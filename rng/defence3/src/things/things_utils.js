@@ -433,6 +433,17 @@ function _refreshThingPrecomputedStats(item) {
     updateItemTextCache(item);
 }
 
+// Selected things refresh stats sooner so the info panel stays live (single
+// player only). A large selection is spread over a few ticks, about 32
+// refreshes per tick, instead of refreshing a whole army every tick.
+const SELECTION_STATS_REFRESH_PER_TICK = 32;
+function _isSelectionStatsRefreshDue(item, selectionSize) {
+    if (selectionSize <= SELECTION_STATS_REFRESH_PER_TICK) return true;
+    let every = Math.min(10, Math.ceil(selectionSize / SELECTION_STATS_REFRESH_PER_TICK));
+    let seed = Number.isFinite(item.id) ? Math.floor(item.id) : (Math.floor(Number(item.gx) || 0) * 7 + Math.floor(Number(item.gy) || 0));
+    return ((gameTime + seed) % every + every) % every === 0;
+}
+
 function recalculateThingPrecomputedStats() {
     let intervalTicks = getThingStatsRecalcIntervalTicks();
     let selectedUnitSet = null;
@@ -441,6 +452,7 @@ function recalculateThingPrecomputedStats() {
         if (selectedUnits && selectedUnits.length > 0) selectedUnitSet = new Set(selectedUnits);
         if (selectedEntities && selectedEntities.length > 0) selectedEntitySet = new Set(selectedEntities);
     }
+    let selectionSize = (selectedUnitSet ? selectedUnitSet.size : 0) + (selectedEntitySet ? selectedEntitySet.size : 0);
     let seen = new Set();
     let seedCursor = 0;
 
@@ -455,7 +467,7 @@ function recalculateThingPrecomputedStats() {
         }
 
         let needsImmediate = !(item.preComputed && Number.isFinite(item.preComputed.maxEnergy));
-        if (!needsImmediate && isSelected) needsImmediate = true;
+        if (!needsImmediate && isSelected) needsImmediate = _isSelectionStatsRefreshDue(item, selectionSize);
 
         if (needsImmediate || item._thingStatsRecalcCounter <= 0) {
             _refreshThingPrecomputedStats(item);
@@ -470,14 +482,11 @@ function recalculateThingPrecomputedStats() {
     for (let b of barracks) processThing(b, !!(selectedEntitySet && selectedEntitySet.has(b)));
     for (let s of collectorSpawners) processThing(s, !!(selectedEntitySet && selectedEntitySet.has(s)));
 
-    for (let y = 0; y < GRID_H; y++) {
-        let row = grid[y];
-        if (!row) continue;
-        for (let x = 0; x < GRID_W; x++) {
-            let cell = row[x];
-            if (!cell || !cell.item) continue;
-            processThing(cell.item, !!(selectedEntitySet && selectedEntitySet.has(cell.item)));
-        }
+    // Cell items in row-major order, as a scan of every tile would visit them.
+    for (let item of getCellItemsRowMajor()) {
+        let cell = grid[item.gy] && grid[item.gy][item.gx];
+        if (!cell || cell.item !== item) continue;
+        processThing(item, !!(selectedEntitySet && selectedEntitySet.has(item)));
     }
 }
 
@@ -504,7 +513,7 @@ function recalculateUnitEffectiveStats() {
             || !Number.isFinite(u.effectiveStacks);
 
         // Never let local-only unit selection affect multiplayer simulation timing.
-        if (!needsImmediate && selectedSet && selectedSet.has(u)) needsImmediate = true;
+        if (!needsImmediate && selectedSet && selectedSet.has(u)) needsImmediate = _isSelectionStatsRefreshDue(u, selectedSet.size);
 
         if (needsImmediate || u._effectiveStatsRecalcCounter <= 0) {
             dueUnits.push(u);
@@ -1273,21 +1282,15 @@ function recomputePlayerPopCaps() {
     else _popCapScratchByOwner.fill(0);
     let popByOwner = _popCapScratchByOwner;
 
-    // Single grid pass: avoid O(players * grid) work.
-    for (let y = 0; y < GRID_H; y++) {
-        let row = grid[y];
-        if (!row) continue;
-        for (let x = 0; x < GRID_W; x++) {
-            let cell = row[x];
-            if (!cell) continue;
-            let item = cell.item;
-            if (!item || item.type !== 'house') continue;
-            let owner = cell.owner;
-            if (owner < 0 || owner >= players.length) continue;
-            if (item.energy <= 0 || item.underConstruction) continue;
-            let level = Math.max(1, Math.floor(getThingBaseLevel(item) || 1));
-            popByOwner[owner] += getHousePopCapContribution(owner, level);
-        }
+    // Single pass over occupied tiles, in grid order: avoid O(players * grid) work.
+    for (let item of getCellItemsRowMajor()) {
+        let cell = grid[item.gy] && grid[item.gy][item.gx];
+        if (!cell || cell.item !== item || item.type !== 'house') continue;
+        let owner = cell.owner;
+        if (owner < 0 || owner >= players.length) continue;
+        if (item.energy <= 0 || item.underConstruction) continue;
+        let level = Math.max(1, Math.floor(getThingBaseLevel(item) || 1));
+        popByOwner[owner] += getHousePopCapContribution(owner, level);
     }
 
     for (let pid = 0; pid < players.length; pid++) {
@@ -1436,9 +1439,9 @@ function getUnitRenderActionRangePx(u) {
 }
 
 function getAreaRangeCellsAtWorld(wx, wy, rangeArea) {
-    let sourceAreaId = getAreaIdAtWorld(wx, wy);
-    if (sourceAreaId < 0) return [];
-    return getGridCellsWithinAreaDistance(sourceAreaId, Math.floor(Math.max(0, Number(rangeArea) || 0)));
+    let sources = getSourceAreaIdsAtWorld(wx, wy);
+    if (sources.length === 0) return [];
+    return getGridCellsWithinDistanceOfSources(sources, Math.floor(Math.max(0, Number(rangeArea) || 0)));
 }
 
 function markConstructionComplete(item) {

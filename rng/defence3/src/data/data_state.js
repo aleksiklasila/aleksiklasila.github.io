@@ -156,6 +156,7 @@ function rebuildAreaDistanceCachesFromAreas() {
 
     areaNeighborIds = new Array(areaCount);
     areaDistanceMatrix = new Array(areaCount);
+    _areaBfsDone = new Array(areaCount);
     areaIdsByDistance = new Array(areaCount);
     areaIdsWithinDistance = new Array(areaCount);
     gridCellsByArea = new Array(areaCount);
@@ -183,57 +184,58 @@ function rebuildAreaDistanceCachesFromAreas() {
         gridCellsByArea[source] = (_areaById[source] && Array.isArray(_areaById[source].cells)) ? _areaById[source].cells.slice() : [];
     }
     // Distance rows and the per-distance area/cell lists are built lazily per
-    // source area (see _ensureAreaDistanceRow). Building every row eagerly,
-    // with cumulative cell copies per distance, took seconds on huge maps.
+    // source area and distance (see _ensureAreaDistanceRow). Building every
+    // row eagerly, with cumulative cell copies per distance, took seconds on
+    // huge maps.
 }
 
 let _areaNeighborSets = [];
+let _areaBfsDone = []; // [areaId] -> true once the BFS from it is exhausted
 
-// BFS over the area graph from one source, on first use. The result depends
-// only on the areas, so it is identical whenever (and on whichever peer) it
-// is first requested.
-function _ensureAreaDistanceRow(source) {
+// BFS over the area graph from one source, expanded one level at a time on
+// demand: range queries need only a few levels, and a full BFS per newly
+// visited area stalled large maps. Each level lists its areas by ascending
+// id, exactly as a complete BFS would, so results never depend on when (or
+// on which peer) a level was first requested. Unreached entries are -1.
+function _ensureAreaDistanceRow(source, depth = Infinity) {
     if (!(source >= 0 && source < areaDistanceMatrix.length)) return null;
     let row = areaDistanceMatrix[source];
-    if (row !== undefined) return row;
-    if (!_areaById[source]) {
-        areaDistanceMatrix[source] = null;
-        areaIdsByDistance[source] = [];
+    if (row === null) return null;
+    if (row === undefined) {
+        if (!_areaById[source]) {
+            areaDistanceMatrix[source] = null;
+            areaIdsByDistance[source] = [];
+            areaIdsWithinDistance[source] = [];
+            gridCellsByAreaDistance[source] = [];
+            gridCellsWithinAreaDistance[source] = [];
+            return null;
+        }
+        row = new Int16Array(areaDistanceMatrix.length).fill(-1);
+        row[source] = 0;
+        areaDistanceMatrix[source] = row;
+        areaIdsByDistance[source] = [[source]];
         areaIdsWithinDistance[source] = [];
         gridCellsByAreaDistance[source] = [];
         gridCellsWithinAreaDistance[source] = [];
-        return null;
+        _areaBfsDone[source] = false;
     }
-    let areaCount = areaDistanceMatrix.length;
-    let distances = new Int16Array(areaCount);
-    distances.fill(-1);
-    distances[source] = 0;
-    let queue = [source];
-    let head = 0;
-    let maxDistance = 0;
-    while (head < queue.length) {
-        let current = queue[head++];
-        let nextDistance = distances[current] + 1;
-        let currentNeighbors = _areaNeighborSets[current];
-        if (!currentNeighbors) continue;
-        for (let next of currentNeighbors) {
-            if (distances[next] !== -1) continue;
-            distances[next] = nextDistance;
-            if (nextDistance > maxDistance) maxDistance = nextDistance;
-            queue.push(next);
+    let levels = areaIdsByDistance[source];
+    while (!_areaBfsDone[source] && levels.length - 1 < depth) {
+        let last = levels[levels.length - 1], distance = levels.length, next = [];
+        for (let current of last) {
+            let neighbors = areaNeighborIds[current];
+            if (!neighbors) continue;
+            for (let n of neighbors) {
+                if (row[n] !== -1) continue;
+                row[n] = distance;
+                next.push(n);
+            }
         }
+        if (next.length === 0) { _areaBfsDone[source] = true; break; }
+        next.sort((x, y) => x - y);
+        levels.push(next);
     }
-    let exact = Array.from({ length: maxDistance + 1 }, () => []);
-    for (let target = 0; target < areaCount; target++) {
-        let dist = distances[target];
-        if (dist >= 0) exact[dist].push(target);
-    }
-    areaDistanceMatrix[source] = distances;
-    areaIdsByDistance[source] = exact;
-    areaIdsWithinDistance[source] = new Array(exact.length);
-    gridCellsByAreaDistance[source] = new Array(exact.length);
-    gridCellsWithinAreaDistance[source] = new Array(exact.length);
-    return distances;
+    return row;
 }
 
 function _getAreaGridCellsAtDistance(source, dist) {
@@ -298,20 +300,103 @@ function addVisibilitySourceAreas(sources, wx, wy, range, light = null) {
     }
 }
 
+// Areas a source at a world position ranges from: every area under its
+// +-0.3 tile window, the window visibility and the range overlay stamp, so
+// gameplay ranges match what is drawn. Ascending ids. A single-area result
+// is a shared array: callers must not modify it.
+const _EMPTY_SOURCE_AREAS = Object.freeze([]);
+let _singleSourceAreaLists = [];
+function getSourceAreaIdsAtWorld(wx, wy) {
+    const x = Number(wx) / TILE, y = Number(wy) / TILE;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return _EMPTY_SOURCE_AREAS;
+    const minX = Math.floor(x - .3), maxX = Math.floor(x + .3);
+    const minY = Math.floor(y - .3), maxY = Math.floor(y + .3);
+    let first = -1, list = null;
+    for (let gy = minY; gy <= maxY; gy++) for (let gx = minX; gx <= maxX; gx++) {
+        const area = getAreaIdAtTile(gx, gy);
+        if (area < 0 || area === first) continue;
+        if (first < 0) first = area;
+        else if (!list) list = [first, area];
+        else if (!list.includes(area)) list.push(area);
+    }
+    if (list) return list.sort((a, b) => a - b);
+    if (first < 0) return _EMPTY_SOURCE_AREAS;
+    return _singleSourceAreaLists[first] || (_singleSourceAreaLists[first] = Object.freeze([first]));
+}
+
+// Union of the areas within `distance` of any source area, each once: the
+// first source's list in its order, then areas only the next ones add.
+// Two-area windows (units near an area border) are common: their unions are
+// cached per distance until the area caches are rebuilt.
+let _sourcePairUnions = new Map(), _sourcePairUnionsFor = null;
+function getAreaIdsWithinDistanceOfSources(sources, distance) {
+    if (sources.length === 1) return getAreaIdsWithinDistance(sources[0], distance);
+    let byPair = null, pairKey = 0;
+    if (sources.length === 2) {
+        if (_sourcePairUnionsFor !== areaIdsWithinDistance) { _sourcePairUnions = new Map(); _sourcePairUnionsFor = areaIdsWithinDistance; }
+        byPair = _sourcePairUnions.get(distance);
+        if (!byPair) _sourcePairUnions.set(distance, byPair = new Map());
+        pairKey = sources[0] * areaDistanceMatrix.length + sources[1];
+        let cached = byPair.get(pairKey);
+        if (cached) return cached;
+    }
+    let seen = new Set(), out = [];
+    for (let source of sources) for (let id of getAreaIdsWithinDistance(source, distance)) {
+        if (!seen.has(id)) { seen.add(id); out.push(id); }
+    }
+    if (byPair) byPair.set(pairKey, out);
+    return out;
+}
+
+function getGridCellsWithinDistanceOfSources(sources, distance) {
+    if (sources.length === 1) return getGridCellsWithinAreaDistance(sources[0], distance);
+    let cells = [];
+    for (let id of getAreaIdsWithinDistanceOfSources(sources, distance)) {
+        let areaCells = gridCellsByArea[id];
+        if (areaCells) for (let cell of areaCells) if (cell) cells.push(cell);
+    }
+    return cells;
+}
+
+// Whether a target at a world position is within `maxDistance` area steps of
+// a source at another: any source window area counts, the target's own tile
+// decides its area.
+function isWorldTargetWithinAreaRange(sourceX, sourceY, targetX, targetY, maxDistance) {
+    let targetAreaId = getAreaIdAtWorld(targetX, targetY);
+    if (targetAreaId < 0) return false;
+    for (let source of getSourceAreaIdsAtWorld(sourceX, sourceY)) {
+        if (isAreaWithinDistance(source, targetAreaId, maxDistance)) return true;
+    }
+    return false;
+}
+
 function getAreaDistance(areaA, areaB) {
     let aId = Math.floor(Number(areaA));
     let bId = Math.floor(Number(areaB));
     if (aId < 0 || bId < 0 || aId >= areaDistanceMatrix.length) return -1;
-    let row = areaDistanceMatrix[aId];
-    if (row === undefined) row = _ensureAreaDistanceRow(aId);
+    let row = _ensureAreaDistanceRow(aId, 0);
     if (!row || bId >= row.length) return -1;
+    while (row[bId] === -1 && !_areaBfsDone[aId]) _ensureAreaDistanceRow(aId, areaIdsByDistance[aId].length);
     return row[bId];
+}
+
+// Whether areaB is at most maxDistance steps from areaA. Equivalent to
+// 0 <= getAreaDistance(a, b) <= maxDistance, expanding only that far.
+function isAreaWithinDistance(areaA, areaB, maxDistance) {
+    let aId = Math.floor(Number(areaA));
+    let bId = Math.floor(Number(areaB));
+    if (aId < 0 || bId < 0 || aId >= areaDistanceMatrix.length || !(maxDistance >= 0)) return false;
+    let limit = Math.floor(maxDistance);
+    let row = _ensureAreaDistanceRow(aId, limit);
+    if (!row || bId >= row.length) return false;
+    let d = row[bId];
+    return d >= 0 && d <= limit;
 }
 
 function getAreaIdsAtDistance(areaId, distance) {
     let aId = Math.floor(Number(areaId));
     let dist = Math.max(0, Math.floor(Number(distance) || 0));
-    if (!(areaDistanceMatrix[aId] || (areaDistanceMatrix[aId] === undefined && _ensureAreaDistanceRow(aId)))) return [];
+    if (!_ensureAreaDistanceRow(aId, dist)) return [];
     let buckets = areaIdsByDistance[aId];
     if (!buckets || !buckets[dist]) return [];
     return buckets[dist];
@@ -320,7 +405,7 @@ function getAreaIdsAtDistance(areaId, distance) {
 function getAreaIdsWithinDistance(areaId, distance) {
     let aId = Math.floor(Number(areaId));
     let dist = Math.max(0, Math.floor(Number(distance) || 0));
-    if (!(areaDistanceMatrix[aId] || (areaDistanceMatrix[aId] === undefined && _ensureAreaDistanceRow(aId)))) return [];
+    if (!_ensureAreaDistanceRow(aId, dist)) return [];
     let buckets = areaIdsByDistance[aId];
     if (!buckets || buckets.length <= 0) return [];
     if (dist >= buckets.length) dist = buckets.length - 1;
@@ -330,7 +415,7 @@ function getAreaIdsWithinDistance(areaId, distance) {
 function getGridCellsAtAreaDistance(areaId, distance) {
     let aId = Math.floor(Number(areaId));
     let dist = Math.max(0, Math.floor(Number(distance) || 0));
-    if (!(areaDistanceMatrix[aId] || (areaDistanceMatrix[aId] === undefined && _ensureAreaDistanceRow(aId)))) return [];
+    if (!_ensureAreaDistanceRow(aId, dist)) return [];
     if (!areaIdsByDistance[aId][dist]) return [];
     return _getAreaGridCellsAtDistance(aId, dist);
 }
@@ -338,7 +423,7 @@ function getGridCellsAtAreaDistance(areaId, distance) {
 function getGridCellsWithinAreaDistance(areaId, distance) {
     let aId = Math.floor(Number(areaId));
     let dist = Math.max(0, Math.floor(Number(distance) || 0));
-    if (!(areaDistanceMatrix[aId] || (areaDistanceMatrix[aId] === undefined && _ensureAreaDistanceRow(aId)))) return [];
+    if (!_ensureAreaDistanceRow(aId, dist)) return [];
     let buckets = areaIdsByDistance[aId];
     if (!buckets || buckets.length <= 0) return [];
     if (dist >= buckets.length) dist = buckets.length - 1;
@@ -398,6 +483,66 @@ function initTileEntityLookup() {
     _activeTileEntities = new Set();
     _tileEntityVersion++;
     requestAdjacencyRecalc();
+}
+
+// Cell items (floor items, barracks, spawners...) in row-major tile order,
+// rebuilt when the tile entity index changes. Iterating it visits items in
+// the same order as a full grid scan. Callers still check
+// grid[gy][gx].item === item: removals during a pass keep the old list.
+let _cellItemsRowMajor = [];
+let _cellItemsRowMajorVersion = -1;
+let _cellItemsRowMajorSet = null;
+
+function getCellItemsRowMajor() {
+    if (_cellItemsRowMajorVersion === _tileEntityVersion && _cellItemsRowMajorSet === _activeTileEntities) return _cellItemsRowMajor;
+    let list = [];
+    for (let item of _activeTileEntities) {
+        let cell = grid[item.gy] && grid[item.gy][item.gx];
+        if (cell && cell.item === item) list.push(item);
+    }
+    list.sort((a, b) => (a.gy - b.gy) || (a.gx - b.gx));
+    _cellItemsRowMajor = list;
+    _cellItemsRowMajorVersion = _tileEntityVersion;
+    _cellItemsRowMajorSet = _activeTileEntities;
+    return list;
+}
+
+// Structures (towers and cell items, never resource mines) bucketed by area,
+// rebuilt when the tile entity index or the areas change. Range scans visit
+// only the areas that hold one instead of every tile in range.
+let _structuresByArea = null;
+let _structuresByAreaVersion = -1;
+let _structuresByAreaSet = null;
+let _structuresByAreaCells = null;
+
+function getStructuresByArea() {
+    if (_structuresByArea && _structuresByAreaVersion === _tileEntityVersion && _structuresByAreaSet === _activeTileEntities
+        && _structuresByAreaCells === gridCellsByArea) return _structuresByArea;
+    let byArea = new Array(gridCellsByArea.length);
+    for (let e of _activeTileEntities) {
+        let gx = e.gx, gy = e.gy, refs = tileEntityRef[gy];
+        if (!refs || refs[gx] !== e) continue;
+        let type = tileEntityType[gy][gx];
+        if (type === TILE_ENTITY_GOLDMINE || type === TILE_ENTITY_ASTARMINE) continue;
+        let area = getAreaIdAtTile(gx, gy);
+        if (area < 0) continue;
+        (byArea[area] || (byArea[area] = [])).push(e);
+    }
+    _structuresByArea = byArea;
+    _structuresByAreaVersion = _tileEntityVersion;
+    _structuresByAreaSet = _activeTileEntities;
+    _structuresByAreaCells = gridCellsByArea;
+    return byArea;
+}
+
+// Index of the first row-major cell item at or after row gy.
+function findCellItemRowStart(list, gy) {
+    let lo = 0, hi = list.length;
+    while (lo < hi) {
+        let mid = (lo + hi) >> 1;
+        if (list[mid].gy < gy) lo = mid + 1; else hi = mid;
+    }
+    return lo;
 }
 
 function setTileEntity(gx, gy, type, ref) {

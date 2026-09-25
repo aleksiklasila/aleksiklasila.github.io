@@ -369,6 +369,7 @@ function quantize3DExactRatio(value, maximum) {
 }
 
 const renderer3dVisualSignatures = new WeakMap();
+const renderer3dSignatureScratch = [];
 
 function get3DExact2DVisualSignature(entity, isUnit = false) {
     if (!entity) return '';
@@ -381,34 +382,49 @@ function get3DExact2DVisualSignature(entity, isUnit = false) {
     // A remembered target moving elsewhere must not invalidate an idle panel.
     let activeAttack = !isUnit || Number(entity.attackFlash) > 0;
     let attackTarget = activeAttack ? entity.attackTarget || null : null;
-    let values = [
-        entity.type || '', entity.unitType || '', Number(entity.owner) || 0,
-        entity.vis || '', entity.color || '', Math.round((Number(entity.r) || 0) * 10),
-        entity.textCanvas && shouldShowBuildingLevels() ? getLevelLabelText(entity) : '',
-        shouldShowUnitLevels() && entity.unitType ? getUnitLevelLabelText(entity) : '',
-        quantize3DExactRatio(entity.energy, maxEnergy),
-        entity.underConstruction ? 1 : 0, entity.isUpgrading ? 1 : 0,
-        quantize3DExactRatio(entity.stackingWorkDone, Number(entity.stackingWorkRequired) || 0),
-        quantize3DExactRatio(entity.spawnTimer, Number(entity.spawnCooldown) || 0),
-        researchTask ? quantize3DExactRatio(researchTask.workDone, Number(researchTask.workRequired) || 0) : 0,
-        Math.round((Number(entity.angle) || 0) * 128),
-        Number(entity.laserState) || 0,
-        Array.isArray(entity.connectedLasers) ? entity.connectedLasers.length : 0,
-        entity.carryingValue > 0 ? 1 : 0, entity.workerState || '',
-        entity.burning > 0 ? 1 : 0, entity.poisoned > 0 ? 1 : 0,
-        entity.frozen > 0 ? 1 : 0, entity.wet > 0 ? 1 : 0,
-        Number(entity.attackFlash) || 0, activeAttack ? entity.attackStyle || '' : '',
-        attackTarget ? Math.round((Number(attackTarget.x) - Number(entity.x)) / 4) : 0,
-        attackTarget ? Math.round((Number(attackTarget.y) - Number(entity.y)) / 4) : 0,
-        Number.isFinite(entity._energyBlockedUntil) && gameTime < entity._energyBlockedUntil ? 1 : 0,
-        entity.researcherHasMaterial ? 1 : 0
-    ];
+    // Filled in place: allocating this per visible entity per frame only fed
+    // the garbage collector, as unchanged inputs reuse the stored key.
+    let values = renderer3dSignatureScratch, n = 0;
+    values[n++] = entity.type || '';
+    values[n++] = entity.unitType || '';
+    values[n++] = Number(entity.owner) || 0;
+    values[n++] = entity.vis || '';
+    values[n++] = entity.color || '';
+    values[n++] = Math.round((Number(entity.r) || 0) * 10);
+    values[n++] = entity.textCanvas && shouldShowBuildingLevels() ? getLevelLabelText(entity) : '';
+    values[n++] = shouldShowUnitLevels() && entity.unitType ? getUnitLevelLabelText(entity) : '';
+    values[n++] = quantize3DExactRatio(entity.energy, maxEnergy);
+    values[n++] = entity.underConstruction ? 1 : 0;
+    values[n++] = entity.isUpgrading ? 1 : 0;
+    values[n++] = quantize3DExactRatio(entity.stackingWorkDone, Number(entity.stackingWorkRequired) || 0);
+    values[n++] = quantize3DExactRatio(entity.spawnTimer, Number(entity.spawnCooldown) || 0);
+    values[n++] = researchTask ? quantize3DExactRatio(researchTask.workDone, Number(researchTask.workRequired) || 0) : 0;
+    values[n++] = Math.round((Number(entity.angle) || 0) * 128);
+    values[n++] = Number(entity.laserState) || 0;
+    values[n++] = Array.isArray(entity.connectedLasers) ? entity.connectedLasers.length : 0;
+    values[n++] = entity.carryingValue > 0 ? 1 : 0;
+    values[n++] = entity.workerState || '';
+    values[n++] = entity.burning > 0 ? 1 : 0;
+    values[n++] = entity.poisoned > 0 ? 1 : 0;
+    values[n++] = entity.frozen > 0 ? 1 : 0;
+    values[n++] = entity.wet > 0 ? 1 : 0;
+    values[n++] = Number(entity.attackFlash) || 0;
+    values[n++] = activeAttack ? entity.attackStyle || '' : '';
+    values[n++] = attackTarget ? Math.round((Number(attackTarget.x) - Number(entity.x)) / 4) : 0;
+    values[n++] = attackTarget ? Math.round((Number(attackTarget.y) - Number(entity.y)) / 4) : 0;
+    values[n++] = Number.isFinite(entity._energyBlockedUntil) && gameTime < entity._energyBlockedUntil ? 1 : 0;
+    values[n++] = entity.researcherHasMaterial ? 1 : 0;
     // Keep the interned key when visual inputs are unchanged. Joining and
     // hashing a long key for every visible unit dominated zoomed-out frames.
     let previous = renderer3dVisualSignatures.get(entity);
-    if (previous && previous.isUnit === isUnit && values.every((value, i) => value === previous.values[i])) return previous.signature;
-    let signature = values.join('|');
-    renderer3dVisualSignatures.set(entity, { isUnit, values, signature });
+    if (previous && previous.isUnit === isUnit) {
+        let same = true, stored = previous.values;
+        for (let i = 0; i < n; i++) if (values[i] !== stored[i]) { same = false; break; }
+        if (same) return previous.signature;
+    }
+    let stored = values.slice(0, n);
+    let signature = stored.join('|');
+    renderer3dVisualSignatures.set(entity, { isUnit, values: stored, signature });
     return signature;
 }
 
@@ -2180,22 +2196,10 @@ function createEmptyVisibilityGrid() {
 }
 
 let visibilityIncludedTilesScratch = [];
-let _visibilityFloorItemCandidates = [];
-let _visibilityFloorItemCandidatesVersion = -1;
-let _visibilityFloorItemCandidatesSet = null;
-
+let visibilityStampScratch = [];
+let visibilityRowSpanMinScratch = new Int32Array(0), visibilityRowSpanMaxScratch = new Int32Array(0);
 function _getVisibilityFloorItemCandidates() {
-    if (_visibilityFloorItemCandidatesVersion === _tileEntityVersion &&
-        _visibilityFloorItemCandidatesSet === _activeTileEntities) return _visibilityFloorItemCandidates;
-    let list = [];
-    for (let item of _activeTileEntities) {
-        let cell = grid[item.gy] && grid[item.gy][item.gx];
-        if (cell && cell.item === item) list.push(item);
-    }
-    _visibilityFloorItemCandidates = list;
-    _visibilityFloorItemCandidatesVersion = _tileEntityVersion;
-    _visibilityFloorItemCandidatesSet = _activeTileEntities;
-    return list;
+    return getCellItemsRowMajor();
 }
 
 function computeVisibilityGridForPlayer(playerId, vis) {
@@ -2239,6 +2243,9 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         }
     };
     let hasSource = false;
+    // Stamped tiles (source tile and range): only tiles within a stamp's
+    // range of it can end up lit, which bounds the sweeps below.
+    let stamps = visibilityStampScratch, stampCount = 0;
     let addWorldVisibilitySource = (wx, wy, rangeArea) => {
         hasSource = true;
         let x = Number(wx);
@@ -2248,6 +2255,9 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         let rangeTiles = range * AREA_UNIT_TILE_EQUIVALENT;
         addVisibilitySourceAreas(areaRangeBySourceArea, x, y, range, vis);
         if (!(range > 0) || !Number.isFinite(x) || !Number.isFinite(y)) return;
+        stamps[stampCount++] = Math.floor(x / TILE);
+        stamps[stampCount++] = Math.floor(y / TILE);
+        stamps[stampCount++] = rangeTiles;
         stampSource(x / TILE, y / TILE, rangeTiles);
         if (areaId < 0) {
             includeFallbackCircleAroundSource(x / TILE, y / TILE, rangeTiles);
@@ -2318,38 +2328,38 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         }
     }
 
-    // Only tiles marked as included can be lit, and everything else is already
-    // zero, so both sweeps can be limited to the included tiles' bounding box.
-    let minIx = GRID_W, maxIx = -1, minIy = GRID_H, maxIy = -1;
-    for (let y = 0; y < GRID_H; y++) {
-        let includedRow = includedTiles[y];
-        let first = includedRow.indexOf(1);
-        if (first < 0) continue;
-        let last = includedRow.lastIndexOf(1);
-        if (first < minIx) minIx = first;
-        if (last > maxIx) maxIx = last;
-        if (y < minIy) minIy = y;
-        maxIy = y;
+    // Values fall by one per tile away from a stamp (the source tile, or a
+    // border tile of its +-0.3 window, with the same range), so a tile more
+    // than ceil(range) + 1 tiles from every source stays 0. Sweep only each
+    // row's [min, max] span of such tiles; every other tile is already 0,
+    // like non-included tiles, which the sweeps also clear inside the spans.
+    // Tiles outside the spans read as 0 in both passes, as after full sweeps.
+    let spanMin = visibilityRowSpanMinScratch, spanMax = visibilityRowSpanMaxScratch;
+    if (spanMin.length !== GRID_H) {
+        spanMin = visibilityRowSpanMinScratch = new Int32Array(GRID_H).fill(GRID_W);
+        spanMax = visibilityRowSpanMaxScratch = new Int32Array(GRID_H).fill(-1);
     }
-    if (maxIx < 0) {
-        for (let y = 0; y < GRID_H; y++) vis[y].fill(0);
-        return;
+    let spanY0 = GRID_H, spanY1 = -1;
+    for (let i = 0; i < stampCount; i += 3) {
+        let reach = Math.ceil(stamps[i + 2]) + 1;
+        let x0 = Math.max(0, stamps[i] - reach), x1 = Math.min(GRID_W - 1, stamps[i] + reach);
+        let y0 = Math.max(0, stamps[i + 1] - reach), y1 = Math.min(GRID_H - 1, stamps[i + 1] + reach);
+        if (x0 > x1 || y0 > y1) continue;
+        if (y0 < spanY0) spanY0 = y0;
+        if (y1 > spanY1) spanY1 = y1;
+        for (let y = y0; y <= y1; y++) {
+            if (x0 < spanMin[y]) spanMin[y] = x0;
+            if (x1 > spanMax[y]) spanMax[y] = x1;
+        }
     }
-    // Sources outside every included tile are cleared by the sweeps; clear
-    // them here for rows and columns the sweeps now skip.
-    for (let y = 0; y < GRID_H; y++) {
-        if (y < minIy || y > maxIy) { vis[y].fill(0); continue; }
-        if (minIx > 0) vis[y].fill(0, 0, minIx);
-        if (maxIx < GRID_W - 1) vis[y].fill(0, maxIx + 1);
-    }
+    let lastX = GRID_W - 1;
     // Forward pass: left, up-left, up and up-right neighbours (-1 per tile).
-    // Same operations as before, with row-local branches hoisted.
-    for (let y = minIy; y <= maxIy; y++) {
+    for (let y = spanY0; y <= spanY1; y++) {
+        if (spanMax[y] < 0) continue;
         let row = vis[y], includedRow = includedTiles[y];
         let hasPrev = y > 0;
         let prevRow = hasPrev ? vis[y - 1] : null, prevIncluded = hasPrev ? includedTiles[y - 1] : null;
-        let lastX = GRID_W - 1;
-        for (let x = minIx; x <= maxIx; x++) {
+        for (let x = spanMin[y], end = spanMax[y]; x <= end; x++) {
             if (!includedRow[x]) {
                 row[x] = 0;
                 continue;
@@ -2365,12 +2375,12 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         }
     }
     // Backward pass: right, down, down-right and down-left neighbours.
-    for (let y = maxIy; y >= minIy; y--) {
+    for (let y = spanY1; y >= spanY0; y--) {
+        if (spanMax[y] < 0) continue;
         let row = vis[y], includedRow = includedTiles[y];
         let hasNext = y < GRID_H - 1;
         let nextRow = hasNext ? vis[y + 1] : null, nextIncluded = hasNext ? includedTiles[y + 1] : null;
-        let lastX = GRID_W - 1;
-        for (let x = maxIx; x >= minIx; x--) {
+        for (let x = spanMax[y], start = spanMin[y]; x >= start; x--) {
             if (!includedRow[x]) {
                 row[x] = 0;
                 continue;
@@ -2384,8 +2394,9 @@ function computeVisibilityGridForPlayer(playerId, vis) {
             }
             row[x] = v;
         }
+        spanMin[y] = GRID_W;
+        spanMax[y] = -1;
     }
-
 }
 
 function getVisibilityGridForPlayer(playerId) {
@@ -2402,19 +2413,101 @@ function getRawVisibilityGridForPlayer(playerId) {
     }
     let cachedRaw = visibilityGridRawByPlayerCache.get(pid);
     if (cachedRaw) return cachedRaw;
-    // Every player is recomputed each tick. Alternate two grids per player
-    // instead of allocating rows each time; the computation clears the grid,
-    // and a grid handed out last tick (e.g. the render grid) stays intact.
     let pool = visibilityGridPoolByPlayer.get(pid);
-    if (!pool) visibilityGridPoolByPlayer.set(pid, pool = { grids: [null, null], next: 0 });
+    if (!pool) visibilityGridPoolByPlayer.set(pid, pool = { grids: [null, null], next: 0, last: null, signature: null, signatureLength: -1,
+        areaGrid: null, areaCells: null, misses: 0, skipUntil: -1 });
+    // The grid is a pure function of the sources' tile windows and ranges
+    // (and the area layout). Idle teams keep identical sources for many
+    // ticks: reuse their last grid instead of recomputing it. A team whose
+    // sources keep changing skips the comparison for a while.
+    let now = typeof gameTime === 'number' ? gameTime : 0;
+    let compare = !(pool.skipUntil > now && pool.skipUntil - now <= VISIBILITY_SIGNATURE_BACKOFF_TICKS);
+    let signature = _visibilitySourceSignatureScratch, signatureLength = -1;
+    if (compare) {
+        if (pool.skipUntil >= 0) { pool.skipUntil = -1; pool.misses = 0; }
+        signatureLength = _collectVisibilitySourceSignature(pid, signature);
+        signature = _visibilitySourceSignatureScratch; // may have grown
+        let last = pool.last;
+        if (last && last.length === GRID_H && (GRID_H === 0 || last[0].length === GRID_W)
+            && pool.areaGrid === areaIdGrid && pool.areaCells === gridCellsByArea
+            && pool.signatureLength === signatureLength && _visibilitySignaturesEqual(pool.signature, signature, signatureLength)) {
+            pool.misses = 0;
+            visibilityGridRawByPlayerCache.set(pid, last);
+            return last;
+        }
+        if (++pool.misses >= 2) pool.skipUntil = now + VISIBILITY_SIGNATURE_BACKOFF_TICKS;
+    }
+    // Alternate two grids per player instead of allocating rows each time;
+    // the computation clears the grid, and a grid handed out last tick (e.g.
+    // the render grid) stays intact.
     let rawVis = pool.grids[pool.next];
     if (!rawVis || rawVis.length !== GRID_H || (GRID_H > 0 && rawVis[0].length !== GRID_W)) {
         rawVis = pool.grids[pool.next] = createEmptyVisibilityGrid();
     }
     pool.next ^= 1;
     computeVisibilityGridForPlayer(pid, rawVis);
+    if (compare) {
+        if (!pool.signature || pool.signature.length < signatureLength) pool.signature = new Float64Array(Math.max(64, signature.length));
+        pool.signature.set(signature.subarray(0, signatureLength));
+    }
+    // Without a comparison the stored signature no longer describes the grid.
+    pool.signatureLength = compare ? signatureLength : -1;
+    pool.areaGrid = areaIdGrid;
+    pool.areaCells = gridCellsByArea;
+    pool.last = rawVis;
     visibilityGridRawByPlayerCache.set(pid, rawVis);
     return rawVis;
+}
+
+const VISIBILITY_SIGNATURE_BACKOFF_TICKS = 8;
+let _visibilitySourceSignatureScratch = new Float64Array(1024);
+
+function _visibilitySignaturesEqual(a, b, length) {
+    if (!a) return false;
+    for (let i = 0; i < length; i++) if (a[i] !== b[i]) return false;
+    return true;
+}
+
+// Everything computeVisibilityGridForPlayer reads from one source, in its
+// enumeration order: the tiles under the source and its +-0.3 tile window
+// (area stamping), and its range. Three numbers per source.
+function _collectVisibilitySourceSignature(playerId, out) {
+    let length = 0;
+    let target = Math.floor(Number(playerId));
+    // Same test as computeVisibilityGridForPlayer's shouldRevealForPlayer;
+    // the common integer-owner case is decided without coercion.
+    let reveals = (e, owner) => owner === target
+        ? true
+        : (((Number(e.watched) || 0) > 0 && Math.floor(Number(e.watchedByTeam)) === target)
+            || (owner !== (owner | 0) && Math.floor(Number(owner)) === target));
+    let push = (wx, wy, rangeArea) => {
+        if (length + 3 > out.length) {
+            let grown = new Float64Array(out.length * 2);
+            grown.set(out);
+            out = _visibilitySourceSignatureScratch = grown;
+        }
+        let fx = Number(wx) / TILE, fy = Number(wy) / TILE;
+        let bx = Math.floor(fx), by = Math.floor(fy);
+        out[length] = bx * 4 + (bx - Math.floor(fx - .3)) * 2 + (Math.floor(fx + .3) - bx);
+        out[length + 1] = by * 4 + (by - Math.floor(fy - .3)) * 2 + (Math.floor(fy + .3) - by);
+        out[length + 2] = Math.max(0, Number(rangeArea) || 0);
+        length += 3;
+    };
+    for (let u of units) {
+        if (!u || u.dead) continue;
+        if (u.owner !== target && !(u.watched > 0) && u.owner === (u.owner | 0)) continue;
+        if (reveals(u, u.owner)) push(u.x, u.y, getEntityEffectiveVisibilityRangeArea(u));
+    }
+    for (let list of [towers, barracks, collectorSpawners]) for (let b of list) {
+        if (!b || !(b.energy > 0) || b.underConstruction || !reveals(b, b.owner)) continue;
+        push(b.x, b.y, getEntityEffectiveVisibilityRangeArea(b));
+    }
+    for (let item of _getVisibilityFloorItemCandidates()) {
+        let cell = grid[item.gy] && grid[item.gy][item.gx];
+        if (!cell || cell.item !== item || !(item.energy > 0) || item.underConstruction || !reveals(item, cell.owner)) continue;
+        push(item.gx * TILE + TILE * 0.5, item.gy * TILE + TILE * 0.5, getEntityEffectiveVisibilityRangeArea(item));
+    }
+    return length;
 }
 
 function isTileActuallyVisibleToPlayer(playerId, gx, gy) {

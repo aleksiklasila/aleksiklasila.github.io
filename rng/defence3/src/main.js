@@ -265,18 +265,16 @@ function gameTick() {
     };
 
     let floorChanged = false;
-    for (let y = 0; y < GRID_H; y++) {
-        for (let x = 0; x < GRID_W; x++) {
-            let cell = grid[y][x];
-            let item = cell.item;
-            if (!item) continue;
-            accumulateBuildingUpKeep(item);
-            if (tickStatusEffects(item)) {
-                clearTileEntity(item.gx, item.gy, item);
-                cell.item = null;
-                cell.owner = -1;
-                floorChanged = true;
-            }
+    // Same row-major order as a full grid walk, visiting only occupied tiles.
+    for (let item of getCellItemsRowMajor()) {
+        let cell = grid[item.gy][item.gx];
+        if (cell.item !== item) continue;
+        accumulateBuildingUpKeep(item);
+        if (tickStatusEffects(item)) {
+            clearTileEntity(item.gx, item.gy, item);
+            cell.item = null;
+            cell.owner = -1;
+            floorChanged = true;
         }
     }
     if (floorChanged) {
@@ -2417,6 +2415,9 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
         u.targetUnit = null; u.targetBuilding = null; u.forcedAttackTarget = false;
         u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
         u.commandState = cmd;
+        // Attack-move resumes toward this tile after each engagement.
+        u._attackMoveGx = cmd === CMD_ATTACK_MOVING ? targetGx : null;
+        u._attackMoveGy = cmd === CMD_ATTACK_MOVING ? targetGy : null;
         if (u.workerState) interruptWorkerForManualMove(u);
         u.targetPos = { x: targetGx * TILE + 16, y: targetGy * TILE + 16 };
         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
@@ -2474,6 +2475,7 @@ function processActions(actions, playerId) {
                 for (let u of units) {
                     if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
                         u.targetUnit = target; u.commandState = CMD_ATTACKING; u.targetBuilding = null; u.forcedAttackTarget = true;
+                        u._attackMoveGx = u._attackMoveGy = null;
                         u._forcedTargetLastSeenX = target.x; u._forcedTargetLastSeenY = target.y;
                         u.targetPos = { x: target.x, y: target.y };
                         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
@@ -2506,6 +2508,7 @@ function processActions(actions, playerId) {
                 for (let u of units) {
                     if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
                         u.targetBuilding = tb; u.commandState = CMD_ATTACKING; u.targetUnit = null; u.forcedAttackTarget = false;
+                        u._attackMoveGx = u._attackMoveGy = null;
                         u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
                         u.targetPos = { x: tb.x, y: tb.y };
                         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
@@ -2535,6 +2538,7 @@ function processActions(actions, playerId) {
                     // (route, rally, worker task). Only free units stop.
                     if (u.holdPosition) { u.holdPosition = false; continue; }
                     u.commandState = CMD_IDLE; u.path = null; u.targetUnit = null; u.targetBuilding = null; u._pendingPathTarget = null; u.forcedAttackTarget = false; u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
+                    u._attackMoveGx = u._attackMoveGy = null;
                     if (u.workerState) {
                         _clearWorkerTarget(u);
                         clearWorkerTaskMemoryForFreeRetarget(u);

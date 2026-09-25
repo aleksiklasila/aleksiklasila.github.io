@@ -1834,15 +1834,15 @@ function _getWorkerAutoSearchDistanceArea(u) {
 
 function _isTargetWithinWorkerSearchArea(originX, originY, target, maxSearchArea) {
     if (!target) return false;
-    let sourceAreaId = getAreaIdAtWorld(originX, originY);
-    if (sourceAreaId < 0) return false;
     let targetAreaId = Number.isFinite(target.areaId)
         ? Math.floor(target.areaId)
         : getAreaIdAtWorld(target.x, target.y);
     if (targetAreaId < 0) return false;
-    let areaDistance = getAreaDistance(sourceAreaId, targetAreaId);
-    if (areaDistance < 0) return false;
-    return areaDistance <= Math.floor(Math.max(0, Number(maxSearchArea) || 0));
+    let maxDistance = Math.floor(Math.max(0, Number(maxSearchArea) || 0));
+    for (let source of getSourceAreaIdsAtWorld(originX, originY)) {
+        if (isAreaWithinDistance(source, targetAreaId, maxDistance)) return true;
+    }
+    return false;
 }
 
 function _isTargetWithinWorkerSearchLimits(u, originX, originY, target, maxSearchArea) {
