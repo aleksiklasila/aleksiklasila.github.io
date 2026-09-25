@@ -1903,13 +1903,47 @@ function _getReservedWorkerForTarget(target, workerType) {
 // live. Invalidated with the reservation table.
 let _workersWithTargetTick = NaN;
 let _workersWithTarget = [];
+let _workerConflictTiles = new Map();
+let _workerMovingTargetConflicts = new Map();
+let _workerConflictEntries = new Map();
+
+function _indexWorkerTargetConflict(unit) {
+    if (!unit.workerTarget) return;
+    let entry = _workerConflictEntries.get(unit);
+    if (!entry) {
+        entry = { unit, order: _workerConflictEntries.size, slots: new Set(), moving: false };
+        _workerConflictEntries.set(unit, entry);
+    }
+    // Healers can target moving units. These must be tested live, even after
+    // the target crossed a tile earlier in this same simulation tick.
+    if (!Number.isFinite(unit.workerTarget.gx) || !Number.isFinite(unit.workerTarget.gy)) {
+        if (!entry.moving) {
+            entry.moving = true;
+            let bucket = _workerMovingTargetConflicts.get(unit.workerType);
+            if (!bucket) _workerMovingTargetConflicts.set(unit.workerType, bucket = []);
+            bucket.push(entry);
+        }
+        return;
+    }
+    let slot = _getWorkerReservationSlotIndex(unit.workerTarget, unit.workerType);
+    if (slot < 0 || entry.slots.has(slot)) return;
+    entry.slots.add(slot);
+    let bucket = _workerConflictTiles.get(slot);
+    if (!bucket) _workerConflictTiles.set(slot, bucket = []);
+    bucket.push(entry);
+}
+
 function _getWorkersWithTargetThisTick() {
-    let tick = typeof gameTime === 'number' ? gameTime : NaN;
+    let tick = typeof gameTime === 'number' ? gameTime : 0;
     if (_workersWithTargetTick !== tick) {
         let list = [];
         for (let other of units) if (other && other.workerTarget) list.push(other);
         _workersWithTarget = list;
         _workersWithTargetTick = tick;
+        _workerConflictTiles.clear();
+        _workerMovingTargetConflicts.clear();
+        _workerConflictEntries.clear();
+        for (let other of list) _indexWorkerTargetConflict(other);
     }
     return _workersWithTarget;
 }
@@ -1918,15 +1952,23 @@ function _findConflictingWorkerOnTargetTile(unit, target) {
     if (!unit || !target || !unit.workerType) return null;
     let targetTileIndex = _getWorkerTargetTileIndex(target);
     if (targetTileIndex < 0) return null;
-    for (let other of _getWorkersWithTargetThisTick()) {
-        if (!other || other === unit || other.dead || !other.workerTarget) continue;
-        if (other.owner !== unit.owner) continue;
-        if (other.workerType !== unit.workerType) continue;
-        let otherTileIndex = _getWorkerTargetTileIndex(other.workerTarget);
-        if (otherTileIndex !== targetTileIndex) continue;
-        return other;
+    _getWorkersWithTargetThisTick();
+    let slot = _getWorkerReservationSlotIndex(target, unit.workerType);
+    let bucket = _workerConflictTiles.get(slot);
+    let best = null;
+    for (let pass = 0; pass < 2; pass++) {
+        let entries = pass === 0 ? bucket : _workerMovingTargetConflicts.get(unit.workerType);
+        if (!entries) continue;
+        for (let entry of entries) {
+            let other = entry.unit;
+            if (best && entry.order >= best.order) continue;
+            if (other === unit || other.dead || !other.workerTarget) continue;
+            if (other.owner !== unit.owner || other.workerType !== unit.workerType) continue;
+            if (_getWorkerTargetTileIndex(other.workerTarget) !== targetTileIndex) continue;
+            best = entry;
+        }
     }
-    return null;
+    return best ? best.unit : null;
 }
 
 function _invalidateWorkerTargetLoadCache() {
@@ -1979,7 +2021,10 @@ function _setWorkerTarget(unit, target, targetType = null) {
 
     unit.workerTarget = target;
     unit.workerTargetType = nextType;
-    if (target && typeof gameTime === 'number' && _workersWithTargetTick === gameTime && !_workersWithTarget.includes(unit)) _workersWithTarget.push(unit);
+    if (target && typeof gameTime === 'number' && _workersWithTargetTick === gameTime) {
+        if (!_workerConflictEntries.has(unit)) _workersWithTarget.push(unit);
+        _indexWorkerTargetConflict(unit);
+    }
     unit._workerReservedTileIndex = -1;
     if (target && nextSlotIndex >= 0) {
         workerReservedTiles[nextSlotIndex] = unit;
@@ -2019,24 +2064,8 @@ function _canAssignWorkerTargetExclusive(u, target, targetType = null, conflictC
     if (u.workerTarget === target && (targetType === null || u.workerTargetType === targetType)) return true;
     let reservedUnit = _getReservedWorkerForTarget(target, u.workerType);
     if (!reservedUnit) {
-        // A candidate search is synchronous and does not assign targets. Build
-        // its fallback occupancy lookup once, never reuse it across searches:
-        // earlier workers may change reservations/targets in the same tick.
-        if (conflictCache) {
-            let tileIndex = _getWorkerTargetTileIndex(target);
-            if (tileIndex < 0) return true;
-            if (!conflictCache.tiles) {
-                let tiles = new Set();
-                for (let other of _getWorkersWithTargetThisTick()) {
-                    if (!other || other === u || other.dead || !other.workerTarget) continue;
-                    if (other.owner !== u.owner || other.workerType !== u.workerType) continue;
-                    let otherTile = _getWorkerTargetTileIndex(other.workerTarget);
-                    if (otherTile >= 0) tiles.add(otherTile);
-                }
-                conflictCache.tiles = tiles;
-            }
-            return !conflictCache.tiles.has(tileIndex);
-        }
+        // Indexed static targets, plus a live check for moving healer targets.
+        // Assignments extend the index; released/dead entries are checked live.
         return !_findConflictingWorkerOnTargetTile(u, target);
     }
     if (reservedUnit === u) return true;
@@ -2352,6 +2381,29 @@ function _builderAssignTarget(u, target, myGx, myGy) {
     }
 }
 
+let _workerSpawnerIndex = null;
+const _emptyWorkerSpawners = Object.freeze([]);
+
+// Building type/position is fixed for its lifetime. Rebuild after placement,
+// removal, snapshot replacement, or at the next tick. Eligibility (energy,
+// owner, construction, queues) remains live: workers may change it mid-tick.
+function _getWorkerSpawnersByType(type) {
+    let tick = typeof gameTime === 'number' ? gameTime : NaN;
+    let version = typeof _tileEntityVersion === 'number' ? _tileEntityVersion : -1;
+    let index = _workerSpawnerIndex;
+    if (!index || index.tick !== tick || index.list !== collectorSpawners
+        || index.length !== collectorSpawners.length || index.version !== version) {
+        index = _workerSpawnerIndex = { tick, version, list: collectorSpawners, length: collectorSpawners.length, types: new Map() };
+        for (let s of collectorSpawners) {
+            if (!s) continue;
+            let bucket = index.types.get(s.type);
+            if (!bucket) index.types.set(s.type, bucket = []);
+            bucket.push(s);
+        }
+    }
+    return index.types.get(type) || _emptyWorkerSpawners;
+}
+
 function _findBestSpawnerRoute(u, type, canWalk = null, options = null) {
     if (!canWalk) canWalk = getPathCanWalkForUnit(u);
     let cacheOnly = !!(options && options.cacheOnly);
@@ -2373,19 +2425,10 @@ function _findBestSpawnerRoute(u, type, canWalk = null, options = null) {
         }
     }
 
-    let candidateSpawners = collectorSpawners
-        .filter(s => s && s.type === type && s.owner === u.owner && s.energy > 0 && !s.underConstruction)
-        .slice()
-        .sort((a, b) => {
-            let ay = Math.floor(Number(a.gy) || 0), by = Math.floor(Number(b.gy) || 0);
-            if (ay !== by) return ay - by;
-            let ax = Math.floor(Number(a.gx) || 0), bx = Math.floor(Number(b.gx) || 0);
-            if (ax !== bx) return ax - bx;
-            let ai = Math.floor(Number(a.id) || 0), bi = Math.floor(Number(b.id) || 0);
-            return ai - bi;
-        });
-
-    for (let s of candidateSpawners) {
+    // The explicit tie-break below already orders (distance, y, x, id).
+    // Sorting every candidate list for every worker cannot change the result.
+    for (let s of _getWorkerSpawnersByType(type)) {
+        if (s.owner !== u.owner || !(s.energy > 0) || s.underConstruction) continue;
         // Pick the route target deterministically before spending the unit's pathfind request slot.
         let score = Math.abs(Math.floor(Number(s.gx) || 0) - startGx) + Math.abs(Math.floor(Number(s.gy) || 0) - startGy);
         if (score < bestScore) {
@@ -2449,7 +2492,7 @@ function _findClosestBuilderSpawner(u) {
     let closest = null, bestDist = Infinity;
     let ux = Math.floor(Number(u && u.x) / TILE);
     let uy = Math.floor(Number(u && u.y) / TILE);
-    for (let s of collectorSpawners) {
+    for (let s of _getWorkerSpawnersByType('builder_spawner')) {
         if (s.type === 'builder_spawner' && s.owner === u.owner && s.energy > 0 && !s.underConstruction) {
             let sx = Math.floor(Number(s.gx) || 0);
             let sy = Math.floor(Number(s.gy) || 0);
@@ -2469,7 +2512,7 @@ function _findClosestHealerSpawner(u) {
     let closest = null, bestDist = Infinity;
     let ux = Math.floor(Number(u && u.x) / TILE);
     let uy = Math.floor(Number(u && u.y) / TILE);
-    for (let s of collectorSpawners) {
+    for (let s of _getWorkerSpawnersByType('healer_spawner')) {
         if (s.type === 'healer_spawner' && s.owner === u.owner && s.energy > 0 && !s.underConstruction) {
             let sx = Math.floor(Number(s.gx) || 0);
             let sy = Math.floor(Number(s.gy) || 0);
@@ -2659,7 +2702,7 @@ function _findNearestResearchBuildingNeedingWork(u) {
     let candidates = [];
     let maxSearch = _getResearcherAutoSearchDistancePx(u);
     let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
-    for (let s of collectorSpawners) {
+    for (let s of _getWorkerSpawnersByType('research')) {
         if (!_isResearcherTargetBuilding(s, u.owner)) continue;
         if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, s, maxSearchArea)) continue;
         let d = Math.hypot(s.x - u.x, s.y - u.y);
@@ -2911,7 +2954,7 @@ function _findClosestSpawner(u, type) {
     let closest = null, bestDist = Infinity;
     let ux = Math.floor(Number(u && u.x) / TILE);
     let uy = Math.floor(Number(u && u.y) / TILE);
-    for (let s of collectorSpawners) {
+    for (let s of _getWorkerSpawnersByType(type)) {
         if (s.type === type && s.owner === u.owner && s.energy > 0 && !s.underConstruction) {
             let sx = Math.floor(Number(s.gx) || 0);
             let sy = Math.floor(Number(s.gy) || 0);

@@ -177,42 +177,52 @@ function spawnQueuedUnitFromSpawner(spawner) {
 }
 
 function processGlobalSpawnerQueue() {
-    let collectReady = () => {
-        let ready = [];
-        let pushIfReady = (s) => {
-            if (!s || s.energy <= 0 || s.underConstruction) return;
-            if (!isQueueEnabled(s)) return;
-            if (!Array.isArray(s.spawnQueue) || s.spawnQueue.length <= 0) return;
-            let owner = Number.isFinite(s.owner) ? s.owner : localPlayerId;
-            let effLvl = getThingBaseLevel(s);
-            let fallbackType = getSpawnerFallbackUnitType(s);
-            let front = getQueuedSpawnInfo(s.spawnQueue[0], fallbackType, effLvl, owner);
-            if (front.energyPaid < front.energyRequired) return;
-            if (!Number.isFinite(s._spawnReadyOrder)) s._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
-            ready.push(s);
-        };
-        for (let b of barracks) pushIfReady(b);
-        for (let s of collectorSpawners) pushIfReady(s);
-        return ready;
-    };
-
-    let guard = 0;
-    while (guard++ < 2048) {
-        let ready = collectReady();
-        if (ready.length <= 0) break;
-
-        let chosen = null;
-        let chosenOrder = Infinity;
-        for (let s of ready) {
-            if (!(players[s.owner].popCount < getPlayerPopCap(s.owner))) continue;
-            let ord = Number(s._spawnReadyOrder) || Infinity;
-            if (ord < chosenOrder) {
-                chosenOrder = ord;
-                chosen = s;
-            }
+    // Spawning changes only the chosen queue and its owner's population.
+    // Discover ready buildings once, then revisit only the queue we consumed.
+    // The heap preserves ready-order priority and original array-order ties.
+    let ready = [];
+    let before = (a, b) => a.order < b.order || (a.order === b.order && a.index < b.index);
+    let pushIfReady = (s, index) => {
+        if (!s || s.energy <= 0 || s.underConstruction || !isQueueEnabled(s)) return;
+        if (!Array.isArray(s.spawnQueue) || s.spawnQueue.length <= 0) return;
+        let owner = Number.isFinite(s.owner) ? s.owner : localPlayerId;
+        let front = getQueuedSpawnInfo(s.spawnQueue[0], getSpawnerFallbackUnitType(s), getThingBaseLevel(s), owner);
+        if (front.energyPaid < front.energyRequired) return;
+        if (!Number.isFinite(s._spawnReadyOrder)) s._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
+        let order = Number(s._spawnReadyOrder) || Infinity;
+        if (order === Infinity) return; // The original strict minimum also skips zero orders.
+        let entry = { s, index, order };
+        let i = ready.length;
+        ready.push(entry);
+        while (i > 0) {
+            let parent = (i - 1) >> 1;
+            if (!before(entry, ready[parent])) break;
+            ready[i] = ready[parent]; i = parent;
         }
-        if (!chosen) break;
-        if (!spawnQueuedUnitFromSpawner(chosen)) break;
+        ready[i] = entry;
+    };
+    let index = 0;
+    for (let b of barracks) pushIfReady(b, index++);
+    for (let s of collectorSpawners) pushIfReady(s, index++);
+    let spawned = 0;
+    while (ready.length && spawned < 2048) {
+        let chosen = ready[0];
+        let last = ready.pop();
+        if (ready.length) {
+            let i = 0;
+            while (i * 2 + 1 < ready.length) {
+                let child = i * 2 + 1;
+                if (child + 1 < ready.length && before(ready[child + 1], ready[child])) child++;
+                if (!before(ready[child], last)) break;
+                ready[i] = ready[child]; i = child;
+            }
+            ready[i] = last;
+        }
+        if (!(players[chosen.s.owner].popCount < getPlayerPopCap(chosen.s.owner))) continue;
+        if (!spawnQueuedUnitFromSpawner(chosen.s)) break;
+        spawned++;
+        // Do not assign the next front an order after the original loop limit.
+        if (spawned < 2048) pushIfReady(chosen.s, chosen.index);
     }
 }
 

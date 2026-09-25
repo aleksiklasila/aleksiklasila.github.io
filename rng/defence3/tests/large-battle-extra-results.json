@@ -1,0 +1,149 @@
+{
+  "node": "v22.20.0",
+  "cpu": "AMD Ryzen 7 4800H with Radeon Graphics         ",
+  "baseline": "3e3ed3e280b7f2430198627f55076c2f29bb8333",
+  "results": [
+    {
+      "repeat": 0,
+      "scenario": "siege",
+      "baseline": true,
+      "multiplayer": false,
+      "units": 2827,
+      "buildings": 830,
+      "tick": 160,
+      "lockstep": "b1e3298b",
+      "workers": {
+        "RETURNING": 65,
+        "IDLE": 1205,
+        "RETURNING_FOR_GOLD": 66,
+        "MOVING_TO": 52
+      },
+      "state": "b1eb09404ad61d59cfe83effe2d6b3c20e91e871aa9699fdf8db9119fe7fe4a7",
+      "productionTotal": 5.914500000007138,
+      "productionMax": 0.15689999999995052,
+      "mean": 52.137975833333364,
+      "median": 52.16740000000027,
+      "p95": 61.80330000000049,
+      "max": 68.15430000000015,
+      "commandMean": 49.874799999999595
+    },
+    {
+      "repeat": 0,
+      "scenario": "siege",
+      "baseline": false,
+      "multiplayer": false,
+      "units": 2827,
+      "buildings": 830,
+      "tick": 160,
+      "lockstep": "b1e3298b",
+      "workers": {
+        "RETURNING": 65,
+        "IDLE": 1205,
+        "RETURNING_FOR_GOLD": 66,
+        "MOVING_TO": 52
+      },
+      "state": "b1eb09404ad61d59cfe83effe2d6b3c20e91e871aa9699fdf8db9119fe7fe4a7",
+      "productionTotal": 7.036000000000968,
+      "productionMax": 0.6673000000009779,
+      "mean": 49.7114999999999,
+      "median": 49.4380000000001,
+      "p95": 60.06949999999961,
+      "max": 64.3056000000006,
+      "commandMean": 47.097500000000004
+    },
+    {
+      "repeat": 0,
+      "scenario": "combat",
+      "baseline": true,
+      "multiplayer": true,
+      "units": 2288,
+      "buildings": 1002,
+      "tick": 160,
+      "lockstep": "ead08536",
+      "workers": {
+        "MANUAL_MOVE": 1067,
+        "RETURNING_FOR_GOLD": 1,
+        "IDLE": 2
+      },
+      "state": "0fa0fb0afa7c8d21fe784a7e77c794a0d8326f21daa7cfa6d1ccb4538456e4b0",
+      "productionTotal": 5.615900000007059,
+      "productionMax": 0.16769999999996799,
+      "mean": 40.132876666666675,
+      "median": 38.25220000000081,
+      "p95": 53.667099999999664,
+      "max": 121.57549999999992,
+      "commandMean": 94.48136666666687
+    },
+    {
+      "repeat": 0,
+      "scenario": "combat",
+      "baseline": false,
+      "multiplayer": true,
+      "units": 2288,
+      "buildings": 1002,
+      "tick": 160,
+      "lockstep": "ead08536",
+      "workers": {
+        "MANUAL_MOVE": 1067,
+        "RETURNING_FOR_GOLD": 1,
+        "IDLE": 2
+      },
+      "state": "0fa0fb0afa7c8d21fe784a7e77c794a0d8326f21daa7cfa6d1ccb4538456e4b0",
+      "productionTotal": 5.7755000000024665,
+      "productionMax": 0.17519999999967695,
+      "mean": 41.21861916666671,
+      "median": 39.2432000000008,
+      "p95": 53.84569999999985,
+      "max": 128.6782000000003,
+      "commandMean": 96.17120000000023
+    },
+    {
+      "repeat": 0,
+      "scenario": "rally",
+      "baseline": true,
+      "multiplayer": true,
+      "units": 6000,
+      "buildings": 1002,
+      "tick": 160,
+      "lockstep": "ae6e8616",
+      "workers": {
+        "IDLE": 1488,
+        "RETURNING": 11,
+        "MOVING_TO": 5,
+        "MANUAL_MOVE": 1996
+      },
+      "state": "4594e783872481a56fe4cedbed673664a5f95e8a6b099a621f4f00f83dba3b42",
+      "productionTotal": 418.51820000000043,
+      "productionMax": 144.4462999999996,
+      "mean": 83.1541266666667,
+      "median": 80.48340000000098,
+      "p95": 107.79880000000048,
+      "max": 236.79789999999957,
+      "commandMean": 212.3686666666666
+    },
+    {
+      "repeat": 0,
+      "scenario": "rally",
+      "baseline": false,
+      "multiplayer": true,
+      "units": 6000,
+      "buildings": 1002,
+      "tick": 160,
+      "lockstep": "ae6e8616",
+      "workers": {
+        "IDLE": 1488,
+        "RETURNING": 11,
+        "MOVING_TO": 5,
+        "MANUAL_MOVE": 1996
+      },
+      "state": "4594e783872481a56fe4cedbed673664a5f95e8a6b099a621f4f00f83dba3b42",
+      "productionTotal": 242.32760000000644,
+      "productionMax": 89.8143999999993,
+      "mean": 87.03399916666665,
+      "median": 82.5010999999995,
+      "p95": 131.07769999999982,
+      "max": 188.59900000000016,
+      "commandMean": 148.3867333333334
+    }
+  ]
+}
