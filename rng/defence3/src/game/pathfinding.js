@@ -127,13 +127,35 @@ function _tryConsumeAstarNodeBudget(owner, count = 1) {
     return true;
 }
 
+// Movement spends A* on every tile step of every unit. Apply those spends
+// once per tick boundary (see gameTick) in the same fixed-point units, so the
+// stockpile ends each tick exactly where per-step updates would leave it.
+const _pendingMovementAstarFixed = [];
+
 function _consumePlayerAstarStockpile(owner, amount, unit = null, sourceTag = null) {
     let delta = Math.max(0, Number(amount) || 0);
     if (!(delta > 0)) return;
     let pid = _normalizeOwnerId(owner);
     if (pid < 0 || !players[pid]) return;
-    addPlayerResource(pid, 'astar', -delta);
+    if (sourceTag === 'movement' && typeof gameStarted !== 'undefined' && gameStarted) {
+        _pendingMovementAstarFixed[pid] = (_pendingMovementAstarFixed[pid] || 0) + _toFixedResourceUnits(-delta);
+    } else {
+        addPlayerResource(pid, 'astar', -delta);
+    }
     _recordAstarUsage(pid, delta, unit, sourceTag);
+}
+
+function flushPendingMovementAstarSpend() {
+    for (let pid = 0; pid < _pendingMovementAstarFixed.length; pid++) {
+        let fixedDelta = _pendingMovementAstarFixed[pid];
+        if (!fixedDelta) continue;
+        _pendingMovementAstarFixed[pid] = 0;
+        let player = _ensurePlayerResourceState(pid);
+        if (!player) continue;
+        let fixedMap = player._resourceFixedValues;
+        let currentFixed = Number.isFinite(fixedMap.astar) ? Math.floor(fixedMap.astar) : _toFixedResourceUnits(Number(player.astar) || 0);
+        _setPlayerResourceValue(pid, 'astar', _fromFixedResourceUnits(currentFixed + fixedDelta));
+    }
 }
 
 function _resolveUnitAstarTileCost(u) {
@@ -159,7 +181,8 @@ function _tryConsumeAstarMoveCost(u, tiles = 1) {
     if (amount <= 0) return true;
     let pid = _normalizeOwnerId(u.owner);
     if (pid < 0) return true;
-    let remaining = _getPlayerAstarBudgetRemaining(u.owner);
+    // Include this tick's not yet applied movement spend.
+    let remaining = _getPlayerAstarBudgetRemaining(u.owner) + _fromFixedResourceUnits(_pendingMovementAstarFixed[pid] || 0);
     if (remaining < amount) {
         _setUnitAstarBudgetBlockedIndicator(u, 1);
     }
@@ -1262,4 +1285,192 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
 
 function findPathAStarTagged(sourceTag, sx, sy, ex, ey, ignoreWalls = false, canWalk = null, pathOwner = null, cacheProfileHint = null, allowClosestReachableFallback = true) {
     return _withPathfindContext(sourceTag, pathOwner, null, () => findPathAStar(sx, sy, ex, ey, ignoreWalls, canWalk, pathOwner, cacheProfileHint, allowClosestReachableFallback));
+}
+
+// ------------------------------------------------------------------
+// Group routes: one reverse search from a shared destination serves every
+// unit in a move/attack-move order, instead of one A* per unit.
+// ------------------------------------------------------------------
+let _heapPopF = 0;
+function _heapPop() {
+    let hF = _astarHeapF, hK = _astarHeapK;
+    let key = hK[0];
+    _heapPopF = hF[0];
+    let heapSz = --_astarHeapSz;
+    if (heapSz > 0) {
+        hF[0] = hF[heapSz];
+        hK[0] = hK[heapSz];
+        let i = 0;
+        while (true) {
+            let l = (i << 1) + 1;
+            if (l >= heapSz) break;
+            let r = l + 1;
+            let s = l;
+            if (r < heapSz && (hF[r] < hF[l] || (hF[r] === hF[l] && hK[r] < hK[l]))) s = r;
+            if (hF[i] < hF[s] || (hF[i] === hF[s] && hK[i] <= hK[s])) break;
+            let tf = hF[i]; hF[i] = hF[s]; hF[s] = tf;
+            let tk = hK[i]; hK[i] = hK[s]; hK[s] = tk;
+            i = s;
+        }
+    }
+    return key;
+}
+
+// Returns one path per start ({x, y}), each running from its start to
+// (ex, ey), or null where the shared search cannot answer (an unreachable
+// start, an unwalkable target or an exhausted node budget); callers then fall
+// back to the per-unit search. Paths are shortest, like findPathAStar, and
+// pick among equal-length steps by clearance first, then by staying close to
+// the unit's own straight line to the target, then by tile index. Each choice
+// depends only on the grid, the starts and the target, so peers agree.
+function findGroupPathsToTarget(starts, ex, ey, canWalk = null, pathOwner = null) {
+    let perfStart = performance.now();
+    let result = new Array(starts.length).fill(null);
+    let gridW = GRID_W, gridH = GRID_H, gridData = grid;
+    if (!(starts.length > 0) || !(ex >= 0 && ey >= 0 && ex < gridW && ey < gridH)) return result;
+    let usePortalEdges = pathOwner !== null;
+    if (usePortalEdges && _cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+    let walkable = (x, y) => gridData[y][x].type !== TYPE_WALL
+        || (usePortalEdges && !!_getCloudTowerFast(x, y, pathOwner)) || !!(canWalk && canWalk(x, y));
+    if (!walkable(ex, ey)) return result;
+
+    let bufSize = gridW * gridH;
+    _ensurePathClearanceCache();
+    _ensureAstarBuffers(bufSize);
+    if (++_astarEpoch > 2000000000) {
+        _astarEpoch = 1;
+        _astarVisitedGen.fill(0);
+        _astarGScoreGen.fill(0);
+    }
+    let epoch = _astarEpoch;
+    let settled = _astarVisitedGen, gGen = _astarGScoreGen, gVal = _astarGScoreVal;
+
+    // Starts are the targets of the reverse search. A consistent heuristic
+    // (distance to their bounding box) keeps it to a corridor plus that box.
+    let minX = gridW, minY = gridH, maxX = -1, maxY = -1;
+    let pendingStarts = new Map();
+    for (let s of starts) {
+        if (!(s.x >= 0 && s.y >= 0 && s.x < gridW && s.y < gridH)) continue;
+        pendingStarts.set(s.y * gridW + s.x, true);
+        if (s.x < minX) minX = s.x;
+        if (s.x > maxX) maxX = s.x;
+        if (s.y < minY) minY = s.y;
+        if (s.y > maxY) maxY = s.y;
+    }
+    if (pendingStarts.size === 0) return result;
+    // Live portals break the heuristic's consistency, as in findPathAStar.
+    let usePortalHeuristic = usePortalEdges && _hasUsablePathPortal(pathOwner);
+    let h = usePortalHeuristic ? () => 0
+        : (x, y) => (x < minX ? minX - x : (x > maxX ? x - maxX : 0)) + (y < minY ? minY - y : (y > maxY ? y - maxY : 0));
+
+    let budgetOwner = Number.isFinite(pathOwner) ? pathOwner : _activePathfindOwner;
+    let endKey = ey * gridW + ex;
+    gGen[endKey] = epoch;
+    gVal[endKey] = 0;
+    _astarHeapSz = 0;
+    _heapPush(h(ex, ey), endKey);
+    let remaining = pendingStarts.size;
+    let searchClouds = usePortalEdges && !!(_cloudTileCache && _cloudTileCache.size);
+    let bound = Infinity;
+    let iterations = 0;
+    let visit = (nKey, ng, nx, ny) => {
+        if (settled[nKey] === epoch) return;
+        if (gGen[nKey] === epoch && gVal[nKey] <= ng) return;
+        // A unit may stand on an unwalkable tile; it is only ever left.
+        if (!walkable(nx, ny) && !pendingStarts.has(nKey)) return;
+        gGen[nKey] = epoch;
+        gVal[nKey] = ng;
+        _heapPush(ng + h(nx, ny), nKey);
+    };
+    while (_astarHeapSz > 0) {
+        let curKey = _heapPop();
+        // Settle every node that can lie on a shortest route of the last start.
+        if (_heapPopF > bound) break;
+        if (settled[curKey] === epoch) continue;
+        settled[curKey] = epoch;
+        let cx = curKey % gridW, cy = (curKey / gridW) | 0;
+        let cg = gVal[curKey];
+        if (pendingStarts.get(curKey) === true) {
+            pendingStarts.set(curKey, false);
+            if (--remaining === 0) bound = cg;
+        }
+        // Stepping into a tile requires that tile to be walkable.
+        if (!walkable(cx, cy)) continue;
+        if (++iterations > bufSize || !_tryConsumeAstarNodeBudget(budgetOwner, 1)) {
+            _lastPathfindAbortedByBudget = true;
+            _recordPathfindCall('player_commands', performance.now() - perfStart, false);
+            return result;
+        }
+        for (let di = 0; di < 8; di += 2) {
+            let nx = cx + _ASTAR_DIRS[di], ny = cy + _ASTAR_DIRS[di + 1];
+            if (nx < 0 || nx >= gridW || ny < 0 || ny >= gridH) continue;
+            visit(ny * gridW + nx, cg + 1, nx, ny);
+        }
+        if (searchClouds) {
+            let cloud = _getCloudTowerFast(cx, cy, pathOwner);
+            let partner = cloud ? getPairedCloudTower(cloud, pathOwner) : null;
+            if (partner) visit(partner.gy * gridW + partner.gx, cg + 1, partner.gx, partner.gy);
+        }
+    }
+
+    // Walk each start downhill. Paths share node objects per tile.
+    let hasClouds = usePortalEdges && !!(_cloudTileCache && _cloudTileCache.size);
+    let stepKeys = [0, 0, 0, 0, 0];
+    let nodes = new Map();
+    let nodeAt = key => {
+        let node = nodes.get(key);
+        if (!node) nodes.set(key, node = { x: key % gridW, y: (key / gridW) | 0 });
+        return node;
+    };
+    let byStart = new Map();
+    for (let i = 0; i < starts.length; i++) {
+        let s = starts[i];
+        if (!(s.x >= 0 && s.y >= 0 && s.x < gridW && s.y < gridH)) continue;
+        let startKey = s.y * gridW + s.x;
+        if (byStart.has(startKey)) { result[i] = byStart.get(startKey); continue; }
+        let path = null;
+        if (settled[startKey] === epoch) {
+            path = [nodeAt(startKey)];
+            let routeDx = ex - s.x, routeDy = ey - s.y;
+            let cur = startKey;
+            while (cur !== endKey) {
+                let cx = cur % gridW, cy = (cur / gridW) | 0, want = gVal[cur] - 1;
+                let count = 0;
+                let consider = (nKey, nx, ny) => {
+                    if (settled[nKey] !== epoch || gVal[nKey] !== want || !walkable(nx, ny)) return;
+                    stepKeys[count++] = nKey;
+                };
+                for (let di = 0; di < 8; di += 2) {
+                    let nx = cx + _ASTAR_DIRS[di], ny = cy + _ASTAR_DIRS[di + 1];
+                    if (nx >= 0 && nx < gridW && ny >= 0 && ny < gridH) consider(ny * gridW + nx, nx, ny);
+                }
+                if (hasClouds) {
+                    let cloud = _getCloudTowerFast(cx, cy, pathOwner);
+                    let partner = cloud ? getPairedCloudTower(cloud, pathOwner) : null;
+                    if (partner) consider(partner.gy * gridW + partner.gx, partner.gx, partner.gy);
+                }
+                // Most steps have one candidate; rank only real choices.
+                let best = count > 0 ? stepKeys[0] : -1;
+                if (count > 1) {
+                    let bestClear = -1, bestCross = 0;
+                    best = -1;
+                    for (let c = 0; c < count; c++) {
+                        let nKey = stepKeys[c], nx = nKey % gridW, ny = (nKey / gridW) | 0;
+                        let clear = _getPathClearance(nx, ny, canWalk, pathOwner, usePortalEdges);
+                        let cross = Math.abs((nx - s.x) * routeDy - (ny - s.y) * routeDx);
+                        if (best < 0 || clear > bestClear || (clear === bestClear && (cross < bestCross || (cross === bestCross && nKey < best)))) {
+                            best = nKey; bestClear = clear; bestCross = cross;
+                        }
+                    }
+                }
+                if (best < 0 || path.length > bufSize) { path = null; break; }
+                path.push(nodeAt(best));
+                cur = best;
+            }
+        }
+        byStart.set(startKey, path);
+        result[i] = path;
+    }
+    _recordPathfindCall('player_commands', performance.now() - perfStart, false);
+    return result;
 }

@@ -93,4 +93,44 @@ sentry.doHolding();
 assert.equal(attacks.at(-1), 'tower', 'holding units attack hostile structures in range');
 assert.equal(sentry.commandState, holding);
 
+// Hold is a movement lock, not an order: routes, targets and progress stay.
+context.towers.length = 0;
+context.isCloudPortalLink = () => false;
+context.canUnitOccupyTile = () => true;
+context._tryConsumeAstarMoveCostForTransition = () => true;
+const held = makeUnit();
+held.x = 16; held.y = 16; held.r = 6; held.holdPosition = true;
+held.path = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }]; held.pathIndex = 1;
+const route = held.path;
+for (let tick = 0; tick < 20; tick++) assert.equal(held.followPath(4), false);
+assert.deepEqual([held.x, held.y, held.pathIndex, held.path], [16, 16, 1, route], 'held units neither move nor lose their route');
+held.holdPosition = false;
+held.followPath(4);
+assert.ok(held.x > 16, 'released units continue along the same route');
+
+const attacking = vm.runInContext('CMD_ATTACKING', context);
+const guard = makeUnit();
+guard.holdPosition = true; guard.commandState = attacking; guard.path = null;
+guard.preComputed.visionRange = 10;
+const far = { id: 7, owner: 1, x: 150, y: 0 }, near = { id: 8, owner: 1, x: 10, y: 0 };
+context._isTargetWithinUnitAttackAreaRange = (_u, t) => t === near;
+guard.targetUnit = far; guard.forcedAttackTarget = true;
+candidates = [near, far];
+guard.doAttacking(4);
+assert.deepEqual([guard.x, guard.y, guard.path, guard.targetUnit], [0, 0, null, far], 'a held unit keeps its target without chasing or pathing');
+assert.equal(attacks.at(-1), 8, 'and fights what is in range meanwhile');
+guard.attackTimer = 0; guard.targetUnit = near;
+guard._performAttackOnUnit = target => { attacks.push('preferred:' + target.id); };
+guard.doAttacking(4);
+assert.equal(attacks.at(-1), 'preferred:8', 'the chosen target is attacked once in range');
+assert.equal(vm.runInContext('canUnitAutoRetaliate', context)(Object.assign(makeUnit(), { holdPosition: true, commandState: 0, preComputed: { attackDamage: 5, attackRangeArea: 1 } })), false);
+
+// Order handling: hold only sets the flag; X releases held units first.
+const main = fs.readFileSync(path.join(__dirname, '..', 'src/main.js'), 'utf8');
+const holdAction = main.slice(main.indexOf("a.action === 'hold'"), main.indexOf("a.action === 'queueUnit'"));
+assert.doesNotMatch(holdAction, /path = null|workerState|targetUnit|_pendingPathTarget|commandState/, 'hold keeps orders, rally routes and worker tasks');
+const stopAction = main.slice(main.indexOf("a.action === 'stop'"), main.indexOf("a.action === 'hold'"));
+assert.match(stopAction, /if \(u\.holdPosition\) \{ u\.holdPosition = false; continue; \}/);
+assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'src/things/worker.js'), 'utf8'), /CMD_HOLDING/);
+
 console.log('PASS: travelling and holding attacks respect range, cooldowns, fixed positions, and deterministic targets.');

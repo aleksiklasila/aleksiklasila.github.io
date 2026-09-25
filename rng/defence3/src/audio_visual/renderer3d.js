@@ -680,9 +680,28 @@
         return { positions, normals, indices: new Uint32Array(indices), uvs, details: new Float32Array(details) };
     }
 
+    // proceduralKind depends only on these four inputs; memoize it because it
+    // runs (with several regex tests) for every object in every frame.
+    const proceduralKindCache = new Map();
+    const lodMeshKeys = new Map();
     function proceduralKind(object) {
         if (object.modelCandidates && object.modelCandidates.length) return null;
         let key = object.modelKey || '';
+        let flags = (object.isFlying ? 1 : 0) | (object.isWorker ? 2 : 0);
+        let byKey = proceduralKindCache.get(key);
+        if (!byKey) {
+            if (proceduralKindCache.size > 512) proceduralKindCache.clear();
+            proceduralKindCache.set(key, byKey = new Map());
+        }
+        let weapon = String(object.weaponType || '');
+        let slots = byKey.get(weapon);
+        if (!slots) byKey.set(weapon, slots = [undefined, undefined, undefined, undefined]);
+        let kind = slots[flags];
+        if (kind === undefined) kind = slots[flags] = computeProceduralKind(key, weapon, !!object.isFlying, !!object.isWorker);
+        return kind;
+    }
+    function computeProceduralKind(key, weaponType, isFlying, isWorker) {
+        let object = { weaponType, isFlying, isWorker };
         if (key === 'unit_snake') return 'serpent:engine';
         if (key.startsWith('unit_')) {
             let weapon = String(object.weaponType || '');
@@ -1516,7 +1535,10 @@
             if (!kind) return null;
             // Use scale at the orbit center so rotating cannot toggle detail levels.
             let pixels = this.lodPixelsPerWorld * Math.max(object.scaleX, object.scaleZ);
-            return pixels < 24 ? kind + ':lod' : kind;
+            if (!(pixels < 24)) return kind;
+            let lod = lodMeshKeys.get(kind);
+            if (!lod) lodMeshKeys.set(kind, lod = kind + ':lod');
+            return lod;
         }
 
         getPrimitiveMesh(object) {

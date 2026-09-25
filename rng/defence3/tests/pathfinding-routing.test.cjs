@@ -67,6 +67,14 @@ for (let scenario = 0; scenario < 40; scenario++) {
             underConstruction: scenario % 5 === 3, baseStats: { isCloud: true, pairId: 'a' } }
     ];
     const expected = m._findPathBfsReference(1, 1, 24, 20, false, null, 0, true);
+    // Group orders give the same shortest routes, through portals too.
+    const groupStartsHere = [{ x: 1, y: 1 }, { x: 2, y: 1 }, { x: 1, y: 2 }].filter(s => !m.grid[s.y][s.x].type);
+    const grouped = m.findGroupPathsToTarget(groupStartsHere, 24, 20, null, 0);
+    groupStartsHere.forEach((s, i) => {
+        const single = m._findPathBfsReference(s.x, s.y, 24, 20, false, null, 0, true);
+        assert.equal(grouped[i]?.length, single?.length, `group shortest path: scenario ${scenario}`);
+        if (grouped[i]) assert.ok(m._isPathValidForScenario(grouped[i], s.x, s.y, 24, 20, false, null, 0, true));
+    });
     for (let id = 0; id < 12; id++) {
         const actual = m._findPathForUnitTagged('player_commands', { id }, 1, 1, 24, 20, false, null, 0, null, false);
         assert.equal(actual?.length, expected?.length, `shortest path: scenario ${scenario}, unit ${id}`);
@@ -252,6 +260,64 @@ assert.equal(crowdA.done, 150, 'the whole crowd passes along the route');
 // column of 150 units took several times longer.
 assert.ok(crowdA.tick < 2600, `crowd throughput: ${crowdA.tick} ticks`);
 assert.deepEqual(crowdB, crowdA, 'crowd movement replays deterministically');
+
+// Group orders: one shared reverse search gives every unit its own shortest
+// path. Compare with per-unit A* on a map with a gate and a block, then check
+// that a crowd flows at least as well along the shared-search routes.
+const obstacles = [];
+for (let y = 15; y < 70; y++) if (y < 38 || y > 42) for (let x = 35; x <= 37; x++) obstacles.push([x, y]);
+for (let y = 22; y <= 32; y++) for (let x = 50; x <= 58; x++) obstacles.push([x, y]);
+const gw = world(160, 100);
+for (const [x, y] of obstacles) gw.grid[y][x].type = unitGrid[y][x].type = 1;
+const groupStarts = Array.from({ length: 150 }, (_, i) => ({ x: 4 + i % 15, y: 45 + Math.floor(i / 15) }));
+const groupPaths = gw.findGroupPathsToTarget(groupStarts, 72, 12, null, 0);
+const astarPaths = groupStarts.map((s, i) => gw._findPathForUnitTagged('player_commands', { id: i, owner: 0 }, s.x, s.y, 72, 12, false, null, 0));
+for (let i = 0; i < groupStarts.length; i++) {
+    assert.ok(groupPaths[i], `group path ${i}`);
+    assert.equal(groupPaths[i].length, astarPaths[i].length, 'group paths are shortest paths');
+    assert.ok(gw._isPathValidForScenario(groupPaths[i], groupStarts[i].x, groupStarts[i].y, 72, 12, false, null, 0, true));
+}
+assert.equal(JSON.stringify(gw.findGroupPathsToTarget(groupStarts, 72, 12, null, 0)), JSON.stringify(groupPaths), 'replays');
+assert.equal(new Set(groupPaths.map(p => JSON.stringify(p.slice(0, 4)))).size, groupStarts.length, 'each unit starts on its own route');
+gw.nodes = 0;
+gw.findGroupPathsToTarget(groupStarts, 72, 12, null, 0);
+const groupNodes = gw.nodes;
+gw.nodes = 0;
+gw._bumpPathTopologyVersion();
+groupStarts.forEach((s, i) => gw._findPathForUnitTagged('player_commands', { id: i, owner: 0 }, s.x, s.y, 72, 12, false, null, 0));
+assert.ok(groupNodes * 3 < gw.nodes, `shared search expands far fewer nodes: ${groupNodes} vs ${gw.nodes}`);
+
+function crowdAlong(paths) {
+    const separate = vm.runInContext('applyUnitSeparation', unitContext);
+    const crowd = paths.map((p, i) => Object.assign(Object.create(Unit.prototype), {
+        id: i, owner: 0, r: 7, x: p[0].x * 32 + 16 + i % 5, y: p[0].y * 32 + 16 + i % 3,
+        path: p, pathIndex: 1, getCollisionRadius: () => 9, done: false
+    }));
+    let done = 0, tick = 0;
+    for (; tick < 6000 && done < crowd.length; tick++) {
+        for (const u of crowd) {
+            if (u.done) continue;
+            u.followPath(3.2);
+            if (u.pathIndex >= u.path.length - 3) { u.done = true; done++; continue; }
+            let px = 0, py = 0, overlap = 0;
+            for (const o of crowd) {
+                if (o === u || o.done) continue;
+                const dx = u.x - o.x, dy = u.y - o.y, d2 = dx * dx + dy * dy;
+                if (d2 >= 324 || d2 < 1e-6) continue;
+                const d = Math.sqrt(d2);
+                px += dx / d * (18 - d) * .6; py += dy / d * (18 - d) * .6; overlap = Math.max(overlap, 18 - d);
+            }
+            if (px || py) separate(u, px, py, overlap);
+            u.x = Math.round(u.x * 8) / 8; u.y = Math.round(u.y * 8) / 8;
+        }
+    }
+    return { tick, done };
+}
+const viaGroup = crowdAlong(groupPaths), viaAstar = crowdAlong(astarPaths);
+assert.equal(viaGroup.done, 150);
+assert.ok(viaGroup.tick <= viaAstar.tick * 1.1 + 20, `group routes flow as well as per-unit A*: ${viaGroup.tick} vs ${viaAstar.tick}`);
+for (const [x, y] of obstacles) unitGrid[y][x].type = 0;
+console.log(`group order: ${groupNodes} vs ${gw.nodes} nodes; crowd ${viaGroup.tick} vs ${viaAstar.tick} ticks; identical routes ${groupPaths.filter((p, i) => JSON.stringify(p) === JSON.stringify(astarPaths[i])).length}`);
 
 // Report timing, assert deterministic work counts rather than machine speed.
 const benchmark = world();

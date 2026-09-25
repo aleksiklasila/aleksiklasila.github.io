@@ -171,6 +171,10 @@ function _removeUnitFromSpatialArray(arr, u) {
     return false;
 }
 
+// Which bucket arrays a unit was last inserted into. Kept outside the unit
+// (never snapshotted); a replaced array forces a fresh membership check.
+const _spatialMembership = new WeakMap();
+
 // Area buckets also count members per owner, so enemy scans can skip areas
 // that hold only the scanning player's units (e.g. a large friendly army).
 function _addUnitToAreaBucket(bucket, u) {
@@ -206,6 +210,8 @@ function updateUnitSpatial(u) {
         if (oldAreaId >= 0 && oldAreaId < spatialUnitsByArea.length) {
             _removeUnitFromAreaBucket(spatialUnitsByArea[oldAreaId], u);
         }
+        let member = _spatialMembership.get(u);
+        if (member) member.area = null;
     }
     if (u._spatialKey !== undefined && u._spatialKey !== newKey) {
         let oldKey = u._spatialKey;
@@ -231,8 +237,22 @@ function updateUnitSpatial(u) {
         }
     }
     if (u._spatialKey === newKey) {
-        _addUnitToSpatialArray(spatialUnits[newKey], u);
-        if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) _addUnitToAreaBucket(spatialUnitsByArea[newAreaId], u);
+        // Unchanged tile: membership only needs re-checking (a linear scan)
+        // when the bucket arrays were replaced since the unit was added.
+        let member = _spatialMembership.get(u);
+        if (!member) _spatialMembership.set(u, member = { chunk: null, area: null });
+        let chunkArr = spatialUnits[newKey];
+        if (member.chunk !== chunkArr) {
+            _addUnitToSpatialArray(chunkArr, u);
+            member.chunk = chunkArr;
+        }
+        if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) {
+            let areaArr = spatialUnitsByArea[newAreaId];
+            if (member.area !== areaArr) {
+                _addUnitToAreaBucket(areaArr, u);
+                member.area = areaArr;
+            }
+        }
         let ownerSame = Math.floor(Number(u.owner));
         if (ownerSame >= 0 && ownerSame < spatialUnitsComplexPlayerCount) {
             _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(newKey, ownerSame, prevScaled, currentScaled);
@@ -243,7 +263,12 @@ function updateUnitSpatial(u) {
         return;
     }
     _addUnitToSpatialArray(spatialUnits[newKey], u);
-    if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) _addUnitToAreaBucket(spatialUnitsByArea[newAreaId], u);
+    let member = { chunk: spatialUnits[newKey], area: null };
+    _spatialMembership.set(u, member);
+    if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) {
+        _addUnitToAreaBucket(spatialUnitsByArea[newAreaId], u);
+        member.area = spatialUnitsByArea[newAreaId];
+    }
     let owner = Math.floor(Number(u.owner));
     if (owner >= 0 && owner < spatialUnitsComplexPlayerCount) {
         let typeIdx = spatialUnitTypeToIndex[u.unitType];
@@ -262,6 +287,7 @@ function updateUnitSpatial(u) {
     if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) _updateSpatialLowestHealthForUnit(u, newKey);
 }
 function removeUnitSpatial(u) {
+    _spatialMembership.delete(u);
     if (u._spatialKey !== undefined) {
         let oldKey = u._spatialKey;
         let prevScaled = Number.isFinite(u._spatialLastVisScaled) ? (u._spatialLastVisScaled | 0) : _getSpatialUnitVisibilityScaled(u);
@@ -636,7 +662,8 @@ function _findClosestEnemyUnitByChunks(owner, wx, wy, rangePx) {
 
     let tps = Math.max(1, Math.floor(Number(TICK_RATE) || 1));
     let rangeKey = Math.max(0, Math.floor(r));
-    let cacheKey = ownerId + '|' + minCx + '|' + minCy + '|' + maxCx + '|' + maxCy + '|' + rangeKey;
+    // Numeric key (exact below 2^53): string keys dominated this hot lookup.
+    let cacheKey = ownerId + 16 * (minCx + 1024 * (minCy + 1024 * (maxCx + 1024 * (maxCy + 1024 * Math.min(rangeKey, 4095)))));
     let cacheEntry = closestEnemyChunkQueryCache.get(cacheKey);
 
     if (cacheEntry) {
