@@ -32,7 +32,8 @@ const context = vm.createContext({
 });
 vm.runInContext(functionSource(read('src/audio_visual/renderer.js'),'getVisualUnitSourceLight'),context);
 const maskSource = read('src/audio_visual/renderer2d.js');
-vm.runInContext(functionSource(maskSource,'ensureVisibilityMaskCanvas')+'\n'+
+// The fog lookup table's declarations sit between these two functions.
+vm.runInContext(functionSource(maskSource,'_getVisibilityFogAlphaLut')+'\n'+functionSource(maskSource,'ensureVisibilityMaskCanvas')+'\n'+
     functionSource(maskSource,'rebuildVisibilityMaskCacheIfNeeded'),context);
 context.rebuildVisibilityMaskCacheIfNeeded();
 assert.equal(grid[0][1],0,'gameplay visibility remains unchanged');

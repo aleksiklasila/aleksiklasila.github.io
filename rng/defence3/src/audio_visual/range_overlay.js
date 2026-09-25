@@ -101,7 +101,8 @@ function getRenderRangeBoundary(selectedBuildings, selected) {
     // union between ticks; selection mode remains immediately responsive.
     if (renderRangeAllTeam && typeof gameTime === 'number') {
         const c = rangeFrameSourcesCache;
-        if (c && c.tick === gameTime && c.grid === grid && c.areas === _areaById
+        // Team outlines refresh at most every other tick (10 Hz at 20 TPS).
+        if (c && gameTime >= c.tick && gameTime - c.tick < 2 && c.grid === grid && c.areas === _areaById
             && c.units === units && c.towers === towers && c.barracks === barracks
             && c.spawners === collectorSpawners && c.mode === renderRangeMode && c.player === localPlayerId) return c.lines;
         const lines = computeRenderRangeBoundary(selectedBuildings, selected);
@@ -139,7 +140,9 @@ function computeRenderRangeBoundary(selectedBuildings, selected) {
         }
         if (renderRangeAllTeam && allBuildings) {
             if (typeof _activeTileEntities !== 'undefined') {
-                for (let e of _activeTileEntities) add(e, false);
+                // Only cell items can be owned sources here (mines never are).
+                let items = typeof _getVisibilityFloorItemCandidates === 'function' ? _getVisibilityFloorItemCandidates() : _activeTileEntities;
+                for (let e of items) add(e, false);
             } else for (let row of grid) for (let c of row) if (c.item) add(c.item, false);
         }
     }

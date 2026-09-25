@@ -175,91 +175,93 @@ function rebuildAreaDistanceCachesFromAreas() {
         _addDroppedItemToAreaBucket(drop, getAreaIdAtTile(drop.gx, drop.gy));
     }
 
+    _areaNeighborSets = neighborSets;
     for (let source = 0; source < areaCount; source++) {
-        if (!_areaById[source]) {
-             areaNeighborIds[source] = [];
-             areaDistanceMatrix[source] = null;
-             areaIdsByDistance[source] = [];
-             areaIdsWithinDistance[source] = [];
-             gridCellsByAreaDistance[source] = [];
-             gridCellsWithinAreaDistance[source] = [];
-             continue;
-        }
-        let neighbors = Array.from(neighborSets[source] || []).sort((a, b) => a - b);
+        let neighbors = _areaById[source] ? Array.from(neighborSets[source] || []).sort((a, b) => a - b) : [];
         areaNeighborIds[source] = neighbors;
         if (_areaById[source]) _areaById[source].neighborAreaIds = neighbors;
-        let ownCells = (_areaById[source] && Array.isArray(_areaById[source].cells)) ? _areaById[source].cells.slice() : [];
-        gridCellsByArea[source] = ownCells;
+        gridCellsByArea[source] = (_areaById[source] && Array.isArray(_areaById[source].cells)) ? _areaById[source].cells.slice() : [];
+    }
+    // Distance rows and the per-distance area/cell lists are built lazily per
+    // source area (see _ensureAreaDistanceRow). Building every row eagerly,
+    // with cumulative cell copies per distance, took seconds on huge maps.
+}
 
-        let distances = new Int16Array(areaCount);
-        distances.fill(-1);
-        distances[source] = 0;
+let _areaNeighborSets = [];
 
-        let queue = [source];
-        let head = 0;
-        let maxDistance = 0;
-        while (head < queue.length) {
-            let current = queue[head++];
-            let nextDistance = distances[current] + 1;
-            let currentNeighbors = neighborSets[current];
-            if (!currentNeighbors) continue;
-            for (let next of currentNeighbors) {
-                if (distances[next] !== -1) continue;
-                distances[next] = nextDistance;
-                if (nextDistance > maxDistance) maxDistance = nextDistance;
-                queue.push(next);
-            }
-        }
-
-        let exact = Array.from({ length: maxDistance + 1 }, () => []);
-        for (let target = 0; target < areaCount; target++) {
-            let dist = distances[target];
-            if (dist < 0) continue;
-            if (!exact[dist]) exact[dist] = [];
-            exact[dist].push(target);
-        }
-
-        let within = new Array(exact.length);
-        let cumulative = [];
-        for (let distance = 0; distance < exact.length; distance++) {
-            if (exact[distance] && exact[distance].length > 0) cumulative = cumulative.concat(exact[distance]);
-            within[distance] = cumulative.slice();
-        }
-
-        let exactGridCells = new Array(exact.length);
-        let cumulativeGridCells = new Array(exact.length);
-        let cumulativeCells = [];
-        for (let distance = 0; distance < exact.length; distance++) {
-            let areaIds = exact[distance] || [];
-            let cellsAtDistance = [];
-            for (let i = 0; i < areaIds.length; i++) {
-                let targetAreaId = areaIds[i];
-                let targetArea = _areaById[targetAreaId];
-                if (!targetArea || !Array.isArray(targetArea.cells)) continue;
-                let tCells = targetArea.cells;
-                for (let j = 0; j < tCells.length; j++) {
-                    if (tCells[j]) cellsAtDistance.push(tCells[j]);
-                }
-            }
-            exactGridCells[distance] = cellsAtDistance;
-            if (cellsAtDistance.length > 0) cumulativeCells = cumulativeCells.concat(cellsAtDistance);
-            cumulativeGridCells[distance] = cumulativeCells.slice();
-        }
-
-        areaDistanceMatrix[source] = distances;
-        areaIdsByDistance[source] = exact;
-        areaIdsWithinDistance[source] = within;
-        gridCellsByAreaDistance[source] = exactGridCells;
-        gridCellsWithinAreaDistance[source] = cumulativeGridCells;
-        if (_areaById[source]) {
-            _areaById[source].distanceRow = distances;
-            _areaById[source].areaIdsByDistance = exact;
-            _areaById[source].areaIdsWithinDistance = within;
-            _areaById[source].gridCells = ownCells;
-            _areaById[source].gridCellsByAreaDistance = exactGridCells;
-            _areaById[source].gridCellsWithinAreaDistance = cumulativeGridCells;
+// BFS over the area graph from one source, on first use. The result depends
+// only on the areas, so it is identical whenever (and on whichever peer) it
+// is first requested.
+function _ensureAreaDistanceRow(source) {
+    if (!(source >= 0 && source < areaDistanceMatrix.length)) return null;
+    let row = areaDistanceMatrix[source];
+    if (row !== undefined) return row;
+    if (!_areaById[source]) {
+        areaDistanceMatrix[source] = null;
+        areaIdsByDistance[source] = [];
+        areaIdsWithinDistance[source] = [];
+        gridCellsByAreaDistance[source] = [];
+        gridCellsWithinAreaDistance[source] = [];
+        return null;
+    }
+    let areaCount = areaDistanceMatrix.length;
+    let distances = new Int16Array(areaCount);
+    distances.fill(-1);
+    distances[source] = 0;
+    let queue = [source];
+    let head = 0;
+    let maxDistance = 0;
+    while (head < queue.length) {
+        let current = queue[head++];
+        let nextDistance = distances[current] + 1;
+        let currentNeighbors = _areaNeighborSets[current];
+        if (!currentNeighbors) continue;
+        for (let next of currentNeighbors) {
+            if (distances[next] !== -1) continue;
+            distances[next] = nextDistance;
+            if (nextDistance > maxDistance) maxDistance = nextDistance;
+            queue.push(next);
         }
     }
+    let exact = Array.from({ length: maxDistance + 1 }, () => []);
+    for (let target = 0; target < areaCount; target++) {
+        let dist = distances[target];
+        if (dist >= 0) exact[dist].push(target);
+    }
+    areaDistanceMatrix[source] = distances;
+    areaIdsByDistance[source] = exact;
+    areaIdsWithinDistance[source] = new Array(exact.length);
+    gridCellsByAreaDistance[source] = new Array(exact.length);
+    gridCellsWithinAreaDistance[source] = new Array(exact.length);
+    return distances;
+}
+
+function _getAreaGridCellsAtDistance(source, dist) {
+    let cached = gridCellsByAreaDistance[source][dist];
+    if (cached) return cached;
+    let cells = [];
+    for (let targetAreaId of areaIdsByDistance[source][dist]) {
+        let targetArea = _areaById[targetAreaId];
+        if (!targetArea || !Array.isArray(targetArea.cells)) continue;
+        for (let cell of targetArea.cells) if (cell) cells.push(cell);
+    }
+    gridCellsByAreaDistance[source][dist] = cells;
+    return cells;
+}
+
+// Cumulative lists (distance 0..dist, in distance order) built on demand.
+function _getAreaCumulative(source, dist, cache, atDistance) {
+    let cached = cache[dist];
+    if (cached) return cached;
+    let from = dist;
+    while (from > 0 && !cache[from - 1]) from--;
+    let list = from > 0 ? cache[from - 1] : [];
+    for (let d = from; d <= dist; d++) {
+        let part = atDistance(d);
+        list = part.length > 0 ? list.concat(part) : list.slice();
+        cache[d] = list;
+    }
+    return list;
 }
 
 function getAreaIdAtTile(gx, gy) {
@@ -301,6 +303,7 @@ function getAreaDistance(areaA, areaB) {
     let bId = Math.floor(Number(areaB));
     if (aId < 0 || bId < 0 || aId >= areaDistanceMatrix.length) return -1;
     let row = areaDistanceMatrix[aId];
+    if (row === undefined) row = _ensureAreaDistanceRow(aId);
     if (!row || bId >= row.length) return -1;
     return row[bId];
 }
@@ -308,6 +311,7 @@ function getAreaDistance(areaA, areaB) {
 function getAreaIdsAtDistance(areaId, distance) {
     let aId = Math.floor(Number(areaId));
     let dist = Math.max(0, Math.floor(Number(distance) || 0));
+    if (!(areaDistanceMatrix[aId] || (areaDistanceMatrix[aId] === undefined && _ensureAreaDistanceRow(aId)))) return [];
     let buckets = areaIdsByDistance[aId];
     if (!buckets || !buckets[dist]) return [];
     return buckets[dist];
@@ -316,27 +320,29 @@ function getAreaIdsAtDistance(areaId, distance) {
 function getAreaIdsWithinDistance(areaId, distance) {
     let aId = Math.floor(Number(areaId));
     let dist = Math.max(0, Math.floor(Number(distance) || 0));
-    let buckets = areaIdsWithinDistance[aId];
+    if (!(areaDistanceMatrix[aId] || (areaDistanceMatrix[aId] === undefined && _ensureAreaDistanceRow(aId)))) return [];
+    let buckets = areaIdsByDistance[aId];
     if (!buckets || buckets.length <= 0) return [];
     if (dist >= buckets.length) dist = buckets.length - 1;
-    return dist >= 0 && buckets[dist] ? buckets[dist] : [];
+    return _getAreaCumulative(aId, dist, areaIdsWithinDistance[aId], d => buckets[d]);
 }
 
 function getGridCellsAtAreaDistance(areaId, distance) {
     let aId = Math.floor(Number(areaId));
     let dist = Math.max(0, Math.floor(Number(distance) || 0));
-    let buckets = gridCellsByAreaDistance[aId];
-    if (!buckets || !buckets[dist]) return [];
-    return buckets[dist];
+    if (!(areaDistanceMatrix[aId] || (areaDistanceMatrix[aId] === undefined && _ensureAreaDistanceRow(aId)))) return [];
+    if (!areaIdsByDistance[aId][dist]) return [];
+    return _getAreaGridCellsAtDistance(aId, dist);
 }
 
 function getGridCellsWithinAreaDistance(areaId, distance) {
     let aId = Math.floor(Number(areaId));
     let dist = Math.max(0, Math.floor(Number(distance) || 0));
-    let buckets = gridCellsWithinAreaDistance[aId];
+    if (!(areaDistanceMatrix[aId] || (areaDistanceMatrix[aId] === undefined && _ensureAreaDistanceRow(aId)))) return [];
+    let buckets = areaIdsByDistance[aId];
     if (!buckets || buckets.length <= 0) return [];
     if (dist >= buckets.length) dist = buckets.length - 1;
-    return dist >= 0 && buckets[dist] ? buckets[dist] : [];
+    return _getAreaCumulative(aId, dist, gridCellsWithinAreaDistance[aId], d => _getAreaGridCellsAtDistance(aId, d));
 }
 
 function getDroppedItemsWithinAreaDistance(areaId, distance) {
