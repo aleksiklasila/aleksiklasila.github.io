@@ -56,13 +56,13 @@ let CONTROL_GROUP_ALERT_TICKS = Math.floor(TICK_RATE * 2.2);
 let MAP_ALERT_DURATION = Math.floor(TICK_RATE * 1.8);
 let MAP_KING_ALERT_DURATION = Math.floor(TICK_RATE * 2.6);
 let _audioReactiveEmitters = [];
-let _audioSpatialGridPrev = [];
-let _audioSpatialGridTarget = [];
-let _audioSpatialGridBackgroundPrev = [];
-let _audioSpatialGridBackgroundTarget = [];
 let _audioSpatialGridBackgroundVelocity = [];
-let _audioSpatialGridEffectsPrev = [];
-let _audioSpatialGridEffectsTarget = [];
+// Static per-tile geometry of the radial background wave.
+let _audioBgTileDist = null, _audioBgTileWaveAmount = null, _audioBgTileSwell = null;
+// Whether the background spring still has nonzero tiles, and the tile rects
+// the effect emitters stamped last update (only those need clearing).
+let _audioBgSpringActive = false;
+let _audioFxStampedRects = [];
 let _audioReactiveLastGridTick = -1;
 let _audioTypeBurstState = Object.create(null);
 
@@ -78,20 +78,24 @@ function _ensureAudioReactiveGrid() {
     audioSpatialGrid = _makeAudioReactiveGridRows();
     audioSpatialGridBackground = _makeAudioReactiveGridRows();
     audioSpatialGridEffects = _makeAudioReactiveGridRows();
-    _audioSpatialGridPrev = _makeAudioReactiveGridRows();
-    _audioSpatialGridTarget = _makeAudioReactiveGridRows();
-    _audioSpatialGridBackgroundPrev = _makeAudioReactiveGridRows();
-    _audioSpatialGridBackgroundTarget = _makeAudioReactiveGridRows();
     _audioSpatialGridBackgroundVelocity = _makeAudioReactiveGridRows();
-    _audioSpatialGridEffectsPrev = _makeAudioReactiveGridRows();
-    _audioSpatialGridEffectsTarget = _makeAudioReactiveGridRows();
+    let n = GRID_W * GRID_H;
+    _audioBgTileDist = new Float32Array(n);
+    _audioBgTileWaveAmount = new Float32Array(n);
+    _audioBgTileSwell = new Float32Array(n);
+    let centerX = GRID_W * 0.5, centerY = GRID_H * 0.5;
+    let maxDist = Math.max(1, Math.hypot(Math.max(centerX, GRID_W - centerX), Math.max(centerY, GRID_H - centerY)));
+    for (let y = 0, i = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++, i++) {
+        let dist = Math.hypot(x + 0.5 - centerX, y + 0.5 - centerY);
+        let centerWeight = Math.max(0, 1 - Math.max(0, Math.min(1, dist / maxDist)));
+        _audioBgTileDist[i] = dist;
+        _audioBgTileWaveAmount[i] = AUDIO_REACTIVE_BG_PULSE_SCALE * (AUDIO_REACTIVE_BG_EDGE_BLEND + centerWeight * (1 - AUDIO_REACTIVE_BG_EDGE_BLEND));
+        _audioBgTileSwell[i] = 1 + centerWeight * centerWeight * AUDIO_REACTIVE_BG_SWELL_SCALE;
+    }
+    _audioBgSpringActive = false;
+    _audioFxStampedRects = [];
     _audioReactiveLastGridTick = -1;
     audioReactiveTextureVersion = 0;
-}
-
-function _copyAudioReactiveGridRows(targetRows, sourceRows) {
-    let rowCount = Math.min(targetRows.length, sourceRows.length);
-    for (let y = 0; y < rowCount; y++) targetRows[y].set(sourceRows[y]);
 }
 
 function _getAudioReactiveNowSeconds() {
@@ -138,24 +142,6 @@ function _getBackgroundMusicReactiveLevel(nowSeconds) {
     averagedLevel /= Math.max(1, _bgMusicReactiveLevelHistory.length);
     _bgMusicReactiveSmoothedLevel += (averagedLevel - _bgMusicReactiveSmoothedLevel) * AUDIO_REACTIVE_BG_ANALYSER_SMOOTHING;
     return Math.max(0, Math.min(1, _bgMusicReactiveSmoothedLevel));
-}
-
-function _getBackgroundReactiveTileLevel(baseLevel, tileX, tileY, nowSeconds) {
-    if (!(baseLevel > 0) || !Number.isFinite(tileX) || !Number.isFinite(tileY)) return 0;
-    let centerX = GRID_W * 0.5;
-    let centerY = GRID_H * 0.5;
-    let dx = tileX + 0.5 - centerX;
-    let dy = tileY + 0.5 - centerY;
-    let dist = Math.hypot(dx, dy);
-    let maxDist = Math.max(1, Math.hypot(Math.max(centerX, GRID_W - centerX), Math.max(centerY, GRID_H - centerY)));
-    let distNorm = Math.max(0, Math.min(1, dist / maxDist));
-    let centerWeight = Math.max(0, 1 - distNorm);
-    let wavePhase = dist / Math.max(0.001, AUDIO_REACTIVE_BG_RADIAL_WAVELENGTH_TILES) - nowSeconds * AUDIO_REACTIVE_BG_RADIAL_SCROLL_SPEED;
-    let wave = Math.sin(wavePhase * Math.PI * 2);
-    let waveAmount = AUDIO_REACTIVE_BG_PULSE_SCALE * (AUDIO_REACTIVE_BG_EDGE_BLEND + centerWeight * (1 - AUDIO_REACTIVE_BG_EDGE_BLEND));
-    let waveScale = 1 + wave * waveAmount;
-    let swellScale = 1 + centerWeight * centerWeight * AUDIO_REACTIVE_BG_SWELL_SCALE;
-    return Math.max(0, Math.min(1.5, baseLevel * waveScale * swellScale));
 }
 
 function _recordAudioReactiveEmitter(type, worldX, worldY, strength = 0.75) {
@@ -225,85 +211,87 @@ function updateAudioReactiveState() {
     audioReactiveGlobalOffsetX = Math.sin(nowSeconds * 1.45) * offsetPulse + Math.sin(nowSeconds * 3.6 + 0.9) * audioReactiveEffectsLevel * 0.22;
     audioReactiveGlobalOffsetY = Math.cos(nowSeconds * 1.18 + 0.4) * offsetPulse + Math.cos(nowSeconds * 3.1 + 1.7) * audioReactiveEffectsLevel * 0.18;
 
-    if (_audioReactiveLastGridTick < 0 || nowTick - _audioReactiveLastGridTick >= AUDIO_REACTIVE_GRID_UPDATE_INTERVAL) {
-        _copyAudioReactiveGridRows(_audioSpatialGridPrev, audioSpatialGrid);
-        _copyAudioReactiveGridRows(_audioSpatialGridBackgroundPrev, audioSpatialGridBackground);
-        _copyAudioReactiveGridRows(_audioSpatialGridEffectsPrev, audioSpatialGridEffects);
+    // The grids change only every few ticks. Rendering reads them directly
+    // (the old per-tick interpolation always resolved to the latest target).
+    if (_audioReactiveLastGridTick >= 0 && nowTick >= _audioReactiveLastGridTick &&
+        nowTick - _audioReactiveLastGridTick < AUDIO_REACTIVE_GRID_UPDATE_INTERVAL) return;
 
-        for (let y = 0; y < GRID_H; y++) {
-            let bgTargetRow = _audioSpatialGridBackgroundTarget[y];
+    let level = audioReactiveBackgroundLevel;
+    // Silent music with a settled spring leaves every background tile at 0:
+    // only the tiles last stamped by effect emitters need clearing.
+    let fullPass = level > 0 || _audioBgSpringActive;
+    if (fullPass) {
+        let active = false;
+        let phaseScale = 1 / Math.max(0.001, AUDIO_REACTIVE_BG_RADIAL_WAVELENGTH_TILES);
+        let phaseOffset = nowSeconds * AUDIO_REACTIVE_BG_RADIAL_SCROLL_SPEED;
+        for (let y = 0, i = 0; y < GRID_H; y++) {
+            let bgRow = audioSpatialGridBackground[y];
             let bgVelocityRow = _audioSpatialGridBackgroundVelocity[y];
-            let fxTargetRow = _audioSpatialGridEffectsTarget[y];
-            let totalTargetRow = _audioSpatialGridTarget[y];
-            for (let x = 0; x < GRID_W; x++) {
-                let rawBgValue = _getBackgroundReactiveTileLevel(audioReactiveBackgroundLevel, x, y, nowSeconds);
-                let bgDelta = rawBgValue - bgTargetRow[x];
+            let fxRow = audioSpatialGridEffects[y];
+            let totalRow = audioSpatialGrid[y];
+            for (let x = 0; x < GRID_W; x++, i++) {
+                let rawBgValue = 0;
+                if (level > 0) {
+                    let wave = Math.sin((_audioBgTileDist[i] * phaseScale - phaseOffset) * Math.PI * 2);
+                    rawBgValue = Math.max(0, Math.min(1.5, level * (1 + wave * _audioBgTileWaveAmount[i]) * _audioBgTileSwell[i]));
+                }
+                let bgDelta = rawBgValue - bgRow[x];
                 let nextVelocity = (bgVelocityRow[x] + bgDelta * AUDIO_REACTIVE_BG_TILE_SMOOTH_ACCEL) * AUDIO_REACTIVE_BG_TILE_SMOOTH_DAMPING;
-                let nextValue = bgTargetRow[x] + nextVelocity;
+                let nextValue = bgRow[x] + nextVelocity;
                 if (Math.abs(rawBgValue - nextValue) < 0.001 && Math.abs(nextVelocity) < 0.001) {
                     nextValue = rawBgValue;
                     nextVelocity = 0;
                 }
                 bgVelocityRow[x] = nextVelocity;
-                bgTargetRow[x] = Math.max(0, Math.min(1.5, nextValue));
-                fxTargetRow[x] = 0;
-                totalTargetRow[x] = bgTargetRow[x];
+                let bg = bgRow[x] = Math.max(0, Math.min(1.5, nextValue));
+                if (bg !== 0 || nextVelocity !== 0) active = true;
+                fxRow[x] = 0;
+                totalRow[x] = bg;
             }
         }
+        _audioBgSpringActive = active;
+    } else {
+        for (let r of _audioFxStampedRects) for (let y = r[1]; y <= r[3]; y++) {
+            audioSpatialGridEffects[y].fill(0, r[0], r[2] + 1);
+            audioSpatialGrid[y].fill(0, r[0], r[2] + 1);
+        }
+    }
+    _audioFxStampedRects.length = 0;
 
-        for (let i = 0; i < _audioReactiveEmitters.length; i++) {
-            let emitter = _audioReactiveEmitters[i];
-            let centerX = emitter.x / TILE;
-            let centerY = emitter.y / TILE;
-            let radiusTiles = Math.max(0.75, emitter.radiusTiles || AUDIO_REACTIVE_FX_DEFAULT_RADIUS_TILES);
-            let radiusSq = radiusTiles * radiusTiles;
-            let minX = Math.max(0, Math.floor(centerX - radiusTiles));
-            let maxX = Math.min(GRID_W - 1, Math.ceil(centerX + radiusTiles));
-            let minY = Math.max(0, Math.floor(centerY - radiusTiles));
-            let maxY = Math.min(GRID_H - 1, Math.ceil(centerY + radiusTiles));
-            let age = Math.max(0, Math.min(1, emitter.life / Math.max(1, emitter.maxLife)));
-            let amplitude = emitter.strength * age;
+    for (let i = 0; i < _audioReactiveEmitters.length; i++) {
+        let emitter = _audioReactiveEmitters[i];
+        let centerX = emitter.x / TILE;
+        let centerY = emitter.y / TILE;
+        let radiusTiles = Math.max(0.75, emitter.radiusTiles || AUDIO_REACTIVE_FX_DEFAULT_RADIUS_TILES);
+        let radiusSq = radiusTiles * radiusTiles;
+        let minX = Math.max(0, Math.floor(centerX - radiusTiles));
+        let maxX = Math.min(GRID_W - 1, Math.ceil(centerX + radiusTiles));
+        let minY = Math.max(0, Math.floor(centerY - radiusTiles));
+        let maxY = Math.min(GRID_H - 1, Math.ceil(centerY + radiusTiles));
+        if (minX > maxX || minY > maxY) continue;
+        _audioFxStampedRects.push([minX, minY, maxX, maxY]);
+        let age = Math.max(0, Math.min(1, emitter.life / Math.max(1, emitter.maxLife)));
+        let amplitude = emitter.strength * age;
 
-            for (let gy = minY; gy <= maxY; gy++) {
-                let fy = gy + 0.5 - centerY;
-                let fxTargetRow = _audioSpatialGridEffectsTarget[gy];
-                let totalTargetRow = _audioSpatialGridTarget[gy];
-                for (let gx = minX; gx <= maxX; gx++) {
-                    let fx = gx + 0.5 - centerX;
-                    let distSq = fx * fx + fy * fy;
-                    if (distSq > radiusSq) continue;
-                    let dist = Math.sqrt(distSq);
-                    let falloff = 1 - dist / radiusTiles;
-                    let value = amplitude * falloff * falloff;
-                    fxTargetRow[gx] = Math.min(1.5, fxTargetRow[gx] + value);
-                    totalTargetRow[gx] = Math.min(1.75, totalTargetRow[gx] + value);
-                }
+        for (let gy = minY; gy <= maxY; gy++) {
+            let fy = gy + 0.5 - centerY;
+            let fxRow = audioSpatialGridEffects[gy];
+            let totalRow = audioSpatialGrid[gy];
+            for (let gx = minX; gx <= maxX; gx++) {
+                let fx = gx + 0.5 - centerX;
+                let distSq = fx * fx + fy * fy;
+                if (distSq > radiusSq) continue;
+                let dist = Math.sqrt(distSq);
+                let falloff = 1 - dist / radiusTiles;
+                let value = amplitude * falloff * falloff;
+                fxRow[gx] = Math.min(1.5, fxRow[gx] + value);
+                totalRow[gx] = Math.min(1.75, totalRow[gx] + value);
             }
         }
-
-        _audioReactiveLastGridTick = nowTick;
-        audioReactiveTextureVersion++;
     }
 
-    let blend = (_audioReactiveLastGridTick < 0)
-        ? 1
-        : Math.max(0, Math.min(1, (nowTick - _audioReactiveLastGridTick + AUDIO_REACTIVE_GRID_UPDATE_INTERVAL) / AUDIO_REACTIVE_GRID_UPDATE_INTERVAL));
-    for (let y = 0; y < GRID_H; y++) {
-        let totalRow = audioSpatialGrid[y];
-        let totalPrevRow = _audioSpatialGridPrev[y];
-        let totalTargetRow = _audioSpatialGridTarget[y];
-        let bgRow = audioSpatialGridBackground[y];
-        let bgPrevRow = _audioSpatialGridBackgroundPrev[y];
-        let bgTargetRow = _audioSpatialGridBackgroundTarget[y];
-        let fxRow = audioSpatialGridEffects[y];
-        let fxPrevRow = _audioSpatialGridEffectsPrev[y];
-        let fxTargetRow = _audioSpatialGridEffectsTarget[y];
-        for (let x = 0; x < GRID_W; x++) {
-            bgRow[x] = bgPrevRow[x] + (bgTargetRow[x] - bgPrevRow[x]) * blend;
-            fxRow[x] = fxPrevRow[x] + (fxTargetRow[x] - fxPrevRow[x]) * blend;
-            totalRow[x] = totalPrevRow[x] + (totalTargetRow[x] - totalPrevRow[x]) * blend;
-        }
-    }
+    _audioReactiveLastGridTick = nowTick;
+    audioReactiveTextureVersion++;
 }
 
 function applyTimingConfig(nextTickRate, nextPipelineMin) {

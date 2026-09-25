@@ -38,10 +38,17 @@ function updateVisualVisibility(playerId, raw) {
     const rise = VISIBILITY_LIGHT_MAX_CHANGE_PER_SECOND * dt;
     const fall = VISIBILITY_FADE_MAX_CHANGE_PER_SECOND * dt;
     let changed = reset;
+    // A dark tile that was already dark keeps light 0 and the same fog (it
+    // can only become explored while lit), unless the fog mode changed.
+    const full = reset || h.historyMode !== teamVisibilityHistory;
+    h.historyMode = teamVisibilityHistory;
+    if (full) changed = true;
     for (let y = 0; y < GRID_H; y++) {
         const source = raw[y], light = h.light[y], fog = h.fog[y];
         for (let x = 0; x < GRID_W; x++) {
-            const i = y * GRID_W + x, target = source[x], current = light[x];
+            const target = source[x], current = light[x];
+            if (target === 0 && current === 0 && !full) continue;
+            const i = y * GRID_W + x;
             if (target > 0) {
                 h.holdUntil[i] = now + holdTicks;
                 h.explored[i] = 1;

@@ -7,13 +7,30 @@ function _getTowerAttackRangeArea(tower) {
 function _isTargetWithinTowerAttackAreaRange(tower, target, rangeArea = NaN) {
     if (!tower || !target) return false;
     let maxAreaDistance = Number.isFinite(rangeArea) ? Math.max(0, Number(rangeArea)) : _getTowerAttackRangeArea(tower);
-    let sourceAreaId = getAreaIdAtWorld(tower.x, tower.y);
-    let targetAreaId = getAreaIdAtWorld(target.x, target.y);
-    if (sourceAreaId >= 0 && targetAreaId >= 0) {
-        let dist = getAreaDistance(sourceAreaId, targetAreaId);
-        return dist >= 0 && dist <= Math.floor(maxAreaDistance);
+    return isWorldTargetWithinAreaRange(tower.x, tower.y, target.x, target.y, Math.floor(maxAreaDistance));
+}
+
+// Nearest hostile floor item (never a barrack or spawner) in the tower's
+// area range: traps, or everything else. Ties go to the lower tile index.
+function _findTowerFloorTarget(tower, rangeArea, traps) {
+    let sources = getSourceAreaIdsAtWorld(tower.x, tower.y);
+    if (sources.length === 0) return null;
+    let best = null, bestD2 = Infinity, bestKey = Infinity;
+    let structuresByArea = getStructuresByArea();
+    for (let areaId of getAreaIdsWithinDistanceOfSources(sources, Math.floor(Math.max(0, Number(rangeArea) || 0)))) {
+        let structures = structuresByArea[areaId];
+        if (!structures) continue;
+        for (let item of structures) {
+            if (item.energy <= 0 || item.underConstruction || isTrapItem(item) !== traps) continue;
+            if (getFloorItemAtTile(item.gx, item.gy) !== item) continue;
+            let cell = grid[item.gy][item.gx];
+            let owner = item.owner !== undefined ? item.owner : cell.owner;
+            if (owner === tower.owner || owner < 0) continue;
+            let dx = item.x - tower.x, dy = item.y - tower.y, d2 = dx * dx + dy * dy, key = item.gy * GRID_W + item.gx;
+            if (d2 < bestD2 || (d2 === bestD2 && key < bestKey)) { best = item; bestD2 = d2; bestKey = key; }
+        }
     }
-    return false;
+    return best;
 }
 
 // ============================================================
@@ -218,6 +235,8 @@ class Tower {
                 let d = Math.hypot(t.x - this.x, t.y - this.y);
                 if (d < bestDist) { bestDist = d; target = t; }
             }
+            // Then traps, as units prioritize them.
+            if (!target) target = _findTowerFloorTarget(this, rangeArea, true);
             // Try barracks and spawners (lower priority, only if no tower found)
             if (!target) {
                 for (let b of barracks) {
@@ -233,6 +252,8 @@ class Tower {
                     if (d < bestDist) { bestDist = d; target = s; }
                 }
             }
+            // Finally other floor buildings (farms, houses...).
+            if (!target) target = _findTowerFloorTarget(this, rangeArea, false);
         }
 
         if (target) {

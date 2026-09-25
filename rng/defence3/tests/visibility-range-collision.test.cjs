@@ -89,7 +89,7 @@ attacker.doAttacking(1);
 vm.runInContext(read('src/things/tower.js'),uc);
 const Tower=vm.runInContext('Tower',uc);
 uc.getTowerPreferredTargetInRange=()=>null;
-uc.getAreaIdAtWorld=()=>0;uc.getAreaDistance=()=>0;
+uc.getAreaIdAtWorld=()=>0;uc.getAreaDistance=()=>0;uc.isAreaWithinDistance=(a,b,max)=>max>=0;uc.isWorldTargetWithinAreaRange=(sx,sy,tx,ty,max)=>max>=0;uc.getSourceAreaIdsAtWorld=()=>[];
 uc.forEachUnitInAreaRange=(_x,_y,_r,visit,opts)=>{assert.equal(opts.areaOnly,true);visit(enemyUnit);};
 uc.WORLD_W=1000;uc.WORLD_H=1000;uc.getThingEffectiveLevel=()=>1;uc.secondsToTicks=()=>60;
 uc.createExplosion=()=>{};uc.playSound=()=>{};uc.projectiles=[];

@@ -52,11 +52,11 @@ for (let i = 0; i < 40; i++) {
     assert.equal(wc._pickDistributedWorkerCandidate(searching, candidates), referencePick(searching, candidates));
 }
 
-// Use an independent, deliberately redundant tile union as the reference.
-// Float32 propagation and source collection run unchanged in both versions.
+// Reference: a deliberately redundant tile union, and both propagation
+// sweeps over every tile of the map (no bounds). Source collection is shared.
 const visibility = functionSource(renderer, 'computeVisibilityGridForPlayer');
 const unionStart = visibility.indexOf('    // The range caches');
-const unionEnd = visibility.indexOf('    // Only tiles marked as included', unionStart);
+const unionEnd = visibility.indexOf('    // Values fall by one per tile', unionStart);
 assert.ok(unionStart >= 0 && unionEnd > unionStart);
 const referenceVisibility = visibility.slice(0, unionStart) + `
     for (const [areaId, range] of areaRangeBySourceArea) {
@@ -64,7 +64,21 @@ const referenceVisibility = visibility.slice(0, unionStart) + `
             if (cell) includedTiles[cell.y][cell.x] = 1;
         }
     }
-` + visibility.slice(unionEnd);
+    const inc = (x, y) => x >= 0 && y >= 0 && x < GRID_W && y < GRID_H && includedTiles[y][x];
+    for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) {
+        if (!includedTiles[y][x]) { vis[y][x] = 0; continue; }
+        let v = vis[y][x];
+        for (const [dx, dy] of [[-1, 0], [0, -1], [-1, -1], [1, -1]]) if (inc(x + dx, y + dy)) v = Math.max(v, vis[y + dy][x + dx] - 1);
+        vis[y][x] = v;
+    }
+    for (let y = GRID_H - 1; y >= 0; y--) for (let x = GRID_W - 1; x >= 0; x--) {
+        if (!includedTiles[y][x]) { vis[y][x] = 0; continue; }
+        let v = vis[y][x];
+        for (const [dx, dy] of [[1, 0], [0, 1], [1, 1], [-1, 1]]) if (inc(x + dx, y + dy)) v = Math.max(v, vis[y + dy][x + dx] - 1);
+        vis[y][x] = v;
+    }
+}
+`;
 const areas = Array.from({ length: 64 }, () => []);
 for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) areas[Math.floor(y / 8) * 8 + Math.floor(x / 8)].push({ x, y });
 const world = {
@@ -99,9 +113,10 @@ vc._activeTileEntities = new Set(world.grid.map((row,i) => row[i].item).reverse(
 vc._activeTileEntities.add({gx:0,gy:0,energy:100});
 vc._activeTileEntities.add({gx:12,gy:13,energy:100});
 vc._tileEntityVersion = 0;
-vm.runInContext('let visibilityIncludedTilesScratch = [], _visibilityFloorItemCandidates = [], _visibilityFloorItemCandidatesVersion = -1, _visibilityFloorItemCandidatesSet = null;\n'
+vm.runInContext('let visibilityIncludedTilesScratch = [], visibilityStampScratch = [], visibilityRowSpanMinScratch = new Int32Array(0), visibilityRowSpanMaxScratch = new Int32Array(0), _cellItemsRowMajor = [], _cellItemsRowMajorVersion = -1, _cellItemsRowMajorSet = null;\n'
+    + functionSource(read('src/data/data_state.js'), 'getCellItemsRowMajor')
     + functionSource(renderer, '_getVisibilityFloorItemCandidates') + visibility, vc);
-vm.runInContext('let visibilityIncludedTilesScratch = [];\n' + referenceVisibility, refVc);
+vm.runInContext('let visibilityIncludedTilesScratch = [], visibilityStampScratch = [], visibilityRowSpanMinScratch = new Int32Array(0), visibilityRowSpanMaxScratch = new Int32Array(0);\n' + referenceVisibility, refVc);
 const grid = () => Array.from({ length: 64 }, () => new Float32Array(64));
 for (let step = 0; step < 18; step++) {
     const a = grid(), b = grid();

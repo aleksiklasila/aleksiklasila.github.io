@@ -4908,6 +4908,47 @@ function renderFloorItemGroupInfo(group) {
     return html;
 }
 
+// Tag/text segments of rendered markup (odd indices are tags). Text nodes
+// the parser created map to the non-empty text segments in document order.
+function indexInfoPanelText(panel, html) {
+    let parts = html.split(/(<[^>]*>)/);
+    let nodes = [], walker = document.createTreeWalker(panel, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node);
+    let textNodes = new Array(parts.length).fill(null), next = 0;
+    for (let i = 0; i < parts.length; i += 2) if (parts[i]) textNodes[i] = nodes[next++] || null;
+    // Anything the parser dropped or merged makes the mapping unreliable.
+    return { parts, textNodes: next === nodes.length ? textNodes : null };
+}
+
+let _infoPanelTextDecoder = null;
+function _decodeInfoPanelText(text) {
+    if (!/[&<]/.test(text)) return text;
+    if (!_infoPanelTextDecoder) _infoPanelTextDecoder = document.createElement('textarea');
+    _infoPanelTextDecoder.innerHTML = text;
+    return _infoPanelTextDecoder.value;
+}
+
+// Apply a text-only change to the rendered panel. Returns false (and leaves
+// the DOM untouched) when any tag differs or a text node cannot be matched.
+function patchInfoPanelText(render, html) {
+    if (!render || !render.textNodes || !render.parts) return false;
+    let parts = html.split(/(<[^>]*>)/), old = render.parts;
+    if (parts.length !== old.length) return false;
+    let changes = [];
+    for (let i = 0; i < parts.length; i++) {
+        if (parts[i] === old[i]) continue;
+        // Tags, and text appearing or disappearing, change the node structure.
+        if (i % 2 || !parts[i] || !old[i]) return false;
+        let node = render.textNodes[i];
+        if (!node || !node.isConnected || node.data !== _decodeInfoPanelText(old[i])) return false;
+        changes.push(i);
+    }
+    for (let i of changes) render.textNodes[i].data = _decodeInfoPanelText(parts[i]);
+    render.parts = parts;
+    render.html = html;
+    return true;
+}
+
 function updateInfoPanel(panelOverride = null, opts = {}) {
     let panel = panelOverride || document.getElementById('info-panel');
     if (!panel) return;
@@ -4958,7 +4999,6 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
 
     infoPanelStatMatrixDescriptorById = {};
     nextInfoPanelStatMatrixDescriptorId = 1;
-    let panelMouseAnchor = captureInfoPanelMouseAnchor(panel);
 
     let html = '';
     // --- GROUP ENTITIES by key ---
@@ -5081,17 +5121,32 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     // Keep existing nodes/listeners when both the displayed result and their
     // captured selection are unchanged. Refreshes still calculate live stats.
     let previousRender = panel._selectionRenderCache;
-    if (!panelOverride && previousRender && previousRender.html === html && previousRender.subgroups === subgroupState
+    let sameSelection = !panelOverride && previousRender && previousRender.subgroups === subgroupState
         && previousRender.units.length === selectedUnits.length && previousRender.entities.length === selectedEntities.length
         && previousRender.units.every((u, i) => u === selectedUnits[i])
-        && previousRender.entities.every((e, i) => e === selectedEntities[i])) {
+        && previousRender.entities.every((e, i) => e === selectedEntities[i]);
+    if (sameSelection && previousRender.html === html) {
         activeFormatBigNumberSuffixStart = prevFormatBigNumberSuffixStart;
         return;
     }
-    panel._selectionRenderCache = panelOverride ? null : {
-        html, subgroups: subgroupState, units: selectedUnits.slice(), entities: selectedEntities.slice()
-    };
+    // Live stats (energy totals, cooldowns...) usually change only text. With
+    // identical markup, update those text nodes in place: listeners stay bound
+    // (they read attributes/text at event time) and no layout is forced.
+    if (sameSelection && patchInfoPanelText(previousRender, html)) {
+        if (!panelOverride) {
+            let researchPopup = document.getElementById('research-popup');
+            if (researchPopup && !researchPopup.classList.contains('hidden')) renderResearchPopupContent();
+        }
+        activeFormatBigNumberSuffixStart = prevFormatBigNumberSuffixStart;
+        return;
+    }
+    // Read the layout before replacing the content (the only forced layout).
+    let panelMouseAnchor = captureInfoPanelMouseAnchor(panel);
     panel.innerHTML = html;
+    panel._selectionRenderCache = panelOverride ? null : {
+        html, subgroups: subgroupState, units: selectedUnits.slice(), entities: selectedEntities.slice(),
+        ...indexInfoPanelText(panel, html)
+    };
     bindInfoPanelPlayerStatusControls(panel);
 
     // Insert thumbnails into sub-group toggle icons

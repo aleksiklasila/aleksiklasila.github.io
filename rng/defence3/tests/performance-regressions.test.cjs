@@ -58,6 +58,7 @@ ctx._findClosestHostileStructure(origin, [first], 1);
 assert.equal(lookups.length, 1, 'even an out-of-range target retains the original lazy snapshot timing');
 const Unit = vm.runInContext('Unit', ctx);
 ctx._findClosestEnemyUnitByChunks = () => null;
+ctx.getCellItemsRowMajor = () => []; ctx.findCellItemRowStart = () => 0;
 ctx.towers = [first]; ctx.barracks = [{ ...tied, x: 1, y: 0 }]; ctx.collectorSpawners = [];
 ctx.gameTime = 0;
 for (const method of ['doIdle', 'doAttackMoving']) {
@@ -89,7 +90,7 @@ const visCtx = {
 vm.createContext(visCtx);
 const stateSource = read('src/data/data_state.js');
 vm.runInContext(stateSource.slice(stateSource.indexOf('function addVisibilitySourceAreas('), stateSource.indexOf('function getAreaDistance(')), visCtx);
-vm.runInContext('let visibilityIncludedTilesScratch = [];\n' + renderer.slice(renderer.indexOf('function computeVisibilityGridForPlayer('), renderer.indexOf('function getVisibilityGridForPlayer(')), visCtx);
+vm.runInContext('let visibilityIncludedTilesScratch = [], visibilityStampScratch = [], visibilityRowSpanMinScratch = new Int32Array(0), visibilityRowSpanMaxScratch = new Int32Array(0);\n' + renderer.slice(renderer.indexOf('function computeVisibilityGridForPlayer('), renderer.indexOf('function getVisibilityGridForPlayer(')), visCtx);
 const makeGrid = () => Array.from({ length: visCtx.GRID_H }, () => new Float32Array(visCtx.GRID_W));
 const unit = { x: 3 * 32, y: 3 * 32, owner: 0, preComputed: { visionRangeArea: 2 } };
 visCtx.units.push(unit);

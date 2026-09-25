@@ -134,6 +134,92 @@ function _isPathNodeRoomy(path, i) {
 
 const _unitCollisionCandidates = [];
 
+// Floor structures that harm units standing on them.
+const TRAP_ITEM_TYPES = new Set(['lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'sand', 'mine']);
+function isTrapItem(item) { return !!(item && TRAP_ITEM_TYPES.has(item.type)); }
+
+// Whether a tile is on the next stretch of the unit's route.
+const UNIT_ROUTE_LOOKAHEAD = 12;
+function _isTileOnUnitRoute(unit, gx, gy) {
+    let path = unit.path;
+    if (!path) return false;
+    let end = Math.min(path.length, (unit.pathIndex || 0) + UNIT_ROUTE_LOOKAHEAD);
+    for (let i = Math.max(0, (unit.pathIndex || 0) - 1); i < end; i++) {
+        if (path[i].x === gx && path[i].y === gy) return true;
+    }
+    return false;
+}
+
+// Hostile structure the unit can hit from where it stands (area attack
+// range, from the same +-0.3 tile window as its drawn range), by threat:
+// turrets, traps on its route, other traps, then any other building. Nearest
+// wins within a class, then the lower tile index. Visible targets only.
+function _findHostileStructureInAttackRange(unit) {
+    let sources = getSourceAreaIdsAtWorld(unit.x, unit.y);
+    if (sources.length === 0) return null;
+    let best = null, bestRank = 4, bestD2 = Infinity, bestKey = Infinity;
+    let structuresByArea = getStructuresByArea();
+    for (let areaId of getAreaIdsWithinDistanceOfSources(sources, Math.floor(_getUnitAttackRangeArea(unit)))) {
+        let structures = structuresByArea[areaId];
+        if (!structures) continue;
+        for (let target of structures) {
+            let gx = target.gx, gy = target.gy, cell = grid[gy][gx];
+            if (!(target.energy > 0) || target.underConstruction) continue;
+            let owner = target.owner !== undefined ? target.owner : cell.owner;
+            if (owner === unit.owner || owner < 0) continue;
+            // Towers are tile entities, never cell items; portals are not turrets.
+            let turret = cell.item !== target && !String(target.type || '').startsWith('cloud');
+            let rank = turret ? 0 : isTrapItem(target) ? (_isTileOnUnitRoute(unit, gx, gy) ? 1 : 2) : 3;
+            if (rank > bestRank) continue;
+            let dx = target.x - unit.x, dy = target.y - unit.y, d2 = dx * dx + dy * dy, key = gy * GRID_W + gx;
+            if (rank === bestRank && (d2 > bestD2 || (d2 === bestD2 && key > bestKey))) continue;
+            if (!isGameplayTargetVisibleToPlayer(unit.owner, gx, gy)) continue;
+            best = target; bestRank = rank; bestD2 = d2; bestKey = key;
+        }
+    }
+    return best;
+}
+
+// Closest visible hostile cell item within range of the unit's tile window.
+// Visits the same tiles in the same row-major order as a scan of every tile
+// in the window (strictly nearer wins, so ties keep the earlier tile), but
+// only tiles that hold an item. `kind` limits it to traps (those on the
+// unit's route first) or to everything else.
+function _findClosestHostileCellItem(unit, range, kind = null) {
+    let rTiles = Math.ceil(range / TILE) + 1;
+    let ugx = Math.floor(unit.x / TILE), ugy = Math.floor(unit.y / TILE);
+    let minGx = Math.max(0, ugx - rTiles), maxGx = Math.min(GRID_W - 1, ugx + rTiles);
+    let minGy = Math.max(0, ugy - rTiles), maxGy = Math.min(GRID_H - 1, ugy + rTiles);
+    let closest = null, closestD = range, closestOnRoute = false;
+    let items = getCellItemsRowMajor();
+    for (let i = findCellItemRowStart(items, minGy); i < items.length; i++) {
+        let item = items[i], gx = item.gx, gy = item.gy;
+        if (gy > maxGy) break;
+        if (gx < minGx || gx > maxGx) continue;
+        if (kind && (kind === 'trap') !== isTrapItem(item)) continue;
+        let cell = grid[gy][gx];
+        if (!cell || cell.item !== item || cell.owner === unit.owner) continue;
+        if (!isGameplayTargetVisibleToPlayer(unit.owner, gx, gy)) continue;
+        if (item.energy <= 0 || item.underConstruction) continue;
+        let d = Math.hypot(item.x - unit.x, item.y - unit.y);
+        if (d >= range) continue;
+        let onRoute = kind === 'trap' && _isTileOnUnitRoute(unit, gx, gy);
+        if (closestOnRoute && !onRoute) continue;
+        if ((onRoute && !closestOnRoute) || d < closestD) { closestD = d; closest = item; closestOnRoute = onRoute; }
+    }
+    return closest;
+}
+
+// Structure an idle or attack-moving unit engages on its own, by threat:
+// turrets, traps (those on its route first), barracks and spawners, then any
+// other building. Within a class the nearest visible one in range.
+function _findAutoStructureTarget(unit, range) {
+    return _findClosestHostileStructure(unit, towers, range)
+        || _findClosestHostileCellItem(unit, range, 'trap')
+        || _findClosestHostileStructure(unit, barracks, range, collectorSpawners)
+        || _findClosestHostileCellItem(unit, range, 'other');
+}
+
 function _findNearbyCombatEnemy(unit, range) {
     let closest = null, best = range * range;
     // This refresh is already staggered by the caller. Do not use the older
@@ -160,11 +246,7 @@ function _getUnitAttackRangeArea(unit) {
 function _isTargetWithinUnitAttackAreaRange(unit, target) {
     if (!unit || !target) return false;
     let rangeArea = Math.max(0, Number(_getUnitAttackRangeArea(unit)) || 0);
-    let sourceAreaId = getAreaIdAtWorld(unit.x, unit.y);
-    let targetAreaId = getAreaIdAtWorld(target.x, target.y);
-    if (sourceAreaId < 0 || targetAreaId < 0) return false;
-    let dist = getAreaDistance(sourceAreaId, targetAreaId);
-    return dist >= 0 && dist <= Math.floor(rangeArea);
+    return isWorldTargetWithinAreaRange(unit.x, unit.y, target.x, target.y, Math.floor(rangeArea));
 }
 
 class Unit {
@@ -495,43 +577,20 @@ class Unit {
             this.commandState = CMD_ATTACKING;
             return;
         }
+        // An engagement during attack-move ended: continue the attack-move
+        // (which also engages structures on the way). Routed by the budgeted
+        // tick-start resolver, together with units resuming to the same tile.
+        if (this._attackMoveGx != null && !this.holdPosition && !this.workerState) {
+            let gx = this._attackMoveGx, gy = this._attackMoveGy;
+            this.targetPos = { x: gx * TILE + 16, y: gy * TILE + 16 };
+            _makeFallbackPathForUnit(this, Math.floor(this.x / TILE), Math.floor(this.y / TILE), gx, gy, CMD_ATTACK_MOVING, 'ai_combat');
+            return;
+        }
         // Structures do not move; a staggered quarter of the ticks suffices.
         if (((gameTime + this.id) & 3) !== 0) return;
-        // Priority for structures: towers -> barracks/spawners -> floor items.
-        let closestTower = _findClosestHostileStructure(this, towers, aggroRange);
-        if (closestTower) {
-            this.targetBuilding = closestTower;
-            this.forcedAttackTarget = false;
-            this.commandState = CMD_ATTACKING;
-            return;
-        }
-
-        let closestStruct = _findClosestHostileStructure(this, barracks, aggroRange, collectorSpawners);
-        if (closestStruct) {
-            this.targetBuilding = closestStruct;
-            this.forcedAttackTarget = false;
-            this.commandState = CMD_ATTACKING;
-            return;
-        }
-
-        let rTiles = Math.ceil(aggroRange / TILE) + 1;
-        let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
-        let minGx = Math.max(0, ugx - rTiles), maxGx = Math.min(GRID_W - 1, ugx + rTiles);
-        let minGy = Math.max(0, ugy - rTiles), maxGy = Math.min(GRID_H - 1, ugy + rTiles);
-        let closestItem = null, closestItemD = aggroRange;
-        for (let gy = minGy; gy <= maxGy; gy++) {
-            for (let gx = minGx; gx <= maxGx; gx++) {
-                let cell = grid[gy][gx];
-                if (!cell || !cell.item || cell.owner === this.owner) continue;
-                if (!isGameplayTargetVisibleToPlayer(this.owner, gx, gy)) continue;
-                let item = cell.item;
-                if (item.energy <= 0 || item.underConstruction) continue;
-                let d = Math.hypot(item.x - this.x, item.y - this.y);
-                if (d < closestItemD) { closestItemD = d; closestItem = item; }
-            }
-        }
-        if (closestItem) {
-            this.targetBuilding = closestItem;
+        let structure = _findAutoStructureTarget(this, aggroRange);
+        if (structure) {
+            this.targetBuilding = structure;
             this.forcedAttackTarget = false;
             this.commandState = CMD_ATTACKING;
         }
@@ -610,8 +669,12 @@ class Unit {
                 bestD2 = d2;
             }
         }, { enemyOfPlayer: this.owner, areaOnly: true });
-        if (!closest) return;
-        this._performAttackOnUnit(closest);
+        if (closest) { this._performAttackOnUnit(closest); return; }
+        // Nothing hostile to hit on the way: shoot structures in reach,
+        // turrets and traps on the route first (staggered by unit id).
+        if (((gameTime + this.id) & 1) !== 0) return;
+        let structure = _findHostileStructureInAttackRange(this);
+        if (structure) this._performAttackOnBuilding(structure);
     }
 
     doAttackMoving(spd) {
@@ -633,40 +696,9 @@ class Unit {
         // ticks (by unit id), which is plenty to react to buildings entering
         // aggro range. Enemy units above are still checked every tick.
         if (((gameTime + this.id) & 3) === 0) {
-            let closestTower = _findClosestHostileStructure(this, towers, aggroRange);
-            if (closestTower) {
-                this.targetBuilding = closestTower;
-                this.forcedAttackTarget = false;
-                this.commandState = CMD_ATTACKING;
-                return;
-            }
-
-            let closestStruct = _findClosestHostileStructure(this, barracks, aggroRange, collectorSpawners);
-            if (closestStruct) {
-                this.targetBuilding = closestStruct;
-                this.forcedAttackTarget = false;
-                this.commandState = CMD_ATTACKING;
-                return;
-            }
-
-            let rTiles = Math.ceil(aggroRange / TILE) + 1;
-            let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
-            let minGx = Math.max(0, ugx - rTiles), maxGx = Math.min(GRID_W - 1, ugx + rTiles);
-            let minGy = Math.max(0, ugy - rTiles), maxGy = Math.min(GRID_H - 1, ugy + rTiles);
-            let closestItem = null, closestItemD = aggroRange;
-            for (let gy = minGy; gy <= maxGy; gy++) {
-                for (let gx = minGx; gx <= maxGx; gx++) {
-                    let cell = grid[gy][gx];
-                    if (!cell || !cell.item || cell.owner === this.owner) continue;
-                    if (!isGameplayTargetVisibleToPlayer(this.owner, gx, gy)) continue;
-                    let item = cell.item;
-                    if (item.energy <= 0 || item.underConstruction) continue;
-                    let d = Math.hypot(item.x - this.x, item.y - this.y);
-                    if (d < closestItemD) { closestItemD = d; closestItem = item; }
-                }
-            }
-            if (closestItem) {
-                this.targetBuilding = closestItem;
+            let structure = _findAutoStructureTarget(this, aggroRange);
+            if (structure) {
+                this.targetBuilding = structure;
                 this.forcedAttackTarget = false;
                 this.commandState = CMD_ATTACKING;
                 return;
@@ -678,6 +710,7 @@ class Unit {
                 this._pendingPathTarget = null;
                 this.pathIsFallbackAstar = false;
                 this.targetPos = null;
+                this._attackMoveGx = this._attackMoveGy = null;
                 this.commandState = CMD_IDLE;
             }
             // Keep attack-move active while waiting for deferred pathfinding.
@@ -690,10 +723,12 @@ class Unit {
                     this._pendingPathTarget = null;
                     this.pathIsFallbackAstar = false;
                     this.targetPos = null;
+                    this._attackMoveGx = this._attackMoveGy = null;
                     this.commandState = CMD_IDLE;
                 }
                 return;
             }
+            this._attackMoveGx = this._attackMoveGy = null;
             this.commandState = CMD_IDLE;
             this.path = null;
             this.targetPos = null;
@@ -958,24 +993,9 @@ class Unit {
         if (closest) { this._performAttackOnUnit(closest); return; }
 
         // Hold uses the same attack area as combat, but never enters the
-        // chasing state. Keep structure priority consistent with attack move.
-        for (let list of [towers, barracks, collectorSpawners]) {
-            let target = _findClosestHostileStructure(this, list, this.preComputed.attackRange + 1, null,
-                building => !building.underConstruction && _isTargetWithinUnitAttackAreaRange(this, building));
-            if (target) { this._performAttackOnBuilding(target); return; }
-        }
-        let range = Math.ceil((Number(this.preComputed.attackRange) || 0) / TILE) + 1;
-        let gx = Math.floor(this.x / TILE), gy = Math.floor(this.y / TILE);
-        for (let y = Math.max(0, gy - range); y <= Math.min(GRID_H - 1, gy + range); y++) {
-            for (let x = Math.max(0, gx - range); x <= Math.min(GRID_W - 1, gx + range); x++) {
-                let cell = grid[y][x], item = cell && cell.item;
-                if (!item || cell.owner === this.owner || item.energy <= 0 || item.underConstruction) continue;
-                if (_isHostileThingVisibleToUnit(this, item) && _isTargetWithinUnitAttackAreaRange(this, item)) {
-                    this._performAttackOnBuilding(item);
-                    return;
-                }
-            }
-        }
+        // chasing state. Structures by the same threat order as attack move.
+        let structure = _findHostileStructureInAttackRange(this);
+        if (structure) this._performAttackOnBuilding(structure);
     }
 
     followPath(spd) {

@@ -7,5 +7,5 @@ http.createServer((req,res) => {
   let file = path.resolve(root, '.' + decodeURIComponent(new URL(req.url,'http://localhost').pathname));
   if(!file.startsWith(root + path.sep)) {res.writeHead(403).end();return;}
   if(fs.existsSync(file) && fs.statSync(file).isDirectory()) file=path.join(file,'index.html');
-  fs.readFile(file,(err,data)=>{if(err){res.writeHead(404).end();return;}res.writeHead(200,{'Content-Type':mime[path.extname(file)]||'application/octet-stream','Cache-Control':'no-store'});res.end(data);});
+  fs.readFile(file,(err,data)=>{if(err){res.writeHead(404).end();return;}res.writeHead(200,{'Content-Type':mime[path.extname(file)]||'application/octet-stream','Cache-Control':'no-store','Document-Policy':'js-profiling'});res.end(data);});
 }).listen(8123,'127.0.0.1',()=>console.log('Smoke preview ready on 8123'));

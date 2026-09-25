@@ -15,6 +15,11 @@ class Projectile {
         this.sourceOwner = source ? source.owner : -1;
         this.sx = source ? source.gx : -1;
         this.sy = source ? source.gy : -1;
+        // Floor items do not block shots; only the aimed-at one is hit.
+        let floorTarget = t && t.unitType === undefined && Number.isFinite(t.gx) && Number.isFinite(t.gy)
+            && getFloorItemAtTile(t.gx, t.gy) === t;
+        this.floorTargetGx = floorTarget ? t.gx : -1;
+        this.floorTargetGy = floorTarget ? t.gy : -1;
     }
 
     getSourceAttacker() {
@@ -43,6 +48,11 @@ class Projectile {
                     if (b.owner === this.sourceOwner || b.energy <= 0) continue;
                     if (Math.hypot(b.x - this.x, b.y - this.y) <= 18) { this.hitBuilding(b); return true; }
                 }
+            }
+            if (this.floorTargetGx >= 0) {
+                let item = getFloorItemAtTile(this.floorTargetGx, this.floorTargetGy);
+                if (item && item.owner !== this.sourceOwner && item.energy > 0
+                    && Math.hypot(item.x - this.x, item.y - this.y) <= 18) { this.hitBuilding(item); return true; }
             }
             return false;
         };

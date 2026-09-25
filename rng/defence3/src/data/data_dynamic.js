@@ -1095,11 +1095,7 @@ function _isTowerPreferredTargetVisibleToOwner(tower, target) {
 function _isTowerPreferredTargetWithinRange(tower, target, rangeArea) {
     if (!tower || !target) return false;
     let maxAreaDistance = Math.max(0, Math.floor(Number(rangeArea) || 0));
-    let sourceAreaId = getAreaIdAtWorld(tower.x, tower.y);
-    let targetAreaId = getAreaIdAtWorld(target.x, target.y);
-    if (sourceAreaId < 0 || targetAreaId < 0) return false;
-    let dist = getAreaDistance(sourceAreaId, targetAreaId);
-    return dist >= 0 && dist <= maxAreaDistance;
+    return isWorldTargetWithinAreaRange(tower.x, tower.y, target.x, target.y, maxAreaDistance);
 }
 
 function getTowerPreferredTargetInRange(tower, rangeArea) {

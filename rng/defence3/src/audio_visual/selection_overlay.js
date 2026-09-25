@@ -5,6 +5,8 @@ let selectionContourCache = { input: [], groups: [] };
 const selectionCircleDirections = Array.from({ length: 16 }, (_, i) => [Math.cos(i * Math.PI / 8), Math.sin(i * Math.PI / 8)]);
 const selectionCanvasPaths = new WeakMap();
 const selectionPresentationPositions = new WeakMap();
+const selectionCellValues = [0, 0, 0, 0];
+const selectionCellCornerX = [0, 1, 1, 0], selectionCellCornerY = [0, 0, 1, 1];
 
 function stabilizeSelectionPosition(entity, x, y, now) {
     let p = selectionPresentationPositions.get(entity);
@@ -32,8 +34,9 @@ function buildSelectionContours(footprints) {
         ? Math.min(2, 0.75 / Math.max(0.25, camera.zoom)) : 0;
     if (tolerance && input.length === previous.input.length && input.every((v, i) =>
         i % 5 < 2 ? Math.abs(v - previous.input[i]) <= tolerance : v === previous.input[i])) return previous.groups;
-    const step = 8, stride = 1048576, origin = 524288, iso = 4;
-    const keyAt = (x, y) => (y + origin) * stride + x + origin;
+    const step = 8, iso = 4;
+    // Small-integer bucket keys (|bucket coords| < 8192; buckets are >= 16px).
+    const keyAt = (x, y) => (y + 8192) * 16384 + x + 8192;
     // Isolated objects need no union at all. This also bounds the cost of a
     // thousand widely separated selections without allocating a world-sized grid.
     let bucketSize = 16;
@@ -69,6 +72,18 @@ function buildSelectionContours(footprints) {
         paths.push(points);
     }
     const chunkSize = 16, rowSize = chunkSize + 1;
+    // Sample and chunk keys are relative to the clustered bounds, so every Map
+    // key stays a small integer (large float keys hash slowly).
+    let minSX = Infinity, minSY = Infinity, maxSX = -Infinity;
+    for (let p of clustered) {
+        if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !(p.radius > 0)) continue;
+        let reach = p.radius + iso;
+        minSX = Math.min(minSX, Math.ceil((p.x - reach) / step)); maxSX = Math.max(maxSX, Math.floor((p.x + reach) / step));
+        minSY = Math.min(minSY, Math.ceil((p.y - reach) / step));
+    }
+    let chunkX0 = Math.floor((minSX - 1) / chunkSize), chunkY0 = Math.floor((minSY - 1) / chunkSize);
+    let chunkCols = Math.floor(maxSX / chunkSize) - chunkX0 + 1;
+    let sampleX0 = chunkX0 * chunkSize, sampleY0 = chunkY0 * chunkSize, sampleCols = chunkCols * chunkSize + 2;
     let fields = new Map();
     for (let p of clustered) {
         if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !(p.radius > 0)) continue;
@@ -80,7 +95,7 @@ function buildSelectionContours(footprints) {
         // Shared border samples are stamped into both adjacent chunks.
         for (let cy = Math.floor((minY - 1) / chunkSize); cy <= Math.floor(maxY / chunkSize); cy++) {
             for (let cx = Math.floor((minX - 1) / chunkSize); cx <= Math.floor(maxX / chunkSize); cx++) {
-                let key = keyAt(cx, cy), chunk = chunks.get(key);
+                let key = (cy - chunkY0) * chunkCols + cx - chunkX0, chunk = chunks.get(key);
                 if (!chunk) {
                     chunk = { x: cx * chunkSize, y: cy * chunkSize, values: new Float32Array(rowSize * rowSize), minX: chunkSize, minY: chunkSize, maxX: 0, maxY: 0 };
                     chunks.set(key, chunk);
@@ -112,53 +127,61 @@ function buildSelectionContours(footprints) {
     const cases = [[], [3,0], [0,1], [3,1], [1,2], [3,0,1,2], [0,2], [3,2],
         [2,3], [0,2], [0,1,2,3], [1,2], [1,3], [0,1], [3,0], []];
     let groups = Array.from(isolated, ([color, paths]) => ({ color, paths, shapes: isolatedShapes.get(color) }));
+    let v = selectionCellValues;
     for (let [color, chunks] of fields) {
-        let nodes = new Map(), links = new Map();
+        // Crossing points in creation order (which is also link order), each
+        // with at most two neighbours: one per cell sharing its edge.
+        let nodes = new Map(), nodeX = [], nodeY = [], link0 = [], link1 = [];
+        let nodeFor = (id, x, y, e) => {
+            let index = nodes.get(id);
+            if (index !== undefined) return index;
+            let next = (e + 1) & 3, t = (iso - v[e]) / (v[next] - v[e]);
+            let ex = x + selectionCellCornerX[e] * step, ey = y + selectionCellCornerY[e] * step;
+            index = nodeX.length;
+            nodeX.push(ex + (x + selectionCellCornerX[next] * step - ex) * t);
+            nodeY.push(ey + (y + selectionCellCornerY[next] * step - ey) * t);
+            link0.push(-1); link1.push(-1);
+            nodes.set(id, index);
+            return index;
+        };
         for (let chunk of chunks.values()) for (let cy = chunk.minY; cy <= chunk.maxY; cy++) for (let cx = chunk.minX; cx <= chunk.maxX; cx++) {
             let index = cy * rowSize + cx, samples = chunk.values;
             let v0 = samples[index], v1 = samples[index + 1], v2 = samples[index + rowSize + 1], v3 = samples[index + rowSize];
-            if (Math.max(v0, v1, v2, v3) < iso || Math.min(v0, v1, v2, v3) >= iso) continue;
-            let values = [v0, v1, v2, v3];
-            let key = keyAt(chunk.x + cx, chunk.y + cy);
-            let mask = 0;
-            for (let i = 0; i < 4; i++) if (values[i] >= iso) mask |= 1 << i;
+            let mask = (v0 >= iso ? 1 : 0) | (v1 >= iso ? 2 : 0) | (v2 >= iso ? 4 : 0) | (v3 >= iso ? 8 : 0);
+            if (mask === 0 || mask === 15) continue;
             let edges = cases[mask];
-            if (!edges.length) continue;
-            let x = (key % stride - origin) * step, y = (Math.floor(key / stride) - origin) * step;
-            let corners = [[x,y], [x+step,y], [x+step,y+step], [x,y+step]];
-            let ids = [key * 2, (key + 1) * 2 + 1, (key + stride) * 2, key * 2 + 1];
-            for (let e of edges) {
-                let id = ids[e];
-                if (nodes.has(id)) continue;
-                let next = (e + 1) % 4;
-                let t = (iso - values[e]) / (values[next] - values[e]);
-                nodes.set(id, [corners[e][0] + (corners[next][0] - corners[e][0]) * t,
-                    corners[e][1] + (corners[next][1] - corners[e][1]) * t]);
-            }
+            v[0] = v0; v[1] = v1; v[2] = v2; v[3] = v3;
+            let gx = chunk.x + cx, gy = chunk.y + cy;
+            let key = (gy - sampleY0) * sampleCols + gx - sampleX0;
+            let x = gx * step, y = gy * step;
+            // Edge ids: top, right (next cell's left), bottom (next row's top), left.
             for (let i = 0; i < edges.length; i += 2) {
-                let a = ids[edges[i]], b = ids[edges[i+1]];
-                if (!links.has(a)) links.set(a, []);
-                if (!links.has(b)) links.set(b, []);
-                links.get(a).push(b); links.get(b).push(a);
+                let ea = edges[i], eb = edges[i + 1];
+                let a = nodeFor(ea === 0 ? key * 2 : ea === 1 ? (key + 1) * 2 + 1 : ea === 2 ? (key + sampleCols) * 2 : key * 2 + 1, x, y, ea);
+                let b = nodeFor(eb === 0 ? key * 2 : eb === 1 ? (key + 1) * 2 + 1 : eb === 2 ? (key + sampleCols) * 2 : key * 2 + 1, x, y, eb);
+                if (link0[a] < 0) link0[a] = b; else link1[a] = b;
+                if (link0[b] < 0) link0[b] = a; else link1[b] = a;
             }
         }
-        let paths = [], visited = new Set();
-        for (let start of links.keys()) {
-            if (visited.has(start)) continue;
+        let paths = [], visited = new Uint8Array(nodeX.length);
+        for (let start = 0; start < nodeX.length; start++) {
+            if (visited[start]) continue;
             let path = [], current = start, last = -1;
-            while (!visited.has(current)) {
-                visited.add(current); path.push(nodes.get(current));
-                let next = links.get(current).find(id => id !== last);
-                if (next === undefined) break;
+            while (!visited[current]) {
+                visited[current] = 1; path.push(current);
+                let next = link0[current] !== last ? link0[current] : link1[current];
+                if (next < 0) break;
                 last = current; current = next;
             }
             if (path.length >= 3) {
                 // A short, local smoothing pass rounds grid transitions without
                 // bridging separate loops or replacing concave shapes with hulls.
-                paths.push(path.map((p, i) => {
-                    let a = path[(i + path.length - 1) % path.length], b = path[(i + 1) % path.length];
-                    return [(a[0] + p[0] * 2 + b[0]) * .25, (a[1] + p[1] * 2 + b[1]) * .25];
-                }));
+                let n = path.length, points = new Array(n);
+                for (let i = 0; i < n; i++) {
+                    let a = path[(i + n - 1) % n], p = path[i], b = path[(i + 1) % n];
+                    points[i] = [(nodeX[a] + nodeX[p] * 2 + nodeX[b]) * .25, (nodeY[a] + nodeY[p] * 2 + nodeY[b]) * .25];
+                }
+                paths.push(points);
             }
         }
         groups.push({ color, paths });

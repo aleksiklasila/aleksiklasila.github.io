@@ -55,7 +55,7 @@ c.grid=Array.from({length:8},()=>Array.from({length:8},()=>({})));
 c.gridCellsByArea=Array.from({length:4},()=>[]);
 for(let y=0;y<8;y++) for(let x=0;x<8;x++) c.gridCellsByArea[lookup(x,y)].push({x,y});
 c.getAreaIdsWithinDistance=(id,range)=>range>=1?[0,1,2,3]:[id];
-vm.runInContext('let visibilityIncludedTilesScratch = [];\n'+fn(read('src/audio_visual/renderer.js'),'computeVisibilityGridForPlayer'),c);
+vm.runInContext('let visibilityIncludedTilesScratch = [], visibilityStampScratch = [], visibilityRowSpanMinScratch = new Int32Array(0), visibilityRowSpanMaxScratch = new Int32Array(0);\n'+fn(read('src/audio_visual/renderer.js'),'computeVisibilityGridForPlayer'),c);
 c.computeVisibilityGridForPlayer(0,light);
 assert.equal(light[2][4],3);
 c.units=[];

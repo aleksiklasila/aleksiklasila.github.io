@@ -19,8 +19,23 @@ async function newGame(size = 80) {
     const set = (id, v) => { const e = document.getElementById(id); if (e) { e.value = String(v); e.dispatchEvent(new Event('change')); } };
     set('cfg-mapsize', size); set('cfg-map-type', 'arena'); set('cfg-max-pop', 5000);
     set('cfg-starting-energy', 1e9); set('cfg-starting-astar', 1e9);
-    [...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Play Solo').click();
+    // Solo games seed from Date.now(); pin it so maps and runs reproduce.
+    const realNow = Date.now;
+    Date.now = () => 1700000000000;
+    try { [...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Play Solo').click(); }
+    finally { Date.now = realNow; }
     await sleep(800);
+    stopHiddenPump();
+}
+
+// A hidden page (e.g. a background preview) runs ticks from an interval;
+// benchmarks drive ticks themselves.
+function stopHiddenPump() {
+    if (typeof _backgroundTickInterval !== 'undefined' && _backgroundTickInterval) { clearInterval(_backgroundTickInterval); _backgroundTickInterval = null; }
+    if (typeof refreshBackgroundTickMode === 'function' && !window.__origRefreshBackgroundTickMode) {
+        window.__origRefreshBackgroundTickMode = refreshBackgroundTickMode;
+        refreshBackgroundTickMode = () => {};
+    }
 }
 
 function clearArena() {
@@ -216,6 +231,35 @@ const SCENARIOS = {
             return acts;
         }
     },
+    // Four teams with various sized groups scattered over the map (walls kept).
+    // Team 0 is fully selected and sent with ctrl to 4 far points (issued as
+    // successive ctrl clicks like the UI); the others criss-cross the map.
+    selectedRally: {
+        ticks: 400, size: 120, walls: true, focus: { gx: 60, gy: 60 },
+        setup() {
+            const W = GRID_W, H = GRID_H;
+            const spots = [[.15, .15], [.5, .12], [.85, .15], [.12, .5], [.88, .5], [.15, .85], [.5, .88], [.85, .85], [.35, .35], [.65, .65], [.35, .65], [.65, .35]];
+            const sizes = [80, 10, 40, 5, 60, 25, 15, 100, 30, 8, 50, 20];
+            spots.forEach(([fx, fy], i) => blob(i % 4, Math.round(W * fx), Math.round(H * fy), sizes[i], COMBAT, 10));
+            selectedUnits = alive(0);
+        },
+        tick(t) {
+            const acts = [];
+            const pts = [[.1, .9], [.9, .9], [.9, .1], [.5, .5]].map(([fx, fy]) => ({ x: fx * GRID_W * TILE, y: fy * GRID_H * TILE }));
+            if (t < 4 || t === 200 || t === 201) {
+                const k = t < 4 ? t + 1 : t - 198;
+                const use = (t >= 200 ? pts.slice().reverse() : pts).slice(0, k);
+                nearestSplit(alive(0), use).forEach((g, j) => g.length && acts.push([0, { action: 'move', unitIds: g.map(u => u.id), targetX: use[j].x, targetY: use[j].y }]));
+            }
+            if (t % 150 === 0) for (let pid = 1; pid < 4; pid++) {
+                const mine = alive(pid), c = centroid(mine);
+                if (!c) continue;
+                acts.push([pid, { action: rand() < .5 ? 'move' : 'attackMove', unitIds: mine.map(u => u.id),
+                    targetX: GRID_W * TILE - c.x, targetY: GRID_H * TILE - c.y }]);
+            }
+            return acts;
+        }
+    },
     // Three armies of 200 mixed units, re-issuing attack-move 4x a second.
     fight3: {
         ticks: 400, focus: { gx: 40, gy: 40 },
@@ -385,7 +429,7 @@ async function run(name, opts = {}) {
     const render = opts.render !== false;
     const sc = SCENARIOS[name];
     await newGame(opts.size || sc.size || 80);
-    clearArena();
+    if (!sc.walls) clearArena();
     refill();
     rngSeed(opts.seed || 12345);
     sc.setup(opts);
@@ -468,7 +512,7 @@ function installProfiler(minLength = 300) {
 
 async function profile(name, opts = {}) {
     const sc = SCENARIOS[name];
-    await newGame(opts.size || sc.size || 80); clearArena(); refill(); rngSeed(opts.seed || 12345); sc.setup(opts);
+    await newGame(opts.size || sc.size || 80); if (!sc.walls) clearArena(); refill(); rngSeed(opts.seed || 12345); sc.setup(opts);
     if (opts.research) applyResearch(opts.research === true ? MAX_RESEARCH_LEVEL : opts.research);
     const ticks = opts.ticks || sc.ticks;
     // Render-only profiling: simulate first, then profile frames.
@@ -494,7 +538,7 @@ async function profile(name, opts = {}) {
 // Low-overhead split of a tick: wraps only a few coarse phases.
 async function phases(name, opts = {}) {
     const sc = SCENARIOS[name];
-    await newGame(opts.size || sc.size || 80); clearArena(); refill(); rngSeed(opts.seed || 12345); sc.setup(opts);
+    await newGame(opts.size || sc.size || 80); if (!sc.walls) clearArena(); refill(); rngSeed(opts.seed || 12345); sc.setup(opts);
     if (opts.research) applyResearch(opts.research === true ? MAX_RESEARCH_LEVEL : opts.research);
     const totals = {}, targets = [
         [window, 'processActions'], [window, 'updateVisibility'], [window, 'recalculateUnitEffectiveStats'],
@@ -502,7 +546,7 @@ async function phases(name, opts = {}) {
         [Unit.prototype, 'update'], [Unit.prototype, 'followPath'], [Unit.prototype, 'doAttackMoving'], [Unit.prototype, 'doAttacking'],
         [Unit.prototype, 'doIdle'], [Unit.prototype, 'doMoving'], [Tower.prototype, 'update'],
         [typeof Projectile !== 'undefined' ? Projectile.prototype : {}, 'update'], [window, 'gameTick']
-    ];
+    ].concat((opts.extra || []).map(n => n.includes('.') ? [(0, eval)(n.split('.')[0]).prototype, n.split('.')[1]] : [window, n]));
     const depth = new Map();
     for (const [obj, n] of targets) {
         const f = obj[n];
@@ -593,7 +637,147 @@ async function renderProbe(name, ticks = 200, opts = {}) {
     return res;
 }
 
-window.BENCH = { SCENARIOS, run, runAll, profile, phases, suite, renderProbe, clearSuite() { localStorage.removeItem('benchSuite'); }, measureRender, place, spawnUnit, blob, block,
+// Sampling profile (JS Self-Profiling API; needs the Document-Policy:
+// js-profiling header from .smoke-server.cjs). fn runs the workload.
+// Returns top self and inclusive functions (file:line) by sample share.
+async function sample(fn, { interval = 1, top = 30, under = null } = {}) {
+    const prof = new Profiler({ sampleInterval: interval, maxBufferSize: 1e6 });
+    await fn();
+    const trace = await prof.stop();
+    const name = i => { const f = trace.frames[i]; return (f.name || '(anon)') + ' ' + String(f.resourceId !== undefined ? trace.resources[f.resourceId] : '').split('/').pop() + ':' + (f.line || 0); };
+    const self = new Map(), incl = new Map();
+    let total = 0;
+    for (const smp of trace.samples) {
+        if (smp.stackId === undefined) continue;
+        total++;
+        let id = smp.stackId, first = true;
+        const seen = new Set();
+        if (under) {
+            let hit = false;
+            for (let k = id; k !== undefined; k = trace.stacks[k].parentId) if (trace.frames[trace.stacks[k].frameId].name === under) { hit = true; break; }
+            if (!hit) { total--; continue; }
+        }
+        while (id !== undefined) {
+            const st = trace.stacks[id], n = name(st.frameId);
+            if (first) { self.set(n, (self.get(n) || 0) + 1); first = false; }
+            if (!seen.has(n)) { seen.add(n); incl.set(n, (incl.get(n) || 0) + 1); }
+            id = st.parentId;
+        }
+    }
+    const fmt = m => [...m].sort((a, b) => b[1] - a[1]).slice(0, top).map(([k, v]) => (100 * v / total).toFixed(1) + '% ' + k).join(String.fromCharCode(10));
+    return ['samples ' + total, '-- self', fmt(self), '-- inclusive', fmt(incl)].join(String.fromCharCode(10));
+}
+
+// Let the real game loop run for ms (after prepare), recording frame
+// intervals; with profile=true also returns a sampling profile.
+async function live(ms = 4000, { profile = false, top = 40, view = null } = {}) {
+    if (view) {
+        setRenderDimensionMode(view.mode || '3d'); camera.zoom = view.zoom || 0.35;
+        camera.x = (view.gx || GRID_W / 2) * TILE - viewW / camera.zoom / 2; camera.y = (view.gy || GRID_H / 2) * TILE - viewH / camera.zoom / 2;
+    }
+    const frames = [];
+    let last = performance.now(), stop = false;
+    const loop = t => { frames.push(t - last); last = t; if (!stop) requestAnimationFrame(loop); };
+    requestAnimationFrame(loop);
+    const work = () => new Promise(r => setTimeout(r, ms));
+    const report = profile ? await sample(work, { top }) : (await work(), null);
+    stop = true;
+    frames.shift();
+    const st = stat(frames);
+    return { fps: +(1000 / st.mean).toFixed(1), frameMs: st, over25: frames.filter(f => f > 25).length, frames: frames.length, gameTime, profile: report };
+}
+
+// Drive frames synchronously (works while the page is hidden): a tick
+// every third frame (60 FPS / 20 TPS) and a render every frame. Returns
+// per-frame cost (tick + render) and optionally a sampling profile.
+async function frames(n = 240, { profile = false, top = 40, view = null } = {}) {
+    if (view) {
+        setRenderDimensionMode(view.mode || '3d'); camera.zoom = view.zoom || 0.35;
+        camera.x = (view.gx || GRID_W / 2) * TILE - viewW / camera.zoom / 2; camera.y = (view.gy || GRID_H / 2) * TILE - viewH / camera.zoom / 2;
+    }
+    const cost = [], sim = [], ren = [];
+    let ts = performance.now();
+    const work = async () => {
+        for (let i = 0; i < n; i++) {
+            ts += 1000 / 60;
+            const a = performance.now();
+            if (i % 3 === 0) { gameOver = false; gameTick(); }
+            const b = performance.now();
+            tickAlpha = (i % 3) / 3;
+            renderFrame(ts);
+            const c = performance.now();
+            cost.push(c - a); sim.push(b - a); ren.push(c - b);
+            if (i % 30 === 29) await sleep(0);
+        }
+    };
+    const report = profile ? await sample(work, { top, under: profile === true ? null : profile }) : (await work(), null);
+    return { frame: stat(cost), tick: stat(sim.filter((_, i) => i % 3 === 0)), render: stat(ren), over16: cost.filter(f => f > 16.7).length, n, profile: report };
+}
+
+// Run a scenario for `ticks` and return state hashes every `every` ticks,
+// to compare gameplay between builds (same seed and map settings).
+async function hashes(name, ticks = 300, every = 50, opts = {}) {
+    const sc = SCENARIOS[name];
+    await newGame(opts.size || sc.size || 80);
+    if (!sc.walls) clearArena();
+    refill(); rngSeed(opts.seed || 12345); sc.setup(opts);
+    const out = [];
+    for (let t = 0; t < ticks; t++) {
+        gameOver = false; refill();
+        for (const [pid, a] of sc.tick(t)) processActions([a], pid);
+        gameTick();
+        if ((t + 1) % every === 0) out.push(computeLockstepStateHashFast(t));
+    }
+    return { out, units: units.filter(u => !u.dead).length };
+}
+
+// Exclusive (self) time per wrapped function, ms per tick, over n ticks of a
+// prepared scenario. Wrapper overhead is charged to callers; compare builds
+// with the same list rather than reading absolute values.
+function selfTimes(name, from, n, fns = [], methods = []) {
+    const stack = [], self = {}, cnt = {}, orig = [];
+    const wrap = (obj, key, label) => {
+        const f = obj[key];
+        if (typeof f !== 'function') return;
+        orig.push([obj, key, f]);
+        obj[key] = function (...a) {
+            const t = performance.now(); stack.push(0);
+            try { return f.apply(this, a); } finally {
+                const el = performance.now() - t, ch = stack.pop();
+                if (stack.length) stack[stack.length - 1] += el;
+                self[label] = (self[label] || 0) + el - ch; cnt[label] = (cnt[label] || 0) + 1;
+            }
+        };
+    };
+    for (const m of methods) { const [cls, key] = m.split('.'); wrap((0, eval)(cls).prototype, key, m); }
+    for (const f of fns) wrap(window, f, f);
+    const t0 = performance.now();
+    continueTicks(name, from, n);
+    const total = (performance.now() - t0) / n;
+    for (const [o, k, f] of orig) o[k] = f;
+    const out = { total: +total.toFixed(2) };
+    for (const k of Object.keys(self).sort((a, b) => self[b] - self[a])) out[k] = +(self[k] / n).toFixed(3) + '/' + Math.round(cnt[k] / n);
+    return out;
+}
+
+// Set a scenario up and run it for `ticks` without measuring.
+async function prepare(name, ticks, opts = {}) {
+    SCENARIOS.__prep = { ...SCENARIOS[name], ticks };
+    return run('__prep', { ...opts, render: false });
+}
+
+// Continue the currently running scenario (after prepare) for n ticks.
+function continueTicks(name, from, n, render = false) {
+    const sc = SCENARIOS[name];
+    for (let t = from; t < from + n; t++) {
+        gameOver = false; refill();
+        for (const [pid, a] of sc.tick.call(SCENARIOS.__prep, t)) processActions([a], pid);
+        gameTick();
+        if (render) renderFrame(performance.now());
+    }
+}
+
+window.BENCH = { SCENARIOS, run, sample, live, frames, hashes, selfTimes, prepare, continueTicks, runAll, profile, phases, suite, renderProbe, clearSuite() { localStorage.removeItem('benchSuite'); }, measureRender, place, spawnUnit, blob, block,
     reset() { sessionStorage.removeItem('benchResults'); } };
 return 'BENCH ready';
 })();

@@ -14,6 +14,13 @@ const context = {
     getRawVisibilityGridForPlayer: () => [[1]],
     getAreaIdAtWorld: () => 0,
     getAreaDistance: () => 0,
+    isAreaWithinDistance: (a, b, max) => max >= 0,
+    isWorldTargetWithinAreaRange: (sx, sy, tx, ty, max) => max >= 0,
+    getSourceAreaIdsAtWorld: () => [0],
+    getAreaIdsWithinDistanceOfSources: () => [0],
+    gridCellsByArea: [[{ x: 0, y: 0 }]],
+    getStructuresByArea: () => [context.towers.slice()],
+    getTowerAtTile: (x, y) => context.towers.find(t => t.gx === x && t.gy === y) || null,
     isGameplayTargetVisibleToPlayer: (_owner, gx) => gx !== 9,
     forEachUnitInAreaRange: (_x, _y, _range, visit, opts) => {
         assert.equal(opts.areaOnly, true, 'the scan must use the same area-based attack range as combat');
