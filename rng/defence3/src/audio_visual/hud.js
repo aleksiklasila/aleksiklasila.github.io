@@ -862,8 +862,8 @@ function buildInfoPanelUpKeepHtml(owner) {
 function _isInfoPanelUnitIdleLike(u) {
     if (!u || u.dead) return false;
     let pathDone = (!u.path || u.pathIndex >= u.path.length);
-    if (u.workerType) return (u.workerState === 'IDLE') || (u.commandState === CMD_HOLDING) || (!u.workerTarget && pathDone);
-    if (u.commandState === CMD_IDLE || u.commandState === CMD_HOLDING) return true;
+    if (u.workerType) return (u.workerState === 'IDLE') || !!u.holdPosition || (!u.workerTarget && pathDone);
+    if (u.commandState === CMD_IDLE || u.holdPosition) return true;
     return !u.target && pathDone;
 }
 
@@ -1126,9 +1126,9 @@ function _getInfoPanelUnitStateHelpText(u) {
         }
     }
 
-    if (u.commandState === CMD_HOLDING) {
-        if (u.workerType) return 'Holding because hold was used. Press X to release hold and let worker auto-AI resume.';
-        return 'Holding position. The unit only fights in place until you give a new order or press X.';
+    if (u.holdPosition) {
+        if (u.workerType) return 'Holding: the worker keeps its task but will not move. Press X to release the hold.';
+        return 'Holding position: orders are kept and it fights in place, but it will not move. Press X to release the hold.';
     }
 
     if (u.workerType) {

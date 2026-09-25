@@ -621,8 +621,20 @@ function recalculateUnitEffectiveStats() {
                 let cx = Math.floor(u.x / chunkPx);
                 let cy = Math.floor(u.y / chunkPx);
                 let chunkRadius = Math.max(0, Math.ceil(radiusPx / chunkPx));
-                let prefix = getSpatialPrefix(owner, typeIdx);
-                similarCount = querySpatialCountRect(prefix, cx - chunkRadius, cy - chunkRadius, cx + chunkRadius, cy + chunkRadius);
+                if (chunkRadius <= 7) {
+                    // Small rectangles (vision is ~1 tile): sum the counts
+                    // directly instead of building a whole-map prefix table
+                    // per owner and unit type. Same clamping, same result.
+                    let x1 = Math.max(0, Math.min(CHUNKS_W - 1, cx - chunkRadius)), x2 = Math.max(0, Math.min(CHUNKS_W - 1, cx + chunkRadius));
+                    let y1 = Math.max(0, Math.min(CHUNKS_H - 1, cy - chunkRadius)), y2 = Math.max(0, Math.min(CHUNKS_H - 1, cy + chunkRadius));
+                    let offset = owner * spatialUnitsComplexStridePerPlayer + 1 + typeIdx;
+                    for (let y = y1; y <= y2; y++) {
+                        for (let x = x1; x <= x2; x++) similarCount += spatialUnitsComplex[(y * CHUNKS_W + x) * spatialUnitsComplexStridePerChunk + offset] | 0;
+                    }
+                } else {
+                    let prefix = getSpatialPrefix(owner, typeIdx);
+                    similarCount = querySpatialCountRect(prefix, cx - chunkRadius, cy - chunkRadius, cx + chunkRadius, cy + chunkRadius);
+                }
             }
         }
         if (similarCount <= 0) {

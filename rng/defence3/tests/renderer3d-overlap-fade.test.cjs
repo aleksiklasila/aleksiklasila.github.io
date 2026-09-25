@@ -11,7 +11,8 @@ const context = {
     fullVisibility: true, visibilityGrid: [], VISIBILITY_LIGHT_NORMALIZATION_RANGE: 1,
     DEFAULT_SHADOW_DIR_X: 0, DEFAULT_SHADOW_DIR_Y: 1,
     resolveRenderVisionRange: () => NaN,
-    _getCachedLitTint: color => color
+    _getCachedLitTint: color => color,
+    RENDER_NO_MODEL_CANDIDATES: Object.freeze([])
 };
 vm.createContext(context);
 vm.runInContext(source.slice(start, end), context);

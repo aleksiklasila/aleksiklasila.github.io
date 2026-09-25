@@ -357,7 +357,7 @@ class Unit {
             updateWorkerAI(this);
             // Keep worker motion state deterministic: movement-oriented worker states must
             // always execute the movement state machine this tick.
-            if (this.commandState !== CMD_HOLDING) {
+            {
                 if (
                     this.workerState === 'MANUAL_MOVE' ||
                     this.workerState === 'MOVING_TO' ||
@@ -391,7 +391,11 @@ class Unit {
                 break;
             case CMD_ATTACK_MOVING: this.doAttackMoving(spd); break;
             case CMD_ATTACKING: this.doAttacking(spd); break;
-            case CMD_HOLDING: this.doHolding(); break;
+            case CMD_HOLDING:
+                // Legacy state from older snapshots: hold is now a flag.
+                this.holdPosition = true;
+                this.commandState = CMD_IDLE;
+                break;
         }
         // Movement must not accumulate five ticks of penetration before being
         // corrected. Resting units retain the configured staggered refresh.
@@ -491,6 +495,8 @@ class Unit {
             this.commandState = CMD_ATTACKING;
             return;
         }
+        // Structures do not move; a staggered quarter of the ticks suffices.
+        if (((gameTime + this.id) & 3) !== 0) return;
         // Priority for structures: towers -> barracks/spawners -> floor items.
         let closestTower = _findClosestHostileStructure(this, towers, aggroRange);
         if (closestTower) {
@@ -548,7 +554,9 @@ class Unit {
                 let ty = this._scoutTarget.gy * TILE + 16;
                 let dx = tx - this.x, dy = ty - this.y;
                 let dist = Math.hypot(dx, dy) || 1;
-                if (dist <= Math.max(4, spd)) {
+                if (this.holdPosition) {
+                    // Keep the destination until released.
+                } else if (dist <= Math.max(4, spd)) {
                     this.commandState = CMD_IDLE;
                 } else {
                     this.x += (dx / dist) * spd;
@@ -621,43 +629,48 @@ class Unit {
             this.commandState = CMD_ATTACKING;
             return;
         }
-        let closestTower = _findClosestHostileStructure(this, towers, aggroRange);
-        if (closestTower) {
-            this.targetBuilding = closestTower;
-            this.forcedAttackTarget = false;
-            this.commandState = CMD_ATTACKING;
-            return;
-        }
-
-        let closestStruct = _findClosestHostileStructure(this, barracks, aggroRange, collectorSpawners);
-        if (closestStruct) {
-            this.targetBuilding = closestStruct;
-            this.forcedAttackTarget = false;
-            this.commandState = CMD_ATTACKING;
-            return;
-        }
-
-        let rTiles = Math.ceil(aggroRange / TILE) + 1;
-        let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
-        let minGx = Math.max(0, ugx - rTiles), maxGx = Math.min(GRID_W - 1, ugx + rTiles);
-        let minGy = Math.max(0, ugy - rTiles), maxGy = Math.min(GRID_H - 1, ugy + rTiles);
-        let closestItem = null, closestItemD = aggroRange;
-        for (let gy = minGy; gy <= maxGy; gy++) {
-            for (let gx = minGx; gx <= maxGx; gx++) {
-                let cell = grid[gy][gx];
-                if (!cell || !cell.item || cell.owner === this.owner) continue;
-                if (!isGameplayTargetVisibleToPlayer(this.owner, gx, gy)) continue;
-                let item = cell.item;
-                if (item.energy <= 0 || item.underConstruction) continue;
-                let d = Math.hypot(item.x - this.x, item.y - this.y);
-                if (d < closestItemD) { closestItemD = d; closestItem = item; }
+        // Structures do not move: scan for them on a staggered quarter of the
+        // ticks (by unit id), which is plenty to react to buildings entering
+        // aggro range. Enemy units above are still checked every tick.
+        if (((gameTime + this.id) & 3) === 0) {
+            let closestTower = _findClosestHostileStructure(this, towers, aggroRange);
+            if (closestTower) {
+                this.targetBuilding = closestTower;
+                this.forcedAttackTarget = false;
+                this.commandState = CMD_ATTACKING;
+                return;
             }
-        }
-        if (closestItem) {
-            this.targetBuilding = closestItem;
-            this.forcedAttackTarget = false;
-            this.commandState = CMD_ATTACKING;
-            return;
+
+            let closestStruct = _findClosestHostileStructure(this, barracks, aggroRange, collectorSpawners);
+            if (closestStruct) {
+                this.targetBuilding = closestStruct;
+                this.forcedAttackTarget = false;
+                this.commandState = CMD_ATTACKING;
+                return;
+            }
+
+            let rTiles = Math.ceil(aggroRange / TILE) + 1;
+            let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
+            let minGx = Math.max(0, ugx - rTiles), maxGx = Math.min(GRID_W - 1, ugx + rTiles);
+            let minGy = Math.max(0, ugy - rTiles), maxGy = Math.min(GRID_H - 1, ugy + rTiles);
+            let closestItem = null, closestItemD = aggroRange;
+            for (let gy = minGy; gy <= maxGy; gy++) {
+                for (let gx = minGx; gx <= maxGx; gx++) {
+                    let cell = grid[gy][gx];
+                    if (!cell || !cell.item || cell.owner === this.owner) continue;
+                    if (!isGameplayTargetVisibleToPlayer(this.owner, gx, gy)) continue;
+                    let item = cell.item;
+                    if (item.energy <= 0 || item.underConstruction) continue;
+                    let d = Math.hypot(item.x - this.x, item.y - this.y);
+                    if (d < closestItemD) { closestItemD = d; closestItem = item; }
+                }
+            }
+            if (closestItem) {
+                this.targetBuilding = closestItem;
+                this.forcedAttackTarget = false;
+                this.commandState = CMD_ATTACKING;
+                return;
+            }
         }
         if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_ATTACK_MOVING) {
             if (this.pathIsFallbackAstar) _tryUpgradeAstarFallbackPath(this);
@@ -855,6 +868,11 @@ class Unit {
             } else if (!this.forcedAttackTarget && d > 8 * TILE) {
                 // Leash
                 this.targetUnit = null; this.attackTarget = null; this.path = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE;
+            } else if (this.holdPosition) {
+                // Held: keep the chosen target (attacked as soon as it is in
+                // range) but never chase it; fight whatever is in range.
+                this.attackTarget = null;
+                this.doHolding();
             } else {
                 // Move toward target using path if available, direct if close
                 if (this.path && this.pathIndex < this.path.length) {
@@ -895,6 +913,9 @@ class Unit {
                         this.targetBuilding = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE;
                     }
                 }
+            } else if (this.holdPosition) {
+                this.attackTarget = null;
+                this.doHolding();
             } else {
                 if (this.path && this.pathIndex < this.path.length) {
                     this.followPath(spd);
@@ -959,6 +980,8 @@ class Unit {
 
     followPath(spd) {
         if (!this.path || this.pathIndex >= this.path.length) return true;
+        // Held units keep their route (and its progress) until released.
+        if (this.holdPosition) return false;
 
         // Treat the shared route as a corridor. A roomy node is reached from
         // anywhere in its open 3x3 block, so crowds may flow beside the exact
@@ -1314,6 +1337,7 @@ function canUnitAutoRetaliate(unit) {
         unit &&
         !unit.dead &&
         !unit.workerState &&
+        !unit.holdPosition &&
         unit.commandState === CMD_IDLE &&
         Number(unit.preComputed && unit.preComputed.attackDamage) > 0 &&
         Number(unit.preComputed && unit.preComputed.attackRangeArea) > 0

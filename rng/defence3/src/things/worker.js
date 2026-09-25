@@ -87,16 +87,9 @@ function updateWorkerAI(u) {
         let routeCanWalk = canWalk || getPathCanWalkForUnit(u);
         return _findBestSpawnerRoute(u, type, routeCanWalk, { cacheOnly: !canRunHeavyAi });
     };
-    if (u.commandState === CMD_HOLDING) {
-        _clearWorkerTarget(u);
-        clearWorkerTaskMemoryForFreeRetarget(u);
-        u.workerState = 'IDLE';
-        u.path = null;
-        u.targetUnit = null;
-        u.targetBuilding = null;
-        u._pendingPathTarget = null;
-        return;
-    }
+    // A held worker keeps its task; it just cannot walk. Do not let the
+    // wait count as being stuck once it is released.
+    if (u.holdPosition) u._builderLastMoveTick = gameTime;
     let owner = u.owner;
     let myGx = Math.floor(u.x / TILE), myGy = Math.floor(u.y / TILE);
     let runHealerRetargetIfDue = () => {
@@ -987,6 +980,44 @@ function _resourceCollectorAssignTarget(u, target, targetType, resourceCfg) {
     }
 }
 
+// Mines never move. Bucket each mine array by 8x8 tiles; rebuild when the
+// array is replaced or a depleted mine is spliced out (length change).
+const _mineSpatialIndexes = new WeakMap();
+const MINE_INDEX_BUCKET_TILES = 8;
+
+function _getMineIndicesNear(mineArray, wx, wy, radiusPx) {
+    let index = _mineSpatialIndexes.get(mineArray);
+    if (!index || index.length !== mineArray.length || index.gridW !== GRID_W || index.gridH !== GRID_H) {
+        let cols = Math.ceil(GRID_W / MINE_INDEX_BUCKET_TILES) + 1;
+        index = { length: mineArray.length, gridW: GRID_W, gridH: GRID_H, cols, buckets: new Map(), loose: [] };
+        for (let i = 0; i < mineArray.length; i++) {
+            let mine = mineArray[i];
+            let x = Number(mine && mine.x), y = Number(mine && mine.y);
+            // Anything without a finite position is always visited, as before.
+            if (!Number.isFinite(x) || !Number.isFinite(y)) { index.loose.push(i); continue; }
+            let bx = Math.floor(x / (TILE * MINE_INDEX_BUCKET_TILES)), by = Math.floor(y / (TILE * MINE_INDEX_BUCKET_TILES));
+            if (bx < 0 || by < 0 || bx >= cols) { index.loose.push(i); continue; }
+            let key = by * cols + bx;
+            let bucket = index.buckets.get(key);
+            if (!bucket) index.buckets.set(key, bucket = []);
+            bucket.push(i);
+        }
+        _mineSpatialIndexes.set(mineArray, index);
+    }
+    let span = TILE * MINE_INDEX_BUCKET_TILES;
+    let minBx = Math.floor((wx - radiusPx) / span), maxBx = Math.floor((wx + radiusPx) / span);
+    let minBy = Math.floor((wy - radiusPx) / span), maxBy = Math.floor((wy + radiusPx) / span);
+    let out = index.loose.slice();
+    for (let by = minBy; by <= maxBy; by++) {
+        for (let bx = minBx; bx <= maxBx; bx++) {
+            if (bx < 0 || bx >= index.cols) continue;
+            let bucket = index.buckets.get(by * index.cols + bx);
+            if (bucket) for (let i = 0; i < bucket.length; i++) out.push(bucket[i]);
+        }
+    }
+    return out.sort((a, b) => a - b);
+}
+
 function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
     let pinned = _getResourceCollectorPinnedTarget(u, resourceCfg);
     if (_isResourceCollectorTargetValid(pinned.target, pinned.targetType, u.owner, resourceCfg)
@@ -1010,13 +1041,16 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
     }
 
     let candidates = [];
+    // One occupancy lookup per (synchronous) search instead of a unit scan
+    // per candidate; nothing is assigned until the search completes.
+    let conflictCache = {};
     let considerCandidate = (candidate, candidateType, dropPenalty = 0) => {
         if (!candidate) return;
         let dx = Number(candidate.x) - origin.x;
         let dy = Number(candidate.y) - origin.y;
         let originDistSq = dx * dx + dy * dy;
         if (!Number.isFinite(originDistSq) || originDistSq > maxSearchPxSq) return;
-        if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType)) return;
+        if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType, conflictCache)) return;
 
         let originDist = Math.sqrt(originDistSq);
         let spawnerDist = anchorSpawner
@@ -1038,7 +1072,10 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
     }
 
     let mineArray = _getResourceCollectorMineArray(resourceCfg) || [];
-    for (let mine of mineArray) {
+    // Only mines inside the search box can pass considerCandidate; visit
+    // those via a static bucket index, still in mine array order.
+    for (let index of _getMineIndicesNear(mineArray, origin.x, origin.y, maxSearchPx)) {
+        let mine = mineArray[index];
         if (!mine) continue;
         if (!(Number.isFinite(mine[resourceCfg.mineStatKey]) && mine[resourceCfg.mineStatKey] > 0)) continue;
         considerCandidate(mine, resourceCfg.mineTileType, 0);
@@ -1051,9 +1088,10 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
     let minGy = Math.max(0, Math.floor((origin.y - maxSearchPx) / TILE));
     let maxGy = Math.min(GRID_H - 1, Math.floor((origin.y + maxSearchPx) / TILE));
     for (let gy = minGy; gy <= maxGy; gy++) {
+        let row = grid[gy];
         for (let gx = minGx; gx <= maxGx; gx++) {
-            let farm = grid[gy][gx].item;
-            if (!_isResourceCollectorTargetValid(farm, resourceCfg.farmKey, u.owner, resourceCfg)) continue;
+            let farm = row[gx].item;
+            if (!farm || !_isResourceCollectorTargetValid(farm, resourceCfg.farmKey, u.owner, resourceCfg)) continue;
             considerCandidate(farm, resourceCfg.farmKey, 0);
         }
     }
@@ -1397,6 +1435,7 @@ function _collectorFindTarget(u, myGx, myGy) {
     }
 
     let candidates = [];
+    let conflictCache = {};
 
     forEachGridCellInAreaRange(origin.x, origin.y, maxSearchArea, (tileRef, cell) => {
         if (!tileRef || !cell) return false;
@@ -1431,7 +1470,7 @@ function _collectorFindTarget(u, myGx, myGy) {
 
         if (!candidate) return false;
         if (!_isTargetWithinWorkerSearchLimits(u, origin.x, origin.y, candidate, maxSearchArea)) return false;
-        if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType)) return false;
+        if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType, conflictCache)) return false;
 
         let originDist = Math.sqrt(originDistSq);
         let spawnerDist = anchorSpawner
@@ -2106,14 +2145,15 @@ function _salvagerFindTarget(u, myGx, myGy) {
     let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     let bestDist = 99999, bestItem = null;
     let spawnerSet = new Set(collectorSpawners);
-    for (let t of towers) { if (t.owner === owner && t.markedForSalvage && _canAssignWorkerTargetExclusive(u, t, null)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, t, maxSearchArea)) continue; let d = Math.hypot(t.x - u.x, t.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = t; } } }
-    for (let b of barracks) { if (b.owner === owner && b.markedForSalvage && _canAssignWorkerTargetExclusive(u, b, null)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, b, maxSearchArea)) continue; let d = Math.hypot(b.x - u.x, b.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = b; } } }
-    for (let s of collectorSpawners) { if (s.owner === owner && s.markedForSalvage && _canAssignWorkerTargetExclusive(u, s, null)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, s, maxSearchArea)) continue; let d = Math.hypot(s.x - u.x, s.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = s; } } }
+    let conflictCache = {};
+    for (let t of towers) { if (t.owner === owner && t.markedForSalvage && _canAssignWorkerTargetExclusive(u, t, null, conflictCache)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, t, maxSearchArea)) continue; let d = Math.hypot(t.x - u.x, t.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = t; } } }
+    for (let b of barracks) { if (b.owner === owner && b.markedForSalvage && _canAssignWorkerTargetExclusive(u, b, null, conflictCache)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, b, maxSearchArea)) continue; let d = Math.hypot(b.x - u.x, b.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = b; } } }
+    for (let s of collectorSpawners) { if (s.owner === owner && s.markedForSalvage && _canAssignWorkerTargetExclusive(u, s, null, conflictCache)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, s, maxSearchArea)) continue; let d = Math.hypot(s.x - u.x, s.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = s; } } }
     forEachGridCellInAreaRange(u.x, u.y, maxSearchArea, (tileRef, c) => {
         if (!tileRef || !c || !c.item) return false;
         if (c.owner !== owner || !c.item.markedForSalvage) return false;
         if (c.item instanceof Barrack || spawnerSet.has(c.item)) return false;
-        if (!_canAssignWorkerTargetExclusive(u, c.item, null)) return false;
+        if (!_canAssignWorkerTargetExclusive(u, c.item, null, conflictCache)) return false;
         let d = Math.hypot(c.item.x - u.x, c.item.y - u.y);
         if (d > maxSearch) return false;
         if (d < bestDist) {
@@ -2837,10 +2877,14 @@ function _findNearestUnderConstruction(u, originX = u.x, originY = u.y) {
     let maxSearch = _getWorkerAutoSearchDistancePx(u);
     let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     for (let b of ownedTargets) {
+        // Reject distant work first when the check below is side-effect free
+        // (it can start an auto-upgrade, but only for idle finished buildings).
+        let far = Math.abs(b.x - originX) > maxSearch || Math.abs(b.y - originY) > maxSearch;
+        if (far && (b.underConstruction || b.isUpgrading || b.isStacking)) continue;
         if (!_isBuilderWorkTarget(b, owner)) continue;
         // Reject distant work before area lookup; keep the exact distance and
         // canonical candidate order for reservation and tie-breaking behavior.
-        if (Math.abs(b.x - originX) > maxSearch || Math.abs(b.y - originY) > maxSearch) continue;
+        if (far) continue;
         if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, b, maxSearchArea)) continue;
         let d = Math.hypot(b.x - originX, b.y - originY);
         if (d > maxSearch) continue;

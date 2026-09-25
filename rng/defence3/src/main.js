@@ -211,10 +211,13 @@ function gameTick() {
     _resetPathfindPerfTick();
     _resetPathBudgetTrackingPerTick();
     _ensureUpKeepRateCacheSize();
-    let upKeepTickBreakdown = Array.from({ length: players.length }, () => _createEmptyUpKeepBreakdown());
+    // Upkeep is deducted once per second from that tick's breakdown (the info
+    // panel shows the latest one), so only accumulate it on those ticks.
+    let upKeepThisTick = (gameTime % TICK_RATE === 0) || _upKeepRateByPlayer.length !== players.length;
+    let upKeepTickBreakdown = upKeepThisTick ? Array.from({ length: players.length }, () => _createEmptyUpKeepBreakdown()) : null;
     let upKeepBuildingSeen = new Set();
     let accumulateBuildingUpKeep = (thing) => {
-        if (!thing || upKeepBuildingSeen.has(thing)) return;
+        if (!upKeepThisTick || !thing || upKeepBuildingSeen.has(thing)) return;
         upKeepBuildingSeen.add(thing);
         _accumulateUpKeepForThing(upKeepTickBreakdown, thing, false);
     };
@@ -296,6 +299,7 @@ function gameTick() {
         pendingPathResolveCursor = (start + checked) % orderedUnits.length;
     }
 
+    flushPendingMovementAstarSpend();
     flushPendingResourceStatRebuilds();
     recalculateUnitEffectiveStats();
     recalculateThingPrecomputedStats();
@@ -354,7 +358,7 @@ function gameTick() {
             selectedUnits = selectedUnits.filter(su => su !== u);
             units.splice(i, 1);
             if (gameOver) return;
-        } else {
+        } else if (upKeepThisTick) {
             _accumulateUpKeepForThing(upKeepTickBreakdown, u, true);
         }
     }
@@ -427,16 +431,17 @@ function gameTick() {
     }
 
     // Keep a live per-second upKeep breakdown for the right-side info panel.
-    _upKeepRateByPlayer = upKeepTickBreakdown;
+    if (upKeepThisTick) _upKeepRateByPlayer = upKeepTickBreakdown;
 
     // Deduct upKeep once per second in a centralized, batched way.
-    if (gameTime % TICK_RATE === 0) {
+    if (gameTime % TICK_RATE === 0 && upKeepTickBreakdown) {
         for (let pid = 0; pid < upKeepTickBreakdown.length; pid++) {
             let totalPerSecond = Number(upKeepTickBreakdown[pid].total) || 0;
             if (!(totalPerSecond > 0)) continue;
             addPlayerResource(pid, 'energy', -totalPerSecond);
         }
     }
+    flushPendingMovementAstarSpend();
     flushPendingResourceStatRebuilds();
 
     updateVisibility(localPlayerId);
@@ -514,6 +519,39 @@ function initInput() {
             )));
     }
 
+    // Split selected things across ctrl multi-points by proximity. Each point
+    // still receives an equal share (as round-robin did), but the closest
+    // thing/point pairs are matched first (squared distance, then index).
+    function _assignToNearestPoints(things, points, thingXY, pointXY) {
+        let n = things.length, k = points.length;
+        let result = new Array(n).fill(0);
+        if (k <= 1 || n === 0) return result;
+        let capacity = Math.ceil(n / k);
+        let load = new Array(k).fill(0);
+        let pts = points.map(pointXY);
+        let pairs = [];
+        for (let i = 0; i < n; i++) {
+            let a = thingXY(things[i]);
+            for (let j = 0; j < k; j++) {
+                let p = pts[j];
+                let dx = (a && p) ? a.x - p.x : 0, dy = (a && p) ? a.y - p.y : 0;
+                pairs.push({ i, j, d: dx * dx + dy * dy });
+            }
+        }
+        pairs.sort((x, y) => (x.d - y.d) || (x.i - y.i) || (x.j - y.j));
+        let done = new Array(n).fill(false), left = n;
+        for (let pair of pairs) {
+            if (!left) break;
+            if (done[pair.i] || load[pair.j] >= capacity) continue;
+            done[pair.i] = true; left--;
+            load[pair.j]++;
+            result[pair.i] = pair.j;
+        }
+        return result;
+    }
+
+    let _entityWorldXY = e => e ? { x: Number.isFinite(e.x) ? e.x : (e.gx * TILE + 16), y: Number.isFinite(e.y) ? e.y : (e.gy * TILE + 16) } : null;
+
     function applyRallyTargets(selSpawners, targetX, targetY, appendToMultiRally, targetUnitId = null) {
         if (!selSpawners || selSpawners.length === 0) return;
         if (appendToMultiRally && multiRallyPoints.length > 0) {
@@ -522,9 +560,10 @@ function initInput() {
             multiRallyPoints = [{ x: targetX, y: targetY, targetUnitId }];
         }
         if (multiRallyPoints.length === 0) multiRallyPoints = [{ x: targetX, y: targetY, targetUnitId }];
+        let pick = _assignToNearestPoints(selSpawners, multiRallyPoints, _entityWorldXY, p => p);
         for (let i = 0; i < selSpawners.length; i++) {
             let b = selSpawners[i];
-            let rp = multiRallyPoints[i % multiRallyPoints.length];
+            let rp = multiRallyPoints[pick[i]];
             queueAction({ action: 'setRally', gx: b.gx, gy: b.gy, targetX: rp.x, targetY: rp.y, targetUnitId: rp.targetUnitId || null });
             b.rallyX = rp.x; b.rallyY = rp.y; b.rallyTargetUnitId = rp.targetUnitId || null;
         }
@@ -1031,7 +1070,9 @@ function initInput() {
         if (multiUnitCommandPoints.length === 0) multiUnitCommandPoints = [{ x: targetX, y: targetY }];
 
         let buckets = Array.from({ length: multiUnitCommandPoints.length }, () => []);
-        for (let i = 0; i < unitIds.length; i++) buckets[i % multiUnitCommandPoints.length].push(unitIds[i]);
+        let unitById = new Map(units.map(u => [u.id, u]));
+        let pick = _assignToNearestPoints(unitIds, multiUnitCommandPoints, id => _entityWorldXY(unitById.get(id)), p => p);
+        for (let i = 0; i < unitIds.length; i++) buckets[pick[i]].push(unitIds[i]);
 
         for (let i = 0; i < buckets.length; i++) {
             if (buckets[i].length === 0) continue;
@@ -1050,7 +1091,10 @@ function initInput() {
         if (multiTowerTargetPoints.length === 0) multiTowerTargetPoints = [{ ...targetSpec }];
 
         let buckets = Array.from({ length: multiTowerTargetPoints.length }, () => []);
-        for (let i = 0; i < selTowers.length; i++) buckets[i % multiTowerTargetPoints.length].push(selTowers[i]);
+        let targetXY = spec => spec.type === 'unit' ? _entityWorldXY(units.find(u => u.id === spec.id))
+            : (Number.isFinite(spec.gx) ? { x: spec.gx * TILE + 16, y: spec.gy * TILE + 16 } : null);
+        let pick = _assignToNearestPoints(selTowers, multiTowerTargetPoints, _entityWorldXY, targetXY);
+        for (let i = 0; i < selTowers.length; i++) buckets[pick[i]].push(selTowers[i]);
 
         for (let i = 0; i < buckets.length; i++) {
             if (buckets[i].length === 0) continue;
@@ -1079,8 +1123,10 @@ function initInput() {
 
         let unitIds = workerUnits.map(u => u.id);
         let buckets = Array.from({ length: multiTargets.length }, () => []);
+        let pick = _assignToNearestPoints(workerUnits, multiTargets, _entityWorldXY,
+            t => ({ x: t.targetGx * TILE + 16, y: t.targetGy * TILE + 16 }));
         for (let i = 0; i < unitIds.length; i++) {
-            buckets[i % multiTargets.length].push(unitIds[i]);
+            buckets[pick[i]].push(unitIds[i]);
         }
 
         for (let i = 0; i < buckets.length; i++) {
@@ -2304,6 +2350,71 @@ function initInput() {
     }
 }
 
+// Move and attack-move orders. Units sharing a destination (and walking
+// rules) are routed by one shared reverse search, each along its own shortest
+// path from its own tile; anything that search cannot answer falls back to
+// the per-unit A*. Unit order and every tie-break are deterministic.
+function _issueGroupMoveOrder(a, playerId, cmd) {
+    let targetGx = Math.floor(a.targetX / TILE), targetGy = Math.floor(a.targetY / TILE);
+    let ids = new Set(a.unitIds);
+    let groups = [];
+    let groupByDest = new Map();
+    let applyPath = (u, ugx, ugy, path) => {
+        if (path && path.length > 0) {
+            u.path = path;
+            u.pathIndex = (path.length > 1 && path[0].x === ugx && path[0].y === ugy) ? 1 : 0;
+            u._pendingPathTarget = null;
+        } else {
+            u.path = _makeFallbackPathForUnit(u, ugx, ugy, targetGx, targetGy, cmd, 'player_commands');
+            u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
+        }
+    };
+    for (let u of units) {
+        if (!ids.has(u.id) || u.owner !== playerId || u.dead) continue;
+        u.targetUnit = null; u.targetBuilding = null; u.forcedAttackTarget = false;
+        u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
+        u.commandState = cmd;
+        if (u.workerState) interruptWorkerForManualMove(u);
+        u.targetPos = { x: targetGx * TILE + 16, y: targetGy * TILE + 16 };
+        let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+        let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
+        if (!_canUsePathfindRequestBudget(u.owner, u)) {
+            u.path = _makeFallbackPathForUnit(u, ugx, ugy, dest.x, dest.y, cmd, 'player_commands');
+            u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
+            continue;
+        }
+        _consumePathfindRequestBudget(u.owner, u);
+        let canWalk = getPathCanWalkForUnit(u);
+        if (u.isFlying) {
+            applyPath(u, ugx, ugy, _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, true, canWalk, u.owner));
+            continue;
+        }
+        let destKey = dest.y * GRID_W + dest.x;
+        let candidates = groupByDest.get(destKey);
+        if (!candidates) groupByDest.set(destKey, candidates = []);
+        let group = candidates.find(g => g.canWalk === canWalk);
+        if (!group) {
+            group = { dest, canWalk, members: [] };
+            candidates.push(group);
+            groups.push(group);
+        }
+        group.members.push({ u, ugx, ugy });
+    }
+    for (let group of groups) {
+        let { dest, canWalk, members } = group;
+        let shared = members.length >= 2
+            ? _withPathfindContext('player_commands', playerId, null,
+                () => findGroupPathsToTarget(members.map(m => ({ x: m.ugx, y: m.ugy })), dest.x, dest.y, canWalk, playerId))
+            : null;
+        for (let i = 0; i < members.length; i++) {
+            let { u, ugx, ugy } = members[i];
+            let path = shared && shared[i];
+            if (!path) path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, false, canWalk, u.owner);
+            applyPath(u, ugx, ugy, path);
+        }
+    }
+}
+
 function processActions(actions, playerId) {
     for (let a of actions) {
         if (a.action === 'place') {
@@ -2311,68 +2422,8 @@ function processActions(actions, playerId) {
             for (let i = 0; i < count; i++) {
                 placeBuilding(a.gx, a.gy, a.itemType, playerId, { autoUpgradeEnabled: a.autoUpgradeEnabled, buildEnabled: a.buildEnabled });
             }
-        } else if (a.action === 'move') {
-            let targetGx = Math.floor(a.targetX / TILE), targetGy = Math.floor(a.targetY / TILE);
-            for (let u of units) {
-                if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
-                    u.targetUnit = null; u.targetBuilding = null; u.forcedAttackTarget = false;
-                    u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
-                    u.commandState = CMD_MOVING;
-                    if (u.workerState) {
-                        interruptWorkerForManualMove(u);
-                    }
-                    u.targetPos = { x: targetGx * TILE + 16, y: targetGy * TILE + 16 };
-                    if (_canUsePathfindRequestBudget(u.owner, u)) {
-                        _consumePathfindRequestBudget(u.owner, u);
-                        let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                        let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
-                        u.path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                        if (u.path && u.path.length > 0) {
-                            u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                            u._pendingPathTarget = null;
-                        } else {
-                            u.path = _makeFallbackPathForUnit(u, ugx, ugy, targetGx, targetGy, CMD_MOVING, 'player_commands');
-                            u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                        }
-                    } else {
-                        let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                        let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
-                        u.path = _makeFallbackPathForUnit(u, ugx, ugy, dest.x, dest.y, CMD_MOVING, 'player_commands');
-                        u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                    }
-                }
-            }
-        } else if (a.action === 'attackMove') {
-            let targetGx = Math.floor(a.targetX / TILE), targetGy = Math.floor(a.targetY / TILE);
-            for (let u of units) {
-                if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
-                    u.targetUnit = null; u.targetBuilding = null; u.forcedAttackTarget = false;
-                    u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
-                    u.commandState = CMD_ATTACK_MOVING;
-                    if (u.workerState) {
-                        interruptWorkerForManualMove(u);
-                    }
-                    u.targetPos = { x: targetGx * TILE + 16, y: targetGy * TILE + 16 };
-                    if (_canUsePathfindRequestBudget(u.owner, u)) {
-                        _consumePathfindRequestBudget(u.owner, u);
-                        let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                        let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
-                        u.path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                        if (u.path && u.path.length > 0) {
-                            u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                            u._pendingPathTarget = null;
-                        } else {
-                            u.path = _makeFallbackPathForUnit(u, ugx, ugy, targetGx, targetGy, CMD_ATTACK_MOVING, 'player_commands');
-                            u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                        }
-                    } else {
-                        let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                        let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
-                        u.path = _makeFallbackPathForUnit(u, ugx, ugy, dest.x, dest.y, CMD_ATTACK_MOVING, 'player_commands');
-                        u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                    }
-                }
-            }
+        } else if (a.action === 'move' || a.action === 'attackMove') {
+            _issueGroupMoveOrder(a, playerId, a.action === 'move' ? CMD_MOVING : CMD_ATTACK_MOVING);
         } else if (a.action === 'attack') {
             let target = units.find(u => u.id === a.targetId);
             if (target) {
@@ -2437,6 +2488,9 @@ function processActions(actions, playerId) {
         } else if (a.action === 'stop') {
             for (let u of units) {
                 if (a.unitIds.includes(u.id) && u.owner === playerId) {
+                    // Releasing hold resumes the unit's current orders
+                    // (route, rally, worker task). Only free units stop.
+                    if (u.holdPosition) { u.holdPosition = false; continue; }
                     u.commandState = CMD_IDLE; u.path = null; u.targetUnit = null; u.targetBuilding = null; u._pendingPathTarget = null; u.forcedAttackTarget = false; u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
                     if (u.workerState) {
                         _clearWorkerTarget(u);
@@ -2447,14 +2501,9 @@ function processActions(actions, playerId) {
             }
         } else if (a.action === 'hold') {
             for (let u of units) {
-                if (a.unitIds.includes(u.id) && u.owner === playerId) {
-                    u.commandState = CMD_HOLDING; u.path = null; u.targetUnit = null; u.targetBuilding = null; u._pendingPathTarget = null; u.forcedAttackTarget = false; u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
-                    if (u.workerState) {
-                        _clearWorkerTarget(u);
-                        clearWorkerTaskMemoryForFreeRetarget(u);
-                        u.workerState = 'IDLE';
-                    }
-                }
+                // Hold only disables movement. Orders, routes, targets and
+                // worker tasks are kept, and new orders queue up while held.
+                if (a.unitIds.includes(u.id) && u.owner === playerId) u.holdPosition = true;
             }
         } else if (a.action === 'queueUnit') {
             let b = getBarrackAtTile(a.gx, a.gy);
@@ -3599,24 +3648,120 @@ function quantizeLockstepUnitPosition(v) {
     return Math.round(n * 4) / 4;
 }
 
+// House pop caps for every player in one grid pass (same per-owner summation
+// order as a per-owner scan).
+function _computeLockstepPopCaps() {
+    let cfgCap = Math.max(1, Math.floor(CONFIG_MAX_POP || 200));
+    let housePop = new Array(players.length).fill(0);
+    for (let gy = 0; gy < GRID_H; gy++) {
+        for (let gx = 0; gx < GRID_W; gx++) {
+            let cell = grid[gy] && grid[gy][gx];
+            let item = cell ? cell.item : null;
+            if (!item || item.type !== 'house') continue;
+            let owner = Math.floor(Number(cell.owner) || 0);
+            if (!(owner >= 0 && owner < housePop.length)) continue;
+            if (!(Number(item.energy) > 0) || !!item.underConstruction) continue;
+            let lvl = Math.max(1, Math.floor(getThingBaseLevel(item) || 1));
+            housePop[owner] += getHousePopCapContribution(owner, lvl);
+        }
+    }
+    return housePop.map(pop => Math.min(cfgCap, pop));
+}
+
+// The periodic lockstep state hash. It covers the same fields as
+// computeLockstepStateDigest in the same sorted order, but mixes integers
+// directly instead of serializing a JSON-like string (~5ms per check with
+// hundreds of units and thousands of mines). Every peer runs this same code.
+function computeLockstepStateHashFast(tick) {
+    let h = 2166136261 >>> 0;
+    let mixInt = (v) => {
+        v = v | 0;
+        h = Math.imul(h ^ (v & 0xff), 16777619);
+        h = Math.imul(h ^ ((v >>> 8) & 0xff), 16777619);
+        h = Math.imul(h ^ ((v >>> 16) & 0xff), 16777619);
+        h = Math.imul(h ^ (v >>> 24), 16777619);
+    };
+    // Quantized values can exceed 32 bits: mix both halves.
+    let mixNum = (n) => {
+        if (!Number.isFinite(n)) n = 0;
+        let hi = Math.floor(n / 4294967296);
+        mixInt(n - hi * 4294967296);
+        mixInt(hi);
+    };
+    let q3 = v => { let n = Number(v); return Number.isFinite(n) ? Math.round(n * 1000) : 0; };
+    let q4 = v => { let n = Number(v); return Number.isFinite(n) ? Math.round(n * 4) : 0; };
+    let strCodes = new Map();
+    let mixStr = (str) => {
+        str = String(str || '');
+        let code = strCodes.get(str);
+        if (code === undefined) {
+            code = 2166136261 >>> 0;
+            for (let i = 0; i < str.length; i++) code = Math.imul(code ^ str.charCodeAt(i), 16777619);
+            strCodes.set(str, code);
+        }
+        mixInt(code);
+    };
+    let int = v => Math.floor(Number(v) || 0);
+    let watchedTeam = e => Number.isFinite(Number(e.watchedByTeam)) ? Math.floor(Number(e.watchedByTeam)) : -1;
+    let t = Math.floor(Number(tick));
+    mixNum(Number.isFinite(t) ? t : currentTick);
+    mixNum(gameTime);
+    let popCaps = _computeLockstepPopCaps();
+    mixInt(players.length);
+    for (let idx = 0; idx < players.length; idx++) {
+        let p = players[idx];
+        mixNum(q3(p && p.money)); mixNum(q3(p && p.energy)); mixNum(q3(p && p.astar));
+        mixInt(int(p && p.popCount)); mixInt(int(popCaps[idx]));
+    }
+    let live = units.filter(u => u && !u.dead).sort((a, b) => int(a.id) - int(b.id));
+    mixInt(live.length);
+    for (let u of live) {
+        mixInt(int(u.id)); mixInt(int(u.owner)); mixStr(u.unitType);
+        mixNum(q4(u.x)); mixNum(q4(u.y)); mixNum(q3(u.energy));
+        mixInt(int(u.commandState)); mixStr(u.workerState); mixStr(u.workerType);
+        mixInt(int(u.stackCount || 1)); mixInt(Math.max(0, int(u.watched))); mixInt(watchedTeam(u));
+    }
+    let byTile = (a, b) => (int(a.gy) - int(b.gy)) || (int(a.gx) - int(b.gx)) || (int(a.owner) - int(b.owner));
+    let mixBuilding = (list, kindKey) => {
+        let sorted = list.filter(x => !!x).sort(byTile);
+        mixInt(sorted.length);
+        for (let b of sorted) {
+            mixInt(int(b.gx)); mixInt(int(b.gy)); mixInt(int(b.owner)); mixStr(b[kindKey]);
+            mixInt(Math.floor(Number(b.level) || 1)); mixNum(q3(b.energy));
+            if (kindKey !== 'type' || list !== towers) mixInt(Array.isArray(b.spawnQueue) ? b.spawnQueue.length : 0);
+            mixInt(b.underConstruction ? 1 : 0); mixInt(b.isUpgrading ? 1 : 0);
+            mixInt(Math.max(0, int(b.watched))); mixInt(watchedTeam(b));
+        }
+    };
+    mixBuilding(towers, 'type');
+    mixBuilding(barracks, 'unitType');
+    mixBuilding(collectorSpawners, 'type');
+    for (let gy = 0; gy < GRID_H; gy++) {
+        for (let gx = 0; gx < GRID_W; gx++) {
+            let cell = grid[gy][gx];
+            if (!cell || !cell.item) continue;
+            let item = cell.item;
+            if ((item instanceof Tower) || (item instanceof Barrack) || isSpawnerEntity(item)) continue;
+            mixInt(gx); mixInt(gy); mixInt(int(cell.owner)); mixStr(item.type);
+            mixInt(Math.floor(Number(item.level) || 1)); mixNum(q3(item.energy));
+            mixInt(item.underConstruction ? 1 : 0); mixInt(item.isUpgrading ? 1 : 0);
+            mixInt(Math.max(0, int(item.watched))); mixInt(watchedTeam(item));
+        }
+    }
+    let mixMines = (list, key) => {
+        let sorted = list.slice().sort((a, b) => (int(a.gy) - int(b.gy)) || (int(a.gx) - int(b.gx)));
+        mixInt(sorted.length);
+        for (let m of sorted) { mixInt(int(m.gx)); mixInt(int(m.gy)); mixNum(int(m[key])); }
+    };
+    mixMines(goldMines, 'gold');
+    mixMines(astarMines, 'astar');
+    return (h >>> 0).toString(16).padStart(8, '0');
+}
+
 function computeLockstepStateDigest(tick) {
     let t = Math.floor(Number(tick));
-    let computePopCapFromGrid = (pid) => {
-        let owner = Math.floor(Number(pid) || 0);
-        let cfgCap = Math.max(1, Math.floor(CONFIG_MAX_POP || 200));
-        let housePop = 0;
-        for (let gy = 0; gy < GRID_H; gy++) {
-            for (let gx = 0; gx < GRID_W; gx++) {
-                let cell = grid[gy] && grid[gy][gx];
-                let item = cell ? cell.item : null;
-                if (!item || item.type !== 'house' || Math.floor(Number(cell.owner) || 0) !== owner) continue;
-                if (!(Number(item.energy) > 0) || !!item.underConstruction) continue;
-                let lvl = Math.max(1, Math.floor(getThingBaseLevel(item) || 1));
-                housePop += getHousePopCapContribution(owner, lvl);
-            }
-        }
-        return Math.min(cfgCap, housePop);
-    };
+    let popCaps = _computeLockstepPopCaps();
+    let computePopCapFromGrid = (pid) => popCaps[Math.floor(Number(pid) || 0)] || 0;
 
     let digest = {
         tick: Number.isFinite(t) ? t : currentTick,
@@ -3771,8 +3916,7 @@ function summarizeLockstepDigestMismatch(expectedDigest, localDigest) {
 }
 
 function computeLockstepStateHash(tick) {
-    let digest = computeLockstepStateDigest(tick);
-    return hashStringLockstep(stableSerializeForLockstep(digest));
+    return computeLockstepStateHashFast(tick);
 }
 
 function maybeCompareLockstepStateHash(tick) {
@@ -4173,8 +4317,9 @@ function runOneTick() {
     requestResearchPopupRefresh();
 
     if (isMultiplayer && (processedTick % LOCKSTEP_STATE_CHECK_INTERVAL) === 0) {
-        let stateDigest = computeLockstepStateDigest(processedTick);
-        let stateHash = hashStringLockstep(stableSerializeForLockstep(stateDigest));
+        // The digest object is only needed for mismatch diagnostics.
+        let stateDigest = LOCKSTEP_DEBUG_HASH_DETAILS ? computeLockstepStateDigest(processedTick) : null;
+        let stateHash = computeLockstepStateHashFast(processedTick);
         if (isHost) {
             connections.forEach(c => {
                 if (c) {

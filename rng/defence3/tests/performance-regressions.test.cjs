@@ -59,8 +59,15 @@ assert.equal(lookups.length, 1, 'even an out-of-range target retains the origina
 const Unit = vm.runInContext('Unit', ctx);
 ctx._findClosestEnemyUnitByChunks = () => null;
 ctx.towers = [first]; ctx.barracks = [{ ...tied, x: 1, y: 0 }]; ctx.collectorSpawners = [];
+ctx.gameTime = 0;
 for (const method of ['doIdle', 'doAttackMoving']) {
-    const attacker = Object.assign(Object.create(Unit.prototype), origin, { unitType: 'norm', preComputed: { visionRange: 4 } });
+    const attacker = Object.assign(Object.create(Unit.prototype), origin, { id: 1, unitType: 'norm', preComputed: { visionRange: 4 } });
+    // Structure scans are staggered to one tick in four, keyed by unit id.
+    for (ctx.gameTime = 0; ctx.gameTime < 3; ctx.gameTime++) {
+        attacker[method](1);
+        assert.equal(attacker.targetBuilding, undefined, 'no structure scan off its staggered tick');
+    }
+    assert.equal(ctx.gameTime, 3);
     attacker[method](1);
     assert.equal(attacker.targetBuilding, first, 'towers retain priority over closer barracks');
     first.energy = 0;

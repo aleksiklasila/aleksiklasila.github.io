@@ -96,15 +96,19 @@ function _getCachedLitTint(baseTint, lightLevel) {
     let tint = String(baseTint || '#c8ced8');
     let bucket = Math.max(0, Math.min(24, Math.round(Math.max(0, Math.min(1, Number(lightLevel) || 0)) * 24)));
     if (bucket >= 24) return tint;
-    let key = `${tint}|${bucket}`;
-    let cached = _litTintCache.get(key);
+    // Per tint, one slot per light bucket: no string key per lookup.
+    let buckets = _litTintCache.get(tint);
+    if (!buckets) {
+        if (_litTintCache.size > 512) _litTintCache.clear();
+        _litTintCache.set(tint, buckets = new Array(24).fill(null));
+    }
+    let cached = buckets[bucket];
     if (cached) return cached;
     let rgb = _parseHexColor(tint);
     if (!rgb) return tint;
     let lightMul = 0.28 + (bucket / 24) * 0.72;
     let lit = _rgbToHex({ r: rgb.r * lightMul, g: rgb.g * lightMul, b: rgb.b * lightMul });
-    if (_litTintCache.size > 2048) _litTintCache.clear();
-    _litTintCache.set(key, lit);
+    buckets[bucket] = lit;
     return lit;
 }
 
@@ -1133,13 +1137,16 @@ function resolveRenderVisionRange(source) {
     return NaN;
 }
 
+const RENDER_NO_MODEL_CANDIDATES = Object.freeze([]);
+
 function push3DRenderObject(target, object) {
     if (!target || !object) return;
     let ox = Number(object.x) || 0;
     let oz = Number(object.z) || 0;
     let gx = Math.floor(ox);
     let gy = Math.floor(oz);
-    const remembered = !!((object.visibilitySource || object.pickSource || {})._historyGhost);
+    const rememberedSource = object.visibilitySource || object.pickSource;
+    const remembered = !!(rememberedSource && rememberedSource._historyGhost);
     let lightGrid = remembered ? getRenderVisibilityGrid() : visibilityGrid;
     let lightRawCenter = fullVisibility ? VISIBILITY_LIGHT_NORMALIZATION_RANGE : ((lightGrid[gy] && lightGrid[gy][gx]) || 0);
     if (!fullVisibility && object.visibilitySource && object.visibilitySource.unitType) {
@@ -1169,7 +1176,11 @@ function push3DRenderObject(target, object) {
     }
     if (object.overlapFade) {
         let fade = object.overlapFade;
-        let key = `${object.modelKey}:${fade.gx},${fade.gy}`;
+        // Numeric key (model id, tile): hundreds of mines use this every frame.
+        let modelIds = push3DRenderObject.fadeModelIds || (push3DRenderObject.fadeModelIds = new Map());
+        let modelId = modelIds.get(object.modelKey);
+        if (modelId === undefined) modelIds.set(object.modelKey, modelId = modelIds.size);
+        let key = modelId * 4294967296 + (fade.gy & 0xffff) * 65536 + (fade.gx & 0xffff);
         let targetHeight = fade.occupied ? Math.min(resolvedScaleY, 0.05) : resolvedScaleY;
         let state = renderer3dOverlapFadeState.get(key);
         if (!state) {
@@ -1191,7 +1202,7 @@ function push3DRenderObject(target, object) {
     target.push({
         pickSource: (object.pickSource || object.visibilitySource || {})._historyGhost ? null : object.pickSource || object.visibilitySource || null,
         modelKey: object.modelKey || 'cube',
-        modelCandidates: Array.isArray(object.modelCandidates) ? object.modelCandidates.slice() : [],
+        modelCandidates: Array.isArray(object.modelCandidates) && object.modelCandidates.length ? object.modelCandidates.slice() : RENDER_NO_MODEL_CANDIDATES,
         x: Number(object.x) || 0,
         z: Number(object.z) || 0,
         y: Number(object.y) || 0,
@@ -2042,7 +2053,16 @@ function rebuildMinimapStaticLayer(scale, tilePx) {
     _minimapStaticDirty = false;
 }
 
+// The minimap only needs a few updates a second. Redraw it immediately when
+// the camera moves (so the viewport box tracks panning), otherwise at ~10 Hz.
+let _minimapLastDrawMs = -Infinity;
+let _minimapLastCameraKey = '';
 function drawMinimap() {
+    let nowMs = performance.now();
+    let cameraKey = camera.x + '|' + camera.y + '|' + camera.zoom + '|' + renderDimensionMode + '|' + GRID_W;
+    if (cameraKey === _minimapLastCameraKey && nowMs - _minimapLastDrawMs < 100 && nowMs >= _minimapLastDrawMs) return;
+    _minimapLastDrawMs = nowMs;
+    _minimapLastCameraKey = cameraKey;
     const units = getLiveRenderView().units;
     let scale = MINIMAP_SIZE / GRID_W; // 2 px per tile
     let tilePx = Math.max(1, scale);
