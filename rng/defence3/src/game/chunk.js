@@ -209,10 +209,12 @@ const _spatialMembership = new WeakMap();
 
 // Area buckets also count members per owner, so enemy scans can skip areas
 // that hold only the scanning player's units (e.g. a large friendly army).
+// Indexed by owner (small integers): every moving unit reads it for each
+// area in its attack range, every tick. Unset owners read undefined.
 function _addUnitToAreaBucket(bucket, u) {
     if (!_addUnitToSpatialArray(bucket, u)) return;
-    let counts = bucket._ownerCounts || (bucket._ownerCounts = new Map());
-    counts.set(u.owner, (counts.get(u.owner) || 0) + 1);
+    let counts = bucket._ownerCounts || (bucket._ownerCounts = []);
+    counts[u.owner] = (counts[u.owner] || 0) + 1;
     u._spatialAreaOwner = u.owner;
 }
 
@@ -220,9 +222,8 @@ function _removeUnitFromAreaBucket(bucket, u) {
     if (!_removeUnitFromSpatialArray(bucket, u)) return;
     let counts = bucket._ownerCounts;
     if (!counts) return;
-    let n = (counts.get(u._spatialAreaOwner) || 0) - 1;
-    if (n > 0) counts.set(u._spatialAreaOwner, n);
-    else counts.delete(u._spatialAreaOwner);
+    let n = (counts[u._spatialAreaOwner] || 0) - 1;
+    counts[u._spatialAreaOwner] = n > 0 ? n : undefined;
 }
 
 function getSpatialKey(wx, wy) {
@@ -392,7 +393,7 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
         let areaId = areaIds[i];
         let bucket = spatialUnitsByArea[areaId];
         if (!bucket || bucket.length <= 0) continue;
-        if (enemyFilter >= 0 && bucket._ownerCounts && bucket._ownerCounts.get(enemyFilter) === bucket.length) continue;
+        if (enemyFilter >= 0 && bucket._ownerCounts && bucket._ownerCounts[enemyFilter] === bucket.length) continue;
         for (let u of bucket) {
             if (!includeDead && u.dead) continue;
             if (playerFilter >= 0 && u.owner !== playerFilter) continue;

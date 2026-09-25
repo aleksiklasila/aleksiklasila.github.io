@@ -37,8 +37,60 @@ function _compareThingsDeterministic(a, b) {
     return 0;
 }
 
+// The sorted order of a list, reused while the list holds the same objects in
+// the same order and their sort keys are unchanged. Sorting 3000 units and
+// every building list with _compareThingsDeterministic each tick was a
+// measurable share of the tick. With unique ids the order depends on ids
+// alone; otherwise every compared key is checked (buildings do not move).
+const _deterministicSortCaches = new Map();
+
+function _deterministicSortKeys(a, keys, o) {
+    keys[o] = _stableNumberOr(a && a.id, -1);
+    keys[o + 1] = _stableNumberOr(a && a.owner, -1);
+    keys[o + 2] = a ? String(a.unitType || a.type || '') : '';
+    keys[o + 3] = a ? _stableNumberOr(a.gx, Math.floor(_stableNumberOr(a.x, 0) / TILE)) : 0;
+    keys[o + 4] = a ? _stableNumberOr(a.gy, Math.floor(_stableNumberOr(a.y, 0) / TILE)) : 0;
+}
+
+function _sortedForDeterministicOrder(slot, list) {
+    let cache = _deterministicSortCaches.get(slot);
+    let n = list.length;
+    if (cache && cache.input.length === n) {
+        let input = cache.input, keys = cache.keys, same = true;
+        for (let i = 0; i < n && same; i++) {
+            let a = list[i];
+            if (a !== input[i]) { same = false; break; }
+            if (cache.byId) {
+                if (_stableNumberOr(a && a.id, -1) !== keys[i]) same = false;
+            } else {
+                let o = i * 5;
+                if (_stableNumberOr(a && a.id, -1) !== keys[o] || _stableNumberOr(a && a.owner, -1) !== keys[o + 1]
+                    || (a ? String(a.unitType || a.type || '') : '') !== keys[o + 2]
+                    || (a ? _stableNumberOr(a.gx, Math.floor(_stableNumberOr(a.x, 0) / TILE)) : 0) !== keys[o + 3]
+                    || (a ? _stableNumberOr(a.gy, Math.floor(_stableNumberOr(a.y, 0) / TILE)) : 0) !== keys[o + 4]) same = false;
+            }
+        }
+        if (same) return cache.sorted;
+    }
+    let sorted = list.slice().sort(_compareThingsDeterministic);
+    // Unique ids: _compareThingsDeterministic never looks past the id.
+    let byId = true;
+    for (let i = 0; i < n && byId; i++) {
+        let a = sorted[i];
+        if (!a || !Number.isFinite(Number(a.id))) byId = false;
+        else if (i > 0 && !(Number(sorted[i - 1].id) < Number(a.id))) byId = false;
+    }
+    let keys = new Array(byId ? n : n * 5);
+    for (let i = 0; i < n; i++) {
+        if (byId) keys[i] = _stableNumberOr(list[i].id, -1);
+        else _deterministicSortKeys(list[i], keys, i * 5);
+    }
+    _deterministicSortCaches.set(slot, { input: list.slice(), keys, byId, sorted });
+    return sorted;
+}
+
 function _buildDeterministicUnitUpdateOrderForTick() {
-    let order = units.slice().sort(_compareThingsDeterministic);
+    let order = _sortedForDeterministicOrder('units', units).slice();
     if (order.length <= 1) return order;
     let s = (((gameTime + 1) * 1664525) + ((order.length + 1) * 1013904223)) >>> 0;
     for (let i = order.length - 1; i > 0; i--) {
@@ -52,7 +104,7 @@ function _buildDeterministicUnitUpdateOrderForTick() {
 }
 
 function _buildDeterministicBuildingUpdateOrderForTick(buildings, seedOffset = 0) {
-    let order = buildings.slice().sort(_compareThingsDeterministic);
+    let order = _sortedForDeterministicOrder(seedOffset, buildings).slice();
     if (order.length <= 1) return order;
     // Use same seeding as units but with different offset per building type
     let s = (((gameTime + 2 + seedOffset) * 1664525) + ((order.length + 1) * 1013904223)) >>> 0;
@@ -292,7 +344,8 @@ function gameTick() {
     // Resolve deferred pathfinding from previous ticks fairly.
     // A rotating cursor prevents early-array units from starving later units.
     if (units.length > 0) {
-        let orderedUnits = units.slice().sort(_compareThingsDeterministic);
+        // Read-only here: the shared cached order (see _sortedForDeterministicOrder).
+        let orderedUnits = _sortedForDeterministicOrder('units', units);
         let start = pendingPathResolveCursor % orderedUnits.length;
         let checked = 0;
         let pendingBuckets = [[], [], [], [], []];

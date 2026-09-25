@@ -100,13 +100,16 @@ return { tick: () => {if(gameTime%40===0) command(); gameTick();}, summary: () =
  workers:units.reduce((out,u)=>{if(u.workerState) out[u.workerState]=(out[u.workerState]||0)+1;return out;},{}),
  state:JSON.stringify({units:units.map(u=>[u.id,u.x,u.y,u.energy,u.commandState,u.workerState,u.workerTarget?.id,u.workerTarget?.gx,u.workerTarget?.gy,u.path,u.pathIndex,u._pendingPathTarget,u.carryingValue]),
  buildings:[...towers,...barracks,...collectorSpawners].map(b=>[b.type,b.gx,b.gy,b.owner,b.energy,b.underConstruction,b.spawnQueue,b.researchTask]),players})}),
- profile: () => ({productionTotal,productionMax}) };
+ profile: () => ({productionTotal,productionMax}),
+ // Distinct property orders among live units: 1 means one hidden class.
+ unitShapes: () => new Set(units.filter(u=>!u.dead).map(u=>Object.keys(u).join(','))).size };
 `;
 const scenario = process.argv[2] || 'idle';
 const multiplayer=process.argv.includes('--multiplayer');
 const game = new Function('window','document','localStorage','scenario','multiplayer', source + '\n' + setup)(window,document,{getItem:()=>null,setItem:noop},scenario,multiplayer);
 const samples = [], commandSamples=[];
-for (let i=0;i<160;i++) { const start=performance.now(); game.tick(); const ms=performance.now()-start; if(i>=40) {samples.push(ms); if(i%40===0) commandSamples.push(ms);} }
+const totalTicks = Number(process.env.BENCH_TICKS) || 160;
+for (let i=0;i<totalTicks;i++) { const start=performance.now(); game.tick(); const ms=performance.now()-start; if(i>=40) {samples.push(ms); if(i%40===0) commandSamples.push(ms);} }
 samples.sort((a,b)=>a-b);
 const summary=game.summary(); summary.state=require('node:crypto').createHash('sha256').update(summary.state).digest('hex');
-console.log(JSON.stringify({scenario, baseline, multiplayer, ...summary, ...game.profile(), mean:samples.reduce((a,b)=>a+b,0)/samples.length, median:samples[Math.floor(samples.length*.5)], p95:samples[Math.floor(samples.length*.95)],max:samples.at(-1),commandMean:commandSamples.reduce((a,b)=>a+b,0)/commandSamples.length}));
+console.log(JSON.stringify({scenario, baseline, multiplayer, ...summary, ...game.profile(), unitShapes:game.unitShapes(), mean:samples.reduce((a,b)=>a+b,0)/samples.length, median:samples[Math.floor(samples.length*.5)], p95:samples[Math.floor(samples.length*.95)],max:samples.at(-1),commandMean:commandSamples.reduce((a,b)=>a+b,0)/commandSamples.length}));

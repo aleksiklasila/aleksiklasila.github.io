@@ -2192,7 +2192,8 @@ function _salvagerFindTarget(u, myGx, myGy) {
     let maxSearch = _getWorkerAutoSearchDistancePx(u);
     let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     let bestDist = 99999, bestItem = null;
-    let spawnerSet = new Set(collectorSpawners);
+    // Built only when a marked cell item is found: most searches find none.
+    let spawnerSet = null;
     let conflictCache = {};
     for (let t of towers) { if (t.owner === owner && t.markedForSalvage && _canAssignWorkerTargetExclusive(u, t, null, conflictCache)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, t, maxSearchArea)) continue; let d = Math.hypot(t.x - u.x, t.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = t; } } }
     for (let b of barracks) { if (b.owner === owner && b.markedForSalvage && _canAssignWorkerTargetExclusive(u, b, null, conflictCache)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, b, maxSearchArea)) continue; let d = Math.hypot(b.x - u.x, b.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = b; } } }
@@ -2200,7 +2201,7 @@ function _salvagerFindTarget(u, myGx, myGy) {
     forEachGridCellInAreaRange(u.x, u.y, maxSearchArea, (tileRef, c) => {
         if (!tileRef || !c || !c.item) return false;
         if (c.owner !== owner || !c.item.markedForSalvage) return false;
-        if (c.item instanceof Barrack || spawnerSet.has(c.item)) return false;
+        if (c.item instanceof Barrack || (spawnerSet || (spawnerSet = new Set(collectorSpawners))).has(c.item)) return false;
         if (!_canAssignWorkerTargetExclusive(u, c.item, null, conflictCache)) return false;
         let d = Math.hypot(c.item.x - u.x, c.item.y - u.y);
         if (d > maxSearch) return false;
