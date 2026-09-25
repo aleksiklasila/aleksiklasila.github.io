@@ -2843,8 +2843,10 @@ function isTileActuallyVisibleToPlayer(playerId, gx, gy) {
     return !!(vis[gy] && vis[gy][gx] > 0);
 }
 
+// Gameplay visibility (same on every peer): the match setting, never the
+// local spectator view.
 function isTileVisibleToPlayer(playerId, gx, gy) {
-    if (fullVisibility) return true;
+    if (matchFullVisibility) return true;
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
 
     let pid = Math.floor(Number(playerId));
@@ -2907,23 +2909,51 @@ function processVisibleSimulationFrame(timestamp) {
         _lastTickTime = timestamp;
         if (dt > 200) dt = 200; // cap to prevent spiral of death
         _tickAccumulator += dt;
-
-        let ticksProcessed = 0;
-        while (_tickAccumulator >= TICK_MS && ticksProcessed < 5) {
-            if (isMultiplayer) {
-                driveStrictLockstep(timestamp, currentTick);
-            }
-            if (isMultiplayer && !isStrictTickReady(currentTick)) {
-                if (!waitingForRemoteSince) waitingForRemoteSince = timestamp;
-                _tickAccumulator = TICK_MS; // wait for remote
-                break;
-            }
-            waitingForRemoteSince = 0;
-            runOneTick();
-            ticksProcessed++;
-            _tickAccumulator -= TICK_MS;
-        }
+        _tickAccumulator = pumpSimulationTicks(timestamp, _tickAccumulator, 5);
     }
+}
+
+// Runs due ticks. In multiplayer a tick runs only once the host sealed it;
+// while it is missing the accumulator holds one tick so it runs on arrival.
+// A guest that fell behind the host (hidden tab, slow frame, reconnect) runs
+// a few extra ticks per call until it is back to its normal buffer.
+function pumpSimulationTicks(now, accumulator, maxTicks) {
+    if (isMultiplayer) {
+        netMaintain(now);
+        driveStrictLockstep(now, currentTick);
+    }
+    let catchUp = 0;
+    if (isMultiplayer && !isHost) {
+        let buffered = getLockstepBufferedTicks();
+        let normal = Math.max(2, Math.floor(Number(LOCKSTEP_PIPELINE_TICKS) || 0) + 2);
+        if (buffered > normal) catchUp = Math.min(buffered - normal, buffered > normal * 4 ? 12 : 3);
+    }
+    let processed = 0;
+    let limit = maxTicks + catchUp;
+    while (processed < limit) {
+        let due = accumulator >= TICK_MS;
+        if (!due && catchUp <= 0) break;
+        if (isMultiplayer && processed > 0) driveStrictLockstep(now, currentTick);
+        if (isMultiplayer && !isStrictTickReady(currentTick)) {
+            if (due) {
+                // Deliberate pauses (start countdown, resync) are not stalls.
+                let paused = lockstepResyncPauseActive || matchStartWaitingForReady || lockstepFatalStopActive || (!isHost && lockstepDesyncDetected);
+                if (paused) netStallStartedAt = 0;
+                else netNoteSimWaiting(true, now);
+                if (!waitingForRemoteSince) waitingForRemoteSince = now;
+                accumulator = Math.min(accumulator, TICK_MS);
+            }
+            break;
+        }
+        if (due) accumulator -= TICK_MS;
+        else catchUp--;
+        if (isMultiplayer) netNoteSimWaiting(false, now);
+        waitingForRemoteSince = 0;
+        runOneTick();
+        processed++;
+        if (gameOver) break;
+    }
+    return accumulator;
 }
 
 function processRenderFrame(timestamp) {
@@ -2974,15 +3004,17 @@ function processRenderFrame(timestamp) {
     }
 }
 
+// Frames are always queued again, even after an error, so one bad frame
+// cannot freeze the game.
 function simulationFrame(timestamp) {
     _simulationFrameHandle = 0;
-    processVisibleSimulationFrame(timestamp);
+    try { processVisibleSimulationFrame(timestamp); } catch (err) { reportRuntimeError('frame', err); }
     queueSimulationFrame();
 }
 
 function renderFrame(timestamp) {
     _renderFrameHandle = 0;
-    processRenderFrame(timestamp);
+    try { processRenderFrame(timestamp); } catch (err) { reportRuntimeError('render', err); }
     queueRenderFrame();
 }
 
@@ -3013,22 +3045,7 @@ function runHiddenTickPump() {
     if (dt < 0) dt = 0;
     _hiddenTickAccumulator += dt;
 
-    let ticksProcessed = 0;
-    while (_hiddenTickAccumulator >= TICK_MS && ticksProcessed < 30) {
-        if (isMultiplayer) {
-            driveStrictLockstep(now, currentTick);
-        }
-        if (isMultiplayer && !isStrictTickReady(currentTick)) {
-            if (!waitingForRemoteSince) waitingForRemoteSince = now;
-            _hiddenTickAccumulator = Math.min(_hiddenTickAccumulator, TICK_MS);
-            break;
-        }
-
-        waitingForRemoteSince = 0;
-        runOneTick();
-        ticksProcessed++;
-        _hiddenTickAccumulator -= TICK_MS;
-    }
+    _hiddenTickAccumulator = pumpSimulationTicks(now, _hiddenTickAccumulator, 30);
 }
 
 function refreshBackgroundTickMode() {
@@ -3036,10 +3053,12 @@ function refreshBackgroundTickMode() {
         _hiddenLastTickTime = performance.now();
         _hiddenTickAccumulator = 0;
         if (!_backgroundTickInterval) {
-            _backgroundTickInterval = setInterval(runHiddenTickPump, TICK_MS);
+            // A worker-driven ticker keeps a hidden tab at full tick rate, so a
+            // player who switches tabs does not stall everyone else.
+            _backgroundTickInterval = netStartBackgroundTicker(TICK_MS, runHiddenTickPump) || true;
         }
     } else if (_backgroundTickInterval) {
-        clearInterval(_backgroundTickInterval);
+        netStopBackgroundTicker();
         _backgroundTickInterval = null;
         _hiddenLastTickTime = 0;
         _hiddenTickAccumulator = 0;

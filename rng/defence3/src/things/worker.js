@@ -100,7 +100,7 @@ function updateWorkerAI(u) {
     let _isNearManualMoveTarget = () => {
         if (!(u && u.targetPos && Number.isFinite(u.targetPos.x) && Number.isFinite(u.targetPos.y))) return false;
         let tol = Math.max(8, Math.min(TILE, Math.floor((Number(u.preComputed && u.preComputed.speed) || 1) * 2)));
-        return Math.hypot(Number(u.targetPos.x) - Number(u.x), Number(u.targetPos.y) - Number(u.y)) <= tol;
+        return detHypot(Number(u.targetPos.x) - Number(u.x), Number(u.targetPos.y) - Number(u.y)) <= tol;
     };
     let _finishManualMoveToIdle = () => {
         _clearWorkerTarget(u, 'manual_move_done');
@@ -221,7 +221,7 @@ function updateWorkerAI(u) {
             u._builderLastWatchY = u.y;
             u._builderLastMoveTick = gameTime;
         } else {
-            movedSinceLast = Math.hypot(u.x - u._builderLastWatchX, u.y - u._builderLastWatchY) >= 2;
+            movedSinceLast = detHypot(u.x - u._builderLastWatchX, u.y - u._builderLastWatchY) >= 2;
             u._builderLastWatchX = u.x;
             u._builderLastWatchY = u.y;
             if (movedSinceLast) u._builderLastMoveTick = gameTime;
@@ -1054,13 +1054,13 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
 
         let originDist = Math.sqrt(originDistSq);
         let spawnerDist = anchorSpawner
-            ? Math.hypot(candidate.x - anchorSpawner.x, candidate.y - anchorSpawner.y)
-            : Math.hypot(candidate.x - u.x, candidate.y - u.y);
+            ? detHypot(candidate.x - anchorSpawner.x, candidate.y - anchorSpawner.y)
+            : detHypot(candidate.x - u.x, candidate.y - u.y);
         candidates.push({
             target: candidate,
             targetType: candidateType,
             dist: spawnerDist + originDist * 0.22 + dropPenalty,
-            worldDist: Math.hypot(candidate.x - u.x, candidate.y - u.y)
+            worldDist: detHypot(candidate.x - u.x, candidate.y - u.y)
         });
     };
 
@@ -1337,7 +1337,7 @@ function _getResourceCollectorGatherTargetNear(worldX, worldY, owner, resourceCf
         for (let x = mineMinGx; x <= mineMaxGx; x++) {
             let m = getResourceMineAt(resourceCfg.key, x, y);
             if (!m || !(Number.isFinite(m[resourceCfg.mineStatKey]) && m[resourceCfg.mineStatKey] > 0)) continue;
-            let d = Math.hypot(m.x - worldX, m.y - worldY);
+            let d = detHypot(m.x - worldX, m.y - worldY);
             if (d <= bestDist) {
                 bestDist = d;
                 best = { target: m, type: resourceCfg.mineTileType };
@@ -1352,7 +1352,7 @@ function _getResourceCollectorGatherTargetNear(worldX, worldY, owner, resourceCf
             let cell = grid[y][x];
             let item = cell && cell.item;
             if (!item || item.type !== resourceCfg.farmKey || item.owner !== owner || item.underConstruction || item.energy <= 0) continue;
-            let d = Math.hypot(item.x - worldX, item.y - worldY);
+            let d = detHypot(item.x - worldX, item.y - worldY);
             if (d <= bestDist) {
                 bestDist = d;
                 best = { target: item, type: resourceCfg.farmKey };
@@ -1366,7 +1366,7 @@ function _getResourceCollectorGatherTargetNear(worldX, worldY, owner, resourceCf
             for (let x = minDropGx; x <= maxDropGx; x++) {
                 let drop = getDroppedItemAt(x, y);
                 if (!drop) continue;
-                let d = Math.hypot(drop.x - worldX, drop.y - worldY);
+                let d = detHypot(drop.x - worldX, drop.y - worldY);
                 if (d <= bestDist) {
                     bestDist = d;
                     best = { target: drop, type: 'drop' };
@@ -1474,14 +1474,14 @@ function _collectorFindTarget(u, myGx, myGy) {
 
         let originDist = Math.sqrt(originDistSq);
         let spawnerDist = anchorSpawner
-            ? Math.hypot(candidate.x - anchorSpawner.x, candidate.y - anchorSpawner.y)
-            : Math.hypot(candidate.x - u.x, candidate.y - u.y);
+            ? detHypot(candidate.x - anchorSpawner.x, candidate.y - anchorSpawner.y)
+            : detHypot(candidate.x - u.x, candidate.y - u.y);
 
         candidates.push({
             target: candidate,
             targetType: candidateType,
             dist: spawnerDist + originDist * 0.22 + dropPenalty,
-            worldDist: Math.hypot(candidate.x - u.x, candidate.y - u.y)
+            worldDist: detHypot(candidate.x - u.x, candidate.y - u.y)
         });
         return false;
     });
@@ -1973,7 +1973,28 @@ function _findConflictingWorkerOnTargetTile(unit, target) {
 
 function _invalidateWorkerTargetLoadCache() {
     _workersWithTargetTick = NaN;
+    _workerConflictTiles.clear();
+    _workerMovingTargetConflicts.clear();
+    _workerConflictEntries.clear();
+    _workersWithTarget = [];
     workerReservedTiles = new Array(Math.max(0, GRID_W * GRID_H * _WORKER_TARGET_LOAD_TYPE_COUNT)).fill(null);
+}
+
+// Caches stamped with the current tick hold references to live entities. A
+// snapshot restore replaces every entity while gameTime may stay the same
+// (the host restores at the tick it just reached), so the caches must be
+// dropped or they would steer the next tick with pre-restore objects on some
+// peers and not others.
+function resetSimulationTickCaches() {
+    _invalidateWorkerTargetLoadCache();
+    _activeBuilderWorkCacheTick = NaN;
+    _activeBuilderWorkTargetsByOwner = new Map();
+    _activeBuilderPathTiles = new Set();
+    _healerDamagedCandidatesTick = NaN;
+    _healerDamagedCandidatesByOwner = [];
+    _workerSpawnerIndex = null;
+    _adjacencyNeedsRecalc = true;
+    _adjacencyLastRecalcTick = -1;
 }
 
 function _setWorkerTarget(unit, target, targetType = null) {
@@ -2195,15 +2216,15 @@ function _salvagerFindTarget(u, myGx, myGy) {
     // Built only when a marked cell item is found: most searches find none.
     let spawnerSet = null;
     let conflictCache = {};
-    for (let t of towers) { if (t.owner === owner && t.markedForSalvage && _canAssignWorkerTargetExclusive(u, t, null, conflictCache)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, t, maxSearchArea)) continue; let d = Math.hypot(t.x - u.x, t.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = t; } } }
-    for (let b of barracks) { if (b.owner === owner && b.markedForSalvage && _canAssignWorkerTargetExclusive(u, b, null, conflictCache)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, b, maxSearchArea)) continue; let d = Math.hypot(b.x - u.x, b.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = b; } } }
-    for (let s of collectorSpawners) { if (s.owner === owner && s.markedForSalvage && _canAssignWorkerTargetExclusive(u, s, null, conflictCache)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, s, maxSearchArea)) continue; let d = Math.hypot(s.x - u.x, s.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = s; } } }
+    for (let t of towers) { if (t.owner === owner && t.markedForSalvage && _canAssignWorkerTargetExclusive(u, t, null, conflictCache)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, t, maxSearchArea)) continue; let d = detHypot(t.x - u.x, t.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = t; } } }
+    for (let b of barracks) { if (b.owner === owner && b.markedForSalvage && _canAssignWorkerTargetExclusive(u, b, null, conflictCache)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, b, maxSearchArea)) continue; let d = detHypot(b.x - u.x, b.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = b; } } }
+    for (let s of collectorSpawners) { if (s.owner === owner && s.markedForSalvage && _canAssignWorkerTargetExclusive(u, s, null, conflictCache)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, s, maxSearchArea)) continue; let d = detHypot(s.x - u.x, s.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = s; } } }
     forEachGridCellInAreaRange(u.x, u.y, maxSearchArea, (tileRef, c) => {
         if (!tileRef || !c || !c.item) return false;
         if (c.owner !== owner || !c.item.markedForSalvage) return false;
         if (c.item instanceof Barrack || (spawnerSet || (spawnerSet = new Set(collectorSpawners))).has(c.item)) return false;
         if (!_canAssignWorkerTargetExclusive(u, c.item, null, conflictCache)) return false;
-        let d = Math.hypot(c.item.x - u.x, c.item.y - u.y);
+        let d = detHypot(c.item.x - u.x, c.item.y - u.y);
         if (d > maxSearch) return false;
         if (d < bestDist) {
             bestDist = d;
@@ -2302,7 +2323,7 @@ function _getBuilderWorkTargetNear(worldX, worldY, owner, radius = 22, allowDisa
         for (let fx = minGx; fx <= maxGx; fx++) {
             let t = _getBuilderWorkTargetAt(fx, fy, owner, allowDisabledBuild);
             if (!t) continue;
-            let d = Math.hypot(t.x - worldX, t.y - worldY);
+            let d = detHypot(t.x - worldX, t.y - worldY);
             if (d <= bestDist) {
                 bestDist = d;
                 best = t;
@@ -2594,7 +2615,7 @@ function _getHealerQueueTargetNear(worldX, worldY, owner, radius = 22, requireNe
         if (!Array.isArray(s.spawnQueue)) return;
         if (requireNeedsWork && !isQueueEnabled(s)) return;
         if (requireNeedsWork && !_isHealerQueueTarget(s, owner)) return;
-        let d = Math.hypot(s.x - worldX, s.y - worldY);
+        let d = detHypot(s.x - worldX, s.y - worldY);
         if (d < bestDist) {
             bestDist = d;
             best = s;
@@ -2666,7 +2687,7 @@ function _findNearestQueuedSpawnerNeedingWork(u, originX = u.x, originY = u.y) {
     let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     let consider = (s) => {
         if (!_isHealerQueueTarget(s, u.owner)) return;
-        let d = Math.hypot(s.x - originX, s.y - originY);
+        let d = detHypot(s.x - originX, s.y - originY);
         if (d > maxSearch) return;
         if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, s, maxSearchArea)) return;
         candidates.push({
@@ -2706,7 +2727,7 @@ function _findNearestResearchBuildingNeedingWork(u) {
     for (let s of _getWorkerSpawnersByType('research')) {
         if (!_isResearcherTargetBuilding(s, u.owner)) continue;
         if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, s, maxSearchArea)) continue;
-        let d = Math.hypot(s.x - u.x, s.y - u.y);
+        let d = detHypot(s.x - u.x, s.y - u.y);
         if (d > maxSearch) continue;
         candidates.push({
             target: s,
@@ -2836,7 +2857,7 @@ function _healerFindTarget(u, myGx, myGy) {
     }
     if (!queueTarget) queueTarget = _findNearestQueuedSpawnerNeedingWork(u, origin.x, origin.y);
     if (queueTarget) {
-        let qd = Math.hypot(queueTarget.x - origin.x, queueTarget.y - origin.y);
+        let qd = detHypot(queueTarget.x - origin.x, queueTarget.y - origin.y);
         if (!hasPinnedQueueTarget && qd > maxSearch) {
             queueTarget = null;
             _clearHealerQueueCommit(u);
@@ -2941,7 +2962,7 @@ function _findNearestUnderConstruction(u, originX = u.x, originY = u.y) {
         // canonical candidate order for reservation and tie-breaking behavior.
         if (far) continue;
         if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, b, maxSearchArea)) continue;
-        let d = Math.hypot(b.x - originX, b.y - originY);
+        let d = detHypot(b.x - originX, b.y - originY);
         if (d > maxSearch) continue;
         candidates.push({
             target: b,
@@ -3006,27 +3027,22 @@ function _workerReturnPath(u) {
 function queueAction(action) {
     if (localDefeated && action && action.action !== 'resign') return;
     if (gameOver) return;
-    if (isMultiplayer && gameStarted && !isHost && !getPeerConnectionState(wsHostId)) {
-        let allowedWhileDisconnected = action && (action.action === 'resign' || action.action === 'syncSpectateMode');
-        if (!allowedWhileDisconnected) {
-            let st = document.getElementById('lobby-status');
-            if (st) {
-                st.textContent = 'Reconnecting to host... commands are paused.';
-                st.style.color = '#fa4';
-            }
-            scheduleGuestAutoReconnect('Lost host connection');
-            return;
-        }
+    if (isMultiplayer && gameStarted && !isHost && !netGetHostConnection()) {
+        // Commands issued while reconnecting are kept and sent once the link
+        // is back (they are scheduled after every tick already sent).
+        scheduleGuestAutoReconnect('Lost host connection');
     }
     let actionLead = Math.max(0, Math.floor(INPUT_DELAY || 0));
-    // Host prebuilds bundles up to current+pipeline. Guests must target beyond that window.
+    // Guests send packets up to current + input delay; commands go right after.
     if (isMultiplayer && gameStarted && !isHost) {
         actionLead = Math.max(actionLead, Math.max(0, Math.floor(LOCKSTEP_PIPELINE_TICKS || 0)) + 1);
     }
     let tick = currentTick + actionLead;
     if (isMultiplayer && gameStarted) {
-        // With low input delay, the target tick may already be packetized/committed.
-        // Move to the nearest still-editable tick so actions never get dropped.
+        // A sent packet may already be sealed by the host, and a sealed tick
+        // never changes, so new commands always go to a later tick. This also
+        // keeps commands safe when the input delay shrinks.
+        if (!isHost) tick = Math.max(tick, lockstepHighestSentLocalTick + 1);
         while (lockstepCommittedByTick[tick] || lockstepBundleByTick[tick]) tick++;
     }
     if (!localInputBuffer[tick]) localInputBuffer[tick] = [];
@@ -3034,13 +3050,10 @@ function queueAction(action) {
     let finalAction = { ...action, teamId: localPlayerId, netId: `${actorId}:${nextLocalActionSeq++}` };
     localInputBuffer[tick].push(finalAction);
 
-    // Invalidate prebuilt packet/bundle state for this tick so the new action is included.
+    // The tick is unsent (guest) or unsealed (host): rebuild its packet.
     delete lockstepLocalPacketByTick[tick];
     if (isHost && lockstepHostPacketsByTick[tick] && myPeerId) {
         delete lockstepHostPacketsByTick[tick][myPeerId];
-        delete lockstepBundleByTick[tick];
-        delete lockstepBundleAckByTick[tick];
-        delete lockstepCommittedByTick[tick];
     }
 }
 

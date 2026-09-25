@@ -13,6 +13,7 @@ const c = vm.createContext({TILE:32, GRID_W:100, GRID_H:100, gameTime:1, pathTop
     localPlayerId:0, getRawVisibilityGridForPlayer:()=>Array.from({length:100},()=>new Uint8Array(100).fill(1))});
 const visibility = c.getRawVisibilityGridForPlayer();
 c.getRawVisibilityGridForPlayer = () => visibility;
+vm.runInContext(read('src/utils/utils_common.js'), c);
 vm.runInContext(read('src/things/unit.js'), c);
 const unit = {x:16,y:16,owner:0};
 assert.equal(c._findClosestHostileStructure(unit, buildings, 64), buildings[0]);

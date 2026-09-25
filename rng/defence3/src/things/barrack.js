@@ -12,7 +12,7 @@ function getBaseSpawnCooldownSeconds(unitType, buildingKey = null) {
 function getBarrackSpawnCooldown(unitType, level, owner = null, buildingKey = null) {
     let cfg = BARRACK_SPAWN_CONFIG[unitType] || BARRACK_SPAWN_CONFIG.norm;
     let reduction = Number.isFinite(cfg.reduction) ? cfg.reduction : 0.10;
-    let baseCd = Math.max(0.05, getBaseSpawnCooldownSeconds(unitType, buildingKey) * Math.pow(1 - reduction, level - 1));
+    let baseCd = Math.max(0.05, getBaseSpawnCooldownSeconds(unitType, buildingKey) * detPow(1 - reduction, level - 1));
     if (buildingKey && Number.isFinite(owner)) {
         let researched = getBuildingStatForOwner(owner, buildingKey, level, 'spawnCd');
         if (Number.isFinite(researched)) return Math.max(0.05, researched);

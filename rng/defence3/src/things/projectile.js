@@ -7,8 +7,12 @@ class Projectile {
     constructor(x, y, t, type, dmg, level, source, maxRange, blastDamage = NaN, blastRadius = NaN) {
         this.x = x; this.y = y; this.prevX = x; this.prevY = y; this.type = type; this.speed = 8; this.life = 100;
         this.startX = x; this.startY = y; this.maxRange = maxRange || 9999;
-        let a = Math.atan2(t.y - y, t.x - x);
-        this.vx = Math.cos(a) * 8; this.vy = Math.sin(a) * 8;
+        // cos/sin(atan2) as an exact normalization: trig results may differ
+        // between browsers, and lockstep peers must agree on every shot.
+        let dx = t.x - x, dy = t.y - y;
+        let len = detHypot(dx, dy);
+        if (len > 0) { this.vx = dx / len * 8; this.vy = dy / len * 8; }
+        else { this.vx = 8; this.vy = 0; }
         this.dmg = dmg; this.level = level;
         this.blastDamage = Number.isFinite(blastDamage) ? Math.max(0, blastDamage) : NaN;
         this.blastRadius = Number.isFinite(blastRadius) ? Math.max(0, blastRadius) : NaN;
@@ -46,19 +50,19 @@ class Projectile {
             for (let list of [towers, barracks, collectorSpawners]) {
                 for (let b of list) {
                     if (b.owner === this.sourceOwner || b.energy <= 0) continue;
-                    if (Math.hypot(b.x - this.x, b.y - this.y) <= 18) { this.hitBuilding(b); return true; }
+                    if (detHypot(b.x - this.x, b.y - this.y) <= 18) { this.hitBuilding(b); return true; }
                 }
             }
             if (this.floorTargetGx >= 0) {
                 let item = getFloorItemAtTile(this.floorTargetGx, this.floorTargetGy);
                 if (item && item.owner !== this.sourceOwner && item.energy > 0
-                    && Math.hypot(item.x - this.x, item.y - this.y) <= 18) { this.hitBuilding(item); return true; }
+                    && detHypot(item.x - this.x, item.y - this.y) <= 18) { this.hitBuilding(item); return true; }
             }
             return false;
         };
 
         if (checkHits()) return false;
-        if (Math.hypot(this.x - this.startX, this.y - this.startY) >= this.maxRange || this.life <= 0) return false;
+        if (detHypot(this.x - this.startX, this.y - this.startY) >= this.maxRange || this.life <= 0) return false;
         return true;
     }
     hit(t) {

@@ -30,6 +30,10 @@
                 <div class="lobby-column" data-lobby-column="0">
                     <div class="lobby-column-title">Network</div>
                     <div class="lobby-setting-row">
+                        <label for="cfg-net-auto">Auto</label>
+                        <input id="cfg-net-auto" type="checkbox" checked title="Automatically configure network timing: the tick rate stays at the game's reference rate and each player's input delay follows their measured ping and stability during the match.">
+                    </div>
+                    <div class="lobby-setting-row">
                         <label for="cfg-tick-rate">Game Ticks Per Second</label>
                         <input id="cfg-tick-rate" type="number" min="5" max="120" value="20" style="width:72px" title="Game ticks per second">
                     </div>
@@ -148,6 +152,7 @@
                     <button onclick="copyGameLink()" id="btn-copy-link" style="display:none">Copy Invite Link</button>
                     <button onclick="startHostedGame()" id="btn-start-online" style="display:none">Start Game</button>
                     <button onclick="requestSpectateCurrentMatch()" id="btn-spectate-online" style="display:none">Spectate</button>
+                    <button onclick="leaveOnlineLobby()" id="btn-lobby-leave" style="display:none">Leave</button>
                 </div>
             </div>
             <div id="lobby-players" style="margin-top:10px;display:flex;flex-direction:column;gap:6px"></div>
@@ -612,6 +617,8 @@
                 style="background:#241f36;border:1px solid #7a67c7;color:#e7ddff;cursor:pointer;padding:6px 12px;border-radius:4px;">Graph</button>
             <button id="go-btn-play-again"
                 style="display:none;background:#1f3624;border:1px solid #5cad74;color:#d8ffe4;cursor:pointer;padding:6px 12px;border-radius:4px;">Play Again</button>
+            <button id="go-btn-main-menu"
+                style="background:#2a2a2a;border:1px solid #666;color:#ddd;cursor:pointer;padding:6px 12px;border-radius:4px;">Main Menu</button>
         </div>
         <div id="go-graph-wrap" style="display:none;width:min(900px,92vw);background:#111;border:1px solid #333;border-radius:8px;padding:10px;">
             <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-bottom:8px;">
@@ -639,13 +646,15 @@
 
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
     
-    <script src="./src/utils/utils_common.js?v=20260516d"></script>
-    <script src="./src/utils/utils_networking.js?v=20260925-crowd-perf"></script>
+    <script src="./src/utils/utils_common.js?v=20260926-netcode"></script>
+    <script src="./src/utils/utils_net_quality.js?v=20260926-netcode"></script>
+    <script src="./src/utils/utils_networking.js?v=20260926-netcode"></script>
+    <script src="./src/utils/utils_host_migration.js?v=20260926-netcode"></script>
     <script src="./src/utils/utils_storage.js?v=20260924-settings"></script>
 
-    <script src="./src/data/data_static.js?v=20260922-team-watch"></script>
-    <script src="./src/data/data_dynamic.js?v=20260925-menu-settings"></script>
-    <script src="./src/data/data_state.js?v=20260925-bulk-perf"></script>
+    <script src="./src/data/data_static.js?v=20260926-netcode"></script>
+    <script src="./src/data/data_dynamic.js?v=20260926-netcode"></script>
+    <script src="./src/data/data_state.js?v=20260926-netcode"></script>
 
     <script src="./src/audio_visual/visibility_history.js?v=20260925-targeting-perf"></script>
     <script src="./src/audio_visual/range_overlay.js?v=20260925-scale-perf"></script>
@@ -653,25 +662,25 @@
     <script src="./src/audio_visual/renderer3d.js?v=20260925-flat-batch"></script>
     <script src="./src/audio_visual/renderer2d.js?v=20260925-bulk-perf"></script>
     <script src="./src/audio_visual/side_visualizations.js?v=20260925-crowd-perf"></script>
-    <script src="./src/audio_visual/renderer.js?v=20260925-flat-batch"></script>
+    <script src="./src/audio_visual/renderer.js?v=20260926-netcode"></script>
     <script src="./src/audio_visual/audio.js?v=20260925-bulk-perf"></script>
     <script src="./src/audio_visual/jukebox.js?v=20260921"></script>
     <script src="./src/audio_visual/hud.js?v=20260925-bulk-perf"></script>
 
     <script src="./src/game/chunk.js?v=20260925-bulk-perf"></script>
-    <script src="./src/game/map.js?v=20260516d"></script>
+    <script src="./src/game/map.js?v=20260926-netcode"></script>
     <script src="./src/game/pathfinding.js?v=20260925-scale-perf"></script>
     <script src="./src/game/player.js?v=20260516d"></script>
 
-    <script src="./src/things/barrack.js?v=20260925-production-queue"></script>
-    <script src="./src/things/unit.js?v=20260925-bulk-perf"></script>
-    <script src="./src/things/worker.js?v=20260925-worker-index"></script>
+    <script src="./src/things/barrack.js?v=20260926-netcode"></script>
+    <script src="./src/things/unit.js?v=20260926-netcode"></script>
+    <script src="./src/things/worker.js?v=20260926-netcode"></script>
     <script src="./src/things/particle.js?v=20260924-local-history-perf2"></script>
-    <script src="./src/things/projectile.js?v=20260925-targeting-perf"></script>
-    <script src="./src/things/things_utils.js?v=20260925-targeting-perf"></script>
-    <script src="./src/things/tower.js?v=20260925-targeting-perf"></script>
+    <script src="./src/things/projectile.js?v=20260926-netcode"></script>
+    <script src="./src/things/things_utils.js?v=20260926-netcode"></script>
+    <script src="./src/things/tower.js?v=20260926-netcode"></script>
 
-    <script src="./src/main.js?v=20260925-bulk-perf"></script>
+    <script src="./src/main.js?v=20260926-netcode"></script>
 
     <script src="./src/bootstrap.js?v=20260924-settings"></script>
 </body>

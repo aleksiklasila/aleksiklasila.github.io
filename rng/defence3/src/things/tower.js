@@ -232,7 +232,7 @@ class Tower {
             for (let t of towers) {
                 if (t === this || t.owner === this.owner || t.energy <= 0) continue;
                 if (!_isTargetWithinTowerAttackAreaRange(this, t, rangeArea)) continue;
-                let d = Math.hypot(t.x - this.x, t.y - this.y);
+                let d = detHypot(t.x - this.x, t.y - this.y);
                 if (d < bestDist) { bestDist = d; target = t; }
             }
             // Then traps, as units prioritize them.
@@ -242,13 +242,13 @@ class Tower {
                 for (let b of barracks) {
                     if (b.owner === this.owner || b.energy <= 0) continue;
                     if (!_isTargetWithinTowerAttackAreaRange(this, b, rangeArea)) continue;
-                    let d = Math.hypot(b.x - this.x, b.y - this.y);
+                    let d = detHypot(b.x - this.x, b.y - this.y);
                     if (d < bestDist) { bestDist = d; target = b; }
                 }
                 for (let s of collectorSpawners) {
                     if (s.owner === this.owner || s.energy <= 0) continue;
                     if (!_isTargetWithinTowerAttackAreaRange(this, s, rangeArea)) continue;
-                    let d = Math.hypot(s.x - this.x, s.y - this.y);
+                    let d = detHypot(s.x - this.x, s.y - this.y);
                     if (d < bestDist) { bestDist = d; target = s; }
                 }
             }

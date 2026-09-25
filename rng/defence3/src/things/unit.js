@@ -86,7 +86,7 @@ function _findClosestHostileStructure(unit, firstList, range, secondList = null,
             let dx = target.x - unit.x, dy = target.y - unit.y;
             if (Math.abs(dx) > bestDistance || Math.abs(dy) > bestDistance) continue;
             if (!vis[gy] || !(vis[gy][gx] > 0)) continue;
-            let distance = Math.hypot(dx, dy);
+            let distance = detHypot(dx, dy);
             if (distance < bestDistance || (distance === bestDistance && bestOrder !== Infinity && order < bestOrder)) {
                 bestDistance = distance; closest = target; bestOrder = order;
             }
@@ -201,7 +201,7 @@ function _findClosestHostileCellItem(unit, range, kind = null) {
         if (!cell || cell.item !== item || cell.owner === unit.owner) continue;
         if (!isGameplayTargetVisibleToPlayer(unit.owner, gx, gy)) continue;
         if (item.energy <= 0 || item.underConstruction) continue;
-        let d = Math.hypot(item.x - unit.x, item.y - unit.y);
+        let d = detHypot(item.x - unit.x, item.y - unit.y);
         if (d >= range) continue;
         let onRoute = kind === 'trap' && _isTileOnUnitRoute(unit, gx, gy);
         if (closestOnRoute && !onRoute) continue;
@@ -593,7 +593,7 @@ class Unit {
                         // Exact overlap fallback: split the pair deterministically so
                         // same-direction air units do not keep shoving in lockstep.
                         let mdx = this.vx, mdy = this.vy;
-                        if (Math.hypot(mdx, mdy) < 0.001 && this.path && this.pathIndex < this.path.length) {
+                        if (detHypot(mdx, mdy) < 0.001 && this.path && this.pathIndex < this.path.length) {
                             let pn = this.path[this.pathIndex];
                             mdx = pn.x * TILE + 16 - this.x;
                             mdy = pn.y * TILE + 16 - this.y;
@@ -663,7 +663,7 @@ class Unit {
         let isNearIssuedTarget = () => {
             if (!(this.targetPos && Number.isFinite(this.targetPos.x) && Number.isFinite(this.targetPos.y))) return false;
             let tol = Math.max(8, Math.min(TILE, Math.floor((Number(spd) || 1) * 2)));
-            return Math.hypot(Number(this.targetPos.x) - Number(this.x), Number(this.targetPos.y) - Number(this.y)) <= tol;
+            return detHypot(Number(this.targetPos.x) - Number(this.x), Number(this.targetPos.y) - Number(this.y)) <= tol;
         };
         if (this.unitType === 'scout') {
             if (this.path && this.pathIndex < this.path.length) {
@@ -675,7 +675,7 @@ class Unit {
                 let tx = this._scoutTarget.gx * TILE + 16;
                 let ty = this._scoutTarget.gy * TILE + 16;
                 let dx = tx - this.x, dy = ty - this.y;
-                let dist = Math.hypot(dx, dy) || 1;
+                let dist = detHypot(dx, dy) || 1;
                 if (this.holdPosition) {
                     // Keep the destination until released.
                 } else if (dist <= Math.max(4, spd)) {
@@ -744,7 +744,7 @@ class Unit {
         let isNearIssuedTarget = () => {
             if (!(this.targetPos && Number.isFinite(this.targetPos.x) && Number.isFinite(this.targetPos.y))) return false;
             let tol = Math.max(8, Math.min(TILE, Math.floor((Number(spd) || 1) * 2)));
-            return Math.hypot(Number(this.targetPos.x) - Number(this.x), Number(this.targetPos.y) - Number(this.y)) <= tol;
+            return detHypot(Number(this.targetPos.x) - Number(this.x), Number(this.targetPos.y) - Number(this.y)) <= tol;
         };
         // Check for nearby enemies first
         let aggroRange = Math.max(TILE, this.preComputed.visionRange * TILE);
@@ -953,7 +953,7 @@ class Unit {
                 this._forcedTargetLastSeenX = this.targetUnit.x;
                 this._forcedTargetLastSeenY = this.targetUnit.y;
             }
-            let d = Math.hypot(this.targetUnit.x - this.x, this.targetUnit.y - this.y);
+            let d = detHypot(this.targetUnit.x - this.x, this.targetUnit.y - this.y);
             if (_isTargetWithinUnitAttackAreaRange(this, this.targetUnit)) {
                 this.attackTarget = this.targetUnit;
                 this.path = null;
@@ -978,7 +978,7 @@ class Unit {
                 } else if (d < 2 * TILE || this.isFlying) {
                     // Close enough or flying - direct move
                     let dx = this.targetUnit.x - this.x, dy = this.targetUnit.y - this.y;
-                    let dist = Math.hypot(dx, dy);
+                    let dist = detHypot(dx, dy);
                     this.x += (dx / dist) * spd; this.y += (dy / dist) * spd;
                 } else {
                     // Need a new path toward target
@@ -1002,7 +1002,7 @@ class Unit {
         if (this.targetBuilding) {
             let tb = this.targetBuilding;
             if (tb.energy <= 0 || !_isHostileThingVisibleToUnit(this, tb)) { this.targetBuilding = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; return; }
-            let d = Math.hypot(tb.x - this.x, tb.y - this.y);
+            let d = detHypot(tb.x - this.x, tb.y - this.y);
             if (_isTargetWithinUnitAttackAreaRange(this, tb)) {
                 this.attackTarget = tb;
                 this.path = null;
@@ -1019,7 +1019,7 @@ class Unit {
                     this.followPath(spd);
                 } else if (d < 2 * TILE || this.isFlying) {
                     let dx = tb.x - this.x, dy = tb.y - this.y;
-                    let dist = Math.hypot(dx, dy);
+                    let dist = detHypot(dx, dy);
                     this.x += (dx / dist) * spd; this.y += (dy / dist) * spd;
                 } else {
                     let tgx = Math.floor(tb.x / TILE), tgy = Math.floor(tb.y / TILE);
@@ -1199,7 +1199,7 @@ class Unit {
             tx += (segDy < 0 ? -laneOffset : laneOffset);
         }
         let dx = tx - this.x, dy = ty - this.y;
-        let dist = Math.hypot(dx, dy);
+        let dist = detHypot(dx, dy);
         if (dist < 4) {
             let nextNode = this.path[this.pathIndex + 1];
             if (nextNode && isCloudPortalLink(node.x, node.y, nextNode.x, nextNode.y, this.owner)) {
@@ -1278,7 +1278,7 @@ class Unit {
                 ctx.shadowBlur = 0;
             } else if (style === 'fire') {
                 // Fire burst toward target
-                let dx = tx - this.x, dy = ty - this.y, d = Math.hypot(dx, dy);
+                let dx = tx - this.x, dy = ty - this.y, d = detHypot(dx, dy);
                 let nx = dx / d, ny = dy / d;
                 ctx.strokeStyle = '#f50'; ctx.lineWidth = 3;
                 ctx.shadowColor = '#f80'; ctx.shadowBlur = 10;
@@ -1363,7 +1363,7 @@ class Unit {
                 ctx.globalAlpha = 1;
             } else if (this.attackFlash > 4) {
                 // Default melee: quick slash line
-                let dx = tx - this.x, dy = ty - this.y, d = Math.hypot(dx, dy) || 1;
+                let dx = tx - this.x, dy = ty - this.y, d = detHypot(dx, dy) || 1;
                 let nx = dx / d, ny = dy / d;
                 let perpX = -ny * 5, perpY = nx * 5;
                 ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
@@ -1497,7 +1497,7 @@ function getUnitStackCount(u) {
 }
 
 function stackCountToLevel(stacks) {
-    return Math.max(1, clampThingLevel(Math.floor(Math.log2(Math.max(1, Math.floor(stacks || 1)))) + 1));
+    return Math.max(1, clampThingLevel(detFloorLog2(stacks || 1) + 1));
 }
 
 function distributeEvenInteger(total, count) {
@@ -1717,8 +1717,8 @@ function findNearestWalkable(gx, gy, fromGx, fromGy, unit = null) {
 
         if (Number.isFinite(fromGx) && Number.isFinite(fromGy)) {
             candidates.sort((a, b) => {
-                let da = Math.hypot(a.x - fromGx, a.y - fromGy);
-                let db = Math.hypot(b.x - fromGx, b.y - fromGy);
+                let da = detHypot(a.x - fromGx, a.y - fromGy);
+                let db = detHypot(b.x - fromGx, b.y - fromGy);
                 if (da !== db) return da - db;
                 if (a.y !== b.y) return a.y - b.y;
                 return a.x - b.x;

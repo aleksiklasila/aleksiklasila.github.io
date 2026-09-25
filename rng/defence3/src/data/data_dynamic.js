@@ -85,7 +85,7 @@ function _getPlayerResourcePenaltyMultiplier(playerId, resourceKey) {
     let currentValue = Number(player[stockpileKey]);
     if (!Number.isFinite(currentValue) || currentValue >= 0) return 1;
     let steps = _getResourcePenaltySteps(currentValue, maxSeen);
-    return Math.max(1, Math.pow(RESOURCE_NEGATIVE_PENALTY_BASE, steps));
+    return Math.max(1, detPow(RESOURCE_NEGATIVE_PENALTY_BASE, steps));
 }
 
 function _hasExplicitResourceStatMapping(resourceKey, kind, statKey) {
@@ -216,6 +216,9 @@ function getStartingThingId(kind, key) {
 
 function ensureResearchThingsReady() {
     if (RESEARCH_THINGS.length > 0) return true;
+    // Without the stats table every starting unit/building would be dropped
+    // as unknown, so build it on demand.
+    if (!ensurePrecomputedStatsMap()) rebuildPrecomputedStatsMap();
     if (!ensurePrecomputedStatsMap()) return false;
     rebuildResearchThings();
     return RESEARCH_THINGS.length > 0;
@@ -419,7 +422,8 @@ function createEditableRuntimeConfigSnapshot() {
             STARTING_ASTAR,
             MAP_TYPE,
             GAME_MODE: gameMode,
-            MAP_VISIBILITY: fullVisibility ? 'full' : teamVisibilityHistory ? 'history' : 'team',
+            // During a match the setting, not a spectator's local full view.
+            MAP_VISIBILITY: (gameStarted ? matchFullVisibility : fullVisibility) ? 'full' : teamVisibilityHistory ? 'history' : 'team',
             TYPE_FLOOR,
             TYPE_WALL,
             CONFIG_MAX_POP,
@@ -885,6 +889,7 @@ function applyMainMenuSettingsSnapshot(rawData) {
     startingResourcesConfig = normalizeStartingResourcesConfig(data.startingResources || makeDefaultStartingResourcesConfig());
     refreshStartingResourcesPreviewPrecomputedStats();
     applyMainMenuControlsToRuntimeState();
+    if (typeof syncNetAutoMenuState === 'function') syncNetAutoMenuState();
     let appliedAdvancedConfig = false;
     if (data.editableConfig && typeof data.editableConfig === 'object') {
         try {
@@ -2038,7 +2043,7 @@ function getResearchBonusExpForStat(kind, statKey) {
 function applyResearchLevelToBaseValue(kind, baseValue, statKey, researchLevel) {
     if (!Number.isFinite(baseValue)) return NaN;
     let rLevel = clampResearchLevel(researchLevel);
-    let mult = Math.pow(getResearchBonusExpForStat(kind, statKey), rLevel);
+    let mult = detPow(getResearchBonusExpForStat(kind, statKey), rLevel);
     if (RESEARCH_DECREASE_STATS[statKey]) return baseValue / Math.max(1e-6, mult);
     return baseValue * mult;
 }
@@ -2067,14 +2072,14 @@ function applyPrecomputedSoftCap(value, cap, statKey, baseValue, maxValueBeforeC
 
     let canUseLog = value > 0 && baseValue > 0 && maxValueBeforeCap > 0 && cap > 0;
     if (canUseLog) {
-        let logDenom = Math.log(maxValueBeforeCap / baseValue);
+        let logDenom = detLog(maxValueBeforeCap / baseValue);
         if (Number.isFinite(logDenom) && Math.abs(logDenom) >= 1e-9) {
-            let tLog = Math.log(value / baseValue) / logDenom;
+            let tLog = detLog(value / baseValue) / logDenom;
             if (Number.isFinite(tLog)) {
                 tLog = Math.max(0, Math.min(1, tLog));
-                let logCapSpan = Math.log(cap / baseValue);
+                let logCapSpan = detLog(cap / baseValue);
                 if (Number.isFinite(logCapSpan)) {
-                    return baseValue * Math.exp(logCapSpan * tLog);
+                    return baseValue * detExp(logCapSpan * tLog);
                 }
             }
         }
@@ -2147,12 +2152,12 @@ function computeBaseUnitStatsAtLevel(unitType, level) {
     let cfg = UNIT_LEVEL_SCALING[unitType] || UNIT_LEVEL_SCALING._default;
     let unitCfg = UNIT_FORMULA_CONFIG || {};
 
-    let energyMult = Math.pow(cfg.energyExp || 1, lvl - 1);
-    let dmgMult = Math.pow(cfg.dmgExp || 1, lvl - 1);
-    let speedMult = Math.pow(cfg.speedExp || 1, lvl - 1);
-    let cdMult = Math.pow(cfg.cdExp || 1, lvl - 1);
-    let visionMult = Math.pow(cfg.visionExp || 1, lvl - 1);
-    let rangeMult = Math.pow((cfg.rangeExp !== undefined ? cfg.rangeExp : (cfg.visionExp || 1)), lvl - 1);
+    let energyMult = detPow(cfg.energyExp || 1, lvl - 1);
+    let dmgMult = detPow(cfg.dmgExp || 1, lvl - 1);
+    let speedMult = detPow(cfg.speedExp || 1, lvl - 1);
+    let cdMult = detPow(cfg.cdExp || 1, lvl - 1);
+    let visionMult = detPow(cfg.visionExp || 1, lvl - 1);
+    let rangeMult = detPow((cfg.rangeExp !== undefined ? cfg.rangeExp : (cfg.visionExp || 1)), lvl - 1);
 
     let energy = Math.max(1, Math.floor((Number(s.energy) || 1) * energyMult));
     let atk = (Number(s.atk) || 0) > 0 ? Math.max(1, Math.round((Number(s.atk) || 0) * dmgMult)) : 0;
@@ -2179,7 +2184,7 @@ function computeBaseUnitStatsAtLevel(unitType, level) {
     let workerSearchDistance = s.isWorker ? Math.max(0.2, Number(s.workerSearchDistance) || 2.0) : 0;
     let gatherBase = Math.max(0, Number(s.gatherPerTrip) || 0);
     let gatherLvlExp = Math.max(0, Number(unitCfg.collectorGatherLevelExp));
-    let gatherPerTrip = (unitType === 'collector' || unitType === 'astar_collector') ? Math.max(1, gatherBase * Math.pow(lvl, gatherLvlExp)) : 0;
+    let gatherPerTrip = (unitType === 'collector' || unitType === 'astar_collector') ? Math.max(1, gatherBase * detPow(lvl, gatherLvlExp)) : 0;
     let workerBaseRate = Math.max(0, Number(unitCfg.workerSpecialistBaseRate) || 0);
     let workerGrowthExp = Math.max(1, Number(unitCfg.workerSpecialistLevelExp) || 1);
     let workerTransferCdExp = Math.max(0.01, Number(unitCfg.workerTransferCooldownLevelExp) || 1);
@@ -2190,15 +2195,15 @@ function computeBaseUnitStatsAtLevel(unitType, level) {
     let researcherBase = Math.max(0, Number(s.researcherDps) || workerBaseRate);
     let upKeepLevelExp = Math.max(1, Number(UNIT_UPKEEP_EXP) || 1);
     let baseUpKeep = Math.max(0.01, Number(s.upKeep) || 1);
-    let upKeep = Math.max(0.01, baseUpKeep * Math.pow(upKeepLevelExp, lvl - 1));
-    let astarCost = Math.max(0.1, (Number(s.astarCost) || 1) * Math.pow(astarCostLevelExp, lvl - 1));
-    let builderDps = unitType === 'builder_unit' ? Math.max(1, Math.round(builderBase * Math.pow(workerGrowthExp, lvl - 1))) : 0;
-    let healerDps = unitType === 'healer_unit' ? Math.max(1, Math.round(healerBase * Math.pow(workerGrowthExp, lvl - 1))) : 0;
-    let researcherDps = unitType === 'researcher_unit' ? Math.max(1, Math.round(researcherBase * Math.pow(workerGrowthExp, lvl - 1))) : 0;
+    let upKeep = Math.max(0.01, baseUpKeep * detPow(upKeepLevelExp, lvl - 1));
+    let astarCost = Math.max(0.1, (Number(s.astarCost) || 1) * detPow(astarCostLevelExp, lvl - 1));
+    let builderDps = unitType === 'builder_unit' ? Math.max(1, Math.round(builderBase * detPow(workerGrowthExp, lvl - 1))) : 0;
+    let healerDps = unitType === 'healer_unit' ? Math.max(1, Math.round(healerBase * detPow(workerGrowthExp, lvl - 1))) : 0;
+    let researcherDps = unitType === 'researcher_unit' ? Math.max(1, Math.round(researcherBase * detPow(workerGrowthExp, lvl - 1))) : 0;
     let transferCooldown = NaN;
     if (s.isWorker) {
         let baseTransferCooldown = Math.max(0.01, Number(s.transferCooldown) || 0.01);
-        transferCooldown = Math.max(0.01, baseTransferCooldown * Math.pow(workerTransferCdExp, lvl - 1));
+        transferCooldown = Math.max(0.01, baseTransferCooldown * detPow(workerTransferCdExp, lvl - 1));
     }
 
     return { energy, atk, atkCd, speed, visionRange, attackRange, watchDuration, workerSearchDistance, gatherPerTrip, builderDps, healerDps, researcherDps, transferCooldown, astarCost, upKeep };
@@ -2217,8 +2222,8 @@ function computeBaseBuildingStatsAtLevel(type, level) {
     let researchEfficiencyExp = Math.max(1, Number(bCfg.researchEfficiencyLevelExp) || 1);
     let researchEfficiencyCap = Math.max(0, Number(bCfg.researchEfficiencyCap) || 0);
     let upKeepLevelExp = Math.max(1, Number(BUILDING_UPKEEP_EXP) || 1.16);
-    let mult = Math.pow(multExp, lvl - 1);
-    let energyMult = Math.pow(energyExp, lvl - 1);
+    let mult = detPow(multExp, lvl - 1);
+    let energyMult = detPow(energyExp, lvl - 1);
     let out = {
         maxEnergy: NaN,
         popCap: NaN,
@@ -2247,7 +2252,7 @@ function computeBaseBuildingStatsAtLevel(type, level) {
     let def = BASE_CARD_TYPES[key] || {};
     let baseUpKeep = Math.max(0.01, Number(def.upKeep));
     if (!Number.isFinite(baseUpKeep)) baseUpKeep = def.target === 'wall' ? 3 : 1;
-    out.upKeep = Math.max(0.01, baseUpKeep * Math.pow(upKeepLevelExp, lvl - 1));
+    out.upKeep = Math.max(0.01, baseUpKeep * detPow(upKeepLevelExp, lvl - 1));
     if (Number.isFinite(def.energy) && def.energy > 0) {
         out.maxEnergy = Math.floor(def.energy * energyMult);
     }
@@ -2259,12 +2264,12 @@ function computeBaseBuildingStatsAtLevel(type, level) {
         let reduction = Number.isFinite(cfg.reduction) ? cfg.reduction : 0.10;
         if (Number.isFinite(baseSpawnCd) && baseSpawnCd > 0) {
             let spawnCdFloor = Math.max(0.001, Number(bCfg.spawnCdFloor) || 0.001);
-            out.spawnCd = Math.max(spawnCdFloor, baseSpawnCd * Math.pow(1 - reduction, lvl - 1));
+            out.spawnCd = Math.max(spawnCdFloor, baseSpawnCd * detPow(1 - reduction, lvl - 1));
         }
         let baseUnitPrice = Number((BASE_UNIT_STATS[spawnUnitType] || {}).price);
         if (Number.isFinite(baseUnitPrice) && baseUnitPrice > 0) {
             let priceExp = Math.max(1, Number(bCfg.spawnedUnitPriceLevelExp) || 1);
-            out.unitPrice = Math.max(1, baseUnitPrice * Math.pow(priceExp, lvl - 1));
+            out.unitPrice = Math.max(1, baseUnitPrice * detPow(priceExp, lvl - 1));
         }
         if (!Number.isFinite(out.visionRange)) {
             let spawnedVision = Number((BASE_UNIT_STATS[spawnUnitType] || {}).visionRange);
@@ -2278,11 +2283,11 @@ function computeBaseBuildingStatsAtLevel(type, level) {
         let baseMultiplier = Number.isFinite(def.multiplier) ? def.multiplier : (Number(bCfg.farmBaseMultiplierFallback) || 1);
         let farmPolyCoeff = Number(bCfg.farmLevelPolyCoeff) || 1;
         let farmPowExp = Math.max(0, Number(bCfg.farmLevelPowerExp) || 0);
-        out.multiplier = baseMultiplier + Math.floor(farmPolyCoeff * lvl * Math.log(lvl + 1) * Math.pow(lvl, farmPowExp));
+        out.multiplier = baseMultiplier + Math.floor(farmPolyCoeff * lvl * detLog(lvl + 1) * detPow(lvl, farmPowExp));
     }
     else if (key === 'house') {
         let housePopExp = Math.max(1, Number(bCfg.levelMultExp * 1) || 1);
-        out.popCap = Math.pow(housePopExp, lvl) * Math.pow(housePopExp, lvl) * Math.max(1, Math.floor(Math.pow(housePopExp, lvl)));
+        out.popCap = detPow(housePopExp, lvl) * detPow(housePopExp, lvl) * Math.max(1, Math.floor(detPow(housePopExp, lvl)));
     }
     else if (key === 'sand') { out.damage = (Number(bCfg.sandFloorDamageBase) || 0) * mult; }
     else if (key === 'lava') { out.damage = (Number(bCfg.lavaFloorDamageBase) || 0) * mult; }
@@ -2290,8 +2295,8 @@ function computeBaseBuildingStatsAtLevel(type, level) {
     else if (key === 'poison_puddle') { out.damage = (Number(bCfg.poisonPuddleFloorDamageBase) || 0) * mult; }
     else if (key === 'ice_patch') { out.damage = (Number(bCfg.icePatchFloorDamageBase) || 0) * mult; }
 
-    if (Number.isFinite(def.damage)) out.damage = def.damage * Math.pow(damageExp, lvl - 1);
-    if (Number.isFinite(def.blastDamage)) out.blastDamage = def.blastDamage * Math.pow(damageExp, lvl - 1);
+    if (Number.isFinite(def.damage)) out.damage = def.damage * detPow(damageExp, lvl - 1);
+    if (Number.isFinite(def.blastDamage)) out.blastDamage = def.blastDamage * detPow(damageExp, lvl - 1);
     if (Number.isFinite(def.blastRadius)) out.blastRadius = Math.max(0, def.blastRadius);
     if (Number.isFinite(def.cd)) out.cd = def.cd;
     if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange;
@@ -2304,14 +2309,14 @@ function computeBaseBuildingStatsAtLevel(type, level) {
     }
     if (key === 'research') {
         let baseEfficiency = Number.isFinite(def.efficiency) ? def.efficiency : 1;
-        out.efficiency = Math.min(researchEfficiencyCap, baseEfficiency * Math.pow(researchEfficiencyExp, lvl - 1));
+        out.efficiency = Math.min(researchEfficiencyCap, baseEfficiency * detPow(researchEfficiencyExp, lvl - 1));
     }
 
     if (key === 'water' || key === 'smg' || key === 'pistol') {
         let towerCdFloor = Math.max(0.001, Number(bCfg.directTowerCdFloor) || 0.001);
         if (Number.isFinite(def.cd)) out.cd = Math.max(towerCdFloor, def.cd * (1 - (lvl - 1) * linearCdReduction));
     } else if (key === 'sand_gun') {
-        if (Number.isFinite(def.cd)) out.cd = def.cd * Math.pow(sandGunCdExp, lvl);
+        if (Number.isFinite(def.cd)) out.cd = def.cd * detPow(sandGunCdExp, lvl);
     }
     if (Number.isFinite(def.maxVisionRange) && Number.isFinite(out.visionRange)) {
         out.visionRange = Math.min(out.visionRange, def.maxVisionRange);
@@ -2921,7 +2926,7 @@ function getResearchMultiplier(playerId, kind, key, statKey) {
     let mults = ensurePlayerResearchMultipliers(playerId);
     let id = makeResearchLevelId(kind, key, statKey);
     if (!Number.isFinite(mults[id])) {
-        mults[id] = Math.pow(getResearchBonusExpForStat(kind, statKey), getPlayerResearchLevel(playerId, kind, key, statKey));
+        mults[id] = detPow(getResearchBonusExpForStat(kind, statKey), getPlayerResearchLevel(playerId, kind, key, statKey));
     }
     return Math.max(1, mults[id]);
 }
@@ -3031,7 +3036,7 @@ function getResearchStatCostWeight(kind, key, statKey, currentLevel) {
     // Normalize different stat scales while still rewarding higher-value upgrades.
     let magnitudeNorm = Math.log10(1 + orientedBase);
     let relativeNorm = Math.max(1, orientedValue / orientedBase);
-    let weight = Math.pow(1 + magnitudeNorm, 0.85) * Math.pow(relativeNorm, 0.65);
+    let weight = detPow(1 + magnitudeNorm, 0.85) * detPow(relativeNorm, 0.65);
 
     return Math.max(0.1, Math.min(1000, weight));
 }
@@ -3043,7 +3048,7 @@ function getResearchCost(kind, key, statKey, currentLevel) {
     let lvl = Math.max(0, Math.floor(currentLevel || 0));
     if (lvl >= MAX_RESEARCH_LEVEL) return 0;
     let weight = getResearchStatCostWeight(kind, key, statKey, lvl);
-    return Math.max(1, Math.floor(RESEARCH_WORK_BASE * weight * Math.pow(RESEARCH_COST_EXP, lvl)));
+    return Math.max(1, Math.floor(RESEARCH_WORK_BASE * weight * detPow(RESEARCH_COST_EXP, lvl)));
 }
 
 function getResearchWork(kind, key, statKey, currentLevel) {
@@ -3053,7 +3058,7 @@ function getResearchWork(kind, key, statKey, currentLevel) {
     let lvl = Math.max(0, Math.floor(currentLevel || 0));
     if (lvl >= MAX_RESEARCH_LEVEL) return 0;
     let weight = getResearchStatCostWeight(kind, key, statKey, lvl);
-    return Math.max(1, Math.floor(RESEARCH_WORK_BASE * weight * Math.pow(RESEARCH_WORK_EXP, lvl)));
+    return Math.max(1, Math.floor(RESEARCH_WORK_BASE * weight * detPow(RESEARCH_WORK_EXP, lvl)));
 }
 
 function ensurePlayerResearchQueueState(playerId) {
@@ -3343,7 +3348,7 @@ function applyResearchCompletion(owner, task) {
     let nextLevel = clampResearchLevel(prevLevel + 1);
     if (nextLevel <= prevLevel) return;
     levels[id] = nextLevel;
-    mults[id] = Math.pow(getResearchBonusExpForStat(task.kind, task.statKey), nextLevel);
+    mults[id] = detPow(getResearchBonusExpForStat(task.kind, task.statKey), nextLevel);
     if (task.kind === 'unit') applyUnitResearchUpgradeToExistingUnits(owner, task.key, task.statKey);
     if (task.kind === 'building') applyBuildingResearchUpgradeToExisting(owner, task.key, task.statKey);
     if (task.kind === 'building' && task.key === 'house' && task.statKey === 'popCap') {

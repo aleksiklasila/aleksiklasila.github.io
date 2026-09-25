@@ -6,6 +6,8 @@ const read = p => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 const source = read('src/utils/utils_networking.js');
 const c = vm.createContext({makeSnapshotEntityRef:()=>null, projectiles:[], snapshot:{}});
 vm.runInContext(source.slice(source.indexOf('function cloneSnapshotValue('), source.indexOf('function makeSnapshotEntityRef(')),c);
+vm.runInContext(read('src/utils/utils_common.js'), c);
+vm.runInContext(source.match(/const SNAPSHOT_DERIVED_STAT_KEYS = [^\n]+/)[0], c);
 vm.runInContext(read('src/things/projectile.js')+'\nthis.Projectile=Projectile;',c);
 const original = new c.Projectile(0,16,{x:100,y:16},'arrow',7,1,{owner:0,gx:0,gy:0},300);
 c.projectiles=[original];
