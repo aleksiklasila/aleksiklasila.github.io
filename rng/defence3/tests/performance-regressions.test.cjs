@@ -58,7 +58,7 @@ ctx._findClosestHostileStructure(origin, [first], 1);
 assert.equal(lookups.length, 1, 'even an out-of-range target retains the original lazy snapshot timing');
 const Unit = vm.runInContext('Unit', ctx);
 ctx._findClosestEnemyUnitByChunks = () => null;
-ctx.getCellItemsRowMajor = () => []; ctx.findCellItemRowStart = () => 0;
+ctx.getCellItemsRowMajor = () => []; ctx.findCellItemRowStart = () => 0; ctx.hasHostileStructureInTileRect = () => true;
 ctx.towers = [first]; ctx.barracks = [{ ...tied, x: 1, y: 0 }]; ctx.collectorSpawners = [];
 ctx.gameTime = 0;
 for (const method of ['doIdle', 'doAttackMoving']) {

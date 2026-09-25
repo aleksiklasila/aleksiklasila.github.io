@@ -823,7 +823,14 @@ function _getSoundRecipe(type, subtype = '') {
 
 function _generateEffectBuffer(type, subtype, variant, recipe) {
     let key = type + ':' + subtype + ':' + variant;
-    if (_generatedAudioBuffers.has(key)) return _generatedAudioBuffers.get(key);
+    let cached = _generatedAudioBuffers.get(key);
+    if (cached) {
+        // Least recently used eviction: a hit moves the buffer to the end, so
+        // sounds in constant use are never regenerated mid-battle.
+        _generatedAudioBuffers.delete(key);
+        _generatedAudioBuffers.set(key, cached);
+        return cached;
+    }
     let [frequency, endFrequency, duration, noiseMix, cutoff, , , pulses] = recipe;
     let rate = audioCtx.sampleRate;
     let buffer = audioCtx.createBuffer(1, Math.ceil(duration * rate), rate);

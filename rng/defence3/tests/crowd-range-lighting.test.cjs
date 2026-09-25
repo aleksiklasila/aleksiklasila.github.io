@@ -5,7 +5,7 @@ const path = require('node:path');
 const read = p => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 const src = read('src/things/unit.js');
 const c = vm.createContext({TILE:32,UNIT_POSITION_QUANTIZATION:1024,gameTime:0,
-    CROSS_TEAM_UNIT_COLLISION_PADDING:16,getUnitCollisionRecalcTicks:()=>5,canUnitOccupyTile:()=>true});
+    CROSS_TEAM_UNIT_COLLISION_PADDING:16,CHUNK_SIZE:1000,CHUNKS_W:1,CHUNKS_H:1,getUnitCollisionRecalcTicks:()=>5,canUnitOccupyTile:()=>true});
 vm.runInContext(src,c);
 // Run the actual collision gather/sort/solve used by Unit.update, including
 // staggered ticks, while 100 units keep moving towards the same waypoint.
@@ -14,8 +14,9 @@ const end=src.indexOf('        if (hadUnitCollision &&',start);
 vm.runInContext('function separate() {\n'+src.slice(start,end)+'\n}',c);
 function crowdRun() {
     let crowd=Array.from({length:100},(_,id)=>({id,owner:0,x:500+(id%10)*2,y:500+Math.floor(id/10)*2,
-        vx:0,vy:0,getCollisionRadius:()=>8,getCollisionLayer:()=> 'ground'}));
-    c.forEachUnitInRange=(x,y,r,visit)=>{for(let u of crowd){let dx=u.x-x,dy=u.y-y,d2=dx*dx+dy*dy;if(d2<=r*r)visit(u,d2,dx,dy);}};
+        vx:0,vy:0,r:8,getCollisionRadius:()=>8,getCollisionLayer:()=> 'ground'}));
+    // One chunk covering the whole crowd: the gather still filters by distance.
+    c.spatialUnits=[crowd];
     for(let tick=0;tick<180;tick++) {
         c.gameTime=tick;
         for(let u of crowd) {

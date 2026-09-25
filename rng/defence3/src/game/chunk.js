@@ -146,6 +146,38 @@ function initSpatialHash() {
     }
     let areaCount = Array.isArray(areas) ? areas.length : 0;
     spatialUnitsByArea = Array.from({ length: Math.max(0, areaCount) }, () => []);
+    spatialBlockCols = Math.ceil(CHUNKS_W / SPATIAL_BLOCK_SIZE);
+    spatialBlockRows = Math.ceil(CHUNKS_H / SPATIAL_BLOCK_SIZE);
+    spatialBlockCounts = new Int32Array(spatialBlockCols * spatialBlockRows * spatialUnitsComplexPlayerCount);
+}
+
+// Units per owner in blocks of 8x8 chunks, kept exactly in step with the
+// per-chunk totals: region queries rule out areas without enemies in a few
+// reads instead of visiting every chunk.
+const SPATIAL_BLOCK_SIZE = 8;
+let spatialBlockCols = 0, spatialBlockRows = 0, spatialBlockCounts = new Int32Array(0);
+
+function _adjustSpatialBlockCount(chunkKey, owner, delta) {
+    let cx = chunkKey % CHUNKS_W, cy = (chunkKey - cx) / CHUNKS_W;
+    let index = (Math.floor(cy / SPATIAL_BLOCK_SIZE) * spatialBlockCols + Math.floor(cx / SPATIAL_BLOCK_SIZE)) * spatialUnitsComplexPlayerCount + owner;
+    if (index >= 0 && index < spatialBlockCounts.length) spatialBlockCounts[index] += delta;
+}
+
+// Whether any unit not owned by ownerId is in chunks [minCx..maxCx] x
+// [minCy..maxCy] (checked by whole blocks, so it may report true for units
+// just outside; false is exact).
+function _regionMayHaveEnemyUnits(ownerId, minCx, minCy, maxCx, maxCy) {
+    let players = spatialUnitsComplexPlayerCount;
+    if (spatialBlockCounts.length !== spatialBlockCols * spatialBlockRows * players || spatialBlockCols === 0) return true;
+    let bx0 = Math.floor(minCx / SPATIAL_BLOCK_SIZE), bx1 = Math.floor(maxCx / SPATIAL_BLOCK_SIZE);
+    let by0 = Math.floor(minCy / SPATIAL_BLOCK_SIZE), by1 = Math.floor(maxCy / SPATIAL_BLOCK_SIZE);
+    for (let by = by0; by <= by1; by++) for (let bx = bx0; bx <= bx1; bx++) {
+        let base = (by * spatialBlockCols + bx) * players;
+        for (let pid = 0; pid < players; pid++) {
+            if (pid !== ownerId && spatialBlockCounts[base + pid] > 0) return true;
+        }
+    }
+    return false;
 }
 
 function _addUnitToSpatialArray(arr, u) {
@@ -201,6 +233,19 @@ function getSpatialKey(wx, wy) {
     return cy * CHUNKS_W + cx;
 }
 function updateUnitSpatial(u) {
+    // A unit that has not moved, changed owner or vision, with its buckets
+    // and the area layout unchanged, would only re-set identical state.
+    let known = _spatialMembership.get(u);
+    if (known && known.x === u.x && known.y === u.y && known.owner === u.owner && known.areaGrid === areaIdGrid
+        && u._spatialKey !== undefined && known.chunk === spatialUnits[u._spatialKey]
+        && (u._spatialAreaId >= 0 ? known.area === spatialUnitsByArea[u._spatialAreaId] : u._spatialAreaId === -1)
+        && _getSpatialUnitVisibilityScaled(u) === u._spatialLastVisScaled) return;
+    _updateUnitSpatialFull(u);
+    let member = _spatialMembership.get(u);
+    if (member) { member.x = u.x; member.y = u.y; member.owner = u.owner; member.areaGrid = areaIdGrid; }
+}
+
+function _updateUnitSpatialFull(u) {
     let newKey = getSpatialKey(u.x, u.y);
     let newAreaId = getAreaIdAtWorld(u.x, u.y);
     let prevScaled = Number.isFinite(u._spatialLastVisScaled) ? (u._spatialLastVisScaled | 0) : _getSpatialUnitVisibilityScaled(u);
@@ -224,6 +269,7 @@ function updateUnitSpatial(u) {
                 let playerBase = (u._spatialKey * spatialUnitsComplexStridePerChunk) + (owner * spatialUnitsComplexStridePerPlayer);
                 let totalIdx = playerBase;
                 let typeCountIdx = playerBase + 1 + typeIdx;
+                if (spatialUnitsComplex[totalIdx] > 0) _adjustSpatialBlockCount(u._spatialKey, owner, -1);
                 spatialUnitsComplex[totalIdx] = Math.max(0, spatialUnitsComplex[totalIdx] - 1);
                 spatialUnitsComplex[typeCountIdx] = Math.max(0, spatialUnitsComplex[typeCountIdx] - 1);
                 _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(oldKey, owner, prevScaled, 0);
@@ -278,6 +324,7 @@ function updateUnitSpatial(u) {
         let totalIdx = playerBase;
         let typeCountIdx = playerBase + 1 + typeIdx;
         spatialUnitsComplex[totalIdx] += 1;
+        _adjustSpatialBlockCount(newKey, owner, 1);
         spatialUnitsComplex[typeCountIdx] += 1;
         _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(newKey, owner, 0, currentScaled);
     }
@@ -300,6 +347,7 @@ function removeUnitSpatial(u) {
                 let playerBase = (u._spatialKey * spatialUnitsComplexStridePerChunk) + (owner * spatialUnitsComplexStridePerPlayer);
                 let totalIdx = playerBase;
                 let typeCountIdx = playerBase + 1 + typeIdx;
+                if (spatialUnitsComplex[totalIdx] > 0) _adjustSpatialBlockCount(u._spatialKey, owner, -1);
                 spatialUnitsComplex[totalIdx] = Math.max(0, spatialUnitsComplex[totalIdx] - 1);
                 spatialUnitsComplex[typeCountIdx] = Math.max(0, spatialUnitsComplex[typeCountIdx] - 1);
                 _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(oldKey, owner, prevScaled, 0);
@@ -656,6 +704,8 @@ function _findClosestEnemyUnitByChunks(owner, wx, wy, rangePx) {
     let maxCx = Math.min(CHUNKS_W - 1, Math.floor((wx + scan) / cws));
     let minCy = Math.max(0, Math.floor((wy - scan) / cws));
     let maxCy = Math.min(CHUNKS_H - 1, Math.floor((wy + scan) / cws));
+    // No enemy anywhere near: every path below would return null.
+    if (!_regionMayHaveEnemyUnits(ownerId, minCx, minCy, maxCx, maxCy)) return null;
 
     let centerCx = Math.max(0, Math.min(CHUNKS_W - 1, Math.floor(wx / cws)));
     let centerCy = Math.max(0, Math.min(CHUNKS_H - 1, Math.floor(wy / cws)));

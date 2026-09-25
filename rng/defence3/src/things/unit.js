@@ -214,6 +214,10 @@ function _findClosestHostileCellItem(unit, range, kind = null) {
 // turrets, traps (those on its route first), barracks and spawners, then any
 // other building. Within a class the nearest visible one in range.
 function _findAutoStructureTarget(unit, range) {
+    // Every scan below stays within this tile window of the unit.
+    let reach = Math.ceil(range / TILE) + 1;
+    let ugx = Math.floor(unit.x / TILE), ugy = Math.floor(unit.y / TILE);
+    if (!hasHostileStructureInTileRect(unit.owner, ugx - reach, ugy - reach, ugx + reach, ugy + reach)) return null;
     return _findClosestHostileStructure(unit, towers, range)
         || _findClosestHostileCellItem(unit, range, 'trap')
         || _findClosestHostileStructure(unit, barracks, range, collectorSpawners)
@@ -493,25 +497,48 @@ class Unit {
             // Pooled entries: this runs for every moving unit every tick.
             let collisionCandidates = _unitCollisionCandidates;
             let candidateCount = 0;
-            forEachUnitInRange(this.x, this.y, sepRange, (other, d2, dx, dy) => {
-                if (other === this || other.dead) return;
-                if (other.getCollisionLayer() !== myLayer) return;
-                let collisionPadding = other.owner === this.owner ? 0 : crossTeamCollisionPadding;
-                let minDist = selfCollisionR + other.getCollisionRadius() + collisionPadding;
-                if (d2 >= minDist * minDist) return;
-                let entry = collisionCandidates[candidateCount] || (collisionCandidates[candidateCount] = {});
-                entry.other = other; entry.d2 = d2; entry.dx = dx; entry.dy = dy; entry.minDist = minDist;
-                entry.order = Math.floor(Number(other.id) || 0);
-                // Insertion sort by unit id (unique), independent of bucket order.
-                let i = candidateCount++;
-                while (i > 0 && collisionCandidates[i - 1].order > entry.order) {
-                    collisionCandidates[i] = collisionCandidates[i - 1];
-                    i--;
+            // Same candidates as forEachUnitInRange(x, y, sepRange, ..., { pad: 0 })
+            // (unit centers are bucketed per chunk, so chunks overlapping the
+            // range circle hold every candidate), inlined: this runs for every
+            // moving unit every tick.
+            let wx = this.x, wy = this.y, radiusSq = sepRange * sepRange, cws = CHUNK_SIZE * TILE;
+            let minCx = Math.max(0, Math.floor((wx - sepRange) / cws)), maxCx = Math.min(CHUNKS_W - 1, Math.floor((wx + sepRange) / cws));
+            let minCy = Math.max(0, Math.floor((wy - sepRange) / cws)), maxCy = Math.min(CHUNKS_H - 1, Math.floor((wy + sepRange) / cws));
+            for (let cy = minCy; cy <= maxCy; cy++) {
+                let chunkMinY = cy * cws;
+                let ny = wy < chunkMinY ? chunkMinY : (wy > chunkMinY + cws ? chunkMinY + cws : wy);
+                for (let cx = minCx; cx <= maxCx; cx++) {
+                    let chunk = spatialUnits[cy * CHUNKS_W + cx];
+                    if (!chunk || chunk.length === 0) continue;
+                    let chunkMinX = cx * cws;
+                    let nx = wx < chunkMinX ? chunkMinX : (wx > chunkMinX + cws ? chunkMinX + cws : wx);
+                    if ((wx - nx) * (wx - nx) + (wy - ny) * (wy - ny) > radiusSq) continue;
+                    for (let k = 0; k < chunk.length; k++) {
+                        let other = chunk[k];
+                        if (other.dead || other === this) continue;
+                        let dx = other.x - wx, dy = other.y - wy, d2 = dx * dx + dy * dy;
+                        if (d2 > radiusSq) continue;
+                        // getCollisionLayer() / getCollisionRadius(), inlined.
+                        let otherLayer = other.isFlying ? 'air' : (other.unitType === 'mole' ? 'mole' : 'ground');
+                        if (otherLayer !== myLayer) continue;
+                        let otherR = +other.collisionR || +other.r || 0.1;
+                        if (otherR < 0.1) otherR = 0.1;
+                        let collisionPadding = other.owner === this.owner ? 0 : crossTeamCollisionPadding;
+                        let minDist = selfCollisionR + otherR + collisionPadding;
+                        if (d2 >= minDist * minDist) continue;
+                        let entry = collisionCandidates[candidateCount] || (collisionCandidates[candidateCount] = {});
+                        entry.other = other; entry.d2 = d2; entry.dx = dx; entry.dy = dy; entry.minDist = minDist;
+                        entry.order = Math.floor(Number(other.id) || 0);
+                        // Insertion sort by unit id (unique), independent of bucket order.
+                        let i = candidateCount++;
+                        while (i > 0 && collisionCandidates[i - 1].order > entry.order) {
+                            collisionCandidates[i] = collisionCandidates[i - 1];
+                            i--;
+                        }
+                        collisionCandidates[i] = entry;
+                    }
                 }
-                collisionCandidates[i] = entry;
-            // Buckets hold unit centers per tile, so chunks overlapping the
-            // range circle already contain every candidate; no extra padding.
-            }, { pad: 0 });
+            }
             for (let c = 0; c < candidateCount; c++) {
                 let entry = collisionCandidates[c];
                 let other = entry.other;

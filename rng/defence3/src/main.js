@@ -345,6 +345,12 @@ function gameTick() {
     recalculateUnitEffectiveStats();
     recalculateThingPrecomputedStats();
 
+    // Every player's gameplay visibility for this tick, from positions at
+    // this point. Computing it here, rather than at whichever query happens
+    // to come first, keeps targeting independent of query order and lets
+    // scans be skipped freely.
+    updateAllPlayerVisibility();
+
     // Towers - use deterministic shuffle like units to avoid order-dependent damage
     let towerUpdateOrder = _buildDeterministicBuildingUpdateOrderForTick(towers, 10);
     for (let i = 0; i < towerUpdateOrder.length; i++) {

@@ -461,7 +461,12 @@ function get3DExact2DCapture(entity, x, y, isUnit) {
 
 // Render through the same draw method as the 2D renderer. This deliberately
 // includes its cached level sprite, progress bars, status colors and outlines.
+// Whether the last get3DExact2DTexture call returned a stand-in because this
+// frame's raster budget was spent (cached scene objects must not keep it).
+let renderer3dExactTextureFallback = false;
+
 function get3DExact2DTexture(entity, useUnitBudget = false) {
+    renderer3dExactTextureFallback = false;
     if (!entity || typeof entity.draw !== 'function') return null;
     let signature = get3DExact2DVisualSignature(entity, useUnitBudget);
     let entry = getCached3DExact2DTexture(signature);
@@ -471,10 +476,16 @@ function get3DExact2DTexture(entity, useUnitBudget = false) {
         // Units are collected after buildings. Give them a separate raster
         // budget so a dense base cannot permanently starve every unit panel.
         if (useUnitBudget) {
-            if (renderer3dExactUnitTextureBuildsRemaining <= 0 || renderer3dExactUnitTextureTimeRemaining <= 0) return get3DExact2DFallbackTexture(entity, true);
+            if (renderer3dExactUnitTextureBuildsRemaining <= 0 || renderer3dExactUnitTextureTimeRemaining <= 0) {
+                renderer3dExactTextureFallback = true;
+                return get3DExact2DFallbackTexture(entity, true);
+            }
             renderer3dExactUnitTextureBuildsRemaining--;
         } else {
-            if (renderer3dExactTextureBuildsRemaining <= 0 || renderer3dExactTextureTimeRemaining <= 0) return get3DExact2DFallbackTexture(entity, false);
+            if (renderer3dExactTextureBuildsRemaining <= 0 || renderer3dExactTextureTimeRemaining <= 0) {
+                renderer3dExactTextureFallback = true;
+                return get3DExact2DFallbackTexture(entity, false);
+            }
             renderer3dExactTextureBuildsRemaining--;
         }
         let canvas = document.createElement('canvas');
@@ -955,7 +966,7 @@ function get3DTopTextureForFloorItem(item, statusOptions = null) {
 function build3DOverlayData(bounds, alpha) {
     let overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: [], bars: [], texts: [] };
     let activeSelectedEntities = getActiveEntities();
-    let activeSelectedUnits = getActiveUnits();
+    let activeSelectedUnits = getActiveUnitsForRender();
     overlays.selectionContours = getSelectionContours(activeSelectedEntities, activeSelectedUnits, alpha, get3DRenderOwnerColor);
     overlays.selectionDashed = selectionOutlineType === OVERLAY_LINE_DOTTED;
     overlays.selectionSeeThrough = selectionOutlineSeeThrough;
@@ -1216,6 +1227,8 @@ function push3DRenderObject(target, object) {
     let tint = _getCachedLitTint(object.tint || '#c8ced8', finalLightLevel);
     let sideTint = _getCachedLitTint(object.sideTint || object.tint || '#c8ced8', finalLightLevel);
     target.push({
+        baseTint: object.tint || '#c8ced8',
+        baseSideTint: object.sideTint || object.tint || '#c8ced8',
         pickSource: (object.pickSource || object.visibilitySource || {})._historyGhost ? null : object.pickSource || object.visibilitySource || null,
         modelKey: object.modelKey || 'cube',
         modelCandidates: Array.isArray(object.modelCandidates) && object.modelCandidates.length ? object.modelCandidates.slice() : RENDER_NO_MODEL_CANDIDATES,
@@ -1433,6 +1446,82 @@ function pushUnit3DActivityEffects(target, u, activity, x, z, footprint) {
     }
 }
 
+// Structures barely change, but the scene is rebuilt every frame. Reuse a
+// structure's render object (relit every frame) while nothing it depends on
+// changed: view mode, audio pulse, facing, whether a unit stands on its
+// tile, and it is not flashing, waiting for its exact panel or easing its
+// height (the last two builds differed). Panels refresh every 1-4 ticks.
+const renderer3dStaticObjects = new WeakMap();
+const renderer3dStaticFrame = { occupied: null, flat2d: false };
+
+const renderer3dUnitObjects = new WeakMap();
+
+function _unit3DWalkPhase(u, activity) {
+    return activity.mode === 1
+        ? Math.max(0, Math.min(1, (8 - Number(u.attackFlash || 0) + (u._historyGhost ? 0 : tickAlpha)) / 8)) * Math.PI
+        : ((u._historyGhost ? u._historyTick : gameTime + tickAlpha)) / TICK_RATE * (activity.mode === 2 ? 8 : activity.mode === 4 ? 14 : 10) + (Number(u.id) || 0) * 2.399;
+}
+
+// Lighting of an object at its current position, exactly as
+// push3DRenderObject derives it (for objects without light overrides).
+function _relight3DObject(o, source, baseTint, baseSideTint, flat2d) {
+    let ox = o.x, oz = o.z, gx = Math.floor(ox), gy = Math.floor(oz);
+    let remembered = !!(source && source._historyGhost);
+    let lightGrid = remembered ? getRenderVisibilityGrid() : visibilityGrid;
+    let lightRawCenter = fullVisibility ? VISIBILITY_LIGHT_NORMALIZATION_RANGE : ((lightGrid[gy] && lightGrid[gy][gx]) || 0);
+    if (!fullVisibility && source && source.unitType) lightRawCenter = Math.max(lightRawCenter, getVisualUnitSourceLight(source));
+    let lightLevel = fullVisibility ? 1 : Math.max(0, Math.min(1, lightRawCenter / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
+    let shadowDirX = DEFAULT_SHADOW_DIR_X, shadowDirZ = DEFAULT_SHADOW_DIR_Y;
+    if (!fullVisibility && !flat2d) {
+        let fx = ox - gx, fz = oz - gy, ifx = 1 - fx, ifz = 1 - fz;
+        const [g00x, g00z, g10x, g10z, g01x, g01z, g11x, g11z] = getRenderLightGradient(gx, gy);
+        let gradX = g00x * ifx * ifz + g10x * fx * ifz + g01x * ifx * fz + g11x * fx * fz;
+        let gradZ = g00z * ifx * ifz + g10z * fx * ifz + g01z * ifx * fz + g11z * fx * fz;
+        let gradLen = Math.hypot(gradX, gradZ);
+        if (gradLen > 0.001) { shadowDirX = gradX / gradLen; shadowDirZ = gradZ / gradLen; }
+    }
+    let finalLightLevel = Math.max(0, Math.min(1, lightLevel));
+    o.tint = _getCachedLitTint(baseTint || '#c8ced8', finalLightLevel);
+    o.sideTint = _getCachedLitTint(baseSideTint || baseTint || '#c8ced8', finalLightLevel);
+    o.lightLevel = finalLightLevel;
+    o.historyGhost = remembered;
+    o.shadowDirX = shadowDirX;
+    o.shadowDirZ = shadowDirZ;
+    o.shadowLength = Math.max(0.6, Math.min(2.4, 1 + (1 - lightLevel) * 0.9));
+}
+
+function _reuseStatic3DObject(target, entity, gx, gy, audioMove, audioHeight) {
+    let entry = renderer3dStaticObjects.get(entity);
+    let age = entry ? gameTime - entry.tick : -1;
+    if (!entry || entry.dynamic || age < 0 || age >= entry.maxAge
+        || entry.view !== renderer3dStaticFrame.view || entry.audioMove !== audioMove || entry.audioHeight !== audioHeight
+        || entry.angle !== entity.angle
+        || entry.occupied !== renderer3dStaticFrame.occupied.has(gy * GRID_W + gx)
+        || getDamageFlashState(entity)) return false;
+    // Structures do not move: their light changes only with the grid.
+    let object = entry.object;
+    if (entry.litVersion !== visibilityVersion || entry.litGrid !== visibilityGrid) {
+        _relight3DObject(object, entity, object.baseTint, object.baseSideTint, renderer3dStaticFrame.flat2d);
+        entry.litVersion = visibilityVersion;
+        entry.litGrid = visibilityGrid;
+    }
+    target.push(object);
+    return true;
+}
+
+function _rememberStatic3DObject(target, entity, gx, gy, audioMove, audioHeight, fallbackTexture) {
+    let object = target[target.length - 1];
+    let entry = renderer3dStaticObjects.get(entity);
+    let easing = !!(entry && entry.object.scaleY !== object.scaleY);
+    renderer3dStaticObjects.set(entity, { object, tick: gameTime, audioMove, audioHeight, angle: entity.angle,
+        litVersion: visibilityVersion, litGrid: visibilityGrid,
+        // Panels (health, progress) refresh every 1-4 ticks, spread by tile.
+        maxAge: 1 + ((gx * 7 + gy * 13) & 3),
+        view: renderer3dStaticFrame.view,
+        occupied: renderer3dStaticFrame.occupied.has(gy * GRID_W + gx),
+        dynamic: fallbackTexture || easing || !!getDamageFlashState(entity) });
+}
+
 function build3DFrameData(flat2d = false) {
     const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = getLiveRenderView();
 
@@ -1464,6 +1553,11 @@ function build3DFrameData(flat2d = false) {
     let reactiveOffsetX = Number(audioReactiveGlobalOffsetX) || 0;
     let reactiveOffsetY = Number(audioReactiveGlobalOffsetY) || 0;
     let unitOccupiedTileKeys = new Set();
+    renderer3dStaticFrame.occupied = unitOccupiedTileKeys;
+    renderer3dStaticFrame.flat2d = !!flat2d;
+    // Settings that change cached objects (view mode, fog, level labels).
+    let view3DKey = (flat2d ? 1 : 0) | (fullVisibility ? 2 : 0) | (shouldShowUnitLevels() ? 4 : 0) | (shouldShowBuildingLevels() ? 8 : 0);
+    renderer3dStaticFrame.view = view3DKey;
     let overlapNowMs = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
     let activeOverlapFadeKeys = new Set();
     // One height transition for every overlapping structure, including mines.
@@ -1529,6 +1623,7 @@ function build3DFrameData(flat2d = false) {
         let fxLevel = fxSoundRow ? fxSoundRow[m.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
+        if (_reuseStatic3DObject(objects, m, m.gx, m.gy, audioMove, audioHeight)) continue;
         let mine2DTexture = get3DExact2DMineTexture('gold', m.gold);
         push3DRenderObject(objects, {
             modelKey: m.gold > 0 ? 'gold_mine_active' : 'gold_mine_empty',
@@ -1547,6 +1642,7 @@ function build3DFrameData(flat2d = false) {
             topTextureCanvas: mine2DTexture,
             sideTint: '#f0c83a'
         });
+        _rememberStatic3DObject(objects, m, m.gx, m.gy, audioMove, audioHeight, !mine2DTexture);
     }
 
     for (let m of astarMines) {
@@ -1558,6 +1654,7 @@ function build3DFrameData(flat2d = false) {
         let fxLevel = fxSoundRow ? fxSoundRow[m.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
+        if (_reuseStatic3DObject(objects, m, m.gx, m.gy, audioMove, audioHeight)) continue;
         let mine2DTexture = get3DExact2DMineTexture('astar', m.astar);
         push3DRenderObject(objects, {
             modelKey: m.astar > 0 ? 'astar_mine_active' : 'astar_mine_empty',
@@ -1576,6 +1673,7 @@ function build3DFrameData(flat2d = false) {
             topTextureCanvas: mine2DTexture,
             sideTint: '#d8d8e8'
         });
+        _rememberStatic3DObject(objects, m, m.gx, m.gy, audioMove, audioHeight, !mine2DTexture);
     }
 
     for (let y = bounds.minGy; y <= bounds.maxGy; y++) {
@@ -1592,6 +1690,7 @@ function build3DFrameData(flat2d = false) {
             let fxLevel = fxSoundRow ? fxSoundRow[x] || 0 : 0;
             let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
             let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
+            if (_reuseStatic3DObject(objects, cell.item, x, y, audioMove, audioHeight)) continue;
             let item2DTexture = get3DExact2DFloorTexture(cell.item, cell.owner);
             let itemStatus = item2DTexture ? null : get3DBuildingTextureStatus(cell.item);
             push3DRenderObject(objects, {
@@ -1612,6 +1711,7 @@ function build3DFrameData(flat2d = false) {
                 topTextureCanvas: item2DTexture || get3DTopTextureForFloorItem(cell.item, itemStatus),
                 sideTint: get3DDamageFlashTint(cell.item, (BASE_CARD_TYPES[cell.item.type] || {}).color || get3DRenderOwnerColor(cell.owner))
             });
+            _rememberStatic3DObject(objects, cell.item, x, y, audioMove, audioHeight, !item2DTexture);
         }
     }
 
@@ -1624,7 +1724,9 @@ function build3DFrameData(flat2d = false) {
         let fxLevel = fxSoundRow ? fxSoundRow[t.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
+        if (_reuseStatic3DObject(objects, t, t.gx, t.gy, audioMove, audioHeight)) continue;
         let tower2DTexture = get3DExact2DTexture(t);
+        let tower2DTextureFallback = renderer3dExactTextureFallback;
         let towerStatus = tower2DTexture ? null : get3DBuildingTextureStatus(t);
         push3DRenderObject(objects, {
             modelKey: `tower_${t.type || 'base'}`,
@@ -1643,6 +1745,7 @@ function build3DFrameData(flat2d = false) {
             topTextureCanvas: tower2DTexture || get3DBuildingTopTexture('tower', t.owner, { subtype: t.type, color: t.baseStats && t.baseStats.color, angle: t.angle || 0, angleKey: _quantizeTowerAngleIndex(t.angle || 0), active: t.type === 'laser' ? t.connectedLasers && t.connectedLasers.length > 0 : true, status: towerStatus, statusKey: towerStatus.keySuffix }),
             sideTint: get3DDamageFlashTint(t, (t.baseStats && t.baseStats.color) || get3DRenderOwnerColor(t.owner))
         });
+        _rememberStatic3DObject(objects, t, t.gx, t.gy, audioMove, audioHeight, !tower2DTexture || tower2DTextureFallback);
     }
 
     for (let s of collectorSpawners) {
@@ -1654,7 +1757,9 @@ function build3DFrameData(flat2d = false) {
         let fxLevel = fxSoundRow ? fxSoundRow[s.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
+        if (_reuseStatic3DObject(objects, s, s.gx, s.gy, audioMove, audioHeight)) continue;
         let spawner2DTexture = get3DExact2DTexture(s);
+        let spawner2DTextureFallback = renderer3dExactTextureFallback;
         let spawnerExtraBars = spawner2DTexture ? null : [];
         if (!spawner2DTexture && !s.underConstruction && s.spawnQueue && s.spawnQueue.length > 0 && s.spawnCooldown > 0) {
             spawnerExtraBars.push({ pct: s.spawnTimer / s.spawnCooldown, bgColor: '#333', fillColor: (s.spawnTimer / s.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
@@ -1689,6 +1794,7 @@ function build3DFrameData(flat2d = false) {
             ),
             sideTint: get3DDamageFlashTint(s, (BASE_CARD_TYPES[s.type] || {}).color || get3DRenderOwnerColor(s.owner))
         });
+        _rememberStatic3DObject(objects, s, s.gx, s.gy, audioMove, audioHeight, !spawner2DTexture || spawner2DTextureFallback);
     }
 
     for (let b of barracks) {
@@ -1700,7 +1806,9 @@ function build3DFrameData(flat2d = false) {
         let fxLevel = fxSoundRow ? fxSoundRow[b.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
+        if (_reuseStatic3DObject(objects, b, b.gx, b.gy, audioMove, audioHeight)) continue;
         let barrack2DTexture = get3DExact2DTexture(b);
+        let barrack2DTextureFallback = renderer3dExactTextureFallback;
         let barrackExtraBars = barrack2DTexture ? null : [];
         if (!barrack2DTexture && !b.underConstruction && b.spawnQueue && b.spawnQueue.length > 0 && b.spawnCooldown > 0) {
             barrackExtraBars.push({ pct: b.spawnTimer / b.spawnCooldown, bgColor: '#333', fillColor: (b.spawnTimer / b.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
@@ -1722,6 +1830,7 @@ function build3DFrameData(flat2d = false) {
             topTextureCanvas: barrack2DTexture || get3DBuildingTopTexture('barrack', b.owner, { subtype: b.unitType, color: (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color, status: barrackStatus, statusKey: barrackStatus.keySuffix }),
             sideTint: get3DDamageFlashTint(b, (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color)
         });
+        _rememberStatic3DObject(objects, b, b.gx, b.gy, audioMove, audioHeight, !barrack2DTexture || barrack2DTextureFallback);
     }
 
     for (let d of droppedItems) {
@@ -1771,16 +1880,36 @@ function build3DFrameData(flat2d = false) {
         let unitSideColor = u.unitType === 'collector'
             ? '#f0a52b'
             : ((BASE_UNIT_STATS[u.unitType] || BASE_UNIT_STATS.norm).color || null);
-        let activity = getUnit3DActivity(u);
         if (u.isSnake) {
             pushSnakeRenderObjects(objects, u, ux + reactiveOffsetX * audioMove * TILE, uy + reactiveOffsetY * audioMove * TILE, footprint);
         } else {
+            // Everything but the interpolated position, walk cycle and
+            // lighting changes only on ticks: refresh just those.
+            let cached = renderer3dUnitObjects.get(u);
+            // Tick-level data may be one tick old for half of the units (by id),
+            // which halves the rebuild on tick frames.
+            let cachedAge = cached ? gameTime - cached.tick : -1;
+            if (cached && (cachedAge === 0 || (cachedAge === 1 && ((u.id + gameTime) & 1) === 1))
+                && cached.view === view3DKey && !cached.dynamic && !getDamageFlashState(u)) {
+                let o = cached.object;
+                o.x = ux / TILE + reactiveOffsetX * audioMove;
+                o.z = uy / TILE + reactiveOffsetY * audioMove;
+                o.walkPhase = _unit3DWalkPhase(u, cached.activity);
+                _relight3DObject(o, u, cached.tint, cached.sideTint, !!objects.flat2d);
+                objects.push(o);
+                if (!flat2d) pushUnit3DActivityEffects(objects, u, cached.activity, ux / TILE, uy / TILE, footprint);
+                continue;
+            }
+            let activity = getUnit3DActivity(u);
             let unit2DTexture = get3DExact2DTexture(u, true);
+            let unitTextureFallback = renderer3dExactTextureFallback;
             let unitStatus = unit2DTexture ? null : get3DUnitTextureStatus(u);
             let facingX = Number(u.vx) || 0, facingY = Number(u.vy) || 0;
             if (activity.target && Number.isFinite(activity.target.x) && Number.isFinite(activity.target.y)) {
                 facingX = activity.target.x - u.x; facingY = activity.target.y - u.y;
             }
+            let unitTint = get3DDamageFlashTint(u, get3DRenderOwnerColor(u.owner));
+            let unitSideTint = get3DDamageFlashTint(u, unitSideColor || get3DRenderOwnerColor(u.owner));
             push3DRenderObject(objects, {
                 modelKey: `unit_${u.unitType || 'norm'}`,
                 x: ux / TILE + reactiveOffsetX * audioMove,
@@ -1792,19 +1921,19 @@ function build3DFrameData(flat2d = false) {
                 visibilitySource: u,
                 rotationY: Math.atan2(facingX, facingY || 0.0001),
                 moveAmount: activity.amount || Math.min(1, Math.hypot(u.x - u.prevX, u.y - u.prevY) / Math.max(.01, TILE * .025)),
-                walkPhase: activity.mode === 1
-                    ? Math.max(0, Math.min(1, (8 - Number(u.attackFlash || 0) + (u._historyGhost ? 0 : tickAlpha)) / 8)) * Math.PI
-                    : ((u._historyGhost ? u._historyTick : gameTime + tickAlpha)) / TICK_RATE * (activity.mode === 2 ? 8 : activity.mode === 4 ? 14 : 10) + (Number(u.id) || 0) * 2.399,
+                walkPhase: _unit3DWalkPhase(u, activity),
                 animationMode: activity.mode,
                 weaponType: getUnit3DWeaponType(u),
                 isFlying: !!u.isFlying,
                 isWorker: !!u.isWorker,
-                tint: get3DDamageFlashTint(u, get3DRenderOwnerColor(u.owner)),
+                tint: unitTint,
                 renderShape: 'cylinder',
                 topTextureKey: unit2DTexture ? unit2DTexture._renderer3DExactKey : `unit:${u.unitType}:${u.owner}:${unitStatus.keySuffix}`,
                 topTextureCanvas: unit2DTexture || get3DUnitTopTexture(u, u.owner, unitStatus),
-                sideTint: get3DDamageFlashTint(u, unitSideColor || get3DRenderOwnerColor(u.owner)),
+                sideTint: unitSideTint,
             });
+            renderer3dUnitObjects.set(u, { object: objects[objects.length - 1], tick: gameTime, view: view3DKey, activity,
+                tint: unitTint, sideTint: unitSideTint, dynamic: !unit2DTexture || unitTextureFallback || !!getDamageFlashState(u) });
             if (!flat2d) pushUnit3DActivityEffects(objects, u, activity, ux / TILE, uy / TILE, footprint);
         }
     }

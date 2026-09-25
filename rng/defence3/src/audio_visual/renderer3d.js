@@ -3051,7 +3051,14 @@
                     (isTransparent ? transparentMeshObjects : opaqueMeshObjects).push(object);
                 } else if ((object.topTextureKey && object.topTextureCanvas) || (object.sideTextureKey && object.sideTextureCanvas)) {
                     let targetGroups = isTransparent ? transparentTexturedCubeGroups : opaqueTexturedCubeGroups;
-                    let groupKey = `${object.topTextureKey || ''}|${object.sideTextureKey || ''}|${figureMeshKey || object.renderShape || 'box'}|anim:${Number(object.animationMode) || 0}`;
+                    // Scene objects are reused between frames with the same
+                    // textures and shape; only the LOD mesh key can change.
+                    let groupKey = object._r3dGroupFigure === figureMeshKey ? object._r3dGroupKey : undefined;
+                    if (groupKey === undefined) {
+                        groupKey = `${object.topTextureKey || ''}|${object.sideTextureKey || ''}|${figureMeshKey || object.renderShape || 'box'}|anim:${Number(object.animationMode) || 0}`;
+                        object._r3dGroupKey = groupKey;
+                        object._r3dGroupFigure = figureMeshKey;
+                    }
                     let group = targetGroups.get(groupKey);
                     if (!group) {
                         group = {

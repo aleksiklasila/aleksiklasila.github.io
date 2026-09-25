@@ -260,6 +260,51 @@ const SCENARIOS = {
             return acts;
         }
     },
+    // Two armies of ~740 mixed units standing still far apart, a third team's
+    // block of ~300 turrets with lava in between, barracks per team (like the
+    // 1500 pop screenshot). Nothing is ordered: an idle-army baseline.
+    armiesIdle: {
+        ticks: 200, size: 100, focus: { gx: 50, gy: 50 },
+        setup() {
+            const types = COMBAT;
+            blob(0, 22, 50, 740, types, 28); blob(1, 78, 50, 740, types, 28);
+            let k = 0;
+            for (let gy = 38; gy <= 62; gy += 1) for (let gx = 40; gx <= 60; gx += 1) {
+                if ((gx + gy) % 2) place(TOWERS[k++ % TOWERS.length], 2, gx, gy); else if (k % 3 === 0) place('lava', 2, gx, gy);
+            }
+            block(0, BARRACKS, 12, 12, 4, 3, 3); block(1, BARRACKS, 76, 12, 4, 3, 3);
+            block(0, ['house'], 12, 82, 12, 3, 1); block(1, ['house'], 76, 82, 12, 3, 1);
+        },
+        tick: () => []
+    },
+    // Same world; team 0 (most units selected) is sent across the map at t=0.
+    armiesRally: {
+        ticks: 300, size: 100, focus: { gx: 50, gy: 50 },
+        setup() { SCENARIOS.armiesIdle.setup(); selectedUnits = alive(0); },
+        tick(t) {
+            if (t !== 0) return [];
+            return [[0, { action: 'attackMove', unitIds: alive(0).map(u => u.id), targetX: 80 * TILE + 16, targetY: 80 * TILE + 16 }]];
+        }
+    },
+    // Structure-heavy, few units: ~2400 turrets, barracks and floor items of
+    // three teams with 120 units wandering between them.
+    structures: {
+        ticks: 200, size: 100, focus: { gx: 50, gy: 50 },
+        setup() {
+            const keys = TOWERS.concat(BARRACKS, FLOOR_ITEMS, ['house']);
+            let k = 0;
+            for (let gy = 4; gy < 96; gy += 2) for (let gx = 4; gx < 96; gx += 2) {
+                const owner = gx < 36 ? 0 : gx < 66 ? 1 : 2;
+                place(keys[(k++ * 7) % keys.length], owner, gx, gy);
+            }
+            this.u = blob(0, 50, 50, 60, COMBAT, 10).concat(blob(1, 50, 30, 60, COMBAT, 10));
+        },
+        tick(t) {
+            if (t % 50) return [];
+            return [0, 1].map(pid => [pid, { action: 'attackMove', unitIds: alive(pid).map(u => u.id),
+                targetX: (20 + ((t / 50 + pid) % 4) * 20) * TILE + 16, targetY: (20 + ((t / 50 + pid * 3) % 4) * 20) * TILE + 16 }]);
+        }
+    },
     // Three armies of 200 mixed units, re-issuing attack-move 4x a second.
     fight3: {
         ticks: 400, focus: { gx: 40, gy: 40 },
