@@ -822,7 +822,56 @@ function continueTicks(name, from, n, render = false) {
     }
 }
 
-window.BENCH = { SCENARIOS, run, sample, live, frames, hashes, selfTimes, prepare, continueTicks, runAll, profile, phases, suite, renderProbe, clearSuite() { localStorage.removeItem('benchSuite'); }, measureRender, place, spawnUnit, blob, block,
+// Frame cost of the current game with and without ticks between frames:
+// CPU time of renderFrame, the same with the GPU drained (1px readback),
+// and GL draw calls/texture uploads per frame. Call after prepare().
+// `wrap` names global functions (or 'r3.method') whose time per frame is
+// reported as ms (outermost calls only).
+async function flatProbe({ views = [['2d', 1], ['2d', 0.5], ['2d', 0.3]], frames = 40, focus = { gx: 50, gy: 50 }, tick = true,
+    wrap = ['build3DFrameData', 'build3DOverlayData', 'get3DExact2DTexture', 'updateHUD', 'updateInfoPanel', 'drawMinimap', 'drawInteractionOverlay', 'r3.render', 'r3.drawFlatBatch', 'r3.drawFlatSprites', 'r3.drawGroundOverlays'] } = {}) {
+    const r3 = ensure3DRendererInitialized(), gl = r3 && r3.gl;
+    const counts = {}, orig = [], times = {}, unwrap = [];
+    for (const n of wrap) {
+        const [obj, key] = n.startsWith('r3.') ? [r3, n.slice(3)] : [window, n];
+        const f = obj[key]; if (typeof f !== 'function') continue;
+        let depth = 0;
+        obj[key] = function (...a) { const t = performance.now(); depth++; try { return f.apply(this, a); } finally { if (--depth === 0) times[n] = (times[n] || 0) + performance.now() - t; } };
+        unwrap.push([obj, key, f]);
+    }
+    for (const n of ['drawArraysInstanced', 'drawElementsInstanced', 'texImage2D', 'texSubImage2D', 'texImage3D', 'texSubImage3D', 'texStorage3D', 'generateMipmap', 'bufferSubData']) {
+        const f = gl[n]; if (!f) continue; orig.push([n, f]);
+        gl[n] = function (...a) { counts[n] = (counts[n] || 0) + 1; return f.apply(this, a); };
+    }
+    const px = new Uint8Array(4), out = {};
+    for (const [mode, zoom] of views) {
+        setRenderDimensionMode(mode); camera.zoom = zoom;
+        camera.x = focus.gx * TILE - viewW / zoom / 2; camera.y = focus.gy * TILE - viewH / zoom / 2;
+        const step = () => { if (tick) { gameOver = false; refill(); gameTick(); } };
+        for (let i = 0; i < 10; i++) { step(); renderFrame(performance.now()); }
+        for (const k in counts) delete counts[k];
+        for (const k in times) delete times[k];
+        const cpu = [], synced = [];
+        for (let i = 0; i < frames; i++) {
+            step();
+            gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+            const a = performance.now();
+            renderFrame(performance.now());
+            const b = performance.now();
+            gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+            cpu.push(b - a); synced.push(performance.now() - a);
+        }
+        const o = { cpu: stat(cpu).mean, synced: stat(synced).mean, p95: stat(synced).p95 };
+        for (const k in counts) o[k] = +(counts[k] / frames).toFixed(1);
+        for (const k in times) o['ms:' + k] = +(times[k] / frames).toFixed(2);
+        out[mode + '@' + zoom] = o;
+        await sleep(0);
+    }
+    for (const [n, f] of orig) gl[n] = f;
+    for (const [obj, key, f] of unwrap) obj[key] = f;
+    return out;
+}
+
+window.BENCH = { SCENARIOS, run, sample, live, frames, hashes, selfTimes, prepare, continueTicks, runAll, profile, phases, suite, renderProbe, flatProbe, clearSuite() { localStorage.removeItem('benchSuite'); }, measureRender, place, spawnUnit, blob, block,
     reset() { sessionStorage.removeItem('benchResults'); } };
 return 'BENCH ready';
 })();
