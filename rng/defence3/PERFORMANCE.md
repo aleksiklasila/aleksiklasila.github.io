@@ -182,3 +182,57 @@ are indicative; the draw-call and texture-upload reductions are exact counts.
 2D stays ~2–3 ms. The remaining 3D gap in fights is mostly per-tick unit
 panel rebuilds (attack flashes change every attacking unit's panel each tick)
 and per-object shadow/instance work in `render`.
+
+# Simulation: one hidden class per unit
+
+With ~3000 units the simulation, not rendering, set the frame rate in both
+views (profiles: `gameTick` ~75–85% of a frame).
+
+## Finding
+
+Units received about 80 fields on first use (worker state, collector/healer/
+builder memory, astar budget, pending paths, damage flash...), in orders that
+depend on unit type and history. After 160 benchmark ticks live units had
+**16–77 distinct property layouts**, so V8 treated every unit field read in the
+tick loops (`Unit.update`, collision, spatial buckets, visibility, targeting)
+as megamorphic. That cost was spread over every hot function rather than
+showing as one hotspot.
+
+## Changes
+
+- The `Unit` constructor declares those fields (as `undefined`, i.e. unchanged
+  behavior) in one fixed order: every unit now has one layout.
+  `tests/unit-hidden-class.test.cjs` fails if a new lazily set field splits it
+  again; the benchmark reports `unitShapes`.
+- The deterministic update orders (units and each building list) reuse the
+  sorted order while the list and its sort keys are unchanged; the seeded
+  shuffle still runs every tick. The deferred-path pass shares it.
+- Area buckets count members per owner in an array instead of a `Map` (read
+  for each area in range by every moving unit's drive-by attack check).
+- Salvager search builds its spawner set only when a marked cell item is found.
+
+Snapshots drop `undefined` fields (JSON) and restore into a new `Unit`, and
+lockstep hashes use explicit fields, so neither changes.
+
+## Measured results
+
+`node tests/large-battle.bench.cjs --compare` / `--compare-extra`, baseline
+`578a714`, AMD Ryzen 7 4800H, Node v22.20.0; mean ms per tick of the 120
+measured ticks, averaged over the paired runs. Every pair's gameplay digest
+and lockstep hash are identical.
+
+| Scenario | Before | After | Before / after | p95 before → after |
+|---|---:|---:|---:|---:|
+| Idle | 28.53 | 18.48 | 1.54× | 36.8 → 24.3 |
+| Group movement | 33.74 | 21.49 | 1.57× | 46.0 → 32.2 |
+| Group attack-move | 38.16 | 18.87 | 2.02× | 48.9 → 27.2 |
+| Working | 41.64 | 27.17 | 1.53× | 61.5 → 38.8 |
+| Production + rally | 73.06 | 37.41 | 1.95× | 97.2 → 51.2 |
+| Crowded armies | 57.50 | 31.26 | 1.84× | 74.3 → 42.0 |
+| Siege | 44.95 | 28.19 | 1.59× | 54.7 → 37.6 |
+| Attack-move, multiplayer branch | 38.41 | 22.98 | 1.67× | 51.9 → 33.7 |
+| Rally, multiplayer branch | 71.82 | 42.22 | 1.70× | 93.0 → 63.3 |
+
+Remaining large costs: per-player visibility (~15%), the unit collision
+loop, worker target searches that scan every building (large in these
+1000-building fixtures), and path following.

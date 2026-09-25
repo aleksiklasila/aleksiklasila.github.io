@@ -310,6 +310,42 @@ class Unit {
         this.vx = 0; this.vy = 0;
         this.workerTransferCooldown = 0;
 
+        // Fields that are otherwise added on first use (workers, pathing,
+        // astar budget, damage flash...). Declaring every one here, in one
+        // order, gives all units one hidden class: property reads in the
+        // per-unit tick loops stay monomorphic instead of megamorphic.
+        // Values stay undefined, as if the field had never been set.
+        this._effectiveStatsRecalcCounter = undefined; this._lastAppliedEffectiveLevel = undefined; this._thingStatsRecalcCounter = undefined;
+        this.workerState = undefined; this.workerType = undefined; this.carryingValue = undefined; this.workerTarget = undefined;
+        this.workerTargetType = undefined; this._workerReservedTileIndex = undefined; this._resourceCollectorMemory = undefined;
+        this._collectorPinnedTarget = undefined; this._collectorPinnedTargetType = undefined; this._collectorLastGatherX = undefined;
+        this._collectorLastGatherY = undefined; this._collectorLastGatherGx = undefined; this._collectorLastGatherGy = undefined;
+        this._collectorLastGatherType = undefined; this._collectorNextSpawner = undefined; this._collectorLastDropoffSpawner = undefined;
+        this._lastMineTarget = undefined; this._astarLastGatherX = undefined; this._astarLastGatherY = undefined;
+        this._astarLastGatherGx = undefined; this._astarLastGatherGy = undefined; this._astarPinnedTarget = undefined;
+        this._astarPinnedTargetType = undefined; this._astarNextSpawner = undefined; this._astarLastMineTarget = undefined;
+        this._astarLastMineTargetType = undefined; this._lastIdleStateTime = undefined; this._workerNextIdleRetargetTick = undefined;
+        this.builderHasMaterial = undefined; this._builderLastWatchX = undefined; this._builderLastWatchY = undefined;
+        this._builderLastMoveTick = undefined; this._builderNextRecheckTick = undefined; this.healerHasMaterial = undefined;
+        this._healerQueueCommitTarget = undefined; this._healerQueueCommitRequired = undefined; this._healerQueueCommitMaxPaid = undefined;
+        this.researcherHasMaterial = undefined; this._workerLastPathX = undefined; this._workerLastPathY = undefined;
+        this._workerPathStallTicks = undefined; this._workerLastPathKey = undefined; this._workerLastPathTick = undefined;
+        this._astarLastChargedTick = undefined; this._astarLastChargedFromKey = undefined; this._astarLastChargedToKey = undefined;
+        this._attackMoveGx = undefined; this._attackMoveGy = undefined; this.pathIsFallbackAstar = undefined;
+        this._pendingPathTarget = undefined; this._astarBudgetBlockedUntil = undefined; this._astarBudgetRetryTick = undefined;
+        this._manualMoveIssuedTick = undefined; this._builderLastWorkX = undefined; this._builderLastWorkY = undefined;
+        this._builderLastWorkGx = undefined; this._builderLastWorkGy = undefined; this._builderSpawnerTarget = undefined;
+        this._healerPinnedQueueTarget = undefined; this._healerLastWorkX = undefined; this._healerLastWorkY = undefined;
+        this._healerLastWorkGx = undefined; this._healerLastWorkGy = undefined; this._healerSpawnerTarget = undefined;
+        this._healerQueueTripCost = undefined; this._researchSpawnerTarget = undefined; this._researcherTripWork = undefined;
+        this._researcherTripCost = undefined; this._researcherMaterialReadyTick = undefined; this._damageFlashStart = undefined;
+        this._damageFlashUntil = undefined; this._damageFlashStrength = undefined; this._damageFlashColor = undefined;
+        this._energyBlockedUntil = undefined; this._nextScoutRetargetTick = undefined; this._scoutTarget = undefined;
+        this._levelTextLabel = undefined;
+        this._collectorLastMoveTick = undefined; this._collectorNextRecheckTick = undefined; this._healerLastMoveTick = undefined;
+        this._healerNextRecheckTick = undefined; this._researchLastMoveTick = undefined; this._researchNextRecheckTick = undefined;
+        this.holdPosition = undefined; this._ambientSoundTicks = undefined;
+
         this._spatialKey = undefined;
         applyUnitLevelScaling(this, 1);
         this.energy = this.preComputedEffective ? this.preComputedEffective.maxEnergy : this.energy;
