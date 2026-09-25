@@ -424,6 +424,7 @@ function createEditableRuntimeConfigSnapshot() {
             TICK_RATE,
             LOCKSTEP_PIPELINE_MIN,
             THING_STATS_RECALC_INTERVAL_SECONDS,
+            LOCKSTEP_STRICT_DEBUG_MODE: !!lockstepStrictDebugMode,
             UNIT_EFFECTIVE_STATS_RECALC_TICKS,
             UNIT_COLLISION_RECALC_TICKS,
             ASTAR_MAX_ITERS_LIMIT,
@@ -505,6 +506,8 @@ function syncMainMenuFromRuntimeConfig() {
     setValue('cfg-tick-rate', TICK_RATE);
     setValue('cfg-pipeline-delay', LOCKSTEP_PIPELINE_MIN);
     setValue('cfg-thing-stats-seconds', THING_STATS_RECALC_INTERVAL_SECONDS);
+    let exactLockstepEl = document.getElementById('cfg-exact-lockstep');
+    if (exactLockstepEl) exactLockstepEl.checked = !!lockstepStrictDebugMode;
     setValue('cfg-unit-eff-stats-ticks', UNIT_EFFECTIVE_STATS_RECALC_TICKS);
     setValue('cfg-unit-collision-ticks', UNIT_COLLISION_RECALC_TICKS);
     setValue('cfg-astar-iter-budget-per-player', ASTAR_ITER_BUDGET_PER_PLAYER_TICK);
@@ -556,6 +559,9 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     applyTimingConfig(nextTickRate, nextPipelineDelay);
     if (Number.isFinite(Number(cfg.THING_STATS_RECALC_INTERVAL_SECONDS))) {
         THING_STATS_RECALC_INTERVAL_SECONDS = Math.max(0.05, Math.min(600, Number(cfg.THING_STATS_RECALC_INTERVAL_SECONDS)));
+    }
+    if (cfg.LOCKSTEP_STRICT_DEBUG_MODE !== undefined) {
+        lockstepStrictDebugMode = !!cfg.LOCKSTEP_STRICT_DEBUG_MODE;
     }
     if (Number.isFinite(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))) {
         UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
@@ -729,6 +735,7 @@ function createEditableRuntimeConfigSnapshotFromMainMenu() {
     cfg.TICK_RATE = Math.max(5, Math.floor(getNumber('cfg-tick-rate', cfg.TICK_RATE)));
     cfg.LOCKSTEP_PIPELINE_MIN = Math.max(0, Math.floor(getNumber('cfg-pipeline-delay', cfg.LOCKSTEP_PIPELINE_MIN)));
     cfg.THING_STATS_RECALC_INTERVAL_SECONDS = Math.max(0.05, Math.min(600, getNumber('cfg-thing-stats-seconds', cfg.THING_STATS_RECALC_INTERVAL_SECONDS)));
+    cfg.LOCKSTEP_STRICT_DEBUG_MODE = !!((document.getElementById('cfg-exact-lockstep') || {}).checked);
     cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-eff-stats-ticks', cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
     cfg.UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-collision-ticks', cfg.UNIT_COLLISION_RECALC_TICKS))));
     cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(getNumber('cfg-astar-iter-budget-per-player', cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))));
@@ -767,6 +774,7 @@ function applyMainMenuControlsToRuntimeState() {
     ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(Number(cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK) || ASTAR_ITER_BUDGET_PER_PLAYER_TICK)));
     WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(Number(cfg.WORKER_AI_TICK_DELAY) || WORKER_AI_TICK_DELAY)));
     applyTimingConfig(cfg.TICK_RATE, cfg.LOCKSTEP_PIPELINE_MIN);
+    lockstepStrictDebugMode = !!cfg.LOCKSTEP_STRICT_DEBUG_MODE;
 
     let gameModeEl = document.getElementById('cfg-gamemode');
     if (gameModeEl) gameMode = String(gameModeEl.value || gameMode || 'destroy');
@@ -774,17 +782,19 @@ function applyMainMenuControlsToRuntimeState() {
     if (fullVisEl) { fullVisibility = fullVisEl.value === 'full'; teamVisibilityHistory = fullVisEl.value === 'history'; }
 }
 
-function createMainMenuSettingsSnapshot() {
-    let numberIds = [
-        'cfg-tick-rate', 'cfg-pipeline-delay', 'cfg-mapsize', 'cfg-max-pop', 'cfg-starting-energy', 'cfg-starting-astar',
-        'cfg-max-thing-level', 'cfg-gold-count', 'cfg-gold-min', 'cfg-gold-max', 'cfg-astar-mine-count', 'cfg-astar-mine-min', 'cfg-astar-mine-max',
-        'cfg-max-research-level', 'cfg-thing-stats-seconds', 'cfg-unit-eff-stats-ticks', 'cfg-unit-collision-ticks', 'cfg-astar-iter-budget-per-player', 'cfg-worker-ai-tick-delay'
-    ];
-    let selectIds = ['cfg-gamemode', 'cfg-map-type', 'cfg-full-vis'];
-    let checkboxIds = [];
+// Every lobby, optimization and display setting control. Map size and map
+// type are selects, so values are stored by control kind, not by a fixed
+// list of number inputs.
+const MAIN_MENU_SETTING_CONTROL_SELECTOR = '[id^="cfg-"], [id^="setting-"], #btn-level-visibility, #btn-render-range, #jukebox-music, #jukebox-effects';
 
+function _getMainMenuSettingControls() {
+    return Array.from(document.querySelectorAll(MAIN_MENU_SETTING_CONTROL_SELECTOR))
+        .filter(el => /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) && el.type !== 'file' && el.type !== 'button');
+}
+
+function createMainMenuSettingsSnapshot() {
     let out = {
-        version: 2,
+        version: 3,
         createdAt: Date.now(),
         lobby: {
             numbers: {},
@@ -794,20 +804,16 @@ function createMainMenuSettingsSnapshot() {
         startingResources: cloneStartingResourcesConfig(),
         editableConfig: encodeFunctionsForTransport(createEditableRuntimeConfigSnapshotFromMainMenu())
     };
-
-    for (let id of numberIds) {
-        let el = document.getElementById(id);
-        if (el) out.lobby.numbers[id] = Number(el.value);
+    for (let el of _getMainMenuSettingControls()) {
+        if (el.type === 'checkbox') out.lobby.checks[el.id] = !!el.checked;
+        else if (el.type === 'number' || el.type === 'range') out.lobby.numbers[el.id] = Number(el.value);
+        else out.lobby.selects[el.id] = String(el.value);
     }
-    for (let id of selectIds) {
-        let el = document.getElementById(id);
-        if (el) out.lobby.selects[id] = String(el.value);
-    }
-    for (let id of checkboxIds) {
-        let el = document.getElementById(id);
-        if (el) out.lobby.checks[id] = !!el.checked;
-    }
-
+    // Display settings that have no control (audio, outlines, placement mode).
+    try {
+        let ui = JSON.parse(localStorage.getItem(LS_UI_SETTINGS_KEY) || 'null');
+        if (ui && typeof ui === 'object') out.ui = ui;
+    } catch { }
     return out;
 }
 
@@ -818,20 +824,31 @@ function applyMainMenuSettingsSnapshot(rawData) {
     let selects = (lobby.selects && typeof lobby.selects === 'object') ? lobby.selects : {};
     let checks = (lobby.checks && typeof lobby.checks === 'object') ? lobby.checks : {};
 
-    for (let id in numbers) {
-        let el = document.getElementById(id);
-        if (!el) continue;
-        if (el.type === 'number') el.value = String(numbers[id]);
+    if (data.ui && typeof data.ui === 'object') {
+        try {
+            localStorage.setItem(LS_UI_SETTINGS_KEY, JSON.stringify(data.ui));
+            loadUiSettingsFromStorage();
+        } catch { }
     }
-    for (let id in selects) {
+    let changed = [];
+    let setControl = (id, value, isCheck) => {
         let el = document.getElementById(id);
-        if (!el) continue;
-        el.value = String(selects[id]);
-    }
-    for (let id in checks) {
-        let el = document.getElementById(id);
-        if (!el) continue;
-        el.checked = !!checks[id];
+        if (!el || !el.matches(MAIN_MENU_SETTING_CONTROL_SELECTOR) || el.type === 'file') return;
+        if (isCheck || el.type === 'checkbox') el.checked = !!value;
+        else if (el.tagName === 'SELECT' && ![...el.options].some(o => o.value === String(value))) return;
+        else el.value = String(value);
+        changed.push(el);
+    };
+    // Older exports stored the map size select under numbers; accept any kind.
+    for (let id in numbers) setControl(id, numbers[id], false);
+    for (let id in selects) setControl(id, selects[id], false);
+    for (let id in checks) setControl(id, checks[id], true);
+    // Display controls apply themselves through their change listeners; the
+    // game settings (cfg-*) are applied below in one pass.
+    for (let el of changed) {
+        if (el.id.startsWith('cfg-')) continue;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
     }
 
     let importedMaxThingLevel = Math.max(1, Math.floor(Number((document.getElementById('cfg-max-thing-level') || {}).value) || MAX_THING_LEVEL));
@@ -1591,19 +1608,6 @@ function setResearchStatMatrixPopupOpen(open) {
     return wasOpen !== open;
 }
 
-function makeDefaultStartingResourcesConfig() {
-    return {
-        researchLevels: {},
-        spawnCounts: {
-            'building:builder_spawner': { 1: 1 },
-            'building:healer_spawner': { 1: 1 },
-            'building:house': { 6: 1 },
-            'unit:builder_unit': { 1: 1 },
-            'unit:healer_unit': { 1: 1 },
-            'unit:king': { 1: 1 }
-        }
-    };
-}
 
 function cloneStartingResourcesConfig() {
     return {
@@ -1612,118 +1616,17 @@ function cloneStartingResourcesConfig() {
     };
 }
 
-function parseStartingThingId(id) {
-    let text = String(id || '');
-    let sep = text.indexOf(':');
-    if (sep < 1) return null;
-    let kind = text.slice(0, sep);
-    let key = text.slice(sep + 1);
-    if ((kind !== 'unit' && kind !== 'building') || !key) return null;
-    return { kind, key };
-}
 
-function getStartingThingId(kind, key) {
-    return `${kind}:${key}`;
-}
 
-function resetStartingResourcesConfig() {
-    startingResourcesConfig = normalizeStartingResourcesConfig(makeDefaultStartingResourcesConfig());
-}
 
-function ensureStartingResourcesSelectedThing() {
-    if (!ensureResearchThingsReady()) {
-        startingResourcesSelectedThingId = '';
-        return;
-    }
-    let parsed = parseStartingThingId(startingResourcesSelectedThingId);
-    if (parsed && getResearchThing(parsed.kind, parsed.key)) return;
-    let first = RESEARCH_THINGS[0];
-    if (!first) {
-        startingResourcesSelectedThingId = '';
-        return;
-    }
-    startingResourcesSelectedThingId = getStartingThingId(first.kind, first.key);
-}
 
-function setStartingResearchLevel(thingId, statKey, value) {
-    let lvl = Math.max(0, Math.min(MAX_RESEARCH_LEVEL, Math.floor(Number(value) || 0)));
-    if (!startingResourcesConfig.researchLevels[thingId]) startingResourcesConfig.researchLevels[thingId] = {};
-    if (lvl <= 0) {
-        delete startingResourcesConfig.researchLevels[thingId][statKey];
-        if (Object.keys(startingResourcesConfig.researchLevels[thingId]).length <= 0) {
-            delete startingResourcesConfig.researchLevels[thingId];
-        }
-        return;
-    }
-    startingResourcesConfig.researchLevels[thingId][statKey] = lvl;
-}
 
-function setStartingSpawnCount(thingId, level, value) {
-    let lvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(level) || 1)));
-    let count = Math.max(0, Math.min(1000, Math.floor(Number(value) || 0)));
-    if (!startingResourcesConfig.spawnCounts[thingId]) startingResourcesConfig.spawnCounts[thingId] = {};
-    if (count <= 0) {
-        delete startingResourcesConfig.spawnCounts[thingId][lvl];
-        if (Object.keys(startingResourcesConfig.spawnCounts[thingId]).length <= 0) {
-            delete startingResourcesConfig.spawnCounts[thingId];
-        }
-        return;
-    }
-    startingResourcesConfig.spawnCounts[thingId][lvl] = count;
-}
 
-function getStartingResourcesMaxPopulation() {
-    let el = document.getElementById('cfg-max-pop');
-    if (el) return Math.max(1, Math.floor(Number(el.value) || 200));
-    return Math.max(1, Math.floor(Number(CONFIG_MAX_POP) || 200));
-}
 
-function getStartingResourcesTotalSpawnCount() {
-    let total = 0;
-    let map = (startingResourcesConfig && startingResourcesConfig.spawnCounts) || {};
-    for (let thingId in map) {
-        let parsed = parseStartingThingId(thingId);
-        if (!parsed || parsed.kind !== 'unit') continue;
-        let lvlMap = map[thingId] || {};
-        for (let lvl in lvlMap) total += Math.max(0, Math.floor(Number(lvlMap[lvl]) || 0));
-    }
-    return total;
-}
 
-function getStartingSpawnCount(thingId, level) {
-    let lvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(level) || 1)));
-    let map = (startingResourcesConfig.spawnCounts && startingResourcesConfig.spawnCounts[thingId]) || {};
-    return Math.max(0, Math.floor(Number(map[lvl]) || 0));
-}
 
-function getStartingSpawnMaxForRow(thingId, level) {
-    let parsed = parseStartingThingId(thingId);
-    if (!parsed || parsed.kind !== 'unit') return 1000;
-    let maxPop = getStartingResourcesMaxPopulation();
-    let current = getStartingSpawnCount(thingId, level);
-    let total = getStartingResourcesTotalSpawnCount();
-    return Math.max(0, maxPop - Math.max(0, total - current));
-}
 
-function adjustStartingResearchLevelDelta(thingId, statKey, delta) {
-    let parsed = parseStartingThingId(thingId);
-    if (!parsed) return;
-    if (!getResearchStatEntry(parsed.kind, parsed.key, statKey)) return;
-    let cur = 0;
-    if (startingResourcesConfig.researchLevels[thingId] && Number.isFinite(startingResourcesConfig.researchLevels[thingId][statKey])) {
-        cur = Math.floor(startingResourcesConfig.researchLevels[thingId][statKey]);
-    }
-    let next = Math.max(0, Math.min(MAX_RESEARCH_LEVEL, cur + Math.floor(Number(delta) || 0)));
-    setStartingResearchLevel(thingId, statKey, next);
-}
 
-function adjustStartingSpawnCountDelta(thingId, level, delta) {
-    let lvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(level) || 1)));
-    let cur = getStartingSpawnCount(thingId, lvl);
-    let maxRow = getStartingSpawnMaxForRow(thingId, lvl);
-    let next = Math.max(0, Math.min(maxRow, cur + Math.floor(Number(delta) || 0)));
-    setStartingSpawnCount(thingId, lvl, next);
-}
 
 function renderStartingResourcesThingRowsForPanel() {
     ensureStartingResourcesSelectedThing();
@@ -1953,15 +1856,6 @@ function stringifyJsLike(value, depth = 0) {
     return 'null';
 }
 
-function parseConfigEditorObject(text) {
-    let src = String(text || '').trim();
-    if (!src) throw new Error('Config editor is empty.');
-    let obj = (new Function('"use strict"; return (' + src + ');'))();
-    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
-        throw new Error('Config must evaluate to an object literal.');
-    }
-    return obj;
-}
 
 function encodeFunctionsForTransport(value) {
     if (typeof value === 'number' && !Number.isFinite(value)) {
@@ -2047,501 +1941,21 @@ function makeRuntimeUnitStatsTableFromEditor(rawTable) {
     return out;
 }
 
-function createEditableRuntimeConfigSnapshot() {
-    return {
-        version: 1,
-        config: {
-            MINIMAP_SIZE,
-            TILE,
-            GRID_W,
-            GRID_H,
-            GOLD_MINE_COUNT,
-            GOLD_MINE_MIN,
-            GOLD_MINE_MAX,
-            GOLD_MINE_AREA,
-            ASTAR_MINE_COUNT,
-            ASTAR_MINE_MIN,
-            ASTAR_MINE_MAX,
-            STARTING_MONEY,
-            STARTING_ASTAR,
-            MAP_TYPE,
-            TYPE_FLOOR,
-            TYPE_WALL,
-            CONFIG_MAX_POP,
-            TICK_RATE,
-            LOCKSTEP_PIPELINE_MIN,
-            LOCKSTEP_STRICT_DEBUG_MODE: !!lockstepStrictDebugMode,
-            UNIT_EFFECTIVE_STATS_RECALC_TICKS,
-            UNIT_COLLISION_RECALC_TICKS,
-            ASTAR_MAX_ITERS_LIMIT,
-            ASTAR_ITER_BUDGET_PER_PLAYER_TICK,
-            WORKER_AI_TICK_DELAY,
-        },
-        progression: {
-            RESEARCH_COST_EXP,
-            RESEARCH_WORK_EXP,
-            RESEARCH_WORK_BASE,
-            RESEARCH_BONUS_EXP_UNITS,
-            RESEARCH_BONUS_EXP_OTHER,
-            RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP,
-            MAX_THING_LEVEL,
-            MAX_RESEARCH_LEVEL,
-            BUILDING_ENERGY_LEVEL_EXP: BUILDING_ENERGY_LEVEL_EXP,
-            BUILDING_LEVEL_MULT_EXP,
-            BUILDING_DAMAGE_LEVEL_EXP,
-            BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL,
-            BUILDING_LINEAR_VISION_BONUS_PER_LEVEL,
-            SAND_GUN_CD_LEVEL_EXP,
-            RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP,
-            RESEARCH_BUILDING_EFFICIENCY_CAP,
-            UNIT_COLLECTOR_GATHER_LEVEL_EXP,
-            UNIT_WORKER_SPECIALIST_BASE_RATE,
-            UNIT_WORKER_SPECIALIST_LEVEL_EXP,
-            BUILDING_UPKEEP_EXP,
-            UNIT_UPKEEP_EXP,
-        },
-        tables: {
-            BASE_CARD_TYPES: makeEditorCardTypesTable(),
-            BASE_CARD_DEFAULT_ENERGY: cloneJsValue(BASE_CARD_DEFAULT_ENERGY),
-            DESCRIPTIONS: cloneJsValue(DESCRIPTIONS),
-            BUILD_CATEGORIES: cloneJsValue(BUILD_CATEGORIES),
-            BARRACK_SPAWN_CONFIG: cloneJsValue(BARRACK_SPAWN_CONFIG),
-            BASE_UNIT_STATS: makeEditorUnitStatsTable(),
-            UNIT_LEVEL_SCALING: cloneJsValue(UNIT_LEVEL_SCALING),
-            BUILDING_FORMULA_CONFIG: cloneJsValue(BUILDING_FORMULA_CONFIG),
-            UNIT_FORMULA_CONFIG: cloneJsValue(UNIT_FORMULA_CONFIG),
-            RESEARCH_FORMULA_CONFIG: cloneJsValue(RESEARCH_FORMULA_CONFIG),
-            PRECOMPUTED_SOFT_CAP_MAP: cloneJsValue(PRECOMPUTED_SOFT_CAP_MAP),
-            RESEARCH_STAT_LABELS: cloneJsValue(RESEARCH_STAT_LABELS),
-            RESEARCHABLE_UNIT_STATS: cloneJsValue(RESEARCHABLE_UNIT_STATS),
-            PRECOMPUTED_UNIT_STAT_KEYS: cloneJsValue(PRECOMPUTED_UNIT_STAT_KEYS),
-            PRECOMPUTED_BUILDING_STAT_KEYS: cloneJsValue(PRECOMPUTED_BUILDING_STAT_KEYS),
-            RESEARCH_DECREASE_STATS: cloneJsValue(RESEARCH_DECREASE_STATS),
-        }
-    };
-}
 
-function serializeEditableRuntimeConfigForTransport() {
-    return encodeFunctionsForTransport(createEditableRuntimeConfigSnapshot());
-}
 
-function ensureDefaultEditableRuntimeConfigSnapshot() {
-    ensureMainMenuPrecomputedStateReady();
-    if (defaultEditableRuntimeConfigSnapshot) return;
-    defaultEditableRuntimeConfigSnapshot = cloneJsValue(createEditableRuntimeConfigSnapshot());
-}
 
-function syncMainMenuFromRuntimeConfig() {
-    let setValue = (id, value) => {
-        let el = document.getElementById(id);
-        if (!el) return;
-        el.value = String(value);
-    };
-    let setChecked = (id, value) => {
-        let el = document.getElementById(id);
-        if (!el) return;
-        el.checked = !!value;
-    };
 
-    setValue('cfg-mapsize', GRID_W);
-    setValue('cfg-gold-count', GOLD_MINE_COUNT);
-    setValue('cfg-gold-min', GOLD_MINE_MIN);
-    setValue('cfg-gold-max', GOLD_MINE_MAX);
-    setValue('cfg-astar-mine-count', ASTAR_MINE_COUNT);
-    setValue('cfg-astar-mine-min', ASTAR_MINE_MIN);
-    setValue('cfg-astar-mine-max', ASTAR_MINE_MAX);
-    setValue('cfg-max-pop', CONFIG_MAX_POP);
-    setValue('cfg-starting-energy', STARTING_MONEY);
-    setValue('cfg-starting-astar', STARTING_ASTAR);
-    setValue('cfg-map-type', MAP_TYPE);
-    setValue('cfg-tick-rate', TICK_RATE);
-    setValue('cfg-pipeline-delay', LOCKSTEP_PIPELINE_MIN);
-    setChecked('cfg-exact-lockstep', lockstepStrictDebugMode);
-    setValue('cfg-unit-eff-stats-ticks', UNIT_EFFECTIVE_STATS_RECALC_TICKS);
-    setValue('cfg-unit-collision-ticks', UNIT_COLLISION_RECALC_TICKS);
-    setValue('cfg-astar-iter-budget-per-player', ASTAR_ITER_BUDGET_PER_PLAYER_TICK);
-    setValue('cfg-worker-ai-tick-delay', WORKER_AI_TICK_DELAY);
-    setValue('cfg-max-thing-level', MAX_THING_LEVEL);
-    setValue('cfg-max-research-level', MAX_RESEARCH_LEVEL);
-}
 
-function applyEditableRuntimeConfigObject(rawConfig, options = null) {
-    let opts = options && typeof options === 'object' ? options : {};
-    let cfgObject = rawConfig;
-    if (opts.fromTransport) cfgObject = decodeFunctionsFromTransport(cfgObject);
 
-    if (!cfgObject || typeof cfgObject !== 'object' || Array.isArray(cfgObject)) {
-        throw new Error('Runtime config must be an object.');
-    }
 
-    let cfg = (cfgObject.config && typeof cfgObject.config === 'object') ? cfgObject.config : {};
-    let prog = (cfgObject.progression && typeof cfgObject.progression === 'object') ? cfgObject.progression : {};
-    let tables = (cfgObject.tables && typeof cfgObject.tables === 'object') ? cfgObject.tables : {};
 
-    if (Number.isFinite(Number(cfg.MINIMAP_SIZE))) MINIMAP_SIZE = Math.max(32, Math.floor(Number(cfg.MINIMAP_SIZE)));
-    if (Number.isFinite(Number(cfg.TILE))) TILE = Math.max(8, Math.floor(Number(cfg.TILE)));
-    if (Number.isFinite(Number(cfg.TYPE_FLOOR))) TYPE_FLOOR = Math.floor(Number(cfg.TYPE_FLOOR));
-    if (Number.isFinite(Number(cfg.TYPE_WALL))) TYPE_WALL = Math.floor(Number(cfg.TYPE_WALL));
 
-    let nextGridW = Number(cfg.GRID_W);
-    let nextGridH = Number(cfg.GRID_H);
-    if (Number.isFinite(nextGridW)) GRID_W = Math.max(8, Math.floor(nextGridW));
-    if (Number.isFinite(nextGridH)) GRID_H = Math.max(8, Math.floor(nextGridH));
-    else GRID_H = GRID_W;
-    WORLD_W = GRID_W * TILE;
-    WORLD_H = GRID_H * TILE;
 
-    if (Number.isFinite(Number(cfg.GOLD_MINE_COUNT))) GOLD_MINE_COUNT = Math.max(0, Math.floor(Number(cfg.GOLD_MINE_COUNT)));
-    if (Number.isFinite(Number(cfg.GOLD_MINE_MIN))) GOLD_MINE_MIN = Math.max(0, Math.floor(Number(cfg.GOLD_MINE_MIN)));
-    if (Number.isFinite(Number(cfg.GOLD_MINE_MAX))) GOLD_MINE_MAX = Math.max(0, Math.floor(Number(cfg.GOLD_MINE_MAX)));
-    if (Number.isFinite(Number(cfg.GOLD_MINE_AREA))) GOLD_MINE_AREA = Math.max(1, Math.floor(Number(cfg.GOLD_MINE_AREA)));
-    if (Number.isFinite(Number(cfg.ASTAR_MINE_COUNT))) ASTAR_MINE_COUNT = Math.max(0, Math.floor(Number(cfg.ASTAR_MINE_COUNT)));
-    if (Number.isFinite(Number(cfg.ASTAR_MINE_MIN))) ASTAR_MINE_MIN = Math.max(0, Math.floor(Number(cfg.ASTAR_MINE_MIN)));
-    if (Number.isFinite(Number(cfg.ASTAR_MINE_MAX))) ASTAR_MINE_MAX = Math.max(0, Math.floor(Number(cfg.ASTAR_MINE_MAX)));
-    if (Number.isFinite(Number(cfg.STARTING_MONEY))) STARTING_MONEY = Math.max(0, Math.floor(Number(cfg.STARTING_MONEY)));
-    if (Number.isFinite(Number(cfg.STARTING_ASTAR))) STARTING_ASTAR = Math.max(0, Number(cfg.STARTING_ASTAR));
-    if (typeof cfg.MAP_TYPE === 'string' && cfg.MAP_TYPE.trim()) MAP_TYPE = cfg.MAP_TYPE.trim();
-    if (Number.isFinite(Number(cfg.CONFIG_MAX_POP))) CONFIG_MAX_POP = Math.max(1, Math.floor(Number(cfg.CONFIG_MAX_POP)));
 
-    let nextTickRate = Number(cfg.TICK_RATE);
-    let nextPipelineDelay = Number(cfg.LOCKSTEP_PIPELINE_MIN);
-    applyTimingConfig(nextTickRate, nextPipelineDelay);
-    if (cfg.LOCKSTEP_STRICT_DEBUG_MODE !== undefined) {
-        lockstepStrictDebugMode = !!cfg.LOCKSTEP_STRICT_DEBUG_MODE;
-    }
-    if (Number.isFinite(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))) {
-        UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
-    }
-    if (Number.isFinite(Number(cfg.UNIT_COLLISION_RECALC_TICKS))) {
-        UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_COLLISION_RECALC_TICKS))));
-    }
-    if (Number.isFinite(Number(cfg.ASTAR_MAX_ITERS_LIMIT))) {
-        ASTAR_MAX_ITERS_LIMIT = Math.max(256, Math.min(18000, Math.floor(Number(cfg.ASTAR_MAX_ITERS_LIMIT))));
-    }
-    if (Number.isFinite(Number(cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))) {
-        ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(Number(cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))));
-    }
-    let workerAiTickDelay = Number(cfg.WORKER_AI_TICK_DELAY);
-    if (!Number.isFinite(workerAiTickDelay)) workerAiTickDelay = Number(cfg.WORKER_HEAVY_AI_STRIDE);
-    if (Number.isFinite(workerAiTickDelay)) {
-        WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(workerAiTickDelay)));
-    }
 
-    if (Number.isFinite(Number(prog.RESEARCH_COST_EXP))) RESEARCH_COST_EXP = Math.max(1, Number(prog.RESEARCH_COST_EXP));
-    if (Number.isFinite(Number(prog.RESEARCH_WORK_EXP))) RESEARCH_WORK_EXP = Math.max(1, Number(prog.RESEARCH_WORK_EXP));
-    if (Number.isFinite(Number(prog.RESEARCH_WORK_BASE))) RESEARCH_WORK_BASE = Math.max(1, Math.floor(Number(prog.RESEARCH_WORK_BASE)));
-    if (Number.isFinite(Number(prog.RESEARCH_BONUS_EXP_UNITS))) RESEARCH_BONUS_EXP_UNITS = Math.max(1, Number(prog.RESEARCH_BONUS_EXP_UNITS));
-    if (Number.isFinite(Number(prog.RESEARCH_BONUS_EXP_OTHER))) RESEARCH_BONUS_EXP_OTHER = Math.max(1, Number(prog.RESEARCH_BONUS_EXP_OTHER));
-    if (Number.isFinite(Number(prog.RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP))) RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP = Math.max(1, Number(prog.RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP));
-    if (Number.isFinite(Number(prog.MAX_THING_LEVEL))) MAX_THING_LEVEL = Math.max(1, Math.floor(Number(prog.MAX_THING_LEVEL)));
-    if (Number.isFinite(Number(prog.MAX_RESEARCH_LEVEL))) MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(Number(prog.MAX_RESEARCH_LEVEL)));
-    if (Number.isFinite(Number(prog.BUILDING_ENERGY_LEVEL_EXP))) BUILDING_ENERGY_LEVEL_EXP = Math.max(1, Number(prog.BUILDING_ENERGY_LEVEL_EXP));
-    if (Number.isFinite(Number(prog.BUILDING_ENERGY_LEVEL_EXP))) BUILDING_ENERGY_LEVEL_EXP = Math.max(1, Number(prog.BUILDING_ENERGY_LEVEL_EXP));
-    if (Number.isFinite(Number(prog.BUILDING_LEVEL_MULT_EXP))) BUILDING_LEVEL_MULT_EXP = Math.max(1, Number(prog.BUILDING_LEVEL_MULT_EXP));
-    if (Number.isFinite(Number(prog.BUILDING_DAMAGE_LEVEL_EXP))) BUILDING_DAMAGE_LEVEL_EXP = Math.max(1, Number(prog.BUILDING_DAMAGE_LEVEL_EXP));
-    if (Number.isFinite(Number(prog.BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL))) BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL = Math.max(0, Math.min(0.95, Number(prog.BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL)));
-    if (Number.isFinite(Number(prog.BUILDING_LINEAR_VISION_BONUS_PER_LEVEL))) BUILDING_LINEAR_VISION_BONUS_PER_LEVEL = Math.max(0, Number(prog.BUILDING_LINEAR_VISION_BONUS_PER_LEVEL));
-    if (Number.isFinite(Number(prog.SAND_GUN_CD_LEVEL_EXP))) SAND_GUN_CD_LEVEL_EXP = Math.max(0.01, Number(prog.SAND_GUN_CD_LEVEL_EXP));
-    if (Number.isFinite(Number(prog.RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP))) RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP = Math.max(1, Number(prog.RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP));
-    if (Number.isFinite(Number(prog.RESEARCH_BUILDING_EFFICIENCY_CAP))) RESEARCH_BUILDING_EFFICIENCY_CAP = Math.max(0, Number(prog.RESEARCH_BUILDING_EFFICIENCY_CAP));
-    if (Number.isFinite(Number(prog.UNIT_COLLECTOR_GATHER_LEVEL_EXP))) UNIT_COLLECTOR_GATHER_LEVEL_EXP = Math.max(0, Number(prog.UNIT_COLLECTOR_GATHER_LEVEL_EXP));
-    if (Number.isFinite(Number(prog.UNIT_WORKER_SPECIALIST_BASE_RATE))) UNIT_WORKER_SPECIALIST_BASE_RATE = Math.max(0, Number(prog.UNIT_WORKER_SPECIALIST_BASE_RATE));
-    if (Number.isFinite(Number(prog.UNIT_WORKER_SPECIALIST_LEVEL_EXP))) UNIT_WORKER_SPECIALIST_LEVEL_EXP = Math.max(1, Number(prog.UNIT_WORKER_SPECIALIST_LEVEL_EXP));
-    if (Number.isFinite(Number(prog.BUILDING_UPKEEP_EXP))) BUILDING_UPKEEP_EXP = Math.max(1, Number(prog.BUILDING_UPKEEP_EXP));
-    if (Number.isFinite(Number(prog.UNIT_UPKEEP_EXP))) UNIT_UPKEEP_EXP = Math.max(1, Number(prog.UNIT_UPKEEP_EXP));
-    // Backward compatibility for older config payloads.
-    if (Number.isFinite(Number(prog.UNIT_UPKEEP_EXP_DEFAULT))) UNIT_UPKEEP_EXP = Math.max(1, Number(prog.UNIT_UPKEEP_EXP_DEFAULT));
 
-    BUILDING_FORMULA_CONFIG.energyLevelExp = BUILDING_ENERGY_LEVEL_EXP;
-    BUILDING_FORMULA_CONFIG.levelMultExp = BUILDING_LEVEL_MULT_EXP;
-    BUILDING_FORMULA_CONFIG.damageLevelExp = BUILDING_DAMAGE_LEVEL_EXP;
-    BUILDING_FORMULA_CONFIG.linearCdReductionPerLevel = BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL;
-    BUILDING_FORMULA_CONFIG.linearVisionBonusPerLevel = BUILDING_LINEAR_VISION_BONUS_PER_LEVEL;
-    BUILDING_FORMULA_CONFIG.sandGunCdLevelExp = SAND_GUN_CD_LEVEL_EXP;
-    BUILDING_FORMULA_CONFIG.researchEfficiencyLevelExp = RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP;
-    BUILDING_FORMULA_CONFIG.researchEfficiencyCap = RESEARCH_BUILDING_EFFICIENCY_CAP;
-    BUILDING_FORMULA_CONFIG.upKeepExp = BUILDING_UPKEEP_EXP;
-    UNIT_FORMULA_CONFIG.collectorGatherLevelExp = UNIT_COLLECTOR_GATHER_LEVEL_EXP;
-    UNIT_FORMULA_CONFIG.workerSpecialistBaseRate = UNIT_WORKER_SPECIALIST_BASE_RATE;
-    UNIT_FORMULA_CONFIG.workerSpecialistLevelExp = UNIT_WORKER_SPECIALIST_LEVEL_EXP;
 
-    if (tables.BASE_CARD_TYPES) replaceObjectContents(BASE_CARD_TYPES, makeRuntimeCardTypesTableFromEditor(tables.BASE_CARD_TYPES));
-    if (tables.BASE_CARD_DEFAULT_ENERGY) replaceObjectContents(BASE_CARD_DEFAULT_ENERGY, tables.BASE_CARD_DEFAULT_ENERGY);
-    if (tables.BASE_CARD_DEFAULT_ENERGY) replaceObjectContents(BASE_CARD_DEFAULT_ENERGY, tables.BASE_CARD_DEFAULT_ENERGY);
-    if (tables.DESCRIPTIONS) replaceObjectContents(DESCRIPTIONS, tables.DESCRIPTIONS);
-    if (tables.BUILD_CATEGORIES) replaceObjectContents(BUILD_CATEGORIES, tables.BUILD_CATEGORIES);
-    if (tables.BARRACK_SPAWN_CONFIG) replaceObjectContents(BARRACK_SPAWN_CONFIG, tables.BARRACK_SPAWN_CONFIG);
-    if (tables.BASE_UNIT_STATS) replaceObjectContents(BASE_UNIT_STATS, makeRuntimeUnitStatsTableFromEditor(tables.BASE_UNIT_STATS));
-    if (tables.UNIT_LEVEL_SCALING) replaceObjectContents(UNIT_LEVEL_SCALING, tables.UNIT_LEVEL_SCALING);
-    if (tables.BUILDING_FORMULA_CONFIG) replaceObjectContents(BUILDING_FORMULA_CONFIG, tables.BUILDING_FORMULA_CONFIG);
-    if (tables.UNIT_FORMULA_CONFIG) replaceObjectContents(UNIT_FORMULA_CONFIG, tables.UNIT_FORMULA_CONFIG);
-    if (tables.RESEARCH_FORMULA_CONFIG) replaceObjectContents(RESEARCH_FORMULA_CONFIG, tables.RESEARCH_FORMULA_CONFIG);
-    if (tables.PRECOMPUTED_SOFT_CAP_MAP) replaceObjectContents(PRECOMPUTED_SOFT_CAP_MAP, tables.PRECOMPUTED_SOFT_CAP_MAP);
-    if (tables.RESEARCH_STAT_LABELS) replaceObjectContents(RESEARCH_STAT_LABELS, tables.RESEARCH_STAT_LABELS);
-    if (tables.RESEARCHABLE_UNIT_STATS) replaceObjectContents(RESEARCHABLE_UNIT_STATS, tables.RESEARCHABLE_UNIT_STATS);
-    if (tables.RESEARCH_DECREASE_STATS) replaceObjectContents(RESEARCH_DECREASE_STATS, tables.RESEARCH_DECREASE_STATS);
-    if (tables.PRECOMPUTED_UNIT_STAT_KEYS) replaceArrayContents(PRECOMPUTED_UNIT_STAT_KEYS, tables.PRECOMPUTED_UNIT_STAT_KEYS);
-    if (tables.PRECOMPUTED_BUILDING_STAT_KEYS) replaceArrayContents(PRECOMPUTED_BUILDING_STAT_KEYS, tables.PRECOMPUTED_BUILDING_STAT_KEYS);
 
-    BUILDING_ENERGY_LEVEL_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.energyLevelExp ?? BUILDING_FORMULA_CONFIG.energyLevelExp) || 1);
-    BUILDING_LEVEL_MULT_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.levelMultExp) || 1);
-    BUILDING_DAMAGE_LEVEL_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.damageLevelExp) || 1);
-    BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL = Math.max(0, Math.min(0.95, Number(BUILDING_FORMULA_CONFIG.linearCdReductionPerLevel) || 0));
-    BUILDING_LINEAR_VISION_BONUS_PER_LEVEL = Math.max(0, Number(BUILDING_FORMULA_CONFIG.linearVisionBonusPerLevel) || 0);
-    SAND_GUN_CD_LEVEL_EXP = Math.max(0.01, Number(BUILDING_FORMULA_CONFIG.sandGunCdLevelExp) || 0.01);
-    RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.researchEfficiencyLevelExp) || 1);
-    RESEARCH_BUILDING_EFFICIENCY_CAP = Math.max(0, Number(BUILDING_FORMULA_CONFIG.researchEfficiencyCap) || 0);
-    BUILDING_UPKEEP_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.upKeepExp) || BUILDING_UPKEEP_EXP);
-    UNIT_COLLECTOR_GATHER_LEVEL_EXP = Math.max(0, Number(UNIT_FORMULA_CONFIG.collectorGatherLevelExp) || 0);
-    UNIT_WORKER_SPECIALIST_BASE_RATE = Math.max(0, Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 0);
-    UNIT_WORKER_SPECIALIST_LEVEL_EXP = Math.max(1, Number(UNIT_FORMULA_CONFIG.workerSpecialistLevelExp) || 1);
-
-    normalizeBaseCardDefinitions();
-    PRECOMPUTED_STATS_READY = false;
-    if (!opts.deferPrecompute) rebuildPrecomputedStatsMap();
-    startingResourcesConfig = normalizeStartingResourcesConfig(startingResourcesConfig);
-    syncMainMenuFromRuntimeConfig();
-}
-
-function makeConfigEditorTextFromCurrentConfig() {
-    return stringifyJsLike(createEditableRuntimeConfigSnapshot());
-}
-
-function setConfigPopupOpen(open) {
-    let popup = document.getElementById('config-popup');
-    if (!popup) return false;
-    let wasOpen = !popup.classList.contains('hidden');
-    popup.classList.toggle('hidden', !open);
-    if (open) {
-        ensureDefaultEditableRuntimeConfigSnapshot();
-        let ta = document.getElementById('config-editor-text');
-        if (ta) ta.value = makeConfigEditorTextFromCurrentConfig();
-    }
-    return wasOpen !== open;
-}
-
-function setOptimizationPopupOpen(open) {
-    let popup = document.getElementById('optimization-popup');
-    if (!popup) return false;
-    let wasOpen = !popup.classList.contains('hidden');
-    popup.classList.toggle('hidden', !open);
-    return wasOpen !== open;
-}
-
-function applyConfigEditorChanges() {
-    let ta = document.getElementById('config-editor-text');
-    if (!ta) return;
-    try {
-        let parsed = parseConfigEditorObject(ta.value);
-        applyEditableRuntimeConfigObject(parsed);
-        ta.value = makeConfigEditorTextFromCurrentConfig();
-        showUiBanner('Runtime config applied.', 'success');
-    } catch (err) {
-        showUiBanner(`Config parse/apply error: ${err && err.message ? err.message : 'Unknown error'}`, 'error', 3600);
-    }
-}
-
-function resetConfigEditorToDefaults() {
-    ensureDefaultEditableRuntimeConfigSnapshot();
-    if (!confirm('Reset runtime config to startup defaults?')) return;
-    applyEditableRuntimeConfigObject(cloneJsValue(defaultEditableRuntimeConfigSnapshot));
-    let ta = document.getElementById('config-editor-text');
-    if (ta) ta.value = makeConfigEditorTextFromCurrentConfig();
-}
-
-function createEditableRuntimeConfigSnapshotFromMainMenu() {
-    let snapshot = createEditableRuntimeConfigSnapshot();
-    let cfg = snapshot.config;
-    let getNumber = (id, fallback) => {
-        let el = document.getElementById(id);
-        if (!el) return fallback;
-        let value = Number(el.value);
-        return Number.isFinite(value) ? value : fallback;
-    };
-    let getString = (id, fallback) => {
-        let el = document.getElementById(id);
-        if (!el) return fallback;
-        let value = String(el.value || '').trim();
-        return value || fallback;
-    };
-
-    cfg.GRID_W = Math.max(8, Math.floor(getNumber('cfg-mapsize', cfg.GRID_W)));
-    cfg.GRID_H = cfg.GRID_W;
-    cfg.GOLD_MINE_COUNT = Math.max(0, Math.floor(getNumber('cfg-gold-count', cfg.GOLD_MINE_COUNT)));
-    cfg.GOLD_MINE_MIN = Math.max(0, Math.floor(getNumber('cfg-gold-min', cfg.GOLD_MINE_MIN)));
-    cfg.GOLD_MINE_MAX = Math.max(0, Math.floor(getNumber('cfg-gold-max', cfg.GOLD_MINE_MAX)));
-    cfg.ASTAR_MINE_COUNT = Math.max(0, Math.floor(getNumber('cfg-astar-mine-count', cfg.ASTAR_MINE_COUNT)));
-    cfg.ASTAR_MINE_MIN = Math.max(0, Math.floor(getNumber('cfg-astar-mine-min', cfg.ASTAR_MINE_MIN)));
-    cfg.ASTAR_MINE_MAX = Math.max(0, Math.floor(getNumber('cfg-astar-mine-max', cfg.ASTAR_MINE_MAX)));
-    cfg.STARTING_MONEY = Math.max(0, Math.floor(getNumber('cfg-starting-energy', cfg.STARTING_MONEY)));
-    cfg.STARTING_ASTAR = Math.max(0, getNumber('cfg-starting-astar', cfg.STARTING_ASTAR));
-    cfg.MAP_TYPE = getString('cfg-map-type', cfg.MAP_TYPE);
-    cfg.CONFIG_MAX_POP = Math.max(1, Math.floor(getNumber('cfg-max-pop', cfg.CONFIG_MAX_POP)));
-    cfg.TICK_RATE = Math.max(5, Math.floor(getNumber('cfg-tick-rate', cfg.TICK_RATE)));
-    cfg.LOCKSTEP_PIPELINE_MIN = Math.max(0, Math.floor(getNumber('cfg-pipeline-delay', cfg.LOCKSTEP_PIPELINE_MIN)));
-    cfg.LOCKSTEP_STRICT_DEBUG_MODE = !!((document.getElementById('cfg-exact-lockstep') || {}).checked);
-    cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-eff-stats-ticks', cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
-    cfg.UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-collision-ticks', cfg.UNIT_COLLISION_RECALC_TICKS))));
-    cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(getNumber('cfg-astar-iter-budget-per-player', cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))));
-    cfg.WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(getNumber('cfg-worker-ai-tick-delay', cfg.WORKER_AI_TICK_DELAY))));
-
-    snapshot.progression.MAX_THING_LEVEL = Math.max(1, Math.floor(getNumber('cfg-max-thing-level', snapshot.progression.MAX_THING_LEVEL)));
-    snapshot.progression.MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(getNumber('cfg-max-research-level', snapshot.progression.MAX_RESEARCH_LEVEL)));
-
-    return snapshot;
-}
-
-function applyMainMenuControlsToRuntimeState() {
-    let snapshot = createEditableRuntimeConfigSnapshotFromMainMenu();
-    let cfg = snapshot.config;
-    let prog = snapshot.progression;
-
-    GRID_W = cfg.GRID_W;
-    GRID_H = cfg.GRID_H;
-    WORLD_W = GRID_W * TILE;
-    WORLD_H = GRID_H * TILE;
-    GOLD_MINE_COUNT = cfg.GOLD_MINE_COUNT;
-    GOLD_MINE_MIN = cfg.GOLD_MINE_MIN;
-    GOLD_MINE_MAX = cfg.GOLD_MINE_MAX;
-    ASTAR_MINE_COUNT = cfg.ASTAR_MINE_COUNT;
-    ASTAR_MINE_MIN = cfg.ASTAR_MINE_MIN;
-    ASTAR_MINE_MAX = cfg.ASTAR_MINE_MAX;
-    STARTING_MONEY = cfg.STARTING_MONEY;
-    STARTING_ASTAR = cfg.STARTING_ASTAR;
-    MAP_TYPE = cfg.MAP_TYPE;
-    CONFIG_MAX_POP = cfg.CONFIG_MAX_POP;
-    MAX_THING_LEVEL = prog.MAX_THING_LEVEL;
-    MAX_RESEARCH_LEVEL = prog.MAX_RESEARCH_LEVEL;
-    UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS) || UNIT_EFFECTIVE_STATS_RECALC_TICKS)));
-    UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_COLLISION_RECALC_TICKS) || UNIT_COLLISION_RECALC_TICKS)));
-    ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(Number(cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK) || ASTAR_ITER_BUDGET_PER_PLAYER_TICK)));
-    WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(Number(cfg.WORKER_AI_TICK_DELAY) || WORKER_AI_TICK_DELAY)));
-    applyTimingConfig(cfg.TICK_RATE, cfg.LOCKSTEP_PIPELINE_MIN);
-    lockstepStrictDebugMode = !!cfg.LOCKSTEP_STRICT_DEBUG_MODE;
-
-    let gameModeEl = document.getElementById('cfg-gamemode');
-    if (gameModeEl) gameMode = String(gameModeEl.value || gameMode || 'destroy');
-    let fullVisEl = document.getElementById('cfg-full-vis');
-    if (fullVisEl) { fullVisibility = fullVisEl.value === 'full'; teamVisibilityHistory = fullVisEl.value === 'history'; }
-}
-
-function createMainMenuSettingsSnapshot() {
-    let numberIds = [
-        'cfg-tick-rate', 'cfg-pipeline-delay', 'cfg-mapsize', 'cfg-max-pop', 'cfg-starting-energy', 'cfg-starting-astar',
-        'cfg-max-thing-level', 'cfg-gold-count', 'cfg-gold-min', 'cfg-gold-max', 'cfg-astar-mine-count', 'cfg-astar-mine-min', 'cfg-astar-mine-max',
-        'cfg-max-research-level', 'cfg-unit-eff-stats-ticks', 'cfg-unit-collision-ticks', 'cfg-astar-iter-budget-per-player', 'cfg-worker-ai-tick-delay'
-    ];
-    let selectIds = ['cfg-gamemode', 'cfg-map-type', 'cfg-full-vis'];
-    let checkboxIds = ['cfg-exact-lockstep'];
-
-    let out = {
-        version: 2,
-        createdAt: Date.now(),
-        lobby: {
-            numbers: {},
-            selects: {},
-            checks: {}
-        },
-        startingResources: cloneStartingResourcesConfig(),
-        editableConfig: encodeFunctionsForTransport(createEditableRuntimeConfigSnapshotFromMainMenu())
-    };
-
-    for (let id of numberIds) {
-        let el = document.getElementById(id);
-        if (el) out.lobby.numbers[id] = Number(el.value);
-    }
-    for (let id of selectIds) {
-        let el = document.getElementById(id);
-        if (el) out.lobby.selects[id] = String(el.value);
-    }
-    for (let id of checkboxIds) {
-        let el = document.getElementById(id);
-        if (el) out.lobby.checks[id] = !!el.checked;
-    }
-
-    return out;
-}
-
-function applyMainMenuSettingsSnapshot(rawData) {
-    let data = (rawData && typeof rawData === 'object') ? rawData : {};
-    let lobby = (data.lobby && typeof data.lobby === 'object') ? data.lobby : {};
-    let numbers = (lobby.numbers && typeof lobby.numbers === 'object') ? lobby.numbers : {};
-    let selects = (lobby.selects && typeof lobby.selects === 'object') ? lobby.selects : {};
-    let checks = (lobby.checks && typeof lobby.checks === 'object') ? lobby.checks : {};
-
-    for (let id in numbers) {
-        let el = document.getElementById(id);
-        if (!el) continue;
-        if (el.type === 'number') el.value = String(numbers[id]);
-    }
-    for (let id in selects) {
-        let el = document.getElementById(id);
-        if (!el) continue;
-        el.value = String(selects[id]);
-    }
-    for (let id in checks) {
-        let el = document.getElementById(id);
-        if (!el) continue;
-        el.checked = !!checks[id];
-    }
-
-    let importedMaxThingLevel = Math.max(1, Math.floor(Number((document.getElementById('cfg-max-thing-level') || {}).value) || MAX_THING_LEVEL));
-    let importedMaxResearchLevel = Math.max(1, Math.floor(Number((document.getElementById('cfg-max-research-level') || {}).value) || MAX_RESEARCH_LEVEL));
-    MAX_THING_LEVEL = importedMaxThingLevel;
-    MAX_RESEARCH_LEVEL = importedMaxResearchLevel;
-    startingResourcesConfig = normalizeStartingResourcesConfig(data.startingResources || makeDefaultStartingResourcesConfig());
-    refreshStartingResourcesPreviewPrecomputedStats();
-    applyMainMenuControlsToRuntimeState();
-    let appliedAdvancedConfig = false;
-    if (data.editableConfig && typeof data.editableConfig === 'object') {
-        try {
-            applyEditableRuntimeConfigObject(data.editableConfig, { fromTransport: true });
-            appliedAdvancedConfig = true;
-        } catch {
-            // Keep imported non-advanced settings even if advanced config payload is invalid.
-        }
-    }
-    if (appliedAdvancedConfig) {
-        syncMainMenuFromRuntimeConfig();
-        let gameModeEl = document.getElementById('cfg-gamemode');
-        if (gameModeEl) gameModeEl.value = gameMode;
-        let fullVisEl = document.getElementById('cfg-full-vis');
-        if (fullVisEl) fullVisEl.value = fullVisibility ? 'full' : teamVisibilityHistory ? 'history' : 'team';
-    }
-
-    let popup = document.getElementById('starting-resources-popup');
-    if (popup && !popup.classList.contains('hidden')) renderStartingResourcesPopupContent();
-}
-
-function downloadMainMenuSettings() {
-    let data = createMainMenuSettingsSnapshot();
-    let blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    let url = URL.createObjectURL(blob);
-    let a = document.createElement('a');
-    let stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    a.href = url;
-    a.download = `defence3-settings-${stamp}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-function importMainMenuSettingsFromFile(file) {
-    if (!file) return;
-    let reader = new FileReader();
-    reader.onload = () => {
-        try {
-            let parsed = JSON.parse(String(reader.result || '{}'));
-            applyMainMenuSettingsSnapshot(parsed);
-            saveUiSettingsToStorage();
-            showUiBanner('Settings imported.', 'success');
-        } catch {
-            showUiBanner('Invalid settings JSON.', 'error', 3600);
-        }
-    };
-    reader.readAsText(file);
-}
 
 function openResearchStatMatrixPopup(kind, key, statKey, fromLevel, toLevel) {
     researchStatMatrixPopupPayload = { kind, key, statKey, fromLevel, toLevel };
@@ -3139,9 +2553,30 @@ function rebuildPrecomputedStatsMapPlayer(targetPlayerId = null) {
     }
 
     PRECOMPUTED_STATS_MAP_PLAYER.length = Array.isArray(players) ? players.length : PRECOMPUTED_STATS_MAP_PLAYER.length;
+    // Players with the same research levels and resource penalties get the
+    // same values: build those once and copy the (flat) entries. Entries are
+    // later updated in place per player, so each player owns its copies.
+    let builtBySignature = new Map();
+    let previewLevels = gameStarted ? null : ((startingResourcesConfig || {}).researchLevels || null);
     for (let playerId of targetIds) {
         _ensurePlayerResourceState(playerId);
         _updatePlayerResourcePenaltyMultipliers(playerId);
+        let signature = null;
+        try {
+            signature = JSON.stringify([
+                previewLevels, (players[playerId] && players[playerId].researchLevels) || null,
+                RESOURCE_TYPE_LIST.map(cfg => _getPlayerResourcePenaltyMultiplier(playerId, String(cfg.stockpileKey || cfg.key || '')))
+            ]);
+        } catch { signature = null; }
+        let template = signature !== null ? builtBySignature.get(signature) : null;
+        if (template) {
+            let copy = { unit: {}, building: {} };
+            for (let kind of ['unit', 'building']) {
+                for (let key in template[kind]) copy[kind][key] = template[kind][key].map(entry => entry ? { ...entry } : entry);
+            }
+            PRECOMPUTED_STATS_MAP_PLAYER[playerId] = copy;
+            continue;
+        }
         let playerEntry = { unit: {}, building: {} };
         for (let unitType in PRECOMPUTED_STATS_MAP.unit) {
             playerEntry.unit[unitType] = [];
@@ -3156,6 +2591,7 @@ function rebuildPrecomputedStatsMapPlayer(targetPlayerId = null) {
             }
         }
         PRECOMPUTED_STATS_MAP_PLAYER[playerId] = playerEntry;
+        if (signature !== null) builtBySignature.set(signature, playerEntry);
     }
 
     return PRECOMPUTED_STATS_MAP_PLAYER;

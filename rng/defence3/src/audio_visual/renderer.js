@@ -2318,39 +2318,73 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         }
     }
 
+    // Only tiles marked as included can be lit, and everything else is already
+    // zero, so both sweeps can be limited to the included tiles' bounding box.
+    let minIx = GRID_W, maxIx = -1, minIy = GRID_H, maxIy = -1;
     for (let y = 0; y < GRID_H; y++) {
+        let includedRow = includedTiles[y];
+        let first = includedRow.indexOf(1);
+        if (first < 0) continue;
+        let last = includedRow.lastIndexOf(1);
+        if (first < minIx) minIx = first;
+        if (last > maxIx) maxIx = last;
+        if (y < minIy) minIy = y;
+        maxIy = y;
+    }
+    if (maxIx < 0) {
+        for (let y = 0; y < GRID_H; y++) vis[y].fill(0);
+        return;
+    }
+    // Sources outside every included tile are cleared by the sweeps; clear
+    // them here for rows and columns the sweeps now skip.
+    for (let y = 0; y < GRID_H; y++) {
+        if (y < minIy || y > maxIy) { vis[y].fill(0); continue; }
+        if (minIx > 0) vis[y].fill(0, 0, minIx);
+        if (maxIx < GRID_W - 1) vis[y].fill(0, maxIx + 1);
+    }
+    // Forward pass: left, up-left, up and up-right neighbours (-1 per tile).
+    // Same operations as before, with row-local branches hoisted.
+    for (let y = minIy; y <= maxIy; y++) {
         let row = vis[y], includedRow = includedTiles[y];
-        let prevRow = vis[y - 1], prevIncluded = includedTiles[y - 1];
-        for (let x = 0; x < GRID_W; x++) {
+        let hasPrev = y > 0;
+        let prevRow = hasPrev ? vis[y - 1] : null, prevIncluded = hasPrev ? includedTiles[y - 1] : null;
+        let lastX = GRID_W - 1;
+        for (let x = minIx; x <= maxIx; x++) {
             if (!includedRow[x]) {
                 row[x] = 0;
                 continue;
             }
             let v = row[x];
-            if (x > 0 && includedRow[x - 1]) v = Math.max(v, row[x - 1] - 1);
-            if (y > 0 && prevIncluded[x]) v = Math.max(v, prevRow[x] - 1);
-            if (x > 0 && y > 0 && prevIncluded[x - 1]) v = Math.max(v, prevRow[x - 1] - 1);
-            if (x < GRID_W - 1 && y > 0 && prevIncluded[x + 1]) v = Math.max(v, prevRow[x + 1] - 1);
+            if (x > 0 && includedRow[x - 1]) { let n = row[x - 1] - 1; if (n > v) v = n; }
+            if (hasPrev) {
+                if (prevIncluded[x]) { let n = prevRow[x] - 1; if (n > v) v = n; }
+                if (x > 0 && prevIncluded[x - 1]) { let n = prevRow[x - 1] - 1; if (n > v) v = n; }
+                if (x < lastX && prevIncluded[x + 1]) { let n = prevRow[x + 1] - 1; if (n > v) v = n; }
+            }
             row[x] = v;
         }
     }
-    for (let y = GRID_H - 1; y >= 0; y--) {
+    // Backward pass: right, down, down-right and down-left neighbours.
+    for (let y = maxIy; y >= minIy; y--) {
         let row = vis[y], includedRow = includedTiles[y];
-        let nextRow = vis[y + 1], nextIncluded = includedTiles[y + 1];
-        for (let x = GRID_W - 1; x >= 0; x--) {
+        let hasNext = y < GRID_H - 1;
+        let nextRow = hasNext ? vis[y + 1] : null, nextIncluded = hasNext ? includedTiles[y + 1] : null;
+        let lastX = GRID_W - 1;
+        for (let x = maxIx; x >= minIx; x--) {
             if (!includedRow[x]) {
                 row[x] = 0;
                 continue;
             }
             let v = row[x];
-            if (x < GRID_W - 1 && includedRow[x + 1]) v = Math.max(v, row[x + 1] - 1);
-            if (y < GRID_H - 1 && nextIncluded[x]) v = Math.max(v, nextRow[x] - 1);
-            if (x < GRID_W - 1 && y < GRID_H - 1 && nextIncluded[x + 1]) v = Math.max(v, nextRow[x + 1] - 1);
-            if (x > 0 && y < GRID_H - 1 && nextIncluded[x - 1]) v = Math.max(v, nextRow[x - 1] - 1);
+            if (x < lastX && includedRow[x + 1]) { let n = row[x + 1] - 1; if (n > v) v = n; }
+            if (hasNext) {
+                if (nextIncluded[x]) { let n = nextRow[x] - 1; if (n > v) v = n; }
+                if (x < lastX && nextIncluded[x + 1]) { let n = nextRow[x + 1] - 1; if (n > v) v = n; }
+                if (x > 0 && nextIncluded[x - 1]) { let n = nextRow[x - 1] - 1; if (n > v) v = n; }
+            }
             row[x] = v;
         }
     }
-
 
 }
 

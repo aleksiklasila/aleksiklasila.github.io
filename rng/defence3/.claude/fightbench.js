@@ -139,7 +139,83 @@ function attackMoveSpam(tick, teams, period = 5) {
     return acts;
 }
 
+// Deterministic harness randomness (never the game's rng).
+let rngState = 1;
+function rngSeed(v) { rngState = (v >>> 0) || 1; }
+function rand() { rngState = (Math.imul(rngState, 1664525) + 1013904223) >>> 0; return rngState / 4294967296; }
+function pick(list) { return list[Math.floor(rand() * list.length)]; }
+
+// Split a subset over several points by proximity with equal shares, like the
+// ctrl multi-point UI.
+function nearestSplit(list, points) {
+    const n = list.length, k = points.length, cap = Math.ceil(n / k), load = new Array(k).fill(0), out = points.map(() => []);
+    const pairs = [];
+    list.forEach((u, i) => points.forEach((p, j) => pairs.push({ i, j, d: (u.x - p.x) ** 2 + (u.y - p.y) ** 2 })));
+    pairs.sort((a, b) => (a.d - b.d) || (a.i - b.i) || (a.j - b.j));
+    const done = new Array(n).fill(false);
+    for (const q of pairs) { if (done[q.i] || load[q.j] >= cap) continue; done[q.i] = true; load[q.j]++; out[q.j].push(list[q.i]); }
+    return out;
+}
+
+const WORKER_BUILDINGS = ['builder_spawner', 'healer_spawner', 'research', 'spawner', 'astar_spawner'];
+const FLOOR_ITEMS = ['lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'sand', 'mine', 'farm'];
+
+function randomBase(pid, cx, cy, spread) {
+    const at = () => ({ gx: Math.max(1, Math.min(GRID_W - 2, Math.round(cx + (rand() - .5) * spread))),
+        gy: Math.max(1, Math.min(GRID_H - 2, Math.round(cy + (rand() - .5) * spread))) });
+    const placeSome = (keys, n, opts) => { const out = []; for (let i = 0, tries = 0; i < n && tries < n * 20; tries++) { const p = at(); const b = place(pick(keys), pid, p.gx, p.gy, opts); if (b) { out.push(b); i++; } } return out; };
+    const barracks = placeSome(BARRACKS, 6);
+    placeSome(WORKER_BUILDINGS, 8);
+    placeSome(['house'], 12);
+    placeSome(TOWERS, 25);
+    placeSome(FLOOR_ITEMS, 10);
+    placeSome(TOWERS.concat(['farm', 'house']), 20, { built: false });
+    const unitsAt = (type, n) => { for (let i = 0; i < n; i++) { const p = at(); spawnUnit(type, pid, p.gx, p.gy); } };
+    for (let i = 0; i < 150; i++) unitsAt(pick(COMBAT), 1);
+    unitsAt('builder_unit', 30); unitsAt('healer_unit', 20); unitsAt('researcher_unit', 15);
+    unitsAt('collector', 30); unitsAt('astar_collector', 15);
+    for (const u of units) if (u.owner === pid && u.unitType !== 'king' && !u.workerType && rand() < .3) u.energy *= .5;
+    return barracks;
+}
+
 const SCENARIOS = {
+    // Four teams with random mixes of every unit, tower, worker and building.
+    // Every few ticks each team orders random subsets to several individual
+    // points (split by proximity) and moves random rally points.
+    chaos: {
+        ticks: 300, size: 120, focus: { gx: 60, gy: 60 },
+        setup() {
+            const W = GRID_W, H = GRID_H, m = Math.round(W * .22);
+            this.bases = [{ x: m, y: m }, { x: W - m, y: m }, { x: m, y: H - m }, { x: W - m, y: H - m }];
+            this.barracks = this.bases.map((b, pid) => randomBase(pid, b.x, b.y, Math.round(W * .3)));
+        },
+        tick(t) {
+            const acts = [];
+            if (t % 4) return acts;
+            for (let pid = 0; pid < 4; pid++) {
+                const mine = alive(pid);
+                for (let s = 0; s < 2 && mine.length; s++) {
+                    const subset = mine.filter(() => rand() < .35);
+                    if (!subset.length) continue;
+                    const k = 1 + Math.floor(rand() * 4);
+                    const points = Array.from({ length: k }, () => {
+                        const base = rand() < .5 ? this.bases[(pid + 1 + Math.floor(rand() * 3)) % 4] : { x: GRID_W / 2, y: GRID_H / 2 };
+                        return { x: (base.x + (rand() - .5) * 20) * TILE, y: (base.y + (rand() - .5) * 20) * TILE };
+                    });
+                    const action = rand() < .7 ? 'attackMove' : 'move';
+                    nearestSplit(subset, points).forEach((group, j) => {
+                        if (group.length) acts.push([pid, { action, unitIds: group.map(u => u.id), targetX: points[j].x, targetY: points[j].y }]);
+                    });
+                }
+                for (const b of this.barracks[pid]) {
+                    if (t % 20 === 0) acts.push([pid, { action: 'queueUnit', gx: b.gx, gy: b.gy, count: 5 }]);
+                    if (rand() < .15) acts.push([pid, { action: 'setRally', gx: b.gx, gy: b.gy,
+                        targetX: (GRID_W / 2 + (rand() - .5) * 40) * TILE, targetY: (GRID_H / 2 + (rand() - .5) * 40) * TILE }]);
+                }
+            }
+            return acts;
+        }
+    },
     // Three armies of 200 mixed units, re-issuing attack-move 4x a second.
     fight3: {
         ticks: 400, focus: { gx: 40, gy: 40 },
@@ -290,15 +366,32 @@ async function measureRender(focus, frames = 30) {
     return out;
 }
 
+// Every research stat at the given level for every player (vision, speed,
+// worker search distance, ranges, ...), with stats and units refreshed.
+function applyResearch(level) {
+    ensureResearchThingsReady();
+    for (let pid = 0; pid < players.length; pid++) {
+        const levels = ensurePlayerResearchLevels(pid);
+        for (const thing of RESEARCH_THINGS) for (const st of thing.stats || []) {
+            if (st.statKey === 'maxLevel') continue;
+            levels[makeResearchLevelId(thing.kind, thing.key, st.statKey)] = level;
+        }
+    }
+    rebuildPrecomputedStatsMapPlayer();
+    for (const u of units) applyUnitLevelScaling(u, Math.max(1, u.unitLevel || 1));
+}
+
 async function run(name, opts = {}) {
     const render = opts.render !== false;
     const sc = SCENARIOS[name];
-    await newGame(80);
+    await newGame(opts.size || sc.size || 80);
     clearArena();
     refill();
-    sc.setup();
+    rngSeed(opts.seed || 12345);
+    sc.setup(opts);
+    if (opts.research) applyResearch(opts.research === true ? MAX_RESEARCH_LEVEL : opts.research);
     const sim = [], cmd = [];
-    const counts = () => [0, 1, 2].map(p => units.filter(u => !u.dead && u.owner === p).length);
+    const counts = () => [0, 1, 2, 3].map(p => units.filter(u => !u.dead && u.owner === p).length);
     const startCounts = counts();
     let renderStats = null;
     const mp = !!opts.mp;
@@ -375,7 +468,8 @@ function installProfiler(minLength = 300) {
 
 async function profile(name, opts = {}) {
     const sc = SCENARIOS[name];
-    await newGame(80); clearArena(); refill(); sc.setup();
+    await newGame(opts.size || sc.size || 80); clearArena(); refill(); rngSeed(opts.seed || 12345); sc.setup(opts);
+    if (opts.research) applyResearch(opts.research === true ? MAX_RESEARCH_LEVEL : opts.research);
     const ticks = opts.ticks || sc.ticks;
     // Render-only profiling: simulate first, then profile frames.
     const renderOnly = opts.render === 'only';
@@ -400,7 +494,8 @@ async function profile(name, opts = {}) {
 // Low-overhead split of a tick: wraps only a few coarse phases.
 async function phases(name, opts = {}) {
     const sc = SCENARIOS[name];
-    await newGame(80); clearArena(); refill(); sc.setup();
+    await newGame(opts.size || sc.size || 80); clearArena(); refill(); rngSeed(opts.seed || 12345); sc.setup(opts);
+    if (opts.research) applyResearch(opts.research === true ? MAX_RESEARCH_LEVEL : opts.research);
     const totals = {}, targets = [
         [window, 'processActions'], [window, 'updateVisibility'], [window, 'recalculateUnitEffectiveStats'],
         [window, 'recalculateThingPrecomputedStats'], [window, 'updateAudioReactiveState'], [window, 'updateWorkerAI'],
@@ -474,18 +569,19 @@ async function suite(versions = ['base', 'new'], names = Object.keys(SCENARIOS).
 }
 
 // Simulate a scenario, then time frames while the simulation keeps running.
-async function renderProbe(name, ticks = 200) {
+async function renderProbe(name, ticks = 200, opts = {}) {
     SCENARIOS.__probe = { ...SCENARIOS[name], ticks };
-    await run('__probe', { render: false });
+    await run('__probe', { ...opts, render: false });
     const cnt = {}, orig = [];
     for (const n of ['get3DExact2DTexture', 'build3DFrameData', 'push3DRenderObject']) {
         const f = window[n]; if (!f) continue; orig.push([n, f]);
         window[n] = function (...a) { const t = performance.now(); try { return f.apply(this, a); } finally { cnt[n] = (cnt[n] || 0) + performance.now() - t; } };
     }
     const res = { units: units.length, towers: towers.length };
-    for (const [mode, zoom] of [['3d', 1], ['2d', 1], ['3d', 0.5]]) {
+    const focus = opts.focus || SCENARIOS[name].focus;
+    for (const [mode, zoom] of opts.views || [['3d', 1], ['2d', 1], ['3d', 0.5], ['2d', 0.5], ['3d', 0.3], ['2d', 0.3]]) {
         setRenderDimensionMode(mode); camera.zoom = zoom;
-        camera.x = SCENARIOS[name].focus.gx * TILE - viewW / zoom / 2; camera.y = SCENARIOS[name].focus.gy * TILE - viewH / zoom / 2;
+        camera.x = focus.gx * TILE - viewW / zoom / 2; camera.y = focus.gy * TILE - viewH / zoom / 2;
         for (let i = 0; i < 10; i++) { gameOver = false; gameTick(); renderFrame(performance.now()); }
         for (const k in cnt) delete cnt[k];
         for (let i = 0; i < 30; i++) { gameOver = false; gameTick(); const a = performance.now(); renderFrame(performance.now()); cnt.frame = (cnt.frame || 0) + performance.now() - a; }

@@ -56,7 +56,7 @@ for (let i = 0; i < 40; i++) {
 // Float32 propagation and source collection run unchanged in both versions.
 const visibility = functionSource(renderer, 'computeVisibilityGridForPlayer');
 const unionStart = visibility.indexOf('    // The range caches');
-const unionEnd = visibility.indexOf('    for (let y = 0; y < GRID_H; y++) {', unionStart);
+const unionEnd = visibility.indexOf('    // Only tiles marked as included', unionStart);
 assert.ok(unionStart >= 0 && unionEnd > unionStart);
 const referenceVisibility = visibility.slice(0, unionStart) + `
     for (const [areaId, range] of areaRangeBySourceArea) {

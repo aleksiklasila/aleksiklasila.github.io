@@ -117,6 +117,9 @@ for (const resource of ['energy', 'astar']) {
 
     const start = main.indexOf('    function applyWorkerAssignTargets(');
     const end = main.indexOf('    function screenToWorldClamped(', start);
+    const helperStart = main.indexOf('    function _assignToNearestPoints(');
+    const helperEnd = main.indexOf('    function applyRallyTargets(', helperStart);
+    vm.runInContext(main.slice(helperStart, helperEnd).replace('let _entityWorldXY', 'var _entityWorldXY'), c);
     vm.runInContext(main.slice(start, end), c);
     Object.assign(c, { multiCollectorAssignTargets: [], multiBuilderAssignTargets: [], multiResearcherAssignTargets: [], multiHealerAssignTargets: [] });
     const actions = [];
@@ -126,6 +129,14 @@ for (const resource of ['energy', 'astar']) {
     actions.length = 0;
     c.applyWorkerAssignTargets(group, 'farm', 5, 4, true);
     assert.deepEqual(actions.map(a => a.targetType), ['mine', 'farm'], 'Ctrl-click retains each gather target type');
+    // Ctrl multi-targets go to the nearest worker, keeping equal shares.
+    const near = unit(3), far = unit(4);
+    near.x = 5 * 32 + 16; near.y = 4 * 32 + 16; far.x = 30 * 32 + 16; far.y = 30 * 32 + 16;
+    c.multiCollectorAssignTargets.length = 0;
+    c.applyWorkerAssignTargets([far, near], 'mine', 29, 30, false);
+    actions.length = 0;
+    c.applyWorkerAssignTargets([far, near], 'farm', 5, 4, true);
+    assert.equal(JSON.stringify(actions.map(a => [a.targetType, a.unitIds])), JSON.stringify([['mine', [far.id]], ['farm', [near.id]]]), 'nearest workers take each target');
 }
 
 console.log('PASS: farm discovery, group orders, collection, mixed targets and deterministic peer replay.');

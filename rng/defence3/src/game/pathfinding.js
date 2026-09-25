@@ -120,6 +120,12 @@ function _consumeAstarNodeBudget(owner, count = 1, unit = null, sourceTag = null
 }
 
 function _tryConsumeAstarNodeBudget(owner, count = 1) {
+    // Hot path (one node, valid player index), called per search expansion.
+    if (count === 1 && (owner | 0) === owner && owner >= 0 && owner < astarNodeBudgetRemainingByPlayer.length && owner < players.length) {
+        if (astarNodeBudgetRemainingByPlayer[owner] < 1) return false;
+        astarNodeBudgetRemainingByPlayer[owner]--;
+        return true;
+    }
     let amount = Math.max(0, Math.floor(Number(count) || 0));
     if (amount <= 0) return true;
     if (_getPlayerAstarIterationBudgetRemaining(owner) < amount) return false;
@@ -1054,6 +1060,9 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
 
     let bufSize = gridW * gridH;
     _ensurePathClearanceCache();
+    let clearanceTiles = _pathClearanceTiles;
+    // Portal lookups can only succeed when cloud towers exist at all.
+    let hasCloudTiles = usePortalEdges && !!(_cloudTileCache && _cloudTileCache.size);
     let routeDx = ex - sx, routeDy = ey - sy;
     // The fractional part is always < 1: it only orders equal-cost paths.
     // Prefer clearance first, then progress and proximity to the direct line.
@@ -1171,7 +1180,7 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
             let nx = cx + _ASTAR_DIRS[di], ny = cy + _ASTAR_DIRS[di + 1];
             if (nx < 0 || nx >= gridW || ny < 0 || ny >= gridH) continue;
             if (!ignoreWalls && gridData[ny][nx].type === TYPE_WALL) {
-                if (!(usePortalEdges && _getCloudTowerFast(nx, ny, pathOwner)) && !(canWalk && canWalk(nx, ny))) continue;
+                if (!(hasCloudTiles && _getCloudTowerFast(nx, ny, pathOwner)) && !(canWalk && canWalk(nx, ny))) continue;
             }
             let nKey = ny * gridW + nx;
             if (visitedGen[nKey] === epoch) continue;
@@ -1183,13 +1192,17 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
                 let distance = Math.abs(ex - nx) + Math.abs(ey - ny);
                 let h = usePortalHeuristic ? 0 : distance;
                 let cross = Math.abs((nx - sx) * routeDy - (ny - sy) * routeDx);
-                let clearancePenalty = (3 - _getPathClearance(nx, ny, canWalk, pathOwner, usePortalEdges)) * 0.125;
+                // Cached terrain clearance answers directly unless special
+                // passability (walk profile or portals) must be checked live.
+                let clearance = clearanceTiles[nKey];
+                if (!clearance || (clearance !== 3 && (canWalk || hasCloudTiles))) clearance = _getPathClearance(nx, ny, canWalk, pathOwner, usePortalEdges);
+                let clearancePenalty = (3 - clearance) * 0.125;
                 _heapPush(ng + h + clearancePenalty + (distance * tieStride + cross) * tieScale, nKey);
             }
         }
 
         // Cloud portal teleport edges
-        if (usePortalEdges) {
+        if (hasCloudTiles) {
             let cloud = _getCloudTowerFast(cx, cy, pathOwner);
             if (cloud) {
                 let partner = getPairedCloudTower(cloud, pathOwner);
@@ -1287,34 +1300,13 @@ function findPathAStarTagged(sourceTag, sx, sy, ex, ey, ignoreWalls = false, can
     return _withPathfindContext(sourceTag, pathOwner, null, () => findPathAStar(sx, sy, ex, ey, ignoreWalls, canWalk, pathOwner, cacheProfileHint, allowClosestReachableFallback));
 }
 
+let _groupStartMarks = null;
+let _groupBucketHead = null, _groupQueueKey = null, _groupQueueNext = null;
+
 // ------------------------------------------------------------------
 // Group routes: one reverse search from a shared destination serves every
 // unit in a move/attack-move order, instead of one A* per unit.
 // ------------------------------------------------------------------
-let _heapPopF = 0;
-function _heapPop() {
-    let hF = _astarHeapF, hK = _astarHeapK;
-    let key = hK[0];
-    _heapPopF = hF[0];
-    let heapSz = --_astarHeapSz;
-    if (heapSz > 0) {
-        hF[0] = hF[heapSz];
-        hK[0] = hK[heapSz];
-        let i = 0;
-        while (true) {
-            let l = (i << 1) + 1;
-            if (l >= heapSz) break;
-            let r = l + 1;
-            let s = l;
-            if (r < heapSz && (hF[r] < hF[l] || (hF[r] === hF[l] && hK[r] < hK[l]))) s = r;
-            if (hF[i] < hF[s] || (hF[i] === hF[s] && hK[i] <= hK[s])) break;
-            let tf = hF[i]; hF[i] = hF[s]; hF[s] = tf;
-            let tk = hK[i]; hK[i] = hK[s]; hK[s] = tk;
-            i = s;
-        }
-    }
-    return key;
-}
 
 // Returns one path per start ({x, y}), each running from its start to
 // (ex, ey), or null where the shared search cannot answer (an unreachable
@@ -1330,8 +1322,9 @@ function findGroupPathsToTarget(starts, ex, ey, canWalk = null, pathOwner = null
     if (!(starts.length > 0) || !(ex >= 0 && ey >= 0 && ex < gridW && ey < gridH)) return result;
     let usePortalEdges = pathOwner !== null;
     if (usePortalEdges && _cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+    let cloudsExist = usePortalEdges && !!(_cloudTileCache && _cloudTileCache.size);
     let walkable = (x, y) => gridData[y][x].type !== TYPE_WALL
-        || (usePortalEdges && !!_getCloudTowerFast(x, y, pathOwner)) || !!(canWalk && canWalk(x, y));
+        || (cloudsExist && !!_getCloudTowerFast(x, y, pathOwner)) || !!(canWalk && canWalk(x, y));
     if (!walkable(ex, ey)) return result;
 
     let bufSize = gridW * gridH;
@@ -1347,71 +1340,115 @@ function findGroupPathsToTarget(starts, ex, ey, canWalk = null, pathOwner = null
 
     // Starts are the targets of the reverse search. A consistent heuristic
     // (distance to their bounding box) keeps it to a corridor plus that box.
+    // Start tiles are marked in a scratch array: 1 = pending, 2 = reached.
+    if (!_groupStartMarks || _groupStartMarks.length < bufSize) _groupStartMarks = new Uint8Array(bufSize);
+    let startMarks = _groupStartMarks;
+    let startKeys = [];
     let minX = gridW, minY = gridH, maxX = -1, maxY = -1;
-    let pendingStarts = new Map();
     for (let s of starts) {
         if (!(s.x >= 0 && s.y >= 0 && s.x < gridW && s.y < gridH)) continue;
-        pendingStarts.set(s.y * gridW + s.x, true);
+        let key = s.y * gridW + s.x;
+        if (startMarks[key]) continue;
+        startMarks[key] = 1;
+        startKeys.push(key);
         if (s.x < minX) minX = s.x;
         if (s.x > maxX) maxX = s.x;
         if (s.y < minY) minY = s.y;
         if (s.y > maxY) maxY = s.y;
     }
-    if (pendingStarts.size === 0) return result;
+    let clearStartMarks = () => { for (let key of startKeys) startMarks[key] = 0; };
+    if (startKeys.length === 0) return result;
     // Live portals break the heuristic's consistency, as in findPathAStar.
-    let usePortalHeuristic = usePortalEdges && _hasUsablePathPortal(pathOwner);
-    let h = usePortalHeuristic ? () => 0
-        : (x, y) => (x < minX ? minX - x : (x > maxX ? x - maxX : 0)) + (y < minY ? minY - y : (y > maxY ? y - maxY : 0));
+    let noHeuristic = usePortalEdges && _hasUsablePathPortal(pathOwner);
 
     let budgetOwner = Number.isFinite(pathOwner) ? pathOwner : _activePathfindOwner;
+    let budgetArr = astarNodeBudgetRemainingByPlayer;
+    let fastBudget = (budgetOwner | 0) === budgetOwner && budgetOwner >= 0 && budgetOwner < budgetArr.length
+        && typeof players !== 'undefined' && budgetOwner < players.length;
     let endKey = ey * gridW + ex;
     gGen[endKey] = epoch;
     gVal[endKey] = 0;
-    _astarHeapSz = 0;
-    _heapPush(h(ex, ey), endKey);
-    let remaining = pendingStarts.size;
-    let searchClouds = usePortalEdges && !!(_cloudTileCache && _cloudTileCache.size);
+    // Bucket queue: every edge costs 1 and the heuristic is consistent, so
+    // priorities popped never decrease. Nodes with equal priority may settle
+    // in any order; the settled set and every distance are the same.
+    let maxPriority = 2 * (gridW + gridH) + bufSize;
+    if (!_groupBucketHead || _groupBucketHead.length < maxPriority + 1) _groupBucketHead = new Int32Array(maxPriority + 1);
+    if (!_groupQueueKey || _groupQueueKey.length < 4 * bufSize + 16) {
+        _groupQueueKey = new Int32Array(4 * bufSize + 16);
+        _groupQueueNext = new Int32Array(4 * bufSize + 16);
+    }
+    let bucketHead = _groupBucketHead, queueKey = _groupQueueKey, queueNext = _groupQueueNext;
+    bucketHead.fill(-1, 0, maxPriority + 1);
+    let queueSize = 0, current = 0;
+    let push = (priority, key) => {
+        if (queueSize >= queueKey.length || priority > maxPriority) return false;
+        queueKey[queueSize] = key;
+        queueNext[queueSize] = bucketHead[priority];
+        bucketHead[priority] = queueSize++;
+        return true;
+    };
+    push(noHeuristic ? 0 : ((ex < minX ? minX - ex : (ex > maxX ? ex - maxX : 0)) + (ey < minY ? minY - ey : (ey > maxY ? ey - maxY : 0))), endKey);
+    let remaining = startKeys.length;
+    let searchClouds = cloudsExist;
     let bound = Infinity;
     let iterations = 0;
-    let visit = (nKey, ng, nx, ny) => {
-        if (settled[nKey] === epoch) return;
-        if (gGen[nKey] === epoch && gVal[nKey] <= ng) return;
-        // A unit may stand on an unwalkable tile; it is only ever left.
-        if (!walkable(nx, ny) && !pendingStarts.has(nKey)) return;
-        gGen[nKey] = epoch;
-        gVal[nKey] = ng;
-        _heapPush(ng + h(nx, ny), nKey);
-    };
-    while (_astarHeapSz > 0) {
-        let curKey = _heapPop();
+    let wallType = TYPE_WALL;
+    while (true) {
+        while (current <= maxPriority && bucketHead[current] < 0) current++;
         // Settle every node that can lie on a shortest route of the last start.
-        if (_heapPopF > bound) break;
+        if (current > maxPriority || current > bound) break;
+        let entry = bucketHead[current];
+        bucketHead[current] = queueNext[entry];
+        let curKey = queueKey[entry];
         if (settled[curKey] === epoch) continue;
         settled[curKey] = epoch;
         let cx = curKey % gridW, cy = (curKey / gridW) | 0;
         let cg = gVal[curKey];
-        if (pendingStarts.get(curKey) === true) {
-            pendingStarts.set(curKey, false);
+        let mark = startMarks[curKey];
+        if (mark === 1) {
+            startMarks[curKey] = 2;
             if (--remaining === 0) bound = cg;
         }
         // Stepping into a tile requires that tile to be walkable.
-        if (!walkable(cx, cy)) continue;
-        if (++iterations > bufSize || !_tryConsumeAstarNodeBudget(budgetOwner, 1)) {
+        if (gridData[cy][cx].type === wallType && !walkable(cx, cy)) continue;
+        let budgetOk = fastBudget
+            ? (budgetArr[budgetOwner] >= 1 ? (budgetArr[budgetOwner]--, true) : false)
+            : _tryConsumeAstarNodeBudget(budgetOwner, 1);
+        if (++iterations > bufSize || !budgetOk) {
             _lastPathfindAbortedByBudget = true;
+            clearStartMarks();
             _recordPathfindCall('player_commands', performance.now() - perfStart, false);
             return result;
         }
+        let ng = cg + 1;
         for (let di = 0; di < 8; di += 2) {
             let nx = cx + _ASTAR_DIRS[di], ny = cy + _ASTAR_DIRS[di + 1];
             if (nx < 0 || nx >= gridW || ny < 0 || ny >= gridH) continue;
-            visit(ny * gridW + nx, cg + 1, nx, ny);
+            let nKey = ny * gridW + nx;
+            if (settled[nKey] === epoch) continue;
+            if (gGen[nKey] === epoch && gVal[nKey] <= ng) continue;
+            // A unit may stand on an unwalkable tile; it is only ever left.
+            if (gridData[ny][nx].type === wallType && !startMarks[nKey] && !walkable(nx, ny)) continue;
+            gGen[nKey] = epoch;
+            gVal[nKey] = ng;
+            push(noHeuristic ? ng : ng + (nx < minX ? minX - nx : (nx > maxX ? nx - maxX : 0)) + (ny < minY ? minY - ny : (ny > maxY ? ny - maxY : 0)), nKey);
         }
         if (searchClouds) {
             let cloud = _getCloudTowerFast(cx, cy, pathOwner);
             let partner = cloud ? getPairedCloudTower(cloud, pathOwner) : null;
-            if (partner) visit(partner.gy * gridW + partner.gx, cg + 1, partner.gx, partner.gy);
+            if (partner) {
+                let nKey = partner.gy * gridW + partner.gx;
+                if (settled[nKey] !== epoch && !(gGen[nKey] === epoch && gVal[nKey] <= ng)
+                    && (startMarks[nKey] || walkable(partner.gx, partner.gy))) {
+                    gGen[nKey] = epoch;
+                    gVal[nKey] = ng;
+                    let px = partner.gx, py = partner.gy;
+                    push(noHeuristic ? ng : ng + (px < minX ? minX - px : (px > maxX ? px - maxX : 0)) + (py < minY ? minY - py : (py > maxY ? py - maxY : 0)), nKey);
+                }
+            }
         }
     }
+    clearStartMarks();
 
     // Walk each start downhill. Paths share node objects per tile.
     let hasClouds = usePortalEdges && !!(_cloudTileCache && _cloudTileCache.size);

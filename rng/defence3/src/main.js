@@ -205,6 +205,48 @@ function _accumulateUpKeepForThing(breakdowns, thing, isUnit) {
 // ============================================================
 // GAME TICK
 // ============================================================
+// Budget-deferred orders (fallback paths) are retried at tick start. Units
+// waiting for the same destination are routed by one shared search, in
+// pending order; anything it cannot answer takes the per-unit retry below.
+function _resolveDeferredPathsByGroup(pending) {
+    let resolved = new Set();
+    let groups = [];
+    let groupByKey = new Map();
+    for (let u of pending) {
+        let pt = u && u._pendingPathTarget;
+        if (!u || u.dead || !pt || !u.pathIsFallbackAstar || u.isFlying) continue;
+        if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) continue;
+        if (!_canUsePathfindRequestBudget(u.owner, u)) continue;
+        let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+        let dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u);
+        let canWalk = getPathCanWalkForUnit(u);
+        let key = u.owner + '|' + (dest.y * GRID_W + dest.x);
+        let candidates = groupByKey.get(key);
+        if (!candidates) groupByKey.set(key, candidates = []);
+        let group = candidates.find(g => g.canWalk === canWalk);
+        if (!group) { group = { dest, canWalk, owner: u.owner, members: [] }; candidates.push(group); groups.push(group); }
+        group.members.push({ u, ugx, ugy, pt });
+    }
+    for (let group of groups) {
+        if (group.members.length < 2) continue;
+        let paths = _withPathfindContext('deferred_resolver', group.owner, null,
+            () => findGroupPathsToTarget(group.members.map(m => ({ x: m.ugx, y: m.ugy })), group.dest.x, group.dest.y, group.canWalk, group.owner));
+        for (let i = 0; i < group.members.length; i++) {
+            let path = paths[i];
+            if (!path || path.length <= 0) continue;
+            let { u, ugx, ugy, pt } = group.members[i];
+            _consumePathfindRequestBudget(u.owner, u);
+            u.path = path;
+            u.pathIndex = (path.length > 1 && path[0].x === ugx && path[0].y === ugy) ? 1 : 0;
+            u.pathIsFallbackAstar = false;
+            u.commandState = pt.cmd;
+            u._pendingPathTarget = null;
+            resolved.add(u);
+        }
+    }
+    return resolved;
+}
+
 function gameTick() {
     if (gameOver) return;
     gameTime++;
@@ -268,10 +310,11 @@ function gameTick() {
 
         for (let srcTier = 0; srcTier <= 4; srcTier++) {
             let pending = pendingBuckets[srcTier];
+            let resolvedByGroup = _resolveDeferredPathsByGroup(pending);
             for (let i = 0; i < pending.length; i++) {
                 let u = pending[i];
                 let pt = u && u._pendingPathTarget;
-                if (!u || u.dead || !pt) continue;
+                if (!u || u.dead || !pt || resolvedByGroup.has(u)) continue;
                 if (u.pathIsFallbackAstar) {
                     _tryUpgradeAstarFallbackPath(u);
                     continue;

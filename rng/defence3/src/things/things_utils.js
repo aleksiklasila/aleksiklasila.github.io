@@ -621,7 +621,7 @@ function recalculateUnitEffectiveStats() {
                 let cx = Math.floor(u.x / chunkPx);
                 let cy = Math.floor(u.y / chunkPx);
                 let chunkRadius = Math.max(0, Math.ceil(radiusPx / chunkPx));
-                if (chunkRadius <= 7) {
+                if (chunkRadius <= 16) {
                     // Small rectangles (vision is ~1 tile): sum the counts
                     // directly instead of building a whole-map prefix table
                     // per owner and unit type. Same clamping, same result.

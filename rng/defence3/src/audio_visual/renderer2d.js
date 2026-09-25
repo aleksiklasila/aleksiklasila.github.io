@@ -969,6 +969,23 @@ function ensureVisibilityMaskCanvas() {
     }
 }
 
+// Fog alpha by light level, tabulated (one pow per tile per tick was the
+// bulk of this rebuild on large maps). Rebuilt if the fog curve changes.
+const VISIBILITY_FOG_LUT_STEPS = 2048;
+let _visibilityFogLut = null, _visibilityFogLutGamma = NaN, _visibilityFogLutMin = NaN;
+function _getVisibilityFogAlphaLut() {
+    if (_visibilityFogLut && _visibilityFogLutGamma === _visibilityFogGamma && _visibilityFogLutMin === _visibilityFogMinAlpha) return _visibilityFogLut;
+    let lut = new Uint8ClampedArray(VISIBILITY_FOG_LUT_STEPS + 1);
+    for (let k = 0; k <= VISIBILITY_FOG_LUT_STEPS; k++) {
+        let fogAlpha = Math.pow(1 - k / VISIBILITY_FOG_LUT_STEPS, _visibilityFogGamma);
+        lut[k] = fogAlpha <= _visibilityFogMinAlpha ? 0 : Math.round(Math.max(0, Math.min(1, fogAlpha)) * 255);
+    }
+    _visibilityFogLut = lut;
+    _visibilityFogLutGamma = _visibilityFogGamma;
+    _visibilityFogLutMin = _visibilityFogMinAlpha;
+    return lut;
+}
+
 function rebuildVisibilityMaskCacheIfNeeded() {
     const visibilityGrid = getRenderVisibilityGrid();
     ensureVisibilityMaskCanvas();
@@ -1005,14 +1022,14 @@ function rebuildVisibilityMaskCacheIfNeeded() {
         }
     }
     let data = imageData.data;
+    let fogLut = _getVisibilityFogAlphaLut();
     let i = 0;
     for (let y = 0; y < GRID_H; y++) {
         let row = visibilityGrid[y];
         for (let x = 0; x < GRID_W; x++) {
             let raw = Math.max(row ? (row[x] || 0) : 0, _visibilityMaskUnitFloor[y * GRID_W + x]);
             let lightLevel = Math.max(0, Math.min(1, raw * invNorm));
-            let fogAlpha = Math.pow(1 - lightLevel, _visibilityFogGamma);
-            let alpha = fogAlpha <= _visibilityFogMinAlpha ? 0 : Math.round(Math.max(0, Math.min(1, fogAlpha)) * 255);
+            let alpha = fogLut[Math.round(lightLevel * VISIBILITY_FOG_LUT_STEPS)];
             i += 3;
             if (data[i] !== alpha) changed = true;
             data[i++] = alpha;

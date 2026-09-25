@@ -1897,11 +1897,28 @@ function _getReservedWorkerForTarget(target, workerType) {
     return reservedUnit;
 }
 
+// Workers that may hold a target: collected once per tick and extended by
+// _setWorkerTarget (the only place a target is set). Callers only ask whether
+// any conflicting worker exists, so order is irrelevant; entries are checked
+// live. Invalidated with the reservation table.
+let _workersWithTargetTick = NaN;
+let _workersWithTarget = [];
+function _getWorkersWithTargetThisTick() {
+    let tick = typeof gameTime === 'number' ? gameTime : NaN;
+    if (_workersWithTargetTick !== tick) {
+        let list = [];
+        for (let other of units) if (other && other.workerTarget) list.push(other);
+        _workersWithTarget = list;
+        _workersWithTargetTick = tick;
+    }
+    return _workersWithTarget;
+}
+
 function _findConflictingWorkerOnTargetTile(unit, target) {
     if (!unit || !target || !unit.workerType) return null;
     let targetTileIndex = _getWorkerTargetTileIndex(target);
     if (targetTileIndex < 0) return null;
-    for (let other of units) {
+    for (let other of _getWorkersWithTargetThisTick()) {
         if (!other || other === unit || other.dead || !other.workerTarget) continue;
         if (other.owner !== unit.owner) continue;
         if (other.workerType !== unit.workerType) continue;
@@ -1913,6 +1930,7 @@ function _findConflictingWorkerOnTargetTile(unit, target) {
 }
 
 function _invalidateWorkerTargetLoadCache() {
+    _workersWithTargetTick = NaN;
     workerReservedTiles = new Array(Math.max(0, GRID_W * GRID_H * _WORKER_TARGET_LOAD_TYPE_COUNT)).fill(null);
 }
 
@@ -1961,6 +1979,7 @@ function _setWorkerTarget(unit, target, targetType = null) {
 
     unit.workerTarget = target;
     unit.workerTargetType = nextType;
+    if (target && typeof gameTime === 'number' && _workersWithTargetTick === gameTime && !_workersWithTarget.includes(unit)) _workersWithTarget.push(unit);
     unit._workerReservedTileIndex = -1;
     if (target && nextSlotIndex >= 0) {
         workerReservedTiles[nextSlotIndex] = unit;
@@ -2008,7 +2027,7 @@ function _canAssignWorkerTargetExclusive(u, target, targetType = null, conflictC
             if (tileIndex < 0) return true;
             if (!conflictCache.tiles) {
                 let tiles = new Set();
-                for (let other of units) {
+                for (let other of _getWorkersWithTargetThisTick()) {
                     if (!other || other === u || other.dead || !other.workerTarget) continue;
                     if (other.owner !== u.owner || other.workerType !== u.workerType) continue;
                     let otherTile = _getWorkerTargetTileIndex(other.workerTarget);
@@ -2603,9 +2622,9 @@ function _findNearestQueuedSpawnerNeedingWork(u, originX = u.x, originY = u.y) {
     let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     let consider = (s) => {
         if (!_isHealerQueueTarget(s, u.owner)) return;
-        if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, s, maxSearchArea)) return;
         let d = Math.hypot(s.x - originX, s.y - originY);
         if (d > maxSearch) return;
+        if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, s, maxSearchArea)) return;
         candidates.push({
             target: s,
             targetType: 'queue',
@@ -2667,17 +2686,9 @@ function _ensureHealerDamagedCandidatesCacheCurrent() {
 
     let cap = Math.max(1, HEALER_DAMAGED_CANDIDATE_LIMIT | 0);
     let pooled = Array.from({ length: ownerCount }, () => []);
-    let orderedUnits = units.slice().sort((a, b) => {
-        let ai = Math.floor(Number(a && a.id) || -1);
-        let bi = Math.floor(Number(b && b.id) || -1);
-        if (ai !== bi) return ai - bi;
-        let ax = Number(a && a.x) || 0, bx = Number(b && b.x) || 0;
-        if (ax !== bx) return ax - bx;
-        let ay = Number(a && a.y) || 0, by = Number(b && b.y) || 0;
-        return ay - by;
-    });
-
-    for (let target of orderedUnits) {
+    // Input order does not matter: each pool is fully ordered below by
+    // (ratio, unit id, x, y), and unit ids are unique.
+    for (let target of units) {
         if (!target || target.dead) continue;
         let owner = Math.floor(Number(target.owner));
         if (owner < 0 || owner >= ownerCount) continue;
@@ -2746,12 +2757,12 @@ function _findNearestDamagedFriendlyUnit(u, originX = u.x, originY = u.y) {
     for (let entry of candidates) {
         let target = entry && entry.u;
         if (!_isHealerTargetUnit(target, owner)) continue;
-        if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, target, maxSearchArea)) continue;
-
+        // Both filters are pure; test the cheap distance before the area lookup.
         let dx = target.x - originX;
         let dy = target.y - originY;
         let distSq = dx * dx + dy * dy;
         if (distSq > maxSearchSq) continue;
+        if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, target, maxSearchArea)) continue;
 
         let worldDistSq = distSq;
         if (!originIsHealer) {
