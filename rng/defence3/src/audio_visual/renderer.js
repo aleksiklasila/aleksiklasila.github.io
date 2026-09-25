@@ -1084,28 +1084,59 @@ function getVisualUnitSourceLight(unit) {
 }
 
 function getRenderLightGradient(gx, gy) {
-    const version = typeof visibilityVersion === 'number' ? visibilityVersion : 0;
-    let cache = getRenderLightGradient.cache;
-    if (!cache || cache.grid !== visibilityGrid || cache.version !== version) {
-        cache = getRenderLightGradient.cache = { grid: visibilityGrid, version, cells: new Map() };
-    }
-    const key = (gy + 2) * (GRID_W + 4) + gx + 2;
-    let gradient = cache.cells.get(key);
-    if (!gradient) {
-        const _vis = visibilityGrid;
+    const o = _lightGradientIndex(gx, gy);
+    return Array.from(_lightGradients.values.subarray(o, o + 8));
+}
 
-        let g00x = ((_vis[gy] && _vis[gy][gx + 1]) || 0) - ((_vis[gy] && _vis[gy][gx - 1]) || 0);
-        let g00z = ((_vis[gy + 1] && _vis[gy + 1][gx]) || 0) - ((_vis[gy - 1] && _vis[gy - 1][gx]) || 0);
-        let g10x = ((_vis[gy] && _vis[gy][gx + 2]) || 0) - ((_vis[gy] && _vis[gy][gx]) || 0);
-        let g10z = ((_vis[gy + 1] && _vis[gy + 1][gx + 1]) || 0) - ((_vis[gy - 1] && _vis[gy - 1][gx + 1]) || 0);
-        let g01x = ((_vis[gy + 1] && _vis[gy + 1][gx + 1]) || 0) - ((_vis[gy + 1] && _vis[gy + 1][gx - 1]) || 0);
-        let g01z = ((_vis[gy + 2] && _vis[gy + 2][gx]) || 0) - ((_vis[gy] && _vis[gy][gx]) || 0);
-        let g11x = ((_vis[gy + 1] && _vis[gy + 1][gx + 2]) || 0) - ((_vis[gy + 1] && _vis[gy + 1][gx]) || 0);
-        let g11z = ((_vis[gy + 2] && _vis[gy + 2][gx + 1]) || 0) - ((_vis[gy] && _vis[gy][gx + 1]) || 0);
-        gradient = [g00x, g00z, g10x, g10z, g01x, g01z, g11x, g11z];
-        cache.cells.set(key, gradient);
+// Light gradients at a tile's four corners (8 values per tile), cached for
+// one visibility grid version in typed arrays: every visible object reads
+// them each frame. Keys as (gy + 2) * (GRID_W + 4) + gx + 2.
+const _lightGradients = { grid: null, version: -1, width: 0, stamp: 0, stamps: null, values: null };
+
+// Index of the tile's 8 gradient values in _lightGradients.values.
+function _lightGradientIndex(gx, gy) {
+    const version = typeof visibilityVersion === 'number' ? visibilityVersion : 0;
+    const cache = _lightGradients, _vis = visibilityGrid;
+    const width = GRID_W + 4, size = width * ((_vis ? _vis.length : 0) + 4);
+    if (!cache.stamps || cache.stamps.length !== size) {
+        cache.stamps = new Int32Array(size);
+        cache.values = new Float64Array(size * 8 + 8); // + one uncached slot
+        cache.stamp = 0;
+        cache.grid = null;
     }
-    return gradient;
+    if (cache.grid !== _vis || cache.version !== version || cache.width !== width) {
+        cache.grid = _vis; cache.version = version; cache.width = width;
+        if (++cache.stamp >= 0x7fffffff) { cache.stamps.fill(0); cache.stamp = 1; }
+    }
+    const key = (gy + 2) * width + gx + 2;
+    const cached = key >= 0 && key < size;
+    if (cached && cache.stamps[key] === cache.stamp) return key * 8;
+    const o = cached ? key * 8 : size * 8, g = cache.values;
+    g[o] = ((_vis[gy] && _vis[gy][gx + 1]) || 0) - ((_vis[gy] && _vis[gy][gx - 1]) || 0);
+    g[o + 1] = ((_vis[gy + 1] && _vis[gy + 1][gx]) || 0) - ((_vis[gy - 1] && _vis[gy - 1][gx]) || 0);
+    g[o + 2] = ((_vis[gy] && _vis[gy][gx + 2]) || 0) - ((_vis[gy] && _vis[gy][gx]) || 0);
+    g[o + 3] = ((_vis[gy + 1] && _vis[gy + 1][gx + 1]) || 0) - ((_vis[gy - 1] && _vis[gy - 1][gx + 1]) || 0);
+    g[o + 4] = ((_vis[gy + 1] && _vis[gy + 1][gx + 1]) || 0) - ((_vis[gy + 1] && _vis[gy + 1][gx - 1]) || 0);
+    g[o + 5] = ((_vis[gy + 2] && _vis[gy + 2][gx]) || 0) - ((_vis[gy] && _vis[gy][gx]) || 0);
+    g[o + 6] = ((_vis[gy + 1] && _vis[gy + 1][gx + 2]) || 0) - ((_vis[gy + 1] && _vis[gy + 1][gx]) || 0);
+    g[o + 7] = ((_vis[gy + 2] && _vis[gy + 2][gx + 1]) || 0) - ((_vis[gy] && _vis[gy][gx + 1]) || 0);
+    if (cached) cache.stamps[key] = cache.stamp;
+    return o;
+}
+
+// Shadow direction at (ox, oz) in tiles from the bilinear light gradient,
+// or the default direction where the light is flat. Written to `out`.
+const _shadowDirScratch = { x: 0, z: 0 };
+function _shadowDirAt(ox, oz, out) {
+    let gx = Math.floor(ox), gy = Math.floor(oz);
+    let fx = ox - gx, fz = oz - gy, ifx = 1 - fx, ifz = 1 - fz;
+    const o = _lightGradientIndex(gx, gy), g = _lightGradients.values;
+    let gradX = g[o] * ifx * ifz + g[o + 2] * fx * ifz + g[o + 4] * ifx * fz + g[o + 6] * fx * fz;
+    let gradZ = g[o + 1] * ifx * ifz + g[o + 3] * fx * ifz + g[o + 5] * ifx * fz + g[o + 7] * fx * fz;
+    let gradLen = Math.hypot(gradX, gradZ);
+    if (gradLen > 0.001) { out.x = gradX / gradLen; out.z = gradZ / gradLen; }
+    else { out.x = DEFAULT_SHADOW_DIR_X; out.z = DEFAULT_SHADOW_DIR_Y; }
+    return out;
 }
 
 function resolveRenderVisionRange(source) {
@@ -1158,6 +1189,12 @@ function resolveRenderVisionRange(source) {
 
 const RENDER_NO_MODEL_CANDIDATES = Object.freeze([]);
 
+// Whether a render view's grid is the live one (not a remembered history
+// grid), so the live tile indexes describe it.
+function _isLiveRenderGrid(viewGrid) {
+    return viewGrid === grid && typeof getCellItemsRowMajor === 'function' && typeof findCellItemRowStart === 'function';
+}
+
 function push3DRenderObject(target, object) {
     if (!target || !object) return;
     let ox = Number(object.x) || 0;
@@ -1176,13 +1213,8 @@ function push3DRenderObject(target, object) {
     let shadowDirX = DEFAULT_SHADOW_DIR_X;
     let shadowDirZ = DEFAULT_SHADOW_DIR_Y;
     if (!fullVisibility && !target.flat2d) {
-        let fx = ox - gx, fz = oz - gy;
-        let ifx = 1 - fx, ifz = 1 - fz;
-        const [g00x, g00z, g10x, g10z, g01x, g01z, g11x, g11z] = getRenderLightGradient(gx, gy);
-        let gradX = g00x * ifx * ifz + g10x * fx * ifz + g01x * ifx * fz + g11x * fx * fz;
-        let gradZ = g00z * ifx * ifz + g10z * fx * ifz + g01z * ifx * fz + g11z * fx * fz;
-        let gradLen = Math.hypot(gradX, gradZ);
-        if (gradLen > 0.001) { shadowDirX = gradX / gradLen; shadowDirZ = gradZ / gradLen; }
+        const dir = _shadowDirAt(ox, oz, _shadowDirScratch);
+        shadowDirX = dir.x; shadowDirZ = dir.z;
     }
     let finalLightLevel = Math.max(0, Math.min(1, Number(object.lightLevel) || lightLevel));
     let visionRange = Number(object.visibilityRangeTiles);
@@ -1446,6 +1478,19 @@ function pushUnit3DActivityEffects(target, u, activity, x, z, footprint) {
 const renderer3dStaticObjects = new WeakMap();
 const renderer3dStaticFrame = { occupied: null, flat2d: false };
 
+// Tiles holding a visible unit this frame (tile index keys), stamped per
+// frame instead of filling a new Set with every visible unit.
+const renderer3dOccupiedTiles = {
+    stamps: new Uint32Array(0),
+    stamp: 0,
+    begin(size) {
+        if (this.stamps.length !== size) { this.stamps = new Uint32Array(size); this.stamp = 0; }
+        if (++this.stamp >= 0xffffffff) { this.stamps.fill(0); this.stamp = 1; }
+    },
+    add(key) { if (key >= 0 && key < this.stamps.length) this.stamps[key] = this.stamp; },
+    has(key) { return this.stamps[key] === this.stamp; }
+};
+
 const renderer3dUnitObjects = new WeakMap();
 
 function _unit3DWalkPhase(u, activity) {
@@ -1456,21 +1501,20 @@ function _unit3DWalkPhase(u, activity) {
 
 // Lighting of an object at its current position, exactly as
 // push3DRenderObject derives it (for objects without light overrides).
-function _relight3DObject(o, source, baseTint, baseSideTint, flat2d) {
+// `sourceLight`, when given, is the unit's own light this tick.
+function _relight3DObject(o, source, baseTint, baseSideTint, flat2d, sourceLight) {
     let ox = o.x, oz = o.z, gx = Math.floor(ox), gy = Math.floor(oz);
     let remembered = !!(source && source._historyGhost);
     let lightGrid = remembered ? getRenderVisibilityGrid() : visibilityGrid;
     let lightRawCenter = fullVisibility ? VISIBILITY_LIGHT_NORMALIZATION_RANGE : ((lightGrid[gy] && lightGrid[gy][gx]) || 0);
-    if (!fullVisibility && source && source.unitType) lightRawCenter = Math.max(lightRawCenter, getVisualUnitSourceLight(source));
+    if (!fullVisibility && source && source.unitType) {
+        lightRawCenter = Math.max(lightRawCenter, sourceLight === undefined ? getVisualUnitSourceLight(source) : sourceLight);
+    }
     let lightLevel = fullVisibility ? 1 : Math.max(0, Math.min(1, lightRawCenter / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
     let shadowDirX = DEFAULT_SHADOW_DIR_X, shadowDirZ = DEFAULT_SHADOW_DIR_Y;
     if (!fullVisibility && !flat2d) {
-        let fx = ox - gx, fz = oz - gy, ifx = 1 - fx, ifz = 1 - fz;
-        const [g00x, g00z, g10x, g10z, g01x, g01z, g11x, g11z] = getRenderLightGradient(gx, gy);
-        let gradX = g00x * ifx * ifz + g10x * fx * ifz + g01x * ifx * fz + g11x * fx * fz;
-        let gradZ = g00z * ifx * ifz + g10z * fx * ifz + g01z * ifx * fz + g11z * fx * fz;
-        let gradLen = Math.hypot(gradX, gradZ);
-        if (gradLen > 0.001) { shadowDirX = gradX / gradLen; shadowDirZ = gradZ / gradLen; }
+        const dir = _shadowDirAt(ox, oz, _shadowDirScratch);
+        shadowDirX = dir.x; shadowDirZ = dir.z;
     }
     let finalLightLevel = Math.max(0, Math.min(1, lightLevel));
     o.tint = _getCachedLitTint(baseTint || '#c8ced8', finalLightLevel);
@@ -1657,7 +1701,8 @@ function build3DFrameData(flat2d = false) {
     let fxSoundGrid = audioSpatialGridEffects;
     let reactiveOffsetX = Number(audioReactiveGlobalOffsetX) || 0;
     let reactiveOffsetY = Number(audioReactiveGlobalOffsetY) || 0;
-    let unitOccupiedTileKeys = new Set();
+    let unitOccupiedTileKeys = renderer3dOccupiedTiles;
+    unitOccupiedTileKeys.begin(GRID_W * GRID_H);
     renderer3dStaticFrame.occupied = unitOccupiedTileKeys;
     renderer3dStaticFrame.flat2d = !!flat2d;
     // Settings that change cached objects (view mode, fog, level labels).
@@ -1783,42 +1828,60 @@ function build3DFrameData(flat2d = false) {
         _rememberStatic3DObject(objects, m, m.gx, m.gy, audioMove, audioHeight, !mine2DTexture);
     }
 
-    for (let y = bounds.minGy; y <= bounds.maxGy; y++) {
-        let gridRow = grid[y];
-        let visRow = visibilityGrid[y];
-        if (!gridRow) continue;
-        for (let x = bounds.minGx; x <= bounds.maxGx; x++) {
-            let cell = gridRow[x];
-            if (!cell || !cell.item) continue;
-            if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
-            let bgSoundRow = bgSoundGrid[y];
-            let fxSoundRow = fxSoundGrid[y];
-            let bgLevel = bgSoundRow ? bgSoundRow[x] || 0 : 0;
-            let fxLevel = fxSoundRow ? fxSoundRow[x] || 0 : 0;
-            let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
-            let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-            if (_reuseStatic3DObject(objects, cell.item, x, y, audioMove, audioHeight)) continue;
-            let item2DTexture = get3DExact2DFloorTexture(cell.item, cell.owner);
-            let itemStatus = item2DTexture ? null : get3DBuildingTextureStatus(cell.item);
-            push3DRenderObject(objects, {
-                modelKey: `item_${cell.item.type || 'floor'}`,
-                x: x + 0.5 + reactiveOffsetX * audioMove,
-                y: get3DConstructionLift(cell.item),
-                z: y + 0.5 + reactiveOffsetY * audioMove,
-                scaleX: 0.84,
-                scaleY: (cell.item.type === 'house' ? 0.82 : 0.14) * (1 + audioHeight),
-                overlapFade: getOverlapFadeForTile(x, y),
-                scaleZ: 0.84,
-                preserveModelHeight: cell.item.type === 'house',
-                visibilitySource: cell.item,
-                rotationY: -(Number(cell.item.angle) || 0),
-                tint: get3DDamageFlashTint(cell.item, get3DRenderOwnerColor(cell.owner)),
-                alpha: get3DConstructionAlpha(cell.item),
-                topTextureKey: item2DTexture ? item2DTexture._renderer3DExactKey : `item:${cell.item.type}:${cell.owner}:${itemStatus.keySuffix}`,
-                topTextureCanvas: item2DTexture || get3DTopTextureForFloorItem(cell.item, itemStatus),
-                sideTint: get3DDamageFlashTint(cell.item, (BASE_CARD_TYPES[cell.item.type] || {}).color || get3DRenderOwnerColor(cell.owner))
-            });
-            _rememberStatic3DObject(objects, cell.item, x, y, audioMove, audioHeight, !item2DTexture);
+    let pushCellItem = (x, y, cell) => {
+        let bgSoundRow = bgSoundGrid[y];
+        let fxSoundRow = fxSoundGrid[y];
+        let bgLevel = bgSoundRow ? bgSoundRow[x] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[x] || 0 : 0;
+        let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
+        let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
+        if (_reuseStatic3DObject(objects, cell.item, x, y, audioMove, audioHeight)) return;
+        let item2DTexture = get3DExact2DFloorTexture(cell.item, cell.owner);
+        let itemStatus = item2DTexture ? null : get3DBuildingTextureStatus(cell.item);
+        push3DRenderObject(objects, {
+            modelKey: `item_${cell.item.type || 'floor'}`,
+            x: x + 0.5 + reactiveOffsetX * audioMove,
+            y: get3DConstructionLift(cell.item),
+            z: y + 0.5 + reactiveOffsetY * audioMove,
+            scaleX: 0.84,
+            scaleY: (cell.item.type === 'house' ? 0.82 : 0.14) * (1 + audioHeight),
+            overlapFade: getOverlapFadeForTile(x, y),
+            scaleZ: 0.84,
+            preserveModelHeight: cell.item.type === 'house',
+            visibilitySource: cell.item,
+            rotationY: -(Number(cell.item.angle) || 0),
+            tint: get3DDamageFlashTint(cell.item, get3DRenderOwnerColor(cell.owner)),
+            alpha: get3DConstructionAlpha(cell.item),
+            topTextureKey: item2DTexture ? item2DTexture._renderer3DExactKey : `item:${cell.item.type}:${cell.owner}:${itemStatus.keySuffix}`,
+            topTextureCanvas: item2DTexture || get3DTopTextureForFloorItem(cell.item, itemStatus),
+            sideTint: get3DDamageFlashTint(cell.item, (BASE_CARD_TYPES[cell.item.type] || {}).color || get3DRenderOwnerColor(cell.owner))
+        });
+        _rememberStatic3DObject(objects, cell.item, x, y, audioMove, audioHeight, !item2DTexture);
+    };
+    // Floor items in row-major order. The live tile index lists them, so
+    // only a remembered (history) grid needs a scan of every visible tile.
+    if (_isLiveRenderGrid(grid)) {
+        let items = getCellItemsRowMajor();
+        for (let i = findCellItemRowStart(items, bounds.minGy); i < items.length; i++) {
+            let item = items[i], x = item.gx, y = item.gy;
+            if (y > bounds.maxGy) break;
+            if (x < bounds.minGx || x > bounds.maxGx) continue;
+            let cell = grid[y][x];
+            if (!cell || cell.item !== item) continue;
+            if (!fullVisibility && (!visibilityGrid[y] || visibilityGrid[y][x] === 0)) continue;
+            pushCellItem(x, y, cell);
+        }
+    } else {
+        for (let y = bounds.minGy; y <= bounds.maxGy; y++) {
+            let gridRow = grid[y];
+            let visRow = visibilityGrid[y];
+            if (!gridRow) continue;
+            for (let x = bounds.minGx; x <= bounds.maxGx; x++) {
+                let cell = gridRow[x];
+                if (!cell || !cell.item) continue;
+                if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
+                pushCellItem(x, y, cell);
+            }
         }
     }
 
@@ -1985,13 +2048,6 @@ function build3DFrameData(flat2d = false) {
         if (flat2d && _pushFlatUnit(flatBatch, u, ux / TILE + reactiveOffsetX * audioMove, uy / TILE + reactiveOffsetY * audioMove, view3DKey)) continue;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
-        let modelScale = u.isFlying ? (u.isWorker ? 0.65 : 0.8) : 1;
-        // The mounted panel is the unit's canonical 2D rendering at every LOD.
-        // The shared status texture remains only a short-lived fallback while a
-        // newly visible exact texture is rasterized within the frame budget.
-        let unitSideColor = u.unitType === 'collector'
-            ? '#f0a52b'
-            : ((BASE_UNIT_STATS[u.unitType] || BASE_UNIT_STATS.norm).color || null);
         if (u.isSnake) {
             pushSnakeRenderObjects(objects, u, ux + reactiveOffsetX * audioMove * TILE, uy + reactiveOffsetY * audioMove * TILE, footprint);
         } else {
@@ -2009,11 +2065,24 @@ function build3DFrameData(flat2d = false) {
                 o.x = ux / TILE + reactiveOffsetX * audioMove;
                 o.z = uy / TILE + reactiveOffsetY * audioMove;
                 o.walkPhase = _unit3DWalkPhase(u, cached.activity);
-                _relight3DObject(o, u, cached.tint, cached.sideTint, !!objects.flat2d);
+                // A unit's own light changes only with ticks (or the viewer).
+                if (cached.sourceLightTick !== gameTime || cached.sourceLightPlayer !== localPlayerId) {
+                    cached.sourceLight = getVisualUnitSourceLight(u);
+                    cached.sourceLightTick = gameTime;
+                    cached.sourceLightPlayer = localPlayerId;
+                }
+                _relight3DObject(o, u, cached.tint, cached.sideTint, !!objects.flat2d, cached.sourceLight);
                 objects.push(o);
                 if (!flat2d) pushUnit3DActivityEffects(objects, u, cached.activity, ux / TILE, uy / TILE, footprint);
                 continue;
             }
+            let modelScale = u.isFlying ? (u.isWorker ? 0.65 : 0.8) : 1;
+            // The mounted panel is the unit's canonical 2D rendering at every LOD.
+            // The shared status texture remains only a short-lived fallback while a
+            // newly visible exact texture is rasterized within the frame budget.
+            let unitSideColor = u.unitType === 'collector'
+                ? '#f0a52b'
+                : ((BASE_UNIT_STATS[u.unitType] || BASE_UNIT_STATS.norm).color || null);
             let activity = getUnit3DActivity(u);
             let unit2DTexture = get3DExact2DTexture(u, true);
             let unitTextureFallback = renderer3dExactTextureFallback;
