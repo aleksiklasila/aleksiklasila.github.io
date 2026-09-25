@@ -1978,11 +1978,131 @@ function initBuildTabs() {
     });
 }
 
-function salvageBtn(gx, gy, isMarked, isUnit, unitId) {
-    if (isUnit) {
-        return `<div style="margin-top:3px;text-align:center"><span class="info-salvage-btn" data-unit-id="${unitId}" style="cursor:pointer;background:${isMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${isMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${isMarked ? '#f44' : '#888'}">${isMarked ? '\u2620\u2715' : '\u2620'}</span></div>`;
+// Green ON / gray OFF pill shared by the keep (heart) and hold toggles.
+function infoOnOffPill(cls, attrs, icon, label, on) {
+    return `<span class="${cls}" ${attrs} style="cursor:pointer;background:${on ? '#232' : '#222'};padding:2px 8px;border:1px solid ${on ? '#6f6' : '#555'};border-radius:3px;font-size:9px;color:${on ? '#9f9' : '#888'}">${icon} ${label}</span>`;
+}
+
+// Heart ON = kept, OFF = marked for salvage.
+function salvageToggleBtn(gx, gy, marked) {
+    return infoOnOffPill('info-salvage-btn', `data-gx="${gx}" data-gy="${gy}" data-marked="${marked ? '1' : '0'}"`, '\u2764\ufe0f', marked ? 'OFF' : 'ON', !marked);
+}
+
+function salvageToggleGroupBtn(coordStr, allMarked, anyMarked) {
+    let label = !anyMarked ? 'ON' : (allMarked ? 'OFF' : 'MIXED');
+    return infoOnOffPill('info-salvage-group-btn', `data-coords="${coordStr}" data-marked="${anyMarked ? '1' : '0'}"`, '\u2764\ufe0f', label, !anyMarked);
+}
+
+// Living units are always ON; clicking kills them.
+function unitKillBtn(ids) {
+    return infoOnOffPill('info-kill-group-btn', `data-ids="${ids}"`, '\u2764\ufe0f', 'ON', true);
+}
+
+// Hold toggle: ON = free to move, OFF = holding position.
+function unitHoldBtn(group) {
+    let holding = group.filter(u => u.holdPosition);
+    let label = holding.length === 0 ? 'ON' : (holding.length === group.length ? 'OFF' : 'MIXED');
+    return infoOnOffPill('info-hold-group-btn', `data-ids="${group.map(u => u.id).join(',')}" data-hold="${holding.length === 0 ? '1' : '0'}"`, '\ud83d\udeb6', label, holding.length === 0);
+}
+
+function infoButtonHelpBtn() {
+    return `<span class="info-btn-help-btn" title="Explain these buttons" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;font-weight:bold;color:#d9b84a">?</span>`;
+}
+
+// Help popup entries per button class: [shortcut, explanation(stateLabel)].
+const INFO_BUTTON_HELP = {
+    'info-salvage-btn': ['', (s, el) => el.dataset.unitId ? 'Kill this unit.' : (s === 'ON' ? 'Mark for salvage: it is removed and part of its value refunded.' : 'Cancel salvage and keep it.')],
+    'info-salvage-group-btn': ['', s => s === 'ON' ? 'Mark all for salvage: they are removed and part of their value refunded.' : 'Cancel salvage and keep them all.'],
+    'info-kill-group-btn': ['', () => 'Kill the selected unit(s).'],
+    'info-hold-group-btn': ['C (hold) / X (release)', s => s === 'ON' ? 'Start holding: units stop moving but keep their orders and fight in place.' : 'Stop holding: units resume their orders.'],
+    'info-scale-group-btn': ['', (s, el) => el.dataset.mode === 'x2' ? 'Double the selected subgroup.' : 'Halve the selected subgroup.'],
+    'info-build-toggle-btn': ['', s => s === 'ON' ? 'Pause construction.' : 'Resume construction.'],
+    'info-build-toggle-group-btn': ['', s => s === 'ON' ? 'Pause construction.' : 'Resume construction.'],
+    'info-queue-toggle-btn': ['', s => s === 'ON' ? 'Stop producing from the queue.' : 'Resume producing from the queue.'],
+    'info-queue-toggle-group-btn': ['', s => s === 'ON' ? 'Stop producing from the queue.' : 'Resume producing from the queue.'],
+    'info-auto-stack-btn': ['', s => s === 'ON' ? 'Stop merging same-type neighbours into stacks.' : 'Automatically merge same-type neighbours into stacks.'],
+    'info-auto-stack-group-btn': ['', s => s === 'ON' ? 'Stop merging same-type neighbours into stacks.' : 'Automatically merge same-type neighbours into stacks.'],
+    'info-auto-upgrade-btn': ['', s => s === 'ON' ? 'Stop upgrading automatically.' : 'Upgrade automatically when affordable.'],
+    'info-auto-upgrade-group-btn': ['', s => s === 'ON' ? 'Stop upgrading automatically.' : 'Upgrade automatically when affordable.'],
+    'info-auto-research-btn': ['', s => s === 'ON' ? 'Stop queueing research automatically.' : 'Queue research automatically.'],
+    'info-auto-research-group-btn': ['', s => s === 'ON' ? 'Stop queueing research automatically.' : 'Queue research automatically.'],
+};
+
+function getInfoButtonHelpEntry(el) {
+    for (let cls of el.classList) {
+        let entry = INFO_BUTTON_HELP[cls];
+        if (!entry) continue;
+        let text = el.textContent || '';
+        let state = /\bOFF\b/.test(text) ? 'OFF' : (/\bMIXED\b/.test(text) ? 'MIXED' : 'ON');
+        let shortcut = entry[0];
+        if (cls === 'info-scale-group-btn') shortcut = el.dataset.mode === 'x2' ? 'E or *' : 'Q or /';
+        return { shortcut, text: entry[1](state, el) };
     }
-    return `<div style="margin-top:3px;text-align:center"><span class="info-salvage-btn" data-gx="${gx}" data-gy="${gy}" style="cursor:pointer;background:${isMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${isMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${isMarked ? '#f44' : '#888'}">${isMarked ? '\u2620\u2715' : '\u2620'}</span></div>`;
+    return null;
+}
+
+// Row of the info panel whose buttons the help popup currently mirrors.
+let infoButtonHelpRowIndex = -1;
+let infoButtonHelpPanel = null;
+
+function getInfoButtonHelpRow() {
+    let panel = infoButtonHelpPanel;
+    return panel && panel.isConnected && infoButtonHelpRowIndex >= 0 ? panel.querySelectorAll('.info-btn-row')[infoButtonHelpRowIndex] || null : null;
+}
+
+function isInfoButtonHelpPopupOpen() {
+    let popup = document.getElementById('unit-state-help-popup');
+    return infoButtonHelpRowIndex >= 0 && !!popup && !popup.classList.contains('hidden');
+}
+
+// Mirror the row's buttons into the help popup. Pressing a mirrored button
+// forwards the press to the real one, so there is only one set of handlers.
+function renderInfoButtonHelpPopup() {
+    let row = getInfoButtonHelpRow();
+    let body = document.getElementById('unit-state-help-body');
+    if (!row || !body) { setUnitStateHelpPopupOpen(false); return; }
+    let buttons = Array.from(row.querySelectorAll('span[class^="info-"]')).filter(el => getInfoButtonHelpEntry(el));
+    body.innerHTML = '';
+    body.style.whiteSpace = 'normal';
+    buttons.forEach(original => {
+        let help = getInfoButtonHelpEntry(original);
+        let item = document.createElement('div');
+        item.style.cssText = 'padding:6px 0;border-bottom:1px solid #26323d;';
+        let head = document.createElement('div');
+        head.style.cssText = 'display:flex;align-items:center;gap:8px;';
+        let copy = original.cloneNode(true);
+        copy.className = 'info-btn-help-mirror';
+        copy.style.fontSize = '12px';
+        bindInstantPress(copy, () => {
+            original.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+            setTimeout(() => { if (isInfoButtonHelpPopupOpen()) renderInfoButtonHelpPopup(); }, 120);
+        });
+        head.appendChild(copy);
+        if (help.shortcut) {
+            let sc = document.createElement('span');
+            sc.style.cssText = 'color:#8dc6ff;font-size:12px;';
+            sc.textContent = `Shortcut: ${help.shortcut}`;
+            head.appendChild(sc);
+        }
+        item.appendChild(head);
+        let desc = document.createElement('div');
+        desc.style.cssText = 'font-size:12px;margin-top:2px;';
+        desc.textContent = help.text;
+        item.appendChild(desc);
+        body.appendChild(item);
+    });
+}
+
+function openInfoButtonHelpPopup(helpBtn) {
+    let row = helpBtn.closest('.info-btn-row');
+    let panel = row && row.closest('#info-panel, #research-popup-info-panel');
+    if (!row || !panel) return;
+    setUnitStateHelpPopupOpen(true);
+    let titleEl = document.getElementById('unit-state-help-title');
+    if (titleEl) titleEl.textContent = '';
+    infoButtonHelpPanel = panel;
+    infoButtonHelpRowIndex = Array.prototype.indexOf.call(panel.querySelectorAll('.info-btn-row'), row);
+    renderInfoButtonHelpPopup();
 }
 
 function autoUpgradeBtn(gx, gy, enabled) {
@@ -2852,14 +2972,14 @@ function renderBarrackInfo(e) {
             : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
         let autoEnabled = isAutoUpgradeEnabled(e);
         let buildEnabled = isBuildEnabled(e);
-        let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? '\u2620\u2715' : '\u2620'}</span>`;
+        let salvBtn = `${salvageToggleBtn(e.gx, e.gy, e.markedForSalvage)}`;
         let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
         let stackBtn = autoStackBtn(e.gx, e.gy, isAutoStackEnabled(e));
         let queueBtn = queueToggleBtn(e.gx, e.gy, isQueueEnabled(e));
         let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, buildEnabled) : disabledInfoPill('\uD83D\uDD28 --');
         html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction((e.spawnQueue || []).length, 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
         html += renderSpawnerEnergyProgressRow(getSpawnerEnergyProgress(e));
-        html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoBtn}</div></div>`;
+        html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoBtn}</div></div>`;
     }
     html += infoDesc(DESCRIPTIONS[bKey] || 'Trains units for combat.');
     return html;
@@ -2932,14 +3052,14 @@ function renderBarrackGroupInfo(group) {
             ? `<span class="info-buy-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:#4f4;font-weight:bold;margin-left:4px;">[+]</span>`
             : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
         let coordStr = group.map(b => `${b.gx},${b.gy}`).join(';');
-        let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? '\u2620\u2715' : '\u2620'}</span>`;
+        let salvBtn = `${salvageToggleGroupBtn(coordStr, group.every(g => g.markedForSalvage), anyMarked)}`;
         let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
         let stackBtn = autoStackGroupBtn(coordStr, group.every(b => isAutoStackEnabled(b)), group.some(b => isAutoStackEnabled(b)));
         let queueBtn = queueToggleGroupBtn(coordStr, group.every(b => isQueueEnabled(b)), group.some(b => isQueueEnabled(b)));
         let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : disabledInfoPill('\uD83D\uDD28 --');
         html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, Math.max(1, readyGroup.length) * 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
         html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(readyGroup));
-        html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoBtn}</div></div>`;
+        html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoBtn}</div></div>`;
     }
     html += infoDesc(DESCRIPTIONS[bKey] || 'Trains units for combat.');
     return html;
@@ -3019,7 +3139,7 @@ function renderTowerInfo(e) {
         let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
         let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, isBuildEnabled(e)) : '';
         let stackBtn = autoStackBtn(e.gx, e.gy, isAutoStackEnabled(e));
-        html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? '\u2620\u2715' : '\u2620'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${stackBtn}${autoBtn}</div></div>`;
+        html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${salvageToggleBtn(e.gx, e.gy, e.markedForSalvage)}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${stackBtn}${autoBtn}</div></div>`;
     }
     html += infoDesc(DESCRIPTIONS[e.type] || 'Defensive tower.');
     return html;
@@ -3106,7 +3226,7 @@ function renderTowerGroupInfo(group) {
         let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
         let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : '';
         let stackBtn = autoStackGroupBtn(coordStr, group.every(t => isAutoStackEnabled(t)), group.some(t => isAutoStackEnabled(t)));
-        html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? '\u2620\u2715' : '\u2620'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${stackBtn}${autoBtn}</div></div>`;
+        html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${salvageToggleGroupBtn(coordStr, group.every(g => g.markedForSalvage), anyMarked)}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${stackBtn}${autoBtn}</div></div>`;
     }
     html += infoDesc(DESCRIPTIONS[e.type] || 'Defensive tower.');
     return html;
@@ -3167,14 +3287,14 @@ function renderSpawnerInfo(e) {
             : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
         let autoEnabled = isAutoUpgradeEnabled(e);
         let buildEnabled = isBuildEnabled(e);
-        let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? '\u2620\u2715' : '\u2620'}</span>`;
+        let salvBtn = `${salvageToggleBtn(e.gx, e.gy, e.markedForSalvage)}`;
         let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
         let stackBtn = autoStackBtn(e.gx, e.gy, isAutoStackEnabled(e));
         let queueBtn = queueToggleBtn(e.gx, e.gy, isQueueEnabled(e));
         let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, buildEnabled) : disabledInfoPill('\uD83D\uDD28 --');
         html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction((e.spawnQueue || []).length, 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
         html += renderSpawnerEnergyProgressRow(getSpawnerEnergyProgress(e));
-        html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoBtn}</div></div>`;
+        html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoBtn}</div></div>`;
     }
     html += infoDesc(DESCRIPTIONS[e.type] || 'Spawns worker units.');
     return html;
@@ -3261,7 +3381,7 @@ function renderFloorItemInfo(e) {
         let autoBtn = autoUpgradeBtn(fgx, fgy, autoEnabled);
         let buildBtn = e.underConstruction ? buildToggleBtn(fgx, fgy, isBuildEnabled(e)) : '';
         let stackBtn = autoStackBtn(fgx, fgy, isAutoStackEnabled(e));
-        html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-btn" data-gx="${fgx}" data-gy="${fgy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? '\u2620\u2715' : '\u2620'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${stackBtn}${autoBtn}</div></div>`;
+        html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${salvageToggleBtn(fgx, fgy, e.markedForSalvage)}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${stackBtn}${autoBtn}</div></div>`;
     }
     html += infoDesc(DESCRIPTIONS[e.type] || 'Placed floor item.');
     return html;
@@ -3415,11 +3535,10 @@ function renderUnitInfo(u) {
     if (u.watched > 0) statuses.push(`Watch T${Math.floor(Number(u.watchedByTeam) || 0) + 1}(${u.watched})`);
     if (statuses.length > 0) html += infoRow('Status', statuses.join(' '));
     if (u.owner === localPlayerId) {
-        html += `<div style="margin-top:3px;text-align:center;display:flex;align-items:center;justify-content:center;gap:4px">`;
-        html += `<span class="info-salvage-btn" data-unit-id="${u.id}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#888">\u2620</span>`;
-        html += `<span class="info-scale-group-btn" data-mode="x2" data-ids="${u.id}" data-unit-type="${u.unitType}" data-unit-level="${ignoreLevelSubgroups ? '' : getUnitBaseLevel(u)}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#8cf">x2</span>`;
-        html += `<span class="info-scale-group-btn" data-mode="d2" data-ids="${u.id}" data-unit-type="${u.unitType}" data-unit-level="${ignoreLevelSubgroups ? '' : getUnitBaseLevel(u)}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#fc8">/2</span>`;
-        html += `</div>`;
+        html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${unitKillBtn(u.id)}${unitHoldBtn([u])}</div><div style="display:flex;align-items:center;gap:4px;">`;
+        html += `<span class="info-scale-group-btn" data-mode="x2" data-ids="${u.id}" data-unit-type="${u.unitType}" data-unit-level="${ignoreLevelSubgroups ? '' : getUnitBaseLevel(u)}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#8cf">x2</span>`;
+        html += `<span class="info-scale-group-btn" data-mode="d2" data-ids="${u.id}" data-unit-type="${u.unitType}" data-unit-level="${ignoreLevelSubgroups ? '' : getUnitBaseLevel(u)}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#fc8">/2</span>`;
+        html += `</div></div>`;
     }
     html += infoDesc(DESCRIPTIONS[u.unitType] || 'Combat unit.');
     return html;
@@ -3597,11 +3716,10 @@ function renderUnitGroupInfo(group) {
     if (u0.owner === localPlayerId) {
         let ids = group.map(u => u.id).join(',');
         let subgroupLevel = ignoreLevelSubgroups ? '' : getUnitBaseLevel(u0);
-        html += `<div style="margin-top:3px;text-align:center;display:flex;align-items:center;justify-content:center;gap:4px">`;
-        html += `<span class="info-kill-group-btn" data-ids="${ids}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#888">\u2620x${group.length}</span>`;
-        html += `<span class="info-scale-group-btn" data-mode="x2" data-ids="${ids}" data-unit-type="${u0.unitType}" data-unit-level="${subgroupLevel}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#8cf">x2</span>`;
-        html += `<span class="info-scale-group-btn" data-mode="d2" data-ids="${ids}" data-unit-type="${u0.unitType}" data-unit-level="${subgroupLevel}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#fc8">/2</span>`;
-        html += `</div>`;
+        html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${unitKillBtn(ids)}${unitHoldBtn(group)}</div><div style="display:flex;align-items:center;gap:4px;">`;
+        html += `<span class="info-scale-group-btn" data-mode="x2" data-ids="${ids}" data-unit-type="${u0.unitType}" data-unit-level="${subgroupLevel}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#8cf">x2</span>`;
+        html += `<span class="info-scale-group-btn" data-mode="d2" data-ids="${ids}" data-unit-type="${u0.unitType}" data-unit-level="${subgroupLevel}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#fc8">/2</span>`;
+        html += `</div></div>`;
     }
     html += infoDesc(DESCRIPTIONS[u0.unitType] || 'Combat unit.');
     return html;
@@ -3734,14 +3852,14 @@ function renderSpawnerGroupInfo(group) {
             ? `<span class="info-buy-worker-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:#4f4;font-weight:bold;margin-left:4px;">[+]</span>`
             : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
         let coordStr = group.map(s => `${s.gx},${s.gy}`).join(';');
-        let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? '\u2620\u2715' : '\u2620'}</span>`;
+        let salvBtn = `${salvageToggleGroupBtn(coordStr, group.every(g => g.markedForSalvage), anyMarked)}`;
         let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
         let stackBtn = autoStackGroupBtn(coordStr, group.every(s => isAutoStackEnabled(s)), group.some(s => isAutoStackEnabled(s)));
         let queueBtn = queueToggleGroupBtn(coordStr, group.every(s => isQueueEnabled(s)), group.some(s => isQueueEnabled(s)));
         let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : disabledInfoPill('\uD83D\uDD28 --');
         html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, Math.max(1, readyGroup.length) * 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
         html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(readyGroup));
-        html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoBtn}</div></div>`;
+        html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoBtn}</div></div>`;
     }
     html += infoDesc(DESCRIPTIONS[e.type] || 'Spawns worker units.');
     return html;
@@ -4515,7 +4633,7 @@ function renderResearchInfo(e) {
         let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, isBuildEnabled(e)) : disabledInfoPill('\uD83D\uDD28 --');
         let queueBtn = queueToggleBtn(e.gx, e.gy, isQueueEnabled(e));
         let stackBtn = autoStackBtn(e.gx, e.gy, isAutoStackEnabled(e));
-        html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? '\u2620\u2715' : '\u2620'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoResearchToggle}${autoBtn}</div></div>`;
+        html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${salvageToggleBtn(e.gx, e.gy, e.markedForSalvage)}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoResearchToggle}${autoBtn}</div></div>`;
     }
     html += infoDesc(DESCRIPTIONS.research || 'Runs queued research projects.');
     return html;
@@ -4628,13 +4746,13 @@ function renderResearchGroupInfo(group) {
         let hasUnderConstruction = group.some(r => r.underConstruction);
         let allBuildEnabled = group.every(r => isBuildEnabled(r));
         let anyBuildEnabled = group.some(r => isBuildEnabled(r));
-        let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? '\u2620\u2715' : '\u2620'}</span>`;
+        let salvBtn = `${salvageToggleGroupBtn(coordStr, group.every(g => g.markedForSalvage), anyMarked)}`;
         let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
         let autoResearch = autoResearchGroupBtn(coordStr, allAutoResearchEnabled, anyAutoResearchEnabled);
         let stackBtn = autoStackGroupBtn(coordStr, group.every(r => isAutoStackEnabled(r)), group.some(r => isAutoStackEnabled(r)));
         let queueBtn = queueToggleGroupBtn(coordStr, group.every(r => isQueueEnabled(r)), group.some(r => isQueueEnabled(r)));
         let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : disabledInfoPill('\uD83D\uDD28 --');
-        html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoResearch}${autoBtn}</div></div>`;
+        html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoResearch}${autoBtn}</div></div>`;
     }
     html += infoDesc(DESCRIPTIONS.research || 'Runs queued research projects.');
     return html;
@@ -4918,7 +5036,7 @@ function renderFloorItemGroupInfo(group) {
         let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
         let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : '';
         let stackBtn = autoStackGroupBtn(coordStr, group.every(f => isAutoStackEnabled(f)), group.some(f => isAutoStackEnabled(f)));
-        html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? '\u2620\u2715' : '\u2620'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${stackBtn}${autoBtn}</div></div>`;
+        html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${salvageToggleGroupBtn(coordStr, group.every(g => g.markedForSalvage), anyMarked)}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${stackBtn}${autoBtn}</div></div>`;
     }
     html += infoDesc(DESCRIPTIONS[e.type] || 'Placed floor item.');
     return html;
@@ -5586,7 +5704,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
                 queueAction({ action: 'killUnit', unitId: parseInt(btn.dataset.unitId) });
             } else {
                 let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
-                let marked = (btn.textContent || '').includes('✕');
+                let marked = btn.dataset.marked === '1';
                 queueAction({ action: 'setSalvage', gx, gy, marked: !marked });
             }
             setTimeout(updateInfoPanel, 50);
@@ -5595,7 +5713,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     // Wire up salvage group buttons
     panel.querySelectorAll('.info-salvage-group-btn').forEach(btn => {
         bindInstantPress(btn, () => {
-            let marked = (btn.textContent || '').includes('✕');
+            let marked = btn.dataset.marked === '1';
             let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
             for (let c of coords) queueAction({ action: 'setSalvage', gx: c.gx, gy: c.gy, marked: !marked });
             setTimeout(updateInfoPanel, 50);
@@ -5699,6 +5817,21 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
             setTimeout(updateInfoPanel, 50);
         });
     });
+    // Wire up hold toggles (units). Releasing only targets held units, since
+    // 'stop' would also cancel the orders of units that are not holding.
+    panel.querySelectorAll('.info-hold-group-btn').forEach(btn => {
+        bindInstantPress(btn, () => {
+            let ids = new Set(btn.dataset.ids.split(',').map(Number));
+            let group = units.filter(u => ids.has(u.id) && !u.dead);
+            if (btn.dataset.hold === '1') queueAction({ action: 'hold', unitIds: group.map(u => u.id) });
+            else queueAction({ action: 'stop', unitIds: group.filter(u => u.holdPosition).map(u => u.id) });
+            setTimeout(updateInfoPanel, 50);
+        });
+    });
+    panel.querySelectorAll('.info-btn-help-btn').forEach(btn => {
+        bindInstantPress(btn, () => openInfoButtonHelpPopup(btn));
+    });
+    if (isInfoButtonHelpPopupOpen() && infoButtonHelpPanel === panel) renderInfoButtonHelpPopup();
     // Wire up x2 /2 subgroup resize buttons (units)
     panel.querySelectorAll('.info-scale-group-btn').forEach(btn => {
         bindInstantPress(btn, () => {
@@ -5758,11 +5891,15 @@ function setUnitStateHelpPopupOpen(open, stateLabel = 'State', helpText = '') {
     let popup = document.getElementById('unit-state-help-popup');
     if (!popup) return false;
     let wasOpen = !popup.classList.contains('hidden');
+    infoButtonHelpRowIndex = -1;
     if (open) {
         let titleEl = document.getElementById('unit-state-help-title');
         let bodyEl = document.getElementById('unit-state-help-body');
         if (titleEl) titleEl.textContent = `${String(stateLabel || 'State')} Help`;
-        if (bodyEl) bodyEl.textContent = String(helpText || 'Current unit order and why it is happening.');
+        if (bodyEl) {
+            bodyEl.style.whiteSpace = 'pre-wrap';
+            bodyEl.textContent = String(helpText || 'Current unit order and why it is happening.');
+        }
     }
     popup.classList.toggle('hidden', !open);
     return wasOpen !== open;

@@ -781,10 +781,11 @@
                 panel(0,.50,0,.98,.98,true);
             } else if (kind === 'item') {
                 if (weapon === 'house') {
-                    part(0,.22,0,.78,.50,.72,0,0,0,.92); // walls
-                    part(0,.52,0,.92,.12,.84,2); // eaves
-                    part(0,.20,.375,.25,.38,.035,1); // front door
-                    panel(0,.60,0,.86,.78,true,0,0,true);
+                    // Walls and eaves stay below the roof panel, or they hide it.
+                    part(0,.195,0,.78,.40,.72,0,0,0,.92); // walls
+                    part(0,.52,0,.92,.10,.84,2); // eaves
+                    part(0,.195,.375,.25,.30,.035,1); // front door
+                    panel(0,.63,0,.86,.78,true,0,0,true);
                 } else {
                     part(0, .20, 0, .69, .47, .69, 0, 0, 0, .8);
                     panel(0, .85, 0, .96, .96, true, 0, 0, true);
@@ -1654,7 +1655,12 @@
                     // Inverse scale gives correct lighting even while a building squashes.
                     vec3 scale2 = vec3(dot(m0.xyz,m0.xyz), dot(m1.xyz,m1.xyz), dot(m2.xyz,m2.xyz));
                     vNormal = normalize(mat3(model) * (n / max(scale2, vec3(.00001))));
-                    gl_Position = uViewProjection * model * vec4(p, 1);
+                    vec4 world = model * vec4(p, 1);
+                    // A squashed structure (unit on its tile) packs the roof and
+                    // its 2D panel into a sliver; lift the panel so it is not lost
+                    // to depth fighting with the roof below.
+                    if (detail.x > 3.5 && aNormal.y > .5) world.y += .02 * (1.0 - clamp(sqrt(scale2.y), 0.0, 1.0));
+                    gl_Position = uViewProjection * world;
                     vColor = color; vTrim = trim; vUv = aUv;
                     vAlpha = alpha; vLight = light; vSurface = int(detail.x + .5);
                 }

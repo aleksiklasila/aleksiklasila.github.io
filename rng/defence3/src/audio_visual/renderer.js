@@ -740,6 +740,18 @@ function get3DSpawnerSideVisualizationVariant(spawner) {
     }
 }
 
+// Model scale for non-tower structures. They share the house's roof height
+// (~0.52 world) with only slight variation, instead of growing with vision
+// range: uneven heights make the 3D skyline look messy. Towers stay tall.
+function get3DStructureModelHeight(type) {
+    switch (type) {
+        case 'barrack': return 0.6;
+        case 'research': return 0.64;
+        case 'spawner': case 'astar_spawner': return 0.56;
+        default: return 0.58;
+    }
+}
+
 function get3DFloorItemSideVisualizationVariant(item) {
     switch (String((item && item.type) || '')) {
         case 'farm': return 'farm';
@@ -1870,7 +1882,8 @@ function build3DFrameData(flat2d = false) {
             y: get3DConstructionLift(s),
             z: s.y / TILE + reactiveOffsetY * audioMove,
             scaleX: 0.95,
-            scaleY: 0.9 * (1 + audioHeight),
+            scaleY: get3DStructureModelHeight(s.type) * (1 + audioHeight),
+            preserveModelHeight: true,
             overlapFade: getOverlapFadeForTile(s.gx, s.gy),
             scaleZ: 0.95,
             visibilitySource: s,
@@ -1915,7 +1928,8 @@ function build3DFrameData(flat2d = false) {
             y: get3DConstructionLift(b),
             z: b.y / TILE + reactiveOffsetY * audioMove,
             scaleX: 0.98,
-            scaleY: 0.86 * (1 + audioHeight),
+            scaleY: get3DStructureModelHeight('barrack') * (1 + audioHeight),
+            preserveModelHeight: true,
             overlapFade: getOverlapFadeForTile(b.gx, b.gy),
             scaleZ: 0.98,
             visibilitySource: b,
