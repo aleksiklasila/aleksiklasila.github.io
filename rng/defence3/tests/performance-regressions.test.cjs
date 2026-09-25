@@ -176,19 +176,20 @@ r.requestModel = object => object.modelKey === 'custom' ? mesh : null;
 r.getPrimitiveMesh = () => mesh;
 r.tmpModel = new Float32Array(16); r.tmpNormal = new Float32Array(9);
 r.instancedMeshUniforms = {}; r.meshUniforms = {};
-r.cubeInstanceCapacity = 2048; r.cubeInstanceArray = new Float32Array(2048 * 26);
+r.cubeInstanceCapacity = 2048; r.cubeInstanceArray = new Float32Array(2048 * 27);
 r.getTopTexture = () => ({});
 let shadowComputations = 0, shadowInstances = 0, colorInstances = 0;
-const originalShadow = r.getShadowInfo;
-r.getShadowInfo = object => { shadowComputations++; return originalShadow.call(r, object); };
+const originalCompute = r.computeShadow;
+r.computeShadow = (object, out) => { shadowComputations++; return originalCompute.call(r, object, out); };
 const originalDrawShadows = r.drawShadows;
-r.drawShadows = (meshes, groups) => {
+r.drawShadows = (meshes, batches) => {
     shadowInstances += meshes.length;
-    for (const group of groups.values()) for (const shadow of group) {
-        assert.ok(shadow.scaleX > 0 && shadow.alpha > 0);
+    for (const batch of [batches.box, batches.cylinder]) for (let i = 0; i < batch.count; i++) {
+        const base = i * 27;
+        assert.ok(Math.hypot(batch.data[base], batch.data[base + 2]) > 0 && batch.data[base + 19] > 0);
         shadowInstances++;
     }
-    originalDrawShadows.call(r, meshes, groups);
+    originalDrawShadows.call(r, meshes, batches);
 };
 r.drawObject = () => { colorInstances++; };
 r.drawTexturedCubeInstances = objects => { colorInstances += objects.length; };

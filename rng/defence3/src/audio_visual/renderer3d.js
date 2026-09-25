@@ -59,6 +59,9 @@
         return normalized;
     }
 
+    // Whether objects with a model key cast shadows (by unsanitized key).
+    const shadowCasterByModelKey = new Map();
+
     const rgbColorCache = new Map();
     function hexToRgb(color) {
         let cached = rgbColorCache.get(color);
@@ -133,6 +136,13 @@
                 source ? light : color[0], source ? light : color[1], source ? light : color[2], o.alpha,
                 exact || tile ? 0 : -(o.rotationY || 0), source);
         }
+    }
+
+    // An exact 2D panel (pooled 96px canvas) that the sprite atlas can hold.
+    function isAtlasPanel(object) {
+        let canvas = object.topTextureCanvas;
+        return !!(canvas && canvas._renderer3DExactKey && canvas.width === FLAT_ATLAS_SIZE && canvas.height === FLAT_ATLAS_SIZE
+            && String(object.topTextureKey || '').startsWith('2d:'));
     }
 
     let flatTextureSerial = 0;
@@ -438,6 +448,28 @@
         if (!ww) return null;
         let invW = 1 / ww;
         return [wx * invW, wy * invW, wz * invW];
+    }
+
+    // composeModelMatrix written in place into instance data at `base`.
+    function writeModelMatrix(out, base, tx, ty, tz, rotationY, sx, sy, sz) {
+        let c = Math.cos(rotationY);
+        let s = Math.sin(rotationY);
+        out[base] = c * sx;
+        out[base + 1] = 0;
+        out[base + 2] = -s * sx;
+        out[base + 3] = 0;
+        out[base + 4] = 0;
+        out[base + 5] = sy;
+        out[base + 6] = 0;
+        out[base + 7] = 0;
+        out[base + 8] = s * sz;
+        out[base + 9] = 0;
+        out[base + 10] = c * sz;
+        out[base + 11] = 0;
+        out[base + 12] = tx;
+        out[base + 13] = ty;
+        out[base + 14] = tz;
+        out[base + 15] = 1;
     }
 
     function composeModelMatrix(out, tx, ty, tz, rotationY, sx, sy, sz) {
@@ -1091,6 +1123,14 @@
         };
     }
 
+    // Floats per model instance: matrix (16), color, alpha, shape/move,
+    // side angle/phase, side color, light and the panel's atlas layer.
+    const INSTANCE_STRIDE = 27;
+
+    // COLOR_ATTACHMENT0/1 and NONE; fixed WebGL2 enum values.
+    const SCENE_DRAW_BUFFERS_COLOR = [0x8CE0, 0];
+    const SCENE_DRAW_BUFFERS_WITH_DEPTH = [0x8CE0, 0x8CE1];
+
     class Defence3Renderer3D {
         constructor(options) {
             this.mount = options && options.mount;
@@ -1521,7 +1561,7 @@
             let bindInstanceAttributes = (mesh) => {
                 gl.bindVertexArray(mesh.vao);
                 gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
-                let instanceStrideBytes = 26 * 4;
+                let instanceStrideBytes = INSTANCE_STRIDE * 4;
                 for (let row = 0; row < 4; row++) {
                     let location = 3 + row;
                     gl.enableVertexAttribArray(location);
@@ -1546,6 +1586,9 @@
                 gl.enableVertexAttribArray(12);
                 gl.vertexAttribPointer(12, 1, gl.FLOAT, false, instanceStrideBytes, 100);
                 gl.vertexAttribDivisor(12, 1);
+                gl.enableVertexAttribArray(14);
+                gl.vertexAttribPointer(14, 1, gl.FLOAT, false, instanceStrideBytes, 104);
+                gl.vertexAttribDivisor(14, 1);
                 gl.bindVertexArray(null);
             };
             bindInstanceAttributes(this.cubeMesh);
@@ -1588,6 +1631,7 @@
                 layout(location=11) in vec3 trim;
                 layout(location=12) in float light;
                 layout(location=13) in vec4 detail;
+                layout(location=14) in float atlasLayer;
                 uniform mat4 uViewProjection;
                 uniform float uAnimationMode;
                 out vec3 vNormal;
@@ -1597,6 +1641,7 @@
                 out float vAlpha;
                 out float vLight;
                 flat out int vSurface;
+                flat out float vLayer;
                 void main() {
                     vec3 p = aPosition, n = aNormal;
                     float animationMode = floor(uAnimationMode + .5);
@@ -1662,7 +1707,7 @@
                     if (detail.x > 3.5 && aNormal.y > .5) world.y += .02 * (1.0 - clamp(sqrt(scale2.y), 0.0, 1.0));
                     gl_Position = uViewProjection * world;
                     vColor = color; vTrim = trim; vUv = aUv;
-                    vAlpha = alpha; vLight = light; vSurface = int(detail.x + .5);
+                    vAlpha = alpha; vLight = light; vSurface = int(detail.x + .5); vLayer = atlasLayer;
                 }
             `, `#version 300 es
                 precision highp float;
@@ -1673,11 +1718,14 @@
                 in float vAlpha;
                 in float vLight;
                 flat in int vSurface;
+                flat in float vLayer;
                 uniform float uIsUnit;
                 uniform float uIsFlying;
                 uniform float uSpriteLodBias;
                 ${CEL_LIGHTING_GLSL}
                 uniform sampler2D uTopTexture;
+                uniform highp sampler2DArray uAtlas;
+                uniform float uUseAtlas;
                 uniform sampler2D uSideTexture;
                 uniform float uHasSideTexture;
                 layout(location=0) out vec4 outColor;
@@ -1695,7 +1743,9 @@
                     if (vSurface == 3) base = vec3(.48,.94,1.0);
                     if (vSurface >= 4) {
                         // Preserve thin sprite strokes without disabling distant mipmaps.
-                        vec4 texel = texture(uTopTexture, vUv, uSpriteLodBias);
+                        // Exact 2D panels come from the shared sprite atlas (one
+                        // draw for every panel); uUseAtlas is uniform per draw.
+                        vec4 texel = uUseAtlas > .5 ? texture(uAtlas, vec3(vUv, vLayer), uSpriteLodBias) : texture(uTopTexture, vUv, uSpriteLodBias);
                         // Transparent sprite padding must not turn into a pale plaque.
                         if (texel.a < .1) discard;
                         base = mix(vec3(.055,.065,.08), texel.rgb, texel.a);
@@ -1722,6 +1772,8 @@
                 isUnit: gl.getUniformLocation(this.figureProgram, 'uIsUnit'),
                 viewProjection: gl.getUniformLocation(this.figureProgram, 'uViewProjection'),
                 topTexture: gl.getUniformLocation(this.figureProgram, 'uTopTexture'),
+                atlas: gl.getUniformLocation(this.figureProgram, 'uAtlas'),
+                useAtlas: gl.getUniformLocation(this.figureProgram, 'uUseAtlas'),
                 sideTexture: gl.getUniformLocation(this.figureProgram, 'uSideTexture'),
                 hasSideTexture: gl.getUniformLocation(this.figureProgram, 'uHasSideTexture')
             };
@@ -1792,13 +1844,16 @@
             gl.bindFramebuffer(gl.FRAMEBUFFER, this.depthPackFramebuffer);
             gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.sceneDepthColorTexture, 0);
             if (this.sceneSamples) {
+                // Color and depth only: packed depth for overlays is taken from
+                // the resolved depth texture, so a multisampled packed-depth
+                // attachment would only cost fill rate and bandwidth.
                 gl.bindFramebuffer(gl.FRAMEBUFFER, this.msaaFramebuffer);
-                for (let i = 0; i < 3; i++) {
+                for (let i of [0, 2]) {
                     gl.bindRenderbuffer(gl.RENDERBUFFER, this.msaaBuffers[i]);
                     gl.renderbufferStorageMultisample(gl.RENDERBUFFER, this.sceneSamples, i === 2 ? gl.DEPTH_COMPONENT24 : gl.RGBA8, width, height);
-                    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, i === 2 ? gl.DEPTH_ATTACHMENT : gl.COLOR_ATTACHMENT0 + i, gl.RENDERBUFFER, this.msaaBuffers[i]);
+                    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, i === 2 ? gl.DEPTH_ATTACHMENT : gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, this.msaaBuffers[i]);
                 }
-                gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+                gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
                 if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) this.sceneSamples = 0;
                 gl.bindRenderbuffer(gl.RENDERBUFFER, null);
             }
@@ -1807,15 +1862,16 @@
             this.overlayDepthFrame = null;
         }
 
-        resolveScene() {
+        // Depth is resolved only for overlay occlusion readback.
+        resolveScene(withDepth = false) {
             if (!this.sceneSamples) return;
             let gl = this.gl, { width, height } = this.sceneTargetSize;
             gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.msaaFramebuffer);
             gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.sceneFramebuffer);
             gl.readBuffer(gl.COLOR_ATTACHMENT0);
             gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
-            gl.blitFramebuffer(0, 0, width, height, 0, 0, width, height, gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT, gl.NEAREST);
-            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+            gl.blitFramebuffer(0, 0, width, height, 0, 0, width, height, withDepth ? gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT : gl.COLOR_BUFFER_BIT, gl.NEAREST);
+            gl.drawBuffers(this.sceneDrawBuffers);
         }
 
         captureOverlayDepthFrame() {
@@ -2384,7 +2440,7 @@
             // Preserve the packed scene depth attachment for other overlays.
             gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
             gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, offset / 10);
-            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+            gl.drawBuffers(this.sceneDrawBuffers);
             gl.disable(gl.BLEND);
             gl.depthMask(true);
             overlays.groundLinesRendered = true;
@@ -2803,18 +2859,25 @@
             gl.drawElements(gl.TRIANGLES, this.planeMesh.indexCount, gl.UNSIGNED_INT, 0);
         }
 
-        getShadowInfo(object) {
-            if (!object) return null;
+        // Shadow placement for one object into `out`; false when it casts none.
+        computeShadow(object, out) {
+            if (!object) return false;
             let alpha = Math.max(0, Math.min(1, Number(object.alpha) || 1));
-            if (alpha < 0.14) return null;
+            if (alpha < 0.14) return false;
 
-            let modelKey = sanitizeModelKey(object.modelKey);
-            if (modelKey === 'particle' || modelKey.indexOf('projectile_') === 0 || modelKey.indexOf('dropped_') === 0) return null;
+            let caster = shadowCasterByModelKey.get(object.modelKey);
+            if (caster === undefined) {
+                let modelKey = sanitizeModelKey(object.modelKey);
+                caster = !(modelKey === 'particle' || modelKey.indexOf('projectile_') === 0 || modelKey.indexOf('dropped_') === 0);
+                if (shadowCasterByModelKey.size >= 512) shadowCasterByModelKey.clear();
+                shadowCasterByModelKey.set(object.modelKey, caster);
+            }
+            if (!caster) return false;
 
             let scaleX = Math.max(0.01, Number(object.scaleX) || 0);
             let scaleY = Math.max(0.01, Number(object.scaleY) || 0);
             let scaleZ = Math.max(0.01, Number(object.scaleZ) || 0);
-            if (Math.max(scaleX, scaleY, scaleZ) < 0.05) return null;
+            if (Math.max(scaleX, scaleY, scaleZ) < 0.05) return false;
 
             let lightLevel = Math.max(0, Math.min(1, Number(object.lightLevel) || 0));
             let dirX = Number(object.shadowDirX);
@@ -2832,18 +2895,21 @@
             let shadowStretch = Math.min(2.2, (1.02 + casterHeight * 0.16) * shadowLength);
             let lightY = Math.max(0.2, SHADOW_LIGHT_DIRECTION[1]);
             let shadowOffset = (casterHeight * shadowLength / lightY) * 0.4;
-            let alphaScale = Math.max(0.04, Math.min(0.28, (0.05 + 0.24 * lightLevel - casterHeight * 0.03) * alpha));
-            return {
-                x: (Number(object.x) || 0) - dirX * shadowOffset,
-                y: SHADOW_GROUND_Y,
-                z: (Number(object.z) || 0) - dirZ * shadowOffset,
-                rotationY: Number(object.rotationY) || 0,
-                scaleX: scaleX * shadowStretch,
-                scaleY: SHADOW_FLAT_HEIGHT * (0.5 + lightLevel),
-                scaleZ: scaleZ * shadowStretch,
-                alpha: alphaScale,
-                renderShape: object && object.renderShape === 'cylinder' ? 'cylinder' : 'box'
-            };
+            out.x = (Number(object.x) || 0) - dirX * shadowOffset;
+            out.y = SHADOW_GROUND_Y;
+            out.z = (Number(object.z) || 0) - dirZ * shadowOffset;
+            out.rotationY = Number(object.rotationY) || 0;
+            out.scaleX = scaleX * shadowStretch;
+            out.scaleY = SHADOW_FLAT_HEIGHT * (0.5 + lightLevel);
+            out.scaleZ = scaleZ * shadowStretch;
+            out.alpha = Math.max(0.04, Math.min(0.28, (0.05 + 0.24 * lightLevel - casterHeight * 0.03) * alpha));
+            out.renderShape = object.renderShape === 'cylinder' ? 'cylinder' : 'box';
+            return true;
+        }
+
+        getShadowInfo(object) {
+            let shadow = {};
+            return this.computeShadow(object, shadow) ? shadow : null;
         }
 
         drawShadowObject(object, shadow = this.getShadowInfo(object)) {
@@ -2875,52 +2941,59 @@
             gl.drawElements(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0);
         }
 
-        drawShadowInstances(objects) {
-            if (!objects || objects.length <= 0) return;
-            let gl = this.gl;
-            let mesh = this.getPrimitiveMesh(objects[0]);
-            this.ensureCubeInstanceCapacity(objects.length);
+        // Primitive shadows are written straight into per-shape instance
+        // data while the scene is sorted, instead of one object per shadow.
+        beginShadowBatches() {
+            let batches = this.shadowBatches || (this.shadowBatches = {
+                box: { renderShape: 'box', data: new Float32Array(64 * INSTANCE_STRIDE), count: 0 },
+                cylinder: { renderShape: 'cylinder', data: new Float32Array(64 * INSTANCE_STRIDE), count: 0 }
+            });
+            batches.box.count = batches.cylinder.count = 0;
+            return batches;
+        }
 
-            let written = 0;
-            for (let index = 0; index < objects.length; index++) {
-                let shadow = objects[index];
-                let base = written * 26;
-                composeModelMatrix(
-                    this.tmpModel,
-                    shadow.x,
-                    shadow.y,
-                    shadow.z,
-                    shadow.rotationY,
-                    shadow.scaleX,
-                    shadow.scaleY,
-                    shadow.scaleZ
-                );
-                this.cubeInstanceArray.set(this.tmpModel, base);
-                this.cubeInstanceArray[base + 16] = 0;
-                this.cubeInstanceArray[base + 17] = 0;
-                this.cubeInstanceArray[base + 18] = 0;
-                this.cubeInstanceArray[base + 19] = shadow.alpha;
-                this.cubeInstanceArray[base + 20] = shadow.renderShape === 'cylinder' ? 1 : 0;
-                this.cubeInstanceArray[base + 21] = 0;
-                this.cubeInstanceArray[base + 22] = 0;
-                this.cubeInstanceArray[base + 23] = 0;
-                this.cubeInstanceArray[base + 24] = 0;
-                this.cubeInstanceArray[base + 25] = 1;
-                written++;
+        pushShadowInstance(object) {
+            let shadow = this.shadowScratch || (this.shadowScratch = {});
+            if (!this.computeShadow(object, shadow)) return false;
+            let batch = shadow.renderShape === 'cylinder' ? this.shadowBatches.cylinder : this.shadowBatches.box;
+            let base = batch.count * INSTANCE_STRIDE;
+            if (base + INSTANCE_STRIDE > batch.data.length) {
+                let grown = new Float32Array(batch.data.length * 2);
+                grown.set(batch.data);
+                batch.data = grown;
             }
-            if (written <= 0) return;
+            let data = batch.data;
+            writeModelMatrix(data, base, shadow.x, shadow.y, shadow.z, shadow.rotationY, shadow.scaleX, shadow.scaleY, shadow.scaleZ);
+            data[base + 16] = 0;
+            data[base + 17] = 0;
+            data[base + 18] = 0;
+            data[base + 19] = shadow.alpha;
+            data[base + 20] = shadow.renderShape === 'cylinder' ? 1 : 0;
+            data[base + 21] = 0;
+            data[base + 22] = 0;
+            data[base + 23] = 0;
+            data[base + 24] = 0;
+            data[base + 25] = 1;
+            batch.count++;
+            return true;
+        }
 
+        drawShadowInstances(batch) {
+            if (!batch || batch.count <= 0) return;
+            let gl = this.gl;
+            let mesh = this.getPrimitiveMesh(batch);
+            this.ensureCubeInstanceCapacity(batch.count);
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
-            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, written * 26));
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, batch.data, 0, batch.count * INSTANCE_STRIDE);
             gl.useProgram(this.instancedMeshProgram);
             gl.bindVertexArray(mesh.vao);
             gl.uniformMatrix4fv(this.instancedMeshUniforms.viewProjection, false, this.tmpViewProjection);
-            gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, written);
+            gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, batch.count);
         }
 
-        drawShadows(meshObjects, primitiveGroups) {
+        drawShadows(meshObjects, batches) {
             let hasMeshes = !!(meshObjects && meshObjects.length > 0);
-            let hasPrimitives = !!(primitiveGroups && primitiveGroups.size > 0);
+            let hasPrimitives = !!(batches && (batches.box.count > 0 || batches.cylinder.count > 0));
             if (!hasMeshes && !hasPrimitives) return;
 
             let gl = this.gl;
@@ -2929,12 +3002,14 @@
             gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
             gl.depthMask(false);
             for (let entry of meshObjects || []) this.drawShadowObject(entry.object, entry.shadow);
-            if (primitiveGroups) {
-                for (let group of primitiveGroups.values()) this.drawShadowInstances(group);
+            if (batches) {
+                // Black shadows blend multiplicatively: their order is irrelevant.
+                this.drawShadowInstances(batches.box);
+                this.drawShadowInstances(batches.cylinder);
             }
             gl.depthMask(true);
             gl.disable(gl.BLEND);
-            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+            gl.drawBuffers(this.sceneDrawBuffers);
         }
 
         getPackedObjectLight(object) {
@@ -2977,7 +3052,7 @@
             let nextCapacity = Math.max(32, this.cubeInstanceCapacity || 0);
             while (nextCapacity < requiredCount) nextCapacity *= 2;
             this.cubeInstanceCapacity = nextCapacity;
-            this.cubeInstanceArray = new Float32Array(nextCapacity * 26);
+            this.cubeInstanceArray = new Float32Array(nextCapacity * INSTANCE_STRIDE);
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
             gl.bufferData(gl.ARRAY_BUFFER, this.cubeInstanceArray.byteLength, gl.DYNAMIC_DRAW);
             gl.bindBuffer(gl.ARRAY_BUFFER, null);
@@ -2988,81 +3063,90 @@
             let gl = this.gl;
             let mesh = this.getPrimitiveMesh(objects[0]);
             this.ensureCubeInstanceCapacity(objects.length);
+            let data = this.cubeInstanceArray;
             for (let index = 0; index < objects.length; index++) {
                 let object = objects[index];
-                let base = index * 26;
-                composeModelMatrix(
-                    this.tmpModel,
-                    object.x,
-                    object.y,
-                    object.z,
-                    object.rotationY || 0,
-                    object.scaleX,
-                    object.scaleY,
-                    object.scaleZ
-                );
-                this.cubeInstanceArray.set(this.tmpModel, base);
+                let base = index * INSTANCE_STRIDE;
+                writeModelMatrix(data, base, object.x, object.y, object.z, object.rotationY || 0, object.scaleX, object.scaleY, object.scaleZ);
                 let color = hexToRgb(object.tint);
-                this.cubeInstanceArray[base + 16] = color[0];
-                this.cubeInstanceArray[base + 17] = color[1];
-                this.cubeInstanceArray[base + 18] = color[2];
-                this.cubeInstanceArray[base + 19] = Math.max(0.05, Math.min(1, Number(object.alpha) || 1));
-                this.cubeInstanceArray[base + 20] = object.renderShape === 'cylinder' ? 1 : 0;
-                this.cubeInstanceArray[base + 21] = 0;
-                this.cubeInstanceArray[base + 22] = color[0];
-                this.cubeInstanceArray[base + 23] = color[1];
-                this.cubeInstanceArray[base + 24] = color[2];
-                this.cubeInstanceArray[base + 25] = this.getPackedObjectLight(object);
+                data[base + 16] = color[0];
+                data[base + 17] = color[1];
+                data[base + 18] = color[2];
+                data[base + 19] = Math.max(0.05, Math.min(1, Number(object.alpha) || 1));
+                data[base + 20] = object.renderShape === 'cylinder' ? 1 : 0;
+                data[base + 21] = 0;
+                data[base + 22] = color[0];
+                data[base + 23] = color[1];
+                data[base + 24] = color[2];
+                data[base + 25] = this.getPackedObjectLight(object);
             }
 
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
-            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, objects.length * 26));
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, objects.length * INSTANCE_STRIDE);
             gl.useProgram(this.instancedMeshProgram);
             gl.bindVertexArray(mesh.vao);
             gl.uniformMatrix4fv(this.instancedMeshUniforms.viewProjection, false, this.tmpViewProjection);
             gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, objects.length);
         }
 
-        drawTexturedCubeInstances(objects, topTexture, sideTexture = null) {
-            if (!objects || objects.length <= 0 || !topTexture) return;
+        // With `atlas`, objects are figures with exact 96px 2D panels drawn from
+        // the sprite atlas; any panel without a layer falls back to its own
+        // texture.
+        drawTexturedCubeInstances(objects, topTexture, sideTexture = null, atlas = null) {
+            if (!objects || objects.length <= 0 || (!topTexture && !atlas)) return;
             let gl = this.gl;
+            if (atlas) {
+                let fallback = null;
+                let layers = this.atlasLayers || (this.atlasLayers = []);
+                let kept = this.atlasObjects || (this.atlasObjects = []);
+                layers.length = kept.length = 0;
+                for (let object of objects) {
+                    let layer = atlas.layerFor(object.topTextureCanvas);
+                    if (layer >= 0) { kept.push(object); layers.push(layer); }
+                    else (fallback || (fallback = [])).push(object);
+                }
+                if (fallback) {
+                    let byKey = new Map();
+                    for (let object of fallback) {
+                        let list = byKey.get(object.topTextureKey);
+                        if (!list) byKey.set(object.topTextureKey, list = []);
+                        list.push(object);
+                    }
+                    for (let list of byKey.values()) this.drawTexturedCubeInstances(list, this.getTopTexture(list[0].topTextureKey, list[0].topTextureCanvas));
+                }
+                if (!kept.length) return;
+                objects = kept;
+            }
             let kind = this.getFigureMeshKey(objects[0]);
             let mesh = kind ? this.figureMeshes.get(kind) : this.getPrimitiveMesh(objects[0]);
             let uniforms = kind ? this.figureUniforms : this.texturedCubeUniforms;
             this.ensureCubeInstanceCapacity(objects.length);
+            let data = this.cubeInstanceArray;
             for (let index = 0; index < objects.length; index++) {
                 let object = objects[index];
-                let base = index * 26;
-                composeModelMatrix(
-                    this.tmpModel,
-                    object.x,
-                    object.y,
-                    object.z,
-                    object.rotationY || 0,
-                    object.scaleX,
-                    object.scaleY,
-                    object.scaleZ
-                );
-                this.cubeInstanceArray.set(this.tmpModel, base);
+                let base = index * INSTANCE_STRIDE;
+                writeModelMatrix(data, base, object.x, object.y, object.z, object.rotationY || 0, object.scaleX, object.scaleY, object.scaleZ);
                 let color = hexToRgb(object.tint);
-                this.cubeInstanceArray[base + 16] = color[0];
-                this.cubeInstanceArray[base + 17] = color[1];
-                this.cubeInstanceArray[base + 18] = color[2];
-                this.cubeInstanceArray[base + 19] = Math.max(0.05, Math.min(1, Number(object.alpha) || 1));
-                this.cubeInstanceArray[base + 20] = object.renderShape === 'cylinder' ? 1 : 0;
-                this.cubeInstanceArray[base + 21] = (Number(object.sideTextureAngle) || 0) - (object.renderShape === 'cylinder' ? (Number(object.rotationY) || 0) : 0);
-                let sideColor = hexToRgb(object.sideTint || object.tint);
-                this.cubeInstanceArray[base + 22] = sideColor[0];
-                this.cubeInstanceArray[base + 23] = sideColor[1];
-                this.cubeInstanceArray[base + 24] = sideColor[2];
-                this.cubeInstanceArray[base + 25] = this.getPackedObjectLight(object);
+                data[base + 16] = color[0];
+                data[base + 17] = color[1];
+                data[base + 18] = color[2];
+                data[base + 19] = Math.max(0.05, Math.min(1, Number(object.alpha) || 1));
                 if (kind) {
-                    this.cubeInstanceArray[base + 20] = object.moveAmount || 0;
-                    this.cubeInstanceArray[base + 21] = object.walkPhase || 0;
+                    data[base + 20] = object.moveAmount || 0;
+                    data[base + 21] = object.walkPhase || 0;
+                } else {
+                    data[base + 20] = object.renderShape === 'cylinder' ? 1 : 0;
+                    data[base + 21] = (Number(object.sideTextureAngle) || 0) - (object.renderShape === 'cylinder' ? (Number(object.rotationY) || 0) : 0);
                 }
+                let sideColor = hexToRgb(object.sideTint || object.tint);
+                data[base + 22] = sideColor[0];
+                data[base + 23] = sideColor[1];
+                data[base + 24] = sideColor[2];
+                data[base + 25] = this.getPackedObjectLight(object);
+                data[base + 26] = atlas ? this.atlasLayers[index] : 0;
             }
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
-            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, objects.length * 26));
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, objects.length * INSTANCE_STRIDE);
             gl.useProgram(kind ? this.figureProgram : this.texturedCubeProgram);
             if (kind) {
                 gl.uniform1f(uniforms.isFlying, kind.startsWith('bird') ? 1 : 0);
@@ -3080,6 +3164,14 @@
             gl.bindTexture(gl.TEXTURE_2D, sideTexture);
             gl.uniform1i(uniforms.sideTexture, 1);
             gl.uniform1f(uniforms.hasSideTexture, sideTexture ? 1 : 0);
+            if (kind) {
+                // The array sampler keeps its own unit even when unused.
+                gl.activeTexture(gl.TEXTURE2);
+                gl.bindTexture(gl.TEXTURE_2D_ARRAY, atlas ? atlas.texture : null);
+                gl.uniform1i(uniforms.atlas, 2);
+                gl.uniform1f(uniforms.useAtlas, atlas ? 1 : 0);
+                gl.activeTexture(gl.TEXTURE0);
+            }
             gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, objects.length);
         }
 
@@ -3207,7 +3299,7 @@
             gl.activeTexture(gl.TEXTURE1);
             gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
             gl.activeTexture(gl.TEXTURE0);
-            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+            gl.drawBuffers(this.sceneDrawBuffers);
             gl.disable(gl.BLEND);
             gl.depthMask(true);
             gl.enable(gl.DEPTH_TEST);
@@ -3222,7 +3314,13 @@
             let gl = this.gl;
             this.overlayDepthCache.clear();
             this.overlayDepthFrame = null;
+            let overlays = snapshot.overlays || null;
+            let needsOverlayDepth = !snapshot.flat2d && !!(overlays && ((overlays.bars && overlays.bars.length > 0) || (overlays.texts && overlays.texts.length > 0)));
+            // Packed depth is written only for frames that read it back, and
+            // with MSAA it is packed from the resolved depth texture instead.
+            this.sceneDrawBuffers = needsOverlayDepth && !this.sceneSamples ? SCENE_DRAW_BUFFERS_WITH_DEPTH : SCENE_DRAW_BUFFERS_COLOR;
             gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneSamples ? this.msaaFramebuffer : this.sceneFramebuffer);
+            gl.drawBuffers(this.sceneDrawBuffers);
             gl.disable(gl.BLEND);
             gl.depthMask(true);
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -3242,57 +3340,63 @@
             this.pickInverseViewProjection = new Float32Array(this.tmpInverseViewProjection);
             let opaqueCubeGroups = new Map();
             let transparentCubeGroups = new Map();
-            let opaqueTexturedCubeGroups = new Map();
-            let transparentTexturedCubeGroups = new Map();
+            // Textured groups persist between frames (keyed as before) and are
+            // listed in first-use order each frame, so the draw order matches
+            // a freshly built map without rebuilding groups for every frame.
+            let frame = this.textureFrame;
+            let groupCaches = this.texturedGroupCaches || (this.texturedGroupCaches = [new Map(), new Map()]);
+            let opaqueTexturedCubeGroups = this.opaqueTexturedGroupList || (this.opaqueTexturedGroupList = []);
+            let transparentTexturedCubeGroups = this.transparentTexturedGroupList || (this.transparentTexturedGroupList = []);
+            opaqueTexturedCubeGroups.length = transparentTexturedCubeGroups.length = 0;
             let opaqueMeshObjects = [];
             let transparentMeshObjects = [];
-            let shadowPrimitiveGroups = new Map();
+            let shadowBatches = this.beginShadowBatches();
             let shadowMeshObjects = [];
-            for (let object of objects) {
+            for (let i = 0; i < objects.length; i++) {
+                let object = objects[i];
                 let isTransparent = (Number(object.alpha) || 1) < 0.999;
                 let figureMeshKey = this.getFigureMeshKey(object);
                 let mesh = figureMeshKey ? null : this.requestModel(object);
+                let textured = (object.topTextureKey && object.topTextureCanvas) || (object.sideTextureKey && object.sideTextureCanvas);
                 if (object.pickSource) {
-                    let textured = (object.topTextureKey && object.topTextureCanvas) || (object.sideTextureKey && object.sideTextureCanvas);
                     let pickMesh = mesh || (textured && this.figureMeshes.get(figureMeshKey)) || this.getPrimitiveMesh(object);
                     this.pickObjects.push({ object, mesh: pickMesh });
                 }
-                let shadow = this.getShadowInfo(object);
-                if (shadow) {
-                    if (mesh) {
-                        shadowMeshObjects.push({ object, shadow });
-                    } else {
-                        let shadowGroupKey = object.renderShape || 'box';
-                        let shadowGroup = shadowPrimitiveGroups.get(shadowGroupKey);
-                        if (!shadowGroup) {
-                            shadowGroup = [];
-                            shadowPrimitiveGroups.set(shadowGroupKey, shadowGroup);
-                        }
-                        shadowGroup.push(shadow);
-                    }
+                if (mesh) {
+                    let shadow = this.getShadowInfo(object);
+                    if (shadow) shadowMeshObjects.push({ object, shadow });
+                } else {
+                    this.pushShadowInstance(object);
                 }
                 if (mesh) {
                     (isTransparent ? transparentMeshObjects : opaqueMeshObjects).push(object);
-                } else if ((object.topTextureKey && object.topTextureCanvas) || (object.sideTextureKey && object.sideTextureCanvas)) {
-                    let targetGroups = isTransparent ? transparentTexturedCubeGroups : opaqueTexturedCubeGroups;
+                } else if (textured) {
                     // Scene objects are reused between frames with the same
                     // textures and shape; only the LOD mesh key can change.
                     let groupKey = object._r3dGroupFigure === figureMeshKey ? object._r3dGroupKey : undefined;
                     if (groupKey === undefined) {
-                        groupKey = `${object.topTextureKey || ''}|${object.sideTextureKey || ''}|${figureMeshKey || object.renderShape || 'box'}|anim:${Number(object.animationMode) || 0}`;
+                        // Figures with exact 2D panels differ only by atlas layer.
+                        let atlasPanel = !!(figureMeshKey && isAtlasPanel(object));
+                        groupKey = atlasPanel
+                            ? `atlas|${figureMeshKey}|anim:${Number(object.animationMode) || 0}`
+                            : `${object.topTextureKey || ''}|${object.sideTextureKey || ''}|${figureMeshKey || object.renderShape || 'box'}|anim:${Number(object.animationMode) || 0}`;
                         object._r3dGroupKey = groupKey;
                         object._r3dGroupFigure = figureMeshKey;
                     }
-                    let group = targetGroups.get(groupKey);
+                    let groupCache = groupCaches[isTransparent ? 1 : 0];
+                    let group = groupCache.get(groupKey);
                     if (!group) {
-                        group = {
-                            topTexture: this.getTopTexture(object.topTextureKey, object.topTextureCanvas),
-                            // Procedural panels use the full 2D status canvas; avoid
-                            // uploading the obsolete audio texture for these models.
-                            sideTexture: !figureMeshKey && object.sideTextureKey && object.sideTextureCanvas ? this.getTopTexture(object.sideTextureKey, object.sideTextureCanvas) : null,
-                            objects: []
-                        };
-                        targetGroups.set(groupKey, group);
+                        group = { topTexture: null, sideTexture: null, objects: [], frame: -1, atlas: groupKey.startsWith('atlas|') };
+                        groupCache.set(groupKey, group);
+                    }
+                    if (group.frame !== frame) {
+                        group.frame = frame;
+                        group.objects.length = 0;
+                        group.topTexture = group.atlas ? null : this.getTopTexture(object.topTextureKey, object.topTextureCanvas);
+                        // Procedural panels use the full 2D status canvas; avoid
+                        // uploading the obsolete audio texture for these models.
+                        group.sideTexture = !figureMeshKey && !group.atlas && object.sideTextureKey && object.sideTextureCanvas ? this.getTopTexture(object.sideTextureKey, object.sideTextureCanvas) : null;
+                        (isTransparent ? transparentTexturedCubeGroups : opaqueTexturedCubeGroups).push(group);
                     }
                     group.objects.push(object);
                 } else {
@@ -3306,15 +3410,17 @@
                     group.push(object);
                 }
             }
-            this.drawShadows(shadowMeshObjects, shadowPrimitiveGroups);
+            this.drawShadows(shadowMeshObjects, shadowBatches);
             for (let object of opaqueMeshObjects) this.drawObject(object);
-            for (let group of opaqueTexturedCubeGroups.values()) {
-                this.drawTexturedCubeInstances(group.objects, group.topTexture, group.sideTexture);
+            let atlas = opaqueTexturedCubeGroups.length || transparentTexturedCubeGroups.length ? this.getFlatAtlas() : null;
+            if (atlas) atlas.beginFrame(this.textureFrame);
+            for (let group of opaqueTexturedCubeGroups) {
+                this.drawTexturedCubeInstances(group.objects, group.topTexture, group.sideTexture, group.atlas ? atlas : null);
             }
             for (let group of opaqueCubeGroups.values()) {
                 this.drawCubeInstances(group);
             }
-            if (transparentMeshObjects.length > 0 || transparentCubeGroups.size > 0 || transparentTexturedCubeGroups.size > 0) {
+            if (transparentMeshObjects.length > 0 || transparentCubeGroups.size > 0 || transparentTexturedCubeGroups.length > 0) {
                 gl.enable(gl.BLEND);
                 gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
                 gl.depthMask(false);
@@ -3326,8 +3432,8 @@
                     return (bdx * bdx + bdz * bdz) - (adx * adx + adz * adz);
                 });
                 for (let object of transparentMeshObjects) this.drawObject(object);
-                for (let group of transparentTexturedCubeGroups.values()) {
-                    this.drawTexturedCubeInstances(group.objects, group.topTexture, group.sideTexture);
+                for (let group of transparentTexturedCubeGroups) {
+                    this.drawTexturedCubeInstances(group.objects, group.topTexture, group.sideTexture, group.atlas ? atlas : null);
                 }
                 for (let group of transparentCubeGroups.values()) {
                     this.drawCubeInstances(group);
@@ -3335,18 +3441,24 @@
                 gl.depthMask(true);
                 gl.disable(gl.BLEND);
             }
-            let overlays = snapshot.overlays || null;
+            if (atlas) atlas.endFrame();
             this.drawGroundOverlays(overlays);
-            let needsOverlayDepth = !!(overlays && ((overlays.bars && overlays.bars.length > 0) || (overlays.texts && overlays.texts.length > 0)));
-            this.resolveScene();
+            this.resolveScene(needsOverlayDepth);
             if (needsOverlayDepth) this.captureOverlayDepthFrame();
             this.presentSceneToCanvas();
             // Delete GPU resources as well as JS entries. Never evict a texture
             // used in this frame; amortize cleanup after camera sweeps/battles.
             this.trimTopTextures();
+            if (frame % 120 === 0) this.trimTexturedGroups(frame - 120);
             gl.bindVertexArray(null);
             gl.bindTexture(gl.TEXTURE_2D, null);
             gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        }
+
+        trimTexturedGroups(oldestFrame) {
+            for (let groupCache of this.texturedGroupCaches || []) {
+                for (let [key, group] of groupCache) if (group.frame < oldestFrame) groupCache.delete(key);
+            }
         }
 
         trimTopTextures() {

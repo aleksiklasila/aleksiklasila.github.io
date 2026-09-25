@@ -122,3 +122,63 @@ simulation entry point and define render snapshots and input/effect messages
 before moving it off the main thread. A data-oriented rewrite should target
 the unit-update passes demonstrated hot by profiling; copying every object
 between threads would not address their cost.
+
+# 3D rendering benchmark
+
+`.claude/renderbench.js` runs in the browser (see its header). `RB.setup()`
+starts a seeded 120×120 arena with **500 combat units and 40 turrets per
+team**; ticks run untimed between frames (three frames per tick) and each frame
+times `renderFrame` at 1920×1080. Scenarios: `move` (both armies ordered to
+3–4 rally points), `move` with all 500 own units selected (outlines, rally
+lines), and `fight` (attack-move into the enemy base: turrets firing, damage,
+particles).
+
+## Findings
+
+- The GPU was not the limit on the test machine: after `gl.finish()` a 3D frame
+  ends when its CPU work ends. The cost is JavaScript in `build3DFrameData`
+  (scene objects) and `render` (sorting, shadows, instance data).
+- Fights were worst. Every damaged unit has its own 2D status panel, so 3D
+  made one draw call per panel (90–190 per frame) and created and mipmapped
+  5–12 new textures from canvases every frame. 2D already used a texture array.
+- The multisampled scene wrote a second (packed depth) color attachment and
+  resolved depth every frame; only health-bar overlay occlusion reads it, and
+  none are currently produced.
+
+## Changes
+
+- Exact 2D panels on 3D models come from the flat renderer's sprite atlas
+  (texture array, GPU-only uploads) with a per-instance layer: one draw per
+  model/animation instead of one per panel, and no texture churn.
+- Packed depth is written/resolved only in frames that read it back; the MSAA
+  target has no packed-depth attachment.
+- Textured instance groups persist between frames; primitive shadows are
+  written straight into instance arrays; matrices are written in place.
+- Floor items come from the row-major tile index instead of scanning every
+  visible tile; unit-occupied tiles use a stamped typed array.
+- Light gradients are cached per tile in typed arrays; a unit's own light is
+  computed once per tick.
+
+Visuals: a same-state A/B (`RB.rendererAB`) renders identical game states
+with both `renderer3d.js` versions. Differences stay at the re-render noise
+floor (≤1 color level in 32×48 block averages; 2D pixel-identical).
+
+## Measured results
+
+Median of three interleaved page loads per version, CPU ms per frame
+(`RB.suite({ detail: false })`). Baseline `fcd332c`.
+
+| Scenario | 3D before | 3D after | Before / after | p95 before → after |
+|---|---:|---:|---:|---:|
+| Move, zoomed out | 5.74 | 4.00 | 1.44× | 11.8 → 8.1 |
+| Move, zoom 1 | 5.00 | 3.73 | 1.34× | 9.2 → 6.7 |
+| Move, 500 selected, zoomed out | 7.53 | 4.99 | 1.51× | 24.8 → 8.8 |
+| Move, 500 selected, zoom 1 | 7.74 | 4.55 | 1.70× | 24.3 → 8.3 |
+| Fight, zoomed out | 9.98 | 9.22 | 1.08× | 20.3 → 17.7 |
+| Fight, zoom 1 | 13.01 | 7.79 | 1.67× | 40.2 → 13.4 |
+
+Run-to-run noise on this machine is large (±30% for one run), so single rows
+are indicative; the draw-call and texture-upload reductions are exact counts.
+2D stays ~2–3 ms. The remaining 3D gap in fights is mostly per-tick unit
+panel rebuilds (attack flashes change every attacking unit's panel each tick)
+and per-object shadow/instance work in `render`.
