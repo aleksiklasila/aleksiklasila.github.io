@@ -140,12 +140,29 @@ function netNoteRttSample(peerId, rttMs, now = performance.now()) {
 }
 
 // Round trip most packets make it within: the 90th percentile of recent
-// samples. Unlike mean + variance it is not inflated by the occasional
-// retransmitted packet, which the stall-driven margin covers instead.
+// samples, leaving out retransmitted ones. On a lossy link a few pings in
+// every 40 come back an RTO late (hundreds of ms), which would set the
+// percentile, while tick traffic does not pay for a loss that way: every
+// packet repeats the previous ticks, so a lost one costs about a tick (and
+// the stall-driven margin covers the rest). Samples far above the bulk count
+// as retransmits only while they are few; a link that got slower moves the
+// bulk itself.
 function netRttBudgetMs(link) {
     if (!link || !Array.isArray(link.recent) || link.recent.length === 0) return NaN;
     let sorted = link.recent.slice().sort((a, b) => a - b);
-    return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9))];
+    let n = sorted.length;
+    let at = q => sorted[Math.min(n - 1, Math.floor(n * q))];
+    if (n >= 5) {
+        let cutoff = at(0.5) + Math.max(60, 3 * (at(0.75) - at(0.25)));
+        let kept = 0;
+        while (kept < n && sorted[kept] <= cutoff) kept++;
+        if (kept < n && kept >= n * 0.75) return sorted[Math.min(kept - 1, Math.floor(kept * 0.9))];
+    } else {
+        // The first few pings (a retransmit among them would be the "90th
+        // percentile"): the middle one plus a margin, until there are more.
+        return Math.min(at(0.9), at(0.5) + 40);
+    }
+    return at(0.9);
 }
 
 function netNoteHeard(peerId, now = performance.now()) {
@@ -229,8 +246,9 @@ function netUpdateAutoController(now = performance.now()) {
     } else if (target < current) {
         if (!netAutoCalmSince) netAutoCalmSince = now;
         // Lowering is safe at any time (queueAction never reuses a sent
-        // tick) but done gradually so short dips do not cause oscillation.
-        if ((now - netAutoCalmSince) > 3000) {
+        // tick) but done gradually so short dips do not cause oscillation;
+        // quicker while far above the target (the start of a match).
+        if ((now - netAutoCalmSince) > (current - target >= 2 ? 1000 : 3000)) {
             LOCKSTEP_PIPELINE_TICKS = current - 1;
             netAutoCalmSince = now;
             netCounters.inputDelayChanges++;
@@ -264,8 +282,9 @@ function netHostUpdateMatchInputDelay(now = performance.now()) {
         netMatchInputDelay = target;
         netMatchDelayCalmSince = now;
     } else if (target < netMatchInputDelay) {
+        // The guests' reports are already smoothed: follow them down soon.
         if (!netMatchDelayCalmSince) netMatchDelayCalmSince = now;
-        if ((now - netMatchDelayCalmSince) > 3000) {
+        if ((now - netMatchDelayCalmSince) > 1000) {
             netMatchInputDelay--;
             netMatchDelayCalmSince = now;
         }
