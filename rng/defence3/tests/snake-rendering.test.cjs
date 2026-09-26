@@ -27,7 +27,8 @@ for (const source of [unitSource, renderer, renderer3d, read('src/utils/utils_ne
 const headStart = renderer.indexOf('let pushSnakeRenderObjects');
 const head = renderer.slice(headStart, renderer.indexOf('for (let u of units)', headStart));
 assert.match(head,/scaleX: footprint,[\s\S]*scaleZ: footprint,/);
-const serpent = renderer3d.slice(renderer3d.indexOf("} else if (kind === 'serpent') {"), renderer3d.indexOf('} else {', renderer3d.indexOf("} else if (kind === 'serpent') {")));
+const serpentStart = renderer3d.indexOf("} else if (kind === 'serpent') {");
+const serpent = renderer3d.slice(serpentStart, renderer3d.indexOf('} else', serpentStart + 10));
 const panel = serpent.match(/panel\(([^)]*)\)/)[1].split(',').map(s=>s.trim());
 assert.equal(panel.length,6,'horizontal panel without the world-aligned flag');
 assert.equal(panel[3],panel[4],'square panel');

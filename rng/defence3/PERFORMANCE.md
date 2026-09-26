@@ -303,3 +303,81 @@ AB.start();   // then read AB.result
 // Visual checks (arena of every role and turret):
 await (0,eval)(await (await fetch('/rng/defence3/.claude/visbench.js')).text());
 ```
+
+# Selection panel and rally clicks
+
+With everything selected, clicking rally points dropped a 120 FPS game to
+~80 with frames of 150–250 ms. `.claude/rallybench.js` reproduces it: one or
+more of every unit and building, huge energy/A*, select all, repeated right
+clicks; frames are driven synchronously (due ticks, then `processRenderFrame`)
+and split by function.
+
+## Findings
+
+The simulation and 3D scene were not the cause; the right-side info panel
+was. For 52 selected things it is ~5,500 elements (~550 KB of markup).
+
+- One unit changing state (Move → Idle) changed a tag attribute, and any tag
+  change rebuilt the whole panel.
+- After a rebuild, restoring the scroll position around the mouse read
+  `textContent` of every element (nested containers repeat their subtree),
+  forcing ~100–130 ms per rebuild.
+- Every right-click command refreshed the panel synchronously, although the
+  command only takes effect on a later tick.
+
+## Changes
+
+- Attribute-only tag changes are patched on the same element (same tag and
+  class, so bound listeners stay valid), like text changes before.
+- Each selection group is its own section; a structural change (a worker's
+  assignment appearing, a queue emptying) rebuilds and rebinds only that
+  section.
+- The mouse anchor follows the hovered element across patches and section
+  rebuilds and compares attributes before reading text; a key without text
+  and per-refresh ids is the fallback.
+- Commands pull the next refresh forward to just after their tick instead of
+  refreshing on the input frame. The refresh interval (250 ms) stretches for
+  huge selections so the panel takes at most ~5% of the time (up to 1.5 s).
+- Barracks and spawners are no longer also pushed as blank floor items (see
+  below), which also removes a second object per such building per frame.
+
+## Measured results
+
+Same page, 57 units and 99 buildings selected, 12 clicks × 60 frames at a
+simulated 120 FPS; single interleaved runs (noisy), CPU ms per frame.
+
+| Scenario | Worst before → after | Mean before → after | Click handler before → after |
+|---|---:|---:|---:|
+| Selected, idle | 252 → 38 | 4.09 → 3.13 | – |
+| Rally clicks | 189 → 42 | 4.92 → 4.13 | 12.6 → 1.7 |
+| Reselect, rally | 197 → 60 | 5.30 → 3.50 | 17.6 → 1.2 |
+
+Remaining slow frames are spread over panel refreshes of very large
+selections (tens of ms, now at most every 250 ms–1.5 s), simulation ticks
+right after orders and occasional garbage collection. The panel markup
+(40% inline styles) is the next thing to shrink.
+
+`RALLY.stability()` parks the mouse on a panel button while levels, queues,
+deaths and number widths change; the hovered control must not move.
+
+```js
+await (0,eval)(await (await fetch('/rng/defence3/.claude/rallybench.js')).text());
+await RALLY.setup({ copies: 3 }); RALLY.matrix(); RALLY.stability();
+```
+
+# Start-of-game structure panels
+
+Barracks and spawners are cell items too. The floor-item pass drew them with
+`drawFloorItem`, which leaves items with their own `draw` blank, and both
+passes share the per-entity static object cache: the barrack/spawner pass
+reused the blank floor object until something reset the cache (a view mode
+switch, new textures). The floor pass now skips entities that draw themselves.
+
+# Unit and building models
+
+`.claude/modelbench.js` builds a full-visibility arena with every unit and
+building (`MB.lineup()`), masses of one kind (`MB.mass(key, 100)`) and
+`MB.stress()` (100 each of ten kinds with production queued, 3D/2D frame
+times). With 400 units and 580 buildings the new models render at the same
+or lower cost than the old ones (3D ~9.5 vs ~12 ms, 2D ~2.7 vs ~2.9 ms per
+frame, single runs).

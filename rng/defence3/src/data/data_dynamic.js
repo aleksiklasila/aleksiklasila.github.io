@@ -2879,7 +2879,7 @@ function rebuildResearchThings() {
         things.push({
             kind: 'unit',
             key,
-            label: key.replace(/_/g, ' '),
+            label: getUnitDisplayName(key),
             basePrice: getUnitBaseResearchPrice(key),
             stats
         });

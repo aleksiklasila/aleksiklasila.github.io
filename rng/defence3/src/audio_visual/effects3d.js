@@ -448,23 +448,7 @@ function pushStructureActivityFx(entity, x, z, roof, ownerColor) {
         }
         return;
     }
-    let queued = entity.spawnQueue && entity.spawnQueue.length > 0;
-    if (!queued) return;
-    let progress = entity.spawnCooldown > 0 ? Math.max(0, Math.min(1, entity.spawnTimer / entity.spawnCooldown)) : 0;
-    let spin = now * (.12 + progress * .25) + seed;
-    let rgb = ownerColor || '#9aa';
-    if (roof < .35) {
-        // Low floor buildings: a small rotor on a roof corner, clear of the display.
-        let rx = x + .32, rz = z + .32, ry = roof + .06;
-        for (let k = 0; k < 2; k++) _fxBox(rx, ry, rz, spin + k * Math.PI * .5, .26, .025, .04, 0, rgb, 1);
-        _fxOrb(rx, ry + .01, rz, .06, '#ffd24a', .9, 0);
-    } else {
-        // A cross of spokes on the +x wall, turning faster as the unit nears completion.
-        let wy = roof * .55, wx = x + .5;
-        for (let k = 0; k < 2; k++) _fxBox(wx, wy, z, Math.PI * .5, .38, .05, .035, 0, rgb, 1, 0, spin + k * Math.PI * .5);
-        _fxOrb(wx + .02, wy, z, .08, '#ffd24a', .9, 0);
-    }
-    if (type === 'healer_spawner') _fxDecal(x, .02, z, 0, 1.1 + .1 * Math.sin(now * .2), '#62ffb0', .35, _FXP.RING, .9, 1);
+    // Production itself is shown by the unit turning on the workshop deck.
 }
 
 // Steam from a moving snake engine's stack, dust behind heavy walkers.

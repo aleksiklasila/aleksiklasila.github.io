@@ -1406,7 +1406,7 @@ function initInput() {
             }
             let activeUnits = getActiveUnits();
             if (issuedStructureCommand && activeUnits.length === 0) {
-                updateInfoPanel();
+                requestInfoPanelRefresh();
                 return;
             }
 
@@ -1414,7 +1414,7 @@ function initInput() {
             if (!clickTileVisible && activeUnits.length > 0) {
                 let allIds = activeUnits.map(u => u.id);
                 applyUnitCommandTargets(allIds, world.x, world.y, isCtrlMulti, 'move');
-                updateInfoPanel();
+                requestInfoPanelRefresh();
                 return;
             }
 
@@ -1459,7 +1459,7 @@ function initInput() {
                     let buildTarget = _getBuilderWorkTargetNear(world.x, world.y, localPlayerId, 22, true);
                     if (buildTarget) {
                         applyWorkerAssignTargets(builderUnits, 'build', buildTarget.gx, buildTarget.gy, isCtrlMulti);
-                        updateInfoPanel();
+                        requestInfoPanelRefresh();
                         // If no non-worker units, return
                         let nonWorkers = activeUnits.filter(u => !u.workerType);
                         if (nonWorkers.length === 0) return;
@@ -1480,7 +1480,7 @@ function initInput() {
                         issuedCollectorAssign = true;
                     }
                     if (issuedCollectorAssign) {
-                        updateInfoPanel();
+                        requestInfoPanelRefresh();
                         let nonWorkers = activeUnits.filter(u => !u.workerType);
                         if (nonWorkers.length === 0) return;
                     }
@@ -1492,7 +1492,7 @@ function initInput() {
                     let queueTarget = _getHealerQueueTargetNear(world.x, world.y, localPlayerId, 22, false);
                     if (queueTarget) {
                         applyWorkerAssignTargets(healerUnits, 'queue', queueTarget.gx, queueTarget.gy, isCtrlMulti);
-                        updateInfoPanel();
+                        requestInfoPanelRefresh();
                         let nonWorkers = activeUnits.filter(u => !u.workerType);
                         if (nonWorkers.length === 0) return;
                     }
@@ -1513,7 +1513,7 @@ function initInput() {
                     }
                     if (researchTarget) {
                         applyWorkerAssignTargets(researcherUnits, 'research', researchTarget.gx, researchTarget.gy, isCtrlMulti);
-                        updateInfoPanel();
+                        requestInfoPanelRefresh();
                         let nonWorkers = activeUnits.filter(u => !u.workerType);
                         if (nonWorkers.length === 0) return;
                     }
@@ -1582,7 +1582,7 @@ function initInput() {
             } else if (!isCtrlMulti) {
                 multiUnitCommandPoints = [];
             }
-            updateInfoPanel();
+            requestInfoPanelRefresh();
         }
     });
 
@@ -1824,7 +1824,7 @@ function initInput() {
                 multiUnitCommandPoints = [];
             }
 
-            updateInfoPanel();
+            requestInfoPanelRefresh();
             return;
         }
 
