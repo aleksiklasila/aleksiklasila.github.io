@@ -34,7 +34,11 @@ function world(resource, localPlayerId = 0) {
     });
     vm.runInContext(read('src/utils/utils_common.js'), c);
     vm.runInContext(read('src/things/worker.js'), c);
-    for (const name of ['_isCollectorGatherTargetType', '_getGatherTargetAtForCollectorWorkerType', '_isValidGatherTargetForCollectorWorkerType', 'processActions']) {
+    c.BASE_CARD_TYPES = {};
+    c.reportRuntimeError = (kind, err) => { throw err; };
+    vm.runInContext(main.match(/const ACTION_MAX_COUNT = [\s\S]*?const ACTION_MAX_TOWER_COORDS = \d+;/)[0], c);
+    for (const name of ['_isCollectorGatherTargetType', '_getGatherTargetAtForCollectorWorkerType', '_isValidGatherTargetForCollectorWorkerType',
+        '_actionInt', '_actionNum', '_actionStr', 'sanitizeAction', 'processActions', 'processAction']) {
         vm.runInContext(mainFunction(name), c);
     }
     // Isolate pathfinding and stat configuration; run real targeting, reservations,

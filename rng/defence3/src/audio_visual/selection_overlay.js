@@ -321,3 +321,81 @@ function drawBuildingRallies2D(ctx, segments, markers) {
             Math.round(pos[1] - (showLines ? 8 : 0) - sprite.offsetY), sprite.drawW, sprite.drawH);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Command feedback: a ring where a command points, shown the moment it is
+// issued and held until the tick it runs on (in multiplayer that is a few
+// ticks later, for everyone alike). Presentation only.
+// ---------------------------------------------------------------------------
+const COMMAND_FEEDBACK_COLORS = { move: '#6f6', attack: '#f66', rally: '#6cf', assign: '#fd6', build: '#ddd' };
+const COMMAND_FEEDBACK_RGB = { move: '102,255,102', attack: '255,102,102', rally: '102,204,255', assign: '255,221,102', build: '221,221,221' };
+const COMMAND_FEEDBACK_MS = 450;
+let commandFeedbackMarks = [];
+
+function noteCommandFeedback(action, runTick) {
+    if (!action || typeof action !== 'object') return;
+    let kind = null, x = NaN, y = NaN;
+    switch (action.action) {
+        case 'move': kind = 'move'; x = action.targetX; y = action.targetY; break;
+        case 'attackMove': case 'attack': kind = 'attack'; x = action.targetX; y = action.targetY; break;
+        case 'attackBuilding': kind = 'attack'; x = action.targetGx * TILE + TILE / 2; y = action.targetGy * TILE + TILE / 2; break;
+        case 'setRally': kind = 'rally'; x = action.targetX; y = action.targetY; break;
+        case 'workerAssign': kind = 'assign'; x = action.targetGx * TILE + TILE / 2; y = action.targetGy * TILE + TILE / 2; break;
+        case 'place': kind = 'build'; x = action.gx * TILE + TILE / 2; y = action.gy * TILE + TILE / 2; break;
+    }
+    if (!kind || !Number.isFinite(x) || !Number.isFinite(y)) return;
+    // Several commands to the same spot at once (split orders) share a ring.
+    for (let m of commandFeedbackMarks) if (m.kind === kind && Math.abs(m.x - x) < 1 && Math.abs(m.y - y) < 1 && m.runTick === runTick) return;
+    commandFeedbackMarks.push({ kind, x, y, at: performance.now(), runTick });
+    if (commandFeedbackMarks.length > 64) commandFeedbackMarks.splice(0, commandFeedbackMarks.length - 64);
+}
+
+function drawCommandFeedback2D(ctx, now = performance.now()) {
+    if (commandFeedbackMarks.length === 0) return;
+    let keep = [];
+    let zoom = Math.max(0.2, Number(camera && camera.zoom) || 1);
+    ctx.save();
+    for (let m of commandFeedbackMarks) {
+        let age = now - m.at;
+        let pending = currentTick < m.runTick;
+        if (!pending && age > COMMAND_FEEDBACK_MS) continue;
+        keep.push(m);
+        let color = COMMAND_FEEDBACK_COLORS[m.kind] || '#fff';
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5 / zoom;
+        if (age < COMMAND_FEEDBACK_MS) {
+            // Click ring: shrinks onto the spot.
+            let t = age / COMMAND_FEEDBACK_MS;
+            ctx.globalAlpha = 0.9 * (1 - t * 0.6);
+            ctx.beginPath();
+            ctx.arc(m.x, m.y, (16 - 10 * t) / zoom, 0, Math.PI * 2);
+            ctx.stroke();
+        } else {
+            // Waiting for its tick: a small pulsing ring.
+            ctx.globalAlpha = 0.5 + 0.3 * Math.sin(age / 90);
+            ctx.beginPath();
+            ctx.arc(m.x, m.y, 6 / zoom, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+    }
+    ctx.restore();
+    commandFeedbackMarks = keep;
+}
+
+// The same marks as ground rings for the 3D view (radius in tiles).
+function commandFeedbackRings3D(now = performance.now()) {
+    let out = [];
+    let keep = [];
+    for (let m of commandFeedbackMarks) {
+        let age = now - m.at;
+        let pending = currentTick < m.runTick;
+        if (!pending && age > COMMAND_FEEDBACK_MS) continue;
+        keep.push(m);
+        let t = Math.min(1, age / COMMAND_FEEDBACK_MS);
+        let a = age < COMMAND_FEEDBACK_MS ? 0.9 * (1 - t * 0.6) : 0.5 + 0.3 * Math.sin(age / 90);
+        let radius = age < COMMAND_FEEDBACK_MS ? (0.55 - 0.35 * t) : 0.2;
+        out.push({ x: m.x / TILE, z: m.y / TILE, radius, strokeColor: `rgba(${COMMAND_FEEDBACK_RGB[m.kind] || '255,255,255'},${a.toFixed(2)})` });
+    }
+    commandFeedbackMarks = keep;
+    return out;
+}
