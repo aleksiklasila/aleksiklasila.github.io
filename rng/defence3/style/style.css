@@ -869,11 +869,11 @@
         /* INFO PANEL (inside right panel) */
         #info-panel,
         #research-popup-info-panel {
-            padding: 8px 18px 8px 8px;
+            padding: 8px 8px 8px 10px;
             font-size: 11px;
             overflow-y: auto;
             overflow-x: hidden;
-            scrollbar-gutter: stable both-edges;
+            scrollbar-gutter: stable;
             flex: 1;
             min-height: 0;
             display: none;
@@ -953,6 +953,92 @@
             text-align: center;
             white-space: nowrap;
             overflow: visible;
+        }
+
+        /* Stat rows: one grid for every row so values line up down the panel.
+           label | base | effective; a single value spans both value columns. */
+        #info-panel .info-row.info-stat,
+        #research-popup-info-panel .info-row.info-stat,
+        #starting-resources-content .info-row.info-stat {
+            display: grid;
+            --info-col: clamp(60px, 25%, 80px);
+            grid-template-columns: minmax(0, 1fr) var(--info-col) var(--info-col);
+            column-gap: 6px;
+            align-items: center;
+            min-height: 17px;
+            padding: 1px 0;
+        }
+
+        #info-panel .info-stat > .info-label,
+        #research-popup-info-panel .info-stat > .info-label,
+        #starting-resources-content .info-stat > .info-label {
+            grid-column: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        #info-panel .info-stat > .info-base,
+        #info-panel .info-stat > .info-eff,
+        #info-panel .info-stat > .info-value,
+        #research-popup-info-panel .info-stat > .info-base,
+        #research-popup-info-panel .info-stat > .info-eff,
+        #research-popup-info-panel .info-stat > .info-value,
+        #starting-resources-content .info-stat > .info-base,
+        #starting-resources-content .info-stat > .info-eff,
+        #starting-resources-content .info-stat > .info-value {
+            flex: none;
+            min-width: 0;
+            text-align: center;
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+            /* Flex centering keeps a value wider than its column centered
+               on it (overflowing both sides evenly). */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #info-panel .info-stat > .info-base,
+        #research-popup-info-panel .info-stat > .info-base,
+        #starting-resources-content .info-stat > .info-base { grid-column: 2; }
+
+        #info-panel .info-stat > .info-eff,
+        #research-popup-info-panel .info-stat > .info-eff,
+        #starting-resources-content .info-stat > .info-eff { grid-column: 3; }
+
+        #info-panel .info-stat > .info-value,
+        #research-popup-info-panel .info-stat > .info-value,
+        #starting-resources-content .info-stat > .info-value { grid-column: 2 / 4; }
+
+        /* Plain labels start where button labels' text does (button + gap). */
+        .info-label-plain {
+            display: inline-block;
+            padding-left: 21px;
+        }
+
+        #info-panel .info-queue-row,
+        #research-popup-info-panel .info-queue-row {
+            margin-top: 3px;
+            padding-top: 3px;
+            border-top: 1px solid #262626;
+        }
+
+        .info-queue-btns {
+            display: inline-flex;
+            gap: 6px;
+        }
+
+        .info-queue-btns > * {
+            margin: 0 !important;
+        }
+
+        /* Units after a number ("⚡/s"): smaller and dimmer so the number reads first. */
+        .info-unit {
+            font-size: 0.82em;
+            opacity: 0.75;
+            margin-left: 1px;
+            letter-spacing: -0.3px;
         }
 
         /* Compact action pills in building/unit info rows so controls fit on one line. */

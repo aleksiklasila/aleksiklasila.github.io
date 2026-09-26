@@ -3115,9 +3115,8 @@ function _normalizeResearchTaskForOwner(task, owner) {
     if (!getResearchStatEntry(kind, key, statKey)) return null;
 
     let normalizedOwner = Math.max(0, Math.floor(Number(owner) || 0));
-    let capLevel = (kind === 'building' && statKey === 'maxLevel')
-        ? Math.max(0, MAX_THING_LEVEL - 1)
-        : MAX_RESEARCH_LEVEL;
+    // maxLevel research maps 0..MAX_RESEARCH_LEVEL onto thing levels, so every stat shares one cap.
+    let capLevel = MAX_RESEARCH_LEVEL;
 
     let fromLevel = Math.max(0, Math.floor(Number(task.fromLevel) || 0));
     let toLevel = Math.max(fromLevel, Math.floor(Number(task.toLevel) || (fromLevel + 1)));
@@ -3233,6 +3232,19 @@ function rebasePlayerResearchQueueState(playerId) {
     }
     if (ordered.length <= 0) return p;
 
+    // Progress belongs to the level, not the task object: same-stat tasks are interchangeable,
+    // so the lowest queued level keeps the most-advanced progress after reordering.
+    let workDoneByStat = Object.create(null);
+    for (let task of ordered) {
+        let statKey = `${task.kind || ''}:${task.key || ''}:${task.statKey || ''}`;
+        (workDoneByStat[statKey] || (workDoneByStat[statKey] = [])).push(task);
+    }
+    for (let statKey in workDoneByStat) {
+        let tasks = workDoneByStat[statKey];
+        tasks.sort((a, b) => (Math.floor(Number(a.fromLevel) || 0)) - (Math.floor(Number(b.fromLevel) || 0)));
+        workDoneByStat[statKey] = tasks.map(t => Math.max(0, Number(t.workDone) || 0));
+    }
+
     let queuedLevelsByStat = Object.create(null);
     for (let task of ordered) {
         if (!task) continue;
@@ -3240,9 +3252,7 @@ function rebasePlayerResearchQueueState(playerId) {
         let baseLevel = Math.max(0, Math.floor(Number(getPlayerResearchLevel(playerId, task.kind, task.key, task.statKey)) || 0));
         let priorSameStat = Math.max(0, Math.floor(Number(queuedLevelsByStat[statKey]) || 0));
         let fromLevel = baseLevel + priorSameStat;
-        let capLevel = (task.kind === 'building' && task.statKey === 'maxLevel')
-            ? Math.max(0, MAX_THING_LEVEL - 1)
-            : MAX_RESEARCH_LEVEL;
+        let capLevel = MAX_RESEARCH_LEVEL;
         let atCap = fromLevel >= capLevel;
         let nextWorkRequired = atCap ? 0 : Math.max(0, Number(getResearchWork(task.kind, task.key, task.statKey, fromLevel)) || 0);
 
@@ -3251,7 +3261,7 @@ function rebasePlayerResearchQueueState(playerId) {
         task.toLevel = atCap ? fromLevel : Math.min(capLevel, fromLevel + 1);
         task.cost = atCap ? 0 : Math.max(0, Number(getResearchCost(task.kind, task.key, task.statKey, fromLevel)) || 0);
         task.workRequired = nextWorkRequired;
-        task.workDone = Math.max(0, Math.min(nextWorkRequired, Number(task.workDone) || 0));
+        task.workDone = Math.max(0, Math.min(nextWorkRequired, Number(workDoneByStat[statKey][priorSameStat]) || 0));
 
         queuedLevelsByStat[statKey] = priorSameStat + 1;
     }

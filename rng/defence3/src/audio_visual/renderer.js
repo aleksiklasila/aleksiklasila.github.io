@@ -1529,6 +1529,53 @@ function _pushStructureActivity(objects, entity, flat2d) {
     pushStructureActivityFx(entity, o.x, o.z, o.y + o.scaleY * roof, get3DRenderOwnerColor(entity.owner));
 }
 
+// The build placement preview in 3D: a translucent copy of the structure's
+// own model on the hovered tile (red where it cannot be built), with the
+// item's 2D icon on its panel. Sizes match the structure passes below.
+// Returns false while the icon is still loading (the overlay draws it then).
+const RENDERER3D_WORKSHOP_KEYS = new Set(['spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research']);
+function _pushBuildPreview3DObject(objects, preview) {
+    let key = preview && preview.key;
+    let def = key && BASE_CARD_TYPES[key];
+    if (!def || preview.areaCells || key === 'area_upgrader') return false;
+    let icon = getItemThumbnailImage(key, RENDERER3D_TOP_TEXTURE_SIZE);
+    if (!icon || !icon.complete || !(icon.naturalWidth > 0)) return false;
+    let panel = get3DTopTextureCanvas(`buildpreview:${key}`, g => g.drawImage(icon, 0, 0, g.canvas.width, g.canvas.height));
+    let ownerColor = get3DRenderOwnerColor(localPlayerId);
+    let blocked = !preview.canBuild;
+    let object = {
+        x: preview.gx + 0.5, y: 0, z: preview.gy + 0.5,
+        tint: blocked ? '#ff4a3a' : ownerColor,
+        sideTint: blocked ? '#ff4a3a' : (def.color || ownerColor),
+        alpha: blocked ? 0.45 : 0.6,
+        preserveModelHeight: true,
+        topTextureKey: `buildpreview:${key}`,
+        topTextureCanvas: panel,
+        lightLevel: 1
+    };
+    if (key.startsWith('barrack_')) {
+        Object.assign(object, { modelKey: key, scaleX: 0.98, scaleZ: 0.98, scaleY: get3DStructureModelHeight('barrack') });
+    } else if (RENDERER3D_WORKSHOP_KEYS.has(key)) {
+        Object.assign(object, { modelKey: `spawner_${key}`, scaleX: 0.95, scaleZ: 0.95, scaleY: get3DStructureModelHeight(key) });
+    } else if (def.target === 'wall') {
+        let portal = !!def.isCloud || key.startsWith('cloud');
+        let visionTiles = getTowerPreviewVisionRange(key, preview.previewLevel) * AREA_UNIT_TILE_EQUIVALENT;
+        Object.assign(object, {
+            modelKey: `tower_${key}`, scaleX: portal ? 0.96 : 0.82, scaleZ: portal ? 0.96 : 0.82,
+            scaleY: 1.05, rotationY: portal ? 0 : Math.PI * 0.5,
+            preserveModelHeight: false, visibilityRangeTiles: Number.isFinite(visionTiles) && visionTiles > 0 ? visionTiles : 5
+        });
+    } else {
+        let farm = key === 'farm' || key === 'astar_farm';
+        Object.assign(object, {
+            modelKey: `item_${key}`, scaleX: 0.84, scaleZ: 0.84,
+            scaleY: key === 'house' ? 0.82 : farm ? 0.72 : 0.14, preserveModelHeight: key === 'house' || farm
+        });
+    }
+    push3DRenderObject(objects, object);
+    return true;
+}
+
 // Front status display of 3D units (surface 15 of the unit models): a 96px
 // pixel-art icon drawn over the owner color, so one texture per state is
 // shared by every player. States: 'walk', 'angry', 'work', 'sleep', or a
@@ -2338,6 +2385,7 @@ function build3DFrameData(flat2d = false) {
         }
     }
 
+    if (buildPreview && !flat2d) buildPreview.modelShown = _pushBuildPreview3DObject(objects, buildPreview);
     if (flat2d) drainFlatObjects();
     // Shots, debris, attacks and laser fences: GPU effect instances.
     buildFrameEffects(projectiles, particles, towers);
