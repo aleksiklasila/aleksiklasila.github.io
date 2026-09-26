@@ -87,7 +87,8 @@ async function progressWithin(world, inst, ms) {
     }
 
     // D: a guest reloads the page mid-match. The fresh page rejoins as the
-    // same player and gets the match through a snapshot everyone applies.
+    // same player: it alone loads the match and catches up, while the others
+    // play on without pausing or restoring anything.
     {
         const world = new H.World({ network: WAN, controls: H.SMALL_MATCH_CONTROLS });
         const { host, guests, hostId } = await H.startHostedMatch(world, { guests: 2, teams: [0, 1, 1] });
@@ -99,11 +100,21 @@ async function progressWithin(world, inst, ms) {
         await world.run(3000);
         const fresh = world.spawn('guest1-reloaded', { storage, url: `http://localhost/rng/defence3/index.html?game=${hostId}` });
         fresh.eval('loadOrCreateLocalIdentity()');
+        const others = [host, guests[1]];
+        const snaps = others.map(i => i.snapshotsApplied);
         fresh.eval(`joinGame(${JSON.stringify(hostId)})`);
         const t0 = world.now;
+        // (Until the page is back the host waits for the missing player.)
+        assert.ok(await world.runUntil(() => host.eval('resyncHostJoining.size') > 0 || fresh.eval('gameStarted'), 15000), 'join scheduled');
+        const hostTick0 = host.eval('currentTick'), t1 = world.now;
         const ok = await world.runUntil(() => fresh.eval('gameStarted') && !fresh.eval('lockstepResyncPauseActive') && fresh.eval('currentTick') > 0 && !host.eval('lockstepResyncPauseActive'), 15000);
         assert.ok(ok, 'reloaded guest is back in the match');
         const joinMs = world.now - t0;
+        assert.ok(await world.runUntil(() => !host.eval('resyncHostJoining.size'), 15000), 'reloaded guest caught up');
+        await world.run(1000);
+        const tps = (host.eval('currentTick') - hostTick0) / ((world.now - t1) / 1000);
+        assert.ok(tps > 18, 'the others kept their pace while it loaded and caught up: ' + tps.toFixed(1) + ' TPS');
+        assert.deepEqual(others.map(i => i.snapshotsApplied), snaps, 'nobody else restored anything');
         assert.equal(fresh.eval('localPlayerId'), oldTeam, 'same team after reload');
         const all = [host, guests[1], fresh];
         const fromTick = fresh.eval('currentTick');
@@ -112,7 +123,7 @@ async function progressWithin(world, inst, ms) {
         H.checkHealthy(world, all, { minCompared: 20, fromTick, label: 'reload' });
         H.assertAllCommandsExecuted(world, fresh, 'reload', world.now - 2500);
         assert.ok(joinMs < 4000, 'reload rejoin took ' + joinMs);
-        rows.push(`page reload: rejoined same team via snapshot in ${Math.round(joinMs)}ms`);
+        rows.push(`page reload: rejoined same team in ${Math.round(joinMs)}ms; the others kept ${tps.toFixed(1)} TPS while it loaded and caught up`);
     }
 
     // E: a player vanishes for good in a 2v2. The host drops them; their

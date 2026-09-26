@@ -37,28 +37,41 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
         if (round === 5) rows.push(`6 restores from differing pre-states evolve bit-identically for 12 ticks; ${Math.round(text.length / 1024)} KB (${Math.round(perThing)} B/entity); unit shapes ${shapes.join('/')} -> ${shapesAfter.join('/')}`);
     }
 
-    // Real gzip transport: a forced divergence recovers through it.
+    // Real gzip transport: a forced divergence is patched through it, first
+    // with a delta, then with a full patch; nobody pauses.
     {
         const w = new H.World({ network: { latencyMs: 60, jitterMs: 10 }, controls: H.SMALL_MATCH_CONTROLS, compressSnapshots: true });
         const m = await H.startHostedMatch(w, { guests: 1 });
+        const pair = [m.host, m.guests[0]];
         // Force compression even for this small match.
-        for (const i of [m.host, m.guests[0]]) i.eval('NET_SNAPSHOT_COMPRESS_MIN_BYTES = 0');
-        await H.playFor(w, [m.host, m.guests[0]], 4000, { seed: 2 });
-        m.guests[0].eval(`(() => { const u = units.find(u => !u.dead); u.x += 13; })()`);
-        const t0 = w.now;
-        const ok = await w.runUntil(() => m.guests[0].snapshotsApplied >= 2 && !m.guests[0].eval('lockstepResyncPauseActive') && !m.host.eval('lockstepResyncPauseActive'), 15000, 20);
-        assert.ok(ok, 'recovered over the compressed transport');
-        const bytes = m.host.eval('netCounters.snapshotBytes');
-        const json = m.host.eval('JSON.stringify(buildHostAuthoritativeStateSnapshot({ includeConfig: false, includeStaticMapState: false, includeGridTypes: true })).length');
+        for (const i of pair) i.eval('NET_SNAPSHOT_COMPRESS_MIN_BYTES = 0');
+        const g = m.guests[0];
+        g.scratch.kinds = [];
+        g.eval(`(() => { const orig = _handleConnectionMessage; _handleConnectionMessage = (c, d) => { if (d && d.type === 'RESYNC_PATCH') __scratch.kinds.push((d.full ? 'full:' : 'delta:') + (d.payload.z ? 'z' : 'json')); return orig(c, d); }; })()`);
+        await H.playFor(w, pair, 4000, { seed: 2 });
+        const snapshots0 = g.snapshotsApplied;
+        g.eval(`(() => { const u = units.find(u => !u.dead); u.x += 13; })()`);
+        let ok = await w.runUntil(() => g.patchesApplied >= 1, 15000, 20);
+        assert.ok(ok, 'delta patch arrived over the compressed transport');
+        g.eval(`resyncGuest.forceFull = true`);
+        g.eval(`(() => { const u = units.find(u => !u.dead); u.energy = Math.max(1, u.energy - 5); })()`);
+        ok = await w.runUntil(() => g.fullPatchesApplied >= 1, 15000, 20);
+        assert.ok(ok, 'full patch arrived over the compressed transport');
+        assert.deepEqual(g.scratch.kinds.slice(0, 2), ['delta:z', 'full:z']);
+        const bytes = g.eval('netCounters.snapshotBytes');
+        const json = m.host.eval('JSON.stringify(snapEncodeState()).length');
         assert.ok(bytes > 0 && bytes < json / 3, `compressed ${bytes} of ${json}`);
-        await H.playFor(w, [m.host, m.guests[0]], 4000, { seed: 3 });
+        assert.equal(g.snapshotsApplied, snapshots0, 'no match-wide resync');
+        assert.equal(m.host.patchesApplied + m.host.snapshotsApplied, 1, 'host restored nothing after the start');
+        const from = g.lastSnapshotTick || 0;
+        await H.playFor(w, pair, 4000, { seed: 3 });
         await w.run(2000);
-        H.checkHealthy(w, [m.host, m.guests[0]], { minCompared: 10, fromTick: m.host.lastSnapshotTick || 0, label: 'gzip' });
-        rows.push(`gzip transport: ${Math.round(json / 1024)} KB -> ${Math.round(bytes / 1024)} KB, recovered`);
+        H.checkHealthy(w, pair, { minCompared: 10, fromTick: from, label: 'gzip' });
+        rows.push(`gzip transport: delta then full patch (${Math.round(json / 1024)} KB -> ${Math.round(bytes / 1024)} KB), no pause`);
     }
 
     // A guest on a browser without DecompressionStream is sent plain JSON,
-    // at the start and in resyncs, while others still get gzip.
+    // at the start and in patches, while others still get gzip.
     {
         const w = new H.World({ network: { latencyMs: 60, jitterMs: 10 }, controls: H.SMALL_MATCH_CONTROLS, compressSnapshots: true });
         const m = await H.startHostedMatch(w, {
@@ -71,18 +84,18 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
         await H.playFor(w, all, 4000, { seed: 4 });
         const kinds = [];
         for (const g of m.guests) g.scratch.kinds = kinds;
-        for (const g of m.guests) g.eval(`(() => { const orig = _handleConnectionMessage; _handleConnectionMessage = (c, d) => { if (d && d.type === 'MATCH_STATE_SNAPSHOT') __scratch.kinds.push(myPeerId + ':' + (d.payload.z ? 'z' : 'json')); return orig(c, d); }; })()`);
-        m.guests[1].eval(`(() => { const u = units.find(u => !u.dead); u.x += 13; })()`);
-        const ok = await w.runUntil(() => kinds.length >= 2 && all.every(i => !i.eval('lockstepResyncPauseActive')), 15000, 20);
-        assert.ok(ok, 'mixed-browser resync completed');
+        for (const g of m.guests) g.eval(`(() => { const orig = _handleConnectionMessage; _handleConnectionMessage = (c, d) => { if (d && d.type === 'RESYNC_PATCH') __scratch.kinds.push(myPeerId + ':' + (d.payload.z ? 'z' : 'json')); return orig(c, d); }; })()`);
+        for (const g of m.guests) g.eval(`(() => { const u = units.find(u => !u.dead); u.x += 13; })()`);
+        const ok = await w.runUntil(() => m.guests.every(g => g.patchesApplied >= 1), 15000, 20);
+        assert.ok(ok, 'mixed-browser patches applied');
         const byPeer = Object.fromEntries(kinds.map(k => k.split(':')));
         assert.equal(byPeer[m.guests[0].eval('myPeerId')], 'z', 'modern guest gets gzip');
         assert.equal(byPeer[m.guests[1].eval('myPeerId')], 'json', 'older browser gets JSON');
-        const from = m.host.lastSnapshotTick || 0;
+        const from = Math.max(...m.guests.map(g => g.lastSnapshotTick || 0));
         await H.playFor(w, all, 4000, { seed: 5 });
         await w.run(2000);
         H.checkHealthy(w, all, { minCompared: 10, fromTick: from, label: 'mixed browsers' });
-        rows.push('guest without DecompressionStream gets JSON snapshots (start and resync); others gzip');
+        rows.push('guest without DecompressionStream gets JSON (start and patches); others gzip');
     }
 
     console.log('PASS: snapshots\n  ' + rows.join('\n  '));

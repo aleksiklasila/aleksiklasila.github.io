@@ -102,14 +102,24 @@ async function lobby(world, guests = 1) {
         assert.equal(late.eval('gameStarted'), false, 'late joiner did not get the match start');
         assert.equal(host.eval('getActiveMatchPeerIds().length'), 2, 'not a participant');
         assert.ok(await world.runUntil(() => late.eval('remoteMatchRunning'), 5000), 'sees a match in progress');
+        const players = [host, guests[0]];
+        const snaps = players.map(i => i.snapshotsApplied);
+        const tick0 = host.eval('currentTick'), t0 = world.now;
+        const stall0 = players.map(i => i.eval('netCounters.stallMs'));
         late.eval('requestSpectateCurrentMatch()');
         assert.ok(await world.runUntil(() => late.eval('gameStarted') && !late.eval('lockstepResyncPauseActive'), 15000), 'spectating');
+        await world.run(1500);
+        // The players never paused for the spectator.
+        assert.deepEqual(players.map(i => i.snapshotsApplied), snaps, 'players restored nothing');
+        const stalled = players.map((i, k) => i.eval('netCounters.stallMs') - stall0[k]);
+        assert.ok(stalled.every(ms => ms < 150), 'players did not wait: ' + stalled.join('/'));
+        assert.ok((host.eval('currentTick') - tick0) / ((world.now - t0) / 1000) > 18.5, 'players kept their pace');
         const from = late.eval('currentTick') + 2;
         await H.playFor(world, [host, guests[0]], 6000, { seed: 3 });
         await world.run(2000);
         H.checkHealthy(world, [host, guests[0], late], { minCompared: 10, fromTick: from, label: 'late spectator' });
         assert.equal(late.eval('localDefeated || spectateMode !== "none"'), true);
-        rows.push('joining during the start is kept out of the match, then spectates in sync');
+        rows.push('joining during the start is kept out of the match, then spectates in sync without pausing the players');
     }
 
     // The host is gone for good: the guest takes over the match, and can

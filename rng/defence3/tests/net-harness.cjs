@@ -424,6 +424,7 @@ function createInstance(world, name, options = {}) {
         timers: new Map(), nextTimerId: 1, hidden: false, frameMs: options.frameMs || 1000 / 60,
         netStats: { sentMessages: 0, sentBytes: 0, recvMessages: 0, recvBytes: 0, sendWhileClosed: 0 },
         tickHashes: new Map(), executedActions: new Map(), workers: [], docListeners: {}, winListeners: {}, issuedActions: new Map(), snapshotsApplied: 0,
+        patchesApplied: 0, fullPatchesApplied: 0,
         storage: options.storage || new Map(),
         // Per-tab storage: pass the old instance's to model a reload.
         session: options.session || new Map()
@@ -583,6 +584,12 @@ function createInstance(world, name, options = {}) {
             __harnessHooks.snapshotApplied(currentTick);
             return r;
         };
+        const __origPatch = applyResyncPatch;
+        applyResyncPatch = function () {
+            const r = __origPatch.apply(this, arguments);
+            __harnessHooks.patchApplied(currentTick, !!arguments[1]);
+            return r;
+        };
         const __origQueue = queueAction;
         queueAction = function (action) {
             const before = nextLocalActionSeq;
@@ -598,8 +605,19 @@ function attachHooks(world, inst) {
     inst.set('__hooks', {
         afterTick: (tick, acts) => {
             // Scripted setup, applied on every peer after the same tick.
+            // Only in the match it was scheduled in (a rematch counts its
+            // ticks from zero again).
+            const session = inst.eval('matchStartSessionId');
+            if (session !== inst.hashSession) {
+                // A new match: its tick numbers start over.
+                inst.hashSession = session;
+                inst.tickHashes.clear();
+                if (inst.tickExact) inst.tickExact.clear();
+                if (inst.tickParts) inst.tickParts.clear();
+                if (inst.tickDigests) inst.tickDigests.clear();
+            }
             const scripts = world.tickScripts.get(tick);
-            if (scripts) for (const code of scripts) inst.eval(code);
+            if (scripts) for (const s of scripts) if (s.session === null || s.session === session) inst.eval(s.code);
             if (tick % world.hashEvery === 0) {
                 if (world.recordParts) {
                     const r = JSON.parse(inst.eval('(() => { const p = {}; const h = computeLockstepStateHashFast(' + tick + ', p); return JSON.stringify([h, p]); })()'));
@@ -612,6 +630,7 @@ function attachHooks(world, inst) {
             for (const a of acts) if (a && a.netId && !inst.executedActions.has(a.netId)) inst.executedActions.set(a.netId, { tick, at: world.sched.now });
         },
         snapshotApplied: tick => { inst.snapshotsApplied++; inst.lastSnapshotTick = tick; (inst.snapshotTicks ||= []).push(tick); },
+        patchApplied: (tick, full) => { inst.patchesApplied++; if (full) inst.fullPatchesApplied++; inst.lastSnapshotTick = tick; (inst.patchTicks ||= []).push(tick); },
         issued: (netId, tick) => world.issued.set(netId, { at: world.sched.now, tick, by: inst.name })
     });
 }
@@ -638,7 +657,11 @@ class World {
     }
     get now() { return this.sched.now; }
     // Run `code` on every instance right after it simulates `tick`.
-    atTick(tick, code) { if (!this.tickScripts.has(tick)) this.tickScripts.set(tick, []); this.tickScripts.get(tick).push(code); }
+    atTick(tick, code) {
+        if (!this.tickScripts.has(tick)) this.tickScripts.set(tick, []);
+        const host = this.instances.find(i => !i.dead && i.eval('isHost && gameStarted'));
+        this.tickScripts.get(tick).push({ code, session: host ? host.eval('matchStartSessionId') : null });
+    }
     // Schedule on a tick safely ahead of every live peer.
     atNextSafeTick(code, lead = 40) { const t = Math.max(...this.instances.filter(i => !i.dead).map(i => i.eval('currentTick'))) + lead; this.atTick(t, code); return t; }
     spawn(name, options = {}) {

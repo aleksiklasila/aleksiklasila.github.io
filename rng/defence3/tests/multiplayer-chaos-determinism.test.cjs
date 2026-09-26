@@ -16,7 +16,7 @@ const SECONDS = Number(process.argv[2]) || 40;
 const BUILDINGS = ['pistol', 'smg', 'water', 'poison', 'fire', 'sand_gun', 'ice', 'sniper', 'elements', 'laser', 'watch_tower',
     'sand', 'lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'mine', 'farm', 'spawner', 'astar_farm', 'astar_spawner',
     'salvager', 'builder_spawner', 'healer_spawner', 'research', 'house', 'area_upgrader',
-    'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b',
+    'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b', 'cloud_2a', 'cloud_2b', 'cloud_3a', 'cloud_3b',
     'barrack_norm', 'barrack_fast', 'barrack_tank', 'barrack_boss', 'barrack_flying', 'barrack_mole', 'barrack_poison_resistant',
     'barrack_fire_resistant', 'barrack_water_resistant', 'barrack_ice_resistant', 'barrack_laser_resistant', 'barrack_snake', 'barrack_scout'];
 const UNITS = ['norm', 'fast', 'tank', 'boss', 'flying', 'mole', 'poison_resistant', 'fire_resistant', 'water_resistant', 'ice_resistant',
@@ -120,21 +120,24 @@ const CHAOS_COMMAND = `(r => {
     return kind;
 })`;
 
-async function setupChaosWorld(mapType, seed, { guestOptions = [], exactHashes = false } = {}) {
+async function setupChaosWorld(mapType, seed, { guestOptions = [], exactHashes = false, teams = [0, 1, 2, 0], mapSize = 40, network = { latencyMs: 30, jitterMs: 20 }, controls: extra = {} } = {}) {
     const controls = {
-        ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '40', 'cfg-map-type': mapType, 'cfg-gold-count': '40', 'cfg-astar-mine-count': '25',
-        'cfg-starting-energy': '5000000', 'cfg-starting-astar': '5000000', 'cfg-max-pop': '100000', 'cfg-full-vis': 'history'
+        ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': String(mapSize), 'cfg-map-type': mapType, 'cfg-gold-count': '40', 'cfg-astar-mine-count': '25',
+        'cfg-starting-energy': '5000000', 'cfg-starting-astar': '5000000', 'cfg-max-pop': '100000', 'cfg-full-vis': 'history', ...extra
     };
-    const world = new H.World({ network: { latencyMs: 30, jitterMs: 20 }, controls, hashEvery: 1, recordParts: true, exactHashes });
+    const world = new H.World({ network, controls, hashEvery: 1, recordParts: true, exactHashes });
     const origSpawn = world.spawn.bind(world);
     world.spawn = (name, opts) => {
         const inst = origSpawn(name, opts);
         if (name === 'host') inst.set('startingResourcesConfig', startingResources(seed));
         return inst;
     };
-    // Three teams, one of them shared by two players.
-    const { host, guests } = await H.startHostedMatch(world, { guests: 3, teams: [0, 1, 2, 0], maxMs: 60000, guestOptions });
+    // By default three teams, one of them shared by two players.
+    const { host, guests } = await H.startHostedMatch(world, { guests: teams.length - 1, teams, maxMs: 90000, guestOptions });
     const all = [host, ...guests];
+    // Every building and unit the game has is in the mix (new ones too).
+    const missing = JSON.parse(host.eval(`JSON.stringify([...Object.keys(BASE_CARD_TYPES).filter(k => !${JSON.stringify(BUILDINGS)}.includes(k)), ...Object.keys(BASE_UNIT_STATS).filter(k => !${JSON.stringify(UNITS)}.includes(k))])`));
+    assert.deepEqual(missing, [], 'chaos lists miss these buildings/units');
     const setupCounts = host.eval(`JSON.stringify({ units: units.length, towers: towers.length, barracks: barracks.length, spawners: collectorSpawners.length, floor: getCellItemsRowMajor().length })`);
 
     return { world, host, guests, all, setupCounts };
@@ -142,6 +145,12 @@ async function setupChaosWorld(mapType, seed, { guestOptions = [], exactHashes =
 
 async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
     const { world, host, guests, all, setupCounts } = await setupChaosWorld(mapType, seed);
+    // What the host finds differing in each repair request (for failures).
+    host.scratch.requests = [];
+    host.eval(`(() => { const orig = resyncHostHandleRequest; resyncHostHandleRequest = function (conn, data) {
+        const codes = new Set(); for (const r of (data && data.rotation) || []) { const mine = snapGetTickHash(r.tick); if (mine) for (const c of snapDiffTickHash(mine, r)) codes.add(c); }
+        __scratch.requests.push({ peer: String(conn.peer), tick: data && data.tick, differs: snapDescribeCodes(codes, 12) });
+        return orig.apply(this, arguments); }; })()`);
     let s = seed;
     const rand = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
     const commandKinds = new Map();
@@ -176,7 +185,7 @@ async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
         if (corruptAt.length && world.now >= corruptAt[0]) {
             corruptAt.shift();
             const victim = guests[Math.floor(rand() * guests.length)];
-            corruptTicks.push(victim.eval('currentTick') - 1);
+            corruptTicks.push({ victim: victim.name, tick: victim.eval('currentTick') - 1 });
             victim.eval(`(() => { const u = units.find(u => !u.dead); if (u) { u.x += 11; u.energy = Math.max(1, u.energy - 5); } })()`);
         }
         for (const t of JSON.parse(host.eval('JSON.stringify([...new Set(units.map(u => u.unitType))])'))) unitTypesSeen.add(t);
@@ -185,15 +194,17 @@ async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
     }
     await world.run(3000);
 
-    // Peers may disagree only between a forced divergence and the resync
-    // that repairs it; any other mismatch is real nondeterminism.
-    const snapTicks = [...new Set(host.snapshotTicks || [])].sort((a, b) => a - b);
-    const allowed = t => corruptTicks.some(ct => ct <= t && !snapTicks.some(st => st > ct && st <= t));
+    // Only the corrupted guest may disagree, and only between the forced
+    // divergence and the patch that repairs it; any other mismatch is real
+    // nondeterminism.
+    const repairTicks = name => { const i = all.find(i => i.name === name); return [...(i.patchTicks || []), ...(i.snapshotTicks || [])]; };
+    const allowed = m => corruptTicks.some(c => (c.victim === m.a || c.victim === m.b) && c.tick <= m.tick
+        && !repairTicks(c.victim).some(st => st > c.tick && st <= m.tick));
     for (const inst of all) {
         assert.deepEqual(inst.errors.map(e => String(e && e.stack || e).slice(0, 600)), [], mapType + ' ' + inst.name + ' threw');
     }
     const cmp = world.compareHashes(all, 0);
-    const real = cmp.mismatches.filter(m => !allowed(m.tick));
+    const real = cmp.mismatches.filter(m => !allowed(m));
     if (real.length) {
         // Name the subsystem that diverged first.
         const m = real[0];
@@ -201,11 +212,14 @@ async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
         const pa = a.tickParts.get(m.tick) || {}, pb = b.tickParts.get(m.tick) || {};
         const parts = Object.keys(pa).filter(k => pa[k] !== pb[k]);
         throw new Error(`${mapType}: nondeterministic divergence at tick ${m.tick} (${m.a} vs ${m.b}) in [${parts.join(', ')}]; `
-            + `forced at ${corruptTicks}, snapshots at ${snapTicks}: ` + JSON.stringify(real.slice(0, 4)));
+            + `forced ${JSON.stringify(corruptTicks)}, repairs ${JSON.stringify(all.map(i => [i.name, repairTicks(i.name)]))}: ` + JSON.stringify(real.slice(0, 4))
+            + '\n  host saw: ' + JSON.stringify(host.scratch.requests)
+            + '\n  patched: ' + all.map(i => i.name + ' ' + JSON.stringify(i.warnings.filter(w => /Patched/.test(JSON.stringify(w.a))).map(w => JSON.stringify(w.a).slice(0, 500)))).join('\n  '));
     }
     assert.ok(cmp.compared > SECONDS * 20 * 3 * 0.8, mapType + ' compared ' + cmp.compared);
-    const hostResyncs = host.eval('netCounters.hardResyncs');
-    assert.equal(hostResyncs, corruptions, mapType + ': one resync per forced divergence and none otherwise');
+    const hostResyncs = all.reduce((n, i) => n + i.patchesApplied, 0);
+    assert.equal(hostResyncs, corruptions, mapType + ': one patch per forced divergence and none otherwise');
+    for (const i of all) assert.equal(i.snapshotsApplied, 1, mapType + ': no match-wide resync on ' + i.name);
     const desyncs = all.reduce((n, i) => n + i.eval('netCounters.desyncsDetected'), 0);
     return {
         mapType, setupCounts: JSON.parse(setupCounts), maxUnits, unitTypesSeen: unitTypesSeen.size, commandKinds: commandKinds.size,
@@ -225,5 +239,5 @@ if (require.main === module) (async () => {
         assert.ok(r.unitTypesSeen >= 18, r.mapType + ' unit types seen ' + r.unitTypesSeen);
         assert.ok(r.commandKinds >= 24, r.mapType + ' command kinds used ' + r.commandKinds);
     }
-    console.log('PASS: chaos determinism\n  ' + results.map(r => `${r.mapType}: ${r.setupCounts.units} units + ${r.setupCounts.towers + r.setupCounts.barracks + r.setupCounts.spawners + r.setupCounts.floor} buildings at start (max ${r.maxUnits} units), ${r.unitTypesSeen} unit types, ${r.commandKinds} command kinds, ${r.compared} tick hashes compared, ${r.hostResyncs} resyncs for forced divergences`).join('\n  '));
+    console.log('PASS: chaos determinism\n  ' + results.map(r => `${r.mapType}: ${r.setupCounts.units} units + ${r.setupCounts.towers + r.setupCounts.barracks + r.setupCounts.spawners + r.setupCounts.floor} buildings at start (max ${r.maxUnits} units), ${r.unitTypesSeen} unit types, ${r.commandKinds} command kinds, ${r.compared} tick hashes compared, ${r.hostResyncs} patches for forced divergences`).join('\n  '));
 })().catch(err => { console.error(err); process.exit(1); });

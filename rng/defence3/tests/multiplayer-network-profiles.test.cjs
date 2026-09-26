@@ -41,10 +41,12 @@ const PROFILES = [
         rows.push(`${profile.name}: ${tps.toFixed(1)}/${target} TPS, guest latency p50 ${Math.round(p50)}ms, input delay ${guests[0].eval('LOCKSTEP_PIPELINE_TICKS')} ticks, ${rate.toFixed(0)} msg/s`);
     }
 
-    // Asymmetric links: one guest on LAN, one far away. Each guest's input
-    // delay follows its own link.
-    {
-        const world = new H.World({ network: { latencyMs: 5 }, controls: H.SMALL_MATCH_CONTROLS });
+    // Asymmetric links: one guest on LAN, one far away. Each guest's packet
+    // pipeline follows its own link. With equal command delay (the default)
+    // every player's commands wait what the far link needs; without it the
+    // near guest stays as responsive as its own link allows.
+    for (const fair of [true, false]) {
+        const world = new H.World({ network: { latencyMs: 5 }, controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-fair-delay': fair } });
         const hostPromise = H.startHostedMatch(world, { guests: 2, guestNames: ['near', 'far'] });
         // Links are keyed by instance name, so they can be set before connecting.
         world.net.setProfile({ latencyMs: 300, jitterMs: 40 }, 'host', 'far');
@@ -55,11 +57,17 @@ const PROFILES = [
         H.checkHealthy(world, [host, near, far], { minCompared: 40, label: 'asymmetric' });
         const nearDelay = near.eval('LOCKSTEP_PIPELINE_TICKS');
         const farDelay = far.eval('LOCKSTEP_PIPELINE_TICKS');
-        assert.ok(nearDelay <= 2, 'LAN guest keeps a small input delay: ' + nearDelay);
-        assert.ok(farDelay >= 6, 'far guest raises its own delay: ' + farDelay);
+        assert.ok(nearDelay <= 2, 'LAN guest keeps a small pipeline: ' + nearDelay);
+        assert.ok(farDelay >= 6, 'far guest raises its own pipeline: ' + farDelay);
         const nearP50 = H.percentile(world.actionLatencies(near), 0.5);
-        assert.ok(nearP50 <= 160, 'near guest stays responsive next to a far one: ' + nearP50);
-        rows.push(`asymmetric: near delay ${nearDelay} (${Math.round(nearP50)}ms), far delay ${farDelay}`);
+        const farP50 = H.percentile(world.actionLatencies(far), 0.5);
+        const hostP50 = H.percentile(world.actionLatencies(host), 0.5);
+        if (fair) {
+            assert.ok(Math.abs(nearP50 - farP50) <= 80 && Math.abs(hostP50 - farP50) <= 80, `equal command delay: host ${hostP50}, near ${nearP50}, far ${farP50}`);
+        } else {
+            assert.ok(nearP50 <= 160, 'near guest stays responsive next to a far one: ' + nearP50);
+        }
+        rows.push(`asymmetric, ${fair ? 'equal' : 'own'} command delay: pipelines near ${nearDelay} far ${farDelay}; command latency host ${Math.round(hostP50)}ms near ${Math.round(nearP50)}ms far ${Math.round(farP50)}ms`);
     }
 
     console.log('PASS: multiplayer network profiles\n  ' + rows.join('\n  '));

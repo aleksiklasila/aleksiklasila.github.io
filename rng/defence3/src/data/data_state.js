@@ -1240,6 +1240,14 @@ let lockstepAppliedResyncSessionId = '';
 let lockstepPendingResumeSessionId = '';
 let lockstepLastWarnAtByKey = {};
 let lockstepHostWaitRequestByPeer = {};
+// Host: ticks sealed without a playing guest's packet, because it came too
+// late ({tick: Set(peerId)}), and the commands of those packets once they
+// arrive, waiting for that guest's next open tick ({peerId: [action]}).
+let lockstepHostLateByTick = {};
+let lockstepHostCarryByPeer = {};
+let lockstepHostLastOnTimeAt = {}; // host: {peerId: host tick when its last in-time packet came}
+let lockstepHostLastPacketAt = {}; // host: {peerId: time any packet of it last came}
+let lockstepHostLastPacketTick = {}; // host: {peerId: newest tick it sent a packet for}
 let lockstepGuestWaitRequest = null;
 const LS_PLAYER_UID_KEY = 'defence3_player_uid';
 const LS_PLAYER_NAME_KEY = 'defence3_player_name';
