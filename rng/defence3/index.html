@@ -34,6 +34,10 @@
                         <input id="cfg-net-auto" type="checkbox" checked title="Automatically configure network timing: the tick rate stays at the game's reference rate and each player's input delay follows their measured ping and stability during the match.">
                     </div>
                     <div class="lobby-setting-row">
+                        <label for="cfg-fair-delay">Equal Command Delay</label>
+                        <input id="cfg-fair-delay" type="checkbox" checked title="Fair play: every player's commands (the host's too) take effect after the same delay, the one the slowest connection needs. Off: each player waits only what their own connection needs, so the host reacts fastest.">
+                    </div>
+                    <div class="lobby-setting-row">
                         <label for="cfg-tick-rate">Game Ticks Per Second</label>
                         <input id="cfg-tick-rate" type="number" min="5" max="120" value="20" style="width:72px" title="Game ticks per second">
                     </div>
@@ -45,6 +49,7 @@
                         <label for="cfg-exact-lockstep">Exact Lockstep Debug</label>
                         <input id="cfg-exact-lockstep" type="checkbox" title="Debug mode: validate every tick and stop immediately on any mismatch instead of attempting recovery.">
                     </div>
+                    <div id="lobby-net-estimate" class="lobby-col-footer" style="color:#8cf"></div>
                     <div class="lobby-col-footer">Host controls these settings for everyone in online matches.</div>
                 </div>
 
@@ -610,13 +615,16 @@
     <div id="game-over">
         <h1 id="go-title">VICTORY</h1>
         <div class="stats" id="go-stats"></div>
+        <div class="stats" id="go-rematch-status" style="min-height:1.2em;font-size:14px;color:#bde5c8"></div>
         <div id="go-controls" style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
             <button id="go-btn-spectate"
                 style="background:#1f2a36;border:1px solid #4a89c7;color:#d8ecff;cursor:pointer;padding:6px 12px;border-radius:4px;">Spectate</button>
             <button id="go-btn-graph"
                 style="background:#241f36;border:1px solid #7a67c7;color:#e7ddff;cursor:pointer;padding:6px 12px;border-radius:4px;">Graph</button>
-            <button id="go-btn-play-again"
-                style="display:none;background:#1f3624;border:1px solid #5cad74;color:#d8ffe4;cursor:pointer;padding:6px 12px;border-radius:4px;">Play Again</button>
+            <button id="go-btn-rematch" title="Start the same match again, with the same players and settings"
+                style="display:none;background:#1f3624;border:1px solid #5cad74;color:#d8ffe4;cursor:pointer;padding:6px 12px;border-radius:4px;font-weight:bold;">Rematch</button>
+            <button id="go-btn-play-again" title="Return everyone to the lobby to change teams or settings"
+                style="display:none;background:#1f2f24;border:1px solid #4c8a60;color:#d8ffe4;cursor:pointer;padding:6px 12px;border-radius:4px;">Lobby</button>
             <button id="go-btn-main-menu"
                 style="background:#2a2a2a;border:1px solid #666;color:#ddd;cursor:pointer;padding:6px 12px;border-radius:4px;">Main Menu</button>
         </div>
@@ -647,40 +655,42 @@
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
     
     <script src="./src/utils/utils_common.js?v=20260926-netcode"></script>
-    <script src="./src/utils/utils_net_quality.js?v=20260926-netcode"></script>
-    <script src="./src/utils/utils_networking.js?v=20260926-netcode"></script>
-    <script src="./src/utils/utils_host_migration.js?v=20260926-netcode"></script>
+    <script src="./src/utils/utils_net_quality.js?v=20260928-lateseal"></script>
+    <script src="./src/utils/utils_networking.js?v=20260928-lateseal"></script>
+    <script src="./src/utils/utils_snapshot.js?v=20260928-lateseal"></script>
+    <script src="./src/utils/utils_resync.js?v=20260928-reserve"></script>
+    <script src="./src/utils/utils_host_migration.js?v=20260928-lateseal"></script>
     <script src="./src/utils/utils_storage.js?v=20260924-settings"></script>
 
     <script src="./src/data/data_static.js?v=20260926-netcode"></script>
-    <script src="./src/data/data_dynamic.js?v=20260926-netcode"></script>
-    <script src="./src/data/data_state.js?v=20260926-netcode"></script>
+    <script src="./src/data/data_dynamic.js?v=20260927-resync"></script>
+    <script src="./src/data/data_state.js?v=20260928-lateseal"></script>
 
     <script src="./src/audio_visual/visibility_history.js?v=20260925-targeting-perf"></script>
     <script src="./src/audio_visual/range_overlay.js?v=20260925-scale-perf"></script>
-    <script src="./src/audio_visual/selection_overlay.js?v=20260925-bulk-perf"></script>
+    <script src="./src/audio_visual/selection_overlay.js?v=20260927-resync"></script>
     <script src="./src/audio_visual/renderer3d.js?v=20260925-flat-batch"></script>
-    <script src="./src/audio_visual/renderer2d.js?v=20260925-bulk-perf"></script>
+    <script src="./src/audio_visual/renderer2d.js?v=20260927-resync"></script>
     <script src="./src/audio_visual/side_visualizations.js?v=20260925-crowd-perf"></script>
-    <script src="./src/audio_visual/renderer.js?v=20260926-netcode"></script>
+    <script src="./src/audio_visual/renderer.js?v=20260927-resync"></script>
     <script src="./src/audio_visual/audio.js?v=20260925-bulk-perf"></script>
     <script src="./src/audio_visual/jukebox.js?v=20260921"></script>
-    <script src="./src/audio_visual/hud.js?v=20260925-bulk-perf"></script>
+    <script src="./src/audio_visual/hud.js?v=20260928-lateseal"></script>
 
-    <script src="./src/game/chunk.js?v=20260925-bulk-perf"></script>
+    <script src="./src/game/chunk.js?v=20260927-resync"></script>
     <script src="./src/game/map.js?v=20260926-netcode"></script>
     <script src="./src/game/pathfinding.js?v=20260925-scale-perf"></script>
     <script src="./src/game/player.js?v=20260516d"></script>
 
     <script src="./src/things/barrack.js?v=20260926-netcode"></script>
-    <script src="./src/things/unit.js?v=20260926-netcode"></script>
-    <script src="./src/things/worker.js?v=20260926-netcode"></script>
+    <script src="./src/things/unit.js?v=20260927-resync"></script>
+    <script src="./src/things/worker.js?v=20260927-resync"></script>
     <script src="./src/things/particle.js?v=20260924-local-history-perf2"></script>
     <script src="./src/things/projectile.js?v=20260926-netcode"></script>
     <script src="./src/things/things_utils.js?v=20260926-netcode"></script>
     <script src="./src/things/tower.js?v=20260926-netcode"></script>
 
-    <script src="./src/main.js?v=20260926-netcode"></script>
+    <script src="./src/main.js?v=20260928-lateseal"></script>
 
     <script src="./src/bootstrap.js?v=20260924-settings"></script>
 </body>

@@ -2206,6 +2206,14 @@ function initInput() {
             hostPlayAgain();
         });
     }
+    let goBtnRematch = document.getElementById('go-btn-rematch');
+    if (goBtnRematch) {
+        goBtnRematch.addEventListener('click', () => {
+            if (!gameOver || !isMultiplayer) return;
+            if (isHost) hostRematch();
+            else guestToggleRematchVote();
+        });
+    }
     let goBtnMainMenu = document.getElementById('go-btn-main-menu');
     if (goBtnMainMenu) {
         goBtnMainMenu.addEventListener('click', () => {
@@ -2471,7 +2479,7 @@ function initInput() {
 // the per-unit A*. Unit order and every tie-break are deterministic.
 function _issueGroupMoveOrder(a, playerId, cmd) {
     let targetGx = Math.floor(a.targetX / TILE), targetGy = Math.floor(a.targetY / TILE);
-    let ids = new Set(a.unitIds);
+    let ids = a.unitIdSet || new Set(a.unitIds);
     let groups = [];
     let groupByDest = new Map();
     let applyPath = (u, ugx, ugy, path) => {
@@ -2533,21 +2541,98 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
     }
 }
 
+// Actions come from other players' machines. Malformed fields are dropped or
+// clamped the same way on every peer, so a bad action can neither throw
+// halfway, loop for long, nor act for another team.
+const ACTION_MAX_COUNT = 100;
+const LOCKSTEP_MAX_ACTIONS_PER_PACKET = 256;
+const ACTION_MAX_UNIT_IDS = 20000;
+const ACTION_MAX_TOWER_COORDS = 5000;
+
+function _actionInt(v) {
+    return (typeof v === 'number' && Number.isFinite(v)) ? Math.floor(v) : null;
+}
+
+function _actionNum(v) {
+    return (typeof v === 'number' && Number.isFinite(v)) ? v : null;
+}
+
+// Never a name objects inherit ('__proto__', 'constructor'...): these strings
+// index lookup tables. A fixed list, not `in Object.prototype`, which differs
+// between browsers and would make peers disagree.
+const ACTION_RESERVED_STRINGS = new Set(['__proto__', 'constructor', 'prototype', 'hasOwnProperty', 'isPrototypeOf',
+    'propertyIsEnumerable', 'toLocaleString', 'toString', 'valueOf', '__defineGetter__', '__defineSetter__',
+    '__lookupGetter__', '__lookupSetter__', 'toSource', 'watch', 'unwatch']);
+
+function _actionStr(v) {
+    return (typeof v === 'string' && !ACTION_RESERVED_STRINGS.has(v)) ? v.slice(0, 64) : null;
+}
+
+function sanitizeAction(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || typeof raw.action !== 'string') return null;
+    let a = { ...raw };
+    for (let k of ['gx', 'gy', 'targetGx', 'targetGy']) if (k in a) a[k] = _actionInt(a[k]) ?? -1;
+    // World positions stay on the map (paths and tiles are looked up there).
+    if ('targetX' in a) { let v = _actionNum(a.targetX); a.targetX = v === null ? null : Math.max(0, Math.min(GRID_W * TILE - 1, v)); }
+    if ('targetY' in a) { let v = _actionNum(a.targetY); a.targetY = v === null ? null : Math.max(0, Math.min(GRID_H * TILE - 1, v)); }
+    for (let k of ['targetId', 'unitId', 'targetUnitId', 'targetTeam', 'unitLevel', 'fromIndex', 'toIndex']) if (k in a) a[k] = _actionInt(a[k]);
+    for (let k of ['itemType', 'kind', 'key', 'statKey', 'targetType', 'mode', 'unitType']) if (k in a) a[k] = _actionStr(a[k]);
+    if ('itemType' in a && !(a.itemType && Object.prototype.hasOwnProperty.call(BASE_CARD_TYPES, a.itemType))) a.itemType = null;
+    if ('count' in a) a.count = Math.max(1, Math.min(ACTION_MAX_COUNT, _actionInt(a.count) ?? 1));
+    let ids = Array.isArray(a.unitIds) ? a.unitIds : [];
+    let clean = [];
+    for (let i = 0; i < ids.length && clean.length < ACTION_MAX_UNIT_IDS; i++) {
+        let id = ids[i];
+        if (typeof id === 'number' && Number.isInteger(id)) clean.push(id);
+    }
+    a.unitIds = clean;
+    // Membership tests against every unit: a set, not a scan of the ids.
+    a.unitIdSet = new Set(clean);
+    if ('towerCoords' in a) {
+        let coords = Array.isArray(a.towerCoords) ? a.towerCoords : [];
+        a.towerCoords = [];
+        for (let i = 0; i < coords.length && a.towerCoords.length < ACTION_MAX_TOWER_COORDS; i++) {
+            let c = coords[i];
+            let gx = c && _actionInt(c.gx), gy = c && _actionInt(c.gy);
+            if (gx !== null && gy !== null) a.towerCoords.push({ gx, gy });
+        }
+    }
+    if ('target' in a) {
+        let t = a.target;
+        a.target = (t && typeof t === 'object' && typeof t.type === 'string')
+            ? { type: t.type, id: _actionInt(t.id), gx: _actionInt(t.gx) ?? -1, gy: _actionInt(t.gy) ?? -1 }
+            : null;
+    }
+    return a;
+}
+
 function processActions(actions, playerId) {
-    for (let a of actions) {
+    if (!Array.isArray(actions)) return;
+    for (let raw of actions) {
+        let a = sanitizeAction(raw);
+        if (!a) continue;
+        // One bad action must not take the rest of the tick's actions with
+        // it (it throws the same way on every peer).
+        try { processAction(a, playerId); } catch (err) { reportRuntimeError('action ' + a.action, err); }
+    }
+}
+
+function processAction(a, playerId) {
+    {
         if (a.action === 'place') {
             let count = Math.max(1, Math.floor(a.count || 1));
             for (let i = 0; i < count; i++) {
                 placeBuilding(a.gx, a.gy, a.itemType, playerId, { autoUpgradeEnabled: a.autoUpgradeEnabled, buildEnabled: a.buildEnabled });
             }
         } else if (a.action === 'move' || a.action === 'attackMove') {
+            if (!Number.isFinite(a.targetX) || !Number.isFinite(a.targetY)) return;
             _issueGroupMoveOrder(a, playerId, a.action === 'move' ? CMD_MOVING : CMD_ATTACK_MOVING);
         } else if (a.action === 'attack') {
             let target = units.find(u => u.id === a.targetId);
             if (target) {
                 let targetGx = Math.floor(target.x / TILE), targetGy = Math.floor(target.y / TILE);
                 for (let u of units) {
-                    if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
+                    if (a.unitIdSet.has(u.id) && u.owner === playerId && !u.dead) {
                         u.targetUnit = target; u.commandState = CMD_ATTACKING; u.targetBuilding = null; u.forcedAttackTarget = true;
                         u._attackMoveGx = u._attackMoveGy = null;
                         u._forcedTargetLastSeenX = target.x; u._forcedTargetLastSeenY = target.y;
@@ -2580,7 +2665,7 @@ function processActions(actions, playerId) {
             if (!(tb && tb.energy > 0)) tb = null;
             if (tb) {
                 for (let u of units) {
-                    if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
+                    if (a.unitIdSet.has(u.id) && u.owner === playerId && !u.dead) {
                         u.targetBuilding = tb; u.commandState = CMD_ATTACKING; u.targetUnit = null; u.forcedAttackTarget = false;
                         u._attackMoveGx = u._attackMoveGy = null;
                         u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
@@ -2607,7 +2692,7 @@ function processActions(actions, playerId) {
             }
         } else if (a.action === 'stop') {
             for (let u of units) {
-                if (a.unitIds.includes(u.id) && u.owner === playerId) {
+                if (a.unitIdSet.has(u.id) && u.owner === playerId) {
                     // Releasing hold resumes the unit's current orders
                     // (route, rally, worker task). Only free units stop.
                     if (u.holdPosition) { u.holdPosition = false; continue; }
@@ -2624,7 +2709,7 @@ function processActions(actions, playerId) {
             for (let u of units) {
                 // Hold only disables movement. Orders, routes, targets and
                 // worker tasks are kept, and new orders queue up while held.
-                if (a.unitIds.includes(u.id) && u.owner === playerId) u.holdPosition = true;
+                if (a.unitIdSet.has(u.id) && u.owner === playerId) u.holdPosition = true;
             }
         } else if (a.action === 'queueUnit') {
             let b = getBarrackAtTile(a.gx, a.gy);
@@ -2678,9 +2763,10 @@ function processActions(actions, playerId) {
                 }
             }
         } else if (a.action === 'workerAssign') {
+            if (!(a.targetGx >= 0 && a.targetGy >= 0 && a.targetGx < GRID_W && a.targetGy < GRID_H)) return;
             // Assign selected worker units to a specific target
             for (let u of units) {
-                if (!a.unitIds.includes(u.id) || u.owner !== playerId || u.dead || !u.workerState) continue;
+                if (!a.unitIdSet.has(u.id) || u.owner !== playerId || u.dead || !u.workerState) continue;
                 let myGx = Math.floor(u.x / TILE), myGy = Math.floor(u.y / TILE);
                 if (u.workerType === 'builder' && a.targetType === 'build') {
                     // Generic lookup: includes both under-construction and upgrading targets.
@@ -2838,17 +2924,17 @@ function processActions(actions, playerId) {
                 let ordered = [];
                 if (p.researchTask) ordered.push(p.researchTask);
                 for (let task of p.researchQueue) ordered.push(task);
-                if (ordered.length <= 1) continue;
+                if (ordered.length <= 1) return;
 
                 let from = fromIsActive ? 0 : (Math.floor(Number(a.fromIndex)) + 1);
-                if (!Number.isFinite(from) || from < 0 || from >= ordered.length) continue;
+                if (!Number.isFinite(from) || from < 0 || from >= ordered.length) return;
 
                 let rawTo = Math.floor(Number(a.toIndex));
                 let to = 0;
                 if (toIsActive) {
                     to = 0;
                 } else {
-                    if (!Number.isFinite(rawTo)) continue;
+                    if (!Number.isFinite(rawTo)) return;
                     if (fromIsActive) {
                         to = Math.max(0, Math.min(ordered.length - 1, rawTo + 1));
                     } else {
@@ -2857,10 +2943,10 @@ function processActions(actions, playerId) {
                             : Math.max(0, Math.min(ordered.length - 1, rawTo + 1));
                     }
                 }
-                if (from === to) continue;
+                if (from === to) return;
 
                 let [task] = ordered.splice(from, 1);
-                if (!task) continue;
+                if (!task) return;
                 ordered.splice(to, 0, task);
 
                 p.researchTask = ordered[0] || null;
@@ -3343,6 +3429,11 @@ function startGame() {
         lockstepLastResendRequestAtByTick = {};
         lockstepHighestSentLocalTick = -1;
         lockstepHostWaitRequestByPeer = {};
+        lockstepHostLateByTick = {};
+        lockstepHostCarryByPeer = {};
+        lockstepHostLastOnTimeAt = {};
+        lockstepHostLastPacketAt = {};
+        lockstepHostLastPacketTick = {};
         lockstepGuestWaitRequest = null;
         lockstepFatalStopActive = false;
         lockstepFatalStopReason = '';
@@ -3421,7 +3512,7 @@ function computeTickPacketChecksum(tick, peerId, teamId, actions) {
     }));
 }
 
-function computeTickBundleChecksum(tick, packets) {
+function computeTickBundleChecksum(tick, packets, flush = 0) {
     let sorted = (Array.isArray(packets) ? packets : [])
         .map(p => ({
             tick: Math.floor(Number(p.tick) || 0),
@@ -3431,7 +3522,10 @@ function computeTickBundleChecksum(tick, packets) {
             checksum: String(p.checksum || '')
         }))
         .sort((a, b) => a.peerId.localeCompare(b.peerId));
-    return hashStringLockstep(stableSerializeForLockstep({ tick: Math.floor(tick), packets: sorted }));
+    let body = { tick: Math.floor(tick), packets: sorted };
+    // A resync tick: every peer drops its history caches before running it.
+    if (flush) body.flush = 1;
+    return hashStringLockstep(stableSerializeForLockstep(body));
 }
 
 let runtimeErrorCount = 0;
@@ -3547,6 +3641,7 @@ function getActiveMatchPeerIds() {
                 if (!pid) continue;
                 if (normalizeMatchRole(matchRoleByPeerId[pid], 'playing') !== 'playing') continue;
                 if (isPeerExplicitlyRemoved(pid)) continue;
+                if (isHost && resyncHostIsJoining(pid)) continue;
                 if (!ids.includes(pid)) ids.push(pid);
             }
         } else {
@@ -3603,15 +3698,68 @@ function validateTickPacket(packet) {
     return String(packet.checksum || '') === expected;
 }
 
+// Wire form of a sealed bundle: packets without what the receiver rebuilds
+// (their tick and checksum), and without empty action lists. The combined
+// checksum still covers everything.
+function packTickBundleForWire(b) {
+    let p = [];
+    for (let pk of b.packets) {
+        let row = [pk.peerId, pk.teamId];
+        if (Array.isArray(pk.actions) && pk.actions.length > 0) row.push(pk.actions);
+        p.push(row);
+    }
+    let w = { t: b.tick, c: b.combinedChecksum, p };
+    if (b.flush) w.f = 1;
+    return w;
+}
+
+// A repeated earlier bundle: when no one sent a command in it and the same
+// players took part as in `current`, a tick and checksum are enough.
+function packRepeatedTickBundleForWire(b, current) {
+    let same = b.packets.length === current.packets.length;
+    for (let i = 0; same && i < b.packets.length; i++) {
+        let a = b.packets[i], c = current.packets[i];
+        if (a.peerId !== c.peerId || a.teamId !== c.teamId || (Array.isArray(a.actions) && a.actions.length > 0)) same = false;
+    }
+    if (!same) return packTickBundleForWire(b);
+    let w = { t: b.tick, c: b.combinedChecksum, s: 1 };
+    if (b.flush) w.f = 1;
+    return w;
+}
+
+// Bundles rebuilt from the wire have checksums computed here, not received.
+const _rebuiltTickBundles = new WeakSet();
+
+function unpackTickBundleFromWire(w, current = null) {
+    if (!w || typeof w !== 'object') return null;
+    let t = Math.floor(Number(w.t));
+    if (!Number.isFinite(t) || t < 0) return null;
+    let rows = w.s ? (current ? current.packets.map(p => [p.peerId, p.teamId]) : null) : w.p;
+    if (!Array.isArray(rows)) return null;
+    let packets = [];
+    for (let row of rows) {
+        if (!Array.isArray(row)) return null;
+        let peerId = String(row[0] || ''), teamId = Math.floor(Number(row[1]) || 0);
+        let actions = Array.isArray(row[2]) ? row[2] : [];
+        packets.push({ tick: t, peerId, teamId, actions, checksum: computeTickPacketChecksum(t, peerId, teamId, actions) });
+    }
+    let b = { tick: t, packets, combinedChecksum: String(w.c || '') };
+    if (w.f) b.flush = 1;
+    _rebuiltTickBundles.add(b);
+    return b;
+}
+
 function validateTickBundle(bundle) {
     if (!bundle || typeof bundle !== 'object') return false;
     let t = Math.floor(Number(bundle.tick));
     if (!Number.isFinite(t) || t < 0) return false;
     let packets = Array.isArray(bundle.packets) ? bundle.packets : [];
-    for (let p of packets) {
-        if (!validateTickPacket(p)) return false;
+    if (!_rebuiltTickBundles.has(bundle)) {
+        for (let p of packets) {
+            if (!validateTickPacket(p)) return false;
+        }
     }
-    let expected = computeTickBundleChecksum(t, packets);
+    let expected = computeTickBundleChecksum(t, packets, bundle.flush ? 1 : 0);
     return String(bundle.combinedChecksum || '') === expected;
 }
 
@@ -3647,6 +3795,7 @@ function sendLocalTickPacketWindow(tick, force = false) {
     if (!hostConn || hostConn.open === false) return;
     let baseTick = Math.floor(Number(tick));
     if (!Number.isFinite(baseTick) || baseTick < 0) return;
+    baseTick = Math.max(baseTick, resyncPacketHorizonTick());
     let lead = Math.max(0, Math.floor(Number(LOCKSTEP_PIPELINE_TICKS) || 0));
     let horizon = baseTick + lead;
     let endTick = Math.max(horizon, lockstepHighestSentLocalTick);
@@ -3666,6 +3815,16 @@ function sendLocalTickPacketWindow(tick, force = false) {
         if (t > lockstepHighestSentLocalTick) lockstepHighestSentLocalTick = t;
     }
     if (batch.length === 0) return;
+    // The last packets sent, again: one lost message then costs a tick, not
+    // a retransmission timeout.
+    let first = batch[0].tick;
+    for (let t = first - 1, n = 0; n < NET_TICK_REDUNDANCY && t >= baseTick; t--) {
+        if (lockstepCommittedByTick[t] || !lockstepLastPacketSentAtByTick[t]) continue;
+        let packet = lockstepLocalPacketByTick[t];
+        if (!packet) continue;
+        batch.unshift(packet);
+        n++;
+    }
     try {
         hostConn.send({ type: 'TICK_PACKETS', packets: batch });
         netCounters.messagesOut++;
@@ -3714,10 +3873,19 @@ function _hostAcceptTickPacket(conn, rawPacket) {
     if (!packet || typeof packet !== 'object') return;
     let connPeerId = String((conn && conn.peer) || '');
     if (!connPeerId || isPeerExplicitlyRemoved(connPeerId)) return;
+    lockstepHostLastPacketAt[connPeerId] = performance.now();
+    let pt = Math.floor(Number(packet.tick));
+    if (Number.isFinite(pt) && !(lockstepHostLastPacketTick[connPeerId] >= pt)) lockstepHostLastPacketTick[connPeerId] = pt;
     packet.tick = Math.floor(Number(packet.tick));
     if (!Number.isFinite(packet.tick) || packet.tick < 0) return;
-    // Late packets for sealed ticks are expected after resends; ignore them.
-    if (packet.tick < currentTick || lockstepCommittedByTick[packet.tick] || lockstepBundleByTick[packet.tick]) return;
+    // Late packets for sealed ticks are expected after resends; ignore them,
+    // unless the tick was sealed without this one (it came too late): then
+    // its commands run on the guest's next open tick.
+    if (packet.tick < currentTick || lockstepCommittedByTick[packet.tick] || lockstepBundleByTick[packet.tick]) {
+        let late = lockstepHostLateByTick[packet.tick];
+        if (late && late.has(connPeerId)) _hostCarryLatePacket(connPeerId, packet, late);
+        return;
+    }
     packet.teamId = Math.floor(Number(packet.teamId) || 0);
     packet.actions = Array.isArray(packet.actions) ? packet.actions.map(a => normalizeLockstepPayload(a)) : [];
     packet = normalizeLockstepPayload(packet) || packet;
@@ -3732,24 +3900,91 @@ function _hostAcceptTickPacket(conn, rawPacket) {
         return;
     }
 
-    let setup = computeTeamSetupFromLobby();
-    let enforcedTeamId = setup.teamByPeer[packet.peerId] ?? packet.teamId;
-    let actions = packet.actions;
-    // Only the host may resign other teams.
-    let filtered = actions.filter(a => !(a && a.action === 'forceResignTeam'));
-    if (packet.teamId !== enforcedTeamId || filtered.length !== actions.length || actions.some(a => Math.floor(Number(a && a.teamId) || 0) !== enforcedTeamId)) {
-        packet.teamId = enforcedTeamId;
-        packet.actions = filtered.map(a => normalizeLockstepPayload({ ...(a || {}), teamId: enforcedTeamId }));
-        packet.checksum = computeTickPacketChecksum(packet.tick, packet.peerId, packet.teamId, packet.actions);
-    }
+    _hostSanitizeTickPacket(packet);
 
     if (!lockstepHostPacketsByTick[packet.tick]) lockstepHostPacketsByTick[packet.tick] = {};
     lockstepHostPacketsByTick[packet.tick][packet.peerId] = packet;
+    lockstepHostLastOnTimeAt[packet.peerId] = currentTick;
     let req = lockstepHostWaitRequestByPeer[packet.peerId];
     if (req && req.tick <= packet.tick) delete lockstepHostWaitRequestByPeer[packet.peerId];
 }
 
-function maybeBuildHostBundle(tick, participants = null) {
+// Host: a guest packet as the host seals it: the guest's own team, no
+// host-only actions, no more than a player could send in a tick (a flood
+// would stall every peer).
+function _hostSanitizeTickPacket(packet) {
+    let setup = computeTeamSetupFromLobby();
+    let enforcedTeamId = setup.teamByPeer[packet.peerId] ?? packet.teamId;
+    let actions = packet.actions;
+    let filtered = actions.filter(a => !(a && a.action === 'forceResignTeam')).slice(0, LOCKSTEP_MAX_ACTIONS_PER_PACKET);
+    for (let i = 0; i < filtered.length; i++) {
+        let a = filtered[i];
+        if (a && Array.isArray(a.unitIds) && a.unitIds.length > ACTION_MAX_UNIT_IDS) filtered[i] = { ...a, unitIds: a.unitIds.slice(0, ACTION_MAX_UNIT_IDS) };
+    }
+    if (packet.teamId !== enforcedTeamId || filtered.length !== actions.length || filtered.some((a, i) => a !== actions[i]) || actions.some(a => Math.floor(Number(a && a.teamId) || 0) !== enforcedTeamId)) {
+        packet.teamId = enforcedTeamId;
+        packet.actions = filtered.map(a => normalizeLockstepPayload({ ...(a || {}), teamId: enforcedTeamId }));
+        packet.checksum = computeTickPacketChecksum(packet.tick, packet.peerId, packet.teamId, packet.actions);
+    }
+    return packet;
+}
+
+// Host: the packet of a tick that was sealed without it. Its commands join
+// the guest's next open tick (once: later copies find the mark gone).
+function _hostCarryLatePacket(peerId, rawPacket, late) {
+    let packet = rawPacket;
+    packet.teamId = Math.floor(Number(packet.teamId) || 0);
+    packet.actions = Array.isArray(packet.actions) ? packet.actions.map(a => normalizeLockstepPayload(a)) : [];
+    packet = normalizeLockstepPayload(packet) || packet;
+    if (String(packet.peerId || '') !== peerId || !validateTickPacket(packet)) return;
+    _hostSanitizeTickPacket(packet);
+    late.delete(peerId);
+    if (packet.actions.length === 0) return;
+    let carry = lockstepHostCarryByPeer[peerId] || (lockstepHostCarryByPeer[peerId] = []);
+    for (let a of packet.actions) carry.push(a);
+    netCounters.lateCommandsCarried = (netCounters.lateCommandsCarried || 0) + packet.actions.length;
+}
+
+// Host: an empty packet for a guest whose own did not come in time.
+function _hostLatePlaceholderPacket(tick, peerId) {
+    let setup = computeTeamSetupFromLobby();
+    let teamId = Math.floor(Number(setup.teamByPeer[peerId]) || 0);
+    let packet = { tick, peerId, teamId, actions: [] };
+    packet.checksum = computeTickPacketChecksum(tick, peerId, teamId, packet.actions);
+    return packet;
+}
+
+// Host: a guest's packet for this tick with its carried commands in front
+// (as many as fit in one packet; the rest wait for the next tick).
+function _hostWithCarriedCommands(tick, peerId, packet) {
+    let carry = lockstepHostCarryByPeer[peerId];
+    if (!carry || carry.length === 0) return packet;
+    let room = LOCKSTEP_MAX_ACTIONS_PER_PACKET - packet.actions.length;
+    if (room <= 0) return packet;
+    let moved = carry.splice(0, room);
+    if (carry.length === 0) delete lockstepHostCarryByPeer[peerId];
+    let merged = { tick, peerId, teamId: packet.teamId, actions: moved.concat(packet.actions) };
+    merged.checksum = computeTickPacketChecksum(tick, peerId, merged.teamId, merged.actions);
+    return merged;
+}
+
+// Host: whether a guest delivered a packet in time since the given tick.
+function lockstepHostOnTimeSince(peerId, tick) {
+    let at = lockstepHostLastOnTimeAt[peerId];
+    return Number.isFinite(at) && at >= tick;
+}
+
+// Host: a guest silent this long is having an outage, not a late packet.
+const HOST_LATE_SEAL_MAX_SILENCE_MS = 1000;
+
+// Host: how long a due tick waits for a late guest packet before it is
+// sealed without it. A lag spike or a silent guest then delays only that
+// guest's commands instead of freezing every peer.
+function hostLateSealGraceMs() {
+    return Math.max(TICK_MS, 40);
+}
+
+function maybeBuildHostBundle(tick, participants = null, sealLate = false) {
     if (!isHost) return null;
     if (lockstepResyncPauseActive || matchStartWaitingForReady) return null;
     let t = Math.floor(Number(tick));
@@ -3763,11 +3998,24 @@ function maybeBuildHostBundle(tick, participants = null) {
 
     let ids = participants || getActiveMatchPeerIds();
     let pmap = lockstepHostPacketsByTick[t];
-    for (let pid of ids) if (!pmap[pid]) return null;
+    let missing = null;
+    for (let pid of ids) {
+        if (pmap[pid]) continue;
+        if (!sealLate) return null;
+        (missing || (missing = [])).push(pid);
+    }
+    if (missing) {
+        let late = lockstepHostLateByTick[t] || (lockstepHostLateByTick[t] = new Set());
+        for (let pid of missing) { pmap[pid] = _hostLatePlaceholderPacket(t, pid); late.add(pid); }
+        netCounters.lateSeals = (netCounters.lateSeals || 0) + 1;
+    }
+    for (let pid in lockstepHostCarryByPeer) if (pmap[pid]) pmap[pid] = _hostWithCarriedCommands(t, pid, pmap[pid]);
 
     let packets = ids.map(pid => pmap[pid]).sort((a, b) => String(a.peerId).localeCompare(String(b.peerId)));
-    let combinedChecksum = computeTickBundleChecksum(t, packets);
+    let flush = resyncHostFlushTicks.has(t) ? 1 : 0;
+    let combinedChecksum = computeTickBundleChecksum(t, packets, flush);
     let bundle = { tick: t, packets, combinedChecksum };
+    if (flush) bundle.flush = 1;
     // Building a bundle seals and commits the tick in one step.
     lockstepBundleByTick[t] = bundle;
     lockstepCommittedByTick[t] = true;
@@ -3781,7 +4029,18 @@ function sendHostBundle(tick, force = false) {
     if (!bundle) return;
     if (!force && lockstepLastBundleSentAtByTick[t]) return;
     lockstepLastBundleSentAtByTick[t] = performance.now();
-    let msg = { type: 'TICK_BUNDLE', bundle, c: 1 };
+    let msg = { type: 'TICK_BUNDLE', w: packTickBundleForWire(bundle), c: 1, d: netMatchInputDelay };
+    // Whose packet this tick was sealed without (they lengthen their lead).
+    let late = lockstepHostLateByTick[t];
+    if (late && late.size > 0) msg.l = Array.from(late);
+    let prev = [];
+    for (let k = NET_TICK_REDUNDANCY; k >= 1; k--) {
+        let b = lockstepBundleByTick[t - k] || lockstepHistoryByTick[t - k];
+        if (b) prev.push(packRepeatedTickBundleForWire(b, bundle));
+    }
+    if (prev.length > 0) msg.prev = prev;
+    let hashes = resyncTakeHostHashes();
+    if (hashes) msg.h = hashes;
     for (let c of connections) {
         if (!c) continue;
         try { c.send(msg); } catch { }
@@ -3795,9 +4054,35 @@ function _hostAdvanceBundles(now) {
     if (lockstepResyncPauseActive || matchStartWaitingForReady) return;
     let participants = getActiveMatchPeerIds();
     let end = currentTick + Math.max(0, Math.floor(Number(LOCKSTEP_HOST_PREBUILD_TICKS) || 0));
+    // The current tick is due and still missing a guest's packet: after a
+    // short grace it goes without it; at once while that guest is still
+    // behind (the tick before went without it too, and nothing came since).
+    // A guest that has sent nothing for a while, or only packets for ticks
+    // long past (stuck, or far behind), is gone for now (an outage, a
+    // reload): then every peer waits for it, as its units cannot be
+    // commanded meanwhile.
+    let sealLate = false;
+    if (!lockstepBundleByTick[currentTick] && waitingForRemoteSince > 0) {
+        let pmap = lockstepHostPacketsByTick[currentTick] || {};
+        let missing = participants.filter(pid => pid !== myPeerId && !pmap[pid]);
+        let behindLimit = Math.ceil(HOST_LATE_SEAL_MAX_SILENCE_MS / TICK_MS);
+        let alive = pid => (now - (lockstepHostLastPacketAt[pid] || 0)) < HOST_LATE_SEAL_MAX_SILENCE_MS
+            && (currentTick - (Number.isFinite(lockstepHostLastPacketTick[pid]) ? lockstepHostLastPacketTick[pid] : -Infinity)) <= behindLimit;
+        if (missing.every(alive)) {
+            sealLate = (now - waitingForRemoteSince) >= hostLateSealGraceMs();
+            if (!sealLate) {
+                let prev = lockstepHostLateByTick[currentTick - 1];
+                sealLate = !!prev && missing.every(pid => prev.has(pid) && !lockstepHostOnTimeSince(pid, currentTick - 1));
+            }
+        }
+    }
     for (let pt = currentTick; pt <= end; pt++) {
-        if (!maybeBuildHostBundle(pt, participants)) break;
+        if (!maybeBuildHostBundle(pt, participants, sealLate && pt === currentTick)) break;
         sendHostBundle(pt);
+    }
+    // Late marks only matter while a copy of the packet may still come.
+    if (sealLate || (currentTick & 63) === 0) {
+        for (let k in lockstepHostLateByTick) if (+k < currentTick - 600) delete lockstepHostLateByTick[k];
     }
 }
 
@@ -3825,17 +4110,35 @@ function _hostRequestMissingPackets(t, now) {
 
 function handleIncomingTickBundle(conn, data) {
     if (isHost) return;
-    let bundle = data && data.bundle ? data.bundle : null;
+    if (data && data.h) resyncGuestReceiveHashes(data.h);
+    if (data && Number.isFinite(data.d)) netMatchInputDelay = Math.max(0, Math.min(NET_MAX_INPUT_DELAY_TICKS, Math.floor(data.d)));
+    if (data && Array.isArray(data.l) && myPeerId && data.l.includes(myPeerId)) netNoteOwnPacketLate();
+    let bundle = data && data.bundle ? data.bundle : unpackTickBundleFromWire(data && data.w);
     if (!bundle || typeof bundle !== 'object') return;
     // Guests normally wait for START_GAME_ALL_READY; ticks from the host mean
     // the match is running, so never stay blocked if that message was lost.
     if (matchStartWaitingForReady) matchStartWaitingForReady = false;
+    // Copies of the previous bundles ride along, so a message that is lost
+    // (and retransmitted much later) does not hold this peer up.
+    if (Array.isArray(data.prev)) {
+        for (let w of data.prev) {
+            let t = Math.floor(Number(w && w.t));
+            if (!(t >= currentTick) || (lockstepCommittedByTick[t] && lockstepBundleByTick[t]) || lockstepPendingBundleByTick[t]) continue;
+            _guestAcceptBundle(unpackTickBundleFromWire(w, bundle), !!data.c);
+        }
+    }
+    _guestAcceptBundle(bundle, !!data.c);
+}
+
+function _guestAcceptBundle(bundle, sealed) {
+    if (!bundle || typeof bundle !== 'object') return;
     let t = Math.floor(Number(bundle.tick));
     if (!Number.isFinite(t) || t < currentTick) return;
     bundle.tick = t;
     if (lockstepCommittedByTick[t] && lockstepBundleByTick[t]) return;
+    if (lockstepPendingBundleByTick[t] && lockstepPendingBundleByTick[t].combinedChecksum === bundle.combinedChecksum) return;
     lockstepPendingBundleByTick[t] = bundle;
-    if (data.c) lockstepPendingCommitByTick[t] = String(bundle.combinedChecksum || '');
+    if (sealed) lockstepPendingCommitByTick[t] = String(bundle.combinedChecksum || '');
 }
 
 function handleIncomingTickBundleAck(conn, data) {
@@ -4124,128 +4427,8 @@ function computeLockstepStateDigest(tick) {
     return digest;
 }
 
-function summarizeLockstepDigestMismatch(expectedDigest, localDigest) {
-    if (!expectedDigest || !localDigest) return null;
-    let summary = {
-        expectedTick: Math.floor(Number(expectedDigest.tick) || 0),
-        localTick: Math.floor(Number(localDigest.tick) || 0),
-        expectedGameTime: Math.floor(Number(expectedDigest.gameTime) || 0),
-        localGameTime: Math.floor(Number(localDigest.gameTime) || 0),
-        counts: {},
-        firstDiff: {}
-    };
-
-    let keys = ['players', 'units', 'towers', 'barracks', 'spawners', 'floorItems', 'mines', 'astarMines'];
-    for (let key of keys) {
-        let expArr = Array.isArray(expectedDigest[key]) ? expectedDigest[key] : [];
-        let locArr = Array.isArray(localDigest[key]) ? localDigest[key] : [];
-        summary.counts[key] = { expected: expArr.length, local: locArr.length };
-        let n = Math.min(expArr.length, locArr.length);
-        for (let i = 0; i < n; i++) {
-            let es = stableSerializeForLockstep(expArr[i]);
-            let ls = stableSerializeForLockstep(locArr[i]);
-            if (es !== ls) {
-                summary.firstDiff[key] = { index: i, expected: expArr[i], local: locArr[i] };
-                break;
-            }
-        }
-        if (!summary.firstDiff[key] && expArr.length !== locArr.length) {
-            summary.firstDiff[key] = {
-                index: n,
-                expected: expArr[n] || null,
-                local: locArr[n] || null
-            };
-        }
-    }
-
-    return summary;
-}
-
 function computeLockstepStateHash(tick) {
     return computeLockstepStateHashFast(tick);
-}
-
-function _diffLockstepHashParts(expectedParts, localParts) {
-    if (!expectedParts || !localParts) return [];
-    let out = [];
-    for (let key of Object.keys(expectedParts)) {
-        if (String(expectedParts[key]) !== String(localParts[key])) out.push(key);
-    }
-    return out;
-}
-
-function maybeCompareLockstepStateHash(tick) {
-    if (isHost || lockstepDesyncDetected) return;
-    let t = Math.floor(Number(tick));
-    if (!Number.isFinite(t) || t < 0) return;
-    let expected = String(lockstepExpectedStateHashByTick[t] || '');
-    let local = String(lockstepLocalStateHashByTick[t] || '');
-    if (!expected || !local) return;
-
-    let expectedDigest = lockstepExpectedStateDigestByTick[t] || null;
-    let localDigest = lockstepLocalStateDigestByTick[t] || null;
-
-    delete lockstepExpectedStateHashByTick[t];
-    delete lockstepLocalStateHashByTick[t];
-    delete lockstepExpectedStateDigestByTick[t];
-    delete lockstepLocalStateDigestByTick[t];
-
-    if (Number.isFinite(lockstepHashGraceUntilTick) && t <= lockstepHashGraceUntilTick) return;
-    if (expected === local) return;
-
-    let now = performance.now();
-    // Digests hold per-subsystem hashes in normal matches and full entity
-    // lists in exact-lockstep debug mode.
-    let diffParts = (expectedDigest && expectedDigest.parts && localDigest && localDigest.parts)
-        ? _diffLockstepHashParts(expectedDigest.parts, localDigest.parts)
-        : [];
-    let mismatchSummary = (expectedDigest && expectedDigest.units && localDigest && localDigest.units)
-        ? summarizeLockstepDigestMismatch(expectedDigest, localDigest)
-        : { parts: diffParts };
-
-    lockstepDesyncDetected = true;
-    netCounters.desyncsDetected++;
-    netCounters.lastDesyncTick = t;
-    netCounters.lastDesyncParts = diffParts.join(', ');
-    waitingForRemoteSince = now;
-    logLockstepWarning('State hash mismatch; pausing lockstep and requesting hard resync', {
-        tick: t,
-        expected,
-        local,
-        details: mismatchSummary
-    });
-
-    let hostConn = netGetHostConnection();
-    if (hostConn) {
-        try {
-            hostConn.send({
-                type: 'TICK_STATE_HASH_MISMATCH_REPORT',
-                tick: t,
-                expectedHash: expected,
-                localHash: local,
-                details: mismatchSummary
-            });
-        } catch { }
-    }
-
-    if (lockstepStrictDebugMode) {
-        stopLockstepDebugMatch('state hash mismatch', { tick: t, expected, local, details: mismatchSummary });
-        return;
-    }
-    requestHardLockstepResync(t, 'state hash mismatch', now);
-}
-
-function handleIncomingTickStateHash(conn, data) {
-    if (isHost) return;
-    let t = Math.floor(Number(data && data.tick));
-    if (!Number.isFinite(t) || t < 0) return;
-    lockstepExpectedStateHashByTick[t] = String(data.stateHash || '');
-    if (data && data.stateDigest && typeof data.stateDigest === 'object') {
-        lockstepExpectedStateDigestByTick[t] = data.stateDigest;
-    } else if (data && data.parts && typeof data.parts === 'object') {
-        lockstepExpectedStateDigestByTick[t] = { parts: data.parts };
-    }
-    maybeCompareLockstepStateHash(t);
 }
 
 // Exact-lockstep debug mode: freeze the match at the first inconsistency so
@@ -4337,7 +4520,23 @@ function processDeferredGuestLockstepWindow(now, tick) {
             continue;
         }
         lockstepCommittedByTick[t] = true;
+        _guestResendIfSealedWithout(t, bundle, hostConn);
     }
+}
+
+// Guest: the host sealed this tick without our commands for it (our packet
+// came too late, or was lost with a dropped link). Send the packet again:
+// the host runs its commands on our next open tick (once, however many
+// copies reach it).
+function _guestResendIfSealedWithout(t, bundle, hostConn) {
+    if (!hostConn) return;
+    // (Commands queued while the link was down may not have a packet yet.)
+    let own = lockstepLocalPacketByTick[t] || ((localInputBuffer[t] || []).length > 0 ? buildLocalTickPacket(t) : null);
+    if (!own || !Array.isArray(own.actions) || own.actions.length === 0) return;
+    let sealed = (bundle.packets || []).find(p => p && String(p.peerId) === String(myPeerId));
+    let ids = new Set(((sealed && sealed.actions) || []).map(a => a && a.netId));
+    if (own.actions.every(a => a && ids.has(a.netId))) return;
+    try { hostConn.send({ type: 'TICK_PACKETS', packets: [own] }); netCounters.messagesOut++; } catch { }
 }
 
 // Guest: the next tick has not arrived. On a live channel it is only late,
@@ -4375,14 +4574,14 @@ function getHostResendBundleForTick(tick) {
 
     let historyBundle = lockstepHistoryByTick[t];
     if (!historyBundle || !Array.isArray(historyBundle.packets)) return null;
-    return {
-        bundle: {
-            tick: t,
-            packets: historyBundle.packets,
-            combinedChecksum: String(historyBundle.combinedChecksum || '')
-        },
-        committed: true
+    let bundle = {
+        tick: t,
+        packets: historyBundle.packets,
+        combinedChecksum: String(historyBundle.combinedChecksum || '')
     };
+    // A patch's flush tick: the checksum covers the mark.
+    if (historyBundle.flush) bundle.flush = 1;
+    return { bundle, committed: true };
 }
 
 function getHostOldestHistoryTick() {
@@ -4412,7 +4611,7 @@ function handleIncomingTickResendRequest(conn, data) {
                 }
                 break;
             }
-            try { conn.send({ type: 'TICK_BUNDLE', bundle: resend.bundle, c: 1 }); } catch { }
+            try { conn.send({ type: 'TICK_BUNDLE', w: packTickBundleForWire(resend.bundle), c: 1 }); } catch { }
         }
         return;
     }
@@ -4533,6 +4732,10 @@ function runOneTick() {
         delete lockstepHistoryByTick[currentTick - getLockstepHistoryKeepTicks()];
     }
 
+    // A resync tick: every peer starts it without history caches, like the
+    // peer that is restored from a patch.
+    if (isMultiplayer && lockstepBundleByTick[currentTick] && lockstepBundleByTick[currentTick].flush) snapFlushHistoryCaches();
+
     // Process deterministic combined actions for this tick.
     let allActs = isMultiplayer
         ? ((lockstepBundleByTick[currentTick] && Array.isArray(lockstepBundleByTick[currentTick].packets))
@@ -4540,7 +4743,11 @@ function runOneTick() {
             : [])
         : (localInputBuffer[currentTick] || []);
     let teams = (activeTeamIds && activeTeamIds.length > 0) ? [...activeTeamIds].sort((a, b) => a - b) : [0, 1];
-    for (let teamId of teams) {
+    // Commands of the same tick that compete (the same tile, the same
+    // target) go to each team in turn: the first team to act rotates.
+    let firstTeam = processedTick % teams.length;
+    for (let k = 0; k < teams.length; k++) {
+        let teamId = teams[(firstTeam + k) % teams.length];
         let acts = allActs.filter(a => (a.teamId ?? 0) === teamId);
         if (acts.length > 0) {
             try { processActions(acts, teamId); } catch (err) { reportRuntimeError('actions', err); }
@@ -4567,45 +4774,9 @@ function runOneTick() {
     if (currentTick % TICK_RATE === 0) sampleGameStats();
     requestResearchPopupRefresh();
 
-    let stateCheckTick = isMultiplayer && (processedTick % LOCKSTEP_STATE_CHECK_INTERVAL) === 0;
-    if (stateCheckTick) {
-        // Per-subsystem hashes come from the same pass; full digests are
-        // only built in exact-lockstep debug mode.
-        let parts = {};
-        let stateHash = computeLockstepStateHashFast(processedTick, parts);
-        let stateDigest = LOCKSTEP_DEBUG_HASH_DETAILS ? computeLockstepStateDigest(processedTick) : { parts };
-        if (LOCKSTEP_DEBUG_HASH_DETAILS) stateDigest.parts = parts;
-        if (isHost) {
-            let msg = { type: 'TICK_STATE_HASH', tick: processedTick, stateHash, parts };
-            if (LOCKSTEP_DEBUG_HASH_DETAILS) msg.stateDigest = stateDigest;
-            for (let c of connections) {
-                if (!c) continue;
-                try { c.send(msg); } catch { }
-            }
-        } else {
-            lockstepLocalStateHashByTick[processedTick] = stateHash;
-            lockstepLocalStateDigestByTick[processedTick] = stateDigest;
-            maybeCompareLockstepStateHash(processedTick);
-        }
-    }
-
-    if (stateCheckTick && !isHost) {
-        let pruneBefore = processedTick - Math.max(200, LOCKSTEP_STATE_CHECK_INTERVAL * 20);
-        for (let key of Object.keys(lockstepExpectedStateHashByTick)) {
-            let t = Math.floor(Number(key));
-            if (Number.isFinite(t) && t < pruneBefore) {
-                delete lockstepExpectedStateHashByTick[key];
-                delete lockstepExpectedStateDigestByTick[key];
-            }
-        }
-        for (let key of Object.keys(lockstepLocalStateHashByTick)) {
-            let t = Math.floor(Number(key));
-            if (Number.isFinite(t) && t < pruneBefore) {
-                delete lockstepLocalStateHashByTick[key];
-                delete lockstepLocalStateDigestByTick[key];
-            }
-        }
-    }
+    // Every peer hashes a slice of the state each tick; guests compare with
+    // the host's (see utils_resync.js).
+    if (isMultiplayer) resyncAfterTick(processedTick);
 
     _tpsTickCount++;
     let tpsNow = performance.now();

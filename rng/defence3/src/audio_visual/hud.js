@@ -1421,11 +1421,32 @@ function updateHUD() {
     if (_hudCache.popText !== popText) { _hudCache.popText = popText; _hudEls.pop.textContent = popText; }
     let secs = Math.floor(gameTime / TICK_RATE);
     if (_hudCache.time !== secs) { _hudCache.time = secs; let m = Math.floor(secs / 60), s = secs % 60; _hudEls.time.textContent = `${m}:${s.toString().padStart(2, '0')}`; }
-    if (_hudCache.fps !== _fpsDisplay || _hudCache.tps !== _tpsDisplay) {
+    let netText = _hudNetText();
+    if (_hudCache.fps !== _fpsDisplay || _hudCache.tps !== _tpsDisplay || _hudCache.net !== netText) {
         _hudCache.fps = _fpsDisplay;
         _hudCache.tps = _tpsDisplay;
-        _hudEls.fps.textContent = `${_fpsDisplay} FPS / ${_tpsDisplay} TPS (v3)`;
+        _hudCache.net = netText;
+        _hudEls.fps.textContent = `${_fpsDisplay} FPS / ${_tpsDisplay} TPS (v3)${netText}`;
     }
+}
+
+// Online: ping to the host, the command delay, and how many of this player's
+// commands are still waiting for their tick.
+function _hudNetText() {
+    if (!isMultiplayer || !gameStarted || gameOver) return '';
+    let text = '';
+    if (!isHost) {
+        let link = netGetHostLinkStats();
+        if (link && Number.isFinite(link.srtt)) text += ` · ping ${Math.round(link.srtt)} ms`;
+    }
+    text += ` · delay ${Math.round(netCommandLeadTicks() * TICK_MS)} ms`;
+    let pending = 0;
+    for (let k in localInputBuffer) if (+k >= currentTick && Array.isArray(localInputBuffer[k])) pending += localInputBuffer[k].length;
+    if (pending > 0) text += ` · ${pending} order${pending > 1 ? 's' : ''} sent`;
+    // Our packets reached the host too late in the last seconds: our orders
+    // run a little later than shown (the connection, not the game).
+    if (!isHost && netLateSamples.length > 0 && (performance.now() - netLateSamples[netLateSamples.length - 1]) < 3000) text += ' · connection lagging';
+    return text;
 }
 
 let _buildMenuTab = null;
@@ -5870,6 +5891,7 @@ function showGameOver() {
     if (graphWrap) graphWrap.style.display = 'none';
     let btnPlayAgain = document.getElementById('go-btn-play-again');
     if (btnPlayAgain) btnPlayAgain.style.display = (isHost && isMultiplayer) ? 'inline-block' : 'none';
+    refreshGameOverRematchUi();
     renderGameGraph(graphMetric);
     playSound(winner === localPlayerId ? 'victory' : 'defeat');
 }

@@ -7,7 +7,7 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
 
 (async () => {
     const rows = [];
-    for (const mapType of ['solar_system', 'islands']) {
+    for (const mapType of (process.argv[2] ? [process.argv[2]] : ['solar_system', 'islands'])) {
         const { world, host, guests, all } = await C.setupChaosWorld(mapType, 4242, { guestOptions: [{ foreignMath: true }, {}, { foreignMath: true }], exactHashes: true });
         assert.notEqual(guests[0].eval('Math.pow(1.1, 2.5)'), host.eval('Math.pow(1.1, 2.5)'), 'guest math differs');
         let s = 99;

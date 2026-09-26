@@ -3027,17 +3027,18 @@ function _workerReturnPath(u) {
 function queueAction(action) {
     if (localDefeated && action && action.action !== 'resign') return;
     if (gameOver) return;
+    // Just joined and still catching up: sent once the host counts us in.
+    if (isMultiplayer && gameStarted && resyncGuestHoldAction(action)) return;
     if (isMultiplayer && gameStarted && !isHost && !netGetHostConnection()) {
         // Commands issued while reconnecting are kept and sent once the link
         // is back (they are scheduled after every tick already sent).
         scheduleGuestAutoReconnect('Lost host connection');
     }
-    let actionLead = Math.max(0, Math.floor(INPUT_DELAY || 0));
-    // Guests send packets up to current + input delay; commands go right after.
-    if (isMultiplayer && gameStarted && !isHost) {
-        actionLead = Math.max(actionLead, Math.max(0, Math.floor(LOCKSTEP_PIPELINE_TICKS || 0)) + 1);
-    }
+    // Guests send packets up to current + input delay; commands go right
+    // after. In fair mode everyone, the host included, waits the match delay.
+    let actionLead = netCommandLeadTicks();
     let tick = currentTick + actionLead;
+    if (isMultiplayer && gameStarted && !isHost && resyncGuest.liveFromTick > tick) tick = resyncGuest.liveFromTick;
     if (isMultiplayer && gameStarted) {
         // A sent packet may already be sealed by the host, and a sealed tick
         // never changes, so new commands always go to a later tick. This also
@@ -3049,6 +3050,7 @@ function queueAction(action) {
     let actorId = myPeerId || `p${localPlayerId}`;
     let finalAction = { ...action, teamId: localPlayerId, netId: `${actorId}:${nextLocalActionSeq++}` };
     localInputBuffer[tick].push(finalAction);
+    if (typeof noteCommandFeedback === 'function') noteCommandFeedback(finalAction, tick);
 
     // The tick is unsent (guest) or unsealed (host): rebuild its packet.
     delete lockstepLocalPacketByTick[tick];

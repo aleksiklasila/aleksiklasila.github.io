@@ -222,7 +222,10 @@ const ECONOMY = {
         assert.equal(guests[1].eval('fullVisibility'), true);
         assert.equal(guests[1].eval('matchFullVisibility'), false);
         const rallyFollow = host.eval(`barracks.filter(b => b.rallyTargetUnitId != null).length`);
-        assertLockstepClean(world, all, 'production/rally', { snapshots: 2 });
+        // (The spectator joined without anyone else restoring anything.)
+        assertLockstepClean(world, all, 'production/rally', { snapshots: 1 });
+        assert.equal(spec.snapshotsApplied, 1, 'spectator loaded the match once');
+        assert.equal(spec.patchesApplied, 0, 'spectator needed no repair');
         H.checkHealthy(world, [host, spec], { minCompared: 200, fromTick: specFrom, label: 'spectator' });
         rows.push(`production queues, dequeue, disabled queue and rallies (${rallyFollow} following enemy units) with a spectator and a resigned player in sync`);
     }
