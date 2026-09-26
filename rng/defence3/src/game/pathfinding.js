@@ -165,19 +165,19 @@ function flushPendingMovementAstarSpend() {
 }
 
 function _resolveUnitAstarTileCost(u) {
-    if (!u) return 0.1;
+    if (!u) return 0.01;
     let unitCost = Number(u.preComputed && u.preComputed.astarCost);
-    if (Number.isFinite(unitCost) && unitCost > 0) return Math.max(0.1, unitCost);
+    if (Number.isFinite(unitCost) && unitCost > 0) return Math.max(0.01, unitCost);
 
     let owner = Number.isFinite(u.owner) ? u.owner : localPlayerId;
     let unitType = String(u.unitType || 'norm');
     let level = Math.max(1, Math.floor(Number(u.effectiveLevel || u.unitLevel || 1) || 1));
     let mapCost = Number(getUnitStatForOwner(owner, unitType, level, 'astarCost'));
-    if (Number.isFinite(mapCost) && mapCost > 0) return Math.max(0.1, mapCost);
+    if (Number.isFinite(mapCost) && mapCost > 0) return Math.max(0.01, mapCost);
 
     let baseCost = Number((BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm || {}).astarCost);
-    if (Number.isFinite(baseCost) && baseCost > 0) return Math.max(0.1, baseCost);
-    return 0.1;
+    if (Number.isFinite(baseCost) && baseCost > 0) return Math.max(0.01, baseCost);
+    return 0.01;
 }
 
 function _tryConsumeAstarMoveCost(u, tiles = 1) {

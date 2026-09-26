@@ -2114,7 +2114,7 @@ function getUnitStatFallbackValue(unitType, statKey) {
     if (statKey === 'healerDps') return Math.max(0, Number(s.healerDps) || 0);
     if (statKey === 'researcherDps') return Math.max(0, Number(s.researcherDps) || 0);
     if (statKey === 'transferCooldown') return s.isWorker ? Math.max(0.01, Number(s.transferCooldown) || 0.01) : 0;
-    if (statKey === 'astarCost') return Math.max(0.1, Number(s.astarCost) || 1);
+    if (statKey === 'astarCost') return Math.max(0.01, Number(s.astarCost) || 1);
     if (statKey === 'upKeep') return Math.max(0.01, Number(s.upKeep) || 1);
     return NaN;
 }
@@ -2147,7 +2147,7 @@ function normalizePrecomputedUnitStatValue(unitType, statKey, value) {
         return 0;
     }
     if (statKey === 'transferCooldown') return s.isWorker ? Math.max(0.01, Number(v) || 0.01) : 0;
-    if (statKey === 'astarCost') return Math.max(0.1, Number(v) || 1);
+    if (statKey === 'astarCost') return Math.max(0.01, Number(v) || 1);
     if (statKey === 'upKeep') return Math.max(0.01, Number(v) || 0.01);
     return v;
 }
@@ -2202,7 +2202,7 @@ function computeBaseUnitStatsAtLevel(unitType, level) {
     let upKeepLevelExp = Math.max(1, Number(UNIT_UPKEEP_EXP) || 1);
     let baseUpKeep = Math.max(0.01, Number(s.upKeep) || 1);
     let upKeep = Math.max(0.01, baseUpKeep * detPow(upKeepLevelExp, lvl - 1));
-    let astarCost = Math.max(0.1, (Number(s.astarCost) || 1) * detPow(astarCostLevelExp, lvl - 1));
+    let astarCost = Math.max(0.01, (Number(s.astarCost) || 1) * detPow(astarCostLevelExp, lvl - 1));
     let builderDps = unitType === 'builder_unit' ? Math.max(1, Math.round(builderBase * detPow(workerGrowthExp, lvl - 1))) : 0;
     let healerDps = unitType === 'healer_unit' ? Math.max(1, Math.round(healerBase * detPow(workerGrowthExp, lvl - 1))) : 0;
     let researcherDps = unitType === 'researcher_unit' ? Math.max(1, Math.round(researcherBase * detPow(workerGrowthExp, lvl - 1))) : 0;
@@ -2522,7 +2522,7 @@ function _getUnitPlayerPrecomputedEntry(playerId, unitType, level) {
         researcherDps: Math.max(0, Number(values.researcherDps) || 0),
         transferCooldownSec,
         transferCooldownTicks: secondsToTicks(transferCooldownSec),
-        astarCost: Math.max(0.1, Number(values.astarCost) || 0.1),
+        astarCost: Math.max(0.01, Number(values.astarCost) || 0.1),
         upKeep: Math.max(0.01, Number(values.upKeep) || 0.01),
     };
 }
@@ -2664,7 +2664,7 @@ function _applyUnitPlayerPrecomputedStat(entry, statKey, value) {
         entry.transferCooldownSec = Math.max(0.01, Number(value) || 0.01);
         entry.transferCooldownTicks = secondsToTicks(entry.transferCooldownSec);
     }
-    else if (statKey === 'astarCost') entry.astarCost = Math.max(0.1, Number(value) || 0.1);
+    else if (statKey === 'astarCost') entry.astarCost = Math.max(0.01, Number(value) || 0.01);
     else if (statKey === 'upKeep') entry.upKeep = Math.max(0.01, Number(value) || 0.01);
     return entry;
 }
