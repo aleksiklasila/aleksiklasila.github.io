@@ -479,6 +479,10 @@ function netUpdateWaitingOverlay(now = performance.now(), forceHide = false) {
         lines.push(`<b>Resynchronizing match state…</b>`);
         let since = Number(lockstepResyncRequestedAt) || 0;
         if (since) lines.push(`<span style="opacity:.75">${_formatSecs(now - since)}</span>`);
+    } else if (!isHost && resyncGuest && resyncGuest.waitSince && currentTick === resyncGuest.T && (now - resyncGuest.waitSince) > NET_WAIT_OVERLAY_DELAY_MS) {
+        // Stopped at the tick a repair patch is due; the others play on.
+        lines.push(`<b>Syncing with the host…</b> <span style="opacity:.75">${_formatSecs(now - resyncGuest.waitSince)}</span>`);
+        lines.push(`<span style="opacity:.75">${resyncGuest.full ? 'Receiving the full match state' : 'Receiving a small correction'}</span>`);
     } else if (netStallStartedAt && (now - netStallStartedAt) > NET_WAIT_OVERLAY_DELAY_MS) {
         let waitMs = now - netStallStartedAt;
         let waiting = netGetWaitingPeerIds();

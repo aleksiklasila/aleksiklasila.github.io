@@ -1586,7 +1586,35 @@ function buildInfoPanelPlayerStatusHtml() {
     return `${baseHtml}<div class="info-title">Online Players</div>${controls}${rows}${buildNetworkInfoPanelHtml()}`;
 }
 
+// What command delay the next match will likely have, from the players'
+// pings (the host's view; guests see the host's figures).
+function lobbyExpectedCommandDelayMs() {
+    let worst = 0, known = 0;
+    for (let lp of (lobbyPlayers || [])) {
+        if (!lp || !lp.peerId || lp.peerId === (isHost ? myPeerId : wsHostId)) continue;
+        let ms = getPeerLatencyMs(lp.peerId);
+        if (!Number.isFinite(ms)) continue;
+        known++;
+        worst = Math.max(worst, ms);
+    }
+    if (known === 0) return null;
+    let tickMs = 1000 / Math.max(1, Number(TICK_RATE) || 20);
+    let ticks = Math.max(1, Math.ceil((worst * 1.2 + 1000 / 60 + 10) / tickMs)) + 1;
+    return { ms: Math.round(ticks * tickMs), worst: Math.round(worst) };
+}
+
+function renderLobbyNetEstimate() {
+    let el = document.getElementById('lobby-net-estimate');
+    if (!el) return;
+    let est = lobbyExpectedCommandDelayMs();
+    let fair = readFairDelayFromMenu();
+    el.textContent = est
+        ? `Expected command delay ≈ ${est.ms} ms${fair ? ' for everyone' : ' for the slowest player'} (worst ping ${est.worst} ms).`
+        : '';
+}
+
 function renderOnlineLobby() {
+    renderLobbyNetEstimate();
     dedupeLobbyPlayers();
     let list = document.getElementById('lobby-players');
     if (!list) return;
