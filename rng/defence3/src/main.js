@@ -1633,6 +1633,7 @@ function initInput() {
         if (e.button === 0) stopBuildPlacementDrag();
         if (e.button === 0 && isBoxSelecting) {
             isBoxSelecting = false;
+            let boxSelected = false;
             if (selectionBox) {
                 let sx = Math.min(selectionBox.sx, selectionBox.ex);
                 let sy = Math.min(selectionBox.sy, selectionBox.ey);
@@ -1673,6 +1674,7 @@ function initInput() {
                     }
                 } else {
                     // Box select - pick up units AND buildings
+                    boxSelected = true;
                     let newUnits = [];
                     let newEntities = [];
                     if (renderDimensionMode === '3d' && selectionBoxScreen) {
@@ -1717,8 +1719,9 @@ function initInput() {
                         }
                     }
                     if (e.shiftKey) {
-                        for (let u of newUnits) { if (!selectedUnits.includes(u)) selectedUnits.push(u); }
-                        for (let ent of newEntities) { if (!selectedEntities.includes(ent)) selectedEntities.push(ent); }
+                        let haveUnits = new Set(selectedUnits), haveEntities = new Set(selectedEntities);
+                        for (let u of newUnits) { if (!haveUnits.has(u)) selectedUnits.push(u); }
+                        for (let ent of newEntities) { if (!haveEntities.has(ent)) selectedEntities.push(ent); }
                     } else {
                         selectedUnits = newUnits;
                         selectedEntities = newEntities;
@@ -1728,7 +1731,12 @@ function initInput() {
                 selectionBox = null;
                 selectionBoxScreen = null;
             }
-            updateInfoPanel();
+            // A box selection's panel (hundreds of things: tens of ms of
+            // markup and layout) is built on the next frame, so the frame
+            // right after the release already shows the new selection, and
+            // quick repeated drags build the panel once.
+            if (boxSelected) requestInfoPanelRefreshAfterFrame();
+            else updateInfoPanel();
         }
     });
 
@@ -3459,6 +3467,7 @@ function startGame() {
     _tpsDisplay = 0;
     _tpsLastTime = _lastTickTime;
     startMainThreadLoops();
+    prewarmItemThumbnails();
 }
 
 let _lastTickTime = 0;

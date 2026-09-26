@@ -1176,7 +1176,7 @@ function _buildInfoPanelUnitStateLabel(u) {
 function _buildInfoPanelStateLabelButton(stateLabel, helpText) {
     let help = _escapeHtml(String(helpText || 'Current state and why it is happening.'));
     let label = _escapeHtml(String(stateLabel || 'State'));
-    return `<span style="display:inline-flex;align-items:center;gap:4px;"><button type="button" class="info-state-help-btn" data-state-label="${label}" data-help-text="${help}" title="Open state help" style="cursor:pointer;background:#1a2631;color:#cfe6ff;border:1px solid #486179;border-radius:3px;font-size:10px;padding:0 4px;line-height:1.2">S</button><span>State</span></span>`;
+    return `<span class="info-label-wrap"><button type="button" class="info-label-btn info-state-help-btn" data-state-label="${label}" data-help-text="${help}" title="Open state help">S</button><span>State</span></span>`;
 }
 
 function _getInfoPanelEntityStateLabel(e, includeResearch = false) {
@@ -1221,7 +1221,7 @@ function _buildInfoPanelAssignedLabelButton(mode, dataAttrs = {}) {
         if (v === undefined || v === null) continue;
         attrs += ` data-${_escapeHtml(String(k))}="${_escapeHtml(String(v))}"`;
     }
-    return `<span style="display:inline-flex;align-items:center;gap:4px;"><button type="button" class="info-assigned-open-popup-btn" data-mode="${_escapeHtml(String(mode || ''))}"${attrs} title="Open assigned in popup" style="cursor:pointer;background:#1a2631;color:#cfe6ff;border:1px solid #486179;border-radius:3px;font-size:10px;padding:0 4px;line-height:1.2">A</button><span>Assigned</span></span>`;
+    return `<span class="info-label-wrap"><button type="button" class="info-label-btn info-assigned-open-popup-btn" data-mode="${_escapeHtml(String(mode || ''))}"${attrs} title="Open assigned in popup">A</button><span>Assigned</span></span>`;
 }
 
 function _findInfoPanelUnitById(unitId) {
@@ -2213,9 +2213,9 @@ function infoRow(label, value, effValue, matrixOpts = null) {
     }
     if (!labelHtml.includes('<button')) labelHtml = `<span class="info-label-plain">${labelHtml}</span>`;
     if (effValue !== undefined) {
-        return `<div class="info-row info-stat"><span class="info-label">${labelHtml}</span><span class="info-base"><span>${formatInfoRowValue(value)}</span></span><span class="info-eff"><span>${formatInfoRowValue(effValue)}</span></span></div>`;
+        return `<div class="info-row info-stat"><span class="info-label">${labelHtml}</span><span class="info-base">${formatInfoRowValue(value)}</span><span class="info-eff">${formatInfoRowValue(effValue)}</span></div>`;
     }
-    return `<div class="info-row info-stat"><span class="info-label">${labelHtml}</span><span class="info-value"><span>${formatInfoRowValue(value)}</span></span></div>`;
+    return `<div class="info-row info-stat"><span class="info-label">${labelHtml}</span><span class="info-value">${formatInfoRowValue(value)}</span></div>`;
 }
 
 function registerInfoPanelStatMatrixDescriptor(label, opts = {}) {
@@ -2234,7 +2234,7 @@ function registerInfoPanelStatMatrixDescriptor(label, opts = {}) {
 function withInfoPanelStatMatrixButton(label, opts = null) {
     if (!opts) return label;
     let id = registerInfoPanelStatMatrixDescriptor(label, opts);
-    return `<span style="display:inline-flex;align-items:center;gap:4px;"><button type="button" class="info-stat-matrix-btn" data-matrix-id="${id}" title="Open level/research matrix" style="cursor:pointer;background:#1a2631;color:#cfe6ff;border:1px solid #486179;border-radius:3px;font-size:10px;padding:0 4px;line-height:1.2">M</button><span>${label}</span></span>`;
+    return `<span class="info-label-wrap"><button type="button" class="info-label-btn info-stat-matrix-btn" data-matrix-id="${id}" title="Open level/research matrix">M</button><span>${label}</span></span>`;
 }
 
 function runWithInfoPanelStatMatrixContext(ctx, fn) {
@@ -2503,7 +2503,7 @@ function getInfoPanelAnchorKey(el) {
     return getInfoPanelAnchorAttributeKey(el) + '|' + getInfoPanelAnchorText(el);
 }
 
-function captureInfoPanelMouseAnchor(panel) {
+function captureInfoPanelMouseAnchor(panel, onlyUnderMouse = false) {
     if (!panel) return null;
     let lastManualTs = infoPanelLastManualScrollTsByEl.get(panel) || 0;
     if (performance.now() - lastManualTs < 250) return null;
@@ -2513,6 +2513,7 @@ function captureInfoPanelMouseAnchor(panel) {
     let my = uiMouseClientY;
     let mouseInside = Number.isFinite(mx) && Number.isFinite(my)
         && mx >= rect.left && mx <= rect.right && my >= rect.top && my <= rect.bottom;
+    if (!mouseInside && onlyUnderMouse) return null;
     if (!mouseInside) {
         mx = rect.left + rect.width / 2;
         my = rect.top + rect.height / 2;
@@ -2527,6 +2528,9 @@ function captureInfoPanelMouseAnchor(panel) {
 
     let anchorEl = rawEl.closest('[data-kind],[data-key],[data-stat-key],[data-gx],[data-gy],[data-coords],[data-scope],[data-thing-id],[data-unit-id],[data-matrix-id],button,.info-row,.info-title');
     if (!anchorEl || !panel.contains(anchorEl)) anchorEl = rawEl;
+    // A section placeholder is about to be filled in: any other placeholder
+    // "matches" it, so holding one still would scroll the panel away.
+    if (anchorEl.closest('.info-section-placeholder') || anchorEl.querySelector(':scope > .info-section-placeholder')) return null;
 
     let anchorRect = anchorEl.getBoundingClientRect();
     let attributeKey = getInfoPanelAnchorAttributeKey(anchorEl), text = getInfoPanelAnchorText(anchorEl);
@@ -2709,7 +2713,7 @@ function infoRowLevel(label, obj) {
         getValue: (thingLevel, researchLevel) => getInfoPanelLevelMatrixEnergyText(obj, thingLevel, researchLevel)
     });
     let eff = parts.hasEff ? parts.eff : parts.base + parts.eff;
-    return `<div class="info-row info-stat"><span class="info-label">${matrixLabel}</span><span class="info-base level-display"><span>${parts.base}</span></span><span class="info-eff level-display"><span>${eff}</span></span></div>`;
+    return `<div class="info-row info-stat"><span class="info-label">${matrixLabel}</span><span class="info-base level-display">${parts.base}</span><span class="info-eff level-display">${eff}</span></div>`;
 }
 
 function infoHeader(name, obj, opts = null) {
@@ -4543,12 +4547,9 @@ function renderResearchThingSelectorButtons(owner, scope, selectedThingId, opts 
     for (let thing of RESEARCH_THINGS) {
         let thingId = `${thing.kind}:${thing.key}`;
         let isSelected = selectedThingIds.includes(thingId);
-        let borderRadius = thing.kind === 'unit' ? '50%' : '4px';
-        let buttonStyle = popupLayout
-            ? `width:100%;height:34px;padding:0;border:2px solid ${isSelected ? '#8cf' : '#333'};border-radius:${borderRadius};background:${isSelected ? '#1a2730' : '#111'};cursor:pointer;display:flex;align-items:center;justify-content:center`
-            : `width:32px;height:32px;padding:0;border:2px solid ${isSelected ? '#8cf' : '#333'};border-radius:${borderRadius};background:${isSelected ? '#1a2730' : '#111'};cursor:pointer;display:flex;align-items:center;justify-content:center`;
-        html += `<button class="info-research-thing-btn" data-owner="${owner}" data-scope="${scope}" data-thing-id="${thingId}" title="${thing.label}" style="${buttonStyle}">`;
-        html += `<img src="${getItemThumbnail(thing.key, 24)}" width="24" height="24" style="display:block;${thing.kind === 'unit' ? 'border-radius:50%;' : ''}">`;
+        let classes ='info-research-thing-btn info-thing-btn' + (popupLayout ? ' info-thing-btn-wide' : '') + (thing.kind === 'unit' ? ' info-thing-btn-unit' : '') + (isSelected ? ' info-thing-btn-selected' : '');
+        html += `<button class="${classes}" data-owner="${owner}" data-scope="${scope}" data-thing-id="${thingId}" title="${thing.label}">`;
+        html += `<img src="${getItemThumbnail(thing.key, 24)}" width="24" height="24">`;
         html += `</button>`;
     }
     html += `</div>`;
@@ -5195,6 +5196,63 @@ function patchInfoPanelText(render, html) {
 
 const INFO_PANEL_SECTION_OPEN = '<div class="info-panel-section">';
 
+// Large selections (many groups: one of every building and unit is ~70, each
+// ~100+ elements) render only the group sections in or near view. The others
+// are empty placeholders of their last measured height, filled in when they
+// scroll near view, so building, patching and laying out the panel costs
+// what a few groups cost, not all of them.
+const INFO_PANEL_VIRTUAL_MIN_GROUPS = 6;
+const INFO_PANEL_SECTION_HEIGHT_ESTIMATE = 320;
+const infoPanelSectionHeights = new Map();
+
+function getInfoPanelSectionHeight(key) {
+    return infoPanelSectionHeights.get(key) || INFO_PANEL_SECTION_HEIGHT_ESTIMATE;
+}
+
+// The scroll range to render (one view above and below the visible part),
+// or null to render everything.
+function getInfoPanelVirtualWindow(panel, allGroups, subgroupState) {
+    let active = allGroups.filter(([key]) => subgroupState[key] !== false);
+    if (active.length < INFO_PANEL_VIRTUAL_MIN_GROUPS) return null;
+    bindInfoPanelVirtualScroll(panel);
+    let viewHeight = panel.clientHeight || 600;
+    // The subgroup bar grows with the group count: estimate it until measured.
+    let headerHeight = infoPanelSectionHeights.get('#header:' + allGroups.length)
+        || Math.ceil(allGroups.length / 6) * 40 + 60;
+    let total = headerHeight;
+    for (let [key] of active) total += getInfoPanelSectionHeight(key);
+    // A new, shorter selection is scrolled back to its end by the browser.
+    let viewTop = Math.max(0, Math.min(panel.scrollTop, total - viewHeight));
+    return { top: viewTop - viewHeight, bottom: viewTop + viewHeight * 2, headerHeight };
+}
+
+// Heights of the header and the rendered group sections, after a rebuild.
+function rememberInfoPanelSectionHeights(panel, sectionKeys, groupCount) {
+    let sections = panel.children;
+    if (sections.length !== sectionKeys.length + 2) return;
+    infoPanelSectionHeights.set('#header:' + groupCount, sections[0].offsetHeight);
+    for (let i = 0; i < sectionKeys.length; i++) {
+        let section = sections[i + 1];
+        if (!section.firstElementChild || section.firstElementChild.classList.contains('info-section-placeholder')) continue;
+        infoPanelSectionHeights.set(sectionKeys[i], section.offsetHeight);
+    }
+}
+
+// Scrolling a placeholder near view renders it (on the next frame).
+function bindInfoPanelVirtualScroll(panel) {
+    if (panel._infoPanelVirtualScrollBound) return;
+    panel._infoPanelVirtualScrollBound = true;
+    let pending = false;
+    panel.addEventListener('scroll', () => {
+        if (pending || !panel.querySelector('.info-section-placeholder')) return;
+        pending = true;
+        requestAnimationFrame(() => {
+            pending = false;
+            updateInfoPanel();
+        });
+    }, { passive: true });
+}
+
 function updateInfoPanel(panelOverride = null, opts = {}) {
     let panel = panelOverride || document.getElementById('info-panel');
     if (!panel) return;
@@ -5313,15 +5371,28 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     // (a worker's assignment appearing, a queue emptying) rebuilds only that
     // section instead of the whole panel.
     let sectionMarks = [];
+    let sectionKeys = [];
     let activeGroupCount = 0;
+    let virtualWindow = panelOverride ? null : getInfoPanelVirtualWindow(panel, allGroups, subgroupState);
+    let groupTop = virtualWindow ? virtualWindow.headerHeight : 0;
     for (let [key, grp] of allGroups) {
         if (subgroupState[key] === false) continue;
         activeGroupCount++;
         sectionMarks.push(html.length);
+        sectionKeys.push(key);
+        if (virtualWindow) {
+            let height = getInfoPanelSectionHeight(key);
+            let top = groupTop;
+            groupTop += height;
+            if (top > virtualWindow.bottom || top + height < virtualWindow.top) {
+                html += `<div class="info-section-placeholder" style="height:${height}px"></div>`;
+                continue;
+            }
+        }
 
         let items = grp.items;
         let label = grp.label;
-        let subgroupPopupBtnHtml = `<button type="button" class="info-subgroup-research-btn" data-key="${key}" title="Open research popup for this subgroup" style="cursor:pointer;background:#1a2631;color:#cfe6ff;border:1px solid #486179;border-radius:3px;font-size:10px;padding:0 4px;margin-right:4px;line-height:1.2">P</button>`;
+        let subgroupPopupBtnHtml = `<button type="button" class="info-label-btn info-subgroup-research-btn" data-key="${key}" title="Open research popup for this subgroup">P</button>`;
 
         if (grp.isUnit) {
             let u0 = items[0];
@@ -5401,7 +5472,10 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     let rebuildSections = null;
     // Read the layout before changing the content (the only forced layout),
     // so patched and rebuilt content keeps the control under the mouse still.
-    let panelMouseAnchor = captureInfoPanelMouseAnchor(panel);
+    // A new selection made elsewhere (a drag on the map) has nothing to keep
+    // still: its content is new, and looking for the old anchor in it costs
+    // a layout pass over the whole panel.
+    let panelMouseAnchor = captureInfoPanelMouseAnchor(panel, !sameSelection);
     if (sameSelection && previousRender.sections && previousRender.sections.length === sectionHtml.length) {
         rebuildSections = [];
         for (let i = 0; i < sectionHtml.length; i++) {
@@ -5441,6 +5515,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         bindRoots.push(panel);
     }
     for (let root of bindRoots) bindInfoPanelSectionControls(root);
+    if (virtualWindow) rememberInfoPanelSectionHeights(panel, sectionKeys, allGroups.length);
     restoreInfoPanelMouseAnchor(panel, panelMouseAnchor);
     if (isInfoButtonHelpPopupOpen() && infoButtonHelpPanel === panel) renderInfoButtonHelpPopup();
     refreshResearchPopup();

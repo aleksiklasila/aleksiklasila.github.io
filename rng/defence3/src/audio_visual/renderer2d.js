@@ -420,13 +420,15 @@ function _getAstarMineTileSprite(isActive) {
 // Thumbnail cache for build menu and sub-group icons
 let _thumbCache = {};
 let _thumbImageCache = {};
+// One scratch canvas draws every thumbnail: a new canvas and 2D context per
+// thumbnail cost more than drawing it. Setting its size resets and clears it.
+let _thumbCanvas = null;
 function getItemThumbnail(key, size) {
     let cacheKey = key + '_' + size;
     if (_thumbCache[cacheKey]) return _thumbCache[cacheKey];
     let dpr = window.devicePixelRatio || 1;
-    let c = document.createElement('canvas');
+    let c = _thumbCanvas || (_thumbCanvas = document.createElement('canvas'));
     c.width = size * dpr; c.height = size * dpr;
-    c.style.width = size + 'px'; c.style.height = size + 'px';
     let ctx = c.getContext('2d');
     ctx.scale(dpr, dpr);
     let cx = size / 2, cy = size / 2;
@@ -613,8 +615,44 @@ function getItemThumbnail(key, size) {
         }
     }
 
-    _thumbCache[cacheKey] = c.toDataURL();
+    _thumbCache[cacheKey] = _thumbnailUrl(c.toDataURL());
     return _thumbCache[cacheKey];
+}
+
+// Thumbnails of every building and unit at the info panel's sizes, drawn a
+// few at a time while the browser is idle: the first large selection would
+// otherwise draw dozens at once (tens of ms of stutter).
+const THUMBNAIL_PREWARM_SIZES = [26, 24, 18, 14];
+function prewarmItemThumbnails() {
+    if (typeof requestIdleCallback !== 'function' || typeof BASE_CARD_TYPES === 'undefined' || typeof BASE_UNIT_STATS === 'undefined') return;
+    let keys = [...Object.keys(BASE_CARD_TYPES), ...Object.keys(BASE_UNIT_STATS)];
+    let jobs = [];
+    for (let size of THUMBNAIL_PREWARM_SIZES) for (let key of keys) jobs.push([key, size]);
+    let next = 0;
+    let step = deadline => {
+        while (next < jobs.length && deadline.timeRemaining() > 2) {
+            let [key, size] = jobs[next++];
+            try { getItemThumbnail(key, size); } catch (_) {}
+        }
+        if (next < jobs.length) requestIdleCallback(step, { timeout: 2000 });
+    };
+    requestIdleCallback(step, { timeout: 2000 });
+}
+
+// Thumbnails are repeated throughout the panel HTML, which is rebuilt on
+// every selection: a short blob: URL instead of a ~1.6 KB data: URL per use
+// keeps that HTML (and its parsing) small. Falls back to the data: URL.
+function _thumbnailUrl(dataUrl) {
+    if (typeof Blob !== 'function' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function' || typeof atob !== 'function') return dataUrl;
+    try {
+        let comma = dataUrl.indexOf(',');
+        let binary = atob(dataUrl.slice(comma + 1));
+        let bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return URL.createObjectURL(new Blob([bytes], { type: dataUrl.slice(5, dataUrl.indexOf(';')) || 'image/png' }));
+    } catch (_) {
+        return dataUrl;
+    }
 }
 
 function getItemThumbnailImage(key, size) {
