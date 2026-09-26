@@ -39,4 +39,17 @@ picker.pickObjects = [object(unit, { topTextureCanvas: canvas }, panelMesh)];
 assert.equal(pick(50, 30), null, 'transparent panel pixels are not clickable');
 alpha = 255;
 assert.equal(pick(50, 30), unit, 'opaque panel pixels are clickable');
-console.log('PASS: mesh picking covers heads, silhouette gaps, squashing, depth, adjacent targets, animation and clipping.');
+
+// Box selection tests the drawn mesh on screen, not its ground point.
+picker.pickViewProjection = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+const box = (x0, y0, x1, y1) => [...picker.boxRenderedSources(x0, y0, x1, y1)];
+picker.pickObjects = [object(unit)];
+assert.deepEqual(box(45, 5, 55, 15), [unit], 'a box over only the head (above the ground point) selects');
+assert.deepEqual(box(70, 5, 80, 15), [], 'a box in the empty corner of the bounds misses');
+assert.deepEqual(box(0, 0, 100, 100), [unit], 'an enclosing box selects');
+picker.pickObjects = [object(building, { scaleY: .2 })];
+assert.deepEqual(box(45, 5, 55, 15), [], 'a squashed building is not caught at its old height');
+assert.deepEqual(box(45, 42, 55, 48), [building]);
+picker.pickObjects = [object(unit, { x: -.5 }), object(building, { x: .5 })];
+assert.deepEqual(box(60, 20, 90, 40), [building], 'only the object under the box');
+console.log('PASS: mesh picking covers heads, silhouette gaps, squashing, depth, adjacent targets, animation and clipping; box selection follows the drawn mesh.');

@@ -58,7 +58,18 @@ function requestInfoPanelRefresh(delayMs = TICK_MS * 1.5) {
     _infoPanelNextRefreshAt = Math.min(_infoPanelNextRefreshAt, performance.now() + delayMs);
 }
 
+// Refresh after the next rendered frame, which itself stays free of it (see
+// the box-selection mouseup: that frame shows the new selection at once).
+let _infoPanelRefreshAfterFrames = 0;
+function requestInfoPanelRefreshAfterFrame() {
+    _infoPanelRefreshAfterFrames = 2;
+}
+
 function _refreshInfoPanelPeriodic(now) {
+    if (_infoPanelRefreshAfterFrames > 0) {
+        if (--_infoPanelRefreshAfterFrames > 0) return;
+        _infoPanelNextRefreshAt = 0;
+    }
     if (now < _infoPanelNextRefreshAt || researchQueueDragInProgress) return;
     let started = performance.now();
     updateInfoPanel();
@@ -1401,49 +1412,66 @@ function get3DBoxSelection(screenRect) {
     let minSy = Math.min(screenRect.sy, screenRect.ey);
     let maxSy = Math.max(screenRect.sy, screenRect.ey);
     let alpha = tickAlpha;
-    let containsWorldPoint = (worldX, worldY, lift = 0.05) => {
+    let pointInBox = (worldX, worldY, lift) => {
         let projected = renderer3dInstance.projectWorldToScreen(worldX / TILE, lift, worldY / TILE);
-        if (!projected) return false;
-        return projected.x >= minSx && projected.x <= maxSx && projected.y >= minSy && projected.y <= maxSy;
+        return !!projected && projected.x >= minSx && projected.x <= maxSx && projected.y >= minSy && projected.y <= maxSy;
     };
 
-    let newUnits = [];
-    let newEntities = [];
+    // What the player sees: anything whose drawn model reaches into the box.
+    // The ground point is checked first (cheap, and the only test for things
+    // not drawn last frame); only the rest have their drawn mesh tested.
+    let unitCandidates = [], entityCandidates = [];
+    let pending = new Set();
+    let consider = (list, ref, worldX, worldY, lift, mark = null) => {
+        let hit = pointInBox(worldX, worldY, lift);
+        if (!hit) pending.add(ref);
+        list.push({ ref, hit, mark });
+    };
     for (let u of units) {
         if (u.owner !== localPlayerId || u.dead) continue;
         let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
         let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
         let ugx = Math.floor(ux / TILE), ugy = Math.floor(uy / TILE);
         if (!isTileVisible(ugx, ugy)) continue;
-        if (containsWorldPoint(ux, uy, 0.28)) newUnits.push(u);
+        consider(unitCandidates, u, ux, uy, 0.28);
     }
     for (let b of barracks) {
-        if (b.energy > 0 && b.owner === localPlayerId && isTileVisible(b.gx, b.gy) && containsWorldPoint(b.x, b.y, 0.12)) newEntities.push(b);
+        if (b.energy > 0 && b.owner === localPlayerId && isTileVisible(b.gx, b.gy)) consider(entityCandidates, b, b.x, b.y, 0.12);
     }
     for (let t of towers) {
-        if (t.energy > 0 && t.owner === localPlayerId && isTileVisible(t.gx, t.gy) && containsWorldPoint(t.x, t.y, 0.18)) newEntities.push(t);
+        if (t.energy > 0 && t.owner === localPlayerId && isTileVisible(t.gx, t.gy)) consider(entityCandidates, t, t.x, t.y, 0.18);
     }
     for (let s of collectorSpawners) {
-        if (s.energy > 0 && s.owner === localPlayerId && isTileVisible(s.gx, s.gy) && containsWorldPoint(s.x, s.y, 0.14)) newEntities.push(s);
+        if (s.energy > 0 && s.owner === localPlayerId && isTileVisible(s.gx, s.gy)) consider(entityCandidates, s, s.x, s.y, 0.14);
     }
+    let seenItems = new Set(entityCandidates.map(c => c.ref));
     let bounds = get3DVisibleWorldBounds();
     for (let gy = bounds.minGy; gy <= bounds.maxGy; gy++) {
         for (let gx = bounds.minGx; gx <= bounds.maxGx; gx++) {
             if (!isTileVisible(gx, gy)) continue;
             let cell = grid[gy][gx];
-            if (cell.item && cell.owner === localPlayerId && containsWorldPoint(gx * TILE + TILE * 0.5, gy * TILE + TILE * 0.5, 0.08) && !newEntities.includes(cell.item)) {
-                cell.item._gx = gx; cell.item._gy = gy; cell.item._cell = cell;
-                newEntities.push(cell.item);
-            }
+            if (!cell.item || cell.owner !== localPlayerId || seenItems.has(cell.item)) continue;
+            seenItems.add(cell.item);
+            consider(entityCandidates, cell.item, gx * TILE + TILE * 0.5, gy * TILE + TILE * 0.5, 0.08, item => { item._gx = gx; item._gy = gy; item._cell = cell; });
         }
     }
     for (let m of goldMines) {
-        if (!isTileVisible(m.gx, m.gy)) continue;
-        if (containsWorldPoint(m.x, m.y, 0.06)) { m._isGoldMine = true; newEntities.push(m); }
+        if (isTileVisible(m.gx, m.gy)) consider(entityCandidates, m, m.x, m.y, 0.06, mine => { mine._isGoldMine = true; });
     }
     for (let m of astarMines) {
-        if (!isTileVisible(m.gx, m.gy)) continue;
-        if (containsWorldPoint(m.x, m.y, 0.06)) { m._isAstarMine = true; newEntities.push(m); }
+        if (isTileVisible(m.gx, m.gy)) consider(entityCandidates, m, m.x, m.y, 0.06, mine => { mine._isAstarMine = true; });
+    }
+
+    let drawnHits = pending.size && typeof renderer3dInstance.boxRenderedSources === 'function'
+        ? renderer3dInstance.boxRenderedSources(minSx, minSy, maxSx, maxSy, pending)
+        : null;
+    let newUnits = [];
+    let newEntities = [];
+    for (let c of unitCandidates) if (c.hit || (drawnHits && drawnHits.has(c.ref))) newUnits.push(c.ref);
+    for (let c of entityCandidates) {
+        if (!c.hit && !(drawnHits && drawnHits.has(c.ref))) continue;
+        if (c.mark) c.mark(c.ref);
+        newEntities.push(c.ref);
     }
     return { units: newUnits, entities: newEntities };
 }

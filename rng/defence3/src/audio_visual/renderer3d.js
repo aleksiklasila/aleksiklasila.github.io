@@ -3064,6 +3064,101 @@
             return best;
         }
 
+        // Box selection against what is drawn: the sources whose rendered
+        // mesh has a triangle reaching into the screen rectangle, so a tall
+        // tower is caught by its top as well. Unlike a click, a box is a
+        // coarse gesture: figures are tested in their rest pose (posing every
+        // vertex of hundreds of units made a drag release take tens of ms).
+        // `candidates` (a Set) limits the test to those sources. Each object's
+        // bounds are projected first; only one straddling the box edge has
+        // its triangles tested.
+        boxRenderedSources(minX, minY, maxX, maxY, candidates = null) {
+            const hits = new Set();
+            const m = this.pickViewProjection;
+            if (!m || !this.pickObjects) return hits;
+            const width = this.cssWidth, height = this.cssHeight;
+            // Screen bounds of the object's mesh bounds (grown a little for
+            // panels that turn to face the camera): 0 off the box, 2 wholly
+            // inside it, 1 straddling or behind the camera.
+            const boundsState = (o, mesh, c, s) => {
+                const b = mesh.bounds;
+                if (!b) return 1;
+                const margin = mesh.details ? .35 : 0;
+                let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+                for (let k = 0; k < 8; k++) {
+                    const lx = (k & 1 ? b[3] + margin : b[0] - margin) * o.scaleX;
+                    const ly = k & 2 ? b[4] + margin : b[1] - margin;
+                    const lz = (k & 4 ? b[5] + margin : b[2] - margin) * o.scaleZ;
+                    const wx = c * lx + s * lz + o.x, wy = ly * o.scaleY + o.y, wz = -s * lx + c * lz + o.z;
+                    const clipW = m[3] * wx + m[7] * wy + m[11] * wz + m[15];
+                    if (!(clipW > 0)) return 1;
+                    const sx = ((m[0] * wx + m[4] * wy + m[8] * wz + m[12]) / clipW * 0.5 + 0.5) * width;
+                    const sy = (1 - ((m[1] * wx + m[5] * wy + m[9] * wz + m[13]) / clipW * 0.5 + 0.5)) * height;
+                    if (sx < x0) x0 = sx; if (sx > x1) x1 = sx;
+                    if (sy < y0) y0 = sy; if (sy > y1) y1 = sy;
+                }
+                if (x1 < minX || x0 > maxX || y1 < minY || y0 > maxY) return 0;
+                return x0 >= minX && x1 <= maxX && y0 >= minY && y1 <= maxY ? 2 : 1;
+            };
+            // Separating axis test: the rectangle's axes (bounds), then each
+            // triangle edge's normal (the triangle's third vertex is `ox, oy`).
+            const edgeSeparates = (px, py, qx, qy, ox, oy) => {
+                const nx = qy - py, ny = px - qx;
+                const d0 = px * nx + py * ny, d1 = ox * nx + oy * ny;
+                const triMin = Math.min(d0, d1), triMax = Math.max(d0, d1);
+                const ax = minX * nx, bx = maxX * nx, ay = minY * ny, by = maxY * ny;
+                const boxMin = Math.min(ax, bx) + Math.min(ay, by), boxMax = Math.max(ax, bx) + Math.max(ay, by);
+                return triMax < boxMin || boxMax < triMin;
+            };
+            const overlaps = (ax, ay, bx, by, cx, cy) => {
+                if (Math.max(ax, bx, cx) < minX || Math.min(ax, bx, cx) > maxX) return false;
+                if (Math.max(ay, by, cy) < minY || Math.min(ay, by, cy) > maxY) return false;
+                return !edgeSeparates(ax, ay, bx, by, cx, cy) && !edgeSeparates(bx, by, cx, cy, ax, ay) && !edgeSeparates(cx, cy, ax, ay, bx, by);
+            };
+            for (const { object: o, mesh } of this.pickObjects) {
+                const source = o.pickSource;
+                if (!source || hits.has(source) || !mesh || !mesh.positions || !mesh.indices) continue;
+                if (candidates && !candidates.has(source)) continue;
+                const c = Math.cos(o.rotationY || 0), s = Math.sin(o.rotationY || 0);
+                const state = boundsState(o, mesh, c, s);
+                if (state === 0) continue;
+                if (state === 2 && mesh.indices.length) { hits.add(source); continue; }
+                const count = mesh.positions.length / 3;
+                // Scratch buffers reused across objects and calls (no garbage per drag).
+                if (!this.boxScratch || this.boxScratch.inFront.length < count) {
+                    const size = Math.max(count, 1024);
+                    this.boxScratch = { screen: new Float64Array(size * 2), inFront: new Uint8Array(size) };
+                }
+                const { screen, inFront } = this.boxScratch;
+                inFront.fill(0, 0, count);
+                for (let i = 0; i < count; i++) {
+                    let x = mesh.positions[i * 3], y = mesh.positions[i * 3 + 1], z = mesh.positions[i * 3 + 2];
+                    if (mesh.details && mesh.details[i * 4] === 4 && mesh.details[i * 4 + 3] > .5) {
+                        const px = x;
+                        x = c * x - s * z;
+                        z = s * px + c * z;
+                    }
+                    const lx = x * o.scaleX, lz = z * o.scaleZ;
+                    const wx = c * lx + s * lz + o.x, wy = y * o.scaleY + o.y, wz = -s * lx + c * lz + o.z;
+                    const clipW = m[3] * wx + m[7] * wy + m[11] * wz + m[15];
+                    if (!(clipW > 0)) continue;
+                    inFront[i] = 1;
+                    screen[i * 2] = ((m[0] * wx + m[4] * wy + m[8] * wz + m[12]) / clipW * 0.5 + 0.5) * width;
+                    screen[i * 2 + 1] = (1 - ((m[1] * wx + m[5] * wy + m[9] * wz + m[13]) / clipW * 0.5 + 0.5)) * height;
+                }
+                const indices = mesh.indices;
+                for (let i = 0; i < indices.length; i += 3) {
+                    const a = indices[i], b = indices[i + 1], d = indices[i + 2];
+                    if (!inFront[a] || !inFront[b] || !inFront[d]) continue;
+                    if (overlaps(screen[a * 2], screen[a * 2 + 1], screen[b * 2], screen[b * 2 + 1], screen[d * 2], screen[d * 2 + 1])) {
+                        hits.add(source);
+                        break;
+                    }
+                }
+            }
+            return hits;
+        }
+
         getScreenPixelsPerTile(x, y, z) {
             let center = this.projectWorldToScreen(x, y, z);
             let offsetX = this.projectWorldToScreen(x + 1, y, z);
@@ -4258,6 +4353,7 @@
             // Retain the transforms/LOD actually drawn, without rebuilding the scene on clicks.
             this.pickObjects = [];
             this.pickInverseViewProjection = new Float32Array(this.tmpInverseViewProjection);
+            this.pickViewProjection = new Float32Array(this.tmpViewProjection);
             let opaqueCubeGroups = new Map();
             let transparentCubeGroups = new Map();
             // Textured groups persist between frames (keyed as before) and are
