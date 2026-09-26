@@ -40,6 +40,9 @@ let netMatchInputDelay = 0;
 let netMatchDelayCalmSince = 0;
 let netAutoLastRaiseAt = 0;
 let netAutoLastStallAt = 0;
+let netLateSamples = []; // guest: when own packets came too late (recent window)
+let netLastOutageAt = -Infinity;
+const NET_OUTAGE_STALL_MS = 1000;
 let netAutoCalmSince = 0;
 let netStallStartedAt = 0;
 let netStallSamples = [];
@@ -80,6 +83,10 @@ function resetNetCounters() {
         reconnectAttempts: 0,
         softRejoins: 0,
         inputDelayChanges: 0,
+        // Host: ticks sealed without a late guest packet, and the commands
+        // carried to later ticks; guest: own packets that came too late.
+        lateSeals: 0,
+        lateCommandsCarried: 0,
         hostMigrations: 0,
         messagesIn: 0,
         messagesOut: 0
@@ -91,6 +98,8 @@ function resetNetQualityState() {
     netLinkStatsByPeer = {};
     netRemoteReportByPeer = {};
     netAutoExtraTicks = 0;
+    netLateSamples = [];
+    netLastOutageAt = -Infinity;
     netMatchInputDelay = 0;
     netMatchDelayCalmSince = 0;
     netAutoLastRaiseAt = 0;
@@ -318,15 +327,32 @@ function netNoteSimWaiting(waiting, now = performance.now()) {
     netCounters.longestStallMs = Math.max(netCounters.longestStallMs, dur);
     netStallSamples.push({ at: now, ms: dur });
     while (netStallSamples.length > 0 && (now - netStallSamples[0].at) > NET_STALL_WINDOW_MS) netStallSamples.shift();
-    // Waiting on the host means our lead was too short for this link. A
-    // lone late packet is cheaper to wait out than to pay for in latency on
-    // every command, so the margin grows only while waiting exceeds ~2% of
-    // the recent time, and by at most two ticks per stall.
-    if (!netAutoEnabled || !isMultiplayer || isHost || lockstepResyncPauseActive || dur <= TICK_MS) return;
+    // Waiting here is the host's bundles arriving late (the host itself does
+    // not wait for late guests): not a sign that this peer's commands need
+    // a longer lead, which the host reports as late packets instead. A stall
+    // long enough to be an outage keeps those reports from counting for a
+    // while (they come all together after it).
+    if (!isMultiplayer || isHost || lockstepResyncPauseActive) return;
+    if (dur > NET_OUTAGE_STALL_MS) netLastOutageAt = now;
+}
+
+// Guest: the host sealed a tick without this peer's packet (it came too
+// late, and its commands run a few ticks later): the lead is short for this
+// link. A lone late packet is cheaper to absorb than to pay for in latency
+// on every command, so the margin grows only once late packets are more
+// than ~2% of the recent ticks, a tick at a time.
+function netNoteOwnPacketLate(now = performance.now()) {
+    netCounters.lateSeals = (netCounters.lateSeals || 0) + 1;
+    netLateSamples.push(now);
+    while (netLateSamples.length > 0 && (now - netLateSamples[0]) > NET_STALL_WINDOW_MS) netLateSamples.shift();
+    if (!netAutoEnabled || !isMultiplayer || isHost || lockstepResyncPauseActive) return;
+    // Packets of an outage (this peer waiting, or just back from one) come
+    // late all together; that is the outage, not a short lead.
+    if (netStallStartedAt || (now - netLastOutageAt) < 3000) return;
     netAutoLastStallAt = now;
-    let pct = netStallPercent(now);
+    let pct = netLateSamples.length / (NET_STALL_WINDOW_MS / TICK_MS) * 100;
     if (pct > 2 && (now - netAutoLastRaiseAt) > 400) {
-        netAutoExtraTicks = Math.min(12, netAutoExtraTicks + (pct > 6 ? 2 : 1));
+        netAutoExtraTicks = Math.min(12, netAutoExtraTicks + 1);
         netAutoLastRaiseAt = now;
     }
 }

@@ -3429,6 +3429,11 @@ function startGame() {
         lockstepLastResendRequestAtByTick = {};
         lockstepHighestSentLocalTick = -1;
         lockstepHostWaitRequestByPeer = {};
+        lockstepHostLateByTick = {};
+        lockstepHostCarryByPeer = {};
+        lockstepHostLastOnTimeAt = {};
+        lockstepHostLastPacketAt = {};
+        lockstepHostLastPacketTick = {};
         lockstepGuestWaitRequest = null;
         lockstepFatalStopActive = false;
         lockstepFatalStopReason = '';
@@ -3868,10 +3873,19 @@ function _hostAcceptTickPacket(conn, rawPacket) {
     if (!packet || typeof packet !== 'object') return;
     let connPeerId = String((conn && conn.peer) || '');
     if (!connPeerId || isPeerExplicitlyRemoved(connPeerId)) return;
+    lockstepHostLastPacketAt[connPeerId] = performance.now();
+    let pt = Math.floor(Number(packet.tick));
+    if (Number.isFinite(pt) && !(lockstepHostLastPacketTick[connPeerId] >= pt)) lockstepHostLastPacketTick[connPeerId] = pt;
     packet.tick = Math.floor(Number(packet.tick));
     if (!Number.isFinite(packet.tick) || packet.tick < 0) return;
-    // Late packets for sealed ticks are expected after resends; ignore them.
-    if (packet.tick < currentTick || lockstepCommittedByTick[packet.tick] || lockstepBundleByTick[packet.tick]) return;
+    // Late packets for sealed ticks are expected after resends; ignore them,
+    // unless the tick was sealed without this one (it came too late): then
+    // its commands run on the guest's next open tick.
+    if (packet.tick < currentTick || lockstepCommittedByTick[packet.tick] || lockstepBundleByTick[packet.tick]) {
+        let late = lockstepHostLateByTick[packet.tick];
+        if (late && late.has(connPeerId)) _hostCarryLatePacket(connPeerId, packet, late);
+        return;
+    }
     packet.teamId = Math.floor(Number(packet.teamId) || 0);
     packet.actions = Array.isArray(packet.actions) ? packet.actions.map(a => normalizeLockstepPayload(a)) : [];
     packet = normalizeLockstepPayload(packet) || packet;
@@ -3886,11 +3900,22 @@ function _hostAcceptTickPacket(conn, rawPacket) {
         return;
     }
 
+    _hostSanitizeTickPacket(packet);
+
+    if (!lockstepHostPacketsByTick[packet.tick]) lockstepHostPacketsByTick[packet.tick] = {};
+    lockstepHostPacketsByTick[packet.tick][packet.peerId] = packet;
+    lockstepHostLastOnTimeAt[packet.peerId] = currentTick;
+    let req = lockstepHostWaitRequestByPeer[packet.peerId];
+    if (req && req.tick <= packet.tick) delete lockstepHostWaitRequestByPeer[packet.peerId];
+}
+
+// Host: a guest packet as the host seals it: the guest's own team, no
+// host-only actions, no more than a player could send in a tick (a flood
+// would stall every peer).
+function _hostSanitizeTickPacket(packet) {
     let setup = computeTeamSetupFromLobby();
     let enforcedTeamId = setup.teamByPeer[packet.peerId] ?? packet.teamId;
     let actions = packet.actions;
-    // Only the host may resign other teams; and no one sends more in a tick
-    // than a player could (a flood would stall every peer).
     let filtered = actions.filter(a => !(a && a.action === 'forceResignTeam')).slice(0, LOCKSTEP_MAX_ACTIONS_PER_PACKET);
     for (let i = 0; i < filtered.length; i++) {
         let a = filtered[i];
@@ -3901,14 +3926,65 @@ function _hostAcceptTickPacket(conn, rawPacket) {
         packet.actions = filtered.map(a => normalizeLockstepPayload({ ...(a || {}), teamId: enforcedTeamId }));
         packet.checksum = computeTickPacketChecksum(packet.tick, packet.peerId, packet.teamId, packet.actions);
     }
-
-    if (!lockstepHostPacketsByTick[packet.tick]) lockstepHostPacketsByTick[packet.tick] = {};
-    lockstepHostPacketsByTick[packet.tick][packet.peerId] = packet;
-    let req = lockstepHostWaitRequestByPeer[packet.peerId];
-    if (req && req.tick <= packet.tick) delete lockstepHostWaitRequestByPeer[packet.peerId];
+    return packet;
 }
 
-function maybeBuildHostBundle(tick, participants = null) {
+// Host: the packet of a tick that was sealed without it. Its commands join
+// the guest's next open tick (once: later copies find the mark gone).
+function _hostCarryLatePacket(peerId, rawPacket, late) {
+    let packet = rawPacket;
+    packet.teamId = Math.floor(Number(packet.teamId) || 0);
+    packet.actions = Array.isArray(packet.actions) ? packet.actions.map(a => normalizeLockstepPayload(a)) : [];
+    packet = normalizeLockstepPayload(packet) || packet;
+    if (String(packet.peerId || '') !== peerId || !validateTickPacket(packet)) return;
+    _hostSanitizeTickPacket(packet);
+    late.delete(peerId);
+    if (packet.actions.length === 0) return;
+    let carry = lockstepHostCarryByPeer[peerId] || (lockstepHostCarryByPeer[peerId] = []);
+    for (let a of packet.actions) carry.push(a);
+    netCounters.lateCommandsCarried = (netCounters.lateCommandsCarried || 0) + packet.actions.length;
+}
+
+// Host: an empty packet for a guest whose own did not come in time.
+function _hostLatePlaceholderPacket(tick, peerId) {
+    let setup = computeTeamSetupFromLobby();
+    let teamId = Math.floor(Number(setup.teamByPeer[peerId]) || 0);
+    let packet = { tick, peerId, teamId, actions: [] };
+    packet.checksum = computeTickPacketChecksum(tick, peerId, teamId, packet.actions);
+    return packet;
+}
+
+// Host: a guest's packet for this tick with its carried commands in front
+// (as many as fit in one packet; the rest wait for the next tick).
+function _hostWithCarriedCommands(tick, peerId, packet) {
+    let carry = lockstepHostCarryByPeer[peerId];
+    if (!carry || carry.length === 0) return packet;
+    let room = LOCKSTEP_MAX_ACTIONS_PER_PACKET - packet.actions.length;
+    if (room <= 0) return packet;
+    let moved = carry.splice(0, room);
+    if (carry.length === 0) delete lockstepHostCarryByPeer[peerId];
+    let merged = { tick, peerId, teamId: packet.teamId, actions: moved.concat(packet.actions) };
+    merged.checksum = computeTickPacketChecksum(tick, peerId, merged.teamId, merged.actions);
+    return merged;
+}
+
+// Host: whether a guest delivered a packet in time since the given tick.
+function lockstepHostOnTimeSince(peerId, tick) {
+    let at = lockstepHostLastOnTimeAt[peerId];
+    return Number.isFinite(at) && at >= tick;
+}
+
+// Host: a guest silent this long is having an outage, not a late packet.
+const HOST_LATE_SEAL_MAX_SILENCE_MS = 1000;
+
+// Host: how long a due tick waits for a late guest packet before it is
+// sealed without it. A lag spike or a silent guest then delays only that
+// guest's commands instead of freezing every peer.
+function hostLateSealGraceMs() {
+    return Math.max(TICK_MS, 40);
+}
+
+function maybeBuildHostBundle(tick, participants = null, sealLate = false) {
     if (!isHost) return null;
     if (lockstepResyncPauseActive || matchStartWaitingForReady) return null;
     let t = Math.floor(Number(tick));
@@ -3922,7 +3998,18 @@ function maybeBuildHostBundle(tick, participants = null) {
 
     let ids = participants || getActiveMatchPeerIds();
     let pmap = lockstepHostPacketsByTick[t];
-    for (let pid of ids) if (!pmap[pid]) return null;
+    let missing = null;
+    for (let pid of ids) {
+        if (pmap[pid]) continue;
+        if (!sealLate) return null;
+        (missing || (missing = [])).push(pid);
+    }
+    if (missing) {
+        let late = lockstepHostLateByTick[t] || (lockstepHostLateByTick[t] = new Set());
+        for (let pid of missing) { pmap[pid] = _hostLatePlaceholderPacket(t, pid); late.add(pid); }
+        netCounters.lateSeals = (netCounters.lateSeals || 0) + 1;
+    }
+    for (let pid in lockstepHostCarryByPeer) if (pmap[pid]) pmap[pid] = _hostWithCarriedCommands(t, pid, pmap[pid]);
 
     let packets = ids.map(pid => pmap[pid]).sort((a, b) => String(a.peerId).localeCompare(String(b.peerId)));
     let flush = resyncHostFlushTicks.has(t) ? 1 : 0;
@@ -3943,6 +4030,9 @@ function sendHostBundle(tick, force = false) {
     if (!force && lockstepLastBundleSentAtByTick[t]) return;
     lockstepLastBundleSentAtByTick[t] = performance.now();
     let msg = { type: 'TICK_BUNDLE', w: packTickBundleForWire(bundle), c: 1, d: netMatchInputDelay };
+    // Whose packet this tick was sealed without (they lengthen their lead).
+    let late = lockstepHostLateByTick[t];
+    if (late && late.size > 0) msg.l = Array.from(late);
     let prev = [];
     for (let k = NET_TICK_REDUNDANCY; k >= 1; k--) {
         let b = lockstepBundleByTick[t - k] || lockstepHistoryByTick[t - k];
@@ -3964,9 +4054,35 @@ function _hostAdvanceBundles(now) {
     if (lockstepResyncPauseActive || matchStartWaitingForReady) return;
     let participants = getActiveMatchPeerIds();
     let end = currentTick + Math.max(0, Math.floor(Number(LOCKSTEP_HOST_PREBUILD_TICKS) || 0));
+    // The current tick is due and still missing a guest's packet: after a
+    // short grace it goes without it; at once while that guest is still
+    // behind (the tick before went without it too, and nothing came since).
+    // A guest that has sent nothing for a while, or only packets for ticks
+    // long past (stuck, or far behind), is gone for now (an outage, a
+    // reload): then every peer waits for it, as its units cannot be
+    // commanded meanwhile.
+    let sealLate = false;
+    if (!lockstepBundleByTick[currentTick] && waitingForRemoteSince > 0) {
+        let pmap = lockstepHostPacketsByTick[currentTick] || {};
+        let missing = participants.filter(pid => pid !== myPeerId && !pmap[pid]);
+        let behindLimit = Math.ceil(HOST_LATE_SEAL_MAX_SILENCE_MS / TICK_MS);
+        let alive = pid => (now - (lockstepHostLastPacketAt[pid] || 0)) < HOST_LATE_SEAL_MAX_SILENCE_MS
+            && (currentTick - (Number.isFinite(lockstepHostLastPacketTick[pid]) ? lockstepHostLastPacketTick[pid] : -Infinity)) <= behindLimit;
+        if (missing.every(alive)) {
+            sealLate = (now - waitingForRemoteSince) >= hostLateSealGraceMs();
+            if (!sealLate) {
+                let prev = lockstepHostLateByTick[currentTick - 1];
+                sealLate = !!prev && missing.every(pid => prev.has(pid) && !lockstepHostOnTimeSince(pid, currentTick - 1));
+            }
+        }
+    }
     for (let pt = currentTick; pt <= end; pt++) {
-        if (!maybeBuildHostBundle(pt, participants)) break;
+        if (!maybeBuildHostBundle(pt, participants, sealLate && pt === currentTick)) break;
         sendHostBundle(pt);
+    }
+    // Late marks only matter while a copy of the packet may still come.
+    if (sealLate || (currentTick & 63) === 0) {
+        for (let k in lockstepHostLateByTick) if (+k < currentTick - 600) delete lockstepHostLateByTick[k];
     }
 }
 
@@ -3996,6 +4112,7 @@ function handleIncomingTickBundle(conn, data) {
     if (isHost) return;
     if (data && data.h) resyncGuestReceiveHashes(data.h);
     if (data && Number.isFinite(data.d)) netMatchInputDelay = Math.max(0, Math.min(NET_MAX_INPUT_DELAY_TICKS, Math.floor(data.d)));
+    if (data && Array.isArray(data.l) && myPeerId && data.l.includes(myPeerId)) netNoteOwnPacketLate();
     let bundle = data && data.bundle ? data.bundle : unpackTickBundleFromWire(data && data.w);
     if (!bundle || typeof bundle !== 'object') return;
     // Guests normally wait for START_GAME_ALL_READY; ticks from the host mean
@@ -4403,7 +4520,23 @@ function processDeferredGuestLockstepWindow(now, tick) {
             continue;
         }
         lockstepCommittedByTick[t] = true;
+        _guestResendIfSealedWithout(t, bundle, hostConn);
     }
+}
+
+// Guest: the host sealed this tick without our commands for it (our packet
+// came too late, or was lost with a dropped link). Send the packet again:
+// the host runs its commands on our next open tick (once, however many
+// copies reach it).
+function _guestResendIfSealedWithout(t, bundle, hostConn) {
+    if (!hostConn) return;
+    // (Commands queued while the link was down may not have a packet yet.)
+    let own = lockstepLocalPacketByTick[t] || ((localInputBuffer[t] || []).length > 0 ? buildLocalTickPacket(t) : null);
+    if (!own || !Array.isArray(own.actions) || own.actions.length === 0) return;
+    let sealed = (bundle.packets || []).find(p => p && String(p.peerId) === String(myPeerId));
+    let ids = new Set(((sealed && sealed.actions) || []).map(a => a && a.netId));
+    if (own.actions.every(a => a && ids.has(a.netId))) return;
+    try { hostConn.send({ type: 'TICK_PACKETS', packets: [own] }); netCounters.messagesOut++; } catch { }
 }
 
 // Guest: the next tick has not arrived. On a live channel it is only late,
@@ -4441,14 +4574,14 @@ function getHostResendBundleForTick(tick) {
 
     let historyBundle = lockstepHistoryByTick[t];
     if (!historyBundle || !Array.isArray(historyBundle.packets)) return null;
-    return {
-        bundle: {
-            tick: t,
-            packets: historyBundle.packets,
-            combinedChecksum: String(historyBundle.combinedChecksum || '')
-        },
-        committed: true
+    let bundle = {
+        tick: t,
+        packets: historyBundle.packets,
+        combinedChecksum: String(historyBundle.combinedChecksum || '')
     };
+    // A patch's flush tick: the checksum covers the mark.
+    if (historyBundle.flush) bundle.flush = 1;
+    return { bundle, committed: true };
 }
 
 function getHostOldestHistoryTick() {

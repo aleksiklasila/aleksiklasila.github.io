@@ -280,6 +280,11 @@ function promoteSelfToHost(oldHostId, hostLeft) {
     lockstepHostPacketsByTick = {};
     lockstepHistoryByTick = {};
     lockstepHostWaitRequestByPeer = {};
+    lockstepHostLateByTick = {};
+    lockstepHostCarryByPeer = {};
+    lockstepHostLastOnTimeAt = {};
+    lockstepHostLastPacketAt = {};
+    lockstepHostLastPacketTick = {};
     lockstepGuestWaitRequest = null;
     lockstepPendingBundleByTick = {};
     lockstepPendingCommitByTick = {};
@@ -332,6 +337,11 @@ function demoteSelfToGuest(newHostId) {
     lockstepHostPacketsByTick = {};
     lockstepHistoryByTick = {};
     lockstepHostWaitRequestByPeer = {};
+    lockstepHostLateByTick = {};
+    lockstepHostCarryByPeer = {};
+    lockstepHostLastOnTimeAt = {};
+    lockstepHostLastPacketAt = {};
+    lockstepHostLastPacketTick = {};
     netDisconnectedSinceByPeer = {};
     guestHostLostAt = 0;
     let epoch = networkSessionEpoch;

@@ -1443,6 +1443,9 @@ function _hudNetText() {
     let pending = 0;
     for (let k in localInputBuffer) if (+k >= currentTick && Array.isArray(localInputBuffer[k])) pending += localInputBuffer[k].length;
     if (pending > 0) text += ` · ${pending} order${pending > 1 ? 's' : ''} sent`;
+    // Our packets reached the host too late in the last seconds: our orders
+    // run a little later than shown (the connection, not the game).
+    if (!isHost && netLateSamples.length > 0 && (performance.now() - netLateSamples[netLateSamples.length - 1]) < 3000) text += ' · connection lagging';
     return text;
 }
 
