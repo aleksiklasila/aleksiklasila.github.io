@@ -460,9 +460,9 @@ function _snapEncodeReservation(out, slot, u) {
 }
 
 // Restores the table from [slot, unit, ...]. A partial restore first drops
-// what it replaces: entries on the carried regions' tiles and entries of the
-// units it carries (the patch holds all of those); entries of units it
-// removes stay as entries of a dead unit (as the host holds them once the
+// what it replaces: entries on the carried regions' tiles and the entry of
+// each unit it carries (the patch holds those); the entry of a unit it
+// removes stays as the entry of a dead unit (as the host holds it once the
 // unit has left its list).
 function _snapDecodeReservations(enc, partial = null) {
     let table = workerReservedTiles;
@@ -472,16 +472,17 @@ function _snapDecodeReservations(enc, partial = null) {
         if (p === undefined) gone.set(id, p = { id, dead: true, _workerReservedTileIndex: -1 });
         return p;
     };
-    if (partial && (partial.regions.size > 0 || partial.carried.length > 0 || partial.removed.length > 0)) {
-        let drop = new Set(partial.carried), ids = new Set(), left = new Set();
+    if (partial) {
+        // The carried regions' entries, and the entry each carried or
+        // removed unit held elsewhere (by its slot from before the restore).
+        for (let r of partial.regions) _snapForRegionReservations(r, slot => { table[slot] = null; });
+        let ids = new Set();
         for (let u of partial.carried) ids.add(u.id);
-        for (let u of partial.removed) if (ids.has(u.id)) drop.add(u); else left.add(u);
-        let regions = partial.regions;
-        for (let slot = 0; slot < table.length; slot++) {
-            let u = table[slot];
-            if (!u) continue;
-            if (drop.has(u) || regions.has(_snapReservationRegion(slot))) table[slot] = null;
-            else if (left.has(u)) table[slot] = placeholder(Number(u.id) || 0);
+        for (let [u, slot] of partial.slots) {
+            if (!(slot >= 0 && slot < table.length) || table[slot] !== u) continue;
+            // Carried (or replaced by a unit of the same id): the patch has
+            // its entries; otherwise it left the list.
+            table[slot] = ids.has(u.id) ? null : placeholder(Number(u.id) || 0);
         }
     }
     if (!Array.isArray(enc)) return;
@@ -1220,9 +1221,16 @@ function snapEncodeState(options = null) {
                     if (list && SNAP_REGION_LISTS.includes(list)) add(list, e, i);
                 }
             }
-            // And every other reservation of the units sent: the receiver
-            // replaces all of theirs.
-            if (rows.u.length > 0) _snapForReservations(-1, (slot, u, r) => { if (!regions.has(r) && done.has(u)) _snapEncodeReservation(res, slot, u); });
+            // And the reservation each unit sent holds elsewhere. (An entry
+            // its unit no longer points at, outside the carried regions,
+            // shows in that region's hash if it differs.)
+            if (rows.u.length > 0) {
+                for (let e of done) {
+                    if (!(e instanceof Unit)) continue;
+                    let slot = e._workerReservedTileIndex;
+                    if (Number.isInteger(slot) && slot >= 0 && workerReservedTiles[slot] === e && !regions.has(_snapReservationRegion(slot))) _snapEncodeReservation(res, slot, e);
+                }
+            }
             out.res = res;
             out.partial = 1;
             out.regions = Array.from(regions);
@@ -1556,6 +1564,8 @@ function snapDecodeState(S, options = null) {
         // and layout match; everything else is created.
         let regions = partial ? new Set(S.regions || []) : null;
         let prev = {}, shells = {}, finals = {}, removed = {};
+        // Units' reservation slots before the restore (carried and removed).
+        let resSlots = new Map();
         // The floor list is gathered from the grid: only when needed.
         let floorList = null;
         let listOf = list => list === 'f' ? (floorList || (floorList = _snapFloorItems())) : _snapListEntities(list);
@@ -1575,6 +1585,7 @@ function snapDecodeState(S, options = null) {
                 let type = rowType(list, row);
                 let old = partial ? _snapFindExisting(list, key, arr) : undefined;
                 let e;
+                if (list === 'u' && old !== undefined) resSlots.set(old, old._workerReservedTileIndex);
                 if (old !== undefined && (list === 'P' || list === 'p' || _snapTypeKey(list, old) === type)) {
                     e = old;
                     if (list === 'u') removeUnitSpatial(e);
@@ -1825,7 +1836,8 @@ function snapDecodeState(S, options = null) {
             _snapDecodeReservations(S.res);
         } else {
             _snapResetWorkerCaches();
-            _snapDecodeReservations(S.res, { regions, carried: shells.u, removed: removed.u });
+            for (let u of removed.u) if (!resSlots.has(u)) resSlots.set(u, u._workerReservedTileIndex);
+            _snapDecodeReservations(S.res, { regions, carried: shells.u, slots: resSlots });
         }
         if (Array.isArray(g.adjacency)) {
             _adjacencyNeedsRecalc = !!g.adjacency[0];
