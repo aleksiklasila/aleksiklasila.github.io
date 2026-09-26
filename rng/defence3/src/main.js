@@ -2557,10 +2557,15 @@ function _actionNum(v) {
     return (typeof v === 'number' && Number.isFinite(v)) ? v : null;
 }
 
-// (Never a name every object has, like '__proto__' or 'constructor': these
-// strings index lookup tables.)
+// Never a name objects inherit ('__proto__', 'constructor'...): these strings
+// index lookup tables. A fixed list, not `in Object.prototype`, which differs
+// between browsers and would make peers disagree.
+const ACTION_RESERVED_STRINGS = new Set(['__proto__', 'constructor', 'prototype', 'hasOwnProperty', 'isPrototypeOf',
+    'propertyIsEnumerable', 'toLocaleString', 'toString', 'valueOf', '__defineGetter__', '__defineSetter__',
+    '__lookupGetter__', '__lookupSetter__', 'toSource', 'watch', 'unwatch']);
+
 function _actionStr(v) {
-    return (typeof v === 'string' && !(v in Object.prototype)) ? v.slice(0, 64) : null;
+    return (typeof v === 'string' && !ACTION_RESERVED_STRINGS.has(v)) ? v.slice(0, 64) : null;
 }
 
 function sanitizeAction(raw) {
@@ -3631,6 +3636,7 @@ function getActiveMatchPeerIds() {
                 if (!pid) continue;
                 if (normalizeMatchRole(matchRoleByPeerId[pid], 'playing') !== 'playing') continue;
                 if (isPeerExplicitlyRemoved(pid)) continue;
+                if (isHost && resyncHostIsJoining(pid)) continue;
                 if (!ids.includes(pid)) ids.push(pid);
             }
         } else {
@@ -3687,13 +3693,66 @@ function validateTickPacket(packet) {
     return String(packet.checksum || '') === expected;
 }
 
+// Wire form of a sealed bundle: packets without what the receiver rebuilds
+// (their tick and checksum), and without empty action lists. The combined
+// checksum still covers everything.
+function packTickBundleForWire(b) {
+    let p = [];
+    for (let pk of b.packets) {
+        let row = [pk.peerId, pk.teamId];
+        if (Array.isArray(pk.actions) && pk.actions.length > 0) row.push(pk.actions);
+        p.push(row);
+    }
+    let w = { t: b.tick, c: b.combinedChecksum, p };
+    if (b.flush) w.f = 1;
+    return w;
+}
+
+// A repeated earlier bundle: when no one sent a command in it and the same
+// players took part as in `current`, a tick and checksum are enough.
+function packRepeatedTickBundleForWire(b, current) {
+    let same = b.packets.length === current.packets.length;
+    for (let i = 0; same && i < b.packets.length; i++) {
+        let a = b.packets[i], c = current.packets[i];
+        if (a.peerId !== c.peerId || a.teamId !== c.teamId || (Array.isArray(a.actions) && a.actions.length > 0)) same = false;
+    }
+    if (!same) return packTickBundleForWire(b);
+    let w = { t: b.tick, c: b.combinedChecksum, s: 1 };
+    if (b.flush) w.f = 1;
+    return w;
+}
+
+// Bundles rebuilt from the wire have checksums computed here, not received.
+const _rebuiltTickBundles = new WeakSet();
+
+function unpackTickBundleFromWire(w, current = null) {
+    if (!w || typeof w !== 'object') return null;
+    let t = Math.floor(Number(w.t));
+    if (!Number.isFinite(t) || t < 0) return null;
+    let rows = w.s ? (current ? current.packets.map(p => [p.peerId, p.teamId]) : null) : w.p;
+    if (!Array.isArray(rows)) return null;
+    let packets = [];
+    for (let row of rows) {
+        if (!Array.isArray(row)) return null;
+        let peerId = String(row[0] || ''), teamId = Math.floor(Number(row[1]) || 0);
+        let actions = Array.isArray(row[2]) ? row[2] : [];
+        packets.push({ tick: t, peerId, teamId, actions, checksum: computeTickPacketChecksum(t, peerId, teamId, actions) });
+    }
+    let b = { tick: t, packets, combinedChecksum: String(w.c || '') };
+    if (w.f) b.flush = 1;
+    _rebuiltTickBundles.add(b);
+    return b;
+}
+
 function validateTickBundle(bundle) {
     if (!bundle || typeof bundle !== 'object') return false;
     let t = Math.floor(Number(bundle.tick));
     if (!Number.isFinite(t) || t < 0) return false;
     let packets = Array.isArray(bundle.packets) ? bundle.packets : [];
-    for (let p of packets) {
-        if (!validateTickPacket(p)) return false;
+    if (!_rebuiltTickBundles.has(bundle)) {
+        for (let p of packets) {
+            if (!validateTickPacket(p)) return false;
+        }
     }
     let expected = computeTickBundleChecksum(t, packets, bundle.flush ? 1 : 0);
     return String(bundle.combinedChecksum || '') === expected;
@@ -3883,11 +3942,11 @@ function sendHostBundle(tick, force = false) {
     if (!bundle) return;
     if (!force && lockstepLastBundleSentAtByTick[t]) return;
     lockstepLastBundleSentAtByTick[t] = performance.now();
-    let msg = { type: 'TICK_BUNDLE', bundle, c: 1, d: netMatchInputDelay };
+    let msg = { type: 'TICK_BUNDLE', w: packTickBundleForWire(bundle), c: 1, d: netMatchInputDelay };
     let prev = [];
     for (let k = NET_TICK_REDUNDANCY; k >= 1; k--) {
         let b = lockstepBundleByTick[t - k] || lockstepHistoryByTick[t - k];
-        if (b) prev.push(b);
+        if (b) prev.push(packRepeatedTickBundleForWire(b, bundle));
     }
     if (prev.length > 0) msg.prev = prev;
     let hashes = resyncTakeHostHashes();
@@ -3937,14 +3996,20 @@ function handleIncomingTickBundle(conn, data) {
     if (isHost) return;
     if (data && data.h) resyncGuestReceiveHashes(data.h);
     if (data && Number.isFinite(data.d)) netMatchInputDelay = Math.max(0, Math.min(NET_MAX_INPUT_DELAY_TICKS, Math.floor(data.d)));
-    let bundle = data && data.bundle ? data.bundle : null;
+    let bundle = data && data.bundle ? data.bundle : unpackTickBundleFromWire(data && data.w);
     if (!bundle || typeof bundle !== 'object') return;
     // Guests normally wait for START_GAME_ALL_READY; ticks from the host mean
     // the match is running, so never stay blocked if that message was lost.
     if (matchStartWaitingForReady) matchStartWaitingForReady = false;
     // Copies of the previous bundles ride along, so a message that is lost
     // (and retransmitted much later) does not hold this peer up.
-    if (Array.isArray(data.prev)) for (let b of data.prev) _guestAcceptBundle(b, !!data.c);
+    if (Array.isArray(data.prev)) {
+        for (let w of data.prev) {
+            let t = Math.floor(Number(w && w.t));
+            if (!(t >= currentTick) || (lockstepCommittedByTick[t] && lockstepBundleByTick[t]) || lockstepPendingBundleByTick[t]) continue;
+            _guestAcceptBundle(unpackTickBundleFromWire(w, bundle), !!data.c);
+        }
+    }
     _guestAcceptBundle(bundle, !!data.c);
 }
 
@@ -4413,7 +4478,7 @@ function handleIncomingTickResendRequest(conn, data) {
                 }
                 break;
             }
-            try { conn.send({ type: 'TICK_BUNDLE', bundle: resend.bundle, c: 1 }); } catch { }
+            try { conn.send({ type: 'TICK_BUNDLE', w: packTickBundleForWire(resend.bundle), c: 1 }); } catch { }
         }
         return;
     }

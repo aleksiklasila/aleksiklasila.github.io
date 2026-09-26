@@ -126,8 +126,39 @@ async function mapCase(mapType, seed) {
         for (const i of all) assert.equal(i.snapshotsApplied, 1, `${mapType}: no match-wide resync on ${i.name}`);
         rows.push(`forced full patch: ${Math.round(g.eval('netCounters.snapshotBytes') / 1024)} KB, exact state equal for ${cmp.compared} ticks`);
     }
-    for (const i of all) assert.deepEqual(i.errors.map(e => String(e && e.stack || e).slice(0, 400)), [], mapType + ' ' + i.name + ' threw');
-    return rows.map(r => mapType + ': ' + r);
+    // D. Live joins: a spectator, then a player reloading its page. Each
+    // loads the match alone at an agreed tick and must then agree exactly,
+    // with no repair, for a long while.
+    {
+        const hostId = host.eval('myPeerId');
+        const spec = world.spawn('spectator', { url: `http://localhost/rng/defence3/index.html?game=${hostId}` });
+        spec.eval(`loadOrCreateLocalIdentity(); joinGame(${JSON.stringify(hostId)})`);
+        assert.ok(await world.runUntil(() => spec.eval('remoteMatchRunning'), 10000), `${mapType}: spectator sees the match`);
+        spec.eval('requestSpectateCurrentMatch()');
+        assert.ok(await world.runUntil(() => spec.eval('gameStarted && !lockstepResyncPauseActive'), 20000), `${mapType}: spectating`);
+        const g = guests[guests.length - 1];
+        const storage = g.storage;
+        world.kill(g);
+        await world.run(800);
+        const fresh = world.spawn(g.name + '-reloaded', { storage, url: `http://localhost/rng/defence3/index.html?game=${hostId}` });
+        fresh.eval('loadOrCreateLocalIdentity()');
+        fresh.eval(`joinGame(${JSON.stringify(hostId)})`);
+        assert.ok(await world.runUntil(() => fresh.eval('gameStarted && !resyncGuest.joining && !resyncGuest.awaitingLive'), 30000), `${mapType}: reloaded player back`);
+        const live = [...all.filter(i => i !== g), spec, fresh];
+        const from = Math.max(spec.lastSnapshotTick, fresh.lastSnapshotTick);
+        const t0 = host.eval('currentTick');
+        while (host.eval('currentTick') < t0 + 400) {
+            for (const i of live) if (i !== spec && rand() < 0.7) i.eval(C.CHAOS_COMMAND + '(' + rand() + ')');
+            await world.run(200);
+        }
+        await world.run(1000);
+        const cmp = world.compareHashes(live, from, 'tickExact');
+        assert.equal(cmp.mismatches.length, 0, `${mapType}: live joiners disagree ` + JSON.stringify(cmp.mismatches.slice(0, 3)));
+        for (const i of [spec, fresh]) assert.equal(i.patchesApplied, 0, `${mapType}: ${i.name} needed a patch: ` + JSON.stringify(host.scratch.requests.slice(-2)));
+        for (const i of live) assert.deepEqual(i.errors.map(e => String(e && e.stack || e).slice(0, 400)), [], mapType + ' ' + i.name + ' threw');
+        rows.push(`live joins (spectator, reloaded player): exact state for ${cmp.compared} tick fingerprints, no repair`);
+        return rows.map(r => mapType + ': ' + r);
+    }
 }
 
 (async () => {

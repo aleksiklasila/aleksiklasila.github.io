@@ -44,7 +44,7 @@
 // entities no longer in their list.
 // ============================================================
 
-const SNAP_FORMAT = 5;
+const SNAP_FORMAT = 6;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
 const SNAP_HASH_SLICES = 10;
@@ -348,6 +348,8 @@ function _snapHashGlobals() {
     let resigned = 0;
     for (let t of (resignedTeams || [])) resigned = (resigned + Math.imul((t | 0) + 1, 2654435761)) | 0;
     h = Math.imul(h ^ resigned, 16777619);
+    for (let t of (activeTeamIds || [])) h = Math.imul(h ^ ((t | 0) + 1), 16777619);
+    h = _snapHV(h, !!_adjacencyPassiveRefreshMode);
     h = Math.imul(h ^ _pendingResourceStatRebuilds.size, 16777619);
     h = _snapHV(h, !!_adjacencyNeedsRecalc);
     h = _snapHV(h, !!_adjacencyDirtyAll);
@@ -736,36 +738,64 @@ const _SNAP_STEPS = 'abcdefghi';
 
 // A unit's path from the step before its current one: [~P, length, skip,
 // x0, y0, steps] (steps: one letter per unit move, '(dx,dy)' otherwise).
+// Encoded paths are cached per path array (a unit gets a new array when it
+// repaths): the steps from the start, and where each step begins in them.
+const _snapPathCache = new WeakMap();
+
+function _snapPathSteps(a) {
+    let hit = _snapPathCache.get(a);
+    if (hit !== undefined) return hit;
+    let n = a.length;
+    let first = a[0];
+    let ok = first !== null && typeof first === 'object' && Object.getPrototypeOf(first) === Object.prototype;
+    let px = ok ? first.x : 0, py = ok ? first.y : 0;
+    ok = ok && Number.isInteger(px) && Number.isInteger(py) && !(px === 0 && 1 / px < 0) && !(py === 0 && 1 / py < 0);
+    let s = '';
+    let offsets = null;
+    for (let i = 1; ok && i < n; i++) {
+        let p = a[i];
+        if (p === null || typeof p !== 'object' || Object.getPrototypeOf(p) !== Object.prototype) { ok = false; break; }
+        let x = p.x, y = p.y;
+        if (!Number.isInteger(x) || !Number.isInteger(y) || (x === 0 && 1 / x < 0) || (y === 0 && 1 / y < 0)) { ok = false; break; }
+        let dx = x - px, dy = y - py;
+        if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1) {
+            if (offsets !== null) offsets.push(s.length);
+            s += _SNAP_STEPS[(dx + 1) * 3 + dy + 1];
+        } else {
+            if (offsets === null) { offsets = []; for (let k = 1; k < i; k++) offsets.push(k - 1); }
+            offsets.push(s.length);
+            s += '(' + dx + ',' + dy + ')';
+        }
+        px = x; py = y;
+    }
+    if (ok) {
+        // Steps are plain {x, y}; check a few for extra fields.
+        for (let k of [0, n - 1, n >> 1]) {
+            let c = 0;
+            for (let _ in a[k]) c++;
+            if (c !== 2) { ok = false; break; }
+        }
+    }
+    hit = ok ? { steps: s, offsets, n, last: a[n - 1], lastX: a[n - 1].x, lastY: a[n - 1].y } : null;
+    _snapPathCache.set(a, hit);
+    return hit;
+}
+
 function _snapEncodePath(o) {
     let a = o.path;
     if (!Array.isArray(a) || a.length === 0) return _snapE(a);
     let n = a.length;
     let skip = Math.max(0, Math.min(n - 1, (o.pathIndex | 0) - 1));
+    let enc = _snapPathSteps(a);
+    // Paths are not edited in place; should one be, its cache is redone.
+    if (enc !== null && (enc.n !== n || enc.last !== a[n - 1] || enc.lastX !== a[n - 1].x || enc.lastY !== a[n - 1].y)) {
+        _snapPathCache.delete(a);
+        enc = _snapPathSteps(a);
+    }
+    if (enc === null) return _snapE(a);
     let first = a[skip];
-    let ok = first !== null && typeof first === 'object' && Object.getPrototypeOf(first) === Object.prototype;
-    let px = ok ? first.x : 0, py = ok ? first.y : 0;
-    ok = ok && Number.isInteger(px) && Number.isInteger(py) && !(px === 0 && 1 / px < 0) && !(py === 0 && 1 / py < 0);
-    let s = '';
-    for (let i = skip + 1; ok && i < n; i++) {
-        let p = a[i];
-        if (p === null || typeof p !== 'object') { ok = false; break; }
-        let x = p.x, y = p.y;
-        if (!Number.isInteger(x) || !Number.isInteger(y) || (x === 0 && 1 / x < 0) || (y === 0 && 1 / y < 0)) { ok = false; break; }
-        let dx = x - px, dy = y - py;
-        s += (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1) ? _SNAP_STEPS[(dx + 1) * 3 + dy + 1] : '(' + dx + ',' + dy + ')';
-        px = x; py = y;
-    }
-    if (ok) {
-        // Steps are plain {x, y}; check a few for extra fields.
-        for (let p of [first, a[n - 1], a[(skip + n) >> 1]]) {
-            if (Object.getPrototypeOf(p) !== Object.prototype) { ok = false; break; }
-            let c = 0;
-            for (let _ in p) c++;
-            if (c !== 2) { ok = false; break; }
-        }
-    }
-    if (!ok) return _snapE(a);
-    return ['~P', n, skip, first.x, first.y, s];
+    let from = skip === 0 ? 0 : (enc.offsets === null ? skip : (skip < enc.offsets.length ? enc.offsets[skip] : enc.steps.length));
+    return ['~P', n, skip, first.x, first.y, from === 0 ? enc.steps : enc.steps.slice(from)];
 }
 
 function _snapDecodePath(enc) {
@@ -949,7 +979,8 @@ function _snapEncodeGlobals(small = false) {
             rng: (rng && typeof rng.getState === 'function') ? rng.getState() : null,
             pathBudget: pathfindBudgetByPlayer ? Array.from(pathfindBudgetByPlayer, _snapE) : [],
             astarBudget: astarNodeBudgetRemainingByPlayer ? Array.from(astarNodeBudgetRemainingByPlayer, _snapE) : [],
-            resigned: Array.from(resignedTeams || [], _snapE)
+            resigned: Array.from(resignedTeams || [], _snapE),
+            teams: Array.from(activeTeamIds || [], _snapE)
         };
     }
     return {
@@ -965,8 +996,12 @@ function _snapEncodeGlobals(small = false) {
         astarBudget: astarNodeBudgetRemainingByPlayer ? Array.from(astarNodeBudgetRemainingByPlayer, _snapE) : [],
         areaState: (areas || []).map(ar => ar ? [_snapE(ar.id), ar.active ? 1 : 0, _snapE(ar.multiplierLevel)] : null),
         resigned: Array.from(resignedTeams || [], _snapE),
+        // Which teams play (the order their same-tick commands run in, who
+        // can still win): peers joining later must not work it out from the
+        // lobby roster.
+        teams: Array.from(activeTeamIds || [], _snapE),
         pendingStatRebuilds: Array.from(_pendingResourceStatRebuilds),
-        adjacency: [!!_adjacencyNeedsRecalc, !!_adjacencyDirtyAll, _snapE(_adjacencyLastRecalcTick), Array.from(_adjacencyDirtyTiles || [], _snapE)]
+        adjacency: [!!_adjacencyNeedsRecalc, !!_adjacencyDirtyAll, _snapE(_adjacencyLastRecalcTick), Array.from(_adjacencyDirtyTiles || [], _snapE), !!_adjacencyPassiveRefreshMode]
     };
 }
 
@@ -1516,7 +1551,8 @@ function snapDecodeState(S, options = null) {
                     for (let c = 0; c < shape.cols.length; c++) {
                         let a = e[shape.cols[c]], b = v[c];
                         if (a === b || (a !== a && b !== b)) continue;
-                        if (a && b && typeof a === 'object' && typeof b === 'object') continue;
+                        // Objects: a different entity, or different contents.
+                        if (a && b && typeof a === 'object' && typeof b === 'object' && _snapSameValue(a, b, 3)) continue;
                         fields.push(shape.cols[c]);
                     }
                     if (fields.length > 0) changed.push(list + row[0] + ':' + fields.slice(0, 10).join(','));
@@ -1550,6 +1586,7 @@ function snapDecodeState(S, options = null) {
         if (Array.isArray(g.pathBudget)) for (let i = 0; i < g.pathBudget.length; i++) pathfindBudgetByPlayer[i] = _snapD(g.pathBudget[i]);
         if (Array.isArray(g.astarBudget)) for (let i = 0; i < g.astarBudget.length; i++) astarNodeBudgetRemainingByPlayer[i] = _snapD(g.astarBudget[i]);
         resignedTeams = new Set((g.resigned || []).map(_snapD));
+        if (Array.isArray(g.teams) && g.teams.length > 0) activeTeamIds = g.teams.map(_snapD);
         if (Array.isArray(g.pendingStatRebuilds)) {
             _pendingResourceStatRebuilds.clear();
             for (let k of g.pendingStatRebuilds) _pendingResourceStatRebuilds.add(k);
@@ -1634,6 +1671,7 @@ function snapDecodeState(S, options = null) {
             _adjacencyDirtyAll = !!g.adjacency[1];
             _adjacencyLastRecalcTick = _snapD(g.adjacency[2]);
             _adjacencyDirtyTiles = new Set((g.adjacency[3] || []).map(_snapD));
+            _adjacencyPassiveRefreshMode = !!g.adjacency[4];
         }
 
         if (partial) {
@@ -1654,6 +1692,27 @@ function snapDecodeState(S, options = null) {
     } finally {
         _snapDec = null;
     }
+}
+
+// For reporting what a patch changed: entities by identity, plain values by
+// content (a few levels deep).
+function _snapSameValue(a, b, depth) {
+    if (a === b) return true;
+    if (a !== a && b !== b) return true;
+    if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+    let pa = Object.getPrototypeOf(a), pb = Object.getPrototypeOf(b);
+    if (pa !== pb) return false;
+    if (pa !== Object.prototype && pa !== Array.prototype) return false; // entities: identity only
+    if (depth <= 0) return true;
+    if (Array.isArray(a)) {
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) if (!_snapSameValue(a[i], b[i], depth - 1)) return false;
+        return true;
+    }
+    let ka = Object.keys(a), kb = Object.keys(b);
+    if (ka.length !== kb.length) return false;
+    for (let k of ka) if (!_snapSameValue(a[k], b[k], depth - 1)) return false;
+    return true;
 }
 
 // Caches whose hits change outcomes (a cached path skips the path budget, a

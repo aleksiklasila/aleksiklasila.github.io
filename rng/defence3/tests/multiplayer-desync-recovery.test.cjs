@@ -257,8 +257,8 @@ function assertCommandsRanEverywhere(world, instances, before, label) {
     }
 
     // 10. A persistent bug on one guest (diverges again every 1.5s): repairs
-    // escalate (delta, full, at most one match-wide resync) and the match
-    // keeps moving throughout.
+    // escalate (delta, full, at most one reload of the match on that guest
+    // alone) and the others never pause.
     {
         const world = new H.World({ network: WAN, controls: H.SMALL_MATCH_CONTROLS });
         const { host, guests } = await H.startHostedMatch(world, { guests: 2, teams: [0, 1, 2] });
@@ -276,10 +276,11 @@ function assertCommandsRanEverywhere(world, instances, before, label) {
         const g = guests[0];
         assert.ok(g.patchesApplied >= 10, 'kept patching: ' + g.patchesApplied);
         assert.ok(g.fullPatchesApplied >= 1, 'escalated to full patches');
-        assert.ok(host.snapshotsApplied <= 2, 'at most one match-wide resync: ' + host.snapshotsApplied);
-        assert.ok(tps > host.eval('TICK_RATE') * 0.85, 'match kept moving: ' + tps.toFixed(1) + ' TPS');
+        assert.equal(host.snapshotsApplied + guests[1].snapshotsApplied, 2, 'the others never restored anything');
+        assert.ok(g.snapshotsApplied <= 2, 'at most one reload of the match on the buggy guest: ' + g.snapshotsApplied);
+        assert.ok(tps > host.eval('TICK_RATE') * 0.9, 'match kept moving: ' + tps.toFixed(1) + ' TPS');
         for (const i of all) assert.deepEqual(i.errors, [], i.name + ' threw');
-        rows.push(`persistent bug on a guest for 40s: ${g.patchesApplied} patches (${g.fullPatchesApplied} full), ${host.snapshotsApplied - 1} match-wide resyncs, ${tps.toFixed(1)} TPS`);
+        rows.push(`persistent bug on a guest for 40s: ${g.patchesApplied} patches (${g.fullPatchesApplied} full), ${g.snapshotsApplied - 1} reload(s) of the match on it alone, ${tps.toFixed(1)} TPS`);
     }
 
     // 11. Exact-lockstep debug mode stops instead of repairing.
