@@ -247,10 +247,36 @@ function _getUnitAttackRangeArea(unit) {
     return Math.max(0, Number(unit && unit.preComputed && unit.preComputed.attackRangeArea) || 0);
 }
 
+// Extra reach, beyond the collision distance, at which bodies count as touching.
+const UNIT_CONTACT_ATTACK_MARGIN = TILE * 0.25;
+
 function _isTargetWithinUnitAttackAreaRange(unit, target) {
     if (!unit || !target) return false;
     let rangeArea = Math.max(0, Number(_getUnitAttackRangeArea(unit)) || 0);
-    return isWorldTargetWithinAreaRange(unit.x, unit.y, target.x, target.y, Math.floor(rangeArea));
+    if (isWorldTargetWithinAreaRange(unit.x, unit.y, target.x, target.y, Math.floor(rangeArea))) return true;
+    return _isUnitTargetInContact(unit, target, Math.floor(rangeArea) + 1);
+}
+
+// A hostile unit pressed against this one, one area step beyond its range.
+// Cross-team collision keeps enemy bodies apart, so an attacker whose target
+// stands just across an area border could otherwise never close in: it
+// chased forever without striking. Touching also needs neighboring tiles
+// with no wall corner between them. Callers check visibility separately.
+function _isUnitTargetInContact(unit, target, maxAreaDistance) {
+    if (!(target instanceof Unit) || target.dead || !(unit.preComputed.attackDamage > 0)) return false;
+    let dx = target.x - unit.x, dy = target.y - unit.y;
+    let reach = unit.getCollisionRadius() + target.getCollisionRadius()
+        + Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0) + UNIT_CONTACT_ATTACK_MARGIN;
+    if (dx * dx + dy * dy > reach * reach) return false;
+    let ugx = Math.floor(unit.x / TILE), ugy = Math.floor(unit.y / TILE);
+    let tgx = Math.floor(target.x / TILE), tgy = Math.floor(target.y / TILE);
+    let sx = tgx - ugx, sy = tgy - ugy;
+    if (Math.abs(sx) > 1 || Math.abs(sy) > 1) return false;
+    if (sx !== 0 && sy !== 0) {
+        let side1 = grid[ugy] && grid[ugy][tgx], side2 = grid[tgy] && grid[tgy][ugx];
+        if ((!side1 || side1.type === TYPE_WALL) && (!side2 || side2.type === TYPE_WALL)) return false;
+    }
+    return isWorldTargetWithinAreaRange(unit.x, unit.y, target.x, target.y, maxAreaDistance);
 }
 
 class Unit {
@@ -895,7 +921,11 @@ class Unit {
         if (this.targetUnit) {
             if (this.targetUnit.dead) { this.targetUnit = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; return; }
             let tgx = Math.floor(this.targetUnit.x / TILE), tgy = Math.floor(this.targetUnit.y / TILE);
-            let targetVisible = isGameplayTargetVisibleToPlayer(this.owner, tgx, tgy);
+            // A forced target (an order, or retaliation against an attacker)
+            // pressed against this unit stays engaged even when its area is
+            // out of sight; units still acquire targets only by vision.
+            let targetVisible = isGameplayTargetVisibleToPlayer(this.owner, tgx, tgy)
+                || (this.forcedAttackTarget && _isUnitTargetInContact(this, this.targetUnit, Math.floor(_getUnitAttackRangeArea(this)) + 1));
             if (!targetVisible) {
                 if (this.forcedAttackTarget) {
                     let lockX = Number.isFinite(this._forcedTargetLastSeenX) ? this._forcedTargetLastSeenX : this.targetUnit.x;

@@ -874,7 +874,8 @@
     // one object/draw per limb. Surface IDs: 0 type-colored cloth, 1 neutral
     // armor, 2 player trim, 3 eye glow, 4 the complete 2D status render (on
     // dedicated rectangular quads), 5 leather/wood/fur, 6 ivory/bone/feathers,
-    // 7 type-colored glow (staff orbs), 8 brass/gold, 9 medic red.
+    // 7 type-colored glow (staff orbs), 8 brass/gold, 9 medic red, 15 the
+    // front status display (owner color behind the unit's status icon).
     // Joints: +-1 limbs, 2 capes/tails, +-3 wings (root at the pivot), +-4
     // quadruped legs (diagonal pairs), 5 neck/head (pivot y, pivot z), +-6
     // parts spinning about the model's vertical axis.
@@ -923,9 +924,28 @@
             part(0, y - .02, z, size + .04, size + .04, .04, 2);
             panel(0, y, z - .024, size, size);
         }
+        // Front status display (surface 15), facing forward (+z): a square
+        // quad on the front face `z` of whatever plate, book or shield carries it.
+        function statusPanel(y, z, size, joint = 0, pivot = 0) {
+            let base = positions.length / 3;
+            for (let p of [[-.5,0],[.5,0],[.5,1],[-.5,1]]) {
+                positions.push(p[0] * size, y + p[1] * size, z + .003);
+                details.push(15, joint, pivot, 0);
+            }
+            uvs.push(0,0,1,0,1,1,0,1);
+            indices.push(base,base+1,base+2,base,base+2,base+3);
+        }
+        // A plate (surface, centered at z with depth d) framing the display.
+        function statusPlate(y, z, size, surface, d = .04, frame = .03, joint = 0, pivot = 0) {
+            part(0, y - frame, z, size + frame * 2, size + frame * 2, d, surface, joint, pivot);
+            statusPanel(y, z + d / 2, size, joint, pivot);
+        }
         // A small seated rider (hands at the pivot height) for mounts. A
-        // helmed rider wears a closed helm with an owner-colored plume.
+        // helmed rider wears a closed helm with an owner-colored plume. A
+        // small shield strapped to the chest, above the horse's head, carries
+        // the status display.
         function rider(y, z, helmed = false) {
+            statusPlate(y + .05, z + .11, .17, 1, .04, .025);
             for (let side of [-1, 1]) part(side * .17, y - .12, z + .02, .07, .17, .11, 0);
             part(0, y, z, .25, .24, .18, 0, 0, 0, .8);
             part(0, y + .03, z, .27, .05, .20, 2);
@@ -957,6 +977,7 @@
                 part(side * .32 * bulk, .60, 0, .19, .095, .23, 2, -side, .65);
             }
             part(0, .33, 0, .53 * bulk, .055, .36, 2);
+            statusPlate(.40, .165, .22, 1, .08, .025); // breastplate display
             part(0, .19, -.205, .61, .47, .065, 0, 2, .66, .72); // cape
             part(0, .18, -.253, .53, .53, .04, 2); // rigid, readable back display
             panel(0, .20, -.277, .49, .49);
@@ -983,7 +1004,8 @@
                 part(side * .40, .56, 0, .28, .14, .32, 2, -side, .64); // pauldrons
             }
             part(0, .30, 0, .64, .37, .42, 1, 0, 0, .86);
-            part(0, .28, .205, .40, .34, .03, 0); // tabard
+            part(0, .28, .205, .40, .34, .03, 0); // tabard, framing the display
+            statusPanel(.31, .22, .28);
             part(0, .305, 0, .67, .06, .47, 2);
             part(0, .66, 0, .34, .30, .34, 1); // helm
             part(0, .76, .171, .25, .035, .01, 3);
@@ -1005,6 +1027,8 @@
             part(0, .30, 0, .76, .06, .56, 2);
             part(0, .58, -.05, .68, .17, .46, 0, 0, 0, .72); // hunched shoulders
             part(0, .60, .16, .30, .23, .28, 0);
+            statusPlate(.33, .27, .22, 5, .08, .03); // crude wooden war plate
+            for (let side of [-1, 1]) part(side * .13, .56, .27, .03, .03, .085, 6); // bone pegs
             backPanel(.22, -.27, .49);
         } else if (kind === 'mage') {
             // Every caster: long robe, wide-brimmed pointed hat and a staff whose
@@ -1020,6 +1044,14 @@
             }
             part(0, .76, .03, .42, .04, .40, 2); // hat brim (clear of the back display)
             part(0, .78, .03, .30, .32, .30, 0, 0, 0, .06); // hat cone
+            // Spellbook held before the chest: leather covers, a block of
+            // pages, a gold clasp; its front cover is the display.
+            part(0, .22, .225, .34, .32, .02, 5);
+            part(.01, .23, .25, .31, .30, .03, 6);
+            part(0, .22, .272, .34, .32, .015, 5);
+            part(-.17, .22, .25, .03, .32, .07, 5); // spine
+            part(.17, .34, .25, .02, .08, .075, 8); // clasp
+            statusPanel(.245, .28, .27);
             backPanel(.16, -.215, .46);
         } else if (kind === 'worker' || kind === 'wingworker') {
             // Workers are blocky: cube head, hard hat, square body and a
@@ -1034,7 +1066,9 @@
                 part(side * .07, .69, .131, .04, .04, .01, 1);
             }
             part(0, .24, 0, .52, .36, .36, 0);
-            part(0, .26, .181, .34, .26, .02, 2); // bib
+            part(0, .29, .181, .32, .26, .02, 1); // bib, framing the display
+            statusPanel(.30, .191, .24);
+            for (let side of [-1, 1]) part(side * .20, .40, -.01, .06, .21, .40, 2); // owner-colored straps
             part(0, .24, 0, .54, .05, .38, 5); // tool belt
             part(0, .58, 0, .28, .24, .26, 6); // cube head
             if (!winged) {
@@ -1051,6 +1085,7 @@
                 for (let side of [-1, 1]) part(side * .07, .64, .135, .08, .07, .025, 3);
             }
             part(0, .18, -.25, .48, .48, .14, 5); // backpack
+            part(0, .645, -.25, .49, .04, .15, 2); // owner stripe along its top
             panel(0, .20, -.322, .44, .44);
             if (winged) {
                 // Wings root on top of the pack and flap about its center.
@@ -1068,7 +1103,7 @@
             part(0, .46, .30, .16, .24, .17, 5, 5, .46, 1, 0, .30); // neck
             part(0, .62, .42, .15, .14, .28, 5, 5, .46, .85, 0, .30); // head
             part(0, .60, .56, .12, .10, .08, 1, 5, .46, 1, 0, .30); // muzzle
-            part(0, .57, .27, .05, .20, .14, 2, 5, .46, 1, 0, .30); // mane
+            part(0, .57, .27, .05, .14, .14, 2, 5, .46, 1, 0, .30); // mane (low: clear of the rider's shield)
             for (let side of [-1, 1]) {
                 part(side * .05, .76, .36, .03, .07, .03, 5, 5, .46, 1, 0, .30); // ears
                 part(side * .05, .69, .52, .03, .03, .01, 3, 5, .46, 1, 0, .30);
@@ -1101,7 +1136,7 @@
             part(0, .46, .30, .16, .24, .17, coat, 5, .46, 1, 0, .30); // neck
             part(0, .62, .42, .15, .14, .28, coat, 5, .46, .85, 0, .30); // head
             part(0, .60, .56, .12, .10, .08, lancer ? 0 : 1, 5, .46, 1, 0, .30); // muzzle
-            part(0, .57, .27, .05, .20, .14, accent, 5, .46, 1, 0, .30); // mane
+            part(0, .57, .27, .05, .14, .14, accent, 5, .46, 1, 0, .30); // mane (low: clear of the rider's shield)
             for (let side of [-1, 1]) {
                 part(side * .05, .76, .36, .03, .07, .03, coat, 5, .46, 1, 0, .30); // ears
                 part(side * .05, .69, .52, .03, .03, .01, 3, 5, .46, 1, 0, .30);
@@ -1146,11 +1181,13 @@
                 }
             }
             part(0,.30,-.39,.33,.06,.35,2,0,0,.15);
+            statusPlate(.29,.30,.16,1,.04,.02); // breastplate display
             panel(0,.58,-.10,.43,.42,true);
         } else if (kind === 'mole') {
             part(0,.07,0,.67,.39,.73,0,0,0,.55);
             part(0,.14,.39,.27,.17,.28,1,5,.20,.12,0,.34); // snout sniffs
             for (let side of [-1,1]) part(side*.34,.025,.19,.19,.09,.40,2,side,.20);
+            statusPlate(.33,.30,.15,1,.05,.02); // digging visor above the snout
             panel(0,.465,-.03,.48,.46,true);
         } else if (kind === 'serpent') {
             // The snake head reads as a fantasy train engine: low chassis,
@@ -1164,6 +1201,7 @@
             part(0,.50,.45,.34,.30,.34,0,0,0,.42); // boiler nose
             part(0,.64,.50,.14,.20,.14,2); // chimney
             part(0,.25,.64,.76,.10,.26,2); // cowcatcher
+            statusPlate(.52,.64,.18,1,.04,.02); // headlamp plate on the boiler
             panel(0,.88,-.06,.66,.66,true);
         } else if (kind === 'portal') {
             // Cloud endpoints: a stone gateway at the back of the tile whose
@@ -1284,7 +1322,7 @@
                 part(0, .30, -.36, .18, .14, .02, 9); // war banner
             } else if (style === 'arcane') {
                 // Elemental sanctum: a glowing rune border, crystal obelisks
-                // and a slowly turning orb over an altar.
+                // and a glowing orb over an altar.
                 part(0, .11, -.305, .80, .012, .025, 7);
                 part(0, .11, .485, .80, .012, .025, 7);
                 for (let side of [-1, 1]) {
@@ -1293,7 +1331,7 @@
                     part(side * .38, .21, -.40, .12, .58, .12, 7, 0, 0, .25);
                 }
                 part(0, .11, -.42, .30, .16, .14, 10);
-                part(0, .30, -.42, .14, .14, .14, 7, 7, .37, 1, 0, .4);
+                part(0, .30, -.42, .14, .14, .14, 7);
                 part(0, .64, -.42, .56, .06, .08, 10);
             } else if (style === 'aerie') {
                 // Aerie: a perch, a straw nest and hay for the mounts.
@@ -1320,9 +1358,8 @@
                 part(-.26, .11, -.40, .34, .14, .22, 1);
                 part(-.30, .25, -.41, .20, .10, .14, 10);
                 part(-.18, .25, -.38, .08, .16, .06, 6);
-                part(.26, .11, -.40, .24, .22, .18, 1);
-                part(.26, .24, -.30, .22, .22, .02, 6, 7, .35, 1, 0, 1.4); // saw blade
-                part(.26, .33, -.285, .05, .05, .02, 1);
+                part(.26, .11, -.40, .24, .22, .18, 1); // grinder
+                part(.26, .33, -.40, .16, .05, .12, 6);
             } else if (style === 'spawner') {
                 // Woodcutter's yard (energy collectors): stacked logs, a
                 // chopping block with an axe and a warm lantern.
@@ -1368,7 +1405,7 @@
                 part(.28, .46, -.36, .09, .09, .28, 1);
                 part(.28, .47, -.215, .07, .07, .02, 3);
                 part(0, .11, -.42, .10, .20, .10, 10);
-                part(0, .31, -.42, .12, .12, .12, 3, 7, .37, 1, 0, .7);
+                part(0, .31, -.42, .12, .12, .12, 3);
             }
         } else if (kind === 'mine') {
             // Resource tiles: the slab and 2D display as before, with ore at
@@ -1601,6 +1638,30 @@
         return null;
     }
     const WORKSHOP_TYPES = new Set(['spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research']);
+
+    // Where barracks and worker yards show the unit in production: a small
+    // miniature among the features along the back edge (model units of the
+    // building model; y is the top of the furniture it stands on, or the
+    // deck at .112), turned a little toward the yard's center.
+    const WORKSHOP_MINIATURES = {
+        rural: { x: -.01, y: .29, z: -.42, yaw: -.3 }, // on the smithy bench, by the anvil
+        castle: { x: 0, y: .53, z: -.43, yaw: 0 }, // on the battlements above the gate
+        boss: { x: -.17, y: .112, z: -.30, yaw: .3 }, // before the palisade
+        arcane: { x: .22, y: .112, z: -.38, yaw: -.3 }, // beside the altar
+        aerie: { x: .34, y: .70, z: -.40, yaw: -.3 }, // on the perch
+        builder_spawner: { x: -.28, y: .29, z: -.36, yaw: .3 }, // on the brick stack
+        salvager: { x: 0, y: .112, z: -.38, yaw: 0 }, // between the scrap and the grinder
+        spawner: { x: -.26, y: .365, z: -.40, yaw: .3 }, // on the log pile
+        astar_spawner: { x: .02, y: .112, z: -.38, yaw: 0 }, // between the cart and the rack
+        healer_spawner: { x: .05, y: .43, z: -.44, yaw: 0 }, // on the medicine shelf
+        research: { x: -.28, y: .57, z: -.43, yaw: .3 }, // on the bookshelf
+        default: { x: 0, y: .112, z: -.30, yaw: 0 }
+    };
+    function workshopMiniature(modelKey) {
+        let kind = proceduralKind({ modelKey });
+        let style = kind && kind.includes(':') ? kind.split(':')[1] : '';
+        return WORKSHOP_MINIATURES[style] || WORKSHOP_MINIATURES.default;
+    }
 
     function createMesh(gl, positions, normals, indices, uvs) {
         let vertexCount = positions.length / 3;
@@ -1836,7 +1897,7 @@
 
     // Floats per model instance: matrix (16), color, alpha, shape/move,
     // side angle/phase, side color, light and the panel's atlas layer.
-    const INSTANCE_STRIDE = 27;
+    const INSTANCE_STRIDE = 28;
 
     // COLOR_ATTACHMENT0/1 and NONE; fixed WebGL2 enum values.
     const SCENE_DRAW_BUFFERS_COLOR = [0x8CE0, 0];
@@ -2300,6 +2361,9 @@
                 gl.enableVertexAttribArray(14);
                 gl.vertexAttribPointer(14, 1, gl.FLOAT, false, instanceStrideBytes, 104);
                 gl.vertexAttribDivisor(14, 1);
+                gl.enableVertexAttribArray(15);
+                gl.vertexAttribPointer(15, 1, gl.FLOAT, false, instanceStrideBytes, 108);
+                gl.vertexAttribDivisor(15, 1);
                 gl.bindVertexArray(null);
             };
             bindInstanceAttributes(this.cubeMesh);
@@ -2338,6 +2402,7 @@
                 layout(location=12) in float light;
                 layout(location=13) in vec4 detail;
                 layout(location=14) in float atlasLayer;
+                layout(location=15) in float statusLayer;
                 uniform mat4 uViewProjection;
                 uniform float uAnimationMode;
                 uniform float uRig;
@@ -2350,6 +2415,7 @@
                 out float vLight;
                 flat out int vSurface;
                 flat out float vLayer;
+                flat out float vStatusLayer;
                 void main() {
                     vec3 p = aPosition, n = aNormal;
                     float animationMode = floor(uAnimationMode + .5);
@@ -2463,7 +2529,7 @@
                     if (detail.x == 4.0 && aNormal.y > .5) world.y += .02 * (1.0 - clamp(sqrt(scale2.y), 0.0, 1.0));
                     gl_Position = uViewProjection * world;
                     vColor = color; vTrim = trim; vUv = aUv;
-                    vAlpha = alpha; vLight = light; vSurface = int(detail.x + .5); vLayer = atlasLayer;
+                    vAlpha = alpha; vLight = light; vSurface = int(detail.x + .5); vLayer = atlasLayer; vStatusLayer = statusLayer;
                 }
             `, `#version 300 es
                 precision highp float;
@@ -2475,6 +2541,7 @@
                 in float vLight;
                 flat in int vSurface;
                 flat in float vLayer;
+                flat in float vStatusLayer;
                 uniform float uIsUnit;
                 uniform float uIsFlying;
                 uniform float uSpriteLodBias;
@@ -2507,8 +2574,15 @@
                     else if (vSurface == 12) base = vec3(.035,.02,.06); // void (unlit)
                     else if (vSurface == 13) base = vec3(.80,.67,.36); // straw
                     else if (vSurface == 14) base = vec3(.19,.20,.23); // dark gray
-                    bool glowing = vSurface == 3 || vSurface == 4 || vSurface == 7 || vSurface == 12;
-                    if (vSurface == 4) {
+                    bool glowing = vSurface == 3 || vSurface == 4 || vSurface == 7 || vSurface == 12 || vSurface == 15;
+                    if (vSurface == 15) {
+                        // Status icon (sprite atlas layer, or none) over the owner color.
+                        base = vColor;
+                        if (vStatusLayer >= 0.0) {
+                            vec4 icon = texture(uAtlas, vec3(vUv, vStatusLayer), uSpriteLodBias);
+                            base = mix(base, icon.rgb, icon.a);
+                        }
+                    } else if (vSurface == 4) {
                         // Preserve thin sprite strokes without disabling distant mipmaps.
                         // Exact 2D panels come from the shared sprite atlas (one
                         // draw for every panel); uUseAtlas is uniform per draw.
@@ -3888,6 +3962,9 @@
             let kind = this.getFigureMeshKey(objects[0]);
             let mesh = kind ? this.getFigureMesh(kind) : this.getPrimitiveMesh(objects[0]);
             let uniforms = kind ? this.figureUniforms : this.texturedCubeUniforms;
+            // Front status displays sample the sprite atlas even when the
+            // back panels of this batch do not.
+            let statusAtlas = kind ? atlas || this.getFlatAtlas() : null;
             this.ensureCubeInstanceCapacity(objects.length);
             let data = this.cubeInstanceArray;
             for (let index = 0; index < objects.length; index++) {
@@ -3912,6 +3989,7 @@
                 data[base + 24] = sideColor[2];
                 data[base + 25] = this.getPackedObjectLight(object);
                 data[base + 26] = atlas ? this.atlasLayers[index] : 0;
+                data[base + 27] = statusAtlas && object.statusTextureCanvas ? statusAtlas.layerFor(object.statusTextureCanvas) : -1;
             }
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
             gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, objects.length * INSTANCE_STRIDE);
@@ -3937,7 +4015,7 @@
             if (kind) {
                 // The array sampler keeps its own unit even when unused.
                 gl.activeTexture(gl.TEXTURE2);
-                gl.bindTexture(gl.TEXTURE_2D_ARRAY, atlas ? atlas.texture : null);
+                gl.bindTexture(gl.TEXTURE_2D_ARRAY, statusAtlas ? statusAtlas.texture : null);
                 gl.uniform1i(uniforms.atlas, 2);
                 gl.uniform1f(uniforms.useAtlas, atlas ? 1 : 0);
                 gl.activeTexture(gl.TEXTURE0);
@@ -4323,5 +4401,6 @@
     Defence3Renderer3D.FxBatch = FxBatch;
     Defence3Renderer3D.FX_MESH = { BOX: FX_MESH_BOX, ORB: FX_MESH_ORB, SPIKE: FX_MESH_SPIKE, DECAL: FX_MESH_DECAL };
     Defence3Renderer3D.FX_PATTERN = FX_PATTERN;
+    Defence3Renderer3D.workshopMiniature = workshopMiniature;
     window.Defence3Renderer3D = Defence3Renderer3D;
 })();

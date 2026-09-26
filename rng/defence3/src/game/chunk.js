@@ -648,10 +648,16 @@ function _isCachedEnemyTargetStillValid(target, ownerId, wx, wy, rangeSq, minCx,
     return (dx * dx + dy * dy) <= rangeSq;
 }
 
-function _computeClosestEnemyUnitByChunks(ownerId, wx, wy, rangeSq, minCx, minCy, maxCx, maxCy, cws) {
-    let bestChunkKey = -1;
-    let bestChunkD2 = Infinity;
+// Chunks holding enemies, as (distance², key) pairs: reused scratch.
+const _closestEnemyChunkScratch = [];
 
+// Closest visible enemy unit in the nearest chunk holding enemies (as it
+// always was). When that chunk has none visible within range, the other
+// chunks in range are searched, nearest first: otherwise an unseen or
+// out-of-range enemy there hid a visible one nearby, and the unit stood
+// among enemies without engaging.
+function _computeClosestEnemyUnitByChunks(ownerId, wx, wy, rangeSq, minCx, minCy, maxCx, maxCy, cws) {
+    let candidates = _closestEnemyChunkScratch, count = 0;
     for (let cy = minCy; cy <= maxCy; cy++) {
         let rowBase = cy * CHUNKS_W;
         for (let cx = minCx; cx <= maxCx; cx++) {
@@ -666,34 +672,41 @@ function _computeClosestEnemyUnitByChunks(ownerId, wx, wy, rangeSq, minCx, minCy
             let ddy = wy - ny;
             let chunkD2 = ddx * ddx + ddy * ddy;
             if (chunkD2 > rangeSq) continue;
-            if (chunkD2 < bestChunkD2) {
-                bestChunkD2 = chunkD2;
-                bestChunkKey = ck;
+            // Stable insertion by distance² (scan order breaks ties, so the
+            // first entry is the chunk the original scan chose).
+            let i = count++;
+            while (i > 0 && candidates[(i - 1) * 2] > chunkD2) {
+                candidates[i * 2] = candidates[(i - 1) * 2];
+                candidates[i * 2 + 1] = candidates[(i - 1) * 2 + 1];
+                i--;
+            }
+            candidates[i * 2] = chunkD2;
+            candidates[i * 2 + 1] = ck;
+        }
+    }
+
+    for (let c = 0; c < count; c++) {
+        let chunk = spatialUnits[candidates[c * 2 + 1]];
+        if (!chunk || chunk.length <= 0) continue;
+        let best = null;
+        let bestD2 = Infinity;
+        for (let u of chunk) {
+            if (!u || u.dead || u.owner === ownerId) continue;
+            let ugx = Math.floor(u.x / TILE);
+            let ugy = Math.floor(u.y / TILE);
+            if (!isGameplayTargetVisibleToPlayer(ownerId, ugx, ugy)) continue;
+            let dx = u.x - wx;
+            let dy = u.y - wy;
+            let d2 = dx * dx + dy * dy;
+            if (d2 > rangeSq) continue;
+            if (d2 < bestD2) {
+                best = u;
+                bestD2 = d2;
             }
         }
+        if (best) return best;
     }
-
-    if (bestChunkKey < 0) return null;
-    let chunk = spatialUnits[bestChunkKey];
-    if (!chunk || chunk.length <= 0) return null;
-
-    let best = null;
-    let bestD2 = Infinity;
-    for (let u of chunk) {
-        if (!u || u.dead || u.owner === ownerId) continue;
-        let ugx = Math.floor(u.x / TILE);
-        let ugy = Math.floor(u.y / TILE);
-        if (!isGameplayTargetVisibleToPlayer(ownerId, ugx, ugy)) continue;
-        let dx = u.x - wx;
-        let dy = u.y - wy;
-        let d2 = dx * dx + dy * dy;
-        if (d2 > rangeSq) continue;
-        if (d2 < bestD2) {
-            best = u;
-            bestD2 = d2;
-        }
-    }
-    return best;
+    return null;
 }
 
 function _findClosestEnemyUnitByChunks(owner, wx, wy, rangePx) {
