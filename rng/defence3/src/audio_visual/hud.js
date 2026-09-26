@@ -3521,8 +3521,8 @@ function renderUnitInfo(u) {
         }), baseDps, effDps);
     }
     html += infoRow(withInfoPanelStatMatrixButton('Speed', { title: `${u.unitType} / Speed`, kind: 'unit', key: u.unitType, statKey: 'speed' }), `${baseSpd.toFixed(1)}${(u.frozen > 0 || u.sandy > 0) ? ' (slowed)' : ''}`, `${effSpd.toFixed(1)}${(u.frozen > 0 || u.sandy > 0) ? ' (slowed)' : ''}`);
-    let baseAstarCost = Math.max(0.1, Number(u.baseLevelAstarCost ?? getUnitStatForOwner(u.owner, u.unitType, lvl, 'astarCost')) || 1);
-    let effAstarCost = Math.max(0.1, Number(u.astarCost ?? getUnitStatForOwner(u.owner, u.unitType, effLvl, 'astarCost')) || baseAstarCost);
+    let baseAstarCost = Math.max(0.01, Number(u.baseLevelAstarCost ?? getUnitStatForOwner(u.owner, u.unitType, lvl, 'astarCost')) || 1);
+    let effAstarCost = Math.max(0.01, Number(u.astarCost ?? getUnitStatForOwner(u.owner, u.unitType, effLvl, 'astarCost')) || baseAstarCost);
     html += infoRow(withInfoPanelStatMatrixButton('★ / Tile', { title: `${u.unitType} / A* Cost`, kind: 'unit', key: u.unitType, statKey: 'astarCost' }), formatBigNumber(baseAstarCost, 2), formatBigNumber(effAstarCost, 2));
     html += infoRow(_buildInfoPanelUnitStateLabel(u), _getInfoPanelUnitStateLabel(u));
     if (u.workerType) html += infoRow(_buildInfoPanelAssignedLabelButton('worker', { unitId: u.id }), _buildInfoPanelWorkerAssignedTargetHtml(u));
