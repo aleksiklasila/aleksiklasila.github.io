@@ -1426,27 +1426,15 @@ function updateHUD() {
         _hudCache.fps = _fpsDisplay;
         _hudCache.tps = _tpsDisplay;
         _hudCache.net = netText;
-        _hudEls.fps.textContent = `${_fpsDisplay} FPS / ${_tpsDisplay} TPS (v3)${netText}`;
+        _hudEls.fps.textContent = `${_fpsDisplay} FPS / ${_tpsDisplay} TPS${netText}`;
     }
 }
 
-// Online: ping to the host, the command delay, and how many of this player's
-// commands are still waiting for their tick.
+// Online: the command delay. Pending orders and connection details are in
+// the side panel.
 function _hudNetText() {
     if (!isMultiplayer || !gameStarted || gameOver) return '';
-    let text = '';
-    if (!isHost) {
-        let link = netGetHostLinkStats();
-        if (link && Number.isFinite(link.srtt)) text += ` · ping ${Math.round(link.srtt)} ms`;
-    }
-    text += ` · delay ${Math.round(netCommandLeadTicks() * TICK_MS)} ms`;
-    let pending = 0;
-    for (let k in localInputBuffer) if (+k >= currentTick && Array.isArray(localInputBuffer[k])) pending += localInputBuffer[k].length;
-    if (pending > 0) text += ` · ${pending} order${pending > 1 ? 's' : ''} sent`;
-    // Our packets reached the host too late in the last seconds: our orders
-    // run a little later than shown (the connection, not the game).
-    if (!isHost && netLateSamples.length > 0 && (performance.now() - netLateSamples[netLateSamples.length - 1]) < 3000) text += ' · connection lagging';
-    return text;
+    return ` / ${Math.round(netCommandLeadTicks() * TICK_MS)} ms`;
 }
 
 let _buildMenuTab = null;

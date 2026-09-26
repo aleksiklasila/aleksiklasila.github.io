@@ -8,6 +8,12 @@ const renderer3dTopTextureCache = new Map();
 const renderer3dOverlapFadeState = new Map();
 const renderer3dSharedAudioTextureCanvases = new Map();
 const RENDERER3D_OVERLAP_FADE_DURATION_MS = 500;
+// A structure under a unit keeps this share of its height (so its roof and 2D
+// panel still read the same), within world-unit bounds that keep the unit on
+// top visible.
+const RENDERER3D_OVERLAP_HEIGHT_FRACTION = 0.25;
+const RENDERER3D_OVERLAP_MIN_HEIGHT = 0.05;
+const RENDERER3D_OVERLAP_MAX_HEIGHT = 0.14;
 const DRAW_Z_BACKGROUND = 500;
 const DRAW_Z_STRUCTURES = 400;
 const DRAW_Z_UNITS = 300;
@@ -1226,6 +1232,7 @@ function push3DRenderObject(target, object) {
         let visibilityHeight = Math.max(0.18, visionRange / 5);
         resolvedScaleY = Math.max(0.05, resolvedScaleY * visibilityHeight);
     }
+    let overlapFadeKey;
     if (object.overlapFade) {
         let fade = object.overlapFade;
         // Numeric key (model id, tile): hundreds of mines use this every frame.
@@ -1233,14 +1240,17 @@ function push3DRenderObject(target, object) {
         let modelId = modelIds.get(object.modelKey);
         if (modelId === undefined) modelIds.set(object.modelKey, modelId = modelIds.size);
         let key = modelId * 4294967296 + (fade.gy & 0xffff) * 65536 + (fade.gx & 0xffff);
-        let targetHeight = fade.occupied ? Math.min(resolvedScaleY, 0.05) : resolvedScaleY;
+        let lowHeight = Math.min(resolvedScaleY, Math.max(RENDERER3D_OVERLAP_MIN_HEIGHT,
+            Math.min(RENDERER3D_OVERLAP_MAX_HEIGHT, resolvedScaleY * RENDERER3D_OVERLAP_HEIGHT_FRACTION)));
+        let targetHeight = fade.occupied ? lowHeight : resolvedScaleY;
         let state = renderer3dOverlapFadeState.get(key);
         if (!state) {
             state = { value: resolvedScaleY, lastUpdateMs: fade.nowMs, lastSeenMs: fade.nowMs };
             renderer3dOverlapFadeState.set(key, state);
         } else {
             let deltaMs = Math.max(0, fade.nowMs - state.lastUpdateMs);
-            let maxStep = deltaMs / RENDERER3D_OVERLAP_FADE_DURATION_MS * Math.max(0.01, resolvedScaleY - 0.05);
+            // Same speed both ways: rising mirrors the descent.
+            let maxStep = deltaMs / RENDERER3D_OVERLAP_FADE_DURATION_MS * Math.max(0.01, resolvedScaleY - lowHeight);
             if (targetHeight > state.value) state.value = Math.min(targetHeight, state.value + maxStep);
             else if (targetHeight < state.value) state.value = Math.max(targetHeight, state.value - maxStep);
             state.lastUpdateMs = fade.nowMs;
@@ -1248,6 +1258,7 @@ function push3DRenderObject(target, object) {
         }
         fade.activeKeys.add(key);
         resolvedScaleY = state.value;
+        overlapFadeKey = key;
     }
     let tint = _getCachedLitTint(object.tint || '#c8ced8', finalLightLevel);
     let sideTint = _getCachedLitTint(object.sideTint || object.tint || '#c8ced8', finalLightLevel);
@@ -1262,6 +1273,7 @@ function push3DRenderObject(target, object) {
         y: Number(object.y) || 0,
         scaleX: Math.max(0.05, Number(object.scaleX) || 0.05),
         scaleY: resolvedScaleY,
+        overlapFadeKey,
         scaleZ: Math.max(0.05, Number(object.scaleZ) || 0.05),
         rotationY: Number(object.rotationY) || 0,
         moveAmount: Math.max(0, Math.min(1, Number(object.moveAmount) || 0)),
@@ -1477,7 +1489,7 @@ function pushUnit3DActivityEffects(target, u, activity, x, z, footprint) {
 // tile, and it is not flashing, waiting for its exact panel or easing its
 // height (the last two builds differed). Panels refresh every 1-4 ticks.
 const renderer3dStaticObjects = new WeakMap();
-const renderer3dStaticFrame = { occupied: null, flat2d: false };
+const renderer3dStaticFrame = { occupied: null, flat2d: false, overlapNowMs: 0, overlapFadeKeys: null };
 
 // Tiles holding a visible unit this frame (tile index keys), stamped per
 // frame instead of filling a new Set with every visible unit.
@@ -1540,6 +1552,14 @@ function _reuseStatic3DObject(target, entity, gx, gy, audioMove, audioHeight) {
     let panel = object.topTextureCanvas;
     if (panel && panel._textureVersion !== entry.textureVersion) return false; // recycled
     _touch3DPanel(panel);
+    // A reused (lowered) structure keeps its height state alive; otherwise the
+    // state is pruned and the structure pops back to full height at once.
+    if (object.overlapFadeKey !== undefined) {
+        let fadeState = renderer3dOverlapFadeState.get(object.overlapFadeKey);
+        if (!fadeState) return false;
+        fadeState.lastSeenMs = fadeState.lastUpdateMs = renderer3dStaticFrame.overlapNowMs;
+        renderer3dStaticFrame.overlapFadeKeys.add(object.overlapFadeKey);
+    }
     if (entry.litVersion !== visibilityVersion || entry.litGrid !== visibilityGrid) {
         _relight3DObject(object, entity, object.baseTint, object.baseSideTint, renderer3dStaticFrame.flat2d);
         entry.litVersion = visibilityVersion;
@@ -1711,8 +1731,10 @@ function build3DFrameData(flat2d = false) {
     renderer3dStaticFrame.view = view3DKey;
     let overlapNowMs = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
     let activeOverlapFadeKeys = new Set();
+    renderer3dStaticFrame.overlapNowMs = overlapNowMs;
+    renderer3dStaticFrame.overlapFadeKeys = activeOverlapFadeKeys;
     // One height transition for every overlapping structure, including mines.
-    // The 0.05 world-unit floor is about half a builder's rendered height.
+    // Occupied structures keep part of their height (RENDERER3D_OVERLAP_*).
     // Flat sprites have no height.
     let getOverlapFadeForTile = (gx, gy) => flat2d ? null : ({
         gx, gy, occupied: unitOccupiedTileKeys.has(gy * GRID_W + gx),
