@@ -287,8 +287,9 @@ function applyResyncPatch(text, full) {
     let t0 = performance.now();
     let S = JSON.parse(text);
     let uiState = _captureSnapshotApplyUiState();
+    // Where each unit was drawn, so ones the patch moves slide there.
     let before = new Map();
-    for (let u of units) before.set(u, u.x * 65536 + u.y);
+    for (let u of units) before.set(u, [u.x, u.y]);
     let res = snapDecodeState(S, { collectChanges: !full });
     let tick = currentTick;
     netCounters.snapshotApplyMs = performance.now() - t0;
@@ -305,7 +306,7 @@ function applyResyncPatch(text, full) {
     for (let u of units) {
         let prev = before.get(u);
         if (prev === undefined) continue;
-        if (prev !== u.x * 65536 + u.y) { u.prevX = Math.floor(prev / 65536); u.prevY = prev - u.prevX * 65536; }
+        if (prev[0] !== u.x || prev[1] !== u.y) { u.prevX = prev[0]; u.prevY = prev[1]; }
     }
     visibilityCacheTick = -1;
     updateVisibility(localPlayerId);
