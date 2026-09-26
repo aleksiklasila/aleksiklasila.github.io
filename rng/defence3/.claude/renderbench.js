@@ -491,8 +491,8 @@ async function sections({ scenario = 'fight', mode = '3d', zoom = 0.35, frames =
         ['    for (let m of goldMines) {', 'occupied'], ['    let pushCellItem = (x, y, cell) => {', 'mines'],
         ['    for (let t of towers) {', 'items'], ['    for (let s of collectorSpawners) {', 'towers'],
         ['    for (let d of droppedItems) {', 'spawnersBarracks'], ['    if (flat2d) drainFlatObjects();\n    for (let u of units) {', 'dropped'],
-        ['    if (flat2d) drainFlatObjects();\n    for (let p of projectiles) {', 'units'], ['    for (let p of particles) {', 'projectiles'],
-        ['    for (let [key, state] of renderer3dOverlapFadeState) {', 'particles'], ['    return {\n        flat2d,', 'fade']];
+        ['    // Shots, debris, attacks and laser fences: GPU effect instances.', 'units'],
+        ['    for (let [key, state] of renderer3dOverlapFadeState) {', 'effects'], ['    return {\n        flat2d,', 'fade']];
     fn = fn.replace('{', '{ let __t = performance.now(), __n; const __T = (k) => { __n = performance.now(); (window.__SEC[k] = (window.__SEC[k]||0) + __n - __t); __t = __n; };');
     for (const [m, k] of marks) { if (!fn.includes(m)) throw new Error('missing ' + k); fn = fn.replace(m, `__T('${k}');\n` + m); }
     fn = fn.replace('            let activity = getUnit3DActivity(u);', '            window.__SEC.rebuilds = (window.__SEC.rebuilds || 0) + 1;\n            let activity = getUnit3DActivity(u);');

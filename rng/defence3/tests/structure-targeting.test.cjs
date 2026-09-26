@@ -89,7 +89,7 @@ assert.equal(ctx._findHostileStructureInAttackRange(unit), lavaOff, 'own structu
 // Projectiles hit the floor item they were aimed at, and floor items never
 // intercept shots aimed elsewhere.
 const pc = vm.createContext({ TILE, towers: [], barracks: [], collectorSpawners: [], forEachUnitInRange: () => false,
-    getFloorItemAtTile: (x, y) => grid[y] && grid[y][x] && grid[y][x].item, createExplosion() {}, playSound() {},
+    getFloorItemAtTile: (x, y) => grid[y] && grid[y][x] && grid[y][x].item, createExplosion() {}, recordCombatFx() {}, COMBAT_FX: {}, playSound() {},
     pushHostileDamageAlert() {}, recordDamageVisual() {}, applyStatusEffect() {}, isEffectImmune: () => false,
     destroyed: [], destroyBuilding(b) { pc.destroyed.push(b); } });
 vm.runInContext(read('src/utils/utils_common.js'), pc);

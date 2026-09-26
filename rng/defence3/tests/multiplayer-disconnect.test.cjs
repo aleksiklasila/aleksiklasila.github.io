@@ -149,20 +149,24 @@ async function progressWithin(world, inst, ms) {
         rows.push('player dropped in 2v2: teammate keeps the team alive');
     }
 
-    // F: nobody clicks drop: the host drops a player gone for 3 minutes.
+    // F: automatic dropping is disabled (NET_HOST_AUTO_DROP_MS): a player gone
+    // for minutes stays in the match until the host drops them, and the drop
+    // button stays available all that time.
     {
         const world = new H.World({ network: WAN, controls: H.SMALL_MATCH_CONTROLS });
         const { host, guests } = await H.startHostedMatch(world, { guests: 2, teams: [0, 1, 2] });
+        const goneId = guests[1].eval('myPeerId');
         world.kill(guests[1]);
-        await world.run(170000);
-        assert.equal(host.eval('isPeerExplicitlyRemoved(' + JSON.stringify(guests[1].eval('myPeerId')) + ')'), false, 'not dropped early');
-        await world.run(15000);
-        assert.equal(host.eval('isPeerExplicitlyRemoved(' + JSON.stringify(guests[1].eval('myPeerId')) + ')'), true, 'auto-dropped');
+        await world.run(185000);
+        assert.equal(host.eval('isPeerExplicitlyRemoved(' + JSON.stringify(goneId) + ')'), false, 'not dropped automatically');
+        assert.match(host.element('net-wait-overlay').innerHTML, /data-net-action="drop"/, 'host still offered a drop button');
+        host.eval(`hostRemovePlayerFromMatch(${JSON.stringify(goneId)})`);
+        assert.equal(host.eval('isPeerExplicitlyRemoved(' + JSON.stringify(goneId) + ')'), true, 'dropped by the host');
         const ms = await progressWithin(world, host, 3000);
         assert.ok(ms < 1500);
         await world.run(3000);
-        H.checkHealthy(world, [host, guests[0]], { minCompared: 5, label: 'auto-drop' });
-        rows.push('player gone for 3 minutes is dropped automatically');
+        H.checkHealthy(world, [host, guests[0]], { minCompared: 5, label: 'late drop' });
+        rows.push('player gone for 3 minutes waits for the host to drop them (no automatic drop)');
     }
 
     // G: a guest leaves a 3-team match from the menu; the others continue.

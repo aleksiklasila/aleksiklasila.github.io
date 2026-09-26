@@ -236,3 +236,70 @@ and lockstep hash are identical.
 Remaining large costs: per-player visibility (~15%), the unit collision
 loop, worker target searches that scan every building (large in these
 1000-building fixtures), and path following.
+
+# Combat effects, role models and animations
+
+Attacks, shots and hits are drawn as GPU effects instead of per-object
+particles, and every unit role has its own 3D body plan and rest pose.
+
+## Design
+
+- **Visual records, not particles.** A unit attack, tower shot or projectile
+  hit appends one record (kind, endpoints, start tick, style) to a fixed
+  4,096-entry ring in `particle.js`. The simulation never reads it, and it is
+  not in snapshots or hashes. Records are released when they expire, and a
+  rewind (new game, resync) drops them.
+- **One effect pass.** `effects3d.js` turns live records, projectiles,
+  particles, laser fences and building activity into instances of four
+  shared meshes (box, orb, spike, ground decal), written straight into typed
+  arrays (`FxBatch`). `renderer3d.js` uploads them once per frame and draws
+  one instanced call per mesh. Decal patterns (rune circles, slash crescents,
+  claw marks, crossed cuts, shockwaves, splats, shadows) are procedural in
+  the fragment shader, so there are no textures.
+- **3D and 2D share it.** The 2D view draws the same instances in an oblique
+  projection: resting heights are flattened and arcs and hops lift shapes up
+  the screen, with a ground shadow under anything airborne.
+- **Unit panels omit attacks.** Attacks were drawn into each unit's 2D status
+  panel, clipped to its footprint, and changed the panel's signature every
+  tick of a fight. Panels now show the unit only (the canvas fallback
+  renderer still draws attacks), so fighting units stop re-rasterizing.
+- **Models and poses** stay one merged mesh per role and one draw per
+  role/pose group. New joints (quadruped legs, neck, spinning rings) and an
+  idle mode are evaluated in the vertex shader; picking mirrors the pose.
+- Secondary pieces (trails, debris, smoke, building activity) are skipped
+  when a tile is under ~14 pixels.
+
+## Measured results
+
+`.claude/abbench.js`, 2,200 units and 80 turrets on a 120×120 arena, 1400×900
+viewport; three interleaved page loads per version (HEAD exported to an
+untracked copy), mean CPU ms per frame. Single-player runs are not
+deterministic, so unit counts at the same step differ between loads.
+
+| Scenario | Before | After |
+|---|---:|---:|
+| Move, 3D zoomed out | 10.35 | 7.60 |
+| Move, 3D zoom 1 | 5.23 | 3.70 |
+| Move, 2D | 2.29 | 2.20 |
+| Fight, 3D zoomed out | 16.80 | 11.20 |
+| Fight, 3D zoom 1 | 20.10 | 12.42 |
+| Fight, 2D | 5.41 | 6.92 |
+
+The 2D fight row compares different battles: at the matched step the new
+build had 1,628 units alive against 1,173 (3.0 vs 4.0 µs per unit), and it
+rasterized 330–410 unit panels per 60 frames against 1,081. The effect pass
+itself measured 0.12–0.43 ms per frame in these fights.
+
+Simulation: `large-battle.bench.cjs` combat, crowded and siege runs of HEAD
+and this version have identical gameplay digests and lockstep hashes, at
+25.3 → 23.4, 36.5 → 36.8 and 31.9 → 30.6 ms per tick (one run each).
+
+## Reproduce
+
+```js
+// In the page (run on each version, alternating loads):
+await (0,eval)(await (await fetch('/rng/defence3/.claude/abbench.js')).text());
+AB.start();   // then read AB.result
+// Visual checks (arena of every role and turret):
+await (0,eval)(await (await fetch('/rng/defence3/.claude/visbench.js')).text());
+```

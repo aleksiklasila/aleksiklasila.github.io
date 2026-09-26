@@ -189,7 +189,7 @@ class Tower {
             projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, getThingEffectiveLevel(this), this, projectileMaxRange, this.currentStats.blastDamage, this.currentStats.blastRadius));
             this.cd = secondsToTicks(this.currentStats.cd || 1.5);
             this.angle = Math.atan2(target.y - this.y, target.x - this.x);
-            createExplosion(this.x + Math.cos(this.angle) * 12, this.y + Math.sin(this.angle) * 12, '#fff', 2);
+            recordCombatFx(COMBAT_FX.MUZZLE, this.x, this.y, target.x, target.y, this.type);
             playSound('shoot_' + this.type, this.x, this.y);
             return;
         }
@@ -260,7 +260,7 @@ class Tower {
             projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, getThingEffectiveLevel(this), this, projectileMaxRange, this.currentStats.blastDamage, this.currentStats.blastRadius));
             this.cd = secondsToTicks(this.currentStats.cd || 1.5);
             this.angle = Math.atan2(target.y - this.y, target.x - this.x);
-            createExplosion(this.x + Math.cos(this.angle) * 12, this.y + Math.sin(this.angle) * 12, '#fff', 2);
+            recordCombatFx(COMBAT_FX.MUZZLE, this.x, this.y, target.x, target.y, this.type);
             playSound('shoot_' + this.type, this.x, this.y);
         }
     }

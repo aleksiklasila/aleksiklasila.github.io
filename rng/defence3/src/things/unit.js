@@ -813,34 +813,24 @@ class Unit {
         this.attackTimer = this.preComputed.attackCooldown;
         this.attackTarget = target;
         this.attackFlash = 8;
+        recordUnitAttackFx(this, target);
         let style = this.attackStyle;
         if (style === 'fire') {
-            createDirectedParticles(this.x, this.y, target.x, target.y, '#f50', 3);
             target.burning = Math.max(target.burning, 45);
             target.burnTickDamage = Math.max(target.burnTickDamage, this.preComputed.attackDamage * 0.04);
         } else if (style === 'water') {
-            createDirectedParticles(this.x, this.y, target.x, target.y, '#4af', 3);
             target.wet = Math.max(target.wet, 60);
         } else if (style === 'ice') {
-            createDirectedParticles(this.x, this.y, target.x, target.y, '#afe', 3);
             target.frozen = Math.max(target.frozen, 40);
         } else if (style === 'poison') {
-            createDirectedParticles(this.x, this.y, target.x, target.y, '#2d2', 3);
             target.poisoned = Math.max(target.poisoned, 50);
             target.poisonTickDamage = Math.max(target.poisonTickDamage, this.preComputed.attackDamage * 0.04);
         } else if (style === 'laser') {
-            createDirectedParticles(this.x, this.y, target.x, target.y, '#f0f', 2);
         } else if (style === 'swoop') {
-            createDirectedParticles(this.x, this.y, target.x, target.y, '#dd0', 2);
             if (this.unitType === 'scout') applyStatusEffect(target, 'watch', getUnitEffectiveLevel(this), 0, this.owner, this.unitType);
         } else if (style === 'ram') {
-            createDirectedParticles(this.x, this.y, target.x, target.y, '#0f0', 3);
-            createDirectedParticles(target.x, target.y, this.x, this.y, '#f00', 2);
             this.energy -= this.preComputed.maxEnergy * 0.03;
             if (this.energy <= 0) { this.dead = true; }
-        } else {
-            // Default melee
-            createDirectedParticles(this.x, this.y, target.x, target.y, '#f88', 2);
         }
         if (target.energy <= 0) { target.dead = true; return true; }
         return false;
@@ -853,38 +843,30 @@ class Unit {
         this.attackTimer = this.preComputed.attackCooldown;
         this.attackTarget = tb;
         this.attackFlash = 8;
+        recordUnitAttackFx(this, tb);
         let style = this.attackStyle;
         if (style === 'fire') {
-            createDirectedParticles(this.x, this.y, tb.x, tb.y, '#f50', 3);
             applyStatusEffect(tb, 'fire', getUnitBaseLevel(this), this.preComputed.attackDamage * 0.04);
             if (!isEffectImmune(tb, 'fire')) tb.energy -= this.preComputed.attackDamage;
         } else if (style === 'water') {
-            createDirectedParticles(this.x, this.y, tb.x, tb.y, '#4af', 3);
             applyStatusEffect(tb, 'water', getUnitBaseLevel(this));
             if (!isEffectImmune(tb, 'water')) tb.energy -= this.preComputed.attackDamage;
         } else if (style === 'ice') {
-            createDirectedParticles(this.x, this.y, tb.x, tb.y, '#afe', 3);
             applyStatusEffect(tb, 'ice', getUnitBaseLevel(this), this.preComputed.attackDamage * 0.2);
             if (!isEffectImmune(tb, 'ice')) tb.energy -= this.preComputed.attackDamage;
         } else if (style === 'poison') {
-            createDirectedParticles(this.x, this.y, tb.x, tb.y, '#2d2', 3);
             applyStatusEffect(tb, 'poison', getUnitBaseLevel(this), this.preComputed.attackDamage * 0.04);
             if (!isEffectImmune(tb, 'poison')) tb.energy -= this.preComputed.attackDamage;
         } else if (style === 'laser') {
-            createDirectedParticles(this.x, this.y, tb.x, tb.y, '#f0f', 2);
             tb.energy -= this.preComputed.attackDamage;
         } else if (style === 'swoop') {
-            createDirectedParticles(this.x, this.y, tb.x, tb.y, '#dd0', 2);
             if (this.unitType === 'scout') applyStatusEffect(tb, 'watch', getUnitEffectiveLevel(this), 0, this.owner, this.unitType);
             tb.energy -= this.preComputed.attackDamage;
         } else if (style === 'ram') {
-            createDirectedParticles(this.x, this.y, tb.x, tb.y, '#0f0', 3);
-            createDirectedParticles(tb.x, tb.y, this.x, this.y, '#f00', 2);
             tb.energy -= this.preComputed.attackDamage;
             this.energy -= this.preComputed.maxEnergy * 0.03;
             if (this.energy <= 0) { this.dead = true; }
         } else {
-            createDirectedParticles(this.x, this.y, tb.x, tb.y, '#f88', 2);
             tb.energy -= this.preComputed.attackDamage;
         }
         pushHostileDamageAlert(tb, buildingEnergyBefore - tb.energy, this.owner);
@@ -1261,7 +1243,7 @@ class Unit {
             ctx.fillStyle = '#0f0'; ctx.fillRect(bx, by, bw * Math.max(0, this.energy / this.preComputed.maxEnergy), bh);
         }
         // Attack visual effects
-        if (this.attackTarget && this.attackFlash > 0) {
+        if (this.attackTarget && this.attackFlash > 0 && (typeof renderer3dPanelRaster === 'undefined' || !renderer3dPanelRaster)) {
             let tx = this.attackTarget.x, ty = this.attackTarget.y;
             ctx.save();
             let style = this.attackStyle;
