@@ -1122,6 +1122,11 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     lockstepHistoryByTick = {};
     lockstepSnapshotLastSentAtByPeer = {};
     lockstepHostWaitRequestByPeer = {};
+    lockstepHostLateByTick = {};
+    lockstepHostCarryByPeer = {};
+    lockstepHostLastOnTimeAt = {};
+    lockstepHostLastPacketAt = {};
+    lockstepHostLastPacketTick = {};
     lockstepGuestWaitRequest = null;
     lockstepHighestSentLocalTick = Math.max(snapTick - 1, Number.isFinite(preservedHighestSent) ? preservedHighestSent : -1);
 
@@ -2664,6 +2669,11 @@ function resetWorldState() {
     lockstepPendingResumeSessionId = '';
     lockstepHighestSentLocalTick = -1;
     lockstepHostWaitRequestByPeer = {};
+    lockstepHostLateByTick = {};
+    lockstepHostCarryByPeer = {};
+    lockstepHostLastOnTimeAt = {};
+    lockstepHostLastPacketAt = {};
+    lockstepHostLastPacketTick = {};
     lockstepGuestWaitRequest = null;
     lockstepPendingBundleByTick = {};
     lockstepPendingCommitByTick = {};
