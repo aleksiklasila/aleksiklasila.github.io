@@ -389,7 +389,11 @@ function __exactStateHash() {
     for (const it of getCellItemsRowMajor()) bld(it);
     for (const pl of players) {
         mix(pl.energy); mix(pl.astar); for (const k of Object.keys(pl._resourceFixedValues || {}).sort()) mix(pl._resourceFixedValues[k]);
-        mix(pl.researchLevels || null); mix((pl.researchQueue || []).map(t => t && (t.kind + t.key + t.statKey)).join('|')); mix(pl.researchTask ? pl.researchTask.workDone : null);
+        mix(pl.researchLevels || null);
+        for (const t of [pl.researchTask || null, ...(pl.researchQueue || [])]) {
+            if (!t) { mix(null); continue; }
+            mix(t.kind + ':' + t.key + ':' + t.statKey); mix(t.fromLevel); mix(t.toLevel); mix(t.cost); mix(t.workRequired); mix(t.workDone);
+        }
     }
     for (const pr of projectiles) { mix(pr.x); mix(pr.y); }
     for (const ar of (areas || [])) if (ar) { mix(ar.multiplierLevel || 0); mix(!!ar.active); }

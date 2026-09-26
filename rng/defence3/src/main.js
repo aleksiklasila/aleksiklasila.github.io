@@ -2753,9 +2753,7 @@ function processAction(a, playerId) {
                     let baseLevel = getPlayerResearchLevel(playerId, a.kind, a.key, a.statKey);
                     let queuedDepth = getResearchQueuedDepthForPlayer(playerId, a.kind, a.key, a.statKey);
                     let projected = baseLevel + queuedDepth;
-                    let capLevel = (a.kind === 'building' && a.statKey === 'maxLevel')
-                        ? Math.max(0, MAX_THING_LEVEL - 1)
-                        : MAX_RESEARCH_LEVEL;
+                    let capLevel = MAX_RESEARCH_LEVEL;
                     if (projected >= capLevel) break;
                     let task = makeResearchTask(playerId, a.kind, a.key, a.statKey, projected);
                     p.researchQueue.push(task);
@@ -2913,6 +2911,8 @@ function processAction(a, playerId) {
                         }
                     }
                 }
+                rebasePlayerResearchQueueState(playerId);
+                tryAdvancePlayerResearchTask(playerId);
             }
         } else if (a.action === 'reorderResearch') {
             let r = getSpawnerAtTile(a.gx, a.gy);
@@ -2952,6 +2952,8 @@ function processAction(a, playerId) {
                 p.researchTask = ordered[0] || null;
                 p.researchQueue.length = 0;
                 for (let i = 1; i < ordered.length; i++) p.researchQueue.push(ordered[i]);
+                rebasePlayerResearchQueueState(playerId);
+                tryAdvancePlayerResearchTask(playerId);
             }
         } else if (a.action === 'markSalvage') {
             // Toggle salvage mark on a building at gx,gy

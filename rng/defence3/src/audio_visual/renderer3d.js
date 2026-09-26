@@ -1396,7 +1396,7 @@
                 part(.30, .49, -.41, .16, .05, .01, 9);
                 part(.30, .435, -.41, .05, .16, .01, 9);
             } else if (style === 'research') {
-                // Laboratory: a bookshelf, a telescope and a glowing orb.
+                // Laboratory: a bookshelf and a telescope.
                 part(-.28, .11, -.43, .34, .46, .10, 5);
                 part(-.28, .20, -.375, .30, .10, .02, 0);
                 part(-.28, .34, -.375, .30, .10, .02, 2);
@@ -1404,8 +1404,6 @@
                 part(.28, .11, -.40, .04, .36, .04, 1);
                 part(.28, .46, -.36, .09, .09, .28, 1);
                 part(.28, .47, -.215, .07, .07, .02, 3);
-                part(0, .11, -.42, .10, .20, .10, 10);
-                part(0, .31, -.42, .12, .12, .12, 3);
             }
         } else if (kind === 'mine') {
             // Resource tiles: the slab and 2D display as before, with ore at
@@ -3592,7 +3590,8 @@
                 if (started) ctx.stroke();
             }
 
-            let image = preview.image;
+            // The flat icon only stands in until the 3D model ghost is shown.
+            let image = preview.modelShown ? null : preview.image;
             if (bounds && image && image.complete && image.naturalWidth > 0) {
                 let drawW = Math.max(16, Math.min(72, (bounds.maxX - bounds.minX) * 0.82));
                 let drawH = Math.max(16, Math.min(72, (bounds.maxY - bounds.minY) * 0.82));
