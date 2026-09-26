@@ -502,10 +502,8 @@ function _markHostResyncAck(peerId, sessionId) {
 // the full match through a resync.
 function hostSendFullMatchSync(conn, role) {
     if (!isHost || !conn || !conn.peer) return;
-    let normalizedRole = normalizeMatchRole(role, 'spectating');
-    let payload = buildHostMatchSyncPayload();
-    let message = { type: normalizedRole === 'spectating' ? 'START_SPECTATE' : 'START_GAME', ...payload };
-    _startHostResyncPause(`full sync for ${conn.peer}`, true, { fullSync: { [String(conn.peer)]: message } });
+    // The others play on while this peer loads the match and catches up.
+    resyncHostScheduleJoin(conn, role);
 }
 
 function normalizeIncomingLobbyPlayers(players) {
@@ -1204,7 +1202,8 @@ function applyAuthoritativeStateSnapshot(snapshot) {
 // stays paused until the host resumes everyone.
 async function applyIncomingMatchSyncPayload(data, role = 'playing') {
     let now = performance.now();
-    let midMatchJoin = !!(data && data.resyncSessionId);
+    let liveJoin = !!(data && Number.isFinite(data.joinTick));
+    let midMatchJoin = !!(data && data.resyncSessionId) || liveJoin;
     gameSeed = data.seed;
     matchStartSessionId = String((data && data.startSessionId) || matchStartSessionId || '');
     if (!isHost) {
@@ -1306,6 +1305,9 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing') {
     }
 
     let _savedSessionId = matchStartSessionId;
+    // Bundles that arrived while this was decoding are still needed.
+    let earlyBundles = liveJoin ? { ...lockstepPendingBundleByTick } : null;
+    let earlyCommits = liveJoin ? { ...lockstepPendingCommitByTick } : null;
     initAudio();
     startGame();
     matchStartSessionId = _savedSessionId;
@@ -1324,6 +1326,14 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing') {
     if (role === 'spectating') { fullVisibility = true; enterSpectateMode('postgame'); }
 
     let hostConn = netGetHostConnection();
+    if (liveJoin) {
+        for (let k in earlyBundles) if (+k >= currentTick && !lockstepBundleByTick[k]) lockstepPendingBundleByTick[k] = earlyBundles[k];
+        for (let k in earlyCommits) if (+k >= currentTick && !lockstepCommittedByTick[k]) lockstepPendingCommitByTick[k] = earlyCommits[k];
+        setMatchLoadOverlay(false);
+        if (!snapshotText) { requestHardLockstepResync(currentTick, 'join without snapshot'); return; }
+        resyncGuestJoined(currentTick);
+        return;
+    }
     if (midMatchJoin) {
         // Wait paused for the host to resume everyone after this resync.
         let sid = String(data.resyncSessionId || '');
@@ -2033,6 +2043,12 @@ function _handleConnectionMessage(conn, data) {
         resyncGuestHandleAt(data);
     } else if (type === 'RESYNC_PATCH' && !isHost) {
         resyncGuestHandlePatch(data);
+    } else if (type === 'JOIN_APPLIED' && isHost) {
+        resyncHostHandleJoinApplied(conn, data);
+    } else if (type === 'JOIN_LIVE' && isHost) {
+        resyncHostHandleJoinLive(conn);
+    } else if (type === 'JOIN_LIVE_ACK' && !isHost) {
+        resyncGuestHandleJoinLiveAck(data);
     } else if (type === 'RESYNC_PATCH_APPLIED' && isHost) {
         let changed = Array.isArray(data.changed) ? data.changed.slice(0, 20).map(String) : [];
         if (changed.length > 0) logLockstepWarning('Guest patched diverged state', { peerId: conn.peer, tick: data.tick, applyMs: data.ms, fields: changed });
@@ -2084,7 +2100,7 @@ function _handleConnectionMessage(conn, data) {
         setMatchLoadOverlay(true, 'Match Starting', 'Waiting for host to generate world…');
     } else if (type === 'START_GAME' && !isHost) {
         _clearGuestJoinTimeout();
-        let midMatchJoin = !!data.resyncSessionId;
+        let midMatchJoin = !!data.resyncSessionId || Number.isFinite(data.joinTick);
         if (!midMatchJoin && !_matchStartPlayerStatuses) {
             // Fallback: if START_GAME_PREPARE was missed, set up statuses from this packet.
             let prepPlayers = normalizeIncomingLobbyPlayers(data.lobbyPlayers);
@@ -2194,9 +2210,9 @@ function _handleConnectionMessage(conn, data) {
             });
             return;
         }
-        let reqReason = String((data && data.reason) || 'peer requested full match sync');
-        let includeConfig = reqReason.toLowerCase().includes('config hash mismatch');
-        _startHostResyncPause(reqReason, includeConfig, { requester: conn && conn.peer });
+        // Only that peer reloads the match (and catches up); the others play on.
+        logLockstepWarning('Guest asked for the full match', { peerId: String(conn && conn.peer || ''), reason: String((data && data.reason) || '') });
+        hostSendFullMatchSync(conn, normalizeMatchRole(matchRoleByPeerId[conn.peer], 'playing'));
     } else if (type === 'START_SPECTATE' && !isHost) {
         _clearGuestJoinTimeout();
         pendingJoinAsSpectator = false;
@@ -2487,7 +2503,7 @@ function _hostHandleLobbyJoin(conn, data) {
                 for (let t = resumeTick; ; t++) {
                     let resend = getHostResendBundleForTick(t);
                     if (!resend) break;
-                    try { conn.send({ type: 'TICK_BUNDLE', bundle: resend.bundle, c: 1 }); } catch { }
+                    try { conn.send({ type: 'TICK_BUNDLE', w: packTickBundleForWire(resend.bundle), c: 1 }); } catch { }
                 }
             } else {
                 hostSendFullMatchSync(conn, knownRole);

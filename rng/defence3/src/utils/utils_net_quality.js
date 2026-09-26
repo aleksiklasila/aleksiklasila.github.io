@@ -16,7 +16,7 @@ const NET_AUTO_REFERENCE_TICK_RATE = 20;
 const NET_MAX_INPUT_DELAY_TICKS = 40;
 // Earlier ticks repeated in each tick message (bundles from the host,
 // packets from guests).
-const NET_TICK_REDUNDANCY = 2;
+let NET_TICK_REDUNDANCY = 2;
 const NET_PING_INTERVAL_IN_MATCH_MS = 500;
 const NET_STATS_BROADCAST_MS = 2000;
 const NET_PEER_UNRESPONSIVE_MS = 4000;

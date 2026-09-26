@@ -3027,6 +3027,8 @@ function _workerReturnPath(u) {
 function queueAction(action) {
     if (localDefeated && action && action.action !== 'resign') return;
     if (gameOver) return;
+    // Just joined and still catching up: sent once the host counts us in.
+    if (isMultiplayer && gameStarted && resyncGuestHoldAction(action)) return;
     if (isMultiplayer && gameStarted && !isHost && !netGetHostConnection()) {
         // Commands issued while reconnecting are kept and sent once the link
         // is back (they are scheduled after every tick already sent).
@@ -3036,6 +3038,7 @@ function queueAction(action) {
     // after. In fair mode everyone, the host included, waits the match delay.
     let actionLead = netCommandLeadTicks();
     let tick = currentTick + actionLead;
+    if (isMultiplayer && gameStarted && !isHost && resyncGuest.liveFromTick > tick) tick = resyncGuest.liveFromTick;
     if (isMultiplayer && gameStarted) {
         // A sent packet may already be sealed by the host, and a sealed tick
         // never changes, so new commands always go to a later tick. This also
