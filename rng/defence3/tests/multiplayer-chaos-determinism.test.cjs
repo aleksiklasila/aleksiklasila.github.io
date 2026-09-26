@@ -16,7 +16,7 @@ const SECONDS = Number(process.argv[2]) || 40;
 const BUILDINGS = ['pistol', 'smg', 'water', 'poison', 'fire', 'sand_gun', 'ice', 'sniper', 'elements', 'laser', 'watch_tower',
     'sand', 'lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'mine', 'farm', 'spawner', 'astar_farm', 'astar_spawner',
     'salvager', 'builder_spawner', 'healer_spawner', 'research', 'house', 'area_upgrader',
-    'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b',
+    'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b', 'cloud_2a', 'cloud_2b', 'cloud_3a', 'cloud_3b',
     'barrack_norm', 'barrack_fast', 'barrack_tank', 'barrack_boss', 'barrack_flying', 'barrack_mole', 'barrack_poison_resistant',
     'barrack_fire_resistant', 'barrack_water_resistant', 'barrack_ice_resistant', 'barrack_laser_resistant', 'barrack_snake', 'barrack_scout'];
 const UNITS = ['norm', 'fast', 'tank', 'boss', 'flying', 'mole', 'poison_resistant', 'fire_resistant', 'water_resistant', 'ice_resistant',
@@ -135,6 +135,9 @@ async function setupChaosWorld(mapType, seed, { guestOptions = [], exactHashes =
     // By default three teams, one of them shared by two players.
     const { host, guests } = await H.startHostedMatch(world, { guests: teams.length - 1, teams, maxMs: 90000, guestOptions });
     const all = [host, ...guests];
+    // Every building and unit the game has is in the mix (new ones too).
+    const missing = JSON.parse(host.eval(`JSON.stringify([...Object.keys(BASE_CARD_TYPES).filter(k => !${JSON.stringify(BUILDINGS)}.includes(k)), ...Object.keys(BASE_UNIT_STATS).filter(k => !${JSON.stringify(UNITS)}.includes(k))])`));
+    assert.deepEqual(missing, [], 'chaos lists miss these buildings/units');
     const setupCounts = host.eval(`JSON.stringify({ units: units.length, towers: towers.length, barracks: barracks.length, spawners: collectorSpawners.length, floor: getCellItemsRowMajor().length })`);
 
     return { world, host, guests, all, setupCounts };
@@ -142,6 +145,12 @@ async function setupChaosWorld(mapType, seed, { guestOptions = [], exactHashes =
 
 async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
     const { world, host, guests, all, setupCounts } = await setupChaosWorld(mapType, seed);
+    // What the host finds differing in each repair request (for failures).
+    host.scratch.requests = [];
+    host.eval(`(() => { const orig = resyncHostHandleRequest; resyncHostHandleRequest = function (conn, data) {
+        const codes = new Set(); for (const r of (data && data.rotation) || []) { const mine = snapGetTickHash(r.tick); if (mine) for (const c of snapDiffTickHash(mine, r)) codes.add(c); }
+        __scratch.requests.push({ peer: String(conn.peer), tick: data && data.tick, differs: snapDescribeCodes(codes, 12) });
+        return orig.apply(this, arguments); }; })()`);
     let s = seed;
     const rand = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
     const commandKinds = new Map();
@@ -203,7 +212,9 @@ async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
         const pa = a.tickParts.get(m.tick) || {}, pb = b.tickParts.get(m.tick) || {};
         const parts = Object.keys(pa).filter(k => pa[k] !== pb[k]);
         throw new Error(`${mapType}: nondeterministic divergence at tick ${m.tick} (${m.a} vs ${m.b}) in [${parts.join(', ')}]; `
-            + `forced ${JSON.stringify(corruptTicks)}, repairs ${JSON.stringify(all.map(i => [i.name, repairTicks(i.name)]))}: ` + JSON.stringify(real.slice(0, 4)));
+            + `forced ${JSON.stringify(corruptTicks)}, repairs ${JSON.stringify(all.map(i => [i.name, repairTicks(i.name)]))}: ` + JSON.stringify(real.slice(0, 4))
+            + '\n  host saw: ' + JSON.stringify(host.scratch.requests)
+            + '\n  patched: ' + all.map(i => i.name + ' ' + JSON.stringify(i.warnings.filter(w => /Patched/.test(JSON.stringify(w.a))).map(w => JSON.stringify(w.a).slice(0, 500)))).join('\n  '));
     }
     assert.ok(cmp.compared > SECONDS * 20 * 3 * 0.8, mapType + ' compared ' + cmp.compared);
     const hostResyncs = all.reduce((n, i) => n + i.patchesApplied, 0);
