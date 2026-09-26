@@ -178,11 +178,14 @@ for (let frame = 0; frame < 5; frame++) {
     assert.deepEqual(renderPanels(panels), firstFrame);
 }
 assert.equal(rasterizations, 1500, 'no repeated rasterization for the visible set, even with moving remembered targets');
+// Attacks are GPU effects, not part of a unit's panel: attacking (and
+// turning to a new target) must not re-rasterize it every tick.
 panels[0].attackFlash = 8;
 const attackFrame = renderPanels(panels);
-assert.notEqual(attackFrame[0], firstFrame[0], 'active attack still updates the displayed panel');
+assert.equal(attackFrame[0], firstFrame[0], 'an attack keeps the displayed panel');
 panels[0].attackTarget.x += 16;
-assert.notEqual(renderPanels(panels)[0], attackFrame[0], 'active attack direction still invalidates the panel');
+assert.equal(renderPanels(panels)[0], attackFrame[0], 'attack direction does not invalidate the panel');
+assert.equal(rasterizations, 1500, 'attacks cause no rasterization');
 for (let frame = 0; frame < 4; frame++) renderPanels(panels.slice(0, 10));
 assert.equal(vm.runInContext('renderer3dExact2DTextureCache.size', tc), 1024, 'inactive panels return to the normal cache budget');
 console.log(`PASS: worker search visits ${oldVisits} -> 1200; 18 visibility comparisons; 1500 stable panels rasterize once across 6 frames.`);

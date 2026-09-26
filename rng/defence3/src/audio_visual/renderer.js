@@ -398,9 +398,9 @@ function get3DExact2DVisualSignature(entity, isUnit = false) {
         || Number(entity.preComputed && entity.preComputed.maxEnergy)
         || Number(entity.preComputedEffective && entity.preComputedEffective.maxEnergy)
         || 0;
-    // Unit.draw only uses the target/style while the attack flash is active.
-    // A remembered target moving elsewhere must not invalidate an idle panel.
-    let activeAttack = !isUnit || Number(entity.attackFlash) > 0;
+    // Unit panels omit attacks (drawn as effects), so a fight does not
+    // re-rasterize every attacking unit's panel each tick.
+    let activeAttack = !isUnit;
     let attackTarget = activeAttack ? entity.attackTarget || null : null;
     // Filled in place: allocating this per visible entity per frame only fed
     // the garbage collector, as unchanged inputs reuse the stored key.
@@ -428,7 +428,7 @@ function get3DExact2DVisualSignature(entity, isUnit = false) {
     values[n++] = entity.poisoned > 0 ? 1 : 0;
     values[n++] = entity.frozen > 0 ? 1 : 0;
     values[n++] = entity.wet > 0 ? 1 : 0;
-    values[n++] = Number(entity.attackFlash) || 0;
+    values[n++] = isUnit ? 0 : Number(entity.attackFlash) || 0;
     values[n++] = activeAttack ? entity.attackStyle || '' : '';
     values[n++] = attackTarget ? Math.round((Number(attackTarget.x) - Number(entity.x)) / 4) : 0;
     values[n++] = attackTarget ? Math.round((Number(attackTarget.y) - Number(entity.y)) / 4) : 0;
@@ -484,6 +484,8 @@ function get3DExact2DCapture(entity, x, y, isUnit) {
 // Whether the last get3DExact2DTexture call returned a stand-in because this
 // frame's raster budget was spent (cached scene objects must not keep it).
 let renderer3dExactTextureFallback = false;
+// True while a unit panel is rasterized: Unit.draw leaves out attacks.
+let renderer3dPanelRaster = false;
 
 function _rasterize3DPanel(signature, scale, offsetX, offsetY, drawFn) {
     let canvas = renderer3dPanelPool.pop();
@@ -549,8 +551,14 @@ function get3DExact2DTexture(entity, useUnitBudget = false) {
     let capture = get3DExact2DCapture(entity, x, y, useUnitBudget);
     let size = RENDERER3D_TOP_TEXTURE_SIZE;
     let scale = (size - 8) / Math.max(1, capture.extent);
-    let panel = _rasterize3DPanel(signature, scale, size * 0.5 - capture.centerX * scale, size * 0.5 - capture.centerY * scale,
-        g => entity.draw(g));
+    renderer3dPanelRaster = useUnitBudget;
+    let panel;
+    try {
+        panel = _rasterize3DPanel(signature, scale, size * 0.5 - capture.centerX * scale, size * 0.5 - capture.centerY * scale,
+            g => entity.draw(g));
+    } finally {
+        renderer3dPanelRaster = false;
+    }
     if (!panel) return null;
     // Flat sprites include the capture padding and the label's offset above
     // the entity. Model footprints are deliberately unrelated to these sizes.
@@ -1079,7 +1087,6 @@ function build3DOverlayData(bounds, alpha) {
         }
     }
 
-    for (let ring of commandFeedbackRings3D()) overlays.rings.push(ring);
     return overlays;
 }
 
@@ -1278,7 +1285,7 @@ function push3DRenderObject(target, object) {
         rotationY: Number(object.rotationY) || 0,
         moveAmount: Math.max(0, Math.min(1, Number(object.moveAmount) || 0)),
         walkPhase: Number(object.walkPhase) || 0,
-        animationMode: Math.max(0, Math.min(6, Math.floor(Number(object.animationMode) || 0))),
+        animationMode: Math.max(0, Math.min(7, Math.floor(Number(object.animationMode) || 0))),
         weaponType: String(object.weaponType || ''),
         preserveModelHeight: !!object.preserveModelHeight,
         isFlying: !!object.isFlying,
@@ -1451,36 +1458,49 @@ function getUnit3DWeaponType(u) {
     if (unitType === 'flying' || unitType === 'scout') return 'talons';
     if (unitType === 'mole') return 'claws';
     let styleWeapons = {
-        fire: 'fire_blade', water: 'water_trident', ice: 'ice_spear',
-        poison: 'poison_scythe', laser: 'laser_staff', melee: 'sword'
+        fire: 'fire_staff', water: 'water_staff', ice: 'ice_staff',
+        poison: 'poison_staff', laser: 'laser_staff', melee: 'sword'
     };
     return styleWeapons[String(u && u.attackStyle || 'melee')] || 'sword';
 }
 
 function pushUnit3DActivityEffects(target, u, activity, x, z, footprint) {
-    if (!activity || activity.mode < 2 || activity.amount <= 0) return;
+    if (!activity || activity.mode < 2 || activity.mode > 6 || activity.amount <= 0) return;
     // Physical equipment carries most of the action. Keep only small contact/magic accents.
     if (activity.mode === 3) return;
-    let palette = {
-        2: ['#ffb52e', '#fff1a8'], 3: [u.workerType === 'astar_collector' ? '#e8e8ff' : '#ffd84d', '#ffffff'],
-        4: ['#ff7043', '#d7e0e8'], 5: ['#62ffb0', '#eafff4'], 6: ['#55bfff', '#c76cff']
-    }[activity.mode];
     let phase = (u._historyGhost ? u._historyTick : gameTime + tickAlpha) / Math.max(1, TICK_RATE) * (activity.mode === 4 ? 12 : 7) + (Number(u.id) || 0) * 1.37;
-    let count = 2;
-    for (let i = 0; i < count; i++) {
-        let p = phase + i * Math.PI * 2 / count;
-        let radius = activity.mode === 5 ? .38 : activity.mode === 6 ? .32 : .24;
-        let burst = activity.mode === 2 || activity.mode === 4;
-        let ox = burst ? Math.cos(p * .63) * .20 : Math.cos(p) * radius;
-        let oz = burst ? .26 + Math.sin(p * .71) * .16 : Math.sin(p) * radius;
-        let oy = burst ? .18 + ((phase * .18 + i / count) % 1) * .42 : .28 + Math.sin(p * 2) * .16 + i * .035;
-        push3DRenderObject(target, {
-            modelKey: `worker_activity_${activity.mode}`,
-            x: x + ox * footprint, y: oy * Math.max(.7, footprint), z: z + oz * footprint,
-            scaleX: burst ? .055 : .07, scaleY: activity.mode === 5 ? .025 : .065, scaleZ: burst ? .025 : .07,
-            rotationY: p, tint: palette[i % palette.length], alpha: .72 + .2 * Math.sin(p), renderShape: activity.mode === 3 || activity.mode === 6 ? 'cylinder' : 'box'
-        });
-    }
+    pushWorkerActivityFx(u, activity.mode, x, z, footprint, phase);
+}
+
+// Idle pose (mode 7): after a unit has stood still for a moment it settles
+// into its role's rest pose (workers sit, mounts graze, flyers hover).
+const RENDERER3D_IDLE_DELAY_SECONDS = 1.5;
+const RENDERER3D_IDLE_SETTLE_SECONDS = .8;
+function _unit3DIdleActivity(u, activity, stillSince) {
+    if (activity.mode !== 0 || activity.amount > 0 || u.isSnake) return activity;
+    let still = (gameTime + (u._historyGhost ? 0 : tickAlpha) - stillSince) / Math.max(1, TICK_RATE) - RENDERER3D_IDLE_DELAY_SECONDS;
+    if (still <= 0) return activity;
+    return { mode: 7, amount: Math.min(1, still / RENDERER3D_IDLE_SETTLE_SECONDS), target: null };
+}
+
+// Flyers keep an altitude with a slow bob; an attack is a dive.
+function _unit3DFlightHeight(u, activity) {
+    if (!u.isFlying) return 0;
+    let t = (u._historyGhost ? u._historyTick : gameTime + tickAlpha) / Math.max(1, TICK_RATE);
+    let height = (u.isWorker ? .36 : .30) + Math.sin(t * 2.2 + (Number(u.id) || 0) * 1.7) * .035;
+    if (activity.mode === 1) height -= Math.sin(_unit3DWalkPhase(u, activity)) * .22;
+    return height;
+}
+
+// A building at work (production, research, a lived-in house), placed on
+// the structure object just pushed so it follows its rendered height.
+function _pushStructureActivity(objects, entity, flat2d) {
+    if (flat2d || entity.underConstruction) return;
+    let type = entity.type;
+    if (type !== 'house' && type !== 'research' && !(entity.spawnQueue && entity.spawnQueue.length)) return;
+    let o = objects[objects.length - 1];
+    let roof = type === 'house' ? .63 : .9;
+    pushStructureActivityFx(entity, o.x, o.z, o.y + o.scaleY * roof, get3DRenderOwnerColor(entity.owner));
 }
 
 // Structures barely change, but the scene is rebuilt every frame. Reuse a
@@ -1509,7 +1529,7 @@ const renderer3dUnitObjects = new WeakMap();
 function _unit3DWalkPhase(u, activity) {
     return activity.mode === 1
         ? Math.max(0, Math.min(1, (8 - Number(u.attackFlash || 0) + (u._historyGhost ? 0 : tickAlpha)) / 8)) * Math.PI
-        : ((u._historyGhost ? u._historyTick : gameTime + tickAlpha)) / TICK_RATE * (activity.mode === 2 ? 8 : activity.mode === 4 ? 14 : 10) + (Number(u.id) || 0) * 2.399;
+        : ((u._historyGhost ? u._historyTick : gameTime + tickAlpha)) / TICK_RATE * (activity.mode === 2 ? 8 : activity.mode === 4 ? 14 : activity.mode === 7 ? 2 : 10) + (Number(u.id) || 0) * 2.399;
 }
 
 // Lighting of an object at its current position, exactly as
@@ -1589,6 +1609,7 @@ function _rememberStatic3DObject(target, entity, gx, gy, audioMove, audioHeight,
 // typed instance batch instead of building scene objects; structures reuse
 // their cached scene objects (pushObject).
 let renderer3dFlatBatch = null;
+let renderer3dFxBatch = null;
 let renderer3dFlatGeneration = 0;
 // Per unit: the panel and own light source of the current tick.
 const renderer3dFlatUnits = new WeakMap();
@@ -1639,52 +1660,6 @@ function _pushFlatUnit(batch, u, x, z, view) {
     return true;
 }
 
-const renderer3dFlatProjectileSprites = new Map();
-
-function _pushFlatProjectile(batch, p, x, z) {
-    let sprite = renderer3dFlatProjectileSprites.get(p.type);
-    if (!sprite) {
-        let color = (BASE_CARD_TYPES[p.type] || {}).color || '#fff';
-        let key = `projectile:${p.type}:${color}`;
-        sprite = { key, texture: get3DTopTextureCanvas(key, (g) => {
-            let size = g.canvas.width;
-            g.fillStyle = color;
-            g.beginPath();
-            g.arc(size * 0.5, size * 0.5, size * 0.18, 0, Math.PI * 2);
-            g.fill();
-            g.strokeStyle = '#fff';
-            g.lineWidth = Math.max(2, Math.round(size * 0.035));
-            g.stroke();
-        }) };
-        renderer3dFlatProjectileSprites.set(p.type, sprite);
-    }
-    let light = _flatLightAt(x, z, 0, false);
-    batch.push(x, z, 0.12, 0.2, light, light, light, 0.95, -Math.atan2(Number(p.vx) || 0, Number(p.vy) || 1), sprite.texture);
-}
-
-// The lit tint as 0..1 rgb, as the GPU renderer parses _getCachedLitTint.
-const renderer3dFlatTintRgb = new Map();
-const RENDERER3D_FLAT_DEFAULT_RGB = [0.78, 0.81, 0.85];
-
-function _getFlatLitRgb(tint, light) {
-    let lit = _getCachedLitTint(tint, light);
-    let rgb = renderer3dFlatTintRgb.get(lit);
-    if (rgb) return rgb;
-    let match = String(lit).trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
-    if (!match) return RENDERER3D_FLAT_DEFAULT_RGB;
-    let hex = match[1].length === 3 ? match[1].replace(/./g, ch => ch + ch) : match[1];
-    rgb = [parseInt(hex.slice(0, 2), 16) / 255, parseInt(hex.slice(2, 4), 16) / 255, parseInt(hex.slice(4, 6), 16) / 255];
-    if (renderer3dFlatTintRgb.size >= 2048) renderer3dFlatTintRgb.clear();
-    renderer3dFlatTintRgb.set(lit, rgb);
-    return rgb;
-}
-
-function _pushFlatParticle(batch, p, x, z) {
-    let rgb = _getFlatLitRgb(p.color || '#fff', _flatLightAt(x, z, 0, false));
-    let alpha = Math.max(0.1, Math.min(1, (Number(p.life) || 0) / 35));
-    batch.push(x, z, 0.06, 0.06, rgb[0], rgb[1], rgb[2], alpha, 0, null);
-}
-
 function build3DFrameData(flat2d = false) {
     const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = getLiveRenderView();
 
@@ -1717,6 +1692,10 @@ function build3DFrameData(flat2d = false) {
     let backgroundVersionFor3D = _backgroundContentVersion;
     if (!fullVisibility) rebuildVisibilityMaskCacheIfNeeded();
     let overlays = build3DOverlayData(bounds, alpha);
+    let fxBatch = renderer3dFxBatch || (renderer3dFxBatch = new window.Defence3Renderer3D.FxBatch());
+    let fxPixelsPerTile = flat2d ? camera.zoom * TILE : ((renderer3dInstance && renderer3dInstance.lodPixelsPerWorld) || 32);
+    // Live effects are culled by live visibility, never by remembered fog.
+    beginFrameEffects(fxBatch, flat2d, bounds, getTeamLightingGrid(), fxPixelsPerTile);
     let soundGrid = audioSpatialGrid;
     let bgSoundGrid = audioSpatialGridBackground;
     let fxSoundGrid = audioSpatialGridEffects;
@@ -1858,7 +1837,7 @@ function build3DFrameData(flat2d = false) {
         let fxLevel = fxSoundRow ? fxSoundRow[x] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-        if (_reuseStatic3DObject(objects, cell.item, x, y, audioMove, audioHeight)) return;
+        if (_reuseStatic3DObject(objects, cell.item, x, y, audioMove, audioHeight)) { _pushStructureActivity(objects, cell.item, flat2d); return; }
         let item2DTexture = get3DExact2DFloorTexture(cell.item, cell.owner);
         let itemStatus = item2DTexture ? null : get3DBuildingTextureStatus(cell.item);
         push3DRenderObject(objects, {
@@ -1880,6 +1859,7 @@ function build3DFrameData(flat2d = false) {
             sideTint: get3DDamageFlashTint(cell.item, (BASE_CARD_TYPES[cell.item.type] || {}).color || get3DRenderOwnerColor(cell.owner))
         });
         _rememberStatic3DObject(objects, cell.item, x, y, audioMove, audioHeight, !item2DTexture);
+        _pushStructureActivity(objects, cell.item, flat2d);
     };
     // Floor items in row-major order. The live tile index lists them, so
     // only a remembered (history) grid needs a scan of every visible tile.
@@ -1950,7 +1930,7 @@ function build3DFrameData(flat2d = false) {
         let fxLevel = fxSoundRow ? fxSoundRow[s.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-        if (_reuseStatic3DObject(objects, s, s.gx, s.gy, audioMove, audioHeight)) continue;
+        if (_reuseStatic3DObject(objects, s, s.gx, s.gy, audioMove, audioHeight)) { _pushStructureActivity(objects, s, flat2d); continue; }
         let spawner2DTexture = get3DExact2DTexture(s);
         let spawner2DTextureFallback = renderer3dExactTextureFallback;
         let spawnerExtraBars = spawner2DTexture ? null : [];
@@ -1989,6 +1969,7 @@ function build3DFrameData(flat2d = false) {
             sideTint: get3DDamageFlashTint(s, (BASE_CARD_TYPES[s.type] || {}).color || get3DRenderOwnerColor(s.owner))
         });
         _rememberStatic3DObject(objects, s, s.gx, s.gy, audioMove, audioHeight, !spawner2DTexture || spawner2DTextureFallback);
+        _pushStructureActivity(objects, s, flat2d);
     }
 
     for (let b of barracks) {
@@ -2000,7 +1981,7 @@ function build3DFrameData(flat2d = false) {
         let fxLevel = fxSoundRow ? fxSoundRow[b.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-        if (_reuseStatic3DObject(objects, b, b.gx, b.gy, audioMove, audioHeight)) continue;
+        if (_reuseStatic3DObject(objects, b, b.gx, b.gy, audioMove, audioHeight)) { _pushStructureActivity(objects, b, flat2d); continue; }
         let barrack2DTexture = get3DExact2DTexture(b);
         let barrack2DTextureFallback = renderer3dExactTextureFallback;
         let barrackExtraBars = barrack2DTexture ? null : [];
@@ -2026,6 +2007,7 @@ function build3DFrameData(flat2d = false) {
             sideTint: get3DDamageFlashTint(b, (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color)
         });
         _rememberStatic3DObject(objects, b, b.gx, b.gy, audioMove, audioHeight, !barrack2DTexture || barrack2DTextureFallback);
+        _pushStructureActivity(objects, b, flat2d);
     }
 
     for (let d of droppedItems) {
@@ -2073,6 +2055,8 @@ function build3DFrameData(flat2d = false) {
         let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
         if (u.isSnake) {
             pushSnakeRenderObjects(objects, u, ux + reactiveOffsetX * audioMove * TILE, uy + reactiveOffsetY * audioMove * TILE, footprint);
+            let head = objects[objects.length - 1];
+            if (!flat2d) pushUnitMotionFx(u, head.x, head.z, footprint, head.scaleY);
         } else {
             // Everything but the interpolated position, walk cycle and
             // lighting changes only on ticks: refresh just those.
@@ -2087,6 +2071,7 @@ function build3DFrameData(flat2d = false) {
                 _touch3DPanel(o.topTextureCanvas);
                 o.x = ux / TILE + reactiveOffsetX * audioMove;
                 o.z = uy / TILE + reactiveOffsetY * audioMove;
+                o.y = cached.baseY + _unit3DFlightHeight(u, cached.activity);
                 o.walkPhase = _unit3DWalkPhase(u, cached.activity);
                 // A unit's own light changes only with ticks (or the viewer).
                 if (cached.sourceLightTick !== gameTime || cached.sourceLightPlayer !== localPlayerId) {
@@ -2096,10 +2081,14 @@ function build3DFrameData(flat2d = false) {
                 }
                 _relight3DObject(o, u, cached.tint, cached.sideTint, !!objects.flat2d, cached.sourceLight);
                 objects.push(o);
-                if (!flat2d) pushUnit3DActivityEffects(objects, u, cached.activity, ux / TILE, uy / TILE, footprint);
+                if (!flat2d) {
+                    pushUnit3DActivityEffects(objects, u, cached.activity, ux / TILE, uy / TILE, footprint);
+                    pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
+                }
                 continue;
             }
-            let modelScale = u.isFlying ? (u.isWorker ? 0.65 : 0.8) : 1;
+            // Mounts (pony, hippogriff) carry a rider: larger than a lone figure.
+            let modelScale = u.unitType === 'fast' ? 1.35 : u.unitType === 'scout' ? 1.15 : u.isFlying ? (u.isWorker ? 0.65 : 0.8) : 1;
             // The mounted panel is the unit's canonical 2D rendering at every LOD.
             // The shared status texture remains only a short-lived fallback while a
             // newly visible exact texture is rasterized within the frame budget.
@@ -2107,6 +2096,9 @@ function build3DFrameData(flat2d = false) {
                 ? '#f0a52b'
                 : ((BASE_UNIT_STATS[u.unitType] || BASE_UNIT_STATS.norm).color || null);
             let activity = getUnit3DActivity(u);
+            let moved = activity.mode !== 0 || activity.amount > 0;
+            let stillSince = moved || !cached ? gameTime : cached.stillSince;
+            activity = _unit3DIdleActivity(u, activity, stillSince);
             let unit2DTexture = get3DExact2DTexture(u, true);
             let unitTextureFallback = renderer3dExactTextureFallback;
             let unitStatus = unit2DTexture ? null : get3DUnitTextureStatus(u);
@@ -2116,10 +2108,11 @@ function build3DFrameData(flat2d = false) {
             }
             let unitTint = get3DDamageFlashTint(u, get3DRenderOwnerColor(u.owner));
             let unitSideTint = get3DDamageFlashTint(u, unitSideColor || get3DRenderOwnerColor(u.owner));
+            let baseY = getUnitHeightOffset(u);
             push3DRenderObject(objects, {
                 modelKey: `unit_${u.unitType || 'norm'}`,
                 x: ux / TILE + reactiveOffsetX * audioMove,
-                y: getUnitHeightOffset(u),
+                y: baseY + _unit3DFlightHeight(u, activity),
                 z: uy / TILE + reactiveOffsetY * audioMove,
                 scaleX: footprint * modelScale,
                 scaleY: Math.max(0.48, footprint * 1.45) * (1 + audioHeight) * modelScale,
@@ -2130,6 +2123,8 @@ function build3DFrameData(flat2d = false) {
                 walkPhase: _unit3DWalkPhase(u, activity),
                 animationMode: activity.mode,
                 weaponType: getUnit3DWeaponType(u),
+                // Flyers show altitude instead; a vision-stretched hippogriff breaks apart.
+                preserveModelHeight: !!u.isFlying,
                 isFlying: !!u.isFlying,
                 isWorker: !!u.isWorker,
                 tint: unitTint,
@@ -2138,85 +2133,21 @@ function build3DFrameData(flat2d = false) {
                 topTextureCanvas: unit2DTexture || get3DUnitTopTexture(u, u.owner, unitStatus),
                 sideTint: unitSideTint,
             });
-            renderer3dUnitObjects.set(u, { object: objects[objects.length - 1], tick: gameTime, view: view3DKey, activity,
+            renderer3dUnitObjects.set(u, { object: objects[objects.length - 1], tick: gameTime, view: view3DKey, activity, stillSince, baseY,
                 textureVersion: objects[objects.length - 1].topTextureCanvas && objects[objects.length - 1].topTextureCanvas._textureVersion,
                 tint: unitTint, sideTint: unitSideTint, dynamic: !unit2DTexture || unitTextureFallback || !!getDamageFlashState(u) });
-            if (!flat2d) pushUnit3DActivityEffects(objects, u, activity, ux / TILE, uy / TILE, footprint);
+            if (!flat2d) {
+                pushUnit3DActivityEffects(objects, u, activity, ux / TILE, uy / TILE, footprint);
+                let o = objects[objects.length - 1];
+                pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
+            }
         }
     }
 
     if (flat2d) drainFlatObjects();
-    for (let p of projectiles) {
-        let px = Number.isFinite(p.prevX) ? (p.prevX + (p.x - p.prevX) * alpha) : p.x;
-        let py = Number.isFinite(p.prevY) ? (p.prevY + (p.y - p.prevY) * alpha) : p.y;
-        let pgx = Math.floor(px / TILE), pgy = Math.floor(py / TILE);
-        if (pgx < bounds.minGx - 1 || pgx > bounds.maxGx + 1 || pgy < bounds.minGy - 1 || pgy > bounds.maxGy + 1) continue;
-        if (!fullVisibility && (!visibilityGrid[pgy] || visibilityGrid[pgy][pgx] === 0)) continue;
-        let bgSoundRow = bgSoundGrid[pgy];
-        let fxSoundRow = fxSoundGrid[pgy];
-        let bgLevel = bgSoundRow ? bgSoundRow[pgx] || 0 : 0;
-        let fxLevel = fxSoundRow ? fxSoundRow[pgx] || 0 : 0;
-        let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
-        if (flat2d) {
-            _pushFlatProjectile(flatBatch, p, px / TILE + reactiveOffsetX * audioMove, py / TILE + reactiveOffsetY * audioMove);
-            continue;
-        }
-        let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-        let projectileColor = (BASE_CARD_TYPES[p.type] || {}).color || '#fff';
-        let projectileKey = `projectile:${p.type}:${projectileColor}`;
-        push3DRenderObject(objects, {
-            modelKey: `projectile_${p.type || 'default'}`,
-            x: px / TILE + reactiveOffsetX * audioMove,
-            y: 0.18,
-            z: py / TILE + reactiveOffsetY * audioMove,
-            scaleX: 0.12,
-            scaleY: 0.12 * (1 + audioHeight),
-            scaleZ: 0.2,
-            rotationY: Math.atan2(Number(p.vx) || 0, Number(p.vy) || 1),
-            tint: projectileColor,
-            alpha: 0.95,
-            topTextureKey: projectileKey,
-            topTextureCanvas: get3DTopTextureCanvas(projectileKey, (g) => {
-                let size = g.canvas.width;
-                g.fillStyle = projectileColor;
-                g.beginPath();
-                g.arc(size * 0.5, size * 0.5, size * 0.18, 0, Math.PI * 2);
-                g.fill();
-                g.strokeStyle = '#fff';
-                g.lineWidth = Math.max(2, Math.round(size * 0.035));
-                g.stroke();
-            })
-        });
-    }
-
-    for (let p of particles) {
-        let px = Number.isFinite(p.prevX) ? (p.prevX + (p.x - p.prevX) * alpha) : p.x;
-        let py = Number.isFinite(p.prevY) ? (p.prevY + (p.y - p.prevY) * alpha) : p.y;
-        let pgx = Math.floor(px / TILE), pgy = Math.floor(py / TILE);
-        if (pgx < bounds.minGx - 1 || pgx > bounds.maxGx + 1 || pgy < bounds.minGy - 1 || pgy > bounds.maxGy + 1) continue;
-        if (!fullVisibility && (!visibilityGrid[pgy] || visibilityGrid[pgy][pgx] === 0)) continue;
-        let bgSoundRow = bgSoundGrid[pgy];
-        let fxSoundRow = fxSoundGrid[pgy];
-        let bgLevel = bgSoundRow ? bgSoundRow[pgx] || 0 : 0;
-        let fxLevel = fxSoundRow ? fxSoundRow[pgx] || 0 : 0;
-        let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
-        if (flat2d) {
-            _pushFlatParticle(flatBatch, p, px / TILE + reactiveOffsetX * audioMove, py / TILE + reactiveOffsetY * audioMove);
-            continue;
-        }
-        let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-        push3DRenderObject(objects, {
-            modelKey: 'particle',
-            x: px / TILE + reactiveOffsetX * audioMove,
-            y: 0.08,
-            z: py / TILE + reactiveOffsetY * audioMove,
-            scaleX: 0.06,
-            scaleY: 0.06 * (1 + audioHeight),
-            scaleZ: 0.06,
-            tint: p.color || '#fff',
-            alpha: Math.max(0.1, Math.min(1, (Number(p.life) || 0) / 35))
-        });
-    }
+    // Shots, debris, attacks and laser fences: GPU effect instances.
+    buildFrameEffects(projectiles, particles, towers);
+    endFrameEffects();
 
     for (let [key, state] of renderer3dOverlapFadeState) {
         if (activeOverlapFadeKeys.has(key)) continue;
@@ -2252,7 +2183,8 @@ function build3DFrameData(flat2d = false) {
         },
         buildPreview,
         objects,
-        flatBatch
+        flatBatch,
+        fx: fxBatch
     };
 }
 
@@ -3482,7 +3414,6 @@ function clearRendererTransientVisualCaches(options = null) {
         UNIT_LEVEL_TEXT_SPRITE_CACHE.clear();
         renderer3dTopTextureCache.clear();
         renderer3dExact2DTextureCache.clear();
-        renderer3dFlatProjectileSprites.clear();
         renderer3dFlatGeneration++;
         if (renderer3dInstance && renderer3dInstance.topTextureCache && typeof renderer3dInstance.topTextureCache.clear === 'function') {
             for (let entry of renderer3dInstance.topTextureCache.values()) renderer3dInstance.gl.deleteTexture(entry.texture);

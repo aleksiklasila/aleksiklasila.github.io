@@ -3050,7 +3050,6 @@ function queueAction(action) {
     let actorId = myPeerId || `p${localPlayerId}`;
     let finalAction = { ...action, teamId: localPlayerId, netId: `${actorId}:${nextLocalActionSeq++}` };
     localInputBuffer[tick].push(finalAction);
-    if (typeof noteCommandFeedback === 'function') noteCommandFeedback(finalAction, tick);
 
     // The tick is unsent (guest) or unsealed (host): rebuild its packet.
     delete lockstepLocalPacketByTick[tick];

@@ -21,7 +21,7 @@ Object.assign(c, {
     renderer3dExactTextureFallback: false, nextPanel: panelA,
 });
 vm.runInContext(slice('function _touch3DPanel', 'function cache3DExact2DTexture'), c);
-vm.runInContext(slice('let renderer3dFlatBatch = null;', 'const renderer3dFlatProjectileSprites'), c);
+vm.runInContext(slice('let renderer3dFlatBatch = null;', 'function build3DFrameData('), c);
 vm.runInContext('var batch = new window.Defence3Renderer3D.FlatSpriteBatch(2);', c);
 const push = (u, x, z, view = 1) => vm.runInContext('batch', c) && c._pushFlatUnit(c.batch, u, x, z, view);
 

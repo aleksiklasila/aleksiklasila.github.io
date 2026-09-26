@@ -1872,7 +1872,6 @@ function draw() {
 
     drawMarkers(moveMarkers, '#4f4');
     drawMarkers(attackMoveMarkers, '#f66');
-    drawCommandFeedback2D(ctx);
 
     // Build preview ghost
     let buildPreview = getCurrentBuildPreviewData();

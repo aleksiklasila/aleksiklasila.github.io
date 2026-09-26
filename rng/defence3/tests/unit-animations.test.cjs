@@ -19,13 +19,22 @@ assert.match(renderer3d, /anim:\$\{Number\(object\.animationMode\) \|\| 0\}/);
 assert.match(renderer, /pushUnit3DActivityEffects\(objects, u, activity/);
 
 for (const weapon of [
-    'king_sword', 'great_axe', 'warhammer', 'dual_blades', 'fire_blade', 'water_trident',
-    'ice_spear', 'poison_scythe', 'laser_staff', 'hammer', 'pickaxe', 'cutter',
+    'king_sword', 'great_axe', 'warhammer', 'dual_blades', 'fire_staff', 'water_staff',
+    'ice_staff', 'poison_staff', 'laser_staff', 'hammer', 'pickaxe', 'cutter',
     'healer_staff', 'research_orb', 'talons', 'claws'
 ]) {
     assert.match(renderer, new RegExp(`'${weapon}'`), `${weapon} should be assigned to a unit role`);
     assert.match(renderer3d, new RegExp(`weapon === '${weapon}'|weapon === \\"${weapon}\\"|:${weapon}`), `${weapon} needs 3D geometry`);
 }
+// Idle rest poses: units that stood still settle (workers sit, mounts graze).
+assert.match(renderer, /mode: 7, amount:/, 'idle pose is produced');
+assert.match(renderer3d, /animationMode == 7\.0/, 'idle pose animates the rig');
+assert.match(renderer3d, /function poseFigureVertex/, 'picking mirrors the animated pose');
+// Roles have their own body plans; related roles share one.
+for (const kind of ["'rider:dual_blades'", "'griffin:javelin'", "'balloon:medic'", "'drone:instruments'", '`knight:', '`ogre:', '`mage:']) {
+    assert.ok(renderer3d.includes(kind), `${kind} body plan`);
+}
+assert.match(renderer3d, /if \(\/_resistant\$\/\.test\(type\)\) return `mage:/, 'every elemental caster is a mage');
 assert.match(renderer, /if \(activity\.mode === 3\) return;/);
 assert.match(renderer, /u\.unitType === 'collector'[\s\S]*?'#f0a52b'/);
 assert.match(renderer, /cell\.item\.type === 'house' \? 0\.82 : 0\.14/);
@@ -34,7 +43,8 @@ assert.match(renderer3d, /return 'serpent:engine'/);
 assert.match(renderer3d, /return 'item:house'/);
 assert.match(renderer3d, /Paired medical booms are mounted to the wing roots/);
 assert.match(renderer3d, /Flying fighters carry slim forward blades on top of their wings/);
-assert.match(renderer3d, /let equipmentYaw = \(kind === 'figure' \|\| kind === 'heavy' \|\| kind === 'worker'\) \? Math\.PI \* \.5 : 0/);
+assert.match(renderer3d, /let humanoid = kind === 'figure' \|\| kind === 'heavy' \|\| kind === 'knight' \|\| kind === 'ogre' \|\| kind === 'mage' \|\| kind === 'worker'/);
+assert.match(renderer3d, /let equipmentYaw = humanoid \? Math\.PI \* \.5 : 0/);
 assert.match(renderer3d, /part\(x, y, z, sx, sy, sz, surface, joint, pivot, taper, equipmentYaw\)/);
 assert.match(renderer3d, /wp\(\.47,\.71,\.16,\.21,\.66,\.055,1,handJoint,handPivot,\.18\)/);
 

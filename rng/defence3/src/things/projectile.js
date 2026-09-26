@@ -11,6 +11,8 @@ class Projectile {
         // between browsers, and lockstep peers must agree on every shot.
         let dx = t.x - x, dy = t.y - y;
         let len = detHypot(dx, dy);
+        // Visual only: the shot's planned length shapes its rendered arc.
+        this.aimDist = len;
         if (len > 0) { this.vx = dx / len * 8; this.vy = dy / len * 8; }
         else { this.vx = 8; this.vy = 0; }
         this.dmg = dmg; this.level = level;
@@ -110,6 +112,7 @@ class Projectile {
             createExplosion(this.x, this.y, "#fff", 4);
         }
 
+        recordCombatFx(COMBAT_FX.IMPACT, this.startX, this.startY, this.x, this.y, this.type);
         pushHostileDamageAlert(t, targetEnergyBefore - t.energy, this.sourceOwner);
     recordDamageVisual(t, targetEnergyBefore - t.energy, this.sourceOwner);
         if (targetEnergyBefore > t.energy) playSound('impact', t.x, t.y, this.type);
@@ -166,6 +169,7 @@ class Projectile {
             b.energy -= actualDmg;
         }
 
+        recordCombatFx(COMBAT_FX.IMPACT, this.startX, this.startY, this.x, this.y, this.type);
         pushHostileDamageAlert(b, buildingEnergyBefore - b.energy, this.sourceOwner);
     recordDamageVisual(b, buildingEnergyBefore - b.energy, this.sourceOwner);
         if (buildingEnergyBefore > b.energy) playSound('impact', b.x, b.y, this.type);

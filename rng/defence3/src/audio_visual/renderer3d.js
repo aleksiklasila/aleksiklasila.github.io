@@ -280,6 +280,187 @@
         }
     }
 
+    // ---- Combat and activity effects ------------------------------------
+    // Short-lived shapes (shots, slashes, runes, debris, smoke) written by the
+    // frame builder straight into one typed batch per mesh: FX_STRIDE floats
+    // each, drawn with one instanced call per mesh and never sorted.
+    //   x, y, z, yaw | sx, sy, sz, pitch | r, g, b, alpha | pattern, param, roll, additive
+    // Patterns: 0 lit solid, 1 emissive solid, 2+ ground/plane decals.
+    const FX_STRIDE = 16;
+    const FX_MESH_BOX = 0, FX_MESH_ORB = 1, FX_MESH_SPIKE = 2, FX_MESH_DECAL = 3, FX_MESH_COUNT = 4;
+    const FX_PATTERN = { LIT: 0, GLOW_SOLID: 1, GLOW: 2, RING: 3, RUNE: 4, CRESCENT: 5, CLAWS: 6, CROSS: 7, SHADOW: 8, SPLAT: 9 };
+
+    class FxBatch {
+        constructor() {
+            this.data = [];
+            this.count = new Int32Array(FX_MESH_COUNT);
+            for (let i = 0; i < FX_MESH_COUNT; i++) this.data.push(new Float32Array(256 * FX_STRIDE));
+            this.total = 0;
+        }
+
+        reset() {
+            this.count.fill(0);
+            this.total = 0;
+        }
+
+        push(mesh, x, y, z, yaw, sx, sy, sz, pitch, r, g, b, alpha, pattern, param, roll, additive) {
+            let i = this.count[mesh], d = this.data[mesh];
+            if ((i + 1) * FX_STRIDE > d.length) {
+                let grown = new Float32Array(d.length * 2);
+                grown.set(d);
+                this.data[mesh] = d = grown;
+            }
+            let o = i * FX_STRIDE;
+            d[o] = x; d[o + 1] = y; d[o + 2] = z; d[o + 3] = yaw;
+            d[o + 4] = sx; d[o + 5] = sy; d[o + 6] = sz; d[o + 7] = pitch;
+            d[o + 8] = r; d[o + 9] = g; d[o + 10] = b; d[o + 11] = alpha;
+            d[o + 12] = pattern; d[o + 13] = param; d[o + 14] = roll; d[o + 15] = additive;
+            this.count[mesh] = i + 1;
+            this.total++;
+        }
+    }
+
+    function createCenteredCubeData() {
+        let cube = createCubeData();
+        let positions = new Float32Array(cube.positions);
+        for (let i = 1; i < positions.length; i += 3) positions[i] -= .5;
+        return { positions, normals: cube.normals, indices: cube.indices, uvs: cube.uvs };
+    }
+
+    // Flat-shaded icosahedron: reads as a ball under cel lighting.
+    function createOrbData() {
+        let t = (1 + Math.sqrt(5)) / 2;
+        let v = [[-1,t,0],[1,t,0],[-1,-t,0],[1,-t,0],[0,-1,t],[0,1,t],[0,-1,-t],[0,1,-t],[t,0,-1],[t,0,1],[-t,0,-1],[-t,0,1]]
+            .map(p => { let l = Math.hypot(p[0], p[1], p[2]) * 2; return [p[0] / l, p[1] / l, p[2] / l]; });
+        let faces = [[0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],[1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+            [3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],[4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]];
+        let positions = [], indices = [];
+        for (let f of faces) for (let k of f) { indices.push(positions.length / 3); positions.push(...v[k]); }
+        positions = new Float32Array(positions);
+        indices = new Uint32Array(indices);
+        return { positions, normals: computeNormals(positions, indices), indices, uvs: new Float32Array(positions.length / 3 * 2) };
+    }
+
+    // Four-sided spike: square base on y = 0, apex at y = 1. Flames, ice,
+    // shards, arrowheads and javelins (pitched along their flight).
+    function createSpikeData() {
+        let base = [[-.5,0,-.5],[.5,0,-.5],[.5,0,.5],[-.5,0,.5]], apex = [0,1,0];
+        let positions = [], indices = [];
+        for (let i = 0; i < 4; i++) {
+            let a = base[i], b = base[(i + 1) % 4];
+            indices.push(positions.length / 3, positions.length / 3 + 1, positions.length / 3 + 2);
+            positions.push(...a, ...apex, ...b);
+        }
+        indices.push(positions.length / 3, positions.length / 3 + 1, positions.length / 3 + 2,
+            positions.length / 3, positions.length / 3 + 2, positions.length / 3 + 3);
+        positions.push(...base[0], ...base[1], ...base[2], ...base[3]);
+        positions = new Float32Array(positions);
+        indices = new Uint32Array(indices);
+        return { positions, normals: computeNormals(positions, indices), indices, uvs: new Float32Array(positions.length / 3 * 2) };
+    }
+
+    const FX_VERTEX_GLSL = `#version 300 es
+        precision highp float;
+        layout(location=0) in vec3 aPosition;
+        layout(location=1) in vec3 aNormal;
+        layout(location=3) in vec4 iA;
+        layout(location=4) in vec4 iB;
+        layout(location=5) in vec4 iC;
+        layout(location=6) in vec4 iD;
+        uniform mat4 uViewProjection;
+        uniform float uFlat;
+        out vec3 vNormal;
+        out vec4 vColor;
+        out vec2 vUv;
+        flat out vec3 vStyle;
+        vec3 orient(vec3 p) {
+            float cr = cos(iD.z), sr = sin(iD.z);
+            p.xy = vec2(cr * p.x - sr * p.y, sr * p.x + cr * p.y);
+            float cp = cos(iB.w), sp = sin(iB.w);
+            p.yz = vec2(cp * p.y - sp * p.z, sp * p.y + cp * p.z);
+            float cy = cos(iA.w), sy = sin(iA.w);
+            return vec3(cy * p.x + sy * p.z, p.y, -sy * p.x + cy * p.z);
+        }
+        void main() {
+            vec3 world = iA.xyz + orient(aPosition * iB.xyz);
+            vNormal = orient(aNormal / max(iB.xyz, vec3(.0001)));
+            // The 2D view is an oblique projection: height lifts a shape up
+            // the screen, so arcs and debris read without a 3D camera.
+            if (uFlat > .5) { world.z -= world.y * .6; world.y = .1; }
+            gl_Position = uViewProjection * vec4(world, 1.);
+            vColor = iC;
+            vUv = aPosition.xz + .5;
+            vStyle = vec3(iD.x, iD.y, iD.w);
+        }`;
+
+    // A function: the shared lighting GLSL is declared further down.
+    const fxFragmentGlsl = () => `#version 300 es
+        precision highp float;
+        in vec3 vNormal;
+        in vec4 vColor;
+        in vec2 vUv;
+        flat in vec3 vStyle;
+        uniform float uFlat;
+        ${CEL_LIGHTING_GLSL}
+        layout(location=0) out vec4 outColor;
+        const float PI = 3.14159265;
+        float band(float v, float center, float width) { return 1. - smoothstep(width * .5, width, abs(v - center)); }
+        void main() {
+            float pattern = floor(vStyle.x + .5), param = vStyle.y;
+            vec3 color = vColor.rgb;
+            float mask = 1.;
+            if (pattern < 1.5) {
+                float diffuse = max(dot(normalize(vNormal), normalize(vec3(-.42, .86, .31))), 0.);
+                float shade = uFlat > .5 ? mix(.8, 1., diffuse) : celShade(diffuse);
+                color *= pattern < .5 ? shade : mix(.82, 1.12, diffuse);
+            } else {
+                vec2 q = vUv * 2. - 1.;
+                float r = length(q);
+                float ang = atan(q.x, q.y);
+                if (pattern == 2.) mask = pow(max(0., 1. - r), 2.);
+                else if (pattern == 3.) mask = band(r, param, .16) * step(r, 1.);
+                else if (pattern == 4.) {
+                    // Rune circle: two rings, ticks and a turning hexagram.
+                    float a = ang + param;
+                    float ticks = step(fract(a * 12. / (2. * PI)), .18) * step(.72, r) * step(r, .9);
+                    float sector = 2. * PI / 3.;
+                    float tri1 = r * cos(mod(a, sector) - sector * .5) - .3;
+                    float tri2 = r * cos(mod(a + sector * .5, sector) - sector * .5) - .3;
+                    mask = max(max(band(r, .94, .07), band(r, .72, .05)), max(ticks, max(band(tri1, 0., .05), band(tri2, 0., .05))));
+                    mask *= step(r, 1.);
+                } else if (pattern == 5.) {
+                    // Crescent swept by param from one tip to the other.
+                    float span = 1.35, t = clamp(ang / span, -1., 1.);
+                    float width = .2 * (1. - t * t);
+                    mask = band(r, .72, width) * step(abs(ang), span) * step(ang, -span + 2. * span * param);
+                } else if (pattern == 6.) {
+                    // Three raking claw strokes.
+                    vec2 c = mat2(.87, .5, -.5, .87) * q;
+                    float along = clamp(c.y / .8, -1., 1.);
+                    float reach = step(c.y, -.8 + 1.6 * param);
+                    float w = .09 * (1. - along * along);
+                    mask = max(band(c.x, -.34, w), max(band(c.x, 0., w), band(c.x, .34, w))) * step(abs(c.y), .8) * reach;
+                } else if (pattern == 7.) {
+                    // Crossed slashes.
+                    vec2 a = normalize(vec2(1., 1.)), b = normalize(vec2(-1., 1.));
+                    float la = abs(dot(q, a)), lb = abs(dot(q, b));
+                    float ta = dot(q, vec2(-a.y, a.x)), tb = dot(q, vec2(-b.y, b.x));
+                    mask = max(band(ta, 0., .14 * (1. - la * la)) * step(la, .95) * step(dot(q, a), -.95 + 1.9 * param),
+                               band(tb, 0., .14 * (1. - lb * lb)) * step(lb, .95) * step(dot(q, b), -.95 + 1.9 * clamp(param * 1.6 - .6, 0., 1.)));
+                } else if (pattern == 8.) {
+                    mask = 1. - smoothstep(.35, 1., r);
+                    color = vec3(0.);
+                } else if (pattern == 9.) {
+                    float edge = .62 + .14 * sin(ang * 7. + param * 3.) + .06 * sin(ang * 13.);
+                    mask = 1. - smoothstep(edge - .1, edge, r);
+                }
+                if (mask <= .003) discard;
+            }
+            float alpha = vColor.a * mask;
+            // Premultiplied: additive shapes add light, others cover.
+            outColor = vec4(color * alpha, alpha * (1. - vStyle.z));
+        }`;
+
     const SHADOW_LIGHT_DIRECTION = (() => {
         let x = -0.42;
         let y = 0.86;
@@ -690,14 +871,21 @@
     }
 
     // Merged procedural parts: one mesh and one draw per material batch, never
-    // one object/draw per limb. Surface IDs: type-colored cloth, neutral armor, player trim,
-    // eyes and the complete 2D status render (on dedicated rectangular quads).
+    // one object/draw per limb. Surface IDs: 0 type-colored cloth, 1 neutral
+    // armor, 2 player trim, 3 eye glow, 4 the complete 2D status render (on
+    // dedicated rectangular quads), 5 leather/wood/fur, 6 ivory/bone/feathers,
+    // 7 type-colored glow (staff orbs), 8 brass/gold, 9 medic red.
+    // Joints: +-1 limbs, 2 capes/tails, +-3 wings (root at the pivot), +-4
+    // quadruped legs (diagonal pairs), 5 neck/head (pivot y, pivot z), +-6
+    // parts spinning about the model's vertical axis.
+    // Every role has its own silhouette; roles that share a purpose share a
+    // body plan (all casters are robed mages, all ground workers are blocky).
     function createFigureData(kind, simplified = false) {
         let variant = kind;
         kind = kind.split(':')[0];
         let weapon = variant.includes(':') ? variant.slice(variant.indexOf(':') + 1) : '';
         let positions = [], normals = [], indices = [], uvs = [], details = [];
-        function part(x, y, z, sx, sy, sz, surface = 0, joint = 0, pivot = 0, taper = 1, yaw = 0) {
+        function part(x, y, z, sx, sy, sz, surface = 0, joint = 0, pivot = 0, taper = 1, yaw = 0, pivotZ = 0) {
             // At strategic zoom, subpixel ornaments turn into noisy gray specks.
             // Keep broad plates (even thin ones), bodies, limbs and sprite panels.
             if (simplified) {
@@ -714,7 +902,7 @@
                 let localX = px * sx * width, localZ = pz * sz * width;
                 positions.push(x + localX * yawCos + localZ * yawSin, y + py * sy, z - localX * yawSin + localZ * yawCos);
                 uvs.push(cube.uvs[i * 2], 1 - cube.uvs[i * 2 + 1]);
-                details.push(surface, joint, pivot, 0);
+                details.push(surface, joint, pivot, pivotZ);
             }
             for (let index of cube.indices) indices.push(base + index);
         }
@@ -730,7 +918,25 @@
             uvs.push(0,0,1,0,1,1,0,1);
             indices.push(base,base+1,base+2,base,base+2,base+3);
         }
-        if (kind === 'figure' || kind === 'heavy' || kind === 'worker') {
+        // Rear display: the canonical 2D render on a rigid backing plate.
+        function backPanel(y, z, size) {
+            part(0, y - .02, z, size + .04, size + .04, .04, 2);
+            panel(0, y, z - .024, size, size);
+        }
+        // A small seated rider (hands at the pivot height) for mounts.
+        function rider(y, z) {
+            for (let side of [-1, 1]) part(side * .17, y - .12, z + .02, .07, .17, .11, 0);
+            part(0, y, z, .25, .24, .18, 0, 0, 0, .8);
+            part(0, y + .03, z, .27, .05, .20, 2);
+            part(0, y + .23, z, .21, .19, .19, 0, 0, 0, .3); // hood
+            part(0, y + .25, z + .085, .14, .08, .03, 1);
+            for (let side of [-1, 1]) {
+                part(side * .035, y + .285, z + .10, .03, .015, .01, 3);
+                part(side * .17, y + .03, z + .02, .07, .18, .08, 0, -side, y + .2);
+            }
+        }
+        let humanoid = kind === 'figure' || kind === 'heavy' || kind === 'knight' || kind === 'ogre' || kind === 'mage' || kind === 'worker';
+        if (kind === 'figure' || kind === 'heavy') {
             let bulk = kind === 'heavy' ? 1.2 : 1;
             part(0, .29, 0, .52 * bulk, .39, .34, 0, 0, 0, .76);
             part(0, .66, 0, .47, .34, .43, 0, 0, 0, .16); // pointed hood
@@ -746,25 +952,168 @@
             part(0, .19, -.205, .61, .47, .065, 0, 2, .66, .72); // cape
             part(0, .18, -.253, .53, .53, .04, 2); // rigid, readable back display
             panel(0, .20, -.277, .49, .49);
-            if (kind === 'worker') {
-                part(.38, .34, -.10, .19, .26, .22, 2, -1, .65);
-                part(0, .79, 0, .56, .055, .47, 2); // worker helmet brim
-                if (!weapon) {
-                    part(.39, .17, .10, .065, .40, .065, 1, -1, .65);
-                    part(.39, .48, .10, .28, .09, .12, 2, -1, .65); // fallback tool
-                }
-            } else if (kind === 'figure' && !weapon) {
+            if (kind === 'figure' && !weapon) {
                 part(.36, .22, .12, .05, .40, .06, 2, -1, .65); // blade
             }
-            if (kind === 'heavy') part(-.43, .26, .12, .24, .32, .10, 2, 1, .65);
-            if (weapon === 'king_sword') for (let x of [-.18,0,.18]) part(x,.88,0,.07,.14,.12,2);
-            if (['fire_blade','water_trident','ice_spear','poison_scythe','laser_staff'].includes(weapon)) {
-                for (let side of [-1,1]) part(side*.34,.67,0,.15,.16,.19,2,0,0,.1);
+            if (kind === 'figure') {
+                // Footman's round shield on the off hand.
+                part(-.40, .22, .11, .06, .30, .30, 2, 1, .65);
+                part(-.44, .31, .11, .03, .12, .12, 8, 1, .65);
             }
+            if (kind === 'heavy') part(-.43, .26, .12, .24, .32, .10, 2, 1, .65);
+            if (weapon === 'king_sword') {
+                for (let x of [-.18,0,.18]) part(x,.88,0,.07,.14,.12,8);
+                part(0,.83,0,.46,.06,.40,8); // crown band
+            }
+        } else if (kind === 'knight') {
+            // Tank: plate armor, a closed helm with a glowing slit and a
+            // tower shield. Broad and square from every angle.
+            for (let side of [-1, 1]) {
+                part(side * .17, .03, 0, .18, .29, .20, 1, side, .32);
+                part(side * .17, .0, .05, .21, .08, .30, 1, side, .32);
+                part(side * .40, .30, 0, .16, .32, .18, 1, -side, .64);
+                part(side * .40, .56, 0, .28, .14, .32, 2, -side, .64); // pauldrons
+            }
+            part(0, .30, 0, .64, .37, .42, 1, 0, 0, .86);
+            part(0, .28, .205, .40, .34, .03, 0); // tabard
+            part(0, .30, 0, .66, .06, .44, 2);
+            part(0, .66, 0, .34, .30, .34, 1); // helm
+            part(0, .76, .171, .25, .035, .01, 3);
+            part(0, .95, -.02, .07, .15, .24, 2); // crest
+            part(-.49, .16, .10, .08, .56, .44, 2, 1, .64); // tower shield
+            part(-.53, .36, .10, .03, .16, .16, 8, 1, .64);
+            backPanel(.20, -.235, .49);
+        } else if (kind === 'ogre') {
+            // Boss: a hunched, horned brute, visibly the largest thing walking.
+            for (let side of [-1, 1]) {
+                part(side * .20, .02, 0, .22, .26, .24, 1, side, .28);
+                part(side * .45, .14, .05, .19, .46, .21, 0, -side, .62); // long arms
+                part(side * .45, .10, .05, .21, .08, .23, 5, -side, .62);
+                part(side * .17, .80, .15, .06, .20, .06, 6, 0, 0, .25); // horns
+                part(side * .07, .745, .30, .05, .03, .02, 3);
+                part(side * .08, .60, .31, .04, .09, .04, 6, 0, 0, .4); // tusks
+            }
+            part(0, .24, .02, .74, .42, .54, 0, 0, 0, .82);
+            part(0, .30, 0, .76, .06, .56, 2);
+            part(0, .58, -.05, .68, .17, .46, 0, 0, 0, .72); // hunched shoulders
+            part(0, .60, .16, .30, .23, .28, 0);
+            backPanel(.22, -.27, .49);
+        } else if (kind === 'mage') {
+            // Every caster: long robe, wide-brimmed pointed hat and a staff whose
+            // head names the element. The robe and orb carry the element color.
+            part(0, 0, 0, .56, .62, .46, 0, 2, .62, .55);
+            part(0, 0, 0, .60, .06, .50, 2);
+            part(0, .34, 0, .40, .05, .34, 2); // sash
+            part(0, .58, 0, .25, .20, .25, 1); // shadowed face
+            for (let side of [-1, 1]) {
+                part(side * .06, .67, .126, .045, .025, .015, 3);
+                part(side * .29, .32, 0, .14, .28, .16, 0, -side, .62, .7); // sleeves
+                part(side * .29, .30, 0, .09, .05, .10, 6, -side, .62); // hands
+            }
+            part(0, .76, .03, .42, .04, .40, 2); // hat brim (clear of the back display)
+            part(0, .78, .03, .30, .32, .30, 0, 0, 0, .06); // hat cone
+            backPanel(.16, -.215, .46);
+        } else if (kind === 'worker') {
+            // Ground workers are blocky: cube head, hard hat, square body and a
+            // backpack carrying their 2D display.
+            for (let side of [-1, 1]) {
+                part(side * .15, .02, 0, .16, .24, .18, 1, side, .28);
+                part(side * .15, 0, .04, .18, .07, .25, 5, side, .28);
+                part(side * .34, .30, 0, .13, .27, .14, 0, -side, .62);
+                part(side * .34, .26, 0, .135, .06, .145, 6, -side, .62);
+                part(side * .07, .69, .131, .04, .04, .01, 1);
+            }
+            part(0, .24, 0, .52, .36, .36, 0);
+            part(0, .26, .181, .34, .26, .02, 2); // bib
+            part(0, .24, 0, .54, .05, .38, 5); // tool belt
+            part(0, .58, 0, .28, .24, .26, 6); // cube head
+            part(0, .82, 0, .32, .10, .30, 0); // hard hat
+            part(0, .82, .05, .37, .03, .38, 0);
+            part(0, .92, 0, .06, .02, .30, 2); // hat ridge
+            part(0, .18, -.25, .48, .48, .14, 5); // backpack
+            panel(0, .20, -.322, .44, .44);
+        } else if (kind === 'rider') {
+            // Fast raiders ride a pony (player-colored mane and blanket).
+            part(0, .28, -.02, .34, .24, .62, 5);
+            part(0, .30, .26, .30, .22, .14, 5);
+            part(0, .46, .30, .16, .24, .17, 5, 5, .46, 1, 0, .30); // neck
+            part(0, .62, .42, .15, .14, .28, 5, 5, .46, .85, 0, .30); // head
+            part(0, .60, .56, .12, .10, .08, 1, 5, .46, 1, 0, .30); // muzzle
+            part(0, .57, .27, .05, .20, .14, 2, 5, .46, 1, 0, .30); // mane
+            for (let side of [-1, 1]) {
+                part(side * .05, .76, .36, .03, .07, .03, 5, 5, .46, 1, 0, .30); // ears
+                part(side * .05, .69, .52, .03, .03, .01, 3, 5, .46, 1, 0, .30);
+                for (let end of [-1, 1]) {
+                    let z = end > 0 ? .20 : -.24, joint = side * end > 0 ? 4 : -4;
+                    part(side * .11, .02, z, .08, .30, .09, 5, joint, .30);
+                    part(side * .11, 0, z + .01, .09, .05, .10, 1, joint, .30);
+                }
+            }
+            part(0, .36, -.36, .07, .20, .06, 2, 2, .52); // tail
+            part(0, .52, -.04, .38, .03, .32, 2); // blanket
+            rider(.55, -.02);
+            // Banner behind the rider carries the 2D display.
+            part(0, .54, -.20, .41, .41, .03, 2);
+            panel(0, .56, -.218, .37, .37);
+            for (let side of [-1, 1]) {
+                part(side * .20, .57, .06, .03, .05, .30, 1, -side, .75);
+                part(side * .20, .55, -.08, .04, .08, .05, 8, -side, .75);
+            }
+        } else if (kind === 'griffin') {
+            // Scouts: a hippogriff (eagle fore, horse hind) with a rider and
+            // javelin; it hovers, so the display lies on its back.
+            part(0, .30, -.08, .30, .22, .56, 0);
+            part(0, .28, .18, .30, .28, .22, 6);
+            part(0, .46, .28, .18, .20, .18, 6, 5, .46, 1, 0, .26);
+            part(0, .52, .42, .07, .06, .13, 8, 5, .46, .3, 0, .26); // beak
+            for (let side of [-1, 1]) {
+                part(side * .06, .58, .36, .03, .03, .02, 3, 5, .46, 1, 0, .26);
+                part(side * .10, .08, .20, .07, .22, .08, 6, side * 4, .30); // talons
+                part(side * .10, .10, -.28, .08, .22, .09, 0, -side * 4, .30); // hind legs
+                part(side * .36, .44, -.04, .48, .05, .38, 0, side * 3, .44);
+                part(side * .64, .43, -.12, .26, .04, .26, 6, side * 3, .44, .2);
+            }
+            part(0, .32, -.40, .06, .16, .09, 0, 2, .46);
+            rider(.53, .02);
+            part(.15, .60, .08, .03, .03, .62, 5, -1, .72); // javelin
+            part(.15, .595, .40, .05, .05, .10, 1, -1, .72, .1);
+            panel(0, .545, -.24, .40, .40, true);
+        } else if (kind === 'balloon') {
+            // Healers float under a balloon marked with a medic's cross.
+            // Stacked rings approximate a round envelope.
+            part(0, .42, 0, .26, .05, .26, 0);
+            part(0, .47, 0, .50, .07, .50, 0);
+            part(0, .54, 0, .68, .30, .68, 0);
+            part(0, .84, 0, .56, .08, .56, 0);
+            part(0, .92, 0, .38, .05, .38, 0);
+            for (let face of [-1, 1]) {
+                part(0, .66, face * .365, .28, .07, .02, 9);
+                part(0, .60, face * .365, .07, .20, .02, 9);
+                part(face * .365, .66, 0, .02, .07, .28, 9);
+                part(face * .365, .60, 0, .02, .20, .07, 9);
+                for (let side of [-1, 1]) part(side * .14, .20, face * .14, .02, .24, .02, 1);
+            }
+            part(0, .02, 0, .30, .18, .30, 5, 2, .3);
+            part(0, .18, 0, .34, .03, .34, 2, 2, .3);
+            part(0, .30, 0, .07, .10, .07, 7);
+            panel(0, .975, 0, .46, .46, true);
+        } else if (kind === 'drone') {
+            // Researchers: a hovering instrument with two counter-turning rings.
+            part(0, .24, 0, .30, .30, .30, 1);
+            part(0, .31, .155, .16, .16, .02, 3);
+            part(0, .54, 0, .22, .06, .22, 0);
+            part(0, .18, 0, .18, .06, .18, 0);
+            for (let s of [-1, 1]) {
+                part(0, .40, s * .31, .62, .04, .05, 0, 6, 0);
+                part(s * .31, .40, 0, .05, .04, .62, 0, 6, 0);
+                part(0, .14, s * .25, .50, .03, .04, 2, -6, 0);
+                part(s * .25, .14, 0, .04, .03, .50, 2, -6, 0);
+            }
+            panel(0, .605, 0, .46, .46, true);
         } else if (kind === 'bird') {
             part(0,.30,0,.30,.25,.64,1,0,0,.65);
             part(0,.49,.25,.25,.21,.26,0,0,0,.55);
-            part(0,.51,.43,.11,.06,.22,2,0,0,.1); // beak
+            part(0,.51,.43,.11,.06,.22,8,0,0,.1); // beak
             for (let side of [-1,1]) {
                 part(side*.10,.60,.37,.045,.025,.035,3);
                 part(side*.35,.43,-.04,.48,.065,.40,1,side*3);
@@ -780,7 +1129,7 @@
             }
         } else if (kind === 'mole') {
             part(0,.07,0,.67,.39,.73,0,0,0,.55);
-            part(0,.14,.39,.27,.17,.28,1,0,0,.12);
+            part(0,.14,.39,.27,.17,.28,1,5,.20,.12,0,.34); // snout sniffs
             for (let side of [-1,1]) part(side*.34,.025,.19,.19,.09,.40,2,side,.20);
             panel(0,.465,-.03,.48,.46,true);
         } else if (kind === 'serpent') {
@@ -800,14 +1149,26 @@
             part(0, 0, 0, 1, .12, 1, 1);
             part(0, .12, 0, .84, .075, .84, 2);
             if (kind === 'tower') {
+                let sub = variant.slice(6);
                 part(0, .18, 0, .57, .49, .57, 0, 0, 0, .76);
                 part(0, .67, 0, .80, .19, .70, 1);
-                part(0, .73, .31, .21, .14, .66, 2);
-                part(0, .745, .645, .12, .10, .015, 3);
+                if (sub !== 'laser') {
+                    part(0, .73, .31, .21, .14, .66, 2);
+                    part(0, .745, .645, .12, .10, .015, 3);
+                }
                 panel(0, .88, 0, .94, .94, true, 0, 0, true);
-                if (variant.endsWith(':twin')) for (let side of [-1,1]) part(side*.22,.73,.34,.10,.12,.66,2);
-                if (variant.endsWith(':sniper')) part(0,.74,.56,.12,.10,.65,1);
-                if (variant.endsWith(':energy')) for (let side of [-1,1]) part(side*.27,.49,.10,.12,.21,.16,3);
+                if (sub === 'twin') for (let side of [-1,1]) part(side*.22,.73,.34,.10,.12,.66,2);
+                if (sub === 'sniper') part(0,.74,.56,.12,.10,.65,1);
+                if (sub === 'energy') for (let side of [-1,1]) part(side*.27,.49,.10,.12,.21,.16,3);
+                // Type details stay below the roof display.
+                if (sub === 'fire') { part(0,.70,.30,.34,.16,.42,2,0,0,.7); part(0,.72,.52,.20,.08,.06,7); }
+                if (sub === 'water') { part(0,.34,-.34,.46,.40,.20,0); for (let y of [.40,.62]) part(0,y,-.34,.50,.04,.24,2); }
+                if (sub === 'ice') for (let side of [-1,1]) part(side*.36,.56,0,.14,.30,.14,7,0,0,.1);
+                if (sub === 'poison') for (let side of [-1,1]) { part(side*.30,.30,-.22,.20,.34,.20,0); part(side*.30,.64,-.22,.22,.04,.22,2); }
+                if (sub === 'sand') part(0,.46,-.30,.30,.30,.26,5,0,0,1.45);
+                if (sub === 'elements') for (let x of [-.3,.3]) for (let z of [-.3,.3]) part(x,.60,z,.10,.10,.10,7);
+                if (sub === 'watch') for (let side of [-1,1]) part(side*.34,.58,.18,.08,.22,.08,8);
+                if (sub === 'laser') for (let x of [-.3,.3]) for (let z of [-.3,.3]) part(x,.56,z,.08,.30,.08,7,0,0,.3);
             } else if (kind === 'mine') {
                 part(0,.19,0,.91,.30,.91,0);
                 panel(0,.50,0,.98,.98,true);
@@ -817,6 +1178,7 @@
                     part(0,.195,0,.78,.40,.72,0,0,0,.92); // walls
                     part(0,.52,0,.92,.10,.84,2); // eaves
                     part(0,.195,.375,.25,.30,.035,1); // front door
+                    for (let side of [-1,1]) part(side*.25,.33,.37,.12,.10,.02,8); // lit windows
                     panel(0,.63,0,.86,.78,true,0,0,true);
                 } else {
                     part(0, .20, 0, .69, .47, .69, 0, 0, 0, .8);
@@ -834,6 +1196,13 @@
                     part(0,.30,-.405,.09,.29,.025,3);
                     part(0,.40,-.42,.29,.09,.025,3);
                 }
+                if (kind === 'barrack') {
+                    // Weapon racks flank the door.
+                    for (let side of [-1,1]) for (let k of [0,1]) {
+                        part(side*(.25+k*.07),.18,.43,.025,.50,.025,5);
+                        part(side*(.25+k*.07),.66,.43,.05,.08,.03,1,0,0,.1);
+                    }
+                }
                 // Keep the roof HUD completely unobstructed. The former pair of
                 // player-colored corner blocks covered the first and last parts
                 // of long level labels when the roof was viewed obliquely.
@@ -844,12 +1213,14 @@
         // joint so the existing attack/work poses swing the complete silhouette.
         let handJoint = kind === 'bird' || kind === 'mole' ? 0 : -1;
         let handPivot = kind === 'bird' || kind === 'mole' ? 0 : .65;
-        let equipmentYaw = (kind === 'figure' || kind === 'heavy' || kind === 'worker') ? Math.PI * .5 : 0;
+        let equipmentYaw = humanoid ? Math.PI * .5 : 0;
         let wp = (x, y, z, sx, sy, sz, surface = 1, joint = handJoint, pivot = handPivot, taper = 1) =>
             part(x, y, z, sx, sy, sz, surface, joint, pivot, taper, equipmentYaw);
-        if (weapon === 'sword' || weapon === 'fire_blade') {
-            wp(.40,.25,.15,.07,.32,.07,1); wp(.40,.61,.15,.15,.58,.045,weapon === 'fire_blade' ? 0 : 1,handJoint,handPivot,.25);
-            wp(.40,.35,.15,.36,.07,.07,2); if (weapon === 'fire_blade') wp(.40,.66,.178,.035,.36,.018,3);
+        if (kind === 'rider' || kind === 'griffin' || kind === 'balloon' || kind === 'drone') {
+            // Mounted and floating roles carry their equipment in the body above.
+        } else if (weapon === 'sword') {
+            wp(.40,.25,.15,.07,.32,.07,1); wp(.40,.61,.15,.15,.58,.045,1,handJoint,handPivot,.25);
+            wp(.40,.35,.15,.36,.07,.07,2);
         } else if (weapon === 'king_sword') {
             wp(.47,.32,.16,.10,.48,.08,2); wp(.47,.71,.16,.21,.66,.055,1,handJoint,handPivot,.18);
             wp(.47,.46,.16,.57,.09,.075,2); wp(.47,1.05,.16,.12,.12,.07,3,handJoint,handPivot,.05);
@@ -859,22 +1230,31 @@
                 wp(side*.38,.29,.14,.055,.25,.055,2,joint,.65); wp(side*.38,.59,.14,.105,.46,.035,1,joint,.65,.18);
             }
         } else if (weapon === 'great_axe') {
-            wp(.45,.37,.14,.09,.86,.075,1); wp(.45,.83,.14,.60,.25,.09,2); wp(.68,.83,.14,.20,.38,.055,1,handJoint,handPivot,.15);
+            wp(.45,.37,.14,.09,.86,.075,5); wp(.45,.83,.14,.60,.25,.09,1); wp(.68,.83,.14,.20,.38,.055,1,handJoint,handPivot,.15);
         } else if (weapon === 'warhammer') {
-            wp(.43,.34,.15,.11,.78,.08,1); wp(.43,.78,.15,.62,.25,.13,2); wp(.43,.78,.245,.30,.16,.055,1);
-        } else if (weapon === 'water_trident') {
-            wp(.40,.40,.15,.07,.92,.08,0); wp(.40,.91,.15,.38,.09,.10,2);
-            for (let x of [.24,.40,.56]) wp(x,.99,.15,.065,.31,.075,0,handJoint,handPivot,.12);
-        } else if (weapon === 'ice_spear') {
-            wp(.40,.39,.15,.06,.94,.07,1); wp(.40,.98,.15,.20,.34,.16,0,handJoint,handPivot,.04); wp(.40,.70,.15,.25,.06,.12,2);
-        } else if (weapon === 'poison_scythe') {
-            wp(.42,.39,.15,.07,.95,.08,0); wp(.57,.91,.15,.43,.10,.12,2); wp(.76,.82,.15,.13,.38,.08,0,handJoint,handPivot,.10);
-        } else if (weapon === 'laser_staff') {
-            wp(.40,.39,.15,.08,.91,.09,2); wp(.40,.91,.15,.31,.20,.22,0); wp(.40,.91,.27,.15,.15,.08,3);
+            wp(.43,.34,.15,.11,.78,.08,5); wp(.43,.78,.15,.62,.25,.13,1); wp(.43,.78,.245,.30,.16,.055,2);
+        } else if (/_staff$/.test(weapon) && kind === 'mage') {
+            // Staff shaft, then an element-specific head (surface 7 glows).
+            wp(.40,.06,.15,.06,1.02,.06,5);
+            if (weapon === 'fire_staff') {
+                wp(.40,1.06,.15,.17,.17,.17,7);
+                for (let side of [-1,1]) wp(.40+side*.10,1.00,.15,.04,.20,.04,8,handJoint,handPivot,.2);
+            } else if (weapon === 'water_staff') {
+                wp(.40,1.04,.15,.14,.14,.14,7);
+                for (let x of [.28,.40,.52]) wp(x,1.12,.15,.04,.16,.05,8,handJoint,handPivot,.15);
+            } else if (weapon === 'ice_staff') {
+                wp(.40,1.02,.15,.15,.34,.15,7,handJoint,handPivot,.05);
+            } else if (weapon === 'poison_staff') {
+                wp(.40,1.05,.15,.18,.15,.18,6);
+                wp(.40,.99,.15,.11,.07,.11,7);
+            } else {
+                wp(.40,1.00,.15,.28,.28,.05,7,handJoint,handPivot,.2);
+                wp(.40,1.10,.15,.08,.08,.08,3);
+            }
         } else if (weapon === 'hammer') {
-            wp(.40,.35,.13,.09,.70,.07,1); wp(.40,.73,.13,.55,.23,.11,2); wp(.40,.73,.21,.28,.13,.05,1);
+            wp(.40,.35,.13,.09,.70,.07,5); wp(.40,.73,.13,.55,.23,.11,1); wp(.40,.73,.21,.28,.13,.05,2);
         } else if (weapon === 'pickaxe') {
-            wp(.40,.35,.13,.08,.75,.065,1); wp(.40,.76,.13,.62,.10,.07,2); wp(.67,.70,.13,.18,.26,.045,1,handJoint,handPivot,.12);
+            wp(.40,.35,.13,.08,.75,.065,5); wp(.40,.76,.13,.62,.10,.07,1); wp(.67,.70,.13,.18,.26,.045,1,handJoint,handPivot,.12);
         } else if (weapon === 'cutter') {
             wp(.40,.35,.14,.12,.47,.075,2); wp(.40,.65,.14,.44,.35,.075,1); wp(.40,.65,.19,.24,.23,.035,3);
         } else if (weapon === 'healer_staff') {
@@ -898,11 +1278,19 @@
                 wp(side*.38,.51,.13,.12,.09,.66,2,joint,0); wp(side*.38,.51,.50,.08,.12,.28,1,joint,0,.08);
             }
         } else if (weapon === 'claws') {
-            for (let side of [-1,1]) for (let claw of [-1,0,1]) wp(side*.38 + claw*.045,.05,.38,.035,.06,.38,1,0,0,.05);
+            for (let side of [-1,1]) for (let claw of [-1,0,1]) wp(side*.38 + claw*.045,.05,.38,.035,.06,.38,6,0,0,.05);
         }
         // Separate face vertices keep the intentionally faceted silhouette.
         normals = computeNormals(positions, indices);
         return { positions, normals, indices: new Uint32Array(indices), uvs, details: new Float32Array(details) };
+    }
+
+    // Animation rig of a procedural kind (shader uniform).
+    const FIGURE_RIGS = { figure: 0, heavy: 0, knight: 0, ogre: 0, worker: 1, mage: 2, rider: 3, bird: 4, griffin: 5,
+        balloon: 6, drone: 7, mole: 8, serpent: 9 };
+    function figureRig(kind) {
+        let rig = FIGURE_RIGS[kind.slice(0, kind.indexOf(':') < 0 ? kind.length : kind.indexOf(':'))];
+        return rig === undefined ? 10 : rig;
     }
 
     // proceduralKind depends only on these four inputs; memoize it because it
@@ -930,14 +1318,27 @@
         if (key === 'unit_snake') return 'serpent:engine';
         if (key.startsWith('unit_')) {
             let weapon = String(object.weaponType || '');
-            if (object.isFlying || /flying|scout|healer_unit|researcher_unit/.test(key)) return `bird:${weapon || 'talons'}`;
-            if (key === 'unit_mole') return `mole:${weapon || 'claws'}`;
-            if (key === 'unit_king') return `heavy:${weapon || 'king_sword'}`;
-            if (/tank|heavy|giant|boss/.test(key)) return `heavy:${weapon || 'great_axe'}`;
-            if (object.isWorker || /builder|collect|salvag|heal|astar|research/.test(key)) return `worker:${weapon || 'hammer'}`;
-            return `figure:${weapon || (/resistant/.test(key) ? 'fire_blade' : 'sword')}`;
+            let type = key.slice(5);
+            if (type === 'scout') return 'griffin:javelin';
+            if (type === 'healer_unit') return 'balloon:medic';
+            if (type === 'researcher_unit') return 'drone:instruments';
+            if (object.isFlying || /flying/.test(type)) return `bird:${weapon || 'talons'}`;
+            if (type === 'mole') return `mole:${weapon || 'claws'}`;
+            if (type === 'king') return `heavy:${weapon || 'king_sword'}`;
+            if (/boss|giant/.test(type)) return `ogre:${weapon || 'great_axe'}`;
+            if (/tank|heavy/.test(type)) return `knight:${weapon || 'warhammer'}`;
+            if (type === 'fast') return 'rider:dual_blades';
+            if (/_resistant$/.test(type)) return `mage:${/_staff$/.test(weapon) ? weapon : 'fire_staff'}`;
+            if (object.isWorker || /builder|collect|salvag|heal|astar|research/.test(type)) return `worker:${weapon || 'hammer'}`;
+            return `figure:${weapon || 'sword'}`;
         }
-        if (key.startsWith('tower_')) return /smg/.test(key) ? 'tower:twin' : /sniper/.test(key) ? 'tower:sniper' : /laser|elements|ice|poison|fire|water/.test(key) ? 'tower:energy' : 'tower';
+        if (key.startsWith('tower_')) {
+            let t = key.slice(6);
+            return t === 'smg' ? 'tower:twin' : t === 'sniper' ? 'tower:sniper' : t === 'laser' ? 'tower:laser'
+                : t === 'fire' ? 'tower:fire' : t === 'water' ? 'tower:water' : t === 'ice' ? 'tower:ice'
+                : t === 'poison' ? 'tower:poison' : t === 'sand_gun' ? 'tower:sand' : t === 'elements' ? 'tower:elements'
+                : t === 'watch_tower' ? 'tower:watch' : 'tower';
+        }
         if (key.startsWith('barrack_')) return 'barrack';
         if (key.startsWith('spawner_')) return /research/.test(key) ? 'spawner:research' : /healer/.test(key) ? 'spawner:healer' : 'spawner';
         if (key === 'item_house') return 'item:house';
@@ -1121,6 +1522,61 @@
             uvs: new Float32Array(uvs),
             indices: new Uint32Array(indices)
         };
+    }
+
+    // The figure vertex shader's pose, for picking. Mirrors its joints,
+    // rigs and animation modes (see the figure program).
+    function poseFigureVertex(out, x, y, z, details, i, phase, move, mode, rig) {
+        const surface = details[i * 4], joint = details[i * 4 + 1], pivot = details[i * 4 + 2];
+        const pivotZ = surface === 4 ? 0 : details[i * 4 + 3];
+        const aj = Math.abs(joint), sj = Math.sign(joint), ox = x, oy = y;
+        let angle = 0;
+        if (aj === 1) {
+            angle = Math.sin(phase) * move * joint * .65;
+            if (mode === 1) angle = Math.sin(phase) * 1.15;
+            else if (mode === 2) angle = joint === -1 ? -.45 + Math.sin(phase) * 1.05 : Math.sin(phase + 1.4) * .18;
+            else if (mode === 3) angle = Math.sin(phase + sj * 1.2) * .72;
+            else if (mode === 4) angle = Math.sin(phase * 1.7) * (joint < 0 ? .72 : .22);
+            else if (mode === 5) angle = (.28 + Math.sin(phase * .55) * .22) * sj;
+            else if (mode === 6) angle = Math.sin(phase * .8 + (joint > 0 ? 0 : 1.8)) * .48;
+            else if (mode === 7) angle = rig === 1 ? (pivot < .45 ? -1.35 * move : -.45 * move) : (pivot < .45 ? 0 : Math.sin(phase * .5 + sj) * .07 * move);
+        } else if (joint === 2) {
+            angle = Math.sin(phase + y * 3) * move * .10;
+            if (mode === 1) angle = -Math.sin(phase) * .16;
+            else if (mode >= 2 && mode <= 6) angle = 0;
+            else if (mode === 7) angle = Math.sin(phase * .7 + y * 2) * .05 * move;
+        } else if (aj === 4) {
+            angle = mode === 1 ? Math.sin(phase) * .35 * sj : mode === 7 ? 0 : Math.sin(phase * 1.2) * move * sj * .75;
+        } else if (joint === 5) {
+            const t = Math.max(0, Math.min(1, (Math.sin(phase * .35) - .1) / .7));
+            if (mode === 7) angle = (rig === 8 ? (.5 + .5 * Math.sin(phase * 3)) * .3 : t * t * (3 - 2 * t) * 1.05) * move;
+            else if (mode === 1) angle = -Math.sin(phase) * .35;
+            else angle = Math.sin(phase * 2) * .05 * move;
+        }
+        const py = y - pivot, pz = z - pivotZ;
+        y = Math.cos(angle) * py - Math.sin(angle) * pz + pivot;
+        z = Math.sin(angle) * py + Math.cos(angle) * pz + pivotZ;
+        if (aj === 3) {
+            const root = pivot > 0 ? pivot : .43;
+            const scale = mode === 5 ? .72 : mode === 6 ? .34 : mode === 1 ? .8 : mode === 7 ? .3 : .48;
+            const wing = Math.sin(phase) * sj * scale;
+            x = Math.cos(wing) * ox - Math.sin(wing) * (oy - root);
+            y = Math.sin(wing) * ox + Math.cos(wing) * (oy - root) + root;
+        } else if (aj === 6) {
+            const spin = phase * .8 * sj, px = x;
+            x = Math.cos(spin) * px - Math.sin(spin) * z;
+            z = Math.sin(spin) * px + Math.cos(spin) * z;
+        }
+        if (mode === 1) z += Math.sin(phase) * .16;
+        if (mode === 2) y -= Math.max(0, Math.sin(phase)) * .035;
+        if (mode === 5) y += (Math.sin(phase * .55) + 1) * .035;
+        if (mode === 6) y += Math.sin(phase * .8 + ox * 2) * .018;
+        if (mode === 7) {
+            if (rig === 1) y -= .19 * move;
+            else if (rig >= 4 && rig <= 7) y += Math.sin(phase) * .03;
+            else y *= 1 + Math.sin(phase * .5) * .014 * move;
+        } else y += Math.abs(Math.sin(phase)) * move * .018;
+        out[0] = x; out[1] = y; out[2] = z;
     }
 
     // Floats per model instance: matrix (16), color, alpha, shape/move,
@@ -1593,26 +2049,19 @@
             };
             bindInstanceAttributes(this.cubeMesh);
             bindInstanceAttributes(this.cylinderMesh);
+            this.bindFigureInstanceAttributes = bindInstanceAttributes;
             this.figureMeshes = new Map();
+            // Common kinds up front; any other combination is built on first use.
             for (let kind of [
-                'figure:sword', 'figure:dual_blades', 'figure:fire_blade', 'figure:water_trident', 'figure:ice_spear', 'figure:poison_scythe', 'figure:laser_staff',
-                'heavy:king_sword', 'heavy:great_axe', 'heavy:warhammer',
+                'figure:sword', 'rider:dual_blades', 'mage:fire_staff', 'mage:water_staff', 'mage:ice_staff', 'mage:poison_staff', 'mage:laser_staff',
+                'heavy:king_sword', 'ogre:great_axe', 'knight:warhammer',
                 'worker:hammer', 'worker:pickaxe', 'worker:cutter',
-                'bird:talons', 'bird:healer_staff', 'bird:research_orb', 'mole:claws', 'serpent:engine',
-                'tower', 'tower:twin', 'tower:sniper', 'tower:energy', 'barrack', 'spawner', 'spawner:research', 'spawner:healer', 'item', 'item:relay', 'item:house', 'mine'
+                'bird:talons', 'griffin:javelin', 'balloon:medic', 'drone:instruments', 'mole:claws', 'serpent:engine',
+                'tower', 'tower:twin', 'tower:sniper', 'tower:laser', 'tower:fire', 'tower:water', 'tower:ice', 'tower:poison', 'tower:sand',
+                'tower:elements', 'tower:watch', 'barrack', 'spawner', 'spawner:research', 'spawner:healer', 'item', 'item:relay', 'item:house', 'mine'
             ]) {
-                for (let simplified of [false, true]) {
-                    let data = createFigureData(kind, simplified);
-                    let mesh = createMesh(gl, data.positions, data.normals, data.indices, data.uvs);
-                    mesh.details = data.details;
-                    bindInstanceAttributes(mesh);
-                    gl.bindVertexArray(mesh.vao);
-                    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-                    gl.bufferData(gl.ARRAY_BUFFER, data.details, gl.STATIC_DRAW);
-                    gl.enableVertexAttribArray(13);
-                    gl.vertexAttribPointer(13, 4, gl.FLOAT, false, 16, 0);
-                    this.figureMeshes.set(simplified ? `${kind}:lod` : kind, mesh);
-                }
+                this.getFigureMesh(kind);
+                this.getFigureMesh(kind + ':lod');
             }
             gl.bindVertexArray(null);
             this.figureProgram = createProgram(gl, `#version 300 es
@@ -1634,6 +2083,7 @@
                 layout(location=14) in float atlasLayer;
                 uniform mat4 uViewProjection;
                 uniform float uAnimationMode;
+                uniform float uRig;
                 out vec3 vNormal;
                 out vec3 vColor;
                 out vec3 vTrim;
@@ -1645,51 +2095,88 @@
                 void main() {
                     vec3 p = aPosition, n = aNormal;
                     float animationMode = floor(uAnimationMode + .5);
-                    float angle = sin(phase) * moveAmount * detail.y * .65;
-                    if (animationMode == 1.0) {
-                        // One-shot attack: both arms drive forward while the cape follows through.
-                        angle = abs(detail.y) == 1.0 ? sin(phase) * 1.15 : (detail.y == 2.0 ? -sin(phase) * .16 : 0.0);
-                    } else if (animationMode == 2.0) {
-                        // Builder: dominant tool arm makes a broad hammering arc.
-                        angle = detail.y == -1.0 ? (-.45 + sin(phase) * 1.05) : (detail.y == 1.0 ? sin(phase + 1.4) * .18 : 0.0);
-                    } else if (animationMode == 3.0) {
-                        // Collectors scoop inward with alternating arms.
-                        angle = abs(detail.y) == 1.0 ? sin(phase + sign(detail.y) * 1.2) * .72 : 0.0;
-                    } else if (animationMode == 4.0) {
-                        // Salvager: short, fast cutting strokes.
-                        angle = abs(detail.y) == 1.0 ? sin(phase * 1.7) * (detail.y < 0.0 ? .72 : .22) : 0.0;
-                    } else if (animationMode == 5.0) {
-                        // Healer: wings and limbs open in a slow restorative pulse.
-                        angle = abs(detail.y) == 1.0 ? (.28 + sin(phase * .55) * .22) * sign(detail.y) : 0.0;
-                    } else if (animationMode == 6.0) {
-                        // Researcher: asymmetric instrument-tuning motion.
-                        angle = abs(detail.y) == 1.0 ? sin(phase * .8 + (detail.y > 0.0 ? 0.0 : 1.8)) * .48 : 0.0;
-                    } else if (detail.y == 2.0) {
+                    float rig = floor(uRig + .5);
+                    float joint = detail.y, aj = abs(joint), sj = sign(joint), pivot = detail.z;
+                    // In idle mode 7 moveAmount is how far the idle pose has settled.
+                    float blend = moveAmount;
+                    float angle = 0.0;
+                    if (aj == 1.0) {
+                        angle = sin(phase) * moveAmount * joint * .65;
+                        if (animationMode == 1.0) {
+                            // One-shot attack: both arms drive forward while the cape follows through.
+                            angle = sin(phase) * 1.15;
+                        } else if (animationMode == 2.0) {
+                            // Builder: dominant tool arm makes a broad hammering arc.
+                            angle = joint == -1.0 ? (-.45 + sin(phase) * 1.05) : sin(phase + 1.4) * .18;
+                        } else if (animationMode == 3.0) {
+                            // Collectors scoop inward with alternating arms.
+                            angle = sin(phase + sj * 1.2) * .72;
+                        } else if (animationMode == 4.0) {
+                            // Salvager: short, fast cutting strokes.
+                            angle = sin(phase * 1.7) * (joint < 0.0 ? .72 : .22);
+                        } else if (animationMode == 5.0) {
+                            // Healer: wings and limbs open in a slow restorative pulse.
+                            angle = (.28 + sin(phase * .55) * .22) * sj;
+                        } else if (animationMode == 6.0) {
+                            // Researcher: asymmetric instrument-tuning motion.
+                            angle = sin(phase * .8 + (joint > 0.0 ? 0.0 : 1.8)) * .48;
+                        } else if (animationMode == 7.0) {
+                            // Idle: workers sit down (legs forward, hands on knees);
+                            // everyone else lets the arms hang and sway a little.
+                            if (rig == 1.0) angle = pivot < .45 ? -1.35 * blend : -.45 * blend;
+                            else angle = pivot < .45 ? 0.0 : sin(phase * .5 + sj) * .07 * blend;
+                        }
+                    } else if (joint == 2.0) {
                         angle = sin(phase + aPosition.y * 3.0) * moveAmount * .10;
+                        if (animationMode == 1.0) angle = -sin(phase) * .16;
+                        else if (animationMode >= 2.0 && animationMode <= 6.0) angle = 0.0;
+                        else if (animationMode == 7.0) angle = sin(phase * .7 + aPosition.y * 2.0) * .05 * blend;
+                    } else if (aj == 4.0) {
+                        // Quadruped legs: diagonal pairs trot; a short rear on attack.
+                        angle = animationMode == 1.0 ? sin(phase) * .35 * sj
+                            : animationMode == 7.0 ? 0.0 : sin(phase * 1.2) * moveAmount * sj * .75;
+                    } else if (joint == 5.0) {
+                        // Neck: grazing (or sniffing) while idle, tossed back on attack.
+                        if (animationMode == 7.0) angle = (rig == 8.0 ? (.5 + .5 * sin(phase * 3.0)) * .3 : smoothstep(.1, .8, sin(phase * .35)) * 1.05) * blend;
+                        else if (animationMode == 1.0) angle = -sin(phase) * .35;
+                        else angle = sin(phase * 2.0) * .05 * moveAmount;
                     }
                     float c = cos(angle), s = sin(angle);
-                    p.y -= detail.z;
+                    p.y -= pivot; p.z -= detail.x == 4.0 ? 0.0 : detail.w;
                     p.yz = mat2(c, s, -s, c) * p.yz;
-                    p.y += detail.z;
+                    p.y += pivot; p.z += detail.x == 4.0 ? 0.0 : detail.w;
                     n.yz = mat2(c, s, -s, c) * n.yz;
-                    if (abs(detail.y) == 3.0) {
-                        // Birds flap even while hovering; each wing rotates at its root.
+                    if (aj == 3.0) {
+                        // Wings flap even while hovering; each rotates at its root.
                         p = aPosition; n = aNormal;
-                        float wingScale = animationMode == 5.0 ? .72 : (animationMode == 6.0 ? .34 : .48);
-                        float wing = sin(phase) * sign(detail.y) * wingScale;
+                        float root = pivot > 0.0 ? pivot : .43;
+                        float wingScale = animationMode == 5.0 ? .72 : (animationMode == 6.0 ? .34 : (animationMode == 1.0 ? .8 : (animationMode == 7.0 ? .3 : .48)));
+                        float wing = sin(phase) * sj * wingScale;
                         float wc = cos(wing), ws = sin(wing);
-                        p.y -= .43;
+                        p.y -= root;
                         p.xy = mat2(wc,ws,-ws,wc) * p.xy;
-                        p.y += .43;
+                        p.y += root;
                         n.xy = mat2(wc,ws,-ws,wc) * n.xy;
+                    } else if (aj == 6.0) {
+                        // Instrument rings turn about the vertical axis, in opposite senses.
+                        float spin = phase * .8 * sj;
+                        float rc = cos(spin), rs = sin(spin);
+                        p.xz = mat2(rc, rs, -rs, rc) * p.xz;
+                        n.xz = mat2(rc, rs, -rs, rc) * n.xz;
                     }
                     if (animationMode == 1.0) p.z += sin(phase) * .16;
                     if (animationMode == 2.0) p.y -= max(0.0, sin(phase)) * .035;
                     if (animationMode == 5.0) p.y += (sin(phase * .55) + 1.0) * .035;
                     if (animationMode == 6.0) p.y += sin(phase * .8 + aPosition.x * 2.0) * .018;
-                    p.y += abs(sin(phase)) * moveAmount * .018;
+                    if (animationMode == 7.0) {
+                        if (rig == 1.0) p.y -= .19 * blend;
+                        else if (rig >= 4.0 && rig <= 7.0) p.y += sin(phase) * .03;
+                        else p.y *= 1.0 + sin(phase * .5) * .014 * blend;
+                    } else {
+                        p.y += abs(sin(phase)) * moveAmount * .018;
+                    }
                     mat4 model = mat4(m0, m1, m2, m3);
-                    if (detail.w > .5) {
+                    if (detail.x == 4.0 && detail.w > .5) {
                         // Keep the entire HUD rectangle world-aligned. Rotating only
                         // its UVs would crop the level/health text at oblique angles.
                         vec2 facing = normalize(m0.xz);
@@ -1704,7 +2191,7 @@
                     // A squashed structure (unit on its tile) packs the roof and
                     // its 2D panel into a sliver; lift the panel so it is not lost
                     // to depth fighting with the roof below.
-                    if (detail.x > 3.5 && aNormal.y > .5) world.y += .02 * (1.0 - clamp(sqrt(scale2.y), 0.0, 1.0));
+                    if (detail.x == 4.0 && aNormal.y > .5) world.y += .02 * (1.0 - clamp(sqrt(scale2.y), 0.0, 1.0));
                     gl_Position = uViewProjection * world;
                     vColor = color; vTrim = trim; vUv = aUv;
                     vAlpha = alpha; vLight = light; vSurface = int(detail.x + .5); vLayer = atlasLayer;
@@ -1739,9 +2226,15 @@
                     // Keep 2D's type colors on the body and owner colors on trim.
                     vec3 base = typeColor;
                     if (vSurface == 1) base = mix(mix(vec3(.055,.065,.08), typeColor, .12), mix(vec3(.76,.84,.92), typeColor, .20), uIsFlying);
-                    if (vSurface == 2) base = vColor;
-                    if (vSurface == 3) base = vec3(.48,.94,1.0);
-                    if (vSurface >= 4) {
+                    else if (vSurface == 2) base = vColor;
+                    else if (vSurface == 3) base = vec3(.48,.94,1.0);
+                    else if (vSurface == 5) base = vec3(.42,.29,.18);
+                    else if (vSurface == 6) base = vec3(.88,.86,.80);
+                    else if (vSurface == 7) base = min(vec3(1.0), typeColor * 1.3 + .1);
+                    else if (vSurface == 8) base = vec3(.96,.74,.24);
+                    else if (vSurface == 9) base = vec3(.88,.18,.20);
+                    bool glowing = vSurface == 3 || vSurface == 4 || vSurface == 7;
+                    if (vSurface == 4) {
                         // Preserve thin sprite strokes without disabling distant mipmaps.
                         // Exact 2D panels come from the shared sprite atlas (one
                         // draw for every panel); uUseAtlas is uniform per draw.
@@ -1751,9 +2244,9 @@
                         base = mix(vec3(.055,.065,.08), texel.rgb, texel.a);
                     }
                     float diffuse = max(dot(normalize(vNormal), normalize(vec3(-.42,.86,.31))),0.0);
-                    float shade = vSurface >= 3 ? 1.0 : mix(.72, 1.0, celShade(diffuse));
+                    float shade = glowing ? 1.0 : mix(.72, 1.0, celShade(diffuse));
                     vec3 shaded = base * shade;
-                    if (vSurface < 3) {
+                    if (!glowing) {
                         shaded *= mix(.86, 1.0, uIsUnit);
                         shaded = mix(shaded, vec3(.025,.035,.055), faceInk(vUv, mix(.65, 1.05, uIsUnit)) * .88);
                     }
@@ -1768,6 +2261,7 @@
             this.figureUniforms = {
                 spriteLodBias: gl.getUniformLocation(this.figureProgram, 'uSpriteLodBias'),
                 animationMode: gl.getUniformLocation(this.figureProgram, 'uAnimationMode'),
+                rig: gl.getUniformLocation(this.figureProgram, 'uRig'),
                 isFlying: gl.getUniformLocation(this.figureProgram, 'uIsFlying'),
                 isUnit: gl.getUniformLocation(this.figureProgram, 'uIsUnit'),
                 viewProjection: gl.getUniformLocation(this.figureProgram, 'uViewProjection'),
@@ -1778,6 +2272,27 @@
                 hasSideTexture: gl.getUniformLocation(this.figureProgram, 'uHasSideTexture')
             };
             gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        }
+
+        getFigureMesh(key) {
+            let mesh = this.figureMeshes.get(key);
+            if (mesh) return mesh;
+            let gl = this.gl;
+            let simplified = key.endsWith(':lod');
+            let data = createFigureData(simplified ? key.slice(0, -4) : key, simplified);
+            mesh = createMesh(gl, data.positions, data.normals, data.indices, data.uvs);
+            mesh.details = data.details;
+            mesh.rig = figureRig(key);
+            this.bindFigureInstanceAttributes(mesh);
+            gl.bindVertexArray(mesh.vao);
+            gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+            gl.bufferData(gl.ARRAY_BUFFER, data.details, gl.STATIC_DRAW);
+            gl.enableVertexAttribArray(13);
+            gl.vertexAttribPointer(13, 4, gl.FLOAT, false, 16, 0);
+            gl.bindVertexArray(null);
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+            this.figureMeshes.set(key, mesh);
+            return mesh;
         }
 
         getFigureMeshKey(object) {
@@ -2122,6 +2637,7 @@
             if (!near || !far) return null;
             let bestT = 1, best = null;
             const texturePixels = new Map();
+            const pose = [0, 0, 0];
             for (const { object: o, mesh } of this.pickObjects) {
                 if (!candidates.has(o.pickSource) || o.pickSource.dead || o.pickSource.energy <= 0) continue;
                 const c = Math.cos(o.rotationY), s = Math.sin(o.rotationY);
@@ -2148,32 +2664,9 @@
                 for (let i = 0; i < mesh.positions.length / 3; i++) {
                     let x = mesh.positions[i * 3], y = mesh.positions[i * 3 + 1], z = mesh.positions[i * 3 + 2];
                     if (mesh.details) {
-                        const joint = mesh.details[i * 4 + 1], pivot = mesh.details[i * 4 + 2];
-                        const phase = o.walkPhase || 0, move = o.moveAmount || 0, mode = o.animationMode || 0;
-                        let angle = Math.sin(phase) * move * joint * .65;
-                        if (mode === 1) angle = Math.abs(joint) === 1 ? Math.sin(phase) * 1.15 : (joint === 2 ? -Math.sin(phase) * .16 : 0);
-                        else if (mode === 2) angle = joint === -1 ? -.45 + Math.sin(phase) * 1.05 : (joint === 1 ? Math.sin(phase + 1.4) * .18 : 0);
-                        else if (mode === 3) angle = Math.abs(joint) === 1 ? Math.sin(phase + Math.sign(joint) * 1.2) * .72 : 0;
-                        else if (mode === 4) angle = Math.abs(joint) === 1 ? Math.sin(phase * 1.7) * (joint < 0 ? .72 : .22) : 0;
-                        else if (mode === 5) angle = Math.abs(joint) === 1 ? (.28 + Math.sin(phase * .55) * .22) * Math.sign(joint) : 0;
-                        else if (mode === 6) angle = Math.abs(joint) === 1 ? Math.sin(phase * .8 + (joint > 0 ? 0 : 1.8)) * .48 : 0;
-                        else if (joint === 2) angle = Math.sin(phase + y * 3) * move * .10;
-                        if (Math.abs(joint) === 3) {
-                            const wing = Math.sin(phase) * Math.sign(joint) * (mode === 5 ? .72 : mode === 6 ? .34 : .48);
-                            const px = x;
-                            x = Math.cos(wing) * x - Math.sin(wing) * (y - .43);
-                            y = Math.sin(wing) * px + Math.cos(wing) * (y - .43) + .43;
-                        } else {
-                            const py = y - pivot;
-                            y = Math.cos(angle) * py - Math.sin(angle) * z + pivot;
-                            z = Math.sin(angle) * py + Math.cos(angle) * z;
-                        }
-                        if (mode === 1) z += Math.sin(phase) * .16;
-                        if (mode === 2) y -= Math.max(0, Math.sin(phase)) * .035;
-                        if (mode === 5) y += (Math.sin(phase * .55) + 1) * .035;
-                        if (mode === 6) y += Math.sin(phase * .8 + mesh.positions[i * 3] * 2) * .018;
-                        y += Math.abs(Math.sin(phase)) * move * .018;
-                        if (mesh.details[i * 4 + 3] > .5) {
+                        poseFigureVertex(pose, x, y, z, mesh.details, i, o.walkPhase || 0, o.moveAmount || 0, o.animationMode || 0, mesh.rig || 0);
+                        x = pose[0]; y = pose[1]; z = pose[2];
+                        if (mesh.details[i * 4] === 4 && mesh.details[i * 4 + 3] > .5) {
                             const px = x;
                             x = c * x - s * z;
                             z = s * px + c * z;
@@ -2199,7 +2692,7 @@
                     if (w < 0 || u + w > 1) continue;
                     const t = (fx * qx + fy * qy + fz * qz) / det;
                     if (t < 0 || t >= bestT) continue;
-                    if (mesh.details && mesh.details[indices[i] * 4] >= 4 && o.topTextureCanvas && mesh.uvs) {
+                    if (mesh.details && mesh.details[indices[i] * 4] === 4 && o.topTextureCanvas && mesh.uvs) {
                         // Match the panel shader's alpha discard; transparent HUD margins aren't solid.
                         const canvas = o.topTextureCanvas;
                         if (!texturePixels.has(canvas)) {
@@ -3118,7 +3611,7 @@
                 objects = kept;
             }
             let kind = this.getFigureMeshKey(objects[0]);
-            let mesh = kind ? this.figureMeshes.get(kind) : this.getPrimitiveMesh(objects[0]);
+            let mesh = kind ? this.getFigureMesh(kind) : this.getPrimitiveMesh(objects[0]);
             let uniforms = kind ? this.figureUniforms : this.texturedCubeUniforms;
             this.ensureCubeInstanceCapacity(objects.length);
             let data = this.cubeInstanceArray;
@@ -3149,7 +3642,8 @@
             gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, objects.length * INSTANCE_STRIDE);
             gl.useProgram(kind ? this.figureProgram : this.texturedCubeProgram);
             if (kind) {
-                gl.uniform1f(uniforms.isFlying, kind.startsWith('bird') ? 1 : 0);
+                gl.uniform1f(uniforms.isFlying, kind.startsWith('bird') || kind.startsWith('griffin') ? 1 : 0);
+                gl.uniform1f(uniforms.rig, mesh.rig);
                 gl.uniform1f(uniforms.animationMode, Number(objects[0].animationMode) || 0);
                 gl.uniform1f(uniforms.spriteLodBias, String(objects[0].topTextureKey).startsWith('2d:') ? -.5 : 0);
                 let key = objects[0].modelKey || '';
@@ -3173,6 +3667,76 @@
                 gl.activeTexture(gl.TEXTURE0);
             }
             gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, objects.length);
+        }
+
+        ensureFxResources() {
+            if (this.fxProgram) return;
+            let gl = this.gl;
+            this.fxProgram = createProgram(gl, FX_VERTEX_GLSL, fxFragmentGlsl());
+            this.fxUniforms = {
+                viewProjection: gl.getUniformLocation(this.fxProgram, 'uViewProjection'),
+                flat: gl.getUniformLocation(this.fxProgram, 'uFlat')
+            };
+            this.fxBuffer = gl.createBuffer();
+            this.fxBufferBytes = 0;
+            let planeData = createPlaneData();
+            let sources = [createCenteredCubeData(), createOrbData(), createSpikeData(), planeData];
+            this.fxMeshes = sources.map(data => {
+                let mesh = createMesh(gl, data.positions, data.normals, data.indices, null);
+                gl.bindVertexArray(mesh.vao);
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.fxBuffer);
+                for (let row = 0; row < 4; row++) {
+                    gl.enableVertexAttribArray(3 + row);
+                    gl.vertexAttribDivisor(3 + row, 1);
+                }
+                return mesh;
+            });
+            gl.bindVertexArray(null);
+        }
+
+        // One upload of every mesh's instances, then one draw per mesh.
+        drawFx(batch, flat) {
+            if (!batch || batch.total <= 0) return;
+            this.ensureFxResources();
+            let gl = this.gl;
+            let bytes = batch.total * FX_STRIDE * 4;
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.fxBuffer);
+            if (this.fxBufferBytes < bytes) {
+                this.fxBufferBytes = Math.max(64 * 1024, bytes * 2);
+                gl.bufferData(gl.ARRAY_BUFFER, this.fxBufferBytes, gl.DYNAMIC_DRAW);
+            }
+            let offsets = this.fxOffsets || (this.fxOffsets = new Int32Array(FX_MESH_COUNT));
+            let offset = 0;
+            for (let mesh = 0; mesh < FX_MESH_COUNT; mesh++) {
+                let count = batch.count[mesh];
+                offsets[mesh] = offset;
+                if (count > 0) gl.bufferSubData(gl.ARRAY_BUFFER, offset, batch.data[mesh], 0, count * FX_STRIDE);
+                offset += count * FX_STRIDE * 4;
+            }
+            gl.useProgram(this.fxProgram);
+            gl.uniformMatrix4fv(this.fxUniforms.viewProjection, false, this.tmpViewProjection);
+            gl.uniform1f(this.fxUniforms.flat, flat ? 1 : 0);
+            if (flat) gl.disable(gl.DEPTH_TEST);
+            else gl.enable(gl.DEPTH_TEST);
+            gl.depthMask(false);
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+            // Decals first: ground marks sit under shots and debris.
+            for (let mesh of [FX_MESH_DECAL, FX_MESH_BOX, FX_MESH_SPIKE, FX_MESH_ORB]) {
+                let count = batch.count[mesh];
+                if (count <= 0) continue;
+                let fxMesh = this.fxMeshes[mesh];
+                gl.bindVertexArray(fxMesh.vao);
+                // No base instance in WebGL2: point the attributes at this mesh's run.
+                for (let row = 0; row < 4; row++) gl.vertexAttribPointer(3 + row, 4, gl.FLOAT, false, FX_STRIDE * 4, offsets[mesh] + row * 16);
+                gl.drawElementsInstanced(gl.TRIANGLES, fxMesh.indexCount, gl.UNSIGNED_INT, 0, count);
+            }
+            gl.drawBuffers(this.sceneDrawBuffers);
+            gl.disable(gl.BLEND);
+            gl.depthMask(true);
+            gl.enable(gl.DEPTH_TEST);
+            gl.bindVertexArray(null);
         }
 
         // Scene objects (3D-style) for the flat view: converted into a batch.
@@ -3329,6 +3893,7 @@
             if (snapshot.flat2d) {
                 if (snapshot.flatBatch) this.drawFlatBatch(snapshot.flatBatch);
                 else this.drawFlatSprites(objects);
+                this.drawFx(snapshot.fx, true);
                 this.drawGroundOverlays(snapshot.overlays);
                 this.resolveScene();
                 this.presentSceneToCanvas();
@@ -3359,7 +3924,7 @@
                 let mesh = figureMeshKey ? null : this.requestModel(object);
                 let textured = (object.topTextureKey && object.topTextureCanvas) || (object.sideTextureKey && object.sideTextureCanvas);
                 if (object.pickSource) {
-                    let pickMesh = mesh || (textured && this.figureMeshes.get(figureMeshKey)) || this.getPrimitiveMesh(object);
+                    let pickMesh = mesh || (textured && figureMeshKey && this.getFigureMesh(figureMeshKey)) || this.getPrimitiveMesh(object);
                     this.pickObjects.push({ object, mesh: pickMesh });
                 }
                 if (mesh) {
@@ -3442,6 +4007,7 @@
                 gl.disable(gl.BLEND);
             }
             if (atlas) atlas.endFrame();
+            this.drawFx(snapshot.fx, false);
             this.drawGroundOverlays(overlays);
             this.resolveScene(needsOverlayDepth);
             if (needsOverlayDepth) this.captureOverlayDepthFrame();
@@ -3476,5 +4042,8 @@
     }
 
     Defence3Renderer3D.FlatSpriteBatch = FlatSpriteBatch;
+    Defence3Renderer3D.FxBatch = FxBatch;
+    Defence3Renderer3D.FX_MESH = { BOX: FX_MESH_BOX, ORB: FX_MESH_ORB, SPIKE: FX_MESH_SPIKE, DECAL: FX_MESH_DECAL };
+    Defence3Renderer3D.FX_PATTERN = FX_PATTERN;
     window.Defence3Renderer3D = Defence3Renderer3D;
 })();

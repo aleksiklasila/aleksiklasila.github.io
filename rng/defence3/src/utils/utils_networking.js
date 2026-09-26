@@ -2610,6 +2610,7 @@ function resetWorldState() {
     units = [];
     projectiles = [];
     particles = [];
+    if (typeof clearCombatFx === 'function') clearCombatFx();
     barracks = [];
     collectorSpawners = [];
     collectors = [];
