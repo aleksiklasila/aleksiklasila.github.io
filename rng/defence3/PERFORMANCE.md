@@ -381,3 +381,35 @@ building (`MB.lineup()`), masses of one kind (`MB.mass(key, 100)`) and
 times). With 400 units and 580 buildings the new models render at the same
 or lower cost than the old ones (3D ~9.5 vs ~12 ms, 2D ~2.7 vs ~2.9 ms per
 frame, single runs).
+
+# Engaging enemies at area borders
+
+Attack range is area based: `floor(attackRangeArea)` area steps from the
+areas under the unit's ±0.3 tile window, and every unit's range is below one
+area (its own area). Most units also see only their own area. Cross-team
+collision keeps enemy bodies ~0.9-1.1 tiles apart, so a unit that saw an
+enemy just across a border (a king or flyer, vision one area) chased it
+forever without striking, and an unseen attacker could not be answered.
+
+- A visible enemy unit pressed against the attacker (collision distance plus
+  a quarter tile, neighboring tiles, no wall corner, one area step beyond the
+  range) is within reach. Units still detect and auto-target only what their
+  team sees.
+- A forced target (an order or retaliation) in contact stays engaged even if
+  its area is out of sight.
+- `_computeClosestEnemyUnitByChunks` (chunks are one tile) searched only the
+  nearest tile holding enemies: an unseen enemy there hid visible ones. It
+  now keeps that result when it has one and otherwise searches the other
+  tiles in range, nearest first. (A full nearest-overall search diverged a
+  repaired peer in `multiplayer-chaos-determinism`; the fallback form keeps
+  the original choice whenever one exists.)
+
+`.claude/combatbench.js` runs 1v1, 1v3, same-area, border and 10v10 fights;
+`tests/multiplayer-border-combat.test.cjs` checks the border fight in
+lockstep (and fails without the contact rule).
+
+`large-battle.bench.cjs` (1,500 units a side, two runs each, ms/tick):
+combat 23.0/22.0 → 23.9/21.9, crowded 35.8/36.5 → 38.8/39.5 (more fighting:
+fewer units alive at tick 160), siege 32.3/32.0 → 33.0/33.3 (identical
+state), multiplayer combat 23.5 → 21.4. With only the contact rule, crowded
+measured 36.7-39.6: the chunk search adds no measurable cost.

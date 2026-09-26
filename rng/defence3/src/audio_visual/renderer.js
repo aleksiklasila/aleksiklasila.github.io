@@ -1322,6 +1322,7 @@ function push3DRenderObject(target, object) {
         sideTextureKey: object.sideTextureKey || '',
         sideTextureCanvas: object.sideTextureCanvas || null,
         sideTextureAngle: Number.isFinite(object.sideTextureAngle) ? Number(object.sideTextureAngle) : 0,
+        statusTextureCanvas: object.statusTextureCanvas || null,
         lightLevel: finalLightLevel,
         historyGhost: remembered,
         shadowDirX: Number.isFinite(object.shadowDirX) ? Number(object.shadowDirX) : shadowDirX,
@@ -1496,14 +1497,6 @@ function getUnit3DWeaponType(u) {
     return styleWeapons[String(u && u.attackStyle || 'melee')] || 'sword';
 }
 
-function pushUnit3DActivityEffects(target, u, activity, x, z, footprint) {
-    if (!activity || activity.mode < 2 || activity.mode > 6 || activity.amount <= 0) return;
-    // Physical equipment carries most of the action. Keep only small contact/magic accents.
-    if (activity.mode === 3) return;
-    let phase = (u._historyGhost ? u._historyTick : gameTime + tickAlpha) / Math.max(1, TICK_RATE) * (activity.mode === 4 ? 12 : 7) + (Number(u.id) || 0) * 1.37;
-    pushWorkerActivityFx(u, activity.mode, x, z, footprint, phase);
-}
-
 // Idle pose (mode 7): after a unit has stood still for a moment it settles
 // into its role's rest pose (workers sit, mounts graze, flyers hover).
 const RENDERER3D_IDLE_DELAY_SECONDS = 1.5;
@@ -1536,19 +1529,122 @@ function _pushStructureActivity(objects, entity, flat2d) {
     pushStructureActivityFx(entity, o.x, o.z, o.y + o.scaleY * roof, get3DRenderOwnerColor(entity.owner));
 }
 
-// The unit a barrack or worker building is producing, turning slowly on
-// its deck (3D only). One cached object per building; call right after the
+// Front status display of 3D units (surface 15 of the unit models): a 96px
+// pixel-art icon drawn over the owner color, so one texture per state is
+// shared by every player. States: 'walk', 'angry', 'work', 'sleep', or a
+// queue count (number). Colored features with a dark outline read on any
+// owner color.
+const RENDERER3D_STATUS_CELL = 8; // 12x12 grid of chunky pixels
+// Pixel letters: W white, R red, G green, B pale blue, Y yellow.
+const RENDERER3D_STATUS_COLORS = { W: '#ffffff', R: '#ff3b30', G: '#4ee04a', B: '#9cc8ff', Y: '#ffd93a' };
+const RENDERER3D_STATUS_FACES = {
+    walk: [
+        '............',
+        '............',
+        '............',
+        '...WW..WW...',
+        '...WW..WW...',
+        '............',
+        '............',
+        '....WWWW....'],
+    angry: [
+        '............',
+        '..R......R..',
+        '...RR..RR...',
+        '............',
+        '...RR..RR...',
+        '............',
+        '............',
+        '....RRRR....',
+        '...R....R...'],
+    work: [
+        '............',
+        '............',
+        '............',
+        '..GGG..GGG..',
+        '..G.G..G.G..',
+        '............',
+        '...G....G...',
+        '....GGGG....'],
+    sleep: [
+        '.......YYYY.',
+        '.........Y..',
+        '........Y...',
+        '.......YYYY.',
+        '............',
+        '............',
+        '..BBB..BBB..',
+        '............',
+        '............',
+        '.....BB.....']
+};
+// Queue counts: empty white, short green, busy orange, long red.
+function get3DQueueCountColor(count) {
+    return count <= 0 ? '#ffffff' : count <= 3 ? '#4ee04a' : count <= 8 ? '#ff9a1f' : '#ff3b30';
+}
+function get3DStatusTexture(state) {
+    return get3DTopTextureCanvas(`status:${state}`, g => {
+        let size = g.canvas.width, c = RENDERER3D_STATUS_CELL, pad = 3;
+        if (typeof state === 'number') {
+            let text = state > 99 ? '99+' : String(state);
+            g.font = `900 ${Math.round(size * (text.length > 2 ? 0.46 : text.length > 1 ? 0.62 : 0.74))}px Arial, sans-serif`;
+            g.textAlign = 'center';
+            g.textBaseline = 'middle';
+            g.lineJoin = 'round';
+            g.lineWidth = Math.max(4, Math.round(size * 0.12));
+            g.strokeStyle = '#10131a';
+            g.strokeText(text, size * 0.5, size * 0.55);
+            g.fillStyle = get3DQueueCountColor(state);
+            g.fillText(text, size * 0.5, size * 0.55);
+            return;
+        }
+        let rows = RENDERER3D_STATUS_FACES[state] || RENDERER3D_STATUS_FACES.walk;
+        let cells = [];
+        rows.forEach((row, y) => { for (let x = 0; x < row.length; x++) if (RENDERER3D_STATUS_COLORS[row[x]]) cells.push([x, y, RENDERER3D_STATUS_COLORS[row[x]]]); });
+        g.fillStyle = '#10131a';
+        for (let [x, y] of cells) g.fillRect(x * c - pad, y * c + c - pad, c + pad * 2, c + pad * 2);
+        for (let [x, y, color] of cells) {
+            g.fillStyle = color;
+            g.fillRect(x * c, y * c + c, c, c);
+        }
+    });
+}
+// Fighting (or closing in) is angry, work is content, a settled idle pose
+// sleeps; anything else (walking, a short stop) looks ahead. Target fields
+// can outlive a fight (a dead target under a new order, a structure's
+// attackTarget), so anger needs a live attack order or a recent blow.
+const RENDERER3D_ANGRY_LINGER_SECONDS = 1.5;
+const renderer3dLastAttackTick = new WeakMap();
+function getUnit3DStatusState(u, activity) {
+    if (u.attackFlash > 0) renderer3dLastAttackTick.set(u, gameTime);
+    let lastAttack = renderer3dLastAttackTick.get(u);
+    let recentlyAttacked = lastAttack !== undefined && gameTime - lastAttack < RENDERER3D_ANGRY_LINGER_SECONDS * TICK_RATE;
+    let target = u.targetUnit || u.targetBuilding;
+    let engaged = u.commandState === CMD_ATTACKING && target && !target.dead && !(target.energy <= 0);
+    if (recentlyAttacked || engaged) return 'angry';
+    if (activity.mode >= 2 && activity.mode <= 6) return 'work';
+    if (activity.mode === 7) return 'sleep';
+    return 'walk';
+}
+
+// The unit a barrack or worker building produces, a small still miniature
+// among the yard's back features (3D only): the unit at the front of the
+// queue, else the building's own unit type. Its front display shows the
+// queued count (also 0). Cached per building; call right after the
 // building's object was pushed.
 const renderer3dProductionGhosts = new WeakMap();
-const RENDERER3D_WORKSHOP_DECK_TOP = 0.112; // deck height in model units (createFigureData)
-const RENDERER3D_WORKSHOP_DECK_CENTER_Z = 0.09; // display center on the deck
+// Placement per yard style: Defence3Renderer3D.workshopMiniature.
+const RENDERER3D_WORKSHOP_MINIATURE_FALLBACK = { x: 0, y: .112, z: -.30, yaw: 0 };
+function _get3DWorkshopMiniature(modelKey) {
+    let R = typeof window !== 'undefined' ? window.Defence3Renderer3D : null;
+    return (R && R.workshopMiniature && R.workshopMiniature(modelKey)) || RENDERER3D_WORKSHOP_MINIATURE_FALLBACK;
+}
 function _pushProductionGhost(objects, entity, flat2d) {
     if (flat2d || !entity || entity.underConstruction || !(entity.energy > 0) || entity._historyGhost) return;
-    let queue = entity.spawnQueue;
-    if (!queue || !queue.length || !(entity.spawnCooldown > 0)) return;
     let building = objects[objects.length - 1];
     if (!building) return;
-    let entry = queue[0];
+    let queue = Array.isArray(entity.spawnQueue) ? entity.spawnQueue : null;
+    let entry = queue && queue.length ? queue[0] : null;
     let type = (entry && typeof entry === 'object' && entry.unitType) || getSpawnerFallbackUnitType(entity);
     let stats = BASE_UNIT_STATS[type];
     if (!stats) return;
@@ -1556,8 +1652,8 @@ function _pushProductionGhost(objects, entity, flat2d) {
     if (!cache || cache.type !== type || cache.owner !== entity.owner) {
         let footprint = Math.max(0.28, Math.min(0.9, ((stats.r || 8) * 2.2) / TILE));
         let mount = type === 'fast' ? 1.35 : type === 'scout' ? 1.2 : type === 'flying' ? 1.3 : 1;
-        // Fit the deck: at most ~half a tile wide (winged mounts are wider).
-        let width = Math.min(type === 'flying' || type === 'scout' ? 0.34 : 0.46, footprint * mount * 0.85);
+        // A miniature: about a sixth of a tile wide (mounts a little wider).
+        let width = mount > 1 ? 0.2 : 0.16;
         let temp = [];
         push3DRenderObject(temp, {
             modelKey: `unit_${type}`,
@@ -1574,14 +1670,15 @@ function _pushProductionGhost(objects, entity, flat2d) {
             topTextureKey: `unit:${type}:${entity.owner}:`,
             topTextureCanvas: get3DUnitTopTexture(type, entity.owner)
         });
-        cache = { type, owner: entity.owner, object: temp[0], litVersion: -1, litGrid: null };
+        cache = { type, owner: entity.owner, object: temp[0], stand: _get3DWorkshopMiniature(building.modelKey), litVersion: -1, litGrid: null };
         renderer3dProductionGhosts.set(entity, cache);
     }
-    let o = cache.object;
-    o.x = building.x;
-    o.z = building.z + RENDERER3D_WORKSHOP_DECK_CENTER_Z * building.scaleZ;
-    o.y = building.y + building.scaleY * RENDERER3D_WORKSHOP_DECK_TOP;
-    o.rotationY = ((entity._historyGhost ? 0 : gameTime + tickAlpha) / Math.max(1, TICK_RATE)) * 0.7 + (Number(entity.gx) || 0);
+    let o = cache.object, stand = cache.stand;
+    o.x = building.x + stand.x * building.scaleX;
+    o.z = building.z + stand.z * building.scaleZ;
+    o.y = building.y + building.scaleY * stand.y;
+    o.rotationY = stand.yaw;
+    o.statusTextureCanvas = get3DStatusTexture(queue ? queue.length : 0);
     if (cache.litVersion !== visibilityVersion || cache.litGrid !== visibilityGrid) {
         _relight3DObject(o, null, o.baseTint, o.baseSideTint, false);
         cache.litVersion = visibilityVersion;
@@ -1841,6 +1938,7 @@ function build3DFrameData(flat2d = false) {
             renderShape: 'cylinder',
             topTextureKey: snake2DTexture ? snake2DTexture._renderer3DExactKey : snakeTextureKey,
             topTextureCanvas: snake2DTexture || get3DUnitTopTexture(unit, unit.owner, unitStatus),
+            statusTextureCanvas: unit._historyGhost ? null : get3DStatusTexture(getUnit3DStatusState(unit, getUnit3DActivity(unit))),
             sideTint,
         });
     };
@@ -2179,10 +2277,7 @@ function build3DFrameData(flat2d = false) {
                 }
                 _relight3DObject(o, u, cached.tint, cached.sideTint, !!objects.flat2d, cached.sourceLight);
                 objects.push(o);
-                if (!flat2d) {
-                    pushUnit3DActivityEffects(objects, u, cached.activity, ux / TILE, uy / TILE, footprint);
-                    pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
-                }
+                if (!flat2d) pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
                 continue;
             }
             // Mounts (pony, winged horses) carry a rider: larger than a lone figure.
@@ -2230,13 +2325,13 @@ function build3DFrameData(flat2d = false) {
                 renderShape: 'cylinder',
                 topTextureKey: unit2DTexture ? unit2DTexture._renderer3DExactKey : `unit:${u.unitType}:${u.owner}:${unitStatus.keySuffix}`,
                 topTextureCanvas: unit2DTexture || get3DUnitTopTexture(u, u.owner, unitStatus),
+                statusTextureCanvas: u._historyGhost ? null : get3DStatusTexture(getUnit3DStatusState(u, activity)),
                 sideTint: unitSideTint,
             });
             renderer3dUnitObjects.set(u, { object: objects[objects.length - 1], tick: gameTime, view: view3DKey, activity, stillSince, baseY,
                 textureVersion: objects[objects.length - 1].topTextureCanvas && objects[objects.length - 1].topTextureCanvas._textureVersion,
                 tint: unitTint, sideTint: unitSideTint, dynamic: !unit2DTexture || unitTextureFallback || !!getDamageFlashState(u) });
             if (!flat2d) {
-                pushUnit3DActivityEffects(objects, u, activity, ux / TILE, uy / TILE, footprint);
                 let o = objects[objects.length - 1];
                 pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
             }

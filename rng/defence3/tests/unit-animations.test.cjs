@@ -16,7 +16,8 @@ for (const mode of [1, 2, 3, 4, 5, 6]) {
 
 assert.match(renderer3d, /uniform float uAnimationMode;/);
 assert.match(renderer3d, /anim:\$\{Number\(object\.animationMode\) \|\| 0\}/);
-assert.match(renderer, /pushUnit3DActivityEffects\(objects, u, activity/);
+// Work is shown by the rig and the front status display, not particles.
+assert.doesNotMatch(renderer, /pushUnit3DActivityEffects|pushWorkerActivityFx/);
 
 for (const weapon of [
     'king_sword', 'great_axe', 'warhammer', 'dual_blades', 'fire_staff', 'water_staff',
@@ -35,7 +36,6 @@ for (const kind of ["'rider:dual_blades'", "'pegasus:bow'", "'pegasus:lance'", "
     assert.ok(renderer3d.includes(kind), `${kind} body plan`);
 }
 assert.match(renderer3d, /if \(\/_resistant\$\/\.test\(type\)\) return `mage:/, 'every elemental caster is a mage');
-assert.match(renderer, /if \(activity\.mode === 3\) return;/);
 assert.match(renderer, /collector: '#f0a52b', healer_unit: '#d8403a', researcher_unit: '#3f74d8'/, 'workers have their own 3D body colors');
 assert.match(renderer, /cell\.item\.type === 'house' \? 0\.82 : isFarmItem \? 0\.72 : 0\.14/);
 assert.doesNotMatch(renderer3d, /serpent:car|snake_segment/, 'snakes render their head only');

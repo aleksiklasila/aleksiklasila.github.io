@@ -177,7 +177,7 @@ r.requestModel = object => object.modelKey === 'custom' ? mesh : null;
 r.getPrimitiveMesh = () => mesh;
 r.tmpModel = new Float32Array(16); r.tmpNormal = new Float32Array(9);
 r.instancedMeshUniforms = {}; r.meshUniforms = {};
-r.cubeInstanceCapacity = 2048; r.cubeInstanceArray = new Float32Array(2048 * 27);
+r.cubeInstanceCapacity = 2048; r.cubeInstanceArray = new Float32Array(2048 * 28);
 r.getTopTexture = () => ({});
 let shadowComputations = 0, shadowInstances = 0, colorInstances = 0;
 const originalCompute = r.computeShadow;
@@ -186,7 +186,7 @@ const originalDrawShadows = r.drawShadows;
 r.drawShadows = (meshes, batches) => {
     shadowInstances += meshes.length;
     for (const batch of [batches.box, batches.cylinder]) for (let i = 0; i < batch.count; i++) {
-        const base = i * 27;
+        const base = i * 28; // INSTANCE_STRIDE
         assert.ok(Math.hypot(batch.data[base], batch.data[base + 2]) > 0 && batch.data[base + 19] > 0);
         shadowInstances++;
     }

@@ -194,7 +194,8 @@ function buildResourceCollectorCardTypes() {
     let out = {};
     for (let cfg of RESOURCE_TYPE_LIST) {
         out[cfg.farmKey] = { name: cfg.farmName, price: cfg.key === 'astar' ? 50 : 40, icon: cfg.farmIcon, color: cfg.farmColor, visionRange: 0, multiplier: 0.02, upKeep: 2.8, target: 'floor', resourceKey: cfg.key };
-        out[cfg.collectorBuildingKey] = { name: cfg.collectorBuildingName, price: cfg.key === 'astar' ? 170 : 150, icon: cfg.collectorBuildingIcon, color: cfg.collectorBuildingColor, visionRange: 0.6, energy: 60, upKeep: 2.8, target: 'floor', resourceKey: cfg.key };
+        // shopName: the build menu's narrow tiles drop the resource icon.
+        out[cfg.collectorBuildingKey] = { name: cfg.collectorBuildingName, shopName: 'Collector', price: cfg.key === 'astar' ? 170 : 150, icon: cfg.collectorBuildingIcon, color: cfg.collectorBuildingColor, visionRange: 0.6, energy: 60, upKeep: 2.8, target: 'floor', resourceKey: cfg.key };
     }
     return out;
 }

@@ -1932,7 +1932,7 @@ function updateBuildMenu() {
             div.appendChild(iconWrap);
             let nameSpan = document.createElement('span');
             nameSpan.className = 'bi-name';
-            nameSpan.textContent = def.name;
+            nameSpan.textContent = def.shopName || def.name;
             div.appendChild(nameSpan);
             let priceSpan = document.createElement('span');
             priceSpan.className = 'bi-price';

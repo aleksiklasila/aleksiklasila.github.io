@@ -426,9 +426,7 @@ function _pushLaserFenceFx(t) {
 
 // ---- Buildings at work (3D only) ---------------------------------------
 
-// A production wheel turning on the side wall while a queue runs; the
-// research lab's instruments orbit its roof; houses breathe smoke. `roof`
-// is the height of the rendered roof.
+// Houses breathe smoke. `roof` is the height of the rendered roof.
 function pushStructureActivityFx(entity, x, z, roof, ownerColor) {
     if (!_fx.batch || _fx.flat || !_fx.detail || entity.underConstruction) return;
     let now = _fx.now / _fx.tickScale, seed = (entity.gx * 7 + entity.gy * 13) | 0;
@@ -440,15 +438,7 @@ function pushStructureActivityFx(entity, x, z, roof, ownerColor) {
         }
         return;
     }
-    if (type === 'research') {
-        if (!entity.researchTask) return;
-        for (let k = 0; k < 2; k++) {
-            let a = now * .09 + k * Math.PI;
-            _fxOrb(x + Math.sin(a) * .56, roof - .04 + Math.sin(a * 2) * .05, z + Math.cos(a) * .56, .1, k ? '#c76cff' : '#55bfff', .95, 1);
-        }
-        return;
-    }
-    // Production itself is shown by the unit turning on the workshop deck.
+    // Production is shown by the unit miniature on the workshop deck.
 }
 
 // Steam from a moving snake engine's stack, dust behind heavy walkers.
@@ -467,22 +457,6 @@ function pushUnitMotionFx(u, x, z, footprint, scaleY) {
     } else if (u.unitType === 'tank' || u.unitType === 'boss' || u.unitType === 'king') {
         let local = (now / 10 + u.id * .29) % 1;
         _fxOrb(x - fx * (.2 + local * .2), .04 + local * .12, z - fz * (.2 + local * .2), .07 + local * .12, '#b9ab92', .35 * (1 - local), 0);
-    }
-}
-
-// Small contact accents for workers at a job (sparks, restorative motes).
-function pushWorkerActivityFx(u, mode, x, z, footprint, phase) {
-    if (!_fx.batch || _fx.flat || !_fx.detail || mode < 2 || mode === 3) return;
-    let palette = { 2: ['#ffb52e', '#fff1a8'], 4: ['#ff7043', '#d7e0e8'], 5: ['#62ffb0', '#eafff4'], 6: ['#55bfff', '#c76cff'] }[mode];
-    if (!palette) return;
-    for (let i = 0; i < 2; i++) {
-        let p = phase + i * Math.PI;
-        let burst = mode === 2 || mode === 4;
-        let radius = mode === 5 ? .38 : mode === 6 ? .32 : .24;
-        let ox = burst ? Math.cos(p * .63) * .2 : Math.cos(p) * radius;
-        let oz = burst ? .26 + Math.sin(p * .71) * .16 : Math.sin(p) * radius;
-        let oy = burst ? .18 + ((phase * .18 + i / 2) % 1) * .42 : .28 + Math.sin(p * 2) * .16 + i * .035;
-        _fxOrb(x + ox * footprint, oy * Math.max(.7, footprint), z + oz * footprint, burst ? .05 : .065, palette[i], .72 + .2 * Math.sin(p), 1);
     }
 }
 
