@@ -347,6 +347,9 @@ class Unit {
         this.holdPosition = undefined; this._ambientSoundTicks = undefined;
 
         this._spatialKey = undefined;
+        // A snapshot restore writes every field itself (same order, so the
+        // same layout) and indexes the unit afterwards.
+        if (_snapUnitShellMode) return;
         applyUnitLevelScaling(this, 1);
         this.energy = this.preComputedEffective ? this.preComputedEffective.maxEnergy : this.energy;
         updateUnitSpatial(this);

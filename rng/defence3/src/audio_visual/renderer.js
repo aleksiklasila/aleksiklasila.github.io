@@ -1073,6 +1073,7 @@ function build3DOverlayData(bounds, alpha) {
         }
     }
 
+    for (let ring of commandFeedbackRings3D()) overlays.rings.push(ring);
     return overlays;
 }
 
@@ -2921,6 +2922,7 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
     if (isMultiplayer) {
         netMaintain(now);
         driveStrictLockstep(now, currentTick);
+        resyncHostFlushHashes(now);
     }
     let catchUp = 0;
     if (isMultiplayer && !isHost) {
@@ -2944,6 +2946,20 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
                 accumulator = Math.min(accumulator, TICK_MS);
             }
             break;
+        }
+        if (isMultiplayer) {
+            // Resync patches: the host encodes one, or the guest applies one,
+            // in its own frame; the tick runs in the next.
+            if (isHost) {
+                if (resyncHostBeforeTick(currentTick)) break;
+            } else if (resyncGuest.T === currentTick) {
+                let hadPatch = !!resyncGuest.patch;
+                if (!resyncGuestBeforeTick(currentTick, now)) {
+                    if (due) accumulator = Math.min(accumulator, TICK_MS);
+                    break;
+                }
+                if (hadPatch) break;
+            }
         }
         if (due) accumulator -= TICK_MS;
         else catchUp--;

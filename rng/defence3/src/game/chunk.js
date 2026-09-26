@@ -182,6 +182,10 @@ function _regionMayHaveEnemyUnits(ownerId, minCx, minCy, maxCx, maxCy) {
 
 function _addUnitToSpatialArray(arr, u) {
     if (!arr) return false;
+    // Arrays are sorted by id: a unit with a higher id than every member
+    // (new units, whole rebuilds in id order) goes at the end directly.
+    let n = arr.length;
+    if (n === 0 || arr[n - 1].id < u.id) { arr.push(u); return true; }
     for (let i = 0; i < arr.length; i++) {
         if (arr[i] === u) return false;
         if (arr[i].id > u.id) {

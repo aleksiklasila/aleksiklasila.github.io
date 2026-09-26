@@ -5870,6 +5870,7 @@ function showGameOver() {
     if (graphWrap) graphWrap.style.display = 'none';
     let btnPlayAgain = document.getElementById('go-btn-play-again');
     if (btnPlayAgain) btnPlayAgain.style.display = (isHost && isMultiplayer) ? 'inline-block' : 'none';
+    refreshGameOverRematchUi();
     renderGameGraph(graphMetric);
     playSound(winner === localPlayerId ? 'victory' : 'defeat');
 }

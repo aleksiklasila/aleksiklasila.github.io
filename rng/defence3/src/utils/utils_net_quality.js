@@ -14,6 +14,9 @@
 
 const NET_AUTO_REFERENCE_TICK_RATE = 20;
 const NET_MAX_INPUT_DELAY_TICKS = 40;
+// Earlier ticks repeated in each tick message (bundles from the host,
+// packets from guests).
+const NET_TICK_REDUNDANCY = 2;
 const NET_PING_INTERVAL_IN_MATCH_MS = 500;
 const NET_STATS_BROADCAST_MS = 2000;
 const NET_PEER_UNRESPONSIVE_MS = 4000;
@@ -28,6 +31,13 @@ let netAutoEnabled = true;
 let netLinkStatsByPeer = {};
 let netRemoteReportByPeer = {};
 let netAutoExtraTicks = 0;
+// Fair play: every player's commands take effect the same number of ticks
+// after they are issued. The host sets this from what its guests' links
+// need and its own commands wait as long (otherwise the host, with no link to
+// cross, would react faster than anyone).
+let netFairInputDelay = true;
+let netMatchInputDelay = 0;
+let netMatchDelayCalmSince = 0;
 let netAutoLastRaiseAt = 0;
 let netAutoLastStallAt = 0;
 let netAutoCalmSince = 0;
@@ -53,6 +63,12 @@ function resetNetCounters() {
         resendRequestsServed: 0,
         packetsResent: 0,
         hardResyncs: 0,
+        // Per-guest repairs (delta or full), and how long the guest waited
+        // for them.
+        patches: 0,
+        fullPatches: 0,
+        patchStallMs: 0,
+        patchStallMaxMs: 0,
         desyncsDetected: 0,
         lastDesyncTick: -1,
         lastDesyncParts: '',
@@ -75,6 +91,8 @@ function resetNetQualityState() {
     netLinkStatsByPeer = {};
     netRemoteReportByPeer = {};
     netAutoExtraTicks = 0;
+    netMatchInputDelay = 0;
+    netMatchDelayCalmSince = 0;
     netAutoLastRaiseAt = 0;
     netAutoLastStallAt = 0;
     netAutoCalmSince = 0;
@@ -192,6 +210,7 @@ function netUpdateAutoController(now = performance.now()) {
     if (!isMultiplayer || !gameStarted) return;
     if (isHost) {
         LOCKSTEP_PIPELINE_TICKS = Math.max(0, Math.floor(Number(INPUT_DELAY) || 0));
+        netHostUpdateMatchInputDelay(now);
         return;
     }
     if (netAutoEnabled) {
@@ -219,6 +238,49 @@ function netUpdateAutoController(now = performance.now()) {
     } else {
         netAutoCalmSince = now;
     }
+}
+
+// Host: the match-wide command delay is the largest any playing guest needs
+// (what it reports, or what its measured ping implies until it reports).
+// Raised at once, lowered a tick at a time after a calm period.
+function netHostUpdateMatchInputDelay(now = performance.now()) {
+    if (!isHost) return;
+    let target = 0;
+    if (netFairInputDelay) {
+        for (let pid of getActiveMatchPeerIds()) {
+            if (!pid || pid === myPeerId) continue;
+            let r = netRemoteReportByPeer[pid];
+            let need = r ? r.inputDelay : NaN;
+            if (!Number.isFinite(need) || need <= 0) {
+                let link = netGetLinkStats(pid);
+                let rtt = netRttBudgetMs(link);
+                need = Number.isFinite(rtt) ? Math.ceil((rtt + 1000 / 60 + 10) / TICK_MS) : Math.floor(Number(LOCKSTEP_PIPELINE_MIN) || 2);
+            }
+            target = Math.max(target, need);
+        }
+    }
+    target = Math.max(0, Math.min(NET_MAX_INPUT_DELAY_TICKS, Math.floor(target)));
+    if (target > netMatchInputDelay) {
+        netMatchInputDelay = target;
+        netMatchDelayCalmSince = now;
+    } else if (target < netMatchInputDelay) {
+        if (!netMatchDelayCalmSince) netMatchDelayCalmSince = now;
+        if ((now - netMatchDelayCalmSince) > 3000) {
+            netMatchInputDelay--;
+            netMatchDelayCalmSince = now;
+        }
+    } else {
+        netMatchDelayCalmSince = now;
+    }
+}
+
+// Ticks between issuing a command and the tick it runs on.
+function netCommandLeadTicks() {
+    let lead = Math.max(0, Math.floor(INPUT_DELAY || 0));
+    if (!isMultiplayer || !gameStarted) return lead;
+    if (!isHost) lead = Math.max(lead, Math.max(0, Math.floor(LOCKSTEP_PIPELINE_TICKS || 0)) + 1);
+    if (netFairInputDelay) lead = Math.max(lead, netMatchInputDelay + 1);
+    return lead;
 }
 
 // Called by the simulation pump: `waiting` is true while the next tick is due
@@ -276,6 +338,7 @@ function netLocalReport(now = performance.now()) {
         tick: Math.floor(Number(currentTick) || 0),
         hidden: !!document.hidden,
         resyncs: netCounters.hardResyncs,
+        patches: netCounters.patches + netCounters.fullPatches,
         desyncs: netCounters.desyncsDetected
     };
 }
@@ -518,6 +581,8 @@ function buildNetworkInfoPanelHtml() {
     let stall = netStallPercent(now);
     let html = title;
     html += row('Tick rate', `${Math.floor(Number(_tpsDisplay) || 0)} / ${TICK_RATE} TPS`, (_tpsDisplay || 0) >= TICK_RATE * 0.9 ? '#9f9' : '#fc8');
+    let leadTicks = netCommandLeadTicks();
+    html += row('Command delay', `${leadTicks} ticks (${Math.round(leadTicks * TICK_MS)} ms)${netFairInputDelay ? ' · equal for all' : ''}`);
     if (isHost) {
         html += row('Your input delay', `${delayTicks} ticks (${Math.round(delayTicks * TICK_MS)} ms)`);
     } else {
@@ -526,11 +591,11 @@ function buildNetworkInfoPanelHtml() {
         html += row('Ping to host', hostLink && Number.isFinite(hostLink.srtt) ? `${Math.round(hostLink.srtt)} ms ±${Math.round(hostLink.rttvar)}` : '--');
     }
     html += row('Waiting (10s)', `${stall.toFixed(1)}%`, stall < 2 ? '#9f9' : stall < 10 ? '#fc8' : '#f88');
-    html += row('Resyncs / desyncs', `${netCounters.hardResyncs} / ${netCounters.desyncsDetected}`, netCounters.desyncsDetected > 0 ? '#fc8' : '#cde');
+    html += row('Desyncs', `${netCounters.desyncsDetected} · ${netCounters.patches + netCounters.fullPatches} patched · ${netCounters.hardResyncs} full resyncs`, netCounters.desyncsDetected > 0 ? '#fc8' : '#cde');
     html += row('Resend requests', `${netCounters.resendRequestsSent} sent · ${netCounters.resendRequestsServed} served`);
     if (netCounters.hostMigrations > 0) html += row('Host changes', String(netCounters.hostMigrations), '#fc8');
     if (netCounters.lastSnapshotAt) {
-        html += row('Last snapshot', `${Math.round(netCounters.snapshotBytes / 1024)} KB · ${Math.round(netCounters.snapshotApplyMs)} ms · ${_formatSecs(now - netCounters.lastSnapshotAt)} ago`);
+        html += row('Last repair', `${Math.round(netCounters.snapshotBytes / 1024)} KB · ${Math.round(isHost ? netCounters.snapshotBuildMs : netCounters.snapshotApplyMs)} ms${!isHost && netCounters.patchStallMs > 0 ? ` · waited ${Math.round(netCounters.patchStallMs)} ms` : ''} · ${_formatSecs(now - netCounters.lastSnapshotAt)} ago`);
     }
     if (netCounters.lastDesyncTick >= 0) {
         html += row('Last desync', `tick ${netCounters.lastDesyncTick}${netCounters.lastDesyncParts ? ` (${_escapeHtml(netCounters.lastDesyncParts)})` : ''}`, '#fc8');

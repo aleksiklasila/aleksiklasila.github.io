@@ -3032,11 +3032,9 @@ function queueAction(action) {
         // is back (they are scheduled after every tick already sent).
         scheduleGuestAutoReconnect('Lost host connection');
     }
-    let actionLead = Math.max(0, Math.floor(INPUT_DELAY || 0));
-    // Guests send packets up to current + input delay; commands go right after.
-    if (isMultiplayer && gameStarted && !isHost) {
-        actionLead = Math.max(actionLead, Math.max(0, Math.floor(LOCKSTEP_PIPELINE_TICKS || 0)) + 1);
-    }
+    // Guests send packets up to current + input delay; commands go right
+    // after. In fair mode everyone, the host included, waits the match delay.
+    let actionLead = netCommandLeadTicks();
     let tick = currentTick + actionLead;
     if (isMultiplayer && gameStarted) {
         // A sent packet may already be sealed by the host, and a sealed tick
@@ -3049,6 +3047,7 @@ function queueAction(action) {
     let actorId = myPeerId || `p${localPlayerId}`;
     let finalAction = { ...action, teamId: localPlayerId, netId: `${actorId}:${nextLocalActionSeq++}` };
     localInputBuffer[tick].push(finalAction);
+    if (typeof noteCommandFeedback === 'function') noteCommandFeedback(finalAction, tick);
 
     // The tick is unsent (guest) or unsealed (host): rebuild its packet.
     delete lockstepLocalPacketByTick[tick];
