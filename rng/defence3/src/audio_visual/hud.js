@@ -574,8 +574,8 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
         let sec = getEnergyDeltaWindowSeconds(metric);
         let value = getPlayerEnergyDeltaRate(owner, sourceKey, sec) - getUpkeepForMetric(metric);
         let thingHtml = label
-            ? _buildInfoPanelThingSelectableLabelHtml(domain, filterKey, label, thumbSpec, 103, `Select all ${label || filterKey}`)
-            : _buildInfoPanelThingSelectableVisualHtml(domain, filterKey, thumbSpec, 40, `Select all ${filterKey}`);
+            ? _buildInfoPanelThingSelectableLabelHtml(domain, filterKey, label, thumbSpec, 103, `Select all ${label || _infoPanelFilterName(domain, filterKey)}`)
+            : _buildInfoPanelThingSelectableVisualHtml(domain, filterKey, thumbSpec, 40, `Select all ${_infoPanelFilterName(domain, filterKey)}`);
         return `<div class="info-row" style="margin:0;gap:6px;align-items:center">`
             + `<button class="info-energy-delta-window-btn" data-metric="${metric}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`
             + thingHtml
@@ -608,7 +608,7 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
                 let unitUpkeep = Math.max(0, Number(upkeepUnitTypes[unitType]) || 0);
                 let unitValue = -unitUpkeep;
                 let sec = getEnergyDeltaWindowSeconds(`unit_${unitType}`);
-                let thingHtml = _buildInfoPanelThingSelectableVisualHtml('units', unitType, { thumbKey: unitType, isUnit: true }, 40, `Select all ${unitType}`);
+                let thingHtml = _buildInfoPanelThingSelectableVisualHtml('units', unitType, { thumbKey: unitType, isUnit: true }, 40, `Select all ${getUnitDisplayName(unitType)}`);
                 html += `<div class="info-row" style="margin:0;gap:6px;align-items:center">`
                     + `<button class="info-energy-delta-window-btn" data-metric="unit_${unitType}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`
                     + thingHtml
@@ -624,7 +624,7 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
                 let buildingUpkeep = Math.max(0, Number(upkeepBuildingTypes[buildingType]) || 0);
                 let buildingValue = -buildingUpkeep;
                 let sec = getEnergyDeltaWindowSeconds('total');
-                let thingHtml = _buildInfoPanelThingSelectableVisualHtml('buildings', buildingType, { thumbKey: buildingType, isUnit: false }, 40, `Select all ${buildingType}`);
+                let thingHtml = _buildInfoPanelThingSelectableVisualHtml('buildings', buildingType, { thumbKey: buildingType, isUnit: false }, 40, `Select all ${_prettyBuildingTypeLabel(buildingType)}`);
                 html += `<div class="info-row" style="margin:0;gap:6px;align-items:center">`
                     + `<button class="info-energy-delta-window-btn" data-metric="building_${buildingType}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`
                     + thingHtml
@@ -657,14 +657,13 @@ function _getPlayerAstarDeltaRate(owner, windowSeconds, matcherFn) {
 }
 
 function _prettyUnitTypeLabel(unitType) {
-    if (unitType === 'collector') return 'Collector';
-    if (unitType === 'astar_collector') return 'A*er';
-    if (unitType === 'salvager_unit') return 'Salvager';
-    if (unitType === 'builder_unit') return 'Builder';
-    if (unitType === 'healer_unit') return 'Healer';
-    if (unitType === 'researcher_unit') return 'Researcher';
-    if (unitType === 'king') return 'King';
-    return String(unitType || 'Other').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    return unitType ? getUnitDisplayName(unitType) : 'Other';
+}
+
+// Name of a roster/upkeep filter key for tooltips.
+function _infoPanelFilterName(domain, filterKey) {
+    if (!filterKey || filterKey === 'total') return 'owned';
+    return String(domain || '').includes('unit') ? getUnitDisplayName(filterKey) : _prettyBuildingTypeLabel(filterKey);
 }
 
 function _prettyBuildingTypeLabel(buildingType) {
@@ -678,9 +677,7 @@ function _prettyBuildingTypeLabel(buildingType) {
     if (key.startsWith('barrack_')) {
         return `${_prettyUnitTypeLabel(key.slice('barrack_'.length))} Barrack`;
     }
-    let def = BASE_CARD_TYPES[key];
-    if (def && def.name) return String(def.name);
-    return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    return getBuildingDisplayName(key);
 }
 
 function _buildInfoPanelThingLabelHtml(label, thumbSpec = null, labelWidth = 103) {
@@ -764,8 +761,8 @@ function buildInfoPanelAstarBudgetHtml(owner) {
         let sec = getAstarWindowSeconds(metric);
         let value = _getPlayerAstarDeltaRate(owner, sec, matcherFn);
         let thingHtml = label
-            ? _buildInfoPanelThingSelectableLabelHtml(domain, filterKey, label, thumbSpec, 103, `Select all ${label || filterKey}`)
-            : _buildInfoPanelThingSelectableVisualHtml(domain, filterKey, thumbSpec, 40, `Select all ${filterKey}`);
+            ? _buildInfoPanelThingSelectableLabelHtml(domain, filterKey, label, thumbSpec, 103, `Select all ${label || _infoPanelFilterName(domain, filterKey)}`)
+            : _buildInfoPanelThingSelectableVisualHtml(domain, filterKey, thumbSpec, 40, `Select all ${_infoPanelFilterName(domain, filterKey)}`);
         return `<div class="info-row" style="margin:0;gap:6px;align-items:center">`
             + secBtn(metric, sec)
             + thingHtml
@@ -828,7 +825,7 @@ function buildInfoPanelUpKeepHtml(owner) {
         + `<span class="info-value" style="color:#f88">-${fmt(value)}⚡/ s</span>`
         + `</div>`;
     let typedRow = (value, thumbSpec, domain, filterKey) => `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
-        + _buildInfoPanelThingSelectableVisualHtml(domain, filterKey, thumbSpec, 40, `Select all ${filterKey}`)
+        + _buildInfoPanelThingSelectableVisualHtml(domain, filterKey, thumbSpec, 40, `Select all ${_infoPanelFilterName(domain, filterKey)}`)
         + `<span class="info-value" style="color:#f88">-${fmt(value)}⚡/ s</span>`
         + `</div>`;
 
@@ -1331,11 +1328,11 @@ function _getInfoPanelThingThumbKey(ref, targetType = '') {
 
 function _getInfoPanelThingTitle(ref, targetType = '') {
     if (!ref) return 'Assigned target';
-    if (ref.unitType) return `${String(ref.unitType).replace(/_/g, ' ')} #${Math.floor(Number(ref.id) || 0)}`;
-    if (ref._isGoldMine || targetType === 'mine' || (Number.isFinite(ref.gold) && Number.isFinite(ref.maxGold))) return 'Gold Mine';
+    if (ref.type === 'barrack' && ref.unitType) return getBuildingDisplayName(`barrack_${ref.unitType}`);
+    if (ref.unitType) return `${getUnitDisplayName(ref.unitType)} #${Math.floor(Number(ref.id) || 0)}`;
+    if (ref._isGoldMine || targetType === 'mine' || (Number.isFinite(ref.gold) && Number.isFinite(ref.maxGold))) return 'Energy Mine';
     if (ref._isAstarMine || targetType === 'astar_mine' || (Number.isFinite(ref.astar) && Number.isFinite(ref.maxAstar))) return 'A* Mine';
-    if (ref.type === 'barrack' && ref.unitType) return `Barrack (${ref.unitType})`;
-    if (ref.type) return String(ref.type).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    if (ref.type) return getBuildingDisplayName(ref.type);
     return 'Assigned target';
 }
 
@@ -2470,28 +2467,25 @@ function bindInfoPanelInteractionTracking(panel) {
     }, { passive: true });
 }
 
+// An anchor key is its attribute part and its (normalized) text. The text is
+// read only for elements whose attribute part matches: textContent of every
+// container repeats its whole subtree, which made restoring the anchor after a
+// rebuild of a large selection panel cost hundreds of milliseconds.
+function getInfoPanelAnchorAttributeKey(el) {
+    if (!el) return '';
+    let ds = el.dataset || {};
+    return (el.tagName || '') + '|' + String(el.className || '').trim() + '|' + (ds.type || '') + '|' + (ds.kind || '')
+        + '|' + (ds.key || '') + '|' + (ds.statKey || '') + '|' + (ds.gx || '') + '|' + (ds.gy || '') + '|' + (ds.coords || '')
+        + '|' + (ds.scope || '') + '|' + (ds.thingId || '') + '|' + (ds.unitId || '') + '|' + (ds.matrixId || '');
+}
+
+function getInfoPanelAnchorText(el) {
+    return el ? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60) : '';
+}
+
 function getInfoPanelAnchorKey(el) {
     if (!el) return '';
-    let cls = String(el.className || '').trim();
-    let ds = el.dataset || {};
-    let keyParts = [
-        el.tagName || '',
-        cls,
-        ds.type || '',
-        ds.kind || '',
-        ds.key || '',
-        ds.statKey || '',
-        ds.gx || '',
-        ds.gy || '',
-        ds.coords || '',
-        ds.scope || '',
-        ds.thingId || '',
-        ds.unitId || '',
-        ds.matrixId || ''
-    ];
-    let text = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60);
-    keyParts.push(text);
-    return keyParts.join('|');
+    return getInfoPanelAnchorAttributeKey(el) + '|' + getInfoPanelAnchorText(el);
 }
 
 function captureInfoPanelMouseAnchor(panel) {
@@ -2520,8 +2514,15 @@ function captureInfoPanelMouseAnchor(panel) {
     if (!anchorEl || !panel.contains(anchorEl)) anchorEl = rawEl;
 
     let anchorRect = anchorEl.getBoundingClientRect();
+    let attributeKey = getInfoPanelAnchorAttributeKey(anchorEl), text = getInfoPanelAnchorText(anchorEl);
     return {
-        key: getInfoPanelAnchorKey(anchorEl),
+        key: attributeKey + '|' + text,
+        attributeKey,
+        text,
+        tagName: anchorEl.tagName,
+        className: anchorEl.getAttribute('class'),
+        stableKey: getInfoPanelAnchorStableKey(anchorEl),
+        element: anchorEl,
         mouseX: mx,
         mouseY: my,
         offsetX: mx - anchorRect.left,
@@ -2529,31 +2530,56 @@ function captureInfoPanelMouseAnchor(panel) {
     };
 }
 
+// The anchor's identity without text and per-refresh numbering (matrix ids,
+// group coordinate lists): a last resort when its exact key is gone.
+function getInfoPanelAnchorStableKey(el) {
+    if (!el) return '';
+    let ds = el.dataset || {};
+    return (el.tagName || '') + '|' + (el.getAttribute('class') || '') + '|' + (ds.type || '') + '|' + (ds.kind || '')
+        + '|' + (ds.key || '') + '|' + (ds.statKey || '') + '|' + (ds.gx || '') + '|' + (ds.gy || '') + '|' + (ds.scope || '')
+        + '|' + (ds.thingId || '') + '|' + (ds.unitId || '');
+}
+
 function restoreInfoPanelMouseAnchor(panel, anchor) {
     if (!panel || !anchor || !anchor.key) return;
     let lastManualTs = infoPanelLastManualScrollTsByEl.get(panel) || 0;
     if (performance.now() - lastManualTs < 250) return;
 
-    let candidates = panel.querySelectorAll('*');
     let best = null;
-    let bestScore = Infinity;
     let desiredTop = anchor.mouseY - anchor.offsetY;
     let desiredLeft = anchor.mouseX - anchor.offsetX;
-
-    for (let el of candidates) {
-        if (getInfoPanelAnchorKey(el) !== anchor.key) continue;
-        let top = el.getBoundingClientRect().top;
-        let score = Math.abs(top - desiredTop);
-        if (score < bestScore) {
-            bestScore = score;
-            best = el;
+    // Text/attribute patches and rebuilds of other sections keep the hovered
+    // element itself: hold it in place directly.
+    if (anchor.element && anchor.element.isConnected && anchor.element !== panel && panel.contains(anchor.element)) {
+        best = anchor.element;
+    } else {
+        // Tag and class are part of the key: compare them before reading
+        // data attributes of thousands of elements.
+        let attributeKey = anchor.attributeKey;
+        let candidates = attributeKey !== undefined && anchor.tagName ? panel.getElementsByTagName(anchor.tagName) : panel.querySelectorAll('*');
+        let bestScore = Infinity, fallback = null, fallbackScore = Infinity;
+        for (let el of candidates) {
+            let exact;
+            if (attributeKey !== undefined) {
+                if (el.getAttribute('class') !== anchor.className) continue;
+                exact = getInfoPanelAnchorAttributeKey(el) === attributeKey && getInfoPanelAnchorText(el) === anchor.text;
+                if (!exact && (best || getInfoPanelAnchorStableKey(el) !== anchor.stableKey)) continue;
+            } else {
+                exact = getInfoPanelAnchorKey(el) === anchor.key;
+                if (!exact) continue;
+            }
+            let score = Math.abs(el.getBoundingClientRect().top - desiredTop);
+            if (exact && score < bestScore) { bestScore = score; best = el; }
+            else if (!exact && score < fallbackScore) { fallbackScore = score; fallback = el; }
         }
+        if (!best) best = fallback;
     }
 
     if (!best) return;
     let afterRect = best.getBoundingClientRect();
     let deltaY = afterRect.top - desiredTop;
     let deltaX = afterRect.left - desiredLeft;
+    if (Math.abs(deltaY) <= 0.5 && Math.abs(deltaX) <= 0.5) return;
     infoPanelProgrammaticScrollUntilByEl.set(panel, performance.now() + 80);
     if (Math.abs(deltaY) > 0.5) panel.scrollTop += deltaY;
     if (Math.abs(deltaX) > 0.5) panel.scrollLeft += deltaX;
@@ -2778,15 +2804,8 @@ function getEntityGroupKey(e) {
 function getEntityGroupLabel(e) {
     if (_isGoldMineLikeEntity(e)) return 'Energy Mine';
     if (_isAstarMineLikeEntity(e)) return 'A* Mine';
-    if (e.type === 'barrack') return ((BASE_CARD_TYPES['barrack_' + e.unitType] || {}).name || e.unitType);
-    if (e instanceof Tower) return (BASE_CARD_TYPES[e.type] || {}).name || e.type;
-    if (e.type === 'spawner') return 'Collector';
-    if (e.type === 'astar_spawner') return 'A*er';
-    if (e.type === 'salvager') return 'Salvager';
-    if (e.type === 'builder_spawner') return 'Builder';
-    if (e.type === 'healer_spawner') return 'Healer';
-    if (e.type === 'research') return 'Research';
-    if (e.type && BASE_CARD_TYPES[e.type]) return BASE_CARD_TYPES[e.type].name;
+    if (e.type === 'barrack') return getBuildingDisplayName('barrack_' + e.unitType);
+    if (e.type) return getBuildingDisplayName(e.type);
     return 'Unknown';
 }
 
@@ -3243,7 +3262,7 @@ function renderTowerGroupInfo(group) {
 
 function renderSpawnerInfo(e) {
     let html = '';
-    let unitLabel = e.type === 'spawner' ? 'Collector' : e.type === 'astar_spawner' ? 'A*er' : e.type === 'builder_spawner' ? 'Builder' : e.type === 'healer_spawner' ? 'Healer' : 'Salvager';
+    let unitLabel = getUnitDisplayName(getSpawnerFallbackUnitType(e));
     let workerUnitType = e.type === 'spawner' ? 'collector'
         : e.type === 'astar_spawner' ? 'astar_collector'
         : e.type === 'builder_spawner' ? 'builder_unit'
@@ -3401,7 +3420,7 @@ function renderGoldMineInfo(e) {
     html += infoRow('Energy', formatInfoFraction(Math.floor(e.gold), e.maxGold));
     let pct = e.maxGold > 0 ? Math.round(e.gold / e.maxGold * 100) : 0;
     html += infoRow('Remaining', `${pct}%`);
-    html += infoDesc('Natural energy deposit. Send collectors to gather.');
+    html += infoDesc('Natural energy deposit. Send ⚡ collectors to gather.');
     return html;
 }
 
@@ -3410,7 +3429,7 @@ function renderAstarMineInfo(e) {
     html += infoRow('A*', formatInfoFraction(Math.floor(e.astar), e.maxAstar));
     let pct = e.maxAstar > 0 ? Math.round(e.astar / e.maxAstar * 100) : 0;
     html += infoRow('Remaining', `${pct}%`);
-    html += infoDesc('Natural A* deposit. Send A*ers to gather.');
+    html += infoDesc('Natural A* deposit. Send ★ collectors to gather.');
     return html;
 }
 
@@ -3549,7 +3568,7 @@ function renderUnitInfo(u) {
         html += `<span class="info-scale-group-btn" data-mode="d2" data-ids="${u.id}" data-unit-type="${u.unitType}" data-unit-level="${ignoreLevelSubgroups ? '' : getUnitBaseLevel(u)}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#fc8">/2</span>`;
         html += `</div></div>`;
     }
-    html += infoDesc(DESCRIPTIONS[u.unitType] || 'Combat unit.');
+    html += infoDesc(getUnitDescription(u.unitType));
     return html;
 }
 
@@ -3730,7 +3749,7 @@ function renderUnitGroupInfo(group) {
         html += `<span class="info-scale-group-btn" data-mode="d2" data-ids="${ids}" data-unit-type="${u0.unitType}" data-unit-level="${subgroupLevel}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#fc8">/2</span>`;
         html += `</div></div>`;
     }
-    html += infoDesc(DESCRIPTIONS[u0.unitType] || 'Combat unit.');
+    html += infoDesc(getUnitDescription(u0.unitType));
     return html;
 }
 
@@ -3778,7 +3797,7 @@ function renderGoldMineGroupInfo(group) {
     html += infoRow('Energy', formatInfoFraction(Math.floor(totalGold), totalMax));
     let pct = totalMax > 0 ? Math.round(totalGold / totalMax * 100) : 0;
     html += infoRow('Remaining', `${pct}%`);
-    html += infoDesc('Natural energy deposit. Send collectors to gather.');
+    html += infoDesc('Natural energy deposit. Send ⚡ collectors to gather.');
     return html;
 }
 
@@ -3790,15 +3809,15 @@ function renderAstarMineGroupInfo(group) {
     html += infoRow('A*', formatInfoFraction(Math.floor(totalAstar), totalMax));
     let pct = totalMax > 0 ? Math.round(totalAstar / totalMax * 100) : 0;
     html += infoRow('Remaining', `${pct}%`);
-    html += infoDesc('Natural A* deposit. Send A*ers to gather.');
+    html += infoDesc('Natural A* deposit. Send ★ collectors to gather.');
     return html;
 }
 
 function renderSpawnerGroupInfo(group) {
     let html = '';
     let e = group[0];
-    let label = e.type === 'spawner' ? 'Collector' : e.type === 'astar_spawner' ? 'A*er' : e.type === 'builder_spawner' ? 'Builder' : e.type === 'healer_spawner' ? 'Healer' : 'Salvager';
-    let unitLabel = e.type === 'spawner' ? 'Collector' : e.type === 'astar_spawner' ? 'A*er' : e.type === 'builder_spawner' ? 'Builder' : e.type === 'healer_spawner' ? 'Healer' : 'Salvager';
+    let label = getBuildingDisplayName(e.type);
+    let unitLabel = getUnitDisplayName(getSpawnerFallbackUnitType(e));
     let workerUnitType = e.type === 'spawner' ? 'collector'
         : e.type === 'astar_spawner' ? 'astar_collector'
         : e.type === 'builder_spawner' ? 'builder_unit'
@@ -5059,16 +5078,66 @@ function indexInfoPanelText(panel, html) {
     for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node);
     let textNodes = new Array(parts.length).fill(null), next = 0;
     for (let i = 0; i < parts.length; i += 2) if (parts[i]) textNodes[i] = nodes[next++] || null;
-    // Anything the parser dropped or merged makes the mapping unreliable.
-    return { parts, textNodes: next === nodes.length ? textNodes : null };
+    // Opening tags map to elements in document order, so a tag whose
+    // attributes changed can be patched in place (see patchInfoPanelText).
+    let elements = panel.getElementsByTagName('*'), tagElements = new Array(parts.length).fill(null), nextElement = 0;
+    for (let i = 1; i < parts.length; i += 2) {
+        let tag = parts[i];
+        if (tag.charCodeAt(1) === 47 /* / */ || tag.charCodeAt(1) === 33 /* ! */) continue;
+        tagElements[i] = elements[nextElement++] || null;
+    }
+    // Anything the parser dropped, merged or inserted (implicit table
+    // bodies...) makes a mapping unreliable.
+    return {
+        parts,
+        textNodes: next === nodes.length ? textNodes : null,
+        tagElements: nextElement === elements.length ? tagElements : null
+    };
+}
+
+// Attributes of one generated start tag, or null if it is not in the simple
+// form the panel emits (name followed by quoted/bare attributes).
+const _INFO_PANEL_TAG_RE = /^<([a-zA-Z][a-zA-Z0-9-]*)([^>]*?)\/?>$/;
+const _INFO_PANEL_ATTR_RE = /\s+([^\s=>"'\/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/y;
+function _parseInfoPanelTag(tag) {
+    let match = _INFO_PANEL_TAG_RE.exec(tag);
+    if (!match) return null;
+    let rest = match[2], attrs = new Map(), re = _INFO_PANEL_ATTR_RE;
+    re.lastIndex = 0;
+    while (re.lastIndex < rest.length) {
+        let start = re.lastIndex, attr = re.exec(rest);
+        if (!attr || attr.index !== start) return /^\s*$/.test(rest.slice(start)) ? { name: match[1].toLowerCase(), attrs } : null;
+        let value = attr[2] !== undefined ? attr[2] : attr[3] !== undefined ? attr[3] : attr[4] !== undefined ? attr[4] : '';
+        attrs.set(attr[1].toLowerCase(), value);
+    }
+    return { name: match[1].toLowerCase(), attrs };
+}
+
+// The attribute edits turning start tag `before` into `after` on the same
+// element, or null when that is not a pure attribute change. Listeners are
+// bound by class after a rebuild, so a changed class needs a rebuild too.
+function _infoPanelTagAttributeEdits(before, after) {
+    let a = _parseInfoPanelTag(before), b = _parseInfoPanelTag(after);
+    if (!a || !b || a.name !== b.name || (a.attrs.get('class') || '') !== (b.attrs.get('class') || '')) return null;
+    let edits = [];
+    for (let [name, value] of b.attrs) if (a.attrs.get(name) !== value) edits.push(name, value);
+    for (let name of a.attrs.keys()) if (!b.attrs.has(name)) edits.push(name, null);
+    return edits;
 }
 
 let _infoPanelTextDecoder = null;
+// Decoding runs the HTML parser; panel strings repeat, so remember them.
+const _infoPanelDecodedText = new Map();
 function _decodeInfoPanelText(text) {
-    if (!/[&<]/.test(text)) return text;
+    if (text.indexOf('&') < 0 && text.indexOf('<') < 0) return text;
+    let decoded = _infoPanelDecodedText.get(text);
+    if (decoded !== undefined) return decoded;
     if (!_infoPanelTextDecoder) _infoPanelTextDecoder = document.createElement('textarea');
     _infoPanelTextDecoder.innerHTML = text;
-    return _infoPanelTextDecoder.value;
+    decoded = _infoPanelTextDecoder.value;
+    if (_infoPanelDecodedText.size >= 4096) _infoPanelDecodedText.clear();
+    _infoPanelDecodedText.set(text, decoded);
+    return decoded;
 }
 
 // Apply a text-only change to the rendered panel. Returns false (and leaves
@@ -5077,20 +5146,40 @@ function patchInfoPanelText(render, html) {
     if (!render || !render.textNodes || !render.parts) return false;
     let parts = html.split(/(<[^>]*>)/), old = render.parts;
     if (parts.length !== old.length) return false;
-    let changes = [];
+    let changes = [], attributeChanges = [];
     for (let i = 0; i < parts.length; i++) {
         if (parts[i] === old[i]) continue;
-        // Tags, and text appearing or disappearing, change the node structure.
-        if (i % 2 || !parts[i] || !old[i]) return false;
+        if (i % 2) {
+            // A start tag whose attributes changed (a state label, a
+            // tooltip...) is patched on its element; other tag changes
+            // alter the node structure.
+            let element = render.tagElements ? render.tagElements[i] : null;
+            if (!element || !element.isConnected) return false;
+            let edits = _infoPanelTagAttributeEdits(old[i], parts[i]);
+            if (!edits) return false;
+            attributeChanges.push(element, edits);
+            continue;
+        }
+        // Text appearing or disappearing changes the node structure.
+        if (!parts[i] || !old[i]) return false;
         let node = render.textNodes[i];
         if (!node || !node.isConnected || node.data !== _decodeInfoPanelText(old[i])) return false;
         changes.push(i);
     }
     for (let i of changes) render.textNodes[i].data = _decodeInfoPanelText(parts[i]);
+    for (let k = 0; k < attributeChanges.length; k += 2) {
+        let element = attributeChanges[k], edits = attributeChanges[k + 1];
+        for (let e = 0; e < edits.length; e += 2) {
+            if (edits[e + 1] === null) element.removeAttribute(edits[e]);
+            else element.setAttribute(edits[e], _decodeInfoPanelText(edits[e + 1]));
+        }
+    }
     render.parts = parts;
     render.html = html;
     return true;
 }
+
+const INFO_PANEL_SECTION_OPEN = '<div class="info-panel-section">';
 
 function updateInfoPanel(panelOverride = null, opts = {}) {
     let panel = panelOverride || document.getElementById('info-panel');
@@ -5155,7 +5244,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     let unitGroups = {};
     for (let u of selectedUnits) {
         let key = getUnitGroupKey(u);
-        if (!unitGroups[key]) unitGroups[key] = { label: u.unitType.toUpperCase(), items: [], isUnit: true };
+        if (!unitGroups[key]) unitGroups[key] = { label: getUnitDisplayName(u.unitType), items: [], isUnit: true };
         unitGroups[key].items.push(u);
     }
 
@@ -5206,10 +5295,15 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     }
 
     // --- INDIVIDUAL GROUP SECTIONS (only show active groups) ---
+    // Each group is its own section element, so a structural change in one
+    // (a worker's assignment appearing, a queue emptying) rebuilds only that
+    // section instead of the whole panel.
+    let sectionMarks = [];
     let activeGroupCount = 0;
     for (let [key, grp] of allGroups) {
         if (subgroupState[key] === false) continue;
         activeGroupCount++;
+        sectionMarks.push(html.length);
 
         let items = grp.items;
         let label = grp.label;
@@ -5254,12 +5348,20 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
     }
 
+    sectionMarks.push(html.length);
     if (activeGroupCount === 0) {
         let playerStatusHtml = buildInfoPanelPlayerStatusHtml();
         if (playerStatusHtml) {
             html += `<div style="margin-top:4px">${playerStatusHtml}</div>`;
         }
     }
+    let sectionHtml = [];
+    for (let i = 0, start = 0; i <= sectionMarks.length; i++) {
+        let end = i < sectionMarks.length ? sectionMarks[i] : html.length;
+        sectionHtml.push(html.slice(start, end));
+        start = end;
+    }
+    html = sectionHtml.map(section => INFO_PANEL_SECTION_OPEN + section + '</div>').join('');
 
     // Keep existing nodes/listeners when both the displayed result and their
     // captured selection are unchanged. Refreshes still calculate live stats.
@@ -5275,21 +5377,65 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     // Live stats (energy totals, cooldowns...) usually change only text. With
     // identical markup, update those text nodes in place: listeners stay bound
     // (they read attributes/text at event time) and no layout is forced.
-    if (sameSelection && patchInfoPanelText(previousRender, html)) {
-        if (!panelOverride) {
-            let researchPopup = document.getElementById('research-popup');
-            if (researchPopup && !researchPopup.classList.contains('hidden')) renderResearchPopupContent();
+    let refreshResearchPopup = () => {
+        if (panelOverride) return;
+        let researchPopup = document.getElementById('research-popup');
+        if (researchPopup && !researchPopup.classList.contains('hidden')) renderResearchPopupContent();
+    };
+    // Sections whose markup changed only in text or attributes are patched
+    // in place; the rest are rebuilt (and their controls bound) one by one.
+    let rebuildSections = null;
+    // Read the layout before changing the content (the only forced layout),
+    // so patched and rebuilt content keeps the control under the mouse still.
+    let panelMouseAnchor = captureInfoPanelMouseAnchor(panel);
+    if (sameSelection && previousRender.sections && previousRender.sections.length === sectionHtml.length) {
+        rebuildSections = [];
+        for (let i = 0; i < sectionHtml.length; i++) {
+            let section = previousRender.sections[i];
+            if (section.html === sectionHtml[i]) continue;
+            if (!section.element.isConnected || section.element.parentNode !== panel) { rebuildSections = null; break; }
+            if (!patchInfoPanelText(section, sectionHtml[i])) rebuildSections.push(i);
         }
+        // Rebuilding most of the panel costs no more as one replacement.
+        if (rebuildSections && rebuildSections.length > 1 && rebuildSections.length * 2 > sectionHtml.length) rebuildSections = null;
+    }
+    if (rebuildSections && rebuildSections.length === 0) {
+        previousRender.html = html;
+        restoreInfoPanelMouseAnchor(panel, panelMouseAnchor);
+        refreshResearchPopup();
         activeFormatBigNumberSuffixStart = prevFormatBigNumberSuffixStart;
         return;
     }
-    // Read the layout before replacing the content (the only forced layout).
-    let panelMouseAnchor = captureInfoPanelMouseAnchor(panel);
-    panel.innerHTML = html;
-    panel._selectionRenderCache = panelOverride ? null : {
-        html, subgroups: subgroupState, units: selectedUnits.slice(), entities: selectedEntities.slice(),
-        ...indexInfoPanelText(panel, html)
-    };
+    let bindRoots = [];
+    if (rebuildSections) {
+        for (let i of rebuildSections) {
+            let element = previousRender.sections[i].element;
+            element.innerHTML = sectionHtml[i];
+            previousRender.sections[i] = { html: sectionHtml[i], element, ...indexInfoPanelText(element, sectionHtml[i]) };
+            bindRoots.push(element);
+        }
+        previousRender.html = html;
+    } else {
+        panel.innerHTML = html;
+        let elements = panel.children, sections = null;
+        if (!panelOverride && elements.length === sectionHtml.length) {
+            sections = sectionHtml.map((sectionMarkup, i) => ({ html: sectionMarkup, element: elements[i], ...indexInfoPanelText(elements[i], sectionMarkup) }));
+        }
+        panel._selectionRenderCache = panelOverride ? null : {
+            html, subgroups: subgroupState, units: selectedUnits.slice(), entities: selectedEntities.slice(), sections
+        };
+        bindRoots.push(panel);
+    }
+    for (let root of bindRoots) bindInfoPanelSectionControls(root);
+    restoreInfoPanelMouseAnchor(panel, panelMouseAnchor);
+    if (isInfoButtonHelpPopupOpen() && infoButtonHelpPanel === panel) renderInfoButtonHelpPopup();
+    refreshResearchPopup();
+    activeFormatBigNumberSuffixStart = prevFormatBigNumberSuffixStart;
+    return;
+
+    // Controls of a rebuilt root (the panel or one section). Existing
+    // sections keep theirs: they read attributes/text at event time.
+    function bindInfoPanelSectionControls(panel) {
     bindInfoPanelPlayerStatusControls(panel);
 
     // Insert thumbnails into sub-group toggle icons
@@ -5553,8 +5699,6 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
             }
         });
     });
-
-    restoreInfoPanelMouseAnchor(panel, panelMouseAnchor);
 
     panel.querySelectorAll('.info-research-move-top-btn').forEach(btn => {
         bindInstantPress(btn, () => {
@@ -5840,7 +5984,6 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     panel.querySelectorAll('.info-btn-help-btn').forEach(btn => {
         bindInstantPress(btn, () => openInfoButtonHelpPopup(btn));
     });
-    if (isInfoButtonHelpPopupOpen() && infoButtonHelpPanel === panel) renderInfoButtonHelpPopup();
     // Wire up x2 /2 subgroup resize buttons (units)
     panel.querySelectorAll('.info-scale-group-btn').forEach(btn => {
         bindInstantPress(btn, () => {
@@ -5857,14 +6000,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
             setTimeout(updateInfoPanel, 50);
         });
     });
-
-    if (!panelOverride) {
-        let researchPopup = document.getElementById('research-popup');
-        if (researchPopup && !researchPopup.classList.contains('hidden')) {
-            renderResearchPopupContent();
-        }
     }
-    activeFormatBigNumberSuffixStart = prevFormatBigNumberSuffixStart;
 }
 
 function showGameOver() {

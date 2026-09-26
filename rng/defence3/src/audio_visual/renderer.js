@@ -42,6 +42,31 @@ let _backgroundTickInterval = null;
 let _hiddenLastTickTime = 0;
 let _hiddenTickAccumulator = 0;
 let _buildMenuRefreshCounter = 0;
+
+// The info panel refreshes every INFO_PANEL_REFRESH_MS, stretched for large
+// selections so that refreshing takes at most ~5% of the time (the markup of
+// hundreds of selected things costs tens of milliseconds to rebuild).
+const INFO_PANEL_REFRESH_MS = 250;
+const INFO_PANEL_REFRESH_MAX_MS = 1500;
+let _infoPanelNextRefreshAt = 0;
+let _infoPanelRefreshCostMs = 0;
+
+// Commands take effect on a later tick, so refreshing the panel as they are
+// issued shows nothing new yet costs a full refresh on the input frame. Pull
+// the periodic refresh forward to just after that tick instead.
+function requestInfoPanelRefresh(delayMs = TICK_MS * 1.5) {
+    _infoPanelNextRefreshAt = Math.min(_infoPanelNextRefreshAt, performance.now() + delayMs);
+}
+
+function _refreshInfoPanelPeriodic(now) {
+    if (now < _infoPanelNextRefreshAt || researchQueueDragInProgress) return;
+    let started = performance.now();
+    updateInfoPanel();
+    let cost = performance.now() - started;
+    // Smoothed, so one slow refresh (a garbage collection) does not stall it.
+    _infoPanelRefreshCostMs += (cost - _infoPanelRefreshCostMs) * 0.3;
+    _infoPanelNextRefreshAt = now + Math.min(INFO_PANEL_REFRESH_MAX_MS, Math.max(INFO_PANEL_REFRESH_MS, _infoPanelRefreshCostMs * 20));
+}
 let _minimapRefreshCounter = 10;
 let _backgroundCacheRefreshCounter = 20;
 let _fpsFrameCount = 0, _fpsLastTime = performance.now(), _fpsDisplay = 0;
@@ -758,12 +783,9 @@ function get3DSpawnerSideVisualizationVariant(spawner) {
 // (~0.52 world) with only slight variation, instead of growing with vision
 // range: uneven heights make the 3D skyline look messy. Towers stay tall.
 function get3DStructureModelHeight(type) {
-    switch (type) {
-        case 'barrack': return 0.6;
-        case 'research': return 0.64;
-        case 'spawner': case 'astar_spawner': return 0.56;
-        default: return 0.58;
-    }
+    // Barracks and worker buildings are flat workshop yards (deck plus
+    // features along the back edge); one height keeps the skyline even.
+    return 0.62;
 }
 
 function get3DFloorItemSideVisualizationVariant(item) {
@@ -1443,19 +1465,29 @@ function getUnit3DActivity(u) {
     return { mode: 0, amount: 0, target: null };
 }
 
+// 3D body colors that differ from the 2D sprite color: healers are red and
+// researchers blue, so flying workers read apart from fighters at a glance.
+const UNIT_3D_BODY_COLORS = { collector: '#f0a52b', healer_unit: '#d8403a', researcher_unit: '#3f74d8' };
+// Riders on (winged) horses: height = width * MOUNT_HEIGHT_RATIO.
+const MOUNTED_UNIT_TYPES = new Set(['fast', 'scout', 'flying']);
+const MOUNT_HEIGHT_RATIO = 0.87;
+
 function getUnit3DWeaponType(u) {
     let unitType = String(u && u.unitType || '');
     let workerType = String(u && u.workerType || '');
-    if (workerType === 'builder') return 'hammer';
-    if (workerType === 'collector' || workerType === 'astar_collector') return 'pickaxe';
-    if (workerType === 'salvager') return 'cutter';
-    if (workerType === 'healer') return 'healer_staff';
-    if (workerType === 'researcher') return 'research_orb';
+    if (workerType === 'builder' || unitType === 'builder_unit') return 'hammer';
+    // Energy grows on farm trees (an axe); A* is dug from mines (a pickaxe).
+    if (workerType === 'collector' || unitType === 'collector') return 'axe';
+    if (workerType === 'astar_collector' || unitType === 'astar_collector') return 'pickaxe';
+    if (workerType === 'salvager' || unitType === 'salvager_unit') return 'cutter';
+    if (workerType === 'healer' || unitType === 'healer_unit') return 'healer_staff';
+    if (workerType === 'researcher' || unitType === 'researcher_unit') return 'research_orb';
     if (unitType === 'king') return 'king_sword';
     if (unitType === 'boss') return 'great_axe';
     if (unitType === 'tank') return 'warhammer';
     if (unitType === 'fast') return 'dual_blades';
-    if (unitType === 'flying' || unitType === 'scout') return 'talons';
+    if (unitType === 'flying') return 'lance';
+    if (unitType === 'scout') return 'bow';
     if (unitType === 'mole') return 'claws';
     let styleWeapons = {
         fire: 'fire_staff', water: 'water_staff', ice: 'ice_staff',
@@ -1499,8 +1531,64 @@ function _pushStructureActivity(objects, entity, flat2d) {
     let type = entity.type;
     if (type !== 'house' && type !== 'research' && !(entity.spawnQueue && entity.spawnQueue.length)) return;
     let o = objects[objects.length - 1];
-    let roof = type === 'house' ? .63 : .9;
+    // Workshops are open yards: activity rises from among their back features.
+    let roof = type === 'house' ? .63 : .5;
     pushStructureActivityFx(entity, o.x, o.z, o.y + o.scaleY * roof, get3DRenderOwnerColor(entity.owner));
+}
+
+// The unit a barrack or worker building is producing, turning slowly on
+// its deck (3D only). One cached object per building; call right after the
+// building's object was pushed.
+const renderer3dProductionGhosts = new WeakMap();
+const RENDERER3D_WORKSHOP_DECK_TOP = 0.112; // deck height in model units (createFigureData)
+const RENDERER3D_WORKSHOP_DECK_CENTER_Z = 0.09; // display center on the deck
+function _pushProductionGhost(objects, entity, flat2d) {
+    if (flat2d || !entity || entity.underConstruction || !(entity.energy > 0) || entity._historyGhost) return;
+    let queue = entity.spawnQueue;
+    if (!queue || !queue.length || !(entity.spawnCooldown > 0)) return;
+    let building = objects[objects.length - 1];
+    if (!building) return;
+    let entry = queue[0];
+    let type = (entry && typeof entry === 'object' && entry.unitType) || getSpawnerFallbackUnitType(entity);
+    let stats = BASE_UNIT_STATS[type];
+    if (!stats) return;
+    let cache = renderer3dProductionGhosts.get(entity);
+    if (!cache || cache.type !== type || cache.owner !== entity.owner) {
+        let footprint = Math.max(0.28, Math.min(0.9, ((stats.r || 8) * 2.2) / TILE));
+        let mount = type === 'fast' ? 1.35 : type === 'scout' ? 1.2 : type === 'flying' ? 1.3 : 1;
+        // Fit the deck: at most ~half a tile wide (winged mounts are wider).
+        let width = Math.min(type === 'flying' || type === 'scout' ? 0.34 : 0.46, footprint * mount * 0.85);
+        let temp = [];
+        push3DRenderObject(temp, {
+            modelKey: `unit_${type}`,
+            x: building.x, y: building.y, z: building.z,
+            scaleX: width, scaleZ: width,
+            scaleY: MOUNTED_UNIT_TYPES.has(type) ? width * MOUNT_HEIGHT_RATIO : width * Math.max(0.48, footprint * 1.45) / footprint,
+            weaponType: getUnit3DWeaponType({ unitType: type }),
+            preserveModelHeight: true,
+            isFlying: !!stats.isFlying,
+            isWorker: !!stats.isWorker,
+            renderShape: 'cylinder',
+            tint: get3DRenderOwnerColor(entity.owner),
+            sideTint: UNIT_3D_BODY_COLORS[type] || stats.color || get3DRenderOwnerColor(entity.owner),
+            topTextureKey: `unit:${type}:${entity.owner}:`,
+            topTextureCanvas: get3DUnitTopTexture(type, entity.owner)
+        });
+        cache = { type, owner: entity.owner, object: temp[0], litVersion: -1, litGrid: null };
+        renderer3dProductionGhosts.set(entity, cache);
+    }
+    let o = cache.object;
+    o.x = building.x;
+    o.z = building.z + RENDERER3D_WORKSHOP_DECK_CENTER_Z * building.scaleZ;
+    o.y = building.y + building.scaleY * RENDERER3D_WORKSHOP_DECK_TOP;
+    o.rotationY = ((entity._historyGhost ? 0 : gameTime + tickAlpha) / Math.max(1, TICK_RATE)) * 0.7 + (Number(entity.gx) || 0);
+    if (cache.litVersion !== visibilityVersion || cache.litGrid !== visibilityGrid) {
+        _relight3DObject(o, null, o.baseTint, o.baseSideTint, false);
+        cache.litVersion = visibilityVersion;
+        cache.litGrid = visibilityGrid;
+    }
+    _touch3DPanel(o.topTextureCanvas);
+    objects.push(o);
 }
 
 // Structures barely change, but the scene is rebuilt every frame. Reuse a
@@ -1831,6 +1919,11 @@ function build3DFrameData(flat2d = false) {
     }
 
     let pushCellItem = (x, y, cell) => {
+        // Barracks and spawners are cell items too, but draw themselves in
+        // their own passes below (drawFloorItem leaves their panel blank).
+        // Both passes share the per-entity static object cache, so pushing
+        // them here would let the blank floor object replace the real one.
+        if (typeof cell.item.draw === 'function') return;
         let bgSoundRow = bgSoundGrid[y];
         let fxSoundRow = fxSoundGrid[y];
         let bgLevel = bgSoundRow ? bgSoundRow[x] || 0 : 0;
@@ -1840,16 +1933,17 @@ function build3DFrameData(flat2d = false) {
         if (_reuseStatic3DObject(objects, cell.item, x, y, audioMove, audioHeight)) { _pushStructureActivity(objects, cell.item, flat2d); return; }
         let item2DTexture = get3DExact2DFloorTexture(cell.item, cell.owner);
         let itemStatus = item2DTexture ? null : get3DBuildingTextureStatus(cell.item);
+        let isFarmItem = cell.item.type === 'farm' || cell.item.type === 'astar_farm';
         push3DRenderObject(objects, {
             modelKey: `item_${cell.item.type || 'floor'}`,
             x: x + 0.5 + reactiveOffsetX * audioMove,
             y: get3DConstructionLift(cell.item),
             z: y + 0.5 + reactiveOffsetY * audioMove,
             scaleX: 0.84,
-            scaleY: (cell.item.type === 'house' ? 0.82 : 0.14) * (1 + audioHeight),
+            scaleY: (cell.item.type === 'house' ? 0.82 : isFarmItem ? 0.72 : 0.14) * (1 + audioHeight),
             overlapFade: getOverlapFadeForTile(x, y),
             scaleZ: 0.84,
-            preserveModelHeight: cell.item.type === 'house',
+            preserveModelHeight: cell.item.type === 'house' || isFarmItem,
             visibilitySource: cell.item,
             rotationY: -(Number(cell.item.angle) || 0),
             tint: get3DDamageFlashTint(cell.item, get3DRenderOwnerColor(cell.owner)),
@@ -1901,17 +1995,19 @@ function build3DFrameData(flat2d = false) {
         let tower2DTexture = get3DExact2DTexture(t);
         let tower2DTextureFallback = renderer3dExactTextureFallback;
         let towerStatus = tower2DTexture ? null : get3DBuildingTextureStatus(t);
+        // Clouds are portals: they never aim, and their gate faces the camera.
+        let isPortal = String(t.type || '').startsWith('cloud');
         push3DRenderObject(objects, {
             modelKey: `tower_${t.type || 'base'}`,
             x: t.x / TILE + reactiveOffsetX * audioMove,
             y: get3DConstructionLift(t),
             z: t.y / TILE + reactiveOffsetY * audioMove,
-            scaleX: 0.82,
+            scaleX: isPortal ? 0.96 : 0.82,
             scaleY: 1.05 * (1 + audioHeight),
             overlapFade: getOverlapFadeForTile(t.gx, t.gy),
-            scaleZ: 0.82,
+            scaleZ: isPortal ? 0.96 : 0.82,
             visibilitySource: t,
-            rotationY: Math.PI * 0.5 - (Number(t.angle) || 0),
+            rotationY: isPortal ? 0 : Math.PI * 0.5 - (Number(t.angle) || 0),
             tint: get3DDamageFlashTint(t, get3DRenderOwnerColor(t.owner)),
             alpha: get3DConstructionAlpha(t),
             topTextureKey: tower2DTexture ? tower2DTexture._renderer3DExactKey : `tower:${t.type}:${t.owner}:${_quantizeTowerAngleIndex(t.angle || 0)}:${towerStatus.keySuffix}`,
@@ -1930,7 +2026,7 @@ function build3DFrameData(flat2d = false) {
         let fxLevel = fxSoundRow ? fxSoundRow[s.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-        if (_reuseStatic3DObject(objects, s, s.gx, s.gy, audioMove, audioHeight)) { _pushStructureActivity(objects, s, flat2d); continue; }
+        if (_reuseStatic3DObject(objects, s, s.gx, s.gy, audioMove, audioHeight)) { _pushStructureActivity(objects, s, flat2d); _pushProductionGhost(objects, s, flat2d); continue; }
         let spawner2DTexture = get3DExact2DTexture(s);
         let spawner2DTextureFallback = renderer3dExactTextureFallback;
         let spawnerExtraBars = spawner2DTexture ? null : [];
@@ -1970,6 +2066,7 @@ function build3DFrameData(flat2d = false) {
         });
         _rememberStatic3DObject(objects, s, s.gx, s.gy, audioMove, audioHeight, !spawner2DTexture || spawner2DTextureFallback);
         _pushStructureActivity(objects, s, flat2d);
+        _pushProductionGhost(objects, s, flat2d);
     }
 
     for (let b of barracks) {
@@ -1981,7 +2078,7 @@ function build3DFrameData(flat2d = false) {
         let fxLevel = fxSoundRow ? fxSoundRow[b.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-        if (_reuseStatic3DObject(objects, b, b.gx, b.gy, audioMove, audioHeight)) { _pushStructureActivity(objects, b, flat2d); continue; }
+        if (_reuseStatic3DObject(objects, b, b.gx, b.gy, audioMove, audioHeight)) { _pushStructureActivity(objects, b, flat2d); _pushProductionGhost(objects, b, flat2d); continue; }
         let barrack2DTexture = get3DExact2DTexture(b);
         let barrack2DTextureFallback = renderer3dExactTextureFallback;
         let barrackExtraBars = barrack2DTexture ? null : [];
@@ -2008,6 +2105,7 @@ function build3DFrameData(flat2d = false) {
         });
         _rememberStatic3DObject(objects, b, b.gx, b.gy, audioMove, audioHeight, !barrack2DTexture || barrack2DTextureFallback);
         _pushStructureActivity(objects, b, flat2d);
+        _pushProductionGhost(objects, b, flat2d);
     }
 
     for (let d of droppedItems) {
@@ -2087,14 +2185,15 @@ function build3DFrameData(flat2d = false) {
                 }
                 continue;
             }
-            // Mounts (pony, hippogriff) carry a rider: larger than a lone figure.
-            let modelScale = u.unitType === 'fast' ? 1.35 : u.unitType === 'scout' ? 1.15 : u.isFlying ? (u.isWorker ? 0.65 : 0.8) : 1;
+            // Mounts (pony, winged horses) carry a rider: larger than a lone figure.
+            let modelScale = u.unitType === 'fast' ? 1.35 : u.unitType === 'scout' ? 1.2 : u.unitType === 'flying' ? 1.3
+                : u.isFlying ? 0.8 : 1;
+            let mounted = MOUNTED_UNIT_TYPES.has(u.unitType);
             // The mounted panel is the unit's canonical 2D rendering at every LOD.
             // The shared status texture remains only a short-lived fallback while a
             // newly visible exact texture is rasterized within the frame budget.
-            let unitSideColor = u.unitType === 'collector'
-                ? '#f0a52b'
-                : ((BASE_UNIT_STATS[u.unitType] || BASE_UNIT_STATS.norm).color || null);
+            let unitSideColor = UNIT_3D_BODY_COLORS[u.unitType]
+                || ((BASE_UNIT_STATS[u.unitType] || BASE_UNIT_STATS.norm).color || null);
             let activity = getUnit3DActivity(u);
             let moved = activity.mode !== 0 || activity.amount > 0;
             let stillSince = moved || !cached ? gameTime : cached.stillSince;
@@ -2115,7 +2214,7 @@ function build3DFrameData(flat2d = false) {
                 y: baseY + _unit3DFlightHeight(u, activity),
                 z: uy / TILE + reactiveOffsetY * audioMove,
                 scaleX: footprint * modelScale,
-                scaleY: Math.max(0.48, footprint * 1.45) * (1 + audioHeight) * modelScale,
+                scaleY: (mounted ? footprint * MOUNT_HEIGHT_RATIO : Math.max(0.48, footprint * 1.45)) * (1 + audioHeight) * modelScale,
                 scaleZ: footprint * modelScale,
                 visibilitySource: u,
                 rotationY: Math.atan2(facingX, facingY || 0.0001),
@@ -2123,8 +2222,8 @@ function build3DFrameData(flat2d = false) {
                 walkPhase: _unit3DWalkPhase(u, activity),
                 animationMode: activity.mode,
                 weaponType: getUnit3DWeaponType(u),
-                // Flyers show altitude instead; a vision-stretched hippogriff breaks apart.
-                preserveModelHeight: !!u.isFlying,
+                // Flyers show altitude instead; mounts keep their proportions.
+                preserveModelHeight: !!u.isFlying || mounted,
                 isFlying: !!u.isFlying,
                 isWorker: !!u.isWorker,
                 tint: unitTint,
@@ -2956,12 +3055,12 @@ function processRenderFrame(timestamp) {
         _fpsDisplay = Math.round(_fpsFrameCount * 1000 / (timestamp - _fpsLastTime));
         _fpsFrameCount = 0; _fpsLastTime = timestamp;
     }
-    // Refresh build menu and info panel every ~30 frames.
+    // Refresh the build menu every ~30 frames (the info panel on its own clock).
     if (++_buildMenuRefreshCounter >= 30) {
         _buildMenuRefreshCounter = 0;
         if (_buildMenuNeedsRefresh) updateBuildMenu();
-        if (!researchQueueDragInProgress) updateInfoPanel();
     }
+    _refreshInfoPanelPeriodic(Number.isFinite(timestamp) ? timestamp : performance.now());
     // Refresh minimap static layer every ~30 frames on a different phase.
     if (++_minimapRefreshCounter >= 30) {
         _minimapRefreshCounter = 0;

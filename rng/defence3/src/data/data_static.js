@@ -93,20 +93,20 @@ const RESOURCE_TYPES = {
         mineStatKey: 'gold',
         mineTileType: 'mine',
         farmKey: 'farm',
-        farmName: 'Energy Farm',
+        farmName: '⚡ Farm',
         farmIcon: '🌾',
         farmColor: '#da0',
-        farmDescription: 'Energy collectors can harvest here; farm level multiplies energy work speed.',
+        farmDescription: 'A tree growing energy. ⚡ Collectors harvest it; farm level multiplies energy work speed.',
         collectorBuildingKey: 'spawner',
-        collectorBuildingName: 'Collector',
+        collectorBuildingName: '⚡ Collector',
         collectorBuildingIcon: '🏭',
         collectorBuildingColor: '#432',
-        collectorBuildingDescription: 'Spawns collectors that gather energy from mines.',
+        collectorBuildingDescription: 'Spawns ⚡ collectors that gather energy from energy mines and farms.',
         collectorUnitKey: 'collector',
-        collectorUnitName: 'Collector',
+        collectorUnitName: '⚡ Collector',
         collectorUnitColor: '#aaa',
         collectorUnitVis: 'star',
-        collectorUnitDescription: 'Resource worker. Mines energy tiles and refills the shared energy stockpile.',
+        collectorUnitDescription: 'Resource worker. Gathers energy from energy mines and farms and refills the shared energy stockpile.',
         gatherPerTrip: 38,
         dropoffSound: 'gold_collected',
         carryGlyph: '⚡',
@@ -123,20 +123,20 @@ const RESOURCE_TYPES = {
         mineStatKey: 'astar',
         mineTileType: 'astar_mine',
         farmKey: 'astar_farm',
-        farmName: 'A* Farm',
+        farmName: '★ Farm',
         farmIcon: '★',
         farmColor: '#9aa',
-        farmDescription: 'A* collectors can harvest here; farm level multiplies A* Work Speed.',
+        farmDescription: 'A mine entrance producing A*. ★ Collectors harvest it; farm level multiplies A* work speed.',
         collectorBuildingKey: 'astar_spawner',
-        collectorBuildingName: 'A*',
+        collectorBuildingName: '★ Collector',
         collectorBuildingIcon: '★',
         collectorBuildingColor: '#432',
-        collectorBuildingDescription: 'Spawns A*ers that gather A* from gray mines and refill the shared A* stockpile.',
+        collectorBuildingDescription: 'Spawns ★ collectors that gather A* from gray A* mines and farms and refill the shared A* stockpile.',
         collectorUnitKey: 'astar_collector',
-        collectorUnitName: 'A* Collector',
+        collectorUnitName: '★ Collector',
         collectorUnitColor: '#bbb',
         collectorUnitVis: 'star',
-        collectorUnitDescription: 'Resource worker. Mines gray A* tiles and refills the shared A* stockpile used by pathfinding.',
+        collectorUnitDescription: 'Resource worker. Gathers A* from gray A* mines and farms and refills the shared A* stockpile used by pathfinding.',
         gatherPerTrip: 40,
         dropoffSound: 'astar_collected',
         carryGlyph: '★',
@@ -488,21 +488,21 @@ const DESCRIPTIONS = {
     healer_spawner: "Spawns healers that restore damaged friendly units. Healers fetch supplies from healer spawners before each heal.",
     research: "Runs queued research projects and spawns researchers that complete research tasks.",
     house: "Raises max population by 1.6^{level} while operational.",
-    cloud_0a: "Cloud bridge endpoint. Connects areas for adjacency.",
-    cloud_0b: "Cloud bridge endpoint. Connects areas for adjacency.",
-    cloud_1a: "Cloud bridge endpoint. Connects areas for adjacency.",
-    cloud_1b: "Cloud bridge endpoint. Connects areas for adjacency.",
-    cloud_2a: "Cloud bridge endpoint. Connects areas for adjacency.",
-    cloud_2b: "Cloud bridge endpoint. Connects areas for adjacency.",
-    cloud_3a: "Cloud bridge endpoint. Connects areas for adjacency.",
-    cloud_3b: "Cloud bridge endpoint. Connects areas for adjacency.",
+    cloud_0a: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
+    cloud_0b: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
+    cloud_1a: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
+    cloud_1b: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
+    cloud_2a: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
+    cloud_2b: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
+    cloud_3a: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
+    cloud_3b: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
     area_upgrader: "Upgrade a fully-filled area's multiplier level. Exponential cost.",
     // Barracks
     barrack_norm: "Trains basic infantry. Balanced stats.",
-    barrack_fast: "Trains fast scouts. Fragile but quick.",
+    barrack_fast: "Trains fast riders. Fragile but quick.",
     barrack_tank: "Trains heavy units. Slow but tough.",
     barrack_boss: "Trains super-heavy units. Expensive powerhouse.",
-    barrack_flying: "Trains flying units. Ignores walls, ranged attack.",
+    barrack_flying: "Trains winged lancers. They fly over walls and swoop onto targets.",
     barrack_mole: "Trains moles. Immune to towers, very fragile.",
     barrack_poison_resistant: "Trains poison-immune units.",
     barrack_fire_resistant: "Trains fire-immune units.",
@@ -513,10 +513,10 @@ const DESCRIPTIONS = {
     barrack_scout: "Trains scouts. Fast flying recon units that roam the map.",
     // Units
     norm: "Basic infantry. Balanced stats, cheap to produce.",
-    fast: "Fast scout. Low Energy but high speed.",
+    fast: "Fast mounted raider. Low Energy but high speed.",
     tank: "Heavy infantry. High Energy and damage, slow.",
     boss: "Super-heavy unit. Extremely tough and powerful.",
-    flying: "Air unit. Ignores walls, has ranged attack.",
+    flying: "Winged lancer. Flies over walls and swoops onto targets.",
     mole: "Stealth unit. Immune to tower fire, very fragile.",
     poison_resistant: "Poison-immune. Attacks with toxic clouds.",
     fire_resistant: "Fire-immune. Attacks with flame bursts.",
@@ -527,8 +527,43 @@ const DESCRIPTIONS = {
     scout: "Fast flying recon. Very high vision, low Energy, low attack. Attacks reveal targets to its team and it patrols random points continuously.",
     healer_unit: "Support worker. Fetches healing supplies from healer spawners and restores nearby damaged friendly units.",
     researcher_unit: "Research worker. Fetches supplies from research labs and converts them into research progress.",
+    builder_unit: "Construction worker. Fetches materials from builder spawners and constructs and upgrades buildings.",
+    salvager_unit: "Recycling worker. Dismantles buildings marked for salvage and returns their resources.",
+    king: "Commander. In Kill King mode, a team whose king dies loses.",
     ...RESOURCE_COLLECTOR_DESCRIPTIONS,
 };
+
+// User-facing names of unit types. Resource workers (and their buildings,
+// see RESOURCE_TYPES) carry their resource's icon, so the energy and A*
+// collectors never share a name.
+const UNIT_DISPLAY_NAMES = {
+    norm: 'Norm', fast: 'Fast', tank: 'Tank', boss: 'Boss', king: 'King', flying: 'Flying', scout: 'Scout', mole: 'Mole',
+    snake: 'Snake', poison_resistant: 'Poison Resistant', fire_resistant: 'Fire Resistant', water_resistant: 'Water Resistant',
+    ice_resistant: 'Ice Resistant', laser_resistant: 'Laser Resistant', builder_unit: 'Builder', salvager_unit: 'Salvager',
+    healer_unit: 'Healer', researcher_unit: 'Researcher',
+    ...Object.fromEntries(RESOURCE_TYPE_LIST.map(cfg => [cfg.collectorUnitKey, cfg.collectorUnitName]))
+};
+
+function _prettyKeyLabel(key) {
+    return String(key || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function getUnitDisplayName(unitType) {
+    return UNIT_DISPLAY_NAMES[unitType] || _prettyKeyLabel(unitType || 'Unit');
+}
+
+// Building card names (BASE_CARD_TYPES), for any building key.
+function getBuildingDisplayName(key) {
+    let def = BASE_CARD_TYPES[key];
+    return def && def.name ? String(def.name) : _prettyKeyLabel(key || 'Building');
+}
+
+// Fallback description of a unit type without one of its own.
+function getUnitDescription(unitType) {
+    if (DESCRIPTIONS[unitType]) return DESCRIPTIONS[unitType];
+    let stats = BASE_UNIT_STATS[unitType];
+    return stats && stats.isWorker ? 'Worker unit.' : 'Combat unit.';
+}
 
 // Build menu categories
 const BUILD_CATEGORIES = {

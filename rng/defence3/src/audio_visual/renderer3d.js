@@ -923,19 +923,27 @@
             part(0, y - .02, z, size + .04, size + .04, .04, 2);
             panel(0, y, z - .024, size, size);
         }
-        // A small seated rider (hands at the pivot height) for mounts.
-        function rider(y, z) {
+        // A small seated rider (hands at the pivot height) for mounts. A
+        // helmed rider wears a closed helm with an owner-colored plume.
+        function rider(y, z, helmed = false) {
             for (let side of [-1, 1]) part(side * .17, y - .12, z + .02, .07, .17, .11, 0);
             part(0, y, z, .25, .24, .18, 0, 0, 0, .8);
             part(0, y + .03, z, .27, .05, .20, 2);
-            part(0, y + .23, z, .21, .19, .19, 0, 0, 0, .3); // hood
+            if (helmed) {
+                part(0, y + .22, z, .20, .17, .19, 1); // helm
+                part(0, y + .38, z - .02, .04, .09, .17, 2); // plume
+                for (let side of [-1, 1]) part(side * .15, y + .18, z, .08, .06, .16, 1); // pauldrons
+            } else {
+                part(0, y + .23, z, .21, .19, .19, 0, 0, 0, .3); // hood
+            }
             part(0, y + .25, z + .085, .14, .08, .03, 1);
             for (let side of [-1, 1]) {
                 part(side * .035, y + .285, z + .10, .03, .015, .01, 3);
                 part(side * .17, y + .03, z + .02, .07, .18, .08, 0, -side, y + .2);
             }
         }
-        let humanoid = kind === 'figure' || kind === 'heavy' || kind === 'knight' || kind === 'ogre' || kind === 'mage' || kind === 'worker';
+        let humanoid = kind === 'figure' || kind === 'heavy' || kind === 'knight' || kind === 'ogre' || kind === 'mage' || kind === 'worker'
+            || kind === 'wingworker';
         if (kind === 'figure' || kind === 'heavy') {
             let bulk = kind === 'heavy' ? 1.2 : 1;
             part(0, .29, 0, .52 * bulk, .39, .34, 0, 0, 0, .76);
@@ -976,7 +984,7 @@
             }
             part(0, .30, 0, .64, .37, .42, 1, 0, 0, .86);
             part(0, .28, .205, .40, .34, .03, 0); // tabard
-            part(0, .30, 0, .66, .06, .44, 2);
+            part(0, .305, 0, .67, .06, .47, 2);
             part(0, .66, 0, .34, .30, .34, 1); // helm
             part(0, .76, .171, .25, .035, .01, 3);
             part(0, .95, -.02, .07, .15, .24, 2); // crest
@@ -1002,8 +1010,8 @@
             // Every caster: long robe, wide-brimmed pointed hat and a staff whose
             // head names the element. The robe and orb carry the element color.
             part(0, 0, 0, .56, .62, .46, 0, 2, .62, .55);
-            part(0, 0, 0, .60, .06, .50, 2);
-            part(0, .34, 0, .40, .05, .34, 2); // sash
+            part(0, 0, 0, .60, .06, .50, 2, 2, .62);
+            part(0, .33, 0, .46, .05, .40, 2, 2, .62); // sash
             part(0, .58, 0, .25, .20, .25, 1); // shadowed face
             for (let side of [-1, 1]) {
                 part(side * .06, .67, .126, .045, .025, .015, 3);
@@ -1013,9 +1021,11 @@
             part(0, .76, .03, .42, .04, .40, 2); // hat brim (clear of the back display)
             part(0, .78, .03, .30, .32, .30, 0, 0, 0, .06); // hat cone
             backPanel(.16, -.215, .46);
-        } else if (kind === 'worker') {
-            // Ground workers are blocky: cube head, hard hat, square body and a
-            // backpack carrying their 2D display.
+        } else if (kind === 'worker' || kind === 'wingworker') {
+            // Workers are blocky: cube head, hard hat, square body and a
+            // backpack carrying their 2D display. Flying workers (healers,
+            // researchers) wear their own headgear and have wings on the pack.
+            let winged = kind === 'wingworker';
             for (let side of [-1, 1]) {
                 part(side * .15, .02, 0, .16, .24, .18, 1, side, .28);
                 part(side * .15, 0, .04, .18, .07, .25, 5, side, .28);
@@ -1027,11 +1037,30 @@
             part(0, .26, .181, .34, .26, .02, 2); // bib
             part(0, .24, 0, .54, .05, .38, 5); // tool belt
             part(0, .58, 0, .28, .24, .26, 6); // cube head
-            part(0, .82, 0, .32, .10, .30, 0); // hard hat
-            part(0, .82, .05, .37, .03, .38, 0);
-            part(0, .92, 0, .06, .02, .30, 2); // hat ridge
+            if (!winged) {
+                part(0, .82, 0, .32, .10, .30, 0); // hard hat
+                part(0, .82, .05, .37, .03, .38, 0);
+                part(0, .92, 0, .06, .02, .30, 2); // hat ridge
+            } else if (weapon === 'healer_staff') {
+                part(0, .82, 0, .31, .11, .29, 9); // red medic cap
+                part(0, .825, 0, .33, .03, .31, 9);
+            } else {
+                part(0, .82, 0, .30, .08, .28, 1); // cap, goggles and a lamp
+                part(0, .90, .02, .05, .06, .05, 7);
+                part(0, .655, 0, .30, .035, .28, 1);
+                for (let side of [-1, 1]) part(side * .07, .64, .135, .08, .07, .025, 3);
+            }
             part(0, .18, -.25, .48, .48, .14, 5); // backpack
             panel(0, .20, -.322, .44, .44);
+            if (winged) {
+                // Wings root on top of the pack and flap about its center.
+                for (let side of [-1, 1]) {
+                    part(side * .12, .64, -.26, .16, .06, .14, 5);
+                    part(side * .34, .64, -.27, .34, .05, .22, 6, side * 3, .66);
+                    part(side * .58, .655, -.30, .22, .04, .18, 6, side * 3, .66, .35);
+                    part(side * .44, .61, -.34, .30, .03, .10, weapon === 'healer_staff' ? 9 : 3, side * 3, .66);
+                }
+            }
         } else if (kind === 'rider') {
             // Fast raiders ride a pony (player-colored mane and blanket).
             part(0, .28, -.02, .34, .24, .62, 5);
@@ -1045,8 +1074,8 @@
                 part(side * .05, .69, .52, .03, .03, .01, 3, 5, .46, 1, 0, .30);
                 for (let end of [-1, 1]) {
                     let z = end > 0 ? .20 : -.24, joint = side * end > 0 ? 4 : -4;
-                    part(side * .11, .02, z, .08, .30, .09, 5, joint, .30);
-                    part(side * .11, 0, z + .01, .09, .05, .10, 1, joint, .30);
+                    part(side * .11, .02, z, .08, .42, .09, 5, joint, .36);
+                    part(side * .11, 0, z + .01, .09, .05, .10, 1, joint, .36);
                 }
             }
             part(0, .36, -.36, .07, .20, .06, 2, 2, .52); // tail
@@ -1059,57 +1088,52 @@
                 part(side * .20, .57, .06, .03, .05, .30, 1, -side, .75);
                 part(side * .20, .55, -.08, .04, .08, .05, 8, -side, .75);
             }
-        } else if (kind === 'griffin') {
-            // Scouts: a hippogriff (eagle fore, horse hind) with a rider and
-            // javelin; it hovers, so the display lies on its back.
-            part(0, .30, -.08, .30, .22, .56, 0);
-            part(0, .28, .18, .30, .28, .22, 6);
-            part(0, .46, .28, .18, .20, .18, 6, 5, .46, 1, 0, .26);
-            part(0, .52, .42, .07, .06, .13, 8, 5, .46, .3, 0, .26); // beak
+        } else if (kind === 'pegasus') {
+            // Scouts and flying units ride winged horses built like the
+            // pony: the display lies flat on the rump (they hover) and
+            // feathered wings rise from the withers. Scouts ride a white
+            // horse with a bow; flying lancers a dark horse with yellow
+            // (type color) mane, tail and wing tips and owner-colored cloth.
+            let lancer = weapon === 'lance';
+            let coat = lancer ? 1 : 6, accent = lancer ? 0 : 2, hoof = lancer ? 0 : 1;
+            part(0, .28, -.02, .34, .24, .62, coat);
+            part(0, .30, .26, .30, .22, .14, coat);
+            part(0, .46, .30, .16, .24, .17, coat, 5, .46, 1, 0, .30); // neck
+            part(0, .62, .42, .15, .14, .28, coat, 5, .46, .85, 0, .30); // head
+            part(0, .60, .56, .12, .10, .08, lancer ? 0 : 1, 5, .46, 1, 0, .30); // muzzle
+            part(0, .57, .27, .05, .20, .14, accent, 5, .46, 1, 0, .30); // mane
             for (let side of [-1, 1]) {
-                part(side * .06, .58, .36, .03, .03, .02, 3, 5, .46, 1, 0, .26);
-                part(side * .10, .08, .20, .07, .22, .08, 6, side * 4, .30); // talons
-                part(side * .10, .10, -.28, .08, .22, .09, 0, -side * 4, .30); // hind legs
-                part(side * .36, .44, -.04, .48, .05, .38, 0, side * 3, .44);
-                part(side * .64, .43, -.12, .26, .04, .26, 6, side * 3, .44, .2);
+                part(side * .05, .76, .36, .03, .07, .03, coat, 5, .46, 1, 0, .30); // ears
+                part(side * .05, .69, .52, .03, .03, .01, 3, 5, .46, 1, 0, .30);
+                for (let end of [-1, 1]) {
+                    let z = end > 0 ? .20 : -.24, joint = side * end > 0 ? 4 : -4;
+                    part(side * .11, .02, z, .08, .42, .09, coat, joint, .36);
+                    part(side * .11, 0, z + .01, .09, .05, .10, hoof, joint, .36);
+                }
+                // Wings (joint 3 flaps them about the withers).
+                part(side * .28, .47, .08, .26, .05, .28, coat, side * 3, .48);
+                part(side * .50, .48, .04, .24, .04, .24, lancer ? 2 : 6, side * 3, .48, .6);
+                part(side * .66, .49, -.02, .14, .03, .16, lancer ? 0 : 6, side * 3, .48, .3);
             }
-            part(0, .32, -.40, .06, .16, .09, 0, 2, .46);
-            rider(.53, .02);
-            part(.15, .60, .08, .03, .03, .62, 5, -1, .72); // javelin
-            part(.15, .595, .40, .05, .05, .10, 1, -1, .72, .1);
-            panel(0, .545, -.24, .40, .40, true);
-        } else if (kind === 'balloon') {
-            // Healers float under a balloon marked with a medic's cross.
-            // Stacked rings approximate a round envelope.
-            part(0, .42, 0, .26, .05, .26, 0);
-            part(0, .47, 0, .50, .07, .50, 0);
-            part(0, .54, 0, .68, .30, .68, 0);
-            part(0, .84, 0, .56, .08, .56, 0);
-            part(0, .92, 0, .38, .05, .38, 0);
-            for (let face of [-1, 1]) {
-                part(0, .66, face * .365, .28, .07, .02, 9);
-                part(0, .60, face * .365, .07, .20, .02, 9);
-                part(face * .365, .66, 0, .02, .07, .28, 9);
-                part(face * .365, .60, 0, .02, .20, .07, 9);
-                for (let side of [-1, 1]) part(side * .14, .20, face * .14, .02, .24, .02, 1);
+            part(0, .36, -.36, .07, .20, .06, accent, 2, .52); // tail
+            part(0, .52, -.02, .38, .03, .32, 2); // blanket (owner color)
+            if (lancer) part(0, .515, -.02, .40, .02, .34, 0); // its yellow trim
+            rider(.55, -.02, lancer);
+            panel(0, .555, -.26, .30, .30, true);
+            if (lancer) {
+                // Lance couched forward and a round shield.
+                part(.20, .57, .30, .04, .04, .62, 5, -1, .75);
+                part(.20, .57, .64, .065, .065, .08, 0, -1, .75, .2);
+                part(.20, .555, .06, .09, .09, .05, 2, -1, .75);
+                part(-.21, .55, .02, .05, .20, .20, 2, 1, .75);
+                part(-.24, .60, .02, .02, .07, .07, 0, 1, .75);
+            } else {
+                // Short bow in the off hand and a quiver on the back.
+                for (let k = -2; k <= 2; k++) part(-.22, .64 + k * .055, .06 - Math.abs(k) * .025, .035, .06, .035, 5, 1, .75);
+                part(-.22, .64, .02, .012, .28, .012, 6, 1, .75); // string
+                part(.10, .64, -.14, .07, .18, .07, 5);
+                for (let k of [-1, 1]) part(.10 + k * .02, .76, -.14, .015, .06, .015, 6);
             }
-            part(0, .02, 0, .30, .18, .30, 5, 2, .3);
-            part(0, .18, 0, .34, .03, .34, 2, 2, .3);
-            part(0, .30, 0, .07, .10, .07, 7);
-            panel(0, .975, 0, .46, .46, true);
-        } else if (kind === 'drone') {
-            // Researchers: a hovering instrument with two counter-turning rings.
-            part(0, .24, 0, .30, .30, .30, 1);
-            part(0, .31, .155, .16, .16, .02, 3);
-            part(0, .54, 0, .22, .06, .22, 0);
-            part(0, .18, 0, .18, .06, .18, 0);
-            for (let s of [-1, 1]) {
-                part(0, .40, s * .31, .62, .04, .05, 0, 6, 0);
-                part(s * .31, .40, 0, .05, .04, .62, 0, 6, 0);
-                part(0, .14, s * .25, .50, .03, .04, 2, -6, 0);
-                part(s * .25, .14, 0, .04, .03, .50, 2, -6, 0);
-            }
-            panel(0, .605, 0, .46, .46, true);
         } else if (kind === 'bird') {
             part(0,.30,0,.30,.25,.64,1,0,0,.65);
             part(0,.49,.25,.25,.21,.26,0,0,0,.55);
@@ -1123,10 +1147,6 @@
             }
             part(0,.30,-.39,.33,.06,.35,2,0,0,.15);
             panel(0,.58,-.10,.43,.42,true);
-            if (weapon === 'healer_staff' || weapon === 'research_orb') {
-                part(0,.17,0,.31,.11,.28,0);
-                part(0,.18,.145,.06,.09,.018,3);
-            }
         } else if (kind === 'mole') {
             part(0,.07,0,.67,.39,.73,0,0,0,.55);
             part(0,.14,.39,.27,.17,.28,1,5,.20,.12,0,.34); // snout sniffs
@@ -1145,6 +1165,230 @@
             part(0,.64,.50,.14,.20,.14,2); // chimney
             part(0,.25,.64,.76,.10,.26,2); // cowcatcher
             panel(0,.88,-.06,.66,.66,true);
+        } else if (kind === 'portal') {
+            // Cloud endpoints: a stone gateway at the back of the tile whose
+            // opening swirls (joint 7 turns rings in the gate's plane over
+            // time) in the cloud's color around a dark core. The 2D display
+            // lies on the flagstones in front, clear of the gate. Lower than
+            // a tower, so the gate hides little of the tile behind it.
+            part(0, 0, 0, .98, .08, .98, 10);
+            part(0, .08, .48, .96, .02, .02, 2);
+            panel(0, .085, .15, .66, .66, true, 0, 0, true);
+            for (let side of [-1, 1]) {
+                part(side * .37, .08, -.34, .17, .60, .22, 10);
+                part(side * .37, .08, -.34, .21, .08, .26, 1);
+                part(side * .37, .38, -.225, .05, .05, .02, 7); // glowing runes
+                part(side * .37, .52, -.225, .05, .05, .02, 7);
+            }
+            part(0, .66, -.34, .94, .10, .26, 10); // lintel
+            part(0, .76, -.34, .34, .06, .18, 10);
+            part(0, .68, -.205, .10, .06, .02, 7); // keystone rune
+            part(0, .08, -.37, .58, .60, .04, 12); // the dark hole
+            // Square rings, outer to inner, alternately glowing and dark,
+            // each turning at its own speed and direction.
+            [[.22, 7, 1, 0], [.16, 12, -1, .5], [.11, 7, 1, 1.1], [.06, 7, -1, 1.9]].forEach(([h, surface, dir, speed], k) => {
+                let z = -.335 + k * .008, t = .04, joint = dir * 7;
+                part(0, .38 + h - t, z, 2 * h, t, .03, surface, joint, .38, 1, 0, speed);
+                part(0, .38 - h, z, 2 * h, t, .03, surface, joint, .38, 1, 0, speed);
+                part(-h + t / 2, .38 - h, z, t, 2 * h, .03, surface, joint, .38, 1, 0, speed);
+                part(h - t / 2, .38 - h, z, t, 2 * h, .03, surface, joint, .38, 1, 0, speed);
+            });
+            part(0, .345, -.30, .07, .07, .03, 7, -7, .38, 1, 0, 2.6); // bright core
+            part(0, .08, -.205, .52, .012, .05, 7); // light spilling out, behind the display
+        } else if (kind === 'farm') {
+            if (weapon === 'astar') {
+                // A* farm: a mine entrance. A stepped rock mound with a
+                // timbered tunnel, rails and a cart of ore; display on top.
+                part(0, 0, 0, .98, .20, .98, 10);
+                part(0, .20, -.06, .86, .22, .80, 10);
+                part(-.30, .20, .30, .20, .10, .20, 10);
+                part(0, .06, .40, .32, .26, .02, 12); // tunnel mouth
+                for (let side of [-1, 1]) part(side * .19, .04, .415, .06, .32, .05, 5);
+                part(0, .34, .415, .46, .06, .07, 5);
+                for (let side of [-1, 1]) part(side * .07, .0, .45, .025, .02, .12, 1); // rails
+                part(.30, .04, .36, .18, .12, .15, 1); // cart
+                for (let side of [-1, 1]) part(.30 + side * .07, .0, .36, .04, .05, .17, 1);
+                part(.30, .16, .36, .15, .06, .12, 6); // ore heap
+                part(.27, .21, .34, .05, .05, .05, 7);
+                part(.33, .20, .39, .04, .04, .04, 7);
+                panel(0, .425, -.06, .80, .80, true, 0, 0, true);
+            } else {
+                // Energy farm: a blocky tree on a tilled plot, growing glowing
+                // energy fruit around its flat crown (the display on top).
+                part(0, 0, 0, .98, .07, .98, 5);
+                for (let z of [-.30, 0, .30]) part(0, .07, z, .90, .02, .06, 1); // furrows
+                part(0, .07, 0, .28, .05, .28, 5);
+                part(0, .07, 0, .16, .36, .16, 5); // trunk
+                part(0, .40, 0, .86, .30, .86, 11); // crown
+                part(0, .43, 0, .92, .20, .70, 11);
+                part(0, .43, 0, .70, .20, .92, 11);
+                for (let side of [-1, 1]) for (let t of [-.24, .22]) {
+                    part(side * .46, .44, t, .08, .10, .08, 7); // fruit
+                    part(t, .47, side * .46, .08, .10, .08, 7);
+                }
+                for (let [x, z] of [[.24, .26], [-.20, .30], [.30, -.18], [-.26, -.24]]) part(x, .32, z, .07, .08, .07, 7);
+                panel(0, .705, 0, .82, .82, true, 0, 0, true);
+            }
+        } else if (kind === 'barrack' || kind === 'workshop') {
+            // Outdoor workshops: a flat deck carrying the 2D display, the
+            // unit in production is assembled on it (a separate object), and
+            // the style's features stand along the back edge so they never
+            // cover the display. Barracks follow their unit's style; worker
+            // buildings are blocky yards with the tools of their trade.
+            let style = weapon;
+            let deckSurface = kind === 'workshop' ? 5 : 14;
+            part(0, 0, 0, .98, .06, .98, 1);
+            part(0, .06, 0, .94, .05, .94, deckSurface);
+            part(0, .06, .47, .94, .03, .02, 2);
+            part(0, .06, -.47, .94, .03, .02, 0);
+            panel(0, .112, .09, .78, .78, true, 0, 0, true);
+            if (style === 'rural') {
+                // Village smithy: a thatched lean-to over a bench and a rack.
+                for (let side of [-1, 1]) part(side * .43, .11, -.42, .06, .56, .06, 5);
+                part(0, .64, -.42, .98, .05, .16, 5);
+                part(0, .69, -.43, 1.0, .08, .20, 13, 0, 0, .85);
+                part(-.16, .11, -.42, .40, .18, .12, 5);
+                part(-.24, .29, -.42, .12, .06, .09, 1); // anvil
+                part(-.08, .29, -.42, .05, .09, .05, 6);
+                for (let k = 0; k < 3; k++) {
+                    part(.14 + k * .09, .11, -.445, .025, .40, .025, 5);
+                    part(.14 + k * .09, .47, -.445, .05, .12, .02, 6, 0, 0, .2);
+                }
+                part(.43, .36, -.36, .02, .22, .12, 0); // banner
+                for (let side of [-1, 1]) part(side * .44, .11, .44, .05, .12, .05, 5);
+            } else if (style === 'castle') {
+                // Keep yard: a crenellated curtain wall with a gate, corner
+                // towers and owner flags.
+                part(0, .11, -.43, .98, .42, .12, 10);
+                for (let x of [-.30, -.10, .10, .30]) part(x, .53, -.43, .12, .10, .12, 10);
+                part(0, .11, -.365, .22, .30, .02, 1); // gate
+                part(0, .43, -.365, .16, .12, .02, 0); // heraldry
+                for (let side of [-1, 1]) {
+                    part(side * .40, .11, -.40, .20, .64, .20, 10);
+                    part(side * .40, .75, -.40, .24, .06, .24, 1);
+                    part(side * .40, .81, -.40, .025, .22, .025, 5);
+                    part(side * .40 + side * .07, .93, -.40, .12, .08, .02, 2);
+                    part(side * .44, .11, .44, .08, .10, .08, 10);
+                }
+            } else if (style === 'boss') {
+                // War camp of the brutes: a dark spiked palisade, horned
+                // pillars and fire braziers.
+                part(0, .11, -.43, .98, .36, .12, 1);
+                for (let x = -.42; x <= .43; x += .12) part(x, .47, -.43, .07, .20, .07, 6, 0, 0, .1);
+                for (let side of [-1, 1]) {
+                    part(side * .40, .11, -.40, .20, .56, .20, 1, 0, 0, .75);
+                    part(side * .47, .60, -.40, .06, .24, .06, 6, 0, 0, .2);
+                    part(side * .40, .67, -.40, .12, .06, .12, 8);
+                    part(side * .44, .11, .44, .09, .16, .09, 6, 0, 0, .2);
+                }
+                part(0, .30, -.36, .18, .14, .02, 9); // war banner
+            } else if (style === 'arcane') {
+                // Elemental sanctum: a glowing rune border, crystal obelisks
+                // and a slowly turning orb over an altar.
+                part(0, .11, -.305, .80, .012, .025, 7);
+                part(0, .11, .485, .80, .012, .025, 7);
+                for (let side of [-1, 1]) {
+                    part(side * .40, .11, .09, .025, .012, .80, 7);
+                    part(side * .38, .11, -.40, .18, .10, .18, 10);
+                    part(side * .38, .21, -.40, .12, .58, .12, 7, 0, 0, .25);
+                }
+                part(0, .11, -.42, .30, .16, .14, 10);
+                part(0, .30, -.42, .14, .14, .14, 7, 7, .37, 1, 0, .4);
+                part(0, .64, -.42, .56, .06, .08, 10);
+            } else if (style === 'aerie') {
+                // Aerie: a perch, a straw nest and hay for the mounts.
+                part(.34, .11, -.40, .07, .62, .07, 5);
+                part(.34, .66, -.40, .36, .04, .05, 5);
+                part(-.28, .11, -.40, .32, .12, .26, 13);
+                for (let x of [-.34, -.22]) part(x, .23, -.40, .07, .08, .07, 6);
+                part(.05, .11, -.445, .02, .52, .02, 5);
+                part(.12, .44, -.445, .12, .16, .02, 0);
+                for (let side of [-1, 1]) part(side * .43, .11, .43, .10, .08, .10, 13);
+            } else if (style === 'builder_spawner') {
+                // Builder yard: scaffolding, a crane with a hook, bricks.
+                for (let side of [-1, 1]) part(side * .40, .11, -.40, .05, .70, .05, 5);
+                part(0, .44, -.40, .86, .04, .06, 5);
+                part(0, .78, -.40, .86, .04, .06, 5);
+                part(.40, .81, -.40, .07, .16, .07, 1);
+                part(.08, .95, -.40, .70, .045, .06, 1); // jib
+                part(-.20, .64, -.40, .012, .31, .012, 1);
+                part(-.20, .59, -.40, .07, .05, .04, 8); // hook
+                part(-.28, .11, -.36, .24, .10, .14, 9); // bricks
+                part(-.28, .21, -.36, .16, .08, .10, 9);
+            } else if (style === 'salvager') {
+                // Scrap yard: a heap of scrap and a grinder with a turning blade.
+                part(-.26, .11, -.40, .34, .14, .22, 1);
+                part(-.30, .25, -.41, .20, .10, .14, 10);
+                part(-.18, .25, -.38, .08, .16, .06, 6);
+                part(.26, .11, -.40, .24, .22, .18, 1);
+                part(.26, .24, -.30, .22, .22, .02, 6, 7, .35, 1, 0, 1.4); // saw blade
+                part(.26, .33, -.285, .05, .05, .02, 1);
+            } else if (style === 'spawner') {
+                // Woodcutter's yard (energy collectors): stacked logs, a
+                // chopping block with an axe and a warm lantern.
+                for (let row = 0; row < 3; row++) for (let k = 0; k < 3 - row; k++) {
+                    part(-.26 + (k - (2 - row) / 2) * .10, .11 + row * .085, -.40, .09, .085, .26, 5);
+                }
+                part(.20, .11, -.38, .16, .12, .16, 5);
+                part(.20, .23, -.38, .03, .18, .03, 5);
+                part(.20, .34, -.34, .03, .07, .09, 6);
+                part(.42, .11, -.42, .04, .52, .04, 1);
+                part(.42, .60, -.42, .10, .10, .10, 8);
+            } else if (style === 'astar_spawner') {
+                // Miners' yard (A* collectors): a cart of ore on rails and
+                // a rack of pickaxes.
+                part(-.22, .11, -.38, .50, .015, .18, 5);
+                part(-.22, .13, -.38, .30, .16, .18, 1);
+                for (let side of [-1, 1]) part(-.22 + side * .10, .115, -.38, .05, .06, .20, 1);
+                part(-.22, .29, -.38, .24, .07, .14, 6);
+                part(-.26, .34, -.36, .05, .05, .05, 7);
+                for (let k = 0; k < 3; k++) {
+                    part(.20 + k * .09, .11, -.44, .02, .36, .02, 5);
+                    part(.20 + k * .09, .45, -.44, .02, .04, .14, 6);
+                }
+            } else if (style === 'healer_spawner') {
+                // Field hospital: a cot, a medicine shelf and a red cross sign.
+                part(-.20, .11, -.38, .40, .10, .18, 5);
+                part(-.20, .21, -.38, .38, .04, .16, 6);
+                part(-.34, .25, -.38, .08, .05, .14, 6);
+                part(.05, .11, -.44, .16, .32, .08, 5);
+                part(.05, .20, -.40, .12, .04, .02, 9);
+                part(.05, .30, -.40, .12, .04, .02, 3);
+                part(.30, .11, -.44, .03, .40, .03, 5);
+                part(.30, .40, -.43, .26, .24, .03, 6);
+                part(.30, .49, -.41, .16, .05, .01, 9);
+                part(.30, .435, -.41, .05, .16, .01, 9);
+            } else if (style === 'research') {
+                // Laboratory: a bookshelf, a telescope and a glowing orb.
+                part(-.28, .11, -.43, .34, .46, .10, 5);
+                part(-.28, .20, -.375, .30, .10, .02, 0);
+                part(-.28, .34, -.375, .30, .10, .02, 2);
+                part(-.28, .48, -.375, .30, .06, .02, 9);
+                part(.28, .11, -.40, .04, .36, .04, 1);
+                part(.28, .46, -.36, .09, .09, .28, 1);
+                part(.28, .47, -.215, .07, .07, .02, 3);
+                part(0, .11, -.42, .10, .20, .10, 10);
+                part(0, .31, -.42, .12, .12, .12, 3, 7, .37, 1, 0, .7);
+            }
+        } else if (kind === 'mine') {
+            // Resource tiles: the slab and 2D display as before, with ore at
+            // the corners: glowing energy crystals, or A* rock with glints.
+            part(0,.19,0,.91,.30,.91,0);
+            panel(0,.50,0,.98,.98,true);
+            let energy = weapon !== 'astar';
+            for (let x of [-.40, .40]) for (let z of [-.40, .40]) {
+                if (energy) {
+                    part(x, .40, z, .10, .22, .10, 7, 0, 0, .25);
+                    part(x - Math.sign(x) * .06, .40, z, .06, .14, .06, 7, 0, 0, .3);
+                } else {
+                    part(x, .40, z, .15, .12, .15, 10);
+                    part(x, .52, z, .05, .05, .05, 6);
+                }
+            }
+            for (let side of [-1, 1]) {
+                if (energy) part(side * .46, .10, side * .12, .06, .26, .10, 7, 0, 0, .3);
+                else part(side * .46, .10, side * .12, .08, .18, .14, 10);
+            }
         } else {
             part(0, 0, 0, 1, .12, 1, 1);
             part(0, .12, 0, .84, .075, .84, 2);
@@ -1169,9 +1413,6 @@
                 if (sub === 'elements') for (let x of [-.3,.3]) for (let z of [-.3,.3]) part(x,.60,z,.10,.10,.10,7);
                 if (sub === 'watch') for (let side of [-1,1]) part(side*.34,.58,.18,.08,.22,.08,8);
                 if (sub === 'laser') for (let x of [-.3,.3]) for (let z of [-.3,.3]) part(x,.56,z,.08,.30,.08,7,0,0,.3);
-            } else if (kind === 'mine') {
-                part(0,.19,0,.91,.30,.91,0);
-                panel(0,.50,0,.98,.98,true);
             } else if (kind === 'item') {
                 if (weapon === 'house') {
                     // Walls and eaves stay below the roof panel, or they hide it.
@@ -1185,27 +1426,6 @@
                     panel(0, .85, 0, .96, .96, true, 0, 0, true);
                     for (let side of [-1, 1]) part(side * .40, .22, 0, .09, .62, .72, 2);
                 }
-            } else {
-                part(0, .19, 0, .76, .52, .76, 0);
-                for (let x of [-.4, .4]) for (let z of [-.4, .4]) part(x, .17, z, .14, .64, .14, 1);
-                part(0, .72, 0, .91, .16, .90, 1, 0, 0, .67);
-                panel(0, .89, 0, .94, .94, true, 0, 0, true);
-                part(0, .20, .391, .28, .40, .02, 1);
-                part(0, .61, .405, .40, .045, .02, 3);
-                if (variant.endsWith(':healer')) {
-                    part(0,.30,-.405,.09,.29,.025,3);
-                    part(0,.40,-.42,.29,.09,.025,3);
-                }
-                if (kind === 'barrack') {
-                    // Weapon racks flank the door.
-                    for (let side of [-1,1]) for (let k of [0,1]) {
-                        part(side*(.25+k*.07),.18,.43,.025,.50,.025,5);
-                        part(side*(.25+k*.07),.66,.43,.05,.08,.03,1,0,0,.1);
-                    }
-                }
-                // Keep the roof HUD completely unobstructed. The former pair of
-                // player-colored corner blocks covered the first and last parts
-                // of long level labels when the roof was viewed obliquely.
             }
         }
 
@@ -1216,7 +1436,7 @@
         let equipmentYaw = humanoid ? Math.PI * .5 : 0;
         let wp = (x, y, z, sx, sy, sz, surface = 1, joint = handJoint, pivot = handPivot, taper = 1) =>
             part(x, y, z, sx, sy, sz, surface, joint, pivot, taper, equipmentYaw);
-        if (kind === 'rider' || kind === 'griffin' || kind === 'balloon' || kind === 'drone') {
+        if (kind === 'rider' || kind === 'pegasus') {
             // Mounted and floating roles carry their equipment in the body above.
         } else if (weapon === 'sword') {
             wp(.40,.25,.15,.07,.32,.07,1); wp(.40,.61,.15,.15,.58,.045,1,handJoint,handPivot,.25);
@@ -1253,24 +1473,43 @@
             }
         } else if (weapon === 'hammer') {
             wp(.40,.35,.13,.09,.70,.07,5); wp(.40,.73,.13,.55,.23,.11,1); wp(.40,.73,.21,.28,.13,.05,2);
-        } else if (weapon === 'pickaxe') {
-            wp(.40,.35,.13,.08,.75,.065,5); wp(.40,.76,.13,.62,.10,.07,1); wp(.67,.70,.13,.18,.26,.045,1,handJoint,handPivot,.12);
+        } else if (weapon === 'pickaxe' || weapon === 'axe') {
+            // Tool heads are built along the hand's forward axis (z): the
+            // yaw of `wp` turns a box, not its offset. Blades point away
+            // from the shaft. A* collectors carry a pickaxe, energy an axe.
+            let tool = (y, z, sy, sz, surface) => part(.40, y, z, .065, sy, sz, surface, handJoint, handPivot);
+            wp(.40,.35,.13,.08,.75,.065,5);
+            if (weapon === 'axe') {
+                tool(.96, .13, .12, .10, 1); // eye around the top of the shaft
+                tool(.945, .23, .15, .10, 1);
+                tool(.925, .31, .19, .07, 1);
+                tool(.905, .37, .23, .06, 6); // cutting edge, tallest and outermost
+                tool(.98, .04, .08, .07, 1); // poll
+            } else {
+                tool(.97, .13, .10, .18, 1);
+                for (let side of [-1, 1]) {
+                    tool(.975, .13 + side * .16, .08, .14, 1);
+                    tool(.965, .13 + side * .26, .06, .08, 6);
+                    tool(.95, .13 + side * .32, .04, .05, 6); // points
+                }
+            }
         } else if (weapon === 'cutter') {
             wp(.40,.35,.14,.12,.47,.075,2); wp(.40,.65,.14,.44,.35,.075,1); wp(.40,.65,.19,.24,.23,.035,3);
-        } else if (weapon === 'healer_staff') {
-            // Paired medical booms are mounted to the wing roots and point forward.
-            for (let side of [-1,1]) {
-                let joint = side * 3;
-                wp(side*.34,.51,.16,.13,.10,.72,1,joint,0); wp(side*.34,.52,.48,.36,.065,.10,2,joint,0);
-                wp(side*.34,.52,.48,.08,.30,.10,2,joint,0); wp(side*.34,.52,.56,.11,.11,.08,3,joint,0);
-            }
-        } else if (weapon === 'research_orb') {
-            // Sensor lances sit on top of both wings instead of floating beside the bird.
-            for (let side of [-1,1]) {
-                let joint = side * 3;
-                wp(side*.38,.53,.12,.11,.10,.68,2,joint,0); wp(side*.38,.54,.46,.21,.21,.19,3,joint,0);
-                wp(side*.38,.54,.46,.32,.04,.31,0,joint,0);
-            }
+        } else if (kind === 'wingworker' && weapon === 'healer_staff') {
+            // A staff topped with a red cross and a medic bag on the hip.
+            part(.34, .08, .12, .04, .80, .04, 5, -1, .62);
+            part(.34, .84, .12, .058, .20, .058, 9, -1, .62);
+            part(.34, .90, .12, .046, .062, .19, 9, -1, .62);
+            part(-.31, .16, .06, .10, .14, .18, 6);
+            part(-.31, .21, .152, .012, .06, .02, 9);
+            part(-.31, .21, .152, .012, .02, .07, 9);
+        } else if (kind === 'wingworker') {
+            // A glowing sample flask and a notebook.
+            part(.34, .24, .16, .13, .14, .13, 7, -1, .62);
+            part(.34, .38, .16, .06, .06, .06, 6, -1, .62);
+            part(.34, .44, .16, .08, .02, .08, 1, -1, .62);
+            part(-.34, .22, .12, .05, .18, .15, 2, 1, .62);
+            part(-.31, .225, .12, .02, .16, .13, 6, 1, .62);
         } else if (weapon === 'talons') {
             // Flying fighters carry slim forward blades on top of their wings.
             for (let side of [-1,1]) {
@@ -1286,8 +1525,9 @@
     }
 
     // Animation rig of a procedural kind (shader uniform).
-    const FIGURE_RIGS = { figure: 0, heavy: 0, knight: 0, ogre: 0, worker: 1, mage: 2, rider: 3, bird: 4, griffin: 5,
-        balloon: 6, drone: 7, mole: 8, serpent: 9 };
+    // Rigs 4-7 hover while idle: birds, winged horses (5), flying workers (6).
+    const FIGURE_RIGS = { figure: 0, heavy: 0, knight: 0, ogre: 0, worker: 1, mage: 2, rider: 3, bird: 4, pegasus: 5,
+        wingworker: 6, mole: 8, serpent: 9 };
     function figureRig(kind) {
         let rig = FIGURE_RIGS[kind.slice(0, kind.indexOf(':') < 0 ? kind.length : kind.indexOf(':'))];
         return rig === undefined ? 10 : rig;
@@ -1319,9 +1559,10 @@
         if (key.startsWith('unit_')) {
             let weapon = String(object.weaponType || '');
             let type = key.slice(5);
-            if (type === 'scout') return 'griffin:javelin';
-            if (type === 'healer_unit') return 'balloon:medic';
-            if (type === 'researcher_unit') return 'drone:instruments';
+            if (type === 'scout') return 'pegasus:bow';
+            if (type === 'flying') return 'pegasus:lance';
+            if (type === 'healer_unit') return 'wingworker:healer_staff';
+            if (type === 'researcher_unit') return 'wingworker:research_orb';
             if (object.isFlying || /flying/.test(type)) return `bird:${weapon || 'talons'}`;
             if (type === 'mole') return `mole:${weapon || 'claws'}`;
             if (type === 'king') return `heavy:${weapon || 'king_sword'}`;
@@ -1332,6 +1573,7 @@
             if (object.isWorker || /builder|collect|salvag|heal|astar|research/.test(type)) return `worker:${weapon || 'hammer'}`;
             return `figure:${weapon || 'sword'}`;
         }
+        if (key.startsWith('tower_cloud')) return 'portal';
         if (key.startsWith('tower_')) {
             let t = key.slice(6);
             return t === 'smg' ? 'tower:twin' : t === 'sniper' ? 'tower:sniper' : t === 'laser' ? 'tower:laser'
@@ -1339,13 +1581,26 @@
                 : t === 'poison' ? 'tower:poison' : t === 'sand_gun' ? 'tower:sand' : t === 'elements' ? 'tower:elements'
                 : t === 'watch_tower' ? 'tower:watch' : 'tower';
         }
-        if (key.startsWith('barrack_')) return 'barrack';
-        if (key.startsWith('spawner_')) return /research/.test(key) ? 'spawner:research' : /healer/.test(key) ? 'spawner:healer' : 'spawner';
+        if (key.startsWith('barrack_')) {
+            let unit = key.slice(8);
+            if (unit === 'boss') return 'barrack:boss';
+            if (unit === 'tank' || unit === 'king') return 'barrack:castle';
+            if (/_resistant$/.test(unit)) return 'barrack:arcane';
+            if (unit === 'flying' || unit === 'scout') return 'barrack:aerie';
+            return 'barrack:rural';
+        }
+        if (key.startsWith('spawner_')) {
+            let type = key.slice(8);
+            return WORKSHOP_TYPES.has(type) ? `workshop:${type}` : 'workshop:builder_spawner';
+        }
         if (key === 'item_house') return 'item:house';
+        if (key === 'item_farm') return 'farm:energy';
+        if (key === 'item_astar_farm') return 'farm:astar';
         if (key.startsWith('item_')) return /relay|cloud|energy/.test(key) ? 'item:relay' : 'item';
-        if (key.includes('_mine_')) return 'mine';
+        if (key.includes('_mine_')) return key.startsWith('astar') ? 'mine:astar' : 'mine:energy';
         return null;
     }
+    const WORKSHOP_TYPES = new Set(['spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research']);
 
     function createMesh(gl, positions, normals, indices, uvs) {
         let vertexCount = positions.length / 3;
@@ -2055,10 +2310,12 @@
             for (let kind of [
                 'figure:sword', 'rider:dual_blades', 'mage:fire_staff', 'mage:water_staff', 'mage:ice_staff', 'mage:poison_staff', 'mage:laser_staff',
                 'heavy:king_sword', 'ogre:great_axe', 'knight:warhammer',
-                'worker:hammer', 'worker:pickaxe', 'worker:cutter',
-                'bird:talons', 'griffin:javelin', 'balloon:medic', 'drone:instruments', 'mole:claws', 'serpent:engine',
+                'worker:hammer', 'worker:pickaxe', 'worker:axe', 'worker:cutter', 'wingworker:healer_staff', 'wingworker:research_orb',
+                'pegasus:bow', 'pegasus:lance', 'mole:claws', 'serpent:engine',
                 'tower', 'tower:twin', 'tower:sniper', 'tower:laser', 'tower:fire', 'tower:water', 'tower:ice', 'tower:poison', 'tower:sand',
-                'tower:elements', 'tower:watch', 'barrack', 'spawner', 'spawner:research', 'spawner:healer', 'item', 'item:relay', 'item:house', 'mine'
+                'tower:elements', 'tower:watch', 'portal', 'barrack:rural', 'barrack:castle', 'barrack:boss', 'barrack:arcane', 'barrack:aerie',
+                'workshop:spawner', 'workshop:astar_spawner', 'workshop:salvager', 'workshop:builder_spawner', 'workshop:healer_spawner',
+                'workshop:research', 'item', 'item:relay', 'item:house', 'farm:energy', 'farm:astar', 'mine:energy', 'mine:astar'
             ]) {
                 this.getFigureMesh(kind);
                 this.getFigureMesh(kind + ':lod');
@@ -2084,6 +2341,7 @@
                 uniform mat4 uViewProjection;
                 uniform float uAnimationMode;
                 uniform float uRig;
+                uniform float uTime;
                 out vec3 vNormal;
                 out vec3 vColor;
                 out vec3 vTrim;
@@ -2163,6 +2421,17 @@
                         float rc = cos(spin), rs = sin(spin);
                         p.xz = mat2(rc, rs, -rs, rc) * p.xz;
                         n.xz = mat2(rc, rs, -rs, rc) * n.xz;
+                    } else if (aj == 7.0) {
+                        // Structure parts turning in their own (xy) plane about
+                        // (0, pivot) over time: portal swirls, saw blades, orbs.
+                        // detail.w adds to the speed.
+                        float spin = uTime * (.6 + detail.w) * sj;
+                        float rc = cos(spin), rs = sin(spin);
+                        p = aPosition; n = aNormal;
+                        p.y -= pivot;
+                        p.xy = mat2(rc, rs, -rs, rc) * p.xy;
+                        p.y += pivot;
+                        n.xy = mat2(rc, rs, -rs, rc) * n.xy;
                     }
                     if (animationMode == 1.0) p.z += sin(phase) * .16;
                     if (animationMode == 2.0) p.y -= max(0.0, sin(phase)) * .035;
@@ -2233,7 +2502,12 @@
                     else if (vSurface == 7) base = min(vec3(1.0), typeColor * 1.3 + .1);
                     else if (vSurface == 8) base = vec3(.96,.74,.24);
                     else if (vSurface == 9) base = vec3(.88,.18,.20);
-                    bool glowing = vSurface == 3 || vSurface == 4 || vSurface == 7;
+                    else if (vSurface == 10) base = vec3(.44,.45,.49); // stone
+                    else if (vSurface == 11) base = vec3(.24,.54,.22); // leaves
+                    else if (vSurface == 12) base = vec3(.035,.02,.06); // void (unlit)
+                    else if (vSurface == 13) base = vec3(.80,.67,.36); // straw
+                    else if (vSurface == 14) base = vec3(.19,.20,.23); // dark gray
+                    bool glowing = vSurface == 3 || vSurface == 4 || vSurface == 7 || vSurface == 12;
                     if (vSurface == 4) {
                         // Preserve thin sprite strokes without disabling distant mipmaps.
                         // Exact 2D panels come from the shared sprite atlas (one
@@ -2262,6 +2536,7 @@
                 spriteLodBias: gl.getUniformLocation(this.figureProgram, 'uSpriteLodBias'),
                 animationMode: gl.getUniformLocation(this.figureProgram, 'uAnimationMode'),
                 rig: gl.getUniformLocation(this.figureProgram, 'uRig'),
+                time: gl.getUniformLocation(this.figureProgram, 'uTime'),
                 isFlying: gl.getUniformLocation(this.figureProgram, 'uIsFlying'),
                 isUnit: gl.getUniformLocation(this.figureProgram, 'uIsUnit'),
                 viewProjection: gl.getUniformLocation(this.figureProgram, 'uViewProjection'),
@@ -3642,8 +3917,9 @@
             gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, objects.length * INSTANCE_STRIDE);
             gl.useProgram(kind ? this.figureProgram : this.texturedCubeProgram);
             if (kind) {
-                gl.uniform1f(uniforms.isFlying, kind.startsWith('bird') || kind.startsWith('griffin') ? 1 : 0);
+                gl.uniform1f(uniforms.isFlying, kind.startsWith('bird') ? 1 : 0);
                 gl.uniform1f(uniforms.rig, mesh.rig);
+                gl.uniform1f(uniforms.time, this.animationTime || 0);
                 gl.uniform1f(uniforms.animationMode, Number(objects[0].animationMode) || 0);
                 gl.uniform1f(uniforms.spriteLodBias, String(objects[0].topTextureKey).startsWith('2d:') ? -.5 : 0);
                 let key = objects[0].modelKey || '';
@@ -3874,6 +4150,8 @@
             this.resize(snapshot.viewportWidth, snapshot.viewportHeight);
             this.buildViewProjection(snapshot);
             this.textureFrame = (this.textureFrame || 0) + 1;
+            // Seconds for time-driven structure animation (kept small for float precision).
+            this.animationTime = ((typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000) % 3600;
 
             let gl = this.gl;
             this.overlayDepthCache.clear();
