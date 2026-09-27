@@ -1965,6 +1965,14 @@ function initInput() {
         sharpen: document.getElementById('setting-gfx-sharpen'),
         resolution: document.getElementById('setting-gfx-resolution')
     };
+    const minFpsSelect = document.getElementById('setting-min-fps');
+    if (minFpsSelect) {
+        minFpsSelect.value = minFrameRateMode;
+        minFpsSelect.addEventListener('change', () => {
+            minFrameRateMode = ['fullscreen', 'always', 'off'].includes(minFpsSelect.value) ? minFpsSelect.value : 'always';
+            saveUiSettingsToStorage();
+        });
+    }
     const gfxPresetSelect = document.getElementById('setting-gfx-preset');
     const syncGraphicsControls = () => {
         for (let key in gfxControls) {

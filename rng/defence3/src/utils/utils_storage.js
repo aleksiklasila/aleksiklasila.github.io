@@ -26,6 +26,7 @@ function saveUiSettingsToStorage() {
         if (typeof selectionOutlineScope !== 'undefined') ui.selectionOutlineScope = selectionOutlineScope;
         if (Number.isFinite(buildPlacementMode)) ui.buildPlacementMode = Math.floor(buildPlacementMode);
         if (typeof graphicsOptions === 'object' && graphicsOptions) ui.graphicsOptions = graphicsOptions;
+        if (typeof minFrameRateMode === 'string') ui.minFrameRateMode = minFrameRateMode;
         let mapVisibility = document.getElementById('cfg-full-vis');
         if (mapVisibility && ['full', 'team', 'history'].includes(mapVisibility.value)) ui.mapVisibility = mapVisibility.value;
         localStorage.setItem(LS_UI_SETTINGS_KEY, JSON.stringify(ui));
@@ -84,6 +85,7 @@ function loadUiSettingsFromStorage() {
                 if (s.graphicsOptions && typeof normalizeGraphicsOptions === 'function') {
                     graphicsOptions = normalizeGraphicsOptions(s.graphicsOptions);
                 }
+                if (['fullscreen', 'always', 'off'].includes(s.minFrameRateMode)) minFrameRateMode = s.minFrameRateMode;
                 if (['full', 'team', 'history'].includes(s.mapVisibility)) {
                     let mapVisibility = document.getElementById('cfg-full-vis');
                     if (mapVisibility) mapVisibility.value = s.mapVisibility;
