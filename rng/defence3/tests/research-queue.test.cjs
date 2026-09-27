@@ -249,6 +249,8 @@ function rng(seed) {
                 if (r < 0.3) {
                     const s = pick(pool);
                     a = { action: 'queueResearch', gx: lab.gx, gy: lab.gy, kind: s.kind, key: s.key, statKey: s.statKey, count: 1 + Math.floor(rand() * 3) };
+                    // Bottom bar drop: insert at a position, including the active slot and past the end.
+                    if (rand() < 0.4) a.insertAt = Math.floor(rand() * (len + 3));
                 } else if (r < 0.45) {
                     const s = pick(pool);
                     a = rand() < 0.8
@@ -259,6 +261,9 @@ function rng(seed) {
                 } else if (r < 0.85) {
                     const fromActive = rand() < 0.3;
                     a = { action: 'reorderResearch', gx: lab.gx, gy: lab.gy, fromIndex: fromActive ? -1 : Math.floor(rand() * Math.max(1, len)), toIndex: Math.max(0, len - 1), fromActive, toActive: false };
+                } else if (r < 0.89) {
+                    // Bottom bar drag: plain ordered indices, including out-of-range ones.
+                    a = { action: 'moveResearch', from: Math.floor(rand() * (len + 3)) - 1, to: Math.floor(rand() * (len + 3)) - 1 };
                 } else if (r < 0.93) {
                     // Arbitrary moves, including out-of-range and to the active slot.
                     a = { action: 'reorderResearch', gx: lab.gx, gy: lab.gy, fromIndex: Math.floor(rand() * (len + 3)) - 1, toIndex: Math.floor(rand() * (len + 3)) - 1, fromActive: rand() < 0.2, toActive: rand() < 0.2 };
@@ -267,8 +272,8 @@ function rng(seed) {
                     const target = pick(l);
                     a = { action: 'setAutoResearch', gx: target.gx, gy: target.gy, enabled: rand() < 0.75 };
                 }
-                counts[a.action + (a.action === 'reorderResearch' ? (a.fromActive ? ':active' : a.toIndex === 0 ? ':top' : ':down') : '')] =
-                    (counts[a.action + (a.action === 'reorderResearch' ? (a.fromActive ? ':active' : a.toIndex === 0 ? ':top' : ':down') : '')] || 0) + 1;
+                const kind = a.action + (a.action === 'reorderResearch' ? (a.fromActive ? ':active' : a.toIndex === 0 ? ':top' : ':down') : '') + (a.insertAt !== undefined ? ':insertAt' : '');
+                counts[kind] = (counts[kind] || 0) + 1;
                 q(inst, a);
             }
             await world.run(150 + Math.floor(rand() * 400));

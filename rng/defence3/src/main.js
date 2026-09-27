@@ -1876,6 +1876,7 @@ function initInput() {
             if (setStartingResourcesPopupOpen(false)) return;
             if (setUnitStateHelpPopupOpen(false)) return;
             if (setHelpPopupOpen(false)) return;
+            if (typeof closeBottomBarMenus === 'function' && closeBottomBarMenus()) return;
             stopBuildPlacementDrag();
             selectedBuildItem = null; selectedUnits = []; selectedEntities = []; activeSubGroups = {}; attackMoveMode = false; requestBuildMenuRefresh(); updateInfoPanel();
         }
@@ -2819,6 +2820,8 @@ function processAction(a, playerId) {
             if (r && r.energy > 0 && !r.underConstruction && stat) {
                 let p = ensurePlayerResearchQueueState(playerId);
                 let count = Math.max(1, Math.floor(a.count || 1));
+                // Optional position in the ordered queue (0 = the active task).
+                let insertAt = Number.isFinite(Number(a.insertAt)) ? Math.max(0, Math.floor(Number(a.insertAt))) : -1;
                 for (let i = 0; i < count; i++) {
                     if (getPlayerResearchQueueTotalLength(playerId) >= getResearchQueueCapacityForPlayer(playerId)) break;
                     let baseLevel = getPlayerResearchLevel(playerId, a.kind, a.key, a.statKey);
@@ -2827,7 +2830,18 @@ function processAction(a, playerId) {
                     let capLevel = MAX_RESEARCH_LEVEL;
                     if (projected >= capLevel) break;
                     let task = makeResearchTask(playerId, a.kind, a.key, a.statKey, projected);
-                    p.researchQueue.push(task);
+                    if (insertAt >= 0) {
+                        let ordered = [];
+                        if (p.researchTask) ordered.push(p.researchTask);
+                        for (let t of p.researchQueue) ordered.push(t);
+                        ordered.splice(Math.min(ordered.length, insertAt + i), 0, task);
+                        p.researchTask = ordered[0] || null;
+                        p.researchQueue.length = 0;
+                        for (let k = 1; k < ordered.length; k++) p.researchQueue.push(ordered[k]);
+                        rebasePlayerResearchQueueState(playerId);
+                    } else {
+                        p.researchQueue.push(task);
+                    }
                     tryAdvancePlayerResearchTask(playerId);
                 }
             }
@@ -3020,6 +3034,26 @@ function processAction(a, playerId) {
                 if (!task) return;
                 ordered.splice(to, 0, task);
 
+                p.researchTask = ordered[0] || null;
+                p.researchQueue.length = 0;
+                for (let i = 1; i < ordered.length; i++) p.researchQueue.push(ordered[i]);
+                rebasePlayerResearchQueueState(playerId);
+                tryAdvancePlayerResearchTask(playerId);
+            }
+        } else if (a.action === 'moveResearch') {
+            // Move one task within the ordered queue (index 0 = the active task).
+            if (getOwnedActiveResearchLabs(playerId).length > 0) {
+                let p = ensurePlayerResearchQueueState(playerId);
+                let ordered = [];
+                if (p.researchTask) ordered.push(p.researchTask);
+                for (let task of p.researchQueue) ordered.push(task);
+                let from = Math.floor(Number(a.from));
+                let to = Math.floor(Number(a.to));
+                if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || from >= ordered.length) return;
+                to = Math.max(0, Math.min(ordered.length - 1, to));
+                if (from === to) return;
+                let [task] = ordered.splice(from, 1);
+                ordered.splice(to, 0, task);
                 p.researchTask = ordered[0] || null;
                 p.researchQueue.length = 0;
                 for (let i = 1; i < ordered.length; i++) p.researchQueue.push(ordered[i]);

@@ -110,7 +110,7 @@ function _getResourcePenaltyStatsSummary(resourceKey) {
     if (stockpileKey === 'astar') {
         return {
             primaryLabel: 'Unit speed',
-            primaryText: 'Only unit speed uses A*. Positive A* has no penalty; negative A* slows units.',
+            primaryText: 'Only unit speed uses ★. Positive ★ has no penalty; negative ★ slows units.',
             degradePercentLabel: 'Unit speed',
             worsenPercentLabel: '',
         };
@@ -301,7 +301,7 @@ function buildResourcePenaltyPopupHtml(resourceKey, owner = localPlayerId) {
 
     let html = `<div style="display:flex;flex-direction:column;gap:10px">`;
     html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">`
-        + `<div style="display:flex;align-items:center;gap:10px"><span style="font-size:28px;color:${cfg.color}">${cfg.icon}</span><div style="font-size:18px;color:#dff3ff;font-weight:600">${_escapeHtml(cfg.label)} Effects</div></div>`
+        + `<div style="display:flex;align-items:center;gap:10px"><span style="font-size:28px;color:${cfg.color}">${cfg.icon}</span><div style="font-size:18px;color:#dff3ff;font-weight:600">${cfg.label === cfg.icon ? '' : _escapeHtml(cfg.label) + ' '}Effects</div></div>`
         + `<div style="font-size:12px;color:#a7bed0">p = ${_escapeHtml(_formatResourcePenaltyPopupFactor(penaltyMultiplier))}</div>`
         + `</div>`;
     html += _buildResourcePenaltyBarHtml(currentValue, maxSeen);
@@ -1119,7 +1119,7 @@ function _getInfoPanelUnitStateHelpText(u) {
 
     if (Number.isFinite(u._astarBudgetBlockedUntil) && gameTime < u._astarBudgetBlockedUntil) {
         if (u.commandState === CMD_MOVING || u.commandState === CMD_ATTACK_MOVING || u.commandState === CMD_ATTACKING) {
-            return 'Moving under A* debt. Negative A* now reduces unit speed through the owner precomputed stat map until the stockpile recovers.';
+            return 'Moving under ★ debt. Negative ★ now reduces unit speed through the owner precomputed stat map until the stockpile recovers.';
         }
     }
 
@@ -1138,7 +1138,7 @@ function _getInfoPanelUnitStateHelpText(u) {
                 return 'Idle because the worker could not afford its next material or energy pickup. Add more income or wait for resources.';
             }
             if (Number.isFinite(u._astarBudgetBlockedUntil) && gameTime < u._astarBudgetBlockedUntil) {
-                return 'Idle because A* was exhausted recently. Wait for more A* income or reduce pathfinding demand.';
+                return 'Idle because ★ was exhausted recently. Wait for more ★ income or reduce pathfinding demand.';
             }
             return `Idle because no valid work was found within range (${searchRange}). Build relevant work closer, raise Work Distance, or give a manual order.`;
         }
@@ -1331,7 +1331,7 @@ function _getInfoPanelThingTitle(ref, targetType = '') {
     if (ref.type === 'barrack' && ref.unitType) return getBuildingDisplayName(`barrack_${ref.unitType}`);
     if (ref.unitType) return `${getUnitDisplayName(ref.unitType)} #${Math.floor(Number(ref.id) || 0)}`;
     if (ref._isGoldMine || targetType === 'mine' || (Number.isFinite(ref.gold) && Number.isFinite(ref.maxGold))) return 'Energy Mine';
-    if (ref._isAstarMine || targetType === 'astar_mine' || (Number.isFinite(ref.astar) && Number.isFinite(ref.maxAstar))) return 'A* Mine';
+    if (ref._isAstarMine || targetType === 'astar_mine' || (Number.isFinite(ref.astar) && Number.isFinite(ref.maxAstar))) return '★ Mine';
     if (ref.type) return getBuildingDisplayName(ref.type);
     return 'Assigned target';
 }
@@ -2829,7 +2829,7 @@ function getEntityGroupKey(e) {
 
 function getEntityGroupLabel(e) {
     if (_isGoldMineLikeEntity(e)) return 'Energy Mine';
-    if (_isAstarMineLikeEntity(e)) return 'A* Mine';
+    if (_isAstarMineLikeEntity(e)) return '★ Mine';
     if (e.type === 'barrack') return getBuildingDisplayName('barrack_' + e.unitType);
     if (e.type) return getBuildingDisplayName(e.type);
     return 'Unknown';
@@ -3452,10 +3452,10 @@ function renderGoldMineInfo(e) {
 
 function renderAstarMineInfo(e) {
     let html = '';
-    html += infoRow('A*', formatInfoFraction(Math.floor(e.astar), e.maxAstar));
+    html += infoRow('★', formatInfoFraction(Math.floor(e.astar), e.maxAstar));
     let pct = e.maxAstar > 0 ? Math.round(e.astar / e.maxAstar * 100) : 0;
     html += infoRow('Remaining', `${pct}%`);
-    html += infoDesc('Natural A* deposit. Send ★ collectors to gather.');
+    html += infoDesc('Natural ★ deposit. Send ★ collectors to gather.');
     return html;
 }
 
@@ -3568,7 +3568,7 @@ function renderUnitInfo(u) {
     html += infoRow(withInfoPanelStatMatrixButton('Speed', { title: `${u.unitType} / Speed`, kind: 'unit', key: u.unitType, statKey: 'speed' }), `${baseSpd.toFixed(1)}${(u.frozen > 0 || u.sandy > 0) ? ' (slowed)' : ''}`, `${effSpd.toFixed(1)}${(u.frozen > 0 || u.sandy > 0) ? ' (slowed)' : ''}`);
     let baseAstarCost = Math.max(0.01, Number(u.baseLevelAstarCost ?? getUnitStatForOwner(u.owner, u.unitType, lvl, 'astarCost')) || 1);
     let effAstarCost = Math.max(0.01, Number(u.astarCost ?? getUnitStatForOwner(u.owner, u.unitType, effLvl, 'astarCost')) || baseAstarCost);
-    html += infoRow(withInfoPanelStatMatrixButton('★ / Tile', { title: `${u.unitType} / A* Cost`, kind: 'unit', key: u.unitType, statKey: 'astarCost' }), formatBigNumber(baseAstarCost, 2), formatBigNumber(effAstarCost, 2));
+    html += infoRow(withInfoPanelStatMatrixButton('★ / Tile', { title: `${u.unitType} / ★ Cost`, kind: 'unit', key: u.unitType, statKey: 'astarCost' }), formatBigNumber(baseAstarCost, 2), formatBigNumber(effAstarCost, 2));
     html += infoRow(_buildInfoPanelUnitStateLabel(u), _getInfoPanelUnitStateLabel(u));
     if (u.workerType) html += infoRow(_buildInfoPanelAssignedLabelButton('worker', { unitId: u.id }), _buildInfoPanelWorkerAssignedTargetHtml(u));
     let immunes = [];
@@ -3832,10 +3832,10 @@ function renderAstarMineGroupInfo(group) {
     let totalAstar = 0, totalMax = 0;
     for (let m of group) { totalAstar += m.astar; totalMax += m.maxAstar; }
     html += infoRow('Count', group.length);
-    html += infoRow('A*', formatInfoFraction(Math.floor(totalAstar), totalMax));
+    html += infoRow('★', formatInfoFraction(Math.floor(totalAstar), totalMax));
     let pct = totalMax > 0 ? Math.round(totalAstar / totalMax * 100) : 0;
     html += infoRow('Remaining', `${pct}%`);
-    html += infoDesc('Natural A* deposit. Send ★ collectors to gather.');
+    html += infoDesc('Natural ★ deposit. Send ★ collectors to gather.');
     return html;
 }
 
@@ -5253,6 +5253,55 @@ function bindInfoPanelVirtualScroll(panel) {
     }, { passive: true });
 }
 
+function parseInfoCoordList(coordStr) {
+    return (coordStr || '').split(';').map(c => {
+        let [x, y] = c.split(',');
+        return { gx: parseInt(x), gy: parseInt(y) };
+    }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
+}
+
+// Queue lengths of the local player's ready producers at the given tiles.
+function _getGroupSpawnQueueOptions(coords, isWorker) {
+    return (coords || []).map(c => {
+        let p = isWorker ? getSpawnerAtTile(c.gx, c.gy) : getBarrackAtTile(c.gx, c.gy);
+        if (!(p && p.owner === localPlayerId && p.energy > 0 && !p.underConstruction)) return null;
+        return { gx: p.gx, gy: p.gy, len: (p.spawnQueue || []).length };
+    }).filter(Boolean);
+}
+
+// Queues count spawns across producers, each to the shortest queue.
+function queueGroupSpawns(coords, isWorker, count) {
+    let options = _getGroupSpawnQueueOptions(coords, isWorker);
+    let cap = isWorker ? 10 : 20;
+    let n = Math.max(1, Math.floor(count || 1));
+    for (let i = 0; i < n; i++) {
+        let best = null;
+        for (let o of options) {
+            if (o.len >= cap) continue;
+            if (!best || o.len < best.len) best = o;
+        }
+        if (!best) return;
+        queueAction({ action: isWorker ? 'queueWorker' : 'queueUnit', gx: best.gx, gy: best.gy, count: 1 });
+        best.len++;
+    }
+}
+
+// Removes count spawns across producers, each from the longest queue.
+function dequeueGroupSpawns(coords, isWorker, count) {
+    let options = _getGroupSpawnQueueOptions(coords, isWorker);
+    let n = Math.max(1, Math.floor(count || 1));
+    for (let i = 0; i < n; i++) {
+        let best = null;
+        for (let o of options) {
+            if (o.len <= 0) continue;
+            if (!best || o.len > best.len) best = o;
+        }
+        if (!best) return;
+        queueAction({ action: isWorker ? 'dequeueWorker' : 'dequeueUnit', gx: best.gx, gy: best.gy, count: 1 });
+        best.len--;
+    }
+}
+
 function updateInfoPanel(panelOverride = null, opts = {}) {
     let panel = panelOverride || document.getElementById('info-panel');
     if (!panel) return;
@@ -5550,29 +5599,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     });
     // Wire up group buy buttons - dynamically find barrack with lowest queue
     panel.querySelectorAll('.info-buy-group-btn').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let parseCoords = (coordStr) => (coordStr || '').split(';').map(c => {
-                let [x, y] = c.split(',');
-                return { gx: parseInt(x), gy: parseInt(y) };
-            }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
-            let coords = parseCoords(btn.dataset.coords);
-            let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
-            let options = coords.map(c => {
-                let b = getBarrackAtTile(c.gx, c.gy);
-                if (!(b && b.owner === localPlayerId && b.energy > 0 && !b.underConstruction)) b = null;
-                return b ? { gx: b.gx, gy: b.gy, len: b.spawnQueue.length } : null;
-            }).filter(Boolean);
-            for (let i = 0; i < purchaseCount; i++) {
-                let best = null;
-                for (let o of options) {
-                    if (o.len >= 20) continue;
-                    if (!best || o.len < best.len) best = o;
-                }
-                if (!best) return;
-                queueAction({ action: 'queueUnit', gx: best.gx, gy: best.gy, count: 1 });
-                best.len++;
-            }
-        });
+        bindInstantPress(btn, () => queueGroupSpawns(parseInfoCoordList(btn.dataset.coords), false, queuePurchaseMultiplier));
     });
 
     // Wire up worker buy buttons (single spawner)
@@ -5584,29 +5611,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     });
     // Wire up worker group buy buttons - distribute to lowest queue
     panel.querySelectorAll('.info-buy-worker-group-btn').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let parseCoords = (coordStr) => (coordStr || '').split(';').map(c => {
-                let [x, y] = c.split(',');
-                return { gx: parseInt(x), gy: parseInt(y) };
-            }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
-            let coords = parseCoords(btn.dataset.coords);
-            let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
-            let options = coords.map(c => {
-                let s = getSpawnerAtTile(c.gx, c.gy);
-                if (!(s && s.owner === localPlayerId && s.energy > 0 && !s.underConstruction)) s = null;
-                return s ? { gx: s.gx, gy: s.gy, len: (s.spawnQueue || []).length } : null;
-            }).filter(Boolean);
-            for (let i = 0; i < purchaseCount; i++) {
-                let best = null;
-                for (let o of options) {
-                    if (o.len >= 10) continue;
-                    if (!best || o.len < best.len) best = o;
-                }
-                if (!best) return;
-                queueAction({ action: 'queueWorker', gx: best.gx, gy: best.gy, count: 1 });
-                best.len++;
-            }
-        });
+        bindInstantPress(btn, () => queueGroupSpawns(parseInfoCoordList(btn.dataset.coords), true, queuePurchaseMultiplier));
     });
 
     // Wire up research buy buttons (single research building)
@@ -5870,36 +5875,8 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
 
     // Wire up dequeue group buttons (removes from building with highest queue)
     panel.querySelectorAll('.info-dequeue-group-btn').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let coords = (btn.dataset.coords || '').split(';').map(c => {
-                let [x, y] = c.split(',');
-                return { gx: parseInt(x), gy: parseInt(y) };
-            }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
-            let isWorker = btn.dataset.type === 'worker';
-            let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
-            let options = coords.map(c => {
-                if (isWorker) {
-                    let s = getSpawnerAtTile(c.gx, c.gy);
-                    if (!(s && s.owner === localPlayerId && s.energy > 0 && !s.underConstruction)) s = null;
-                    return s ? { gx: s.gx, gy: s.gy, len: (s.spawnQueue || []).length } : null;
-                }
-                let b = getBarrackAtTile(c.gx, c.gy);
-                if (!(b && b.owner === localPlayerId && b.energy > 0 && !b.underConstruction)) b = null;
-                return b ? { gx: b.gx, gy: b.gy, len: b.spawnQueue.length } : null;
-            }).filter(Boolean);
-            for (let i = 0; i < purchaseCount; i++) {
-                let best = null;
-                for (let o of options) {
-                    if (o.len <= 0) continue;
-                    if (!best || o.len > best.len) best = o;
-                }
-                if (!best) return;
-                queueAction({ action: isWorker ? 'dequeueWorker' : 'dequeueUnit', gx: best.gx, gy: best.gy, count: 1 });
-                best.len--;
-            }
-        });
+        bindInstantPress(btn, () => dequeueGroupSpawns(parseInfoCoordList(btn.dataset.coords), btn.dataset.type === 'worker', queuePurchaseMultiplier));
     });
-
     // Wire up sub-group toggle buttons (simple toggle, doesn't affect others)
     panel.querySelectorAll('.subgroup-toggle').forEach(btn => {
         bindInstantPress(btn, () => {
@@ -6648,7 +6625,7 @@ function renderGameGraph(metric = graphMetric) {
         structures: { title: 'Structures', yTitle: 'STRUCTURES' },
         pop: { title: 'Population', yTitle: 'POPULATION' },
         energy: { title: 'Energy', yTitle: 'ENERGY' },
-        astar: { title: 'A*', yTitle: 'A*' }
+        astar: { title: '★', yTitle: '★' }
     };
     metric = metricDefs[metric] ? metric : 'units';
     graphMetric = metric;

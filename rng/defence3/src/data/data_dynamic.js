@@ -1332,7 +1332,7 @@ function renderGameGraph(metric = graphMetric) {
         structures: { title: 'Structures', yTitle: 'STRUCTURES' },
         pop: { title: 'Population', yTitle: 'POPULATION' },
         energy: { title: 'Energy', yTitle: 'ENERGY' },
-        astar: { title: 'A*', yTitle: 'A*' }
+        astar: { title: '★', yTitle: '★' }
     };
     metric = metricDefs[metric] ? metric : 'units';
     graphMetric = metric;
