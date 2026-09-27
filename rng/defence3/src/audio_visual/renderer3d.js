@@ -631,6 +631,63 @@
         return [wx * invW, wy * invW, wz * invW];
     }
 
+    // Shadow-map camera: an orthographic view along SHADOW_LIGHT_DIRECTION
+    // that covers the part of the camera frustum between the ground and
+    // SHADOW_CASTER_HEIGHT, clamped to the map. Bounds are snapped to whole
+    // shadow texels so the map does not shimmer while panning.
+    const SHADOW_CASTER_HEIGHT = 3;
+    function buildShadowViewProjection(out, view, inverseViewProjection, worldWidth, worldHeight, size) {
+        let corners = [];
+        for (let z of [-1, 1]) for (let y of [-1, 1]) for (let x of [-1, 1]) corners.push(transformClipToWorld(inverseViewProjection, x, y, z));
+        let points = [];
+        let clampPoint = (x, y, z) => {
+            if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+            points.push([Math.max(-2, Math.min(worldWidth + 2, x)), y, Math.max(-2, Math.min(worldHeight + 2, z))]);
+        };
+        for (let i = 0; i < 8; i++) {
+            let a = corners[i];
+            if (!a) continue;
+            if (a[1] >= 0 && a[1] <= SHADOW_CASTER_HEIGHT) clampPoint(a[0], a[1], a[2]);
+            for (let bit of [1, 2, 4]) {
+                let j = i ^ bit;
+                if (j <= i || !corners[j]) continue;
+                let b = corners[j];
+                for (let h of [0, SHADOW_CASTER_HEIGHT]) {
+                    if ((a[1] - h) * (b[1] - h) > 0 || a[1] === b[1]) continue;
+                    let t = (h - a[1]) / (b[1] - a[1]);
+                    clampPoint(a[0] + (b[0] - a[0]) * t, h, a[2] + (b[2] - a[2]) * t);
+                }
+            }
+        }
+        if (points.length < 3) return 0;
+        let d = SHADOW_LIGHT_DIRECTION;
+        lookAt(view, [d[0], d[1], d[2]], [0, 0, 0], [0, 1, 0]);
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+        for (let p of points) {
+            let lx = view[0] * p[0] + view[4] * p[1] + view[8] * p[2] + view[12];
+            let ly = view[1] * p[0] + view[5] * p[1] + view[9] * p[2] + view[13];
+            let lz = view[2] * p[0] + view[6] * p[1] + view[10] * p[2] + view[14];
+            minX = Math.min(minX, lx); maxX = Math.max(maxX, lx);
+            minY = Math.min(minY, ly); maxY = Math.max(maxY, ly);
+            minZ = Math.min(minZ, lz); maxZ = Math.max(maxZ, lz);
+        }
+        // Square extent rounded up to a whole tile keeps the texel size stable.
+        let extent = Math.ceil(Math.max(maxX - minX, maxY - minY, 1) + 1);
+        let texel = extent / size;
+        minX = Math.floor((minX + maxX - extent) * 0.5 / texel) * texel;
+        minY = Math.floor((minY + maxY - extent) * 0.5 / texel) * texel;
+        maxX = minX + extent; maxY = minY + extent;
+        // View space looks down -z; casters above the covered ground sit
+        // toward the light (larger z), so extend the near side for them.
+        let near = -(maxZ + SHADOW_CASTER_HEIGHT / Math.max(0.2, d[1]) + 1), far = -(minZ - 1);
+        let proj = new Float32Array(16);
+        proj[0] = 2 / (maxX - minX); proj[5] = 2 / (maxY - minY); proj[10] = -2 / (far - near);
+        proj[12] = -(maxX + minX) / (maxX - minX); proj[13] = -(maxY + minY) / (maxY - minY);
+        proj[14] = -(far + near) / (far - near); proj[15] = 1;
+        multiplyMatrices(out, proj, view);
+        return extent;
+    }
+
     // composeModelMatrix written in place into instance data at `base`.
     function writeModelMatrix(out, base, tx, ty, tz, rotationY, sx, sy, sz) {
         let c = Math.cos(rotationY);
@@ -1900,6 +1957,7 @@
     // COLOR_ATTACHMENT0/1 and NONE; fixed WebGL2 enum values.
     const SCENE_DRAW_BUFFERS_COLOR = [0x8CE0, 0];
     const SCENE_DRAW_BUFFERS_WITH_DEPTH = [0x8CE0, 0x8CE1];
+    const SHADOW_DRAW_BUFFERS = [0];
 
     class Defence3Renderer3D {
         constructor(options) {
@@ -2281,7 +2339,10 @@
             // Use a shared sample count supported by both color and depth formats.
             let colorSamples = gl.getInternalformatParameter(gl.RENDERBUFFER, gl.RGBA8, gl.SAMPLES);
             let depthSamples = gl.getInternalformatParameter(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, gl.SAMPLES);
-            this.sceneSamples = Array.from(colorSamples).filter(n => n > 1 && n <= 4 && depthSamples.includes(n)).sort((a,b) => a-b)[0] || 0;
+            this.supportedSceneSamples = Array.from(colorSamples).filter(n => n > 1 && n <= 4 && depthSamples.includes(n)).sort((a,b) => a-b)[0] || 0;
+            this.sceneSamples = this.supportedSceneSamples;
+            this.graphicsOptions = typeof normalizeGraphicsOptions === 'function' ? normalizeGraphicsOptions(null) : null;
+            this.postProcess = window.Defence3PostProcess ? new window.Defence3PostProcess(gl) : null;
             this.msaaFramebuffer = gl.createFramebuffer();
             this.msaaBuffers = [gl.createRenderbuffer(), gl.createRenderbuffer(), gl.createRenderbuffer()];
             this.depthPackFramebuffer = gl.createFramebuffer();
@@ -2657,6 +2718,26 @@
             return object && object.renderShape === 'cylinder' ? this.cylinderMesh : this.cubeMesh;
         }
 
+        // Settings > Rendering. MSAA and resolution changes reallocate the
+        // scene target on the next resize; everything else is per frame.
+        setGraphicsOptions(options) {
+            // Called every frame with the settings object, which is replaced
+            // (not mutated) on change.
+            if (options === this.graphicsSource) return;
+            this.graphicsSource = options;
+            if (!this.supported || !this.postProcess || typeof normalizeGraphicsOptions !== 'function') return;
+            let next = normalizeGraphicsOptions(options);
+            let prev = this.graphicsOptions;
+            if (prev && JSON.stringify(prev) === JSON.stringify(next)) return;
+            this.graphicsOptions = next;
+            let samples = (next.aa === 'msaa' || next.aa === 'msaa_fxaa') ? this.supportedSceneSamples : 0;
+            if (samples !== this.sceneSamples || !prev || prev.resolution !== next.resolution) {
+                this.sceneSamples = samples;
+                this.sceneTargetSize.width = this.sceneTargetSize.height = 0;
+                if (this.cssWidth > 0 && this.cssHeight > 0) this.resize(this.cssWidth, this.cssHeight);
+            }
+        }
+
         setEnabled(enabled) {
             this.enabled = !!enabled && this.supported;
             this.canvas.style.display = this.enabled ? 'block' : 'none';
@@ -2670,6 +2751,9 @@
             // rescale a 1.5x canvas on a 2x display. Bound large-screen GPU cost.
             const pixelBudget = 6000000;
             this.pixelRatio = Math.min(window.devicePixelRatio || 1, Math.max(1, Math.sqrt(pixelBudget / (safeWidth * safeHeight))));
+            // Resolution scale renders fewer pixels; the canvas is stretched back by CSS.
+            let resolution = this.graphicsOptions ? this.graphicsOptions.resolution : 1;
+            if (resolution < 1) this.pixelRatio *= resolution;
             this.cssWidth = safeWidth;
             this.cssHeight = safeHeight;
             let deviceWidth = Math.max(1, Math.floor(safeWidth * this.pixelRatio));
@@ -2772,8 +2856,19 @@
             gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
         }
 
-        presentSceneToCanvas() {
+        presentSceneToCanvas(flat = false) {
             let gl = this.gl;
+            let post = this.postProcess, options = this.graphicsOptions;
+            if (post && options && post.isActive(options, flat)) {
+                post.render(options, {
+                    colorTex: this.sceneColorTexture, depthTex: this.sceneDepthTexture,
+                    width: this.sceneTargetSize.width, height: this.sceneTargetSize.height,
+                    near: 0.1, far: 220, flat, quadVao: this.presentVao,
+                    pixelsPerWorld: this.lodPixelsPerWorld, pixelRatio: this.pixelRatio,
+                    shadow: flat ? null : this.shadowFrame
+                });
+                return;
+            }
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
             gl.viewport(0, 0, this.sceneTargetSize.width, this.sceneTargetSize.height);
             gl.disable(gl.DEPTH_TEST);
@@ -4346,7 +4441,7 @@
                 this.drawFx(snapshot.fx, true);
                 this.drawGroundOverlays(snapshot.overlays);
                 this.resolveScene();
-                this.presentSceneToCanvas();
+                this.presentSceneToCanvas(true);
                 this.trimTopTextures();
                 return;
             }
@@ -4368,6 +4463,9 @@
             let transparentMeshObjects = [];
             let shadowBatches = this.beginShadowBatches();
             let shadowMeshObjects = [];
+            let shadowMode = this.graphicsOptions ? this.graphicsOptions.shadows : 'simple';
+            let castShadows = shadowMode === 'simple';
+            this.shadowFrame = null;
             for (let i = 0; i < objects.length; i++) {
                 let object = objects[i];
                 let isTransparent = (Number(object.alpha) || 1) < 0.999;
@@ -4378,11 +4476,13 @@
                     let pickMesh = mesh || (textured && figureMeshKey && this.getFigureMesh(figureMeshKey)) || this.getPrimitiveMesh(object);
                     this.pickObjects.push({ object, mesh: pickMesh });
                 }
-                if (mesh) {
-                    let shadow = this.getShadowInfo(object);
-                    if (shadow) shadowMeshObjects.push({ object, shadow });
-                } else {
-                    this.pushShadowInstance(object);
+                if (castShadows) {
+                    if (mesh) {
+                        let shadow = this.getShadowInfo(object);
+                        if (shadow) shadowMeshObjects.push({ object, shadow });
+                    } else {
+                        this.pushShadowInstance(object);
+                    }
                 }
                 if (mesh) {
                     (isTransparent ? transparentMeshObjects : opaqueMeshObjects).push(object);
@@ -4436,6 +4536,9 @@
             for (let group of opaqueCubeGroups.values()) {
                 this.drawCubeInstances(group);
             }
+            if (shadowMode === 'detailed' || shadowMode === 'high') {
+                this.renderShadowMap(snapshot, shadowMode, opaqueMeshObjects, opaqueTexturedCubeGroups, opaqueCubeGroups, atlas);
+            }
             if (transparentMeshObjects.length > 0 || transparentCubeGroups.size > 0 || transparentTexturedCubeGroups.length > 0) {
                 gl.enable(gl.BLEND);
                 gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -4460,9 +4563,10 @@
             if (atlas) atlas.endFrame();
             this.drawFx(snapshot.fx, false);
             this.drawGroundOverlays(overlays);
-            this.resolveScene(needsOverlayDepth);
+            let postNeedsDepth = !!(this.postProcess && this.graphicsOptions && this.postProcess.needsDepth(this.graphicsOptions, false));
+            this.resolveScene(needsOverlayDepth || postNeedsDepth);
             if (needsOverlayDepth) this.captureOverlayDepthFrame();
-            this.presentSceneToCanvas();
+            this.presentSceneToCanvas(false);
             // Delete GPU resources as well as JS entries. Never evict a texture
             // used in this frame; amortize cleanup after camera sweeps/battles.
             this.trimTopTextures();
@@ -4470,6 +4574,76 @@
             gl.bindVertexArray(null);
             gl.bindTexture(gl.TEXTURE_2D, null);
             gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        }
+
+        ensureShadowMap(size) {
+            let gl = this.gl;
+            size = Math.min(size, gl.getParameter(gl.MAX_TEXTURE_SIZE) || 2048);
+            if (this.shadowMap && this.shadowMap.size === size) return this.shadowMap;
+            if (this.shadowMap) {
+                gl.deleteTexture(this.shadowMap.tex);
+                gl.deleteFramebuffer(this.shadowMap.fb);
+            }
+            let tex = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, tex);
+            gl.texStorage2D(gl.TEXTURE_2D, 1, gl.DEPTH_COMPONENT24, size, size);
+            // Hardware depth comparison with bilinear PCF.
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
+            gl.bindTexture(gl.TEXTURE_2D, null);
+            let fb = gl.createFramebuffer();
+            gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, tex, 0);
+            gl.drawBuffers([gl.NONE]);
+            gl.readBuffer(gl.NONE);
+            this.shadowMap = { tex, fb, size, lightViewProjection: new Float32Array(16), view: new Float32Array(16) };
+            return this.shadowMap;
+        }
+
+        // Settings > Shadows: detailed/high. Re-issues this frame's opaque
+        // draws from the light into a depth-only target, so every geometry
+        // path (animated figures, textured panels, models) casts exactly as
+        // drawn. The post pass resolves it against the scene depth.
+        renderShadowMap(snapshot, mode, meshObjects, texturedGroups, cubeGroups, atlas) {
+            let gl = this.gl;
+            let map = this.ensureShadowMap(mode === 'high' ? 4096 : 2048);
+            // World units covered by the (square) map, or 0 when nothing is visible.
+            let extent = buildShadowViewProjection(map.lightViewProjection, map.view, this.tmpInverseViewProjection,
+                Number(snapshot.worldWidth) || 0, Number(snapshot.worldHeight) || 0, map.size);
+            if (!extent) return;
+            let cameraViewProjection = this.tmpViewProjection;
+            let sceneDrawBuffers = this.sceneDrawBuffers;
+            this.tmpViewProjection = map.lightViewProjection;
+            this.sceneDrawBuffers = SHADOW_DRAW_BUFFERS;
+            gl.bindFramebuffer(gl.FRAMEBUFFER, map.fb);
+            gl.viewport(0, 0, map.size, map.size);
+            gl.depthMask(true);
+            gl.clear(gl.DEPTH_BUFFER_BIT);
+            gl.colorMask(false, false, false, false);
+            gl.enable(gl.POLYGON_OFFSET_FILL);
+            gl.polygonOffset(1.6, 4);
+            try {
+                for (let object of meshObjects) this.drawObject(object);
+                for (let group of texturedGroups) this.drawTexturedCubeInstances(group.objects, group.topTexture, group.sideTexture, group.atlas ? atlas : null);
+                for (let group of cubeGroups.values()) this.drawCubeInstances(group);
+            } finally {
+                gl.disable(gl.POLYGON_OFFSET_FILL);
+                gl.colorMask(true, true, true, true);
+                this.tmpViewProjection = cameraViewProjection;
+                this.sceneDrawBuffers = sceneDrawBuffers;
+                gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneSamples ? this.msaaFramebuffer : this.sceneFramebuffer);
+                gl.drawBuffers(sceneDrawBuffers);
+                gl.viewport(0, 0, this.sceneTargetSize.width, this.sceneTargetSize.height);
+            }
+            this.shadowFrame = {
+                tex: map.tex, size: map.size, lightViewProjection: map.lightViewProjection,
+                inverseViewProjection: this.tmpInverseViewProjection, taps: mode === 'high' ? 16 : 9,
+                lightDirection: SHADOW_LIGHT_DIRECTION, worldTexel: extent / map.size
+            };
         }
 
         trimTexturedGroups(oldestFrame) {

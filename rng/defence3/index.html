@@ -431,6 +431,16 @@
 
             <div class="help-tab-panel" data-tab-panel="settings">
                 <div class="help-mode">Gameplay and rendering options</div>
+                <div class="settings-section-title">Gameplay</div>
+                <div class="settings-list">
+                    <div class="settings-row">
+                        <label for="btn-show-statsmap">Precomputed Stats Map</label>
+                        <button id="btn-show-statsmap"
+                            style="background:transparent; border:1px solid #4a5a6a; color:#b7d8ff; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Open JSON</button>
+                    </div>
+                </div>
+                <div class="settings-section-title">Rendering</div>
+                <div class="settings-subtitle">Overlays &amp; lines</div>
                 <div class="settings-list">
                     <div class="settings-row">
                         <label for="btn-level-visibility">Levels visibility</label>
@@ -489,10 +499,44 @@
                         <label for="setting-selection-outline-see-through">See-through selection outlines (3D)</label>
                         <label class="settings-toggle" for="setting-selection-outline-see-through"><input type="checkbox" id="setting-selection-outline-see-through"> Through objects</label>
                     </div>
+                </div>
+                <div class="settings-subtitle">Graphics &amp; post process (3D)</div>
+                <div class="settings-list">
                     <div class="settings-row">
-                        <label for="btn-show-statsmap">Precomputed Stats Map</label>
-                        <button id="btn-show-statsmap"
-                            style="background:transparent; border:1px solid #4a5a6a; color:#b7d8ff; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Open JSON</button>
+                        <label for="setting-gfx-preset">Post process preset</label>
+                        <select id="setting-gfx-preset" style="width:150px"><option value="off">Off (fastest)</option><option value="simple">Simple</option><option value="balanced">Balanced</option><option value="high">High</option><option value="ultra">Ultra</option><option value="custom">Custom</option></select>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-gfx-aa">Anti-aliasing</label>
+                        <select id="setting-gfx-aa" style="width:150px"><option value="off">Off</option><option value="fxaa">FXAA</option><option value="msaa">MSAA</option><option value="msaa_fxaa">MSAA + FXAA</option></select>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-gfx-shadows">Shadows</label>
+                        <select id="setting-gfx-shadows" style="width:150px"><option value="off">Off</option><option value="simple">Simple (drop)</option><option value="detailed">Detailed (2K map)</option><option value="high">High (4K, soft)</option></select>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-gfx-ao">Ambient occlusion</label>
+                        <select id="setting-gfx-ao" style="width:150px"><option value="off">Off</option><option value="low">Low (half res)</option><option value="high">High (full res)</option></select>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-gfx-outline">Edge outlines</label>
+                        <label class="settings-toggle" for="setting-gfx-outline"><input type="checkbox" id="setting-gfx-outline"> Enabled</label>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-gfx-bloom">Bloom</label>
+                        <label class="settings-toggle" for="setting-gfx-bloom"><input type="checkbox" id="setting-gfx-bloom"> Enabled</label>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-gfx-grade">Color grading + vignette</label>
+                        <label class="settings-toggle" for="setting-gfx-grade"><input type="checkbox" id="setting-gfx-grade"> Enabled</label>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-gfx-sharpen">Sharpen</label>
+                        <label class="settings-toggle" for="setting-gfx-sharpen"><input type="checkbox" id="setting-gfx-sharpen"> Enabled</label>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-gfx-resolution">Render resolution</label>
+                        <select id="setting-gfx-resolution" style="width:150px"><option value="1">100%</option><option value="0.85">85%</option><option value="0.75">75%</option><option value="0.67">67%</option><option value="0.5">50%</option></select>
                     </div>
                 </div>
             </div>
@@ -657,23 +701,24 @@
     <script src="./src/utils/utils_common.js?v=20260926-netcode"></script>
     <script src="./src/utils/utils_net_quality.js?v=20260928-lateseal"></script>
     <script src="./src/utils/utils_networking.js?v=20260929-fx"></script>
-    <script src="./src/utils/utils_snapshot.js?v=20260928-lateseal"></script>
+    <script src="./src/utils/utils_snapshot.js?v=20260927-laser"></script>
     <script src="./src/utils/utils_resync.js?v=20260928-reserve"></script>
     <script src="./src/utils/utils_host_migration.js?v=20260928-lateseal"></script>
-    <script src="./src/utils/utils_storage.js?v=20260924-settings"></script>
+    <script src="./src/utils/utils_storage.js?v=20260927-post"></script>
 
     <script src="./src/data/data_static.js?v=20260926-netcode"></script>
     <script src="./src/data/data_dynamic.js?v=20260927-resync"></script>
-    <script src="./src/data/data_state.js?v=20260928-lateseal"></script>
+    <script src="./src/data/data_state.js?v=20260927-post"></script>
 
     <script src="./src/audio_visual/visibility_history.js?v=20260925-targeting-perf"></script>
     <script src="./src/audio_visual/range_overlay.js?v=20260925-scale-perf"></script>
     <script src="./src/audio_visual/selection_overlay.js?v=20260929-fx"></script>
-    <script src="./src/audio_visual/renderer3d.js?v=20260929-fx"></script>
+    <script src="./src/audio_visual/postprocess3d.js?v=20260927-post"></script>
+    <script src="./src/audio_visual/renderer3d.js?v=20260927-post"></script>
     <script src="./src/audio_visual/renderer2d.js?v=20260929-fx"></script>
     <script src="./src/audio_visual/side_visualizations.js?v=20260925-crowd-perf"></script>
     <script src="./src/audio_visual/effects3d.js?v=20260929-fx"></script>
-    <script src="./src/audio_visual/renderer.js?v=20260929-fx"></script>
+    <script src="./src/audio_visual/renderer.js?v=20260927-post"></script>
     <script src="./src/audio_visual/audio.js?v=20260925-bulk-perf"></script>
     <script src="./src/audio_visual/jukebox.js?v=20260921"></script>
     <script src="./src/audio_visual/hud.js?v=20260928-lateseal"></script>
@@ -688,8 +733,8 @@
     <script src="./src/things/worker.js?v=20260929-fx"></script>
     <script src="./src/things/particle.js?v=20260929-fx"></script>
     <script src="./src/things/projectile.js?v=20260929-fx"></script>
-    <script src="./src/things/things_utils.js?v=20260926-netcode"></script>
-    <script src="./src/things/tower.js?v=20260929-fx"></script>
+    <script src="./src/things/things_utils.js?v=20260927-laser"></script>
+    <script src="./src/things/tower.js?v=20260927-laser"></script>
 
     <script src="./src/main.js?v=20260928-lateseal"></script>
 

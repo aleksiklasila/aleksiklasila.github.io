@@ -111,7 +111,7 @@ let worldDraws=0,mode='2d',received;
 const pipeline=vm.createContext({ctx:{setTransform(){}},canvas:{},bgCtx:{},minimapCtx:{},window:{devicePixelRatio:1},
     renderDimensionMode:mode,_tickAccumulator:0,TICK_MS:50,tickAlpha:0,
     _fpsFrameCount:0,_fpsLastTime:0,_buildMenuRefreshCounter:0,_minimapRefreshCounter:0,_backgroundCacheRefreshCounter:0,
-    updateVisibilityHistory(){},updateCamera(){},ensure3DRendererInitialized:()=>({render(s){received=s;}}),
+    updateVisibilityHistory(){},updateCamera(){},graphicsOptions:{},ensure3DRendererInitialized:()=>({setGraphicsOptions(){},render(s){received=s;}}),
     build3DFrameData:flat2d=>({flat2d}),draw(){worldDraws++;},drawMinimap(){},drawInteractionOverlay(){},
     flushTickUiRequests(){},updateHUD(){},updateControlGroupBar(){},_refreshInfoPanelPeriodic(){}});
 vm.runInContext(source.slice(begin,end),pipeline);

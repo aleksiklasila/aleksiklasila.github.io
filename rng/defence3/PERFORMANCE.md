@@ -413,3 +413,54 @@ combat 23.0/22.0 → 23.9/21.9, crowded 35.8/36.5 → 38.8/39.5 (more fighting:
 fewer units alive at tick 160), siege 32.3/32.0 → 33.0/33.3 (identical
 state), multiplayer combat 23.5 → 21.4. With only the contact rule, crowded
 measured 36.7-39.6: the chunk search adds no measurable cost.
+
+# 3D graphics options and post processing
+
+Settings > Rendering > Graphics has presets (Off, Simple, Balanced, High,
+Ultra) plus per-option overrides; changing any option shows "Custom". Simple is
+the original renderer: an MSAA scene target and projected drop shadows.
+
+- **Anti-aliasing**: off, FXAA, MSAA, or MSAA + FXAA.
+- **Shadows**: off, simple (drop shadows), detailed (2048² shadow map, 9 PCF
+  taps), high (4096², 16 taps). The shadow pass redraws the frame's opaque
+  batches from the light into a depth-only target, so animated figures,
+  textured panels and models cast exactly what is drawn. Shadows are resolved
+  in the post pass from scene depth. A normal rebuilt from depth masks faces
+  turned away from the light, since cel shading already darkens them, and
+  offsets the lookup by a few texels to avoid acne. The light frustum covers
+  the visible ground plus casters up to 3 tiles high, and it snaps to whole
+  texels so shadows do not shimmer while panning.
+- **Ambient occlusion**: depth-only SSAO. Low is 8 taps at half resolution;
+  high is 16 taps at full resolution. Occlusion is measured against the local
+  plane in inverse depth, so flat ground never occludes itself.
+- **Edge outlines**, **bloom** (luminance threshold at quarter resolution with a
+  separable 9-tap blur), **color grading + vignette**, **sharpen**, and
+  **render resolution** (50–100%).
+
+Each effect is a `#define` in one composite shader, so disabled effects cost
+nothing. When no effect is on, the renderer keeps its plain blit.
+
+## Measured results
+
+GeForce RTX 2060 (ANGLE D3D11), Chrome, 2560×1440 scene target, 903 3D objects
+(474 units and a building cluster). Each figure is the median GPU time from
+`EXT_disjoint_timer_query_webgl2` over 30 frames, keeping the better of two
+rounds.
+
+| Configuration | GPU ms/frame |
+|---|---:|
+| Bare (no AA, no shadows, no post) | 0.43 |
+| Preset Off | 0.46 |
+| Preset Simple (original) | 0.79–1.35 |
+| Preset Balanced | 0.72 |
+| Preset High | 1.87 |
+| Preset Ultra | 2.36 |
+| Ultra at 75% resolution | 1.59 |
+| FXAA / MSAA / MSAA+FXAA | 0.54 / 0.68 / 0.75 |
+| Shadows simple / detailed / high | 0.54 / 0.89 / 1.05 |
+| AO low / high | 0.58 / 0.98 |
+| Outline / bloom / grade / sharpen | 0.52 / 0.49 / 0.44 / 0.47 |
+
+Most effects add less than 0.2 ms. The costliest are the shadow maps and
+full-resolution AO, at about 0.5 ms each. Shadow maps also add about 0.5 ms of
+CPU per frame, because every opaque batch is issued a second time.
