@@ -1,0 +1,171 @@
+/* ---------- BOTTOM BAR (between the side panels) ---------- */
+#center-column { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#center-column #game-area { min-height: 0; }
+body.app-fullscreen #bottom-bar { display: none; }
+
+#bottom-bar {
+    flex-shrink: 0; display: flex; flex-direction: column;
+    background: rgba(0, 0, 0, 0.95); border-top: 2px solid #333;
+    border-left: 2px solid #333; border-right: 2px solid #333;
+    padding: 0 4px; z-index: 10; font-size: 11px;
+}
+/* Both rows share one height: 34px items plus room for the thin scrollbar. */
+.bb-row {
+    display: flex; align-items: center; gap: 4px; overflow-x: auto; overflow-y: hidden;
+    height: 42px; flex-shrink: 0; padding: 1px 2px 3px;
+    scrollbar-width: thin; scrollbar-color: #3a4652 transparent;
+}
+.bb-row::-webkit-scrollbar { height: 4px; }
+.bb-row::-webkit-scrollbar-thumb { background: #3a4652; border-radius: 2px; }
+
+.bb-thing {
+    position: relative; flex: 0 0 auto; width: 34px; height: 34px; border: 2px solid var(--bb-c, #888);
+    border-radius: 6px; background: #121212; display: flex; align-items: center; justify-content: center;
+    cursor: grab; touch-action: none; transition: filter 100ms, box-shadow 100ms;
+}
+.bb-thing img, .bb-task img, .bb-placeholder img { display: block; pointer-events: none; flex: 0 0 auto; }
+.bb-thing.bb-unit, .bb-thing.bb-unit img { border-radius: 50%; }
+.bb-thing:hover, .bb-thing.bb-open { filter: brightness(1.25); box-shadow: 0 0 0 1px #ffffff55, 0 0 8px var(--bb-c, #888); }
+.bb-thing .bb-count {
+    position: absolute; right: 1px; bottom: 0; font-size: 9px; line-height: 10px; font-weight: bold; color: #fd0;
+    text-shadow: 0 0 2px #000, 0 0 2px #000, 0 0 3px #000; pointer-events: none; font-variant-numeric: tabular-nums;
+}
+.bb-thing.bb-unit .bb-count { right: 50%; transform: translateX(50%); }
+/* None owned: grey outline, dimmed icon (category colour returns on hover). */
+.bb-thing.bb-none { border-color: #4a4a4a; background: #0c0c0c; }
+.bb-thing.bb-none img { opacity: 0.55; filter: saturate(0.6); }
+.bb-thing.bb-none .bb-count { color: #777; }
+.bb-thing.bb-none:hover, .bb-thing.bb-none.bb-open { border-color: var(--bb-c, #888); }
+.bb-thing.bb-none:hover img, .bb-thing.bb-none.bb-open img { opacity: 1; filter: none; }
+.bb-menu-cat { font-size: 10px; font-weight: normal; margin-left: 4px; }
+.bb-sep { flex: 0 0 auto; width: 2px; height: 28px; margin: 0 4px; background: linear-gradient(#0000, #555, #0000); }
+.bb-src-dim { opacity: 0.4; }
+.bb-src-hidden { display: none !important; }
+.bb-empty-msg { color: #777; font-size: 11px; padding: 0 8px; white-space: nowrap; }
+
+.bb-research-wrap { display: flex; align-items: stretch; gap: 4px; border-top: 1px solid #222; }
+#bb-research-label {
+    flex: 0 0 48px; display: flex; flex-direction: column; justify-content: center; align-items: center;
+    color: #9cf; border-right: 1px solid #243240; padding-right: 4px; cursor: help; line-height: 12px;
+}
+.bb-rl-title { font-size: 9px; color: #7fa7c9; }
+.bb-rl-count { font-size: 11px; font-weight: bold; font-variant-numeric: tabular-nums; }
+#bb-research { flex: 1; min-width: 0; gap: 10px; padding-left: 12px; }
+
+/* Task: icon on the left, level/stat over the energy still needed. */
+.bb-task {
+    position: relative; flex: 0 0 auto; width: 74px; height: 34px; border: 2px solid var(--bb-c, #888);
+    border-radius: 6px; background: #111; display: flex; align-items: center; gap: 3px;
+    padding: 0 3px 0 9px; cursor: grab; touch-action: none;
+}
+.bb-task.bb-unit { border-radius: 12px; padding-left: 11px; }
+.bb-task.bb-unit .bb-task-progress { left: 4px; top: 6px; bottom: 6px; }
+.bb-task.bb-open, .bb-thing.bb-open { outline: 1px solid #fff; outline-offset: 1px; }
+.bb-star { color: #9aa; }
+.bb-task.bb-unit img { border-radius: 50%; }
+/* Chevrons between tasks: the queue flows to the left. */
+.bb-task + .bb-task::before, .bb-caret + .bb-task::before, .bb-placeholder + .bb-task::before, .bb-task + .bb-placeholder::before {
+    content: '‹'; position: absolute; left: -10px; top: 50%; transform: translateY(-55%);
+    color: #4d6377; font-size: 13px; font-weight: bold; pointer-events: none;
+}
+.bb-placeholder { position: relative; }
+.bb-task:hover { filter: brightness(1.2); }
+.bb-task-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.bb-task-top { display: flex; justify-content: space-between; gap: 2px; font-size: 9px; line-height: 12px; }
+.bb-task-lvl { color: #9cf; font-weight: bold; }
+.bb-task-stat { color: #bbb; overflow: hidden; white-space: nowrap; }
+.bb-task-cost { font-size: 9px; line-height: 12px; color: #fd0; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
+.bb-task.bb-active {
+    border-color: #4af;
+    box-shadow: 0 0 0 1px #4af5, 0 0 8px #2d7dd288; background: linear-gradient(90deg, #0f1c28, #111 70%);
+}
+.bb-task-progress {
+    position: absolute; left: 2px; top: 3px; bottom: 3px; width: 4px; border-radius: 2px;
+    background: #0b141c; border: 1px solid #28445c; overflow: hidden;
+}
+.bb-task-progress > div {
+    position: absolute; left: 0; right: 0; bottom: 0; background: linear-gradient(0deg, #2d7dd2, #6fd6ff);
+}
+.bb-task-arrow {
+    position: absolute; left: -12px; top: 50%; transform: translateY(-50%); color: #6cf; font-size: 10px;
+    pointer-events: none; animation: bb-arrow-left 1.1s ease-in-out infinite;
+}
+@keyframes bb-arrow-left {
+    0%, 100% { transform: translate(2px, -50%); opacity: 0.35; }
+    50% { transform: translate(-2px, -50%); opacity: 1; }
+}
+/* Free capacity: same size as a task. */
+.bb-slot { flex: 0 0 auto; width: 74px; height: 34px; border: 1px solid #26313b; border-radius: 6px; background: #0b0f13; }
+.bb-caret { flex: 0 0 auto; width: 3px; height: 32px; border-radius: 2px; background: #6cf; box-shadow: 0 0 8px #6cf; animation: bb-caret 1s ease-in-out infinite; }
+@keyframes bb-caret { 50% { opacity: 0.35; } }
+.bb-placeholder {
+    flex: 0 0 auto; border: 2px dashed #6cf; border-radius: 6px; background: #13212d;
+    display: flex; align-items: center; justify-content: center;
+}
+.bb-placeholder img { opacity: 0.55; }
+.bb-ph-thing { width: 34px; height: 34px; }
+.bb-ph-task { width: 74px; height: 34px; }
+.bb-ghost {
+    position: fixed; z-index: 2000; pointer-events: none; opacity: 0.92; transform: scale(1.08);
+    box-shadow: 0 8px 20px #000c; margin: 0;
+}
+.bb-ghost.bb-ghost-cancel { opacity: 0.5; }
+.bb-ghost.bb-ghost-blocked { border-color: #f55 !important; }
+body.bb-dragging, body.bb-dragging * { cursor: grabbing !important; }
+
+/* Hover / drop menu above the bar */
+.bb-menu {
+    position: fixed; z-index: 900; width: 300px; max-width: calc(100vw - 12px);
+    display: flex; flex-direction: column; gap: 4px; padding: 6px;
+    background: #10161d; border: 1px solid #3c5368; border-radius: 8px; box-shadow: 0 10px 28px #000b;
+    font-size: 11px; color: #d8e4ef;
+}
+.bb-menu::after {
+    content: ''; position: absolute; bottom: -7px; left: calc(var(--bb-arrow-x, 50%) - 7px);
+    border: 7px solid transparent; border-bottom: 0; border-top-color: #3c5368;
+}
+.bb-menu-drop { border-color: #4a89c7; }
+.bb-menu-head { display: flex; align-items: center; gap: 6px; }
+.bb-menu-icon { width: 28px; height: 28px; border: 2px solid var(--bb-c, #888); border-radius: 5px; display: flex; align-items: center; justify-content: center; background: #111; flex: 0 0 auto; }
+.bb-menu-icon.bb-unit, .bb-menu-icon.bb-unit img { border-radius: 50%; }
+.bb-menu-title { color: #8dc6ff; font-size: 13px; font-weight: bold; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bb-menu-sub { color: #fd0; font-weight: bold; }
+.bb-menu-stats { display: flex; justify-content: space-between; gap: 8px; padding: 3px 6px; background: #0b1117; border: 1px solid #1f2d3a; border-radius: 4px; font-variant-numeric: tabular-nums; }
+.bb-menu-stats b { color: #fff; }
+.bb-muted { color: #778; font-weight: normal; }
+.bb-menu-upgrades { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+.bb-menu-upgrades > div { margin-top: 0 !important; }
+.bb-menu-section { color: #9cf; margin: 2px 0 3px; display: flex; justify-content: space-between; }
+.bb-menu-note { color: #888; padding: 4px 2px; }
+.bb-menu-hint { color: #778; text-align: center; font-size: 10px; }
+.bb-menu-queue {
+    display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: 4px 8px;
+    padding: 4px 6px; border: 1px solid #242424; border-radius: 4px; background: #101010;
+}
+.bb-menu-queue-label { color: #bbb; }
+.bb-menu-queue-frac { color: #fff; text-align: center; font-variant-numeric: tabular-nums; }
+.bb-menu-queue-btns { display: flex; gap: 6px; font-weight: bold; }
+.bb-btn-sub { color: #f55; cursor: pointer; }
+.bb-btn-add { color: #4f4; cursor: pointer; }
+.bb-btn-sub:hover, .bb-btn-add:hover { filter: brightness(1.4); }
+.bb-menu-queue-bar {
+    grid-column: 1 / -1; position: relative; height: 11px; border: 1px solid #35516a; border-radius: 3px;
+    background: #0f161c; overflow: hidden;
+}
+.bb-menu-queue-bar > div { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, #2d7dd2, #49c0ff); }
+.bb-menu-queue-bar > span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: bold; color: #d6ecff; text-shadow: 0 1px 1px #000; }
+.bb-menu-actions { display: flex; flex-direction: column; gap: 3px; }
+.bb-menu-actions:empty { display: none; }
+.bb-menu-btn {
+    display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 4px 8px;
+    background: #182029; border: 1px solid #34495c; border-radius: 4px; color: #dce9f7; font: inherit; cursor: pointer; text-align: left;
+}
+.bb-menu-btn:hover { background: #22303d; border-color: #4a89c7; }
+.bb-off { opacity: 0.4; pointer-events: none; }
+
+.bb-menu-drop { width: 380px; }
+.bb-menu-task-head { display: flex; justify-content: space-between; gap: 8px; color: #8dc6ff; font-weight: bold; }
+.bb-menu-task { padding: 4px; border: 1px solid #242424; border-radius: 4px; background: #101010; display: flex; flex-direction: column; gap: 2px; }
+.bb-menu-task-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; white-space: nowrap; }
+.bb-menu-task-name { display: flex; align-items: center; gap: 4px; color: #bbb; }
+.bb-menu-task-name button[disabled] { opacity: 0.35; cursor: default !important; }

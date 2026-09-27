@@ -3246,6 +3246,7 @@ function processRenderFrame(timestamp) {
         if (_buildMenuNeedsRefresh) updateBuildMenu();
     }
     _refreshInfoPanelPeriodic(Number.isFinite(timestamp) ? timestamp : performance.now());
+    if (typeof updateBottomBar === 'function') updateBottomBar(Number.isFinite(timestamp) ? timestamp : performance.now());
     // Refresh minimap static layer every ~30 frames on a different phase.
     if (++_minimapRefreshCounter >= 30) {
         _minimapRefreshCounter = 0;
