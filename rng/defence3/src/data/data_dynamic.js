@@ -93,7 +93,19 @@ function _hasExplicitResourceStatMapping(resourceKey, kind, statKey) {
     return Array.isArray(mapped) ? mapped.includes(statKey) : false;
 }
 
+// Static config: cached per kind/stat (the resource penalty rebuild asks for
+// every stat of every thing).
+const _resourceKeyForStatCache = new Map();
 function _getResourceKeyForPrecomputedStat(kind, statKey) {
+    let cacheKey = kind + '|' + statKey;
+    let cached = _resourceKeyForStatCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+    let resolved = _resolveResourceKeyForPrecomputedStat(kind, statKey);
+    _resourceKeyForStatCache.set(cacheKey, resolved);
+    return resolved;
+}
+
+function _resolveResourceKeyForPrecomputedStat(kind, statKey) {
     for (let cfg of RESOURCE_TYPE_LIST) {
         let stockpileKey = String(cfg.stockpileKey || cfg.key || '');
         if (!stockpileKey || stockpileKey === 'energy') continue;
@@ -102,16 +114,27 @@ function _getResourceKeyForPrecomputedStat(kind, statKey) {
     return 'energy';
 }
 
-function _applyPlayerResourcePenaltyToStatValue(playerId, kind, statKey, value) {
+// Stats a negative stockpile never scales.
+const RESOURCE_PENALTY_EXEMPT_STATS = new Set(['upKeep', 'popCap', 'energy', 'maxEnergy', 'workerSearchDistance', 'visionRange', 'visionRangeArea', 'attackRange', 'attackRangeArea', 'blastRadius']);
+
+// The penalty multiplier for one of a player's stats (1 = none).
+function _getPlayerStatPenaltyMultiplier(playerId, kind, statKey) {
+    if (RESOURCE_PENALTY_EXEMPT_STATS.has(statKey)) return 1;
+    return _getPlayerResourcePenaltyMultiplier(playerId, _getResourceKeyForPrecomputedStat(kind, statKey));
+}
+
+function _penalizeStatValue(statKey, value, multiplier) {
     let numericValue = Number(value);
-    if (!Number.isFinite(numericValue)) return numericValue;
-    if (statKey === 'upKeep' || statKey === 'popCap' || statKey === 'energy' || statKey === 'maxEnergy' || statKey === 'workerSearchDistance' || statKey === 'visionRange' || statKey === 'visionRangeArea' || statKey === 'attackRange' || statKey === 'attackRangeArea' || statKey === 'blastRadius') return numericValue;
-    let resourceKey = _getResourceKeyForPrecomputedStat(kind, statKey);
-    let multiplier = _getPlayerResourcePenaltyMultiplier(playerId, resourceKey);
-    if (!(multiplier > 1)) return numericValue;
+    if (!Number.isFinite(numericValue) || !(multiplier > 1)) return numericValue;
     return RESEARCH_DECREASE_STATS[statKey]
         ? (numericValue * multiplier)
         : (numericValue / multiplier);
+}
+
+function _applyPlayerResourcePenaltyToStatValue(playerId, kind, statKey, value) {
+    let numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return numericValue;
+    return _penalizeStatValue(statKey, numericValue, _getPlayerStatPenaltyMultiplier(playerId, kind, statKey));
 }
 
 function _updatePlayerResourcePenaltyMultipliers(playerId) {
@@ -190,22 +213,32 @@ function addPlayerResource(playerId, resourceKey, delta) {
     return _setPlayerResourceValue(pid, stockpileKey, _fromFixedResourceUnits(fixedMap[stockpileKey]));
 }
 
+// A stockpile's penalty multiplier changed: refresh the stats it scales.
+// While a stockpile is negative this runs on every upkeep payment, so it
+// only touches penalty-scaled stats (exempt ones cannot have changed; research
+// rebuilds its own stats) and resolves the multiplier once per stat.
 function rebuildPrecomputedStatsMapPlayerResource(playerId, resourceKey) {
     if (!ensurePrecomputedStatsMap()) return;
     let pid = Math.max(0, Math.floor(playerId || 0));
     let stockpileKey = String(resourceKey || '');
     if (!stockpileKey) return;
 
-    for (let unitType in PRECOMPUTED_STATS_MAP.unit) {
-        for (let statKey of PRECOMPUTED_UNIT_STAT_KEYS) {
-            if (_getResourceKeyForPrecomputedStat('unit', statKey) !== stockpileKey) continue;
-            rebuildPrecomputedStatsMapPlayerThingStat(pid, 'unit', unitType, statKey);
-        }
-    }
-    for (let buildingKey in PRECOMPUTED_STATS_MAP.building) {
-        for (let statKey of PRECOMPUTED_BUILDING_STAT_KEYS) {
-            if (_getResourceKeyForPrecomputedStat('building', statKey) !== stockpileKey) continue;
-            rebuildPrecomputedStatsMapPlayerThingStat(pid, 'building', buildingKey, statKey);
+    // Every stat handled here is scaled by this one stockpile's multiplier.
+    let multiplier = _getPlayerResourcePenaltyMultiplier(pid, stockpileKey);
+    for (let [branch, statKeys] of [['unit', PRECOMPUTED_UNIT_STAT_KEYS], ['building', PRECOMPUTED_BUILDING_STAT_KEYS]]) {
+        let scaled = statKeys.filter(statKey => !RESOURCE_PENALTY_EXEMPT_STATS.has(statKey) && _getResourceKeyForPrecomputedStat(branch, statKey) === stockpileKey);
+        if (scaled.length === 0) continue;
+        let playerEntry = _ensurePrecomputedStatsMapPlayerEntry(pid);
+        for (let key in PRECOMPUTED_STATS_MAP[branch]) {
+            let normalizedKey = branch === 'unit' ? _normalizePlayerPrecomputedUnitKey(key) : _normalizePlayerPrecomputedBuildingKey(key);
+            let levels = playerEntry[branch][normalizedKey];
+            let complete = !!levels && levels.length > MAX_THING_LEVEL;
+            for (let statKey of scaled) {
+                // A building stat with no value at any level stays NaN
+                // whatever the multiplier (most buildings use few stats).
+                if (complete && branch === 'building' && !_buildingStatHasValues(normalizedKey, statKey)) continue;
+                _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey, multiplier);
+            }
         }
     }
 }
@@ -2702,31 +2735,69 @@ function rebuildPrecomputedStatsMapPlayerThingStat(playerId, kind, key, statKey 
         ? _normalizePlayerPrecomputedUnitKey(key)
         : _normalizePlayerPrecomputedBuildingKey(key);
 
-    if (!playerEntry[branch][normalizedKey]) playerEntry[branch][normalizedKey] = [];
-    for (let lvl = 0; lvl <= MAX_THING_LEVEL; lvl++) {
-        if (!playerEntry[branch][normalizedKey][lvl]) {
-            playerEntry[branch][normalizedKey][lvl] = branch === 'unit'
+    if (!statKey) {
+        if (!playerEntry[branch][normalizedKey]) playerEntry[branch][normalizedKey] = [];
+        let levels = playerEntry[branch][normalizedKey];
+        for (let lvl = 0; lvl <= MAX_THING_LEVEL; lvl++) {
+            levels[lvl] = branch === 'unit'
                 ? _getUnitPlayerPrecomputedEntry(pid, normalizedKey, lvl)
                 : _getBuildingPlayerPrecomputedEntry(pid, normalizedKey, lvl);
-            continue;
         }
-
-        if (!statKey) {
-            playerEntry[branch][normalizedKey][lvl] = branch === 'unit'
-                ? _getUnitPlayerPrecomputedEntry(pid, normalizedKey, lvl)
-                : _getBuildingPlayerPrecomputedEntry(pid, normalizedKey, lvl);
-            continue;
-        }
-
-        let rLvl = getPlayerResearchLevel(pid, branch, normalizedKey, statKey);
-        let source = ((((PRECOMPUTED_STATS_MAP[branch] || {})[normalizedKey] || [])[lvl] || {})[statKey] || null);
-        let rawValue = source ? source[rLvl] : (branch === 'unit' ? normalizePrecomputedUnitStatValue(normalizedKey, statKey, NaN) : NaN);
-        let value = _applyPlayerResourcePenaltyToStatValue(pid, branch, statKey, rawValue);
-        if (branch === 'unit') _applyUnitPlayerPrecomputedStat(playerEntry[branch][normalizedKey][lvl], statKey, value);
-        else _applyBuildingPlayerPrecomputedStat(playerEntry[branch][normalizedKey][lvl], statKey, value);
+        return levels;
     }
+    return _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey, _getPlayerStatPenaltyMultiplier(pid, branch, statKey));
+}
 
-    return playerEntry[branch][normalizedKey];
+// Whether a building's precomputed stat has any finite value (any level,
+// any research level). Cached per source table, so rebuilding the stats map
+// starts a fresh cache.
+const _buildingStatValueCache = new WeakMap();
+function _buildingStatHasValues(buildingKey, statKey) {
+    let sources = PRECOMPUTED_STATS_MAP.building[buildingKey];
+    if (!sources) return false;
+    let cache = _buildingStatValueCache.get(sources);
+    if (!cache) _buildingStatValueCache.set(sources, cache = new Map());
+    let known = cache.get(statKey);
+    if (known !== undefined) return known;
+    let found = false;
+    for (let lvl = 0; lvl < sources.length && !found; lvl++) {
+        let values = sources[lvl] && sources[lvl][statKey];
+        if (!values) continue;
+        for (let i = 0; i < values.length; i++) if (Number.isFinite(Number(values[i]))) { found = true; break; }
+    }
+    cache.set(statKey, found);
+    return found;
+}
+
+// One stat of one thing at every level. Research level, penalty and the unit
+// fallback do not depend on the thing level, so they are resolved once.
+function _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey, multiplier) {
+    let playerEntry = _ensurePrecomputedStatsMapPlayerEntry(pid);
+    if (!playerEntry[branch][normalizedKey]) playerEntry[branch][normalizedKey] = [];
+    let levels = playerEntry[branch][normalizedKey];
+    let levelSources = (PRECOMPUTED_STATS_MAP[branch] || {})[normalizedKey] || [];
+    let isUnit = branch === 'unit';
+    let rLvl = getPlayerResearchLevel(pid, branch, normalizedKey, statKey);
+    let fallback;
+    for (let lvl = 0; lvl <= MAX_THING_LEVEL; lvl++) {
+        let entry = levels[lvl];
+        if (!entry) {
+            levels[lvl] = isUnit
+                ? _getUnitPlayerPrecomputedEntry(pid, normalizedKey, lvl)
+                : _getBuildingPlayerPrecomputedEntry(pid, normalizedKey, lvl);
+            continue;
+        }
+        let levelSource = levelSources[lvl];
+        let source = levelSource ? levelSource[statKey] : null;
+        let rawValue;
+        if (source) rawValue = source[rLvl];
+        else if (isUnit) rawValue = fallback !== undefined ? fallback : (fallback = normalizePrecomputedUnitStatValue(normalizedKey, statKey, NaN));
+        else rawValue = NaN;
+        let value = _penalizeStatValue(statKey, rawValue, multiplier);
+        if (isUnit) _applyUnitPlayerPrecomputedStat(entry, statKey, value);
+        else _applyBuildingPlayerPrecomputedStat(entry, statKey, value);
+    }
+    return levels;
 }
 
 function ensurePrecomputedStatsMap() {

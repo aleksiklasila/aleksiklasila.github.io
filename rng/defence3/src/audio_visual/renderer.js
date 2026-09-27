@@ -303,7 +303,7 @@ function get3DBuildingTextureStatus(entity, extraBars = []) {
         bars.push({ pct: maxEnergy > 0 ? energy / maxEnergy : 0, bgColor: isProgress ? '#333' : '#600', fillColor: isProgress ? '#fa0' : '#0f0' });
     }
     for (let bar of extraBars) bars.push(bar);
-    return build3DStatusTextureOptions(entity && entity.textCanvas && shouldShowBuildingLevels() ? getLevelLabelText(entity) : '', bars);
+    return build3DStatusTextureOptions(entity && entity.textCanvas && shouldShowBuildingLevels(entity) ? getLevelLabelText(entity) : '', bars);
 }
 
 function get3DConstructionAlpha(entity) {
@@ -348,7 +348,7 @@ function get3DUnitTextureStatus(unit) {
     if (unit && unit.energy < maxEnergy) {
         bars.push({ pct: Math.max(0, unit.energy / Math.max(1, maxEnergy)), bgColor: '#600', fillColor: '#0f0' });
     }
-    let status = build3DStatusTextureOptions(shouldShowUnitLevels() ? getUnitLevelLabelText(unit) : '', bars);
+    let status = build3DStatusTextureOptions(shouldShowUnitLevels(unit) ? getUnitLevelLabelText(unit) : '', bars);
     let glyph = get3DUnitStatusGlyph(unit);
     if (glyph) {
         status.glyphSymbol = glyph.symbol;
@@ -447,8 +447,8 @@ function get3DExact2DVisualSignature(entity, isUnit = false) {
     values[n++] = entity.vis || '';
     values[n++] = entity.color || '';
     values[n++] = Math.round((Number(entity.r) || 0) * 10);
-    values[n++] = entity.textCanvas && shouldShowBuildingLevels() ? getLevelLabelText(entity) : '';
-    values[n++] = shouldShowUnitLevels() && entity.unitType ? getUnitLevelLabelText(entity) : '';
+    values[n++] = entity.textCanvas && shouldShowBuildingLevels(entity) ? getLevelLabelText(entity) : '';
+    values[n++] = entity.unitType && shouldShowUnitLevels(entity) ? getUnitLevelLabelText(entity) : '';
     values[n++] = quantize3DExactRatio(entity.energy, maxEnergy);
     values[n++] = entity.underConstruction ? 1 : 0;
     values[n++] = entity.isUpgrading ? 1 : 0;
@@ -492,7 +492,7 @@ function get3DExact2DCapture(entity, x, y, isUnit) {
     let top = y - radius - 7;  // health bar
     let bottom = y + radius + 3;
 
-    if (shouldShowUnitLevels()) {
+    if (shouldShowUnitLevels(entity)) {
         let labelSprite = _getUnitLevelTextSprite(getUnitLevelLabelText(entity));
         halfWidth = Math.max(halfWidth, labelSprite.width * 0.5);
         top -= labelSprite.height;
@@ -1820,11 +1820,17 @@ function _relight3DObject(o, source, baseTint, baseSideTint, flat2d, sourceLight
     o.shadowLength = Math.max(0.6, Math.min(2.4, 1 + (1 - lightLevel) * 0.9));
 }
 
+// Whether a structure's panel shows its level (per thing in 3D: distance).
+function _static3DLabelShown(entity) {
+    return renderer3dStaticFrame.flat2d ? false : !!(entity && entity.textCanvas && shouldShowBuildingLevels(entity));
+}
+
 function _reuseStatic3DObject(target, entity, gx, gy, audioMove, audioHeight) {
     let entry = renderer3dStaticObjects.get(entity);
     let age = entry ? gameTime - entry.tick : -1;
     if (!entry || entry.dynamic || age < 0 || age >= entry.maxAge
         || entry.view !== renderer3dStaticFrame.view || entry.audioMove !== audioMove || entry.audioHeight !== audioHeight
+        || entry.label !== _static3DLabelShown(entity)
         || entry.angle !== entity.angle
         || entry.occupied !== renderer3dStaticFrame.occupied.has(gy * GRID_W + gx)
         || getDamageFlashState(entity)) return false;
@@ -1860,6 +1866,7 @@ function _rememberStatic3DObject(target, entity, gx, gy, audioMove, audioHeight,
         // Panels (health, progress) refresh every 1-4 ticks, spread by tile.
         maxAge: 1 + ((gx * 7 + gy * 13) & 3),
         view: renderer3dStaticFrame.view,
+        label: _static3DLabelShown(entity),
         occupied: renderer3dStaticFrame.occupied.has(gy * GRID_W + gx),
         dynamic: fallbackTexture || easing || !!getDamageFlashState(entity) });
 }
@@ -1956,7 +1963,7 @@ function build3DFrameData(flat2d = false) {
     let fxBatch = renderer3dFxBatch || (renderer3dFxBatch = new window.Defence3Renderer3D.FxBatch());
     let fxPixelsPerTile = flat2d ? camera.zoom * TILE : ((renderer3dInstance && renderer3dInstance.lodPixelsPerWorld) || 32);
     // Live effects are culled by live visibility, never by remembered fog.
-    beginFrameEffects(fxBatch, flat2d, bounds, getTeamLightingGrid(), fxPixelsPerTile);
+    beginFrameEffects(fxBatch, flat2d, bounds, getTeamLightingGrid(), fxPixelsPerTile, renderer3dInstance);
     let soundGrid = audioSpatialGrid;
     let bgSoundGrid = audioSpatialGridBackground;
     let fxSoundGrid = audioSpatialGridEffects;
@@ -1967,7 +1974,10 @@ function build3DFrameData(flat2d = false) {
     renderer3dStaticFrame.occupied = unitOccupiedTileKeys;
     renderer3dStaticFrame.flat2d = !!flat2d;
     // Settings that change cached objects (view mode, fog, level labels).
-    let view3DKey = (flat2d ? 1 : 0) | (fullVisibility ? 2 : 0) | (shouldShowUnitLevels() ? 4 : 0) | (shouldShowBuildingLevels() ? 8 : 0);
+    // Flat 2D shows labels by zoom for everything at once; in 3D each thing
+    // decides by its own distance, checked by the caches per thing.
+    let view3DKey = (flat2d ? 1 : 0) | (fullVisibility ? 2 : 0) | (levelVisibilityMode << 4)
+        | (flat2d ? (shouldShowUnitLevels() ? 4 : 0) | (shouldShowBuildingLevels() ? 8 : 0) : 0);
     renderer3dStaticFrame.view = view3DKey;
     let overlapNowMs = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
     let activeOverlapFadeKeys = new Set();
@@ -2338,6 +2348,7 @@ function build3DFrameData(flat2d = false) {
             let cachedAge = cached ? gameTime - cached.tick : -1;
             if (cached && (cachedAge === 0 || (cachedAge === 1 && ((u.id + gameTime) & 1) === 1))
                 && cached.view === view3DKey && !cached.dynamic && !getDamageFlashState(u)
+                && cached.label === (!flat2d && shouldShowUnitLevels(u))
                 && (cached.object.topTextureCanvas || {})._textureVersion === cached.textureVersion) {
                 let o = cached.object;
                 _touch3DPanel(o.topTextureCanvas);
@@ -2404,7 +2415,7 @@ function build3DFrameData(flat2d = false) {
                 statusTextureCanvas: u._historyGhost ? null : get3DStatusTexture(getUnit3DStatusState(u, activity)),
                 sideTint: unitSideTint,
             });
-            renderer3dUnitObjects.set(u, { object: objects[objects.length - 1], tick: gameTime, view: view3DKey, activity, stillSince, baseY,
+            renderer3dUnitObjects.set(u, { object: objects[objects.length - 1], tick: gameTime, view: view3DKey, label: !flat2d && shouldShowUnitLevels(u), activity, stillSince, baseY,
                 textureVersion: objects[objects.length - 1].topTextureCanvas && objects[objects.length - 1].topTextureCanvas._textureVersion,
                 tint: unitTint, sideTint: unitSideTint, dynamic: !unit2DTexture || unitTextureFallback || !!getDamageFlashState(u) });
             if (!flat2d) {

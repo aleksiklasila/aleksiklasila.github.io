@@ -1527,16 +1527,42 @@ function getUnitLevelLabelText(unit) {
     return `L${lvl}`;
 }
 
-function shouldShowBuildingLevels() {
-    if (!(levelVisibilityMode === LEVEL_VISIBILITY_ALL || levelVisibilityMode === LEVEL_VISIBILITY_BUILDINGS)) return false;
-    if (!camera || !Number.isFinite(camera.zoom)) return true;
-    return camera.zoom >= 0.62;
+// How large a world point is drawn, as a 2D-equivalent zoom (screen pixels
+// per world pixel). In 2D this is the camera zoom. In 3D it is the on-screen
+// scale at that point, i.e. its distance to the camera: zoom, tilt and where
+// the point is on the map all count, so the far end of a tilted view is
+// "zoomed out" even when the camera is zoomed in.
+function getViewZoomAt(worldX, worldY) {
+    let r = typeof renderer3dInstance !== 'undefined' ? renderer3dInstance : null;
+    if (r && r.enabled && r.lodProjectionScale > 0 && typeof renderDimensionMode !== 'undefined' && renderDimensionMode === '3d'
+        && Number.isFinite(worldX) && Number.isFinite(worldY)) {
+        return r.pixelsPerWorldAt(worldX / TILE, 0, worldY / TILE) / TILE;
+    }
+    return camera && Number.isFinite(camera.zoom) ? camera.zoom : 1;
 }
 
-function shouldShowUnitLevels() {
+// Level labels appear once a thing is drawn large enough. With an entity the
+// size is measured where it is (see getViewZoomAt); in 3D a 5% band keeps a
+// label from flickering while the camera moves across the threshold.
+const _levelLabelShown = new WeakMap();
+function _isDrawnLargeEnough(entity, threshold) {
+    if (!entity) return !camera || !Number.isFinite(camera.zoom) || camera.zoom >= threshold;
+    let zoom = getViewZoomAt(Number(entity.x), Number(entity.y));
+    if (renderDimensionMode !== '3d') return zoom >= threshold;
+    let shown = _levelLabelShown.get(entity);
+    let next = shown ? zoom >= threshold * 0.95 : zoom >= threshold * 1.05;
+    if (next !== shown) _levelLabelShown.set(entity, next);
+    return next;
+}
+
+function shouldShowBuildingLevels(entity = null) {
+    if (!(levelVisibilityMode === LEVEL_VISIBILITY_ALL || levelVisibilityMode === LEVEL_VISIBILITY_BUILDINGS)) return false;
+    return _isDrawnLargeEnough(entity, 0.62);
+}
+
+function shouldShowUnitLevels(entity = null) {
     if (levelVisibilityMode !== LEVEL_VISIBILITY_ALL) return false;
-    if (!camera || !Number.isFinite(camera.zoom)) return true;
-    return camera.zoom >= 0.7;
+    return _isDrawnLargeEnough(entity, 0.7);
 }
 
 function getLevelVisibilityButtonText() {

@@ -308,7 +308,7 @@ class Tower {
             }
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
             if (!isUpg) {
-                if (shouldShowBuildingLevels()) drawLevelTextCache(ctx, this, this.x, this.y);
+                if (shouldShowBuildingLevels(this)) drawLevelTextCache(ctx, this, this.x, this.y);
                 return;
             }
         } else {
@@ -328,7 +328,7 @@ class Tower {
                 drawTowerIcon(ctx, this.x, this.y, this.baseStats.color, this.angle, this.level, this.type);
             }
         }
-        if (shouldShowBuildingLevels()) drawLevelTextCache(ctx, this, this.x, this.y);
+        if (shouldShowBuildingLevels(this)) drawLevelTextCache(ctx, this, this.x, this.y);
 
         // Energy bar (single bar for damage/progress)
         if (!this.underConstruction && !this.isUpgrading) {

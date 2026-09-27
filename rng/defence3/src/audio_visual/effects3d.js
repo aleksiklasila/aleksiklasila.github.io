@@ -113,7 +113,7 @@ function _fxEnvelope(q, fadeIn, fadeOut) {
 // ---- Recorded attacks, shots and hits ---------------------------------
 
 function _fxEvent(kind, x0, z0, x1, z1, style, seed, q) {
-    const rest = _fx.rest, detail = _fx.detail;
+    const rest = _fx.rest, detail = _fxDetailAt(x1, z1);
     let dx = x1 - x0, dz = z1 - z0, dist = Math.hypot(dx, dz) || .001;
     let yaw = Math.atan2(dx, dz), nx = dx / dist, nz = dz / dist;
     let fade = 1 - q;
@@ -351,13 +351,13 @@ function _pushProjectileFx(p, px, pz) {
         case 1: { // fireball
             _fxOrb(px, y, pz, .2, '#ff7a1a', 1, 0);
             _fxOrb(px, y, pz, .34, '#ffb347', .5);
-            if (_fx.detail) for (let k = 1; k <= 2; k++) { let q = trail(k * .16); _fxOrb(q[0], q[1], q[2], .13 - k * .03, '#ffd27a', .7 - k * .2); }
+            if (_fxDetailAt(px, pz)) for (let k = 1; k <= 2; k++) { let q = trail(k * .16); _fxOrb(q[0], q[1], q[2], .13 - k * .03, '#ffd27a', .7 - k * .2); }
             break;
         }
         case 2: case 4: { // water / poison globs
             let main = style === 2 ? '#3aa8ff' : '#5de04a', light = style === 2 ? '#bfe6ff' : '#b6ff7a';
             _fxOrb(px, y, pz, .18, main, 1, 0);
-            if (_fx.detail) for (let k = 1; k <= 2; k++) { let q = trail(k * .14); _fxOrb(q[0], q[1], q[2], .08 - k * .015, light, .8 - k * .25, 0); }
+            if (_fxDetailAt(px, pz)) for (let k = 1; k <= 2; k++) { let q = trail(k * .14); _fxOrb(q[0], q[1], q[2], .08 - k * .015, light, .8 - k * .25, 0); }
             break;
         }
         case 3: // ice shard pointing along its flight
@@ -428,7 +428,7 @@ function _pushLaserFenceFx(t) {
 
 // Houses breathe smoke. `roof` is the height of the rendered roof.
 function pushStructureActivityFx(entity, x, z, roof, ownerColor) {
-    if (!_fx.batch || _fx.flat || !_fx.detail || entity.underConstruction) return;
+    if (!_fx.batch || _fx.flat || entity.underConstruction || !_fxDetailAt(x, z)) return;
     let now = _fx.now / _fx.tickScale, seed = (entity.gx * 7 + entity.gy * 13) | 0;
     let type = entity.type;
     if (type === 'house') {
@@ -443,7 +443,7 @@ function pushStructureActivityFx(entity, x, z, roof, ownerColor) {
 
 // Steam from a moving snake engine's stack, dust behind heavy walkers.
 function pushUnitMotionFx(u, x, z, footprint, scaleY) {
-    if (!_fx.batch || _fx.flat || !_fx.detail) return;
+    if (!_fx.batch || _fx.flat || !_fxDetailAt(x, z)) return;
     let moving = Math.hypot(u.x - u.prevX, u.y - u.prevY) > .01;
     if (!moving) return;
     let now = _fx.now / _fx.tickScale;
@@ -462,7 +462,16 @@ function pushUnitMotionFx(u, x, z, footprint, scaleY) {
 
 // ---- Frame entry points --------------------------------------------------
 
-function beginFrameEffects(batch, flat2d, bounds, visibility, pixelsPerTile) {
+// Whether secondary pieces (debris, trails, smoke) at (x, z) are big enough
+// on screen to draw. In 3D this is per position, so a far corner of a tilted
+// view drops them even when zoomed in; the flat view uses the zoom.
+function _fxDetailAt(x, z) {
+    let r = _fx.renderer;
+    if (_fx.flat || !r) return _fx.detail;
+    return !(r.pixelsPerWorldAt(x, .3, z) < 14);
+}
+
+function beginFrameEffects(batch, flat2d, bounds, visibility, pixelsPerTile, renderer = null) {
     _FXM = window.Defence3Renderer3D.FX_MESH;
     _FXP = window.Defence3Renderer3D.FX_PATTERN;
     batch.reset();
@@ -471,6 +480,7 @@ function beginFrameEffects(batch, flat2d, bounds, visibility, pixelsPerTile) {
     _fx.rest = flat2d ? .15 : 1;
     // Zoomed far out, secondary pieces (debris, trails, smoke) are subpixel.
     _fx.detail = !(pixelsPerTile < 14);
+    _fx.renderer = !flat2d && renderer && typeof renderer.pixelsPerWorldAt === 'function' ? renderer : null;
     _fx.tickScale = Math.max(.25, (typeof TICK_RATE === 'number' ? TICK_RATE : 20) / 20);
     let now = gameTime + (typeof tickAlpha === 'number' ? tickAlpha : 0);
     // A new game or a rewind leaves records in the future: drop them.

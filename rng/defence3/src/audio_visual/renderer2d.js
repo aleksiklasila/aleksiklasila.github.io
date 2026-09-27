@@ -349,7 +349,7 @@ function drawFloorItem(ctx, cell, px, py) {
         ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(px + 2, py + 2, TILE - 4, TILE - 4);
     }
     drawBuildingEnergyProgressBar(ctx, item, x, y + 2, TILE - 8, 3);
-    if (item.textCanvas && shouldShowBuildingLevels()) drawLevelTextCache(ctx, item, x, y);
+    if (item.textCanvas && shouldShowBuildingLevels(item)) drawLevelTextCache(ctx, item, x, y);
 }
 
 function _getGoldMineTileSprite(isActive) {

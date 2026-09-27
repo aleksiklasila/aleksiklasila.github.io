@@ -31,8 +31,14 @@ function buildSelectionContours(footprints) {
     // Large moving selections otherwise remarch the whole union at render FPS.
     // Reuse only for subpixel motion relative to the last built geometry (not
     // the last frame), so accumulated movement always triggers a fresh outline.
-    let tolerance = footprints.length >= 100 && typeof camera !== 'undefined'
-        ? Math.min(2, 0.75 / Math.max(0.25, camera.zoom)) : 0;
+    let tolerance = 0;
+    if (footprints.length >= 100 && typeof camera !== 'undefined') {
+        // Sub-pixel where the selection is drawn largest (nearest the camera).
+        let zoom = 0;
+        if (typeof getViewZoomAt === 'function') for (let p of footprints) zoom = Math.max(zoom, getViewZoomAt(p.x, p.y));
+        else zoom = camera.zoom;
+        tolerance = Math.min(2, 0.75 / Math.max(0.25, zoom));
+    }
     if (tolerance && input.length === previous.input.length && input.every((v, i) =>
         i % 5 < 2 ? Math.abs(v - previous.input[i]) <= tolerance : v === previous.input[i])) return previous.groups;
     const step = 8, iso = 4;

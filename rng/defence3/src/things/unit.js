@@ -1411,7 +1411,7 @@ class Unit {
             ctx.restore();
         }
 
-        if (shouldShowUnitLevels()) {
+        if (shouldShowUnitLevels(this)) {
             let txt = getUnitLevelLabelText(this);
             let sprite = _getUnitLevelTextSprite(txt);
             let dx = Math.round(this.x - sprite.width * 0.5);

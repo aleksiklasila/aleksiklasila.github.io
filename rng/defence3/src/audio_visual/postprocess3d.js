@@ -55,7 +55,7 @@
         precision highp float;
         in vec2 vUv;
         uniform vec2 uTexel;      // depth texel size
-        uniform float uRadiusPx;  // sample radius in depth pixels
+        uniform float uProjScale; // depth pixels per world unit at view depth 1
         uniform float uWorldRadius;
         ${DEPTH_GLSL}
         out vec4 outAo;
@@ -75,6 +75,9 @@
             float angle = noise * 6.2831853;
             float occ = 0.0;
             float z0 = 1.0 / w0;
+            // Sample radius: a fixed world size, so near and far ground
+            // (tilted views) occlude alike, clamped for the cost of far taps.
+            float uRadiusPx = clamp(uWorldRadius * .75 * uProjScale / z0, 2.0, 48.0);
             for (int i = 0; i < ${taps}; i++) {
                 float fi = float(i);
                 float r = (fi + 0.5 + noise) / float(${taps});
@@ -379,9 +382,7 @@
                 gl.uniform1i(p.uniforms.uDepth, 0);
                 gl.uniform2f(p.uniforms.uNearFar, frame.near, frame.far);
                 gl.uniform2f(p.uniforms.uTexel, 1 / width, 1 / height);
-                // About 0.45 tiles, in depth pixels at the screen centre.
-                let radiusPx = Math.max(3, Math.min(48, 0.45 * (frame.pixelsPerWorld || 40) * (frame.pixelRatio || 1)));
-                gl.uniform1f(p.uniforms.uRadiusPx, radiusPx);
+                gl.uniform1f(p.uniforms.uProjScale, frame.projectionScale || (frame.pixelsPerWorld || 40) * 20);
                 gl.uniform1f(p.uniforms.uWorldRadius, 0.6);
                 this.drawQuad(frame.quadVao);
             }
