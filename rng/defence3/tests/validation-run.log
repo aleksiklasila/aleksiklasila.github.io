@@ -1,0 +1,559 @@
+TAP version 13
+# PASS: worker search visits 655146 -> 1200; 18 visibility comparisons; 1500 stable panels rasterize once across 6 frames.
+# Subtest: tests\\battle-performance.test.cjs
+ok 1 - tests\\battle-performance.test.cjs
+  ---
+  duration_ms: 11805.241
+  type: 'test'
+  ...
+# PASS: farm discovery, group orders, collection, mixed targets and deterministic peer replay.
+# Subtest: tests\\collector-farms.test.cjs
+ok 2 - tests\\collector-farms.test.cjs
+  ---
+  duration_ms: 166.6253
+  type: 'test'
+  ...
+# PASS: role-specific attack effects, runes, expiry, culling, rewinds, lobbed shots, 2D flattening and laser fences.
+# Subtest: tests\\combat-effects.test.cjs
+ok 3 - tests\\combat-effects.test.cjs
+  ---
+  duration_ms: 139.6001
+  type: 'test'
+  ...
+# PASS: 100 moving units spread to 21 per 2x2 tiles; mean nearest 14.9px; deterministic sweep, clipped perimeter and identical live shadows.
+# Subtest: tests\\crowd-range-lighting.test.cjs
+ok 4 - tests\\crowd-range-lighting.test.cjs
+  ---
+  duration_ms: 1052.6973
+  type: 'test'
+  ...
+# PASS: travelling and holding attacks respect range, cooldowns, fixed positions, and deterministic targets.
+# Subtest: tests\\drive-by-attack.test.cjs
+ok 5 - tests\\drive-by-attack.test.cjs
+  ---
+  duration_ms: 148.3652
+  type: 'test'
+  ...
+# PASS: flat projection/input mapping; 1500 sprites and 400 distinct panels/particles in one GPU draw; layer reuse, GPU-only uploads, painter order, direct GPU presentation and Canvas fallback.
+# Subtest: tests\\flat-gpu-renderer.test.cjs
+ok 6 - tests\\flat-gpu-renderer.test.cjs
+  ---
+  duration_ms: 200.3076
+  type: 'test'
+  ...
+# PASS: units write panel sprites straight into the batch (lookups once per tick, lit like scene objects); panel canvases are pooled and versioned.
+# Subtest: tests\\flat-sprite-batch.test.cjs
+ok 7 - tests\\flat-sprite-batch.test.cjs
+  ---
+  duration_ms: 163.2697
+  type: 'test'
+  ...
+# PASS: shared links, independent local playback, local volumes, host authority, stale packets, URL validation and autoplay recovery.
+# Subtest: tests\\jukebox.test.cjs
+ok 8 - tests\\jukebox.test.cjs
+  ---
+  duration_ms: 125.5798
+  type: 'test'
+  ...
+# PASS: gameplay projectiles and units survive snapshots; local history, particles and visual RNG stay client-side.
+# Subtest: tests\\local-visual-snapshot.test.cjs
+ok 9 - tests\\local-visual-snapshot.test.cjs
+  ---
+  duration_ms: 2284.237
+  type: 'test'
+  ...
+# PASS: all 38 menu/display controls round trip; visibility modes, Config, browser storage and legacy config imports.
+# Subtest: tests\\main-menu-settings.test.cjs
+ok 10 - tests\\main-menu-settings.test.cjs
+  ---
+  duration_ms: 332.4283
+  type: 'test'
+  ...
+# PASS: action fuzz
+#   targeted: 2 of the host's buildings and 3 units attacked with every command kind: untouched
+#   30s of malformed commands from one guest: no errors, no divergence, 20.0 TPS
+# Subtest: tests\\multiplayer-action-fuzz.test.cjs
+ok 11 - tests\\multiplayer-action-fuzz.test.cjs
+  ---
+  duration_ms: 83863.6398
+  type: 'test'
+  ...
+# PASS: kings fight visible soldiers across area borders in lockstep (135 tick hashes compared, [[0,"king",230],[0,"norm",40],[0,"norm",40],[0,"laser_resistant",55],[1,"king",225],[1,"norm",40],[1,"norm",40],[1,"laser_resistant",55]]).
+# Subtest: tests\\multiplayer-border-combat.test.cjs
+ok 12 - tests\\multiplayer-border-combat.test.cjs
+  ---
+  duration_ms: 2655.1253
+  type: 'test'
+  ...
+# PASS: chaos determinism
+#   arena: 180 units + 201 buildings at start (max 196 units), 20 unit types, 27 command kinds, 2595 tick hashes compared, 2 patches for forced divergences
+#   random: 159 units + 199 buildings at start (max 160 units), 20 unit types, 27 command kinds, 2595 tick hashes compared, 2 patches for forced divergences
+#   islands: 171 units + 201 buildings at start (max 183 units), 20 unit types, 27 command kinds, 2594 tick hashes compared, 2 patches for forced divergences
+#   crossroads: 177 units + 198 buildings at start (max 177 units), 20 unit types, 27 command kinds, 2595 tick hashes compared, 2 patches for forced divergences
+#   solar_system: 177 units + 201 buildings at start (max 234 units), 20 unit types, 27 command kinds, 2595 tick hashes compared, 2 patches for forced divergences
+#   island: 177 units + 201 buildings at start (max 185 units), 20 unit types, 27 command kinds, 2594 tick hashes compared, 2 patches for forced divergences
+# Subtest: tests\\multiplayer-chaos-determinism.test.cjs
+ok 13 - tests\\multiplayer-chaos-determinism.test.cjs
+  ---
+  duration_ms: 155345.7431
+  type: 'test'
+  ...
+# PASS: concurrency (2955 bit-exact tick comparisons)
+#   teammates ordering the same units on one tick
+#   teammates and an opponent building on the same tiles on one tick
+#   teammates adding, removing and reordering research on one tick
+#   both teams contesting one mine and teammates reassigning the same builders on one tick
+#   split, merge, move, kill and enemy attack on the same group on one tick
+#   4 bursts of 40 simultaneous commands from each of 4 players
+# Subtest: tests\\multiplayer-concurrency.test.cjs
+ok 14 - tests\\multiplayer-concurrency.test.cjs
+  ---
+  duration_ms: 14314.3199
+  type: 'test'
+  ...
+# PASS: corruption fuzz
+#   unitMove (u1 moved) on guest1: 1 patch after 1200 ms, whole state equal
+#   unitEnergy (u8 energy) on guest2: 1 patch after 1200 ms, whole state equal
+#   unitOrders (u4 holds) on guest3: 1 patch after 1200 ms, whole state equal
+#   unitPath (u3 path dropped) on guest1: 1 patch after 800 ms, whole state equal
+#   unitTarget (u1 attacks u58) on guest2: 1 patch after 800 ms, whole state equal
+#   workerCargo (u39 cargo) on guest3: 1 patch after 1200 ms, whole state equal
+#   unitGone (u1 gone) on guest1: 1 patch after 800 ms, whole state equal
+#   unitExtra (extra u246) on guest2: 1 patch after 800 ms, whole state equal
+#   buildingEnergy (smg energy) on guest3: 1 patch after 1200 ms, whole state equal
+#   buildingLevel (barrack level) on guest1: 1 patch after 1200 ms, whole state equal
+#   buildingTimer (barrack timer) on guest2: overwritten by the next ticks alike on every peer, no patch needed
+#   towerGone (tower gone at 23,17) on guest3: 1 patch after 800 ms, whole state equal
+#   cellOwner (cell owner at 21,17) on guest1: 1 patch after 800 ms, whole state equal
+#   cellType (wall at 2,2) on guest2: 1 patch after 1200 ms, whole state equal
+#   reservation (reservation 5 -> u40) on guest3: 1 patch after 1200 ms, whole state equal
+#   reservationDrop (reservation 1612 dropped) on guest1: 1 patch after 1200 ms, whole state equal
+#   towerOrder (tower order) on guest2: 1 patch after 800 ms, whole state equal
+#   playerEnergy (player energy) on guest3: 1 patch after 800 ms, whole state equal
+#   playerResearch (research energy) on guest1: 1 patch after 800 ms, whole state equal
+#   rng (random state) on guest2: 1 patch after 800 ms, whole state equal
+#   unitIds (unit ids) on guest3: 1 patch after 800 ms, whole state equal
+#   adjacency (adjacency pass) on guest1: 1 patch after 800 ms, whole state equal
+#   area (area level) on guest2: 1 patch after 800 ms, whole state equal
+#   mine (mine) on guest3: 1 patch after 800 ms, whole state equal
+#   drop (dropped item) on guest1: 1 patch after 1600 ms, whole state equal
+#   projectile: nothing to change, skipped
+#   whole state equal on all 4 peers afterwards; 558 exact fingerprints since the last repair
+# Subtest: tests\\multiplayer-corruption-fuzz.test.cjs
+ok 15 - tests\\multiplayer-corruption-fuzz.test.cjs
+  ---
+  duration_ms: 54302.1617
+  type: 'test'
+  ...
+# PASS: cross-engine math
+#   solar_system: 1635 tick hashes bit-exact fingerprints equal across engines
+#   islands: 1635 tick hashes bit-exact fingerprints equal across engines
+# Subtest: tests\\multiplayer-cross-engine.test.cjs
+ok 16 - tests\\multiplayer-cross-engine.test.cjs
+  ---
+  duration_ms: 40608.3778
+  type: 'test'
+  ...
+# PASS: multiplayer desync recovery
+#   guest unit divergence patched in 940ms (guest waited 17ms, others 0/0ms), in sync 20s after
+#   guest player divergence patched in 740ms (guest waited 17ms, others 0/0ms), in sync 20s after
+#   guest mine divergence patched in 1000ms (guest waited 17ms, others 0/0ms), in sync 20s after
+#   guest building divergence patched in 940ms (guest waited 17ms, others 0/0ms), in sync 20s after
+#   host divergence in 2v2: each guest patched, in 960ms
+#   two guests diverging together patched in 1140ms
+#   commands issued while a patch was pending ran once everywhere
+#   disconnects mid-patch: the patch survives another guest dropping out; the patched one rejoins in sync
+#   reload while a patch is pending joins cleanly
+#   3 repairs under 400ms jitter (reordered messages)
+#   15 divergences in 30s: all patched, 20.0 of 20 TPS
+#   lost patch: guest waited 2083ms at most, re-asked and was patched after 3140ms; others unaffected
+#   persistent bug on a guest for 40s: 24 patches (20 full), 1 reload(s) of the match on it alone, 20.0 TPS
+#   exact-lockstep mode freezes every peer at the first mismatch and names what differs: state hash mismatch at tick 45 in players; tiles 4-7,12-15: unit 1 builder_unit, unit 2 healer_unit, unit 3 king, house 
+#   exception mid-tick: match keeps running; same-on-all needs no repair, one-sided is patched
+# Subtest: tests\\multiplayer-desync-recovery.test.cjs
+ok 17 - tests\\multiplayer-desync-recovery.test.cjs
+  ---
+  duration_ms: 55416.168
+  type: 'test'
+  ...
+# PASS: multiplayer disconnect/reconnect
+#   silent 6s outage in 2v2: resumed 720ms after the link returned, no resync
+#   20s outage: guest reconnected and resumed in 0.5s without a snapshot
+#   closed link in 3-team FFA: reconnected in 750ms
+#   page reload: rejoined same team in 550ms; the others kept 20.0 TPS while it loaded and caught up
+#   player dropped in 2v2: teammate keeps the team alive
+#   player gone for 3 minutes waits for the host to drop them (no automatic drop)
+#   guest leaving a 3-team match resigns and the match continues
+#   host leaving a running 1v1 hands the win to the guest; after the match it sends the guest to the menu
+#   hidden guest tab: host keeps 20.0 TPS
+#   tab crash (host never saw the close): rejoined same team in 3050ms
+#   second tab with the same profile: refused with a message, match unaffected
+# Subtest: tests\\multiplayer-disconnect.test.cjs
+ok 18 - tests\\multiplayer-disconnect.test.cjs
+  ---
+  duration_ms: 32456.067
+  type: 'test'
+  ...
+# PASS: extremes
+#   8 teams, 496 units + 536 buildings at start (max 134 units now), research 0 -> 10 on every stat, debt and back: 5453 tick fingerprints equal, 20.0 TPS
+#   divergence on one of 8 peers after all that: 1 patch(es) of 389 KB, exact again
+# Subtest: tests\\multiplayer-extremes.test.cjs
+ok 19 - tests\\multiplayer-extremes.test.cjs
+  ---
+  duration_ms: 192166.7727
+  type: 'test'
+  ...
+# PASS: fairness
+#   200ms RTT: command delay host 5.0 ticks/275ms, guests 5.0 ticks/277ms, guests 5.0 ticks/277ms (match delay 5 ticks)
+#   40ms RTT: command delay host 3.0 ticks/176ms, guests 3.0 ticks/173ms, guests 3.0 ticks/173ms (match delay 3 ticks)
+#   mixed pings: command delay host 9.2 ticks/483ms, guests 9.2 ticks/486ms, guests 9.2 ticks/487ms (match delay 8 ticks)
+#   same-tick commands: first team rotates 0,1,2,0,1,2
+# Subtest: tests\\multiplayer-fairness.test.cjs
+ok 20 - tests\\multiplayer-fairness.test.cjs
+  ---
+  duration_ms: 14265.3423
+  type: 'test'
+  ...
+# PASS: multiplayer features
+#   research queue: add 5, remove 1, reorder to front and down; researched 1 stats
+#   unit/worker queues: +6/+4, -2/-3, paused and resumed (6 units produced)
+#   traps: 47 traps; sand/water/ice/poison/lava applied their effects and a mine exploded
+#   healing: damaged barrack 10 -> 40 energy
+#   kill-king victory at the same tick on all peers, defeat shown to losers, second match after Play Again in sync
+#   destroy mode: two resignations leave the host as winner on every peer
+# Subtest: tests\\multiplayer-features.test.cjs
+ok 21 - tests\\multiplayer-features.test.cjs
+  ---
+  duration_ms: 23290.6465
+  type: 'test'
+  ...
+# PASS: host migration
+#   host left a 3-team match: successor took over in 500ms, host's team resigned, others in sync
+#   host tab closed in 2v2: moved in 1050ms; reloaded host found the match and rejoined its team in 950ms
+#   1v1 host reload (gzip start): guest took over, host back as a player in 2200ms, no forfeit; a second reload from the stale link rejoins too
+#   silent host death: match moved 15.8s after the host went quiet
+#   host offline 40s: others moved after 15.8s; old host rejoined as guest 3.0s after its network returned
+#   guest offline 30s: never took over, rejoined the same host
+#   one broken guest-host link (guest first in successor order): no split, back on the original host
+#   one broken guest-host link (guest second in successor order): no split, back on the original host
+#   1v1 host crash: guest takes over, dropping the host ends the match in its favor
+#   two hosts leave in a row: the last two players continue in sync
+#   spectator present: a player takes over, the spectator follows in sync
+#   8-seed sweep (latency 40-160ms, jitter 10-50ms, gzip): moved within 1750ms, host back within 1600ms, in sync
+# Subtest: tests\\multiplayer-host-migration.test.cjs
+ok 22 - tests\\multiplayer-host-migration.test.cjs
+  ---
+  duration_ms: 66723.4386
+  type: 'test'
+  ...
+# PASS: late seal
+#   one guest's link spiking 500 ms: host and other guest max frame gap 117/150 ms (spiky guest 417 ms), 73 ticks sealed without it, 13 of its commands carried, each run once, in sync
+#   guest silent 3 s: the match went on for 15 ticks, then waited; afterwards every command ran once, in sync
+#   guest link 250 ms slower each way: lead 4 -> 9 ticks, commands meanwhile carried once each, in sync
+# Subtest: tests\\multiplayer-late-seal.test.cjs
+ok 23 - tests\\multiplayer-late-seal.test.cjs
+  ---
+  duration_ms: 12215.5942
+  type: 'test'
+  ...
+# PASS: lobby flows
+#   missing game: back to the menu with a message, URL cleaned, solo playable
+#   unreachable host: join times out to the menu
+#   leave lobby, close lobby (guests informed), then single player
+#   Auto on by default (manual fields disabled); manual tick rate and delay honored when off
+#   joining during the start is kept out of the match, then spectates in sync without pausing the players
+#   host gone for good: guest takes over (drop button shown), and can leave to the menu
+# Subtest: tests\\multiplayer-lobby.test.cjs
+ok 24 - tests\\multiplayer-lobby.test.cjs
+  ---
+  duration_ms: 10561.6173
+  type: 'test'
+  ...
+# PASS: configuration matrix
+#   1v1 arena destroy LAN: 283 fingerprints equal, 20.0/20 TPS, delay 2 ticks, ended together, rematch ok
+#   2v2 islands kill-king 200ms: 855 fingerprints equal, 20.0/20 TPS, delay 7 ticks, ended together, rematch ok
+#   FFA4 crossroads full-vis 10TPS: 432 fingerprints equal, 10.0/10 TPS, delay 4 ticks, ended together, rematch ok
+#   1v1 solar kill-king 30TPS lossy: 427 fingerprints equal, 30.0/30 TPS, delay 9 ticks, ended together, rematch ok
+#   2v1v1 random unstable: 834 fingerprints equal, 19.4/20 TPS, delay 10 ticks, ended together, rematch ok
+#   FFA3 island own-delay 300ms: 574 fingerprints equal, 20.0/20 TPS, delay 0 ticks, ended together, rematch ok
+#   1v1 arena exact-lockstep: 283 fingerprints equal, 19.9/20 TPS, delay 3 ticks, ended together, rematch ok
+#   FFA6 big map: 1415 fingerprints equal, 20.0/20 TPS, delay 3 ticks, ended together, rematch ok
+# Subtest: tests\\multiplayer-matrix.test.cjs
+ok 25 - tests\\multiplayer-matrix.test.cjs
+  ---
+  duration_ms: 126489.4445
+  type: 'test'
+  ...
+# PASS: multiplayer network profiles
+#   lan: 20.0/20 TPS, guest latency p50 150ms, input delay 1 ticks, 22 msg/s
+#   wan: 20.0/20 TPS, guest latency p50 233ms, input delay 3 ticks, 22 msg/s
+#   high-ping: 20.0/20 TPS, guest latency p50 450ms, input delay 7 ticks, 21 msg/s
+#   intercontinental-vpn: 20.0/20 TPS, guest latency p50 717ms, input delay 13 ticks, 21 msg/s
+#   unstable: 19.4/20 TPS, guest latency p50 617ms, input delay 13 ticks, 20 msg/s
+#   asymmetric, equal command delay: pipelines near 1 far 8; command latency host 483ms near 500ms far 467ms
+#   asymmetric, own command delay: pipelines near 1 far 8; command latency host 83ms near 150ms far 467ms
+# Subtest: tests\\multiplayer-network-profiles.test.cjs
+ok 26 - tests\\multiplayer-network-profiles.test.cjs
+  ---
+  duration_ms: 23434.9158
+  type: 'test'
+  ...
+# PASS: per-guest patches
+#   crossroads: full restore on guest1 only: identical to the host for 40 ticks (114 KB, 162 units)
+#   crossroads: full restore on guest2 only: identical to the host for 40 ticks (130 KB, 137 units)
+#   crossroads: 1-unit divergence on guest1: 1 patch(es), first after 760ms {"bytes":62078,"apply":0,"stall":16.66666666666788,"changed":4}; exact state equal for 243 ticks
+#   crossroads: 6-unit divergence on guest2: 1 patch(es), first after 760ms {"bytes":114722,"apply":0,"stall":16.66666666666788,"changed":33}; exact state equal for 243 ticks
+#   crossroads: 40-unit divergence on guest3: 1 patch(es), first after 740ms {"bytes":144864,"apply":0,"stall":16.66666666666424,"changed":50}; exact state equal for 243 ticks
+#   crossroads: forced full patch: 154 KB, exact state equal for 243 ticks
+#   crossroads: live joins (spectator, reloaded player): exact state for 1691 tick fingerprints, no repair
+#   islands: full restore on guest1 only: identical to the host for 40 ticks (99 KB, 161 units)
+#   islands: full restore on guest2 only: identical to the host for 40 ticks (115 KB, 154 units)
+#   islands: 1-unit divergence on guest1: 1 patch(es), first after 960ms {"bytes":56639,"apply":0,"stall":16.66666666666788,"changed":1}; exact state equal for 243 ticks
+#   islands: 6-unit divergence on guest2: 1 patch(es), first after 740ms {"bytes":108830,"apply":0,"stall":0,"changed":10}; exact state equal for 243 ticks
+#   islands: 40-unit divergence on guest3: 2 patch(es), first after 760ms {"bytes":1071,"apply":0,"stall":0,"changed":1}; exact state equal for 201 ticks
+#   islands: forced full patch: 131 KB, exact state equal for 243 ticks
+#   islands: live joins (spectator, reloaded player): exact state for 1691 tick fingerprints, no repair
+#   solar_system: full restore on guest1 only: identical to the host for 40 ticks (111 KB, 192 units)
+#   solar_system: full restore on guest2 only: identical to the host for 40 ticks (133 KB, 198 units)
+#   solar_system: 1-unit divergence on guest1: 1 patch(es), first after 740ms {"bytes":39748,"apply":0,"stall":0,"changed":4}; exact state equal for 243 ticks
+#   solar_system: 6-unit divergence on guest2: 1 patch(es), first after 920ms {"bytes":140914,"apply":0,"stall":16.66666666666788,"changed":25}; exact state equal for 243 ticks
+#   solar_system: 40-unit divergence on guest3: 1 patch(es), first after 740ms {"bytes":160683,"apply":0,"stall":0,"changed":50}; exact state equal for 243 ticks
+#   solar_system: forced full patch: 163 KB, exact state equal for 243 ticks
+#   solar_system: live joins (spectator, reloaded player): exact state for 1691 tick fingerprints, no repair
+# Subtest: tests\\multiplayer-patch.test.cjs
+ok 27 - tests\\multiplayer-patch.test.cjs
+  ---
+  duration_ms: 137366.4
+  type: 'test'
+  ...
+# PASS: rematch
+#   vote shown to all; one-click rematch running for everyone 4200ms later, same teams and settings, in sync
+#   guest gone at game over: rematch started without them after 4200ms
+#   three back-to-back rematches: clean start and in sync each time
+# Subtest: tests\\multiplayer-rematch.test.cjs
+ok 28 - tests\\multiplayer-rematch.test.cjs
+  ---
+  duration_ms: 14689.5
+  type: 'test'
+  ...
+# PASS: multiplayer scenarios
+#   build 3s, research 7s, stack after research 2s; build/auto-stack toggles respected
+#   area of 5 filled in 4s, upgraded, base levels followed research after 9s
+#   workers: mining, A* mining, salvage and healer/researcher trips (6 worker states seen)
+#   production queues, dequeue, disabled queue and rallies (0 following enemy units) with a spectator and a resigned player in sync
+#   split 6->12 and merge, hold/stop, and a battle, all in sync
+# Subtest: tests\\multiplayer-scenarios.test.cjs
+ok 29 - tests\\multiplayer-scenarios.test.cjs
+  ---
+  duration_ms: 25901.4912
+  type: 'test'
+  ...
+# PASS: snapshots
+#   6 restores from differing pre-states evolve bit-identically for 12 ticks; 129 KB (701 B/entity); unit shapes 1/1/1/1 -> 1/1/1/1
+#   gzip transport: delta then full patch (11 KB -> 3 KB), no pause
+#   guest without DecompressionStream gets JSON (start and patches); others gzip
+# Subtest: tests\\multiplayer-snapshot.test.cjs
+ok 30 - tests\\multiplayer-snapshot.test.cjs
+  ---
+  duration_ms: 28938.7873
+  type: 'test'
+  ...
+# PASS: soak (113s, 6207 fingerprints, 18.2 TPS)
+#   10s network 200 ms
+#   20s network lossy
+#   30s guest1 silent 5 s
+#   45s guest2 reloads
+#   60s guest3 diverges
+#   70s spectator joins
+#   80s network unstable
+#   100s network LAN
+#   ended together, rematch in sync
+# Subtest: tests\\multiplayer-soak.test.cjs
+ok 31 - tests\\multiplayer-soak.test.cjs
+  ---
+  duration_ms: 84567.0148
+  type: 'test'
+  ...
+# PASS: UI fuzz: 2400 gestures (31 kinds) -> 1751 commands, input never touched simulation state, 1995 bit-exact tick comparisons equal
+# Subtest: tests\\multiplayer-ui-fuzz.test.cjs
+ok 32 - tests\\multiplayer-ui-fuzz.test.cjs
+  ---
+  duration_ms: 28899.7901
+  type: 'test'
+  ...
+# group order: 4566 vs 14775 nodes; crowd 1118 vs 1118 ticks; identical routes 150
+# PASS: 1000 shared requests, 215 expansions, 27.0ms; shortest paths, replay and movement checks passed.
+# Subtest: tests\\pathfinding-routing.test.cjs
+ok 33 - tests\\pathfinding-routing.test.cjs
+  ---
+  duration_ms: 59255.1824
+  type: 'test'
+  ...
+# PASS: 1200 target scans, visibility lifecycle, 1200 sprite replays and 1400 shadow instances preserve behavior.
+# Subtest: tests\\performance-regressions.test.cjs
+ok 34 - tests\\performance-regressions.test.cjs
+  ---
+  duration_ms: 460.1254
+  type: 'test'
+  ...
+# PASS: 3D same-type selection, render bounds, and minimap use the active camera frustum.
+# Subtest: tests\\renderer3d-frustum.test.cjs
+ok 35 - tests\\renderer3d-frustum.test.cjs
+  ---
+  duration_ms: 111.1859
+  type: 'test'
+  ...
+# PASS: towers and mines ease symmetrically between full height and a partial occupied height.
+# Subtest: tests\\renderer3d-overlap-fade.test.cjs
+ok 36 - tests\\renderer3d-overlap-fade.test.cjs
+  ---
+  duration_ms: 109.877
+  type: 'test'
+  ...
+# PASS: unit panels use exact 2D renders at every LOD and barrack roof markers are absent.
+# Subtest: tests\\renderer3d-panels.test.cjs
+ok 37 - tests\\renderer3d-panels.test.cjs
+  ---
+  duration_ms: 114.2755
+  type: 'test'
+  ...
+# PASS: mesh picking covers heads, silhouette gaps, squashing, depth, adjacent targets, animation and clipping; box selection follows the drawn mesh.
+# Subtest: tests\\renderer3d-picking.test.cjs
+ok 38 - tests\\renderer3d-picking.test.cjs
+  ---
+  duration_ms: 115.0166
+  type: 'test'
+  ...
+# PASS: research queue
+#   reported case: R4 moved above R3 stays second, progress 310 kept on R3; queue drained to +2/+1
+#   stale queue state heals on the next reorder or dequeue, identically on every peer
+#   fuzz seed 1: 3 players, queueResearch 89, dequeueResearch 41, reorderResearch:top 93, reorderResearch:down 47, setAutoResearch 23, reorderResearch:active 21; 22 levels researched, in sync
+#   fuzz seed 7: 3 players, reorderResearch:top 81, queueResearch 95, dequeueResearch 53, setAutoResearch 24, reorderResearch:down 48, reorderResearch:active 19; 22 levels researched, in sync
+#   fuzz seed 42: 3 players, queueResearch 97, reorderResearch:active 11, reorderResearch:top 80, dequeueResearch 45, setAutoResearch 20, reorderResearch:down 46; 20 levels researched, in sync
+# Subtest: tests\\research-queue.test.cjs
+ok 39 - tests\\research-queue.test.cjs
+  ---
+  duration_ms: 30537.346
+  type: 'test'
+  ...
+# PASS: 1200 selections -> 338 boundary edges; separated clusters, holes, interpolation, rally transforms, membership and depth-tested GPU batching.
+# Subtest: tests\\selection-performance.test.cjs
+ok 40 - tests\\selection-performance.test.cjs
+  ---
+  duration_ms: 263.4733
+  type: 'test'
+  ...
+# PASS: settings defaults, round trip, legacy outlines, and audio recovery.
+# Subtest: tests\\settings-persistence.test.cjs
+ok 41 - tests\\settings-persistence.test.cjs
+  ---
+  duration_ms: 114.2593
+  type: 'test'
+  ...
+# PASS: head-only snakes, no tail state, square model-mounted roof panel with nothing above it.
+# Subtest: tests\\snake-rendering.test.cjs
+ok 42 - tests\\snake-rendering.test.cjs
+  ---
+  duration_ms: 124.4634
+  type: 'test'
+  ...
+# PASS: 34 local scripts parse; 2D renderer exports its startup and drawing functions.
+# Subtest: tests\\source-loading.test.cjs
+ok 43 - tests\\source-loading.test.cjs
+  ---
+  duration_ms: 231.416
+  type: 'test'
+  ...
+# PASS: 120 scheduler replays; stable priorities, full queues, caps, failures and 2048 limit; 1000 ready buildings: 500500 -> 1000 readiness checks.
+# Subtest: tests\\spawner-queue-performance.test.cjs
+ok 44 - tests\\spawner-queue-performance.test.cjs
+  ---
+  duration_ms: 731.5209
+  type: 'test'
+  ...
+# PASS: 1000 queries against 10000 buildings read 16000 candidates; selection reuse, panel invalidation, and zoomed sprite resolution.
+# Subtest: tests\\structure-render-hotspots.test.cjs
+ok 45 - tests\\structure-render-hotspots.test.cjs
+  ---
+  duration_ms: 1942.166
+  type: 'test'
+  ...
+# PASS: +-0.3 tile source windows, structure threat order (turret > route trap > trap > building), floor-target projectiles (9 ticks).
+# Subtest: tests\\structure-targeting.test.cjs
+ok 46 - tests\\structure-targeting.test.cjs
+  ---
+  duration_ms: 126.7586
+  type: 'test'
+  ...
+# PASS: watch effects are team-exclusive, replaceable, deterministic, and granted by scouts.
+# Subtest: tests\\team-watch-effects.test.cjs
+ok 47 - tests\\team-watch-effects.test.cjs
+  ---
+  duration_ms: 138.2048
+  type: 'test'
+  ...
+# PASS: 3D profession/attack animations and their shared audio cues are wired.
+# Subtest: tests\\unit-animations.test.cjs
+ok 48 - tests\\unit-animations.test.cjs
+  ---
+  duration_ms: 123.8451
+  type: 'test'
+  ...
+# PASS: one unit property layout (working 3000 units, combat 2616 units) after worker, combat and pathing ticks.
+# Subtest: tests\\unit-hidden-class.test.cjs
+ok 49 - tests\\unit-hidden-class.test.cjs
+  ---
+  duration_ms: 7799.2978
+  type: 'test'
+  ...
+# PASS: border/corner overlap, effective ranges, immediate gameplay visibility and visual outline hold.
+# Subtest: tests\\visibility-border-overlap.test.cjs
+ok 50 - tests\\visibility-border-overlap.test.cjs
+  ---
+  duration_ms: 155.0981
+  type: 'test'
+  ...
+# PASS: immediate targeting, local visual hold/fade at 10/30/60 Hz, 83200 bytes for 80x80 tiles, freeze-on-hide entity records, retained mine resources, no repeat terrain uploads.
+# Subtest: tests\\visibility-history-performance.test.cjs
+ok 51 - tests\\visibility-history-performance.test.cjs
+  ---
+  duration_ms: 1768.1772
+  type: 'test'
+  ...
+# PASS: fractional/union/team ranges, 10k-tile perimeter, bounded corner pushes, deterministic replay and automatic retargeting.
+# Subtest: tests\\visibility-range-collision.test.cjs
+ok 52 - tests\\visibility-range-collision.test.cjs
+  ---
+  duration_ms: 185.1498
+  type: 'test'
+  ...
+# PASS: moving source stays lit in the blurred mask without changing gameplay visibility.
+# Subtest: tests\\visibility-source-mask.test.cjs
+ok 53 - tests\\visibility-source-mask.test.cjs
+  ---
+  duration_ms: 141.5725
+  type: 'test'
+  ...
+# PASS: 3000-worker occupancy agrees with exhaustive scans; assignment, release, death, mobile targets, tick/reset and live spawner eligibility.
+# Subtest: tests\\worker-target-index.test.cjs
+ok 54 - tests\\worker-target-index.test.cjs
+  ---
+  duration_ms: 204.6549
+  type: 'test'
+  ...
+# PASS: 7000 zoomed bodies use two sharp sprite tiers; 30 contour frames match exhaustive geometry exactly.
+# Subtest: tests\\zoom-contour-performance.test.cjs
+ok 55 - tests\\zoom-contour-performance.test.cjs
+  ---
+  duration_ms: 427.4824
+  type: 'test'
+  ...
+1..55
+# tests 55
+# suites 0
+# pass 55
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1350106.206

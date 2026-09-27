@@ -58,9 +58,9 @@ for (let owner=0; owner<2; owner++) {
     energy:stats.maxEnergy,maxEnergy:stats.maxEnergy,preComputed:stats};
   grid[gy][gx].item=house; grid[gy][gx].owner=owner; setTileEntity(gx,gy,'house',house);
   for (let i=0; i<500; i++) {
-    const gx = 4 + i%25 + owner*90, gy = 4 + Math.floor(i/25)*3;
+    const gx = 4 + i%25 + owner*90, gy = 4 + Math.floor(i/25)*(scenario==='lasers'?2:3);
     let b;
-    if (i%4===0) { b = new Tower(gx,gy,['pistol','smg','water','poison','sniper'][Math.floor(i/4)%5],owner); towers.push(b); grid[gy][gx].type = TYPE_WALL; }
+    if (scenario==='lasers' || i%4===0) { b = new Tower(gx,gy,scenario==='lasers'?'laser':['pistol','smg','water','poison','sniper'][Math.floor(i/4)%5],owner); towers.push(b); grid[gy][gx].type = TYPE_WALL; }
     else if (i%4===1) { b = new Barrack(gx,gy,owner,'norm'); barracks.push(b); }
     else { const C = [CollectorSpawner, BuilderSpawner, HealerSpawner, ResearchSpawner, AstarSpawner, SalvagerSpawner][Math.floor(i/4)%6]; b = new C(gx,gy,owner); collectorSpawners.push(b); }
     setTileEntity(gx,gy,b.type,b);
@@ -72,7 +72,7 @@ for (let owner=0; owner<2; owner++) {
   }
   for (let i=0; i<1500; i++) {
     const type = types[i%types.length];
-    const x = (scenario==='siege' ? (owner?4:90) : scenario==='combat' || scenario==='crowded' ? 52+owner*10 : 8+owner*75) + rng()*(scenario==='crowded'?6:25);
+    const x = (scenario==='siege' || scenario==='lasers' ? (owner?4:90) : scenario==='combat' || scenario==='crowded' ? 52+owner*10 : 8+owner*75) + rng()*(scenario==='crowded'?6:25);
     const y = 8+rng()*(scenario==='crowded'?20:100);
     const u = new Unit(BASE_UNIT_STATS[type] ? type : 'norm',owner,x*TILE,y*TILE);
     configureWorkerUnitFromType(u);
@@ -80,6 +80,7 @@ for (let owner=0; owner<2; owner++) {
   }
 }
 generateResourceMinesMixed(); recalculateAdjacency();
+if(scenario==='lasers') recalculateLaserConnections();
 if(scenario==='working') for(let owner=0;owner<2;owner++) {
  const lab=collectorSpawners.find(b=>b.owner===owner && b.type==='research' && !b.underConstruction);
  if(lab) processActions([{action:'queueResearch',gx:lab.gx,gy:lab.gy,kind:'unit',key:'norm',statKey:'atk',count:5}],owner);

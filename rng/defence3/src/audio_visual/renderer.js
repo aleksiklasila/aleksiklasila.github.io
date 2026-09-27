@@ -1446,14 +1446,15 @@ function get3DBoxSelection(screenRect) {
     }
     let seenItems = new Set(entityCandidates.map(c => c.ref));
     let bounds = get3DVisibleWorldBounds();
-    for (let gy = bounds.minGy; gy <= bounds.maxGy; gy++) {
-        for (let gx = bounds.minGx; gx <= bounds.maxGx; gx++) {
-            if (!isTileVisible(gx, gy)) continue;
-            let cell = grid[gy][gx];
-            if (!cell.item || cell.owner !== localPlayerId || seenItems.has(cell.item)) continue;
-            seenItems.add(cell.item);
-            consider(entityCandidates, cell.item, gx * TILE + TILE * 0.5, gy * TILE + TILE * 0.5, 0.08, item => { item._gx = gx; item._gy = gy; item._cell = cell; });
-        }
+    let items = getCellItemsRowMajor();
+    for (let i = findCellItemRowStart(items, bounds.minGy); i < items.length; i++) {
+        let item = items[i], gx = item.gx, gy = item.gy;
+        if (gy > bounds.maxGy) break;
+        if (gx < bounds.minGx || gx > bounds.maxGx || seenItems.has(item)) continue;
+        let cell = grid[gy] && grid[gy][gx];
+        if (!cell || cell.item !== item || cell.owner !== localPlayerId || !isTileVisible(gx, gy)) continue;
+        seenItems.add(item);
+        consider(entityCandidates, item, gx * TILE + TILE * 0.5, gy * TILE + TILE * 0.5, 0.08, item => { item._gx = gx; item._gy = gy; item._cell = cell; });
     }
     for (let m of goldMines) {
         if (isTileVisible(m.gx, m.gy)) consider(entityCandidates, m, m.x, m.y, 0.06, mine => { mine._isGoldMine = true; });
@@ -2521,6 +2522,7 @@ function ensure3DRendererInitialized() {
 function setRenderDimensionMode(nextMode) {
     let normalized = nextMode === '3d' ? '3d' : '2d';
     if (renderDimensionMode === normalized) return;
+    renderer3dRotateDrag = null;
     renderDimensionMode = normalized;
     if (normalized === '3d') ensure3DRendererInitialized();
     syncRenderModeUi();

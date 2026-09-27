@@ -40,6 +40,25 @@ function _getHostileStructureIndex(list) {
     return index;
 }
 
+// Conservative beam rectangle; Tower.update retains the exact hit/owner/health
+// tests. Sort by the original ID comparator and original array order for ties,
+// since bucket traversal order must never affect damage or destruction order.
+function getLaserStructureCandidates(list, sx, sy, ex, ey) {
+    let index = _getHostileStructureIndex(list);
+    let stride = Math.ceil(GRID_W / 4) + 1;
+    let minX = Math.max(0, Math.floor((Math.min(sx, ex) - 18) / index.size));
+    let maxX = Math.min(Math.ceil(GRID_W / 4), Math.floor((Math.max(sx, ex) + 18) / index.size));
+    let minY = Math.max(0, Math.floor((Math.min(sy, ey) - 18) / index.size));
+    let maxY = Math.min(Math.ceil(GRID_H / 4), Math.floor((Math.max(sy, ey) + 18) / index.size));
+    let entries = [];
+    for (let by = minY; by <= maxY; by++) for (let bx = minX; bx <= maxX; bx++) {
+        let bucket = index.buckets.get(by * stride + bx);
+        if (bucket) for (let entry of bucket) entries.push(entry);
+    }
+    entries.sort((a, b) => ((a.target.id || 0) - (b.target.id || 0)) || a.order - b.order);
+    return entries.map(entry => entry.target);
+}
+
 // Preserve list order, strict distance ties and lazy visibility snapshot timing.
 // The raw grid is immutable for this tick; resolve it once per scan rather than
 // repeating player normalization and cache lookups for every building.
