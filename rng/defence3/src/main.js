@@ -2041,7 +2041,15 @@ function initInput() {
         // Chromium: while fullscreen, Esc reaches the game (cancel build,
         // close popups) instead of leaving fullscreen; holding Esc still leaves.
         let keyboard = navigator.keyboard;
-        if (keyboard && typeof keyboard.lock === 'function') {
+        let canLockEsc = !!(keyboard && typeof keyboard.lock === 'function');
+        if (btnFs) {
+            btnFs.title = canLockEsc
+                ? 'Fullscreen. Esc works in game while fullscreen; hold Esc (or click FS) to leave. § also works as Esc.'
+                : 'Fullscreen. In this browser Esc always leaves fullscreen: use § instead of Esc, '
+                    + 'or use browser fullscreen, where Esc stays in game: F11 (on laptops often Fn + F11), '
+                    + 'or the ⤢ button in the browser menu (☰). Leave it the same way.';
+        }
+        if (canLockEsc) {
             if (isNativeFullscreen) keyboard.lock(['Escape']).catch(() => { });
             else if (typeof keyboard.unlock === 'function') keyboard.unlock();
         }
