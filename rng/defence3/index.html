@@ -540,6 +540,10 @@
                         <label for="setting-gfx-resolution">Render resolution</label>
                         <select id="setting-gfx-resolution" style="width:150px"><option value="1">100%</option><option value="0.85">85%</option><option value="0.75">75%</option><option value="0.67">67%</option><option value="0.5">50%</option></select>
                     </div>
+                    <div class="settings-row">
+                        <label for="setting-min-fps" title="Browsers may run the game at only 60 FPS (Edge and Chrome do in fullscreen). This draws extra frames in between, up to about 120 FPS, for more responsive input. It can cost some extra CPU.">120 FPS boost</label>
+                        <select id="setting-min-fps" style="width:150px"><option value="always">Always</option><option value="fullscreen">In fullscreen</option><option value="off">Off</option></select>
+                    </div>
                 </div>
             </div>
 
@@ -718,7 +722,7 @@
     <script src="./src/utils/utils_snapshot.js?v=20260927-laser"></script>
     <script src="./src/utils/utils_resync.js?v=20260928-reserve"></script>
     <script src="./src/utils/utils_host_migration.js?v=20260928-lateseal"></script>
-    <script src="./src/utils/utils_storage.js?v=20260927-post"></script>
+    <script src="./src/utils/utils_storage.js?v=20260930-fps120"></script>
 
     <script src="./src/data/data_static.js?v=20260926-netcode"></script>
     <script src="./src/data/data_dynamic.js?v=20260927-lod"></script>
@@ -732,7 +736,7 @@
     <script src="./src/audio_visual/renderer2d.js?v=20260927-dist"></script>
     <script src="./src/audio_visual/side_visualizations.js?v=20260925-crowd-perf"></script>
     <script src="./src/audio_visual/effects3d.js?v=20260927-lod"></script>
-    <script src="./src/audio_visual/renderer.js?v=20260930-bottombar"></script>
+    <script src="./src/audio_visual/renderer.js?v=20260930-fpsalways"></script>
     <script src="./src/audio_visual/audio.js?v=20260927-dist"></script>
     <script src="./src/audio_visual/jukebox.js?v=20260921"></script>
     <script src="./src/audio_visual/hud.js?v=20260930-deltacolor"></script>
@@ -751,7 +755,7 @@
     <script src="./src/things/things_utils.js?v=20260927-dist"></script>
     <script src="./src/things/tower.js?v=20260927-dist"></script>
 
-    <script src="./src/main.js?v=20260930-bottombar"></script>
+    <script src="./src/main.js?v=20260930-fpsalways"></script>
 
     <script src="./src/bootstrap.js?v=20260924-settings"></script>
 </body>

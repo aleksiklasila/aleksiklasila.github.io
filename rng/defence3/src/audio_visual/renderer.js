@@ -3261,16 +3261,98 @@ function processRenderFrame(timestamp) {
 
 // Frames are always queued again, even after an error, so one bad frame
 // cannot freeze the game.
-function simulationFrame(timestamp) {
+// Frame times use performance.now(), not the rAF timestamp, because fill-in
+// frames (below) run between rAF callbacks and every clock must be monotonic.
+function simulationFrame() {
     _simulationFrameHandle = 0;
-    try { processVisibleSimulationFrame(timestamp); } catch (err) { reportRuntimeError('frame', err); }
+    try { processVisibleSimulationFrame(performance.now()); } catch (err) { reportRuntimeError('frame', err); }
     queueSimulationFrame();
 }
 
-function renderFrame(timestamp) {
+function renderFrame() {
     _renderFrameHandle = 0;
-    try { processRenderFrame(timestamp); } catch (err) { reportRuntimeError('render', err); }
+    _lastRenderFrameAt = performance.now();
+    try { processRenderFrame(_lastRenderFrameAt); } catch (err) { reportRuntimeError('render', err); }
     queueRenderFrame();
+    scheduleFillInFrame();
+}
+
+// Browsers pace requestAnimationFrame to what they think the display runs at,
+// and Edge/Chrome drop it to 60 in fullscreen after a few seconds. When rAF
+// comes slower than MIN_RENDER_FRAME_RATE, extra frames run in between: at each
+// display refresh the newest frame is then fresher, so input feels as
+// responsive as at 120. With rAF already this fast, no extra frames run.
+//
+// Timers are often only as precise as Windows' 15.6 ms tick (on battery for
+// example), too coarse to hit 8.3 ms gaps. Then the wait is a timer for the
+// part it can cover and MessageChannel hops (not clamped) for the rest, which
+// keeps the main thread polling part of the time; hence the setting.
+const MIN_RENDER_FRAME_RATE = 120;
+// 'always' (default): whenever the browser runs slower. 'fullscreen': only in
+// native fullscreen, where browsers drop to 60. 'off': browser frame rate only.
+let minFrameRateMode = 'always';
+let _lastRenderFrameAt = 0;
+let _fillInTimer = 0;
+let _fillInHopPending = false;
+let _timerGranularityMs = 16;
+const _fillInChannel = new MessageChannel();
+_fillInChannel.port1.onmessage = () => { _fillInHopPending = false; _fillInStep(); };
+
+// Measured once: how late a 1 ms timer fires. Precise timers make hops unnecessary.
+(function measureTimerGranularity() {
+    let samples = [], last = performance.now();
+    let step = () => {
+        let now = performance.now();
+        samples.push(now - last);
+        last = now;
+        if (samples.length < 8) setTimeout(step, 1);
+        else _timerGranularityMs = samples.slice(2).sort((a, b) => a - b)[3] || 16;
+    };
+    setTimeout(step, 1);
+})();
+
+function _fillInFramesWanted() {
+    if (minFrameRateMode === 'off' || document.hidden || !gameStarted) return false;
+    return minFrameRateMode === 'always' || !!document.fullscreenElement;
+}
+
+// A gap is filled once it is 1.2 frame intervals long (10 ms at 120): browser
+// frames at 120 Hz or faster never leave one, at 60 Hz one frame goes in each.
+function _fillInDueAt() {
+    return _lastRenderFrameAt + 1.2 * (1000 / MIN_RENDER_FRAME_RATE);
+}
+
+function scheduleFillInFrame() {
+    if (_fillInTimer) { clearTimeout(_fillInTimer); _fillInTimer = 0; }
+    if (!_fillInFramesWanted()) return;
+    let wait = _fillInDueAt() - performance.now();
+    if (_timerGranularityMs <= 4) {
+        // Precise timers: just sleep until due.
+        _fillInTimer = setTimeout(_fillInStep, Math.max(0, wait));
+    } else if (wait > _timerGranularityMs + 1) {
+        // Coarse timers: sleep while the timer cannot overshoot, then hop.
+        _fillInTimer = setTimeout(scheduleFillInFrame, wait - _timerGranularityMs - 1);
+    } else {
+        _fillInStep();
+    }
+}
+
+function _fillInStep() {
+    _fillInTimer = 0;
+    if (!_fillInFramesWanted()) return;
+    let now = performance.now();
+    if (now >= _fillInDueAt()) {
+        _lastRenderFrameAt = now;
+        try { processVisibleSimulationFrame(now); } catch (err) { reportRuntimeError('frame', err); }
+        try { processRenderFrame(now); } catch (err) { reportRuntimeError('render', err); }
+        scheduleFillInFrame();
+    } else if (_timerGranularityMs <= 4) {
+        scheduleFillInFrame();
+    } else if (!_fillInHopPending) {
+        // Not due yet: hop again (input and rAF still run in between).
+        _fillInHopPending = true;
+        _fillInChannel.port2.postMessage(0);
+    }
 }
 
 function queueSimulationFrame() {
