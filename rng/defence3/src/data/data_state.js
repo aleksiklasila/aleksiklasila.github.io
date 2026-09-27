@@ -928,6 +928,50 @@ function showSelectionOutlinesForUnits() {
     return selectionOutlineScope === OVERLAY_SCOPE_UNITS || selectionOutlineScope === OVERLAY_SCOPE_BUILDINGS_UNITS;
 }
 
+// Settings > Rendering > Post process (3D). 'simple' is the original
+// pipeline: MSAA scene target plus projected drop shadows. 'detailed' and
+// 'high' shadows are shadow-mapped (2048 / 4096 texels).
+const GRAPHICS_AA_MODES = ['off', 'fxaa', 'msaa', 'msaa_fxaa'];
+const GRAPHICS_AO_MODES = ['off', 'low', 'high'];
+const GRAPHICS_SHADOW_MODES = ['off', 'simple', 'detailed', 'high'];
+const GRAPHICS_OPTION_KEYS = ['aa', 'shadows', 'ao', 'outline', 'bloom', 'grade', 'sharpen', 'resolution'];
+const GRAPHICS_PRESETS = {
+    off: { aa: 'off', shadows: 'off', ao: 'off', outline: false, bloom: false, grade: false, sharpen: false, resolution: 1 },
+    simple: { aa: 'msaa', shadows: 'simple', ao: 'off', outline: false, bloom: false, grade: false, sharpen: false, resolution: 1 },
+    balanced: { aa: 'fxaa', shadows: 'simple', ao: 'off', outline: true, bloom: false, grade: true, sharpen: false, resolution: 1 },
+    high: { aa: 'msaa', shadows: 'detailed', ao: 'low', outline: true, bloom: true, grade: true, sharpen: false, resolution: 1 },
+    ultra: { aa: 'msaa_fxaa', shadows: 'high', ao: 'high', outline: true, bloom: true, grade: true, sharpen: false, resolution: 1 }
+};
+
+function normalizeGraphicsOptions(raw, fallback = GRAPHICS_PRESETS.simple) {
+    let src = raw && typeof raw === 'object' ? raw : {};
+    let pick = (value, list, def) => list.includes(value) ? value : def;
+    let bool = (value, def) => typeof value === 'boolean' ? value : def;
+    let res = Number(src.resolution);
+    return {
+        aa: pick(src.aa, GRAPHICS_AA_MODES, fallback.aa),
+        shadows: pick(src.shadows, GRAPHICS_SHADOW_MODES, fallback.shadows),
+        ao: pick(src.ao, GRAPHICS_AO_MODES, fallback.ao),
+        outline: bool(src.outline, fallback.outline),
+        bloom: bool(src.bloom, fallback.bloom),
+        grade: bool(src.grade, fallback.grade),
+        sharpen: bool(src.sharpen, fallback.sharpen),
+        resolution: src.resolution !== undefined && src.resolution !== null && Number.isFinite(res) ? Math.max(0.5, Math.min(1, res)) : fallback.resolution
+    };
+}
+
+// The preset whose options equal these, or 'custom'.
+function matchGraphicsPreset(options) {
+    let o = normalizeGraphicsOptions(options);
+    for (let name in GRAPHICS_PRESETS) {
+        let p = GRAPHICS_PRESETS[name];
+        if (GRAPHICS_OPTION_KEYS.every(k => p[k] === o[k])) return name;
+    }
+    return 'custom';
+}
+
+let graphicsOptions = normalizeGraphicsOptions(null);
+
 const OVERLAY_SPRITE_CACHE_MAX_SIDE = 2048;
 const OVERLAY_SPRITE_CACHE_MAX_AREA = 2200000;
 const _unitSelectionRingSpriteCache = new Map();

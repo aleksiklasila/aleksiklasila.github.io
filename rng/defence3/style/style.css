@@ -524,6 +524,23 @@
             margin-top: 6px;
         }
 
+        .settings-section-title {
+            color: #8dc6ff;
+            font-size: 13px;
+            font-weight: bold;
+            margin: 14px 0 2px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid #34495e;
+        }
+
+        .settings-subtitle {
+            color: #9fb2c7;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            margin: 10px 0 0;
+        }
+
         .settings-row {
             display: flex;
             align-items: center;

@@ -1937,6 +1937,50 @@ function initInput() {
             saveUiSettingsToStorage();
         });
     }
+    // Settings > Rendering > Graphics. The preset select mirrors the
+    // individual options ('custom' when they match no preset).
+    const gfxControls = {
+        aa: document.getElementById('setting-gfx-aa'),
+        shadows: document.getElementById('setting-gfx-shadows'),
+        ao: document.getElementById('setting-gfx-ao'),
+        outline: document.getElementById('setting-gfx-outline'),
+        bloom: document.getElementById('setting-gfx-bloom'),
+        grade: document.getElementById('setting-gfx-grade'),
+        sharpen: document.getElementById('setting-gfx-sharpen'),
+        resolution: document.getElementById('setting-gfx-resolution')
+    };
+    const gfxPresetSelect = document.getElementById('setting-gfx-preset');
+    const syncGraphicsControls = () => {
+        for (let key in gfxControls) {
+            let el = gfxControls[key];
+            if (!el) continue;
+            if (el.type === 'checkbox') el.checked = !!graphicsOptions[key];
+            else el.value = String(graphicsOptions[key]);
+        }
+        if (gfxPresetSelect) gfxPresetSelect.value = matchGraphicsPreset(graphicsOptions);
+    };
+    const setGraphicsOptions = next => {
+        graphicsOptions = normalizeGraphicsOptions(next);
+        syncGraphicsControls();
+        saveUiSettingsToStorage();
+    };
+    for (let key in gfxControls) {
+        let el = gfxControls[key];
+        if (!el) continue;
+        el.addEventListener('change', () => {
+            let value = el.type === 'checkbox' ? el.checked : (key === 'resolution' ? Number(el.value) : el.value);
+            setGraphicsOptions({ ...graphicsOptions, [key]: value });
+        });
+    }
+    if (gfxPresetSelect) {
+        gfxPresetSelect.addEventListener('change', () => {
+            let preset = GRAPHICS_PRESETS[gfxPresetSelect.value];
+            // 'custom' keeps the current options.
+            if (preset) setGraphicsOptions({ ...preset });
+            else syncGraphicsControls();
+        });
+    }
+    syncGraphicsControls();
     if (goldMineTextToggle) {
         goldMineTextToggle.checked = !!showGoldMineAmountText;
         goldMineTextToggle.addEventListener('change', () => {

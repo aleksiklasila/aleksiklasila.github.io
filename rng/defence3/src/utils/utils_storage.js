@@ -25,6 +25,7 @@ function saveUiSettingsToStorage() {
         if (typeof selectionOutlineSeeThrough === 'boolean') ui.selectionOutlineSeeThrough = selectionOutlineSeeThrough;
         if (typeof selectionOutlineScope !== 'undefined') ui.selectionOutlineScope = selectionOutlineScope;
         if (Number.isFinite(buildPlacementMode)) ui.buildPlacementMode = Math.floor(buildPlacementMode);
+        if (typeof graphicsOptions === 'object' && graphicsOptions) ui.graphicsOptions = graphicsOptions;
         let mapVisibility = document.getElementById('cfg-full-vis');
         if (mapVisibility && ['full', 'team', 'history'].includes(mapVisibility.value)) ui.mapVisibility = mapVisibility.value;
         localStorage.setItem(LS_UI_SETTINGS_KEY, JSON.stringify(ui));
@@ -79,6 +80,9 @@ function loadUiSettingsFromStorage() {
                 }
                 if (Number.isFinite(s.buildPlacementMode)) {
                     buildPlacementMode = Math.max(0, Math.min(2, Math.floor(s.buildPlacementMode)));
+                }
+                if (s.graphicsOptions && typeof normalizeGraphicsOptions === 'function') {
+                    graphicsOptions = normalizeGraphicsOptions(s.graphicsOptions);
                 }
                 if (['full', 'team', 'history'].includes(s.mapVisibility)) {
                     let mapVisibility = document.getElementById('cfg-full-vis');

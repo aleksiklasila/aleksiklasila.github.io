@@ -3212,6 +3212,7 @@ function processRenderFrame(timestamp) {
     let renderer3d = ensure3DRendererInitialized();
     if (renderer3d) {
         renderer3dSnapshot = build3DFrameData(renderDimensionMode === '2d');
+        renderer3d.setGraphicsOptions(graphicsOptions);
         renderer3d.render(renderer3dSnapshot);
         drawMinimap();
     } else {
