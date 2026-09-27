@@ -867,8 +867,11 @@ function _getAudioSpatialState(worldX, worldY, reach = 12) {
     let dx = (worldX - camera.x - width * .5) / TILE;
     let dy = (worldY - camera.y - height * .5) / TILE;
     // Listen at the point the player is looking at, not the elevated 3D eye.
-    // Zoom still gently changes level, but cannot push every source past a cutoff.
-    let zoomDistance = Math.max(0, Math.max(width, height) / TILE - 12) * .06;
+    // How far away the source is drawn (its distance to the camera in 3D, the
+    // zoom in 2D) still gently lowers it, but cannot push every source past a
+    // cutoff.
+    let viewScale = typeof getViewZoomAt === 'function' ? getViewZoomAt(worldX, worldY) : camera.zoom;
+    let zoomDistance = Math.max(0, Math.max(viewW, viewH) / Math.max(0.01, viewScale) / TILE - 12) * .06;
     let distance = Math.hypot(dx, dy, zoomDistance);
     let normalized = distance / Math.max(1, reach);
     let edge = Math.max(0, 1 - normalized * normalized);

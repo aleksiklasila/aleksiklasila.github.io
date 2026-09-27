@@ -1279,17 +1279,34 @@
             part(0, .76, -.34, .34, .06, .18, 10);
             part(0, .68, -.205, .10, .06, .02, 7); // keystone rune
             part(0, .08, -.37, .58, .60, .04, 12); // the dark hole
-            // Square rings, outer to inner, alternately glowing and dark,
-            // each turning at its own speed and direction.
-            [[.22, 7, 1, 0], [.16, 12, -1, .5], [.11, 7, 1, 1.1], [.06, 7, -1, 1.9]].forEach(([h, surface, dir, speed], k) => {
-                let z = -.335 + k * .008, t = .04, joint = dir * 7;
-                part(0, .38 + h - t, z, 2 * h, t, .03, surface, joint, .38, 1, 0, speed);
-                part(0, .38 - h, z, 2 * h, t, .03, surface, joint, .38, 1, 0, speed);
-                part(-h + t / 2, .38 - h, z, t, 2 * h, .03, surface, joint, .38, 1, 0, speed);
-                part(h - t / 2, .38 - h, z, t, 2 * h, .03, surface, joint, .38, 1, 0, speed);
-            });
-            part(0, .345, -.30, .07, .07, .03, 7, -7, .38, 1, 0, 2.6); // bright core
+            // The swirl fills the opening on both faces, so the portal's
+            // color reads from behind too. `face` is +1 in front of the hole
+            // (toward the display) and -1 behind it.
+            let swirl = (face) => {
+                let z0 = face > 0 ? -.335 : -.405;
+                if (simplified) {
+                    // Far away: three nested turning plates instead of thin
+                    // rings, which would drop out and leave a black hole.
+                    [[.44, 7, 1, 0], [.30, 12, -1, .5], [.20, 7, 1, 1.1]].forEach(([w, surface, dir, speed], k) => {
+                        part(0, .38 - w / 2, z0 + face * k * .012, w, w, .03, surface, dir * 7, .38, 1, 0, speed);
+                    });
+                    return;
+                }
+                // Square rings, outer to inner, alternately glowing and dark,
+                // each turning at its own speed and direction.
+                [[.22, 7, 1, 0], [.16, 12, -1, .5], [.11, 7, 1, 1.1], [.06, 7, -1, 1.9]].forEach(([h, surface, dir, speed], k) => {
+                    let z = z0 + face * k * .008, t = .04, joint = dir * 7;
+                    part(0, .38 + h - t, z, 2 * h, t, .03, surface, joint, .38, 1, 0, speed);
+                    part(0, .38 - h, z, 2 * h, t, .03, surface, joint, .38, 1, 0, speed);
+                    part(-h + t / 2, .38 - h, z, t, 2 * h, .03, surface, joint, .38, 1, 0, speed);
+                    part(h - t / 2, .38 - h, z, t, 2 * h, .03, surface, joint, .38, 1, 0, speed);
+                });
+                part(0, .345, z0 + face * .035, .07, .07, .03, 7, -7, .38, 1, 0, 2.6); // bright core
+            };
+            swirl(1);
+            swirl(-1);
             part(0, .08, -.205, .52, .012, .05, 7); // light spilling out, behind the display
+            part(0, .08, -.475, .52, .012, .05, 7); // and out of the back
         } else if (kind === 'farm') {
             if (weapon === 'astar') {
                 // A* farm: a mine entrance. A stepped rock mound with a
@@ -2706,12 +2723,26 @@
         getFigureMeshKey(object) {
             let kind = proceduralKind(object);
             if (!kind) return null;
-            // Use scale at the orbit center so rotating cannot toggle detail levels.
-            let pixels = this.lodPixelsPerWorld * Math.max(object.scaleX, object.scaleZ);
-            if (!(pixels < 24)) return kind;
+            // Detail follows the object's own on-screen size (its view depth),
+            // not just the zoom: a far corner of a tilted view is small even
+            // when zoomed in. A little hysteresis keeps a model from flipping
+            // between meshes at the threshold while the camera moves.
+            let pixels = this.pixelsPerWorldAt(Number(object.x) || 0, 0, Number(object.z) || 0) * Math.max(object.scaleX, object.scaleZ);
+            let simplified = object._r3dLod ? pixels < 27 : pixels < 24;
+            object._r3dLod = simplified;
+            if (!simplified) return kind;
             let lod = lodMeshKeys.get(kind);
             if (!lod) lodMeshKeys.set(kind, lod = kind + ':lod');
             return lod;
+        }
+
+        // On-screen CSS pixels per world unit at a point, from its depth along
+        // the view direction (orthographic flat view: the zoom).
+        pixelsPerWorldAt(x, y, z) {
+            let eye = this.lodEye, f = this.lodForward;
+            if (!eye || !this.lodProjectionScale) return this.lodPixelsPerWorld || 32;
+            let depth = (x - eye[0]) * f[0] + (y - eye[1]) * f[1] + (z - eye[2]) * f[2];
+            return this.lodProjectionScale / Math.max(0.1, depth);
         }
 
         getPrimitiveMesh(object) {
@@ -2865,6 +2896,7 @@
                     width: this.sceneTargetSize.width, height: this.sceneTargetSize.height,
                     near: 0.1, far: 220, flat, quadVao: this.presentVao,
                     pixelsPerWorld: this.lodPixelsPerWorld, pixelRatio: this.pixelRatio,
+                    projectionScale: (this.lodProjectionScale || 0) * this.pixelRatio,
                     shadow: flat ? null : this.shadowFrame
                 });
                 return;
@@ -2949,6 +2981,7 @@
                 m[13] = -camera.centerZ * m[9];
                 m[15] = 1;
                 invertMatrix4(this.tmpInverseViewProjection, m);
+                this.lodProjectionScale = 0;
                 return;
             }
             let aspect = Math.max(1e-4, (snapshot.viewportWidth || 1) / (snapshot.viewportHeight || 1));
@@ -2966,7 +2999,15 @@
             ];
             let target = [centerX, 0, centerZ];
             perspective(this.tmpProjection, 0.74, aspect, 0.1, 220);
-            this.lodPixelsPerWorld = this.cssHeight * this.tmpProjection[5] / (2 * distance);
+            // CSS pixels per world unit at view depth 1; divide by a point's
+            // depth along the view direction for its on-screen scale.
+            this.lodProjectionScale = this.cssHeight * this.tmpProjection[5] / 2;
+            this.lodPixelsPerWorld = this.lodProjectionScale / distance;
+            let lodEye = this.lodEye || (this.lodEye = new Float32Array(3));
+            let lodForward = this.lodForward || (this.lodForward = new Float32Array(3));
+            lodEye[0] = eye[0]; lodEye[1] = eye[1]; lodEye[2] = eye[2];
+            let fx = centerX - eye[0], fy = -eye[1], fz = centerZ - eye[2], fl = Math.hypot(fx, fy, fz) || 1;
+            lodForward[0] = fx / fl; lodForward[1] = fy / fl; lodForward[2] = fz / fl;
             lookAt(this.tmpView, eye, target, [0, 1, 0]);
             multiplyMatrices(this.tmpViewProjection, this.tmpProjection, this.tmpView);
             invertMatrix4(this.tmpInverseViewProjection, this.tmpViewProjection);

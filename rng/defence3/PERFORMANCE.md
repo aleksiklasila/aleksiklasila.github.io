@@ -453,8 +453,8 @@ rounds.
 | Preset Off | 0.46 |
 | Preset Simple (original) | 0.79–1.35 |
 | Preset Balanced | 0.72 |
-| Preset High | 1.87 |
-| Preset Ultra | 2.36 |
+| Preset High (earlier definition: 2K shadows + bloom) | 1.87 |
+| Preset Ultra (earlier definition, without sharpen) | 2.36 |
 | Ultra at 75% resolution | 1.59 |
 | FXAA / MSAA / MSAA+FXAA | 0.54 / 0.68 / 0.75 |
 | Shadows simple / detailed / high | 0.54 / 0.89 / 1.05 |
@@ -464,3 +464,60 @@ rounds.
 Most effects add less than 0.2 ms. The costliest are the shadow maps and
 full-resolution AO, at about 0.5 ms each. Shadow maps also add about 0.5 ms of
 CPU per frame, because every opaque batch is issued a second time.
+
+## Default preset and distance-based detail
+
+The default preset is **High**: MSAA, 4096² shadow map, low AO, edge
+outlines, color grading and sharpening, with no bloom. **Ultra** adds FXAA,
+full-resolution AO and bloom. Settings players have already saved are kept.
+
+Model LOD and secondary effects (smoke, dust, projectile trails, hit debris)
+used to depend on the zoom alone, measured at the orbit centre. They now use
+each object's own on-screen scale: the camera's projection scale divided by
+the object's depth along the view direction. On a tilted view, the far end of
+the map gets simplified models and no smoke, and nearby objects keep full
+detail. Model LOD has a small hysteresis band (24/27 px) so models do not
+flicker between meshes while the camera moves.
+
+Every other "how big is it on screen" decision in 3D now works the same way,
+through `getViewZoomAt(x, y)`. In 2D that is the camera zoom; in 3D it is the
+on-screen scale at the point:
+
+- level labels on buildings and units, per thing, with a 5% band against
+  flicker. The 3D object caches track each thing's label, so a label appears
+  or disappears without a full cache flush;
+- the tolerance for reusing a moving selection's contour;
+- the distance falloff of positional sounds.
+
+The costs are a projection and a map lookup per thing (about 0.24 µs). With
+the default "Levels: Buildings" setting, unit checks return early. AO's sample radius is also
+scaled by depth. At far LOD, portals keep a simplified turning swirl instead
+of dropping to a black opening, and the swirl is drawn on both faces of the
+gate.
+
+# Once-a-second hitch with a negative stockpile
+
+While a stockpile is negative, its penalty multiplier changes with every
+upkeep payment, once per second (20 ticks). Each change rebuilt every stat
+tied to that resource, for every unit and building type at all 21 levels:
+about 22 ms on the 20th tick. With one of every building, upkeep is enough to
+drive energy negative, which gave the visible stutter.
+
+The rebuild now:
+
+- skips stats the penalty never scales (upkeep, pop cap, energy, ranges and
+  so on);
+- skips building stats that have no value at any level, since they stay NaN
+  whatever the multiplier. This is 674 of the 768 building/stat pairs;
+- resolves the multiplier, research level and unit fallback once per stat
+  rather than once per level.
+
+The result is identical to a full rebuild
+(`tests/resource-penalty-stats.test.cjs`). In-browser, with one of every unit
+and building and energy at −3000 to −8000:
+
+| | Before | After |
+|---|---:|---:|
+| Resource penalty rebuild | 21.6–24.2 ms | 1.7 ms |
+| Every-20th-tick simulation step | ~21 ms | median 2.1, max 3.9 ms |
+| Frame CPU p99 | 18 ms | 5.1 ms |

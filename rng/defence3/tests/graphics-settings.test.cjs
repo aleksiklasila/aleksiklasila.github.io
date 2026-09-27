@@ -25,33 +25,38 @@ function session() {
 }
 
 const s = session();
-// Default is the original pipeline.
-assert.deepEqual(JSON.parse(s.get('JSON.stringify(graphicsOptions)')), JSON.parse(s.get('JSON.stringify(GRAPHICS_PRESETS.simple)')));
-assert.equal(s.get('matchGraphicsPreset(graphicsOptions)'), 'simple');
+// Default is High: MSAA, 4K shadow map, low AO, outlines, grading, sharpen.
+assert.equal(s.get('matchGraphicsPreset(graphicsOptions)'), 'high');
+assert.deepEqual(JSON.parse(s.get('JSON.stringify(graphicsOptions)')), { aa: 'msaa', shadows: 'high', ao: 'low', outline: true, bloom: false, grade: true, sharpen: true, resolution: 1 });
 for (const name of ['off', 'simple', 'balanced', 'high', 'ultra']) {
     assert.equal(s.get(`matchGraphicsPreset(GRAPHICS_PRESETS.${name})`), name, name + ' round-trips');
 }
-assert.equal(s.get(`matchGraphicsPreset({ ...GRAPHICS_PRESETS.high, bloom: false })`), 'custom');
+assert.equal(s.get(`matchGraphicsPreset({ ...GRAPHICS_PRESETS.high, bloom: true })`), 'custom');
 // Shadow modes include shadow-mapped quality levels.
 assert.deepEqual([...s.get('GRAPHICS_SHADOW_MODES')], ['off', 'simple', 'detailed', 'high']);
-assert.equal(s.get('GRAPHICS_PRESETS.high.shadows'), 'detailed');
+assert.equal(s.get('GRAPHICS_PRESETS.high.shadows'), 'high');
 assert.equal(s.get('GRAPHICS_PRESETS.ultra.shadows'), 'high');
-// Invalid values fall back per field; resolution is clamped; zero is not "missing".
+// Invalid values fall back per field to the default; resolution is clamped.
 const bad = JSON.parse(s.get(`JSON.stringify(normalizeGraphicsOptions({ aa: 'ssaa', shadows: 'rtx', ao: 'high', outline: 'yes', bloom: true, resolution: 0.1 }))`));
-assert.deepEqual(bad, { aa: 'msaa', shadows: 'simple', ao: 'high', outline: false, bloom: true, grade: false, sharpen: false, resolution: 0.5 });
+assert.deepEqual(bad, { aa: 'msaa', shadows: 'high', ao: 'high', outline: true, bloom: true, grade: true, sharpen: true, resolution: 0.5 });
 assert.equal(s.get('normalizeGraphicsOptions({ resolution: 3 }).resolution'), 1);
 assert.equal(s.get('normalizeGraphicsOptions({ resolution: null }).resolution'), 1);
 
 // Persistence round trip, and corrupt stored options recover to valid ones.
-s.run(`graphicsOptions = normalizeGraphicsOptions({ ...GRAPHICS_PRESETS.ultra, resolution: 0.75, sharpen: true }); saveUiSettingsToStorage();`);
+s.run(`graphicsOptions = normalizeGraphicsOptions({ ...GRAPHICS_PRESETS.ultra, resolution: 0.75, sharpen: false }); saveUiSettingsToStorage();`);
 const t = session();
 t.run('loadUiSettingsFromStorage()');
-assert.deepEqual(JSON.parse(t.get('JSON.stringify(graphicsOptions)')), { aa: 'msaa_fxaa', shadows: 'high', ao: 'high', outline: true, bloom: true, grade: true, sharpen: true, resolution: 0.75 });
+assert.deepEqual(JSON.parse(t.get('JSON.stringify(graphicsOptions)')), { aa: 'msaa_fxaa', shadows: 'high', ao: 'high', outline: true, bloom: true, grade: true, sharpen: false, resolution: 0.75 });
 values.set('defence3_ui_settings_v1', JSON.stringify({ graphicsOptions: { aa: 42, shadows: 'detailed' } }));
 const u = session();
 u.run('loadUiSettingsFromStorage()');
 assert.equal(u.get('graphicsOptions.aa'), 'msaa');
 assert.equal(u.get('graphicsOptions.shadows'), 'detailed');
+// A stored "simple" is kept: existing players keep what they picked.
+values.set('defence3_ui_settings_v1', JSON.stringify({ graphicsOptions: { aa: 'msaa', shadows: 'simple', ao: 'off', outline: false, bloom: false, grade: false, sharpen: false, resolution: 1 } }));
+const v = session();
+v.run('loadUiSettingsFromStorage()');
+assert.equal(v.get('matchGraphicsPreset(graphicsOptions)'), 'simple');
 
 // Shader variants: disabled effects are compiled out entirely.
 const pctx = vm.createContext({ window: {} });

@@ -301,7 +301,7 @@ class Barrack {
             }
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 17, 24, 3);
         }
-        if (this.textCanvas && shouldShowBuildingLevels()) drawLevelTextCache(ctx, this, this.x, this.y);
+        if (this.textCanvas && shouldShowBuildingLevels(this)) drawLevelTextCache(ctx, this, this.x, this.y);
     }
 }
 
@@ -373,7 +373,7 @@ class CollectorSpawner {
             }
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
         }
-        if (this.textCanvas && shouldShowBuildingLevels()) drawLevelTextCache(ctx, this, this.x, this.y);
+        if (this.textCanvas && shouldShowBuildingLevels(this)) drawLevelTextCache(ctx, this, this.x, this.y);
     }
 }
 
@@ -439,7 +439,7 @@ class AstarSpawner {
             }
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
         }
-        if (this.textCanvas && shouldShowBuildingLevels()) drawLevelTextCache(ctx, this, this.x, this.y);
+        if (this.textCanvas && shouldShowBuildingLevels(this)) drawLevelTextCache(ctx, this, this.x, this.y);
     }
 }
 
@@ -503,7 +503,7 @@ class SalvagerSpawner {
             }
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
         }
-        if (this.textCanvas && shouldShowBuildingLevels()) drawLevelTextCache(ctx, this, this.x, this.y);
+        if (this.textCanvas && shouldShowBuildingLevels(this)) drawLevelTextCache(ctx, this, this.x, this.y);
     }
 }
 
@@ -576,7 +576,7 @@ class BuilderSpawner {
             }
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
         }
-        if (this.textCanvas && shouldShowBuildingLevels()) drawLevelTextCache(ctx, this, this.x, this.y);
+        if (this.textCanvas && shouldShowBuildingLevels(this)) drawLevelTextCache(ctx, this, this.x, this.y);
     }
 }
 
@@ -647,7 +647,7 @@ class HealerSpawner {
             }
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
         }
-        if (this.textCanvas && shouldShowBuildingLevels()) drawLevelTextCache(ctx, this, this.x, this.y);
+        if (this.textCanvas && shouldShowBuildingLevels(this)) drawLevelTextCache(ctx, this, this.x, this.y);
     }
 }
 
@@ -749,7 +749,7 @@ class ResearchSpawner {
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
         }
 
-        if (this.textCanvas && shouldShowBuildingLevels()) drawLevelTextCache(ctx, this, this.x, this.y);
+        if (this.textCanvas && shouldShowBuildingLevels(this)) drawLevelTextCache(ctx, this, this.x, this.y);
     }
 }
 
