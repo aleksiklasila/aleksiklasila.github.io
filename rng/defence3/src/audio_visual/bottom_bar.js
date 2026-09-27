@@ -28,8 +28,10 @@ const BB_STAT_ABBR = {
 
 let bb = {
     els: null,
-    order: [],              // owned thing ids in display order
+    order: [],              // owned (or pinned) thing ids in display order
+    rest: [],               // never-owned thing ids in display order, after the divider
     known: new Set(),
+    rates: null,            // per-thing and total ⚡/s and ★/s, refreshed with the bar
     owner: -1,
     lastGameTime: -1,
     lastRefresh: 0,
@@ -49,7 +51,11 @@ function _bbEscape(s) {
 // Whole numbers, compact above 1000 (4 -> "4", 12345 -> "12.3K").
 function _bbFmtInt(n) {
     n = Math.max(0, Math.floor(Number(n) || 0));
-    return n < 1000 ? String(n) : formatBigNumber(n, 1);
+    return formatCompactNumber(n);
+}
+
+function _bbFmtEnergy(n) {
+    return '⚡' + formatCompactNumber(Math.max(0, Number(n) || 0));
 }
 
 function _bbThingLabel(kind, key) {
@@ -132,6 +138,16 @@ function _bbSyncOrder(map) {
         bb.known.add(info.id);
         bb.order.push(info.id);
     }
+    bb.rest = bb.rest.filter(id => !bb.known.has(id));
+}
+
+// The not-owned section, in the player's order: defaults are appended once,
+// and anything owned or pinned leaves it.
+function _bbRestIds() {
+    let have = new Set(bb.rest);
+    for (let id of _bbUnownedIds()) if (!have.has(id)) bb.rest.push(id);
+    bb.rest = bb.rest.filter(id => !bb.known.has(id));
+    return bb.rest;
 }
 
 // Things never owned yet, in shop order and then units; shown after the owned ones.
@@ -220,16 +236,50 @@ function _bbProducerQueueState(info, owner) {
     };
 }
 
-function _bbThingRates(info, owner) {
+// Every thing's ⚡/s and ★/s plus the totals, in one pass over the logs.
+// Units: work income (workers) minus upkeep, and ★ used moving. Buildings: upkeep.
+function _bbComputeRates(owner) {
     let sec = ENERGY_DELTA_DEFAULT_WINDOW_SECONDS;
-    let upkeep = typeof getPlayerUpKeepBreakdown === 'function' ? getPlayerUpKeepBreakdown(owner) : { unitTypes: {}, buildingTypes: {} };
+    let upkeep = typeof getPlayerUpKeepBreakdown === 'function' ? getPlayerUpKeepBreakdown(owner) : { total: 0, unitTypes: {}, buildingTypes: {} };
+    let bySource = Object.create(null);
+    for (let src of new Set(Object.values(BB_WORKER_ENERGY_SOURCE))) bySource[src] = getPlayerEnergyDeltaRate(owner, src, sec);
+    let astarByUnit = Object.create(null);
+    let astarTotal = 0;
+    let cutoff = gameTime - Math.max(1, Math.floor(TICK_RATE * sec));
+    for (let ev of (_ensureAstarLogPlayer(owner) || [])) {
+        if (!ev || !(ev.tick >= cutoff)) continue;
+        let d = Number.isFinite(Number(ev.delta)) ? Number(ev.delta) : -(Math.max(0, Number(ev.used) || 0));
+        astarByUnit[ev.unitType] = (astarByUnit[ev.unitType] || 0) + d;
+        astarTotal += d;
+    }
+    for (let k in astarByUnit) astarByUnit[k] /= sec;
+    return {
+        sec, upkeep, bySource, astarByUnit,
+        energyTotal: getPlayerEnergyDeltaRate(owner, '', sec) - (Number(upkeep.total) || 0),
+        astarTotal: astarTotal / sec,
+    };
+}
+
+function _bbThingRates(info) {
+    let R = bb.rates;
+    if (!R) return { energy: 0, astar: null, sec: ENERGY_DELTA_DEFAULT_WINDOW_SECONDS };
     if (info.isUnit) {
         let src = BB_WORKER_ENERGY_SOURCE[info.key];
-        let energy = (src ? getPlayerEnergyDeltaRate(owner, src, sec) : 0) - (Number(upkeep.unitTypes[info.key]) || 0);
-        let astar = _getPlayerAstarDeltaRate(owner, sec, ev => ev.unitType === info.key);
-        return { energy, astar, sec };
+        return { energy: (src ? (R.bySource[src] || 0) : 0) - (Number(R.upkeep.unitTypes[info.key]) || 0), astar: R.astarByUnit[info.key] || 0, sec: R.sec };
     }
-    return { energy: -(Number(upkeep.buildingTypes[info.key]) || 0), astar: null, sec };
+    return { energy: -(Number(R.upkeep.buildingTypes[info.key]) || 0), astar: null, sec: R.sec };
+}
+
+// Compact signed rate: "-0.5", "+12", "-1.2K"; "0" when negligible.
+function _bbFmtRateShort(v) {
+    if (!Number.isFinite(v) || Math.abs(v) < 0.05) return '0';
+    let a = Math.abs(v);
+    let body = formatCompactNumber(a);
+    return (v > 0 ? '+' : '-') + body;
+}
+
+function _bbRateClass(v) {
+    return !Number.isFinite(v) || Math.abs(v) < 0.05 ? 'bb-r0' : v > 0 ? 'bb-rpos' : 'bb-rneg';
 }
 
 // ---------------------------------------------------------------- DOM
@@ -243,6 +293,7 @@ function _bbEnsureDom() {
         things: document.getElementById('bb-things'),
         research: document.getElementById('bb-research'),
         researchLabel: document.getElementById('bb-research-label'),
+        thingsLabel: document.getElementById('bb-things-label'),
     };
     bar.addEventListener('pointerdown', _bbOnPointerDown);
     bar.addEventListener('contextmenu', ev => ev.preventDefault());
@@ -262,6 +313,7 @@ function _bbEnsureDom() {
 
 function _bbResetForNewMatch() {
     bb.order = [];
+    bb.rest = [];
     bb.known = new Set();
     bb.things = new Map();
     bb.thingsSig = '';
@@ -285,6 +337,8 @@ function updateBottomBar(now) {
 
     bb.things = _bbCollectThings(localPlayerId);
     _bbSyncOrder(bb.things);
+    bb.rates = _bbComputeRates(localPlayerId);
+    _bbRenderTotals();
 
     // Never swap the DOM under a press: the press may still become a click or drag.
     if (!bb.press) {
@@ -294,6 +348,13 @@ function updateBottomBar(now) {
     if (bb.menu) _bbRenderMenu();
 }
 
+function _bbRenderTotals() {
+    let R = bb.rates;
+    let row = (v, glyph, res) => `<span class="bb-lv ${_bbRateClass(v)}" style="color:${getDeltaRateColor(v, res)}">${_bbFmtRateShort(v)}</span><span class="bb-lu">${glyph}<span class="bb-per">/s</span></span>`;
+    let html = row(R.energyTotal, '<span class="bb-glyph">⚡</span>', 'energy') + row(R.astarTotal, '<span class="bb-glyph bb-star">★</span>', 'astar');
+    if (bb.els.thingsLabel.innerHTML !== html) bb.els.thingsLabel.innerHTML = html;
+}
+
 function _bbThingHtml(id, owned) {
     let info = _bbThingInfo(id);
     let label = _bbThingLabel(info.kind, info.key);
@@ -301,28 +362,35 @@ function _bbThingHtml(id, owned) {
     let cls = 'bb-thing' + (info.isUnit ? ' bb-unit' : '') + (info.count <= 0 ? ' bb-none' : '')
         + (owned ? '' : ' bb-unowned') + (open ? ' bb-open' : '');
     let cat = BB_CATEGORY[_bbThingCategory(info.kind, info.key)].label;
+    let rates = _bbThingRates(info);
+    let astarText = rates.astar === null ? '–' : _bbFmtRateShort(rates.astar);
     let title = `${label} (${cat}): ${info.count > 0 ? `${info.count}, ${info.idle} idle` : 'none owned'}\n`
-        + `Click: menu · Hold + drag onto the research row: upgrade${owned ? ' · drag in this row: reorder' : ''}`;
-    return `<div class="${cls}" data-id="${_bbEscape(id)}" style="--bb-c:${_bbThingColor(info.kind, info.key)}" title="${_bbEscape(title)}">`
+        + `⚡ ${_bbFmtRateShort(rates.energy)}/s · ★ ${astarText}/s (last ${rates.sec}s)\n`
+        + 'Click: menu · Hold + drag: reorder, or drop on the research row to upgrade';
+    return `<div class="${cls}" data-id="${_bbEscape(id)}" title="${_bbEscape(title)}">`
         + `<img src="${getItemThumbnail(info.key, 20)}" width="20" height="20" alt="" draggable="false">`
-        + `<span class="bb-count">x${_bbFmtInt(info.count)}</span>`
+        + `<span class="bb-rate bb-rate-e ${_bbRateClass(rates.energy)}" style="color:${getDeltaRateColor(rates.energy, 'energy')}">${_bbFmtRateShort(rates.energy)}<span class="bb-glyph">⚡</span></span>`
+        + `<span class="bb-rate bb-rate-a ${rates.astar === null ? 'bb-r0' : _bbRateClass(rates.astar)}"${rates.astar === null ? '' : ` style="color:${getDeltaRateColor(rates.astar, 'astar')}"`}>${astarText}<span class="bb-glyph bb-star">★</span></span>`
         + `</div>`;
 }
 
 function _bbRenderThings() {
     let els = bb.els;
-    let unowned = _bbUnownedIds();
-    let sig = bb.order.map(id => {
+    let rest = _bbRestIds();
+    let part = (id) => {
         let info = _bbThingInfo(id);
-        return `${id}/${info.count}/${info.idle}`;
-    }).join('|') + '#' + unowned.join('|') + '#' + (bb.menu && bb.menu.type === 'thing' ? bb.menu.id : '');
+        let rates = _bbThingRates(info);
+        return `${id}/${info.count}/${info.idle}/${_bbFmtRateShort(rates.energy)}/${rates.astar === null ? '' : _bbFmtRateShort(rates.astar)}`;
+    };
+    let sig = bb.order.map(part).join('|') + '#' + rest.map(part).join('|') + '#' + (bb.menu && bb.menu.type === 'thing' ? bb.menu.id : '')
+        + '#' + formatCompactNumber(getPlayerDeltaFlowScale(localPlayerId, 'energy')) + '/' + formatCompactNumber(getPlayerDeltaFlowScale(localPlayerId, 'astar'));
     if (sig === bb.thingsSig) return;
     bb.thingsSig = sig;
     let html = '';
     for (let id of bb.order) html += _bbThingHtml(id, true);
-    if (unowned.length > 0) {
-        html += `<div class="bb-sep" title="Not owned yet"></div>`;
-        for (let id of unowned) html += _bbThingHtml(id, false);
+    if (rest.length > 0) {
+        html += `<div class="bb-sep" title="Never owned yet (drag things across to pin them left of this line)"></div>`;
+        for (let id of rest) html += _bbThingHtml(id, false);
     }
     els.things.innerHTML = html;
 }
@@ -347,7 +415,7 @@ function _bbRenderResearch(now) {
         parts.push(`${_bbTaskStatId(t)}/${t.toLevel}/${Math.round(_bbTaskProgress(t) * 200)}/${Math.round(Number(t.cost) || 0)}`);
     }
     let sig = parts.join('|') + `#${cap}#${caret}#${openIndex}`;
-    let labelHtml = `<span class="bb-rl-title">Research</span><span class="bb-rl-count">${tasks.length}/${cap}</span>`;
+    let labelHtml = `<span class="bb-lcap">Research</span><span class="bb-lcount">${tasks.length}<span class="bb-per">/${cap}</span></span>`;
     if (els.researchLabel.innerHTML !== labelHtml) els.researchLabel.innerHTML = labelHtml;
     if (sig === bb.researchSig) return;
     bb.researchSig = sig;
@@ -379,7 +447,7 @@ function _bbTaskHtml(t, index, open) {
         + `Energy left: ${formatBigNumber(left, 0)} of ${formatBigNumber(cost, 0)} (${Math.floor(pct * 100)}%)\n`
         + `Click: details · Hold + drag: reorder`;
     let cls = 'bb-task' + (active ? ' bb-active' : '') + (t.kind === 'unit' ? ' bb-unit' : '') + (open ? ' bb-open' : '');
-    let html = `<div class="${cls}" data-index="${index}" style="--bb-c:${_bbThingColor(t.kind, t.key)}" title="${_bbEscape(title)}">`;
+    let html = `<div class="${cls}" data-index="${index}" title="${_bbEscape(title)}">`;
     html += `<div class="bb-task-progress"><div style="height:${(pct * 100).toFixed(1)}%"></div></div>`;
     if (active) html += `<span class="bb-task-arrow">◀</span>`;
     html += `<img src="${getItemThumbnail(t.key, 20)}" width="20" height="20" alt="" draggable="false">`;
@@ -402,7 +470,6 @@ function _bbOnPointerDown(ev) {
         id: isTask ? null : el.dataset.id,
         index: isTask ? Number(el.dataset.index) : -1,
         src: el,
-        owned: !el.classList.contains('bb-unowned'),
         startX: ev.clientX,
         startY: ev.clientY,
         x: ev.clientX,
@@ -510,7 +577,7 @@ function _bbUpdateDrag() {
     let thingsRect = els.things.getBoundingClientRect();
     let zone = null;
     if (_bbPointInRect(press.x, press.y, researchRect, 14)) zone = 'research';
-    else if (press.type === 'thing' && press.owned && _bbPointInRect(press.x, press.y, thingsRect, 8)) zone = 'things';
+    else if (press.type === 'thing' && _bbPointInRect(press.x, press.y, thingsRect, 8)) zone = 'things';
     else if (press.type === 'task') zone = 'research-out';
 
     let full = press.type === 'thing' && getPlayerResearchQueueTotalLength(localPlayerId) >= getResearchQueueCapacityForPlayer(localPlayerId);
@@ -527,15 +594,24 @@ function _bbUpdateDrag() {
         _bbPlaceAt(els.research, press.placeholder, items, idx);
         press.dropIndex = idx;
     } else if (zone === 'things') {
-        let items = _bbRowItems(els.things, '.bb-thing:not(.bb-unowned)').filter(el => el !== press.src);
+        // The divider counts as an item: left of it is the pinned (owned)
+        // section, right of it the never-owned one. Owned things stay left.
+        let items = _bbRowItems(els.things, '.bb-thing, .bb-sep').filter(el => el !== press.src);
+        let sepPos = items.findIndex(el => el.classList.contains('bb-sep'));
         let idx = _bbInsertionIndex(items, press.x);
+        if (sepPos >= 0 && idx > sepPos && _bbThingInfo(press.id).count > 0) idx = sepPos;
         if (!press.placeholder || press.placeholder.parentNode !== els.things) {
             if (press.placeholder) press.placeholder.remove();
             press.placeholder = _bbMakePlaceholder(press.src, 'thing');
             press.src.classList.add('bb-src-hidden');
         }
-        _bbPlaceAt(els.things, press.placeholder, items, idx);
+        let ref = idx < items.length ? items[idx] : null;
+        if (ref !== press.placeholder && press.placeholder.nextSibling !== ref && !(ref === null && els.things.lastChild === press.placeholder)) {
+            _bbFlip(els.things, () => els.things.insertBefore(press.placeholder, ref));
+        }
         press.dropIndex = idx;
+        press.dropRest = sepPos >= 0 && idx > sepPos;
+        press.dropPos = press.dropRest ? idx - sepPos - 1 : idx;
     } else if (zone === 'research-out') {
         // A task dragged away keeps its slot and snaps back on release.
         let items = _bbRowItems(els.research, '.bb-task');
@@ -630,10 +706,16 @@ function _bbOnPointerUp(ev) {
     }
 
     if (zone === 'things' && Number.isFinite(idx) && idx >= 0) {
-        let from = bb.order.indexOf(press.id);
-        if (from >= 0) {
-            bb.order.splice(from, 1);
-            bb.order.splice(Math.min(idx, bb.order.length), 0, press.id);
+        let id = press.id;
+        bb.order = bb.order.filter(x => x !== id);
+        bb.rest = bb.rest.filter(x => x !== id);
+        if (press.dropRest) {
+            bb.known.delete(id);
+            bb.rest.splice(Math.min(press.dropPos, bb.rest.length), 0, id);
+        } else {
+            // Pinned: stays left of the divider even while none are owned.
+            bb.known.add(id);
+            bb.order.splice(Math.min(press.dropPos, bb.order.length), 0, id);
         }
         if (placeholder && placeholder.parentNode) {
             placeholder.parentNode.insertBefore(press.src, placeholder);
@@ -735,10 +817,10 @@ function _bbOpenMenu(spec) {
     _bbRenderMenu(true);
 }
 
-function _bbFmtRate(v, glyph) {
+function _bbFmtRate(v, glyph, res) {
     if (v === null || v === undefined) return `<span class="bb-muted">– ${glyph}/s</span>`;
-    let color = v > 0.05 ? '#7f7' : v < -0.05 ? '#f88' : '#aa9';
-    let text = Math.abs(v) < 0.05 ? '0.0' : `${v > 0 ? '+' : ''}${formatBigNumber(v, 1)}`;
+    let color = getDeltaRateColor(v, res);
+    let text = Math.abs(v) < 0.05 ? '0' : `${v > 0 ? '+' : ''}${formatCompactNumber(v)}`;
     return `<span style="color:${color}">${text} ${glyph}/s</span>`;
 }
 
@@ -746,7 +828,7 @@ function _bbMenuHeadHtml(kind, key, subHtml) {
     let isUnitCls = kind === 'unit' ? ' bb-unit' : '';
     let cat = BB_CATEGORY[_bbThingCategory(kind, key)];
     return `<div class="bb-menu-head">`
-        + `<span class="bb-menu-icon${isUnitCls}" style="--bb-c:${cat.color}"><img src="${getItemThumbnail(key, 20)}" width="20" height="20" alt=""></span>`
+        + `<span class="bb-menu-icon${isUnitCls}"><img src="${getItemThumbnail(key, 20)}" width="20" height="20" alt=""></span>`
         + `<span class="bb-menu-title">${_bbEscape(_bbThingLabel(kind, key))} <span class="bb-menu-cat" style="color:${cat.color}">${cat.label}</span></span>`
         + `<span class="bb-menu-sub">${subHtml}</span>`
         + `</div>`;
@@ -759,12 +841,12 @@ function _bbThingMenuHtml() {
     if (info.count <= 0) {
         html += `<div class="bb-menu-stats"><span class="bb-muted">None owned yet · drag onto the research row to upgrade</span></div>`;
     } else {
-        let rates = _bbThingRates(info, owner);
+        let rates = _bbThingRates(info);
         let idlePct = Math.round(100 * info.idle / info.count);
         html += `<div class="bb-menu-stats" title="Rates over the last ${rates.sec}s">`
             + `<span>Idle <b>${info.idle}/${info.count}</b> <span class="bb-muted">${idlePct}%</span></span>`
-            + _bbFmtRate(rates.energy, '⚡')
-            + _bbFmtRate(rates.astar, '<span class="bb-star">★</span>')
+            + _bbFmtRate(rates.energy, '⚡', 'energy')
+            + _bbFmtRate(rates.astar, '<span class="bb-star">★</span>', 'astar')
             + `</div>`;
     }
 
@@ -776,14 +858,14 @@ function _bbThingMenuHtml() {
         let pct = Math.max(0, Math.min(1, Number(q.progress.pct) || 0));
         html += `<div class="bb-menu-queue" title="${_bbEscape(`${q.producerLabel}: ${q.ready.length} ready`)}">`
             + `<span class="bb-menu-queue-label">Queue</span>`
-            + `<span style="color:#fd0">${formatInfoCurrency(q.cost)}</span>`
+            + `<span style="color:#fd0">${_bbFmtEnergy(q.cost)}</span>`
             + `<span class="bb-menu-queue-frac">${_bbFmtInt(q.queued)}/${_bbFmtInt(q.cap)}</span>`
             + `<span class="bb-menu-queue-btns">`
             + `<span class="bb-btn-sub${can ? '' : ' bb-off'}" data-bb-act="queue-sub" data-worker="${q.isWorker ? 1 : 0}" data-coords="${coords}">[-]</span>`
             + `<span class="bb-btn-add${can ? '' : ' bb-off'}" data-bb-act="queue-add" data-worker="${q.isWorker ? 1 : 0}" data-coords="${coords}">[+]</span>`
             + `</span>`
             + `<div class="bb-menu-queue-bar"><div style="width:${(pct * 100).toFixed(1)}%"></div>`
-            + `<span>${q.progress.hasQueue ? `${formatInfoCurrency(q.progress.paid)}/${formatInfoCurrency(q.progress.required)}` : (can ? 'idle' : `no ready ${_bbEscape(q.producerLabel)}`)}</span></div>`
+            + `<span>${q.progress.hasQueue ? `${_bbFmtEnergy(q.progress.paid)}/${_bbFmtEnergy(q.progress.required)}` : (can ? 'idle' : `no ready ${_bbEscape(q.producerLabel)}`)}</span></div>`
             + `</div>`;
     }
 
@@ -857,13 +939,13 @@ function _bbTaskMenuHtml() {
     html += `<span class="bb-menu-task-name" style="color:#fd0">`
         + `<button type="button" data-bb-act="task-first" title="Move to first in queue" style="${btn}"${i === 0 ? ' disabled' : ''}>↑</button>`
         + `<button type="button" data-bb-act="task-last" title="Move to last in queue" style="${btn}"${i === tasks.length - 1 ? ' disabled' : ''}>↓</button>`
-        + `<span>${preview.atMax ? 'MAX' : formatInfoCurrency(cost)} <span style="color:#9cf">R${t.toLevel}</span></span></span>`;
+        + `<span>${preview.atMax ? 'MAX' : _bbFmtEnergy(cost)} <span style="color:#9cf">R${t.toLevel}</span></span></span>`;
     html += `<span class="bb-menu-queue-btns">`
         + `<span class="bb-btn-sub" data-bb-act="task-sub" title="Remove this task">[-]</span>`
         + `<span class="bb-btn-add${preview.atMax ? ' bb-off' : ''}" data-bb-act="task-add" title="Queue the next level right after this one">[+]</span>`
         + `</span>`;
     html += `</div>`;
-    html += renderResearchWorkProgressRow(cost * pct, cost);
+    html += `<div class="bb-menu-queue-bar"><div style="width:${(pct * 100).toFixed(1)}%"></div><span>${_bbFmtEnergy(cost * pct)}/${_bbFmtEnergy(cost)}</span></div>`;
     html += `</div>`;
     return html;
 }
@@ -944,10 +1026,16 @@ function _bbOnMenuClick(ev) {
     let btn = ev.target instanceof Element ? ev.target.closest('[data-bb-act]') : null;
     if (!btn || btn.disabled || btn.classList.contains('bb-off')) return;
     let act = btn.dataset.bbAct;
+    // Select and shop finish what the menu was opened for; queue and task
+    // buttons are often pressed repeatedly, so those keep it open.
     if (act === 'select') {
         _bbSelect(_bbThingInfo(btn.dataset.id), btn.dataset.mode);
+        closeBottomBarMenus();
+        return;
     } else if (act === 'shop') {
         _bbSelectInShop(btn.dataset.key);
+        closeBottomBarMenus();
+        return;
     } else if (act === 'queue-add' || act === 'queue-sub') {
         let coords = parseInfoCoordList(btn.dataset.coords);
         let isWorker = btn.dataset.worker === '1';

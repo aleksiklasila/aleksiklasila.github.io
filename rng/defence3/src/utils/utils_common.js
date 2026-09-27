@@ -137,6 +137,25 @@ function formatBigNumber(n, d = 1, suffixStart = undefined) {
     return sign + text + suffixes[tier];
 }
 
+// At most ~4 characters for tight UI: "4.5", "828", "9.9K", "145K", "2.0M".
+// Decimals only while they fit; fractions under 10 keep one decimal.
+function formatCompactNumber(n) {
+    if (n == null || !Number.isFinite(Number(n))) return '' + n;
+    n = Number(n);
+    let sign = n < 0 ? '-' : '';
+    let abs = Math.abs(n);
+    if (Number.isInteger(abs) && abs < 10) return sign + abs;
+    if (Number(abs.toFixed(1)) < 10) return sign + abs.toFixed(1);
+    if (Math.round(abs) < 1000) return sign + Math.round(abs);
+    const suffixes = ['', 'K', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dc'];
+    let tier = Math.max(1, Math.min(suffixes.length - 1, Math.floor(Math.log10(abs) / 3)));
+    let scaled = abs / Math.pow(1000, tier);
+    // Rounding up to the next tier (999.6K -> 1.0M).
+    if (Math.round(scaled) >= 1000 && tier < suffixes.length - 1) { tier++; scaled /= 1000; }
+    let text = Number(scaled.toFixed(1)) < 100 ? scaled.toFixed(1) : String(Math.round(scaled));
+    return sign + text + suffixes[tier];
+}
+
 function _escapeHtml(text) {
     return String(text === undefined || text === null ? '' : text)
         .replace(/&/g, '&amp;')

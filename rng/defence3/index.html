@@ -6,7 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>RTS Defence</title>
     <link rel="stylesheet" href="./style/style.css">
-    <link rel="stylesheet" href="./style/bottom_bar.css?v=20260930-bottombar">
+    <link rel="stylesheet" href="./style/bottom_bar.css?v=20260930-grey">
+    <link rel="stylesheet" href="./style/scrollbars.css?v=20260930-scroll">
 </head>
 
 <body>
@@ -620,7 +621,10 @@
                 <div id="renderer3d-host" aria-hidden="true"></div>
             </div>
             <div id="bottom-bar">
-                <div id="bb-things" class="bb-row" aria-label="Owned things"></div>
+                <div class="bb-things-wrap">
+                    <div id="bb-things-label" title="Overall energy (top) and ★ (bottom) per second, over the last 10 s. Energy: income minus upkeep; ★: collected minus used moving."></div>
+                    <div id="bb-things" class="bb-row" aria-label="Things"></div>
+                </div>
                 <div class="bb-research-wrap">
                     <div id="bb-research-label" title="Research queue: the left-most item is being researched. Drag to reorder; drag a thing from the row above to insert upgrades."></div>
                     <div id="bb-research" class="bb-row" aria-label="Research queue"></div>
@@ -708,7 +712,7 @@
 
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
     
-    <script src="./src/utils/utils_common.js?v=20260926-netcode"></script>
+    <script src="./src/utils/utils_common.js?v=20260930-compact"></script>
     <script src="./src/utils/utils_net_quality.js?v=20260928-lateseal"></script>
     <script src="./src/utils/utils_networking.js?v=20260929-fx"></script>
     <script src="./src/utils/utils_snapshot.js?v=20260927-laser"></script>
@@ -731,8 +735,8 @@
     <script src="./src/audio_visual/renderer.js?v=20260930-bottombar"></script>
     <script src="./src/audio_visual/audio.js?v=20260927-dist"></script>
     <script src="./src/audio_visual/jukebox.js?v=20260921"></script>
-    <script src="./src/audio_visual/hud.js?v=20260930-bottombar"></script>
-    <script src="./src/audio_visual/bottom_bar.js?v=20260930-bottombar"></script>
+    <script src="./src/audio_visual/hud.js?v=20260930-deltacolor"></script>
+    <script src="./src/audio_visual/bottom_bar.js?v=20260930-deltacolor"></script>
 
     <script src="./src/game/chunk.js?v=20260927-resync"></script>
     <script src="./src/game/map.js?v=20260926-netcode"></script>

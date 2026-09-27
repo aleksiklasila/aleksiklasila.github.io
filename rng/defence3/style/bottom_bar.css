@@ -9,59 +9,78 @@ body.app-fullscreen #bottom-bar { display: none; }
     border-left: 2px solid #333; border-right: 2px solid #333;
     padding: 0 4px; z-index: 10; font-size: 11px;
 }
-/* Both rows share one height: 34px items plus room for the thin scrollbar. */
+/* Both rows share one height, plus room for the thin scrollbar. */
 .bb-row {
     display: flex; align-items: center; gap: 4px; overflow-x: auto; overflow-y: hidden;
-    height: 42px; flex-shrink: 0; padding: 1px 2px 3px;
-    scrollbar-width: thin; scrollbar-color: #3a4652 transparent;
+    height: 44px; flex-shrink: 0; padding: 1px 2px 3px;
 }
 .bb-row::-webkit-scrollbar { height: 4px; }
-.bb-row::-webkit-scrollbar-thumb { background: #3a4652; border-radius: 2px; }
 
+/* Thing tile: icon in the middle, ⚡/s in the top-right corner and ★/s in the
+   bottom-right corner, both over the icon's edge with a dark outline. */
 .bb-thing {
-    position: relative; flex: 0 0 auto; width: 34px; height: 34px; border: 2px solid var(--bb-c, #888);
+    position: relative; flex: 0 0 auto; width: 38px; height: 36px; border: 2px solid #4a4a4a;
     border-radius: 6px; background: #121212; display: flex; align-items: center; justify-content: center;
     cursor: grab; touch-action: none; transition: filter 100ms, box-shadow 100ms;
 }
-.bb-thing img, .bb-task img, .bb-placeholder img { display: block; pointer-events: none; flex: 0 0 auto; }
 .bb-thing.bb-unit, .bb-thing.bb-unit img { border-radius: 50%; }
-.bb-thing:hover, .bb-thing.bb-open { filter: brightness(1.25); box-shadow: 0 0 0 1px #ffffff55, 0 0 8px var(--bb-c, #888); }
-.bb-thing .bb-count {
-    position: absolute; right: 1px; bottom: 0; font-size: 9px; line-height: 10px; font-weight: bold; color: #fd0;
-    text-shadow: 0 0 2px #000, 0 0 2px #000, 0 0 3px #000; pointer-events: none; font-variant-numeric: tabular-nums;
+.bb-thing img, .bb-task img, .bb-placeholder img { display: block; pointer-events: none; flex: 0 0 auto; }
+.bb-thing:hover, .bb-thing.bb-open { filter: brightness(1.2); border-color: #707070; box-shadow: 0 0 6px #ffffff22; }
+.bb-rate {
+    position: absolute; right: 0; font-size: 8px; line-height: 9px; font-weight: bold; white-space: nowrap;
+    font-variant-numeric: tabular-nums; letter-spacing: -0.3px; pointer-events: none;
+    text-shadow: 0 0 2px #000, 0 0 2px #000, 0 0 3px #000;
 }
-.bb-thing.bb-unit .bb-count { right: 50%; transform: translateX(50%); }
-/* None owned: grey outline, dimmed icon (category colour returns on hover). */
-.bb-thing.bb-none { border-color: #4a4a4a; background: #0c0c0c; }
-.bb-thing.bb-none img { opacity: 0.55; filter: saturate(0.6); }
-.bb-thing.bb-none .bb-count { color: #777; }
-.bb-thing.bb-none:hover, .bb-thing.bb-none.bb-open { border-color: var(--bb-c, #888); }
-.bb-thing.bb-none:hover img, .bb-thing.bb-none.bb-open img { opacity: 1; filter: none; }
+.bb-rate-e { top: 0; }
+.bb-rate-a { bottom: 0; }
+.bb-rate.bb-r0 { font-weight: normal; }
+.bb-thing.bb-unit .bb-rate { right: 3px; }
+.bb-thing.bb-unit .bb-rate-e { top: 3px; }
+.bb-thing.bb-unit .bb-rate-a { bottom: 3px; }
+/* Glyphs sit in a fixed slot so values line up. */
+.bb-glyph { display: inline-block; width: 1.1em; text-align: center; font-size: 0.9em; font-weight: normal; }
+.bb-star { color: #9aa; }
+.bb-per { font-size: 0.8em; font-weight: normal; color: #7c8791; }
+.bb-rpos { color: #7f7; }
+.bb-rneg { color: #f88; }
+.bb-r0 { color: #6f7479; }
+/* None owned: the darker shop grey. */
+.bb-thing.bb-none { border-color: #333; background: #0e0e0e; }
+.bb-thing.bb-none:hover, .bb-thing.bb-none.bb-open { border-color: #5a5a5a; }
 .bb-menu-cat { font-size: 10px; font-weight: normal; margin-left: 4px; }
-.bb-sep { flex: 0 0 auto; width: 2px; height: 28px; margin: 0 4px; background: linear-gradient(#0000, #555, #0000); }
+.bb-sep { flex: 0 0 auto; width: 2px; height: 30px; margin: 0 4px; background: linear-gradient(#0000, #555, #0000); }
 .bb-src-dim { opacity: 0.4; }
 .bb-src-hidden { display: none !important; }
 .bb-empty-msg { color: #777; font-size: 11px; padding: 0 8px; white-space: nowrap; }
 
-.bb-research-wrap { display: flex; align-items: stretch; gap: 4px; border-top: 1px solid #222; }
-#bb-research-label {
-    flex: 0 0 48px; display: flex; flex-direction: column; justify-content: center; align-items: center;
-    color: #9cf; border-right: 1px solid #243240; padding-right: 4px; cursor: help; line-height: 12px;
+/* Row labels share one width and one grid: a right-aligned value column wide
+   enough for "-14.1K", then a unit column. */
+.bb-things-wrap, .bb-research-wrap { display: flex; align-items: stretch; gap: 4px; }
+.bb-research-wrap { border-top: 1px solid #222; }
+.bb-things-wrap > .bb-row, #bb-research { flex: 1; min-width: 0; }
+#bb-things-label, #bb-research-label {
+    flex: 0 0 84px; display: grid; grid-template-columns: 6.2ch auto; column-gap: 2px; row-gap: 1px;
+    align-content: center; justify-content: center; align-items: baseline;
+    border-right: 1px solid #243240; padding: 0 6px 0 2px; cursor: help;
+    font-size: 11px; line-height: 14px; font-weight: bold; font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-.bb-rl-title { font-size: 9px; color: #7fa7c9; }
-.bb-rl-count { font-size: 11px; font-weight: bold; font-variant-numeric: tabular-nums; }
-#bb-research { flex: 1; min-width: 0; gap: 10px; padding-left: 12px; }
+.bb-lv { text-align: right; }
+.bb-lu { text-align: left; font-weight: normal; }
+.bb-lu .bb-glyph { font-size: 11px; }
+.bb-lcap, .bb-lcount { grid-column: 1 / -1; text-align: center; }
+.bb-lcap { font-size: 10px; font-weight: normal; color: #7fa7c9; letter-spacing: 0.3px; }
+.bb-lcount { color: #9cf; }
+#bb-research { gap: 10px; padding-left: 12px; }
 
 /* Task: icon on the left, level/stat over the energy still needed. */
 .bb-task {
-    position: relative; flex: 0 0 auto; width: 74px; height: 34px; border: 2px solid var(--bb-c, #888);
+    position: relative; flex: 0 0 auto; width: 74px; height: 34px; border: 2px solid #4a4a4a;
     border-radius: 6px; background: #111; display: flex; align-items: center; gap: 3px;
     padding: 0 3px 0 9px; cursor: grab; touch-action: none;
 }
 .bb-task.bb-unit { border-radius: 12px; padding-left: 11px; }
 .bb-task.bb-unit .bb-task-progress { left: 4px; top: 6px; bottom: 6px; }
 .bb-task.bb-open, .bb-thing.bb-open { outline: 1px solid #fff; outline-offset: 1px; }
-.bb-star { color: #9aa; }
 .bb-task.bb-unit img { border-radius: 50%; }
 /* Chevrons between tasks: the queue flows to the left. */
 .bb-task + .bb-task::before, .bb-caret + .bb-task::before, .bb-placeholder + .bb-task::before, .bb-task + .bb-placeholder::before {
@@ -103,7 +122,7 @@ body.app-fullscreen #bottom-bar { display: none; }
     display: flex; align-items: center; justify-content: center;
 }
 .bb-placeholder img { opacity: 0.55; }
-.bb-ph-thing { width: 34px; height: 34px; }
+.bb-ph-thing { width: 38px; height: 36px; }
 .bb-ph-task { width: 74px; height: 34px; }
 .bb-ghost {
     position: fixed; z-index: 2000; pointer-events: none; opacity: 0.92; transform: scale(1.08);
@@ -126,14 +145,14 @@ body.bb-dragging, body.bb-dragging * { cursor: grabbing !important; }
 }
 .bb-menu-drop { border-color: #4a89c7; }
 .bb-menu-head { display: flex; align-items: center; gap: 6px; }
-.bb-menu-icon { width: 28px; height: 28px; border: 2px solid var(--bb-c, #888); border-radius: 5px; display: flex; align-items: center; justify-content: center; background: #111; flex: 0 0 auto; }
+.bb-menu-icon { width: 28px; height: 28px; border: 2px solid #4a4a4a; border-radius: 5px; display: flex; align-items: center; justify-content: center; background: #111; flex: 0 0 auto; }
 .bb-menu-icon.bb-unit, .bb-menu-icon.bb-unit img { border-radius: 50%; }
 .bb-menu-title { color: #8dc6ff; font-size: 13px; font-weight: bold; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bb-menu-sub { color: #fd0; font-weight: bold; }
 .bb-menu-stats { display: flex; justify-content: space-between; gap: 8px; padding: 3px 6px; background: #0b1117; border: 1px solid #1f2d3a; border-radius: 4px; font-variant-numeric: tabular-nums; }
 .bb-menu-stats b { color: #fff; }
 .bb-muted { color: #778; font-weight: normal; }
-.bb-menu-upgrades { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+.bb-menu-upgrades { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .bb-menu-upgrades > div { margin-top: 0 !important; }
 .bb-menu-section { color: #9cf; margin: 2px 0 3px; display: flex; justify-content: space-between; }
 .bb-menu-note { color: #888; padding: 4px 2px; }

@@ -1762,6 +1762,14 @@ function initInput() {
     });
 
     gameArea.addEventListener('contextmenu', e => e.preventDefault());
+    // In a match, a stray right click anywhere (side panels, bars, popups) must
+    // not open the browser menu. Text fields and links keep theirs for copy/paste.
+    document.addEventListener('contextmenu', (e) => {
+        if (!gameStarted) return;
+        let t = e.target instanceof Element ? e.target : null;
+        if (t && t.closest('input, textarea, select, a[href], [contenteditable="true"]')) return;
+        e.preventDefault();
+    });
     gameArea.addEventListener('auxclick', (e) => {
         if (e.button === 1) e.preventDefault();
     });

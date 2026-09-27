@@ -60,6 +60,60 @@ function _lerpRgb(a, b, t) {
     };
 }
 
+// Colour for a per-second delta by its share of the player's overall flow of
+// that resource: ~0 grey, small drains orange shading to red as they grow
+// toward the whole flow, gains grey -> light green -> green. The biggest drains
+// and gains stand out; if everything is near zero, everything stays grey.
+const DELTA_COLOR_GREY = { r: 139, g: 146, b: 154 };
+const DELTA_COLOR_ORANGE = { r: 255, g: 168, b: 72 };
+const DELTA_COLOR_RED = { r: 255, g: 72, b: 72 };
+const DELTA_COLOR_LIGHT_GREEN = { r: 165, g: 222, b: 140 };
+const DELTA_COLOR_GREEN = { r: 80, g: 240, b: 100 };
+const DELTA_COLOR_SOFT_SHARE = 0.1;   // share at which grey has fully turned orange / light green
+const DELTA_COLOR_FULL_SHARE = 0.6;   // share at which the colour is fully red / green
+const DELTA_COLOR_MIN_FLOW = 5;       // per second; below this overall flow nothing is 'large'
+let _deltaFlowScaleCache = {}; // resourceKey -> { key, value }, recomputed once per tick
+
+// Gross flow per second over the default window: the larger of all income and
+// all spending (upkeep included), at least DELTA_COLOR_MIN_FLOW so trickles
+// stay grey or orange instead of red.
+function getPlayerDeltaFlowScale(owner, resourceKey) {
+    let pid = _normalizeOwnerId(owner);
+    let cacheKey = `${pid}:${resourceKey}:${gameTime}`;
+    if (_deltaFlowScaleCache[resourceKey] && _deltaFlowScaleCache[resourceKey].key === cacheKey) return _deltaFlowScaleCache[resourceKey].value;
+    let sec = ENERGY_DELTA_DEFAULT_WINDOW_SECONDS;
+    let cutoff = gameTime - Math.max(1, Math.floor(TICK_RATE * sec));
+    let gain = 0, loss = 0;
+    if (resourceKey === 'astar') {
+        for (let ev of (_ensureAstarLogPlayer(pid) || [])) {
+            if (!ev || !(ev.tick >= cutoff)) continue;
+            let d = Number.isFinite(Number(ev.delta)) ? Number(ev.delta) : -(Math.max(0, Number(ev.used) || 0));
+            if (d > 0) gain += d; else loss -= d;
+        }
+    } else {
+        for (let ev of (ensureEnergyDeltaLogPlayer(pid) || [])) {
+            if (!ev || !(ev.tick >= cutoff) || ev.source === 'upKeep') continue;
+            let d = Number(ev.delta) || 0;
+            if (d > 0) gain += d; else loss -= d;
+        }
+        let upkeep = typeof getPlayerUpKeepBreakdown === 'function' ? getPlayerUpKeepBreakdown(pid) : null;
+        loss += Math.max(0, Number(upkeep && upkeep.total) || 0) * sec;
+    }
+    let value = Math.max(DELTA_COLOR_MIN_FLOW, gain / sec, loss / sec);
+    _deltaFlowScaleCache[resourceKey] = { key: cacheKey, value };
+    return value;
+}
+
+function getDeltaRateColor(value, resourceKey = 'energy', owner = localPlayerId) {
+    let v = Number(value);
+    if (!Number.isFinite(v) || Math.abs(v) < 0.05) return _rgbToCss(DELTA_COLOR_GREY);
+    let share = Math.min(1, Math.abs(v) / getPlayerDeltaFlowScale(owner, resourceKey));
+    let soft = v < 0 ? DELTA_COLOR_ORANGE : DELTA_COLOR_LIGHT_GREEN;
+    let full = v < 0 ? DELTA_COLOR_RED : DELTA_COLOR_GREEN;
+    if (share <= DELTA_COLOR_SOFT_SHARE) return _rgbToCss(_lerpRgb(DELTA_COLOR_GREY, soft, share / DELTA_COLOR_SOFT_SHARE));
+    return _rgbToCss(_lerpRgb(soft, full, (share - DELTA_COLOR_SOFT_SHARE) / (DELTA_COLOR_FULL_SHARE - DELTA_COLOR_SOFT_SHARE)));
+}
+
 function _getHudResourceValueColor(owner, resourceKey, value) {
     let player = players[Math.max(0, Math.floor(Number(owner) || 0))] || null;
     let maxSeen = Math.max(1, Number(player && player.resourceMaxValues && player.resourceMaxValues[resourceKey]) || 0);
@@ -85,7 +139,7 @@ function _renderHudResource(el, cacheKey, owner, resourceKey, glyph, glyphColor,
     if (!Number.isFinite(numericValue)) numericValue = 0;
     let flooredValue = Math.floor(numericValue);
     let valueColor = _getHudResourceValueColor(owner, resourceKey, flooredValue);
-    let html = `<span class="hud-resource-glyph-btn" data-resource-key="${resourceKey}" title="Show ${resourceKey} stat effect details" style="color:${glyphColor};cursor:pointer;user-select:none">${glyph}</span> <span style="color:${valueColor}">${formatBigNumber(flooredValue)}</span>`;
+    let html = `<span class="hud-resource-glyph-btn" data-resource-key="${resourceKey}" title="Show ${resourceKey} stat effect details" style="color:${glyphColor};cursor:pointer;user-select:none">${glyph}</span> <span style="color:${valueColor}" title="${formatBigNumber(flooredValue)}">${formatCompactNumber(flooredValue)}</span>`;
     if (_hudCache[cacheKey] !== html) {
         _hudCache[cacheKey] = html;
         el.innerHTML = html;
@@ -565,11 +619,7 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
         if (!Number.isFinite(v) || Math.abs(v) < 0.05) return '0.0';
         return `${v > 0 ? '+' : ''}${formatBigNumber(v, 1)}`;
     };
-    let color = (v) => {
-        if (v > 0.05) return '#6f6';
-        if (v < -0.05) return '#f88';
-        return '#dd6';
-    };
+    let color = (v) => getDeltaRateColor(v, 'energy', owner);
     let row = (metric, sourceKey, thumbSpec = null, label = '', filterKey = 'total', domain = 'units') => {
         let sec = getEnergyDeltaWindowSeconds(metric);
         let value = getPlayerEnergyDeltaRate(owner, sourceKey, sec) - getUpkeepForMetric(metric);
@@ -750,11 +800,7 @@ function buildInfoPanelAstarBudgetHtml(owner) {
         if (!Number.isFinite(v) || Math.abs(v) < 0.05) return '0.0';
         return `${v > 0 ? '+' : ''}${formatBigNumber(v, 1)}`;
     };
-    let colorDelta = (v) => {
-        if (v > 0.05) return '#8f8';
-        if (v < -0.05) return '#f88';
-        return '#9aa';
-    };
+    let colorDelta = (v) => getDeltaRateColor(v, 'astar', owner);
     let secBtn = (metric, sec) => `<button class="info-astar-window-btn" data-metric="${metric}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`;
 
     let deltaRow = (metric, matcherFn, thumbSpec = null, label = '', filterKey = 'total', domain = 'units') => {
@@ -822,11 +868,11 @@ function buildInfoPanelUpKeepHtml(owner) {
     let fmt = (v) => formatBigNumber(Math.max(0, Number(v) || 0), 2);
     let totalRow = (value) => `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
         + _buildInfoPanelThingSelectableLabelHtml('upkeep-total', 'total', 'Total', null, 40, 'Select all upkeep things')
-        + `<span class="info-value" style="color:#f88">-${fmt(value)}⚡/ s</span>`
+        + `<span class="info-value" style="color:${getDeltaRateColor(-value, 'energy', owner)}">-${fmt(value)}⚡/ s</span>`
         + `</div>`;
     let typedRow = (value, thumbSpec, domain, filterKey) => `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
         + _buildInfoPanelThingSelectableVisualHtml(domain, filterKey, thumbSpec, 40, `Select all ${_infoPanelFilterName(domain, filterKey)}`)
-        + `<span class="info-value" style="color:#f88">-${fmt(value)}⚡/ s</span>`
+        + `<span class="info-value" style="color:${getDeltaRateColor(-value, 'energy', owner)}">-${fmt(value)}⚡/ s</span>`
         + `</div>`;
 
     let html = _buildCollapsibleInfoSectionTitle('upKeep', 'UpKeep');
@@ -2847,15 +2893,10 @@ function getGroupThumbKey(grp) {
     return null;
 }
 
+// One neutral grey for every group (the bottom bar uses the same); toggled-off
+// groups use the darker shop grey.
 function getGroupBorderColor(grp) {
-    let e = grp.items[0];
-    if (grp.isUnit) return (BASE_UNIT_STATS[e.unitType] || {}).color || '#fff';
-    if (_isGoldMineLikeEntity(e)) return '#fd0';
-    if (_isAstarMineLikeEntity(e)) return '#bbb';
-    if (e.type === 'barrack') return (BASE_UNIT_STATS[e.unitType] || {}).color || '#686';
-    if (e instanceof Tower) return (BASE_CARD_TYPES[e.type] || {}).color || '#fff';
-    let ct = BASE_CARD_TYPES[e.type] || {};
-    return ct.color || '#fff';
+    return '#4a4a4a';
 }
 
 function getGroupLevel(key, grp) {
