@@ -1864,7 +1864,14 @@ function initInput() {
     document.addEventListener('keydown', (e) => {
         keysDown[e.key.toLowerCase()] = true;
         if (!gameStarted) return;
-        if (e.key === 'Escape') {
+        // § is an alias for Esc that never leaves fullscreen (except while typing).
+        let escAlias = e.key === '§' && !(e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable="true"]'));
+        if (escAlias) {
+            e.preventDefault();
+            let jukebox = document.getElementById('jukebox-panel');
+            if (jukebox && jukebox.open) { jukebox.close(); return; }
+        }
+        if (e.key === 'Escape' || escAlias) {
             if (researchThingLevelDropdown) {
                 closeResearchThingLevelDropdown();
                 e.preventDefault();
@@ -2031,6 +2038,13 @@ function initInput() {
         appFullscreen = false;
         document.body.classList.remove('app-fullscreen');
         if (btnFs) btnFs.textContent = isNativeFullscreen ? '\uD83D\uDDD6 FS' : '\u26F6 FS';
+        // Chromium: while fullscreen, Esc reaches the game (cancel build,
+        // close popups) instead of leaving fullscreen; holding Esc still leaves.
+        let keyboard = navigator.keyboard;
+        if (keyboard && typeof keyboard.lock === 'function') {
+            if (isNativeFullscreen) keyboard.lock(['Escape']).catch(() => { });
+            else if (typeof keyboard.unlock === 'function') keyboard.unlock();
+        }
         window.dispatchEvent(new Event('resize'));
     }
     document.addEventListener('fullscreenchange', syncFullscreenUi);
