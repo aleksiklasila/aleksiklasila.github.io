@@ -1777,39 +1777,12 @@ function initInput() {
     gameArea.addEventListener('wheel', (e) => {
         if (!gameStarted || gameOver || !Number.isFinite(e.deltaY) || e.deltaY === 0) return;
         e.preventDefault();
-        let minZoom = Math.max(viewW / WORLD_W, viewH / WORLD_H, 0.4);
-        let nextZoom = e.deltaY < 0 ? Math.min(MAX_CAMERA_ZOOM, camera.zoom * 1.2) : Math.max(minZoom, camera.zoom / 1.2);
-        // Trackpads keep emitting at the limit. Avoid two 3D projection/pick
-        // passes when the camera cannot zoom any further.
-        if (nextZoom === camera.zoom) return;
-        // Zoom centered on mouse cursor position
-        let rect = gameArea.getBoundingClientRect();
-        let screenX = e.clientX - rect.left;
-        let screenY = e.clientY - rect.top;
-        let worldBeforeX = camera.x + screenX / camera.zoom;
-        let worldBeforeY = camera.y + screenY / camera.zoom;
-        let worldBefore3D = null;
-        if (renderDimensionMode === '3d' && renderer3dInstance && typeof renderer3dInstance.buildViewProjection === 'function' && typeof renderer3dInstance.screenToGround === 'function') {
-            renderer3dInstance.buildViewProjection(get3DProjectionSnapshot());
-            let pickedBefore = renderer3dInstance.screenToGround(e.clientX, e.clientY, rect);
-            if (pickedBefore && Number.isFinite(pickedBefore.x) && Number.isFinite(pickedBefore.y)) {
-                worldBefore3D = { x: pickedBefore.x * TILE, y: pickedBefore.y * TILE };
-            }
-        }
-        camera.zoom = nextZoom;
-        if (renderDimensionMode !== '3d') {
-            // Keep 2D zoom centered on the cursor.
-            camera.x = worldBeforeX - screenX / camera.zoom;
-            camera.y = worldBeforeY - screenY / camera.zoom;
-        } else if (worldBefore3D && renderer3dInstance && typeof renderer3dInstance.buildViewProjection === 'function' && typeof renderer3dInstance.screenToGround === 'function') {
-            renderer3dInstance.buildViewProjection(get3DProjectionSnapshot());
-            let pickedAfter = renderer3dInstance.screenToGround(e.clientX, e.clientY, rect);
-            if (pickedAfter && Number.isFinite(pickedAfter.x) && Number.isFinite(pickedAfter.y)) {
-                camera.x += worldBefore3D.x - pickedAfter.x * TILE;
-                camera.y += worldBefore3D.y - pickedAfter.y * TILE;
-            }
-        }
-        clampCamera();
+        let minZoom = getMinCameraZoom();
+        let from = _cameraZoomAnim ? _cameraZoomAnim.target : camera.zoom;
+        let nextZoom = e.deltaY < 0 ? Math.min(MAX_CAMERA_ZOOM, from * 1.2) : Math.max(minZoom, from / 1.2);
+        // Trackpads keep emitting at the limit.
+        if (nextZoom === from) return;
+        _cameraZoomAnim = { target: nextZoom, clientX: e.clientX, clientY: e.clientY, applied: camera.zoom };
     }, { passive: false });
 
     minimapCanvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -1965,13 +1938,20 @@ function initInput() {
         sharpen: document.getElementById('setting-gfx-sharpen'),
         resolution: document.getElementById('setting-gfx-resolution')
     };
-    const minFpsSelect = document.getElementById('setting-min-fps');
-    if (minFpsSelect) {
-        minFpsSelect.value = minFrameRateMode;
-        minFpsSelect.addEventListener('change', () => {
-            minFrameRateMode = ['fullscreen', 'always', 'off'].includes(minFpsSelect.value) ? minFpsSelect.value : 'always';
+    const fpsTargetSelect = document.getElementById('setting-fps-target');
+    if (fpsTargetSelect) {
+        fpsTargetSelect.innerHTML = '<option value="auto">Auto</option>'
+            + FPS_TARGET_CHOICES.map(v => `<option value="${v}">${v}</option>`).join('');
+        refreshFpsTargetAutoLabel();
+        fpsTargetSelect.addEventListener('change', () => {
+            setFpsTargetSetting(fpsTargetSelect.value);
+            fpsTargetSelect.value = String(getFpsTargetSetting());
             saveUiSettingsToStorage();
+            if (typeof scheduleFillInFrame === 'function') scheduleFillInFrame();
         });
+        // The window may have moved to another display since.
+        let btnSettings = document.getElementById('btn-help');
+        if (btnSettings) btnSettings.addEventListener('click', refreshFpsTargetAutoLabel);
     }
     const gfxPresetSelect = document.getElementById('setting-gfx-preset');
     const syncGraphicsControls = () => {
@@ -3209,45 +3189,131 @@ function clampCamera() {
     camera.y = Math.max(0, Math.min(maxY, camera.y));
 }
 
-function updateCamera() {
-    let speed = 12 / camera.zoom;
+// Settings > Target FPS: the Auto option shows the rate it currently uses.
+// Also shows this display's choice (the window may have moved displays).
+function refreshFpsTargetAutoLabel() {
+    let select = document.getElementById('setting-fps-target');
+    let opt = select && select.querySelector('option[value="auto"]');
+    if (!opt) return;
+    let text = `Auto (${getDisplayRefreshRate()} Hz)`;
+    if (opt.textContent !== text) opt.textContent = text;
+    let value = String(getFpsTargetSetting());
+    if (select.value !== value) select.value = value;
+}
+
+function getMinCameraZoom() {
+    return Math.max(viewW / WORLD_W, viewH / WORLD_H, 0.4);
+}
+
+// Camera motion is time based, from the frame clock (see _runLoopFrame):
+// every frame moves by exactly its share of time, whatever the frame rate.
+// Keyboard panning: 1440 screen px/s (12 px per frame at 120 FPS), eased in
+// and out over a few frames. Wheel zoom: 1.2x per notch, eased toward the
+// target around the cursor.
+const CAMERA_PAN_SPEED = 1440;
+const CAMERA_PAN_EASE_MS = 35;
+const CAMERA_ZOOM_EASE_MS = 45;
+let _cameraFrameTime = 0;
+let _cameraPanVel = { x: 0, y: 0 };
+let _cameraZoomAnim = null; // { target, clientX, clientY, applied }
+
+// Sets the zoom keeping the world point under (clientX, clientY) in place.
+function setCameraZoomAt(zoom, clientX, clientY) {
+    let gameArea = document.getElementById('game-area');
+    if (!gameArea || !(zoom > 0)) return;
+    let rect = gameArea.getBoundingClientRect();
+    let screenX = clientX - rect.left;
+    let screenY = clientY - rect.top;
+    let worldBeforeX = camera.x + screenX / camera.zoom;
+    let worldBeforeY = camera.y + screenY / camera.zoom;
+    let r3 = renderDimensionMode === '3d' && renderer3dInstance
+        && typeof renderer3dInstance.buildViewProjection === 'function' && typeof renderer3dInstance.screenToGround === 'function'
+        ? renderer3dInstance : null;
+    let worldBefore3D = null;
+    if (r3) {
+        r3.buildViewProjection(get3DProjectionSnapshot());
+        let picked = r3.screenToGround(clientX, clientY, rect);
+        if (picked && Number.isFinite(picked.x) && Number.isFinite(picked.y)) worldBefore3D = { x: picked.x * TILE, y: picked.y * TILE };
+    }
+    camera.zoom = zoom;
+    if (!r3) {
+        camera.x = worldBeforeX - screenX / camera.zoom;
+        camera.y = worldBeforeY - screenY / camera.zoom;
+    } else if (worldBefore3D) {
+        r3.buildViewProjection(get3DProjectionSnapshot());
+        let picked = r3.screenToGround(clientX, clientY, rect);
+        if (picked && Number.isFinite(picked.x) && Number.isFinite(picked.y)) {
+            camera.x += worldBefore3D.x - picked.x * TILE;
+            camera.y += worldBefore3D.y - picked.y * TILE;
+        }
+    }
+    clampCamera();
+}
+
+function updateCamera(frameTime) {
+    let t = Number.isFinite(frameTime) ? frameTime : performance.now();
+    let dt = _cameraFrameTime ? t - _cameraFrameTime : 0;
+    _cameraFrameTime = t;
+    // Long stalls (hidden tab, loading) must not fling the camera, but
+    // ordinary hitches must be covered in full: a camera that drops time
+    // during a hitch visibly slows down and speeds up again.
+    dt = Math.max(0, Math.min(250, dt));
+
+    let zoomAnim = _cameraZoomAnim;
+    if (zoomAnim) {
+        if (zoomAnim.applied !== camera.zoom) {
+            // Something else set the zoom (pinch, minimap, tools): it wins.
+            _cameraZoomAnim = null;
+        } else {
+            let k = 1 - Math.exp(-dt / CAMERA_ZOOM_EASE_MS);
+            let z = Math.exp(Math.log(camera.zoom) + (Math.log(zoomAnim.target) - Math.log(camera.zoom)) * k);
+            if (Math.abs(z / zoomAnim.target - 1) < 0.002) z = zoomAnim.target;
+            z = Math.max(getMinCameraZoom(), Math.min(MAX_CAMERA_ZOOM, z));
+            setCameraZoomAt(z, zoomAnim.clientX, zoomAnim.clientY);
+            zoomAnim.applied = camera.zoom;
+            if (z === zoomAnim.target || camera.zoom !== z) _cameraZoomAnim = null;
+        }
+    }
+
+    let moveX = 0;
+    let moveY = 0;
+    let up = keysDown['arrowup'] || keysDown['w'];
+    let down = keysDown['arrowdown'] || keysDown['s'];
+    let right = keysDown['arrowright'] || keysDown['d'];
+    let left = keysDown['arrowleft'] || keysDown['a'];
     if (renderDimensionMode === '3d' && renderer3dInstance && typeof renderer3dInstance.getGroundMovementBasis === 'function') {
         let basis = renderer3dInstance.getGroundMovementBasis();
-        let moveX = 0;
-        let moveY = 0;
-        if (keysDown['arrowup'] || keysDown['w']) {
-            moveX += basis.forwardX;
-            moveY += basis.forwardZ;
-        }
-        if (keysDown['arrowdown'] || keysDown['s']) {
-            moveX -= basis.forwardX;
-            moveY -= basis.forwardZ;
-        }
-        if (keysDown['arrowright'] || keysDown['d']) {
-            moveX += basis.rightX;
-            moveY += basis.rightZ;
-        }
-        if (keysDown['arrowleft'] || keysDown['a']) {
-            moveX -= basis.rightX;
-            moveY -= basis.rightZ;
-        }
-        if (moveX !== 0 || moveY !== 0) {
-            let moveLen = detHypot(moveX, moveY) || 1;
-            camera.x += moveX / moveLen * speed;
-            camera.y += moveY / moveLen * speed;
-        }
+        if (up) { moveX += basis.forwardX; moveY += basis.forwardZ; }
+        if (down) { moveX -= basis.forwardX; moveY -= basis.forwardZ; }
+        if (right) { moveX += basis.rightX; moveY += basis.rightZ; }
+        if (left) { moveX -= basis.rightX; moveY -= basis.rightZ; }
     } else {
-        if (keysDown['arrowup'] || keysDown['w']) camera.y -= speed;
-        if (keysDown['arrowdown'] || keysDown['s']) camera.y += speed;
-        if (keysDown['arrowleft'] || keysDown['a']) camera.x -= speed;
-        if (keysDown['arrowright'] || keysDown['d']) camera.x += speed;
+        if (up) moveY -= 1;
+        if (down) moveY += 1;
+        if (left) moveX -= 1;
+        if (right) moveX += 1;
+    }
+    let moveLen = detHypot(moveX, moveY);
+    let speed = CAMERA_PAN_SPEED / camera.zoom; // world px per second
+    let targetVx = moveLen > 0 ? moveX / moveLen * speed : 0;
+    let targetVy = moveLen > 0 ? moveY / moveLen * speed : 0;
+    let vel = _cameraPanVel;
+    if (dt > 0) {
+        // Exact ease over dt: v -> target with time constant CAMERA_PAN_EASE_MS,
+        // and the distance travelled while easing.
+        let k = Math.exp(-dt / CAMERA_PAN_EASE_MS);
+        let dx = targetVx * dt / 1000 + (vel.x - targetVx) * (1 - k) * CAMERA_PAN_EASE_MS / 1000;
+        let dy = targetVy * dt / 1000 + (vel.y - targetVy) * (1 - k) * CAMERA_PAN_EASE_MS / 1000;
+        vel.x = targetVx + (vel.x - targetVx) * k;
+        vel.y = targetVy + (vel.y - targetVy) * k;
+        if (Math.abs(vel.x) < 1 && targetVx === 0) vel.x = 0;
+        if (Math.abs(vel.y) < 1 && targetVy === 0) vel.y = 0;
+        camera.x += dx;
+        camera.y += dy;
     }
 
     clampCamera();
 }
-
-// ============================================================
-
 
 // ============================================================
 // GAME INIT & MAIN LOOP

@@ -16,7 +16,11 @@ const H=require('./net-harness.cjs');
         renderer3dInstance.buildViewProjection=function(s){__scratch.projections++;return build.call(this,s);};
     `);
     const game=host,start=game.eval('currentTick'),before=game.eval('__exactStateHash()');
-    const wheel=delta=>game.dispatch('game-area','wheel',{clientX:600,clientY:400,deltaY:delta});
+    // Wheel zoom eases over frames: run the camera until it settles.
+    const wheel=delta=>{
+        game.dispatch('game-area','wheel',{clientX:600,clientY:400,deltaY:delta});
+        game.eval('__scratch.camT=(__scratch.camT||1e6);for(let i=0;i<40&&_cameraZoomAnim;i++)updateCamera(__scratch.camT+=16)');
+    };
     for(const mode of ['2d','3d']) {
         game.eval(`renderDimensionMode='${mode}';camera={x:1200,y:1100,zoom:4};`);
         const point=()=>JSON.parse(game.eval(`JSON.stringify((()=>{

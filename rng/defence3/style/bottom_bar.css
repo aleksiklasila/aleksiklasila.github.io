@@ -53,21 +53,21 @@ body.app-fullscreen #bottom-bar { display: none; }
 .bb-src-hidden { display: none !important; }
 .bb-empty-msg { color: #777; font-size: 11px; padding: 0 8px; white-space: nowrap; }
 
-/* Row labels share one width and one grid: a right-aligned value column wide
-   enough for "-14.1K", then a unit column. */
+/* Totals and research count live in #left-footer, beside the rows. */
 .bb-things-wrap, .bb-research-wrap { display: flex; align-items: stretch; gap: 4px; }
 .bb-research-wrap { border-top: 1px solid #222; }
 .bb-things-wrap > .bb-row, #bb-research { flex: 1; min-width: 0; }
 #bb-things-label, #bb-research-label {
-    flex: 0 0 84px; display: grid; grid-template-columns: 6.2ch auto; column-gap: 2px; row-gap: 1px;
-    align-content: center; justify-content: center; align-items: baseline;
-    border-right: 1px solid #243240; padding: 0 6px 0 2px; cursor: help;
-    font-size: 11px; line-height: 14px; font-weight: bold; font-variant-numeric: tabular-nums; white-space: nowrap;
+    flex: 0 0 auto; display: grid; grid-template-columns: 7ch auto; column-gap: 4px; row-gap: 1px;
+    align-content: center; justify-content: end; align-items: baseline; cursor: help;
+    font-size: 15px; line-height: 19px; font-weight: bold; font-variant-numeric: tabular-nums; white-space: nowrap;
 }
+#bb-research-label { grid-template-columns: auto; font-size: 12px; line-height: 14px; }
+#bb-things-label .bb-glyph { width: 1.3em; font-size: 1em; }
 .bb-lv { text-align: right; }
 .bb-lu { text-align: left; font-weight: normal; }
 .bb-lu .bb-glyph { font-size: 11px; }
-.bb-lcap, .bb-lcount { grid-column: 1 / -1; text-align: center; }
+.bb-lcap, .bb-lcount { grid-column: 1 / -1; text-align: right; }
 .bb-lcap { font-size: 10px; font-weight: normal; color: #7fa7c9; letter-spacing: 0.3px; }
 .bb-lcount { color: #9cf; }
 #bb-research { gap: 10px; padding-left: 12px; }

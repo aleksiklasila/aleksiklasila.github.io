@@ -26,7 +26,7 @@ function saveUiSettingsToStorage() {
         if (typeof selectionOutlineScope !== 'undefined') ui.selectionOutlineScope = selectionOutlineScope;
         if (Number.isFinite(buildPlacementMode)) ui.buildPlacementMode = Math.floor(buildPlacementMode);
         if (typeof graphicsOptions === 'object' && graphicsOptions) ui.graphicsOptions = graphicsOptions;
-        if (typeof minFrameRateMode === 'string') ui.minFrameRateMode = minFrameRateMode;
+        if (typeof fpsTargetByDisplay === 'object' && fpsTargetByDisplay) ui.fpsTargetByDisplay = fpsTargetByDisplay;
         let mapVisibility = document.getElementById('cfg-full-vis');
         if (mapVisibility && ['full', 'team', 'history'].includes(mapVisibility.value)) ui.mapVisibility = mapVisibility.value;
         localStorage.setItem(LS_UI_SETTINGS_KEY, JSON.stringify(ui));
@@ -85,7 +85,13 @@ function loadUiSettingsFromStorage() {
                 if (s.graphicsOptions && typeof normalizeGraphicsOptions === 'function') {
                     graphicsOptions = normalizeGraphicsOptions(s.graphicsOptions);
                 }
-                if (['fullscreen', 'always', 'off'].includes(s.minFrameRateMode)) minFrameRateMode = s.minFrameRateMode;
+                if (s.fpsTargetByDisplay && typeof s.fpsTargetByDisplay === 'object') {
+                    fpsTargetByDisplay = {};
+                    for (let key in s.fpsTargetByDisplay) {
+                        let v = normalizeFpsTargetSetting(s.fpsTargetByDisplay[key]);
+                        if (v !== 'auto') fpsTargetByDisplay[key] = v;
+                    }
+                }
                 if (['full', 'team', 'history'].includes(s.mapVisibility)) {
                     let mapVisibility = document.getElementById('cfg-full-vis');
                     if (mapVisibility) mapVisibility.value = s.mapVisibility;
