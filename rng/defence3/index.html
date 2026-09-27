@@ -5,8 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>RTS Defence</title>
-    <link rel="stylesheet" href="./style/style.css">
-    <link rel="stylesheet" href="./style/bottom_bar.css?v=20260930-grey">
+    <link rel="stylesheet" href="./style/style.css?v=20261001-loop2">
+    <link rel="stylesheet" href="./style/bottom_bar.css?v=20261001-loop2">
     <link rel="stylesheet" href="./style/scrollbars.css?v=20260930-scroll">
 </head>
 
@@ -169,35 +169,29 @@
 
     <!-- HUD -->
     <div id="hud">
-    <span class="hud-energy" id="hud-energy">⚡ 300</span>
-        <span class="hud-astar" id="hud-astar">★ 9000</span>
-        <span class="hud-pop" id="hud-pop">Pop: 0/200/200</span>
+        <div class="hud-left">
+            <span class="hud-fps" id="hud-fps">0 FPS</span>
+        </div>
         <span class="hud-time" id="hud-time">0:00</span>
-        <span class="hud-time" id="hud-fps" style="color:#666">0 FPS</span>
-        <button id="jukebox-open" type="button" aria-label="Open music and sound settings" title="Music and sound">♫</button>
-        <span class="hud-time"
-            style="margin-left: auto; display:inline-flex; align-items:center; gap:8px; margin-right:5px;">
+        <div class="hud-right">
+            <button id="jukebox-open" type="button" aria-label="Open music and sound settings" title="Music and sound">&#9835;</button>
             <span id="view-mode-toggle" class="hud-render-toggle" aria-label="Render mode toggle">
                 <button id="btn-view-2d" type="button" data-view-mode="2d" class="active">2D</button>
                 <button id="btn-view-3d" type="button" data-view-mode="3d">3D</button>
             </span>
-            <button id="btn-fullscreen"
-                style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:12px; padding:2px 6px; border-radius:3px;">&#x26F6;
-                FS</button>
-            <button id="btn-default-build"
-                style="background:transparent; border:1px solid #6f6; color:#9f9; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">\uD83D\uDD28 New: ON</button>
-            <button id="btn-default-auto-upgrade"
-                style="background:transparent; border:1px solid #4af; color:#8cf; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">L+New: ON</button>
-            <button id="btn-help"
-                style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">&#9881;</button>
+            <span class="hud-sep" aria-hidden="true"></span>
+            <button id="btn-fullscreen" class="hud-btn">&#x26F6; FS</button>
+            <button id="btn-default-build" class="hud-btn">&#x1F528; New: ON</button>
+            <button id="btn-default-auto-upgrade" class="hud-btn">L+New: ON</button>
+            <button id="btn-help" class="hud-btn" title="Controls &amp; settings">&#9881;</button>
             <span style="display:none; align-items:center;">
                 <input type="checkbox" id="setting-long-press" style="margin-right:2px; cursor:pointer;">
                 <label for="setting-long-press" style="cursor:pointer; font-size:12px; color:#ddd;">Long Press
                     Rally</label>
             </span>
-            <button id="btn-resign" title="Resign"
-                 style="background:transparent; border:1px solid #744; color:#f99; cursor:pointer; font-size:12px; padding:2px 6px; border-radius:3px; margin-left:6px;">&#9760;</button>
-        </span>
+            <span class="hud-sep" aria-hidden="true"></span>
+            <button id="btn-resign" class="hud-btn hud-btn-danger" title="Resign">&#9760;</button>
+        </div>
     </div>
 
 
@@ -541,8 +535,8 @@
                         <select id="setting-gfx-resolution" style="width:150px"><option value="1">100%</option><option value="0.85">85%</option><option value="0.75">75%</option><option value="0.67">67%</option><option value="0.5">50%</option></select>
                     </div>
                     <div class="settings-row">
-                        <label for="setting-min-fps" title="Browsers may run the game at only 60 FPS (Edge and Chrome do in fullscreen). This draws extra frames in between, up to about 120 FPS, for more responsive input. It can cost some extra CPU.">120 FPS boost</label>
-                        <select id="setting-min-fps" style="width:150px"><option value="always">Always</option><option value="fullscreen">In fullscreen</option><option value="off">Off</option></select>
+                        <label for="setting-fps-target" title="Frame rate the game paces its frames to, set separately for each display. Auto: the refresh rate the browser runs this display at. If Auto shows more than the display really has (for example a 60 Hz display next to a 120 Hz one), pick the real rate here. Lower than the browser runs: frames are skipped evenly. Higher (for example Edge's 60 FPS fullscreen on a 120 Hz display): extra frames are drawn in between, as far as the frame cost allows.">Target FPS (this display)</label>
+                        <select id="setting-fps-target" style="width:150px"><option value="auto">Auto</option></select>
                     </div>
                 </div>
             </div>
@@ -626,11 +620,9 @@
             </div>
             <div id="bottom-bar">
                 <div class="bb-things-wrap">
-                    <div id="bb-things-label" title="Overall energy (top) and ★ (bottom) per second, over the last 10 s. Energy: income minus upkeep; ★: collected minus used moving."></div>
                     <div id="bb-things" class="bb-row" aria-label="Things"></div>
                 </div>
                 <div class="bb-research-wrap">
-                    <div id="bb-research-label" title="Research queue: the left-most item is being researched. Drag to reorder; drag a thing from the row above to insert upgrades."></div>
                     <div id="bb-research" class="bb-row" aria-label="Research queue"></div>
                 </div>
             </div>
@@ -659,6 +651,20 @@
                     <canvas id="minimapCanvas" width="160" height="160"></canvas>
                 </div>
                 <div id="shop-stats-container"></div>
+            </div>
+            <!-- Same height as #bottom-bar: resources + per-second deltas, then population + research count. -->
+            <div id="left-footer">
+                <div class="lf-row lf-resources">
+                    <div class="lf-stack">
+                        <span class="hud-energy" id="hud-energy"></span>
+                        <span class="hud-astar" id="hud-astar"></span>
+                    </div>
+                    <div id="bb-things-label" title="Overall energy (top) and &#9733; (bottom) per second, over the last 10 s. Energy: income minus upkeep; &#9733;: collected minus used moving."></div>
+                </div>
+                <div class="lf-row lf-pop">
+                    <span class="hud-pop" id="hud-pop"></span>
+                    <div id="bb-research-label" title="Research queue: the left-most item is being researched. Drag to reorder; drag a thing from the row above to insert upgrades."></div>
+                </div>
             </div>
         </div>
 
@@ -722,7 +728,7 @@
     <script src="./src/utils/utils_snapshot.js?v=20260927-laser"></script>
     <script src="./src/utils/utils_resync.js?v=20260928-reserve"></script>
     <script src="./src/utils/utils_host_migration.js?v=20260928-lateseal"></script>
-    <script src="./src/utils/utils_storage.js?v=20260930-fps120"></script>
+    <script src="./src/utils/utils_storage.js?v=20261001-loop2"></script>
 
     <script src="./src/data/data_static.js?v=20260926-netcode"></script>
     <script src="./src/data/data_dynamic.js?v=20260927-lod"></script>
@@ -736,10 +742,10 @@
     <script src="./src/audio_visual/renderer2d.js?v=20260927-dist"></script>
     <script src="./src/audio_visual/side_visualizations.js?v=20260925-crowd-perf"></script>
     <script src="./src/audio_visual/effects3d.js?v=20260927-lod"></script>
-    <script src="./src/audio_visual/renderer.js?v=20260930-fpsalways"></script>
+    <script src="./src/audio_visual/renderer.js?v=20261001-loop2"></script>
     <script src="./src/audio_visual/audio.js?v=20260927-dist"></script>
     <script src="./src/audio_visual/jukebox.js?v=20260921"></script>
-    <script src="./src/audio_visual/hud.js?v=20260930-deltacolor"></script>
+    <script src="./src/audio_visual/hud.js?v=20261001-loop2"></script>
     <script src="./src/audio_visual/bottom_bar.js?v=20260930-deltacolor"></script>
 
     <script src="./src/game/chunk.js?v=20260927-resync"></script>
@@ -755,7 +761,7 @@
     <script src="./src/things/things_utils.js?v=20260927-dist"></script>
     <script src="./src/things/tower.js?v=20260927-dist"></script>
 
-    <script src="./src/main.js?v=20260930-fpsalways"></script>
+    <script src="./src/main.js?v=20261001-loop2"></script>
 
     <script src="./src/bootstrap.js?v=20260924-settings"></script>
 </body>

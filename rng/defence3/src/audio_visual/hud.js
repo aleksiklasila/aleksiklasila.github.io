@@ -139,7 +139,8 @@ function _renderHudResource(el, cacheKey, owner, resourceKey, glyph, glyphColor,
     if (!Number.isFinite(numericValue)) numericValue = 0;
     let flooredValue = Math.floor(numericValue);
     let valueColor = _getHudResourceValueColor(owner, resourceKey, flooredValue);
-    let html = `<span class="hud-resource-glyph-btn" data-resource-key="${resourceKey}" title="Show ${resourceKey} stat effect details" style="color:${glyphColor};cursor:pointer;user-select:none">${glyph}</span> <span style="color:${valueColor}" title="${formatBigNumber(flooredValue)}">${formatCompactNumber(flooredValue)}</span>`;
+    // Value first, glyph after in a fixed slot (see #left-footer .lf-stack).
+    let html = `<span class="hud-res-value" style="color:${valueColor}" title="${formatBigNumber(flooredValue)}">${formatCompactNumber(flooredValue)}</span><span class="hud-resource-glyph-btn" data-resource-key="${resourceKey}" title="Show ${resourceKey} stat effect details" style="color:${glyphColor};cursor:pointer;user-select:none">${glyph}</span>`;
     if (_hudCache[cacheKey] !== html) {
         _hudCache[cacheKey] = html;
         el.innerHTML = html;
@@ -1460,8 +1461,7 @@ function updateHUD() {
     refreshResourcePenaltyPopupContent(localPlayerId);
     let playerCap = getPlayerPopCap(localPlayerId);
     let cfgCap = getConfiguredMaxPop();
-    let popText = `Pop: ${String(p.popCount)}/${String(playerCap)}/${String(cfgCap)}`;
-    if (_hudCache.popText !== popText) { _hudCache.popText = popText; _hudEls.pop.textContent = popText; }
+    _renderHudPop(p.popCount, playerCap, cfgCap);
     let secs = Math.floor(gameTime / TICK_RATE);
     if (_hudCache.time !== secs) { _hudCache.time = secs; let m = Math.floor(secs / 60), s = secs % 60; _hudEls.time.textContent = `${m}:${s.toString().padStart(2, '0')}`; }
     let netText = _hudNetText();
@@ -1471,6 +1471,44 @@ function updateHUD() {
         _hudCache.net = netText;
         _hudEls.fps.textContent = `${_fpsDisplay} FPS / ${_tpsDisplay} TPS${netText}`;
     }
+}
+
+// Pop: current / house capacity / max population.
+// Current pop is grey until it nears the max (orange from 80%, red from 95%).
+// House capacity is judged against the current pop: green while units can
+// still be produced, orange when almost full, red when houses block growth;
+// green again once houses reach the max. The max is green until reached.
+function _renderHudPop(pop, houseCap, maxPop) {
+    let key = `${pop}/${houseCap}/${maxPop}`;
+    if (_hudCache.popText === key) return;
+    _hudCache.popText = key;
+    let el = _hudEls.pop;
+    let popCls = pop >= maxPop * 0.95 ? 'pop-bad' : pop >= maxPop * 0.8 ? 'pop-warn' : 'pop-cur';
+    let housesMaxed = houseCap >= maxPop;
+    let free = houseCap - pop;
+    let capCls = housesMaxed ? 'pop-good' : free <= 0 ? 'pop-bad' : free < Math.max(5, pop * 0.1) ? 'pop-warn' : 'pop-good';
+    let maxCls = pop >= maxPop ? 'pop-bad' : 'pop-good';
+    let lines = [`Population: ${pop} units`, `Houses provide: ${houseCap}`, `Max population: ${maxPop}`, ''];
+    if (pop >= maxPop) lines.push('Max population reached: no new units until some are lost.');
+    else if (free <= 0) {
+        lines.push(pop > houseCap
+            ? `Over the house capacity by ${pop - houseCap}: no new units until you build or upgrade houses.`
+            : 'Houses are full: build more houses or upgrade houses to produce more units.');
+        lines.push(`Up to ${maxPop - houseCap} more capacity can still come from houses.`);
+    } else if (housesMaxed) lines.push(`Room for ${maxPop - pop} more units. Houses already cover the max population.`);
+    else {
+        lines.push(`Room for ${free} more units before houses are full.`);
+        if (capCls === 'pop-warn') lines.push('Almost full: build or upgrade houses soon.');
+    }
+    if (!el._tip) {
+        el.innerHTML = `<span class="pop-label">Pop </span><span class="pop-n"></span><span class="pop-sep">/</span><span class="pop-n"></span>`
+            + `<span class="pop-sep">/</span><span class="pop-n"></span><span class="lf-tip" role="tooltip"></span>`;
+        el._nums = el.querySelectorAll('.pop-n');
+        el._tip = el.querySelector('.lf-tip');
+    }
+    let vals = [[pop, popCls], [houseCap, capCls], [maxPop, maxCls]];
+    vals.forEach(([v, cls], i) => { el._nums[i].textContent = String(v); el._nums[i].className = 'pop-n ' + cls; });
+    el._tip.textContent = lines.join('\n');
 }
 
 // Online: the command delay. Pending orders and connection details are in

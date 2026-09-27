@@ -3134,20 +3134,24 @@ function updateAllPlayerVisibility() {
 }
 
 
-// Stagger periodic tasks so expensive refreshes don't bunch on one frame.
-function processVisibleSimulationFrame(timestamp) {
-    sendNetworkPings(timestamp);
+// Advances the simulation clock to `simTime` (frame-clock time) and runs the
+// ticks due by then. Network work uses the wall clock.
+function processVisibleSimulationFrame(simTime) {
+    let now = performance.now();
+    sendNetworkPings(now);
     if (document.hidden) {
-        _lastTickTime = timestamp;
+        _lastTickTime = simTime;
         return;
     }
 
     if (gameStarted && !gameOver) {
-        let dt = timestamp - _lastTickTime;
-        _lastTickTime = timestamp;
-        if (dt > 200) dt = 200; // cap to prevent spiral of death
-        _tickAccumulator += dt;
-        _tickAccumulator = pumpSimulationTicks(timestamp, _tickAccumulator, 5);
+        let dt = simTime - _lastTickTime;
+        if (dt > 0) {
+            _lastTickTime = simTime;
+            if (dt > 200) dt = 200; // cap to prevent spiral of death
+            _tickAccumulator += dt;
+        }
+        _tickAccumulator = pumpSimulationTicks(now, _tickAccumulator, 5);
     }
 }
 
@@ -3215,8 +3219,10 @@ function processRenderFrame(timestamp) {
         return;
     }
 
-    tickAlpha = Math.min(_tickAccumulator / TICK_MS, 1);
-    updateCamera();
+    // _frameSimLeadMs: how far this frame's time is past the simulation
+    // clock (the loop runs ticks after drawing, see _runLoopFrame).
+    tickAlpha = Math.max(0, Math.min((_tickAccumulator + _frameSimLeadMs) / TICK_MS, 1));
+    updateCamera(timestamp);
     let dpr = window.devicePixelRatio || 1;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     let renderer3dSnapshot = null;
@@ -3259,42 +3265,217 @@ function processRenderFrame(timestamp) {
     }
 }
 
+// FRAME LOOP
+// One steady frame clock drives drawing, camera and unit interpolation:
+// browser frames use the rAF timestamp (vsync aligned) and fill-in frames
+// (below) use evenly spaced slots between two browser frames. Camera and
+// units therefore move by the same amount every frame, even when a frame
+// starts a little late, which is what makes panning look locked.
+//
+// Game ticks run right after a frame is drawn, in their own task, for the
+// ticks due by the NEXT frame. A long tick then falls in the gap between
+// frames instead of delaying the frame that was about to be shown, and the
+// interpolation is exactly what running the tick before the next frame gives.
+//
 // Frames are always queued again, even after an error, so one bad frame
 // cannot freeze the game.
-// Frame times use performance.now(), not the rAF timestamp, because fill-in
-// frames (below) run between rAF callbacks and every clock must be monotonic.
-function simulationFrame() {
-    _simulationFrameHandle = 0;
-    try { processVisibleSimulationFrame(performance.now()); } catch (err) { reportRuntimeError('frame', err); }
-    queueSimulationFrame();
+function _scheduleSimulationUpTo(time) {
+    if (!(time > _simTargetTime)) return;
+    _simTargetTime = time;
+    if (_simTaskPosted) return;
+    _simTaskPosted = true;
+    _simChannel.port2.postMessage(0);
 }
 
-function renderFrame() {
-    _renderFrameHandle = 0;
+let _frameSimLeadMs = 0;
+let _frameClock = 0;
+let _rafLastTs = 0;
+let _rafIntervalMs = 1000 / 60;
+const _rafDeltas = [];
+let _simTargetTime = 0;
+let _simTaskPosted = false;
+const _simChannel = new MessageChannel();
+_simChannel.port1.onmessage = () => {
+    _simTaskPosted = false;
+    let t0 = performance.now();
+    try { processVisibleSimulationFrame(_simTargetTime); } catch (err) { reportRuntimeError('frame', err); }
+    let simMs = performance.now() - t0;
+    _simMsEma += (simMs - _simMsEma) * 0.1;
+};
+
+// Browser frame interval: median of the last 15 gaps, ignoring stalls.
+// Steady gaps also teach the display's refresh rate (see getDisplayRefreshRate).
+let _rafDisplayKey = '';
+
+function _noteRafTimestamp(ts) {
+    let key = _displayKey();
+    if (key !== _rafDisplayKey) {
+        // Another display: learn its frame interval afresh.
+        _rafDisplayKey = key;
+        _rafDeltas.length = 0;
+        _rafLastTs = 0;
+    }
+    if (_rafLastTs) {
+        let d = ts - _rafLastTs;
+        if (d > 2 && d < 60) {
+            _rafDeltas.push(d);
+            if (_rafDeltas.length > 15) _rafDeltas.shift();
+            let sorted = _rafDeltas.slice().sort((x, y) => x - y);
+            _rafIntervalMs = sorted[sorted.length >> 1];
+            if (sorted.length >= 15 && !document.hidden && sorted[11] - sorted[3] < _rafIntervalMs * 0.12) {
+                _learnDisplayRefreshRate(1000 / _rafIntervalMs);
+            }
+        }
+    }
+    _rafLastTs = ts;
+}
+
+function _runLoopFrame(time, nextTime) {
+    time = Math.max(time, _frameClock);
+    _frameClock = time;
     _lastRenderFrameAt = performance.now();
-    try { processRenderFrame(_lastRenderFrameAt); } catch (err) { reportRuntimeError('render', err); }
+    _frameSimLeadMs = gameStarted && !gameOver && !document.hidden ? Math.max(0, time - _lastTickTime) : 0;
+    try { processRenderFrame(time); } catch (err) { reportRuntimeError('render', err); }
+    _frameSimLeadMs = 0;
+    let renderMs = performance.now() - _lastRenderFrameAt;
+    _renderMsEma += (renderMs - _renderMsEma) * 0.1;
+    _scheduleSimulationUpTo(Math.max(time, nextTime));
+}
+
+let _frameCapCredit = 0;
+let _frameCapLastTs = 0;
+
+function _rafLoopFrame(ts) {
+    _renderFrameHandle = 0;
+    _noteRafTimestamp(ts);
     queueRenderFrame();
+    // Browser faster than the target (say 120 Hz, target 60): draw on the
+    // browser frames that keep the target pace, so every drawn frame is shown for
+    // the same number of refreshes. Credit follows the real frame times, so
+    // a browser frame delayed by a long tick does not shift the pace.
+    let targetMs = 1000 / getTargetFrameRate();
+    let gap = _frameCapLastTs ? ts - _frameCapLastTs : _rafIntervalMs;
+    _frameCapLastTs = ts;
+    if (_rafIntervalMs < targetMs * 0.9) {
+        _frameCapCredit = Math.min(_frameCapCredit + gap, targetMs * 2);
+        if (_frameCapCredit < targetMs - _rafIntervalMs * 0.5) return;
+        _frameCapCredit = Math.max(0, _frameCapCredit - targetMs);
+        _planFillInFrames(ts, 0);
+        _runLoopFrame(ts, ts + targetMs);
+        return;
+    }
+    _frameCapCredit = 0;
+    let slots = _planFillInFrames(ts);
+    _runLoopFrame(ts, ts + _rafIntervalMs / (slots + 1));
     scheduleFillInFrame();
+}
+
+// Draws one frame now (benchmarks and tools); the loop uses _rafLoopFrame.
+function renderFrame(timestamp) {
+    let t = Number.isFinite(timestamp) ? timestamp : performance.now();
+    _lastRenderFrameAt = performance.now();
+    try { processRenderFrame(t); } catch (err) { reportRuntimeError('render', err); }
 }
 
 // Browsers pace requestAnimationFrame to what they think the display runs at,
 // and Edge/Chrome drop it to 60 in fullscreen after a few seconds. When rAF
-// comes slower than MIN_RENDER_FRAME_RATE, extra frames run in between: at each
-// display refresh the newest frame is then fresher, so input feels as
-// responsive as at 120. With rAF already this fast, no extra frames run.
+// comes slower than the target FPS, extra frames run in between, evenly
+// spaced: at 60 Hz with a 120 target one frame goes exactly half way. The
+// count is the whole number of target frames that fit (60 -> 144 adds one,
+// 60 -> 240 adds three), so steps stay even. When rAF is faster than the
+// target, frames are skipped to keep the target pace instead.
 //
 // Timers are often only as precise as Windows' 15.6 ms tick (on battery for
 // example), too coarse to hit 8.3 ms gaps. Then the wait is a timer for the
 // part it can cover and MessageChannel hops (not clamped) for the rest, which
 // keeps the main thread polling part of the time; hence the setting.
-const MIN_RENDER_FRAME_RATE = 120;
-// 'always' (default): whenever the browser runs slower. 'fullscreen': only in
-// native fullscreen, where browsers drop to 60. 'off': browser frame rate only.
-let minFrameRateMode = 'always';
+//
+// Target (Settings > Target FPS): 'auto' follows the refresh rate of the
+// display the window is on, or a fixed common rate. The choice is kept per
+// display: browsers may run a 60 Hz display at another display's 120 Hz
+// (Chromium vsyncs to one display on some multi-monitor setups), which no web
+// API reveals, so picking 60 once on that display fixes it for good, while
+// other displays keep their own choice.
+const FPS_TARGET_CHOICES = [30, 50, 60, 72, 75, 90, 100, 120, 144, 165, 180, 240, 360];
+let fpsTargetByDisplay = {};
+function normalizeFpsTargetSetting(v) {
+    if (v === 'auto') return 'auto';
+    let n = Math.round(Number(v));
+    return FPS_TARGET_CHOICES.includes(n) ? n : 'auto';
+}
+
+function getFpsTargetSetting() {
+    let v = fpsTargetByDisplay[_displayKey()];
+    return v === undefined ? 'auto' : v;
+}
+
+function setFpsTargetSetting(v) {
+    v = normalizeFpsTargetSetting(v);
+    if (v === 'auto') delete fpsTargetByDisplay[_displayKey()];
+    else fpsTargetByDisplay[_displayKey()] = v;
+}
+
+function getTargetFrameRate() {
+    let v = getFpsTargetSetting();
+    return v === 'auto' ? getDisplayRefreshRate() : v;
+}
+
+// Display refresh rate, per display. Browsers slow rAF down (fullscreen,
+// battery saver, load) but never run it faster than the display, so the
+// fastest steady rate seen on a display is its refresh rate. Displays are told
+// apart by their screen geometry, which changes when the window moves to
+// another display, and the rates are remembered across page loads so
+// fullscreen right after loading still knows a 120 Hz display is 120 Hz.
+const LS_DISPLAY_RATES_KEY = 'defence3_display_rates_v1';
+const COMMON_REFRESH_RATES = [24, 30, 48, 50, 60, 72, 75, 85, 90, 100, 110, 120, 144, 160, 165, 170, 180, 200, 240, 280, 300, 360, 480];
+// Only real display rates (48 Hz and up) count: a steady low frame rate
+// under load says nothing about the display.
+const MIN_DISPLAY_RATE = 48;
+let _displayRates = (() => {
+    try {
+        let v = JSON.parse(localStorage.getItem(LS_DISPLAY_RATES_KEY) || '{}');
+        let out = {};
+        if (v && typeof v === 'object') for (let k in v) if (Number(v[k]) >= MIN_DISPLAY_RATE) out[k] = Number(v[k]);
+        return out;
+    } catch { return {}; }
+})();
+
+function _displayKey() {
+    let sc = window.screen || {};
+    return [sc.availLeft || 0, sc.availTop || 0, sc.width || 0, sc.height || 0, Math.round((window.devicePixelRatio || 1) * 100)].join(',');
+}
+
+function _snapRefreshRate(hz) {
+    let best = 0;
+    for (let r of COMMON_REFRESH_RATES) if (Math.abs(r - hz) <= r * 0.04 && (!best || Math.abs(r - hz) < Math.abs(best - hz))) best = r;
+    return best || Math.round(hz);
+}
+
+function _learnDisplayRefreshRate(hz) {
+    let key = _displayKey();
+    let rate = _snapRefreshRate(hz);
+    if (rate < MIN_DISPLAY_RATE || !(rate > (Number(_displayRates[key]) || 0))) return;
+    _displayRates[key] = rate;
+    try { localStorage.setItem(LS_DISPLAY_RATES_KEY, JSON.stringify(_displayRates)); } catch { }
+    if (typeof refreshFpsTargetAutoLabel === 'function') refreshFpsTargetAutoLabel();
+}
+
+// The learned rate of this display; 60 until one is learned. Never the
+// current frame rate itself: under load that drops, and a target following it
+// down would cap the frame rate lower and lower.
+function getDisplayRefreshRate() {
+    return Number(_displayRates[_displayKey()]) || 60;
+}
+
 let _lastRenderFrameAt = 0;
 let _fillInTimer = 0;
 let _fillInHopPending = false;
 let _timerGranularityMs = 16;
+// Fill-in slots after the latest browser frame: base time, spacing, next slot, slot count.
+let _fillInBase = 0;
+let _fillInSpacing = 0;
+let _fillInNext = 1;
+let _fillInCount = 0;
 const _fillInChannel = new MessageChannel();
 _fillInChannel.port1.onmessage = () => { _fillInHopPending = false; _fillInStep(); };
 
@@ -3311,20 +3492,45 @@ _fillInChannel.port1.onmessage = () => { _fillInHopPending = false; _fillInStep(
     setTimeout(step, 1);
 })();
 
+// Only the target FPS decides: fill-in frames run when it is above the
+// browser's frame rate (for example Edge's fullscreen 60 on a 120 Hz display).
 function _fillInFramesWanted() {
-    if (minFrameRateMode === 'off' || document.hidden || !gameStarted) return false;
-    return minFrameRateMode === 'always' || !!document.fullscreenElement;
+    return gameStarted && !document.hidden;
 }
 
-// A gap is filled once it is 1.2 frame intervals long (10 ms at 120): browser
-// frames at 120 Hz or faster never leave one, at 60 Hz one frame goes in each.
+// Plans the fill-in frames after the browser frame at `ts`; returns their count.
+// Recent cost of one frame and of the simulation work after it (ms).
+let _renderMsEma = 0;
+let _simMsEma = 0;
+
+// Fill-in frames are for a browser that throttles its frames (fullscreen
+// 60 on a faster display), never for frames that are slow because the game
+// is busy: extra frames would only slow it further. So none below 50 browser
+// FPS, and only as many as the measured frame cost leaves room for.
+function _planFillInFrames(ts, maxCount = 7) {
+    let count = 0;
+    if (_fillInFramesWanted() && _rafIntervalMs <= 20) {
+        // Never above the display's refresh rate: frames it cannot show only
+        // make the shown ones uneven (it shows whichever finished last).
+        let rate = Math.min(getTargetFrameRate(), getDisplayRefreshRate());
+        count = Math.max(0, Math.min(maxCount, Math.round(_rafIntervalMs * rate / 1000 + 0.05) - 1));
+        let perFrame = _renderMsEma + _simMsEma;
+        if (perFrame > 0) count = Math.min(count, Math.max(0, Math.floor(_rafIntervalMs * 0.7 / perFrame) - 1));
+    }
+    _fillInBase = ts;
+    _fillInCount = count;
+    _fillInSpacing = _rafIntervalMs / (count + 1);
+    _fillInNext = 1;
+    return count;
+}
+
 function _fillInDueAt() {
-    return _lastRenderFrameAt + 1.2 * (1000 / MIN_RENDER_FRAME_RATE);
+    return _fillInBase + _fillInNext * _fillInSpacing;
 }
 
 function scheduleFillInFrame() {
     if (_fillInTimer) { clearTimeout(_fillInTimer); _fillInTimer = 0; }
-    if (!_fillInFramesWanted()) return;
+    if (!_fillInFramesWanted() || _fillInNext > _fillInCount) return;
     let wait = _fillInDueAt() - performance.now();
     if (_timerGranularityMs <= 4) {
         // Precise timers: just sleep until due.
@@ -3339,12 +3545,16 @@ function scheduleFillInFrame() {
 
 function _fillInStep() {
     _fillInTimer = 0;
-    if (!_fillInFramesWanted()) return;
+    if (!_fillInFramesWanted() || _fillInNext > _fillInCount) return;
     let now = performance.now();
     if (now >= _fillInDueAt()) {
-        _lastRenderFrameAt = now;
-        try { processVisibleSimulationFrame(now); } catch (err) { reportRuntimeError('frame', err); }
-        try { processRenderFrame(now); } catch (err) { reportRuntimeError('render', err); }
+        // A slot missed by more than half a slot is skipped: the next one (or
+        // the next browser frame) shows the right moment instead.
+        while (_fillInNext <= _fillInCount && now > _fillInDueAt() + _fillInSpacing * 0.5) _fillInNext++;
+        if (_fillInNext > _fillInCount) return;
+        let time = _fillInDueAt();
+        _fillInNext++;
+        _runLoopFrame(time, time + _fillInSpacing);
         scheduleFillInFrame();
     } else if (_timerGranularityMs <= 4) {
         scheduleFillInFrame();
@@ -3355,6 +3565,15 @@ function _fillInStep() {
     }
 }
 
+// The simulation's own browser-frame loop: it keeps ticks going even when
+// no frame is drawn (and headless). It only schedules the tick task, which
+// runs after the frame is painted, like the one each drawn frame schedules.
+function simulationFrame(ts) {
+    _simulationFrameHandle = 0;
+    _scheduleSimulationUpTo(Number.isFinite(ts) ? ts : performance.now());
+    queueSimulationFrame();
+}
+
 function queueSimulationFrame() {
     if (_simulationFrameHandle) return;
     _simulationFrameHandle = requestAnimationFrame(simulationFrame);
@@ -3362,7 +3581,7 @@ function queueSimulationFrame() {
 
 function queueRenderFrame() {
     if (_renderFrameHandle) return;
-    _renderFrameHandle = requestAnimationFrame(renderFrame);
+    _renderFrameHandle = requestAnimationFrame(_rafLoopFrame);
 }
 
 function startMainThreadLoops() {

@@ -30,7 +30,9 @@ const context = vm.createContext({
     },
     window: { innerWidth: 1280, innerHeight: 720, addEventListener: noop, matchMedia: () => ({ matches: false }) },
     localStorage: { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value) },
-    Event: class { constructor(type) { this.type = type; } }, console, performance
+    Event: class { constructor(type) { this.type = type; } }, console, performance,
+    MessageChannel: class { constructor() { this.port1 = {}; this.port2 = { postMessage() {} }; } },
+    setTimeout: () => 0, clearTimeout: () => {}, requestAnimationFrame: () => 0
 });
 for (const [, file] of html.matchAll(/<script src="\.\/(src\/[^"?]+)(?:\?[^" ]*)?"/g)) {
     if (!file.endsWith('bootstrap.js')) vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context, { filename: file });

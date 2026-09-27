@@ -516,6 +516,14 @@ function createInstance(world, name, options = {}) {
         }
         terminate() { this._terminated = true; if (this._timer) this._timer.cancelled = true; }
     }
+    // The frame loop runs ticks in a MessageChannel task after each frame;
+    // messages are delivered on the virtual clock, right after the sender.
+    class HarnessMessageChannel {
+        constructor() {
+            const port1 = this.port1 = { onmessage: null };
+            this.port2 = { postMessage: data => sched.at(sched.now, () => { if (port1.onmessage) port1.onmessage({ data }); }, inst) };
+        }
+    }
     const consoleProxy = {
         log: (...a) => inst.logs.push(a), info: (...a) => inst.logs.push(a), debug: () => { },
         warn: (...a) => inst.warnings.push({ t: sched.now, a }),
@@ -529,13 +537,13 @@ function createInstance(world, name, options = {}) {
     }
     const factory = new Function(
         'window', 'document', 'localStorage', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval',
-        'requestAnimationFrame', 'cancelAnimationFrame', 'console', 'navigator', 'alert', 'confirm', 'prompt', 'Event', 'globalThis', 'location', 'Worker', 'Date', 'Math', 'DecompressionStream', 'sessionStorage',
+        'requestAnimationFrame', 'cancelAnimationFrame', 'console', 'navigator', 'alert', 'confirm', 'prompt', 'Event', 'globalThis', 'location', 'Worker', 'Date', 'Math', 'DecompressionStream', 'sessionStorage', 'MessageChannel',
         SOURCE + '\nlet __harnessValue;\nlet __hooks = null; let __cap = null; const __scratch = {};\n' + SETUP
     );
     inst.game = factory(window, document, localStorage, performance, setTimeoutFn, clearTimeoutFn, setIntervalFn, clearTimeoutFn,
         raf, () => { }, consoleProxy, window.navigator, () => { }, () => true, () => null, HarnessEvent, window, location, options.noWorker ? undefined : HarnessWorker, HarnessDate, options.foreignMath ? makeForeignMath() : Math,
         // { noDecompression: true } models an older browser without it.
-        options.noDecompression ? undefined : globalThis.DecompressionStream, sessionStorage);
+        options.noDecompression ? undefined : globalThis.DecompressionStream, sessionStorage, HarnessMessageChannel);
     inst.window = window;
     inst.document = document;
     inst.element = elementFor;
