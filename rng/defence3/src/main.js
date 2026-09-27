@@ -1077,7 +1077,7 @@ function initInput() {
 
         if (barracks.includes(sampleEntity)) {
             for (let b of barracks) {
-                if (!b || b.energy <= 0) continue;
+                if (!b || b.energy <= 0 || b.owner !== localPlayerId) continue;
                 if (b.unitType !== sampleEntity.unitType) continue;
                 if (!isTileVisible(b.gx, b.gy)) continue;
                 if (!isPointInView(b.x, b.y, 14, 0.12)) continue;
@@ -1088,7 +1088,7 @@ function initInput() {
 
         if (towers.includes(sampleEntity)) {
             for (let t of towers) {
-                if (!t || t.energy <= 0) continue;
+                if (!t || t.energy <= 0 || t.owner !== localPlayerId) continue;
                 if (t.type !== sampleEntity.type) continue;
                 if (!isTileVisible(t.gx, t.gy)) continue;
                 if (!isPointInView(t.x, t.y, 15, 0.18)) continue;
@@ -1099,7 +1099,7 @@ function initInput() {
 
         if (collectorSpawners.includes(sampleEntity)) {
             for (let s of collectorSpawners) {
-                if (!s || s.energy <= 0) continue;
+                if (!s || s.energy <= 0 || s.owner !== localPlayerId) continue;
                 if (s.type !== sampleEntity.type) continue;
                 if (!isTileVisible(s.gx, s.gy)) continue;
                 if (!isPointInView(s.x, s.y, 14, 0.14)) continue;
@@ -1109,16 +1109,14 @@ function initInput() {
         }
 
         let sampleType = sampleEntity.type;
-        for (let gy = 0; gy < GRID_H; gy++) {
-            for (let gx = 0; gx < GRID_W; gx++) {
-                if (!isTileVisible(gx, gy)) continue;
-                let cell = grid[gy][gx];
-                if (!cell || !cell.item || cell.item.energy <= 0) continue;
-                if (cell.item.type !== sampleType) continue;
-                if (!isPointInView(gx * TILE + TILE * 0.5, gy * TILE + TILE * 0.5, 14, 0.08)) continue;
-                cell.item._gx = gx; cell.item._gy = gy; cell.item._cell = cell;
-                out.push(cell.item);
-            }
+        for (let item of getCellItemsRowMajor()) {
+            let gx = item.gx, gy = item.gy;
+            let cell = grid[gy] && grid[gy][gx];
+            if (!cell || cell.item !== item || cell.owner !== localPlayerId || item.energy <= 0) continue;
+            if (item.type !== sampleType || !isTileVisible(gx, gy)) continue;
+            if (!isPointInView(gx * TILE + TILE * 0.5, gy * TILE + TILE * 0.5, 14, 0.08)) continue;
+            item._gx = gx; item._gy = gy; item._cell = cell;
+            out.push(item);
         }
         return out;
     }
@@ -1134,8 +1132,9 @@ function initInput() {
                 let groupSet = new Set(group);
                 selectedUnits = selectedUnits.filter(u => !groupSet.has(u));
             } else {
+                let selected = new Set(selectedUnits);
                 for (let u of group) {
-                    if (!selectedUnits.includes(u)) selectedUnits.push(u);
+                    if (!selected.has(u)) { selectedUnits.push(u); selected.add(u); }
                 }
             }
             return;
@@ -1149,8 +1148,9 @@ function initInput() {
                 let groupSet = new Set(group);
                 selectedEntities = selectedEntities.filter(ent => !groupSet.has(ent));
             } else {
+                let selected = new Set(selectedEntities);
                 for (let ent of group) {
-                    if (!selectedEntities.includes(ent)) selectedEntities.push(ent);
+                    if (!selected.has(ent)) { selectedEntities.push(ent); selected.add(ent); }
                 }
             }
         }
@@ -1634,6 +1634,7 @@ function initInput() {
         if (e.button === 0 && isBoxSelecting) {
             isBoxSelecting = false;
             let boxSelected = false;
+            let unchangedBoxSelection = false;
             if (selectionBox) {
                 let sx = Math.min(selectionBox.sx, selectionBox.ex);
                 let sy = Math.min(selectionBox.sy, selectionBox.ey);
@@ -1699,15 +1700,17 @@ function initInput() {
                         }
                         let minGx = Math.max(0, Math.floor(sx / TILE)), maxGx = Math.min(GRID_W - 1, Math.floor(ex / TILE));
                         let minGy = Math.max(0, Math.floor(sy / TILE)), maxGy = Math.min(GRID_H - 1, Math.floor(ey / TILE));
-                        for (let gy = minGy; gy <= maxGy; gy++) {
-                            for (let gx = minGx; gx <= maxGx; gx++) {
-                                if (!isTileVisible(gx, gy)) continue;
-                                let cell = grid[gy][gx];
-                                if (cell.item && cell.owner === localPlayerId && !newEntities.includes(cell.item)) {
-                                    cell.item._gx = gx; cell.item._gy = gy; cell.item._cell = cell;
-                                    newEntities.push(cell.item);
-                                }
-                            }
+                        let seenItems = new Set(newEntities);
+                        let items = getCellItemsRowMajor();
+                        for (let i = findCellItemRowStart(items, minGy); i < items.length; i++) {
+                            let item = items[i], gx = item.gx, gy = item.gy;
+                            if (gy > maxGy) break;
+                            if (gx < minGx || gx > maxGx || seenItems.has(item)) continue;
+                            let cell = grid[gy] && grid[gy][gx];
+                            if (!cell || cell.item !== item || cell.owner !== localPlayerId || !isTileVisible(gx, gy)) continue;
+                            item._gx = gx; item._gy = gy; item._cell = cell;
+                            newEntities.push(item);
+                            seenItems.add(item);
                         }
                         for (let m of goldMines) {
                             if (!isTileVisible(m.gx, m.gy)) continue;
@@ -1723,11 +1726,21 @@ function initInput() {
                         for (let u of newUnits) { if (!haveUnits.has(u)) selectedUnits.push(u); }
                         for (let ent of newEntities) { if (!haveEntities.has(ent)) selectedEntities.push(ent); }
                     } else {
-                        selectedUnits = newUnits;
-                        selectedEntities = newEntities;
+                        // Repeating the same drag should retain panel nodes and
+                        // their listeners. A fresh subgroup object forces a full
+                        // panel rebuild even when nothing actually changed.
+                        unchangedBoxSelection = selectedUnits.length === newUnits.length
+                            && selectedEntities.length === newEntities.length
+                            && selectedUnits.every((u, i) => u === newUnits[i])
+                            && selectedEntities.every((e, i) => e === newEntities[i])
+                            && !Object.values(activeSubGroups).some(value => value === false);
+                        if (!unchangedBoxSelection) {
+                            selectedUnits = newUnits;
+                            selectedEntities = newEntities;
+                        }
                     }
                 }
-                activeSubGroups = {};
+                if (!unchangedBoxSelection) activeSubGroups = {};
                 selectionBox = null;
                 selectionBoxScreen = null;
             }
@@ -1754,12 +1767,19 @@ function initInput() {
     });
 
     gameArea.addEventListener('wheel', (e) => {
+        if (!gameStarted || gameOver || !Number.isFinite(e.deltaY) || e.deltaY === 0) return;
+        e.preventDefault();
+        let minZoom = Math.max(viewW / WORLD_W, viewH / WORLD_H, 0.4);
+        let nextZoom = e.deltaY < 0 ? Math.min(MAX_CAMERA_ZOOM, camera.zoom * 1.2) : Math.max(minZoom, camera.zoom / 1.2);
+        // Trackpads keep emitting at the limit. Avoid two 3D projection/pick
+        // passes when the camera cannot zoom any further.
+        if (nextZoom === camera.zoom) return;
         // Zoom centered on mouse cursor position
-        let worldBeforeX = mouseWorldX;
-        let worldBeforeY = mouseWorldY;
         let rect = gameArea.getBoundingClientRect();
         let screenX = e.clientX - rect.left;
         let screenY = e.clientY - rect.top;
+        let worldBeforeX = camera.x + screenX / camera.zoom;
+        let worldBeforeY = camera.y + screenY / camera.zoom;
         let worldBefore3D = null;
         if (renderDimensionMode === '3d' && renderer3dInstance && typeof renderer3dInstance.buildViewProjection === 'function' && typeof renderer3dInstance.screenToGround === 'function') {
             renderer3dInstance.buildViewProjection(get3DProjectionSnapshot());
@@ -1768,9 +1788,7 @@ function initInput() {
                 worldBefore3D = { x: pickedBefore.x * TILE, y: pickedBefore.y * TILE };
             }
         }
-        let minZoom = Math.max(viewW / WORLD_W, viewH / WORLD_H, 0.4);
-        if (e.deltaY < 0) camera.zoom = Math.min(MAX_CAMERA_ZOOM, camera.zoom * 1.2);
-        else camera.zoom = Math.max(minZoom, camera.zoom / 1.2);
+        camera.zoom = nextZoom;
         if (renderDimensionMode !== '3d') {
             // Keep 2D zoom centered on the cursor.
             camera.x = worldBeforeX - screenX / camera.zoom;
@@ -1784,7 +1802,7 @@ function initInput() {
             }
         }
         clampCamera();
-    });
+    }, { passive: false });
 
     minimapCanvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -1896,10 +1914,11 @@ function initInput() {
         }
     });
     document.addEventListener('keyup', (e) => { keysDown[e.key.toLowerCase()] = false; });
-    window.addEventListener('blur', () => { keysDown = {}; stopBuildPlacementDrag(); });
+    window.addEventListener('blur', () => { keysDown = {}; renderer3dRotateDrag = null; stopBuildPlacementDrag(); });
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
             keysDown = {};
+            renderer3dRotateDrag = null;
             stopBuildPlacementDrag();
         }
     });

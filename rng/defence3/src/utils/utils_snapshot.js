@@ -54,7 +54,7 @@ const SNAP_SKIP_KEYS = new Set([
     'textCtx', 'textCanvas', '_textCanvasScale', '_levelTextLabel', 'prevX', 'prevY',
     '_spatialKey', '_spatialAreaId', '_spatialAreaOwner', '_spatialUnitTypeIdx', '_spatialLastVisScaled',
     '_damageFlashStart', '_damageFlashUntil', '_damageFlashStrength', '_damageFlashColor', '_ambientSoundTicks',
-    '_historyGhost', '_historyTick', '_droppedIndex', '_areaBucketId'
+    '_historyGhost', '_historyTick', '_droppedIndex', '_areaBucketId', '_laserLinkLevel'
 ]);
 
 // Lists: P players, u units, t towers, b barracks, s spawners, f floor

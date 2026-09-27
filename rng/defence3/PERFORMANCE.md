@@ -402,7 +402,7 @@ forever without striking, and an unseen attacker could not be answered.
   now keeps that result when it has one and otherwise searches the other
   tiles in range, nearest first. (A full nearest-overall search diverged a
   repaired peer in `multiplayer-chaos-determinism`; the fallback form keeps
-  the original choice whenever one exists.)
+the original choice whenever one exists.)
 
 `.claude/combatbench.js` runs 1v1, 1v3, same-area, border and 10v10 fights;
 `tests/multiplayer-border-combat.test.cjs` checks the border fight in

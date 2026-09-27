@@ -64,6 +64,8 @@ class Tower {
         this.cd = 0; this.angle = 0;
         this.connectedLasers = [];
         this.laserState = 0; this.laserTimer = 0;
+        // effectiveLevel the current connectedLasers were computed with.
+        this._laserLinkLevel = -1;
         this.markedForSalvage = false;
         this.autoUpgradeEnabled = true;
         this.buildEnabled = true;
@@ -119,6 +121,10 @@ class Tower {
         if (this.type.startsWith('cloud')) return;
 
         if (this.type === 'laser') {
+            // Beam reach depends on effectiveLevel, which is 0 while under
+            // construction and changes with adjacency/upgrades. Relink when it
+            // moves so a finished tower connects without another placement.
+            if (this._laserLinkLevel !== this.effectiveLevel) recalculateLaserConnections();
             this.laserState = 0;
             for (let other of this.connectedLasers) {
                 if (this.gx < other.gx || (this.gx === other.gx && this.gy < other.gy)) {
@@ -150,9 +156,11 @@ class Tower {
                             }
                         }
                     }
-                    // Check Buildings - iterate in deterministic ID order
+                    // Keep list priority and stable ID order, but only sort
+                    // buildings in the beam's narrow strip. The shared spatial
+                    // index refreshes after same-tick placement/destruction.
                     for (let list of [towers, barracks, collectorSpawners]) {
-                        let sortedList = [...list].sort((a, b) => (a.id || 0) - (b.id || 0));
+                        let sortedList = getLaserStructureCandidates(list, sx, sy, ex, ey);
                         for (let b of sortedList) {
                             if (b.owner === this.owner || b.energy <= 0) continue;
                             let hit = false;

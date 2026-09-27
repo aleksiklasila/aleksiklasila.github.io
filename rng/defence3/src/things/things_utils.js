@@ -4,7 +4,7 @@
 // ADJACENCY & LASER CONNECTIONS
 // ============================================================
 function recalculateLaserConnections() {
-    towers.forEach(t => { if (t.type === 'laser') t.connectedLasers = []; });
+    towers.forEach(t => { if (t.type === 'laser') { t.connectedLasers = []; t._laserLinkLevel = t.effectiveLevel; } });
     for (let i = 0; i < towers.length; i++) {
         let t1 = towers[i]; if (t1.type !== 'laser') continue;
         for (let j = i + 1; j < towers.length; j++) {

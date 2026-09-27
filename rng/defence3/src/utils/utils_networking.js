@@ -3359,21 +3359,29 @@ function _armMatchStartReadyTimeout(sessionId) {
 }
 
 function readConfigFromMenu() {
+    // Zero is a valid resource configuration. Only missing/invalid input uses
+    // the fallback; truthiness silently restored mines and starting resources.
+    let readResource = (id, fallback, integer = true) => {
+        let el = document.getElementById(id);
+        let raw = el ? String(el.value).trim() : '';
+        let value = raw === '' ? NaN : Number(raw);
+        return Number.isFinite(value) ? Math.max(0, integer ? Math.floor(value) : value) : fallback;
+    };
     let size = parseInt(document.getElementById('cfg-mapsize').value) || 80;
     GRID_W = size; GRID_H = size;
     WORLD_W = GRID_W * TILE; WORLD_H = GRID_H * TILE;
-    GOLD_MINE_COUNT = parseInt(document.getElementById('cfg-gold-count').value) || 18;
-    GOLD_MINE_MIN = parseInt(document.getElementById('cfg-gold-min').value) || 500;
-    GOLD_MINE_MAX = parseInt(document.getElementById('cfg-gold-max').value) || 1500;
-    ASTAR_MINE_COUNT = Math.max(0, Math.floor(parseInt((document.getElementById('cfg-astar-mine-count') || {}).value) || ASTAR_MINE_COUNT));
-    ASTAR_MINE_MIN = Math.max(0, Math.floor(parseInt((document.getElementById('cfg-astar-mine-min') || {}).value) || ASTAR_MINE_MIN));
-    ASTAR_MINE_MAX = Math.max(ASTAR_MINE_MIN, Math.floor(parseInt((document.getElementById('cfg-astar-mine-max') || {}).value) || ASTAR_MINE_MAX));
+    GOLD_MINE_COUNT = readResource('cfg-gold-count', 18);
+    GOLD_MINE_MIN = readResource('cfg-gold-min', 500);
+    GOLD_MINE_MAX = Math.max(GOLD_MINE_MIN, readResource('cfg-gold-max', 1500));
+    ASTAR_MINE_COUNT = readResource('cfg-astar-mine-count', ASTAR_MINE_COUNT);
+    ASTAR_MINE_MIN = readResource('cfg-astar-mine-min', ASTAR_MINE_MIN);
+    ASTAR_MINE_MAX = Math.max(ASTAR_MINE_MIN, readResource('cfg-astar-mine-max', ASTAR_MINE_MAX));
     fullVisibility = document.getElementById('cfg-full-vis').value === 'full';
     teamVisibilityHistory = document.getElementById('cfg-full-vis').value === 'history';
     gameMode = document.getElementById('cfg-gamemode').value || 'destroy';
     CONFIG_MAX_POP = Math.max(1, Math.floor(parseInt(document.getElementById('cfg-max-pop').value) || 200));
-    STARTING_MONEY = Math.max(0, Math.floor(parseInt(document.getElementById('cfg-starting-energy').value) || 2000));
-    STARTING_ASTAR = Math.max(0, Number((document.getElementById('cfg-starting-astar') || {}).value) || STARTING_ASTAR);
+    STARTING_MONEY = readResource('cfg-starting-energy', 2000);
+    STARTING_ASTAR = readResource('cfg-starting-astar', STARTING_ASTAR, false);
     MAP_TYPE = document.getElementById('cfg-map-type').value || 'random';
     THING_STATS_RECALC_INTERVAL_SECONDS = Math.max(0.05, Math.min(600, Number((document.getElementById('cfg-thing-stats-seconds') || {}).value) || THING_STATS_RECALC_INTERVAL_SECONDS));
     UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(document.getElementById('cfg-unit-eff-stats-ticks').value) || 5)));
