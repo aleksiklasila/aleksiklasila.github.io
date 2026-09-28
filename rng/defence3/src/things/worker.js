@@ -111,7 +111,8 @@ function updateWorkerAI(u) {
         u.pathIsFallbackAstar = false;
         u.targetPos = null;
         u._manualMoveIssuedTick = 0;
-        u._workerNextIdleRetargetTick = gameTime + getWorkerIdleRetargetTicks();
+        // The player sent it here: it looks for work at once.
+        u._workerNextIdleRetargetTick = gameTime;
         u.workerState = 'IDLE';
         u.commandState = CMD_IDLE;
     };
@@ -1792,13 +1793,26 @@ function getWorkerIdleRetargetTicks() {
     return Math.max(30, Math.floor(TICK_RATE * 3));
 }
 
+// An idle worker's periodic search: on every k-th heavy AI tick, about
+// every half second.
+function getWorkerIdleSearchTicks() {
+    return Math.max(1, Math.round(TICK_RATE / 2));
+}
+
 function shouldRunWorkerIdleRetarget(u, canRunHeavyAi) {
     if (!u) return false;
     let interval = getWorkerIdleRetargetTicks();
+    // A new worker (no schedule yet) looks at once.
     if (!Number.isFinite(u._workerNextIdleRetargetTick)) {
         u._workerNextIdleRetargetTick = gameTime + interval;
+        return true;
     }
-    if (canRunHeavyAi) {
+    // An idle worker with nothing found looks again on its staggered idle
+    // search tick (about twice a second), not on every heavy AI tick: a
+    // worker that finishes a task searches at once anyway, and commands
+    // force a search through _workerNextIdleRetargetTick.
+    let delay = Math.max(1, Math.floor(Number(WORKER_AI_TICK_DELAY) || 1));
+    if (canRunHeavyAi && (Math.floor((gameTime + u.id) / delay) % Math.ceil(getWorkerIdleSearchTicks() / delay)) === 0) {
         u._workerNextIdleRetargetTick = gameTime + interval;
         return true;
     }
@@ -2208,8 +2222,27 @@ function _astarCollectorFindTarget(u) {
 }
 
 // Salvager: find nearest marked building
+// Whether the owner has anything marked for salvage (towers, barracks,
+// spawners, cell items), once per tick: most searches find nothing.
+let _salvageMarksCache = { tick: -1, owners: new Set() };
+function _ownerHasSalvageMarks(owner) {
+    let c = _salvageMarksCache;
+    if (c.tick !== gameTime) {
+        c.tick = gameTime;
+        c.owners = new Set();
+        let add = e => { if (e && e.markedForSalvage) c.owners.add(e.owner); };
+        for (let t of towers) add(t);
+        for (let b of barracks) add(b);
+        for (let s of collectorSpawners) add(s);
+        if (typeof _activeTileEntities !== 'undefined') for (const item of _activeTileEntities) add(item);
+        else for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) { let cell = grid[y][x]; if (cell && cell.item && cell.item.markedForSalvage) c.owners.add(cell.owner); }
+    }
+    return c.owners.has(owner);
+}
+
 function _salvagerFindTarget(u, myGx, myGy) {
     let owner = u.owner;
+    if (!_ownerHasSalvageMarks(owner)) { u.workerState = 'IDLE'; u.commandState = CMD_IDLE; return; }
     let maxSearch = _getWorkerAutoSearchDistancePx(u);
     let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     let bestDist = 99999, bestItem = null;
@@ -2685,9 +2718,10 @@ function _findNearestQueuedSpawnerNeedingWork(u, originX = u.x, originY = u.y) {
     let candidates = [];
     let maxSearch = _getWorkerAutoSearchDistancePx(u);
     let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
-    // The owner's barracks then spawners (same order as the full lists);
-    // the cheap distance test first (the queue test has no side effects).
-    for (let s of _ownedQueueSpawners(u.owner)) {
+    // The owner's barracks then spawners near enough (in the full lists'
+    // order); the cheap distance test first (the queue test has no side
+    // effects).
+    for (let s of _ownedQueueSpawnersNear(u.owner, originX, originY, maxSearch)) {
         let d = detHypot(s.x - originX, s.y - originY);
         if (d > maxSearch) continue;
         if (!_isHealerQueueTarget(s, u.owner)) continue;
@@ -2719,6 +2753,39 @@ function _ownedQueueSpawners(owner) {
         for (let s of collectorSpawners) add(s);
     }
     return c.byOwner.get(owner) || [];
+}
+
+// Those of _ownedQueueSpawners(owner) whose position is within `range` of
+// (x, y) on both axes (maybe a few more), in the same order. Buckets of
+// QUEUE_SPAWNER_BUCKET tiles, built with the per-tick list.
+const QUEUE_SPAWNER_BUCKET = 8;
+function _ownedQueueSpawnersNear(owner, x, y, range) {
+    let list = _ownedQueueSpawners(owner);
+    if (list.length < 32) return list;
+    let size = QUEUE_SPAWNER_BUCKET * TILE;
+    let idx = list._buckets;
+    if (!idx) {
+        idx = list._buckets = new Map();
+        for (let i = 0; i < list.length; i++) {
+            let s = list[i];
+            let key = Math.floor((Number(s.y) || 0) / size) * 4096 + Math.floor((Number(s.x) || 0) / size);
+            let b = idx.get(key);
+            if (!b) idx.set(key, b = []);
+            b.push(i);
+        }
+    }
+    let x0 = Math.floor((x - range) / size), x1 = Math.floor((x + range) / size);
+    let y0 = Math.floor((y - range) / size), y1 = Math.floor((y + range) / size);
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) > idx.size) return list;
+    let hits = [];
+    for (let by = y0; by <= y1; by++) for (let bx = x0; bx <= x1; bx++) {
+        let b = idx.get(by * 4096 + bx);
+        if (b) for (let i of b) hits.push(i);
+    }
+    hits.sort((a, b) => a - b);
+    let out = new Array(hits.length);
+    for (let k = 0; k < hits.length; k++) out[k] = list[hits[k]];
+    return out;
 }
 
 function _isResearcherTargetBuilding(target, owner) {

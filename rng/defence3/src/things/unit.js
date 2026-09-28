@@ -62,6 +62,8 @@ function getLaserStructureCandidates(list, sx, sy, ex, ey) {
 // Preserve list order, strict distance ties and lazy visibility snapshot timing.
 // The raw grid is immutable for this tick; resolve it once per scan rather than
 // repeating player normalization and cache lookups for every building.
+// Stand-in grid for full map visibility (every tile visible).
+const _FULL_VIS_ROWS = { length: -1 };
 function _findClosestHostileStructure(unit, firstList, range, secondList = null, acceptsTarget = null) {
     let closest = null;
     let bestDistance = range;
@@ -83,12 +85,14 @@ function _findClosestHostileStructure(unit, firstList, range, secondList = null,
             }
             if (witness) index.witnesses.set(unit.owner, witness);
         }
+        // Full map visibility: nothing is hidden (as isTileActuallyVisibleToPlayer).
+        if (!vis && witness && typeof matchFullVisibility !== 'undefined' && matchFullVisibility) vis = _FULL_VIS_ROWS;
         if (!vis && witness) {
             let owner = Math.floor(Number(unit.owner));
             if (!Number.isFinite(owner) || owner < 0) owner = localPlayerId;
             vis = getRawVisibilityGridForPlayer(owner);
         }
-        if (!vis || vis.length !== GRID_H || !(bestDistance > 0)) continue;
+        if (!vis || (vis !== _FULL_VIS_ROWS && vis.length !== GRID_H) || !(bestDistance > 0)) continue;
         let bestOrder = Infinity;
         const stride = Math.ceil(GRID_W / 4) + 1;
         const minX = Math.max(0, Math.floor((unit.x - bestDistance) / index.size));
@@ -104,7 +108,7 @@ function _findClosestHostileStructure(unit, firstList, range, secondList = null,
             if (acceptsTarget && !acceptsTarget(target)) continue;
             let dx = target.x - unit.x, dy = target.y - unit.y;
             if (Math.abs(dx) > bestDistance || Math.abs(dy) > bestDistance) continue;
-            if (!vis[gy] || !(vis[gy][gx] > 0)) continue;
+            if (vis !== _FULL_VIS_ROWS && (!vis[gy] || !(vis[gy][gx] > 0))) continue;
             let distance = detHypot(dx, dy);
             if (distance < bestDistance || (distance === bestDistance && bestOrder !== Infinity && order < bestOrder)) {
                 bestDistance = distance; closest = target; bestOrder = order;
@@ -326,6 +330,7 @@ class Unit {
         this.x = x; this.y = y;
         this.prevX = x; this.prevY = y;
         this._sepI = -1;   // index in the separation pass (per tick)
+        this._simEnc = null;   // simulation worker: what the page was last sent (sim_delta.js)
         this.teleportHideTicks = 0;
 
         let s = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm;
@@ -609,7 +614,11 @@ class Unit {
             this.pickScoutDestination();
             return;
         }
-        // Auto-aggro nearby enemies
+        // Auto-aggro nearby enemies: idle units look on every other tick
+        // (staggered by id; 100 ms at 20 ticks a second).
+        // (Resuming an attack-move and the structure check below wait for
+        // the unit's scanning tick too.)
+        if (((gameTime + this.id) & 1) !== 0) return;
         let aggroRange = Math.max(TILE, this.preComputed.visionRange * TILE);
         let closest = _findClosestEnemyUnitByChunks(this.owner, this.x, this.y, aggroRange);
         if (closest) {

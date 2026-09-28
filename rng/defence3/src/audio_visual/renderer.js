@@ -2341,7 +2341,8 @@ function build3DFrameData(flat2d = false) {
         // A tick frame also builds the unit layer: the structures keep the
         // previous tick's layer for this one frame and rebuild on the next,
         // so the two builds do not share a frame.
-        if (!staticReuse && sameView && layerBuilding && S.tick === gameTime - 1) staticReuse = true;
+        // (Ticks may come in groups: any older layer.)
+        if (!staticReuse && sameView && layerBuilding && S.tick < gameTime) staticReuse = true;
         if (staticReuse) staticLayer = S;
         else {
             let mx = Math.max(4, Math.ceil((bounds.maxGx - bounds.minGx) * 0.3)), my = Math.max(4, Math.ceil((bounds.maxGy - bounds.minGy) * 0.3));
@@ -3681,7 +3682,20 @@ function updateVisibility(playerId) {
     visibilityGrid = updateVisualVisibility(targetPlayerId, getRawVisibilityGridForPlayer(targetPlayerId));
 }
 
+// Full map visibility: gameplay treats every tile as visible, so the grids
+// only light the local player's view; that one is refreshed every
+// FULL_VIS_GRID_TICKS ticks.
+const FULL_VIS_GRID_TICKS = 4;
 function updateAllPlayerVisibility() {
+    if (matchFullVisibility) {
+        let pid = Math.floor(Number(localPlayerId)) || 0;
+        if (!Array.isArray(visibilityGridByPlayer) || visibilityGridByPlayer.length < players.length) {
+            visibilityGridByPlayer = Array.from({ length: players.length }, () => []);
+        }
+        let stamp = visibilityGridStampByPlayer.get(pid);
+        if (stamp === undefined || gameTime - stamp >= FULL_VIS_GRID_TICKS || stamp > gameTime) visibilityGridByPlayer[pid] = getRawVisibilityGridForPlayer(pid) || [];
+        return;
+    }
     let seen = new Set();
     let ids = [];
     let pushId = (value) => {
@@ -3768,7 +3782,7 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
         // Simulation worker: a few ticks may be in flight; beyond that the
         // page waits for results rather than queueing more.
         let inWorker = typeof simClientActive === 'function' && simClientActive();
-        if (inWorker && simClientInFlight() >= SIM_CLIENT_MAX_IN_FLIGHT + (catchUp > 0 ? 2 : 0)) {
+        if (inWorker && simClientInFlight() >= simClientMaxInFlight() + (catchUp > 0 ? 2 : 0)) {
             if (due) accumulator = Math.min(accumulator, TICK_MS);
             break;
         }

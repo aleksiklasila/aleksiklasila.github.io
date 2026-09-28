@@ -474,6 +474,11 @@ function createInstance(world, name, options = {}) {
     // Simulation worker mode for the whole world (or SIM_WORKER=1).
     // Explicit either way (the page's default is the worker).
     location.searchParams.set('simworker', (world.simWorker || process.env.SIM_WORKER === '1') && options.simWorker !== false ? '1' : '0');
+    // Ticks per worker result: 1 unless SIM_STRIDE says otherwise (tests
+    // read the page's state after given ticks, which grouped results only
+    // leave current at a group's last tick). SIM_WORKER_VERIFY compares after
+    // every tick.
+    location.searchParams.set('simstride', process.env.SIM_WORKER_VERIFY === '1' ? '1' : (process.env.SIM_STRIDE || '1'));
     const window = {
         innerWidth: 1280, innerHeight: 720, devicePixelRatio: 1,
         addEventListener: (type, fn) => { (inst.winListeners[type] ||= []).push(fn); }, removeEventListener: () => { },
@@ -567,8 +572,11 @@ function createInstance(world, name, options = {}) {
             const data = structuredClone(msg);
             // The page lists no script tags here: one entry loads them all.
             if (data && data.type === 'load' && !(data.scripts && data.scripts.length)) data.scripts = ['harness:all'];
+            // Tests compare every tick: each tick's lockstep hash, and the
+            // page's copy exact after every result.
             sched.at(sched.now, () => {
                 if (this._terminated || !this._sandbox.onmessage) return;
+                if (data && data.type === 'start') { try { vm.runInContext('simReportLockstepHashes = true; simDeltaAlwaysFull = true;', this._ctx); } catch (err) { inst.errors.push(err); } }
                 this._sandbox.onmessage({ data });
             }, inst);
         }
@@ -661,10 +669,10 @@ function createInstance(world, name, options = {}) {
             return r;
         };
         const __simActs = new Map();
-        simClientTickAppliedHook = (tick) => {
+        simClientTickAppliedHook = (tick, lockHash, current) => {
             const acts = __simActs.get(tick) || [];
             __simActs.delete(tick);
-            __harnessHooks.afterTick(tick, acts);
+            __harnessHooks.afterTick(tick, acts, lockHash, current);
             __harnessHooks.verify(tick);
         };
         const __origApply = applyAuthoritativeStateSnapshot;
@@ -739,7 +747,8 @@ function attachHooks(world, inst) {
         verify: tick => {
             if (process.env.SIM_WORKER_VERIFY !== '1') return;
             // One tick in flight, so the worker is exactly at this tick.
-            if (!inst.simVerifyArmed) { inst.simVerifyArmed = true; inst.eval('simClientInFlight = () => _simClient.inFlight ? 99 : 0'); }
+            // Every tick a full one (the copy is exact after each).
+            if (!inst.simVerifyArmed) { inst.simVerifyArmed = true; inst.eval('simClientInFlight = () => _simClient.inFlight ? 99 : 0'); if (inst.simWorker) inst.simWorker.eval('simDeltaAlwaysFull = true'); }
             simVerifyTick(inst, tick);
         },
         dispatched: tick => {
@@ -747,7 +756,9 @@ function attachHooks(world, inst) {
             const scripts = world.tickScripts.get(tick);
             return scripts ? scripts.filter(s => s.session === null || s.session === session).map(s => s.code) : [];
         },
-        afterTick: (tick, acts) => {
+        // Worker: lockHash is the worker's lockstep hash of that tick; the
+        // page's copy is current only on a group's last tick (current).
+        afterTick: (tick, acts, lockHash, current = true) => {
             // Scripted setup, applied on every peer after the same tick.
             // Only in the match it was scheduled in (a rematch counts its
             // ticks from zero again).
@@ -763,13 +774,14 @@ function attachHooks(world, inst) {
             const scripts = world.tickScripts.get(tick);
             if (scripts) for (const s of scripts) if (s.session === null || s.session === session) inst.eval(s.code);
             if (tick % world.hashEvery === 0) {
-                if (world.recordParts) {
+                if (lockHash !== undefined && (!world.recordParts || !current)) inst.tickHashes.set(tick, lockHash);
+                else if (world.recordParts) {
                     const r = JSON.parse(inst.eval('(() => { const p = {}; const h = computeLockstepStateHashFast(' + tick + ', p); return JSON.stringify([h, p]); })()'));
                     inst.tickHashes.set(tick, r[0]);
                     (inst.tickParts ||= new Map()).set(tick, r[1]);
                 } else inst.tickHashes.set(tick, inst.eval('computeLockstepStateHashFast(' + tick + ')'));
             }
-            if (world.exactHashes) (inst.tickExact ||= new Map()).set(tick, inst.eval('__exactStateHash()'));
+            if (world.exactHashes && current) (inst.tickExact ||= new Map()).set(tick, inst.eval('__exactStateHash()'));
             // DUMP_TICKS=a-b: every unit's fields at those ticks, compared
             // between peers when the process exits (debugging divergences).
             if (process.env.DUMP_TICKS) {

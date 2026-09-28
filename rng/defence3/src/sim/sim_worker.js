@@ -172,7 +172,12 @@ self.onmessage = (ev) => {
             _simStart(msg);
         } else if (msg.type === 'tick') {
             _simTick(msg);
+        } else if (msg.type === 'flush') {
+            _simFlushOut();
         } else if (msg.type === 'request') {
+            // Requests see (and may change) the state the page has: the
+            // ticks run so far go out first.
+            _simFlushOut();
             _simRequest(msg);
         }
     } catch (err) { _simError(msg.type, err); }
@@ -197,6 +202,7 @@ function _simStart(msg) {
     for (let [name, value] of Object.entries(g.assign || {})) self.eval(name + ' = ' + JSON.stringify(value));
     applyAuthoritativeStateSnapshot(JSON.parse(msg.snapshotText));
     _simEvents = [];
+    _simPend = null;
     if (_simMode === 'authority') simDeltaEncoderReset();
     _simPost({ type: 'started', epoch: _simEpoch, tick: currentTick, hash: computeLockstepStateHashFast(currentTick) });
 }
@@ -230,6 +236,31 @@ function _simTick(msg) {
     }
     // The rolling state hash, as every peer records it after a tick.
     let hash = msg.hash ? snapRecordTickHash(tick) : null;
+    let P = _simPend || (_simPend = { first: tick, hashes: [], lock: simReportLockstepHashes ? [] : null, simMs: 0 });
+    P.hashes.push(hash);
+    if (P.lock) P.lock.push(computeLockstepStateHashFast(tick));
+    P.simMs += simMs;
+    // The page groups ticks (out: false on all but a group's last): one
+    // result per group halves or more the encoding and the page's work.
+    if (msg.out === false) return;
+    _simFlushOut();
+}
+
+// Ticks run but not yet sent to the page.
+let _simPend = null;
+// Tests: each tick's lockstep hash goes out too (the page's copy is only
+// current at a group's last tick).
+let simReportLockstepHashes = false;
+
+// The result of the ticks run since the last one: the changes over all of
+// them, their hashes and events, and the current visuals.
+function _simFlushOut() {
+    let P = _simPend;
+    if (!P || _simMode !== 'authority') { _simPend = null; return; }
+    _simPend = null;
+    let tick = currentTick - 1;
+    let hash = P.hashes[P.hashes.length - 1];
+    let simMs = P.simMs;
     let t1 = performance.now();
     let delta = simDeltaEncode();
     let transfer = [];
@@ -238,7 +269,7 @@ function _simTick(msg) {
     _simEvents = [];
     // Per-unit visual records for the page's 3D unit layer.
     let vis = null;
-    try { vis = simUnitVisEncode(); transfer.push(vis.buffer); } catch (err) { _simError('vis', err); }
+    try { vis = simUnitVisEncode(P.hashes.length); transfer.push(vis.buffer); } catch (err) { _simError('vis', err); }
     // The local player's raw visibility grid (computed here anyway): the
     // page uses it instead of computing its own.
     let sight = null;
@@ -248,7 +279,7 @@ function _simTick(msg) {
         for (let y = 0; y < GRID_H; y++) if (rows[y]) sight.set(rows[y], y * GRID_W);
         transfer.push(sight.buffer);
     } catch (err) { sight = null; _simError('sight', err); }
-    _simPost({ type: 'ticked', epoch: _simEpoch, tick, delta, hash, events, vis, sight, sightPlayer: localPlayerId, simMs, encodeMs: performance.now() - t1 }, transfer);
+    _simPost({ type: 'ticked', epoch: _simEpoch, tick, first: P.first, count: P.hashes.length, delta, hash, hashes: P.hashes, lockHashes: P.lock, events, vis, sight, sightPlayer: localPlayerId, simMs, encodeMs: performance.now() - t1 }, transfer);
 }
 
 // ---- requests the page's network code needs in tick order ----

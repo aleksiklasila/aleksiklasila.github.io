@@ -31,15 +31,18 @@ const simClientEnabled = (() => {
 let _simClient = null;
 // Ticks dispatched to the worker whose results have not come back yet.
 const SIM_CLIENT_MAX_IN_FLIGHT = 2;
-// The page's copy is hash-checked against the worker every this many ticks.
-const SIM_CLIENT_CHECK_TICKS = 5;
-
-// Two ticks of every 10, offset by the block, so over 5 blocks each of the
-// 10 hash slices is checked once.
-function _simClientCheckTick(tick) {
-    return (tick % SIM_CLIENT_CHECK_TICKS) === (Math.floor(tick / 10) % SIM_CLIENT_CHECK_TICKS);
+// The worker sends one result per group of this many ticks (?simstride=N;
+// by default 2 at 20+ ticks a second): the page applies ~10 updates a
+// second and interpolates over each group.
+function simClientStride() {
+    let q = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('simstride') : null;
+    let n = q !== null ? Math.floor(Number(q)) : (TICK_RATE >= 20 ? 2 : 1);
+    return Math.max(1, Math.min(8, n || 1));
 }
-
+// With groups, room for the next group while one is being applied.
+function simClientMaxInFlight() {
+    return SIM_CLIENT_MAX_IN_FLIGHT * (_simClient ? _simClient.stride || 1 : 1);
+}
 // The latest tick's per-unit visual records (sim_delta.js, simUnitVisEncode).
 let simClientUnitVis = null;
 
@@ -66,7 +69,7 @@ function _simClientCreate() {
     let worker = new Worker('./src/sim/sim_worker.js?v=20261004-a');
     let c = {
         worker, loaded: false, active: false, epoch: 0, startTick: -1, nextRequestId: 1, replies: new Map(),
-        inFlight: 0, tickClock: 0, dispatchAt: new Map(), appliedTick: -1, appliedAt: 0, latencyMs: TICK_MS, arrivedAt: 0, intervalMs: TICK_MS, errors: [],
+        inFlight: 0, stride: 1, unsent: 0, lastDispatchAt: 0, tickClock: 0, dispatchAt: new Map(), appliedTick: -1, appliedAt: 0, latencyMs: TICK_MS, arrivedAt: 0, intervalMs: TICK_MS, drawnAlpha: -1, errors: [],
         stats: { applied: 0, applyMs: [], simMs: [], encodeMs: [], latencyMs: [], rows: 0, heals: 0, dropped: 0 }
     };
     worker.onmessage = ev => { try { _simClientOnMessage(ev.data || {}); } catch (err) { reportRuntimeError('sim worker', err); } };
@@ -114,6 +117,8 @@ function simClientStartMatch() {
     c.active = true;
     c.startTick = currentTick;
     c.inFlight = 0;
+    c.stride = simClientStride();
+    c.unsent = 0;
     c.dispatchAt.clear();
     c.appliedTick = currentTick - 1;
     c.appliedAt = 0; c.arrivedAt = 0;
@@ -160,7 +165,27 @@ function simClientRunTick(tick, actions, teams, flush) {
     if (!(at >= now - TICK_MS)) at = now;
     c.tickClock = at;
     c.dispatchAt.set(tick, at);
-    c.worker.postMessage({ type: 'tick', tick, actions, teams, flush: !!flush, hash: true });
+    c.lastDispatchAt = now;
+    // A group's last tick sends the result (see simClientStride).
+    let out = ((tick + 1) % c.stride) === 0;
+    c.unsent = out ? 0 : c.unsent + 1;
+    c.worker.postMessage({ type: 'tick', tick, actions, teams, flush: !!flush, hash: true, out });
+}
+
+// Ticks run without a result yet (a group not complete) go out now.
+function simClientFlush() {
+    let c = _simClient;
+    if (!c || !c.active || !c.unsent) return;
+    c.unsent = 0;
+    c.worker.postMessage({ type: 'flush' });
+}
+
+// Called by the tick loop each frame: when the next tick of a started group
+// is not coming soon (paused, waiting for peers...), the ticks run so far go
+// out rather than wait.
+function simClientMaybeFlush(now) {
+    let c = _simClient;
+    if (c && c.active && c.unsent && now - c.lastDispatchAt > TICK_MS * 1.5) simClientFlush();
 }
 
 // Tests: code the worker runs at this point of the tick stream.
@@ -209,16 +234,31 @@ function _simClientOnMessage(msg) {
 function _simClientApplyTick(msg) {
     let c = _simClient;
     if (msg.epoch !== c.epoch) { c.stats.dropped++; return; }
-    c.inFlight = Math.max(0, c.inFlight - 1);
+    let count = msg.count || 1, first = msg.first !== undefined ? msg.first : msg.tick;
+    c.inFlight = Math.max(0, c.inFlight - count);
     let t0 = performance.now();
     let dispatchedAt = c.dispatchAt.get(msg.tick);
-    c.dispatchAt.delete(msg.tick);
+    for (let t = first; t <= msg.tick; t++) c.dispatchAt.delete(t);
     // While a reload of the page's copy is on its way, results only count.
     if (c.healing) return;
     // The page's lockstep tick counter runs ahead of the results.
     let pageTick = currentTick;
     let applied = true;
+    // Units move on from where they are drawn now (the interpolation of the
+    // last result at this moment), so motion stays continuous however the
+    // results arrive (a group, early, two in one frame).
+    // (The alpha of the last frame drawn with the previous result; none drawn
+    // since it arrived: from its start.)
+    let shown = c.arrivedAt > 0 ? (c.drawnAlpha >= 0 ? c.drawnAlpha : 0) : 1;
+    c.drawnAlpha = -1;
+    for (let i = 0; i < units.length; i++) {
+        let u = units[i];
+        if (u.prevX === u.prevX && u.prevX !== undefined && shown < 1) { u.prevX += (u.x - u.prevX) * shown; u.prevY += (u.y - u.prevY) * shown; }
+        else { u.prevX = u.x; u.prevY = u.y; }
+    }
     try { simDeltaApply(msg.delta); } catch (err) { applied = false; reportRuntimeError('sim delta', err); }
+    // New units start where they are.
+    for (let i = 0; i < units.length; i++) { let u = units[i]; if (!(u.prevX === u.prevX) || u.prevX === undefined) { u.prevX = u.x; u.prevY = u.y; } }
     currentTick = pageTick;
     c.appliedTick = msg.tick;
     c.appliedAt = dispatchedAt !== undefined ? dispatchedAt : t0;
@@ -241,33 +281,62 @@ function _simClientApplyTick(msg) {
     if (!applied) { _simClientHeal(msg.tick); return; }
     // The worker's per-unit visual records, for the 3D unit layer while this
     // tick is the current one (same unit list, same order).
+    if (msg.vis) _simClientContinueVis(msg.vis, shown);
     simClientUnitVis = msg.vis ? { data: msg.vis, gameTime, units, n: units.length } : null;
     c.lastSight = msg.sight ? { data: msg.sight, player: msg.sightPlayer } : null;
     if (msg.delta.dirtyMap) _simClientMapChanged();
     _simClientReplayEvents(msg.events || []);
-    _simClientPageTickWork(msg.tick);
+    _simClientPageTickWork(msg.tick, count);
     // The page's copy must hash as the worker's; otherwise it is reloaded.
     // The worker's record is the one the resync compares with the peers.
     if (msg.hash) {
-        // The page's copy is checked on one tick in SIM_CLIENT_CHECK_TICKS,
-        // rotating so every hash slice (tick % 10) comes up in turn; a
+        // The page's copy is checked on full ticks, the ones that leave it
+        // exact (see SIM_DELTA_FULL_TICKS); their hash slices rotate. A
         // difference reloads it.
-        let mine = _simClientCheckTick(msg.tick) ? snapTickHash(msg.tick, !!lockstepStrictDebugMode) : null;
+        let mine = msg.delta && msg.delta.full ? snapTickHash(msg.tick, !!lockstepStrictDebugMode) : null;
         if (mine && mine.sum !== msg.hash.sum) {
             c.stats.mismatch = (c.stats.mismatch || 0) + 1;
             if (!c.stats.firstDiff) try { c.stats.firstDiff = { tick: msg.tick, parts: snapDescribeCodes(snapDiffTickHash(mine, msg.hash)) }; } catch { }
             _simClientHeal(msg.tick);
         }
-        if (isMultiplayer) resyncAfterTick(msg.tick, msg.hash);
-        else snapStoreTickHash(msg.hash);
     }
-    if (simClientTickAppliedHook) simClientTickAppliedHook(msg.tick);
+    // Every tick's record, in order (the peers compare each).
+    let hashes = msg.hashes || [msg.hash];
+    for (let k = 0; k < hashes.length; k++) {
+        let h = hashes[k];
+        if (!h) continue;
+        if (isMultiplayer) resyncAfterTick(first + k, h);
+        else snapStoreTickHash(h);
+    }
+    if (simClientTickAppliedHook) for (let t = first; t <= msg.tick; t++) simClientTickAppliedHook(t, msg.lockHashes ? msg.lockHashes[t - first] : undefined, t === msg.tick);
     let ms = performance.now() - t0;
     c.stats.applied++;
     c.stats.rows += msg.delta.rows || 0;
     if (msg.delta.rowsBy) { let rb = c.stats.rowsBy || (c.stats.rowsBy = {}); for (let k in msg.delta.rowsBy) rb[k] = (rb[k] || 0) + msg.delta.rowsBy[k]; }
     c.stats.applyMs.push(ms); c.stats.simMs.push(msg.simMs); c.stats.encodeMs.push(msg.encodeMs);
     for (let k of ['applyMs', 'simMs', 'encodeMs', 'latencyMs']) if (c.stats[k].length > 600) c.stats[k].splice(0, 300);
+}
+
+// The same for the 3D records: each render slot's start is where the slot
+// is drawn now (from the previous records at `shown`), not where the worker
+// last had it.
+let _simVisDrawn = { x0: new Float64Array(0), y0: new Float64Array(0), x1: new Float64Array(0), y1: new Float64Array(0), id: new Float64Array(0) };
+function _simClientContinueVis(vis, shown) {
+    let D = _simVisDrawn, S = SIM_UNIT_VIS_STRIDE, n = vis.length / S;
+    for (let i = 0; i < n; i++) {
+        let r = i * S, slot = vis[r + 8];
+        if (slot < 0) continue;
+        if (slot >= D.id.length) {
+            let cap = Math.max(1024, (slot + 1) * 2), grow = (a, fill) => { let g = new Float64Array(cap); if (fill) g.fill(fill); g.set(a); return g; };
+            D.x0 = grow(D.x0); D.y0 = grow(D.y0); D.x1 = grow(D.x1); D.y1 = grow(D.y1); D.id = grow(D.id, -1);
+        }
+        let id = vis[r + 13];
+        if (D.id[slot] === id && shown < 1) {
+            vis[r + 11] = D.x0[slot] + (D.x1[slot] - D.x0[slot]) * shown;
+            vis[r + 12] = D.y0[slot] + (D.y1[slot] - D.y0[slot]) * shown;
+        }
+        D.id[slot] = id; D.x0[slot] = vis[r + 11]; D.y0[slot] = vis[r + 12]; D.x1[slot] = vis[r + 9]; D.y1[slot] = vis[r + 10];
+    }
 }
 
 // Buildings, floor items or tiles changed: the cached map layers redraw.
@@ -306,8 +375,8 @@ function _simClientReplayEvents(events) {
 }
 
 // What the page did as part of a tick: visuals, audio state and UI.
-function _simClientPageTickWork(tick) {
-    for (let i = particles.length - 1; i >= 0; i--) if (!particles[i].update()) particles.splice(i, 1);
+function _simClientPageTickWork(tick, count = 1) {
+    for (let k = 0; k < count; k++) for (let i = particles.length - 1; i >= 0; i--) if (!particles[i].update()) particles.splice(i, 1);
     _simClientLaserSound();
     updateAudioReactiveState();
     if (selectedUnits.length && selectedUnits.some(u => u.dead)) selectedUnits = selectedUnits.filter(u => !u.dead);
@@ -324,7 +393,7 @@ function _simClientPageTickWork(tick) {
     }
     _simClient.lastSight = null;
     visibilityGrid = updateVisualVisibility(localPlayerId, getRawVisibilityGridForPlayer(localPlayerId));
-    if ((tick + 1) % TICK_RATE === 0) sampleGameStats();
+    for (let t = tick - count + 1; t <= tick; t++) if ((t + 1) % TICK_RATE === 0) { sampleGameStats(); break; }
     requestResearchPopupRefresh();
     let c = _simClient;
     if (!c.gameOverShown) {
@@ -389,6 +458,7 @@ function _simClientApplyReplicaState(msg) {
 // exactly the same point of the simulation on the page as in the worker.
 function simClientQuiescent() {
     let c = _simClient;
+    if (c && c.active && c.unsent) simClientFlush();
     return !c || !c.active || (c.inFlight === 0 && !c.healing);
 }
 
@@ -431,6 +501,8 @@ function simClientTickAlpha(frameTime) {
     let c = _simClient;
     if (!c || !c.arrivedAt) return 1;
     let alpha = (frameTime - c.arrivedAt) / Math.max(1, c.intervalMs);
+    // Called once per drawn frame: remembered for the next result's start.
+    c.drawnAlpha = alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
     return alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
 }
 
