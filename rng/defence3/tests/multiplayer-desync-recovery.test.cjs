@@ -10,10 +10,10 @@ const WAN = { latencyMs: 60, jitterMs: 10 };
 
 // Change simulated state on one peer only, the way a determinism bug would.
 function corrupt(inst, kind = 'unit') {
-    if (kind === 'unit') return inst.eval(`(() => { const u = units.find(u => !u.dead); u.energy = Math.max(1, u.energy - 3); u.x += 7; return u.id; })()`);
-    if (kind === 'player') return inst.eval(`(addPlayerResource(0, 'energy', -123), 0)`);
-    if (kind === 'mine') return inst.eval(`(() => { const m = goldMines.find(m => m.gold > 100); m.gold -= 50; return 0; })()`);
-    if (kind === 'building') return inst.eval(`(() => { const b = [...towers, ...barracks, ...collectorSpawners].find(b => b.energy > 10); b.energy -= 5; b.spawnTimer = (b.spawnTimer || 0) + 3; return 0; })()`);
+    if (kind === 'unit') return inst.evalSim(`(() => { const u = units.find(u => !u.dead); u.energy = Math.max(1, u.energy - 3); u.x += 7; return u.id; })()`);
+    if (kind === 'player') return inst.evalSim(`(addPlayerResource(0, 'energy', -123), 0)`);
+    if (kind === 'mine') return inst.evalSim(`(() => { const m = goldMines.find(m => m.gold > 100); m.gold -= 50; return 0; })()`);
+    if (kind === 'building') return inst.evalSim(`(() => { const b = [...towers, ...barracks, ...collectorSpawners].find(b => b.energy > 10); b.energy -= 5; b.spawnTimer = (b.spawnTimer || 0) + 3; return 0; })()`);
     throw new Error('kind');
 }
 
@@ -266,9 +266,10 @@ function assertCommandsRanEverywhere(world, instances, before, label) {
         await H.playFor(world, all, 3000, { seed: 90 });
         const startTick = host.eval('currentTick');
         const t0 = world.now;
-        guests[0].eval(`(() => {
-            const orig = runOneTick;
-            runOneTick = function () { const r = orig.apply(this, arguments); if (currentTick % 30 === 0) { const u = units.find(u => !u.dead); if (u) u.x += 3; } return r; };
+        // In the simulation (the worker, when the page runs one).
+        guests[0].evalSim(`(() => {
+            const orig = gameTick;
+            gameTick = function () { const r = orig.apply(this, arguments); if ((currentTick + 1) % 30 === 0) { const u = units.find(u => !u.dead); if (u) u.x += 3; } return r; };
         })()`);
         await H.playFor(world, all, 40000, { seed: 91 });
         const secs = (world.now - t0) / 1000;
@@ -309,7 +310,7 @@ function assertCommandsRanEverywhere(world, instances, before, label) {
         const { host, guests } = await H.startHostedMatch(world, { guests: 2, teams: [0, 1, 2] });
         const all = [host, ...guests];
         await H.playFor(world, all, 3000, { seed: 71 });
-        const armThrow = (inst, tick) => inst.eval(`(() => {
+        const armThrow = (inst, tick) => inst.evalSim(`(() => {
             const orig = recomputePlayerPopCaps;
             recomputePlayerPopCaps = function () { if (currentTick === ${tick}) throw new Error('injected tick bug'); return orig.apply(this, arguments); };
         })()`);

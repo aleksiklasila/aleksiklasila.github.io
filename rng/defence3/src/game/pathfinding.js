@@ -234,6 +234,8 @@ function _makeFallbackPathForUnit(u, sx, sy, ex, ey, cmd = CMD_MOVING, src = 'fa
 
 function _tryUpgradeAstarFallbackPath(u) {
     if (!u || !u.pathIsFallbackAstar || !u._pendingPathTarget || u.dead) return;
+    // Waiting for its group's shared search (see _takeGroupPathSearch).
+    if (u._awaitGroupPath > gameTime) return;
     if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) return;
     if (!_canUsePathfindRequestBudget(u.owner, u)) return;
 

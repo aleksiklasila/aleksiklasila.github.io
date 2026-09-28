@@ -31,6 +31,18 @@ let renderer3dLayerContexts = new Map();
 let renderer3dLayerStats = new Map();
 let visibilityGridRawByPlayerCache = new Map();
 let visibilityCacheTick = -1;
+// Gameplay visibility is recomputed every VISIBILITY_TICK_INTERVAL ticks per
+// player, players on alternating ticks, and reused in between (targeting sees
+// the world at most a tick late). All peers reuse identically; caches are
+// dropped together at resyncs (snapFlushHistoryCaches).
+const VISIBILITY_TICK_INTERVAL = 2;
+let visibilityGridStampByPlayer = new Map();
+
+function clearGameplayVisibilityCache() {
+    visibilityGridRawByPlayerCache.clear();
+    visibilityGridStampByPlayer.clear();
+    visibilityCacheTick = -1;
+}
 const visibilityGridPoolByPlayer = new Map();
 const VISIBILITY_LIGHT_CELL_SIZE = 4;
 const VISIBILITY_LIGHT_NORMALIZATION_RANGE = 6;
@@ -1370,6 +1382,7 @@ function get3DProjectionSnapshot() {
     return {
         viewportWidth: viewW,
         viewportHeight: viewH,
+        viewPad: getRenderViewPad(),
         worldWidth: GRID_W,
         worldHeight: GRID_H,
         camera: {
@@ -1936,7 +1949,8 @@ function build3DFrameData(flat2d = false) {
     renderer3dExactTextureTimeRemaining = 2;
     renderer3dExactUnitTextureBuildsRemaining = 12;
     renderer3dExactUnitTextureTimeRemaining = 2;
-    let bounds = flat2d ? getVisibleWorldBounds(2) : get3DVisibleWorldBounds();
+    // The overscan margin is drawn too (see getRenderViewPad).
+    let bounds = flat2d ? getVisibleWorldBounds(2 + Math.ceil(getRenderViewPad() / Math.max(0.01, camera.zoom) / TILE)) : get3DVisibleWorldBounds();
     let alpha = tickAlpha;
     // All entity models below are procedural: their shader uses the top/status
     // panel and side tint, never the legacy animated side texture.
@@ -2443,6 +2457,7 @@ function build3DFrameData(flat2d = false) {
         flat2d,
         viewportWidth: viewW,
         viewportHeight: viewH,
+        viewPad: getRenderViewPad(),
         worldWidth: GRID_W,
         worldHeight: GRID_H,
         backgroundCanvas: backgroundCanvasFor3D,
@@ -2479,8 +2494,9 @@ function drawInteractionOverlay(renderer3dSnapshot = null) {
         || (o && ['rects', 'areaTiles', 'rings', 'markers', 'bars', 'texts'].some(key => o[key] && o[key].length)));
     if (!hasContent && overlayCanvas._interactionEmpty) return;
     let dpr = window.devicePixelRatio || 1;
+    let pad = overlayCanvas._viewPad || 0;
     overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    overlayCtx.clearRect(0, 0, viewW, viewH);
+    overlayCtx.clearRect(0, 0, viewW + 2 * pad, viewH + 2 * pad);
     overlayCanvas._interactionEmpty = !hasContent;
     if (!hasContent) return;
 
@@ -2492,8 +2508,8 @@ function drawInteractionOverlay(renderer3dSnapshot = null) {
     }
 
     if (isBoxSelecting && selectionBoxScreen) {
-        let sx = Math.min(selectionBoxScreen.sx, selectionBoxScreen.ex);
-        let sy = Math.min(selectionBoxScreen.sy, selectionBoxScreen.ey);
+        let sx = Math.min(selectionBoxScreen.sx, selectionBoxScreen.ex) + pad;
+        let sy = Math.min(selectionBoxScreen.sy, selectionBoxScreen.ey) + pad;
         let w = Math.abs(selectionBoxScreen.ex - selectionBoxScreen.sx);
         let h = Math.abs(selectionBoxScreen.ey - selectionBoxScreen.sy);
         overlayCtx.fillStyle = 'rgba(0,255,0,0.12)';
@@ -2524,9 +2540,9 @@ function ensure3DRendererInitialized() {
     renderer3dInstance = new window.Defence3Renderer3D({
         mount: renderer3dHost
     });
-    renderer3dInstance.resize(viewW, viewH);
     renderer3dInstance.setEnabled(true);
     syncRenderModeUi();
+    _applyRenderViewPad();
     return renderer3dInstance.supported ? renderer3dInstance : null;
 }
 
@@ -2728,7 +2744,7 @@ function drawMinimap() {
         renderer3dInstance &&
         typeof renderer3dInstance.getGroundFrustumPolygon === 'function'
     ) {
-        let footprint = renderer3dInstance.getGroundFrustumPolygon(get3DProjectionSnapshot());
+        let footprint = renderer3dInstance.getGroundFrustumPolygon(get3DProjectionSnapshot(), true);
         if (footprint && footprint.length >= 3) {
             minimapCtx.beginPath();
             minimapCtx.moveTo(footprint[0].x * scale, footprint[0].y * scale);
@@ -2968,12 +2984,12 @@ function getRawVisibilityGridForPlayer(playerId) {
     let pid = Math.floor(Number(playerId));
     if (!Number.isFinite(pid) || pid < 0) pid = localPlayerId;
 
-    if (visibilityCacheTick !== gameTime) {
-        visibilityGridRawByPlayerCache.clear();
-        visibilityCacheTick = gameTime;
-    }
+    visibilityCacheTick = gameTime;
     let cachedRaw = visibilityGridRawByPlayerCache.get(pid);
-    if (cachedRaw) return cachedRaw;
+    let stamp = visibilityGridStampByPlayer.get(pid);
+    if (cachedRaw && stamp !== undefined && (stamp === gameTime
+        || (gameTime > stamp && gameTime - stamp < VISIBILITY_TICK_INTERVAL && (gameTime + pid) % VISIBILITY_TICK_INTERVAL !== 0))) return cachedRaw;
+    visibilityGridStampByPlayer.set(pid, gameTime);
     let pool = visibilityGridPoolByPlayer.get(pid);
     if (!pool) visibilityGridPoolByPlayer.set(pid, pool = { grids: [null, null], next: 0, last: null, signature: null, signatureLength: -1,
         areaGrid: null, areaCells: null, misses: 0, skipUntil: -1 });
@@ -3188,7 +3204,21 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
             }
             break;
         }
+        // Simulation worker: a few ticks may be in flight; beyond that the
+        // page waits for results rather than queueing more.
+        let inWorker = typeof simClientActive === 'function' && simClientActive();
+        if (inWorker && simClientInFlight() >= SIM_CLIENT_MAX_IN_FLIGHT + (catchUp > 0 ? 2 : 0)) {
+            if (due) accumulator = Math.min(accumulator, TICK_MS);
+            break;
+        }
         if (isMultiplayer) {
+            // A guest applies a resync patch to the page's copy of the state
+            // too: with the worker, once every tick before it has come back.
+            // (The host's patches are encoded by the worker, in order.)
+            if (inWorker && !isHost && resyncGuest.T === currentTick && !simClientQuiescent()) {
+                if (due) accumulator = Math.min(accumulator, TICK_MS);
+                break;
+            }
             // Resync patches: the host encodes one, or the guest applies one,
             // in its own frame; the tick runs in the next.
             if (isHost) {
@@ -3213,6 +3243,221 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
     return accumulator;
 }
 
+// CAMERA SLIDE (Settings > Camera slide)
+// A frame shows the camera at its frame time, and the browser shows it until
+// the next frame is drawn, which a game tick can hold up for 20+ ms. So the
+// GPU canvas and the overlay are drawn with a margin around the view, and the
+// browser's compositor (its own thread, running at the display rate even
+// while the page is busy) slides them at the camera's pan velocity from the
+// frame time on. On screen the camera is then where it should be at every
+// display refresh; the next frame replaces the slide seamlessly. The margin
+// bounds the slide, so a very long stall stops at its edge. Panning only:
+// rotation and zoom are not extrapolated.
+const CAMERA_SLIDE_PAD_PX = 64;
+const CAMERA_SLIDE_MAX_MS = 200;
+let cameraSlideEnabled = true;
+// Settings > Pixel-snapped camera (2D): each frame is drawn with the camera
+// on a whole device pixel, so sprites are not resampled at a different
+// sub-pixel phase every frame while panning (shimmer and smear). The camera
+// itself keeps its exact position; only drawing rounds it.
+let pixelSnapCamera = true;
+let _cameraSnapSaved = null;
+
+function _applyRenderCameraSnap() {
+    _cameraSnapSaved = null;
+    if (!pixelSnapCamera || renderDimensionMode !== '2d') return;
+    let px = camera.zoom * (window.devicePixelRatio || 1);
+    if (!(px > 0)) return;
+    _cameraSnapSaved = { x: camera.x, y: camera.y };
+    camera.x = Math.round(camera.x * px) / px;
+    camera.y = Math.round(camera.y * px) / px;
+}
+
+function _restoreRenderCameraSnap() {
+    if (!_cameraSnapSaved) return;
+    camera.x = _cameraSnapSaved.x;
+    camera.y = _cameraSnapSaved.y;
+    _cameraSnapSaved = null;
+}
+let _cameraSlideAnims = [];
+let _cameraSlideActive = false;
+// The latest slide (for diagnostics): frame time, duration, warp inputs.
+let _cameraSlideLast = null;
+// What the current slide starts from: the last drawn frame's view and camera.
+let _cameraSlideFrame = null;
+
+// Overscan margin (css px on each side) of the GPU canvas and overlay.
+function getRenderViewPad() {
+    return cameraSlideEnabled && renderer3dInstance && renderer3dInstance.supported ? CAMERA_SLIDE_PAD_PX : 0;
+}
+
+// Sizes and places the padded layers; called on resize and setting changes.
+function _applyRenderViewPad() {
+    let pad = getRenderViewPad();
+    let dpr = window.devicePixelRatio || 1;
+    if (overlayCanvas) {
+        overlayCanvas.width = Math.round((viewW + 2 * pad) * dpr);
+        overlayCanvas.height = Math.round((viewH + 2 * pad) * dpr);
+        overlayCanvas.style.width = (viewW + 2 * pad) + 'px';
+        overlayCanvas.style.height = (viewH + 2 * pad) + 'px';
+        overlayCanvas.style.left = overlayCanvas.style.top = (-pad) + 'px';
+        overlayCanvas.style.right = overlayCanvas.style.bottom = 'auto';
+        overlayCanvas._viewPad = pad;
+        overlayCanvas._interactionEmpty = false;
+    }
+    renderer3dHost = renderer3dHost || document.getElementById('renderer3d-host');
+    if (renderer3dHost) {
+        renderer3dHost.style.inset = 'auto';
+        renderer3dHost.style.left = renderer3dHost.style.top = (-pad) + 'px';
+        renderer3dHost.style.width = (viewW + 2 * pad) + 'px';
+        renderer3dHost.style.height = (viewH + 2 * pad) + 'px';
+    }
+    if (renderer3dInstance) renderer3dInstance.resize(viewW + 2 * pad, viewH + 2 * pad);
+    _stopCameraSlide();
+}
+
+function setCameraSlideEnabled(on) {
+    cameraSlideEnabled = !!on;
+    _applyRenderViewPad();
+}
+
+function _stopCameraSlide() {
+    for (let a of _cameraSlideAnims) a.cancel();
+    _cameraSlideAnims = [];
+    _cameraSlideActive = false;
+    _cameraSlideLast = null;
+}
+
+// 3x3 matrix helpers (row-major arrays of 9) for the slide's ground warp.
+function _m3mul(a, b) {
+    let r = new Array(9);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) r[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
+    return r;
+}
+
+function _m3inv(m) {
+    let [a, b, c, d, e, f, g, h, i] = m;
+    let A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g;
+    let det = a * A + b * B + c * C;
+    if (!det) return null;
+    return [A / det, -(b * i - c * h) / det, (b * f - c * e) / det,
+        B / det, (a * i - c * g) / det, -(a * f - c * d) / det,
+        C / det, -(a * h - b * g) / det, (a * e - b * d) / det];
+}
+
+function _m3apply(m, x, y) {
+    let w = m[6] * x + m[7] * y + m[8];
+    return [(m[0] * x + m[1] * y + m[2]) / w, (m[3] * x + m[4] * y + m[5]) / w];
+}
+
+// Panning moves every ground point by the same world offset, so the drawn
+// ground moves by a projective map of the image (a homography: exact for the
+// ground plane in perspective, near-exact for what stands on it). A plain
+// shift would move near and far ground equally, which in a tilted view makes
+// the picture bob between frames.
+// Returns the map, in the layers' css px, from the last frame's image to the
+// image after the camera moved by (dx, dz) tiles.
+function _cameraSlideWarp(base, baseInv, dx, dz) {
+    return _m3mul(_m3mul(base, [1, 0, -dx, 0, 1, -dz, 0, 0, 1]), baseInv);
+}
+
+function _cssMatrixFromHomography(m) {
+    let k = 1 / m[8];
+    let f = v => (v * k).toPrecision(9);
+    return `matrix3d(${f(m[0])},${f(m[3])},0,${f(m[6])},${f(m[1])},${f(m[4])},0,${f(m[7])},0,0,1,0,${f(m[2])},${f(m[5])},0,1)`;
+}
+
+// Called after each drawn frame: records what the slide starts from, then
+// builds it (see _buildCameraSlide).
+function updateCameraSlide(frameTime) {
+    let pad = getRenderViewPad();
+    let r3 = renderer3dInstance;
+    let flat = renderDimensionMode !== '3d';
+    let m = r3 && r3.pickViewProjection;
+    if (!(pad > 0) || !gameStarted || document.hidden || !r3 || (!flat && !m)) {
+        _cameraSlideFrame = null;
+        if (_cameraSlideActive) _stopCameraSlide();
+        return;
+    }
+    // Ground (tile x, tile z) -> layer css px, from the frame just drawn:
+    // 2D is a scaled top-down view; 3D uses the drawn frame's projection.
+    let W = r3.cssWidth, H = r3.cssHeight, z = camera.zoom;
+    let base = flat
+        ? [TILE * z, 0, pad - camera.x * z, 0, TILE * z, pad - camera.y * z, 0, 0, 1]
+        : _m3mul([W / 2, 0, W / 2, 0, -H / 2, H / 2, 0, 0, 1], [m[0], m[8], m[12], m[1], m[9], m[13], m[3], m[11], m[15]]);
+    let baseInv = _m3inv(base);
+    if (!baseInv) { _cameraSlideFrame = null; return; }
+    let vel = _cameraPanVel, tgt = _cameraPanTarget;
+    _cameraSlideFrame = {
+        frameTime, base, baseInv, pad, W, H, cx: camera.x, cy: camera.y, v0x: vel.x, v0y: vel.y, tx: tgt.x, ty: tgt.y,
+        maxX: WORLD_W - viewW / camera.zoom, maxY: WORLD_H - viewH / camera.zoom
+    };
+    _buildCameraSlide();
+}
+
+// A pan key changed: turn the picture now instead of at the next frame.
+function refreshCameraSlideForInput() {
+    if (_cameraSlideFrame && getRenderViewPad() > 0) _buildCameraSlide();
+}
+
+function _buildCameraSlide() {
+    let F = _cameraSlideFrame;
+    let inputs = typeof _cameraPanInputs !== 'undefined' ? _cameraPanInputs.slice() : [];
+    let moving = F.v0x !== 0 || F.v0y !== 0 || F.tx !== 0 || F.ty !== 0 || inputs.some(i => i.x !== 0 || i.y !== 0);
+    let layers = [renderer3dHost, overlayCanvas].filter(Boolean);
+    if (!moving || !layers.length || typeof layers[0].animate !== 'function') {
+        if (_cameraSlideActive) _stopCameraSlide();
+        return;
+    }
+    // Where the camera will be `sec` after the frame, in tiles from there:
+    // updateCamera's own motion model through the key changes so far, each
+    // axis stopping where the camera is clamped at the map edge.
+    let shift = sec => {
+        let r = cameraPanTravel(F.v0x, F.v0y, F.tx, F.ty, F.frameTime, sec, inputs);
+        return [Math.max(-F.cx, Math.min(F.maxX - F.cx, r.x)) / TILE, Math.max(-F.cy, Math.min(F.maxY - F.cy, r.y)) / TILE];
+    };
+    // How long until the view's corners would show past the margin.
+    let pad = F.pad, W = F.W, H = F.H;
+    let corners = [[pad, pad], [W - pad, pad], [pad, H - pad], [W - pad, H - pad]];
+    let reach = sec => {
+        let [dx, dz] = shift(sec);
+        let inv = _m3inv(_cameraSlideWarp(F.base, F.baseInv, dx, dz));
+        if (!inv) return Infinity;
+        let worst = 0;
+        for (let [x, y] of corners) {
+            let [sx, sy] = _m3apply(inv, x, y);
+            worst = Math.max(worst, Math.abs(sx - x), Math.abs(sy - y));
+        }
+        return worst;
+    };
+    let durMs = CAMERA_SLIDE_MAX_MS;
+    for (let i = 0; i < 3; i++) {
+        let r = reach(durMs / 1000);
+        if (!(r > pad)) break;
+        durMs *= pad / r * 0.98;
+    }
+    if (!(durMs > 1)) { if (_cameraSlideActive) _stopCameraSlide(); return; }
+    // Keyframes every ~8 ms: the browser interpolates between them, and the
+    // warp is not linear in time.
+    let steps = Math.max(2, Math.ceil(durMs / 8));
+    let keyframes = [];
+    for (let k = 0; k <= steps; k++) {
+        let [dx, dz] = shift(durMs / 1000 * k / steps);
+        keyframes.push({ offset: k / steps, transform: _cssMatrixFromHomography(_cameraSlideWarp(F.base, F.baseInv, dx, dz)) });
+    }
+    let next = layers.map(el => {
+        let anim = el.animate(keyframes, { duration: durMs, fill: 'forwards', easing: 'linear' });
+        // From the frame's own time: the slide covers exactly the time the
+        // frame has been, and will be, on screen.
+        anim.startTime = F.frameTime;
+        return anim;
+    });
+    for (let a of _cameraSlideAnims) a.cancel();
+    _cameraSlideAnims = next;
+    _cameraSlideActive = true;
+    _cameraSlideLast = { frameTime: F.frameTime, durMs, base: F.base, baseInv: F.baseInv, shift };
+}
+
 function processRenderFrame(timestamp) {
     if (!ctx || !canvas || !bgCtx || !minimapCtx) {
         ensureRenderContextsInitialized();
@@ -3221,8 +3466,11 @@ function processRenderFrame(timestamp) {
 
     // _frameSimLeadMs: how far this frame's time is past the simulation
     // clock (the loop runs ticks after drawing, see _runLoopFrame).
-    tickAlpha = Math.max(0, Math.min((_tickAccumulator + _frameSimLeadMs) / TICK_MS, 1));
+    tickAlpha = (typeof simClientActive === 'function' && simClientActive())
+        ? simClientTickAlpha(timestamp)
+        : Math.max(0, Math.min((_tickAccumulator + _frameSimLeadMs) / TICK_MS, 1));
     updateCamera(timestamp);
+    _applyRenderCameraSnap();
     let dpr = window.devicePixelRatio || 1;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     let renderer3dSnapshot = null;
@@ -3302,6 +3550,9 @@ _simChannel.port1.onmessage = () => {
     let simMs = performance.now() - t0;
     _simMsEma += (simMs - _simMsEma) * 0.1;
 };
+// Headless runs (Node): a port with a handler would keep the process alive
+// (assigning onmessage references it, so this comes after).
+if (_simChannel.port1.unref) { _simChannel.port1.unref(); _simChannel.port2.unref(); }
 
 // Browser frame interval: median of the last 15 gaps, ignoring stalls.
 // Steady gaps also teach the display's refresh rate (see getDisplayRefreshRate).
@@ -3337,6 +3588,10 @@ function _runLoopFrame(time, nextTime) {
     _frameSimLeadMs = gameStarted && !gameOver && !document.hidden ? Math.max(0, time - _lastTickTime) : 0;
     try { processRenderFrame(time); } catch (err) { reportRuntimeError('render', err); }
     _frameSimLeadMs = 0;
+    try { updateCameraSlide(time); } catch (err) { reportRuntimeError('render', err); }
+    // The slide starts from the drawn (snapped) camera; the camera itself
+    // goes back to its exact position.
+    _restoreRenderCameraSnap();
     let renderMs = performance.now() - _lastRenderFrameAt;
     _renderMsEma += (renderMs - _renderMsEma) * 0.1;
     _scheduleSimulationUpTo(Math.max(time, nextTime));
@@ -3478,6 +3733,7 @@ let _fillInNext = 1;
 let _fillInCount = 0;
 const _fillInChannel = new MessageChannel();
 _fillInChannel.port1.onmessage = () => { _fillInHopPending = false; _fillInStep(); };
+if (_fillInChannel.port1.unref) { _fillInChannel.port1.unref(); _fillInChannel.port2.unref(); }
 
 // Measured once: how late a 1 ms timer fires. Precise timers make hops unnecessary.
 (function measureTimerGranularity() {
@@ -3690,10 +3946,7 @@ function ensureRenderContextsInitialized() {
     bgCanvas.height = viewH * dpr;
     bgCanvas.style.width = viewW + 'px';
     bgCanvas.style.height = viewH + 'px';
-    overlayCanvas.width = viewW * dpr;
-    overlayCanvas.height = viewH * dpr;
-    overlayCanvas.style.width = viewW + 'px';
-    overlayCanvas.style.height = viewH + 'px';
+    _applyRenderViewPad();
     canvas.width = viewW * dpr;
     canvas.height = viewH * dpr;
     canvas.style.width = viewW + 'px';
@@ -3705,8 +3958,6 @@ function ensureRenderContextsInitialized() {
     ctx.imageSmoothingEnabled = false;
     bgCtx.imageSmoothingEnabled = false;
     overlayCtx.imageSmoothingEnabled = false;
-    if (renderer3dInstance) renderer3dInstance.resize(viewW, viewH);
-
     if (!_renderInitEventsBound) {
         window.addEventListener('resize', () => {
             if (!ensureRenderContextsInitialized()) return;

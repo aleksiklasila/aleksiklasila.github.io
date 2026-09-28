@@ -13,7 +13,8 @@ assert.doesNotMatch(main, /function isWorldPointInCurrentView\(/);
 
 assert.match(renderer3d, /getGroundFrustumPolygon\(snapshot\)/);
 assert.match(renderer3d, /let footprint = this\.getGroundFrustumPolygon\(snapshot\);/);
-assert.match(renderer, /renderer3dInstance\.getGroundFrustumPolygon\(get3DProjectionSnapshot\(\)\)/);
+// The minimap outlines the view itself, without the camera-slide margin.
+assert.match(renderer, /renderer3dInstance\.getGroundFrustumPolygon\(get3DProjectionSnapshot\(\), true\)/);
 assert.match(renderer, /if \(!drew3DFrustum\)/);
 
 console.log('PASS: 3D same-type selection, render bounds, and minimap use the active camera frustum.');

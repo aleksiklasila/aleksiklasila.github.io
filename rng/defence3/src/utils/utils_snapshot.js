@@ -52,7 +52,7 @@ const SNAP_HASH_SLICES = 10;
 // Render, audio and index bookkeeping: rebuilt or irrelevant after restore.
 const SNAP_SKIP_KEYS = new Set([
     'textCtx', 'textCanvas', '_textCanvasScale', '_levelTextLabel', 'prevX', 'prevY',
-    '_spatialKey', '_spatialAreaId', '_spatialAreaOwner', '_spatialUnitTypeIdx', '_spatialLastVisScaled',
+    '_spatialKey', '_spatialMember', '_spatialAreaId', '_spatialAreaOwner', '_spatialUnitTypeIdx', '_spatialLastVisScaled',
     '_damageFlashStart', '_damageFlashUntil', '_damageFlashStrength', '_damageFlashColor', '_ambientSoundTicks',
     '_historyGhost', '_historyTick', '_droppedIndex', '_areaBucketId', '_laserLinkLevel'
 ]);
@@ -581,7 +581,11 @@ let _snapHashHistory = new Map();
 function snapRecordTickHash(tick) {
     // Exact-lockstep debug mode hashes everything every tick: it stops at the
     // first tick anything differs and names all of it.
-    let r = snapTickHash(tick, !!lockstepStrictDebugMode);
+    return snapStoreTickHash(snapTickHash(tick, !!lockstepStrictDebugMode));
+}
+
+// Records a tick hash computed elsewhere (the simulation worker's).
+function snapStoreTickHash(r) {
     _snapHashHistory.set(r.tick, r);
     if (_snapHashHistory.size > SNAP_HASH_HISTORY_TICKS) {
         for (let k of _snapHashHistory.keys()) {
@@ -1183,6 +1187,9 @@ function snapEncodeState(options = null) {
                 for (let i of labs) add('s', collectorSpawners[i], i);
             }
             if (only.projectiles) for (let i = 0; i < projectiles.length; i++) add('p', projectiles[i], i);
+            // Explicit entities (the simulation worker's per-tick changes):
+            // Map list -> [[entity, index], ...].
+            if (only.entities) for (let [list, items] of only.entities) for (let [e, i] of items) add(list, e, i);
             if (regions.size > 0) {
                 let rt = SNAP_REGION_TILES, ts = TILE * SNAP_REGION_TILES;
                 for (let i = 0; i < units.length; i++) {
@@ -1893,6 +1900,8 @@ function _snapSameValue(a, b, depth) {
 // starts without them, so at a resync every peer drops them on the same tick.
 function snapFlushHistoryCaches() {
     _bumpPathTopologyVersion();
+    // Gameplay visibility is reused between ticks (see VISIBILITY_TICK_INTERVAL).
+    if (typeof clearGameplayVisibilityCache === 'function') clearGameplayVisibilityCache();
     closestEnemyChunkQueryCache.clear();
     // Worker caches stamped with gameTime: the previous tick's last part and
     // the next tick's first part share it, so a peer that restores would

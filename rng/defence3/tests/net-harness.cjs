@@ -11,6 +11,20 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const files = Array.from(html.matchAll(/<script src="\.\/(src\/[^"?]+)(?:\?[^" ]*)?"/g), m => m[1])
     .filter(f => !f.endsWith('bootstrap.js'));
 const SOURCE = files.map(f => fs.readFileSync(path.join(root, f), 'utf8')).join('\n;\n');
+// The simulation worker's scripts (?simworker=1): the game's own, compiled
+// once, run in a separate context per worker.
+const vm = require('node:vm');
+let _simWorkerScripts = null;
+function simWorkerScripts() {
+    if (!_simWorkerScripts) {
+        const list = files.filter(f => !/sim_client\.js|sim_shadow\.js|sim_worker\.js/.test(f));
+        _simWorkerScripts = {
+            game: list.map(f => Object.assign(new vm.Script(fs.readFileSync(path.join(root, f), 'utf8'), { filename: f }), { __file: f })),
+            worker: new vm.Script(fs.readFileSync(path.join(root, 'src/sim/sim_worker.js'), 'utf8'), { filename: 'src/sim/sim_worker.js' })
+        };
+    }
+    return _simWorkerScripts;
+}
 
 // Default control values, read from the menu markup.
 const CONTROL_DEFAULTS = new Map();
@@ -457,6 +471,8 @@ function createInstance(world, name, options = {}) {
         fullscreenElement: null
     };
     const location = new URL(options.url || 'http://localhost/rng/defence3/index.html');
+    // Simulation worker mode for the whole world (or SIM_WORKER=1).
+    if ((world.simWorker || process.env.SIM_WORKER === '1') && options.simWorker !== false) location.searchParams.set('simworker', '1');
     const window = {
         innerWidth: 1280, innerHeight: 720, devicePixelRatio: 1,
         addEventListener: (type, fn) => { (inst.winListeners[type] ||= []).push(fn); }, removeEventListener: () => { },
@@ -516,6 +532,50 @@ function createInstance(world, name, options = {}) {
         }
         terminate() { this._terminated = true; if (this._timer) this._timer.cancelled = true; }
     }
+    // The simulation worker (src/sim/sim_worker.js) in its own context on the
+    // virtual clock: a message is handled right after it is posted, and the
+    // reply arrives options.simWorkerMs later (as if the tick took that long).
+    class HarnessSimWorker {
+        constructor() {
+            this.onmessage = null; this.onerror = null;
+            const worker = this;
+            const scripts = simWorkerScripts();
+            const sandbox = {
+                console: { log() { }, info() { }, debug() { }, warn() { }, error: (...a) => inst.errors.push(new Error('[sim worker] ' + a.map(x => (x && x.stack) || String(x)).join(' '))) },
+                MessageChannel: class { constructor() { this.port1 = { onmessage: null, unref() { } }; this.port2 = { postMessage() { }, unref() { } }; } },
+                performance: { now: () => sched.now }, setTimeout: () => 0, clearTimeout() { }, setInterval: () => 0, clearInterval() { },
+                Date: HarnessDate, Math: options.foreignMath ? makeForeignMath() : Math, structuredClone, URLSearchParams, URL, TextEncoder, TextDecoder,
+                location: { search: '', href: 'http://localhost/rng/defence3/src/sim/sim_worker.js' }, navigator: { userAgent: 'harness-worker' },
+                crypto: window.crypto,
+                importScripts: () => { for (const sc of scripts.game) { try { sc.runInContext(ctx); } catch (err) { inst.errors.push(new Error("[sim worker] loading " + sc.__file + ": " + (err && err.stack || err))); } } },
+                postMessage: (msg) => {
+                    const data = structuredClone(msg);
+                    sched.at(sched.now + (options.simWorkerMs ?? 5), () => { if (!worker._terminated && worker.onmessage) worker.onmessage({ data }); }, inst);
+                }
+            };
+            sandbox.self = sandbox;
+            // Values tests pass into eval'd code (inst.scratch).
+            Object.defineProperty(sandbox, '__scratch', { get: () => inst.scratch });
+            const ctx = vm.createContext(sandbox);
+            scripts.worker.runInContext(ctx);
+            this._ctx = ctx;
+            this._sandbox = sandbox;
+            inst.simWorker = this;
+        }
+        postMessage(msg) {
+            const data = structuredClone(msg);
+            sched.at(sched.now, () => {
+                if (this._terminated || !this._sandbox.onmessage) return;
+                this._sandbox.onmessage({ data });
+            }, inst);
+        }
+        // Tests: evaluate in the worker's scope.
+        eval(code) { return vm.runInContext(code, this._ctx); }
+        terminate() { this._terminated = true; }
+    }
+    const WorkerClass = options.noWorker ? undefined : function (url, ...rest) {
+        return /sim_worker/.test(String(url)) ? new HarnessSimWorker() : new HarnessWorker(url, ...rest);
+    };
     // The frame loop runs ticks in a MessageChannel task after each frame;
     // messages are delivered on the virtual clock, right after the sender.
     class HarnessMessageChannel {
@@ -541,13 +601,16 @@ function createInstance(world, name, options = {}) {
         SOURCE + '\nlet __harnessValue;\nlet __hooks = null; let __cap = null; const __scratch = {};\n' + SETUP
     );
     inst.game = factory(window, document, localStorage, performance, setTimeoutFn, clearTimeoutFn, setIntervalFn, clearTimeoutFn,
-        raf, () => { }, consoleProxy, window.navigator, () => { }, () => true, () => null, HarnessEvent, window, location, options.noWorker ? undefined : HarnessWorker, HarnessDate, options.foreignMath ? makeForeignMath() : Math,
+        raf, () => { }, consoleProxy, window.navigator, () => { }, () => true, () => null, HarnessEvent, window, location, WorkerClass, HarnessDate, options.foreignMath ? makeForeignMath() : Math,
         // { noDecompression: true } models an older browser without it.
         options.noDecompression ? undefined : globalThis.DecompressionStream, sessionStorage, HarnessMessageChannel);
     inst.window = window;
     inst.document = document;
     inst.element = elementFor;
     inst.eval = code => inst.game.eval(code);
+    // Changes to the simulated state: with the simulation worker, made there
+    // (the page's copy follows with the next tick's changes).
+    inst.evalSim = code => (inst.simWorker && inst.eval('simClientActive()')) ? inst.simWorker.eval(code) : inst.eval(code);
     inst.set = (n, v) => inst.game.set(n, v);
     // Shared object for passing values into eval'd code: inst.scratch.x -> __scratch.x
     inst.scratch = inst.eval('__scratch');
@@ -587,8 +650,19 @@ function createInstance(world, name, options = {}) {
             const acts = (isMultiplayer && lockstepBundleByTick[tick] && Array.isArray(lockstepBundleByTick[tick].packets))
                 ? lockstepBundleByTick[tick].packets.flatMap(p => p.actions || []) : [];
             const r = __origRunOneTick.apply(this, arguments);
-            __harnessHooks.afterTick(tick, acts);
+            // Simulation worker: the tick completes when its result is applied.
+            if (typeof simClientActive === 'function' && simClientActive()) {
+                __simActs.set(tick, acts);
+                for (const code of __harnessHooks.dispatched(tick)) simClientWorkerEval(code);
+            } else __harnessHooks.afterTick(tick, acts);
             return r;
+        };
+        const __simActs = new Map();
+        simClientTickAppliedHook = (tick) => {
+            const acts = __simActs.get(tick) || [];
+            __simActs.delete(tick);
+            __harnessHooks.afterTick(tick, acts);
+            __harnessHooks.verify(tick);
         };
         const __origApply = applyAuthoritativeStateSnapshot;
         applyAuthoritativeStateSnapshot = function () {
@@ -613,8 +687,63 @@ function createInstance(world, name, options = {}) {
     return inst;
 }
 
+// SIM_WORKER_VERIFY=1: after every applied tick, compare each entity of the
+// page's copy with the worker's (one tick in flight) and report the fields
+// that differ, once per list and field.
+const SIM_VERIFY_HASHES = `(() => { const kinds = { u: 'u', t: 'b', b: 'b', s: 'b', f: 'b', g: 'm', a: 'm', d: 'd' }; const out = {};
+    for (const list in kinds) { const arr = _snapListEntities(list); for (let i = 0; i < arr.length; i++) { const e = arr[i]; out[list + ':' + _snapEntityKey(list, e, i)] = _snapHashEntity(kinds[list], e, 7); } }
+    out['P'] = (() => { let h = 0; for (const p of players) h = _snapHDeep(h, p, 4); return h >>> 0; })();
+    out['p'] = projectiles.length; out['g:globals'] = _snapHashGlobals();
+    return JSON.stringify(out); })()`;
+const SIM_VERIFY_FIELDS = key => `(() => { const [list, k] = ${JSON.stringify(key)}.split(':'); const arr = list === 'P' ? players : _snapListEntities(list);
+    const e = list === 'P' ? null : arr.find((x, i) => String(_snapEntityKey(list, x, i)) === k);
+    const ser = (v, d, seen) => { if (v === null || typeof v !== 'object') return typeof v === 'number' && Object.is(v, -0) ? '-0' : (typeof v === 'number' && v !== v ? 'NaN' : v);
+        if (v instanceof Unit) return '#u' + v.id; if (d > 1 && typeof v.gx === 'number' && typeof v.gy === 'number') return '#b' + v.gx + ',' + v.gy;
+        if (seen.has(v)) return '<cyc>'; seen.add(v); if (d > 4) return '<deep>';
+        if (v instanceof Map) return { map: [...v].map(x => ser(x, d + 1, seen)) }; if (v instanceof Set) return { set: [...v].map(x => ser(x, d + 1, seen)) };
+        if (Array.isArray(v) || ArrayBuffer.isView(v)) return Array.from(v).map(x => ser(x, d + 1, seen));
+        const o = {}; for (const kk of Object.keys(v)) o[kk] = ser(v[kk], d + 1, seen); return o; };
+    const src = list === 'P' ? { players } : e; if (!src) return '{}';
+    const r = {}; for (const kk of Object.keys(src)) { if (SNAP_SKIP_KEYS.has(kk)) continue; r[kk] = JSON.stringify(ser(src[kk], 1, new Set([src]))); } return JSON.stringify(r); })()`;
+function simVerifyTick(inst, tick) {
+    const w = inst.simWorker;
+    if (!w) return;
+    const P = JSON.parse(inst.eval(SIM_VERIFY_HASHES)), W = JSON.parse(w.eval(SIM_VERIFY_HASHES));
+    const seen = inst.simVerifySeen || (inst.simVerifySeen = new Set());
+    let n = 0;
+    for (const key of new Set([...Object.keys(P), ...Object.keys(W)])) {
+        if (P[key] === W[key]) continue;
+        n++;
+        if (!(key in P) || !(key in W)) { const tag = key.split(':')[0] + ':membership'; if (!seen.has(tag)) { seen.add(tag); console.error(`[verify ${inst.name} t${tick}] ${key} only on ${key in P ? 'page' : 'worker'}`); } continue; }
+        if (key === 'p' || key === 'g:globals') { const tag = key; if (!seen.has(tag)) { seen.add(tag); console.error(`[verify ${inst.name} t${tick}] ${key} differs`); } continue; }
+        const pf = JSON.parse(inst.eval(SIM_VERIFY_FIELDS(key))), wf = JSON.parse(w.eval(SIM_VERIFY_FIELDS(key)));
+        for (const f of new Set([...Object.keys(pf), ...Object.keys(wf)])) {
+            if (pf[f] === wf[f]) continue;
+            const tag = key.split(':')[0] + '.' + f;
+            if (seen.has(tag)) continue;
+            seen.add(tag);
+            console.error(`[verify ${inst.name} t${tick}] ${key} .${f}\n   page   ${String(pf[f]).slice(0, 300)}\n   worker ${String(wf[f]).slice(0, 300)}`);
+        }
+    }
+    if (n) console.error(`[verify-n ${inst.name} t${tick}] ${n} differ: ${[...new Set([...Object.keys(P), ...Object.keys(W)])].filter(k => P[k] !== W[k]).slice(0, 6).join(' ')}`);
+    inst.simVerifyDiffs = (inst.simVerifyDiffs || 0) + n;
+}
+
 function attachHooks(world, inst) {
     inst.set('__hooks', {
+        // Simulation worker: the scripted setup for this tick, which the
+        // worker runs right after it (and the page after applying it).
+        verify: tick => {
+            if (process.env.SIM_WORKER_VERIFY !== '1') return;
+            // One tick in flight, so the worker is exactly at this tick.
+            if (!inst.simVerifyArmed) { inst.simVerifyArmed = true; inst.eval('simClientInFlight = () => _simClient.inFlight ? 99 : 0'); }
+            simVerifyTick(inst, tick);
+        },
+        dispatched: tick => {
+            const session = inst.eval('matchStartSessionId');
+            const scripts = world.tickScripts.get(tick);
+            return scripts ? scripts.filter(s => s.session === null || s.session === session).map(s => s.code) : [];
+        },
         afterTick: (tick, acts) => {
             // Scripted setup, applied on every peer after the same tick.
             // Only in the match it was scheduled in (a rematch counts its
@@ -638,6 +767,36 @@ function attachHooks(world, inst) {
                 } else inst.tickHashes.set(tick, inst.eval('computeLockstepStateHashFast(' + tick + ')'));
             }
             if (world.exactHashes) (inst.tickExact ||= new Map()).set(tick, inst.eval('__exactStateHash()'));
+            // DUMP_TICKS=a-b: every unit's fields at those ticks, compared
+            // between peers when the process exits (debugging divergences).
+            if (process.env.DUMP_TICKS) {
+                const [a, b] = process.env.DUMP_TICKS.split('-').map(Number);
+                if (tick >= a && tick <= b) {
+                    (inst.tickDumps ||= new Map()).set(tick, inst.eval(`JSON.stringify((() => { const out = {}; const ser = v => { try { return JSON.stringify(v, (k, x) => (x instanceof Unit && k !== '') ? '#u' + x.id : (x && typeof x === 'object' && typeof x.gx === 'number' && k !== '' && !Array.isArray(x) && !(x instanceof Unit)) ? '#b' + x.gx + ',' + x.gy : x); } catch { return '?'; } };
+                        for (const u of units) { const r = {}; for (const k of Object.keys(u)) if (!SNAP_SKIP_KEYS.has(k)) r[k] = ser(u[k]); out['u' + u.id] = r; }
+                        for (const [n, l] of [['t', towers], ['b', barracks], ['s', collectorSpawners]]) for (const e of l) { const r = {}; for (const k of Object.keys(e)) if (!SNAP_SKIP_KEYS.has(k)) r[k] = ser(e[k]); out[n + e.gx + ',' + e.gy] = r; }
+                        out.P = { p: ser(players), pr: ser(projectiles.map(p => [p.x, p.y, p.damage])) };
+                        return out; })())`));
+                    if (!world.__dumpHooked) {
+                        world.__dumpHooked = true;
+                        process.on('exit', () => {
+                            const host = world.instances.find(i => i.name === 'host');
+                            for (const g of world.instances) {
+                                if (g === host || !g.tickDumps) continue;
+                                for (const [t, text] of [...g.tickDumps].sort((x, y) => x[0] - y[0])) {
+                                    const H = host.tickDumps && host.tickDumps.get(t); if (!H) continue;
+                                    const A = JSON.parse(H), B = JSON.parse(text); const diffs = [];
+                                    for (const key of new Set([...Object.keys(A), ...Object.keys(B)])) {
+                                        if (!A[key] || !B[key]) { diffs.push(key + ' only on ' + (A[key] ? 'host' : g.name)); continue; }
+                                        for (const f of new Set([...Object.keys(A[key]), ...Object.keys(B[key])])) if (A[key][f] !== B[key][f]) diffs.push(key + '.' + f + ' host=' + String(A[key][f]).slice(0, 120) + ' ' + g.name + '=' + String(B[key][f]).slice(0, 120));
+                                    }
+                                    if (diffs.length) console.error('[dump t' + t + ' host vs ' + g.name + '] ' + diffs.length + ' diffs' + String.fromCharCode(10) + '   ' + diffs.slice(0, 25).join(String.fromCharCode(10) + '   '));
+                                }
+                            }
+                        });
+                    }
+                }
+            }
             if (world.digestTicks && world.digestTicks.has(tick)) (inst.tickDigests ||= new Map()).set(tick, inst.eval('JSON.stringify(computeLockstepStateDigest(' + tick + '))'));
             for (const a of acts) if (a && a.netId && !inst.executedActions.has(a.netId)) inst.executedActions.set(a.netId, { tick, at: world.sched.now });
         },
@@ -650,6 +809,7 @@ function attachHooks(world, inst) {
 class World {
     constructor(options = {}) {
         this.sched = new Scheduler();
+        this.simWorker = !!options.simWorker;
         this.net = new Network(this);
         this.instances = [];
         this.signalingMs = options.signalingMs ?? 80;

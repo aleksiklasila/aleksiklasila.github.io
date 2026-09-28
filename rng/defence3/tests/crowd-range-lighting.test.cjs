@@ -5,7 +5,7 @@ const path = require('node:path');
 const read = p => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 const src = read('src/things/unit.js');
 const c = vm.createContext({TILE:32,UNIT_POSITION_QUANTIZATION:1024,gameTime:0,
-    CROSS_TEAM_UNIT_COLLISION_PADDING:16,CHUNK_SIZE:1000,CHUNKS_W:1,CHUNKS_H:1,getUnitCollisionRecalcTicks:()=>5,canUnitOccupyTile:()=>true});
+    CROSS_TEAM_UNIT_COLLISION_PADDING:16,MOVING_UNIT_COLLISION_TICKS:2,CROWDED_TILE_UNITS:12,CROWDED_UNIT_COLLISION_TICKS:4,CHUNK_SIZE:1000,spatialUnitsComplexPlayerCount:0,BASE_UNIT_STATS:{norm:{r:8}},CHUNKS_W:1,CHUNKS_H:1,getUnitCollisionRecalcTicks:()=>5,canUnitOccupyTile:()=>true});
 vm.runInContext(src,c);
 // Run the actual collision gather/sort/solve used by Unit.update, including
 // staggered ticks, while 100 units keep moving towards the same waypoint.

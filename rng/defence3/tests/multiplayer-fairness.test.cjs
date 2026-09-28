@@ -58,7 +58,7 @@ async function latencyCase(network, label, perLink = null) {
         const world = new H.World({ network: { latencyMs: 40, jitterMs: 5 }, controls: H.SMALL_MATCH_CONTROLS });
         const { host, guests } = await H.startHostedMatch(world, { guests: 2, teams: [0, 1, 2] });
         const all = [host, ...guests];
-        for (const i of all) i.eval(`(() => { __scratch.order = []; const o = processActions; processActions = function (acts, team) { if (acts.length) __scratch.order.push([currentTick, team]); return o.apply(this, arguments); }; })()`);
+        for (const i of all) i.evalSim(`(() => { __scratch.order = []; const o = processActions; processActions = function (acts, team) { if (acts.length) __scratch.order.push([currentTick, team]); return o.apply(this, arguments); }; })()`);
         const T = world.atNextSafeTick('', 30);
         // Every team has a command in each of ticks T..T+5.
         for (const i of all) i.eval(`(() => { for (let t = ${T}; t < ${T} + 6; t++) (localInputBuffer[t] ||= []).push({ action: 'hold', unitIds: [], teamId: localPlayerId, netId: myPeerId + ':fair' + t }); })()`);
@@ -67,7 +67,7 @@ async function latencyCase(network, label, perLink = null) {
         for (const [tick, team] of host.scratch.order) if (tick >= T && tick < T + 6 && !firsts.has(tick)) firsts.set(tick, team);
         assert.equal(firsts.size, 6, 'all six ticks ran commands: ' + JSON.stringify([...firsts]));
         assert.deepEqual(new Set(firsts.values()), new Set([0, 1, 2]), 'each team goes first in turn: ' + JSON.stringify([...firsts]));
-        for (const i of guests) assert.deepEqual(i.scratch.order.filter(([t]) => t >= T && t < T + 6), host.scratch.order.filter(([t]) => t >= T && t < T + 6), 'same order on ' + i.name);
+        for (const i of guests) assert.equal(JSON.stringify(i.scratch.order.filter(([t]) => t >= T && t < T + 6)), JSON.stringify(host.scratch.order.filter(([t]) => t >= T && t < T + 6)), 'same order on ' + i.name);
         H.checkHealthy(world, all, { minCompared: 5, fromTick: 0, label: 'rotation' });
         rows.push('same-tick commands: first team rotates ' + [...firsts.values()].join(','));
     }

@@ -207,9 +207,10 @@ function _removeUnitFromSpatialArray(arr, u) {
     return false;
 }
 
-// Which bucket arrays a unit was last inserted into. Kept outside the unit
-// (never snapshotted); a replaced array forces a fresh membership check.
-const _spatialMembership = new WeakMap();
+// Which bucket arrays a unit was last inserted into: u._spatialMember (a
+// plain field: a WeakMap lookup per unit per tick was measurable; never
+// snapshotted, see SNAP_SKIP_KEYS). A replaced array forces a fresh
+// membership check.
 
 // Area buckets also count members per owner, so enemy scans can skip areas
 // that hold only the scanning player's units (e.g. a large friendly army).
@@ -240,13 +241,13 @@ function getSpatialKey(wx, wy) {
 function updateUnitSpatial(u) {
     // A unit that has not moved, changed owner or vision, with its buckets
     // and the area layout unchanged, would only re-set identical state.
-    let known = _spatialMembership.get(u);
+    let known = u._spatialMember;
     if (known && known.x === u.x && known.y === u.y && known.owner === u.owner && known.areaGrid === areaIdGrid
         && u._spatialKey !== undefined && known.chunk === spatialUnits[u._spatialKey]
         && (u._spatialAreaId >= 0 ? known.area === spatialUnitsByArea[u._spatialAreaId] : u._spatialAreaId === -1)
         && _getSpatialUnitVisibilityScaled(u) === u._spatialLastVisScaled) return;
     _updateUnitSpatialFull(u);
-    let member = _spatialMembership.get(u);
+    let member = u._spatialMember;
     if (member) { member.x = u.x; member.y = u.y; member.owner = u.owner; member.areaGrid = areaIdGrid; }
 }
 
@@ -260,7 +261,7 @@ function _updateUnitSpatialFull(u) {
         if (oldAreaId >= 0 && oldAreaId < spatialUnitsByArea.length) {
             _removeUnitFromAreaBucket(spatialUnitsByArea[oldAreaId], u);
         }
-        let member = _spatialMembership.get(u);
+        let member = u._spatialMember;
         if (member) member.area = null;
     }
     if (u._spatialKey !== undefined && u._spatialKey !== newKey) {
@@ -290,8 +291,8 @@ function _updateUnitSpatialFull(u) {
     if (u._spatialKey === newKey) {
         // Unchanged tile: membership only needs re-checking (a linear scan)
         // when the bucket arrays were replaced since the unit was added.
-        let member = _spatialMembership.get(u);
-        if (!member) _spatialMembership.set(u, member = { chunk: null, area: null });
+        let member = u._spatialMember;
+        if (!member) u._spatialMember = member = { chunk: null, area: null };
         let chunkArr = spatialUnits[newKey];
         if (member.chunk !== chunkArr) {
             _addUnitToSpatialArray(chunkArr, u);
@@ -315,7 +316,7 @@ function _updateUnitSpatialFull(u) {
     }
     _addUnitToSpatialArray(spatialUnits[newKey], u);
     let member = { chunk: spatialUnits[newKey], area: null };
-    _spatialMembership.set(u, member);
+    u._spatialMember = member;
     if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) {
         _addUnitToAreaBucket(spatialUnitsByArea[newAreaId], u);
         member.area = spatialUnitsByArea[newAreaId];
@@ -339,7 +340,7 @@ function _updateUnitSpatialFull(u) {
     if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) _updateSpatialLowestHealthForUnit(u, newKey);
 }
 function removeUnitSpatial(u) {
-    _spatialMembership.delete(u);
+    u._spatialMember = undefined;
     if (u._spatialKey !== undefined) {
         let oldKey = u._spatialKey;
         let prevScaled = Number.isFinite(u._spatialLastVisScaled) ? (u._spatialLastVisScaled | 0) : _getSpatialUnitVisibilityScaled(u);

@@ -298,6 +298,26 @@ function _isUnitTargetInContact(unit, target, maxAreaDistance) {
     return isWorldTargetWithinAreaRange(unit.x, unit.y, target.x, target.y, maxAreaDistance);
 }
 
+// A plain object for widening unit reference fields (see the Unit constructor).
+const _UNIT_FIELD_WIDEN = {};
+
+// Largest unit collision radius in the current stats (the runtime config can
+// edit them in place), re-read once per tick.
+let _maxUnitCollisionRadiusCache = 0, _maxUnitCollisionRadiusTick = NaN;
+function _maxUnitCollisionRadius() {
+    if (_maxUnitCollisionRadiusTick !== gameTime) {
+        let m = 0.1;
+        for (let k in BASE_UNIT_STATS) {
+            let st = BASE_UNIT_STATS[k];
+            if (!st || typeof st !== 'object') continue;
+            m = Math.max(m, Number(st.collisionR) || 0, Number(st.r) || 0);
+        }
+        _maxUnitCollisionRadiusCache = m;
+        _maxUnitCollisionRadiusTick = gameTime;
+    }
+    return _maxUnitCollisionRadiusCache;
+}
+
 class Unit {
     constructor(unitType, owner, x, y) {
         this.id = nextUnitId++;
@@ -328,13 +348,19 @@ class Unit {
         this.sandResistant = s.sandResistant || false;
         this.attackStyle = s.attackStyle || 'melee';
         this.isKing = (unitType === 'king');
+        // Reference fields that later hold units, buildings or plain objects
+        // are widened here first (then reset): V8 otherwise widens them the
+        // first time such a value arrives mid-match, e.g. the first hit of a
+        // battle, and recompiles every function reading units - a stall of
+        // tens of ms. Values and behaviour are unchanged.
+        this.attackTarget = this; this.attackTarget = _UNIT_FIELD_WIDEN;
         this.attackTarget = null; // visual: current attack target for draw effects
         this.attackFlash = 0; // visual: flash timer for attack animation
 
         this.commandState = CMD_IDLE;
-        this.targetUnit = null;
-        this.targetBuilding = null;
-        this.targetPos = null;
+        this.targetUnit = this; this.targetUnit = _UNIT_FIELD_WIDEN; this.targetUnit = null;
+        this.targetBuilding = this; this.targetBuilding = _UNIT_FIELD_WIDEN; this.targetBuilding = null;
+        this.targetPos = this; this.targetPos = _UNIT_FIELD_WIDEN; this.targetPos = null;
         this.path = null;
         this.pathIndex = 0;
         this.forcedAttackTarget = false;
@@ -383,15 +409,17 @@ class Unit {
         this._healerPinnedQueueTarget = undefined; this._healerLastWorkX = undefined; this._healerLastWorkY = undefined;
         this._healerLastWorkGx = undefined; this._healerLastWorkGy = undefined; this._healerSpawnerTarget = undefined;
         this._healerQueueTripCost = undefined; this._researchSpawnerTarget = undefined; this._researcherTripWork = undefined;
-        this._researcherTripCost = undefined; this._researcherMaterialReadyTick = undefined; this._damageFlashStart = undefined;
-        this._damageFlashUntil = undefined; this._damageFlashStrength = undefined; this._damageFlashColor = undefined;
+        this._researcherTripCost = undefined; this._researcherMaterialReadyTick = undefined; this._damageFlashStart = 0;
+        // Same meaning as unset (no flash); typed like the values set later
+        // (see the widening note above): -0 is a fractional-kind zero.
+        this._damageFlashUntil = 0; this._damageFlashStrength = -0; this._damageFlashColor = '';
         this._energyBlockedUntil = undefined; this._nextScoutRetargetTick = undefined; this._scoutTarget = undefined;
         this._levelTextLabel = undefined;
         this._collectorLastMoveTick = undefined; this._collectorNextRecheckTick = undefined; this._healerLastMoveTick = undefined;
         this._healerNextRecheckTick = undefined; this._researchLastMoveTick = undefined; this._researchNextRecheckTick = undefined;
         this.holdPosition = undefined; this._ambientSoundTicks = undefined;
 
-        this._spatialKey = undefined;
+        this._spatialKey = undefined; this._spatialMember = undefined; this._spatialAreaId = undefined; this._spatialAreaOwner = undefined; this._awaitGroupPath = 0;
         // A snapshot restore writes every field itself (same order, so the
         // same layout) and indexes the unit afterwards.
         if (_snapUnitShellMode) return;
@@ -568,9 +596,18 @@ class Unit {
                 break;
         }
         // Movement must not accumulate five ticks of penetration before being
-        // corrected. Resting units retain the configured staggered refresh.
+        // corrected: moving units separate every other tick (staggered by
+        // id, halving the neighbour scans of dense moving armies). Resting
+        // units retain the configured staggered refresh.
         let movedThisTick = this.x !== this.prevX || this.y !== this.prevY;
-        let collisionInterval = movedThisTick ? 1 : getUnitCollisionRecalcTicks();
+        let collisionInterval = movedThisTick ? MOVING_UNIT_COLLISION_TICKS : getUnitCollisionRecalcTicks();
+        // In a dense crowd each check scans dozens of neighbours: moving units
+        // there separate less often (a crowd's tile count is the same on
+        // every peer, whatever the bucket order).
+        if (movedThisTick && this._spatialKey !== undefined) {
+            let here = spatialUnits[this._spatialKey];
+            if (here && here.length > CROWDED_TILE_UNITS) collisionInterval = CROWDED_UNIT_COLLISION_TICKS;
+        }
         let hadUnitCollision = false;
         if (collisionInterval <= 1 || ((gameTime + this.id) % collisionInterval) === 0) {
             let selfCollisionR = this.getCollisionRadius();
@@ -586,22 +623,33 @@ class Unit {
             // range circle hold every candidate), inlined: this runs for every
             // moving unit every tick.
             let wx = this.x, wy = this.y, radiusSq = sepRange * sepRange, cws = CHUNK_SIZE * TILE;
+            // Teammates never collide farther apart than the two radii (no
+            // cross-team padding): chunks holding only this player's units
+            // are tested with that tighter range (same candidates, far fewer
+            // units scanned in a big army).
+            let owner = this.owner, ownerCounted = owner >= 0 && owner < spatialUnitsComplexPlayerCount;
+            let sameRange = Math.min(sepRange, selfCollisionR + _maxUnitCollisionRadius());
+            let sameSq = sameRange * sameRange;
             let minCx = Math.max(0, Math.floor((wx - sepRange) / cws)), maxCx = Math.min(CHUNKS_W - 1, Math.floor((wx + sepRange) / cws));
             let minCy = Math.max(0, Math.floor((wy - sepRange) / cws)), maxCy = Math.min(CHUNKS_H - 1, Math.floor((wy + sepRange) / cws));
             for (let cy = minCy; cy <= maxCy; cy++) {
                 let chunkMinY = cy * cws;
                 let ny = wy < chunkMinY ? chunkMinY : (wy > chunkMinY + cws ? chunkMinY + cws : wy);
                 for (let cx = minCx; cx <= maxCx; cx++) {
-                    let chunk = spatialUnits[cy * CHUNKS_W + cx];
+                    let key = cy * CHUNKS_W + cx;
+                    let chunk = spatialUnits[key];
                     if (!chunk || chunk.length === 0) continue;
+                    let rangeSq = ownerCounted
+                        && spatialUnitsComplex[key * spatialUnitsComplexStridePerChunk + owner * spatialUnitsComplexStridePerPlayer] === chunk.length
+                        ? sameSq : radiusSq;
                     let chunkMinX = cx * cws;
                     let nx = wx < chunkMinX ? chunkMinX : (wx > chunkMinX + cws ? chunkMinX + cws : wx);
-                    if ((wx - nx) * (wx - nx) + (wy - ny) * (wy - ny) > radiusSq) continue;
+                    if ((wx - nx) * (wx - nx) + (wy - ny) * (wy - ny) > rangeSq) continue;
                     for (let k = 0; k < chunk.length; k++) {
                         let other = chunk[k];
                         if (other.dead || other === this) continue;
                         let dx = other.x - wx, dy = other.y - wy, d2 = dx * dx + dy * dy;
-                        if (d2 > radiusSq) continue;
+                        if (d2 > rangeSq) continue;
                         // getCollisionLayer() / getCollisionRadius(), inlined.
                         let otherLayer = other.isFlying ? 'air' : (other.unitType === 'mole' ? 'mole' : 'ground');
                         if (otherLayer !== myLayer) continue;
@@ -767,6 +815,9 @@ class Unit {
 
     tryDriveByAttack() {
         if (this.workerState || this.attackTimer > 0 || this.preComputed.attackDamage <= 0) return;
+        // Scanning on the move is staggered to every other tick (by unit id):
+        // a ready shot waits at most one tick.
+        if (((gameTime + this.id) & 1) !== 0) return;
         let closest = null;
         let bestD2 = Infinity;
         // Use only simulation state. Pick by distance, then unit id, independent of
@@ -782,8 +833,7 @@ class Unit {
         }, { enemyOfPlayer: this.owner, areaOnly: true });
         if (closest) { this._performAttackOnUnit(closest); return; }
         // Nothing hostile to hit on the way: shoot structures in reach,
-        // turrets and traps on the route first (staggered by unit id).
-        if (((gameTime + this.id) & 1) !== 0) return;
+        // turrets and traps on the route first (same staggered ticks).
         let structure = _findHostileStructureInAttackRange(this);
         if (structure) this._performAttackOnBuilding(structure);
     }
@@ -1734,37 +1784,57 @@ function resizeUnitSubgroup(playerId, unitIds, mode, subgroupFilter = null) {
 }
 
 
-function findNearestWalkable(gx, gy, fromGx, fromGy, unit = null) {
-    if (isWalkableTileFor(unit, gx, gy)) return { x: gx, y: gy };
+// The nearest walkable tile to (gx, gy) by ring, and in that ring the one
+// nearest to (fromGx, fromGy) (ties: smaller y, then smaller x). Scans each
+// ring in place: building and sorting a candidate list per ring per unit made
+// a rally to an unwalkable spot cost most of a tick.
+// The walkable tiles of the nearest ring do not depend on where the unit is,
+// only on what may stand on them: cached per target and walking class for the
+// rest of the tick (a big army ordered to an unwalkable spot asks thousands
+// of times). Keyed by the path topology version, which every peer bumps at
+// resyncs, and by the tick.
+let _nearestWalkableRingCache = new Map();
+let _nearestWalkableRingCacheKey = '';
 
+function _nearestWalkableRing(gx, gy, unit) {
+    let tickKey = gameTime + '|' + currentTick + '|' + pathTopologyVersion;
+    if (_nearestWalkableRingCacheKey !== tickKey) { _nearestWalkableRingCacheKey = tickKey; _nearestWalkableRingCache.clear(); }
+    let cls = !unit ? 'n' : unit.isFlying ? 'f' : (unit.owner + '|' + (unit.workerType || ''));
+    let key = gx + ',' + gy + '|' + cls;
+    let ring = _nearestWalkableRingCache.get(key);
+    if (ring !== undefined) return ring;
+    ring = null;
     let maxRadius = Math.max(GRID_W, GRID_H);
-    for (let r = 1; r <= maxRadius; r++) {
-        let candidates = [];
+    for (let r = 1; r <= maxRadius && !ring; r++) {
+        let tiles = [];
+        // The old candidate order: top and bottom rows by x, then the sides.
         for (let x = gx - r; x <= gx + r; x++) {
-            candidates.push({ x, y: gy - r });
-            candidates.push({ x, y: gy + r });
+            if (isWalkableTileFor(unit, x, gy - r)) tiles.push(x, gy - r);
+            if (isWalkableTileFor(unit, x, gy + r)) tiles.push(x, gy + r);
         }
         for (let y = gy - r + 1; y <= gy + r - 1; y++) {
-            candidates.push({ x: gx - r, y });
-            candidates.push({ x: gx + r, y });
+            if (isWalkableTileFor(unit, gx - r, y)) tiles.push(gx - r, y);
+            if (isWalkableTileFor(unit, gx + r, y)) tiles.push(gx + r, y);
         }
-
-        if (Number.isFinite(fromGx) && Number.isFinite(fromGy)) {
-            candidates.sort((a, b) => {
-                let da = detHypot(a.x - fromGx, a.y - fromGy);
-                let db = detHypot(b.x - fromGx, b.y - fromGy);
-                if (da !== db) return da - db;
-                if (a.y !== b.y) return a.y - b.y;
-                return a.x - b.x;
-            });
-        }
-
-        for (let c of candidates) {
-            if (!isWalkableTileFor(unit, c.x, c.y)) continue;
-            return { x: c.x, y: c.y };
-        }
+        if (tiles.length) ring = tiles;
     }
+    _nearestWalkableRingCache.set(key, ring);
+    return ring;
+}
 
+function findNearestWalkable(gx, gy, fromGx, fromGy, unit = null) {
+    if (isWalkableTileFor(unit, gx, gy)) return { x: gx, y: gy };
+    let hasFrom = Number.isFinite(fromGx) && Number.isFinite(fromGy);
+    let ring = _nearestWalkableRing(gx, gy, unit);
+    if (ring) {
+        if (!hasFrom) return { x: ring[0], y: ring[1] };
+        let bestX = ring[0], bestY = ring[1], bestD = detHypot(bestX - fromGx, bestY - fromGy);
+        for (let i = 2; i < ring.length; i += 2) {
+            let x = ring[i], y = ring[i + 1], d = detHypot(x - fromGx, y - fromGy);
+            if (d < bestD || (d === bestD && (y < bestY || (y === bestY && x < bestX)))) { bestX = x; bestY = y; bestD = d; }
+        }
+        return { x: bestX, y: bestY };
+    }
     return {
         x: Math.max(0, Math.min(GRID_W - 1, gx)),
         y: Math.max(0, Math.min(GRID_H - 1, gy))

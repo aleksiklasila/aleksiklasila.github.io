@@ -5,8 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>RTS Defence</title>
-    <link rel="stylesheet" href="./style/style.css?v=20261001-loop2">
-    <link rel="stylesheet" href="./style/bottom_bar.css?v=20261001-loop2">
+    <link rel="stylesheet" href="./style/style.css?v=20261001-slide2">
+    <link rel="stylesheet" href="./style/bottom_bar.css?v=20261001-slide2">
     <link rel="stylesheet" href="./style/scrollbars.css?v=20260930-scroll">
 </head>
 
@@ -527,8 +527,8 @@
                         <label class="settings-toggle" for="setting-gfx-grade"><input type="checkbox" id="setting-gfx-grade"> Enabled</label>
                     </div>
                     <div class="settings-row">
-                        <label for="setting-gfx-sharpen">Sharpen</label>
-                        <label class="settings-toggle" for="setting-gfx-sharpen"><input type="checkbox" id="setting-gfx-sharpen"> Enabled</label>
+                        <label for="setting-gfx-sharpen" title="Sharpens the final image. Stronger settings keep edges and units crisper while the camera moves (less smearing).">Sharpen</label>
+                        <select id="setting-gfx-sharpen" style="width:150px"><option value="false">Off</option><option value="low">Low</option><option value="true">Medium</option><option value="high">High</option></select>
                     </div>
                     <div class="settings-row">
                         <label for="setting-gfx-resolution">Render resolution</label>
@@ -537,6 +537,14 @@
                     <div class="settings-row">
                         <label for="setting-fps-target" title="Frame rate the game paces its frames to, set separately for each display. Auto: the refresh rate the browser runs this display at. If Auto shows more than the display really has (for example a 60 Hz display next to a 120 Hz one), pick the real rate here. Lower than the browser runs: frames are skipped evenly. Higher (for example Edge's 60 FPS fullscreen on a 120 Hz display): extra frames are drawn in between, as far as the frame cost allows.">Target FPS (this display)</label>
                         <select id="setting-fps-target" style="width:150px"><option value="auto">Auto</option></select>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-camera-slide" title="While panning, the browser keeps sliding the last drawn frame at the camera's speed until the next one is ready, so panning stays smooth even when a game tick holds up drawing. Turn off if the edges or moving units look doubled (ghosting).">Camera slide (smooth panning)</label>
+                        <label class="settings-toggle" for="setting-camera-slide"><input type="checkbox" id="setting-camera-slide" checked> Enabled</label>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-pixel-snap" title="2D: draws each frame with the camera on a whole screen pixel, so the map and units stay sharp while panning instead of shimmering or smearing between pixels.">Pixel-snapped camera (2D)</label>
+                        <label class="settings-toggle" for="setting-pixel-snap"><input type="checkbox" id="setting-pixel-snap" checked> Enabled</label>
                     </div>
                 </div>
             </div>
@@ -724,13 +732,13 @@
     
     <script src="./src/utils/utils_common.js?v=20260930-compact"></script>
     <script src="./src/utils/utils_net_quality.js?v=20260928-lateseal"></script>
-    <script src="./src/utils/utils_networking.js?v=20260929-fx"></script>
-    <script src="./src/utils/utils_snapshot.js?v=20260927-laser"></script>
-    <script src="./src/utils/utils_resync.js?v=20260928-reserve"></script>
+    <script src="./src/utils/utils_networking.js?v=20261002-sim2"></script>
+    <script src="./src/utils/utils_snapshot.js?v=20261002-sim2"></script>
+    <script src="./src/utils/utils_resync.js?v=20261002-sim2"></script>
     <script src="./src/utils/utils_host_migration.js?v=20260928-lateseal"></script>
-    <script src="./src/utils/utils_storage.js?v=20261001-loop2"></script>
+    <script src="./src/utils/utils_storage.js?v=20261002-sim2"></script>
 
-    <script src="./src/data/data_static.js?v=20260926-netcode"></script>
+    <script src="./src/data/data_static.js?v=20261002-sim2"></script>
     <script src="./src/data/data_dynamic.js?v=20260927-lod"></script>
     <script src="./src/data/data_state.js?v=20260927-lod"></script>
 
@@ -738,30 +746,34 @@
     <script src="./src/audio_visual/range_overlay.js?v=20260925-scale-perf"></script>
     <script src="./src/audio_visual/selection_overlay.js?v=20260927-dist"></script>
     <script src="./src/audio_visual/postprocess3d.js?v=20260927-lod"></script>
-    <script src="./src/audio_visual/renderer3d.js?v=20260927-lod"></script>
+    <script src="./src/audio_visual/renderer3d.js?v=20261002-sim2"></script>
     <script src="./src/audio_visual/renderer2d.js?v=20260927-dist"></script>
     <script src="./src/audio_visual/side_visualizations.js?v=20260925-crowd-perf"></script>
     <script src="./src/audio_visual/effects3d.js?v=20260927-lod"></script>
-    <script src="./src/audio_visual/renderer.js?v=20261001-loop2"></script>
+    <script src="./src/audio_visual/renderer.js?v=20261002-sim2"></script>
     <script src="./src/audio_visual/audio.js?v=20260927-dist"></script>
     <script src="./src/audio_visual/jukebox.js?v=20260921"></script>
-    <script src="./src/audio_visual/hud.js?v=20261001-loop2"></script>
+    <script src="./src/audio_visual/hud.js?v=20261001-slide2"></script>
     <script src="./src/audio_visual/bottom_bar.js?v=20260930-deltacolor"></script>
 
-    <script src="./src/game/chunk.js?v=20260927-resync"></script>
+    <script src="./src/game/chunk.js?v=20261002-sim2"></script>
     <script src="./src/game/map.js?v=20260926-netcode"></script>
-    <script src="./src/game/pathfinding.js?v=20260925-scale-perf"></script>
+    <script src="./src/game/pathfinding.js?v=20261002-sim2"></script>
     <script src="./src/game/player.js?v=20260516d"></script>
 
     <script src="./src/things/barrack.js?v=20260927-dist"></script>
-    <script src="./src/things/unit.js?v=20260927-dist"></script>
+    <script src="./src/things/unit.js?v=20261002-sim2"></script>
     <script src="./src/things/worker.js?v=20260929-fx"></script>
     <script src="./src/things/particle.js?v=20260929-fx"></script>
     <script src="./src/things/projectile.js?v=20260929-fx"></script>
     <script src="./src/things/things_utils.js?v=20260927-dist"></script>
     <script src="./src/things/tower.js?v=20260927-dist"></script>
 
-    <script src="./src/main.js?v=20261001-loop2"></script>
+    <script src="./src/main.js?v=20261002-sim2"></script>
+
+    <script src="./src/sim/sim_delta.js?v=20261002-sim2"></script>
+    <script src="./src/sim/sim_shadow.js?v=20261002-sim2"></script>
+    <script src="./src/sim/sim_client.js?v=20261002-sim2"></script>
 
     <script src="./src/bootstrap.js?v=20260924-settings"></script>
 </body>

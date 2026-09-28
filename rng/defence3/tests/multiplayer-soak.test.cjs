@@ -46,7 +46,7 @@ const SECONDS = Number(process.argv[2]) || 110;
         [at(60), 'guest3 diverges', () => {
             const g = guests[2];
             divergence = { name: g.name, tick: g.eval('currentTick') - 1, patchesBefore: g.patchesApplied };
-            g.eval(`(() => { const us = units.filter(u => !u.dead); for (let i = 0; i < 5; i++) { const u = us[(i * 31) % us.length]; u.x += 6; u.energy = Math.max(1, u.energy - 2); } })()`);
+            g.evalSim(`(() => { const us = units.filter(u => !u.dead); for (let i = 0; i < 5; i++) { const u = us[(i * 31) % us.length]; u.x += 6; u.energy = Math.max(1, u.energy - 2); } })()`);
         }],
         [at(70), 'spectator joins', async () => {
             const spec = world.spawn('spectator', { url: `http://localhost/rng/defence3/index.html?game=${hostId}` });

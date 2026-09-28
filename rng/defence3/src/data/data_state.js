@@ -936,6 +936,10 @@ const GRAPHICS_AA_MODES = ['off', 'fxaa', 'msaa', 'msaa_fxaa'];
 const GRAPHICS_AO_MODES = ['off', 'low', 'high'];
 const GRAPHICS_SHADOW_MODES = ['off', 'simple', 'detailed', 'high'];
 const GRAPHICS_OPTION_KEYS = ['aa', 'shadows', 'ao', 'outline', 'bloom', 'grade', 'sharpen', 'resolution'];
+// Sharpen: false (off), 'low', true (medium, the original strength) or
+// 'high'. Stronger keeps moving edges crisper (less smear while panning).
+const GRAPHICS_SHARPEN_MODES = [false, 'low', true, 'high'];
+const GRAPHICS_SHARPEN_AMOUNT = { low: 0.1, true: 0.18, high: 0.32 };
 const GRAPHICS_PRESETS = {
     off: { aa: 'off', shadows: 'off', ao: 'off', outline: false, bloom: false, grade: false, sharpen: false, resolution: 1 },
     simple: { aa: 'msaa', shadows: 'simple', ao: 'off', outline: false, bloom: false, grade: false, sharpen: false, resolution: 1 },
@@ -956,7 +960,7 @@ function normalizeGraphicsOptions(raw, fallback = GRAPHICS_PRESETS.high) {
         outline: bool(src.outline, fallback.outline),
         bloom: bool(src.bloom, fallback.bloom),
         grade: bool(src.grade, fallback.grade),
-        sharpen: bool(src.sharpen, fallback.sharpen),
+        sharpen: GRAPHICS_SHARPEN_MODES.includes(src.sharpen) ? src.sharpen : fallback.sharpen,
         resolution: src.resolution !== undefined && src.resolution !== null && Number.isFinite(res) ? Math.max(0.5, Math.min(1, res)) : fallback.resolution
     };
 }

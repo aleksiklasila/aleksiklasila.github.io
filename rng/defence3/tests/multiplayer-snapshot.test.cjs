@@ -16,7 +16,7 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
         for (let k = 0; k < 20; k++) { for (const i of all) if (rand() < 0.7) i.eval(C.CHAOS_COMMAND + '(' + rand() + ')'); await world.run(200); }
         // Make pre-states differ: one peer diverged, one runs ahead, one
         // just ran the UI, before all restore the host's snapshot.
-        guests[0].eval(`(() => { const u = units.find(u => !u.dead); if (u) { u.x += 9; u.workerTarget = null; } })()`);
+        guests[0].evalSim(`(() => { const u = units.find(u => !u.dead); if (u) { u.x += 9; u.workerTarget = null; } })()`);
         host.eval(`(() => { for (let n = 0; n < 3; n++) { lockstepBundleByTick[currentTick] = { tick: currentTick, packets: [], combinedChecksum: '' }; runOneTick(); } })()`);
         const text = host.eval('JSON.stringify(buildHostAuthoritativeStateSnapshot({ includeConfig: false, includeStaticMapState: false, includeGridTypes: true }))');
         const shapes = all.map(i => i.eval('new Set(units.filter(u => !u.dead).map(u => Object.keys(u).join(","))).size'));
@@ -50,11 +50,11 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
         g.eval(`(() => { const orig = _handleConnectionMessage; _handleConnectionMessage = (c, d) => { if (d && d.type === 'RESYNC_PATCH') __scratch.kinds.push((d.full ? 'full:' : 'delta:') + (d.payload.z ? 'z' : 'json')); return orig(c, d); }; })()`);
         await H.playFor(w, pair, 4000, { seed: 2 });
         const snapshots0 = g.snapshotsApplied;
-        g.eval(`(() => { const u = units.find(u => !u.dead); u.x += 13; })()`);
+        g.evalSim(`(() => { const u = units.find(u => !u.dead); u.x += 13; })()`);
         let ok = await w.runUntil(() => g.patchesApplied >= 1, 15000, 20);
         assert.ok(ok, 'delta patch arrived over the compressed transport');
         g.eval(`resyncGuest.forceFull = true`);
-        g.eval(`(() => { const u = units.find(u => !u.dead); u.energy = Math.max(1, u.energy - 5); })()`);
+        g.evalSim(`(() => { const u = units.find(u => !u.dead); u.energy = Math.max(1, u.energy - 5); })()`);
         ok = await w.runUntil(() => g.fullPatchesApplied >= 1, 15000, 20);
         assert.ok(ok, 'full patch arrived over the compressed transport');
         assert.deepEqual(g.scratch.kinds.slice(0, 2), ['delta:z', 'full:z']);
@@ -85,7 +85,7 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
         const kinds = [];
         for (const g of m.guests) g.scratch.kinds = kinds;
         for (const g of m.guests) g.eval(`(() => { const orig = _handleConnectionMessage; _handleConnectionMessage = (c, d) => { if (d && d.type === 'RESYNC_PATCH') __scratch.kinds.push(myPeerId + ':' + (d.payload.z ? 'z' : 'json')); return orig(c, d); }; })()`);
-        for (const g of m.guests) g.eval(`(() => { const u = units.find(u => !u.dead); u.x += 13; })()`);
+        for (const g of m.guests) g.evalSim(`(() => { const u = units.find(u => !u.dead); u.x += 13; })()`);
         const ok = await w.runUntil(() => m.guests.every(g => g.patchesApplied >= 1), 15000, 20);
         assert.ok(ok, 'mixed-browser patches applied');
         const byPeer = Object.fromEntries(kinds.map(k => k.split(':')));
