@@ -4,27 +4,28 @@ const vm = require('node:vm');
 const path = require('node:path');
 const read = p => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 const src = read('src/things/unit.js');
-const c = vm.createContext({TILE:32,UNIT_POSITION_QUANTIZATION:1024,gameTime:0,
-    CROSS_TEAM_UNIT_COLLISION_PADDING:16,MOVING_UNIT_COLLISION_TICKS:2,CROWDED_TILE_UNITS:12,CROWDED_UNIT_COLLISION_TICKS:4,CHUNK_SIZE:1000,spatialUnitsComplexPlayerCount:0,BASE_UNIT_STATS:{norm:{r:8}},CHUNKS_W:1,CHUNKS_H:1,getUnitCollisionRecalcTicks:()=>5,canUnitOccupyTile:()=>true});
+const c = vm.createContext({TILE:32,UNIT_POSITION_QUANTIZATION:1024,gameTime:0,GRID_W:100,GRID_H:100,
+    CROSS_TEAM_UNIT_COLLISION_PADDING:16,CHUNK_SIZE:1000,spatialUnitsComplexPlayerCount:0,spatialUnitsComplex:new Int32Array(0),
+    spatialUnitsComplexStridePerChunk:0,spatialUnitsComplexStridePerPlayer:0,BASE_UNIT_STATS:{norm:{r:8}},CHUNKS_W:1,CHUNKS_H:1,
+    getUnitCollisionRecalcTicks:()=>5,canUnitOccupyTile:()=>true,updateUnitSpatial:()=>{}});
+vm.runInContext(read('src/utils/utils_common.js'),c);
 vm.runInContext(src,c);
-// Run the actual collision gather/sort/solve used by Unit.update, including
-// staggered ticks, while 100 units keep moving towards the same waypoint.
-const start=src.indexOf('        // Movement must not accumulate');
-const end=src.indexOf('        if (hadUnitCollision &&',start);
-vm.runInContext('function separate() {\n'+src.slice(start,end)+'\n}',c);
+// Run the actual separation pass of a tick (after all units moved), while
+// 100 units keep moving towards the same waypoint.
 function crowdRun() {
     let crowd=Array.from({length:100},(_,id)=>({id,owner:0,x:500+(id%10)*2,y:500+Math.floor(id/10)*2,
-        vx:0,vy:0,r:8,getCollisionRadius:()=>8,getCollisionLayer:()=> 'ground'}));
-    // One chunk covering the whole crowd: the gather still filters by distance.
+        vx:0,vy:0,r:8,unitType:'norm',dead:false,isFlying:false,_spatialKey:0,getCollisionRadius:()=>8,getCollisionLayer:()=> 'ground'}));
+    // One chunk covering the whole crowd: the pass still filters by distance.
     c.spatialUnits=[crowd];
+    c.units=crowd;
     for(let tick=0;tick<180;tick++) {
         c.gameTime=tick;
         for(let u of crowd) {
             u.prevX=u.x;u.prevY=u.y;
             let dx=509-u.x,dy=509-u.y,d=Math.hypot(dx,dy);
             if(d>8){u.vx=dx/d*2;u.vy=dy/d*2;u.x+=u.vx;u.y+=u.vy;}
-            c.separate.call(u);
         }
+        c.runUnitSeparationPass();
     }
     let maxPacked=0;
     for(let u of crowd) maxPacked=Math.max(maxPacked,crowd.filter(v=>Math.abs(u.x-v.x)<=32&&Math.abs(u.y-v.y)<=32).length);
@@ -33,6 +34,20 @@ function crowdRun() {
 }
 const crowd=crowdRun();
 assert.deepEqual(crowdRun(),crowd,'crowd resolution replays deterministically');
+{
+    // Pushes are summed as integers: another bucket order (as a peer may
+    // have) gives the same positions.
+    const orig=crowdRun; const units0=[];
+    let crowd2=Array.from({length:100},(_,id)=>({id,owner:0,x:500+(id%10)*2,y:500+Math.floor(id/10)*2,
+        vx:0,vy:0,r:8,unitType:'norm',dead:false,isFlying:false,_spatialKey:0,getCollisionRadius:()=>8,getCollisionLayer:()=> 'ground'}));
+    c.units=crowd2; c.spatialUnits=[crowd2.slice().reverse()];
+    for(let tick=0;tick<180;tick++) {
+        c.gameTime=tick;
+        for(let u of crowd2) { u.prevX=u.x;u.prevY=u.y; let dx=509-u.x,dy=509-u.y,d=Math.hypot(dx,dy); if(d>8){u.vx=dx/d*2;u.vy=dy/d*2;u.x+=u.vx;u.y+=u.vy;} }
+        c.runUnitSeparationPass();
+    }
+    assert.deepEqual(crowd2.map(u=>[u.x,u.y]),crowd.positions,'separation does not depend on bucket order');
+}
 assert.ok(crowd.maxPacked<65,`crowd should spread beyond 2x2 tiles: ${crowd.maxPacked}`);
 assert.ok(crowd.meanNearest>5,`nearest-neighbor spacing recovers promptly: ${crowd.meanNearest}`);
 // A huge accumulated push cannot skip a wall even if its endpoint is empty.

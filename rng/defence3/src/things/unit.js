@@ -325,6 +325,7 @@ class Unit {
         this.owner = owner;
         this.x = x; this.y = y;
         this.prevX = x; this.prevY = y;
+        this._sepI = -1;   // index in the separation pass (per tick)
         this.teleportHideTicks = 0;
 
         let s = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm;
@@ -419,7 +420,7 @@ class Unit {
         this._healerNextRecheckTick = undefined; this._researchLastMoveTick = undefined; this._researchNextRecheckTick = undefined;
         this.holdPosition = undefined; this._ambientSoundTicks = undefined;
 
-        this._spatialKey = undefined; this._spatialMember = undefined; this._spatialAreaId = undefined; this._spatialAreaOwner = undefined; this._r3d = undefined; this._r3dSig = undefined; this._r3dTex = undefined; this._awaitGroupPath = 0;
+        this._spatialKey = undefined; this._spatialMember = undefined; this._spatialAreaId = undefined; this._spatialAreaOwner = undefined; this._r3d = undefined; this._r3dSig = undefined; this._r3dTex = undefined; this._visStill = undefined; this._rslot = undefined; this._awaitGroupPath = 0;
         // A snapshot restore writes every field itself (same order, so the
         // same layout) and indexes the unit afterwards.
         if (_snapUnitShellMode) return;
@@ -595,127 +596,8 @@ class Unit {
                 this.commandState = CMD_IDLE;
                 break;
         }
-        // Movement must not accumulate five ticks of penetration before being
-        // corrected: moving units separate every other tick (staggered by
-        // id, halving the neighbour scans of dense moving armies). Resting
-        // units retain the configured staggered refresh.
-        let movedThisTick = this.x !== this.prevX || this.y !== this.prevY;
-        let collisionInterval = movedThisTick ? MOVING_UNIT_COLLISION_TICKS : getUnitCollisionRecalcTicks();
-        // In a dense crowd each check scans dozens of neighbours: moving units
-        // there separate less often (a crowd's tile count is the same on
-        // every peer, whatever the bucket order).
-        if (movedThisTick && this._spatialKey !== undefined) {
-            let here = spatialUnits[this._spatialKey];
-            if (here && here.length > CROWDED_TILE_UNITS) collisionInterval = CROWDED_UNIT_COLLISION_TICKS;
-        }
-        let hadUnitCollision = false;
-        if (collisionInterval <= 1 || ((gameTime + this.id) % collisionInterval) === 0) {
-            let selfCollisionR = this.getCollisionRadius();
-            let crossTeamCollisionPadding = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0);
-            let sepRange = selfCollisionR * 2 + crossTeamCollisionPadding;
-            let pushX = 0, pushY = 0, maxOverlap = 0;
-            let myLayer = this.getCollisionLayer();
-            // Pooled entries: this runs for every moving unit every tick.
-            let collisionCandidates = _unitCollisionCandidates;
-            let candidateCount = 0;
-            // Same candidates as forEachUnitInRange(x, y, sepRange, ..., { pad: 0 })
-            // (unit centers are bucketed per chunk, so chunks overlapping the
-            // range circle hold every candidate), inlined: this runs for every
-            // moving unit every tick.
-            let wx = this.x, wy = this.y, radiusSq = sepRange * sepRange, cws = CHUNK_SIZE * TILE;
-            // Teammates never collide farther apart than the two radii (no
-            // cross-team padding): chunks holding only this player's units
-            // are tested with that tighter range (same candidates, far fewer
-            // units scanned in a big army).
-            let owner = this.owner, ownerCounted = owner >= 0 && owner < spatialUnitsComplexPlayerCount;
-            let sameRange = Math.min(sepRange, selfCollisionR + _maxUnitCollisionRadius());
-            let sameSq = sameRange * sameRange;
-            let minCx = Math.max(0, Math.floor((wx - sepRange) / cws)), maxCx = Math.min(CHUNKS_W - 1, Math.floor((wx + sepRange) / cws));
-            let minCy = Math.max(0, Math.floor((wy - sepRange) / cws)), maxCy = Math.min(CHUNKS_H - 1, Math.floor((wy + sepRange) / cws));
-            for (let cy = minCy; cy <= maxCy; cy++) {
-                let chunkMinY = cy * cws;
-                let ny = wy < chunkMinY ? chunkMinY : (wy > chunkMinY + cws ? chunkMinY + cws : wy);
-                for (let cx = minCx; cx <= maxCx; cx++) {
-                    let key = cy * CHUNKS_W + cx;
-                    let chunk = spatialUnits[key];
-                    if (!chunk || chunk.length === 0) continue;
-                    let rangeSq = ownerCounted
-                        && spatialUnitsComplex[key * spatialUnitsComplexStridePerChunk + owner * spatialUnitsComplexStridePerPlayer] === chunk.length
-                        ? sameSq : radiusSq;
-                    let chunkMinX = cx * cws;
-                    let nx = wx < chunkMinX ? chunkMinX : (wx > chunkMinX + cws ? chunkMinX + cws : wx);
-                    if ((wx - nx) * (wx - nx) + (wy - ny) * (wy - ny) > rangeSq) continue;
-                    for (let k = 0; k < chunk.length; k++) {
-                        let other = chunk[k];
-                        if (other.dead || other === this) continue;
-                        let dx = other.x - wx, dy = other.y - wy, d2 = dx * dx + dy * dy;
-                        if (d2 > rangeSq) continue;
-                        // getCollisionLayer() / getCollisionRadius(), inlined.
-                        let otherLayer = other.isFlying ? 'air' : (other.unitType === 'mole' ? 'mole' : 'ground');
-                        if (otherLayer !== myLayer) continue;
-                        let otherR = +other.collisionR || +other.r || 0.1;
-                        if (otherR < 0.1) otherR = 0.1;
-                        let collisionPadding = other.owner === this.owner ? 0 : crossTeamCollisionPadding;
-                        let minDist = selfCollisionR + otherR + collisionPadding;
-                        if (d2 >= minDist * minDist) continue;
-                        let entry = collisionCandidates[candidateCount] || (collisionCandidates[candidateCount] = {});
-                        entry.other = other; entry.d2 = d2; entry.dx = dx; entry.dy = dy; entry.minDist = minDist;
-                        entry.order = Math.floor(Number(other.id) || 0);
-                        // Insertion sort by unit id (unique), independent of bucket order.
-                        let i = candidateCount++;
-                        while (i > 0 && collisionCandidates[i - 1].order > entry.order) {
-                            collisionCandidates[i] = collisionCandidates[i - 1];
-                            i--;
-                        }
-                        collisionCandidates[i] = entry;
-                    }
-                }
-            }
-            for (let c = 0; c < candidateCount; c++) {
-                let entry = collisionCandidates[c];
-                let other = entry.other;
-                let dx = -entry.dx;
-                let dy = -entry.dy;
-                let d = Math.sqrt(Math.max(0, entry.d2));
-                let minDist = entry.minDist;
-                if (d < minDist) {
-                    hadUnitCollision = true;
-                    maxOverlap = Math.max(maxOverlap, minDist - d);
-                    let nx = 0, ny = 0;
-                    if (d > 0.001) {
-                        nx = dx / d;
-                        ny = dy / d;
-                    } else {
-                        // Exact overlap fallback: split the pair deterministically so
-                        // same-direction air units do not keep shoving in lockstep.
-                        let mdx = this.vx, mdy = this.vy;
-                        if (detHypot(mdx, mdy) < 0.001 && this.path && this.pathIndex < this.path.length) {
-                            let pn = this.path[this.pathIndex];
-                            mdx = pn.x * TILE + 16 - this.x;
-                            mdy = pn.y * TILE + 16 - this.y;
-                        }
-                        let pairSign = ((Number(this.id) || 0) < (Number(other && other.id) || 0)) ? -1 : 1;
-                        if (Math.abs(mdx) >= Math.abs(mdy)) {
-                            nx = 0;
-                            ny = (mdx >= 0 ? -1 : 1) * pairSign;
-                        } else {
-                            nx = (mdy >= 0 ? 1 : -1) * pairSign;
-                            ny = 0;
-                        }
-                    }
-                    let force = (minDist - Math.max(d, 0.001)) * 0.6;
-                    pushX += nx * force;
-                    pushY += ny * force;
-                }
-                entry.other = null;
-            }
-            if (pushX !== 0 || pushY !== 0) {
-                applyUnitSeparation(this, pushX, pushY, maxOverlap);
-            }
-        }
-        if (hadUnitCollision && this.pathIsFallbackAstar && this._pendingPathTarget) {
-            _tryUpgradeAstarFallbackPath(this);
-        }
+        // Unit separation runs for all units at once after the updates
+        // (runUnitSeparationPass).
         pushUnitOutOfBlockedTile(this);
         this.x = _quantizeUnitWorldCoord(this.x);
         this.y = _quantizeUnitWorldCoord(this.y);
@@ -1839,6 +1721,188 @@ function findNearestWalkable(gx, gy, fromGx, fromGy, unit = null) {
         x: Math.max(0, Math.min(GRID_W - 1, gx)),
         y: Math.max(0, Math.min(GRID_H - 1, gy))
     };
+}
+
+// ---- Unit separation ----
+// One pass per tick after every unit has moved (gameTick). Each touching
+// pair is found once (per spatial chunk: the chunk itself, then the chunks
+// ahead of it) and both units are pushed apart, every tick, so crowds move
+// smoothly instead of creeping into each other and snapping back.
+// A unit takes part when it moved this tick or on its staggered resting
+// check (getUnitCollisionRecalcTicks); a pair is tested when either does,
+// and only a taking-part unit is pushed. Pushes are summed as integers
+// (1/UNIT_SEPARATION_Q px), so the result does not depend on the order of
+// the pairs (bucket order may differ between peers).
+const UNIT_SEPARATION_Q = 1024;
+// Share of an overlap a unit corrects: both of a pair (about what two
+// successive 0.6 corrections gave), or the only one taking part.
+const UNIT_SEPARATION_SHARE_BOTH = 0.42, UNIT_SEPARATION_SHARE_ONE = 0.6;
+// A colliding unit on a fallback path retries its path every this many ticks.
+const UNIT_SEPARATION_PATH_RETRY_TICKS = 4;
+// Contacts summed in full (see runUnitSeparationPass).
+const UNIT_SEPARATION_CONTACTS = 3;
+const _sep = { cap: 0, offs: null, offsReach: 0, offsCws: 0 };
+function _sepGrow(n) {
+    if (n <= _sep.cap) return;
+    let cap = Math.max(1024, n, _sep.cap * 2);
+    _sep.x = new Float64Array(cap); _sep.y = new Float64Array(cap); _sep.r = new Float64Array(cap);
+    _sep.owner = new Int32Array(cap); _sep.layer = new Uint8Array(cap); _sep.check = new Uint8Array(cap);
+    _sep.px = new Float64Array(cap); _sep.py = new Float64Array(cap); _sep.ov = new Float64Array(cap); _sep.hit = new Uint16Array(cap);
+    _sep.cap = cap;
+}
+
+// Direction a unit leaves an exact overlap in: sideways to its motion (or
+// path), split between the pair by id.
+function _unitExactOverlapDir(unit, other, out) {
+    let mdx = unit.vx, mdy = unit.vy;
+    if (detHypot(mdx, mdy) < 0.001 && unit.path && unit.pathIndex < unit.path.length) {
+        let pn = unit.path[unit.pathIndex];
+        mdx = pn.x * TILE + 16 - unit.x;
+        mdy = pn.y * TILE + 16 - unit.y;
+    }
+    let pairSign = ((Number(unit.id) || 0) < (Number(other && other.id) || 0)) ? -1 : 1;
+    if (Math.abs(mdx) >= Math.abs(mdy)) { out[0] = 0; out[1] = (mdx >= 0 ? -1 : 1) * pairSign; }
+    else { out[0] = (mdy >= 0 ? 1 : -1) * pairSign; out[1] = 0; }
+}
+const _sepDir = [0, 0];
+
+// One touching pair's pushes (a, b: pass indices; dx, dy from a to b).
+function _sepHit(a, b, ua, ub, dx, dy, d2, minDist) {
+    if (ua.dead || ub.dead) return;
+    let S = _sep, C = S.check;
+    let d = Math.sqrt(d2);
+    let overlap = minDist - Math.max(d, 0.001);
+    let f = overlap * (C[a] && C[b] ? UNIT_SEPARATION_SHARE_BOTH : UNIT_SEPARATION_SHARE_ONE) * UNIT_SEPARATION_Q;
+    if (C[a]) {
+        let nx, ny;
+        if (d > 0.001) { nx = -dx / d; ny = -dy / d; } else { _unitExactOverlapDir(ua, ub, _sepDir); nx = _sepDir[0]; ny = _sepDir[1]; }
+        S.px[a] += Math.round(nx * f); S.py[a] += Math.round(ny * f);
+        if (overlap > S.ov[a]) S.ov[a] = overlap;
+        S.hit[a]++;
+    }
+    if (C[b]) {
+        let nx, ny;
+        if (d > 0.001) { nx = dx / d; ny = dy / d; } else { _unitExactOverlapDir(ub, ua, _sepDir); nx = _sepDir[0]; ny = _sepDir[1]; }
+        S.px[b] += Math.round(nx * f); S.py[b] += Math.round(ny * f);
+        if (overlap > S.ov[b]) S.ov[b] = overlap;
+        S.hit[b]++;
+    }
+}
+
+// Tests unit ua (index a) against B[from..] (same layer, either taking
+// part, within reach).
+function _sepScan(ua, B, from, pad) {
+    let S = _sep, C = S.check, L = S.layer, X = S.x, Y = S.y, R = S.r, O = S.owner;
+    let a = ua._sepI, ca = C[a], la = L[a], xa = X[a], ya = Y[a], ra = R[a], oa = O[a];
+    for (let j = from, bn = B.length; j < bn; j++) {
+        let ub = B[j], b = ub._sepI;
+        if (!(ca | C[b]) || L[b] !== la) continue;
+        let dx = X[b] - xa, dy = Y[b] - ya, d2 = dx * dx + dy * dy;
+        let minDist = ra + R[b] + (O[b] === oa ? 0 : pad);
+        if (d2 >= minDist * minDist) continue;
+        _sepHit(a, b, ua, ub, dx, dy, d2, minDist);
+    }
+}
+
+// Owner of a chunk holding one player's units only, else -1.
+function _sepSoleOwner(key, chunk) {
+    let o = chunk[0].owner;
+    return o >= 0 && o < spatialUnitsComplexPlayerCount
+        && spatialUnitsComplex[key * spatialUnitsComplexStridePerChunk + o * spatialUnitsComplexStridePerPlayer] === chunk.length ? o : -1;
+}
+
+function runUnitSeparationPass() {
+    let n = units.length;
+    _sepGrow(n);
+    let S = _sep, X = S.x, Y = S.y, R = S.r, O = S.owner, L = S.layer, C = S.check;
+    let restTicks = getUnitCollisionRecalcTicks();
+    let any = false;
+    let nChunks = CHUNKS_W * CHUNKS_H;
+    if (!S.chunkR || S.chunkR.length < nChunks) { S.chunkR = new Float64Array(nChunks); S.chunkC = new Uint8Array(nChunks); }
+    let chunkR = S.chunkR, chunkC = S.chunkC;
+    chunkR.fill(0, 0, nChunks); chunkC.fill(0, 0, nChunks);
+    for (let i = 0; i < n; i++) {
+        let u = units[i];
+        u._sepI = i;
+        X[i] = u.x; Y[i] = u.y;
+        let r = +u.collisionR || +u.r || 0.1;
+        R[i] = r < 0.1 ? 0.1 : r;
+        O[i] = u.owner;
+        L[i] = u.isFlying ? 1 : (u.unitType === 'mole' ? 2 : 0);
+        let c = !u.dead && (u.x !== u.prevX || u.y !== u.prevY || restTicks <= 1 || ((gameTime + u.id) % restTicks) === 0);
+        C[i] = c ? 1 : 0;
+        if (c) any = true;
+        let key = u._spatialKey;
+        if (key >= 0 && key < nChunks) {
+            if (R[i] > chunkR[key]) chunkR[key] = R[i];
+            if (c) chunkC[key] = 1;
+        }
+        S.px[i] = 0; S.py[i] = 0; S.ov[i] = 0; S.hit[i] = 0;
+    }
+    if (!any) return;
+    let pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0);
+    let maxR = Math.max(0.1, _maxUnitCollisionRadius());
+    let cws = CHUNK_SIZE * TILE;
+    let farAny = 2 * maxR + pad;
+    let reach = Math.max(1, Math.ceil(farAny / cws));
+    // Forward neighbour offsets with the least distance between the chunks.
+    let offs = S.offs;
+    if (!offs || S.offsReach !== reach || S.offsCws !== cws) {
+        offs = [];
+        for (let oy = 0; oy <= reach; oy++) for (let ox = -reach; ox <= reach; ox++) {
+            if (oy === 0 && ox <= 0) continue;
+            let gx = Math.max(0, Math.abs(ox) - 1), gy = Math.max(0, oy - 1);
+            offs.push(ox, oy, Math.sqrt(gx * gx + gy * gy) * cws);
+        }
+        S.offs = offs; S.offsReach = reach; S.offsCws = cws;
+    }
+    for (let cy = 0; cy < CHUNKS_H; cy++) for (let cx = 0; cx < CHUNKS_W; cx++) {
+        let key = cy * CHUNKS_W + cx;
+        let A = spatialUnits[key];
+        if (!A || A.length === 0) continue;
+        let an = A.length, activeA = chunkC[key], rA = chunkR[key];
+        if (activeA) for (let i = 0; i < an - 1; i++) _sepScan(A[i], A, i + 1, pad);
+        let ownA = -2;
+        for (let k = 0; k < offs.length; k += 3) {
+            let gap = offs[k + 2];
+            if (gap >= farAny) continue;
+            let nx = cx + offs[k], ny = cy + offs[k + 1];
+            if (nx < 0 || nx >= CHUNKS_W || ny >= CHUNKS_H) continue;
+            let key2 = ny * CHUNKS_W + nx;
+            // Neither chunk has a unit taking part, or even their largest
+            // units (with the enemy padding) cannot touch across the gap.
+            if (!(activeA | chunkC[key2])) continue;
+            let near = rA + chunkR[key2];
+            if (gap >= near + pad) continue;
+            let B = spatialUnits[key2];
+            if (!B || B.length === 0) continue;
+            if (gap >= near) {
+                // Only enemies can touch this far apart.
+                if (ownA === -2) ownA = _sepSoleOwner(key, A);
+                if (ownA >= 0 && _sepSoleOwner(key2, B) === ownA) continue;
+            }
+            for (let i = 0; i < an; i++) _sepScan(A[i], B, 0, pad);
+        }
+    }
+    for (let i = 0; i < n; i++) {
+        if (!S.hit[i]) continue;
+        let u = units[i];
+        if (u.dead) continue;
+        // All contacts are resolved at once: beyond a few, their sum is
+        // damped by sqrt(contacts) (full sums overshoot and oscillate in a
+        // dense crowd; a plain average cannot hold a crowd pressing in).
+        // applyUnitSeparation bounds it by the deepest overlap.
+        let k = S.hit[i], scale = k <= UNIT_SEPARATION_CONTACTS ? 1 : Math.sqrt(UNIT_SEPARATION_CONTACTS / k);
+        let px = S.px[i] * scale / UNIT_SEPARATION_Q, py = S.py[i] * scale / UNIT_SEPARATION_Q;
+        if (px !== 0 || py !== 0) applyUnitSeparation(u, px, py, S.ov[i]);
+        // A unit bumping along a fallback path retries its real path now
+        // and then (staggered), not on every tick of contact.
+        if (u.pathIsFallbackAstar && u._pendingPathTarget && ((gameTime + u.id) % UNIT_SEPARATION_PATH_RETRY_TICKS) === 0) _tryUpgradeAstarFallbackPath(u);
+        pushUnitOutOfBlockedTile(u);
+        u.x = _quantizeUnitWorldCoord(u.x);
+        u.y = _quantizeUnitWorldCoord(u.y);
+        updateUnitSpatial(u);
+    }
 }
 
 function applyUnitSeparation(unit, dx, dy, maxOverlap = unit.getCollisionRadius() * 2) {

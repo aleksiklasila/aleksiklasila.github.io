@@ -52,7 +52,7 @@ const SKIP = new Set(['prevX', 'prevY', '_spatialMember', '_spatialKey', '_spati
         simDeltaEncoderReset();
         __scratch.deltas = [];
         const f = runOneTick; runOneTick = function () { const r = f.apply(this, arguments);
-            const t0 = __scratch.realNow(); const d = simDeltaEncode(); const ms = __scratch.realNow() - t0;
+            const t0 = __scratch.realNow(); const d = simDeltaEncode(); if (typeof simUnitVisEncode === "function") d.vis = simUnitVisEncode(); const ms = __scratch.realNow() - t0;
             __scratch.deltas.push({ tick: currentTick, d, ms, hash: __exactStateHash() + '/' + computeLockstepStateHashFast(currentTick) + '/' + JSON.stringify(snapTickHash(currentTick, true)) });
             return r; };
     })()`);

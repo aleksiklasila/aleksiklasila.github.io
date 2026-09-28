@@ -2685,23 +2685,40 @@ function _findNearestQueuedSpawnerNeedingWork(u, originX = u.x, originY = u.y) {
     let candidates = [];
     let maxSearch = _getWorkerAutoSearchDistancePx(u);
     let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
-    let consider = (s) => {
-        if (!_isHealerQueueTarget(s, u.owner)) return;
+    // The owner's barracks then spawners (same order as the full lists);
+    // the cheap distance test first (the queue test has no side effects).
+    for (let s of _ownedQueueSpawners(u.owner)) {
         let d = detHypot(s.x - originX, s.y - originY);
-        if (d > maxSearch) return;
-        if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, s, maxSearchArea)) return;
+        if (d > maxSearch) continue;
+        if (!_isHealerQueueTarget(s, u.owner)) continue;
+        if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, s, maxSearchArea)) continue;
         candidates.push({
             target: s,
             targetType: 'queue',
             dist: d,
         });
-    };
-    for (let b of barracks) consider(b);
-    for (let s of collectorSpawners) {
-        if (!s) continue;
-        consider(s);
     }
     return _pickDistributedWorkerTarget(u, candidates);
+}
+
+// Barracks, then collector spawners, of one owner, in list order; rebuilt
+// per tick (or when either list changes length).
+let _ownedQueueSpawnersCache = { tick: -1, nb: -1, ns: -1, byOwner: new Map() };
+function _ownedQueueSpawners(owner) {
+    let c = _ownedQueueSpawnersCache;
+    if (c.tick !== gameTime || c.nb !== barracks.length || c.ns !== collectorSpawners.length) {
+        c.tick = gameTime; c.nb = barracks.length; c.ns = collectorSpawners.length;
+        c.byOwner = new Map();
+        let add = (s) => {
+            if (!s) return;
+            let list = c.byOwner.get(s.owner);
+            if (!list) c.byOwner.set(s.owner, list = []);
+            list.push(s);
+        };
+        for (let b of barracks) add(b);
+        for (let s of collectorSpawners) add(s);
+    }
+    return c.byOwner.get(owner) || [];
 }
 
 function _isResearcherTargetBuilding(target, owner) {
@@ -2952,7 +2969,21 @@ function _findNearestUnderConstruction(u, originX = u.x, originY = u.y) {
     let candidates = [];
     let maxSearch = _getWorkerAutoSearchDistancePx(u);
     let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
-    for (let b of ownedTargets) {
+    // The list is in row order (see _rebuildActiveBuilderWorkCache): only
+    // the rows the search box reaches are scanned (a slice, same order).
+    let rows = ownedTargets._rows;
+    if (!rows || rows.length !== ownedTargets.length) {
+        rows = ownedTargets._rows = new Int32Array(ownedTargets.length);
+        for (let i = 0; i < ownedTargets.length; i++) {
+            let t = ownedTargets[i];
+            rows[i] = Math.floor(Number(t && t.gy) || Math.floor((Number(t && t.y) || 0) / TILE));
+        }
+    }
+    let lowRow = Math.floor((originY - maxSearch) / TILE) - 2, highRow = Math.floor((originY + maxSearch) / TILE) + 2;
+    let lo = 0, hi = rows.length;
+    while (lo < hi) { let m = (lo + hi) >> 1; if (rows[m] < lowRow) lo = m + 1; else hi = m; }
+    for (let i = lo; i < ownedTargets.length && rows[i] <= highRow; i++) {
+        let b = ownedTargets[i];
         // Reject distant work first when the check below is side-effect free
         // (it can start an auto-upgrade, but only for idle finished buildings).
         let far = Math.abs(b.x - originX) > maxSearch || Math.abs(b.y - originY) > maxSearch;

@@ -233,10 +233,22 @@ function _simTick(msg) {
     let t1 = performance.now();
     let delta = simDeltaEncode();
     let transfer = [];
-    for (let list in delta.hot) { let h = delta.hot[list]; transfer.push(h.v.buffer, h.k.buffer); }
+    for (let list in delta.hot) { let h = delta.hot[list]; transfer.push(h.v.buffer, h.k.buffer, h.idx.buffer, h.mask.buffer); }
     let events = _simEvents;
     _simEvents = [];
-    _simPost({ type: 'ticked', epoch: _simEpoch, tick, delta, hash, events, simMs, encodeMs: performance.now() - t1 }, transfer);
+    // Per-unit visual records for the page's 3D unit layer.
+    let vis = null;
+    try { vis = simUnitVisEncode(); transfer.push(vis.buffer); } catch (err) { _simError('vis', err); }
+    // The local player's raw visibility grid (computed here anyway): the
+    // page uses it instead of computing its own.
+    let sight = null;
+    try {
+        let rows = getRawVisibilityGridForPlayer(localPlayerId);
+        sight = new Float32Array(GRID_W * GRID_H);
+        for (let y = 0; y < GRID_H; y++) if (rows[y]) sight.set(rows[y], y * GRID_W);
+        transfer.push(sight.buffer);
+    } catch (err) { sight = null; _simError('sight', err); }
+    _simPost({ type: 'ticked', epoch: _simEpoch, tick, delta, hash, events, vis, sight, sightPlayer: localPlayerId, simMs, encodeMs: performance.now() - t1 }, transfer);
 }
 
 // ---- requests the page's network code needs in tick order ----
