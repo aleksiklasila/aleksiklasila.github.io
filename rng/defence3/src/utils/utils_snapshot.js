@@ -54,7 +54,7 @@ const SNAP_SKIP_KEYS = new Set([
     'textCtx', 'textCanvas', '_textCanvasScale', '_levelTextLabel', 'prevX', 'prevY',
     '_spatialKey', '_spatialMember', '_spatialAreaId', '_spatialAreaOwner', '_spatialUnitTypeIdx', '_spatialLastVisScaled',
     '_damageFlashStart', '_damageFlashUntil', '_damageFlashStrength', '_damageFlashColor', '_ambientSoundTicks',
-    '_historyGhost', '_historyTick', '_droppedIndex', '_areaBucketId', '_laserLinkLevel', '_r3d', '_r3dSig', '_r3dTex', '_visStill', '_r3dStatic', '_rslot', '_sepI'
+    '_historyGhost', '_historyTick', '_droppedIndex', '_areaBucketId', '_laserLinkLevel', '_r3d', '_r3dSig', '_r3dTex', '_visStill', '_r3dStatic', '_rslot', '_sepI', '_simEnc'
 ]);
 
 // Lists: P players, u units, t towers, b barracks, s spawners, f floor
@@ -1573,6 +1573,9 @@ function snapDecodeState(S, options = null) {
         let prev = {}, shells = {}, finals = {}, removed = {};
         // Units' reservation slots before the restore (carried and removed).
         let resSlots = new Map();
+        // Units kept (patched in place): where the page last drew them, so a
+        // row does not cut their interpolation short.
+        let keptPrev = new Map();
         // The floor list is gathered from the grid: only when needed.
         let floorList = null;
         let listOf = list => list === 'f' ? (floorList || (floorList = _snapFloorItems())) : _snapListEntities(list);
@@ -1595,7 +1598,7 @@ function snapDecodeState(S, options = null) {
                 if (list === 'u' && old !== undefined) resSlots.set(old, old._workerReservedTileIndex);
                 if (old !== undefined && (list === 'P' || list === 'p' || _snapTypeKey(list, old) === type)) {
                     e = old;
-                    if (list === 'u') removeUnitSpatial(e);
+                    if (list === 'u') { removeUnitSpatial(e); if (partial && old.prevX === old.prevX && old.prevX !== undefined) keptPrev.set(old, [old.prevX, old.prevY]); }
                     let keys = shapes[tpls[row[1]][0]].keys;
                     let own = Object.keys(old);
                     if (!_snapKeysEqual(own, keys)) { let want = new Set(keys); for (let k of own) if (!want.has(k)) delete old[k]; }
@@ -1856,7 +1859,7 @@ function snapDecodeState(S, options = null) {
 
         if (partial) {
             for (let u of removed.u) removeUnitSpatial(u);
-            for (let u of shells.u) { u.prevX = u.x; u.prevY = u.y; updateUnitSpatial(u); }
+            for (let u of shells.u) { let p = keptPrev.get(u); if (p) { u.prevX = p[0]; u.prevY = p[1]; } else { u.prevX = u.x; u.prevY = u.y; } updateUnitSpatial(u); }
         } else {
             initSpatialHash();
             for (let u of units) { u.prevX = u.x; u.prevY = u.y; updateUnitSpatial(u); }

@@ -77,7 +77,9 @@ for (const resource of ['energy', 'astar']) {
         c.updateWorkerAI(u);
         assert.equal(u.workerTarget, null, 'ignore enemy, unfinished, dead, wrong-type and distant farms');
         const valid = farm(4);
-        c.updateWorkerAI(u);
+        // An idle collector searches again on its periodic idle search
+        // tick (about twice a second).
+        for (let t = 0; t < 24 && u.workerTarget !== valid; t++) { c.gameTime++; c.updateWorkerAI(u); }
         assert.equal(u.workerTarget, valid, 'discover floor farms without a manual command or mines');
         u.x = valid.x; u.y = valid.y; u.path = null;
         c.updateWorkerAI(u);

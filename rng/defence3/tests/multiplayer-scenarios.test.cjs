@@ -88,7 +88,9 @@ const ECONOMY = {
         const plans = all.map(inst => {
             const [t1, t2, t3] = freeTilesNear(inst, 3);
             q(inst, { action: 'place', gx: t1.gx, gy: t1.gy, itemType: 'pistol', count: 5, autoUpgradeEnabled: true, buildEnabled: true });
-            q(inst, { action: 'place', gx: t2.gx, gy: t2.gy, itemType: 'pistol', count: 5, autoUpgradeEnabled: true, buildEnabled: true });
+            // No auto-upgrade: an upgrade raises the stacks with the level
+            // (whatever auto-stack says), which would race the check below.
+            q(inst, { action: 'place', gx: t2.gx, gy: t2.gy, itemType: 'pistol', count: 5, autoUpgradeEnabled: false, buildEnabled: true });
             q(inst, { action: 'place', gx: t3.gx, gy: t3.gy, itemType: 'pistol', count: 1, autoUpgradeEnabled: true, buildEnabled: false });
             return { inst, t1, t2, t3 };
         });

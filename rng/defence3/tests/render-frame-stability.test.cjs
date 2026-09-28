@@ -183,6 +183,44 @@ function flickers(frames, field) {
             assert.ok(m.steps > 1000, 'units move while recorded');
             assert.ok(m.backRate < 0.01, `drawn units step back and forth: ${(m.backRate * 100).toFixed(2)}% of steps`);
         }
+        // One unit given a new move order every 300 ms (as when a player keeps
+        // clicking ahead of it): its drawn position must keep moving forward,
+        // never hold then jump (a result that cuts the interpolation short)
+        // nor step back, in 2D (the page's positions) and 3D (the records).
+        for (const mode of ['2d', '3d']) {
+            const r = JSON.parse(await b.ev(`(async () => {
+                setRenderDimensionMode('${mode}');
+                const k = units.find(u => !u.dead && u.owner === localPlayerId && u.isKing) || units.find(u => !u.dead && u.owner === localPlayerId && !u.workerType);
+                camera.zoom = 2; camera.x = k.x - viewW / camera.zoom / 2; camera.y = k.y - viewH / camera.zoom / 2;
+                await new Promise(r => setTimeout(r, 500));
+                const ys = [];
+                const orig = processRenderFrame;
+                window.processRenderFrame = function () {
+                    const res = orig.apply(this, arguments);
+                    const i = units.indexOf(k), vis = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+                    if ('${mode}' === '3d' && vis && i >= 0) { const o = i * SIM_UNIT_VIS_STRIDE; ys.push(vis[o + 12] + (vis[o + 10] - vis[o + 12]) * tickAlpha); }
+                    else ys.push(k.prevY + (k.y - k.prevY) * tickAlpha);
+                    return res;
+                };
+                for (let n = 0; n < 8; n++) {
+                    queueAction({ action: 'move', unitIds: [k.id], targetX: k.x + ((n % 3) - 1) * 6, targetY: k.y - 90 });
+                    await new Promise(r => setTimeout(r, 300));
+                }
+                window.processRenderFrame = orig;
+                return JSON.stringify(ys);
+            })()`));
+            let first = r.findIndex((y, i) => i > 0 && Math.abs(y - r[i - 1]) > 0.01), back = 0, holds = 0, steps = 0;
+            for (let i = Math.max(1, first + 1); i < r.length; i++) {
+                const dy = r[i] - r[i - 1];
+                if (dy > 0.05) back++;
+                else if (Math.abs(dy) <= 0.01) holds++;
+                else steps++;
+            }
+            console.log(`  ${mode} repeated orders: ${steps} moving frames, ${holds} held, ${back} back`);
+            assert.ok(first >= 0 && steps > 40, `${mode}: the unit moves`);
+            assert.equal(back, 0, `${mode}: repeated orders make the unit step back`);
+            assert.ok(holds <= Math.max(3, steps * 0.08), `${mode}: the unit stalls between results (${holds} held frames of ${steps + holds})`);
+        }
         console.log('render-frame-stability: ok');
     } finally {
         await b.close();

@@ -50,6 +50,7 @@ const SKIP = new Set(['prevX', 'prevY', '_spatialMember', '_spatialKey', '_spati
         // Both sides restore the same text, as every peer does at a match start.
         applyAuthoritativeStateSnapshot(JSON.parse(__scratch.start));
         simDeltaEncoderReset();
+        simDeltaAlwaysFull = ${process.env.SIM_DELTA_ALWAYS_FULL === '1'};
         __scratch.deltas = [];
         const f = runOneTick; runOneTick = function () { const r = f.apply(this, arguments);
             const t0 = __scratch.realNow(); const d = simDeltaEncode(); if (typeof simUnitVisEncode === "function") d.vis = simUnitVisEncode(); const ms = __scratch.realNow() - t0;
@@ -82,6 +83,9 @@ const SKIP = new Set(['prevX', 'prevY', '_spatialMember', '_spatialKey', '_spati
             const t0 = realPerf.now();
             R.eval('simDeltaApply(__scratch.delta)');
             appMs.push(realPerf.now() - t0); encMs.push(item.ms); rows += item.d.rows;
+            // Units' other fields reach the copy by full ticks at the latest:
+            // it is exact on those (and positions and the like on every tick).
+            if (!item.d.full) continue;
             const mine = hashOf(R);
             if (mine !== item.hash) {
                 const a = JSON.parse(item.hash.split('/').slice(2).join('/')), r = JSON.parse(mine.split('/').slice(2).join('/'));
@@ -149,5 +153,5 @@ const SKIP = new Set(['prevX', 'prevY', '_spatialMember', '_spatialKey', '_spati
     }
     for (const inst of [A, R]) assert.deepEqual(inst.errors.map(e => String(e.stack || e).slice(0, 400)), [], inst.name + ' threw');
     const stats = a => { a.sort((x, y) => x - y); return `mean ${(a.reduce((s, v) => s + v, 0) / a.length).toFixed(2)} ms, p95 ${a[Math.floor(a.length * .95)].toFixed(2)} ms`; };
-    console.log(`PASS: copy identical to the authority on all ${compared} ticks (${A.eval('units.length')} units at the end, ${(rows / compared).toFixed(1)} rows/tick); encode ${stats(encMs)}, apply ${stats(appMs)}.`);
+    console.log(`PASS: copy identical to the authority on all ${compared} full ticks of ${encMs.length} (${A.eval('units.length')} units at the end, ${(rows / encMs.length).toFixed(1)} rows/tick); encode ${stats(encMs)}, apply ${stats(appMs)}.`);
 })().catch(err => { console.error(err); process.exitCode = 1; });
