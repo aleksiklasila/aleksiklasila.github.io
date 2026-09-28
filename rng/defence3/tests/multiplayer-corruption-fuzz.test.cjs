@@ -71,7 +71,7 @@ const BROAD = new Set(['playerResearch', 'adjacency', 'unitIds', 'rng']);
         const victim = guests[k++ % guests.length];
         const before = all.map(repairs);
         const fullBefore = victim.fullPatchesApplied;
-        const what = victim.eval(KINDS[kind]);
+        const what = victim.evalSim(KINDS[kind]);
         if (!what) { rows.push(`${kind}: nothing to change, skipped`); continue; }
         const t0 = world.now;
         // Keep playing until the victim is patched and nothing is in flight

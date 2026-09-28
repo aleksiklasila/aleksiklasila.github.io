@@ -87,7 +87,7 @@ async function mapCase(mapType, seed) {
         const before = all.map(i => i.patchesApplied + i.snapshotsApplied);
         const fulls0 = g.fullPatchesApplied;
         const stalls = all.map(i => i.eval('netCounters.stallMs'));
-        g.eval(`(() => { const us = units.filter(u => !u.dead); for (let i = 0; i < ${sizes[c]} && us.length; i++) { const u = us[(i * 37 + ${c}) % us.length]; u.x += 3 + (i % 5); u.energy = Math.max(1, u.energy - 1); u.attackTimer = (u.attackTimer || 0) + 2; }
+        g.evalSim(`(() => { const us = units.filter(u => !u.dead); for (let i = 0; i < ${sizes[c]} && us.length; i++) { const u = us[(i * 37 + ${c}) % us.length]; u.x += 3 + (i % 5); u.energy = Math.max(1, u.energy - 1); u.attackTimer = (u.attackTimer || 0) + 2; }
             if (${sizes[c]} > 5) { const t = towers[${c} % Math.max(1, towers.length)]; if (t) t.cd = (t.cd || 0) + 2; players[1].energy += 13; } })()`);
         const t0 = world.now;
         const ok = await world.runUntil(() => g.patchesApplied + g.snapshotsApplied > before[all.indexOf(g)] && g.eval('resyncGuest.T < 0'), 20000, 20);
@@ -115,7 +115,7 @@ async function mapCase(mapType, seed) {
         const g = guests[0];
         const before = g.fullPatchesApplied;
         g.eval('resyncGuest.forceFull = true');
-        g.eval(`(() => { const u = units.find(u => !u.dead); u.x += 5; })()`);
+        g.evalSim(`(() => { const u = units.find(u => !u.dead); u.x += 5; })()`);
         const ok = await world.runUntil(() => g.fullPatchesApplied > before && g.eval('resyncGuest.T < 0'), 20000, 20);
         assert.ok(ok, `${mapType}: full patch applied`);
         const from = g.lastSnapshotTick;

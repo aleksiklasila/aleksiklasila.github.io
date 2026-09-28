@@ -799,6 +799,9 @@
             opacity: 0;
         }
 
+        /* Both slide during panning (see updateCameraSlide in renderer.js). */
+        #renderer3d-host, #gameOverlayCanvas { will-change: transform; transform-origin: 0 0; }
+
         #renderer3d-host {
             position: absolute;
             inset: 0;

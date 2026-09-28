@@ -279,8 +279,19 @@ function _resolveDeferredPathsByGroup(pending) {
         if (!group) { group = { dest, canWalk, owner: u.owner, members: [] }; candidates.push(group); groups.push(group); }
         group.members.push({ u, ugx, ugy, pt });
     }
-    for (let group of groups) {
-        if (group.members.length < 2) continue;
+    // Groups whose units wait for a shared search go first, then the others
+    // (which already had one and also retry on their own). Each list starts
+    // at a different group every tick, so none can hold the per-tick limit
+    // (see _takeGroupPathSearch) for good, e.g. a group ordered somewhere
+    // unreachable that stays pending.
+    let waiting = [], rest = [];
+    for (let group of groups) (group.members.some(m => m.u._awaitGroupPath > gameTime) ? waiting : rest).push(group);
+    let rotated = list => list.length ? list.slice(gameTime % list.length).concat(list.slice(0, gameTime % list.length)) : list;
+    for (let group of rotated(waiting).concat(rotated(rest))) {
+        // Alone: routed by its own search after all.
+        if (group.members.length < 2) { for (let m of group.members) m.u._awaitGroupPath = 0; continue; }
+        // The rest stay pending for the next ticks (see _takeGroupPathSearch).
+        if (!_takeGroupPathSearch(group.owner, true)) continue;
         let paths = _withPathfindContext('deferred_resolver', group.owner, null,
             () => findGroupPathsToTarget(group.members.map(m => ({ x: m.ugx, y: m.ugy })), group.dest.x, group.dest.y, group.canWalk, group.owner));
         for (let i = 0; i < group.members.length; i++) {
@@ -293,8 +304,11 @@ function _resolveDeferredPathsByGroup(pending) {
             u.pathIsFallbackAstar = false;
             u.commandState = pt.cmd;
             u._pendingPathTarget = null;
+            u._awaitGroupPath = 0;
             resolved.add(u);
         }
+        // Not answered by the shared search: their own searches.
+        for (let m of group.members) m.u._awaitGroupPath = 0;
     }
     return resolved;
 }
@@ -433,6 +447,17 @@ function gameTick() {
         u.update();
     }
 
+    // Dead units are processed in the same order as ever and removed in one
+    // pass afterwards: a splice per death shifted the whole list each time,
+    // which in big fights (hundreds of deaths a tick) cost most of the tick.
+    let removedUnits = null;
+    let compactRemovedUnits = () => {
+        if (!removedUnits) return;
+        let w = 0;
+        for (let k = 0; k < units.length; k++) if (!removedUnits.has(units[k])) units[w++] = units[k];
+        units.length = w;
+        if (selectedUnits.length) selectedUnits = selectedUnits.filter(su => !removedUnits.has(su));
+    };
     for (let i = units.length - 1; i >= 0; i--) {
         let u = units[i];
         if (u.dead) {
@@ -455,13 +480,13 @@ function gameTick() {
             if (u.isKing) checkWinCondition();
             removeUnitSpatial(u);
             players[u.owner].popCount--;
-            selectedUnits = selectedUnits.filter(su => su !== u);
-            units.splice(i, 1);
-            if (gameOver) return;
+            (removedUnits ||= new Set()).add(u);
+            if (gameOver) { compactRemovedUnits(); return; }
         } else if (upKeepThisTick) {
             _accumulateUpKeepForThing(upKeepTickBreakdown, u, true);
         }
     }
+    compactRemovedUnits();
 
     // Barracks - use deterministic shuffle to avoid order-dependent updates
     let barracksUpdateOrder = _buildDeterministicBuildingUpdateOrderForTick(barracks, 20);
@@ -1843,7 +1868,9 @@ function initInput() {
 
     // Keyboard
     document.addEventListener('keydown', (e) => {
+        let wasDown = !!keysDown[e.key.toLowerCase()];
         keysDown[e.key.toLowerCase()] = true;
+        if (!wasDown) noteCameraPanInput(e.timeStamp);
         if (!gameStarted) return;
         // § is an alias for Esc that never leaves fullscreen (except while typing).
         let escAlias = e.key === '§' && !(e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable="true"]'));
@@ -1902,8 +1929,8 @@ function initInput() {
             handleControlGroupKey(num, !!e.shiftKey);
         }
     });
-    document.addEventListener('keyup', (e) => { keysDown[e.key.toLowerCase()] = false; });
-    window.addEventListener('blur', () => { keysDown = {}; renderer3dRotateDrag = null; stopBuildPlacementDrag(); });
+    document.addEventListener('keyup', (e) => { keysDown[e.key.toLowerCase()] = false; noteCameraPanInput(e.timeStamp); });
+    window.addEventListener('blur', () => { keysDown = {}; noteCameraPanInput(); renderer3dRotateDrag = null; stopBuildPlacementDrag(); });
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
             keysDown = {};
@@ -1938,6 +1965,22 @@ function initInput() {
         sharpen: document.getElementById('setting-gfx-sharpen'),
         resolution: document.getElementById('setting-gfx-resolution')
     };
+    const cameraSlideToggle = document.getElementById('setting-camera-slide');
+    if (cameraSlideToggle) {
+        cameraSlideToggle.checked = cameraSlideEnabled;
+        cameraSlideToggle.addEventListener('change', () => {
+            setCameraSlideEnabled(cameraSlideToggle.checked);
+            saveUiSettingsToStorage();
+        });
+    }
+    const pixelSnapToggle = document.getElementById('setting-pixel-snap');
+    if (pixelSnapToggle) {
+        pixelSnapToggle.checked = pixelSnapCamera;
+        pixelSnapToggle.addEventListener('change', () => {
+            pixelSnapCamera = pixelSnapToggle.checked;
+            saveUiSettingsToStorage();
+        });
+    }
     const fpsTargetSelect = document.getElementById('setting-fps-target');
     if (fpsTargetSelect) {
         fpsTargetSelect.innerHTML = '<option value="auto">Auto</option>'
@@ -1973,6 +2016,8 @@ function initInput() {
         if (!el) continue;
         el.addEventListener('change', () => {
             let value = el.type === 'checkbox' ? el.checked : (key === 'resolution' ? Number(el.value) : el.value);
+            // Sharpen: 'false' / 'true' select values are the booleans.
+            if (key === 'sharpen') value = value === 'true' ? true : value === 'false' ? false : value;
             setGraphicsOptions({ ...graphicsOptions, [key]: value });
         });
     }
@@ -2563,6 +2608,29 @@ function initInput() {
     }
 }
 
+// Shared group path searches (one reverse search per destination) are
+// limited per player per tick; groups over the limit wait as pending paths
+// and are routed on the next ticks by the deferred resolver, in order. A
+// many-point rally of a big army is then spread over a few ticks instead of
+// one very long tick.
+const GROUP_PATH_SEARCHES_PER_PLAYER_TICK = 2;
+// A unit waits at most this many ticks for its group's shared search, then
+// searches on its own (u._awaitGroupPath holds the tick it waits until).
+const GROUP_PATH_WAIT_TICKS = 20;
+let _groupPathSearchTick = -1;
+let _groupPathSearchesByPlayer = new Map();
+
+// Commands are processed before gameTick advances gameTime; the resolver runs
+// after (inTick): both count against the same tick.
+function _takeGroupPathSearch(playerId, inTick = false) {
+    let tick = inTick ? gameTime - 1 : gameTime;
+    if (_groupPathSearchTick !== tick) { _groupPathSearchTick = tick; _groupPathSearchesByPlayer.clear(); }
+    let used = _groupPathSearchesByPlayer.get(playerId) || 0;
+    if (used >= GROUP_PATH_SEARCHES_PER_PLAYER_TICK) return false;
+    _groupPathSearchesByPlayer.set(playerId, used + 1);
+    return true;
+}
+
 // Move and attack-move orders. Units sharing a destination (and walking
 // rules) are routed by one shared reverse search, each along its own shortest
 // path from its own tile; anything that search cannot answer falls back to
@@ -2592,6 +2660,7 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
         u._attackMoveGy = cmd === CMD_ATTACK_MOVING ? targetGy : null;
         if (u.workerState) interruptWorkerForManualMove(u);
         u.targetPos = { x: targetGx * TILE + 16, y: targetGy * TILE + 16 };
+        u._awaitGroupPath = 0;
         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
         let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
         if (!_canUsePathfindRequestBudget(u.owner, u)) {
@@ -2618,6 +2687,15 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
     }
     for (let group of groups) {
         let { dest, canWalk, members } = group;
+        if (members.length >= 2 && !_takeGroupPathSearch(playerId)) {
+            // Over this tick's search limit: routed on a following tick.
+            // They wait for that shared search, not one search each.
+            for (let { u, ugx, ugy } of members) {
+                _makeFallbackPathForUnit(u, ugx, ugy, dest.x, dest.y, cmd, 'player_commands');
+                u._awaitGroupPath = gameTime + GROUP_PATH_WAIT_TICKS;
+            }
+            continue;
+        }
         let shared = members.length >= 2
             ? _withPathfindContext('player_commands', playerId, null,
                 () => findGroupPathsToTarget(members.map(m => ({ x: m.ugx, y: m.ugy })), dest.x, dest.y, canWalk, playerId))
@@ -3215,6 +3293,8 @@ const CAMERA_PAN_EASE_MS = 35;
 const CAMERA_ZOOM_EASE_MS = 45;
 let _cameraFrameTime = 0;
 let _cameraPanVel = { x: 0, y: 0 };
+// Velocity the pan eases toward (from the keys held), world px per second.
+let _cameraPanTarget = { x: 0, y: 0 };
 let _cameraZoomAnim = null; // { target, clientX, clientY, applied }
 
 // Sets the zoom keeping the world point under (clientX, clientY) in place.
@@ -3250,6 +3330,74 @@ function setCameraZoomAt(zoom, clientX, clientY) {
     clampCamera();
 }
 
+// Target pan velocity (world px per second) for the keys held now.
+function getCameraPanTargetVelocity() {
+    let moveX = 0;
+    let moveY = 0;
+    let up = keysDown['arrowup'] || keysDown['w'];
+    let down = keysDown['arrowdown'] || keysDown['s'];
+    let right = keysDown['arrowright'] || keysDown['d'];
+    let left = keysDown['arrowleft'] || keysDown['a'];
+    if (renderDimensionMode === '3d' && renderer3dInstance && typeof renderer3dInstance.getGroundMovementBasis === 'function') {
+        let basis = renderer3dInstance.getGroundMovementBasis();
+        if (up) { moveX += basis.forwardX; moveY += basis.forwardZ; }
+        if (down) { moveX -= basis.forwardX; moveY -= basis.forwardZ; }
+        if (right) { moveX += basis.rightX; moveY += basis.rightZ; }
+        if (left) { moveX -= basis.rightX; moveY -= basis.rightZ; }
+    } else {
+        if (up) moveY -= 1;
+        if (down) moveY += 1;
+        if (left) moveX -= 1;
+        if (right) moveX += 1;
+    }
+    let moveLen = detHypot(moveX, moveY);
+    let speed = CAMERA_PAN_SPEED / camera.zoom;
+    return { x: moveLen > 0 ? moveX / moveLen * speed : 0, y: moveLen > 0 ? moveY / moveLen * speed : 0 };
+}
+
+// Pan key changes since the camera last moved, with the time they happened
+// (the event's own time, even when the page was busy when it was pressed):
+// the camera turns at that moment, not at the next frame. The camera slide
+// is rebuilt at once, so the picture turns without waiting for a frame.
+let _cameraPanInputs = [];
+function noteCameraPanInput(time) {
+    if (!gameStarted) return;
+    let target = getCameraPanTargetVelocity();
+    let last = _cameraPanInputs.length ? _cameraPanInputs[_cameraPanInputs.length - 1] : _cameraPanTarget;
+    if (target.x === last.x && target.y === last.y) return;
+    let t = Number.isFinite(time) && time > 0 ? Math.min(time, performance.now()) : performance.now();
+    _cameraPanInputs.push({ t, x: target.x, y: target.y });
+    if (typeof refreshCameraSlideForInput === 'function') refreshCameraSlideForInput();
+}
+
+// Pan motion over `sec` seconds from time t0 (ms): velocity (v0x, v0y) eases
+// toward the target (tx, ty) with time constant CAMERA_PAN_EASE_MS, and the
+// target switches at each input's time. Returns the distance moved (world
+// px) and the velocity and target at the end. Inputs from before t0 already
+// apply at t0.
+function cameraPanTravel(v0x, v0y, tx, ty, t0, sec, inputs) {
+    let x = 0, y = 0, vx = v0x, vy = v0y, t = t0, end = t0 + sec * 1000, tau = CAMERA_PAN_EASE_MS / 1000;
+    let step = to => {
+        let s = (to - t) / 1000;
+        if (!(s > 0)) return;
+        let k = Math.exp(-s / tau);
+        x += tx * s + (vx - tx) * (1 - k) * tau;
+        y += ty * s + (vy - ty) * (1 - k) * tau;
+        vx = tx + (vx - tx) * k;
+        vy = ty + (vy - ty) * k;
+        t = to;
+    };
+    for (let input of inputs) {
+        if (input.t > t) {
+            if (input.t >= end) break;
+            step(input.t);
+        }
+        tx = input.x; ty = input.y;
+    }
+    step(end);
+    return { x, y, vx, vy, tx, ty };
+}
+
 function updateCamera(frameTime) {
     let t = Number.isFinite(frameTime) ? frameTime : performance.now();
     let dt = _cameraFrameTime ? t - _cameraFrameTime : 0;
@@ -3275,42 +3423,24 @@ function updateCamera(frameTime) {
         }
     }
 
-    let moveX = 0;
-    let moveY = 0;
-    let up = keysDown['arrowup'] || keysDown['w'];
-    let down = keysDown['arrowdown'] || keysDown['s'];
-    let right = keysDown['arrowright'] || keysDown['d'];
-    let left = keysDown['arrowleft'] || keysDown['a'];
-    if (renderDimensionMode === '3d' && renderer3dInstance && typeof renderer3dInstance.getGroundMovementBasis === 'function') {
-        let basis = renderer3dInstance.getGroundMovementBasis();
-        if (up) { moveX += basis.forwardX; moveY += basis.forwardZ; }
-        if (down) { moveX -= basis.forwardX; moveY -= basis.forwardZ; }
-        if (right) { moveX += basis.rightX; moveY += basis.rightZ; }
-        if (left) { moveX -= basis.rightX; moveY -= basis.rightZ; }
-    } else {
-        if (up) moveY -= 1;
-        if (down) moveY += 1;
-        if (left) moveX -= 1;
-        if (right) moveX += 1;
-    }
-    let moveLen = detHypot(moveX, moveY);
-    let speed = CAMERA_PAN_SPEED / camera.zoom; // world px per second
-    let targetVx = moveLen > 0 ? moveX / moveLen * speed : 0;
-    let targetVy = moveLen > 0 ? moveY / moveLen * speed : 0;
+    // Pan: the eased motion through this frame's key changes (see
+    // cameraPanTravel), so every frame moves by exactly its share of time.
     let vel = _cameraPanVel;
+    let inputs = _cameraPanInputs;
+    _cameraPanInputs = [];
     if (dt > 0) {
-        // Exact ease over dt: v -> target with time constant CAMERA_PAN_EASE_MS,
-        // and the distance travelled while easing.
-        let k = Math.exp(-dt / CAMERA_PAN_EASE_MS);
-        let dx = targetVx * dt / 1000 + (vel.x - targetVx) * (1 - k) * CAMERA_PAN_EASE_MS / 1000;
-        let dy = targetVy * dt / 1000 + (vel.y - targetVy) * (1 - k) * CAMERA_PAN_EASE_MS / 1000;
-        vel.x = targetVx + (vel.x - targetVx) * k;
-        vel.y = targetVy + (vel.y - targetVy) * k;
-        if (Math.abs(vel.x) < 1 && targetVx === 0) vel.x = 0;
-        if (Math.abs(vel.y) < 1 && targetVy === 0) vel.y = 0;
-        camera.x += dx;
-        camera.y += dy;
+        let r = cameraPanTravel(vel.x, vel.y, _cameraPanTarget.x, _cameraPanTarget.y, t - dt, dt / 1000, inputs);
+        camera.x += r.x;
+        camera.y += r.y;
+        vel.x = r.vx;
+        vel.y = r.vy;
     }
+    // The keys held now (zoom or 3D rotation may also have changed the speed).
+    let target = getCameraPanTargetVelocity();
+    _cameraPanTarget.x = target.x;
+    _cameraPanTarget.y = target.y;
+    if (Math.abs(vel.x) < 1 && target.x === 0) vel.x = 0;
+    if (Math.abs(vel.y) < 1 && target.y === 0) vel.y = 0;
 
     clampCamera();
 }
@@ -3318,7 +3448,14 @@ function updateCamera(frameTime) {
 // ============================================================
 // GAME INIT & MAIN LOOP
 // ============================================================
+let _simShadowStartedThisMatch = false;
+let _simShadowMatchTick = -1;
+let _simClientStartedThisMatch = false;
+
 function startGame() {
+    _simShadowStartedThisMatch = false;
+    _simClientStartedThisMatch = false;
+    if (typeof simClientStop === 'function') simClientStop();
     document.getElementById('lobby').style.display = 'none';
     let go = document.getElementById('game-over');
     if (go) go.style.display = 'none';
@@ -4932,6 +5069,21 @@ function flushTickUiRequests() {
 }
 
 function runOneTick() {
+    // Simulation worker check (?simworker=shadow): the worker starts from the
+    // same snapshot, restored on the page too (as a multiplayer host does).
+    if (typeof simShadowEnabled !== 'undefined' && simShadowEnabled && _simShadowMatchTick !== currentTick && !_simShadowStartedThisMatch) {
+        _simShadowStartedThisMatch = true;
+        let text = JSON.stringify(buildHostAuthoritativeStateSnapshot({ includeConfig: false, includeStaticMapState: true, includeGridTypes: true }));
+        applyAuthoritativeStateSnapshot(JSON.parse(text));
+        simShadowStartMatch(text);
+    }
+    // Simulation worker (?simworker=1): it starts from the page's state at
+    // the match's first tick.
+    if (typeof simClientEnabled !== 'undefined' && simClientEnabled && !simClientActive() && !_simClientStartedThisMatch) {
+        _simClientStartedThisMatch = true;
+        simClientStartMatch();
+    }
+    let inWorker = typeof simClientActive === 'function' && simClientActive();
     // Reset pathfinding budget before processing actions
     pathfindBudget = 0;
     let processedTick = currentTick;
@@ -4946,7 +5098,8 @@ function runOneTick() {
 
     // A resync tick: every peer starts it without history caches, like the
     // peer that is restored from a patch.
-    if (isMultiplayer && lockstepBundleByTick[currentTick] && lockstepBundleByTick[currentTick].flush) snapFlushHistoryCaches();
+    let flushTick = !!(isMultiplayer && lockstepBundleByTick[currentTick] && lockstepBundleByTick[currentTick].flush);
+    if (flushTick && !inWorker) snapFlushHistoryCaches();
 
     // Process deterministic combined actions for this tick.
     let allActs = isMultiplayer
@@ -4958,7 +5111,7 @@ function runOneTick() {
     // Commands of the same tick that compete (the same tile, the same
     // target) go to each team in turn: the first team to act rotates.
     let firstTeam = processedTick % teams.length;
-    for (let k = 0; k < teams.length; k++) {
+    for (let k = 0; k < teams.length && !inWorker; k++) {
         let teamId = teams[(firstTeam + k) % teams.length];
         let acts = allActs.filter(a => (a.teamId ?? 0) === teamId);
         if (acts.length > 0) {
@@ -4981,14 +5134,21 @@ function runOneTick() {
     // waiting on this peer). The tick still completes: a deterministic error
     // happens identically on every peer, anything else shows up in the state
     // hash and is repaired by a resync.
-    try { gameTick(); } catch (err) { reportRuntimeError('tick', err); }
+    if (inWorker) {
+        // The worker runs it; the page applies the result when it comes
+        // (sim_client.js), including the per-tick page work below.
+        simClientRunTick(processedTick, allActs, teams, flushTick);
+    } else {
+        try { gameTick(); } catch (err) { reportRuntimeError('tick', err); }
+        if (typeof simShadowEnabled !== 'undefined' && simShadowEnabled) simShadowAfterTick(processedTick, allActs, teams, flushTick);
 
-    if (currentTick % TICK_RATE === 0) sampleGameStats();
-    requestResearchPopupRefresh();
+        if (currentTick % TICK_RATE === 0) sampleGameStats();
+        requestResearchPopupRefresh();
 
-    // Every peer hashes a slice of the state each tick; guests compare with
-    // the host's (see utils_resync.js).
-    if (isMultiplayer) resyncAfterTick(processedTick);
+        // Every peer hashes a slice of the state each tick; guests compare
+        // with the host's (see utils_resync.js).
+        if (isMultiplayer) resyncAfterTick(processedTick);
+    }
 
     _tpsTickCount++;
     let tpsNow = performance.now();

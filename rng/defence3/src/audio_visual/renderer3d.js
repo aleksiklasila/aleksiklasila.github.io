@@ -2350,6 +2350,13 @@
             this.tmpNormal = new Float32Array(9);
             this.cssWidth = 1;
             this.cssHeight = 1;
+            // Overscan (css px on each side, from snapshot.viewPad): the
+            // canvas is that much larger than the view and sits that much
+            // up-left of it, so the page can slide it during a pan without
+            // exposing an edge. Screen coordinates in and out of the public
+            // methods stay relative to the view; "canvas" ones include it.
+            this.viewPad = 0;
+            this.pickViewPad = 0;
             this.orbitYaw = 0;
             this.orbitPitch = 0.92;
             this.sceneFramebuffer = gl.createFramebuffer();
@@ -2774,6 +2781,11 @@
             this.canvas.style.display = this.enabled ? 'block' : 'none';
         }
 
+        resizeForSnapshot(snapshot) {
+            let pad = Math.max(0, Number(snapshot.viewPad) || 0);
+            this.resize((Number(snapshot.viewportWidth) || 1) + 2 * pad, (Number(snapshot.viewportHeight) || 1) + 2 * pad);
+        }
+
         resize(width, height) {
             if (!this.supported) return;
             let safeWidth = Math.max(1, Math.floor(width || 1));
@@ -2969,13 +2981,18 @@
         }
 
         buildViewProjection(snapshot) {
+            let pad = Math.max(0, Number(snapshot.viewPad) || 0);
+            this.viewPad = pad;
+            let viewW = Math.max(1, Number(snapshot.viewportWidth) || 1);
+            let viewH = Math.max(1, Number(snapshot.viewportHeight) || 1);
+            let growX = (viewW + 2 * pad) / viewW, growY = (viewH + 2 * pad) / viewH;
             if (snapshot.flat2d) {
                 // World X/Z map exactly to the existing 2D mouse/camera math.
                 const camera = snapshot.camera;
                 const m = this.tmpViewProjection;
                 m.fill(0);
-                m[0] = 2 / camera.visibleWidth;
-                m[9] = -2 / camera.visibleHeight;
+                m[0] = 2 / (camera.visibleWidth * growX);
+                m[9] = -2 / (camera.visibleHeight * growY);
                 m[6] = -0.001;
                 m[12] = -camera.centerX * m[0];
                 m[13] = -camera.centerZ * m[9];
@@ -2984,7 +3001,7 @@
                 this.lodProjectionScale = 0;
                 return;
             }
-            let aspect = Math.max(1e-4, (snapshot.viewportWidth || 1) / (snapshot.viewportHeight || 1));
+            let aspect = Math.max(1e-4, (viewW + 2 * pad) / (viewH + 2 * pad));
             let camera = snapshot.camera || {};
             let centerX = Number(camera.centerX) || 0;
             let centerZ = Number(camera.centerZ) || 0;
@@ -2998,7 +3015,9 @@
                 centerZ + Math.cos(this.orbitYaw) * horizontalDistance
             ];
             let target = [centerX, 0, centerZ];
-            perspective(this.tmpProjection, 0.74, aspect, 0.1, 220);
+            // Overscan widens the field of view by exactly the margin, so the
+            // view itself projects as without it.
+            perspective(this.tmpProjection, 2 * Math.atan(Math.tan(0.37) * growY), aspect, 0.1, 220);
             // CSS pixels per world unit at view depth 1; divide by a point's
             // depth along the view direction for its on-screen scale.
             this.lodProjectionScale = this.cssHeight * this.tmpProjection[5] / 2;
@@ -3038,15 +3057,19 @@
             };
         }
 
-        getGroundFrustumPolygon(snapshot) {
+        // `viewOnly`: the view's footprint without the overscan margin.
+        getGroundFrustumPolygon(snapshot, viewOnly = false) {
             if (!snapshot) return null;
-            this.resize(snapshot.viewportWidth, snapshot.viewportHeight);
+            this.resizeForSnapshot(snapshot);
             this.buildViewProjection(snapshot);
+            let pad = viewOnly ? (this.viewPad || 0) : 0;
+            let sx = this.cssWidth > 0 ? (this.cssWidth - 2 * pad) / this.cssWidth : 1;
+            let sy = this.cssHeight > 0 ? (this.cssHeight - 2 * pad) / this.cssHeight : 1;
 
             let corners = [];
             for (let z of [-1, 1]) {
-                for (let y of [-1, 1]) {
-                    for (let x of [-1, 1]) {
+                for (let y of [-sy, sy]) {
+                    for (let x of [-sx, sx]) {
                         corners.push(transformClipToWorld(this.tmpInverseViewProjection, x, y, z));
                     }
                 }
@@ -3083,16 +3106,29 @@
             return points;
         }
 
+        // View coordinates (relative to the game area).
         projectWorldToScreen(x, y, z) {
-            let projected = this.projectWorldToScreenDetailed(x, y, z);
+            let projected = this.projectWorldToCanvasDetailed(x, y, z);
             if (!projected) return null;
             return {
-                x: projected.x,
-                y: projected.y,
+                x: projected.x - (this.viewPad || 0),
+                y: projected.y - (this.viewPad || 0),
             };
         }
 
         projectWorldToScreenDetailed(x, y, z) {
+            let projected = this.projectWorldToCanvasDetailed(x, y, z);
+            if (projected) { projected.x -= this.viewPad || 0; projected.y -= this.viewPad || 0; }
+            return projected;
+        }
+
+        // Canvas coordinates (include the overscan): for drawing on the canvases.
+        projectWorldToCanvas(x, y, z) {
+            let projected = this.projectWorldToCanvasDetailed(x, y, z);
+            return projected ? { x: projected.x, y: projected.y } : null;
+        }
+
+        projectWorldToCanvasDetailed(x, y, z) {
             let clipX = this.tmpViewProjection[0] * x + this.tmpViewProjection[4] * y + this.tmpViewProjection[8] * z + this.tmpViewProjection[12];
             let clipY = this.tmpViewProjection[1] * x + this.tmpViewProjection[5] * y + this.tmpViewProjection[9] * z + this.tmpViewProjection[13];
             let clipZ = this.tmpViewProjection[2] * x + this.tmpViewProjection[6] * y + this.tmpViewProjection[10] * z + this.tmpViewProjection[14];
@@ -3114,6 +3150,9 @@
 
         pickRenderedSource(screenX, screenY, candidates) {
             if (!this.pickInverseViewProjection || !this.pickObjects) return null;
+            let pickPad = this.pickViewPad || 0;
+            screenX += pickPad;
+            screenY += pickPad;
             const nx = screenX / this.cssWidth * 2 - 1, ny = 1 - screenY / this.cssHeight * 2;
             const near = transformClipToWorld(this.pickInverseViewProjection, nx, ny, -1);
             const far = transformClipToWorld(this.pickInverseViewProjection, nx, ny, 1);
@@ -3210,6 +3249,9 @@
         // its triangles tested.
         boxRenderedSources(minX, minY, maxX, maxY, candidates = null) {
             const hits = new Set();
+            let pickPad = this.pickViewPad || 0;
+            minX += pickPad; maxX += pickPad;
+            minY += pickPad; maxY += pickPad;
             const m = this.pickViewProjection;
             if (!m || !this.pickObjects) return hits;
             const width = this.cssWidth, height = this.cssHeight;
@@ -3481,13 +3523,13 @@
             let tile = overlays.worldTileSize || 32;
             for (let group of groups) for (let path of group.paths) {
                 let phase = 0;
-                let firstProjected = overlays.selectionDashed && this.projectWorldToScreen(path[0][0]/tile, .05, path[0][1]/tile);
+                let firstProjected = overlays.selectionDashed && this.projectWorldToCanvas(path[0][0]/tile, .05, path[0][1]/tile);
                 let pa = firstProjected;
                 for (let i = 0; i < path.length; i++) {
                     let a = path[i], b = path[(i + 1) % path.length];
                     add(a[0]/tile, a[1]/tile, b[0]/tile, b[1]/tile, group.color, overlays.selectionDashed, phase);
                     if (overlays.selectionDashed) {
-                        let pb = i + 1 === path.length ? firstProjected : this.projectWorldToScreen(b[0]/tile, .05, b[1]/tile);
+                        let pb = i + 1 === path.length ? firstProjected : this.projectWorldToCanvas(b[0]/tile, .05, b[1]/tile);
                         if (pa && pb) phase += Math.hypot(pb.x-pa.x, pb.y-pa.y);
                         pa = pb;
                     }
@@ -3523,7 +3565,7 @@
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
 
-            let projectGround = (x, z) => this.projectWorldToScreen(x, 0.05, z);
+            let projectGround = (x, z) => this.projectWorldToCanvas(x, 0.05, z);
             let getPathGroup = (groups, key, init) => {
                 let group = groups.get(key);
                 if (group) return group;
@@ -3697,7 +3739,7 @@
             }
 
             for (let bar of overlays.bars || []) {
-                let p = this.projectWorldToScreenDetailed(bar.x, Number(bar.lift) || 0.6, bar.z);
+                let p = this.projectWorldToCanvasDetailed(bar.x, Number(bar.lift) || 0.6, bar.z);
                 if (!p || !this.isOverlayPointVisible(p)) continue;
                 let pixelsPerTile = this.getScreenPixelsPerTile(bar.x, Number(bar.lift) || 0.6, bar.z);
                 if (pixelsPerTile <= 0) continue;
@@ -3716,7 +3758,7 @@
             ctx.textAlign = 'center';
             ctx.textBaseline = 'bottom';
             for (let text of overlays.texts || []) {
-                let p = this.projectWorldToScreenDetailed(text.x, Number(text.lift) || 0.8, text.z);
+                let p = this.projectWorldToCanvasDetailed(text.x, Number(text.lift) || 0.8, text.z);
                 if (!p || !text.text || !this.isOverlayPointVisible(p)) continue;
                 let pixelsPerTile = this.getScreenPixelsPerTile(text.x, Number(text.lift) || 0.8, text.z);
                 if (pixelsPerTile <= 0) continue;
@@ -3736,7 +3778,7 @@
 
         drawBuildPreview(preview, ctx) {
             if (!ctx || !preview) return;
-            let projectGround = (x, z) => this.projectWorldToScreen(x, 0.06, z);
+            let projectGround = (x, z) => this.projectWorldToCanvas(x, 0.06, z);
             let drawTile = (tileX, tileZ, fillStyle, strokeStyle) => {
                 let corners = [
                     projectGround(tileX, tileZ),
@@ -3836,10 +3878,12 @@
 
         screenToGround(clientX, clientY, rect) {
             if (!rect || !this.tmpInverseViewProjection) return null;
-            let width = Math.max(1, rect.width || 1);
-            let height = Math.max(1, rect.height || 1);
-            let ndcX = ((clientX - rect.left) / width) * 2 - 1;
-            let ndcY = 1 - ((clientY - rect.top) / height) * 2;
+            // `rect` is the view's; the projection covers the overscan too.
+            let pad = this.viewPad || 0;
+            let width = Math.max(1, (rect.width || 1) + 2 * pad);
+            let height = Math.max(1, (rect.height || 1) + 2 * pad);
+            let ndcX = ((clientX - rect.left + pad) / width) * 2 - 1;
+            let ndcY = 1 - ((clientY - rect.top + pad) / height) * 2;
             let nearPoint = transformClipToWorld(this.tmpInverseViewProjection, ndcX, ndcY, -1);
             let farPoint = transformClipToWorld(this.tmpInverseViewProjection, ndcX, ndcY, 1);
             if (!nearPoint || !farPoint) return null;
@@ -4455,7 +4499,7 @@
 
         render(snapshot) {
             if (!this.enabled || !this.supported || !snapshot) return;
-            this.resize(snapshot.viewportWidth, snapshot.viewportHeight);
+            this.resizeForSnapshot(snapshot);
             this.buildViewProjection(snapshot);
             this.textureFrame = (this.textureFrame || 0) + 1;
             // Seconds for time-driven structure animation (kept small for float precision).
@@ -4489,6 +4533,7 @@
             // Retain the transforms/LOD actually drawn, without rebuilding the scene on clicks.
             this.pickObjects = [];
             this.pickInverseViewProjection = new Float32Array(this.tmpInverseViewProjection);
+            this.pickViewPad = this.viewPad;
             this.pickViewProjection = new Float32Array(this.tmpViewProjection);
             let opaqueCubeGroups = new Map();
             let transparentCubeGroups = new Map();

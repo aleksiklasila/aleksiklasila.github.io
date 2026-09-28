@@ -86,7 +86,7 @@ const NON_FINITE = `(() => {
     {
         const g = guests[3];
         const before = g.patchesApplied;
-        g.eval(`(() => { const us = units.filter(u => !u.dead); for (let i = 0; i < 10; i++) { const u = us[(i * 53) % us.length]; u.x += 5; u.energy = Math.max(1, u.energy - 2); } players[3].energy += 77; })()`);
+        g.evalSim(`(() => { const us = units.filter(u => !u.dead); for (let i = 0; i < 10; i++) { const u = us[(i * 53) % us.length]; u.x += 5; u.energy = Math.max(1, u.energy - 2); } players[3].energy += 77; })()`);
         assert.ok(await world.runUntil(() => g.patchesApplied > before && g.eval('resyncGuest.T < 0'), 20000, 20), 'patched');
         await world.run(4000);
         const from = g.lastSnapshotTick;

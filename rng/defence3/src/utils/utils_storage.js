@@ -27,6 +27,8 @@ function saveUiSettingsToStorage() {
         if (Number.isFinite(buildPlacementMode)) ui.buildPlacementMode = Math.floor(buildPlacementMode);
         if (typeof graphicsOptions === 'object' && graphicsOptions) ui.graphicsOptions = graphicsOptions;
         if (typeof fpsTargetByDisplay === 'object' && fpsTargetByDisplay) ui.fpsTargetByDisplay = fpsTargetByDisplay;
+        if (typeof cameraSlideEnabled === 'boolean') ui.cameraSlideEnabled = cameraSlideEnabled;
+        if (typeof pixelSnapCamera === 'boolean') ui.pixelSnapCamera = pixelSnapCamera;
         let mapVisibility = document.getElementById('cfg-full-vis');
         if (mapVisibility && ['full', 'team', 'history'].includes(mapVisibility.value)) ui.mapVisibility = mapVisibility.value;
         localStorage.setItem(LS_UI_SETTINGS_KEY, JSON.stringify(ui));
@@ -85,6 +87,8 @@ function loadUiSettingsFromStorage() {
                 if (s.graphicsOptions && typeof normalizeGraphicsOptions === 'function') {
                     graphicsOptions = normalizeGraphicsOptions(s.graphicsOptions);
                 }
+                if (typeof s.cameraSlideEnabled === 'boolean') cameraSlideEnabled = s.cameraSlideEnabled;
+                if (typeof s.pixelSnapCamera === 'boolean' && typeof pixelSnapCamera === 'boolean') pixelSnapCamera = s.pixelSnapCamera;
                 if (s.fpsTargetByDisplay && typeof s.fpsTargetByDisplay === 'object') {
                     fpsTargetByDisplay = {};
                     for (let key in s.fpsTargetByDisplay) {

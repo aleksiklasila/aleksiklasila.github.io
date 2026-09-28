@@ -146,6 +146,7 @@
         uniform vec2 uAoTexel;
         uniform sampler2D uBloom;
         uniform float uOutlineScale;
+        uniform float uSharpen;   // sharpening amount
         uniform highp sampler2DShadow uShadowMap;
         uniform mat4 uInvViewProj;
         uniform mat4 uLightViewProj;
@@ -222,7 +223,7 @@
             {
                 vec3 n = texture(uColor, vUv + vec2(uTexel.x, 0.0)).rgb + texture(uColor, vUv - vec2(uTexel.x, 0.0)).rgb
                        + texture(uColor, vUv + vec2(0.0, uTexel.y)).rgb + texture(uColor, vUv - vec2(0.0, uTexel.y)).rgb;
-                c = clamp(c + (base * 4.0 - n) * 0.18, 0.0, 1.0);
+                c = clamp(c + (base * 4.0 - n) * uSharpen, 0.0, 1.0);
             }
         #endif
         #ifdef AO
@@ -429,6 +430,7 @@
                 gl.uniform2f(u.uNearFar, frame.near, frame.far);
             }
             if (u.uOutlineScale) gl.uniform1f(u.uOutlineScale, Math.max(1, Math.round(frame.pixelRatio || 1)));
+            if (u.uSharpen) gl.uniform1f(u.uSharpen, GRAPHICS_SHARPEN_AMOUNT[String(options.sharpen)] || GRAPHICS_SHARPEN_AMOUNT.true);
             if (u.uShadowMap && frame.shadow) {
                 gl.activeTexture(gl.TEXTURE4);
                 gl.bindTexture(gl.TEXTURE_2D, frame.shadow.tex);

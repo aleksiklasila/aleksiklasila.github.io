@@ -186,7 +186,7 @@ async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
             corruptAt.shift();
             const victim = guests[Math.floor(rand() * guests.length)];
             corruptTicks.push({ victim: victim.name, tick: victim.eval('currentTick') - 1 });
-            victim.eval(`(() => { const u = units.find(u => !u.dead); if (u) { u.x += 11; u.energy = Math.max(1, u.energy - 5); } })()`);
+            victim.evalSim(`(() => { const u = units.find(u => !u.dead); if (u) { u.x += 11; u.energy = Math.max(1, u.energy - 5); } })()`);
         }
         for (const t of JSON.parse(host.eval('JSON.stringify([...new Set(units.map(u => u.unitType))])'))) unitTypesSeen.add(t);
         maxUnits = Math.max(maxUnits, host.eval('units.length'));
@@ -195,11 +195,20 @@ async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
     await world.run(3000);
 
     // Only the corrupted guest may disagree, and only between the forced
-    // divergence and the patch that repairs it; any other mismatch is real
-    // nondeterminism.
+    // divergence and the patches that repair it; any other mismatch is real
+    // nondeterminism. A patch carries the regions found to differ; effects
+    // that reach elsewhere before it lands (a unit alive on one side only
+    // changes the whole update order) are repaired by a follow-up patch, so
+    // repairs within FOLLOW_UP ticks of the first count as the same one.
+    const FOLLOW_UP = 60;
     const repairTicks = name => { const i = all.find(i => i.name === name); return [...(i.patchTicks || []), ...(i.snapshotTicks || [])]; };
-    const allowed = m => corruptTicks.some(c => (c.victim === m.a || c.victim === m.b) && c.tick <= m.tick
-        && !repairTicks(c.victim).some(st => st > c.tick && st <= m.tick));
+    const repairWindow = c => {
+        const after = repairTicks(c.victim).filter(st => st > c.tick).sort((a, b) => a - b);
+        if (!after.length) return { first: Infinity, last: Infinity, count: 0 };
+        const inWindow = after.filter(st => st <= after[0] + FOLLOW_UP);
+        return { first: after[0], last: inWindow[inWindow.length - 1], count: inWindow.length };
+    };
+    const allowed = m => corruptTicks.some(c => (c.victim === m.a || c.victim === m.b) && c.tick <= m.tick && m.tick <= repairWindow(c).last);
     for (const inst of all) {
         assert.deepEqual(inst.errors.map(e => String(e && e.stack || e).slice(0, 600)), [], mapType + ' ' + inst.name + ' threw');
     }
@@ -218,7 +227,11 @@ async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
     }
     assert.ok(cmp.compared > SECONDS * 20 * 3 * 0.8, mapType + ' compared ' + cmp.compared);
     const hostResyncs = all.reduce((n, i) => n + i.patchesApplied, 0);
-    assert.equal(hostResyncs, corruptions, mapType + ': one patch per forced divergence and none otherwise');
+    // Every forced divergence was repaired (by a patch and at most one
+    // follow-up), and no patch happened for anything else.
+    const windows = corruptTicks.map(repairWindow);
+    for (const w of windows) assert.ok(w.count >= 1 && w.count <= 2, mapType + ': repairs per forced divergence ' + JSON.stringify(windows));
+    assert.equal(hostResyncs, windows.reduce((n, w) => n + w.count, 0), mapType + ': patches only for forced divergences');
     for (const i of all) assert.equal(i.snapshotsApplied, 1, mapType + ': no match-wide resync on ' + i.name);
     const desyncs = all.reduce((n, i) => n + i.eval('netCounters.desyncsDetected'), 0);
     return {

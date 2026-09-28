@@ -96,9 +96,10 @@ function resyncNoteRestored(tick) {
 // Per-tick hashing (both sides)
 // ---------------------------------------------------------------------------
 
-// Called after every simulated tick in multiplayer.
-function resyncAfterTick(tick) {
-    let r = snapRecordTickHash(tick);
+// Called after every simulated tick in multiplayer. With the simulation
+// worker, `record` is the hash it computed for the tick.
+function resyncAfterTick(tick, record = null) {
+    let r = record ? snapStoreTickHash(record) : snapRecordTickHash(tick);
     if (isHost) {
         _resyncHostHashQueue.push(r.tick, r.sum);
         if (_resyncHostHashQueue.length > 400) _resyncHostHashQueue.splice(0, _resyncHostHashQueue.length - 400);
@@ -313,6 +314,8 @@ function applyResyncPatch(text, full) {
     dirtyGrid = true;
     _minimapStaticDirty = true;
     if (typeof requestBuildMenuRefresh === 'function') requestBuildMenuRefresh();
+    // The simulation worker (if on) applies the same patch at this point.
+    if (typeof simClientAfterPatchApplied === 'function') simClientAfterPatchApplied(text, full);
     g.T = -1;
     g.patch = null;
     g.waitSince = 0;
@@ -452,26 +455,35 @@ function resyncHostBeforeTick(tick) {
         if (pending.join) { _resyncHostSendJoin(conn, pending); did = true; continue; }
         let t0 = performance.now();
         let buckets = pending.full ? null : snapBucketsFromCodes(pending.codes);
-        let S = snapEncodeState(buckets ? { buckets } : null);
+        // The small parts always go along: a divergence reaches players'
+        // resources (bounties, costs), projectiles and globals soon after
+        // it starts, often after the guest reported, which would take
+        // another round trip.
+        if (buckets) { buckets.players = true; buckets.projectiles = true; buckets.globals = true; }
         let peer = _resyncHostPeer(pid);
         peer.lastT = pending.T;
         peer.lastFull = !!pending.full;
         peer.carried = buckets;
-        let text = JSON.stringify(S);
-        netCounters.snapshotBuildMs = performance.now() - t0;
-        netCounters.lastSnapshotAt = performance.now();
         if (pending.full) netCounters.fullPatches++; else netCounters.patches++;
         did = true;
         let msg = { type: 'RESYNC_PATCH', tick: pending.T, id: pending.id, full: pending.full };
-        if (text.length >= NET_SNAPSHOT_COMPRESS_MIN_BYTES) {
-            netEncodeSnapshotText(text).then(payload => {
-                netCounters.snapshotBytes = netSnapshotPayloadBytes(payload);
-                try { conn.send({ ...msg, payload: netSnapshotPayloadForPeer(pid, payload, text) }); } catch { }
-            });
-        } else {
-            netCounters.snapshotBytes = text.length;
-            try { conn.send({ ...msg, payload: { json: text } }); } catch { }
-        }
+        let send = text => {
+            netCounters.snapshotBuildMs = performance.now() - t0;
+            netCounters.lastSnapshotAt = performance.now();
+            if (text.length >= NET_SNAPSHOT_COMPRESS_MIN_BYTES) {
+                netEncodeSnapshotText(text).then(payload => {
+                    netCounters.snapshotBytes = netSnapshotPayloadBytes(payload);
+                    try { conn.send({ ...msg, payload: netSnapshotPayloadForPeer(pid, payload, text) }); } catch { }
+                });
+            } else {
+                netCounters.snapshotBytes = text.length;
+                try { conn.send({ ...msg, payload: { json: text } }); } catch { }
+            }
+        };
+        // With the simulation worker, the worker encodes it (the page's copy
+        // does not hold every field exactly); the request goes before tick T.
+        if (typeof simClientActive === 'function' && simClientActive()) simClientEncodePatch(buckets).then(send, () => { });
+        else send(JSON.stringify(snapEncodeState(buckets ? { buckets } : null)));
     }
     for (let t of resyncHostFlushTicks) if (t < tick - 600) resyncHostFlushTicks.delete(t);
     return did;
@@ -510,16 +522,21 @@ function _resyncHostSendJoin(conn, pending) {
     let pid = String(conn.peer);
     let t0 = performance.now();
     let snapshot = buildHostAuthoritativeStateSnapshot({ includeConfig: true, includeStaticMapState: true, includeGridTypes: true });
-    let text = JSON.stringify(snapshot);
-    netCounters.snapshotBuildMs = performance.now() - t0;
-    netCounters.lastSnapshotAt = performance.now();
     let message = { type: pending.join === 'spectating' ? 'START_SPECTATE' : 'START_GAME', ...buildHostMatchSyncPayload(), joinTick: pending.T };
-    logLockstepWarning('Sending the match to a joining player', { peerId: pid, tick: pending.T, bytes: text.length });
-    netEncodeSnapshotText(text).then(payload => {
-        netCounters.snapshotBytes = netSnapshotPayloadBytes(payload);
-        if (conn.open === false) return;
-        try { conn.send({ ...message, snapshotPayload: netSnapshotPayloadForPeer(pid, payload, text) }); } catch { }
-    });
+    let send = snapshot => {
+        let text = JSON.stringify(snapshot);
+        netCounters.snapshotBuildMs = performance.now() - t0;
+        netCounters.lastSnapshotAt = performance.now();
+        logLockstepWarning('Sending the match to a joining player', { peerId: pid, tick: pending.T, bytes: text.length });
+        netEncodeSnapshotText(text).then(payload => {
+            netCounters.snapshotBytes = netSnapshotPayloadBytes(payload);
+            if (conn.open === false) return;
+            try { conn.send({ ...message, snapshotPayload: netSnapshotPayloadForPeer(pid, payload, text) }); } catch { }
+        });
+    };
+    // With the simulation worker, its state (see resyncHostBeforeTick).
+    if (typeof simClientActive === 'function' && simClientActive()) simClientFillSnapshotState(snapshot).then(send, () => { });
+    else send(snapshot);
 }
 
 // Host: the joiner restored the match at `tick`; send what was sealed since.

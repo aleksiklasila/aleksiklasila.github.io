@@ -1081,9 +1081,8 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     };
 
     // Recompute gameplay visibility, retaining this client's visual history.
-    visibilityGridRawByPlayerCache.clear();
+    clearGameplayVisibilityCache();
     visibilityGridByPlayer = Array.from({ length: players.length }, () => []);
-    visibilityCacheTick = -1;
     updateVisibility(localPlayerId);
     dirtyGrid = true;
     dirtyAreas = true;
@@ -1193,6 +1192,8 @@ function applyAuthoritativeStateSnapshot(snapshot) {
 
     lockstepResyncResumeTick = snapTick;
     resyncNoteRestored(snapTick);
+    // The simulation worker (if on) restores the same state.
+    if (typeof simClientAfterSnapshotApplied === 'function') simClientAfterSnapshotApplied(snapshot);
 
     let st = document.getElementById('lobby-status');
     if (st && !isHost) {
