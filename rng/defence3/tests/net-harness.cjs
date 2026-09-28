@@ -547,7 +547,7 @@ function createInstance(world, name, options = {}) {
                 Date: HarnessDate, Math: options.foreignMath ? makeForeignMath() : Math, structuredClone, URLSearchParams, URL, TextEncoder, TextDecoder,
                 location: { search: '', href: 'http://localhost/rng/defence3/src/sim/sim_worker.js' }, navigator: { userAgent: 'harness-worker' },
                 crypto: window.crypto,
-                importScripts: () => { for (const sc of scripts.game) { try { sc.runInContext(ctx); } catch (err) { inst.errors.push(new Error("[sim worker] loading " + sc.__file + ": " + (err && err.stack || err))); } } },
+                importScripts: () => { if (worker._imported) return; worker._imported = true; for (const sc of scripts.game) { try { sc.runInContext(ctx); } catch (err) { inst.errors.push(new Error("[sim worker] loading " + sc.__file + ": " + (err && err.stack || err))); } } },
                 postMessage: (msg) => {
                     const data = structuredClone(msg);
                     sched.at(sched.now + (options.simWorkerMs ?? 5), () => { if (!worker._terminated && worker.onmessage) worker.onmessage({ data }); }, inst);
@@ -564,6 +564,8 @@ function createInstance(world, name, options = {}) {
         }
         postMessage(msg) {
             const data = structuredClone(msg);
+            // The page lists no script tags here: one entry loads them all.
+            if (data && data.type === 'load' && !(data.scripts && data.scripts.length)) data.scripts = ['harness:all'];
             sched.at(sched.now, () => {
                 if (this._terminated || !this._sandbox.onmessage) return;
                 this._sandbox.onmessage({ data });

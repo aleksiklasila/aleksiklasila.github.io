@@ -137,6 +137,25 @@ function _simStubUi() {
     }
 }
 
+// importScripts only runs files served with a JavaScript MIME type; some
+// local servers send .js as text/plain (pages run those anyway). Such a file
+// is fetched and run from a blob of the right type instead.
+let _simImportViaBlob = false;
+function _simImport(url) {
+    if (!_simImportViaBlob) {
+        try { importScripts(url); return; } catch (err) {
+            if (!err || err.name !== 'NetworkError' || typeof XMLHttpRequest === 'undefined') throw err;
+            _simImportViaBlob = true;
+        }
+    }
+    let xhr = new XMLHttpRequest();
+    xhr.open('GET', url, false);
+    xhr.send();
+    if (xhr.status !== 200 && xhr.status !== 0) throw new Error('could not load ' + url + ' (' + xhr.status + ')');
+    let blobUrl = URL.createObjectURL(new Blob([xhr.responseText + String.fromCharCode(10) + '//# sourceURL=' + url], { type: 'text/javascript' }));
+    try { importScripts(blobUrl); } finally { URL.revokeObjectURL(blobUrl); }
+}
+
 let _simLoaded = false;
 let _simMode = 'shadow';
 let _simEpoch = 0;
@@ -145,7 +164,7 @@ self.onmessage = (ev) => {
     try {
         if (msg.type === 'load') {
             let t0 = performance.now();
-            importScripts(...msg.scripts);
+            for (let url of msg.scripts) _simImport(url);
             _simStubUi();
             _simLoaded = true;
             _simPost({ type: 'loaded', ms: performance.now() - t0 });

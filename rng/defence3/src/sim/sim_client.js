@@ -43,14 +43,14 @@ function _simClientScriptUrls() {
 }
 
 function _simClientCreate() {
-    let worker = new Worker('./src/sim/sim_worker.js?v=20261002-sim2');
+    let worker = new Worker('./src/sim/sim_worker.js?v=20261002-sim4');
     let c = {
         worker, loaded: false, active: false, epoch: 0, startTick: -1, nextRequestId: 1, replies: new Map(),
         inFlight: 0, tickClock: 0, dispatchAt: new Map(), appliedTick: -1, appliedAt: 0, latencyMs: TICK_MS, errors: [],
         stats: { applied: 0, applyMs: [], simMs: [], encodeMs: [], latencyMs: [], rows: 0, heals: 0, dropped: 0 }
     };
     worker.onmessage = ev => { try { _simClientOnMessage(ev.data || {}); } catch (err) { reportRuntimeError('sim worker', err); } };
-    worker.onerror = ev => { c.errors.push(String(ev.message || ev)); console.error('[sim worker]', ev.message || ev); };
+    worker.onerror = ev => { c.errors.push(String(ev.message || ev)); if (!c.loaded) c.failed = String(ev.message || 'worker error'); console.error('[sim worker]', ev.message || ev); };
     worker.postMessage({ type: 'load', scripts: _simClientScriptUrls() });
     return c;
 }
@@ -71,6 +71,12 @@ function simClientStartMatch() {
     if (!simClientEnabled || lockstepStrictDebugMode) return false;
     simClientPreload();
     let c = _simClient;
+    // A worker that is still loading, or could not load the game, does not
+    // take the match: it runs on the page as without ?simworker=1.
+    if (!c.loaded || c.failed) {
+        console.warn('[sim worker] ' + (c.failed ? 'failed to load (' + c.failed + ')' : 'not loaded yet') + '; this match runs on the page');
+        return false;
+    }
     // The worker restores this; the page's copy decodes the same state (the
     // lockstep bookkeeping stays as it is). The page ran no tick since its
     // last restore, so no peer has history caches to drop yet.
@@ -168,6 +174,7 @@ function _simClientOnMessage(msg) {
         }
         case 'error': {
             if (c.errors.length < 50) c.errors.push(msg.where + ': ' + msg.message);
+            if (msg.where === 'load') c.failed = msg.message || 'load error';
             // A tick that threw in the worker counts (and logs) as it would
             // on the page.
             let err = new Error(msg.message);
