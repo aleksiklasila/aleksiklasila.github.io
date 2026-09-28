@@ -419,7 +419,7 @@ class Unit {
         this._healerNextRecheckTick = undefined; this._researchLastMoveTick = undefined; this._researchNextRecheckTick = undefined;
         this.holdPosition = undefined; this._ambientSoundTicks = undefined;
 
-        this._spatialKey = undefined; this._spatialMember = undefined; this._spatialAreaId = undefined; this._spatialAreaOwner = undefined; this._awaitGroupPath = 0;
+        this._spatialKey = undefined; this._spatialMember = undefined; this._spatialAreaId = undefined; this._spatialAreaOwner = undefined; this._r3d = undefined; this._r3dSig = undefined; this._r3dTex = undefined; this._awaitGroupPath = 0;
         // A snapshot restore writes every field itself (same order, so the
         // same layout) and indexes the unit afterwards.
         if (_snapUnitShellMode) return;

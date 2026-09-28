@@ -31,7 +31,8 @@ const SIM_DELTA_HOT_FIELDS = {
         'effectiveLevel', '_lastAppliedEffectiveLevel', '_effectiveStatsRecalcCounter', '_thingStatsRecalcCounter', '_astarLastChargedTick',
         '_astarLastChargedToKey', '_astarLastChargedFromKey', '_workerNextIdleRetargetTick', '_builderLastWatchX', '_builderLastWatchY',
         '_builderLastMoveTick', 'workerTransferCooldown', 'wet', 'frozen', 'burning', 'poisoned', 'sandy', 'watched', 'teleportHideTicks',
-        'builderHasMaterial', '_workerLastPathTick', '_collectorLastMoveTick', '_healerLastMoveTick', '_researchLastMoveTick', '_awaitGroupPath'],
+        'builderHasMaterial', '_workerLastPathTick', '_collectorLastMoveTick', '_healerLastMoveTick', '_researchLastMoveTick', '_awaitGroupPath',
+        '_builderNextRecheckTick'],
     t: ['cd', 'energy', '_thingStatsRecalcCounter'],
     b: ['energy', '_thingStatsRecalcCounter'],
     s: ['energy', '_thingStatsRecalcCounter'],
@@ -45,6 +46,18 @@ const SIM_DELTA_LISTS = ['u', 't', 'b', 's', 'f', 'g', 'a', 'd'];
 // state (production queues, stat objects...) is changed in place, which the
 // field comparator cannot see.
 const SIM_DELTA_HASH_KIND = { t: 'b', b: 'b', s: 'b', f: 'b', g: 'm', a: 'm', d: 'd' };
+
+// Content hash of an entity without its hot fields (those travel in the
+// typed arrays every tick; a tower's cooldown would otherwise make it a row
+// every tick). They are set aside while hashing and put back.
+const _simHashHotSaved = [];
+function _simContentHash(list, kind, e) {
+    let hot = SIM_DELTA_HOT_FIELDS[list] || [];
+    for (let i = 0; i < hot.length; i++) { let f = hot[i]; _simHashHotSaved[i] = e[f]; if (f in e) e[f] = 0; }
+    let h = _snapHashEntity(kind, e, 7);
+    for (let i = 0; i < hot.length; i++) { let f = hot[i]; if (f in e) e[f] = _simHashHotSaved[i]; }
+    return h;
+}
 
 // Hot value kinds: the value itself (number) or one of these.
 // ABSENT: the entity has no such field (left as is on the page).
@@ -109,7 +122,7 @@ function simDeltaEncoderReset() {
         for (let i = 0; i < arr.length; i++) {
             let e = arr[i];
             let shape = _simDeltaShape(list, e);
-            seen.set(e, { shape, vals: shape.copy(e), h: hashKind ? _snapHashEntity(hashKind, e, 7) : 0 });
+            seen.set(e, { shape, vals: shape.copy(e), h: hashKind ? _simContentHash(list, hashKind, e) : 0 });
             keys[i] = _snapEntityKey(list, e, i);
         }
         lists[list] = { seen, keys };
@@ -132,6 +145,7 @@ function simDeltaEncode() {
     // whether the map's cached layers need a redraw.
     let built = [];
     let dirtyMap = false;
+    let rowsBy = {};
     for (let list of SIM_DELTA_LISTS) {
         let st = enc.lists[list];
         let arr = _snapListEntities(list);
@@ -163,7 +177,7 @@ function simDeltaEncode() {
             if (!dirty && prev && (list !== 'u' || ((i + enc.tick) & 15) === 0) && _simDeltaShape(list, e) !== shape) dirty = true;
             let h = 0;
             if (hashKind) {
-                h = _snapHashEntity(hashKind, e, 7);
+                h = _simContentHash(list, hashKind, e);
                 if (prev && h !== prev.h) dirty = true;
             }
             // Not representable in the hot arrays: the row carries it.
@@ -187,7 +201,7 @@ function simDeltaEncode() {
                 for (let k of keys) if (!was.has(k)) { let [gx, gy] = String(k).split(',').map(Number); regions.add(_snapRegion(gx, gy)); }
             }
         }
-        if (items.length) entities.set(list, items);
+        if (items.length) { entities.set(list, items); rowsBy[list] = items.length; }
         st.seen = nextSeen;
         st.keys = keys;
         if (nf) hot[list] = { n: arr.length, fields: nf, v, k: kinds };
@@ -209,7 +223,7 @@ function simDeltaEncode() {
     // Per-player pathfinding budgets: hashed, not in the snapshot codec.
     let budgets = [pathfindBudgetByPlayer ? pathfindBudgetByPlayer.slice() : null,
         astarNodeBudgetRemainingByPlayer ? astarNodeBudgetRemainingByPlayer.slice() : null];
-    return { S, hot, rows: rowCount, built, dirtyMap, budgets };
+    return { S, hot, rows: rowCount, rowsBy, built, dirtyMap, budgets };
 }
 
 // Page side: apply one tick's changes to the page's copy of the world.

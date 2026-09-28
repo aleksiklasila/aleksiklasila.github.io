@@ -139,10 +139,17 @@
     }
 
     // An exact 2D panel (pooled 96px canvas) that the sprite atlas can hold.
+    // Pooled panels keep their size: it is read (DOM calls) once per canvas;
+    // the key test is kept on the object while its key is the same.
     function isAtlasPanel(object) {
         let canvas = object.topTextureCanvas;
-        return !!(canvas && canvas._renderer3DExactKey && canvas.width === FLAT_ATLAS_SIZE && canvas.height === FLAT_ATLAS_SIZE
-            && String(object.topTextureKey || '').startsWith('2d:'));
+        if (!canvas || !canvas._renderer3DExactKey) return false;
+        let sized = canvas._atlasSized;
+        if (sized === undefined) sized = canvas._atlasSized = canvas.width === FLAT_ATLAS_SIZE && canvas.height === FLAT_ATLAS_SIZE;
+        if (!sized) return false;
+        let key = object.topTextureKey;
+        if (object._iAtlasKey !== key) { object._iAtlasKey = key; object._iAtlasOk = String(key || '').startsWith('2d:'); }
+        return object._iAtlasOk;
     }
 
     let flatTextureSerial = 0;
@@ -237,8 +244,14 @@
         }
 
         layerFor(source) {
-            if (source.width !== FLAT_ATLAS_SIZE || source.height !== FLAT_ATLAS_SIZE) return FLAT_SINGLE;
             let slot = source._flatAtlasSlot;
+            // The common case: already in its layer and unchanged. (Reading
+            // a canvas size is a DOM call; skipped here.)
+            if (slot !== undefined && this.sources[slot] === source && this.versions[slot] === (Number(source._textureVersion) || 0)) {
+                this.lastUsed[slot] = this.frame;
+                return slot;
+            }
+            if (source.width !== FLAT_ATLAS_SIZE || source.height !== FLAT_ATLAS_SIZE) return FLAT_SINGLE;
             if (slot === undefined || this.sources[slot] !== source) {
                 slot = this.acquire();
                 if (slot < 0) return FLAT_SINGLE;
@@ -689,6 +702,32 @@
     }
 
     // composeModelMatrix written in place into instance data at `base`.
+    // An object's instance matrix; the rotation's cosine and sine are kept
+    // on the object (most objects keep their rotation between frames).
+    function writeObjectMatrix(out, base, o) {
+        let r = o.rotationY || 0;
+        let c, s;
+        if (o._iRot === r) { c = o._iCos; s = o._iSin; }
+        else { c = Math.cos(r); s = Math.sin(r); o._iRot = r; o._iCos = c; o._iSin = s; }
+        let sx = o.scaleX, sy = o.scaleY, sz = o.scaleZ;
+        out[base] = c * sx; out[base + 1] = 0; out[base + 2] = -s * sx; out[base + 3] = 0;
+        out[base + 4] = 0; out[base + 5] = sy; out[base + 6] = 0; out[base + 7] = 0;
+        out[base + 8] = s * sz; out[base + 9] = 0; out[base + 10] = c * sz; out[base + 11] = 0;
+        out[base + 12] = o.x; out[base + 13] = o.y; out[base + 14] = o.z; out[base + 15] = 1;
+    }
+
+    // Parsed tint colours, kept on the object while its tint string is the same.
+    function objectRgb(o) {
+        let t = o.tint;
+        if (o._iTint !== t) { o._iTint = t; o._iRgb = hexToRgb(t); }
+        return o._iRgb;
+    }
+    function objectSideRgb(o) {
+        let t = o.sideTint || o.tint;
+        if (o._iSide !== t) { o._iSide = t; o._iSideRgb = hexToRgb(t); }
+        return o._iSideRgb;
+    }
+
     function writeModelMatrix(out, base, tx, ty, tz, rotationY, sx, sy, sz) {
         let c = Math.cos(rotationY);
         let s = Math.sin(rotationY);
@@ -2414,6 +2453,8 @@
             gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
             let bindInstanceAttributes = (mesh) => {
+                mesh.instanceBase = 0;
+                mesh.instanceBuffer = this.cubeInstanceBuffer;
                 gl.bindVertexArray(mesh.vao);
                 gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
                 let instanceStrideBytes = INSTANCE_STRIDE * 4;
@@ -2480,7 +2521,7 @@
                 layout(location=7) in vec3 color;
                 layout(location=8) in float alpha;
                 layout(location=9) in float moveAmount;
-                layout(location=10) in float phase;
+                layout(location=10) in float phaseIn;
                 layout(location=11) in vec3 trim;
                 layout(location=12) in float light;
                 layout(location=13) in vec4 detail;
@@ -2490,6 +2531,10 @@
                 uniform float uAnimationMode;
                 uniform float uRig;
                 uniform float uTime;
+                // Unit layer (see drawUnitLayer): tick interpolation factor and
+                // the flyer bob's time.
+                uniform float uLayerAlpha;
+                uniform float uFlyTime;
                 out vec3 vNormal;
                 out vec3 vColor;
                 out vec3 vTrim;
@@ -2501,6 +2546,11 @@
                 flat out float vStatusLayer;
                 void main() {
                     vec3 p = aPosition, n = aNormal;
+                    // Instance matrices are yaw + scale; their constant slots
+                    // carry the unit layer's data (zero for other draws):
+                    // offset back to the previous tick (m0.w, m1.w), walk phase
+                    // rate (m2.w), flyer bob seed and flag (m1.x, m1.z).
+                    float phase = phaseIn + m2.w * uLayerAlpha;
                     float animationMode = floor(uAnimationMode + .5);
                     float rig = floor(uRig + .5);
                     float joint = detail.y, aj = abs(joint), sj = sign(joint), pivot = detail.z;
@@ -2593,7 +2643,9 @@
                     } else {
                         p.y += abs(sin(phase)) * moveAmount * .018;
                     }
-                    mat4 model = mat4(m0, m1, m2, m3);
+                    vec3 layerOffset = vec3(m0.w, 0.0, m1.w) * (1.0 - uLayerAlpha);
+                    if (m1.z > .5) layerOffset.y += sin(uFlyTime * 2.2 + m1.x) * .035 - (animationMode == 1.0 ? sin(phase) * .22 : 0.0);
+                    mat4 model = mat4(vec4(m0.x, 0.0, m0.z, 0.0), vec4(0.0, m1.y, 0.0, 0.0), vec4(m2.x, 0.0, m2.z, 0.0), vec4(m3.xyz + layerOffset, 1.0));
                     if (detail.x == 4.0 && detail.w > .5) {
                         // Keep the entire HUD rectangle world-aligned. Rotating only
                         // its UVs would crop the level/health text at oblique angles.
@@ -2694,6 +2746,8 @@
                 animationMode: gl.getUniformLocation(this.figureProgram, 'uAnimationMode'),
                 rig: gl.getUniformLocation(this.figureProgram, 'uRig'),
                 time: gl.getUniformLocation(this.figureProgram, 'uTime'),
+                layerAlpha: gl.getUniformLocation(this.figureProgram, 'uLayerAlpha'),
+                flyTime: gl.getUniformLocation(this.figureProgram, 'uFlyTime'),
                 isFlying: gl.getUniformLocation(this.figureProgram, 'uIsFlying'),
                 isUnit: gl.getUniformLocation(this.figureProgram, 'uIsUnit'),
                 viewProjection: gl.getUniformLocation(this.figureProgram, 'uViewProjection'),
@@ -2728,7 +2782,14 @@
         }
 
         getFigureMeshKey(object) {
-            let kind = proceduralKind(object);
+            // The kind follows fields fixed for an object's life (model,
+            // weapon, flags); objects are reused between frames.
+            let kind = object._r3dKind;
+            if (kind === undefined || object._r3dKindModel !== object.modelKey || object._r3dKindWeapon !== object.weaponType) {
+                kind = object._r3dKind = proceduralKind(object);
+                object._r3dKindModel = object.modelKey;
+                object._r3dKindWeapon = object.weaponType;
+            }
             if (!kind) return null;
             // Detail follows the object's own on-screen size (its view depth),
             // not just the zoom: a far corner of a tilted view is small even
@@ -3150,6 +3211,7 @@
 
         pickRenderedSource(screenX, screenY, candidates) {
             if (!this.pickInverseViewProjection || !this.pickObjects) return null;
+            this.syncUnitLayerPickPositions();
             let pickPad = this.pickViewPad || 0;
             screenX += pickPad;
             screenY += pickPad;
@@ -3254,6 +3316,7 @@
             minY += pickPad; maxY += pickPad;
             const m = this.pickViewProjection;
             if (!m || !this.pickObjects) return hits;
+            this.syncUnitLayerPickPositions();
             const width = this.cssWidth, height = this.cssHeight;
             // Screen bounds of the object's mesh bounds (grown a little for
             // panels that turn to face the camera): 0 off the box, 2 wholly
@@ -4098,11 +4161,12 @@
             if (!batch || batch.count <= 0) return;
             let gl = this.gl;
             let mesh = this.getPrimitiveMesh(batch);
-            this.ensureCubeInstanceCapacity(batch.count);
-            gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
-            gl.bufferSubData(gl.ARRAY_BUFFER, 0, batch.data, 0, batch.count * INSTANCE_STRIDE);
+            let base = this.allocInstances(batch.count);
+            this.cubeInstanceArray.set(batch.data.subarray(0, batch.count * INSTANCE_STRIDE), base * INSTANCE_STRIDE);
+            this.uploadInstances(base, batch.count);
             gl.useProgram(this.instancedMeshProgram);
             gl.bindVertexArray(mesh.vao);
+            this.setInstanceBase(mesh, base);
             gl.uniformMatrix4fv(this.instancedMeshUniforms.viewProjection, false, this.tmpViewProjection);
             gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, batch.count);
         }
@@ -4162,6 +4226,61 @@
             gl.drawElements(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0);
         }
 
+        // ---- Frame instance arena ----
+        // Every instanced batch of a frame is written once into one buffer
+        // (CPU copy + GPU buffer) at its own range. The shadow-map pass
+        // draws the same batches again from their ranges instead of
+        // rebuilding and re-uploading them. Reset at the start of render().
+        resetInstanceArena() {
+            this.arenaUsed = 0;
+        }
+
+        // Room for `count` instances; returns the first instance index.
+        allocInstances(count) {
+            let base = this.arenaUsed || 0;
+            let need = base + count;
+            if (!(this.cubeInstanceCapacity >= need)) {
+                let gl = this.gl;
+                let next = Math.max(256, this.cubeInstanceCapacity || 0);
+                while (next < need) next *= 2;
+                let grown = new Float32Array(next * INSTANCE_STRIDE);
+                if (this.cubeInstanceArray && base > 0) grown.set(this.cubeInstanceArray.subarray(0, base * INSTANCE_STRIDE));
+                this.cubeInstanceArray = grown;
+                this.cubeInstanceCapacity = next;
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, grown.byteLength, gl.DYNAMIC_DRAW);
+                // The ranges already written this frame go along.
+                if (base > 0) gl.bufferSubData(gl.ARRAY_BUFFER, 0, grown, 0, base * INSTANCE_STRIDE);
+            }
+            this.arenaUsed = need;
+            return base;
+        }
+
+        uploadInstances(base, count) {
+            let gl = this.gl;
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
+            gl.bufferSubData(gl.ARRAY_BUFFER, base * INSTANCE_STRIDE * 4, this.cubeInstanceArray, base * INSTANCE_STRIDE, count * INSTANCE_STRIDE);
+        }
+
+        // Points the bound mesh VAO's instance attributes at `base`.
+        setInstanceBase(mesh, base, buffer = this.cubeInstanceBuffer) {
+            if (mesh.instanceBase === base && mesh.instanceBuffer === buffer) return;
+            mesh.instanceBase = base;
+            mesh.instanceBuffer = buffer;
+            let gl = this.gl;
+            let stride = INSTANCE_STRIDE * 4, o = base * stride;
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            for (let row = 0; row < 4; row++) gl.vertexAttribPointer(3 + row, 4, gl.FLOAT, false, stride, o + row * 16);
+            gl.vertexAttribPointer(7, 3, gl.FLOAT, false, stride, o + 64);
+            gl.vertexAttribPointer(8, 1, gl.FLOAT, false, stride, o + 76);
+            gl.vertexAttribPointer(9, 1, gl.FLOAT, false, stride, o + 80);
+            gl.vertexAttribPointer(10, 1, gl.FLOAT, false, stride, o + 84);
+            gl.vertexAttribPointer(11, 3, gl.FLOAT, false, stride, o + 88);
+            gl.vertexAttribPointer(12, 1, gl.FLOAT, false, stride, o + 100);
+            gl.vertexAttribPointer(14, 1, gl.FLOAT, false, stride, o + 104);
+            gl.vertexAttribPointer(15, 1, gl.FLOAT, false, stride, o + 108);
+        }
+
         ensureCubeInstanceCapacity(requiredCount) {
             if (this.cubeInstanceCapacity >= requiredCount) return;
             let gl = this.gl;
@@ -4178,11 +4297,14 @@
             if (!objects || objects.length <= 0) return;
             let gl = this.gl;
             let mesh = this.getPrimitiveMesh(objects[0]);
-            this.ensureCubeInstanceCapacity(objects.length);
+            // Written once per frame (the shadow-map pass draws it again).
+            let first = objects._arenaFrame === this.textureFrame && objects._arenaCount === objects.length ? objects._arenaBase : -1;
+            if (first < 0) {
+            first = this.allocInstances(objects.length);
             let data = this.cubeInstanceArray;
             for (let index = 0; index < objects.length; index++) {
                 let object = objects[index];
-                let base = index * INSTANCE_STRIDE;
+                let base = (first + index) * INSTANCE_STRIDE;
                 writeModelMatrix(data, base, object.x, object.y, object.z, object.rotationY || 0, object.scaleX, object.scaleY, object.scaleZ);
                 let color = hexToRgb(object.tint);
                 data[base + 16] = color[0];
@@ -4196,13 +4318,117 @@
                 data[base + 24] = color[2];
                 data[base + 25] = this.getPackedObjectLight(object);
             }
-
-            gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
-            gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, objects.length * INSTANCE_STRIDE);
+            this.uploadInstances(first, objects.length);
+            objects._arenaFrame = this.textureFrame; objects._arenaBase = first; objects._arenaCount = objects.length;
+            }
             gl.useProgram(this.instancedMeshProgram);
             gl.bindVertexArray(mesh.vao);
+            this.setInstanceBase(mesh, first);
             gl.uniformMatrix4fv(this.instancedMeshUniforms.viewProjection, false, this.tmpViewProjection);
             gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, objects.length);
+        }
+
+        // ---- Unit layer ----
+        // Objects the frame builder put in the layer (see renderer.js, UNIT
+        // LAYER) are written to their own buffer when the layer changes (a
+        // tick), and drawn from it every frame with uLayerAlpha. Returns the
+        // objects the layer cannot draw (no atlas panel or figure), for the
+        // per-frame path.
+        prepareUnitLayer(layer, atlas) {
+            this.layerAlpha = Number(layer.alpha) || 0;
+            this.layerFlyTime = Number(layer.flyTime) || 0;
+            if (this.unitLayerVersion === layer.version && this.unitLayerDraws) {
+                // Keep its atlas layers (evicted after two frames unused).
+                let slots = this.unitLayerSlots, frame = atlas.frame;
+                for (let i = 0; i < slots.length; i++) atlas.lastUsed[slots[i]] = frame;
+                return this.unitLayerFallback;
+            }
+            let gl = this.gl;
+            this.unitLayerVersion = layer.version;
+            let groups = new Map(), fallback = [], picks = [], slotSet = new Set();
+            let total = 0;
+            for (let o of layer.objects) {
+                let kind = this.getFigureMeshKey(o);
+                let top = kind && isAtlasPanel(o) ? atlas.layerFor(o.topTextureCanvas) : -1;
+                if (top < 0) { fallback.push(o); continue; }
+                o._layerTop = top;
+                // By kind (interned strings), then animation mode: no key
+                // strings built per object.
+                let byMode = groups.get(kind);
+                if (!byMode) groups.set(kind, byMode = []);
+                let mode = o.animationMode | 0;
+                let g = byMode[mode];
+                if (!g) byMode[mode] = g = { kind, objects: [] };
+                g.objects.push(o);
+                total++;
+            }
+            let need = total * INSTANCE_STRIDE;
+            if (!this.unitLayerArray || this.unitLayerArray.length < need) {
+                this.unitLayerArray = new Float32Array(Math.max(need, 1024 * INSTANCE_STRIDE, (this.unitLayerArray ? this.unitLayerArray.length : 0) * 2));
+            }
+            if (!this.unitLayerBuffer) this.unitLayerBuffer = gl.createBuffer();
+            let data = this.unitLayerArray, statusAtlas = atlas, draws = [], at = 0;
+            let groupList = [];
+            for (let byMode of groups.values()) for (let g of byMode) if (g) groupList.push(g);
+            for (let g of groupList) {
+                let first = at;
+                let groupMesh = this.getFigureMesh(g.kind);
+                for (let o of g.objects) {
+                    let base = at * INSTANCE_STRIDE;
+                    writeObjectMatrix(data, base, o);
+                    data[base + 3] = o._pdx; data[base + 7] = o._pdz; data[base + 11] = o._phaseRate;
+                    data[base + 4] = o._flySeed; data[base + 6] = o._flyOn;
+                    let color = objectRgb(o);
+                    data[base + 16] = color[0]; data[base + 17] = color[1]; data[base + 18] = color[2];
+                    data[base + 19] = Math.max(0.05, Math.min(1, Number(o.alpha) || 1));
+                    data[base + 20] = o.moveAmount || 0;
+                    data[base + 21] = o.walkPhase || 0;
+                    let side = objectSideRgb(o);
+                    data[base + 22] = side[0]; data[base + 23] = side[1]; data[base + 24] = side[2];
+                    data[base + 25] = this.getPackedObjectLight(o);
+                    data[base + 26] = o._layerTop;
+                    let status = o.statusTextureCanvas ? statusAtlas.layerFor(o.statusTextureCanvas) : -1;
+                    data[base + 27] = status;
+                    slotSet.add(o._layerTop);
+                    if (status >= 0) slotSet.add(status);
+                    if (o.pickSource) {
+                        let entry = o._r3dPick || (o._r3dPick = { object: o, mesh: null });
+                        entry.mesh = groupMesh;
+                        picks.push(entry);
+                    }
+                    at++;
+                }
+                draws.push({ first, count: at - first, sample: g.objects[0], kind: g.kind, mesh: groupMesh, statusAtlas, buffer: this.unitLayerBuffer, fallback: null });
+            }
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.unitLayerBuffer);
+            if ((this.unitLayerBufferBytes || 0) < data.byteLength) {
+                gl.bufferData(gl.ARRAY_BUFFER, data.byteLength, gl.DYNAMIC_DRAW);
+                this.unitLayerBufferBytes = data.byteLength;
+            }
+            if (at) gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, at * INSTANCE_STRIDE);
+            // A reallocated buffer invalidates attribute pointers set from it.
+            for (let d of draws) d.mesh.instanceBuffer = null;
+            this.unitLayerDraws = draws;
+            this.unitLayerPicks = picks;
+            this.unitLayerSlots = Int32Array.from(slotSet);
+            this.unitLayerFallback = fallback;
+            this.unitLayerObjects = layer.objects;
+            return fallback;
+        }
+
+        drawUnitLayer(atlas) {
+            let draws = this.unitLayerDraws;
+            if (!draws || !atlas) return;
+            for (let d of draws) this.drawTexturedInstanceRange(d, null, null, atlas);
+        }
+
+        // Picking reads object positions: put the layer's objects where this
+        // frame shows them.
+        syncUnitLayerPickPositions() {
+            let objects = this.unitLayerObjects;
+            if (!objects) return;
+            let back = 1 - (this.layerAlpha || 0);
+            for (let o of objects) { o.x = o._cx + o._pdx * back; o.z = o._cz + o._pdz * back; }
         }
 
         // With `atlas`, objects are figures with exact 96px 2D panels drawn from
@@ -4211,6 +4437,15 @@
         drawTexturedCubeInstances(objects, topTexture, sideTexture = null, atlas = null) {
             if (!objects || objects.length <= 0 || (!topTexture && !atlas)) return;
             let gl = this.gl;
+            // Already written this frame (the shadow-map pass): draw its range.
+            let cached = objects._arenaFrame === this.textureFrame && objects._arenaTotal === objects.length ? objects._arenaDraw : null;
+            if (cached) {
+                if (cached.fallback) for (let f of cached.fallback) this.drawTexturedCubeInstances(f.list, f.texture);
+                if (cached.count) this.drawTexturedInstanceRange(cached, topTexture, sideTexture, atlas);
+                return;
+            }
+            let input = objects;
+            let fallbackDraws = null;
             if (atlas) {
                 let fallback = null;
                 let layers = this.atlasLayers || (this.atlasLayers = []);
@@ -4228,9 +4463,18 @@
                         if (!list) byKey.set(object.topTextureKey, list = []);
                         list.push(object);
                     }
-                    for (let list of byKey.values()) this.drawTexturedCubeInstances(list, this.getTopTexture(list[0].topTextureKey, list[0].topTextureCanvas));
+                    fallbackDraws = [];
+                    for (let list of byKey.values()) {
+                        let texture = this.getTopTexture(list[0].topTextureKey, list[0].topTextureCanvas);
+                        fallbackDraws.push({ list, texture });
+                        this.drawTexturedCubeInstances(list, texture);
+                    }
                 }
-                if (!kept.length) return;
+                if (!kept.length) {
+                    input._arenaFrame = this.textureFrame; input._arenaTotal = input.length;
+                    input._arenaDraw = { fallback: fallbackDraws, count: 0 };
+                    return;
+                }
                 objects = kept;
             }
             let kind = this.getFigureMeshKey(objects[0]);
@@ -4239,13 +4483,13 @@
             // Front status displays sample the sprite atlas even when the
             // back panels of this batch do not.
             let statusAtlas = kind ? atlas || this.getFlatAtlas() : null;
-            this.ensureCubeInstanceCapacity(objects.length);
+            let first = this.allocInstances(objects.length);
             let data = this.cubeInstanceArray;
             for (let index = 0; index < objects.length; index++) {
                 let object = objects[index];
-                let base = index * INSTANCE_STRIDE;
-                writeModelMatrix(data, base, object.x, object.y, object.z, object.rotationY || 0, object.scaleX, object.scaleY, object.scaleZ);
-                let color = hexToRgb(object.tint);
+                let base = (first + index) * INSTANCE_STRIDE;
+                writeObjectMatrix(data, base, object);
+                let color = objectRgb(object);
                 data[base + 16] = color[0];
                 data[base + 17] = color[1];
                 data[base + 18] = color[2];
@@ -4257,7 +4501,7 @@
                     data[base + 20] = object.renderShape === 'cylinder' ? 1 : 0;
                     data[base + 21] = (Number(object.sideTextureAngle) || 0) - (object.renderShape === 'cylinder' ? (Number(object.rotationY) || 0) : 0);
                 }
-                let sideColor = hexToRgb(object.sideTint || object.tint);
+                let sideColor = objectSideRgb(object);
                 data[base + 22] = sideColor[0];
                 data[base + 23] = sideColor[1];
                 data[base + 24] = sideColor[2];
@@ -4265,8 +4509,18 @@
                 data[base + 26] = atlas ? this.atlasLayers[index] : 0;
                 data[base + 27] = statusAtlas && object.statusTextureCanvas ? statusAtlas.layerFor(object.statusTextureCanvas) : -1;
             }
-            gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
-            gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, objects.length * INSTANCE_STRIDE);
+            this.uploadInstances(first, objects.length);
+            let draw = { first, count: objects.length, sample: objects[0], kind, mesh, statusAtlas, fallback: fallbackDraws };
+            input._arenaFrame = this.textureFrame; input._arenaTotal = input.length; input._arenaDraw = draw;
+            this.drawTexturedInstanceRange(draw, topTexture, sideTexture, atlas);
+        }
+
+        // Draws a textured batch already written to the instance arena.
+        drawTexturedInstanceRange(draw, topTexture, sideTexture, atlas) {
+            let gl = this.gl;
+            let { kind, mesh, statusAtlas } = draw;
+            let objects = [draw.sample];
+            let uniforms = kind ? this.figureUniforms : this.texturedCubeUniforms;
             gl.useProgram(kind ? this.figureProgram : this.texturedCubeProgram);
             if (kind) {
                 gl.uniform1f(uniforms.isFlying, kind.startsWith('bird') ? 1 : 0);
@@ -4278,6 +4532,11 @@
                 gl.uniform1f(uniforms.isUnit, key.startsWith('unit_') ? 1 : 0);
             }
             gl.bindVertexArray(mesh.vao);
+            this.setInstanceBase(mesh, draw.first, draw.buffer || this.cubeInstanceBuffer);
+            if (kind) {
+                gl.uniform1f(uniforms.layerAlpha, draw.buffer ? this.layerAlpha : 1);
+                gl.uniform1f(uniforms.flyTime, this.layerFlyTime || 0);
+            }
             gl.uniformMatrix4fv(uniforms.viewProjection, false, this.tmpViewProjection);
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, topTexture);
@@ -4294,7 +4553,7 @@
                 gl.uniform1f(uniforms.useAtlas, atlas ? 1 : 0);
                 gl.activeTexture(gl.TEXTURE0);
             }
-            gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, objects.length);
+            gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, draw.count);
         }
 
         ensureFxResources() {
@@ -4502,6 +4761,7 @@
             this.resizeForSnapshot(snapshot);
             this.buildViewProjection(snapshot);
             this.textureFrame = (this.textureFrame || 0) + 1;
+            this.resetInstanceArena();
             // Seconds for time-driven structure animation (kept small for float precision).
             this.animationTime = ((typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000) % 3600;
 
@@ -4552,6 +4812,19 @@
             let shadowMode = this.graphicsOptions ? this.graphicsOptions.shadows : 'simple';
             let castShadows = shadowMode === 'simple';
             this.shadowFrame = null;
+            // The unit layer (drawn from its own buffer); what it cannot draw
+            // joins this frame's objects.
+            let unitLayer = snapshot.unitLayer && !castShadows ? snapshot.unitLayer : null;
+            let layerAtlas = null;
+            if (unitLayer) {
+                layerAtlas = this.getFlatAtlas();
+                layerAtlas.beginFrame(this.textureFrame);
+                let rest = this.prepareUnitLayer(unitLayer, layerAtlas);
+                if (rest && rest.length) objects = objects.concat(rest);
+                for (let e of this.unitLayerPicks) this.pickObjects.push(e);
+            } else {
+                this.unitLayerDraws = null; this.unitLayerPicks = null; this.unitLayerObjects = null; this.unitLayerVersion = -1;
+            }
             for (let i = 0; i < objects.length; i++) {
                 let object = objects[i];
                 let isTransparent = (Number(object.alpha) || 1) < 0.999;
@@ -4560,7 +4833,10 @@
                 let textured = (object.topTextureKey && object.topTextureCanvas) || (object.sideTextureKey && object.sideTextureCanvas);
                 if (object.pickSource) {
                     let pickMesh = mesh || (textured && figureMeshKey && this.getFigureMesh(figureMeshKey)) || this.getPrimitiveMesh(object);
-                    this.pickObjects.push({ object, mesh: pickMesh });
+                    // One record per object, reused between frames.
+                    let entry = object._r3dPick || (object._r3dPick = { object, mesh: null });
+                    entry.mesh = pickMesh;
+                    this.pickObjects.push(entry);
                 }
                 if (castShadows) {
                     if (mesh) {
@@ -4614,11 +4890,12 @@
             }
             this.drawShadows(shadowMeshObjects, shadowBatches);
             for (let object of opaqueMeshObjects) this.drawObject(object);
-            let atlas = opaqueTexturedCubeGroups.length || transparentTexturedCubeGroups.length ? this.getFlatAtlas() : null;
-            if (atlas) atlas.beginFrame(this.textureFrame);
+            let atlas = layerAtlas || (opaqueTexturedCubeGroups.length || transparentTexturedCubeGroups.length ? this.getFlatAtlas() : null);
+            if (atlas && !layerAtlas) atlas.beginFrame(this.textureFrame);
             for (let group of opaqueTexturedCubeGroups) {
                 this.drawTexturedCubeInstances(group.objects, group.topTexture, group.sideTexture, group.atlas ? atlas : null);
             }
+            if (unitLayer) this.drawUnitLayer(atlas);
             for (let group of opaqueCubeGroups.values()) {
                 this.drawCubeInstances(group);
             }
@@ -4715,6 +4992,7 @@
             try {
                 for (let object of meshObjects) this.drawObject(object);
                 for (let group of texturedGroups) this.drawTexturedCubeInstances(group.objects, group.topTexture, group.sideTexture, group.atlas ? atlas : null);
+                if (this.unitLayerDraws) this.drawUnitLayer(atlas);
                 for (let group of cubeGroups.values()) this.drawCubeInstances(group);
             } finally {
                 gl.disable(gl.POLYGON_OFFSET_FILL);

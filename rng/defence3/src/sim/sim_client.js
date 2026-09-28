@@ -28,6 +28,8 @@ const simClientEnabled = (() => {
 let _simClient = null;
 // Ticks dispatched to the worker whose results have not come back yet.
 const SIM_CLIENT_MAX_IN_FLIGHT = 2;
+// The page's copy is hash-checked against the worker every this many ticks.
+const SIM_CLIENT_CHECK_TICKS = 5;
 
 // Test hook: called with each tick once its result is applied.
 let simClientTickAppliedHook = null;
@@ -216,8 +218,10 @@ function _simClientApplyTick(msg) {
     // The page's copy must hash as the worker's; otherwise it is reloaded.
     // The worker's record is the one the resync compares with the peers.
     if (msg.hash) {
-        let mine = snapTickHash(msg.tick, !!lockstepStrictDebugMode);
-        if (mine.sum !== msg.hash.sum) {
+        // The page's copy is checked on every SIM_CLIENT_CHECK_TICKS-th tick
+        // (a slice of the state each time); a difference reloads it.
+        let mine = (msg.tick % SIM_CLIENT_CHECK_TICKS) === 0 ? snapTickHash(msg.tick, !!lockstepStrictDebugMode) : null;
+        if (mine && mine.sum !== msg.hash.sum) {
             c.stats.mismatch = (c.stats.mismatch || 0) + 1;
             if (!c.stats.firstDiff) try { c.stats.firstDiff = { tick: msg.tick, parts: snapDescribeCodes(snapDiffTickHash(mine, msg.hash)) }; } catch { }
             _simClientHeal(msg.tick);
@@ -229,6 +233,7 @@ function _simClientApplyTick(msg) {
     let ms = performance.now() - t0;
     c.stats.applied++;
     c.stats.rows += msg.delta.rows || 0;
+    if (msg.delta.rowsBy) { let rb = c.stats.rowsBy || (c.stats.rowsBy = {}); for (let k in msg.delta.rowsBy) rb[k] = (rb[k] || 0) + msg.delta.rowsBy[k]; }
     c.stats.applyMs.push(ms); c.stats.simMs.push(msg.simMs); c.stats.encodeMs.push(msg.encodeMs);
     for (let k of ['applyMs', 'simMs', 'encodeMs', 'latencyMs']) if (c.stats[k].length > 600) c.stats[k].splice(0, 300);
 }
@@ -274,7 +279,9 @@ function _simClientPageTickWork(tick) {
     _simClientLaserSound();
     updateAudioReactiveState();
     if (selectedUnits.length && selectedUnits.some(u => u.dead)) selectedUnits = selectedUnits.filter(u => !u.dead);
-    updateVisibility(localPlayerId);
+    // What this player sees (the worker computes every player's gameplay
+    // visibility; the page computes another player's only when asked).
+    visibilityGrid = updateVisualVisibility(localPlayerId, getRawVisibilityGridForPlayer(localPlayerId));
     if ((tick + 1) % TICK_RATE === 0) sampleGameStats();
     requestResearchPopupRefresh();
     let c = _simClient;
@@ -394,6 +401,7 @@ window.simClientStats = function () {
     return {
         enabled: true, loaded: c.loaded, active: c.active, epoch: c.epoch, appliedTick: c.appliedTick, inFlight: c.inFlight, heals: s.heals, dropped: s.dropped,
         errors: c.errors.slice(0, 5), firstDiff: s.firstDiff || null, rowsPerTick: s.applied ? Math.round(s.rows / s.applied * 10) / 10 : 0,
+        rowsPerTickByList: s.applied ? Object.fromEntries(Object.entries(s.rowsBy || {}).map(([k, v]) => [k, Math.round(v / s.applied * 10) / 10])) : null,
         applyMs: { mean: m(s.applyMs), p95: q(s.applyMs, .95) }, workerSimMs: { mean: m(s.simMs), p95: q(s.simMs, .95) },
         workerEncodeMs: { mean: m(s.encodeMs), p95: q(s.encodeMs, .95) }, latencyMs: { mean: m(s.latencyMs), p95: q(s.latencyMs, .95), shown: Math.round(c.latencyMs) }
     };
