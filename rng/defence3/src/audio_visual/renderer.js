@@ -186,7 +186,10 @@ function recordDamageVisual(target, amount, sourceOwner = null) {
     target._damageFlashUntil = Math.max(Number(target._damageFlashUntil) || 0, gameTime + DAMAGE_FLASH_TICKS);
     target._damageFlashStrength = Math.max(Number(target._damageFlashStrength) || 0, scaledStrength);
     target._damageFlashColor = getDamageFlashColor(target, sourceOwner);
+    // Units flashing now take the per-object path (see UNIT RENDER SLOTS).
+    if (target.unitType && target.id !== undefined) renderer3dFlashUntil.set(target.id, target._damageFlashUntil);
 }
+const renderer3dFlashUntil = new Map();
 
 function getDamageFlashState(target) {
     if (!target) return null;
@@ -406,6 +409,28 @@ function _touch3DPanel(panel) {
     if (panel && panel._panelCtx) panel._usedFrame = renderer3dExactTextureFrame;
 }
 
+// Structure layer state (see build3DFrameData, STRUCTURE LAYER).
+let renderer3dStaticLayer = null;
+let renderer3dStaticLayerVersion = 0;
+// Set when _reuseStatic3DObject serves a structure from its cache.
+let _staticReuseHit = false;
+
+// Structures whose activity effects play every frame (_pushStructureActivity).
+function _structureHasActivity(entity) {
+    if (!entity || entity.underConstruction) return false;
+    return entity.type === 'house' || entity.type === 'research' || !!(entity.spawnQueue && entity.spawnQueue.length);
+}
+
+function _pin3DPanelToStatic(panel, version) {
+    if (panel && panel._panelCtx) { panel._usedFrame = renderer3dExactTextureFrame; panel._staticPin = version; }
+}
+
+// Panels drawn by the unit layer stay in use for its whole life (until the
+// next build) without a touch per frame.
+function _pin3DPanelToLayer(panel, version) {
+    if (panel && panel._panelCtx) { panel._usedFrame = renderer3dExactTextureFrame; panel._layerPin = version; }
+}
+
 function cache3DExact2DTexture(signature, panel) {
     panel._usedFrame = renderer3dExactTextureFrame;
     renderer3dExact2DTextureCache.set(signature, panel);
@@ -425,6 +450,9 @@ function begin3DTextureFrame() {
     if (renderer3dExact2DTextureCache.size <= RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX) return;
     for (let [key, panel] of renderer3dExact2DTextureCache) {
         if (panel._usedFrame >= renderer3dExactTextureFrame - 2) continue;
+        // (Guarded: some tests load parts of this file.)
+        if (typeof renderer3dUnitLayer !== 'undefined' && renderer3dUnitLayer && panel._layerPin === renderer3dUnitLayer.version) continue;
+        if (typeof renderer3dStaticLayer !== 'undefined' && renderer3dStaticLayer && panel._staticPin === renderer3dStaticLayer.version) continue;
         renderer3dExact2DTextureCache.delete(key);
         if (panel._panelCtx && renderer3dPanelPool.length < RENDERER3D_PANEL_POOL_MAX) renderer3dPanelPool.push(panel);
         if (renderer3dExact2DTextureCache.size <= RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX) break;
@@ -1355,12 +1383,12 @@ function push3DRenderObject(target, object) {
         // The 3D renderer's own per-object caches, declared here so every
         // render object has one shape (fast property reads in its loops).
         _r3dGroupKey: undefined, _r3dGroupFigure: undefined, _r3dKind: undefined, _r3dKindModel: undefined, _r3dKindWeapon: undefined,
-        _r3dLod: false, _r3dPick: null,
+        _r3dLod: 0, _r3dPick: null,
         _iRot: NaN, _iCos: 1, _iSin: 0, _iTint: undefined, _iRgb: null, _iSide: undefined, _iSideRgb: null,
         // Unit layer: position at the tick, offset back to the previous
         // tick, walk phase rate and flyer bob (see UNIT LAYER).
         _cx: 0, _cz: 0, _pdx: 0, _pdz: 0, _phaseRate: 0, _flyOn: 0, _flySeed: 0, _layerTop: -1,
-        _iAtlasKey: undefined, _iAtlasOk: false
+        _iAtlasKey: undefined, _iAtlasOk: false, _litFor: undefined
     });
 }
 
@@ -1792,7 +1820,8 @@ function _pushProductionGhost(objects, entity, flat2d) {
 // changed: view mode, audio pulse, facing, whether a unit stands on its
 // tile, and it is not flashing, waiting for its exact panel or easing its
 // height (the last two builds differed). Panels refresh every 1-4 ticks.
-const renderer3dStaticObjects = new WeakMap();
+// The entry lives on the entity (entity._r3dStatic): a property read per
+// structure per frame instead of a WeakMap lookup.
 const renderer3dStaticFrame = { occupied: null, flat2d: false, overlapNowMs: 0, overlapFadeKeys: null };
 
 // Tiles holding a visible unit this frame (tile index keys), stamped per
@@ -1853,6 +1882,122 @@ function _unit3DWalkPhaseLinear(u, activity, out) {
     return out;
 }
 const _unitLayerPhase = [0, 0];
+
+// A cached unit object set up for the layer from the worker's record: the
+// tick's position and the offset back, facing, activity, walk phase, status
+// icon and light (as layerCollect and _refreshUnit3DObject would).
+function _layerWriteFromVis(u, cached, vis, r, statusCanvases, offX, offZ) {
+    let o = cached.object;
+    _pin3DPanelToLayer(o.topTextureCanvas, renderer3dUnitLayerVersion);
+    let cx = u.x / TILE + offX, cz = u.y / TILE + offZ;
+    o.x = o._cx = cx; o.z = o._cz = cz;
+    o._pdx = (u.prevX - u.x) / TILE; o._pdz = (u.prevY - u.y) / TILE;
+    o.rotationY = vis[r + 2];
+    o.statusTextureCanvas = statusCanvases[vis[r + 5] | 0] || null;
+    if (u.isSnake) {
+        o._phaseRate = 0; o._flyOn = 0; o._flySeed = 0;
+    } else {
+        let mode = vis[r] | 0;
+        o.animationMode = mode;
+        o.moveAmount = vis[r + 1];
+        o.walkPhase = vis[r + 3]; o._phaseRate = vis[r + 4];
+        o.y = cached.baseY + (u.isFlying ? (u.isWorker ? .36 : .30) : 0);
+        o._flyOn = u.isFlying ? 1 : 0;
+        o._flySeed = ((Number(u.id) || 0) * 1.7) % (Math.PI * 2);
+    }
+    // Light where it is at the tick (as _relight3DObject; no shadow
+    // direction: the layer is not used with drop shadows).
+    let level = 1;
+    if (!fullVisibility) {
+        let gx = Math.floor(cx), gy = Math.floor(cz);
+        let row = visibilityGrid[gy];
+        let raw = Math.max((row && row[gx]) || 0, vis[r + 6]);
+        level = Math.max(0, Math.min(1, raw / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
+    }
+    if (o.lightLevel !== level || o._litFor !== cached.tint) {
+        o.tint = _getCachedLitTint(cached.tint || '#c8ced8', level);
+        o.sideTint = _getCachedLitTint(cached.sideTint || cached.tint || '#c8ced8', level);
+        o.lightLevel = level;
+        o._litFor = cached.tint;
+    }
+    o.historyGhost = false;
+    // Drop shadows (Simple shadows) lean away from the light at its tile.
+    if (_simpleShadows && !fullVisibility) {
+        let dir = _shadowDirAt(cx, cz, _shadowDirScratch);
+        o.shadowDirX = dir.x; o.shadowDirZ = dir.z;
+        o.shadowLength = Math.max(0.6, Math.min(2.4, 1 + (1 - level) * 0.9));
+    }
+}
+let _simpleShadows = false;
+
+// UNIT RENDER SLOTS (3D, with the simulation worker)
+// Each living unit has a render slot (the worker's record says which). A
+// slot keeps what the unit layer needs that changes only with the unit's
+// panel or the view: model, scales, height, base colours, panel. A layer
+// build then reads the worker's records and these typed arrays in one
+// loop, without touching the unit objects; a unit goes through the
+// per-object path (which refills its slot) only when its slot is not valid.
+const _uSlot = { cap: 0 };
+function _uSlotGrow(slot) {
+    if (slot < _uSlot.cap) return;
+    let cap = Math.max(1024, _uSlot.cap * 2, slot + 1);
+    let grow = (Type, old, per = 1) => { let a = new Type(cap * per); if (old) a.set(old); return a; };
+    _uSlot.valid = grow(Uint8Array, _uSlot.valid);
+    _uSlot.id = grow(Float64Array, _uSlot.id);
+    _uSlot.sig = grow(Float32Array, _uSlot.sig);
+    _uSlot.view = grow(Int32Array, _uSlot.view);
+    _uSlot.label = grow(Uint8Array, _uSlot.label);
+    _uSlot.labelShown = grow(Uint8Array, _uSlot.labelShown);
+    _uSlot.texVer = grow(Float64Array, _uSlot.texVer);
+    _uSlot.lod = grow(Uint8Array, _uSlot.lod);
+    _uSlot.flags = grow(Uint8Array, _uSlot.flags);
+    _uSlot.dim = grow(Float32Array, _uSlot.dim, 4);    // sx, sy, sz, y
+    _uSlot.rgb = grow(Uint8Array, _uSlot.rgb, 6);      // tint r g b, side r g b (0-255)
+    _uSlot.kind = _uSlot.kind || []; _uSlot.kindLod = _uSlot.kindLod || []; _uSlot.kindLod2 = _uSlot.kindLod2 || []; _uSlot.panel = _uSlot.panel || [];
+    _uSlot.cap = cap;
+}
+const U_SLOT_FLYING = 1, U_SLOT_WORKER = 2, U_SLOT_SNAKE = 4, U_SLOT_MOTION = 8;
+
+// After the per-object path put a unit's object in the layer: its slot.
+function _uSlotFill(slot, u, o, cached, sig, view) {
+    if (!(slot >= 0)) return;
+    _uSlotGrow(slot);
+    let kind = renderer3dInstance && renderer3dInstance.getFigureMeshKey(o) ? o._r3dKind : null;
+    let tint = _parseHexColor(cached.tint || '#c8ced8'), side = _parseHexColor(cached.sideTint || cached.tint || '#c8ced8');
+    if (!kind || !tint || !side || !o.topTextureCanvas) { _uSlot.valid[slot] = 0; return; }
+    let S = _uSlot;
+    S.valid[slot] = 1; S.id[slot] = u.id; S.sig[slot] = sig; S.view[slot] = view;
+    S.label[slot] = u.isSnake ? 2 : (cached.label ? 1 : 0);
+    S.labelShown[slot] = cached.label ? 1 : 0;
+    S.texVer[slot] = o.topTextureCanvas._textureVersion || 0;
+    S.lod[slot] = o._r3dLod | 0;
+    S.flags[slot] = (u.isFlying ? U_SLOT_FLYING : 0) | (u.isWorker ? U_SLOT_WORKER : 0) | (u.isSnake ? U_SLOT_SNAKE : 0)
+        | ((u.isSnake || u.unitType === 'tank' || u.unitType === 'boss' || u.unitType === 'king') ? U_SLOT_MOTION : 0);
+    let d = slot * 4;
+    S.dim[d] = o.scaleX; S.dim[d + 1] = o.scaleY; S.dim[d + 2] = o.scaleZ;
+    S.dim[d + 3] = u.isSnake ? o.y : cached.baseY + (u.isFlying ? (u.isWorker ? .36 : .30) : 0);
+    let c = slot * 6;
+    S.rgb[c] = tint.r; S.rgb[c + 1] = tint.g; S.rgb[c + 2] = tint.b; S.rgb[c + 3] = side.r; S.rgb[c + 4] = side.g; S.rgb[c + 5] = side.b;
+    S.kind[slot] = kind;
+    S.kindLod[slot] = kind + ':lod';
+    S.kindLod2[slot] = kind + ':lod2';
+    S.panel[slot] = o.topTextureCanvas;
+}
+
+// A lit colour channel as _getCachedLitTint and the renderer produce it.
+function _litChannel(c255, bucket) {
+    if (bucket >= 24) return c255 / 255;
+    let mul = 0.28 + (bucket / 24) * 0.72;
+    return Math.max(0, Math.min(255, Math.round(c255 * mul))) / 255;
+}
+// _litChannel for each light bucket (0-24) and channel value (0-255).
+const _LIT_LUT = (() => {
+    let t = new Float32Array(25 * 256);
+    for (let b = 0; b < 25; b++) for (let c = 0; c < 256; c++) t[b * 256 + c] = _litChannel(c, b);
+    return t;
+})();
+const _uRec = new Float32Array(28);
+let _uSlotVisIndex = -1;
 
 // Whether a unit's object can be drawn from the layer until the next tick.
 function _unitLayerEligible(u, cached, o) {
@@ -1917,7 +2062,7 @@ function _static3DLabelShown(entity) {
 }
 
 function _reuseStatic3DObject(target, entity, gx, gy, audioMove, audioHeight) {
-    let entry = renderer3dStaticObjects.get(entity);
+    let entry = entity._r3dStatic;
     let age = entry ? gameTime - entry.tick : -1;
     if (!entry || entry.dynamic || age < 0 || age >= entry.maxAge
         || entry.view !== renderer3dStaticFrame.view || entry.audioMove !== audioMove || entry.audioHeight !== audioHeight
@@ -1944,14 +2089,15 @@ function _reuseStatic3DObject(target, entity, gx, gy, audioMove, audioHeight) {
         entry.litGrid = visibilityGrid;
     }
     target.push(object);
+    _staticReuseHit = true;
     return true;
 }
 
 function _rememberStatic3DObject(target, entity, gx, gy, audioMove, audioHeight, fallbackTexture) {
     let object = target[target.length - 1];
-    let entry = renderer3dStaticObjects.get(entity);
+    let entry = entity._r3dStatic;
     let easing = !!(entry && entry.object.scaleY !== object.scaleY);
-    renderer3dStaticObjects.set(entity, { object, tick: gameTime, audioMove, audioHeight, angle: entity.angle,
+    entity._r3dStatic = ({ object, tick: gameTime, audioMove, audioHeight, angle: entity.angle,
         textureVersion: object.topTextureCanvas ? object.topTextureCanvas._textureVersion : undefined,
         litVersion: visibilityVersion, litGrid: visibilityGrid,
         // Panels (health, progress) refresh every 1-4 ticks, spread by tile.
@@ -2019,7 +2165,18 @@ function _pushFlatUnit(batch, u, x, z, view) {
     return true;
 }
 
+// Debug: when window.__r3dPhases is an object, build3DFrameData adds the
+// time of each of its phases to it (ms), per kind of frame.
+function _r3dPhase(name, t0) {
+    let P = typeof window !== 'undefined' ? window.__r3dPhases : null;
+    if (!P) return 0;
+    let now = performance.now();
+    if (t0) P[name] = (P[name] || 0) + (now - t0);
+    return now;
+}
+
 function build3DFrameData(flat2d = false) {
+    let _ph = _r3dPhase('', 0);
     const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = getLiveRenderView();
 
     begin3DTextureFrame();
@@ -2124,11 +2281,12 @@ function build3DFrameData(flat2d = false) {
     UNIT_3D_REBUILD_TICKS = Math.max(UNIT_3D_REBUILD_TICKS_MIN, Math.min(8, Math.ceil(units.length / 1000)));
     // The unit layer: reused from its tick, or built this frame.
     let unitLayer = null, layerReuse = false, previousOccupied = null;
-    if (!flat2d && RENDERER3D_UNIT_LAYER_ENABLED && renderer3dInstance
-        && !(graphicsOptions && graphicsOptions.shadows === 'simple')) {
+    _simpleShadows = !!(graphicsOptions && graphicsOptions.shadows === 'simple');
+    if (!flat2d && RENDERER3D_UNIT_LAYER_ENABLED && renderer3dInstance) {
         let L = renderer3dUnitLayer;
+        // (A big zoom change rebuilds too: model detail follows on-screen size.)
         layerReuse = !!(L && L.tick === gameTime && L.view === view3DKey && L.fullVis === fullVisibility && L.player === localPlayerId
-            && L.units === units && L.unitCount === units.length
+            && L.units === units && L.unitCount === units.length && Math.abs(camera.zoom / L.zoom - 1) < 0.25
             && bounds.minGx >= L.bounds.minGx && bounds.maxGx <= L.bounds.maxGx && bounds.minGy >= L.bounds.minGy && bounds.maxGy <= L.bounds.maxGy);
         if (layerReuse) { unitLayer = L; renderer3dUnitLayerStats.reuse++; }
         else {
@@ -2140,10 +2298,11 @@ function build3DFrameData(flat2d = false) {
             // A margin around the view, so panning between ticks keeps it.
             let mx = Math.max(4, Math.ceil((bounds.maxGx - bounds.minGx) * 0.3)), my = Math.max(4, Math.ceil((bounds.maxGy - bounds.minGy) * 0.3));
             unitLayer = renderer3dUnitLayer = {
-                tick: gameTime, view: view3DKey, fullVis: fullVisibility, player: localPlayerId, units, unitCount: units.length,
+                tick: gameTime, view: view3DKey, fullVis: fullVisibility, player: localPlayerId, units, unitCount: units.length, zoom: camera.zoom,
                 bounds: { minGx: bounds.minGx - mx, maxGx: bounds.maxGx + mx, minGy: bounds.minGy - my, maxGy: bounds.maxGy + my },
-                objects: [], occupied: [], perFrame: [], motion: [], version: ++renderer3dUnitLayerVersion
+                objects: [], occupied: [], perFrame: [], motion: [], fallback: [], version: ++renderer3dUnitLayerVersion
             };
+            renderer3dInstance.beginUnitLayerWrite(unitLayer.version);
         }
     } else renderer3dUnitLayer = null;
     let layerBuilding = !!(unitLayer && !layerReuse);
@@ -2166,16 +2325,73 @@ function build3DFrameData(flat2d = false) {
         unitOccupiedTileKeys.add(ugy * GRID_W + ugx);
     }
 
-    for (let m of goldMines) {
-        if (m.gx < bounds.minGx || m.gx > bounds.maxGx || m.gy < bounds.minGy || m.gy > bounds.maxGy) continue;
-        if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) continue;
+    _ph = _r3dPhase('start', _ph);
+    // STRUCTURE LAYER (3D): structures whose cached object is reused
+    // unchanged (no audio pulse, flash, rebuild) are drawn from a buffer the
+    // renderer keeps (see renderer3d.js, the static arena) until the next
+    // tick or view change; on the frames between only the others are
+    // processed. Activity effects and overlap-fade states are kept up.
+    let staticLayer = null, staticReuse = false;
+    if (!flat2d && RENDERER3D_UNIT_LAYER_ENABLED && renderer3dInstance) {
+        let S = renderer3dStaticLayer;
+        let sameView = !!(S && S.view === view3DKey && S.fullVis === fullVisibility && S.player === localPlayerId && S.grid === grid
+            && Math.abs(camera.zoom / S.zoom - 1) < 0.25
+            && bounds.minGx >= S.bounds.minGx && bounds.maxGx <= S.bounds.maxGx && bounds.minGy >= S.bounds.minGy && bounds.maxGy <= S.bounds.maxGy);
+        staticReuse = sameView && S.tick === gameTime && S.visVersion === visibilityVersion && S.visGrid === visibilityGrid;
+        // A tick frame also builds the unit layer: the structures keep the
+        // previous tick's layer for this one frame and rebuild on the next,
+        // so the two builds do not share a frame.
+        if (!staticReuse && sameView && layerBuilding && S.tick === gameTime - 1) staticReuse = true;
+        if (staticReuse) staticLayer = S;
+        else {
+            let mx = Math.max(4, Math.ceil((bounds.maxGx - bounds.minGx) * 0.3)), my = Math.max(4, Math.ceil((bounds.maxGy - bounds.minGy) * 0.3));
+            staticLayer = renderer3dStaticLayer = {
+                tick: gameTime, view: view3DKey, fullVis: fullVisibility, player: localPlayerId, visVersion: visibilityVersion, visGrid: visibilityGrid, grid, zoom: camera.zoom,
+                bounds: { minGx: bounds.minGx - mx, maxGx: bounds.maxGx + mx, minGy: bounds.minGy - my, maxGy: bounds.maxGy + my },
+                objects: [], perFrame: [], activity: [], fadeKeys: [], version: ++renderer3dStaticLayerVersion
+            };
+        }
+    } else renderer3dStaticLayer = null;
+    let staticBuilding = !!(staticLayer && !staticReuse);
+    let sBounds = staticBuilding ? staticLayer.bounds : bounds;
+    // One structure: stable ones go to the layer being built, the rest are
+    // remembered for the frames that reuse it.
+    let structureStep = (entity, fn, x, y) => {
+        if (!staticBuilding) { fn(entity, x, y); return; }
+        let before = objects.length;
+        _staticReuseHit = false;
+        fn(entity, x, y);
+        let n = objects.length - before;
+        if (n === 0) return;
+        // Served from its cache, or just rebuilt into a cache entry that is
+        // not easing, flashing or waiting for its panel.
+        let entry = entity._r3dStatic;
+        let stable = _staticReuseHit || !!(entry && entry.object === objects[before] && !entry.dynamic);
+        for (let k = before; stable && k < objects.length; k++) if (!(objects[k].alpha >= 0.999)) stable = false;
+        // By name: the frames reusing the layer call their own step
+        // functions (a stored closure would push into this frame's list).
+        if (!stable) { staticLayer.perFrame.push({ step: fn.name, entity, x, y }); return; }
+        let first = objects[before];
+        for (let k = before; k < objects.length; k++) {
+            let o = objects[k];
+            staticLayer.objects.push(o);
+            _pin3DPanelToStatic(o.topTextureCanvas, staticLayer.version);
+            if (o.overlapFadeKey !== undefined) staticLayer.fadeKeys.push(o.overlapFadeKey);
+        }
+        objects.length = before;
+        if (_structureHasActivity(entity)) staticLayer.activity.push(entity, first);
+    };
+    let pushCellItemStep = (item, x, y) => pushCellItem(x, y, grid[y][x]);
+    let pushGoldMine = (m) => {
+        if (m.gx < sBounds.minGx || m.gx > sBounds.maxGx || m.gy < sBounds.minGy || m.gy > sBounds.maxGy) return;
+        if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) return;
         let bgSoundRow = bgSoundGrid[m.gy];
         let fxSoundRow = fxSoundGrid[m.gy];
         let bgLevel = bgSoundRow ? bgSoundRow[m.gx] || 0 : 0;
         let fxLevel = fxSoundRow ? fxSoundRow[m.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-        if (_reuseStatic3DObject(objects, m, m.gx, m.gy, audioMove, audioHeight)) continue;
+        if (_reuseStatic3DObject(objects, m, m.gx, m.gy, audioMove, audioHeight)) return;
         let mine2DTexture = get3DExact2DMineTexture('gold', m.gold);
         push3DRenderObject(objects, {
             modelKey: m.gold > 0 ? 'gold_mine_active' : 'gold_mine_empty',
@@ -2195,18 +2411,19 @@ function build3DFrameData(flat2d = false) {
             sideTint: '#f0c83a'
         });
         _rememberStatic3DObject(objects, m, m.gx, m.gy, audioMove, audioHeight, !mine2DTexture);
-    }
+    };
+    if (!staticReuse) for (let m of goldMines) structureStep(m, pushGoldMine);
 
-    for (let m of astarMines) {
-        if (m.gx < bounds.minGx || m.gx > bounds.maxGx || m.gy < bounds.minGy || m.gy > bounds.maxGy) continue;
-        if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) continue;
+    let pushAstarMine = (m) => {
+        if (m.gx < sBounds.minGx || m.gx > sBounds.maxGx || m.gy < sBounds.minGy || m.gy > sBounds.maxGy) return;
+        if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) return;
         let bgSoundRow = bgSoundGrid[m.gy];
         let fxSoundRow = fxSoundGrid[m.gy];
         let bgLevel = bgSoundRow ? bgSoundRow[m.gx] || 0 : 0;
         let fxLevel = fxSoundRow ? fxSoundRow[m.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-        if (_reuseStatic3DObject(objects, m, m.gx, m.gy, audioMove, audioHeight)) continue;
+        if (_reuseStatic3DObject(objects, m, m.gx, m.gy, audioMove, audioHeight)) return;
         let mine2DTexture = get3DExact2DMineTexture('astar', m.astar);
         push3DRenderObject(objects, {
             modelKey: m.astar > 0 ? 'astar_mine_active' : 'astar_mine_empty',
@@ -2226,7 +2443,8 @@ function build3DFrameData(flat2d = false) {
             sideTint: '#d8d8e8'
         });
         _rememberStatic3DObject(objects, m, m.gx, m.gy, audioMove, audioHeight, !mine2DTexture);
-    }
+    };
+    if (!staticReuse) for (let m of astarMines) structureStep(m, pushAstarMine);
 
     let pushCellItem = (x, y, cell) => {
         // Barracks and spawners are cell items too, but draw themselves in
@@ -2267,41 +2485,43 @@ function build3DFrameData(flat2d = false) {
     };
     // Floor items in row-major order. The live tile index lists them, so
     // only a remembered (history) grid needs a scan of every visible tile.
-    if (_isLiveRenderGrid(grid)) {
+    if (staticReuse) {
+        // Nothing to walk: only what could not be kept.
+    } else if (_isLiveRenderGrid(grid)) {
         let items = getCellItemsRowMajor();
-        for (let i = findCellItemRowStart(items, bounds.minGy); i < items.length; i++) {
+        for (let i = findCellItemRowStart(items, sBounds.minGy); i < items.length; i++) {
             let item = items[i], x = item.gx, y = item.gy;
-            if (y > bounds.maxGy) break;
-            if (x < bounds.minGx || x > bounds.maxGx) continue;
+            if (y > sBounds.maxGy) break;
+            if (x < sBounds.minGx || x > sBounds.maxGx) continue;
             let cell = grid[y][x];
             if (!cell || cell.item !== item) continue;
             if (!fullVisibility && (!visibilityGrid[y] || visibilityGrid[y][x] === 0)) continue;
-            pushCellItem(x, y, cell);
+            structureStep(cell.item, pushCellItemStep, x, y);
         }
     } else {
-        for (let y = bounds.minGy; y <= bounds.maxGy; y++) {
+        for (let y = sBounds.minGy; y <= sBounds.maxGy; y++) {
             let gridRow = grid[y];
             let visRow = visibilityGrid[y];
             if (!gridRow) continue;
-            for (let x = bounds.minGx; x <= bounds.maxGx; x++) {
+            for (let x = sBounds.minGx; x <= sBounds.maxGx; x++) {
                 let cell = gridRow[x];
                 if (!cell || !cell.item) continue;
                 if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
-                pushCellItem(x, y, cell);
+                structureStep(cell.item, pushCellItemStep, x, y);
             }
         }
     }
 
-    for (let t of towers) {
-        if (t.gx < bounds.minGx - 1 || t.gx > bounds.maxGx + 1 || t.gy < bounds.minGy - 1 || t.gy > bounds.maxGy + 1) continue;
-        if (!fullVisibility && (!visibilityGrid[t.gy] || visibilityGrid[t.gy][t.gx] === 0)) continue;
+    let pushTower = (t) => {
+        if (t.gx < sBounds.minGx - 1 || t.gx > sBounds.maxGx + 1 || t.gy < sBounds.minGy - 1 || t.gy > sBounds.maxGy + 1) return;
+        if (!fullVisibility && (!visibilityGrid[t.gy] || visibilityGrid[t.gy][t.gx] === 0)) return;
         let bgSoundRow = bgSoundGrid[t.gy];
         let fxSoundRow = fxSoundGrid[t.gy];
         let bgLevel = bgSoundRow ? bgSoundRow[t.gx] || 0 : 0;
         let fxLevel = fxSoundRow ? fxSoundRow[t.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-        if (_reuseStatic3DObject(objects, t, t.gx, t.gy, audioMove, audioHeight)) continue;
+        if (_reuseStatic3DObject(objects, t, t.gx, t.gy, audioMove, audioHeight)) return;
         let tower2DTexture = get3DExact2DTexture(t);
         let tower2DTextureFallback = renderer3dExactTextureFallback;
         let towerStatus = tower2DTexture ? null : get3DBuildingTextureStatus(t);
@@ -2325,18 +2545,19 @@ function build3DFrameData(flat2d = false) {
             sideTint: get3DDamageFlashTint(t, (t.baseStats && t.baseStats.color) || get3DRenderOwnerColor(t.owner))
         });
         _rememberStatic3DObject(objects, t, t.gx, t.gy, audioMove, audioHeight, !tower2DTexture || tower2DTextureFallback);
-    }
+    };
+    if (!staticReuse) for (let t of towers) structureStep(t, pushTower);
 
-    for (let s of collectorSpawners) {
-        if (s.gx < bounds.minGx || s.gx > bounds.maxGx || s.gy < bounds.minGy || s.gy > bounds.maxGy) continue;
-        if (!fullVisibility && (!visibilityGrid[s.gy] || visibilityGrid[s.gy][s.gx] === 0)) continue;
+    let pushSpawner = (s) => {
+        if (s.gx < sBounds.minGx || s.gx > sBounds.maxGx || s.gy < sBounds.minGy || s.gy > sBounds.maxGy) return;
+        if (!fullVisibility && (!visibilityGrid[s.gy] || visibilityGrid[s.gy][s.gx] === 0)) return;
         let bgSoundRow = bgSoundGrid[s.gy];
         let fxSoundRow = fxSoundGrid[s.gy];
         let bgLevel = bgSoundRow ? bgSoundRow[s.gx] || 0 : 0;
         let fxLevel = fxSoundRow ? fxSoundRow[s.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-        if (_reuseStatic3DObject(objects, s, s.gx, s.gy, audioMove, audioHeight)) { _pushStructureActivity(objects, s, flat2d); _pushProductionGhost(objects, s, flat2d); continue; }
+        if (_reuseStatic3DObject(objects, s, s.gx, s.gy, audioMove, audioHeight)) { _pushStructureActivity(objects, s, flat2d); _pushProductionGhost(objects, s, flat2d); return; }
         let spawner2DTexture = get3DExact2DTexture(s);
         let spawner2DTextureFallback = renderer3dExactTextureFallback;
         let spawnerExtraBars = spawner2DTexture ? null : [];
@@ -2377,18 +2598,19 @@ function build3DFrameData(flat2d = false) {
         _rememberStatic3DObject(objects, s, s.gx, s.gy, audioMove, audioHeight, !spawner2DTexture || spawner2DTextureFallback);
         _pushStructureActivity(objects, s, flat2d);
         _pushProductionGhost(objects, s, flat2d);
-    }
+    };
+    if (!staticReuse) for (let s of collectorSpawners) structureStep(s, pushSpawner);
 
-    for (let b of barracks) {
-        if (b.gx < bounds.minGx || b.gx > bounds.maxGx || b.gy < bounds.minGy || b.gy > bounds.maxGy) continue;
-        if (!fullVisibility && (!visibilityGrid[b.gy] || visibilityGrid[b.gy][b.gx] === 0)) continue;
+    let pushBarrack = (b) => {
+        if (b.gx < sBounds.minGx || b.gx > sBounds.maxGx || b.gy < sBounds.minGy || b.gy > sBounds.maxGy) return;
+        if (!fullVisibility && (!visibilityGrid[b.gy] || visibilityGrid[b.gy][b.gx] === 0)) return;
         let bgSoundRow = bgSoundGrid[b.gy];
         let fxSoundRow = fxSoundGrid[b.gy];
         let bgLevel = bgSoundRow ? bgSoundRow[b.gx] || 0 : 0;
         let fxLevel = fxSoundRow ? fxSoundRow[b.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-        if (_reuseStatic3DObject(objects, b, b.gx, b.gy, audioMove, audioHeight)) { _pushStructureActivity(objects, b, flat2d); _pushProductionGhost(objects, b, flat2d); continue; }
+        if (_reuseStatic3DObject(objects, b, b.gx, b.gy, audioMove, audioHeight)) { _pushStructureActivity(objects, b, flat2d); _pushProductionGhost(objects, b, flat2d); return; }
         let barrack2DTexture = get3DExact2DTexture(b);
         let barrack2DTextureFallback = renderer3dExactTextureFallback;
         let barrackExtraBars = barrack2DTexture ? null : [];
@@ -2416,8 +2638,19 @@ function build3DFrameData(flat2d = false) {
         _rememberStatic3DObject(objects, b, b.gx, b.gy, audioMove, audioHeight, !barrack2DTexture || barrack2DTextureFallback);
         _pushStructureActivity(objects, b, flat2d);
         _pushProductionGhost(objects, b, flat2d);
-    }
+    };
+    if (!staticReuse) for (let b of barracks) structureStep(b, pushBarrack);
 
+    _ph = _r3dPhase(staticBuilding ? 'structuresBuild' : 'structuresReuse', _ph);
+    // Reusing the structure layer: the structures it could not keep, and the
+    // per-frame upkeep of those it holds.
+    if (staticReuse) {
+        let steps = { pushGoldMine, pushAstarMine, pushTower, pushSpawner, pushBarrack, pushCellItemStep };
+        for (let p of staticLayer.perFrame) steps[p.step](p.entity, p.x, p.y);
+        for (let i = 0; i < staticLayer.activity.length; i += 2) _pushStructureActivity([staticLayer.activity[i + 1]], staticLayer.activity[i], false);
+        // (Its structures' fade states are kept: pruning runs only on frames
+        // that walk the structures; the layer is rebuilt every tick.)
+    }
     for (let d of droppedItems) {
         if (d.gx < bounds.minGx || d.gx > bounds.maxGx || d.gy < bounds.minGy || d.gy > bounds.maxGy) continue;
         if (!fullVisibility && (!visibilityGrid[d.gy] || visibilityGrid[d.gy][d.gx] === 0)) continue;
@@ -2448,7 +2681,6 @@ function build3DFrameData(flat2d = false) {
     // Units already in the reused layer need only their panels kept alive
     // and their motion effects (a few unit types) at this frame's position.
     if (layerReuse) {
-        for (let o of unitLayer.objects) _touch3DPanel(o.topTextureCanvas);
         for (let m of unitLayer.motion) {
             let u = m.u;
             if (u.dead) continue;
@@ -2480,12 +2712,110 @@ function build3DFrameData(flat2d = false) {
         }
         // Lit where it is at the tick (the light grid changes on ticks).
         _relight3DObject(o, u, cached.tint, cached.sideTint, false, cached.sourceLight);
+        _pin3DPanelToLayer(o.topTextureCanvas, unitLayer.version);
         unitLayer.objects.push(o);
+        if (!renderer3dInstance.writeUnitLayerObject(o)) unitLayer.fallback.push(o);
+        else if (unitVis && _uSlotVisIndex >= 0) {
+            let vr = _uSlotVisIndex * SIM_UNIT_VIS_STRIDE;
+            _uSlotFill(unitVis[vr + 8], u, o, cached, unitVis[vr + 7], view3DKey);
+        }
         if (u.isSnake || u.unitType === 'tank' || u.unitType === 'boss' || u.unitType === 'king') {
             unitLayer.motion.push({ u, footprint, scaleY: o.scaleY, audioMove });
         }
     };
-    for (let u of (layerReuse ? unitLayer.perFrame : units)) {
+    // Building the layer with the worker's per-unit visual records (see
+    // sim_delta.js, simUnitVisEncode): a unit whose cached object is still
+    // valid is written from its record, without the per-object logic below.
+    let unitVis = layerBuilding && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    let statusCanvases = unitVis ? SIM_UNIT_STATUS_NAMES.map(name => get3DStatusTexture(name)) : null;
+    let unitList = layerReuse ? unitLayer.perFrame : units;
+    // With the records: units whose slot is valid are written from it; the
+    // rest (slowIdx) take the per-object loop below.
+    let slowIdx = null;
+    if (unitVis) {
+        slowIdx = [];
+        let VS = SIM_UNIT_VIS_STRIDE, S = _uSlot, r3 = renderer3dInstance;
+        let statusSlots = r3.statusSlotsFor(statusCanvases);
+        let labelsOn = levelVisibilityMode === LEVEL_VISIBILITY_ALL;
+        let flashChecks = renderer3dFlashUntil.size > 0, nowT = gameTime + tickAlpha;
+        let layerVersion = unitLayer.version;
+        let rec = _uRec;
+        for (let i = 0; i < units.length; i++) {
+            let r = i * VS;
+            let slot = unitVis[r + 8];
+            if (slot < 0) continue;
+            let x = unitVis[r + 9], y = unitVis[r + 10], px = unitVis[r + 11], py = unitVis[r + 12];
+            let ux = px + (x - px) * alpha, uy = py + (y - py) * alpha;
+            let ugx = Math.floor(ux / TILE), ugy = Math.floor(uy / TILE);
+            if (ugx < unitBounds.minGx - 1 || ugx > unitBounds.maxGx + 1 || ugy < unitBounds.minGy - 1 || ugy > unitBounds.maxGy + 1) continue;
+            if (!fullVisibility && (!visibilityGrid[ugy] || visibilityGrid[ugy][ugx] === 0)) continue;
+            unitLayer.occupied.push(ugy * GRID_W + ugx);
+            let id = unitVis[r + 13];
+            if (!(slot < S.cap) || !S.valid[slot] || S.id[slot] !== id || S.sig[slot] !== unitVis[r + 7] || S.view[slot] !== view3DKey
+                || (S.panel[slot]._textureVersion || 0) !== S.texVer[slot]) { slowIdx.push(i); continue; }
+            if (flashChecks) {
+                let until = renderer3dFlashUntil.get(id);
+                if (until !== undefined) { if (until > nowT) { slowIdx.push(i); continue; } renderer3dFlashUntil.delete(id); }
+            }
+            let flags = S.flags[slot];
+            if (S.label[slot] !== 2) {
+                // Level labels by on-screen size, with the same hysteresis.
+                let shown = S.labelShown[slot] === 1;
+                if (labelsOn) {
+                    let zoom = getViewZoomAt(ux, uy);
+                    shown = shown ? zoom >= 0.7 * 0.95 : zoom >= 0.7 * 1.05;
+                } else shown = false;
+                S.labelShown[slot] = shown ? 1 : 0;
+                if ((shown ? 1 : 0) !== S.label[slot]) { slowIdx.push(i); continue; }
+            }
+            let gx = Math.floor(x / TILE), gy = Math.floor(y / TILE);
+            let bgRow = bgSoundGrid[gy], fxRow = fxSoundGrid[gy];
+            let audioMove = (bgRow ? bgRow[gx] || 0 : 0) * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + (fxRow ? fxRow[gx] || 0 : 0) * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
+            let cx = x / TILE + reactiveOffsetX * audioMove, cz = y / TILE + reactiveOffsetY * audioMove;
+            // Light at the tick's tile (and the unit's own).
+            let level = 1;
+            if (!fullVisibility) {
+                let row = visibilityGrid[Math.floor(cz)];
+                let raw = Math.max((row && row[Math.floor(cx)]) || 0, unitVis[r + 6]);
+                level = Math.max(0, Math.min(1, raw / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
+            }
+            let bucket = Math.max(0, Math.min(24, Math.round(level * 24)));
+            let d = slot * 4, c = slot * 6;
+            let sx = S.dim[d], sy = S.dim[d + 1], sz = S.dim[d + 2];
+            let facing = unitVis[r + 2], cs = Math.cos(facing), sn = Math.sin(facing);
+            let snake = flags & U_SLOT_SNAKE, flying = !snake && (flags & U_SLOT_FLYING);
+            rec[0] = cs * sx; rec[1] = 0; rec[2] = -sn * sx; rec[3] = (px - x) / TILE;
+            rec[4] = flying ? (id * 1.7) % (Math.PI * 2) : 0; rec[5] = sy; rec[6] = flying ? 1 : 0; rec[7] = (py - y) / TILE;
+            rec[8] = sn * sz; rec[9] = 0; rec[10] = cs * sz; rec[11] = snake ? 0 : unitVis[r + 4];
+            rec[12] = cx; rec[13] = S.dim[d + 3]; rec[14] = cz; rec[15] = 1;
+            let lut = bucket * 256, rgb = S.rgb;
+            rec[16] = _LIT_LUT[lut + rgb[c]]; rec[17] = _LIT_LUT[lut + rgb[c + 1]]; rec[18] = _LIT_LUT[lut + rgb[c + 2]];
+            rec[19] = 1;
+            rec[20] = snake ? 0 : unitVis[r + 1];
+            rec[21] = snake ? 0 : unitVis[r + 3];
+            rec[22] = _LIT_LUT[lut + rgb[c + 3]]; rec[23] = _LIT_LUT[lut + rgb[c + 4]]; rec[24] = _LIT_LUT[lut + rgb[c + 5]];
+            rec[25] = level;
+            rec[27] = statusSlots[unitVis[r + 5] | 0];
+            // Level of detail by on-screen size (hysteresis as getFigureMeshKey).
+            let pixels = r3.pixelsPerWorldAt(cx, 0, cz) * Math.max(sx, sz);
+            let lod = figureLodLevel(S.lod[slot], pixels);
+            S.lod[slot] = lod;
+            let panel = S.panel[slot];
+            panel._layerPin = layerVersion; panel._usedFrame = renderer3dExactTextureFrame;
+            if (!r3.writeUnitLayerRecord(lod === 0 ? S.kind[slot] : lod === 1 ? S.kindLod[slot] : S.kindLod2[slot], snake ? 0 : unitVis[r] | 0, rec, panel, units[i])) { slowIdx.push(i); continue; }
+            if (flags & U_SLOT_MOTION) {
+                let u = units[i];
+                let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
+                unitLayer.motion.push({ u, footprint, scaleY: sy, audioMove });
+                pushUnitMotionFx(u, ux / TILE + reactiveOffsetX * audioMove, uy / TILE + reactiveOffsetY * audioMove, footprint, sy);
+            }
+        }
+    }
+    let loopCount = slowIdx ? slowIdx.length : unitList.length;
+    for (let li = 0; li < loopCount; li++) {
+        let ui = slowIdx ? slowIdx[li] : li;
+        let u = slowIdx ? units[ui] : unitList[ui];
+        _uSlotVisIndex = ui;
         if (flat2d) drainFlatObjects();
         if (u.dead) continue;
         let ux = u.prevX + (u.x - u.prevX) * alpha;
@@ -2502,6 +2832,25 @@ function build3DFrameData(flat2d = false) {
         if (flat2d && _pushFlatUnit(flatBatch, u, ux / TILE + reactiveOffsetX * audioMove, uy / TILE + reactiveOffsetY * audioMove, view3DKey)) continue;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
+        if (unitVis) {
+            let cached = u._r3d, r = ui * SIM_UNIT_VIS_STRIDE;
+            let sig = unitVis[r + 7];
+            if (cached && cached.sigW !== sig) cached.tick = -1e9;   // panel changed: rebuild below
+            else if (cached && (cached.snake ? !!u.isSnake : !u.isSnake) && cached.view === view3DKey
+                && (u.isSnake || cached.label === shouldShowUnitLevels(u))
+                && _unitLayerEligible(u, cached, cached.object)
+                && (cached.object.topTextureCanvas || {})._textureVersion === cached.textureVersion) {
+                _layerWriteFromVis(u, cached, unitVis, r, statusCanvases, reactiveOffsetX * audioMove, reactiveOffsetY * audioMove);
+                unitLayer.objects.push(cached.object);
+                if (!renderer3dInstance.writeUnitLayerObject(cached.object)) unitLayer.fallback.push(cached.object);
+                else _uSlotFill(unitVis[r + 8], u, cached.object, cached, sig, view3DKey);
+                if (u.isSnake || u.unitType === 'tank' || u.unitType === 'boss' || u.unitType === 'king') {
+                    unitLayer.motion.push({ u, footprint, scaleY: cached.object.scaleY, audioMove });
+                    pushUnitMotionFx(u, ux / TILE + reactiveOffsetX * audioMove, uy / TILE + reactiveOffsetY * audioMove, footprint, cached.object.scaleY);
+                }
+                continue;
+            }
+        }
         if (u.isSnake) {
             // As units below: between ticks only the position and lighting
             // of the cached head object change.
@@ -2528,6 +2877,7 @@ function build3DFrameData(flat2d = false) {
                 objects.push(o);
                 if (!flat2d) pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
                 if (layerBuilding) layerCollect(u, footprint, audioMove);
+                if (unitVis) cached.sigW = unitVis[ui * SIM_UNIT_VIS_STRIDE + 7];
                 continue;
             }
             pushSnakeRenderObjects(objects, u, ux + reactiveOffsetX * audioMove * TILE, uy + reactiveOffsetY * audioMove * TILE, footprint);
@@ -2561,6 +2911,7 @@ function build3DFrameData(flat2d = false) {
                     }
                     objects.push(o);
                     layerCollect(u, footprint, audioMove);
+                    if (unitVis) cached.sigW = unitVis[ui * SIM_UNIT_VIS_STRIDE + 7];
                     // This frame's motion effects (the layer's own start next frame).
                     if (u.unitType === 'tank' || u.unitType === 'boss' || u.unitType === 'king') {
                         pushUnitMotionFx(u, ux / TILE + reactiveOffsetX * audioMove, uy / TILE + reactiveOffsetY * audioMove, footprint, o.scaleY);
@@ -2581,6 +2932,7 @@ function build3DFrameData(flat2d = false) {
                 objects.push(o);
                 if (!flat2d) pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
                 if (layerBuilding) layerCollect(u, footprint, audioMove);
+                if (unitVis) cached.sigW = unitVis[ui * SIM_UNIT_VIS_STRIDE + 7];
                 continue;
             }
             // Mounts (pony, winged horses) carry a rider: larger than a lone figure.
@@ -2640,15 +2992,18 @@ function build3DFrameData(flat2d = false) {
             }
             if (layerBuilding) layerCollect(u, footprint, audioMove);
         }
+        if (unitVis && u._r3d) u._r3d.sigW = unitVis[ui * SIM_UNIT_VIS_STRIDE + 7];
     }
 
+    _ph = _r3dPhase(layerBuilding ? 'unitsBuild' : 'unitsReuse', _ph);
     if (buildPreview && !flat2d) buildPreview.modelShown = _pushBuildPreview3DObject(objects, buildPreview);
     if (flat2d) drainFlatObjects();
     // Shots, debris, attacks and laser fences: GPU effect instances.
     buildFrameEffects(projectiles, particles, towers);
     endFrameEffects();
 
-    for (let [key, state] of renderer3dOverlapFadeState) {
+    _ph = _r3dPhase('effects', _ph);
+    if (!staticReuse) for (let [key, state] of renderer3dOverlapFadeState) {
         if (activeOverlapFadeKeys.has(key)) continue;
         let idleMs = overlapNowMs - (Number(state && state.lastSeenMs) || overlapNowMs);
         if (idleMs > RENDERER3D_OVERLAP_FADE_DURATION_MS) {
@@ -2658,6 +3013,7 @@ function build3DFrameData(flat2d = false) {
 
     return {
         flat2d,
+        staticLayer: staticLayer ? { version: staticLayer.version, objects: staticLayer.objects } : null,
         unitLayer: unitLayer ? { version: unitLayer.version, objects: unitLayer.objects, alpha,
             flyTime: ((gameTime + alpha) / Math.max(1, TICK_RATE)) % UNIT_LAYER_FLY_PERIOD } : null,
         viewportWidth: viewW,

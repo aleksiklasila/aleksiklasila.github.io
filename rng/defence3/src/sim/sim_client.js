@@ -2,8 +2,8 @@
 // ============================================================
 // SIMULATION WORKER, PAGE SIDE (authority)
 //
-// With the simulation worker on (?simworker=1), game ticks run in
-// src/sim/sim_worker.js. The page keeps the lockstep, the network and
+// With the simulation worker on (the default; ?simworker=0 turns it off),
+// game ticks run in src/sim/sim_worker.js. The page keeps the lockstep, the network and
 // everything on screen, and a full copy of the world that each tick's
 // changes keep equal to the worker's (src/sim/sim_delta.js):
 //
@@ -17,12 +17,15 @@
 //   worker in tick order, and the page's copy applies the same patch at the
 //   same point of the stream. Whole-state restores start a new epoch:
 //   results of the old one are dropped.
-// - The page's copy is checked against the worker's hash every tick and
-//   reloaded from the worker if it ever differs.
+// - The page's copy is checked against the worker's hash (a rotating slice,
+//   every few ticks) and reloaded from the worker if it ever differs.
 // ============================================================
 
 const simClientEnabled = (() => {
-    try { return new URLSearchParams(location.search).get('simworker') === '1'; } catch { return false; }
+    // On by default; ?simworker=0 keeps ticks on the page (?simworker=shadow
+    // is the separate comparison mode, sim_shadow.js).
+    if (typeof Worker === 'undefined') return false;
+    try { let v = new URLSearchParams(location.search).get('simworker'); return v !== '0' && v !== 'shadow'; } catch { return true; }
 })();
 
 let _simClient = null;
@@ -30,6 +33,21 @@ let _simClient = null;
 const SIM_CLIENT_MAX_IN_FLIGHT = 2;
 // The page's copy is hash-checked against the worker every this many ticks.
 const SIM_CLIENT_CHECK_TICKS = 5;
+
+// Two ticks of every 10, offset by the block, so over 5 blocks each of the
+// 10 hash slices is checked once.
+function _simClientCheckTick(tick) {
+    return (tick % SIM_CLIENT_CHECK_TICKS) === (Math.floor(tick / 10) % SIM_CLIENT_CHECK_TICKS);
+}
+
+// The latest tick's per-unit visual records (sim_delta.js, simUnitVisEncode).
+let simClientUnitVis = null;
+
+// The records when they describe the current units (else null).
+function simClientCurrentUnitVis() {
+    let v = simClientUnitVis;
+    return v && v.gameTime === gameTime && v.units === units && v.n === units.length ? v.data : null;
+}
 
 // Test hook: called with each tick once its result is applied.
 let simClientTickAppliedHook = null;
@@ -45,10 +63,10 @@ function _simClientScriptUrls() {
 }
 
 function _simClientCreate() {
-    let worker = new Worker('./src/sim/sim_worker.js?v=20261002-sim4');
+    let worker = new Worker('./src/sim/sim_worker.js?v=20261004-a');
     let c = {
         worker, loaded: false, active: false, epoch: 0, startTick: -1, nextRequestId: 1, replies: new Map(),
-        inFlight: 0, tickClock: 0, dispatchAt: new Map(), appliedTick: -1, appliedAt: 0, latencyMs: TICK_MS, errors: [],
+        inFlight: 0, tickClock: 0, dispatchAt: new Map(), appliedTick: -1, appliedAt: 0, latencyMs: TICK_MS, arrivedAt: 0, intervalMs: TICK_MS, errors: [],
         stats: { applied: 0, applyMs: [], simMs: [], encodeMs: [], latencyMs: [], rows: 0, heals: 0, dropped: 0 }
     };
     worker.onmessage = ev => { try { _simClientOnMessage(ev.data || {}); } catch (err) { reportRuntimeError('sim worker', err); } };
@@ -98,7 +116,7 @@ function simClientStartMatch() {
     c.inFlight = 0;
     c.dispatchAt.clear();
     c.appliedTick = currentTick - 1;
-    c.appliedAt = 0;
+    c.appliedAt = 0; c.arrivedAt = 0;
     c.gameOverShown = false;
     c.healing = false;
     for (let [, r] of c.replies) r.reject(new Error('match restarted'));
@@ -204,6 +222,15 @@ function _simClientApplyTick(msg) {
     currentTick = pageTick;
     c.appliedTick = msg.tick;
     c.appliedAt = dispatchedAt !== undefined ? dispatchedAt : t0;
+    // Units move from the previous tick to this one over the time the
+    // next result is expected to take (the recent spacing of results), so
+    // motion stays continuous whether results come on time, late or in a
+    // burst while catching up.
+    if (c.arrivedAt > 0) {
+        let interval = Math.max(TICK_MS * 0.25, Math.min(TICK_MS * 3, t0 - c.arrivedAt));
+        c.intervalMs += (interval - c.intervalMs) * 0.25;
+    }
+    c.arrivedAt = t0;
     if (dispatchedAt !== undefined) {
         // Units are shown this far behind their tick's time, so results
         // that come a little late still move smoothly.
@@ -212,15 +239,20 @@ function _simClientApplyTick(msg) {
         c.stats.latencyMs.push(latency);
     }
     if (!applied) { _simClientHeal(msg.tick); return; }
+    // The worker's per-unit visual records, for the 3D unit layer while this
+    // tick is the current one (same unit list, same order).
+    simClientUnitVis = msg.vis ? { data: msg.vis, gameTime, units, n: units.length } : null;
+    c.lastSight = msg.sight ? { data: msg.sight, player: msg.sightPlayer } : null;
     if (msg.delta.dirtyMap) _simClientMapChanged();
     _simClientReplayEvents(msg.events || []);
     _simClientPageTickWork(msg.tick);
     // The page's copy must hash as the worker's; otherwise it is reloaded.
     // The worker's record is the one the resync compares with the peers.
     if (msg.hash) {
-        // The page's copy is checked on every SIM_CLIENT_CHECK_TICKS-th tick
-        // (a slice of the state each time); a difference reloads it.
-        let mine = (msg.tick % SIM_CLIENT_CHECK_TICKS) === 0 ? snapTickHash(msg.tick, !!lockstepStrictDebugMode) : null;
+        // The page's copy is checked on one tick in SIM_CLIENT_CHECK_TICKS,
+        // rotating so every hash slice (tick % 10) comes up in turn; a
+        // difference reloads it.
+        let mine = _simClientCheckTick(msg.tick) ? snapTickHash(msg.tick, !!lockstepStrictDebugMode) : null;
         if (mine && mine.sum !== msg.hash.sum) {
             c.stats.mismatch = (c.stats.mismatch || 0) + 1;
             if (!c.stats.firstDiff) try { c.stats.firstDiff = { tick: msg.tick, parts: snapDescribeCodes(snapDiffTickHash(mine, msg.hash)) }; } catch { }
@@ -279,8 +311,18 @@ function _simClientPageTickWork(tick) {
     _simClientLaserSound();
     updateAudioReactiveState();
     if (selectedUnits.length && selectedUnits.some(u => u.dead)) selectedUnits = selectedUnits.filter(u => !u.dead);
-    // What this player sees (the worker computes every player's gameplay
-    // visibility; the page computes another player's only when asked).
+    // What this player sees: the worker's grid for this tick when it sent
+    // one (rows are views of it), else computed here. Other players' grids
+    // are computed on the page only when asked for.
+    let sight = _simClient.lastSight;
+    if (sight && sight.player === localPlayerId && sight.data.length === GRID_W * GRID_H) {
+        let rows = new Array(GRID_H);
+        for (let y = 0; y < GRID_H; y++) rows[y] = sight.data.subarray(y * GRID_W, (y + 1) * GRID_W);
+        visibilityGridRawByPlayerCache.set(localPlayerId, rows);
+        visibilityGridStampByPlayer.set(localPlayerId, gameTime);
+        visibilityCacheTick = gameTime;
+    }
+    _simClient.lastSight = null;
     visibilityGrid = updateVisualVisibility(localPlayerId, getRawVisibilityGridForPlayer(localPlayerId));
     if ((tick + 1) % TICK_RATE === 0) sampleGameStats();
     requestResearchPopupRefresh();
@@ -378,7 +420,7 @@ function simClientAfterSnapshotApplied(snapshot) {
     c.inFlight = 0;
     c.dispatchAt.clear();
     c.appliedTick = currentTick - 1;
-    c.appliedAt = 0;
+    c.appliedAt = 0; c.arrivedAt = 0;
     c.healing = false;
     c.gameOverShown = !!gameOver;
     c.worker.postMessage({ type: 'request', op: 'applySnapshot', args: { snapshot, epoch: c.epoch, globals: _simClientGlobals() } });
@@ -387,8 +429,8 @@ function simClientAfterSnapshotApplied(snapshot) {
 // ---- interpolation between the last two applied ticks ----
 function simClientTickAlpha(frameTime) {
     let c = _simClient;
-    if (!c || !c.appliedAt) return 1;
-    let alpha = (frameTime - c.appliedAt - c.latencyMs) / TICK_MS;
+    if (!c || !c.arrivedAt) return 1;
+    let alpha = (frameTime - c.arrivedAt) / Math.max(1, c.intervalMs);
     return alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
 }
 

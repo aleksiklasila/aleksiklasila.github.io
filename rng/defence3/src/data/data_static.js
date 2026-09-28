@@ -776,12 +776,6 @@ let PLAYER_RESOURCE_STAT_MULTIPLIERS = [];
 let PRECOMPUTED_STATS_READY = false;
 
 // Spatial hash (10x10 tile chunks)
-// Moving units check unit separation every this many ticks (staggered by id).
-const MOVING_UNIT_COLLISION_TICKS = 2;
-// Moving units on a tile holding more than CROWDED_TILE_UNITS units check
-// every CROWDED_UNIT_COLLISION_TICKS ticks instead.
-const CROWDED_TILE_UNITS = 12;
-const CROWDED_UNIT_COLLISION_TICKS = 4;
 const CHUNK_SIZE = 1;
 let CHUNKS_W = Math.ceil(GRID_W / CHUNK_SIZE);
 let CHUNKS_H = Math.ceil(GRID_H / CHUNK_SIZE);

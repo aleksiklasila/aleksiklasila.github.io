@@ -990,10 +990,16 @@
                 let mainLimb = Math.abs(joint) === 1 && sy >= .25 && sx >= .13;
                 let readableEquipment = !!weapon && (sy >= .20 || sx >= .20 || sz >= .20);
                 if (surface === 3 || (middleSize < .18 && !mainLimb && !readableEquipment)) return;
+                // Far level (a unit a few pixels across): only the bulk of
+                // the figure, its limbs and large equipment.
+                if (simplified === 2 && middleSize < .26 && !mainLimb && !(weapon && Math.max(sx, sy, sz) >= .35)) return;
             }
             let cube = createCubeData(), base = positions.length / 3;
             let yawCos = Math.cos(yaw), yawSin = Math.sin(yaw);
-            for (let i = 0; i < cube.positions.length / 3; i++) {
+            // The far level drops bottom faces (the last face): the camera and
+            // the light are always above.
+            let cubeVerts = simplified === 2 ? 20 : cube.positions.length / 3;
+            for (let i = 0; i < cubeVerts; i++) {
                 let px = cube.positions[i * 3], py = cube.positions[i * 3 + 1], pz = cube.positions[i * 3 + 2];
                 let width = 1 + (taper - 1) * py;
                 let localX = px * sx * width, localZ = pz * sz * width;
@@ -1001,7 +1007,7 @@
                 uvs.push(cube.uvs[i * 2], 1 - cube.uvs[i * 2 + 1]);
                 details.push(surface, joint, pivot, pivotZ);
             }
-            for (let index of cube.indices) indices.push(base + index);
+            for (let k = 0; k < cubeVerts / 4 * 6; k++) indices.push(base + cube.indices[k]);
         }
         function panel(x, y, z, width, height, horizontal = false, joint = 0, pivot = 0, worldAligned = false) {
             let base = positions.length / 3;
@@ -1023,6 +1029,7 @@
         // Front status display (surface 15), facing forward (+z): a square
         // quad on the front face `z` of whatever plate, book or shield carries it.
         function statusPanel(y, z, size, joint = 0, pivot = 0) {
+            if (simplified === 2) return;   // about a pixel at that distance
             let base = positions.length / 3;
             for (let p of [[-.5,0],[.5,0],[.5,1],[-.5,1]]) {
                 positions.push(p[0] * size, y + p[1] * size, z + .003);
@@ -1685,6 +1692,14 @@
     // runs (with several regex tests) for every object in every frame.
     const proceduralKindCache = new Map();
     const lodMeshKeys = new Map();
+    // Figure detail level (0 full, 1 simplified, 2 far) from the on-screen
+    // size in CSS pixels, with hysteresis around each threshold.
+    function figureLodLevel(previous, pixels) {
+        let level1 = previous >= 1 ? pixels < 27 : pixels < 24;
+        if (!level1) return 0;
+        return (previous >= 2 ? pixels < 13.5 : pixels < 12) ? 2 : 1;
+    }
+    if (typeof window !== 'undefined') window.figureLodLevel = figureLodLevel;
     function proceduralKind(object) {
         if (object.modelCandidates && object.modelCandidates.length) return null;
         let key = object.modelKey || '';
@@ -2099,6 +2114,9 @@
                 layout(location = 10) in float iSideAngle;
                 layout(location = 12) in float iLightLevel;
                 uniform mat4 uViewProjection;
+                // Unit layer drop shadows: offset back to the previous tick in
+                // the matrix's constant slots (zero for other draws).
+                uniform float uLayerAlpha;
                 out vec3 vNormal;
                 out vec3 vColor;
                 out float vAlpha;
@@ -2106,7 +2124,8 @@
                 out float vShape;
                 out float vLightLevel;
                 void main() {
-                    mat4 model = mat4(iModelRow0, iModelRow1, iModelRow2, iModelRow3);
+                    mat4 model = mat4(vec4(iModelRow0.x, 0.0, iModelRow0.z, 0.0), vec4(0.0, iModelRow1.y, 0.0, 0.0), vec4(iModelRow2.x, 0.0, iModelRow2.z, 0.0),
+                        vec4(iModelRow3.xyz + vec3(iModelRow0.w, 0.0, iModelRow1.w) * (1.0 - uLayerAlpha), 1.0));
                     mat3 normalMatrix = mat3(model);
                     gl_Position = uViewProjection * model * vec4(aPosition, 1.0);
                     vNormal = normalize(normalMatrix * aNormal);
@@ -2341,7 +2360,8 @@
                 lightLevel: gl.getUniformLocation(this.meshProgram, 'uLightLevel')
             };
             this.instancedMeshUniforms = {
-                viewProjection: gl.getUniformLocation(this.instancedMeshProgram, 'uViewProjection')
+                viewProjection: gl.getUniformLocation(this.instancedMeshProgram, 'uViewProjection'),
+                layerAlpha: gl.getUniformLocation(this.instancedMeshProgram, 'uLayerAlpha')
             };
             this.texturedCubeUniforms = {
                 viewProjection: gl.getUniformLocation(this.texturedCubeProgram, 'uViewProjection'),
@@ -2764,8 +2784,8 @@
             let mesh = this.figureMeshes.get(key);
             if (mesh) return mesh;
             let gl = this.gl;
-            let simplified = key.endsWith(':lod');
-            let data = createFigureData(simplified ? key.slice(0, -4) : key, simplified);
+            let simplified = key.endsWith(':lod') ? 1 : key.endsWith(':lod2') ? 2 : 0;
+            let data = createFigureData(simplified ? key.slice(0, key.lastIndexOf(':lod')) : key, simplified);
             mesh = createMesh(gl, data.positions, data.normals, data.indices, data.uvs);
             mesh.details = data.details;
             mesh.rig = figureRig(key);
@@ -2796,12 +2816,12 @@
             // when zoomed in. A little hysteresis keeps a model from flipping
             // between meshes at the threshold while the camera moves.
             let pixels = this.pixelsPerWorldAt(Number(object.x) || 0, 0, Number(object.z) || 0) * Math.max(object.scaleX, object.scaleZ);
-            let simplified = object._r3dLod ? pixels < 27 : pixels < 24;
-            object._r3dLod = simplified;
-            if (!simplified) return kind;
+            let level = figureLodLevel(object._r3dLod | 0, pixels);
+            object._r3dLod = level;
+            if (!level) return kind;
             let lod = lodMeshKeys.get(kind);
-            if (!lod) lodMeshKeys.set(kind, lod = kind + ':lod');
-            return lod;
+            if (!lod) lodMeshKeys.set(kind, lod = [kind + ':lod', kind + ':lod2']);
+            return lod[level - 1];
         }
 
         // On-screen CSS pixels per world unit at a point, from its depth along
@@ -4131,10 +4151,10 @@
             return batches;
         }
 
-        pushShadowInstance(object) {
+        pushShadowInstance(object, batches = this.shadowBatches, dx = 0, dz = 0) {
             let shadow = this.shadowScratch || (this.shadowScratch = {});
             if (!this.computeShadow(object, shadow)) return false;
-            let batch = shadow.renderShape === 'cylinder' ? this.shadowBatches.cylinder : this.shadowBatches.box;
+            let batch = shadow.renderShape === 'cylinder' ? batches.cylinder : batches.box;
             let base = batch.count * INSTANCE_STRIDE;
             if (base + INSTANCE_STRIDE > batch.data.length) {
                 let grown = new Float32Array(batch.data.length * 2);
@@ -4153,8 +4173,17 @@
             data[base + 23] = 0;
             data[base + 24] = 0;
             data[base + 25] = 1;
+            data[base + 3] = dx;
+            data[base + 7] = dz;
             batch.count++;
             return true;
+        }
+
+        newShadowBatches() {
+            return {
+                box: { renderShape: 'box', data: new Float32Array(64 * INSTANCE_STRIDE), count: 0 },
+                cylinder: { renderShape: 'cylinder', data: new Float32Array(64 * INSTANCE_STRIDE), count: 0 }
+            };
         }
 
         drawShadowInstances(batch) {
@@ -4168,13 +4197,15 @@
             gl.bindVertexArray(mesh.vao);
             this.setInstanceBase(mesh, base);
             gl.uniformMatrix4fv(this.instancedMeshUniforms.viewProjection, false, this.tmpViewProjection);
+            gl.uniform1f(this.instancedMeshUniforms.layerAlpha, batch.layerAlpha === undefined ? 1 : batch.layerAlpha);
             gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, batch.count);
         }
 
         drawShadows(meshObjects, batches) {
             let hasMeshes = !!(meshObjects && meshObjects.length > 0);
             let hasPrimitives = !!(batches && (batches.box.count > 0 || batches.cylinder.count > 0));
-            if (!hasMeshes && !hasPrimitives) return;
+            let hasLayers = !!(this.unitLayerShadow || (this.staticGroups && this.staticGroups.shadow));
+            if (!hasMeshes && !hasPrimitives && !hasLayers) return;
 
             let gl = this.gl;
             gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
@@ -4187,6 +4218,14 @@
                 this.drawShadowInstances(batches.box);
                 this.drawShadowInstances(batches.cylinder);
             }
+            // The layers' drop shadows (Simple shadows), kept per layer.
+            for (let extra of [this.unitLayerShadow, this.staticGroups && this.staticGroups.shadow]) {
+                if (!extra) continue;
+                extra.box.layerAlpha = extra.cylinder.layerAlpha = extra === this.unitLayerShadow ? this.layerAlpha : 1;
+                this.drawShadowInstances(extra.box);
+                this.drawShadowInstances(extra.cylinder);
+            }
+            if (this.staticGroups && this.staticGroups.shadowMeshes) for (let entry of this.staticGroups.shadowMeshes) this.drawShadowObject(entry.object, entry.shadow);
             gl.depthMask(true);
             gl.disable(gl.BLEND);
             gl.drawBuffers(this.sceneDrawBuffers);
@@ -4233,6 +4272,97 @@
         // rebuilding and re-uploading them. Reset at the start of render().
         resetInstanceArena() {
             this.arenaUsed = 0;
+            this.arenaStamp = this.textureFrame;
+        }
+
+        // The static arena (structure layer) takes the place of the frame
+        // arena while its batches are drawn: exchanges the current arena
+        // fields with `other` and returns the previous ones.
+        swapArena(other) {
+            let cur = { buffer: this.cubeInstanceBuffer, array: this.cubeInstanceArray, cap: this.cubeInstanceCapacity, used: this.arenaUsed, stamp: this.arenaStamp };
+            this.cubeInstanceBuffer = other.buffer; this.cubeInstanceArray = other.array; this.cubeInstanceCapacity = other.cap;
+            this.arenaUsed = other.used; this.arenaStamp = other.stamp;
+            return cur;
+        }
+
+        // ---- Structure layer ----
+        // Structures the frame builder kept (renderer.js, STRUCTURE LAYER) are
+        // grouped when the layer changes and written to the static arena on
+        // their first draw; later frames draw them from there.
+        prepareStaticLayer(layer) {
+            if (this.staticLayerVersion === layer.version && this.staticGroups) return;
+            let gl = this.gl;
+            this.staticLayerVersion = layer.version;
+            let st = this.staticArenaState || (this.staticArenaState = { buffer: gl.createBuffer(), array: null, cap: 0, used: 0, stamp: 0 });
+            st.used = 0;
+            st.stamp = -layer.version;
+            let textured = new Map(), cubes = new Map(), meshes = [], picks = [];
+            for (let o of layer.objects) {
+                let figureMeshKey = this.getFigureMeshKey(o);
+                let mesh = figureMeshKey ? null : this.requestModel(o);
+                let isTextured = (o.topTextureKey && o.topTextureCanvas) || (o.sideTextureKey && o.sideTextureCanvas);
+                if (o.pickSource) {
+                    let pickMesh = mesh || (isTextured && figureMeshKey && this.getFigureMesh(figureMeshKey)) || this.getPrimitiveMesh(o);
+                    let entry = o._r3dPick || (o._r3dPick = { object: o, mesh: null });
+                    entry.mesh = pickMesh;
+                    picks.push(entry);
+                }
+                if (mesh) meshes.push(o);
+                else if (isTextured) {
+                    let atlasPanel = !!(figureMeshKey && isAtlasPanel(o));
+                    let key = atlasPanel
+                        ? `atlas|${figureMeshKey}|anim:${Number(o.animationMode) || 0}`
+                        : `${o.topTextureKey || ''}|${o.sideTextureKey || ''}|${figureMeshKey || o.renderShape || 'box'}|anim:${Number(o.animationMode) || 0}`;
+                    let g = textured.get(key);
+                    if (!g) textured.set(key, g = { atlas: atlasPanel, figure: figureMeshKey, objects: [], topKey: o.topTextureKey, topCanvas: o.topTextureCanvas,
+                        sideKey: !figureMeshKey && !atlasPanel && o.sideTextureKey && o.sideTextureCanvas ? o.sideTextureKey : null, sideCanvas: o.sideTextureCanvas });
+                    g.objects.push(o);
+                } else {
+                    let key = o.renderShape || 'box';
+                    let g = cubes.get(key);
+                    if (!g) cubes.set(key, g = []);
+                    g.push(o);
+                }
+            }
+            let shadow = null, shadowMeshes = null;
+            if (this.graphicsOptions && this.graphicsOptions.shadows === 'simple') {
+                shadow = this.newShadowBatches(); shadowMeshes = [];
+                for (let o of meshes) { let info = this.getShadowInfo(o); if (info) shadowMeshes.push({ object: o, shadow: info }); }
+                for (let g of textured.values()) for (let o of g.objects) this.pushShadowInstance(o, shadow);
+                for (let g of cubes.values()) for (let o of g) this.pushShadowInstance(o, shadow);
+            }
+            this.staticGroups = { textured: [...textured.values()], cubes: [...cubes.values()], meshes, picks, slots: null, shadow, shadowMeshes };
+        }
+
+        drawStaticLayer(atlas) {
+            let groups = this.staticGroups;
+            if (!groups) return;
+            let saved = this.swapArena(this.staticArenaState);
+            try {
+                let firstWrite = this.arenaUsed === 0;
+                for (let g of groups.textured) {
+                    // Textures are looked up each frame (keeps their cache entries).
+                    let top = g.atlas ? null : this.getTopTexture(g.topKey, g.topCanvas);
+                    let side = g.sideKey ? this.getTopTexture(g.sideKey, g.sideCanvas) : null;
+                    this.drawTexturedCubeInstances(g.objects, top, side, g.atlas ? atlas : null);
+                }
+                for (let g of groups.cubes) this.drawCubeInstances(g);
+                if (firstWrite && atlas) {
+                    // The atlas layers the written batches use, kept each frame.
+                    let slots = new Set(), a = this.cubeInstanceArray, n = this.arenaUsed;
+                    for (let i = 0; i < n; i++) {
+                        let top = a[i * INSTANCE_STRIDE + 26], status = a[i * INSTANCE_STRIDE + 27];
+                        if (top >= 0) slots.add(top | 0);
+                        if (status >= 0) slots.add(status | 0);
+                    }
+                    groups.slots = Int32Array.from(slots);
+                } else if (groups.slots && atlas) {
+                    for (let i = 0; i < groups.slots.length; i++) atlas.lastUsed[groups.slots[i]] = atlas.frame;
+                }
+            } finally {
+                this.staticArenaState = this.swapArena(saved);
+            }
+            for (let o of groups.meshes) this.drawObject(o);
         }
 
         // Room for `count` instances; returns the first instance index.
@@ -4298,7 +4428,7 @@
             let gl = this.gl;
             let mesh = this.getPrimitiveMesh(objects[0]);
             // Written once per frame (the shadow-map pass draws it again).
-            let first = objects._arenaFrame === this.textureFrame && objects._arenaCount === objects.length ? objects._arenaBase : -1;
+            let first = objects._arenaFrame === this.arenaStamp && objects._arenaCount === objects.length ? objects._arenaBase : -1;
             if (first < 0) {
             first = this.allocInstances(objects.length);
             let data = this.cubeInstanceArray;
@@ -4319,7 +4449,7 @@
                 data[base + 25] = this.getPackedObjectLight(object);
             }
             this.uploadInstances(first, objects.length);
-            objects._arenaFrame = this.textureFrame; objects._arenaBase = first; objects._arenaCount = objects.length;
+            objects._arenaFrame = this.arenaStamp; objects._arenaBase = first; objects._arenaCount = objects.length;
             }
             gl.useProgram(this.instancedMeshProgram);
             gl.bindVertexArray(mesh.vao);
@@ -4334,6 +4464,132 @@
         // tick), and drawn from it every frame with uLayerAlpha. Returns the
         // objects the layer cannot draw (no atlas panel or figure), for the
         // per-frame path.
+        // The frame builder writes each layer object here as it goes (one pass
+        // over the units): instance data into buckets by figure mesh and
+        // animation mode. prepareUnitLayer then joins the buckets.
+        beginUnitLayerWrite(version) {
+            this.directVersion = version;
+            let buckets = this.directBuckets || (this.directBuckets = new Map());
+            for (let byMode of buckets.values()) for (let b of byMode) if (b) { b.count = 0; b.picks.length = 0; }
+            this.directAtlas = this.getFlatAtlas();
+            // The atlas layers the layer uses (a stamp per layer, no Set).
+            this.directSlotList = [];
+            this.directSlotMark = (this.directSlotMark | 0) + 1;
+            if (!this.directSlotSeen || this.directSlotSeen.length < this.directAtlas.lastUsed.length) this.directSlotSeen = new Int32Array(Math.max(64, this.directAtlas.lastUsed.length));
+            // Simple shadows: each object's drop shadow, with its offset back to
+            // the previous tick (two sets alternate between builds).
+            let simple = !!(this.graphicsOptions && this.graphicsOptions.shadows === 'simple');
+            if (simple) {
+                let sets = this.directShadowSets || (this.directShadowSets = [this.newShadowBatches(), this.newShadowBatches()]);
+                this.directShadowIndex = (this.directShadowIndex || 0) ^ 1;
+                this.directShadow = sets[this.directShadowIndex];
+                this.directShadow.box.count = this.directShadow.cylinder.count = 0;
+            } else this.directShadow = null;
+        }
+
+        // Returns false when the object cannot be drawn from the layer.
+        writeUnitLayerObject(o) {
+            let atlas = this.directAtlas;
+            let kind = this.getFigureMeshKey(o);
+            let top = kind && isAtlasPanel(o) ? atlas.layerFor(o.topTextureCanvas) : -1;
+            if (top < 0) return false;
+            let byMode = this.directBuckets.get(kind);
+            if (!byMode) this.directBuckets.set(kind, byMode = []);
+            let mode = o.animationMode | 0;
+            let b = byMode[mode];
+            if (!b) byMode[mode] = b = { kind, mode, data: new Float32Array(64 * INSTANCE_STRIDE), count: 0, picks: [], sample: null };
+            if ((b.count + 1) * INSTANCE_STRIDE > b.data.length) {
+                let grown = new Float32Array(b.data.length * 2);
+                grown.set(b.data);
+                b.data = grown;
+            }
+            let data = b.data, base = b.count * INSTANCE_STRIDE;
+            writeObjectMatrix(data, base, o);
+            data[base + 3] = o._pdx; data[base + 7] = o._pdz; data[base + 11] = o._phaseRate;
+            data[base + 4] = o._flySeed; data[base + 6] = o._flyOn;
+            let color = objectRgb(o);
+            data[base + 16] = color[0]; data[base + 17] = color[1]; data[base + 18] = color[2];
+            data[base + 19] = Math.max(0.05, Math.min(1, Number(o.alpha) || 1));
+            data[base + 20] = o.moveAmount || 0;
+            data[base + 21] = o.walkPhase || 0;
+            let side = objectSideRgb(o);
+            data[base + 22] = side[0]; data[base + 23] = side[1]; data[base + 24] = side[2];
+            data[base + 25] = this.getPackedObjectLight(o);
+            data[base + 26] = top;
+            let status = o.statusTextureCanvas ? atlas.layerFor(o.statusTextureCanvas) : -1;
+            data[base + 27] = status;
+            this.markDirectSlot(top);
+            if (status >= 0) this.markDirectSlot(status);
+            if (o.pickSource) b.picks.push(o);
+            if (!b.count) b.sample = o;
+            b.count++;
+            if (this.directShadow) this.pushShadowInstance(o, this.directShadow, o._pdx, o._pdz);
+            return true;
+        }
+
+        markDirectSlot(slot) {
+            let seen = this.directSlotSeen;
+            if (slot >= seen.length) { let g = new Int32Array(slot * 2 + 1); g.set(seen); this.directSlotSeen = seen = g; }
+            if (seen[slot] !== this.directSlotMark) { seen[slot] = this.directSlotMark; this.directSlotList.push(slot); }
+        }
+
+        // The atlas layers of the status icons (one per status code), for
+        // records written through writeUnitLayerRecord.
+        statusSlotsFor(canvases) {
+            let atlas = this.directAtlas || this.getFlatAtlas();
+            let out = this.statusSlotScratch || (this.statusSlotScratch = new Float32Array(8));
+            for (let i = 0; i < canvases.length; i++) {
+                let slot = canvases[i] ? atlas.layerFor(canvases[i]) : -1;
+                out[i] = slot;
+                if (slot >= 0) this.markDirectSlot(slot);
+            }
+            return out;
+        }
+
+        // A finished instance record (all but the panel's atlas layer) into
+        // the bucket of its figure mesh and animation mode. The unit is kept
+        // for picking. False when the panel has no atlas layer.
+        writeUnitLayerRecord(kind, mode, rec, panel, unit) {
+            let atlas = this.directAtlas;
+            let top = atlas.layerFor(panel);
+            if (top < 0) return false;
+            let byMode = this.directBuckets.get(kind);
+            if (!byMode) this.directBuckets.set(kind, byMode = []);
+            let b = byMode[mode];
+            if (!b) byMode[mode] = b = { kind, mode, data: new Float32Array(64 * INSTANCE_STRIDE), count: 0, picks: [], sample: null };
+            if ((b.count + 1) * INSTANCE_STRIDE > b.data.length) {
+                let grown = new Float32Array(b.data.length * 2);
+                grown.set(b.data);
+                b.data = grown;
+            }
+            let base = b.count * INSTANCE_STRIDE;
+            b.data.set(rec, base);
+            b.data[base + 26] = top;
+            this.markDirectSlot(top);
+            (b.pickUnits || (b.pickUnits = [])).push(unit, b.count);
+            if (!b.count) b.sample = b.sample || { animationMode: mode, topTextureKey: '2d:', modelKey: 'unit_' };
+            b.count++;
+            if (this.directShadow) {
+                let proxy = this.shadowProxy || (this.shadowProxy = {});
+                this.fillRecordProxy(proxy, b.data, base, unit);
+                this.pushShadowInstance(proxy, this.directShadow, b.data[base + 3], b.data[base + 7]);
+            }
+            return true;
+        }
+
+        // An object-like view of an instance record (picking, drop shadows).
+        fillRecordProxy(o, data, base, unit) {
+            let sx = Math.hypot(data[base], data[base + 2]), sz = Math.hypot(data[base + 8], data[base + 10]);
+            o.x = data[base + 12]; o.y = data[base + 13]; o.z = data[base + 14];
+            o.scaleX = sx; o.scaleY = data[base + 5]; o.scaleZ = sz;
+            o.rotationY = Math.atan2(-data[base + 2] / (sx || 1), data[base] / (sx || 1));
+            o.alpha = 1; o.lightLevel = data[base + 25]; o.pickSource = unit;
+            o.modelKey = 'unit_' + (unit && unit.unitType || 'norm'); o.renderShape = 'cylinder';
+            o.shadowDirX = undefined; o.shadowDirZ = undefined; o.shadowLength = undefined;
+            o._pdx = data[base + 3]; o._pdz = data[base + 7]; o._cx = o.x; o._cz = o.z;
+            return o;
+        }
+
         prepareUnitLayer(layer, atlas) {
             this.layerAlpha = Number(layer.alpha) || 0;
             this.layerFlyTime = Number(layer.flyTime) || 0;
@@ -4345,6 +4601,7 @@
             }
             let gl = this.gl;
             this.unitLayerVersion = layer.version;
+            if (this.directVersion === layer.version && this.directBuckets) return this.joinUnitLayerBuckets(layer, atlas);
             let groups = new Map(), fallback = [], picks = [], slotSet = new Set();
             let total = 0;
             for (let o of layer.objects) {
@@ -4416,6 +4673,51 @@
             return fallback;
         }
 
+        // prepareUnitLayer for a layer written through writeUnitLayerObject.
+        joinUnitLayerBuckets(layer, atlas) {
+            let gl = this.gl;
+            let total = 0, buckets = [];
+            for (let byMode of this.directBuckets.values()) for (let b of byMode) if (b && b.count) { buckets.push(b); total += b.count; }
+            let need = total * INSTANCE_STRIDE;
+            if (!this.unitLayerArray || this.unitLayerArray.length < need) {
+                this.unitLayerArray = new Float32Array(Math.max(need, 1024 * INSTANCE_STRIDE, (this.unitLayerArray ? this.unitLayerArray.length : 0) * 2));
+            }
+            if (!this.unitLayerBuffer) this.unitLayerBuffer = gl.createBuffer();
+            let data = this.unitLayerArray, at = 0, draws = [], picks = [];
+            let recordPicks = [];
+            for (let b of buckets) {
+                data.set(b.data.subarray(0, b.count * INSTANCE_STRIDE), at * INSTANCE_STRIDE);
+                let mesh = this.getFigureMesh(b.kind);
+                if (b.pickUnits && b.pickUnits.length) { recordPicks.push({ b, mesh, first: at, units: b.pickUnits }); b.pickUnits = []; }
+                draws.push({ first: at, count: b.count, sample: b.sample, kind: b.kind, mesh, statusAtlas: atlas, buffer: this.unitLayerBuffer, fallback: null });
+                for (let o of b.picks) {
+                    let entry = o._r3dPick || (o._r3dPick = { object: o, mesh: null });
+                    entry.mesh = mesh;
+                    picks.push(entry);
+                }
+                at += b.count;
+            }
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.unitLayerBuffer);
+            if ((this.unitLayerBufferBytes || 0) < data.byteLength) {
+                gl.bufferData(gl.ARRAY_BUFFER, data.byteLength, gl.DYNAMIC_DRAW);
+                this.unitLayerBufferBytes = data.byteLength;
+            }
+            if (at) gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, at * INSTANCE_STRIDE);
+            for (let d of draws) d.mesh.instanceBuffer = null;
+            let slots = Int32Array.from(this.directSlotList);
+            for (let i = 0; i < slots.length; i++) atlas.lastUsed[slots[i]] = atlas.frame;
+            this.unitLayerDraws = draws;
+            this.unitLayerPicks = picks;
+            this.unitLayerSlots = slots;
+            this.unitLayerFallback = layer.fallback || [];
+            this.unitLayerObjects = layer.objects;
+            this.unitLayerShadow = this.directShadow;
+            // Record-written units get pick entries only when something picks.
+            this.unitLayerRecordPicks = recordPicks;
+            this.unitLayerRecordPicksBuilt = null;
+            return this.unitLayerFallback;
+        }
+
         drawUnitLayer(atlas) {
             let draws = this.unitLayerDraws;
             if (!draws || !atlas) return;
@@ -4425,6 +4727,28 @@
         // Picking reads object positions: put the layer's objects where this
         // frame shows them.
         syncUnitLayerPickPositions() {
+            // Pick entries for the units written as records (built once per
+            // layer, appended once per frame).
+            let rp = this.unitLayerRecordPicks;
+            if (rp && rp.length && this.unitLayerDraws) {
+                let built = this.unitLayerRecordPicksBuilt;
+                if (!built) {
+                    built = this.unitLayerRecordPicksBuilt = [];
+                    let data = this.unitLayerArray;
+                    for (let e of rp) {
+                        for (let k = 0; k < e.units.length; k += 2) {
+                            let o = this.fillRecordProxy({}, data, (e.first + e.units[k + 1]) * INSTANCE_STRIDE, e.units[k]);
+                            built.push({ object: o, mesh: e.mesh });
+                        }
+                    }
+                }
+                if (this.pickObjects && this.pickRecordsFrame !== this.textureFrame) {
+                    this.pickRecordsFrame = this.textureFrame;
+                    for (let e of built) this.pickObjects.push(e);
+                }
+                let back = 1 - (this.layerAlpha || 0);
+                for (let e of built) { let o = e.object; o.x = o._cx + o._pdx * back; o.z = o._cz + o._pdz * back; }
+            }
             let objects = this.unitLayerObjects;
             if (!objects) return;
             let back = 1 - (this.layerAlpha || 0);
@@ -4438,7 +4762,7 @@
             if (!objects || objects.length <= 0 || (!topTexture && !atlas)) return;
             let gl = this.gl;
             // Already written this frame (the shadow-map pass): draw its range.
-            let cached = objects._arenaFrame === this.textureFrame && objects._arenaTotal === objects.length ? objects._arenaDraw : null;
+            let cached = objects._arenaFrame === this.arenaStamp && objects._arenaTotal === objects.length ? objects._arenaDraw : null;
             if (cached) {
                 if (cached.fallback) for (let f of cached.fallback) this.drawTexturedCubeInstances(f.list, f.texture);
                 if (cached.count) this.drawTexturedInstanceRange(cached, topTexture, sideTexture, atlas);
@@ -4471,7 +4795,7 @@
                     }
                 }
                 if (!kept.length) {
-                    input._arenaFrame = this.textureFrame; input._arenaTotal = input.length;
+                    input._arenaFrame = this.arenaStamp; input._arenaTotal = input.length;
                     input._arenaDraw = { fallback: fallbackDraws, count: 0 };
                     return;
                 }
@@ -4510,8 +4834,8 @@
                 data[base + 27] = statusAtlas && object.statusTextureCanvas ? statusAtlas.layerFor(object.statusTextureCanvas) : -1;
             }
             this.uploadInstances(first, objects.length);
-            let draw = { first, count: objects.length, sample: objects[0], kind, mesh, statusAtlas, fallback: fallbackDraws };
-            input._arenaFrame = this.textureFrame; input._arenaTotal = input.length; input._arenaDraw = draw;
+            let draw = { first, count: objects.length, sample: objects[0], kind, mesh, statusAtlas, fallback: fallbackDraws, buffer: this.cubeInstanceBuffer };
+            input._arenaFrame = this.arenaStamp; input._arenaTotal = input.length; input._arenaDraw = draw;
             this.drawTexturedInstanceRange(draw, topTexture, sideTexture, atlas);
         }
 
@@ -4814,7 +5138,7 @@
             this.shadowFrame = null;
             // The unit layer (drawn from its own buffer); what it cannot draw
             // joins this frame's objects.
-            let unitLayer = snapshot.unitLayer && !castShadows ? snapshot.unitLayer : null;
+            let unitLayer = snapshot.unitLayer || null;
             let layerAtlas = null;
             if (unitLayer) {
                 layerAtlas = this.getFlatAtlas();
@@ -4823,7 +5147,15 @@
                 if (rest && rest.length) objects = objects.concat(rest);
                 for (let e of this.unitLayerPicks) this.pickObjects.push(e);
             } else {
-                this.unitLayerDraws = null; this.unitLayerPicks = null; this.unitLayerObjects = null; this.unitLayerVersion = -1;
+                this.unitLayerDraws = null; this.unitLayerPicks = null; this.unitLayerObjects = null; this.unitLayerVersion = -1; this.unitLayerShadow = null;
+            }
+            let staticLayer = snapshot.staticLayer || null;
+            if (staticLayer) {
+                if (!layerAtlas) { layerAtlas = this.getFlatAtlas(); layerAtlas.beginFrame(this.textureFrame); }
+                this.prepareStaticLayer(staticLayer);
+                for (let e of this.staticGroups.picks) this.pickObjects.push(e);
+            } else {
+                this.staticGroups = null; this.staticLayerVersion = -1;
             }
             for (let i = 0; i < objects.length; i++) {
                 let object = objects[i];
@@ -4896,6 +5228,7 @@
                 this.drawTexturedCubeInstances(group.objects, group.topTexture, group.sideTexture, group.atlas ? atlas : null);
             }
             if (unitLayer) this.drawUnitLayer(atlas);
+            if (staticLayer) this.drawStaticLayer(atlas);
             for (let group of opaqueCubeGroups.values()) {
                 this.drawCubeInstances(group);
             }
@@ -4993,6 +5326,7 @@
                 for (let object of meshObjects) this.drawObject(object);
                 for (let group of texturedGroups) this.drawTexturedCubeInstances(group.objects, group.topTexture, group.sideTexture, group.atlas ? atlas : null);
                 if (this.unitLayerDraws) this.drawUnitLayer(atlas);
+                if (this.staticGroups) this.drawStaticLayer(atlas);
                 for (let group of cubeGroups.values()) this.drawCubeInstances(group);
             } finally {
                 gl.disable(gl.POLYGON_OFFSET_FILL);

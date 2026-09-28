@@ -472,7 +472,8 @@ function createInstance(world, name, options = {}) {
     };
     const location = new URL(options.url || 'http://localhost/rng/defence3/index.html');
     // Simulation worker mode for the whole world (or SIM_WORKER=1).
-    if ((world.simWorker || process.env.SIM_WORKER === '1') && options.simWorker !== false) location.searchParams.set('simworker', '1');
+    // Explicit either way (the page's default is the worker).
+    location.searchParams.set('simworker', (world.simWorker || process.env.SIM_WORKER === '1') && options.simWorker !== false ? '1' : '0');
     const window = {
         innerWidth: 1280, innerHeight: 720, devicePixelRatio: 1,
         addEventListener: (type, fn) => { (inst.winListeners[type] ||= []).push(fn); }, removeEventListener: () => { },

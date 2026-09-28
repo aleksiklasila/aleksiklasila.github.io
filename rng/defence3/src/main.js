@@ -487,6 +487,7 @@ function gameTick() {
         }
     }
     compactRemovedUnits();
+    runUnitSeparationPass();
 
     // Barracks - use deterministic shuffle to avoid order-dependent updates
     let barracksUpdateOrder = _buildDeterministicBuildingUpdateOrderForTick(barracks, 20);
@@ -3625,7 +3626,13 @@ function startGame() {
         return placed;
     };
 
-    let buildStarterUnitSpawnTilesBfs = (origin, maxRadius = 24) => {
+    // Free tiles by distance from `origin` (BFS). The search passes through
+    // buildings (a base can wall its own middle in), not terrain walls.
+    // With `floorItems`, walkable tiles holding a floor item count too.
+    // Only tiles clearly nearer this team's spawn than any other team's
+    // (1.2x: a neutral band between the armies), so a starting army never
+    // begins among its enemies.
+    let buildStarterUnitSpawnTilesBfs = (origin, maxRadius = 24, floorItems = false, others = []) => {
         let out = [];
         let q = [];
         let seen = new Set();
@@ -3639,13 +3646,18 @@ function startGame() {
             let gx = cur.gx, gy = cur.gy;
             let md = Math.abs(gx - startGx) + Math.abs(gy - startGy);
             if (md > maxRadius) continue;
+            if (md > 0) {
+                let own = (gx - startGx) * (gx - startGx) + (gy - startGy) * (gy - startGy), foreign = false;
+                for (let o of others) if ((gx - o.gx) * (gx - o.gx) + (gy - o.gy) * (gy - o.gy) <= own * 1.44) { foreign = true; break; }
+                if (foreign) continue;
+            }
 
             let cell = (grid[gy] && grid[gy][gx]) ? grid[gy][gx] : null;
             let isFloorTile = !!cell && cell.type !== TYPE_WALL;
-            let isFreeTile = isFloorTile && !cell.item && !getGoldMineAt(gx, gy);
+            let isFreeTile = isFloorTile && (!cell.item || floorItems) && !getGoldMineAt(gx, gy);
             if (isFreeTile) out.push({ gx, gy });
 
-            if (!isFloorTile) continue;
+            if (!isFloorTile && !(cell && getTileEntityRef(gx, gy))) continue;
             let n0 = gx + 1, n1 = gx - 1, n2 = gy + 1, n3 = gy - 1;
             if (n0 < GRID_W) {
                 let k = gy * GRID_W + n0;
@@ -3672,28 +3684,47 @@ function startGame() {
         return out;
     };
 
+    // Starting units spread over enough free tiles for at most
+    // STARTER_UNITS_PER_TILE each (the area grows with the army), dealt out
+    // round robin; units sharing a tile stand at distinct offsets in it, so
+    // no two start on the same point.
+    const STARTER_UNITS_PER_TILE = 3;
+    let starterUnitCountByTeam = {};
+    const STARTER_TILE_OFFSETS = [[0, 0], [-9, -9], [9, 9], [9, -9], [-9, 9], [0, -11], [0, 11], [-11, 0], [11, 0]];
     let getNextStarterUnitSpawnTile = (pid, origin) => {
         let state = teamStarterSpawnState[pid];
         if (!state) {
-            state = {
-                tiles: buildStarterUnitSpawnTilesBfs(origin),
-                cursor: 0
-            };
+            let want = Math.ceil(Math.max(1, starterUnitCountByTeam[pid] || 0) / STARTER_UNITS_PER_TILE);
+            let others = [];
+            for (let other in teamSpawnPos) if (Number(other) !== Number(pid) && teamSpawnPos[other]) others.push(teamSpawnPos[other]);
+            let radius = 24, floorItems = false, tiles = buildStarterUnitSpawnTilesBfs(origin, radius, false, others);
+            while (tiles.length < want && (radius < GRID_W + GRID_H || !floorItems)) {
+                if (radius < GRID_W + GRID_H) radius += 8;
+                else floorItems = true;
+                tiles = buildStarterUnitSpawnTilesBfs(origin, radius, floorItems, others);
+            }
+            // The nearest tiles (BFS order) that hold the army; a small army
+            // still takes a tile per unit.
+            let count = Math.max(1, starterUnitCountByTeam[pid] || 0);
+            let keep = Math.max(want, Math.min(count, 64));
+            if (tiles.length > keep) tiles.length = keep;
+            state = { tiles, cursor: 0 };
             teamStarterSpawnState[pid] = state;
         }
         if (!state.tiles || state.tiles.length <= 0) {
             let fallback = findNearestWalkable(origin.gx, origin.gy, origin.gx, origin.gy);
-            return { gx: fallback.x, gy: fallback.y };
+            return { gx: fallback.x, gy: fallback.y, ox: 0, oy: 0 };
         }
-        let idx = state.cursor % state.tiles.length;
-        let tile = state.tiles[idx];
-        state.cursor = (idx + 1) % state.tiles.length;
-        return tile;
+        let n = state.tiles.length;
+        let tile = state.tiles[state.cursor % n];
+        let off = STARTER_TILE_OFFSETS[Math.floor(state.cursor / n) % STARTER_TILE_OFFSETS.length];
+        state.cursor++;
+        return { gx: tile.gx, gy: tile.gy, ox: off[0], oy: off[1] };
     };
 
     let spawnStartingUnit = (pid, origin, unitType, level) => {
         let spawnTile = getNextStarterUnitSpawnTile(pid, origin);
-        let u = new Unit(unitType, pid, spawnTile.gx * TILE + 16, spawnTile.gy * TILE + 16);
+        let u = new Unit(unitType, pid, spawnTile.gx * TILE + 16 + spawnTile.ox, spawnTile.gy * TILE + 16 + spawnTile.oy);
         applyWorkerDefaults(u);
         applyUnitLevelScaling(u, Math.max(1, clampThingLevel(level || 1)));
         u.energy = u.preComputed.maxEnergy;
@@ -3731,9 +3762,18 @@ function startGame() {
     for (let pid of teams) {
         let pos = teamSpawnPos[pid];
         let spawnByThing = startingResourcesConfig.spawnCounts || {};
+        // Buildings first, then units on the tiles left free.
+        let unitCount = 0;
         for (let thingId in spawnByThing) {
+            let parsed = parseStartingThingId(thingId), levelMap = spawnByThing[thingId];
+            if (!parsed || parsed.kind === 'building' || !levelMap || typeof levelMap !== 'object') continue;
+            for (let levelText in levelMap) unitCount += Math.max(0, Math.min(1000, Math.floor(Number(levelMap[levelText]) || 0)));
+        }
+        starterUnitCountByTeam[pid] = unitCount;
+        for (let pass = 0; pass < 2; pass++) for (let thingId in spawnByThing) {
             let parsed = parseStartingThingId(thingId);
             if (!parsed) continue;
+            if ((parsed.kind === 'building') !== (pass === 0)) continue;
             let levelMap = spawnByThing[thingId];
             if (!levelMap || typeof levelMap !== 'object') continue;
             for (let levelText in levelMap) {

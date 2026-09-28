@@ -7,8 +7,9 @@
 // what changed, encoded here on the worker (simDeltaEncode) and applied on
 // the page (simDeltaApply):
 //
-// - Hot fields: numeric fields that change most ticks (positions, timers,
-//   counters...), per list in list order, as typed arrays (transferable).
+// - Hot fields: numeric fields that change often (positions, timers,
+//   counters...), as typed arrays (transferable): only the fields that
+//   changed since the last tick, per entity (its index and a field mask).
 //   A value that is not a number, undefined, null or a boolean makes its
 //   entity send a row instead.
 // - Rows: every other field goes through the snapshot codec (references,
@@ -64,6 +65,7 @@ function _simContentHash(list, kind, e) {
 const SIM_HOT_NUMBER = 0, SIM_HOT_UNDEFINED = 1, SIM_HOT_NULL = 2, SIM_HOT_TRUE = 3, SIM_HOT_FALSE = 4, SIM_HOT_ABSENT = 5;
 
 let _simDeltaEnc = null;
+let _simHotScratchV = new Float64Array(64), _simHotScratchK = new Uint8Array(64);
 
 // Generated per list, with the field names written out (dynamic keyed access
 // was most of the cost): pack(e, v, k, base) writes the hot values of e,
@@ -88,6 +90,32 @@ function _simHotCodec(list) {
     c = _simHotCodecs[list] = { pack: new Function('e', 'v', 'k', 'base', pack), unpack: new Function('e', 'v', 'k', 'base', unpack) };
     return c;
 }
+// Page side: the changed hot fields of one entity (mask bits over the list's
+// fields, values from v/k at p on). Returns the next p; _simHotMoved tells
+// whether x or y changed.
+let _simHotMoved = false;
+const _simHotMaskedCodecs = {};
+function _simHotMaskedUnpack(list) {
+    let fn = _simHotMaskedCodecs[list];
+    if (fn) return fn;
+    let fields = SIM_DELTA_HOT_FIELDS[list] || [];
+    let body = 'let kind, moved = false;\n' + fields.map((f, i) => {
+        let a = 'e[' + JSON.stringify(f) + ']', word = i < 32 ? 'lo' : 'hi', bit = i % 32;
+        let set = f === 'x' || f === 'y'
+            ? `kind = k[p]; if (kind === 0) { if (${a} !== v[p]) { ${a} = v[p]; moved = true; } } else if (kind !== 5) { ${a} = kind === 1 ? undefined : kind === 2 ? null : kind === 3; moved = true; }`
+            : `kind = k[p]; if (kind === 0) ${a} = v[p]; else if (kind !== 5) ${a} = kind === 1 ? undefined : kind === 2 ? null : kind === 3;`;
+        return `if ((${word} >>> ${bit}) & 1) { ${set} p++; }`;
+    }).join('\n') + '\n_simHotMoved = moved; return p;';
+    return (_simHotMaskedCodecs[list] = new Function('e', 'lo', 'hi', 'v', 'k', 'p', body));
+}
+
+// Enumerable keys of an entity (its own: class methods are not enumerable).
+function _simKeyCount(e) {
+    let n = 0;
+    for (let k in e) n++;
+    return n;
+}
+
 const _simDeltaShapes = new Map(); // layout key -> { cold: [field], compare(e, vals), copy(e) }
 
 function _simDeltaShape(list, e) {
@@ -102,7 +130,7 @@ function _simDeltaShape(list, e) {
     // Changed: not identical, and not both NaN.
     let body = cold.map((k, i) => `(${acc(k)} !== v[${i}] && (${acc(k)} === ${acc(k)} || v[${i}] === v[${i}]))`).join(' || ') || 'false';
     shape = {
-        layout, cold,
+        layout, cold, nkeys: keys.length,
         changed: new Function('e', 'v', 'return ' + body + ';'),
         copy: new Function('e', 'return [' + cold.map(acc).join(', ') + '];')
     };
@@ -119,10 +147,13 @@ function simDeltaEncoderReset() {
         let hashKind = SIM_DELTA_HASH_KIND[list];
         let seen = new Map();
         let keys = new Array(arr.length);
+        let nf = (SIM_DELTA_HOT_FIELDS[list] || []).length, codec = _simHotCodec(list);
         for (let i = 0; i < arr.length; i++) {
             let e = arr[i];
             let shape = _simDeltaShape(list, e);
-            seen.set(e, { shape, vals: shape.copy(e), h: hashKind ? _simContentHash(list, hashKind, e) : 0 });
+            let entry = { shape, vals: shape.copy(e), h: hashKind ? _simContentHash(list, hashKind, e) : 0, hv: null, hk: null };
+            if (nf) { entry.hv = new Float64Array(nf); entry.hk = new Uint8Array(nf); codec.pack(e, entry.hv, entry.hk, 0); }
+            seen.set(e, entry);
             keys[i] = _snapEntityKey(list, e, i);
         }
         lists[list] = { seen, keys };
@@ -153,8 +184,9 @@ function simDeltaEncode() {
         let nf = fields.length;
         let codec = _simHotCodec(list);
         let hashKind = SIM_DELTA_HASH_KIND[list];
-        let v = nf ? new Float64Array(arr.length * nf) : null;
-        let kinds = nf ? new Uint8Array(arr.length * nf) : null;
+        let sv = _simHotScratchV.length >= nf ? _simHotScratchV : (_simHotScratchV = new Float64Array(nf));
+        let sk = _simHotScratchK.length >= nf ? _simHotScratchK : (_simHotScratchK = new Uint8Array(nf));
+        let cIdx = [], cMask = [], cV = [], cK = [];
         let items = [];
         let membershipChanged = arr.length !== st.keys.length;
         let keys = new Array(arr.length);
@@ -174,21 +206,42 @@ function simDeltaEncode() {
             // gain fields as they go (status effects...). Units keep one
             // layout by design; a staggered 16-tick check backs that up (and
             // the page's hash check catches the rest).
-            if (!dirty && prev && (list !== 'u' || ((i + enc.tick) & 15) === 0) && _simDeltaShape(list, e) !== shape) dirty = true;
+            // (A layout change adds or removes a field: the own key count is
+            // compared first, without building the layout key.)
+            if (!dirty && prev && (list !== 'u' || ((i + enc.tick) & 15) === 0) && _simKeyCount(e) !== shape.nkeys && _simDeltaShape(list, e) !== shape) dirty = true;
             let h = 0;
             if (hashKind) {
                 h = _simContentHash(list, hashKind, e);
                 if (prev && h !== prev.h) dirty = true;
             }
             // Not representable in the hot arrays: the row carries it.
-            if (nf && !codec.pack(e, v, kinds, i * nf)) dirty = true;
+            let packed = !nf || codec.pack(e, sv, sk, 0);
+            if (!packed) dirty = true;
+            // Changed hot fields since last tick (all of them for a new entity).
+            let hv = prev ? prev.hv : null, hk = prev ? prev.hk : null;
+            if (nf) {
+                if (!hv) { hv = new Float64Array(nf); hk = new Uint8Array(nf).fill(255); }
+                let lo = 0, hi = 0;
+                for (let f = 0; f < nf; f++) {
+                    let kv = sk[f], vv = sv[f];
+                    if (kv !== hk[f] || (kv === 0 && vv !== hv[f])) {
+                        if (f < 32) lo |= 1 << f; else hi |= 1 << (f - 32);
+                        cV.push(kv === 0 ? vv : 0); cK.push(kv);
+                        hv[f] = vv; hk[f] = kv;
+                    }
+                }
+                if (lo || hi) { cIdx.push(i); cMask.push(lo >>> 0, hi >>> 0); }
+                // Unrepresentable: the row has it; compare afresh next tick.
+                if (!packed) hk.fill(255);
+            }
             if (dirty) {
                 shape = _simDeltaShape(list, e);
                 items.push([e, i]);
                 rowCount++;
                 if (list === 't' || list === 'b' || list === 's' || list === 'f') built.push(list, i);
             }
-            nextSeen.set(e, dirty ? { shape, vals: shape.copy(e), h } : prev);
+            if (dirty) nextSeen.set(e, { shape, vals: shape.copy(e), h, hv, hk });
+            else { if (!prev.hv) { prev.hv = hv; prev.hk = hk; } nextSeen.set(e, prev); }
         }
         if (membershipChanged) {
             if (list !== 'u' && list !== 'd') dirtyMap = true;
@@ -202,9 +255,22 @@ function simDeltaEncode() {
             }
         }
         if (items.length) { entities.set(list, items); rowsBy[list] = items.length; }
+        // A unit that left the list: the copy keeps its reservation entry (as
+        // a dead placeholder) unless told otherwise; when the authority freed
+        // or reassigned it (a worker dying clears its target), that entry's
+        // region goes out with its reservations.
+        if (list === 'u' && membershipChanged && typeof workerReservedTiles !== 'undefined') {
+            for (let [e, prev] of st.seen) {
+                if (nextSeen.has(e)) continue;
+                let at = prev.shape.cold.indexOf('_workerReservedTileIndex');
+                let slot = at >= 0 ? prev.vals[at] : -1;
+                if (Number.isInteger(slot) && slot >= 0 && slot < workerReservedTiles.length && workerReservedTiles[slot] !== e) regions.add(_snapReservationRegion(slot));
+            }
+        }
         st.seen = nextSeen;
         st.keys = keys;
-        if (nf) hot[list] = { n: arr.length, fields: nf, v, k: kinds };
+        if (nf) hot[list] = { n: arr.length, fields: nf, idx: Int32Array.from(cIdx), mask: Uint32Array.from(cMask),
+            v: Float64Array.from(cV), k: Uint8Array.from(cK) };
     }
     // Grid cells whose type or owner changed.
     let cells = [];
@@ -240,13 +306,16 @@ function simDeltaApply(delta) {
         let h = delta.hot[list];
         let arr = _snapListEntities(list);
         if (arr.length !== h.n) throw new Error(`sim delta: ${list} has ${arr.length}, expected ${h.n}`);
-        let unpack = _simHotCodec(list).unpack;
-        let nf = h.fields, v = h.v, k = h.k;
+        let unpack = _simHotMaskedUnpack(list);
+        let idx = h.idx, mask = h.mask, v = h.v, k = h.k, p = 0;
         let isUnits = list === 'u';
-        for (let i = 0; i < arr.length; i++) {
-            let e = arr[i];
-            // Units that moved are re-indexed (selection, range queries...).
-            if (unpack(e, v, k, i * nf) && isUnits) updateUnitSpatial(e);
+        for (let j = 0; j < idx.length; j++) {
+            let e = arr[idx[j]];
+            p = unpack(e, mask[2 * j], mask[2 * j + 1], v, k, p);
+            // Units that moved to another chunk or area are re-indexed
+            // (selection and range queries); the page's own per-chunk
+            // statistics serve only its occasional queries.
+            if (_simHotMoved && isUnits && (e._spatialKey !== getSpatialKey(e.x, e.y) || e._spatialAreaId !== getAreaIdAtWorld(e.x, e.y))) updateUnitSpatial(e);
         }
     }
     if (delta.budgets) {
@@ -260,4 +329,92 @@ function simDeltaApply(delta) {
             if (e) updateItemTextCache(e);
         }
     }
+}
+
+// ---- Unit visual records (worker, each tick) ----
+// What the page's 3D unit layer needs per unit that follows from simulation
+// state alone, computed here where that state lives (the worker has time to
+// spare), SIM_UNIT_VIS_STRIDE floats per unit in list order:
+//   activity mode, amount, facing (rad), walk phase at the tick, phase rate
+//   per tick of interpolation, status icon code, the unit's own light range
+//   for the local player, a hash of its 2D panel's visual signature (the
+//   page redraws a panel only when this changes), its render slot (stable
+//   while it lives: the page keeps per-slot render data), position and
+//   previous position (world px), and id.
+const SIM_UNIT_VIS_STRIDE = 14;
+// Render slots: a small index per living unit, reused after it dies.
+const _simRenderSlots = { owner: [], free: [], stamp: new Int32Array(0), tick: 0 };
+const SIM_UNIT_STATUS_NAMES = ['walk', 'angry', 'work', 'sleep'];
+const _simUnitStatusCode = { walk: 0, angry: 1, work: 2, sleep: 3 };
+const _simVisPhase = [0, 0];
+
+function _simSignatureHash(u) {
+    // Half of the units per tick (by id): a panel change reaches the page at
+    // most a tick later.
+    let rec0 = u._r3dSig;
+    if (rec0 && rec0.hash !== undefined && ((u.id + gameTime) & 1)) return rec0.hash;
+    let sig = get3DExact2DVisualSignature(u, true);
+    let rec = u._r3dSig;
+    if (rec && rec.hashFor === sig) return rec.hash;
+    let h = 2166136261 | 0;
+    for (let i = 0; i < sig.length; i++) h = Math.imul(h ^ sig.charCodeAt(i), 16777619);
+    // Exact in a float32: 24 bits.
+    h = (h >>> 0) & 0xffffff;
+    if (rec) { rec.hashFor = sig; rec.hash = h; }
+    return h;
+}
+
+function _simRenderSlotOf(u) {
+    let R = _simRenderSlots, slot = u._rslot;
+    if (slot !== undefined && R.owner[slot] === u) return slot;
+    slot = R.free.length ? R.free.pop() : R.owner.length;
+    R.owner[slot] = u;
+    u._rslot = slot;
+    return slot;
+}
+
+function simUnitVisEncode() {
+    let n = units.length, S = SIM_UNIT_VIS_STRIDE;
+    let out = new Float32Array(n * S);
+    let R = _simRenderSlots;
+    let stampTick = ++R.tick;
+    if (R.stamp.length < R.owner.length + n) { let grown = new Int32Array((R.owner.length + n) * 2); grown.set(R.stamp); R.stamp = grown; }
+    for (let i = 0; i < n; i++) {
+        let u = units[i], o = i * S;
+        if (u.dead) { out[o + 8] = -1; continue; }
+        let slot = _simRenderSlotOf(u);
+        if (R.stamp.length <= slot) { let grown = new Int32Array((slot + 1) * 2); grown.set(R.stamp); R.stamp = grown; }
+        R.stamp[slot] = stampTick;
+        out[o + 8] = slot;
+        out[o + 9] = u.x; out[o + 10] = u.y; out[o + 11] = u.prevX; out[o + 12] = u.prevY;
+        out[o + 13] = u.id;
+        if (u.isSnake) {
+            let act = getUnit3DActivity(u);
+            out[o] = 0; out[o + 1] = 0;
+            out[o + 2] = Math.atan2(Number(u.vx) || 0, Number(u.vy) || 1);
+            out[o + 3] = 0; out[o + 4] = 0;
+            out[o + 5] = _simUnitStatusCode[getUnit3DStatusState(u, act)] || 0;
+        } else {
+            let activity = getUnit3DActivity(u);
+            if (activity.mode !== 0 || activity.amount > 0 || u._visStill === undefined) u._visStill = gameTime;
+            activity = _unit3DIdleActivity(u, activity, u._visStill);
+            let fx = Number(u.vx) || 0, fy = Number(u.vy) || 0;
+            if (activity.target && Number.isFinite(activity.target.x) && Number.isFinite(activity.target.y)) {
+                fx = activity.target.x - u.x; fy = activity.target.y - u.y;
+            }
+            out[o] = activity.mode;
+            out[o + 1] = Math.max(0, Math.min(1, activity.amount || Math.min(1, Math.hypot(u.x - u.prevX, u.y - u.prevY) / Math.max(.01, TILE * .025)) || 0));
+            out[o + 2] = Math.atan2(fx, fy || 0.0001) || 0;
+            _unit3DWalkPhaseLinear(u, activity, _simVisPhase);
+            out[o + 3] = _simVisPhase[0]; out[o + 4] = _simVisPhase[1];
+            out[o + 5] = _simUnitStatusCode[getUnit3DStatusState(u, activity)] || 0;
+        }
+        out[o + 6] = getVisualUnitSourceLight(u);
+        out[o + 7] = _simSignatureHash(u);
+    }
+    // Slots of units no longer in the list are free again.
+    for (let slot = 0; slot < R.owner.length; slot++) {
+        if (R.owner[slot] && R.stamp[slot] !== stampTick) { R.owner[slot] = null; R.free.push(slot); }
+    }
+    return out;
 }
