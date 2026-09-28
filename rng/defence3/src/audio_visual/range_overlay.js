@@ -101,8 +101,9 @@ function getRenderRangeBoundary(selectedBuildings, selected) {
     // union between ticks; selection mode remains immediately responsive.
     if (renderRangeAllTeam && typeof gameTime === 'number') {
         const c = rangeFrameSourcesCache;
-        // Team outlines refresh at most every other tick (10 Hz at 20 TPS).
-        if (c && gameTime >= c.tick && gameTime - c.tick < 2 && c.grid === grid && c.areas === _areaById
+        // Team outlines refresh at most every other tick (10 Hz at 20 TPS),
+        // every fourth with very large armies.
+        if (c && gameTime >= c.tick && gameTime - c.tick < (units.length > 2000 ? 4 : 2) && c.grid === grid && c.areas === _areaById
             && c.units === units && c.towers === towers && c.barracks === barracks
             && c.spawners === collectorSpawners && c.mode === renderRangeMode && c.player === localPlayerId) return c.lines;
         const lines = computeRenderRangeBoundary(selectedBuildings, selected);

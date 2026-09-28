@@ -64,12 +64,12 @@ const renderer = read('src/audio_visual/renderer.js');
 const signatures = new Function(`let RENDERER3D_TOP_TEXTURE_SIZE=128, gameTime=0;
     let shouldShowBuildingLevels=()=>false, shouldShowUnitLevels=()=>false;
     ${renderer.slice(renderer.indexOf('function quantize3DExactRatio'), renderer.indexOf('function get3DExact2DCapture'))}
-    return {get3DExact2DVisualSignature, renderer3dVisualSignatures};`)();
+    return {get3DExact2DVisualSignature};`)();
 const entity = {unitType:'norm',energy:10,preComputed:{maxEnergy:10}};
 const key = signatures.get3DExact2DVisualSignature(entity, true);
-const entry = signatures.renderer3dVisualSignatures.get(entity);
+const entry = entity._r3dSig;
 signatures.get3DExact2DVisualSignature(entity, true);
-assert.equal(signatures.renderer3dVisualSignatures.get(entity),entry,'unchanged visuals reuse the key entry');
+assert.equal(entity._r3dSig,entry,'unchanged visuals reuse the key entry');
 entity.energy = 5;
 assert.notEqual(signatures.get3DExact2DVisualSignature(entity,true),key,'damage invalidates panel immediately');
 

@@ -436,7 +436,8 @@ function quantize3DExactRatio(value, maximum) {
     return Math.round(Math.max(0, Math.min(1, (Number(value) || 0) / maximum)) * RENDERER3D_TOP_TEXTURE_SIZE);
 }
 
-const renderer3dVisualSignatures = new WeakMap();
+// Each entity's last visual signature lives on it (entity._r3dSig): a
+// property read instead of a WeakMap lookup per visible entity.
 const renderer3dSignatureScratch = [];
 
 function get3DExact2DVisualSignature(entity, isUnit = false) {
@@ -484,7 +485,7 @@ function get3DExact2DVisualSignature(entity, isUnit = false) {
     values[n++] = entity.researcherHasMaterial ? 1 : 0;
     // Keep the interned key when visual inputs are unchanged. Joining and
     // hashing a long key for every visible unit dominated zoomed-out frames.
-    let previous = renderer3dVisualSignatures.get(entity);
+    let previous = entity._r3dSig;
     if (previous && previous.isUnit === isUnit) {
         let same = true, stored = previous.values;
         for (let i = 0; i < n; i++) if (values[i] !== stored[i]) { same = false; break; }
@@ -492,7 +493,7 @@ function get3DExact2DVisualSignature(entity, isUnit = false) {
     }
     let stored = values.slice(0, n);
     let signature = stored.join('|');
-    renderer3dVisualSignatures.set(entity, { isUnit, values: stored, signature });
+    entity._r3dSig = { isUnit, values: stored, signature };
     return signature;
 }
 
@@ -625,17 +626,17 @@ function get3DExact2DTexture(entity, useUnitBudget = false) {
 // a few frames stale), else for units the plain 2D body at the same framing,
 // shared by every unit of that type, owner and footprint. The version tells
 // whether the previous panel's canvas was since recycled for another.
-const renderer3dLastExactTextures = new WeakMap();
+// Kept on the entity (entity._r3dTex), as the signature above.
 
 function _rememberExact2DTexture(entity, panel) {
-    let last = renderer3dLastExactTextures.get(entity);
-    if (!last) renderer3dLastExactTextures.set(entity, last = {});
+    let last = entity._r3dTex;
+    if (!last) entity._r3dTex = last = { panel: null, version: 0 };
     last.panel = panel;
     last.version = panel._textureVersion;
 }
 
 function get3DExact2DFallbackTexture(entity, isUnit) {
-    let previous = renderer3dLastExactTextures.get(entity);
+    let previous = entity._r3dTex;
     if (previous && previous.panel._textureVersion === previous.version) {
         _touch3DPanel(previous.panel);
         return previous.panel;
@@ -1350,7 +1351,16 @@ function push3DRenderObject(target, object) {
         historyGhost: remembered,
         shadowDirX: Number.isFinite(object.shadowDirX) ? Number(object.shadowDirX) : shadowDirX,
         shadowDirZ: Number.isFinite(object.shadowDirZ) ? Number(object.shadowDirZ) : shadowDirZ,
-        shadowLength: Math.max(0.6, Math.min(2.4, Number(object.shadowLength) || (1 + (1 - lightLevel) * 0.9)))
+        shadowLength: Math.max(0.6, Math.min(2.4, Number(object.shadowLength) || (1 + (1 - lightLevel) * 0.9))),
+        // The 3D renderer's own per-object caches, declared here so every
+        // render object has one shape (fast property reads in its loops).
+        _r3dGroupKey: undefined, _r3dGroupFigure: undefined, _r3dKind: undefined, _r3dKindModel: undefined, _r3dKindWeapon: undefined,
+        _r3dLod: false, _r3dPick: null,
+        _iRot: NaN, _iCos: 1, _iSin: 0, _iTint: undefined, _iRgb: null, _iSide: undefined, _iSideRgb: null,
+        // Unit layer: position at the tick, offset back to the previous
+        // tick, walk phase rate and flyer bob (see UNIT LAYER).
+        _cx: 0, _cz: 0, _pdx: 0, _pdz: 0, _phaseRate: 0, _flyOn: 0, _flySeed: 0, _layerTop: -1,
+        _iAtlasKey: undefined, _iAtlasOk: false
     });
 }
 
@@ -1798,7 +1808,75 @@ const renderer3dOccupiedTiles = {
     has(key) { return this.stamps[key] === this.stamp; }
 };
 
-const renderer3dUnitObjects = new WeakMap();
+// A unit's cached 3D object lives on the unit itself (u._r3d: a property
+// read instead of a WeakMap lookup per unit per frame; not simulation state).
+
+// Full unit object rebuilds per unit, in ticks (see build3DFrameData): at
+// least every 3 ticks, and with big armies so that about 1000 units rebuild
+// per tick (panel contents such as health bars then lag a little more;
+// facing, activity and status icons still update every tick).
+const UNIT_3D_REBUILD_TICKS_MIN = 3;
+let UNIT_3D_REBUILD_TICKS = UNIT_3D_REBUILD_TICKS_MIN;
+
+// UNIT LAYER (3D)
+// Between ticks a unit's 3D object changes only by interpolation: its
+// position (a straight line from the previous tick's), its walk cycle
+// (linear in time) and a flyer's bob (a sine of time). On a tick (or when
+// the view needs it) the frame builder puts every unit whose object is
+// stable into the layer: the renderer uploads it once, and on the frames
+// until the next tick draws it again with the interpolation done on the GPU
+// (see renderer3d.js, drawUnitLayer), so those frames skip the per-unit work.
+// Units whose look changes within a tick (damage flash, a panel not ready
+// yet, transparency) stay on the per-frame path. ?unitlayer=0 disables it.
+const RENDERER3D_UNIT_LAYER_ENABLED = (() => {
+    try { return new URLSearchParams(location.search).get('unitlayer') !== '0'; } catch { return true; }
+})();
+let renderer3dUnitLayer = null;
+let renderer3dUnitLayerVersion = 0;
+// Frames that reused the layer / built it, and why a build was needed.
+const renderer3dUnitLayerStats = { reuse: 0, build: 0, why: {} };
+// Period of the flyer bob's time argument (2.2 rad per second of game time).
+const UNIT_LAYER_FLY_PERIOD = Math.PI * 2 / 2.2 * 1000;
+
+// _unit3DWalkPhase as base + rate * tickAlpha (exact where it is linear).
+function _unit3DWalkPhaseLinear(u, activity, out) {
+    if (activity.mode === 1) {
+        let b = (8 - Number(u.attackFlash || 0)) / 8;
+        if (b >= 1) { out[0] = Math.PI; out[1] = 0; }
+        else if (b <= -1 / 8) { out[0] = 0; out[1] = 0; }
+        else { out[0] = Math.max(0, b) * Math.PI; out[1] = Math.PI / 8; }
+        return out;
+    }
+    let speed = activity.mode === 2 ? 8 : activity.mode === 4 ? 14 : activity.mode === 7 ? 2 : 10;
+    out[0] = gameTime / TICK_RATE * speed + (Number(u.id) || 0) * 2.399;
+    out[1] = speed / TICK_RATE;
+    return out;
+}
+const _unitLayerPhase = [0, 0];
+
+// Whether a unit's object can be drawn from the layer until the next tick.
+function _unitLayerEligible(u, cached, o) {
+    return !!(cached && cached.object === o && !cached.dynamic && !getDamageFlashState(u) && o.alpha >= 0.999
+        && o.topTextureCanvas && !u._historyGhost);
+}
+
+// Per-tick part of a unit's 3D object, between full rebuilds: activity,
+// facing and movement, and the status icon (as the rebuild computes them).
+function _refreshUnit3DObject(u, o, cached) {
+    cached.refreshTick = gameTime;
+    let activity = getUnit3DActivity(u);
+    if (activity.mode !== 0 || activity.amount > 0) cached.stillSince = gameTime;
+    activity = _unit3DIdleActivity(u, activity, cached.stillSince);
+    cached.activity = activity;
+    let facingX = Number(u.vx) || 0, facingY = Number(u.vy) || 0;
+    if (activity.target && Number.isFinite(activity.target.x) && Number.isFinite(activity.target.y)) {
+        facingX = activity.target.x - u.x; facingY = activity.target.y - u.y;
+    }
+    o.rotationY = Math.atan2(facingX, facingY || 0.0001) || 0;
+    o.moveAmount = Math.max(0, Math.min(1, activity.amount || Math.min(1, Math.hypot(u.x - u.prevX, u.y - u.prevY) / Math.max(.01, TILE * .025)) || 0));
+    o.animationMode = Math.max(0, Math.min(7, Math.floor(Number(activity.mode) || 0)));
+    o.statusTextureCanvas = u._historyGhost ? null : (get3DStatusTexture(getUnit3DStatusState(u, activity)) || null);
+}
 
 function _unit3DWalkPhase(u, activity) {
     return activity.mode === 1
@@ -2043,8 +2121,42 @@ function build3DFrameData(flat2d = false) {
         });
     };
 
+    UNIT_3D_REBUILD_TICKS = Math.max(UNIT_3D_REBUILD_TICKS_MIN, Math.min(8, Math.ceil(units.length / 1000)));
+    // The unit layer: reused from its tick, or built this frame.
+    let unitLayer = null, layerReuse = false, previousOccupied = null;
+    if (!flat2d && RENDERER3D_UNIT_LAYER_ENABLED && renderer3dInstance
+        && !(graphicsOptions && graphicsOptions.shadows === 'simple')) {
+        let L = renderer3dUnitLayer;
+        layerReuse = !!(L && L.tick === gameTime && L.view === view3DKey && L.fullVis === fullVisibility && L.player === localPlayerId
+            && L.units === units && L.unitCount === units.length
+            && bounds.minGx >= L.bounds.minGx && bounds.maxGx <= L.bounds.maxGx && bounds.minGy >= L.bounds.minGy && bounds.maxGy <= L.bounds.maxGy);
+        if (layerReuse) { unitLayer = L; renderer3dUnitLayerStats.reuse++; }
+        else {
+            if (L && L.occupied && L.view === view3DKey) previousOccupied = L.occupied;
+            renderer3dUnitLayerStats.build++;
+            let why = !L ? 'none' : L.tick !== gameTime ? 'tick' : L.view !== view3DKey ? 'view' : L.units !== units || L.unitCount !== units.length ? 'units'
+                : L.fullVis !== fullVisibility || L.player !== localPlayerId ? 'player' : 'bounds';
+            renderer3dUnitLayerStats.why[why] = (renderer3dUnitLayerStats.why[why] || 0) + 1;
+            // A margin around the view, so panning between ticks keeps it.
+            let mx = Math.max(4, Math.ceil((bounds.maxGx - bounds.minGx) * 0.3)), my = Math.max(4, Math.ceil((bounds.maxGy - bounds.minGy) * 0.3));
+            unitLayer = renderer3dUnitLayer = {
+                tick: gameTime, view: view3DKey, fullVis: fullVisibility, player: localPlayerId, units, unitCount: units.length,
+                bounds: { minGx: bounds.minGx - mx, maxGx: bounds.maxGx + mx, minGy: bounds.minGy - my, maxGy: bounds.maxGy + my },
+                objects: [], occupied: [], perFrame: [], motion: [], version: ++renderer3dUnitLayerVersion
+            };
+        }
+    } else renderer3dUnitLayer = null;
+    let layerBuilding = !!(unitLayer && !layerReuse);
+    let unitBounds = layerBuilding ? unitLayer.bounds : bounds;
+    // With the layer, occupied tiles are collected in the unit pass below;
+    // structures (drawn first) use the layer's, a tick old on build frames.
+    if (layerReuse) {
+        for (let k of unitLayer.occupied) unitOccupiedTileKeys.add(k);
+    } else if (layerBuilding && previousOccupied) {
+        for (let k of previousOccupied) unitOccupiedTileKeys.add(k);
+    }
     // Occupied tiles lower structures in 3D; flat sprites do not overlap-fade.
-    if (!flat2d) for (let u of units) {
+    if (!flat2d && !unitLayer) for (let u of units) {
         if (u.dead) continue;
         let ux = u.prevX + (u.x - u.prevX) * alpha;
         let uy = u.prevY + (u.y - u.prevY) * alpha;
@@ -2333,14 +2445,55 @@ function build3DFrameData(flat2d = false) {
     }
 
     if (flat2d) drainFlatObjects();
-    for (let u of units) {
+    // Units already in the reused layer need only their panels kept alive
+    // and their motion effects (a few unit types) at this frame's position.
+    if (layerReuse) {
+        for (let o of unitLayer.objects) _touch3DPanel(o.topTextureCanvas);
+        for (let m of unitLayer.motion) {
+            let u = m.u;
+            if (u.dead) continue;
+            let x = (u.prevX + (u.x - u.prevX) * alpha) / TILE + reactiveOffsetX * m.audioMove;
+            let z = (u.prevY + (u.y - u.prevY) * alpha) / TILE + reactiveOffsetY * m.audioMove;
+            pushUnitMotionFx(u, x, z, m.footprint, m.scaleY);
+        }
+    }
+    // A unit's object moves into the layer being built when it is stable
+    // until the next tick; the rest stay on the per-frame path.
+    let layerCollect = (u, footprint, audioMove) => {
+        let o = objects[objects.length - 1];
+        let cached = u._r3d;
+        if (!_unitLayerEligible(u, cached, o)) {
+            unitLayer.perFrame.push(u);
+            return;
+        }
+        objects.pop();
+        let cx = u.x / TILE + reactiveOffsetX * audioMove, cz = u.y / TILE + reactiveOffsetY * audioMove;
+        o.x = o._cx = cx; o.z = o._cz = cz;
+        o._pdx = (u.prevX - u.x) / TILE; o._pdz = (u.prevY - u.y) / TILE;
+        if (cached.snake) { o._phaseRate = 0; o._flyOn = 0; o._flySeed = 0; }
+        else {
+            _unit3DWalkPhaseLinear(u, cached.activity, _unitLayerPhase);
+            o.walkPhase = _unitLayerPhase[0]; o._phaseRate = _unitLayerPhase[1];
+            o.y = cached.baseY + (u.isFlying ? (u.isWorker ? .36 : .30) : 0);
+            o._flyOn = u.isFlying ? 1 : 0;
+            o._flySeed = ((Number(u.id) || 0) * 1.7) % (Math.PI * 2);
+        }
+        // Lit where it is at the tick (the light grid changes on ticks).
+        _relight3DObject(o, u, cached.tint, cached.sideTint, false, cached.sourceLight);
+        unitLayer.objects.push(o);
+        if (u.isSnake || u.unitType === 'tank' || u.unitType === 'boss' || u.unitType === 'king') {
+            unitLayer.motion.push({ u, footprint, scaleY: o.scaleY, audioMove });
+        }
+    };
+    for (let u of (layerReuse ? unitLayer.perFrame : units)) {
         if (flat2d) drainFlatObjects();
         if (u.dead) continue;
         let ux = u.prevX + (u.x - u.prevX) * alpha;
         let uy = u.prevY + (u.y - u.prevY) * alpha;
         let ugx = Math.floor(ux / TILE), ugy = Math.floor(uy / TILE);
-        if (ugx < bounds.minGx - 1 || ugx > bounds.maxGx + 1 || ugy < bounds.minGy - 1 || ugy > bounds.maxGy + 1) continue;
+        if (ugx < unitBounds.minGx - 1 || ugx > unitBounds.maxGx + 1 || ugy < unitBounds.minGy - 1 || ugy > unitBounds.maxGy + 1) continue;
         if (!fullVisibility && (!visibilityGrid[ugy] || visibilityGrid[ugy][ugx] === 0)) continue;
+        if (layerBuilding) unitLayer.occupied.push(ugy * GRID_W + ugx);
         let bgSoundRow = bgSoundGrid[ugy];
         let fxSoundRow = fxSoundGrid[ugy];
         let bgLevel = bgSoundRow ? bgSoundRow[ugx] || 0 : 0;
@@ -2350,22 +2503,70 @@ function build3DFrameData(flat2d = false) {
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
         if (u.isSnake) {
+            // As units below: between ticks only the position and lighting
+            // of the cached head object change.
+            let cached = u._r3d;
+            let cachedAge = cached ? gameTime - cached.tick : -1;
+            if (cached && cached.snake && (cachedAge === 0 || (cachedAge < UNIT_3D_REBUILD_TICKS && ((u.id + gameTime) % UNIT_3D_REBUILD_TICKS) !== 0))
+                && cached.view === view3DKey && !cached.dynamic && !getDamageFlashState(u)
+                && (cached.object.topTextureCanvas || {})._textureVersion === cached.textureVersion) {
+                let o = cached.object;
+                _touch3DPanel(o.topTextureCanvas);
+                if (cached.refreshTick !== gameTime) {
+                    cached.refreshTick = gameTime;
+                    o.rotationY = Math.atan2(Number(u.vx) || 0, Number(u.vy) || 1);
+                    o.statusTextureCanvas = u._historyGhost ? null : get3DStatusTexture(getUnit3DStatusState(u, getUnit3DActivity(u)));
+                }
+                o.x = (ux + reactiveOffsetX * audioMove * TILE) / TILE;
+                o.z = (uy + reactiveOffsetY * audioMove * TILE) / TILE;
+                if (cached.sourceLightTick !== gameTime || cached.sourceLightPlayer !== localPlayerId) {
+                    cached.sourceLight = getVisualUnitSourceLight(u);
+                    cached.sourceLightTick = gameTime;
+                    cached.sourceLightPlayer = localPlayerId;
+                }
+                _relight3DObject(o, u, cached.tint, cached.sideTint, !!objects.flat2d, cached.sourceLight);
+                objects.push(o);
+                if (!flat2d) pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
+                if (layerBuilding) layerCollect(u, footprint, audioMove);
+                continue;
+            }
             pushSnakeRenderObjects(objects, u, ux + reactiveOffsetX * audioMove * TILE, uy + reactiveOffsetY * audioMove * TILE, footprint);
             let head = objects[objects.length - 1];
+            u._r3d = { snake: true, object: head, tick: gameTime, refreshTick: gameTime, view: view3DKey, tint: head.baseTint, sideTint: head.baseSideTint,
+                textureVersion: head.topTextureCanvas && head.topTextureCanvas._textureVersion,
+                dynamic: !head.topTextureCanvas || renderer3dExactTextureFallback || !!getDamageFlashState(u) };
             if (!flat2d) pushUnitMotionFx(u, head.x, head.z, footprint, head.scaleY);
+            if (layerBuilding) layerCollect(u, footprint, audioMove);
         } else {
             // Everything but the interpolated position, walk cycle and
             // lighting changes only on ticks: refresh just those.
-            let cached = renderer3dUnitObjects.get(u);
-            // Tick-level data may be one tick old for half of the units (by id),
-            // which halves the rebuild on tick frames.
+            let cached = u._r3d;
+            // A full rebuild (panel texture signature, colours, model) runs
+            // for each unit every UNIT_3D_REBUILD_TICKS ticks, a third of the
+            // units per tick (by id); in between, a cheap per-tick refresh
+            // keeps facing, activity and the status icon current.
             let cachedAge = cached ? gameTime - cached.tick : -1;
-            if (cached && (cachedAge === 0 || (cachedAge === 1 && ((u.id + gameTime) & 1) === 1))
+            if (cached && (cachedAge === 0 || (cachedAge < UNIT_3D_REBUILD_TICKS && ((u.id + gameTime) % UNIT_3D_REBUILD_TICKS) !== 0))
                 && cached.view === view3DKey && !cached.dynamic && !getDamageFlashState(u)
                 && cached.label === (!flat2d && shouldShowUnitLevels(u))
                 && (cached.object.topTextureCanvas || {})._textureVersion === cached.textureVersion) {
                 let o = cached.object;
                 _touch3DPanel(o.topTextureCanvas);
+                if (cached.refreshTick !== gameTime) _refreshUnit3DObject(u, o, cached);
+                if (layerBuilding && _unitLayerEligible(u, cached, o)) {
+                    if (cached.sourceLightTick !== gameTime || cached.sourceLightPlayer !== localPlayerId) {
+                        cached.sourceLight = getVisualUnitSourceLight(u);
+                        cached.sourceLightTick = gameTime;
+                        cached.sourceLightPlayer = localPlayerId;
+                    }
+                    objects.push(o);
+                    layerCollect(u, footprint, audioMove);
+                    // This frame's motion effects (the layer's own start next frame).
+                    if (u.unitType === 'tank' || u.unitType === 'boss' || u.unitType === 'king') {
+                        pushUnitMotionFx(u, ux / TILE + reactiveOffsetX * audioMove, uy / TILE + reactiveOffsetY * audioMove, footprint, o.scaleY);
+                    }
+                    continue;
+                }
                 o.x = ux / TILE + reactiveOffsetX * audioMove;
                 o.z = uy / TILE + reactiveOffsetY * audioMove;
                 o.y = cached.baseY + _unit3DFlightHeight(u, cached.activity);
@@ -2379,6 +2580,7 @@ function build3DFrameData(flat2d = false) {
                 _relight3DObject(o, u, cached.tint, cached.sideTint, !!objects.flat2d, cached.sourceLight);
                 objects.push(o);
                 if (!flat2d) pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
+                if (layerBuilding) layerCollect(u, footprint, audioMove);
                 continue;
             }
             // Mounts (pony, winged horses) carry a rider: larger than a lone figure.
@@ -2429,13 +2631,14 @@ function build3DFrameData(flat2d = false) {
                 statusTextureCanvas: u._historyGhost ? null : get3DStatusTexture(getUnit3DStatusState(u, activity)),
                 sideTint: unitSideTint,
             });
-            renderer3dUnitObjects.set(u, { object: objects[objects.length - 1], tick: gameTime, view: view3DKey, label: !flat2d && shouldShowUnitLevels(u), activity, stillSince, baseY,
+            u._r3d = ({ object: objects[objects.length - 1], tick: gameTime, refreshTick: gameTime, view: view3DKey, label: !flat2d && shouldShowUnitLevels(u), activity, stillSince, baseY,
                 textureVersion: objects[objects.length - 1].topTextureCanvas && objects[objects.length - 1].topTextureCanvas._textureVersion,
                 tint: unitTint, sideTint: unitSideTint, dynamic: !unit2DTexture || unitTextureFallback || !!getDamageFlashState(u) });
             if (!flat2d) {
                 let o = objects[objects.length - 1];
                 pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
             }
+            if (layerBuilding) layerCollect(u, footprint, audioMove);
         }
     }
 
@@ -2455,6 +2658,8 @@ function build3DFrameData(flat2d = false) {
 
     return {
         flat2d,
+        unitLayer: unitLayer ? { version: unitLayer.version, objects: unitLayer.objects, alpha,
+            flyTime: ((gameTime + alpha) / Math.max(1, TICK_RATE)) % UNIT_LAYER_FLY_PERIOD } : null,
         viewportWidth: viewW,
         viewportHeight: viewH,
         viewPad: getRenderViewPad(),
