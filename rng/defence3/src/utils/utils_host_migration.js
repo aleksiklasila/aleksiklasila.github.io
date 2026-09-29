@@ -314,6 +314,7 @@ function promoteSelfToHost(oldHostId, hostLeft) {
         window.history.replaceState({}, '', url.toString());
     } catch { }
     _setLobbyStatus('You are now hosting this match.', '#9f9');
+    if (typeof simClientSyncGlobals === 'function') simClientSyncGlobals();
     saveMatchRecord(true);
     broadcastLobbyState(true);
     updateInfoPanel();
@@ -331,6 +332,7 @@ function demoteSelfToGuest(newHostId) {
     }
     isHost = false;
     wsHostId = hid;
+    if (typeof simClientSyncGlobals === 'function') simClientSyncGlobals();
     lockstepResyncPauseActive = false;
     lockstepResyncPendingAckByPeer = {};
     lockstepResyncSnapshotCache = null;

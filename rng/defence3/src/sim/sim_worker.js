@@ -7,15 +7,17 @@
 // the main thread. Plain importScripts: works from any static host
 // (GitHub Pages included), no special headers.
 //
-// Stage 1 (shadow): the page keeps simulating as before; this worker gets
-// the match start state and every tick's commands, runs the same ticks and
-// reports its state hash per tick, which the page compares with its own.
+// Authority mode (the default): the worker owns the world. Each tick it
+// sends the page the world's frame (sim_frame.js, sim_frame_world.js:
+// transferred buffers the page hands back), side effects, the state hash,
+// the local player's sight and details of the entities the page watches. Shadow mode (?simworker=shadow, sim_shadow.js):
+// the page simulates too, and compares the worker's hash per tick.
 //
-// Messages in:  { type: 'load', scripts: [urls] }
-//               { type: 'start', globals, snapshotText }
-//               { type: 'tick', tick, actions, teams }
-// Messages out: { type: 'loaded', ms } | { type: 'started', tick, hash }
-//               { type: 'ticked', tick, hash, ms } | { type: 'error', where, message, stack }
+// Messages in:  { type: 'load', scripts } | { type: 'start', globals, snapshotText }
+//               { type: 'tick', tick, actions, teams } | { type: 'request', id, op, args }
+//               { type: 'frameReturn', bufs } | { type: 'watch', list: [id, slot, ...] }
+// Messages out: { type: 'loaded' } | { type: 'started', frame } | { type: 'ticked', frame, delta, ... }
+//               { type: 'reply', id, result } | { type: 'error', where, message, stack }
 // ============================================================
 
 // ---- stand-in DOM (the simulation touches a few UI hooks) ----
@@ -107,6 +109,8 @@ function _simError(where, err) {
 
 // ---- side effects the page replays (sounds, flashes, alerts, particles, fx) ----
 let _simEvents = [];
+// Set when the simulation's win check found this player defeated.
+let _simLocalDefeat = '';
 // An entity as the page finds it: ['u', id] or ['b', gx, gy].
 function _simRef(e) {
     if (!e || typeof e !== 'object') return null;
@@ -125,6 +129,8 @@ function _simStubUi() {
         'ensureLevelTextCanvas', 'enterSpectateMode', 'sampleGameStats']) {
         try { if (typeof self.eval(name) === 'function') self.eval(name + ' = ' + '(() => {})'); } catch { }
     }
+    // This player defeated (the win check's spectate mode): the page's to show.
+    self.enterSpectateMode = mode => { _simLocalDefeat = String(mode || 'defeated'); };
     self._simRecordSound = (type, x, y, sub) => { _simEvents.push(['s', type, x, y, sub === undefined ? '' : sub]); };
     self._simRecordDamage = (target, amount, owner) => { let r = _simRef(target); if (r) _simEvents.push(['d', r, amount, owner === undefined ? null : owner]); };
     self._simRecordAlert = (target, dmg, owner) => { let r = _simRef(target); if (r) _simEvents.push(['h', r, dmg, owner]); };
@@ -172,12 +178,13 @@ self.onmessage = (ev) => {
             _simStart(msg);
         } else if (msg.type === 'tick') {
             _simTick(msg);
-        } else if (msg.type === 'flush') {
-            _simFlushOut();
+        } else if (msg.type === 'frameReturn') {
+            // The page is done with these buffers: the next frames reuse them.
+            for (let b of msg.bufs || []) simFrameReturn(b);
+        } else if (msg.type === 'watch') {
+            simFrameWatch(msg.list);
+            simFrameWatchStructures(msg.structures);
         } else if (msg.type === 'request') {
-            // Requests see (and may change) the state the page has: the
-            // ticks run so far go out first.
-            _simFlushOut();
             _simRequest(msg);
         }
     } catch (err) { _simError(msg.type, err); }
@@ -202,9 +209,16 @@ function _simStart(msg) {
     for (let [name, value] of Object.entries(g.assign || {})) self.eval(name + ' = ' + JSON.stringify(value));
     applyAuthoritativeStateSnapshot(JSON.parse(msg.snapshotText));
     _simEvents = [];
-    _simPend = null;
-    if (_simMode === 'authority') simDeltaEncoderReset();
-    _simPost({ type: 'started', epoch: _simEpoch, tick: currentTick, hash: computeLockstepStateHashFast(currentTick) });
+    _simLocalDefeat = '';
+    if (_simMode !== 'authority') {
+        _simPost({ type: 'started', epoch: _simEpoch, tick: currentTick, hash: computeLockstepStateHashFast(currentTick) });
+        return;
+    }
+    simFrameResetAll();
+    // The page's world comes from frames: this one before the first tick.
+    let transfer = [];
+    let world = _simEncodeWorld(transfer);
+    _simPost({ type: 'started', epoch: _simEpoch, tick: currentTick, hash: computeLockstepStateHashFast(currentTick), world }, transfer);
 }
 
 // ---- one tick: the same work runOneTick does, with the page's commands ----
@@ -236,50 +250,57 @@ function _simTick(msg) {
     }
     // The rolling state hash, as every peer records it after a tick.
     let hash = msg.hash ? snapRecordTickHash(tick) : null;
-    let P = _simPend || (_simPend = { first: tick, hashes: [], lock: simReportLockstepHashes ? [] : null, simMs: 0 });
-    P.hashes.push(hash);
-    if (P.lock) P.lock.push(computeLockstepStateHashFast(tick));
-    P.simMs += simMs;
-    // The page groups ticks (out: false on all but a group's last): one
-    // result per group halves or more the encoding and the page's work.
-    if (msg.out === false) return;
-    _simFlushOut();
+    let report = typeof simTickReportHook === 'function' ? simTickReportHook(tick) : null;
+    _simPostResult(tick, hash, simReportLockstepHashes ? [computeLockstepStateHashFast(tick)] : null, simMs, report);
 }
 
-// Ticks run but not yet sent to the page.
-let _simPend = null;
-// Tests: each tick's lockstep hash goes out too (the page's copy is only
-// current at a group's last tick).
+// Tests: each tick's lockstep hash goes out too, and what the hook reports.
 let simReportLockstepHashes = false;
+let simTickReportHook = null;
 
-// The result of the ticks run since the last one: the changes over all of
-// them, their hashes and events, and the current visuals.
-function _simFlushOut() {
-    let P = _simPend;
-    if (!P || _simMode !== 'authority') { _simPend = null; return; }
-    _simPend = null;
-    let tick = currentTick - 1;
-    let hash = P.hashes[P.hashes.length - 1];
-    let simMs = P.simMs;
+// Everything the page shows of the world, as of now: the tables (units,
+// structures, projectiles; their buffers go in `transfer`), the state and
+// details of the entities the page watches.
+function simFrameResetAll() {
+    simFrameReset();
+    _simStructSlots.reset();
+    _simProjSlots.reset();
+    simFrameResetState();
+}
+function _simEncodeWorld(transfer) {
+    let w = {};
+    try { w.units = simFrameEncode(); transfer.push(w.units.buf); } catch (err) { _simError('frame', err); }
+    try { w.structures = simFrameEncodeStructures(); transfer.push(w.structures.buf); } catch (err) { _simError('structures', err); }
+    try { w.projectiles = simFrameEncodeProjectiles(); transfer.push(w.projectiles.buf); } catch (err) { _simError('projectiles', err); }
+    try { w.state = simFrameEncodeState(); } catch (err) { _simError('state', err); }
+    try { w.details = simFrameDetails(); w.structureDetails = simFrameStructureDetails(); } catch (err) { _simError('details', err); }
+    // Codes the tables introduced (after all of them).
+    let S = _simFrameStrings;
+    if (S.sent < S.list.length) { w.strings = [S.sent, S.list.slice(S.sent)]; S.sent = S.list.length; }
+    return w;
+}
+
+// The tick's result: the world frame, the hash, side effects and the local
+// player's sight.
+function _simPostResult(tick, hash, lock, simMs, report = null) {
     let t1 = performance.now();
-    let delta = simDeltaEncode();
     let transfer = [];
-    for (let list in delta.hot) { let h = delta.hot[list]; transfer.push(h.v.buffer, h.k.buffer, h.idx.buffer, h.mask.buffer); }
+    let world = _simEncodeWorld(transfer);
     let events = _simEvents;
     _simEvents = [];
-    // Per-unit visual records for the page's 3D unit layer.
-    let vis = null;
-    try { vis = simUnitVisEncode(P.hashes.length); transfer.push(vis.buffer); } catch (err) { _simError('vis', err); }
     // The local player's raw visibility grid (computed here anyway): the
-    // page uses it instead of computing its own.
+    // page uses it instead of computing its own. (A pooled buffer.)
     let sight = null;
     try {
-        let rows = getRawVisibilityGridForPlayer(localPlayerId);
-        sight = new Float32Array(GRID_W * GRID_H);
+        // The grid this tick computed (asking for it now would compute the
+        // next tick's: the clock has moved on).
+        let rows = visibilityGridRawByPlayerCache.get(localPlayerId) || getRawVisibilityGridForPlayer(localPlayerId), n = GRID_W * GRID_H;
+        let buf = _simFrameAcquireExact(n * 4);
+        sight = new Float32Array(buf, 0, n);
         for (let y = 0; y < GRID_H; y++) if (rows[y]) sight.set(rows[y], y * GRID_W);
-        transfer.push(sight.buffer);
+        transfer.push(buf);
     } catch (err) { sight = null; _simError('sight', err); }
-    _simPost({ type: 'ticked', epoch: _simEpoch, tick, first: P.first, count: P.hashes.length, delta, hash, hashes: P.hashes, lockHashes: P.lock, events, vis, sight, sightPlayer: localPlayerId, simMs, encodeMs: performance.now() - t1 }, transfer);
+    _simPost({ type: 'ticked', epoch: _simEpoch, tick, world, hash, lockHashes: lock, events, sight, sightPlayer: localPlayerId, simMs, encodeMs: performance.now() - t1, report }, transfer);
 }
 
 // ---- requests the page's network code needs in tick order ----
@@ -294,14 +315,12 @@ function _simRequest(msg) {
         case 'encodeState':
             result = { state: snapEncodeState(), gameTime };
             break;
-        // Guest: a resync patch before the next tick; the page's copy applies
-        // the same text at the same point of the stream.
+        // Guest: a resync patch before the next tick. (The page sees its
+        // effects in the next frame and records.)
         case 'applyPatch': {
-            // As applyResyncPatch does on the page, at the same point.
             snapDecodeState(JSON.parse(msg.args.text), { collectChanges: !msg.args.full });
             visibilityCacheTick = -1;
             updateVisibility(localPlayerId);
-            simDeltaEncoderReset();
             break;
         }
         // A whole-state restore; results before it belong to the old epoch.
@@ -311,14 +330,11 @@ function _simRequest(msg) {
             applyAuthoritativeStateSnapshot(snap);
             _simEpoch = msg.args.epoch;
             _simEvents = [];
-            simDeltaEncoderReset();
+            _simLocalDefeat = '';
+            // The page's world comes whole with the next frame.
+            simFrameResetAll();
             break;
         }
-        // The page's copy differs: the whole state, for it to reload.
-        case 'replicaState':
-            _simPost({ type: 'replicaState', epoch: _simEpoch, tick: currentTick - 1, text: JSON.stringify(snapEncodeState()) });
-            simDeltaEncoderReset();
-            break;
         case 'setGlobals':
             for (let [name, value] of Object.entries(msg.args.assign || {})) self.eval(name + ' = ' + JSON.stringify(value));
             break;

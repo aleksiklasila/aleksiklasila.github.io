@@ -134,7 +134,7 @@ assert.equal(resumed.length, 216);
 assert.ok(deferred._isPathValidForScenario(resumed, 145, 85, 5, 10, false, null, 0, true));
 
 const unitGrid = Array.from({ length: 100 }, () => Array.from({ length: 160 }, () => ({ type: 0 })));
-const unitContext = vm.createContext({ TILE: 32, GRID_W: 160, GRID_H: 100, TYPE_WALL: 1, grid: unitGrid });
+const unitContext = vm.createContext({ TILE: 32, GRID_W: 160, GRID_H: 100, TYPE_WALL: 1, grid: unitGrid, pathTopologyVersion: 1 });
 vm.runInContext(read('src/utils/utils_common.js'), unitContext);
 vm.runInContext(read('src/things/unit.js'), unitContext);
 

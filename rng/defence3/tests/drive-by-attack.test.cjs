@@ -18,6 +18,7 @@ const context = {
     isWorldTargetWithinAreaRange: (sx, sy, tx, ty, max) => max >= 0,
     getSourceAreaIdsAtWorld: () => [0],
     getAreaIdsWithinDistanceOfSources: () => [0],
+    getAreaRangeTileBox: () => [0, 0, 0, 0], hasHostileStructureInTileRect: () => true,
     gridCellsByArea: [[{ x: 0, y: 0 }]],
     getStructuresByArea: () => [context.towers.slice()],
     getTowerAtTile: (x, y) => context.towers.find(t => t.gx === x && t.gy === y) || null,

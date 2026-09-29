@@ -186,7 +186,10 @@ async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
             corruptAt.shift();
             const victim = guests[Math.floor(rand() * guests.length)];
             corruptTicks.push({ victim: victim.name, tick: victim.eval('currentTick') - 1 });
-            victim.evalSim(`(() => { const u = units.find(u => !u.dead); if (u) { u.x += 11; u.energy = Math.max(1, u.energy - 5); } })()`);
+            // The healthiest unit (lowest id on ties): a unit about to die
+            // anyway can take the divergence with it before any hash shows it.
+            victim.evalSim(`(() => { let u = null; for (const c of units) if (!c.dead && (!u || c.energy > u.energy)) u = c;
+                if (u) { u.x += 11; u.energy = Math.max(1, u.energy - 5); } })()`);
         }
         for (const t of JSON.parse(host.eval('JSON.stringify([...new Set(units.map(u => u.unitType))])'))) unitTypesSeen.add(t);
         maxUnits = Math.max(maxUnits, host.eval('units.length'));

@@ -86,7 +86,8 @@ const HISTORY_LISTS = ['units', 'towers', 'barracks', 'collectorSpawners', 'gold
 
 function freezeHistoryRecord(record) {
     const source = record.source;
-    const copy = Object.create(Object.getPrototypeOf(source));
+    // (A unit view reads the frame: its ghost is a plain unit.)
+    const copy = Object.create(source._frameView ? Object.getPrototypeOf(Object.getPrototypeOf(source)) : Object.getPrototypeOf(source));
     for (const key of HISTORY_RENDER_FIELDS) copy[key] = source[key];
     // Only small rendering data is copied, once on disappearance. No paths,
     // targets, spatial buckets, canvases or recursively reachable world state.

@@ -86,6 +86,10 @@ function hudViolations(inst, pid) {
     return out;
 }
 
+// The tick the page's copy of the state is at: with the simulation worker the
+// lockstep counter (currentTick) runs ahead of the results applied so far.
+const stateTick = inst => inst.eval(`typeof simClientActive === 'function' && simClientActive() ? _simClient.appliedTick + 1 : currentTick`);
+
 function assertValid(all, pids, label) {
     for (const inst of all) for (const pid of pids) {
         assert.deepEqual(invariantViolations(inst, pid), [], `${label}: ${inst.name} player ${pid}`);
@@ -96,7 +100,7 @@ function assertValid(all, pids, label) {
         // agreement of every field is covered by the harness hash.
         for (const inst of all.slice(1)) {
             const other = tasksOf(inst, pid);
-            if (inst.eval('currentTick') === all[0].eval('currentTick')) assert.deepEqual(other, ref, `${label}: ${inst.name} sees player ${pid}'s queue`);
+            if (stateTick(inst) === stateTick(all[0])) assert.deepEqual(other, ref, `${label}: ${inst.name} sees player ${pid}'s queue`);
         }
     }
 }

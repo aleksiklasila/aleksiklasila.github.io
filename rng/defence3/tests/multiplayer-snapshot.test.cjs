@@ -59,7 +59,7 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
         assert.ok(ok, 'full patch arrived over the compressed transport');
         assert.deepEqual(g.scratch.kinds.slice(0, 2), ['delta:z', 'full:z']);
         const bytes = g.eval('netCounters.snapshotBytes');
-        const json = m.host.eval('JSON.stringify(snapEncodeState()).length');
+        const json = m.host.evalSim('JSON.stringify(snapEncodeState()).length');
         assert.ok(bytes > 0 && bytes < json / 3, `compressed ${bytes} of ${json}`);
         assert.equal(g.snapshotsApplied, snapshots0, 'no match-wide resync');
         assert.equal(m.host.patchesApplied + m.host.snapshotsApplied, 1, 'host restored nothing after the start');

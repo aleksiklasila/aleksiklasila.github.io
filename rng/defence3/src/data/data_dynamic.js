@@ -301,7 +301,7 @@ function normalizeStartingResourcesConfig(rawCfg) {
             if (typeof countMap === 'object' && countMap !== null) {
                 for (let levelText in countMap) {
                     let level = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(levelText) || 0)));
-                    let count = Math.max(0, Math.min(1000, Math.floor(Number(countMap[levelText]) || 0)));
+                    let count = Math.max(0, Math.min(10000, Math.floor(Number(countMap[levelText]) || 0)));
                     if (!out.spawnCounts[id]) out.spawnCounts[id] = {};
                     if (count > 0) out.spawnCounts[id][level] = count;
                 }
@@ -359,7 +359,7 @@ function setStartingResearchLevel(thingId, statKey, value) {
 
 function setStartingSpawnCount(thingId, level, value) {
     let lvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(level) || 1)));
-    let count = Math.max(0, Math.min(1000, Math.floor(Number(value) || 0)));
+    let count = Math.max(0, Math.min(10000, Math.floor(Number(value) || 0)));
     if (!startingResourcesConfig.spawnCounts[thingId]) startingResourcesConfig.spawnCounts[thingId] = {};
     if (count <= 0) {
         delete startingResourcesConfig.spawnCounts[thingId][lvl];

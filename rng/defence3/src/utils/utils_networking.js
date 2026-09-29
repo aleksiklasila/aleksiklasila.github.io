@@ -445,43 +445,56 @@ function _startHostResyncPause(reason = '', includeConfig = false, options = {})
         includeStaticMapState: Object.keys(fullSyncByPeer).length > 0,
         includeGridTypes: true
     });
-    let text = JSON.stringify(snapshot);
-    netCounters.snapshotBuildMs = performance.now() - t0;
-    // The host restores from the exact text the peers receive, so everyone
-    // starts from identical state, including anything the snapshot rounds.
-    let applyStart = performance.now();
-    applyAuthoritativeStateSnapshot(JSON.parse(text));
-    netCounters.snapshotApplyMs = performance.now() - applyStart;
-    netCounters.hardResyncs++;
-    netCounters.lastSnapshotAt = now;
 
     let ackMap = {};
     for (let c of connections) {
         if (c && c.peer && !isPeerExplicitlyRemoved(c.peer)) ackMap[String(c.peer)] = false;
     }
-    lockstepResyncPauseActive = true;
-    lockstepResyncSessionId = sessionId;
-    lockstepResyncPendingAckByPeer = ackMap;
-    lockstepResyncRequestedAt = now;
-    lockstepResyncDeadlineAt = now + 20000;
-    waitingForRemoteSince = now;
-    lockstepResyncSnapshotCache = { sessionId, tick: currentTick, payload: null, text, sentTo: new Set(), fullSyncByPeer: { ...fullSyncByPeer } };
-    logLockstepWarning('Host resynchronizing match', { tick: currentTick, reason: String(reason || ''), bytes: text.length });
-
+    // Paused from here: no tick runs until every peer restored the snapshot.
+    // (Set again once the host restored it: a restore resets the lockstep.)
+    let cache = { sessionId, tick: currentTick, payload: null, text: null, sentTo: new Set(), fullSyncByPeer: { ...fullSyncByPeer } };
+    let pause = () => {
+        lockstepResyncPauseActive = true;
+        lockstepResyncSessionId = sessionId;
+        lockstepResyncPendingAckByPeer = ackMap;
+        lockstepResyncRequestedAt = now;
+        lockstepResyncDeadlineAt = now + 20000;
+        waitingForRemoteSince = now;
+        lockstepResyncSnapshotCache = cache;
+    };
+    pause();
     _broadcastResyncPauseState(true, sessionId, reason);
-    netEncodeSnapshotText(text).then(payload => {
-        let cache = lockstepResyncSnapshotCache;
-        if (!cache || cache.sessionId !== sessionId) return;
-        cache.payload = payload;
-        netCounters.snapshotBytes = netSnapshotPayloadBytes(payload);
-        for (let c of connections) {
-            if (c && c.peer && Object.prototype.hasOwnProperty.call(lockstepResyncPendingAckByPeer, String(c.peer))) _sendResyncSnapshotTo(c);
-        }
-    });
 
-    if (_isHostResyncPauseComplete()) {
-        _finishHostResyncPause('no remote peers pending');
-    }
+    let restore = text => {
+        if (lockstepResyncSnapshotCache !== cache) return;
+        cache.text = text;
+        netCounters.snapshotBuildMs = performance.now() - t0;
+        // The host restores from the exact text the peers receive, so everyone
+        // starts from identical state, including anything the snapshot rounds.
+        let applyStart = performance.now();
+        applyAuthoritativeStateSnapshot(JSON.parse(text));
+        pause();
+        netCounters.snapshotApplyMs = performance.now() - applyStart;
+        netCounters.hardResyncs++;
+        netCounters.lastSnapshotAt = now;
+        logLockstepWarning('Host resynchronizing match', { tick: currentTick, reason: String(reason || ''), bytes: text.length });
+        netEncodeSnapshotText(text).then(payload => {
+            let cache = lockstepResyncSnapshotCache;
+            if (!cache || cache.sessionId !== sessionId) return;
+            cache.payload = payload;
+            netCounters.snapshotBytes = netSnapshotPayloadBytes(payload);
+            for (let c of connections) {
+                if (c && c.peer && Object.prototype.hasOwnProperty.call(lockstepResyncPendingAckByPeer, String(c.peer))) _sendResyncSnapshotTo(c);
+            }
+        });
+        if (_isHostResyncPauseComplete()) {
+            _finishHostResyncPause('no remote peers pending');
+        }
+    };
+    // With the simulation worker, the simulation state is the worker's (once
+    // the ticks already dispatched ran).
+    if (typeof simClientActive === 'function' && simClientActive()) simClientFillSnapshotState(snapshot).then(s => restore(JSON.stringify(s)), () => { });
+    else restore(JSON.stringify(snapshot));
 }
 
 function _markHostResyncAck(peerId, sessionId) {

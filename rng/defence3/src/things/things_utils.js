@@ -549,10 +549,9 @@ function recalculateUnitEffectiveStats() {
         && spatialUnitsComplex.length > 0
         && CHUNKS_W > 0
         && CHUNKS_H > 0;
-    if (isMultiplayer && gameStarted) {
-        // Lockstep correctness: exact nearby same-type counts matter more than the chunk-prefix approximation.
-        canUseSpatialCounts = false;
-    }
+    // Nearby same-type counts come from the spatial chunk counts (a square of
+    // chunks around the unit) through per owner and type summed-area tables:
+    // O(1) per unit. The counts are simulation state, the same on every peer.
     let unitTypeToSpatialIdx = new Map();
     let chunkPx = Math.max(1, CHUNK_SIZE * TILE);
 
@@ -649,16 +648,11 @@ function recalculateUnitEffectiveStats() {
                 let cx = Math.floor(u.x / chunkPx);
                 let cy = Math.floor(u.y / chunkPx);
                 let chunkRadius = Math.max(0, Math.ceil(radiusPx / chunkPx));
-                if (chunkRadius <= 16) {
-                    // Small rectangles (vision is ~1 tile): sum the counts
-                    // directly instead of building a whole-map prefix table
-                    // per owner and unit type. Same clamping, same result.
-                    let x1 = Math.max(0, Math.min(CHUNKS_W - 1, cx - chunkRadius)), x2 = Math.max(0, Math.min(CHUNKS_W - 1, cx + chunkRadius));
-                    let y1 = Math.max(0, Math.min(CHUNKS_H - 1, cy - chunkRadius)), y2 = Math.max(0, Math.min(CHUNKS_H - 1, cy + chunkRadius));
-                    let offset = owner * spatialUnitsComplexStridePerPlayer + 1 + typeIdx;
-                    for (let y = y1; y <= y2; y++) {
-                        for (let x = x1; x <= x2; x++) similarCount += spatialUnitsComplex[(y * CHUNKS_W + x) * spatialUnitsComplexStridePerChunk + offset] | 0;
-                    }
+                // A tiny window (1-2 chunks across) is summed directly; larger
+                // ones through the table (built once per owner and type).
+                if (chunkRadius <= 0) {
+                    let x = Math.max(0, Math.min(CHUNKS_W - 1, cx)), y = Math.max(0, Math.min(CHUNKS_H - 1, cy));
+                    similarCount = spatialUnitsComplex[(y * CHUNKS_W + x) * spatialUnitsComplexStridePerChunk + owner * spatialUnitsComplexStridePerPlayer + 1 + typeIdx] | 0;
                 } else {
                     let prefix = getSpatialPrefix(owner, typeIdx);
                     similarCount = querySpatialCountRect(prefix, cx - chunkRadius, cy - chunkRadius, cx + chunkRadius, cy + chunkRadius);
@@ -1493,6 +1487,8 @@ function isAutoResearchEnabled(item) {
 
 function getLevelLabelText(item) {
     if (!item) return 'L1';
+    // A structure view (sim_frame_world.js): the simulation's label.
+    if (item._structView) return item._labelText();
     let currentLevel = item.underConstruction
         ? 0
         : Math.max(1, Math.floor(getThingBaseLevel(item) || 1));

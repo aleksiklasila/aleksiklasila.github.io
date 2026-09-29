@@ -62,8 +62,6 @@ function getLaserStructureCandidates(list, sx, sy, ex, ey) {
 // Preserve list order, strict distance ties and lazy visibility snapshot timing.
 // The raw grid is immutable for this tick; resolve it once per scan rather than
 // repeating player normalization and cache lookups for every building.
-// Stand-in grid for full map visibility (every tile visible).
-const _FULL_VIS_ROWS = { length: -1 };
 function _findClosestHostileStructure(unit, firstList, range, secondList = null, acceptsTarget = null) {
     let closest = null;
     let bestDistance = range;
@@ -85,14 +83,12 @@ function _findClosestHostileStructure(unit, firstList, range, secondList = null,
             }
             if (witness) index.witnesses.set(unit.owner, witness);
         }
-        // Full map visibility: nothing is hidden (as isTileActuallyVisibleToPlayer).
-        if (!vis && witness && typeof matchFullVisibility !== 'undefined' && matchFullVisibility) vis = _FULL_VIS_ROWS;
         if (!vis && witness) {
             let owner = Math.floor(Number(unit.owner));
             if (!Number.isFinite(owner) || owner < 0) owner = localPlayerId;
             vis = getRawVisibilityGridForPlayer(owner);
         }
-        if (!vis || (vis !== _FULL_VIS_ROWS && vis.length !== GRID_H) || !(bestDistance > 0)) continue;
+        if (!vis || vis.length !== GRID_H || !(bestDistance > 0)) continue;
         let bestOrder = Infinity;
         const stride = Math.ceil(GRID_W / 4) + 1;
         const minX = Math.max(0, Math.floor((unit.x - bestDistance) / index.size));
@@ -108,7 +104,7 @@ function _findClosestHostileStructure(unit, firstList, range, secondList = null,
             if (acceptsTarget && !acceptsTarget(target)) continue;
             let dx = target.x - unit.x, dy = target.y - unit.y;
             if (Math.abs(dx) > bestDistance || Math.abs(dy) > bestDistance) continue;
-            if (vis !== _FULL_VIS_ROWS && (!vis[gy] || !(vis[gy][gx] > 0))) continue;
+            if (!vis[gy] || !(vis[gy][gx] > 0)) continue;
             let distance = detHypot(dx, dy);
             if (distance < bestDistance || (distance === bestDistance && bestOrder !== Infinity && order < bestOrder)) {
                 bestDistance = distance; closest = target; bestOrder = order;
@@ -181,8 +177,12 @@ function _findHostileStructureInAttackRange(unit) {
     let sources = getSourceAreaIdsAtWorld(unit.x, unit.y);
     if (sources.length === 0) return null;
     let best = null, bestRank = 4, bestD2 = Infinity, bestKey = Infinity;
+    let range = Math.floor(_getUnitAttackRangeArea(unit));
+    // Nothing hostile anywhere in the areas in reach: done (O(1)).
+    let box = getAreaRangeTileBox(sources, range);
+    if (!hasHostileStructureInTileRect(unit.owner, box[0], box[1], box[2], box[3])) return null;
     let structuresByArea = getStructuresByArea();
-    for (let areaId of getAreaIdsWithinDistanceOfSources(sources, Math.floor(_getUnitAttackRangeArea(unit)))) {
+    for (let areaId of getAreaIdsWithinDistanceOfSources(sources, range)) {
         let structures = structuresByArea[areaId];
         if (!structures) continue;
         for (let target of structures) {
@@ -329,8 +329,8 @@ class Unit {
         this.owner = owner;
         this.x = x; this.y = y;
         this.prevX = x; this.prevY = y;
-        this._sepI = -1;   // index in the separation pass (per tick)
-        this._simEnc = null;   // simulation worker: what the page was last sent (sim_delta.js)
+        // followPath: inputs of the last completed node scan (a cache).
+        this._fpPath = null; this._fpTile = -1; this._fpIdx = -1; this._fpVer = -1;
         this.teleportHideTicks = 0;
 
         let s = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm;
@@ -614,11 +614,7 @@ class Unit {
             this.pickScoutDestination();
             return;
         }
-        // Auto-aggro nearby enemies: idle units look on every other tick
-        // (staggered by id; 100 ms at 20 ticks a second).
-        // (Resuming an attack-move and the structure check below wait for
-        // the unit's scanning tick too.)
-        if (((gameTime + this.id) & 1) !== 0) return;
+        // Auto-aggro nearby enemies
         let aggroRange = Math.max(TILE, this.preComputed.visionRange * TILE);
         let closest = _findClosestEnemyUnitByChunks(this.owner, this.x, this.y, aggroRange);
         if (closest) {
@@ -1046,6 +1042,11 @@ class Unit {
         // tiles; tight nodes still need their own tile. The window is short
         // and also rejoins units that separation pushed past a waypoint.
         let tileX = Math.floor(this.x / TILE), tileY = Math.floor(this.y / TILE);
+        // The node scans below depend only on the tile, the path, the index
+        // and the topology: when those match the last completed scan, it
+        // would find nothing new (units cross a tile in many ticks).
+        let fpTile = tileY * GRID_W + tileX;
+        if (this._fpPath === this.path && this._fpTile === fpTile && this._fpIdx === this.pathIndex && this._fpVer === pathTopologyVersion) return this._followPathStep(spd);
         let first = Math.max(0, this.pathIndex - 1);
         let limit = Math.min(this.path.length - 1, this.pathIndex + 6);
         let reached = -1;
@@ -1102,7 +1103,13 @@ class Unit {
             if (this.pathIndex >= this.path.length) return true;
         }
         if (!this.path || this.pathIndex >= this.path.length) return true;
+        this._fpPath = this.path; this._fpIdx = this.pathIndex; this._fpVer = pathTopologyVersion;
+        this._fpTile = Math.floor(this.y / TILE) * GRID_W + Math.floor(this.x / TILE);
+        return this._followPathStep(spd);
+    }
 
+    // followPath after its node bookkeeping: steer toward the current node.
+    _followPathStep(spd) {
         let node = this.path[this.pathIndex];
         if (!this.pathIsFallbackAstar && !this.isFlying && !canUnitOccupyTile(this, node.x, node.y)) {
             this.path = null;
@@ -1758,6 +1765,7 @@ function _sepGrow(n) {
     _sep.owner = new Int32Array(cap); _sep.layer = new Uint8Array(cap); _sep.check = new Uint8Array(cap);
     _sep.px = new Float64Array(cap); _sep.py = new Float64Array(cap); _sep.ov = new Float64Array(cap); _sep.hit = new Uint16Array(cap);
     _sep.cap = cap;
+    _sep.key = null;   // the per-tile arrays follow (see runUnitSeparationPass)
 }
 
 // Direction a unit leaves an exact overlap in: sideways to its motion (or
@@ -1775,49 +1783,46 @@ function _unitExactOverlapDir(unit, other, out) {
 }
 const _sepDir = [0, 0];
 
-// One touching pair's pushes (a, b: pass indices; dx, dy from a to b).
-function _sepHit(a, b, ua, ub, dx, dy, d2, minDist) {
-    if (ua.dead || ub.dead) return;
-    let S = _sep, C = S.check;
+// Units by tile, contiguous: ord[k] is the unit index of the k-th sorted
+// entry; tile c holds sorted entries start[c] .. start[c + 1] - 1. The pair
+// loops read positions and flags from the packed arrays (sx, sy...), not
+// from the unit objects.
+// One touching pair's pushes (sorted entries p, q; dx, dy from p to q).
+function _sepHit(p, q, dx, dy, d2, minDist) {
+    let S = _sep, sc = S.sc, a = S.ord[p], b = S.ord[q];
     let d = Math.sqrt(d2);
     let overlap = minDist - Math.max(d, 0.001);
-    let f = overlap * (C[a] && C[b] ? UNIT_SEPARATION_SHARE_BOTH : UNIT_SEPARATION_SHARE_ONE) * UNIT_SEPARATION_Q;
-    if (C[a]) {
+    let f = overlap * (sc[p] && sc[q] ? UNIT_SEPARATION_SHARE_BOTH : UNIT_SEPARATION_SHARE_ONE) * UNIT_SEPARATION_Q;
+    if (sc[p]) {
         let nx, ny;
-        if (d > 0.001) { nx = -dx / d; ny = -dy / d; } else { _unitExactOverlapDir(ua, ub, _sepDir); nx = _sepDir[0]; ny = _sepDir[1]; }
+        if (d > 0.001) { nx = -dx / d; ny = -dy / d; } else { _unitExactOverlapDir(units[a], units[b], _sepDir); nx = _sepDir[0]; ny = _sepDir[1]; }
         S.px[a] += Math.round(nx * f); S.py[a] += Math.round(ny * f);
         if (overlap > S.ov[a]) S.ov[a] = overlap;
         S.hit[a]++;
     }
-    if (C[b]) {
+    if (sc[q]) {
         let nx, ny;
-        if (d > 0.001) { nx = dx / d; ny = dy / d; } else { _unitExactOverlapDir(ub, ua, _sepDir); nx = _sepDir[0]; ny = _sepDir[1]; }
+        if (d > 0.001) { nx = dx / d; ny = dy / d; } else { _unitExactOverlapDir(units[b], units[a], _sepDir); nx = _sepDir[0]; ny = _sepDir[1]; }
         S.px[b] += Math.round(nx * f); S.py[b] += Math.round(ny * f);
         if (overlap > S.ov[b]) S.ov[b] = overlap;
         S.hit[b]++;
     }
 }
 
-// Tests unit ua (index a) against B[from..] (same layer, either taking
-// part, within reach).
-function _sepScan(ua, B, from, pad) {
-    let S = _sep, C = S.check, L = S.layer, X = S.x, Y = S.y, R = S.r, O = S.owner;
-    let a = ua._sepI, ca = C[a], la = L[a], xa = X[a], ya = Y[a], ra = R[a], oa = O[a];
-    for (let j = from, bn = B.length; j < bn; j++) {
-        let ub = B[j], b = ub._sepI;
-        if (!(ca | C[b]) || L[b] !== la) continue;
-        let dx = X[b] - xa, dy = Y[b] - ya, d2 = dx * dx + dy * dy;
-        let minDist = ra + R[b] + (O[b] === oa ? 0 : pad);
-        if (d2 >= minDist * minDist) continue;
-        _sepHit(a, b, ua, ub, dx, dy, d2, minDist);
+// Pairs of sorted entries p in [p0, p1) with q in [q0, q1) (only q > p when
+// both ranges are the same tile).
+function _sepRange(p0, p1, q0, q1, same, pad) {
+    let S = _sep, sx = S.sx, sy = S.sy, sr = S.sr, so = S.so, sl = S.sl, sc = S.sc;
+    for (let p = p0; p < p1; p++) {
+        let cp = sc[p], lp = sl[p], xp = sx[p], yp = sy[p], rp = sr[p], op = so[p];
+        for (let q = same ? p + 1 : q0; q < q1; q++) {
+            if (!(cp | sc[q]) || sl[q] !== lp) continue;
+            let dx = sx[q] - xp, dy = sy[q] - yp, d2 = dx * dx + dy * dy;
+            let minDist = rp + sr[q] + (so[q] === op ? 0 : pad);
+            if (d2 >= minDist * minDist) continue;
+            _sepHit(p, q, dx, dy, d2, minDist);
+        }
     }
-}
-
-// Owner of a chunk holding one player's units only, else -1.
-function _sepSoleOwner(key, chunk) {
-    let o = chunk[0].owner;
-    return o >= 0 && o < spatialUnitsComplexPlayerCount
-        && spatialUnitsComplex[key * spatialUnitsComplexStridePerChunk + o * spatialUnitsComplexStridePerPlayer] === chunk.length ? o : -1;
 }
 
 function runUnitSeparationPass() {
@@ -1827,12 +1832,20 @@ function runUnitSeparationPass() {
     let restTicks = getUnitCollisionRecalcTicks();
     let any = false;
     let nChunks = CHUNKS_W * CHUNKS_H;
-    if (!S.chunkR || S.chunkR.length < nChunks) { S.chunkR = new Float64Array(nChunks); S.chunkC = new Uint8Array(nChunks); }
-    let chunkR = S.chunkR, chunkC = S.chunkC;
-    chunkR.fill(0, 0, nChunks); chunkC.fill(0, 0, nChunks);
+    if (!S.chunkR || S.chunkR.length < nChunks) {
+        S.chunkR = new Float64Array(nChunks); S.chunkC = new Uint8Array(nChunks);
+        S.sole = new Int32Array(nChunks); S.start = new Int32Array(nChunks + 1); S.fillPos = new Int32Array(nChunks);
+    }
+    if (!S.key || S.key.length < n) {
+        let cap = S.cap;
+        S.key = new Int32Array(cap); S.ord = new Int32Array(cap);
+        S.sx = new Float64Array(cap); S.sy = new Float64Array(cap); S.sr = new Float64Array(cap);
+        S.so = new Int32Array(cap); S.sl = new Uint8Array(cap); S.sc = new Uint8Array(cap);
+    }
+    let chunkR = S.chunkR, chunkC = S.chunkC, sole = S.sole, start = S.start, K = S.key;
+    chunkR.fill(0, 0, nChunks); chunkC.fill(0, 0, nChunks); sole.fill(-2, 0, nChunks); start.fill(0, 0, nChunks + 1);
     for (let i = 0; i < n; i++) {
         let u = units[i];
-        u._sepI = i;
         X[i] = u.x; Y[i] = u.y;
         let r = +u.collisionR || +u.r || 0.1;
         R[i] = r < 0.1 ? 0.1 : r;
@@ -1841,20 +1854,35 @@ function runUnitSeparationPass() {
         let c = !u.dead && (u.x !== u.prevX || u.y !== u.prevY || restTicks <= 1 || ((gameTime + u.id) % restTicks) === 0);
         C[i] = c ? 1 : 0;
         if (c) any = true;
-        let key = u._spatialKey;
-        if (key >= 0 && key < nChunks) {
-            if (R[i] > chunkR[key]) chunkR[key] = R[i];
-            if (c) chunkC[key] = 1;
-        }
         S.px[i] = 0; S.py[i] = 0; S.ov[i] = 0; S.hit[i] = 0;
+        // Units in the spatial buckets (alive), by tile.
+        let key = u._spatialKey;
+        if (u.dead || !(key >= 0 && key < nChunks)) { K[i] = -1; continue; }
+        K[i] = key;
+        start[key + 1]++;
+        if (R[i] > chunkR[key]) chunkR[key] = R[i];
+        if (c) chunkC[key] = 1;
+        let s0 = sole[key];
+        sole[key] = s0 === -2 ? u.owner : (s0 === u.owner ? s0 : -1);
     }
     if (!any) return;
+    // Counting sort by tile (stable: unit order within a tile).
+    for (let c = 0; c < nChunks; c++) start[c + 1] += start[c];
+    let fill = S.fillPos;
+    fill.set(start.subarray(0, nChunks));
+    let ord = S.ord, sx = S.sx, sy = S.sy, sr = S.sr, so = S.so, sl = S.sl, sc = S.sc;
+    for (let i = 0; i < n; i++) {
+        let key = K[i];
+        if (key < 0) continue;
+        let k = fill[key]++;
+        ord[k] = i; sx[k] = X[i]; sy[k] = Y[i]; sr[k] = R[i]; so[k] = O[i]; sl[k] = L[i]; sc[k] = C[i];
+    }
     let pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0);
     let maxR = Math.max(0.1, _maxUnitCollisionRadius());
     let cws = CHUNK_SIZE * TILE;
     let farAny = 2 * maxR + pad;
     let reach = Math.max(1, Math.ceil(farAny / cws));
-    // Forward neighbour offsets with the least distance between the chunks.
+    // Forward neighbour offsets with the least distance between the tiles.
     let offs = S.offs;
     if (!offs || S.offsReach !== reach || S.offsCws !== cws) {
         offs = [];
@@ -1867,30 +1895,26 @@ function runUnitSeparationPass() {
     }
     for (let cy = 0; cy < CHUNKS_H; cy++) for (let cx = 0; cx < CHUNKS_W; cx++) {
         let key = cy * CHUNKS_W + cx;
-        let A = spatialUnits[key];
-        if (!A || A.length === 0) continue;
-        let an = A.length, activeA = chunkC[key], rA = chunkR[key];
-        if (activeA) for (let i = 0; i < an - 1; i++) _sepScan(A[i], A, i + 1, pad);
-        let ownA = -2;
+        let a0 = start[key], a1 = start[key + 1];
+        if (a0 === a1) continue;
+        let activeA = chunkC[key], rA = chunkR[key];
+        if (activeA && a1 - a0 > 1) _sepRange(a0, a1, a0, a1, true, pad);
         for (let k = 0; k < offs.length; k += 3) {
             let gap = offs[k + 2];
             if (gap >= farAny) continue;
             let nx = cx + offs[k], ny = cy + offs[k + 1];
             if (nx < 0 || nx >= CHUNKS_W || ny >= CHUNKS_H) continue;
             let key2 = ny * CHUNKS_W + nx;
-            // Neither chunk has a unit taking part, or even their largest
+            let b0 = start[key2], b1 = start[key2 + 1];
+            if (b0 === b1) continue;
+            // Neither tile has a unit taking part, or even their largest
             // units (with the enemy padding) cannot touch across the gap.
             if (!(activeA | chunkC[key2])) continue;
             let near = rA + chunkR[key2];
             if (gap >= near + pad) continue;
-            let B = spatialUnits[key2];
-            if (!B || B.length === 0) continue;
-            if (gap >= near) {
-                // Only enemies can touch this far apart.
-                if (ownA === -2) ownA = _sepSoleOwner(key, A);
-                if (ownA >= 0 && _sepSoleOwner(key2, B) === ownA) continue;
-            }
-            for (let i = 0; i < an; i++) _sepScan(A[i], B, 0, pad);
+            // Only enemies can touch this far apart.
+            if (gap >= near && sole[key] >= 0 && sole[key2] === sole[key]) continue;
+            _sepRange(a0, a1, b0, b1, false, pad);
         }
     }
     for (let i = 0; i < n; i++) {

@@ -423,13 +423,17 @@ let _thumbImageCache = {};
 // One scratch canvas draws every thumbnail: a new canvas and 2D context per
 // thumbnail cost more than drawing it. Setting its size resets and clears it.
 let _thumbCanvas = null;
-function getItemThumbnail(key, size) {
+// intoCanvas: only draw the thumbnail there (the prewarm encodes it off the
+// main thread with toBlob); nothing is cached or returned.
+function getItemThumbnail(key, size, intoCanvas = null) {
     let cacheKey = key + '_' + size;
     if (_thumbCache[cacheKey]) return _thumbCache[cacheKey];
     let dpr = window.devicePixelRatio || 1;
-    let c = _thumbCanvas || (_thumbCanvas = document.createElement('canvas'));
+    let c = intoCanvas || _thumbCanvas || (_thumbCanvas = document.createElement('canvas'));
     c.width = size * dpr; c.height = size * dpr;
-    let ctx = c.getContext('2d');
+    // A CPU-backed canvas: encoding it (toDataURL, toBlob) reads it back
+    // without a costly synchronous GPU readback on the main thread.
+    let ctx = c.getContext('2d', { willReadFrequently: true });
     ctx.scale(dpr, dpr);
     let cx = size / 2, cy = size / 2;
     let s = size / 32; // scale factor relative to 32px tile
@@ -615,6 +619,7 @@ function getItemThumbnail(key, size) {
         }
     }
 
+    if (intoCanvas) return null;
     _thumbCache[cacheKey] = _thumbnailUrl(c.toDataURL());
     return _thumbCache[cacheKey];
 }
@@ -629,10 +634,21 @@ function prewarmItemThumbnails() {
     let jobs = [];
     for (let size of THUMBNAIL_PREWARM_SIZES) for (let key of keys) jobs.push([key, size]);
     let next = 0;
+    // Drawn here (cheap), PNG-encoded by the browser off the main thread
+    // (toBlob), cached as a blob: URL when ready.
+    let asyncEncode = typeof HTMLCanvasElement !== 'undefined' && typeof HTMLCanvasElement.prototype.toBlob === 'function'
+        && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function';
     let step = deadline => {
         while (next < jobs.length && deadline.timeRemaining() > 2) {
             let [key, size] = jobs[next++];
-            try { getItemThumbnail(key, size); } catch (_) {}
+            let cacheKey = key + '_' + size;
+            if (_thumbCache[cacheKey]) continue;
+            try {
+                if (!asyncEncode) { getItemThumbnail(key, size); continue; }
+                let c = document.createElement('canvas');
+                getItemThumbnail(key, size, c);
+                c.toBlob(blob => { if (blob && !_thumbCache[cacheKey]) _thumbCache[cacheKey] = URL.createObjectURL(blob); });
+            } catch (_) {}
         }
         if (next < jobs.length) requestIdleCallback(step, { timeout: 2000 });
     };

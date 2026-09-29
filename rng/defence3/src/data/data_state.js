@@ -416,6 +416,52 @@ function getAreaIdsWithinDistance(areaId, distance) {
     return _getAreaCumulative(aId, dist, areaIdsWithinDistance[aId], d => buckets[d]);
 }
 
+// Tile bounding box [minGx, minGy, maxGx, maxGy] of every area within
+// `distance` steps of the source areas (cached per area and distance with
+// the distance rows): an O(1) bound for "anything hostile in range?" checks
+// before walking the areas themselves.
+let _areaRangeBoxes = null, _areaRangeBoxesFor = null;
+const _areaRangeBoxScratch = new Int32Array(4);
+// Per distance: 4 ints per area (min gx, min gy, max gx, max gy); an empty
+// box (max < 0) marks "not computed yet" (every area holds a tile).
+function _areaRangeBoxRow(dist) {
+    if (_areaRangeBoxesFor !== areaIdsWithinDistance) { _areaRangeBoxes = []; _areaRangeBoxesFor = areaIdsWithinDistance; }
+    let row = _areaRangeBoxes[dist];
+    if (!row || row.length !== _areaById.length * 4) {
+        row = _areaRangeBoxes[dist] = new Int32Array(_areaById.length * 4);
+        for (let i = 2; i < row.length; i += 4) { row[i] = -1; }
+    }
+    return row;
+}
+function getAreaRangeTileBox(sources, distance) {
+    let out = _areaRangeBoxScratch;
+    out[0] = GRID_W; out[1] = GRID_H; out[2] = -1; out[3] = -1;
+    let dist = Math.max(0, Math.min(63, Math.floor(Number(distance) || 0)));
+    let row = _areaRangeBoxRow(dist);
+    for (let k = 0; k < sources.length; k++) {
+        let aId = sources[k], o = aId * 4;
+        if (!(aId >= 0 && o < row.length)) continue;
+        if (row[o + 2] < 0) {
+            let x0 = GRID_W, y0 = GRID_H, x1 = -1, y1 = -1;
+            for (let id of getAreaIdsWithinDistance(aId, dist)) {
+                let a = _areaById[id];
+                if (!a) continue;
+                if (a.minGx < x0) x0 = a.minGx;
+                if (a.minGy < y0) y0 = a.minGy;
+                if (a.maxGx > x1) x1 = a.maxGx;
+                if (a.maxGy > y1) y1 = a.maxGy;
+            }
+            row[o] = x0; row[o + 1] = y0; row[o + 2] = x1; row[o + 3] = y1;
+            if (x1 < 0) continue;
+        }
+        if (row[o] < out[0]) out[0] = row[o];
+        if (row[o + 1] < out[1]) out[1] = row[o + 1];
+        if (row[o + 2] > out[2]) out[2] = row[o + 2];
+        if (row[o + 3] > out[3]) out[3] = row[o + 3];
+    }
+    return out;
+}
+
 function getGridCellsAtAreaDistance(areaId, distance) {
     let aId = Math.floor(Number(areaId));
     let dist = Math.max(0, Math.floor(Number(distance) || 0));

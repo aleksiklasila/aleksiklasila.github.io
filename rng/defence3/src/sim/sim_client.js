@@ -3,22 +3,22 @@
 // SIMULATION WORKER, PAGE SIDE (authority)
 //
 // With the simulation worker on (the default; ?simworker=0 turns it off),
-// game ticks run in src/sim/sim_worker.js. The page keeps the lockstep, the network and
-// everything on screen, and a full copy of the world that each tick's
-// changes keep equal to the worker's (src/sim/sim_delta.js):
+// game ticks run in src/sim/sim_worker.js. The page keeps the lockstep, the
+// network and everything on screen:
 //
 // - runOneTick hands the tick's commands to the worker (simClientRunTick)
-//   instead of simulating; several ticks can be in flight.
-// - Each result is applied to the page's copy, then its side effects
-//   (sounds, flashes, alerts, particles, combat effects) are replayed and the
-//   per-tick page work runs (stats, win/defeat UI, visual visibility).
+//   instead of simulating; a few ticks can be in flight.
+// - The world: each result carries its frame (sim_frame.js: units;
+//   sim_frame_world.js: structures, projectiles, players and globals, changed
+//   cells), buffers the page reads it from (as views) until the next frame
+//   arrives, and then hands back. The selection also gets detail records.
+// - Side effects (sounds, flashes, alerts, particles, combat effects) are
+//   replayed, then the per-tick page work runs (stats, win/defeat UI,
+//   visual visibility).
 // - Multiplayer: the worker's rolling state hash of each tick feeds the
-//   unchanged resync bookkeeping; resync patches are encoded or applied by the
-//   worker in tick order, and the page's copy applies the same patch at the
-//   same point of the stream. Whole-state restores start a new epoch:
-//   results of the old one are dropped.
-// - The page's copy is checked against the worker's hash (a rotating slice,
-//   every few ticks) and reloaded from the worker if it ever differs.
+//   resync bookkeeping; resync patches are encoded or applied by the worker
+//   in tick order. Whole-state restores start a new epoch: results of the
+//   old one are dropped.
 // ============================================================
 
 const simClientEnabled = (() => {
@@ -31,25 +31,10 @@ const simClientEnabled = (() => {
 let _simClient = null;
 // Ticks dispatched to the worker whose results have not come back yet.
 const SIM_CLIENT_MAX_IN_FLIGHT = 2;
-// The worker sends one result per group of this many ticks (?simstride=N;
-// by default 2 at 20+ ticks a second): the page applies ~10 updates a
-// second and interpolates over each group.
-function simClientStride() {
-    let q = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('simstride') : null;
-    let n = q !== null ? Math.floor(Number(q)) : (TICK_RATE >= 20 ? 2 : 1);
-    return Math.max(1, Math.min(8, n || 1));
-}
-// With groups, room for the next group while one is being applied.
-function simClientMaxInFlight() {
-    return SIM_CLIENT_MAX_IN_FLIGHT * (_simClient ? _simClient.stride || 1 : 1);
-}
-// The latest tick's per-unit visual records (sim_delta.js, simUnitVisEncode).
-let simClientUnitVis = null;
-
-// The records when they describe the current units (else null).
+// The current units' frame (sim_frame.js views) while `units` is its list.
 function simClientCurrentUnitVis() {
-    let v = simClientUnitVis;
-    return v && v.gameTime === gameTime && v.units === units && v.n === units.length ? v.data : null;
+    let c = _simClient;
+    return c && c.active && c.frameUnits === units && _pageFrame ? _pageFrame : null;
 }
 
 // Test hook: called with each tick once its result is applied.
@@ -66,10 +51,10 @@ function _simClientScriptUrls() {
 }
 
 function _simClientCreate() {
-    let worker = new Worker('./src/sim/sim_worker.js?v=20261004-a');
+    let worker = new Worker('./src/sim/sim_worker.js?v=20261006-c');
     let c = {
         worker, loaded: false, active: false, epoch: 0, startTick: -1, nextRequestId: 1, replies: new Map(),
-        inFlight: 0, stride: 1, unsent: 0, lastDispatchAt: 0, tickClock: 0, dispatchAt: new Map(), appliedTick: -1, appliedAt: 0, latencyMs: TICK_MS, arrivedAt: 0, intervalMs: TICK_MS, drawnAlpha: -1, errors: [],
+        inFlight: 0, lastDispatchAt: 0, tickClock: 0, dispatchAt: new Map(), appliedTick: -1, appliedAt: 0, latencyMs: TICK_MS, arrivedAt: 0, intervalMs: TICK_MS, drawnAlpha: -1, errors: [],
         stats: { applied: 0, applyMs: [], simMs: [], encodeMs: [], latencyMs: [], rows: 0, heals: 0, dropped: 0 }
     };
     worker.onmessage = ev => { try { _simClientOnMessage(ev.data || {}); } catch (err) { reportRuntimeError('sim worker', err); } };
@@ -108,6 +93,8 @@ function simClientStartMatch() {
     snapFlushHistoryCaches();
     snapDecodeState(JSON.parse(text).state);
     currentTick = pageTick;
+    // Units come from the worker's frames (the first one with 'started').
+    _simClientResetUnits();
     recomputePlayerPopCaps();
     clearGameplayVisibilityCache();
     updateVisibility(localPlayerId);
@@ -117,13 +104,10 @@ function simClientStartMatch() {
     c.active = true;
     c.startTick = currentTick;
     c.inFlight = 0;
-    c.stride = simClientStride();
-    c.unsent = 0;
     c.dispatchAt.clear();
     c.appliedTick = currentTick - 1;
     c.appliedAt = 0; c.arrivedAt = 0;
     c.gameOverShown = false;
-    c.healing = false;
     for (let [, r] of c.replies) r.reject(new Error('match restarted'));
     c.replies.clear();
     c.worker.postMessage({
@@ -141,6 +125,7 @@ function simClientStartMatch() {
 function _simClientGlobals() {
     return {
         isMultiplayer, isHost, localPlayerId, gameSeed, activeTeamIds, gameMode, fullVisibility, matchFullVisibility,
+        myPeerId: typeof myPeerId !== 'undefined' ? myPeerId : null,
         lobbyPlayers: typeof lobbyPlayers !== 'undefined' ? lobbyPlayers : [], gameStarted: true
     };
 }
@@ -165,27 +150,7 @@ function simClientRunTick(tick, actions, teams, flush) {
     if (!(at >= now - TICK_MS)) at = now;
     c.tickClock = at;
     c.dispatchAt.set(tick, at);
-    c.lastDispatchAt = now;
-    // A group's last tick sends the result (see simClientStride).
-    let out = ((tick + 1) % c.stride) === 0;
-    c.unsent = out ? 0 : c.unsent + 1;
-    c.worker.postMessage({ type: 'tick', tick, actions, teams, flush: !!flush, hash: true, out });
-}
-
-// Ticks run without a result yet (a group not complete) go out now.
-function simClientFlush() {
-    let c = _simClient;
-    if (!c || !c.active || !c.unsent) return;
-    c.unsent = 0;
-    c.worker.postMessage({ type: 'flush' });
-}
-
-// Called by the tick loop each frame: when the next tick of a started group
-// is not coming soon (paused, waiting for peers...), the ticks run so far go
-// out rather than wait.
-function simClientMaybeFlush(now) {
-    let c = _simClient;
-    if (c && c.active && c.unsent && now - c.lastDispatchAt > TICK_MS * 1.5) simClientFlush();
+    c.worker.postMessage({ type: 'tick', tick, actions, teams, flush: !!flush, hash: true });
 }
 
 // Tests: code the worker runs at this point of the tick stream.
@@ -208,9 +173,10 @@ function _simClientOnMessage(msg) {
     if (!c) return;
     switch (msg.type) {
         case 'loaded': c.loaded = true; break;
-        case 'started': break;
+        case 'started':
+            if (msg.world) { if (msg.epoch === c.epoch) _simClientApplyWorld(msg.world, 1); else _simClientReturnBufs(_simClientWorldBufs(msg.world)); }
+            break;
         case 'ticked': _simClientApplyTick(msg); break;
-        case 'replicaState': if (msg.epoch === c.epoch) _simClientApplyReplicaState(msg); break;
         case 'reply': {
             let r = c.replies.get(msg.id);
             c.replies.delete(msg.id);
@@ -233,32 +199,26 @@ function _simClientOnMessage(msg) {
 
 function _simClientApplyTick(msg) {
     let c = _simClient;
-    if (msg.epoch !== c.epoch) { c.stats.dropped++; return; }
-    let count = msg.count || 1, first = msg.first !== undefined ? msg.first : msg.tick;
-    c.inFlight = Math.max(0, c.inFlight - count);
+    if (msg.epoch !== c.epoch) {
+        c.stats.dropped++;
+        let bufs = _simClientWorldBufs(msg.world);
+        if (msg.sight) bufs.push(msg.sight.buffer);
+        _simClientReturnBufs(bufs);
+        return;
+    }
+    c.inFlight = Math.max(0, c.inFlight - 1);
     let t0 = performance.now();
     let dispatchedAt = c.dispatchAt.get(msg.tick);
-    for (let t = first; t <= msg.tick; t++) c.dispatchAt.delete(t);
-    // While a reload of the page's copy is on its way, results only count.
-    if (c.healing) return;
+    c.dispatchAt.delete(msg.tick);
     // The page's lockstep tick counter runs ahead of the results.
     let pageTick = currentTick;
-    let applied = true;
     // Units move on from where they are drawn now (the interpolation of the
-    // last result at this moment), so motion stays continuous however the
-    // results arrive (a group, early, two in one frame).
-    // (The alpha of the last frame drawn with the previous result; none drawn
-    // since it arrived: from its start.)
+    // last frame at this moment), so motion stays continuous however the
+    // results arrive. (The alpha of the last frame drawn with the previous
+    // result; none drawn since it arrived: from its start.)
     let shown = c.arrivedAt > 0 ? (c.drawnAlpha >= 0 ? c.drawnAlpha : 0) : 1;
     c.drawnAlpha = -1;
-    for (let i = 0; i < units.length; i++) {
-        let u = units[i];
-        if (u.prevX === u.prevX && u.prevX !== undefined && shown < 1) { u.prevX += (u.x - u.prevX) * shown; u.prevY += (u.y - u.prevY) * shown; }
-        else { u.prevX = u.x; u.prevY = u.y; }
-    }
-    try { simDeltaApply(msg.delta); } catch (err) { applied = false; reportRuntimeError('sim delta', err); }
-    // New units start where they are.
-    for (let i = 0; i < units.length; i++) { let u = units[i]; if (!(u.prevX === u.prevX) || u.prevX === undefined) { u.prevX = u.x; u.prevY = u.y; } }
+    try { _simClientApplyWorld(msg.world, shown); } catch (err) { reportRuntimeError('sim frame', err); }
     currentTick = pageTick;
     c.appliedTick = msg.tick;
     c.appliedAt = dispatchedAt !== undefined ? dispatchedAt : t0;
@@ -272,71 +232,157 @@ function _simClientApplyTick(msg) {
     }
     c.arrivedAt = t0;
     if (dispatchedAt !== undefined) {
-        // Units are shown this far behind their tick's time, so results
-        // that come a little late still move smoothly.
         let latency = Math.max(0, t0 - dispatchedAt);
         c.latencyMs += (Math.min(latency, TICK_MS * 3) - c.latencyMs) * (latency > c.latencyMs ? 0.3 : 0.05);
         c.stats.latencyMs.push(latency);
     }
-    if (!applied) { _simClientHeal(msg.tick); return; }
-    // The worker's per-unit visual records, for the 3D unit layer while this
-    // tick is the current one (same unit list, same order).
-    if (msg.vis) _simClientContinueVis(msg.vis, shown);
-    simClientUnitVis = msg.vis ? { data: msg.vis, gameTime, units, n: units.length } : null;
     c.lastSight = msg.sight ? { data: msg.sight, player: msg.sightPlayer } : null;
-    if (msg.delta.dirtyMap) _simClientMapChanged();
     _simClientReplayEvents(msg.events || []);
-    _simClientPageTickWork(msg.tick, count);
-    // The page's copy must hash as the worker's; otherwise it is reloaded.
-    // The worker's record is the one the resync compares with the peers.
+    _simClientPageTickWork(msg.tick);
+    // The tick's record (the peers compare them).
     if (msg.hash) {
-        // The page's copy is checked on full ticks, the ones that leave it
-        // exact (see SIM_DELTA_FULL_TICKS); their hash slices rotate. A
-        // difference reloads it.
-        let mine = msg.delta && msg.delta.full ? snapTickHash(msg.tick, !!lockstepStrictDebugMode) : null;
-        if (mine && mine.sum !== msg.hash.sum) {
-            c.stats.mismatch = (c.stats.mismatch || 0) + 1;
-            if (!c.stats.firstDiff) try { c.stats.firstDiff = { tick: msg.tick, parts: snapDescribeCodes(snapDiffTickHash(mine, msg.hash)) }; } catch { }
-            _simClientHeal(msg.tick);
-        }
+        if (isMultiplayer) resyncAfterTick(msg.tick, msg.hash);
+        else snapStoreTickHash(msg.hash);
     }
-    // Every tick's record, in order (the peers compare each).
-    let hashes = msg.hashes || [msg.hash];
-    for (let k = 0; k < hashes.length; k++) {
-        let h = hashes[k];
-        if (!h) continue;
-        if (isMultiplayer) resyncAfterTick(first + k, h);
-        else snapStoreTickHash(h);
-    }
-    if (simClientTickAppliedHook) for (let t = first; t <= msg.tick; t++) simClientTickAppliedHook(t, msg.lockHashes ? msg.lockHashes[t - first] : undefined, t === msg.tick);
+    if (simClientTickAppliedHook) simClientTickAppliedHook(msg.tick, msg.lockHashes ? msg.lockHashes[0] : undefined, msg.report);
     let ms = performance.now() - t0;
     c.stats.applied++;
-    c.stats.rows += msg.delta.rows || 0;
-    if (msg.delta.rowsBy) { let rb = c.stats.rowsBy || (c.stats.rowsBy = {}); for (let k in msg.delta.rowsBy) rb[k] = (rb[k] || 0) + msg.delta.rowsBy[k]; }
     c.stats.applyMs.push(ms); c.stats.simMs.push(msg.simMs); c.stats.encodeMs.push(msg.encodeMs);
     for (let k of ['applyMs', 'simMs', 'encodeMs', 'latencyMs']) if (c.stats[k].length > 600) c.stats[k].splice(0, 300);
 }
 
-// The same for the 3D records: each render slot's start is where the slot
-// is drawn now (from the previous records at `shown`), not where the worker
-// last had it.
-let _simVisDrawn = { x0: new Float64Array(0), y0: new Float64Array(0), x1: new Float64Array(0), y1: new Float64Array(0), id: new Float64Array(0) };
-function _simClientContinueVis(vis, shown) {
-    let D = _simVisDrawn, S = SIM_UNIT_VIS_STRIDE, n = vis.length / S;
-    for (let i = 0; i < n; i++) {
-        let r = i * S, slot = vis[r + 8];
-        if (slot < 0) continue;
-        if (slot >= D.id.length) {
-            let cap = Math.max(1024, (slot + 1) * 2), grow = (a, fill) => { let g = new Float64Array(cap); if (fill) g.fill(fill); g.set(a); return g; };
-            D.x0 = grow(D.x0); D.y0 = grow(D.y0); D.x1 = grow(D.x1); D.y1 = grow(D.y1); D.id = grow(D.id, -1);
-        }
-        let id = vis[r + 13];
-        if (D.id[slot] === id && shown < 1) {
-            vis[r + 11] = D.x0[slot] + (D.x1[slot] - D.x0[slot]) * shown;
-            vis[r + 12] = D.y0[slot] + (D.y1[slot] - D.y0[slot]) * shown;
-        }
-        D.id[slot] = id; D.x0[slot] = vis[r + 11]; D.y0[slot] = vis[r + 12]; D.x1[slot] = vis[r + 9]; D.y1[slot] = vis[r + 10];
+// ---- units: frames and their views ----
+
+// View per slot (while alive; by id in _pageUnitsById).
+let _pageSlotViews = [];
+let _pageViewStamp = 0;
+
+function _simClientReturnBufs(bufs) {
+    let c = _simClient;
+    bufs = bufs.filter(b => b && b.byteLength);
+    if (c && bufs.length) c.worker.postMessage({ type: 'frameReturn', bufs }, bufs);
+}
+
+// The page's units: none until the worker's next frame (objects from a
+// restore on the page are not the simulation's).
+function _simClientResetUnits() {
+    let c = _simClient;
+    for (let u of _pageUnitsById.values()) { u._freeze(); u.dead = true; }
+    _pageUnitsById = new Map();
+    _pageSlotViews = [];
+    let bufs = pageResetWorldTables(c);
+    if (_pageFrame) { bufs.push(_pageFrame.buf); _pageFrame = null; }
+    _simClientReturnBufs(bufs);
+    units = [];
+    if (typeof initSpatialHash === 'function') initSpatialHash();
+    if (c) { c.frameUnits = null; c.mver = -1; c.watchKey = ''; }
+    _pageFrameStrings.length = 1;
+}
+
+// The buffers of a world frame (to hand back).
+function _simClientWorldBufs(w) {
+    return w ? [w.units, w.structures, w.projectiles].filter(t => t && t.buf).map(t => t.buf) : [];
+}
+
+// A world frame: string codes, units, structures, projectiles, the state and
+// the details; the previous frame's buffers go back.
+function _simClientApplyWorld(w, shown) {
+    let c = _simClient;
+    if (!w) return;
+    if (w.strings) { let base = w.strings[0], list = w.strings[1]; for (let i = 0; i < list.length; i++) _pageFrameStrings[base + i] = list[i]; }
+    let back = [];
+    if (w.units) _simClientApplyFrame(w.units, shown);
+    if (w.structures) { let old = pageApplyStructures(w.structures, c); if (old) back.push(old.buf); }
+    if (w.projectiles) { let old = pageApplyProjectiles(w.projectiles, c, shown); if (old) back.push(old.buf); }
+    pageApplyState(w.state);
+    _simClientApplyDetails(w.details);
+    pageApplyStructureDetails(w.structureDetails, c);
+    _simClientWatch();
+    // Selected structures replaced by new objects (a restore): the new ones.
+    if (selectedEntities.length && selectedEntities.some(e => e && e._structView && e.dead)) {
+        selectedEntities = selectedEntities.map(e => {
+            if (!e || !e._structView || !e.dead) return e;
+            let cell = grid[e.gy] && grid[e.gy][e.gx];
+            let now = getTileEntityRef(e.gx, e.gy) || (cell && cell.item) || null;
+            return now && now._structView && !now.dead ? now : null;
+        }).filter(Boolean);
     }
+    _simClientReturnBufs(back);
+}
+
+// A new units table: where drawn units continue from, which views live (new
+// ones made, gone ones frozen dead), then it becomes the current one and the
+// previous buffer goes back.
+function _simClientApplyFrame(frame, shown) {
+    let c = _simClient;
+    let F = simFrameViews(frame.buf, frame.cap);
+    F.n = frame.n; F.count = frame.count;
+    let old = _pageFrame;
+    if (old && shown < 1) {
+        let n = Math.min(F.n, old.n), oid = old.id, ox = old.x, oy = old.y, opx = old.px, opy = old.py, id = F.id, px = F.px, py = F.py;
+        for (let s = 0; s < n; s++) {
+            if (id[s] < 0 || oid[s] !== id[s]) continue;
+            px[s] = opx[s] + (ox[s] - opx[s]) * shown;
+            py[s] = opy[s] + (oy[s] - opy[s]) * shown;
+        }
+    }
+    if (frame.mver !== c.mver || c.frameUnits !== units) {
+        let stamp = ++_pageViewStamp, list = new Array(frame.count), order = F.order, ids = F.id;
+        for (let k = 0; k < frame.count; k++) {
+            let s = order[k], id = ids[s], v = _pageSlotViews[s];
+            if (!v || v.id !== id || v.dead) {
+                v = _pageUnitsById.get(id);
+                if (!v || v.dead) { v = new PageUnit(id, s); _pageUnitsById.set(id, v); }
+                _pageSlotViews[s] = v;
+            }
+            v._stamp = stamp;
+            list[k] = v;
+        }
+        // Gone: their last values, from the frame they were last in.
+        let prev = c.frameUnits || [];
+        for (let v of prev) if (v._stamp !== stamp && !v.dead) { v._freeze(); v.dead = true; _pageUnitsById.delete(v.id); }
+        for (let k = 0; k < list.length; k++) list[k]._s = order[k];
+        units = list;
+        c.frameUnits = list;
+        c.mver = frame.mver;
+        // A restore brought new objects for units the page had selected.
+        if (selectedUnits.length && selectedUnits.some(u => !(u instanceof PageUnit))) {
+            selectedUnits = selectedUnits.map(u => u instanceof PageUnit ? u : _pageUnitsById.get(u.id)).filter(u => u && !u.dead);
+        }
+    }
+    _pageFrame = F;
+    if (old) _simClientReturnBufs([old.buf]);
+}
+
+// Details of watched units (their paths, targets and stats), and which
+// units the page watches next: the selection (up to a cap).
+const SIM_CLIENT_WATCH_MAX = 256;
+let _simClientDetailed = [];
+function _simClientApplyDetails(details) {
+    for (let v of _simClientDetailed) v._det = null;
+    _simClientDetailed = [];
+    if (details) for (let d of details) {
+        let v = _pageUnitsById.get(d.id);
+        if (v) { v._det = d; _simClientDetailed.push(v); }
+    }
+}
+// What the page watches: the selected units and structures (up to caps).
+function _simClientWatch() {
+    let c = _simClient, list = [], structures = [], key = '';
+    for (let i = 0; i < selectedUnits.length && list.length < SIM_CLIENT_WATCH_MAX * 2; i++) {
+        let u = selectedUnits[i];
+        if (!(u instanceof PageUnit) || u.dead) continue;
+        list.push(u.id, u._s);
+        key += u.id + ':' + u._s + ',';
+    }
+    key += '|';
+    for (let i = 0; i < selectedEntities.length && structures.length < 128; i++) {
+        let e = selectedEntities[i];
+        if (!e || !Number.isFinite(e.gx) || !Number.isFinite(e.gy)) continue;
+        structures.push(e.gx, e.gy);
+        key += e.gx + ',' + e.gy + ';';
+    }
+    if (key !== c.watchKey) { c.watchKey = key; c.worker.postMessage({ type: 'watch', list, structures }); }
 }
 
 // Buildings, floor items or tiles changed: the cached map layers redraw.
@@ -350,12 +396,7 @@ function _simClientMapChanged() {
 // Entities referenced by the worker's side effects.
 function _simClientResolve(ref) {
     if (!ref) return null;
-    if (ref[0] === 'u') {
-        let id = ref[1];
-        let lo = 0, hi = units.length - 1;
-        while (lo <= hi) { let mid = (lo + hi) >> 1, v = units[mid].id; if (v === id) return units[mid]; if (v < id) lo = mid + 1; else hi = mid - 1; }
-        return units.find(u => u.id === id) || null;
-    }
+    if (ref[0] === 'u') return _pageUnitsById.get(ref[1]) || null;
     let gx = ref[1], gy = ref[2];
     let cell = grid[gy] && grid[gy][gx];
     return getTileEntityRef(gx, gy) || (cell && cell.item) || null;
@@ -375,8 +416,8 @@ function _simClientReplayEvents(events) {
 }
 
 // What the page did as part of a tick: visuals, audio state and UI.
-function _simClientPageTickWork(tick, count = 1) {
-    for (let k = 0; k < count; k++) for (let i = particles.length - 1; i >= 0; i--) if (!particles[i].update()) particles.splice(i, 1);
+function _simClientPageTickWork(tick) {
+    for (let i = particles.length - 1; i >= 0; i--) if (!particles[i].update()) particles.splice(i, 1);
     _simClientLaserSound();
     updateAudioReactiveState();
     if (selectedUnits.length && selectedUnits.some(u => u.dead)) selectedUnits = selectedUnits.filter(u => !u.dead);
@@ -393,7 +434,7 @@ function _simClientPageTickWork(tick, count = 1) {
     }
     _simClient.lastSight = null;
     visibilityGrid = updateVisualVisibility(localPlayerId, getRawVisibilityGridForPlayer(localPlayerId));
-    for (let t = tick - count + 1; t <= tick; t++) if ((t + 1) % TICK_RATE === 0) { sampleGameStats(); break; }
+    if ((tick + 1) % TICK_RATE === 0) sampleGameStats();
     requestResearchPopupRefresh();
     let c = _simClient;
     if (!c.gameOverShown) {
@@ -405,8 +446,6 @@ function _simClientPageTickWork(tick, count = 1) {
             checkWinCondition();
             if (!gameOver) { gameOver = true; showGameOver(); }
         }
-        // Defeat of this player (spectating) is page state.
-        else if ((tick & 3) === 0 && !localDefeated) checkWinCondition();
     }
 }
 
@@ -423,43 +462,12 @@ function _simClientLaserSound() {
     if (any) startLaserSound(lx, ly); else stopLaserSound();
 }
 
-// The page's copy differs from the worker's: reload it (the worker sends its
-// whole state after the ticks it already ran, and restarts its baseline).
-function _simClientHeal(tick) {
-    let c = _simClient;
-    if (c.healing) return;
-    c.healing = true;
-    c.stats.heals++;
-    logLockstepWarning('Simulation copy differs from the worker; reloading it', { tick });
-    c.worker.postMessage({ type: 'request', op: 'replicaState', args: { epoch: c.epoch } });
-}
-
-function _simClientApplyReplicaState(msg) {
-    let c = _simClient;
-    let pageTick = currentTick;
-    let uiState = _captureSnapshotApplyUiState();
-    let res = snapDecodeState(JSON.parse(msg.text));
-    currentTick = pageTick;
-    recomputePlayerPopCaps();
-    for (let u of units) { u.prevX = u.x; u.prevY = u.y; }
-    _restoreSnapshotApplyUiState(uiState, { unitsById: res ? res.unitsById : new Map(), towers, barracks, spawners: collectorSpawners, goldMines, astarMines });
-    clearGameplayVisibilityCache();
-    updateVisibility(localPlayerId);
-    _simClientMapChanged();
-    invalidateStaticLayerCache();
-    c.appliedTick = msg.tick;
-    c.healing = false;
-}
-
 // ---- points where the page's network code reads or replaces the state ----
 
-// Whether the page's copy is the worker's current state (nothing in flight).
-// Encoding a resync patch or applying one waits for this, so it happens at
-// exactly the same point of the simulation on the page as in the worker.
+// Whether every dispatched tick's result is back (nothing in flight).
 function simClientQuiescent() {
     let c = _simClient;
-    if (c && c.active && c.unsent) simClientFlush();
-    return !c || !c.active || (c.inFlight === 0 && !c.healing);
+    return !c || !c.active || c.inFlight === 0;
 }
 
 // Host: a resync patch of the simulation as it is before the next tick
@@ -474,8 +482,7 @@ function simClientFillSnapshotState(snapshot) {
     return simClientRequest('encodeState').then(r => { snapshot.state = r.state; snapshot.gameTime = r.gameTime; return snapshot; });
 }
 
-// Guest: the page applied a resync patch at a quiescent point; the worker
-// applies the same text there.
+// Guest: a resync patch, for the worker to apply before the next tick.
 function simClientAfterPatchApplied(text, full) {
     if (!simClientActive()) return;
     _simClient.worker.postMessage({ type: 'request', op: 'applyPatch', args: { text, full: !!full } });
@@ -491,7 +498,8 @@ function simClientAfterSnapshotApplied(snapshot) {
     c.dispatchAt.clear();
     c.appliedTick = currentTick - 1;
     c.appliedAt = 0; c.arrivedAt = 0;
-    c.healing = false;
+    // Units come with the worker's next frame.
+    _simClientResetUnits();
     c.gameOverShown = !!gameOver;
     c.worker.postMessage({ type: 'request', op: 'applySnapshot', args: { snapshot, epoch: c.epoch, globals: _simClientGlobals() } });
 }
