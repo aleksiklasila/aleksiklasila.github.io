@@ -83,11 +83,11 @@ const SEP_CHECK = `(() => {
         inst.eval(`(() => { const mine = units.filter(u => !u.dead && !u.workerType); queueAction({ action: 'attackMove', unitIds: mine.filter(u => u.owner === localPlayerId).map(u => u.id), targetX: GRID_W * TILE * .7, targetY: GRID_H * TILE * .5 }); })()`);
         for (let k = 0; k < 6; k++) {
             await world.run(1500);
-            const r = JSON.parse(inst.eval(VIS_CHECK));
+            const r = JSON.parse(inst.evalSim(VIS_CHECK));
             assert.equal(r.diffs, 0, `${mapType}: visibility kernel differs on ${r.diffs} of ${r.cells} tiles`);
             assert.ok(r.lit > 0 && r.checked > 1);
             results.push(r.lit);
-            const sep = JSON.parse(inst.eval(SEP_CHECK));
+            const sep = JSON.parse(inst.evalSim(SEP_CHECK));
             assert.equal(sep.diffs, 0, `${mapType}: separation kernel differs for ${sep.diffs} of ${sep.units} units`);
             sepTouching = Math.max(sepTouching, sep.touching);
         }
