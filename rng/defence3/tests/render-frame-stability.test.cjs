@@ -44,14 +44,20 @@ async function browser(url) {
         '--window-size=1600,1000', '--disable-features=CalculateNativeWinOcclusion', 'about:blank'], { stdio: 'ignore' });
     let page;
     for (let i = 0; i < 100 && !page; i++) {
-        try { page = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find(t => t.type === 'page'); } catch {}
+        try { page = (await (await fetch(`http://127.0.0.1:${port}/json`, {signal:AbortSignal.timeout(1000)})).json()).find(t => t.type === 'page'); } catch {}
         if (!page) await sleep(200);
     }
+    if (!page) { proc.kill(); throw new Error('Edge debug endpoint did not open'); }
     const ws = new WebSocket(page.webSocketDebuggerUrl);
     await new Promise(r => ws.onopen = r);
     let id = 0; const pending = new Map();
-    ws.onmessage = m => { const d = JSON.parse(m.data); if (d.id && pending.has(d.id)) { pending.get(d.id)(d); pending.delete(d.id); } };
-    const send = (method, params = {}) => new Promise(r => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+    ws.onmessage = m => { const d = JSON.parse(m.data); if (d.id && pending.has(d.id)) { const p=pending.get(d.id); clearTimeout(p.timer); p.resolve(d); pending.delete(d.id); } };
+    const send = (method, params = {}) => new Promise((resolve, reject) => {
+        const i = ++id;
+        const timer = setTimeout(() => { pending.delete(i); reject(new Error('CDP timeout: '+method+' '+String(params.expression||'').slice(0,120))); }, 30000);
+        pending.set(i,{resolve,reject,timer}); ws.send(JSON.stringify({ id:i,method,params }));
+    });
+    ws.onclose = () => { for(const p of pending.values()) { clearTimeout(p.timer); p.reject(new Error('Edge connection closed')); } pending.clear(); };
     const ev = async expr => {
         const r = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
         if (r.result && r.result.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails).slice(0, 600));

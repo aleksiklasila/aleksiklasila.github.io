@@ -1808,6 +1808,35 @@ function _sepShared(S, name, Type, n) {
 // Work is split into small batches of checking units, including within one
 // crowded tile, rather than rows whose occupancy varies by orders of magnitude.
 
+function _prepareSharedUnitSeparation(S, n, nChunks, restTicks) {
+    const input = _sepShared(S, 'inputSlots', Int32Array, S.cap);
+    const flags = _sepShared(S, 'inputFlags', Uint8Array, S.cap);
+    const keys = _sepShared(S, 'inputKeys', Uint32Array, S.cap);
+    const pathX = _sepShared(S, 'pathX', Float64Array, S.cap);
+    const pathY = _sepShared(S, 'pathY', Float64Array, S.cap);
+    let live = 0;
+    // Migration boundary: only cold references are gathered here. Numeric
+    // classification, sorting and packing run directly on shared unit columns.
+    for (let i = 0; i < n; i++) {
+        const u = units[i], key = u._spatialKey;
+        input[i] = u._si;
+        flags[i] = u.isFlying ? 1 : (u.unitType === 'mole' ? 2 : 0);
+        if (u.dead || !(key >= 0 && key < nChunks)) keys[i] = nChunks;
+        else { keys[i] = key; live++; }
+        const path = u.path, index = u.pathIndex;
+        const node = path && index < path.length ? path[index] : null;
+        pathX[i] = node ? node.x * TILE + 16 : NaN;
+        pathY[i] = node ? node.y * TILE + 16 : NaN;
+    }
+    const order = simSpatialStableOrder(keys, n, nChunks);
+    simParallelBind('sep.inputOrder', order);
+    _simParams[0] = live; _simParams[1] = 512;
+    _simParams[2] = restTicks; _simParams[3] = gameTime;
+    simParallelRun(SIM_KERNEL_SEPARATION_PREPARE, Math.ceil(live / 512));
+    for (let c = 0; c < nChunks; c++) S.start[c + 1] += S.start[c];
+    return live;
+}
+
 function runUnitSeparationPass() {
     let n = units.length;
     _sepGrow(n);
@@ -1830,6 +1859,10 @@ function runUnitSeparationPass() {
     let K = S.key;
     chunkR.fill(0, 0, nChunks); chunkC.fill(0, 0, nChunks); sole.fill(-2, 0, nChunks); start.fill(0, 0, nChunks + 1);
     PX.fill(0, 0, n); PY.fill(0, 0, n); OV.fill(0, 0, n); HIT.fill(0, 0, n);
+    if (n >= 4096) {
+        jobCount = _prepareSharedUnitSeparation(S, n, nChunks, restTicks);
+        if (!jobCount) return;
+    } else {
     for (let i = 0; i < n; i++) {
         let u = units[i];
         let r = +u.collisionR || +u.r || 0.1;
@@ -1874,6 +1907,7 @@ function runUnitSeparationPass() {
     }
     _simParams[0] = start[nChunks]; _simParams[1] = 512;
     simParallelRun(SIM_KERNEL_UNIT_PACK, Math.ceil(start[nChunks] / 512));
+    }
     let pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0);
     let maxR = Math.max(0.1, _maxUnitCollisionRadius());
     let cws = CHUNK_SIZE * TILE;
@@ -1899,10 +1933,35 @@ function runUnitSeparationPass() {
     P[6] = UNIT_SEPARATION_SHARE_BOTH; P[7] = UNIT_SEPARATION_SHARE_ONE; P[8] = S.offs.length / 3;
     P[9] = jobCount;
     simParallelRun(SIM_KERNEL_SEPARATION, Math.ceil(jobCount / unitsPerJob));
+    const useSharedFinish = n >= 4096;
+    if (useSharedFinish) {
+        _sepShared(S, 'nextX', Float64Array, cap); _sepShared(S, 'nextY', Float64Array, cap);
+        _sepShared(S, 'fast', Uint8Array, cap);
+        P[0] = n; P[1] = 512; P[2] = TILE; P[3] = UNIT_POSITION_QUANTIZATION;
+        P[4] = UNIT_SEPARATION_CONTACTS; P[5] = UNIT_SEPARATION_Q;
+        simParallelRun(SIM_KERNEL_SEPARATION_FINISH, Math.ceil(n / 512));
+    }
     for (let i = 0; i < n; i++) {
         if (!HIT[i]) continue;
         let u = units[i];
         if (u.dead) continue;
+        if (useSharedFinish && S.fast[i]) {
+            const x = S.nextX[i], y = S.nextY[i], gx = Math.floor(x / TILE), gy = Math.floor(y / TILE);
+            if (u.isFlying || (grid[gy] && grid[gy][gx] && grid[gy][gx].type !== TYPE_WALL)) {
+                const member = u._spatialMember;
+                u.x = x; u.y = y;
+                if (u.pathIsFallbackAstar && u._pendingPathTarget && ((gameTime + u.id) % UNIT_SEPARATION_PATH_RETRY_TICKS) === 0) _tryUpgradeAstarFallbackPath(u);
+                // Same tile, owner, vision and area generation as before this
+                // collision phase: bucket membership cannot have changed.
+                if (member && member.owner === u.owner && member.areaGrid === areaIdGrid
+                    && member.chunk === spatialUnits[u._spatialKey]
+                    && Math.floor(member.x / TILE) === gx && Math.floor(member.y / TILE) === gy
+                    && !ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) {
+                    member.x = x; member.y = y;
+                } else updateUnitSpatial(u);
+                continue;
+            }
+        }
         // All contacts are resolved at once: beyond a few, their sum is
         // damped by sqrt(contacts) (full sums overshoot and oscillate in a
         // dense crowd; a plain average cannot hold a crowd pressing in).
