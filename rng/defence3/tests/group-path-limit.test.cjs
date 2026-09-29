@@ -19,7 +19,8 @@ const H = require('./net-harness.cjs');
 
     // The stuck group: the lowest-id units (first in the resolver's order),
     // whose shared search never answers and whose own searches never finish.
-    host.eval(`(() => {
+    // (In the simulation: with the worker, there.)
+    host.evalSim(`(() => {
         const mine = units.filter(u => !u.dead && u.owner === localPlayerId && !u.workerType).sort((a, b) => a.id - b.id);
         __scratch.stuck = new Set(mine.slice(0, 6).map(u => u.id));
         __scratch.bad = { gx: 3, gy: 3 };
@@ -32,10 +33,10 @@ const H = require('./net-harness.cjs');
         _findPathForUnitTagged = function (tag, u) { if (u && __scratch.stuck.has(u.id)) return null; return single.apply(this, arguments); };
         const own = _tryUpgradeAstarFallbackPath;
         _tryUpgradeAstarFallbackPath = function (u) { if (u && __scratch.stuck.has(u.id)) return; return own.apply(this, arguments); };
-        queueAction({ action: 'move', unitIds: [...__scratch.stuck], targetX: 3 * TILE + 16, targetY: 3 * TILE + 16 });
     })()`);
+    host.eval(`queueAction({ action: 'move', unitIds: [...__scratch.stuck], targetX: 3 * TILE + 16, targetY: 3 * TILE + 16 })`);
     await world.run(500);
-    assert.equal(host.eval('units.filter(u => __scratch.stuck.has(u.id) && u._pendingPathTarget).length'), 6, 'the stuck group stays pending');
+    assert.equal(host.evalSim('units.filter(u => __scratch.stuck.has(u.id) && u._pendingPathTarget).length'), 6, 'the stuck group stays pending');
 
     // The rest over 5 points, as shift right-click does (one order per point).
     host.eval(`(() => {
@@ -46,7 +47,7 @@ const H = require('./net-harness.cjs');
             targetX: fx * GRID_W * TILE, targetY: fy * GRID_H * TILE }));
     })()`);
     await world.run(2000);
-    const r = JSON.parse(host.eval(`JSON.stringify((() => {
+    const r = JSON.parse(host.evalSim(`JSON.stringify((() => {
         const ids = new Set(__scratch.selIds), sel = units.filter(u => ids.has(u.id) && !u.dead);
         return { n: sel.length, waiting: sel.filter(u => u._awaitGroupPath > gameTime).length,
             stillPending: sel.filter(u => u._pendingPathTarget && !(u.path && u.path.length)).length };

@@ -814,6 +814,91 @@ function _getCloudTowerFast(gx, gy, owner) {
     return t;
 }
 
+// ---- Connected regions of the plain ground graph ----
+// Tiles that are not walls (and the owner's live cloud portals, joined with
+// their pair) in 4-connected regions, per owner, rebuilt when the topology
+// or the live portals change. A search whose target lies in another region
+// than its start cannot reach it: rather than exhausting the start's whole
+// region (often over several ticks of budget), it goes straight to the
+// region's tile nearest the target (see findPathAStar).
+let _pathRegions = { version: -1, w: 0, h: 0, byOwner: new Map(), nearest: new Map() };
+
+function _pathRegionPortalSignature() {
+    if (_cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+    let sig = 0;
+    for (let [key, t] of _cloudTileCache) if (t.energy > 0 && !t.underConstruction) sig = (Math.imul(sig ^ (key + 1), 16777619) + (t.owner + 3)) | 0;
+    return sig;
+}
+
+// Region label per tile (-1: not walkable) for plain ground movement of
+// `owner` (null: no portals).
+function getPathRegions(owner) {
+    let R = _pathRegions;
+    let portalSig = _pathRegionPortalSignature();
+    if (R.version !== pathTopologyVersion || R.w !== GRID_W || R.h !== GRID_H || R.portalSig !== portalSig) {
+        R.version = pathTopologyVersion; R.w = GRID_W; R.h = GRID_H; R.portalSig = portalSig;
+        R.byOwner = new Map(); R.nearest = new Map();
+    }
+    let key = owner === null || owner === undefined ? -1 : owner;
+    let labels = R.byOwner.get(key);
+    if (labels) return labels;
+    let w = GRID_W, h = GRID_H, n = w * h;
+    labels = new Int32Array(n).fill(-1);
+    let walk = new Uint8Array(n);
+    for (let y = 0; y < h; y++) {
+        let row = grid[y];
+        for (let x = 0; x < w; x++) if (row[x].type !== TYPE_WALL || (key >= 0 && _getCloudTowerFast(x, y, key))) walk[y * w + x] = 1;
+    }
+    let q = new Int32Array(n), next = 0;
+    for (let i = 0; i < n; i++) {
+        if (!walk[i] || labels[i] >= 0) continue;
+        let id = next++, head = 0, tail = 0;
+        labels[i] = id; q[tail++] = i;
+        while (head < tail) {
+            let k = q[head++], x = k % w, y = (k / w) | 0;
+            if (x > 0 && walk[k - 1] && labels[k - 1] < 0) { labels[k - 1] = id; q[tail++] = k - 1; }
+            if (x < w - 1 && walk[k + 1] && labels[k + 1] < 0) { labels[k + 1] = id; q[tail++] = k + 1; }
+            if (y > 0 && walk[k - w] && labels[k - w] < 0) { labels[k - w] = id; q[tail++] = k - w; }
+            if (y < h - 1 && walk[k + w] && labels[k + w] < 0) { labels[k + w] = id; q[tail++] = k + w; }
+        }
+    }
+    // Paired portals join their regions (union-find, then relabel).
+    if (key >= 0 && _cloudTileCache.size) {
+        let parent = new Int32Array(next);
+        for (let i = 0; i < next; i++) parent[i] = i;
+        let find = a => { while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; } return a; };
+        for (let [tileKey, t] of _cloudTileCache) {
+            if (t.owner !== key || !(t.energy > 0 && !t.underConstruction)) continue;
+            let partner = getPairedCloudTower(t, key);
+            if (!partner) continue;
+            let a = labels[tileKey], b = labels[partner.gy * w + partner.gx];
+            if (a < 0 || b < 0) continue;
+            let ra = find(a), rb = find(b);
+            if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb);
+        }
+        for (let i = 0; i < n; i++) if (labels[i] >= 0) labels[i] = find(labels[i]);
+    }
+    R.byOwner.set(key, labels);
+    return labels;
+}
+
+// The tile of `region` nearest (Manhattan, then lowest index) to (ex, ey):
+// the reachable stand-in for a target outside the region. Cached.
+function nearestTileInPathRegion(owner, labels, region, ex, ey) {
+    let R = _pathRegions;
+    let key = ((owner === null || owner === undefined ? -1 : owner) + 2) * 1e9 + region * 1e5 + ey * GRID_W + ex;
+    let hit = R.nearest.get(key);
+    if (hit !== undefined) return hit;
+    let w = GRID_W, best = -1, bestD = Infinity;
+    for (let i = 0; i < labels.length; i++) {
+        if (labels[i] !== region) continue;
+        let d = Math.abs(i % w - ex) + Math.abs(((i / w) | 0) - ey);
+        if (d < bestD) { bestD = d; best = i; }
+    }
+    R.nearest.set(key, best);
+    return best;
+}
+
 // Typed-array min-heap (no object allocation per push)
 // _astarHeapF / _astarHeapK must be ensured before use; _astarHeapSz tracks current size.
 let _astarHeapSz = 0;
@@ -1056,6 +1141,26 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
             else {
                 _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
                 return null;
+            }
+        }
+        // Plain ground movement: a target in another region cannot be
+        // reached; the search heads for the start region's tile nearest it.
+        if (!canWalk) {
+            let owner = usePortalEdges ? pathOwner : null;
+            let labels = getPathRegions(owner);
+            let sr = labels[sy * gridW + sx], er = labels[ey * gridW + ex];
+            if (sr >= 0 && er !== sr) {
+                let t = allowClosestReachableFallback ? nearestTileInPathRegion(owner, labels, sr, ex, ey) : -1;
+                if (t < 0) {
+                    _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
+                    return null;
+                }
+                // Already as near as it can get: arrived.
+                if (t === sy * gridW + sx) {
+                    _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
+                    return [{ x: sx, y: sy }];
+                }
+                ex = t % gridW; ey = (t / gridW) | 0;
             }
         }
     }

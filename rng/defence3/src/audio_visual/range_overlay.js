@@ -115,21 +115,105 @@ function getRenderRangeBoundary(selectedBuildings, selected) {
     return computeRenderRangeBoundary(selectedBuildings, selected);
 }
 
+// Working state of the range outline, per area (typed arrays sized to the
+// area count; reset when the world changes):
+// best/prevBest: largest floored range of a source in the area (-1: none),
+// rem: remaining range while spreading, active/prevActive/shown: coverage
+// masks, lastSeen: when an area was last covered (for the hold).
+let _rangeWork = null;
+function _rangeWorkFor(areaCount) {
+    let w = _rangeWork;
+    if (w && w.grid === grid && w.areas === _areaById && w.n === areaCount) return w;
+    w = _rangeWork = { grid, areas: _areaById, n: areaCount,
+        best: new Int16Array(areaCount).fill(-1), prevBest: new Int16Array(areaCount).fill(-1),
+        touched: new Int32Array(areaCount), nTouched: 0, prevTouched: new Int32Array(areaCount), nPrev: 0,
+        rem: new Int16Array(areaCount), active: new Uint8Array(areaCount), prevActive: new Uint8Array(areaCount),
+        shown: new Uint8Array(areaCount), lastSeen: new Float64Array(areaCount).fill(-Infinity),
+        buckets: [], tiles: null };
+    return w;
+}
+
+// Areas one step from an area.
+function _rangeAreaNeighbors(id) {
+    let list = typeof areaNeighborIds !== 'undefined' ? areaNeighborIds[id] : null;
+    return list || getAreaIdsWithinDistance(id, 1);
+}
+
+// Outline of the covered tiles: per grid line, the runs of edges with a
+// covered tile on exactly one side (outside the map counts as uncovered).
+function _rangeBoundaryFromTiles(cov, width, height) {
+    let lines = [];
+    const push = (horizontal, axis, start, end) => lines.push(horizontal
+        ? { x1: start, z1: axis, x2: end, z2: axis, color: 'rgba(120,220,255,0.65)' }
+        : { x1: axis, z1: start, x2: axis, z2: end, color: 'rgba(120,220,255,0.65)' });
+    for (let y = 0; y <= height; y++) {
+        let start = -1, above = (y - 1) * width, below = y * width;
+        for (let x = 0; x <= width; x++) {
+            let edge = x < width && (y > 0 ? cov[above + x] : 0) !== (y < height ? cov[below + x] : 0);
+            if (edge) { if (start < 0) start = x; }
+            else if (start >= 0) { push(true, y, start, x); start = -1; }
+        }
+    }
+    for (let x = 0; x <= width; x++) {
+        let start = -1;
+        for (let y = 0; y <= height; y++) {
+            let edge = y < height && (x > 0 ? cov[y * width + x - 1] : 0) !== (x < width ? cov[y * width + x] : 0);
+            if (edge) { if (start < 0) start = y; }
+            else if (start >= 0) { push(false, x, start, y); start = -1; }
+        }
+    }
+    return lines;
+}
+
+// The outline of every area within range of a source. Sources reduce to
+// their areas' largest floored range, which then spreads over the area graph
+// in one pass (a bucket queue by remaining range: O(areas + borders), however
+// many units), instead of uniting each source's own list of areas. The
+// outline is traced from a tile mask of the covered areas.
 function computeRenderRangeBoundary(selectedBuildings, selected) {
     if (renderRangeMode === RENDER_RANGE_NONE) {
         rangeBoundaryCache.context = null;
         return [];
     }
-    let sources = new Map();
+    let areaCount = _areaById.length;
+    let context = `${renderRangeMode}:${renderRangeAllTeam}:${localPlayerId}`;
+    let sameWorld = rangeBoundaryCache.grid === grid && rangeBoundaryCache.areas === _areaById
+        && rangeBoundaryCache.context === context && !!_rangeWork && _rangeWork.grid === grid
+        && _rangeWork.areas === _areaById && _rangeWork.n === areaCount;
+    let w = _rangeWorkFor(areaCount);
+    if (!sameWorld) {
+        w.best.fill(-1); w.prevBest.fill(-1); w.nTouched = 0; w.nPrev = 0;
+        w.prevActive.fill(0); w.shown.fill(0); w.lastSeen.fill(-Infinity);
+    }
+    // Clear the older source table and fill it; the last one is kept to compare.
+    for (let i = 0; i < w.nPrev; i++) w.prevBest[w.prevTouched[i]] = -1;
+    let t16 = w.prevBest; w.prevBest = w.best; w.best = t16;
+    let t32 = w.prevTouched; w.prevTouched = w.touched; w.touched = t32;
+    let nPrev = w.nPrev = sameWorld ? w.nTouched : -1;
+    if (nPrev < 0) w.nPrev = w.nTouched;
+    w.nTouched = 0;
+    let best = w.best, touched = w.touched, maxRange = 0;
     const add = (e, unit) => {
         if (!e || e.dead || e.energy <= 0 || (!unit && e.underConstruction)
             || (renderRangeAllTeam && e.owner !== localPlayerId)) return;
-        let x = Number.isFinite(e.x) ? e.x : (e.gx + .5) * TILE;
-        let y = Number.isFinite(e.y) ? e.y : (e.gy + .5) * TILE;
         let range = getEntityEffectiveVisibilityRangeArea(e);
         // A fractional range includes the source area (distance zero).
         // Floor only after the positive-range check, as gameplay does.
-        addVisibilitySourceAreas(sources, x, y, range);
+        if (!(range > 0)) return;
+        let wx = Number.isFinite(e.x) ? e.x : (e.gx + .5) * TILE;
+        let wy = Number.isFinite(e.y) ? e.y : (e.gy + .5) * TILE;
+        if (!Number.isFinite(wx) || !Number.isFinite(wy)) return;
+        let r = Math.min(32767, Math.floor(range));
+        // Every area under the source's +-0.3 tile window, as gameplay.
+        let x = wx / TILE, y = wy / TILE;
+        let minX = Math.floor(x - .3), maxX = Math.floor(x + .3), minY = Math.floor(y - .3), maxY = Math.floor(y + .3);
+        for (let gy = minY; gy <= maxY; gy++) for (let gx = minX; gx <= maxX; gx++) {
+            let area = getAreaIdAtTile(gx, gy);
+            if (!(area >= 0 && area < areaCount) || best[area] >= r) continue;
+            if (best[area] < 0) touched[w.nTouched++] = area;
+            best[area] = r;
+            if (r > maxRange) maxRange = r;
+        }
     };
     let includeUnits = [RENDER_RANGE_ALL, RENDER_RANGE_UNITS, RENDER_RANGE_TURRETS_AND_UNITS].includes(renderRangeMode);
     let includeBuildings = renderRangeMode !== RENDER_RANGE_UNITS;
@@ -147,60 +231,64 @@ function computeRenderRangeBoundary(selectedBuildings, selected) {
             } else for (let row of grid) for (let c of row) if (c.item) add(c.item, false);
         }
     }
-    let context = `${renderRangeMode}:${renderRangeAllTeam}:${localPlayerId}`;
-    let sameWorld = rangeBoundaryCache.grid === grid && rangeBoundaryCache.areas === _areaById
-        && rangeBoundaryCache.context === context;
     // Integer simulation ticks avoid floating-point drift at the expiry tick.
     let tickClock = typeof gameTime === 'number' && typeof TICK_RATE === 'number';
     let now = tickClock ? gameTime : Date.now();
     let holdDuration = tickClock ? Math.max(1, Math.floor(TICK_RATE)) : RANGE_AREA_HOLD_MS;
-    // Compare numeric maps directly: source order is irrelevant. Avoid sorting
-    // and allocating string signatures every render frame for large armies.
-    if (sameWorld && rangeBoundaryCache.sources && sources.size === rangeBoundaryCache.sources.size) {
+    // Unchanged sources (in any order) keep the outline until a hold expires.
+    if (sameWorld && nPrev === w.nTouched) {
         let unchanged = true;
-        for (let [area, radius] of sources) if (rangeBoundaryCache.sources.get(area) !== radius) { unchanged = false; break; }
+        for (let i = 0; i < w.nTouched; i++) if (w.prevBest[touched[i]] !== best[touched[i]]) { unchanged = false; break; }
         if (unchanged && now < rangeBoundaryCache.nextExpiry) return rangeBoundaryCache.lines;
     }
-    // Union area ids before visiting tiles; identical unit ranges cost once.
-    let activeIds = new Set();
-    for (let [area, range] of sources) for (let id of getAreaIdsWithinDistance(area, Math.floor(range))) activeIds.add(id);
-    let lastSeen = sameWorld ? rangeBoundaryCache.lastSeen : new Map();
-    // A source that just left an area keeps its outline for one second.
-    // Refresh the previously active areas only when sources change, so the
-    // steady frame path still returns from the cache above.
-    if (sameWorld && rangeBoundaryCache.activeCoverage) {
-        for (let id of rangeBoundaryCache.activeCoverage) lastSeen.set(id, now);
-    }
-    for (let id of activeIds) lastSeen.set(id, now);
-    let ids = new Set(activeIds), nextExpiry = Infinity;
-    for (let [id, seenAt] of lastSeen) {
-        if (activeIds.has(id)) continue;
-        let expiry = seenAt + holdDuration;
-        if (expiry > now) { ids.add(id); nextExpiry = Math.min(nextExpiry, expiry); }
-        else lastSeen.delete(id);
-    }
-    if (sameWorld && rangeBoundaryCache.coverage && ids.size === rangeBoundaryCache.coverage.size) {
-        let unchanged = true;
-        for (let id of ids) if (!rangeBoundaryCache.coverage.has(id)) { unchanged = false; break; }
-        if (unchanged) {
-            rangeBoundaryCache.sources = sources;
-            rangeBoundaryCache.activeCoverage = activeIds;
-            rangeBoundaryCache.lastSeen = lastSeen;
-            rangeBoundaryCache.nextExpiry = nextExpiry;
-            return rangeBoundaryCache.lines;
+    // Spread the ranges: rem[a] is the most range left on reaching area a.
+    let rem = w.rem, active = w.active, buckets = w.buckets;
+    rem.fill(-1); active.fill(0);
+    for (let d = 0; d <= maxRange; d++) { if (buckets[d]) buckets[d].length = 0; else buckets[d] = []; }
+    for (let i = 0; i < w.nTouched; i++) { let a = touched[i]; rem[a] = best[a]; buckets[best[a]].push(a); }
+    for (let d = maxRange; d >= 0; d--) {
+        let bucket = buckets[d];
+        for (let k = 0; k < bucket.length; k++) {
+            let a = bucket[k];
+            if (rem[a] !== d || active[a]) continue;
+            active[a] = 1;
+            if (d === 0) continue;
+            for (let n of _rangeAreaNeighbors(a)) {
+                if (n >= 0 && n < areaCount && rem[n] < d - 1) { rem[n] = d - 1; buckets[d - 1].push(n); }
+            }
         }
     }
-    let boundaries = [];
-    for (let id of ids) {
-        let area = _areaById[id];
-        if (!area) continue;
-        let edges = rangeAreaEdges.get(area);
-        if (!edges) { edges = buildRangeBoundary(area.cells, GRID_W, GRID_H); rangeAreaEdges.set(area, edges); }
-        boundaries.push(edges);
+    // A source that just left an area keeps its outline for one second.
+    // The previously active areas renew their hold only when sources change,
+    // so the steady frame path still returns from the cache above.
+    let lastSeen = w.lastSeen, prevActive = w.prevActive, shown = w.shown, nextExpiry = Infinity, changed = !sameWorld;
+    for (let a = 0; a < areaCount; a++) {
+        if (active[a] || prevActive[a]) lastSeen[a] = now;
+        let on = 0;
+        if (active[a]) on = 1;
+        else if (lastSeen[a] + holdDuration > now) {
+            on = 1;
+            if (lastSeen[a] + holdDuration < nextExpiry) nextExpiry = lastSeen[a] + holdDuration;
+        }
+        if (on !== shown[a]) { shown[a] = on; changed = true; }
     }
-    let lines = unionRangePerimeters(boundaries);
-    rangeBoundaryCache = { grid, areas: _areaById, context, sources, activeCoverage: activeIds,
-        lastSeen, nextExpiry, coverage: ids, lines, path: null };
+    w.active = prevActive; w.prevActive = active;
+    if (!changed) {
+        rangeBoundaryCache.nextExpiry = nextExpiry;
+        return rangeBoundaryCache.lines;
+    }
+    let width = GRID_W, height = GRID_H;
+    if (!w.tiles || w.tiles.length !== width * height) w.tiles = new Uint8Array(width * height);
+    let cov = w.tiles, hasGrid = typeof areaIdGrid !== 'undefined' && areaIdGrid && areaIdGrid.length === height;
+    for (let y = 0; y < height; y++) {
+        let row = hasGrid ? areaIdGrid[y] : null, o = y * width;
+        for (let x = 0; x < width; x++) {
+            let id = row ? row[x] : getAreaIdAtTile(x, y);
+            cov[o + x] = id >= 0 && id < areaCount && shown[id] && _areaById[id] ? 1 : 0;
+        }
+    }
+    let lines = _rangeBoundaryFromTiles(cov, width, height);
+    rangeBoundaryCache = { grid, areas: _areaById, context, nextExpiry, lines, path: null };
     return lines;
 }
 

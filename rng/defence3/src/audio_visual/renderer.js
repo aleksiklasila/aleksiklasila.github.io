@@ -1166,6 +1166,8 @@ function build3DOverlayData(bounds, alpha) {
 
 function getVisualUnitSourceLight(unit) {
     if (!unit || !unit.unitType || unit.dead || unit._historyGhost) return 0;
+    // A unit view (sim_frame.js): the worker's value for this player.
+    if (unit._frameView) return unit._col('light');
     if (unit.owner !== localPlayerId && !(unit.watched > 0 && unit.watchedByTeam === localPlayerId)) return 0;
     let range = getEntityEffectiveVisibilityRangeTiles(unit);
     return Number.isFinite(range) ? Math.max(0, range) : 0;
@@ -1533,6 +1535,8 @@ function getBackgroundWorldBoundsForRenderMode() {
 }
 
 function getUnit3DActivity(u) {
+    // A unit view (sim_frame.js): the worker's reading of it.
+    if (u._frameView) return u._activity();
     let moving = Math.hypot(u.x - u.prevX, u.y - u.prevY) > 0.01;
     if (u.attackFlash > 0) return { mode: 1, amount: 1, target: u.attackTarget || null };
     let state = String(u.workerState || '');
@@ -1743,6 +1747,7 @@ function get3DStatusTexture(state) {
 const RENDERER3D_ANGRY_LINGER_SECONDS = 1.5;
 const renderer3dLastAttackTick = new WeakMap();
 function getUnit3DStatusState(u, activity) {
+    if (u._frameView) return SIM_UNIT_STATUS_NAMES[u._col('status')] || 'walk';
     if (u.attackFlash > 0) renderer3dLastAttackTick.set(u, gameTime);
     let lastAttack = renderer3dLastAttackTick.get(u);
     let recentlyAttacked = lastAttack !== undefined && gameTime - lastAttack < RENDERER3D_ANGRY_LINGER_SECONDS * TICK_RATE;
@@ -1886,21 +1891,21 @@ const _unitLayerPhase = [0, 0];
 // A cached unit object set up for the layer from the worker's record: the
 // tick's position and the offset back, facing, activity, walk phase, status
 // icon and light (as layerCollect and _refreshUnit3DObject would).
-function _layerWriteFromVis(u, cached, vis, r, statusCanvases, offX, offZ) {
+function _layerWriteFromVis(u, cached, F, sl, statusCanvases, offX, offZ) {
     let o = cached.object;
     _pin3DPanelToLayer(o.topTextureCanvas, renderer3dUnitLayerVersion);
     let cx = u.x / TILE + offX, cz = u.y / TILE + offZ;
     o.x = o._cx = cx; o.z = o._cz = cz;
     o._pdx = (u.prevX - u.x) / TILE; o._pdz = (u.prevY - u.y) / TILE;
-    o.rotationY = vis[r + 2];
-    o.statusTextureCanvas = statusCanvases[vis[r + 5] | 0] || null;
+    o.rotationY = F.facing[sl];
+    o.statusTextureCanvas = statusCanvases[F.status[sl] | 0] || null;
     if (u.isSnake) {
         o._phaseRate = 0; o._flyOn = 0; o._flySeed = 0;
     } else {
-        let mode = vis[r] | 0;
+        let mode = F.mode[sl];
         o.animationMode = mode;
-        o.moveAmount = vis[r + 1];
-        o.walkPhase = vis[r + 3]; o._phaseRate = vis[r + 4];
+        o.moveAmount = F.amount[sl];
+        o.walkPhase = F.phase[sl]; o._phaseRate = F.prate[sl];
         o.y = cached.baseY + (u.isFlying ? (u.isWorker ? .36 : .30) : 0);
         o._flyOn = u.isFlying ? 1 : 0;
         o._flySeed = ((Number(u.id) || 0) * 1.7) % (Math.PI * 2);
@@ -1911,7 +1916,7 @@ function _layerWriteFromVis(u, cached, vis, r, statusCanvases, offX, offZ) {
     if (!fullVisibility) {
         let gx = Math.floor(cx), gy = Math.floor(cz);
         let row = visibilityGrid[gy];
-        let raw = Math.max((row && row[gx]) || 0, vis[r + 6]);
+        let raw = Math.max((row && row[gx]) || 0, F.light[sl]);
         level = Math.max(0, Math.min(1, raw / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
     }
     if (o.lightLevel !== level || o._litFor !== cached.tint) {
@@ -1952,11 +1957,18 @@ function _uSlotGrow(slot) {
     _uSlot.lod = grow(Uint8Array, _uSlot.lod);
     _uSlot.flags = grow(Uint8Array, _uSlot.flags);
     _uSlot.dim = grow(Float32Array, _uSlot.dim, 4);    // sx, sy, sz, y
+    // The last record written for the slot and the inputs it came from
+    // (U_SLOT_KEY_N values): an unchanged unit (idle) reuses it.
+    _uSlot.rec = grow(Float32Array, _uSlot.rec, 28);
+    _uSlot.inKey = grow(Float64Array, _uSlot.inKey, U_SLOT_KEY_N);
     _uSlot.rgb = grow(Uint8Array, _uSlot.rgb, 6);      // tint r g b, side r g b (0-255)
     _uSlot.kind = _uSlot.kind || []; _uSlot.kindLod = _uSlot.kindLod || []; _uSlot.kindLod2 = _uSlot.kindLod2 || []; _uSlot.panel = _uSlot.panel || [];
     _uSlot.cap = cap;
 }
 const U_SLOT_FLYING = 1, U_SLOT_WORKER = 2, U_SLOT_SNAKE = 4, U_SLOT_MOTION = 8;
+const U_SLOT_KEY_N = 12;
+// Camera state for levels of detail: bumped when the LOD camera changes.
+let _uLodCamStamp = 0, _uLodCamKey = '';
 
 // After the per-object path put a unit's object in the layer: its slot.
 function _uSlotFill(slot, u, o, cached, sig, view) {
@@ -1978,6 +1990,7 @@ function _uSlotFill(slot, u, o, cached, sig, view) {
     S.dim[d + 3] = u.isSnake ? o.y : cached.baseY + (u.isFlying ? (u.isWorker ? .36 : .30) : 0);
     let c = slot * 6;
     S.rgb[c] = tint.r; S.rgb[c + 1] = tint.g; S.rgb[c + 2] = tint.b; S.rgb[c + 3] = side.r; S.rgb[c + 4] = side.g; S.rgb[c + 5] = side.b;
+    S.inKey[slot * U_SLOT_KEY_N] = NaN;   // the cached record is stale
     S.kind[slot] = kind;
     S.kindLod[slot] = kind + ':lod';
     S.kindLod2[slot] = kind + ':lod2';
@@ -1997,6 +2010,8 @@ const _LIT_LUT = (() => {
     return t;
 })();
 const _uRec = new Float32Array(28);
+// Debug: why units leave the unit layer's fast path (window.__unitSlowWhy).
+let _dbgStats = null;
 let _uSlotVisIndex = -1;
 
 // Whether a unit's object can be drawn from the layer until the next tick.
@@ -2070,6 +2085,12 @@ function _reuseStatic3DObject(target, entity, gx, gy, audioMove, audioHeight) {
         || entry.angle !== entity.angle
         || entry.occupied !== renderer3dStaticFrame.occupied.has(gy * GRID_W + gx)
         || getDamageFlashState(entity)) return false;
+    // Its panel's inputs (health, progress, aim...), checked once per tick:
+    // unchanged, the structure is kept however long.
+    if (entry.sigTick !== gameTime) {
+        if (get3DExact2DVisualSignature(entity, false) !== entry.sig) return false;
+        entry.sigTick = gameTime;
+    }
     // Structures do not move: their light changes only with the grid.
     let object = entry.object;
     let panel = object.topTextureCanvas;
@@ -2100,8 +2121,10 @@ function _rememberStatic3DObject(target, entity, gx, gy, audioMove, audioHeight,
     entity._r3dStatic = ({ object, tick: gameTime, audioMove, audioHeight, angle: entity.angle,
         textureVersion: object.topTextureCanvas ? object.topTextureCanvas._textureVersion : undefined,
         litVersion: visibilityVersion, litGrid: visibilityGrid,
-        // Panels (health, progress) refresh every 1-4 ticks, spread by tile.
-        maxAge: 1 + ((gx * 7 + gy * 13) & 3),
+        // Kept while its panel signature holds (see _reuseStatic3DObject);
+        // rebuilt now and then anyway (spread by tile).
+        maxAge: 200 + ((gx * 7 + gy * 13) & 31),
+        sig: get3DExact2DVisualSignature(entity, false), sigTick: gameTime,
         view: renderer3dStaticFrame.view,
         label: _static3DLabelShown(entity),
         occupied: renderer3dStaticFrame.occupied.has(gy * GRID_W + gx),
@@ -2207,8 +2230,11 @@ function build3DFrameData(flat2d = false) {
     let backgroundMaxX = WORLD_W, backgroundMaxY = WORLD_H;
     let backgroundCanvasFor3D = getBackgroundMip(Math.min(1, 4096 / Math.max(WORLD_W, WORLD_H)));
     let backgroundVersionFor3D = _backgroundContentVersion;
+    _ph = _r3dPhase('startPre', _ph);
     if (!fullVisibility) rebuildVisibilityMaskCacheIfNeeded();
+    _ph = _r3dPhase('visMask', _ph);
     let overlays = build3DOverlayData(bounds, alpha);
+    _ph = _r3dPhase('overlays', _ph);
     let fxBatch = renderer3dFxBatch || (renderer3dFxBatch = new window.Defence3Renderer3D.FxBatch());
     let fxPixelsPerTile = flat2d ? camera.zoom * TILE : ((renderer3dInstance && renderer3dInstance.lodPixelsPerWorld) || 32);
     // Live effects are culled by live visibility, never by remembered fog.
@@ -2717,46 +2743,51 @@ function build3DFrameData(flat2d = false) {
         unitLayer.objects.push(o);
         if (!renderer3dInstance.writeUnitLayerObject(o)) unitLayer.fallback.push(o);
         else if (unitVis && _uSlotVisIndex >= 0) {
-            let vr = _uSlotVisIndex * SIM_UNIT_VIS_STRIDE;
-            _uSlotFill(unitVis[vr + 8], u, o, cached, unitVis[vr + 7], view3DKey);
+            let sl = unitVis.order[_uSlotVisIndex];
+            _uSlotFill(sl, u, o, cached, unitVis.sig[sl], view3DKey);
         }
         if (u.isSnake || u.unitType === 'tank' || u.unitType === 'boss' || u.unitType === 'king') {
             unitLayer.motion.push({ u, footprint, scaleY: o.scaleY, audioMove });
         }
     };
-    // Building the layer with the worker's per-unit visual records (see
-    // sim_delta.js, simUnitVisEncode): a unit whose cached object is still
-    // valid is written from its record, without the per-object logic below.
+    // Building the layer from the worker's unit frame (sim_frame.js): a unit
+    // whose cached object is still valid is written from its frame columns,
+    // without the per-object logic below.
     let unitVis = layerBuilding && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
     let statusCanvases = unitVis ? SIM_UNIT_STATUS_NAMES.map(name => get3DStatusTexture(name)) : null;
     let unitList = layerReuse ? unitLayer.perFrame : units;
     // With the records: units whose slot is valid are written from it; the
     // rest (slowIdx) take the per-object loop below.
     let slowIdx = null;
+    _dbgStats = typeof window !== 'undefined' && window.__unitSlowWhy ? (window.__unitSlowWhy.builds++, window.__unitSlowWhy) : null;
     if (unitVis) {
         slowIdx = [];
-        let VS = SIM_UNIT_VIS_STRIDE, S = _uSlot, r3 = renderer3dInstance;
+        let FV = unitVis, FO = FV.order, S = _uSlot, r3 = renderer3dInstance;
         let statusSlots = r3.statusSlotsFor(statusCanvases);
         let labelsOn = levelVisibilityMode === LEVEL_VISIBILITY_ALL;
         let flashChecks = renderer3dFlashUntil.size > 0, nowT = gameTime + tickAlpha;
         let layerVersion = unitLayer.version;
         let rec = _uRec;
+        let camKey = r3.lodEye ? r3.lodEye[0] + ',' + r3.lodEye[1] + ',' + r3.lodEye[2] + ',' + r3.lodForward[0] + ',' + r3.lodForward[1] + ',' + r3.lodForward[2] + ',' + r3.lodProjectionScale : String(r3.lodPixelsPerWorld);
+        if (camKey !== _uLodCamKey) { _uLodCamKey = camKey; _uLodCamStamp++; }
+        let camStamp = _uLodCamStamp, KN = U_SLOT_KEY_N, keyArr = S.inKey, recArr = S.rec;
         for (let i = 0; i < units.length; i++) {
-            let r = i * VS;
-            let slot = unitVis[r + 8];
-            if (slot < 0) continue;
-            let x = unitVis[r + 9], y = unitVis[r + 10], px = unitVis[r + 11], py = unitVis[r + 12];
+            let slot = FO[i];
+            let x = FV.x[slot], y = FV.y[slot], px = FV.px[slot], py = FV.py[slot];
             let ux = px + (x - px) * alpha, uy = py + (y - py) * alpha;
             let ugx = Math.floor(ux / TILE), ugy = Math.floor(uy / TILE);
             if (ugx < unitBounds.minGx - 1 || ugx > unitBounds.maxGx + 1 || ugy < unitBounds.minGy - 1 || ugy > unitBounds.maxGy + 1) continue;
             if (!fullVisibility && (!visibilityGrid[ugy] || visibilityGrid[ugy][ugx] === 0)) continue;
             unitLayer.occupied.push(ugy * GRID_W + ugx);
-            let id = unitVis[r + 13];
-            if (!(slot < S.cap) || !S.valid[slot] || S.id[slot] !== id || S.sig[slot] !== unitVis[r + 7] || S.view[slot] !== view3DKey
-                || (S.panel[slot]._textureVersion || 0) !== S.texVer[slot]) { slowIdx.push(i); continue; }
+            let id = FV.id[slot];
+            if (!(slot < S.cap) || !S.valid[slot] || S.id[slot] !== id || S.sig[slot] !== FV.sig[slot] || S.view[slot] !== view3DKey
+                || (S.panel[slot]._textureVersion || 0) !== S.texVer[slot]) {
+                let st = _dbgStats; if (st) { let why = !(slot < S.cap) || !S.valid[slot] ? 'invalid' : S.id[slot] !== id ? 'id' : S.sig[slot] !== FV.sig[slot] ? 'sig' : S.view[slot] !== view3DKey ? 'view' : 'tex'; st[why]++; if (why === 'invalid') { let t = 'type_' + units[i].unitType; st[t] = (st[t] || 0) + 1; } }
+                slowIdx.push(i); continue;
+            }
             if (flashChecks) {
                 let until = renderer3dFlashUntil.get(id);
-                if (until !== undefined) { if (until > nowT) { slowIdx.push(i); continue; } renderer3dFlashUntil.delete(id); }
+                if (until !== undefined) { if (until > nowT) { if (_dbgStats) _dbgStats.flash++; slowIdx.push(i); continue; } renderer3dFlashUntil.delete(id); }
             }
             let flags = S.flags[slot];
             if (S.label[slot] !== 2) {
@@ -2767,7 +2798,7 @@ function build3DFrameData(flat2d = false) {
                     shown = shown ? zoom >= 0.7 * 0.95 : zoom >= 0.7 * 1.05;
                 } else shown = false;
                 S.labelShown[slot] = shown ? 1 : 0;
-                if ((shown ? 1 : 0) !== S.label[slot]) { slowIdx.push(i); continue; }
+                if ((shown ? 1 : 0) !== S.label[slot]) { if (_dbgStats) _dbgStats.label++; slowIdx.push(i); continue; }
             }
             let gx = Math.floor(x / TILE), gy = Math.floor(y / TILE);
             let bgRow = bgSoundGrid[gy], fxRow = fxSoundGrid[gy];
@@ -2777,33 +2808,57 @@ function build3DFrameData(flat2d = false) {
             let level = 1;
             if (!fullVisibility) {
                 let row = visibilityGrid[Math.floor(cz)];
-                let raw = Math.max((row && row[Math.floor(cx)]) || 0, unitVis[r + 6]);
+                let raw = Math.max((row && row[Math.floor(cx)]) || 0, FV.light[slot]);
                 level = Math.max(0, Math.min(1, raw / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
             }
             let bucket = Math.max(0, Math.min(24, Math.round(level * 24)));
+            // Unchanged since the slot's last record (an idle unit): that
+            // record, with this tick's animation phase.
+            let ko = slot * KN, ro = slot * 28, st = statusSlots[FV.status[slot] | 0];
+            if (keyArr[ko] === x && keyArr[ko + 1] === y && keyArr[ko + 2] === px && keyArr[ko + 3] === py && keyArr[ko + 4] === FV.facing[slot]
+                && keyArr[ko + 5] === FV.mode[slot] && keyArr[ko + 6] === FV.amount[slot] && keyArr[ko + 7] === st && keyArr[ko + 8] === cx
+                && keyArr[ko + 9] === cz && keyArr[ko + 10] === level && keyArr[ko + 11] === camStamp) {
+                for (let q = 0; q < 28; q++) rec[q] = recArr[ro + q];
+                let snakeC = flags & U_SLOT_SNAKE;
+                rec[11] = snakeC ? 0 : FV.prate[slot]; rec[21] = snakeC ? 0 : FV.phase[slot];
+                let lodC = S.lod[slot], panelC = S.panel[slot];
+                panelC._layerPin = layerVersion; panelC._usedFrame = renderer3dExactTextureFrame;
+                if (!r3.writeUnitLayerRecord(lodC === 0 ? S.kind[slot] : lodC === 1 ? S.kindLod[slot] : S.kindLod2[slot], snakeC ? 0 : FV.mode[slot], rec, panelC, units[i])) { slowIdx.push(i); continue; }
+                if (flags & U_SLOT_MOTION) {
+                    let u = units[i];
+                    let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
+                    unitLayer.motion.push({ u, footprint, scaleY: S.dim[slot * 4 + 1], audioMove });
+                    pushUnitMotionFx(u, ux / TILE + reactiveOffsetX * audioMove, uy / TILE + reactiveOffsetY * audioMove, footprint, S.dim[slot * 4 + 1]);
+                }
+                continue;
+            }
             let d = slot * 4, c = slot * 6;
             let sx = S.dim[d], sy = S.dim[d + 1], sz = S.dim[d + 2];
-            let facing = unitVis[r + 2], cs = Math.cos(facing), sn = Math.sin(facing);
+            let facing = FV.facing[slot], cs = Math.cos(facing), sn = Math.sin(facing);
             let snake = flags & U_SLOT_SNAKE, flying = !snake && (flags & U_SLOT_FLYING);
             rec[0] = cs * sx; rec[1] = 0; rec[2] = -sn * sx; rec[3] = (px - x) / TILE;
             rec[4] = flying ? (id * 1.7) % (Math.PI * 2) : 0; rec[5] = sy; rec[6] = flying ? 1 : 0; rec[7] = (py - y) / TILE;
-            rec[8] = sn * sz; rec[9] = 0; rec[10] = cs * sz; rec[11] = snake ? 0 : unitVis[r + 4];
+            rec[8] = sn * sz; rec[9] = 0; rec[10] = cs * sz; rec[11] = snake ? 0 : FV.prate[slot];
             rec[12] = cx; rec[13] = S.dim[d + 3]; rec[14] = cz; rec[15] = 1;
             let lut = bucket * 256, rgb = S.rgb;
             rec[16] = _LIT_LUT[lut + rgb[c]]; rec[17] = _LIT_LUT[lut + rgb[c + 1]]; rec[18] = _LIT_LUT[lut + rgb[c + 2]];
             rec[19] = 1;
-            rec[20] = snake ? 0 : unitVis[r + 1];
-            rec[21] = snake ? 0 : unitVis[r + 3];
+            rec[20] = snake ? 0 : FV.amount[slot];
+            rec[21] = snake ? 0 : FV.phase[slot];
             rec[22] = _LIT_LUT[lut + rgb[c + 3]]; rec[23] = _LIT_LUT[lut + rgb[c + 4]]; rec[24] = _LIT_LUT[lut + rgb[c + 5]];
             rec[25] = level;
-            rec[27] = statusSlots[unitVis[r + 5] | 0];
+            rec[27] = statusSlots[FV.status[slot] | 0];
             // Level of detail by on-screen size (hysteresis as getFigureMeshKey).
             let pixels = r3.pixelsPerWorldAt(cx, 0, cz) * Math.max(sx, sz);
             let lod = figureLodLevel(S.lod[slot], pixels);
             S.lod[slot] = lod;
+            for (let q = 0; q < 28; q++) recArr[ro + q] = rec[q];
+            keyArr[ko] = x; keyArr[ko + 1] = y; keyArr[ko + 2] = px; keyArr[ko + 3] = py; keyArr[ko + 4] = FV.facing[slot];
+            keyArr[ko + 5] = FV.mode[slot]; keyArr[ko + 6] = FV.amount[slot]; keyArr[ko + 7] = st; keyArr[ko + 8] = cx;
+            keyArr[ko + 9] = cz; keyArr[ko + 10] = level; keyArr[ko + 11] = camStamp;
             let panel = S.panel[slot];
             panel._layerPin = layerVersion; panel._usedFrame = renderer3dExactTextureFrame;
-            if (!r3.writeUnitLayerRecord(lod === 0 ? S.kind[slot] : lod === 1 ? S.kindLod[slot] : S.kindLod2[slot], snake ? 0 : unitVis[r] | 0, rec, panel, units[i])) { slowIdx.push(i); continue; }
+            if (!r3.writeUnitLayerRecord(lod === 0 ? S.kind[slot] : lod === 1 ? S.kindLod[slot] : S.kindLod2[slot], snake ? 0 : FV.mode[slot], rec, panel, units[i])) { slowIdx.push(i); continue; }
             if (flags & U_SLOT_MOTION) {
                 let u = units[i];
                 let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
@@ -2812,7 +2867,9 @@ function build3DFrameData(flat2d = false) {
             }
         }
     }
+    _ph = _r3dPhase(layerBuilding ? 'unitsFast' : 'unitsPre', _ph);
     let loopCount = slowIdx ? slowIdx.length : unitList.length;
+    if (typeof window !== 'undefined' && window.__unitLayerStats) { let st = window.__unitLayerStats; st.builds++; st.slow += slowIdx ? slowIdx.length : -1; st.total += units.length; }
     for (let li = 0; li < loopCount; li++) {
         let ui = slowIdx ? slowIdx[li] : li;
         let u = slowIdx ? units[ui] : unitList[ui];
@@ -2834,17 +2891,17 @@ function build3DFrameData(flat2d = false) {
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
         if (unitVis) {
-            let cached = u._r3d, r = ui * SIM_UNIT_VIS_STRIDE;
-            let sig = unitVis[r + 7];
+            let cached = u._r3d, sl = unitVis.order[ui];
+            let sig = unitVis.sig[sl];
             if (cached && cached.sigW !== sig) cached.tick = -1e9;   // panel changed: rebuild below
             else if (cached && (cached.snake ? !!u.isSnake : !u.isSnake) && cached.view === view3DKey
                 && (u.isSnake || cached.label === shouldShowUnitLevels(u))
                 && _unitLayerEligible(u, cached, cached.object)
                 && (cached.object.topTextureCanvas || {})._textureVersion === cached.textureVersion) {
-                _layerWriteFromVis(u, cached, unitVis, r, statusCanvases, reactiveOffsetX * audioMove, reactiveOffsetY * audioMove);
+                _layerWriteFromVis(u, cached, unitVis, sl, statusCanvases, reactiveOffsetX * audioMove, reactiveOffsetY * audioMove);
                 unitLayer.objects.push(cached.object);
                 if (!renderer3dInstance.writeUnitLayerObject(cached.object)) unitLayer.fallback.push(cached.object);
-                else _uSlotFill(unitVis[r + 8], u, cached.object, cached, sig, view3DKey);
+                else _uSlotFill(sl, u, cached.object, cached, sig, view3DKey);
                 if (u.isSnake || u.unitType === 'tank' || u.unitType === 'boss' || u.unitType === 'king') {
                     unitLayer.motion.push({ u, footprint, scaleY: cached.object.scaleY, audioMove });
                     pushUnitMotionFx(u, ux / TILE + reactiveOffsetX * audioMove, uy / TILE + reactiveOffsetY * audioMove, footprint, cached.object.scaleY);
@@ -2878,7 +2935,7 @@ function build3DFrameData(flat2d = false) {
                 objects.push(o);
                 if (!flat2d) pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
                 if (layerBuilding) layerCollect(u, footprint, audioMove);
-                if (unitVis) cached.sigW = unitVis[ui * SIM_UNIT_VIS_STRIDE + 7];
+                if (unitVis) cached.sigW = unitVis.sig[unitVis.order[ui]];
                 continue;
             }
             pushSnakeRenderObjects(objects, u, ux + reactiveOffsetX * audioMove * TILE, uy + reactiveOffsetY * audioMove * TILE, footprint);
@@ -2912,7 +2969,7 @@ function build3DFrameData(flat2d = false) {
                     }
                     objects.push(o);
                     layerCollect(u, footprint, audioMove);
-                    if (unitVis) cached.sigW = unitVis[ui * SIM_UNIT_VIS_STRIDE + 7];
+                    if (unitVis) cached.sigW = unitVis.sig[unitVis.order[ui]];
                     // This frame's motion effects (the layer's own start next frame).
                     if (u.unitType === 'tank' || u.unitType === 'boss' || u.unitType === 'king') {
                         pushUnitMotionFx(u, ux / TILE + reactiveOffsetX * audioMove, uy / TILE + reactiveOffsetY * audioMove, footprint, o.scaleY);
@@ -2933,7 +2990,7 @@ function build3DFrameData(flat2d = false) {
                 objects.push(o);
                 if (!flat2d) pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
                 if (layerBuilding) layerCollect(u, footprint, audioMove);
-                if (unitVis) cached.sigW = unitVis[ui * SIM_UNIT_VIS_STRIDE + 7];
+                if (unitVis) cached.sigW = unitVis.sig[unitVis.order[ui]];
                 continue;
             }
             // Mounts (pony, winged horses) carry a rider: larger than a lone figure.
@@ -2993,7 +3050,7 @@ function build3DFrameData(flat2d = false) {
             }
             if (layerBuilding) layerCollect(u, footprint, audioMove);
         }
-        if (unitVis && u._r3d) u._r3d.sigW = unitVis[ui * SIM_UNIT_VIS_STRIDE + 7];
+        if (unitVis && u._r3d) u._r3d.sigW = unitVis.sig[unitVis.order[ui]];
     }
 
     _ph = _r3dPhase(layerBuilding ? 'unitsBuild' : 'unitsReuse', _ph);
@@ -3341,7 +3398,10 @@ function _getVisibilityFloorItemCandidates() {
     return getCellItemsRowMajor();
 }
 
-function computeVisibilityGridForPlayer(playerId, vis) {
+// sources/sourceLength: the player's sources as (world x, world y, range)
+// triples, in enumeration order (see _buildVisibilitySourceLists); without
+// them the world is scanned for the player's sources.
+function computeVisibilityGridForPlayer(playerId, vis, sources = null, sourceLength = 0) {
     for (let y = 0; y < GRID_H; y++) vis[y].fill(0);
 
     let areaRangeBySourceArea = new Map();
@@ -3409,12 +3469,14 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         return ownerId === targetId || ((Number(watched) || 0) > 0 && Math.floor(Number(watchedByTeam)) === targetId);
     };
 
-    for (let u of units) {
+    if (sources) for (let i = 0; i < sourceLength; i += 3) addWorldVisibilitySource(sources[i], sources[i + 1], sources[i + 2]);
+    else for (let u of units) {
         if (!u || u.dead) continue;
         if (!shouldRevealForPlayer(u.owner, u.watched || 0, u.watchedByTeam)) continue;
         let visionArea = getEntityEffectiveVisibilityRangeArea(u);
         addWorldVisibilitySource(u.x, u.y, visionArea);
     }
+    if (!sources) {
     for (let t of towers) {
         if (!t || !(t.energy > 0) || t.underConstruction) continue;
         if (!shouldRevealForPlayer(t.owner, t.watched || 0, t.watchedByTeam)) continue;
@@ -3446,6 +3508,7 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         }
     } else {
         for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) revealFloorItem(grid[y][x], x, y);
+    }
     }
 
     // Players without sources (empty slots, eliminated teams) see nothing;
@@ -3560,11 +3623,15 @@ function getRawVisibilityGridForPlayer(playerId) {
     // ticks: reuse their last grid instead of recomputing it. A team whose
     // sources keep changing skips the comparison for a while.
     let now = typeof gameTime === 'number' ? gameTime : 0;
+    // Every player's sources, collected in one pass (updateAllPlayerVisibility).
+    let src = null, srcLength = 0;
+    if (_visibilitySourceLists === true) _visibilitySourceLists = _buildVisibilitySourceLists();
+    if (_visibilitySourceLists) { src = _visibilitySourceLists.lists[pid] || _EMPTY_VISIBILITY_SOURCES; srcLength = _visibilitySourceLists.lengths[pid] || 0; }
     let compare = !(pool.skipUntil > now && pool.skipUntil - now <= VISIBILITY_SIGNATURE_BACKOFF_TICKS);
     let signature = _visibilitySourceSignatureScratch, signatureLength = -1;
     if (compare) {
         if (pool.skipUntil >= 0) { pool.skipUntil = -1; pool.misses = 0; }
-        signatureLength = _collectVisibilitySourceSignature(pid, signature);
+        signatureLength = _collectVisibilitySourceSignature(pid, signature, src, srcLength);
         signature = _visibilitySourceSignatureScratch; // may have grown
         let last = pool.last;
         if (last && last.length === GRID_H && (GRID_H === 0 || last[0].length === GRID_W)
@@ -3584,7 +3651,7 @@ function getRawVisibilityGridForPlayer(playerId) {
         rawVis = pool.grids[pool.next] = createEmptyVisibilityGrid();
     }
     pool.next ^= 1;
-    computeVisibilityGridForPlayer(pid, rawVis);
+    computeVisibilityGridForPlayer(pid, rawVis, src, srcLength);
     if (compare) {
         if (!pool.signature || pool.signature.length < signatureLength) pool.signature = new Float64Array(Math.max(64, signature.length));
         pool.signature.set(signature.subarray(0, signatureLength));
@@ -3610,8 +3677,19 @@ function _visibilitySignaturesEqual(a, b, length) {
 // Everything computeVisibilityGridForPlayer reads from one source, in its
 // enumeration order: the tiles under the source and its +-0.3 tile window
 // (area stamping), and its range. Three numbers per source.
-function _collectVisibilitySourceSignature(playerId, out) {
+function _collectVisibilitySourceSignature(playerId, out, sources = null, sourceLength = 0) {
     let length = 0;
+    if (sources) {
+        if (sourceLength > out.length) out = _visibilitySourceSignatureScratch = new Float64Array(Math.max(sourceLength, out.length * 2));
+        for (let i = 0; i < sourceLength; i += 3) {
+            let fx = sources[i] / TILE, fy = sources[i + 1] / TILE;
+            let bx = Math.floor(fx), by = Math.floor(fy);
+            out[i] = bx * 4 + (bx - Math.floor(fx - .3)) * 2 + (Math.floor(fx + .3) - bx);
+            out[i + 1] = by * 4 + (by - Math.floor(fy - .3)) * 2 + (Math.floor(fy + .3) - by);
+            out[i + 2] = Math.max(0, Number(sources[i + 2]) || 0);
+        }
+        return sourceLength;
+    }
     let target = Math.floor(Number(playerId));
     // Same test as computeVisibilityGridForPlayer's shouldRevealForPlayer;
     // the common integer-owner case is decided without coercion.
@@ -3649,6 +3727,56 @@ function _collectVisibilitySourceSignature(playerId, out) {
     return length;
 }
 
+// Every player's visibility sources in one pass over the world (instead of
+// a pass per player): per player id, (world x, world y, range) triples in
+// the enumeration order of computeVisibilityGridForPlayer. An entity reveals
+// to its owner and, while watched, to the watching team.
+const _EMPTY_VISIBILITY_SOURCES = new Float64Array(0);
+// null, true (to be built on first use) or the built lists.
+let _visibilitySourceLists = null;
+const _visibilitySourceStore = { lists: [], lengths: [] };
+function _buildVisibilitySourceLists() {
+    let S = _visibilitySourceStore, lists = S.lists, lengths = S.lengths;
+    for (let i = 0; i < lengths.length; i++) lengths[i] = 0;
+    const pushTo = (pid, wx, wy, range) => {
+        let list = lists[pid], n = lengths[pid] || 0;
+        if (!list || n + 3 > list.length) {
+            let grown = new Float64Array(Math.max(96, list ? list.length * 2 : 0));
+            if (list) grown.set(list.subarray(0, n));
+            lists[pid] = list = grown;
+        }
+        list[n] = wx; list[n + 1] = wy; list[n + 2] = range;
+        lengths[pid] = n + 3;
+    };
+    const add = (owner, e, wx, wy) => {
+        let p1 = Math.floor(Number(owner));
+        let p2 = (Number(e.watched) || 0) > 0 ? Math.floor(Number(e.watchedByTeam)) : -1;
+        let ok1 = p1 >= 0 && p1 < 4096, ok2 = p2 >= 0 && p2 < 4096 && p2 !== p1;
+        if (!ok1 && !ok2) return;
+        let range = getEntityEffectiveVisibilityRangeArea(e);
+        if (ok1) pushTo(p1, wx, wy, range);
+        if (ok2) pushTo(p2, wx, wy, range);
+    };
+    for (let u of units) if (u && !u.dead) add(u.owner, u, u.x, u.y);
+    for (let list of [towers, barracks, collectorSpawners]) for (let b of list) {
+        if (b && b.energy > 0 && !b.underConstruction) add(b.owner, b, b.x, b.y);
+    }
+    if (typeof _activeTileEntities !== 'undefined') {
+        for (let item of _getVisibilityFloorItemCandidates()) {
+            let cell = grid[item.gy] && grid[item.gy][item.gx];
+            if (!cell || cell.item !== item || !(item.energy > 0) || item.underConstruction) continue;
+            add(cell.owner, item, item.gx * TILE + TILE * 0.5, item.gy * TILE + TILE * 0.5);
+        }
+    } else {
+        for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) {
+            let cell = grid[y][x], item = cell && cell.item;
+            if (!item || !(item.energy > 0) || item.underConstruction) continue;
+            add(cell.owner, item, x * TILE + TILE * 0.5, y * TILE + TILE * 0.5);
+        }
+    }
+    return S;
+}
+
 function isTileActuallyVisibleToPlayer(playerId, gx, gy) {
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
     let pid = Math.floor(Number(playerId));
@@ -3682,20 +3810,7 @@ function updateVisibility(playerId) {
     visibilityGrid = updateVisualVisibility(targetPlayerId, getRawVisibilityGridForPlayer(targetPlayerId));
 }
 
-// Full map visibility: gameplay treats every tile as visible, so the grids
-// only light the local player's view; that one is refreshed every
-// FULL_VIS_GRID_TICKS ticks.
-const FULL_VIS_GRID_TICKS = 4;
 function updateAllPlayerVisibility() {
-    if (matchFullVisibility) {
-        let pid = Math.floor(Number(localPlayerId)) || 0;
-        if (!Array.isArray(visibilityGridByPlayer) || visibilityGridByPlayer.length < players.length) {
-            visibilityGridByPlayer = Array.from({ length: players.length }, () => []);
-        }
-        let stamp = visibilityGridStampByPlayer.get(pid);
-        if (stamp === undefined || gameTime - stamp >= FULL_VIS_GRID_TICKS || stamp > gameTime) visibilityGridByPlayer[pid] = getRawVisibilityGridForPlayer(pid) || [];
-        return;
-    }
     let seen = new Set();
     let ids = [];
     let pushId = (value) => {
@@ -3718,9 +3833,15 @@ function updateAllPlayerVisibility() {
     if (!Array.isArray(visibilityGridByPlayer) || visibilityGridByPlayer.length < players.length) {
         visibilityGridByPlayer = Array.from({ length: players.length }, () => []);
     }
-    for (let id of ids) {
-        let vis = getRawVisibilityGridForPlayer(id);
-        visibilityGridByPlayer[id] = vis || [];
+    // Built on the first grid that is due (most calls reuse every grid).
+    _visibilitySourceLists = true;
+    try {
+        for (let id of ids) {
+            let vis = getRawVisibilityGridForPlayer(id);
+            visibilityGridByPlayer[id] = vis || [];
+        }
+    } finally {
+        _visibilitySourceLists = null;
     }
 }
 
@@ -3782,7 +3903,7 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
         // Simulation worker: a few ticks may be in flight; beyond that the
         // page waits for results rather than queueing more.
         let inWorker = typeof simClientActive === 'function' && simClientActive();
-        if (inWorker && simClientInFlight() >= simClientMaxInFlight() + (catchUp > 0 ? 2 : 0)) {
+        if (inWorker && simClientInFlight() >= SIM_CLIENT_MAX_IN_FLIGHT + (catchUp > 0 ? 2 : 0)) {
             if (due) accumulator = Math.min(accumulator, TICK_MS);
             break;
         }

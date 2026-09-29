@@ -286,6 +286,19 @@ function resyncGuestBeforeTick(tick, now) {
 function applyResyncPatch(text, full) {
     let g = resyncGuest;
     let t0 = performance.now();
+    // With the simulation worker, the worker applies it: the page sees the
+    // result in the next frame and records.
+    if (typeof simClientActive === 'function' && simClientActive()) {
+        simClientAfterPatchApplied(text, full);
+        netCounters.snapshotApplyMs = performance.now() - t0;
+        netCounters.snapshotBytes = g.patch ? g.patch.bytes : text.length;
+        netCounters.lastSnapshotAt = performance.now();
+        if (full) { netCounters.fullPatches++; g.fullPatches++; } else { netCounters.patches++; g.patches++; }
+        netCounters.lastDesyncParts = full ? 'full state' : '';
+        g.lastChanged = [];
+        _resyncGuestPatchDone(currentTick);
+        return;
+    }
     let S = JSON.parse(text);
     let uiState = _captureSnapshotApplyUiState();
     // Where each unit was drawn, so ones the patch moves slide there.
@@ -314,8 +327,12 @@ function applyResyncPatch(text, full) {
     dirtyGrid = true;
     _minimapStaticDirty = true;
     if (typeof requestBuildMenuRefresh === 'function') requestBuildMenuRefresh();
-    // The simulation worker (if on) applies the same patch at this point.
-    if (typeof simClientAfterPatchApplied === 'function') simClientAfterPatchApplied(text, full);
+    _resyncGuestPatchDone(tick);
+}
+
+// The guest's bookkeeping once a patch is applied (at `tick`).
+function _resyncGuestPatchDone(tick) {
+    let g = resyncGuest;
     g.T = -1;
     g.patch = null;
     g.waitSince = 0;

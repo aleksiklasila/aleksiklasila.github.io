@@ -89,33 +89,50 @@ function _sortedForDeterministicOrder(slot, list) {
     return sorted;
 }
 
-function _buildDeterministicUnitUpdateOrderForTick() {
-    let order = _sortedForDeterministicOrder('units', units).slice();
-    if (order.length <= 1) return order;
-    let s = (((gameTime + 1) * 1664525) + ((order.length + 1) * 1013904223)) >>> 0;
-    for (let i = order.length - 1; i > 0; i--) {
+// Units update in a fresh deterministic order each tick, so no unit is
+// always first (A* budget contention, who strikes first). The order keeps
+// memory locality: the id order is cut into blocks of UNIT_UPDATE_ORDER_BLOCK
+// units (allocated, and so stored, close together), the blocks are shuffled,
+// and each block is walked from a random start in a random direction. Units
+// in different blocks come in either order with even odds, and so do two
+// units of one block (a random rotation, averaged over both directions). A
+// full per-unit shuffle made every update a cache miss: at 10k units the
+// tick ran ~20% slower. Buildings use the same scheme.
+const UNIT_UPDATE_ORDER_BLOCK = 64;
+let _updateOrderBlocks = new Int32Array(0);
+function _blockLocalShuffledOrder(sorted, seed) {
+    let n = sorted.length;
+    if (n <= 1) return sorted.slice();
+    let B = UNIT_UPDATE_ORDER_BLOCK, nb = Math.ceil(n / B);
+    if (_updateOrderBlocks.length < nb) _updateOrderBlocks = new Int32Array(Math.max(nb, _updateOrderBlocks.length * 2));
+    let blocks = _updateOrderBlocks;
+    for (let b = 0; b < nb; b++) blocks[b] = b;
+    let s = seed >>> 0;
+    for (let i = nb - 1; i > 0; i--) {
         s = ((s * 1664525) + 1013904223) >>> 0;
         let j = s % (i + 1);
-        let tmp = order[i];
-        order[i] = order[j];
-        order[j] = tmp;
+        let tmp = blocks[i]; blocks[i] = blocks[j]; blocks[j] = tmp;
+    }
+    let order = new Array(n), k = 0;
+    for (let bi = 0; bi < nb; bi++) {
+        let b0 = blocks[bi] * B, len = Math.min(B, n - b0);
+        s = ((s * 1664525) + 1013904223) >>> 0;
+        let start = (s >>> 8) % len, backward = s & 1;
+        if (backward) for (let q = 0; q < len; q++) order[k++] = sorted[b0 + (start - q + len) % len];
+        else for (let q = 0; q < len; q++) order[k++] = sorted[b0 + (start + q) % len];
     }
     return order;
 }
 
+function _buildDeterministicUnitUpdateOrderForTick() {
+    return _blockLocalShuffledOrder(_sortedForDeterministicOrder('units', units),
+        ((gameTime + 1) * 1664525) + ((units.length + 1) * 1013904223));
+}
+
+// Buildings: the same order scheme, seeded per building type.
 function _buildDeterministicBuildingUpdateOrderForTick(buildings, seedOffset = 0) {
-    let order = _sortedForDeterministicOrder(seedOffset, buildings).slice();
-    if (order.length <= 1) return order;
-    // Use same seeding as units but with different offset per building type
-    let s = (((gameTime + 2 + seedOffset) * 1664525) + ((order.length + 1) * 1013904223)) >>> 0;
-    for (let i = order.length - 1; i > 0; i--) {
-        s = ((s * 1664525) + 1013904223) >>> 0;
-        let j = s % (i + 1);
-        let tmp = order[i];
-        order[i] = order[j];
-        order[j] = tmp;
-    }
-    return order;
+    return _blockLocalShuffledOrder(_sortedForDeterministicOrder(seedOffset, buildings),
+        ((gameTime + 2 + seedOffset) * 1664525) + ((buildings.length + 1) * 1013904223));
 }
 
 
@@ -272,6 +289,16 @@ function _resolveDeferredPathsByGroup(pending) {
         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
         let dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u);
         let canWalk = getPathCanWalkForUnit(u);
+        // Plain ground units: a destination outside the unit's region is
+        // replaced by the region's tile nearest it (see getPathRegions), so
+        // the shared search can reach it.
+        if (!canWalk) {
+            let labels = getPathRegions(u.owner), sr = labels[ugy * GRID_W + ugx];
+            if (sr >= 0 && labels[dest.y * GRID_W + dest.x] !== sr) {
+                let t = nearestTileInPathRegion(u.owner, labels, sr, dest.x, dest.y);
+                if (t >= 0) dest = { x: t % GRID_W, y: (t / GRID_W) | 0 };
+            }
+        }
         let key = u.owner + '|' + (dest.y * GRID_W + dest.x);
         let candidates = groupByKey.get(key);
         if (!candidates) groupByKey.set(key, candidates = []);
@@ -3767,7 +3794,7 @@ function startGame() {
         for (let thingId in spawnByThing) {
             let parsed = parseStartingThingId(thingId), levelMap = spawnByThing[thingId];
             if (!parsed || parsed.kind === 'building' || !levelMap || typeof levelMap !== 'object') continue;
-            for (let levelText in levelMap) unitCount += Math.max(0, Math.min(1000, Math.floor(Number(levelMap[levelText]) || 0)));
+            for (let levelText in levelMap) unitCount += Math.max(0, Math.min(10000, Math.floor(Number(levelMap[levelText]) || 0)));
         }
         starterUnitCountByTeam[pid] = unitCount;
         for (let pass = 0; pass < 2; pass++) for (let thingId in spawnByThing) {
@@ -3778,7 +3805,7 @@ function startGame() {
             if (!levelMap || typeof levelMap !== 'object') continue;
             for (let levelText in levelMap) {
                 let lvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(levelText) || 1)));
-                let count = Math.max(0, Math.min(1000, Math.floor(Number(levelMap[levelText]) || 0)));
+                let count = Math.max(0, Math.min(10000, Math.floor(Number(levelMap[levelText]) || 0)));
                 for (let i = 0; i < count; i++) {
                     if (parsed.kind === 'building') {
                         spawnStartingBuilding(pid, pos, parsed.key, lvl);

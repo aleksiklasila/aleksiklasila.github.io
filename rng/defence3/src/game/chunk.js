@@ -184,22 +184,21 @@ function _addUnitToSpatialArray(arr, u) {
     if (!arr) return false;
     // Arrays are sorted by id: a unit with a higher id than every member
     // (new units, whole rebuilds in id order) goes at the end directly.
-    let n = arr.length;
-    if (n === 0 || arr[n - 1].id < u.id) { arr.push(u); return true; }
-    for (let i = 0; i < arr.length; i++) {
-        if (arr[i] === u) return false;
-        if (arr[i].id > u.id) {
-            arr.splice(i, 0, u);
-            return true;
-        }
-    }
-    arr.push(u);
+    let n = arr.length, id = u.id;
+    if (n === 0 || arr[n - 1].id < id) { arr.push(u); return true; }
+    // Binary search for the first member with a higher id (ids are unique).
+    let lo = 0, hi = n;
+    while (lo < hi) { let mid = (lo + hi) >> 1; if (arr[mid].id < id) lo = mid + 1; else hi = mid; }
+    if (lo < n && arr[lo] === u) return false;
+    arr.splice(lo, 0, u);
     return true;
 }
 
 function _removeUnitFromSpatialArray(arr, u) {
     if (!arr) return false;
-    let i = arr.indexOf(u);
+    let n = arr.length, id = u.id, lo = 0, hi = n;
+    while (lo < hi) { let mid = (lo + hi) >> 1; if (arr[mid].id < id) lo = mid + 1; else hi = mid; }
+    let i = lo < n && arr[lo] === u ? lo : arr.indexOf(u);
     if (i >= 0) {
         arr.splice(i, 1);
         return true;
@@ -241,11 +240,18 @@ function getSpatialKey(wx, wy) {
 function updateUnitSpatial(u) {
     // A unit that has not moved, changed owner or vision, with its buckets
     // and the area layout unchanged, would only re-set identical state.
+    // Nor would one that moved within its tile and area (most moves: a unit
+    // crosses a tile in many ticks): only its recorded position changes.
     let known = u._spatialMember;
-    if (known && known.x === u.x && known.y === u.y && known.owner === u.owner && known.areaGrid === areaIdGrid
+    if (known && known.owner === u.owner && known.areaGrid === areaIdGrid
         && u._spatialKey !== undefined && known.chunk === spatialUnits[u._spatialKey]
         && (u._spatialAreaId >= 0 ? known.area === spatialUnitsByArea[u._spatialAreaId] : u._spatialAreaId === -1)
-        && _getSpatialUnitVisibilityScaled(u) === u._spatialLastVisScaled) return;
+        && _getSpatialUnitVisibilityScaled(u) === u._spatialLastVisScaled
+        && ((known.x === u.x && known.y === u.y)
+            || (!ENABLE_SPATIAL_LOWEST_HEALTH_CACHE && getSpatialKey(u.x, u.y) === u._spatialKey && getAreaIdAtWorld(u.x, u.y) === u._spatialAreaId))) {
+        known.x = u.x; known.y = u.y;
+        return;
+    }
     _updateUnitSpatialFull(u);
     let member = u._spatialMember;
     if (member) { member.x = u.x; member.y = u.y; member.owner = u.owner; member.areaGrid = areaIdGrid; }
@@ -384,15 +390,21 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
     let numericRangeArea = Math.max(0, Number(rangeAreaUnits) || 0);
     let maxDistance = Math.max(0, Math.ceil(numericRangeArea));
     let maxRangePx = numericRangeArea * AREA_UNIT_TILE_EQUIVALENT * TILE;
-    let areaIds = getAreaIdsWithinDistanceOfSources(sources, maxDistance);
-    if (!areaIds || areaIds.length <= 0) return false;
-
     let includeDead = !!(opts && opts.includeDead);
     let predicate = (opts && typeof opts.predicate === 'function') ? opts.predicate : null;
     let playerFilter = Number.isFinite(opts && opts.player) ? Math.floor(opts.player) : -1;
     let enemyFilter = Number.isFinite(opts && opts.enemyOfPlayer) ? Math.floor(opts.enemyOfPlayer) : -1;
+    // Enemies only: no enemy unit in the tiles those areas cover (per-block
+    // counts), nothing to visit (O(1) before walking the areas).
+    if (enemyFilter >= 0 && !includeDead) {
+        let box = getAreaRangeTileBox(sources, maxDistance), cs = CHUNK_SIZE;
+        if (box[2] < 0 || !_regionMayHaveEnemyUnits(enemyFilter, Math.floor(box[0] / cs), Math.floor(box[1] / cs), Math.floor(box[2] / cs), Math.floor(box[3] / cs))) return false;
+    }
     let unitTypeFilter = (opts && typeof opts.unitType === 'string' && opts.unitType.length > 0) ? opts.unitType : '';
     let areaOnly = !!(opts && opts.areaOnly);
+    let areaIds = getAreaIdsWithinDistanceOfSources(sources, maxDistance);
+    if (!areaIds || areaIds.length <= 0) return false;
+
 
     for (let i = 0; i < areaIds.length; i++) {
         let areaId = areaIds[i];

@@ -5,6 +5,8 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const H = require('./net-harness.cjs');
+// The snapshot codec on the simulation's own objects: the page runs it here.
+process.env.SIM_WORKER = '0';
 const read = p => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 
 (async () => {

@@ -368,6 +368,8 @@ function makePeerClass(world, inst) {
 // ------------------------------------------------------------------
 // Game instance
 // ------------------------------------------------------------------
+// The exact fingerprint of the state, also run in the simulation worker.
+const EXACT_STATE_HASH_SRC = "const __exactView = new DataView(new ArrayBuffer(8));\nfunction __exactStateHash() {\n    let h = 2166136261 >>> 0;\n    const mix = v => {\n        if (typeof v === 'number') { __exactView.setFloat64(0, v); for (let i = 0; i < 8; i++) h = Math.imul(h ^ __exactView.getUint8(i), 16777619); return; }\n        const str = v === undefined ? '~u' : v === null ? '~n' : typeof v === 'object' ? JSON.stringify(v) : String(v);\n        for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);\n        h = Math.imul(h ^ 255, 16777619);\n    };\n    const ref = e => e ? (e.id !== undefined ? 'u' + e.id : (e.gx + ',' + e.gy)) : null;\n    for (const u of units.slice().sort((a, b) => a.id - b.id)) {\n        mix(u.id); mix(u.x); mix(u.y); mix(u.energy); mix(u.attackTimer); mix(u.commandState); mix(!!u.holdPosition); mix(u.workerState);\n        mix(u.stackCount); mix(u.path ? u.path.length : -1); mix(u.pathIndex); mix(u.targetPos ? u.targetPos.x : null); mix(u.targetPos ? u.targetPos.y : null);\n        mix(ref(u.targetUnit)); mix(ref(u.targetBuilding)); mix(ref(u.workerTarget)); mix(u._pendingPathTarget ? u._pendingPathTarget.gx + ',' + u._pendingPathTarget.gy : null);\n    }\n    const bld = b => {\n        mix(b.gx); mix(b.gy); mix(b.type); mix(b.energy); mix(b.maxEnergy); mix(b.spawnTimer); mix(b.stackingWorkDone); mix(b.stacks); mix(b.manualStacks); mix(b.level);\n        mix(b.rallyX); mix(b.rallyY); mix(b.rallyTargetUnitId); mix(b.autoUpgradeEnabled); mix(b.autoStackEnabled); mix(b.buildEnabled); mix(b.queueEnabled);\n        mix(b.markedForSalvage); mix(b.autoResearchEnabled); mix(Array.isArray(b.spawnQueue) ? b.spawnQueue.length : -1); mix(!!b.isUpgrading); mix(!!b.underConstruction); mix(b.preferredTargetSpec || null);\n    };\n    for (const list of [towers, barracks, collectorSpawners]) for (const b of list.slice().sort((a, b) => (a.gy - b.gy) || (a.gx - b.gx))) bld(b);\n    for (const it of getCellItemsRowMajor()) bld(it);\n    for (const pl of players) {\n        mix(pl.energy); mix(pl.astar); for (const k of Object.keys(pl._resourceFixedValues || {}).sort()) mix(pl._resourceFixedValues[k]);\n        mix(pl.researchLevels || null);\n        for (const t of [pl.researchTask || null, ...(pl.researchQueue || [])]) {\n            if (!t) { mix(null); continue; }\n            mix(t.kind + ':' + t.key + ':' + t.statKey); mix(t.fromLevel); mix(t.toLevel); mix(t.cost); mix(t.workRequired); mix(t.workDone);\n        }\n    }\n    for (const pr of projectiles) { mix(pr.x); mix(pr.y); }\n    for (const ar of (areas || [])) if (ar) { mix(ar.multiplierLevel || 0); mix(!!ar.active); }\n    for (const d of droppedItems) { mix(d.gx); mix(d.gy); mix(d.value); mix(d.timer); }\n    mix([...resignedTeams].sort().join(','));\n    return (h >>> 0).toString(16);\n}\n";
 const SETUP = `
 const __stubs = {
     playSound: () => {}, startLaserSound: () => {}, stopLaserSound: () => {}, updateAudioReactiveState: () => {},
@@ -474,11 +476,6 @@ function createInstance(world, name, options = {}) {
     // Simulation worker mode for the whole world (or SIM_WORKER=1).
     // Explicit either way (the page's default is the worker).
     location.searchParams.set('simworker', (world.simWorker || process.env.SIM_WORKER === '1') && options.simWorker !== false ? '1' : '0');
-    // Ticks per worker result: 1 unless SIM_STRIDE says otherwise (tests
-    // read the page's state after given ticks, which grouped results only
-    // leave current at a group's last tick). SIM_WORKER_VERIFY compares after
-    // every tick.
-    location.searchParams.set('simstride', process.env.SIM_WORKER_VERIFY === '1' ? '1' : (process.env.SIM_STRIDE || '1'));
     const window = {
         innerWidth: 1280, innerHeight: 720, devicePixelRatio: 1,
         addEventListener: (type, fn) => { (inst.winListeners[type] ||= []).push(fn); }, removeEventListener: () => { },
@@ -572,11 +569,20 @@ function createInstance(world, name, options = {}) {
             const data = structuredClone(msg);
             // The page lists no script tags here: one entry loads them all.
             if (data && data.type === 'load' && !(data.scripts && data.scripts.length)) data.scripts = ['harness:all'];
-            // Tests compare every tick: each tick's lockstep hash, and the
-            // page's copy exact after every result.
+            // Tests compare every tick: each tick's lockstep hash, and (when
+            // the world records them) its parts and exact fingerprint.
             sched.at(sched.now, () => {
                 if (this._terminated || !this._sandbox.onmessage) return;
-                if (data && data.type === 'start') { try { vm.runInContext('simReportLockstepHashes = true; simDeltaAlwaysFull = true;', this._ctx); } catch (err) { inst.errors.push(err); } }
+                if (data && data.type === 'start') {
+                    try {
+                        vm.runInContext('simReportLockstepHashes = true;', this._ctx);
+                        if (world.exactHashes || world.recordParts) {
+                            if (vm.runInContext('typeof __exactStateHash', this._ctx) === 'undefined') vm.runInContext(EXACT_STATE_HASH_SRC, this._ctx);
+                            vm.runInContext(`simTickReportHook = t => ({ exact: ${world.exactHashes ? '__exactStateHash()' : 'null'},
+                                parts: ${world.recordParts ? '(() => { const p = {}; computeLockstepStateHashFast(t, p); return p; })()' : 'null'} });`, this._ctx);
+                        }
+                    } catch (err) { inst.errors.push(err); }
+                }
                 this._sandbox.onmessage({ data });
             }, inst);
         }
@@ -608,13 +614,18 @@ function createInstance(world, name, options = {}) {
     }
     const factory = new Function(
         'window', 'document', 'localStorage', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval',
-        'requestAnimationFrame', 'cancelAnimationFrame', 'console', 'navigator', 'alert', 'confirm', 'prompt', 'Event', 'globalThis', 'location', 'Worker', 'Date', 'Math', 'DecompressionStream', 'sessionStorage', 'MessageChannel',
+        'requestAnimationFrame', 'cancelAnimationFrame', 'console', 'navigator', 'alert', 'confirm', 'prompt', 'Event', 'globalThis', 'location', 'Worker', 'Date', 'Math', 'DecompressionStream', 'sessionStorage', 'MessageChannel', 'Function',
+        // The game's own new Function(...) (transported config functions,
+        // generated codecs) compiles here, in the game's scope: in a browser
+        // its top-level functions are globals those bodies can see; in this
+        // wrapper they are locals a real Function could not reach.
+        'Function = function (...__fnArgs) { const __fnBody = __fnArgs.pop(); return eval("(function (" + __fnArgs.join(",") + ") {\\n" + __fnBody + "\\n})"); };\n' +
         SOURCE + '\nlet __harnessValue;\nlet __hooks = null; let __cap = null; const __scratch = {};\n' + SETUP
     );
     inst.game = factory(window, document, localStorage, performance, setTimeoutFn, clearTimeoutFn, setIntervalFn, clearTimeoutFn,
         raf, () => { }, consoleProxy, window.navigator, () => { }, () => true, () => null, HarnessEvent, window, location, WorkerClass, HarnessDate, options.foreignMath ? makeForeignMath() : Math,
         // { noDecompression: true } models an older browser without it.
-        options.noDecompression ? undefined : globalThis.DecompressionStream, sessionStorage, HarnessMessageChannel);
+        options.noDecompression ? undefined : globalThis.DecompressionStream, sessionStorage, HarnessMessageChannel, null);
     inst.window = window;
     inst.document = document;
     inst.element = elementFor;
@@ -669,11 +680,10 @@ function createInstance(world, name, options = {}) {
             return r;
         };
         const __simActs = new Map();
-        simClientTickAppliedHook = (tick, lockHash, current) => {
+        simClientTickAppliedHook = (tick, lockHash, report) => {
             const acts = __simActs.get(tick) || [];
             __simActs.delete(tick);
-            __harnessHooks.afterTick(tick, acts, lockHash, current);
-            __harnessHooks.verify(tick);
+            __harnessHooks.afterTick(tick, acts, lockHash, report || {});
         };
         const __origApply = applyAuthoritativeStateSnapshot;
         applyAuthoritativeStateSnapshot = function () {
@@ -698,67 +708,19 @@ function createInstance(world, name, options = {}) {
     return inst;
 }
 
-// SIM_WORKER_VERIFY=1: after every applied tick, compare each entity of the
-// page's copy with the worker's (one tick in flight) and report the fields
-// that differ, once per list and field.
-const SIM_VERIFY_HASHES = `(() => { const kinds = { u: 'u', t: 'b', b: 'b', s: 'b', f: 'b', g: 'm', a: 'm', d: 'd' }; const out = {};
-    for (const list in kinds) { const arr = _snapListEntities(list); for (let i = 0; i < arr.length; i++) { const e = arr[i]; out[list + ':' + _snapEntityKey(list, e, i)] = _snapHashEntity(kinds[list], e, 7); } }
-    out['P'] = (() => { let h = 0; for (const p of players) h = _snapHDeep(h, p, 4); return h >>> 0; })();
-    out['p'] = projectiles.length; out['g:globals'] = _snapHashGlobals();
-    return JSON.stringify(out); })()`;
-const SIM_VERIFY_FIELDS = key => `(() => { const [list, k] = ${JSON.stringify(key)}.split(':'); const arr = list === 'P' ? players : _snapListEntities(list);
-    const e = list === 'P' ? null : arr.find((x, i) => String(_snapEntityKey(list, x, i)) === k);
-    const ser = (v, d, seen) => { if (v === null || typeof v !== 'object') return typeof v === 'number' && Object.is(v, -0) ? '-0' : (typeof v === 'number' && v !== v ? 'NaN' : v);
-        if (v instanceof Unit) return '#u' + v.id; if (d > 1 && typeof v.gx === 'number' && typeof v.gy === 'number') return '#b' + v.gx + ',' + v.gy;
-        if (seen.has(v)) return '<cyc>'; seen.add(v); if (d > 4) return '<deep>';
-        if (v instanceof Map) return { map: [...v].map(x => ser(x, d + 1, seen)) }; if (v instanceof Set) return { set: [...v].map(x => ser(x, d + 1, seen)) };
-        if (Array.isArray(v) || ArrayBuffer.isView(v)) return Array.from(v).map(x => ser(x, d + 1, seen));
-        const o = {}; for (const kk of Object.keys(v)) o[kk] = ser(v[kk], d + 1, seen); return o; };
-    const src = list === 'P' ? { players } : e; if (!src) return '{}';
-    const r = {}; for (const kk of Object.keys(src)) { if (SNAP_SKIP_KEYS.has(kk)) continue; r[kk] = JSON.stringify(ser(src[kk], 1, new Set([src]))); } return JSON.stringify(r); })()`;
-function simVerifyTick(inst, tick) {
-    const w = inst.simWorker;
-    if (!w) return;
-    const P = JSON.parse(inst.eval(SIM_VERIFY_HASHES)), W = JSON.parse(w.eval(SIM_VERIFY_HASHES));
-    const seen = inst.simVerifySeen || (inst.simVerifySeen = new Set());
-    let n = 0;
-    for (const key of new Set([...Object.keys(P), ...Object.keys(W)])) {
-        if (P[key] === W[key]) continue;
-        n++;
-        if (!(key in P) || !(key in W)) { const tag = key.split(':')[0] + ':membership'; if (!seen.has(tag)) { seen.add(tag); console.error(`[verify ${inst.name} t${tick}] ${key} only on ${key in P ? 'page' : 'worker'}`); } continue; }
-        if (key === 'p' || key === 'g:globals') { const tag = key; if (!seen.has(tag)) { seen.add(tag); console.error(`[verify ${inst.name} t${tick}] ${key} differs`); } continue; }
-        const pf = JSON.parse(inst.eval(SIM_VERIFY_FIELDS(key))), wf = JSON.parse(w.eval(SIM_VERIFY_FIELDS(key)));
-        for (const f of new Set([...Object.keys(pf), ...Object.keys(wf)])) {
-            if (pf[f] === wf[f]) continue;
-            const tag = key.split(':')[0] + '.' + f;
-            if (seen.has(tag)) continue;
-            seen.add(tag);
-            console.error(`[verify ${inst.name} t${tick}] ${key} .${f}\n   page   ${String(pf[f]).slice(0, 300)}\n   worker ${String(wf[f]).slice(0, 300)}`);
-        }
-    }
-    if (n) console.error(`[verify-n ${inst.name} t${tick}] ${n} differ: ${[...new Set([...Object.keys(P), ...Object.keys(W)])].filter(k => P[k] !== W[k]).slice(0, 6).join(' ')}`);
-    inst.simVerifyDiffs = (inst.simVerifyDiffs || 0) + n;
-}
-
 function attachHooks(world, inst) {
     inst.set('__hooks', {
         // Simulation worker: the scripted setup for this tick, which the
-        // worker runs right after it (and the page after applying it).
-        verify: tick => {
-            if (process.env.SIM_WORKER_VERIFY !== '1') return;
-            // One tick in flight, so the worker is exactly at this tick.
-            // Every tick a full one (the copy is exact after each).
-            if (!inst.simVerifyArmed) { inst.simVerifyArmed = true; inst.eval('simClientInFlight = () => _simClient.inFlight ? 99 : 0'); if (inst.simWorker) inst.simWorker.eval('simDeltaAlwaysFull = true'); }
-            simVerifyTick(inst, tick);
-        },
+        // worker runs right after it.
         dispatched: tick => {
             const session = inst.eval('matchStartSessionId');
             const scripts = world.tickScripts.get(tick);
             return scripts ? scripts.filter(s => s.session === null || s.session === session).map(s => s.code) : [];
         },
-        // Worker: lockHash is the worker's lockstep hash of that tick; the
-        // page's copy is current only on a group's last tick (current).
-        afterTick: (tick, acts, lockHash, current = true) => {
+        // Worker: lockHash is the worker's lockstep hash of that tick, and
+        // report its parts and exact fingerprint (the page has no copy of
+        // the simulation to compute them from).
+        afterTick: (tick, acts, lockHash, report = null) => {
             // Scripted setup, applied on every peer after the same tick.
             // Only in the match it was scheduled in (a rematch counts its
             // ticks from zero again).
@@ -772,16 +734,19 @@ function attachHooks(world, inst) {
                 if (inst.tickDigests) inst.tickDigests.clear();
             }
             const scripts = world.tickScripts.get(tick);
-            if (scripts) for (const s of scripts) if (s.session === null || s.session === session) inst.eval(s.code);
+            // (With the worker they ran there, right after the tick.)
+            if (scripts && !report) for (const s of scripts) if (s.session === null || s.session === session) inst.eval(s.code);
             if (tick % world.hashEvery === 0) {
-                if (lockHash !== undefined && (!world.recordParts || !current)) inst.tickHashes.set(tick, lockHash);
-                else if (world.recordParts) {
+                if (report) {
+                    inst.tickHashes.set(tick, lockHash);
+                    if (report.parts) (inst.tickParts ||= new Map()).set(tick, report.parts);
+                } else if (world.recordParts) {
                     const r = JSON.parse(inst.eval('(() => { const p = {}; const h = computeLockstepStateHashFast(' + tick + ', p); return JSON.stringify([h, p]); })()'));
                     inst.tickHashes.set(tick, r[0]);
                     (inst.tickParts ||= new Map()).set(tick, r[1]);
                 } else inst.tickHashes.set(tick, inst.eval('computeLockstepStateHashFast(' + tick + ')'));
             }
-            if (world.exactHashes && current) (inst.tickExact ||= new Map()).set(tick, inst.eval('__exactStateHash()'));
+            if (world.exactHashes) (inst.tickExact ||= new Map()).set(tick, report ? report.exact : inst.eval('__exactStateHash()'));
             // DUMP_TICKS=a-b: every unit's fields at those ticks, compared
             // between peers when the process exits (debugging divergences).
             if (process.env.DUMP_TICKS) {

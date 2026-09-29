@@ -76,7 +76,7 @@ const CONTROLS = {
     H.checkHealthy(world, [host, guest], { label: 'laser link' });
     let fired = false;
     for (let i = 0; i < 20 && !fired; i++) {
-        host.eval(park); guest.eval(park);
+        host.evalSim(park); guest.evalSim(park);
         await world.run(50);
         fired = host.eval(`towers.some(t => t.type === 'laser' && t.laserState === 1)`) ||
             host.eval(`(() => { const u = units.find(u => u.id === ${enemyBefore.id}); return !u || u.dead || u.energy < ${enemyBefore.energy}; })()`);

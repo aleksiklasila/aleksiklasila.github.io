@@ -54,7 +54,7 @@ const SNAP_SKIP_KEYS = new Set([
     'textCtx', 'textCanvas', '_textCanvasScale', '_levelTextLabel', 'prevX', 'prevY',
     '_spatialKey', '_spatialMember', '_spatialAreaId', '_spatialAreaOwner', '_spatialUnitTypeIdx', '_spatialLastVisScaled',
     '_damageFlashStart', '_damageFlashUntil', '_damageFlashStrength', '_damageFlashColor', '_ambientSoundTicks',
-    '_historyGhost', '_historyTick', '_droppedIndex', '_areaBucketId', '_laserLinkLevel', '_r3d', '_r3dSig', '_r3dTex', '_visStill', '_r3dStatic', '_rslot', '_sepI', '_simEnc'
+    '_historyGhost', '_historyTick', '_droppedIndex', '_areaBucketId', '_laserLinkLevel', '_r3d', '_r3dSig', '_r3dTex', '_visStill', '_r3dStatic', '_rslot', '_sslot', '_pslot', '_simLabelKey', '_simLabel', '_fpPath', '_fpTile', '_fpIdx', '_fpVer'
 ]);
 
 // Lists: P players, u units, t towers, b barracks, s spawners, f floor
@@ -79,15 +79,22 @@ function _snapIsBuilding(e) {
     return e instanceof Tower || e instanceof Barrack || isSpawnerEntity(e);
 }
 
+// Cached with the row-major item list it filters (rebuilt with it). Callers
+// get a fresh copy: some keep or reorder the list they are given.
+let _snapFloorItemsFor = null, _snapFloorItemsList = null;
 function _snapFloorItems() {
-    let out = [];
-    for (let item of getCellItemsRowMajor()) {
-        if (!item || _snapIsBuilding(item)) continue;
-        let cell = grid[item.gy] && grid[item.gy][item.gx];
-        if (!cell || cell.item !== item) continue;
-        out.push(item);
+    let rows = getCellItemsRowMajor();
+    if (_snapFloorItemsFor !== rows) {
+        let out = [];
+        for (let item of rows) {
+            if (!item || _snapIsBuilding(item)) continue;
+            let cell = grid[item.gy] && grid[item.gy][item.gx];
+            if (!cell || cell.item !== item) continue;
+            out.push(item);
+        }
+        _snapFloorItemsFor = rows; _snapFloorItemsList = out;
     }
-    return out;
+    return _snapFloorItemsList.slice();
 }
 
 function _snapListEntities(list) {
@@ -1176,7 +1183,10 @@ function snapEncodeState(options = null) {
             let done = new Set();
             let at = {};
             for (let list of SNAP_LISTS) at[list] = [];
-            let add = (list, e, i) => { if (done.has(e)) return; done.add(e); _snapEncodeRow(list, e, i, rows[list], mru[list]); at[list].push(i); };
+            // noUnits: records for the page, which has units from frames
+            // (references to units stay references, resolved by id there).
+            let noUnits = !!only.noUnits;
+            let add = (list, e, i) => { if (done.has(e) || (noUnits && list === 'u')) return; done.add(e); _snapEncodeRow(list, e, i, rows[list], mru[list]); at[list].push(i); };
             let regions = only.regions;
             let withPlayers = !!only.players;
             let labs = [];
@@ -1207,7 +1217,7 @@ function snapEncodeState(options = null) {
             }
             // Reservations on the carried tiles (their units come along).
             let res = [];
-            for (let r of regions) _snapForRegionReservations(r, (slot, u) => _snapEncodeReservation(res, slot, u));
+            if (!noUnits) for (let r of regions) _snapForRegionReservations(r, (slot, u) => _snapEncodeReservation(res, slot, u));
             // Entities pointed at by what is sent come along, so every
             // reference resolves even where the receiver lacks them.
             let where = null;
@@ -1499,12 +1509,20 @@ function _snapSetTile(gx, gy, type, ref) {
     let row = tileEntityRef[gy];
     if (!row) return;
     let prev = row[gx];
+    let nextType = type || TILE_ENTITY_NONE, nextRef = ref || null;
+    // Unchanged (entity, type and owner): the indexes built on the tile
+    // entities stay valid (a patch re-sets every building it carries).
+    let owners = _snapTileOwners.length === GRID_W * GRID_H ? _snapTileOwners : (_snapTileOwners = new Int32Array(GRID_W * GRID_H).fill(-9));
+    let ownerNow = nextRef && Number.isFinite(nextRef.owner) ? nextRef.owner : -8;
+    if (prev === nextRef && tileEntityType[gy][gx] === nextType && owners[gy * GRID_W + gx] === ownerNow) return;
     if (prev && prev !== ref) _activeTileEntities.delete(prev);
-    tileEntityType[gy][gx] = type || TILE_ENTITY_NONE;
-    row[gx] = ref || null;
+    tileEntityType[gy][gx] = nextType;
+    row[gx] = nextRef;
     if (ref) _activeTileEntities.add(ref);
+    owners[gy * GRID_W + gx] = ownerNow;
     _tileEntityVersion++;
 }
+let _snapTileOwners = new Int32Array(0);
 
 function _snapTileTypeOf(list, e) {
     switch (list) {
