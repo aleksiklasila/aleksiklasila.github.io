@@ -51,7 +51,7 @@ function _simClientScriptUrls() {
 }
 
 function _simClientCreate() {
-    let worker = new Worker('./src/sim/sim_worker.js?v=20261006-c');
+    let worker = new Worker('./src/sim/sim_worker.js?v=20261007-a');
     let c = {
         worker, loaded: false, active: false, epoch: 0, startTick: -1, nextRequestId: 1, replies: new Map(),
         inFlight: 0, lastDispatchAt: 0, tickClock: 0, dispatchAt: new Map(), appliedTick: -1, appliedAt: 0, latencyMs: TICK_MS, arrivedAt: 0, intervalMs: TICK_MS, drawnAlpha: -1, errors: [],
@@ -59,7 +59,10 @@ function _simClientCreate() {
     };
     worker.onmessage = ev => { try { _simClientOnMessage(ev.data || {}); } catch (err) { reportRuntimeError('sim worker', err); } };
     worker.onerror = ev => { c.errors.push(String(ev.message || ev)); if (!c.loaded) c.failed = String(ev.message || 'worker error'); console.error('[sim worker]', ev.message || ev); };
-    worker.postMessage({ type: 'load', scripts: _simClientScriptUrls() });
+    // ?simhelpers=N: at most N helper workers for the parallel jobs (0: none).
+    let maxHelpers = null;
+    try { let q = new URLSearchParams(location.search).get('simhelpers'); if (q !== null && q !== '') maxHelpers = Math.max(0, Math.floor(Number(q)) || 0); } catch { }
+    worker.postMessage({ type: 'load', scripts: _simClientScriptUrls(), maxHelpers });
     return c;
 }
 
@@ -172,7 +175,7 @@ function _simClientOnMessage(msg) {
     let c = _simClient;
     if (!c) return;
     switch (msg.type) {
-        case 'loaded': c.loaded = true; break;
+        case 'loaded': c.loaded = true; c.helpers = msg.helpers || 0; c.shared = !!msg.shared; break;
         case 'started':
             if (msg.world) { if (msg.epoch === c.epoch) _simClientApplyWorld(msg.world, 1); else _simClientReturnBufs(_simClientWorldBufs(msg.world)); }
             break;
@@ -521,7 +524,7 @@ window.simClientStats = function () {
     let m = a => a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length * 100) / 100 : 0;
     let s = c.stats;
     return {
-        enabled: true, loaded: c.loaded, active: c.active, epoch: c.epoch, appliedTick: c.appliedTick, inFlight: c.inFlight, heals: s.heals, dropped: s.dropped,
+        enabled: true, loaded: c.loaded, active: c.active, helpers: c.helpers || 0, shared: !!c.shared, epoch: c.epoch, appliedTick: c.appliedTick, inFlight: c.inFlight, heals: s.heals, dropped: s.dropped,
         errors: c.errors.slice(0, 5), firstDiff: s.firstDiff || null, rowsPerTick: s.applied ? Math.round(s.rows / s.applied * 10) / 10 : 0,
         rowsPerTickByList: s.applied ? Object.fromEntries(Object.entries(s.rowsBy || {}).map(([k, v]) => [k, Math.round(v / s.applied * 10) / 10])) : null,
         applyMs: { mean: m(s.applyMs), p95: q(s.applyMs, .95) }, workerSimMs: { mean: m(s.simMs), p95: q(s.simMs, .95) },
