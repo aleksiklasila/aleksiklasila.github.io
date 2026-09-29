@@ -162,6 +162,24 @@ function _simImport(url) {
     try { importScripts(blobUrl); } finally { URL.revokeObjectURL(blobUrl); }
 }
 
+// The helpers' script. Started from a blob (the page's fallback for servers
+// sending .js as text/plain), or when imports needed blobs, it is the helper
+// sources in one blob too: a relative URL or a text/plain script would fail.
+function _simHelperUrl() {
+    let base = self.SIM_WORKER_BASE || location.href;
+    let url = new URL('sim_helper.js?v=20261009-b', base).href;
+    if (!self.SIM_WORKER_BASE && !_simImportViaBlob) return url;
+    let nl = String.fromCharCode(10);
+    let parts = ['sim_parallel.js?v=20261009-b', 'sim_frame.js?v=20261008-a'].map(f => {
+        let xhr = new XMLHttpRequest();
+        xhr.open('GET', new URL(f, base).href, false);
+        xhr.send();
+        if (xhr.status !== 200 && xhr.status !== 0) throw new Error('could not load ' + f + ' (' + xhr.status + ')');
+        return xhr.responseText;
+    });
+    return URL.createObjectURL(new Blob([parts.join(nl + ';' + nl) + nl + 'simParallelHelperMain();' + nl + '//# sourceURL=' + url], { type: 'text/javascript' }));
+}
+
 let _simLoaded = false;
 let _simMode = 'shadow';
 let _simEpoch = 0;
@@ -175,7 +193,7 @@ self.onmessage = (ev) => {
             _simLoaded = true;
             // Helpers for the parallel jobs (with shared memory; sim_parallel.js).
             let helpers = 0;
-            try { helpers = simParallelInit('sim_helper.js?v=20261009-a', msg.maxHelpers); } catch (err) { _simError('helpers', err); }
+            try { helpers = simParallelInit(_simHelperUrl(), msg.maxHelpers); } catch (err) { _simError('helpers', err); }
             _simPost({ type: 'loaded', ms: performance.now() - t0, helpers, shared: SIM_PAR_SHARED });
         } else if (msg.type === 'start') {
             _simStart(msg);

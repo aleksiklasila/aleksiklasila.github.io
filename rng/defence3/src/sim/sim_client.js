@@ -50,20 +50,55 @@ function _simClientScriptUrls() {
         .filter(src => /\/src\//.test(src) && !/bootstrap\.js|sim_shadow\.js|sim_worker\.js|sim_client\.js/.test(src));
 }
 
+const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261009-b';
+
 function _simClientCreate() {
-    let worker = new Worker('./src/sim/sim_worker.js?v=20261009-a');
     let c = {
-        worker, loaded: false, active: false, epoch: 0, startTick: -1, nextRequestId: 1, replies: new Map(),
+        worker: null, loaded: false, active: false, epoch: 0, startTick: -1, nextRequestId: 1, replies: new Map(),
         inFlight: 0, lastDispatchAt: 0, tickClock: 0, dispatchAt: new Map(), appliedTick: -1, appliedAt: 0, latencyMs: TICK_MS, arrivedAt: 0, intervalMs: TICK_MS, drawnAlpha: -1, errors: [],
         stats: { applied: 0, applyMs: [], simMs: [], encodeMs: [], latencyMs: [], rows: 0, heals: 0, dropped: 0 }
     };
-    worker.onmessage = ev => { try { _simClientOnMessage(ev.data || {}); } catch (err) { reportRuntimeError('sim worker', err); } };
-    worker.onerror = ev => { c.errors.push(String(ev.message || ev)); if (!c.loaded) c.failed = String(ev.message || 'worker error'); console.error('[sim worker]', ev.message || ev); };
     // ?simhelpers=N: at most N helper workers for the parallel jobs (0: none).
     let maxHelpers = null;
     try { let q = new URLSearchParams(location.search).get('simhelpers'); if (q !== null && q !== '') maxHelpers = Math.max(0, Math.floor(Number(q)) || 0); } catch { }
-    worker.postMessage({ type: 'load', scripts: _simClientScriptUrls(), maxHelpers });
+    _simClientSpawn(c, false, maxHelpers);
     return c;
+}
+
+// Some local servers send .js as text/plain, and Firefox will not start a
+// worker from that. The first load error before 'loaded' retries once from a
+// blob of the script (told its real URL, for the files it loads itself).
+function _simClientSpawn(c, viaBlob, maxHelpers) {
+    let worker;
+    if (!viaBlob) worker = new Worker(SIM_CLIENT_WORKER_URL);
+    else {
+        let url = new URL(SIM_CLIENT_WORKER_URL, location.href).href;
+        let xhr = new XMLHttpRequest();
+        xhr.open('GET', url, false);
+        xhr.send();
+        if (xhr.status !== 200 && xhr.status !== 0) throw new Error('could not load ' + url + ' (' + xhr.status + ')');
+        let nl = String.fromCharCode(10);
+        let blobUrl = URL.createObjectURL(new Blob(['self.SIM_WORKER_BASE = ' + JSON.stringify(url) + ';' + nl + xhr.responseText + nl + '//# sourceURL=' + url], { type: 'text/javascript' }));
+        worker = new Worker(blobUrl);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+    }
+    c.worker = worker;
+    worker.onmessage = ev => { try { _simClientOnMessage(ev.data || {}); } catch (err) { reportRuntimeError('sim worker', err); } };
+    worker.onerror = ev => {
+        if (c.worker !== worker) return;
+        if (!ev.message && !c.loaded && !viaBlob) {
+            ev.preventDefault();
+            worker.terminate();
+            console.warn('[sim worker] could not start from its URL (served as text/plain?); retrying from a blob');
+            try { _simClientSpawn(c, true, maxHelpers); } catch (err) { c.failed = String(err.message || err); console.error('[sim worker]', c.failed); }
+            return;
+        }
+        // No message: a script failed to load (the worker's, or a nested one's).
+        let where = ev.filename ? ` (${ev.filename}:${ev.lineno}:${ev.colno})` : '';
+        let text = (ev.message || 'worker error, no message (script failed to load?)') + where;
+        c.errors.push(text); if (!c.loaded) c.failed = text; console.error('[sim worker]', text, ev);
+    };
+    worker.postMessage({ type: 'load', scripts: _simClientScriptUrls(), maxHelpers });
 }
 
 // Loaded ahead (the scripts take a few hundred ms), so matches start at once.
@@ -146,11 +181,12 @@ function simClientStop() {
 function simClientRunTick(tick, actions, teams, flush) {
     let c = _simClient;
     c.inFlight++;
-    // Ticks on a steady clock: one TICK_MS after the previous one, unless
+    // Ticks on the shared wall clock: one interval after the previous, unless
     // the match stalled (then from now), so frame timing does not jitter it.
     let now = performance.now();
-    let at = c.tickClock + TICK_MS;
-    if (!(at >= now - TICK_MS)) at = now;
+    let tickMs = netSimulationTickMs();
+    let at = c.tickClock + tickMs;
+    if (!(at >= now - tickMs)) at = now;
     c.tickClock = at;
     c.dispatchAt.set(tick, at);
     c.worker.postMessage({ type: 'tick', tick, actions, teams, flush: !!flush, hash: true });
@@ -230,7 +266,8 @@ function _simClientApplyTick(msg) {
     // motion stays continuous whether results come on time, late or in a
     // burst while catching up.
     if (c.arrivedAt > 0) {
-        let interval = Math.max(TICK_MS * 0.25, Math.min(TICK_MS * 3, t0 - c.arrivedAt));
+        let tickMs = netSimulationTickMs();
+        let interval = Math.max(tickMs * 0.25, Math.min(tickMs * 3, t0 - c.arrivedAt));
         c.intervalMs += (interval - c.intervalMs) * 0.25;
     }
     c.arrivedAt = t0;
@@ -249,6 +286,7 @@ function _simClientApplyTick(msg) {
     }
     if (simClientTickAppliedHook) simClientTickAppliedHook(msg.tick, msg.lockHashes ? msg.lockHashes[0] : undefined, msg.report);
     let ms = performance.now() - t0;
+    netNoteSimulationTick(performance.now(), (Number(msg.simMs) || 0) + (Number(msg.encodeMs) || 0) + ms);
     c.stats.applied++;
     c.stats.applyMs.push(ms); c.stats.simMs.push(msg.simMs); c.stats.encodeMs.push(msg.encodeMs);
     for (let k of ['applyMs', 'simMs', 'encodeMs', 'latencyMs']) if (c.stats[k].length > 600) c.stats[k].splice(0, 300);

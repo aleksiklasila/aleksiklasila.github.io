@@ -3132,10 +3132,12 @@ function queueAction(action) {
         // is back (they are scheduled after every tick already sent).
         scheduleGuestAutoReconnect('Lost host connection');
     }
-    // Guests send packets up to current + input delay; commands go right
-    // after. In fair mode everyone, the host included, waits the match delay.
+    // Fair delay starts at the completed tick the player sees, including on
+    // the host. Ticks merely queued in a busy worker must not add another
+    // private delay on top of the shared command lead.
     let actionLead = netCommandLeadTicks();
-    let tick = currentTick + actionLead;
+    let commandTick = isMultiplayer && gameStarted && netFairInputDelay ? netCompletedSimulationTick() : currentTick;
+    let tick = Math.max(currentTick, commandTick + actionLead);
     if (isMultiplayer && gameStarted && !isHost && resyncGuest.liveFromTick > tick) tick = resyncGuest.liveFromTick;
     if (isMultiplayer && gameStarted) {
         // A sent packet may already be sealed by the host, and a sealed tick

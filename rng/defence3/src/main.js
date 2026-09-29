@@ -719,10 +719,10 @@ function initInput() {
             let b = selSpawners[i];
             let rp = multiRallyPoints[pick[i]];
             queueAction({ action: 'setRally', gx: b.gx, gy: b.gy, targetX: rp.x, targetY: rp.y, targetUnitId: rp.targetUnitId || null });
-            // Instant feedback only offline: in lockstep the rally is
-            // simulation state and must change on the scheduled tick on every
-            // peer, not earlier on the one that clicked.
-            if (!isMultiplayer) { b.rallyX = rp.x; b.rallyY = rp.y; b.rallyTargetUnitId = rp.targetUnitId || null; }
+            // Instant feedback only for an offline, page-owned structure.
+            // Worker views are read-only: writing rallyX throws before the
+            // same click can issue its selected units' move command.
+            if (!isMultiplayer && !b._structView) { b.rallyX = rp.x; b.rallyY = rp.y; b.rallyTargetUnitId = rp.targetUnitId || null; }
         }
     }
 
@@ -4214,7 +4214,11 @@ function sendLocalTickPacketWindow(tick, force = false) {
     if (!Number.isFinite(baseTick) || baseTick < 0) return;
     baseTick = Math.max(baseTick, resyncPacketHorizonTick());
     let lead = Math.max(0, Math.floor(Number(LOCKSTEP_PIPELINE_TICKS) || 0));
-    let horizon = baseTick + lead;
+    let completedTick = netCompletedSimulationTick();
+    // Anchor the future input window to the same visible tick as commands.
+    // Keep any additional resync horizon, but not the worker's unshown ticks.
+    let horizonTick = netFairInputDelay ? baseTick - (currentTick - completedTick) : baseTick;
+    let horizon = Math.max(baseTick, horizonTick + lead);
     let endTick = Math.max(horizon, lockstepHighestSentLocalTick);
     let now = performance.now();
     let resendMs = getLockstepPacketSafetyResendMs();
@@ -4446,7 +4450,7 @@ function sendHostBundle(tick, force = false) {
     if (!bundle) return;
     if (!force && lockstepLastBundleSentAtByTick[t]) return;
     lockstepLastBundleSentAtByTick[t] = performance.now();
-    let msg = { type: 'TICK_BUNDLE', w: packTickBundleForWire(bundle), c: 1, d: netMatchInputDelay };
+    let msg = { type: 'TICK_BUNDLE', w: packTickBundleForWire(bundle), c: 1, d: netMatchInputDelay, pace: netSimulationTickMs() };
     // Whose packet this tick was sealed without (they lengthen their lead).
     let late = lockstepHostLateByTick[t];
     if (late && late.size > 0) msg.l = Array.from(late);
@@ -4529,6 +4533,7 @@ function handleIncomingTickBundle(conn, data) {
     if (isHost) return;
     if (data && data.h) resyncGuestReceiveHashes(data.h);
     if (data && Number.isFinite(data.d)) netMatchInputDelay = Math.max(0, Math.min(NET_MAX_INPUT_DELAY_TICKS, Math.floor(data.d)));
+    if (data && Number.isFinite(data.pace) && data.pace >= TICK_MS) netMatchTickMs = data.pace;
     if (data && Array.isArray(data.l) && myPeerId && data.l.includes(myPeerId)) netNoteOwnPacketLate();
     let bundle = data && data.bundle ? data.bundle : unpackTickBundleFromWire(data && data.w);
     if (!bundle || typeof bundle !== 'object') return;
@@ -5155,6 +5160,7 @@ function runOneTick() {
     // Reset pathfinding budget before processing actions
     pathfindBudget = 0;
     let processedTick = currentTick;
+    let tickWorkStart = performance.now();
 
     if (isHost && isMultiplayer) {
         // Sealed bundles are never mutated, so the history keeps the object
@@ -5208,6 +5214,7 @@ function runOneTick() {
         simClientRunTick(processedTick, allActs, teams, flushTick);
     } else {
         try { gameTick(); } catch (err) { reportRuntimeError('tick', err); }
+        netNoteSimulationTick(performance.now(), performance.now() - tickWorkStart);
         if (typeof simShadowEnabled !== 'undefined' && simShadowEnabled) simShadowAfterTick(processedTick, allActs, teams, flushTick);
 
         if (currentTick % TICK_RATE === 0) sampleGameStats();

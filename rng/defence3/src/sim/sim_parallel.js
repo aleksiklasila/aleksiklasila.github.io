@@ -414,7 +414,9 @@ let _simPool = null;
 
 // Starts the helpers (simulation worker, with shared memory and 3+ cores).
 function simParallelInit(helperUrl, maxHelpers = null) {
-    if (_simPool || !SIM_PAR_SHARED || typeof Worker !== 'function') return 0;
+    // Helpers idle on Atomics.waitAsync (missing in some browsers, e.g. older
+    // Firefox): without it the worker runs every chunk itself.
+    if (_simPool || !SIM_PAR_SHARED || typeof Worker !== 'function' || typeof Atomics.waitAsync !== 'function') return 0;
     let cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2;
     // Start with roughly one simulation participant per physical core on an
     // SMT machine. Larger CPUs must not be permanently capped at 7 helpers;
@@ -427,7 +429,9 @@ function simParallelInit(helperUrl, maxHelpers = null) {
     for (let i = 0; i < n; i++) {
         try {
             let w = new Worker(helperUrl);
-            w.onerror = e => { console.error('[sim helper]', e.message || e); };
+            // A failed helper is not fatal (the worker takes its chunks): keep
+            // its error from propagating up to the page's worker as well.
+            w.onerror = e => { e.preventDefault(); console.error('[sim helper]', e.message || 'failed to load', e.filename ? `${e.filename}:${e.lineno}` : helperUrl); };
             w.postMessage({ type: 'init', ctl, params: _simParams, index: i });
             for (let name in _simParReg) w.postMessage({ type: 'bind', name, arr: _simParReg[name], ver: _simParRegVer });
             helpers.push(w);
