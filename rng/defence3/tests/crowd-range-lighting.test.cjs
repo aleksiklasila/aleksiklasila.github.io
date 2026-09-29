@@ -11,6 +11,7 @@ const c = vm.createContext({TILE:32,UNIT_POSITION_QUANTIZATION:1024,gameTime:0,G
 vm.runInContext(read('src/utils/utils_common.js'),c);
 // The separation pass runs its pair search as a kernel (sim_parallel.js).
 vm.runInContext(read('src/sim/sim_parallel.js'),c);
+vm.runInContext(read('src/sim/sim_unit_state.js'),c);
 vm.runInContext(src,c);
 // Run the actual separation pass of a tick (after all units moved), while
 // 100 units keep moving towards the same waypoint.
@@ -20,6 +21,12 @@ function crowdRun() {
     // One chunk covering the whole crowd: the pass still filters by distance.
     c.spatialUnits=[crowd];
     c.units=crowd;
+    vm.runInContext(`function adoptTestUnits() { for (const u of units) {
+        const saved = { ...u };
+        simUnitStateAllocate(u);
+        Object.setPrototypeOf(u, Unit.prototype);
+        for (const k of SIM_UNIT_COLUMNS) { delete u[k]; u[k] = saved[k] === undefined ? 0 : saved[k]; }
+    } } adoptTestUnits();`, c);
     for(let tick=0;tick<180;tick++) {
         c.gameTime=tick;
         for(let u of crowd) {
@@ -43,6 +50,7 @@ assert.deepEqual(crowdRun(),crowd,'crowd resolution replays deterministically');
     let crowd2=Array.from({length:100},(_,id)=>({id,owner:0,x:500+(id%10)*2,y:500+Math.floor(id/10)*2,
         vx:0,vy:0,r:8,unitType:'norm',dead:false,isFlying:false,_spatialKey:0,getCollisionRadius:()=>8,getCollisionLayer:()=> 'ground'}));
     c.units=crowd2; c.spatialUnits=[crowd2.slice().reverse()];
+    vm.runInContext('adoptTestUnits()', c);
     for(let tick=0;tick<180;tick++) {
         c.gameTime=tick;
         for(let u of crowd2) { u.prevX=u.x;u.prevY=u.y; let dx=509-u.x,dy=509-u.y,d=Math.hypot(dx,dy); if(d>8){u.vx=dx/d*2;u.vy=dy/d*2;u.x+=u.vx;u.y+=u.vy;} }

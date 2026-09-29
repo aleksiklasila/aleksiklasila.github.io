@@ -33,7 +33,63 @@ const _simParams = simSharedArray(Float64Array, 64);
 
 // ---- kernels: (arrays, params, chunk) ----
 const SIM_KERNELS = [];
-const SIM_KERNEL_VISIBILITY = 0, SIM_KERNEL_SEPARATION = 1;
+const SIM_KERNEL_VISIBILITY = 0, SIM_KERNEL_SEPARATION = 1, SIM_KERNEL_UNIT_FRAME = 2, SIM_KERNEL_UNIT_PACK = 3;
+
+// Gather the immutable collision snapshot in spatial order from the unit
+// columns. The simulation only supplies the permutation and cold path inputs.
+SIM_KERNELS[SIM_KERNEL_UNIT_PACK] = function (R, P, chunk) {
+    const slots = R['sep.slots'], X = R['unit.x'], Y = R['unit.y'], CR = R['unit.collisionR'], RAD = R['unit.r'];
+    const OWNER = R['unit.owner'], ID = R['unit.id'];
+    const sx = R['sep.sx'], sy = R['sep.sy'], sr = R['sep.sr'], so = R['sep.so'], sid = R['sep.sid'];
+    for (let k = chunk * P[1], end = Math.min(P[0], k + P[1]); k < end; k++) {
+        const s = slots[k], r = CR[s] || RAD[s] || .1;
+        sx[k] = X[s]; sy[k] = Y[s]; sr[k] = r < .1 ? .1 : r; so[k] = OWNER[s]; sid[k] = ID[s] || 0;
+    }
+};
+
+// Frame ownership: only the simulation writes a buffer until this job joins.
+// The page then owns that immutable buffer until it explicitly returns it.
+// Helpers read authoritative Float64 unit columns, never mutable Unit objects.
+let _simKernelFrame = null;
+SIM_KERNELS[SIM_KERNEL_UNIT_FRAME] = function (R, P, chunk) {
+    const buf = R['frame.buffer.' + P[9]].buffer, cap = P[0];
+    let F = _simKernelFrame;
+    if (!F || F.buf !== buf || F.cap !== cap) F = _simKernelFrame = simFrameViews(buf, cap);
+    const X = R['unit.x'], Y = R['unit.y'], VX = R['unit.vx'], VY = R['unit.vy'];
+    const PREVX = R['unit.prevX'], PREVY = R['unit.prevY'], ID = R['unit.id'];
+    const ENERGY = R['unit.energy'], OWNER = R['unit.owner'], RAD = R['unit.r'], CMD = R['unit.commandState'];
+    const slots = R['frame.slot'], lastX = R['frame.lastX'], lastY = R['frame.lastY'];
+    const targetX = R['frame.targetX'], targetY = R['frame.targetY'], still = R['frame.still'], flash = R['frame.flash'];
+    const time = P[3], rate = P[4], tile = P[5];
+    for (let i = chunk * P[2], end = Math.min(P[1], i + P[2]); i < end; i++) {
+        const s = F.order[i], u = slots[s], x = X[u], y = Y[u], vx = VX[u] || 0, vy = VY[u] || 0;
+        F.id[s] = ID[u]; F.owner[s] = OWNER[u]; F.energy[s] = ENERGY[u]; F.r[s] = RAD[u]; F.cmd[s] = CMD[u] | 0;
+        F.x[s] = x; F.y[s] = y; F.vx[s] = vx; F.vy[s] = vy;
+        F.px[s] = lastX[s]; F.py[s] = lastY[s]; lastX[s] = x; lastY[s] = y;
+        if (F.flags[s] & SIM_UF_SNAKE) {
+            F.mode[s] = 0; F.amount[s] = 0; F.facing[s] = Math.atan2(vx, vy || 1); F.phase[s] = 0; F.prate[s] = 0;
+            continue;
+        }
+        let mode = F.mode[s], amount = F.amount[s];
+        if (mode === 0 && !(amount > 0)) {
+            const rest = (time + P[6] - still[s]) / Math.max(1, rate) - P[7];
+            if (rest > 0) { mode = 7; amount = Math.min(1, rest / P[8]); if (F.status[s] === 0) F.status[s] = 3; }
+        }
+        let fx = vx, fy = vy;
+        if (Number.isFinite(targetX[s])) { fx = targetX[s] - x; fy = targetY[s] - y; }
+        F.mode[s] = mode;
+        F.amount[s] = Math.max(0, Math.min(1, amount || Math.min(1, Math.hypot(x - PREVX[u], y - PREVY[u]) / Math.max(.01, tile * .025)) || 0));
+        F.facing[s] = Math.atan2(fx, fy || .0001) || 0;
+        if (mode === 1) {
+            const b = (8 - flash[s]) / 8;
+            F.phase[s] = b >= 1 ? Math.PI : b <= -1 / 8 ? 0 : Math.max(0, b) * Math.PI;
+            F.prate[s] = b >= 1 || b <= -1 / 8 ? 0 : Math.PI / 8;
+        } else {
+            const speed = mode === 2 ? 8 : mode === 4 ? 14 : mode === 7 ? 2 : 10;
+            F.phase[s] = time / rate * speed + (ID[u] || 0) * 2.399; F.prate[s] = speed / rate;
+        }
+    }
+};
 
 // Per-thread scratch.
 const _simParScratch = { inc: null, span0: null, span1: null, rem: null, buckets: [], areaMax: null, touched: null, stamps: new Float64Array(3 * 256) };
@@ -174,7 +230,7 @@ SIM_KERNELS[SIM_KERNEL_VISIBILITY] = function (R, P, chunk) {
 // Unit separation, gathered per unit: each unit that checks this tick sums
 // the pushes of every unit touching it, from its own side (a pair is seen
 // from both units; each unit is written by one chunk only). Chunks are
-// ranges of tiles. Params: CHUNKS_W, CHUNKS_H, tiles per chunk (rows),
+// batches of active units. Params: CHUNKS_W, CHUNKS_H, units per job,
 // pad, farAny, Q, SHARE_BOTH, SHARE_ONE. Arrays (sorted entries): sep.ord,
 // sep.sx/sy/sr (position, radius), sep.so (owner), sep.sl (layer), sep.sc
 // (checks), sep.sid (id), sep.sdx/sdy (motion, for exact overlaps); per
@@ -182,19 +238,16 @@ SIM_KERNELS[SIM_KERNEL_VISIBILITY] = function (R, P, chunk) {
 // (dx, dy, gap triples over the whole neighbourhood); outputs by unit
 // index: sep.px/py (integer sums), sep.ov (deepest overlap), sep.hit.
 SIM_KERNELS[SIM_KERNEL_SEPARATION] = function (R, P, chunk) {
-    const CW = P[0] | 0, CH = P[1] | 0, rowsPer = P[2] | 0, pad = P[3], farAny = P[4], Q = P[5], BOTH = P[6], ONE = P[7], nOffs = P[8] | 0;
+    const CW = P[0] | 0, CH = P[1] | 0, unitsPerJob = P[2] | 0, pad = P[3], farAny = P[4], Q = P[5], BOTH = P[6], ONE = P[7], nOffs = P[8] | 0;
     const ord = R['sep.ord'], sx = R['sep.sx'], sy = R['sep.sy'], sr = R['sep.sr'], so = R['sep.so'], sl = R['sep.sl'], sc = R['sep.sc'];
     const sid = R['sep.sid'], sdx = R['sep.sdx'], sdy = R['sep.sdy'];
     const start = R['sep.start'], chunkR = R['sep.chunkR'], chunkC = R['sep.chunkC'], sole = R['sep.sole'], offs = R['sep.offs'];
     const PX = R['sep.px'], PY = R['sep.py'], OV = R['sep.ov'], HIT = R['sep.hit'];
-    const cy0 = chunk * rowsPer, cy1 = Math.min(CH, cy0 + rowsPer);
-    for (let cy = cy0; cy < cy1; cy++) for (let cx = 0; cx < CW; cx++) {
-        let key = cy * CW + cx;
+    const jobs = R['sep.jobs'], keys = R['sep.keys'];
+    for (let j = chunk * unitsPerJob, end = Math.min(P[9], j + unitsPerJob); j < end; j++) {
+        const p = jobs[j], key = keys[p], cy = Math.floor(key / CW), cx = key - cy * CW;
         let a0 = start[key], a1 = start[key + 1];
-        if (a0 === a1 || !chunkC[key]) continue;
         let rA = chunkR[key];
-        for (let p = a0; p < a1; p++) {
-            if (!sc[p]) continue;
             let xp = sx[p], yp = sy[p], rp = sr[p], op = so[p], lp = sl[p];
             let px = 0, py = 0, ov = 0, hit = 0;
             for (let k = -1; k < nOffs; k++) {
@@ -236,7 +289,6 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION] = function (R, P, chunk) {
             }
             let a = ord[p];
             PX[a] = px; PY[a] = py; OV[a] = ov; HIT[a] = hit;
-        }
     }
 };
 

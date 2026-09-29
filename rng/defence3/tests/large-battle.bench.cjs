@@ -27,7 +27,7 @@ if (process.argv.includes('--compare') || process.argv.includes('--compare-extra
     },null,2)+'\n');
     process.exit(0);
 }
-const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+const html = process.argv.includes('--baseline') ? execFileSync('git', ['show', referenceRef + ':' + execFileSync('git', ['rev-parse', '--show-prefix'], {cwd:root, encoding:'utf8'}).trim() + 'index.html'], {cwd:root, encoding:'utf8', maxBuffer:8e6}) : fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const files = Array.from(html.matchAll(/<script src="\.\/(src\/[^"?]+)(?:\?[^" ]*)?"/g), m => m[1]).filter(f => !f.endsWith('bootstrap.js'));
 const baseline = process.argv.includes('--baseline');
 const prefix = baseline ? execFileSync('git', ['rev-parse', '--show-prefix'], {cwd:root, encoding:'utf8'}).trim() : '';

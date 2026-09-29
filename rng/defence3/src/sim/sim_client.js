@@ -51,7 +51,7 @@ function _simClientScriptUrls() {
 }
 
 function _simClientCreate() {
-    let worker = new Worker('./src/sim/sim_worker.js?v=20261007-a');
+    let worker = new Worker('./src/sim/sim_worker.js?v=20261008-a');
     let c = {
         worker, loaded: false, active: false, epoch: 0, startTick: -1, nextRequestId: 1, replies: new Map(),
         inFlight: 0, lastDispatchAt: 0, tickClock: 0, dispatchAt: new Map(), appliedTick: -1, appliedAt: 0, latencyMs: TICK_MS, arrivedAt: 0, intervalMs: TICK_MS, drawnAlpha: -1, errors: [],
@@ -263,7 +263,7 @@ let _pageViewStamp = 0;
 function _simClientReturnBufs(bufs) {
     let c = _simClient;
     bufs = bufs.filter(b => b && b.byteLength);
-    if (c && bufs.length) c.worker.postMessage({ type: 'frameReturn', bufs }, bufs);
+    if (c && bufs.length) c.worker.postMessage({ type: 'frameReturn', bufs }, bufs.filter(b => !(typeof SharedArrayBuffer === 'function' && b instanceof SharedArrayBuffer)));
 }
 
 // The page's units: none until the worker's next frame (objects from a
@@ -277,6 +277,7 @@ function _simClientResetUnits() {
     if (_pageFrame) { bufs.push(_pageFrame.buf); _pageFrame = null; }
     _simClientReturnBufs(bufs);
     units = [];
+    simUnitStateReset();
     if (typeof initSpatialHash === 'function') initSpatialHash();
     if (c) { c.frameUnits = null; c.mver = -1; c.watchKey = ''; }
     _pageFrameStrings.length = 1;

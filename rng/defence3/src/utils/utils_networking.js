@@ -688,7 +688,7 @@ function snapshotEntity(obj, omitKeys = []) {
     if (!obj || typeof obj !== 'object') return null;
     let omit = new Set(omitKeys);
     let out = {};
-    for (let k of Object.keys(obj)) {
+    for (let k of simUnitStateKeys(obj)) {
         if (omit.has(k)) continue;
         let val = obj[k];
         
@@ -2617,6 +2617,7 @@ function setLobbyMode(mode) {
 }
 
 function resetWorldState() {
+    simUnitStateReset();
     visibilityHistoryState = null;
     resyncResetState();
     // Clear all world/runtime objects so no match state carries over.
