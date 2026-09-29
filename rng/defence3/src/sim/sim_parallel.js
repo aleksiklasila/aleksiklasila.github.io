@@ -34,6 +34,122 @@ const _simParams = simSharedArray(Float64Array, 64);
 // ---- kernels: (arrays, params, chunk) ----
 const SIM_KERNELS = [];
 const SIM_KERNEL_VISIBILITY = 0, SIM_KERNEL_SEPARATION = 1, SIM_KERNEL_UNIT_FRAME = 2, SIM_KERNEL_UNIT_PACK = 3;
+const SIM_KERNEL_SPATIAL_HISTOGRAM = 4, SIM_KERNEL_SPATIAL_SCATTER = 5, SIM_KERNEL_SEPARATION_PREPARE = 6;
+const SIM_KERNEL_SEPARATION_FINISH = 7;
+
+// The common collision correction stays inside one tile. Compute it in
+// parallel; the commit checks terrain/membership and handles tile crossings
+// with the full swept collision routine. No approximate contact budget.
+SIM_KERNELS[SIM_KERNEL_SEPARATION_FINISH] = function (R, P, chunk) {
+    const slots = R['sep.inputSlots'], X = R['unit.x'], Y = R['unit.y'];
+    const PX = R['sep.px'], PY = R['sep.py'], OV = R['sep.ov'], HIT = R['sep.hit'];
+    const outX = R['sep.nextX'], outY = R['sep.nextY'], fast = R['sep.fast'];
+    const tile = P[2], quant = P[3], contacts = P[4], pushQuant = P[5];
+    for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
+        fast[i] = 0;
+        const hits = HIT[i];
+        if (!hits) continue;
+        const s = slots[i], x = X[s], y = Y[s];
+        const scale = hits <= contacts ? 1 : Math.sqrt(contacts / hits);
+        let dx = PX[i] * scale / pushQuant, dy = PY[i] * scale / pushQuant;
+        const length = Math.sqrt(dx * dx + dy * dy), limit = Math.max(0, OV[i]);
+        if (length > limit) { dx *= limit / length; dy *= limit / length; }
+        // Preserve the sweep's last-step arithmetic (dx * steps / steps),
+        // including its rounding before the final quantization.
+        const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / (tile / 4)));
+        const rawX = x + dx * steps / steps, rawY = y + dy * steps / steps;
+        const nx = Number.isFinite(rawX) ? Math.round(rawX * quant) / quant : 0;
+        const ny = Number.isFinite(rawY) ? Math.round(rawY * quant) / quant : 0;
+        outX[i] = nx; outY[i] = ny;
+        if (Math.floor(nx / tile) === Math.floor(x / tile) && Math.floor(ny / tile) === Math.floor(y / tile)) fast[i] = 1;
+    }
+};
+
+// Stable radix ordering: each partition owns one histogram and scatter cursor.
+// Prefixes are reduced in partition order, never in worker claim order. Memory
+// is O(units + partitions*256), independent of map area or helper count.
+SIM_KERNELS[SIM_KERNEL_SPATIAL_HISTOGRAM] = function (R, P, chunk) {
+    const keys = R['spatial.keys'], a = R['spatial.orderA'], b = R['spatial.orderB'];
+    const input = P[4] ? b : a, hist = R['spatial.hist'];
+    const base = chunk * 256, shift = P[2];
+    hist.fill(0, base, base + 256);
+    for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
+        const u = P[3] ? i : input[i];
+        hist[base + ((keys[u] >>> shift) & 255)]++;
+    }
+};
+SIM_KERNELS[SIM_KERNEL_SPATIAL_SCATTER] = function (R, P, chunk) {
+    const keys = R['spatial.keys'], a = R['spatial.orderA'], b = R['spatial.orderB'];
+    const input = P[4] ? b : a, output = P[4] ? a : b, hist = R['spatial.hist'];
+    const base = chunk * 256, shift = P[2];
+    for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
+        const u = P[3] ? i : input[i];
+        output[hist[base + ((keys[u] >>> shift) & 255)]++] = u;
+    }
+};
+
+const _simSpatialOrder = { cap: 0 };
+function simSpatialStableOrder(keys, count, maxKey) {
+    const S = _simSpatialOrder, partition = 4096, parts = Math.ceil(count / partition);
+    if (!S.a || count > S.cap) {
+        S.cap = Math.max(1024, count, S.cap * 2);
+        S.a = simSharedArray(Int32Array, S.cap); S.b = simSharedArray(Int32Array, S.cap);
+        S.hist = simSharedArray(Int32Array, Math.ceil(S.cap / partition) * 256);
+        simParallelBind('spatial.orderA', S.a); simParallelBind('spatial.orderB', S.b);
+        simParallelBind('spatial.hist', S.hist);
+    }
+    simParallelBind('spatial.keys', keys);
+    let flip = 0;
+    for (let shift = 0; shift === 0 || (maxKey >>> shift) !== 0; shift += 8) {
+        _simParams[0] = count; _simParams[1] = partition; _simParams[2] = shift;
+        _simParams[3] = shift === 0 ? 1 : 0; _simParams[4] = flip;
+        simParallelRun(SIM_KERNEL_SPATIAL_HISTOGRAM, parts);
+        let cursor = 0;
+        for (let digit = 0; digit < 256; digit++) for (let part = 0; part < parts; part++) {
+            const index = part * 256 + digit, n = S.hist[index];
+            S.hist[index] = cursor; cursor += n;
+        }
+        simParallelRun(SIM_KERNEL_SPATIAL_SCATTER, parts);
+        flip ^= 1;
+        if (shift === 24) break;
+    }
+    return flip ? S.b : S.a;
+}
+
+SIM_KERNELS[SIM_KERNEL_SEPARATION_PREPARE] = function (R, P, chunk) {
+    const input = R['sep.inputSlots'], flags = R['sep.inputFlags'], order = R['sep.inputOrder'];
+    const inputKeys = R['spatial.keys'], X = R['unit.x'], Y = R['unit.y'];
+    const VX = R['unit.vx'], VY = R['unit.vy'], PREVX = R['unit.prevX'], PREVY = R['unit.prevY'];
+    const CR = R['unit.collisionR'], RAD = R['unit.r'], OWNER = R['unit.owner'], ID = R['unit.id'];
+    const ord = R['sep.ord'], slots = R['sep.slots'], keys = R['sep.keys'], jobs = R['sep.jobs'];
+    const sx = R['sep.sx'], sy = R['sep.sy'], sr = R['sep.sr'], so = R['sep.so'], sid = R['sep.sid'];
+    const sl = R['sep.sl'], sc = R['sep.sc'], sdx = R['sep.sdx'], sdy = R['sep.sdy'];
+    const pathX = R['sep.pathX'], pathY = R['sep.pathY'];
+    const start = R['sep.start'], chunkR = R['sep.chunkR'], sole = R['sep.sole'];
+    for (let k = chunk * P[1], end = Math.min(P[0], k + P[1]); k < end; k++) {
+        const i = order[k], s = input[i], key = inputKeys[i];
+        const x = X[s], y = Y[s], r = Math.max(.1, CR[s] || RAD[s] || .1), owner = OWNER[s];
+        ord[k] = i; slots[k] = s; keys[k] = key; jobs[k] = k;
+        sx[k] = x; sy[k] = y; sr[k] = r; so[k] = owner; sid[k] = ID[s] || 0;
+        sl[k] = flags[i];
+        sc[k] = x !== PREVX[s] || y !== PREVY[s] || P[2] <= 1 || ((P[3] + ID[s]) % P[2]) === 0 ? 1 : 0;
+        let dx = VX[s], dy = VY[s];
+        if (Math.sqrt(dx * dx + dy * dy) < .001 && Number.isFinite(pathX[i])) {
+            dx = pathX[i] - x; dy = pathY[i] - y;
+        }
+        sdx[k] = dx; sdy[k] = dy;
+        if (k === 0 || inputKeys[order[k - 1]] !== key) {
+            let maxR = r, oneOwner = owner, j = k + 1;
+            for (; j < P[0] && inputKeys[order[j]] === key; j++) {
+                const slot = input[order[j]], otherR = Math.max(.1, CR[slot] || RAD[slot] || .1);
+                if (otherR > maxR) maxR = otherR;
+                if (OWNER[slot] !== oneOwner) oneOwner = -1;
+            }
+            start[key + 1] = j - k; chunkR[key] = maxR; sole[key] = oneOwner;
+            R['sep.chunkC'][key] = 1;
+        }
+    }
+};
 
 // Gather the immutable collision snapshot in spatial order from the unit
 // columns. The simulation only supplies the permutation and cold path inputs.
@@ -246,6 +362,7 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION] = function (R, P, chunk) {
     const jobs = R['sep.jobs'], keys = R['sep.keys'];
     for (let j = chunk * unitsPerJob, end = Math.min(P[9], j + unitsPerJob); j < end; j++) {
         const p = jobs[j], key = keys[p], cy = Math.floor(key / CW), cx = key - cy * CW;
+        if (!sc[p]) { const a = ord[p]; PX[a] = 0; PY[a] = 0; OV[a] = 0; HIT[a] = 0; continue; }
         let a0 = start[key], a1 = start[key + 1];
         let rA = chunkR[key];
             let xp = sx[p], yp = sy[p], rp = sr[p], op = so[p], lp = sl[p];
@@ -299,8 +416,11 @@ let _simPool = null;
 function simParallelInit(helperUrl, maxHelpers = null) {
     if (_simPool || !SIM_PAR_SHARED || typeof Worker !== 'function') return 0;
     let cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2;
-    let n = Math.max(0, Math.min(7, cores - 2));
-    if (Number.isFinite(maxHelpers)) n = Math.min(n, Math.max(0, maxHelpers));
+    // Start with roughly one simulation participant per physical core on an
+    // SMT machine. Larger CPUs must not be permanently capped at 7 helpers;
+    // the explicit override can use the other hardware threads as well.
+    let n = Math.max(0, Math.ceil(cores / 2) - 1);
+    if (Number.isFinite(maxHelpers)) n = Math.min(Math.max(0, cores - 2), Math.max(0, Math.floor(maxHelpers)));
     if (n < 1) return 0;
     let ctl = new Int32Array(new SharedArrayBuffer(64 * 4));
     let helpers = [];

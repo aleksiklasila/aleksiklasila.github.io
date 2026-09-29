@@ -51,7 +51,7 @@ function _simClientScriptUrls() {
 }
 
 function _simClientCreate() {
-    let worker = new Worker('./src/sim/sim_worker.js?v=20261008-a');
+    let worker = new Worker('./src/sim/sim_worker.js?v=20261009-a');
     let c = {
         worker, loaded: false, active: false, epoch: 0, startTick: -1, nextRequestId: 1, replies: new Map(),
         inFlight: 0, lastDispatchAt: 0, tickClock: 0, dispatchAt: new Map(), appliedTick: -1, appliedAt: 0, latencyMs: TICK_MS, arrivedAt: 0, intervalMs: TICK_MS, drawnAlpha: -1, errors: [],

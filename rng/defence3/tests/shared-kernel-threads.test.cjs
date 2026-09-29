@@ -22,14 +22,29 @@ const workerCode = `const { parentPort, workerData, MessageChannel } = require('
     const inst = world.spawn('source', {simWorker:false}); inst.eval('startSoloGame();');
     // Dense enough to expose poor work distribution, mixed owners/layers and
     // exact overlaps; large frame exercises enough chunks to engage all cores.
-    inst.eval(`for (let i=0;i<6000;i++) { const u=new Unit(i%5===0?'flying':'norm',i&1,100+(i%80)*3,100+Math.floor(i/80)*3); units.push(u); }
+    inst.eval(`const runKernel = simParallelRun;
+        simParallelRun = function(kernel, total) {
+            if (kernel === SIM_KERNEL_SEPARATION_PREPARE) {
+                __scratch.prepareParams = Array.from(_simParams);
+                __scratch.prepareReg = Object.fromEntries(Object.entries(_simParReg).filter(([k])=>k.startsWith('sep.')||k.startsWith('unit.')||k==='spatial.keys').map(([k,v])=>[k,v.slice()]));
+            }
+            if (kernel === SIM_KERNEL_SEPARATION || kernel === SIM_KERNEL_SEPARATION_FINISH) {
+                const prefix = kernel === SIM_KERNEL_SEPARATION ? 'sep' : 'finish';
+                __scratch[prefix + 'Params'] = Array.from(_simParams);
+                __scratch[prefix + 'Reg'] = Object.fromEntries(Object.entries(_simParReg).filter(([k])=>k.startsWith('sep.')||k.startsWith('unit.')).map(([k,v])=>[k,v.slice()]));
+            }
+            return runKernel(kernel, total);
+        };
+        for (let i=0;i<6000;i++) { const u=new Unit(i%5===0?'flying':'norm',i&1,100+(i%80)*3,100+Math.floor(i/80)*3); units.push(u); }
         gameTick(); runUnitSeparationPass();
-        __scratch.sepParams = Array.from(_simParams);
-        __scratch.sepReg = Object.fromEntries(Object.entries(_simParReg).filter(([k])=>k.startsWith('sep.')).map(([k,v])=>[k,v.slice()]));
         simFrameEncode(); __scratch.frameParams=Array.from(_simParams);
         __scratch.frameReg=Object.fromEntries(Object.entries(_simParReg).filter(([k])=>k.startsWith('frame.')||k.startsWith('unit.')).map(([k,v])=>[k,v.slice()]));`);
     assert.deepEqual(inst.errors.map(String), []);
     const scenarios = [
+        {kernel:6, params:inst.scratch.prepareParams, reg:inst.scratch.prepareReg,
+            outputs:['sep.ord','sep.slots','sep.keys','sep.jobs','sep.sx','sep.sy','sep.sr','sep.so','sep.sid','sep.sl','sep.sc','sep.sdx','sep.sdy','sep.start','sep.chunkR','sep.sole','sep.chunkC'], total:p=>Math.ceil(p[0]/p[1])},
+        {kernel:7, params:inst.scratch.finishParams, reg:inst.scratch.finishReg,
+            outputs:['sep.nextX','sep.nextY','sep.fast'], total:p=>Math.ceil(p[0]/p[1])},
         {kernel:3, params:[inst.scratch.sepReg['sep.start'][inst.scratch.sepParams[0]*inst.scratch.sepParams[1]],512], reg:{...inst.scratch.sepReg,...Object.fromEntries(Object.entries(inst.scratch.frameReg).filter(([k])=>k.startsWith('unit.')))}, outputs:['sep.sx','sep.sy','sep.sr','sep.so','sep.sid'], total:p=>Math.ceil(p[0]/p[1])},
         {kernel:1, params:inst.scratch.sepParams, reg:inst.scratch.sepReg, outputs:['sep.px','sep.py','sep.ov','sep.hit'], total:p=>Math.ceil(p[9]/p[2])},
         {kernel:2, params:inst.scratch.frameParams, reg:inst.scratch.frameReg, outputs:['frame.buffer.0'], total:p=>Math.ceil(p[1]/p[2])}
