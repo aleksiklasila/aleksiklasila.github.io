@@ -3938,7 +3938,11 @@ function processVisibleSimulationFrame(simTime) {
         let dt = simTime - _lastTickTime;
         if (dt > 0) {
             _lastTickTime = simTime;
-            if (dt > 200) dt = 200; // cap to prevent spiral of death
+            // Keep a bounded catch-up budget in ticks even when the shared
+            // pace is slow; a fixed 200 ms cap would discard more wall time
+            // as the pace drops and falsely report an ever-slower machine.
+            let maxGap = Math.max(200, netSimulationTickMs() * 5);
+            if (dt > maxGap) dt = maxGap;
             _tickAccumulator += dt;
         }
         _tickAccumulator = pumpSimulationTicks(now, _tickAccumulator, 5);
@@ -3952,19 +3956,25 @@ function processVisibleSimulationFrame(simTime) {
 function pumpSimulationTicks(now, accumulator, maxTicks) {
     if (isMultiplayer) {
         netMaintain(now);
+        netHostUpdateSimulationPace(now);
         driveStrictLockstep(now, currentTick);
         resyncHostFlushHashes(now);
     }
     let catchUp = 0;
     if (isMultiplayer && !isHost) {
         let buffered = getLockstepBufferedTicks();
-        let normal = Math.max(2, Math.floor(Number(LOCKSTEP_PIPELINE_TICKS) || 0) + 2);
+        // The input pipeline is a future command horizon, not a target amount
+        // of already sealed simulation to leave unplayed on this guest. A
+        // large pipeline (e.g. 16 ticks) used to permit another ~800 ms of
+        // visible lag here, despite the same displayed command delay.
+        let normal = 2;
         if (buffered > normal) catchUp = Math.min(buffered - normal, buffered > normal * 4 ? 12 : 3);
     }
     let processed = 0;
     let limit = maxTicks + catchUp;
+    let tickMs = netSimulationTickMs();
     while (processed < limit) {
-        let due = accumulator >= TICK_MS;
+        let due = accumulator >= tickMs;
         if (!due && catchUp <= 0) break;
         if (isMultiplayer && processed > 0) driveStrictLockstep(now, currentTick);
         if (isMultiplayer && !isStrictTickReady(currentTick)) {
@@ -3974,7 +3984,7 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
                 if (paused) netStallStartedAt = 0;
                 else netNoteSimWaiting(true, now);
                 if (!waitingForRemoteSince) waitingForRemoteSince = now;
-                accumulator = Math.min(accumulator, TICK_MS);
+                accumulator = Math.min(accumulator, tickMs);
             }
             break;
         }
@@ -3982,7 +3992,7 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
         // page waits for results rather than queueing more.
         let inWorker = typeof simClientActive === 'function' && simClientActive();
         if (inWorker && simClientInFlight() >= SIM_CLIENT_MAX_IN_FLIGHT + (catchUp > 0 ? 2 : 0)) {
-            if (due) accumulator = Math.min(accumulator, TICK_MS);
+            if (due) accumulator = Math.min(accumulator, tickMs);
             break;
         }
         if (isMultiplayer) {
@@ -3990,7 +4000,7 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
             // too: with the worker, once every tick before it has come back.
             // (The host's patches are encoded by the worker, in order.)
             if (inWorker && !isHost && resyncGuest.T === currentTick && !simClientQuiescent()) {
-                if (due) accumulator = Math.min(accumulator, TICK_MS);
+                if (due) accumulator = Math.min(accumulator, tickMs);
                 break;
             }
             // Resync patches: the host encodes one, or the guest applies one,
@@ -4000,13 +4010,13 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
             } else if (resyncGuest.T === currentTick) {
                 let hadPatch = !!resyncGuest.patch;
                 if (!resyncGuestBeforeTick(currentTick, now)) {
-                    if (due) accumulator = Math.min(accumulator, TICK_MS);
+                    if (due) accumulator = Math.min(accumulator, tickMs);
                     break;
                 }
                 if (hadPatch) break;
             }
         }
-        if (due) accumulator -= TICK_MS;
+        if (due) accumulator -= tickMs;
         else catchUp--;
         if (isMultiplayer) netNoteSimWaiting(false, now);
         waitingForRemoteSince = 0;
@@ -4242,7 +4252,7 @@ function processRenderFrame(timestamp) {
     // clock (the loop runs ticks after drawing, see _runLoopFrame).
     tickAlpha = (typeof simClientActive === 'function' && simClientActive())
         ? simClientTickAlpha(timestamp)
-        : Math.max(0, Math.min((_tickAccumulator + _frameSimLeadMs) / TICK_MS, 1));
+        : Math.max(0, Math.min((_tickAccumulator + _frameSimLeadMs) / netSimulationTickMs(), 1));
     updateCamera(timestamp);
     _applyRenderCameraSnap();
     let dpr = window.devicePixelRatio || 1;

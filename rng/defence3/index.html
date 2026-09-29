@@ -43,7 +43,7 @@
                     </div>
                     <div class="lobby-setting-row">
                         <label for="cfg-fair-delay">Equal Command Delay</label>
-                        <input id="cfg-fair-delay" type="checkbox" checked title="Fair play: every player's commands (the host's too) take effect after the same delay, the one the slowest connection needs. Off: each player waits only what their own connection needs, so the host reacts fastest.">
+                        <input id="cfg-fair-delay" type="checkbox" checked title="Fair play: share command delay and follow the fastest simulation pace all players, including the host, can sustain. Recover full speed when a bottleneck clears. Off: each player uses their own connection delay, so the host can react faster.">
                     </div>
                     <div class="lobby-setting-row">
                         <label for="cfg-tick-rate">Game Ticks Per Second</label>
@@ -746,7 +746,7 @@
 
     <script src="./plotly-2.35.2.min.js"></script>
     
-    <script src="./src/sim/sim_parallel.js?v=20261009-a"></script>
+    <script src="./src/sim/sim_parallel.js?v=20261009-b"></script>
     <script src="./src/sim/sim_unit_state.js?v=20261008-a"></script>
     <script src="./src/utils/utils_common.js?v=20260930-compact"></script>
     <script src="./src/utils/utils_net_quality.js?v=20260928-lateseal"></script>
@@ -792,7 +792,7 @@
     <script src="./src/sim/sim_frame.js?v=20261008-a"></script>
     <script src="./src/sim/sim_frame_world.js?v=20261007-a"></script>
     <script src="./src/sim/sim_shadow.js?v=20261002-sim2"></script>
-    <script src="./src/sim/sim_client.js?v=20261009-a"></script>
+    <script src="./src/sim/sim_client.js?v=20261009-b"></script>
 
     <script src="./src/bootstrap.js?v=20260924-settings"></script>
 </body>

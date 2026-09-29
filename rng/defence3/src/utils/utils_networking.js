@@ -2718,6 +2718,7 @@ function resetWorldState() {
     resetSimulationTickCaches();
     resetEnergyDeltaTracking();
     resetNetCounters();
+    netResetSimulationPace();
     resetHostMigrationState();
     netDisconnectedSinceByPeer = {};
     netWaitingSinceByPeer = {};
