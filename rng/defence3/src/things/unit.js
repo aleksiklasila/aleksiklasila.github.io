@@ -324,6 +324,7 @@ function _maxUnitCollisionRadius() {
 
 class Unit {
     constructor(unitType, owner, x, y) {
+        simUnitStateAllocate(this);
         this.id = nextUnitId++;
         this.unitType = unitType;
         this.owner = owner;
@@ -433,6 +434,33 @@ class Unit {
         this.energy = this.preComputedEffective ? this.preComputedEffective.maxEnergy : this.energy;
         updateUnitSpatial(this);
     }
+
+    get id() { return this._us ? this._us.id[this._si] : undefined; }
+    set id(v) { if (this._us) this._us.id[this._si] = v; else Object.defineProperty(this, 'id', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get owner() { return this._us ? this._us.owner[this._si] : undefined; }
+    set owner(v) { if (this._us) this._us.owner[this._si] = v; else Object.defineProperty(this, 'owner', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get x() { return this._us ? this._us.x[this._si] : undefined; }
+    set x(v) { if (this._us) this._us.x[this._si] = v; else Object.defineProperty(this, 'x', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get y() { return this._us ? this._us.y[this._si] : undefined; }
+    set y(v) { if (this._us) this._us.y[this._si] = v; else Object.defineProperty(this, 'y', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get prevX() { return this._us ? this._us.prevX[this._si] : undefined; }
+    set prevX(v) { if (this._us) this._us.prevX[this._si] = v; else Object.defineProperty(this, 'prevX', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get prevY() { return this._us ? this._us.prevY[this._si] : undefined; }
+    set prevY(v) { if (this._us) this._us.prevY[this._si] = v; else Object.defineProperty(this, 'prevY', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get vx() { return this._us ? this._us.vx[this._si] : undefined; }
+    set vx(v) { if (this._us) this._us.vx[this._si] = v; else Object.defineProperty(this, 'vx', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get vy() { return this._us ? this._us.vy[this._si] : undefined; }
+    set vy(v) { if (this._us) this._us.vy[this._si] = v; else Object.defineProperty(this, 'vy', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get energy() { return this._us ? this._us.energy[this._si] : undefined; }
+    set energy(v) { if (this._us) this._us.energy[this._si] = v; else Object.defineProperty(this, 'energy', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get r() { return this._us ? this._us.r[this._si] : undefined; }
+    set r(v) { if (this._us) this._us.r[this._si] = v; else Object.defineProperty(this, 'r', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get collisionR() { return this._us ? this._us.collisionR[this._si] : undefined; }
+    set collisionR(v) { if (this._us) this._us.collisionR[this._si] = v; else Object.defineProperty(this, 'collisionR', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get pathIndex() { return this._us ? this._us.pathIndex[this._si] : undefined; }
+    set pathIndex(v) { if (this._us) this._us.pathIndex[this._si] = v; else Object.defineProperty(this, 'pathIndex', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get commandState() { return this._us ? this._us.commandState[this._si] : undefined; }
+    set commandState(v) { if (this._us) this._us.commandState[this._si] = v; else Object.defineProperty(this, 'commandState', { value: v, writable: true, enumerable: true, configurable: true }); }
 
     getCollisionLayer() {
         if (this.isFlying) return 'air';
@@ -1761,8 +1789,8 @@ const _sep = { cap: 0, offs: null, offsReach: 0, offsCws: 0 };
 function _sepGrow(n) {
     if (n <= _sep.cap) return;
     let cap = Math.max(1024, n, _sep.cap * 2);
-    _sep.x = new Float64Array(cap); _sep.y = new Float64Array(cap); _sep.r = new Float64Array(cap);
-    _sep.owner = new Int32Array(cap); _sep.layer = new Uint8Array(cap); _sep.check = new Uint8Array(cap);
+    _sep.r = new Float64Array(cap);
+    _sep.layer = new Uint8Array(cap); _sep.check = new Uint8Array(cap);
     _sep.cap = cap;   // (the packed and output arrays follow it: runUnitSeparationPass)
 }
 
@@ -1777,13 +1805,13 @@ function _sepShared(S, name, Type, n) {
     if (!arr || arr.length < n) { arr = S[name] = simSharedArray(Type, n); simParallelBind('sep.' + name, arr); }
     return arr;
 }
-// Rows of tiles per chunk of the kernel.
-const UNIT_SEPARATION_CHUNKS = 32;
+// Work is split into small batches of checking units, including within one
+// crowded tile, rather than rows whose occupancy varies by orders of magnitude.
 
 function runUnitSeparationPass() {
     let n = units.length;
     _sepGrow(n);
-    let S = _sep, X = S.x, Y = S.y, R = S.r, O = S.owner, L = S.layer, C = S.check;
+    let S = _sep, R = S.r, L = S.layer, C = S.check;
     let restTicks = getUnitCollisionRecalcTicks();
     let any = false;
     let nChunks = CHUNKS_W * CHUNKS_H, cap = S.cap;
@@ -1794,22 +1822,22 @@ function runUnitSeparationPass() {
     let ord = _sepShared(S, 'ord', Int32Array, cap), sx = _sepShared(S, 'sx', Float64Array, cap), sy = _sepShared(S, 'sy', Float64Array, cap);
     let sr = _sepShared(S, 'sr', Float64Array, cap), so = _sepShared(S, 'so', Int32Array, cap), sl = _sepShared(S, 'sl', Uint8Array, cap);
     let sc = _sepShared(S, 'sc', Uint8Array, cap), sid = _sepShared(S, 'sid', Float64Array, cap);
+    let slots = _sepShared(S, 'slots', Int32Array, cap), keys = _sepShared(S, 'keys', Int32Array, cap);
+    let jobs = _sepShared(S, 'jobs', Int32Array, cap), jobCount = 0;
     let sdx = _sepShared(S, 'sdx', Float64Array, cap), sdy = _sepShared(S, 'sdy', Float64Array, cap);
     let PX = _sepShared(S, 'px', Float64Array, cap), PY = _sepShared(S, 'py', Float64Array, cap);
-    let OV = _sepShared(S, 'ov', Float64Array, cap), HIT = _sepShared(S, 'hit', Uint16Array, cap);
+    let OV = _sepShared(S, 'ov', Float64Array, cap), HIT = _sepShared(S, 'hit', Uint32Array, cap);
     let K = S.key;
     chunkR.fill(0, 0, nChunks); chunkC.fill(0, 0, nChunks); sole.fill(-2, 0, nChunks); start.fill(0, 0, nChunks + 1);
+    PX.fill(0, 0, n); PY.fill(0, 0, n); OV.fill(0, 0, n); HIT.fill(0, 0, n);
     for (let i = 0; i < n; i++) {
         let u = units[i];
-        X[i] = u.x; Y[i] = u.y;
         let r = +u.collisionR || +u.r || 0.1;
         R[i] = r < 0.1 ? 0.1 : r;
-        O[i] = u.owner;
         L[i] = u.isFlying ? 1 : (u.unitType === 'mole' ? 2 : 0);
         let c = !u.dead && (u.x !== u.prevX || u.y !== u.prevY || restTicks <= 1 || ((gameTime + u.id) % restTicks) === 0);
         C[i] = c ? 1 : 0;
         if (c) any = true;
-        PX[i] = 0; PY[i] = 0; OV[i] = 0; HIT[i] = 0;
         // Units in the spatial buckets (alive), by tile.
         let key = u._spatialKey;
         if (u.dead || !(key >= 0 && key < nChunks)) { K[i] = -1; continue; }
@@ -1829,9 +1857,10 @@ function runUnitSeparationPass() {
         let key = K[i];
         if (key < 0) continue;
         let k = fill[key]++;
-        ord[k] = i; sx[k] = X[i]; sy[k] = Y[i]; sr[k] = R[i]; so[k] = O[i]; sl[k] = L[i]; sc[k] = C[i];
+        ord[k] = i; sl[k] = L[i]; sc[k] = C[i]; keys[k] = key;
+        if (C[i]) jobs[jobCount++] = k;
         let u = units[i];
-        sid[k] = Number(u.id) || 0;
+        slots[k] = u._si;
         // Where it leaves an exact overlap: sideways to its motion (or path).
         if (C[i]) {
             let mdx = u.vx, mdy = u.vy;
@@ -1843,6 +1872,8 @@ function runUnitSeparationPass() {
             sdx[k] = mdx; sdy[k] = mdy;
         }
     }
+    _simParams[0] = start[nChunks]; _simParams[1] = 512;
+    simParallelRun(SIM_KERNEL_UNIT_PACK, Math.ceil(start[nChunks] / 512));
     let pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0);
     let maxR = Math.max(0.1, _maxUnitCollisionRadius());
     let cws = CHUNK_SIZE * TILE;
@@ -1862,11 +1893,12 @@ function runUnitSeparationPass() {
         S.offs = offs; S.offsReach = reach; S.offsCws = cws;
         simParallelBind('sep.offs', offs);
     }
-    let rowsPer = Math.max(1, Math.ceil(CHUNKS_H / UNIT_SEPARATION_CHUNKS));
+    let unitsPerJob = 128;
     let P = _simParams;
-    P[0] = CHUNKS_W; P[1] = CHUNKS_H; P[2] = rowsPer; P[3] = pad; P[4] = farAny; P[5] = UNIT_SEPARATION_Q;
+    P[0] = CHUNKS_W; P[1] = CHUNKS_H; P[2] = unitsPerJob; P[3] = pad; P[4] = farAny; P[5] = UNIT_SEPARATION_Q;
     P[6] = UNIT_SEPARATION_SHARE_BOTH; P[7] = UNIT_SEPARATION_SHARE_ONE; P[8] = S.offs.length / 3;
-    simParallelRun(SIM_KERNEL_SEPARATION, Math.ceil(CHUNKS_H / rowsPer));
+    P[9] = jobCount;
+    simParallelRun(SIM_KERNEL_SEPARATION, Math.ceil(jobCount / unitsPerJob));
     for (let i = 0; i < n; i++) {
         if (!HIT[i]) continue;
         let u = units[i];

@@ -514,6 +514,7 @@ function gameTick() {
         }
     }
     compactRemovedUnits();
+    simUnitStateCollect();
     runUnitSeparationPass();
 
     // Barracks - use deterministic shuffle to avoid order-dependent updates

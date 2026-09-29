@@ -90,6 +90,11 @@ const OTHERS = `(() => { const out = {};
     assert.equal(failure, null, failure || '');
     assert.ok(checked > TICKS * 0.8, 'compared ' + checked + ' results');
     assert.ok(detailed, 'selected units get their details (paths, stats)');
+    if (process.env.SIM_SHARED === '1') {
+        assert.equal(W.eval('SIM_PAR_SHARED'), true);
+        assert.ok(W.eval('_simSharedFrames.size') <= 12, 'shared frame buffers remain bounded');
+        assert.ok(W.eval('_simSharedFrameId') < 20, 'returned buffer wrappers reuse stable helper bindings');
+    }
     assert.deepEqual(P.errors.map(e => String(e.stack || e).slice(0, 400)), [], 'no errors');
     const stats = JSON.parse(P.eval('JSON.stringify(window.simClientStats())'));
     console.log(`PASS: the page's units and world matched the worker on ${checked} results (up to ${unitsSeen} units); page apply ${stats.applyMs.mean} ms, worker encode ${stats.workerEncodeMs.mean} ms.`);

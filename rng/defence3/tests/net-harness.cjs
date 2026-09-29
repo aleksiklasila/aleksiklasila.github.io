@@ -7,10 +7,18 @@ const path = require('node:path');
 const nodeCrypto = require('node:crypto');
 
 const root = path.join(__dirname, '..');
-const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+// Paired scale replays can load a historical implementation without checking
+// out files or touching the user's working tree.
+const baselineRef = process.env.DEFENCE_TEST_BASELINE;
+const readSource = baselineRef ? (() => {
+    const { execFileSync } = require('node:child_process');
+    const prefix = execFileSync('git', ['rev-parse', '--show-prefix'], { cwd: root, encoding: 'utf8' }).trim();
+    return file => execFileSync('git', ['show', baselineRef + ':' + prefix + file], { cwd: root, encoding: 'utf8', maxBuffer: 16e6 });
+})() : file => fs.readFileSync(path.join(root, file), 'utf8');
+const html = readSource('index.html');
 const files = Array.from(html.matchAll(/<script src="\.\/(src\/[^"?]+)(?:\?[^" ]*)?"/g), m => m[1])
     .filter(f => !f.endsWith('bootstrap.js'));
-const SOURCE = files.map(f => fs.readFileSync(path.join(root, f), 'utf8')).join('\n;\n');
+const SOURCE = files.map(readSource).join('\n;\n');
 // The simulation worker's scripts (?simworker=1): the game's own, compiled
 // once, run in a separate context per worker.
 const vm = require('node:vm');
@@ -19,8 +27,8 @@ function simWorkerScripts() {
     if (!_simWorkerScripts) {
         const list = files.filter(f => !/sim_client\.js|sim_shadow\.js|sim_worker\.js/.test(f));
         _simWorkerScripts = {
-            game: list.map(f => Object.assign(new vm.Script(fs.readFileSync(path.join(root, f), 'utf8'), { filename: f }), { __file: f })),
-            worker: new vm.Script(fs.readFileSync(path.join(root, 'src/sim/sim_worker.js'), 'utf8'), { filename: 'src/sim/sim_worker.js' })
+            game: list.map(f => Object.assign(new vm.Script(readSource(f), { filename: f }), { __file: f })),
+            worker: new vm.Script(readSource('src/sim/sim_worker.js'), { filename: 'src/sim/sim_worker.js' })
         };
     }
     return _simWorkerScripts;
@@ -544,6 +552,7 @@ function createInstance(world, name, options = {}) {
             const worker = this;
             const scripts = simWorkerScripts();
             const sandbox = {
+                crossOriginIsolated: process.env.SIM_SHARED === '1', SharedArrayBuffer,
                 console: { log() { }, info() { }, debug() { }, warn() { }, error: (...a) => inst.errors.push(new Error('[sim worker] ' + a.map(x => (x && x.stack) || String(x)).join(' '))) },
                 MessageChannel: class { constructor() { this.port1 = { onmessage: null, unref() { } }; this.port2 = { postMessage() { }, unref() { } }; } },
                 performance: { now: () => sched.now }, setTimeout: () => 0, clearTimeout() { }, setInterval: () => 0, clearInterval() { },
@@ -551,8 +560,8 @@ function createInstance(world, name, options = {}) {
                 location: { search: '', href: 'http://localhost/rng/defence3/src/sim/sim_worker.js' }, navigator: { userAgent: 'harness-worker' },
                 crypto: window.crypto,
                 importScripts: () => { if (worker._imported) return; worker._imported = true; for (const sc of scripts.game) { try { sc.runInContext(ctx); } catch (err) { inst.errors.push(new Error("[sim worker] loading " + sc.__file + ": " + (err && err.stack || err))); } } },
-                postMessage: (msg) => {
-                    const data = structuredClone(msg);
+                postMessage: (msg, transfer = []) => {
+                    const data = process.env.SIM_SHARED === '1' ? structuredClone(msg, { transfer }) : structuredClone(msg);
                     sched.at(sched.now + (options.simWorkerMs ?? 5), () => { if (!worker._terminated && worker.onmessage) worker.onmessage({ data }); }, inst);
                 }
             };
@@ -565,8 +574,8 @@ function createInstance(world, name, options = {}) {
             this._sandbox = sandbox;
             inst.simWorker = this;
         }
-        postMessage(msg) {
-            const data = structuredClone(msg);
+        postMessage(msg, transfer = []) {
+            const data = process.env.SIM_SHARED === '1' ? structuredClone(msg, { transfer }) : structuredClone(msg);
             // The page lists no script tags here: one entry loads them all.
             if (data && data.type === 'load' && !(data.scripts && data.scripts.length)) data.scripts = ['harness:all'];
             // Tests compare every tick: each tick's lockstep hash, and (when

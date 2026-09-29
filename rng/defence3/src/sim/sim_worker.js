@@ -175,7 +175,7 @@ self.onmessage = (ev) => {
             _simLoaded = true;
             // Helpers for the parallel jobs (with shared memory; sim_parallel.js).
             let helpers = 0;
-            try { helpers = simParallelInit('sim_helper.js?v=20261007-a', msg.maxHelpers); } catch (err) { _simError('helpers', err); }
+            try { helpers = simParallelInit('sim_helper.js?v=20261008-a', msg.maxHelpers); } catch (err) { _simError('helpers', err); }
             _simPost({ type: 'loaded', ms: performance.now() - t0, helpers, shared: SIM_PAR_SHARED });
         } else if (msg.type === 'start') {
             _simStart(msg);
@@ -272,7 +272,7 @@ function simFrameResetAll() {
 }
 function _simEncodeWorld(transfer) {
     let w = {};
-    try { w.units = simFrameEncode(); transfer.push(w.units.buf); } catch (err) { _simError('frame', err); }
+    try { w.units = simFrameEncode(); if (!SIM_PAR_SHARED) transfer.push(w.units.buf); } catch (err) { _simError('frame', err); }
     try { w.structures = simFrameEncodeStructures(); transfer.push(w.structures.buf); } catch (err) { _simError('structures', err); }
     try { w.projectiles = simFrameEncodeProjectiles(); transfer.push(w.projectiles.buf); } catch (err) { _simError('projectiles', err); }
     try { w.state = simFrameEncodeState(); } catch (err) { _simError('state', err); }

@@ -730,7 +730,7 @@ function _snapGetShape(keys) {
 
 // Shape of an entity, trying the recent ones of the same list first.
 function _snapShapeOf(e, mru) {
-    let keys = Object.keys(e);
+    let keys = simUnitStateKeys(e);
     for (let i = 0; i < mru.length; i++) {
         let s = mru[i];
         if (_snapKeysEqual(keys, s.keys)) {
@@ -996,7 +996,7 @@ function _snapEncodePoolValue(v) {
         // building something still points at).
         let name = proto && proto.constructor && proto.constructor.name;
         let fields = {};
-        for (let k of Object.keys(v)) {
+        for (let k of simUnitStateKeys(v)) {
             if (SNAP_SKIP_KEYS.has(k)) continue;
             fields[k] = (k === 'path' && v instanceof Unit) ? _snapEncodePath(v) : _snapE(v[k]);
         }
@@ -1467,6 +1467,7 @@ function _snapDPool(i) {
         if (tag === '~c') {
             let C = _snapClassByName(enc[1]);
             let out = C ? Object.create(C.prototype) : {};
+            if (C === Unit) simUnitStateAllocate(out);
             memo[i] = out;
             let fields = enc[2];
             for (let k in fields) out[k] = _snapD(fields[k]);
@@ -1618,7 +1619,7 @@ function snapDecodeState(S, options = null) {
                     e = old;
                     if (list === 'u') { removeUnitSpatial(e); if (partial && old.prevX === old.prevX && old.prevX !== undefined) keptPrev.set(old, [old.prevX, old.prevY]); }
                     let keys = shapes[tpls[row[1]][0]].keys;
-                    let own = Object.keys(old);
+                    let own = simUnitStateKeys(old);
                     if (!_snapKeysEqual(own, keys)) { let want = new Set(keys); for (let k of own) if (!want.has(k)) delete old[k]; }
                 } else {
                     e = _snapNewShell(list, type);

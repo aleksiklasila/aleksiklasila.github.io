@@ -3,13 +3,13 @@
 // SIMULATION FRAMES (worker -> page, units)
 //
 // Each tick the simulation worker writes what the page needs of every unit
-// into one ArrayBuffer: typed-array columns indexed by the unit's render
+// into one buffer: typed-array columns indexed by the unit's render
 // slot (stable while the unit lives, reused after it dies), plus the unit
-// list's order as slots. The buffer is transferred (moved, not copied) to
-// the page, which reads units straight from it and hands it back when the
-// next frame arrives; the worker reuses returned buffers (a small ring).
-// Nothing is diffed, encoded or decoded: the cost is one sequential write
-// per unit per tick, and moving a frame costs the same at any size.
+// list's order as slots. With isolation the buffer is shared with helpers
+// and the page; otherwise it is transferred. The page owns an immutable
+// frame until it hands it back. Helpers finish writing before publication.
+// Core fields come directly from authoritative unit columns; reference and
+// UI fields are gathered on the simulation thread. No per-unit messages.
 //
 // Strings (unit and worker types, worker states, attack styles) travel as
 // codes; each frame lists the codes it introduces.
@@ -39,13 +39,42 @@ const _simUnitStatusCode = { walk: 0, angry: 1, work: 2, sleep: 3 };
 
 // Typed-array views of a frame buffer laid out for `cap` slots.
 function simFrameViews(buf, cap) {
-    let f = { buf, cap }, off = 0;
-    for (let k of SIM_FRAME_F32) { f[k] = new Float32Array(buf, off, cap); off += 4 * cap; }
-    for (let k of SIM_FRAME_I32) { f[k] = new Int32Array(buf, off, cap); off += 4 * cap; }
-    f.order = new Int32Array(buf, off, cap); off += 4 * cap;
-    for (let k of SIM_FRAME_I16) { f[k] = new Int16Array(buf, off, cap); off += 2 * cap; }
-    for (let k of SIM_FRAME_U8) { f[k] = new Uint8Array(buf, off, cap); off += cap; }
-    return f;
+    return { buf, cap,
+        x: new Float32Array(buf, 0 * cap, cap),
+        y: new Float32Array(buf, 4 * cap, cap),
+        px: new Float32Array(buf, 8 * cap, cap),
+        py: new Float32Array(buf, 12 * cap, cap),
+        vx: new Float32Array(buf, 16 * cap, cap),
+        vy: new Float32Array(buf, 20 * cap, cap),
+        energy: new Float32Array(buf, 24 * cap, cap),
+        maxEnergy: new Float32Array(buf, 28 * cap, cap),
+        tx: new Float32Array(buf, 32 * cap, cap),
+        ty: new Float32Array(buf, 36 * cap, cap),
+        facing: new Float32Array(buf, 40 * cap, cap),
+        amount: new Float32Array(buf, 44 * cap, cap),
+        phase: new Float32Array(buf, 48 * cap, cap),
+        prate: new Float32Array(buf, 52 * cap, cap),
+        light: new Float32Array(buf, 56 * cap, cap),
+        sig: new Float32Array(buf, 60 * cap, cap),
+        r: new Float32Array(buf, 64 * cap, cap),
+        vision: new Float32Array(buf, 68 * cap, cap),
+        cargo: new Float32Array(buf, 72 * cap, cap),
+        id: new Int32Array(buf, 76 * cap, cap),
+        flags: new Int32Array(buf, 80 * cap, cap),
+        order: new Int32Array(buf, 84 * cap, cap),
+        owner: new Int16Array(buf, 88 * cap, cap),
+        watchedBy: new Int16Array(buf, 90 * cap, cap),
+        level: new Int16Array(buf, 92 * cap, cap),
+        blevel: new Int16Array(buf, 94 * cap, cap),
+        type: new Int16Array(buf, 96 * cap, cap),
+        wtype: new Int16Array(buf, 98 * cap, cap),
+        wstate: new Int16Array(buf, 100 * cap, cap),
+        style: new Int16Array(buf, 102 * cap, cap),
+        mode: new Uint8Array(buf, 104 * cap, cap),
+        status: new Uint8Array(buf, 105 * cap, cap),
+        flash: new Uint8Array(buf, 106 * cap, cap),
+        cmd: new Uint8Array(buf, 107 * cap, cap),
+    };
 }
 
 // ---- worker side ----
@@ -57,6 +86,22 @@ const _simRenderSlots = { owner: [], free: [], stamp: new Int32Array(0), tick: 0
 const _simFrameStrings = { codes: new Map(), list: [''], sent: 1 };
 // Buffers the page gave back.
 const _simFramePool = [];
+// Shared buffers return from postMessage as new JS wrappers. A trailer token
+// resolves them to the worker's canonical wrapper and persistent helper binding.
+// Without this, rebinding on every tick makes helpers miss each new frame job.
+const _simSharedFrames = new Map();
+let _simSharedFrameId = 0;
+function _simFrameBindBuffer(buf) {
+    if (!SIM_PAR_SHARED) { simParallelBind('frame.buffer.0', new Uint8Array(buf)); return 0; }
+    const trailer = new DataView(buf, buf.byteLength - 4, 4);
+    let id = trailer.getUint32(0, true);
+    if (!id || !_simSharedFrames.has(id)) {
+        id = ++_simSharedFrameId; trailer.setUint32(0, id, true);
+        _simSharedFrames.set(id, buf);
+        simParallelBind('frame.buffer.' + id, new Uint8Array(buf));
+    }
+    return id;
+}
 
 function simFrameReset() {
     let R = _simRenderSlots;
@@ -74,22 +119,37 @@ function _simFrameCode(s) {
 }
 
 function simFrameReturn(buf) {
-    if (buf && buf.byteLength && _simFramePool.length < 12) _simFramePool.push(buf);
+    if (!buf || !buf.byteLength) return;
+    if (typeof SharedArrayBuffer === 'function' && buf instanceof SharedArrayBuffer) {
+        const id = new DataView(buf, buf.byteLength - 4, 4).getUint32(0, true);
+        buf = _simSharedFrames.get(id);
+        if (!buf || _simFramePool.includes(buf)) return;
+    }
+    if (_simFramePool.length >= 12) {
+        const old = _simFramePool.shift();
+        if (typeof SharedArrayBuffer === 'function' && old instanceof SharedArrayBuffer) {
+            const id = new DataView(old, old.byteLength - 4, 4).getUint32(0, true);
+            _simSharedFrames.delete(id); simParallelBind('frame.buffer.' + id, null);
+        }
+    }
+    _simFramePool.push(buf);
 }
 
-function _simFrameAcquire(bytes) {
+function _simFrameAcquire(bytes, shared = false) {
     let P = _simFramePool;
     for (let i = P.length - 1; i >= 0; i--) {
         let b = P[i];
-        if (b.byteLength >= bytes && b.byteLength <= bytes * 4 + 65536) { P.splice(i, 1); return b; }
+        if ((typeof SharedArrayBuffer === 'function' && b instanceof SharedArrayBuffer) === shared
+            && b.byteLength >= bytes + (shared ? 4 : 0) && b.byteLength <= bytes * 4 + 65536) { P.splice(i, 1); return b; }
     }
-    return new ArrayBuffer(Math.ceil(bytes * 1.25) + 4096);
+    const Type = shared ? SharedArrayBuffer : ArrayBuffer;
+    return new Type(Math.ceil(bytes * 1.25) + 4096);
 }
 
 // A pooled buffer of exactly this size (per-tick grids).
 function _simFrameAcquireExact(bytes) {
     let P = _simFramePool;
-    for (let i = P.length - 1; i >= 0; i--) if (P[i].byteLength === bytes) return P.splice(i, 1)[0];
+    for (let i = P.length - 1; i >= 0; i--) if (P[i] instanceof ArrayBuffer && P[i].byteLength === bytes) return P.splice(i, 1)[0];
     return new ArrayBuffer(bytes);
 }
 
@@ -118,16 +178,27 @@ function _simRenderSlotOf(u) {
     R.version++;
     if (R.lastX.length <= slot) {
         let cap = Math.max(1024, (slot + 1) * 2);
-        let gx = new Float64Array(cap), gy = new Float64Array(cap);
+        let gx = simSharedArray(Float64Array, cap), gy = simSharedArray(Float64Array, cap);
         gx.set(R.lastX); gy.set(R.lastY);
         R.lastX = gx; R.lastY = gy;
+        simParallelBind('frame.lastX', gx); simParallelBind('frame.lastY', gy);
     }
     R.lastX[slot] = u.prevX; R.lastY[slot] = u.prevY;
     return slot;
 }
 
-const _simVisPhase = [0, 0];
 let _simFrameOrderLast = null;
+const _simFrameInput = { cap: 0 };
+function _simFrameGrowInput(n) {
+    const S = _simFrameInput;
+    if (S.cap >= n) return S;
+    S.cap = Math.max(1024, n, S.cap * 2);
+    for (const k of ['slot', 'targetX', 'targetY', 'still', 'flash']) {
+        S[k] = simSharedArray(Float64Array, S.cap);
+        simParallelBind('frame.' + k, S[k]);
+    }
+    return S;
+}
 
 // This tick's frame. Returns { buf, cap, n, count, mver, strings } (transfer buf).
 function simFrameEncode() {
@@ -139,8 +210,9 @@ function simFrameEncode() {
     for (let i = 0; i < count; i++) { let u = list[i]; if (!u.dead) { _simRenderSlotOf(u); live++; } }
     let n = R.owner.length;
     let cap = Math.max(64, n);
-    let buf = _simFrameAcquire(cap * SIM_FRAME_SLOT_BYTES);
+    let buf = _simFrameAcquire(cap * SIM_FRAME_SLOT_BYTES, SIM_PAR_SHARED);
     let F = simFrameViews(buf, cap);
+    let input = _simFrameGrowInput(cap);
     if (R.stamp.length < n) { let grown = new Int32Array(Math.max(1024, n * 2)); grown.set(R.stamp); R.stamp = grown; }
     let order = F.order, k = 0, orderChanged = !_simFrameOrderLast || _simFrameOrderLast.length !== live;
     let flagsA = F.flags;
@@ -151,14 +223,9 @@ function simFrameEncode() {
         R.stamp[s] = stampTick;
         if (!orderChanged && _simFrameOrderLast[k] !== s) orderChanged = true;
         order[k++] = s;
-        F.id[s] = u.id;
-        F.x[s] = u.x; F.y[s] = u.y; F.px[s] = R.lastX[s]; F.py[s] = R.lastY[s];
-        R.lastX[s] = u.x; R.lastY[s] = u.y;
-        F.vx[s] = Number(u.vx) || 0; F.vy[s] = Number(u.vy) || 0;
-        F.energy[s] = u.energy;
+        input.slot[s] = u._si;
         let pc = u.preComputed;
         F.maxEnergy[s] = pc ? pc.maxEnergy : u.energy;
-        F.r[s] = u.r;
         let at = u.attackTarget;
         let flags = (u.isFlying ? SIM_UF_FLYING : 0) | (u.isSnake ? SIM_UF_SNAKE : 0) | (u.isWorker ? SIM_UF_WORKER : 0)
             | (u.holdPosition ? SIM_UF_HOLD : 0) | (u.burning > 0 ? SIM_UF_BURNING : 0) | (u.poisoned > 0 ? SIM_UF_POISONED : 0)
@@ -172,7 +239,6 @@ function simFrameEncode() {
         let eff = u.preComputedEffective;
         F.vision[s] = eff && Number.isFinite(eff.visionRangeArea) ? eff.visionRangeArea : getEntityEffectiveVisibilityRangeArea(u);
         F.cargo[s] = Number(u.carryingValue) || 0;
-        F.owner[s] = u.owner;
         F.watchedBy[s] = Number.isFinite(u.watchedByTeam) ? u.watchedByTeam : -1;
         F.level[s] = Number.isFinite(u.effectiveLevel) ? u.effectiveLevel : -1;
         F.blevel[s] = Number.isFinite(u.unitLevel) ? u.unitLevel : -1;
@@ -182,29 +248,16 @@ function simFrameEncode() {
         F.style[s] = _simFrameCode(u.attackStyle);
         let flash = Number(u.attackFlash) || 0;
         F.flash[s] = flash <= 0 ? 0 : flash >= 255 ? 255 : flash;
-        F.cmd[s] = u.commandState | 0;
         // Look: activity, facing, walk phase, status face, own light, panel.
-        if (u.isSnake) {
-            let act = getUnit3DActivity(u);
-            F.mode[s] = 0; F.amount[s] = 0;
-            F.facing[s] = Math.atan2(Number(u.vx) || 0, Number(u.vy) || 1);
-            F.phase[s] = 0; F.prate[s] = 0;
-            F.status[s] = _simUnitStatusCode[getUnit3DStatusState(u, act)] || 0;
-        } else {
-            let activity = getUnit3DActivity(u);
-            if (activity.mode !== 0 || activity.amount > 0 || u._visStill === undefined) u._visStill = gameTime;
-            activity = _unit3DIdleActivity(u, activity, u._visStill);
-            let fx = Number(u.vx) || 0, fy = Number(u.vy) || 0;
-            if (activity.target && Number.isFinite(activity.target.x) && Number.isFinite(activity.target.y)) {
-                fx = activity.target.x - u.x; fy = activity.target.y - u.y;
-            }
-            F.mode[s] = activity.mode;
-            F.amount[s] = Math.max(0, Math.min(1, activity.amount || Math.min(1, Math.hypot(u.x - u.prevX, u.y - u.prevY) / Math.max(.01, TILE * .025)) || 0));
-            F.facing[s] = Math.atan2(fx, fy || 0.0001) || 0;
-            _unit3DWalkPhaseLinear(u, activity, _simVisPhase);
-            F.phase[s] = _simVisPhase[0]; F.prate[s] = _simVisPhase[1];
-            F.status[s] = _simUnitStatusCode[getUnit3DStatusState(u, activity)] || 0;
-        }
+        let activity = getUnit3DActivity(u);
+        if (!u.isSnake && (activity.mode !== 0 || activity.amount > 0 || u._visStill === undefined)) u._visStill = gameTime;
+        input.still[s] = u._visStill;
+        input.flash[s] = flash;
+        const target = activity.target;
+        input.targetX[s] = target && Number.isFinite(target.x) && Number.isFinite(target.y) ? target.x : NaN;
+        input.targetY[s] = target ? target.y : NaN;
+        F.mode[s] = activity.mode; F.amount[s] = activity.amount;
+        F.status[s] = _simUnitStatusCode[getUnit3DStatusState(u, activity)] || 0;
         F.light[s] = getVisualUnitSourceLight(u);
         F.sig[s] = _simSignatureHash(u);
     }
@@ -216,6 +269,12 @@ function simFrameEncode() {
         }
     }
     if (orderChanged) { _simFrameOrderLast = order.slice(0, live); R.version++; }
+    const bufferId = _simFrameBindBuffer(buf);
+    const P = _simParams;
+    P[0] = cap; P[1] = live; P[2] = 256; P[3] = gameTime; P[4] = TICK_RATE; P[5] = TILE; P[6] = tickAlpha;
+    P[7] = RENDERER3D_IDLE_DELAY_SECONDS; P[8] = RENDERER3D_IDLE_SETTLE_SECONDS;
+    P[9] = bufferId;
+    simParallelRun(SIM_KERNEL_UNIT_FRAME, Math.ceil(live / P[2]));
     return { buf, cap, n, count: live, mver: R.version };
 }
 
@@ -272,7 +331,7 @@ const _pageFrameStrings = [''];
 // flashes) is set on it as on a unit.
 class PageUnit {
     constructor(id, slot) {
-        this.id = id;
+        Object.defineProperty(this, 'id', { value: id, writable: true, enumerable: true });
         this._s = slot;
         this.dead = false;
         this._last = null;   // last values, once dead
