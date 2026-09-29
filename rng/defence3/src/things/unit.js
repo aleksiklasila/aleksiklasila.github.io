@@ -1763,67 +1763,22 @@ function _sepGrow(n) {
     let cap = Math.max(1024, n, _sep.cap * 2);
     _sep.x = new Float64Array(cap); _sep.y = new Float64Array(cap); _sep.r = new Float64Array(cap);
     _sep.owner = new Int32Array(cap); _sep.layer = new Uint8Array(cap); _sep.check = new Uint8Array(cap);
-    _sep.px = new Float64Array(cap); _sep.py = new Float64Array(cap); _sep.ov = new Float64Array(cap); _sep.hit = new Uint16Array(cap);
-    _sep.cap = cap;
-    _sep.key = null;   // the per-tile arrays follow (see runUnitSeparationPass)
+    _sep.cap = cap;   // (the packed and output arrays follow it: runUnitSeparationPass)
 }
 
-// Direction a unit leaves an exact overlap in: sideways to its motion (or
-// path), split between the pair by id.
-function _unitExactOverlapDir(unit, other, out) {
-    let mdx = unit.vx, mdy = unit.vy;
-    if (detHypot(mdx, mdy) < 0.001 && unit.path && unit.pathIndex < unit.path.length) {
-        let pn = unit.path[unit.pathIndex];
-        mdx = pn.x * TILE + 16 - unit.x;
-        mdy = pn.y * TILE + 16 - unit.y;
-    }
-    let pairSign = ((Number(unit.id) || 0) < (Number(other && other.id) || 0)) ? -1 : 1;
-    if (Math.abs(mdx) >= Math.abs(mdy)) { out[0] = 0; out[1] = (mdx >= 0 ? -1 : 1) * pairSign; }
-    else { out[0] = (mdy >= 0 ? 1 : -1) * pairSign; out[1] = 0; }
-}
-const _sepDir = [0, 0];
 
-// Units by tile, contiguous: ord[k] is the unit index of the k-th sorted
-// entry; tile c holds sorted entries start[c] .. start[c + 1] - 1. The pair
-// loops read positions and flags from the packed arrays (sx, sy...), not
-// from the unit objects.
-// One touching pair's pushes (sorted entries p, q; dx, dy from p to q).
-function _sepHit(p, q, dx, dy, d2, minDist) {
-    let S = _sep, sc = S.sc, a = S.ord[p], b = S.ord[q];
-    let d = Math.sqrt(d2);
-    let overlap = minDist - Math.max(d, 0.001);
-    let f = overlap * (sc[p] && sc[q] ? UNIT_SEPARATION_SHARE_BOTH : UNIT_SEPARATION_SHARE_ONE) * UNIT_SEPARATION_Q;
-    if (sc[p]) {
-        let nx, ny;
-        if (d > 0.001) { nx = -dx / d; ny = -dy / d; } else { _unitExactOverlapDir(units[a], units[b], _sepDir); nx = _sepDir[0]; ny = _sepDir[1]; }
-        S.px[a] += Math.round(nx * f); S.py[a] += Math.round(ny * f);
-        if (overlap > S.ov[a]) S.ov[a] = overlap;
-        S.hit[a]++;
-    }
-    if (sc[q]) {
-        let nx, ny;
-        if (d > 0.001) { nx = dx / d; ny = dy / d; } else { _unitExactOverlapDir(units[b], units[a], _sepDir); nx = _sepDir[0]; ny = _sepDir[1]; }
-        S.px[b] += Math.round(nx * f); S.py[b] += Math.round(ny * f);
-        if (overlap > S.ov[b]) S.ov[b] = overlap;
-        S.hit[b]++;
-    }
+// Units by tile, contiguous (sorted entries): ord[k] is the unit index of
+// the k-th entry; tile c holds entries start[c] .. start[c + 1] - 1. The
+// separation kernel (sim_parallel.js) gathers each checking unit's pushes
+// from these packed arrays, in parallel over rows of tiles; the units are
+// read before and written after, here.
+function _sepShared(S, name, Type, n) {
+    let arr = S[name];
+    if (!arr || arr.length < n) { arr = S[name] = simSharedArray(Type, n); simParallelBind('sep.' + name, arr); }
+    return arr;
 }
-
-// Pairs of sorted entries p in [p0, p1) with q in [q0, q1) (only q > p when
-// both ranges are the same tile).
-function _sepRange(p0, p1, q0, q1, same, pad) {
-    let S = _sep, sx = S.sx, sy = S.sy, sr = S.sr, so = S.so, sl = S.sl, sc = S.sc;
-    for (let p = p0; p < p1; p++) {
-        let cp = sc[p], lp = sl[p], xp = sx[p], yp = sy[p], rp = sr[p], op = so[p];
-        for (let q = same ? p + 1 : q0; q < q1; q++) {
-            if (!(cp | sc[q]) || sl[q] !== lp) continue;
-            let dx = sx[q] - xp, dy = sy[q] - yp, d2 = dx * dx + dy * dy;
-            let minDist = rp + sr[q] + (so[q] === op ? 0 : pad);
-            if (d2 >= minDist * minDist) continue;
-            _sepHit(p, q, dx, dy, d2, minDist);
-        }
-    }
-}
+// Rows of tiles per chunk of the kernel.
+const UNIT_SEPARATION_CHUNKS = 32;
 
 function runUnitSeparationPass() {
     let n = units.length;
@@ -1831,18 +1786,18 @@ function runUnitSeparationPass() {
     let S = _sep, X = S.x, Y = S.y, R = S.r, O = S.owner, L = S.layer, C = S.check;
     let restTicks = getUnitCollisionRecalcTicks();
     let any = false;
-    let nChunks = CHUNKS_W * CHUNKS_H;
-    if (!S.chunkR || S.chunkR.length < nChunks) {
-        S.chunkR = new Float64Array(nChunks); S.chunkC = new Uint8Array(nChunks);
-        S.sole = new Int32Array(nChunks); S.start = new Int32Array(nChunks + 1); S.fillPos = new Int32Array(nChunks);
-    }
-    if (!S.key || S.key.length < n) {
-        let cap = S.cap;
-        S.key = new Int32Array(cap); S.ord = new Int32Array(cap);
-        S.sx = new Float64Array(cap); S.sy = new Float64Array(cap); S.sr = new Float64Array(cap);
-        S.so = new Int32Array(cap); S.sl = new Uint8Array(cap); S.sc = new Uint8Array(cap);
-    }
-    let chunkR = S.chunkR, chunkC = S.chunkC, sole = S.sole, start = S.start, K = S.key;
+    let nChunks = CHUNKS_W * CHUNKS_H, cap = S.cap;
+    let chunkR = _sepShared(S, 'chunkR', Float64Array, nChunks), chunkC = _sepShared(S, 'chunkC', Uint8Array, nChunks);
+    let sole = _sepShared(S, 'sole', Int32Array, nChunks), start = _sepShared(S, 'start', Int32Array, nChunks + 1);
+    if (!S.fillPos || S.fillPos.length < nChunks) S.fillPos = new Int32Array(nChunks);
+    if (!S.key || S.key.length < cap) S.key = new Int32Array(cap);
+    let ord = _sepShared(S, 'ord', Int32Array, cap), sx = _sepShared(S, 'sx', Float64Array, cap), sy = _sepShared(S, 'sy', Float64Array, cap);
+    let sr = _sepShared(S, 'sr', Float64Array, cap), so = _sepShared(S, 'so', Int32Array, cap), sl = _sepShared(S, 'sl', Uint8Array, cap);
+    let sc = _sepShared(S, 'sc', Uint8Array, cap), sid = _sepShared(S, 'sid', Float64Array, cap);
+    let sdx = _sepShared(S, 'sdx', Float64Array, cap), sdy = _sepShared(S, 'sdy', Float64Array, cap);
+    let PX = _sepShared(S, 'px', Float64Array, cap), PY = _sepShared(S, 'py', Float64Array, cap);
+    let OV = _sepShared(S, 'ov', Float64Array, cap), HIT = _sepShared(S, 'hit', Uint16Array, cap);
+    let K = S.key;
     chunkR.fill(0, 0, nChunks); chunkC.fill(0, 0, nChunks); sole.fill(-2, 0, nChunks); start.fill(0, 0, nChunks + 1);
     for (let i = 0; i < n; i++) {
         let u = units[i];
@@ -1854,7 +1809,7 @@ function runUnitSeparationPass() {
         let c = !u.dead && (u.x !== u.prevX || u.y !== u.prevY || restTicks <= 1 || ((gameTime + u.id) % restTicks) === 0);
         C[i] = c ? 1 : 0;
         if (c) any = true;
-        S.px[i] = 0; S.py[i] = 0; S.ov[i] = 0; S.hit[i] = 0;
+        PX[i] = 0; PY[i] = 0; OV[i] = 0; HIT[i] = 0;
         // Units in the spatial buckets (alive), by tile.
         let key = u._spatialKey;
         if (u.dead || !(key >= 0 && key < nChunks)) { K[i] = -1; continue; }
@@ -1870,64 +1825,59 @@ function runUnitSeparationPass() {
     for (let c = 0; c < nChunks; c++) start[c + 1] += start[c];
     let fill = S.fillPos;
     fill.set(start.subarray(0, nChunks));
-    let ord = S.ord, sx = S.sx, sy = S.sy, sr = S.sr, so = S.so, sl = S.sl, sc = S.sc;
     for (let i = 0; i < n; i++) {
         let key = K[i];
         if (key < 0) continue;
         let k = fill[key]++;
         ord[k] = i; sx[k] = X[i]; sy[k] = Y[i]; sr[k] = R[i]; so[k] = O[i]; sl[k] = L[i]; sc[k] = C[i];
+        let u = units[i];
+        sid[k] = Number(u.id) || 0;
+        // Where it leaves an exact overlap: sideways to its motion (or path).
+        if (C[i]) {
+            let mdx = u.vx, mdy = u.vy;
+            if (detHypot(mdx, mdy) < 0.001 && u.path && u.pathIndex < u.path.length) {
+                let pn = u.path[u.pathIndex];
+                mdx = pn.x * TILE + 16 - u.x;
+                mdy = pn.y * TILE + 16 - u.y;
+            }
+            sdx[k] = mdx; sdy[k] = mdy;
+        }
     }
     let pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0);
     let maxR = Math.max(0.1, _maxUnitCollisionRadius());
     let cws = CHUNK_SIZE * TILE;
     let farAny = 2 * maxR + pad;
     let reach = Math.max(1, Math.ceil(farAny / cws));
-    // Forward neighbour offsets with the least distance between the tiles.
-    let offs = S.offs;
-    if (!offs || S.offsReach !== reach || S.offsCws !== cws) {
-        offs = [];
-        for (let oy = 0; oy <= reach; oy++) for (let ox = -reach; ox <= reach; ox++) {
-            if (oy === 0 && ox <= 0) continue;
-            let gx = Math.max(0, Math.abs(ox) - 1), gy = Math.max(0, oy - 1);
-            offs.push(ox, oy, Math.sqrt(gx * gx + gy * gy) * cws);
+    // Neighbour tile offsets (all around) with the least distance between
+    // the tiles.
+    if (!S.offs || S.offsReach !== reach || S.offsCws !== cws) {
+        let list = [];
+        for (let oy = -reach; oy <= reach; oy++) for (let ox = -reach; ox <= reach; ox++) {
+            if (ox === 0 && oy === 0) continue;
+            let gx = Math.max(0, Math.abs(ox) - 1), gy = Math.max(0, Math.abs(oy) - 1);
+            list.push(ox, oy, Math.sqrt(gx * gx + gy * gy) * cws);
         }
+        let offs = simSharedArray(Float64Array, list.length);
+        offs.set(list);
         S.offs = offs; S.offsReach = reach; S.offsCws = cws;
+        simParallelBind('sep.offs', offs);
     }
-    for (let cy = 0; cy < CHUNKS_H; cy++) for (let cx = 0; cx < CHUNKS_W; cx++) {
-        let key = cy * CHUNKS_W + cx;
-        let a0 = start[key], a1 = start[key + 1];
-        if (a0 === a1) continue;
-        let activeA = chunkC[key], rA = chunkR[key];
-        if (activeA && a1 - a0 > 1) _sepRange(a0, a1, a0, a1, true, pad);
-        for (let k = 0; k < offs.length; k += 3) {
-            let gap = offs[k + 2];
-            if (gap >= farAny) continue;
-            let nx = cx + offs[k], ny = cy + offs[k + 1];
-            if (nx < 0 || nx >= CHUNKS_W || ny >= CHUNKS_H) continue;
-            let key2 = ny * CHUNKS_W + nx;
-            let b0 = start[key2], b1 = start[key2 + 1];
-            if (b0 === b1) continue;
-            // Neither tile has a unit taking part, or even their largest
-            // units (with the enemy padding) cannot touch across the gap.
-            if (!(activeA | chunkC[key2])) continue;
-            let near = rA + chunkR[key2];
-            if (gap >= near + pad) continue;
-            // Only enemies can touch this far apart.
-            if (gap >= near && sole[key] >= 0 && sole[key2] === sole[key]) continue;
-            _sepRange(a0, a1, b0, b1, false, pad);
-        }
-    }
+    let rowsPer = Math.max(1, Math.ceil(CHUNKS_H / UNIT_SEPARATION_CHUNKS));
+    let P = _simParams;
+    P[0] = CHUNKS_W; P[1] = CHUNKS_H; P[2] = rowsPer; P[3] = pad; P[4] = farAny; P[5] = UNIT_SEPARATION_Q;
+    P[6] = UNIT_SEPARATION_SHARE_BOTH; P[7] = UNIT_SEPARATION_SHARE_ONE; P[8] = S.offs.length / 3;
+    simParallelRun(SIM_KERNEL_SEPARATION, Math.ceil(CHUNKS_H / rowsPer));
     for (let i = 0; i < n; i++) {
-        if (!S.hit[i]) continue;
+        if (!HIT[i]) continue;
         let u = units[i];
         if (u.dead) continue;
         // All contacts are resolved at once: beyond a few, their sum is
         // damped by sqrt(contacts) (full sums overshoot and oscillate in a
         // dense crowd; a plain average cannot hold a crowd pressing in).
         // applyUnitSeparation bounds it by the deepest overlap.
-        let k = S.hit[i], scale = k <= UNIT_SEPARATION_CONTACTS ? 1 : Math.sqrt(UNIT_SEPARATION_CONTACTS / k);
-        let px = S.px[i] * scale / UNIT_SEPARATION_Q, py = S.py[i] * scale / UNIT_SEPARATION_Q;
-        if (px !== 0 || py !== 0) applyUnitSeparation(u, px, py, S.ov[i]);
+        let k = HIT[i], scale = k <= UNIT_SEPARATION_CONTACTS ? 1 : Math.sqrt(UNIT_SEPARATION_CONTACTS / k);
+        let px = PX[i] * scale / UNIT_SEPARATION_Q, py = PY[i] * scale / UNIT_SEPARATION_Q;
+        if (px !== 0 || py !== 0) applyUnitSeparation(u, px, py, OV[i]);
         // A unit bumping along a fallback path retries its real path now
         // and then (staggered), not on every tick of contact.
         if (u.pathIsFallbackAstar && u._pendingPathTarget && ((gameTime + u.id) % UNIT_SEPARATION_PATH_RETRY_TICKS) === 0) _tryUpgradeAstarFallbackPath(u);

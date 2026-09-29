@@ -5,6 +5,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>RTS Defence</title>
+    <!-- Cross-origin isolation (COOP/COEP headers from a service worker, which
+         GitHub Pages cannot send itself): SharedArrayBuffer for the simulation
+         workers. The first visit reloads once. Must be the first script. -->
+    <script src="./coi-serviceworker.min.js"></script>
     <link rel="stylesheet" href="./style/style.css?v=20261001-slide2">
     <link rel="stylesheet" href="./style/bottom_bar.css?v=20261001-slide2">
     <link rel="stylesheet" href="./style/scrollbars.css?v=20260930-scroll">
@@ -12,7 +16,9 @@
 
 <body>
 
-    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <!-- PeerJS 1.5.4 and Plotly 2.35.2, served from here (cross-origin
+         isolation blocks third-party scripts that do not opt in). -->
+    <script src="./peerjs.min.js"></script>
 
     <!-- LOBBY -->
     <div id="lobby">
@@ -730,8 +736,9 @@
         </div>
     </div>
 
-    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <script src="./plotly-2.35.2.min.js"></script>
     
+    <script src="./src/sim/sim_parallel.js?v=20261007-a"></script>
     <script src="./src/utils/utils_common.js?v=20260930-compact"></script>
     <script src="./src/utils/utils_net_quality.js?v=20260928-lateseal"></script>
     <script src="./src/utils/utils_networking.js?v=20261006-c"></script>
@@ -752,9 +759,9 @@
     <script src="./src/audio_visual/renderer2d.js?v=20261005-a"></script>
     <script src="./src/audio_visual/side_visualizations.js?v=20260925-crowd-perf"></script>
     <script src="./src/audio_visual/effects3d.js?v=20260927-lod"></script>
-    <script src="./src/audio_visual/renderer.js?v=20261006-b"></script>
+    <script src="./src/audio_visual/renderer.js?v=20261007-a"></script>
     <script src="./src/audio_visual/audio.js?v=20260927-dist"></script>
-    <script src="./src/audio_visual/jukebox.js?v=20260921"></script>
+    <script src="./src/audio_visual/jukebox.js?v=20261007-a"></script>
     <script src="./src/audio_visual/hud.js?v=20261001-slide2"></script>
     <script src="./src/audio_visual/bottom_bar.js?v=20260930-deltacolor"></script>
 
@@ -764,7 +771,7 @@
     <script src="./src/game/player.js?v=20260516d"></script>
 
     <script src="./src/things/barrack.js?v=20260927-dist"></script>
-    <script src="./src/things/unit.js?v=20261006-b"></script>
+    <script src="./src/things/unit.js?v=20261007-a"></script>
     <script src="./src/things/worker.js?v=20261004-a"></script>
     <script src="./src/things/particle.js?v=20260929-fx"></script>
     <script src="./src/things/projectile.js?v=20260929-fx"></script>
@@ -773,10 +780,10 @@
 
     <script src="./src/main.js?v=20261005-a"></script>
 
-    <script src="./src/sim/sim_frame.js?v=20261006-c"></script>
-    <script src="./src/sim/sim_frame_world.js?v=20261006-c"></script>
+    <script src="./src/sim/sim_frame.js?v=20261007-a"></script>
+    <script src="./src/sim/sim_frame_world.js?v=20261007-a"></script>
     <script src="./src/sim/sim_shadow.js?v=20261002-sim2"></script>
-    <script src="./src/sim/sim_client.js?v=20261006-c"></script>
+    <script src="./src/sim/sim_client.js?v=20261007-a"></script>
 
     <script src="./src/bootstrap.js?v=20260924-settings"></script>
 </body>

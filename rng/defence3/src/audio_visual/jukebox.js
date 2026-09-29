@@ -112,9 +112,32 @@ const Jukebox = (() => {
         if (isHost) send(conn, { type: 'JUKEBOX_STATE', state: snapshot() });
         else { acceptedRevision = -1; send(conn, { type: 'JUKEBOX_SYNC' }); }
     }
+    // The player's iframe, made here: with cross-origin isolation on (see
+    // index.html) a YouTube iframe loads only as a credentialless one
+    // (Chromium browsers; elsewhere it stays blank and the link opens it).
+    function playerFrame() {
+        let holder = document.getElementById('jukebox-player');
+        if (!holder || !window.crossOriginIsolated || holder.tagName === 'IFRAME') return 'jukebox-player';
+        let frame = document.createElement('iframe');
+        frame.id = 'jukebox-player';
+        frame.width = '240'; frame.height = '200';
+        frame.setAttribute('credentialless', '');
+        frame.allow = 'autoplay; encrypted-media';
+        let params = new URLSearchParams({ enablejsapi: '1', playsinline: '1', controls: '0', disablekb: '1', rel: '0', origin: location.origin });
+        frame.src = 'https://www.youtube.com/embed/' + encodeURIComponent(state.videoId) + '?' + params;
+        holder.replaceWith(frame);
+        return frame;
+    }
+    // Isolated pages can embed YouTube only in Chromium browsers (Edge, Chrome).
+    const embedBlocked = () => window.crossOriginIsolated && typeof HTMLIFrameElement !== 'undefined' && !('credentialless' in HTMLIFrameElement.prototype);
     function createPlayer() {
         if (player || !window.YT || !window.YT.Player) return;
-        player = new YT.Player('jukebox-player', {
+        if (embedBlocked()) {
+            message = 'Music plays in Edge or Chrome. This browser blocks the YouTube player in the game: use the link to open it on YouTube.';
+            status();
+            return;
+        }
+        player = new YT.Player(playerFrame(), {
             width: '240', height: '200', videoId: state.videoId,
             playerVars: { playsinline: 1, controls: 0, disablekb: 1, origin: location.origin, rel: 0 },
             events: {

@@ -3646,12 +3646,13 @@ function getRawVisibilityGridForPlayer(playerId) {
     // Alternate two grids per player instead of allocating rows each time;
     // the computation clears the grid, and a grid handed out last tick (e.g.
     // the render grid) stays intact.
-    let rawVis = pool.grids[pool.next];
-    if (!rawVis || rawVis.length !== GRID_H || (GRID_H > 0 && rawVis[0].length !== GRID_W)) {
-        rawVis = pool.grids[pool.next] = createEmptyVisibilityGrid();
-    }
+    let k = pool.next;
+    let rawVis = _visibilityPoolGrid(pool, k, pid);
     pool.next ^= 1;
-    computeVisibilityGridForPlayer(pid, rawVis, src, srcLength);
+    // In updateAllPlayerVisibility: computed there, with the other players'
+    // grids due this tick, in parallel (sim_parallel.js).
+    if (_visibilityJobs && src) _visibilityJobs.push(pid, k);
+    else computeVisibilityGridForPlayer(pid, rawVis, src, srcLength);
     if (compare) {
         if (!pool.signature || pool.signature.length < signatureLength) pool.signature = new Float64Array(Math.max(64, signature.length));
         pool.signature.set(signature.subarray(0, signatureLength));
@@ -3663,6 +3664,78 @@ function getRawVisibilityGridForPlayer(playerId) {
     pool.last = rawVis;
     visibilityGridRawByPlayerCache.set(pid, rawVis);
     return rawVis;
+}
+
+// A player's grid k (of two): rows over one flat Float32Array (in shared
+// memory for the parallel jobs, named vis.g.<player>.<k>).
+function _visibilityPoolGrid(pool, k, pid) {
+    let rows = pool.grids[k];
+    if (rows && rows.length === GRID_H && (GRID_H === 0 || rows[0].length === GRID_W)) return rows;
+    let flat = typeof simSharedArray === 'function' ? simSharedArray(Float32Array, GRID_W * GRID_H) : new Float32Array(GRID_W * GRID_H);
+    rows = new Array(GRID_H);
+    for (let y = 0; y < GRID_H; y++) rows[y] = flat.subarray(y * GRID_W, (y + 1) * GRID_W);
+    rows._flat = flat;
+    pool.grids[k] = rows;
+    if (typeof simParallelBind === 'function') simParallelBind('vis.g.' + pid + '.' + k, flat);
+    return rows;
+}
+
+// Grids due in this updateAllPlayerVisibility call: (player, grid) pairs.
+let _visibilityJobs = null;
+// The area layout as the visibility kernel reads it (rebuilt when it changes).
+let _visibilityKernelAreaKey = null;
+function _visibilityKernelAreas() {
+    let key = _visibilityKernelAreaKey;
+    if (key && key.grid === areaIdGrid && key.cells === gridCellsByArea && key.nb === areaNeighborIds && key.byId === _areaById
+        && key.w === GRID_W && key.h === GRID_H) return key.count;
+    let W = GRID_W, H = GRID_H;
+    let count = Math.max(_areaById.length, gridCellsByArea.length, areaNeighborIds.length);
+    let areaGrid = simSharedArray(Int32Array, W * H);
+    for (let y = 0; y < H; y++) {
+        let row = areaIdGrid[y];
+        for (let x = 0; x < W; x++) { let a = row ? Math.floor(Number(row[x])) : -1; areaGrid[y * W + x] = a >= 0 ? a : -1; }
+    }
+    let nbOff = simSharedArray(Int32Array, count + 1), cellOff = simSharedArray(Int32Array, count + 1), exists = simSharedArray(Uint8Array, count);
+    let nbTotal = 0, cellTotal = 0;
+    for (let a = 0; a < count; a++) {
+        nbTotal += (areaNeighborIds[a] || []).length;
+        for (let c of (gridCellsByArea[a] || [])) if (c) cellTotal++;
+    }
+    let nb = simSharedArray(Int32Array, nbTotal), cells = simSharedArray(Int32Array, cellTotal);
+    let j = 0, q = 0;
+    for (let a = 0; a < count; a++) {
+        nbOff[a] = j; cellOff[a] = q;
+        for (let n of (areaNeighborIds[a] || [])) nb[j++] = n;
+        for (let c of (gridCellsByArea[a] || [])) if (c) cells[q++] = c.y * W + c.x;
+        exists[a] = _areaById[a] ? 1 : 0;
+    }
+    nbOff[count] = j; cellOff[count] = q;
+    for (let [name, arr] of [['vis.areaGrid', areaGrid], ['vis.nbOff', nbOff], ['vis.nb', nb], ['vis.cellOff', cellOff], ['vis.cells', cells], ['vis.areaExists', exists]]) simParallelBind(name, arr);
+    _visibilityKernelAreaKey = { grid: areaIdGrid, cells: gridCellsByArea, nb: areaNeighborIds, byId: _areaById, w: W, h: H, count };
+    return count;
+}
+let _visibilityKernelSrc = null, _visibilityKernelSrcOff = null, _visibilityKernelJobs = null;
+// Runs the queued grids (the visibility kernel, sim_parallel.js).
+function _runVisibilityJobs(jobs) {
+    let lists = _visibilitySourceLists;
+    let count = _visibilityKernelAreas();
+    // Every player's sources, one array; (offset, count) per player.
+    let maxPid = 0, total = 0;
+    for (let pid = 0; pid < lists.lengths.length; pid++) { if (lists.lengths[pid]) { maxPid = pid; total += lists.lengths[pid]; } }
+    for (let j = 0; j < jobs.length; j += 2) maxPid = Math.max(maxPid, jobs[j]);
+    if (!_visibilityKernelSrc || _visibilityKernelSrc.length < total) { _visibilityKernelSrc = simSharedArray(Float64Array, Math.max(3072, total * 2)); simParallelBind('vis.src', _visibilityKernelSrc); }
+    if (!_visibilityKernelSrcOff || _visibilityKernelSrcOff.length < (maxPid + 1) * 2) { _visibilityKernelSrcOff = simSharedArray(Int32Array, Math.max(64, (maxPid + 1) * 4)); simParallelBind('vis.srcOff', _visibilityKernelSrcOff); }
+    if (!_visibilityKernelJobs || _visibilityKernelJobs.length < jobs.length) { _visibilityKernelJobs = simSharedArray(Int32Array, Math.max(64, jobs.length * 2)); simParallelBind('vis.jobs', _visibilityKernelJobs); }
+    let src = _visibilityKernelSrc, off = _visibilityKernelSrcOff, at = 0;
+    off.fill(0);
+    for (let pid = 0; pid <= maxPid; pid++) {
+        let n = lists.lengths[pid] || 0;
+        off[pid * 2] = at / 3; off[pid * 2 + 1] = n / 3;
+        if (n) { src.set(lists.lists[pid].subarray(0, n), at); at += n; }
+    }
+    _visibilityKernelJobs.set(jobs);
+    _simParams[0] = GRID_W; _simParams[1] = GRID_H; _simParams[2] = TILE; _simParams[3] = AREA_UNIT_TILE_EQUIVALENT; _simParams[4] = count;
+    simParallelRun(SIM_KERNEL_VISIBILITY, jobs.length / 2);
 }
 
 const VISIBILITY_SIGNATURE_BACKOFF_TICKS = 8;
@@ -3835,12 +3908,17 @@ function updateAllPlayerVisibility() {
     }
     // Built on the first grid that is due (most calls reuse every grid).
     _visibilitySourceLists = true;
+    // The grids due are queued, then computed together (in parallel).
+    let parallel = typeof simParallelRun === 'function';
+    _visibilityJobs = parallel ? [] : null;
     try {
         for (let id of ids) {
             let vis = getRawVisibilityGridForPlayer(id);
             visibilityGridByPlayer[id] = vis || [];
         }
+        if (_visibilityJobs && _visibilityJobs.length) _runVisibilityJobs(_visibilityJobs);
     } finally {
+        _visibilityJobs = null;
         _visibilitySourceLists = null;
     }
 }

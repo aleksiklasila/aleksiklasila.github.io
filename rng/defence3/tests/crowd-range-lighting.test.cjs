@@ -9,6 +9,8 @@ const c = vm.createContext({TILE:32,UNIT_POSITION_QUANTIZATION:1024,gameTime:0,G
     spatialUnitsComplexStridePerChunk:0,spatialUnitsComplexStridePerPlayer:0,BASE_UNIT_STATS:{norm:{r:8}},CHUNKS_W:1,CHUNKS_H:1,
     getUnitCollisionRecalcTicks:()=>5,canUnitOccupyTile:()=>true,updateUnitSpatial:()=>{}});
 vm.runInContext(read('src/utils/utils_common.js'),c);
+// The separation pass runs its pair search as a kernel (sim_parallel.js).
+vm.runInContext(read('src/sim/sim_parallel.js'),c);
 vm.runInContext(src,c);
 // Run the actual separation pass of a tick (after all units moved), while
 // 100 units keep moving towards the same waypoint.
