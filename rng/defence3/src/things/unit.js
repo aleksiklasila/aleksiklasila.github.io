@@ -15,8 +15,10 @@ function _isHostileThingVisibleToUnit(unit, target) {
 
 const hostileStructureIndexes = new WeakMap();
 
+// Structures do not move, and liveness and owner are checked at query time:
+// the buckets only change with the tile entity index (not every tick).
 function _getHostileStructureIndex(list) {
-    const tick = typeof gameTime === 'number' ? gameTime : 0;
+    const tick = typeof _tileEntityVersion === 'number' ? _tileEntityVersion : (typeof gameTime === 'number' ? gameTime : 0);
     const revision = typeof pathTopologyVersion === 'number' ? pathTopologyVersion : 0;
     let index = hostileStructureIndexes.get(list);
     if (index && index.tick === tick && index.revision === revision && index.length === list.length) return index;
@@ -142,13 +144,29 @@ function _tryConsumeAstarMoveCostForTransition(u, fromNode = null, toNode = null
 function _isPathNodeRoomy(path, i) {
     let node = path[i], next = path[i + 1];
     if (!next || Math.abs(next.x - node.x) + Math.abs(next.y - node.y) !== 1) return false;
-    let x = node.x, y = node.y;
+    return _isTileBlockOpen(node.x, node.y);
+}
+
+// Whether a tile's whole 3x3 block is open terrain, cached per tile until
+// the topology changes (0 unknown, 1 open, 2 not): moving units ask every
+// tick.
+let _tileBlockOpen = null, _tileBlockOpenVer = -1;
+function _isTileBlockOpen(x, y) {
     if (x < 1 || y < 1 || x >= GRID_W - 1 || y >= GRID_H - 1) return false;
-    for (let gy = y - 1; gy <= y + 1; gy++) {
-        let row = grid[gy];
-        if (row[x - 1].type === TYPE_WALL || row[x].type === TYPE_WALL || row[x + 1].type === TYPE_WALL) return false;
+    if (_tileBlockOpenVer !== pathTopologyVersion || !_tileBlockOpen || _tileBlockOpen.length !== GRID_W * GRID_H) {
+        if (!_tileBlockOpen || _tileBlockOpen.length !== GRID_W * GRID_H) _tileBlockOpen = new Uint8Array(GRID_W * GRID_H);
+        else _tileBlockOpen.fill(0);
+        _tileBlockOpenVer = pathTopologyVersion;
     }
-    return true;
+    let k = y * GRID_W + x, v = _tileBlockOpen[k];
+    if (v) return v === 1;
+    let open = true;
+    for (let gy = y - 1; gy <= y + 1 && open; gy++) {
+        let row = grid[gy];
+        if (row[x - 1].type === TYPE_WALL || row[x].type === TYPE_WALL || row[x + 1].type === TYPE_WALL) open = false;
+    }
+    _tileBlockOpen[k] = open ? 1 : 2;
+    return open;
 }
 
 const _unitCollisionCandidates = [];
@@ -260,6 +278,30 @@ function _findNearbyCombatEnemy(unit, range) {
     return closest;
 }
 
+// Whether any enemy unit or hostile structure may be within `steps` area
+// steps of `area` (conservative: whole blocks and area boxes), for `owner`.
+// Cached for the tick: units of a crowd share their areas. A unit's +-0.3
+// tile window reaches at most one area further than its own, which callers
+// add to `steps`.
+let _hostileNearCache = new Map(), _hostileNearCacheTick = -1, _hostileNearCacheFor = null;
+const _hostileNearSource = [0];
+function _hostilesPossibleNearArea(owner, area, steps) {
+    if (!(area >= 0)) return true;
+    if (_hostileNearCacheTick !== gameTime || _hostileNearCacheFor !== areaIdsWithinDistance) {
+        _hostileNearCache.clear(); _hostileNearCacheTick = gameTime; _hostileNearCacheFor = areaIdsWithinDistance;
+    }
+    if (steps > 63) steps = 63;
+    let key = (area * 64 + steps) * 64 + (owner & 63);
+    let hit = _hostileNearCache.get(key);
+    if (hit !== undefined) return hit;
+    _hostileNearSource[0] = area;
+    let box = getAreaRangeTileBox(_hostileNearSource, steps), cs = CHUNK_SIZE;
+    let possible = box[2] >= 0 && (_regionMayHaveEnemyUnits(owner, Math.floor(box[0] / cs), Math.floor(box[1] / cs), Math.floor(box[2] / cs), Math.floor(box[3] / cs))
+        || hasHostileStructureInTileRect(owner, box[0], box[1], box[2], box[3]));
+    _hostileNearCache.set(key, possible);
+    return possible;
+}
+
 function _quantizeUnitWorldCoord(value) {
     let n = Number(value);
     if (!Number.isFinite(n)) return 0;
@@ -326,6 +368,10 @@ class Unit {
     constructor(unitType, owner, x, y) {
         simUnitStateAllocate(this);
         this.id = nextUnitId++;
+        // Stats refreshed on its first tick (a snapshotted flag: the list of
+        // such units is rebuilt from it after a restore).
+        this._needsStatsInit = true;
+        _noteNewUnitForStats(this);
         this.unitType = unitType;
         this.owner = owner;
         this.x = x; this.y = y;
@@ -393,7 +439,8 @@ class Unit {
         // order, gives all units one hidden class: property reads in the
         // per-unit tick loops stay monomorphic instead of megamorphic.
         // Values stay undefined, as if the field had never been set.
-        this._effectiveStatsRecalcCounter = undefined; this._lastAppliedEffectiveLevel = undefined; this._thingStatsRecalcCounter = undefined;
+        this._lastAppliedEffectiveLevel = undefined;
+        this._floorTile = -1; this._removedNow = false; this._routeKey = null; this._routeEnd = -1; this._routeSegEnd = -1; this._pendingDueStamp = -1; this._okTile = -1; this._okVer = 0; this._okNodeTile = -1; this._okNodeVer = 0; this._thingStatsRefreshStamp = 0; this._effectiveStatsStamp = 0; this._vsGen = 0; this._vsR = -1; this._vsA = -1; this._vsP1 = -1; this._vsP2 = -1; this._vsAreas = null;
         this.workerState = undefined; this.workerType = undefined; this.carryingValue = undefined; this.workerTarget = undefined;
         this.workerTargetType = undefined; this._workerReservedTileIndex = undefined; this._resourceCollectorMemory = undefined;
         this._collectorPinnedTarget = undefined; this._collectorPinnedTargetType = undefined; this._collectorLastGatherX = undefined;
@@ -426,7 +473,7 @@ class Unit {
         this._healerNextRecheckTick = undefined; this._researchLastMoveTick = undefined; this._researchNextRecheckTick = undefined;
         this.holdPosition = undefined; this._ambientSoundTicks = undefined;
 
-        this._spatialKey = undefined; this._spatialMember = undefined; this._spatialAreaId = undefined; this._spatialAreaOwner = undefined; this._r3d = undefined; this._r3dSig = undefined; this._r3dTex = undefined; this._visStill = undefined; this._rslot = undefined; this._awaitGroupPath = 0;
+        this._spatialKey = undefined; this._spatialAreaId = undefined; this._spatialTile = -1; this._spatialZone = -1; this._spatialOwner = -1; this._spatialEpoch = 0; this._r3d = undefined; this._r3dSig = undefined; this._r3dTex = undefined; this._visStill = undefined; this._rslot = undefined; this._awaitGroupPath = 0;
         // A snapshot restore writes every field itself (same order, so the
         // same layout) and indexes the unit afterwards.
         if (_snapUnitShellMode) return;
@@ -435,32 +482,16 @@ class Unit {
         updateUnitSpatial(this);
     }
 
-    get id() { return this._us ? this._us.id[this._si] : undefined; }
-    set id(v) { if (this._us) this._us.id[this._si] = v; else Object.defineProperty(this, 'id', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get owner() { return this._us ? this._us.owner[this._si] : undefined; }
-    set owner(v) { if (this._us) this._us.owner[this._si] = v; else Object.defineProperty(this, 'owner', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get x() { return this._us ? this._us.x[this._si] : undefined; }
-    set x(v) { if (this._us) this._us.x[this._si] = v; else Object.defineProperty(this, 'x', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get y() { return this._us ? this._us.y[this._si] : undefined; }
-    set y(v) { if (this._us) this._us.y[this._si] = v; else Object.defineProperty(this, 'y', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get prevX() { return this._us ? this._us.prevX[this._si] : undefined; }
-    set prevX(v) { if (this._us) this._us.prevX[this._si] = v; else Object.defineProperty(this, 'prevX', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get prevY() { return this._us ? this._us.prevY[this._si] : undefined; }
-    set prevY(v) { if (this._us) this._us.prevY[this._si] = v; else Object.defineProperty(this, 'prevY', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get vx() { return this._us ? this._us.vx[this._si] : undefined; }
-    set vx(v) { if (this._us) this._us.vx[this._si] = v; else Object.defineProperty(this, 'vx', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get vy() { return this._us ? this._us.vy[this._si] : undefined; }
-    set vy(v) { if (this._us) this._us.vy[this._si] = v; else Object.defineProperty(this, 'vy', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get energy() { return this._us ? this._us.energy[this._si] : undefined; }
-    set energy(v) { if (this._us) this._us.energy[this._si] = v; else Object.defineProperty(this, 'energy', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get r() { return this._us ? this._us.r[this._si] : undefined; }
-    set r(v) { if (this._us) this._us.r[this._si] = v; else Object.defineProperty(this, 'r', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get collisionR() { return this._us ? this._us.collisionR[this._si] : undefined; }
-    set collisionR(v) { if (this._us) this._us.collisionR[this._si] = v; else Object.defineProperty(this, 'collisionR', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get pathIndex() { return this._us ? this._us.pathIndex[this._si] : undefined; }
-    set pathIndex(v) { if (this._us) this._us.pathIndex[this._si] = v; else Object.defineProperty(this, 'pathIndex', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get commandState() { return this._us ? this._us.commandState[this._si] : undefined; }
-    set commandState(v) { if (this._us) this._us.commandState[this._si] = v; else Object.defineProperty(this, 'commandState', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get id() { return this._us ? this._us.id[this._si] : (this._det ? this._det.id : undefined); }
+    set id(v) { if (this._us) this._us.id[this._si] = v; else if (this._det) this._det.id = v; else Object.defineProperty(this, 'id', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get owner() { return this._us ? this._us.owner[this._si] : (this._det ? this._det.owner : undefined); }
+    set owner(v) { if (this._us) this._us.owner[this._si] = v; else if (this._det) this._det.owner = v; else Object.defineProperty(this, 'owner', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get pathIndex() { return this._us ? this._us.pathIndex[this._si] : (this._det ? this._det.pathIndex : undefined); }
+    set pathIndex(v) { if (this._us) this._us.pathIndex[this._si] = v; else if (this._det) this._det.pathIndex = v; else Object.defineProperty(this, 'pathIndex', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get energy() { return this._us ? this._us.energy[this._si] : (this._det ? this._det.energy : undefined); }
+    set energy(v) { if (this._us) this._us.energy[this._si] = v; else if (this._det) this._det.energy = v; else Object.defineProperty(this, 'energy', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get commandState() { return this._us ? this._us.commandState[this._si] : (this._det ? this._det.commandState : undefined); }
+    set commandState(v) { if (this._us) this._us.commandState[this._si] = v; else if (this._det) this._det.commandState = v; else Object.defineProperty(this, 'commandState', { value: v, writable: true, enumerable: true, configurable: true }); }
 
     getCollisionLayer() {
         if (this.isFlying) return 'air';
@@ -493,6 +524,8 @@ class Unit {
     }
 
     update() {
+        // Previous position for interpolation and the collision pass.
+        this.prevX = this.x; this.prevY = this.y;
         if (this.dead) return;
 
         if (this.teleportHideTicks > 0) this.teleportHideTicks--;
@@ -521,14 +554,17 @@ class Unit {
         if (this.sandy > 0) this.sandy--;
         if (this.watched > 0) {
             this.watched--;
-            if (this.watched <= 0) this.watchedByTeam = -1;
+            if (this.watched <= 0) { this.watchedByTeam = -1; if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(this); }
         }
 
         if (this.energy <= 0) { this.dead = true; return; }
 
-        // Floor item interaction
+        // Floor item interaction: on entering a tile, then refreshed once a
+        // second, staggered by unit (trap effects last seconds).
         let gx = Math.floor(this.x / TILE), gy = Math.floor(this.y / TILE);
-        if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
+        let floorTile = gy * GRID_W + gx;
+        if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && (floorTile !== this._floorTile || (gameTime + this.id) % TICK_RATE === 0)) {
+            this._floorTile = floorTile;
             let cell = grid[gy][gx];
             if (cell.item && cell.owner !== this.owner && !cell.item.underConstruction) {
                 let item = cell.item;
@@ -549,26 +585,7 @@ class Unit {
                     applyStatusEffect(this, 'water', itemLevel, 0, item.owner, item.type);
                 }
                 else if (item.type === 'mine') {
-                    let blastDamage = getBuildingStatForOwner(item.owner, 'mine', itemLevel, 'blastDamage');
-                    if (!Number.isFinite(blastDamage) || blastDamage <= 0) blastDamage = Number(item.damage) || 135;
-                    let blastRadiusArea = getBuildingStatForOwner(item.owner, 'mine', itemLevel, 'blastRadius');
-                    if (!Number.isFinite(blastRadiusArea) || blastRadiusArea <= 0) blastRadiusArea = 0.24;
-                    let blastRadiusPx = Math.max(0, Number(blastRadiusArea) * AREA_UNIT_TILE_EQUIVALENT * TILE);
-
-                    forEachUnitInRange(this.x, this.y, blastRadiusPx, (u) => {
-                        if (!u) return;
-                        let prevEnergy = u.energy;
-                        u.energy -= blastDamage;
-                        pushHostileDamageAlert(u, prevEnergy - u.energy, item.owner);
-                        recordDamageVisual(u, prevEnergy - u.energy, item.owner);
-                        if (u.energy <= 0 && !u.dead) u.dead = true;
-                    }, { enemyOfPlayer: item.owner });
-
-                    createExplosion(this.x, this.y, "#f80", 15);
-                    playSound('mine_explode', this.x, this.y);
-                    clearTileEntity(cell.item.gx, cell.item.gy, cell.item);
-                    cell.item = null;
-                    if (this.energy <= 0) this.dead = true;
+                    this._explodeMine(cell, item, itemLevel);
                     return;
                 }
             }
@@ -637,12 +654,38 @@ class Unit {
         updateUnitSpatial(this);
     }
 
+    // A hostile mine under the unit goes off (separate from update: its
+    // closure's context would otherwise be allocated on every update).
+    _explodeMine(cell, item, itemLevel) {
+        let blastDamage = getBuildingStatForOwner(item.owner, 'mine', itemLevel, 'blastDamage');
+        if (!Number.isFinite(blastDamage) || blastDamage <= 0) blastDamage = Number(item.damage) || 135;
+        let blastRadiusArea = getBuildingStatForOwner(item.owner, 'mine', itemLevel, 'blastRadius');
+        if (!Number.isFinite(blastRadiusArea) || blastRadiusArea <= 0) blastRadiusArea = 0.24;
+        let blastRadiusPx = Math.max(0, Number(blastRadiusArea) * AREA_UNIT_TILE_EQUIVALENT * TILE);
+
+        forEachUnitInRange(this.x, this.y, blastRadiusPx, (u) => {
+            if (!u) return;
+            let prevEnergy = u.energy;
+            u.energy -= blastDamage;
+            pushHostileDamageAlert(u, prevEnergy - u.energy, item.owner);
+            recordDamageVisual(u, prevEnergy - u.energy, item.owner);
+            if (u.energy <= 0 && !u.dead) u.dead = true;
+        }, { enemyOfPlayer: item.owner });
+
+        createExplosion(this.x, this.y, "#f80", 15);
+        playSound('mine_explode', this.x, this.y);
+        clearTileEntity(cell.item.gx, cell.item.gy, cell.item);
+        cell.item = null;
+        if (this.energy <= 0) this.dead = true;
+    }
+
     doIdle(spd) {
         if (this.unitType === 'scout') {
             this.pickScoutDestination();
             return;
         }
-        // Auto-aggro nearby enemies
+        // Auto-aggro nearby enemies (the query staggers and caches itself;
+        // an outer stagger here could alias with it and never meet).
         let aggroRange = Math.max(TILE, this.preComputed.visionRange * TILE);
         let closest = _findClosestEnemyUnitByChunks(this.owner, this.x, this.y, aggroRange);
         if (closest) {
@@ -670,12 +713,15 @@ class Unit {
         }
     }
 
+    // Within arrival tolerance of the issued move target.
+    _isNearIssuedTarget(spd) {
+        let t = this.targetPos;
+        if (!(t && Number.isFinite(t.x) && Number.isFinite(t.y))) return false;
+        let tol = Math.max(8, Math.min(TILE, Math.floor((Number(spd) || 1) * 2)));
+        return detHypot(Number(t.x) - Number(this.x), Number(t.y) - Number(this.y)) <= tol;
+    }
+
     doMoving(spd) {
-        let isNearIssuedTarget = () => {
-            if (!(this.targetPos && Number.isFinite(this.targetPos.x) && Number.isFinite(this.targetPos.y))) return false;
-            let tol = Math.max(8, Math.min(TILE, Math.floor((Number(spd) || 1) * 2)));
-            return detHypot(Number(this.targetPos.x) - Number(this.x), Number(this.targetPos.y) - Number(this.y)) <= tol;
-        };
         if (this.unitType === 'scout') {
             if (this.path && this.pathIndex < this.path.length) {
                 if (this.followPath(spd)) {
@@ -702,7 +748,7 @@ class Unit {
         }
         if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_MOVING) {
             if (this.pathIsFallbackAstar) _tryUpgradeAstarFallbackPath(this);
-            if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_MOVING && isNearIssuedTarget()) {
+            if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_MOVING && this._isNearIssuedTarget(spd)) {
                 this._pendingPathTarget = null;
                 this.pathIsFallbackAstar = false;
                 this.targetPos = null;
@@ -712,9 +758,10 @@ class Unit {
             return;
         }
         if (this.followPath(spd)) {
+            if (continueUnitRoute(this, CMD_MOVING)) return;
             if (this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_MOVING) {
                 this.path = null;
-                if (isNearIssuedTarget()) {
+                if (this._isNearIssuedTarget(spd)) {
                     this._pendingPathTarget = null;
                     this.pathIsFallbackAstar = false;
                     this.targetPos = null;
@@ -733,12 +780,34 @@ class Unit {
         // Scanning on the move is staggered to every other tick (by unit id):
         // a ready shot waits at most one tick.
         if (((gameTime + this.id) & 1) !== 0) return;
+        // Marching through quiet ground (the common case): nothing hostile
+        // anywhere near the unit's area, answered once per tick per area.
+        if (!_hostilesPossibleNearArea(this.owner, this._spatialAreaId, Math.ceil(_getUnitAttackRangeArea(this)) + 1)) return;
+        this._driveByScan();
+    }
+
+    // The scan itself (a separate method: its closure's context would
+    // otherwise be allocated on every call of tryDriveByAttack).
+    _driveByScan() {
         let closest = null;
         let bestD2 = Infinity;
+        // The query visits the areas within ceil(range) steps. A whole range:
+        // every visited unit is in range. Otherwise the last ring only counts
+        // through contact. A unit's bucket area is its tile's area, so the
+        // coverage answers visibility per area.
+        let rangeArea = _getUnitAttackRangeArea(this), whole = Math.floor(rangeArea);
+        let exact = whole === Math.ceil(rangeArea);
+        let sources = exact ? null : getSourceAreaIdsAtWorld(this.x, this.y);
+        let cover = _visCoverReady() && this.owner >= 0 && this.owner < _visCover.players ? _visCover.cover[this.owner] : null;
         // Use only simulation state. Pick by distance, then unit id, independent of
         // spatial bucket insertion order on different lockstep peers.
-        forEachUnitInAreaRange(this.x, this.y, _getUnitAttackRangeArea(this), (enemy) => {
-            if (!_isHostileThingVisibleToUnit(this, enemy) || !_isTargetWithinUnitAttackAreaRange(this, enemy)) return;
+        forEachUnitInAreaRange(this.x, this.y, rangeArea, (enemy, areaId) => {
+            if (cover ? !(cover[areaId] > 0) : !_isHostileThingVisibleToUnit(this, enemy)) return;
+            if (!exact) {
+                let inRange = false;
+                for (let k = 0; k < sources.length && !inRange; k++) inRange = isAreaWithinDistance(sources[k], areaId, whole);
+                if (!inRange && !_isUnitTargetInContact(this, enemy, whole + 1)) return;
+            }
             let dx = enemy.x - this.x, dy = enemy.y - this.y;
             let d2 = dx * dx + dy * dy;
             if (d2 < bestD2 || (d2 === bestD2 && (!closest || enemy.id < closest.id))) {
@@ -754,11 +823,6 @@ class Unit {
     }
 
     doAttackMoving(spd) {
-        let isNearIssuedTarget = () => {
-            if (!(this.targetPos && Number.isFinite(this.targetPos.x) && Number.isFinite(this.targetPos.y))) return false;
-            let tol = Math.max(8, Math.min(TILE, Math.floor((Number(spd) || 1) * 2)));
-            return detHypot(Number(this.targetPos.x) - Number(this.x), Number(this.targetPos.y) - Number(this.y)) <= tol;
-        };
         // Check for nearby enemies first
         let aggroRange = Math.max(TILE, this.preComputed.visionRange * TILE);
         let closest = _findClosestEnemyUnitByChunks(this.owner, this.x, this.y, aggroRange);
@@ -782,7 +846,7 @@ class Unit {
         }
         if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_ATTACK_MOVING) {
             if (this.pathIsFallbackAstar) _tryUpgradeAstarFallbackPath(this);
-            if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_ATTACK_MOVING && isNearIssuedTarget()) {
+            if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_ATTACK_MOVING && this._isNearIssuedTarget(spd)) {
                 this._pendingPathTarget = null;
                 this.pathIsFallbackAstar = false;
                 this.targetPos = null;
@@ -793,9 +857,10 @@ class Unit {
             return;
         }
         if (this.followPath(spd)) {
+            if (continueUnitRoute(this, CMD_ATTACK_MOVING)) return;
             if (this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_ATTACK_MOVING) {
                 this.path = null;
-                if (isNearIssuedTarget()) {
+                if (this._isNearIssuedTarget(spd)) {
                     this._pendingPathTarget = null;
                     this.pathIsFallbackAstar = false;
                     this.targetPos = null;
@@ -1139,7 +1204,7 @@ class Unit {
     // followPath after its node bookkeeping: steer toward the current node.
     _followPathStep(spd) {
         let node = this.path[this.pathIndex];
-        if (!this.pathIsFallbackAstar && !this.isFlying && !canUnitOccupyTile(this, node.x, node.y)) {
+        if (!this.pathIsFallbackAstar && !this.isFlying && !canUnitOccupyTileCached(this, node.x, node.y, 1)) {
             this.path = null;
             this.pathIndex = 0;
             if (this.pathIsFallbackAstar && this._pendingPathTarget) {
@@ -1459,6 +1524,7 @@ function _issueRetaliationPath(unit, targetGx, targetGy, forcedAttackTarget) {
     unit.path = null;
     unit.pathIndex = 0;
     unit._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_ATTACKING, src: forcedAttackTarget ? 'retaliate_unit' : 'retaliate_building' };
+    notePendingPathUnit(unit);
 }
 
 function tryAutoRetaliateOnHostileDamage(unit, attacker, lastKnownX = null, lastKnownY = null) {
@@ -1556,9 +1622,10 @@ function removeUnitNow(u, adjustPop = true) {
     }
     _clearWorkerTarget(u);
     removeUnitSpatial(u);
-    selectedUnits = selectedUnits.filter(su => su !== u);
-    let idx = units.indexOf(u);
-    if (idx >= 0) units.splice(idx, 1);
+    // Left in the list, dead, for the tick's single compaction pass (which
+    // also drops it from the selection): a splice per removal made removing
+    // many units quadratic.
+    u._removedNow = true;
     if (adjustPop && players[u.owner]) players[u.owner].popCount = Math.max(0, (players[u.owner].popCount || 0) - 1);
 }
 
@@ -1808,27 +1875,18 @@ function _sepShared(S, name, Type, n) {
 // Work is split into small batches of checking units, including within one
 // crowded tile, rather than rows whose occupancy varies by orders of magnitude.
 
-function _prepareSharedUnitSeparation(S, n, nChunks, restTicks) {
-    const input = _sepShared(S, 'inputSlots', Int32Array, S.cap);
-    const flags = _sepShared(S, 'inputFlags', Uint8Array, S.cap);
-    const keys = _sepShared(S, 'inputKeys', Uint32Array, S.cap);
-    const pathX = _sepShared(S, 'pathX', Float64Array, S.cap);
-    const pathY = _sepShared(S, 'pathY', Float64Array, S.cap);
-    let live = 0;
-    // Migration boundary: only cold references are gathered here. Numeric
-    // classification, sorting and packing run directly on shared unit columns.
-    for (let i = 0; i < n; i++) {
-        const u = units[i], key = u._spatialKey;
-        input[i] = u._si;
-        flags[i] = u.isFlying ? 1 : (u.unitType === 'mole' ? 2 : 0);
-        if (u.dead || !(key >= 0 && key < nChunks)) keys[i] = nChunks;
-        else { keys[i] = key; live++; }
-        const path = u.path, index = u.pathIndex;
-        const node = path && index < path.length ? path[index] : null;
-        pathX[i] = node ? node.x * TILE + 16 : NaN;
-        pathY[i] = node ? node.y * TILE + 16 : NaN;
-    }
-    const order = simSpatialStableOrder(keys, n, nChunks);
+// Large worlds: the entries come straight from the unit state slots. The
+// spatial index keeps each slot's chunk and layer current, so nothing is
+// gathered from unit objects; entries are ordered by chunk (ties by slot:
+// pushes are summed as integers, so the order does not change them).
+function _prepareSharedUnitSeparation(S, slotCount, nChunks, restTicks) {
+    const U = _simUnitState;
+    const order = simSpatialStableOrder(U.sepKey, slotCount, SIM_SEP_ABSENT);
+    const keyOf = U.sepKey;
+    let lo = 0, hi = slotCount;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (keyOf[order[m]] < SIM_SEP_ABSENT) lo = m + 1; else hi = m; }
+    const live = lo;
+    if (!live) return 0;
     simParallelBind('sep.inputOrder', order);
     _simParams[0] = live; _simParams[1] = 512;
     _simParams[2] = restTicks; _simParams[3] = gameTime;
@@ -1839,6 +1897,11 @@ function _prepareSharedUnitSeparation(S, n, nChunks, restTicks) {
 
 function runUnitSeparationPass() {
     let n = units.length;
+    // Large worlds run on unit state slots (outputs by slot), small ones on
+    // the units array (outputs by index).
+    const U = _simUnitState;
+    const bySlot = n >= 4096 && !!U && CHUNKS_W * CHUNKS_H < SIM_SEP_ABSENT;
+    if (bySlot) n = U.owners.length;
     _sepGrow(n);
     let S = _sep, R = S.r, L = S.layer, C = S.check;
     let restTicks = getUnitCollisionRecalcTicks();
@@ -1859,7 +1922,7 @@ function runUnitSeparationPass() {
     let K = S.key;
     chunkR.fill(0, 0, nChunks); chunkC.fill(0, 0, nChunks); sole.fill(-2, 0, nChunks); start.fill(0, 0, nChunks + 1);
     PX.fill(0, 0, n); PY.fill(0, 0, n); OV.fill(0, 0, n); HIT.fill(0, 0, n);
-    if (n >= 4096) {
+    if (bySlot) {
         jobCount = _prepareSharedUnitSeparation(S, n, nChunks, restTicks);
         if (!jobCount) return;
     } else {
@@ -1894,6 +1957,8 @@ function runUnitSeparationPass() {
         if (C[i]) jobs[jobCount++] = k;
         let u = units[i];
         slots[k] = u._si;
+        // Packed straight from the unit (small worlds, see SIM_KERNEL_UNIT_PACK).
+        sx[k] = u.x; sy[k] = u.y; sr[k] = R[i]; so[k] = u.owner; sid[k] = u.id || 0;
         // Where it leaves an exact overlap: sideways to its motion (or path).
         if (C[i]) {
             let mdx = u.vx, mdy = u.vy;
@@ -1905,8 +1970,6 @@ function runUnitSeparationPass() {
             sdx[k] = mdx; sdy[k] = mdy;
         }
     }
-    _simParams[0] = start[nChunks]; _simParams[1] = 512;
-    simParallelRun(SIM_KERNEL_UNIT_PACK, Math.ceil(start[nChunks] / 512));
     }
     let pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0);
     let maxR = Math.max(0.1, _maxUnitCollisionRadius());
@@ -1933,7 +1996,7 @@ function runUnitSeparationPass() {
     P[6] = UNIT_SEPARATION_SHARE_BOTH; P[7] = UNIT_SEPARATION_SHARE_ONE; P[8] = S.offs.length / 3;
     P[9] = jobCount;
     simParallelRun(SIM_KERNEL_SEPARATION, Math.ceil(jobCount / unitsPerJob));
-    const useSharedFinish = n >= 4096;
+    const useSharedFinish = bySlot;
     if (useSharedFinish) {
         _sepShared(S, 'nextX', Float64Array, cap); _sepShared(S, 'nextY', Float64Array, cap);
         _sepShared(S, 'fast', Uint8Array, cap);
@@ -1941,27 +2004,41 @@ function runUnitSeparationPass() {
         P[4] = UNIT_SEPARATION_CONTACTS; P[5] = UNIT_SEPARATION_Q;
         simParallelRun(SIM_KERNEL_SEPARATION_FINISH, Math.ceil(n / 512));
     }
+    // Path retries spend the owner's search budget: run them in id order
+    // after the commit (slot order differs between peers).
+    let retries = null, slow = null;
+    const owners = bySlot ? U.owners : units;
     for (let i = 0; i < n; i++) {
         if (!HIT[i]) continue;
-        let u = units[i];
-        if (u.dead) continue;
+        let u = owners[i];
+        if (!u || u.dead) continue;
         if (useSharedFinish && S.fast[i]) {
             const x = S.nextX[i], y = S.nextY[i], gx = Math.floor(x / TILE), gy = Math.floor(y / TILE);
             if (u.isFlying || (grid[gy] && grid[gy][gx] && grid[gy][gx].type !== TYPE_WALL)) {
-                const member = u._spatialMember;
                 u.x = x; u.y = y;
-                if (u.pathIsFallbackAstar && u._pendingPathTarget && ((gameTime + u.id) % UNIT_SEPARATION_PATH_RETRY_TICKS) === 0) _tryUpgradeAstarFallbackPath(u);
-                // Same tile, owner, vision and area generation as before this
-                // collision phase: bucket membership cannot have changed.
-                if (member && member.owner === u.owner && member.areaGrid === areaIdGrid
-                    && member.chunk === spatialUnits[u._spatialKey]
-                    && Math.floor(member.x / TILE) === gx && Math.floor(member.y / TILE) === gy
-                    && !ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) {
-                    member.x = x; member.y = y;
-                } else updateUnitSpatial(u);
+                if (u.pathIsFallbackAstar && u._pendingPathTarget && ((gameTime + u.id) % UNIT_SEPARATION_PATH_RETRY_TICKS) === 0) (retries ||= []).push(u);
+                updateUnitSpatial(u);
                 continue;
             }
         }
+        // The rest can reach order-dependent work (a path retry after a push
+        // out of a blocked tile): with slots, done afterwards in id order.
+        if (bySlot) { (slow ||= []).push(i); continue; }
+        _commitUnitSeparation(u, i, HIT, PX, PY, OV, (v) => (retries ||= []).push(v));
+    }
+    if (slow) {
+        slow.sort((a, b) => owners[a].id - owners[b].id);
+        for (let i of slow) _commitUnitSeparation(owners[i], i, HIT, PX, PY, OV, (v) => (retries ||= []).push(v));
+    }
+    if (retries) {
+        if (bySlot) retries.sort((a, b) => a.id - b.id);
+        for (let u of retries) _tryUpgradeAstarFallbackPath(u);
+    }
+}
+
+// The swept commit of one unit's summed pushes (see runUnitSeparationPass).
+function _commitUnitSeparation(u, i, HIT, PX, PY, OV, retry) {
+    {
         // All contacts are resolved at once: beyond a few, their sum is
         // damped by sqrt(contacts) (full sums overshoot and oscillate in a
         // dense crowd; a plain average cannot hold a crowd pressing in).
@@ -1971,7 +2048,7 @@ function runUnitSeparationPass() {
         if (px !== 0 || py !== 0) applyUnitSeparation(u, px, py, OV[i]);
         // A unit bumping along a fallback path retries its real path now
         // and then (staggered), not on every tick of contact.
-        if (u.pathIsFallbackAstar && u._pendingPathTarget && ((gameTime + u.id) % UNIT_SEPARATION_PATH_RETRY_TICKS) === 0) _tryUpgradeAstarFallbackPath(u);
+        if (u.pathIsFallbackAstar && u._pendingPathTarget && ((gameTime + u.id) % UNIT_SEPARATION_PATH_RETRY_TICKS) === 0) retry(u);
         pushUnitOutOfBlockedTile(u);
         u.x = _quantizeUnitWorldCoord(u.x);
         u.y = _quantizeUnitWorldCoord(u.y);
@@ -2009,7 +2086,7 @@ function applyUnitSeparation(unit, dx, dy, maxOverlap = unit.getCollisionRadius(
 function pushUnitOutOfBlockedTile(unit) {
     if (!unit || unit.dead || unit.isFlying) return;
     let gx = Math.floor(unit.x / TILE), gy = Math.floor(unit.y / TILE);
-    if (canUnitOccupyTile(unit, gx, gy)) return;
+    if (canUnitOccupyTileCached(unit, gx, gy, 0)) return;
 
     let fromGx = Number.isFinite(unit.prevX) ? Math.floor(unit.prevX / TILE) : gx;
     let fromGy = Number.isFinite(unit.prevY) ? Math.floor(unit.prevY / TILE) : gy;

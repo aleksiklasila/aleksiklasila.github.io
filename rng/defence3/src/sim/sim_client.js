@@ -134,6 +134,8 @@ function simClientStartMatch() {
     // Units come from the worker's frames (the first one with 'started').
     _simClientResetUnits();
     recomputePlayerPopCaps();
+    // The worker simulates from here on: the page reads its grids.
+    _visCoverSimContext = false;
     clearGameplayVisibilityCache();
     updateVisibility(localPlayerId);
     let controls = {};

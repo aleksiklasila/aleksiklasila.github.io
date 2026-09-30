@@ -41,7 +41,7 @@ const SIM_KERNEL_SEPARATION_FINISH = 7;
 // parallel; the commit checks terrain/membership and handles tile crossings
 // with the full swept collision routine. No approximate contact budget.
 SIM_KERNELS[SIM_KERNEL_SEPARATION_FINISH] = function (R, P, chunk) {
-    const slots = R['sep.inputSlots'], X = R['unit.x'], Y = R['unit.y'];
+    const X = R['unit.x'], Y = R['unit.y'];
     const PX = R['sep.px'], PY = R['sep.py'], OV = R['sep.ov'], HIT = R['sep.hit'];
     const outX = R['sep.nextX'], outY = R['sep.nextY'], fast = R['sep.fast'];
     const tile = P[2], quant = P[3], contacts = P[4], pushQuant = P[5];
@@ -49,7 +49,7 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION_FINISH] = function (R, P, chunk) {
         fast[i] = 0;
         const hits = HIT[i];
         if (!hits) continue;
-        const s = slots[i], x = X[s], y = Y[s];
+        const s = i, x = X[s], y = Y[s];
         const scale = hits <= contacts ? 1 : Math.sqrt(contacts / hits);
         let dx = PX[i] * scale / pushQuant, dy = PY[i] * scale / pushQuant;
         const length = Math.sqrt(dx * dx + dy * dy), limit = Math.max(0, OV[i]);
@@ -117,31 +117,30 @@ function simSpatialStableOrder(keys, count, maxKey) {
 }
 
 SIM_KERNELS[SIM_KERNEL_SEPARATION_PREPARE] = function (R, P, chunk) {
-    const input = R['sep.inputSlots'], flags = R['sep.inputFlags'], order = R['sep.inputOrder'];
-    const inputKeys = R['spatial.keys'], X = R['unit.x'], Y = R['unit.y'];
+    const flags = R['unit.sepLayer'], order = R['sep.inputOrder'];
+    const inputKeys = R['unit.sepKey'], X = R['unit.x'], Y = R['unit.y'];
     const VX = R['unit.vx'], VY = R['unit.vy'], PREVX = R['unit.prevX'], PREVY = R['unit.prevY'];
     const CR = R['unit.collisionR'], RAD = R['unit.r'], OWNER = R['unit.owner'], ID = R['unit.id'];
     const ord = R['sep.ord'], slots = R['sep.slots'], keys = R['sep.keys'], jobs = R['sep.jobs'];
     const sx = R['sep.sx'], sy = R['sep.sy'], sr = R['sep.sr'], so = R['sep.so'], sid = R['sep.sid'];
     const sl = R['sep.sl'], sc = R['sep.sc'], sdx = R['sep.sdx'], sdy = R['sep.sdy'];
-    const pathX = R['sep.pathX'], pathY = R['sep.pathY'];
     const start = R['sep.start'], chunkR = R['sep.chunkR'], sole = R['sep.sole'];
     for (let k = chunk * P[1], end = Math.min(P[0], k + P[1]); k < end; k++) {
-        const i = order[k], s = input[i], key = inputKeys[i];
+        const i = order[k], s = i, key = inputKeys[s];
         const x = X[s], y = Y[s], r = Math.max(.1, CR[s] || RAD[s] || .1), owner = OWNER[s];
         ord[k] = i; slots[k] = s; keys[k] = key; jobs[k] = k;
         sx[k] = x; sy[k] = y; sr[k] = r; so[k] = owner; sid[k] = ID[s] || 0;
-        sl[k] = flags[i];
+        sl[k] = flags[s];
         sc[k] = x !== PREVX[s] || y !== PREVY[s] || P[2] <= 1 || ((P[3] + ID[s]) % P[2]) === 0 ? 1 : 0;
+        // Exact overlaps leave sideways to the motion; a unit at rest picks
+        // a side by id.
         let dx = VX[s], dy = VY[s];
-        if (Math.sqrt(dx * dx + dy * dy) < .001 && Number.isFinite(pathX[i])) {
-            dx = pathX[i] - x; dy = pathY[i] - y;
-        }
+        if (Math.sqrt(dx * dx + dy * dy) < .001) { const d = (ID[s] || 0) & 3; dx = d === 0 ? 1 : d === 2 ? -1 : 0; dy = d === 1 ? 1 : d === 3 ? -1 : 0; }
         sdx[k] = dx; sdy[k] = dy;
         if (k === 0 || inputKeys[order[k - 1]] !== key) {
             let maxR = r, oneOwner = owner, j = k + 1;
             for (; j < P[0] && inputKeys[order[j]] === key; j++) {
-                const slot = input[order[j]], otherR = Math.max(.1, CR[slot] || RAD[slot] || .1);
+                const slot = order[j], otherR = Math.max(.1, CR[slot] || RAD[slot] || .1);
                 if (otherR > maxR) maxR = otherR;
                 if (OWNER[slot] !== oneOwner) oneOwner = -1;
             }

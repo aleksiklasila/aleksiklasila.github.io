@@ -31,11 +31,19 @@ function world(resource, localPlayerId = 0) {
         getBuildingStatForOwner: () => 2, playSound: () => {},
         BASE_UNIT_STATS: { [cfg.collectorUnitKey]: { transferCooldown: 1 } },
         getUnitEffectiveLevel: () => 1,
+        // Cell items for the farm index (rebuilt on every query here).
+        getCellItemsRowMajor: () => c.grid.flatMap(row => row.map(cell => cell.item).filter(Boolean)),
     });
+    let version = 0;
+    Object.defineProperty(c, '_tileEntityVersion', { get: () => ++version });
+    Object.defineProperty(c, 'droppedItemsVersion', { get: () => ++version });
     vm.runInContext(read('src/utils/utils_common.js'), c);
     vm.runInContext(read('src/things/worker.js'), c);
     c.BASE_CARD_TYPES = {};
     c.reportRuntimeError = (kind, err) => { throw err; };
+    // Actions look up their units by id (main.js keeps an index; a scan here).
+    c._actionUnits = a => c.units.filter(u => (a.unitIdSet || new Set(a.unitIds || [])).has(u.id));
+    c.getUnitById = id => c.units.find(u => u.id === id) || null;
     vm.runInContext(main.match(/const ACTION_MAX_COUNT = [\s\S]*?const ACTION_MAX_TOWER_COORDS = \d+;/)[0], c);
     for (const name of ['_isCollectorGatherTargetType', '_getGatherTargetAtForCollectorWorkerType', '_isValidGatherTargetForCollectorWorkerType',
         '_actionInt', '_actionNum', '_actionStr', 'sanitizeAction', 'processActions', 'processAction']) {

@@ -12,6 +12,7 @@ const context = {
     towers: [], barracks: [], collectorSpawners: [],
     gameTime: 1, pathTopologyVersion: 1, localPlayerId: 0,
     getRawVisibilityGridForPlayer: () => [[1]],
+    _visCoverReady: () => false,
     getAreaIdAtWorld: () => 0,
     getAreaDistance: () => 0,
     isAreaWithinDistance: (a, b, max) => max >= 0,
@@ -106,6 +107,7 @@ assert.equal(sentry.commandState, holding);
 context.towers.length = 0;
 context.isCloudPortalLink = () => false;
 context.canUnitOccupyTile = () => true;
+context.canUnitOccupyTileCached = () => true;
 context._tryConsumeAstarMoveCostForTransition = () => true;
 const held = makeUnit();
 held.x = 16; held.y = 16; held.r = 6; held.holdPosition = true;

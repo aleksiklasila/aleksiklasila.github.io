@@ -142,6 +142,7 @@ vm.runInContext(read('src/things/unit.js'), unitContext);
 // charges every traversed edge and leaves the cached array untouched.
 unitContext.isCloudPortalLink = () => false;
 unitContext.canUnitOccupyTile = () => true;
+unitContext.canUnitOccupyTileCached = (u, x, y) => unitContext.canUnitOccupyTile(u, x, y);
 let chargedEdges = 0;
 unitContext._tryConsumeAstarMoveCostForTransition = () => { chargedEdges++; return true; };
 const Unit = vm.runInContext('Unit', unitContext);
@@ -171,6 +172,8 @@ function shoved(x, y = 4, routePath = shovePath) {
 }
 function setCorridor(walled) {
     for (let x = 0; x < 12; x++) unitGrid[3][x].type = unitGrid[5][x].type = walled ? 1 : 0;
+    // Walls changed: as the game does, a new path topology.
+    unitContext.pathTopologyVersion++;
 }
 // Open terrain is a corridor: every node whose 3x3 block holds the unit
 // counts as reached, so a unit skirts beside the exact tiles.

@@ -15,7 +15,7 @@ let areas = [];
 let goldMines = []; // {gx, gy, gold, maxGold}
 let astarMines = []; // {gx, gy, astar, maxAstar}
 let areaNeighborIds = []; // [areaId] -> [neighborAreaId]
-let areaDistanceMatrix = []; // [areaId] -> Int16Array(areaCount)
+let areaDistanceMatrix = []; // [areaId] -> Map(areaId -> steps) of the areas reached so far
 let areaIdsByDistance = []; // [areaId][distance] -> [areaId]
 let areaIdsWithinDistance = []; // [areaId][distance] -> [areaId]
 let areaIdGrid = []; // 2D lookup [y][x] -> areaId
@@ -166,13 +166,9 @@ function rebuildAreaDistanceCachesFromAreas() {
     gridCellsByArea = new Array(areaCount);
     gridCellsByAreaDistance = new Array(areaCount);
     gridCellsWithinAreaDistance = new Array(areaCount);
-    if (!Array.isArray(spatialUnitsByArea) || spatialUnitsByArea.length !== areaCount) {
-        spatialUnitsByArea = Array.from({ length: areaCount }, () => []);
-    } else {
-        for (let i = 0; i < spatialUnitsByArea.length; i++) {
-            if (!Array.isArray(spatialUnitsByArea[i])) spatialUnitsByArea[i] = [];
-        }
-    }
+    // A new layout: fresh buckets, every indexed unit in its tile's area.
+    spatialUnitsByArea = Array.from({ length: areaCount }, () => []);
+    if (typeof rebuildUnitAreaBuckets === 'function') rebuildUnitAreaBuckets();
     droppedItemsByArea = Array.from({ length: areaCount }, () => []);
     for (let i = 0; i < droppedItems.length; i++) {
         let drop = droppedItems[i];
@@ -200,7 +196,7 @@ let _areaBfsDone = []; // [areaId] -> true once the BFS from it is exhausted
 // demand: range queries need only a few levels, and a full BFS per newly
 // visited area stalled large maps. Each level lists its areas by ascending
 // id, exactly as a complete BFS would, so results never depend on when (or
-// on which peer) a level was first requested. Unreached entries are -1.
+// on which peer) a level was first requested. Unreached areas are absent.
 function _ensureAreaDistanceRow(source, depth = Infinity) {
     if (!(source >= 0 && source < areaDistanceMatrix.length)) return null;
     let row = areaDistanceMatrix[source];
@@ -214,8 +210,10 @@ function _ensureAreaDistanceRow(source, depth = Infinity) {
             gridCellsWithinAreaDistance[source] = [];
             return null;
         }
-        row = new Int16Array(areaDistanceMatrix.length).fill(-1);
-        row[source] = 0;
+        // Sparse: a full row per source area (areas x areas in all) cost
+        // more to allocate than the few levels range queries expand.
+        row = new Map();
+        row.set(source, 0);
         areaDistanceMatrix[source] = row;
         areaIdsByDistance[source] = [[source]];
         areaIdsWithinDistance[source] = [];
@@ -230,8 +228,8 @@ function _ensureAreaDistanceRow(source, depth = Infinity) {
             let neighbors = areaNeighborIds[current];
             if (!neighbors) continue;
             for (let n of neighbors) {
-                if (row[n] !== -1) continue;
-                row[n] = distance;
+                if (row.has(n)) continue;
+                row.set(n, distance);
                 next.push(n);
             }
         }
@@ -310,22 +308,39 @@ function addVisibilitySourceAreas(sources, wx, wy, range, light = null) {
 // is a shared array: callers must not modify it.
 const _EMPTY_SOURCE_AREAS = Object.freeze([]);
 let _singleSourceAreaLists = [];
+let _sourceAreaPairs = new Map();
+const _sourceAreaScratch = new Int32Array(4);
 function getSourceAreaIdsAtWorld(wx, wy) {
     const x = Number(wx) / TILE, y = Number(wy) / TILE;
     if (!Number.isFinite(x) || !Number.isFinite(y)) return _EMPTY_SOURCE_AREAS;
     const minX = Math.floor(x - .3), maxX = Math.floor(x + .3);
     const minY = Math.floor(y - .3), maxY = Math.floor(y + .3);
-    let first = -1, list = null;
+    // At most four tiles: distinct areas collected in ascending order.
+    const ids = _sourceAreaScratch;
+    let n = 0;
     for (let gy = minY; gy <= maxY; gy++) for (let gx = minX; gx <= maxX; gx++) {
         const area = getAreaIdAtTile(gx, gy);
-        if (area < 0 || area === first) continue;
-        if (first < 0) first = area;
-        else if (!list) list = [first, area];
-        else if (!list.includes(area)) list.push(area);
+        if (area < 0) continue;
+        let i = 0;
+        while (i < n && ids[i] < area) i++;
+        if (i < n && ids[i] === area) continue;
+        for (let j = n; j > i; j--) ids[j] = ids[j - 1];
+        ids[i] = area; n++;
     }
-    if (list) return list.sort((a, b) => a - b);
-    if (first < 0) return _EMPTY_SOURCE_AREAS;
-    return _singleSourceAreaLists[first] || (_singleSourceAreaLists[first] = Object.freeze([first]));
+    if (n === 0) return _EMPTY_SOURCE_AREAS;
+    if (n === 1) return _singleSourceAreaLists[ids[0]] || (_singleSourceAreaLists[ids[0]] = Object.freeze([ids[0]]));
+    // Several areas (a window across borders): one shared frozen list per
+    // set of areas, found through nested maps (no allocation once seen).
+    let key = ids[0] * 1048576 + ids[1];
+    let node = _sourceAreaPairs.get(key);
+    if (!node) _sourceAreaPairs.set(key, node = { list: null, more: null });
+    for (let k = 2; k < n; k++) {
+        if (!node.more) node.more = new Map();
+        let next = node.more.get(ids[k]);
+        if (!next) node.more.set(ids[k], next = { list: null, more: null });
+        node = next;
+    }
+    return node.list || (node.list = Object.freeze(Array.prototype.slice.call(ids, 0, n)));
 }
 
 // Union of the areas within `distance` of any source area, each once: the
@@ -379,9 +394,10 @@ function getAreaDistance(areaA, areaB) {
     let bId = Math.floor(Number(areaB));
     if (aId < 0 || bId < 0 || aId >= areaDistanceMatrix.length) return -1;
     let row = _ensureAreaDistanceRow(aId, 0);
-    if (!row || bId >= row.length) return -1;
-    while (row[bId] === -1 && !_areaBfsDone[aId]) _ensureAreaDistanceRow(aId, areaIdsByDistance[aId].length);
-    return row[bId];
+    if (!row || bId >= areaDistanceMatrix.length) return -1;
+    while (!row.has(bId) && !_areaBfsDone[aId]) _ensureAreaDistanceRow(aId, areaIdsByDistance[aId].length);
+    let d = row.get(bId);
+    return d === undefined ? -1 : d;
 }
 
 // Whether areaB is at most maxDistance steps from areaA. Equivalent to
@@ -392,9 +408,9 @@ function isAreaWithinDistance(areaA, areaB, maxDistance) {
     if (aId < 0 || bId < 0 || aId >= areaDistanceMatrix.length || !(maxDistance >= 0)) return false;
     let limit = Math.floor(maxDistance);
     let row = _ensureAreaDistanceRow(aId, limit);
-    if (!row || bId >= row.length) return false;
-    let d = row[bId];
-    return d >= 0 && d <= limit;
+    if (!row || bId >= areaDistanceMatrix.length) return false;
+    let d = row.get(bId);
+    return d !== undefined && d <= limit;
 }
 
 function getAreaIdsAtDistance(areaId, distance) {
@@ -647,6 +663,10 @@ function setTileEntity(gx, gy, type, ref) {
     if (ref) _activeTileEntities.add(ref);
     _tileEntityVersion++;
     _markAdjacencyDirtyAt(gx, gy, 1);
+    if (typeof visCoverOnBuildingChanged === 'function') {
+        if (prevRef && prevRef !== ref) visCoverOnBuildingChanged(prevRef);
+        if (ref) visCoverOnBuildingChanged(ref);
+    }
 }
 
 function clearTileEntity(gx, gy, expectedRef = null) {
@@ -658,6 +678,7 @@ function clearTileEntity(gx, gy, expectedRef = null) {
     _tileEntityVersion++;
     tileEntityType[gy][gx] = TILE_ENTITY_NONE;
     tileEntityRef[gy][gx] = null;
+    if (prevRef && typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(prevRef);
     let tileIndex = gy * GRID_W + gx;
     let baseIndex = tileIndex * _WORKER_TARGET_LOAD_TYPE_COUNT;
     for (let i = 0; i < _WORKER_TARGET_LOAD_TYPE_COUNT; i++) {
@@ -788,8 +809,12 @@ function _setDroppedItemAt(gx, gy, drop) {
     if (grid[y] && grid[y][x]) grid[y][x].droppedItem = drop || null;
 }
 
+// Bumped whenever a drop is added or removed (bucket indexes rebuild on it).
+let droppedItemsVersion = 0;
+
 function addDroppedItem(drop) {
     if (!drop) return null;
+    droppedItemsVersion++;
     let gx = Math.floor(Number(drop.gx));
     let gy = Math.floor(Number(drop.gy));
     if (!(gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H)) return null;
@@ -810,6 +835,7 @@ function addDroppedItem(drop) {
 
 function removeDroppedItem(drop) {
     if (!drop) return false;
+    droppedItemsVersion++;
     let gx = Math.floor(Number(drop.gx));
     let gy = Math.floor(Number(drop.gy));
     if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {

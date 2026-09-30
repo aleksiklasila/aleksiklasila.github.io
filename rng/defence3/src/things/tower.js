@@ -10,6 +10,35 @@ function _isTargetWithinTowerAttackAreaRange(tower, target, rangeArea = NaN) {
     return isWorldTargetWithinAreaRange(tower.x, tower.y, target.x, target.y, Math.floor(maxAreaDistance));
 }
 
+function _isProducerStructure(e) {
+    return e instanceof Barrack || e instanceof CollectorSpawner || e instanceof AstarSpawner || e instanceof SalvagerSpawner
+        || e instanceof BuilderSpawner || e instanceof HealerSpawner || e instanceof ResearchSpawner;
+}
+
+// Nearest living enemy tower ('tower') or barrack/spawner ('producer') in
+// the areas within `wholeRange` steps of the tower; ties go to the lower
+// tile index.
+function _findTowerStructureTarget(tower, wholeRange, kind) {
+    let sources = getSourceAreaIdsAtWorld(tower.x, tower.y);
+    if (sources.length === 0) return null;
+    let box = getAreaRangeTileBox(sources, wholeRange);
+    if (!hasHostileStructureInTileRect(tower.owner, box[0], box[1], box[2], box[3])) return null;
+    let best = null, bestD2 = Infinity, bestKey = Infinity;
+    let structuresByArea = getStructuresByArea();
+    for (let areaId of getAreaIdsWithinDistanceOfSources(sources, wholeRange)) {
+        let structures = structuresByArea[areaId];
+        if (!structures) continue;
+        for (let e of structures) {
+            if (e === tower || e.owner === tower.owner || !(e.energy > 0)) continue;
+            let isTower = e instanceof Tower;
+            if (kind === 'tower' ? !isTower : (isTower || !_isProducerStructure(e))) continue;
+            let dx = e.x - tower.x, dy = e.y - tower.y, d2 = dx * dx + dy * dy, key = e.gy * GRID_W + e.gx;
+            if (d2 < bestD2 || (d2 === bestD2 && key < bestKey)) { best = e; bestD2 = d2; bestKey = key; }
+        }
+    }
+    return best;
+}
+
 // Nearest hostile floor item (never a barrack or spawner) in the tower's
 // area range: traps, or everything else. Ties go to the lower tile index.
 function _findTowerFloorTarget(tower, rangeArea, traps) {
@@ -103,6 +132,7 @@ class Tower {
             this.energy = Math.max(1, Math.min(this.maxEnergy, Math.floor(prevEnergy)));
         }
         this.updateTextCache();
+        if (typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(this);
     }
 
     calcStats(lvl) {
@@ -204,9 +234,11 @@ class Tower {
         let bestPrimary = null, bestSecondary = null, bestImmune = null;
         let dPrimary = Infinity, dSecondary = Infinity, dImmune = Infinity;
 
-        forEachUnitInAreaRange(this.x, this.y, rangeArea, (u) => {
+        // Every unit in the areas within floor(range) steps is in range (the
+        // area of its tile is its bucket's), so no per-unit range check.
+        let wholeRange = Math.floor(rangeArea);
+        forEachUnitInAreaRange(this.x, this.y, wholeRange, (u) => {
             if (u.turretImmune) return;
-            if (!_isTargetWithinTowerAttackAreaRange(this, u, rangeArea)) return;
             let dx = u.x - this.x;
             let dy = u.y - this.y;
             let d2 = dx * dx + dy * dy;
@@ -232,35 +264,14 @@ class Tower {
 
         let target = bestPrimary || bestSecondary || bestImmune;
 
-        // If no unit target, try closest enemy building
+        // If no unit target, the nearest enemy building in range: towers
+        // first, then traps, then barracks and spawners, then other floor
+        // buildings. Only the structures in the areas in range are visited.
         if (!target) {
-            // Auto-find nearest enemy building: towers first, then barracks/spawners
-            let bestDist = Infinity;
             this.cd = secondsToTicks(this.currentStats.cd || 1.5);
-            for (let t of towers) {
-                if (t === this || t.owner === this.owner || t.energy <= 0) continue;
-                if (!_isTargetWithinTowerAttackAreaRange(this, t, rangeArea)) continue;
-                let d = detHypot(t.x - this.x, t.y - this.y);
-                if (d < bestDist) { bestDist = d; target = t; }
-            }
-            // Then traps, as units prioritize them.
+            target = _findTowerStructureTarget(this, wholeRange, 'tower');
             if (!target) target = _findTowerFloorTarget(this, rangeArea, true);
-            // Try barracks and spawners (lower priority, only if no tower found)
-            if (!target) {
-                for (let b of barracks) {
-                    if (b.owner === this.owner || b.energy <= 0) continue;
-                    if (!_isTargetWithinTowerAttackAreaRange(this, b, rangeArea)) continue;
-                    let d = detHypot(b.x - this.x, b.y - this.y);
-                    if (d < bestDist) { bestDist = d; target = b; }
-                }
-                for (let s of collectorSpawners) {
-                    if (s.owner === this.owner || s.energy <= 0) continue;
-                    if (!_isTargetWithinTowerAttackAreaRange(this, s, rangeArea)) continue;
-                    let d = detHypot(s.x - this.x, s.y - this.y);
-                    if (d < bestDist) { bestDist = d; target = s; }
-                }
-            }
-            // Finally other floor buildings (farms, houses...).
+            if (!target) target = _findTowerStructureTarget(this, wholeRange, 'producer');
             if (!target) target = _findTowerFloorTarget(this, rangeArea, false);
         }
 

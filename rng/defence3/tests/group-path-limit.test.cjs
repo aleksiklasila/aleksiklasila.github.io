@@ -24,9 +24,10 @@ const H = require('./net-harness.cjs');
         const mine = units.filter(u => !u.dead && u.owner === localPlayerId && !u.workerType).sort((a, b) => a.id - b.id);
         __scratch.stuck = new Set(mine.slice(0, 6).map(u => u.id));
         __scratch.bad = { gx: 3, gy: 3 };
-        const group = findGroupPathsToTarget;
-        findGroupPathsToTarget = function (starts, ex, ey) {
-            if (ex === __scratch.bad.gx && ey === __scratch.bad.gy) return starts.map(() => null);
+        // Group orders go through the shared routes (routeGroupMembers).
+        const group = routeGroupMembers;
+        routeGroupMembers = function (owner, ex, ey, canWalk, members) {
+            if (ex === __scratch.bad.gx && ey === __scratch.bad.gy) return members.map(() => null);
             return group.apply(this, arguments);
         };
         const single = _findPathForUnitTagged;

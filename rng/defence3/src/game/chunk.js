@@ -1,126 +1,8 @@
 "use strict";
 
-function _spatialChunkPlayerFlatIndex(chunkKey, owner) {
-    if (!Number.isFinite(chunkKey) || !Number.isFinite(owner)) return -1;
-    let ck = Math.floor(chunkKey);
-    let pid = Math.floor(owner);
-    if (ck < 0 || ck >= (CHUNKS_W * CHUNKS_H)) return -1;
-    if (pid < 0 || pid >= spatialUnitsComplexPlayerCount) return -1;
-    return ck * spatialUnitsComplexPlayerCount + pid;
-}
-
-function _isDamagedLivingUnitForOwner(u, owner) {
-    if (!u || u.dead) return false;
-    if (u.owner !== owner) return false;
-    let maxEnergy = Number(u.preComputed && u.preComputed.maxEnergy);
-    if (!Number.isFinite(u.energy) || !Number.isFinite(maxEnergy)) return false;
-    return u.energy > 0 && u.energy < maxEnergy;
-}
-
-function _isUnitHealthLowerThan(a, b) {
-    if (!a || !b) return false;
-    let aE = Number(a.energy), aM = Number(a.preComputed && a.preComputed.maxEnergy);
-    let bE = Number(b.energy), bM = Number(b.preComputed && b.preComputed.maxEnergy);
-    if (!(aM > 0) || !(bM > 0)) return false;
-    return (aE * bM) < (bE * aM);
-}
-
-function _recomputeSpatialLowestHealthUnitForChunkPlayer(chunkKey, owner) {
-    if (!ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) return null;
-    if (!Number.isFinite(chunkKey) || !Number.isFinite(owner)) return null;
-    let ck = Math.floor(chunkKey);
-    let pid = Math.floor(owner);
-    let idx = _spatialChunkPlayerFlatIndex(ck, pid);
-    if (idx < 0) return null;
-
-    let chunk = spatialUnits[ck];
-    let best = null;
-    if (chunk && chunk.length > 0) {
-        for (let u of chunk) {
-            if (!_isDamagedLivingUnitForOwner(u, pid)) continue;
-            if (!best || _isUnitHealthLowerThan(u, best)) best = u;
-        }
-    }
-    spatialUnitsComplexLowestHealthUnit[idx] = best;
-    return best;
-}
-
-function _updateSpatialLowestHealthForUnit(u, chunkKey) {
-    if (!ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) return;
-    if (!u || !Number.isFinite(chunkKey)) return;
-    let ck = Math.floor(chunkKey);
-    let owner = Math.floor(Number(u.owner));
-    let idx = _spatialChunkPlayerFlatIndex(ck, owner);
-    if (idx < 0) return;
-
-    let current = spatialUnitsComplexLowestHealthUnit[idx];
-    let currentValid = current
-        && current._spatialKey === ck
-        && _isDamagedLivingUnitForOwner(current, owner);
-
-    if (!_isDamagedLivingUnitForOwner(u, owner)) {
-        if (current === u) _recomputeSpatialLowestHealthUnitForChunkPlayer(ck, owner);
-        else if (!currentValid) _recomputeSpatialLowestHealthUnitForChunkPlayer(ck, owner);
-        return;
-    }
-
-    if (!currentValid || current === u || _isUnitHealthLowerThan(u, current)) {
-        spatialUnitsComplexLowestHealthUnit[idx] = u;
-    }
-}
-
-function _getSpatialUnitVisibilityScaled(u) {
-    if (!u || u.dead) return 0;
-    let value = Number(u.preComputed && u.preComputed.visionRange);
-    if (!Number.isFinite(value) || value <= 0) {
-        value = Number(u.currentStats && u.currentStats.visionRange);
-    }
-    if (!Number.isFinite(value) || value <= 0) {
-        value = Number((BASE_UNIT_STATS[u.unitType] || BASE_UNIT_STATS.norm || {}).visionRange) || 4;
-    }
-    return Math.max(0, Math.round(value * SPATIAL_VISIBILITY_SCALE));
-}
-
-function _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(chunkKey, owner, previousScaled, currentScaled) {
-    if (!(spatialUnitsComplexMaxUnitVisOffset >= 0)) return;
-    if (!Number.isFinite(chunkKey) || !Number.isFinite(owner)) return;
-    let ck = Math.floor(chunkKey);
-    let pid = Math.floor(owner);
-    if (pid < 0 || pid >= spatialUnitsComplexPlayerCount) return;
-    let playerBase = (ck * spatialUnitsComplexStridePerChunk) + (pid * spatialUnitsComplexStridePerPlayer);
-    let maxIdx = playerBase + spatialUnitsComplexMaxUnitVisOffset;
-    let maxScaled = spatialUnitsComplex[maxIdx] | 0;
-    if (currentScaled > maxScaled) {
-        spatialUnitsComplex[maxIdx] = currentScaled;
-        return;
-    }
-    // If this unit was (or tied for) the chunk max and dropped visibility/dead/removed, recompute max.
-    if (previousScaled >= maxScaled && currentScaled < previousScaled) {
-        _recomputeSpatialMaxUnitVisibilityForChunkPlayer(ck, pid);
-    }
-}
-
-function _recomputeSpatialMaxUnitVisibilityForChunkPlayer(chunkKey, owner) {
-    if (!(spatialUnitsComplexMaxUnitVisOffset >= 0)) return;
-    if (!Number.isFinite(chunkKey) || !Number.isFinite(owner)) return;
-    let ck = Math.floor(chunkKey);
-    let pid = Math.floor(owner);
-    if (ck < 0 || ck >= spatialUnits.length) return;
-    if (pid < 0 || pid >= spatialUnitsComplexPlayerCount) return;
-    let maxScaled = 0;
-    let chunk = spatialUnits[ck];
-    if (chunk && chunk.length > 0) {
-        for (let u of chunk) {
-            if (!u || u.dead || Math.floor(Number(u.owner)) !== pid) continue;
-            let scaled = _getSpatialUnitVisibilityScaled(u);
-            if (scaled > maxScaled) maxScaled = scaled;
-        }
-    }
-    let playerBase = (ck * spatialUnitsComplexStridePerChunk) + (pid * spatialUnitsComplexStridePerPlayer);
-    spatialUnitsComplex[playerBase + spatialUnitsComplexMaxUnitVisOffset] = maxScaled;
-}
-
 function initSpatialHash() {
+    spatialEpoch++;
+    if (typeof simUnitClearSepKeys === 'function') simUnitClearSepKeys();
     CHUNKS_W = Math.ceil(GRID_W / CHUNK_SIZE);
     CHUNKS_H = Math.ceil(GRID_H / CHUNK_SIZE);
     spatialUnits = [];
@@ -134,16 +16,9 @@ function initSpatialHash() {
     spatialNormUnitTypeIndex = Number.isFinite(spatialUnitTypeToIndex.norm) ? spatialUnitTypeToIndex.norm : 0;
     spatialUnitsComplexUnitTypeCount = unitKeys.length;
     spatialUnitsComplexPlayerCount = Math.max(1, Math.floor(Number(players && players.length) || 0));
-    spatialUnitsComplexMaxUnitVisOffset = 1 + spatialUnitsComplexUnitTypeCount;
-    spatialUnitsComplexMaxThingVisOffset = spatialUnitsComplexMaxUnitVisOffset + 1;
-    spatialUnitsComplexStridePerPlayer = spatialUnitsComplexMaxThingVisOffset + 1; // total + perUnitType + maxUnitVis + maxThingVis
+    spatialUnitsComplexStridePerPlayer = 1 + spatialUnitsComplexUnitTypeCount; // total + perUnitType
     spatialUnitsComplexStridePerChunk = spatialUnitsComplexPlayerCount * spatialUnitsComplexStridePerPlayer;
     spatialUnitsComplex = new Int32Array((CHUNKS_W * CHUNKS_H) * spatialUnitsComplexStridePerChunk);
-    if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) {
-        spatialUnitsComplexLowestHealthUnit = new Array((CHUNKS_W * CHUNKS_H) * spatialUnitsComplexPlayerCount).fill(null);
-    } else {
-        spatialUnitsComplexLowestHealthUnit = [];
-    }
     let areaCount = Array.isArray(areas) ? areas.length : 0;
     spatialUnitsByArea = Array.from({ length: Math.max(0, areaCount) }, () => []);
     spatialBlockCols = Math.ceil(CHUNKS_W / SPATIAL_BLOCK_SIZE);
@@ -206,28 +81,22 @@ function _removeUnitFromSpatialArray(arr, u) {
     return false;
 }
 
-// Which bucket arrays a unit was last inserted into: u._spatialMember (a
-// plain field: a WeakMap lookup per unit per tick was measurable; never
-// snapshotted, see SNAP_SKIP_KEYS). A replaced array forces a fresh
-// membership check.
-
 // Area buckets also count members per owner, so enemy scans can skip areas
 // that hold only the scanning player's units (e.g. a large friendly army).
 // Indexed by owner (small integers): every moving unit reads it for each
 // area in its attack range, every tick. Unset owners read undefined.
-function _addUnitToAreaBucket(bucket, u) {
+function _addUnitToAreaBucket(bucket, u, owner) {
     if (!_addUnitToSpatialArray(bucket, u)) return;
     let counts = bucket._ownerCounts || (bucket._ownerCounts = []);
-    counts[u.owner] = (counts[u.owner] || 0) + 1;
-    u._spatialAreaOwner = u.owner;
+    counts[owner] = (counts[owner] || 0) + 1;
 }
 
-function _removeUnitFromAreaBucket(bucket, u) {
+function _removeUnitFromAreaBucket(bucket, u, owner) {
     if (!_removeUnitFromSpatialArray(bucket, u)) return;
     let counts = bucket._ownerCounts;
     if (!counts) return;
-    let n = (counts[u._spatialAreaOwner] || 0) - 1;
-    counts[u._spatialAreaOwner] = n > 0 ? n : undefined;
+    let n = (counts[owner] || 0) - 1;
+    counts[owner] = n > 0 ? n : undefined;
 }
 
 function getSpatialKey(wx, wy) {
@@ -237,149 +106,101 @@ function getSpatialKey(wx, wy) {
     cy = Math.max(0, Math.min(CHUNKS_H - 1, cy));
     return cy * CHUNKS_W + cx;
 }
+
+// Replaced bucket arrays (initSpatialHash) bump this: a unit whose
+// _spatialEpoch differs is in none of the current buckets.
+let spatialEpoch = 1;
+
+// Where a unit is indexed: u._spatialTile (tile index, the unit's position
+// clamped to the map), u._spatialKey (chunk), u._spatialAreaId (area of the
+// tile, -1 none), u._spatialOwner (owner when inserted), u._spatialEpoch.
+// None of them are snapshotted (SNAP_SKIP_KEYS).
+//
+// Called after every move: the common case (same tile, owner and buckets)
+// is one tile computation and three compares.
 function updateUnitSpatial(u) {
-    // A unit that has not moved, changed owner or vision, with its buckets
-    // and the area layout unchanged, would only re-set identical state.
-    // Nor would one that moved within its tile and area (most moves: a unit
-    // crosses a tile in many ticks): only its recorded position changes.
-    let known = u._spatialMember;
-    if (known && known.owner === u.owner && known.areaGrid === areaIdGrid
-        && u._spatialKey !== undefined && known.chunk === spatialUnits[u._spatialKey]
-        && (u._spatialAreaId >= 0 ? known.area === spatialUnitsByArea[u._spatialAreaId] : u._spatialAreaId === -1)
-        && _getSpatialUnitVisibilityScaled(u) === u._spatialLastVisScaled
-        && ((known.x === u.x && known.y === u.y)
-            || (!ENABLE_SPATIAL_LOWEST_HEALTH_CACHE && getSpatialKey(u.x, u.y) === u._spatialKey && getAreaIdAtWorld(u.x, u.y) === u._spatialAreaId))) {
-        known.x = u.x; known.y = u.y;
+    let fx = u.x / TILE, fy = u.y / TILE;
+    let gx = Math.floor(fx), gy = Math.floor(fy);
+    // Its +-0.3 tile vision window follows the zone of the tile it is in.
+    let rx = fx - gx, ry = fy - gy;
+    let zone = (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
+    if (!(gx >= 0)) gx = 0; else if (gx >= GRID_W) gx = GRID_W - 1;
+    if (!(gy >= 0)) gy = 0; else if (gy >= GRID_H) gy = GRID_H - 1;
+    let tile = gy * GRID_W + gx;
+    simUnitMirror(u);
+    if (tile === u._spatialTile && u._spatialEpoch === spatialEpoch && u._spatialOwner === u.owner) {
+        if (zone !== u._spatialZone) { u._spatialZone = zone; visCoverOnUnitSpatialChanged(u); }
         return;
     }
-    _updateUnitSpatialFull(u);
-    let member = u._spatialMember;
-    if (member) { member.x = u.x; member.y = u.y; member.owner = u.owner; member.areaGrid = areaIdGrid; }
+    u._spatialZone = zone;
+    _moveUnitSpatial(u, gx, gy, tile);
 }
 
-function _updateUnitSpatialFull(u) {
-    let newKey = getSpatialKey(u.x, u.y);
-    let newAreaId = getAreaIdAtWorld(u.x, u.y);
-    let prevScaled = Number.isFinite(u._spatialLastVisScaled) ? (u._spatialLastVisScaled | 0) : _getSpatialUnitVisibilityScaled(u);
-    let currentScaled = _getSpatialUnitVisibilityScaled(u);
-    if (u._spatialAreaId !== undefined && (u._spatialAreaId !== newAreaId || u._spatialAreaOwner !== u.owner)) {
-        let oldAreaId = u._spatialAreaId;
-        if (oldAreaId >= 0 && oldAreaId < spatialUnitsByArea.length) {
-            _removeUnitFromAreaBucket(spatialUnitsByArea[oldAreaId], u);
-        }
-        let member = u._spatialMember;
-        if (member) member.area = null;
-    }
-    if (u._spatialKey !== undefined && u._spatialKey !== newKey) {
-        let oldKey = u._spatialKey;
-        if (_removeUnitFromSpatialArray(spatialUnits[u._spatialKey], u)) {
-            let owner = Math.floor(Number(u.owner));
-            if (owner >= 0 && owner < spatialUnitsComplexPlayerCount) {
-                let typeIdx = Number.isFinite(u._spatialUnitTypeIdx)
-                    ? u._spatialUnitTypeIdx
-                    : (Number.isFinite(spatialUnitTypeToIndex[u.unitType]) ? spatialUnitTypeToIndex[u.unitType] : spatialNormUnitTypeIndex);
-                let playerBase = (u._spatialKey * spatialUnitsComplexStridePerChunk) + (owner * spatialUnitsComplexStridePerPlayer);
-                let totalIdx = playerBase;
-                let typeCountIdx = playerBase + 1 + typeIdx;
-                if (spatialUnitsComplex[totalIdx] > 0) _adjustSpatialBlockCount(u._spatialKey, owner, -1);
-                spatialUnitsComplex[totalIdx] = Math.max(0, spatialUnitsComplex[totalIdx] - 1);
-                spatialUnitsComplex[typeCountIdx] = Math.max(0, spatialUnitsComplex[typeCountIdx] - 1);
-                _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(oldKey, owner, prevScaled, 0);
-            }
-            if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) {
-                let oldIdx = _spatialChunkPlayerFlatIndex(oldKey, owner);
-                if (oldIdx >= 0 && spatialUnitsComplexLowestHealthUnit[oldIdx] === u) {
-                    _recomputeSpatialLowestHealthUnitForChunkPlayer(oldKey, owner);
-                }
-            }
-        }
-    }
-    if (u._spatialKey === newKey) {
-        // Unchanged tile: membership only needs re-checking (a linear scan)
-        // when the bucket arrays were replaced since the unit was added.
-        let member = u._spatialMember;
-        if (!member) u._spatialMember = member = { chunk: null, area: null };
-        let chunkArr = spatialUnits[newKey];
-        if (member.chunk !== chunkArr) {
-            _addUnitToSpatialArray(chunkArr, u);
-            member.chunk = chunkArr;
-        }
-        if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) {
-            let areaArr = spatialUnitsByArea[newAreaId];
-            if (member.area !== areaArr) {
-                _addUnitToAreaBucket(areaArr, u);
-                member.area = areaArr;
-            }
-        }
-        let ownerSame = Math.floor(Number(u.owner));
-        if (ownerSame >= 0 && ownerSame < spatialUnitsComplexPlayerCount) {
-            _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(newKey, ownerSame, prevScaled, currentScaled);
-        }
-        u._spatialLastVisScaled = currentScaled;
-        u._spatialAreaId = newAreaId;
-        if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) _updateSpatialLowestHealthForUnit(u, newKey);
-        return;
-    }
-    _addUnitToSpatialArray(spatialUnits[newKey], u);
-    let member = { chunk: spatialUnits[newKey], area: null };
-    u._spatialMember = member;
-    if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) {
-        _addUnitToAreaBucket(spatialUnitsByArea[newAreaId], u);
-        member.area = spatialUnitsByArea[newAreaId];
-    }
-    let owner = Math.floor(Number(u.owner));
-    if (owner >= 0 && owner < spatialUnitsComplexPlayerCount) {
-        let typeIdx = spatialUnitTypeToIndex[u.unitType];
-        if (!Number.isFinite(typeIdx)) typeIdx = spatialNormUnitTypeIndex;
-        u._spatialUnitTypeIdx = typeIdx;
-        let playerBase = (newKey * spatialUnitsComplexStridePerChunk) + (owner * spatialUnitsComplexStridePerPlayer);
-        let totalIdx = playerBase;
-        let typeCountIdx = playerBase + 1 + typeIdx;
-        spatialUnitsComplex[totalIdx] += 1;
-        _adjustSpatialBlockCount(newKey, owner, 1);
-        spatialUnitsComplex[typeCountIdx] += 1;
-        _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(newKey, owner, 0, currentScaled);
-    }
-    u._spatialKey = newKey;
-    u._spatialAreaId = newAreaId;
-    u._spatialLastVisScaled = currentScaled;
-    if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) _updateSpatialLowestHealthForUnit(u, newKey);
+// Per chunk and owner: unit totals and per-type counts, and the 8x8 block
+// totals. Adjusted only when the chunk bucket really gained or lost the unit.
+function _spatialCountUnit(u, chunkKey, owner, delta) {
+    if (!(owner >= 0 && owner < spatialUnitsComplexPlayerCount)) return;
+    let typeIdx = u._spatialUnitTypeIdx;
+    let base = chunkKey * spatialUnitsComplexStridePerChunk + owner * spatialUnitsComplexStridePerPlayer;
+    spatialUnitsComplex[base] += delta;
+    spatialUnitsComplex[base + 1 + typeIdx] += delta;
+    _adjustSpatialBlockCount(chunkKey, owner, delta);
 }
-function removeUnitSpatial(u) {
-    u._spatialMember = undefined;
-    if (u._spatialKey !== undefined) {
-        let oldKey = u._spatialKey;
-        let prevScaled = Number.isFinite(u._spatialLastVisScaled) ? (u._spatialLastVisScaled | 0) : _getSpatialUnitVisibilityScaled(u);
-        if (_removeUnitFromSpatialArray(spatialUnits[u._spatialKey], u)) {
-            let owner = Math.floor(Number(u.owner));
-            if (owner >= 0 && owner < spatialUnitsComplexPlayerCount) {
-                let typeIdx = Number.isFinite(u._spatialUnitTypeIdx)
-                    ? u._spatialUnitTypeIdx
-                    : (Number.isFinite(spatialUnitTypeToIndex[u.unitType]) ? spatialUnitTypeToIndex[u.unitType] : spatialNormUnitTypeIndex);
-                let playerBase = (u._spatialKey * spatialUnitsComplexStridePerChunk) + (owner * spatialUnitsComplexStridePerPlayer);
-                let totalIdx = playerBase;
-                let typeCountIdx = playerBase + 1 + typeIdx;
-                if (spatialUnitsComplex[totalIdx] > 0) _adjustSpatialBlockCount(u._spatialKey, owner, -1);
-                spatialUnitsComplex[totalIdx] = Math.max(0, spatialUnitsComplex[totalIdx] - 1);
-                spatialUnitsComplex[typeCountIdx] = Math.max(0, spatialUnitsComplex[typeCountIdx] - 1);
-                _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(oldKey, owner, prevScaled, 0);
-            }
-            if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) {
-                let oldIdx = _spatialChunkPlayerFlatIndex(oldKey, owner);
-                if (oldIdx >= 0 && spatialUnitsComplexLowestHealthUnit[oldIdx] === u) {
-                    _recomputeSpatialLowestHealthUnitForChunkPlayer(oldKey, owner);
-                }
-            }
-        }
-        u._spatialLastVisScaled = 0;
-        u._spatialKey = undefined;
+
+function _moveUnitSpatial(u, gx, gy, tile) {
+    let chunkKey = CHUNK_SIZE === 1 ? tile : Math.floor(gy / CHUNK_SIZE) * CHUNKS_W + Math.floor(gx / CHUNK_SIZE);
+    let areaRow = areaIdGrid[gy], area = areaRow ? areaRow[gx] : -1;
+    if (!(area >= 0 && area < spatialUnitsByArea.length)) area = -1;
+    let owner = u.owner;
+    let indexed = u._spatialEpoch === spatialEpoch && u._spatialKey !== undefined;
+    let oldKey = indexed ? u._spatialKey : -1, oldArea = indexed ? u._spatialAreaId : -1, oldOwner = indexed ? u._spatialOwner : -1;
+    let ownerChanged = indexed && oldOwner !== owner;
+    if (indexed && (oldKey !== chunkKey || ownerChanged)) {
+        if (_removeUnitFromSpatialArray(spatialUnits[oldKey], u)) _spatialCountUnit(u, oldKey, oldOwner, -1);
     }
-    if (u._spatialAreaId !== undefined) {
-        let oldAreaId = u._spatialAreaId;
-        if (oldAreaId >= 0 && oldAreaId < spatialUnitsByArea.length) {
-            _removeUnitFromAreaBucket(spatialUnitsByArea[oldAreaId], u);
+    if (indexed && oldArea >= 0 && (oldArea !== area || ownerChanged)) _removeUnitFromAreaBucket(spatialUnitsByArea[oldArea], u, oldOwner);
+    if (!indexed || oldKey !== chunkKey || ownerChanged) {
+        if (!indexed || ownerChanged || u._spatialUnitTypeIdx === undefined) {
+            let typeIdx = spatialUnitTypeToIndex[u.unitType];
+            u._spatialUnitTypeIdx = typeIdx >= 0 ? typeIdx : spatialNormUnitTypeIndex;
         }
-        u._spatialAreaId = undefined;
+        if (_addUnitToSpatialArray(spatialUnits[chunkKey], u)) _spatialCountUnit(u, chunkKey, owner, 1);
+    }
+    if (area >= 0 && (!indexed || oldArea !== area || ownerChanged)) _addUnitToAreaBucket(spatialUnitsByArea[area], u, owner);
+    u._spatialTile = tile;
+    u._spatialKey = chunkKey;
+    u._spatialAreaId = area;
+    u._spatialOwner = owner;
+    u._spatialEpoch = spatialEpoch;
+    simUnitSetSepKey(u, chunkKey, u.isFlying ? 1 : (u.unitType === 'mole' ? 2 : 0));
+    visCoverOnUnitSpatialChanged(u);
+}
+
+function removeUnitSpatial(u) {
+    let indexed = u._spatialEpoch === spatialEpoch && u._spatialKey !== undefined;
+    if (indexed) {
+        if (_removeUnitFromSpatialArray(spatialUnits[u._spatialKey], u)) _spatialCountUnit(u, u._spatialKey, u._spatialOwner, -1);
+        let area = u._spatialAreaId;
+        if (area >= 0 && area < spatialUnitsByArea.length) _removeUnitFromAreaBucket(spatialUnitsByArea[area], u, u._spatialOwner);
+    }
+    u._spatialKey = undefined;
+    u._spatialAreaId = undefined;
+    u._spatialTile = -1;
+    u._spatialEpoch = 0;
+    simUnitSetSepKey(u, SIM_SEP_ABSENT, 0);
+    if (indexed) visCoverOnUnitSpatialChanged(u);
+}
+
+// The area layout was rebuilt (new area buckets): every indexed unit joins
+// the bucket of its tile's area, in id order.
+function rebuildUnitAreaBuckets() {
+    let sorted = units.filter(u => u && u._spatialEpoch === spatialEpoch && u._spatialKey !== undefined).sort((a, b) => a.id - b.id);
+    for (let u of sorted) {
+        let t = u._spatialTile, gx = t % GRID_W, gy = (t - gx) / GRID_W;
+        let row = areaIdGrid[gy], area = row ? row[gx] : -1;
+        if (!(area >= 0 && area < spatialUnitsByArea.length)) area = -1;
+        u._spatialAreaId = area;
+        if (area >= 0) _addUnitToAreaBucket(spatialUnitsByArea[area], u, u._spatialOwner);
     }
 }
 

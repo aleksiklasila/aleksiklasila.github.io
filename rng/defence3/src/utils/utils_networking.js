@@ -2712,6 +2712,8 @@ function resetWorldState() {
     nextUnitId = 1;
     pathfindBudget = 0;
     pendingPathResolveCursor = 0;
+    if (typeof resetPendingPathUnits === 'function') resetPendingPathUnits();
+    if (typeof resetNewUnitsForStats === 'function') resetNewUnitsForStats();
     pathTopologyVersion = 1;
     sharedPathCache.clear();
     sharedSpawnerRouteCache.clear();

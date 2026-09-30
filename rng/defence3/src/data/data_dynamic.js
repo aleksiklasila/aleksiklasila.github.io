@@ -1021,11 +1021,13 @@ function eliminateTeamAssets(pid) {
     for (let i = units.length - 1; i >= 0; i--) {
         let u = units[i];
         if (u.owner !== pid) continue;
+        u.dead = true;
         removeUnitSpatial(u);
         selectedUnits = selectedUnits.filter(su => su !== u);
         units.splice(i, 1);
     }
     players[pid].popCount = 0;
+    _bumpPathTopologyVersion();
 
     for (let i = towers.length - 1; i >= 0; i--) {
         let t = towers[i];
@@ -2772,6 +2774,7 @@ function _buildingStatHasValues(buildingKey, statKey) {
 // One stat of one thing at every level. Research level, penalty and the unit
 // fallback do not depend on the thing level, so they are resolved once.
 function _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey, multiplier) {
+    _precomputedStatsVersion++;
     let playerEntry = _ensurePrecomputedStatsMapPlayerEntry(pid);
     if (!playerEntry[branch][normalizedKey]) playerEntry[branch][normalizedKey] = [];
     let levels = playerEntry[branch][normalizedKey];
@@ -3482,6 +3485,13 @@ function computeUnitLevelScaledStats(unit, level) {
 // Clones remember their source, so a snapshot can send one as a reference to
 // the source plus its maxEnergy (snapshots check the rest still matches).
 const precomputedCloneSource = new WeakMap();
+// Every unit with the same effective table and base maxEnergy shares one
+// clone (per source table, per base maxEnergy) instead of allocating its
+// own on each refresh. Source tables are updated in place when a stat is
+// rebuilt (research, resource penalties): that bumps the version and drops
+// the clones made from their old values.
+const _precomputedCloneCache = new WeakMap();
+let _precomputedStatsVersion = 0;
 
 function clonePrecomputedWithBaseMaxEnergy(baseStats, effectiveStats) {
         let preserveBaseMaxEnergy = arguments.length < 3 ? true : !!arguments[2];
@@ -3490,8 +3500,16 @@ function clonePrecomputedWithBaseMaxEnergy(baseStats, effectiveStats) {
         let baseMaxEnergy = Number(baseStats && baseStats.maxEnergy);
         if (!Number.isFinite(baseMaxEnergy)) return effectiveStats;
         if (Number(effectiveStats.maxEnergy) === baseMaxEnergy) return effectiveStats;
-        let clone = { ...effectiveStats, maxEnergy: baseMaxEnergy };
+        let byBase = _precomputedCloneCache.get(effectiveStats);
+        if (!byBase || byBase.version !== _precomputedStatsVersion) {
+            _precomputedCloneCache.set(effectiveStats, byBase = new Map());
+            byBase.version = _precomputedStatsVersion;
+        }
+        let clone = byBase.get(baseMaxEnergy);
+        if (clone) return clone;
+        clone = { ...effectiveStats, maxEnergy: baseMaxEnergy };
         precomputedCloneSource.set(clone, effectiveStats);
+        byBase.set(baseMaxEnergy, clone);
         return clone;
 }
 
@@ -3523,6 +3541,7 @@ function applyUnitLevelScaling(unit, level) {
     unit.baseLevel = lvl;
     unit.effectiveStacks = Math.max(1, Number.isFinite(unit.stackCount) ? Math.floor(unit.stackCount) : 1);
     unit.effectiveLevel = lvl;
+    if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(unit);
 }
 
 function applyUnitEffectiveScaling(unit, effectiveLevel) {
@@ -3540,4 +3559,5 @@ function applyUnitEffectiveScaling(unit, effectiveLevel) {
     unit.energy = Math.max(1, Math.min(unit.maxEnergy, Math.floor(unit.energy)));
 
     unit.effectiveLevel = lvl;
+    if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(unit);
 }
