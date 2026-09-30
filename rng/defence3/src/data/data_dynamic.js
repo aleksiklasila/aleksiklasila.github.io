@@ -1024,7 +1024,7 @@ function eliminateTeamAssets(pid) {
         u.dead = true;
         removeUnitSpatial(u);
         selectedUnits = selectedUnits.filter(su => su !== u);
-        units.splice(i, 1);
+        units.splice(i, 1); unitSlotMapInvalidate();
     }
     players[pid].popCount = 0;
     _bumpPathTopologyVersion();
@@ -1037,6 +1037,7 @@ function eliminateTeamAssets(pid) {
         if (grid[t.gy] && grid[t.gy][t.gx]) {
             grid[t.gy][t.gx].type = TYPE_FLOOR;
             grid[t.gy][t.gx].owner = -1;
+            if (typeof simMoveTileTypeChanged === 'function') simMoveTileTypeChanged(t.gx, t.gy);
             _markCombinedBgTileDirty(t.gx, t.gy, 0, true);
         }
     }
@@ -1280,6 +1281,36 @@ function countTeamStructures(pid) {
     return n;
 }
 
+// Counts for the game stats graph (never read by the simulation): each tick
+// a TICK_RATE-th of the units and structures (by position), so a second's
+// ticks together see every one; the finished counts serve the next sample.
+let _gameStatsAcc = null, _gameStatsDone = null;
+function _gameStatsSlice(k, step, into = null) {
+    let a = into || { workers: {}, idle: {}, units: {}, structures: {} };
+    let add = (m, pid) => { m[pid] = (m[pid] || 0) + 1; };
+    for (let i = k, n = units.length; i < n; i += step) {
+        let u = units[i];
+        if (!u || u.dead) continue;
+        let pid = Number.isFinite(u.owner) ? u.owner : -1;
+        add(a.units, pid);
+        if (!u.workerType) continue;
+        add(a.workers, pid);
+        if (u.workerState === 'IDLE' || (!u.workerTarget && (!u.path || u.pathIndex >= u.path.length))) add(a.idle, pid);
+    }
+    let items = getCellItemsRowMajor();
+    for (let i = k, n = items.length; i < n; i += step) {
+        let item = items[i], cell = grid[item.gy] && grid[item.gy][item.gx];
+        if (!cell || cell.item !== item || !(Number(item.energy) > 0)) continue;
+        add(a.structures, cell.owner);
+    }
+    return a;
+}
+function gameStatsStep(tick) {
+    let step = Math.max(1, TICK_RATE | 0), k = ((tick % step) + step) % step;
+    if (k === 0 || !_gameStatsAcc) { if (_gameStatsAcc && k === 0) _gameStatsDone = _gameStatsAcc; _gameStatsAcc = { workers: {}, idle: {}, units: {}, structures: {} }; }
+    _gameStatsSlice(k, step, _gameStatsAcc);
+}
+
 function sampleGameStats() {
     if (!gameStarted) return;
     let teams = (activeTeamIds && activeTeamIds.length > 0) ? activeTeamIds : [0, 1];
@@ -1294,32 +1325,19 @@ function sampleGameStats() {
         idleWorkers: {},
         structures: {}
     };
-    let workersByTeam = {};
-    let idleWorkersByTeam = {};
-    for (let pid of teams) {
-        workersByTeam[pid] = 0;
-        idleWorkersByTeam[pid] = 0;
-    }
-    for (let u of units) {
-        if (!u || u.dead) continue;
-        let pid = Number.isFinite(u.owner) ? u.owner : -1;
-        if (workersByTeam[pid] === undefined) continue;
-        if (!u.workerType) continue;
-        workersByTeam[pid]++;
-        let pathDone = (!u.path || u.pathIndex >= u.path.length);
-        if (u.workerState === 'IDLE' || (!u.workerTarget && pathDone)) {
-            idleWorkersByTeam[pid]++;
-        }
-    }
+    // The counts of the last whole second, gathered a slice a tick
+    // (gameStatsStep); before the first one, gathered now.
+    let acc = _gameStatsDone || _gameStatsSlice(0, 1);
+    let workersByTeam = acc.workers, idleWorkersByTeam = acc.idle, unitsByTeam = acc.units, structuresByTeam = acc.structures;
     for (let pid of teams) {
         sample.energy[pid] = players[pid] ? players[pid].energy : 0;
         sample.astar[pid] = players[pid] ? (Number(players[pid].astar) || 0) : 0;
         sample.pop[pid] = players[pid] ? players[pid].popCount : 0;
-        sample.units[pid] = countTeamUnits(pid);
+        sample.units[pid] = unitsByTeam[pid] || 0;
         sample.workers[pid] = workersByTeam[pid] || 0;
         sample.combat[pid] = Math.max(0, sample.units[pid] - sample.workers[pid]);
         sample.idleWorkers[pid] = idleWorkersByTeam[pid] || 0;
-        sample.structures[pid] = countTeamStructures(pid);
+        sample.structures[pid] = structuresByTeam[pid] || 0;
     }
     gameStatsHistory.push(sample);
     if (gameStatsHistory.length > 3600) gameStatsHistory.shift();
@@ -3533,6 +3551,7 @@ function applyUnitLevelScaling(unit, level) {
     unit.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(unit.preComputedBase, scaled);
     unit.basePreComputed = unit.preComputedBase;
     unit.preComputed = unit.preComputedEffective;
+    if (typeof simMoveStatsChanged === 'function') simMoveStatsChanged(unit);
     let unitDef = BASE_UNIT_STATS[unit.unitType] || BASE_UNIT_STATS.norm || {};
     unit.isFlying = !!unitDef.isFlying;
     unit.maxEnergy = unit.preComputedBase.maxEnergy;
@@ -3552,6 +3571,7 @@ function applyUnitEffectiveScaling(unit, effectiveLevel) {
 
     unit.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(unit.preComputedBase, scaled);
     unit.preComputed = unit.preComputedEffective;
+    if (typeof simMoveStatsChanged === 'function') simMoveStatsChanged(unit);
     let unitDef = BASE_UNIT_STATS[unit.unitType] || BASE_UNIT_STATS.norm || {};
     unit.isFlying = !!unitDef.isFlying;
     unit.maxEnergy = Number(unit.preComputedBase && unit.preComputedBase.maxEnergy) || unit.preComputedEffective.maxEnergy;

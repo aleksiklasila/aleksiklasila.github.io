@@ -45,7 +45,7 @@ const workerCode = `const { parentPort, workerData, MessageChannel } = require('
             outputs:['sep.ord','sep.slots','sep.keys','sep.jobs','sep.sx','sep.sy','sep.sr','sep.so','sep.sid','sep.sl','sep.sc','sep.sdx','sep.sdy','sep.start','sep.chunkR','sep.sole','sep.chunkC'], total:p=>Math.ceil(p[0]/p[1])},
         {kernel:7, params:inst.scratch.finishParams, reg:inst.scratch.finishReg,
             outputs:['sep.nextX','sep.nextY','sep.fast'], total:p=>Math.ceil(p[0]/p[1])},
-        {kernel:3, params:[inst.scratch.sepReg['sep.start'][inst.scratch.sepParams[0]*inst.scratch.sepParams[1]],512], reg:{...inst.scratch.sepReg,...Object.fromEntries(Object.entries(inst.scratch.frameReg).filter(([k])=>k.startsWith('unit.')))}, outputs:['sep.sx','sep.sy','sep.sr','sep.so','sep.sid'], total:p=>Math.ceil(p[0]/p[1])},
+        {kernel:3, params:[inst.scratch.sepParams[9],512], reg:{...inst.scratch.sepReg,...Object.fromEntries(Object.entries(inst.scratch.frameReg).filter(([k])=>k.startsWith('unit.')))}, outputs:['sep.sx','sep.sy','sep.sr','sep.so','sep.sid'], total:p=>Math.ceil(p[0]/p[1])},
         {kernel:1, params:inst.scratch.sepParams, reg:inst.scratch.sepReg, outputs:['sep.px','sep.py','sep.ov','sep.hit'], total:p=>Math.ceil(p[9]/p[2])},
         {kernel:2, params:inst.scratch.frameParams, reg:inst.scratch.frameReg, outputs:['frame.buffer.0'], total:p=>Math.ceil(p[1]/p[2])}
     ];

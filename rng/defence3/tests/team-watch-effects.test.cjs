@@ -48,8 +48,8 @@ assert.equal(target.watched, 0);
 assert.equal(target.watchedByTeam, -1, 'expired reveal should clear its team');
 
 assert.match(renderer, /watchedByTeam\)\) === targetId/);
-assert.match(unit, /this\.unitType === 'scout'\) applyStatusEffect\(target, 'watch'/);
-assert.match(unit, /this\.unitType === 'scout'\) applyStatusEffect\(tb, 'watch'/);
+assert.match(unit, /(this|a)\.unitType === 'scout'\) applyStatusEffect\(target, 'watch'/);
+assert.match(unit, /(this|a)\.unitType === 'scout'\) applyStatusEffect\(tb, 'watch'/);
 assert.match(tower, /u\.watchedByTeam === this\.owner/);
 assert.match(dataStatic, /scout: \{[^\n]*watchDuration: 5/);
 assert.match(dataStatic, /scout: \['energy'[^\n]*'watchDuration'/);

@@ -223,6 +223,18 @@ function _makeFallbackPathForUnit(u, sx, sy, ex, ey, cmd = CMD_MOVING, src = 'fa
         u.commandState = cmd;
         return path;
     }
+    // Walkers: the way on the flow navigation at once (no search to wait for).
+    if (typeof navPathTo === 'function') {
+        let navPath = navPathTo(u, ex, ey);
+        if (navPath && navPath.length > 0) {
+            u.pathIsFallbackAstar = false;
+            u.path = navPath;
+            u.pathIndex = (navPath.length > 1 && navPath[0].x === sx && navPath[0].y === sy) ? 1 : 0;
+            u._pendingPathTarget = null;
+            u.commandState = cmd;
+            return navPath;
+        }
+    }
     u.pathIsFallbackAstar = true;
     u.path = null;
     u.pathIndex = 0;
@@ -237,12 +249,23 @@ function _tryUpgradeAstarFallbackPath(u) {
     if (!u || !u.pathIsFallbackAstar || !u._pendingPathTarget || u.dead) return;
     // Waiting for its group's shared search (see _takeGroupPathSearch).
     if (u._awaitGroupPath > gameTime) return;
-    if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) return;
-    if (!_canUsePathfindRequestBudget(u.owner, u)) return;
-
     let pt = u._pendingPathTarget;
     let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
     let dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u);
+    // Walkers: the way on the flow navigation (no search, no budget).
+    if (typeof navPathTo === 'function') {
+        let navPath = navPathTo(u, dest.x, dest.y);
+        if (navPath && navPath.length > 0) {
+            u.path = navPath;
+            u.pathIndex = (navPath.length > 1 && navPath[0].x === ugx && navPath[0].y === ugy) ? 1 : 0;
+            u.pathIsFallbackAstar = false;
+            u.commandState = pt.cmd;
+            u._pendingPathTarget = null;
+            return;
+        }
+    }
+    if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) return;
+    if (!_canUsePathfindRequestBudget(u.owner, u)) return;
     _consumePathfindRequestBudget(u.owner, u);
     let path = _findPathForUnitTagged(pt.src || 'deferred_resolver', u, ugx, ugy, dest.x, dest.y, !!u.isFlying, getPathCanWalkForUnit(u), u.owner);
     if (path && path.length > 0) {
@@ -325,6 +348,13 @@ function _withPathfindContext(source, owner, unit, fn) {
 }
 
 function _findPathForUnitTagged(sourceTag, unit, sx, sy, ex, ey, ignoreWalls = false, canWalk = null, pathOwner = null, cacheProfileHint = null, allowClosestReachableFallback = true) {
+    // Walkers to an open tile: the way on the flow navigation, no search
+    // (the search remains for what it cannot answer: a walled-off tile, a
+    // way only through tiles this unit alone may enter).
+    if (unit && typeof navPathTo === 'function') {
+        let path = navPathTo(unit, ex, ey);
+        if (path) return path;
+    }
     let owner = _normalizeOwnerId(pathOwner);
     return _withPathfindContext(sourceTag, owner, unit, () => findPathAStar(sx, sy, ex, ey, ignoreWalls, canWalk, pathOwner, cacheProfileHint, allowClosestReachableFallback));
 }
@@ -821,7 +851,7 @@ function _resolveMovementProfile(ignoreWalls, canWalk, cacheProfileHint = null) 
     return null;
 }
 
-function _buildDeterministicOpenGridPath(sx, sy, ex, ey) {
+function _buildDeterministicOpenGridPath(sx, sy, ex, ey, maxLen = Infinity) {
     let path = [{ x: sx, y: sy }];
     let cx = sx;
     let cy = sy;
@@ -864,6 +894,7 @@ function _buildDeterministicOpenGridPath(sx, sy, ex, ey) {
         }
 
         path.push({ x: cx, y: cy });
+        if (path.length >= maxLen) break;
     }
 
     return path;
@@ -1185,7 +1216,7 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
     let resumeStartX = sx;
     let resumeStartY = sy;
 
-    let gridData = grid;
+    let gridData = grid, wallG = typeof simMoveWallGrid === 'function' ? simMoveWallGrid() : null;
     let gridW = GRID_W;
     let gridH = GRID_H;
 
@@ -1412,7 +1443,7 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
         for (let di = 0; di < 8; di += 2) {
             let nx = cx + _ASTAR_DIRS[di], ny = cy + _ASTAR_DIRS[di + 1];
             if (nx < 0 || nx >= gridW || ny < 0 || ny >= gridH) continue;
-            if (!ignoreWalls && gridData[ny][nx].type === TYPE_WALL) {
+            if (!ignoreWalls && (wallG ? wallG[ny * gridW + nx] : gridData[ny][nx].type === TYPE_WALL)) {
                 if (!(hasCloudTiles && _getCloudTowerFast(nx, ny, pathOwner)) && !(canWalk && canWalk(nx, ny))) continue;
             }
             let nKey = ny * gridW + nx;
@@ -1753,18 +1784,86 @@ function findGroupPathsToTarget(starts, ex, ey, canWalk = null, pathOwner = null
 // owner's search budget, and the members whose tiles it has reached get
 // their paths (walked downhill from the distances, shared per start tile).
 // A search too big for one tick's budget therefore finishes a few ticks
-// later instead of failing every tick. Routes are caches of the path
-// topology: a topology change (every peer bumps it at a resync) drops them.
-// Live routes (least recently used dropped beyond): enough for many-point
-// orders of every player. A route holds 5 bytes per map tile.
-const GROUP_ROUTE_MAX = 32;
+// later instead of failing every tick. Routes are caches (every peer drops
+// them at a resync, resetGroupRoutes); at most FLOW_MAX live, 5 bytes per
+// map tile each.
 const GROUP_ROUTE_NODES_PER_TICK = 60000;
+// Nodes all routes together expand per tick (a big order starts many at
+// once; each route gets a share, members near their destination first).
+// A route always gets at least GROUP_ROUTE_NODES_MIN.
+const GROUP_ROUTE_NODES_TICK = 60000, GROUP_ROUTE_NODES_MIN = 1500;
+let _groupRouteNodesTick = -1, _groupRouteNodesLeft = 0;
+function _groupRouteNodeBudget(share) {
+    if (_groupRouteNodesTick !== gameTime) { _groupRouteNodesTick = gameTime; _groupRouteNodesLeft = GROUP_ROUTE_NODES_TICK; }
+    return Math.max(GROUP_ROUTE_NODES_MIN, Math.min(GROUP_ROUTE_NODES_PER_TICK, share, _groupRouteNodesLeft));
+}
+function _groupRouteAdvance(route, source, share) {
+    const before = route.expandedTotal;
+    _withPathfindContext(source, route.owner, null, () => route.advance(_groupRouteNodeBudget(share)));
+    _groupRouteNodesLeft -= route.expandedTotal - before;
+}
 // Start tiles turned into paths per tick, over all routes (walking a long
 // route downhill for thousands of tiles at once would stall a tick).
 const GROUP_ROUTE_PATHS_PER_TICK = 400;
-let _groupRoutes = new Map(), _groupRoutesVersion = -1, _groupRouteSeq = 0;
+let _groupRoutes = new Map(), _groupRouteSeq = 0;
 const _groupRouteStepKeys = new Int32Array(8);
 let _groupRoutePathTick = -1, _groupRoutePathsLeft = 0;
+
+// Flying units' routes: over the air walkability (AIR_CAN_WALK) and the
+// portals, so buildings other than portals never change them: an air flow
+// stays valid until the portals change (_cloudSignature). Today every tile
+// is open to flyers (a void or border tile would close it: _airWallTable).
+const AIR_CAN_WALK = Object.assign(() => true, { _pathProfileKey: 'air', _air: true });
+let _airWall = null, _cloudSig = 0, _cloudSigVer = -1;
+// The portals as they are (cloud towers: tile, owner, pair, usable).
+function _cloudSignature() {
+    if (_cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+    if (_cloudSigVer === _cloudTileCacheVer) return _cloudSig;
+    let h = 2166136261 | 0;
+    for (const [k, t] of _cloudTileCache) {
+        h = Math.imul(h ^ k, 16777619); h = Math.imul(h ^ (t.owner | 0), 16777619);
+        h = Math.imul(h ^ ((t.baseStats && t.baseStats.pairId) | 0), 16777619);
+        h = Math.imul(h ^ (t.energy > 0 && !t.underConstruction ? 1 : 0), 16777619);
+    }
+    _cloudSig = h; _cloudSigVer = _cloudTileCacheVer;
+    return h;
+}
+function _airWallTable() {
+    if (!_airWall || _airWall.length !== GRID_W * GRID_H) {
+        _airWall = simSharedArray(Uint8Array, GRID_W * GRID_H);
+        if (typeof simParallelBind === 'function') simParallelBind('mv.airwall', _airWall);
+    }
+    return _airWall;
+}
+
+// Routes keep off walls: stepping onto a tile costs 1, plus 2 next to a
+// wall and 1 two tiles from one (see stepCostTable), so flows run down the
+// middle of corridors and hug walls only where there is no other way.
+let _stepCost = null, _stepCostWall = null;
+function stepCostTable(wall) {
+    if (!_stepCost || _stepCost.length !== wall.length) { _stepCost = new Uint8Array(wall.length); _stepCostWall = wall; }
+    return _stepCost;
+}
+// A tile's step cost (0 in the table: not yet known).
+function _stepCostAt(table, wall, t) {
+    let c = table[t];
+    if (c) return c;
+    const W = GRID_W, H = GRID_H, x = t % W, y = (t - x) / W;
+    c = 1;
+    ring: for (let r = 1; r <= 2; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H || wall[ny * W + nx]) { c = r === 1 ? 3 : 2; break ring; }
+    }
+    table[t] = c;
+    return c;
+}
+// The walls changed at a tile: the costs around it are worked out again.
+function stepCostsChanged(gx, gy) {
+    if (!_stepCost) return;
+    for (let y = gy - 2; y <= gy + 2; y++) for (let x = gx - 2; x <= gx + 2; x++) if (x >= 0 && y >= 0 && x < GRID_W && y < GRID_H) _stepCost[y * GRID_W + x] = 0;
+}
+function stepCostsReset() { if (_stepCost) _stepCost.fill(0); }
 
 function _groupRouteProfile(canWalk) {
     if (!canWalk) return 'plain';
@@ -1785,23 +1884,85 @@ function _groupRouteTakePathQuota() {
 }
 
 // The live route for a destination (created on first use).
+// ---- Flows ----
+// A route is also a flow field: every settled tile's distance to the
+// destination (g), so units of a group order follow it tile by tile in the
+// movement kernel with no path of their own (see SIM_KERNEL_MOVE). Routes
+// live in FLOW_MAX slots (arrays in shared memory, by slot id for the
+// kernels); a slot's generation changes when its route is dropped, and the
+// units following it go back to Unit.update. Routes survive topology
+// changes: a new request after one gets a fresh route (the old one stays
+// for the units already on it until its slot is needed; they check walls
+// as they go).
+const FLOW_MAX = 32;
+let _flowSlots = new Array(FLOW_MAX).fill(null);
+let _flowGen = null, _flowUsed = null, _flowG = [], _flowF = [];
+function _flowTables() {
+    if (!_flowGen) {
+        _flowGen = simSharedArray(Int32Array, FLOW_MAX); _flowUsed = simSharedArray(Int32Array, FLOW_MAX);
+        simParallelBind('flow.gen', _flowGen); simParallelBind('flow.used', _flowUsed);
+    }
+}
+function _flowBind() {
+    _flowG = _flowSlots.map(r => r ? r.g : null); _flowF = _flowSlots.map(r => r ? r.flags : null);
+    simParallelBind('flow.g', _flowG); simParallelBind('flow.f', _flowF);
+}
+function _flowRelease(fid) {
+    const r = _flowSlots[fid];
+    if (!r) return;
+    r.fid = -1;
+    if (_groupRoutes.get(r.key) === r) _groupRoutes.delete(r.key);
+    _flowSlots[fid] = null;
+    _flowGen[fid]++;
+}
+// A slot for a new route: a free one, else the least recently used (by
+// orders and by the kernel's followers; ties: the lowest slot).
+function _flowAssign(route) {
+    _flowTables();
+    let fid = _flowSlots.indexOf(null);
+    if (fid < 0) {
+        let best = Infinity;
+        for (let i = 0; i < FLOW_MAX; i++) {
+            const r = _flowSlots[i], used = Math.max(r.lastUsed, _flowUsed[i]);
+            if (used < best) { best = used; fid = i; }
+        }
+        _flowRelease(fid);
+    }
+    _flowSlots[fid] = route; route.fid = fid; route.gen = ++_flowGen[fid]; _flowUsed[fid] = gameTime;
+    _flowBind();
+}
+function resetGroupRoutes() {
+    _flowTables();
+    for (let i = 0; i < FLOW_MAX; i++) _flowRelease(i);
+    _groupRoutes = new Map();
+    _flowBind();
+}
+function flowRouteById(fid) { return fid >= 0 && fid < FLOW_MAX ? _flowSlots[fid] : null; }
+
 function getGroupRoute(owner, ex, ey, canWalk, starts) {
-    if (_groupRoutesVersion !== pathTopologyVersion) { _groupRoutes = new Map(); _groupRoutesVersion = pathTopologyVersion; }
     let key = _groupRouteKey(owner, ex, ey, canWalk);
     if (key === null) return null;
     let route = _groupRoutes.get(key);
+    if (route && (route.air ? route.cloudSig !== _cloudSignature() : route.version !== pathTopologyVersion)) {
+        // Built before the walls changed: new requests get a fresh one.
+        _groupRoutes.delete(key);
+        route = null;
+    }
     if (!route) {
-        if (_groupRoutes.size >= GROUP_ROUTE_MAX) {
-            // Drop the least recently used (ties: the oldest).
-            let oldest = null;
-            for (let r of _groupRoutes.values()) if (!oldest || r.lastUsed < oldest.lastUsed || (r.lastUsed === oldest.lastUsed && r.seq < oldest.seq)) oldest = r;
-            _groupRoutes.delete(oldest.key);
-        }
         route = new GroupRoute(key, owner, ex, ey, canWalk, starts);
+        _flowAssign(route);
         _groupRoutes.set(key, route);
     }
     route.lastUsed = gameTime;
     return route;
+}
+
+// Walls per tile from the grid (for callers without the movement kernel's
+// table: sandboxed tests).
+function _gridWallTable() {
+    const t = new Uint8Array(GRID_W * GRID_H);
+    for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) t[y * GRID_W + x] = grid[y][x].type === TYPE_WALL ? 1 : 0;
+    return t;
 }
 
 class GroupRoute {
@@ -1810,14 +1971,17 @@ class GroupRoute {
         this.owner = owner; this.ex = ex; this.ey = ey; this.canWalk = canWalk;
         let n = GRID_W * GRID_H;
         this.w = GRID_W; this.h = GRID_H;
-        this.g = new Int32Array(n).fill(-1);
+        this.version = pathTopologyVersion; this.fid = -1; this.gen = 0;
+        this.g = simSharedArray(Int32Array, n).fill(-1);
         // Per tile: bit 0 settled, bit 1 start tile (may be left though blocked).
-        this.flags = new Uint8Array(n);
-        this.pending = new Set();           // start tiles not settled yet
+        this.flags = simSharedArray(Uint8Array, n);
+        this.pendingCount = 0;              // start tiles not settled yet (flag bit 1 set, bit 0 not)
+        this.segments = new Map();           // start tile -> its first segment (shared by units there)
         this.paths = new Map();              // start tile -> path (null: none)
         this.heap = new Float64Array(1024); this.heapSize = 0;
         this.bound = Infinity;               // settle up to this priority once every start is reached
         this.exhausted = false;              // nothing left to expand
+        this.expandedTotal = 0;
         // Heuristic: distance to the starts' bounding box, fixed at creation
         // (consistent for any start, so later starts stay exact).
         let minX = GRID_W, minY = GRID_H, maxX = -1, maxY = -1;
@@ -1826,6 +1990,8 @@ class GroupRoute {
             if (s.y < minY) minY = s.y; if (s.y > maxY) maxY = s.y;
         }
         this.bx0 = minX; this.by0 = minY; this.bx1 = maxX; this.by1 = maxY;
+        this.air = !!(canWalk && canWalk._air);
+        this.cloudSig = this.air ? _cloudSignature() : 0;
         this.usePortals = owner !== null;
         this.noHeuristic = false;
         // Live portals: the portal-aware bound to the starts' box.
@@ -1871,12 +2037,15 @@ class GroupRoute {
         for (let s of starts) {
             if (!(s.x >= 0 && s.y >= 0 && s.x < this.w && s.y < this.h)) continue;
             let k = s.y * this.w + s.x;
-            this.flags[k] |= 2;
-            if (!(this.flags[k] & 1)) { this.pending.add(k); this.bound = Infinity; }
+            const f = this.flags[k];
+            if (f & 2) continue;
+            this.flags[k] = f | 2;
+            if (!(f & 1)) { this.pendingCount++; this.bound = Infinity; }
         }
     }
 
     _walkable(x, y) {
+        if (this.air) return false;
         return grid[y][x].type !== TYPE_WALL
             || (this.usePortals && _cloudTileCache && _cloudTileCache.size > 0 && !!_getCloudTowerFast(x, y, this.owner))
             || !!(this.canWalk && this.canWalk(x, y));
@@ -1885,9 +2054,13 @@ class GroupRoute {
     // Expands up to `maxNodes` nodes within the owner's budget. Returns false
     // when the budget ran out before the reached starts were done.
     advance(maxNodes) {
-        if (this.exhausted || (this.pending.size === 0 && this.heapSize === 0)) return true;
+        if (this.exhausted || (this.pendingCount === 0 && this.heapSize === 0)) return true;
         let W = this.w, H = this.h, g = this.g, flags = this.flags;
-        let owner = this.owner, wallType = TYPE_WALL, gridData = grid;
+        let owner = this.owner;
+        // Walls from the per-tile table (see simMoveTileTypeChanged), not
+        // the grid's cell objects (a cache miss per node on large maps).
+        const wall = this.air ? _airWallTable() : (typeof simMoveWallGrid === 'function' ? simMoveWallGrid() : _gridWallTable());
+        const costs = this.air ? null : stepCostTable(wall);
         if (this.usePortals && _cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
         let searchClouds = this.usePortals && !!(_cloudTileCache && _cloudTileCache.size);
         let budgetArr = astarNodeBudgetRemainingByPlayer;
@@ -1896,27 +2069,28 @@ class GroupRoute {
         while (this.heapSize > 0) {
             let top = this.heap[0];
             let priority = Math.floor(top / 2097152);
-            if (this.pending.size === 0 && priority > this.bound) return true;
+            if (this.pendingCount === 0 && priority > this.bound) return true;
             if (expanded >= maxNodes) return false;
             let budgetOk = fastBudget ? (budgetArr[owner] >= 1 ? (budgetArr[owner]--, true) : false) : _tryConsumeAstarNodeBudget(owner, 1);
             if (!budgetOk) { _lastPathfindAbortedByBudget = true; return false; }
             this._pop();
             let cur = top - priority * 2097152;
             if (flags[cur] & 1) continue;
-            expanded++;
+            expanded++; this.expandedTotal++;
             flags[cur] |= 1;
             let cx = cur % W, cy = (cur / W) | 0, cg = g[cur];
-            if ((flags[cur] & 2) && this.pending.delete(cur) && this.pending.size === 0) this.bound = priority;
+            if ((flags[cur] & 2) && --this.pendingCount === 0) this.bound = priority;
             // Stepping into a tile requires that tile to be walkable.
-            if (gridData[cy][cx].type === wallType && !this._walkable(cx, cy)) continue;
-            let ng = cg + 1;
+            if (wall[cur] && !this._walkable(cx, cy)) continue;
+            // (Entering cur costs its step cost; flyers pay 1.)
+            let ng = cg + (costs ? _stepCostAt(costs, wall, cur) : 1);
             for (let di = 0; di < 8; di += 2) {
                 let nx = cx + _ASTAR_DIRS[di], ny = cy + _ASTAR_DIRS[di + 1];
                 if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
                 let nKey = ny * W + nx;
                 if ((flags[nKey] & 1) || (g[nKey] >= 0 && g[nKey] <= ng)) continue;
                 // A unit may stand on an unwalkable tile; it is only ever left.
-                if (gridData[ny][nx].type === wallType && !(flags[nKey] & 2) && !this._walkable(nx, ny)) continue;
+                if (wall[nKey] && !(flags[nKey] & 2) && !this._walkable(nx, ny)) continue;
                 g[nKey] = ng;
                 this._push(this.noHeuristic ? ng : ng + this._h(nx, ny), nKey);
             }
@@ -1954,10 +2128,16 @@ class GroupRoute {
     // The first `maxLen` nodes downhill from a tile (the whole rest when it
     // is closer), null when the tile is not settled.
     segmentFrom(sx, sy, maxLen) {
-        return this._walk(sx, sy, maxLen);
+        // Units on the same tile share it (paths are never modified).
+        if (maxLen !== GROUP_ROUTE_SEGMENT) return this._walk(sx, sy, maxLen);
+        const key = sy * this.w + sx;
+        let seg = this.segments.get(key);
+        if (seg === undefined) { seg = this._walk(sx, sy, maxLen); if (seg) this.segments.set(key, seg); }
+        return seg;
     }
 
     _walk(sx, sy, maxLen) {
+        _ensurePathClearanceCache();
         let W = this.w, H = this.h, startKey = sy * W + sx;
         let g = this.g, flags = this.flags, owner = this.owner, canWalk = this.canWalk;
         let hasClouds = this.usePortals && !!(_cloudTileCache && _cloudTileCache.size);
@@ -1967,17 +2147,25 @@ class GroupRoute {
         if (!node) nodes.set(startKey, node = { x: sx, y: sy });
         let path = [node];
         let routeDx = this.ex - sx, routeDy = this.ey - sy;
-        let cur = startKey, stepKeys = _groupRouteStepKeys, limit = W * H, wallType = TYPE_WALL, gridData = grid;
+        let cur = startKey, stepKeys = _groupRouteStepKeys, limit = W * H, wall = this.air ? _airWallTable() : (typeof simMoveWallGrid === 'function' ? simMoveWallGrid() : _gridWallTable());
         while (cur !== this.endKey) {
             let cx = cur % W, cy = (cur / W) | 0, want = g[cur] - 1;
+            // The lowest distance among the settled neighbours below this
+            // tile's (steps cost more near walls, so not always one less).
+            for (let di = 0; di < 8; di += 2) {
+                let nx = cx + _ASTAR_DIRS[di], ny = cy + _ASTAR_DIRS[di + 1];
+                if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+                let nKey = ny * W + nx;
+                if ((flags[nKey] & 1) && g[nKey] >= 0 && g[nKey] < want) want = g[nKey];
+            }
             let count = 0;
-            // Settled neighbours one step closer that can be stepped on.
+            // Settled neighbours at that distance that can be stepped on.
             for (let di = 0; di < 8; di += 2) {
                 let nx = cx + _ASTAR_DIRS[di], ny = cy + _ASTAR_DIRS[di + 1];
                 if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
                 let nKey = ny * W + nx;
                 if (!(flags[nKey] & 1) || g[nKey] !== want) continue;
-                if (gridData[ny][nx].type === wallType && !this._walkable(nx, ny)) continue;
+                if (wall[nKey] && !this._walkable(nx, ny)) continue;
                 stepKeys[count++] = nKey;
             }
             if (hasClouds) {
@@ -1985,7 +2173,7 @@ class GroupRoute {
                 let partner = cloud ? getPairedCloudTower(cloud, owner) : null;
                 if (partner) {
                     let nKey = partner.gy * W + partner.gx;
-                    if ((flags[nKey] & 1) && g[nKey] === want && this._walkable(partner.gx, partner.gy)) stepKeys[count++] = nKey;
+                    if ((flags[nKey] & 1) && g[nKey] === g[cur] - 1 && this._walkable(partner.gx, partner.gy)) stepKeys[count++] = nKey;
                 }
             }
             // Most steps have one candidate; rank only real choices.
@@ -2013,6 +2201,48 @@ class GroupRoute {
     }
 }
 
+// A unit's destination tile as the interface shows it ({x, y} or null): its
+// path's end, or its flow's destination. O(1): for markers drawn per frame.
+function unitDisplayDest(u) {
+    let p = u && u.path;
+    if (p && p.length) return p[p.length - 1];
+    if (u && u._routeKey && u._routeEnd >= 0) return { x: u._routeEnd % GRID_W, y: (u._routeEnd / GRID_W) | 0 };
+    return null;
+}
+
+// A unit's path as the interface shows it: its own, or for a unit following
+// a flow in the movement kernel (no path of its own) the flow walked from
+// where it stands (up to UNIT_DISPLAY_PATH nodes and the destination),
+// cached for the tick. Never simulation input.
+const UNIT_DISPLAY_PATH = 64;
+const _displayPaths = new WeakMap();
+function unitDisplayPath(u) {
+    let p = u && u.path;
+    if (p && p.length) return p;
+    if (!u || !u._routeKey || !u._us) return p;
+    if (u._routeKey === NAV_ROUTE_KEY) {
+        let c = _displayPaths.get(u);
+        if (c && c.tick === gameTime) return c.path;
+        let path = navPath(navProfileOf(u), Math.floor(u.x / TILE), Math.floor(u.y / TILE), u._routeEnd, UNIT_DISPLAY_PATH) || [];
+        let end = u._routeEnd;
+        path.push({ x: end % GRID_W, y: (end / GRID_W) | 0 });
+        _displayPaths.set(u, { tick: gameTime, path });
+        return path;
+    }
+    let route = _groupRoutes.get(u._routeKey);
+    if (!route) return p;
+    let c = _displayPaths.get(u);
+    if (c && c.tick === gameTime) return c.path;
+    let gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE), seg = null;
+    if (gx >= 0 && gy >= 0 && gx < route.w && gy < route.h) seg = route._walk(gx, gy, UNIT_DISPLAY_PATH);
+    if (seg && seg.length) {
+        let last = seg[seg.length - 1];
+        if (last.y * route.w + last.x !== route.endKey) seg = seg.concat([{ x: route.ex, y: route.ey }]);
+    } else seg = [{ x: route.ex, y: route.ey }];
+    _displayPaths.set(u, { tick: gameTime, path: seg });
+    return seg;
+}
+
 // Units following a route in segments (see routeGroupMembers) keep, as
 // snapshotted numbers, the route (u._routeKey), its end tile (u._routeEnd)
 // and the last tile of their current segment (u._routeSegEnd): a unit whose
@@ -2036,11 +2266,42 @@ function continueUnitRoute(u, cmd) {
     if (!key) return false;
     let path = u.path, last = path && path.length ? path[path.length - 1] : null;
     let endKey = u._routeEnd;
+    // On the flow navigation: the next stretch of the way from here.
+    if (key === NAV_ROUTE_KEY) {
+        let gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
+        u._routeKey = null;
+        if (gy * GRID_W + gx === endKey || (last && last.y * GRID_W + last.x === endKey)) return false;
+        // One nav node on to the end (O(1) a tick), from the route's ready tick.
+        let profile = navProfileOf(u), ex = endKey % GRID_W, ey = (endKey - ex) / GRID_W;
+        navFieldRequest(profile, endKey, true);
+        u.path = [{ x: ex, y: ey, nav: profile + 1, w: 1, ready: u._navReady | 0 }]; u.pathIndex = 0;
+        u._routeKey = NAV_ROUTE_KEY; u._routeSegEnd = endKey;
+        return true;
+    }
+    // Following a flow in the kernel (no path yet): a segment from here.
+    if (!last && u._routeSegEnd === -1) {
+        let gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
+        if (gy * GRID_W + gx === endKey) { u._routeKey = null; return false; }
+        let route = _groupRoutes.get(key) || null;
+        if (route && gx >= 0 && gy >= 0 && gx < route.w && gy < route.h && (route.flags[gy * route.w + gx] & 1)) {
+            route.lastUsed = gameTime;
+            let seg = _giveRouteSegment(u, route, gx, gy);
+            if (seg && seg.length > 1) {
+                u.path = seg;
+                u.pathIndex = (seg[0].x === gx && seg[0].y === gy) ? 1 : 0;
+                return true;
+            }
+        }
+        u._routeKey = null;
+        _makeFallbackPathForUnit(u, gx, gy, endKey % GRID_W, (endKey / GRID_W) | 0, cmd, 'player_commands');
+        if (route && !route.exhausted) u._awaitGroupPath = gameTime + 20;
+        return true;
+    }
     if (!last || last.y * GRID_W + last.x !== u._routeSegEnd) { u._routeKey = null; return false; }
     u._routeKey = null;
     if (last.y * GRID_W + last.x === endKey) return false;
     let gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
-    let route = _groupRoutesVersion === pathTopologyVersion ? _groupRoutes.get(key) : null;
+    let route = _groupRoutes.get(key) || null;
     if (route && gx >= 0 && gy >= 0 && gx < route.w && gy < route.h && route.ready(gy * route.w + gx)) {
         route.lastUsed = gameTime;
         let seg = _giveRouteSegment(u, route, gx, gy);
@@ -2059,11 +2320,14 @@ function continueUnitRoute(u, cmd) {
 // Every live route still short of its starts advances within this tick's
 // share of its owner's budget (tick start, before any other search).
 function advanceGroupRoutes() {
-    if (_groupRoutesVersion !== pathTopologyVersion || _groupRoutes.size === 0) return;
-    for (let route of [..._groupRoutes.values()].sort((a, b) => a.seq - b.seq)) {
-        if (route.exhausted || route.pending.size === 0 || route.advancedTick === gameTime) continue;
+    if (_groupRoutes.size === 0) return;
+    const active = [..._groupRoutes.values()].filter(r => !r.exhausted && r.pendingCount > 0 && r.advancedTick !== gameTime).sort((a, b) => a.seq - b.seq);
+    // Equal shares of the tick's nodes (what one leaves goes to the next).
+    for (let i = 0; i < active.length; i++) {
+        const route = active[i];
         route.advancedTick = gameTime;
-        _withPathfindContext('deferred_resolver', route.owner, null, () => route.advance(GROUP_ROUTE_NODES_PER_TICK));
+        if (_groupRouteNodesTick !== gameTime) _groupRouteNodeBudget(0);
+        _groupRouteAdvance(route, 'deferred_resolver', Math.floor(_groupRouteNodesLeft / (active.length - i)));
     }
 }
 
@@ -2083,7 +2347,7 @@ function routeGroupMembers(owner, ex, ey, canWalk, members) {
     // Once per tick per route (advanceGroupRoutes may have done it already).
     if (route.advancedTick !== gameTime) {
         route.advancedTick = gameTime;
-        _withPathfindContext('player_commands', owner, null, () => route.advance(GROUP_ROUTE_NODES_PER_TICK));
+        _groupRouteAdvance(route, 'player_commands', GROUP_ROUTE_NODES_TICK / 8);
     }
     _recordPathfindCall('player_commands', performance.now() - perfStart, false);
     for (let i = 0; i < members.length; i++) {

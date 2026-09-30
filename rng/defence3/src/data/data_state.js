@@ -306,15 +306,49 @@ function addVisibilitySourceAreas(sources, wx, wy, range, light = null) {
 // +-0.3 tile window, the window visibility and the range overlay stamp, so
 // gameplay ranges match what is drawn. Ascending ids. A single-area result
 // is a shared array: callers must not modify it.
+// Every distinct list has a small integer id (0: empty) for state kept
+// in typed arrays: _sourceAreaListById[id].
 const _EMPTY_SOURCE_AREAS = Object.freeze([]);
-let _singleSourceAreaLists = [];
+const _sourceAreaListById = [_EMPTY_SOURCE_AREAS];
+let _singleSourceAreaIds = [];
 let _sourceAreaPairs = new Map();
 const _sourceAreaScratch = new Int32Array(4);
+const _sourceAreaListIds = new Map([[_EMPTY_SOURCE_AREAS, 0]]);
+function _sourceAreaListIdOf(list) {
+    const id = _sourceAreaListIds.get(list);
+    return id === undefined ? 0 : id;
+}
+function _newSourceAreaList(list) {
+    const id = _sourceAreaListById.length;
+    _sourceAreaListById.push(list); _sourceAreaListIds.set(list, id);
+    return id;
+}
 function getSourceAreaIdsAtWorld(wx, wy) {
+    return _sourceAreaListById[getSourceAreaListIdAtWorld(wx, wy)];
+}
+// The window is decided by the tile and which third of it (per axis) the
+// position is in (below .3: the tile before as well, above .7: the next),
+// so the ids are kept per tile and zone (filled on first use, for the
+// current area grid).
+let _sourceAreaZoneIds = null, _sourceAreaZoneGrid = null, _sourceAreaZoneAdm = null;
+function getSourceAreaListIdAtWorld(wx, wy) {
     const x = Number(wx) / TILE, y = Number(wy) / TILE;
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return _EMPTY_SOURCE_AREAS;
-    const minX = Math.floor(x - .3), maxX = Math.floor(x + .3);
-    const minY = Math.floor(y - .3), maxY = Math.floor(y + .3);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return 0;
+    const gx = Math.floor(x), gy = Math.floor(y);
+    const rx = x - gx, ry = y - gy;
+    const zx = rx < .3 ? 0 : rx < .7 ? 1 : 2, zy = ry < .3 ? 0 : ry < .7 ? 1 : 2;
+    if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_H) return _sourceAreaListIdOfWindow(gx - (zx === 0 ? 1 : 0), gx + (zx === 2 ? 1 : 0), gy - (zy === 0 ? 1 : 0), gy + (zy === 2 ? 1 : 0));
+    let T = _sourceAreaZoneIds;
+    if (!T || _sourceAreaZoneGrid !== areaIdGrid || _sourceAreaZoneAdm !== areaDistanceMatrix || T.length !== GRID_W * GRID_H * 9) {
+        if (T && T.length === GRID_W * GRID_H * 9) T.fill(0); else T = _sourceAreaZoneIds = new Int32Array(GRID_W * GRID_H * 9);
+        _sourceAreaZoneGrid = areaIdGrid; _sourceAreaZoneAdm = areaDistanceMatrix;
+    }
+    const k = (gy * GRID_W + gx) * 9 + zx * 3 + zy;
+    let id = T[k] - 1;
+    if (id < 0) { id = _sourceAreaListIdOfWindow(gx - (zx === 0 ? 1 : 0), gx + (zx === 2 ? 1 : 0), gy - (zy === 0 ? 1 : 0), gy + (zy === 2 ? 1 : 0)); T[k] = id + 1; }
+    return id;
+}
+function _sourceAreaListIdOfWindow(minX, maxX, minY, maxY) {
     // At most four tiles: distinct areas collected in ascending order.
     const ids = _sourceAreaScratch;
     let n = 0;
@@ -327,20 +361,25 @@ function getSourceAreaIdsAtWorld(wx, wy) {
         for (let j = n; j > i; j--) ids[j] = ids[j - 1];
         ids[i] = area; n++;
     }
-    if (n === 0) return _EMPTY_SOURCE_AREAS;
-    if (n === 1) return _singleSourceAreaLists[ids[0]] || (_singleSourceAreaLists[ids[0]] = Object.freeze([ids[0]]));
+    if (n === 0) return 0;
+    if (n === 1) {
+        let id = _singleSourceAreaIds[ids[0]];
+        if (id === undefined) { id = _singleSourceAreaIds[ids[0]] = _newSourceAreaList(Object.freeze([ids[0]])); }
+        return id;
+    }
     // Several areas (a window across borders): one shared frozen list per
     // set of areas, found through nested maps (no allocation once seen).
     let key = ids[0] * 1048576 + ids[1];
     let node = _sourceAreaPairs.get(key);
-    if (!node) _sourceAreaPairs.set(key, node = { list: null, more: null });
+    if (!node) _sourceAreaPairs.set(key, node = { id: 0, more: null });
     for (let k = 2; k < n; k++) {
         if (!node.more) node.more = new Map();
         let next = node.more.get(ids[k]);
-        if (!next) node.more.set(ids[k], next = { list: null, more: null });
+        if (!next) node.more.set(ids[k], next = { id: 0, more: null });
         node = next;
     }
-    return node.list || (node.list = Object.freeze(Array.prototype.slice.call(ids, 0, n)));
+    if (node.id === 0) node.id = _newSourceAreaList(Object.freeze(Array.prototype.slice.call(ids, 0, n)));
+    return node.id;
 }
 
 // Union of the areas within `distance` of any source area, each once: the
@@ -548,7 +587,61 @@ function initTileEntityLookup() {
     tileEntityRef = Array.from({ length: GRID_H }, () => Array(GRID_W).fill(null));
     _activeTileEntities = new Set();
     _tileEntityVersion++;
+    tileEntityIndexesReset();
     requestAdjacencyRecalc();
+}
+
+// ---- Tile entity changes, for indexes kept up to date as they happen ----
+// Every change of a tile's entity appends the tile to the journal; an index
+// keeps a cursor ({ epoch, pos }) and applies the tiles changed since. A new
+// epoch (a new lookup, cell owners replaced by a restore) means everything
+// may have changed: the indexes rebuild. The indexes hold their entries in
+// tile order, so they are the same on every peer whatever the history.
+let _teLog = [], _teLogBase = 0, _tileEntityEpoch = 1;
+function noteTileEntityChanged(gx, gy) {
+    _teLog.push(gy * GRID_W + gx);
+    // (A long journal is dropped: indexes that far behind rebuild.)
+    if (_teLog.length >= 262144) { _teLogBase += _teLog.length; _teLog = []; }
+}
+function tileEntityIndexesReset() { _tileEntityEpoch++; }
+// The tiles changed since the cursor (distinct, ascending), and the cursor
+// moved to now; null when the index must rebuild.
+function tileEntityChangesSince(c) {
+    const end = _teLogBase + _teLog.length;
+    if (c.epoch !== _tileEntityEpoch || c.pos < _teLogBase) { c.epoch = _tileEntityEpoch; c.pos = end; return null; }
+    if (c.pos === end) return _TE_NO_CHANGES;
+    const from = c.pos - _teLogBase;
+    c.pos = end;
+    const tiles = [];
+    for (let i = from; i < _teLog.length; i++) tiles.push(_teLog[i]);
+    tiles.sort((a, b) => a - b);
+    let w = 0;
+    for (let i = 0; i < tiles.length; i++) if (i === 0 || tiles[i] !== tiles[i - 1]) tiles[w++] = tiles[i];
+    tiles.length = w;
+    return tiles;
+}
+const _TE_NO_CHANGES = Object.freeze([]);
+// Index of the first entry at tile `t` or after in a list of entities in
+// tile order (gy * GRID_W + gx).
+function _tileOrderedIndexOf(list, t) {
+    let lo = 0, hi = list.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1, e = list[mid];
+        if (e.gy * GRID_W + e.gx < t) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+}
+// A copy of `list` (tile order) with the entry at tile t replaced by `e`
+// (null: removed).
+function _tileOrderedReplace(list, t, e) {
+    let i = _tileOrderedIndexOf(list, t);
+    const has = i < list.length && list[i].gy * GRID_W + list[i].gx === t;
+    if (!has && !e) return list;
+    const out = list.slice();
+    if (has && e) out[i] = e;
+    else if (has) out.splice(i, 1);
+    else out.splice(i, 0, e);
+    return out;
 }
 
 // Cell items (floor items, barracks, spawners...) in row-major tile order,
@@ -559,8 +652,26 @@ let _cellItemsRowMajor = [];
 let _cellItemsRowMajorVersion = -1;
 let _cellItemsRowMajorSet = null;
 
+const _cellItemsCursor = { epoch: -1, pos: 0 };
+// The cell item standing on tile t (the tile's cell item, an active tile
+// entity placed there), or null.
+function _cellItemAtTile(t) {
+    const gx = t % GRID_W, gy = (t - gx) / GRID_W, cell = grid[gy] && grid[gy][gx], item = cell ? cell.item : null;
+    return item && _activeTileEntities.has(item) && item.gx === gx && item.gy === gy ? item : null;
+}
 function getCellItemsRowMajor() {
-    if (_cellItemsRowMajorVersion === _tileEntityVersion && _cellItemsRowMajorSet === _activeTileEntities) return _cellItemsRowMajor;
+    const journal = typeof tileEntityChangesSince === 'function';
+    if (!journal && _cellItemsRowMajorVersion === _tileEntityVersion && _cellItemsRowMajorSet === _activeTileEntities) return _cellItemsRowMajor;
+    const changes = journal && _cellItemsRowMajorSet === _activeTileEntities ? tileEntityChangesSince(_cellItemsCursor) : null;
+    if (changes !== null) {
+        // (A new list when anything changed: a pass over the old one keeps it.)
+        let list = _cellItemsRowMajor;
+        for (let i = 0; i < changes.length; i++) list = _tileOrderedReplace(list, changes[i], _cellItemAtTile(changes[i]));
+        _cellItemsRowMajor = list;
+        _cellItemsRowMajorVersion = _tileEntityVersion;
+        return list;
+    }
+    if (journal && _cellItemsRowMajorSet !== _activeTileEntities) tileEntityChangesSince(_cellItemsCursor);
     let list = [];
     for (let item of _activeTileEntities) {
         let cell = grid[item.gy] && grid[item.gy][item.gx];
@@ -581,9 +692,29 @@ let _structuresByAreaVersion = -1;
 let _structuresByAreaSet = null;
 let _structuresByAreaCells = null;
 
+const _structuresByAreaCursor = { epoch: -1, pos: 0 };
+// The structure on tile t for getStructuresByArea (not a mine), or null.
+function _structureAtTile(t) {
+    const gx = t % GRID_W, gy = (t - gx) / GRID_W, refs = tileEntityRef[gy], e = refs ? refs[gx] : null;
+    if (!e || e.gx !== gx || e.gy !== gy) return null;
+    const type = tileEntityType[gy][gx];
+    return type === TILE_ENTITY_GOLDMINE || type === TILE_ENTITY_ASTARMINE ? null : e;
+}
 function getStructuresByArea() {
-    if (_structuresByArea && _structuresByAreaVersion === _tileEntityVersion && _structuresByAreaSet === _activeTileEntities
-        && _structuresByAreaCells === gridCellsByArea) return _structuresByArea;
+    const same = _structuresByArea && _structuresByAreaSet === _activeTileEntities && _structuresByAreaCells === gridCellsByArea;
+    const changes = same ? tileEntityChangesSince(_structuresByAreaCursor) : null;
+    if (changes !== null) {
+        // Per area, a new list where one changed (in tile order).
+        for (let i = 0; i < changes.length; i++) {
+            const t = changes[i], gx = t % GRID_W, area = getAreaIdAtTile(gx, (t - gx) / GRID_W);
+            if (area < 0) continue;
+            const next = _tileOrderedReplace(_structuresByArea[area] || [], t, _structureAtTile(t));
+            _structuresByArea[area] = next.length ? next : undefined;
+        }
+        _structuresByAreaVersion = _tileEntityVersion;
+        return _structuresByArea;
+    }
+    if (!same) tileEntityChangesSince(_structuresByAreaCursor);
     let byArea = new Array(gridCellsByArea.length);
     for (let e of _activeTileEntities) {
         let gx = e.gx, gy = e.gy, refs = tileEntityRef[gy];
@@ -594,6 +725,8 @@ function getStructuresByArea() {
         if (area < 0) continue;
         (byArea[area] || (byArea[area] = [])).push(e);
     }
+    // (Tile order: the same on every peer.)
+    for (let a = 0; a < byArea.length; a++) if (byArea[a] && byArea[a].length > 1) byArea[a].sort((p, q) => (p.gy - q.gy) || (p.gx - q.gx));
     _structuresByArea = byArea;
     _structuresByAreaVersion = _tileEntityVersion;
     _structuresByAreaSet = _activeTileEntities;
@@ -639,6 +772,25 @@ function hasHostileStructureInTileRect(owner, x0, y0, x1, y1) {
     if (!Number.isInteger(owner) || owner < 0 || owner >= playerCount) return true;
     x0 = Math.max(0, x0); y0 = Math.max(0, y0); x1 = Math.min(GRID_W - 1, x1); y1 = Math.min(GRID_H - 1, y1);
     if (x0 > x1 || y0 > y1) return false;
+    // The movement kernel's structure tables (kept up to date tile by tile):
+    // blocks holding structures hostile to the owner, then their tiles.
+    if (typeof _simMoveStructs === 'function' && typeof spatialBlockCols !== 'undefined' && spatialBlockCols > 0 && owner < spatialUnitsComplexPlayerCount) {
+        _simMoveStructs();
+        const codes = _simMoveStruct, blocks = _simMoveStructBlocks, pc = spatialUnitsComplexPlayerCount, B = SPATIAL_BLOCK_SIZE * CHUNK_SIZE;
+        if (codes && blocks && codes.length === GRID_W * GRID_H) {
+            for (let by = Math.floor(y0 / B), by1 = Math.floor(y1 / B); by <= by1; by++) for (let bx = Math.floor(x0 / B), bx1 = Math.floor(x1 / B); bx <= bx1; bx++) {
+                if (!(blocks[(by * spatialBlockCols + bx) * pc + owner] > 0)) continue;
+                for (let y = Math.max(y0, by * B), ye = Math.min(y1, by * B + B - 1); y <= ye; y++) {
+                    const row = y * GRID_W;
+                    for (let x = Math.max(x0, bx * B), xe = Math.min(x1, bx * B + B - 1); x <= xe; x++) {
+                        const c = codes[row + x];
+                        if (c !== -1 && c !== owner) return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
     let sat = _getHostileStructureSat(owner), stride = GRID_W + 1;
     return sat[(y1 + 1) * stride + x1 + 1] - sat[y0 * stride + x1 + 1] - sat[(y1 + 1) * stride + x0] + sat[y0 * stride + x0] > 0;
 }
@@ -662,6 +814,9 @@ function setTileEntity(gx, gy, type, ref) {
     tileEntityRef[gy][gx] = ref || null;
     if (ref) _activeTileEntities.add(ref);
     _tileEntityVersion++;
+    noteTileEntityChanged(gx, gy);
+    if (typeof workerWorkChanged === 'function') { if (ref) workerWorkChanged(Number.isFinite(ref.owner) ? ref.owner : -1, null, gx, gy); if (prevRef && prevRef !== ref) workerWorkChanged(Number.isFinite(prevRef.owner) ? prevRef.owner : -1, null, gx, gy); }
+    if (typeof simMoveTileEntityChanged === 'function') simMoveTileEntityChanged(gx, gy);
     _markAdjacencyDirtyAt(gx, gy, 1);
     if (typeof visCoverOnBuildingChanged === 'function') {
         if (prevRef && prevRef !== ref) visCoverOnBuildingChanged(prevRef);
@@ -676,6 +831,9 @@ function clearTileEntity(gx, gy, expectedRef = null) {
     let prevRef = tileEntityRef[gy][gx];
     if (prevRef) _activeTileEntities.delete(prevRef);
     _tileEntityVersion++;
+    noteTileEntityChanged(gx, gy);
+    if (prevRef && typeof workerWorkChanged === 'function') workerWorkChanged(Number.isFinite(prevRef.owner) ? prevRef.owner : -1, null, gx, gy);
+    if (typeof simMoveTileEntityChanged === 'function') simMoveTileEntityChanged(gx, gy);
     tileEntityType[gy][gx] = TILE_ENTITY_NONE;
     tileEntityRef[gy][gx] = null;
     if (prevRef && typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(prevRef);
@@ -815,6 +973,7 @@ let droppedItemsVersion = 0;
 function addDroppedItem(drop) {
     if (!drop) return null;
     droppedItemsVersion++;
+    if (typeof workerWorkChanged === 'function') workerWorkChanged(-1, null, Math.floor(Number(drop.gx)), Math.floor(Number(drop.gy)));
     let gx = Math.floor(Number(drop.gx));
     let gy = Math.floor(Number(drop.gy));
     if (!(gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H)) return null;

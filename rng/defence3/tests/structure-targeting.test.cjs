@@ -39,6 +39,8 @@ const ctx = vm.createContext({
         return byArea;
     },
     gameTime: 0, areaIdsWithinDistance: [], areaDistanceMatrix: new Array(8),
+    // (Only its identity is used: the source-area table's cache key.)
+    areaIdGrid: [],
     // The O(1) pre-checks: never rule anything out here (the scans are under test).
     getAreaRangeTileBox: () => [0, 0, W - 1, H - 1], hasHostileStructureInTileRect: () => true,
 });

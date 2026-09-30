@@ -1099,8 +1099,8 @@ function build3DOverlayData(bounds, alpha) {
         let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
         if (u.commandState >= CMD_MOVING && u.commandState <= CMD_ATTACK_MOVING) {
             let destX = null, destY = null;
-            if (u.path && u.path.length > 0) {
-                let lastPt = u.path[u.path.length - 1];
+            let lastPt = typeof unitDisplayDest === 'function' ? unitDisplayDest(u) : (u.path && u.path.length ? u.path[u.path.length - 1] : null);
+            if (lastPt) {
                 destX = lastPt.x * TILE + 16;
                 destY = lastPt.y * TILE + 16;
             } else if (u._pendingPathTarget) {
@@ -3895,7 +3895,8 @@ function _visCoverEnsure() {
     // Entities registered under an older generation count as unregistered.
     C.gen++;
     C.adm = areaDistanceMatrix; C.areaCount = A; C.players = n;
-    C.cover = Array.from({ length: n }, () => new Int32Array(A));
+    // (Shared: the combat scan reads it on the helpers.)
+    C.cover = Array.from({ length: n }, () => simSharedArray(Int32Array, Math.max(1, A)));
     C.steps = Array.from({ length: n }, () => new Int8Array(A).fill(-1));
     C.dense = new Int32Array(n * A * VIS_COVER_DENSE_STEPS);
     C.sparse = new Map();
@@ -3956,7 +3957,7 @@ function _visCoverAdd(p, area, steps, delta) {
 }
 
 function _visCoverApply(e, delta) {
-    let steps = e._vsR, areas = e._vsAreas;
+    let steps = e._vsR, id = e._vsListId, areas = id >= 0 ? _sourceAreaListById[id] : null;
     if (steps < 0 || !areas) return;
     for (let i = 0; i < areas.length; i++) {
         if (e._vsP1 >= 0) _visCoverAdd(e._vsP1, areas[i], steps, delta);
@@ -4008,31 +4009,95 @@ function _visCoverSync(e, isUnit) {
     if (steps < 0) area = -1;
     if (known && e._vsR === steps && e._vsA === area && e._vsP1 === p1 && e._vsP2 === p2) return;
     if (!known && steps < 0) return;
-    let areas = steps >= 0 ? getSourceAreaIdsAtWorld(wx, wy) : null;
-    // A new window zone often covers the same areas (one- and two-area
-    // lists are shared, so identity says so): only the key changes.
-    if (known && areas === e._vsAreas && e._vsR === steps && e._vsP1 === p1 && e._vsP2 === p2) { e._vsA = area; return; }
+    // Areas as the id of their shared list (see getSourceAreaListIdAtWorld).
+    let listId = steps >= 0 ? getSourceAreaListIdAtWorld(wx, wy) : -1;
+    // A new window zone often covers the same areas: only the key changes.
+    if (known && listId === e._vsListId && e._vsR === steps && e._vsP1 === p1 && e._vsP2 === p2) { e._vsA = area; return; }
     if (known) _visCoverApply(e, -1);
     else if (!isUnit) C.list.push(e);
-    if (steps < 0 && isUnit) { e._vsGen = 0; e._vsR = -1; e._vsAreas = null; return; }
+    if (steps < 0 && isUnit) { e._vsGen = 0; e._vsR = -1; e._vsListId = -1; return; }
     e._vsGen = C.gen;
     e._vsR = steps; e._vsA = area; e._vsP1 = p1; e._vsP2 = p2;
-    e._vsAreas = areas;
+    e._vsListId = listId;
     _visCoverApply(e, 1);
 }
 
+// A registered unit's window moved (slot `s` of the unit state columns
+// `c`) with the same range and watchers: its object is not needed. False
+// when it must go through _visCoverSync (not registered this generation).
+function visCoverSlotWindow(c, s, wx, wy, key) {
+    const C = _visCover;
+    if (C.syncedTick < 0 || C.adm !== areaDistanceMatrix) return true;
+    if (c.vsGen[s] !== C.gen) return false;
+    const steps = c.vsR[s];
+    if (steps < 0) return false;
+    // (Held: redone from where it is when the unit phase ends.)
+    if (_visCoverHold) { _visCoverHeldSlots.push(s); return true; }
+    const id = getSourceAreaListIdAtWorld(wx, wy), old = c.vsList[s];
+    c.vsA[s] = key;
+    if (id === old) return true;
+    const p1 = c.vsP1[s], p2 = c.vsP2[s];
+    let list = old >= 0 ? _sourceAreaListById[old] : null;
+    if (list) for (let i = 0; i < list.length; i++) {
+        if (p1 >= 0) _visCoverAdd(p1, list[i], steps, -1);
+        if (p2 >= 0) _visCoverAdd(p2, list[i], steps, -1);
+    }
+    list = _sourceAreaListById[id];
+    for (let i = 0; i < list.length; i++) {
+        if (p1 >= 0) _visCoverAdd(p1, list[i], steps, 1);
+        if (p2 >= 0) _visCoverAdd(p2, list[i], steps, 1);
+    }
+    c.vsList[s] = id;
+    return true;
+}
+
 // Hooks (simulation code only).
+// During the unit phase of a tick (the status pre-pass to the hits) the
+// coverage stands still: every unit decides by what was seen at its start,
+// whoever moved first (and the kernels, which run before the pass, decide
+// as Unit.update would). Changes wait in _visCoverHeld until it ends.
+let _visCoverHold = false;
+const _visCoverHeld = new Map(), _visCoverHeldSlots = [];
+function visCoverHoldBegin() { _visCoverHold = true; }
+function visCoverHoldEnd() {
+    _visCoverHold = false;
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    if (_visCoverHeldSlots.length > 0) {
+        const c = S ? S.columns : null;
+        for (let i = 0; i < _visCoverHeldSlots.length; i++) {
+            const s = _visCoverHeldSlots[i], u = S ? S.owners[s] : null;
+            if (!u || u.dead) continue;
+            const fx = c.x[s] / TILE, fy = c.y[s] / TILE;
+            let gx = Math.floor(fx), gy = Math.floor(fy);
+            const rx = fx - gx, ry = fy - gy, zone = (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
+            if (!(gx >= 0)) gx = 0; else if (gx >= GRID_W) gx = GRID_W - 1;
+            if (!(gy >= 0)) gy = 0; else if (gy >= GRID_H) gy = GRID_H - 1;
+            if (!visCoverSlotWindow(c, s, c.x[s], c.y[s], (gy * GRID_W + gx) * 9 + zone)) _visCoverHeld.set(u, true);
+        }
+        _visCoverHeldSlots.length = 0;
+    }
+    if (_visCoverHeld.size === 0) return;
+    for (const [e, isUnit] of _visCoverHeld) {
+        if (_visCover.syncedTick < 0 || _visCover.adm !== areaDistanceMatrix) break;
+        _visCoverSync(e, isUnit);
+    }
+    _visCoverHeld.clear();
+}
+function visCoverHoldReset() { _visCoverHold = false; _visCoverHeld.clear(); _visCoverHeldSlots.length = 0; }
 function visCoverOnUnitSpatialChanged(u) {
     if (_visCover.syncedTick < 0 || _visCover.adm !== areaDistanceMatrix) return;
+    if (_visCoverHold) { _visCoverHeld.set(u, true); return; }
     _visCoverSync(u, true);
 }
 function visCoverOnBuildingChanged(e) {
     if (!e || _visCover.syncedTick < 0 || _visCover.adm !== areaDistanceMatrix) return;
+    if (_visCoverHold) { _visCoverHeld.set(e, false); return; }
     _visCoverSync(e, false);
 }
 // Any source whose range, watcher or state changed (unit or building).
 function visCoverOnEntityChanged(e) {
     if (!e || _visCover.syncedTick < 0 || _visCover.adm !== areaDistanceMatrix) return;
+    if (_visCoverHold) { _visCoverHeld.set(e, e instanceof Unit); return; }
     _visCoverSync(e, e instanceof Unit);
 }
 
@@ -5171,6 +5236,8 @@ function applyStatusEffect(target, effect, level, baseDamage = 0, sourceOwner = 
     if (!target) return false;
     ensureStatusState(target);
     if (isEffectImmune(target, effect)) return false;
+    // An armed mover (see simMoveTryArm) is handed back to Unit.update.
+    if (typeof simMoveDisarm === 'function' && target instanceof Unit) simMoveDisarm(target);
 
     let lvl = Math.max(1, level || 1);
     let mappedDuration = _getEffectStat(sourceOwner, sourceType, lvl, effect, 'duration');

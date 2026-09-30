@@ -6,7 +6,7 @@ function initSpatialHash() {
     CHUNKS_W = Math.ceil(GRID_W / CHUNK_SIZE);
     CHUNKS_H = Math.ceil(GRID_H / CHUNK_SIZE);
     spatialUnits = [];
-    for (let i = 0; i < CHUNKS_W * CHUNKS_H; i++) spatialUnits.push([]);
+    _sxDirty = true;
     closestEnemyChunkQueryCache.clear();
 
     spatialUnitTypeToIndex = Object.create(null);
@@ -18,9 +18,8 @@ function initSpatialHash() {
     spatialUnitsComplexPlayerCount = Math.max(1, Math.floor(Number(players && players.length) || 0));
     spatialUnitsComplexStridePerPlayer = 1 + spatialUnitsComplexUnitTypeCount; // total + perUnitType
     spatialUnitsComplexStridePerChunk = spatialUnitsComplexPlayerCount * spatialUnitsComplexStridePerPlayer;
-    spatialUnitsComplex = new Int32Array((CHUNKS_W * CHUNKS_H) * spatialUnitsComplexStridePerChunk);
-    let areaCount = Array.isArray(areas) ? areas.length : 0;
-    spatialUnitsByArea = Array.from({ length: Math.max(0, areaCount) }, () => []);
+    spatialUnitsComplex = simSharedArray(Int32Array, (CHUNKS_W * CHUNKS_H) * spatialUnitsComplexStridePerChunk);
+    simParallelBind('spatial.cplx', spatialUnitsComplex);
     spatialBlockCols = Math.ceil(CHUNKS_W / SPATIAL_BLOCK_SIZE);
     spatialBlockRows = Math.ceil(CHUNKS_H / SPATIAL_BLOCK_SIZE);
     spatialBlockCounts = new Int32Array(spatialBlockCols * spatialBlockRows * spatialUnitsComplexPlayerCount);
@@ -55,50 +54,6 @@ function _regionMayHaveEnemyUnits(ownerId, minCx, minCy, maxCx, maxCy) {
     return false;
 }
 
-function _addUnitToSpatialArray(arr, u) {
-    if (!arr) return false;
-    // Arrays are sorted by id: a unit with a higher id than every member
-    // (new units, whole rebuilds in id order) goes at the end directly.
-    let n = arr.length, id = u.id;
-    if (n === 0 || arr[n - 1].id < id) { arr.push(u); return true; }
-    // Binary search for the first member with a higher id (ids are unique).
-    let lo = 0, hi = n;
-    while (lo < hi) { let mid = (lo + hi) >> 1; if (arr[mid].id < id) lo = mid + 1; else hi = mid; }
-    if (lo < n && arr[lo] === u) return false;
-    arr.splice(lo, 0, u);
-    return true;
-}
-
-function _removeUnitFromSpatialArray(arr, u) {
-    if (!arr) return false;
-    let n = arr.length, id = u.id, lo = 0, hi = n;
-    while (lo < hi) { let mid = (lo + hi) >> 1; if (arr[mid].id < id) lo = mid + 1; else hi = mid; }
-    let i = lo < n && arr[lo] === u ? lo : arr.indexOf(u);
-    if (i >= 0) {
-        arr.splice(i, 1);
-        return true;
-    }
-    return false;
-}
-
-// Area buckets also count members per owner, so enemy scans can skip areas
-// that hold only the scanning player's units (e.g. a large friendly army).
-// Indexed by owner (small integers): every moving unit reads it for each
-// area in its attack range, every tick. Unset owners read undefined.
-function _addUnitToAreaBucket(bucket, u, owner) {
-    if (!_addUnitToSpatialArray(bucket, u)) return;
-    let counts = bucket._ownerCounts || (bucket._ownerCounts = []);
-    counts[owner] = (counts[owner] || 0) + 1;
-}
-
-function _removeUnitFromAreaBucket(bucket, u, owner) {
-    if (!_removeUnitFromSpatialArray(bucket, u)) return;
-    let counts = bucket._ownerCounts;
-    if (!counts) return;
-    let n = (counts[owner] || 0) - 1;
-    counts[owner] = n > 0 ? n : undefined;
-}
-
 function getSpatialKey(wx, wy) {
     let cx = Math.floor(wx / (CHUNK_SIZE * TILE));
     let cy = Math.floor(wy / (CHUNK_SIZE * TILE));
@@ -128,12 +83,68 @@ function updateUnitSpatial(u) {
     if (!(gy >= 0)) gy = 0; else if (gy >= GRID_H) gy = GRID_H - 1;
     let tile = gy * GRID_W + gx;
     simUnitMirror(u);
-    if (tile === u._spatialTile && u._spatialEpoch === spatialEpoch && u._spatialOwner === u.owner) {
+    const c = u._us;
+    if (c) {
+        const s = u._si;
+        if (c.spEpoch[s] === spatialEpoch && c.spOwner[s] === c.owner[s] && c.sepKey[s] !== SIM_SEP_ABSENT) {
+            if (tile === c.spTile[s]) spatialSlotZone(c, s, gx, gy, zone, tile);
+            else spatialSlotMove(c, s, gx, gy, zone, tile);
+            return;
+        }
+    } else if (tile === u._spatialTile && u._spatialEpoch === spatialEpoch && u._spatialOwner === u.owner) {
         if (zone !== u._spatialZone) { u._spatialZone = zone; visCoverOnUnitSpatialChanged(u); }
         return;
     }
     u._spatialZone = zone;
     _moveUnitSpatial(u, gx, gy, tile);
+}
+
+// updateUnitSpatial for a unit by its slot, from the columns (x, y).
+function spatialSlotUpdate(c, s) {
+    const fx = c.x[s] / TILE, fy = c.y[s] / TILE;
+    let gx = Math.floor(fx), gy = Math.floor(fy);
+    const rx = fx - gx, ry = fy - gy;
+    const zone = (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
+    if (!(gx >= 0)) gx = 0; else if (gx >= GRID_W) gx = GRID_W - 1;
+    if (!(gy >= 0)) gy = 0; else if (gy >= GRID_H) gy = GRID_H - 1;
+    const tile = gy * GRID_W + gx;
+    if (c.spEpoch[s] === spatialEpoch && c.spOwner[s] === c.owner[s] && c.sepKey[s] !== SIM_SEP_ABSENT) {
+        if (tile === c.spTile[s]) spatialSlotZone(c, s, gx, gy, zone, tile);
+        else spatialSlotMove(c, s, gx, gy, zone, tile);
+        return;
+    }
+    const u = _simUnitState.owners[s];
+    if (u && !u.dead) updateUnitSpatial(u);
+}
+
+// The slot versions (unit state columns `c`, slot `s`) for an indexed unit
+// whose owner is unchanged: nothing is read from the unit object, so the
+// movement kernel's events cost no cache misses on it.
+// Same tile, window zone `zone`: a zone whose window covers the same areas
+// keeps the registered one (its mask is in the columns).
+function spatialSlotZone(c, s, gx, gy, zone, tile) {
+    if (zone === c.spZone[s] || ((c.mvZmask[s] >> zone) & 1) !== 0) return;
+    c.spZone[s] = zone;
+    if (!visCoverSlotWindow(c, s, c.x[s], c.y[s], tile * 9 + zone)) visCoverOnUnitSpatialChanged(_simUnitState.owners[s]);
+    c.mvZmask[s] = _simMoveZoneMask(gx, gy, zone);
+}
+// Another tile (chunk counts, area, key, window).
+function spatialSlotMove(c, s, gx, gy, zone, tile) {
+    const chunkKey = CHUNK_SIZE === 1 ? tile : Math.floor(gy / CHUNK_SIZE) * CHUNKS_W + Math.floor(gx / CHUNK_SIZE);
+    const oldKey = c.sepKey[s], owner = c.spOwner[s];
+    if (oldKey !== chunkKey) { _spatialCountSlot(c, s, oldKey, owner, -1); _spatialCountSlot(c, s, chunkKey, owner, 1); c.sepKey[s] = chunkKey; }
+    const row = areaIdGrid[gy], area = row ? row[gx] : -1;
+    c.spArea[s] = area >= 0 ? area : -1;
+    c.spTile[s] = tile; c.spZone[s] = zone;
+    if (!visCoverSlotWindow(c, s, c.x[s], c.y[s], tile * 9 + zone)) visCoverOnUnitSpatialChanged(_simUnitState.owners[s]);
+    c.mvZmask[s] = _simMoveZoneMask(gx, gy, zone);
+}
+function _spatialCountSlot(c, s, chunkKey, owner, delta) {
+    if (!(owner >= 0 && owner < spatialUnitsComplexPlayerCount)) return;
+    const base = chunkKey * spatialUnitsComplexStridePerChunk + owner * spatialUnitsComplexStridePerPlayer;
+    spatialUnitsComplex[base] += delta;
+    spatialUnitsComplex[base + 1 + c.spType[s]] += delta;
+    _adjustSpatialBlockCount(chunkKey, owner, delta);
 }
 
 // Per chunk and owner: unit totals and per-type counts, and the 8x8 block
@@ -150,58 +161,240 @@ function _spatialCountUnit(u, chunkKey, owner, delta) {
 function _moveUnitSpatial(u, gx, gy, tile) {
     let chunkKey = CHUNK_SIZE === 1 ? tile : Math.floor(gy / CHUNK_SIZE) * CHUNKS_W + Math.floor(gx / CHUNK_SIZE);
     let areaRow = areaIdGrid[gy], area = areaRow ? areaRow[gx] : -1;
-    if (!(area >= 0 && area < spatialUnitsByArea.length)) area = -1;
+    if (!(area >= 0)) area = -1;
     let owner = u.owner;
     let indexed = u._spatialEpoch === spatialEpoch && u._spatialKey !== undefined;
-    let oldKey = indexed ? u._spatialKey : -1, oldArea = indexed ? u._spatialAreaId : -1, oldOwner = indexed ? u._spatialOwner : -1;
+    let oldKey = indexed ? u._spatialKey : -1, oldOwner = indexed ? u._spatialOwner : -1;
     let ownerChanged = indexed && oldOwner !== owner;
-    if (indexed && (oldKey !== chunkKey || ownerChanged)) {
-        if (_removeUnitFromSpatialArray(spatialUnits[oldKey], u)) _spatialCountUnit(u, oldKey, oldOwner, -1);
-    }
-    if (indexed && oldArea >= 0 && (oldArea !== area || ownerChanged)) _removeUnitFromAreaBucket(spatialUnitsByArea[oldArea], u, oldOwner);
+    // The counts move with the unit; the unit lists are the per-tick index
+    // (spatialIndexRebuild).
+    if (indexed && (oldKey !== chunkKey || ownerChanged)) _spatialCountUnit(u, oldKey, oldOwner, -1);
     if (!indexed || oldKey !== chunkKey || ownerChanged) {
         if (!indexed || ownerChanged || u._spatialUnitTypeIdx === undefined) {
             let typeIdx = spatialUnitTypeToIndex[u.unitType];
             u._spatialUnitTypeIdx = typeIdx >= 0 ? typeIdx : spatialNormUnitTypeIndex;
         }
-        if (_addUnitToSpatialArray(spatialUnits[chunkKey], u)) _spatialCountUnit(u, chunkKey, owner, 1);
+        _spatialCountUnit(u, chunkKey, owner, 1);
     }
-    if (area >= 0 && (!indexed || oldArea !== area || ownerChanged)) _addUnitToAreaBucket(spatialUnitsByArea[area], u, owner);
     u._spatialTile = tile;
     u._spatialKey = chunkKey;
     u._spatialAreaId = area;
     u._spatialOwner = owner;
     u._spatialEpoch = spatialEpoch;
     simUnitSetSepKey(u, chunkKey, u.isFlying ? 1 : (u.unitType === 'mole' ? 2 : 0));
+    simMoveDisarm(u);
+    if (u._us) u._us.mvZmask[u._si] = _simMoveZoneMask(gx, gy, u._spatialZone);
     visCoverOnUnitSpatialChanged(u);
 }
 
 function removeUnitSpatial(u) {
     let indexed = u._spatialEpoch === spatialEpoch && u._spatialKey !== undefined;
-    if (indexed) {
-        if (_removeUnitFromSpatialArray(spatialUnits[u._spatialKey], u)) _spatialCountUnit(u, u._spatialKey, u._spatialOwner, -1);
-        let area = u._spatialAreaId;
-        if (area >= 0 && area < spatialUnitsByArea.length) _removeUnitFromAreaBucket(spatialUnitsByArea[area], u, u._spatialOwner);
-    }
+    if (indexed) _spatialCountUnit(u, u._spatialKey, u._spatialOwner, -1);
     u._spatialKey = undefined;
     u._spatialAreaId = undefined;
     u._spatialTile = -1;
     u._spatialEpoch = 0;
     simUnitSetSepKey(u, SIM_SEP_ABSENT, 0);
+    simMoveDisarm(u);
+    if (u._us) u._us.mvZmask[u._si] = 0;
     if (indexed) visCoverOnUnitSpatialChanged(u);
 }
 
 // The area layout was rebuilt (new area buckets): every indexed unit joins
 // the bucket of its tile's area, in id order.
 function rebuildUnitAreaBuckets() {
-    let sorted = units.filter(u => u && u._spatialEpoch === spatialEpoch && u._spatialKey !== undefined).sort((a, b) => a.id - b.id);
-    for (let u of sorted) {
+    if (typeof resetUnitZoneMasks === 'function') resetUnitZoneMasks();
+    for (let u of units) {
+        if (!u || u._spatialEpoch !== spatialEpoch || u._spatialKey === undefined) continue;
         let t = u._spatialTile, gx = t % GRID_W, gy = (t - gx) / GRID_W;
         let row = areaIdGrid[gy], area = row ? row[gx] : -1;
-        if (!(area >= 0 && area < spatialUnitsByArea.length)) area = -1;
-        u._spatialAreaId = area;
-        if (area >= 0) _addUnitToAreaBucket(spatialUnitsByArea[area], u, u._spatialOwner);
+        u._spatialAreaId = area >= 0 ? area : -1;
     }
+    _sxDirty = true;
+}
+
+// ---- The unit index: units by chunk and by area, rebuilt once a tick ----
+// spatialIndexRebuild runs at the start of each tick (gameTick), from the
+// units array, their positions and the area grid alone: every unit not
+// dead, by the chunk and area of the tile it stands on, in the order of the
+// units array within a chunk or area (which every peer shares). So a peer
+// that restored a snapshot builds the same index as the others. A unit
+// that moves to another chunk later in the tick is listed under the old one
+// until the next rebuild (queries pad by a tile and read live positions;
+// the collision pass allows for a tick's movement); units added later join
+// then. Epoch stamps keep a rebuild O(units): a chunk or area not stamped
+// this epoch is empty.
+let _sxEpoch = 1, _sxDirty = true;
+let _sxStamp = new Int32Array(0), _sxStart = new Int32Array(0), _sxCount = new Int32Array(0), _sxList = [];
+let _sxAStamp = new Int32Array(0), _sxAStart = new Int32Array(0), _sxACount = new Int32Array(0), _sxAList = [];
+let _sxAOwner = new Int32Array(0), _sxKeys = new Int32Array(0), _sxAreas = new Int32Array(0);
+let _sxFill = new Int32Array(0), _sxAFill = new Int32Array(0), _sxAreaCap = 0, _sxPlayers = 0;
+// Per entry (shared with the collision kernels): its unit's slot (-1 none)
+// and chunk; the number of entries.
+let _sxESlot = new Int32Array(0), _sxEKey = new Int32Array(0), _sxSi = new Int32Array(0), _sxListed = 0;
+function spatialIndexEntries() { spatialIndexEnsure(); return _sxListed; }
+
+function spatialIndexEnsure() { if (_sxDirty) spatialIndexRebuild(); }
+function spatialIndexInvalidate() { _sxDirty = true; }
+
+// Large worlds build it with the kernels (SIM_KERNEL_INDEX_*): the same
+// result (chunk and area ranges in key order, each in units order).
+let _sxPar = null;
+function spatialIndexRebuild() {
+    _sxDirty = false;
+    const n = units.length;
+    if (n >= 4096 && _simUnitState && typeof SIM_KERNEL_INDEX_COUNT === 'number' && _spatialIndexRebuildParallel()) return;
+    _spatialIndexRebuildSerial();
+}
+function _spatialIndexRebuildParallel() {
+    const nChunks = CHUNKS_W * CHUNKS_H, n = units.length, players = spatialUnitsComplexPlayerCount;
+    const A = Math.max(areaDistanceMatrix ? areaDistanceMatrix.length : 0, Array.isArray(areas) ? areas.length : 0, 1);
+    let X = _sxPar;
+    if (!X || X.nChunks !== nChunks || X.A < A || X.players !== players) {
+        X = _sxPar = { nChunks, A, players, bad: simSharedArray(Int32Array, 1),
+            stamp: simSharedArray(Int32Array, nChunks), start: simSharedArray(Int32Array, nChunks), cnt: simSharedArray(Int32Array, nChunks), fill: simSharedArray(Int32Array, nChunks),
+            astamp: new Int32Array(A), astart: simSharedArray(Int32Array, A), acnt: simSharedArray(Int32Array, A), afill: simSharedArray(Int32Array, A), aown: simSharedArray(Int32Array, A * players),
+            keys: null, areas: null, ent: null, aent: null, cap: 0 };
+        for (const k of ['bad', 'start', 'cnt', 'fill', 'astart', 'acnt', 'afill', 'aown']) simParallelBind('ix.' + k, X[k]);
+        _sxEpoch = 1;
+    }
+    if (X.cap < n) {
+        X.cap = Math.max(4096, n * 2);
+        for (const k of ['keys', 'areas', 'ent', 'aent']) { X[k] = simSharedArray(Int32Array, X.cap); simParallelBind('ix.' + k, X[k]); }
+    }
+    if (_sxESlot.length < n) { _sxESlot = simSharedArray(Int32Array, Math.max(1024, n * 2)); _sxEKey = simSharedArray(Int32Array, Math.max(1024, n * 2)); }
+    simParallelBind('sep.eslot', _sxESlot); simParallelBind('sep.ekey', _sxEKey);
+    const slots = _unitSlotMapEnsure();
+    simParallelBind('ix.slots', slots);
+    simParallelBind('ix.agrid', _spatialAreaGridFlat());
+    // The query views are the parallel build's arrays.
+    _sxStamp = X.stamp; _sxStart = X.start; _sxCount = X.cnt;
+    _sxAStamp = X.astamp; _sxAStart = X.astart; _sxACount = X.acnt; _sxAOwner = X.aown; _sxAreaCap = A; _sxPlayers = players;
+    if (++_sxEpoch >= 0x3fffffff) { _sxEpoch = 1; X.stamp.fill(0); X.astamp.fill(0); }
+    const ep = _sxEpoch, P = _simParams;
+    const CJ = 65536, AJ = 16384, cj = Math.ceil(nChunks / CJ), aj = Math.ceil(A / AJ), UJ = 8192;
+    P[0] = n; P[1] = UJ; P[2] = nChunks; P[3] = A; P[4] = players; P[5] = SIM_SEP_ABSENT; P[6] = cj; P[7] = CJ; P[8] = AJ;
+    P[9] = TILE; P[10] = GRID_W; P[11] = GRID_H; P[12] = CHUNK_SIZE; P[13] = CHUNKS_W;
+    X.bad[0] = 0;
+    // Each unit's chunk and area (the kernels), then the units sorted by
+    // chunk and by area with the stable parallel radix sort (units order
+    // within one): ranges in key order, as the serial build lists them.
+    simParallelRun(SIM_KERNEL_INDEX_KEYS, Math.ceil(n / UJ));
+    // A unit without a state slot (none in play, normally): the serial build.
+    if (X.bad[0]) return false;
+    const list = _sxList, listA = _sxAList, keys = X.keys, arOf = X.areas, cnt = X.cnt, start = X.start, stamp = X.stamp;
+    if (list.length < n) list.length = n;
+    if (listA.length < n) listA.length = n;
+    let order = simSpatialStableOrder(keys, n, nChunks, 1), pos = 0, prev = -1;
+    for (; pos < n; pos++) {
+        const i = order[pos], k = keys[i];
+        if (k >= nChunks) break;
+        if (k !== prev) { start[k] = pos; stamp[k] = ep; cnt[k] = 0; prev = k; }
+        cnt[k]++;
+        list[pos] = units[i]; _sxESlot[pos] = slots[i]; _sxEKey[pos] = k;
+    }
+    order = simSpatialStableOrder(arOf, n, A, 2);
+    const acnt = X.acnt, astart = X.astart, astamp = X.astamp, aown = X.aown, OWN = _simUnitState.columns.owner;
+    let posA = 0;
+    prev = -1;
+    for (; posA < n; posA++) {
+        const i = order[posA], a2 = arOf[i];
+        if (a2 >= A) break;
+        if (a2 !== prev) { astart[a2] = posA; astamp[a2] = ep; acnt[a2] = 0; aown.fill(0, a2 * players, a2 * players + players); prev = a2; }
+        acnt[a2]++;
+        const o = OWN[slots[i]];
+        if (o >= 0 && o < players) aown[a2 * players + o]++;
+        listA[posA] = units[i];
+    }
+    _sxListed = pos;
+    for (let k = pos; k < list.length; k++) list[k] = undefined;
+    for (let k = posA; k < listA.length; k++) listA[k] = undefined;
+    return true;
+}
+function _spatialIndexRebuildSerial() {
+    const nChunks = CHUNKS_W * CHUNKS_H, n = units.length, players = spatialUnitsComplexPlayerCount;
+    if (_sxPar) {
+        // Back from the parallel build: arrays of its own.
+        _sxPar = null; _sxStamp = new Int32Array(0); _sxAreaCap = 0;
+    }
+    if (_sxStamp.length !== nChunks) {
+        _sxStamp = simSharedArray(Int32Array, nChunks); _sxStart = simSharedArray(Int32Array, nChunks); _sxCount = simSharedArray(Int32Array, nChunks); _sxFill = new Int32Array(nChunks);
+    }
+    const A = Math.max(areaDistanceMatrix ? areaDistanceMatrix.length : 0, Array.isArray(areas) ? areas.length : 0, 1);
+    if (_sxAreaCap < A || _sxPlayers !== players) {
+        _sxAreaCap = A; _sxPlayers = players;
+        _sxAStamp = new Int32Array(A); _sxAStart = new Int32Array(A); _sxACount = new Int32Array(A); _sxAFill = new Int32Array(A);
+        _sxAOwner = new Int32Array(A * players);
+    }
+    if (_sxKeys.length < n) { _sxKeys = new Int32Array(n * 2); _sxAreas = new Int32Array(n * 2); _sxSi = new Int32Array(n * 2); }
+    if (_sxESlot.length < n) { _sxESlot = simSharedArray(Int32Array, Math.max(1024, n * 2)); _sxEKey = simSharedArray(Int32Array, Math.max(1024, n * 2)); }
+    if (++_sxEpoch >= 0x3fffffff) { _sxEpoch = 1; _sxStamp.fill(0); _sxAStamp.fill(0); }
+    const ep = _sxEpoch;
+    const S = _simUnitState, slots = S ? _unitSlotMapEnsure() : null, owners = S ? S.owners : null;
+    const keys = _sxKeys, arOf = _sxAreas;
+    // Counts per chunk and area (and owners per area).
+    for (let i = 0; i < n; i++) {
+        const u = units[i];
+        const si = slots ? slots[i] : -1;
+        _sxSi[i] = si >= 0 && owners[si] === u ? si : -1;
+        if (!u || u.dead) { keys[i] = -1; continue; }
+        let gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
+        if (!(gx >= 0)) gx = 0; else if (gx >= GRID_W) gx = GRID_W - 1;
+        if (!(gy >= 0)) gy = 0; else if (gy >= GRID_H) gy = GRID_H - 1;
+        const key = CHUNK_SIZE === 1 ? gy * GRID_W + gx : Math.floor(gy / CHUNK_SIZE) * CHUNKS_W + Math.floor(gx / CHUNK_SIZE);
+        const owner = u.owner;
+        if (!(key >= 0 && key < nChunks)) { keys[i] = -1; continue; }
+        keys[i] = key;
+        if (_sxStamp[key] !== ep) { _sxStamp[key] = ep; _sxCount[key] = 0; }
+        _sxCount[key]++;
+        const row = areaIdGrid[gy], area = row ? row[gx] : -1;
+        if (!(area >= 0 && area < A)) { arOf[i] = -1; continue; }
+        arOf[i] = area;
+        if (_sxAStamp[area] !== ep) { _sxAStamp[area] = ep; _sxACount[area] = 0; _sxAOwner.fill(0, area * players, area * players + players); }
+        _sxACount[area]++;
+        if (owner >= 0 && owner < players) _sxAOwner[area * players + owner]++;
+    }
+    // Ranges in order of first appearance (a range's count is negated
+    // once placed), then the members from each range's start.
+    let pos = 0, posA = 0;
+    const fill = _sxFill, fillA = _sxAFill;
+    for (let i = 0; i < n; i++) {
+        const key = keys[i];
+        if (key < 0) continue;
+        const c = _sxCount[key];
+        if (c > 0) { _sxStart[key] = pos; fill[key] = pos; pos += c; _sxCount[key] = -c; }
+        const a = arOf[i];
+        if (a < 0) continue;
+        const ca = _sxACount[a];
+        if (ca > 0) { _sxAStart[a] = posA; fillA[a] = posA; posA += ca; _sxACount[a] = -ca; }
+    }
+    const list = _sxList, listA = _sxAList;
+    if (list.length < pos) list.length = pos;
+    if (listA.length < posA) listA.length = posA;
+    for (let i = 0; i < n; i++) {
+        const key = keys[i];
+        if (key < 0) continue;
+        const u = units[i], e = fill[key]++;
+        list[e] = u; _sxESlot[e] = _sxSi[i]; _sxEKey[e] = key;
+        if (_sxCount[key] < 0) _sxCount[key] = -_sxCount[key];
+        const a = arOf[i];
+        if (a < 0) continue;
+        listA[fillA[a]++] = u;
+        if (_sxACount[a] < 0) _sxACount[a] = -_sxACount[a];
+    }
+    _sxListed = pos;
+    for (let k = pos; k < list.length; k++) list[k] = undefined;
+    for (let k = posA; k < listA.length; k++) listA[k] = undefined;
+}
+
+// The area grid as one shared array (tile -> area, -1 none), for the kernels.
+let _spatialAreaFlat = null, _spatialAreaFlatOf = null;
+function _spatialAreaGridFlat() {
+    if (_spatialAreaFlatOf === areaIdGrid && _spatialAreaFlat && _spatialAreaFlat.length === GRID_W * GRID_H) return _spatialAreaFlat;
+    const f = simSharedArray(Int32Array, Math.max(1, GRID_W * GRID_H));
+    for (let y = 0; y < GRID_H; y++) { const row = areaIdGrid[y]; if (row) f.set(row.length === GRID_W ? row : Array.from({ length: GRID_W }, (_, x) => row[x] ?? -1), y * GRID_W); else f.fill(-1, y * GRID_W, (y + 1) * GRID_W); }
+    _spatialAreaFlat = f; _spatialAreaFlatOf = areaIdGrid;
+    return f;
 }
 
 function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
@@ -225,14 +418,16 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
     let areaOnly = !!(opts && opts.areaOnly);
     let areaIds = getAreaIdsWithinDistanceOfSources(sources, maxDistance);
     if (!areaIds || areaIds.length <= 0) return false;
-
-
+    spatialIndexEnsure();
+    const ep = _sxEpoch, players = _sxPlayers, cap = _sxAreaCap, listA = _sxAList;
     for (let i = 0; i < areaIds.length; i++) {
         let areaId = areaIds[i];
-        let bucket = spatialUnitsByArea[areaId];
-        if (!bucket || bucket.length <= 0) continue;
-        if (enemyFilter >= 0 && bucket._ownerCounts && bucket._ownerCounts[enemyFilter] === bucket.length) continue;
-        for (let u of bucket) {
+        if (!(areaId >= 0 && areaId < cap) || _sxAStamp[areaId] !== ep) continue;
+        let k0 = _sxAStart[areaId], cnt = _sxACount[areaId];
+        // Only the scanning player's own units there.
+        if (enemyFilter >= 0 && enemyFilter < players && _sxAOwner[areaId * players + enemyFilter] === cnt) continue;
+        for (let k = k0, k1 = k0 + cnt; k < k1; k++) {
+            let u = listA[k];
             if (!includeDead && u.dead) continue;
             if (playerFilter >= 0 && u.owner !== playerFilter) continue;
             if (enemyFilter >= 0 && u.owner === enemyFilter) continue;
@@ -273,9 +468,12 @@ function getUnitsInRange(wx, wy, rangePx) {
     let maxCy = Math.floor((wy + r) / (CHUNK_SIZE * TILE));
     minCx = Math.max(0, minCx); maxCx = Math.min(CHUNKS_W - 1, maxCx);
     minCy = Math.max(0, minCy); maxCy = Math.min(CHUNKS_H - 1, maxCy);
+    spatialIndexEnsure();
     for (let cy = minCy; cy <= maxCy; cy++) {
         for (let cx = minCx; cx <= maxCx; cx++) {
-            for (let u of spatialUnits[cy * CHUNKS_W + cx]) result.push(u);
+            let ck = cy * CHUNKS_W + cx;
+            if (_sxStamp[ck] !== _sxEpoch) continue;
+            for (let k = _sxStart[ck], k1 = k + _sxCount[ck]; k < k1; k++) result.push(_sxList[k]);
         }
     }
     return result;
@@ -322,7 +520,9 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
     }
     let useFilters = canCplx && (hasPlayerFilter || hasEnemyFilter || hasUnitTypeFilter);
     let typeOff = 1 + unitTypeFilterIdx; // only valid when hasUnitTypeFilter
-    let chunks = spatialUnits, chunkCols = CHUNKS_W;
+    let chunkCols = CHUNKS_W;
+    spatialIndexEnsure();
+    const sxEp = _sxEpoch, sxStamp = _sxStamp, sxStart = _sxStart, sxCount = _sxCount, sxList = _sxList;
 
     // Hot path: exact alive scan for one player (healer/ally scans).
     if (!includeDead && exact && !predicate && hasPlayerFilter && !hasEnemyFilter && !hasUnitTypeFilter) {
@@ -335,14 +535,14 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
                     let pb = cb + playerFilter * cplxSP;
                     if (cplx[pb] <= 0) continue;
                 }
-                let chunk = chunks[ck];
-                if (!chunk || chunk.length <= 0) continue;
+                if (sxStamp[ck] !== sxEp) continue;
                 let minX = cx * cws, minY = cy * cws;
                 let nx = wx < minX ? minX : (wx > minX + cws ? minX + cws : wx);
                 let ny = wy < minY ? minY : (wy > minY + cws ? minY + cws : wy);
                 let ddx = wx - nx, ddy = wy - ny;
                 if (ddx * ddx + ddy * ddy > radiusSq) continue;
-                for (let u of chunk) {
+                for (let k = sxStart[ck], k1 = k + sxCount[ck]; k < k1; k++) {
+                    let u = sxList[k];
                     if (u.owner !== playerFilter || u.dead) continue;
                     let dx = u.x - wx, dy = u.y - wy;
                     let d2 = dx * dx + dy * dy;
@@ -381,14 +581,14 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
                         if (!ok) continue;
                     }
                 }
-                let chunk = chunks[ck];
-                if (!chunk || chunk.length <= 0) continue;
+                if (sxStamp[ck] !== sxEp) continue;
                 let minX = cx * cws, minY = cy * cws;
                 let nx = wx < minX ? minX : (wx > minX + cws ? minX + cws : wx);
                 let ny = wy < minY ? minY : (wy > minY + cws ? minY + cws : wy);
                 let ddx = wx - nx, ddy = wy - ny;
                 if (ddx * ddx + ddy * ddy > radiusSq) continue;
-                for (let u of chunk) {
+                for (let k = sxStart[ck], k1 = k + sxCount[ck]; k < k1; k++) {
+                    let u = sxList[k];
                     if (hasPlayerFilter && u.owner !== playerFilter) continue;
                     if (hasEnemyFilter && u.owner === enemyFilter) continue;
                     if (hasUnitTypeFilter && u.unitType !== unitTypeFilter) continue;
@@ -429,8 +629,7 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
                     if (!ok) continue;
                 }
             }
-            let chunk = chunks[ck];
-            if (!chunk || chunk.length <= 0) continue;
+            if (sxStamp[ck] !== sxEp) continue;
             if (exact) {
                 let minX = cx * cws, minY = cy * cws;
                 let nx = wx < minX ? minX : (wx > minX + cws ? minX + cws : wx);
@@ -438,7 +637,8 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
                 let ddx = wx - nx, ddy = wy - ny;
                 if (ddx * ddx + ddy * ddy > radiusSq) continue;
             }
-            for (let u of chunk) {
+            for (let k = sxStart[ck], k1 = k + sxCount[ck]; k < k1; k++) {
+                let u = sxList[k];
                 if (hasPlayerFilter && u.owner !== playerFilter) continue;
                 if (hasEnemyFilter && u.owner === enemyFilter) continue;
                 if (hasUnitTypeFilter && u.unitType !== unitTypeFilter) continue;
@@ -519,12 +719,14 @@ function _computeClosestEnemyUnitByChunks(ownerId, wx, wy, rangeSq, minCx, minCy
         }
     }
 
+    spatialIndexEnsure();
     for (let c = 0; c < count; c++) {
-        let chunk = spatialUnits[candidates[c * 2 + 1]];
-        if (!chunk || chunk.length <= 0) continue;
+        let ck = candidates[c * 2 + 1];
+        if (_sxStamp[ck] !== _sxEpoch) continue;
         let best = null;
         let bestD2 = Infinity;
-        for (let u of chunk) {
+        for (let k = _sxStart[ck], k1 = k + _sxCount[ck]; k < k1; k++) {
+            let u = _sxList[k];
             if (!u || u.dead || u.owner === ownerId) continue;
             let ugx = Math.floor(u.x / TILE);
             let ugy = Math.floor(u.y / TILE);
@@ -546,7 +748,7 @@ function _computeClosestEnemyUnitByChunks(ownerId, wx, wy, rangeSq, minCx, minCy
 function _findClosestEnemyUnitByChunks(owner, wx, wy, rangePx) {
     let ownerId = Math.floor(Number(owner));
     if (ownerId < 0 || ownerId >= spatialUnitsComplexPlayerCount) return null;
-    if (!(spatialUnits && spatialUnits.length > 0)) return null;
+    if (!(CHUNKS_W * CHUNKS_H > 0)) return null;
 
     let cws = CHUNK_SIZE * TILE;
     let r = Math.max(0, Number(rangePx) || 0);

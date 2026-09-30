@@ -58,7 +58,9 @@ assert.deepEqual(crowdRun(),crowd,'crowd resolution replays deterministically');
     }
     assert.deepEqual(crowd2.map(u=>[u.x,u.y]),crowd.positions,'separation does not depend on bucket order');
 }
-assert.ok(crowd.maxPacked<65,`crowd should spread beyond 2x2 tiles: ${crowd.maxPacked}`);
+// (Units at rest give way to movers pressing into them, so a pile that is
+// pressed from every side for ever, as here, packs a little tighter.)
+assert.ok(crowd.maxPacked<70,`crowd should spread beyond 2x2 tiles: ${crowd.maxPacked}`);
 assert.ok(crowd.meanNearest>5,`nearest-neighbor spacing recovers promptly: ${crowd.meanNearest}`);
 // A huge accumulated push cannot skip a wall even if its endpoint is empty.
 c.canUnitOccupyTile=(_u,x)=>x!==1;

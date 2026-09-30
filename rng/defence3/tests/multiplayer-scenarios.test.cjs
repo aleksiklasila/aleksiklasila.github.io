@@ -257,12 +257,14 @@ const ECONOMY = {
         await world.run(3000);
         assert.equal(guests[0].eval(`JSON.stringify(units.filter(u => ${JSON.stringify(held)}.includes(u.id)).map(u => [u.x, u.y]))`), pos, 'held units stay put');
         q(guests[0], { action: 'stop', unitIds: held });
-        // Everyone attacks the other base.
+        // Everyone attack-moves to the middle between the kings (toward the
+        // other base: on the way to it both armies meet there, whichever of
+        // the equally short ways each takes).
         const deathsBefore = host.eval('units.length');
         for (const inst of all) {
-            const enemyKing = JSON.parse(inst.eval(`JSON.stringify((u => ({ x: u.x, y: u.y }))(units.find(u => u.owner !== localPlayerId && u.isKing)))`));
+            const mid = JSON.parse(inst.eval(`JSON.stringify((() => { const k = units.filter(u => u.isKing); return { x: (k[0].x + k[1].x) / 2, y: (k[0].y + k[1].y) / 2 }; })())`));
             const mine = JSON.parse(inst.eval(`JSON.stringify(units.filter(u => u.owner === localPlayerId && !u.isKing).map(u => u.id))`));
-            q(inst, { action: 'attackMove', unitIds: mine, targetX: enemyKing.x, targetY: enemyKing.y });
+            q(inst, { action: 'attackMove', unitIds: mine, targetX: mid.x, targetY: mid.y });
         }
         await until(world, () => host.eval('units.length') < deathsBefore - 3 || host.eval('gameOver'), 90000, 'combat kills units');
         assertLockstepClean(world, all, 'split/merge/hold/combat');

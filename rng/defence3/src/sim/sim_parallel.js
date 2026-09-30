@@ -35,16 +35,468 @@ const _simParams = simSharedArray(Float64Array, 64);
 const SIM_KERNELS = [];
 const SIM_KERNEL_VISIBILITY = 0, SIM_KERNEL_SEPARATION = 1, SIM_KERNEL_UNIT_FRAME = 2, SIM_KERNEL_UNIT_PACK = 3;
 const SIM_KERNEL_SPATIAL_HISTOGRAM = 4, SIM_KERNEL_SPATIAL_SCATTER = 5, SIM_KERNEL_SEPARATION_PREPARE = 6;
-const SIM_KERNEL_SEPARATION_FINISH = 7;
+const SIM_KERNEL_SEPARATION_FINISH = 7, SIM_KERNEL_MOVE = 8, SIM_KERNEL_SEPARATION_YIELD = 9;
+const SIM_KERNEL_INDEX_CLEAR = 10, SIM_KERNEL_INDEX_COUNT = 11, SIM_KERNEL_INDEX_SCATTER = 12, SIM_KERNEL_INDEX_ORDER = 13;
+const SIM_KERNEL_EFF_COUNT = 14, SIM_KERNEL_SNAP_REGION = 19, SIM_KERNEL_COMBAT_SCAN = 20, SIM_KERNEL_INDEX_KEYS = 23;
+const SIM_KERNEL_STATUS = 24;
+
+// One tick of an armed mover (see simMoveTryArm in unit.js): Unit.update
+// for a unit marching along its path with nothing to react to, straight on
+// the columns. It keeps a window of the path's nodes (mvNodes, path
+// indices mvBase..), follows it like followPath and _followPathStep (the
+// node scan when its tile or node changed, corridor and lane targets, the
+// arrival step), checks the floor of a tile it enters and, for shooters and
+// attack-movers, whether anything hostile may be in reach (per-block
+// counts). Anything else leaves the whole tick to Unit.update: the kernel
+// works on locals and writes nothing then (mvOn 0, mvOut 0). Written:
+// position, speed, path index, node steps taken (mvSpent, charged by the
+// main thread) and mvOut: 1 moved, 2 moved into a window zone covering
+// other areas, 3 moved into another tile, 4 into a wall tile (x, y not yet
+// quantized; the main thread pushes it out).
+// Flow navigation (see flownav.js): the next tile from t toward dest, -1
+// none. dfield: the destination field (costs over the box bx, by, bw x bh),
+// used inside its box; elsewhere the cluster hop and the exit's local field.
+function simNavStep(W, C, cw, nc, hop, fields, nodeBase, nodeTile, nodePair, dfield, doff, bx, by, bw, bh, t, dest) {
+    if (t === dest) return -1;
+    const tx = t % W, ty = (t - tx) / W;
+    if (dfield) {
+        const lx = tx - bx, ly = ty - by;
+        if (lx >= 0 && ly >= 0 && lx < bw && ly < bh) {
+            const o = doff + ly * bw + lx, here = dfield[o];
+            if (here !== 0xFFFF) {
+                let best = -1, bv = here;
+                if (lx + 1 < bw && dfield[o + 1] < bv) { bv = dfield[o + 1]; best = t + 1; }
+                if (lx > 0 && dfield[o - 1] < bv) { bv = dfield[o - 1]; best = t - 1; }
+                if (ly + 1 < bh && dfield[o + bw] < bv) { bv = dfield[o + bw]; best = t + W; }
+                if (ly > 0 && dfield[o - bw] < bv) { bv = dfield[o - bw]; best = t - W; }
+                return best;
+            }
+        }
+    }
+    const cxi = (tx / C) | 0, cyi = (ty / C) | 0, cf = cyi * cw + cxi;
+    const dx = dest % W, dy = (dest - dx) / W, ct = ((dy / C) | 0) * cw + ((dx / C) | 0);
+    const e = hop[cf * nc + ct];
+    if (e >= 254) return -1;
+    const node = nodeBase[cf] + e;
+    if (nodeTile[node] === t) { const p = nodePair[node]; return p >= 0 ? nodeTile[p] : -1; }
+    const off = node * C * C, lx = tx - cxi * C, ly = ty - cyi * C;
+    let best = -1, bv = fields[off + ly * C + lx];
+    if (lx + 1 < C && fields[off + ly * C + lx + 1] < bv) { bv = fields[off + ly * C + lx + 1]; best = t + 1; }
+    if (lx > 0 && fields[off + ly * C + lx - 1] < bv) { bv = fields[off + ly * C + lx - 1]; best = t - 1; }
+    if (ly + 1 < C && fields[off + (ly + 1) * C + lx] < bv) { bv = fields[off + (ly + 1) * C + lx]; best = t + W; }
+    if (ly > 0 && fields[off + (ly - 1) * C + lx] < bv) { bv = fields[off + (ly - 1) * C + lx]; best = t - W; }
+    return best;
+}
+
+// Whether tile t's whole 3x3 block is open terrain (see _isTileBlockOpen).
+function _simOpenBlock(WALL, t, W, H) {
+    const x = t % W, y = (t - x) / W;
+    if (x < 1 || y < 1 || x >= W - 1 || y >= H - 1) return false;
+    for (let yy = y - 1; yy <= y + 1; yy++) { const r = yy * W; if (WALL[r + x - 1] | WALL[r + x] | WALL[r + x + 1]) return false; }
+    return true;
+}
+
+// Window node i of a unit (window at nb, path indices base..base+wl-1):
+// its tile key, -2 when the window does not hold it.
+function _simMoveNode(NODES, nb, base, wl, i) { return (i >= base && i < base + wl) ? NODES[nb + i - base] : -2; }
+// Whether node i is roomy (see _isPathNodeRoomy): 1 yes, 0 no, -1 unknown.
+function _simMoveRoomy(NODES, WALL, nb, base, wl, len, W, H, i) {
+    if (i + 1 >= len) return 0;
+    const k = _simMoveNode(NODES, nb, base, wl, i), nk = _simMoveNode(NODES, nb, base, wl, i + 1);
+    if (k < 0 || nk < 0) return -1;
+    const kx = k % W, ky = (k - kx) / W, nx = nk % W, ny = (nk - nx) / W;
+    if (Math.abs(nx - kx) + Math.abs(ny - ky) !== 1) return 0;
+    if (kx < 1 || ky < 1 || kx >= W - 1 || ky >= H - 1) return 0;
+    for (let yy = ky - 1; yy <= ky + 1; yy++) { const r = yy * W; if (WALL[r + kx - 1] | WALL[r + kx] | WALL[r + kx + 1]) return 0; }
+    return 1;
+}
+// Whether area b is within k steps of area a (data_state.js
+// isAreaWithinDistance) on the area graph area.off / area.nb (CSR): 1 yes,
+// 0 no, -1 not worked out here (k > 2).
+function _simAreaNear(OFF, NB, a, b, k) {
+    if (a === b) return 1;
+    if (k <= 0) return 0;
+    const a0 = OFF[a], a1 = OFF[a + 1];
+    for (let i = a0; i < a1; i++) if (NB[i] === b) return 1;
+    if (k === 1) return 0;
+    if (k > 2) return -1;
+    for (let i = a0; i < a1; i++) {
+        const c = NB[i];
+        for (let j = OFF[c], j1 = OFF[c + 1]; j < j1; j++) if (NB[j] === b) return 1;
+    }
+    return 0;
+}
+// isWorldTargetWithinAreaRange: a target at (tx, ty) within k area steps of
+// any area of the source window at (x, y) (the tile, and the one before or
+// after it on each axis nearer than .3 of a tile to that side). 1, 0, -1.
+function _simInAreaRange(AG, OFF, NB, W, H, tile, x, y, tx, ty, k) {
+    const tgx = Math.floor(tx / tile), tgy = Math.floor(ty / tile);
+    if (tgx < 0 || tgy < 0 || tgx >= W || tgy >= H) return 0;
+    const ta = AG[tgy * W + tgx];
+    if (!(ta >= 0)) return 0;
+    const fx = x / tile, fy = y / tile, gx = Math.floor(fx), gy = Math.floor(fy), rx = fx - gx, ry = fy - gy;
+    const x0 = rx < .3 ? gx - 1 : gx, x1 = rx < .7 ? gx : gx + 1, y0 = ry < .3 ? gy - 1 : gy, y1 = ry < .7 ? gy : gy + 1;
+    let unknown = 0;
+    for (let yy = y0; yy <= y1; yy++) {
+        if (yy < 0 || yy >= H) continue;
+        for (let xx = x0; xx <= x1; xx++) {
+            if (xx < 0 || xx >= W) continue;
+            const a = AG[yy * W + xx];
+            if (!(a >= 0)) continue;
+            const r = _simAreaNear(OFF, NB, a, ta, k);
+            if (r === 1) return 1;
+            if (r < 0) unknown = 1;
+        }
+    }
+    return unknown ? -1 : 0;
+}
+// unit.js _isTargetWithinUnitAttackAreaRange for unit s and unit q at
+// (tx, ty) (s can attack: damage above 0): in range by areas (k steps), or
+// touching one step beyond (reach: the bodies' radii and padding; no wall
+// corner between their tiles). 1, 0, -1.
+function _simUnitInAttackRange(AG, OFF, NB, WALL, CR, RR, W, H, tile, pad, s, q, x, y, tx, ty, k) {
+    const r = _simInAreaRange(AG, OFF, NB, W, H, tile, x, y, tx, ty, k);
+    if (r !== 0) return r;
+    const rs = Math.max(0.1, CR[s] || RR[s] || 0.1), rq = Math.max(0.1, CR[q] || RR[q] || 0.1);
+    const reach = rs + rq + pad, dx = tx - x, dy = ty - y;
+    if (dx * dx + dy * dy > reach * reach) return 0;
+    const ugx = Math.floor(x / tile), ugy = Math.floor(y / tile), tgx = Math.floor(tx / tile), tgy = Math.floor(ty / tile);
+    const sx = tgx - ugx, sy = tgy - ugy;
+    if (sx > 1 || sx < -1 || sy > 1 || sy < -1) return 0;
+    if (sx !== 0 && sy !== 0) {
+        const in1 = tgx >= 0 && tgx < W && ugy >= 0 && ugy < H, in2 = ugx >= 0 && ugx < W && tgy >= 0 && tgy < H;
+        if ((!in1 || WALL[ugy * W + tgx]) && (!in2 || WALL[tgy * W + ugx])) return 0;
+    }
+    return _simInAreaRange(AG, OFF, NB, W, H, tile, x, y, tx, ty, k + 1);
+}
+
+SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
+    const ON = R['unit.mvOn'], OUT = R['unit.mvOut'], FL = R['unit.mvFlags'], ZM = R['unit.mvZmask'];
+    const SPD = R['unit.mvSpd'], LANE = R['unit.mvLane'], SPENT = R['unit.mvSpent'], REACH = R['unit.mvReach'];
+    const BASE = R['unit.mvBase'], WLEN = R['unit.mvWlen'], PLEN = R['unit.mvPlen'], SCAN = R['unit.mvScan'], FLOOR = R['unit.mvFloor'];
+    const NODES = R['unit.mvNodes'], AREA = R['unit.spArea'], WAKE = R['unit.mvWake'], DEADC = R['unit.dead'];
+    const FLOWC = R['unit.mvFlow'], MFGEN = R['unit.mvFGen'], DEST = R['unit.mvDest'];
+    const AIRW = R['mv.airwall'];
+    const NF0 = R['nav.0.fields'], NH0 = R['nav.0.hop'], NB0 = R['nav.0.nb'], NT0 = R['nav.0.nt'], NP0 = R['nav.0.np'], NM0 = R['nav.0.meta'];
+    const NF1 = R['nav.1.fields'], NH1 = R['nav.1.hop'], NB1 = R['nav.1.nb'], NT1 = R['nav.1.nt'], NP1 = R['nav.1.np'], NM1 = R['nav.1.meta'];
+    const FPN = R['nav.fpool.0'], FMN = R['nav.fmeta.0'], FPW = R['nav.fpool.1'], FMW = R['nav.fmeta.1'], RDY = R['unit.mvReady'];
+    const NVT = R['unit.mvNavT'], NVV = R['unit.mvNavV'], NVW = R['unit.mvNavW'], NVG = R['unit.mvNavG'];
+    const HT = R['unit.mvHT'], HTID = R['unit.mvHTId'], X0 = R['unit.x0'], Y0 = R['unit.y0'], CRC = R['unit.collisionR'], RRC = R['unit.r'];
+    const AOFF = R['area.off'], ANB = R['area.nb'];
+    const AT = R['unit.attackTimer'], COV = R['vis.cover'], AG = R['ix.agrid'];
+    // (Speed: halved while frozen, again while sandy, as in Unit.update.)
+    const FRZ = R['unit.frozen'], SND = R['unit.sandy'], NLD = R['unit.mvNavLD'];
+    const NVN1 = R['unit.mvNavN1'], NVN2 = R['unit.mvNavN2'], NVF = R['unit.mvNavFar'], NVO = R['unit.mvNavOpen'];
+    const X = R['unit.x'], Y = R['unit.y'], PX = R['unit.prevX'], PY = R['unit.prevY'], VX = R['unit.vx'], VY = R['unit.vy'];
+    const EN = R['unit.energy'], OWN = R['unit.owner'], ID = R['unit.id'], PIDX = R['unit.pathIndex'], SEP = R['unit.sepKey'];
+    const HS = R['mv.hostile'], SC = R['mv.struct'], WALL = R['mv.wall'], AB = R['mv.areaBox'], ABOK = R['mv.areaBoxOk'];
+    const t = P[2] | 0, tr = P[3] | 0, W = P[5] | 0, H = P[6] | 0, tile = P[7], q = P[8];
+    const bc = P[9] | 0, br = P[10] | 0, players = P[11] | 0, B = P[14], absent = P[15], WIN = P[16] | 0, BOXSTEPS = P[17] | 0;
+    const wver = P[19] | 0, pad = P[20], wcheck = P[21] | 0, WK = R['unit.mvWk'];
+    const stride = bc + 1, plane = stride * (br + 1), maxSide = tile * 0.8;
+    for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) {
+        OUT[s] = 0;
+        if (!ON[s]) continue;
+        if (!(EN[s] > 0) || SEP[s] === absent || DEADC[s]) { ON[s] = 0; continue; }
+        const parked = ON[s] === 2, hold = ON[s] === 3;
+        // Parked (an idle worker, a unit waiting for its route): until its
+        // wake tick, a tick is its floor and hostile checks.
+        if (parked && t >= WAKE[s]) { ON[s] = 0; continue; }
+        const f = FL[s], id = ID[s] | 0, owner = OWN[s] | 0;
+        const x = X[s], y = Y[s], gx = Math.floor(x / tile), gy = Math.floor(y / tile);
+        if (!(owner >= 0 && owner < players) || !(gx >= 0 && gy >= 0 && gx < W && gy < H)) { ON[s] = 0; continue; }
+        const tl = gy * W + gx;
+        // The floor of a tile it entered (and the once-a-second refresh):
+        // only a hostile structure there does anything.
+        if (FLOOR[s] !== tl || ((t + id) | 0) % tr === 0) {
+            const code = SC[tl];
+            if (code !== -1 && code !== owner) { ON[s] = 0; continue; }
+            if (parked || hold) FLOOR[s] = tl;
+        }
+        if (hold) {
+            // Attack hold (see simMoveTryHold in unit.js): the target where
+            // it was at the pass's start (x0, y0), as Unit.update sees it.
+            const q = HT[s];
+            if (!(q >= 0) || DEADC[q] || (ID[q] | 0) !== HTID[s] || WALL[tl] || !AOFF) { ON[s] = 0; continue; }
+            const tx = X0[q], ty = Y0[q], qgx = Math.floor(tx / tile), qgy = Math.floor(ty / tile);
+            if (qgx < 0 || qgy < 0 || qgx >= W || qgy >= H) { ON[s] = 0; continue; }
+            const cov = COV ? COV[owner] : null, a = AG ? AG[qgy * W + qgx] : -1;
+            if (!cov || !(a >= 0) || !(cov[a] > 0)) { ON[s] = 0; continue; }
+            if (_simUnitInAttackRange(AG, AOFF, ANB, WALL, CRC, RRC, W, H, tile, pad, s, q, x, y, tx, ty, REACH[s]) !== 1) { ON[s] = 0; continue; }
+            // The attack itself is Unit.update's (its timer: the status
+            // pre-pass counted it down already).
+            if (!(AT[s] > 0)) { ON[s] = 0; continue; }
+            // (6: held; see simHoldStillValid.)
+            PX[s] = x; PY[s] = y; OUT[s] = 6;
+            continue;
+        }
+        // Hostiles possibly in reach: attack-movers every tick, drive-by
+        // shooters on their scan ticks (the tiles of its areas in reach).
+        const atk = (f & 16) !== 0;
+        if (atk || ((f & 1) !== 0 && ((t + id) & 1) === 0)) {
+            let x0, y0, x1, y1;
+            if (atk) { const r = REACH[s]; x0 = gx - r; y0 = gy - r; x1 = gx + r; y1 = gy + r; }
+            else {
+                const area = AREA[s], k = area * BOXSTEPS + REACH[s];
+                if (!(area >= 0) || !ABOK[k]) { ON[s] = 0; continue; }
+                x0 = AB[k * 4]; y0 = AB[k * 4 + 1]; x1 = AB[k * 4 + 2]; y1 = AB[k * 4 + 3];
+            }
+            x0 = x0 < 0 ? 0 : x0; y0 = y0 < 0 ? 0 : y0; x1 = x1 >= W ? W - 1 : x1; y1 = y1 >= H ? H - 1 : y1;
+            if (x0 <= x1 && y0 <= y1) {
+                const bx0 = Math.floor(x0 / B), by0 = Math.floor(y0 / B), bx1 = Math.floor(x1 / B), by1 = Math.floor(y1 / B), o = owner * plane;
+                if (HS[o + (by1 + 1) * stride + bx1 + 1] - HS[o + by0 * stride + bx1 + 1] - HS[o + (by1 + 1) * stride + bx0] + HS[o + by0 * stride + bx0] > 0) { ON[s] = 0; continue; }
+            }
+        }
+        if (parked) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
+        if ((f & 64) !== 0) {
+            // A worker's check tick: its task looked at (Unit.update).
+            if (WK[s] && ((t + id) | 0) % wcheck === 0) { ON[s] = 0; continue; }
+            // Following the flow navigation (flownav.js) toward its
+            // destination, steered like _followPathStep.
+            const dk = DEST[s], dx0 = dk % W, dy0 = (dk - dx0) / W;
+            const prof = (f & 32) !== 0 ? 1 : 0, WL = prof ? AIRW : WALL;
+            const fid = FLOWC[s], wide = fid >= 4194304, did = wide ? fid - 4194304 : fid, dm = did * 8;
+            const FMETA = wide ? FMW : FMN, FPOOL = wide ? FPW : FPN;
+            // (Its field: the slot as armed, made.)
+            if (!(fid >= 0) || !FMETA || FMETA[dm + 6] !== MFGEN[s] || FMETA[dm + 1] !== dk || FMETA[dm + 7] !== 1) { ON[s] = 0; continue; }
+            // Its route starts next tick (asked for after this tick's flush).
+            if (t < RDY[s]) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
+            const NF = prof ? NF1 : NF0, NH = prof ? NH1 : NH0, NB = prof ? NB1 : NB0, NT = prof ? NT1 : NT0, NP = prof ? NP1 : NP0, NM = prof ? NM1 : NM0;
+            if (!NF || !NM) { ON[s] = 0; continue; }
+            const nC = NM[0], ncw = NM[1], nnc = NM[3];
+            const span = wide ? 3 * nC : nC, df = FPOOL, doff = did * span * span, dbx = FMETA[dm + 2], dby = FMETA[dm + 3], dbw = FMETA[dm + 4], dbh = FMETA[dm + 5];
+            // On the destination tile: Unit.update arrives.
+            if (tl === dk) { ON[s] = 0; continue; }
+            // Near it and held back by the crowd (under a third of its speed
+            // made good toward it last tick, pushes included): arrived where
+            // it is (not all of a big group fit on one tile).
+            // (As _followNavNode, with its last distance, unit.mvNavLD: the
+            // arrival itself is Unit.update's.)
+            let navLD = -1;
+            if ((f & 128) === 0 && Math.abs(dx0 - gx) <= 8 && Math.abs(dy0 - gy) <= 8) {
+                const ex = dx0 * tile + 16 - x, ey = dy0 * tile + 16 - y, now = Math.sqrt(ex * ex + ey * ey), last = NLD[s];
+                let es = SPD[s];
+                if (FRZ[s] > 0) es *= 0.5;
+                if (SND[s] > 0) es *= 0.5;
+                if (last >= 0 && last - now < es * 0.3) { ON[s] = 0; continue; }
+                navLD = now;
+            }
+            // The look-ahead from this tile (cached per tile: a pure
+            // function of the tile, navigation, walls and destination).
+            let n1, n2, far, open;
+            if (NVT[s] === tl && NVV[s] === NM[6] && NVW[s] === wver && NVG[s] === FMETA[dm + 6]) {
+                n1 = NVN1[s]; n2 = NVN2[s]; far = NVF[s]; open = NVO[s] === 1;
+            } else {
+                n1 = simNavStep(W, nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, tl, dk);
+                if (n1 < 0 || WL[n1]) { ON[s] = 0; continue; }
+                // A step across a border that is not to a neighbouring tile (a
+                // bad build): Unit.update.
+                if (Math.abs(n1 % W - gx) + Math.abs(((n1 - n1 % W) / W) - gy) !== 1) { ON[s] = 0; continue; }
+                // On open ground it looks up to 6 tiles ahead (all with open
+                // blocks) and heads straight there: walked as lines, not stairs.
+                far = n1; n2 = -1;
+                open = _simOpenBlock(WL, tl, W, H) && _simOpenBlock(WL, n1, W, H);
+                let cur = n1;
+                for (let k = 1; k < (open ? 6 : 2); k++) {
+                    const nx = simNavStep(W, nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, cur, dk);
+                    if (nx < 0 || WL[nx]) break;
+                    if (k === 1) n2 = nx;
+                    if (!open || !_simOpenBlock(WL, nx, W, H)) break;
+                    far = cur = nx;
+                }
+                NVT[s] = tl; NVV[s] = NM[6]; NVW[s] = wver; NVG[s] = FMETA[dm + 6];
+                NVN1[s] = n1; NVN2[s] = n2; NVF[s] = far; NVO[s] = open ? 1 : 0;
+            }
+            NLD[s] = navLD;
+            const kx = far % W, ky = (far - kx) / W;
+            const baseTx = kx * tile + 16, baseTy = ky * tile + 16;
+            let tx, ty;
+            if (open) {
+                // Its own side offset from the flow's line (through the tile
+                // centres), drifting back gently: a group moves as a wide
+                // stream, each unit in its lane.
+                const routeDx = kx - gx, routeDy = ky - gy, routeLen = Math.sqrt(routeDx * routeDx + routeDy * routeDy);
+                const sx = -routeDy / routeLen, sy = routeDx / routeLen;
+                let side = ((x - (gx * tile + 16)) * sx + (y - (gy * tile + 16)) * sy) * 0.875;
+                side = side > maxSide ? maxSide : (side < -maxSide ? -maxSide : side);
+                tx = baseTx + sx * side; ty = baseTy + sy * side;
+            } else {
+                const lane = LANE[s], segDx = kx - gx, segDy = ky - gy;
+                let lx = 0, ly = 0;
+                if (Math.abs(segDx) >= Math.abs(segDy)) ly = (segDx < 0 ? lane : -lane);
+                else lx = (segDy < 0 ? -lane : lane);
+                tx = baseTx + lx; ty = baseTy + ly;
+            }
+            let dx = tx - x, dy = ty - y, dist = Math.sqrt(dx * dx + dy * dy);
+            // Never turn back for a point it has passed (the next tile's
+            // centre behind it, stepping around a corner): the one after.
+            if (n2 >= 0 && far === n1 && VX[s] * dx + VY[s] * dy < 0) {
+                const n2x = n2 % W;
+                tx = n2x * tile + 16; ty = ((n2 - n2x) / W) * tile + 16;
+                dx = tx - x; dy = ty - y; dist = Math.sqrt(dx * dx + dy * dy);
+            }
+            if (dist < 4) {
+                // At the next tile's point already: on toward the one after.
+                if (n2 < 0) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
+                const n2x = n2 % W;
+                tx = n2x * tile + 16; ty = ((n2 - n2x) / W) * tile + 16;
+                dx = tx - x; dy = ty - y; dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < 4) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
+            }
+            let spd = SPD[s];
+            if (FRZ[s] > 0) spd *= 0.5;
+            if (SND[s] > 0) spd *= 0.5;
+            const vx = (dx / dist) * spd, vy = (dy / dist) * spd;
+            const nx = x + vx, ny = y + vy;
+            const ngx = Math.floor(nx / tile), ngy = Math.floor(ny / tile);
+            // Entering another tile is a step (charged like a path node).
+            const stepped = ngx !== gx || ngy !== gy;
+            PX[s] = x; PY[s] = y; VX[s] = vx; VY[s] = vy; SPENT[s] = stepped ? 1 : 0; FLOOR[s] = tl;
+            if ((f & 32) === 0 && (ngx < 0 || ngy < 0 || ngx >= W || ngy >= H || WALL[ngy * W + ngx])) {
+                X[s] = nx; Y[s] = ny; ON[s] = 0; OUT[s] = 4; continue;
+            }
+            const qx = Number.isFinite(nx) ? Math.round(nx * q) / q : 0, qy = Number.isFinite(ny) ? Math.round(ny * q) / q : 0;
+            X[s] = qx; Y[s] = qy;
+            const qgx = Math.floor(qx / tile), qgy = Math.floor(qy / tile);
+            if (qgx !== gx || qgy !== gy) { OUT[s] = 3; continue; }
+            const rx = qx / tile - gx, ry = qy / tile - gy;
+            const zone = (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
+            OUT[s] = ((ZM[s] >> zone) & 1) === 0 ? 2 : 1;
+            continue;
+        }
+        // The path window (see _simMoveNode): a node it does not hold means
+        // the tick needs the path itself.
+        const len = PLEN[s], base = BASE[s], wl = WLEN[s], nb = s * WIN;
+        let idx = PIDX[s] | 0, spent = 0, bail = false;
+        if (idx >= len) { ON[s] = 0; continue; }
+        // The node scan (followPath) when the tile or the node changed.
+        if (SCAN[s] !== tl) {
+            const first = idx - 1 > 0 ? idx - 1 : 0, limit = Math.min(len - 1, idx + 6);
+            let reached = -1, r1 = 0;
+            for (let i = first; i <= limit; i++) {
+                r1 = 0;
+                const k = _simMoveNode(NODES, nb, base, wl, i);
+                if (k < 0) { bail = true; break; }
+                const kx = k % W, ky = (k - kx) / W, dx = kx - gx, dy = ky - gy;
+                if (i + 1 < len) {
+                    const nk = _simMoveNode(NODES, nb, base, wl, i + 1);
+                    if (nk < 0) { bail = true; break; }
+                    const nx = nk % W, ny = (nk - nx) / W;
+                    // A portal link ends the window, so none are inside it.
+                    if (Math.abs(nx - kx) + Math.abs(ny - ky) !== 1) { bail = true; break; }
+                }
+                if ((dx === 0 && dy === 0) || (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1 && (r1 = _simMoveRoomy(NODES, WALL, nb, base, wl, len, W, H, i)) === 1)) reached = i;
+                if (r1 < 0) { bail = true; break; }
+            }
+            if (bail) { ON[s] = 0; continue; }
+            while (idx <= reached) { if (idx > 0) spent++; idx++; }
+            if (idx >= len) { ON[s] = 0; continue; }
+            // Stale nodes on its own tile.
+            for (;;) {
+                const k = _simMoveNode(NODES, nb, base, wl, idx);
+                if (k < 0) { bail = true; break; }
+                if (k !== tl) break;
+                if (idx > 0) spent++;
+                idx++;
+                if (idx >= len) { bail = true; break; }
+            }
+            if (bail) { ON[s] = 0; continue; }
+        }
+        // The step toward node idx (_followPathStep).
+        const k = _simMoveNode(NODES, nb, base, wl, idx);
+        if (k < 0) { ON[s] = 0; continue; }
+        if ((f & (8 | 32)) === 0 && WALL[k]) { ON[s] = 0; continue; }
+        const kx = k % W, ky = (k - kx) / W;
+        const baseTx = kx * tile + 16, baseTy = ky * tile + 16;
+        let segDx = 0, segDy = 0;
+        const pk = idx > 0 ? _simMoveNode(NODES, nb, base, wl, idx - 1) : -1;
+        if (idx > 0 && pk < 0) { ON[s] = 0; continue; }
+        let px = 0, py = 0;
+        if (idx > 0) { px = pk % W; py = (pk - px) / W; segDx = kx - px; segDy = ky - py; }
+        else if (idx + 1 < len) {
+            const nk = _simMoveNode(NODES, nb, base, wl, idx + 1);
+            if (nk < 0) { ON[s] = 0; continue; }
+            const nx = nk % W; segDx = nx - kx; segDy = (nk - nx) / W - ky;
+        }
+        if (segDx === 0 && segDy === 0) {
+            if (kx !== gx) segDx = kx - gx;
+            else if (ky !== gy) segDy = ky - gy;
+            else if (idx + 1 < len) {
+                const nk = _simMoveNode(NODES, nb, base, wl, idx + 1);
+                if (nk < 0) { ON[s] = 0; continue; }
+                const nx = nk % W; segDx = nx - kx; segDy = (nk - nx) / W - ky;
+            } else segDx = 1;
+        }
+        let tx, ty, lx = 0, ly = 0;
+        let rA = 0, rB = 0;
+        if (idx > 0 && Math.abs(px - gx) <= 1 && Math.abs(py - gy) <= 1) {
+            rA = _simMoveRoomy(NODES, WALL, nb, base, wl, len, W, H, idx - 1);
+            if (rA === 1) rB = _simMoveRoomy(NODES, WALL, nb, base, wl, len, W, H, idx);
+            if (rA < 0 || rB < 0) { ON[s] = 0; continue; }
+        }
+        if (rA === 1 && rB === 1) {
+            let ak = _simMoveNode(NODES, nb, base, wl, idx + 1);
+            const fk = idx + 2 < len ? _simMoveNode(NODES, nb, base, wl, idx + 2) : -1;
+            if (ak < 0 || (idx + 2 < len && fk < 0)) { ON[s] = 0; continue; }
+            let ax = ak % W, ay = (ak - ax) / W;
+            if (fk >= 0) { const fx = fk % W, fy = (fk - fx) / W; if (Math.abs(fx - ax) + Math.abs(fy - ay) === 1) { ax = fx; ay = fy; } }
+            const routeDx = ax - px, routeDy = ay - py, routeLen = Math.sqrt(routeDx * routeDx + routeDy * routeDy);
+            lx = -routeDy / routeLen; ly = routeDx / routeLen;
+            let side = ((x - baseTx) * lx + (y - baseTy) * ly) * 0.875;
+            side = side > maxSide ? maxSide : (side < -maxSide ? -maxSide : side);
+            tx = baseTx + lx * side; ty = baseTy + ly * side;
+        } else {
+            const lane = LANE[s];
+            if (Math.abs(segDx) >= Math.abs(segDy)) ly = (segDx < 0 ? lane : -lane);
+            else lx = (segDy < 0 ? -lane : lane);
+            tx = baseTx + lx; ty = baseTy + ly;
+        }
+        const dx = tx - x, dy = ty - y, dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 4) {
+            // Arrived at the node: the next one from the next tick (a portal
+            // link would have ended the window).
+            if (idx + 1 < len && _simMoveNode(NODES, nb, base, wl, idx + 1) < 0) { ON[s] = 0; continue; }
+            if (idx > 0) spent++;
+            idx++;
+            if (idx >= len) { ON[s] = 0; continue; }
+            PX[s] = x; PY[s] = y; PIDX[s] = idx; SPENT[s] = spent; SCAN[s] = -1; FLOOR[s] = tl;
+            OUT[s] = 1;
+            continue;
+        }
+        let spd = SPD[s];
+        if (FRZ[s] > 0) spd *= 0.5;
+        if (SND[s] > 0) spd *= 0.5;
+        const vx = (dx / dist) * spd, vy = (dy / dist) * spd;
+        const nx = x + vx, ny = y + vy;
+        PX[s] = x; PY[s] = y; VX[s] = vx; VY[s] = vy; PIDX[s] = idx; SPENT[s] = spent; FLOOR[s] = tl;
+        SCAN[s] = tl;
+        const ngx = Math.floor(nx / tile), ngy = Math.floor(ny / tile);
+        if ((f & 32) === 0 && (ngx < 0 || ngy < 0 || ngx >= W || ngy >= H || WALL[ngy * W + ngx])) {
+            X[s] = nx; Y[s] = ny; ON[s] = 0; OUT[s] = 4; continue;
+        }
+        const qx = Number.isFinite(nx) ? Math.round(nx * q) / q : 0, qy = Number.isFinite(ny) ? Math.round(ny * q) / q : 0;
+        X[s] = qx; Y[s] = qy;
+        const qgx = Math.floor(qx / tile), qgy = Math.floor(qy / tile);
+        if (qgx !== gx || qgy !== gy) { OUT[s] = 3; continue; }
+        const rx = qx / tile - gx, ry = qy / tile - gy;
+        const zone = (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
+        OUT[s] = ((ZM[s] >> zone) & 1) === 0 ? 2 : 1;
+    }
+};
 
 // The common collision correction stays inside one tile. Compute it in
 // parallel; the commit checks terrain/membership and handles tile crossings
 // with the full swept collision routine. No approximate contact budget.
+// A push that stays in the unit's tile is committed here (fast 1), and
+// fast 2 when the main thread still has work: a window zone covering other
+// areas (see updateUnitSpatial), or a path retry tick of a unit that may be
+// waiting on a fallback path (see runUnitSeparationPass).
 SIM_KERNELS[SIM_KERNEL_SEPARATION_FINISH] = function (R, P, chunk) {
-    const X = R['unit.x'], Y = R['unit.y'];
+    const X = R['unit.x'], Y = R['unit.y'], ZM = R['unit.mvZmask'], ON = R['unit.mvOn'], FL = R['unit.mvFlags'], ID = R['unit.id'];
     const PX = R['sep.px'], PY = R['sep.py'], OV = R['sep.ov'], HIT = R['sep.hit'];
     const outX = R['sep.nextX'], outY = R['sep.nextY'], fast = R['sep.fast'];
-    const tile = P[2], quant = P[3], contacts = P[4], pushQuant = P[5];
+    const tile = P[2], quant = P[3], contacts = P[4], pushQuant = P[5], t = P[6] | 0, retry = P[7] | 0;
+    const WALL = R['mv.wall'], LAYER = R['unit.sepLayer'], GW = P[8] | 0, GH = P[9] | 0;
     for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
         fast[i] = 0;
         const hits = HIT[i];
@@ -61,7 +513,27 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION_FINISH] = function (R, P, chunk) {
         const nx = Number.isFinite(rawX) ? Math.round(rawX * quant) / quant : 0;
         const ny = Number.isFinite(rawY) ? Math.round(rawY * quant) / quant : 0;
         outX[i] = nx; outY[i] = ny;
-        if (Math.floor(nx / tile) === Math.floor(x / tile) && Math.floor(ny / tile) === Math.floor(y / tile)) fast[i] = 1;
+        const gx = Math.floor(nx / tile), gy = Math.floor(ny / tile), ox = Math.floor(x / tile), oy = Math.floor(y / tile);
+        if (gx !== ox || gy !== oy) {
+            // Into another tile: committed here when the sweep cannot meet
+            // a blocked tile (a flyer, or open ground over the tiles
+            // between; off the map counts as blocked). Otherwise
+            // _commitUnitSeparation, in id order.
+            if (!WALL || !LAYER) continue;
+            if (LAYER[s] !== 1) {
+                if (Math.abs(gx - ox) > 1 || Math.abs(gy - oy) > 1) continue;
+                const x0 = gx < ox ? gx : ox, x1 = gx < ox ? ox : gx, y0 = gy < oy ? gy : oy, y1 = gy < oy ? oy : gy;
+                if (x0 < 0 || y0 < 0 || x1 >= GW || y1 >= GH) continue;
+                if (WALL[y0 * GW + x0] | WALL[y0 * GW + x1] | WALL[y1 * GW + x0] | WALL[y1 * GW + x1]) continue;
+            }
+            X[s] = nx; Y[s] = ny;
+            fast[i] = 2;
+            continue;
+        }
+        X[s] = nx; Y[s] = ny;
+        const rx = nx / tile - gx, ry = ny / tile - gy;
+        const zone = (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
+        fast[i] = ((ZM[s] >> zone) & 1) === 0 || ((((t + ID[s]) | 0) % retry) === 0 && !(ON[s] && (FL[s] & 4) === 0)) ? 2 : 1;
     }
 };
 
@@ -69,7 +541,7 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION_FINISH] = function (R, P, chunk) {
 // Prefixes are reduced in partition order, never in worker claim order. Memory
 // is O(units + partitions*256), independent of map area or helper count.
 SIM_KERNELS[SIM_KERNEL_SPATIAL_HISTOGRAM] = function (R, P, chunk) {
-    const keys = R['spatial.keys'], a = R['spatial.orderA'], b = R['spatial.orderB'];
+    const keys = R[P[5] ? 'spatial.keys.' + P[5] : 'spatial.keys'], a = R['spatial.orderA'], b = R['spatial.orderB'];
     const input = P[4] ? b : a, hist = R['spatial.hist'];
     const base = chunk * 256, shift = P[2];
     hist.fill(0, base, base + 256);
@@ -79,7 +551,7 @@ SIM_KERNELS[SIM_KERNEL_SPATIAL_HISTOGRAM] = function (R, P, chunk) {
     }
 };
 SIM_KERNELS[SIM_KERNEL_SPATIAL_SCATTER] = function (R, P, chunk) {
-    const keys = R['spatial.keys'], a = R['spatial.orderA'], b = R['spatial.orderB'];
+    const keys = R[P[5] ? 'spatial.keys.' + P[5] : 'spatial.keys'], a = R['spatial.orderA'], b = R['spatial.orderB'];
     const input = P[4] ? b : a, output = P[4] ? a : b, hist = R['spatial.hist'];
     const base = chunk * 256, shift = P[2];
     for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
@@ -89,7 +561,9 @@ SIM_KERNELS[SIM_KERNEL_SPATIAL_SCATTER] = function (R, P, chunk) {
 };
 
 const _simSpatialOrder = { cap: 0 };
-function simSpatialStableOrder(keys, count, maxKey) {
+// (keySlot: the name the keys are bound under, so that callers sorting
+// different key arrays each keep theirs bound.)
+function simSpatialStableOrder(keys, count, maxKey, keySlot = 0) {
     const S = _simSpatialOrder, partition = 4096, parts = Math.ceil(count / partition);
     if (!S.a || count > S.cap) {
         S.cap = Math.max(1024, count, S.cap * 2);
@@ -98,11 +572,11 @@ function simSpatialStableOrder(keys, count, maxKey) {
         simParallelBind('spatial.orderA', S.a); simParallelBind('spatial.orderB', S.b);
         simParallelBind('spatial.hist', S.hist);
     }
-    simParallelBind('spatial.keys', keys);
+    simParallelBind(keySlot ? 'spatial.keys.' + keySlot : 'spatial.keys', keys);
     let flip = 0;
     for (let shift = 0; shift === 0 || (maxKey >>> shift) !== 0; shift += 8) {
         _simParams[0] = count; _simParams[1] = partition; _simParams[2] = shift;
-        _simParams[3] = shift === 0 ? 1 : 0; _simParams[4] = flip;
+        _simParams[3] = shift === 0 ? 1 : 0; _simParams[4] = flip; _simParams[5] = keySlot;
         simParallelRun(SIM_KERNEL_SPATIAL_HISTOGRAM, parts);
         let cursor = 0;
         for (let digit = 0; digit < 256; digit++) for (let part = 0; part < parts; part++) {
@@ -117,35 +591,47 @@ function simSpatialStableOrder(keys, count, maxKey) {
 }
 
 SIM_KERNELS[SIM_KERNEL_SEPARATION_PREPARE] = function (R, P, chunk) {
-    const flags = R['unit.sepLayer'], order = R['sep.inputOrder'];
-    const inputKeys = R['unit.sepKey'], X = R['unit.x'], Y = R['unit.y'];
+    // Entries of the unit index (spatialIndexRebuild): its slot and chunk,
+    // grouped by chunk (sep.rs / sep.rc: a chunk's first entry and count).
+    const eslot = R['sep.eslot'], ekey = R['sep.ekey'], rs = R['sep.rs'], rc = R['sep.rc'];
+    const flags = R['unit.sepLayer'], X = R['unit.x'], Y = R['unit.y'], DEADS = R['unit.dead'];
     const VX = R['unit.vx'], VY = R['unit.vy'], PREVX = R['unit.prevX'], PREVY = R['unit.prevY'];
     const CR = R['unit.collisionR'], RAD = R['unit.r'], OWNER = R['unit.owner'], ID = R['unit.id'];
     const ord = R['sep.ord'], slots = R['sep.slots'], keys = R['sep.keys'], jobs = R['sep.jobs'];
     const sx = R['sep.sx'], sy = R['sep.sy'], sr = R['sep.sr'], so = R['sep.so'], sid = R['sep.sid'];
     const sl = R['sep.sl'], sc = R['sep.sc'], sdx = R['sep.sdx'], sdy = R['sep.sdy'];
-    const start = R['sep.start'], chunkR = R['sep.chunkR'], sole = R['sep.sole'];
+    const chunkR = R['sep.chunkR'], sole = R['sep.sole'], chunkC = R['sep.chunkC'];
+    const rest = P[2] | 0, t0 = P[3] | 0;
     for (let k = chunk * P[1], end = Math.min(P[0], k + P[1]); k < end; k++) {
-        const i = order[k], s = i, key = inputKeys[s];
+        const s0 = eslot[k], key = ekey[k];
+        // (Units that died since the index was built take no part.)
+        const s = s0 >= 0 && DEADS[s0] ? -1 : s0;
+        ord[k] = s; slots[k] = s; keys[k] = key; jobs[k] = k;
+        if (s < 0) { sc[k] = 0; sx[k] = 1e9; sy[k] = 1e9; sr[k] = .1; so[k] = -3; sl[k] = 255; sid[k] = 0; continue; }
         const x = X[s], y = Y[s], r = Math.max(.1, CR[s] || RAD[s] || .1), owner = OWNER[s];
-        ord[k] = i; slots[k] = s; keys[k] = key; jobs[k] = k;
         sx[k] = x; sy[k] = y; sr[k] = r; so[k] = owner; sid[k] = ID[s] || 0;
         sl[k] = flags[s];
-        sc[k] = x !== PREVX[s] || y !== PREVY[s] || P[2] <= 1 || ((P[3] + ID[s]) % P[2]) === 0 ? 1 : 0;
+        // Bit 0: takes part this tick; bit 1: moved this tick.
+        const movedHere = x !== PREVX[s] || y !== PREVY[s];
+        sc[k] = (movedHere ? 3 : 0) | (rest <= 1 || ((t0 + ID[s]) | 0) % rest === 0 ? 1 : 0);
         // Exact overlaps leave sideways to the motion; a unit at rest picks
         // a side by id.
         let dx = VX[s], dy = VY[s];
         if (Math.sqrt(dx * dx + dy * dy) < .001) { const d = (ID[s] || 0) & 3; dx = d === 0 ? 1 : d === 2 ? -1 : 0; dy = d === 1 ? 1 : d === 3 ? -1 : 0; }
         sdx[k] = dx; sdy[k] = dy;
-        if (k === 0 || inputKeys[order[k - 1]] !== key) {
-            let maxR = r, oneOwner = owner, j = k + 1;
-            for (; j < P[0] && inputKeys[order[j]] === key; j++) {
-                const slot = order[j], otherR = Math.max(.1, CR[slot] || RAD[slot] || .1);
+        // The chunk's first entry: its largest radius, sole owner and
+        // whether a unit in it moved.
+        if (rs[key] === k) {
+            let maxR = 0, oneOwner = -2, moved = 0;
+            for (let j = k, e = k + rc[key]; j < e; j++) {
+                const slot = eslot[j];
+                if (slot < 0 || DEADS[slot]) continue;
+                const otherR = Math.max(.1, CR[slot] || RAD[slot] || .1);
                 if (otherR > maxR) maxR = otherR;
-                if (OWNER[slot] !== oneOwner) oneOwner = -1;
+                oneOwner = oneOwner === -2 ? OWNER[slot] : (OWNER[slot] === oneOwner ? oneOwner : -1);
+                if (X[slot] !== PREVX[slot] || Y[slot] !== PREVY[slot]) moved = 1;
             }
-            start[key + 1] = j - k; chunkR[key] = maxR; sole[key] = oneOwner;
-            R['sep.chunkC'][key] = 1;
+            chunkR[key] = maxR; sole[key] = oneOwner; chunkC[key] = moved;
         }
     }
 };
@@ -342,6 +828,31 @@ SIM_KERNELS[SIM_KERNEL_VISIBILITY] = function (R, P, chunk) {
     }
 };
 
+// Units at rest next to a moving one take part too (they give way to it,
+// both sharing the correction), not only on their staggered checks: a unit
+// walking into a standing crowd is not pushed back alone. Chunk flags from
+// SEPARATION_PREPARE (sep.chunkC, valid where sep.rstamp is the epoch P[2]).
+SIM_KERNELS[SIM_KERNEL_SEPARATION_YIELD] = function (R, P, chunk) {
+    const sc = R['sep.sc'], keys = R['sep.keys'], ord = R['sep.ord'], chunkC = R['sep.chunkC'], rstamp = R['sep.rstamp'];
+    const CW = P[3] | 0, CH = P[4] | 0, ep = P[2] | 0;
+    for (let k = chunk * P[1], end = Math.min(P[0], k + P[1]); k < end; k++) {
+        if ((sc[k] & 1) || ord[k] < 0) continue;
+        const key = keys[k] | 0, cx = key % CW, cy = (key - cx) / CW;
+        let near = 0;
+        for (let oy = -1; oy <= 1 && !near; oy++) {
+            const ny = cy + oy;
+            if (ny < 0 || ny >= CH) continue;
+            for (let ox = -1; ox <= 1; ox++) {
+                const nx = cx + ox;
+                if (nx < 0 || nx >= CW) continue;
+                const k2 = ny * CW + nx;
+                if (rstamp[k2] === ep && chunkC[k2]) { near = 1; break; }
+            }
+        }
+        if (near) sc[k] |= 1;
+    }
+};
+
 // Unit separation, gathered per unit: each unit that checks this tick sums
 // the pushes of every unit touching it, from its own side (a pair is seen
 // from both units; each unit is written by one chunk only). Chunks are
@@ -349,52 +860,75 @@ SIM_KERNELS[SIM_KERNEL_VISIBILITY] = function (R, P, chunk) {
 // pad, farAny, Q, SHARE_BOTH, SHARE_ONE. Arrays (sorted entries): sep.ord,
 // sep.sx/sy/sr (position, radius), sep.so (owner), sep.sl (layer), sep.sc
 // (checks), sep.sid (id), sep.sdx/sdy (motion, for exact overlaps); per
-// tile: sep.start, sep.chunkR, sep.chunkC, sep.sole; offsets: sep.offs
-// (dx, dy, gap triples over the whole neighbourhood); outputs by unit
-// index: sep.px/py (integer sums), sep.ov (deepest overlap), sep.hit.
+// chunk: sep.rs/rc (first entry, count; empty unless sep.rstamp is the
+// epoch P[11]), sep.chunkR (largest radius), sep.sole (sole owner); outputs
+// by unit index: sep.px/py (integer sums), sep.ov (deepest overlap), sep.hit.
 SIM_KERNELS[SIM_KERNEL_SEPARATION] = function (R, P, chunk) {
-    const CW = P[0] | 0, CH = P[1] | 0, unitsPerJob = P[2] | 0, pad = P[3], farAny = P[4], Q = P[5], BOTH = P[6], ONE = P[7], nOffs = P[8] | 0;
+    const CW = P[0] | 0, CH = P[1] | 0, unitsPerJob = P[2] | 0, pad = P[3], farAny = P[4], Q = P[5], BOTH = P[6], ONE = P[7], cws = P[10], ep = P[11] | 0;
+    const MOVER = P[12], YIELD = P[13];
+    // Units listed by the tile they had at the index rebuild (the start of
+    // the tick): chunks are culled that much more loosely.
+    const marginArr = R['sep.margin'], MARGIN = marginArr && marginArr.length ? marginArr[0] : 0;
     const ord = R['sep.ord'], sx = R['sep.sx'], sy = R['sep.sy'], sr = R['sep.sr'], so = R['sep.so'], sl = R['sep.sl'], sc = R['sep.sc'];
     const sid = R['sep.sid'], sdx = R['sep.sdx'], sdy = R['sep.sdy'];
-    const start = R['sep.start'], chunkR = R['sep.chunkR'], chunkC = R['sep.chunkC'], sole = R['sep.sole'], offs = R['sep.offs'];
+    // Chunk ranges: stamped this epoch, else empty.
+    const rs = R['sep.rs'], rc = R['sep.rc'], rstamp = R['sep.rstamp'], chunkR = R['sep.chunkR'], sole = R['sep.sole'];
     const PX = R['sep.px'], PY = R['sep.py'], OV = R['sep.ov'], HIT = R['sep.hit'];
     const jobs = R['sep.jobs'], keys = R['sep.keys'];
+    // Neighbour chunks within reach of any pair (farAny = 2 * the largest
+    // radius + padding), and that largest radius.
+    const reach = Math.max(1, Math.ceil((farAny + MARGIN) / cws)), maxR = (farAny - pad) / 2;
     for (let j = chunk * unitsPerJob, end = Math.min(P[9], j + unitsPerJob); j < end; j++) {
-        const p = jobs[j], key = keys[p], cy = Math.floor(key / CW), cx = key - cy * CW;
-        if (!sc[p]) { const a = ord[p]; PX[a] = 0; PY[a] = 0; OV[a] = 0; HIT[a] = 0; continue; }
-        let a0 = start[key], a1 = start[key + 1];
-        let rA = chunkR[key];
-            let xp = sx[p], yp = sy[p], rp = sr[p], op = so[p], lp = sl[p];
-            let px = 0, py = 0, ov = 0, hit = 0;
-            for (let k = -1; k < nOffs; k++) {
+        const p = jobs[j], a = ord[p];
+        if (a < 0) continue;
+        if ((sc[p] & 1) === 0) { PX[a] = 0; PY[a] = 0; OV[a] = 0; HIT[a] = 0; continue; }
+        const pMoved = (sc[p] & 2) !== 0;
+        const key = keys[p] | 0, cx = key % CW, cy = (key - cx) / CW;
+        const xp = sx[p], yp = sy[p], rp = sr[p], op = so[p], lp = sl[p];
+        // Its distance to its chunk's edges; the neighbour chunks it can
+        // touch (a member of one farther than its radius + that chunk's
+        // largest + padding is out of reach).
+        const ex0 = xp - cx * cws, ex1 = (cx + 1) * cws - xp, ey0 = yp - cy * cws, ey1 = (cy + 1) * cws - yp;
+        const lim = rp + maxR + pad + MARGIN;
+        const ox0 = ex0 >= lim ? 0 : -Math.min(reach, Math.ceil((lim - ex0) / cws)), ox1 = ex1 >= lim ? 0 : Math.min(reach, Math.ceil((lim - ex1) / cws));
+        const oy0 = ey0 >= lim ? 0 : -Math.min(reach, Math.ceil((lim - ey0) / cws)), oy1 = ey1 >= lim ? 0 : Math.min(reach, Math.ceil((lim - ey1) / cws));
+        let px = 0, py = 0, ov = 0, hit = 0;
+        for (let oy = oy0; oy <= oy1; oy++) {
+            const ny = cy + oy;
+            if (ny < 0 || ny >= CH) continue;
+            const ddy = oy < 0 ? ey0 + (-oy - 1) * cws : (oy > 0 ? ey1 + (oy - 1) * cws : 0);
+            for (let ox = ox0; ox <= ox1; ox++) {
                 let b0, b1;
-                if (k < 0) { b0 = a0; b1 = a1; }
+                if (ox === 0 && oy === 0) { b0 = rs[key]; b1 = b0 + rc[key]; }
                 else {
-                    let gap = offs[k * 3 + 2];
-                    if (gap >= farAny) continue;
-                    let nx = cx + offs[k * 3], ny = cy + offs[k * 3 + 1];
-                    if (nx < 0 || nx >= CW || ny < 0 || ny >= CH) continue;
-                    let key2 = ny * CW + nx;
-                    b0 = start[key2]; b1 = start[key2 + 1];
-                    if (b0 === b1) continue;
-                    let near = rA + chunkR[key2];
-                    if (gap >= near + pad) continue;
-                    if (gap >= near && sole[key] >= 0 && sole[key2] === sole[key]) continue;
+                    const nx = cx + ox;
+                    if (nx < 0 || nx >= CW) continue;
+                    const key2 = ny * CW + nx;
+                    if (rstamp[key2] !== ep) continue;
+                    const ddx = ox < 0 ? ex0 + (-ox - 1) * cws : (ox > 0 ? ex1 + (ox - 1) * cws : 0);
+                    const reachP = rp + chunkR[key2] + (sole[key2] === op ? 0 : pad) + MARGIN;
+                    if (ddx * ddx + ddy * ddy >= reachP * reachP) continue;
+                    b0 = rs[key2]; b1 = b0 + rc[key2];
                 }
                 for (let q = b0; q < b1; q++) {
                     if (q === p || sl[q] !== lp) continue;
-                    let dx = sx[q] - xp, dy = sy[q] - yp, d2 = dx * dx + dy * dy;
-                    let minDist = rp + sr[q] + (so[q] === op ? 0 : pad);
+                    const dx = sx[q] - xp, dy = sy[q] - yp, d2 = dx * dx + dy * dy;
+                    const minDist = rp + sr[q] + (so[q] === op ? 0 : pad);
                     if (d2 >= minDist * minDist) continue;
-                    let d = Math.sqrt(d2);
-                    let overlap = minDist - Math.max(d, 0.001);
-                    let f = overlap * (sc[q] ? BOTH : ONE) * Q;
+                    const d = Math.sqrt(d2);
+                    const overlap = minDist - Math.max(d, 0.001);
+                    // The share of the overlap it corrects: even between two
+                    // movers or two at rest; a mover against a unit at rest
+                    // that gives way (takes part) little, the other most.
+                    const qs = sc[q], qMoved = (qs & 2) !== 0;
+                    const share = pMoved === qMoved ? ((qs & 1) ? BOTH : ONE) : (pMoved ? ((qs & 1) ? MOVER : ONE) : YIELD);
+                    const f = overlap * share * Q;
                     let nxv, nyv;
                     if (d > 0.001) { nxv = -dx / d; nyv = -dy / d; }
                     else {
                         // Exact overlap: sideways to its motion, split by id.
-                        let mdx = sdx[p], mdy = sdy[p];
-                        let pairSign = sid[p] < sid[q] ? -1 : 1;
+                        const mdx = sdx[p], mdy = sdy[p];
+                        const pairSign = sid[p] < sid[q] ? -1 : 1;
                         if (Math.abs(mdx) >= Math.abs(mdy)) { nxv = 0; nyv = (mdx >= 0 ? -1 : 1) * pairSign; }
                         else { nxv = (mdy >= 0 ? 1 : -1) * pairSign; nyv = 0; }
                     }
@@ -403,8 +937,8 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION] = function (R, P, chunk) {
                     hit++;
                 }
             }
-            let a = ord[p];
-            PX[a] = px; PY[a] = py; OV[a] = ov; HIT[a] = hit;
+        }
+        PX[a] = px; PY[a] = py; OV[a] = ov; HIT[a] = hit;
     }
 };
 
@@ -516,3 +1050,261 @@ function simParallelHelperMain() {
     }
 }
 let _simParHelperParams = null;
+
+// ---- The unit index (chunk.js spatialIndexRebuild), in parallel ----
+// Entries grouped by chunk (tile) in chunk order and by area in area order,
+// each group in the units array's order (shared by every peer): counts
+// (atomic), prefix sums (the simulation thread), atomic placement, then
+// each group sorted back into units order. Arrays: ix.slots (units index ->
+// slot), ix.keys / ix.areas (per units index), ix.cnt / ix.fill / ix.start
+// per chunk, ix.acnt / ix.afill / ix.astart / ix.aown per area, ix.ent /
+// ix.aent (entry -> units index), sep.eslot / sep.ekey.
+// P: [0] units, [1] per job, [2] chunks, [3] areas, [4] players, [5] absent,
+// [6] chunk jobs (INDEX_CLEAR / INDEX_ORDER: jobs past it are areas), [7] per chunk job, [8] per area job.
+SIM_KERNELS[SIM_KERNEL_INDEX_CLEAR] = function (R, P, chunk) {
+    const cj = P[6] | 0;
+    if (chunk < cj) {
+        const a = chunk * P[7], b = Math.min(P[2], a + P[7]);
+        R['ix.cnt'].fill(0, a, b); R['ix.fill'].fill(0, a, b);
+    } else {
+        const a = (chunk - cj) * P[8], b = Math.min(P[3], a + P[8]), players = P[4] | 0;
+        R['ix.acnt'].fill(0, a, b); R['ix.afill'].fill(0, a, b); R['ix.aown'].fill(0, a * players, b * players);
+    }
+};
+SIM_KERNELS[SIM_KERNEL_INDEX_COUNT] = function (R, P, chunk) {
+    const SL = R['ix.slots'], X = R['unit.x'], Y = R['unit.y'], DEAD = R['unit.dead'], AG = R['ix.agrid'], OWN = R['unit.owner'];
+    const keys = R['ix.keys'], areas = R['ix.areas'], cnt = R['ix.cnt'], acnt = R['ix.acnt'], aown = R['ix.aown'], bad = R['ix.bad'];
+    const nChunks = P[2] | 0, A = P[3] | 0, players = P[4] | 0;
+    const tile = P[9], GW = P[10] | 0, GH = P[11] | 0, CS = P[12] | 0, CW = P[13] | 0;
+    for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
+        const si = SL[i];
+        if (si < 0) { keys[i] = -1; areas[i] = -1; Atomics.store(bad, 0, 1); continue; }
+        // Every unit not dead, by the tile it stands on (clamped to the map).
+        if (DEAD[si]) { keys[i] = -1; areas[i] = -1; continue; }
+        let gx = Math.floor(X[si] / tile), gy = Math.floor(Y[si] / tile);
+        if (!(gx >= 0)) gx = 0; else if (gx >= GW) gx = GW - 1;
+        if (!(gy >= 0)) gy = 0; else if (gy >= GH) gy = GH - 1;
+        const k = CS === 1 ? gy * GW + gx : Math.floor(gy / CS) * CW + Math.floor(gx / CS);
+        if (!(k >= 0 && k < nChunks)) { keys[i] = -1; areas[i] = -1; continue; }
+        keys[i] = k;
+        Atomics.add(cnt, k, 1);
+        const a = AG[gy * GW + gx];
+        if (!(a >= 0 && a < A)) { areas[i] = -1; continue; }
+        areas[i] = a;
+        Atomics.add(acnt, a, 1);
+        const o = OWN[si];
+        if (o >= 0 && o < players) Atomics.add(aown, a * players + o, 1);
+    }
+};
+SIM_KERNELS[SIM_KERNEL_INDEX_SCATTER] = function (R, P, chunk) {
+    const keys = R['ix.keys'], areas = R['ix.areas'], start = R['ix.start'], fill = R['ix.fill'], ent = R['ix.ent'];
+    const astart = R['ix.astart'], afill = R['ix.afill'], aent = R['ix.aent'];
+    for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
+        const k = keys[i];
+        if (k < 0) continue;
+        ent[start[k] + Atomics.add(fill, k, 1)] = i;
+        const a = areas[i];
+        if (a >= 0) aent[astart[a] + Atomics.add(afill, a, 1)] = i;
+    }
+};
+function _simIndexSortRange(E, a, b) {
+    for (let j = a + 1; j < b; j++) {
+        const v = E[j];
+        let q = j - 1;
+        while (q >= a && E[q] > v) { E[q + 1] = E[q]; q--; }
+        E[q + 1] = v;
+    }
+}
+SIM_KERNELS[SIM_KERNEL_INDEX_ORDER] = function (R, P, chunk) {
+    const cj = P[6] | 0;
+    if (chunk < cj) {
+        const cnt = R['ix.cnt'], start = R['ix.start'], ent = R['ix.ent'], SL = R['ix.slots'];
+        const eslot = R['sep.eslot'], ekey = R['sep.ekey'];
+        for (let k = chunk * P[7], end = Math.min(P[2], k + P[7]); k < end; k++) {
+            const c = cnt[k];
+            if (c === 0) continue;
+            const a = start[k], b = a + c;
+            if (c > 1) _simIndexSortRange(ent, a, b);
+            for (let e = a; e < b; e++) { eslot[e] = SL[ent[e]]; ekey[e] = k; }
+        }
+    } else {
+        const acnt = R['ix.acnt'], astart = R['ix.astart'], aent = R['ix.aent'];
+        for (let k = (chunk - cj) * P[8], end = Math.min(P[3], k + P[8]); k < end; k++) {
+            const c = acnt[k];
+            if (c > 1) _simIndexSortRange(aent, astart[k], astart[k] + c);
+        }
+    }
+};
+
+// Same-owner same-type units around each due unit (things_utils.js
+// _countNearbySameTypeUnits): the sum of its window of the per-chunk counts
+// (spatial.cplx). eff.win per due unit: x1, y1, x2, y2, lane (-1: none).
+// P: [0] due units, [1] per job, [2] chunks per row, [3] ints per chunk.
+SIM_KERNELS[SIM_KERNEL_EFF_COUNT] = function (R, P, chunk) {
+    const win = R['eff.win'], out = R['eff.out'], data = R['spatial.cplx'];
+    const CW = P[2] | 0, stride = P[3] | 0;
+    for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
+        const o = i * 5, lane = win[o + 4];
+        if (lane < 0) continue;
+        const x1 = win[o], y1 = win[o + 1], x2 = win[o + 2], y2 = win[o + 3];
+        let sum = 0;
+        for (let y = y1; y <= y2; y++) {
+            let idx = (y * CW + x1) * stride + lane;
+            for (let x = x1; x <= x2; x++, idx += stride) sum += data[idx];
+        }
+        out[i] = sum | 0;
+    }
+};
+
+// The state hash's region of each unit (utils_snapshot.js snapTickHash),
+// from its position columns: snap.reg[i] for units[i] (-1: no slot).
+// P: [0] units, [1] per job, [2] region size in pixels.
+// With it, snap.hc[i]: the hash of the unit's column fields (snap.kc: the
+// fields' codes, in utils_snapshot.js SNAP_HASH_UNIT_COLUMNS order), as the
+// generated field hashers mix numbers.
+const _snapKF64 = new Float64Array(1), _snapKI32 = new Int32Array(_snapKF64.buffer);
+SIM_KERNELS[SIM_KERNEL_SNAP_REGION] = function (R, P, chunk) {
+    const SL = R['ix.slots'], X = R['unit.x'], Y = R['unit.y'], out = R['snap.reg'], ts = P[2];
+    const HC = R['snap.hc'], KC = R['snap.kc'];
+    const cols = KC ? [R['unit.owner'], X, Y, R['unit.vx'], R['unit.vy'], R['unit.energy'], R['unit.commandState'], R['unit.dead'], R['unit.attackTimer'], R['unit.attackFlash']] : null;
+    for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
+        const si = SL[i];
+        const r = si < 0 ? -1 : Math.floor(Y[si] / ts) * 1024 + Math.floor(X[si] / ts);
+        out[i] = r;
+        // (Only this tick's slice: P[3] slices, P[4] the slice.)
+        if (!HC || si < 0 || (P[3] > 0 && r % P[3] !== P[4])) continue;
+        let h = 0;
+        for (let k = 0; k < cols.length; k++) {
+            const x = cols[k][si], kc = KC[k];
+            let v;
+            if ((x | 0) === x && (x !== 0 || 1 / x > 0)) v = Math.imul(kc ^ x, 16777619);
+            else if (x !== x) v = kc ^ 0x7ff8;
+            else { _snapKF64[0] = x; v = Math.imul(Math.imul(kc ^ _snapKI32[0], 16777619) ^ _snapKI32[1], 0x5bd1e995); }
+            h = (h + Math.imul(v, 2654435761)) | 0;
+        }
+        HC[i] = h;
+    }
+};
+
+// The status pre-pass (unit.js statusPrepassRun): for each unit (units[i]
+// at slot ix.slots[i]) its position copied (unit.x0, y0), and if not dead,
+// its status effects counted down and their
+// damage dealt, then its attack timers counted down, as Unit.update did
+// them. unit.stEv: 1 damaged (unit.stDot: how much), 2 its watch ended,
+// 4 died; st.count[chunk]: the chunk's units with events.
+// P: [0] units, [1] per job.
+SIM_KERNELS[SIM_KERNEL_STATUS] = function (R, P, chunk) {
+    const SL = R['ix.slots'], DEAD = R['unit.dead'], EN = R['unit.energy'], AT = R['unit.attackTimer'], AF = R['unit.attackFlash'];
+    const TH = R['unit.teleportHideTicks'], BU = R['unit.burning'], BD = R['unit.burnTickDamage'], PO = R['unit.poisoned'], PD = R['unit.poisonTickDamage'];
+    const FR = R['unit.frozen'], ID = R['unit.iceTickDamage'], WE = R['unit.wet'], SA = R['unit.sandy'], WA = R['unit.watched'];
+    const EV = R['unit.stEv'], DOT = R['unit.stDot'], CNT = R['st.count'];
+    const X = R['unit.x'], Y = R['unit.y'], X0 = R['unit.x0'], Y0 = R['unit.y0'], WTC = R['unit.workerTransferCooldown'];
+    let n = 0;
+    for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
+        const s = SL[i];
+        if (s < 0) continue;
+        X0[s] = X[s]; Y0[s] = Y[s];
+        if (DEAD[s]) continue;
+        let ev = 0, dot = 0;
+        if (TH[s] > 0) TH[s]--;
+        if (BU[s] > 0) { BU[s]--; const d = BD[s]; if (d > 0) { EN[s] -= d; dot += d; ev = 1; } }
+        if (PO[s] > 0) { PO[s]--; const d = PD[s]; if (d > 0) { EN[s] -= d; dot += d; ev = 1; } }
+        if (FR[s] > 0 && WE[s] > 0 && ID[s] > 0) { const d = ID[s] * 1.5; EN[s] -= d; dot += d; ev = 1; }
+        if (FR[s] > 0) FR[s]--;
+        if (WE[s] > 0) WE[s]--;
+        if (SA[s] > 0) SA[s]--;
+        if (WA[s] > 0) { WA[s]--; if (WA[s] <= 0) ev |= 2; }
+        if (EN[s] <= 0) { DEAD[s] = 1; ev |= 4; }
+        else { if (AT[s] > 0) AT[s]--; if (AF[s] > 0) AF[s]--; if (WTC[s] > 0) WTC[s]--; }
+        EV[s] = ev;
+        if (ev !== 0) { DOT[s] = dot; n++; }
+    }
+    CNT[chunk] = n;
+};
+
+// The combat scan (unit.js combatScanRun): for each idle or attack-moving
+// unit the kernel did not move, the nearest enemy unit (not dead) within
+// its aggro range whose area the unit's player sees (vis.cover), nearest
+// first then lowest id: slot into unit.cbT (-1 none), unit.cbTick = tick.
+// The unit index (sep.*) lists units by the tile they had at its rebuild;
+// positions are read live, so the rings are searched a tile further out.
+// Empty surroundings end at once (mv.hostile: hostile structures and other
+// players' units per block, summed-area).
+SIM_KERNELS[SIM_KERNEL_COMBAT_SCAN] = function (R, P, chunk) {
+    const OUT = R['unit.mvOut'], CMD = R['unit.commandState'], DEAD = R['unit.dead'], X = R['unit.x'], Y = R['unit.y'];
+    const OWN = R['unit.owner'], ID = R['unit.id'], AR = R['unit.spArea'], SEP = R['unit.sepKey'];
+    const RNG = R['unit.cbRange'], CT = R['unit.cbT'], CTK = R['unit.cbTick'];
+    // (Enemies where they were at the pass's start, and their areas there.)
+    const X0 = R['unit.x0'], Y0 = R['unit.y0'], AG = R['ix.agrid'], GW = P[15] | 0, GH = P[16] | 0;
+    const rs = R['sep.rs'], rc = R['sep.rc'], rst = R['sep.rstamp'], es = R['sep.eslot'], COVER = R['vis.cover'], HS = R['mv.hostile'];
+    const t = P[2] | 0, CW = P[3] | 0, CH = P[4] | 0, tile = P[5], ep = P[6] | 0, players = P[7] | 0, cmdIdle = P[8], cmdAM = P[9];
+    const B = P[10] | 0, bc = P[11] | 0, br = P[12] | 0, absent = P[13], cs = P[14] | 0, cws = tile * cs;
+    const stride = bc + 1, plane = stride * (br + 1);
+    for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) {
+        if (OUT[s] !== 0 || DEAD[s] || SEP[s] === absent) continue;
+        const cmd = CMD[s];
+        if (cmd !== cmdIdle && cmd !== cmdAM) continue;
+        const owner = OWN[s] | 0, r = RNG[s];
+        if (!(owner >= 0 && owner < players) || !(r > 0)) continue;
+        const cov = COVER[owner];
+        if (!cov) continue;
+        CTK[s] = t; CT[s] = -1;
+        const x = X[s], y = Y[s], cx = Math.floor(x / cws), cy = Math.floor(y / cws);
+        const rt = Math.ceil(r / cws) + 1;
+        // Nothing hostile in the blocks around: none.
+        {
+            const x0 = Math.max(0, cx - rt) * cs, y0 = Math.max(0, cy - rt) * cs, x1 = Math.min(CW - 1, cx + rt) * cs, y1 = Math.min(CH - 1, cy + rt) * cs;
+            const bx0 = Math.floor(x0 / B), by0 = Math.floor(y0 / B), bx1 = Math.min(bc - 1, Math.floor(x1 / B)), by1 = Math.min(br - 1, Math.floor(y1 / B)), o = owner * plane;
+            if (bx0 <= bx1 && by0 <= by1 && HS[o + (by1 + 1) * stride + bx1 + 1] - HS[o + by0 * stride + bx1 + 1] - HS[o + (by1 + 1) * stride + bx0] + HS[o + by0 * stride + bx0] <= 0) continue;
+        }
+        let best = -1, bd2 = r * r;
+        for (let ring = 0; ring <= rt; ring++) {
+            if (best >= 0 && (ring - 2) * cws > Math.sqrt(bd2)) break;
+            for (let oy = -ring; oy <= ring; oy++) {
+                const ty = cy + oy;
+                if (ty < 0 || ty >= CH) continue;
+                const edge = oy === -ring || oy === ring;
+                for (let ox = -ring; ox <= ring; ox += (edge || ring === 0) ? 1 : 2 * ring) {
+                    const tx = cx + ox;
+                    if (tx < 0 || tx >= CW) continue;
+                    const k = ty * CW + tx;
+                    if (rst[k] !== ep) continue;
+                    for (let e = rs[k], e1 = e + rc[k]; e < e1; e++) {
+                        const q = es[e];
+                        if (q < 0 || DEAD[q] || (OWN[q] | 0) === owner) continue;
+                        const qx = X0[q], qy = Y0[q], qgx = Math.floor(qx / tile), qgy = Math.floor(qy / tile);
+                        if (qgx < 0 || qgy < 0 || qgx >= GW || qgy >= GH) continue;
+                        const a = AG[qgy * GW + qgx];
+                        if (!(a >= 0) || !(cov[a] > 0)) continue;
+                        const dx = qx - x, dy = qy - y, d2 = dx * dx + dy * dy;
+                        if (d2 > bd2) continue;
+                        if (best < 0 || d2 < bd2 || ID[q] < ID[best]) { best = q; bd2 = d2; }
+                    }
+                }
+            }
+        }
+        CT[s] = best;
+    }
+};
+
+// The unit index's keys (chunk.js _spatialIndexRebuildParallel): per units
+// index, its chunk (every unit not dead, by the tile it stands on; others
+// nChunks) and that tile's area (none: A), for the radix sorts.
+// P as SIM_KERNEL_INDEX_COUNT's.
+SIM_KERNELS[SIM_KERNEL_INDEX_KEYS] = function (R, P, chunk) {
+    const SL = R['ix.slots'], X = R['unit.x'], Y = R['unit.y'], DEAD = R['unit.dead'], AG = R['ix.agrid'];
+    const keys = R['ix.keys'], areas = R['ix.areas'], bad = R['ix.bad'];
+    const nChunks = P[2] | 0, A = P[3] | 0, tile = P[9], GW = P[10] | 0, GH = P[11] | 0, CS = P[12] | 0, CW = P[13] | 0;
+    for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
+        const si = SL[i];
+        if (si < 0) { keys[i] = nChunks; areas[i] = A; Atomics.store(bad, 0, 1); continue; }
+        if (DEAD[si]) { keys[i] = nChunks; areas[i] = A; continue; }
+        let gx = Math.floor(X[si] / tile), gy = Math.floor(Y[si] / tile);
+        if (!(gx >= 0)) gx = 0; else if (gx >= GW) gx = GW - 1;
+        if (!(gy >= 0)) gy = 0; else if (gy >= GH) gy = GH - 1;
+        const k = CS === 1 ? gy * GW + gx : Math.floor(gy / CS) * CW + Math.floor(gx / CS);
+        keys[i] = k >= 0 && k < nChunks ? k : nChunks;
+        const a = AG[gy * GW + gx];
+        areas[i] = a >= 0 && a < A ? a : A;
+    }
+};
