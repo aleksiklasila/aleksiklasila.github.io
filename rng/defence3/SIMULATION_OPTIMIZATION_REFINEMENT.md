@@ -38,6 +38,16 @@ Keep phase timings comparable: moving work out of `_forEachUnitInTickOrder` or `
 
 These are opportunities established by code inspection. Their individual timing contributions are not yet measured.
 
+### Second refinement: corrections and sharper implementation choices
+
+- Reservations already persist through set/clear mutations. The expensive recurring reconstruction is the lazily rebuilt worker target-conflict index, not a per-tick reconstruction of the reservation array.
+- Worker candidate choice is an ordered fold with a near-tie condition and lexical string keys. An ordinary numeric sort or parallel minimum reduction is not an equivalent replacement.
+- The shared spatial build already parallelizes key generation and sorting, but still fills object lists and range/owner metadata in serial population loops.
+- Helper jobs use claimed chunks and an aggregate completion count. The current error handler does not recover an already claimed chunk, and owned-state kernels cannot simply be rerun after partial writes.
+- Navigation rebuild publication already follows deterministic multi-tick stages. Incremental computation must not make paths available earlier merely because it finishes sooner.
+
+The plan below incorporates these corrections. Favor bounded changes with measured end-to-end benefit before introducing the most complex algorithms.
+
 ## 2. Common engine architecture and behavioral contract
 
 Workers remain the first implementation priority, including fully employed workers. Normal combat units are a mandatory second workstream, not a residual fallback after worker optimization. Turrets, projectiles, lasers, and production receive explicit measurement and targeted algorithmic changes. A full typed-building migration is conditional on measured benefit; it is not a prerequisite for eliminating broad projectile scans or repeated queue calculations.
@@ -172,6 +182,28 @@ Persistent buffers are rebound only at barriers. Buffer generations, overflow de
 
 Initially keep sequential phase barriers. Cross-tick pipelining is unnecessary complexity until the basic architecture meets its budget.
 
+### 2.7 Define the read version and visibility of each mutation
+
+An immutable decision view does not mean a single snapshot for the entire tick. Write a phase access table before moving work:
+
+| Consumer | Required input/commit rule |
+|---|---|
+| Towers and lasers | Observe relevant preceding tower actions in canonical order |
+| Projectile impacts | Observe preceding impacts and current target survival; preserve reverse projectile order |
+| Unit statuses | Run after projectiles; capture the specified tick-start unit positions |
+| Unit/worker decisions | Read a named post-status decision version, including the chosen position and stat versions |
+| Assignment | Read current reservations; earlier resolved claims affect later eligibility |
+| Movement and floor interactions | Commit transitions in defined priority; one mine can be consumed only once |
+| Unit hit commit | Resolve admitted hits with live death/destruction checks |
+| Economic operations | Revalidate target, task, queue, and material state after combat and earlier work |
+| Production | Observe the completed economic phase and current population limits |
+
+Specify target-position and attacker-position versions separately: current code sometimes combines a moved attacker with tick-start target coordinates. Do not describe all positions as one shared snapshot and accidentally change contact/range behavior.
+
+Each extracted phase needs a small semantic table: inputs, allowed writes, events emitted, first consumer of each write, canonical priority, and retained legacy exceptions. Mark intentional changes from the interleaved legacy update as revision changes; algorithm-only transformations must still match their legacy oracle. The new serial implementation is the oracle only for those explicitly selected revision semantics.
+
+Shared journals provide invalidation and accounting; order-sensitive combat/work events remain separate ordered streams. Coalescing a health change to its first and last value must not erase a death, heal eligibility transition, effect application, or temporary population release observed between them.
+
 ## 3. Optimization workstreams
 
 ### A. Active and idle worker execution
@@ -231,7 +263,7 @@ Apply the same audit to other apparent predicates and lookups. Classify helpers 
 
 #### A4. Maintain reservations and task indexes incrementally
 
-Replace per-tick full-unit reservation reconstruction and full-unit manual-conflict scans with maintained indexes.
+Retain the existing maintained reservation table. Replace the lazy per-tick full-unit discovery in `_getWorkersWithTargetThisTick` and full-unit manual-conflict scans with maintained conflict indexes. The reservation array is allocated/reset on initialization and restore paths; do not claim its removal as a recurring tick saving.
 
 Update on assignment, release, removal, target motion, ownership change, and manual override.
 
@@ -242,6 +274,8 @@ Reservation records must remain authoritative where they outlive a worker’s cu
 Search candidates by region and profession. Share broad-phase ranges but preserve worker-specific scoring, task memory, eligibility, and ties.
 
 A lost claim must not end the search solely because an implementation-local candidate batch was exhausted.
+
+The current single reservation cell is keyed by tile/profession, while conflict checks also inspect owner and target holders. Query eligibility and `_setWorkerTarget` do not implement one interchangeable lower-ID comparator: the query may reject an existing claim before the setter's displacement rule is reached. Reproduce the call-path behavior in the serial assignment resolver, including manual overrides and returning-worker claims. Do not replace it with generic per-target auctions.
 
 #### A5. Optimize healer candidate selection without changing its policy
 
@@ -276,6 +310,26 @@ Fix the expired-retarget/backoff interaction so rejected searches leave a meanin
 Coalesce work changes by affected region/profession. Avoid worker×target subscription matrices and global wakeups for every individual damage event.
 
 Existing hold/stop behavior remains unchanged. No pause command is required.
+
+#### A7. Parallelize candidate preparation without changing the ordered choice
+
+`_pickDistributedWorkerCandidate` first accepts strictly lower scores, then handles scores within 1e-9 using the lexical key `targetType|gx,gy|id`. Its near-tie branch can replace the selected candidate without replacing the stored best score. This is an ordered fold, not a conventional total-order comparator; sorting, local top-k, or merging chunk minima needs a proof and cannot be assumed correct.
+
+Prepare eligibility-independent geometry and scores in helpers, preserving canonical candidate sequence. Resolve reservation-sensitive eligibility and selection in an exact compact fold. Reuse candidate-key representations where useful, but preserve lexical ordering (for example, the text '10' sorts before '2'); numeric field sorting is not equivalent. Preserve the existing Number multiplication and conversion in the worker-specific score seed rather than substituting `Math.imul` without an equivalence check.
+
+For contention, process bounded candidate pages with an explicit continuation cursor and fold state. Apply prior assignment effects at the defined priority point. If claims change, invalidate/re-evaluate affected eligibility; do not use a stale prefiltered list. A worker either finds the same eligible choice or proves the relevant candidate stream exhausted. Paging bounds memory, not gameplay search effort. Use a serial reference for lower-ID displacement, different owners sharing a reservation cell, two target objects on one tile, and moving healer targets.
+
+#### A8. Turn work availability into shared regional inputs
+
+`_workerWorkVerOf` currently folds regional versions separately for each worker, including regions around its profession-specific search origin and current position. Cache/deduplicate identical region-set queries per owner/profession and source version. Share that read preparation before attempting a reverse subscription index.
+
+Separate three changes: candidate membership, candidate eligibility, and an individual claim/payment. A single payment or claim should not rebuild every profession's entire target set. Conversely, owner-wide research/resource changes may legitimately invalidate many workers and need one coalesced owner/profession event.
+
+The builder cache currently scans structures and canonicalizes targets on tile-entity changes or after ten ticks. Maintain its active membership and canonical enumeration incrementally, but first specify whether new eligibility remains visible at the old refresh boundary. Immediate discovery of newly damaged/eligible targets is a behavior change if the old cache would not contain them yet. Live revalidation of existing candidates is a separate rule.
+
+Define invalidation coverage from the actual search domain, including researcher-specific reach, mobile healer targets, area-range semantics, ownership, and alternate search origins. Never use a smaller geometric wake region than the query can inspect. Version/checksum equality alone is not an infallible proof of no change: use explicit epoch/generation rules and test wrap/reset, while retaining required periodic wakeups.
+
+Measure failed searches, shared version-query preparation, conflict checks, and wake-to-success ratio. Mass completion, empty resources, and owner-wide changes must not produce duplicate wake entries or worker-by-target subscription storage. Keep a deterministic dense scan fallback when most workers are due; do not postpone legitimate work to smooth CPU usage.
 
 ### B. Economic operations and shared-resource reductions
 
@@ -398,6 +452,8 @@ Cache these derived trees under an explicit memory budget. Active route descript
 
 For validation, compare every incremental graph result against full recomputation on randomized topology changes.
 
+Implement navigation in escalating steps: deduplicate requested destinations, avoid unaffected local rebuilds, then assess retained-tree repair. Dynamic shortest-path repair is optional until profiling shows full recomputation of the demanded rows still exceeds budget. Equal distances are not sufficient validation: next-hop/predecessor choices, unreachable markers, route sequences, and readiness must agree too. Preserve row identity separately from local storage layout so incremental exit allocation cannot redefine tie order.
+
 #### D4. Publish complete navigation generations
 
 Do not publish a mixture of new local fields and incompatible old destination rows.
@@ -410,6 +466,8 @@ Until publication:
 - Live wall checks prevent illegal movement.
 - Pending field readiness remains explicit.
 - No peer starts a route earlier because its cache happened to contain a result.
+
+Current rebuilds use `NAV_BUILD_SLICES` and deterministic publication stages in `navTick`. Preserve the logical installation tick even when optimized work finishes early. A cache miss, eviction, slow helper, or restore can increase wall-clock work, but cannot move logical readiness on one peer. Collect newly requested destinations during an in-progress rebuild and define how each joins the next generation before publishing it; copying only the request set from build start is insufficient.
 
 #### D5. Keep A* economics independent
 
@@ -522,7 +580,7 @@ Start with a tight ordered typed fold. Parallelize independent target groups onl
 
 The current kernel visits a contacting pair from each participating unit. This repeats distance and overlap computation.
 
-Add a pair-once path for dense interactions:
+After measuring the existing gather path and its preparation/commit costs, prototype a pair-once path for dense interactions:
 
 1. Enumerate unordered cell pairs.
 2. Split large cell pairs into bounded blocks.
@@ -549,6 +607,8 @@ The partition between paths must assign each interaction exactly once.
 Do not store one large object or record per contact. Dense overlaps could otherwise create a memory explosion. Use bounded tile/block-local partials.
 
 No contacts are discarded to meet a performance target.
+
+Keep gather as the production reference until a bounded prototype wins on complete separation time, including pair enumeration, endpoint reduction, scratch traffic, and helper waits. Do not require pair-once merely because it halves geometry calculations; its reduction cost can exceed that saving. Enable it only for a deterministically selected density regime that passes exact equivalence and peak-memory gates.
 
 ### G. World change journal and maintenance
 
@@ -581,6 +641,18 @@ Additional maintenance changes:
 - Batch creation/removal without repeated list splicing.
 
 Independent reconstruction tests must compare all maintained indexes with a fresh rebuild.
+
+#### G1. Finish the spatial build instead of adding another spatial copy
+
+`_spatialIndexRebuildParallel` already generates keys and stably sorts by chunk and by area. It then walks both orders on the main simulation thread to fill object arrays, slot/key arrays, range metadata, and owner counts. Measure these serial tails independently from sorting and worker time.
+
+First make typed slot ranges the direct query interface. Migrate remaining object-query consumers incrementally; build an object view only where it is still needed. Parallelize boundary detection/range metadata and per-area owner counts with uniquely owned ranges or bounded local reductions, avoiding an atomic increment for every entity. Keep canonical within-cell order wherever first-match queries expose it.
+
+Spatial sorting currently returns reusable scratch storage. Consumers must finish or retain their needed order before another sort reuses that storage. Explicit ownership is also required if per-phase views remain alive across later rebuilds.
+
+Prefer a proven full packed rebuild at high movement density and local maintenance at low density only if it wins after ordering and journal cost. Compare deterministic estimates of entities moved, affected cells, and ordering work; both algorithms must expose the same logical membership/order. Never introduce a large per-helper histogram over every map cell and owner without including its memory and clearing cost.
+
+Keep live count summaries and frozen query membership distinct. Queries against older membership need a conservative displacement/radius bound; ordinary speed is not a valid bound for teleports or other discontinuous moves. Such transitions require the phase's explicit spatial refresh or an exactly queried exception list. Test area-border movement, separation displacement, teleports, and newly spawned entities at every consumer boundary.
 
 ### H. Hashing and snapshot repair
 
@@ -749,6 +821,38 @@ Retain periodic gameplay normalization and the different status boundaries for t
 
 Use the shared journal for housing capacity, research/lab eligibility, portals, visibility, adjacency, and repair indexes. Implement typed hot building fields only when they remove measured traversal or commit costs. Reuse object adapters for cold metadata.
 
+### M. Execution overhead, memory, and recoverable jobs
+
+#### M1. Choose task granularity by work, not just entity count
+
+Several existing kernels dispatch fixed entity ranges (2,048, 4,096, or 8,192 entries). Equal entity counts can contain radically different numbers of candidates, links, or contacts. Retain dynamic task claiming, but create bounded spatial/candidate blocks for dense jobs so one hotspot cannot hold the entire barrier.
+
+Use deterministic work estimates for dense versus sparse paths and dispatch thresholds. Benchmark the serial path for tiny jobs and avoid a helper barrier when it costs more than the work. Fuse compatible cheap passes only when their input/output phase contract permits it; do not fuse across gameplay visibility or resource boundaries.
+
+Measure preparation, dispatch, main-participant work, helper work distribution, wait time, compaction, and commit. Main-participant elapsed time already overlaps helper work; do not add every helper's CPU time to wall-clock tick time. Instrument detailed counters only in diagnostic runs and compare against the low-overhead timing build.
+
+#### M2. Make helper failure recovery concrete
+
+Today `simParallelRun` waits for an aggregate completed-chunk count. A helper failure after claiming work can leave that count short; the error handler only logs the error. A partially mutated authoritative chunk cannot be safely processed again as if it were untouched.
+
+Use run generation plus per-job claim/completion state, and publish outputs only for a completed compatible run. For pure kernels, discard/recompute uncommitted outputs after fencing the failed generation. Do not reissue an overdue claim while its original helper can still write into the same storage. Terminate or otherwise prove quiescence of old writers, or use isolated generation-owned output buffers.
+
+For owned-state kernels, choose explicitly between staged replacement values committed once, or a retained recoverable input version covering every mutated field. Prefer staged status outputs for the first recoverable implementation if their measured bandwidth cost fits. Never recover by replaying damage, cooldown decrements, resource debits, or effects against partially updated state.
+
+The tick commits, hashes, acknowledges commands, advances its tick counter, and publishes only after all required phases succeed. A watchdog detects infrastructure failure in wall-clock time; it must not convert failure into different gameplay deadlines or skip jobs. If recovery is impossible, report a failed tick and restore a known coherent version rather than continue from partial state. Test failure before claim, after claim, during output, during owned writes, and after completion but before publication.
+
+#### M3. Budget bytes and lifecycle work before allocating more columns
+
+For every persistent/scratch structure, record bytes per live entity, allocated slot, map cell, owner, destination, job, and in-flight version. Also record bytes read/written per tick and peak old-plus-new storage during growth, restore, and navigation publication.
+
+For scale: one Float64 column over 200,000 slots is 1.6 MB; a 16-entry Int32 route window is 12.8 MB at that size. A million-cell Int32 plane is 4 MB before multiplying by owners, types, or helper count. These are arithmetic illustrations, not measured total allocations. Existing columns and indexes must be inventoried before adding replacements alongside them.
+
+Current unit allocation grows and rebinds all columns, while reclamation checks sliced slot ranges and detaches dead objects' numeric fields before reuse. Pre-size known benchmark populations and reserve capacity at safe barriers; also test production crossing capacity boundaries without preallocation. Use live/activity indirection first to eliminate high-water scans. Only compact physical slots if measured savings exceed relocation and reference-repair cost.
+
+Removal queues should carry slot plus generation and retire slots only after all current intents/readers finish. Preserve detached-object semantics while legacy references remain; do not discard their last values or reuse an address beneath a queued hit. Generation reset/wrap and same-tick restore require an epoch as well as a slot number. Derived local slot generations do not become gameplay identity or enter hashes merely because they are convenient.
+
+Bound and release candidate pages, journal segments, detached references, helper buffers, and old navigation/frame generations. Track object allocations and retained capacity after a grow-then-shrink battle. Hard memory exhaustion is an explicit failure/recovery condition, never permission to truncate contacts, candidates, attacks, or worker output.
+
 ## 4. Implementation order, interfaces, and risks
 
 ### 4.1 Internal interfaces
@@ -786,9 +890,9 @@ The names are proposed interfaces; their essential contract is explicit read ver
 | 4 | Worker travel, deadlines, assignment and economic commit | All professions sustain legal work simultaneously |
 | 5 | Complete normal-unit combat, chase, cooldown validation, statuses, and typed hit commit | No common state falls back to broad object updates; useful attacks and movement preserved |
 | 6 | Projectile structure broad phase and stable compaction; due-turret queries | Exact collision/target priority, same-tick shot motion, and status ordering |
-| 7 | Navigation local rebuilds and destination repair | Incremental results match full recomputation |
+| 7 | Navigation demand/local rebuilds; retained-tree repair only if still justified | Adopted incremental paths match full recomputation, ties, and readiness |
 | 8 | Laser topology/strip queries and changed-only production, where measured material | Link/hit equivalence; exact production order and throughput |
-| 9 | Spatial/visibility/lifecycle cleanup and pair-once separation | Exact query/contact reference tests |
+| 9 | Spatial/visibility/lifecycle cleanup; pair-once separation if its complete measured cost wins | Exact query/contact references and bounded peak memory |
 | 10 | Typed hashing and indexed repair for all migrated entity types | Corruption/repair/restore tests |
 | 11 | Direct frame encoding and grid deltas | Ownership and dropped-frame tests |
 | 12 | Whole-system optimization and acceptance | Complete tick, active-economy, combat, and building-heavy acceptance |
@@ -796,6 +900,18 @@ The names are proposed interfaces; their essential contract is explicit read ver
 Preserve the current implementation as the baseline, including any user changes present when implementation starts. The working tree was clean at this refinement's initial inspection.
 
 The table expresses dependencies and priority, not a requirement to postpone small independent gains. Once phase/order tests exist, the local projectile structure query can be implemented early without migrating all buildings. Advance larger building migrations only when representative measurements show that they compete with the remaining worker/combat work. An illustrative triage threshold is 5% of complete tick time or recurring tail spikes; it is not a correctness criterion or a reason to ignore a structure-heavy workload.
+
+Deliver the architecture in working slices, not one all-or-nothing rewrite. Extend the manifest/journal only for each migrated field and consumer, retain a serial execution path, and remove duplicate old preparation when its last consumer migrates. Do not require a complete universal schema or every activity index before optimizing worker execution.
+
+The first reviewable implementation slices are:
+
+1. **Establish comparable measurements and semantic oracles.** Recover the exact baseline fixture/revision behind the inherited numbers; label them historical until reproducible. Instrument worker states, combat fallback reasons, serial spatial tails, projectiles, production, and job waits. Use the same field/hash/publication coverage on both sides.
+2. **Remove repeated worker preparation.** Maintain target-conflict membership; share repeated work-version queries; preserve candidate folding and reservation semantics. Verify moving targets and complete legal work cycles before adding parallel assignment.
+3. **Migrate one worker operation end to end.** Include due scheduling, typed proposal, ordered economic commit, invalidation, snapshot/hash, and restore. Then cover every profession and mass contention. Timing a proposal kernel without its commit is not a completed slice.
+4. **Complete a representative combat path end to end.** In-range unit attacks and chase, then forced/building targets, holding, drive-by, and special behavior. Account for each remaining adapter explicitly.
+5. **Apply independent algorithmic fixes.** Local projectile structure queries and spatial serial-tail removal can proceed once their own phase/order oracles exist, without waiting for the optional larger navigation/laser rewrites.
+
+For every slice, retain it only after correctness, useful-throughput, whole-tick cost, and memory gates. A failed optimization returns to its reference path rather than expanding into more architecture to justify itself. Performance-path selection must not enter replay/snapshot semantics. Intentional behavior revision remains a separate, explicit compatibility decision.
 
 ### 4.3 Performance budget
 
@@ -856,6 +972,10 @@ Recompute the whole-tick bound after every stage. If a fraction f of baseline ti
 | Laser strip queries miss large-radius units | Conservative per-cell/global radius bounds and index-motion margins |
 | Cached producer fronts lose payment or ready-order changes | Queue generations, mutation hooks, and scheduler replay oracle |
 | Unified building status pass changes application timing | Preserve tower and producer sub-phases |
+| Worker near-tie choice is treated as a sortable comparator | Preserve its canonical ordered fold and lexical tie semantics |
+| Aggregate helper completion count hides a lost claim | Per-job completion, fenced recovery, and coherent tick publication |
+| Fewer calculations require more memory traffic than they save | Whole-phase timing and peak/retained-byte gates |
+| Faster local navigation changes route availability | Preserve logical readiness across warm/cold caches and helper counts |
 
 ### 4.5 Compatibility
 
@@ -900,6 +1020,13 @@ Compare per-tick state with 0, 1, 3, and 7 helpers, varied scheduling and chunk 
 - Beam-strip queries equal existing hit results for large-radius units, endpoint boundaries, crossing/overlapping beams, resistance, and same-phase destruction.
 - Incremental producer readiness equals the existing scheduler through payments, queue edits, disabled queues, population saturation/release, failed spawning, the 2,048 limit, and restore.
 - Maintained building activity lists match independent exhaustive discovery after damage, repair, ownership, upgrade, and topology changes.
+- Worker candidate selection preserves the ordered near-tie fold for randomized canonical streams, lexical numeric keys, existing-target bias, large stable IDs, and adversarial scores within 1e-9.
+- Maintained conflicts preserve distinct query/setter behavior, different-owner occupancy, same-tile target replacement, returning claims, and mobile target crossings.
+- Work availability queries cover all search origins/domains; mass wakeups enqueue once, cached builder eligibility respects its specified visibility tick, and epoch reset cannot hide work.
+- Dense/sparse activity and spatial paths produce the same state and query order, including teleports, area borders, and order-buffer reuse.
+- Helper fault injection proves no hangs, duplicate effects, partial tick publication, stale-generation writes, or premature command acknowledgment.
+- Grow/shrink, slot reuse, capacity rebind, long-tick/deadline boundaries, generation wrap, and same-tick restore preserve identity and release obsolete storage.
+- Navigation requests arriving during rebuild, cold-cache restore, and cache eviction preserve exact logical readiness and routing ties.
 
 ### Mandatory workload families
 
@@ -929,6 +1056,8 @@ For each family record entity/state counts, map and owner counts, seed, revision
 Worker priority does not exempt combat or buildings from acceptance. Retain the supplied whole-tick and independently measured active-worker 20x requirements. Establish combat-only and structure-heavy baselines before implementation, require unchanged useful throughput and no material whole-tick regression in them, and publish their measured gains separately. Do not claim an unmeasured 20x gain for every individual subsystem.
 
 During future implementation validation, use matching instrumentation and tick windows. Separate diagnostics from low-overhead timing. Include GC, helper waits, preparation, commit, hashing, and maintenance in the complete tick.
+
+Capture both fixed-input scenario timing and closed-loop sustained simulation. Fixed-input repeats isolate algorithm cost; closed-loop runs expose altered assignments, battle attrition, growth, and route churn. Report actual state populations over the timing window so faster attrition or depleted work cannot masquerade as a faster implementation. Use repeated comparable runs and publish the spread, not only the best sample. A correctness test that changes workload through its instrumentation cannot serve as the performance baseline.
 
 The success claim remains **measured whole-tick improvement with full gameplay throughput**. The new optimizations make that target more plausible by reducing duplicated queries, repeated graph work, serial preparation, and publication scans; none is counted as achieved until its correctness and end-to-end contribution are demonstrated.
 
