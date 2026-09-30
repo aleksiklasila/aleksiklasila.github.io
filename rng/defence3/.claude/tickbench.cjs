@@ -5,7 +5,8 @@
 //   node .claude/tickbench.cjs [seconds] [--prof]   (run with --cpu-prof for a profile)
 const path = require('node:path');
 const H = require(path.join(__dirname, '../tests/net-harness.cjs'));
-const data = require(path.join(__dirname, '../tests/1500.json'));
+// DATA=path: another lobby settings file (default tests/1500.json).
+const data = require(process.env.DATA ? path.resolve(process.env.DATA) : path.join(__dirname, '../tests/1500.json'));
 const seconds = Number(process.argv[2]) || 15;
 (async () => {
     const controls = { ...H.SMALL_MATCH_CONTROLS };

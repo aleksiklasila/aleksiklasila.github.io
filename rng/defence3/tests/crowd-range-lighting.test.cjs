@@ -7,7 +7,7 @@ const src = read('src/things/unit.js');
 const c = vm.createContext({TILE:32,UNIT_POSITION_QUANTIZATION:1024,gameTime:0,GRID_W:100,GRID_H:100,
     CROSS_TEAM_UNIT_COLLISION_PADDING:16,CHUNK_SIZE:1000,spatialUnitsComplexPlayerCount:0,spatialUnitsComplex:new Int32Array(0),
     spatialUnitsComplexStridePerChunk:0,spatialUnitsComplexStridePerPlayer:0,BASE_UNIT_STATS:{norm:{r:8}},CHUNKS_W:1,CHUNKS_H:1,
-    getUnitCollisionRecalcTicks:()=>5,canUnitOccupyTile:()=>true,updateUnitSpatial:()=>{}});
+    getUnitCollisionRecalcTicks:()=>5,canUnitOccupyTile:()=>true,canUnitOccupyTileCached:()=>true,updateUnitSpatial:()=>{}});
 vm.runInContext(read('src/utils/utils_common.js'),c);
 // The separation pass runs its pair search as a kernel (sim_parallel.js).
 vm.runInContext(read('src/sim/sim_parallel.js'),c);

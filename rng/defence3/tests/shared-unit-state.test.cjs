@@ -16,9 +16,11 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     // before reallocation. Fractions stay Float64, not render precision.
     const first = units[0], x = first.x = 123.1234567890123;
     for (let i = 0; i < 2100; i++) { const u = new Unit('norm', i & 1, 50+i%20, 50+(i%19)); units.push(u); }
+    // (Positions are unit fields, copied into the columns after each move.)
+    simUnitMirror(first);
     if (first.x !== x || first._us.x[first._si] !== x) fail('growth/precision');
     const retired = units.pop(), oldX = retired.x, slot = retired._si;
-    removeUnitSpatial(retired); retired.dead = true; simUnitStateCollect();
+    removeUnitSpatial(retired); retired.dead = true; simUnitStateCollect(true);
     const replacement = new Unit('norm', 0, 300, 300); units.push(replacement);
     if (replacement._si !== slot || retired.x !== oldX) fail('slot retirement');
     retired.x = -100;

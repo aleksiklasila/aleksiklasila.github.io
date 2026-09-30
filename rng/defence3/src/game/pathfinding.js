@@ -227,6 +227,7 @@ function _makeFallbackPathForUnit(u, sx, sy, ex, ey, cmd = CMD_MOVING, src = 'fa
     u.path = null;
     u.pathIndex = 0;
     u._pendingPathTarget = { gx: ex, gy: ey, cmd, src };
+    notePendingPathUnit(u);
     u.commandState = cmd;
     _setUnitAstarBudgetBlockedIndicator(u, 1);
     return null;
@@ -264,23 +265,30 @@ function _recordAstarUsage(owner, usedNodes, unit = null, sourceTag = null) {
     let bucket = _ensureAstarLogPlayer(pid);
     if (!bucket) return;
 
-    let unitType = String((unit && unit.unitType) || _activePathfindUnitType || 'other');
+    let unitType = (unit && unit.unitType) || _activePathfindUnitType || 'other';
+    if (typeof unitType !== 'string') unitType = String(unitType);
+    let source = sourceTag || _activePathfindSource || PATH_SOURCE_UNSPECIFIED;
+    if (typeof source !== 'string') source = String(source);
+    // Movement records one spend per unit step. Readers only sum by tick,
+    // type and source, so every spend of a tick goes into one row per
+    // (owner, type, source), found through this tick's index.
+    if (_astarUsageIndexTick !== gameTime) { _astarUsageIndex = new Map(); _astarUsageIndexTick = gameTime; }
+    // owner -> unit type -> source (nested maps: no key strings per step).
+    let byOwner = _astarUsageIndex.get(pid);
+    if (!byOwner) _astarUsageIndex.set(pid, byOwner = new Map());
+    let byType = byOwner.get(unitType);
+    if (!byType) byOwner.set(unitType, byType = new Map());
+    let row = byType.get(source);
+    if (row && row.bucket === bucket) {
+        row.ev.used += used;
+        row.ev.delta -= used;
+        return;
+    }
     let unitMetric = _astarMetricKeyForUnitType(unitType);
     let unitId = (unit && Number.isFinite(Number(unit.id)))
         ? Math.floor(Number(unit.id))
         : (Number.isFinite(Number(_activePathfindUnitId)) ? Math.floor(Number(_activePathfindUnitId)) : null);
-    let source = String(sourceTag || _activePathfindSource || PATH_SOURCE_UNSPECIFIED);
-    // Movement records one spend per unit step. Readers only sum by tick,
-    // type and source, so merge same-tick rows instead of logging each step.
-    for (let i = bucket.length - 1, seen = 0; i >= 0 && seen < 8; i--, seen++) {
-        let ev = bucket[i];
-        if (ev.tick !== gameTime) break;
-        if (ev.unitType !== unitType || ev.source !== source) continue;
-        ev.used += used;
-        ev.delta -= used;
-        return;
-    }
-    bucket.push({
+    let ev = {
         tick: gameTime,
         owner: pid,
         unitType,
@@ -289,10 +297,13 @@ function _recordAstarUsage(owner, usedNodes, unit = null, sourceTag = null) {
         source,
         used,
         delta: -used,
-    });
+    };
+    bucket.push(ev);
+    byType.set(source, { bucket, ev });
 
     _pruneTickLogBucket(bucket, gameTime - Math.max(1, Math.floor(TICK_RATE * ASTAR_USAGE_LOG_MAX_SECONDS)));
 }
+let _astarUsageIndex = new Map(), _astarUsageIndexTick = -1;
 
 function _withPathfindContext(source, owner, unit, fn) {
     let prevSource = _activePathfindSource;
@@ -371,12 +382,52 @@ function _withPathfindSource(source, fn) {
     }
 }
 
-function _countPendingPathBacklog() {
-    let c = 0;
-    for (let u of units) {
-        if (u && !u.dead && u._pendingPathTarget) c++;
+// Units waiting for a deferred path, registered where a pending target is
+// set, and scheduled by the tick they are next due: the tick after they
+// were last looked at, or later while their search budget cools down
+// (u._astarBudgetRetryTick). The resolver visits only the units due, so a
+// big army waiting its turn costs nothing per tick. The due tick follows
+// from the unit's state, so a restored peer rebuilds the same schedule.
+let _pendingPathUnits = new Set();
+let _pendingPathDue = new Map(); // tick -> [unit] (duplicates dropped when taken)
+function _pendingPathDueTick(u, afterTick) {
+    let retry = u._astarBudgetRetryTick;
+    return Number.isFinite(retry) && retry > afterTick + 1 ? retry : afterTick + 1;
+}
+function schedulePendingPathUnit(u, tick) {
+    let list = _pendingPathDue.get(tick);
+    if (!list) _pendingPathDue.set(tick, list = []);
+    list.push(u);
+}
+function notePendingPathUnit(u) {
+    _pendingPathUnits.add(u);
+    schedulePendingPathUnit(u, _pendingPathDueTick(u, gameTime));
+}
+function resetPendingPathUnits() {
+    _pendingPathUnits = new Set();
+    _pendingPathDue = new Map();
+    for (let u of units) if (u && !u.dead && u._pendingPathTarget) notePendingPathUnit(u);
+}
+// The pending units due at `tick` (each once, in id order); those no longer
+// waiting are dropped.
+function takeDuePendingPathUnits(tick) {
+    let due = [];
+    for (let [t, list] of _pendingPathDue) {
+        if (t > tick) continue;
+        _pendingPathDue.delete(t);
+        for (let u of list) {
+            if (u._pendingDueStamp === tick) continue;
+            u._pendingDueStamp = tick;
+            if (u.dead || !u._pendingPathTarget) { _pendingPathUnits.delete(u); continue; }
+            due.push(u);
+        }
     }
-    return c;
+    due.sort((a, b) => a.id - b.id);
+    return due;
+}
+
+function _countPendingPathBacklog() {
+    return _pendingPathUnits.size;
 }
 
 function _pendingPathPriority(src) {
@@ -597,7 +648,29 @@ function runPathfindingCorrectnessHarness() {
 window.getPathfindingPerfSnapshot = getPathfindingPerfSnapshot;
 window.runPathfindingCorrectnessHarness = runPathfindingCorrectnessHarness;
 
+// Where combat units may stand changes with the path topology and when a
+// building finishes (an unfinished one can be walked through): cached
+// "this tile is fine" answers carry this version.
+let tileOccupancyVersion = 1;
+function bumpTileOccupancyVersion() { tileOccupancyVersion++; }
+
+// canUnitOccupyTile for a unit's tile, remembered per unit (combat units:
+// a worker's passability also depends on its task) until the tile or the
+// occupancy version changes. `slot` 0: the unit's own tile, 1: its path node.
+function canUnitOccupyTileCached(unit, gx, gy, slot) {
+    let key = gy * GRID_W + gx;
+    if (slot === 0 ? (unit._okTile === key && unit._okVer === tileOccupancyVersion)
+        : (unit._okNodeTile === key && unit._okNodeVer === tileOccupancyVersion)) return true;
+    let ok = canUnitOccupyTile(unit, gx, gy);
+    if (ok && !unit.workerType) {
+        if (slot === 0) { unit._okTile = key; unit._okVer = tileOccupancyVersion; }
+        else { unit._okNodeTile = key; unit._okNodeVer = tileOccupancyVersion; }
+    }
+    return ok;
+}
+
 function _bumpPathTopologyVersion() {
+    tileOccupancyVersion++;
     pathTopologyVersion++;
     if (pathTopologyVersion > 1000000000) pathTopologyVersion = 1;
     if (sharedPathCache.size > 0) sharedPathCache.clear();
@@ -625,6 +698,55 @@ function _hasUsablePathPortal(owner) {
         }
     }
     return false;
+}
+
+// A lower bound on the path length from a tile to a target when the
+// owner's live portals (a step from a cloud to its paired cloud) can
+// shorten it: the shortest distance where any move costs its Manhattan
+// length and each portal step costs 1. It is consistent (a shortest-path
+// metric), so searches keep their heuristic with portals instead of
+// flooding the map. `targetH(x, y)` is the plain distance to the target.
+// Returns entries [x, y, cost] (cost: 1 + the partner's distance), and
+// h(x, y) = min(targetH(x, y), min over entries |x - ex| + |y - ey| + cost).
+function _portalHeuristicEntries(owner, targetH) {
+    if (_cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+    let ends = [];
+    for (let t of _cloudTileCache.values()) {
+        if (t.owner !== owner || !(t.energy > 0) || t.underConstruction) continue;
+        let partner = getPairedCloudTower(t, owner);
+        if (partner) ends.push({ x: t.gx, y: t.gy, partner });
+    }
+    if (ends.length === 0) return null;
+    ends.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+    let index = new Map(ends.map((e, i) => [e.y * GRID_W + e.x, i]));
+    let partnerOf = ends.map(e => index.has(e.partner.gy * GRID_W + e.partner.gx) ? index.get(e.partner.gy * GRID_W + e.partner.gx) : -1);
+    let H = ends.map(e => targetH(e.x, e.y));
+    // Shortest distances to the target over portal endpoints (few of them).
+    for (let round = 0; round < ends.length + 1; round++) {
+        let changed = false;
+        for (let i = 0; i < ends.length; i++) {
+            let best = H[i];
+            if (partnerOf[i] >= 0 && 1 + H[partnerOf[i]] < best) best = 1 + H[partnerOf[i]];
+            for (let j = 0; j < ends.length; j++) {
+                let d = Math.abs(ends[i].x - ends[j].x) + Math.abs(ends[i].y - ends[j].y) + H[j];
+                if (d < best) best = d;
+            }
+            if (best < H[i]) { H[i] = best; changed = true; }
+        }
+        if (!changed) break;
+    }
+    let out = [];
+    for (let i = 0; i < ends.length; i++) if (partnerOf[i] >= 0) out.push(ends[i].x, ends[i].y, 1 + H[partnerOf[i]]);
+    return out.length ? out : null;
+}
+
+function _portalHeuristic(entries, x, y, plain) {
+    let h = plain;
+    for (let i = 0; i < entries.length; i += 3) {
+        let d = Math.abs(x - entries[i]) + Math.abs(y - entries[i + 1]) + entries[i + 2];
+        if (d < h) h = d;
+    }
+    return h;
 }
 
 let _pathClearanceGrid = null;
@@ -1209,7 +1331,11 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
     astarFrom[startKey] = startKey; // sentinel for path reconstruction
 
     _astarHeapSz = 0;
-    let startH = usePortalHeuristic ? 0 : (Math.abs(ex - sx) + Math.abs(ey - sy));
+    // With live portals, the portal-aware bound (see _portalHeuristicEntries).
+    let portalEntries = usePortalHeuristic ? _portalHeuristicEntries(pathOwner, (x, y) => Math.abs(ex - x) + Math.abs(ey - y)) : null;
+    let startH = usePortalHeuristic
+        ? (portalEntries ? _portalHeuristic(portalEntries, sx, sy, Math.abs(ex - sx) + Math.abs(ey - sy)) : 0)
+        : (Math.abs(ex - sx) + Math.abs(ey - sy));
     _heapPush(startH, startKey);
 
     while (_astarHeapSz > 0) {
@@ -1297,7 +1423,7 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
                 gScoreVal[nKey] = ng;
                 astarFrom[nKey] = curKey;
                 let distance = Math.abs(ex - nx) + Math.abs(ey - ny);
-                let h = usePortalHeuristic ? 0 : distance;
+                let h = usePortalHeuristic ? (portalEntries ? _portalHeuristic(portalEntries, nx, ny, distance) : 0) : distance;
                 let cross = Math.abs((nx - sx) * routeDy - (ny - sy) * routeDx);
                 // Cached terrain clearance answers directly unless special
                 // passability (walk profile or portals) must be checked live.
@@ -1324,7 +1450,8 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
                             let distance = Math.abs(ex - partner.gx) + Math.abs(ey - partner.gy);
                             let cross = Math.abs((partner.gx - sx) * routeDy - (partner.gy - sy) * routeDx);
                             let clearancePenalty = (3 - _getPathClearance(partner.gx, partner.gy, canWalk, pathOwner, usePortalEdges)) * 0.125;
-                            _heapPush(ng + clearancePenalty + (distance * tieStride + cross) * tieScale, nKey); // h=0 with live portals
+                            let ph = portalEntries ? _portalHeuristic(portalEntries, partner.gx, partner.gy, distance) : 0;
+                            _heapPush(ng + ph + clearancePenalty + (distance * tieStride + cross) * tieScale, nKey);
                         }
                     }
                 }
@@ -1617,4 +1744,363 @@ function findGroupPathsToTarget(starts, ex, ey, canWalk = null, pathOwner = null
     }
     _recordPathfindCall('player_commands', performance.now() - perfStart, false);
     return result;
+}
+
+// ---- Group routes: shared reverse searches that run over several ticks ----
+// A move order for a large army is answered by one reverse search from the
+// destination (the flow of findGroupPathsToTarget), but one that keeps its
+// state between ticks: each tick it expands at most its share of the
+// owner's search budget, and the members whose tiles it has reached get
+// their paths (walked downhill from the distances, shared per start tile).
+// A search too big for one tick's budget therefore finishes a few ticks
+// later instead of failing every tick. Routes are caches of the path
+// topology: a topology change (every peer bumps it at a resync) drops them.
+// Live routes (least recently used dropped beyond): enough for many-point
+// orders of every player. A route holds 5 bytes per map tile.
+const GROUP_ROUTE_MAX = 32;
+const GROUP_ROUTE_NODES_PER_TICK = 60000;
+// Start tiles turned into paths per tick, over all routes (walking a long
+// route downhill for thousands of tiles at once would stall a tick).
+const GROUP_ROUTE_PATHS_PER_TICK = 400;
+let _groupRoutes = new Map(), _groupRoutesVersion = -1, _groupRouteSeq = 0;
+const _groupRouteStepKeys = new Int32Array(8);
+let _groupRoutePathTick = -1, _groupRoutePathsLeft = 0;
+
+function _groupRouteProfile(canWalk) {
+    if (!canWalk) return 'plain';
+    return canWalk._pathProfileKey || null;
+}
+
+function _groupRouteKey(owner, ex, ey, canWalk) {
+    let profile = _groupRouteProfile(canWalk);
+    return profile === null ? null : owner + '|' + profile + '|' + (ey * GRID_W + ex);
+}
+
+// Start tiles this tick may still turn into paths.
+function _groupRouteTakePathQuota() {
+    if (_groupRoutePathTick !== gameTime) { _groupRoutePathTick = gameTime; _groupRoutePathsLeft = GROUP_ROUTE_PATHS_PER_TICK; }
+    if (_groupRoutePathsLeft <= 0) return false;
+    _groupRoutePathsLeft--;
+    return true;
+}
+
+// The live route for a destination (created on first use).
+function getGroupRoute(owner, ex, ey, canWalk, starts) {
+    if (_groupRoutesVersion !== pathTopologyVersion) { _groupRoutes = new Map(); _groupRoutesVersion = pathTopologyVersion; }
+    let key = _groupRouteKey(owner, ex, ey, canWalk);
+    if (key === null) return null;
+    let route = _groupRoutes.get(key);
+    if (!route) {
+        if (_groupRoutes.size >= GROUP_ROUTE_MAX) {
+            // Drop the least recently used (ties: the oldest).
+            let oldest = null;
+            for (let r of _groupRoutes.values()) if (!oldest || r.lastUsed < oldest.lastUsed || (r.lastUsed === oldest.lastUsed && r.seq < oldest.seq)) oldest = r;
+            _groupRoutes.delete(oldest.key);
+        }
+        route = new GroupRoute(key, owner, ex, ey, canWalk, starts);
+        _groupRoutes.set(key, route);
+    }
+    route.lastUsed = gameTime;
+    return route;
+}
+
+class GroupRoute {
+    constructor(key, owner, ex, ey, canWalk, starts) {
+        this.key = key; this.seq = ++_groupRouteSeq; this.lastUsed = gameTime;
+        this.owner = owner; this.ex = ex; this.ey = ey; this.canWalk = canWalk;
+        let n = GRID_W * GRID_H;
+        this.w = GRID_W; this.h = GRID_H;
+        this.g = new Int32Array(n).fill(-1);
+        // Per tile: bit 0 settled, bit 1 start tile (may be left though blocked).
+        this.flags = new Uint8Array(n);
+        this.pending = new Set();           // start tiles not settled yet
+        this.paths = new Map();              // start tile -> path (null: none)
+        this.heap = new Float64Array(1024); this.heapSize = 0;
+        this.bound = Infinity;               // settle up to this priority once every start is reached
+        this.exhausted = false;              // nothing left to expand
+        // Heuristic: distance to the starts' bounding box, fixed at creation
+        // (consistent for any start, so later starts stay exact).
+        let minX = GRID_W, minY = GRID_H, maxX = -1, maxY = -1;
+        for (let s of starts) {
+            if (s.x < minX) minX = s.x; if (s.x > maxX) maxX = s.x;
+            if (s.y < minY) minY = s.y; if (s.y > maxY) maxY = s.y;
+        }
+        this.bx0 = minX; this.by0 = minY; this.bx1 = maxX; this.by1 = maxY;
+        this.usePortals = owner !== null;
+        this.noHeuristic = false;
+        // Live portals: the portal-aware bound to the starts' box.
+        this.portalEntries = this.usePortals && _hasUsablePathPortal(owner)
+            ? _portalHeuristicEntries(owner, (x, y) => this._boxH(x, y)) : null;
+        let endKey = ey * GRID_W + ex;
+        this.endKey = endKey;
+        this.g[endKey] = 0;
+        this._push(this._h(ex, ey), endKey);
+        this.addStarts(starts);
+    }
+
+    _boxH(x, y) {
+        if (this.bx1 < 0) return 0;
+        return (x < this.bx0 ? this.bx0 - x : (x > this.bx1 ? x - this.bx1 : 0)) + (y < this.by0 ? this.by0 - y : (y > this.by1 ? y - this.by1 : 0));
+    }
+    _h(x, y) {
+        let h = this._boxH(x, y);
+        return this.portalEntries ? _portalHeuristic(this.portalEntries, x, y, h) : h;
+    }
+
+    // Min-heap of priority * 2^21 + tile (tiles below 2^21: maps up to 1448^2).
+    _push(priority, key) {
+        if (this.heapSize >= this.heap.length) { let grown = new Float64Array(this.heap.length * 2); grown.set(this.heap); this.heap = grown; }
+        let h = this.heap, i = this.heapSize++, v = priority * 2097152 + key;
+        while (i > 0) { let p = (i - 1) >> 1; if (h[p] <= v) break; h[i] = h[p]; i = p; }
+        h[i] = v;
+    }
+    _pop() {
+        let h = this.heap, top = h[0], last = h[--this.heapSize], n = this.heapSize, i = 0;
+        while (true) {
+            let l = 2 * i + 1;
+            if (l >= n) break;
+            let r = l + 1, c = (r < n && h[r] < h[l]) ? r : l;
+            if (h[c] >= last) break;
+            h[i] = h[c]; i = c;
+        }
+        if (n > 0) h[i] = last;
+        return top;
+    }
+
+    addStarts(starts) {
+        for (let s of starts) {
+            if (!(s.x >= 0 && s.y >= 0 && s.x < this.w && s.y < this.h)) continue;
+            let k = s.y * this.w + s.x;
+            this.flags[k] |= 2;
+            if (!(this.flags[k] & 1)) { this.pending.add(k); this.bound = Infinity; }
+        }
+    }
+
+    _walkable(x, y) {
+        return grid[y][x].type !== TYPE_WALL
+            || (this.usePortals && _cloudTileCache && _cloudTileCache.size > 0 && !!_getCloudTowerFast(x, y, this.owner))
+            || !!(this.canWalk && this.canWalk(x, y));
+    }
+
+    // Expands up to `maxNodes` nodes within the owner's budget. Returns false
+    // when the budget ran out before the reached starts were done.
+    advance(maxNodes) {
+        if (this.exhausted || (this.pending.size === 0 && this.heapSize === 0)) return true;
+        let W = this.w, H = this.h, g = this.g, flags = this.flags;
+        let owner = this.owner, wallType = TYPE_WALL, gridData = grid;
+        if (this.usePortals && _cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+        let searchClouds = this.usePortals && !!(_cloudTileCache && _cloudTileCache.size);
+        let budgetArr = astarNodeBudgetRemainingByPlayer;
+        let fastBudget = (owner | 0) === owner && owner >= 0 && owner < budgetArr.length && owner < players.length;
+        let expanded = 0;
+        while (this.heapSize > 0) {
+            let top = this.heap[0];
+            let priority = Math.floor(top / 2097152);
+            if (this.pending.size === 0 && priority > this.bound) return true;
+            if (expanded >= maxNodes) return false;
+            let budgetOk = fastBudget ? (budgetArr[owner] >= 1 ? (budgetArr[owner]--, true) : false) : _tryConsumeAstarNodeBudget(owner, 1);
+            if (!budgetOk) { _lastPathfindAbortedByBudget = true; return false; }
+            this._pop();
+            let cur = top - priority * 2097152;
+            if (flags[cur] & 1) continue;
+            expanded++;
+            flags[cur] |= 1;
+            let cx = cur % W, cy = (cur / W) | 0, cg = g[cur];
+            if ((flags[cur] & 2) && this.pending.delete(cur) && this.pending.size === 0) this.bound = priority;
+            // Stepping into a tile requires that tile to be walkable.
+            if (gridData[cy][cx].type === wallType && !this._walkable(cx, cy)) continue;
+            let ng = cg + 1;
+            for (let di = 0; di < 8; di += 2) {
+                let nx = cx + _ASTAR_DIRS[di], ny = cy + _ASTAR_DIRS[di + 1];
+                if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+                let nKey = ny * W + nx;
+                if ((flags[nKey] & 1) || (g[nKey] >= 0 && g[nKey] <= ng)) continue;
+                // A unit may stand on an unwalkable tile; it is only ever left.
+                if (gridData[ny][nx].type === wallType && !(flags[nKey] & 2) && !this._walkable(nx, ny)) continue;
+                g[nKey] = ng;
+                this._push(this.noHeuristic ? ng : ng + this._h(nx, ny), nKey);
+            }
+            if (searchClouds) {
+                let cloud = _getCloudTowerFast(cx, cy, owner);
+                let partner = cloud ? getPairedCloudTower(cloud, owner) : null;
+                if (partner) {
+                    let nKey = partner.gy * W + partner.gx;
+                    if (!(flags[nKey] & 1) && !(g[nKey] >= 0 && g[nKey] <= ng) && ((flags[nKey] & 2) || this._walkable(partner.gx, partner.gy))) {
+                        g[nKey] = ng;
+                        this._push(this.noHeuristic ? ng : ng + this._h(partner.gx, partner.gy), nKey);
+                    }
+                }
+            }
+        }
+        this.exhausted = true;
+        return true;
+    }
+
+    // Whether the path from this start tile is known (the tile is settled:
+    // its whole downhill chain was settled before it) or can never be
+    // (search exhausted).
+    ready(startKey) { return this.exhausted || (this.flags[startKey] & 1) === 1; }
+
+    // The path from a start tile (walked downhill, nodes shared per tile),
+    // null when unreachable. Built once per start tile.
+    pathFrom(sx, sy) {
+        let W = this.w, startKey = sy * W + sx;
+        if (this.paths.has(startKey)) return this.paths.get(startKey);
+        let path = this._walk(sx, sy, Infinity);
+        this.paths.set(startKey, path);
+        return path;
+    }
+
+    // The first `maxLen` nodes downhill from a tile (the whole rest when it
+    // is closer), null when the tile is not settled.
+    segmentFrom(sx, sy, maxLen) {
+        return this._walk(sx, sy, maxLen);
+    }
+
+    _walk(sx, sy, maxLen) {
+        let W = this.w, H = this.h, startKey = sy * W + sx;
+        let g = this.g, flags = this.flags, owner = this.owner, canWalk = this.canWalk;
+        let hasClouds = this.usePortals && !!(_cloudTileCache && _cloudTileCache.size);
+        let nodes = this.nodes || (this.nodes = new Map());
+        if (!(flags[startKey] & 1)) return null;
+        let node = nodes.get(startKey);
+        if (!node) nodes.set(startKey, node = { x: sx, y: sy });
+        let path = [node];
+        let routeDx = this.ex - sx, routeDy = this.ey - sy;
+        let cur = startKey, stepKeys = _groupRouteStepKeys, limit = W * H, wallType = TYPE_WALL, gridData = grid;
+        while (cur !== this.endKey) {
+            let cx = cur % W, cy = (cur / W) | 0, want = g[cur] - 1;
+            let count = 0;
+            // Settled neighbours one step closer that can be stepped on.
+            for (let di = 0; di < 8; di += 2) {
+                let nx = cx + _ASTAR_DIRS[di], ny = cy + _ASTAR_DIRS[di + 1];
+                if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+                let nKey = ny * W + nx;
+                if (!(flags[nKey] & 1) || g[nKey] !== want) continue;
+                if (gridData[ny][nx].type === wallType && !this._walkable(nx, ny)) continue;
+                stepKeys[count++] = nKey;
+            }
+            if (hasClouds) {
+                let cloud = _getCloudTowerFast(cx, cy, owner);
+                let partner = cloud ? getPairedCloudTower(cloud, owner) : null;
+                if (partner) {
+                    let nKey = partner.gy * W + partner.gx;
+                    if ((flags[nKey] & 1) && g[nKey] === want && this._walkable(partner.gx, partner.gy)) stepKeys[count++] = nKey;
+                }
+            }
+            // Most steps have one candidate; rank only real choices.
+            let best = count > 0 ? stepKeys[0] : -1;
+            if (count > 1) {
+                let bestClear = -1, bestCross = 0;
+                best = -1;
+                for (let c = 0; c < count; c++) {
+                    let nKey = stepKeys[c], nx = nKey % W, ny = (nKey / W) | 0;
+                    let clear = _getPathClearance(nx, ny, canWalk, owner, this.usePortals);
+                    let cross = Math.abs((nx - sx) * routeDy - (ny - sy) * routeDx);
+                    if (best < 0 || clear > bestClear || (clear === bestClear && (cross < bestCross || (cross === bestCross && nKey < best)))) {
+                        best = nKey; bestClear = clear; bestCross = cross;
+                    }
+                }
+            }
+            if (best < 0 || path.length > limit) return null;
+            let next = nodes.get(best);
+            if (!next) nodes.set(best, next = { x: best % W, y: (best / W) | 0 });
+            path.push(next);
+            cur = best;
+            if (path.length >= maxLen) break;
+        }
+        return path;
+    }
+}
+
+// Units following a route in segments (see routeGroupMembers) keep, as
+// snapshotted numbers, the route (u._routeKey), its end tile (u._routeEnd)
+// and the last tile of their current segment (u._routeSegEnd): a unit whose
+// path still ends there when it runs out continues on the route. Routes are
+// caches dropped on every peer together (topology changes, resyncs); a unit
+// whose route is gone asks for a path to its end again.
+const GROUP_ROUTE_SEGMENT = 24;
+function _giveRouteSegment(u, route, gx, gy) {
+    let seg = route.segmentFrom(gx, gy, GROUP_ROUTE_SEGMENT);
+    if (!seg || seg.length === 0) return null;
+    let last = seg[seg.length - 1];
+    u._routeKey = route.key; u._routeEnd = route.endKey; u._routeSegEnd = last.y * route.w + last.x;
+    return seg;
+}
+
+// Called when a unit's path ran out: true when it goes on (a next segment,
+// or a fresh request for the rest of its way); false when it arrived or was
+// not on a route.
+function continueUnitRoute(u, cmd) {
+    let key = u._routeKey;
+    if (!key) return false;
+    let path = u.path, last = path && path.length ? path[path.length - 1] : null;
+    let endKey = u._routeEnd;
+    if (!last || last.y * GRID_W + last.x !== u._routeSegEnd) { u._routeKey = null; return false; }
+    u._routeKey = null;
+    if (last.y * GRID_W + last.x === endKey) return false;
+    let gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
+    let route = _groupRoutesVersion === pathTopologyVersion ? _groupRoutes.get(key) : null;
+    if (route && gx >= 0 && gy >= 0 && gx < route.w && gy < route.h && route.ready(gy * route.w + gx)) {
+        route.lastUsed = gameTime;
+        let seg = _giveRouteSegment(u, route, gx, gy);
+        if (seg && seg.length > 1) {
+            u.path = seg;
+            u.pathIndex = (seg[0].x === gx && seg[0].y === gy) ? 1 : 0;
+            return true;
+        }
+    }
+    // The route is gone (or does not cover this tile): the rest of the way
+    // is requested like any deferred move.
+    _makeFallbackPathForUnit(u, gx, gy, endKey % GRID_W, (endKey / GRID_W) | 0, cmd, 'player_commands');
+    return true;
+}
+
+// Every live route still short of its starts advances within this tick's
+// share of its owner's budget (tick start, before any other search).
+function advanceGroupRoutes() {
+    if (_groupRoutesVersion !== pathTopologyVersion || _groupRoutes.size === 0) return;
+    for (let route of [..._groupRoutes.values()].sort((a, b) => a.seq - b.seq)) {
+        if (route.exhausted || route.pending.size === 0 || route.advancedTick === gameTime) continue;
+        route.advancedTick = gameTime;
+        _withPathfindContext('deferred_resolver', route.owner, null, () => route.advance(GROUP_ROUTE_NODES_PER_TICK));
+    }
+}
+
+// Routes the members (each {u, ugx, ugy}) toward (ex, ey) through the
+// shared route: advances it within this tick's budget, then gives every
+// member whose tile it has reached its path (within the tick's quota of new
+// start tiles). Returns the paths by member index: a path, null (can never
+// be reached: route it alone), or undefined (not known yet: keep waiting).
+function routeGroupMembers(owner, ex, ey, canWalk, members) {
+    let starts = members.map(m => ({ x: m.ugx, y: m.ugy }));
+    let route = getGroupRoute(owner, ex, ey, canWalk, starts);
+    let out = new Array(members.length);
+    if (!route) return out;
+    _ensurePathClearanceCache();
+    route.addStarts(starts);
+    let perfStart = performance.now();
+    // Once per tick per route (advanceGroupRoutes may have done it already).
+    if (route.advancedTick !== gameTime) {
+        route.advancedTick = gameTime;
+        _withPathfindContext('player_commands', owner, null, () => route.advance(GROUP_ROUTE_NODES_PER_TICK));
+    }
+    _recordPathfindCall('player_commands', performance.now() - perfStart, false);
+    for (let i = 0; i < members.length; i++) {
+        let m = members[i];
+        if (!(m.ugx >= 0 && m.ugy >= 0 && m.ugx < route.w && m.ugy < route.h)) { out[i] = null; continue; }
+        let key = m.ugy * route.w + m.ugx;
+        if (!route.ready(key)) continue;
+        // Combat units follow the route in short segments (cheap, any
+        // number at once); workers, whose AI treats a path's end as their
+        // arrival, get the whole path (a few start tiles per tick).
+        if (!m.u.workerState) {
+            if (!(route.flags[key] & 1)) { out[i] = null; continue; }
+            out[i] = _giveRouteSegment(m.u, route, m.ugx, m.ugy);
+            continue;
+        }
+        if (!route.paths.has(key) && !_groupRouteTakePathQuota()) continue;
+        out[i] = route.pathFrom(m.ugx, m.ugy);
+    }
+    return out;
 }

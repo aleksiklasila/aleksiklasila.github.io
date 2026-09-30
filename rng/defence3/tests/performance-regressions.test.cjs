@@ -22,7 +22,9 @@ const grids = Array.from({ length: 3 }, () => Array.from({ length: 48 }, () => F
 let lookups = [];
 const ctx = {
     TILE: 32, GRID_W: 64, GRID_H: 48, localPlayerId: 0,
-    getRawVisibilityGridForPlayer(owner) { lookups.push(owner); return grids[owner]; }
+    getRawVisibilityGridForPlayer(owner) { lookups.push(owner); return grids[owner]; },
+    // Not on a shared route here (see continueUnitRoute in pathfinding.js).
+    continueUnitRoute: () => false,
 };
 vm.createContext(ctx);
 vm.runInContext(read('src/utils/utils_common.js'), ctx);

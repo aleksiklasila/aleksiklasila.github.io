@@ -125,8 +125,34 @@ function _blockLocalShuffledOrder(sorted, seed) {
 }
 
 function _buildDeterministicUnitUpdateOrderForTick() {
-    return _blockLocalShuffledOrder(_sortedForDeterministicOrder('units', units),
-        ((gameTime + 1) * 1664525) + ((units.length + 1) * 1013904223));
+    return _blockLocalShuffledOrder(units, ((gameTime + 1) * 1664525) + ((units.length + 1) * 1013904223));
+}
+
+// The same order as _buildDeterministicUnitUpdateOrderForTick, visited in
+// place (no per-tick array of every unit).
+function _forEachUnitInTickOrder(fn) {
+    let list = units, n = list.length;
+    if (n <= 1) { if (n === 1 && list[0]) fn(list[0]); return; }
+    let seed = ((gameTime + 1) * 1664525) + ((n + 1) * 1013904223);
+    let B = UNIT_UPDATE_ORDER_BLOCK, nb = Math.ceil(n / B);
+    if (_updateOrderBlocks.length < nb) _updateOrderBlocks = new Int32Array(Math.max(nb, _updateOrderBlocks.length * 2));
+    let blocks = _updateOrderBlocks;
+    for (let b = 0; b < nb; b++) blocks[b] = b;
+    let s = seed >>> 0;
+    for (let i = nb - 1; i > 0; i--) {
+        s = ((s * 1664525) + 1013904223) >>> 0;
+        let j = s % (i + 1);
+        let tmp = blocks[i]; blocks[i] = blocks[j]; blocks[j] = tmp;
+    }
+    for (let bi = 0; bi < nb; bi++) {
+        let b0 = blocks[bi] * B, len = Math.min(B, n - b0);
+        s = ((s * 1664525) + 1013904223) >>> 0;
+        let start = (s >>> 8) % len, backward = s & 1;
+        for (let q = 0; q < len; q++) {
+            let u = list[b0 + (backward ? (start - q + len) % len : (start + q) % len)];
+            if (u) fn(u);
+        }
+    }
 }
 
 // Buildings: the same order scheme, seeded per building type.
@@ -277,6 +303,11 @@ function _accumulateUpKeepForThing(breakdowns, thing, isUnit) {
 // Budget-deferred orders (fallback paths) are retried at tick start. Units
 // waiting for the same destination are routed by one shared search, in
 // pending order; anything it cannot answer takes the per-unit retry below.
+const _deferredDestCache = new WeakMap();
+// Members waiting for a route look again this many ticks later (the routes
+// themselves advance every tick, see advanceGroupRoutes).
+const GROUP_ROUTE_CHECK_TICKS = 2;
+
 function _resolveDeferredPathsByGroup(pending) {
     let resolved = new Set();
     let groups = [];
@@ -287,17 +318,24 @@ function _resolveDeferredPathsByGroup(pending) {
         if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) continue;
         if (!_canUsePathfindRequestBudget(u.owner, u)) continue;
         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-        let dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u);
         let canWalk = getPathCanWalkForUnit(u);
-        // Plain ground units: a destination outside the unit's region is
-        // replaced by the region's tile nearest it (see getPathRegions), so
-        // the shared search can reach it.
-        if (!canWalk) {
-            let labels = getPathRegions(u.owner), sr = labels[ugy * GRID_W + ugx];
-            if (sr >= 0 && labels[dest.y * GRID_W + dest.x] !== sr) {
-                let t = nearestTileInPathRegion(u.owner, labels, sr, dest.x, dest.y);
-                if (t >= 0) dest = { x: t % GRID_W, y: (t / GRID_W) | 0 };
+        // The destination follows from the target, the unit's tile and the
+        // topology: remembered per pending target while those stay the same.
+        let tile = ugy * GRID_W + ugx, known = _deferredDestCache.get(pt), dest;
+        if (known && known.tile === tile && known.version === pathTopologyVersion && known.canWalk === canWalk) dest = known.dest;
+        else {
+            dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u);
+            // Plain ground units: a destination outside the unit's region is
+            // replaced by the region's tile nearest it (see getPathRegions), so
+            // the shared search can reach it.
+            if (!canWalk) {
+                let labels = getPathRegions(u.owner), sr = labels[ugy * GRID_W + ugx];
+                if (sr >= 0 && labels[dest.y * GRID_W + dest.x] !== sr) {
+                    let t = nearestTileInPathRegion(u.owner, labels, sr, dest.x, dest.y);
+                    if (t >= 0) dest = { x: t % GRID_W, y: (t / GRID_W) | 0 };
+                }
             }
+            _deferredDestCache.set(pt, { tile, version: pathTopologyVersion, canWalk, dest });
         }
         let key = u.owner + '|' + (dest.y * GRID_W + dest.x);
         let candidates = groupByKey.get(key);
@@ -317,13 +355,18 @@ function _resolveDeferredPathsByGroup(pending) {
     for (let group of rotated(waiting).concat(rotated(rest))) {
         // Alone: routed by its own search after all.
         if (group.members.length < 2) { for (let m of group.members) m.u._awaitGroupPath = 0; continue; }
-        // The rest stay pending for the next ticks (see _takeGroupPathSearch).
-        if (!_takeGroupPathSearch(group.owner, true)) continue;
-        let paths = _withPathfindContext('deferred_resolver', group.owner, null,
-            () => findGroupPathsToTarget(group.members.map(m => ({ x: m.ugx, y: m.ugy })), group.dest.x, group.dest.y, group.canWalk, group.owner));
+        // The shared route (continued over ticks within the budget).
+        let paths = routeGroupMembers(group.owner, group.dest.x, group.dest.y, group.canWalk, group.members);
         for (let i = 0; i < group.members.length; i++) {
             let path = paths[i];
-            if (!path || path.length <= 0) continue;
+            // Not reached yet: keeps waiting for the route.
+            if (path === undefined) {
+                let w = group.members[i].u;
+                w._awaitGroupPath = gameTime + GROUP_PATH_WAIT_TICKS;
+                w._astarBudgetRetryTick = gameTime + GROUP_ROUTE_CHECK_TICKS;
+                continue;
+            }
+            if (!path || path.length <= 0) { group.members[i].u._awaitGroupPath = 0; continue; }
             let { u, ugx, ugy, pt } = group.members[i];
             _consumePathfindRequestBudget(u.owner, u);
             u.path = path;
@@ -334,11 +377,13 @@ function _resolveDeferredPathsByGroup(pending) {
             u._awaitGroupPath = 0;
             resolved.add(u);
         }
-        // Not answered by the shared search: their own searches.
-        for (let m of group.members) m.u._awaitGroupPath = 0;
     }
     return resolved;
 }
+
+// The upkeep breakdown of the second in progress (see gameTick). Dropped
+// with the other cross-tick caches at a resync, on every peer.
+let _upKeepAccum = null;
 
 function gameTick() {
     if (gameOver) return;
@@ -346,13 +391,18 @@ function gameTick() {
     _resetPathfindPerfTick();
     _resetPathBudgetTrackingPerTick();
     _ensureUpKeepRateCacheSize();
-    // Upkeep is deducted once per second from that tick's breakdown (the info
-    // panel shows the latest one), so only accumulate it on those ticks.
-    let upKeepThisTick = (gameTime % TICK_RATE === 0) || _upKeepRateByPlayer.length !== players.length;
-    let upKeepTickBreakdown = upKeepThisTick ? Array.from({ length: players.length }, () => _createEmptyUpKeepBreakdown()) : null;
-    let upKeepBuildingSeen = new Set();
+    // Upkeep is deducted once per second. The second's breakdown is built
+    // over its ticks: each tick adds one TICK_RATE-th of the units and
+    // buildings (by their position in the tick's visiting order), so no
+    // tick walks them all. Completed on the second's last tick; the info
+    // panel shows the latest complete one.
+    let upKeepSlice = gameTime % TICK_RATE;
+    let upKeepThisTick = upKeepSlice === 0;
+    if (!_upKeepAccum || _upKeepAccum.length !== players.length) _upKeepAccum = Array.from({ length: players.length }, () => _createEmptyUpKeepBreakdown());
+    let upKeepTickBreakdown = _upKeepAccum;
+    let upKeepBuildingSeen = new Set(), upKeepBuildingIndex = 0;
     let accumulateBuildingUpKeep = (thing) => {
-        if (!upKeepThisTick || !thing || upKeepBuildingSeen.has(thing)) return;
+        if (!thing || (upKeepBuildingIndex++ % TICK_RATE) !== upKeepSlice || upKeepBuildingSeen.has(thing)) return;
         upKeepBuildingSeen.add(thing);
         _accumulateUpKeepForThing(upKeepTickBreakdown, thing, false);
     };
@@ -378,23 +428,17 @@ function gameTick() {
 
     recomputePlayerPopCaps();
 
-    // Save previous positions for interpolation
-    for (let u of units) { u.prevX = u.x; u.prevY = u.y; }
+    // Previous positions for interpolation: units set theirs in update().
     for (let p of projectiles) { p.prevX = p.x; p.prevY = p.y; }
 
-    // Resolve deferred pathfinding from previous ticks fairly.
-    // A rotating cursor prevents early-array units from starving later units.
-    if (units.length > 0) {
-        // Read-only here: the shared cached order (see _sortedForDeterministicOrder).
-        let orderedUnits = _sortedForDeterministicOrder('units', units);
-        let start = pendingPathResolveCursor % orderedUnits.length;
-        let checked = 0;
+    // Resolve deferred pathfinding from previous ticks, in id order, by
+    // source priority. Only the waiting units due this tick are visited;
+    // those still waiting afterwards are scheduled again.
+    advanceGroupRoutes();
+    if (_pendingPathDue.size > 0) {
+        let waiting = takeDuePendingPathUnits(gameTime);
         let pendingBuckets = [[], [], [], [], []];
-        while (checked < orderedUnits.length) {
-            let idx = (start + checked) % orderedUnits.length;
-            checked++;
-            let u = orderedUnits[idx];
-            if (u.dead || !u._pendingPathTarget) continue;
+        for (let u of waiting) {
             let src = u._pendingPathTarget && u._pendingPathTarget.src;
             let srcTier = Math.max(0, Math.min(4, _pendingPathPriority(src)));
             pendingBuckets[srcTier].push(u);
@@ -431,7 +475,10 @@ function gameTick() {
                 }
             }
         }
-        pendingPathResolveCursor = (start + checked) % orderedUnits.length;
+        for (let u of waiting) {
+            if (u.dead || !u._pendingPathTarget) _pendingPathUnits.delete(u);
+            else schedulePendingPathUnit(u, _pendingPathDueTick(u, gameTime));
+        }
     }
 
     flushPendingMovementAstarSpend();
@@ -467,12 +514,11 @@ function gameTick() {
     // Units
     // Shuffle unit update order per tick so A* budget contention is shared
     // across different units over time (deterministically for lockstep).
-    let unitUpdateOrder = _buildDeterministicUnitUpdateOrderForTick();
-    for (let i = 0; i < unitUpdateOrder.length; i++) {
-        let u = unitUpdateOrder[i];
-        if (!u) continue;
-        u.update();
-    }
+    // The units array order is the same on every peer (appends in
+    // simulation order, in-place compaction, snapshots keep it), so it is
+    // the base order; walked in shuffled blocks without building a list.
+    // Units added during the pass wait for the next tick.
+    _forEachUnitInTickOrder(u => u.update());
 
     // Dead units are processed in the same order as ever and removed in one
     // pass afterwards: a splice per death shifted the whole list each time,
@@ -487,7 +533,10 @@ function gameTick() {
     };
     for (let i = units.length - 1; i >= 0; i--) {
         let u = units[i];
-        if (u.dead) {
+        if (u.dead && u._removedNow) {
+            // Removed by removeUnitNow (spatial and population already done).
+            (removedUnits ||= new Set()).add(u);
+        } else if (u.dead) {
             if (!u.isKing && !u.workerState) playSound('unit_death', u.x, u.y, u.unitType);
             // Drop energy on death (bounty)
             let cost = BASE_UNIT_STATS[u.unitType] ? BASE_UNIT_STATS[u.unitType].energy * 0.5 : 5;
@@ -509,7 +558,7 @@ function gameTick() {
             players[u.owner].popCount--;
             (removedUnits ||= new Set()).add(u);
             if (gameOver) { compactRemovedUnits(); return; }
-        } else if (upKeepThisTick) {
+        } else if (i % TICK_RATE === upKeepSlice) {
             _accumulateUpKeepForThing(upKeepTickBreakdown, u, true);
         }
     }
@@ -585,10 +634,10 @@ function gameTick() {
     }
 
     // Keep a live per-second upKeep breakdown for the right-side info panel.
-    if (upKeepThisTick) _upKeepRateByPlayer = upKeepTickBreakdown;
+    if (upKeepThisTick) { _upKeepRateByPlayer = upKeepTickBreakdown; _upKeepAccum = null; }
 
     // Deduct upKeep once per second in a centralized, batched way.
-    if (gameTime % TICK_RATE === 0 && upKeepTickBreakdown) {
+    if (upKeepThisTick) {
         for (let pid = 0; pid < upKeepTickBreakdown.length; pid++) {
             let totalPerSecond = Number(upKeepTickBreakdown[pid].total) || 0;
             if (!(totalPerSecond > 0)) continue;
@@ -2660,6 +2709,47 @@ function _takeGroupPathSearch(playerId, inTick = false) {
     return true;
 }
 
+// Whether a unit on tile (gx, gy) can walk into path region `region`: its
+// tile is in it, or (standing on a blocked tile, which it may leave) a
+// neighbouring tile is.
+function _pathStartInRegion(labels, region, gx, gy) {
+    let k = gy * GRID_W + gx, l = labels[k];
+    if (l >= 0) return l === region;
+    return (gx > 0 && labels[k - 1] === region) || (gx < GRID_W - 1 && labels[k + 1] === region)
+        || (gy > 0 && labels[k - GRID_W] === region) || (gy < GRID_H - 1 && labels[k + GRID_W] === region);
+}
+
+// Units by id with their index in the units array, rebuilt when the array
+// changed: actions look up their selected units instead of scanning every
+// unit per action.
+let _unitIndexById = null, _unitIndexFor = null, _unitIndexLen = -1, _unitIndexTick = -1, _unitIndexFirst = null, _unitIndexLast = null;
+function _unitIndexMap() {
+    let n = units.length;
+    if (_unitIndexById && _unitIndexFor === units && _unitIndexLen === n && _unitIndexTick === gameTime
+        && _unitIndexFirst === units[0] && _unitIndexLast === units[n - 1]) return _unitIndexById;
+    let map = new Map();
+    for (let i = 0; i < n; i++) { let u = units[i]; if (u) map.set(u.id, i); }
+    _unitIndexById = map; _unitIndexFor = units; _unitIndexLen = n; _unitIndexTick = gameTime;
+    _unitIndexFirst = units[0]; _unitIndexLast = units[n - 1];
+    return map;
+}
+function getUnitById(id) {
+    let i = _unitIndexMap().get(id);
+    return i === undefined ? null : units[i];
+}
+// An action's selected units that exist, in the units array's order.
+function _actionUnits(a) {
+    let map = _unitIndexMap(), idx = [];
+    for (let id of (a.unitIdSet || new Set(a.unitIds || []))) {
+        let i = map.get(id);
+        if (i !== undefined) idx.push(i);
+    }
+    idx.sort((x, y) => x - y);
+    let out = new Array(idx.length);
+    for (let k = 0; k < idx.length; k++) out[k] = units[idx[k]];
+    return out;
+}
+
 // Move and attack-move orders. Units sharing a destination (and walking
 // rules) are routed by one shared reverse search, each along its own shortest
 // path from its own tile; anything that search cannot answer falls back to
@@ -2679,7 +2769,7 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
             u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
         }
     };
-    for (let u of units) {
+    for (let u of _actionUnits(a)) {
         if (!ids.has(u.id) || u.owner !== playerId || u.dead) continue;
         u.targetUnit = null; u.targetBuilding = null; u.forcedAttackTarget = false;
         u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
@@ -2716,22 +2806,29 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
     }
     for (let group of groups) {
         let { dest, canWalk, members } = group;
-        if (members.length >= 2 && !_takeGroupPathSearch(playerId)) {
-            // Over this tick's search limit: routed on a following tick.
-            // They wait for that shared search, not one search each.
-            for (let { u, ugx, ugy } of members) {
+        // Only starts that can reach the destination go into the shared
+        // search: one walled-in unit would otherwise make it flood the whole
+        // map, run out of budget, and leave every member to its own search.
+        let shareable = members;
+        if (members.length >= 2 && !canWalk) {
+            let labels = getPathRegions(playerId), region = labels[dest.y * GRID_W + dest.x];
+            if (region >= 0) shareable = members.filter(m => _pathStartInRegion(labels, region, m.ugx, m.ugy));
+        }
+        // The shared route to this destination (it continues over the next
+        // ticks when it cannot finish within this one's budget).
+        let routed = shareable.length >= 2 ? routeGroupMembers(playerId, dest.x, dest.y, canWalk, shareable) : null;
+        let routedIndex = new Map();
+        if (routed) for (let i = 0; i < shareable.length; i++) routedIndex.set(shareable[i], routed[i]);
+        for (let m of members) {
+            let { u, ugx, ugy } = m;
+            let path = routedIndex.get(m);
+            // Not reached yet: waits for the route (the deferred resolver
+            // keeps it going) rather than searching on its own.
+            if (path === undefined && routedIndex.has(m)) {
                 _makeFallbackPathForUnit(u, ugx, ugy, dest.x, dest.y, cmd, 'player_commands');
                 u._awaitGroupPath = gameTime + GROUP_PATH_WAIT_TICKS;
+                continue;
             }
-            continue;
-        }
-        let shared = members.length >= 2
-            ? _withPathfindContext('player_commands', playerId, null,
-                () => findGroupPathsToTarget(members.map(m => ({ x: m.ugx, y: m.ugy })), dest.x, dest.y, canWalk, playerId))
-            : null;
-        for (let i = 0; i < members.length; i++) {
-            let { u, ugx, ugy } = members[i];
-            let path = shared && shared[i];
             if (!path) path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, false, canWalk, u.owner);
             applyPath(u, ugx, ugy, path);
         }
@@ -2825,10 +2922,10 @@ function processAction(a, playerId) {
             if (!Number.isFinite(a.targetX) || !Number.isFinite(a.targetY)) return;
             _issueGroupMoveOrder(a, playerId, a.action === 'move' ? CMD_MOVING : CMD_ATTACK_MOVING);
         } else if (a.action === 'attack') {
-            let target = units.find(u => u.id === a.targetId);
+            let target = getUnitById(a.targetId);
             if (target) {
                 let targetGx = Math.floor(target.x / TILE), targetGy = Math.floor(target.y / TILE);
-                for (let u of units) {
+                for (let u of _actionUnits(a)) {
                     if (a.unitIdSet.has(u.id) && u.owner === playerId && !u.dead) {
                         u.targetUnit = target; u.commandState = CMD_ATTACKING; u.targetBuilding = null; u.forcedAttackTarget = true;
                         u._attackMoveGx = u._attackMoveGy = null;
@@ -2846,6 +2943,7 @@ function processAction(a, playerId) {
                                 u.path = null;
                                 u.pathIndex = 0;
                                 u._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_ATTACKING, src: 'player_commands' };
+                                notePendingPathUnit(u);
                             }
                         } else {
                             u.path = _makeFallbackPathForUnit(u, ugx, ugy, dest.x, dest.y, CMD_ATTACKING, 'player_commands');
@@ -2861,7 +2959,7 @@ function processAction(a, playerId) {
             let tb = getTileEntityRef(a.targetGx, a.targetGy);
             if (!(tb && tb.energy > 0)) tb = null;
             if (tb) {
-                for (let u of units) {
+                for (let u of _actionUnits(a)) {
                     if (a.unitIdSet.has(u.id) && u.owner === playerId && !u.dead) {
                         u.targetBuilding = tb; u.commandState = CMD_ATTACKING; u.targetUnit = null; u.forcedAttackTarget = false;
                         u._attackMoveGx = u._attackMoveGy = null;
@@ -2879,6 +2977,7 @@ function processAction(a, playerId) {
                                 u.path = null;
                                 u.pathIndex = 0;
                                 u._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_ATTACKING, src: 'player_commands' };
+                                notePendingPathUnit(u);
                             }
                         } else {
                             u.path = _makeFallbackPathForUnit(u, ugx, ugy, dest.x, dest.y, CMD_ATTACKING, 'player_commands');
@@ -2888,7 +2987,7 @@ function processAction(a, playerId) {
                 }
             }
         } else if (a.action === 'stop') {
-            for (let u of units) {
+            for (let u of _actionUnits(a)) {
                 if (a.unitIdSet.has(u.id) && u.owner === playerId) {
                     // Releasing hold resumes the unit's current orders
                     // (route, rally, worker task). Only free units stop.
@@ -2903,7 +3002,7 @@ function processAction(a, playerId) {
                 }
             }
         } else if (a.action === 'hold') {
-            for (let u of units) {
+            for (let u of _actionUnits(a)) {
                 // Hold only disables movement. Orders, routes, targets and
                 // worker tasks are kept, and new orders queue up while held.
                 if (a.unitIdSet.has(u.id) && u.owner === playerId) u.holdPosition = true;
@@ -2973,7 +3072,7 @@ function processAction(a, playerId) {
         } else if (a.action === 'workerAssign') {
             if (!(a.targetGx >= 0 && a.targetGy >= 0 && a.targetGx < GRID_W && a.targetGy < GRID_H)) return;
             // Assign selected worker units to a specific target
-            for (let u of units) {
+            for (let u of _actionUnits(a)) {
                 if (!a.unitIdSet.has(u.id) || u.owner !== playerId || u.dead || !u.workerState) continue;
                 let myGx = Math.floor(u.x / TILE), myGy = Math.floor(u.y / TILE);
                 if (u.workerType === 'builder' && a.targetType === 'build') {
@@ -3535,8 +3634,13 @@ function startGame() {
 
     startingResourcesConfig = normalizeStartingResourcesConfig(startingResourcesConfig);
 
-    let findStarterBuildSpot = (origin, maxRadius = 12) => {
-        let radiusLimit = Math.max(1, Math.min(Math.max(GRID_W, GRID_H), Math.floor(Number(maxRadius) || 12)));
+    // The nearest buildable tile to `origin`: least Manhattan distance, ties
+    // by row then column (the origin itself excluded). Tiles only fill up
+    // while the match is set up, so each origin keeps a cursor into that
+    // order and the next search resumes where the last one stopped: all the
+    // starting buildings of a base cost one pass over the tiles they cover.
+    let starterBuildCursors = new Map();
+    let findStarterBuildSpot = (origin) => {
         let isBuildableStarterTile = (gx, gy) => {
             if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
             let cell = grid[gy][gx];
@@ -3544,32 +3648,27 @@ function startGame() {
             if (getGoldMineAt(gx, gy) || getAstarMineAt(gx, gy)) return false;
             return true;
         };
-
-        for (let r = 1; r <= radiusLimit; r++) {
-            for (let dy = -r; dy <= r; dy++) {
-                for (let dx = -r; dx <= r; dx++) {
-                    let fx = origin.gx + dx, fy = origin.gy + dy;
-                    if (Math.abs(dx) + Math.abs(dy) > r) continue;
-                    if (!isBuildableStarterTile(fx, fy)) continue;
-                    return { gx: fx, gy: fy };
+        let ox = origin.gx, oy = origin.gy;
+        let key = ox + ',' + oy;
+        // Position in the order: ring r, row offset dy, and side (0: -dx, 1: +dx).
+        let cur = starterBuildCursors.get(key);
+        if (!cur) { cur = { r: 1, dy: -1, side: 0 }; starterBuildCursors.set(key, cur); }
+        let maxR = GRID_W + GRID_H;
+        for (; cur.r <= maxR; cur.r++, cur.dy = -cur.r, cur.side = 0) {
+            let r = cur.r;
+            // Rows of the ring that lie on the map.
+            if (cur.dy < -r) cur.dy = -r;
+            if (oy + cur.dy < 0) { cur.dy = -oy; cur.side = 0; }
+            let dyEnd = Math.min(r, GRID_H - 1 - oy);
+            for (; cur.dy <= dyEnd; cur.dy++, cur.side = 0) {
+                let adx = r - Math.abs(cur.dy);
+                for (; cur.side < 2; cur.side++) {
+                    if (cur.side === 1 && adx === 0) continue;
+                    let fx = ox + (cur.side === 0 ? -adx : adx), fy = oy + cur.dy;
+                    if (isBuildableStarterTile(fx, fy)) return { gx: fx, gy: fy };
                 }
             }
         }
-
-        // Fallback: if local rings are blocked, scan entire map and pick the closest buildable tile.
-        let best = null;
-        let bestScore = Infinity;
-        for (let gy = 0; gy < GRID_H; gy++) {
-            for (let gx = 0; gx < GRID_W; gx++) {
-                if (!isBuildableStarterTile(gx, gy)) continue;
-                let score = Math.abs(gx - origin.gx) + Math.abs(gy - origin.gy);
-                if (score < bestScore) {
-                    bestScore = score;
-                    best = { gx, gy };
-                }
-            }
-        }
-        if (best) return best;
         return null;
     };
 
@@ -3639,7 +3738,7 @@ function startGame() {
     };
 
     let spawnStartingBuilding = (pid, origin, itemKey, level) => {
-        let spot = findStarterBuildSpot(origin, 64);
+        let spot = findStarterBuildSpot(origin);
         if (!spot) return null;
         let ok = placeBuilding(spot.gx, spot.gy, itemKey, pid, {
             autoUpgradeEnabled: true,
@@ -3669,8 +3768,8 @@ function startGame() {
         q.push({ gx: startGx, gy: startGy });
         seen.add(startGy * GRID_W + startGx);
 
-        while (q.length > 0) {
-            let cur = q.shift();
+        for (let qHead = 0; qHead < q.length; qHead++) {
+            let cur = q[qHead];
             let gx = cur.gx, gy = cur.gy;
             let md = Math.abs(gx - startGx) + Math.abs(gy - startGy);
             if (md > maxRadius) continue;

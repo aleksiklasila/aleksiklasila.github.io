@@ -75,6 +75,13 @@ function _getAdjacencySignatureAt(gx, gy) {
     };
 }
 
+// Portals (cloud towers) join path regions; spawners are route targets.
+function _adjacencyObjAffectsPaths(obj) {
+    if (obj instanceof Tower) return !!(obj.baseStats && obj.baseStats.isCloud);
+    return obj instanceof CollectorSpawner || obj instanceof AstarSpawner || obj instanceof SalvagerSpawner
+        || obj instanceof BuilderSpawner || obj instanceof HealerSpawner || obj instanceof ResearchSpawner;
+}
+
 function _runAdjacencyRecalculation() {
     if (!_adjacencyNeedsRecalc) return;
     if (!_adjacencyDirtyAll && _adjacencyDirtyTiles.size <= 0) {
@@ -91,9 +98,11 @@ function _runAdjacencyRecalculation() {
     let seeds = [];
     let seedKeySet = new Set();
 
+    let touchesPathTopology = false;
     let pushSeedAt = (gx, gy) => {
         let sig = _getAdjacencySignatureAt(gx, gy);
         if (!sig || !sig.obj || !Number.isFinite(sig.obj.gx) || !Number.isFinite(sig.obj.gy)) return;
+        if (!touchesPathTopology && _adjacencyObjAffectsPaths(sig.obj)) touchesPathTopology = true;
         let key = _adjTileKey(sig.obj.gx, sig.obj.gy);
         if (seedKeySet.has(key)) return;
         seedKeySet.add(key);
@@ -286,6 +295,15 @@ function _runAdjacencyRecalculation() {
                 }
             }
 
+            // Stats follow from these (research changes reach them through
+            // the periodic refresh): members of a big group whose inputs did
+            // not change keep theirs instead of rebuilding every table.
+            // Snapshotted, so every peer skips the same members.
+            let statsSig = baseLevel + '|' + obj.effectiveLevel + '|' + nextPotentialLevel + '|' + (obj.isUpgrading ? 1 : 0)
+                + '|' + (obj.underConstruction ? 1 : 0) + '|' + obj.upgrademaxEnergy + '|' + groupSize + '|' + areaMult + '|' + obj.owner;
+            if (obj._adjStatsSig === statsSig && obj.effectiveGroupSize === groupSize && obj.effectiveAreaMult === areaMult) continue;
+            obj._adjStatsSig = statsSig;
+
             if (obj.updateStats) {
                 obj.effectiveGroupSize = groupSize;
                 obj.effectiveAreaMult = areaMult;
@@ -320,6 +338,7 @@ function _runAdjacencyRecalculation() {
                     obj.energy = Math.max(1, Math.min(obj.maxEnergy, Math.floor(prevEnergy)));
                 }
                 updateItemTextCache(obj);
+                if (typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(obj);
             }
         }
     }
@@ -338,7 +357,11 @@ function _runAdjacencyRecalculation() {
 
     if (areaVisualsChanged) dirtyAreas = true;
 
-    _bumpPathTopologyVersion();
+    // Paths and routes only change when walkability does (placements,
+    // removals and mines bump on their own) or when a portal or spawner may
+    // have come into service: a finished barrack or turret keeps every
+    // path cache.
+    if (runFull || touchesPathTopology) _bumpPathTopologyVersion();
     _adjacencyNeedsRecalc = false;
     _adjacencyDirtyAll = false;
     _adjacencyDirtyTiles.clear();
@@ -370,14 +393,6 @@ function getThingStatsRecalcIntervalTicks() {
 
 function getUnitCollisionRecalcTicks() {
     return Math.max(1, Math.min(240, Math.floor(Number(UNIT_COLLISION_RECALC_TICKS) || 1)));
-}
-
-function _seedThingStatsRecalcCounter(item, intervalTicks, fallbackSeed = 0) {
-    let seed = 0;
-    if (item && Number.isFinite(item.id)) seed = (Math.floor(item.id) * 1103515245) >>> 0;
-    else if (item && Number.isFinite(item.gx) && Number.isFinite(item.gy)) seed = (((Math.floor(item.gx) + 1) * 73856093) ^ ((Math.floor(item.gy) + 1) * 19349663)) >>> 0;
-    else seed = (Math.floor(fallbackSeed) * 83492791) >>> 0;
-    return intervalTicks > 1 ? (seed % intervalTicks) : 0;
 }
 
 // Rebuild a building's derived stat tables from its level and owner, without
@@ -450,6 +465,7 @@ function _refreshThingPrecomputedStats(item) {
     }
 
     updateItemTextCache(item);
+    if (typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(item);
 }
 
 // Selected things refresh stats sooner so the info panel stays live (single
@@ -463,8 +479,53 @@ function _isSelectionStatsRefreshDue(item, selectionSize) {
     return ((gameTime + seed) % every + every) % every === 0;
 }
 
+// Units created since the last stats pass (u._needsStatsInit): refreshed on
+// their first tick, before their turn in the strided passes below comes up.
+// The list follows the flag, which snapshots carry: a restore rebuilds it.
+// (Capped: where no tick drains it, e.g. the page beside a simulation
+// worker, it is dropped.)
+let _newUnitsForStats = [];
+function _noteNewUnitForStats(u) {
+    if (_newUnitsForStats.length >= 65536) _newUnitsForStats.length = 0;
+    _newUnitsForStats.push(u);
+}
+function resetNewUnitsForStats() {
+    _newUnitsForStats = [];
+    for (let u of units) if (u && u._needsStatsInit) _newUnitsForStats.push(u);
+}
+
+// A strided pass: the units at indices congruent to the tick modulo the
+// interval, so each tick touches only the due share. Removals shift
+// indices, which can move a unit's turn by a tick or so.
+function _forEachStridedUnit(intervalTicks, tick, fn) {
+    let step = Math.max(1, intervalTicks | 0);
+    for (let i = tick % step, n = units.length; i < n; i += step) {
+        let u = units[i];
+        if (u && !u.dead) fn(u);
+    }
+}
+
+// Periodic refreshes run on a fixed phase per thing instead of a countdown
+// stored on it: a thing is due on the ticks where (gameTime + phase) is a
+// multiple of the interval. Deciding that is a little integer math per
+// thing, with no per-tick writes to every unit and building.
+function _thingStatsPhase(item, intervalTicks) {
+    if (intervalTicks <= 1) return 0;
+    let seed;
+    if (Number.isFinite(item.id)) seed = (Math.floor(item.id) * 1103515245 + 12345) >>> 0;
+    else seed = (((Math.floor(Number(item.gx) || 0) + 1) * 73856093) ^ ((Math.floor(Number(item.gy) || 0) + 1) * 19349663)) >>> 0;
+    return seed % intervalTicks;
+}
+
+function _isThingStatsDueThisTick(item, intervalTicks, tick) {
+    return intervalTicks <= 1 || (tick + _thingStatsPhase(item, intervalTicks)) % intervalTicks === 0;
+}
+
+let _thingStatsRefreshStamp = 0;
+
 function recalculateThingPrecomputedStats() {
     let intervalTicks = getThingStatsRecalcIntervalTicks();
+    let tick = Math.max(0, Math.floor(Number(gameTime) || 0));
     let selectedUnitSet = null;
     let selectedEntitySet = null;
     if (!isMultiplayer || !gameStarted) {
@@ -472,75 +533,167 @@ function recalculateThingPrecomputedStats() {
         if (selectedEntities && selectedEntities.length > 0) selectedEntitySet = new Set(selectedEntities);
     }
     let selectionSize = (selectedUnitSet ? selectedUnitSet.size : 0) + (selectedEntitySet ? selectedEntitySet.size : 0);
-    let seen = new Set();
-    let seedCursor = 0;
 
-    let processThing = (item, isSelected = false) => {
-        if (!item || item.dead || seen.has(item)) return;
-        seen.add(item);
-
-        if (!Number.isFinite(item._thingStatsRecalcCounter)) {
-            item._thingStatsRecalcCounter = _seedThingStatsRecalcCounter(item, intervalTicks, ++seedCursor);
-        } else if (item._thingStatsRecalcCounter > intervalTicks) {
-            item._thingStatsRecalcCounter = intervalTicks;
-        }
-
-        let needsImmediate = !(item.preComputed && Number.isFinite(item.preComputed.maxEnergy));
-        if (!needsImmediate && isSelected) needsImmediate = _isSelectionStatsRefreshDue(item, selectionSize);
-
-        if (needsImmediate || item._thingStatsRecalcCounter <= 0) {
-            _refreshThingPrecomputedStats(item);
-            item._thingStatsRecalcCounter = intervalTicks;
-        } else {
-            item._thingStatsRecalcCounter--;
-        }
+    // New units, the strided share and (single player) the selection; a
+    // stamp keeps a unit to one refresh per call.
+    let unitStamp = ++_thingStatsRefreshStamp;
+    let refreshUnit = (u) => {
+        if (!u || u.dead || u._thingStatsRefreshStamp === unitStamp) return;
+        u._thingStatsRefreshStamp = unitStamp;
+        _refreshThingPrecomputedStats(u);
     };
+    for (let u of _newUnitsForStats) {
+        if (!u._needsStatsInit) continue;
+        u._needsStatsInit = false;
+        refreshUnit(u);
+    }
+    _newUnitsForStats.length = 0;
+    _forEachStridedUnit(intervalTicks, tick, refreshUnit);
+    if (selectedUnitSet) for (let u of selectedUnitSet) if (_isSelectionStatsRefreshDue(u, selectionSize)) refreshUnit(u);
 
-    for (let u of units) processThing(u, !!(selectedUnitSet && selectedUnitSet.has(u)));
-    for (let t of towers) processThing(t, !!(selectedEntitySet && selectedEntitySet.has(t)));
-    for (let b of barracks) processThing(b, !!(selectedEntitySet && selectedEntitySet.has(b)));
-    for (let s of collectorSpawners) processThing(s, !!(selectedEntitySet && selectedEntitySet.has(s)));
+    // Buildings can sit in more than one list (a barrack is also a cell
+    // item); a stamp refreshes each at most once per call.
+    let stamp = ++_thingStatsRefreshStamp;
+    let processThing = (item) => {
+        if (!item || item.dead || item._thingStatsRefreshStamp === stamp) return;
+        let due = !(item.preComputed && Number.isFinite(item.preComputed.maxEnergy)) || _isThingStatsDueThisTick(item, intervalTicks, tick);
+        if (!due && selectedEntitySet && selectedEntitySet.has(item)) due = _isSelectionStatsRefreshDue(item, selectionSize);
+        if (!due) return;
+        item._thingStatsRefreshStamp = stamp;
+        _refreshThingPrecomputedStats(item);
+    };
+    for (let t of towers) processThing(t);
+    for (let b of barracks) processThing(b);
+    for (let s of collectorSpawners) processThing(s);
 
     // Cell items in row-major order, as a scan of every tile would visit them.
     for (let item of getCellItemsRowMajor()) {
         let cell = grid[item.gy] && grid[item.gy][item.gx];
         if (!cell || cell.item !== item) continue;
-        processThing(item, !!(selectedEntitySet && selectedEntitySet.has(item)));
+        processThing(item);
     }
 }
 
+function _effectiveStatsRadiusPx(u) {
+    return Math.max(0.5, Number((u.basePreComputed && u.basePreComputed.visionRange) || (u.preComputed && u.preComputed.visionRange) || 0.5)) * TILE;
+}
+
+// Scratch for _countNearbySameTypeUnits, reused across ticks (no garbage).
+let _effCountPrefix = new Int32Array(0);
+let _effCountWin = new Int32Array(0); // per due unit: x1, y1, x2, y2, pair key
+
+// Nearby same-owner same-type unit counts for the due units, from the
+// spatial chunk counts over the square of chunks around each unit (clamped
+// to the map). Units are grouped by owner and type; each group either sums
+// its windows directly or, when the windows overlap a lot, builds a
+// summed-area table over just the box they cover and answers each in O(1).
+// Whichever is cheaper is used; both give the same exact integer counts.
+function _countNearbySameTypeUnits(dueUnits, n, similarOut, chunkPx) {
+    if (_effCountWin.length < n * 5) _effCountWin = new Int32Array(Math.max(n * 5, _effCountWin.length * 2));
+    let win = _effCountWin;
+    let typeCount = Math.max(1, spatialUnitsComplexUnitTypeCount | 0);
+    let groups = new Map(); // pair key -> [indices]
+    for (let i = 0; i < n; i++) {
+        let u = dueUnits[i];
+        win[i * 5 + 4] = -1;
+        let owner = Math.floor(Number(u.owner));
+        let typeIdx = spatialUnitTypeToIndex[u.unitType];
+        if (!Number.isFinite(typeIdx) || typeIdx < 0) continue;
+        if (!(owner >= 0 && owner < spatialUnitsComplexPlayerCount)) continue;
+        let cx = Math.floor(u.x / chunkPx);
+        let cy = Math.floor(u.y / chunkPx);
+        let chunkRadius = Math.max(0, Math.ceil(_effectiveStatsRadiusPx(u) / chunkPx));
+        let x1 = Math.max(0, Math.min(CHUNKS_W - 1, cx - chunkRadius));
+        let y1 = Math.max(0, Math.min(CHUNKS_H - 1, cy - chunkRadius));
+        let x2 = Math.max(0, Math.min(CHUNKS_W - 1, cx + chunkRadius));
+        let y2 = Math.max(0, Math.min(CHUNKS_H - 1, cy + chunkRadius));
+        if (!(x1 <= x2 && y1 <= y2)) continue; // NaN positions
+        let key = owner * typeCount + typeIdx;
+        let o = i * 5;
+        win[o] = x1; win[o + 1] = y1; win[o + 2] = x2; win[o + 3] = y2; win[o + 4] = key;
+        let list = groups.get(key);
+        if (!list) { list = []; groups.set(key, list); }
+        list.push(i);
+    }
+
+    let strideChunk = spatialUnitsComplexStridePerChunk;
+    let data = spatialUnitsComplex;
+    for (let [key, list] of groups) {
+        let owner = Math.floor(key / typeCount), typeIdx = key - owner * typeCount;
+        let lane = owner * spatialUnitsComplexStridePerPlayer + 1 + typeIdx;
+        let bx1 = CHUNKS_W, by1 = CHUNKS_H, bx2 = -1, by2 = -1, directCost = 0;
+        for (let i of list) {
+            let o = i * 5;
+            let x1 = win[o], y1 = win[o + 1], x2 = win[o + 2], y2 = win[o + 3];
+            if (x1 < bx1) bx1 = x1;
+            if (y1 < by1) by1 = y1;
+            if (x2 > bx2) bx2 = x2;
+            if (y2 > by2) by2 = y2;
+            directCost += (x2 - x1 + 1) * (y2 - y1 + 1);
+        }
+        let bw = bx2 - bx1 + 1, bh = by2 - by1 + 1;
+        // A table cell costs about two window reads (read, add, store).
+        if (directCost <= bw * bh * 2) {
+            for (let i of list) {
+                let o = i * 5;
+                let x1 = win[o], y1 = win[o + 1], x2 = win[o + 2], y2 = win[o + 3];
+                let sum = 0;
+                for (let y = y1; y <= y2; y++) {
+                    let idx = (y * CHUNKS_W + x1) * strideChunk + lane;
+                    for (let x = x1; x <= x2; x++, idx += strideChunk) sum += data[idx];
+                }
+                similarOut[i] = sum | 0;
+            }
+            continue;
+        }
+        // Summed-area table of the box, with a zero row and column in front.
+        let pStride = bw + 1;
+        let cells = pStride * (bh + 1);
+        if (_effCountPrefix.length < cells) _effCountPrefix = new Int32Array(Math.max(cells, _effCountPrefix.length * 2));
+        let prefix = _effCountPrefix;
+        prefix.fill(0, 0, pStride);
+        for (let ry = 1; ry <= bh; ry++) {
+            let out = ry * pStride, prev = out - pStride;
+            prefix[out] = 0;
+            let rowAccum = 0;
+            let idx = ((by1 + ry - 1) * CHUNKS_W + bx1) * strideChunk + lane;
+            for (let rx = 1; rx <= bw; rx++, idx += strideChunk) {
+                rowAccum += data[idx];
+                prefix[out + rx] = prefix[prev + rx] + rowAccum;
+            }
+        }
+        for (let i of list) {
+            let o = i * 5;
+            let xa = win[o] - bx1, ya = win[o + 1] - by1, xb = win[o + 2] - bx1 + 1, yb = win[o + 3] - by1 + 1;
+            similarOut[i] = (prefix[yb * pStride + xb] - prefix[ya * pStride + xb]
+                - prefix[yb * pStride + xa] + prefix[ya * pStride + xa]) | 0;
+        }
+    }
+}
+
+let _effectiveStatsStamp = 0;
+
+let _effDueUnits = [];
 function recalculateUnitEffectiveStats() {
     let intervalTicks = getUnitEffectiveStatsRecalcTicks();
-    let dueUnits = [];
+    let dueUnits = _effDueUnits;
+    dueUnits.length = 0;
     let selectedSet = null;
     if ((!isMultiplayer || !gameStarted) && selectedUnits && selectedUnits.length > 0) selectedSet = new Set(selectedUnits);
 
-    for (let u of units) {
-        if (!u || u.dead) continue;
-
-        if (!Number.isFinite(u._effectiveStatsRecalcCounter)) {
-            let seed = ((u.id * 1103515245 + (u.owner + 1) * 12345) >>> 0);
-            u._effectiveStatsRecalcCounter = intervalTicks > 1 ? (seed % intervalTicks) : 0;
-        } else if (u._effectiveStatsRecalcCounter > intervalTicks) {
-            u._effectiveStatsRecalcCounter = intervalTicks;
-        }
-
-        let needsImmediate = !Number.isFinite(u.baseLevel)
-            || !(u.basePreComputed && Number.isFinite(u.basePreComputed.visionRange))
-            || !(u.basePreComputed && Number.isFinite(u.basePreComputed.maxEnergy))
-            || !Number.isFinite(u.effectiveLevel)
-            || !Number.isFinite(u.effectiveStacks);
-
-        // Never let local-only unit selection affect multiplayer simulation timing.
-        if (!needsImmediate && selectedSet && selectedSet.has(u)) needsImmediate = _isSelectionStatsRefreshDue(u, selectedSet.size);
-
-        if (needsImmediate || u._effectiveStatsRecalcCounter <= 0) {
-            dueUnits.push(u);
-            u._effectiveStatsRecalcCounter = intervalTicks;
-        } else {
-            u._effectiveStatsRecalcCounter--;
-        }
-    }
+    let tick = Math.max(0, Math.floor(Number(gameTime) || 0));
+    // New units (their list is drained by recalculateThingPrecomputedStats,
+    // which runs next), the strided share, and the selection (single player
+    // only: never local timing in multiplayer).
+    let stamp = ++_effectiveStatsStamp;
+    let take = (u) => {
+        if (!u || u.dead || u._effectiveStatsStamp === stamp) return;
+        u._effectiveStatsStamp = stamp;
+        dueUnits.push(u);
+    };
+    for (let u of _newUnitsForStats) if (u._needsStatsInit) take(u);
+    _forEachStridedUnit(intervalTicks, tick, take);
+    if (selectedSet) for (let u of selectedSet) if (_isSelectionStatsRefreshDue(u, selectedSet.size)) take(u);
 
     if (dueUnits.length <= 0) return;
 
@@ -549,76 +702,18 @@ function recalculateUnitEffectiveStats() {
         && spatialUnitsComplex.length > 0
         && CHUNKS_W > 0
         && CHUNKS_H > 0;
-    // Nearby same-type counts come from the spatial chunk counts (a square of
-    // chunks around the unit) through per owner and type summed-area tables:
-    // O(1) per unit. The counts are simulation state, the same on every peer.
-    let unitTypeToSpatialIdx = new Map();
     let chunkPx = Math.max(1, CHUNK_SIZE * TILE);
 
-    // Prefix sums per owner+unitType allow O(1) rectangular count queries per unit.
-    let spatialPrefixByOwner = new Map();
-    let prefixStride = CHUNKS_W + 1;
-    let prefixCellCount = (CHUNKS_H + 1) * prefixStride;
-
-    let getTypeIndexCached = (unitType) => {
-        if (unitTypeToSpatialIdx.has(unitType)) return unitTypeToSpatialIdx.get(unitType);
-        let idx = spatialUnitTypeToIndex[unitType];
-        let valid = Number.isFinite(idx) ? idx : -1;
-        unitTypeToSpatialIdx.set(unitType, valid);
-        return valid;
-    };
-
-    let getSpatialPrefix = (owner, typeIdx) => {
-        let byType = spatialPrefixByOwner.get(owner);
-        if (!byType) {
-            byType = new Map();
-            spatialPrefixByOwner.set(owner, byType);
-        }
-
-        let prefix = byType.get(typeIdx);
-        if (prefix) return prefix;
-
-        prefix = new Int32Array(prefixCellCount);
-        for (let cy = 1; cy <= CHUNKS_H; cy++) {
-            let rowAccum = 0;
-            let chunkRow = (cy - 1) * CHUNKS_W;
-            let outRow = cy * prefixStride;
-            let outPrevRow = (cy - 1) * prefixStride;
-            for (let cx = 1; cx <= CHUNKS_W; cx++) {
-                let chunkKey = chunkRow + (cx - 1);
-                let playerBase = (chunkKey * spatialUnitsComplexStridePerChunk) + (owner * spatialUnitsComplexStridePerPlayer);
-                let v = spatialUnitsComplex[playerBase + 1 + typeIdx] | 0;
-                rowAccum += v;
-                let outIdx = outRow + cx;
-                prefix[outIdx] = prefix[outPrevRow + cx] + rowAccum;
-            }
-        }
-
-        byType.set(typeIdx, prefix);
-        return prefix;
-    };
-
-    let querySpatialCountRect = (prefix, minCx, minCy, maxCx, maxCy) => {
-        if (!prefix) return 0;
-        let x1 = Math.max(0, Math.min(CHUNKS_W - 1, minCx));
-        let y1 = Math.max(0, Math.min(CHUNKS_H - 1, minCy));
-        let x2 = Math.max(0, Math.min(CHUNKS_W - 1, maxCx));
-        let y2 = Math.max(0, Math.min(CHUNKS_H - 1, maxCy));
-        if (x2 < x1 || y2 < y1) return 0;
-
-        let xa = x1;
-        let ya = y1;
-        let xb = x2 + 1;
-        let yb = y2 + 1;
-
-        return (prefix[yb * prefixStride + xb]
-            - prefix[ya * prefixStride + xb]
-            - prefix[yb * prefixStride + xa]
-            + prefix[ya * prefixStride + xa]) | 0;
-    };
-
-    let dueInfo = [];
-    for (let u of dueUnits) {
+    // Per due unit (reused typed scratch, no objects per unit): base stacks,
+    // whether its base tables were rebuilt, and its nearby same-type count.
+    let n = dueUnits.length;
+    if (_effBaseStacks.length < n) {
+        let cap = Math.max(n, _effBaseStacks.length * 2);
+        _effBaseStacks = new Float64Array(cap); _effRefresh = new Uint8Array(cap); _effSimilar = new Int32Array(cap);
+    }
+    let baseStacksOf = _effBaseStacks, refreshed = _effRefresh, similar = _effSimilar;
+    for (let i = 0; i < n; i++) {
+        let u = dueUnits[i];
         let baseStacks = getUnitStackCount(u);
         let baseLevel = stackCountToLevel(baseStacks);
         let needsRefresh = !Number.isFinite(u.baseLevel) || u.baseLevel !== baseLevel ||
@@ -634,52 +729,38 @@ function recalculateUnitEffectiveStats() {
 
         u.effectiveStacks = baseStacks;
         u.effectiveLevel = baseLevel;
-        dueInfo.push({ u, baseStacks, needsRefresh });
+        baseStacksOf[i] = baseStacks; refreshed[i] = needsRefresh ? 1 : 0; similar[i] = 0;
     }
 
-    for (let info of dueInfo) {
-        let u = info.u;
-        let radiusPx = Math.max(0.5, Number((u.basePreComputed && u.basePreComputed.visionRange) || (u.preComputed && u.preComputed.visionRange) || 0.5)) * TILE;
-        let similarCount = 0;
-        if (canUseSpatialCounts) {
-            let owner = Math.floor(Number(u.owner));
-            let typeIdx = getTypeIndexCached(u.unitType);
-            if (owner >= 0 && owner < spatialUnitsComplexPlayerCount && typeIdx >= 0) {
-                let cx = Math.floor(u.x / chunkPx);
-                let cy = Math.floor(u.y / chunkPx);
-                let chunkRadius = Math.max(0, Math.ceil(radiusPx / chunkPx));
-                // A tiny window (1-2 chunks across) is summed directly; larger
-                // ones through the table (built once per owner and type).
-                if (chunkRadius <= 0) {
-                    let x = Math.max(0, Math.min(CHUNKS_W - 1, cx)), y = Math.max(0, Math.min(CHUNKS_H - 1, cy));
-                    similarCount = spatialUnitsComplex[(y * CHUNKS_W + x) * spatialUnitsComplexStridePerChunk + owner * spatialUnitsComplexStridePerPlayer + 1 + typeIdx] | 0;
-                } else {
-                    let prefix = getSpatialPrefix(owner, typeIdx);
-                    similarCount = querySpatialCountRect(prefix, cx - chunkRadius, cy - chunkRadius, cx + chunkRadius, cy + chunkRadius);
-                }
-            }
-        }
+    if (canUseSpatialCounts) _countNearbySameTypeUnits(dueUnits, n, similar, chunkPx);
+
+    for (let i = 0; i < n; i++) {
+        let u = dueUnits[i];
+        let similarCount = similar[i] | 0;
         if (similarCount <= 0) {
+            let radiusPx = _effectiveStatsRadiusPx(u);
             forEachUnitInRange(u.x, u.y, radiusPx, () => {
                 similarCount++;
             }, { player: u.owner, unitType: u.unitType });
         }
 
         if (similarCount < 1) similarCount = 1;
-        let effStacks = Math.max(1, Math.floor(similarCount * info.baseStacks));
+        let effStacks = Math.max(1, Math.floor(similarCount * baseStacksOf[i]));
         u.effectiveStacks = effStacks;
         u.effectiveLevel = stackCountToLevel(effStacks);
     }
 
-    for (let info of dueInfo) {
-        let u = info.u;
+    for (let i = 0; i < n; i++) {
+        let u = dueUnits[i];
         let nextEffLevel = getUnitEffectiveLevel(u);
-        if (info.needsRefresh || u._lastAppliedEffectiveLevel !== nextEffLevel) {
+        if (refreshed[i] || u._lastAppliedEffectiveLevel !== nextEffLevel) {
             applyUnitEffectiveScaling(u, nextEffLevel);
             u._lastAppliedEffectiveLevel = nextEffLevel;
         }
     }
+    dueUnits.length = 0;
 }
+let _effBaseStacks = new Float64Array(0), _effRefresh = new Uint8Array(0), _effSimilar = new Int32Array(0);
 
 // ============================================================
 // BUILDING PLACEMENT & DESTRUCTION
@@ -1073,6 +1154,9 @@ function destroyBuilding(building) {
         grid[building.gy][building.gx].owner = -1;
         _markCombinedBgTileDirty(building.gx, building.gy, 0, false);
     }
+    // A freed tile: walls, builder passage and routes change.
+    _bumpPathTopologyVersion();
+    visCoverOnBuildingChanged(building);
     createExplosion(building.x, building.y, '#f44', 10);
     playSound('building_destroyed', building.x, building.y);
     checkWinCondition();
@@ -1234,6 +1318,8 @@ function addManualStackToThing(item, amount = 1) {
     refreshThingProgressState(item);
     if (item.updateTextCache) item.updateTextCache();
     else updateItemTextCache(item);
+    bumpTileOccupancyVersion();
+    visCoverOnBuildingChanged(item);
 }
 
 function getThingBaseLevel(item, fallback = 1) {

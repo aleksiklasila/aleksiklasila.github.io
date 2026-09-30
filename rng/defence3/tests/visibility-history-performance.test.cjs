@@ -24,6 +24,8 @@ const c = vm.createContext({
 vm.runInContext(read('src/audio_visual/visibility_history.js')+'\nteamVisibilityHistory=true;',c);
 const renderer=read('src/audio_visual/renderer.js');
 c.getRawVisibilityGridForPlayer=()=>c.raw;
+// No gameplay coverage in this sandbox: the queries read the grid.
+c._visCoverTileVisible=()=>null;
 for (const name of ['isTileActuallyVisibleToPlayer','isGameplayTargetVisibleToPlayer']) vm.runInContext(fn(renderer,name),c);
 const raw=()=>Array.from({length:80},()=>new Float32Array(80));
 c.raw=raw();c.raw[0][0]=3;

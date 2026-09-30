@@ -47,14 +47,18 @@
 const SNAP_FORMAT = 7;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
+// Each tick hashes one slice (regions, grid rows) of the world. The resync
+// waits one rotation after a divergence (utils_resync.js), so this is also
+// the detection delay in ticks.
 const SNAP_HASH_SLICES = 10;
 
 // Render, audio and index bookkeeping: rebuilt or irrelevant after restore.
 const SNAP_SKIP_KEYS = new Set([
     'textCtx', 'textCanvas', '_textCanvasScale', '_levelTextLabel', 'prevX', 'prevY',
-    '_spatialKey', '_spatialMember', '_spatialAreaId', '_spatialAreaOwner', '_spatialUnitTypeIdx', '_spatialLastVisScaled',
+    '_spatialKey', '_spatialMember', '_spatialAreaId', '_spatialAreaOwner', '_spatialUnitTypeIdx', '_spatialLastVisScaled', '_spatialTile', '_spatialZone', '_spatialOwner', '_spatialEpoch',
     '_damageFlashStart', '_damageFlashUntil', '_damageFlashStrength', '_damageFlashColor', '_ambientSoundTicks',
-    '_historyGhost', '_historyTick', '_droppedIndex', '_areaBucketId', '_laserLinkLevel', '_r3d', '_r3dSig', '_r3dTex', '_visStill', '_r3dStatic', '_rslot', '_sslot', '_pslot', '_simLabelKey', '_simLabel', '_fpPath', '_fpTile', '_fpIdx', '_fpVer'
+    '_historyGhost', '_historyTick', '_droppedIndex', '_areaBucketId', '_laserLinkLevel', '_r3d', '_r3dSig', '_r3dTex', '_visStill', '_r3dStatic', '_rslot', '_sslot', '_pslot', '_simLabelKey', '_simLabel', '_fpPath', '_fpTile', '_fpIdx', '_fpVer',
+    '_vsGen', '_vsR', '_vsA', '_vsP1', '_vsP2', '_vsAreas', '_okTile', '_okVer', '_okNodeTile', '_okNodeVer', '_pendingDueStamp', '_thingStatsRefreshStamp', '_effectiveStatsStamp'
 ]);
 
 // Lists: P players, u units, t towers, b barracks, s spawners, f floor
@@ -1117,6 +1121,8 @@ function _snapEncodeGlobals() {
         // lobby roster.
         teams: Array.from(activeTeamIds || [], _snapE),
         pendingStatRebuilds: Array.from(_pendingResourceStatRebuilds),
+        // The upkeep breakdown of the second in progress (built over its ticks).
+        upkeepAcc: (typeof _upKeepAccum !== 'undefined' && _upKeepAccum) ? JSON.parse(JSON.stringify(_upKeepAccum)) : null,
         adjacency: [!!_adjacencyNeedsRecalc, !!_adjacencyDirtyAll, _snapE(_adjacencyLastRecalcTick), Array.from(_adjacencyDirtyTiles || [], _snapE), !!_adjacencyPassiveRefreshMode]
     };
 }
@@ -1550,6 +1556,7 @@ function _snapResetWorkerCaches() {
     _healerDamagedCandidatesTick = NaN;
     _healerDamagedCandidatesByOwner = [];
     _workerSpawnerIndex = null;
+    if (typeof _upKeepAccum !== 'undefined') _upKeepAccum = null;
 }
 
 // Restore an encoded state: whole, or (partial) the regions it carries,
@@ -1768,6 +1775,17 @@ function snapDecodeState(S, options = null) {
         gameOver = !!g.gameOver;
         winner = _snapD(g.winner);
         pendingPathResolveCursor = _snapD(g.cursor);
+        if (typeof _upKeepAccum !== 'undefined') {
+            _upKeepAccum = Array.isArray(g.upkeepAcc) ? g.upkeepAcc.map(row => {
+                let b = _createEmptyUpKeepBreakdown();
+                for (let k of Object.keys(row || {})) {
+                    let v = row[k];
+                    if (v && typeof v === 'object') { let o = Object.create(null); Object.assign(o, v); b[k] = o; }
+                    else b[k] = v;
+                }
+                return b;
+            }) : null;
+        }
         globalSpawnerReadyOrderCounter = _snapD(g.spawnOrder);
         if (rng && typeof rng.setState === 'function' && g.rng !== null && g.rng !== undefined) rng.setState(g.rng);
         if (Array.isArray(g.pathBudget)) for (let i = 0; i < g.pathBudget.length; i++) pathfindBudgetByPlayer[i] = _snapD(g.pathBudget[i]);
@@ -1884,6 +1902,10 @@ function snapDecodeState(S, options = null) {
             for (let u of units) { u.prevX = u.x; u.prevY = u.y; updateUnitSpatial(u); }
         }
         for (let p of shells.p) { p.prevX = p.x; p.prevY = p.y; }
+        resetPendingPathUnits();
+        resetNewUnitsForStats();
+        // Rebuilt from the restored world on its first query.
+        if (typeof resetVisibilityCoverage === 'function') resetVisibilityCoverage();
         if (!partial || shells.t.length > 0 || removed.t.length > 0) recalculateLaserConnections();
 
         let unitsById = null;
