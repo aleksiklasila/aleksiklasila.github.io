@@ -1841,8 +1841,9 @@ function draw() {
         if (u.dead) continue;
         let ux = u.prevX + (u.x - u.prevX) * alpha, uy = u.prevY + (u.y - u.prevY) * alpha;
         let neutralEndpoint = null;
-        if (u.path && u.path.length > 0) {
-            let last = u.path[u.path.length - 1];
+        let shownDest = typeof unitDisplayDest === 'function' ? unitDisplayDest(u) : (u.path && u.path.length ? u.path[u.path.length - 1] : null);
+        if (shownDest) {
+            let last = shownDest;
             neutralEndpoint = { x: last.x * TILE + 16, y: last.y * TILE + 16 };
         } else if (u._pendingPathTarget) {
             neutralEndpoint = { x: u._pendingPathTarget.gx * TILE + 16, y: u._pendingPathTarget.gy * TILE + 16 };
@@ -1851,8 +1852,8 @@ function draw() {
         }
         if (u.commandState >= CMD_MOVING && u.commandState <= CMD_ATTACK_MOVING) {
             let destX = null, destY = null, markerKey = null;
-            if (u.path && u.path.length > 0) {
-                let lastPt = u.path[u.path.length - 1];
+            if (shownDest) {
+                let lastPt = shownDest;
                 destX = lastPt.x * TILE + 16;
                 destY = lastPt.y * TILE + 16;
                 markerKey = lastPt.x + ',' + lastPt.y;

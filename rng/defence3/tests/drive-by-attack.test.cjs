@@ -141,7 +141,7 @@ const main = fs.readFileSync(path.join(__dirname, '..', 'src/main.js'), 'utf8');
 const holdAction = main.slice(main.indexOf("a.action === 'hold'"), main.indexOf("a.action === 'queueUnit'"));
 assert.doesNotMatch(holdAction, /path = null|workerState|targetUnit|_pendingPathTarget|commandState/, 'hold keeps orders, rally routes and worker tasks');
 const stopAction = main.slice(main.indexOf("a.action === 'stop'"), main.indexOf("a.action === 'hold'"));
-assert.match(stopAction, /if \(u\.holdPosition\) \{ u\.holdPosition = false; continue; \}/);
+assert.match(stopAction, /if \(u\.holdPosition\) \{ u\.holdPosition = false;( simMoveDisarm\(u\);)? continue; \}/);
 assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'src/things/worker.js'), 'utf8'), /CMD_HOLDING/);
 
 console.log('PASS: travelling and holding attacks respect range, cooldowns, fixed positions, and deterministic targets.');

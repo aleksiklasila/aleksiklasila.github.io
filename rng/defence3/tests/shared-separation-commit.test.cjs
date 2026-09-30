@@ -22,11 +22,14 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
         if(i%11===0) S.px[s]=S.py[s]=0;
     }
     _simParams[0]=slots; _simParams[1]=512; _simParams[2]=TILE; _simParams[3]=UNIT_POSITION_QUANTIZATION;
-    _simParams[4]=UNIT_SEPARATION_CONTACTS; _simParams[5]=UNIT_SEPARATION_Q;
+    _simParams[4]=UNIT_SEPARATION_CONTACTS; _simParams[5]=UNIT_SEPARATION_Q; _simParams[6]=gameTime; _simParams[7]=UNIT_SEPARATION_PATH_RETRY_TICKS;
+    _simParams[8]=GRID_W; _simParams[9]=GRID_H; simMoveWallGrid();
+    // The kernel commits pushes that cannot meet a blocked tile itself: the oracle starts from the positions before.
+    const before=samples.map(u=>[u.x,u.y]);
     simParallelRun(SIM_KERNEL_SEPARATION_FINISH,Math.ceil(slots/512));
     let accepted=0, different=0, rejected=n;
     for(let i=0;i<n;i++) {
-        const u=samples[i], s=u._si, gx=Math.floor(u.x/TILE), gy=Math.floor(u.y/TILE);
+        const u=samples[i], s=u._si; u.x=before[i][0]; u.y=before[i][1]; const gx=Math.floor(u.x/TILE), gy=Math.floor(u.y/TILE);
         if(!S.fast[s] || (!u.isFlying && grid[gy][gx].type===TYPE_WALL)) continue;
         accepted++; rejected--;
         const k=S.hit[s], scale=k<=UNIT_SEPARATION_CONTACTS?1:Math.sqrt(UNIT_SEPARATION_CONTACTS/k);
@@ -39,7 +42,8 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     return {accepted,rejected,different};
 })())`));
 assert.equal(result.different,0);
-assert.ok(result.accepted>5000);
-assert.ok(result.rejected>100);
+// (Pushes across tiles over open ground are committed by the kernel too:
+// here nearly all; the rest go through the scalar commit.)
+assert.ok(result.accepted>10000);
 assert.deepEqual(inst.errors.map(String),[]);
 console.log('PASS: parallel collision correction agrees exactly with swept scalar collision/quantization:',result);

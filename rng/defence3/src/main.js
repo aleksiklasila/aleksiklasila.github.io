@@ -130,9 +130,36 @@ function _buildDeterministicUnitUpdateOrderForTick() {
 
 // The same order as _buildDeterministicUnitUpdateOrderForTick, visited in
 // place (no per-tick array of every unit).
+// Slot of each unit in `units`, by index, kept in step where the array
+// changes (pushes, the dead-unit compaction) and rebuilt when it is not:
+// the update pass skips units the movement kernel already moved without
+// reading their objects. A stale entry only costs a read (Unit.update
+// checks its own slot too).
+const _unitSlotMap = { ref: null, len: -1, slots: new Int32Array(0) };
+function _unitSlotMapEnsure() {
+    const M = _unitSlotMap, n = units.length;
+    if (M.ref === units && M.len === n) return M.slots;
+    // (Shared: the index kernels read it.)
+    if (M.slots.length < n) M.slots = simSharedArray(Int32Array, Math.max(1024, n * 2));
+    for (let i = 0; i < n; i++) { const u = units[i]; M.slots[i] = u && u._us ? u._si : -1; }
+    M.ref = units; M.len = n;
+    return M.slots;
+}
+// After units.push(u).
+function unitSlotMapPushed(u) {
+    const M = _unitSlotMap;
+    if (M.ref !== units || M.len !== units.length - 1) return;
+    if (M.slots.length < units.length) { const a = simSharedArray(Int32Array, units.length * 2); a.set(M.slots); M.slots = a; }
+    M.slots[M.len++] = u && u._us ? u._si : -1;
+}
+function unitSlotMapInvalidate() { _unitSlotMap.ref = null; }
+
 function _forEachUnitInTickOrder(fn) {
     let list = units, n = list.length;
     if (n <= 1) { if (n === 1 && list[0]) fn(list[0]); return; }
+    // Units the movement kernel moved this tick are skipped (fn is update).
+    const S = _simUnitState, slots = S ? _unitSlotMapEnsure() : null;
+    const OUT = S ? S.columns.mvOut : null, owners = S ? S.owners : null;
     let seed = ((gameTime + 1) * 1664525) + ((n + 1) * 1013904223);
     let B = UNIT_UPDATE_ORDER_BLOCK, nb = Math.ceil(n / B);
     if (_updateOrderBlocks.length < nb) _updateOrderBlocks = new Int32Array(Math.max(nb, _updateOrderBlocks.length * 2));
@@ -149,8 +176,18 @@ function _forEachUnitInTickOrder(fn) {
         s = ((s * 1664525) + 1013904223) >>> 0;
         let start = (s >>> 8) % len, backward = s & 1;
         for (let q = 0; q < len; q++) {
-            let u = list[b0 + (backward ? (start - q + len) % len : (start + q) % len)];
-            if (u) fn(u);
+            let idx = b0 + (backward ? (start - q + len) % len : (start + q) % len);
+            let u = list[idx];
+            if (!u) continue;
+            if (OUT) {
+                const s = slots[idx];
+                if (s >= 0 && OUT[s] !== 0 && owners[s] === u) {
+                    // Held attackers: the hold checked again at their turn.
+                    if (OUT[s] < 6 || simHoldStillValid(S.columns, s)) continue;
+                    simHoldUndo(S.columns, s);
+                }
+            }
+            fn(u);
         }
     }
 }
@@ -315,9 +352,25 @@ function _resolveDeferredPathsByGroup(pending) {
     for (let u of pending) {
         let pt = u && u._pendingPathTarget;
         if (!u || u.dead || !pt || !u.pathIsFallbackAstar || u.isFlying) continue;
+        let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+        // The way on the flow navigation (no search, no budget); what it
+        // cannot answer goes to the unit's own budgeted search after this.
+        if (typeof navPathTo === 'function') {
+            let path = navPathTo(u, pt.gx, pt.gy);
+            if (!path || path.length <= 0) continue;
+            {
+                u.path = path;
+                u.pathIndex = (path.length > 1 && path[0].x === ugx && path[0].y === ugy) ? 1 : 0;
+                u.pathIsFallbackAstar = false;
+                u.commandState = pt.cmd;
+                u._pendingPathTarget = null;
+                u._awaitGroupPath = 0;
+                resolved.add(u);
+                continue;
+            }
+        }
         if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) continue;
         if (!_canUsePathfindRequestBudget(u.owner, u)) continue;
-        let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
         let canWalk = getPathCanWalkForUnit(u);
         // The destination follows from the target, the unit's tile and the
         // topology: remembered per pending target while those stay the same.
@@ -385,9 +438,20 @@ function _resolveDeferredPathsByGroup(pending) {
 // with the other cross-tick caches at a resync, on every peer.
 let _upKeepAccum = null;
 
+let _removedMarks = new Uint8Array(0);
 function gameTick() {
     if (gameOver) return;
     gameTime++;
+    // The unit index for this tick's queries and collision pass, from the
+    // state as the tick begins (the same on a peer that just restored it).
+    spatialIndexRebuild();
+    // Queued slices of big orders first (this tick's budget is shared with
+    // the orders that came in for it), then a fresh budget for the next.
+    runQueuedOrders();
+    navTick();
+    // The destination fields asked for so far (the orders'), for this tick.
+    navFieldsFlush();
+    _refillOrderBudget();
     _resetPathfindPerfTick();
     _resetPathBudgetTrackingPerTick();
     _ensureUpKeepRateCacheSize();
@@ -427,6 +491,7 @@ function gameTick() {
     }
 
     recomputePlayerPopCaps();
+    healerCandidatesStep();
 
     // Previous positions for interpolation: units set theirs in update().
     for (let p of projectiles) { p.prevX = p.x; p.prevY = p.y; }
@@ -518,25 +583,48 @@ function gameTick() {
     // simulation order, in-place compaction, snapshots keep it), so it is
     // the base order; walked in shuffled blocks without building a list.
     // Units added during the pass wait for the next tick.
+    visCoverHoldBegin();
+    statusPrepassRun();
+    simMoveRun();
+    combatScanRun();
     _forEachUnitInTickOrder(u => u.update());
+    unitHitsResolve();
+    visCoverHoldEnd();
+    simMoveEndTick();
 
     // Dead units are processed in the same order as ever and removed in one
     // pass afterwards: a splice per death shifted the whole list each time,
     // which in big fights (hundreds of deaths a tick) cost most of the tick.
-    let removedUnits = null;
+    // Dead units are found in the dead column (through the slot map, no
+    // object reads) and marked by index; the compaction moves references.
+    let removedAny = false;
+    const DS = _simUnitState, dslots = DS ? _unitSlotMapEnsure() : null, DEAD = DS ? DS.columns.dead : null, downers = DS ? DS.owners : null;
+    if (_removedMarks.length < units.length) _removedMarks = new Uint8Array(units.length * 2);
+    const marks = _removedMarks;
     let compactRemovedUnits = () => {
-        if (!removedUnits) return;
-        let w = 0;
-        for (let k = 0; k < units.length; k++) if (!removedUnits.has(units[k])) units[w++] = units[k];
+        if (!removedAny) return;
+        let w = 0, removedSet = selectedUnits.length ? new Set() : null;
+        const M = _unitSlotMap, keep = M.ref === units && M.len === units.length, ms = M.slots;
+        for (let k = 0; k < units.length; k++) {
+            if (marks[k]) { marks[k] = 0; if (removedSet) removedSet.add(units[k]); continue; }
+            if (keep) ms[w] = ms[k];
+            units[w++] = units[k];
+        }
         units.length = w;
-        if (selectedUnits.length) selectedUnits = selectedUnits.filter(su => !removedUnits.has(su));
+        if (keep) M.len = w;
+        if (removedSet) selectedUnits = selectedUnits.filter(su => !removedSet.has(su));
     };
     for (let i = units.length - 1; i >= 0; i--) {
         let u = units[i];
-        if (u.dead && u._removedNow) {
+        const si = dslots ? dslots[i] : -1;
+        if (si >= 0 && downers[si] === u ? DEAD[si] === 0 : !u.dead) {
+            if (i % TICK_RATE === upKeepSlice) _accumulateUpKeepForThing(upKeepTickBreakdown, u, true);
+            continue;
+        }
+        if (u._removedNow) {
             // Removed by removeUnitNow (spatial and population already done).
-            (removedUnits ||= new Set()).add(u);
-        } else if (u.dead) {
+            marks[i] = 1; removedAny = true;
+        } else {
             if (!u.isKing && !u.workerState) playSound('unit_death', u.x, u.y, u.unitType);
             // Drop energy on death (bounty)
             let cost = BASE_UNIT_STATS[u.unitType] ? BASE_UNIT_STATS[u.unitType].energy * 0.5 : 5;
@@ -556,10 +644,8 @@ function gameTick() {
             if (u.isKing) checkWinCondition();
             removeUnitSpatial(u);
             players[u.owner].popCount--;
-            (removedUnits ||= new Set()).add(u);
+            marks[i] = 1; removedAny = true;
             if (gameOver) { compactRemovedUnits(); return; }
-        } else if (i % TICK_RATE === upKeepSlice) {
-            _accumulateUpKeepForThing(upKeepTickBreakdown, u, true);
         }
     }
     compactRemovedUnits();
@@ -2750,6 +2836,37 @@ function _actionUnits(a) {
     return out;
 }
 
+const FLOW_MIN_GROUP = 8;
+// The ground combat units of a move order: their shared route (started
+// now, within this tick's search budget) as a flow each of them follows
+// from its columns. Units that cannot reach the destination search alone.
+function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
+    let labels = profile === NAV_PROFILE_GROUND ? getPathRegions(playerId) : null, region = labels ? labels[dest.y * GRID_W + dest.x] : -1;
+    let reachable = members, outliers = null;
+    if (region >= 0) {
+        reachable = [];
+        for (let m of members) (_pathStartInRegion(labels, region, m.ugx, m.ugy) ? reachable : (outliers ||= [])).push(m);
+    }
+    if (reachable.length) {
+        navEnsure(profile);
+        const destKey = dest.y * GRID_W + dest.x, did = navFieldRequest(profile, destKey, true), ready = navFieldReadyTick();
+        for (let m of reachable) {
+            let u = m.u;
+            u._routeKey = NAV_ROUTE_KEY; u._routeEnd = destKey; u._navReady = ready;
+            if (m.ugy * GRID_W + m.ugx === destKey) continue;
+            // Its way: one nav node to the end (as continueUnitRoute gives),
+            // walked by the kernel from its columns.
+            u.path = [{ x: dest.x, y: dest.y, nav: profile + 1, w: 1, ready }]; u.pathIndex = 0; u._routeSegEnd = destKey;
+            if (did >= 0) simFlowArm(u._us, u._si, did, navFieldGen(did), destKey, cmd, profile === NAV_PROFILE_AIR, ready);
+        }
+    }
+    if (outliers) for (let m of outliers) {
+        let u = m.u;
+        u._routeKey = null;
+        applyPath(u, m.ugx, m.ugy, _findPathForUnitTagged('player_commands', u, m.ugx, m.ugy, dest.x, dest.y, !!u.isFlying, null, u.owner));
+    }
+}
+
 // Move and attack-move orders. Units sharing a destination (and walking
 // rules) are routed by one shared reverse search, each along its own shortest
 // path from its own tile; anything that search cannot answer falls back to
@@ -2769,6 +2886,9 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
             u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
         }
     };
+    let flowDest = [null, null], flowMembers = [null, null];
+    // Flows pay off for groups; a few units route alone as before.
+    let useFlows = (a.unitIds ? a.unitIds.length : 0) >= FLOW_MIN_GROUP;
     for (let u of _actionUnits(a)) {
         if (!ids.has(u.id) || u.owner !== playerId || u.dead) continue;
         u.targetUnit = null; u.targetBuilding = null; u.forcedAttackTarget = false;
@@ -2780,7 +2900,21 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
         if (u.workerState) interruptWorkerForManualMove(u);
         u.targetPos = { x: targetGx * TILE + 16, y: targetGy * TILE + 16 };
         u._awaitGroupPath = 0;
+        // Off any earlier flow (a route below sets it again).
+        u._routeKey = null;
         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+        // Combat units follow a flow (the group's route as a distance field,
+        // in the movement kernel; flying ones the straight line): no path
+        // or search of their own. See simFlowArm.
+        if (useFlows && !u.workerState && !u.holdPosition && u._us && u._spatialEpoch === spatialEpoch) {
+            let profile = u.isFlying ? 1 : 0;
+            let fdest = flowDest[profile] || (flowDest[profile] = findNearestWalkable(targetGx, targetGy, ugx, ugy, u));
+            u._pendingPathTarget = null; u.pathIsFallbackAstar = false; u._routeSegEnd = -1;
+            u._routeEnd = fdest.y * GRID_W + fdest.x;
+            u.path = null; u.pathIndex = 0;
+            (flowMembers[profile] ||= []).push({ u, ugx, ugy });
+            continue;
+        }
         let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
         if (!_canUsePathfindRequestBudget(u.owner, u)) {
             u.path = _makeFallbackPathForUnit(u, ugx, ugy, dest.x, dest.y, cmd, 'player_commands');
@@ -2804,6 +2938,8 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
         }
         group.members.push({ u, ugx, ugy });
     }
+    if (flowMembers[0]) _issueFlowOrder(playerId, cmd, flowDest[0], flowMembers[0], applyPath, NAV_PROFILE_GROUND);
+    if (flowMembers[1]) _issueFlowOrder(playerId, cmd, flowDest[1], flowMembers[1], applyPath, NAV_PROFILE_AIR);
     for (let group of groups) {
         let { dest, canWalk, members } = group;
         // Only starts that can reach the destination go into the shared
@@ -2911,8 +3047,50 @@ function processActions(actions, playerId) {
     }
 }
 
+// Move orders over many units are applied in slices: at most
+// ORDER_UNITS_PER_TICK units a tick (over all orders), the rest queued and
+// applied at the start of the next ticks in order. The first slice moves at
+// once; a later order (or any other order) for a unit drops it from the
+// queued ones, so the latest order always wins. The queue is simulation
+// state (snapshotted with the globals).
+const ORDER_UNITS_PER_TICK = 10000;
+let _orderQueue = [], _orderBudgetLeft = ORDER_UNITS_PER_TICK;
+function _dropQueuedOrderUnits(idSet, playerId) {
+    if (!_orderQueue.length || !idSet || !idSet.size) return;
+    for (let e of _orderQueue) {
+        if (e.playerId !== playerId) continue;
+        let w = e.next;
+        for (let i = e.next; i < e.ids.length; i++) if (!idSet.has(e.ids[i])) e.ids[w++] = e.ids[i];
+        e.ids.length = w;
+    }
+    _orderQueue = _orderQueue.filter(e => e.next < e.ids.length);
+}
+function _queueGroupMoveOrder(a, playerId, cmd) {
+    _dropQueuedOrderUnits(a.unitIdSet, playerId);
+    _orderQueue.push({ playerId, cmd, action: a.action, targetX: a.targetX, targetY: a.targetY, ids: a.unitIds.slice(), next: 0 });
+    runQueuedOrders();
+}
+// Applies queued orders within this tick's budget.
+function runQueuedOrders() {
+    while (_orderQueue.length && _orderBudgetLeft > 0) {
+        let e = _orderQueue[0];
+        let take = Math.min(_orderBudgetLeft, e.ids.length - e.next);
+        let ids = e.ids.slice(e.next, e.next + take);
+        e.next += take; _orderBudgetLeft -= take;
+        if (e.next >= e.ids.length) _orderQueue.shift();
+        try { _issueGroupMoveOrder({ action: e.action, targetX: e.targetX, targetY: e.targetY, unitIds: ids, unitIdSet: new Set(ids) }, e.playerId, e.cmd); }
+        catch (err) { reportRuntimeError('queued order', err); }
+    }
+}
+function _refillOrderBudget() { _orderBudgetLeft = ORDER_UNITS_PER_TICK; }
+function resetOrderQueue() { _orderQueue = []; _orderBudgetLeft = ORDER_UNITS_PER_TICK; }
+
 function processAction(a, playerId) {
     {
+        // An order may give the player's idle workers something to do.
+        workerWorkChanged(playerId);
+        // Any order for units supersedes queued move orders for them.
+        if (a.action !== 'move' && a.action !== 'attackMove' && a.unitIdSet && a.unitIdSet.size) _dropQueuedOrderUnits(a.unitIdSet, playerId);
         if (a.action === 'place') {
             let count = Math.max(1, Math.floor(a.count || 1));
             for (let i = 0; i < count; i++) {
@@ -2920,7 +3098,7 @@ function processAction(a, playerId) {
             }
         } else if (a.action === 'move' || a.action === 'attackMove') {
             if (!Number.isFinite(a.targetX) || !Number.isFinite(a.targetY)) return;
-            _issueGroupMoveOrder(a, playerId, a.action === 'move' ? CMD_MOVING : CMD_ATTACK_MOVING);
+            _queueGroupMoveOrder(a, playerId, a.action === 'move' ? CMD_MOVING : CMD_ATTACK_MOVING);
         } else if (a.action === 'attack') {
             let target = getUnitById(a.targetId);
             if (target) {
@@ -2991,7 +3169,7 @@ function processAction(a, playerId) {
                 if (a.unitIdSet.has(u.id) && u.owner === playerId) {
                     // Releasing hold resumes the unit's current orders
                     // (route, rally, worker task). Only free units stop.
-                    if (u.holdPosition) { u.holdPosition = false; continue; }
+                    if (u.holdPosition) { u.holdPosition = false; simMoveDisarm(u); continue; }
                     u.commandState = CMD_IDLE; u.path = null; u.targetUnit = null; u.targetBuilding = null; u._pendingPathTarget = null; u.forcedAttackTarget = false; u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
                     u._attackMoveGx = u._attackMoveGy = null;
                     if (u.workerState) {
@@ -3005,7 +3183,7 @@ function processAction(a, playerId) {
             for (let u of _actionUnits(a)) {
                 // Hold only disables movement. Orders, routes, targets and
                 // worker tasks are kept, and new orders queue up while held.
-                if (a.unitIdSet.has(u.id) && u.owner === playerId) u.holdPosition = true;
+                if (a.unitIdSet.has(u.id) && u.owner === playerId) { u.holdPosition = true; simMoveDisarm(u); }
             }
         } else if (a.action === 'queueUnit') {
             let b = getBarrackAtTile(a.gx, a.gy);
@@ -3718,6 +3896,8 @@ function startGame() {
             }
         }
         updateItemTextCache(item);
+        // Built at once: it sees from now (visibility coverage).
+        if (typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(item);
     };
 
     let getPlacedBuildingEntityAt = (gx, gy, itemKey, owner) => {
@@ -3855,7 +4035,7 @@ function startGame() {
         applyWorkerDefaults(u);
         applyUnitLevelScaling(u, Math.max(1, clampThingLevel(level || 1)));
         u.energy = u.preComputed.maxEnergy;
-        units.push(u);
+        units.push(u); unitSlotMapPushed(u);
         players[pid].popCount++;
         return u;
     };
@@ -4692,17 +4872,18 @@ function quantizeLockstepUnitPosition(v) {
 function _computeLockstepPopCaps() {
     let cfgCap = Math.max(1, Math.floor(CONFIG_MAX_POP || 200));
     let housePop = new Array(players.length).fill(0);
-    for (let gy = 0; gy < GRID_H; gy++) {
-        for (let gx = 0; gx < GRID_W; gx++) {
-            let cell = grid[gy] && grid[gy][gx];
-            let item = cell ? cell.item : null;
-            if (!item || item.type !== 'house') continue;
-            let owner = Math.floor(Number(cell.owner) || 0);
-            if (!(owner >= 0 && owner < housePop.length)) continue;
-            if (!(Number(item.energy) > 0) || !!item.underConstruction) continue;
-            let lvl = Math.max(1, Math.floor(getThingBaseLevel(item) || 1));
-            housePop[owner] += getHousePopCapContribution(owner, lvl);
-        }
+    // The houses themselves (kept up to date as tiles change, in the grid
+    // scan's row-major order): O(houses), not O(map).
+    let houses = typeof _cellItemsOfType === 'function' ? _cellItemsOfType('house') : getCellItemsRowMajor().filter(i => i.type === 'house');
+    for (let i = 0; i < houses.length; i++) {
+        let item = houses[i];
+        let cell = grid[item.gy] && grid[item.gy][item.gx];
+        if (!cell || cell.item !== item) continue;
+        let owner = Math.floor(Number(cell.owner) || 0);
+        if (!(owner >= 0 && owner < housePop.length)) continue;
+        if (!(Number(item.energy) > 0) || !!item.underConstruction) continue;
+        let lvl = Math.max(1, Math.floor(getThingBaseLevel(item) || 1));
+        housePop[owner] += getHousePopCapContribution(owner, lvl);
     }
     return housePop.map(pop => Math.min(cfgCap, pop));
 }
@@ -5316,6 +5497,7 @@ function runOneTick() {
         netNoteSimulationTick(performance.now(), performance.now() - tickWorkStart);
         if (typeof simShadowEnabled !== 'undefined' && simShadowEnabled) simShadowAfterTick(processedTick, allActs, teams, flushTick);
 
+        gameStatsStep(currentTick);
         if (currentTick % TICK_RATE === 0) sampleGameStats();
         requestResearchPopupRefresh();
 

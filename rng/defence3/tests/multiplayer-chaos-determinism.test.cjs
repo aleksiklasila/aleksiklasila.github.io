@@ -234,7 +234,8 @@ async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
     // follow-up), and no patch happened for anything else.
     const windows = corruptTicks.map(repairWindow);
     for (const w of windows) assert.ok(w.count >= 1 && w.count <= 2, mapType + ': repairs per forced divergence ' + JSON.stringify(windows));
-    assert.equal(hostResyncs, windows.reduce((n, w) => n + w.count, 0), mapType + ': patches only for forced divergences');
+    assert.equal(hostResyncs, windows.reduce((n, w) => n + w.count, 0), mapType + ': patches only for forced divergences'
+        + ` (forced ${JSON.stringify(corruptTicks)}, repairs ${JSON.stringify(all.map(i => [i.name, repairTicks(i.name)]))}; host saw ${JSON.stringify(host.scratch.requests)})`);
     for (const i of all) assert.equal(i.snapshotsApplied, 1, mapType + ': no match-wide resync on ' + i.name);
     const desyncs = all.reduce((n, i) => n + i.eval('netCounters.desyncsDetected'), 0);
     return {

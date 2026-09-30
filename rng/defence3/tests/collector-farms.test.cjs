@@ -43,6 +43,7 @@ function world(resource, localPlayerId = 0) {
     c.reportRuntimeError = (kind, err) => { throw err; };
     // Actions look up their units by id (main.js keeps an index; a scan here).
     c._actionUnits = a => c.units.filter(u => (a.unitIdSet || new Set(a.unitIds || [])).has(u.id));
+    c._dropQueuedOrderUnits = () => {};
     c.getUnitById = id => c.units.find(u => u.id === id) || null;
     vm.runInContext(main.match(/const ACTION_MAX_COUNT = [\s\S]*?const ACTION_MAX_TOWER_COORDS = \d+;/)[0], c);
     for (const name of ['_isCollectorGatherTargetType', '_getGatherTargetAtForCollectorWorkerType', '_isValidGatherTargetForCollectorWorkerType',
@@ -85,6 +86,8 @@ for (const resource of ['energy', 'astar']) {
         c.updateWorkerAI(u);
         assert.equal(u.workerTarget, null, 'ignore enemy, unfinished, dead, wrong-type and distant farms');
         const valid = farm(4);
+        // (Placed straight into the grid: a real placement tells idle workers.)
+        c.workerWorkChanged(0);
         // An idle collector searches again on its periodic idle search
         // tick (about twice a second).
         for (let t = 0; t < 24 && u.workerTarget !== valid; t++) { c.gameTime++; c.updateWorkerAI(u); }

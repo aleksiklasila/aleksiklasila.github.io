@@ -2713,6 +2713,10 @@ function resetWorldState() {
     pathfindBudget = 0;
     pendingPathResolveCursor = 0;
     if (typeof resetPendingPathUnits === 'function') resetPendingPathUnits();
+    if (typeof resetOrderQueue === 'function') resetOrderQueue();
+    if (typeof resetGroupRoutes === 'function') resetGroupRoutes();
+    if (typeof navReset === 'function') navReset();
+    if (typeof resetWorkerWorkVersions === 'function') resetWorkerWorkVersions();
     if (typeof resetNewUnitsForStats === 'function') resetNewUnitsForStats();
     pathTopologyVersion = 1;
     sharedPathCache.clear();

@@ -39,18 +39,25 @@ const SEP_CHECK = `(() => {
     const dir = (p, q) => { let mdx = sdx[p], mdy = sdy[p], sign = sid[p] < sid[q] ? -1 : 1; return Math.abs(mdx) >= Math.abs(mdy) ? [0, (mdx >= 0 ? -1 : 1) * sign] : [(mdy >= 0 ? 1 : -1) * sign, 0]; };
     const hitPair = (p, q, dx, dy, d2, minDist) => {
         const a = ord[p], b = ord[q], d = Math.sqrt(d2), overlap = minDist - Math.max(d, 0.001);
-        const f = overlap * (sc[p] && sc[q] ? UNIT_SEPARATION_SHARE_BOTH : UNIT_SEPARATION_SHARE_ONE) * UNIT_SEPARATION_Q;
-        if (sc[p]) { const [nx, ny] = d > 0.001 ? [-dx / d, -dy / d] : dir(p, q); px[a] += Math.round(nx * f); py[a] += Math.round(ny * f); if (overlap > ov[a]) ov[a] = overlap; hit[a]++; }
-        if (sc[q]) { const [nx, ny] = d > 0.001 ? [dx / d, dy / d] : dir(q, p); px[b] += Math.round(nx * f); py[b] += Math.round(ny * f); if (overlap > ov[b]) ov[b] = overlap; hit[b]++; }
+        // Shares (sc bit 0: takes part, bit 1: moved): even between movers or
+        // units at rest; a mover against one at rest that gives way little.
+        const share = (x, y) => ((sc[x] & 2) !== 0) === ((sc[y] & 2) !== 0) ? ((sc[y] & 1) ? UNIT_SEPARATION_SHARE_BOTH : UNIT_SEPARATION_SHARE_ONE)
+            : ((sc[x] & 2) ? ((sc[y] & 1) ? UNIT_SEPARATION_SHARE_MOVER : UNIT_SEPARATION_SHARE_ONE) : UNIT_SEPARATION_SHARE_YIELD);
+        const fp = overlap * share(p, q) * UNIT_SEPARATION_Q, fq = overlap * share(q, p) * UNIT_SEPARATION_Q;
+        if (sc[p] & 1) { const [nx, ny] = d > 0.001 ? [-dx / d, -dy / d] : dir(p, q); px[a] += Math.round(nx * fp); py[a] += Math.round(ny * fp); if (overlap > ov[a]) ov[a] = overlap; hit[a]++; }
+        if (sc[q] & 1) { const [nx, ny] = d > 0.001 ? [dx / d, dy / d] : dir(q, p); px[b] += Math.round(nx * fq); py[b] += Math.round(ny * fq); if (overlap > ov[b]) ov[b] = overlap; hit[b]++; }
     };
     const range = (p0, p1, q0, q1, same) => { for (let p = p0; p < p1; p++) for (let q = same ? p + 1 : q0; q < q1; q++) {
-        if (!(sc[p] | sc[q]) || sl[q] !== sl[p]) continue;
+        if (!((sc[p] | sc[q]) & 1) || sl[q] !== sl[p]) continue;
         const dx = sx[q] - sx[p], dy = sy[q] - sy[p], d2 = dx * dx + dy * dy, minDist = sr[p] + sr[q] + (so[q] === so[p] ? 0 : pad);
         if (d2 < minDist * minDist) hitPair(p, q, dx, dy, d2, minDist); } };
+    // Chunks holding a unit that takes part this tick.
+    const part = new Uint8Array(nChunks);
+    for (let c = 0; c < nChunks; c++) for (let k = start[c]; k < start[c + 1]; k++) if (sc[k] & 1) { part[c] = 1; break; }
     for (let cy = 0; cy < CHUNKS_H; cy++) for (let cx = 0; cx < CHUNKS_W; cx++) {
         const key = cy * CHUNKS_W + cx, a0 = start[key], a1 = start[key + 1];
         if (a0 === a1) continue;
-        if (chunkC[key] && a1 - a0 > 1) range(a0, a1, a0, a1, true);
+        if (part[key] && a1 - a0 > 1) range(a0, a1, a0, a1, true);
         for (let oy = 0; oy <= reach; oy++) for (let ox = -reach; ox <= reach; ox++) {
             if (oy === 0 && ox <= 0) continue;
             const gap = Math.sqrt(Math.max(0, Math.abs(ox) - 1) ** 2 + Math.max(0, oy - 1) ** 2) * cws;
@@ -58,7 +65,7 @@ const SEP_CHECK = `(() => {
             const nx = cx + ox, ny = cy + oy;
             if (nx < 0 || nx >= CHUNKS_W || ny >= CHUNKS_H) continue;
             const key2 = ny * CHUNKS_W + nx, b0 = start[key2], b1 = start[key2 + 1];
-            if (b0 === b1 || !(chunkC[key] | chunkC[key2])) continue;
+            if (b0 === b1 || !(part[key] | part[key2])) continue;
             const near = chunkR[key] + chunkR[key2];
             if (gap >= near + pad) continue;
             if (gap >= near && sole[key] >= 0 && sole[key2] === sole[key]) continue;

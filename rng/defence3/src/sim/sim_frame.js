@@ -306,7 +306,7 @@ function simFrameDetails() {
         for (let k of SIM_DETAIL_FIELDS) { let v = u[k]; if (v !== undefined && (v === null || typeof v !== 'object')) d[k] = v; }
         for (let k of SIM_DETAIL_REFS) { let v = u[k]; d[k] = v ? _simRef(v) || (Number.isFinite(v.x) ? { x: v.x, y: v.y } : null) : null; }
         for (let k of SIM_DETAIL_STATS) d[k] = _simPlainStats(u[k]);
-        let p = u.path;
+        let p = typeof unitDisplayPath === 'function' ? unitDisplayPath(u) : u.path;
         if (Array.isArray(p)) {
             let from = Math.max(0, (u.pathIndex | 0) - 1), pts = new Float32Array(Math.max(0, p.length - from) * 2);
             for (let i = from, q = 0; i < p.length; i++) { pts[q++] = p[i] ? p[i].x : 0; pts[q++] = p[i] ? p[i].y : 0; }

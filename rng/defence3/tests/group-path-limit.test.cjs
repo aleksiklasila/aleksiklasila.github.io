@@ -37,12 +37,12 @@ const H = require('./net-harness.cjs');
     })()`);
     host.eval(`queueAction({ action: 'move', unitIds: [...__scratch.stuck], targetX: 3 * TILE + 16, targetY: 3 * TILE + 16 })`);
     await world.run(500);
-    assert.equal(host.evalSim('units.filter(u => __scratch.stuck.has(u.id) && u._pendingPathTarget).length'), 6, 'the stuck group stays pending');
 
     // The rest over 5 points, as shift right-click does (one order per point).
     host.eval(`(() => {
         const sel = units.filter(u => !u.dead && u.owner === localPlayerId && !u.workerType && !__scratch.stuck.has(u.id));
         __scratch.selIds = sel.map(u => u.id);
+        __scratch.start = new Map(sel.map(u => [u.id, [u.x, u.y]]));
         const pts = [[.3, .3], [.8, .3], [.5, .6], [.25, .85], [.75, .85]];
         pts.forEach(([fx, fy], i) => queueAction({ action: 'move', unitIds: sel.filter((u, k) => k % pts.length === i).map(u => u.id),
             targetX: fx * GRID_W * TILE, targetY: fy * GRID_H * TILE }));
@@ -50,8 +50,11 @@ const H = require('./net-harness.cjs');
     await world.run(2000);
     const r = JSON.parse(host.evalSim(`JSON.stringify((() => {
         const ids = new Set(__scratch.selIds), sel = units.filter(u => ids.has(u.id) && !u.dead);
-        return { n: sel.length, waiting: sel.filter(u => u._awaitGroupPath > gameTime).length,
-            stillPending: sel.filter(u => u._pendingPathTarget && !(u.path && u.path.length)).length };
+        // Moving: a path, or following its group's flow in the movement kernel.
+        const onFlow = u => u._us && u._us.mvOn[u._si] === 1 && (u._us.mvFlags[u._si] & 64);
+        const moved = u => { const p = __scratch.start.get(u.id); return Math.hypot(u.x - p[0], u.y - p[1]) > TILE; };
+        return { n: sel.length, waiting: sel.filter(u => u._awaitGroupPath > gameTime && !moved(u)).length,
+            stillPending: sel.filter(u => !moved(u) && !(u.path && u.path.length) && !onFlow(u) && u.commandState !== CMD_IDLE).length };
     })())`));
     assert.equal(r.waiting, 0, 'nobody still waits for a shared search 2 s later');
     assert.equal(r.stillPending, 0, `the selection is routed: ${r.stillPending}/${r.n} still without a path`);

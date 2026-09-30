@@ -307,6 +307,7 @@ function generateResourceMinesMixed() {
         }
         occupied.add(key);
         grid[c.gy][c.gx].type = TYPE_WALL;
+        if (typeof simMoveTileTypeChanged === 'function') simMoveTileTypeChanged(c.gx, c.gy);
     }
 
     // If both resource types are configured, ensure both appear when at least two mines were placed.
@@ -370,6 +371,7 @@ function generateGoldMines() {
         goldMines.push(mine);
         setTileEntity(gx, gy, TILE_ENTITY_GOLDMINE, mine);
         grid[gy][gx].type = TYPE_WALL;
+        if (typeof simMoveTileTypeChanged === 'function') simMoveTileTypeChanged(gx, gy);
         return true;
     };
 
@@ -575,6 +577,7 @@ function generateAstarMines() {
         astarMines.push(mine);
         setTileEntity(gx, gy, TILE_ENTITY_ASTARMINE, mine);
         grid[gy][gx].type = TYPE_WALL;
+        if (typeof simMoveTileTypeChanged === 'function') simMoveTileTypeChanged(gx, gy);
         return true;
     };
 

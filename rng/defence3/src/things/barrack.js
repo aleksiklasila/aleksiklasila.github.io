@@ -118,6 +118,8 @@ function spawnQueuedUnitFromSpawner(spawner) {
     if (!fallbackType) return false;
 
     let queued = spawner.spawnQueue.shift();
+    // The queue moved on: its next item may need healers' energy.
+    if (typeof workerWorkChanged === 'function') workerWorkChanged(spawner.owner, 'healer', spawner.gx, spawner.gy);
     let spawnInfo = getQueuedSpawnInfo(queued, fallbackType, effLvl, owner);
     let spawnPos = findNearestWalkable(spawner.gx, spawner.gy);
     let u = new Unit(spawnInfo.unitType, owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
@@ -125,7 +127,7 @@ function spawnQueuedUnitFromSpawner(spawner) {
 
     applyUnitLevelScaling(u, spawnInfo.level);
     u.energy = u.maxEnergy;
-    units.push(u);
+    units.push(u); unitSlotMapPushed(u);
     players[owner].popCount++;
 
     // For worker units, rally is a direct move order that must be followed before auto-search resumes.

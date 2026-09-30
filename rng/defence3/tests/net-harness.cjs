@@ -762,7 +762,7 @@ function attachHooks(world, inst) {
                 const [a, b] = process.env.DUMP_TICKS.split('-').map(Number);
                 if (tick >= a && tick <= b) {
                     (inst.tickDumps ||= new Map()).set(tick, inst.eval(`JSON.stringify((() => { const out = {}; const ser = v => { try { return JSON.stringify(v, (k, x) => (x instanceof Unit && k !== '') ? '#u' + x.id : (x && typeof x === 'object' && typeof x.gx === 'number' && k !== '' && !Array.isArray(x) && !(x instanceof Unit)) ? '#b' + x.gx + ',' + x.gy : x); } catch { return '?'; } };
-                        for (const u of units) { const r = {}; for (const k of Object.keys(u)) if (!SNAP_SKIP_KEYS.has(k)) r[k] = ser(u[k]); out['u' + u.id] = r; }
+                        for (const u of units) { const r = {}; for (const k of (typeof simUnitStateKeys === 'function' ? simUnitStateKeys(u) : Object.keys(u))) if (!SNAP_SKIP_KEYS.has(k)) r[k] = ser(u[k]); out['u' + u.id] = r; }
                         for (const [n, l] of [['t', towers], ['b', barracks], ['s', collectorSpawners]]) for (const e of l) { const r = {}; for (const k of Object.keys(e)) if (!SNAP_SKIP_KEYS.has(k)) r[k] = ser(e[k]); out[n + e.gx + ',' + e.gy] = r; }
                         out.P = { p: ser(players), pr: ser(projectiles.map(p => [p.x, p.y, p.damage])) };
                         return out; })())`));
@@ -779,7 +779,7 @@ function attachHooks(world, inst) {
                                         if (!A[key] || !B[key]) { diffs.push(key + ' only on ' + (A[key] ? 'host' : g.name)); continue; }
                                         for (const f of new Set([...Object.keys(A[key]), ...Object.keys(B[key])])) if (A[key][f] !== B[key][f]) diffs.push(key + '.' + f + ' host=' + String(A[key][f]).slice(0, 120) + ' ' + g.name + '=' + String(B[key][f]).slice(0, 120));
                                     }
-                                    if (diffs.length) console.error('[dump t' + t + ' host vs ' + g.name + '] ' + diffs.length + ' diffs' + String.fromCharCode(10) + '   ' + diffs.slice(0, 25).join(String.fromCharCode(10) + '   '));
+                                    if (diffs.length) console.error('[dump t' + t + ' host vs ' + g.name + '] ' + diffs.length + ' diffs' + String.fromCharCode(10) + '   ' + diffs.slice(0, +(process.env.DUMP_MAX || 25)).join(String.fromCharCode(10) + '   '));
                                 }
                             }
                         });

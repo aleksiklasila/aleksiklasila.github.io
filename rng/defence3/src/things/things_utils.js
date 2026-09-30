@@ -417,11 +417,31 @@ function restoreDerivedThingStats(item) {
 function _refreshThingPrecomputedStats(item) {
     if (!item || item.dead) return;
 
-    if (item.unitType && Number.isFinite(item.owner)) {
+    // Units only (barracks carry a unitType too: theirs are building stats).
+    if (item instanceof Unit && item.unitType && Number.isFinite(item.owner)) {
         let baseLevel = getUnitBaseLevel(item);
         let effectiveLevel = getUnitEffectiveLevel(item, baseLevel);
+        // Its tables unchanged (same levels, no stat table rebuilt since its
+        // last refresh): the refresh would only redo the field writes below,
+        // so those alone (the same outcome, without the table work).
+        const lvl = Math.max(1, Math.floor(baseLevel || 1)), eff = Math.max(1, Math.floor(effectiveLevel || 1));
+        if (item._statsVer === _precomputedStatsVersion && item.baseLevel === lvl && item.effectiveLevel === eff
+            && Number.isFinite(item.stackCount) && item.stackCount >= 1 && item.preComputedBase && item.preComputed === item.preComputedEffective
+            && item.basePreComputed === item.preComputedBase && !!item.isFlying === !!(BASE_UNIT_STATS[item.unitType] || BASE_UNIT_STATS.norm || {}).isFlying
+            && item.preComputedBase === computeUnitLevelScaledStats(item, lvl)
+            && item.preComputedEffective === clonePrecomputedWithBaseMaxEnergy(item.preComputedBase, computeUnitLevelScaledStats(item, eff))) {
+            item.unitLevel = lvl;
+            item.effectiveStacks = Math.max(1, Math.floor(item.stackCount));
+            item.maxEnergy = item.preComputedBase.maxEnergy;
+            let e = Number(item.energy);
+            if (!Number.isFinite(e)) e = Number(item.preComputedBase.maxEnergy) || 1;
+            item.energy = Math.max(1, Math.min(item.maxEnergy, Math.floor(e)));
+            item.effectiveLevel = eff;
+            return;
+        }
         applyUnitLevelScaling(item, baseLevel);
         applyUnitEffectiveScaling(item, effectiveLevel);
+        item._statsVer = _precomputedStatsVersion;
         return;
     }
 
@@ -588,8 +608,9 @@ let _effCountWin = new Int32Array(0); // per due unit: x1, y1, x2, y2, pair key
 // its windows directly or, when the windows overlap a lot, builds a
 // summed-area table over just the box they cover and answers each in O(1).
 // Whichever is cheaper is used; both give the same exact integer counts.
+let _effCountOut = new Int32Array(0);
 function _countNearbySameTypeUnits(dueUnits, n, similarOut, chunkPx) {
-    if (_effCountWin.length < n * 5) _effCountWin = new Int32Array(Math.max(n * 5, _effCountWin.length * 2));
+    if (_effCountWin.length < n * 5) _effCountWin = simSharedArray(Int32Array, Math.max(n * 5, _effCountWin.length * 2));
     let win = _effCountWin;
     let typeCount = Math.max(1, spatialUnitsComplexUnitTypeCount | 0);
     let groups = new Map(); // pair key -> [indices]
@@ -618,6 +639,22 @@ function _countNearbySameTypeUnits(dueUnits, n, similarOut, chunkPx) {
 
     let strideChunk = spatialUnitsComplexStridePerChunk;
     let data = spatialUnitsComplex;
+    // Many due units (large worlds): every window summed by the kernels.
+    if (n >= 2048 && typeof SIM_KERNEL_EFF_COUNT === 'number') {
+        for (let i = 0; i < n; i++) {
+            let o = i * 5, key = win[o + 4];
+            if (key < 0) continue;
+            let owner = Math.floor(key / typeCount), typeIdx = key - owner * typeCount;
+            win[o + 4] = owner * spatialUnitsComplexStridePerPlayer + 1 + typeIdx;
+        }
+        if (_effCountOut.length < n) { _effCountOut = simSharedArray(Int32Array, win.length / 5); }
+        simParallelBind('eff.win', win); simParallelBind('eff.out', _effCountOut); simParallelBind('spatial.cplx', data);
+        const P = _simParams;
+        P[0] = n; P[1] = 512; P[2] = CHUNKS_W; P[3] = strideChunk;
+        simParallelRun(SIM_KERNEL_EFF_COUNT, Math.ceil(n / 512));
+        for (let i = 0; i < n; i++) if (win[i * 5 + 4] >= 0) similarOut[i] = _effCountOut[i];
+        return;
+    }
     for (let [key, list] of groups) {
         let owner = Math.floor(key / typeCount), typeIdx = key - owner * typeCount;
         let lane = owner * spatialUnitsComplexStridePerPlayer + 1 + typeIdx;
@@ -948,6 +985,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         else {
             grid[gy][gx].type = TYPE_WALL;
             grid[gy][gx].owner = playerId;
+            simMoveTileTypeChanged(gx, gy);
             let t = new Tower(gx, gy, itemKey, playerId);
             t.underConstruction = true; t.energy = 1;
             t.autoUpgradeEnabled = useDefaultAutoUpgrade;
@@ -1129,6 +1167,7 @@ function destroyBuilding(building) {
         clearTileEntity(building.gx, building.gy, building);
         grid[building.gy][building.gx].type = TYPE_FLOOR;
         grid[building.gy][building.gx].owner = -1;
+        simMoveTileTypeChanged(building.gx, building.gy);
         _markCombinedBgTileDirty(building.gx, building.gy, 0, true);
         recalculateAdjacency();
         recalculateLaserConnections();
@@ -1547,6 +1586,8 @@ function markConstructionComplete(item) {
     refreshThingProgressState(item);
     if (item.updateTextCache) item.updateTextCache();
     else updateItemTextCache(item);
+    // Built: it sees from now (visibility coverage).
+    if (typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(item);
 }
 
 function isAutoUpgradeEnabled(item) {

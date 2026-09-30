@@ -557,6 +557,7 @@ function pageApplyState(st) {
             cell.type = st.cells[j + 1]; cell.owner = st.cells[j + 2];
         }
         _tileEntityVersion++;
+        if (typeof tileEntityIndexesReset === 'function') tileEntityIndexesReset();
         _simClientMapChanged();
     }
 }

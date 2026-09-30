@@ -55,10 +55,10 @@ const SNAP_HASH_SLICES = 10;
 // Render, audio and index bookkeeping: rebuilt or irrelevant after restore.
 const SNAP_SKIP_KEYS = new Set([
     'textCtx', 'textCanvas', '_textCanvasScale', '_levelTextLabel', 'prevX', 'prevY',
-    '_spatialKey', '_spatialMember', '_spatialAreaId', '_spatialAreaOwner', '_spatialUnitTypeIdx', '_spatialLastVisScaled', '_spatialTile', '_spatialZone', '_spatialOwner', '_spatialEpoch',
+    '_statsVer', '_spatialKey', '_spatialMember', '_spatialAreaId', '_spatialAreaOwner', '_spatialUnitTypeIdx', '_spatialLastVisScaled', '_spatialTile', '_spatialZone', '_spatialOwner', '_spatialEpoch',
     '_damageFlashStart', '_damageFlashUntil', '_damageFlashStrength', '_damageFlashColor', '_ambientSoundTicks',
     '_historyGhost', '_historyTick', '_droppedIndex', '_areaBucketId', '_laserLinkLevel', '_r3d', '_r3dSig', '_r3dTex', '_visStill', '_r3dStatic', '_rslot', '_sslot', '_pslot', '_simLabelKey', '_simLabel', '_fpPath', '_fpTile', '_fpIdx', '_fpVer',
-    '_vsGen', '_vsR', '_vsA', '_vsP1', '_vsP2', '_vsAreas', '_okTile', '_okVer', '_okNodeTile', '_okNodeVer', '_pendingDueStamp', '_thingStatsRefreshStamp', '_effectiveStatsStamp'
+    '_vsGen', '_vsR', '_vsA', '_vsP1', '_vsP2', '_vsAreas', '_vsListId', '_okTile', '_okVer', '_okNodeTile', '_okNodeVer', '_pendingDueStamp', '_thingStatsRefreshStamp', '_effectiveStatsStamp'
 ]);
 
 // Lists: P players, u units, t towers, b barracks, s spawners, f floor
@@ -313,6 +313,20 @@ function _snapMakeFieldHasher(fields) {
     return new Function('S', 'C', '_snapStrCode', 'return function (o, h, F, I, V, P) {\n' + body + '\n};')(S, C, _snapStrCode);
 }
 
+// Units, the many: the fields that change all the time every rotation, the
+// rest in SNAP_HASH_UNIT_GROUPS groups, one a rotation (a divergence there
+// shows within that many rotations; it reaches the core fields sooner).
+const SNAP_HASH_UNIT_CORE = ['owner', 'unitType', 'x', 'y', 'vx', 'vy', 'energy', 'commandState', 'dead', 'workerState', 'path'];
+const SNAP_HASH_UNIT_GROUPS = 3;
+const _snapUnitGroupFields = Array.from({ length: SNAP_HASH_UNIT_GROUPS }, (_, g) =>
+    [...SNAP_HASH_UNIT_CORE, ...SNAP_HASH_FIELDS.u.filter(k => !SNAP_HASH_UNIT_CORE.includes(k)).filter((k, i) => i % SNAP_HASH_UNIT_GROUPS === g)]);
+const _snapUnitGroupHashers = _snapUnitGroupFields.map(f => _snapMakeFieldHasher(f));
+// The hashed fields that are unit state columns: hashed for every unit by
+// the kernels (SIM_KERNEL_SNAP_REGION, no object read); the slice's units
+// then only have their other fields read here.
+const SNAP_HASH_UNIT_COLUMNS = ['owner', 'x', 'y', 'vx', 'vy', 'energy', 'commandState', 'dead', 'attackTimer', 'attackFlash'];
+const _snapUnitGroupObjHashers = _snapUnitGroupFields.map(f => _snapMakeFieldHasher(f.filter(k => !SNAP_HASH_UNIT_COLUMNS.includes(k))));
+let _snapColCodes = null;
 const _snapHashers = {
     u: _snapMakeFieldHasher(SNAP_HASH_FIELDS.u),
     b: _snapMakeFieldHasher(SNAP_HASH_FIELDS.b),
@@ -368,18 +382,33 @@ function _snapHashGlobals() {
     let dirty = 0;
     for (let k of (_adjacencyDirtyTiles || [])) dirty = (dirty + Math.imul((k | 0) + 1, 2654435761)) | 0;
     h = Math.imul(Math.imul(h ^ dirty, 16777619) ^ (_adjacencyDirtyTiles ? _adjacencyDirtyTiles.size : 0), 16777619);
+    // Bookkeeping built over several ticks (a patch must carry it too).
+    if (typeof _upKeepAccum !== 'undefined' && _upKeepAccum) for (let row of _upKeepAccum) h = _snapHNum(h, row ? row.total : 0);
+    if (typeof workerWorkVersionsChecksum === 'function') h = Math.imul(h ^ workerWorkVersionsChecksum(), 16777619);
+    if (typeof healerCandidatesChecksum === 'function') h = Math.imul(h ^ healerCandidatesChecksum(), 16777619);
     return h >>> 0;
 }
 
-// Membership and order of one list.
-function _snapHashOrder(list) {
+// Membership and order of one list. Units (the long list): its length and
+// the ids at the positions of this tick's slice (slice < 0: all).
+function _snapHashOrder(list, slice = -1) {
     let h = 2166136261 | 0;
-    if (list === 'u') { for (let u of units) h = Math.imul(h ^ u.id, 16777619); }
+    if (list === 'u') {
+        let S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+        let slots = S && typeof _unitSlotMapEnsure === 'function' ? _unitSlotMapEnsure() : null;
+        let owners = S ? S.owners : null, ID = S ? S.columns.id : null;
+        h = Math.imul(h ^ units.length, 16777619);
+        for (let i = slice < 0 ? 0 : slice, step = slice < 0 ? 1 : SNAP_HASH_SLICES; i < units.length; i += step) {
+            let si = slots ? slots[i] : -1;
+            h = Math.imul(h ^ (si >= 0 && owners[si] === units[i] ? ID[si] : units[i].id), 16777619);
+        }
+    }
     else for (let e of _snapListEntities(list)) h = Math.imul(Math.imul(h ^ e.gx, 16777619) ^ e.gy, 16777619);
     return h >>> 0;
 }
 
 let _snapStaticSliceCache = null;
+let _snapRegions = new Int32Array(0), _snapColHash = new Int32Array(0);
 
 // Per slice: [entity, hasher kind, seed, region, ...] for every building,
 // floor item and mine, rebuilt when the tile index changes.
@@ -455,8 +484,8 @@ function _snapForReservations(slice, fn) {
     }
     let rt = SNAP_REGION_TILES, rw = Math.ceil(GRID_W / rt), rh = Math.ceil(GRID_H / rt);
     for (let ry = 0; ry < rh; ry++) {
-        // region = ry * 1024 + rx, and 1024 = 4 (mod 10)
-        let rx0 = (((slice - 4 * ry) % SNAP_HASH_SLICES) + SNAP_HASH_SLICES) % SNAP_HASH_SLICES;
+        // region = ry * 1024 + rx
+        let rx0 = (((slice - (1024 % SNAP_HASH_SLICES) * ry) % SNAP_HASH_SLICES) + SNAP_HASH_SLICES) % SNAP_HASH_SLICES;
         for (let rx = rx0; rx < rw; rx += SNAP_HASH_SLICES) {
             let r = ry * 1024 + rx;
             _snapForRegionReservations(r, (slot, u) => fn(slot, u, r));
@@ -525,17 +554,44 @@ function snapTickHash(tick, allSlices = false) {
         for (let pr of projectiles) hp = Math.imul(hp ^ _snapHashEntity('p', pr, 0), 16777619);
         push(SNAP_PART_PROJECTILES * SNAP_CODE_SHIFT, hp >>> 0);
         push(SNAP_PART_GLOBALS * SNAP_CODE_SHIFT, _snapHashGlobals());
-        for (let list of SNAP_ORDER_LISTS) push(SNAP_PART_ORDER * SNAP_CODE_SHIFT + SNAP_LIST_CODE[list], _snapHashOrder(list));
+        for (let list of SNAP_ORDER_LISTS) push(SNAP_PART_ORDER * SNAP_CODE_SHIFT + SNAP_LIST_CODE[list], _snapHashOrder(list, allSlices ? -1 : slice));
     }
     // Entities of this slice's regions, summed per region (order-free).
     let regions = new Map();
     let rt = SNAP_REGION_TILES, ts = TILE * SNAP_REGION_TILES;
-    let hu = _snapHashers.u;
+    let hu = allSlices ? _snapHashers.u : _snapUnitGroupHashers[Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_UNIT_GROUPS];
+    // Positions from the unit state columns (by the tick loop's slot map;
+    // many units: each one's region worked out by the kernels): only the
+    // slice's units are read as objects.
+    let S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    let slots = S && typeof _unitSlotMapEnsure === 'function' ? _unitSlotMapEnsure() : null;
+    let owners = S ? S.owners : null, CX = S ? S.columns.x : null, CY = S ? S.columns.y : null;
+    let REG = null, HC = null;
+    const huObj = allSlices ? null : _snapUnitGroupObjHashers[Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_UNIT_GROUPS];
+    if (slots && units.length >= 8192 && typeof SIM_KERNEL_SNAP_REGION === 'number') {
+        if (_snapRegions.length < units.length) { _snapRegions = simSharedArray(Int32Array, units.length * 2); _snapColHash = simSharedArray(Int32Array, units.length * 2); }
+        if (!_snapColCodes) { _snapColCodes = simSharedArray(Int32Array, SNAP_HASH_UNIT_COLUMNS.length); SNAP_HASH_UNIT_COLUMNS.forEach((k, i) => { _snapColCodes[i] = _snapStrCode(k); }); simParallelBind('snap.kc', _snapColCodes); }
+        REG = _snapRegions; HC = allSlices ? null : _snapColHash;
+        simParallelBind('ix.slots', slots); simParallelBind('snap.reg', REG); simParallelBind('snap.hc', _snapColHash);
+        const P = _simParams;
+        P[0] = units.length; P[1] = 8192; P[2] = ts; P[3] = allSlices ? 0 : SNAP_HASH_SLICES; P[4] = slice;
+        simParallelRun(SIM_KERNEL_SNAP_REGION, Math.ceil(units.length / 8192));
+    }
     for (let i = 0; i < units.length; i++) {
+        let r;
+        if (REG !== null && REG[i] >= 0) {
+            r = REG[i];
+            if (!allSlices && (r % SNAP_HASH_SLICES) !== slice) continue;
+        }
         let u = units[i];
-        let r = Math.floor(u.y / ts) * 1024 + Math.floor(u.x / ts);
+        let si = slots ? slots[i] : -1;
+        if (si >= 0 && owners[si] === u) r = Math.floor(CY[si] / ts) * 1024 + Math.floor(CX[si] / ts);
+        else r = Math.floor(u.y / ts) * 1024 + Math.floor(u.x / ts);
         if (!allSlices && (r % SNAP_HASH_SLICES) !== slice) continue;
-        let h = hu(u, Math.imul(u.id, 7919) ^ 0x11, _snapF64, _snapI32, _snapHV, _snapHPath);
+        let h;
+        // (The column fields from the kernels, the rest from the object.)
+        if (HC !== null && si >= 0 && owners[si] === u) h = (huObj(u, Math.imul(u.id, 7919) ^ 0x11, _snapF64, _snapI32, _snapHV, _snapHPath) + HC[i]) | 0;
+        else h = hu(u, Math.imul(u.id, 7919) ^ 0x11, _snapF64, _snapI32, _snapHV, _snapHPath);
         h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
         let prev = regions.get(r);
         regions.set(r, prev === undefined ? h : ((prev + h) >>> 0));
@@ -1123,6 +1179,13 @@ function _snapEncodeGlobals() {
         pendingStatRebuilds: Array.from(_pendingResourceStatRebuilds),
         // The upkeep breakdown of the second in progress (built over its ticks).
         upkeepAcc: (typeof _upKeepAccum !== 'undefined' && _upKeepAccum) ? JSON.parse(JSON.stringify(_upKeepAccum)) : null,
+        // Move orders still being applied in slices (see runQueuedOrders).
+        orderQueue: typeof _orderQueue !== 'undefined' ? _orderQueue.map(e => [e.playerId, e.cmd, e.action, e.targetX, e.targetY, e.ids.slice(e.next)]) : [],
+        orderBudget: typeof _orderBudgetLeft !== 'undefined' ? _orderBudgetLeft : 0,
+        workVer: typeof workerWorkVersionsSnapshot === 'function' ? workerWorkVersionsSnapshot() : null,
+        healers: typeof healerCandidatesSnapshot === 'function' ? healerCandidatesSnapshot() : null,
+        // The ground navigation's walls (as differences from the live walls).
+        nav: typeof navSnapshotState === 'function' ? navSnapshotState() : null,
         adjacency: [!!_adjacencyNeedsRecalc, !!_adjacencyDirtyAll, _snapE(_adjacencyLastRecalcTick), Array.from(_adjacencyDirtyTiles || [], _snapE), !!_adjacencyPassiveRefreshMode]
     };
 }
@@ -1528,6 +1591,8 @@ function _snapSetTile(gx, gy, type, ref) {
     if (ref) _activeTileEntities.add(ref);
     owners[gy * GRID_W + gx] = ownerNow;
     _tileEntityVersion++;
+    if (typeof noteTileEntityChanged === 'function') noteTileEntityChanged(gx, gy);
+    if (typeof simMoveTileEntityChanged === 'function') simMoveTileEntityChanged(gx, gy);
 }
 let _snapTileOwners = new Int32Array(0);
 
@@ -1631,7 +1696,7 @@ function snapDecodeState(S, options = null) {
                 } else {
                     e = _snapNewShell(list, type);
                     fresh++;
-                    if (list === 'u') (freshUnits ||= []).push(e);
+                    if (list === 'u') (freshUnits ||= []).push([e, +key]);
                 }
                 made[r] = e;
                 byKey.set(key, e);
@@ -1659,9 +1724,11 @@ function snapDecodeState(S, options = null) {
                 removed[list] = [];
                 if (freshUnits !== null) {
                     result = arr.slice();
-                    for (let u of freshUnits) {
+                    // (By the row's id: a new shell's own id is not set yet.)
+                    let idOf = new Map(freshUnits);
+                    for (let [u, id] of freshUnits) {
                         let lo = 0, hi = result.length;
-                        while (lo < hi) { let mid = (lo + hi) >> 1; if (result[mid].id < u.id) lo = mid + 1; else hi = mid; }
+                        while (lo < hi) { let mid = (lo + hi) >> 1, m = result[mid]; if ((idOf.has(m) ? idOf.get(m) : m.id) < id) lo = mid + 1; else hi = mid; }
                         result.splice(lo, 0, u);
                     }
                 }
@@ -1775,16 +1842,9 @@ function snapDecodeState(S, options = null) {
         gameOver = !!g.gameOver;
         winner = _snapD(g.winner);
         pendingPathResolveCursor = _snapD(g.cursor);
-        if (typeof _upKeepAccum !== 'undefined') {
-            _upKeepAccum = Array.isArray(g.upkeepAcc) ? g.upkeepAcc.map(row => {
-                let b = _createEmptyUpKeepBreakdown();
-                for (let k of Object.keys(row || {})) {
-                    let v = row[k];
-                    if (v && typeof v === 'object') { let o = Object.create(null); Object.assign(o, v); b[k] = o; }
-                    else b[k] = v;
-                }
-                return b;
-            }) : null;
+        if (typeof _orderQueue !== 'undefined') {
+            _orderQueue = Array.isArray(g.orderQueue) ? g.orderQueue.map(r => ({ playerId: r[0], cmd: r[1], action: r[2], targetX: r[3], targetY: r[4], ids: Array.isArray(r[5]) ? r[5] : [], next: 0 })) : [];
+            _orderBudgetLeft = Number.isFinite(g.orderBudget) ? g.orderBudget : ORDER_UNITS_PER_TICK;
         }
         globalSpawnerReadyOrderCounter = _snapD(g.spawnOrder);
         if (rng && typeof rng.setState === 'function' && g.rng !== null && g.rng !== undefined) rng.setState(g.rng);
@@ -1819,6 +1879,7 @@ function snapDecodeState(S, options = null) {
                     if (row) row[idx % GRID_W].type = t;
                 }
             }
+            if (typeof simMoveWallsDirty === 'function') simMoveWallsDirty();
         }
         if (Array.isArray(S.cells)) {
             for (let j = 0; j + 2 < S.cells.length; j += 3) {
@@ -1831,6 +1892,8 @@ function snapDecodeState(S, options = null) {
             }
             // Indexes built from cell owners (hostile structures) rebuild.
             _tileEntityVersion++;
+            if (typeof tileEntityIndexesReset === 'function') tileEntityIndexesReset();
+            if (typeof simMoveStructsReset === 'function') simMoveStructsReset();
         }
         if (Array.isArray(S.owners)) {
             for (let gy = 0; gy < GRID_H; gy++) { let row = grid[gy]; if (row) for (let gx = 0; gx < GRID_W; gx++) row[gx].owner = -1; }
@@ -1904,9 +1967,34 @@ function snapDecodeState(S, options = null) {
         for (let p of shells.p) { p.prevX = p.x; p.prevY = p.y; }
         resetPendingPathUnits();
         resetNewUnitsForStats();
+        // Movement caches (flows, armed units, the unit index, walls) start
+        // over from the restored world, as on every peer's flush.
+        if (typeof resetGroupRoutes === 'function') resetGroupRoutes();
+        if (typeof simMoveDisarmAll === 'function') simMoveDisarmAll(); if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats();
+        if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
+        if (typeof simMoveWallsDirty === 'function') simMoveWallsDirty();
+        // The navigation as the snapshot's peer has it (the same walls).
+        if (typeof navRestoreState === 'function') navRestoreState(S.g ? S.g.nav : null);
+        if (typeof navFieldsRestore === 'function') navFieldsRestore();
         // Rebuilt from the restored world on its first query.
         if (typeof resetVisibilityCoverage === 'function') resetVisibilityCoverage();
         if (!partial || shells.t.length > 0 || removed.t.length > 0) recalculateLaserConnections();
+        // Idle workers' work versions as sent (last: the tile entities and
+        // drops set again above count as changes here).
+        if (typeof resetWorkerWorkVersions === 'function') resetWorkerWorkVersions(S.g ? S.g.workVer : null);
+        // The second's upkeep so far (the cache resets above drop it).
+        if (typeof _upKeepAccum !== 'undefined') {
+            _upKeepAccum = Array.isArray(g.upkeepAcc) ? g.upkeepAcc.map(row => {
+                let b = _createEmptyUpKeepBreakdown();
+                for (let k of Object.keys(row || {})) {
+                    let v = row[k];
+                    if (v && typeof v === 'object') { let o = Object.create(null); Object.assign(o, v); b[k] = o; }
+                    else b[k] = v;
+                }
+                return b;
+            }) : null;
+        }
+        if (typeof healerCandidatesRestore === 'function') { const byId = new Map(); for (const u of units) byId.set(u.id, u); healerCandidatesRestore(S.g ? S.g.healers : null, byId); }
 
         let unitsById = null;
         return {
@@ -1944,6 +2032,16 @@ function _snapSameValue(a, b, depth) {
 // starts without them, so at a resync every peer drops them on the same tick.
 function snapFlushHistoryCaches() {
     _bumpPathTopologyVersion();
+    // The movement kernel's world tables are rebuilt on every peer alike.
+    if (typeof simMoveWallsDirty === 'function') simMoveWallsDirty();
+    // Routes (flows) are rebuilt on every peer alike.
+    if (typeof resetGroupRoutes === 'function') resetGroupRoutes();
+    if (typeof navReset === 'function') navReset();
+    // The unit index too (a restoring peer builds it from the restored state).
+    if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
+    // Armed and parked units go back to Unit.update everywhere (a restored
+    // peer's units start that way).
+    if (typeof simMoveDisarmAll === 'function') simMoveDisarmAll(); if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats();
     // Gameplay visibility is reused between ticks (see VISIBILITY_TICK_INTERVAL).
     if (typeof clearGameplayVisibilityCache === 'function') clearGameplayVisibilityCache();
     closestEnemyChunkQueryCache.clear();
