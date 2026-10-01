@@ -36,7 +36,7 @@ const replay=new Function('exhaustive',`
     ${towerSource}
     if(exhaustive)getLaserStructureCandidates=list=>list.slice().sort((a,b)=>(a.id||0)-(b.id||0));
     let events=[],towers=[],barracks=[],collectorSpawners=[];
-    let tickStatusEffects=()=>{},playSound=()=>{},recordDamageVisual=()=>{},createExplosion=()=>{};
+    let tickStatusEffects=()=>{},playSound=()=>{},recordDamageVisual=()=>{},createExplosion=()=>{},ensureLaserConnections=()=>{};
     let pushHostileDamageAlert=(b,d)=>events.push([b.key,d]);
     let tryAutoRetaliateOnHostileDamage=()=>{};
     let getUnitsInRange=()=>[{key:'immune',x:80,y:48,r:8,owner:1,energy:1,turretImmune:true},

@@ -125,6 +125,7 @@ function _workerFinishManualMoveToIdle(u) {
 // staggered by id; between those it only walks, exactly as the movement
 // kernel walks it (which hands it back on those ticks).
 const WORKER_MOVE_CHECK_TICKS = 8;
+const BUILDER_WATCH_TICKS = WORKER_MOVE_CHECK_TICKS * 2;
 const _WORKER_MOVING_STATES = new Set(['MANUAL_MOVE', 'MOVING_TO', 'MOVING_TO_ASTAR', 'RETURNING', 'RETURNING_ASTAR', 'MOVING_TO_BUILD', 'RETURNING_FOR_GOLD', 'MOVING_TO_HEAL', 'MOVING_TO_RESEARCH']);
 function isWorkerBetweenMoveChecks(u) {
     return ((gameTime + u.id) | 0) % WORKER_MOVE_CHECK_TICKS !== 0 && _WORKER_MOVING_STATES.has(u.workerState)
@@ -242,12 +243,15 @@ function updateWorkerAI(u) {
     } else if (u.workerType === 'builder') {
         // Long-period watchdog: builders that stop making movement progress
         // should periodically re-evaluate work instead of waiting forever.
+        // Sampled on its own cadence (BUILDER_WATCH_TICKS, a multiple of the
+        // move checks; a parked builder wakes for it): how often the AI
+        // happens to run otherwise must not change what it measures.
         let movedSinceLast = false;
         if (!Number.isFinite(u._builderLastWatchX) || !Number.isFinite(u._builderLastWatchY)) {
             u._builderLastWatchX = u.x;
             u._builderLastWatchY = u.y;
             u._builderLastMoveTick = gameTime;
-        } else {
+        } else if (((gameTime + u.id) | 0) % BUILDER_WATCH_TICKS === 0) {
             movedSinceLast = detHypot(u.x - u._builderLastWatchX, u.y - u._builderLastWatchY) >= 2;
             u._builderLastWatchX = u.x;
             u._builderLastWatchY = u.y;
@@ -613,8 +617,7 @@ function updateWorkerAI(u) {
                 return;
             }
             if (!u.path || u.pathIndex >= u.path.length) {
-                let tx = targetIsQueue ? u.workerTarget.x : u.workerTarget.x;
-                let ty = targetIsQueue ? u.workerTarget.y : u.workerTarget.y;
+                let tx = _thingTickX(u.workerTarget), ty = _thingTickY(u.workerTarget);
                 let inHealRange = _isWorkerWithinTileInteractionRange(u, u.workerTarget, 1);
                 if (!inHealRange) {
                     let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
@@ -754,7 +757,7 @@ function updateWorkerAI(u) {
                     u._healerSpawnerTarget = null;
                     u.workerState = 'MOVING_TO_HEAL';
                     let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                    let targetGx = Math.floor(u.workerTarget.x / TILE), targetGy = Math.floor(u.workerTarget.y / TILE);
+                    let targetGx = Math.floor(_thingTickX(u.workerTarget) / TILE), targetGy = Math.floor(_thingTickY(u.workerTarget) / TILE);
                     u.path = _requestWorkerPath(u, startGx, startGy, targetGx, targetGy, null, null);
                     u.pathIndex = 0; u.commandState = CMD_MOVING;
                 } else {
@@ -1692,8 +1695,8 @@ function _isWorkerWithinTileInteractionRange(u, target, maxTileDelta = 1) {
     if (!u || !target) return false;
     let ux = Math.floor((Number(u.x) || 0) / TILE);
     let uy = Math.floor((Number(u.y) || 0) / TILE);
-    let tx = Number.isFinite(target.gx) ? Math.floor(target.gx) : Math.floor((Number(target.x) || 0) / TILE);
-    let ty = Number.isFinite(target.gy) ? Math.floor(target.gy) : Math.floor((Number(target.y) || 0) / TILE);
+    let tx = Number.isFinite(target.gx) ? Math.floor(target.gx) : Math.floor((Number(_thingTickX(target)) || 0) / TILE);
+    let ty = Number.isFinite(target.gy) ? Math.floor(target.gy) : Math.floor((Number(_thingTickY(target)) || 0) / TILE);
     if (!Number.isFinite(ux) || !Number.isFinite(uy) || !Number.isFinite(tx) || !Number.isFinite(ty)) return false;
     if (Math.abs(ux - tx) <= maxTileDelta && Math.abs(uy - ty) <= maxTileDelta) return true;
     // At the open tile the navigation takes it to for a walled-in target.
@@ -1893,7 +1896,9 @@ function _workerWorkTable() {
     const rw = Math.ceil(GRID_W / WORKER_WORK_REGION_TILES), rh = Math.ceil(GRID_H / WORKER_WORK_REGION_TILES), np = Math.max(1, typeof players !== "undefined" && players ? players.length : 1);
     const dims = np + ':' + rw + 'x' + rh;
     if (!_workerWorkVer || _workerWorkDims !== dims) {
-        _workerWorkVer = new Int32Array(np * _WORKER_WORK_TYPES.length * (1 + rw * rh)); _workerWorkDims = dims;
+        // (Shared: the movement kernel checks parked idle workers' versions.)
+        _workerWorkVer = simSharedArray(Int32Array, np * _WORKER_WORK_TYPES.length * (1 + rw * rh)); _workerWorkDims = dims;
+        simParallelBind('wk.ver', _workerWorkVer);
         _workerWorkVer.rw = rw; _workerWorkVer.rh = rh; _workerWorkVer.np = np; _workerWorkVer.sum = 0;
     }
     return _workerWorkVer;
@@ -1920,23 +1925,39 @@ function _workerWorkOrigin(u) {
     return u;
 }
 function _workerWorkVerOf(u) {
-    const V = _workerWorkTable(), o = u.owner;
+    const V = _workerWorkTable(), org = _workerWorkOrigin(u);
+    return _workerWorkHash(V, u.owner, _workerWorkType(u.workerType), u.workerType === 'healer', Math.ceil(_getWorkerAutoSearchDistancePx(u) / TILE) + 1,
+        Math.floor(org.x / TILE), Math.floor(org.y / TILE), org !== u, Math.floor(u.x / TILE), Math.floor(u.y / TILE));
+}
+// The version of the work around an origin tile (and, `twice`, the worker's
+// own tile too) within d tiles, for an owner and worker type (healers also
+// count the damaged-unit candidates' changes). A pure function of the table:
+// the movement kernel works it out alike for parked idle workers
+// (SIM_KERNEL_MOVE, simMoveTryPark).
+function _workerWorkHash(V, o, typeIdx, healer, d, ogx, ogy, twice, pgx, pgy) {
     if (!(o >= 0 && o < V.np)) return 0;
-    const all = _workerWorkBase(V, o, 0), mine = _workerWorkBase(V, o, _workerWorkType(u.workerType));
+    const all = _workerWorkBase(V, o, 0), mine = _workerWorkBase(V, o, typeIdx);
     let h = (Math.imul(V[all], 31) + V[mine]) | 0;
-    // (Healers: the damaged units they look at changed.)
-    if (u.workerType === 'healer') h = (Math.imul(h, 31) + _healerCandidatesGen) | 0;
-    const R = WORKER_WORK_REGION_TILES, d = Math.ceil(_getWorkerAutoSearchDistancePx(u) / TILE) + 1, org = _workerWorkOrigin(u);
-    const add = (gx, gy) => {
+    if (healer) h = (Math.imul(h, 31) + _healerCandidatesGen) | 0;
+    const R = WORKER_WORK_REGION_TILES;
+    for (let pass = 0; pass < (twice ? 2 : 1); pass++) {
+        const gx = pass ? pgx : ogx, gy = pass ? pgy : ogy;
         for (let ry = Math.max(0, Math.floor((gy - d) / R)), ry1 = Math.min(V.rh - 1, Math.floor((gy + d) / R)); ry <= ry1; ry++)
             for (let rx = Math.max(0, Math.floor((gx - d) / R)), rx1 = Math.min(V.rw - 1, Math.floor((gx + d) / R)); rx <= rx1; rx++) {
                 const r = 1 + ry * V.rw + rx;
                 h = (Math.imul(h, 31) + Math.imul(V[all + r], 7) + V[mine + r]) | 0;
             }
-    };
-    add(Math.floor(org.x / TILE), Math.floor(org.y / TILE));
-    if (org !== u) add(Math.floor(u.x / TILE), Math.floor(u.y / TILE));
+    }
     return h;
+}
+// The tick from which a worker's search origin may change while it stays
+// idle (a collector looks from where it stands for its first 5 idle seconds).
+function _workerWorkOriginUntil(u) {
+    if (isResourceCollectorWorkerType(u.workerType) && u.workerState === 'IDLE') {
+        const since = u._lastIdleStateTime || 0, span = secondsToTicks(5);
+        if (gameTime - since < span) return since + span;
+    }
+    return Infinity;
 }
 // Snapshots: the versions that are not 0, as [index, version, ...].
 function resetWorkerWorkVersions(v = null) {
@@ -1962,9 +1983,15 @@ function shouldRunWorkerIdleRetarget(u, canRunHeavyAi) {
         u._idleFailVer = _workerWorkVerOf(u); u._idleFailUntil = gameTime + WORKER_IDLE_BACKOFF_SECONDS * TICK_RATE;
         return true;
     }
-    // Nothing found last time and nothing changed since.
+    // Nothing found last time and nothing changed since. (Its scheduled
+    // search moves on meanwhile: a change is seen on its next staggered or
+    // scheduled search tick, both future ticks, so the worker can stay
+    // parked until then; see simMoveTryPark.)
     const ver = _workerWorkVerOf(u);
-    if (u._idleFailVer === ver && gameTime < u._idleFailUntil) return false;
+    if (u._idleFailVer === ver && gameTime < u._idleFailUntil) {
+        if (u._workerNextIdleRetargetTick <= gameTime) u._workerNextIdleRetargetTick = gameTime + interval;
+        return false;
+    }
     // An idle worker with nothing found looks again on its staggered idle
     // search tick (about twice a second), not on every heavy AI tick: a
     // worker that finishes a task searches at once anyway, and commands
@@ -2010,7 +2037,7 @@ function _isTargetWithinWorkerSearchArea(originX, originY, target, maxSearchArea
     if (!target) return false;
     let targetAreaId = Number.isFinite(target.areaId)
         ? Math.floor(target.areaId)
-        : getAreaIdAtWorld(target.x, target.y);
+        : getAreaIdAtWorld(_thingTickX(target), _thingTickY(target));
     if (targetAreaId < 0) return false;
     let maxDistance = Math.floor(Math.max(0, Number(maxSearchArea) || 0));
     for (let source of getSourceAreaIdsAtWorld(originX, originY)) {
@@ -2036,6 +2063,27 @@ function _getTargetPriorityLevel(target) {
 
 // Per-target worker load counters (updated on target set/clear).
 let workerReservedTiles = [];
+// Every write goes through workerReservedSet: per snapshot region, the
+// number of occupied slots (for the tick hash, which skips empty regions).
+// Recounted when the table is replaced (_workerReservedCounts).
+let _workerResCount = null, _workerResCountFor = null;
+function workerReservedSet(slot, v) {
+    const t = workerReservedTiles, old = t[slot];
+    t[slot] = v;
+    if (_workerResCountFor === t && (!old) !== (!v)) _workerResCount[_snapReservationRegionIndex(slot)] += v ? 1 : -1;
+}
+function workerReservedCountsInvalidate() { _workerResCountFor = null; }
+// The counts, current (null without the snapshot code).
+function _workerReservedCounts() {
+    const t = workerReservedTiles;
+    if (_workerResCountFor === t) return _workerResCount;
+    if (typeof _snapReservationRegionIndex !== 'function') return null;
+    const n = _snapReservationRegionCount();
+    if (!_workerResCount || _workerResCount.length !== n) _workerResCount = new Int32Array(n); else _workerResCount.fill(0);
+    for (let s = 0; s < t.length; s++) if (t[s]) _workerResCount[_snapReservationRegionIndex(s)]++;
+    _workerResCountFor = t;
+    return _workerResCount;
+}
 const _WORKER_TARGET_LOAD_TYPES = [...RESOURCE_COLLECTOR_UNIT_KEYS, 'salvager', 'builder', 'healer', 'researcher'];
 const _WORKER_TARGET_LOAD_TYPE_COUNT = _WORKER_TARGET_LOAD_TYPES.length;
 
@@ -2045,8 +2093,8 @@ function _workerTypeToLoadIndex(workerType) {
 
 function _getWorkerTargetTileIndex(target) {
     if (!target) return null;
-    let gx = Number.isFinite(target.gx) ? Math.floor(target.gx) : Math.floor((Number(target.x) || 0) / TILE);
-    let gy = Number.isFinite(target.gy) ? Math.floor(target.gy) : Math.floor((Number(target.y) || 0) / TILE);
+    let gx = Number.isFinite(target.gx) ? Math.floor(target.gx) : Math.floor((Number(_thingTickX(target)) || 0) / TILE);
+    let gy = Number.isFinite(target.gy) ? Math.floor(target.gy) : Math.floor((Number(_thingTickY(target)) || 0) / TILE);
     if (!Number.isFinite(gx) || !Number.isFinite(gy)) return -1;
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return -1;
     return gy * GRID_W + gx;
@@ -2065,7 +2113,7 @@ function _getReservedWorkerForTarget(target, workerType) {
     if (slotIndex < 0) return null;
     let reservedUnit = workerReservedTiles[slotIndex];
     if (!reservedUnit || reservedUnit.dead) {
-        if (slotIndex >= 0) workerReservedTiles[slotIndex] = null;
+        if (slotIndex >= 0) workerReservedSet(slotIndex, null);
         return null;
     }
     return reservedUnit;
@@ -2192,7 +2240,7 @@ function _setWorkerTarget(unit, target, targetType = null) {
                 ? Math.floor(reservedUnit._workerReservedTileIndex)
                 : -1;
             if (reservedSlotIndex >= 0 && workerReservedTiles[reservedSlotIndex] === reservedUnit) {
-                workerReservedTiles[reservedSlotIndex] = null;
+                workerReservedSet(reservedSlotIndex, null);
             }
             if (reservedUnit.workerTarget === target) {
                 reservedUnit.workerTarget = null;
@@ -2214,7 +2262,7 @@ function _setWorkerTarget(unit, target, targetType = null) {
     let prevTarget = unit.workerTarget;
     if (prevTarget) {
         let prevSlotIndex = Number.isFinite(unit._workerReservedTileIndex) ? Math.floor(unit._workerReservedTileIndex) : -1;
-        if (prevSlotIndex >= 0 && workerReservedTiles[prevSlotIndex] === unit) workerReservedTiles[prevSlotIndex] = null;
+        if (prevSlotIndex >= 0 && workerReservedTiles[prevSlotIndex] === unit) workerReservedSet(prevSlotIndex, null);
     }
 
     unit.workerTarget = target;
@@ -2225,7 +2273,7 @@ function _setWorkerTarget(unit, target, targetType = null) {
     }
     unit._workerReservedTileIndex = -1;
     if (target && nextSlotIndex >= 0) {
-        workerReservedTiles[nextSlotIndex] = unit;
+        workerReservedSet(nextSlotIndex, unit);
         unit._workerReservedTileIndex = nextSlotIndex;
     }
     return true;
@@ -2246,7 +2294,7 @@ function _clearWorkerTarget(unit, reason = null) {
     let prevTarget = unit.workerTarget;
     if (prevTarget) {
         let prevSlotIndex = Number.isFinite(unit._workerReservedTileIndex) ? Math.floor(unit._workerReservedTileIndex) : -1;
-        if (prevSlotIndex >= 0 && workerReservedTiles[prevSlotIndex] === unit) workerReservedTiles[prevSlotIndex] = null;
+        if (prevSlotIndex >= 0 && workerReservedTiles[prevSlotIndex] === unit) workerReservedSet(prevSlotIndex, null);
     }
 
     unit.workerTarget = null;
@@ -2298,8 +2346,8 @@ function _scoreWorkerTaskCandidate(u, candidate) {
     let score = Number(candidate.dist) || 0;
     if (u.workerTarget && u.workerTarget === candidate.target) score -= TILE * 0.75;
 
-    let gx = Number.isFinite(candidate.target && candidate.target.gx) ? candidate.target.gx : Math.floor((candidate.target && candidate.target.x || 0) / TILE);
-    let gy = Number.isFinite(candidate.target && candidate.target.gy) ? candidate.target.gy : Math.floor((candidate.target && candidate.target.y || 0) / TILE);
+    let gx = Number.isFinite(candidate.target && candidate.target.gx) ? candidate.target.gx : Math.floor((candidate.target && _thingTickX(candidate.target) || 0) / TILE);
+    let gy = Number.isFinite(candidate.target && candidate.target.gy) ? candidate.target.gy : Math.floor((candidate.target && _thingTickY(candidate.target) || 0) / TILE);
     let seed = ((u.id * 1103515245 + gx * 12345 + gy * 54321) >>> 0) % 1024;
     score += (seed / 1024) * TILE * 0.35;
     return score;
@@ -2387,22 +2435,38 @@ function _astarCollectorFindTarget(u) {
 
 // Salvager: find nearest marked building
 // Whether the owner has anything marked for salvage (towers, barracks,
-// spawners, cell items), once per tick: most searches find nothing.
-let _salvageMarksCache = { tick: -1, owners: new Set() };
-function _ownerHasSalvageMarks(owner) {
+// spawners, cell items), and its marked towers, barracks and spawners in
+// their arrays' order: once per tick (and again after a mark order), most
+// searches find nothing and the rest look at these lists, not every
+// structure. A structure destroyed since is no longer its tile's entity.
+let _salvageMarksCache = { tick: -1, ver: -1, owners: new Set(), lists: new Map() };
+let _salvageMarksVersion = 0;
+function salvageMarksChanged() { _salvageMarksVersion++; }
+function _salvageMarksCurrent() {
     let c = _salvageMarksCache;
-    if (c.tick !== gameTime) {
-        c.tick = gameTime;
-        c.owners = new Set();
+    if (c.tick !== gameTime || c.ver !== _salvageMarksVersion) {
+        c.tick = gameTime; c.ver = _salvageMarksVersion;
+        c.owners = new Set(); c.lists = new Map();
         let add = e => { if (e && e.markedForSalvage) c.owners.add(e.owner); };
-        for (let t of towers) add(t);
-        for (let b of barracks) add(b);
-        for (let s of collectorSpawners) add(s);
+        let list = (e, k) => {
+            if (!e || !e.markedForSalvage) return;
+            c.owners.add(e.owner);
+            let l = c.lists.get(e.owner);
+            if (!l) c.lists.set(e.owner, l = [[], [], []]);
+            l[k].push(e);
+        };
+        for (let t of towers) list(t, 0);
+        for (let b of barracks) list(b, 1);
+        for (let s of collectorSpawners) list(s, 2);
         if (typeof _activeTileEntities !== 'undefined') for (const item of _activeTileEntities) add(item);
         else for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) { let cell = grid[y][x]; if (cell && cell.item && cell.item.markedForSalvage) c.owners.add(cell.owner); }
     }
-    return c.owners.has(owner);
+    return c;
 }
+function _ownerHasSalvageMarks(owner) {
+    return _salvageMarksCurrent().owners.has(owner);
+}
+const _NO_SALVAGE_LISTS = [[], [], []];
 
 function _salvagerFindTarget(u, myGx, myGy) {
     let owner = u.owner;
@@ -2413,20 +2477,27 @@ function _salvagerFindTarget(u, myGx, myGy) {
     // Built only when a marked cell item is found: most searches find none.
     let spawnerSet = null;
     let conflictCache = {};
-    for (let t of towers) { if (t.owner === owner && t.markedForSalvage && _canAssignWorkerTargetExclusive(u, t, null, conflictCache)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, t, maxSearchArea)) continue; let d = detHypot(t.x - u.x, t.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = t; } } }
-    for (let b of barracks) { if (b.owner === owner && b.markedForSalvage && _canAssignWorkerTargetExclusive(u, b, null, conflictCache)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, b, maxSearchArea)) continue; let d = detHypot(b.x - u.x, b.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = b; } } }
-    for (let s of collectorSpawners) { if (s.owner === owner && s.markedForSalvage && _canAssignWorkerTargetExclusive(u, s, null, conflictCache)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, s, maxSearchArea)) continue; let d = detHypot(s.x - u.x, s.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = s; } } }
+    // The owner's marked towers, then barracks, then spawners, in their
+    // arrays' order (as a scan of the arrays would meet them).
+    let marked = _salvageMarksCurrent().lists.get(owner) || _NO_SALVAGE_LISTS;
+    for (let k = 0; k < 3; k++) for (let e of marked[k]) {
+        if (e.owner !== owner || !e.markedForSalvage || getTileEntityRef(e.gx, e.gy) !== e) continue;
+        // (Cheap tests first: only a nearer one needs the exclusivity check.)
+        let d = detHypot(e.x - u.x, e.y - u.y);
+        if (d > maxSearch || !(d < bestDist)) continue;
+        if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, e, maxSearchArea)) continue;
+        if (!_canAssignWorkerTargetExclusive(u, e, null, conflictCache)) continue;
+        bestDist = d; bestItem = e;
+    }
     forEachGridCellInAreaRange(u.x, u.y, maxSearchArea, (tileRef, c) => {
         if (!tileRef || !c || !c.item) return false;
         if (c.owner !== owner || !c.item.markedForSalvage) return false;
         if (c.item instanceof Barrack || (spawnerSet || (spawnerSet = new Set(collectorSpawners))).has(c.item)) return false;
-        if (!_canAssignWorkerTargetExclusive(u, c.item, null, conflictCache)) return false;
         let d = detHypot(c.item.x - u.x, c.item.y - u.y);
-        if (d > maxSearch) return false;
-        if (d < bestDist) {
-            bestDist = d;
-            bestItem = c.item;
-        }
+        if (d > maxSearch || !(d < bestDist)) return false;
+        if (!_canAssignWorkerTargetExclusive(u, c.item, null, conflictCache)) return false;
+        bestDist = d;
+        bestItem = c.item;
         return false;
     });
     if (bestItem) {
@@ -2738,9 +2809,11 @@ function _getHealerQueueTripCost(u, target) {
 function _healerRememberWorkSite(u, target = null) {
     let t = target || (u ? u.workerTarget : null);
     if (!u || !t) return;
-    if (Number.isFinite(t.x) && Number.isFinite(t.y)) {
-        u._healerLastWorkX = t.x;
-        u._healerLastWorkY = t.y;
+    // (A unit target where it was at the pass's start: _unitTickX.)
+    let tx = _thingTickX(t), ty = _thingTickY(t);
+    if (Number.isFinite(tx) && Number.isFinite(ty)) {
+        u._healerLastWorkX = tx;
+        u._healerLastWorkY = ty;
     }
     if (Number.isFinite(t.gx) && Number.isFinite(t.gy)) {
         u._healerLastWorkGx = t.gx;
@@ -3015,16 +3088,18 @@ function _findNearestDamagedFriendlyUnit(u, originX = u.x, originY = u.y) {
         let target = entry && entry.u;
         if (!_isHealerTargetUnit(target, owner)) continue;
         // Both filters are pure; test the cheap distance before the area lookup.
-        let dx = target.x - originX;
-        let dy = target.y - originY;
+        // (Units where they were at the pass's start: _unitTickX.)
+        let tx0 = _unitTickX(target), ty0 = _unitTickY(target);
+        let dx = tx0 - originX;
+        let dy = ty0 - originY;
         let distSq = dx * dx + dy * dy;
         if (distSq > maxSearchSq) continue;
         if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, target, maxSearchArea)) continue;
 
         let worldDistSq = distSq;
         if (!originIsHealer) {
-            let wdx = target.x - healerX;
-            let wdy = target.y - healerY;
+            let wdx = tx0 - healerX;
+            let wdy = ty0 - healerY;
             worldDistSq = wdx * wdx + wdy * wdy;
         }
 
@@ -3107,7 +3182,7 @@ function _healerFindTarget(u, myGx, myGy) {
         if (u.healerHasMaterial) {
             u.workerState = 'MOVING_TO_HEAL';
             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-            let targetGx = Math.floor(target.x / TILE), targetGy = Math.floor(target.y / TILE);
+            let targetGx = Math.floor(_unitTickX(target) / TILE), targetGy = Math.floor(_unitTickY(target) / TILE);
             u.path = _requestWorkerPath(u, startGx, startGy, targetGx, targetGy, null, null, true);
             u.pathIndex = 0;
             u.commandState = CMD_MOVING;
@@ -3136,6 +3211,21 @@ function _healerFindTarget(u, myGx, myGy) {
     }
 }
 
+// A bucket's structures that were builder work the first time a search
+// looked at the bucket this tick (that look starts due upgrades, as
+// _isBuilderWorkTarget does): searches re-check these live instead of every
+// structure of the bucket. (Work appearing later in the tick, say a research
+// completing, is seen next tick.)
+const _builderBucketWorkCache = new WeakMap();
+function _builderBucketWork(list, owner) {
+    let c = _builderBucketWorkCache.get(list);
+    if (c && c.tick === gameTime) return c.work;
+    const work = [];
+    for (let i = 0; i < list.length; i++) if (_isBuilderWorkTarget(list[i], owner)) work.push(list[i]);
+    _builderBucketWorkCache.set(list, { tick: gameTime, work });
+    return work;
+}
+
 function _findNearestUnderConstruction(u, originX = u.x, originY = u.y) {
     let owner = Number.isFinite(u.owner) ? u.owner : localPlayerId;
     let buckets = _ownedStructureBuckets(owner);
@@ -3152,8 +3242,9 @@ function _findNearestUnderConstruction(u, originX = u.x, originY = u.y) {
     for (let by = by0; by <= by1; by++) for (let bx = bx0; bx <= bx1; bx++) {
         let list = buckets[by * X.cols + bx];
         if (!list) continue;
-        for (let i = 0; i < list.length; i++) {
-            let b = list[i];
+        let work = _builderBucketWork(list, owner);
+        for (let i = 0; i < work.length; i++) {
+            let b = work[i];
             if (Math.abs(b.x - originX) > maxSearch || Math.abs(b.y - originY) > maxSearch) continue;
             if (!_isBuilderWorkTarget(b, owner)) continue;
             if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, b, maxSearchArea)) continue;

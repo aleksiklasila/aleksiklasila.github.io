@@ -3,6 +3,46 @@
 // ============================================================
 // PROJECTILE CLASS
 // ============================================================
+// The structure a shot at (x, y) hits: the first tower, then barrack, then
+// spawner (in their arrays' order) of another owner, alive, within 18 px.
+// During the projectile phase (projectilesBegin/End) the structures are
+// ranked in that order once, and a shot looks only at the tiles around it
+// (structures stand at their tile's centre); otherwise the lists are scanned.
+let _projBuildingRank = null;
+function projectilesBegin() {
+    const m = new Map();
+    let k = 0;
+    for (const list of [towers, barracks, collectorSpawners]) for (const b of list) if (!m.has(b)) m.set(b, k++);
+    _projBuildingRank = m;
+}
+function projectilesEnd() { _projBuildingRank = null; }
+function _projectileBuildingHit(p) {
+    const rank = _projBuildingRank;
+    if (!rank) {
+        for (let list of [towers, barracks, collectorSpawners]) for (let b of list) {
+            if (b.owner === p.sourceOwner || b.energy <= 0) continue;
+            if (detHypot(b.x - p.x, b.y - p.y) <= 18) return b;
+        }
+        return null;
+    }
+    let best = null, bestRank = Infinity;
+    const gx0 = Math.max(0, Math.floor((p.x - 18) / TILE) - 1), gx1 = Math.min(GRID_W - 1, Math.floor((p.x + 18) / TILE) + 1);
+    const gy0 = Math.max(0, Math.floor((p.y - 18) / TILE) - 1), gy1 = Math.min(GRID_H - 1, Math.floor((p.y + 18) / TILE) + 1);
+    for (let gy = gy0; gy <= gy1; gy++) {
+        const refs = tileEntityRef[gy];
+        if (!refs) continue;
+        for (let gx = gx0; gx <= gx1; gx++) {
+            const b = refs[gx];
+            if (!b) continue;
+            const r = rank.get(b);
+            if (r === undefined || r >= bestRank) continue;
+            if (b.owner === p.sourceOwner || b.energy <= 0) continue;
+            if (detHypot(b.x - p.x, b.y - p.y) <= 18) { best = b; bestRank = r; }
+        }
+    }
+    return best;
+}
+
 class Projectile {
     constructor(x, y, t, type, dmg, level, source, maxRange, blastDamage = NaN, blastRadius = NaN) {
         this.x = x; this.y = y; this.prevX = x; this.prevY = y; this.type = type; this.speed = 8; this.life = 100;
@@ -49,12 +89,8 @@ class Projectile {
                     return true;
                 }
             }, { enemyOfPlayer: this.sourceOwner })) return true;
-            for (let list of [towers, barracks, collectorSpawners]) {
-                for (let b of list) {
-                    if (b.owner === this.sourceOwner || b.energy <= 0) continue;
-                    if (detHypot(b.x - this.x, b.y - this.y) <= 18) { this.hitBuilding(b); return true; }
-                }
-            }
+            let b = _projectileBuildingHit(this);
+            if (b) { this.hitBuilding(b); return true; }
             if (this.floorTargetGx >= 0) {
                 let item = getFloorItemAtTile(this.floorTargetGx, this.floorTargetGy);
                 if (item && item.owner !== this.sourceOwner && item.energy > 0

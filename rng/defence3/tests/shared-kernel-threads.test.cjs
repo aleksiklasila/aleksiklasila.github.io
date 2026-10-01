@@ -65,6 +65,9 @@ const workerCode = `const { parentPort, workerData, MessageChannel } = require('
         const ctx=vm.createContext({self:{crossOriginIsolated:true},Worker:BrowserWorker,navigator:{hardwareConcurrency:16},MessageChannel,console});
         vm.runInContext(parallel+'\n'+frame,ctx);
         vm.runInContext(`simParallelInit('',${helpers});`,ctx);
+        // (Whether helpers took chunks, over every run with this many: on a
+        // loaded machine the main thread may finish a single job alone.)
+        let claimed=false;
         try {
             for(let round=0;round<3;round++) for(let j=0;j<scenarios.length;j++) {
                 const sc=scenarios[j];
@@ -83,8 +86,9 @@ const workerCode = `const { parentPort, workerData, MessageChannel } = require('
                 const output=sc.outputs.map(name=>{ctx.name=name;const a=vm.runInContext('_simParReg[name]',ctx);return Buffer.from(a.buffer,a.byteOffset,a.byteLength);});
                 if(helpers===0&&round===0) expected[j]=output.map(b=>Buffer.from(b));
                 else output.forEach((b,k)=>assert.deepEqual(b,expected[j][k],`${helpers} helpers round ${round} ${sc.outputs[k]}`));
-                if(helpers) assert.ok(claims.some(n=>n>0),'real helpers must claim work');
+                if(claims.some(n=>n>0)) claimed=true;
             }
+            if(helpers) assert.ok(claimed,'real helpers must claim work');
         } finally { await Promise.all(workers.map(w=>w.worker.terminate())); }
     }
     console.log('PASS: actual SharedArrayBuffer workers: every separation/frame output byte identical with 0, 1 and 7 helpers over repeated rebindings.');

@@ -151,6 +151,18 @@ function _consumePlayerAstarStockpile(owner, amount, unit = null, sourceTag = nu
     _recordAstarUsage(pid, delta, unit, sourceTag);
 }
 
+// During the unit pass, whether a step's A* is covered is judged by the
+// player's budget at the pass's start, not what is left at that moment:
+// steps the movement kernel takes before the pass and steps in Unit.update
+// (in the pass's order) are then marked alike, whatever the order.
+let _astarAtPassStart = null;
+function astarPassStart() {
+    const a = [];
+    for (let pid = 0; pid < players.length; pid++) a[pid] = _getPlayerAstarBudgetRemaining(pid) + _fromFixedResourceUnits(_pendingMovementAstarFixed[pid] || 0);
+    _astarAtPassStart = a;
+}
+function astarPassEnd() { _astarAtPassStart = null; }
+
 function flushPendingMovementAstarSpend() {
     for (let pid = 0; pid < _pendingMovementAstarFixed.length; pid++) {
         let fixedDelta = _pendingMovementAstarFixed[pid];
@@ -187,8 +199,10 @@ function _tryConsumeAstarMoveCost(u, tiles = 1) {
     if (amount <= 0) return true;
     let pid = _normalizeOwnerId(u.owner);
     if (pid < 0) return true;
-    // Include this tick's not yet applied movement spend.
-    let remaining = _getPlayerAstarBudgetRemaining(u.owner) + _fromFixedResourceUnits(_pendingMovementAstarFixed[pid] || 0);
+    // Include this tick's not yet applied movement spend. (In the unit pass:
+    // the budget at its start, see astarPassStart.)
+    let remaining = _astarAtPassStart ? (_astarAtPassStart[pid] ?? 0)
+        : _getPlayerAstarBudgetRemaining(u.owner) + _fromFixedResourceUnits(_pendingMovementAstarFixed[pid] || 0);
     if (remaining < amount) {
         _setUnitAstarBudgetBlockedIndicator(u, 1);
     }

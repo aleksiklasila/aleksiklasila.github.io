@@ -154,6 +154,7 @@ class Tower {
             // Beam reach depends on effectiveLevel, which is 0 while under
             // construction and changes with adjacency/upgrades. Relink when it
             // moves so a finished tower connects without another placement.
+            ensureLaserConnections();
             if (this._laserLinkLevel !== this.effectiveLevel) recalculateLaserConnections();
             this.laserState = 0;
             for (let other of this.connectedLasers) {

@@ -62,10 +62,14 @@ async function mapCase(mapType, seed) {
         const g = guests[round % guests.length];
         const gid = JSON.stringify(g.eval('myPeerId'));
         const T = Math.max(...all.map(i => i.eval('currentTick'))) + 30;
-        shared.rec = {};
+        shared.rec = {}; shared.text = undefined;
         // Every peer drops its history caches at T, as the protocol does.
-        world.atTick(T - 1, `(() => { snapFlushHistoryCaches(); if (isHost) __scratch.shared.text = JSON.stringify(snapEncodeState());
-            else if (myPeerId === ${gid}) snapDecodeState(JSON.parse(__scratch.shared.text)); })()`);
+        // The guest may run tick T - 1 before the host does (lockstep lets
+        // it): whichever of the two gets there first encodes the state
+        // (the same on both), and the guest restores that.
+        world.atTick(T - 1, `(() => { snapFlushHistoryCaches(); if (!isHost && myPeerId !== ${gid}) return;
+            if (__scratch.shared.text === undefined) __scratch.shared.text = JSON.stringify(snapEncodeState());
+            if (!isHost) snapDecodeState(JSON.parse(__scratch.shared.text)); })()`);
         for (const k of [0, 1, 10, 25, WINDOW]) world.atTick(T + k, `(() => { if (isHost || myPeerId === ${gid}) (__scratch.shared.rec[currentTick] ||= {})[isHost ? 'h' : 'g'] = ${FULL_VALUES}; })()`);
         await world.runUntil(() => all.every(i => i.eval('currentTick') > T + WINDOW + 2), 60000, 20);
         for (const t of Object.keys(shared.rec).map(Number).sort((a, b) => a - b)) {

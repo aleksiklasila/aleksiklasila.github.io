@@ -26,7 +26,8 @@ async function worker() {
             const started = Date.now();
             const child = spawn(process.execPath, [path.join(__dirname, file)], { env: { ...process.env, SIM_WORKER: mode }, windowsHide: true });
             let text = '', timedOut = false;
-            const timer = setTimeout(() => { timedOut = true; child.kill(); }, 600000);
+            // (Simulation-worker mode runs the big multiplayer files 5-10x slower.)
+            const timer = setTimeout(() => { timedOut = true; child.kill(); }, Number(option('timeout', mode === '1' ? 1800 : 900)) * 1000);
             child.stdout.on('data', b => { text += b; }); child.stderr.on('data', b => { text += b; });
             child.on('error', e => { text += String(e); });
             child.on('close', status => { clearTimeout(timer); resolve({ mode, file, status, output: text, timedOut, elapsedMs:Date.now()-started }); });

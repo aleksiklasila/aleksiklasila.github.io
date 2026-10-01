@@ -3,23 +3,70 @@
 // ============================================================
 // ADJACENCY & LASER CONNECTIONS
 // ============================================================
+// Laser links: two lasers of one owner in the same row or column, 1 to
+// min(effective levels) tiles apart, no wall between (other towers do not
+// block). Each tower's partners are in towers-array order. Lasers of a
+// line are only compared with the next ones along it within reach, so a
+// recompute is O(lasers log lasers + links), not O(towers^2).
+const _laserLines = new Map();
 function recalculateLaserConnections() {
-    towers.forEach(t => { if (t.type === 'laser') { t.connectedLasers = []; t._laserLinkLevel = t.effectiveLevel; } });
+    _laserLinksDirty = false;
+    const lines = _laserLines, partners = [];
+    lines.clear();
     for (let i = 0; i < towers.length; i++) {
-        let t1 = towers[i]; if (t1.type !== 'laser') continue;
-        for (let j = i + 1; j < towers.length; j++) {
-            let t2 = towers[j]; if (t2.type !== 'laser' || t2.owner !== t1.owner) continue;
-            let aX = t1.gx === t2.gx, aY = t1.gy === t2.gy;
-            if (!aX && !aY) continue;
-            let blocked = false, dist;
-            if (aX) { dist = Math.abs(t1.gy - t2.gy); let mn = Math.min(t1.gy, t2.gy), mx = Math.max(t1.gy, t2.gy); for (let y = mn + 1; y < mx; y++) if (grid[y][t1.gx].type === TYPE_WALL) blocked = true; }
-            else { dist = Math.abs(t1.gx - t2.gx); let mn = Math.min(t1.gx, t2.gx), mx = Math.max(t1.gx, t2.gx); for (let x = mn + 1; x < mx; x++) if (grid[t1.gy][x].type === TYPE_WALL) blocked = true; }
-            let gap = dist - 1, limit = Math.min(t1.effectiveLevel, t2.effectiveLevel);
-            if (gap > limit || gap < 1) blocked = true;
-            if (!blocked) { t1.connectedLasers.push(t2); t2.connectedLasers.push(t1); }
+        const t = towers[i];
+        if (t.type !== 'laser') continue;
+        t.connectedLasers = []; t._laserLinkLevel = t.effectiveLevel;
+        // (Lines by owner and row/column: string keys, owners may be anything.)
+        const kc = 'c' + t.owner + ':' + t.gx, kr = 'r' + t.owner + ':' + t.gy;
+        let a = lines.get(kc); if (!a) lines.set(kc, a = []); a.push(i);
+        let b = lines.get(kr); if (!b) lines.set(kr, b = []); b.push(i);
+    }
+    for (const [key, list] of lines) {
+        if (list.length < 2) continue;
+        const col = key[0] === 'c';
+        list.sort((x, y) => (col ? towers[x].gy - towers[y].gy : towers[x].gx - towers[y].gx) || x - y);
+        // (A laser without a numeric level links at any distance: the
+        // minimum of the levels is NaN, never exceeded.)
+        let anyNaN = false;
+        for (let k = 0; k < list.length && !anyNaN; k++) anyNaN = !(towers[list[k]].effectiveLevel >= -Infinity);
+        for (let a = 0; a < list.length; a++) {
+            const t1 = towers[list[a]], c1 = col ? t1.gy : t1.gx, l1 = t1.effectiveLevel;
+            for (let b = a + 1; b < list.length; b++) {
+                const t2 = towers[list[b]], dist = (col ? t2.gy : t2.gx) - c1, gap = dist - 1;
+                // (Further ones are further: past t1's level none can link.)
+                if (gap > l1 && !anyNaN) break;
+                if (gap < 1) continue;
+                const limit = Math.min(l1, t2.effectiveLevel);
+                if (gap > limit) continue;
+                let blocked = false;
+                if (col) { for (let y = c1 + 1; y < c1 + dist && !blocked; y++) if (grid[y][t1.gx].type === TYPE_WALL) blocked = true; }
+                else { const row = grid[t1.gy]; for (let x = c1 + 1; x < c1 + dist && !blocked; x++) if (row[x].type === TYPE_WALL) blocked = true; }
+                if (blocked) continue;
+                partners.push(list[a], list[b]);
+            }
         }
     }
+    if (!partners.length) return;
+    // Each tower's partners in towers-array order.
+    const byTower = new Map();
+    for (let k = 0; k < partners.length; k += 2) {
+        const i = partners[k], j = partners[k + 1];
+        let a = byTower.get(i); if (!a) byTower.set(i, a = []); a.push(j);
+        let b = byTower.get(j); if (!b) byTower.set(j, b = []); b.push(i);
+    }
+    for (const [i, list] of byTower) {
+        list.sort((x, y) => x - y);
+        const out = towers[i].connectedLasers;
+        for (const j of list) out.push(towers[j]);
+    }
 }
+// Structures placed or removed: the links are made again before they are
+// next used (a laser's update, the end of the tick: ensureLaserConnections),
+// once however many changed. Restores recompute at once.
+let _laserLinksDirty = false;
+function markLaserConnectionsDirty() { _laserLinksDirty = true; }
+function ensureLaserConnections() { if (_laserLinksDirty) recalculateLaserConnections(); }
 
 function _isOperationalAdjacencyEntity(obj) {
     if (!obj) return false;
@@ -710,94 +757,144 @@ function _countNearbySameTypeUnits(dueUnits, n, similarOut, chunkPx) {
 
 let _effectiveStatsStamp = 0;
 
-let _effDueUnits = [];
+// A unit's base tables were (re)applied (applyUnitLevelScaling): the
+// effective-stats kernel can take it from the columns (esOk) while its
+// window does not depend on its effective tables (_effectiveStatsRadiusPx).
+function effStatsUnitBaseChanged(u) {
+    const c = u && u._us;
+    if (!c) return;
+    const s = u._si, b = u.basePreComputed, typeIdx = spatialUnitTypeToIndex[u.unitType];
+    const ok = !!(b && Number.isFinite(b.visionRange) && b.visionRange && Number.isFinite(b.maxEnergy)
+        && Number.isFinite(typeIdx) && typeIdx >= 0 && Number.isFinite(u.baseLevel));
+    c.esOk[s] = ok ? 1 : 0;
+    if (!ok) return;
+    const chunkPx = Math.max(1, CHUNK_SIZE * TILE);
+    c.esRad[s] = Math.max(0, Math.ceil(Math.max(0.5, Number(b.visionRange)) * TILE / chunkPx));
+    c.esType[s] = typeIdx;
+}
+// Every unit takes the full path once more (a restore replaced tables in
+// place, the stat tables changed).
+function effStatsInvalidateAll() {
+    if (typeof _simUnitState !== 'undefined' && _simUnitState) _simUnitState.columns.esOk.fill(0);
+}
+let _effStatsVersion = -1;
+
+// The nearby same-owner same-type count of one unit (the full path): the
+// spatial chunk counts over its window, as the kernel sums them.
+function _effWindowCount(u, chunkPx) {
+    let owner = Math.floor(Number(u.owner));
+    let typeIdx = spatialUnitTypeToIndex[u.unitType];
+    if (!Number.isFinite(typeIdx) || typeIdx < 0 || !(owner >= 0 && owner < spatialUnitsComplexPlayerCount)) return 0;
+    let cx = Math.floor(u.x / chunkPx), cy = Math.floor(u.y / chunkPx);
+    let chunkRadius = Math.max(0, Math.ceil(_effectiveStatsRadiusPx(u) / chunkPx));
+    let x1 = Math.max(0, Math.min(CHUNKS_W - 1, cx - chunkRadius)), y1 = Math.max(0, Math.min(CHUNKS_H - 1, cy - chunkRadius));
+    let x2 = Math.max(0, Math.min(CHUNKS_W - 1, cx + chunkRadius)), y2 = Math.max(0, Math.min(CHUNKS_H - 1, cy + chunkRadius));
+    if (!(x1 <= x2 && y1 <= y2)) return 0;
+    let strideChunk = spatialUnitsComplexStridePerChunk, data = spatialUnitsComplex;
+    let lane = owner * spatialUnitsComplexStridePerPlayer + 1 + typeIdx, sum = 0;
+    for (let y = y1; y <= y2; y++) {
+        let idx = (y * CHUNKS_W + x1) * strideChunk + lane;
+        for (let x = x1; x <= x2; x++, idx += strideChunk) sum += data[idx];
+    }
+    return sum | 0;
+}
+
+// One unit, the whole way (new units, the selection, units the kernel
+// leaves to objects): base stacks and level (its base tables made again
+// when they do not fit), the nearby count, effective stacks and level, and
+// its effective tables when that level changed.
+function _effStatsFullUnit(u, canUseSpatialCounts, chunkPx) {
+    let baseStacks = getUnitStackCount(u);
+    let baseLevel = stackCountToLevel(baseStacks);
+    let needsRefresh = !Number.isFinite(u.baseLevel) || u.baseLevel !== baseLevel ||
+        !(u.basePreComputed && Number.isFinite(u.basePreComputed.visionRange)) || !(u.basePreComputed && Number.isFinite(u.basePreComputed.maxEnergy));
+    u.stackCount = baseStacks;
+    u.unitLevel = baseLevel;
+    if (needsRefresh) {
+        applyUnitLevelScaling(u, baseLevel);
+        u.stackCount = baseStacks;
+    } else if (u._us && !u._us.esOk[u._si]) effStatsUnitBaseChanged(u);
+    let similarCount = canUseSpatialCounts ? _effWindowCount(u, chunkPx) : 0;
+    if (similarCount <= 0) {
+        let radiusPx = _effectiveStatsRadiusPx(u);
+        forEachUnitInRange(u.x, u.y, radiusPx, () => { similarCount++; }, { player: u.owner, unitType: u.unitType });
+    }
+    if (similarCount < 1) similarCount = 1;
+    let effStacks = Math.max(1, Math.floor(similarCount * baseStacks));
+    u.effectiveStacks = effStacks;
+    u.effectiveLevel = stackCountToLevel(effStacks);
+    let nextEffLevel = getUnitEffectiveLevel(u);
+    if (needsRefresh || u._lastAppliedEffectiveLevel !== nextEffLevel) {
+        applyUnitEffectiveScaling(u, nextEffLevel);
+        u._lastAppliedEffectiveLevel = nextEffLevel;
+    }
+}
+
+// Units' effective stats: new units, the strided share of the units
+// (1/intervalTicks of them a tick, by index) and, in single player, the
+// selection. The strided share runs in the kernels from the columns
+// (SIM_KERNEL_EFF_UNITS: stacks, levels, nearby counts); only units whose
+// effective level changed (their effective tables), and units the columns
+// cannot answer for, are touched as objects, in the share's order.
+let _effFlags = null;
 function recalculateUnitEffectiveStats() {
     let intervalTicks = getUnitEffectiveStatsRecalcTicks();
-    let dueUnits = _effDueUnits;
-    dueUnits.length = 0;
     let selectedSet = null;
     if ((!isMultiplayer || !gameStarted) && selectedUnits && selectedUnits.length > 0) selectedSet = new Set(selectedUnits);
-
     let tick = Math.max(0, Math.floor(Number(gameTime) || 0));
-    // New units (their list is drained by recalculateThingPrecomputedStats,
-    // which runs next), the strided share, and the selection (single player
-    // only: never local timing in multiplayer).
     let stamp = ++_effectiveStatsStamp;
-    let take = (u) => {
-        if (!u || u.dead || u._effectiveStatsStamp === stamp) return;
-        u._effectiveStatsStamp = stamp;
-        dueUnits.push(u);
-    };
-    for (let u of _newUnitsForStats) if (u._needsStatsInit) take(u);
-    _forEachStridedUnit(intervalTicks, tick, take);
-    if (selectedSet) for (let u of selectedSet) if (_isSelectionStatsRefreshDue(u, selectedSet.size)) take(u);
-
-    if (dueUnits.length <= 0) return;
-
+    if (typeof _precomputedStatsVersion !== 'undefined' && _effStatsVersion !== _precomputedStatsVersion) { _effStatsVersion = _precomputedStatsVersion; effStatsInvalidateAll(); }
     let canUseSpatialCounts = spatialUnitsComplexStridePerChunk > 0
         && spatialUnitsComplexStridePerPlayer > 0
         && spatialUnitsComplex.length > 0
         && CHUNKS_W > 0
         && CHUNKS_H > 0;
     let chunkPx = Math.max(1, CHUNK_SIZE * TILE);
-
-    // Per due unit (reused typed scratch, no objects per unit): base stacks,
-    // whether its base tables were rebuilt, and its nearby same-type count.
-    let n = dueUnits.length;
-    if (_effBaseStacks.length < n) {
-        let cap = Math.max(n, _effBaseStacks.length * 2);
-        _effBaseStacks = new Float64Array(cap); _effRefresh = new Uint8Array(cap); _effSimilar = new Int32Array(cap);
-    }
-    let baseStacksOf = _effBaseStacks, refreshed = _effRefresh, similar = _effSimilar;
-    for (let i = 0; i < n; i++) {
-        let u = dueUnits[i];
-        let baseStacks = getUnitStackCount(u);
-        let baseLevel = stackCountToLevel(baseStacks);
-        let needsRefresh = !Number.isFinite(u.baseLevel) || u.baseLevel !== baseLevel ||
-            !(u.basePreComputed && Number.isFinite(u.basePreComputed.visionRange)) || !(u.basePreComputed && Number.isFinite(u.basePreComputed.maxEnergy));
-
-        u.stackCount = baseStacks;
-        u.unitLevel = baseLevel;
-
-        if (needsRefresh) {
-            applyUnitLevelScaling(u, baseLevel);
-            u.stackCount = baseStacks;
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    const taken = u => {
+        if (!u || u.dead) return true;
+        const c = u._us;
+        if (c) { if (c.esTaken[u._si] === stamp) return true; c.esTaken[u._si] = stamp; return false; }
+        if (u._effectiveStatsStamp === stamp) return true;
+        u._effectiveStatsStamp = stamp;
+        return false;
+    };
+    // New units (their list is drained by recalculateThingPrecomputedStats,
+    // which runs next).
+    for (let u of _newUnitsForStats) if (u._needsStatsInit && !taken(u)) _effStatsFullUnit(u, canUseSpatialCounts, chunkPx);
+    // The strided share.
+    let step = Math.max(1, intervalTicks | 0), phase = tick % step, n = units.length;
+    let m = phase < n ? Math.ceil((n - phase) / step) : 0;
+    if (m > 0 && S && canUseSpatialCounts && typeof SIM_KERNEL_EFF_UNITS === 'number' && n >= EFF_STATS_KERNEL_MIN_UNITS) {
+        const slots = _unitSlotMapEnsure(), c = S.columns;
+        if (!_effFlags || _effFlags.length < m) { _effFlags = simSharedArray(Uint8Array, Math.max(1024, m * 2)); simParallelBind('eff.flag', _effFlags); }
+        simParallelBind('ix.slots', slots); simParallelBind('spatial.cplx', spatialUnitsComplex);
+        const P = _simParams;
+        P[0] = m; P[1] = 1024; P[2] = step; P[3] = phase; P[4] = chunkPx; P[5] = CHUNKS_W; P[6] = CHUNKS_H;
+        P[7] = spatialUnitsComplexStridePerChunk; P[8] = spatialUnitsComplexStridePerPlayer; P[9] = spatialUnitsComplexPlayerCount;
+        P[10] = MAX_THING_LEVEL; P[11] = stamp;
+        simParallelRun(SIM_KERNEL_EFF_UNITS, Math.ceil(m / 1024));
+        const F = _effFlags;
+        for (let j = 0; j < m; j++) {
+            const f = F[j];
+            if (f === 0 || f === 3) continue;
+            const i = phase + j * step, u = units[i];
+            if (f === 1) {
+                // (The kernel set its stacks and levels.)
+                const s = slots[i], lvl = c.effectiveLevel[s];
+                applyUnitEffectiveScaling(u, lvl);
+                c._lastAppliedEffectiveLevel[s] = lvl;
+            } else if (!taken(u)) _effStatsFullUnit(u, canUseSpatialCounts, chunkPx);
         }
-
-        u.effectiveStacks = baseStacks;
-        u.effectiveLevel = baseLevel;
-        baseStacksOf[i] = baseStacks; refreshed[i] = needsRefresh ? 1 : 0; similar[i] = 0;
+    } else {
+        for (let i = phase; i < n; i += step) { const u = units[i]; if (!taken(u)) _effStatsFullUnit(u, canUseSpatialCounts, chunkPx); }
     }
-
-    if (canUseSpatialCounts) _countNearbySameTypeUnits(dueUnits, n, similar, chunkPx);
-
-    for (let i = 0; i < n; i++) {
-        let u = dueUnits[i];
-        let similarCount = similar[i] | 0;
-        if (similarCount <= 0) {
-            let radiusPx = _effectiveStatsRadiusPx(u);
-            forEachUnitInRange(u.x, u.y, radiusPx, () => {
-                similarCount++;
-            }, { player: u.owner, unitType: u.unitType });
-        }
-
-        if (similarCount < 1) similarCount = 1;
-        let effStacks = Math.max(1, Math.floor(similarCount * baseStacksOf[i]));
-        u.effectiveStacks = effStacks;
-        u.effectiveLevel = stackCountToLevel(effStacks);
-    }
-
-    for (let i = 0; i < n; i++) {
-        let u = dueUnits[i];
-        let nextEffLevel = getUnitEffectiveLevel(u);
-        if (refreshed[i] || u._lastAppliedEffectiveLevel !== nextEffLevel) {
-            applyUnitEffectiveScaling(u, nextEffLevel);
-            u._lastAppliedEffectiveLevel = nextEffLevel;
-        }
-    }
-    dueUnits.length = 0;
+    // The selection (single player only: never local timing in multiplayer).
+    if (selectedSet) for (let u of selectedSet) if (_isSelectionStatsRefreshDue(u, selectedSet.size) && !taken(u)) _effStatsFullUnit(u, canUseSpatialCounts, chunkPx);
 }
-let _effBaseStacks = new Float64Array(0), _effRefresh = new Uint8Array(0), _effSimilar = new Int32Array(0);
+// From this many units the strided share runs in the kernels (tests lower
+// it; both ways give the same state).
+let EFF_STATS_KERNEL_MIN_UNITS = 2048;
 
 // ============================================================
 // BUILDING PLACEMENT & DESTRUCTION
@@ -1151,7 +1248,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
     // Newly placed structures start under construction, so they don't affect adjacency yet.
     // Avoid expensive full-map adjacency recalculation on every placement.
     if (placedNewStructure) _bumpPathTopologyVersion();
-    if (placedNewWallStructure) recalculateLaserConnections();
+    if (placedNewWallStructure) markLaserConnectionsDirty();
     if (playerId === localPlayerId && !silentPlace) playSound('place', gx * TILE + 16, gy * TILE + 16);
     return true;
 }
@@ -1170,7 +1267,7 @@ function destroyBuilding(building) {
         simMoveTileTypeChanged(building.gx, building.gy);
         _markCombinedBgTileDirty(building.gx, building.gy, 0, true);
         recalculateAdjacency();
-        recalculateLaserConnections();
+        markLaserConnectionsDirty();
     } else if (building instanceof Barrack || (building.type === 'barrack')) {
         let idx = barracks.indexOf(building);
         if (idx !== -1) barracks.splice(idx, 1);
@@ -1340,7 +1437,7 @@ function refreshThingProgressState(item) {
         let slotIndex = tileIndex * _WORKER_TARGET_LOAD_TYPE_COUNT + builderTypeIndex;
         let reservedUnit = workerReservedTiles[slotIndex];
         if (reservedUnit) reservedUnit._workerReservedTileIndex = -1;
-        workerReservedTiles[slotIndex] = null;
+        workerReservedSet(slotIndex, null);
     }
 }
 

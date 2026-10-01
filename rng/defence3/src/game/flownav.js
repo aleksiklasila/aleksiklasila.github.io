@@ -593,10 +593,15 @@ function navStep(profile, t, dest, destId) {
 const NAV_ROUTE_KEY = 'nav';
 function navProfileOf(u) { return u && u.isFlying ? NAV_PROFILE_AIR : NAV_PROFILE_GROUND; }
 // Up to maxLen tiles from (gx, gy) toward dest (the start first), as path
-// nodes; null when the navigation has no way from there.
+// nodes; null when the navigation has no way from there. For the interface:
+// it changes nothing (a destination field it would ask for, or a build,
+// would exist on the peer that shows the unit only): an existing field of
+// the destination when there is one, else the coarse steps.
 function navPath(profile, gx, gy, dest, maxLen) {
-    navEnsure(profile);
-    const did = navDestField(profile, dest), W = GRID_W;
+    const nav = _nav[profile];
+    if (!nav || !(dest >= 0 && dest < nav.W * nav.H)) return null;
+    const W = GRID_W, F = _navFields.pools[1], s = F && F.byKey ? F.byKey.get(_navFieldKey(profile, dest)) : undefined;
+    const did = s === undefined ? -1 : NAV_WIDE_BASE + s;
     let t = gy * W + gx;
     const path = [{ x: gx, y: gy }];
     while (t !== dest && path.length < maxLen) {

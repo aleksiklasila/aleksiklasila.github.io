@@ -8,6 +8,10 @@ function initSpatialHash() {
     spatialUnits = [];
     _sxDirty = true;
     closestEnemyChunkQueryCache.clear();
+    // (New count tables: changes to the old ones are void.)
+    _spatialCountQ.length = 0;
+    // (New type indexes: the effective-stats windows are worked out again.)
+    if (typeof _simUnitState !== 'undefined' && _simUnitState) _simUnitState.columns.esOk.fill(0);
 
     spatialUnitTypeToIndex = Object.create(null);
     let unitKeys = Object.keys(BASE_UNIT_STATS || {});
@@ -140,22 +144,33 @@ function spatialSlotMove(c, s, gx, gy, zone, tile) {
     c.mvZmask[s] = _simMoveZoneMask(gx, gy, zone);
 }
 function _spatialCountSlot(c, s, chunkKey, owner, delta) {
-    if (!(owner >= 0 && owner < spatialUnitsComplexPlayerCount)) return;
-    const base = chunkKey * spatialUnitsComplexStridePerChunk + owner * spatialUnitsComplexStridePerPlayer;
-    spatialUnitsComplex[base] += delta;
-    spatialUnitsComplex[base + 1 + c.spType[s]] += delta;
-    _adjustSpatialBlockCount(chunkKey, owner, delta);
+    _spatialCountAdd(chunkKey, owner, c.spType[s], delta);
 }
 
 // Per chunk and owner: unit totals and per-type counts, and the 8x8 block
 // totals. Adjusted only when the chunk bucket really gained or lost the unit.
 function _spatialCountUnit(u, chunkKey, owner, delta) {
+    _spatialCountAdd(chunkKey, owner, u._spatialUnitTypeIdx, delta);
+}
+// During the unit pass the counts stay as at its start, like the unit index
+// they filter (spatialIndexRebuild): a unit the movement kernel moved
+// before the pass is still counted where the index lists it, whichever
+// peer moved it when. The changes are applied at the pass's end.
+let _spatialCountDefer = false, _spatialCountQ = [];
+function _spatialCountAdd(chunkKey, owner, typeIdx, delta) {
     if (!(owner >= 0 && owner < spatialUnitsComplexPlayerCount)) return;
-    let typeIdx = u._spatialUnitTypeIdx;
-    let base = chunkKey * spatialUnitsComplexStridePerChunk + owner * spatialUnitsComplexStridePerPlayer;
+    if (_spatialCountDefer) { _spatialCountQ.push(chunkKey, owner, typeIdx, delta); return; }
+    const base = chunkKey * spatialUnitsComplexStridePerChunk + owner * spatialUnitsComplexStridePerPlayer;
     spatialUnitsComplex[base] += delta;
     spatialUnitsComplex[base + 1 + typeIdx] += delta;
     _adjustSpatialBlockCount(chunkKey, owner, delta);
+}
+function spatialCountsDeferBegin() { _spatialCountDefer = true; }
+function spatialCountsDeferEnd() {
+    _spatialCountDefer = false;
+    const q = _spatialCountQ;
+    for (let i = 0; i < q.length; i += 4) _spatialCountAdd(q[i], q[i + 1], q[i + 2], q[i + 3]);
+    q.length = 0;
 }
 
 function _moveUnitSpatial(u, gx, gy, tile) {
@@ -232,6 +247,11 @@ let _sxFill = new Int32Array(0), _sxAFill = new Int32Array(0), _sxAreaCap = 0, _
 // Per entry (shared with the collision kernels): its unit's slot (-1 none)
 // and chunk; the number of entries.
 let _sxESlot = new Int32Array(0), _sxEKey = new Int32Array(0), _sxSi = new Int32Array(0), _sxListed = 0;
+// The parallel build lists units by slot (_sxESlot, _sxASlot; the unit is
+// _simUnitState.owners[slot], null once released): _sxBySlot. The serial
+// build lists the objects (_sxList, _sxAList).
+let _sxBySlot = false, _sxASlot = new Int32Array(0);
+function _sxOwners() { return _sxBySlot ? _simUnitState.owners : null; }
 function spatialIndexEntries() { spatialIndexEnsure(); return _sxListed; }
 
 function spatialIndexEnsure() { if (_sxDirty) spatialIndexRebuild(); }
@@ -240,10 +260,14 @@ function spatialIndexInvalidate() { _sxDirty = true; }
 // Large worlds build it with the kernels (SIM_KERNEL_INDEX_*): the same
 // result (chunk and area ranges in key order, each in units order).
 let _sxPar = null;
+// From this many units the index is built by the kernels (tests lower it;
+// both builds give the same queries).
+let SPATIAL_PARALLEL_MIN_UNITS = 4096;
 function spatialIndexRebuild() {
     _sxDirty = false;
+    if (typeof simUnitStateReleaseFreed === 'function') simUnitStateReleaseFreed();
     const n = units.length;
-    if (n >= 4096 && _simUnitState && typeof SIM_KERNEL_INDEX_COUNT === 'number' && _spatialIndexRebuildParallel()) return;
+    if (n >= SPATIAL_PARALLEL_MIN_UNITS && _simUnitState && typeof SIM_KERNEL_INDEX_COUNT === 'number' && _spatialIndexRebuildParallel()) return;
     _spatialIndexRebuildSerial();
 }
 function _spatialIndexRebuildParallel() {
@@ -253,14 +277,14 @@ function _spatialIndexRebuildParallel() {
     if (!X || X.nChunks !== nChunks || X.A < A || X.players !== players) {
         X = _sxPar = { nChunks, A, players, bad: simSharedArray(Int32Array, 1),
             stamp: simSharedArray(Int32Array, nChunks), start: simSharedArray(Int32Array, nChunks), cnt: simSharedArray(Int32Array, nChunks), fill: simSharedArray(Int32Array, nChunks),
-            astamp: new Int32Array(A), astart: simSharedArray(Int32Array, A), acnt: simSharedArray(Int32Array, A), afill: simSharedArray(Int32Array, A), aown: simSharedArray(Int32Array, A * players),
-            keys: null, areas: null, ent: null, aent: null, cap: 0 };
-        for (const k of ['bad', 'start', 'cnt', 'fill', 'astart', 'acnt', 'afill', 'aown']) simParallelBind('ix.' + k, X[k]);
+            astamp: simSharedArray(Int32Array, A), astart: simSharedArray(Int32Array, A), acnt: simSharedArray(Int32Array, A), afill: simSharedArray(Int32Array, A), aown: simSharedArray(Int32Array, A * players),
+            listed: simSharedArray(Int32Array, 2), keys: null, areas: null, ent: null, aent: null, aslot: null, cap: 0 };
+        for (const k of ['bad', 'stamp', 'start', 'cnt', 'fill', 'astamp', 'astart', 'acnt', 'afill', 'aown', 'listed']) simParallelBind('ix.' + k, X[k]);
         _sxEpoch = 1;
     }
     if (X.cap < n) {
         X.cap = Math.max(4096, n * 2);
-        for (const k of ['keys', 'areas', 'ent', 'aent']) { X[k] = simSharedArray(Int32Array, X.cap); simParallelBind('ix.' + k, X[k]); }
+        for (const k of ['keys', 'areas', 'ent', 'aent', 'aslot']) { X[k] = simSharedArray(Int32Array, X.cap); simParallelBind('ix.' + k, X[k]); }
     }
     if (_sxESlot.length < n) { _sxESlot = simSharedArray(Int32Array, Math.max(1024, n * 2)); _sxEKey = simSharedArray(Int32Array, Math.max(1024, n * 2)); }
     simParallelBind('sep.eslot', _sxESlot); simParallelBind('sep.ekey', _sxEKey);
@@ -282,37 +306,27 @@ function _spatialIndexRebuildParallel() {
     simParallelRun(SIM_KERNEL_INDEX_KEYS, Math.ceil(n / UJ));
     // A unit without a state slot (none in play, normally): the serial build.
     if (X.bad[0]) return false;
-    const list = _sxList, listA = _sxAList, keys = X.keys, arOf = X.areas, cnt = X.cnt, start = X.start, stamp = X.stamp;
-    if (list.length < n) list.length = n;
-    if (listA.length < n) listA.length = n;
-    let order = simSpatialStableOrder(keys, n, nChunks, 1), pos = 0, prev = -1;
-    for (; pos < n; pos++) {
-        const i = order[pos], k = keys[i];
-        if (k >= nChunks) break;
-        if (k !== prev) { start[k] = pos; stamp[k] = ep; cnt[k] = 0; prev = k; }
-        cnt[k]++;
-        list[pos] = units[i]; _sxESlot[pos] = slots[i]; _sxEKey[pos] = k;
+    // Entries by slot (owners[slot]: slots freed this tick are not reused
+    // before the next rebuild, simUnitStateReleaseFreed); per position in
+    // key order the slot, per key its range, then the counts (and owners
+    // per area), all in the kernels.
+    P[15] = ep;
+    X.listed[0] = n; X.listed[1] = n;
+    for (let pass = 0; pass < 2; pass++) {
+        const order = simSpatialStableOrder(pass ? X.areas : X.keys, n, pass ? A : nChunks, pass ? 2 : 1);
+        simParallelBind(pass ? 'ix.ordA' : 'ix.ordC', order);
+        P[0] = n; P[1] = UJ; P[2] = nChunks; P[3] = A; P[4] = players; P[14] = pass; P[15] = ep;
+        simParallelRun(SIM_KERNEL_INDEX_FILL, Math.ceil(n / UJ));
+        simParallelRun(SIM_KERNEL_INDEX_RUNS, Math.ceil(n / UJ));
     }
-    order = simSpatialStableOrder(arOf, n, A, 2);
-    const acnt = X.acnt, astart = X.astart, astamp = X.astamp, aown = X.aown, OWN = _simUnitState.columns.owner;
-    let posA = 0;
-    prev = -1;
-    for (; posA < n; posA++) {
-        const i = order[posA], a2 = arOf[i];
-        if (a2 >= A) break;
-        if (a2 !== prev) { astart[a2] = posA; astamp[a2] = ep; acnt[a2] = 0; aown.fill(0, a2 * players, a2 * players + players); prev = a2; }
-        acnt[a2]++;
-        const o = OWN[slots[i]];
-        if (o >= 0 && o < players) aown[a2 * players + o]++;
-        listA[posA] = units[i];
-    }
-    _sxListed = pos;
-    for (let k = pos; k < list.length; k++) list[k] = undefined;
-    for (let k = posA; k < listA.length; k++) listA[k] = undefined;
+    _sxASlot = X.aslot;
+    _sxListed = X.listed[0];
+    _sxBySlot = true;
     return true;
 }
 function _spatialIndexRebuildSerial() {
     const nChunks = CHUNKS_W * CHUNKS_H, n = units.length, players = spatialUnitsComplexPlayerCount;
+    _sxBySlot = false;
     if (_sxPar) {
         // Back from the parallel build: arrays of its own.
         _sxPar = null; _sxStamp = new Int32Array(0); _sxAreaCap = 0;
@@ -416,10 +430,12 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
     }
     let unitTypeFilter = (opts && typeof opts.unitType === 'string' && opts.unitType.length > 0) ? opts.unitType : '';
     let areaOnly = !!(opts && opts.areaOnly);
+    // (As forEachUnitInRange's.)
+    let tickStart = !!(opts && opts.tickStart);
     let areaIds = getAreaIdsWithinDistanceOfSources(sources, maxDistance);
     if (!areaIds || areaIds.length <= 0) return false;
     spatialIndexEnsure();
-    const ep = _sxEpoch, players = _sxPlayers, cap = _sxAreaCap, listA = _sxAList;
+    const ep = _sxEpoch, players = _sxPlayers, cap = _sxAreaCap, own = _sxOwners(), listA = own ? null : _sxAList, AS = _sxASlot;
     for (let i = 0; i < areaIds.length; i++) {
         let areaId = areaIds[i];
         if (!(areaId >= 0 && areaId < cap) || _sxAStamp[areaId] !== ep) continue;
@@ -427,13 +443,13 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
         // Only the scanning player's own units there.
         if (enemyFilter >= 0 && enemyFilter < players && _sxAOwner[areaId * players + enemyFilter] === cnt) continue;
         for (let k = k0, k1 = k0 + cnt; k < k1; k++) {
-            let u = listA[k];
-            if (!includeDead && u.dead) continue;
+            let u = own ? own[AS[k]] : listA[k];
+            if (!u || (!includeDead && u.dead)) continue;
             if (playerFilter >= 0 && u.owner !== playerFilter) continue;
             if (enemyFilter >= 0 && u.owner === enemyFilter) continue;
             if (unitTypeFilter && u.unitType !== unitTypeFilter) continue;
-            let dx = (Number(u.x) || 0) - wx;
-            let dy = (Number(u.y) || 0) - wy;
+            let dx = (Number(tickStart ? _unitTickX(u) : u.x) || 0) - wx;
+            let dy = (Number(tickStart ? _unitTickY(u) : u.y) || 0) - wy;
             let hitRadius = Math.max(0, Number(u.r) || 0);
             let maxHitRangePx = maxRangePx + hitRadius;
             if (!areaOnly && (dx * dx + dy * dy) > (maxHitRangePx * maxHitRangePx)) continue;
@@ -469,11 +485,12 @@ function getUnitsInRange(wx, wy, rangePx) {
     minCx = Math.max(0, minCx); maxCx = Math.min(CHUNKS_W - 1, maxCx);
     minCy = Math.max(0, minCy); maxCy = Math.min(CHUNKS_H - 1, maxCy);
     spatialIndexEnsure();
+    const own = _sxOwners();
     for (let cy = minCy; cy <= maxCy; cy++) {
         for (let cx = minCx; cx <= maxCx; cx++) {
             let ck = cy * CHUNKS_W + cx;
             if (_sxStamp[ck] !== _sxEpoch) continue;
-            for (let k = _sxStart[ck], k1 = k + _sxCount[ck]; k < k1; k++) result.push(_sxList[k]);
+            for (let k = _sxStart[ck], k1 = k + _sxCount[ck]; k < k1; k++) { const u = own ? own[_sxESlot[k]] : _sxList[k]; if (u) result.push(u); }
         }
     }
     return result;
@@ -493,6 +510,9 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
     let includeDead = !!(opts && opts.includeDead);
     let exact = !(opts && opts.exact === false);
     let predicate = (opts && typeof opts.predicate === 'function') ? opts.predicate : null;
+    // Units where they were at the unit pass's start (_unitTickX): the index
+    // lists them by that tile, and decisions in the pass read them there.
+    let tickStart = !!(opts && opts.tickStart);
 
     let playerFilter = -1, enemyFilter = -1, unitTypeFilterIdx = -1, unitTypeFilter = '';
     let hasPlayerFilter = false, hasEnemyFilter = false, hasUnitTypeFilter = false;
@@ -522,7 +542,7 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
     let typeOff = 1 + unitTypeFilterIdx; // only valid when hasUnitTypeFilter
     let chunkCols = CHUNKS_W;
     spatialIndexEnsure();
-    const sxEp = _sxEpoch, sxStamp = _sxStamp, sxStart = _sxStart, sxCount = _sxCount, sxList = _sxList;
+    const sxEp = _sxEpoch, sxStamp = _sxStamp, sxStart = _sxStart, sxCount = _sxCount, own = _sxOwners(), sxList = own ? null : _sxList, ES = _sxESlot;
 
     // Hot path: exact alive scan for one player (healer/ally scans).
     if (!includeDead && exact && !predicate && hasPlayerFilter && !hasEnemyFilter && !hasUnitTypeFilter) {
@@ -542,9 +562,10 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
                 let ddx = wx - nx, ddy = wy - ny;
                 if (ddx * ddx + ddy * ddy > radiusSq) continue;
                 for (let k = sxStart[ck], k1 = k + sxCount[ck]; k < k1; k++) {
-                    let u = sxList[k];
+                    let u = own ? own[ES[k]] : sxList[k];
+                if (!u) continue;
                     if (u.owner !== playerFilter || u.dead) continue;
-                    let dx = u.x - wx, dy = u.y - wy;
+                    let dx = (tickStart ? _unitTickX(u) : u.x) - wx, dy = (tickStart ? _unitTickY(u) : u.y) - wy;
                     let d2 = dx * dx + dy * dy;
                     if (d2 > radiusSq) continue;
                     if (visitor(u, d2, dx, dy) === true) return true;
@@ -588,12 +609,13 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
                 let ddx = wx - nx, ddy = wy - ny;
                 if (ddx * ddx + ddy * ddy > radiusSq) continue;
                 for (let k = sxStart[ck], k1 = k + sxCount[ck]; k < k1; k++) {
-                    let u = sxList[k];
+                    let u = own ? own[ES[k]] : sxList[k];
+                if (!u) continue;
                     if (hasPlayerFilter && u.owner !== playerFilter) continue;
                     if (hasEnemyFilter && u.owner === enemyFilter) continue;
                     if (hasUnitTypeFilter && u.unitType !== unitTypeFilter) continue;
                     if (u.dead) continue;
-                    let dx = u.x - wx, dy = u.y - wy;
+                    let dx = (tickStart ? _unitTickX(u) : u.x) - wx, dy = (tickStart ? _unitTickY(u) : u.y) - wy;
                     let d2 = dx * dx + dy * dy;
                     if (d2 > radiusSq) continue;
                     if (visitor(u, d2, dx, dy) === true) return true;
@@ -638,12 +660,13 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
                 if (ddx * ddx + ddy * ddy > radiusSq) continue;
             }
             for (let k = sxStart[ck], k1 = k + sxCount[ck]; k < k1; k++) {
-                let u = sxList[k];
+                let u = own ? own[ES[k]] : sxList[k];
+                if (!u) continue;
                 if (hasPlayerFilter && u.owner !== playerFilter) continue;
                 if (hasEnemyFilter && u.owner === enemyFilter) continue;
                 if (hasUnitTypeFilter && u.unitType !== unitTypeFilter) continue;
                 if (!includeDead && u.dead) continue;
-                let dx = u.x - wx, dy = u.y - wy;
+                let dx = (tickStart ? _unitTickX(u) : u.x) - wx, dy = (tickStart ? _unitTickY(u) : u.y) - wy;
                 let d2 = dx * dx + dy * dy;
                 if (exact && d2 > radiusSq) continue;
                 if (predicate && !predicate(u, d2, dx, dy)) continue;
@@ -669,87 +692,15 @@ function _chunkHasEnemyForOwnerFast(chunkKey, ownerId) {
     return false;
 }
 
-function _isCachedEnemyTargetStillValid(target, ownerId, wx, wy, rangeSq, minCx, minCy, maxCx, maxCy, cws) {
-    if (!target || target.dead || target.owner === ownerId) return false;
-    let ugx = Math.floor(target.x / TILE);
-    let ugy = Math.floor(target.y / TILE);
-    if (!isGameplayTargetVisibleToPlayer(ownerId, ugx, ugy)) return false;
-    let tcx = Math.floor(target.x / cws);
-    let tcy = Math.floor(target.y / cws);
-    if (tcx < minCx || tcx > maxCx || tcy < minCy || tcy > maxCy) return false;
-    let dx = target.x - wx;
-    let dy = target.y - wy;
-    return (dx * dx + dy * dy) <= rangeSq;
-}
-
-// Chunks holding enemies, as (distance², key) pairs: reused scratch.
-const _closestEnemyChunkScratch = [];
-
-// Closest visible enemy unit in the nearest chunk holding enemies (as it
-// always was). When that chunk has none visible within range, the other
-// chunks in range are searched, nearest first: otherwise an unseen or
-// out-of-range enemy there hid a visible one nearby, and the unit stood
-// among enemies without engaging.
-function _computeClosestEnemyUnitByChunks(ownerId, wx, wy, rangeSq, minCx, minCy, maxCx, maxCy, cws) {
-    let candidates = _closestEnemyChunkScratch, count = 0;
-    for (let cy = minCy; cy <= maxCy; cy++) {
-        let rowBase = cy * CHUNKS_W;
-        for (let cx = minCx; cx <= maxCx; cx++) {
-            let ck = rowBase + cx;
-            if (!_chunkHasEnemyForOwnerFast(ck, ownerId)) continue;
-
-            let chunkMinX = cx * cws;
-            let chunkMinY = cy * cws;
-            let nx = wx < chunkMinX ? chunkMinX : (wx > chunkMinX + cws ? chunkMinX + cws : wx);
-            let ny = wy < chunkMinY ? chunkMinY : (wy > chunkMinY + cws ? chunkMinY + cws : wy);
-            let ddx = wx - nx;
-            let ddy = wy - ny;
-            let chunkD2 = ddx * ddx + ddy * ddy;
-            if (chunkD2 > rangeSq) continue;
-            // Stable insertion by distance² (scan order breaks ties, so the
-            // first entry is the chunk the original scan chose).
-            let i = count++;
-            while (i > 0 && candidates[(i - 1) * 2] > chunkD2) {
-                candidates[i * 2] = candidates[(i - 1) * 2];
-                candidates[i * 2 + 1] = candidates[(i - 1) * 2 + 1];
-                i--;
-            }
-            candidates[i * 2] = chunkD2;
-            candidates[i * 2 + 1] = ck;
-        }
-    }
-
-    spatialIndexEnsure();
-    for (let c = 0; c < count; c++) {
-        let ck = candidates[c * 2 + 1];
-        if (_sxStamp[ck] !== _sxEpoch) continue;
-        let best = null;
-        let bestD2 = Infinity;
-        for (let k = _sxStart[ck], k1 = k + _sxCount[ck]; k < k1; k++) {
-            let u = _sxList[k];
-            if (!u || u.dead || u.owner === ownerId) continue;
-            let ugx = Math.floor(u.x / TILE);
-            let ugy = Math.floor(u.y / TILE);
-            if (!isGameplayTargetVisibleToPlayer(ownerId, ugx, ugy)) continue;
-            let dx = u.x - wx;
-            let dy = u.y - wy;
-            let d2 = dx * dx + dy * dy;
-            if (d2 > rangeSq) continue;
-            if (d2 < bestD2) {
-                best = u;
-                bestD2 = d2;
-            }
-        }
-        if (best) return best;
-    }
-    return null;
-}
-
+// The nearest visible enemy unit within rangePx of (wx, wy) for `owner`, as
+// the combat scan kernel picks it (SIM_KERNEL_COMBAT_SCAN): enemies where
+// they were at the unit pass's start (_unitTickX), nearest first, then
+// lowest id. A pure function of the state (no query cache: a cache's
+// history differs between peers after a restore).
 function _findClosestEnemyUnitByChunks(owner, wx, wy, rangePx) {
     let ownerId = Math.floor(Number(owner));
     if (ownerId < 0 || ownerId >= spatialUnitsComplexPlayerCount) return null;
     if (!(CHUNKS_W * CHUNKS_H > 0)) return null;
-
     let cws = CHUNK_SIZE * TILE;
     let r = Math.max(0, Number(rangePx) || 0);
     let rangeSq = r * r;
@@ -758,40 +709,25 @@ function _findClosestEnemyUnitByChunks(owner, wx, wy, rangePx) {
     let maxCx = Math.min(CHUNKS_W - 1, Math.floor((wx + scan) / cws));
     let minCy = Math.max(0, Math.floor((wy - scan) / cws));
     let maxCy = Math.min(CHUNKS_H - 1, Math.floor((wy + scan) / cws));
-    // No enemy anywhere near: every path below would return null.
+    // No enemy anywhere near: none.
     if (!_regionMayHaveEnemyUnits(ownerId, minCx, minCy, maxCx, maxCy)) return null;
-
-    let centerCx = Math.max(0, Math.min(CHUNKS_W - 1, Math.floor(wx / cws)));
-    let centerCy = Math.max(0, Math.min(CHUNKS_H - 1, Math.floor(wy / cws)));
-    let centerChunkId = centerCy * CHUNKS_W + centerCx;
-
-    let tps = Math.max(1, Math.floor(Number(TICK_RATE) || 1));
-    let rangeKey = Math.max(0, Math.floor(r));
-    // Numeric key (exact below 2^53): string keys dominated this hot lookup.
-    let cacheKey = ownerId + 16 * (minCx + 1024 * (minCy + 1024 * (maxCx + 1024 * (maxCy + 1024 * Math.min(rangeKey, 4095)))));
-    let cacheEntry = closestEnemyChunkQueryCache.get(cacheKey);
-
-    if (cacheEntry) {
-        if (_isCachedEnemyTargetStillValid(cacheEntry.target, ownerId, wx, wy, rangeSq, minCx, minCy, maxCx, maxCy, cws)) {
-            return cacheEntry.target;
+    spatialIndexEnsure();
+    const own = _sxOwners();
+    let best = null, bestD2 = rangeSq;
+    for (let cy = minCy; cy <= maxCy; cy++) {
+        for (let cx = minCx; cx <= maxCx; cx++) {
+            let ck = cy * CHUNKS_W + cx;
+            if (!_chunkHasEnemyForOwnerFast(ck, ownerId) || _sxStamp[ck] !== _sxEpoch) continue;
+            for (let k = _sxStart[ck], k1 = k + _sxCount[ck]; k < k1; k++) {
+                let u = own ? own[_sxESlot[k]] : _sxList[k];
+                if (!u || u.dead || u.owner === ownerId) continue;
+                let ux = _unitTickX(u), uy = _unitTickY(u);
+                let dx = ux - wx, dy = uy - wy, d2 = dx * dx + dy * dy;
+                if (d2 > bestD2 || (d2 === bestD2 && best && u.id > best.id)) continue;
+                if (!isGameplayTargetVisibleToPlayer(ownerId, Math.floor(ux / TILE), Math.floor(uy / TILE))) continue;
+                best = u; bestD2 = d2;
+            }
         }
-        if (cacheEntry.target === null && (gameTime - cacheEntry.updatedAt) < tps) {
-            if (((gameTime + centerChunkId) % tps) !== 0) return null;
-        }
-        if ((gameTime - cacheEntry.updatedAt) < tps && ((gameTime + centerChunkId) % tps) !== 0) {
-            return null;
-        }
-    } else if (((gameTime + centerChunkId) % tps) !== 0) {
-        return null;
-    }
-
-    let best = _computeClosestEnemyUnitByChunks(ownerId, wx, wy, rangeSq, minCx, minCy, maxCx, maxCy, cws);
-    closestEnemyChunkQueryCache.set(cacheKey, {
-        updatedAt: gameTime,
-        target: best
-    });
-    if (closestEnemyChunkQueryCache.size > CLOSEST_ENEMY_CHUNK_CACHE_MAX) {
-        closestEnemyChunkQueryCache.clear();
     }
     return best;
 }

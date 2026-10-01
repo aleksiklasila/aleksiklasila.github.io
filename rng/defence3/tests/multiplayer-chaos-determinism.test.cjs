@@ -139,6 +139,13 @@ async function setupChaosWorld(mapType, seed, { guestOptions = [], exactHashes =
     const missing = JSON.parse(host.eval(`JSON.stringify([...Object.keys(BASE_CARD_TYPES).filter(k => !${JSON.stringify(BUILDINGS)}.includes(k)), ...Object.keys(BASE_UNIT_STATS).filter(k => !${JSON.stringify(UNITS)}.includes(k))])`));
     assert.deepEqual(missing, [], 'chaos lists miss these buildings/units');
     const setupCounts = host.eval(`JSON.stringify({ units: units.length, towers: towers.length, barracks: barracks.length, spawners: collectorSpawners.length, floor: getCellItemsRowMajor().length })`);
+    // CHAOS_SIM_EVAL: code every peer's simulation runs after the same tick,
+    // e.g. the large-world paths on these small worlds:
+    //   SPATIAL_PARALLEL_MIN_UNITS = 0; SNAP_HASH_KERNEL_MIN_UNITS = 0
+    if (process.env.CHAOS_SIM_EVAL) {
+        const at = world.atNextSafeTick(process.env.CHAOS_SIM_EVAL, 10);
+        await world.runUntil(() => all.every(i => i.eval('currentTick') > at + 1), 20000, 20);
+    }
 
     return { world, host, guests, all, setupCounts };
 }
