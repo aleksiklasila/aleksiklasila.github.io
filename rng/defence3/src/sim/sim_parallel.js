@@ -223,6 +223,8 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
     // in aggro range or -1, cbTick = t) and hostile structures alone (summed
     // area, as mv.hostile).
     const CBT = R['unit.cbT'], CBTK = R['unit.cbTick'], HSS = R['mv.hstruct'], CHS = R['unit.mvChs'], RNG = R['unit.cbRange'];
+    // (The combat scan's crowd flag: arriving in a crowd, flow mode.)
+    const CWN = R['unit.cwNear'], CWT = R['unit.cwTick'], CWD = R['unit.cwDense'];
     // Parked idle workers' version checks (worker.js _workerWorkHash): the
     // table, its layout (P[22..27]) and the healer candidates' generation (P[28]).
     const WKV = R['wk.ver'], WKTY = R['unit.wkType'], WKD = R['unit.wkD'], WKOX = R['unit.wkOx'], WKOY = R['unit.wkOy'], WKTW = R['unit.wkTwice'];
@@ -427,13 +429,28 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
             // it is (not all of a big group fit on one tile).
             // (As _followNavNode, with its last distance, unit.mvNavLD: the
             // arrival itself is Unit.update's.)
+            // Waiting in a crowd (mvNavLD -2 - dest, see Unit._followNavNode):
+            // still, but for its look every 16 ticks (by id: on when the crowd
+            // around thinned out) and a try every 64.
+            if (NLD[s] === -2 - dk) {
+                const look = ((t + id) & 15) === 0;
+                if (!look || (((t + id) & 63) !== 0 && !(CWT[s] === t && CWD[s] < 9))) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
+                NLD[s] = -1;
+            }
+            // (Further out, up to 64 tiles: held back beside an idle or
+            // waiting unit of its own, cwNear, it waits: a big crowd settles
+            // outward, and goes on as it thins.)
             let navLD = -1;
-            if ((f & 128) === 0 && Math.abs(dx0 - gx) <= 8 && Math.abs(dy0 - gy) <= 8) {
+            if ((f & 128) === 0 && Math.abs(dx0 - gx) <= 64 && Math.abs(dy0 - gy) <= 64) {
                 const ex = dx0 * tile + 16 - x, ey = dy0 * tile + 16 - y, now = Math.sqrt(ex * ex + ey * ey), last = NLD[s];
                 let es = SPD[s];
                 if (FRZ[s] > 0) es *= 0.5;
                 if (SND[s] > 0) es *= 0.5;
-                if (last >= 0 && last - now < es * 0.3) { ON[s] = 0; continue; }
+                const near = Math.abs(dx0 - gx) <= 8 && Math.abs(dy0 - gy) <= 8;
+                if (last >= 0 && last - now < es * 0.3) {
+                    if (near) { ON[s] = 0; continue; }
+                    if (CWT[s] === t && CWN[s] === 1) { NLD[s] = -2 - dk; PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
+                }
                 navLD = now;
             }
             // The look-ahead from this tile (cached per tile: a pure
@@ -1564,9 +1581,34 @@ SIM_KERNELS[SIM_KERNEL_COMBAT_SCAN] = function (R, P, chunk) {
     const t = P[2] | 0, CW = P[3] | 0, CH = P[4] | 0, tile = P[5], ep = P[6] | 0, players = P[7] | 0, cmdIdle = P[8], cmdAM = P[9];
     const B = P[10] | 0, bc = P[11] | 0, br = P[12] | 0, absent = P[13], cs = P[14] | 0, cws = tile * cs;
     const stride = bc + 1, plane = stride * (br + 1);
+    const CWN = R['unit.cwNear'], CWT = R['unit.cwTick'], CWD = R['unit.cwDense'], NLDS = R['unit.mvNavLD'], cmdMove = P[17], CMDS = CMD;
     for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) {
         if (OUT[s] !== 0 || DEAD[s] || SEP[s] === absent) continue;
         const cmd = CMD[s];
+        // Moving (or attack-moving): whether an idle or waiting (mvNavLD at
+        // most -2) unit of its owner stands in its tile or one beside it, and
+        // how many units are listed in those tiles (the index: the tick's start).
+        // (Only near a group's destination or waiting does it matter:
+        // mvNavLD at least 0 or at most -2; -1 elsewhere.)
+        if ((cmd === cmdMove || cmd === cmdAM) && NLDS[s] !== -1) {
+            const own = OWN[s] | 0, gx = Math.floor(X[s] / cws), gy = Math.floor(Y[s] / cws);
+            let near = 0, dense = 0;
+            for (let ty = gy - 1; ty <= gy + 1; ty++) {
+                if (ty < 0 || ty >= CH) continue;
+                for (let tx = gx - 1; tx <= gx + 1; tx++) {
+                    if (tx < 0 || tx >= CW) continue;
+                    const k = ty * CW + tx;
+                    if (rst[k] !== ep) continue;
+                    dense += rc[k];
+                    if (near) continue;
+                    for (let e = rs[k], e1 = e + rc[k]; e < e1; e++) {
+                        const q = es[e];
+                        if (q >= 0 && q !== s && !DEAD[q] && (OWN[q] | 0) === own && (CMDS[q] === cmdIdle || NLDS[q] <= -2)) { near = 1; break; }
+                    }
+                }
+            }
+            CWN[s] = near; CWT[s] = t; CWD[s] = dense > 65535 ? 65535 : dense;
+        }
         if (cmd !== cmdIdle && cmd !== cmdAM) continue;
         const owner = OWN[s] | 0, r = RNG[s];
         if (!(owner >= 0 && owner < players) || !(r > 0)) continue;

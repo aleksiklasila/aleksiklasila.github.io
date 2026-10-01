@@ -52,6 +52,13 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // The combat scan (SIM_KERNEL_COMBAT_SCAN): its aggro range (pixels),
     // and at tick cbTick the nearest visible enemy's slot (-1 none).
     ['cbRange', Float64Array, 1], ['cbT', Int32Array, 1], ['cbTick', Int32Array, 1],
+    // A moving unit with an idle or waiting unit of its owner in its tile or
+    // one beside it at the tick's start (cwNear 1) as of tick cwTick (the
+    // combat scan): waiting in a crowd (see NAV_CROWD_TILES).
+    ['cwNear', Uint8Array, 1], ['cwTick', Int32Array, 1],
+    // (And the units listed in its 3x3 tiles, capped: a waiting unit goes
+    // on once that thins out.)
+    ['cwDense', Uint16Array, 1],
     // Flow mode: the tick its route may start (see navFieldReadyTick).
     ['mvReady', Int32Array, 1],
     // Attack hold (mvOn 3; see simMoveTryHold): the target's slot and id,
