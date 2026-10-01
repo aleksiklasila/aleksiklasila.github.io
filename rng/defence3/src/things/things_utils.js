@@ -584,10 +584,6 @@ function _thingStatsPhase(item, intervalTicks) {
     return seed % intervalTicks;
 }
 
-function _isThingStatsDueThisTick(item, intervalTicks, tick) {
-    return intervalTicks <= 1 || (tick + _thingStatsPhase(item, intervalTicks)) % intervalTicks === 0;
-}
-
 let _thingStatsRefreshStamp = 0;
 
 function recalculateThingPrecomputedStats() {
@@ -618,27 +614,53 @@ function recalculateThingPrecomputedStats() {
     _forEachStridedUnit(intervalTicks, tick, refreshUnit);
     if (selectedUnitSet) for (let u of selectedUnitSet) if (_isSelectionStatsRefreshDue(u, selectionSize)) refreshUnit(u);
 
-    // Buildings can sit in more than one list (a barrack is also a cell
-    // item); a stamp refreshes each at most once per call.
+    // Buildings and floor items: those due this tick (their phase bucket),
+    // new ones (no stats yet) and, single player, the selection; in tile
+    // order, a stamp refreshing each at most once per call.
     let stamp = ++_thingStatsRefreshStamp;
     let processThing = (item) => {
         if (!item || item.dead || item._thingStatsRefreshStamp === stamp) return;
-        let due = !(item.preComputed && Number.isFinite(item.preComputed.maxEnergy)) || _isThingStatsDueThisTick(item, intervalTicks, tick);
-        if (!due && selectedEntitySet && selectedEntitySet.has(item)) due = _isSelectionStatsRefreshDue(item, selectionSize);
-        if (!due) return;
         item._thingStatsRefreshStamp = stamp;
         _refreshThingPrecomputedStats(item);
     };
-    for (let t of towers) processThing(t);
-    for (let b of barracks) processThing(b);
-    for (let s of collectorSpawners) processThing(s);
-
-    // Cell items in row-major order, as a scan of every tile would visit them.
-    for (let item of getCellItemsRowMajor()) {
-        let cell = grid[item.gy] && grid[item.gy][item.gx];
-        if (!cell || cell.item !== item) continue;
-        processThing(item);
+    for (const item of _thingStatsDue(intervalTicks, tick)) processThing(item);
+    if (selectedEntitySet) for (let item of selectedEntitySet) {
+        if (item && !(item instanceof Unit) && _isSelectionStatsRefreshDue(item, selectionSize)) processThing(item);
     }
+}
+
+// The cells' items (buildings, floor items) by refresh phase: per phase
+// tile -> item, kept from the tile entity journal (made anew when the tile
+// index was rebuilt); items placed since the last call that have no stats
+// yet are due at once.
+let _thingPhaseBuckets = null;
+function _thingStatsDue(intervalTicks, tick) {
+    let B = _thingPhaseBuckets;
+    const changes = B && B.interval === intervalTicks && B.w === GRID_W && B.h === GRID_H ? tileEntityChangesSince(B.cursor) : null;
+    const due = [];
+    const add = (t, e) => {
+        const p = _thingStatsPhase(e, intervalTicks);
+        B.buckets[p].set(t, e); B.phaseOf.set(t, p);
+        if (!(e.preComputed && Number.isFinite(e.preComputed.maxEnergy))) due.push(e);
+    };
+    if (changes === null) {
+        B = _thingPhaseBuckets = { interval: intervalTicks, w: GRID_W, h: GRID_H, cursor: { epoch: -1, pos: 0 },
+            buckets: Array.from({ length: intervalTicks }, () => new Map()), phaseOf: new Map() };
+        tileEntityChangesSince(B.cursor);
+        for (const e of _activeTileEntities) {
+            if (!e || getTileEntityRef(e.gx, e.gy) !== e) continue;
+            const cell = grid[e.gy] && grid[e.gy][e.gx];
+            if (cell && cell.item === e) add(e.gy * GRID_W + e.gx, e);
+        }
+    } else for (const t of changes) {
+        const p = B.phaseOf.get(t);
+        if (p !== undefined) { B.buckets[p].delete(t); B.phaseOf.delete(t); }
+        const gx = t % GRID_W, gy = (t - gx) / GRID_W, e = getTileEntityRef(gx, gy), cell = grid[gy] && grid[gy][gx];
+        if (e && cell && cell.item === e) add(t, e);
+    }
+    for (const e of B.buckets[(intervalTicks - tick % intervalTicks) % intervalTicks].values()) due.push(e);
+    due.sort((a, b) => (a.gy * GRID_W + a.gx) - (b.gy * GRID_W + b.gx));
+    return due;
 }
 
 function _effectiveStatsRadiusPx(u) {
@@ -1109,7 +1131,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             b.buildEnabled = useDefaultBuild;
             b.level = 0; b.effectiveLevel = 0; b.potentialEffectiveLevel = 0;
             updateItemTextCache(b);
-            barracks.push(b);
+            barracks.push(b); barracksChanged();
             grid[gy][gx].item = b;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, b);
@@ -1128,7 +1150,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            collectorSpawners.push(s);
+            collectorSpawners.push(s); collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1147,7 +1169,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            collectorSpawners.push(s);
+            collectorSpawners.push(s); collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1166,7 +1188,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            collectorSpawners.push(s);
+            collectorSpawners.push(s); collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1186,7 +1208,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            collectorSpawners.push(s);
+            collectorSpawners.push(s); collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1205,7 +1227,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            collectorSpawners.push(s);
+            collectorSpawners.push(s); collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1224,7 +1246,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            collectorSpawners.push(s);
+            collectorSpawners.push(s); collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1270,7 +1292,7 @@ function destroyBuilding(building) {
         markLaserConnectionsDirty();
     } else if (building instanceof Barrack || (building.type === 'barrack')) {
         let idx = barracks.indexOf(building);
-        if (idx !== -1) barracks.splice(idx, 1);
+        if (idx !== -1) { barracks.splice(idx, 1); barracksChanged(); }
         clearTileEntity(building.gx, building.gy, building);
         grid[building.gy][building.gx].item = null;
         grid[building.gy][building.gx].owner = -1;
@@ -1278,7 +1300,7 @@ function destroyBuilding(building) {
         recalculateAdjacency();
     } else if (building instanceof CollectorSpawner || building instanceof AstarSpawner || building instanceof SalvagerSpawner || building instanceof BuilderSpawner || building instanceof HealerSpawner || building instanceof ResearchSpawner) {
         let idx = collectorSpawners.indexOf(building);
-        if (idx !== -1) collectorSpawners.splice(idx, 1);
+        if (idx !== -1) { collectorSpawners.splice(idx, 1); collectorSpawnersChanged(); }
         clearTileEntity(building.gx, building.gy, building);
         grid[building.gy][building.gx].item = null;
         grid[building.gy][building.gx].owner = -1;
@@ -1512,8 +1534,9 @@ function recomputePlayerPopCaps() {
     else _popCapScratchByOwner.fill(0);
     let popByOwner = _popCapScratchByOwner;
 
-    // Single pass over occupied tiles, in grid order: avoid O(players * grid) work.
-    for (let item of getCellItemsRowMajor()) {
+    // The houses (kept per type from the tile entity journal; integer sums,
+    // so their order does not matter).
+    for (let item of (typeof _cellItemsOfType === 'function' ? _cellItemsOfType('house') : getCellItemsRowMajor())) {
         let cell = grid[item.gy] && grid[item.gy][item.gx];
         if (!cell || cell.item !== item || item.type !== 'house') continue;
         let owner = cell.owner;

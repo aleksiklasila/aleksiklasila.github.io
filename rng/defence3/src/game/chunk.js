@@ -78,11 +78,7 @@ let spatialEpoch = 1;
 // Called after every move: the common case (same tile, owner and buckets)
 // is one tile computation and three compares.
 function updateUnitSpatial(u) {
-    let fx = u.x / TILE, fy = u.y / TILE;
-    let gx = Math.floor(fx), gy = Math.floor(fy);
-    // Its +-0.3 tile vision window follows the zone of the tile it is in.
-    let rx = fx - gx, ry = fy - gy;
-    let zone = (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
+    let gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
     if (!(gx >= 0)) gx = 0; else if (gx >= GRID_W) gx = GRID_W - 1;
     if (!(gy >= 0)) gy = 0; else if (gy >= GRID_H) gy = GRID_H - 1;
     let tile = gy * GRID_W + gx;
@@ -91,57 +87,39 @@ function updateUnitSpatial(u) {
     if (c) {
         const s = u._si;
         if (c.spEpoch[s] === spatialEpoch && c.spOwner[s] === c.owner[s] && c.sepKey[s] !== SIM_SEP_ABSENT) {
-            if (tile === c.spTile[s]) spatialSlotZone(c, s, gx, gy, zone, tile);
-            else spatialSlotMove(c, s, gx, gy, zone, tile);
+            if (tile !== c.spTile[s]) spatialSlotMove(c, s, gx, gy, tile);
             return;
         }
-    } else if (tile === u._spatialTile && u._spatialEpoch === spatialEpoch && u._spatialOwner === u.owner) {
-        if (zone !== u._spatialZone) { u._spatialZone = zone; visCoverOnUnitSpatialChanged(u); }
-        return;
-    }
-    u._spatialZone = zone;
+    } else if (tile === u._spatialTile && u._spatialEpoch === spatialEpoch && u._spatialOwner === u.owner) return;
     _moveUnitSpatial(u, gx, gy, tile);
 }
 
 // updateUnitSpatial for a unit by its slot, from the columns (x, y).
 function spatialSlotUpdate(c, s) {
-    const fx = c.x[s] / TILE, fy = c.y[s] / TILE;
-    let gx = Math.floor(fx), gy = Math.floor(fy);
-    const rx = fx - gx, ry = fy - gy;
-    const zone = (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
+    let gx = Math.floor(c.x[s] / TILE), gy = Math.floor(c.y[s] / TILE);
     if (!(gx >= 0)) gx = 0; else if (gx >= GRID_W) gx = GRID_W - 1;
     if (!(gy >= 0)) gy = 0; else if (gy >= GRID_H) gy = GRID_H - 1;
     const tile = gy * GRID_W + gx;
     if (c.spEpoch[s] === spatialEpoch && c.spOwner[s] === c.owner[s] && c.sepKey[s] !== SIM_SEP_ABSENT) {
-        if (tile === c.spTile[s]) spatialSlotZone(c, s, gx, gy, zone, tile);
-        else spatialSlotMove(c, s, gx, gy, zone, tile);
+        if (tile !== c.spTile[s]) spatialSlotMove(c, s, gx, gy, tile);
         return;
     }
     const u = _simUnitState.owners[s];
     if (u && !u.dead) updateUnitSpatial(u);
 }
 
-// The slot versions (unit state columns `c`, slot `s`) for an indexed unit
-// whose owner is unchanged: nothing is read from the unit object, so the
-// movement kernel's events cost no cache misses on it.
-// Same tile, window zone `zone`: a zone whose window covers the same areas
-// keeps the registered one (its mask is in the columns).
-function spatialSlotZone(c, s, gx, gy, zone, tile) {
-    if (zone === c.spZone[s] || ((c.mvZmask[s] >> zone) & 1) !== 0) return;
-    c.spZone[s] = zone;
-    if (!visCoverSlotWindow(c, s, c.x[s], c.y[s], tile * 9 + zone)) visCoverOnUnitSpatialChanged(_simUnitState.owners[s]);
-    c.mvZmask[s] = _simMoveZoneMask(gx, gy, zone);
-}
-// Another tile (chunk counts, area, key, window).
-function spatialSlotMove(c, s, gx, gy, zone, tile) {
+// The slot version (unit state columns `c`, slot `s`) for an indexed unit
+// whose owner is unchanged, into another tile (chunk counts, area, key):
+// nothing is read from the unit object, so the movement kernel's events
+// cost no cache misses on it.
+function spatialSlotMove(c, s, gx, gy, tile) {
     const chunkKey = CHUNK_SIZE === 1 ? tile : Math.floor(gy / CHUNK_SIZE) * CHUNKS_W + Math.floor(gx / CHUNK_SIZE);
     const oldKey = c.sepKey[s], owner = c.spOwner[s];
     if (oldKey !== chunkKey) { _spatialCountSlot(c, s, oldKey, owner, -1); _spatialCountSlot(c, s, chunkKey, owner, 1); c.sepKey[s] = chunkKey; }
     const row = areaIdGrid[gy], area = row ? row[gx] : -1;
     c.spArea[s] = area >= 0 ? area : -1;
-    c.spTile[s] = tile; c.spZone[s] = zone;
-    if (!visCoverSlotWindow(c, s, c.x[s], c.y[s], tile * 9 + zone)) visCoverOnUnitSpatialChanged(_simUnitState.owners[s]);
-    c.mvZmask[s] = _simMoveZoneMask(gx, gy, zone);
+    c.spTile[s] = tile;
+    if (!visCoverSlotWindow(c, s)) visCoverOnUnitSpatialChanged(_simUnitState.owners[s]);
 }
 function _spatialCountSlot(c, s, chunkKey, owner, delta) {
     _spatialCountAdd(chunkKey, owner, c.spType[s], delta);
@@ -198,7 +176,6 @@ function _moveUnitSpatial(u, gx, gy, tile) {
     u._spatialEpoch = spatialEpoch;
     simUnitSetSepKey(u, chunkKey, u.isFlying ? 1 : (u.unitType === 'mole' ? 2 : 0));
     simMoveDisarm(u);
-    if (u._us) u._us.mvZmask[u._si] = _simMoveZoneMask(gx, gy, u._spatialZone);
     visCoverOnUnitSpatialChanged(u);
 }
 
@@ -211,14 +188,12 @@ function removeUnitSpatial(u) {
     u._spatialEpoch = 0;
     simUnitSetSepKey(u, SIM_SEP_ABSENT, 0);
     simMoveDisarm(u);
-    if (u._us) u._us.mvZmask[u._si] = 0;
     if (indexed) visCoverOnUnitSpatialChanged(u);
 }
 
 // The area layout was rebuilt (new area buckets): every indexed unit joins
 // the bucket of its tile's area, in id order.
 function rebuildUnitAreaBuckets() {
-    if (typeof resetUnitZoneMasks === 'function') resetUnitZoneMasks();
     for (let u of units) {
         if (!u || u._spatialEpoch !== spatialEpoch || u._spatialKey === undefined) continue;
         let t = u._spatialTile, gx = t % GRID_W, gy = (t - gx) / GRID_W;

@@ -23,12 +23,20 @@ is next. Newest entries first within each section.
   `PROFILE_RANGE=a,b PROFILE_OUT=file.cpuprofile` for a CPU profile,
   `node .claude/profsum.cjs file.cpuprofile [subtree]` to read it.
 - Large-world paths have unit-count thresholds (`SPATIAL_PARALLEL_MIN_UNITS`,
-  `SNAP_HASH_KERNEL_MIN_UNITS`, `EFF_STATS_KERNEL_MIN_UNITS`,
-  `VIS_HELD_KERNEL_MIN`): the small test worlds never reach them, so run the
-  chaos/patch/equivalence tests also with
-  `CHAOS_SIM_EVAL="SPATIAL_PARALLEL_MIN_UNITS = 0; SNAP_HASH_KERNEL_MIN_UNITS = 0; EFF_STATS_KERNEL_MIN_UNITS = 0; VIS_HELD_KERNEL_MIN = 0"`
+  `SEPARATION_SLOT_MIN_UNITS`, `SNAP_HASH_KERNEL_MIN_UNITS`,
+  `EFF_STATS_KERNEL_MIN_UNITS`): the small test worlds never reach them, so
+  run the chaos/patch/equivalence tests also with
+  `CHAOS_SIM_EVAL="SPATIAL_PARALLEL_MIN_UNITS = 0; SEPARATION_SLOT_MIN_UNITS = 0; SNAP_HASH_KERNEL_MIN_UNITS = 0; EFF_STATS_KERNEL_MIN_UNITS = 0"`
   (every peer) and, for the equivalence test, `HOST_SIM_EVAL=...` (host
   only: kernel path vs the guest's object path).
+- More tickbench diagnostics: `SUBPHASES=a,b,...` (time any global
+  functions as phases), `WMOVESTAT=1` (workers in moving states that ran
+  `Unit.update`, by why), `WAKESTAT=1` (idle worker wakes, with the
+  exact sub-reason), `EVAL="$(cat probe.js)" AFTER='expr'` for ad-hoc
+  probes. A kernel's hand-back sites can be counted by re-evaluating it with
+  counters (run without HELPERS so kernels run on the simulation thread).
+  `PROFILE_RANGE` counts absolute ticks: the timed run starts around tick
+  70 on the 1000 map (use e.g. 130,150); the profile holds both peers.
 
 ## Determinism rules learned (keep them)
 
@@ -54,6 +62,89 @@ is next. Newest entries first within each section.
   caches or pools: only the peer that shows a unit runs it.
 
 ## Session log
+
+### 2026-10-01 (sixth round) — one tick path: separation job, visibility recompute, workers
+
+User direction (see the plan, "Fifth refinement"): the tick path is one
+parallel path (move, turn, commit), O(1) per entity; every decision,
+search, reroute and transfer runs in background layers at fixed cadences;
+no pathfinding of any kind on the tick path; approximations of a few ticks
+are fine when rates hold on average; moving eventually beats never moving.
+
+1. Separation contacts are a lane-0 background job (`separationStart`
+   after the status pre-pass, from tick-start positions; prepare marks
+   movers by the `sepMov` column written by the finish kernel);
+   `runUnitSeparationPass` waits and commits. Background jobs have two
+   lanes (0 same-tick, 1 long: navigation builds).
+2. The unit pass walks an activity list: candidates (no kernel output, or
+   held/chasing) listed in index order, each 64-unit block's run walked as
+   a rotation from its start step (identical order, checked against the
+   old walk on random inputs).
+3. Visibility: units' coverage is recomputed every tick at
+   `syncVisibilityCoverage`: `SIM_KERNEL_VIS_SEED` (28, replaces
+   VIS_HELD) marks each unit's window areas with its steps (atomic max,
+   stamped), then per player a bucket spread over the area graph; the
+   difference from last tick counts once per area in `cover` (buildings
+   keep their incremental ring counts). Unit hooks only keep the unit's
+   parameters (vsGen/vsR/vsP1/vsP2/vsA columns). Removed: the unit-phase
+   hold for units, `visCoverSlotWindow` work, window zones (spZone,
+   mvZmask, zone kernel outputs 2/8), vsList/vsHeld columns. Measured on
+   the 1000 map: 5.4k seed areas per player, ~6k covered, 120k areas.
+4. Workers: (a) while the transfer cooldown runs `updateWorkerAI` does
+   nothing (player moves excepted) and a standing worker is parked until
+   it ends (`simMoveTryParkWork`); walking workers skip check-tick
+   hand-backs meanwhile. (b) `WORKER_MOVE_CHECK_TICKS` 8 -> 32. (c)
+   Workers on A* paths are armed in path mode (window ends before a tile
+   the worker may not stand on; check ticks in path mode). (d) Routing is
+   flow navigation only: `_requestWorkerPath` = `navPathTo`, spawner
+   routes = nearest spawner + `navPathTo` (no geometric fallback, no
+   route cache, no A* or budget fallbacks; manual-move rebuilds and
+   blocked-assign moves use nav). (e) On an unreachable flow a worker
+   stands (kernel and `_followNavNode`) instead of "arriving" and
+   rerouting every tick (the probe found ~100k such AI runs in 3 s of
+   ACTIVE: approach tile 4+ away, flow step none). (f) The spawner type
+   index is rebuilt only when `collectorSpawnersVersion` changes; the
+   salvage-mark lists when marks or tile entities change (both reset on
+   every peer at a resync).
+5. Flow detour: a flow step into a wall the navigation predates (a building
+   since its last build) goes to the open side neighbour nearest the tile
+   the flow leads to past it (`simNavDetour`, kernel and
+   `_followNavNode`). Before, ~8k combat units and ~2.6k workers a tick
+   were handed back for this in ACTIVE. Walled in on all four sides: it
+   stands (kernel too). A flow step into a wall slides along it (x, else
+   y, else stands: `simFlowSlide`, both paths), so flow movers never need
+   the serial push-out (which searched and dropped the path).
+6. Unreachable flows: a worker more than a tile from its destination
+   stands (within a tile it has arrived: a builder inside its own site);
+   others arrive as before.
+7. Idle workers: the periodic search is every 1.5 s (was 0.5 s); a parked
+   idle worker pushed off its tile is no longer woken (the version hash is
+   computed where it stands; an origin that is the worker itself is now
+   the unit object, `wkTwice` 0, and follows it; `wkTile` removed).
+   Idle combat units' safety wake every 100 ticks (was 20; the kernel
+   watches their aggro box every tick).
+8. Searches: salvagers look at marked structures in their search box only
+   (buckets) and no longer build a Set of every spawner per search
+   (`_collectorSpawnerSet`, by membership version); the owned queue
+   spawners index follows `barracksVersion`/`collectorSpawnersVersion`.
+9. Building layer: statuses of buildings and floor items run only for an
+   active set (`thingStatusWake` from status effects and damage, plus a
+   sweep of a TICK_RATE-th of the items a tick with their upkeep share;
+   made anew on every peer at a resync); thing stats refresh from phase
+   buckets kept from the tile entity journal (due bucket + new things, in
+   tile order) instead of a walk over every building; quiet barracks and
+   spawners (nothing queued, timer at rest, no status; not research) skip
+   their update.
+10. Hashing: the per-slice building/floor item/mine lists are kept per tile
+    from the tile entity journal (were rebuilt on every tile index change,
+    ~13 ms a tick in ACTIVE).
+
+Measured: base p50 290 -> 223 ms (gameTick mean 292 -> 200: separation
+53 -> 17, simMoveRun 59 -> 34, visibility 35 -> 12, unit pass 32 -> 25);
+ACTIVE p50 430 -> 377 ms (unit pass 171 -> 111). Remaining ACTIVE worker
+AI (profile, 64 ms a tick per peer): searches (healer queues 25%,
+collectors 19%, builders 18%, researchers 10%, salvagers 9%), spawner
+lookups, a gather ~0.9 ms each.
 
 ### 2026-10-01 (fourth round) — siege diagnosis, shrines
 
@@ -378,6 +469,15 @@ idle combat 51 / 5667, firing 46 / 9026), building update-order sorting 58,
 simMoveRun 51, resync 44, towers 35.
 
 ### Next steps (in order)
+
+Current order (sixth round; the plan's "Fifth refinement" has the
+details): opportunity tables for idle searches; combat units moving
+unarmed (`c1`) and remaining hand-backs as mover events; movement orders
+snapshotted and the object movement code removed (one path); worker
+logistics as a typed background job; hashing as an L1 job; building layer
+at K-tick cadence; towers/projectiles (J1/J2); closest-reachable routing.
+Run the full suite on a snapshot copy after each batch. The list below is
+the older one, kept for its details.
 
 0. Run the full suite on the third round's changes before anything else:
    `node tests/run-regressions.cjs 4 --filter="multiplayer-(chaos|desync|snapshot|patch|matrix|scenarios|action-fuzz|cross|corruption|border|extremes|host-mig|late)|shared-|sim-frame|parallel|kernel-object|laser|worker|collector|drive|research|spawner|combat|structure|battle|spatial-index|deterministic-sort" --output=../.reg.json`

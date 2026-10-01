@@ -8,6 +8,7 @@ let RESOURCE_COLLECTOR_UNIT_KEYS=['collector','astar_collector'], units=[], coll
 const _resolveMovementProfile=()=>null;
 const _thingTickX=t=>t.x, _thingTickY=t=>t.y, _unitTickX=t=>t.x, _unitTickY=t=>t.y;
 const simSharedArray=(T,n)=>new T(n), simParallelBind=()=>{};
+const navPathTo=(u,x,y)=>[{x,y,nav:1,ready:0}];
 ${source}
 return { units, spawners:collectorSpawners, set:_setWorkerTarget, clear:_clearWorkerTarget,
  conflict:_findConflictingWorkerOnTargetTile, tile:_getWorkerTargetTileIndex, reset:_invalidateWorkerTargetLoadCache,

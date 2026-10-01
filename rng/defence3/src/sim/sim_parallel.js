@@ -20,9 +20,11 @@ const SIM_PAR_SHARED = typeof SharedArrayBuffer === 'function' && typeof Atomics
 
 // Control words.
 const SIM_PAR_GEN = 0, SIM_PAR_KERNEL = 1, SIM_PAR_NEXT = 2, SIM_PAR_TOTAL = 3, SIM_PAR_DONE = 4, SIM_PAR_REGVER = 5, SIM_PAR_ACTIVE = 6;
-// The background job (simParallelBackground): its kernel, chunk count, done
-// count, bindings version and ticket counter (job id << 24 | next chunk).
-const SIM_PAR_BG_KERNEL = 8, SIM_PAR_BG_TOTAL = 9, SIM_PAR_BG_DONE = 10, SIM_PAR_BG_REGVER = 11, SIM_PAR_BG_NEXT = 12;
+// Background jobs (simParallelBackground), one per lane (lane 0: the tick's
+// own jobs, taken first; lane 1: long jobs such as a navigation build): its
+// kernel, chunk count, done count, bindings version and ticket counter (job
+// id << 24 | next chunk), at SIM_PAR_BG_BASE + lane * 8.
+const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 2;
 
 // A typed array in shared memory when helpers may use it.
 function simSharedArray(Type, n) {
@@ -33,8 +35,12 @@ function simSharedArray(Type, n) {
 const _simParReg = {};
 let _simParRegVer = 0;
 const _simParams = simSharedArray(Float64Array, 64);
-// The background job's parameters (its own: foreground jobs rewrite _simParams).
+// The background jobs' parameters, per lane (their own: foreground jobs
+// rewrite _simParams). _simBgParams: lane 1 (long jobs), _simTickBgParams:
+// lane 0 (the tick's).
+const _simTickBgParams = simSharedArray(Float64Array, 64);
 const _simBgParams = simSharedArray(Float64Array, 64);
+const _simBgParamsByLane = [_simTickBgParams, _simBgParams];
 
 // ---- kernels: (arrays, params, chunk) ----
 const SIM_KERNELS = [];
@@ -43,7 +49,7 @@ const SIM_KERNEL_SPATIAL_HISTOGRAM = 4, SIM_KERNEL_SPATIAL_SCATTER = 5, SIM_KERN
 const SIM_KERNEL_SEPARATION_FINISH = 7, SIM_KERNEL_MOVE = 8, SIM_KERNEL_SEPARATION_YIELD = 9;
 const SIM_KERNEL_INDEX_CLEAR = 10, SIM_KERNEL_INDEX_COUNT = 11, SIM_KERNEL_INDEX_SCATTER = 12, SIM_KERNEL_INDEX_ORDER = 13;
 const SIM_KERNEL_EFF_COUNT = 14, SIM_KERNEL_SNAP_REGION = 19, SIM_KERNEL_COMBAT_SCAN = 20, SIM_KERNEL_INDEX_KEYS = 23;
-const SIM_KERNEL_STATUS = 24, SIM_KERNEL_INDEX_FILL = 25, SIM_KERNEL_INDEX_RUNS = 26, SIM_KERNEL_EFF_UNITS = 27, SIM_KERNEL_VIS_HELD = 28;
+const SIM_KERNEL_STATUS = 24, SIM_KERNEL_INDEX_FILL = 25, SIM_KERNEL_INDEX_RUNS = 26, SIM_KERNEL_EFF_UNITS = 27, SIM_KERNEL_VIS_SEED = 28;
 const SIM_KERNEL_TILE_OWNERS = 29;
 
 // One tick of an armed mover (see simMoveTryArm in unit.js): Unit.update
@@ -56,12 +62,37 @@ const SIM_KERNEL_TILE_OWNERS = 29;
 // counts). Anything else leaves the whole tick to Unit.update: the kernel
 // works on locals and writes nothing then (mvOn 0, mvOut 0). Written:
 // position, speed, path index, node steps taken (mvSpent, charged by the
-// main thread) and mvOut: 1 moved, 2 moved into a window zone covering
-// other areas, 3 moved into another tile, 4 into a wall tile (x, y not yet
-// quantized; the main thread pushes it out).
+// main thread) and mvOut: 1 moved, 3 moved into another tile, 4 into a
+// wall tile (x, y not yet quantized; the main thread pushes it out).
 // Flow navigation (see flownav.js): the next tile from t toward dest, -1
 // none. dfield: the destination field (costs over the box bx, by, bw x bh),
 // used inside its box; elsewhere the cluster hop and the exit's local field.
+// The flow's next tile from (gx, gy) is a wall the navigation predates (a
+// building since its last build; the next build is made in the background):
+// the open side neighbour (4-way) nearest to tile `aim` (where the flow leads
+// past it), the first in N, S, W, E order on ties; -1 none.
+function simNavDetour(WL, W, H, gx, gy, aim) {
+    const ax = aim % W, ay = (aim - ax) / W;
+    let best = -1, bd = Infinity;
+    for (let k = 0; k < 4; k++) {
+        const x = gx + (k === 2 ? -1 : k === 3 ? 1 : 0), y = gy + (k === 0 ? -1 : k === 1 ? 1 : 0);
+        if (x < 0 || y < 0 || x >= W || y >= H || WL[y * W + x]) continue;
+        const ex = ax - x, ey = ay - y, d = ex * ex + ey * ey;
+        if (d < bd) { bd = d; best = y * W + x; }
+    }
+    return best;
+}
+// A ground unit on a flow at tile (gx, gy) whose step would end in tile
+// (ngx, ngy), a wall or off the map (WL): it slides along the wall on one
+// axis, x first, else stands. Returns which components to drop: 0 none,
+// 2 the y step, 1 the x step, 3 both.
+function simFlowSlide(WL, W, H, gx, gy, ngx, ngy) {
+    const ox = ngx >= 0 && ngx < W, oy = ngy >= 0 && ngy < H;
+    if (ox && oy && WL[ngy * W + ngx] === 0) return 0;
+    if (ox && gy >= 0 && gy < H && WL[gy * W + ngx] === 0) return 2;
+    if (oy && gx >= 0 && gx < W && WL[ngy * W + gx] === 0) return 1;
+    return 3;
+}
 function simNavStep(W, C, cw, nc, hop, fields, nodeBase, nodeTile, nodePair, dfield, doff, bx, by, bw, bh, t, dest) {
     if (t === dest) return -1;
     const tx = t % W, ty = (t - tx) / W;
@@ -200,7 +231,7 @@ function _simHostileStructNear(SC, W, H, tile, owner, x, y, r) {
 }
 
 SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
-    const ON = R['unit.mvOn'], OUT = R['unit.mvOut'], FL = R['unit.mvFlags'], ZM = R['unit.mvZmask'];
+    const ON = R['unit.mvOn'], OUT = R['unit.mvOut'], FL = R['unit.mvFlags'];
     const SPD = R['unit.mvSpd'], LANE = R['unit.mvLane'], SPENT = R['unit.mvSpent'], REACH = R['unit.mvReach'];
     const BASE = R['unit.mvBase'], WLEN = R['unit.mvWlen'], PLEN = R['unit.mvPlen'], SCAN = R['unit.mvScan'], FLOOR = R['unit.mvFloor'];
     const NODES = R['unit.mvNodes'], AREA = R['unit.spArea'], WAKE = R['unit.mvWake'], DEADC = R['unit.dead'];
@@ -228,13 +259,13 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
     // Parked idle workers' version checks (worker.js _workerWorkHash): the
     // table, its layout (P[22..27]) and the healer candidates' generation (P[28]).
     const WKV = R['wk.ver'], WKTY = R['unit.wkType'], WKD = R['unit.wkD'], WKOX = R['unit.wkOx'], WKOY = R['unit.wkOy'], WKTW = R['unit.wkTwice'];
-    const WKT = R['unit.wkTile'], WKF = R['unit.wkFail'], WKU = R['unit.wkUntil'], WKSC = R['unit.wkSched'];
+    const WKF = R['unit.wkFail'], WKU = R['unit.wkUntil'], WKSC = R['unit.wkSched'];
     const WKNP = P[22] | 0, WKTYPES = P[23] | 0, WKRW = P[24] | 0, WKRH = P[25] | 0, WKR = P[26] | 0, WKPER = Math.max(1, P[27] | 0), WKHGEN = P[28] | 0;
     const WKWATCH = Math.max(1, P[29] | 0), WKWX = R['unit.wkWx'], WKWY = R['unit.wkWy'];
     const t = P[2] | 0, tr = P[3] | 0, W = P[5] | 0, H = P[6] | 0, tile = P[7], q = P[8];
     const QZ = q;
     const bc = P[9] | 0, br = P[10] | 0, players = P[11] | 0, B = P[14], absent = P[15], WIN = P[16] | 0, BOXSTEPS = P[17] | 0;
-    const wver = P[19] | 0, pad = P[20], wcheck = P[21] | 0, WK = R['unit.mvWk'];
+    const wver = P[19] | 0, pad = P[20], wcheck = P[21] | 0, WK = R['unit.mvWk'], WTC = R['unit.workerTransferCooldown'];
     const stride = bc + 1, plane = stride * (br + 1), maxSide = tile * 0.8;
     for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) {
         OUT[s] = 0;
@@ -249,27 +280,26 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
         if (parked && t >= WAKE[s]) {
             // An idle worker woken for its periodic search (every WKPER
             // ticks by id) stays parked while its search would return at
-            // once: the same work version as at its failed search, in that
-            // backoff, nothing else due, still on the tile it was parked on.
+            // once: the same work version as at its failed search (around
+            // where it stands now, and its search origin), in that backoff,
+            // nothing else due.
             let stay = false;
             if ((FL[s] & 2) && WKV && t < WKSC[s] && t < WKU[s] && ((t + (ID[s] | 0)) % WKPER) === 0) {
-                const gx = Math.floor(X[s] / tile), gy = Math.floor(Y[s] / tile);
-                if (gy * W + gx === WKT[s]) {
-                    const o = OWN[s] | 0;
-                    if (o >= 0 && o < WKNP) {
-                        const span = 1 + WKRW * WKRH, all = (o * WKTYPES) * span, mine = (o * WKTYPES + WKTY[s]) * span, d = WKD[s], tw = WKTW[s];
-                        let h = (Math.imul(WKV[all], 31) + WKV[mine]) | 0;
-                        if (tw & 2) h = (Math.imul(h, 31) + WKHGEN) | 0;
-                        for (let pass = 0; pass < ((tw & 1) ? 2 : 1); pass++) {
-                            const cx = pass ? gx : WKOX[s], cy = pass ? gy : WKOY[s];
-                            for (let ry = Math.max(0, Math.floor((cy - d) / WKR)), ry1 = Math.min(WKRH - 1, Math.floor((cy + d) / WKR)); ry <= ry1; ry++)
-                                for (let rx = Math.max(0, Math.floor((cx - d) / WKR)), rx1 = Math.min(WKRW - 1, Math.floor((cx + d) / WKR)); rx <= rx1; rx++) {
-                                    const r = 1 + ry * WKRW + rx;
-                                    h = (Math.imul(h, 31) + Math.imul(WKV[all + r], 7) + WKV[mine + r]) | 0;
-                                }
-                        }
-                        if (h === WKF[s]) { stay = true; WAKE[s] = Math.min(t + WKPER, WKSC[s]); }
+                const gx = Math.floor(X[s] / tile), gy = Math.floor(Y[s] / tile), o = OWN[s] | 0;
+                if (o >= 0 && o < WKNP) {
+                    const span = 1 + WKRW * WKRH, all = (o * WKTYPES) * span, mine = (o * WKTYPES + WKTY[s]) * span, d = WKD[s], tw = WKTW[s];
+                    let h = (Math.imul(WKV[all], 31) + WKV[mine]) | 0;
+                    if (tw & 2) h = (Math.imul(h, 31) + WKHGEN) | 0;
+                    for (let pass = 0; pass < ((tw & 1) ? 2 : 1); pass++) {
+                        // (An origin that is the worker itself: where it stands.)
+                        const cx = pass || !(tw & 1) ? gx : WKOX[s], cy = pass || !(tw & 1) ? gy : WKOY[s];
+                        for (let ry = Math.max(0, Math.floor((cy - d) / WKR)), ry1 = Math.min(WKRH - 1, Math.floor((cy + d) / WKR)); ry <= ry1; ry++)
+                            for (let rx = Math.max(0, Math.floor((cx - d) / WKR)), rx1 = Math.min(WKRW - 1, Math.floor((cx + d) / WKR)); rx <= rx1; rx++) {
+                                const r = 1 + ry * WKRW + rx;
+                                h = (Math.imul(h, 31) + Math.imul(WKV[all + r], 7) + WKV[mine + r]) | 0;
+                            }
                     }
+                    if (h === WKF[s]) { stay = true; WAKE[s] = Math.min(t + WKPER, WKSC[s]); }
                 }
             }
             if (!stay) { ON[s] = 0; continue; }
@@ -352,10 +382,7 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
             const qx = Number.isFinite(nx) ? Math.round(nx * QZ) / QZ : 0, qy = Number.isFinite(ny) ? Math.round(ny * QZ) / QZ : 0;
             PX[s] = x; PY[s] = y; X[s] = qx; Y[s] = qy;
             const qgx2 = Math.floor(qx / tile), qgy2 = Math.floor(qy / tile);
-            if (qgx2 !== gx || qgy2 !== gy) { OUT[s] = 9; continue; }
-            const rx = qx / tile - gx, ry = qy / tile - gy;
-            const zone = (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
-            OUT[s] = ((ZM[s] >> zone) & 1) === 0 ? 8 : 7;
+            OUT[s] = qgx2 !== gx || qgy2 !== gy ? 9 : 7;
             continue;
         }
         if (ON[s] === 6) {
@@ -406,8 +433,9 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
         }
         if (parked) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
         if ((f & 64) !== 0) {
-            // A worker's check tick: its task looked at (Unit.update).
-            if (WK[s] && ((t + id) | 0) % wcheck === 0) { ON[s] = 0; continue; }
+            // A worker's check tick: its task looked at (Unit.update), unless
+            // its transfer cooldown runs (then it only walks: updateWorkerAI).
+            if (WK[s] && ((t + id) | 0) % wcheck === 0 && !(WTC[s] > 0)) { ON[s] = 0; continue; }
             // Following the flow navigation (flownav.js) toward its
             // destination, steered like _followPathStep.
             const dk = DEST[s], dx0 = dk % W, dy0 = (dk - dx0) / W;
@@ -460,21 +488,35 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
                 n1 = NVN1[s]; n2 = NVN2[s]; far = NVF[s]; open = NVO[s] === 1;
             } else {
                 n1 = simNavStep(W, nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, tl, dk);
-                if (n1 < 0 || WL[n1]) { ON[s] = 0; continue; }
-                // A step across a border that is not to a neighbouring tile (a
-                // bad build): Unit.update.
-                if (Math.abs(n1 % W - gx) + Math.abs(((n1 - n1 % W) / W) - gy) !== 1) { ON[s] = 0; continue; }
-                // On open ground it looks up to 6 tiles ahead (all with open
-                // blocks) and heads straight there: walked as lines, not stairs.
-                far = n1; n2 = -1;
-                open = _simOpenBlock(WL, tl, W, H) && _simOpenBlock(WL, n1, W, H);
-                let cur = n1;
-                for (let k = 1; k < (open ? 6 : 2); k++) {
-                    const nx = simNavStep(W, nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, cur, dk);
-                    if (nx < 0 || WL[nx]) break;
-                    if (k === 1) n2 = nx;
-                    if (!open || !_simOpenBlock(WL, nx, W, H)) break;
-                    far = cur = nx;
+                // No way there: a worker more than a tile away stands (as
+                // _followNavNode), anything else is handed back (it arrives
+                // as near as it gets).
+                if (n1 < 0) { if (WK[s] && (Math.abs(dx0 - gx) > 1 || Math.abs(dy0 - gy) > 1)) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; } ON[s] = 0; continue; }
+                if (WL[n1]) {
+                    // A wall the navigation predates: around it (as
+                    // _followNavNode), toward where the flow leads past it.
+                    let aim = simNavStep(W, nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, n1, dk);
+                    if (!(aim >= 0) || WL[aim]) aim = dk;
+                    n1 = simNavDetour(WL, W, H, gx, gy, aim);
+                    // (Walled in on every side: it stands, as _followNavNode.)
+                    if (n1 < 0) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
+                    far = n1; n2 = -1; open = false;
+                } else {
+                    // A step across a border that is not to a neighbouring tile
+                    // (a bad build): Unit.update.
+                    if (Math.abs(n1 % W - gx) + Math.abs(((n1 - n1 % W) / W) - gy) !== 1) { ON[s] = 0; continue; }
+                    // On open ground it looks up to 6 tiles ahead (all with open
+                    // blocks) and heads straight there: walked as lines, not stairs.
+                    far = n1; n2 = -1;
+                    open = _simOpenBlock(WL, tl, W, H) && _simOpenBlock(WL, n1, W, H);
+                    let cur = n1;
+                    for (let k = 1; k < (open ? 6 : 2); k++) {
+                        const nx = simNavStep(W, nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, cur, dk);
+                        if (nx < 0 || WL[nx]) break;
+                        if (k === 1) n2 = nx;
+                        if (!open || !_simOpenBlock(WL, nx, W, H)) break;
+                        far = cur = nx;
+                    }
                 }
                 NVT[s] = tl; NVV[s] = NM[6]; NVW[s] = wver; NVG[s] = FMETA[dm + 6];
                 NVN1[s] = n1; NVN2[s] = n2; NVF[s] = far; NVO[s] = open ? 1 : 0;
@@ -518,24 +560,27 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
             let spd = SPD[s];
             if (FRZ[s] > 0) spd *= 0.5;
             if (SND[s] > 0) spd *= 0.5;
-            const vx = (dx / dist) * spd, vy = (dy / dist) * spd;
+            let vx = (dx / dist) * spd, vy = (dy / dist) * spd;
+            // Into a wall (on the ground): along it, one axis, else it
+            // stands (simFlowSlide, as _followNavNode).
+            if ((f & 32) === 0) {
+                const sl = simFlowSlide(WALL, W, H, gx, gy, Math.floor((x + vx) / tile), Math.floor((y + vy) / tile));
+                if (sl & 1) vx = 0;
+                if (sl & 2) vy = 0;
+            }
             const nx = x + vx, ny = y + vy;
             const ngx = Math.floor(nx / tile), ngy = Math.floor(ny / tile);
             // Entering another tile is a step (charged like a path node).
             const stepped = ngx !== gx || ngy !== gy;
             PX[s] = x; PY[s] = y; VX[s] = vx; VY[s] = vy; SPENT[s] = stepped ? 1 : 0; FLOOR[s] = tl;
-            if ((f & 32) === 0 && (ngx < 0 || ngy < 0 || ngx >= W || ngy >= H || WALL[ngy * W + ngx])) {
-                X[s] = nx; Y[s] = ny; ON[s] = 0; OUT[s] = 4; continue;
-            }
             const qx = Number.isFinite(nx) ? Math.round(nx * q) / q : 0, qy = Number.isFinite(ny) ? Math.round(ny * q) / q : 0;
             X[s] = qx; Y[s] = qy;
             const qgx = Math.floor(qx / tile), qgy = Math.floor(qy / tile);
-            if (qgx !== gx || qgy !== gy) { OUT[s] = 3; continue; }
-            const rx = qx / tile - gx, ry = qy / tile - gy;
-            const zone = (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
-            OUT[s] = ((ZM[s] >> zone) & 1) === 0 ? 2 : 1;
+            OUT[s] = qgx !== gx || qgy !== gy ? 3 : 1;
             continue;
         }
+        // A worker's check tick, as in flow mode.
+        if (WK[s] && ((t + id) | 0) % wcheck === 0 && !(WTC[s] > 0)) { ON[s] = 0; continue; }
         // The path window (see _simMoveNode): a node it does not hold means
         // the tick needs the path itself.
         const len = PLEN[s], base = BASE[s], wl = WLEN[s], nb = s * WIN;
@@ -649,10 +694,7 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
         const qx = Number.isFinite(nx) ? Math.round(nx * q) / q : 0, qy = Number.isFinite(ny) ? Math.round(ny * q) / q : 0;
         X[s] = qx; Y[s] = qy;
         const qgx = Math.floor(qx / tile), qgy = Math.floor(qy / tile);
-        if (qgx !== gx || qgy !== gy) { OUT[s] = 3; continue; }
-        const rx = qx / tile - gx, ry = qy / tile - gy;
-        const zone = (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
-        OUT[s] = ((ZM[s] >> zone) & 1) === 0 ? 2 : 1;
+        OUT[s] = qgx !== gx || qgy !== gy ? 3 : 1;
     }
 };
 
@@ -660,16 +702,19 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
 // parallel; the commit checks terrain/membership and handles tile crossings
 // with the full swept collision routine. No approximate contact budget.
 // A push that stays in the unit's tile is committed here (fast 1), and
-// fast 2 when the main thread still has work: a window zone covering other
-// areas (see updateUnitSpatial), or a path retry tick of a unit that may be
-// waiting on a fallback path (see runUnitSeparationPass).
+// fast 2 when the main thread still has work: a path retry tick of a unit
+// that may be waiting on a fallback path (see runUnitSeparationPass).
 SIM_KERNELS[SIM_KERNEL_SEPARATION_FINISH] = function (R, P, chunk) {
-    const X = R['unit.x'], Y = R['unit.y'], ZM = R['unit.mvZmask'], ON = R['unit.mvOn'], FL = R['unit.mvFlags'], ID = R['unit.id'];
+    const X = R['unit.x'], Y = R['unit.y'], ON = R['unit.mvOn'], FL = R['unit.mvFlags'], ID = R['unit.id'];
     const PX = R['sep.px'], PY = R['sep.py'], OV = R['sep.ov'], HIT = R['sep.hit'];
     const outX = R['sep.nextX'], outY = R['sep.nextY'], fast = R['sep.fast'];
     const tile = P[2], quant = P[3], contacts = P[4], pushQuant = P[5], t = P[6] | 0, retry = P[7] | 0;
     const WALL = R['mv.wall'], LAYER = R['unit.sepLayer'], GW = P[8] | 0, GH = P[9] | 0;
+    // Whether each unit moved by itself this tick (before the pushes), for
+    // the next tick's separationStart.
+    const SMV = R['unit.sepMov'], PRX = R['unit.prevX'], PRY = R['unit.prevY'];
     for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
+        SMV[i] = X[i] !== PRX[i] || Y[i] !== PRY[i] ? 1 : 0;
         fast[i] = 0;
         const hits = HIT[i];
         if (!hits) continue;
@@ -703,9 +748,7 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION_FINISH] = function (R, P, chunk) {
             continue;
         }
         X[s] = nx; Y[s] = ny;
-        const rx = nx / tile - gx, ry = ny / tile - gy;
-        const zone = (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
-        fast[i] = ((ZM[s] >> zone) & 1) === 0 || ((((t + ID[s]) | 0) % retry) === 0 && !(ON[s] && (FL[s] & 4) === 0)) ? 2 : 1;
+        fast[i] = (((t + ID[s]) | 0) % retry) === 0 && !(ON[s] && (FL[s] & 4) === 0) ? 2 : 1;
     }
 };
 
@@ -774,6 +817,9 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION_PREPARE] = function (R, P, chunk) {
     const sl = R['sep.sl'], sc = R['sep.sc'], sdx = R['sep.sdx'], sdy = R['sep.sdy'];
     const chunkR = R['sep.chunkR'], sole = R['sep.sole'], chunkC = R['sep.chunkC'], box = R['sep.box'];
     const rest = P[2] | 0, t0 = P[3] | 0;
+    // P[4] 1: at the tick's start (separationStart): moved means moved by
+    // itself last tick (unit.sepMov, kept with the unit), not x != prevX.
+    const early = P[4] === 1, SMV = R['unit.sepMov'];
     for (let k = chunk * P[1], end = Math.min(P[0], k + P[1]); k < end; k++) {
         const s0 = eslot[k], key = ekey[k];
         // (Units that died since the index was built take no part.)
@@ -784,7 +830,7 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION_PREPARE] = function (R, P, chunk) {
         sx[k] = x; sy[k] = y; sr[k] = r; so[k] = owner; sid[k] = ID[s] || 0;
         sl[k] = flags[s];
         // Bit 0: takes part this tick; bit 1: moved this tick.
-        const movedHere = x !== PREVX[s] || y !== PREVY[s];
+        const movedHere = early ? SMV[s] === 1 : (x !== PREVX[s] || y !== PREVY[s]);
         sc[k] = (movedHere ? 3 : 0) | (rest <= 1 || ((t0 + ID[s]) | 0) % rest === 0 ? 1 : 0);
         // Exact overlaps leave sideways to the motion; a unit at rest picks
         // a side by id.
@@ -801,7 +847,7 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION_PREPARE] = function (R, P, chunk) {
                 const otherR = Math.max(.1, CR[slot] || RAD[slot] || .1);
                 if (otherR > maxR) maxR = otherR;
                 oneOwner = oneOwner === -2 ? OWNER[slot] : (OWNER[slot] === oneOwner ? oneOwner : -1);
-                if (X[slot] !== PREVX[slot] || Y[slot] !== PREVY[slot]) moved = 1;
+                if (early ? SMV[slot] === 1 : (X[slot] !== PREVX[slot] || Y[slot] !== PREVY[slot])) moved = 1;
                 const ux = X[slot], uy = Y[slot];
                 if (ux < x0) x0 = ux; if (ux > x1) x1 = ux; if (uy < y0) y0 = uy; if (uy > y1) y1 = uy;
             }
@@ -1156,7 +1202,7 @@ function simParallelInit(helperUrl, maxHelpers = null) {
             // A failed helper is not fatal (the worker takes its chunks): keep
             // its error from propagating up to the page's worker as well.
             w.onerror = e => { e.preventDefault(); console.error('[sim helper]', e.message || 'failed to load', e.filename ? `${e.filename}:${e.lineno}` : helperUrl); };
-            w.postMessage({ type: 'init', ctl, params: _simParams, bgParams: _simBgParams, index: i });
+            w.postMessage({ type: 'init', ctl, params: _simParams, bgParams: _simBgParamsByLane, index: i });
             for (let name in _simParReg) w.postMessage({ type: 'bind', name, arr: _simParReg[name], ver: _simParRegVer });
             helpers.push(w);
         } catch (err) { break; }
@@ -1199,44 +1245,46 @@ function simParallelRun(kernel, total) {
 }
 
 // ---- background jobs ----
-// A kernel run whose result is needed later (a navigation build's stages):
-// the helpers take its chunks whenever no foreground job waits for them,
-// the simulation thread none until simParallelBackgroundWait, where it takes
-// what is left and waits for the rest. Its inputs must stay as they are
-// until then (the kernels are pure; its parameters are _simBgParams, set by
-// the caller before this). One at a time: a new one waits for the last.
-// Without helpers it runs at the wait, the same result.
-let _simBg = null, _simBgId = 0;
-function simParallelBackground(kernel, total) {
-    simParallelBackgroundWait();
+// A kernel run whose result is needed later (the tick's separation, a
+// navigation build's stages): the helpers take its chunks whenever no
+// foreground job waits for them (lane 0 before lane 1), the simulation
+// thread none until simParallelBackgroundWait, where it takes what is left
+// and waits for the rest. Its inputs must stay as they are until then (the
+// kernels are pure; its parameters are the lane's, _simBgParamsByLane, set
+// by the caller before this). One per lane at a time: a new one waits for
+// the lane's last. Without helpers it runs at the wait, the same result.
+const _simBg = [null, null];
+let _simBgId = 0;
+function simParallelBackground(kernel, total, lane = 1) {
+    simParallelBackgroundWait(lane);
     if (!(total > 0)) return;
     const pool = _simPool;
     _simBgId = (_simBgId + 1) & 0x7F;
-    _simBg = { kernel, total, id: _simBgId, sync: !pool };
+    _simBg[lane] = { kernel, total, id: _simBgId, sync: !pool };
     if (!pool) return;
-    const ctl = pool.ctl;
-    ctl[SIM_PAR_BG_KERNEL] = kernel; ctl[SIM_PAR_BG_TOTAL] = total; ctl[SIM_PAR_BG_DONE] = 0; ctl[SIM_PAR_BG_REGVER] = _simParRegVer;
-    Atomics.store(ctl, SIM_PAR_BG_NEXT, _simBgId << 24);
+    const ctl = pool.ctl, b = SIM_PAR_BG_BASE + lane * 8;
+    ctl[b + SIM_PAR_BG_KERNEL] = kernel; ctl[b + SIM_PAR_BG_TOTAL] = total; ctl[b + SIM_PAR_BG_DONE] = 0; ctl[b + SIM_PAR_BG_REGVER] = _simParRegVer;
+    Atomics.store(ctl, b + SIM_PAR_BG_NEXT, _simBgId << 24);
     // Idle helpers wake (no new foreground job: the generation stays even).
     Atomics.add(ctl, SIM_PAR_GEN, 2);
     Atomics.notify(ctl, SIM_PAR_GEN);
 }
-function simParallelBackgroundWait() {
-    const J = _simBg;
+function simParallelBackgroundWait(lane = 1) {
+    const J = _simBg[lane];
     if (!J) return;
-    _simBg = null;
-    const fn = SIM_KERNELS[J.kernel];
-    if (J.sync) { for (let c = 0; c < J.total; c++) fn(_simParReg, _simBgParams, c); return; }
-    const ctl = _simPool.ctl;
+    _simBg[lane] = null;
+    const fn = SIM_KERNELS[J.kernel], P = _simBgParamsByLane[lane];
+    if (J.sync) { for (let c = 0; c < J.total; c++) fn(_simParReg, P, c); return; }
+    const ctl = _simPool.ctl, b = SIM_PAR_BG_BASE + lane * 8;
     for (;;) {
-        const v = Atomics.add(ctl, SIM_PAR_BG_NEXT, 1), c = v & 0xFFFFFF;
+        const v = Atomics.add(ctl, b + SIM_PAR_BG_NEXT, 1), c = v & 0xFFFFFF;
         if (c >= J.total) break;
-        fn(_simParReg, _simBgParams, c);
-        Atomics.add(ctl, SIM_PAR_BG_DONE, 1);
+        fn(_simParReg, P, c);
+        Atomics.add(ctl, b + SIM_PAR_BG_DONE, 1);
     }
-    for (let d; (d = Atomics.load(ctl, SIM_PAR_BG_DONE)) < J.total;) Atomics.wait(ctl, SIM_PAR_BG_DONE, d, 5);
+    for (let d; (d = Atomics.load(ctl, b + SIM_PAR_BG_DONE)) < J.total;) Atomics.wait(ctl, b + SIM_PAR_BG_DONE, d, 5);
 }
-function simParallelBackgroundPending() { return !!_simBg; }
+function simParallelBackgroundPending(lane = 1) { return !!_simBg[lane]; }
 
 // ---- a helper's side (sim_helper.js) ----
 function simParallelHelperMain() {
@@ -1277,16 +1325,23 @@ function simParallelHelperMain() {
             Atomics.sub(ctl, SIM_PAR_ACTIVE, 1);
             Atomics.notify(ctl, SIM_PAR_ACTIVE);
             // Missing arrays of the latest jobs: take the messages bringing them.
-            if (regVer < ctl[SIM_PAR_REGVER] || regVer < ctl[SIM_PAR_BG_REGVER]) await nextTask();
+            if (regVer < ctl[SIM_PAR_REGVER] || regVer < ctl[SIM_PAR_BG_BASE + SIM_PAR_BG_REGVER] || regVer < ctl[SIM_PAR_BG_BASE + 8 + SIM_PAR_BG_REGVER]) await nextTask();
             // Background chunks while no foreground job is posted (checked
-            // between chunks). A ticket of another job (posted after this
-            // one's last chunk was taken) is past its end: nothing taken.
-            while (bgParams && Atomics.load(ctl, SIM_PAR_GEN) === seen && regVer >= ctl[SIM_PAR_BG_REGVER]) {
-                const v = Atomics.add(ctl, SIM_PAR_BG_NEXT, 1), c = v & 0xFFFFFF;
-                if (c >= ctl[SIM_PAR_BG_TOTAL]) break;
-                SIM_KERNELS[ctl[SIM_PAR_BG_KERNEL]](_simParReg, bgParams, c);
-                Atomics.add(ctl, SIM_PAR_BG_DONE, 1);
-                Atomics.notify(ctl, SIM_PAR_BG_DONE);
+            // between chunks), lane 0 first. A ticket of another job (posted
+            // after this one's last chunk was taken) is past its end.
+            while (bgParams && Atomics.load(ctl, SIM_PAR_GEN) === seen) {
+                let ran = false;
+                for (let lane = 0; lane < SIM_PAR_BG_LANES && !ran; lane++) {
+                    const b = SIM_PAR_BG_BASE + lane * 8;
+                    if (regVer < ctl[b + SIM_PAR_BG_REGVER]) continue;
+                    const v = Atomics.add(ctl, b + SIM_PAR_BG_NEXT, 1), c = v & 0xFFFFFF;
+                    if (c >= ctl[b + SIM_PAR_BG_TOTAL]) continue;
+                    SIM_KERNELS[ctl[b + SIM_PAR_BG_KERNEL]](_simParReg, bgParams[lane], c);
+                    Atomics.add(ctl, b + SIM_PAR_BG_DONE, 1);
+                    Atomics.notify(ctl, b + SIM_PAR_BG_DONE);
+                    ran = true;
+                }
+                if (!ran) break;
             }
         }
     }
@@ -1432,30 +1487,53 @@ SIM_KERNELS[SIM_KERNEL_EFF_UNITS] = function (R, P, chunk) {
     }
 };
 
-// The coverage hold's end (renderer.js visCoverHoldEnd): per held slot
-// (vis.held), as visCoverSlotWindow: a registered unit (vsGen = P[5],
-// range) whose window, where it is now, covers the same areas (vis.zoneIds,
-// the ids by tile and zone, 0 not known yet) only gets its key (vsA):
-// vis.heldF 0. Dead: 0 (nothing). Anything else: 1 (the caller).
-// P: [0] slots, [1] per job, [2] TILE, [3]/[4] grid, [5] coverage generation.
-SIM_KERNELS[SIM_KERNEL_VIS_HELD] = function (R, P, chunk) {
-    const H = R['vis.held'], F = R['vis.heldF'], ZT = R['vis.zoneIds'], X = R['unit.x'], Y = R['unit.y'], DEAD = R['unit.dead'];
-    const VG = R['unit.vsGen'], VR = R['unit.vsR'], VL = R['unit.vsList'], VA = R['unit.vsA'];
-    const tile = P[2], W = P[3] | 0, Hh = P[4] | 0, gen = P[5] | 0;
-    for (let j = chunk * P[1], end = Math.min(P[0], j + P[1]); j < end; j++) {
-        const s = H[j];
-        if (DEAD[s]) { F[j] = 0; continue; }
+// Units' visibility seeds (renderer.js _visCoverUnits): every live,
+// indexed unit registered this generation with a range (vsGen = P[5], vsR
+// steps) marks the areas under its +-0.3 tile window (ix.agrid: the area of
+// each tile, -1 none) for its player and a watching team (vsP1, vsP2) with
+// the most steps per area: vis.useed[player * A + area] = stamp << 6 |
+// steps (an older stamp is no seed). The first mark of an area this stamp
+// lists it in vis.ulist (from player * A, vis.ucnt[player] entries, in no
+// particular order).
+// P: [0] slots, [1] per job, [2] TILE, [3]/[4] grid, [5] coverage
+// generation, [6] areas, [7] players, [8] stamp, [9] SIM_SEP_ABSENT.
+SIM_KERNELS[SIM_KERNEL_VIS_SEED] = function (R, P, chunk) {
+    const X = R['unit.x'], Y = R['unit.y'], DEAD = R['unit.dead'], SK = R['unit.sepKey'];
+    const VG = R['unit.vsGen'], VR = R['unit.vsR'], V1 = R['unit.vsP1'], V2 = R['unit.vsP2'];
+    const SEED = R['vis.useed'], LIST = R['vis.ulist'], CNT = R['vis.ucnt'], AG = R['ix.agrid'];
+    const tile = P[2], W = P[3] | 0, H = P[4] | 0, gen = P[5] | 0, A = P[6] | 0, np = P[7] | 0, stamp = P[8] | 0, absent = P[9];
+    for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) {
+        if (VG[s] !== gen || DEAD[s] || SK[s] === absent) continue;
+        const r = VR[s];
+        if (r < 0) continue;
         const fx = X[s] / tile, fy = Y[s] / tile;
-        if (!(fx === fx && fy === fy)) { F[j] = 1; continue; }
-        const gx = Math.floor(fx), gy = Math.floor(fy);
-        if (gx < 0 || gy < 0 || gx >= W || gy >= Hh || VG[s] !== gen || VR[s] < 0) { F[j] = 1; continue; }
-        const rx = fx - gx, ry = fy - gy, zx = rx < .3 ? 0 : rx < .7 ? 1 : 2, zy = ry < .3 ? 0 : ry < .7 ? 1 : 2;
-        const id = ZT[(gy * W + gx) * 9 + zx * 3 + zy] - 1;
-        if (id < 0 || id !== VL[s]) { F[j] = 1; continue; }
-        VA[s] = (gy * W + gx) * 9 + zx * 3 + zy;
-        F[j] = 0;
+        if (!(fx > -1e9 && fx < 1e9 && fy > -1e9 && fy < 1e9)) continue;
+        const gx = Math.floor(fx), gy = Math.floor(fy), rx = fx - gx, ry = fy - gy;
+        const x0 = rx < .3 ? gx - 1 : gx, x1 = rx < .7 ? gx : gx + 1, y0 = ry < .3 ? gy - 1 : gy, y1 = ry < .7 ? gy : gy + 1;
+        const p1 = V1[s], p2 = V2[s], val = (stamp << 6) | r;
+        for (let ty = y0; ty <= y1; ty++) {
+            if (ty < 0 || ty >= H) continue;
+            for (let tx = x0; tx <= x1; tx++) {
+                if (tx < 0 || tx >= W) continue;
+                const a = AG[ty * W + tx];
+                if (!(a >= 0 && a < A)) continue;
+                if (p1 >= 0 && p1 < np) _simVisSeed(SEED, LIST, CNT, p1, p1 * A, a, val, stamp);
+                if (p2 >= 0 && p2 < np) _simVisSeed(SEED, LIST, CNT, p2, p2 * A, a, val, stamp);
+            }
+        }
     }
 };
+// The most steps for one player's area (an atomic maximum), listing the
+// area at its first mark of the stamp.
+function _simVisSeed(SEED, LIST, CNT, p, base, a, val, stamp) {
+    const k = base + a;
+    let cur = SEED[k];
+    while (cur < val) {
+        const prev = Atomics.compareExchange(SEED, k, cur, val);
+        if (prev === cur) { if ((cur >> 6) !== stamp) LIST[base + Atomics.add(CNT, p, 1)] = a; return; }
+        cur = prev;
+    }
+}
 
 SIM_KERNELS[SIM_KERNEL_EFF_COUNT] = function (R, P, chunk) {
     const win = R['eff.win'], out = R['eff.out'], data = R['spatial.cplx'];
@@ -1479,10 +1557,18 @@ SIM_KERNELS[SIM_KERNEL_EFF_COUNT] = function (R, P, chunk) {
 // With it, snap.hc[i]: the hash of the unit's column fields (snap.kc: the
 // fields' codes, in utils_snapshot.js SNAP_HASH_UNIT_COLUMNS order), as the
 // generated field hashers mix numbers.
+// P[5] 1 (one slice): each unit of the slice is also summed into its
+// region (snap.acc[region], mod 2^32), the region listed once (snap.list,
+// snap.cnt[0]; snap.stamp: P[8]) - except the units of this rotation's
+// group (id % P[7] === P[6]: their object fields too; snap.rot, cnt[1]),
+// and units without a slot or outside 0..P[9] regions (snap.noslot,
+// cnt[2]), left to the caller.
 const _snapKF64 = new Float64Array(1), _snapKI32 = new Int32Array(_snapKF64.buffer);
 SIM_KERNELS[SIM_KERNEL_SNAP_REGION] = function (R, P, chunk) {
     const SL = R['ix.slots'], X = R['unit.x'], Y = R['unit.y'], out = R['snap.reg'], ts = P[2];
     const HC = R['snap.hc'], KC = R['snap.kc'];
+    const acc = P[5] === 1, ACC = R['snap.acc'], STAMP = R['snap.stamp'], LIST = R['snap.list'], ROTL = R['snap.rot'], NOSL = R['snap.noslot'], CNT = R['snap.cnt'], ID = R['unit.id'];
+    const rot = P[6] | 0, groups = P[7] | 0, stamp = P[8] | 0, rmax = P[9] | 0;
     // (In SNAP_HASH_UNIT_COLUMNS order.)
     const cols = KC ? [R['unit.owner'], X, Y, R['unit.vx'], R['unit.vy'], R['unit.energy'], R['unit.commandState'], R['unit.dead'], R['unit.attackTimer'], R['unit.attackFlash'],
         R['unit.teleportHideTicks'], R['unit.poisoned'], R['unit.burning'], R['unit.frozen'], R['unit.wet'], R['unit.sandy'], R['unit.watched'], R['unit.workerTransferCooldown']] : null;
@@ -1490,6 +1576,7 @@ SIM_KERNELS[SIM_KERNEL_SNAP_REGION] = function (R, P, chunk) {
         const si = SL[i];
         const r = si < 0 ? -1 : Math.floor(Y[si] / ts) * 1024 + Math.floor(X[si] / ts);
         out[i] = r;
+        if (acc && si < 0) { NOSL[Atomics.add(CNT, 2, 1)] = i; continue; }
         // (Only this tick's slice: P[3] slices, P[4] the slice.)
         if (!HC || si < 0 || (P[3] > 0 && r % P[3] !== P[4])) continue;
         let h = 0;
@@ -1502,6 +1589,14 @@ SIM_KERNELS[SIM_KERNEL_SNAP_REGION] = function (R, P, chunk) {
             h = (h + Math.imul(v, 2654435761)) | 0;
         }
         HC[i] = h;
+        if (!acc) continue;
+        if (!(r >= 0 && r < rmax)) { NOSL[Atomics.add(CNT, 2, 1)] = i; continue; }
+        if (Atomics.exchange(STAMP, r, stamp) !== stamp) LIST[Atomics.add(CNT, 0, 1)] = r;
+        const id = ID[si];
+        if ((((id % groups) + groups) % groups) === rot) { ROTL[Atomics.add(CNT, 1, 1)] = i; continue; }
+        let hh = (Math.imul(id, 7919) ^ 0x11) + h | 0;
+        hh = Math.imul(hh ^ (hh >>> 15), 2246822519);
+        Atomics.add(ACC, r, hh);
     }
 };
 

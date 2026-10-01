@@ -1131,7 +1131,7 @@ function eliminateTeamAssets(pid) {
     for (let i = barracks.length - 1; i >= 0; i--) {
         let b = barracks[i];
         if (b.owner !== pid) continue;
-        barracks.splice(i, 1);
+        barracks.splice(i, 1); barracksChanged();
         clearTileEntity(b.gx, b.gy, b);
         if (grid[b.gy] && grid[b.gy][b.gx]) {
             grid[b.gy][b.gx].item = null;
@@ -1141,7 +1141,7 @@ function eliminateTeamAssets(pid) {
     for (let i = collectorSpawners.length - 1; i >= 0; i--) {
         let s = collectorSpawners[i];
         if (s.owner !== pid) continue;
-        collectorSpawners.splice(i, 1);
+        collectorSpawners.splice(i, 1); collectorSpawnersChanged();
         clearTileEntity(s.gx, s.gy, s);
         if (grid[s.gy] && grid[s.gy][s.gx]) {
             grid[s.gy][s.gx].item = null;

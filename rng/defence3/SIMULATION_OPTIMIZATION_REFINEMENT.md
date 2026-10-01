@@ -78,7 +78,68 @@ Where siege time goes (ms/tick): unit pass 284 (attack-move 84, units attacking 
 
 **Fourth round (2026-10-01)**: siege diagnosis found idle-worker wake-ups dominated by bounty drops (hundreds per tick, each waking every worker type of every player nearby) and attack-move hand-backs on structure ticks with no structure actually in range. Drops are replaced by **shrines** (user design: damage taken accumulates as a per-player 💀 resource, drained passively into ⚡/★ by researched multiplier and drain rate; menu option, off restores drops), and the movement kernel checks hostile structure tiles exactly before handing back. Remaining siege priorities unchanged: units attacking buildings (kernel hold for building targets), chase with paths, firing ticks, towers (J1), collector conflict index (A4).
 
+### Fourth refinement: the layered tick (2026-10-01, user direction)
+
+Goal first: a stable 20 TPS (every tick < 50 ms) with 200k units and 10k+ buildings; deterministic approximations are accepted (fair to all players, never game-breaking: units must not get stuck for good, orders must stay responsive), and exactness is tightened afterwards. Parallel kernels alone cannot close the remaining ~10x: the tick still sweeps every unit and building many times, and object code runs for tens of thousands of units a tick. The tick is reorganised into layers:
+
+| Layer | Runs | Contents | Rule |
+|---|---|---|---|
+| L0 tick path | every tick, simulation thread + foreground kernels | commands -> intents; movement integration (position += movement + separation vectors); attack/damage/death/spawn commits; economic commits; committing the background results; starting the hash | O(1) per active entity, no searches or loops over other entities or tiles |
+| L1 same-tick background | helpers, started from a frozen copy at the tick's start, committed at the tick's end | separation/shove vectors, visibility coverage, crowd/flow heatmaps, effective stats, combat-scan answers, column hashing | inputs = the tick-start state (x0/y0, columns); nothing in flight between ticks, so snapshots and restores need nothing new |
+| L2 staggered | each entity every K ticks by (tick + id) % K, its share of a tick | unit and worker decisions (searches, target validation, state changes), building updates (statuses with K-tick steps, production, stat refresh), healer candidates | per tick O(entities / K); urgent cases (a player order to the unit, an attack that is due) run at once |
+| L3 slow background | multi-tick jobs on the helpers, installed at a fixed tick | navigation builds (done), work/opportunity index, region summaries | inputs are copies made at the start; results installed at start + D on every peer; a restore rebuilds from snapshotted inputs |
+
+Determinism rules for asynchronous work: a job reads only frozen inputs (copies, or columns nothing writes until its commit); its result is committed at a fixed tick and point in the tick, never "when ready" (the simulation thread waits, or runs what is left itself); kernels are pure; same-tick jobs are preferred because a restore happens between ticks. Peer-local timing (helper count, machine speed) never changes results.
+
+Approximations adopted (each with its fallback):
+- Separation (L1): pushes computed from tick-start positions and applied after the unit pass (one tick of latency); a unit blocked in a crowd for a while moves without pushing (as flyers do) along its flow, reconsidered on staggered ticks. Crowds: units held back beside idle or waiting units of their own wait (still), look again every 16 ticks and try every 64 (implemented; also to be used away from destinations).
+- Visibility (L1/L2): coverage from tick-start positions, area changes applied with up to a few ticks of latency; sight may last a few ticks longer.
+- Building statuses and timers (L2): processed every K ticks with K ticks' worth of decrement/damage.
+- Unit decisions (L2): every K ticks per unit (movement every tick); latency hidden by animations later (reloading, reading a map).
+- Worker work (L3): found through a work index rebuilt every few ticks (nearest region with work, O(1) lookup, reservation, fallback: wait for the next build).
+
+Measured costs to remove (ms per tick, HELPERS=7; base = 157k units marching across the map, siege = 16.4k towers + armies):
+
+| Item | base | siege | Plan |
+|---|---:|---:|---|
+| Separation | 53 | 27 | L1 job overlapped with the unit pass; movers every tick, resting units every K; stuck units ghost |
+| Movement kernel run + mover bookkeeping (tile/zone/visibility per mover) | 59 | 51 | bookkeeping into kernels, visibility deferred to L1 |
+| Unit pass (walk + Unit.update) | 32 | 158 | activity list (no walk over 200k), L2 decisions every K ticks |
+| Visibility (sync, update, hold end) | 35 | 38 | L1 job from tick-start positions |
+| Hashing / resync | 26 | 45 | column hashing as an L1 job; fewer object fields per tick |
+| Building statuses, stat refresh, barracks, spawners | 48 | 70 | L2 every K ticks, quiet buildings skipped |
+| Towers, projectiles | 4 | 46 | due-shot scheduling (J1), L2 targeting |
+| Index rebuild, effective stats, other | 30 | 40 | kernels (done) and L1 |
+
+Order of work: separation as an L1 job; the unit pass activity list and L2 decisions; building L2; visibility L1; hashing; towers; the work index (L3). Each step is measured on base and siege and checked with the determinism suite (run on a snapshot copy of the tree so work can go on meanwhile).
+
 **Contract additions learned during implementation** (details in the progress log, "Determinism rules learned"): a restore disarms kernels on the restoring peer only, so every kernel decision must equal `Unit.update` exactly; reads of other units during the unit pass use pass-start state (positions, frozen spatial counts, A* budget at pass start); large-world paths are gated by unit-count thresholds, so tests must force them on (`CHAOS_SIM_EVAL`, `HOST_SIM_EVAL`); freed unit slots are reused only from the next index rebuild; caches validated by object references or immutable keys are dropped on snapshot decode; `SNAP_HASH_SLICES` stays 10.
+
+### Fifth refinement: one tick path, brains in the background (2026-10-01, user direction)
+
+The user's direction, sharpened: the tick path is **one** path, not "kernel plus object fallback". Each tick every unit (and turret) only does what a player perceives at once: it moves (or stands) along its current movement order, turns, and the tick commits what the background layers decided (damage, transfers of goods, new orders). Nothing on the tick path costs more than O(1) per entity: no searches, no pathfinding of any kind (A* or flow builds), no rerouting decisions, no scans of other entities or tiles. Everything that need not happen every tick (decisions, target searches, rerouting, transfers of goods at a destination, visibility, stats, statuses, hashing) runs in background layers at fixed tick cadences, deterministic and fair to all players; delays of a few ticks are fine when rates hold on average (an action every cooldown, a decision every K ticks) and are hidden by visuals later (loading, reading a map). Moving eventually beats never moving: a unit with no way to its target goes as near as it can or waits and retries, it is never stuck for good.
+
+**Target architecture.**
+- *Movement orders* (unit state columns, authoritative, snapshotted): mode (stand, flow to a tile, chase a slot, hold, approach a building), destination tile and its flow field slot, flags (worker, flyer), wake tick. Events written by the movers: arrived, unreachable/stood, cooldown ended. Today these columns are a derived cache (a restoring peer starts with every unit disarmed, hence the equivalence rule); once they are snapshotted (target slots as unit ids) and the object movement code (`doMoving`, `followPath`, `_followNavNode`) is gone, a restoring peer resumes the same orders and the equivalence rule disappears.
+- *Movers* (L0, parallel kernels over all units): flow following (done), chase and hold (done), path windows (kept only until the last A* paths are gone), separation (L1 job, done). No hand-backs: an exhausted order raises an event and the unit stands.
+- *Brains* (L2/L3): per unit a decision at its cadence ((tick + id) % K) or at its next decision slot after an event; decisions issue movement orders. First as batched object code with O(1) lookups (opportunity tables, nav nodes), then ported to typed jobs on the helpers by area: worker logistics (a typed state machine: carry, cooldown, target, destination; transfers committed as resource events), combat targeting and firing, buildings.
+- *Opportunity tables* (L3): per owner and worker type, work sites (construction, repair, queues to pay, research, salvage marks, mines, farms, spawners for drop-off and gold) kept per region of the work-version grid; rebuilt for dirty regions (the existing work-version bumps) at a fixed cadence; each region holds its nearest few sites; a worker's search is a table read plus an O(1) validation (fallback: wait for the next build).
+- *Routing* (no search ever on the tick path): every unit and worker uses the flow navigation (`navPathTo`: a nav node toward the target or the open tile nearest it). A route into a wall the navigation predates detours around it (`simNavDetour`, done); an unreachable destination: workers stand and their task looks again on its check ticks (done); planned: the closest reachable tile per (source component, destination), computed in the background from the cluster graph, so units move as near as they can instead of waiting.
+
+**Done this round** (measured on the 1000 map, HELPERS=7): base p50 290 -> 223 ms (gameTick mean 292 -> 200), ACTIVE p50 430 -> 377 ms (unit pass 171 -> 111 ms):
+- Separation contacts as a same-tick background job during the unit pass (helpers; the simulation thread waits only at the commit).
+- The unit pass walks an activity list (units the movers did not handle) in the exact shuffled order.
+- Visibility: units' coverage recomputed every tick from the columns (seed kernel + area-graph spread, ~2 ms); the incremental unit hooks, the unit-phase hold and window zones are gone (buildings stay incremental); the mover bookkeeping lost its zone events.
+- Workers: actions wait for the transfer cooldown with nothing looked at, and a standing worker is parked until the cooldown ends; walking workers skip check-tick hand-backs while it runs; check ticks every 32 (was 8); workers' A* paths armed in the kernel; worker routing is flow navigation only (no A*, no geometric fallbacks, no spawner route cache); a worker on an unreachable flow stands instead of re-routing every tick; spawner and salvage-mark indexes rebuilt only when their membership changes.
+
+**Next, in order** (each measured on base, ACTIVE and siege, and checked with equivalence and forced-path chaos):
+1. Opportunity tables for idle searches (healer queues ~25% of worker AI, collectors 19%, builders 18%, researchers 10%, salvagers 9%), then the remaining per-action costs (a gather ~0.9 ms: profile).
+2. Combat units moving without an armed order (`c1` ~4.9k updates a tick in ACTIVE) and hand-backs: the movers raise events instead.
+3. Movement orders snapshotted; the object movement code removed (one path); worker logistics as a typed background job.
+4. Hashing (~40 ms ACTIVE): column hashing as an L1 job; fewer object fields.
+5. Building layer: statuses (`tickStatusEffects` ~17 ms), precomputed stats (~18 ms), barracks/spawners (~20 ms) at K-tick cadence with quiet buildings skipped.
+6. Towers and projectiles (siege): due-shot scheduling (J1), structure broad phase (J2).
+7. Closest-reachable routing in the background.
 
 ## 2. Common engine architecture and behavioral contract
 

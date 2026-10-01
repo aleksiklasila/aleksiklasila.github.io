@@ -719,7 +719,6 @@ function _bumpPathTopologyVersion() {
     if (pathTopologyVersion > 1000000000) pathTopologyVersion = 1;
     if (sharedPathCache.size > 0) sharedPathCache.clear();
     if (sharedPartialPathCache.size > 0) sharedPartialPathCache.clear();
-    if (sharedSpawnerRouteCache.size > 0) sharedSpawnerRouteCache.clear();
     if (sharedSpawnerRallyTemplateCache.size > 0) sharedSpawnerRallyTemplateCache.clear();
 }
 

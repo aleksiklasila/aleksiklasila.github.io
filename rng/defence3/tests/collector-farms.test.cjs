@@ -25,7 +25,8 @@ function world(resource, localPlayerId = 0) {
         getResourceMineAt: (_key, gx, gy) => [...c.goldMines, ...c.astarMines].find(m => m.gx === gx && m.gy === gy),
         secondsToTicks: s => s * 30,
         _canUsePathfindRequestBudget: () => true, _consumePathfindRequestBudget: () => {},
-        _findPathForUnitTagged: (_tag, _u, sx, sy, gx, gy) => [{ x: sx, y: sy }, { x: gx, y: gy }],
+        // (Workers go by the flow navigation: a nav node toward the tile.)
+        navPathTo: (_u, gx, gy) => [{ x: gx, y: gy, nav: 1, ready: 0 }],
         _lastPathfindAbortedByBudget: false,
         getThingBaseLevel: () => 1, stackCountToLevel: () => 1,
         getBuildingStatForOwner: () => 2, playSound: () => {},
@@ -91,8 +92,8 @@ for (const resource of ['energy', 'astar']) {
         // (Placed straight into the grid: a real placement tells idle workers.)
         c.workerWorkChanged(0);
         // An idle collector searches again on its periodic idle search
-        // tick (about twice a second).
-        for (let t = 0; t < 24 && u.workerTarget !== valid; t++) { c.gameTime++; c.updateWorkerAI(u); }
+        // tick (about every 1.5 seconds).
+        for (let t = 0; t < 64 && u.workerTarget !== valid; t++) { c.gameTime++; c.updateWorkerAI(u); }
         assert.equal(u.workerTarget, valid, 'discover floor farms without a manual command or mines');
         u.x = valid.x; u.y = valid.y; u.path = null;
         c.updateWorkerAI(u);

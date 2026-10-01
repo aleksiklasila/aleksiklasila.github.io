@@ -34,66 +34,21 @@ function _researcherTryPickupMaterial(u, target, owner) {
     return true;
 }
 
-const WORKER_REPATH_MIN_INTERVAL_TICKS = 8;
-const WORKER_REPATH_STALL_TICKS = 45;
 const WORKER_MANUAL_MOVE_MAX_PENDING_TICKS = 120;
 
+// A worker's way to tile (targetGx, targetGy): the flow navigation alone (no
+// search: a nav node toward the tile, or the open tile nearest it). null:
+// no way there (the worker stays; its task looks again later).
 function _requestWorkerPath(u, startGx, startGy, targetGx, targetGy, canWalk = null, cacheProfileHint = null, force = false) {
-    if (!u) return null;
-    let ignoreWalls = !!u.isFlying;
-    let cacheProfile = cacheProfileHint || (ignoreWalls ? 'ignore_walls' : null);
-    let key = String(targetGx) + ',' + String(targetGy) + '|' + (cacheProfile || 'default') + '|' + (canWalk ? 'cw1' : 'cw0') + '|' + (ignoreWalls ? 'fly1' : 'fly0');
-    let curGx = Math.floor(Number(u.x) / TILE);
-    let curGy = Math.floor(Number(u.y) / TILE);
-    if (!Number.isFinite(u._workerLastPathX) || !Number.isFinite(u._workerLastPathY)) {
-        u._workerLastPathX = curGx;
-        u._workerLastPathY = curGy;
-        u._workerPathStallTicks = 0;
-    } else {
-        let movedTiles = Math.abs(curGx - Math.floor(Number(u._workerLastPathX) || curGx)) + Math.abs(curGy - Math.floor(Number(u._workerLastPathY) || curGy));
-        u._workerPathStallTicks = movedTiles > 0 ? 0 : Math.max(0, Number(u._workerPathStallTicks) || 0) + 1;
-        u._workerLastPathX = curGx;
-        u._workerLastPathY = curGy;
-    }
-
-    let lastTick = Math.floor(Number(u._workerLastPathTick) || -999999);
-    let sameTarget = (u._workerLastPathKey === key);
-    let stalled = (Number(u._workerPathStallTicks) || 0) >= WORKER_REPATH_STALL_TICKS;
-    if (!force && sameTarget && !stalled && (gameTime - lastTick) < WORKER_REPATH_MIN_INTERVAL_TICKS) {
-        return u.path || null;
-    }
-
-    // The way on the flow navigation: a nav node (no search).
-    if (typeof navPathTo === 'function') {
-        let navPath = navPathTo(u, targetGx, targetGy);
-        if (navPath) {
-            u._workerLastPathKey = key;
-            u._workerLastPathTick = gameTime;
-            return navPath;
-        }
-    }
-
-    if (!_canUsePathfindRequestBudget(u.owner, u)) {
-        _makeFallbackPathForUnit(u, startGx, startGy, targetGx, targetGy, u.commandState || CMD_MOVING, 'worker_ai');
-        return null;
-    }
-
-    _consumePathfindRequestBudget(u.owner, u);
-    let path = _findPathForUnitTagged('worker_ai', u, startGx, startGy, targetGx, targetGy, ignoreWalls, canWalk, u.owner, cacheProfile);
-    if (!path && _lastPathfindAbortedByBudget) {
-        _makeFallbackPathForUnit(u, startGx, startGy, targetGx, targetGy, u.commandState || CMD_MOVING, 'worker_ai');
-    }
-    u._workerLastPathKey = key;
-    u._workerLastPathTick = gameTime;
-    return path;
+    if (!u || typeof navPathTo !== 'function') return null;
+    return navPathTo(u, targetGx, targetGy);
 }
 
 
 // Worker AI logic - runs inside Unit.update() for collector/salvager/builder/healer types
 // Helpers of updateWorkerAI (module functions: no closures per worker per tick).
-function _workerSpawnerRoute(u, type, canWalk, canRunHeavyAi) {
-    let routeCanWalk = canWalk || getPathCanWalkForUnit(u);
-    return _findBestSpawnerRoute(u, type, routeCanWalk, { cacheOnly: !canRunHeavyAi });
+function _workerSpawnerRoute(u, type) {
+    return _findBestSpawnerRoute(u, type);
 }
 function _workerRunHealerRetargetIfDue(u, canRunHeavyAi, myGx, myGy) {
     if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return false;
@@ -124,7 +79,7 @@ function _workerFinishManualMoveToIdle(u) {
 // (still there? still its own?) every WORKER_MOVE_CHECK_TICKS ticks,
 // staggered by id; between those it only walks, exactly as the movement
 // kernel walks it (which hands it back on those ticks).
-const WORKER_MOVE_CHECK_TICKS = 8;
+const WORKER_MOVE_CHECK_TICKS = 32;
 const BUILDER_WATCH_TICKS = WORKER_MOVE_CHECK_TICKS * 2;
 const _WORKER_MOVING_STATES = new Set(['MANUAL_MOVE', 'MOVING_TO', 'MOVING_TO_ASTAR', 'RETURNING', 'RETURNING_ASTAR', 'MOVING_TO_BUILD', 'RETURNING_FOR_GOLD', 'MOVING_TO_HEAL', 'MOVING_TO_RESEARCH']);
 function isWorkerBetweenMoveChecks(u) {
@@ -135,6 +90,12 @@ function isWorkerBetweenMoveChecks(u) {
 function updateWorkerAI(u) {
     if (!u.workerState) return;
     if (isWorkerBetweenMoveChecks(u)) return;
+    // At work (gathering, building, healing, researching, depositing...):
+    // every action waits for the transfer cooldown, so while it runs the
+    // worker only stands or walks on, looking at nothing (a standing one is
+    // parked until it runs out, simMoveTryParkWork). A player's move order
+    // is followed regardless.
+    if (u.workerTransferCooldown > 0 && u.workerState !== 'MANUAL_MOVE') return;
     let workerAiTickDelay = Math.max(1, Math.floor(Number(WORKER_AI_TICK_DELAY) || 1));
     let canRunHeavyAi = ((gameTime + u.id) % workerAiTickDelay) === 0;
 
@@ -158,9 +119,10 @@ function updateWorkerAI(u) {
             let rebuilt = _requestWorkerPath(u, ugx, ugy, dest.x, dest.y, canWalk, null, true);
             if (rebuilt && rebuilt.length > 0) {
                 u.path = rebuilt;
-                u.pathIndex = (rebuilt.length > 1 && rebuilt[0].x === ugx && rebuilt[0].y === ugy) ? 1 : 0;
+                u.pathIndex = 0;
             } else {
-                _makeFallbackPathForUnit(u, ugx, ugy, dest.x, dest.y, CMD_MOVING, 'worker_ai');
+                // No way there: it stops.
+                _workerFinishManualMoveToIdle(u);
             }
             return;
         }
@@ -1312,8 +1274,9 @@ function _isResourceCollectorSpawnerValidForUnit(u, spawner, resourceCfg = null)
 
 function _getResourceCollectorSearchOrigin(u, resourceCfg = null) {
     let cfg = resourceCfg || _getResourceCollectorConfigForUnit(u);
+    // (The worker itself: its search follows where it stands.)
     if (u && u.workerState === 'IDLE' && (gameTime - (u._lastIdleStateTime || 0)) < secondsToTicks(5)) {
-        return { x: u.x, y: u.y };
+        return u;
     }
     let mem = _getResourceCollectorMemory(u);
     if (u && Number.isFinite(mem.lastGatherX) && Number.isFinite(mem.lastGatherY)) {
@@ -1325,7 +1288,7 @@ function _getResourceCollectorSearchOrigin(u, resourceCfg = null) {
     if (cfg && cfg.stockpileKey === 'astar' && u && Number.isFinite(u._astarLastGatherX) && Number.isFinite(u._astarLastGatherY)) {
         return { x: u._astarLastGatherX, y: u._astarLastGatherY };
     }
-    return { x: u.x, y: u.y };
+    return u;
 }
 
 function _getResourceCollectorGatherTargetAt(gx, gy, owner, resourceCfg, preferredType = null) {
@@ -1870,9 +1833,9 @@ function getWorkerIdleRetargetTicks() {
 }
 
 // An idle worker's periodic search: on every k-th heavy AI tick, about
-// every half second.
+// every 1.5 seconds (a parked one is looked at then, see simMoveTryPark).
 function getWorkerIdleSearchTicks() {
-    return Math.max(1, Math.round(TICK_RATE / 2));
+    return Math.max(1, Math.round(TICK_RATE * 1.5));
 }
 
 // Work for idle workers: per owner and worker type, a version bumped by
@@ -2443,16 +2406,17 @@ function _astarCollectorFindTarget(u) {
 // Salvager: find nearest marked building
 // Whether the owner has anything marked for salvage (towers, barracks,
 // spawners, cell items), and its marked towers, barracks and spawners in
-// their arrays' order: once per tick (and again after a mark order), most
+// their arrays' order: made again after a mark order or a tile entity
+// change (and on every peer at a resync, _snapResetWorkerCaches); most
 // searches find nothing and the rest look at these lists, not every
 // structure. A structure destroyed since is no longer its tile's entity.
-let _salvageMarksCache = { tick: -1, ver: -1, owners: new Set(), lists: new Map() };
+let _salvageMarksCache = { tile: -1, ver: -1, owners: new Set(), lists: new Map() };
 let _salvageMarksVersion = 0;
 function salvageMarksChanged() { _salvageMarksVersion++; }
 function _salvageMarksCurrent() {
     let c = _salvageMarksCache;
-    if (c.tick !== gameTime || c.ver !== _salvageMarksVersion) {
-        c.tick = gameTime; c.ver = _salvageMarksVersion;
+    if (c.ver !== _salvageMarksVersion || c.tile !== _tileEntityVersion) {
+        c.tile = _tileEntityVersion; c.ver = _salvageMarksVersion;
         c.owners = new Set(); c.lists = new Map();
         let add = e => { if (e && e.markedForSalvage) c.owners.add(e.owner); };
         let list = (e, k) => {
@@ -2470,6 +2434,13 @@ function _salvageMarksCurrent() {
     }
     return c;
 }
+// The members of collectorSpawners (a set, made again when it changes).
+let _collectorSpawnerSetCache = { list: null, ver: -1, set: new Set() };
+function _collectorSpawnerSet() {
+    const c = _collectorSpawnerSetCache, ver = typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion : -2;
+    if (c.list !== collectorSpawners || c.ver !== ver || ver === -2) { c.list = collectorSpawners; c.ver = ver; c.set = new Set(collectorSpawners); }
+    return c.set;
+}
 function _ownerHasSalvageMarks(owner) {
     return _salvageMarksCurrent().owners.has(owner);
 }
@@ -2481,25 +2452,25 @@ function _salvagerFindTarget(u, myGx, myGy) {
     let maxSearch = _getWorkerAutoSearchDistancePx(u);
     let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     let bestDist = 99999, bestItem = null;
-    // Built only when a marked cell item is found: most searches find none.
-    let spawnerSet = null;
     let conflictCache = {};
     // The owner's marked towers, then barracks, then spawners, in their
     // arrays' order (as a scan of the arrays would meet them).
+    // (Those in the search box only, by their buckets.)
     let marked = _salvageMarksCurrent().lists.get(owner) || _NO_SALVAGE_LISTS;
-    for (let k = 0; k < 3; k++) for (let e of marked[k]) {
-        if (e.owner !== owner || !e.markedForSalvage || getTileEntityRef(e.gx, e.gy) !== e) continue;
+    let reach = Math.ceil(maxSearch / TILE) + 1;
+    for (let k = 0; k < 3; k++) _forEachStructureInTileBox(marked[k], myGx - reach, myGy - reach, myGx + reach, myGy + reach, (e) => {
+        if (e.owner !== owner || !e.markedForSalvage || getTileEntityRef(e.gx, e.gy) !== e) return;
         // (Cheap tests first: only a nearer one needs the exclusivity check.)
         let d = detHypot(e.x - u.x, e.y - u.y);
-        if (d > maxSearch || !(d < bestDist)) continue;
-        if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, e, maxSearchArea)) continue;
-        if (!_canAssignWorkerTargetExclusive(u, e, null, conflictCache)) continue;
+        if (d > maxSearch || !(d < bestDist)) return;
+        if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, e, maxSearchArea)) return;
+        if (!_canAssignWorkerTargetExclusive(u, e, null, conflictCache)) return;
         bestDist = d; bestItem = e;
-    }
+    });
     forEachGridCellInAreaRange(u.x, u.y, maxSearchArea, (tileRef, c) => {
         if (!tileRef || !c || !c.item) return false;
         if (c.owner !== owner || !c.item.markedForSalvage) return false;
-        if (c.item instanceof Barrack || (spawnerSet || (spawnerSet = new Set(collectorSpawners))).has(c.item)) return false;
+        if (c.item instanceof Barrack || _collectorSpawnerSet().has(c.item)) return false;
         let d = detHypot(c.item.x - u.x, c.item.y - u.y);
         if (d > maxSearch || !(d < bestDist)) return false;
         if (!_canAssignWorkerTargetExclusive(u, c.item, null, conflictCache)) return false;
@@ -2581,7 +2552,7 @@ function _builderGetSearchOrigin(u) {
     if (u && Number.isFinite(u._builderLastWorkX) && Number.isFinite(u._builderLastWorkY)) {
         return { x: u._builderLastWorkX, y: u._builderLastWorkY };
     }
-    return { x: u.x, y: u.y };
+    return u;
 }
 
 function _getBuilderWorkTargetAt(gx, gy, owner, allowDisabledBuild = false) {
@@ -2689,7 +2660,7 @@ const _emptyWorkerSpawners = Object.freeze([]);
 // owner, construction, queues) remains live: workers may change it mid-tick.
 function _getWorkerSpawnersByType(type) {
     let tick = typeof gameTime === 'number' ? gameTime : NaN;
-    let version = typeof _tileEntityVersion === 'number' ? _tileEntityVersion : -1;
+    let version = typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion : (typeof _tileEntityVersion === 'number' ? _tileEntityVersion : -1);
     let index = _workerSpawnerIndex;
     if (!index || index.list !== collectorSpawners
         || index.length !== collectorSpawners.length || index.version !== version) {
@@ -2704,71 +2675,13 @@ function _getWorkerSpawnersByType(type) {
     return index.types.get(type) || _emptyWorkerSpawners;
 }
 
-function _findBestSpawnerRoute(u, type, canWalk = null, options = null) {
-    if (!canWalk) canWalk = getPathCanWalkForUnit(u);
-    let cacheOnly = !!(options && options.cacheOnly);
-    let bestSpawner = null;
-    let bestPath = null;
-    let bestScore = Infinity;
-    let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-
-    let movementProfile = _resolveMovementProfile(!!u.isFlying, canWalk, null);
-    let routeKey = null;
-    if (movementProfile) {
-        routeKey = 'spawner|' + type + '|' + u.owner + '|' + movementProfile + '|' + startGx + ',' + startGy;
-        let cached = sharedSpawnerRouteCache.get(routeKey);
-        if (cached && !_isPathCacheExpired(cached, SPAWNER_ROUTE_CACHE_TTL_TICKS)) {
-            let s = cached.spawner;
-            if (s && s.type === type && s.owner === u.owner && s.energy > 0 && !s.underConstruction && cached.path && cached.path.length > 0) {
-                return { spawner: s, path: cached.path };
-            }
-        }
-    }
-
-    // Nearest by (distance, row, column): one spawner a tile.
-    bestSpawner = _findClosestSpawner(u, type);
-
-    if (!bestSpawner) return null;
-
-    let bestSpawnerGx = Math.floor(Number(bestSpawner.gx) || 0);
-    let bestSpawnerGy = Math.floor(Number(bestSpawner.gy) || 0);
-    // (The way is on the navigation; only its search fallback is budgeted.)
-    if (!cacheOnly) {
-        bestPath = _requestWorkerPath(
-            u,
-            startGx,
-            startGy,
-            bestSpawnerGx,
-            bestSpawnerGy,
-            canWalk,
-            null,
-            true
-        );
-    }
-
-    let finalPath = bestPath;
-    if (!Array.isArray(finalPath) || finalPath.length <= 0) {
-        // Deterministic geometric fallback so route selection does not depend on local cache/path budget state.
-        if (startGx === bestSpawnerGx && startGy === bestSpawnerGy) {
-            finalPath = [{ x: startGx, y: startGy }];
-        } else {
-            finalPath = [
-                { x: startGx, y: startGy },
-                { x: bestSpawnerGx, y: bestSpawnerGy }
-            ];
-        }
-    }
-
-    if (routeKey) {
-        sharedSpawnerRouteCache.set(routeKey, {
-            spawner: bestSpawner,
-            path: bestPath,
-            tick: gameTime,
-            version: pathTopologyVersion
-        });
-        _trimPathCacheIfNeeded(sharedSpawnerRouteCache, SPAWNER_ROUTE_CACHE_MAX_ENTRIES);
-    }
-    return { spawner: bestSpawner, path: finalPath };
+// The nearest live spawner of the type (by distance, row, column; bucketed)
+// and the flow navigation's way there; null when there is none, or no way.
+function _findBestSpawnerRoute(u, type) {
+    const spawner = _findClosestSpawner(u, type);
+    if (!spawner || typeof navPathTo !== 'function') return null;
+    const path = navPathTo(u, Math.floor(Number(spawner.gx) || 0), Math.floor(Number(spawner.gy) || 0));
+    return path ? { spawner, path } : null;
 }
 
 // (Nearest by distance, row, column: the bucketed search.)
@@ -2832,7 +2745,7 @@ function _healerGetSearchOrigin(u) {
     if (u && Number.isFinite(u._healerLastWorkX) && Number.isFinite(u._healerLastWorkY)) {
         return { x: u._healerLastWorkX, y: u._healerLastWorkY };
     }
-    return { x: u.x, y: u.y };
+    return u;
 }
 
 function _getHealerQueueTargetNear(worldX, worldY, owner, radius = 22, requireNeedsWork = true) {
@@ -2935,12 +2848,14 @@ function _findNearestQueuedSpawnerNeedingWork(u, originX = u.x, originY = u.y) {
 
 // Barracks, then collector spawners, of one owner, in list order; rebuilt
 // per tick (or when either list changes length).
-let _ownedQueueSpawnersCache = { tick: -1, nb: -1, ns: -1, byOwner: new Map() };
+let _ownedQueueSpawnersCache = { vb: -1, vs: -1, nb: -1, ns: -1, byOwner: new Map() };
 function _ownedQueueSpawners(owner) {
     let c = _ownedQueueSpawnersCache;
-    // Membership changes with the tile index (placements, removals).
-    if (c.tick !== _tileEntityVersion || c.nb !== barracks.length || c.ns !== collectorSpawners.length || c.lb !== barracks || c.ls !== collectorSpawners) {
-        c.tick = _tileEntityVersion; c.nb = barracks.length; c.ns = collectorSpawners.length; c.lb = barracks; c.ls = collectorSpawners;
+    // Membership changes with the lists' versions (placements, removals).
+    const vb = typeof barracksVersion === 'number' ? barracksVersion : _tileEntityVersion;
+    const vs = typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion : _tileEntityVersion;
+    if (c.vb !== vb || c.vs !== vs || c.nb !== barracks.length || c.ns !== collectorSpawners.length || c.lb !== barracks || c.ls !== collectorSpawners) {
+        c.vb = vb; c.vs = vs; c.nb = barracks.length; c.ns = collectorSpawners.length; c.lb = barracks; c.ls = collectorSpawners;
         c.byOwner = new Map();
         let add = (s) => {
             if (!s) return;
@@ -3391,11 +3306,7 @@ function _workerReturnPath(u) {
     let type = resourceCollector
         ? resourceCollector.collectorBuildingKey
         : (u.workerType === 'salvager' ? 'salvager' : null);
-    let canWalk = resourceCollector ? _resourceCollectorCanWalk : null;
-    let workerAiTickDelay = Math.max(1, Math.floor(Number(WORKER_AI_TICK_DELAY) || 1));
-    let forceImmediateRoute = !!resourceCollector && (Number(u.carryingValue) > 0);
-    let cacheOnly = !forceImmediateRoute && (((gameTime + u.id) % workerAiTickDelay) !== 0);
-    let route = _findBestSpawnerRoute(u, type, canWalk, { cacheOnly: cacheOnly });
+    let route = _findBestSpawnerRoute(u, type);
     if (route) {
         if (resourceCollector && route.spawner) _setResourceCollectorNextSpawner(u, route.spawner);
         u.path = route.path || [];
@@ -3501,22 +3412,10 @@ function issueWorkerBlockedAssignFallbackMove(u, targetGx, targetGy) {
     u.commandState = CMD_MOVING;
     u.targetPos = { x: targetX, y: targetY };
 
-    if (_canUsePathfindRequestBudget(u.owner, u)) {
-        _consumePathfindRequestBudget(u.owner, u);
-        let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-        u.path = _findPathForUnitTagged('player_commands', u, ugx, ugy, gx, gy, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-        if (u.path && u.path.length > 0) {
-            u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-            u._pendingPathTarget = null;
-        } else {
-            u.path = _makeFallbackPathForUnit(u, ugx, ugy, gx, gy, CMD_MOVING, 'player_commands');
-            u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-        }
-    } else {
-        let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-        u.path = _makeFallbackPathForUnit(u, ugx, ugy, gx, gy, CMD_MOVING, 'player_commands');
-        u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-    }
+    // (The flow navigation's way; none: it stays.)
+    u.path = typeof navPathTo === 'function' ? navPathTo(u, gx, gy) : null;
+    u.pathIndex = 0;
+    u._pendingPathTarget = null;
 }
 
 function _releaseManualWorkerAssignmentConflicts(assigningUnit, target, targetType = null) {

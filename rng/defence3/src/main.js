@@ -165,6 +165,7 @@ function unitSlotMapPushed(u) {
 }
 function unitSlotMapInvalidate() { _unitSlotMap.ref = null; }
 
+let _updateOrderCand = new Int32Array(0), _updateOrderRun = new Int32Array(0);
 function _forEachUnitInTickOrder(fn) {
     let list = units, n = list.length;
     if (n <= 1) { if (n === 1 && list[0]) fn(list[0]); return; }
@@ -182,12 +183,37 @@ function _forEachUnitInTickOrder(fn) {
         let j = s % (i + 1);
         let tmp = blocks[i]; blocks[i] = blocks[j]; blocks[j] = tmp;
     }
+    // Only the units that still need their update (not moved by the kernel;
+    // held and chasing ones are checked again at their turn), listed in index
+    // order, so each block's run is contiguous: walked from its start step
+    // forward or backward, as a rotation of the run. (Nothing during the pass
+    // changes another unit's kernel output: slots are detached outside it.)
+    if (_updateOrderCand.length < n) _updateOrderCand = new Int32Array(Math.max(1024, n * 2));
+    if (_updateOrderRun.length < nb + 1) _updateOrderRun = new Int32Array(Math.max(nb + 1, _updateOrderRun.length * 2));
+    const cand = _updateOrderCand, run = _updateOrderRun;
+    let m = 0;
+    for (let idx = 0; idx < n; idx++) {
+        if (idx % B === 0) run[idx / B] = m;
+        if (OUT) {
+            const sl = slots[idx];
+            if (sl >= 0) { const o = OUT[sl]; if (o !== 0 && o < 6 && owners[sl] === list[idx]) continue; }
+        }
+        cand[m++] = idx;
+    }
+    run[nb] = m;
     for (let bi = 0; bi < nb; bi++) {
         let b0 = blocks[bi] * B, len = Math.min(B, n - b0);
         s = ((s * 1664525) + 1013904223) >>> 0;
         let start = (s >>> 8) % len, backward = s & 1;
-        for (let q = 0; q < len; q++) {
-            let idx = b0 + (backward ? (start - q + len) % len : (start + q) % len);
+        const lo = run[blocks[bi]], hi = run[blocks[bi] + 1];
+        if (lo === hi) continue;
+        // The first of the run past the start step (forward: from the start
+        // step on, then the rest; backward: down from it, then from the end).
+        let p = lo;
+        if (backward) { while (p < hi && cand[p] - b0 <= start) p++; }
+        else { while (p < hi && cand[p] - b0 < start) p++; }
+        for (let q = 0, cnt = hi - lo; q < cnt; q++) {
+            let idx = backward ? cand[p - 1 - q >= lo ? p - 1 - q : hi - 1 - (q - (p - lo))] : cand[p + q < hi ? p + q : lo + (q - (hi - p))];
             let u = list[idx];
             if (!u) continue;
             if (OUT) {
@@ -488,16 +514,31 @@ function gameTick() {
     };
 
     let floorChanged = false;
-    // Same row-major order as a full grid walk, visiting only occupied tiles.
-    for (let item of getCellItemsRowMajor()) {
-        let cell = grid[item.gy][item.gx];
-        if (cell.item !== item) continue;
-        accumulateBuildingUpKeep(item);
-        if (tickStatusEffects(item)) {
-            clearTileEntity(item.gx, item.gy, item);
-            cell.item = null;
-            cell.owner = -1;
-            floorChanged = true;
+    // Buildings and floor items: a TICK_RATE-th of them a tick (by their
+    // place in row-major order) count their upkeep and are looked at for
+    // statuses (a guard for the hooks); then the statuses of those with
+    // something running (thingStatusWake: status effects, damage), in
+    // row-major order.
+    {
+        const cellItems = getCellItemsRowMajor();
+        for (let i = upKeepSlice; i < cellItems.length; i += TICK_RATE) {
+            const item = cellItems[i];
+            if (grid[item.gy][item.gx].item !== item) continue;
+            if (!upKeepBuildingSeen.has(item)) { upKeepBuildingSeen.add(item); _accumulateUpKeepForThing(upKeepTickBreakdown, item, false); }
+            ensureStatusState(item);
+            if (thingStatusPending(item)) thingStatusWake(item);
+        }
+        upKeepBuildingIndex = cellItems.length;
+        for (const item of thingStatusDue()) {
+            let cell = grid[item.gy][item.gx];
+            if (cell.item !== item) { thingStatusDone(item); continue; }
+            if (tickStatusEffects(item)) {
+                clearTileEntity(item.gx, item.gy, item);
+                cell.item = null;
+                cell.owner = -1;
+                floorChanged = true;
+                thingStatusDone(item);
+            } else if (!thingStatusPending(item)) thingStatusDone(item);
         }
     }
     if (floorChanged) {
@@ -612,6 +653,9 @@ function gameTick() {
     // Units added during the pass wait for the next tick.
     visCoverHoldBegin();
     statusPrepassRun();
+    // The separation's contacts, from where units stand now, run on the
+    // helpers during the pass (committed by runUnitSeparationPass).
+    separationStart();
     // (From here to the pass's end other units are seen where they were at
     // its start: _unitTickX.)
     unitPassBegin();
@@ -689,7 +733,7 @@ function gameTick() {
     let barracksUpdateOrder = _buildDeterministicBuildingUpdateOrderForTick(barracks, 20);
     for (let i = 0; i < barracksUpdateOrder.length; i++) {
         let b = barracksUpdateOrder[i];
-        if (!b) continue;
+        if (!b || spawnerQuiet(b)) continue;
         b.update();
     }
     for (let i = barracks.length - 1; i >= 0; i--) {
@@ -703,7 +747,7 @@ function gameTick() {
     let spawnerUpdateOrder = _buildDeterministicBuildingUpdateOrderForTick(collectorSpawners, 30);
     for (let i = 0; i < spawnerUpdateOrder.length; i++) {
         let cs = spawnerUpdateOrder[i];
-        if (!cs) continue;
+        if (!cs || spawnerQuiet(cs)) continue;
         cs.update();
     }
     for (let i = collectorSpawners.length - 1; i >= 0; i--) {

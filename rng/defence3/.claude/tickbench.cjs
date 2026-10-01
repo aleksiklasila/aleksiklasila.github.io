@@ -241,7 +241,8 @@ const seconds = Number(process.argv[2]) || 15;
             'recomputePlayerPopCaps', '_runAdjacencyRecalculation', 'sampleGameStats', 'gameTick', 'simMoveEndTick',
             'visCoverHoldEnd', 'unitHitsResolve', 'statusPrepassRun', 'runQueuedOrders', 'navTick', 'navFieldsFlush', 'compactRemovedUnits',
             'updateVisibility', 'flushPendingResourceStatRebuilds', 'ensureLaserConnections', 'processActions', 'gameStatsStep', 'projectilesBegin',
-            '_buildDeterministicBuildingUpdateOrderForTick', 'healerCandidatesStep', 'tickStatusEffects', 'getCellItemsRowMajor', 'updateAudioReactiveState', '_finalizePathfindPerfTick']) {
+            '_buildDeterministicBuildingUpdateOrderForTick', 'healerCandidatesStep', 'tickStatusEffects', 'getCellItemsRowMajor', 'updateAudioReactiveState', '_finalizePathfindPerfTick',
+            ...${JSON.stringify((process.env.SUBPHASES || '').split(',').filter(Boolean))}]) {
             let f; try { f = eval(name); } catch { continue; } if (typeof f !== 'function') continue;
             const w = function () { const a = __scratch.realNow(); try { return f.apply(this, arguments); } finally { rec(name, __scratch.realNow() - a); } }; eval(name + ' = w');
         }
@@ -272,6 +273,17 @@ const seconds = Number(process.argv[2]) || 15;
         if (!this.workerState && this.commandState === CMD_ATTACKING) k += this.targetBuilding ? ':bld' : this.attackTarget === this.targetUnit && this.targetUnit ? ':inrange' : ':chase';
         const a = __scratch.realNow();
         try { return f.call(this); } finally { if (currentTick >= 48) { const e = (__scratch.us[k] ||= [0, 0]); e[0] += __scratch.realNow() - a; e[1]++; } } }; }`);
+    // WMOVESTAT=1: workers in a moving state that ran Unit.update, by why:
+    // their path done, an A* path, a nav node (on its check tick or not,
+    // with its mvOn before the kernel ran); ms and calls per tick.
+    if (process.env.WMOVESTAT) host.eval(`__scratch.wm = {}; { let pre = null; const fr = simMoveRun; simMoveRun = function () { const S = _simUnitState; pre = S.columns.mvOn.slice(0, S.owners.length); return fr.apply(this, arguments); };
+        const MV = new Set(['MANUAL_MOVE', 'MOVING_TO', 'MOVING_TO_ASTAR', 'RETURNING', 'RETURNING_ASTAR', 'MOVING_TO_BUILD', 'RETURNING_FOR_GOLD', 'MOVING_TO_HEAL', 'MOVING_TO_RESEARCH']);
+        const f = Unit.prototype.update; Unit.prototype.update = function () {
+            const c = this._us, s = this._si; if (!c || c.mvOut[s] || !MV.has(this.workerState)) return f.call(this);
+            const chk = ((gameTime + this.id) | 0) % WORKER_MOVE_CHECK_TICKS === 0, p = this.path, i = this.pathIndex;
+            const k = this.workerState + ':' + (this.holdPosition ? 'hold' : !p || i >= p.length ? 'pathDone' + (this._pendingPathTarget ? ':pending' : '') + (this.workerTransferCooldown > 0 ? ':cd' : '') + (this.workerTarget ? (_isWorkerWithinTileInteractionRange(this, this.workerTarget, 1) ? ':inRange' : ':far') : ':noTarget') + (typeof _workerHasPendingAutoRouteToTarget === 'function' && _workerHasPendingAutoRouteToTarget(this) ? ':autoRoute' : '') + ':on' + this._us.mvOn[s] + ':cmd' + this.commandState : p[i].nav ? 'nav:' + (chk ? 'check' : 'pre' + (pre ? pre[s] : '-')) : 'astar' + (chk ? ':check' : ''));
+            const a = __scratch.realNow();
+            try { return f.call(this); } finally { if (currentTick >= 48) { const e = (__scratch.wm[k] ||= [0, 0]); e[0] += __scratch.realNow() - a; e[1]++; } } }; }`);
     // CHASESTAT=1: chasing units that ran Unit.update, by the first unmet
     // condition of simMoveTryChase (all met: the kernel handed it back).
     if (process.env.CHASESTAT) host.eval(`__scratch.chase = {}; { const f = Unit.prototype.update; Unit.prototype.update = function () {
@@ -326,7 +338,7 @@ const seconds = Number(process.argv[2]) || 15;
         const f = Unit.prototype.update; Unit.prototype.update = function () {
             const c = this._us, s = this._si; if (!c || c.mvOut[s] || this.workerState !== 'IDLE') return f.call(this);
             let k; const t = this.workerType;
-            if (pre && pre[s] === 2 && post[s] === 0) { const fl = __scratch.wkFl[s]; k = 'woke:' + (gameTime >= wakeAt[s] ? ((fl & 2) ? 'wakeVer' : 'wakeNoVer') : (fl & 4) ? 'watch' : 'floor'); }
+            if (pre && pre[s] === 2 && post[s] === 0) { const fl = __scratch.wkFl[s]; k = 'woke:' + (gameTime >= wakeAt[s] ? ((fl & 2) ? 'wakeVer:' + (gameTime >= c.wkSched[s] ? 'sched:' + (c.wkSched[s] === this._workerNextIdleRetargetTick ? 'next' : c.wkSched[s] === this._builderNextRecheckTick ? 'recheck' : 'other') : gameTime >= c.wkUntil[s] ? 'until' : (Math.floor(c.y[s] / TILE) * GRID_W + Math.floor(c.x[s] / TILE)) !== c.wkTile[s] ? 'moved' : _workerWorkVerOf(this) !== c.wkFail[s] ? 'ver' : 'other') : 'wakeNoVer') : (fl & 4) ? 'watch' : 'floor'); }
             else if (pre && pre[s] === 0) k = endParked[s] === 1 ? 'disarmed' : 'unparked:' + (endWhy[s] || '?');
             else k = 'other' + (pre ? pre[s] : '-');
             const a = __scratch.realNow(); const r0 = globalThis.__wkSearch | 0;
@@ -447,6 +459,7 @@ const seconds = Number(process.argv[2]) || 15;
         chaseStat: process.env.CHASESTAT ? JSON.parse(host.eval('JSON.stringify(__scratch.chase)')) : undefined,
         holdStat: process.env.HOLDSTAT ? JSON.parse(host.eval('JSON.stringify(__scratch.hold)')) : undefined,
         amStat: process.env.AMSTAT ? JSON.parse(host.eval('(() => { const n = Math.max(1, __scratch.tickMs.length - 48); return JSON.stringify(Object.fromEntries(Object.entries(__scratch.am).sort((a,b)=>b[1][0]-a[1][0]).slice(0, 40).map(([k,v])=>[k,[Math.round(v[0]/n*10)/10, Math.round(v[1]/n)]]))); })()')) : undefined,
+        wmoveStat: process.env.WMOVESTAT ? JSON.parse(host.eval('(() => { const n = Math.max(1, __scratch.tickMs.length - 48); return JSON.stringify(Object.fromEntries(Object.entries(__scratch.wm).sort((a,b)=>b[1][0]-a[1][0]).map(([k,v])=>[k,[Math.round(v[0]/n*10)/10, Math.round(v[1]/n)]]))); })()')) : undefined,
         wakeStat: process.env.WAKESTAT ? JSON.parse(host.eval('(() => { const n = Math.max(1, __scratch.tickMs.length - 48); return JSON.stringify(Object.fromEntries(Object.entries(__scratch.wk).sort((a,b)=>b[1][0]-a[1][0]).map(([k,v])=>[k,[Math.round(v[0]/n*10)/10, Math.round(v[1]/n)]]))); })()')) : undefined,
         updSplit: process.env.UPDSPLIT ? JSON.parse(host.eval('(() => { const n = Math.max(1, __scratch.tickMs.length - 48); return JSON.stringify(Object.fromEntries(Object.entries(__scratch.us).sort((a,b)=>b[1][0]-a[1][0]).map(([k,v])=>[k,[Math.round(v[0]/n*10)/10, Math.round(v[1]/n)]]))); })()')) : undefined,
         orderSplit: process.env.ORDERSPLIT ? JSON.parse(host.eval('JSON.stringify(Object.fromEntries(Object.entries(__scratch.os).map(([k,v])=>[k,[Math.round(v[0]),v[1]]])))')) : undefined,
