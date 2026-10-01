@@ -55,7 +55,7 @@ const SNAP_HASH_SLICES = 10;
 // Render, audio and index bookkeeping: rebuilt or irrelevant after restore.
 const SNAP_SKIP_KEYS = new Set([
     'textCtx', 'textCanvas', '_textCanvasScale', '_levelTextLabel', 'prevX', 'prevY',
-    '_statsVer', '_spatialKey', '_spatialMember', '_spatialAreaId', '_spatialAreaOwner', '_spatialUnitTypeIdx', '_spatialLastVisScaled', '_spatialTile', '_spatialZone', '_spatialOwner', '_spatialEpoch',
+    '_statsVer', '_spatialKey', '_spatialMember', '_spatialAreaId', '_spatialAreaOwner', '_spatialUnitTypeIdx', '_spatialLastVisScaled', '_spatialTile', '_spatialOwner', '_spatialEpoch',
     '_damageFlashStart', '_damageFlashUntil', '_damageFlashStrength', '_damageFlashColor', '_ambientSoundTicks',
     '_historyGhost', '_historyTick', '_droppedIndex', '_areaBucketId', '_laserLinkLevel', '_r3d', '_r3dSig', '_r3dTex', '_visStill', '_r3dStatic', '_rslot', '_sslot', '_pslot', '_simLabelKey', '_simLabel', '_fpPath', '_fpTile', '_fpIdx', '_fpVer',
     '_vsGen', '_vsR', '_vsA', '_vsP1', '_vsP2', '_vsAreas', '_vsListId', '_okTile', '_okVer', '_okNodeTile', '_okNodeVer', '_pendingDueStamp', '_thingStatsRefreshStamp', '_effectiveStatsStamp',
@@ -432,36 +432,51 @@ function _snapHashOrder(list, slice = -1) {
 
 let _snapStaticSliceCache = null;
 let _snapRegions = new Int32Array(0), _snapColHash = new Int32Array(0);
+// The region sums of one slice's units (SIM_KERNEL_SNAP_REGION, P[5] 1):
+// per region (ry * 1024 + rx) its sum, cleared as read; the stamp of the
+// call that listed it; the lists and their counts.
+const SNAP_ACC_REGIONS = 1 << 20;
+// (Tests turn it off to compare with the summing below; both agree.)
+let SNAP_HASH_KERNEL_SUMS = true;
+let _snapAcc = null, _snapAccStamp = null, _snapAccStampNow = 0, _snapAccList = null, _snapAccRot = new Int32Array(0), _snapAccNoSlot = new Int32Array(0), _snapAccCnt = null;
 
-// Per slice: [entity, hasher kind, seed, region, ...] for every building,
-// floor item and mine, rebuilt when the tile index changes.
+// Per slice: the tile entities (buildings, floor items, mines) of its
+// regions, as tile -> [entity, hasher kind, seed, region]: kept from the tile
+// entity journal (only changed tiles are looked at again); made anew when
+// the tile index was rebuilt. Region sums do not depend on the order.
 function _snapStaticSlices() {
     let c = _snapStaticSliceCache;
-    if (c && c.version === _tileEntityVersion && c.towers === towers && c.towersLength === towers.length
-        && c.barracks === barracks && c.barracksLength === barracks.length && c.spawners === collectorSpawners
-        && c.spawnersLength === collectorSpawners.length && c.gold === goldMines.length && c.astar === astarMines.length) return c.slices;
-    let rt = SNAP_REGION_TILES;
-    let slices = Array.from({ length: SNAP_HASH_SLICES }, () => []);
-    let put = (e, kind, code) => {
-        let r = Math.floor(e.gy / rt) * 1024 + Math.floor(e.gx / rt);
-        slices[r % SNAP_HASH_SLICES].push(e, kind, (Math.imul(e.gx, 4099) + e.gy) ^ code, r);
-    };
-    for (let e of towers) put(e, 'b', 0x22);
-    for (let e of barracks) put(e, 'b', 0x33);
-    for (let e of collectorSpawners) put(e, 'b', 0x44);
-    for (let e of goldMines) put(e, 'm', 0x66);
-    for (let e of astarMines) put(e, 'm', 0x77);
-    for (let item of getCellItemsRowMajor()) {
-        if (!item || _snapIsBuilding(item)) continue;
-        let cell = grid[item.gy] && grid[item.gy][item.gx];
-        if (!cell || cell.item !== item) continue;
-        put(item, 'b', 0x55);
+    const changes = c && c.w === GRID_W && c.h === GRID_H ? tileEntityChangesSince(c.cursor) : null;
+    if (changes === null) {
+        c = _snapStaticSliceCache = { w: GRID_W, h: GRID_H, cursor: { epoch: -1, pos: 0 }, slices: Array.from({ length: SNAP_HASH_SLICES }, () => new Map()) };
+        tileEntityChangesSince(c.cursor);
+        for (const e of _activeTileEntities) if (e && getTileEntityRef(e.gx, e.gy) === e) _snapStaticPut(c, e.gy * GRID_W + e.gx, e);
+        return c.slices;
     }
-    _snapStaticSliceCache = {
-        version: _tileEntityVersion, towers, towersLength: towers.length, barracks, barracksLength: barracks.length,
-        spawners: collectorSpawners, spawnersLength: collectorSpawners.length, gold: goldMines.length, astar: astarMines.length, slices
-    };
-    return slices;
+    for (const t of changes) {
+        const gx = t % GRID_W, gy = (t - gx) / GRID_W;
+        _snapStaticSliceOf(gx, gy, c).delete(t);
+        const e = getTileEntityRef(gx, gy);
+        if (e) _snapStaticPut(c, t, e);
+    }
+    return c.slices;
+}
+function _snapStaticSliceOf(gx, gy, c) {
+    const rt = SNAP_REGION_TILES, r = Math.floor(gy / rt) * 1024 + Math.floor(gx / rt);
+    return c.slices[r % SNAP_HASH_SLICES];
+}
+// The tile entity at tile t, by its kind: towers, barracks, spawners and
+// other floor items hashed as buildings, mines as mines.
+function _snapStaticPut(c, t, e) {
+    const gx = t % GRID_W, gy = (t - gx) / GRID_W, tt = getTileEntityType(gx, gy);
+    let kind = 'b', code = 0x55;
+    if (tt === TILE_ENTITY_GOLDMINE) { kind = 'm'; code = 0x66; }
+    else if (tt === TILE_ENTITY_ASTARMINE) { kind = 'm'; code = 0x77; }
+    else if (e instanceof Tower) code = 0x22;
+    else if (e instanceof Barrack) code = 0x33;
+    else if (isSpawnerEntity(e)) code = 0x44;
+    const rt = SNAP_REGION_TILES, r = Math.floor(gy / rt) * 1024 + Math.floor(gx / rt);
+    c.slices[r % SNAP_HASH_SLICES].set(t, [e, kind, (Math.imul(gx, 4099) + gy) ^ code, r]);
 }
 
 // Worker reservations (target tile and worker type -> unit). The table is
@@ -609,10 +624,59 @@ function snapTickHash(tick, allSlices = false) {
         REG = _snapRegions; HC = allSlices ? null : _snapColHash;
         simParallelBind('ix.slots', slots); simParallelBind('snap.reg', REG); simParallelBind('snap.hc', _snapColHash);
         const P = _simParams;
-        P[0] = units.length; P[1] = 8192; P[2] = ts; P[3] = allSlices ? 0 : SNAP_HASH_SLICES; P[4] = slice;
+        P[0] = units.length; P[1] = 8192; P[2] = ts; P[3] = allSlices ? 0 : SNAP_HASH_SLICES; P[4] = slice; P[5] = 0;
+        if (!allSlices && SNAP_HASH_KERNEL_SUMS) {
+            if (!_snapAcc) {
+                _snapAcc = simSharedArray(Int32Array, SNAP_ACC_REGIONS); _snapAccStamp = simSharedArray(Int32Array, SNAP_ACC_REGIONS);
+                _snapAccList = simSharedArray(Int32Array, SNAP_ACC_REGIONS); _snapAccCnt = simSharedArray(Int32Array, 3);
+                simParallelBind('snap.acc', _snapAcc); simParallelBind('snap.stamp', _snapAccStamp); simParallelBind('snap.list', _snapAccList); simParallelBind('snap.cnt', _snapAccCnt);
+            }
+            if (_snapAccRot.length < units.length) {
+                _snapAccRot = simSharedArray(Int32Array, units.length * 2); _snapAccNoSlot = simSharedArray(Int32Array, units.length * 2);
+                simParallelBind('snap.rot', _snapAccRot); simParallelBind('snap.noslot', _snapAccNoSlot);
+            }
+            if (++_snapAccStampNow >= 0x7fffffff) { _snapAccStamp.fill(0); _snapAccStampNow = 1; }
+            _snapAccCnt.fill(0);
+            P[5] = 1; P[6] = rot; P[7] = SNAP_HASH_UNIT_GROUPS; P[8] = _snapAccStampNow; P[9] = SNAP_ACC_REGIONS;
+        }
         simParallelRun(SIM_KERNEL_SNAP_REGION, Math.ceil(units.length / 8192));
     }
-    for (let i = 0; i < units.length; i++) {
+    // One slice through the kernel: its sums, then the units it left (this
+    // rotation's group by id, with their objects' fields; units without a
+    // slot or outside the summed regions, as below).
+    if (REG !== null && !allSlices && SNAP_HASH_KERNEL_SUMS) {
+        const ACC = _snapAcc, RL = _snapAccRot, NL = _snapAccNoSlot, LIST = _snapAccList;
+        for (let k = 0, n = _snapAccCnt[1]; k < n; k++) {
+            const i = RL[k], si = slots[i], u = units[i], seed = Math.imul(CID[si], 7919) ^ 0x11;
+            let h = (_snapUnitObjHasher(u, seed, _snapF64, _snapI32, _snapHV, _snapHPath) + HC[i]) | 0;
+            h = Math.imul(h ^ (h >>> 15), 2246822519);
+            ACC[REG[i]] = (ACC[REG[i]] + h) | 0;
+        }
+        for (let k = 0, n = _snapAccCnt[0]; k < n; k++) {
+            const r = LIST[k], h = ACC[r] >>> 0;
+            ACC[r] = 0;
+            let prev = regions.get(r);
+            regions.set(r, prev === undefined ? h : ((prev + h) >>> 0));
+        }
+        for (let k = 0, n = _snapAccCnt[2]; k < n; k++) {
+            const i = NL[k], u = units[i], si = slots[i];
+            let r;
+            if (si >= 0 && owners[si] === u) r = Math.floor(CY[si] / ts) * 1024 + Math.floor(CX[si] / ts);
+            else r = Math.floor(u.y / ts) * 1024 + Math.floor(u.x / ts);
+            if ((r % SNAP_HASH_SLICES) !== slice) continue;
+            let h;
+            if (si >= 0 && owners[si] === u) {
+                const id = CID[si], seed = Math.imul(id, 7919) ^ 0x11;
+                h = ((((id % SNAP_HASH_UNIT_GROUPS) + SNAP_HASH_UNIT_GROUPS) % SNAP_HASH_UNIT_GROUPS) === rot
+                    ? (_snapUnitObjHasher(u, seed, _snapF64, _snapI32, _snapHV, _snapHPath) + HC[i]) : (seed + HC[i])) | 0;
+            }
+            else h = hu(u, Math.imul(u.id, 7919) ^ 0x11, _snapF64, _snapI32, _snapHV, _snapHPath);
+            h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
+            let prev = regions.get(r);
+            regions.set(r, prev === undefined ? h : ((prev + h) >>> 0));
+        }
+    }
+    else for (let i = 0; i < units.length; i++) {
         let r;
         if (REG !== null && REG[i] >= 0) {
             r = REG[i];
@@ -642,11 +706,10 @@ function snapTickHash(tick, allSlices = false) {
     // tile index changes (something built, destroyed or depleted).
     let slices = _snapStaticSlices();
     let hashStatic = (entries) => {
-        for (let j = 0; j < entries.length; j += 4) {
-            let e = entries[j];
-            let h = _snapHashers[entries[j + 1]](e, entries[j + 2], _snapF64, _snapI32, _snapHV, _snapHPath);
+        for (const en of entries.values()) {
+            let h = _snapHashers[en[1]](en[0], en[2], _snapF64, _snapI32, _snapHV, _snapHPath);
             h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
-            let r = entries[j + 3];
+            let r = en[3];
             let prev = regions.get(r);
             regions.set(r, prev === undefined ? h : ((prev + h) >>> 0));
         }
@@ -1663,6 +1726,9 @@ function _snapResetWorkerCaches() {
     _healerDamagedCandidatesTick = NaN;
     _healerDamagedCandidatesByOwner = [];
     _workerSpawnerIndex = null;
+    if (typeof _salvageMarksCache !== 'undefined') _salvageMarksCache.ver = -1;
+    if (typeof _ownedQueueSpawnersCache !== 'undefined') _ownedQueueSpawnersCache.vb = -1;
+    if (typeof _collectorSpawnerSetCache !== 'undefined') _collectorSpawnerSetCache.ver = -1;
     if (typeof _upKeepAccum !== 'undefined') _upKeepAccum = null;
 }
 
@@ -2086,6 +2152,7 @@ function snapFlushHistoryCaches() {
     if (typeof simMoveDisarmAll === 'function') simMoveDisarmAll(); if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsInvalidateAll === 'function') effStatsInvalidateAll(); if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset(); if (typeof shrineResetPending === 'function') shrineResetPending();
     // Gameplay visibility is reused between ticks (see VISIBILITY_TICK_INTERVAL).
     if (typeof clearGameplayVisibilityCache === 'function') clearGameplayVisibilityCache();
+    if (typeof thingStatusRebuild === 'function') thingStatusRebuild();
     closestEnemyChunkQueryCache.clear();
     // Worker caches stamped with gameTime: the previous tick's last part and
     // the next tick's first part share it, so a peer that restores would

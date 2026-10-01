@@ -310,6 +310,15 @@ class Barrack {
 // ============================================================
 // COLLECTOR / SALVAGER (barrack-like spawners + worker units)
 // ============================================================
+// A barrack or spawner whose update would change nothing: nothing queued,
+// its timer at rest, no status running, alive; not a research building
+// (its update moves research on). (Its spawn cooldown is worked
+// out again by its next update, once something is queued.)
+function spawnerQuiet(b) {
+    return b.type !== 'research' && !!b.spawnQueue && b.spawnQueue.length === 0 && !(b.spawnTimer > 0) && b._spawnReadyOrder === undefined
+        && b.energy > 0 && !thingStatusPending(b);
+}
+
 class CollectorSpawner {
     constructor(gx, gy, owner, stacks = 1) {
         this.gx = gx; this.gy = gy; this.owner = owner;

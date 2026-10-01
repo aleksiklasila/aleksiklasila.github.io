@@ -2721,7 +2721,6 @@ function resetWorldState() {
     if (typeof resetNewUnitsForStats === 'function') resetNewUnitsForStats();
     pathTopologyVersion = 1;
     sharedPathCache.clear();
-    sharedSpawnerRouteCache.clear();
     resetSimulationTickCaches();
     resetEnergyDeltaTracking();
     resetNetCounters();

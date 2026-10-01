@@ -500,7 +500,7 @@ class Unit {
         // per-unit tick loops stay monomorphic instead of megamorphic.
         // Values stay undefined, as if the field had never been set.
         this._lastAppliedEffectiveLevel = undefined;
-        this._floorTile = -1; this._removedNow = false; this._routeKey = null; this._routeEnd = -1; this._routeSegEnd = -1; this._pendingDueStamp = -1; this._okTile = -1; this._okVer = 0; this._okNodeTile = -1; this._okNodeVer = 0; this._thingStatsRefreshStamp = 0; this._effectiveStatsStamp = 0; this._statsVer = -1; this._navReady = 0; this._navLastD = -1; this._vsGen = 0; this._vsR = -1; this._vsA = -1; this._vsP1 = -1; this._vsP2 = -1; this._vsListId = -1;
+        this._floorTile = -1; this._removedNow = false; this._routeKey = null; this._routeEnd = -1; this._routeSegEnd = -1; this._pendingDueStamp = -1; this._okTile = -1; this._okVer = 0; this._okNodeTile = -1; this._okNodeVer = 0; this._thingStatsRefreshStamp = 0; this._effectiveStatsStamp = 0; this._statsVer = -1; this._navReady = 0; this._navLastD = -1; this._vsGen = 0; this._vsR = -1; this._vsA = -1; this._vsP1 = -1; this._vsP2 = -1;
         this.workerState = undefined; this.workerType = undefined; this.carryingValue = undefined; this.workerTarget = undefined;
         this.workerTargetType = undefined; this._workerReservedTileIndex = undefined; this._resourceCollectorMemory = undefined;
         this._collectorPinnedTarget = undefined; this._collectorPinnedTargetType = undefined; this._collectorLastGatherX = undefined;
@@ -513,8 +513,7 @@ class Unit {
         this.builderHasMaterial = undefined; this._builderLastWatchX = undefined; this._builderLastWatchY = undefined;
         this._builderLastMoveTick = undefined; this._builderNextRecheckTick = undefined; this.healerHasMaterial = undefined;
         this._healerQueueCommitTarget = undefined; this._healerQueueCommitRequired = undefined; this._healerQueueCommitMaxPaid = undefined;
-        this.researcherHasMaterial = undefined; this._workerLastPathX = undefined; this._workerLastPathY = undefined;
-        this._workerPathStallTicks = undefined; this._workerLastPathKey = undefined; this._workerLastPathTick = undefined;
+        this.researcherHasMaterial = undefined;
         this._astarLastChargedTick = undefined; this._astarLastChargedFromKey = undefined; this._astarLastChargedToKey = undefined;
         this._attackMoveGx = undefined; this._attackMoveGy = undefined; this.pathIsFallbackAstar = undefined;
         this._pendingPathTarget = undefined; this._astarBudgetBlockedUntil = undefined; this._astarBudgetRetryTick = undefined;
@@ -533,7 +532,7 @@ class Unit {
         this._healerNextRecheckTick = undefined; this._researchLastMoveTick = undefined; this._researchNextRecheckTick = undefined;
         this.holdPosition = undefined; this._ambientSoundTicks = undefined;
 
-        this._spatialKey = undefined; this._spatialAreaId = undefined; this._spatialTile = -1; this._spatialZone = -1; this._spatialOwner = -1; this._spatialEpoch = 0; this._r3d = undefined; this._r3dSig = undefined; this._r3dTex = undefined; this._visStill = undefined; this._rslot = undefined; this._awaitGroupPath = 0;
+        this._spatialKey = undefined; this._spatialAreaId = undefined; this._spatialTile = -1; this._spatialOwner = -1; this._spatialEpoch = 0; this._r3d = undefined; this._r3dSig = undefined; this._r3dTex = undefined; this._visStill = undefined; this._rslot = undefined; this._awaitGroupPath = 0;
         if (!_unitFieldsMutable) _makeUnitFieldsMutable(this);
         // A snapshot restore writes every field itself (same order, so the
         // same layout) and indexes the unit afterwards.
@@ -578,8 +577,6 @@ class Unit {
     set _spatialOwner(v) { const c = this._us; if (c) c.spOwner[this._si] = v; else if (c === undefined) Object.defineProperty(this, '_spatialOwner', { value: v, writable: true, configurable: true }); }
     get _spatialEpoch() { const c = this._us; return c ? c.spEpoch[this._si] : 0; }
     set _spatialEpoch(v) { const c = this._us; if (c) c.spEpoch[this._si] = v; else if (c === undefined) Object.defineProperty(this, '_spatialEpoch', { value: v, writable: true, configurable: true }); }
-    get _spatialZone() { const c = this._us; return c ? c.spZone[this._si] : -1; }
-    set _spatialZone(v) { const c = this._us; if (c) c.spZone[this._si] = v; else if (c === undefined) Object.defineProperty(this, '_spatialZone', { value: v, writable: true, configurable: true }); }
     get _spatialUnitTypeIdx() { const c = this._us; if (!c) return undefined; const v = c.spType[this._si]; return v === -1 ? undefined : v; }
     set _spatialUnitTypeIdx(v) { const c = this._us; if (c) c.spType[this._si] = v === undefined ? -1 : v; else if (c === undefined) Object.defineProperty(this, '_spatialUnitTypeIdx', { value: v, writable: true, configurable: true }); }
     get _vsGen() { const c = this._us; return c ? c.vsGen[this._si] : 0; }
@@ -594,10 +591,6 @@ class Unit {
     set _vsP2(v) { const c = this._us; if (c) c.vsP2[this._si] = v; else if (c === undefined) Object.defineProperty(this, '_vsP2', { value: v, writable: true, configurable: true }); }
     get _spatialKey() { const c = this._us; if (!c) return undefined; const k = c.sepKey[this._si]; return k === SIM_SEP_ABSENT ? undefined : k; }
     set _spatialKey(v) { const c = this._us; if (c) c.sepKey[this._si] = v === undefined ? SIM_SEP_ABSENT : v; else if (c === undefined) Object.defineProperty(this, '_spatialKey', { value: v, writable: true, configurable: true }); }
-    get _vsAreas() { const c = this._us; if (!c) return null; const id = c.vsList[this._si]; return id < 0 ? null : _sourceAreaListById[id]; }
-    set _vsAreas(v) { const c = this._us; if (c) c.vsList[this._si] = v ? _sourceAreaListIdOf(v) : -1; else if (c === undefined) Object.defineProperty(this, '_vsAreas', { value: v, writable: true, configurable: true }); }
-    get _vsListId() { const c = this._us; return c ? c.vsList[this._si] : -1; }
-    set _vsListId(v) { const c = this._us; if (c) c.vsList[this._si] = v; }
     // Stacks and levels: columns (SIM_UNIT_LEVEL_COLUMNS; NaN: not set).
     get stackCount() { const c = this._us; const v = c ? c.stackCount[this._si] : (this._det ? this._det.stackCount : undefined); return v === v ? v : undefined; }
     set stackCount(v) { const c = this._us; if (c) c.stackCount[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det.stackCount = v; else Object.defineProperty(this, 'stackCount', { value: v, writable: true, enumerable: true, configurable: true }); }
@@ -616,6 +609,8 @@ class Unit {
     get _floorTile() { const c = this._us; return c ? c.mvFloor[this._si] : (this._det ? this._det._floorTile : this._flt); }
     set _floorTile(v) { const c = this._us; if (c) c.mvFloor[this._si] = v; else if (this._det) this._det._floorTile = v; else Object.defineProperty(this, '_flt', { value: v, writable: true, configurable: true }); }
     // Arriving in a crowd (see _followNavNode): a column (mvNavLD) the kernel shares.
+    get _sepMoved() { const c = this._us; return c ? c.sepMov[this._si] : (this._det ? this._det._sepMoved : (this._smv | 0)); }
+    set _sepMoved(v) { const c = this._us; if (c) c.sepMov[this._si] = v ? 1 : 0; else if (this._det) this._det._sepMoved = v ? 1 : 0; else Object.defineProperty(this, '_smv', { value: v ? 1 : 0, writable: true, configurable: true }); }
     get _navLastD() { const c = this._us; return c ? c.mvNavLD[this._si] : (this._det ? this._det._navLastD : this._nld); }
     set _navLastD(v) { const c = this._us; if (c) c.mvNavLD[this._si] = v; else if (this._det) this._det._navLastD = v; else Object.defineProperty(this, '_nld', { value: v, writable: true, configurable: true }); }
     // Dead: a column (see SIM_MOVE_COLUMNS), true or false.
@@ -786,6 +781,7 @@ class Unit {
         if (cols) {
             let cmd = this.commandState;
             if (cmd === CMD_MOVING || cmd === CMD_ATTACK_MOVING) simMoveTryArm(this);
+            else if (cmd === CMD_IDLE && this.workerState && this.workerTransferCooldown > 0) simMoveTryParkWork(this);
             else if (cmd === CMD_IDLE && this.workerState === 'IDLE') simMoveTryPark(this);
             else if (cmd === CMD_IDLE && !this.workerState) simMoveTryParkIdle(this);
             else if (cmd === CMD_ATTACKING) {
@@ -1345,9 +1341,16 @@ class Unit {
                 if (_unitCrowdIdleNear(this)) { this._navLastD = -2 - dest; return false; }
             }
         } else this._navLastD = -1;
-        const profile = nd.nav - 1, slot = navFieldRequest(profile, dest, !!nd.w), n = navStep(profile, t, dest, slot);
-        if (n < 0) { this.pathIndex = this.path.length; return true; }
-        const nx = n % W, ny = (n - nx) / W;
+        const profile = nd.nav - 1, slot = navFieldRequest(profile, dest, !!nd.w);
+        let n = navStep(profile, t, dest, slot);
+        // No way there on the navigation: a worker more than a tile away
+        // stands and waits (its task looks again on its check ticks; a new
+        // build may open the way); anything else has arrived as near as it
+        // gets.
+        if (n < 0) {
+            if (this.workerState && (Math.abs(nd.x - gx) > 1 || Math.abs(nd.y - gy) > 1)) return false;
+            this.pathIndex = this.path.length; return true;
+        }
         let tx, ty;
         // Exactly as the movement kernel steers (flow mode; it hands the
         // unusual cases back here): on open ground up to 6 tiles ahead (all
@@ -1355,9 +1358,18 @@ class Unit {
         // from the line; elsewhere the next tile's centre on its lane. n2:
         // the tile after the next.
         const wall = navWallTable(profile);
-        const open = _simOpenBlock(wall, t, W, GRID_H) && _simOpenBlock(wall, n, W, GRID_H);
+        // A wall the navigation predates (rebuilt in the background): around
+        // it (simNavDetour), toward where the flow leads past it.
+        const detour = !!wall[n];
+        if (detour) {
+            let aim = navStep(profile, n, dest, slot);
+            if (!(aim >= 0) || wall[aim]) aim = dest;
+            n = simNavDetour(wall, W, GRID_H, gx, gy, aim);
+            if (n < 0) return false;
+        }
+        const open = !detour && _simOpenBlock(wall, t, W, GRID_H) && _simOpenBlock(wall, n, W, GRID_H);
         let far = n, n2 = -1;
-        for (let k = 1, cur = n; k < (open ? 6 : 2); k++) {
+        for (let k = 1, cur = n; k < (detour ? 1 : open ? 6 : 2); k++) {
             const nn = navStep(profile, cur, dest, slot);
             if (nn < 0 || wall[nn]) break;
             if (k === 1) n2 = nn;
@@ -1390,7 +1402,13 @@ class Unit {
             dx = tx - this.x; dy = ty - this.y; dist = Math.sqrt(dx * dx + dy * dy);
             if (dist < 4) return false;
         }
-        const vx = (dx / dist) * spd, vy = (dy / dist) * spd;
+        let vx = (dx / dist) * spd, vy = (dy / dist) * spd;
+        // Into a wall (on the ground): along it, one axis, else it stands.
+        if (profile === NAV_PROFILE_GROUND) {
+            const sl = simFlowSlide(wall, W, GRID_H, gx, gy, Math.floor((this.x + vx) / TILE), Math.floor((this.y + vy) / TILE));
+            if (sl & 1) vx = 0;
+            if (sl & 2) vy = 0;
+        }
         this.x += vx; this.y += vy; this.vx = vx; this.vy = vy;
         // Entering another tile is a step (charged like a path node; a step
         // the owner cannot cover still happens, as in the kernel).
@@ -2277,67 +2295,6 @@ function simMoveStatsChanged(u) {
     c.mvSpd[s] = spd; c.mvReach[s] = reach; c.mvCost[s] = _resolveUnitAstarTileCost(u);
 }
 
-// Zones of tile (gx, gy) whose +-0.3 tile windows cover the same areas as
-// `zone`'s (bit per zone; see updateUnitSpatial for the zones).
-const _simMoveNearAreas = new Int32Array(9), _simMoveSetA = new Int32Array(4), _simMoveSetB = new Int32Array(4);
-function _simMoveWindowAreas(zone, out) {
-    const zx = (zone / 3) | 0, zy = zone % 3;
-    let n = 0;
-    for (let dx = zx === 0 ? -1 : 0; dx <= (zx === 2 ? 1 : 0); dx++) for (let dy = zy === 0 ? -1 : 0; dy <= (zy === 2 ? 1 : 0); dy++) {
-        const v = _simMoveNearAreas[(dx + 1) * 3 + dy + 1];
-        if (v < 0) continue;
-        let i = 0;
-        while (i < n && out[i] < v) i++;
-        if (i < n && out[i] === v) continue;
-        for (let j = n; j > i; j--) out[j] = out[j - 1];
-        out[i] = v; n++;
-    }
-    return n;
-}
-// Cached per tile and zone (0: not yet known) for the current area layout;
-// a new layout also resets every unit's mask (see resetUnitZoneMasks).
-let _simMoveZoneMaskCache = null, _simMoveZoneMaskGrid = null, _simMoveZoneMaskAdm = null;
-function _simMoveZoneMask(gx, gy, zone) {
-    if (_simMoveZoneMaskGrid !== areaIdGrid || _simMoveZoneMaskAdm !== areaDistanceMatrix || !_simMoveZoneMaskCache || _simMoveZoneMaskCache.length !== GRID_W * GRID_H * 9) {
-        if (!_simMoveZoneMaskCache || _simMoveZoneMaskCache.length !== GRID_W * GRID_H * 9) _simMoveZoneMaskCache = new Uint16Array(GRID_W * GRID_H * 9);
-        else _simMoveZoneMaskCache.fill(0);
-        _simMoveZoneMaskGrid = areaIdGrid; _simMoveZoneMaskAdm = areaDistanceMatrix;
-        resetUnitZoneMasks();
-    }
-    if (!(gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)) return _simMoveZoneMaskOf(gx, gy, zone);
-    const k = (gy * GRID_W + gx) * 9 + zone;
-    let m = _simMoveZoneMaskCache[k];
-    if (m === 0) m = _simMoveZoneMaskCache[k] = _simMoveZoneMaskOf(gx, gy, zone);
-    return m;
-}
-// Every unit's registered window zone counts as unknown (the next zone
-// change re-registers it).
-function resetUnitZoneMasks() {
-    const S = _simUnitState;
-    if (S) S.columns.mvZmask.fill(0);
-}
-function _simMoveZoneMaskOf(gx, gy, zone) {
-    const center = getAreaIdAtTile(gx, gy);
-    let same = true;
-    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
-        const v = getAreaIdAtTile(gx + dx, gy + dy);
-        _simMoveNearAreas[(dx + 1) * 3 + dy + 1] = v;
-        if (v !== center) same = false;
-    }
-    if (same) return 0x1FF;
-    const n = _simMoveWindowAreas(zone, _simMoveSetA);
-    let mask = 0;
-    for (let z = 0; z < 9; z++) {
-        if (z === zone) { mask |= 1 << z; continue; }
-        const m = _simMoveWindowAreas(z, _simMoveSetB);
-        if (m !== n) continue;
-        let eq = true;
-        for (let i = 0; i < n && eq; i++) eq = _simMoveSetA[i] === _simMoveSetB[i];
-        if (eq) mask |= 1 << z;
-    }
-    return mask;
-}
-
 // Flow mode: a unit following the flow navigation (destination field slot
 // `fid`, its generation `gen`; the air navigation for a flying unit) to tile
 // `dest` under command `cmd`, armed
@@ -2408,12 +2365,14 @@ function simMoveTryArm(u) {
         if (did >= 0) simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, nd.ready | 0, !!u.workerState || !nd.w, !!u.workerState);
         return;
     }
-    if (u.workerState) return;
-    if (!u.holdPosition && u._spatialEpoch === spatialEpoch && _simMoveTryFlowArm(u, c, u._si, cmd)) return;
+    // (Workers walk their own paths: no group routes.)
+    const worker = !!u.workerState;
+    if (!worker && !u.holdPosition && u._spatialEpoch === spatialEpoch && _simMoveTryFlowArm(u, c, u._si, cmd)) return;
     const path = u.path, idx = u.pathIndex;
     // Waiting for its group's route (see routeGroupMembers): parked until
     // the route gives it a path (the path setter wakes it) or its wait ends.
     const waiting = !path || !(idx < path.length);
+    if (waiting && worker) return;
     if (waiting && !(u.pathIsFallbackAstar && u._pendingPathTarget && u._pendingPathTarget.cmd === cmd && u._awaitGroupPath > gameTime + 1)) return;
     const s = u._si;
     if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
@@ -2461,6 +2420,9 @@ function simMoveTryArm(u) {
     for (; wl < SIM_MOVE_WINDOW && base + wl < path.length; wl++) {
         const n = path[base + wl], nx = n.x, ny = n.y;
         if (wl > 0 && (Math.abs(nx - px) + Math.abs(ny - py) !== 1 || (clouds && isCloudPortalLink(px, py, nx, ny, owner)))) break;
+        // (A worker's path ends on its target's tile, where it may not
+        // stand: Unit.update walks it from there on.)
+        if (worker && wl > 0 && !canUnitOccupyTile(u, nx, ny)) break;
         nodes[nb + wl] = ny * GRID_W + nx;
         px = nx; py = ny;
     }
@@ -2475,7 +2437,7 @@ function simMoveTryArm(u) {
     c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvSpd[s] = spd;
     c.mvLane[s] = Math.max(1.5, Math.min(4, u.r * 0.6));
     c.mvCost[s] = _resolveUnitAstarTileCost(u);
-    c.mvScan[s] = -1; c.mvSpent[s] = 0;
+    c.mvScan[s] = -1; c.mvSpent[s] = 0; c.mvWk[s] = worker ? 1 : 0;
     c.mvOn[s] = 1;
 }
 
@@ -2537,7 +2499,7 @@ function _simMoveTryApproachBuilding(u) {
     c.mvReach[s] = k; c.mvSpd[s] = spd;
     c.mvLane[s] = Math.max(1.5, Math.min(4, u.r * 0.6));
     c.mvCost[s] = _resolveUnitAstarTileCost(u);
-    c.mvScan[s] = -1; c.mvSpent[s] = 0;
+    c.mvScan[s] = -1; c.mvSpent[s] = 0; c.mvWk[s] = 0;
     c.mvHT[s] = gy * GRID_W + gx; c.mvHTId[s] = u.forcedAttackTarget ? 1 : 0;
     c.mvOn[s] = 6;
 }
@@ -2563,8 +2525,8 @@ function _isChaseStepOpen(u, t, d, px = t.x, py = t.y) {
 // needs nothing of Unit.update while nothing changes (the status pre-pass
 // counts its timers down). The kernel hands the unit back on the tick of
 // its attack, or at once when the target dies or leaves its tile, the unit
-// leaves its tile or window zone (the range is a matter of those), or the
-// target's area leaves its owner's sight. Forced targets (their last seen
+// leaves its tile (the range is a matter of that), or the target's area
+// leaves its owner's sight. Forced targets (their last seen
 // position is kept each tick), held units and structures stay in
 // Unit.update.
 function simMoveTryHold(u) {
@@ -2688,13 +2650,26 @@ function simHoldUndo(c, s) {
 // floor and its aggro box (hostile units or structures there: back to
 // Unit.update, which engages) each tick, and wakes it every
 // SIM_IDLE_PARK_TICKS for its periodic checks.
-const SIM_IDLE_PARK_TICKS = 20;
+const SIM_IDLE_PARK_TICKS = 100;
 function simMoveTryParkIdle(u) {
     const c = u._us;
     if (!c || u.dead || u.holdPosition || u.workerState || u.unitType === 'scout' || u._attackMoveGx != null) return;
     const s = u._si, reach = c.mvReachA[s];
     if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT || reach === 255) return;
     c.mvWake[s] = gameTime + SIM_IDLE_PARK_TICKS; c.mvFlags[s] = 16; c.mvReach[s] = reach;
+    c.mvOn[s] = 2;
+}
+// A worker at its work (its path done, nothing pending) whose transfer
+// cooldown runs: Unit.update only stands it there until the cooldown runs
+// out (updateWorkerAI; the status pre-pass counts it down), so it is parked
+// until that tick.
+function simMoveTryParkWork(u) {
+    const c = u._us;
+    if (!c || u.dead || u.holdPosition || u.workerState === 'MANUAL_MOVE' || !(u.workerTransferCooldown > 0)) return;
+    if ((u.path && u.pathIndex < u.path.length) || u._pendingPathTarget) return;
+    const s = u._si;
+    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
+    c.mvWake[s] = gameTime + Math.ceil(u.workerTransferCooldown); c.mvFlags[s] = 0;
     c.mvOn[s] = 2;
 }
 function simMoveTryPark(u) {
@@ -2736,11 +2711,11 @@ function simMoveTryPark(u) {
     // (A collector that has no idle start yet sets it on its next update.)
     if (Number.isInteger(failVer) && Number.isFinite(failUntil) && failUntil > gameTime + 1
         && !(isResourceCollectorWorkerType(u.workerType) && !u._lastIdleStateTime)) {
-        const org = _workerWorkOrigin(u), gx = Math.floor(c.x[s] / TILE), gy = Math.floor(c.y[s] / TILE);
+        const org = _workerWorkOrigin(u);
         c.wkType[s] = _workerWorkType(u.workerType); c.wkD[s] = Math.ceil(_getWorkerAutoSearchDistancePx(u) / TILE) + 1;
         c.wkOx[s] = Math.floor(org.x / TILE); c.wkOy[s] = Math.floor(org.y / TILE);
         c.wkTwice[s] = org !== u ? 1 : 0;
-        c.wkTile[s] = gy * GRID_W + gx; c.wkFail[s] = failVer | 0; c.wkUntil[s] = failUntil; c.wkSched[s] = sched;
+        c.wkFail[s] = failVer | 0; c.wkUntil[s] = failUntil; c.wkSched[s] = sched;
         c.mvFlags[s] |= 2;
     }
     c.mvOn[s] = 2;
@@ -2977,8 +2952,7 @@ function simMoveRun() {
         // Into a wall tile: the end of Unit.update (pushed out; can start
         // path work on the owner's budget): in id order afterwards.
         if (o === 4) { if (owners[s]) (slow ||= []).push(owners[s]); continue; }
-        // A window zone covering other areas, or another tile: the spatial
-        // index and visibility, from the columns.
+        // Another tile: the spatial index, from the columns.
         spatialSlotUpdate(c, s);
         // A drive-by shooter entering another area needs its box.
         if (o === 3 && (c.mvFlags[s] & 1) && c.spArea[s] >= 0) _simMoveEnsureAreaBox(c.spArea[s], c.mvReach[s]);
@@ -3097,14 +3071,14 @@ function simMoveEndTick() {
 // Large worlds: the entries are the unit index's (spatialIndexRebuild,
 // just before this pass), grouped by chunk, with each entry's slot; the
 // kernels read the unit state columns, nothing is gathered from objects.
-function _prepareSharedUnitSeparation(S, restTicks) {
+function _prepareSharedUnitSeparation(S, restTicks, early = false) {
     const n = spatialIndexEntries();
     if (!n) return 0;
     _sepShared(S, 'box', Int32Array, CHUNKS_W * CHUNKS_H * 4);
     simParallelBind('sep.eslot', _sxESlot); simParallelBind('sep.ekey', _sxEKey);
     simParallelBind('sep.rs', _sxStart); simParallelBind('sep.rc', _sxCount); simParallelBind('sep.rstamp', _sxStamp);
     _simParams[0] = n; _simParams[1] = 512;
-    _simParams[2] = restTicks; _simParams[3] = gameTime;
+    _simParams[2] = restTicks; _simParams[3] = gameTime; _simParams[4] = early ? 1 : 0;
     simParallelRun(SIM_KERNEL_SEPARATION_PREPARE, Math.ceil(n / 512));
     _simParams[0] = n; _simParams[1] = 2048; _simParams[2] = _sxEpoch; _simParams[3] = CHUNKS_W; _simParams[4] = CHUNKS_H;
     simParallelRun(SIM_KERNEL_SEPARATION_YIELD, Math.ceil(n / 2048));
@@ -3114,12 +3088,78 @@ function _prepareSharedUnitSeparation(S, restTicks) {
 // How far a unit may have moved within a tick since the unit index was
 // built (a unit's step plus a push), for the collision pass's culling.
 const UNIT_SEPARATION_INDEX_MARGIN = TILE * 0.5;
+// Large worlds (slots) start the separation at the tick's start, as a
+// background job (lane 0) the helpers run while the simulation thread does
+// the unit pass: contacts from where the units stand as the tick begins
+// (movers: units that moved by themselves last tick, _sepMoved), pushes
+// applied after the pass (runUnitSeparationPass). Small worlds separate
+// after the pass from where units are then.
+let SEPARATION_SLOT_MIN_UNITS = 4096;
+let _sepPending = null;
+function separationStart() {
+    _sepPending = null;
+    const U = _simUnitState;
+    if (!U || units.length < SEPARATION_SLOT_MIN_UNITS || !(CHUNKS_W * CHUNKS_H < SIM_SEP_ABSENT)) return;
+    const n = U.owners.length;
+    _sepGrow(n);
+    const S = _sep, cap = S.cap, nChunks = CHUNKS_W * CHUNKS_H;
+    const restTicks = getUnitCollisionRecalcTicks();
+    for (const [name, Type, size] of [['chunkR', Float64Array, nChunks], ['chunkC', Uint8Array, nChunks], ['sole', Int32Array, nChunks], ['start', Int32Array, nChunks + 1],
+        ['ord', Int32Array, cap], ['sx', Float64Array, cap], ['sy', Float64Array, cap], ['sr', Float64Array, cap], ['so', Int32Array, cap], ['sl', Uint8Array, cap],
+        ['sc', Uint8Array, cap], ['sid', Float64Array, cap], ['slots', Int32Array, cap], ['keys', Int32Array, cap], ['jobs', Int32Array, cap],
+        ['sdx', Float64Array, cap], ['sdy', Float64Array, cap]]) _sepShared(S, name, Type, size);
+    const PX = _sepShared(S, 'px', Float64Array, cap), PY = _sepShared(S, 'py', Float64Array, cap);
+    const OV = _sepShared(S, 'ov', Float64Array, cap), HIT = _sepShared(S, 'hit', Uint32Array, cap);
+    PX.fill(0, 0, n); PY.fill(0, 0, n); OV.fill(0, 0, n); HIT.fill(0, 0, n);
+    if (!S.margin) { S.margin = simSharedArray(Float64Array, 1); simParallelBind('sep.margin', S.margin); }
+    // (The index and the positions are both the tick's start.)
+    S.margin[0] = 0;
+    _simParams[4] = 1;
+    const jobCount = _prepareSharedUnitSeparation(S, restTicks, true);
+    // (No contacts to look for: the commit still records who moved.)
+    if (!jobCount) { _sepPending = { tick: gameTime, n }; return; }
+    _sepNeighbourOffsets(S);
+    const pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0), maxR = Math.max(0.1, _maxUnitCollisionRadius()), cws = CHUNK_SIZE * TILE;
+    const P = _simTickBgParams, unitsPerJob = 128;
+    P[0] = CHUNKS_W; P[1] = CHUNKS_H; P[2] = unitsPerJob; P[3] = pad; P[4] = 2 * maxR + pad; P[5] = UNIT_SEPARATION_Q;
+    P[6] = UNIT_SEPARATION_SHARE_BOTH; P[7] = UNIT_SEPARATION_SHARE_ONE; P[8] = S.offs.length / 3;
+    P[9] = jobCount; P[10] = cws; P[11] = _sxEpoch; P[12] = UNIT_SEPARATION_SHARE_MOVER; P[13] = UNIT_SEPARATION_SHARE_YIELD;
+    P[14] = 1;
+    simParallelBackground(SIM_KERNEL_SEPARATION, Math.ceil(jobCount / unitsPerJob), 0);
+    _sepPending = { tick: gameTime, n };
+}
+// The neighbour tile offsets (all around, with the least distance between
+// the tiles) for the separation kernel.
+function _sepNeighbourOffsets(S) {
+    const pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0), maxR = Math.max(0.1, _maxUnitCollisionRadius());
+    const cws = CHUNK_SIZE * TILE, reach = Math.max(1, Math.ceil((2 * maxR + pad) / cws));
+    if (!S.offs || S.offsReach !== reach || S.offsCws !== cws) {
+        let list = [];
+        for (let oy = -reach; oy <= reach; oy++) for (let ox = -reach; ox <= reach; ox++) {
+            if (ox === 0 && oy === 0) continue;
+            let gx = Math.max(0, Math.abs(ox) - 1), gy = Math.max(0, Math.abs(oy) - 1);
+            list.push(ox, oy, Math.sqrt(gx * gx + gy * gy) * cws);
+        }
+        let offs = simSharedArray(Float64Array, list.length);
+        offs.set(list);
+        S.offs = offs; S.offsReach = reach; S.offsCws = cws;
+        simParallelBind('sep.offs', offs);
+    }
+}
 function runUnitSeparationPass() {
+    // Started at the tick's start: its pushes, then the commit.
+    if (_sepPending && _sepPending.tick === gameTime) {
+        const n0 = _sepPending.n;
+        _sepPending = null;
+        simParallelBackgroundWait(0);
+        _commitUnitSeparationPushes(n0);
+        return;
+    }
     let n = units.length;
     // Large worlds run on unit state slots (outputs by slot), small ones on
     // the units array (outputs by index).
     const U = _simUnitState;
-    const bySlot = n >= 4096 && !!U && CHUNKS_W * CHUNKS_H < SIM_SEP_ABSENT;
+    const bySlot = n >= SEPARATION_SLOT_MIN_UNITS && !!U && CHUNKS_W * CHUNKS_H < SIM_SEP_ABSENT;
     if (bySlot) n = U.owners.length;
     _sepGrow(n);
     let S = _sep, R = S.r, L = S.layer, C = S.check;
@@ -3234,7 +3274,8 @@ function runUnitSeparationPass() {
     P[9] = jobCount; P[10] = cws; P[11] = epoch; P[12] = UNIT_SEPARATION_SHARE_MOVER; P[13] = UNIT_SEPARATION_SHARE_YIELD;
     P[14] = bySlot ? 1 : 0;
     simParallelRun(SIM_KERNEL_SEPARATION, Math.ceil(jobCount / unitsPerJob));
-    const useSharedFinish = bySlot;
+    if (bySlot) { _commitUnitSeparationPushes(n); return; }
+    const useSharedFinish = false;
     if (useSharedFinish) {
         _sepShared(S, 'nextX', Float64Array, cap); _sepShared(S, 'nextY', Float64Array, cap);
         _sepShared(S, 'fast', Uint8Array, cap);
@@ -3251,8 +3292,8 @@ function runUnitSeparationPass() {
     for (let i = 0; i < n; i++) {
         if (!HIT[i] || (useSharedFinish && S.fast[i] === 1)) continue;
         if (useSharedFinish && S.fast[i]) {
-            // Committed by the kernel (same tile); 2: zone or retry work
-            // (the object only on the unit's retry ticks).
+            // Committed by the kernel; 2: another tile, or retry work (the
+            // object only on the unit's retry ticks).
             const c = U.columns;
             if (((gameTime + c.id[i]) | 0) % UNIT_SEPARATION_PATH_RETRY_TICKS === 0) {
                 const u = owners[i];
@@ -3274,6 +3315,48 @@ function runUnitSeparationPass() {
     }
     if (retries) {
         if (bySlot) retries.sort((a, b) => a.id - b.id);
+        for (let u of retries) _tryUpgradeAstarFallbackPath(u);
+    }
+}
+
+// The pushes of the slots below n (large worlds): the finish kernel applies
+// those that stay in their tile (and records who moved by itself), the rest
+// commit through the objects in id order.
+function _commitUnitSeparationPushes(n) {
+    const U = _simUnitState, S = _sep, cap = S.cap;
+    const PX = S.px, PY = S.py, OV = S.ov, HIT = S.hit;
+    _sepShared(S, 'nextX', Float64Array, cap); _sepShared(S, 'nextY', Float64Array, cap);
+    _sepShared(S, 'fast', Uint8Array, cap);
+    const P = _simParams;
+    P[0] = n; P[1] = 512; P[2] = TILE; P[3] = UNIT_POSITION_QUANTIZATION;
+    P[4] = UNIT_SEPARATION_CONTACTS; P[5] = UNIT_SEPARATION_Q; P[6] = gameTime; P[7] = UNIT_SEPARATION_PATH_RETRY_TICKS;
+    P[8] = GRID_W; P[9] = GRID_H;
+    simMoveWallGrid();
+    simParallelRun(SIM_KERNEL_SEPARATION_FINISH, Math.ceil(n / 512));
+    let retries = null, slow = null;
+    const owners = U.owners, c = U.columns, fast = S.fast;
+    for (let i = 0; i < n; i++) {
+        if (!HIT[i] || fast[i] === 1) continue;
+        if (fast[i]) {
+            // Committed by the kernel; 2: another tile, or retry work (the
+            // object only on the unit's retry ticks).
+            if (((gameTime + c.id[i]) | 0) % UNIT_SEPARATION_PATH_RETRY_TICKS === 0) {
+                const u = owners[i];
+                if (u && !u.dead && u.pathIsFallbackAstar && u._pendingPathTarget) (retries ||= []).push(u);
+            }
+            if (c.energy[i] > 0) spatialSlotUpdate(c, i);
+            continue;
+        }
+        const u = owners[i];
+        if (!u || u.dead) continue;
+        (slow ||= []).push(i);
+    }
+    if (slow) {
+        slow.sort((a, b) => owners[a].id - owners[b].id);
+        for (let i of slow) _commitUnitSeparation(owners[i], i, HIT, PX, PY, OV, (v) => (retries ||= []).push(v));
+    }
+    if (retries) {
+        retries.sort((a, b) => a.id - b.id);
         for (let u of retries) _tryUpgradeAstarFallbackPath(u);
     }
 }

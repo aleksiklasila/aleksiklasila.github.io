@@ -346,7 +346,7 @@ function getSourceAreaListIdAtWorld(wx, wy) {
     if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_H) return _sourceAreaListIdOfWindow(gx - (zx === 0 ? 1 : 0), gx + (zx === 2 ? 1 : 0), gy - (zy === 0 ? 1 : 0), gy + (zy === 2 ? 1 : 0));
     let T = _sourceAreaZoneIds;
     if (!T || _sourceAreaZoneGrid !== areaIdGrid || _sourceAreaZoneAdm !== areaDistanceMatrix || T.length !== GRID_W * GRID_H * 9) {
-        // (Shared: the coverage kernel reads it, SIM_KERNEL_VIS_HELD.)
+        // (Shared, for kernels.)
         if (T && T.length === GRID_W * GRID_H * 9) T.fill(0);
         else { T = _sourceAreaZoneIds = simSharedArray(Int32Array, GRID_W * GRID_H * 9); simParallelBind('vis.zoneIds', T); }
         _sourceAreaZoneGrid = areaIdGrid; _sourceAreaZoneAdm = areaDistanceMatrix;
@@ -945,7 +945,14 @@ let units = [];
 let projectiles = [];
 let particles = [];
 let barracks = [];
+// Bumped whenever a barrack joins or leaves barracks.
+let barracksVersion = 0;
+function barracksChanged() { barracksVersion++; }
 let collectorSpawners = [];
+// Bumped whenever a spawner joins or leaves collectorSpawners (indexes of
+// it are kept until then).
+let collectorSpawnersVersion = 0;
+function collectorSpawnersChanged() { collectorSpawnersVersion++; }
 let collectors = []; // deprecated - worker units now in units array
 let droppedItems = [];
 let droppedItemGrid = [];
