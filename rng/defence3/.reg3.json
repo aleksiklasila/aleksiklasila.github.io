@@ -1,0 +1,74 @@
+[
+  {
+    "mode": "0",
+    "file": "combat-effects.test.cjs",
+    "status": 0,
+    "output": "PASS: role-specific attack effects, runes, expiry, culling, rewinds, lobbed shots, 2D flattening and laser fences.\n",
+    "timedOut": false,
+    "elapsedMs": 234
+  },
+  {
+    "mode": "0",
+    "file": "collector-farms.test.cjs",
+    "status": 0,
+    "output": "PASS: farm discovery, group orders, collection, mixed targets and deterministic peer replay.\n",
+    "timedOut": false,
+    "elapsedMs": 280
+  },
+  {
+    "mode": "0",
+    "file": "drive-by-attack.test.cjs",
+    "status": 0,
+    "output": "PASS: travelling and holding attacks respect range, cooldowns, fixed positions, and deterministic targets.\n",
+    "timedOut": false,
+    "elapsedMs": 240
+  },
+  {
+    "mode": "0",
+    "file": "laser-activation.test.cjs",
+    "status": 0,
+    "output": "PASS: lasers placed 2 tiles apart link on construction completion (no extra placement) and fire; [{\"gx\":10,\"gy\":23,\"uc\":false,\"lvl\":1,\"links\":1},{\"gx\":12,\"gy\":23,\"uc\":false,\"lvl\":1,\"links\":1}]\n",
+    "timedOut": false,
+    "elapsedMs": 4733
+  },
+  {
+    "mode": "0",
+    "file": "laser-links.test.cjs",
+    "status": 0,
+    "output": "PASS: indexed laser links equal all-pairs links (1776 links over 300 layouts)\n",
+    "timedOut": false,
+    "elapsedMs": 993
+  },
+  {
+    "mode": "0",
+    "file": "deterministic-sort.test.cjs",
+    "status": 0,
+    "output": "PASS: cached deterministic building order equals the comparator sort (1200 checks)\n",
+    "timedOut": false,
+    "elapsedMs": 6760
+  },
+  {
+    "mode": "0",
+    "file": "laser-performance.test.cjs",
+    "status": 0,
+    "output": "PASS: 1000 laser rectangles match exhaustive stable damage order, strict edges, replacement/removal and tick reset; candidates 23433 / 3000000.\n",
+    "timedOut": false,
+    "elapsedMs": 2089
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-border-combat.test.cjs",
+    "status": 0,
+    "output": "PASS: kings fight visible soldiers across area borders in lockstep (133 tick hashes compared, [[0,\"king\",226],[0,\"norm\",40],[0,\"norm\",40],[0,\"laser_resistant\",55],[1,\"king\",230],[1,\"norm\",40],[1,\"norm\",40],[1,\"laser_resistant\",55]]).\n",
+    "timedOut": false,
+    "elapsedMs": 4061
+  },
+  {
+    "mode": "0",
+    "file": "battle-performance.test.cjs",
+    "status": 0,
+    "output": "PASS: worker search visits 655146 -> 1200; 18 visibility comparisons; 1500 stable panels rasterize once across 6 frames.\n",
+    "timedOut": false,
+    "elapsedMs": 15156
+  }
+]

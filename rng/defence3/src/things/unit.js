@@ -317,6 +317,21 @@ function _getUnitAttackRangeArea(unit) {
 const UNIT_CONTACT_ATTACK_MARGIN = TILE * 0.25;
 
 // (The target at (tx, ty): by default where it is.)
+// Arriving in a crowd (Unit._followNavNode and the movement kernel's flow
+// mode): within this many tiles of a group's destination, a unit held back
+// beside an idle unit of its own owner has arrived.
+const NAV_CROWD_TILES = 64;
+function _unitCrowdIdleNear(u) {
+    const c = u._us;
+    return !!c && c.cwTick[u._si] === gameTime && c.cwNear[u._si] === 1;
+}
+// Fewer than 9 units listed in its 3x3 tiles at the tick's start: a waiting
+// unit goes on.
+function _unitCrowdThin(u) {
+    const c = u._us;
+    return !!c && c.cwTick[u._si] === gameTime && c.cwDense[u._si] < 9;
+}
+
 function _isTargetWithinUnitAttackAreaRange(unit, target, tx = target && target.x, ty = target && target.y) {
     if (!unit || !target) return false;
     let rangeArea = Math.max(0, Number(_getUnitAttackRangeArea(unit)) || 0);
@@ -1302,6 +1317,7 @@ class Unit {
     // True when the path is done (at the node's tile and no more nodes, or
     // no way on from here).
     _followNavNode(nd, spd) {
+        // (NAV_CROWD_TILES: see the arrival below.)
         if (gameTime < (nd.ready | 0)) return false;
         const W = GRID_W, gx = Math.floor(this.x / TILE), gy = Math.floor(this.y / TILE), t = gy * W + gx, dest = nd.y * W + nd.x;
         if (t === dest) { this.pathIndex++; this._navLastD = -1; return this.pathIndex >= this.path.length; }
@@ -1310,10 +1326,24 @@ class Unit {
         // movement kernel (not every unit of a big group fits on its tile).
         // Workers and lone units go all the way (a worker's task is at the
         // tile; only a group's destination is too small for all of it).
-        if (nd.w && !this.workerState && this.pathIndex === this.path.length - 1 && Math.abs(nd.x - gx) <= 8 && Math.abs(nd.y - gy) <= 8) {
+        // Waiting in a crowd (_navLastD -2 - dest): still, but for a look
+        // every 16 ticks (by id: on when the crowd around has thinned out)
+        // and a try every 64 (so a jam in a corridor clears).
+        if (this._navLastD === -2 - dest) {
+            if (((gameTime + this.id) & 15) !== 0 || (((gameTime + this.id) & 63) !== 0 && !_unitCrowdThin(this))) return false;
+            this._navLastD = -1;
+        }
+        // Further out (up to NAV_CROWD_TILES), held back beside an idle or
+        // waiting unit of its own (the combat scan's crowd flag): it waits,
+        // so a big crowd settles from its middle outward instead of pressing.
+        if (nd.w && !this.workerState && this.pathIndex === this.path.length - 1 && Math.abs(nd.x - gx) <= NAV_CROWD_TILES && Math.abs(nd.y - gy) <= NAV_CROWD_TILES) {
             const d = detHypot(nd.x * TILE + 16 - this.x, nd.y * TILE + 16 - this.y), last = this._navLastD;
             this._navLastD = d;
-            if (last >= 0 && last - d < spd * 0.3) { this.pathIndex = this.path.length; this._navLastD = -1; return true; }
+            const near = Math.abs(nd.x - gx) <= 8 && Math.abs(nd.y - gy) <= 8;
+            if (last >= 0 && last - d < spd * 0.3) {
+                if (near) { this.pathIndex = this.path.length; this._navLastD = -1; return true; }
+                if (_unitCrowdIdleNear(this)) { this._navLastD = -2 - dest; return false; }
+            }
         } else this._navLastD = -1;
         const profile = nd.nav - 1, slot = navFieldRequest(profile, dest, !!nd.w), n = navStep(profile, t, dest, slot);
         if (n < 0) { this.pathIndex = this.path.length; return true; }
@@ -3041,7 +3071,7 @@ function combatScanRun() {
     P[0] = n; P[1] = 2048; P[2] = gameTime; P[3] = CHUNKS_W; P[4] = CHUNKS_H; P[5] = TILE; P[6] = _sxEpoch;
     P[7] = Math.min(spatialUnitsComplexPlayerCount, _visCover.players); P[8] = CMD_IDLE; P[9] = CMD_ATTACK_MOVING;
     P[10] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; P[11] = spatialBlockCols; P[12] = spatialBlockRows; P[13] = SIM_SEP_ABSENT; P[14] = CHUNK_SIZE;
-    P[15] = GRID_W; P[16] = GRID_H;
+    P[15] = GRID_W; P[16] = GRID_H; P[17] = CMD_MOVING;
     simParallelBind('ix.agrid', _spatialAreaGridFlat());
     _combatScanTick = gameTime;
     // Owners per tile first (SIM_KERNEL_TILE_OWNERS): the scan passes over

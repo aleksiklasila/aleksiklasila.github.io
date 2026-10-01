@@ -38,6 +38,8 @@ function describeDiff(hostText, guestText) {
         if (!a[k] || !b[k]) { diffs.push(k + ' only on ' + (a[k] ? 'host' : 'guest')); continue; }
         for (const f of Object.keys(a[k])) if (JSON.stringify(a[k][f]) !== JSON.stringify(b[k][f])) diffs.push(k + '.' + f + ' host=' + JSON.stringify(a[k][f]).slice(0, 100) + ' objects=' + JSON.stringify(b[k][f]).slice(0, 100));
     }
+    // (DIFFU=1: unit fields first.)
+    if (process.env.DIFFU) diffs.sort((x, y) => (x[0] === 'u' ? 0 : 1) - (y[0] === 'u' ? 0 : 1));
     return diffs.length + ' fields: ' + diffs.slice(0, 10).join(' | ');
 }
 
@@ -71,6 +73,7 @@ async function runCase(seed, map, lowAstar = Number(process.env.LOWASTAR) || 0) 
     const rand = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
     for (let k = 0; k < rounds; k++) { for (const i of all) if (rand() < 0.6) i.eval(C.CHAOS_COMMAND + '(' + rand() + ')'); await world.run(200); }
     if (process.env.PU) for (const [name, inst] of [['host', host], ['objects', g]]) { console.log(name); for (const l of JSON.parse(inst.evalSim('JSON.stringify(globalThis.__plog || [])'))) console.log('  ' + l); }
+    if (process.env.PU && process.env.HOST_SIM_EVAL) console.log('host stat', host.evalSim('JSON.stringify(globalThis.__hostStat || null)'));
     const bad = [];
     for (const [t, h] of host.tickExact || []) { if (t < t0) continue; const o = g.tickExact.get(t); if (o !== undefined && o !== h) bad.push(t); }
     let compared = 0;

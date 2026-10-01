@@ -111,6 +111,66 @@ Changes:
    the unit's turn (alive, still the target, same tile). Equivalence test
    passes (hold counts rose on crossroads).
 
+Shrine follow-ups (user requests): 💀 is a per-player resource (no map
+object): research multiplier 0.01 x 2^level, drain 1 x 10^level per second
+(`RESEARCH_FORMULA_CONFIG.shrine*BonusExp`, per-key research exponents via
+`getResearchBonusExpForStat(kind, stat, key)`); stat matrices and the level
+dropdown show research levels only for level-less things
+(`researchMatrixThingLevels`); gains carry fractions between ticks
+(`player.shrineCarry`, state) so small multipliers pay out exactly.
+
+### 2026-10-01 (fifth round) — kernels for the siege, background jobs, crowds
+
+The user's direction (recorded here for later sessions): the per-tick main
+path must become O(1)-ish per active entity; background work committed at
+fixed tick delays (like the navigation build) with O(1) lookups and
+reservation in the tick; deterministic approximations are fine (fair,
+reversible, with fallbacks: units must never get stuck for good). Goal
+first: stable 20 TPS (< 50 ms per tick); tighten approximations afterwards.
+
+5. Fire commit (kernel output 10): a held unit's attack tick (unit or
+   structure target) is committed at its turn by `simHoldFire` (attack,
+   re-arm) instead of a full `Unit.update`.
+6. Approach (mvOn 6, `_simMoveTryApproachBuilding`): a unit walking its
+   path (or a nav node's flow field, crowd rule as `_followNavNode`) to a
+   structure it attacks stays in the kernel while the structure's tile is
+   still hostile, in sight and out of range; hands back on the 8-tick look
+   for units. Siege building-attacker updates 9.5k -> 2k per tick.
+7. Chase with a path of its own arms the kernel's chase mode (flag 1: then
+   flying is no reason to step straight). Chase updates 12.7k -> 4.6k.
+8. Combat scan: a per-tile owner mask (`SIM_KERNEL_TILE_OWNERS`, `ix.omask`)
+   lets scans pass over tiles with no enemy (results unchanged).
+9. Background jobs (`simParallelBackground` / `simParallelBackgroundWait`,
+   sim_parallel.js): helpers take a job's chunks whenever no foreground job
+   waits; the simulation thread only at the wait. Ticket counter (job id <<
+   24 | chunk) so no chunk is lost or run twice across jobs; own parameter
+   block `_simBgParams`. The navigation rebuild's local fields and hop
+   table run this way (collected at the build's fixed steps);
+   `tests/nav-background.test.cjs` compares with a synchronous build (0
+   and 3 real helpers).
+10. Healer candidate changes bump the healer work versions of the regions
+    the candidates are in (not a global generation): idle healers far from
+    any change stay parked. Siege healer wakes 1.8k -> 0.7k per tick.
+11. Crowds (approximation): a moving unit within 64 tiles of a group's
+    destination, held back (under 30% of its speed made good) beside an
+    idle or waiting unit of its own, waits (`_navLastD = -2 - dest`, the
+    snapshotted column): still, a look every 16 ticks (on when fewer than 9
+    units are listed in its 3x3 tiles) and a try every 64 (a corridor jam
+    clears). Within 8 tiles: arrived as before. Crowd flag and density come
+    from the combat scan (tick start; columns `cwNear`, `cwDense`,
+    `cwTick`), so the kernel and `Unit.update` decide alike.
+
+Measured (siege p50): 628 -> 571 (round 4) -> 517 (approach, fire) -> 509
+(owner mask) -> 499 (background nav) -> 490 (chase with path). Base ~285-290
+(unchanged): the base workload is 157k units marching across the map (most
+over 128 tiles from their rally points), so its cost is moving units:
+movement kernel, separation (~140k contacts and ~135k pushed units a tick),
+tile/zone/visibility updates for movers, the index.
+
+Tools: tickbench `EVAL=<code>` (host, before the run); equivalence test
+`DIFFU=1` (unit fields first) and `PU` with `HOST_SIM_EVAL` prints
+`globalThis.__hostStat`.
+
 ### 2026-10-01 — determinism repair
 
 Fixed (all found with the equivalence harness, now `tests/kernel-object-equivalence.test.cjs`):
