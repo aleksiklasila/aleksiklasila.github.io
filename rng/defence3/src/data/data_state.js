@@ -981,7 +981,7 @@ let droppedItemsVersion = 0;
 function addDroppedItem(drop) {
     if (!drop) return null;
     droppedItemsVersion++;
-    if (typeof workerWorkChanged === 'function') workerWorkChanged(-1, null, Math.floor(Number(drop.gx)), Math.floor(Number(drop.gy)));
+    if (typeof workerWorkDropAdded === 'function') workerWorkDropAdded(Math.floor(Number(drop.gx)), Math.floor(Number(drop.gy)));
     let gx = Math.floor(Number(drop.gx));
     let gy = Math.floor(Number(drop.gy));
     if (!(gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H)) return null;

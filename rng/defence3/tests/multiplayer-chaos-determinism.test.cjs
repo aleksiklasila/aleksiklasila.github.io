@@ -136,7 +136,7 @@ async function setupChaosWorld(mapType, seed, { guestOptions = [], exactHashes =
     const { host, guests } = await H.startHostedMatch(world, { guests: teams.length - 1, teams, maxMs: 90000, guestOptions });
     const all = [host, ...guests];
     // Every building and unit the game has is in the mix (new ones too).
-    const missing = JSON.parse(host.eval(`JSON.stringify([...Object.keys(BASE_CARD_TYPES).filter(k => !${JSON.stringify(BUILDINGS)}.includes(k)), ...Object.keys(BASE_UNIT_STATS).filter(k => !${JSON.stringify(UNITS)}.includes(k))])`));
+    const missing = JSON.parse(host.eval(`JSON.stringify([...Object.keys(BASE_CARD_TYPES).filter(k => !BASE_CARD_TYPES[k].notBuildable && !${JSON.stringify(BUILDINGS)}.includes(k)), ...Object.keys(BASE_UNIT_STATS).filter(k => !${JSON.stringify(UNITS)}.includes(k))])`));
     assert.deepEqual(missing, [], 'chaos lists miss these buildings/units');
     const setupCounts = host.eval(`JSON.stringify({ units: units.length, towers: towers.length, barracks: barracks.length, spawners: collectorSpawners.length, floor: getCellItemsRowMajor().length })`);
     // CHAOS_SIM_EVAL: code every peer's simulation runs after the same tick,

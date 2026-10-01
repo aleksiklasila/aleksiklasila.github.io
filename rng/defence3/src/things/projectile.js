@@ -150,7 +150,7 @@ class Projectile {
 
         recordCombatFx(COMBAT_FX.IMPACT, this.startX, this.startY, this.x, this.y, this.type);
         pushHostileDamageAlert(t, targetEnergyBefore - t.energy, this.sourceOwner);
-    recordDamageVisual(t, targetEnergyBefore - t.energy, this.sourceOwner);
+    recordDamageVisual(t, targetEnergyBefore - t.energy, this.sourceOwner); shrineDamageTaken(t, targetEnergyBefore - t.energy);
         if (targetEnergyBefore > t.energy) playSound('impact', t.x, t.y, this.type);
         tryAutoRetaliateOnHostileDamage(t, sourceAttacker, Number.isFinite(this.sx) ? this.sx * TILE + 16 : null, Number.isFinite(this.sy) ? this.sy * TILE + 16 : null);
 
@@ -160,7 +160,7 @@ class Projectile {
                 let prevEnergy = e.energy;
                 e.energy -= splashDmg;
                 pushHostileDamageAlert(e, prevEnergy - e.energy, this.sourceOwner);
-        recordDamageVisual(e, prevEnergy - e.energy, this.sourceOwner);
+        recordDamageVisual(e, prevEnergy - e.energy, this.sourceOwner); shrineDamageTaken(e, prevEnergy - e.energy);
                 tryAutoRetaliateOnHostileDamage(e, sourceAttacker, Number.isFinite(this.sx) ? this.sx * TILE + 16 : null, Number.isFinite(this.sy) ? this.sy * TILE + 16 : null);
                 if (this.type === 'fire') applyStatusEffect(e, 'fire', this.level || 1, splashDmg * 0.05, this.sourceOwner, this.type);
                 if (e.energy <= 0 && !e.dead) e.dead = true;
@@ -207,7 +207,7 @@ class Projectile {
 
         recordCombatFx(COMBAT_FX.IMPACT, this.startX, this.startY, this.x, this.y, this.type);
         pushHostileDamageAlert(b, buildingEnergyBefore - b.energy, this.sourceOwner);
-    recordDamageVisual(b, buildingEnergyBefore - b.energy, this.sourceOwner);
+    recordDamageVisual(b, buildingEnergyBefore - b.energy, this.sourceOwner); shrineDamageTaken(b, buildingEnergyBefore - b.energy);
         if (buildingEnergyBefore > b.energy) playSound('impact', b.x, b.y, this.type);
 
         createExplosion(this.x, this.y, "#f84", 4);

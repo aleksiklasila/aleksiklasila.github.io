@@ -1287,6 +1287,7 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing') {
         CONFIG_MAX_POP = Math.max(1, Math.floor(data.cfg.maxPop || 200));
         STARTING_MONEY = Math.max(0, Math.floor(data.cfg.startingMoney || 2000));
         STARTING_ASTAR = Math.max(0, Number(data.cfg.startingAstar) || 9000);
+        SHRINES_ENABLED = data.cfg.shrines === undefined ? true : !!data.cfg.shrines;
         MAP_TYPE = data.cfg.mapType || 'random';
         THING_STATS_RECALC_INTERVAL_SECONDS = Math.max(0.05, Math.min(600, Number(data.cfg.thingStatsRecalcIntervalSeconds) || THING_STATS_RECALC_INTERVAL_SECONDS));
         UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(data.cfg.unitEffectiveStatsRecalcTicks) || UNIT_EFFECTIVE_STATS_RECALC_TICKS)));
@@ -3023,6 +3024,7 @@ function startHostedGame() {
                 maxPop: CONFIG_MAX_POP,
                 startingMoney: STARTING_MONEY,
                 startingAstar: STARTING_ASTAR,
+                shrines: !!SHRINES_ENABLED,
                 mapType: MAP_TYPE,
                 tickRate: TICK_RATE,
                 pipelineDelay: LOCKSTEP_PIPELINE_MIN,
@@ -3404,6 +3406,7 @@ function readConfigFromMenu() {
     CONFIG_MAX_POP = Math.max(1, Math.floor(parseInt(document.getElementById('cfg-max-pop').value) || 200));
     STARTING_MONEY = readResource('cfg-starting-energy', 2000);
     STARTING_ASTAR = readResource('cfg-starting-astar', STARTING_ASTAR, false);
+    { let el = document.getElementById('cfg-shrines'); if (el) SHRINES_ENABLED = !!el.checked; }
     MAP_TYPE = document.getElementById('cfg-map-type').value || 'random';
     THING_STATS_RECALC_INTERVAL_SECONDS = Math.max(0.05, Math.min(600, Number((document.getElementById('cfg-thing-stats-seconds') || {}).value) || THING_STATS_RECALC_INTERVAL_SECONDS));
     UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(document.getElementById('cfg-unit-eff-stats-ticks').value) || 5)));

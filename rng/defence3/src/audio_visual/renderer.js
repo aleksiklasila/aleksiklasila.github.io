@@ -5314,19 +5314,19 @@ function tickStatusEffects(target) {
         target.burning--;
         if (target.burnTickDamage > 0) {
             target.energy -= target.burnTickDamage;
-            recordDamageVisual(target, target.burnTickDamage);
+            recordDamageVisual(target, target.burnTickDamage); shrineDamageTaken(target, target.burnTickDamage);
         }
     }
     if (target.poisoned > 0) {
         target.poisoned--;
         if (target.poisonTickDamage > 0) {
             target.energy -= target.poisonTickDamage;
-            recordDamageVisual(target, target.poisonTickDamage);
+            recordDamageVisual(target, target.poisonTickDamage); shrineDamageTaken(target, target.poisonTickDamage);
         }
     }
     if (target.frozen > 0 && target.wet > 0 && target.iceTickDamage > 0) {
         target.energy -= target.iceTickDamage;
-        recordDamageVisual(target, target.iceTickDamage);
+        recordDamageVisual(target, target.iceTickDamage); shrineDamageTaken(target, target.iceTickDamage);
     }
     if (target.frozen > 0) target.frozen--;
     if (target.wet > 0) target.wet--;

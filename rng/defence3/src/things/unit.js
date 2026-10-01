@@ -773,7 +773,7 @@ class Unit {
             if (cmd === CMD_MOVING || cmd === CMD_ATTACK_MOVING) simMoveTryArm(this);
             else if (cmd === CMD_IDLE && this.workerState === 'IDLE') simMoveTryPark(this);
             else if (cmd === CMD_IDLE && !this.workerState) simMoveTryParkIdle(this);
-            else if (cmd === CMD_ATTACKING) { simMoveTryHold(this); if (cols.mvOn[this._si] !== 3) simMoveTryChase(this); }
+            else if (cmd === CMD_ATTACKING) { simMoveTryHold(this); if (cols.mvOn[this._si] !== 3 && cols.mvOn[this._si] !== 5) simMoveTryChase(this); }
         }
     }
 
@@ -791,7 +791,7 @@ class Unit {
             let prevEnergy = u.energy;
             u.energy -= blastDamage;
             pushHostileDamageAlert(u, prevEnergy - u.energy, item.owner);
-            recordDamageVisual(u, prevEnergy - u.energy, item.owner);
+            recordDamageVisual(u, prevEnergy - u.energy, item.owner); shrineDamageTaken(u, prevEnergy - u.energy);
             if (u.energy <= 0 && !u.dead) u.dead = true;
         }, { enemyOfPlayer: item.owner, tickStart: true });
 
@@ -1026,7 +1026,9 @@ class Unit {
         this.attackFlash = 8;
         recordUnitAttackFx(this, target);
         if (this.attackStyle === 'ram') {
-            this.energy -= this.preComputed.maxEnergy * 0.03;
+            let recoil = this.preComputed.maxEnergy * 0.03;
+            this.energy -= recoil;
+            shrineDamageTaken(this, recoil);
             if (this.energy <= 0) { this.dead = true; }
         }
     }
@@ -1694,7 +1696,7 @@ function _unitHitUnit(a, target, dmg, ax, ay) {
     let before = target.energy;
     target.energy -= dmg;
     pushHostileDamageAlert(target, before - target.energy, a.owner);
-    recordDamageVisual(target, before - target.energy, a.owner);
+    recordDamageVisual(target, before - target.energy, a.owner); shrineDamageTaken(target, before - target.energy);
     if (before > target.energy) playSound('melee_hit', target.x, target.y, a.unitType);
     tryAutoRetaliateOnHostileDamage(target, a, ax, ay);
     let style = a.attackStyle;
@@ -1735,7 +1737,7 @@ function _unitHitBuilding(a, tb, dmg) {
         tb.energy -= dmg;
     }
     pushHostileDamageAlert(tb, before - tb.energy, a.owner);
-    recordDamageVisual(tb, before - tb.energy, a.owner);
+    recordDamageVisual(tb, before - tb.energy, a.owner); shrineDamageTaken(tb, before - tb.energy);
     if (before > tb.energy) playSound('melee_hit', tb.x, tb.y, a.unitType);
     if (tb.energy <= 0) destroyBuilding(tb);
 }
@@ -1775,7 +1777,7 @@ function statusPrepassRun() {
             EV[s] = 0;
             const u = owners[s];
             if (!u || u !== units[i]) continue;
-            if (ev & 1) recordDamageVisual(u, DOT[s]);
+            if (ev & 1) { recordDamageVisual(u, DOT[s]); shrineDamageTaken(u, DOT[s]); }
             if (ev & 2) { u.watchedByTeam = -1; if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(u); }
         }
     }
@@ -2470,6 +2472,7 @@ function _isChaseStepOpen(u, t, d, px = t.x, py = t.y) {
 // Unit.update.
 function simMoveTryHold(u) {
     const c = u._us, tu = u.targetUnit;
+    if (c && !tu && u.targetBuilding) { _simMoveTryHoldBuilding(u, c); return; }
     if (!c || u.dead || u.holdPosition || u.workerState || !tu || tu.dead || u.forcedAttackTarget || u.targetBuilding || u.attackTarget !== tu || u.path) return;
     if (!(u.attackTimer > 1) || !(u.preComputed && u.preComputed.attackDamage > 0)) return;
     const q = tu._si, tc = tu._us;
@@ -2481,6 +2484,30 @@ function simMoveTryHold(u) {
     c.mvHT[s] = q; c.mvHTId[s] = tu.id; c.mvReach[s] = k;
     c.mvFlags[s] = 0;
     c.mvOn[s] = 3;
+}
+
+// Building hold (mvOn 5): a unit attacking a structure in range, waiting for
+// its cooldown (doAttacking's building branch: alive, visible, in area
+// range, attackTimer above 0). The kernel keeps it while the structure's
+// tile still holds a hostile structure (mv.struct), its area is in sight,
+// it is in range and the timer runs, and hands it back on its attack tick,
+// on an automatic target's reconsideration tick ((t + id) % 8: a look for
+// enemy units) and on the usual floor/wall checks. The structure's own
+// state is checked again at the unit's turn (simHoldStillValid).
+function _simMoveTryHoldBuilding(u, c) {
+    const tb = u.targetBuilding;
+    if (u.dead || u.holdPosition || u.workerState || u.path || u.attackTarget !== tb || !(tb.energy > 0)) return;
+    if (!(u.attackTimer > 1) || !(u.preComputed && u.preComputed.attackDamage > 0)) return;
+    const s = u._si, gx = tb.gx, gy = tb.gy;
+    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
+    // (The kernel knows the tile; a structure stands at its centre.)
+    if (!(Number.isInteger(gx) && Number.isInteger(gy) && gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)
+        || tb.x !== gx * TILE + TILE / 2 || tb.y !== gy * TILE + TILE / 2) return;
+    const k = Math.floor(Math.max(0, Number(_getUnitAttackRangeArea(u)) || 0));
+    if (!(k <= 2)) return;
+    c.mvDest[s] = gy * GRID_W + gx; c.mvReach[s] = k;
+    c.mvFlags[s] = u.forcedAttackTarget ? 1 : 0;
+    c.mvOn[s] = 5;
 }
 
 // Chase: a unit after an enemy unit it is not in range of, with no path of
@@ -2529,9 +2556,29 @@ function simChaseUndo(c, s) {
 function simHoldStillValid(c, s) {
     // (Targets are seen where they were at the pass's start, hits land
     // after it: only a death during the pass, or walls changed, matter.)
-    if (c.mvOn[s] !== 3 || c.dead[s] || !(c.energy[s] > 0) || _simMoveWallDirty || _simMoveWallVer !== _simMoveRunWallVer) return false;
+    const on = c.mvOn[s];
+    if ((on !== 3 && on !== 5) || c.dead[s] || !(c.energy[s] > 0) || _simMoveWallDirty || _simMoveWallVer !== _simMoveRunWallVer) return false;
+    if (on === 5) {
+        // A structure: still standing, still the unit's target.
+        const u = _simUnitState.owners[s], tb = u && u.targetBuilding;
+        return !!tb && tb.energy > 0 && !u.targetUnit && u.attackTarget === tb && u.commandState === CMD_ATTACKING && !u.holdPosition
+            && tb.gy * GRID_W + tb.gx === c.mvDest[s];
+    }
     const q = c.mvHT[s];
     return q >= 0 && !c.dead[q] && (c.id[q] | 0) === c.mvHTId[s];
+}
+// A held unit's attack tick (kernel output 10), its hold still standing at
+// its turn: what Unit.update does then (doAttacking in range with the timer
+// run out: the attack on its target, unit or structure), and, as at its end,
+// armed again (the timer restarted).
+function simHoldFire(c, s) {
+    const u = _simUnitState.owners[s];
+    if (c.mvOn[s] === 5) { const tb = u.targetBuilding; u.attackTarget = tb; u._performAttackOnBuilding(tb); }
+    else { const tu = u.targetUnit; u.attackTarget = tu; u._performAttackOnUnit(tu); }
+    c.mvOn[s] = 0;
+    if (u.dead || u.commandState !== CMD_ATTACKING) return;
+    simMoveTryHold(u);
+    if (c.mvOn[s] !== 3 && c.mvOn[s] !== 5) simMoveTryChase(u);
 }
 function simHoldUndo(c, s) {
     c.mvOn[s] = 0; c.mvOut[s] = 0;
@@ -2824,7 +2871,7 @@ function simMoveRun() {
         const o = OUT[s];
         if (o === 0) continue;
         if (c.mvSpent[s]) charged = true;
-        if (o === 1 || o === 6 || o === 7) continue;
+        if (o === 1 || o === 6 || o === 7 || o === 10) continue;
         // Arrived in the crowd at its destination: the move is done.
         if (o === 5) { const u = owners[s]; if (u && !u.dead) simFlowArrive(u); continue; }
         // Into a wall tile: the end of Unit.update (pushed out; can start
