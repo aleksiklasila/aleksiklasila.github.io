@@ -1933,7 +1933,7 @@ function _workerWorkOrigin(u) {
 }
 function _workerWorkVerOf(u) {
     const V = _workerWorkTable(), org = _workerWorkOrigin(u);
-    return _workerWorkHash(V, u.owner, _workerWorkType(u.workerType), u.workerType === 'healer', Math.ceil(_getWorkerAutoSearchDistancePx(u) / TILE) + 1,
+    return _workerWorkHash(V, u.owner, _workerWorkType(u.workerType), false, Math.ceil(_getWorkerAutoSearchDistancePx(u) / TILE) + 1,
         Math.floor(org.x / TILE), Math.floor(org.y / TILE), org !== u, Math.floor(u.x / TILE), Math.floor(u.y / TILE));
 }
 // The version of the work around an origin tile (and, `twice`, the worker's
@@ -2999,7 +2999,9 @@ const HEALER_DAMAGED_CANDIDATE_LIMIT = 12;
 // live when picked): made on the ticks that are multiples of
 // HEALER_CANDIDATE_CACHE_TICKS by healerCandidatesStep (gameTick), so on
 // every peer from the same state, and sent with snapshots.
-// _healerCandidatesGen counts changes (idle healers look again then).
+// _healerCandidatesGen counts changes; idle healers look again when a
+// candidate list changes near them (the healer work versions of the regions
+// its candidates are in).
 let _healerCandidatesGen = 0;
 function _ensureHealerDamagedCandidatesCacheCurrent() {
     let ownerCount = Math.max(1, Math.floor(Number(players && players.length) || 0));
@@ -3028,11 +3030,17 @@ function healerCandidatesStep() {
         list.splice(i, 0, { u: target, ratio, id });
         if (list.length > cap) list.length = cap;
     }
+    // An owner's list changed: work for its idle healers within reach of its
+    // candidates (their regions' healer versions), not for every healer of
+    // every player.
     let changed = _healerDamagedCandidatesByOwner.length !== ownerCount;
-    for (let o = 0; o < ownerCount && !changed; o++) {
+    for (let o = 0; o < ownerCount; o++) {
         const a = _healerDamagedCandidatesByOwner[o] || [], b = best[o];
-        if (a.length !== b.length) changed = true;
-        else for (let i = 0; i < a.length; i++) if (a[i].u !== b[i].u) { changed = true; break; }
+        let diff = a.length !== b.length;
+        for (let i = 0; i < a.length && !diff; i++) if (a[i].u !== b[i].u) diff = true;
+        if (!diff) continue;
+        changed = true;
+        for (const e of b) workerWorkChanged(o, 'healer', Math.floor(e.u.x / TILE), Math.floor(e.u.y / TILE));
     }
     _healerDamagedCandidatesByOwner = best;
     _healerDamagedCandidatesTick = gameTime;

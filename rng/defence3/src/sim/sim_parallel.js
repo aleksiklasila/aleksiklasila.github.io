@@ -20,6 +20,9 @@ const SIM_PAR_SHARED = typeof SharedArrayBuffer === 'function' && typeof Atomics
 
 // Control words.
 const SIM_PAR_GEN = 0, SIM_PAR_KERNEL = 1, SIM_PAR_NEXT = 2, SIM_PAR_TOTAL = 3, SIM_PAR_DONE = 4, SIM_PAR_REGVER = 5, SIM_PAR_ACTIVE = 6;
+// The background job (simParallelBackground): its kernel, chunk count, done
+// count, bindings version and ticket counter (job id << 24 | next chunk).
+const SIM_PAR_BG_KERNEL = 8, SIM_PAR_BG_TOTAL = 9, SIM_PAR_BG_DONE = 10, SIM_PAR_BG_REGVER = 11, SIM_PAR_BG_NEXT = 12;
 
 // A typed array in shared memory when helpers may use it.
 function simSharedArray(Type, n) {
@@ -30,6 +33,8 @@ function simSharedArray(Type, n) {
 const _simParReg = {};
 let _simParRegVer = 0;
 const _simParams = simSharedArray(Float64Array, 64);
+// The background job's parameters (its own: foreground jobs rewrite _simParams).
+const _simBgParams = simSharedArray(Float64Array, 64);
 
 // ---- kernels: (arrays, params, chunk) ----
 const SIM_KERNELS = [];
@@ -39,6 +44,7 @@ const SIM_KERNEL_SEPARATION_FINISH = 7, SIM_KERNEL_MOVE = 8, SIM_KERNEL_SEPARATI
 const SIM_KERNEL_INDEX_CLEAR = 10, SIM_KERNEL_INDEX_COUNT = 11, SIM_KERNEL_INDEX_SCATTER = 12, SIM_KERNEL_INDEX_ORDER = 13;
 const SIM_KERNEL_EFF_COUNT = 14, SIM_KERNEL_SNAP_REGION = 19, SIM_KERNEL_COMBAT_SCAN = 20, SIM_KERNEL_INDEX_KEYS = 23;
 const SIM_KERNEL_STATUS = 24, SIM_KERNEL_INDEX_FILL = 25, SIM_KERNEL_INDEX_RUNS = 26, SIM_KERNEL_EFF_UNITS = 27, SIM_KERNEL_VIS_HELD = 28;
+const SIM_KERNEL_TILE_OWNERS = 29;
 
 // One tick of an armed mover (see simMoveTryArm in unit.js): Unit.update
 // for a unit marching along its path with nothing to react to, straight on
@@ -328,7 +334,8 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
             if (!(d > 0) || d > 8 * tile) { ON[s] = 0; continue; }
             const fly = (f & 32) !== 0;
             if (!fly && WALL[tl]) { ON[s] = 0; continue; }
-            let direct = d < 2 * tile || fly;
+            // (With a path of its own (bit 1), flying is no reason: the path.)
+            let direct = d < 2 * tile || (fly && (f & 1) === 0);
             if (!direct && d < 6 * tile) {
                 const st = CHS[s], ax = x + dx / d * st, ay = y + dy / d * st, agx = Math.floor(ax / tile), agy = Math.floor(ay / tile);
                 direct = agx >= 0 && agy >= 0 && agx < W && agy < H && !WALL[agy * W + agx] && !WALL[qgy * W + qgx];
@@ -348,6 +355,21 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
             const zone = (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
             OUT[s] = ((ZM[s] >> zone) & 1) === 0 ? 8 : 7;
             continue;
+        }
+        if (ON[s] === 6) {
+            // Approach (see _simMoveTryApproachBuilding in unit.js): the
+            // structure still hostile at its tile (mvHT), in sight, not in
+            // range; an automatic target's look for units every 8 ticks (by
+            // id) is Unit.update's. Then the path or flow field, as a move.
+            const bt = HT[s];
+            if (!(bt >= 0 && bt < W * H) || !AOFF || !AG) { ON[s] = 0; continue; }
+            const code = SC[bt];
+            if (code === -1 || code === owner) { ON[s] = 0; continue; }
+            if (HTID[s] === 0 && ((t + id) % 8) === 0) { ON[s] = 0; continue; }
+            const cov = COV ? COV[owner] : null, a = AG[bt];
+            if (!cov || !(a >= 0) || !(cov[a] > 0)) { ON[s] = 0; continue; }
+            const bgx = bt % W, bgy = (bt - bgx) / W;
+            if (_simInAreaRange(AG, AOFF, ANB, W, H, tile, x, y, bgx * tile + tile / 2, bgy * tile + tile / 2, REACH[s]) !== 0) { ON[s] = 0; continue; }
         }
         // Hostiles possibly in reach: attack-movers every tick, drive-by
         // shooters on their scan ticks (the tiles of its areas in reach).
@@ -1117,7 +1139,7 @@ function simParallelInit(helperUrl, maxHelpers = null) {
             // A failed helper is not fatal (the worker takes its chunks): keep
             // its error from propagating up to the page's worker as well.
             w.onerror = e => { e.preventDefault(); console.error('[sim helper]', e.message || 'failed to load', e.filename ? `${e.filename}:${e.lineno}` : helperUrl); };
-            w.postMessage({ type: 'init', ctl, params: _simParams, index: i });
+            w.postMessage({ type: 'init', ctl, params: _simParams, bgParams: _simBgParams, index: i });
             for (let name in _simParReg) w.postMessage({ type: 'bind', name, arr: _simParReg[name], ver: _simParRegVer });
             helpers.push(w);
         } catch (err) { break; }
@@ -1159,14 +1181,55 @@ function simParallelRun(kernel, total) {
     for (let d; (d = Atomics.load(ctl, SIM_PAR_DONE)) < total;) Atomics.wait(ctl, SIM_PAR_DONE, d, 5);
 }
 
+// ---- background jobs ----
+// A kernel run whose result is needed later (a navigation build's stages):
+// the helpers take its chunks whenever no foreground job waits for them,
+// the simulation thread none until simParallelBackgroundWait, where it takes
+// what is left and waits for the rest. Its inputs must stay as they are
+// until then (the kernels are pure; its parameters are _simBgParams, set by
+// the caller before this). One at a time: a new one waits for the last.
+// Without helpers it runs at the wait, the same result.
+let _simBg = null, _simBgId = 0;
+function simParallelBackground(kernel, total) {
+    simParallelBackgroundWait();
+    if (!(total > 0)) return;
+    const pool = _simPool;
+    _simBgId = (_simBgId + 1) & 0x7F;
+    _simBg = { kernel, total, id: _simBgId, sync: !pool };
+    if (!pool) return;
+    const ctl = pool.ctl;
+    ctl[SIM_PAR_BG_KERNEL] = kernel; ctl[SIM_PAR_BG_TOTAL] = total; ctl[SIM_PAR_BG_DONE] = 0; ctl[SIM_PAR_BG_REGVER] = _simParRegVer;
+    Atomics.store(ctl, SIM_PAR_BG_NEXT, _simBgId << 24);
+    // Idle helpers wake (no new foreground job: the generation stays even).
+    Atomics.add(ctl, SIM_PAR_GEN, 2);
+    Atomics.notify(ctl, SIM_PAR_GEN);
+}
+function simParallelBackgroundWait() {
+    const J = _simBg;
+    if (!J) return;
+    _simBg = null;
+    const fn = SIM_KERNELS[J.kernel];
+    if (J.sync) { for (let c = 0; c < J.total; c++) fn(_simParReg, _simBgParams, c); return; }
+    const ctl = _simPool.ctl;
+    for (;;) {
+        const v = Atomics.add(ctl, SIM_PAR_BG_NEXT, 1), c = v & 0xFFFFFF;
+        if (c >= J.total) break;
+        fn(_simParReg, _simBgParams, c);
+        Atomics.add(ctl, SIM_PAR_BG_DONE, 1);
+    }
+    for (let d; (d = Atomics.load(ctl, SIM_PAR_BG_DONE)) < J.total;) Atomics.wait(ctl, SIM_PAR_BG_DONE, d, 5);
+}
+function simParallelBackgroundPending() { return !!_simBg; }
+
 // ---- a helper's side (sim_helper.js) ----
 function simParallelHelperMain() {
-    let ctl = null, seen = 0, regVer = 0;
+    let ctl = null, seen = 0, regVer = 0, bgParams = null;
     self.onmessage = ev => {
         let m = ev.data || {};
         if (m.type === 'init') {
             ctl = m.ctl;
             _simParHelperParams = m.params;
+            bgParams = m.bgParams;
             loop();
         } else if (m.type === 'bind') {
             _simParReg[m.name] = m.arr;
@@ -1197,7 +1260,17 @@ function simParallelHelperMain() {
             Atomics.sub(ctl, SIM_PAR_ACTIVE, 1);
             Atomics.notify(ctl, SIM_PAR_ACTIVE);
             // Missing arrays of the latest jobs: take the messages bringing them.
-            if (regVer < ctl[SIM_PAR_REGVER]) await nextTask();
+            if (regVer < ctl[SIM_PAR_REGVER] || regVer < ctl[SIM_PAR_BG_REGVER]) await nextTask();
+            // Background chunks while no foreground job is posted (checked
+            // between chunks). A ticket of another job (posted after this
+            // one's last chunk was taken) is past its end: nothing taken.
+            while (bgParams && Atomics.load(ctl, SIM_PAR_GEN) === seen && regVer >= ctl[SIM_PAR_BG_REGVER]) {
+                const v = Atomics.add(ctl, SIM_PAR_BG_NEXT, 1), c = v & 0xFFFFFF;
+                if (c >= ctl[SIM_PAR_BG_TOTAL]) break;
+                SIM_KERNELS[ctl[SIM_PAR_BG_KERNEL]](_simParReg, bgParams, c);
+                Atomics.add(ctl, SIM_PAR_BG_DONE, 1);
+                Atomics.notify(ctl, SIM_PAR_BG_DONE);
+            }
         }
     }
 }
@@ -1451,6 +1524,26 @@ SIM_KERNELS[SIM_KERNEL_STATUS] = function (R, P, chunk) {
     CNT[chunk] = n;
 };
 
+// Owners per tile of the unit index (ix.omask: bit p set when a unit of
+// player p is listed there; dead units too). The entries are grouped by
+// tile (sep.ekey); a job owns the runs that start in its range (finishing
+// them past its end), so no two write one tile. P: [0] entries, [1] per job.
+SIM_KERNELS[SIM_KERNEL_TILE_OWNERS] = function (R, P, chunk) {
+    const es = R['sep.eslot'], ek = R['sep.ekey'], OWN = R['unit.owner'], M = R['ix.omask'], n = P[0] | 0;
+    for (let e = chunk * P[1], end = Math.min(n, e + P[1]); e < end; e++) {
+        const k = ek[e];
+        if (e > 0 && ek[e - 1] === k) continue;
+        let m = 0;
+        for (let g = e; g < n && ek[g] === k; g++) {
+            const q = es[g];
+            if (q < 0) continue;
+            const o = OWN[q] | 0;
+            m |= (o >= 0 && o < 8) ? (1 << o) : 0xFF;
+        }
+        M[k] = m;
+    }
+};
+
 // The combat scan (unit.js combatScanRun): for each idle or attack-moving
 // unit the kernel did not move, the nearest enemy unit (not dead) within
 // its aggro range whose area the unit's player sees (vis.cover), nearest
@@ -1466,6 +1559,8 @@ SIM_KERNELS[SIM_KERNEL_COMBAT_SCAN] = function (R, P, chunk) {
     // (Enemies where they were at the pass's start, and their areas there.)
     const X0 = R['unit.x0'], Y0 = R['unit.y0'], AG = R['ix.agrid'], GW = P[15] | 0, GH = P[16] | 0;
     const rs = R['sep.rs'], rc = R['sep.rc'], rst = R['sep.rstamp'], es = R['sep.eslot'], COVER = R['vis.cover'], HS = R['mv.hostile'];
+    // (Tiles with no unit of another player are passed over: ix.omask.)
+    const OM = R['ix.omask'];
     const t = P[2] | 0, CW = P[3] | 0, CH = P[4] | 0, tile = P[5], ep = P[6] | 0, players = P[7] | 0, cmdIdle = P[8], cmdAM = P[9];
     const B = P[10] | 0, bc = P[11] | 0, br = P[12] | 0, absent = P[13], cs = P[14] | 0, cws = tile * cs;
     const stride = bc + 1, plane = stride * (br + 1);
@@ -1477,6 +1572,7 @@ SIM_KERNELS[SIM_KERNEL_COMBAT_SCAN] = function (R, P, chunk) {
         if (!(owner >= 0 && owner < players) || !(r > 0)) continue;
         const cov = COVER[owner];
         if (!cov) continue;
+        const foe = owner < 8 ? (0xFF ^ (1 << owner)) : 0xFF;
         CTK[s] = t; CT[s] = -1;
         const x = X[s], y = Y[s], cx = Math.floor(x / cws), cy = Math.floor(y / cws);
         const rt = Math.ceil(r / cws) + 1;
@@ -1497,7 +1593,7 @@ SIM_KERNELS[SIM_KERNEL_COMBAT_SCAN] = function (R, P, chunk) {
                     const tx = cx + ox;
                     if (tx < 0 || tx >= CW) continue;
                     const k = ty * CW + tx;
-                    if (rst[k] !== ep) continue;
+                    if (rst[k] !== ep || (OM[k] & foe) === 0) continue;
                     for (let e = rs[k], e1 = e + rc[k]; e < e1; e++) {
                         const q = es[e];
                         if (q < 0 || DEAD[q] || (OWN[q] | 0) === owner) continue;

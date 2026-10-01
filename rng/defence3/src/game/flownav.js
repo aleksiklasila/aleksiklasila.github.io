@@ -42,6 +42,8 @@ function navBuild(profile, wall, costs, W, H) {
 }
 // The walls (copied) and room for their step costs, bound for the kernels.
 function navBuildStart(profile, wallLive, withCosts, W, H) {
+    // (A build's background stage still running reads the names bound here.)
+    if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait();
     const C = Math.max(W, H) > 512 ? 32 : 16;
     const wall = simSharedArray(Uint8Array, W * H);
     wall.set(wallLive.length === W * H ? wallLive : wallLive.subarray(0, W * H));
@@ -126,11 +128,25 @@ function _navBuildBind(b) {
     if (b.adjStart) { simParallelBind('navb.adjS', b.adjStart); simParallelBind('navb.adjA', b.adjA); simParallelBind('navb.adjC', b.adjC); simParallelBind('navb.hop', b.hop); }
 }
 const _navNoCost = new Uint8Array(0);
-function _navBuildParams(b) {
-    const P = _simParams;
+function _navBuildParams(b, P = _simParams) {
     P[3] = b.W; P[4] = b.H; P[5] = b.C; P[6] = b.cw; P[7] = b.nc; P[8] = b.k; P[9] = b.B; P[10] = b.adjA ? b.adjA.length : 0;
     return P;
 }
+// The local fields of all nodes, or the hop table, as a background job
+// (simParallelBackground): collected by navBuildCollect before the next stage.
+function navBuildLocalBackground(b) {
+    if (b.k <= 0) return;
+    const P = _navBuildParams(b, _simBgParams), per = 32;
+    P[0] = 0; P[1] = b.k; P[2] = per;
+    simParallelBackground(SIM_KERNEL_NAV_LOCAL, Math.ceil(b.k / per));
+}
+function navBuildHopBackground(b) {
+    if (b.nc <= 0) return;
+    const P = _navBuildParams(b, _simBgParams), per = 4;
+    P[0] = 0; P[1] = b.nc; P[2] = per;
+    simParallelBackground(SIM_KERNEL_NAV_HOP, Math.ceil(b.nc / per));
+}
+function navBuildCollect() { simParallelBackgroundWait(); }
 // Local fields of nodes i0..i1-1 (Dijkstra inside the cluster from each).
 function navBuildLocal(b, i0, i1) {
     if (i1 <= i0) return;
@@ -565,6 +581,8 @@ function navEnsure(profile) {
     return nav;
 }
 function navReset() {
+    // (A build's background stage: finished, its result dropped.)
+    if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait();
     for (const F of _navFields.pools) {
         if (F.meta) for (const s of F.byKey.values()) { F.meta[s * NAV_FIELD_META] = -1; F.meta[s * NAV_FIELD_META + 6]++; F.free.push(s); }
         F.byKey = new Map(); F.pending = [];
@@ -699,10 +717,12 @@ function navTick() {
     const J = _navJob, off = gameTime - J.start;
     while (J.step <= off && _navJob === J) _navJobStep(J, J.step++);
 }
-// Step 0 copies the walls, 1 makes the costs and nodes, 2..S+1 the local
-// fields, S+2 the graph, S+3..2S+2 the hop table and the destination
-// fields in use, 2S+3 installs it. (Arrays are bound a step before the
-// kernels read them: helpers take the bindings between jobs.)
+// Step 0 copies the walls, 1 makes the costs and nodes and starts the local
+// fields in the background (the helpers between the tick's other jobs), S+2
+// collects them and makes the graph, then starts the hop table in the
+// background, 2S+3 collects it and installs the build. The steps' ticks are
+// those of the build's start alone: when the helpers finish never changes
+// what any peer does (a collect waits, or runs what is left itself).
 function _navJobStep(J, step) {
     const S = NAV_BUILD_SLICES;
     if (step === 0) {
@@ -710,15 +730,13 @@ function _navJobStep(J, step) {
         _navWallDiffReset();
     } else if (step === 1) {
         navBuildNodes(J.b);
-    } else if (step <= S + 1) {
-        const b = J.b, i = step - 2;
-        navBuildLocal(b, Math.floor(b.k * i / S), Math.floor(b.k * (i + 1) / S));
+        navBuildLocalBackground(J.b);
     } else if (step === S + 2) {
+        navBuildCollect();
         navBuildGraph(J.b);
-    } else if (step <= 2 * S + 2) {
-        const b = J.b, i = step - S - 3;
-        navBuildHop(b, Math.floor(b.nc * i / S), Math.floor(b.nc * (i + 1) / S));
+        navBuildHopBackground(J.b);
     } else if (step === 2 * S + 3) {
+        navBuildCollect();
         _navJob = null;
         navPublish(navBuildFinish(J.b));
     }
