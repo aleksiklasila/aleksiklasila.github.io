@@ -773,7 +773,11 @@ class Unit {
             if (cmd === CMD_MOVING || cmd === CMD_ATTACK_MOVING) simMoveTryArm(this);
             else if (cmd === CMD_IDLE && this.workerState === 'IDLE') simMoveTryPark(this);
             else if (cmd === CMD_IDLE && !this.workerState) simMoveTryParkIdle(this);
-            else if (cmd === CMD_ATTACKING) { simMoveTryHold(this); if (cols.mvOn[this._si] !== 3 && cols.mvOn[this._si] !== 5) simMoveTryChase(this); }
+            else if (cmd === CMD_ATTACKING) {
+                simMoveTryHold(this);
+                const on = cols.mvOn[this._si];
+                if (on !== 3 && on !== 5) { simMoveTryChase(this); if (cols.mvOn[this._si] !== 4) _simMoveTryApproachBuilding(this); }
+            }
         }
     }
 
@@ -2445,6 +2449,69 @@ function simMoveTryArm(u) {
     c.mvOn[s] = 1;
 }
 
+// Approach (mvOn 6): a unit attacking a structure it is not in range of,
+// following its path there (doAttacking's building branch: followPath).
+// The kernel walks the path window, or the flow field of a nav node, as for
+// a move (no scans) while the structure's tile (mvHT) still holds a hostile structure, its area is in
+// sight and the unit is not in range (_simInAreaRange 0); it hands the unit
+// back when in range or unsure, at the window's or path's end, and on an
+// automatic target's look for enemy units ((t + id) % 8). Nothing during the
+// pass can fail doAttacking's checks on the structure (hits land after it,
+// destroyBuilding leaves its energy, sight is held), so no turn check.
+function _simMoveTryApproachBuilding(u) {
+    const c = u._us, tb = u.targetBuilding;
+    if (!c || u.dead || u.holdPosition || u.workerState || u.targetUnit || !tb || u.attackTarget === tb || !(tb.energy > 0)) return;
+    const path = u.path, idx = u.pathIndex;
+    if (!path || !(idx < path.length)) return;
+    const s = u._si, owner = u.owner, gx = tb.gx, gy = tb.gy;
+    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
+    if (!(owner >= 0 && owner < spatialUnitsComplexPlayerCount) || !spatialBlockCols) return;
+    if (!(Number.isInteger(gx) && Number.isInteger(gy) && gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)
+        || tb.x !== gx * TILE + TILE / 2 || tb.y !== gy * TILE + TILE / 2) return;
+    const k = Math.floor(Math.max(0, Number(_getUnitAttackRangeArea(u)) || 0));
+    if (!(k <= 2)) return;
+    const pc = u.preComputed;
+    const spd = pc ? pc.speed * _getUnitAstarSpeedMultiplier(u) : NaN;
+    if (!(spd >= 0)) return;
+    // A flow navigation node next (_followNavNode): flow mode toward its
+    // tile, without scans. Arriving short of it in a crowd only for a group
+    // node (nd.w) that ends the path, as _followNavNode (the kernel hands
+    // that arrival back to Unit.update); bit 128 otherwise.
+    const nd = path[idx];
+    if (nd.nav) {
+        const dest = nd.y * GRID_W + nd.x, profile = nd.nav - 1;
+        if (Math.floor(c.y[s] / TILE) * GRID_W + Math.floor(c.x[s] / TILE) === dest) return;
+        const did = navFieldRequest(profile, dest, !!nd.w);
+        if (!(did >= 0)) return;
+        const crowd = !!nd.w && idx === path.length - 1;
+        c.mvFlags[s] = 64 | (crowd ? 0 : 128) | (profile === NAV_PROFILE_AIR ? 32 : 0); c.mvReach[s] = k; c.mvSpd[s] = spd;
+        c.mvFlow[s] = did; c.mvFGen[s] = navFieldGen(did); c.mvDest[s] = dest; c.mvNavT[s] = -1; c.mvReady[s] = nd.ready | 0;
+        c.mvWk[s] = 0; c.mvSpent[s] = 0;
+        c.mvHT[s] = gy * GRID_W + gx; c.mvHTId[s] = u.forcedAttackTarget ? 1 : 0;
+        c.mvOn[s] = 6;
+        return;
+    }
+    // The path window, as simMoveTryArm's (and ending before a nav node).
+    const base = idx > 0 ? idx - 1 : 0, nb = s * SIM_MOVE_WINDOW, nodes = c.mvNodes;
+    const clouds = _cloudTileCache && _cloudTileCache.size > 0;
+    let wl = 0, px = 0, py = 0;
+    for (; wl < SIM_MOVE_WINDOW && base + wl < path.length; wl++) {
+        const n = path[base + wl], nx = n.x, ny = n.y;
+        if (wl > 0 && (n.nav || Math.abs(nx - px) + Math.abs(ny - py) !== 1 || (clouds && isCloudPortalLink(px, py, nx, ny, owner)))) break;
+        nodes[nb + wl] = ny * GRID_W + nx;
+        px = nx; py = ny;
+    }
+    if (wl < 2 && base + wl < path.length) return;
+    c.mvBase[s] = base; c.mvWlen[s] = wl; c.mvPlen[s] = path.length;
+    c.mvFlags[s] = (u.pathIsFallbackAstar ? 8 : 0) | (u.isFlying ? 32 : 0);
+    c.mvReach[s] = k; c.mvSpd[s] = spd;
+    c.mvLane[s] = Math.max(1.5, Math.min(4, u.r * 0.6));
+    c.mvCost[s] = _resolveUnitAstarTileCost(u);
+    c.mvScan[s] = -1; c.mvSpent[s] = 0;
+    c.mvHT[s] = gy * GRID_W + gx; c.mvHTId[s] = u.forcedAttackTarget ? 1 : 0;
+    c.mvOn[s] = 6;
+}
+
 // An idle worker whose search found nothing does nothing until its next
 // search tick (see shouldRunWorkerIdleRetarget) or, for a builder, its next
 // recheck: parked (mvOn 2) until then, its ticks cost the kernel a floor
@@ -2521,7 +2588,10 @@ function _simMoveTryHoldBuilding(u, c) {
 function simMoveTryChase(u) {
     const c = u._us, tu = u.targetUnit;
     if (!c || u.dead || u.holdPosition || u.workerState || !tu || tu.dead || u.forcedAttackTarget || u.targetBuilding || u.attackTarget === tu) return;
-    if (u.path && u.pathIndex < u.path.length) return;
+    // (With a path of its own, doAttacking steps straight only when close or
+    // the step is open, flying or not; otherwise it follows the path:
+    // Unit.update. Bit 1 tells the kernel.)
+    const hasPath = !!(u.path && u.pathIndex < u.path.length);
     const pc = u.preComputed;
     if (!(pc && pc.attackDamage > 0)) return;
     const q = tu._si, s = u._si;
@@ -2531,7 +2601,7 @@ function simMoveTryChase(u) {
     if (!(k <= 1)) return;
     c.mvHT[s] = q; c.mvHTId[s] = tu.id; c.mvReach[s] = k;
     c.mvChs[s] = Math.max(TILE * 0.6, Number(pc.speed) || 1);
-    c.mvFlags[s] = u.isFlying ? 32 : 0;
+    c.mvFlags[s] = (u.isFlying ? 32 : 0) | (hasPath ? 1 : 0);
     c.mvOn[s] = 4;
 }
 // A chasing unit the kernel moved (output 7-9), at its turn: whether that
@@ -2578,7 +2648,7 @@ function simHoldFire(c, s) {
     c.mvOn[s] = 0;
     if (u.dead || u.commandState !== CMD_ATTACKING) return;
     simMoveTryHold(u);
-    if (c.mvOn[s] !== 3 && c.mvOn[s] !== 5) simMoveTryChase(u);
+    if (c.mvOn[s] !== 3 && c.mvOn[s] !== 5) { simMoveTryChase(u); if (c.mvOn[s] !== 4) _simMoveTryApproachBuilding(u); }
 }
 function simHoldUndo(c, s) {
     c.mvOn[s] = 0; c.mvOut[s] = 0;
@@ -2639,7 +2709,7 @@ function simMoveTryPark(u) {
         const org = _workerWorkOrigin(u), gx = Math.floor(c.x[s] / TILE), gy = Math.floor(c.y[s] / TILE);
         c.wkType[s] = _workerWorkType(u.workerType); c.wkD[s] = Math.ceil(_getWorkerAutoSearchDistancePx(u) / TILE) + 1;
         c.wkOx[s] = Math.floor(org.x / TILE); c.wkOy[s] = Math.floor(org.y / TILE);
-        c.wkTwice[s] = (org !== u ? 1 : 0) | (u.workerType === 'healer' ? 2 : 0);
+        c.wkTwice[s] = org !== u ? 1 : 0;
         c.wkTile[s] = gy * GRID_W + gx; c.wkFail[s] = failVer | 0; c.wkUntil[s] = failUntil; c.wkSched[s] = sched;
         c.mvFlags[s] |= 2;
     }
@@ -2956,7 +3026,7 @@ function _combatScanTarget(u, range) {
 }
 // Runs the combat scan for every idle or attack-moving unit before the
 // update pass (in parallel; see SIM_KERNEL_COMBAT_SCAN).
-let _combatScanTick = -1;
+let _combatScanTick = -1, _combatScanOwnerMask = null;
 function combatScanRun() {
     if (_combatScanTick === gameTime) return;
 
@@ -2974,6 +3044,16 @@ function combatScanRun() {
     P[15] = GRID_W; P[16] = GRID_H;
     simParallelBind('ix.agrid', _spatialAreaGridFlat());
     _combatScanTick = gameTime;
+    // Owners per tile first (SIM_KERNEL_TILE_OWNERS): the scan passes over
+    // tiles holding only its own player's units.
+    {
+        const nc = CHUNKS_W * CHUNKS_H, ne = spatialIndexEntries();
+        if (!_combatScanOwnerMask || _combatScanOwnerMask.length !== nc) { _combatScanOwnerMask = simSharedArray(Uint8Array, nc); }
+        simParallelBind('ix.omask', _combatScanOwnerMask); simParallelBind('sep.ekey', _sxEKey);
+        P[0] = ne; P[1] = 8192;
+        simParallelRun(SIM_KERNEL_TILE_OWNERS, Math.ceil(ne / 8192));
+        P[0] = n; P[1] = 2048;
+    }
     simParallelRun(SIM_KERNEL_COMBAT_SCAN, Math.ceil(n / 2048));
 }
 
