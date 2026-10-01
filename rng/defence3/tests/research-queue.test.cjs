@@ -291,7 +291,11 @@ function rng(seed) {
         for (const inst of all) for (const pid of pids) assert.deepEqual(hudViolations(inst, pid), [], `seed ${seed}: ${inst.name} panel for ${pid}`);
         const gained = players.reduce((n, p, i) => n + pool.reduce((m, s, j) => m + levelOf(host, p.pid, s) - startLevels[i][j], 0), 0);
         assert.ok(gained > 0, `seed ${seed}: research progressed`);
-        for (const g of guests) for (const p of players) for (const s of pool) assert.equal(levelOf(g, p.pid, s), levelOf(host, p.pid, s), `seed ${seed}: levels agree`);
+        // Every peer's levels at the same tick (peers run a few ticks apart).
+        const levelsExpr = JSON.stringify(players.map(p => pool.map(s => `getPlayerResearchLevel(${p.pid}, ${JSON.stringify(s.kind)}, ${JSON.stringify(s.key)}, ${JSON.stringify(s.statKey)})`)));
+        const at = world.atNextSafeTick(`__scratch.levels = JSON.stringify(${levelsExpr}.map(r => r.map(e => eval(e))))`);
+        await world.runUntil(() => all.every(i => i.eval('currentTick') > at + 1), 20000, 20);
+        for (const g of guests) assert.equal(g.scratch.levels, host.scratch.levels, `seed ${seed}: levels agree at tick ${at}`);
         assertInSync(world, all, `fuzz seed ${seed}`, 500);
         rows.push(`fuzz seed ${seed}: 3 players, ${Object.entries(counts).map(([k, v]) => `${k} ${v}`).join(', ')}; ${gained} levels researched, in sync`);
     }

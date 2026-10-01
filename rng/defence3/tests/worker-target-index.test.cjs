@@ -6,6 +6,7 @@ const make = new Function(`
 let TILE=32, GRID_W=128, GRID_H=128, gameTime=1, CMD_IDLE=0;
 let RESOURCE_COLLECTOR_UNIT_KEYS=['collector','astar_collector'], units=[], collectorSpawners=[], _tileEntityVersion=0;
 const _resolveMovementProfile=()=>null;
+const _thingTickX=t=>t.x, _thingTickY=t=>t.y, _unitTickX=t=>t.x, _unitTickY=t=>t.y;
 ${source}
 return { units, spawners:collectorSpawners, set:_setWorkerTarget, clear:_clearWorkerTarget,
  conflict:_findConflictingWorkerOnTargetTile, tile:_getWorkerTargetTileIndex, reset:_invalidateWorkerTargetLoadCache,

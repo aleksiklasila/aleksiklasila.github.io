@@ -21,6 +21,8 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     if (first.x !== x || first._us.x[first._si] !== x) fail('growth/precision');
     const retired = units.pop(), oldX = retired.x, slot = retired._si;
     removeUnitSpatial(retired); retired.dead = true; simUnitStateCollect(true);
+    // (Freed slots are reused from the next unit index rebuild on.)
+    simUnitStateReleaseFreed();
     const replacement = new Unit('norm', 0, 300, 300); units.push(replacement);
     if (replacement._si !== slot || retired.x !== oldX) fail('slot retirement');
     retired.x = -100;

@@ -4031,8 +4031,11 @@ function visCoverSlotWindow(c, s, wx, wy, key) {
     if (c.vsGen[s] !== C.gen) return false;
     const steps = c.vsR[s];
     if (steps < 0) return false;
-    // (Held: redone from where it is when the unit phase ends.)
-    if (_visCoverHold) { _visCoverHeldSlots.push(s); return true; }
+    // (Held: redone from where it is when the unit phase ends; once.)
+    if (_visCoverHold) {
+        if (c.vsHeld[s] !== _visCoverHoldEpoch) { c.vsHeld[s] = _visCoverHoldEpoch; _visCoverHeldSlots.push(s); }
+        return true;
+    }
     const id = getSourceAreaListIdAtWorld(wx, wy), old = c.vsList[s];
     c.vsA[s] = key;
     if (id === old) return true;
@@ -4058,13 +4061,36 @@ function visCoverSlotWindow(c, s, wx, wy, key) {
 // as Unit.update would). Changes wait in _visCoverHeld until it ends.
 let _visCoverHold = false;
 const _visCoverHeld = new Map(), _visCoverHeldSlots = [];
-function visCoverHoldBegin() { _visCoverHold = true; }
+let _visCoverHoldEpoch = 1;
+function visCoverHoldBegin() { _visCoverHold = true; _visCoverHoldEpoch = (_visCoverHoldEpoch + 1) | 0 || 1; }
+// Many held slots: the kernels settle the ones whose window still covers
+// the same areas (only the key changes); the rest are flagged.
+let _visHeldList = null, _visHeldFlags = null;
+// (Tests lower it; both ways give the same coverage.)
+let VIS_HELD_KERNEL_MIN = 4096;
+function _visCoverHeldKernel(S) {
+    const H = _visCoverHeldSlots, n = H.length, T = sourceAreaZoneTable();
+    if (!T || typeof SIM_KERNEL_VIS_HELD !== 'number') return null;
+    if (!_visHeldList || _visHeldList.length < n) {
+        _visHeldList = simSharedArray(Int32Array, Math.max(4096, n * 2)); _visHeldFlags = simSharedArray(Uint8Array, _visHeldList.length);
+        simParallelBind('vis.held', _visHeldList); simParallelBind('vis.heldF', _visHeldFlags);
+    }
+    for (let i = 0; i < n; i++) _visHeldList[i] = H[i];
+    simParallelBind('vis.zoneIds', T);
+    const P = _simParams;
+    P[0] = n; P[1] = 2048; P[2] = TILE; P[3] = GRID_W; P[4] = GRID_H; P[5] = _visCover.gen;
+    simParallelRun(SIM_KERNEL_VIS_HELD, Math.ceil(n / 2048));
+    return _visHeldFlags;
+}
 function visCoverHoldEnd() {
     _visCoverHold = false;
     const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
     if (_visCoverHeldSlots.length > 0) {
         const c = S ? S.columns : null;
+        const synced = _visCover.syncedTick >= 0 && _visCover.adm === areaDistanceMatrix;
+        const F = synced && S && _visCoverHeldSlots.length >= VIS_HELD_KERNEL_MIN ? _visCoverHeldKernel(S) : null;
         for (let i = 0; i < _visCoverHeldSlots.length; i++) {
+            if (F !== null && F[i] === 0) continue;
             const s = _visCoverHeldSlots[i], u = S ? S.owners[s] : null;
             if (!u || u.dead) continue;
             const fx = c.x[s] / TILE, fy = c.y[s] / TILE;

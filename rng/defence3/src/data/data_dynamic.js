@@ -3560,6 +3560,7 @@ function applyUnitLevelScaling(unit, level) {
     unit.baseLevel = lvl;
     unit.effectiveStacks = Math.max(1, Number.isFinite(unit.stackCount) ? Math.floor(unit.stackCount) : 1);
     unit.effectiveLevel = lvl;
+    if (typeof effStatsUnitBaseChanged === 'function') effStatsUnitBaseChanged(unit);
     if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(unit);
 }
 

@@ -58,7 +58,9 @@ const SNAP_SKIP_KEYS = new Set([
     '_statsVer', '_spatialKey', '_spatialMember', '_spatialAreaId', '_spatialAreaOwner', '_spatialUnitTypeIdx', '_spatialLastVisScaled', '_spatialTile', '_spatialZone', '_spatialOwner', '_spatialEpoch',
     '_damageFlashStart', '_damageFlashUntil', '_damageFlashStrength', '_damageFlashColor', '_ambientSoundTicks',
     '_historyGhost', '_historyTick', '_droppedIndex', '_areaBucketId', '_laserLinkLevel', '_r3d', '_r3dSig', '_r3dTex', '_visStill', '_r3dStatic', '_rslot', '_sslot', '_pslot', '_simLabelKey', '_simLabel', '_fpPath', '_fpTile', '_fpIdx', '_fpVer',
-    '_vsGen', '_vsR', '_vsA', '_vsP1', '_vsP2', '_vsAreas', '_vsListId', '_okTile', '_okVer', '_okNodeTile', '_okNodeVer', '_pendingDueStamp', '_thingStatsRefreshStamp', '_effectiveStatsStamp'
+    '_vsGen', '_vsR', '_vsA', '_vsP1', '_vsP2', '_vsAreas', '_vsListId', '_okTile', '_okVer', '_okNodeTile', '_okNodeVer', '_pendingDueStamp', '_thingStatsRefreshStamp', '_effectiveStatsStamp',
+    // (Charges already made this tick: nothing between ticks.)
+    '_astarLastChargedTick', '_astarLastChargedFromKey', '_astarLastChargedToKey'
 ]);
 
 // Lists: P players, u units, t towers, b barracks, s spawners, f floor
@@ -272,9 +274,22 @@ function _snapHPath(h, o) {
     if (!Array.isArray(p)) return _snapHV(h, p);
     let i = o.pathIndex | 0;
     h = Math.imul(h ^ p.length, 16777619);
-    for (let k = i - 1; k <= i + 1; k++) if (k >= 0 && k < p.length) h = _snapHShallow(h, p[k]);
-    if (p.length > 0) h = _snapHShallow(h, p[p.length - 1]);
+    for (let k = i - 1; k <= i + 1; k++) if (k >= 0 && k < p.length) h = _snapHPathNode(h, p[k]);
+    if (p.length > 0) h = _snapHPathNode(h, p[p.length - 1]);
     return h;
+}
+// A path node: its tile (integers) and, for navigation nodes, its profile
+// and ready tick; anything else as a field value.
+function _snapHPathNode(h, n) {
+    if (n !== null && typeof n === 'object') {
+        const x = n.x, y = n.y;
+        if ((x | 0) === x && (y | 0) === y) {
+            h = Math.imul(Math.imul(h ^ x, 16777619) ^ y, 16777619);
+            const nav = n.nav;
+            return nav === undefined ? h : Math.imul(Math.imul(h ^ (nav | 0), 16777619) ^ (n.ready | 0), 16777619);
+        }
+    }
+    return _snapHShallow(h, n);
 }
 
 // Fields that drive behaviour, hashed every rotation (a patch sends every
@@ -324,8 +339,12 @@ const _snapUnitGroupHashers = _snapUnitGroupFields.map(f => _snapMakeFieldHasher
 // The hashed fields that are unit state columns: hashed for every unit by
 // the kernels (SIM_KERNEL_SNAP_REGION, no object read); the slice's units
 // then only have their other fields read here.
-const SNAP_HASH_UNIT_COLUMNS = ['owner', 'x', 'y', 'vx', 'vy', 'energy', 'commandState', 'dead', 'attackTimer', 'attackFlash'];
-const _snapUnitGroupObjHashers = _snapUnitGroupFields.map(f => _snapMakeFieldHasher(f.filter(k => !SNAP_HASH_UNIT_COLUMNS.includes(k))));
+const SNAP_HASH_UNIT_COLUMNS = ['owner', 'x', 'y', 'vx', 'vy', 'energy', 'commandState', 'dead', 'attackTimer', 'attackFlash',
+    'teleportHideTicks', 'poisoned', 'burning', 'frozen', 'wet', 'sandy', 'watched', 'workerTransferCooldown'];
+// From this many units the column fields are hashed by the kernels (tests
+// lower it to cover that path on small worlds; every peer must agree).
+let SNAP_HASH_KERNEL_MIN_UNITS = 8192;
+const _snapUnitObjHasher = _snapMakeFieldHasher(SNAP_HASH_FIELDS.u.filter(k => !SNAP_HASH_UNIT_COLUMNS.includes(k)));
 let _snapColCodes = null;
 const _snapHashers = {
     u: _snapMakeFieldHasher(SNAP_HASH_FIELDS.u),
@@ -358,7 +377,8 @@ function _snapHDeep(h, x, depth) {
     return h;
 }
 
-function _snapHashGlobals() {
+// (Areas: the slice's tenth of them, by index, as regions; slice < 0 all.)
+function _snapHashGlobals(slice = -1) {
     let h = 2166136261 | 0;
     h = _snapHNum(h, gameTime);
     h = _snapHNum(h, nextUnitId);
@@ -369,7 +389,10 @@ function _snapHashGlobals() {
     h = _snapHDeep(h, (rng && typeof rng.getState === 'function') ? rng.getState() : null, 1);
     if (pathfindBudgetByPlayer) for (let i = 0; i < pathfindBudgetByPlayer.length; i++) h = _snapHNum(h, pathfindBudgetByPlayer[i]);
     if (astarNodeBudgetRemainingByPlayer) for (let i = 0; i < astarNodeBudgetRemainingByPlayer.length; i++) h = _snapHNum(h, astarNodeBudgetRemainingByPlayer[i]);
-    for (let ar of (areas || [])) if (ar) { h = _snapHV(h, !!ar.active); h = _snapHDeep(h, ar.multiplierLevel, 1); }
+    if (areas) for (let i = slice < 0 ? 0 : slice, step = slice < 0 ? 1 : SNAP_HASH_SLICES; i < areas.length; i += step) {
+        const ar = areas[i];
+        if (ar) { h = _snapHV(h, !!ar.active); h = _snapHDeep(h, ar.multiplierLevel, 1); }
+    }
     let resigned = 0;
     for (let t of (resignedTeams || [])) resigned = (resigned + Math.imul((t | 0) + 1, 2654435761)) | 0;
     h = Math.imul(h ^ resigned, 16777619);
@@ -451,6 +474,13 @@ function _snapReservationRegion(slot) {
     return Math.floor(Math.floor(tile / GRID_W) / SNAP_REGION_TILES) * 1024 + Math.floor((tile % GRID_W) / SNAP_REGION_TILES);
 }
 
+// The same region as a dense index (ry * columns + rx), and how many.
+function _snapReservationRegionIndex(slot) {
+    let tile = Math.floor(slot / _WORKER_TARGET_LOAD_TYPE_COUNT);
+    return Math.floor(Math.floor(tile / GRID_W) / SNAP_REGION_TILES) * Math.ceil(GRID_W / SNAP_REGION_TILES) + Math.floor((tile % GRID_W) / SNAP_REGION_TILES);
+}
+function _snapReservationRegionCount() { return Math.ceil(GRID_W / SNAP_REGION_TILES) * Math.ceil(GRID_H / SNAP_REGION_TILES); }
+
 function _snapReservationHash(slot, u) {
     let h = Math.imul((slot + 1) ^ Math.imul((Number(u.id) | 0) + 0x3c6ef372, 2654435761), 2246822519) ^ (u.dead ? 0x6b43a9b5 : 0x1b873593);
     return Math.imul(h ^ (h >>> 13), 3266489917) >>> 0;
@@ -483,10 +513,13 @@ function _snapForReservations(slice, fn) {
         return;
     }
     let rt = SNAP_REGION_TILES, rw = Math.ceil(GRID_W / rt), rh = Math.ceil(GRID_H / rt);
+    // (Regions with no entry skipped: the occupied-slot counts per region.)
+    let counts = typeof _workerReservedCounts === 'function' ? _workerReservedCounts() : null;
     for (let ry = 0; ry < rh; ry++) {
         // region = ry * 1024 + rx
         let rx0 = (((slice - (1024 % SNAP_HASH_SLICES) * ry) % SNAP_HASH_SLICES) + SNAP_HASH_SLICES) % SNAP_HASH_SLICES;
         for (let rx = rx0; rx < rw; rx += SNAP_HASH_SLICES) {
+            if (counts && counts[ry * rw + rx] === 0) continue;
             let r = ry * 1024 + rx;
             _snapForRegionReservations(r, (slot, u) => fn(slot, u, r));
         }
@@ -506,6 +539,8 @@ function _snapEncodeReservation(out, slot, u) {
 // unit has left its list).
 function _snapDecodeReservations(enc, partial = null) {
     let table = workerReservedTiles;
+    // (Written directly here: the counts are made again when next asked.)
+    if (typeof workerReservedCountsInvalidate === 'function') workerReservedCountsInvalidate();
     let gone = new Map();
     let placeholder = id => {
         let p = gone.get(id);
@@ -553,7 +588,7 @@ function snapTickHash(tick, allSlices = false) {
         let hp = Math.imul(2166136261 ^ projectiles.length, 16777619);
         for (let pr of projectiles) hp = Math.imul(hp ^ _snapHashEntity('p', pr, 0), 16777619);
         push(SNAP_PART_PROJECTILES * SNAP_CODE_SHIFT, hp >>> 0);
-        push(SNAP_PART_GLOBALS * SNAP_CODE_SHIFT, _snapHashGlobals());
+        push(SNAP_PART_GLOBALS * SNAP_CODE_SHIFT, _snapHashGlobals(allSlices ? -1 : slice));
         for (let list of SNAP_ORDER_LISTS) push(SNAP_PART_ORDER * SNAP_CODE_SHIFT + SNAP_LIST_CODE[list], _snapHashOrder(list, allSlices ? -1 : slice));
     }
     // Entities of this slice's regions, summed per region (order-free).
@@ -567,8 +602,8 @@ function snapTickHash(tick, allSlices = false) {
     let slots = S && typeof _unitSlotMapEnsure === 'function' ? _unitSlotMapEnsure() : null;
     let owners = S ? S.owners : null, CX = S ? S.columns.x : null, CY = S ? S.columns.y : null;
     let REG = null, HC = null;
-    const huObj = allSlices ? null : _snapUnitGroupObjHashers[Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_UNIT_GROUPS];
-    if (slots && units.length >= 8192 && typeof SIM_KERNEL_SNAP_REGION === 'number') {
+    const rot = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_UNIT_GROUPS, CID = S ? S.columns.id : null;
+    if (slots && units.length >= SNAP_HASH_KERNEL_MIN_UNITS && typeof SIM_KERNEL_SNAP_REGION === 'number') {
         if (_snapRegions.length < units.length) { _snapRegions = simSharedArray(Int32Array, units.length * 2); _snapColHash = simSharedArray(Int32Array, units.length * 2); }
         if (!_snapColCodes) { _snapColCodes = simSharedArray(Int32Array, SNAP_HASH_UNIT_COLUMNS.length); SNAP_HASH_UNIT_COLUMNS.forEach((k, i) => { _snapColCodes[i] = _snapStrCode(k); }); simParallelBind('snap.kc', _snapColCodes); }
         REG = _snapRegions; HC = allSlices ? null : _snapColHash;
@@ -585,12 +620,19 @@ function snapTickHash(tick, allSlices = false) {
         }
         let u = units[i];
         let si = slots ? slots[i] : -1;
-        if (si >= 0 && owners[si] === u) r = Math.floor(CY[si] / ts) * 1024 + Math.floor(CX[si] / ts);
+        if (r !== undefined) { /* (the kernel's) */ }
+        else if (si >= 0 && owners[si] === u) r = Math.floor(CY[si] / ts) * 1024 + Math.floor(CX[si] / ts);
         else r = Math.floor(u.y / ts) * 1024 + Math.floor(u.x / ts);
         if (!allSlices && (r % SNAP_HASH_SLICES) !== slice) continue;
         let h;
-        // (The column fields from the kernels, the rest from the object.)
-        if (HC !== null && si >= 0 && owners[si] === u) h = (huObj(u, Math.imul(u.id, 7919) ^ 0x11, _snapF64, _snapI32, _snapHV, _snapHPath) + HC[i]) | 0;
+        // (The column fields from the kernels for every unit of the slice;
+        // the object's own fields, all of them, for the units of this
+        // rotation's group by id: reading the objects is most of the cost.)
+        if (HC !== null && si >= 0 && owners[si] === u) {
+            const id = CID[si], seed = Math.imul(id, 7919) ^ 0x11;
+            h = ((((id % SNAP_HASH_UNIT_GROUPS) + SNAP_HASH_UNIT_GROUPS) % SNAP_HASH_UNIT_GROUPS) === rot
+                ? (_snapUnitObjHasher(u, seed, _snapF64, _snapI32, _snapHV, _snapHPath) + HC[i]) : (seed + HC[i])) | 0;
+        }
         else h = hu(u, Math.imul(u.id, 7919) ^ 0x11, _snapF64, _snapI32, _snapHV, _snapHPath);
         h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
         let prev = regions.get(r);
@@ -1970,7 +2012,7 @@ function snapDecodeState(S, options = null) {
         // Movement caches (flows, armed units, the unit index, walls) start
         // over from the restored world, as on every peer's flush.
         if (typeof resetGroupRoutes === 'function') resetGroupRoutes();
-        if (typeof simMoveDisarmAll === 'function') simMoveDisarmAll(); if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats();
+        if (typeof simMoveDisarmAll === 'function') simMoveDisarmAll(); if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsInvalidateAll === 'function') effStatsInvalidateAll(); if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset();
         if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
         if (typeof simMoveWallsDirty === 'function') simMoveWallsDirty();
         // The navigation as the snapshot's peer has it (the same walls).
@@ -2041,7 +2083,7 @@ function snapFlushHistoryCaches() {
     if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
     // Armed and parked units go back to Unit.update everywhere (a restored
     // peer's units start that way).
-    if (typeof simMoveDisarmAll === 'function') simMoveDisarmAll(); if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats();
+    if (typeof simMoveDisarmAll === 'function') simMoveDisarmAll(); if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsInvalidateAll === 'function') effStatsInvalidateAll(); if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset();
     // Gameplay visibility is reused between ticks (see VISIBILITY_TICK_INTERVAL).
     if (typeof clearGameplayVisibilityCache === 'function') clearGameplayVisibilityCache();
     closestEnemyChunkQueryCache.clear();

@@ -331,6 +331,12 @@ function getSourceAreaIdsAtWorld(wx, wy) {
 // so the ids are kept per tile and zone (filled on first use, for the
 // current area grid).
 let _sourceAreaZoneIds = null, _sourceAreaZoneGrid = null, _sourceAreaZoneAdm = null;
+// The table of ids by tile and zone, current for the area grid (made empty
+// when it changed); null before the first use.
+function sourceAreaZoneTable() {
+    getSourceAreaListIdAtWorld(TILE * 0.5, TILE * 0.5);
+    return _sourceAreaZoneIds;
+}
 function getSourceAreaListIdAtWorld(wx, wy) {
     const x = Number(wx) / TILE, y = Number(wy) / TILE;
     if (!Number.isFinite(x) || !Number.isFinite(y)) return 0;
@@ -340,7 +346,9 @@ function getSourceAreaListIdAtWorld(wx, wy) {
     if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_H) return _sourceAreaListIdOfWindow(gx - (zx === 0 ? 1 : 0), gx + (zx === 2 ? 1 : 0), gy - (zy === 0 ? 1 : 0), gy + (zy === 2 ? 1 : 0));
     let T = _sourceAreaZoneIds;
     if (!T || _sourceAreaZoneGrid !== areaIdGrid || _sourceAreaZoneAdm !== areaDistanceMatrix || T.length !== GRID_W * GRID_H * 9) {
-        if (T && T.length === GRID_W * GRID_H * 9) T.fill(0); else T = _sourceAreaZoneIds = new Int32Array(GRID_W * GRID_H * 9);
+        // (Shared: the coverage kernel reads it, SIM_KERNEL_VIS_HELD.)
+        if (T && T.length === GRID_W * GRID_H * 9) T.fill(0);
+        else { T = _sourceAreaZoneIds = simSharedArray(Int32Array, GRID_W * GRID_H * 9); simParallelBind('vis.zoneIds', T); }
         _sourceAreaZoneGrid = areaIdGrid; _sourceAreaZoneAdm = areaDistanceMatrix;
     }
     const k = (gy * GRID_W + gx) * 9 + zx * 3 + zy;
@@ -842,7 +850,7 @@ function clearTileEntity(gx, gy, expectedRef = null) {
     for (let i = 0; i < _WORKER_TARGET_LOAD_TYPE_COUNT; i++) {
         let reservedUnit = workerReservedTiles[baseIndex + i];
         if (reservedUnit) reservedUnit._workerReservedTileIndex = -1;
-        workerReservedTiles[baseIndex + i] = null;
+        workerReservedSet(baseIndex + i, null);
     }
     _markAdjacencyDirtyAt(gx, gy, 1);
 }
@@ -1004,7 +1012,7 @@ function removeDroppedItem(drop) {
         for (let i = 0; i < _WORKER_TARGET_LOAD_TYPE_COUNT; i++) {
             let reservedUnit = workerReservedTiles[baseIndex + i];
             if (reservedUnit) reservedUnit._workerReservedTileIndex = -1;
-            workerReservedTiles[baseIndex + i] = null;
+            workerReservedSet(baseIndex + i, null);
         }
     }
 

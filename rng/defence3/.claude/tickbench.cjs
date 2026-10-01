@@ -89,6 +89,44 @@ const seconds = Number(process.argv[2]) || 15;
     //  mix: the map in quarters (lines, blocks, spiral, groups far apart).
     // Then every unit attack-moves toward the other team's side, and every
     // barrack rallies to the middle.
+    // TOWERS=n: n built towers per team (every tower type, lasers in rows),
+    // half in two facing bands across the middle of the map, in range of each
+    // other (towers engage towers; armies crossing meet them), half spread
+    // over the team's own half. Combine with BATTLE= for armies against them.
+    if (process.env.TOWERS) {
+        const at = world.atNextSafeTick(`try { (() => {
+            const per = ${Number(process.env.TOWERS) || 0}, W = GRID_W, H = GRID_H, keys = BUILD_CATEGORIES.towers.filter(k => k !== 'watch_tower');
+            let placed = [0, 0], seed = 12345;
+            const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+            const place = (gx, gy, key, p) => { if (gx < 2 || gy < 2 || gx >= W - 2 || gy >= H - 2) return false; const c = grid[gy][gx];
+                if (c.type !== TYPE_FLOOR || c.item || getTileEntityRef(gx, gy)) return false;
+                if (!placeBuilding(gx, gy, key, p, { ignorePlacementRules: true, silent: true })) return false;
+                const e = getTileEntityRef(gx, gy) || c.item; if (e && e.underConstruction) { e.underConstruction = false; e.buildProgress = 1; e.energy = e.maxEnergy; }
+                placed[p]++; return true; };
+            for (let p = 0; p < 2; p++) {
+                // The band: rows 3..9 tiles from the middle on the team's side,
+                // a tower on every other tile (units pass between); a laser row.
+                const dir = p ? 1 : -1, band = Math.floor(per / 2);
+                outer: for (let row = 0; row < 7; row++) {
+                    const gy = Math.floor(H / 2) + dir * (3 + row);
+                    for (let gx = 4 + (row & 1); gx < W - 4; gx += 2) {
+                        if (placed[p] >= band) break outer;
+                        place(gx, gy, row === 2 ? 'laser' : keys[(gx + row) % keys.length], p);
+                    }
+                }
+                // The rest over the team's half.
+                for (let tries = 0; placed[p] < per && tries < per * 20; tries++) {
+                    const gx = 4 + Math.floor(rnd() * (W - 8)), gy = p ? Math.floor(H / 2) + 12 + Math.floor(rnd() * (H / 2 - 16)) : 4 + Math.floor(rnd() * (H / 2 - 16));
+                    place(gx, gy, keys[Math.floor(rnd() * keys.length)], p);
+                }
+            }
+            if (typeof recalculateLaserConnections === 'function') recalculateLaserConnections();
+            recalculateAdjacency(true);
+            __scratch.towerStats = { placed, towers: towers.length };
+        })() } catch (e) { __scratch.towerStats = String(e && e.stack || e).slice(0, 400); }`);
+        while (host.eval('currentTick') <= at + 2) await world.run(250);
+        console.log('towers setup at', at, host.eval('JSON.stringify(__scratch.towerStats || null)'));
+    }
     if (process.env.BATTLE) {
         const at = world.atNextSafeTick(`try { (() => {
             const mode = ${JSON.stringify(process.env.BATTLE)}, np = players.length;
@@ -197,12 +235,18 @@ const seconds = Number(process.argv[2]) || 15;
         for (const name of ['updateAllPlayerVisibility', 'recalculateUnitEffectiveStats', 'recalculateThingPrecomputedStats', 'processGlobalSpawnerQueue',
             'processActions', 'resyncAfterTick', 'simMoveRun', 'spatialIndexRebuild', 'runUnitSeparationPass', '_forEachUnitInTickOrder', 'simUnitStateCollect',
             'advanceGroupRoutes', '_resolveDeferredPathsByGroup', 'takeDuePendingPathUnits', 'syncVisibilityCoverage', 'flushPendingMovementAstarSpend',
-            'recomputePlayerPopCaps', '_runAdjacencyRecalculation', 'sampleGameStats', 'gameTick', 'simMoveEndTick']) {
+            'recomputePlayerPopCaps', '_runAdjacencyRecalculation', 'sampleGameStats', 'gameTick', 'simMoveEndTick',
+            'visCoverHoldEnd', 'unitHitsResolve', 'statusPrepassRun', 'runQueuedOrders', 'navTick', 'navFieldsFlush', 'compactRemovedUnits',
+            'updateVisibility', 'flushPendingResourceStatRebuilds', 'ensureLaserConnections', 'processActions', 'gameStatsStep', 'projectilesBegin',
+            '_buildDeterministicBuildingUpdateOrderForTick', 'healerCandidatesStep', 'tickStatusEffects', 'getCellItemsRowMajor', 'updateAudioReactiveState', '_finalizePathfindPerfTick']) {
             let f; try { f = eval(name); } catch { continue; } if (typeof f !== 'function') continue;
             const w = function () { const a = __scratch.realNow(); try { return f.apply(this, arguments); } finally { rec(name, __scratch.realNow() - a); } }; eval(name + ' = w');
         }
         { const T = Tower.prototype.update, B = Barrack.prototype.update, PR = Projectile.prototype.update;
-          let tt = 0; Tower.prototype.update = function () { const a = __scratch.realNow(); try { return T.apply(this, arguments); } finally { rec('towers', __scratch.realNow() - a); } }; }`);
+          let tt = 0; Tower.prototype.update = function () { const a = __scratch.realNow(); try { return T.apply(this, arguments); } finally { rec('towers', __scratch.realNow() - a); } };
+          Barrack.prototype.update = function () { const a = __scratch.realNow(); try { return B.apply(this, arguments); } finally { rec('barracks', __scratch.realNow() - a); } };
+          for (const C of [CollectorSpawner, AstarSpawner, SalvagerSpawner, BuilderSpawner, HealerSpawner, ResearchSpawner]) { const U = C.prototype.update; if (C.prototype.hasOwnProperty('update')) C.prototype.update = function () { const a = __scratch.realNow(); try { return U.apply(this, arguments); } finally { rec('spawners', __scratch.realNow() - a); } }; }
+          Projectile.prototype.update = function () { const a = __scratch.realNow(); try { return PR.apply(this, arguments); } finally { rec('projectiles', __scratch.realNow() - a); } }; }`);
     // DUMPSEP=n: the collision pass's kernel inputs at tick n, written to DUMPSEP_OUT (for kernel benchmarks).
     if (process.env.DUMPSEP) host.eval(`{ const f = SIM_KERNELS[SIM_KERNEL_SEPARATION]; let done = false;
         SIM_KERNELS[SIM_KERNEL_SEPARATION] = function (R, P, chunk) {
@@ -220,8 +264,18 @@ const seconds = Number(process.argv[2]) || 15;
     // UPDSPLIT=1: Unit.update time and count by kind (worker state / command).
     if (process.env.UPDSPLIT) host.eval(`__scratch.us = {}; { const f = Unit.prototype.update; Unit.prototype.update = function () {
         if (this._us && this._us.mvOut[this._si]) return f.call(this);
-        const k = this.workerState ? 'w:' + this.workerState : 'c' + this.commandState; const a = __scratch.realNow();
+        let k = this.workerState ? 'w:' + this.workerState + (this.workerState === 'IDLE' ? ':' + this.workerType : '') : 'c' + this.commandState;
+        // (Attacking: a building target, a unit in range (its attack tick), or a chase.)
+        if (!this.workerState && this.commandState === CMD_ATTACKING) k += this.targetBuilding ? ':bld' : this.attackTarget === this.targetUnit && this.targetUnit ? ':inrange' : ':chase';
+        const a = __scratch.realNow();
         try { return f.call(this); } finally { if (currentTick >= 48) { const e = (__scratch.us[k] ||= [0, 0]); e[0] += __scratch.realNow() - a; e[1]++; } } }; }`);
+    // CHASESTAT=1: chasing units that ran Unit.update, by the first unmet
+    // condition of simMoveTryChase (all met: the kernel handed it back).
+    if (process.env.CHASESTAT) host.eval(`__scratch.chase = {}; { const f = Unit.prototype.update; Unit.prototype.update = function () {
+        if (!(this._us && !this._us.mvOut[this._si] && !this.workerState && this.commandState === CMD_ATTACKING && !this.targetBuilding && this.targetUnit && this.attackTarget !== this.targetUnit)) return f.call(this);
+        const tu = this.targetUnit, k = Math.floor(Math.max(0, Number(_getUnitAttackRangeArea(this)) || 0));
+        const why = this.holdPosition ? 'hold' : tu.dead ? 'tdead' : this.forcedAttackTarget ? 'forced' : (this.path && this.pathIndex < this.path.length) ? 'path' : !(this.preComputed.attackDamage > 0) ? 'nodmg' : k > 1 ? 'range' + Math.min(k, 9) : 'handback';
+        __scratch.chase[why] = (__scratch.chase[why] || 0) + 1; return f.call(this); }; }`);
     // ORDERSPLIT=1: time of the move-order handler and its callees in the order tick.
     if (process.env.ORDERSPLIT) host.eval(`__scratch.os = {};
         for (const name of ['_issueGroupMoveOrder', '_findPathForUnitTagged', 'routeGroupMembers', 'findNearestWalkable', 'interruptWorkerForManualMove', '_makeFallbackPathForUnit', 'getPathRegions', '_actionUnits', '_canUsePathfindRequestBudget', '_consumePathfindRequestBudget', 'getPathCanWalkForUnit', '_pathStartInRegion']) {
@@ -325,6 +379,9 @@ const seconds = Number(process.argv[2]) || 15;
     const a = JSON.parse(ms).sort((x, y) => x - y);
     const mean = a.reduce((s, v) => s + v, 0) / a.length;
     const r = v => Math.round(v * 100) / 100;
+    // AFTER=<expression>: evaluated on the host after the run (between
+    // ticks, the world as it is); its result printed first (micro timings).
+    if (process.env.AFTER) console.log('AFTER', host.eval(process.env.AFTER));
     console.log(JSON.stringify({ ticks: a.length, units: host.eval('units.length'), meanMs: r(mean), p50: r(a[a.length >> 1]), p95: r(a[Math.floor(a.length * .95)]), max: r(a[a.length - 1]),
         wallS: r((Date.now() - t0) / 1000), tick: host.eval('currentTick'), hashAtTick: host.eval('__scratch.hashAt'),
         pathStats: process.env.PATHSTATS ? JSON.parse(host.eval('JSON.stringify(__scratch.ps)')) : undefined,
@@ -345,6 +402,7 @@ const seconds = Number(process.argv[2]) || 15;
         kshare: process.env.KSHARE ? JSON.parse(host.eval('JSON.stringify({ share: __scratch.ks, binds: __scratch.kb, bindTicks: Object.keys(__scratch.kbt).length })')) : undefined,
         slotMapRebuilds:process.env.SLOTMAP ? host.eval('__scratch.smr') : undefined,
         loopCost: process.env.LOOPCOST ? JSON.parse(host.eval('JSON.stringify(__scratch.lc.filter(a => a[0] % 10 === 0))')) : undefined,
+        chaseStat: process.env.CHASESTAT ? JSON.parse(host.eval('JSON.stringify(__scratch.chase)')) : undefined,
         holdStat: process.env.HOLDSTAT ? JSON.parse(host.eval('JSON.stringify(__scratch.hold)')) : undefined,
         updSplit: process.env.UPDSPLIT ? JSON.parse(host.eval('(() => { const n = Math.max(1, __scratch.tickMs.length - 48); return JSON.stringify(Object.fromEntries(Object.entries(__scratch.us).sort((a,b)=>b[1][0]-a[1][0]).map(([k,v])=>[k,[Math.round(v[0]/n*10)/10, Math.round(v[1]/n)]]))); })()')) : undefined,
         orderSplit: process.env.ORDERSPLIT ? JSON.parse(host.eval('JSON.stringify(Object.fromEntries(Object.entries(__scratch.os).map(([k,v])=>[k,[Math.round(v[0]),v[1]]])))')) : undefined,

@@ -7,17 +7,20 @@
 // once by SIM_KERNEL_STATUS (see statusPrepassRun in unit.js).
 const SIM_UNIT_STATUS_COLUMNS = ['teleportHideTicks', 'burning', 'burnTickDamage', 'poisoned', 'poisonTickDamage',
     'frozen', 'iceTickDamage', 'wet', 'sandy', 'watched', 'workerTransferCooldown'];
+// Stacks and levels (the effective-stats kernel, SIM_KERNEL_EFF_UNITS):
+// NaN stands for a field not set (its accessor reads undefined).
+const SIM_UNIT_LEVEL_COLUMNS = ['stackCount', 'unitLevel', 'baseLevel', 'effectiveStacks', 'effectiveLevel', '_lastAppliedEffectiveLevel'];
 const SIM_UNIT_COLUMNS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy',
-    'energy', 'r', 'collisionR', 'pathIndex', 'commandState', 'attackTimer', 'attackFlash', ...SIM_UNIT_STATUS_COLUMNS];
+    'energy', 'r', 'collisionR', 'pathIndex', 'commandState', 'attackTimer', 'attackFlash', ...SIM_UNIT_STATUS_COLUMNS, ...SIM_UNIT_LEVEL_COLUMNS];
 // Read and written through prototype accessors: the columns are the state
 // (the movement kernel moves units without touching their objects).
-const SIM_UNIT_ACCESSOR_COLUMNS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', 'pathIndex', 'commandState', 'attackTimer', 'attackFlash', ...SIM_UNIT_STATUS_COLUMNS];
+const SIM_UNIT_ACCESSOR_COLUMNS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', 'pathIndex', 'commandState', 'attackTimer', 'attackFlash', ...SIM_UNIT_STATUS_COLUMNS, ...SIM_UNIT_LEVEL_COLUMNS];
 // Radii: plain fields on the unit, copied into the columns by
 // simUnitMirror (the spatial index calls it; they rarely change).
 const SIM_UNIT_MIRROR_COLUMNS = ['r', 'collisionR'];
 // Accessor keys that are not columns (see simUnitStateKeys): the path is a
 // plain reference behind a setter that disarms the movement kernel.
-const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD'];
+const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile'];
 
 function simUnitMirror(u) {
     const c = u._us;
@@ -55,6 +58,24 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // the target's tile, and the unit's own tile and window zone, as when
     // the hold began.
     ['mvHT', Int32Array, 1], ['mvHTId', Int32Array, 1], ['mvHTT', Int32Array, 1], ['mvHOT', Int32Array, 1], ['mvHOZ', Int8Array, 1],
+    // Chase (mvOn 4; see simMoveTryChase): the target in mvHT/mvHTId, the
+    // range in mvReach, and the look-ahead of its direct step (_isChaseStepOpen).
+    ['mvChs', Float64Array, 1],
+    // Effective stats (SIM_KERNEL_EFF_UNITS): 1 when the unit's base tables
+    // fit its baseLevel and its window is known (esRad chunks around it,
+    // esType its spatial type); esTaken the pass that took it; esFlag the
+    // kernel's verdict per strided entry.
+    ['esOk', Uint8Array, 1], ['esRad', Int32Array, 1], ['esType', Int32Array, 1], ['esTaken', Int32Array, 1],
+    // A parked idle worker's work version check (mvFlags 2; see
+    // simMoveTryPark): its work type, reach (tiles), origin tile, whether its
+    // own tile counts too (wkTwice; 2: a healer), the tile it was parked on,
+    // the version its last search failed at and that backoff's end, and the
+    // tick of its next wake for anything else.
+    ['wkType', Int32Array, 1], ['wkD', Int32Array, 1], ['wkOx', Int32Array, 1], ['wkOy', Int32Array, 1], ['wkTwice', Uint8Array, 1],
+    ['wkTile', Int32Array, 1], ['wkFail', Int32Array, 1], ['wkUntil', Float64Array, 1], ['wkSched', Float64Array, 1],
+    // A parked builder's last watchdog sample (mvFlags 4): woken at a sample
+    // tick only when it no longer stands there.
+    ['wkWx', Float64Array, 1], ['wkWy', Float64Array, 1],
     // The status pre-pass's events (1 damaged, 2 its watch ended, 4 died)
     // and the damage dealt.
     ['stEv', Uint8Array, 1], ['stDot', Float64Array, 1],
@@ -74,9 +95,11 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // renderer.js), so their updates need not read the unit object.
     ['spTile', Int32Array, 1], ['spArea', Int32Array, 1], ['spOwner', Int32Array, 1], ['spEpoch', Int32Array, 1],
     ['spZone', Int8Array, 1], ['spType', Int16Array, 1], ['vsGen', Int32Array, 1], ['vsR', Int8Array, 1],
-    ['vsA', Int32Array, 1], ['vsP1', Int8Array, 1], ['vsP2', Int8Array, 1], ['vsList', Int32Array, 1]];
+    ['vsA', Int32Array, 1], ['vsP1', Int8Array, 1], ['vsP2', Int8Array, 1], ['vsList', Int32Array, 1],
+    // The coverage hold that queued the slot last (renderer.js visCoverSlotWindow).
+    ['vsHeld', Int32Array, 1]];
 // Accessor defaults (the "not indexed / not registered" values).
-const SIM_SPATIAL_DEFAULTS = { spTile: -1, spArea: -2, spOwner: -1, spEpoch: 0, spZone: -1, spType: -1, vsGen: 0, vsR: -1, vsA: -1, vsP1: -1, vsP2: -1, vsList: -1 };
+const SIM_SPATIAL_DEFAULTS = { spTile: -1, spArea: -2, spOwner: -1, spEpoch: 0, spZone: -1, spType: -1, vsGen: 0, vsR: -1, vsA: -1, vsP1: -1, vsP2: -1, vsList: -1, vsHeld: 0 };
 let _simUnitState = null;
 // Per-slot inputs of the collision pass, kept current by the spatial index
 // (not read from unit objects every tick): the unit's chunk, or
@@ -101,6 +124,15 @@ function _simUnitColumnsObject() {
         _SimUnitColumns = new Function(names.map(n => 'this.' + n + ' = null;').join(' '));
     }
     return new _SimUnitColumns();
+}
+
+// Slots released this tick become free for new units (spatialIndexRebuild,
+// at the start of a tick).
+function simUnitStateReleaseFreed() {
+    const S = _simUnitState;
+    if (!S || !S.freeLater || !S.freeLater.length) return;
+    for (const s of S.freeLater) S.free.push(s);
+    S.freeLater.length = 0;
 }
 
 function simUnitStateAllocate(u) {
@@ -132,7 +164,9 @@ function simUnitStateAllocate(u) {
         S.cap = cap;
     }
     S.sepKey[s] = SIM_SEP_ABSENT;
-    S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvZmask[s] = 0; S.columns.dead[s] = 0; S.columns.mvNavT[s] = -1; S.columns.mvNavLD[s] = -1;
+    S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvZmask[s] = 0; S.columns.dead[s] = 0; S.columns.mvNavT[s] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1;
+    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0;
+    for (const k of SIM_UNIT_LEVEL_COLUMNS) S.columns[k][s] = NaN;
     for (const k in SIM_SPATIAL_DEFAULTS) S.columns[k][s] = SIM_SPATIAL_DEFAULTS[k];
     S.owners[s] = u;
     Object.defineProperties(u, { _us: { value: S.columns, writable: true }, _si: { value: s, writable: true }, _det: { value: null, writable: true },
@@ -151,11 +185,14 @@ function simUnitStateDetach(S, s) {
     for (const k of SIM_UNIT_ACCESSOR_COLUMNS) values[k] = S.columns[k][s];
     values.dead = S.columns.dead[s] === 1;
     values._navLastD = S.columns.mvNavLD[s];
+    values._floorTile = S.columns.mvFloor[s];
     u._det = values;
     u._us = null; u._si = -1;
     S.sepKey[s] = SIM_SEP_ABSENT;
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0;
-    S.owners[s] = null; S.free.push(s);
+    // (Reused from the next unit index rebuild on: its entries name units
+    // by slot for the rest of the tick, see simUnitStateReleaseFreed.)
+    S.owners[s] = null; (S.freeLater || (S.freeLater = [])).push(s);
 }
 
 // The spatial index reports where a unit is (chunk key, layer) or that it

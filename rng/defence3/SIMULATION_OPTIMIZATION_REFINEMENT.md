@@ -48,6 +48,36 @@ These are opportunities established by code inspection. Their individual timing 
 
 The plan below incorporates these corrections. Favor bounded changes with measured end-to-end benefit before introducing the most complex algorithms.
 
+### Third refinement: measured state and revised priorities (2026-10-01)
+
+Implementation has started; `OPTIMIZATION_PROGRESS.md` is the working log (what changed, how to verify, every measurement, next steps). Read it first in a new session. Summary as of the end of 2026-10-01:
+
+**Measured** (`tests/100000-1000.json`, ~200k units, HELPERS=7, `.claude/tickbench.cjs` / `.claude/benchall.sh`):
+
+| Workload | Start of work | Now (p50) | Gap to ≤50 ms |
+|---|---:|---:|---:|
+| base (supplied mix, mostly idle) | ~867 ms (inherited) | 266–275 ms | ~5.4× |
+| ACTIVE (workers employed) | not measured before | 493 ms (second round) | ~10× |
+| BATTLE=mix (armies fighting) | 497 ms (first measured) | 445 ms (second round) | ~9× |
+| siege (TOWERS=8000 per team + BATTLE=mix) | 664 ms (first measured) | 628 ms | ~12.5× |
+
+Where base time goes now (ms/tick): separation 53–56 (kernel ~21, the rest preparation and apply), movement kernel run 36–38 (serial slot bookkeeping ~13), unit pass 29, hashing/resync 26, thing stats 15, coverage hold end 15, visibility sync 11, unit index 11, barracks 9–11, unit effective stats 8, building statuses 5–14.
+
+Where siege time goes (ms/tick): unit pass 284 (attack-move 84, units attacking buildings 81, chase 62, idle combat 50, firing 46, idle workers ~150 in total), movement 51, resync 45, towers 37, separation 27, thing stats 24, status prepass 13, queued orders 12, projectile setup 11, building update order 11 (was 58).
+
+**Done or started, by workstream**: determinism repair (prerequisite, complete); A6 idle workers parked in the movement kernel with exact version checks (work hash replicated in the kernel, builder watchdog wakes); E4/E5 partial (scan-before-move, kernel chase for chasers without a path, hold); C partial (unit effective stats computed in kernels from typed level/stack columns; thing stats still open); G1 done (unit index fill/ranges/owner counts in kernels, slot-based entries); H1 partial (hash 44.8 → ~25 ms); F partial (exact tile bounding-box culling; pair-once not started); K1 partial (laser links indexed and deferred); visibility coverage-hold kernel; building update order cached by list reference.
+
+**Revised priorities** (largest measured remaining cost first):
+
+1. Structure-heavy combat. Realistic games have **5–10k towers** (like barracks), so towers engaging towers, units sieging tower lines, and towers firing on units are a main workload, not an edge case. Units targeting buildings have no kernel mode yet (E4 extension); attack-move units rescan structures because hostile structures are always in reach; turrets need due-action scheduling (J1); projectiles need the structure broad phase (J2) and a cached rank map; building statuses run on every building every tick (L2 active set).
+2. Chase with paths (~70% of chasers) and firing ticks in kernels (E5, E7). Queueing mine damage like hits removes mid-pass deaths, which are the reason for turn re-checks.
+3. Separation pair-once and smaller reach (F); movement slot bookkeeping in a kernel; coverage ring updates in parallel (order-free final state).
+4. Hashing remainder (H1/H2): building statics and list order.
+5. Active workers (A1–A5): MOVING_TO and search costs dominate ACTIVE.
+6. Traps (lava, water, ice, poison, sand, mines; a few thousand, with units crossing them): measure once. Their reach is one tile, so they should be cheap to batch; low priority.
+
+**Contract additions learned during implementation** (details in the progress log, "Determinism rules learned"): a restore disarms kernels on the restoring peer only, so every kernel decision must equal `Unit.update` exactly; reads of other units during the unit pass use pass-start state (positions, frozen spatial counts, A* budget at pass start); large-world paths are gated by unit-count thresholds, so tests must force them on (`CHAOS_SIM_EVAL`, `HOST_SIM_EVAL`); freed unit slots are reused only from the next index rebuild; caches validated by object references or immutable keys are dropped on snapshot decode; `SNAP_HASH_SLICES` stays 10.
+
 ## 2. Common engine architecture and behavioral contract
 
 Workers remain the first implementation priority, including fully employed workers. Normal combat units are a mandatory second workstream, not a residual fallback after worker optimization. Turrets, projectiles, lasers, and production receive explicit measurement and targeted algorithmic changes. A full typed-building migration is conditional on measured benefit; it is not a prerequisite for eliminating broad projectile scans or repeated queue calculations.
@@ -1044,6 +1074,8 @@ Compare per-tick state with 0, 1, 3, and 7 helpers, varied scheduling and chunk 
 - Normal-unit-only movement, sustained melee/ranged combat, mixed flying/ground units, hold/forced-target armies, and structure sieges; vary idle/engaged/chasing proportions without changing rules.
 - Many attackers concentrating on one target and many independent fights, to expose commit serialization separately from acquisition cost.
 - Turret-heavy battles with preferred targets, status-heavy targets, empty acquisition, continuous projectile fire, and large static building populations.
+- Realistic tower counts: 5–10k towers (mixed types, lasers included) alongside comparable barracks counts; towers engaging towers across opposing lines; armies sieging tower lines (benchmark modes `TOWERS=8000` and `TOWERS=8000 BATTLE=mix`).
+- A few thousand traps (lava, water, ice, poison, sand, mines) with units crossing them (lower priority: one-tile reach).
 - Long laser corridors, many unrelated towers, dense collinear links, crossing beams, and repeated wall/link changes.
 - Many quiet/empty producers, many unpaid fronts, fully funded production, population-blocked queues, and mass capacity release.
 

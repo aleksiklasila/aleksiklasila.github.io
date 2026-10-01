@@ -29,8 +29,10 @@ const KINDS = {
     towerGone: `(() => { const i = towers.findIndex(t => t.energy > 0 && !t.underConstruction); if (i < 0) return ''; const t = towers[i]; towers.splice(i, 1); clearTileEntity(t.gx, t.gy, t); recalculateLaserConnections(); return 'tower gone at ' + t.gx + ',' + t.gy; })()`,
     cellOwner: `(() => { const s = collectorSpawners.find(s => s.owner >= 0); if (!s) return ''; grid[s.gy][s.gx].owner = -1; return 'cell owner at ' + s.gx + ',' + s.gy; })()`,
     cellType: `(() => { for (let gy = 2; gy < GRID_H; gy += 3) for (let gx = 2; gx < GRID_W; gx += 3) { const c = grid[gy][gx]; if (!c.item && !getTileEntityRef(gx, gy) && c.type !== TYPE_WALL) { c.type = TYPE_WALL; return 'wall at ' + gx + ',' + gy; } } return ''; })()`,
-    reservation: `(() => { const w = units.find(u => !u.dead && u.workerType); if (!w) return ''; for (let s = 5; s < workerReservedTiles.length; s += 97) if (!workerReservedTiles[s]) { workerReservedTiles[s] = w; return 'reservation ' + s + ' -> u' + w.id; } return ''; })()`,
-    reservationDrop: `(() => { const s = workerReservedTiles.findIndex(u => u); if (s < 0) return ''; workerReservedTiles[s] = null; return 'reservation ' + s + ' dropped'; })()`,
+    // (Through workerReservedSet, as every write of the game's: it keeps the
+    // per-region counts the tick hash uses to skip empty regions.)
+    reservation: `(() => { const w = units.find(u => !u.dead && u.workerType); if (!w) return ''; for (let s = 5; s < workerReservedTiles.length; s += 97) if (!workerReservedTiles[s]) { workerReservedSet(s, w); return 'reservation ' + s + ' -> u' + w.id; } return ''; })()`,
+    reservationDrop: `(() => { const s = workerReservedTiles.findIndex(u => u); if (s < 0) return ''; workerReservedSet(s, null); return 'reservation ' + s + ' dropped'; })()`,
     towerOrder: `(() => { if (towers.length < 4) return ''; const a = towers[1]; towers[1] = towers[towers.length - 2]; towers[towers.length - 2] = a; return 'tower order'; })()`,
     playerEnergy: `(addPlayerResource(1, 'energy', -321), 'player energy')`,
     playerResearch: `(() => { const t = RESEARCH_THINGS.find(t => t.kind === 'unit' && t.key === 'norm'); if (!t) return ''; applyResearchCompletion(2, { kind: t.kind, key: t.key, statKey: t.stats[0].statKey }); return 'research ' + t.stats[0].statKey; })()`,
@@ -50,6 +52,9 @@ const BROAD = new Set(['playerResearch', 'adjacency', 'unitIds', 'rng']);
 (async () => {
     const pick = process.argv[2] ? process.argv[2].split(',') : Object.keys(KINDS);
     const { world, host, guests, all } = await C.setupChaosWorld('crossroads', 9091, { teams: [0, 1, 2, 3], exactHashes: true, network: { latencyMs: 60, jitterMs: 15 } });
+    // SNAP_KERNEL_MIN=0: the large-world hash path (column hashes from the
+    // kernels, object fields by rotation) on this small world.
+    if (process.env.SNAP_KERNEL_MIN) for (const i of all) i.evalSim('SNAP_HASH_KERNEL_MIN_UNITS = ' + Number(process.env.SNAP_KERNEL_MIN));
     let s = 4242;
     const rand = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
     const play = async ms => { const end = world.now + ms; while (world.now < end) { for (const i of all) if (rand() < 0.5) i.eval(C.CHAOS_COMMAND + '(' + rand() + ')'); await world.run(200); } };

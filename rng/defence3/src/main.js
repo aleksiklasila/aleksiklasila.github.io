@@ -37,55 +37,66 @@ function _compareThingsDeterministic(a, b) {
     return 0;
 }
 
-// The sorted order of a list, reused while the list holds the same objects in
-// the same order and their sort keys are unchanged. Sorting 3000 units and
-// every building list with _compareThingsDeterministic each tick was a
-// measurable share of the tick. With unique ids the order depends on ids
-// alone; otherwise every compared key is checked (buildings do not move).
+// The sorted order of a list (_compareThingsDeterministic), kept per list
+// slot. A thing's sort keys (id, owner, type, tile) never change in place
+// (a snapshot decode, which can, drops these caches), so the cache stands
+// while the list holds the same objects in the same order (references
+// compared); a list with things only removed keeps the order of the rest;
+// otherwise it is sorted again on numeric keys (types ranked as strings),
+// ties kept in list order as the stable comparator sort keeps them.
 const _deterministicSortCaches = new Map();
-
-function _deterministicSortKeys(a, keys, o) {
-    keys[o] = _stableNumberOr(a && a.id, -1);
-    keys[o + 1] = _stableNumberOr(a && a.owner, -1);
-    keys[o + 2] = a ? String(a.unitType || a.type || '') : '';
-    keys[o + 3] = a ? _stableNumberOr(a.gx, Math.floor(_stableNumberOr(a.x, 0) / TILE)) : 0;
-    keys[o + 4] = a ? _stableNumberOr(a.gy, Math.floor(_stableNumberOr(a.y, 0) / TILE)) : 0;
-}
+function deterministicSortCachesReset() { _deterministicSortCaches.clear(); }
 
 function _sortedForDeterministicOrder(slot, list) {
     let cache = _deterministicSortCaches.get(slot);
     let n = list.length;
-    if (cache && cache.input.length === n) {
-        let input = cache.input, keys = cache.keys, same = true;
-        for (let i = 0; i < n && same; i++) {
-            let a = list[i];
-            if (a !== input[i]) { same = false; break; }
-            if (cache.byId) {
-                if (_stableNumberOr(a && a.id, -1) !== keys[i]) same = false;
-            } else {
-                let o = i * 5;
-                if (_stableNumberOr(a && a.id, -1) !== keys[o] || _stableNumberOr(a && a.owner, -1) !== keys[o + 1]
-                    || (a ? String(a.unitType || a.type || '') : '') !== keys[o + 2]
-                    || (a ? _stableNumberOr(a.gx, Math.floor(_stableNumberOr(a.x, 0) / TILE)) : 0) !== keys[o + 3]
-                    || (a ? _stableNumberOr(a.gy, Math.floor(_stableNumberOr(a.y, 0) / TILE)) : 0) !== keys[o + 4]) same = false;
+    if (cache) {
+        let input = cache.input, m = input.length;
+        if (m === n) {
+            let same = true;
+            for (let i = 0; i < n; i++) if (list[i] !== input[i]) { same = false; break; }
+            if (same) return cache.sorted;
+        } else if (n < m) {
+            // Only removals (the rest in the same order): the order of the rest.
+            let j = 0;
+            for (let i = 0; i < m && j < n; i++) if (input[i] === list[j]) j++;
+            if (j === n) {
+                let keep = new Set(list), sorted = cache.sorted.filter(e => keep.has(e));
+                _deterministicSortCaches.set(slot, { input: list.slice(), sorted });
+                return sorted;
             }
         }
-        if (same) return cache.sorted;
     }
-    let sorted = list.slice().sort(_compareThingsDeterministic);
-    // Unique ids: _compareThingsDeterministic never looks past the id.
-    let byId = true;
-    for (let i = 0; i < n && byId; i++) {
-        let a = sorted[i];
-        if (!a || !Number.isFinite(Number(a.id))) byId = false;
-        else if (i > 0 && !(Number(sorted[i - 1].id) < Number(a.id))) byId = false;
-    }
-    let keys = new Array(byId ? n : n * 5);
+    let sorted = _deterministicSortFresh(list);
+    _deterministicSortCaches.set(slot, { input: list.slice(), sorted });
+    return sorted;
+}
+// list.slice().sort(_compareThingsDeterministic), on numeric keys.
+function _deterministicSortFresh(list) {
+    let n = list.length;
+    let kId = new Float64Array(n), kOwner = new Float64Array(n), kType = new Int32Array(n), kGx = new Float64Array(n), kGy = new Float64Array(n);
+    let types = new Map(), idx = [], nulls = [];
     for (let i = 0; i < n; i++) {
-        if (byId) keys[i] = _stableNumberOr(list[i].id, -1);
-        else _deterministicSortKeys(list[i], keys, i * 5);
+        let a = list[i];
+        if (!a) { nulls.push(a); continue; }
+        idx.push(i);
+        kId[i] = _stableNumberOr(a.id, -1);
+        kOwner[i] = _stableNumberOr(a.owner, -1);
+        let t = String(a.unitType || a.type || '');
+        let r = types.get(t);
+        if (r === undefined) types.set(t, r = types.size);
+        kType[i] = r;
+        kGx[i] = _stableNumberOr(a.gx, Math.floor(_stableNumberOr(a.x, 0) / TILE));
+        kGy[i] = _stableNumberOr(a.gy, Math.floor(_stableNumberOr(a.y, 0) / TILE));
     }
-    _deterministicSortCaches.set(slot, { input: list.slice(), keys, byId, sorted });
+    // Type strings in code unit order (as `<` compares them).
+    let names = [...types.keys()].sort(), rankOf = new Int32Array(types.size);
+    for (let k = 0; k < names.length; k++) rankOf[types.get(names[k])] = k;
+    for (let i = 0; i < n; i++) kType[i] = rankOf[kType[i]] || 0;
+    idx.sort((i, j) => (kId[i] - kId[j]) || (kOwner[i] - kOwner[j]) || (kType[i] - kType[j]) || (kGx[i] - kGx[j]) || (kGy[i] - kGy[j]) || (i - j));
+    let sorted = new Array(n);
+    for (let k = 0; k < idx.length; k++) sorted[k] = list[idx[k]];
+    for (let k = 0; k < nulls.length; k++) sorted[idx.length + k] = nulls[k];
     return sorted;
 }
 
@@ -182,9 +193,11 @@ function _forEachUnitInTickOrder(fn) {
             if (OUT) {
                 const s = slots[idx];
                 if (s >= 0 && OUT[s] !== 0 && owners[s] === u) {
-                    // Held attackers: the hold checked again at their turn.
-                    if (OUT[s] < 6 || simHoldStillValid(S.columns, s)) continue;
-                    simHoldUndo(S.columns, s);
+                    // Held attackers and chasers: checked again at their turn.
+                    const o = OUT[s];
+                    if (o < 6) continue;
+                    if (o === 6) { if (simHoldStillValid(S.columns, s)) continue; simHoldUndo(S.columns, s); }
+                    else { if (simChaseStillValid(S.columns, s)) continue; simChaseUndo(S.columns, s); }
                 }
             }
             fn(u);
@@ -574,7 +587,18 @@ function gameTick() {
     }
 
     // Projectiles
-    for (let i = projectiles.length - 1; i >= 0; i--) { if (!projectiles[i].update()) projectiles.splice(i, 1); }
+    // (Last to first, as ever; spent shots removed in one pass after, the
+    // rest keeping their order.)
+    projectilesBegin();
+    try {
+        let n0 = projectiles.length, spent = null;
+        for (let i = n0 - 1; i >= 0; i--) { if (!projectiles[i].update()) (spent || (spent = new Uint8Array(n0)))[i] = 1; }
+        if (spent) {
+            let w = 0;
+            for (let i = 0; i < projectiles.length; i++) if (i >= n0 || !spent[i]) projectiles[w++] = projectiles[i];
+            projectiles.length = w;
+        }
+    } finally { projectilesEnd(); }
 
     // Units
     // Shuffle unit update order per tick so A* budget contention is shared
@@ -585,9 +609,14 @@ function gameTick() {
     // Units added during the pass wait for the next tick.
     visCoverHoldBegin();
     statusPrepassRun();
-    simMoveRun();
-    combatScanRun();
-    _forEachUnitInTickOrder(u => u.update());
+    // (From here to the pass's end other units are seen where they were at
+    // its start: _unitTickX.)
+    unitPassBegin();
+    try {
+        simMoveRun();
+        combatScanRun();
+        _forEachUnitInTickOrder(u => u.update());
+    } finally { unitPassEnd(); }
     unitHitsResolve();
     visCoverHoldEnd();
     simMoveEndTick();
@@ -732,6 +761,9 @@ function gameTick() {
     }
     flushPendingMovementAstarSpend();
     flushPendingResourceStatRebuilds();
+    // Laser links of the structures placed and removed this tick (the state
+    // between ticks has them; hashes and snapshots include them).
+    ensureLaserConnections();
 
     updateVisibility(localPlayerId);
     _finalizePathfindPerfTick(_countPendingPathBacklog());
@@ -3467,11 +3499,13 @@ function processAction(a, playerId) {
             let target = getTileEntityRef(a.gx, a.gy);
             if (target && target.owner === playerId && target.markedForSalvage !== undefined) {
                 target.markedForSalvage = !target.markedForSalvage;
+                if (typeof salvageMarksChanged === 'function') salvageMarksChanged();
             }
         } else if (a.action === 'setSalvage') {
             let target = getTileEntityRef(a.gx, a.gy);
             if (target && target.owner === playerId && target.markedForSalvage !== undefined) {
                 target.markedForSalvage = !!a.marked;
+                if (typeof salvageMarksChanged === 'function') salvageMarksChanged();
             }
         } else if (a.action === 'setAutoUpgrade') {
             let target = getTileEntityRef(a.gx, a.gy);
