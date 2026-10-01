@@ -213,6 +213,85 @@ function addPlayerResource(playerId, resourceKey, delta) {
     return _setPlayerResourceValue(pid, stockpileKey, _fromFixedResourceUnits(fixedMap[stockpileKey]));
 }
 
+// ============================================================
+// SHRINES (SHRINES_ENABLED)
+// ============================================================
+// \uD83D\uDC80 is damage taken: the energy a player's units and buildings
+// lose to damage (never below 0: overkill is not counted) goes to the
+// player's shrine, player.shrine (fixed point in _resourceFixedValues.shrine,
+// like energy). Not healing, splitting or stat changes: only the damage
+// sites call shrineDamageTaken. Every tick shrineTick adds the tick's damage
+// (summed as fixed-point integers: the order damage came in does not
+// matter) and drains up to drainRate / TICK_RATE of it (research: building
+// 'shrine') into energy and \u2605, times its multiplier, as the player set
+// with the shrineDrain action (player.shrineDrain: 1 energy, 2 \u2605, 3
+// half each, 0 none; 3 at the start).
+const SHRINE_DRAIN_ENERGY = 1, SHRINE_DRAIN_ASTAR = 2, SHRINE_DRAIN_DEFAULT = 3;
+let _shrinePendingFixed = new Float64Array(8);
+function shrineDamageTaken(target, amount) {
+    if (!SHRINES_ENABLED || !target || !(amount > 0)) return;
+    let o = target.owner;
+    if (!Number.isInteger(o) || o < 0) return;
+    let after = Number(target.energy);
+    let lost = after < 0 ? amount + after : amount;
+    if (!(lost > 0)) return;
+    if (o >= _shrinePendingFixed.length) { let a = new Float64Array(o + 8); a.set(_shrinePendingFixed); _shrinePendingFixed = a; }
+    _shrinePendingFixed[o] += _toFixedResourceUnits(lost);
+}
+function getPlayerShrineDrainMode(playerId) {
+    let p = players[playerId];
+    if (!p) return 0;
+    return p.shrineDrain === undefined ? SHRINE_DRAIN_DEFAULT : (Math.floor(Number(p.shrineDrain)) || 0) & 3;
+}
+// What the player's shrine gives this tick: [shrine drained, energy, \u2605]
+// (fixed units). The gain is take x multiplier, split by the drain order;
+// the fractions below a fixed unit carry over to the next ticks
+// (player.shrineCarry: [energy, \u2605], fixed units; simulation state),
+// so a small multiplier still pays out at its exact rate.
+function _shrineDrainFixed(pid, curFixed, mode, carry = null) {
+    if (!(curFixed > 0) || !mode) return null;
+    let rate = Number(getBuildingStatForOwner(pid, 'shrine', 1, 'drainRate'));
+    if (!(rate > 0)) return null;
+    let take = Math.min(curFixed, Math.max(1, Math.floor(rate * RESOURCE_FIXED_POINT_SCALE / Math.max(1, TICK_RATE))));
+    let mult = Number(getBuildingStatForOwner(pid, 'shrine', 1, 'multiplier'));
+    let gain = take * (mult > 0 ? mult : 0);
+    let shareE = mode === SHRINE_DRAIN_ENERGY ? 1 : (mode === SHRINE_DRAIN_ASTAR ? 0 : 0.5);
+    let e = gain * shareE + (carry ? carry[0] : 0), a = gain * (1 - shareE) + (carry ? carry[1] : 0);
+    let toEnergy = Math.floor(e), toAstar = Math.floor(a);
+    if (carry) { carry[0] = e - toEnergy; carry[1] = a - toAstar; }
+    return [take, toEnergy, toAstar];
+}
+function shrineTick() {
+    let P = _shrinePendingFixed;
+    for (let pid = 0; pid < players.length; pid++) {
+        let player = players[pid];
+        if (!player) continue;
+        let fixedMap = player._resourceFixedValues || (player._resourceFixedValues = {});
+        let cur = Math.floor(Number(fixedMap.shrine) || 0);
+        if (pid < P.length && P[pid] !== 0) { cur += P[pid]; P[pid] = 0; }
+        let carry = null;
+        if (SHRINES_ENABLED && cur > 0) {
+            if (!Array.isArray(player.shrineCarry) || player.shrineCarry.length !== 2) player.shrineCarry = [0, 0];
+            carry = player.shrineCarry;
+        }
+        let d = carry ? _shrineDrainFixed(pid, cur, getPlayerShrineDrainMode(pid), carry) : null;
+        if (d) {
+            cur -= d[0];
+            if (d[1] > 0) {
+                addPlayerResource(pid, 'energy', d[1] / RESOURCE_FIXED_POINT_SCALE);
+                if (typeof recordEnergyDelta === 'function') recordEnergyDelta(pid, 'shrine', d[1] / RESOURCE_FIXED_POINT_SCALE);
+            }
+            if (d[2] > 0) {
+                addPlayerResource(pid, 'astar', d[2] / RESOURCE_FIXED_POINT_SCALE);
+                if (typeof recordAstarDelta === 'function') recordAstarDelta(pid, d[2] / RESOURCE_FIXED_POINT_SCALE, null, 'shrine');
+            }
+        }
+        if (fixedMap.shrine !== undefined || cur !== 0) { fixedMap.shrine = cur; player.shrine = _fromFixedResourceUnits(cur); }
+    }
+}
+// Nothing pending between ticks (a restore starts clean).
+function shrineResetPending() { _shrinePendingFixed.fill(0); }
+
 // A stockpile's penalty multiplier changed: refresh the stats it scales.
 // While a stockpile is negative this runs on every upkeep payment, so it
 // only touches penalty-scaled stats (exempt ones cannot have changed; research
@@ -297,6 +376,8 @@ function normalizeStartingResourcesConfig(rawCfg) {
             if (!parsed) continue;
             let thing = getResearchThing(parsed.kind, parsed.key);
             if (!thing) continue;
+            // (Never placed: research levels only.)
+            if (parsed.kind === 'building' && (BASE_CARD_TYPES[parsed.key] || {}).notBuildable) continue;
             let countMap = raw.spawnCounts[id];
             if (typeof countMap === 'object' && countMap !== null) {
                 for (let levelText in countMap) {
@@ -453,6 +534,7 @@ function createEditableRuntimeConfigSnapshot() {
             ASTAR_MINE_MAX,
             STARTING_MONEY,
             STARTING_ASTAR,
+            SHRINES_ENABLED: !!SHRINES_ENABLED,
             MAP_TYPE,
             GAME_MODE: gameMode,
             // During a match the setting, not a spectator's local full view.
@@ -558,6 +640,8 @@ function syncMainMenuFromRuntimeConfig() {
     setValue('cfg-worker-ai-tick-delay', WORKER_AI_TICK_DELAY);
     setValue('cfg-max-thing-level', MAX_THING_LEVEL);
     setValue('cfg-max-research-level', MAX_RESEARCH_LEVEL);
+    let shrinesEl = document.getElementById('cfg-shrines');
+    if (shrinesEl) shrinesEl.checked = !!SHRINES_ENABLED;
 }
 
 function applyEditableRuntimeConfigObject(rawConfig, options = null) {
@@ -595,6 +679,7 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     if (Number.isFinite(Number(cfg.ASTAR_MINE_MAX))) ASTAR_MINE_MAX = Math.max(0, Math.floor(Number(cfg.ASTAR_MINE_MAX)));
     if (Number.isFinite(Number(cfg.STARTING_MONEY))) STARTING_MONEY = Math.max(0, Math.floor(Number(cfg.STARTING_MONEY)));
     if (Number.isFinite(Number(cfg.STARTING_ASTAR))) STARTING_ASTAR = Math.max(0, Number(cfg.STARTING_ASTAR));
+    if (cfg.SHRINES_ENABLED !== undefined) SHRINES_ENABLED = !!cfg.SHRINES_ENABLED;
     if (typeof cfg.MAP_TYPE === 'string' && cfg.MAP_TYPE.trim()) MAP_TYPE = cfg.MAP_TYPE.trim();
     if (['destroy', 'killking'].includes(cfg.GAME_MODE)) gameMode = cfg.GAME_MODE;
     if (['full', 'team', 'history'].includes(cfg.MAP_VISIBILITY)) {
@@ -796,6 +881,7 @@ function createEditableRuntimeConfigSnapshotFromMainMenu() {
     cfg.ASTAR_MINE_MAX = Math.max(0, Math.floor(getNumber('cfg-astar-mine-max', cfg.ASTAR_MINE_MAX)));
     cfg.STARTING_MONEY = Math.max(0, Math.floor(getNumber('cfg-starting-energy', cfg.STARTING_MONEY)));
     cfg.STARTING_ASTAR = Math.max(0, getNumber('cfg-starting-astar', cfg.STARTING_ASTAR));
+    { let el = document.getElementById('cfg-shrines'); if (el) cfg.SHRINES_ENABLED = !!el.checked; }
     cfg.MAP_TYPE = getString('cfg-map-type', cfg.MAP_TYPE);
     cfg.GAME_MODE = getString('cfg-gamemode', cfg.GAME_MODE);
     cfg.MAP_VISIBILITY = getString('cfg-full-vis', cfg.MAP_VISIBILITY);
@@ -833,6 +919,7 @@ function applyMainMenuControlsToRuntimeState() {
     ASTAR_MINE_MAX = cfg.ASTAR_MINE_MAX;
     STARTING_MONEY = cfg.STARTING_MONEY;
     STARTING_ASTAR = cfg.STARTING_ASTAR;
+    SHRINES_ENABLED = cfg.SHRINES_ENABLED !== undefined ? !!cfg.SHRINES_ENABLED : SHRINES_ENABLED;
     MAP_TYPE = cfg.MAP_TYPE;
     CONFIG_MAX_POP = cfg.CONFIG_MAX_POP;
     MAX_THING_LEVEL = prog.MAX_THING_LEVEL;
@@ -1318,6 +1405,7 @@ function sampleGameStats() {
         tick: gameTime,
         energy: {},
         astar: {},
+        shrine: {},
         pop: {},
         units: {},
         workers: {},
@@ -1332,6 +1420,7 @@ function sampleGameStats() {
     for (let pid of teams) {
         sample.energy[pid] = players[pid] ? players[pid].energy : 0;
         sample.astar[pid] = players[pid] ? (Number(players[pid].astar) || 0) : 0;
+        sample.shrine[pid] = players[pid] ? (Number(players[pid].shrine) || 0) : 0;
         sample.pop[pid] = players[pid] ? players[pid].popCount : 0;
         sample.units[pid] = unitsByTeam[pid] || 0;
         sample.workers[pid] = workersByTeam[pid] || 0;
@@ -1352,7 +1441,8 @@ function renderGameGraph(metric = graphMetric) {
         structures: { title: 'Structures', yTitle: 'STRUCTURES' },
         pop: { title: 'Population', yTitle: 'POPULATION' },
         energy: { title: 'Energy', yTitle: 'ENERGY' },
-        astar: { title: '★', yTitle: '★' }
+        astar: { title: '★', yTitle: '★' },
+        shrine: { title: '\uD83D\uDC80 Shrine (damage taken)', yTitle: '\uD83D\uDC80' }
     };
     metric = metricDefs[metric] ? metric : 'units';
     graphMetric = metric;
@@ -1556,8 +1646,9 @@ function buildResearchStatMatrixGrid(kind, key, statKey) {
     for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) header.push(`R${rl}`);
     grid.push(header);
 
-    for (let tl = 1; tl <= MAX_THING_LEVEL; tl++) {
-        let row = [`L${tl}`];
+    let levels = researchMatrixThingLevels(kind, key);
+    for (let tl = 1; tl <= levels; tl++) {
+        let row = [levels > 1 ? `L${tl}` : 'Value'];
         for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) {
             let v = getResearchStatValueAtLevel(kind, key, statKey, rl, tl);
             row.push(formatResearchStatValue(statKey, v));
@@ -1585,8 +1676,9 @@ function buildStatMatrixGridFromDescriptor(d) {
     for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) header.push(`R${rl}`);
     grid.push(header);
 
-    for (let tl = 1; tl <= MAX_THING_LEVEL; tl++) {
-        let row = [`L${tl}`];
+    let levels = researchMatrixThingLevels(d.kind, d.key);
+    for (let tl = 1; tl <= levels; tl++) {
+        let row = [levels > 1 ? `L${tl}` : 'Value'];
         for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) {
             let raw = null;
             if (typeof d.getValue === 'function') {
@@ -2090,7 +2182,18 @@ function getResearchBonusExp(kind) {
     return kind === 'unit' ? RESEARCH_BONUS_EXP_UNITS : RESEARCH_BONUS_EXP_OTHER;
 }
 
-function getResearchBonusExpForStat(kind, statKey) {
+// Rows of a stat matrix: the thing's levels; one for a thing without levels
+// (the shrine: research alone scales it).
+function researchMatrixThingLevels(kind, key) {
+    return kind === 'building' && (BASE_CARD_TYPES[key] || {}).notBuildable ? 1 : MAX_THING_LEVEL;
+}
+
+// (key: the thing, for things with their own exponents: the shrine.)
+function getResearchBonusExpForStat(kind, statKey, key = null) {
+    if (kind === 'building' && key === 'shrine') {
+        if (statKey === 'multiplier') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.shrineMultiplierBonusExp) || 2);
+        if (statKey === 'drainRate') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.shrineDrainRateBonusExp) || 10);
+    }
     if (statKey === 'unitPrice') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.unitPriceBonusExp) || 1);
     if (kind === 'unit' && statKey === 'visionRange') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.unitVisionRangeBonusExp) || 1);
     if (kind === 'unit' && statKey === 'attackRange') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.unitAttackRangeBonusExp) || 1);
@@ -2099,10 +2202,10 @@ function getResearchBonusExpForStat(kind, statKey) {
     return getResearchBonusExp(kind);
 }
 
-function applyResearchLevelToBaseValue(kind, baseValue, statKey, researchLevel) {
+function applyResearchLevelToBaseValue(kind, baseValue, statKey, researchLevel, key = null) {
     if (!Number.isFinite(baseValue)) return NaN;
     let rLevel = clampResearchLevel(researchLevel);
-    let mult = detPow(getResearchBonusExpForStat(kind, statKey), rLevel);
+    let mult = detPow(getResearchBonusExpForStat(kind, statKey, key), rLevel);
     if (RESEARCH_DECREASE_STATS[statKey]) return baseValue / Math.max(1e-6, mult);
     return baseValue * mult;
 }
@@ -2306,6 +2409,7 @@ function computeBaseBuildingStatsAtLevel(type, level) {
         watchDuration: NaN,
         efficiency: NaN,
         upKeep: NaN,
+        drainRate: NaN,
     };
 
     let def = BASE_CARD_TYPES[key] || {};
@@ -2343,6 +2447,11 @@ function computeBaseBuildingStatsAtLevel(type, level) {
         let farmPolyCoeff = Number(bCfg.farmLevelPolyCoeff) || 1;
         let farmPowExp = Math.max(0, Number(bCfg.farmLevelPowerExp) || 0);
         out.multiplier = baseMultiplier + Math.floor(farmPolyCoeff * lvl * detLog(lvl + 1) * detPow(lvl, farmPowExp));
+    }
+    else if (key === 'shrine') {
+        // No levels: research alone scales it.
+        out.multiplier = Number(def.multiplier);
+        out.drainRate = Number(def.drainRate);
     }
     else if (key === 'house') {
         let housePopExp = Math.max(1, Number(bCfg.levelMultExp * 1) || 1);
@@ -2511,10 +2620,10 @@ function rebuildPrecomputedStatsMap() {
             for (let statKey of PRECOMPUTED_BUILDING_STAT_KEYS) {
                 let arr = new Array(MAX_RESEARCH_LEVEL + 1);
                 let cap = getPrecomputedSoftCap('building', buildingKey, statKey, { baseAtLevel1, baseAtMaxLevel });
-                let baselineValue = applyResearchLevelToBaseValue('building', baseAtLevel1[statKey], statKey, 0);
-                let maxValueBeforeCap = applyResearchLevelToBaseValue('building', baseAtMaxLevel[statKey], statKey, MAX_RESEARCH_LEVEL);
+                let baselineValue = applyResearchLevelToBaseValue('building', baseAtLevel1[statKey], statKey, 0, buildingKey);
+                let maxValueBeforeCap = applyResearchLevelToBaseValue('building', baseAtMaxLevel[statKey], statKey, MAX_RESEARCH_LEVEL, buildingKey);
                 for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
-                    let researched = applyResearchLevelToBaseValue('building', base[statKey], statKey, r);
+                    let researched = applyResearchLevelToBaseValue('building', base[statKey], statKey, r, buildingKey);
                     arr[r] = applyPrecomputedSoftCap(researched, cap, statKey, baselineValue, maxValueBeforeCap);
                 }
                 levelEntry[statKey] = arr;
@@ -2626,6 +2735,7 @@ function _getBuildingPlayerPrecomputedEntry(playerId, buildingKey, level) {
         watchDuration: Number(values.watchDuration),
         efficiency: Number(values.efficiency),
         upKeep: Math.max(0.01, Number(values.upKeep) || 0.01),
+        drainRate: Number(values.drainRate),
     };
 }
 
@@ -2923,6 +3033,12 @@ function getResearchStatEntriesForThing(kind, key) {
         out.push({ statKey, label: RESEARCH_STAT_LABELS[statKey] || statKey, baseValue });
     };
 
+    // The shrine has no levels, health or upkeep: its two stats only.
+    if (key === 'shrine') {
+        addStat('multiplier', getBuildingStatFromMap(key, 1, 'multiplier', 0));
+        addStat('drainRate', getBuildingStatFromMap(key, 1, 'drainRate', 0));
+        return out;
+    }
     addStat('maxLevel', 1);
     addStat('maxEnergy', getBaseBuildingmaxEnergyForResearch(key));
     let d = BASE_CARD_TYPES[key] || {};
@@ -3024,7 +3140,7 @@ function getResearchMultiplier(playerId, kind, key, statKey) {
     let mults = ensurePlayerResearchMultipliers(playerId);
     let id = makeResearchLevelId(kind, key, statKey);
     if (!Number.isFinite(mults[id])) {
-        mults[id] = detPow(getResearchBonusExpForStat(kind, statKey), getPlayerResearchLevel(playerId, kind, key, statKey));
+        mults[id] = detPow(getResearchBonusExpForStat(kind, statKey, key), getPlayerResearchLevel(playerId, kind, key, statKey));
     }
     return Math.max(1, mults[id]);
 }
@@ -3050,6 +3166,7 @@ function formatResearchStatValue(statKey, value) {
     if (statKey === 'attackRange' || statKey === 'visionRange') return areaCompact(value);
     if (statKey === 'speed' || statKey === 'multiplier' || statKey === 'astarCost') return compact(value, 2);
     if (statKey === 'efficiency') return compact(value, 2);
+    if (statKey === 'drainRate') return `${compact(value, 1)}\uD83D\uDC80/ s`;
     if (statKey === 'spawnCd') return `${compact(value, 2)}s`;
     if (statKey === 'builderDps' || statKey === 'healerDps' || statKey === 'researcherDps' || statKey === 'gatherPerTrip') return compact(value, 1);
     if (statKey === 'upKeep') return `${compact(value, 2)}⚡/ s`;
@@ -3456,7 +3573,7 @@ function applyResearchCompletion(owner, task) {
     let nextLevel = clampResearchLevel(prevLevel + 1);
     if (nextLevel <= prevLevel) return;
     levels[id] = nextLevel;
-    mults[id] = detPow(getResearchBonusExpForStat(task.kind, task.statKey), nextLevel);
+    mults[id] = detPow(getResearchBonusExpForStat(task.kind, task.statKey, task.key), nextLevel);
     if (task.kind === 'unit') applyUnitResearchUpgradeToExistingUnits(owner, task.key, task.statKey);
     if (task.kind === 'building') applyBuildingResearchUpgradeToExisting(owner, task.key, task.statKey);
     if (task.kind === 'building' && task.key === 'house' && task.statKey === 'popCap') {

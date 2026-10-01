@@ -263,41 +263,54 @@
         #hud .hud-btn:hover { filter: brightness(1.3); background: #1b1f24; }
         #hud .hud-btn-danger { border-color: #744; color: #f99; font-size: 13px; }
 
-        /* Left panel footer: lines up with #bottom-bar (2px border + two 44px rows). */
+        /* Left panel footer: as tall as #bottom-bar (2px border + 89px), four
+           lines: energy, star, shrine, population. */
         #left-footer {
             flex-shrink: 0;
             margin-top: auto;
+            height: 91px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
             border-top: 2px solid #333;
             font-weight: bold;
             font-variant-numeric: tabular-nums;
         }
 
         .lf-row {
-            height: 44px;
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 6px;
-            padding: 0 8px 0 10px;
+            padding: 0 6px 0 8px;
         }
 
-        .lf-row + .lf-row {
-            height: 45px;
-            border-top: 1px solid #222;
-        }
-
-        /* Value column right-aligned and wide enough for "999.9B", then the glyph
-           in a fixed slot, so glyphs never move. */
+        /* Value right-aligned and wide enough for "999.9B", the glyph in a
+           fixed slot, then the change per second and (shrine) its drain
+           buttons: one grid, so the rows line up. */
         .lf-stack {
             display: grid;
-            grid-template-columns: 7ch 1.3em;
-            column-gap: 4px;
+            grid-template-columns: 6.5ch 1.3em 1fr 6ch auto;
+            flex: 1;
+            column-gap: 3px;
             align-items: baseline;
-            font-size: 15px;
-            line-height: 19px;
+            font-size: 14px;
+            line-height: 18px;
+            cursor: help;
         }
 
-        .lf-stack .hud-energy, .lf-stack .hud-astar { display: contents; }
+        .lf-stack .hud-energy, .lf-stack .hud-astar, .lf-stack .hud-shrine { display: contents; }
+        .lf-pop { height: 19px; }
+        /* Research count on one line beside the population. */
+        .lf-pop #bb-research-label { grid-template-columns: auto auto; column-gap: 4px; align-items: baseline; }
+        .lf-pop #bb-research-label .bb-lcap, .lf-pop #bb-research-label .bb-lcount { grid-column: auto; }
+        .lf-drain { display: inline-flex; gap: 2px; align-items: center; align-self: center; }
+        .lf-drain-arrow { font-size: 12px; line-height: 12px; padding: 0 1px; color: #888; background: transparent; }
+        .lf-stack .bb-lv { text-align: right; }
+        .lf-drain-btn { font-size: 10px; line-height: 12px; padding: 0 2px; min-width: 15px; background: #151515; color: #666; border: 1px solid #333; border-radius: 3px; cursor: pointer; }
+        .lf-drain-btn.on { color: #fd6; border-color: #a85; background: #2a2010; }
+        .lf-drain-btn.on.lf-astar { color: #bdd; border-color: #6aa; background: #142424; }
         .hud-res-value { text-align: right; white-space: nowrap; }
         .hud-resource-glyph-btn { text-align: center; }
 

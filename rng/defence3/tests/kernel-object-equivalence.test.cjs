@@ -53,7 +53,7 @@ async function runCase(seed, map, lowAstar = Number(process.env.LOWASTAR) || 0) 
         (globalThis.__plog ||= []).push(currentTick + ' ' + b + ' -> ' + st(this)); return r; }; }`);
     // Kernel outcomes on the host (moves by mode), to show what was compared.
     if (!process.env.NOKOUT) host.evalSim(`{ globalThis.__kout = {}; const run = simMoveRun; simMoveRun = function () { const r = run.apply(this, arguments); const S = _simUnitState; if (!S) return r; const O = S.columns.mvOut;
-        for (let s = 0; s < S.owners.length; s++) { const o = O[s]; if (o) { const k = o >= 7 ? 'chase' : o === 6 ? 'hold' : 'move'; globalThis.__kout[k] = (globalThis.__kout[k] || 0) + 1; } } return r; }; }`);
+        for (let s = 0; s < S.owners.length; s++) { const o = O[s]; if (o) { const k = o === 10 ? 'fire' : o >= 7 ? 'chase' : o === 6 ? 'hold' : 'move'; globalThis.__kout[k] = (globalThis.__kout[k] || 0) + 1; } } return r; }; }`);
     // LOWASTAR=n: every player starts with n A* (movement then runs the
     // budget out: steps that are not covered mark their units).
     if (lowAstar) world.atTick(host.eval('currentTick') + 5, `for (let p = 0; p < players.length; p++) _setPlayerResourceValue(p, 'astar', ${lowAstar})`);

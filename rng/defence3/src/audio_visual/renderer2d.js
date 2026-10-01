@@ -445,6 +445,11 @@ function getItemThumbnail(key, size, intoCanvas = null) {
         ctx.fillStyle = '#fd0'; ctx.beginPath(); ctx.arc(cx, cy, 10 * s, 0, 6.28); ctx.fill();
         ctx.fillStyle = '#000';
         ctx.beginPath(); ctx.moveTo(cx, cy - 7 * s); ctx.lineTo(cx - 5 * s, cy + 3 * s); ctx.lineTo(cx + 5 * s, cy + 3 * s); ctx.closePath(); ctx.fill();
+    } else if (key === 'shrine') {
+        ctx.fillStyle = '#2a1f2a'; ctx.beginPath(); ctx.arc(cx, cy, 13 * s, 0, 6.28); ctx.fill();
+        ctx.strokeStyle = def ? def.color : '#c9b'; ctx.lineWidth = Math.max(1, 1.5 * s); ctx.stroke();
+        ctx.font = `${Math.max(10, Math.round(17 * s))}px Arial`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('💀', cx, cy + 1 * s);
     } else if (key === 'goldmine') {
         ctx.fillStyle = '#fd0'; ctx.fillRect(cx - 10 * s, cy - 10 * s, 20 * s, 20 * s);
         ctx.fillStyle = '#fff7c2';

@@ -117,6 +117,7 @@ function _bbCollectThings(owner) {
     for (let e of _getOwnedInfoPanelBuildings(owner)) {
         add('building', String(getEntityStatsCalcType(e) || ''), _isInfoPanelBuildingIdleLike(e));
     }
+    if (SHRINES_ENABLED && BASE_CARD_TYPES.shrine) add('building', 'shrine', false);
     return map;
 }
 
@@ -136,7 +137,9 @@ function _bbSyncOrder(map) {
     });
     for (let info of fresh) {
         bb.known.add(info.id);
-        bb.order.push(info.id);
+        // The shrine leads the row (everyone has one).
+        if (info.id === 'building:shrine') bb.order.unshift(info.id);
+        else bb.order.push(info.id);
     }
     bb.rest = bb.rest.filter(id => !bb.known.has(id));
 }
@@ -349,6 +352,8 @@ function updateBottomBar(now) {
 }
 
 function _bbRenderTotals() {
+    // (The totals now live in the bottom-left stack, updateHUD.)
+    if (!bb.els.thingsLabel) return;
     let R = bb.rates;
     let row = (v, glyph, res) => `<span class="bb-lv ${_bbRateClass(v)}" style="color:${getDeltaRateColor(v, res)}">${_bbFmtRateShort(v)}</span><span class="bb-lu">${glyph}<span class="bb-per">/s</span></span>`;
     let html = row(R.energyTotal, '<span class="bb-glyph">⚡</span>', 'energy') + row(R.astarTotal, '<span class="bb-glyph bb-star">★</span>', 'astar');

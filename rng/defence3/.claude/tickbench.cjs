@@ -184,6 +184,9 @@ const seconds = Number(process.argv[2]) || 15;
     }
     const { performance: realPerf } = require('node:perf_hooks');
     host.scratch.realNow = () => realPerf.now();
+    // EVAL=<code>: evaluated on the host before the timed run (ad-hoc
+    // instrumentation; read results back with AFTER=).
+    if (process.env.EVAL) host.eval(process.env.EVAL);
     // PROFILE_TICK=n: CPU profile of that one whole tick (commands included).
     const profileTick = Number(process.env.PROFILE_TICK) || -1;
     // PROFILE_RANGE=a,b: one CPU profile of ticks a..b (steady state).
@@ -302,12 +305,51 @@ const seconds = Number(process.argv[2]) || 15;
     // HOLDSTAT=1: attacking units not held by the kernel (mvOn 3), by the first failed condition of simMoveTryHold.
     if (process.env.HOLDSTAT) host.eval(`__scratch.hold = {}; { const f = simMoveEndTick; simMoveEndTick = function () { if (currentTick % 10 === 0) { const S = _simUnitState, H = __scratch.hold;
         for (const u of units) { if (u.dead || u.commandState !== CMD_ATTACKING) continue; const on = S.columns.mvOn[u._si]; const tu = u.targetUnit;
-            const k = on === 3 ? 'held' : u.workerState ? 'worker' : u.holdPosition ? 'holdPos' : u.targetBuilding ? 'building' : !tu || tu.dead ? 'noTarget' : u.forcedAttackTarget ? 'forced' : u.attackTarget !== tu ? 'atkTargetDiff' : !(u.attackTimer > 1) ? 'timer' + Math.min(2, Math.max(0, Math.floor(u.attackTimer))) : (u.burning > 0 || u.poisoned > 0 || u.frozen > 0 || u.wet > 0 || u.sandy > 0 || u.watched > 0 || u.teleportHideTicks > 0) ? 'status' : !isWorldTargetWithinAreaRange(u.x, u.y, tu.x, tu.y, Math.floor(Math.max(0, Number(_getUnitAttackRangeArea(u)) || 0))) ? 'range' : 'other:on' + on;
+            const k = on === 3 ? 'held' : on === 5 ? 'heldBld' : u.workerState ? 'worker' : u.holdPosition ? 'holdPos' : u.targetBuilding ? 'building' : !tu || tu.dead ? 'noTarget' : u.forcedAttackTarget ? 'forced' : u.attackTarget !== tu ? 'atkTargetDiff' : !(u.attackTimer > 1) ? 'timer' + Math.min(2, Math.max(0, Math.floor(u.attackTimer))) : (u.burning > 0 || u.poisoned > 0 || u.frozen > 0 || u.wet > 0 || u.sandy > 0 || u.watched > 0 || u.teleportHideTicks > 0) ? 'status' : !isWorldTargetWithinAreaRange(u.x, u.y, tu.x, tu.y, Math.floor(Math.max(0, Number(_getUnitAttackRangeArea(u)) || 0))) ? 'range' : 'other:on' + on;
             H[k] = (H[k] || 0) + 1; }
         for (const u of units) { if (u.dead || u.workerState !== 'IDLE') continue; const on = S.columns.mvOn[u._si];
             const nx = u._workerNextIdleRetargetTick;
             const k = 'park:' + u.workerType + ':' + (on === 2 ? 'parked' : u.commandState !== CMD_IDLE ? 'cmd' + u.commandState : u.holdPosition ? 'holdPos' : u.workerTransferCooldown > 0 ? 'cooldown' : (u.burning > 0 || u.poisoned > 0 || u.frozen > 0 || u.wet > 0 || u.sandy > 0 || u.watched > 0 || u.teleportHideTicks > 0) ? 'status' : (u.attackTimer > 0 || u.attackFlash > 0) ? 'atk' : !Number.isFinite(nx) ? 'noNext' : nx <= gameTime + 1 ? 'nextDue' : 'other:on' + on);
             H[k] = (H[k] || 0) + 1; } } return f.apply(this, arguments); }; }`);
+    // WAKESTAT=1: idle workers that ran Unit.update, by why they were not
+    // parked through the tick: 'unparked:<reason>' (their last update did not
+    // park them: the first unmet condition of simMoveTryPark), 'disarmed'
+    // (parked after their last update, unarmed before the kernel ran: a
+    // hook, e.g. a push into another tile), 'woke:<why>' (the kernel woke
+    // them: wake tick reached with or without the version check, watchdog,
+    // floor); ms and calls per tick, and how many searched (retarget ran).
+    if (process.env.WAKESTAT) host.eval(`__scratch.wk = {}; { const S0 = () => _simUnitState; let pre = null, post = null, wakeAt = null, endParked = new Int8Array(0), endWhy = [];
+        const fr = simMoveRun; simMoveRun = function () { const S = S0(), n = S.owners.length; pre = S.columns.mvOn.slice(0, n); wakeAt = S.columns.mvWake.slice(0, n); const fl = S.columns.mvFlags.slice(0, n);
+            try { return fr.apply(this, arguments); } finally { post = S.columns.mvOn.slice(0, n); __scratch.wkFl = fl; } };
+        const why = u => { const c = u._us, s = u._si; if (c.mvOn[s] === 2) return 'parked'; if (u.commandState !== CMD_IDLE) return 'cmd' + u.commandState; if (u.holdPosition) return 'holdPos'; if (u.workerTransferCooldown > 0) return 'cooldown';
+            if (u._spatialEpoch !== spatialEpoch) return 'epoch'; const nx = u._workerNextIdleRetargetTick; if (!Number.isFinite(nx)) return 'noNext'; if (nx <= gameTime + 1) return 'nextDue'; return 'wakeSoon'; };
+        const f = Unit.prototype.update; Unit.prototype.update = function () {
+            const c = this._us, s = this._si; if (!c || c.mvOut[s] || this.workerState !== 'IDLE') return f.call(this);
+            let k; const t = this.workerType;
+            if (pre && pre[s] === 2 && post[s] === 0) { const fl = __scratch.wkFl[s]; k = 'woke:' + (gameTime >= wakeAt[s] ? ((fl & 2) ? 'wakeVer' : 'wakeNoVer') : (fl & 4) ? 'watch' : 'floor'); }
+            else if (pre && pre[s] === 0) k = endParked[s] === 1 ? 'disarmed' : 'unparked:' + (endWhy[s] || '?');
+            else k = 'other' + (pre ? pre[s] : '-');
+            const a = __scratch.realNow(); const r0 = globalThis.__wkSearch | 0;
+            try { return f.call(this); } finally { const ms = __scratch.realNow() - a;
+                if (currentTick >= 48) { const e = (__scratch.wk[t + ':' + k] ||= [0, 0]); e[0] += ms; e[1]++; }
+                if (endParked.length < c.mvOn.length) { const a2 = new Int8Array(c.mvOn.length * 2); a2.set(endParked); endParked = a2; }
+                const w = why(this); endParked[s] = w === 'parked' ? 1 : 0; endWhy[s] = w; } }; }`);
+    // AMSTAT=1: combat units (not workers) that ran Unit.update, by command,
+    // armed state before the kernel (pre mvOn), the combat scan's answer
+    // (cb: enemy found / none / not scanned), structure tick, and the command
+    // after the update (->state); ms and calls per tick.
+    if (process.env.AMSTAT) host.eval(`__scratch.am = {}; { let pre = null;
+        const fr = simMoveRun; simMoveRun = function () { const S = _simUnitState; pre = S.columns.mvOn.slice(0, S.owners.length); return fr.apply(this, arguments); };
+        const f = Unit.prototype.update; Unit.prototype.update = function () {
+            const c = this._us, s = this._si; if (!c || c.mvOut[s] || this.workerState) return f.call(this);
+            const cmd = this.commandState; if (cmd !== CMD_ATTACK_MOVING && cmd !== CMD_IDLE) return f.call(this);
+            const cb = c.cbTick[s] !== gameTime ? 'cbNo' : c.cbT[s] >= 0 ? 'cbHit' : 'cbNone';
+            const st = ((gameTime + this.id) & 3) === 0 ? 'st' : '';
+            const pend = (!this.path || this.pathIndex >= this.path.length) ? (this._pendingPathTarget ? 'pend' : 'nopath') : 'path';
+            const a = __scratch.realNow();
+            try { return f.call(this); } finally { const ms = __scratch.realNow() - a; if (currentTick >= 48) {
+                const k = 'c' + cmd + ':on' + (pre ? pre[s] : '-') + ':' + cb + ':' + pend + (st ? ':st' : '') + '->' + this.commandState + (this.targetBuilding ? 'b' : '');
+                const e = (__scratch.am[k] ||= [0, 0]); e[0] += ms; e[1]++; } } }; }`);
     // KTIME=1: wall time per kernel per tick (ms, averaged over the run).
     if (process.env.KTIME) host.eval(`__scratch.kt = {}; { const f = simParallelRun; simParallelRun = function (k, total) { const a = __scratch.realNow(); try { return f.apply(this, arguments); } finally { __scratch.kt[k] = (__scratch.kt[k] || 0) + __scratch.realNow() - a; } }; }`);
     // KSHARE=1: per kernel, the share of chunks the main thread ran itself; binds per tick (by name).
@@ -404,6 +446,8 @@ const seconds = Number(process.argv[2]) || 15;
         loopCost: process.env.LOOPCOST ? JSON.parse(host.eval('JSON.stringify(__scratch.lc.filter(a => a[0] % 10 === 0))')) : undefined,
         chaseStat: process.env.CHASESTAT ? JSON.parse(host.eval('JSON.stringify(__scratch.chase)')) : undefined,
         holdStat: process.env.HOLDSTAT ? JSON.parse(host.eval('JSON.stringify(__scratch.hold)')) : undefined,
+        amStat: process.env.AMSTAT ? JSON.parse(host.eval('(() => { const n = Math.max(1, __scratch.tickMs.length - 48); return JSON.stringify(Object.fromEntries(Object.entries(__scratch.am).sort((a,b)=>b[1][0]-a[1][0]).slice(0, 40).map(([k,v])=>[k,[Math.round(v[0]/n*10)/10, Math.round(v[1]/n)]]))); })()')) : undefined,
+        wakeStat: process.env.WAKESTAT ? JSON.parse(host.eval('(() => { const n = Math.max(1, __scratch.tickMs.length - 48); return JSON.stringify(Object.fromEntries(Object.entries(__scratch.wk).sort((a,b)=>b[1][0]-a[1][0]).map(([k,v])=>[k,[Math.round(v[0]/n*10)/10, Math.round(v[1]/n)]]))); })()')) : undefined,
         updSplit: process.env.UPDSPLIT ? JSON.parse(host.eval('(() => { const n = Math.max(1, __scratch.tickMs.length - 48); return JSON.stringify(Object.fromEntries(Object.entries(__scratch.us).sort((a,b)=>b[1][0]-a[1][0]).map(([k,v])=>[k,[Math.round(v[0]/n*10)/10, Math.round(v[1]/n)]]))); })()')) : undefined,
         orderSplit: process.env.ORDERSPLIT ? JSON.parse(host.eval('JSON.stringify(Object.fromEntries(Object.entries(__scratch.os).map(([k,v])=>[k,[Math.round(v[0]),v[1]]])))')) : undefined,
                 fastProps: process.env.FASTPROPS ? [host, ...guests].map(p => p.eval('(() => { let fast = 0, slow = 0; for (const u of units) { if (%HasFastProperties(u)) fast++; else slow++; } return fast + "/" + slow + " cols:" + %HasFastProperties(_simUnitState.columns); })()')) : undefined,

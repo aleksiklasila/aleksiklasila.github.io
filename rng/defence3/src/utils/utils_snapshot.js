@@ -2012,7 +2012,7 @@ function snapDecodeState(S, options = null) {
         // Movement caches (flows, armed units, the unit index, walls) start
         // over from the restored world, as on every peer's flush.
         if (typeof resetGroupRoutes === 'function') resetGroupRoutes();
-        if (typeof simMoveDisarmAll === 'function') simMoveDisarmAll(); if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsInvalidateAll === 'function') effStatsInvalidateAll(); if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset();
+        if (typeof simMoveDisarmAll === 'function') simMoveDisarmAll(); if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsInvalidateAll === 'function') effStatsInvalidateAll(); if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset(); if (typeof shrineResetPending === 'function') shrineResetPending();
         if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
         if (typeof simMoveWallsDirty === 'function') simMoveWallsDirty();
         // The navigation as the snapshot's peer has it (the same walls).
@@ -2083,7 +2083,7 @@ function snapFlushHistoryCaches() {
     if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
     // Armed and parked units go back to Unit.update everywhere (a restored
     // peer's units start that way).
-    if (typeof simMoveDisarmAll === 'function') simMoveDisarmAll(); if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsInvalidateAll === 'function') effStatsInvalidateAll(); if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset();
+    if (typeof simMoveDisarmAll === 'function') simMoveDisarmAll(); if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsInvalidateAll === 'function') effStatsInvalidateAll(); if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset(); if (typeof shrineResetPending === 'function') shrineResetPending();
     // Gameplay visibility is reused between ticks (see VISIBILITY_TICK_INTERVAL).
     if (typeof clearGameplayVisibilityCache === 'function') clearGameplayVisibilityCache();
     closestEnemyChunkQueryCache.clear();

@@ -153,6 +153,10 @@
                         <input id="cfg-astar-mine-max" type="number" min="10" max="500000000000" value="20000" >
                     </div>
                     <div class="lobby-setting-row compact">
+                        <label for="cfg-shrines" title="&#128128; is damage taken: the energy your units and buildings lose to damage goes to your shrine and drains passively into &#9889; and &#9733; (multiplier and drain rate are researched). Off: dying units drop energy where they fall.">&#128128; Shrines</label>
+                        <input id="cfg-shrines" type="checkbox" checked title="&#128128; is damage taken: the energy your units and buildings lose to damage goes to your shrine and drains passively into &#9889; and &#9733; (multiplier and drain rate are researched). Off: dying units drop energy where they fall.">
+                    </div>
+                    <div class="lobby-setting-row compact">
                         <label>Max Research Level</label>
                         <input id="cfg-max-research-level" type="number" min="1" max="100" step="1" value="10" style="width:72px">
                     </div>
@@ -676,14 +680,14 @@
                 </div>
                 <div id="shop-stats-container"></div>
             </div>
-            <!-- Same height as #bottom-bar: resources + per-second deltas, then population + research count. -->
+            <!-- Same height as #bottom-bar: energy, ★ and 💀 (each with its change per second), then population + research count. -->
             <div id="left-footer">
                 <div class="lf-row lf-resources">
-                    <div class="lf-stack">
+                    <div class="lf-stack" title="Per second, over the last 10 s. Energy: income minus upkeep; &#9733;: collected minus used moving; &#128128;: damage taken minus drained.">
                         <span class="hud-energy" id="hud-energy"></span>
                         <span class="hud-astar" id="hud-astar"></span>
+                        <span class="hud-shrine" id="hud-shrine"></span>
                     </div>
-                    <div id="bb-things-label" title="Overall energy (top) and &#9733; (bottom) per second, over the last 10 s. Energy: income minus upkeep; &#9733;: collected minus used moving."></div>
                 </div>
                 <div class="lf-row lf-pop">
                     <span class="hud-pop" id="hud-pop"></span>
@@ -738,6 +742,8 @@
                     style="background:#202020;border:1px solid #555;color:#ddd;cursor:pointer;padding:3px 8px;border-radius:4px;">Energy</button>
                 <button class="go-graph-metric" data-metric="astar"
                     style="background:#202020;border:1px solid #555;color:#ddd;cursor:pointer;padding:3px 8px;border-radius:4px;">★</button>
+                <button class="go-graph-metric" data-metric="shrine" title="Shrine: damage taken, not yet drained"
+                    style="background:#202020;border:1px solid #555;color:#ddd;cursor:pointer;padding:3px 8px;border-radius:4px;">💀</button>
             </div>
             <div id="go-graph-plot"
                 style="width:100%;max-width:860px;height:320px;display:block;margin:0 auto;border:1px solid #2d2d2d;background:#0d0d0d;"></div>

@@ -170,6 +170,29 @@ function _simUnitInAttackRange(AG, OFF, NB, WALL, CR, RR, W, H, tile, pad, s, q,
     return _simInAreaRange(AG, OFF, NB, W, H, tile, x, y, tx, ty, k + 1);
 }
 
+// Whether a structure hostile to `owner` (mv.struct codes: -1 none, p
+// owned by p alone, -2 hostile to all) may lie within distance r of (x, y):
+// some tile holding one has a point that near (a structure stands inside its
+// tile). Conservative for unit.js _findAutoStructureTarget, which only
+// takes structures nearer than r.
+function _simHostileStructNear(SC, W, H, tile, owner, x, y, r) {
+    if (!(r > 0)) return false;
+    const r2 = r * r;
+    const gx0 = Math.max(0, Math.floor((x - r) / tile)), gx1 = Math.min(W - 1, Math.floor((x + r) / tile));
+    const gy0 = Math.max(0, Math.floor((y - r) / tile)), gy1 = Math.min(H - 1, Math.floor((y + r) / tile));
+    for (let gy = gy0; gy <= gy1; gy++) {
+        const y0 = gy * tile, dy = y < y0 ? y0 - y : (y > y0 + tile ? y - y0 - tile : 0), ry = r2 - dy * dy;
+        if (ry < 0) continue;
+        for (let gx = gx0, k = gy * W + gx0; gx <= gx1; gx++, k++) {
+            const c = SC[k];
+            if (c === -1 || c === owner) continue;
+            const x0 = gx * tile, dx = x < x0 ? x0 - x : (x > x0 + tile ? x - x0 - tile : 0);
+            if (dx * dx <= ry) return true;
+        }
+    }
+    return false;
+}
+
 SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
     const ON = R['unit.mvOn'], OUT = R['unit.mvOut'], FL = R['unit.mvFlags'], ZM = R['unit.mvZmask'];
     const SPD = R['unit.mvSpd'], LANE = R['unit.mvLane'], SPENT = R['unit.mvSpent'], REACH = R['unit.mvReach'];
@@ -193,7 +216,7 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
     // This tick's combat scan (run before this kernel: the nearest enemy unit
     // in aggro range or -1, cbTick = t) and hostile structures alone (summed
     // area, as mv.hostile).
-    const CBT = R['unit.cbT'], CBTK = R['unit.cbTick'], HSS = R['mv.hstruct'], CHS = R['unit.mvChs'];
+    const CBT = R['unit.cbT'], CBTK = R['unit.cbTick'], HSS = R['mv.hstruct'], CHS = R['unit.mvChs'], RNG = R['unit.cbRange'];
     // Parked idle workers' version checks (worker.js _workerWorkHash): the
     // table, its layout (P[22..27]) and the healer candidates' generation (P[28]).
     const WKV = R['wk.ver'], WKTY = R['unit.wkType'], WKD = R['unit.wkD'], WKOX = R['unit.wkOx'], WKOY = R['unit.wkOy'], WKTW = R['unit.wkTwice'];
@@ -209,7 +232,7 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
         OUT[s] = 0;
         if (!ON[s]) continue;
         if (!(EN[s] > 0) || SEP[s] === absent || DEADC[s]) { ON[s] = 0; continue; }
-        const parked = ON[s] === 2, hold = ON[s] === 3;
+        const parked = ON[s] === 2, hold = ON[s] === 3, bhold = ON[s] === 5;
         // Parked (an idle worker, a unit waiting for its route): until its
         // wake tick, a tick is its floor and hostile checks.
         // (A parked builder pushed off its watchdog's last sample: woken at
@@ -265,11 +288,28 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
             const cov = COV ? COV[owner] : null, a = AG ? AG[qgy * W + qgx] : -1;
             if (!cov || !(a >= 0) || !(cov[a] > 0)) { ON[s] = 0; continue; }
             if (_simUnitInAttackRange(AG, AOFF, ANB, WALL, CRC, RRC, W, H, tile, pad, s, q, x, y, tx, ty, REACH[s]) !== 1) { ON[s] = 0; continue; }
-            // The attack itself is Unit.update's (its timer: the status
-            // pre-pass counted it down already).
-            if (!(AT[s] > 0)) { ON[s] = 0; continue; }
-            // (6: held; see simHoldStillValid.)
-            PX[s] = x; PY[s] = y; OUT[s] = 6;
+            // (6: held; 10: its attack tick (the status pre-pass counted the
+            // timer down), the attack made at its turn: simHoldFire.)
+            PX[s] = x; PY[s] = y; OUT[s] = AT[s] > 0 ? 6 : 10;
+            continue;
+        }
+        if (bhold) {
+            // Building hold (see _simMoveTryHoldBuilding in unit.js): the
+            // structure's tile (mvDest) still holds a hostile structure, its
+            // area is in sight, it is within the unit's area range, the
+            // timer runs; not an automatic target's look for units (every
+            // 8 ticks by id).
+            const bt = DEST[s];
+            if (!(bt >= 0 && bt < W * H) || WALL[tl] || !AOFF || !AG) { ON[s] = 0; continue; }
+            const code = SC[bt];
+            if (code === -1 || code === owner) { ON[s] = 0; continue; }
+            if ((FL[s] & 1) === 0 && ((t + id) % 8) === 0) { ON[s] = 0; continue; }
+            const cov = COV ? COV[owner] : null, a = AG[bt];
+            if (!cov || !(a >= 0) || !(cov[a] > 0)) { ON[s] = 0; continue; }
+            const bgx = bt % W, bgy = (bt - bgx) / W;
+            if (_simInAreaRange(AG, AOFF, ANB, W, H, tile, x, y, bgx * tile + tile / 2, bgy * tile + tile / 2, REACH[s]) !== 1) { ON[s] = 0; continue; }
+            // (6: held; 10: its attack tick, see simHoldFire.)
+            PX[s] = x; PY[s] = y; OUT[s] = AT[s] > 0 ? 6 : 10;
             continue;
         }
         if (ON[s] === 4) {
@@ -331,7 +371,12 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
                     // found none and no structure look is due (or none can
                     // be in reach): nothing to react to, the move goes on.
                     if (!atk || CBTK[s] !== t || CBT[s] >= 0 || !HSS) { ON[s] = 0; continue; }
-                    if (((t + id) & 3) === 0 && HSS[i11] - HSS[i01] - HSS[i10] + HSS[i00] > 0) { ON[s] = 0; continue; }
+                    // (The look, _findAutoStructureTarget, finds nothing
+                    // unless a hostile structure's tile comes within its
+                    // aggro range: checked tile by tile when the blocks
+                    // around hold one.)
+                    if (((t + id) & 3) === 0 && HSS[i11] - HSS[i01] - HSS[i10] + HSS[i00] > 0
+                        && _simHostileStructNear(SC, W, H, tile, owner, x, y, RNG[s])) { ON[s] = 0; continue; }
                 }
             }
         }

@@ -43,6 +43,7 @@ const ctx = vm.createContext({
     areaIdGrid: [],
     // The O(1) pre-checks: never rule anything out here (the scans are under test).
     getAreaRangeTileBox: () => [0, 0, W - 1, H - 1], hasHostileStructureInTileRect: () => true,
+    simSharedArray: (Type, n) => new Type(n), simParallelBind: () => {},
 });
 const state = read('src/data/data_state.js');
 vm.runInContext(functionSource(state, 'getAreaIdAtWorld')
@@ -94,7 +95,7 @@ assert.equal(ctx._findHostileStructureInAttackRange(unit), lavaOff, 'own structu
 // intercept shots aimed elsewhere.
 const pc = vm.createContext({ TILE, towers: [], barracks: [], collectorSpawners: [], forEachUnitInRange: () => false,
     getFloorItemAtTile: (x, y) => grid[y] && grid[y][x] && grid[y][x].item, createExplosion() {}, recordCombatFx() {}, COMBAT_FX: {}, playSound() {},
-    pushHostileDamageAlert() {}, recordDamageVisual() {}, applyStatusEffect() {}, isEffectImmune: () => false,
+    pushHostileDamageAlert() {}, recordDamageVisual() {}, shrineDamageTaken() {}, applyStatusEffect() {}, isEffectImmune: () => false,
     destroyed: [], destroyBuilding(b) { pc.destroyed.push(b); } });
 vm.runInContext(read('src/utils/utils_common.js'), pc);
 vm.runInContext(read('src/things/projectile.js') + '\nthis.Projectile = Projectile;', pc);

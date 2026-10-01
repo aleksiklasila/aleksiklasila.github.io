@@ -22,7 +22,7 @@ const context = {
     getUnitStatForOwner: (_owner, type, level, stat) => type === 'scout' && stat === 'watchDuration' ? 4 + level : NaN,
     getBuildingStatForOwner: (_owner, type, level, stat) => type === 'watch_tower' && stat === 'watchDuration' ? 4 + level : NaN,
     secondsToTicks: seconds => Math.round(seconds * 10),
-    recordDamageVisual: () => {},
+    recordDamageVisual: () => {}, shrineDamageTaken: () => {},
 };
 vm.createContext(context);
 vm.runInContext(renderer.slice(statusStart, statusEnd), context);

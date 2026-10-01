@@ -55,6 +55,62 @@ is next. Newest entries first within each section.
 
 ## Session log
 
+### 2026-10-01 (fourth round) — siege diagnosis, shrines
+
+Suite on the third round: 69/72 in both modes; the 3 failures were test
+sandboxes missing `simSharedArray`/`simParallelBind` (collector-farms,
+structure-targeting, worker-target-index), fixed in the tests.
+
+Siege diagnosis (`TOWERS=8000 BATTLE=mix`; new tickbench tools `WAKESTAT=1`
+why idle workers ran Unit.update, `AMSTAT=1` attack-move/idle hand-backs by
+scan answer and outcome, `EVAL=<code>` ad-hoc host instrumentation):
+
+- Idle workers were the largest unit-pass item (~190 ms/tick with the
+  wrapper): almost all `woke:wakeVer`, i.e. their periodic search tick came
+  and the work version had changed. Cause: ~330 unit deaths per tick each
+  dropped a bounty item, and every drop bumped the '*' work version of all
+  8 players in its 64-tile region, so every idle worker type near a battle
+  searched (collector searches ~150 us: the per-tick conflict index rebuild
+  `_getWorkersWithTargetThisTick` and conflict checks, plan A4).
+- Attack-move: `c2 ... :st->2` 4924 calls/tick (~92 ms): on the structure
+  tick the kernel handed back whenever an 8x8 block in reach held a
+  hostile structure; `_findAutoStructureTarget` then found nothing.
+
+Changes:
+
+1. Drops bump only the drop-collecting worker types (`workerWorkDropAdded`).
+2. Movement kernel: on attack-move/idle-park structure ticks, after the
+   block test, a tile-exact conservative test (`_simHostileStructNear`: any
+   tile with a hostile `mv.struct` code whose rectangle comes within aggro
+   range `cbRange`) before handing back. Equivalence test passes (default
+   cases); not yet benchmarked.
+3. Shrines (gameplay change requested by the user, menu Resources
+   "💀 Shrines", default on; off = the old bounty drops): damage taken by a
+   player's units and buildings (energy actually lost, never below 0) goes
+   to the player's shrine `player.shrine` (💀). Hook `shrineDamageTaken`
+   beside every simulation `recordDamageVisual` (projectiles, splash,
+   lasers, unit hits, mines, status DOT incl. the kernel's, ram recoil).
+   Summed per tick as fixed-point integers (`_shrinePendingFixed`), so the
+   order of damage does not matter; `shrineTick` (end of gameTick) adds it
+   and drains up to `drainRate / TICK_RATE` into energy/★ times
+   `multiplier` per the player's `shrineDrain` order (1 ⚡, 2 ★, 3 half
+   each, 0 none). Stats: building `shrine` (`notBuildable`, research only:
+   multiplier ×1.25/level like farms, drainRate ×2/level). UI: bottom-left
+   stack ⚡/★/💀 with per-second rates and 💀 drain toggles, Pop below;
+   graph metric; ⚡/s and ★/s panel rows; bottom bar. With shrines on no
+   bounty drops exist, so the drop-wake cost is gone.
+   `tests/shrine.test.cjs` (both modes): hook, overkill, drain math, order,
+   peer agreement, exact hashes. Test sandboxes that stub
+   `recordDamageVisual` also stub `shrineDamageTaken`.
+4. Building hold (mvOn 5, `_simMoveTryHoldBuilding`): a unit attacking a
+   structure in range while its cooldown runs stays in the kernel (tile
+   still hostile in `mv.struct`, area in sight, `_simInAreaRange` with
+   k <= 2, timer above 0); handed back on its attack tick and, for
+   automatic targets, on the `(t + id) % 8` look for enemy units. Output 6
+   like the unit hold; `simHoldStillValid` re-checks the structure object at
+   the unit's turn (alive, still the target, same tile). Equivalence test
+   passes (hold counts rose on crossroads).
+
 ### 2026-10-01 — determinism repair
 
 Fixed (all found with the equivalence harness, now `tests/kernel-object-equivalence.test.cjs`):

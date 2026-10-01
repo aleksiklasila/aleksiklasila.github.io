@@ -1914,6 +1914,13 @@ function workerWorkChanged(owner, workerType = null, gx = -1, gy = -1) {
     V[i] = (V[i] + 1) | 0;
     V.sum = (V.sum + _workerWorkMix(i)) | 0;
 }
+// A drop at (gx, gy): work for every player's collectors that pick drops up
+// (supportsDropTarget), and no other worker's (a battle drops hundreds a
+// tick; waking every idle worker near it for a search was most of a siege's
+// worker time).
+function workerWorkDropAdded(gx, gy) {
+    for (const cfg of RESOURCE_TYPE_LIST) if (cfg.supportsDropTarget) workerWorkChanged(-1, cfg.collectorUnitKey, gx, gy);
+}
 // The state hash's checksum of the versions, kept as they change: the sum
 // of each version times a mix of its index.
 function _workerWorkMix(i) { return Math.imul((i + 1) ^ 0x9e3779b9, 2654435761) | 0; }

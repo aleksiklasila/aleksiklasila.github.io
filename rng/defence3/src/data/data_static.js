@@ -19,6 +19,10 @@ let ASTAR_MINE_MIN = 500;
 let ASTAR_MINE_MAX = 1500;
 let STARTING_MONEY = 2000;
 let STARTING_ASTAR = 9000;
+// Shrines (menu, Resources): damage a player's units and buildings take
+// goes to the player's shrine (resource 💀), drained passively into energy
+// and ★ (see shrineTick). Off: no shrine; dying units drop their bounty.
+let SHRINES_ENABLED = true;
 let MAP_TYPE = 'random';
 let TYPE_FLOOR = 0, TYPE_WALL = 1;
 let CONFIG_MAX_POP = 200;
@@ -305,6 +309,9 @@ const BASE_CARD_TYPES = {
     research: { name: "Research", price: 260, icon: "\u25B3\uD83E\uDDEA", color: "#446", visionRange: 0.6, energy: 70, efficiency: 1, upKeep: 0.5, target: 'floor' },
     house: { name: "House", price: 110, icon: "\uD83C\uDFE0", color: "#c95", visionRange: 0.4, energy: 30, upKeep: 0.5, target: 'floor' },
     area_upgrader: { name: "Area Up", price: 100, icon: "\u2B06\uFE0F", color: "#fd0", visionRange: 0.2, upKeep: 0.5, target: 'area_upgrade' },
+    // The shrine (SHRINES_ENABLED): never built, one per player, passive;
+    // only its stats (research) are a building's.
+    shrine: { name: "Shrine", price: 200, icon: "\uD83D\uDC80", color: "#c9b", visionRange: 0, energy: 1, multiplier: 0.01, drainRate: 1, upKeep: 0, target: 'none', notBuildable: true },
 
     // Clouds
     cloud_0a: { name: "Cloud R1", price: 100, icon: "\u2601\uFE0F", color: "#f66", visionRange: 0, upKeep: 10, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 0 },
@@ -422,6 +429,10 @@ const RESEARCH_FORMULA_CONFIG = {
     unitVisionRangeBonusExp: 1.08,
     unitAttackRangeBonusExp: 1.08,
     buildingVisionRangeBonusExp: 1.06,
+    // The shrine: multiplier 0.01 x 2^level (about 10 at level 10), drain
+    // 1 x 10^level per second (1, 10, 100, ...).
+    shrineMultiplierBonusExp: 2,
+    shrineDrainRateBonusExp: 10,
 };
 
 // Ensure every card/building type has a canonical base Energy in BASE_CARD_TYPES.
@@ -498,6 +509,7 @@ const DESCRIPTIONS = {
     cloud_3a: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
     cloud_3b: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
     area_upgrader: "Upgrade a fully-filled area's multiplier level. Exponential cost.",
+    shrine: "\uD83D\uDC80 is damage taken: every bit of energy your units and buildings lose to damage goes to your shrine. It drains passively into \u26A1 and/or \u2605 (the buttons beside \uD83D\uDC80 at the bottom left; both: half each, neither: it keeps filling), up to Drain / s, times Multiplier. Research raises both; leave draining off to bank \uD83D\uDC80 for a higher multiplier.",
     // Barracks
     barrack_norm: "Trains basic infantry. Balanced stats.",
     barrack_fast: "Trains fast riders. Fragile but quick.",
@@ -656,6 +668,7 @@ const RESEARCH_STAT_LABELS = {
     spawnCd: 'Spawn CD',
     visionRange: 'Vision',
     multiplier: 'Multiplier',
+    drainRate: '\uD83D\uDC80 Drain / s',
     burnDps: 'Burn DPS',
     burnDuration: 'Burn Duration',
     poisonDps: 'Poison DPS',
@@ -694,7 +707,7 @@ const RESEARCHABLE_UNIT_STATS = {
 };
 
 const PRECOMPUTED_UNIT_STAT_KEYS = ['energy', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'watchDuration', 'workerSearchDistance', 'gatherPerTrip', 'builderDps', 'healerDps', 'researcherDps', 'transferCooldown', 'astarCost', 'upKeep'];
-const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxEnergy', 'popCap', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'attackRange', 'multiplier', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency', 'upKeep'];
+const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxEnergy', 'popCap', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'attackRange', 'multiplier', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency', 'upKeep', 'drainRate'];
 const RESOURCE_PRECOMPUTED_STAT_MAP = {
     astar: {
         unit: ['speed'],

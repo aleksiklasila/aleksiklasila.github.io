@@ -196,7 +196,10 @@ function _forEachUnitInTickOrder(fn) {
                     // Held attackers and chasers: checked again at their turn.
                     const o = OUT[s];
                     if (o < 6) continue;
-                    if (o === 6) { if (simHoldStillValid(S.columns, s)) continue; simHoldUndo(S.columns, s); }
+                    if (o === 6 || o === 10) {
+                        if (simHoldStillValid(S.columns, s)) { if (o === 10) simHoldFire(S.columns, s); continue; }
+                        simHoldUndo(S.columns, s);
+                    }
                     else { if (simChaseStillValid(S.columns, s)) continue; simChaseUndo(S.columns, s); }
                 }
             }
@@ -655,10 +658,11 @@ function gameTick() {
             marks[i] = 1; removedAny = true;
         } else {
             if (!u.isKing && !u.workerState) playSound('unit_death', u.x, u.y, u.unitType);
-            // Drop energy on death (bounty)
+            // Energy on death (bounty), dropped where it fell (with shrines
+            // on, damage taken feeds the owner's shrine instead).
             let cost = BASE_UNIT_STATS[u.unitType] ? BASE_UNIT_STATS[u.unitType].energy * 0.5 : 5;
             let bounty = Math.floor(cost * 0.1);
-            if (bounty > 0) {
+            if (bounty > 0 && !SHRINES_ENABLED) {
                 let gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
                 if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && !getDroppedItemAt(gx, gy)) {
                     let drop = { type: 'energy', value: bounty, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, timer: TICK_RATE * 120 };
@@ -759,6 +763,8 @@ function gameTick() {
             addPlayerResource(pid, 'energy', -totalPerSecond);
         }
     }
+    // The tick's damage into the shrines, and their drain (see shrineTick).
+    shrineTick();
     flushPendingMovementAstarSpend();
     flushPendingResourceStatRebuilds();
     // Laser links of the structures placed and removed this tick (the state
@@ -3551,6 +3557,9 @@ function processAction(a, playerId) {
                     target.isResearching = false;
                 }
             }
+        } else if (a.action === 'shrineDrain') {
+            // Where the player's shrine drains to: 1 energy, 2 \u2605, 3 both, 0 neither.
+            if (players[playerId]) players[playerId].shrineDrain = (Math.floor(Number(a.drain)) || 0) & 3;
         } else if (a.action === 'killUnit') {
             let u = units.find(u => u.id === a.unitId && u.owner === playerId);
             // gameTick's dead-unit sweep releases the population slot.
@@ -3828,7 +3837,11 @@ function startGame() {
         p.researchMultipliers = {};
         p.researchQueue = [];
         p.researchTask = null;
+        p.shrine = 0;
+        p.shrineDrain = SHRINE_DRAIN_DEFAULT;
+        if (p._resourceFixedValues) p._resourceFixedValues.shrine = 0;
     }
+    shrineResetPending();
     for (let playerId = 0; playerId < players.length; playerId++) {
         _ensurePlayerResourceState(playerId);
         _updatePlayerResourcePenaltyMultipliers(playerId);
@@ -4087,7 +4100,7 @@ function startGame() {
                 if (lvl <= 0) continue;
                 let id = makeResearchLevelId(parsed.kind, parsed.key, statKey);
                 players[pid].researchLevels[id] = lvl;
-                players[pid].researchMultipliers[id] = detPow(getResearchBonusExpForStat(parsed.kind, statKey), lvl);
+                players[pid].researchMultipliers[id] = detPow(getResearchBonusExpForStat(parsed.kind, statKey, parsed.key), lvl);
             }
         }
     }
@@ -4117,6 +4130,7 @@ function startGame() {
             if ((parsed.kind === 'building') !== (pass === 0)) continue;
             let levelMap = spawnByThing[thingId];
             if (!levelMap || typeof levelMap !== 'object') continue;
+            if (parsed.kind === 'building' && (BASE_CARD_TYPES[parsed.key] || {}).notBuildable) continue;
             for (let levelText in levelMap) {
                 let lvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(levelText) || 1)));
                 let count = Math.max(0, Math.min(10000, Math.floor(Number(levelMap[levelText]) || 0)));

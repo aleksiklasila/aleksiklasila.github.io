@@ -76,6 +76,8 @@ Where siege time goes (ms/tick): unit pass 284 (attack-move 84, units attacking 
 5. Active workers (A1–A5): MOVING_TO and search costs dominate ACTIVE.
 6. Traps (lava, water, ice, poison, sand, mines; a few thousand, with units crossing them): measure once. Their reach is one tile, so they should be cheap to batch; low priority.
 
+**Fourth round (2026-10-01)**: siege diagnosis found idle-worker wake-ups dominated by bounty drops (hundreds per tick, each waking every worker type of every player nearby) and attack-move hand-backs on structure ticks with no structure actually in range. Drops are replaced by **shrines** (user design: damage taken accumulates as a per-player 💀 resource, drained passively into ⚡/★ by researched multiplier and drain rate; menu option, off restores drops), and the movement kernel checks hostile structure tiles exactly before handing back. Remaining siege priorities unchanged: units attacking buildings (kernel hold for building targets), chase with paths, firing ticks, towers (J1), collector conflict index (A4).
+
 **Contract additions learned during implementation** (details in the progress log, "Determinism rules learned"): a restore disarms kernels on the restoring peer only, so every kernel decision must equal `Unit.update` exactly; reads of other units during the unit pass use pass-start state (positions, frozen spatial counts, A* budget at pass start); large-world paths are gated by unit-count thresholds, so tests must force them on (`CHAOS_SIM_EVAL`, `HOST_SIM_EVAL`); freed unit slots are reused only from the next index rebuild; caches validated by object references or immutable keys are dropped on snapshot decode; `SNAP_HASH_SLICES` stays 10.
 
 ## 2. Common engine architecture and behavioral contract

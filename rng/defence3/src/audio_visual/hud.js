@@ -133,14 +133,17 @@ function _getHudResourceValueColor(owner, resourceKey, value) {
     return _rgbToCss(_lerpRgb(yellow, green, gainMix));
 }
 
-function _renderHudResource(el, cacheKey, owner, resourceKey, glyph, glyphColor, value) {
+// One line of the bottom-left stack (see #left-footer .lf-stack): value,
+// glyph, change per second (rateHtml: two cells) and an extra cell.
+function _renderHudResource(el, cacheKey, owner, resourceKey, glyph, glyphColor, value, rateHtml = '<span></span><span></span>', extraHtml = '<span></span>', glyphHtml = null) {
     if (!el) return;
     let numericValue = Number(value);
     if (!Number.isFinite(numericValue)) numericValue = 0;
     let flooredValue = Math.floor(numericValue);
     let valueColor = _getHudResourceValueColor(owner, resourceKey, flooredValue);
-    // Value first, glyph after in a fixed slot (see #left-footer .lf-stack).
-    let html = `<span class="hud-res-value" style="color:${valueColor}" title="${formatBigNumber(flooredValue)}">${formatCompactNumber(flooredValue)}</span><span class="hud-resource-glyph-btn" data-resource-key="${resourceKey}" title="Show ${resourceKey} stat effect details" style="color:${glyphColor};cursor:pointer;user-select:none">${glyph}</span>`;
+    let html = `<span class="hud-res-value" style="color:${valueColor}" title="${formatBigNumber(flooredValue)}">${formatCompactNumber(flooredValue)}</span>`
+        + (glyphHtml || `<span class="hud-resource-glyph-btn" data-resource-key="${resourceKey}" title="Show ${resourceKey} stat effect details" style="color:${glyphColor};cursor:pointer;user-select:none">${glyph}</span>`)
+        + extraHtml + rateHtml;
     if (_hudCache[cacheKey] !== html) {
         _hudCache[cacheKey] = html;
         el.innerHTML = html;
@@ -621,7 +624,13 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
         return `${v > 0 ? '+' : ''}${formatBigNumber(v, 1)}`;
     };
     let color = (v) => getDeltaRateColor(v, 'energy', owner);
-    let row = (metric, sourceKey, thumbSpec = null, label = '', filterKey = 'total', domain = 'units') => {
+    // (fine: small rates with more decimals, the shrine's at low research.)
+    let fmtFine = (v) => {
+        if (!Number.isFinite(v) || Math.abs(v) < 0.0005) return '0.0';
+        if (Math.abs(v) >= 0.05) return fmt(v);
+        return `${v > 0 ? '+' : ''}${v.toFixed(Math.abs(v) < 0.005 ? 4 : 3)}`;
+    };
+    let row = (metric, sourceKey, thumbSpec = null, label = '', filterKey = 'total', domain = 'units', fine = false) => {
         let sec = getEnergyDeltaWindowSeconds(metric);
         let value = getPlayerEnergyDeltaRate(owner, sourceKey, sec) - getUpkeepForMetric(metric);
         let thingHtml = label
@@ -630,7 +639,7 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
         return `<div class="info-row" style="margin:0;gap:6px;align-items:center">`
             + `<button class="info-energy-delta-window-btn" data-metric="${metric}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`
             + thingHtml
-            + `<span class="info-value" style="color:${color(value)};flex:0 0 84px;min-width:84px;padding-left:4px;text-align:right;font-variant-numeric:tabular-nums">${fmt(value)} ⚡/ s</span>`
+            + `<span class="info-value" style="color:${color(value)};flex:0 0 84px;min-width:84px;padding-left:4px;text-align:right;font-variant-numeric:tabular-nums">${(fine ? fmtFine : fmt)(value)} ⚡/ s</span>`
             + `</div>`;
     };
 
@@ -646,6 +655,7 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
         html += row('research', 'research', { thumbKey: 'researcher_unit', isUnit: true }, '', 'researcher_unit', 'units');
         html += row('builder', 'builder', { thumbKey: 'builder_unit', isUnit: true }, '', 'builder_unit', 'units');
         html += row('healer', 'healer', { thumbKey: 'healer_unit', isUnit: true }, '', 'healer_unit', 'units');
+        if (SHRINES_ENABLED) html += row('shrine', 'shrine', { thumbKey: 'shrine', isUnit: false }, '', 'shrine', 'buildings', true);
 
         // Keep worker rows explicit, but also show any remaining unit upkeep types
         // so the rows reconcile with the total panel value.
@@ -804,7 +814,12 @@ function buildInfoPanelAstarBudgetHtml(owner) {
     let colorDelta = (v) => getDeltaRateColor(v, 'astar', owner);
     let secBtn = (metric, sec) => `<button class="info-astar-window-btn" data-metric="${metric}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`;
 
-    let deltaRow = (metric, matcherFn, thumbSpec = null, label = '', filterKey = 'total', domain = 'units') => {
+    let fmtFine = (v) => {
+        if (!Number.isFinite(v) || Math.abs(v) < 0.0005) return '0.0';
+        if (Math.abs(v) >= 0.05) return fmtDelta(v);
+        return `${v > 0 ? '+' : ''}${v.toFixed(Math.abs(v) < 0.005 ? 4 : 3)}`;
+    };
+    let deltaRow = (metric, matcherFn, thumbSpec = null, label = '', filterKey = 'total', domain = 'units', fine = false) => {
         let sec = getAstarWindowSeconds(metric);
         let value = _getPlayerAstarDeltaRate(owner, sec, matcherFn);
         let thingHtml = label
@@ -813,7 +828,7 @@ function buildInfoPanelAstarBudgetHtml(owner) {
         return `<div class="info-row" style="margin:0;gap:6px;align-items:center">`
             + secBtn(metric, sec)
             + thingHtml
-            + `<span class="info-value" style="color:${colorDelta(value)};flex:0 0 84px;min-width:84px;padding-left:4px;text-align:right;font-variant-numeric:tabular-nums">${fmtDelta(value)} ★ / s</span>`
+            + `<span class="info-value" style="color:${colorDelta(value)};flex:0 0 84px;min-width:84px;padding-left:4px;text-align:right;font-variant-numeric:tabular-nums">${(fine ? fmtFine : fmtDelta)(value)} ★ / s</span>`
             + `</div>`;
     };
 
@@ -831,6 +846,7 @@ function buildInfoPanelAstarBudgetHtml(owner) {
         html += deltaRow('builder', ev => ev.unitMetric === 'builder', { thumbKey: 'builder_unit', isUnit: true }, '', 'builder_unit', 'units');
         html += deltaRow('healer', ev => ev.unitMetric === 'healer', { thumbKey: 'healer_unit', isUnit: true }, '', 'healer_unit', 'units');
         html += deltaRow('researcher', ev => ev.unitMetric === 'researcher', { thumbKey: 'researcher_unit', isUnit: true }, '', 'researcher_unit', 'units');
+        if (SHRINES_ENABLED) html += deltaRow('shrine', ev => ev.source === 'shrine', { thumbKey: 'shrine', isUnit: false }, '', 'shrine', 'buildings', true);
 
         let special = new Set(['king', 'collector', 'astar_collector', 'salvager_unit', 'builder_unit', 'healer_unit', 'researcher_unit']);
         let otherTypes = new Set();
@@ -1443,10 +1459,64 @@ function _buildInfoPanelWorkerAssignedTargetHtml(u) {
         + `</button>` + wrapEnd;
 }
 
+// The change per second of a resource line (two grid cells).
+function _hudRateHtml(v, resourceKey) {
+    if (typeof _bbFmtRateShort !== 'function') return '<span></span><span></span>';
+    let color = resourceKey === 'shrine' ? '' : ` style="color:${getDeltaRateColor(v, resourceKey)}"`;
+    return `<span class="bb-lv ${_bbRateClass(v)}"${color}>${_bbFmtRateShort(v)}</span><span class="bb-per">/s</span>`;
+}
+
+// The shrine's change per second on the page: its value now against the
+// value about ENERGY_DELTA_DEFAULT_WINDOW_SECONDS ago (damage taken minus
+// what was drained).
+let _hudShrineSamples = [];
+function _hudShrineRate(owner, value) {
+    let S = _hudShrineSamples, t = gameTime;
+    if (S.length && (S[S.length - 1][0] > t || S[S.length - 1][2] !== owner)) S.length = 0;
+    if (!S.length || S[S.length - 1][0] !== t) S.push([t, value, owner]);
+    let windowTicks = Math.max(1, Math.floor(TICK_RATE * ENERGY_DELTA_DEFAULT_WINDOW_SECONDS));
+    while (S.length > 2 && S[1][0] <= t - windowTicks) S.shift();
+    let dt = (t - S[0][0]) / Math.max(1, TICK_RATE);
+    return dt > 0 ? (value - S[0][1]) / dt : 0;
+}
+
+// The shrine's drain buttons: \u26A1 and \u2605 (both: half each; neither:
+// it keeps what it holds). A click sends the shrineDrain order; the
+// buttons show the order at once.
+let _hudShrineDrainShown = null;
+function _hudShrineDrainHtml(owner) {
+    let mode = getPlayerShrineDrainMode(owner);
+    if (_hudShrineDrainShown && _hudShrineDrainShown.owner === owner && gameTime < _hudShrineDrainShown.until && _hudShrineDrainShown.mode !== mode) mode = _hudShrineDrainShown.mode;
+    let btn = (bit, glyph, cls, what) => `<button type="button" class="lf-drain-btn ${cls}${(mode & bit) ? ' on' : ''}" data-shrine-drain="${bit}" title="${(mode & bit) ? 'Draining' : 'Not draining'} \uD83D\uDC80 into ${what} (click to toggle; both: half each)">${glyph}</button>`;
+    return `<span class="lf-drain"><span class="lf-drain-arrow" title="Drains into">\u2192</span>${btn(SHRINE_DRAIN_ENERGY, '\u26A1', 'lf-energy', 'energy')}${btn(SHRINE_DRAIN_ASTAR, '\u2605', 'lf-astar', '\u2605')}</span>`;
+}
+function _bindHudShrineDrain(el) {
+    if (!el || el.dataset.shrineDrainBound === '1') return;
+    el.dataset.shrineDrainBound = '1';
+    el.addEventListener('click', (ev) => {
+        let b = ev.target instanceof Element ? ev.target.closest('[data-shrine-drain]') : null;
+        if (!b) return;
+        let cur = _hudShrineDrainShown && _hudShrineDrainShown.owner === localPlayerId && gameTime < _hudShrineDrainShown.until ? _hudShrineDrainShown.mode : getPlayerShrineDrainMode(localPlayerId);
+        let next = cur ^ (Number(b.getAttribute('data-shrine-drain')) & 3);
+        _hudShrineDrainShown = { owner: localPlayerId, mode: next, until: gameTime + Math.max(10, TICK_RATE * 3) };
+        queueAction({ action: 'shrineDrain', drain: next });
+        ev.stopPropagation();
+    });
+}
+
+function _hudShrineGlyphHtml(owner) {
+    let mult = Number(getBuildingStatForOwner(owner, 'shrine', 1, 'multiplier'));
+    let rate = Number(getBuildingStatForOwner(owner, 'shrine', 1, 'drainRate'));
+    let title = `\uD83D\uDC80 Shrine: damage taken (energy your units and buildings lost to damage).\nDrains up to ${formatCompactNumber(Number.isFinite(rate) ? rate : 0)} \uD83D\uDC80/s into \u26A1/\u2605, times ${Number.isFinite(mult) ? mult.toFixed(2) : '0'}.\nResearch: Shrine (multiplier, drain / s).`;
+    return `<span class="hud-shrine-glyph" title="${_escapeHtml(title)}" style="color:#c9b;user-select:none;text-align:center">\uD83D\uDC80</span>`;
+}
+
 function updateHUD() {
     if (!_hudEls.energy) {
         _hudEls.energy = document.getElementById('hud-energy');
         _hudEls.astar = document.getElementById('hud-astar');
+        _hudEls.shrine = document.getElementById('hud-shrine');
+        _bindHudShrineDrain(_hudEls.shrine);
         _hudEls.pop = document.getElementById('hud-pop');
         _hudEls.time = document.getElementById('hud-time');
         _hudEls.fps = document.getElementById('hud-fps');
@@ -1454,10 +1524,18 @@ function updateHUD() {
         _bindHudResourcePopupTrigger(_hudEls.astar, 'astar');
     }
     let p = players[localPlayerId];
+    let rates = typeof bb !== 'undefined' && bb && bb.rates && bb.owner === localPlayerId ? bb.rates : null;
     let energy = Math.floor(p.energy);
-    _renderHudResource(_hudEls.energy, 'energy', localPlayerId, 'energy', '⚡', '#da0', energy);
+    _renderHudResource(_hudEls.energy, 'energy', localPlayerId, 'energy', '⚡', '#da0', energy, _hudRateHtml(rates ? rates.energyTotal : 0, 'energy'));
     let astarCur = Math.floor(_getPlayerAstarBudgetRemaining(localPlayerId));
-    _renderHudResource(_hudEls.astar, 'astarText', localPlayerId, 'astar', '★', '#9aa', astarCur);
+    _renderHudResource(_hudEls.astar, 'astarText', localPlayerId, 'astar', '★', '#9aa', astarCur, _hudRateHtml(rates ? rates.astarTotal : 0, 'astar'));
+    if (_hudEls.shrine) {
+        if (SHRINES_ENABLED) {
+            let shrine = Number(p.shrine) || 0;
+            _renderHudResource(_hudEls.shrine, 'shrineText', localPlayerId, 'shrine', '', '', shrine, _hudRateHtml(_hudShrineRate(localPlayerId, shrine), 'shrine'),
+                _hudShrineDrainHtml(localPlayerId), _hudShrineGlyphHtml(localPlayerId));
+        } else if (_hudCache.shrineText !== '') { _hudCache.shrineText = ''; _hudEls.shrine.innerHTML = ''; }
+    }
     refreshResourcePenaltyPopupContent(localPlayerId);
     let playerCap = getPlayerPopCap(localPlayerId);
     let cfgCap = getConfiguredMaxPop();
@@ -4095,8 +4173,10 @@ function openResearchThingLevelDropdown(anchorEl, opts) {
         openResearchStatMatrixPopup(kind, key, statKey, fromLevel, toLevel);
     });
 
+    // A thing without levels (the shrine): its research levels and values.
+    let levelless = typeof researchMatrixThingLevels === 'function' && researchMatrixThingLevels(kind, key) <= 1;
     let hint = document.createElement('span');
-    hint.textContent = ': visual only, R is L independent';
+    hint.textContent = levelless ? ': value per research level' : ': visual only, R is L independent';
     hint.style.color = '#9ab4cb';
     hint.style.fontSize = '10px';
     hint.style.whiteSpace = 'nowrap';
@@ -4105,8 +4185,23 @@ function openResearchThingLevelDropdown(anchorEl, opts) {
     head.appendChild(hint);
     menu.appendChild(head);
 
+    if (levelless) {
+        for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) {
+            let value = getResearchStatValueAtLevel(kind, key, statKey, rl, 1);
+            if (!Number.isFinite(value)) continue;
+            let row = document.createElement('div');
+            row.style.padding = '3px 6px';
+            row.style.borderRadius = '3px';
+            row.style.fontSize = '11px';
+            row.style.whiteSpace = 'nowrap';
+            row.style.color = rl === toLevel ? '#8fc' : '#cfe6ff';
+            row.style.background = rl === fromLevel ? '#1f3750' : 'transparent';
+            row.textContent = `R${rl}: ${formatResearchStatValue(statKey, value)}${rl === fromLevel ? ' (now)' : rl === toLevel && toLevel !== fromLevel ? ' (next)' : ''}`;
+            menu.appendChild(row);
+        }
+    }
     let selectedThingLevel = getResearchPreviewThingLevel();
-    for (let thingLevel = 1; thingLevel <= MAX_THING_LEVEL; thingLevel++) {
+    for (let thingLevel = 1; !levelless && thingLevel <= MAX_THING_LEVEL; thingLevel++) {
         let fromValue = getResearchStatValueAtLevel(kind, key, statKey, fromLevel, thingLevel);
         let toValue = getResearchStatValueAtLevel(kind, key, statKey, toLevel, thingLevel);
         if (!Number.isFinite(fromValue) && !Number.isFinite(toValue)) continue;
@@ -6237,8 +6332,9 @@ function buildResearchStatMatrixGrid(kind, key, statKey) {
     for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) header.push(`R${rl}`);
     grid.push(header);
 
-    for (let tl = 1; tl <= MAX_THING_LEVEL; tl++) {
-        let row = [`L${tl}`];
+    let levels = researchMatrixThingLevels(kind, key);
+    for (let tl = 1; tl <= levels; tl++) {
+        let row = [levels > 1 ? `L${tl}` : 'Value'];
         for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) {
             let v = getResearchStatValueAtLevel(kind, key, statKey, rl, tl);
             row.push(formatResearchStatValue(statKey, v));
@@ -6266,8 +6362,9 @@ function buildStatMatrixGridFromDescriptor(d) {
     for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) header.push(`R${rl}`);
     grid.push(header);
 
-    for (let tl = 1; tl <= MAX_THING_LEVEL; tl++) {
-        let row = [`L${tl}`];
+    let levels = researchMatrixThingLevels(d.kind, d.key);
+    for (let tl = 1; tl <= levels; tl++) {
+        let row = [levels > 1 ? `L${tl}` : 'Value'];
         for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) {
             let raw = null;
             if (typeof d.getValue === 'function') {
@@ -6514,9 +6611,11 @@ function renderStartingResourcesThingRowsForPanel() {
         html += `</div>`;
     }
 
-    html += `<div style="margin-top:4px;padding-top:4px;border-top:1px solid #2c2c2c">`;
-    html += `<div style="font-size:10px;color:#8cf;margin-bottom:3px">Starting Spawn Counts (Per Level)</div>`;
-    for (let lvl = 1; lvl <= MAX_THING_LEVEL; lvl++) {
+    // (Things never placed, the shrine: research levels only.)
+    let spawnable = !(selectedThing.kind === 'building' && (BASE_CARD_TYPES[selectedThing.key] || {}).notBuildable);
+    if (spawnable) html += `<div style="margin-top:4px;padding-top:4px;border-top:1px solid #2c2c2c">`;
+    if (spawnable) html += `<div style="font-size:10px;color:#8cf;margin-bottom:3px">Starting Spawn Counts (Per Level)</div>`;
+    for (let lvl = 1; spawnable && lvl <= MAX_THING_LEVEL; lvl++) {
         let cur = getStartingSpawnCount(thingId, lvl);
         let maxRow = getStartingSpawnMaxForRow(thingId, lvl);
         html += `<div class="info-row" style="align-items:center;gap:8px;margin:1px 0;">`;
@@ -6528,7 +6627,7 @@ function renderStartingResourcesThingRowsForPanel() {
         html += `</div>`;
         html += `</div>`;
     }
-    html += `</div>`;
+    if (spawnable) html += `</div>`;
 
     html += `</div>`;
     return html;
@@ -6704,7 +6803,8 @@ function renderGameGraph(metric = graphMetric) {
         structures: { title: 'Structures', yTitle: 'STRUCTURES' },
         pop: { title: 'Population', yTitle: 'POPULATION' },
         energy: { title: 'Energy', yTitle: 'ENERGY' },
-        astar: { title: '★', yTitle: '★' }
+        astar: { title: '★', yTitle: '★' },
+        shrine: { title: '💀 Shrine (damage taken, not yet drained)', yTitle: '💀' }
     };
     metric = metricDefs[metric] ? metric : 'units';
     graphMetric = metric;
