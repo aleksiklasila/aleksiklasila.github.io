@@ -150,7 +150,8 @@ function _runAdjacencyRecalculation() {
         if (dirtyKeys.length > ADJACENCY_TILES_PER_TICK) { dirtyKeys.sort((a, b) => a - b); dirtyKeys.length = ADJACENCY_TILES_PER_TICK; }
         for (const k of dirtyKeys) _adjacencyDirtyTiles.delete(k);
     }
-    let prevAreaActive = areas.map(a => !!(a && a.active));
+    // (Each touched area's state before: the whole list only for a full run.)
+    let prevAreaActive = runFull ? areas.map(a => !!(a && a.active)) : null, prevActive = new Map();
     let areaVisualsChanged = false;
     let touchedAreaIds = new Set();
     let seeds = [];
@@ -193,7 +194,7 @@ function _runAdjacencyRecalculation() {
     } else {
         for (let aId of touchedAreaIds) {
             let a = getAreaById(aId);
-            if (a) a.active = false;
+            if (a) { prevActive.set(aId, !!a.active); a.active = false; }
         }
     }
 
@@ -411,7 +412,8 @@ function _runAdjacencyRecalculation() {
             a.multiplierLevel = 0;
             areaVisualsChanged = true;
         }
-        if (!!prevAreaActive[aId] !== nextActive) areaVisualsChanged = true;
+        const wasActive = prevAreaActive ? !!prevAreaActive[aId] : (prevActive.has(aId) ? prevActive.get(aId) : !!a.active);
+        if (wasActive !== nextActive) areaVisualsChanged = true;
         a.active = nextActive;
     }
 
@@ -438,7 +440,8 @@ function recalculateAdjacency(forceFull = false, options = null) {
     if (forceFull) _adjacencyDirtyAll = true;
     _adjacencyPassiveRefreshMode = !!(options && options.passiveRefresh);
     _adjacencyNeedsRecalc = true;
-    if (_adjacencyLastRecalcTick === gameTime) return;
+    // (During a tick: once, at its end (gameTick); outside one, now.)
+    if (_adjacencyLastRecalcTick === gameTime || (typeof _inGameTick !== 'undefined' && _inGameTick)) return;
     _runAdjacencyRecalculation();
 }
 
@@ -834,6 +837,16 @@ function effStatsAppliedSync() {
     if (!S) return;
     const c = S.columns, n = S.owners.length;
     for (let s = 0; s < n; s++) c._lastAppliedEffectiveLevel[s] = c.effectiveLevel[s];
+    // (And at the current table versions: units behind take their tables now,
+    // on every peer alike (a restored peer derived its units' stats from the
+    // current tables), as the old research pass did at once.)
+    for (let s = 0; s < n; s++) {
+        const u = S.owners[s];
+        if (!u) continue;
+        const v = _unitStatsVerOf(u);
+        if (c.esVer[s] !== v && !u.dead) { const e = u.energy; applyUnitLevelScaling(u, getUnitBaseLevel(u)); if (u.preComputedEffective) u.energy = Math.max(1, Math.min(e, u.preComputedEffective.maxEnergy)); }
+        c.esVer[s] = v;
+    }
 }
 let _effStatsVersion = -1;
 
@@ -861,10 +874,36 @@ function _effWindowCount(u, chunkPx) {
 // leaves to objects): base stacks and level (its base tables made again
 // when they do not fit), the nearby count, effective stacks and level, and
 // its effective tables when that level changed.
+// Per (owner, unit type) the version of its stat tables (research, resource
+// penalties: unitStatsTablesChanged), and per unit (column esVer) the one its
+// stats were applied at: a unit behind takes the tables at its next refresh
+// (the kernel hands it to _effStatsFullUnit). Peer-local counts: a resync
+// marks every unit current on every peer (effStatsAppliedSync).
+const UNIT_STATS_VER_TYPES = 64;
+let _unitStatsVer = new Int32Array(16 * UNIT_STATS_VER_TYPES);
+function _unitStatsVerTable(players) {
+    if (_unitStatsVer.length < players * UNIT_STATS_VER_TYPES) { const t = typeof simSharedArray === 'function' ? simSharedArray(Int32Array, players * 2 * UNIT_STATS_VER_TYPES) : new Int32Array(players * 2 * UNIT_STATS_VER_TYPES); t.set(_unitStatsVer); _unitStatsVer = t; }
+    else if (typeof simSharedArray === 'function' && typeof SharedArrayBuffer === 'function' && !(_unitStatsVer.buffer instanceof SharedArrayBuffer) && typeof SIM_PAR_SHARED !== 'undefined' && SIM_PAR_SHARED) { const t = simSharedArray(Int32Array, _unitStatsVer.length); t.set(_unitStatsVer); _unitStatsVer = t; }
+    return _unitStatsVer;
+}
+function unitStatsTablesChanged(owner, unitType) {
+    const o = Math.floor(Number(owner)), ti = typeof spatialUnitTypeToIndex !== 'undefined' ? spatialUnitTypeToIndex[unitType] : undefined;
+    if (!(o >= 0)) return;
+    const T = _unitStatsVerTable(o + 1);
+    if (Number.isFinite(ti) && ti >= 0 && ti < UNIT_STATS_VER_TYPES) T[o * UNIT_STATS_VER_TYPES + ti]++;
+    else for (let k = 0; k < UNIT_STATS_VER_TYPES; k++) T[o * UNIT_STATS_VER_TYPES + k]++;
+}
+function _unitStatsVerOf(u) {
+    const o = Math.floor(Number(u.owner)), ti = typeof spatialUnitTypeToIndex !== 'undefined' ? spatialUnitTypeToIndex[u.unitType] : undefined;
+    if (!(o >= 0) || !(ti >= 0 && ti < UNIT_STATS_VER_TYPES) || o * UNIT_STATS_VER_TYPES + ti >= _unitStatsVer.length) return 0;
+    return _unitStatsVer[o * UNIT_STATS_VER_TYPES + ti];
+}
 function _effStatsFullUnit(u, canUseSpatialCounts, chunkPx) {
     let baseStacks = getUnitStackCount(u);
     let baseLevel = stackCountToLevel(baseStacks);
-    let needsRefresh = !Number.isFinite(u.baseLevel) || u.baseLevel !== baseLevel ||
+    const c = u._us, ver = _unitStatsVerOf(u), behind = !!c && c.esVer[u._si] !== ver;
+    if (c) c.esVer[u._si] = ver;
+    let needsRefresh = behind || !Number.isFinite(u.baseLevel) || u.baseLevel !== baseLevel ||
         !(u.basePreComputed && Number.isFinite(u.basePreComputed.visionRange)) || !(u.basePreComputed && Number.isFinite(u.basePreComputed.maxEnergy));
     u.stackCount = baseStacks;
     u.unitLevel = baseLevel;
@@ -901,7 +940,8 @@ function recalculateUnitEffectiveStats() {
     if ((!isMultiplayer || !gameStarted) && selectedUnits && selectedUnits.length > 0) selectedSet = new Set(selectedUnits);
     let tick = Math.max(0, Math.floor(Number(gameTime) || 0));
     let stamp = ++_effectiveStatsStamp;
-    if (typeof _precomputedStatsVersion !== 'undefined' && _effStatsVersion !== _precomputedStatsVersion) { _effStatsVersion = _precomputedStatsVersion; effStatsInvalidateAll(); }
+    // (Changed stat tables: each unit behind takes them at its refresh, see
+    // _unitStatsVerOf; not every unit at once.)
     let canUseSpatialCounts = spatialUnitsComplexStridePerChunk > 0
         && spatialUnitsComplexStridePerPlayer > 0
         && spatialUnitsComplex.length > 0
@@ -931,6 +971,7 @@ function recalculateUnitEffectiveStats() {
         P[0] = m; P[1] = 1024; P[2] = step; P[3] = phase; P[4] = chunkPx; P[5] = CHUNKS_W; P[6] = CHUNKS_H;
         P[7] = spatialUnitsComplexStridePerChunk; P[8] = spatialUnitsComplexStridePerPlayer; P[9] = spatialUnitsComplexPlayerCount;
         P[10] = MAX_THING_LEVEL; P[11] = stamp;
+        simParallelBind('eff.tver', _unitStatsVerTable(spatialUnitsComplexPlayerCount)); P[14] = UNIT_STATS_VER_TYPES;
         // (The upkeep bins, when kept: main.js _upkU.)
         const UK = typeof _upkU !== 'undefined' && _upkU && _upkU.cols === c && _upkU.cnt === _upkHist ? _upkU : null;
         P[12] = UK ? UK.np : 0; P[13] = UK ? UK.L1 : 0;

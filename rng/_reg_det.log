@@ -1,0 +1,15 @@
+0 multiplayer-snapshot.test.cjs PASS
+0 shared-unit-state.test.cjs PASS
+0 tier-result-reduction.test.cjs PASS
+0 unit-retirement.test.cjs PASS
+0 multiplayer-desync-recovery.test.cjs PASS
+0 multiplayer-patch.test.cjs PASS
+0 multiplayer-chaos-determinism.test.cjs PASS
+1 multiplayer-snapshot.test.cjs PASS
+1 shared-unit-state.test.cjs PASS
+1 tier-result-reduction.test.cjs PASS
+1 unit-retirement.test.cjs PASS
+1 multiplayer-desync-recovery.test.cjs PASS
+1 multiplayer-chaos-determinism.test.cjs PASS
+1 multiplayer-patch.test.cjs PASS
+14/14 passed

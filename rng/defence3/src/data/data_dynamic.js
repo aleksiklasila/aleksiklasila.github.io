@@ -2911,6 +2911,7 @@ function _buildingStatHasValues(buildingKey, statKey) {
 // fallback do not depend on the thing level, so they are resolved once.
 function _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey, multiplier) {
     _precomputedStatsVersion++;
+    if (branch === 'unit') unitStatsTablesChanged(pid, normalizedKey);
     let playerEntry = _ensurePrecomputedStatsMapPlayerEntry(pid);
     if (!playerEntry[branch][normalizedKey]) playerEntry[branch][normalizedKey] = [];
     let levels = playerEntry[branch][normalizedKey];
@@ -3489,14 +3490,13 @@ function rebasePlayerResearchQueueState(playerId) {
     return p;
 }
 
+// The units take the new tables at their next effective-stats refresh (a
+// twentieth of them a tick, UNIT_EFFECTIVE_STATS_RECALC_TICKS): their
+// (owner, type) table version (unitStatsTablesChanged) no longer matches
+// theirs (esVer), so the refresh applies their level scaling anew (and the
+// energy bound). No pass over every unit at the research's tick.
 function applyUnitResearchUpgradeToExistingUnits(owner, unitType, statKey) {
     rebuildPrecomputedStatsMapPlayerThingStat(owner, 'unit', unitType, statKey);
-    for (let u of units) {
-        if (!u || u.dead || u.owner !== owner || u.unitType !== unitType) continue;
-        let prevEnergy = u.energy;
-        applyUnitLevelScaling(u, getUnitBaseLevel(u));
-        if (statKey === 'energy') u.energy = Math.max(1, Math.min(prevEnergy, u.preComputedEffective.maxEnergy));
-    }
 }
 
 function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
