@@ -79,6 +79,8 @@ let spatialEpoch = 1;
 // Called after every move: the common case (same tile, owner and buckets)
 // is one tile computation and three compares.
 function updateUnitSpatial(u) {
+    // (A unit placed outside a tick: the prebuilt unit index no longer holds.)
+    if (_sxPre && typeof _inGameTick !== 'undefined' && !_inGameTick) spatialIndexInvalidate();
     let gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
     if (!(gx >= 0)) gx = 0; else if (gx >= GRID_W) gx = GRID_W - 1;
     if (!(gy >= 0)) gy = 0; else if (gy >= GRID_H) gy = GRID_H - 1;
@@ -196,6 +198,7 @@ function _moveUnitSpatial(u, gx, gy, tile) {
 }
 
 function removeUnitSpatial(u) {
+    if (_sxPre && typeof _inGameTick !== 'undefined' && !_inGameTick) spatialIndexInvalidate();
     let indexed = u._spatialEpoch === spatialEpoch && u._spatialKey !== undefined;
     if (indexed) _spatialCountUnit(u, u._spatialKey, u._spatialOwner, -1);
     u._spatialKey = undefined;
@@ -246,7 +249,15 @@ function _sxOwners() { return _sxBySlot ? _simUnitState.owners : null; }
 function spatialIndexEntries() { spatialIndexEnsure(); return _sxListed; }
 
 function spatialIndexEnsure() { if (_sxPre) _spatialIndexCollect(); if (_sxDirty) spatialIndexRebuild(); }
-function spatialIndexInvalidate() { if (_sxPre) _spatialIndexCollect(); _sxDirty = true; }
+function spatialIndexInvalidate() { if (_sxPre) _spatialIndexCollect(); _sxDirty = true; _spatialIndexChainDrop(); }
+// The prebuild chain's separation still running reads the index's arrays:
+// before they are rewritten (or the world changes), waited for and dropped
+// (the tick then separates itself, from the same state: the same result).
+function _spatialIndexChainDrop() {
+    if (typeof SIM_LANE_IX !== 'number' || !simParallelBackgroundPending(SIM_LANE_IX)) return;
+    simParallelBackgroundWait(SIM_LANE_IX);
+    if (typeof separationPrebuildDrop === 'function') separationPrebuildDrop();
+}
 
 // The next tick's index, built after a tick's end on the helpers (lane
 // SIM_LANE_IX) while the state hash and the time between ticks run; taken
@@ -276,27 +287,44 @@ function spatialIndexPrebuild() {
     const order = simSpatialStableOrderStages(n, nChunks, 1);
     simParallelBind('ix.ordC', order.out);
     const stages = [[SIM_KERNEL_INDEX_KEYS, uj, base], ...order.stages, [SIM_KERNEL_INDEX_FILL, uj, base], [SIM_KERNEL_INDEX_RUNS, uj, base]];
-    if (stages.length > SIM_PAR_BG_STAGES) return;
+    // (The owners per tile, for the next tick's combat scan, from it.)
+    const OM = typeof _combatScanOwnerMask !== 'undefined' ? _combatScanOwnerMask : null, masks = !!OM && OM.length === nChunks;
+    if (masks) { simParallelBind('ix.omask', OM); stages.push([SIM_KERNEL_TILE_OWNERS, uj, [n, UJ, 1]]); }
+    // The index's last stage: what its taking waits for; then the next
+    // tick's separation (unit.js separationPrebuildStages), which the tick
+    // takes after its unit pass.
+    const indexStages = stages.length;
+    const sep = typeof separationPrebuildStages === 'function' ? separationPrebuildStages(n, ep, gameTime + 1) : null;
+    if (sep) for (const st of sep) stages.push(st);
+    if (stages.length > SIM_PAR_BG_STAGES) throw new Error('spatialIndexPrebuild: ' + stages.length + ' stages');
     for (let i = 0; i < stages.length; i++) { const P = simParallelStageParams(SIM_LANE_IX, i), v = stages[i][2]; for (let k = 0; k < v.length; k++) P[k] = v[k]; }
     X.bad[0] = 0; X.listed[0] = n; X.listed[1] = n;
     simParallelBackgroundChain(SIM_LANE_IX, stages.map(st => [st[0], st[1]]));
     const M = _unitSlotMap;
-    _sxPre = { units, n, ver: M.ver, ep };
+    _sxPre = { units, n, ver: M.ver, ep, masks, indexStages, sep: !!sep };
 }
 // The prebuilt index, waited for: taken when still valid, else dropped (the
 // next use rebuilds it).
 function _spatialIndexCollect() {
     const J = _sxPre;
     _sxPre = null;
-    simParallelBackgroundWait(SIM_LANE_IX);
     const X = _sxPar, M = _unitSlotMap;
-    if (_sxDirty || !X || X.bad[0] || J.units !== units || J.n !== units.length || M.ref !== units || M.ver !== J.ver || J.ep !== _sxEpoch + 1) { _sxDirty = true; return; }
+    const valid = !_sxDirty && !!X && J.units === units && J.n === units.length && M.ref === units && M.ver === J.ver && J.ep === _sxEpoch + 1;
+    // (The index's stages; the separation's run on, taken after the unit
+    // pass, unless the index is dropped: then the whole chain is waited for.)
+    if (J.sep && valid) simParallelBackgroundWaitStage(SIM_LANE_IX, J.indexStages - 1);
+    else simParallelBackgroundWait(SIM_LANE_IX);
+    if (!valid || X.bad[0]) { _sxDirty = true; _spatialIndexChainDrop(); return; }
+    if (J.sep && typeof separationPrebuildTaken === 'function') separationPrebuildTaken(J.ep);
     _sxStamp = X.stamp; _sxStart = X.start; _sxCount = X.cnt;
     _sxEpoch = J.ep;
     _sxListed = X.listed[0];
     _sxBySlot = true;
     _sxTaken = true;
+    if (J.masks) _sxOwnerMaskEpoch = J.ep;
 }
+// (The index epoch the owners per tile were made for: see combatScanRun.)
+let _sxOwnerMaskEpoch = -1;
 // (Set when the prebuilt index was taken: the tick's rebuild has nothing to do.)
 let _sxTaken = false;
 
@@ -317,6 +345,7 @@ function spatialIndexRebuild() {
     if (_sxTaken && !_sxDirty) { _sxTaken = false; return; }
     _sxTaken = false;
     _sxDirty = false;
+    _spatialIndexChainDrop();
     const n = units.length;
     if (n >= SPATIAL_PARALLEL_MIN_UNITS && _simUnitState && typeof SIM_KERNEL_INDEX_COUNT === 'number' && _spatialIndexRebuildParallel()) return;
     _spatialIndexRebuildSerial();

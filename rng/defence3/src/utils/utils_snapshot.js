@@ -627,6 +627,69 @@ function _snapDecodeReservations(enc, partial = null) {
 
 // Hashes one slice of the regions (or all of them) and the small parts.
 // Returns { tick, sum, pairs: [code, hash, ...] }.
+// snapTickHash's parts other than the units': buildings and mines (their
+// slices cached until the tile index changes), drops, reservations (summed
+// into `regions`) and the grid rows (pushed).
+function _snapTickHashStatic(t, slice, allSlices, regions, push) {
+    const rt = SNAP_REGION_TILES;
+    // Buildings and mines never move: their slices are cached until the
+    // tile index changes (something built, destroyed or depleted).
+    let slices = _snapStaticSlices();
+    let hashStatic = (entries) => {
+        for (const en of entries.values()) {
+            let h = _snapHashers[en[1]](en[0], en[2], _snapF64, _snapI32, _snapHV, _snapHPath);
+            h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
+            let r = en[3];
+            let prev = regions.get(r);
+            regions.set(r, prev === undefined ? h : ((prev + h) >>> 0));
+        }
+    };
+    // (This slice's: all of them by their core fields, and this rotation's
+    // round by all their fields.)
+    let hashStaticCore = (entries) => {
+        for (const en of entries.values()) {
+            let h = _snapStaticCore(en[0], en[1], en[2]);
+            h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
+            let r = en[3];
+            let prev = regions.get(r);
+            regions.set(r, prev === undefined ? h : ((prev + h) >>> 0));
+        }
+    };
+    if (allSlices) for (let k = 0; k < slices.length; k++) hashStatic(slices[k]);
+    else {
+        const round = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS;
+        for (let k = 0; k < SNAP_HASH_GRID_ROUNDS; k++) (k === round ? hashStatic : hashStaticCore)(slices[slice + SNAP_HASH_SLICES * k]);
+    }
+    for (let i = 0; i < droppedItems.length; i++) {
+        let e = droppedItems[i];
+        let r = Math.floor(e.gy / rt) * 1024 + Math.floor(e.gx / rt);
+        if (!allSlices && (r % SNAP_HASH_SLICES) !== slice) continue;
+        let h = _snapHashEntity('d', e, (Math.imul(e.gx, 4099) + e.gy) ^ 0x88);
+        let prev = regions.get(r);
+        regions.set(r, prev === undefined ? h : ((prev + h) >>> 0));
+    }
+    _snapForReservations(allSlices ? -1 : slice, (slot, u, r) => {
+        let h = _snapReservationHash(slot, u);
+        let prev = regions.get(r);
+        regions.set(r, prev === undefined ? h : ((prev + h) >>> 0));
+    });
+    // Grid rows of this slice, in one rotation of SNAP_HASH_GRID_ROUNDS:
+    // cell types and owners.
+    {
+        let h = 2166136261 | 0;
+        const gstep = SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS, g0 = slice + SNAP_HASH_SLICES * (Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS);
+        for (let gy = allSlices ? 0 : g0; gy < GRID_H; gy += allSlices ? 1 : gstep) {
+            let row = grid[gy];
+            if (!row) continue;
+            for (let gx = 0; gx < GRID_W; gx++) {
+                let c = row[gx];
+                h = Math.imul(Math.imul(h ^ c.type, 16777619) ^ c.owner, 16777619);
+            }
+        }
+        push(SNAP_PART_GRID * SNAP_CODE_SHIFT, h >>> 0);
+    }
+}
+
 function snapTickHash(tick, allSlices = false) {
     let t = Math.floor(tick);
     let slice = ((t % SNAP_HASH_SLICES) + SNAP_HASH_SLICES) % SNAP_HASH_SLICES;
@@ -657,7 +720,7 @@ function snapTickHash(tick, allSlices = false) {
     let S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
     let slots = S && typeof _unitSlotMapEnsure === 'function' ? _unitSlotMapEnsure() : null;
     let owners = S ? S.owners : null, CX = S ? S.columns.x : null, CY = S ? S.columns.y : null;
-    let REG = null, HC = null, unitOrderHash = null;
+    let REG = null, HC = null, unitOrderHash = null, kernelPending = false;
     const rot = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_UNIT_GROUPS, CID = S ? S.columns.id : null;
     if (slots && units.length >= SNAP_HASH_KERNEL_MIN_UNITS && typeof SIM_KERNEL_SNAP_REGION === 'number') {
         if (_snapRegions.length < units.length) { _snapRegions = simSharedArray(Int32Array, units.length * 2); _snapColHash = simSharedArray(Int32Array, units.length * 2); }
@@ -683,8 +746,21 @@ function snapTickHash(tick, allSlices = false) {
             if (!_snapOrdSums || _snapOrdSums.length < jobs) { _snapOrdSums = simSharedArray(Int32Array, Math.max(64, jobs * 2)); simParallelBind('snap.ord', _snapOrdSums); }
             P[10] = 1;
         } else P[10] = 0;
-        simParallelRun(SIM_KERNEL_SNAP_REGION, Math.ceil(units.length / 8192));
-        if (P[10] === 1) {
+        if (P[10] === 1 && typeof simParallelBackground === 'function') {
+            // (In the background: the buildings', drops', reservations' and
+            // grid's parts are hashed meanwhile; taken below.)
+            const B = simParallelStageParams(0, 0);
+            for (let k = 0; k <= 10; k++) B[k] = P[k];
+            simParallelBackground(SIM_KERNEL_SNAP_REGION, Math.ceil(units.length / 8192), 0);
+            kernelPending = true;
+        } else simParallelRun(SIM_KERNEL_SNAP_REGION, Math.ceil(units.length / 8192));
+    }
+    // The parts without the units (while the kernel runs).
+    _snapTickHashStatic(t, slice, allSlices, regions, push);
+    if (kernelPending) simParallelBackgroundWait(0);
+    if (REG !== null) {
+        const P = _simParams;
+        if (kernelPending || (!allSlices && SNAP_HASH_KERNEL_SUMS && P[10] === 1)) {
             // The units' order: the jobs' sums, and the slice's units without a slot.
             let h = Math.imul(2166136261 ^ units.length, 16777619);
             for (let k = 0, jobs = Math.ceil(units.length / 8192); k < jobs; k++) h = (h + _snapOrdSums[k]) | 0;
@@ -754,63 +830,7 @@ function snapTickHash(tick, allSlices = false) {
         let prev = regions.get(r);
         regions.set(r, prev === undefined ? h : ((prev + h) >>> 0));
     }
-    // Buildings and mines never move: their slices are cached until the
-    // tile index changes (something built, destroyed or depleted).
-    let slices = _snapStaticSlices();
-    let hashStatic = (entries) => {
-        for (const en of entries.values()) {
-            let h = _snapHashers[en[1]](en[0], en[2], _snapF64, _snapI32, _snapHV, _snapHPath);
-            h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
-            let r = en[3];
-            let prev = regions.get(r);
-            regions.set(r, prev === undefined ? h : ((prev + h) >>> 0));
-        }
-    };
-    // (This slice's: all of them by their core fields, and this rotation's
-    // round by all their fields.)
-    let hashStaticCore = (entries) => {
-        for (const en of entries.values()) {
-            let h = _snapStaticCore(en[0], en[1], en[2]);
-            h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
-            let r = en[3];
-            let prev = regions.get(r);
-            regions.set(r, prev === undefined ? h : ((prev + h) >>> 0));
-        }
-    };
-    if (allSlices) for (let k = 0; k < slices.length; k++) hashStatic(slices[k]);
-    else {
-        const round = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS;
-        for (let k = 0; k < SNAP_HASH_GRID_ROUNDS; k++) (k === round ? hashStatic : hashStaticCore)(slices[slice + SNAP_HASH_SLICES * k]);
-    }
-    for (let i = 0; i < droppedItems.length; i++) {
-        let e = droppedItems[i];
-        let r = Math.floor(e.gy / rt) * 1024 + Math.floor(e.gx / rt);
-        if (!allSlices && (r % SNAP_HASH_SLICES) !== slice) continue;
-        let h = _snapHashEntity('d', e, (Math.imul(e.gx, 4099) + e.gy) ^ 0x88);
-        let prev = regions.get(r);
-        regions.set(r, prev === undefined ? h : ((prev + h) >>> 0));
-    }
-    _snapForReservations(allSlices ? -1 : slice, (slot, u, r) => {
-        let h = _snapReservationHash(slot, u);
-        let prev = regions.get(r);
-        regions.set(r, prev === undefined ? h : ((prev + h) >>> 0));
-    });
     for (let [r, h] of regions) push(SNAP_PART_REGION * SNAP_CODE_SHIFT + r, h);
-    // Grid rows of this slice, in one rotation of SNAP_HASH_GRID_ROUNDS:
-    // cell types and owners.
-    {
-        let h = 2166136261 | 0;
-        const gstep = SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS, g0 = slice + SNAP_HASH_SLICES * (Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS);
-        for (let gy = allSlices ? 0 : g0; gy < GRID_H; gy += allSlices ? 1 : gstep) {
-            let row = grid[gy];
-            if (!row) continue;
-            for (let gx = 0; gx < GRID_W; gx++) {
-                let c = row[gx];
-                h = Math.imul(Math.imul(h ^ c.type, 16777619) ^ c.owner, 16777619);
-            }
-        }
-        push(SNAP_PART_GRID * SNAP_CODE_SHIFT, h >>> 0);
-    }
     return { tick: t, sum, pairs };
 }
 
