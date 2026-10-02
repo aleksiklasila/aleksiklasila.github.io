@@ -346,7 +346,13 @@ function _isTargetWithinUnitAttackAreaRange(unit, target, tx = target && target.
 // (Outside the pass, where it is.)
 let _unitPassOn = false;
 function unitPassBegin() { _unitPassOn = true; spatialCountsDeferBegin(); astarPassStart(); }
-function unitPassEnd() { _unitPassOn = false; spatialCountsDeferEnd(); astarPassEnd(); simMoveWallsDeferEnd(); }
+function unitPassEnd() {
+    _unitPassOn = false;
+    // (The kernels' chunk moves: counted once, after the separation commit,
+    // when one follows this tick.)
+    spatialCountsDeferEnd(!!(_sepPending && _sepPending.tick === gameTime));
+    astarPassEnd(); simMoveWallsDeferEnd();
+}
 function _unitTickX(t) { const c = t._us; return c && _unitPassOn ? c.x0[t._si] : t.x; }
 function _unitTickY(t) { const c = t._us; return c && _unitPassOn ? c.y0[t._si] : t.y; }
 // Any target (units as _unitTickX, other things where they are).
@@ -626,6 +632,9 @@ class Unit {
     get dead() { const c = this._us; return c ? c.dead[this._si] === 1 : (this._det ? this._det.dead === true : this._deadv === true); }
     set dead(v) {
         const c = this._us;
+        // (Outside a tick, an action's or a restore's: the prebuilt unit
+        // index no longer holds.)
+        if (typeof _inGameTick !== 'undefined' && !_inGameTick && typeof _sxPre !== 'undefined' && _sxPre) spatialIndexInvalidate();
         if (c) c.dead[this._si] = v ? 1 : 0;
         else if (this._det) this._det.dead = !!v;
         else Object.defineProperty(this, '_deadv', { value: !!v, writable: true, configurable: true });
@@ -3141,7 +3150,8 @@ function simMoveRun() {
     const n = S.owners.length;
     if (!n) return;
     const c = S.columns, players = spatialUnitsComplexPlayerCount;
-    if (typeof _precomputedStatsVersion !== 'undefined' && _simMoveStatsVersion !== _precomputedStatsVersion) simMoveRefreshAllStats();
+    // (Changed stat tables reach the movement columns as each unit takes them,
+    // simMoveStatsChanged; not every unit at once.)
     _simMoveBuildHostile();
     _simMoveWalls();
     _simMoveAreaBoxes();
@@ -3474,14 +3484,26 @@ function _prepareSharedUnitSeparation(S, restTicks, early = false) {
 // How far a unit may have moved within a tick since the unit index was
 // built (a unit's step plus a push), for the collision pass's culling.
 const UNIT_SEPARATION_INDEX_MARGIN = TILE * 0.5;
-// Large worlds (slots) start the separation at the tick's start, as a
-// background job (lane 0) the helpers run while the simulation thread does
-// the unit pass: contacts from where the units stand as the tick begins
-// (movers: units that moved by themselves last tick, _sepMoved), pushes
-// applied after the pass (runUnitSeparationPass). Small worlds separate
-// after the pass from where units are then.
+// Large worlds (slots) run the separation as a chain on the helpers (lane
+// 0, see SIM_KERNEL_SEP_PACK: pack, chunk aggregates, mark, pairs twice): started at the tick's start from the
+// tick-start copy of the units (SIM_KERNEL_STATUS: x0/y0, sepD0/R0/L0) and
+// the unit index, while the simulation thread does the unit pass; collected
+// and applied after it (runUnitSeparationPass). Movers: units that moved by
+// themselves last tick (_sepMoved). Each unit's contacts are looked at
+// every other tick (staggered by id), its push spread over two ticks.
+// Small worlds separate after the pass from where units are then.
 let SEPARATION_SLOT_MIN_UNITS = 4096;
-let _sepPending = null;
+// UNIT_SEPARATION_MODE 0: staggered, half the units a tick ((t + id) even:
+// each unit every other tick); 1: every unit every tick (pushes at once);
+// 2: every unit on even ticks. With 0 and 2 each push is scaled by
+// UNIT_SEPARATION_TIER_GAIN (bounded by its deepest overlap) and applied
+// half on its tick, half on the next. Staggered keeps crowds and fights as
+// still and spaced as every tick (tests/separation-jitter.test.cjs); every
+// unit at once (2) makes crowds sway.
+let UNIT_SEPARATION_MODE = 0;
+let UNIT_SEPARATION_TIER_GAIN = 1.2;
+let _sepPending = null, _sepDirty = true;
+const SEP_PACK_PER = 512, SEP_MARK_PER = 2048;
 function separationStart() {
     _sepPending = null;
     const U = _simUnitState;
@@ -3489,30 +3511,41 @@ function separationStart() {
     const n = U.owners.length;
     _sepGrow(n);
     const S = _sep, cap = S.cap, nChunks = CHUNKS_W * CHUNKS_H;
-    const restTicks = getUnitCollisionRecalcTicks();
-    for (const [name, Type, size] of [['chunkR', Float64Array, nChunks], ['chunkC', Uint8Array, nChunks], ['sole', Int32Array, nChunks], ['start', Int32Array, nChunks + 1],
-        ['ord', Int32Array, cap], ['sx', Float64Array, cap], ['sy', Float64Array, cap], ['sr', Float64Array, cap], ['so', Int32Array, cap], ['sl', Uint8Array, cap],
-        ['sc', Uint8Array, cap], ['sid', Float64Array, cap], ['slots', Int32Array, cap], ['keys', Int32Array, cap], ['jobs', Int32Array, cap],
-        ['sdx', Float64Array, cap], ['sdy', Float64Array, cap]]) _sepShared(S, name, Type, size);
-    const PX = _sepShared(S, 'px', Float64Array, cap), PY = _sepShared(S, 'py', Float64Array, cap);
-    const OV = _sepShared(S, 'ov', Float64Array, cap), HIT = _sepShared(S, 'hit', Uint32Array, cap);
-    PX.fill(0, 0, n); PY.fill(0, 0, n); OV.fill(0, 0, n); HIT.fill(0, 0, n);
-    if (!S.margin) { S.margin = simSharedArray(Float64Array, 1); simParallelBind('sep.margin', S.margin); }
-    // (The index and the positions are both the tick's start.)
-    S.margin[0] = 0;
-    _simParams[4] = 1;
-    const jobCount = _prepareSharedUnitSeparation(S, restTicks, true);
-    // (No contacts to look for: the commit still records who moved.)
-    if (!jobCount) { _sepPending = { tick: gameTime, n }; return; }
-    _sepNeighbourOffsets(S);
-    const pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0), maxR = Math.max(0.1, _maxUnitCollisionRadius()), cws = CHUNK_SIZE * TILE;
-    const P = _simTickBgParams, unitsPerJob = 128;
-    P[0] = CHUNKS_W; P[1] = CHUNKS_H; P[2] = unitsPerJob; P[3] = pad; P[4] = 2 * maxR + pad; P[5] = UNIT_SEPARATION_Q;
-    P[6] = UNIT_SEPARATION_SHARE_BOTH; P[7] = UNIT_SEPARATION_SHARE_ONE; P[8] = S.offs.length / 3;
-    P[9] = jobCount; P[10] = cws; P[11] = _sxEpoch; P[12] = UNIT_SEPARATION_SHARE_MOVER; P[13] = UNIT_SEPARATION_SHARE_YIELD;
-    P[14] = 1;
-    simParallelBackground(SIM_KERNEL_SEPARATION, Math.ceil(jobCount / unitsPerJob), 0);
+    for (const [name, Type, size] of [['chunkR', Float64Array, nChunks], ['chunkC', Uint8Array, nChunks], ['chunkP', Uint8Array, nChunks], ['sole', Int32Array, nChunks],
+        ['box', Int32Array, nChunks * 4], ['ord', Int32Array, cap], ['rec', Float32Array, cap * 4], ['meta', Int32Array, cap],
+        ['sid', Float64Array, cap], ['px', Float64Array, cap], ['py', Float64Array, cap], ['ov', Float64Array, cap],
+        ['hit', Uint32Array, cap], ['nextX', Float64Array, cap], ['nextY', Float64Array, cap], ['fast', Uint8Array, cap], ['ex', Int32Array, cap], ['exc', Int32Array, Math.ceil(cap / 512) + 1]]) _sepShared(S, name, Type, size);
+    // (The sums are cleared as the commit reads them; after the small-world
+    // pass wrote them by unit index, or new arrays, once here.)
+    if (_sepDirty || S.sumsCap !== cap) { S.px.fill(0); S.py.fill(0); S.ov.fill(0); S.hit.fill(0); _sepDirty = false; S.sumsCap = cap; }
+    const ne = spatialIndexEntries(), mode = UNIT_SEPARATION_MODE | 0;
     _sepPending = { tick: gameTime, n };
+    // (Not a separation tick: the commit applies the pushes carried over.)
+    if (!ne || (mode === 2 && (gameTime & 1) !== 0)) return;
+    simParallelBind('sep.eslot', _sxESlot); simParallelBind('sep.ekey', _sxEKey);
+    simParallelBind('sep.rs', _sxStart); simParallelBind('sep.rc', _sxCount); simParallelBind('sep.rstamp', _sxStamp);
+    const pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0), maxR = Math.max(0.1, _maxUnitCollisionRadius()), cws = CHUNK_SIZE * TILE;
+    const farAny = 2 * maxR + pad, reach = Math.max(1, Math.ceil(farAny / cws)), H = Math.max(2, reach);
+    const bands = Math.ceil(CHUNKS_H / H);
+    let P = simParallelStageParams(0, 0);
+    P[0] = ne; P[1] = SEP_PACK_PER; P[2] = getUnitCollisionRecalcTicks(); P[3] = gameTime; P[4] = mode;
+    P = simParallelStageParams(0, 1);
+    P[0] = ne; P[1] = SEP_MARK_PER;
+    P = simParallelStageParams(0, 2);
+    P[0] = ne; P[1] = SEP_MARK_PER; P[2] = _sxEpoch; P[3] = CHUNKS_W; P[4] = CHUNKS_H; P[5] = gameTime; P[6] = mode;
+    for (let parity = 0; parity < 2; parity++) {
+        P = simParallelStageParams(0, 3 + parity);
+        P[0] = CHUNKS_W; P[1] = CHUNKS_H; P[2] = H; P[3] = pad; P[4] = farAny; P[5] = UNIT_SEPARATION_Q;
+        P[6] = UNIT_SEPARATION_SHARE_BOTH; P[7] = UNIT_SEPARATION_SHARE_ONE; P[9] = ne; P[10] = cws; P[11] = _sxEpoch;
+        P[12] = UNIT_SEPARATION_SHARE_MOVER; P[13] = UNIT_SEPARATION_SHARE_YIELD; P[14] = parity;
+    }
+    simParallelBackgroundChain(0, [[SIM_KERNEL_SEP_PACK, Math.ceil(ne / SEP_PACK_PER)], [SIM_KERNEL_SEP_AGG, Math.ceil(ne / SEP_MARK_PER)], [SIM_KERNEL_SEP_MARK, Math.ceil(ne / SEP_MARK_PER)],
+        [SIM_KERNEL_SEP_PAIRS, Math.ceil(bands / 2)], [SIM_KERNEL_SEP_PAIRS, Math.floor(bands / 2)]]);
+}
+// A resync (every peer at the same tick): no push carried over.
+function separationReset() {
+    const U = _simUnitState;
+    if (U) { U.columns.sepCx.fill(0); U.columns.sepCy.fill(0); }
 }
 // The neighbour tile offsets (all around, with the least distance between
 // the tiles) for the separation kernel.
@@ -3541,6 +3574,7 @@ function runUnitSeparationPass() {
         _commitUnitSeparationPushes(n0);
         return;
     }
+    _sepDirty = true;
     let n = units.length;
     // Large worlds run on unit state slots (outputs by slot), small ones on
     // the units array (outputs by index).
@@ -3706,26 +3740,34 @@ function runUnitSeparationPass() {
 }
 
 // The pushes of the slots below n (large worlds): the finish kernel applies
-// those that stay in their tile (and records who moved by itself), the rest
-// commit through the objects in id order.
+// them (and records who moved by itself) and lists the slots needing the
+// simulation thread: a new tile (the unit index), a path retry, or blocked
+// ground on the way (the swept object commit, in id order).
 function _commitUnitSeparationPushes(n) {
-    const U = _simUnitState, S = _sep, cap = S.cap;
-    const PX = S.px, PY = S.py, OV = S.ov, HIT = S.hit;
-    _sepShared(S, 'nextX', Float64Array, cap); _sepShared(S, 'nextY', Float64Array, cap);
-    _sepShared(S, 'fast', Uint8Array, cap);
-    const P = _simParams;
-    P[0] = n; P[1] = 512; P[2] = TILE; P[3] = UNIT_POSITION_QUANTIZATION;
+    const U = _simUnitState, S = _sep;
+    const P = _simParams, per = 512, chunks = Math.ceil(n / per);
+    P[0] = n; P[1] = per; P[2] = TILE; P[3] = UNIT_POSITION_QUANTIZATION;
     P[4] = UNIT_SEPARATION_CONTACTS; P[5] = UNIT_SEPARATION_Q; P[6] = gameTime; P[7] = UNIT_SEPARATION_PATH_RETRY_TICKS;
-    P[8] = GRID_W; P[9] = GRID_H;
+    const once = (UNIT_SEPARATION_MODE | 0) === 1;
+    P[8] = GRID_W; P[9] = GRID_H; P[10] = once ? 1 : UNIT_SEPARATION_TIER_GAIN; P[11] = once ? 1 : 0.5;
+    {
+        // (Tile changes indexed in the kernel, as the movement kernel's.)
+        const V = typeof _visCover !== 'undefined' ? _visCover : null;
+        P[12] = 1; P[13] = spatialEpoch; P[14] = V ? V.gen : 0; P[15] = !V || V.syncedTick < 0 || V.adm !== areaDistanceMatrix ? 1 : 0;
+        P[16] = CHUNK_SIZE; P[17] = CHUNKS_W; P[18] = SIM_SEP_ABSENT;
+        simParallelBind('ix.agrid', _spatialAreaGridFlat());
+        _sepShared(S, 'moves', Int32Array, 1)[0] = 0;
+    }
     simMoveWallGrid();
-    simParallelRun(SIM_KERNEL_SEPARATION_FINISH, Math.ceil(n / 512));
+    simParallelRun(SIM_KERNEL_SEPARATION_FINISH, chunks);
+    // (Chunk moves: counted now, as at the pass's end.)
+    if (S.moves[0]) _spatialKernelMoves = true;
+    if (_spatialKernelMoves) spatialCountsDeferEnd();
     let retries = null, slow = null;
-    const owners = U.owners, c = U.columns, fast = S.fast;
-    for (let i = 0; i < n; i++) {
-        if (!HIT[i] || fast[i] === 1) continue;
+    const owners = U.owners, c = U.columns, fast = S.fast, EX = S.ex, EXC = S.exc;
+    for (let k = 0; k < chunks; k++) for (let j = k * per, e = j + EXC[k]; j < e; j++) {
+        const i = EX[j];
         if (fast[i]) {
-            // Committed by the kernel; 2: another tile, or retry work (the
-            // object only on the unit's retry ticks).
             if (((gameTime + c.id[i]) | 0) % UNIT_SEPARATION_PATH_RETRY_TICKS === 0) {
                 const u = owners[i];
                 if (u && !u.dead && u.pathIsFallbackAstar && u._pendingPathTarget) (retries ||= []).push(u);
@@ -3739,7 +3781,15 @@ function _commitUnitSeparationPushes(n) {
     }
     if (slow) {
         slow.sort((a, b) => owners[a].id - owners[b].id);
-        for (let i of slow) _commitUnitSeparation(owners[i], i, HIT, PX, PY, OV, (v) => (retries ||= []).push(v));
+        for (let i of slow) {
+            const u = owners[i];
+            applyUnitSeparation(u, S.nextX[i], S.nextY[i], Infinity);
+            if (u.pathIsFallbackAstar && u._pendingPathTarget && ((gameTime + u.id) % UNIT_SEPARATION_PATH_RETRY_TICKS) === 0) (retries ||= []).push(u);
+            pushUnitOutOfBlockedTile(u);
+            u.x = _quantizeUnitWorldCoord(u.x);
+            u.y = _quantizeUnitWorldCoord(u.y);
+            updateUnitSpatial(u);
+        }
     }
     if (retries) {
         retries.sort((a, b) => a.id - b.id);

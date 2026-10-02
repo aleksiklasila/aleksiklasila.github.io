@@ -156,14 +156,16 @@ function _buildDeterministicUnitUpdateOrderForTick() {
 // the update pass skips units the movement kernel already moved without
 // reading their objects. A stale entry only costs a read (Unit.update
 // checks its own slot too).
-const _unitSlotMap = { ref: null, len: -1, slots: new Int32Array(0) };
+// (ver: counts every change of the list it follows, for the prebuilt
+// unit index's check.)
+const _unitSlotMap = { ref: null, len: -1, slots: new Int32Array(0), ver: 0 };
 function _unitSlotMapEnsure() {
     const M = _unitSlotMap, n = units.length;
     if (M.ref === units && M.len === n) return M.slots;
     // (Shared: the index kernels read it.)
     if (M.slots.length < n) M.slots = simSharedArray(Int32Array, Math.max(1024, n * 2));
     for (let i = 0; i < n; i++) { const u = units[i]; M.slots[i] = u && u._us ? u._si : -1; }
-    M.ref = units; M.len = n;
+    M.ref = units; M.len = n; M.ver++;
     return M.slots;
 }
 // After units.push(u).
@@ -172,8 +174,9 @@ function unitSlotMapPushed(u) {
     if (M.ref !== units || M.len !== units.length - 1) return;
     if (M.slots.length < units.length) { const a = simSharedArray(Int32Array, units.length * 2); a.set(M.slots); M.slots = a; }
     M.slots[M.len++] = u && u._us ? u._si : -1;
+    M.ver++;
 }
-function unitSlotMapInvalidate() { _unitSlotMap.ref = null; }
+function unitSlotMapInvalidate() { _unitSlotMap.ref = null; _unitSlotMap.ver++; }
 
 let _updateOrderCand = new Int32Array(0), _updateOrderRun = new Int32Array(0);
 function _forEachUnitInTickOrder(fn) {
@@ -689,8 +692,15 @@ function unitRetirePrepare() {
     }
     return blocks;
 }
+// (True while gameTick runs: work requested mid-tick that can wait for the
+// tick's end, such as the adjacency recalculation, waits.)
+let _inGameTick = false;
 function gameTick() {
     if (gameOver) return;
+    _inGameTick = true;
+    try { _gameTickBody(); } finally { _inGameTick = false; }
+}
+function _gameTickBody() {
     gameTime++;
     // The unit index for this tick's queries and collision pass, from the
     // state as the tick begins (the same on a peer that just restored it).
@@ -882,7 +892,7 @@ function gameTick() {
             w += end - from; from = end + 1;
         }
         units.length = w;
-        if (keep) M.len = w;
+        if (keep) { M.len = w; M.ver++; }
         if (removedSet) selectedUnits = selectedUnits.filter(su => !removedSet.has(su));
     };
     for (let b = retireBlocks - 1; b >= 0; b--) for (let j = _unitRetireCounts[b] - 1; j >= 0; j--) {
@@ -963,7 +973,7 @@ function gameTick() {
     else stopLaserSound();
     updateAudioReactiveState();
 
-    if (_adjacencyNeedsRecalc && _adjacencyLastRecalcTick !== gameTime) {
+    if (_adjacencyNeedsRecalc) {
         _runAdjacencyRecalculation();
     }
 
@@ -989,6 +999,8 @@ function gameTick() {
 
     updateVisibility(localPlayerId);
     _finalizePathfindPerfTick(_countPendingPathBacklog());
+    // The next tick's unit index, on the helpers while the state hash runs.
+    if (typeof spatialIndexPrebuild === 'function') spatialIndexPrebuild();
 }
 
 // ============================================================

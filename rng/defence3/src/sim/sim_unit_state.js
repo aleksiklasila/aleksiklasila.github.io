@@ -172,7 +172,16 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['wsAk', Int8Array, 1], ['wsNeed', Int32Array, 1], ['wsJid', Int32Array, 1], ['wsCur', Int32Array, 1], ['wsMy', Int32Array, 1],
     // Its unit type's index in simUnitTypeIndex's list (-1 not known), and
     // its upkeep bin (main.js upkeepUnitRefresh; -1 none).
-    ['upT', Int16Array, 1], ['upB', Int32Array, 1]];
+    ['upT', Int16Array, 1], ['upB', Int32Array, 1],
+    // The separation's tick-start copy (SIM_KERNEL_STATUS writes it with
+    // x0/y0, its tier job reads it while the pass moves units): dead, radius,
+    // layer; and the push it found that is still to be applied next tick
+    // (sepCx/sepCy: a push is spread over two ticks).
+    ['sepD0', Uint8Array, 1], ['sepR0', Float64Array, 1], ['sepL0', Uint8Array, 1],
+    ['sepCx', Float64Array, 1], ['sepCy', Float64Array, 1],
+    // The version of its (owner, type) stat tables its stats were applied at
+    // (things_utils.js _unitStatsVerOf).
+    ['esVer', Int32Array, 1]];
 // Accessor defaults (the "not indexed / not registered" values).
 const SIM_SPATIAL_DEFAULTS = { spTile: -1, spArea: -2, spOwner: -1, spEpoch: 0, spType: -1, vsGen: 0, vsR: -1, vsA: -1, vsP1: -1, vsP2: -1 };
 let _simUnitState = null;
@@ -183,6 +192,7 @@ let _simUnitState = null;
 const SIM_SEP_ABSENT = 0xFFFFFF;
 
 function simUnitStateReset() {
+    if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
     // A whole-world replacement needs no slot recycling. Old objects retain
     // their own generation's columns, but no registry keeps its owners alive.
     _simUnitState = null;
@@ -240,7 +250,7 @@ function simUnitStateAllocate(u) {
     }
     S.sepKey[s] = SIM_SEP_ABSENT;
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNavT[s] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
-    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = 0; S.columns.lzAcc[s] = 0;
+    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = 0; S.columns.lzAcc[s] = 0; S.columns.sepCx[s] = 0; S.columns.sepCy[s] = 0; S.columns.esVer[s] = -1;
     for (const k of SIM_UNIT_LEVEL_COLUMNS) S.columns[k][s] = NaN;
     for (const k in SIM_SPATIAL_DEFAULTS) S.columns[k][s] = SIM_SPATIAL_DEFAULTS[k];
     S.owners[s] = u;

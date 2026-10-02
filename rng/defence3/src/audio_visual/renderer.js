@@ -3987,10 +3987,12 @@ function visWindowZone(wx, wy) {
     return (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
 }
 
-const VIS_COVER_SWEEP_TICKS = 16;
-// Units' parameters (their range mostly: level and research changes) are
-// swept more slowly: a sixty-fourth of the units a tick.
-const VIS_COVER_UNIT_SWEEP_TICKS = 64;
+// The sweeps are a safety net behind the hooks (every change is applied
+// where it happens): buildings over 64 ticks, units over 256 (a share of
+// each a tick, by list position: the same on every peer).
+const VIS_COVER_SWEEP_TICKS = 64;
+// Units' parameters (their range mostly: level and research changes).
+const VIS_COVER_UNIT_SWEEP_TICKS = 256;
 
 // Brings one source's registration up to date with the world (a unit: its
 // parameters, _visCoverSyncUnit). Buildings are live while on their tile,

@@ -147,12 +147,15 @@ function _spatialCountAdd(chunkKey, owner, typeIdx, delta) {
 function spatialCountsDeferBegin() { _spatialCountDefer = true; }
 // (Set by simMoveRun when its kernel moved units into other chunks.)
 let _spatialKernelMoves = false;
-function spatialCountsDeferEnd() {
+// (keepKernel: the kernels' chunk moves stay pending, for one count pass
+// after the separation commit, which adds its own: the counts are sums, so
+// removals in between (by the current key) and the moves add up the same.)
+function spatialCountsDeferEnd(keepKernel = false) {
     _spatialCountDefer = false;
     const q = _spatialCountQ;
     for (let i = 0; i < q.length; i += 4) _spatialCountAdd(q[i], q[i + 1], q[i + 2], q[i + 3]);
     q.length = 0;
-    if (_spatialKernelMoves) {
+    if (_spatialKernelMoves && !keepKernel) {
         _spatialKernelMoves = false;
         const S = _simUnitState;
         if (S && typeof SIM_KERNEL_SP_COUNTS === 'number') {
@@ -242,8 +245,60 @@ let _sxBySlot = false, _sxASlot = new Int32Array(0);
 function _sxOwners() { return _sxBySlot ? _simUnitState.owners : null; }
 function spatialIndexEntries() { spatialIndexEnsure(); return _sxListed; }
 
-function spatialIndexEnsure() { if (_sxDirty) spatialIndexRebuild(); }
-function spatialIndexInvalidate() { _sxDirty = true; }
+function spatialIndexEnsure() { if (_sxPre) _spatialIndexCollect(); if (_sxDirty) spatialIndexRebuild(); }
+function spatialIndexInvalidate() { if (_sxPre) _spatialIndexCollect(); _sxDirty = true; }
+
+// The next tick's index, built after a tick's end on the helpers (lane
+// SIM_LANE_IX) while the state hash and the time between ticks run; taken
+// at the next use (the next tick's start, or any query before it). Valid
+// only if nothing it reads changed since: the units list (version), a death
+// or position set outside a tick (spatialIndexInvalidate: a restore, an
+// action killing a unit). Taken or dropped, the same index results (it is
+// a pure function of the units and their positions).
+let _sxPre = null;
+function spatialIndexPrebuild() {
+    // (Without helpers the chain runs when taken: the same work, the same
+    // index, later.)
+    if (_sxPre || typeof SIM_LANE_IX !== 'number') return;
+    const n = units.length;
+    if (n < SPATIAL_PARALLEL_MIN_UNITS || !_simUnitState || !_sxPar || _sxEpoch + 1 >= 0x3fffffff) return;
+    // (Background readers of the current index finish first.)
+    if (typeof acqTierIndexWait === 'function') acqTierIndexWait();
+    const X = _sxPar, nChunks = CHUNKS_W * CHUNKS_H, players = spatialUnitsComplexPlayerCount;
+    const A = Math.max(areaDistanceMatrix ? areaDistanceMatrix.length : 0, Array.isArray(areas) ? areas.length : 0, 1);
+    if (X.nChunks !== nChunks || X.A < A || X.players !== players || X.cap < n || _sxESlot.length < n) return;
+    const slots = _unitSlotMapEnsure();
+    simParallelBind('ix.slots', slots); simParallelBind('ix.agrid', _spatialAreaGridFlat());
+    simParallelBind('sep.eslot', _sxESlot); simParallelBind('sep.ekey', _sxEKey);
+    simParallelBind('spatial.keys.1', X.keys);
+    const ep = _sxEpoch + 1, UJ = 8192, uj = Math.ceil(n / UJ);
+    const base = [n, UJ, nChunks, A, players, SIM_SEP_ABSENT, Math.ceil(nChunks / 65536), 65536, 16384, TILE, GRID_W, GRID_H, CHUNK_SIZE, CHUNKS_W, 0, ep];
+    const order = simSpatialStableOrderStages(n, nChunks, 1);
+    simParallelBind('ix.ordC', order.out);
+    const stages = [[SIM_KERNEL_INDEX_KEYS, uj, base], ...order.stages, [SIM_KERNEL_INDEX_FILL, uj, base], [SIM_KERNEL_INDEX_RUNS, uj, base]];
+    if (stages.length > SIM_PAR_BG_STAGES) return;
+    for (let i = 0; i < stages.length; i++) { const P = simParallelStageParams(SIM_LANE_IX, i), v = stages[i][2]; for (let k = 0; k < v.length; k++) P[k] = v[k]; }
+    X.bad[0] = 0; X.listed[0] = n; X.listed[1] = n;
+    simParallelBackgroundChain(SIM_LANE_IX, stages.map(st => [st[0], st[1]]));
+    const M = _unitSlotMap;
+    _sxPre = { units, n, ver: M.ver, ep };
+}
+// The prebuilt index, waited for: taken when still valid, else dropped (the
+// next use rebuilds it).
+function _spatialIndexCollect() {
+    const J = _sxPre;
+    _sxPre = null;
+    simParallelBackgroundWait(SIM_LANE_IX);
+    const X = _sxPar, M = _unitSlotMap;
+    if (_sxDirty || !X || X.bad[0] || J.units !== units || J.n !== units.length || M.ref !== units || M.ver !== J.ver || J.ep !== _sxEpoch + 1) { _sxDirty = true; return; }
+    _sxStamp = X.stamp; _sxStart = X.start; _sxCount = X.cnt;
+    _sxEpoch = J.ep;
+    _sxListed = X.listed[0];
+    _sxBySlot = true;
+    _sxTaken = true;
+}
+// (Set when the prebuilt index was taken: the tick's rebuild has nothing to do.)
+let _sxTaken = false;
 
 // Large worlds build it with the kernels (SIM_KERNEL_INDEX_*): the same
 // result (chunk and area ranges in key order, each in units order).
@@ -252,10 +307,16 @@ let _sxPar = null;
 // both builds give the same queries).
 let SPATIAL_PARALLEL_MIN_UNITS = 4096;
 function spatialIndexRebuild() {
+    // (Chunk moves a tick left pending, a tick that ended early: counted.)
+    if (_spatialKernelMoves) spatialCountsDeferEnd();
     // (A posted acquisition scan reads the index in place.)
     if (typeof acqTierIndexWait === 'function') acqTierIndexWait();
-    _sxDirty = false;
     if (typeof simUnitStateReleaseFreed === 'function') simUnitStateReleaseFreed();
+    // The index built after the last tick, when still valid.
+    if (_sxPre) _spatialIndexCollect();
+    if (_sxTaken && !_sxDirty) { _sxTaken = false; return; }
+    _sxTaken = false;
+    _sxDirty = false;
     const n = units.length;
     if (n >= SPATIAL_PARALLEL_MIN_UNITS && _simUnitState && typeof SIM_KERNEL_INDEX_COUNT === 'number' && _spatialIndexRebuildParallel()) return;
     _spatialIndexRebuildSerial();
@@ -302,14 +363,15 @@ function _spatialIndexRebuildParallel() {
     // per area), all in the kernels.
     P[15] = ep;
     X.listed[0] = n; X.listed[1] = n;
-    for (let pass = 0; pass < 2; pass++) {
-        const order = simSpatialStableOrder(pass ? X.areas : X.keys, n, pass ? A : nChunks, pass ? 2 : 1);
-        simParallelBind(pass ? 'ix.ordA' : 'ix.ordC', order);
-        P[0] = n; P[1] = UJ; P[2] = nChunks; P[3] = A; P[4] = players; P[14] = pass; P[15] = ep;
+    // (Chunks only: units by area are their areas' tiles' units, see
+    // forEachUnitInAreaRange.)
+    {
+        const order = simSpatialStableOrder(X.keys, n, nChunks, 1);
+        simParallelBind('ix.ordC', order);
+        P[0] = n; P[1] = UJ; P[2] = nChunks; P[3] = A; P[4] = players; P[14] = 0; P[15] = ep;
         simParallelRun(SIM_KERNEL_INDEX_FILL, Math.ceil(n / UJ));
         simParallelRun(SIM_KERNEL_INDEX_RUNS, Math.ceil(n / UJ));
     }
-    _sxASlot = X.aslot;
     _sxListed = X.listed[0];
     _sxBySlot = true;
     return true;
@@ -351,44 +413,28 @@ function _spatialIndexRebuildSerial() {
         keys[i] = key;
         if (_sxStamp[key] !== ep) { _sxStamp[key] = ep; _sxCount[key] = 0; }
         _sxCount[key]++;
-        const row = areaIdGrid[gy], area = row ? row[gx] : -1;
-        if (!(area >= 0 && area < A)) { arOf[i] = -1; continue; }
-        arOf[i] = area;
-        if (_sxAStamp[area] !== ep) { _sxAStamp[area] = ep; _sxACount[area] = 0; _sxAOwner.fill(0, area * players, area * players + players); }
-        _sxACount[area]++;
-        if (owner >= 0 && owner < players) _sxAOwner[area * players + owner]++;
     }
     // Ranges in order of first appearance (a range's count is negated
     // once placed), then the members from each range's start.
-    let pos = 0, posA = 0;
-    const fill = _sxFill, fillA = _sxAFill;
+    let pos = 0;
+    const fill = _sxFill;
     for (let i = 0; i < n; i++) {
         const key = keys[i];
         if (key < 0) continue;
         const c = _sxCount[key];
         if (c > 0) { _sxStart[key] = pos; fill[key] = pos; pos += c; _sxCount[key] = -c; }
-        const a = arOf[i];
-        if (a < 0) continue;
-        const ca = _sxACount[a];
-        if (ca > 0) { _sxAStart[a] = posA; fillA[a] = posA; posA += ca; _sxACount[a] = -ca; }
     }
-    const list = _sxList, listA = _sxAList;
+    const list = _sxList;
     if (list.length < pos) list.length = pos;
-    if (listA.length < posA) listA.length = posA;
     for (let i = 0; i < n; i++) {
         const key = keys[i];
         if (key < 0) continue;
         const u = units[i], e = fill[key]++;
         list[e] = u; _sxESlot[e] = _sxSi[i]; _sxEKey[e] = key;
         if (_sxCount[key] < 0) _sxCount[key] = -_sxCount[key];
-        const a = arOf[i];
-        if (a < 0) continue;
-        listA[fillA[a]++] = u;
-        if (_sxACount[a] < 0) _sxACount[a] = -_sxACount[a];
     }
     _sxListed = pos;
     for (let k = pos; k < list.length; k++) list[k] = undefined;
-    for (let k = posA; k < listA.length; k++) listA[k] = undefined;
 }
 
 // The area grid as one shared array (tile -> area, -1 none), for the kernels.
@@ -425,15 +471,20 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
     let areaIds = getAreaIdsWithinDistanceOfSources(sources, maxDistance);
     if (!areaIds || areaIds.length <= 0) return false;
     spatialIndexEnsure();
-    const ep = _sxEpoch, players = _sxPlayers, cap = _sxAreaCap, own = _sxOwners(), listA = own ? null : _sxAList, AS = _sxASlot;
+    // Each area's tiles (in the area's cell order), each tile's units in
+    // units order (the unit index by tile).
+    const ep = _sxEpoch, own = _sxOwners(), list = own ? null : _sxList, ES = _sxESlot, ST = _sxStamp, SS = _sxStart, SC = _sxCount, cs = CHUNK_SIZE;
     for (let i = 0; i < areaIds.length; i++) {
         let areaId = areaIds[i];
-        if (!(areaId >= 0 && areaId < cap) || _sxAStamp[areaId] !== ep) continue;
-        let k0 = _sxAStart[areaId], cnt = _sxACount[areaId];
-        // Only the scanning player's own units there.
-        if (enemyFilter >= 0 && enemyFilter < players && _sxAOwner[areaId * players + enemyFilter] === cnt) continue;
-        for (let k = k0, k1 = k0 + cnt; k < k1; k++) {
-            let u = own ? own[AS[k]] : listA[k];
+        const cells = gridCellsByArea[areaId];
+        if (!cells) continue;
+        for (let ci = 0; ci < cells.length; ci++) {
+        const cell = cells[ci];
+        if (!cell) continue;
+        const ck = cs === 1 ? cell.y * GRID_W + cell.x : Math.floor(cell.y / cs) * CHUNKS_W + Math.floor(cell.x / cs);
+        if (ST[ck] !== ep) continue;
+        for (let k = SS[ck], k1 = k + SC[ck]; k < k1; k++) {
+            let u = own ? own[ES[k]] : list[k];
             if (!u || (!includeDead && u.dead)) continue;
             if (playerFilter >= 0 && u.owner !== playerFilter) continue;
             if (enemyFilter >= 0 && u.owner === enemyFilter) continue;
@@ -445,6 +496,7 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
             if (!areaOnly && (dx * dx + dy * dy) > (maxHitRangePx * maxHitRangePx)) continue;
             if (predicate && !predicate(u)) continue;
             if (visitor(u, areaId) === true) return true;
+        }
         }
     }
     return false;

@@ -449,13 +449,15 @@ let _snapRegions = new Int32Array(0), _snapColHash = new Int32Array(0);
 const SNAP_ACC_REGIONS = 1 << 20;
 // With the kernel's sums, units' object fields (beyond the columns) are
 // hashed for one group by id of this many a rotation (each unit's every
-// SNAP_HASH_SLICES * SNAP_HASH_OBJ_GROUPS ticks).
-const SNAP_HASH_OBJ_GROUPS = 10;
+// SNAP_HASH_SLICES * SNAP_HASH_OBJ_GROUPS ticks: 400; the columns, where
+// nearly all of a unit's changing state is, every rotation).
+const SNAP_HASH_OBJ_GROUPS = 40;
 // Grid rows: those of this slice, one in this many rotations (each row
 // every SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS ticks).
 const SNAP_HASH_GRID_ROUNDS = 10;
 // (Tests turn it off to compare with the summing below; both agree.)
 let SNAP_HASH_KERNEL_SUMS = true;
+let _snapOrdSums = null;
 let _snapAcc = null, _snapAccStamp = null, _snapAccStampNow = 0, _snapAccList = null, _snapAccRot = new Int32Array(0), _snapAccNoSlot = new Int32Array(0), _snapAccCnt = null;
 
 // Per slice and rotation (SNAP_HASH_GRID_ROUNDS: each region's buildings
@@ -642,7 +644,8 @@ function snapTickHash(tick, allSlices = false) {
         for (let pr of projectiles) hp = Math.imul(hp ^ _snapHashEntity('p', pr, 0), 16777619);
         push(SNAP_PART_PROJECTILES * SNAP_CODE_SHIFT, hp >>> 0);
         push(SNAP_PART_GLOBALS * SNAP_CODE_SHIFT, _snapHashGlobals(allSlices ? -1 : slice, Math.floor(t / SNAP_HASH_SLICES)));
-        for (let list of SNAP_ORDER_LISTS) push(SNAP_PART_ORDER * SNAP_CODE_SHIFT + SNAP_LIST_CODE[list], _snapHashOrder(list, allSlices ? -1 : slice));
+        // (The units' order: from the region kernel below, when it runs.)
+        for (let list of SNAP_ORDER_LISTS) if (list !== 'u') push(SNAP_PART_ORDER * SNAP_CODE_SHIFT + SNAP_LIST_CODE[list], _snapHashOrder(list, allSlices ? -1 : slice));
     }
     // Entities of this slice's regions, summed per region (order-free).
     let regions = new Map();
@@ -654,7 +657,7 @@ function snapTickHash(tick, allSlices = false) {
     let S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
     let slots = S && typeof _unitSlotMapEnsure === 'function' ? _unitSlotMapEnsure() : null;
     let owners = S ? S.owners : null, CX = S ? S.columns.x : null, CY = S ? S.columns.y : null;
-    let REG = null, HC = null;
+    let REG = null, HC = null, unitOrderHash = null;
     const rot = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_UNIT_GROUPS, CID = S ? S.columns.id : null;
     if (slots && units.length >= SNAP_HASH_KERNEL_MIN_UNITS && typeof SIM_KERNEL_SNAP_REGION === 'number') {
         if (_snapRegions.length < units.length) { _snapRegions = simSharedArray(Int32Array, units.length * 2); _snapColHash = simSharedArray(Int32Array, units.length * 2); }
@@ -676,9 +679,20 @@ function snapTickHash(tick, allSlices = false) {
             if (++_snapAccStampNow >= 0x7fffffff) { _snapAccStamp.fill(0); _snapAccStampNow = 1; }
             _snapAccCnt.fill(0);
             P[5] = 1; P[6] = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_OBJ_GROUPS; P[7] = SNAP_HASH_OBJ_GROUPS; P[8] = _snapAccStampNow; P[9] = SNAP_ACC_REGIONS;
-        }
+            const jobs = Math.ceil(units.length / 8192);
+            if (!_snapOrdSums || _snapOrdSums.length < jobs) { _snapOrdSums = simSharedArray(Int32Array, Math.max(64, jobs * 2)); simParallelBind('snap.ord', _snapOrdSums); }
+            P[10] = 1;
+        } else P[10] = 0;
         simParallelRun(SIM_KERNEL_SNAP_REGION, Math.ceil(units.length / 8192));
+        if (P[10] === 1) {
+            // The units' order: the jobs' sums, and the slice's units without a slot.
+            let h = Math.imul(2166136261 ^ units.length, 16777619);
+            for (let k = 0, jobs = Math.ceil(units.length / 8192); k < jobs; k++) h = (h + _snapOrdSums[k]) | 0;
+            for (let k = 0, n = _snapAccCnt[2]; k < n; k++) { const i = _snapAccNoSlot[k]; if (i % SNAP_HASH_SLICES === slice && !(slots[i] >= 0)) h = (h + _snapOrderMix(i, units[i].id)) | 0; }
+            unitOrderHash = h >>> 0;
+        }
     }
+    push(SNAP_PART_ORDER * SNAP_CODE_SHIFT + SNAP_LIST_CODE.u, unitOrderHash !== null ? unitOrderHash : _snapHashOrder('u', allSlices ? -1 : slice));
     // One slice through the kernel: its sums, then the units it left (this
     // rotation's group by id, with their objects' fields; units without a
     // slot or outside the summed regions, as below).
@@ -1792,6 +1806,8 @@ function _snapResetWorkerCaches() {
 // patching this peer's own objects so references from untouched entities
 // stay valid. Returns { unitsById, missingRefs, statMapsRebuilt, changed }.
 function snapDecodeState(S, options = null) {
+    // (A prebuilt unit index reads what this rewrites: waited for, dropped.)
+    if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
     if (!S || S.v !== SNAP_FORMAT) return null;
     let collect = !!(options && options.collectChanges);
     let partial = !!S.partial;
@@ -2221,6 +2237,8 @@ function snapFlushHistoryCaches() {
     if (typeof clearGameplayVisibilityCache === 'function') clearGameplayVisibilityCache();
     if (typeof thingStatusRebuild === 'function') thingStatusRebuild();
     if (typeof statusDotAccReset === 'function') statusDotAccReset();
+    // (Separation pushes carried to the next tick: none on any peer.)
+    if (typeof separationReset === 'function') separationReset();
     // (The acquisition tier: a pending run dropped, no result until the next.)
     if (typeof acqTierReset === 'function') acqTierReset();
     if (typeof laserBeamsReset === 'function') laserBeamsReset();
