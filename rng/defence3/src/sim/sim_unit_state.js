@@ -22,6 +22,14 @@ const SIM_UNIT_MIRROR_COLUMNS = ['r', 'collisionR'];
 // plain reference behind a setter that disarms the movement kernel.
 const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved'];
 
+// Unit types by first sight (peer-local indices: only ever mapped back to
+// the type's name).
+const _simUnitTypeNames = [], _simUnitTypeIdx = new Map();
+function simUnitTypeIndex(type) {
+    let i = _simUnitTypeIdx.get(type);
+    if (i === undefined) { i = _simUnitTypeNames.length; if (i >= 32767) return -1; _simUnitTypeNames.push(type); _simUnitTypeIdx.set(type, i); }
+    return i;
+}
 // (Unit.maxEnergy into its column: called where unit stats are applied, the
 // same on every peer.)
 function simUnitMaxE(u) {
@@ -152,7 +160,19 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // (The tile it steered in, and for how many ticks the step holds.)
     ['mvCTl', Int32Array, 1], ['mvCN', Uint8Array, 1],
     // The tick (+ 1) SIM_KERNEL_MOVE_STEP moved it (SIM_KERNEL_MOVE leaves it).
-    ['mvStepT', Int32Array, 1]];
+    ['mvStepT', Int32Array, 1],
+    // The worker search registry (worker.js wsRegister): an idle worker's
+    // search, done on the tier (wsKind 0 none, 1 collector, 3 builder or
+    // salvager, 4 healer, 5 researcher): its resource type, the tick it
+    // registered, its origin (NaN: where it stands; and until wsOU too), its
+    // radius, anchor, area steps, need bits, jitter id, current target tile,
+    // own reserved tile.
+    ['wsKind', Uint8Array, 1], ['wsCfg', Int8Array, 1], ['wsT', Int32Array, 1], ['wsOU', Int32Array, 1],
+    ['wsOx', Float64Array, 1], ['wsOy', Float64Array, 1], ['wsR', Float64Array, 1], ['wsAx', Float64Array, 1], ['wsAy', Float64Array, 1],
+    ['wsAk', Int8Array, 1], ['wsNeed', Int32Array, 1], ['wsJid', Int32Array, 1], ['wsCur', Int32Array, 1], ['wsMy', Int32Array, 1],
+    // Its unit type's index in simUnitTypeIndex's list (-1 not known), and
+    // its upkeep bin (main.js upkeepUnitRefresh; -1 none).
+    ['upT', Int16Array, 1], ['upB', Int32Array, 1]];
 // Accessor defaults (the "not indexed / not registered" values).
 const SIM_SPATIAL_DEFAULTS = { spTile: -1, spArea: -2, spOwner: -1, spEpoch: 0, spType: -1, vsGen: 0, vsR: -1, vsA: -1, vsP1: -1, vsP2: -1 };
 let _simUnitState = null;
@@ -224,7 +244,9 @@ function simUnitStateAllocate(u) {
     for (const k of SIM_UNIT_LEVEL_COLUMNS) S.columns[k][s] = NaN;
     for (const k in SIM_SPATIAL_DEFAULTS) S.columns[k][s] = SIM_SPATIAL_DEFAULTS[k];
     S.owners[s] = u;
-    S.columns.live[s] = 1; S.columns.maxE[s] = Number(u.maxEnergy); S.columns.spMvOwn[s] = 0; S.columns.mvBlk[s] = 0; S.columns.mvCD[s] = -1;
+    S.columns.live[s] = 1; S.columns.maxE[s] = Number(u.maxEnergy); S.columns.spMvOwn[s] = 0; S.columns.mvBlk[s] = 0; S.columns.mvCD[s] = -1; S.columns.wsKind[s] = 0;
+    // (Tick-stamped answers of the slot's last unit are not this one's.)
+    S.columns.cbTick[s] = -1; S.columns.cbT[s] = -1; S.columns.dbTick[s] = -1; S.columns.dbT[s] = -1; S.columns.cwTick[s] = -1; S.columns.mvStepT[s] = -1; S.columns.upT[s] = -1; S.columns.upB[s] = -1;
     Object.defineProperties(u, { _us: { value: S.columns, writable: true }, _si: { value: s, writable: true }, _det: { value: null, writable: true },
         _path: { value: null, writable: true }, _ws: { value: undefined, writable: true }, _wnr: { value: undefined, writable: true } });
 }

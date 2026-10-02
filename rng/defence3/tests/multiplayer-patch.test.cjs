@@ -34,7 +34,7 @@ function describeDiff(hostText, guestText) {
     const diffs = [];
     for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
         if (!a[k] || !b[k]) { diffs.push(k + ' only on ' + (a[k] ? 'host' : 'guest')); continue; }
-        for (const f of Object.keys(a[k])) if (JSON.stringify(a[k][f]) !== JSON.stringify(b[k][f])) diffs.push(k + '.' + f + ' host=' + JSON.stringify(a[k][f]).slice(0, 120) + ' guest=' + JSON.stringify(b[k][f]).slice(0, 120));
+        for (const f of Object.keys(a[k])) if (JSON.stringify(a[k][f]) !== JSON.stringify(b[k][f])) { let x = a[k][f], y = b[k][f]; if (typeof x === 'string' && typeof y === 'string' && x[0] === '{') { try { x = JSON.parse(x); y = JSON.parse(y); } catch { } } let d = ''; if (x && y && typeof x === 'object' && typeof y === 'object') { for (const q of new Set([...Object.keys(x), ...Object.keys(y)])) if (JSON.stringify(x[q]) !== JSON.stringify(y[q])) d += ' ' + q + ':' + JSON.stringify(x[q]).slice(0, 80) + '/' + JSON.stringify(y[q]).slice(0, 80); } diffs.push(k + '.' + f + (d ? ' differs in' + d : ' host=' + JSON.stringify(x).slice(0, 120) + ' guest=' + JSON.stringify(y).slice(0, 120))); }
     }
     return diffs.length + ' fields: ' + diffs.slice(0, 8).join(' | ');
 }

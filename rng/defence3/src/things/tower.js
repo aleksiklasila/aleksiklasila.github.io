@@ -172,7 +172,65 @@ function _findTowerFloorTarget(tower, rangeArea, traps) {
 // ============================================================
 // TOWER CLASS
 // ============================================================
+// Towers act only when due (towersTick): a tower's cooldown is the tick it
+// ends (_cdUntil; cd reads and sets the ticks left), and setting it puts the
+// tower in the due wheel at the tick after (as the countdown it replaces:
+// a cooldown of N set at tick T acts again at T + N + 1). The wheel is made
+// anew from every tower after a resync on every peer (towerDueReset).
+let _towerDue = null;
+function towerDueReset() { _towerDue = null; }
+function towerSchedule(t) {
+    const W = _towerDue;
+    if (!W || !t || t.energy <= 0 || t.underConstruction || (typeof t.type === 'string' && (t.type === 'laser' || t.type.startsWith('cloud')))) return;
+    const at = Math.max(gameTime + 1, Math.ceil(Number(t._cdUntil) || 0) + 1);
+    let L = W.get(at);
+    if (!L) W.set(at, L = []);
+    L.push(t);
+}
+function _towerDueBuild(now) {
+    const W = _towerDue = new Map();
+    for (const t of towers) {
+        if (!t || t.energy <= 0 || t.underConstruction || t.type === 'laser' || (typeof t.type === 'string' && t.type.startsWith('cloud'))) continue;
+        const at = Math.max(now, Math.ceil(Number(t._cdUntil) || 0) + 1);
+        let L = W.get(at);
+        if (!L) W.set(at, L = []);
+        L.push(t);
+    }
+    return W;
+}
+// A tick of the towers: statuses of those with some running (every tick, as
+// ever), then the towers due, in tile order; any whose energy ran out are
+// removed (the list from the end, as ever).
+function towersTick() {
+    let dead = false, st = null;
+    for (const e of _thingStatusSelf) if (e instanceof Tower) (st || (st = [])).push(e);
+    if (st) {
+        st.sort((a, b) => (a.gy * GRID_W + a.gx) - (b.gy * GRID_W + b.gx));
+        for (const e of st) { if (e.energy > 0) thingStatusTickSelf(e); if (!(e.energy > 0)) dead = true; }
+    }
+    const W = _towerDue || _towerDueBuild(gameTime);
+    const due = W.get(gameTime);
+    if (due) {
+        W.delete(gameTime);
+        due.sort((a, b) => (a.gy * GRID_W + a.gx) - (b.gy * GRID_W + b.gx));
+        let prev = null;
+        for (const t of due) {
+            if (t === prev) continue;
+            prev = t;
+            if (t.energy > 0 && getTileEntityRef(t.gx, t.gy) === t) t.act();
+            if (!(t.energy > 0)) dead = true;
+        }
+    }
+    if (dead) {
+        for (let i = towers.length - 1; i >= 0; i--) if (towers[i].energy <= 0) destroyBuilding(towers[i]);
+        for (const e of [..._thingStatusSelf]) if ((e instanceof Tower) && !(e.energy > 0) && getTileEntityRef(e.gx, e.gy) !== e) _thingStatusSelf.delete(e);
+    }
+}
+
 class Tower {
+    // (The cooldown: see towerSchedule.)
+    get cd() { return Math.max(0, (Number(this._cdUntil) || 0) - gameTime); }
+    set cd(v) { this._cdUntil = gameTime + Math.max(0, Number(v) || 0); towerSchedule(this); }
     constructor(gx, gy, type, owner, startStacks = 1) {
         this.gx = gx; this.gy = gy; this.type = type; this.owner = owner;
         this.x = gx * TILE + 16; this.y = gy * TILE + 16;
@@ -240,6 +298,7 @@ class Tower {
         }
         this.updateTextCache();
         if (typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(this);
+        if (this.type === 'laser' && this.connectedLasers) this.laserCheck();
     }
 
     calcStats(lvl) {
@@ -249,6 +308,11 @@ class Tower {
     update() {
         if (this.energy <= 0) return;
         thingStatusTickSelf(this);
+        this.act();
+    }
+
+    // Its turn (towersTick: due, its cooldown over).
+    act() {
         if (this.energy <= 0) return;
         if (this.underConstruction) {
             let requiredEnergy = Math.max(1, Math.floor(getUpgrademaxEnergy(this, 1) || this.maxEnergy || 1));
@@ -257,17 +321,20 @@ class Tower {
         }
         if (this.type.startsWith('cloud')) return;
 
-        if (this.type === 'laser') {
-            // Its beams are the map's (laserBeamsTick). Reach depends on its
-            // effective level (0 while under construction, adjacency,
-            // upgrades), damage on its stats: relinked when they move.
-            if (this._laserLinkLevel !== this.effectiveLevel) { if (typeof markLaserConnectionsDirty === 'function') markLaserConnectionsDirty(); laserMapDirty(); }
-            else if (this.currentStats && this._laserDmgSeen !== this.currentStats.damage && this.connectedLasers && this.connectedLasers.length) laserMapDirty();
-            return;
-        }
+        if (this.type === 'laser') { this.laserCheck(); return; }
 
-        if (this.cd > 0) { this.cd--; return; }
+        if (this.cd > 0) return;
         this.shoot();
+    }
+
+    // A laser's beams are the map's (laserBeamsTick). Reach depends on its
+    // effective level (0 while under construction, adjacency, upgrades),
+    // damage on its stats: relinked when they move (checked where its stats
+    // are made: updateStats).
+    laserCheck() {
+        if (this.type !== 'laser') return;
+        if (this._laserLinkLevel !== this.effectiveLevel) { if (typeof markLaserConnectionsDirty === 'function') markLaserConnectionsDirty(); if (typeof laserMapDirty === 'function') laserMapDirty(); }
+        else if (this.currentStats && this._laserDmgSeen !== this.currentStats.damage && this.connectedLasers && this.connectedLasers.length && typeof laserMapDirty === 'function') laserMapDirty();
     }
 
     shoot() {

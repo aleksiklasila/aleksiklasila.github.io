@@ -82,6 +82,81 @@ function _shouldWaitForConstruction(self) {
 
 let globalSpawnerReadyOrderCounter = 1;
 
+// A spawner's production cooldown in ticks, as its type sets it.
+const _SPAWN_COOLDOWN_ARGS = { spawner: ['collector', 'spawner'], astar_spawner: ['astar_collector', 'astar_spawner'], salvager: ['salvager_unit', 'salvager'],
+    builder_spawner: ['builder_unit', 'builder_spawner'], healer_spawner: ['healer_unit', 'healer_spawner'], research: ['researcher_unit', 'research'] };
+function spawnerCooldownTicks(s) {
+    const lvl = getThingBaseLevel(s);
+    if (s.type === 'barrack') return Math.round(getBarrackSpawnCooldown(s.unitType, lvl, s.owner, `barrack_${s.unitType}`) * TICK_RATE);
+    const a = _SPAWN_COOLDOWN_ARGS[s.type];
+    return a ? Math.round(getBarrackSpawnCooldown(a[0], lvl, s.owner, a[1]) * TICK_RATE) : Math.max(1, Math.round(s.spawnCooldown || 1));
+}
+// Where a spawner's production may have moved on (a payment, its queue or
+// its queue switch changed, construction done): its timer and, once its
+// front is paid, its ready order (barracks and spawners have no tick of
+// their own: spawnerStructuresTick).
+function spawnerProductionChanged(s) {
+    if (!s || !Array.isArray(s.spawnQueue) || !(s.energy > 0) || s.underConstruction) return;
+    s.spawnCooldown = spawnerCooldownTicks(s);
+    const had = Number.isFinite(s._spawnReadyOrder);
+    if (s.spawnQueue.length > 0) updateSpawnerProductionProgress(s);
+    else { s.spawnTimer = 0; s._spawnReadyOrder = undefined; }
+    // (Ready already: listed again, its entry may have been passed while it
+    // could not spawn.)
+    if (had && Number.isFinite(s._spawnReadyOrder)) spawnerReadyNoted(s);
+    // (A research building shows its player's task: built now, say.)
+    if (s.type === 'research') {
+        const task = getPlayerResearchTask(s.owner) || null;
+        s.researchTask = task;
+        s.isResearching = !!(task && !s.isUpgrading && isAutoResearchEnabled(s) && (task.workDone || 0) < task.workRequired);
+    }
+}
+// A tick of the barracks and spawners: those with statuses running (woken
+// by damage or effects: thingStatusWake) tick them at their phase
+// (spawnerDue), in tile order; any whose energy ran out are removed (the
+// lists from the end, as ever); the players' research moves on.
+function spawnerStructuresTick() {
+    let dead = false, due = null;
+    for (const e of _thingStatusSelf) {
+        if (!(e instanceof Barrack) && !isSpawnerEntity(e)) continue;
+        if (!(e.energy > 0)) { dead = true; continue; }
+        if (spawnerDue(e)) (due || (due = [])).push(e);
+    }
+    if (due) {
+        due.sort((a, b) => (a.gy * GRID_W + a.gx) - (b.gy * GRID_W + b.gx));
+        for (const e of due) { thingStatusTickSelf(e); if (!(e.energy > 0)) dead = true; }
+    }
+    if (dead) {
+        for (let i = barracks.length - 1; i >= 0; i--) if (barracks[i].energy <= 0) destroyBuilding(barracks[i]);
+        for (let i = collectorSpawners.length - 1; i >= 0; i--) if (collectorSpawners[i].energy <= 0) destroyBuilding(collectorSpawners[i]);
+        for (const e of [..._thingStatusSelf]) if (!(e.energy > 0) && ((e instanceof Barrack) || isSpawnerEntity(e)) && getTileEntityRef(e.gx, e.gy) !== e) _thingStatusSelf.delete(e);
+    }
+    researchAdvanceTick();
+}
+// Each player's research moves on once a tick while it has a research
+// building (built, alive: the buildings' bins); the research buildings show
+// its task, set where the task changes (and anew on every peer after a
+// resync: spawnerReadyReset).
+let _researchTaskSeen = [];
+function researchAdvanceTick() {
+    const B = typeof _upkBuildingsStep === 'function' ? _upkBuildingsStep() : null;
+    if (!B) return;
+    const np = players.length;
+    let has = 0;
+    for (let b = 0; b < B.n; b++) if (B.cnt[b] && B.type[b] === 'research' && B.owner[b] < np && B.owner[b] < 31) has |= 1 << B.owner[b];
+    for (let o = 0; o < np && o < 31; o++) {
+        if (!(has & (1 << o))) continue;
+        _researchAdvancedTick[o] = gameTime;
+        const task = tryAdvancePlayerResearchTask(o) || null;
+        if (_researchTaskSeen[o] === task) continue;
+        _researchTaskSeen[o] = task;
+        for (const s of collectorSpawners) {
+            if (!s || s.type !== 'research' || s.owner !== o) continue;
+            s.researchTask = task;
+            s.isResearching = !!(task && !s.isUpgrading && isAutoResearchEnabled(s) && (task.workDone || 0) < task.workRequired);
+        }
+    }
+}
 function updateSpawnerProductionProgress(spawner) {
     if (!spawner) return;
     if (!Array.isArray(spawner.spawnQueue) || spawner.spawnQueue.length <= 0) {
@@ -101,6 +176,7 @@ function updateSpawnerProductionProgress(spawner) {
     spawner.spawnTimer = Math.max(0, Math.min(cooldown, Math.round(cooldown * paidPct)));
     if (front.energyPaid >= front.energyRequired && !Number.isFinite(spawner._spawnReadyOrder)) {
         spawner._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
+        spawnerReadyNoted(spawner);
     } else if (front.energyPaid < front.energyRequired) {
         spawner._spawnReadyOrder = undefined;
     }
@@ -179,53 +255,85 @@ function spawnQueuedUnitFromSpawner(spawner) {
     return true;
 }
 
+// Spawners whose queue front is paid, by ready order (_spawnReadyOrder,
+// assigned from an increasing counter: appended, each owner's list stays
+// sorted): per owner its entries (spawner, order) from a head index. An
+// entry whose spawner no longer holds that order (spawned, dequeued,
+// removed) is dropped when reached. Made anew from the spawners on every
+// peer after a resync (spawnerReadyReset).
+let _spawnReady = null;
+function spawnerReadyReset() { _spawnReady = null; _researchTaskSeen = []; }
+// After s._spawnReadyOrder was assigned.
+function spawnerReadyNoted(s) {
+    const R = _spawnReady;
+    if (!R || !s || !Number.isFinite(s._spawnReadyOrder)) return;
+    const o = Number.isFinite(s.owner) ? s.owner : -1;
+    let L = R.byOwner.get(o);
+    if (!L) R.byOwner.set(o, L = { e: [], head: 0 });
+    const order = s._spawnReadyOrder, e = L.e;
+    if (e.length <= L.head || e[e.length - 1] <= order) e.push(s, order);
+    else {
+        // (An older order again, e.g. its queue enabled again: in its place.)
+        let lo = L.head >> 1, hi = e.length >> 1;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (e[mid * 2 + 1] <= order) lo = mid + 1; else hi = mid; }
+        e.splice(lo * 2, 0, s, order);
+    }
+    // (Stale entries pile up only behind an owner at its cap: compacted now and then.)
+    if (L.e.length - L.head > 4 * (barracks.length + collectorSpawners.length) + 64) _spawnReadyCompact(L);
+}
+function _spawnReadyCompact(L) {
+    const e = [];
+    for (let k = L.head; k < L.e.length; k += 2) if (L.e[k]._spawnReadyOrder === L.e[k + 1]) e.push(L.e[k], L.e[k + 1]);
+    L.e = e; L.head = 0;
+}
+function _spawnReadyBuild() {
+    const R = _spawnReady = { byOwner: new Map() }, all = [];
+    for (const b of barracks) if (b && Number.isFinite(b._spawnReadyOrder)) all.push(b);
+    for (const s of collectorSpawners) if (s && Number.isFinite(s._spawnReadyOrder)) all.push(s);
+    all.sort((a, b) => a._spawnReadyOrder - b._spawnReadyOrder);
+    for (const s of all) spawnerReadyNoted(s);
+    return R;
+}
+// Whether s (holding a ready order) may spawn: in the world, alive, built,
+// its queue enabled and its front paid.
+function _spawnReadyValid(s) {
+    if (!s || s.energy <= 0 || s.underConstruction || !isQueueEnabled(s)) return false;
+    if (!Array.isArray(s.spawnQueue) || s.spawnQueue.length <= 0) return false;
+    if (typeof getTileEntityRef === 'function' && getTileEntityRef(s.gx, s.gy) !== s) return false;
+    const owner = Number.isFinite(s.owner) ? s.owner : localPlayerId;
+    const front = getQueuedSpawnInfo(s.spawnQueue[0], getSpawnerFallbackUnitType(s), getThingBaseLevel(s), owner);
+    return front.energyPaid >= front.energyRequired;
+}
 function processGlobalSpawnerQueue() {
-    // Spawning changes only the chosen queue and its owner's population.
-    // Discover ready buildings once, then revisit only the queue we consumed.
-    // The heap preserves ready-order priority and original array-order ties.
-    let ready = [];
-    let before = (a, b) => a.order < b.order || (a.order === b.order && a.index < b.index);
-    let pushIfReady = (s, index) => {
-        if (!s || s.energy <= 0 || s.underConstruction || !isQueueEnabled(s)) return;
-        if (!Array.isArray(s.spawnQueue) || s.spawnQueue.length <= 0) return;
-        let owner = Number.isFinite(s.owner) ? s.owner : localPlayerId;
-        let front = getQueuedSpawnInfo(s.spawnQueue[0], getSpawnerFallbackUnitType(s), getThingBaseLevel(s), owner);
-        if (front.energyPaid < front.energyRequired) return;
-        if (!Number.isFinite(s._spawnReadyOrder)) s._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
-        let order = Number(s._spawnReadyOrder) || Infinity;
-        if (order === Infinity) return; // The original strict minimum also skips zero orders.
-        let entry = { s, index, order };
-        let i = ready.length;
-        ready.push(entry);
-        while (i > 0) {
-            let parent = (i - 1) >> 1;
-            if (!before(entry, ready[parent])) break;
-            ready[i] = ready[parent]; i = parent;
-        }
-        ready[i] = entry;
-    };
-    let index = 0;
-    for (let b of barracks) pushIfReady(b, index++);
-    for (let s of collectorSpawners) pushIfReady(s, index++);
+    // The ready spawners in ready order across owners (each owner's list is
+    // sorted; owners at their population cap are passed over whole), up to
+    // 2048 spawns a tick; a spawner ready again after spawning goes to the
+    // end (a new order), as ever.
+    const R = _spawnReady || _spawnReadyBuild();
     let spawned = 0;
-    while (ready.length && spawned < 2048) {
-        let chosen = ready[0];
-        let last = ready.pop();
-        if (ready.length) {
-            let i = 0;
-            while (i * 2 + 1 < ready.length) {
-                let child = i * 2 + 1;
-                if (child + 1 < ready.length && before(ready[child + 1], ready[child])) child++;
-                if (!before(ready[child], last)) break;
-                ready[i] = ready[child]; i = child;
+    while (spawned < 2048) {
+        let best = null, bestOrder = Infinity;
+        for (const [o, L] of R.byOwner) {
+            if (L.head >= L.e.length) continue;
+            if (!(o >= 0 && players[o] && players[o].popCount < getPlayerPopCap(o))) continue;
+            // (Its first entry still valid.)
+            while (L.head < L.e.length) {
+                const s = L.e[L.head], order = L.e[L.head + 1];
+                if (s._spawnReadyOrder === order && _spawnReadyValid(s)) break;
+                L.head += 2;
             }
-            ready[i] = last;
+            if (L.head >= L.e.length) { L.e = []; L.head = 0; continue; }
+            const order = L.e[L.head + 1];
+            if (order < bestOrder) { bestOrder = order; best = L; }
         }
-        if (!(players[chosen.s.owner].popCount < getPlayerPopCap(chosen.s.owner))) continue;
-        if (!spawnQueuedUnitFromSpawner(chosen.s)) break;
+        if (!best) break;
+        const s = best.e[best.head];
+        if (!spawnQueuedUnitFromSpawner(s)) break;
+        best.head += 2;
+        if (best.head > 4096 && best.head * 2 > best.e.length) { best.e = best.e.slice(best.head); best.head = 0; }
         spawned++;
-        // Do not assign the next front an order after the original loop limit.
-        if (spawned < 2048) pushIfReady(chosen.s, chosen.index);
+        // Its next front, if paid already: ready again (a new order).
+        if (spawned < 2048 && _spawnReadyValid(s) && !Number.isFinite(s._spawnReadyOrder)) { s._spawnReadyOrder = globalSpawnerReadyOrderCounter++; spawnerReadyNoted(s); }
     }
 }
 

@@ -1372,14 +1372,22 @@ function countTeamStructures(pid) {
 // a TICK_RATE-th of the units and structures (by position), so a second's
 // ticks together see every one; the finished counts serve the next sample.
 let _gameStatsAcc = null, _gameStatsDone = null;
-function _gameStatsSlice(k, step, into = null) {
+// (The graph's counts: a slice a tick, of a sample of 1 in `sample` units
+// and items, rotating each second, scaled up; unit totals are exact.)
+const GAME_STATS_SAMPLE = 10;
+function _gameStatsSlice(k, step, into = null, sample = 1, rot = 0) {
     let a = into || { workers: {}, idle: {}, units: {}, structures: {} };
-    let add = (m, pid) => { m[pid] = (m[pid] || 0) + 1; };
+    let add = (m, pid) => { m[pid] = (m[pid] || 0) + sample; };
+    if (sample > 1) {
+        // (Every live unit is counted in its owner's population.)
+        for (let pid = 0; pid < players.length; pid++) if (k === 0) a.units[pid] = players[pid] ? players[pid].popCount : 0;
+    }
+    k += step * (rot % sample); step *= sample;
     for (let i = k, n = units.length; i < n; i += step) {
         let u = units[i];
         if (!u || u.dead) continue;
         let pid = Number.isFinite(u.owner) ? u.owner : -1;
-        add(a.units, pid);
+        if (sample === 1) add(a.units, pid);
         if (!u.workerType) continue;
         add(a.workers, pid);
         if (u.workerState === 'IDLE' || (!u.workerTarget && (!u.path || u.pathIndex >= u.path.length))) add(a.idle, pid);
@@ -1395,7 +1403,7 @@ function _gameStatsSlice(k, step, into = null) {
 function gameStatsStep(tick) {
     let step = Math.max(1, TICK_RATE | 0), k = ((tick % step) + step) % step;
     if (k === 0 || !_gameStatsAcc) { if (_gameStatsAcc && k === 0) _gameStatsDone = _gameStatsAcc; _gameStatsAcc = { workers: {}, idle: {}, units: {}, structures: {} }; }
-    _gameStatsSlice(k, step, _gameStatsAcc);
+    _gameStatsSlice(k, step, _gameStatsAcc, GAME_STATS_SAMPLE, Math.floor(tick / step));
 }
 
 function sampleGameStats() {

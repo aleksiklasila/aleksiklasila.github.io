@@ -166,6 +166,36 @@ ACTIVE p50 211 -> 165 ms (workers' AI 47 -> ~13 ms a tick, mostly the
 per-worker state machines and idle wakes). Equivalence (8 seeds), chaos,
 desync, corruption fuzz and the worker tests pass.
 
+simMoveRun (2026-10-02, user: under 10 ms; tricks and approximations fine
+when movement stays smooth). ACTIVE 200k: 29 -> ~16 ms (p50 tick ~144-155;
+machine timing varies +-10% run to run, compare within runs):
+22. Kernel-side index update: the movement kernel's epilogue writes tile,
+    area and chunk key of units that changed tile (spatialSlotMove's) and
+    keeps the chunk move; SIM_KERNEL_SP_COUNTS applies the count moves with
+    Atomics at the pass's end (counts verified equal to a full recount).
+    Node-step charges summed per chunk/owner/type in the kernel.
+23. Unit slot compaction after a whole-world restore (match start applied
+    the host's own snapshot: 400k slots for 200k units).
+24. Flow movement steers only on tile entry, without a commitment, or when
+    its window ends (16 ticks; 4 within 8 tiles of the destination);
+    between, it follows the committed step (mvCD/mvCTl/mvCT/mvCN/mvCVx/y),
+    in the kernel and Unit._followNavNode alike (equivalence holds).
+    SIM_KERNEL_MOVE_STEP: the plain integrate and parked ticks in a small
+    kernel before the movement kernel (bit-identical results).
+25. Latent mismatches fixed: _simMoveTryFlowArm vs continueUnitRoute (a
+    used-up path ending at the route's end); the integrator placed after
+    the field checks (a remade field hands back so Unit.update asks again).
+26. Hostile tables in two parallel passes (bit-identical); acquisition
+    tier reads the live index (waited at the next index rebuild), copies
+    only the structure tables and cover; drive-by checks use the timer and
+    the drive-by kernel's verdict before the area box; area boxes ensured
+    only when missing; wall key from per-block 3x3 sums (one read).
+Measured: a foreground parallel job costs 27-63 us fixed (fusing saves
+little). Main-kernel steering ~1 us per unit (sparse rows, many columns);
+look-ahead rebuilds on tile entry ~35-40% of it. Ideas left: per field and
+tile look-ahead memo (Atomics-published), drive-by superset box before the
+area box, fewer columns per step.
+
 Remaining (siege, mean ms): unit pass ~90-115 (~7.4k Unit.update a tick:
 idle 1.4k, attackers not armed 1.75k, attack-move acquisitions 1k, kernel
 hand-backs for dead targets / non-direct chases ~1.9k), simMoveRun ~46-51,

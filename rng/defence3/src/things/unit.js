@@ -443,7 +443,7 @@ class Unit {
         this.owner = owner;
         this.x = x; this.y = y;
         this.prevX = x; this.prevY = y;
-        if (this._us) { this._us.x0[this._si] = x; this._us.y0[this._si] = y; }
+        if (this._us) { this._us.x0[this._si] = x; this._us.y0[this._si] = y; this._us.upT[this._si] = simUnitTypeIndex(unitType); if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); }
         // followPath: inputs of the last completed node scan (a cache).
         this._fpPath = null; this._fpTile = -1; this._fpIdx = -1; this._fpVer = -1;
         this.teleportHideTicks = 0;
@@ -553,7 +553,7 @@ class Unit {
     get id() { return this._us ? this._us.id[this._si] : (this._det ? this._det.id : undefined); }
     set id(v) { if (this._us) this._us.id[this._si] = v; else if (this._det) this._det.id = v; else Object.defineProperty(this, 'id', { value: v, writable: true, enumerable: true, configurable: true }); }
     get owner() { return this._us ? this._us.owner[this._si] : (this._det ? this._det.owner : undefined); }
-    set owner(v) { if (this._us) { this._us.owner[this._si] = v; this._us.mvOn[this._si] = 0; } else if (this._det) this._det.owner = v; else Object.defineProperty(this, 'owner', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set owner(v) { if (this._us) { this._us.owner[this._si] = v; this._us.mvOn[this._si] = 0; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.owner = v; else Object.defineProperty(this, 'owner', { value: v, writable: true, enumerable: true, configurable: true }); }
     get x() { return this._us ? this._us.x[this._si] : (this._det ? this._det.x : undefined); }
     set x(v) { if (this._us) this._us.x[this._si] = v; else if (this._det) this._det.x = v; else Object.defineProperty(this, 'x', { value: v, writable: true, enumerable: true, configurable: true }); }
     get y() { return this._us ? this._us.y[this._si] : (this._det ? this._det.y : undefined); }
@@ -599,17 +599,18 @@ class Unit {
     set _vsP2(v) { const c = this._us; if (c) c.vsP2[this._si] = v; else if (c === undefined) Object.defineProperty(this, '_vsP2', { value: v, writable: true, configurable: true }); }
     get _spatialKey() { const c = this._us; if (!c) return undefined; const k = c.sepKey[this._si]; return k === SIM_SEP_ABSENT ? undefined : k; }
     set _spatialKey(v) { const c = this._us; if (c) c.sepKey[this._si] = v === undefined ? SIM_SEP_ABSENT : v; else if (c === undefined) Object.defineProperty(this, '_spatialKey', { value: v, writable: true, configurable: true }); }
-    // Stacks and levels: columns (SIM_UNIT_LEVEL_COLUMNS; NaN: not set).
+    // Stacks and levels: columns (SIM_UNIT_LEVEL_COLUMNS; NaN: not set);
+    // the upkeep bin follows them (upkeepUnitRefresh).
     get stackCount() { const c = this._us; const v = c ? c.stackCount[this._si] : (this._det ? this._det.stackCount : undefined); return v === v ? v : undefined; }
-    set stackCount(v) { const c = this._us; if (c) c.stackCount[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det.stackCount = v; else Object.defineProperty(this, 'stackCount', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set stackCount(v) { const c = this._us; if (c) { c.stackCount[this._si] = typeof v === 'number' ? v : NaN; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.stackCount = v; else Object.defineProperty(this, 'stackCount', { value: v, writable: true, enumerable: true, configurable: true }); }
     get unitLevel() { const c = this._us; const v = c ? c.unitLevel[this._si] : (this._det ? this._det.unitLevel : undefined); return v === v ? v : undefined; }
-    set unitLevel(v) { const c = this._us; if (c) c.unitLevel[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det.unitLevel = v; else Object.defineProperty(this, 'unitLevel', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set unitLevel(v) { const c = this._us; if (c) { c.unitLevel[this._si] = typeof v === 'number' ? v : NaN; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.unitLevel = v; else Object.defineProperty(this, 'unitLevel', { value: v, writable: true, enumerable: true, configurable: true }); }
     get baseLevel() { const c = this._us; const v = c ? c.baseLevel[this._si] : (this._det ? this._det.baseLevel : undefined); return v === v ? v : undefined; }
-    set baseLevel(v) { const c = this._us; if (c) c.baseLevel[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det.baseLevel = v; else Object.defineProperty(this, 'baseLevel', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set baseLevel(v) { const c = this._us; if (c) { c.baseLevel[this._si] = typeof v === 'number' ? v : NaN; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.baseLevel = v; else Object.defineProperty(this, 'baseLevel', { value: v, writable: true, enumerable: true, configurable: true }); }
     get effectiveStacks() { const c = this._us; const v = c ? c.effectiveStacks[this._si] : (this._det ? this._det.effectiveStacks : undefined); return v === v ? v : undefined; }
     set effectiveStacks(v) { const c = this._us; if (c) c.effectiveStacks[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det.effectiveStacks = v; else Object.defineProperty(this, 'effectiveStacks', { value: v, writable: true, enumerable: true, configurable: true }); }
     get effectiveLevel() { const c = this._us; const v = c ? c.effectiveLevel[this._si] : (this._det ? this._det.effectiveLevel : undefined); return v === v ? v : undefined; }
-    set effectiveLevel(v) { const c = this._us; if (c) c.effectiveLevel[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det.effectiveLevel = v; else Object.defineProperty(this, 'effectiveLevel', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set effectiveLevel(v) { const c = this._us; if (c) { c.effectiveLevel[this._si] = typeof v === 'number' ? v : NaN; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.effectiveLevel = v; else Object.defineProperty(this, 'effectiveLevel', { value: v, writable: true, enumerable: true, configurable: true }); }
     get _lastAppliedEffectiveLevel() { const c = this._us; const v = c ? c._lastAppliedEffectiveLevel[this._si] : (this._det ? this._det._lastAppliedEffectiveLevel : undefined); return v === v ? v : undefined; }
     set _lastAppliedEffectiveLevel(v) { const c = this._us; if (c) c._lastAppliedEffectiveLevel[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det._lastAppliedEffectiveLevel = v; else Object.defineProperty(this, '_lastAppliedEffectiveLevel', { value: v, writable: true, enumerable: true, configurable: true }); }
     // The tile whose floor it last checked (Unit.update's floor items): a
@@ -636,7 +637,7 @@ class Unit {
         const c = this._us;
         if (c === undefined) { Object.defineProperty(this, '_ws', { value: v, writable: true, configurable: true }); return; }
         this._ws = v;
-        if (c) c.mvOn[this._si] = 0;
+        if (c) { c.mvOn[this._si] = 0; if (v !== 'IDLE') c.wsKind[this._si] = 0; }
     }
     get _workerNextIdleRetargetTick() { return this._wnr; }
     set _workerNextIdleRetargetTick(v) {
@@ -2815,6 +2816,24 @@ function simMoveTryPark(u) {
     if (!c || u.dead || u.holdPosition || u.workerTransferCooldown > 0) return;
     const s = u._si;
     if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
+    // Registered with the search tier (worker.js wsRegister): parked till the
+    // tier hands it its work; only a builder's watchdog sample (pushed away)
+    // or its recheck (with a target) wakes it.
+    if (c.wsKind[s] && typeof _wsRegistered === 'function' && _wsRegistered(u)) {
+        const watchStill = u.workerType === 'builder' && Number.isFinite(u._builderLastWatchX) && Number.isFinite(u._builderLastWatchY)
+            && u._builderLastWatchX === c.x[s] && u._builderLastWatchY === c.y[s];
+        let wake = gameTime + 0x3fffffff;
+        if (u.workerType === 'builder') {
+            if (u.workerTarget && Number.isFinite(u._builderNextRecheckTick) && u._builderNextRecheckTick < wake) wake = u._builderNextRecheckTick;
+            const w = gameTime + 1 + (((BUILDER_WATCH_TICKS - ((gameTime + 1 + u.id) % BUILDER_WATCH_TICKS)) % BUILDER_WATCH_TICKS) + BUILDER_WATCH_TICKS) % BUILDER_WATCH_TICKS;
+            if (w < wake && !watchStill) wake = w;
+        }
+        if (!(wake > gameTime + 1)) return;
+        c.mvWake[s] = wake; c.mvFlags[s] = watchStill ? 4 : 0;
+        if (watchStill) { c.wkWx[s] = u._builderLastWatchX; c.wkWy[s] = u._builderLastWatchY; }
+        c.mvOn[s] = 2;
+        return;
+    }
     const next = u._workerNextIdleRetargetTick;
     if (!Number.isFinite(next)) return;
     // (A collector with no idle start yet sets it on its next update: not parked.)
