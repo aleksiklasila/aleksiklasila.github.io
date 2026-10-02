@@ -987,6 +987,7 @@ function workerSearchTierStep() {
     if (_wsStepTick === gameTime || !_wsAvailable()) return;
     _wsStepTick = gameTime;
     const ph = gameTime % WS_TICKS;
+    if (ph === (WS_POST_PHASE + 1) % WS_TICKS) _wsOrder();
     if (ph === (WS_POST_PHASE + 2) % WS_TICKS) _wsCommit();
     else if (_wsPending) _wsTakeSome();
     if (ph !== (WS_POST_PHASE + 1) % WS_TICKS) _wswStep((Math.floor(gameTime / WS_TICKS) * 3 + (ph + WS_TICKS - (WS_POST_PHASE + 2) % WS_TICKS) % WS_TICKS) % WSW_SWEEP);
@@ -1265,7 +1266,18 @@ function _wsPost() {
     Bp[0] = total; Bp[1] = 16; Bp[2] = WS_K; Bp[3] = TILE; Bp[4] = WS_BUCKET; Bp[7] = TILE * 0.5; Bp[8] = GRID_W; Bp[9] = GRID_H;
     Bp[10] = _wsw ? _wsw.bw : 0; Bp[11] = chunks; Bp[12] = CH; Bp[13] = HM;
     simParallelBackground(SIM_KERNEL_WS_SCAN, Math.ceil(total / 16), WS_LANE);
-    _wsPosted = { chunks, CH, groups, heal };
+    _wsPosted = { chunks, CH, groups, heal, ordered: false };
+}
+function _wsOrder() {
+    const J = _wsPosted;
+    if (!J || J.ordered) return;
+    simParallelBackgroundWait(WS_LANE);
+    _wsArr('ws.order', Int32Array, J.chunks * J.CH);
+    _wsArr('ws.orderCount', Int32Array, 1);
+    const P = _simBgParamsByLane[WS_LANE];
+    P[0] = J.chunks; P[1] = J.CH; P[2] = WS_K; P[3] = WSR_HEAL;
+    simParallelBackground(SIM_KERNEL_WS_ORDER, 1, WS_LANE);
+    J.ordered = true;
 }
 // A worker's take of its result (its type's search function, which finds
 // the result: wsTake).
@@ -1278,27 +1290,17 @@ function _wsTakeNow(u) {
     else if (wt === 'researcher') _researcherSearch(u);
 }
 function _wsCommit() {
-    if (!_wsPosted) return;
+    if (!_wsPosted || !_wsPosted.ordered) return;
     simParallelBackgroundWait(WS_LANE);
     const J = _wsPosted;
     _wsPosted = null;
     const S = _simUnitState;
     if (!S) return;
-    const c = S.columns, owners = S.owners, R = _simParReg, K = WS_K;
-    const OUT = R['ws.res'], OSC = R['ws.score'], UOUT = R['ws.ures'], CNT = R['ws.rcnt'], RS = R['ws.rslot'], RID = R['ws.rid'], RWT = R['ws.rwt'], RK = R['ws.rkind'], RG = R['ws.rgrp'], RO = R['ws.rowner'];
     _wsCommitTick = gameTime;
-    // The workers that found something, still registered as when selected,
-    // in id order.
-    const found = [];
-    for (let ch = 0; ch < J.chunks; ch++) for (let m = 0, e = CNT[ch]; m < e; m++) {
-        const i = ch * J.CH + m, kind = RK[i];
-        if (OUT[i * K] < 0 && !(kind === WSR_HEAL && UOUT[i * 3] >= 0)) continue;
-        const s = RS[i], u = owners[s];
-        if (!u || u.dead || (u.id | 0) !== RID[i] || c.wsKind[s] !== kind || c.wsT[s] !== RWT[i]) continue;
-        found.push(i);
-    }
+    // Constant-time publication. All ordering work happened on the tier;
+    // each reply is checked live when its scheduled share is consumed.
+    const found = _simParReg['ws.order'].subarray(0, _simParReg['ws.orderCount'][0]);
     if (!found.length) return;
-    found.sort((a, b) => RID[a] - RID[b]);
     // The takes: a share a tick, this one and the next WS_TAKE_TICKS - 1
     // (the last before the next post), in id order.
     _wsPending = { J, found, pos: 0, end: gameTime + WS_TAKE_TICKS - 1 };
@@ -3384,31 +3386,39 @@ function _hcPost(ownerCount, cap) {
     const P = _simBgParamsByLane[HC_LANE];
     P[0] = n; P[1] = HC_CHUNK; P[2] = ownerCount; P[3] = cap;
     simParallelBackground(SIM_KERNEL_HEAL_CAND, chunks, HC_LANE);
-    _hcPosted = { chunks, ownerCount, cap, n };
+    _hcPosted = { chunks, ownerCount, cap, n, reduced: false };
+}
+// The penultimate tick posts the merge. The final tick only consumes K
+// answers per owner, independent of the number of slots/chunks scanned.
+function _hcReduce() {
+    const J = _hcPosted;
+    if (!J || J.reduced) return;
+    simParallelBackgroundWait(HC_LANE);
+    _hcArr('hc.best', Int32Array, J.ownerCount * J.cap);
+    _hcArr('hc.bestRat', Float64Array, J.ownerCount * J.cap);
+    const P = _simBgParamsByLane[HC_LANE];
+    P[0] = J.chunks; P[1] = J.ownerCount; P[2] = J.cap;
+    simParallelBackground(SIM_KERNEL_HEAL_REDUCE, J.ownerCount, HC_LANE);
+    J.reduced = true;
 }
 // The posted scan's lists per owner ({u, ratio, id}), or null.
 function _hcCollect(ownerCount, cap) {
     const J = _hcPosted;
     _hcPosted = null;
-    if (!J || J.ownerCount !== ownerCount || J.cap !== cap) return null;
+    if (!J || !J.reduced || J.ownerCount !== ownerCount || J.cap !== cap) return null;
     simParallelBackgroundWait(HC_LANE);
-    const RES = _simParReg['hc.res'], RAT = _simParReg['hc.rat'], ID = _simParReg['hc.id'], owners = _simUnitState.owners;
+    const RES = _simParReg['hc.best'], RAT = _simParReg['hc.bestRat'], ID = _simParReg['hc.id'], owners = _simUnitState.owners;
     const out = [];
     for (let o = 0; o < ownerCount; o++) {
-        const all = [];
-        for (let ch = 0; ch < J.chunks; ch++) for (let k = 0, b = (ch * ownerCount + o) * cap; k < cap; k++) {
-            const s = RES[b + k];
-            if (s < 0) break;
-            all.push({ s, ratio: RAT[b + k], id: Math.floor(ID[s]) });
-        }
-        all.sort((a, b) => a.ratio - b.ratio || a.id - b.id);
         // (The owner's `cap` best as posted, then those still alive: past
         // them the chunks' lists would depend on the slot layout, which
         // differs on a peer that restored.)
         const list = [];
-        for (let k = 0; k < all.length && k < cap; k++) {
-            const e = all[k], u = owners[e.s];
-            if (u && u.id === e.id && !u.dead) list.push({ u, ratio: e.ratio, id: e.id });
+        for (let k = 0, b = o * cap; k < cap; k++) {
+            const s = RES[b + k];
+            if (s < 0) break;
+            const id = Math.floor(ID[s]), u = owners[s];
+            if (u && u.id === id && !u.dead) list.push({ u, ratio: RAT[b + k], id });
         }
         out.push(list);
     }
@@ -3419,6 +3429,7 @@ function healerCandidatesStep() {
     if (_hcAvailable()) {
         const ownerCount = Math.max(1, Math.floor(Number(players && players.length) || 0)), cap = Math.max(1, HEALER_DAMAGED_CANDIDATE_LIMIT | 0);
         if (k === 0) _hcPost(ownerCount, cap);
+        if (k === R - 2) _hcReduce();
         if (k !== R - 1) return;
         const best = _hcCollect(ownerCount, cap);
         if (best) _healerCandidatesInstall(best, ownerCount);

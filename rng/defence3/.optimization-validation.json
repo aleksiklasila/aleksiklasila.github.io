@@ -1,0 +1,74 @@
+[
+  {
+    "mode": "0",
+    "file": "mixed-rally-move.test.cjs",
+    "status": 0,
+    "output": "PASS: mixed selection issues both rally and move.\n",
+    "timedOut": false,
+    "elapsedMs": 8047
+  },
+  {
+    "mode": "0",
+    "file": "kernel-object-equivalence.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: seed 13 crossroads: kernel and object updates differ at tick 267: 3 fields: u16.x host=595.375 objects=591.375 | u16.y host=385.125 objects=384.375 | u16.path host=\"[\\\"~a\\\",\\\"{\\\\\\\"x\\\\\\\":17,\\\\\\\"y\\\\\\\":11,\\\\\\\"nav\\\\\\\":1,\\\\\\\"ready\\\\\\\":258}\\\"]\" objects=\"[\\\"~a\\\",\\\"{\\\\\\\"x\\\\\\\":17,\\\\\\\"y\\\\\\\":11,\\\\\\\"nav\\\\\\\":1,\\\\\\\"ready\\\\\\\":242}\\\"]\"\n    at runCase (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\kernel-object-equivalence.test.cjs:84:16)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\kernel-object-equivalence.test.cjs:98:55 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 76488
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-snapshot.test.cjs",
+    "status": 0,
+    "output": "PASS: snapshots\n  6 restores from differing pre-states evolve bit-identically for 12 ticks; 129 KB (676 B/entity); unit shapes 1/1/1/1 -> 1/1/1/1\n  gzip transport: delta then full patch (13 KB -> 3 KB), no pause\n  guest without DecompressionStream gets JSON (start and patches); others gzip\n",
+    "timedOut": false,
+    "elapsedMs": 32634
+  },
+  {
+    "mode": "0",
+    "file": "nav-crowd-arrival.test.cjs",
+    "status": 0,
+    "output": "PASS: move and attack-move require a friendly crowd before arriving short.\n",
+    "timedOut": false,
+    "elapsedMs": 1124
+  },
+  {
+    "mode": "0",
+    "file": "shared-unit-state.test.cjs",
+    "status": 0,
+    "output": "PASS: shared unit growth, Float64 precision, stale references, slot reuse, snapshot restore; scalar frame oracle: { compared: 1328052, units: 1952, capacity: 4096 }\n",
+    "timedOut": false,
+    "elapsedMs": 3746
+  },
+  {
+    "mode": "0",
+    "file": "tier-result-reduction.test.cjs",
+    "status": 0,
+    "output": "PASS: healer top-K matches full-sort oracle across slot layouts; worker replies ordered without padding/empty results.\n",
+    "timedOut": false,
+    "elapsedMs": 235
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-patch.test.cjs",
+    "status": 0,
+    "output": "PASS: per-guest patches\n  crossroads: full restore on guest1 only: identical to the host for 40 ticks (130 KB, 163 units)\n  crossroads: full restore on guest2 only: identical to the host for 40 ticks (132 KB, 140 units)\n  crossroads: 1-unit divergence on guest1: 1 patch(es), first after 1220ms {\"bytes\":56005,\"apply\":0,\"stall\":66.66666666667152,\"changed\":1}; exact state equal for 244 ticks\n  crossroads: 6-unit divergence on guest2: 1 patch(es), first after 700ms {\"bytes\":132751,\"apply\":0,\"stall\":16.66666666666788,\"changed\":21}; exact state equal for 245 ticks\n  crossroads: 40-unit divergence on guest3: 2 patch(es), first after 760ms {\"bytes\":109146,\"apply\":0,\"stall\":33.33333333332848,\"changed\":14}; exact state equal for 206 ticks\n  crossroads: forced full patch: 134 KB, exact state equal for 246 ticks\n  crossroads: live joins (spectator, reloaded player): exact state for 1692 tick fingerprints, no repair\n  islands: full restore on guest1 only: identical to the host for 40 ticks (105 KB, 160 units)\n  islands: full restore on guest2 only: identical to the host for 40 ticks (117 KB, 149 units)\n  islands: 1-unit divergence on guest1: 1 patch(es), first after 1060ms {\"bytes\":48711,\"apply\":0,\"stall\":50.00000000000364,\"changed\":1}; exact state equal for 243 ticks\n  islands: 6-unit divergence on guest2: 1 patch(es), first after 760ms {\"bytes\":99624,\"apply\":0,\"stall\":16.66666666666788,\"changed\":9}; exact state equal for 246 ticks\n  islands: 40-unit divergence on guest3: 1 patch(es), first after 760ms {\"bytes\":150120,\"apply\":0,\"stall\":66.66666666665697,\"changed\":49}; exact state equal for 246 ticks\n  islands: forced full patch: 139 KB, exact state equal for 243 ticks\n  islands: live joins (spectator, reloaded player): exact state for 1692 tick fingerprints, no repair\n  solar_system: full restore on guest1 only: identical to the host for 40 ticks (114 KB, 191 units)\n  solar_system: full restore on guest2 only: identical to the host for 40 ticks (141 KB, 196 units)\n  solar_system: 1-unit divergence on guest1: 1 patch(es), first after 1120ms {\"bytes\":50331,\"apply\":0,\"stall\":66.66666666667152,\"changed\":1}; exact state equal for 243 ticks\n  solar_system: 6-unit divergence on guest2: 1 patch(es), first after 900ms {\"bytes\":116038,\"apply\":0,\"stall\":16.66666666666788,\"changed\":9}; exact state equal for 245 ticks\n  solar_system: 40-unit divergence on guest3: 1 patch(es), first after 760ms {\"bytes\":174271,\"apply\":0,\"stall\":16.66666666666424,\"changed\":50}; exact state equal for 246 ticks\n  solar_system: forced full patch: 157 KB, exact state equal for 243 ticks\n  solar_system: live joins (spectator, reloaded player): exact state for 1694 tick fingerprints, no repair\n",
+    "timedOut": false,
+    "elapsedMs": 163695
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-chaos-determinism.test.cjs",
+    "status": 0,
+    "output": "PASS: chaos determinism\n  arena: 180 units + 201 buildings at start (max 191 units), 20 unit types, 27 command kinds, 2595 tick hashes compared, 2 patches for forced divergences\n  random: 158 units + 201 buildings at start (max 159 units), 20 unit types, 27 command kinds, 2595 tick hashes compared, 2 patches for forced divergences\n  islands: 171 units + 201 buildings at start (max 182 units), 20 unit types, 27 command kinds, 2595 tick hashes compared, 2 patches for forced divergences\n  crossroads: 177 units + 201 buildings at start (max 177 units), 20 unit types, 27 command kinds, 2595 tick hashes compared, 2 patches for forced divergences\n  solar_system: 177 units + 201 buildings at start (max 220 units), 20 unit types, 27 command kinds, 2595 tick hashes compared, 2 patches for forced divergences\n  island: 177 units + 201 buildings at start (max 184 units), 20 unit types, 27 command kinds, 2595 tick hashes compared, 2 patches for forced divergences\n",
+    "timedOut": false,
+    "elapsedMs": 177016
+  },
+  {
+    "mode": "1",
+    "file": "mixed-rally-move.test.cjs",
+    "status": 0,
+    "output": "PASS: mixed selection issues both rally and move.\n",
+    "timedOut": false,
+    "elapsedMs": 8549
+  }
+]

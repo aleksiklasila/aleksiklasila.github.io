@@ -1385,7 +1385,9 @@ class Unit {
             this._navLastD = d;
             const near = Math.abs(nd.x - gx) <= 8 && Math.abs(nd.y - gy) <= 8;
             if (last >= 0 && last - d < spd * 0.3 * steer) {
-                if (near) { this.pathIndex = this.path.length; this._navLastD = -1; return true; }
+                // A detour or wall can also reduce progress. Only settle
+                // short of the destination when a friendly crowd is there.
+                if (near && _unitCrowdIdleNear(this)) { this.pathIndex = this.path.length; this._navLastD = -1; return true; }
                 if (_unitCrowdIdleNear(this)) { this._navLastD = -2 - dest; return false; }
             }
         } else this._navLastD = -1;

@@ -68,6 +68,9 @@ const SIM_KERNEL_ACQ_SNAP = 32, SIM_KERNEL_ACQ_SCAN = 33, SIM_KERNEL_ACQ_COMMIT 
 const SIM_KERNEL_UPD_CAND = 36, SIM_KERNEL_HELD_DEAD = 37, SIM_KERNEL_DRIVEBY = 38, SIM_KERNEL_WS_SCAN = 39, SIM_KERNEL_HEAL_CAND = 40, SIM_KERNEL_SP_COUNTS = 41, SIM_KERNEL_MOVE_STEP = 42, SIM_KERNEL_SAT_ROWS = 43, SIM_KERNEL_SAT_COLS = 44, SIM_KERNEL_WS_SELECT = 45, SIM_KERNEL_UPKEEP = 46;
 const SIM_KERNEL_STATUS = 24, SIM_KERNEL_INDEX_FILL = 25, SIM_KERNEL_INDEX_RUNS = 26, SIM_KERNEL_EFF_UNITS = 27, SIM_KERNEL_VIS_SEED = 28;
 const SIM_KERNEL_TILE_OWNERS = 29;
+const SIM_KERNEL_HEAL_REDUCE = 47;
+const SIM_KERNEL_WS_ORDER = 48;
+const SIM_KERNEL_UNIT_RETIRE = 49;
 
 // One tick of an armed mover (see simMoveTryArm in unit.js): Unit.update
 // for a unit marching along its path with nothing to react to, straight on
@@ -810,7 +813,7 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
                 if (SND[s] > 0) es *= 0.5;
                 const near = Math.abs(dx0 - gx) <= 8 && Math.abs(dy0 - gy) <= 8;
                 if (last >= 0 && last - now < es * 0.3 * SIM_STEER_NEAR_TICKS) {
-                    if (near) { ON[s] = 0; continue; }
+                    if (near && CWT[s] === t && CWN[s] === 1) { ON[s] = 0; continue; }
                     if (CWT[s] === t && CWN[s] === 1) { NLD[s] = -2 - dk; PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
                 }
                 navLD = now;
@@ -2359,6 +2362,59 @@ SIM_KERNELS[SIM_KERNEL_HEAL_CAND] = function (R, P, chunk) {
         while (k > 0 && (RES[b + k - 1] < 0 || r < RAT[b + k - 1] || (r === RAT[b + k - 1] && id < Math.floor(ID[RES[b + k - 1]])))) { RES[b + k] = RES[b + k - 1]; RAT[b + k] = RAT[b + k - 1]; k--; }
         RES[b + k] = s; RAT[b + k] = r;
     }
+};
+
+// Merge the healer scan's chunk lists on the same background lane, one
+// job per owner. P: [0] chunks, [1] owners, [2] candidate limit. Only the
+// immutable posted inputs are read; the tick validates the final K slots.
+SIM_KERNELS[SIM_KERNEL_HEAL_REDUCE] = function (R, P, owner) {
+    const RES = R['hc.res'], RAT = R['hc.rat'], ID = R['hc.id'];
+    const OUT = R['hc.best'], RATIO = R['hc.bestRat'];
+    const chunks = P[0] | 0, np = P[1] | 0, K = P[2] | 0, b = owner * K;
+    for (let k = 0; k < K; k++) { OUT[b + k] = -1; RATIO[b + k] = Infinity; }
+    for (let ch = 0; ch < chunks; ch++) for (let j = 0, a = (ch * np + owner) * K; j < K; j++) {
+        const s = RES[a + j];
+        if (s < 0) break;
+        const r = RAT[a + j], id = Math.floor(ID[s]);
+        let k = K - 1;
+        if (OUT[b + k] >= 0 && (r > RATIO[b + k] || (r === RATIO[b + k] && id >= Math.floor(ID[OUT[b + k]])))) continue;
+        while (k > 0 && (OUT[b + k - 1] < 0 || r < RATIO[b + k - 1] || (r === RATIO[b + k - 1] && id < Math.floor(ID[OUT[b + k - 1]])))) {
+            OUT[b + k] = OUT[b + k - 1]; RATIO[b + k] = RATIO[b + k - 1]; k--;
+        }
+        OUT[b + k] = s; RATIO[b + k] = r;
+    }
+};
+
+// Worker replies in canonical id order, prepared entirely from the posted
+// request/results. No live columns: withdrawals/deaths are checked by the
+// tick as it consumes its bounded share. P: chunks, chunk size, K, healer kind.
+SIM_KERNELS[SIM_KERNEL_WS_ORDER] = function (R, P, chunk) {
+    const CNT = R['ws.rcnt'], KIND = R['ws.rkind'], ID = R['ws.rid'];
+    const RES = R['ws.res'], URES = R['ws.ures'], OUT = R['ws.order'];
+    let n = 0;
+    for (let ch = 0; ch < P[0]; ch++) for (let m = 0; m < CNT[ch]; m++) {
+        const i = ch * P[1] + m;
+        if (RES[i * P[2]] >= 0 || (KIND[i] === P[3] && URES[i * 3] >= 0)) OUT[n++] = i;
+    }
+    OUT.subarray(0, n).sort((a, b) => ID[a] - ID[b]);
+    R['ws.orderCount'][0] = n;
+};
+
+// Tick-end lifecycle: clear movement outputs and list only dead units (or
+// unbacked objects to check), in units-array order within each block.
+// P: units count, block size, slot count. The tick visits the sparse list
+// backwards, preserving death/bounty/win-condition ordering exactly.
+SIM_KERNELS[SIM_KERNEL_UNIT_RETIRE] = function (R, P, chunk) {
+    const slots = R['ix.slots'], dead = R['unit.dead'], out = R['unit.mvOut'];
+    const list = R['retire.list'], counts = R['retire.count'];
+    const start = chunk * P[1];
+    for (let s = start, end = Math.min(P[2], start + P[1]); s < end; s++) out[s] = 0;
+    let n = 0;
+    for (let i = start, end = Math.min(P[0], start + P[1]); i < end; i++) {
+        const s = slots[i];
+        if (s < 0 || dead[s]) list[start + n++] = i;
+    }
+    counts[chunk] = n;
 };
 
 // The unit pass's candidates (main.js _forEachUnitInTickOrder): per block
