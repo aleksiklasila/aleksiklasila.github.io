@@ -32,7 +32,7 @@ const SIM_PAR_GEN = 0, SIM_PAR_KERNEL = 1, SIM_PAR_NEXT = 2, SIM_PAR_TOTAL = 3, 
 // rewritten only once closed and empty (no claim in flight), so a late
 // claim can never run a chunk of the next job.
 const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 7;
-const SIM_PAR_BG_ID = 5, SIM_PAR_BG_READERS = 6, SIM_PAR_BG_STAGE = 7, SIM_PAR_BG_STAGES = 12;
+const SIM_PAR_BG_ID = 5, SIM_PAR_BG_READERS = 6, SIM_PAR_BG_STAGE = 7, SIM_PAR_BG_STAGES = 24;
 // (Control words: SIM_PAR_BG_BASE + lanes * 8, rounded up.)
 const SIM_PAR_CTL_WORDS = 128;
 // The tiers: work that need not run at the tick's rate (20 per second) goes
@@ -1598,8 +1598,8 @@ SIM_KERNELS[SIM_KERNEL_VISIBILITY] = function (R, P, chunk) {
 // SEPARATION_PREPARE (sep.chunkC, valid where sep.rstamp is the epoch P[2]).
 SIM_KERNELS[SIM_KERNEL_SEPARATION_YIELD] = function (R, P, chunk) {
     const sc = R['sep.sc'], keys = R['sep.keys'], ord = R['sep.ord'], chunkC = R['sep.chunkC'], rstamp = R['sep.rstamp'];
-    const CW = P[3] | 0, CH = P[4] | 0, ep = P[2] | 0, t0 = P[5] | 0, stag = (P[6] | 0) === 0;
-    for (let k = chunk * P[1], end = Math.min(P[0], k + P[1]); k < end; k++) {
+    const CW = P[3] | 0, CH = P[4] | 0, ep = P[2] | 0, t0 = P[5] | 0, stag = (P[6] | 0) === 0, NL = P[7] === 1 ? R['ix.listed'][0] | 0 : P[0] | 0;
+    for (let k = chunk * P[1], end = Math.min(NL, k + P[1]); k < end; k++) {
         if ((meta[k] & 65536) || ord[k] < 0 || (stag && ((t0 + sid[k]) & 1) !== 0)) continue;
         const key = keys[k] | 0, cx = key % CW, cy = (key - cx) / CW;
         let near = 0;
@@ -1639,33 +1639,37 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION_YIELD] = function (R, P, chunk) {
 // SIM_KERNEL_SEPARATION_FINISH spreads its push over that tick and the
 // next); 1: every unit every tick; 2: every unit every other tick.
 // P (PACK): [0] entries, [1] per job, [2] rest ticks, [3] tick, [4] mode.
+// (P[5] 1: between ticks, from the live columns (x, y, dead, radii, layer:
+// the next tick's start state) and the entries the unit index build listed.)
 SIM_KERNELS[SIM_KERNEL_SEP_PACK] = function (R, P, chunk) {
-    const eslot = R['sep.eslot'];
-    const X = R['unit.x0'], Y = R['unit.y0'], D0 = R['unit.sepD0'], R0 = R['unit.sepR0'], L0 = R['unit.sepL0'];
+    const eslot = R['sep.eslot'], live = P[5] === 1;
+    const X = live ? R['unit.x'] : R['unit.x0'], Y = live ? R['unit.y'] : R['unit.y0'], D0 = live ? R['unit.dead'] : R['unit.sepD0'];
+    const R0 = live ? null : R['unit.sepR0'], L0 = live ? R['unit.sepLayer'] : R['unit.sepL0'], CRL = R['unit.collisionR'], RDL = R['unit.r'];
+    const NL = live ? R['ix.listed'][0] | 0 : P[0] | 0;
     const OWNER = R['unit.owner'], ID = R['unit.id'], SMV = R['unit.sepMov'];
     const ord = R['sep.ord'], rec = R['sep.rec'], meta = R['sep.meta'], sid = R['sep.sid'];
     // (P[4]: 0 staggered, a unit on its own ticks ((t + id) even) only; 1
     // every tick; 2 every unit, on the even ticks this runs on. A unit at
     // rest looks on every rest-th of its own ticks, by id.)
     const mode = P[4] | 0, t0 = P[3] | 0, rest0 = P[2] | 0, rest = mode === 2 ? Math.max(1, rest0 >> 1) : rest0, run = mode === 2 ? t0 >> 1 : t0;
-    for (let k = chunk * P[1], end = Math.min(P[0], k + P[1]); k < end; k++) {
+    for (let k = chunk * P[1], end = Math.min(NL, k + P[1]); k < end; k++) {
         const s0 = eslot[k];
         const s = s0 >= 0 && D0[s0] ? -1 : s0;
         ord[k] = s;
         const r4 = k * 4;
         if (s < 0) { meta[k] = 255 << 8 | 255; rec[r4] = 1e9; rec[r4 + 1] = 1e9; rec[r4 + 2] = .1; sid[k] = 0; continue; }
         const id = ID[s] || 0, moved = SMV[s] === 1, own = mode !== 0 || ((t0 + id) & 1) === 0;
-        rec[r4] = X[s]; rec[r4 + 1] = Y[s]; rec[r4 + 2] = R0[s]; sid[k] = id;
+        rec[r4] = X[s]; rec[r4 + 1] = Y[s]; rec[r4 + 2] = R0 ? R0[s] : Math.max(.1, CRL[s] || RDL[s] || .1); sid[k] = id;
         const sc = (moved ? 2 : 0) | (own && (moved || rest <= 1 || ((run + id) | 0) % rest === 0) ? 1 : 0);
         meta[k] = sc << 16 | (L0[s] & 255) << 8 | (OWNER[s] & 255);
     }
 };
 // P: [0] entries, [1] per job.
 SIM_KERNELS[SIM_KERNEL_SEP_AGG] = function (R, P, chunk) {
-    const ekey = R['sep.ekey'], rs = R['sep.rs'], rc = R['sep.rc'];
+    const ekey = R['sep.ekey'], rs = R['sep.rs'], rc = R['sep.rc'], NL = P[7] === 1 ? R['ix.listed'][0] | 0 : P[0] | 0;
     const ord = R['sep.ord'], rec = R['sep.rec'], meta = R['sep.meta'];
     const chunkR = R['sep.chunkR'], sole = R['sep.sole'], chunkC = R['sep.chunkC'], chunkP = R['sep.chunkP'], box = R['sep.box'];
-    for (let k = chunk * P[1], end = Math.min(P[0], k + P[1]); k < end; k++) {
+    for (let k = chunk * P[1], end = Math.min(NL, k + P[1]); k < end; k++) {
         const key = ekey[k];
         // (A chunk's first entry: the previous entry's chunk differs; entries
         // are in chunk order.)
@@ -1692,8 +1696,8 @@ SIM_KERNELS[SIM_KERNEL_SEP_AGG] = function (R, P, chunk) {
 // written by any of them, the same value.)
 SIM_KERNELS[SIM_KERNEL_SEP_MARK] = function (R, P, chunk) {
     const meta = R['sep.meta'], keys = R['sep.ekey'], ord = R['sep.ord'], sid = R['sep.sid'], chunkC = R['sep.chunkC'], chunkP = R['sep.chunkP'], rstamp = R['sep.rstamp'];
-    const CW = P[3] | 0, CH = P[4] | 0, ep = P[2] | 0, t0 = P[5] | 0, stag = (P[6] | 0) === 0;
-    for (let k = chunk * P[1], end = Math.min(P[0], k + P[1]); k < end; k++) {
+    const CW = P[3] | 0, CH = P[4] | 0, ep = P[2] | 0, t0 = P[5] | 0, stag = (P[6] | 0) === 0, NL = P[7] === 1 ? R['ix.listed'][0] | 0 : P[0] | 0;
+    for (let k = chunk * P[1], end = Math.min(NL, k + P[1]); k < end; k++) {
         if ((meta[k] & 65536) || ord[k] < 0 || (stag && ((t0 + sid[k]) & 1) !== 0)) continue;
         const key = keys[k] | 0, cx = key % CW, cy = (key - cx) / CW;
         let near = 0;
@@ -1738,7 +1742,7 @@ function _simSepSide(PX, PY, OV, HIT, a, ux, uy, d, id, oid, overlap, share, Q) 
 // epoch, [12] MOVER, [13] YIELD, [14] band parity (job c: band 2c + it).
 SIM_KERNELS[SIM_KERNEL_SEP_PAIRS] = function (R, P, chunk) {
     const CW = P[0] | 0, CH = P[1] | 0, H = P[2] | 0, pad = P[3], farAny = P[4], Q = P[5], BOTH = P[6], ONE = P[7];
-    const listed = P[9] | 0, cws = P[10], ep = P[11] | 0, MOVER = P[12], YIELD = P[13];
+    const listed = P[15] === 1 ? R['ix.listed'][0] | 0 : P[9] | 0, cws = P[10], ep = P[11] | 0, MOVER = P[12], YIELD = P[13];
     const band = chunk * 2 + (P[14] | 0), row0 = band * H, row1 = Math.min(CH, row0 + H);
     if (row0 >= CH) return;
     const ord = R['sep.ord'], rec = R['sep.rec'], meta = R['sep.meta'], sid = R['sep.sid'];
@@ -2060,7 +2064,7 @@ function simParallelBackgroundWait(lane = 1) {
     _simBg[lane] = null;
     const views = _simBgStageParams[lane];
     if (J.sync) {
-        for (let i = 0; i < J.stages.length; i++) { const fn = SIM_KERNELS[J.stages[i][0]], P = views[J.slots[i]]; for (let c = 0; c < J.stages[i][1]; c++) fn(_simParReg, P, c); }
+        for (let i = J.ran | 0; i < J.stages.length; i++) { const fn = SIM_KERNELS[J.stages[i][0]], P = views[J.slots[i]]; for (let c = 0; c < J.stages[i][1]; c++) fn(_simParReg, P, c); }
         return;
     }
     const ctl = _simPool.ctl, b = SIM_PAR_BG_BASE + lane * 8, last = J.stages.length - 1, id0 = _simBgIds[lane];
@@ -2080,6 +2084,36 @@ function simParallelBackgroundWait(lane = 1) {
     _simBgClose(ctl, b, 0);
 }
 function simParallelBackgroundPending(lane = 1) { return !!_simBg[lane]; }
+// Waits until the lane's chain has finished its stages up to `stage` (by
+// their place in the posted list, stages of no chunks counted as done),
+// taking chunks of those meanwhile; the job stays posted (the rest runs on).
+function simParallelBackgroundWaitStage(lane, stage) {
+    const J = _simBg[lane];
+    if (!J) return;
+    // (The stage's place among the posted, non-empty stages.)
+    let k = -1;
+    for (let i = 0; i < J.slots.length; i++) if (J.slots[i] <= stage) k = i;
+    if (k < 0) return;
+    const views = _simBgStageParams[lane];
+    if (J.sync) {
+        for (let i = J.ran | 0; i <= k; i++) { const fn = SIM_KERNELS[J.stages[i][0]], P = views[J.slots[i]]; for (let c = 0; c < J.stages[i][1]; c++) fn(_simParReg, P, c); }
+        J.ran = Math.max(J.ran | 0, k + 1);
+        return;
+    }
+    if (k >= J.stages.length - 1) { simParallelBackgroundWait(lane); return; }
+    const ctl = _simPool.ctl, b = SIM_PAR_BG_BASE + lane * 8, idAfter = (_simBgIds[lane] + k + 1) & 0x7F;
+    for (;;) {
+        // Done once the stage after it is open (its id), or later ones.
+        const id = Atomics.load(ctl, b + SIM_PAR_BG_ID), st = Atomics.load(ctl, b + SIM_PAR_BG_STAGE);
+        if (id >= 0 && st > k) break;
+        if (id === idAfter) break;
+        const r = _simBgClaim(ctl, lane, _simBgChain, views);
+        if (r === 2) break;
+        if (r === 1) continue;
+        const d = Atomics.load(ctl, b + SIM_PAR_BG_DONE);
+        Atomics.wait(ctl, b + SIM_PAR_BG_DONE, d, 1);
+    }
+}
 // Whether the lane's job is complete (without waiting or taking chunks):
 // for jobs whose result may be collected early.
 function simParallelBackgroundDone(lane = 1) {
@@ -2997,7 +3031,10 @@ SIM_KERNELS[SIM_KERNEL_STATUS] = function (R, P, chunk) {
         X0[s] = X[s]; Y0[s] = Y[s];
         // (The separation tier's copy: radius and layer, dead below.)
         SR0[s] = Math.max(.1, CR[s] || RAD[s] || .1); SL0[s] = LAY[s];
-        if (DEAD[s]) { SD0[s] = 1; continue; }
+        // (Dead as the tick starts, before this pass's damage: the prebuilt
+        // separation (from the state after the last tick) sees the same.)
+        SD0[s] = DEAD[s];
+        if (DEAD[s]) continue;
         let ev = 0, dot = 0;
         if (TH[s] > 0) TH[s]--;
         if (BU[s] > 0) { BU[s]--; const d = BD[s]; if (d > 0) { EN[s] -= d; dot += d; ev = 1; } }
@@ -3009,7 +3046,6 @@ SIM_KERNELS[SIM_KERNEL_STATUS] = function (R, P, chunk) {
         if (WA[s] > 0) { WA[s]--; if (WA[s] <= 0) ev |= 2; }
         if (EN[s] <= 0) { DEAD[s] = 1; ev |= 4; }
         else { if (AT[s] > 0) AT[s]--; if (AF[s] > 0) AF[s]--; if (WTC[s] > 0) WTC[s]--; }
-        SD0[s] = DEAD[s];
         // (Reported every per ticks, or now that it died.)
         const acc = ACC[s] + dot;
         ev &= ~1;
@@ -3025,8 +3061,9 @@ SIM_KERNELS[SIM_KERNEL_STATUS] = function (R, P, chunk) {
 // player p is listed there; dead units too). The entries are grouped by
 // tile (sep.ekey); a job owns the runs that start in its range (finishing
 // them past its end), so no two write one tile. P: [0] entries, [1] per job.
+// (P[2] 1: the entries listed by this build, ix.listed, not P[0].)
 SIM_KERNELS[SIM_KERNEL_TILE_OWNERS] = function (R, P, chunk) {
-    const es = R['sep.eslot'], ek = R['sep.ekey'], OWN = R['unit.owner'], M = R['ix.omask'], n = P[0] | 0;
+    const es = R['sep.eslot'], ek = R['sep.ekey'], OWN = R['unit.owner'], M = R['ix.omask'], n = P[2] === 1 ? R['ix.listed'][0] | 0 : P[0] | 0;
     for (let e = chunk * P[1], end = Math.min(n, e + P[1]); e < end; e++) {
         const k = ek[e];
         if (e > 0 && ek[e - 1] === k) continue;

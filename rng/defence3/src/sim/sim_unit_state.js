@@ -20,7 +20,7 @@ const SIM_UNIT_ACCESSOR_COLUMNS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'v
 const SIM_UNIT_MIRROR_COLUMNS = ['r', 'collisionR'];
 // Accessor keys that are not columns (see simUnitStateKeys): the path is a
 // plain reference behind a setter that disarms the movement kernel.
-const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved'];
+const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved', '_statsBehind'];
 
 // Unit types by first sight (peer-local indices: only ever mapped back to
 // the type's name).
@@ -275,6 +275,7 @@ function simUnitStateDetach(S, s) {
     values._navLastD = S.columns.mvNavLD[s];
     values._floorTile = S.columns.mvFloor[s];
     values._sepMoved = S.columns.sepMov[s];
+    values._statsBehind = typeof _unitStatsBehind === 'function' ? _unitStatsBehind(u, S.columns.esVer[s]) : false;
     u._det = values;
     u._us = null; u._si = -1;
     S.sepKey[s] = SIM_SEP_ABSENT;

@@ -837,16 +837,21 @@ function effStatsAppliedSync() {
     if (!S) return;
     const c = S.columns, n = S.owners.length;
     for (let s = 0; s < n; s++) c._lastAppliedEffectiveLevel[s] = c.effectiveLevel[s];
-    // (And at the current table versions: units behind take their tables now,
-    // on every peer alike (a restored peer derived its units' stats from the
-    // current tables), as the old research pass did at once.)
+    // (A restored unit's flag (_statsBehind: -2 behind, -3 current) as a
+    // version: behind stays behind, as on the peer it came from.)
     for (let s = 0; s < n; s++) {
+        const v = c.esVer[s];
+        if (v !== -2 && v !== -3) continue;
         const u = S.owners[s];
-        if (!u) continue;
-        const v = _unitStatsVerOf(u);
-        if (c.esVer[s] !== v && !u.dead) { const e = u.energy; applyUnitLevelScaling(u, getUnitBaseLevel(u)); if (u.preComputedEffective) u.energy = Math.max(1, Math.min(e, u.preComputedEffective.maxEnergy)); }
-        c.esVer[s] = v;
+        c.esVer[s] = v === -3 && u ? _unitStatsVerOf(u) : -2;
     }
+}
+// (esVer -1: a new unit, its stats not applied yet; -2: behind, from a
+// restore.)
+function _unitStatsBehind(u, ver) {
+    if (ver === -3) return false;
+    if (ver < 0) return true;
+    return ver !== _unitStatsVerOf(u);
 }
 let _effStatsVersion = -1;
 

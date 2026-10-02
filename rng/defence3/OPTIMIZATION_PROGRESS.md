@@ -63,6 +63,79 @@ is next. Newest entries first within each section.
 
 ## Session log
 
+### 2026-10-02 (eighth round) — separation chain, index prebuild, total-work cuts
+
+User priorities (restated): main tick < 50 ms at 20 TPS; smooth jitter-free
+movement/turning of units and buildings; responsive commands; units not
+packed too close, a gap between teams; everything else free to rework.
+
+Key finding: the harness guest runs every kernel serially, so its profile
+is the total CPU work per tick: ~490 ms at 200k in ACTIVE (8 cores x 50 ms
+is the ceiling). Work must shrink, not only move to helpers. Profile per
+peer with `.claude/profpeer.cjs file.cpuprofile [self] [total] [root]`
+(script ids split host and guest); kernel names for profile lines:
+`.claude/kname.cjs "" <line>...`.
+
+Done:
+1. Restore duplicate slots (the reported healer-candidate mismatch): the
+   fix in HEAD (simUnitStateCollect before simUnitStateCompact in
+   snapDecodeState) holds; chaos/patch/desync/snapshot pass in both modes.
+2. Background lanes: chains of up to 12 stages (simParallelBackgroundChain,
+   per-stage params simParallelStageParams; the participant finishing a
+   stage's last chunk opens the next). Per-lane id + reader count: a lane is
+   rewritten only closed and empty (fixes DETERMINISM_AUDIT #1, a late claim
+   running a chunk of the next job). 7 lanes (SIM_LANE_IX new), ctl 128
+   words. tests/background-chain.test.cjs (real threads, 0/1/7 helpers).
+3. Separation as a helper chain on lane 0 (PACK -> AGG -> MARK -> PAIRS even
+   bands -> PAIRS odd bands), from a tick-start copy (STATUS writes
+   x0/y0, sepD0/sepR0/sepL0), during the unit pass. Each touching pair once
+   (both sides' pushes; integer sums, so order-free; bands of >= reach rows,
+   two stages, no atomics); records Float32 (x, y, r) + packed meta.
+   Staggered: a unit takes part on (t + id) even ticks; FINISH spreads each
+   push over two ticks (sepCx/sepCy carry, reset at a resync) with gain
+   1.2; FINISH indexes tile changes itself (the main thread lists only
+   blocked/retry units); one SP_COUNTS pass a tick. Global every-other-tick
+   (UNIT_SEPARATION_MODE 2) made crowds sway (reversals 2x): not used.
+   tests/separation-pairs.test.cjs (pair kernel == per-unit kernel, bit
+   exact), tests/separation-jitter.test.cjs (overlap, back-and-forth,
+   largest tick move vs every-tick separation).
+4. Area index removed (its one reader, forEachUnitInAreaRange, walks the
+   areas' tiles: tile order, then units order).
+5. Unit index prebuilt after each tick on SIM_LANE_IX (chunk.js
+   spatialIndexPrebuild): KEYS, radix (HIST/PREFIX/SCATTER x3), FILL, RUNS
+   as a chain while the state hash runs; taken at the next use; dropped
+   when the units list changed (slot map ver), a unit died outside a tick
+   (dead setter) or a restore/flush invalidated it.
+6. Hash: units' list order in the region kernel (position-keyed sum);
+   object fields of each unit every 400 ticks (SNAP_HASH_OBJ_GROUPS 40).
+7. Adjacency recalculation: only at the tick's end (mid-tick requests
+   wait), touched areas only (no copy of all 120k areas' flags).
+8. Visibility safety sweeps: buildings over 64 ticks, units over 256.
+9. Research: units take new stat tables lazily at their effective-stats
+   refresh (per (owner, type) table versions, esVer column; the behind flag
+   travels in snapshots as _statsBehind); no all-units refresh (a research
+   cost ~1 s of unit pass at 200k). Buildings: the floor items list instead
+   of two scans of every grid cell (still immediate).
+
+Measured (ACTIVE 200k, HELPERS=7, idle machine): gameTick p50 ~140 (last
+session) -> 50.2 ms; whole tick p50 72 -> 65 ms. resyncAfterTick 18 -> 10.
+Remaining gameTick (mean ms): simMoveRun 13.4 (MOVE 5.6, MOVE_STEP 3.3,
+drive-by 1.5), unit pass 9.8, eff stats ~5-8, separation commit 6.4
+(FINISH 3, counts 1.5, chain wait), status 2.5, vis 2.1.
+Movement probe (per tick): 173k plain steps, 18.6k steers (14k tile
+entries, 4.5k window ends), 25k parked, ~600 hand-backs.
+
+Determinism to fix later (noted, not fixed): kernel/object chase divergence
+(DETERMINISM_AUDIT #2), audit #3-#6; hash detection of object-only fields
+now 400 ticks; visibility sweeps rely on complete hooks over 256 ticks;
+index prebuild relies on no positions being set outside ticks except via
+restore; building research still immediate (a spike for big tower counts).
+
+Next: movement kernels (motion records with a validity deadline so most
+units only integrate; steering ahead on a tier), effective stats off the
+tick (output buffers, commit next tick), STATUS sparse, hash JS parts
+(building core, reservations), worker check ticks (WORKER_MOVE_CHECK_TICKS).
+
 ### 2026-10-02 (seventh round) — tier lanes, combat on the movers, determinism
 
 User direction (plan, "Sixth refinement"): the 20 TPS thread only does what

@@ -69,11 +69,17 @@ function _ensurePlayerResourceState(playerId) {
     return player;
 }
 
+// The debt as a share of the most ever held, in steps of
+// 1 / RESOURCE_PENALTY_STEP_DIV (the nearest step): the
+// stat tables are rebuilt when the step changes, not on every spend while
+// in debt (each rebuild sends every unit of the player through a stats
+// refresh).
+const RESOURCE_PENALTY_STEP_DIV = 16;
 function _getResourcePenaltySteps(currentValue, maxValue) {
     let cur = Number(currentValue);
     let maxSeen = Math.max(1, Number(maxValue) || 0);
     if (!Number.isFinite(cur) || cur >= 0) return 0;
-    return Math.max(0, Math.abs(cur) / maxSeen);
+    return Math.max(0, Math.round(Math.abs(cur) / maxSeen * RESOURCE_PENALTY_STEP_DIV) / RESOURCE_PENALTY_STEP_DIV);
 }
 
 function _getPlayerResourcePenaltyMultiplier(playerId, resourceKey) {
@@ -3499,76 +3505,50 @@ function applyUnitResearchUpgradeToExistingUnits(owner, unitType, statKey) {
     rebuildPrecomputedStatsMapPlayerThingStat(owner, 'unit', unitType, statKey);
 }
 
+// A building research: the tables, then every building of that kind at
+// once, in list order (towers, barracks, spawners, then the floor items by
+// tile: the cells' items list, not a pass over every grid cell).
+// (To do: spread over ticks with the pending state in snapshots, as units'.)
 function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
     rebuildPrecomputedStatsMapPlayerThingStat(owner, 'building', buildingKey, statKey);
-    for (let t of towers) {
-        if (!t || t.owner !== owner || t.type !== buildingKey) continue;
-        let prevEnergy = t.energy;
-        t.updateStats();
-        if (statKey === 'maxEnergy') t.energy = Math.max(1, Math.min(prevEnergy, t.maxEnergy));
+    const list = [];
+    for (let t of towers) if (t && t.owner === owner && t.type === buildingKey) list.push(t, 0);
+    for (let b of barracks) if (b && b.owner === owner && `barrack_${b.unitType}` === buildingKey) list.push(b, 1);
+    for (let s of collectorSpawners) if (s && s.owner === owner && s.type === buildingKey) list.push(s, 1);
+    const items = typeof getCellItemsRowMajor === 'function' ? getCellItemsRowMajor() : [];
+    for (const item of items) {
+        const cell = grid[item.gy] && grid[item.gy][item.gx];
+        if (!cell || cell.item !== item || cell.owner !== owner || item.type !== buildingKey) continue;
+        list.push(item, 2);
     }
-
-    for (let b of barracks) {
-        if (!b || b.owner !== owner || `barrack_${b.unitType}` !== buildingKey) continue;
-        let prevEnergy = b.energy;
-        let lvl = getThingEffectiveLevel(b);
-        b.preComputedBase = calculateItemStats(`barrack_${b.unitType}`, Math.max(1, b.level || lvl), b.owner);
-        b.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(b.preComputedBase, calculateItemStats(`barrack_${b.unitType}`, lvl, b.owner), false);
-        b.preComputed = b.preComputedBase;
-        b.maxEnergy = Math.max(1, Math.floor((b.preComputedBase && b.preComputedBase.maxEnergy) || 1));
-        if (statKey === 'maxEnergy') b.energy = Math.max(1, Math.min(prevEnergy, b.maxEnergy));
-    }
-
-    for (let s of collectorSpawners) {
-        if (!s || s.owner !== owner || s.type !== buildingKey) continue;
-        let prevEnergy = s.energy;
-        let lvl = getThingEffectiveLevel(s);
-        s.preComputedBase = calculateItemStats(s.type, Math.max(1, s.level || lvl), s.owner);
-        s.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(s.preComputedBase, calculateItemStats(s.type, lvl, s.owner), false);
-        s.preComputed = s.preComputedBase;
-        s.maxEnergy = Math.max(1, Math.floor((s.preComputedBase && s.preComputedBase.maxEnergy) || 1));
-        if (statKey === 'maxEnergy') s.energy = Math.max(1, Math.min(prevEnergy, s.maxEnergy));
-    }
-
-    for (let y = 0; y < GRID_H; y++) {
-        for (let x = 0; x < GRID_W; x++) {
-            let cell = grid[y][x];
-            if (!cell || !cell.item || cell.owner !== owner) continue;
-            let item = cell.item;
-            if (item.type !== buildingKey) continue;
-            let prevEnergy = item.energy;
-            let lvl = getThingBaseLevel(item);
-            let stats = calculateItemStats(item.type, lvl, owner);
-            if (Number.isFinite(stats.maxEnergy) && stats.maxEnergy > 0) {
-                item.maxEnergy = Math.max(1, Math.floor(stats.maxEnergy));
-                if (statKey === 'maxEnergy') item.energy = Math.max(1, Math.min(prevEnergy, item.maxEnergy));
-            }
-            if (Number.isFinite(stats.damage)) item.damage = stats.damage;
+    for (let i = 0; i < list.length; i += 2) _buildingResearchApply(list[i], statKey, list[i + 1]);
+    if (statKey === 'maxLevel') for (let i = 0; i < list.length; i += 2) refreshThingProgressState(list[i]);
+}
+function _buildingResearchApply(e, statKey, kind) {
+    if (!e) return;
+    if (kind === 0) {
+        let prevEnergy = e.energy;
+        e.updateStats();
+        if (statKey === 'maxEnergy') e.energy = Math.max(1, Math.min(prevEnergy, e.maxEnergy));
+    } else if (kind === 1) {
+        let prevEnergy = e.energy;
+        let lvl = getThingEffectiveLevel(e);
+        const type = e.type === 'barrack' ? `barrack_${e.unitType}` : e.type;
+        e.preComputedBase = calculateItemStats(type, Math.max(1, e.level || lvl), e.owner);
+        e.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(e.preComputedBase, calculateItemStats(type, lvl, e.owner), false);
+        e.preComputed = e.preComputedBase;
+        e.maxEnergy = Math.max(1, Math.floor((e.preComputedBase && e.preComputedBase.maxEnergy) || 1));
+        if (statKey === 'maxEnergy') e.energy = Math.max(1, Math.min(prevEnergy, e.maxEnergy));
+    } else {
+        const cell = grid[e.gy] && grid[e.gy][e.gx];
+        if (!cell || cell.item !== e) return;
+        let prevEnergy = e.energy;
+        let stats = calculateItemStats(e.type, getThingBaseLevel(e), cell.owner);
+        if (Number.isFinite(stats.maxEnergy) && stats.maxEnergy > 0) {
+            e.maxEnergy = Math.max(1, Math.floor(stats.maxEnergy));
+            if (statKey === 'maxEnergy') e.energy = Math.max(1, Math.min(prevEnergy, e.maxEnergy));
         }
-    }
-
-    if (statKey === 'maxLevel') {
-        for (let t of towers) {
-            if (!t || t.owner !== owner || t.type !== buildingKey) continue;
-            refreshThingProgressState(t);
-        }
-        for (let b of barracks) {
-            if (!b || b.owner !== owner || `barrack_${b.unitType}` !== buildingKey) continue;
-            refreshThingProgressState(b);
-        }
-        for (let s of collectorSpawners) {
-            if (!s || s.owner !== owner || s.type !== buildingKey) continue;
-            refreshThingProgressState(s);
-        }
-        for (let y = 0; y < GRID_H; y++) {
-            for (let x = 0; x < GRID_W; x++) {
-                let cell = grid[y][x];
-                if (!cell || !cell.item || cell.owner !== owner) continue;
-                let item = cell.item;
-                if (item.type !== buildingKey) continue;
-                refreshThingProgressState(item);
-            }
-        }
+        if (Number.isFinite(stats.damage)) e.damage = stats.damage;
     }
 }
 

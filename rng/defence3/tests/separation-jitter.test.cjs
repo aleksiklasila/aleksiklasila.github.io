@@ -18,6 +18,7 @@ function run(mode, seed, teams) {
     inst.eval(slotPath ? 'SEPARATION_SLOT_MIN_UNITS = 0; SPATIAL_PARALLEL_MIN_UNITS = 0;' : 'SEPARATION_SLOT_MIN_UNITS = 1e9;');
     if (mode === 'every') inst.eval('UNIT_SEPARATION_MODE = 1;');
     if (mode === 'global') inst.eval('UNIT_SEPARATION_MODE = 2;');
+    if (mode === 'inTick') inst.eval('SEPARATION_PREBUILD = false;');
     const out = JSON.parse(inst.eval(`JSON.stringify((() => {
         for (const u of units) u.dead = true;
         gameTick();
@@ -40,7 +41,9 @@ function run(mode, seed, teams) {
             pos.push(all.map(id => { const u = byId.get(id); return u && !u.dead ? [u.x, u.y] : null; }));
         }
         // The standing crowd: the last 80 ticks.
-        let steps = 0, reversals = 0, still = 0, maxStep = 0, sumStep = 0;
+        // (Visible back-and-forth: both steps at least a quarter pixel; its
+        // amplitude, the smaller step, summed.)
+        let steps = 0, reversals = 0, still = 0, maxStep = 0, sumStep = 0, visible = 0, amp = 0;
         for (let k = 0; k < all.length; k++) {
             for (let t = 181; t < pos.length; t++) {
                 const a = pos[t - 2][k], b = pos[t - 1][k], c = pos[t][k];
@@ -49,7 +52,11 @@ function run(mode, seed, teams) {
                 const m = Math.hypot(d2x, d2y);
                 sumStep += m; steps++;
                 if (m < 0.01) still++;
-                if (d1x * d2x + d1y * d2y < -0.01) reversals++;
+                if (d1x * d2x + d1y * d2y < -0.01) {
+                    reversals++;
+                    const m1 = Math.hypot(d1x, d1y);
+                    if (m1 >= 0.25 && m >= 0.25) { visible++; amp += Math.min(m1, m); }
+                }
             }
             for (let t = 1; t < pos.length; t++) { const a = pos[t - 1][k], b = pos[t][k]; if (a && b) maxStep = Math.max(maxStep, Math.hypot(b[0] - a[0], b[1] - a[1])); }
         }
@@ -67,6 +74,7 @@ function run(mode, seed, teams) {
             pairs++;
         }
         return { units: alive.length, meanStep: sumStep / Math.max(1, steps), still: still / Math.max(1, steps), reversals: reversals / Math.max(1, steps), maxStep,
+            visibleJitter: visible / Math.max(1, steps), jitterPx: amp / Math.max(1, steps),
             friendOverlapPairs: nf, friendOverlap: nf ? ovF / nf : 0, friendDeepest: deepF, enemyOverlapPairs: ne, enemyOverlap: ne ? ovE / ne : 0, enemyDeepest: deepE };
     })())`));
     assert.deepEqual(inst.errors.map(String), []);
@@ -78,16 +86,19 @@ for (const [seed, teams] of [[5, 1], [17, 1], [5, 2], [17, 2]]) {
     const old = run('old', seed, teams), now = run('tier', seed, teams);
     rows.push({ seed, teams, old, now });
     if (print) {
-        const every = run('every', seed, teams);
-        for (const [k, v] of [['old', old], ['every', every], ['tier', now]]) console.log(seed, teams, k, Object.entries(v).map(([a, b]) => a + '=' + (+b).toFixed(3)).join(' '));
+        const every = run('inTick', seed, teams);
+        for (const [k, v] of [['old', old], ['inTick', every], ['tier', now]]) console.log(seed, teams, k, Object.entries(v).map(([a, b]) => a + '=' + (+b).toFixed(3)).join(' '));
         continue;
     }
     // No teleporting: one tick's move stays within what walking and the
     // bounded pushes give.
     assert.ok(now.maxStep <= Math.max(16, old.maxStep * 1.25), `seed ${seed}/${teams}: largest tick move ${now.maxStep} (old ${old.maxStep})`);
     if (teams === 1) {
-        // A standing crowd settles: little back-and-forth; not packed.
-        assert.ok(now.reversals <= old.reversals * 1.25 + 0.02, `seed ${seed}: reversals ${now.reversals} (old ${old.reversals})`);
+        // A standing crowd settles: little visible back-and-forth (both
+        // steps a quarter pixel or more; sub-pixel settling does not show);
+        // not packed.
+        assert.ok(now.visibleJitter <= old.visibleJitter * 1.5 + 0.005, `seed ${seed}: visible back-and-forth ${now.visibleJitter} (old ${old.visibleJitter})`);
+        assert.ok(now.jitterPx <= old.jitterPx * 1.5 + 0.005, `seed ${seed}: back-and-forth px ${now.jitterPx} (old ${old.jitterPx})`);
         assert.ok(now.meanStep <= old.meanStep * 1.25 + 0.05, `seed ${seed}: mean step ${now.meanStep} (old ${old.meanStep})`);
         assert.ok(now.friendOverlap <= old.friendOverlap * 1.6 + 0.01, `seed ${seed}: friend overlap ${now.friendOverlap} (old ${old.friendOverlap})`);
     } else {
@@ -96,4 +107,4 @@ for (const [seed, teams] of [[5, 1], [17, 1], [5, 2], [17, 2]]) {
     }
 }
 if (!print) console.log('PASS: crowd separation (helpers, 10/s per unit, spread pushes) about as smooth and spaced as every-tick separation: ' +
-    rows.map(r => `seed ${r.seed}/${r.teams}: reversals ${r.now.reversals.toFixed(3)}/${r.old.reversals.toFixed(3)}, step ${r.now.meanStep.toFixed(3)}/${r.old.meanStep.toFixed(3)}, overlap ${r.now.friendOverlap.toFixed(3)}/${r.old.friendOverlap.toFixed(3)} (teams ${r.now.enemyOverlap.toFixed(3)}/${r.old.enemyOverlap.toFixed(3)}), max move ${r.now.maxStep.toFixed(1)}/${r.old.maxStep.toFixed(1)}`).join('; '));
+    rows.map(r => `seed ${r.seed}/${r.teams}: visible back-and-forth ${r.now.visibleJitter.toFixed(4)}/${r.old.visibleJitter.toFixed(4)} (${r.now.jitterPx.toFixed(4)}/${r.old.jitterPx.toFixed(4)} px), step ${r.now.meanStep.toFixed(3)}/${r.old.meanStep.toFixed(3)}, overlap ${r.now.friendOverlap.toFixed(3)}/${r.old.friendOverlap.toFixed(3)} (teams ${r.now.enemyOverlap.toFixed(3)}/${r.old.enemyOverlap.toFixed(3)}), max move ${r.now.maxStep.toFixed(1)}/${r.old.maxStep.toFixed(1)}`).join('; '));
