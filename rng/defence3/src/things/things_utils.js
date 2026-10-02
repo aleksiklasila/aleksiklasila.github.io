@@ -442,8 +442,11 @@ function recalculateAdjacency(forceFull = false, options = null) {
     _runAdjacencyRecalculation();
 }
 
+// Effective stats follow the units around them a few seconds behind: each
+// unit's turn comes this many times less often than the configured ticks.
+const UNIT_EFFECTIVE_STATS_SLOWDOWN = 5;
 function getUnitEffectiveStatsRecalcTicks() {
-    return Math.max(1, Math.min(240, Math.floor(Number(UNIT_EFFECTIVE_STATS_RECALC_TICKS) || 1)));
+    return Math.max(1, Math.min(1200, Math.floor(Number(UNIT_EFFECTIVE_STATS_RECALC_TICKS) || 1) * UNIT_EFFECTIVE_STATS_SLOWDOWN));
 }
 
 function getThingStatsRecalcIntervalTicks() {
@@ -582,6 +585,9 @@ function resetNewUnitsForStats() {
 // A strided pass: the units at indices congruent to the tick modulo the
 // interval, so each tick touches only the due share. Removals shift
 // indices, which can move a unit's turn by a tick or so.
+// The buildings' periodic refresh runs this many times slower than the
+// configured interval.
+const THING_STATS_NET_SLOWDOWN = 8;
 function _forEachStridedUnit(intervalTicks, tick, fn) {
     let step = Math.max(1, intervalTicks | 0);
     for (let i = tick % step, n = units.length; i < n; i += step) {
@@ -615,8 +621,10 @@ function recalculateThingPrecomputedStats() {
     }
     let selectionSize = (selectedUnitSet ? selectedUnitSet.size : 0) + (selectedEntitySet ? selectedEntitySet.size : 0);
 
-    // New units, the strided share and (single player) the selection; a
-    // stamp keeps a unit to one refresh per call.
+    // New units and (single player) the selection; a stamp keeps a unit to
+    // one refresh per call. (No periodic pass over units: their stats change
+    // only where they are applied at once: new units, level and effective
+    // level changes, research: applyUnitResearchUpgradeToExistingUnits.)
     let unitStamp = ++_thingStatsRefreshStamp;
     let refreshUnit = (u) => {
         if (!u || u.dead || u._thingStatsRefreshStamp === unitStamp) return;
@@ -629,7 +637,6 @@ function recalculateThingPrecomputedStats() {
         refreshUnit(u);
     }
     _newUnitsForStats.length = 0;
-    _forEachStridedUnit(intervalTicks, tick, refreshUnit);
     if (selectedUnitSet) for (let u of selectedUnitSet) if (_isSelectionStatsRefreshDue(u, selectionSize)) refreshUnit(u);
 
     // Buildings and floor items: those due this tick (their phase bucket),
@@ -641,7 +648,8 @@ function recalculateThingPrecomputedStats() {
         item._thingStatsRefreshStamp = stamp;
         _refreshThingPrecomputedStats(item);
     };
-    for (const item of _thingStatsDue(intervalTicks, tick)) processThing(item);
+    // (A safety net: their stats are applied where they change too.)
+    for (const item of _thingStatsDue(intervalTicks * THING_STATS_NET_SLOWDOWN, tick)) processThing(item);
     if (selectedEntitySet) for (let item of selectedEntitySet) {
         if (item && !(item instanceof Unit) && _isSelectionStatsRefreshDue(item, selectionSize)) processThing(item);
     }
@@ -923,6 +931,9 @@ function recalculateUnitEffectiveStats() {
         P[0] = m; P[1] = 1024; P[2] = step; P[3] = phase; P[4] = chunkPx; P[5] = CHUNKS_W; P[6] = CHUNKS_H;
         P[7] = spatialUnitsComplexStridePerChunk; P[8] = spatialUnitsComplexStridePerPlayer; P[9] = spatialUnitsComplexPlayerCount;
         P[10] = MAX_THING_LEVEL; P[11] = stamp;
+        // (The upkeep bins, when kept: main.js _upkU.)
+        const UK = typeof _upkU !== 'undefined' && _upkU && _upkU.cols === c && _upkU.cnt === _upkHist ? _upkU : null;
+        P[12] = UK ? UK.np : 0; P[13] = UK ? UK.L1 : 0;
         simParallelRun(SIM_KERNEL_EFF_UNITS, Math.ceil(m / 1024));
         const F = _effFlags;
         for (let j = 0; j < m; j++) {
@@ -1497,6 +1508,7 @@ function addManualStackToThing(item, amount = 1) {
     item.stacks = getThingStackedStacks(item);
     item.manualStacks = getThingManualStacks(item) + addCount;
     item.level = stackCountToLevel(item.stacks);
+    if (typeof upkeepThingDirty === 'function') upkeepThingDirty(item);
     if (Number.isFinite(item.gx) && Number.isFinite(item.gy)) {
         _requestAdjacencyRecalcForThing(item, 1);
         recalculateAdjacency();
@@ -1562,9 +1574,17 @@ function recomputePlayerPopCaps() {
     else _popCapScratchByOwner.fill(0);
     let popByOwner = _popCapScratchByOwner;
 
-    // The houses (kept per type from the tile entity journal; integer sums,
-    // so their order does not matter).
-    for (let item of (typeof _cellItemsOfType === 'function' ? _cellItemsOfType('house') : getCellItemsRowMajor())) {
+    // The houses: the buildings' bins (main.js _upkBuildingsStep: by owner,
+    // type and level, kept from placements, removals, construction and
+    // upgrades), each house bin counted once (integer sums).
+    if (typeof _upkBuildingsStep === 'function') {
+        const B = _upkBuildingsStep();
+        for (let b = 0; b < B.n; b++) {
+            const c = B.cnt[b], owner = B.owner[b];
+            if (!c || B.type[b] !== 'house' || owner >= players.length) continue;
+            popByOwner[owner] += c * getHousePopCapContribution(owner, B.lvl[b]);
+        }
+    } else for (let item of (typeof _cellItemsOfType === 'function' ? _cellItemsOfType('house') : getCellItemsRowMajor())) {
         let cell = grid[item.gy] && grid[item.gy][item.gx];
         if (!cell || cell.item !== item || item.type !== 'house') continue;
         let owner = cell.owner;
@@ -1737,6 +1757,9 @@ function markConstructionComplete(item) {
     // Built: it sees from now (visibility coverage).
     if (typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(item);
     if (typeof workSiteBuilt === 'function') workSiteBuilt(item);
+    if (typeof upkeepThingDirty === 'function') upkeepThingDirty(item);
+    if (typeof spawnerProductionChanged === 'function' && Array.isArray(item.spawnQueue)) spawnerProductionChanged(item);
+    if (typeof Tower === 'function' && item instanceof Tower) { towerSchedule(item); item.laserCheck(); }
 }
 
 function isAutoUpgradeEnabled(item) {

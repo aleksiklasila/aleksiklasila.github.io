@@ -321,6 +321,170 @@ function _addUpKeepTypeFixed(typeMap, fixedMap, key, fixedAmount) {
 
 let _upKeepRateByPlayer = [];
 
+// The second's upkeep, worked out on its last tick from running counts:
+// units and buildings are kept in bins (by owner, type and level: a few
+// hundred in all), each moved between bins in O(1) where its upkeep may
+// change; the second multiplies each bin's count by its price (cached until
+// research changes the stats). Upkeep follows a unit's level as of its
+// last stats refresh (upkeepUnitRefresh), a building's as of its last
+// placement, construction or upgrade. The bins are made anew on every peer
+// after a resync (upkeepReset), so they agree everywhere.
+function _upKeepSecond() {
+    const np = players.length, rows = Array.from({ length: np }, () => _createEmptyUpKeepBreakdown());
+    if (_upkPriceVer !== _precomputedStatsVersion) { _upkPriceVer = _precomputedStatsVersion; _upkUPrice = []; _upkBPrice = []; }
+    const U = typeof _simUnitState !== 'undefined' && _simUnitState && typeof SIM_KERNEL_UPKEEP === 'number' ? _upkUnitsStep(np) : null;
+    if (U) {
+        const L1 = U.L1, cnt = U.cnt;
+        for (let b = 1, e = Math.min(cnt.length, U.NT * np * L1); b < e; b++) {
+            const c = cnt[b];
+            if (!c) continue;
+            const l = b % L1, q = (b - l) / L1, o = q % np, t = (q - o) / np, type = _simUnitTypeNames[t];
+            let f = _upkUPrice[b];
+            if (f === undefined) {
+                let upKeep = Number(getUnitStatForOwner(o, type, l, 'upKeep'));
+                let perSecond = Number.isFinite(upKeep) ? Math.max(0, upKeep) : Math.max(0, Number((BASE_UNIT_STATS[type] || BASE_UNIT_STATS.norm || {}).upKeep) || 1);
+                f = _upkUPrice[b] = Math.max(0, Math.floor(Number(perSecond * UPKEEP_FIXED_SCALE) || 0));
+            }
+            if (!(f > 0)) continue;
+            f *= c;
+            const row = rows[o];
+            _addUpKeepFixed(row, f, null); _addUpKeepFixed(row, f, 'units');
+            _addUpKeepTypeFixed(row.unitTypes, row._unitTypesFixed, String(type || 'other'), f);
+        }
+    } else {
+        for (const u of units) if (u && !u.dead) _accumulateUpKeepForThing(rows, u, true);
+    }
+    // Buildings: their bins (owner, type, level), each priced once.
+    const B = _upkBuildingsStep();
+    for (let b = 0; b < B.n; b++) {
+        const c = B.cnt[b];
+        if (!c) continue;
+        const owner = B.owner[b], statsType = B.stats[b], type = B.type[b], lvl = B.lvl[b];
+        if (owner >= np) continue;
+        let p = _upkBPrice[b];
+        if (p === undefined) {
+            let upKeep = Number(getBuildingStatForOwner(owner, statsType, lvl, 'upKeep')), perSecond;
+            if (Number.isFinite(upKeep)) perSecond = Math.max(0, upKeep);
+            else { let def = BASE_CARD_TYPES[statsType] || {}, base = Number(def.upKeep); perSecond = Number.isFinite(base) ? Math.max(0, base) : (def.target === 'wall' ? 3 : 1); }
+            let isTurret = B.tower[b] === 1;
+            if (!isTurret && type) { let def = BASE_CARD_TYPES[statsType] || BASE_CARD_TYPES[type] || {}; isTurret = def.target === 'wall'; }
+            p = _upkBPrice[b] = { f: Math.max(0, Math.floor(Number(perSecond * UPKEEP_FIXED_SCALE) || 0)), tur: isTurret };
+        }
+        if (!(p.f > 0)) continue;
+        const f = p.f * c, row = rows[owner];
+        _addUpKeepFixed(row, f, null); _addUpKeepFixed(row, f, 'buildings');
+        _addUpKeepTypeFixed(row.buildingTypes, row._buildingTypesFixed, String(statsType || type || 'unknown'), f);
+        if (p.tur) _addUpKeepFixed(row, f, 'turrets');
+    }
+    return rows;
+}
+// (Prices per bin, until the stats change.)
+let _upkPriceVer = -1, _upkUPrice = [], _upkBPrice = [];
+// The units' bins: per slot its bin (unit.upB), per bin how many (upk.h).
+let _upkU = null, _upkHist = null;
+function _upkUnitBin(U, c, s) {
+    const ow = c.owner[s], t = c.upT[s];
+    if (!(ow >= 0 && ow < U.np) || t < 0) return -1;
+    // (getUnitEffectiveLevel, as SIM_KERNEL_UPKEEP.)
+    let l = c.effectiveLevel[s];
+    if (!(l - l === 0)) {
+        l = c.unitLevel[s];
+        if (!(l - l === 0)) {
+            l = c.baseLevel[s];
+            if (!(l - l === 0)) {
+                const sc = c.stackCount[s];
+                if (sc - sc === 0) { let v = Math.floor(Math.max(1, sc || 1)), k = 0; while (v >= 2) { v = Math.floor(v / 2); k++; } l = k + 1; }
+                else l = 1;
+            }
+        }
+    }
+    const b = (t * U.np + Math.floor(ow)) * U.L1 + Math.max(1, Math.max(0, Math.min(U.L1 - 1, Math.floor(l))));
+    if (b >= U.cnt.length) { const a = simSharedArray(Int32Array, Math.max(b + 1, U.cnt.length * 2)); a.set(U.cnt); U.cnt = _upkHist = a; simParallelBind('upk.h', a); }
+    return b;
+}
+// Where a unit's stats are applied (simUnitMaxE): its bin again.
+function upkeepUnitRefresh(u) {
+    const U = _upkU, c = u && u._us;
+    if (!U || !c || c !== _simUnitState.columns) return;
+    const s = u._si, b = _upkUnitBin(U, c, s), o = c.upB[s];
+    if (b === o) return;
+    if (o >= 0) U.cnt[o]--;
+    if (b >= 0) U.cnt[b]++;
+    c.upB[s] = b;
+}
+// A unit removed (gameTick's removals): out of its bin.
+function upkeepUnitGone(u) {
+    const U = _upkU, c = u && u._us;
+    if (!U || !c || c !== _simUnitState.columns) return;
+    const o = c.upB[u._si];
+    if (o >= 0) U.cnt[o]--;
+    c.upB[u._si] = -1;
+}
+function _upkUnitsStep(np) {
+    let U = _upkU;
+    if (U && U.np === np && U.L1 === MAX_THING_LEVEL + 1 && U.cols === _simUnitState.columns) { U.NT = _simUnitTypeNames.length; return U; }
+    // Made anew: every unit in its bin (SIM_KERNEL_UPKEEP on the helpers).
+    const n = units.length, NT = Math.max(1, _simUnitTypeNames.length), L1 = MAX_THING_LEVEL + 1, nh = NT * np * L1;
+    if (!_upkHist || _upkHist.length < nh) { _upkHist = simSharedArray(Int32Array, Math.max(4096, nh * 2)); simParallelBind('upk.h', _upkHist); }
+    _upkHist.fill(0);
+    U = _upkU = { np, L1, NT, cnt: _upkHist, cols: _simUnitState.columns };
+    if (n > 0) {
+        const slots = _unitSlotMapEnsure(), P = _simParams;
+        simParallelBind('ix.slots', slots);
+        P[0] = n; P[1] = 8192; P[2] = np; P[3] = NT; P[4] = MAX_THING_LEVEL;
+        simParallelRun(SIM_KERNEL_UPKEEP, Math.ceil(n / 8192));
+    }
+    return U;
+}
+
+// The buildings' upkeep bins: a building counts (owned, alive, built) in
+// one bin, by owner, stats type, type, base level and whether it is a
+// tower; per tile the bin of the building anchored there (-1 none), per bin
+// how many. A building moves bins only when it is placed or removed (the
+// tile journal), built or its level changes (upkeepThingDirty); research
+// changes the bins' prices, which the second works out. Made anew on every
+// peer after a resync (upkeepReset; the next second makes it).
+let _upkB = null;
+function upkeepReset() { _upkB = null; _upkU = null; _upkPriceVer = -1; }
+function upkeepThingDirty(e) {
+    if (_upkB && e && e.gx >= 0 && e.gy >= 0 && e.gx < _upkB.w && e.gy < _upkB.h) _upkB.dirty.push(e.gy * _upkB.w + e.gx);
+}
+function _upkBinOf(B, e) {
+    const owner = Number.isFinite(Number(e.owner)) ? Math.floor(Number(e.owner)) : -1;
+    if (owner < 0 || !(Number(e.energy) > 0) || e.underConstruction) return -1;
+    const statsType = getEntityStatsCalcType(e);
+    if (!statsType) return -1;
+    const lvl = Math.max(1, getThingBaseLevel(e)), tower = e instanceof Tower ? 1 : 0, type = e.type || '';
+    const key = owner + ':' + lvl + ':' + tower + ':' + statsType + ':' + type;
+    let b = B.ids.get(key);
+    if (b === undefined) {
+        b = B.n++; B.ids.set(key, b);
+        B.owner.push(owner); B.stats.push(statsType); B.type.push(type); B.lvl.push(lvl); B.tower.push(tower); B.cnt.push(0);
+    }
+    return b;
+}
+function _upkTile(B, t) {
+    const e = _ownedStructureAtTile(t), b = e ? _upkBinOf(B, e) : -1, o = B.bin[t];
+    if (b === o) return;
+    if (o >= 0) B.cnt[o]--;
+    if (b >= 0) B.cnt[b]++;
+    B.bin[t] = b;
+}
+function _upkBuildingsStep() {
+    let B = _upkB;
+    const changes = B && B.w === GRID_W && B.h === GRID_H && B.set === _activeTileEntities ? tileEntityChangesSince(B.cursor) : null;
+    if (changes === null) {
+        B = _upkB = { w: GRID_W, h: GRID_H, set: _activeTileEntities, cursor: { epoch: -1, pos: 0 }, bin: new Int32Array(GRID_W * GRID_H).fill(-1), dirty: [],
+            ids: new Map(), n: 0, owner: [], stats: [], type: [], lvl: [], tower: [], cnt: [] };
+        tileEntityChangesSince(B.cursor);
+        for (const e of _activeTileEntities) if (e && e.gx >= 0 && e.gy >= 0 && e.gx < GRID_W && e.gy < GRID_H) _upkTile(B, e.gy * GRID_W + e.gx);
+        return B;
+    }
+    for (let i = 0; i < changes.length; i++) _upkTile(B, changes[i]);
+    if (B.dirty.length) { const d = B.dirty; B.dirty = []; for (let i = 0; i < d.length; i++) _upkTile(B, d[i]); }
+    return B;
+}
+
 function _ensureUpKeepRateCacheSize() {
     let targetLen = Array.isArray(players) ? players.length : 0;
     while (_upKeepRateByPlayer.length < targetLen) _upKeepRateByPlayer.push(_createEmptyUpKeepBreakdown());
@@ -530,14 +694,7 @@ function gameTick() {
     // panel shows the latest complete one.
     let upKeepSlice = gameTime % TICK_RATE;
     let upKeepThisTick = upKeepSlice === 0;
-    if (!_upKeepAccum || _upKeepAccum.length !== players.length) _upKeepAccum = Array.from({ length: players.length }, () => _createEmptyUpKeepBreakdown());
-    let upKeepTickBreakdown = _upKeepAccum;
-    let upKeepBuildingSeen = new Set(), upKeepBuildingIndex = 0;
-    let accumulateBuildingUpKeep = (thing) => {
-        if (!thing || (upKeepBuildingIndex++ % TICK_RATE) !== upKeepSlice || upKeepBuildingSeen.has(thing)) return;
-        upKeepBuildingSeen.add(thing);
-        _accumulateUpKeepForThing(upKeepTickBreakdown, thing, false);
-    };
+    _upKeepAccum = null;
 
     let floorChanged = false;
     // Buildings and floor items: a TICK_RATE-th of them a tick (by their
@@ -550,11 +707,9 @@ function gameTick() {
         for (let i = upKeepSlice; i < cellItems.length; i += TICK_RATE) {
             const item = cellItems[i];
             if (grid[item.gy][item.gx].item !== item) continue;
-            if (!upKeepBuildingSeen.has(item)) { upKeepBuildingSeen.add(item); _accumulateUpKeepForThing(upKeepTickBreakdown, item, false); }
             ensureStatusState(item);
             if (thingStatusPending(item)) thingStatusWake(item);
         }
-        upKeepBuildingIndex = cellItems.length;
         for (const item of thingStatusDue()) {
             let cell = grid[item.gy][item.gx];
             if (cell.item !== item) { thingStatusDone(item); continue; }
@@ -643,21 +798,9 @@ function gameTick() {
     // Laser beams (the beam map, a helper kernel for the units on them).
     laserBeamsTick();
 
-    // Towers - use deterministic shuffle like units to avoid order-dependent damage
-    let towerUpdateOrder = _buildDeterministicBuildingUpdateOrderForTick(towers, 10);
-    for (let i = 0; i < towerUpdateOrder.length; i++) {
-        let t = towerUpdateOrder[i];
-        if (!t) continue;
-        t.update();
-    }
-
-    // Destroy dead towers
-    for (let i = towers.length - 1; i >= 0; i--) {
-        if (towers[i].energy <= 0) destroyBuilding(towers[i]);
-    }
-    for (let i = 0; i < towers.length; i++) {
-        accumulateBuildingUpKeep(towers[i]);
-    }
+    // Towers: those due act (towersTick: cooldowns end at known ticks), in
+    // tile order; statuses and removals.
+    towersTick();
 
     // Projectiles
     // (Last to first, as ever; spent shots removed in one pass after, the
@@ -724,10 +867,8 @@ function gameTick() {
     for (let i = units.length - 1; i >= 0; i--) {
         let u = units[i];
         const si = dslots ? dslots[i] : -1;
-        if (si >= 0 && downers[si] === u ? DEAD[si] === 0 : !u.dead) {
-            if (i % TICK_RATE === upKeepSlice) _accumulateUpKeepForThing(upKeepTickBreakdown, u, true);
-            continue;
-        }
+        if (si >= 0 && downers[si] === u ? DEAD[si] === 0 : !u.dead) continue;
+        upkeepUnitGone(u);
         if (u._removedNow) {
             // Removed by removeUnitNow (spatial and population already done).
             marks[i] = 1; removedAny = true;
@@ -760,33 +901,10 @@ function gameTick() {
     simUnitStateCollect();
     runUnitSeparationPass();
 
-    // Barracks - use deterministic shuffle to avoid order-dependent updates
-    let barracksUpdateOrder = _buildDeterministicBuildingUpdateOrderForTick(barracks, 20);
-    for (let i = 0; i < barracksUpdateOrder.length; i++) {
-        let b = barracksUpdateOrder[i];
-        if (!b || spawnerQuiet(b) || !spawnerDue(b)) continue;
-        b.update();
-    }
-    for (let i = barracks.length - 1; i >= 0; i--) {
-        if (barracks[i].energy <= 0) destroyBuilding(barracks[i]);
-    }
-    for (let i = 0; i < barracks.length; i++) {
-        accumulateBuildingUpKeep(barracks[i]);
-    }
-
-    // Collector/Salvager spawners (barrack-like) - use deterministic shuffle
-    let spawnerUpdateOrder = _buildDeterministicBuildingUpdateOrderForTick(collectorSpawners, 30);
-    for (let i = 0; i < spawnerUpdateOrder.length; i++) {
-        let cs = spawnerUpdateOrder[i];
-        if (!cs || spawnerQuiet(cs) || !spawnerDue(cs)) continue;
-        cs.update();
-    }
-    for (let i = collectorSpawners.length - 1; i >= 0; i--) {
-        if (collectorSpawners[i].energy <= 0) destroyBuilding(collectorSpawners[i]);
-    }
-    for (let i = 0; i < collectorSpawners.length; i++) {
-        accumulateBuildingUpKeep(collectorSpawners[i]);
-    }
+    // Barracks and spawners: no tick of their own (production moves on
+    // with payments and queue changes, construction with builders): their
+    // statuses, removals and the players' research (spawnerStructuresTick).
+    spawnerStructuresTick();
 
     processGlobalSpawnerQueue();
 
@@ -827,13 +945,12 @@ function gameTick() {
         _runAdjacencyRecalculation();
     }
 
-    // Keep a live per-second upKeep breakdown for the right-side info panel.
-    if (upKeepThisTick) { _upKeepRateByPlayer = upKeepTickBreakdown; _upKeepAccum = null; }
-
-    // Deduct upKeep once per second in a centralized, batched way.
+    // Upkeep, once a second: worked out now (_upKeepSecond; the info panel
+    // shows it), deducted.
     if (upKeepThisTick) {
-        for (let pid = 0; pid < upKeepTickBreakdown.length; pid++) {
-            let totalPerSecond = Number(upKeepTickBreakdown[pid].total) || 0;
+        const upKeepBreakdown = _upKeepRateByPlayer = _upKeepSecond();
+        for (let pid = 0; pid < upKeepBreakdown.length; pid++) {
+            let totalPerSecond = Number(upKeepBreakdown[pid].total) || 0;
             if (!(totalPerSecond > 0)) continue;
             addPlayerResource(pid, 'energy', -totalPerSecond);
         }
@@ -3311,6 +3428,7 @@ function processAction(a, playerId) {
                     b.spawnQueue.push(getQueuedSpawnInfo({ unitType: b.unitType, level: queuedLevel }, b.unitType, queuedLevel, playerId));
                 }
                 if (typeof workSiteDirty === 'function') workSiteDirty(b.gx, b.gy);
+                spawnerProductionChanged(b);
             }
         } else if (a.action === 'queueWorker') {
             let s = getSpawnerAtTile(a.gx, a.gy);
@@ -3331,6 +3449,7 @@ function processAction(a, playerId) {
                     s.spawnQueue.push(getQueuedSpawnInfo({ unitType: queuedType, level: queuedLevel }, queuedType, queuedLevel, playerId));
                 }
                 if (typeof workSiteDirty === 'function') workSiteDirty(s.gx, s.gy);
+                spawnerProductionChanged(s);
             }
         } else if (a.action === 'queueResearch') {
             let r = getSpawnerAtTile(a.gx, a.gy);
@@ -3472,6 +3591,7 @@ function processAction(a, playerId) {
                     if (b.spawnQueue.length <= 0) break;
                     b.spawnQueue.shift();
                 }
+                spawnerProductionChanged(b);
             }
         } else if (a.action === 'dequeueWorker') {
             let s = getSpawnerAtTile(a.gx, a.gy);
@@ -3482,6 +3602,7 @@ function processAction(a, playerId) {
                     if (s.spawnQueue.length <= 0) break;
                     s.spawnQueue.shift();
                 }
+                spawnerProductionChanged(s);
             }
         } else if (a.action === 'dequeueResearch') {
             let r = getSpawnerAtTile(a.gx, a.gy);
@@ -3622,6 +3743,7 @@ function processAction(a, playerId) {
             if (!(target && target.owner === playerId && ((target instanceof Barrack) || isSpawnerEntity(target)))) target = null;
             if (target) {
                 target.queueEnabled = !!a.enabled;
+                spawnerProductionChanged(target);
             }
         } else if (a.action === 'setAutoResearch') {
             let target = getSpawnerAtTile(a.gx, a.gy);
@@ -4004,6 +4126,7 @@ function startGame() {
         item.effectiveLevel = lvl;
         item.potentialEffectiveLevel = lvl;
         item.underConstruction = false;
+        upkeepThingDirty(item);
         item.isUpgrading = false;
 
         if (item instanceof Tower) {

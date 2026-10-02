@@ -2123,6 +2123,9 @@ function snapDecodeState(S, options = null) {
 
         // (A whole world: its units in slots from 0, see simUnitStateCompact.)
         if (!partial && typeof simUnitStateCompact === 'function') simUnitStateCompact();
+        // (Max energy and the movement stats into the columns, as the
+        // others' flush did: this peer's flush ran before its units came.)
+        if (typeof simUnitMaxE === 'function') for (let u of (partial ? shells.u : units)) if (u && u._us) { simUnitMaxE(u); if (typeof simMoveStatsChanged === 'function') simMoveStatsChanged(u); }
         if (partial) {
             for (let u of removed.u) removeUnitSpatial(u);
             for (let u of shells.u) { let p = keptPrev.get(u); if (p) { u.prevX = p[0]; u.prevY = p[1]; } else { u.prevX = u.x; u.prevY = u.y; } updateUnitSpatial(u); }
@@ -2219,6 +2222,9 @@ function snapFlushHistoryCaches() {
     if (typeof laserBeamsReset === 'function') laserBeamsReset();
     if (typeof workerSearchTierReset === 'function') workerSearchTierReset();
     if (typeof healerCandidatesTierReset === 'function') healerCandidatesTierReset();
+    if (typeof upkeepReset === 'function') upkeepReset();
+    if (typeof spawnerReadyReset === 'function') spawnerReadyReset();
+    if (typeof towerDueReset === 'function') towerDueReset();
     closestEnemyChunkQueryCache.clear();
     // Worker caches stamped with gameTime: the previous tick's last part and
     // the next tick's first part share it, so a peer that restores would

@@ -170,7 +170,7 @@ function _simHelperUrl() {
     let url = new URL('sim_helper.js?v=20261009-b', base).href;
     if (!self.SIM_WORKER_BASE && !_simImportViaBlob) return url;
     let nl = String.fromCharCode(10);
-    let parts = ['sim_parallel.js?v=20261014-i', 'sim_frame.js?v=20261008-a', '../game/flownav.js?v=20261012-a'].map(f => {
+    let parts = ['sim_parallel.js?v=20261016-a', 'sim_frame.js?v=20261008-a', '../game/flownav.js?v=20261012-a'].map(f => {
         let xhr = new XMLHttpRequest();
         xhr.open('GET', new URL(f, base).href, false);
         xhr.send();

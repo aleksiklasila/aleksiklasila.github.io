@@ -65,7 +65,7 @@ const SIM_KERNEL_INDEX_CLEAR = 10, SIM_KERNEL_INDEX_COUNT = 11, SIM_KERNEL_INDEX
 const SIM_KERNEL_EFF_COUNT = 14, SIM_KERNEL_SNAP_REGION = 19, SIM_KERNEL_COMBAT_SCAN = 20, SIM_KERNEL_INDEX_KEYS = 23;
 const SIM_KERNEL_VIS_SNAP = 30, SIM_KERNEL_VIS_SPREAD = 31;
 const SIM_KERNEL_ACQ_SNAP = 32, SIM_KERNEL_ACQ_SCAN = 33, SIM_KERNEL_ACQ_COMMIT = 34, SIM_KERNEL_LASER_HITS = 35;
-const SIM_KERNEL_UPD_CAND = 36, SIM_KERNEL_HELD_DEAD = 37, SIM_KERNEL_DRIVEBY = 38, SIM_KERNEL_WS_SCAN = 39, SIM_KERNEL_HEAL_CAND = 40, SIM_KERNEL_SP_COUNTS = 41, SIM_KERNEL_MOVE_STEP = 42, SIM_KERNEL_SAT_ROWS = 43, SIM_KERNEL_SAT_COLS = 44;
+const SIM_KERNEL_UPD_CAND = 36, SIM_KERNEL_HELD_DEAD = 37, SIM_KERNEL_DRIVEBY = 38, SIM_KERNEL_WS_SCAN = 39, SIM_KERNEL_HEAL_CAND = 40, SIM_KERNEL_SP_COUNTS = 41, SIM_KERNEL_MOVE_STEP = 42, SIM_KERNEL_SAT_ROWS = 43, SIM_KERNEL_SAT_COLS = 44, SIM_KERNEL_WS_SELECT = 45, SIM_KERNEL_UPKEEP = 46;
 const SIM_KERNEL_STATUS = 24, SIM_KERNEL_INDEX_FILL = 25, SIM_KERNEL_INDEX_RUNS = 26, SIM_KERNEL_EFF_UNITS = 27, SIM_KERNEL_VIS_SEED = 28;
 const SIM_KERNEL_TILE_OWNERS = 29;
 
@@ -1883,12 +1883,15 @@ SIM_KERNELS[SIM_KERNEL_INDEX_ORDER] = function (R, P, chunk) {
 // tables to make, no window or count), 3 nothing (dead, taken already).
 // P: [0] entries, [1] per job, [2] step, [3] phase, [4] chunk px,
 // [5]/[6] chunks wide/high, [7] stride per chunk, [8] per player,
-// [9] players, [10] MAX_THING_LEVEL, [11] stamp (unit.esTaken).
+// [9] players, [10] MAX_THING_LEVEL, [11] stamp (unit.esTaken); [12] the
+// upkeep bins' players (0: no bins), [13] their levels + 1: a unit whose
+// levels it wrote moves bins (unit.upB, upk.h; main.js _upkUnitBin).
 SIM_KERNELS[SIM_KERNEL_EFF_UNITS] = function (R, P, chunk) {
     const SL = R['ix.slots'], DEAD = R['unit.dead'], OK = R['unit.esOk'], RAD = R['unit.esRad'], TYP = R['unit.esType'], TAKEN = R['unit.esTaken'];
     const STK = R['unit.stackCount'], ULV = R['unit.unitLevel'], BLV = R['unit.baseLevel'], ESK = R['unit.effectiveStacks'], ELV = R['unit.effectiveLevel'], LAST = R['unit._lastAppliedEffectiveLevel'];
     const X = R['unit.x'], Y = R['unit.y'], OWN = R['unit.owner'], data = R['spatial.cplx'], F = R['eff.flag'];
     const step = P[2] | 0, phase = P[3] | 0, chunkPx = P[4], CW = P[5] | 0, CH = P[6] | 0, strideC = P[7] | 0, strideP = P[8] | 0, players = P[9] | 0, maxL = P[10], stamp = P[11] | 0;
+    const UNP = P[12] | 0, UL1 = P[13] | 0, UT = R['unit.upT'], UB = R['unit.upB'], UH = R['upk.h'];
     // stackCountToLevel (detFloorLog2, clampThingLevel).
     const lvl = st => {
         let v = Math.floor(Math.max(1, Number(st) || 1)), k = 0;
@@ -1921,6 +1924,11 @@ SIM_KERNELS[SIM_KERNEL_EFF_UNITS] = function (R, P, chunk) {
         const effS = Math.max(1, Math.floor(sum * base)), el = lvl(effS);
         ESK[s] = effS; ELV[s] = el; TAKEN[s] = stamp;
         F[j] = LAST[s] === el ? 0 : 1;
+        if (UNP) {
+            // (Its effective level is finite now: the bin's level.)
+            const t = UT[s], b = t >= 0 && o < UNP ? (t * UNP + o) * UL1 + Math.max(1, Math.min(UL1 - 1, el)) : -1, ob = UB[s];
+            if (b !== ob && b < UH.length) { if (ob >= 0) Atomics.sub(UH, ob, 1); if (b >= 0) Atomics.add(UH, b, 1); UB[s] = b; }
+        }
     }
 };
 
@@ -2117,28 +2125,59 @@ SIM_KERNELS[SIM_KERNEL_DRIVEBY] = function (R, P, chunk) {
     }
 };
 
-// The worker search tier (worker.js workerSearchTierStep): per request
-// (ws.r*: kind, owner, origin, the worker's place, radius, area steps or -1,
-// ...) its K best sites, best first (then lower site): ws.res the site (-1
-// none), ws.score its score. Within the radius of the origin and, with
-// area steps, in an area within that many steps of the origin's window (as
-// _isTargetWithinWorkerSearchArea).
-//  Kind 1, a resource collector: the sites of its group (wsg<group>.*:
-//   world place, site kind, owner or -1 any; by bucket of P[4] tiles;
-//   spawners), the owner's own or anyone's; score from the anchor (or the
-//   group's nearest working spawner of the owner by tile steps, then row,
-//   column, id; or the worker) plus 0.22 of the distance from the origin,
-//   plus P[7] for a drop (site kind 0); not one reserved by a worker of its
-//   type (ws.rneed's reservation bit; but its own, ws.rmy). The site: its
-//   index in the group.
-//  Kind 3, the work site grid (wsw.*, worker.js): the owner's tiles offering
+// The worker search tier (worker.js workerSearchTierStep).
+// SIM_KERNEL_WS_SELECT (the post, every slot chunk of P[1]): a registered
+// worker (unit.wsKind, alive) due a search, the first post after it
+// registered (within P[3] ticks) and then once in P[4] ticks ((tick + id) %
+// P[4] < P[3]): its request at ws.r*[chunk * P[1] + m] (its registry's
+// values; its origin where it stands without one or before unit.wsOU), how
+// many at ws.rcnt[chunk]. P: [0] slots, [1] per job, [2] tick, [3] WS_TICKS,
+// [4] retry ticks.
+SIM_KERNELS[SIM_KERNEL_WS_SELECT] = function (R, P, chunk) {
+    const KIND = R['unit.wsKind'], CFG = R['unit.wsCfg'], WT = R['unit.wsT'], OU = R['unit.wsOU'], WOX = R['unit.wsOx'], WOY = R['unit.wsOy'], WR = R['unit.wsR'];
+    const WAX = R['unit.wsAx'], WAY = R['unit.wsAy'], WAK = R['unit.wsAk'], WN = R['unit.wsNeed'], WJ = R['unit.wsJid'], WC = R['unit.wsCur'], WM = R['unit.wsMy'];
+    const X = R['unit.x'], Y = R['unit.y'], OWN = R['unit.owner'], ID = R['unit.id'], DEAD = R['unit.dead'];
+    const RS = R['ws.rslot'], RID = R['ws.rid'], RWT = R['ws.rwt'], RK = R['ws.rkind'], RO = R['ws.rowner'], ROX = R['ws.rox'], ROY = R['ws.roy'], RUX = R['ws.rux'], RUY = R['ws.ruy'];
+    const RR = R['ws.rr'], RAK = R['ws.rak'], RAX = R['ws.rax'], RAY = R['ws.ray'], RG = R['ws.rgrp'], RN = R['ws.rneed'], RJ = R['ws.rjid'], RC = R['ws.rcur'], RM = R['ws.rmy'], CNT = R['ws.rcnt'];
+    const t = P[2] | 0, WT4 = P[3] | 0, RETRY = Math.max(1, P[4] | 0), b0 = chunk * P[1];
+    let m = 0;
+    for (let s = b0, end = Math.min(P[0], b0 + P[1]); s < end; s++) {
+        const k = KIND[s];
+        if (!k || DEAD[s]) continue;
+        const id = ID[s] | 0;
+        if (!(t - WT[s] < WT4 || ((t + id) % RETRY) < WT4)) continue;
+        const i = b0 + m++, x = X[s], y = Y[s], ox = WOX[s], self = !(ox === ox) || t < OU[s];
+        RS[i] = s; RID[i] = id; RWT[i] = WT[s]; RK[i] = k; RO[i] = OWN[s] | 0; ROX[i] = self ? x : ox; ROY[i] = self ? y : WOY[s]; RUX[i] = x; RUY[i] = y;
+        RR[i] = WR[s]; RAK[i] = WAK[s]; RAX[i] = WAX[s]; RAY[i] = WAY[s]; RG[i] = CFG[s]; RN[i] = WN[s]; RJ[i] = WJ[s]; RC[i] = WC[s]; RM[i] = WM[s];
+    }
+    CNT[chunk] = m;
+};
+// SIM_KERNEL_WS_SCAN (a tier job, P[1] requests a job over the selected ones:
+// request g the m-th of select chunk c, ws.rpre[c] <= g < ws.rpre[c + 1], at
+// c * P[12] + m): its K best sites, best first (then lower site): ws.res the
+// site (-1 none), ws.score its score. Within the radius of the origin and,
+// with area steps, in an area within that many steps of the origin's window
+// (as _isTargetWithinWorkerSearchArea).
+//  Kind 1, a resource collector: the sites of its type's group (wsg<P[16 +
+//   type]>.*: world place, site kind, owner or -1 any; by bucket of P[4]
+//   tiles; spawners), the owner's own or anyone's, not reserved by another
+//   worker of its type (wsw.resv; but its own, ws.rmy); score from the
+//   anchor (or the group's nearest working spawner of the owner by tile
+//   steps, then row, column, id; or the worker) plus 0.22 of the distance
+//   from the origin, plus P[7] for a drop (site kind 0). The site: its index
+//   in the group.
+//  Kinds 3, 4 and 5, the work site grid (wsw.*): the owner's tiles offering
 //   all of ws.rneed's bits (low byte; count index in the next, the
-//   reservation bit above), not reserved by a worker of the type (but its
-//   own tile, ws.rmy); score the distance, less TILE * 0.75 for its current
-//   target's tile (ws.rcur) and plus _scoreWorkerTaskCandidate's jitter for
-//   ws.rjid >= 0 (the worker's id). The site: its tile.
+//   reservation bit above; kind 5, a researcher: the bits its owner's
+//   research needs, P[24 + owner], 0 none), not reserved by a worker of the
+//   type (but its own tile); score the distance, less TILE * 0.75 for its
+//   current target's tile (ws.rcur) and plus _scoreWorkerTaskCandidate's
+//   jitter for ws.rjid >= 0. The site: its tile. Kind 4, a healer: also its
+//   owner's damaged units (wsh.*, P[13] an owner) by squared distance plus
+//   0.08 of the squared distance from the worker, the best 3 in ws.ures.
 // P: [0] requests, [1] per job, [2] K, [3] TILE, [4] bucket tiles, [7] drop
-// penalty, [8]/[9] grid, [10]/[11] the work grid's 8x8 blocks.
+// penalty, [8]/[9] grid, [10] the work grid's 8x8 blocks wide, [11] select
+// chunks, [12] slots a select chunk.
 let _wsAreaStamp = null, _wsAreaStampV = 0;
 function _wsAreasWithin(AG, OFF, NB, W, H, tile, x, y, k) {
     const A = OFF.length - 1;
@@ -2168,42 +2207,68 @@ function _wsInsert(OUT, OSC, o0, K, s, sc) {
 }
 SIM_KERNELS[SIM_KERNEL_WS_SCAN] = function (R, P, chunk) {
     const RK = R['ws.rkind'], RO = R['ws.rowner'], ROX = R['ws.rox'], ROY = R['ws.roy'], RUX = R['ws.rux'], RUY = R['ws.ruy'], RR = R['ws.rr'], RAK = R['ws.rak'], RAX = R['ws.rax'], RAY = R['ws.ray'], RG = R['ws.rgrp'];
-    const RN = R['ws.rneed'], RJ = R['ws.rjid'], RC = R['ws.rcur'], RM = R['ws.rmy'];
-    const OUT = R['ws.res'], OSC = R['ws.score'], AG = R['ws.agrid'], AOFF = R['ws.aoff'], ANB = R['ws.anb'];
-    const K = P[2] | 0, tile = P[3], BT = P[4] | 0, dropPen = P[7], W = P[8] | 0, H = P[9] | 0, GBW = P[10] | 0, half = tile * 0.5;
-    for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
-        const o0 = i * K;
+    const RN = R['ws.rneed'], RJ = R['ws.rjid'], RC = R['ws.rcur'], RM = R['ws.rmy'], PRE = R['ws.rpre'];
+    const OUT = R['ws.res'], OSC = R['ws.score'], UOUT = R['ws.ures'], AG = R['ws.agrid'], AOFF = R['ws.aoff'], ANB = R['ws.anb'];
+    const HX = R['wsh.x'], HY = R['wsh.y'], HA = R['wsh.a'], HN = R['wsh.n'], HMAX = P[13] | 0;
+    const F = R['wsw.flags'], O = R['wsw.own'], SA = R['wsw.area'], RV = R['wsw.resv'], WCNT = R['wsw.cnt'];
+    const K = P[2] | 0, tile = P[3], BT = P[4] | 0, dropPen = P[7], W = P[8] | 0, H = P[9] | 0, GBW = P[10] | 0, nreg = P[11] | 0, CH = P[12] | 0, half = tile * 0.5;
+    const g0 = chunk * P[1], g1 = Math.min(P[0], g0 + P[1]);
+    // (The select chunk of g0: the last whose first request is at or before it.)
+    let c = 0;
+    { let lo = 0, hi = nreg - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (PRE[mid] <= g0) lo = mid; else hi = mid - 1; } c = lo; }
+    for (let g = g0; g < g1; g++) {
+        while (c + 1 < nreg && PRE[c + 1] <= g) c++;
+        const i = c * CH + (g - PRE[c]), o0 = i * K;
         for (let k = 0; k < K; k++) { OUT[o0 + k] = -1; OSC[o0 + k] = Infinity; }
         const kind = RK[i], owner = RO[i] | 0, ox = ROX[i], oy = ROY[i], r = RR[i], r2 = r * r, ak = RAK[i] | 0;
+        if (kind === 4) { UOUT[i * 3] = -1; UOUT[i * 3 + 1] = -1; UOUT[i * 3 + 2] = -1; }
         // (The areas within the steps: stamped.)
         const st = ak >= 0 && AG && AOFF && ANB ? _wsAreasWithin(AG, AOFF, ANB, W, H, tile, ox, oy, ak) : 0, AS = _wsAreaStamp;
-        if (kind === 3) {
-            const F = R['wsw.flags'], O = R['wsw.own'], SA = R['wsw.area'], RV = R['wsw.resv'], CNT = R['wsw.cnt'];
+        if (kind >= 3) {
             if (!F) continue;
-            const nd = RN[i], need = nd & 255, ci = (nd >> 8) & 255, rb = (nd >> 16) & 255, jid = RJ[i], cur = RC[i], my = RM[i];
-            const gx0 = Math.max(0, Math.floor((ox - r) / tile)), gx1 = Math.min(W - 1, Math.floor((ox + r) / tile));
-            const gy0 = Math.max(0, Math.floor((oy - r) / tile)), gy1 = Math.min(H - 1, Math.floor((oy + r) / tile));
-            for (let by = gy0 >> 3, by1 = gy1 >> 3; by <= by1; by++) for (let bx = gx0 >> 3, bx1 = gx1 >> 3; bx <= bx1; bx++) {
-                if (!CNT[(by * GBW + bx) * 8 + ci]) continue;
-                for (let ty = Math.max(gy0, by << 3), ty1 = Math.min(gy1, (by << 3) + 7); ty <= ty1; ty++) for (let tx = Math.max(gx0, bx << 3), tx1 = Math.min(gx1, (bx << 3) + 7); tx <= tx1; tx++) {
-                    const t = ty * W + tx;
-                    if ((F[t] & need) !== need || O[t] !== owner) continue;
-                    const dx = tx * tile + half - ox, dy = ty * tile + half - oy, d2 = dx * dx + dy * dy;
-                    if (!(d2 <= r2)) continue;
-                    if (st && !(SA[t] >= 0 && AS[SA[t]] === st)) continue;
-                    if ((RV[t] & rb) && t !== my) continue;
-                    let sc = Math.sqrt(d2);
-                    if (jid >= 0) {
-                        if (t === cur) sc -= tile * 0.75;
-                        sc += ((((jid * 1103515245 + tx * 12345 + ty * 54321) >>> 0) % 1024) / 1024) * tile * 0.35;
+            const nd = RN[i], rb = (nd >> 16) & 255, jid = RJ[i], cur = RC[i], my = RM[i];
+            let need = nd & 255, ci = (nd >> 8) & 255;
+            if (kind === 5) { need = owner >= 0 && owner < 32 ? P[24 + owner] | 0 : 0; ci = 3; }
+            if (need) {
+                const gx0 = Math.max(0, Math.floor((ox - r) / tile)), gx1 = Math.min(W - 1, Math.floor((ox + r) / tile));
+                const gy0 = Math.max(0, Math.floor((oy - r) / tile)), gy1 = Math.min(H - 1, Math.floor((oy + r) / tile));
+                for (let by = gy0 >> 3, by1 = gy1 >> 3; by <= by1; by++) for (let bx = gx0 >> 3, bx1 = gx1 >> 3; bx <= bx1; bx++) {
+                    if (!WCNT[(by * GBW + bx) * 8 + ci]) continue;
+                    for (let ty = Math.max(gy0, by << 3), ty1 = Math.min(gy1, (by << 3) + 7); ty <= ty1; ty++) for (let tx = Math.max(gx0, bx << 3), tx1 = Math.min(gx1, (bx << 3) + 7); tx <= tx1; tx++) {
+                        const t = ty * W + tx;
+                        if ((F[t] & need) !== need || O[t] !== owner) continue;
+                        const dx = tx * tile + half - ox, dy = ty * tile + half - oy, d2 = dx * dx + dy * dy;
+                        if (!(d2 <= r2)) continue;
+                        if (st && !(SA[t] >= 0 && AS[SA[t]] === st)) continue;
+                        if ((RV[t] & rb) && t !== my) continue;
+                        let sc = Math.sqrt(d2);
+                        if (jid >= 0) {
+                            if (t === cur) sc -= tile * 0.75;
+                            sc += ((((jid * 1103515245 + tx * 12345 + ty * 54321) >>> 0) % 1024) / 1024) * tile * 0.35;
+                        }
+                        _wsInsert(OUT, OSC, o0, K, t, sc);
                     }
-                    _wsInsert(OUT, OSC, o0, K, t, sc);
                 }
+            }
+            // A healer: its owner's damaged units too (_findNearestDamagedFriendlyUnit).
+            if (kind === 4 && HX && owner >= 0 && owner < HN.length) {
+                const ux = RUX[i], uy = RUY[i];
+                let b0 = -1, b1 = -1, b2 = -1, s0 = Infinity, s1 = Infinity, s2 = Infinity;
+                for (let q = 0, e = HN[owner]; q < e; q++) {
+                    const h = owner * HMAX + q, dx = HX[h] - ox, dy = HY[h] - oy, d2 = dx * dx + dy * dy;
+                    if (d2 > r2) continue;
+                    if (st && !(HA[h] >= 0 && AS[HA[h]] === st)) continue;
+                    const wx = HX[h] - ux, wy = HY[h] - uy, sc = d2 + (wx * wx + wy * wy) * 0.08;
+                    if (sc < s0) { b2 = b1; s2 = s1; b1 = b0; s1 = s0; b0 = q; s0 = sc; }
+                    else if (sc < s1) { b2 = b1; s2 = s1; b1 = q; s1 = sc; }
+                    else if (sc < s2) { b2 = q; s2 = sc; }
+                }
+                UOUT[i * 3] = b0; UOUT[i * 3 + 1] = b1; UOUT[i * 3 + 2] = b2;
             }
             continue;
         }
-        const g = RG[i], pre = 'wsg' + g + '.', meta = R[pre + 'meta'];
-        if (kind !== 1 || !meta || !(g >= 0)) continue;
+        const grp = RG[i], gid = grp >= 0 && grp < 8 ? P[16 + grp] : -1, pre = 'wsg' + gid + '.', meta = R[pre + 'meta'];
+        if (kind !== 1 || !meta || !(gid >= 0)) continue;
         const n = meta[0], np = meta[1], bcols = meta[3], brows = meta[4];
         const SX = R[pre + 'sx'], SY = R[pre + 'sy'], ST = R[pre + 'st'], SO = R[pre + 'so'];
         const ux = RUX[i], uy = RUY[i];
@@ -2219,7 +2284,7 @@ SIM_KERNELS[SIM_KERNEL_WS_SCAN] = function (R, P, chunk) {
             }
             if (best >= 0) { ax = PX[best]; ay = PY[best]; } else { ax = ux; ay = uy; }
         }
-        const BS = R[pre + 'bs'], BC = R[pre + 'bc'], BI = R[pre + 'bi'], RV = R['wsw.resv'], rb = RV ? (RN[i] >> 16) & 255 : 0, my = RM[i];
+        const BS = R[pre + 'bs'], BC = R[pre + 'bc'], BI = R[pre + 'bi'], rb = RV ? (RN[i] >> 16) & 255 : 0, my = RM[i];
         const bx0 = Math.max(0, Math.floor((ox - r) / tile / BT)), bx1 = Math.min(bcols - 1, Math.floor((ox + r) / tile / BT));
         const by0 = Math.max(0, Math.floor((oy - r) / tile / BT)), by1 = Math.min(brows - 1, Math.floor((oy + r) / tile / BT));
         for (let by = by0; by <= by1; by++) for (let bx = bx0; bx <= bx1; bx++) {
@@ -2236,6 +2301,42 @@ SIM_KERNELS[SIM_KERNEL_WS_SCAN] = function (R, P, chunk) {
                 _wsInsert(OUT, OSC, o0, K, s, Math.sqrt(ex * ex + ey * ey) + Math.sqrt(d2) * 0.22 + (ST[s] === 0 ? dropPen : 0));
             }
         }
+    }
+};
+
+// The units' upkeep bins made anew (main.js _upkUnitsBuild, after a
+// resync), per block of P[1] units-array indices: a unit of an owner below
+// P[2] with a type index (upT) below P[3] in its bin ((type * P[2] + owner)
+// * (P[4] + 1) + its effective level as getUnitEffectiveLevel, 1..P[4]):
+// upB its bin (-1 none), counted in upk.h (Atomics: integer counts).
+SIM_KERNELS[SIM_KERNEL_UPKEEP] = function (R, P, chunk) {
+    const SL = R['ix.slots'], OWN = R['unit.owner'], UT = R['unit.upT'], UB = R['unit.upB'];
+    const EL = R['unit.effectiveLevel'], UL = R['unit.unitLevel'], BL = R['unit.baseLevel'], SC = R['unit.stackCount'];
+    const HIST = R['upk.h'];
+    const NP = P[2] | 0, NT = P[3] | 0, MAXL = P[4] | 0, L1 = MAXL + 1, b0 = chunk * P[1];
+    for (let i = b0, end = Math.min(P[0], b0 + P[1]); i < end; i++) {
+        const s = SL[i];
+        if (s < 0) continue;
+        UB[s] = -1;
+        const ow = OWN[s], t = UT[s];
+        if (!(ow >= 0 && ow < NP) || t < 0 || t >= NT) continue;
+        // (getUnitEffectiveLevel: the first finite of the levels, else the
+        // stack count's level, else 1; clamped.)
+        let l = EL[s];
+        if (!(l - l === 0)) {
+            l = UL[s];
+            if (!(l - l === 0)) {
+                l = BL[s];
+                if (!(l - l === 0)) {
+                    const sc = SC[s];
+                    if (sc - sc === 0) { let v = Math.floor(Math.max(1, sc || 1)), k = 0; while (v >= 2) { v = Math.floor(v / 2); k++; } l = k + 1; }
+                    else l = 1;
+                }
+            }
+        }
+        const lv = Math.max(1, Math.max(0, Math.min(MAXL, Math.floor(l)))), b = (t * NP + Math.floor(ow)) * L1 + lv;
+        UB[s] = b;
+        Atomics.add(HIST, b, 1);
     }
 };
 
