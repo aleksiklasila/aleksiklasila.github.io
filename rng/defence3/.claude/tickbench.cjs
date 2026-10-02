@@ -26,6 +26,12 @@ const seconds = Number(process.argv[2]) || 15;
         applyEditableRuntimeConfigObject(${JSON.stringify(data.editableConfig)}, { fromTransport: true });`;
     const { host, guests } = await H.startHostedMatch(world, { guests: 1, maxMs: 60000, controls, hostSetup });
     const peers = [host, ...guests];
+    // (Helpers before the workloads' setups: as in the game, they run from
+    // the match's start, so background jobs posted by the setups use them.)
+    if (process.env.HELPERS) {
+        host.scratch.Worker = require(path.join(__dirname, '../tests/real-sim-helper.cjs'));
+        console.log('helpers', host.eval(`Worker = __scratch.Worker; navigator.hardwareConcurrency = 32; simParallelInit('', ${Number(process.env.HELPERS)})`));
+    }
     await world.run(1000);
     for (const g of peers) g.eval(`(() => {
         const mine = units.filter(u => !u.dead && u.owner === localPlayerId && !u.workerType);
@@ -178,12 +184,11 @@ const seconds = Number(process.argv[2]) || 15;
         while (host.eval('currentTick') <= at + 2) await world.run(250);
         console.log('battle setup at', at, host.eval('JSON.stringify(__scratch.battleStats || null)'));
     }
-    if (process.env.HELPERS) {
-        host.scratch.Worker = require(path.join(__dirname, '../tests/real-sim-helper.cjs'));
-        console.log('helpers', host.eval(`Worker = __scratch.Worker; navigator.hardwareConcurrency = 32; simParallelInit('', ${Number(process.env.HELPERS)})`));
-    }
     const { performance: realPerf } = require('node:perf_hooks');
     host.scratch.realNow = () => realPerf.now();
+    // KDUMP=file (with EVAL setting __scratch.dumpAt/dumpKernel and the
+    // dump hook): a kernel run's inputs, for replaying it alone.
+    if (process.env.KDUMP) host.scratch.dump = obj => require('node:fs').writeFileSync(process.env.KDUMP, require('node:v8').serialize(obj));
     // EVAL=<code>: evaluated on the host before the timed run (ad-hoc
     // instrumentation; read results back with AFTER=).
     if (process.env.EVAL) host.eval(process.env.EVAL);

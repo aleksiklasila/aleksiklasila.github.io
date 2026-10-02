@@ -47,28 +47,36 @@ function _compareThingsDeterministic(a, b) {
 const _deterministicSortCaches = new Map();
 function deterministicSortCachesReset() { _deterministicSortCaches.clear(); }
 
-function _sortedForDeterministicOrder(slot, list) {
+// (ver: the list's membership version when it has one, towersVersion and
+// the like: unchanged, the same list, nothing to compare.)
+let _detSortStamp = 0;
+function _sortedForDeterministicOrder(slot, list, ver = null) {
     let cache = _deterministicSortCaches.get(slot);
     let n = list.length;
+    if (cache && ver !== null && cache.ver === ver && cache.list === list && cache.input.length === n) return cache.sorted;
     if (cache) {
         let input = cache.input, m = input.length;
         if (m === n) {
             let same = true;
             for (let i = 0; i < n; i++) if (list[i] !== input[i]) { same = false; break; }
-            if (same) return cache.sorted;
+            if (same) { cache.ver = ver; cache.list = list; return cache.sorted; }
         } else if (n < m) {
             // Only removals (the rest in the same order): the order of the rest.
             let j = 0;
             for (let i = 0; i < m && j < n; i++) if (input[i] === list[j]) j++;
             if (j === n) {
-                let keep = new Set(list), sorted = cache.sorted.filter(e => keep.has(e));
-                _deterministicSortCaches.set(slot, { input: list.slice(), sorted });
+                // (The rest marked with a stamp: no set of every thing.)
+                const st = ++_detSortStamp;
+                let keepNull = false;
+                for (let i = 0; i < n; i++) { const e = list[i]; if (e) e._detSortStamp = st; else keepNull = true; }
+                let sorted = cache.sorted.filter(e => e ? e._detSortStamp === st : keepNull);
+                _deterministicSortCaches.set(slot, { input: list.slice(), sorted, ver, list });
                 return sorted;
             }
         }
     }
     let sorted = _deterministicSortFresh(list);
-    _deterministicSortCaches.set(slot, { input: list.slice(), sorted });
+    _deterministicSortCaches.set(slot, { input: list.slice(), sorted, ver, list });
     return sorted;
 }
 // list.slice().sort(_compareThingsDeterministic), on numeric keys.
@@ -111,9 +119,10 @@ function _deterministicSortFresh(list) {
 // tick ran ~20% slower. Buildings use the same scheme.
 const UNIT_UPDATE_ORDER_BLOCK = 64;
 let _updateOrderBlocks = new Int32Array(0);
-function _blockLocalShuffledOrder(sorted, seed) {
+// (out: an array to fill, reused tick after tick.)
+function _blockLocalShuffledOrder(sorted, seed, out = null) {
     let n = sorted.length;
-    if (n <= 1) return sorted.slice();
+    if (n <= 1) { if (!out) return sorted.slice(); out.length = n; if (n) out[0] = sorted[0]; return out; }
     let B = UNIT_UPDATE_ORDER_BLOCK, nb = Math.ceil(n / B);
     if (_updateOrderBlocks.length < nb) _updateOrderBlocks = new Int32Array(Math.max(nb, _updateOrderBlocks.length * 2));
     let blocks = _updateOrderBlocks;
@@ -124,7 +133,8 @@ function _blockLocalShuffledOrder(sorted, seed) {
         let j = s % (i + 1);
         let tmp = blocks[i]; blocks[i] = blocks[j]; blocks[j] = tmp;
     }
-    let order = new Array(n), k = 0;
+    let order = out || new Array(n), k = 0;
+    if (out) out.length = n;
     for (let bi = 0; bi < nb; bi++) {
         let b0 = blocks[bi] * B, len = Math.min(B, n - b0);
         s = ((s * 1664525) + 1013904223) >>> 0;
@@ -184,28 +194,31 @@ function _forEachUnitInTickOrder(fn) {
         let tmp = blocks[i]; blocks[i] = blocks[j]; blocks[j] = tmp;
     }
     // Only the units that still need their update (not moved by the kernel;
-    // held and chasing ones are checked again at their turn), listed in index
-    // order, so each block's run is contiguous: walked from its start step
-    // forward or backward, as a rotation of the run. (Nothing during the pass
-    // changes another unit's kernel output: slots are detached outside it.)
-    if (_updateOrderCand.length < n) _updateOrderCand = new Int32Array(Math.max(1024, n * 2));
-    if (_updateOrderRun.length < nb + 1) _updateOrderRun = new Int32Array(Math.max(nb + 1, _updateOrderRun.length * 2));
-    const cand = _updateOrderCand, run = _updateOrderRun;
-    let m = 0;
-    for (let idx = 0; idx < n; idx++) {
-        if (idx % B === 0) run[idx / B] = m;
-        if (OUT) {
-            const sl = slots[idx];
-            if (sl >= 0) { const o = OUT[sl]; if (o !== 0 && o < 6 && owners[sl] === list[idx]) continue; }
-        }
-        cand[m++] = idx;
+    // chasing ones and attack ticks are checked again at their turn), per
+    // block in index order (SIM_KERNEL_UPD_CAND, on the helpers: the
+    // simulation thread walks candidates, not every unit): each block's run
+    // walked from its start step forward or backward, as a rotation of the
+    // run. (Nothing during the pass changes another unit's kernel output:
+    // slots are detached outside it.) Held units (output 6) are not visited:
+    // nothing during the pass can end a hold (targets and walls are judged as
+    // at its start: _unitTickDead, simMoveWallGrid) but the unit's own end,
+    // marked after the pass (SIM_KERNEL_HELD_DEAD).
+    if (_updateOrderCand.length < nb * B) { _updateOrderCand = simSharedArray(Int32Array, Math.max(1024, nb * B * 2)); simParallelBind('upd.cand', _updateOrderCand); }
+    if (_updateOrderRun.length < nb + 1) { _updateOrderRun = simSharedArray(Int32Array, Math.max(1024, (nb + 1) * 2)); simParallelBind('upd.cnt', _updateOrderRun); }
+    const cand = _updateOrderCand, bcnt = _updateOrderRun;
+    if (OUT) {
+        simParallelBind('ix.slots', slots);
+        const P = _simParams, per = 256;
+        P[0] = n; P[1] = B; P[2] = per;
+        simParallelRun(SIM_KERNEL_UPD_CAND, Math.ceil(nb / per));
+    } else {
+        for (let b = 0; b < nb; b++) { let m = 0; for (let idx = b * B, end = Math.min(n, idx + B); idx < end; idx++) cand[b * B + m++] = idx; bcnt[b] = m; }
     }
-    run[nb] = m;
     for (let bi = 0; bi < nb; bi++) {
         let b0 = blocks[bi] * B, len = Math.min(B, n - b0);
         s = ((s * 1664525) + 1013904223) >>> 0;
         let start = (s >>> 8) % len, backward = s & 1;
-        const lo = run[blocks[bi]], hi = run[blocks[bi] + 1];
+        const lo = b0, hi = b0 + bcnt[blocks[bi]];
         if (lo === hi) continue;
         // The first of the run past the start step (forward: from the start
         // step on, then the rest; backward: down from it, then from the end).
@@ -226,18 +239,31 @@ function _forEachUnitInTickOrder(fn) {
                         if (simHoldStillValid(S.columns, s)) { if (o === 10) simHoldFire(S.columns, s); continue; }
                         simHoldUndo(S.columns, s);
                     }
+                    // (A hold's chase step, a chase come in range.)
+                    else if (o >= 11) { if (simChaseStillValid(S.columns, s, 3)) { simHoldChaseCommit(S.columns, s, o); continue; } simChaseUndo(S.columns, s); }
                     else { if (simChaseStillValid(S.columns, s)) continue; simChaseUndo(S.columns, s); }
                 }
             }
             fn(u);
         }
     }
+    // Held units whose energy ran out during the pass (a mine, a ram's
+    // recoil): dead now, as Unit.update would have marked them.
+    if (OUT) {
+        const P = _simParams, ns = S.owners.length;
+        P[0] = ns; P[1] = 8192;
+        simParallelRun(SIM_KERNEL_HELD_DEAD, Math.ceil(ns / 8192));
+    }
 }
 
 // Buildings: the same order scheme, seeded per building type.
+const _buildingOrderOut = new Map();
 function _buildDeterministicBuildingUpdateOrderForTick(buildings, seedOffset = 0) {
-    return _blockLocalShuffledOrder(_sortedForDeterministicOrder(seedOffset, buildings),
-        ((gameTime + 2 + seedOffset) * 1664525) + ((buildings.length + 1) * 1013904223));
+    const ver = buildings === towers ? towersVersion : buildings === barracks ? barracksVersion : buildings === collectorSpawners ? collectorSpawnersVersion : null;
+    let out = _buildingOrderOut.get(seedOffset);
+    if (!out) _buildingOrderOut.set(seedOffset, out = []);
+    return _blockLocalShuffledOrder(_sortedForDeterministicOrder(seedOffset, buildings, ver),
+        ((gameTime + 2 + seedOffset) * 1664525) + ((buildings.length + 1) * 1013904223), out);
 }
 
 
@@ -614,6 +640,9 @@ function gameTick() {
     // scans be skipped freely.
     updateAllPlayerVisibility();
 
+    // Laser beams (the beam map, a helper kernel for the units on them).
+    laserBeamsTick();
+
     // Towers - use deterministic shuffle like units to avoid order-dependent damage
     let towerUpdateOrder = _buildDeterministicBuildingUpdateOrderForTick(towers, 10);
     for (let i = 0; i < towerUpdateOrder.length; i++) {
@@ -656,6 +685,8 @@ function gameTick() {
     // The separation's contacts, from where units stand now, run on the
     // helpers during the pass (committed by runUnitSeparationPass).
     separationStart();
+    // Workers' searches: posted and committed by the search tier.
+    if (typeof workerSearchTierStep === 'function') workerSearchTierStep();
     // (From here to the pass's end other units are seen where they were at
     // its start: _unitTickX.)
     unitPassBegin();
@@ -733,7 +764,7 @@ function gameTick() {
     let barracksUpdateOrder = _buildDeterministicBuildingUpdateOrderForTick(barracks, 20);
     for (let i = 0; i < barracksUpdateOrder.length; i++) {
         let b = barracksUpdateOrder[i];
-        if (!b || spawnerQuiet(b)) continue;
+        if (!b || spawnerQuiet(b) || !spawnerDue(b)) continue;
         b.update();
     }
     for (let i = barracks.length - 1; i >= 0; i--) {
@@ -747,7 +778,7 @@ function gameTick() {
     let spawnerUpdateOrder = _buildDeterministicBuildingUpdateOrderForTick(collectorSpawners, 30);
     for (let i = 0; i < spawnerUpdateOrder.length; i++) {
         let cs = spawnerUpdateOrder[i];
-        if (!cs || spawnerQuiet(cs)) continue;
+        if (!cs || spawnerQuiet(cs) || !spawnerDue(cs)) continue;
         cs.update();
     }
     for (let i = collectorSpawners.length - 1; i >= 0; i--) {
@@ -809,6 +840,8 @@ function gameTick() {
     }
     // The tick's damage into the shrines, and their drain (see shrineTick).
     shrineTick();
+    // Research pools into the research queues (every RESEARCH_DRAIN_TICKS).
+    researchDrainTick();
     flushPendingMovementAstarSpend();
     flushPendingResourceStatRebuilds();
     // Laser links of the structures placed and removed this tick (the state
@@ -3277,6 +3310,7 @@ function processAction(a, playerId) {
                     let queuedLevel = getThingBaseLevel(b);
                     b.spawnQueue.push(getQueuedSpawnInfo({ unitType: b.unitType, level: queuedLevel }, b.unitType, queuedLevel, playerId));
                 }
+                if (typeof workSiteDirty === 'function') workSiteDirty(b.gx, b.gy);
             }
         } else if (a.action === 'queueWorker') {
             let s = getSpawnerAtTile(a.gx, a.gy);
@@ -3296,6 +3330,7 @@ function processAction(a, playerId) {
                                     : 'salvager_unit');
                     s.spawnQueue.push(getQueuedSpawnInfo({ unitType: queuedType, level: queuedLevel }, queuedType, queuedLevel, playerId));
                 }
+                if (typeof workSiteDirty === 'function') workSiteDirty(s.gx, s.gy);
             }
         } else if (a.action === 'queueResearch') {
             let r = getSpawnerAtTile(a.gx, a.gy);
@@ -3550,12 +3585,14 @@ function processAction(a, playerId) {
             if (target && target.owner === playerId && target.markedForSalvage !== undefined) {
                 target.markedForSalvage = !target.markedForSalvage;
                 if (typeof salvageMarksChanged === 'function') salvageMarksChanged();
+                if (typeof workSiteDirty === 'function') workSiteDirty(target.gx, target.gy);
             }
         } else if (a.action === 'setSalvage') {
             let target = getTileEntityRef(a.gx, a.gy);
             if (target && target.owner === playerId && target.markedForSalvage !== undefined) {
                 target.markedForSalvage = !!a.marked;
                 if (typeof salvageMarksChanged === 'function') salvageMarksChanged();
+                if (typeof workSiteDirty === 'function') workSiteDirty(target.gx, target.gy);
             }
         } else if (a.action === 'setAutoUpgrade') {
             let target = getTileEntityRef(a.gx, a.gy);

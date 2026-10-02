@@ -1119,7 +1119,7 @@ function eliminateTeamAssets(pid) {
     for (let i = towers.length - 1; i >= 0; i--) {
         let t = towers[i];
         if (t.owner !== pid) continue;
-        towers.splice(i, 1);
+        towers.splice(i, 1); towersChanged();
         clearTileEntity(t.gx, t.gy, t);
         if (grid[t.gy] && grid[t.gy][t.gx]) {
             grid[t.gy][t.gx].type = TYPE_FLOOR;
@@ -3648,6 +3648,11 @@ function clonePrecomputedWithBaseMaxEnergy(baseStats, effectiveStats) {
         return clone;
 }
 
+// While set (_refreshThingPrecomputedStats: the level scaling, then the
+// effective one), the movement columns are told of the stats once, at the
+// end, not of the step between (a change that is undone at once must not
+// count: simMoveStatsChanged disarms a unit whose stats changed).
+let _unitStatsNotifyHeld = false;
 function applyUnitLevelScaling(unit, level) {
     if (!unit) return;
     let lvl = Math.max(1, Math.floor(level || 1));
@@ -3668,10 +3673,11 @@ function applyUnitLevelScaling(unit, level) {
     unit.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(unit.preComputedBase, scaled);
     unit.basePreComputed = unit.preComputedBase;
     unit.preComputed = unit.preComputedEffective;
-    if (typeof simMoveStatsChanged === 'function') simMoveStatsChanged(unit);
+    if (!_unitStatsNotifyHeld && typeof simMoveStatsChanged === 'function') simMoveStatsChanged(unit);
     let unitDef = BASE_UNIT_STATS[unit.unitType] || BASE_UNIT_STATS.norm || {};
     unit.isFlying = !!unitDef.isFlying;
     unit.maxEnergy = unit.preComputedBase.maxEnergy;
+    if (typeof simUnitMaxE === 'function') simUnitMaxE(unit);
     unit.energy = Math.max(1, Math.min(unit.preComputedBase.maxEnergy, Math.floor(prevEnergyAbs)));
 
     unit.baseLevel = lvl;
@@ -3689,10 +3695,11 @@ function applyUnitEffectiveScaling(unit, effectiveLevel) {
 
     unit.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(unit.preComputedBase, scaled);
     unit.preComputed = unit.preComputedEffective;
-    if (typeof simMoveStatsChanged === 'function') simMoveStatsChanged(unit);
+    if (!_unitStatsNotifyHeld && typeof simMoveStatsChanged === 'function') simMoveStatsChanged(unit);
     let unitDef = BASE_UNIT_STATS[unit.unitType] || BASE_UNIT_STATS.norm || {};
     unit.isFlying = !!unitDef.isFlying;
     unit.maxEnergy = Number(unit.preComputedBase && unit.preComputedBase.maxEnergy) || unit.preComputedEffective.maxEnergy;
+    if (typeof simUnitMaxE === 'function') simUnitMaxE(unit);
     if (!Number.isFinite(unit.energy)) unit.energy = Math.max(1, unit.maxEnergy);
     unit.energy = Math.max(1, Math.min(unit.maxEnergy, Math.floor(unit.energy)));
 

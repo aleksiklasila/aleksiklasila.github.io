@@ -28,8 +28,10 @@ let TYPE_FLOOR = 0, TYPE_WALL = 1;
 let CONFIG_MAX_POP = 200;
 let TICK_RATE = 20; // ticks per second (menu configurable)
 let TICK_MS = 1000 / TICK_RATE;
-let UNIT_EFFECTIVE_STATS_RECALC_TICKS = 5;
-let THING_STATS_RECALC_INTERVAL_SECONDS = 3;
+// A tier below the tick: a unit's stacks and effective level once a second.
+let UNIT_EFFECTIVE_STATS_RECALC_TICKS = 20;
+// (A guard behind the stat table version: every thing every 10 seconds.)
+let THING_STATS_RECALC_INTERVAL_SECONDS = 10;
 let UNIT_COLLISION_RECALC_TICKS = 5;
 // Extra center-to-center spacing used only between units owned by different players.
 let CROSS_TEAM_UNIT_COLLISION_PADDING = TILE * 0.5;

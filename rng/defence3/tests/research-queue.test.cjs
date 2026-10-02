@@ -207,7 +207,9 @@ function rng(seed) {
         const pid = host.eval('localPlayerId');
         const lab = labOf(host);
         const S = own(host, `(t => ({ kind: t.kind, key: t.key, statKey: t.stats[0].statKey }))(RESEARCH_THINGS.find(t => t.kind === 'unit'))`);
-        q(host, { action: 'queueResearch', gx: lab.gx, gy: lab.gy, ...S, count: 3 });
+        // (Enough queued that two remain once the corruption lands:
+        // researchers fill the research pool every cooldown.)
+        q(host, { action: 'queueResearch', gx: lab.gx, gy: lab.gy, ...S, count: 8 });
         await world.run(1500);
         // Same corruption on every peer at the same tick: levels swapped, like the old reorder left them.
         world.atNextSafeTick(`(() => { const p = ensurePlayerResearchQueueState(${pid}); const a = p.researchTask, b = p.researchQueue[1];

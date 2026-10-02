@@ -31,12 +31,13 @@ api.tick();list.reverse();assert.deepEqual(api.query(list,...p).filter(b=>hit(b,
 // and stable ordering of id-less buildings in separate list classes.
 const towerSource=fs.readFileSync(path.join(__dirname,'../src/things/tower.js'),'utf8');
 const replay=new Function('exhaustive',`
-    let TILE=32,GRID_W=128,GRID_H=128,gameTime=1,pathTopologyVersion=1;
+    // (Tick 3: this laser's beam tick, see LASER_BEAM_TICKS.)
+    let TILE=32,GRID_W=128,GRID_H=128,gameTime=3,pathTopologyVersion=1;
     ${source.slice(source.indexOf('const hostileStructureIndexes'),source.indexOf('// Preserve list order'))}
     ${towerSource}
     if(exhaustive)getLaserStructureCandidates=list=>list.slice().sort((a,b)=>(a.id||0)-(b.id||0));
     let events=[],towers=[],barracks=[],collectorSpawners=[];
-    let tickStatusEffects=()=>{},playSound=()=>{},recordDamageVisual=()=>{},shrineDamageTaken=()=>{},createExplosion=()=>{},ensureLaserConnections=()=>{};
+    let tickStatusEffects=()=>{},thingStatusTickSelf=()=>{},playSound=()=>{},recordDamageVisual=()=>{},shrineDamageTaken=()=>{},createExplosion=()=>{},ensureLaserConnections=()=>{};
     let pushHostileDamageAlert=(b,d)=>events.push([b.key,d]);
     let tryAutoRetaliateOnHostileDamage=()=>{};
     let getUnitsInRange=()=>[{key:'immune',x:80,y:48,r:8,owner:1,energy:1,turretImmune:true},

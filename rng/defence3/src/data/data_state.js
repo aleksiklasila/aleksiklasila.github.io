@@ -941,6 +941,9 @@ let rng = null; // shared PRNG
 let gameSeed = 0;
 
 let towers = [];
+// Bumped whenever a tower joins or leaves towers.
+let towersVersion = 0;
+function towersChanged() { towersVersion++; }
 let units = [];
 let projectiles = [];
 let particles = [];

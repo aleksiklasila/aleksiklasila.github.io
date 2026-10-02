@@ -60,24 +60,43 @@ lookups = [];
 ctx._findClosestHostileStructure(origin, [first], 1);
 assert.equal(lookups.length, 1, 'even an out-of-range target retains the original lazy snapshot timing');
 const Unit = vm.runInContext('Unit', ctx);
-ctx._findClosestEnemyUnitByChunks = () => null;
-ctx.getCellItemsRowMajor = () => []; ctx.findCellItemRowStart = () => 0; ctx.hasHostileStructureInTileRect = () => true;
 ctx.towers = [first]; ctx.barracks = [{ ...tied, x: 1, y: 0 }]; ctx.collectorSpawners = [];
-ctx.gameTime = 0;
+// The looks of idle and attack-moving units read the acquisition tier's
+// committed choice (_acqStructureHit), on their staggered tick only.
+const picks = [];
+ctx._acqStructureHit = () => { picks.push(ctx.gameTime); return first; };
 for (const method of ['doIdle', 'doAttackMoving']) {
+    picks.length = 0;
     const attacker = Object.assign(Object.create(Unit.prototype), origin, { id: 1, unitType: 'norm', preComputed: { visionRange: 4 } });
-    // Structure scans are staggered to one tick in four, keyed by unit id.
+    // Structure looks are staggered to one tick in four, keyed by unit id.
     for (ctx.gameTime = 0; ctx.gameTime < 3; ctx.gameTime++) {
         attacker[method](1);
-        assert.equal(attacker.targetBuilding, undefined, 'no structure scan off its staggered tick');
+        assert.equal(attacker.targetBuilding, undefined, 'no structure look off its staggered tick');
     }
     assert.equal(ctx.gameTime, 3);
     attacker[method](1);
-    assert.equal(attacker.targetBuilding, first, 'towers retain priority over closer barracks');
-    first.energy = 0;
-    attacker[method](1);
-    assert.equal(attacker.targetBuilding, ctx.barracks[0], 'same-tick destruction is observed immediately');
-    first.energy = 1;
+    assert.equal(attacker.targetBuilding, first, "the tier's choice taken on the staggered tick");
+    assert.deepEqual(picks, [3]);
+}
+// The tier's choice (sim_parallel.js _simAcqStructure): a turret over a
+// closer barrack, traps before barracks, the nearest within a class, the
+// lower tile on a tie, never the unit's own.
+{
+    const sp = read('src/sim/sim_parallel.js');
+    const sctx = vm.createContext({});
+    vm.runInContext(sp.slice(sp.indexOf('function _simAcqStructure('), sp.indexOf('\n// The commit (at a fixed tick')), sctx);
+    const W = 16, H = 16, tile = 32, SCLS = new Int8Array(W * H), SOWN = new Int8Array(W * H).fill(-1), AG = new Int32Array(W * H), COVF = new Int32Array(1).fill(1);
+    const put = (gx, gy, cls, own) => { SCLS[gy * W + gx] = cls; SOWN[gy * W + gx] = own; };
+    const pick = r => sctx._simAcqStructure(SCLS, SOWN, null, AG, COVF, 0, 0, 2 * tile + 16, 2 * tile + 16, r, tile, W, H, 16, 1, 1, 2, 4);
+    put(6, 2, 1, 1); put(3, 2, 3, 1);
+    assert.equal(pick(6 * tile), 2 * W + 6, 'towers retain priority over closer barracks');
+    assert.equal(pick(2 * tile), 2 * W + 3, "out of the tower's reach: the barrack");
+    put(2, 6, 1, 1);
+    assert.equal(pick(6 * tile), 2 * W + 6, 'a tie: the lower tile');
+    put(6, 2, 0, -1); put(2, 6, 0, -1); put(2, 3, 2, 1);
+    assert.equal(pick(6 * tile), 3 * W + 2, 'traps before barracks');
+    put(2, 3, 0, -1); put(3, 2, 3, 0);
+    assert.equal(pick(6 * tile), -1, 'own structures are not targets');
 }
 
 // Scratch storage must not leak reveal coverage between teams, ticks or maps.
