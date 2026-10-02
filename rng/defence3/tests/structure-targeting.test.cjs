@@ -80,12 +80,14 @@ const lavaOn = place(3, 1, { type: 'poison_puddle' });
 assert.equal(ctx._findHostileStructureInAttackRange(unit), lavaOff, 'nearest trap when no route');
 unit.path = [{ x: 1, y: 0 }, { x: 2, y: 0 }, { x: 3, y: 0 }, { x: 3, y: 1 }];
 unit.pathIndex = 1;
-assert.equal(ctx._findHostileStructureInAttackRange(unit), lavaOn, 'traps on the route first (padding reaches block 1)');
+// (A route does not rank traps: the drive-by look is worked out on the
+// helpers, which do not know routes; the nearest trap.)
+assert.equal(ctx._findHostileStructureInAttackRange(unit), lavaOff, 'traps by distance, a route or not');
 const turret = place(3, 0, { type: 'pistol', tower: true });
 assert.equal(ctx._findHostileStructureInAttackRange(unit), turret, 'turrets first');
 turret.energy = 0;
 place(3, 0, { type: 'cloud_0a', tower: true });
-assert.equal(ctx._findHostileStructureInAttackRange(unit), lavaOn, 'portals are not turrets');
+assert.equal(ctx._findHostileStructureInAttackRange(unit), lavaOff, 'portals are not turrets');
 place(0, 0, { type: 'lava', owner: 0 });
 unit.x = 0.5 * TILE;
 unit.path = null;
@@ -107,4 +109,4 @@ assert.equal(lavaOff.energy, 10, 'the trap it flew over was not hit');
 const miss = new pc.Projectile(0.5 * TILE, 1.5 * TILE, { x: 7 * TILE, y: 1.5 * TILE }, 'pistol', 25, 1, { owner: 0, gx: 0, gy: 1 }, 7 * TILE);
 while (miss.update());
 assert.equal(lavaOff.energy, 10, 'shots at other targets pass over floor items');
-console.log(`PASS: +-0.3 tile source windows, structure threat order (turret > route trap > trap > building), floor-target projectiles (${flying} ticks).`);
+console.log(`PASS: +-0.3 tile source windows, structure threat order (turret > trap > building), floor-target projectiles (${flying} ticks).`);

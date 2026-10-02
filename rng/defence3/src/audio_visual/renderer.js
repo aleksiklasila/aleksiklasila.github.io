@@ -3887,11 +3887,16 @@ const _visCover = {
     list: [],          // registered buildings
     syncedTick: -1,
     visual: [],        // [player] rows kept in step with the cover, made on request
-    // Units' part (_visCoverUnits), for generation uGen: seeds (shared,
-    // [player * areas + area] = stamp << 6 | steps), the areas seeded this
-    // stamp per player (ulist, ucnt), the areas units covered last time per
-    // player (ucov) and their state (ust: 1 counted in the cover).
-    uGen: 0, useed: null, ulist: null, ucnt: null, ustamp: 0, urem: null, ust: [], ucov: [], ucovNext: [], ubuckets: [],
+    // Units' part (_visCoverUnitsStep), for generation uGen, all shared
+    // (SIM_KERNEL_VIS_SEED, SIM_KERNEL_VIS_SPREAD): seeds ([player * areas
+    // + area] = stamp << 6 | steps), the areas seeded this stamp (ulist,
+    // ucnt), the areas covered at the last run (uprev, uprevn; ust 1: counted
+    // in the cover), the last run's change (uplus, uminus, udiff), scratch;
+    // the snapshot (vtx, vty, vtkey); uStage: 0 idle, 1 seeds posted, 2 the
+    // spread posted; uTick: the tick of the last step.
+    uGen: 0, useed: null, ulist: null, ucnt: null, ustamp: 0, urem: null, ust: null, uprev: null, uprevn: null,
+    uplus: null, uminus: null, udiff: null, ubufA: null, ubufB: null, ubufC: null, ucur: null, uaok: null,
+    vtx: null, vty: null, vtkey: null, uStage: 0, uTick: -1,
 };
 
 function resetVisibilityCoverage() {
@@ -4135,84 +4140,125 @@ function syncVisibilityCoverage() {
         list.length = w;
     }
     C.syncedTick = gameTime;
-    _visCoverUnits();
+    // Units' cover: a tier below the tick (SIM_LANE_T5, see
+    // _visCoverUnitsStep); at once after a reset, then the tick's step as
+    // usual (whenever the reset's first query came: the steps go by tick).
+    if (full) _visCoverUnitsNow();
+    _visCoverUnitsStep();
 }
 
-// The units' cover, from where every unit stands now: the areas under each
-// live, indexed unit's +-0.3 tile window (as getSourceAreaListIdAtWorld)
-// get its steps, the most per player and area (SIM_KERNEL_VIS_SEED on the
-// helpers; vsR, vsP1, vsP2 from _visCoverSyncUnit); then per player the
-// steps spread over the area graph, one less per neighbour (an area within
+// The units' cover, from where every unit stood at a tick: the areas under
+// each live, indexed unit's +-0.3 tile window (as getSourceAreaListIdAtWorld)
+// get its steps, the most per player and area; then per player the steps
+// spread over the area graph, one less per neighbour (an area within
 // `steps` of a seed: the rings of _visCoverApplyRing). Each area covered
 // counts once in the cover, so a change from last time is one count.
-function _visCoverUnits() {
-    const C = _visCover, A = C.areaCount, np = C.players;
-    if (C.uGen !== C.gen || !C.useed || C.useed.length !== Math.max(1, np * A)) {
-        C.useed = simSharedArray(Int32Array, Math.max(1, np * A)); C.ulist = simSharedArray(Int32Array, Math.max(1, np * A));
-        C.ucnt = simSharedArray(Int32Array, np);
-        C.urem = new Int8Array(A).fill(-1);
-        C.ust = Array.from({ length: np }, () => new Uint8Array(A));
-        C.ucov = Array.from({ length: np }, () => []); C.ucovNext = [];
-        C.ubuckets = Array.from({ length: VIS_COVER_MAX_STEPS + 1 }, () => []);
-        C.ustamp = 0; C.uGen = C.gen;
+// A tier at 5 per second on the helpers (lane SIM_LANE_T5), every
+// VIS_COVER_UNITS_TICKS ticks from phase VIS_COVER_UNITS_PHASE: at phase 0
+// the last run's change is counted in the cover (the commit), the units are
+// taken (SIM_KERNEL_VIS_SNAP, in parallel) and their seeds posted
+// (SIM_KERNEL_VIS_SEED); at phase 2 the spread (SIM_KERNEL_VIS_SPREAD, a job
+// per player). So sight follows where units stood up to two periods ago.
+// Its inputs are the snapshot and the area layout of its start (the grid
+// and graph arrays of a layout are never changed, a new layout gets new
+// ones), its outputs counted at fixed ticks: every peer the same.
+const VIS_COVER_UNITS_TICKS = 4, VIS_COVER_UNITS_PHASE = 1;
+const VIS_COVER_UNITS_LANE = typeof SIM_LANE_T5 === 'number' ? SIM_LANE_T5 : 3;
+function _visCoverUnitsStep() {
+    const C = _visCover;
+    if (C.uTick === gameTime) return;
+    C.uTick = gameTime;
+    const T = VIS_COVER_UNITS_TICKS, ph = (((gameTime - VIS_COVER_UNITS_PHASE) % T) + T) % T;
+    if (ph === 0) { _visCoverUnitsCommit(); _visCoverUnitsPost(); }
+    else if (ph === 2) _visCoverUnitsSpreadPost();
+}
+// After a reset: the whole run at once (the helpers help), counted now.
+// (Every peer resets at the same point of a tick; its first query, which
+// makes this, may come earlier or later on one than another, but no tick
+// runs in between: the same units, the same result. The step of the tick
+// is its own: _visCoverUnitsStep, once per tick.)
+function _visCoverUnitsNow() {
+    _visCoverUnitsDrop();
+    _visCoverUnitsPost();
+    _visCoverUnitsSpreadPost();
+    _visCoverUnitsCommit();
+}
+// A run in progress is dropped (a reset: every peer at the same tick).
+function _visCoverUnitsDrop() {
+    simParallelBackgroundWait(VIS_COVER_UNITS_LANE);
+    _visCover.uStage = 0;
+}
+// The tier's arrays for this generation (players and areas); a new
+// generation starts with nothing counted.
+function _visCoverUnitsAlloc() {
+    const C = _visCover, A = C.areaCount, np = C.players, NA = Math.max(1, np * A);
+    if (C.uGen === C.gen && C.useed && C.useed.length === NA) return;
+    _visCoverUnitsDrop();
+    const I32 = n => simSharedArray(Int32Array, Math.max(1, n));
+    C.useed = I32(NA); C.ulist = I32(NA); C.ucnt = I32(np);
+    C.urem = simSharedArray(Int8Array, NA).fill(-1);
+    C.ubufA = I32(NA); C.ubufB = I32(NA); C.ubufC = I32(NA); C.ucur = I32(NA);
+    C.ust = simSharedArray(Uint8Array, NA); C.uprev = I32(NA); C.uprevn = I32(np);
+    C.uplus = I32(NA); C.uminus = I32(NA); C.udiff = I32(2 * np);
+    C.uaok = simSharedArray(Uint8Array, Math.max(1, A));
+    for (const [name, arr] of [['vis.useed', C.useed], ['vis.ulist', C.ulist], ['vis.ucnt', C.ucnt], ['vis.urem', C.urem],
+        ['vis.ubufA', C.ubufA], ['vis.ubufB', C.ubufB], ['vis.ubufC', C.ubufC], ['vis.ucur', C.ucur], ['vis.ust', C.ust],
+        ['vis.uprev', C.uprev], ['vis.uprevn', C.uprevn], ['vis.uplus', C.uplus], ['vis.uminus', C.uminus], ['vis.udiff', C.udiff], ['vt.aok', C.uaok]]) simParallelBind(name, arr);
+    C.ustamp = 0; C.uGen = C.gen; C.uStage = 0;
+}
+// Phase 0: the snapshot and the seeds.
+function _visCoverUnitsPost() {
+    const C = _visCover, S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    _visCoverUnitsAlloc();
+    simParallelBackgroundWait(VIS_COVER_UNITS_LANE);
+    const n = S ? S.owners.length : 0, A = C.areaCount, np = C.players;
+    if (!C.vtx || C.vtx.length < n) {
+        const cap = Math.max(1024, n * 2);
+        C.vtx = simSharedArray(Float64Array, cap); C.vty = simSharedArray(Float64Array, cap); C.vtkey = simSharedArray(Int32Array, cap);
+        simParallelBind('vt.x', C.vtx); simParallelBind('vt.y', C.vty); simParallelBind('vt.key', C.vtkey);
     }
+    if (n > 0) {
+        const P = _simParams;
+        P[0] = n; P[1] = 8192; P[2] = C.gen; P[3] = SIM_SEP_ABSENT;
+        simParallelRun(SIM_KERNEL_VIS_SNAP, Math.ceil(n / 8192));
+    }
+    // The layout as of now (its arrays are its own: see above).
+    simParallelBind('vt.agrid', _spatialAreaGridFlat());
+    _simAreaCsr();
+    simParallelBind('vt.aoff', _simParReg['area.off']); simParallelBind('vt.anb', _simParReg['area.nb']);
+    const aok = C.uaok;
+    for (let a = 0; a < A; a++) aok[a] = _areaById[a] ? 1 : 0;
     if (++C.ustamp >= (1 << 24)) { C.useed.fill(0); C.ustamp = 1; }
     C.ucnt.fill(0);
-    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
-    if (S && S.owners.length > 0) {
-        simParallelBind('vis.useed', C.useed); simParallelBind('vis.ulist', C.ulist); simParallelBind('vis.ucnt', C.ucnt);
-        simParallelBind('ix.agrid', _spatialAreaGridFlat());
-        const P = _simParams, n = S.owners.length;
-        P[0] = n; P[1] = 4096; P[2] = TILE; P[3] = GRID_W; P[4] = GRID_H; P[5] = C.gen; P[6] = A; P[7] = np; P[8] = C.ustamp; P[9] = SIM_SEP_ABSENT;
-        simParallelRun(SIM_KERNEL_VIS_SEED, Math.ceil(n / 4096));
-    }
-    for (let p = 0; p < np; p++) _visCoverUnitsSpread(p);
+    const B = _simBgParamsByLane[VIS_COVER_UNITS_LANE];
+    B[0] = n; B[1] = 1024; B[2] = TILE; B[3] = GRID_W; B[4] = GRID_H; B[6] = A; B[7] = np; B[8] = C.ustamp;
+    simParallelBackground(SIM_KERNEL_VIS_SEED, Math.ceil(n / 1024), VIS_COVER_UNITS_LANE);
+    C.uStage = 1;
 }
-function _visCoverUnitsSpread(p) {
-    const C = _visCover, A = C.areaCount, seed = C.useed, list = C.ulist, base = p * A, n = C.ucnt[p];
-    const rem = C.urem, st = C.ust[p], old = C.ucov[p], cur = C.ucovNext, buckets = C.ubuckets;
-    cur.length = 0;
-    let top = -1;
-    for (let i = 0; i < n; i++) {
-        const a = list[base + i];
-        if (!_areaById[a]) continue;
-        const r = seed[base + a] & 63;
-        if (rem[a] < 0) cur.push(a);
-        if (r > rem[a]) { rem[a] = r; buckets[r].push(a); if (r > top) top = r; }
+// Phase 2: the spread, once the seeds are in.
+function _visCoverUnitsSpreadPost() {
+    const C = _visCover;
+    if (C.uStage !== 1 || C.uGen !== C.gen) return;
+    simParallelBackgroundWait(VIS_COVER_UNITS_LANE);
+    const B = _simBgParamsByLane[VIS_COVER_UNITS_LANE];
+    B[0] = C.areaCount; B[1] = C.players; B[2] = C.ustamp;
+    simParallelBackground(SIM_KERNEL_VIS_SPREAD, C.players, VIS_COVER_UNITS_LANE);
+    C.uStage = 2;
+}
+// The commit: the run's change counted in the cover (no longer covered
+// first, then newly covered).
+function _visCoverUnitsCommit() {
+    const C = _visCover;
+    if (C.uStage === 1) _visCoverUnitsSpreadPost();
+    if (C.uStage !== 2 || C.uGen !== C.gen) { C.uStage = 0; return; }
+    simParallelBackgroundWait(VIS_COVER_UNITS_LANE);
+    C.uStage = 0;
+    const A = C.areaCount, D = C.udiff, PL = C.uplus, MI = C.uminus;
+    for (let p = 0; p < C.players; p++) {
+        const cover = C.cover[p], rows = C.visual[p], base = p * A;
+        for (let i = 0, e = D[2 * p + 1]; i < e; i++) { const a = MI[base + i]; if (--cover[a] === 0 && rows) _visCoverPaintArea(rows, a, false); }
+        for (let i = 0, e = D[2 * p]; i < e; i++) { const a = PL[base + i]; if (++cover[a] === 1 && rows) _visCoverPaintArea(rows, a, true); }
     }
-    for (let r = top; r > 0; r--) {
-        const b = buckets[r];
-        for (let i = 0; i < b.length; i++) {
-            const a = b[i];
-            if (rem[a] !== r) continue;
-            const nb = areaNeighborIds[a];
-            if (!nb) continue;
-            for (let j = 0; j < nb.length; j++) {
-                const q = nb[j];
-                if (rem[q] >= r - 1) continue;
-                if (rem[q] < 0) cur.push(q);
-                rem[q] = r - 1;
-                if (r > 1) buckets[r - 1].push(q);
-            }
-        }
-        b.length = 0;
-    }
-    if (top >= 0) buckets[0].length = 0;
-    // Counted in the cover: areas newly covered +1, no longer covered -1.
-    const cover = C.cover[p], rows = C.visual[p];
-    for (let i = 0; i < cur.length; i++) { const a = cur[i]; st[a] |= 2; rem[a] = -1; }
-    for (let i = 0; i < old.length; i++) {
-        const a = old[i];
-        if (st[a] & 2) continue;
-        st[a] = 0;
-        if (--cover[a] === 0 && rows) _visCoverPaintArea(rows, a, false);
-    }
-    for (let i = 0; i < cur.length; i++) {
-        const a = cur[i];
-        if ((st[a] & 1) === 0 && ++cover[a] === 1 && rows) _visCoverPaintArea(rows, a, true);
-        st[a] = 1;
-    }
-    C.ucov[p] = cur; C.ucovNext = old;
 }
 
 function _visCoverActive() {
@@ -5362,7 +5408,18 @@ function applyStatusEffect(target, effect, level, baseDamage = 0, sourceOwner = 
 // TICK_RATE-th of the items a tick; made anew from every item on every peer
 // at a resync (thingStatusRebuild). An extra member changes nothing.
 let _thingStatusActive = new Set();
-function thingStatusWake(e) { _thingStatusActive.add(e); }
+// Buildings that tick their own statuses in their update (towers, barracks,
+// spawners: thingStatusTickSelf), while something may run: the same hooks
+// add them, a tick with nothing left removes them, a resync makes it anew
+// (an extra member changes nothing either).
+let _thingStatusSelf = new Set();
+function thingStatusWake(e) { _thingStatusActive.add(e); _thingStatusSelf.add(e); }
+function thingStatusTickSelf(e) {
+    if (!_thingStatusSelf.has(e)) return false;
+    const gone = tickStatusEffects(e);
+    if (!thingStatusPending(e)) _thingStatusSelf.delete(e);
+    return gone;
+}
 function thingStatusDone(e) { _thingStatusActive.delete(e); }
 function thingStatusPending(e) {
     return e.burning > 0 || e.poisoned > 0 || e.frozen > 0 || e.wet > 0 || e.sandy > 0 || e.watched > 0 || (e.energy !== undefined && e.energy <= 0);
@@ -5378,6 +5435,8 @@ const _NO_THINGS = Object.freeze([]);
 function thingStatusRebuild() {
     _thingStatusActive = new Set();
     for (const item of getCellItemsRowMajor()) if (thingStatusPending(item)) _thingStatusActive.add(item);
+    _thingStatusSelf = new Set();
+    for (const list of [towers, barracks, collectorSpawners]) for (const e of list) if (e) { ensureStatusState(e); if (thingStatusPending(e)) _thingStatusSelf.add(e); }
 }
 
 function tickStatusEffects(target) {

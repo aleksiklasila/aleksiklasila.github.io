@@ -75,14 +75,15 @@ uc.forEachUnitInRange=(_x,_y,_r,visit)=>targets.forEach(e=>visit(e,e.x*e.x+e.y*e
 assert.equal(uc._findNearbyCombatEnemy({owner:0,x:0,y:0},100).id,3);
 targets.reverse();
 assert.equal(uc._findNearbyCombatEnemy({owner:0,x:0,y:0},100).id,3,'retarget ties ignore spatial bucket order');
-let enemyUnit={id:2,owner:1,x:16,y:16,dead:false};uc._findNearbyCombatEnemy=()=>enemyUnit;
+// (The look reads the acquisition tier's result: _combatScanHit.)
+let enemyUnit={id:2,owner:1,x:16,y:16,dead:false};uc._combatScanHit=()=>enemyUnit;
 uc.isGameplayTargetVisibleToPlayer=()=>{throw seen;};
 let attacker=Object.assign(Object.create(Unit.prototype),{id:0,x:0,y:0,owner:0,
     preComputed:{visionRange:4},targetBuilding:{energy:10},targetUnit:null,forcedAttackTarget:false,path:[{}]});
 assert.throws(()=>attacker.doAttacking(1),e=>e===seen);
 assert.equal(attacker.targetUnit,enemyUnit);assert.equal(attacker.targetBuilding,null);
 attacker.forcedAttackTarget=true;attacker.targetUnit=null;
-uc._findNearbyCombatEnemy=()=>{throw Error('explicit orders must not retarget');};
+uc._combatScanHit=()=>{throw Error('explicit orders must not retarget');};
 attacker.doAttacking(1);
 
 // Towers must not apply a pixel cutoff to units while using areas for buildings.

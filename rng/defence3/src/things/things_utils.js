@@ -11,6 +11,8 @@
 const _laserLines = new Map();
 function recalculateLaserConnections() {
     _laserLinksDirty = false;
+    // (The beam map follows: tower.js laserBeamsTick.)
+    if (typeof laserMapDirty === 'function') laserMapDirty();
     const lines = _laserLines, partners = [];
     lines.clear();
     for (let i = 0; i < towers.length; i++) {
@@ -138,7 +140,16 @@ function _runAdjacencyRecalculation() {
     }
 
     let passiveRefresh = !!_adjacencyPassiveRefreshMode;
-    let runFull = _adjacencyDirtyAll || _adjacencyDirtyTiles.size > 1200;
+    // (Many dirty tiles: the first ADJACENCY_TILES_PER_TICK by tile index
+    // now, the rest on the next ticks; only a forced recalculation does every
+    // structure at once.)
+    let runFull = _adjacencyDirtyAll;
+    let dirtyKeys = null;
+    if (!runFull) {
+        dirtyKeys = Array.from(_adjacencyDirtyTiles);
+        if (dirtyKeys.length > ADJACENCY_TILES_PER_TICK) { dirtyKeys.sort((a, b) => a - b); dirtyKeys.length = ADJACENCY_TILES_PER_TICK; }
+        for (const k of dirtyKeys) _adjacencyDirtyTiles.delete(k);
+    }
     let prevAreaActive = areas.map(a => !!(a && a.active));
     let areaVisualsChanged = false;
     let touchedAreaIds = new Set();
@@ -163,7 +174,7 @@ function _runAdjacencyRecalculation() {
             pushSeedAt(ent.gx, ent.gy);
         }
     } else {
-        for (let key of _adjacencyDirtyTiles) {
+        for (let key of dirtyKeys) {
             let gx = key % GRID_W;
             let gy = Math.floor(key / GRID_W);
             if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) continue;
@@ -316,6 +327,8 @@ function _runAdjacencyRecalculation() {
             }
             obj.effectiveStacks = nextEffectiveStacks;
             obj.potentialEffectiveLevel = nextPotentialLevel;
+            // (An upgrade may come due: the workers' sites.)
+            if (obj.effectiveLevel !== nextEffectiveLevel && typeof workSiteDirty === 'function') workSiteDirty(obj.gx, obj.gy);
             obj.effectiveLevel = nextEffectiveLevel;
             if (!passiveRefresh) obj.isUpgrading = nextIsUpgrading;
 
@@ -409,12 +422,13 @@ function _runAdjacencyRecalculation() {
     // have come into service: a finished barrack or turret keeps every
     // path cache.
     if (runFull || touchesPathTopology) _bumpPathTopologyVersion();
-    _adjacencyNeedsRecalc = false;
+    if (runFull) _adjacencyDirtyTiles.clear();
+    _adjacencyNeedsRecalc = _adjacencyDirtyTiles.size > 0;
     _adjacencyDirtyAll = false;
-    _adjacencyDirtyTiles.clear();
     _adjacencyLastRecalcTick = gameTime;
     _adjacencyPassiveRefreshMode = false;
 }
+const ADJACENCY_TILES_PER_TICK = 1200;
 
 function recalculateAdjacency(forceFull = false, options = null) {
     if (forceFull && typeof forceFull === 'object') {
@@ -480,14 +494,18 @@ function _refreshThingPrecomputedStats(item) {
             item.unitLevel = lvl;
             item.effectiveStacks = Math.max(1, Math.floor(item.stackCount));
             item.maxEnergy = item.preComputedBase.maxEnergy;
+            if (typeof simUnitMaxE === 'function') simUnitMaxE(item);
             let e = Number(item.energy);
             if (!Number.isFinite(e)) e = Number(item.preComputedBase.maxEnergy) || 1;
             item.energy = Math.max(1, Math.min(item.maxEnergy, Math.floor(e)));
             item.effectiveLevel = eff;
             return;
         }
-        applyUnitLevelScaling(item, baseLevel);
-        applyUnitEffectiveScaling(item, effectiveLevel);
+        // (The movement columns told once, of the final stats.)
+        _unitStatsNotifyHeld = true;
+        try { applyUnitLevelScaling(item, baseLevel); applyUnitEffectiveScaling(item, effectiveLevel); }
+        finally { _unitStatsNotifyHeld = false; }
+        if (typeof simMoveStatsChanged === 'function') simMoveStatsChanged(item);
         item._statsVer = _precomputedStatsVersion;
         return;
     }
@@ -798,6 +816,16 @@ function effStatsUnitBaseChanged(u) {
 // place, the stat tables changed).
 function effStatsInvalidateAll() {
     if (typeof _simUnitState !== 'undefined' && _simUnitState) _simUnitState.columns.esOk.fill(0);
+}
+// At a resync, on every peer: each unit's effective level counts as applied
+// (a restored peer has no record of what was; the others applied theirs at
+// its refresh), so no peer applies its tables again for nothing (that also
+// rounds its energy) at a refresh the others make without.
+function effStatsAppliedSync() {
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    if (!S) return;
+    const c = S.columns, n = S.owners.length;
+    for (let s = 0; s < n; s++) c._lastAppliedEffectiveLevel[s] = c.effectiveLevel[s];
 }
 let _effStatsVersion = -1;
 
@@ -1111,7 +1139,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             t.buildEnabled = useDefaultBuild;
             t.level = 0; t.effectiveLevel = 0; t.potentialEffectiveLevel = 0;
             t.updateTextCache();
-            towers.push(t);
+            towers.push(t); towersChanged();
             setTileEntity(gx, gy, itemKey, t);
             placedNewStructure = true;
             placedNewWallStructure = true;
@@ -1282,7 +1310,7 @@ function destroyBuilding(building) {
 
     if (building instanceof Tower || (building.constructor && building.constructor.name === 'Tower') || isWallTargetType) {
         let idx = towers.indexOf(building);
-        if (idx !== -1) towers.splice(idx, 1);
+        if (idx !== -1) { towers.splice(idx, 1); towersChanged(); }
         clearTileEntity(building.gx, building.gy, building);
         grid[building.gy][building.gx].type = TYPE_FLOOR;
         grid[building.gy][building.gx].owner = -1;
@@ -1708,6 +1736,7 @@ function markConstructionComplete(item) {
     else updateItemTextCache(item);
     // Built: it sees from now (visibility coverage).
     if (typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(item);
+    if (typeof workSiteBuilt === 'function') workSiteBuilt(item);
 }
 
 function isAutoUpgradeEnabled(item) {

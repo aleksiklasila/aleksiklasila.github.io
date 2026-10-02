@@ -63,6 +63,116 @@ is next. Newest entries first within each section.
 
 ## Session log
 
+### 2026-10-02 (seventh round) — tier lanes, combat on the movers, determinism
+
+User direction (plan, "Sixth refinement"): the 20 TPS thread only does what
+players perceive at that rate and must stay well under 50 ms; everything
+else on a hierarchy of lower-rate tier threads (10/5/1/0.5 TPS) committing
+at fixed, staggered ticks; cadences deterministic, later handshaked and
+auto-adjusted in multiplayer, editable in the menu.
+
+Done (siege, HELPERS=7, machine ~60% loaded by other work):
+1. Long-range attack holds (mvHWin / mvHTT / mvHVer: window key, target
+   tile, area layout version; _simAreaLayoutVer bumps with a new layout).
+2. Drive-by looks: the kernel hands a ready shooter back only when
+   _simDriveByAny finds a visible enemy in range (unit index, exact
+   _simUnitInAttackRange with mvRangeK = floor range) or a visible hostile
+   structure in area range. c1 updates 3.4k -> 0.6k a tick.
+3. Building attackers' 8-tick look for units from the combat scan
+   (_combatScanHit; the scan covers mvOn 5/6 automatic targets on their look
+   tick); the approach/hold kernels continue when it found none. c3:bld
+   1.8k -> 0.6k.
+4. Attack-move structure look counts only visible tiles.
+5. Hold <-> chase in the kernel: a hold whose target stepped out of range
+   takes the chase step (outputs 11/12), a chase come in range is held
+   (13); simHoldChaseCommit does the rest of Unit.update at its turn.
+6. Tier lanes in sim_parallel.js (SIM_LANE_T10/T5/T1/T05, priority order
+   SIM_PAR_BG_ORDER, per-lane params); sim_parallel version bumped
+   (20261013-a) for the helpers.
+7. Visibility units' cover as a T5 tier (snapshot, seeds, per-player
+   spread with the diff, commit at phase 1): 12.1 -> 8.7 ms.
+8. Units' damage over time reported every 4 ticks summed (stAcc; reset on
+   every peer at a flush): status pre-pass 14 -> 8.7 ms.
+9. Buildings tick statuses only while something runs (_thingStatusSelf):
+   towers 36 -> 21 ms.
+10. Projectile structure ranking cached by towersVersion (new) /
+    barracksVersion / collectorSpawnersVersion.
+11. Stat cadences: UNIT_EFFECTIVE_STATS_RECALC_TICKS 20 (was 5),
+    THING_STATS_RECALC_INTERVAL_SECONDS 10 (was 3); menu defaults match.
+
+Determinism fixes (chaos test, arena, repair of guest1 at tick 295):
+- Flow look-ahead cache keyed by the field kind (1 narrow / 2 wide), not
+  the field slot generation (peer-local allocation history).
+- Field remakes over a new build all at the next flush (the slot-order
+  spreading made field contents depend on each peer's pool).
+- simMoveStatsChanged disarms only when the movement stats changed; a
+  refresh's level-then-effective scaling notifies once at the end
+  (_unitStatsNotifyHeld).
+- Visibility tier steps by tick only; a reset recompute is followed by the
+  tick's normal step.
+Debugging note: CHAOS_SIM_EVAL runs the world to a safe tick and changes
+the harness schedule; inject instrumentation at setup instead.
+
+Later the same day (user: every search, range check and scan on the
+helpers; the tick O(1) per entity):
+12. Acquisition tier (T10 lane, period 4, phases 2/0): unit and structure
+    targets from a snapshot; O(1) reads; no fallback searches.
+13. Laser beam map + SIM_KERNEL_LASER_HITS; towers 21 -> 9 ms.
+14. SIM_KERNEL_DRIVEBY (exact answers, O(1) check in _driveByScan).
+15. Chase by flow; pass-start death semantics (dead0, _unitTickDead);
+    held units not visited; candidates by SIM_KERNEL_UPD_CAND; post lists
+    from the movement kernel.
+16. Building order by list version; projectile structure order by kind
+    and tile.
+17. Determinism: building statuses in the per-slice core hash; status
+    sets rebuilt at decode end; effective levels marked applied at flush.
+Siege p50 252 ms (tick p50 ~236); unit pass p50 ~60.
+r31 (all, machine loaded): base p50 145 (tick 132), active 213 (tick 185),
+siege 260 (tick 239). Active is now led by workers' searches (healers
+40 ms / 150 calls, salvagers 29 ms / 3 calls, collectors 19, builders 16).
+Full suite: all pass but flat-gpu-renderer (fails at HEAD too) and
+render-frame-stability (browser timing, passes alone). Tests updated for
+the new rules: structure looks read the tier (performance-regressions),
+traps rank by distance (structure-targeting), extracted sources end with
+a newline (battle-performance).
+
+Worker AI off the tick (2026-10-02, user: worker AI on helper tiers, the
+tick O(1)):
+18. Worker search tier (worker.js, SIM_KERNEL_WS_SCAN, lane T1, post at
+    phase 3, commit 2 ticks later): a worker due to search posts a request
+    and waits idle until the commit; the kernel returns its K=6 best sites;
+    the take re-checks them live (validity, exclusivity) and picks the
+    first. Collectors: persistent per-type site groups (drops, mines,
+    farms, spawners; rebuilt on list versions or construction done).
+    Builders, healers (queues), salvagers, researchers: the work site grid
+    (per tile: work bits from pure tests, owner, area; per 8x8 counts; per
+    owner counts) kept by the tile journal, dirty tiles (salvage marks,
+    construction done, queue changes, effective level changes) and a
+    60-tick sweep; changed only between searches (phases 1-3). Both kinds
+    skip sites reserved by another worker of the type (an all-type
+    reservation mirror per tile, from workerReservedSet) and apply the
+    area-step limit in the kernel (CSR BFS from the origin's window).
+19. Healer candidates (12 most damaged per owner) on lane T05: columns
+    copied at the round's first tick (maxE: a new mirror column written
+    where unit stats are applied; live), merged at its last; 3.6 -> 0.3 ms.
+20. Worker conflict index kept between ticks (extended by
+    _setWorkerTarget, compacted from its own entries), not rebuilt from
+    all units each tick: 4 -> 0.2 ms. Closest spawner: the owner's list of
+    the type, linear under 512.
+21. Fix (latent, exposed by the tier): a parked idle worker in a search
+    backoff was not woken at the backoff's end, where the object path's
+    scheduled search runs (simMoveTryPark: sched = max(next, failUntil)).
+ACTIVE p50 211 -> 165 ms (workers' AI 47 -> ~13 ms a tick, mostly the
+per-worker state machines and idle wakes). Equivalence (8 seeds), chaos,
+desync, corruption fuzz and the worker tests pass.
+
+Remaining (siege, mean ms): unit pass ~90-115 (~7.4k Unit.update a tick:
+idle 1.4k, attackers not armed 1.75k, attack-move acquisitions 1k, kernel
+hand-backs for dead targets / non-direct chases ~1.9k), simMoveRun ~46-51,
+towers 21, hits 16, hash 16, orders 14 (bursty), index 9.7, building order
+9, visibility 8.7, stats 8.8 + 7.6 (before the cadence change).
+
+
 ### 2026-10-01 (sixth round) — one tick path: separation job, visibility recompute, workers
 
 User direction (see the plan, "Fifth refinement"): the tick path is one
@@ -137,7 +247,18 @@ are fine when rates hold on average; moving eventually beats never moving.
    their update.
 10. Hashing: the per-slice building/floor item/mine lists are kept per tile
     from the tile entity journal (were rebuilt on every tile index change,
-    ~13 ms a tick in ACTIVE).
+    ~13 ms a tick in ACTIVE). The region kernel sums the slice's units into
+    a typed per-region accumulator (atomics; touched regions listed once),
+    so the simulation thread no longer walks every unit or does a Map
+    update per unit (`SNAP_HASH_KERNEL_SUMS`, tests compare both ways:
+    equal). Rotations (user: hashing must not take a large share of the
+    tick; next is moving it off the tick entirely): units' object fields
+    one group by id in `SNAP_HASH_OBJ_GROUPS` = 10 (each unit every 100
+    ticks; columns still every slice), grid rows, areas and the slice's
+    building hashes one round in `SNAP_HASH_GRID_ROUNDS` = 10 (every 100
+    ticks), list order sliced by position for every list. Chaos, desync
+    recovery and corruption fuzz pass with forced kernel paths. Base hash
+    23.5 -> 14.5 ms (before the building rotation).
 
 Measured: base p50 290 -> 223 ms (gameTick mean 292 -> 200: separation
 53 -> 17, simMoveRun 59 -> 34, visibility 35 -> 12, unit pass 32 -> 25);

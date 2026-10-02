@@ -1,5 +1,112 @@
 "use strict";
 
+// Laser beams: a map made when the links change (laserBeamsTick), not
+// looked for each tick: a beam is the tiles strictly between two linked
+// lasers. Each tick a helper kernel (SIM_KERNEL_LASER_HITS) finds the units
+// on beam tiles (one look-up each); the structures on a beam's tiles are
+// listed with it. Units' records come every LASER_REPORT_TICKS ticks, summed.
+const LASER_REPORT_TICKS = 4;
+const _laserMap = { stale: true, head: null, cap: 0, next: null, beam: null, bown: null, bdmg: null, hit: null, count: null, beams: [], aTowers: [], set: [] };
+function laserMapDirty() { _laserMap.stale = true; }
+function _laserMapBuild() {
+    const M = _laserMap, W = GRID_W, H = GRID_H;
+    M.stale = false;
+    if (!M.head || M.head.length !== W * H) { M.head = simSharedArray(Int32Array, W * H).fill(-1); simParallelBind('lz.head', M.head); M.set = []; }
+    for (const t of M.set) M.head[t] = -1;
+    M.set = [];
+    for (const t of M.aTowers) t.laserState = 0;
+    const beams = [], aTowers = [], ent = [];
+    for (const t of towers) {
+        if (t.type !== 'laser' || !t.connectedLasers || !t.connectedLasers.length || t.underConstruction || !(t.energy > 0)) continue;
+        t._laserDmgSeen = t.currentStats ? t.currentStats.damage : 0;
+        let isA = false;
+        for (const o of t.connectedLasers) {
+            if (!(t.gx < o.gx || (t.gx === o.gx && t.gy < o.gy))) continue;
+            const b = beams.length, vert = t.gx === o.gx;
+            const dmg = ((Number(t.currentStats && t.currentStats.damage) || 0) + (Number(o.currentStats && o.currentStats.damage) || 0)) / 60;
+            const structs = [];
+            const from = vert ? t.gy : t.gx, to = vert ? o.gy : o.gx;
+            for (let c = from + 1; c < to; c++) {
+                const gx = vert ? t.gx : c, gy = vert ? c : t.gy, k = gy * W + gx;
+                if (M.head[k] === -1) M.set.push(k);
+                ent.push(b, M.head[k]); M.head[k] = (ent.length >> 1) - 1;
+                const e = getTileEntityRef(gx, gy);
+                if (e && _projBuildingKind(e) >= 0) structs.push(e);
+            }
+            beams.push({ a: t, b: o, owner: t.owner, dmg, structs });
+            isA = true;
+        }
+        if (isA) aTowers.push(t);
+    }
+    const ne = ent.length >> 1, nb = beams.length;
+    if (M.cap < Math.max(ne, nb)) {
+        const cap = Math.max(1024, 2 * Math.max(ne, nb));
+        M.next = simSharedArray(Int32Array, cap); M.beam = simSharedArray(Int32Array, cap);
+        M.bown = simSharedArray(Int32Array, cap); M.bdmg = simSharedArray(Float64Array, cap); M.hit = simSharedArray(Uint8Array, cap);
+        simParallelBind('lz.next', M.next); simParallelBind('lz.beam', M.beam); simParallelBind('lz.bown', M.bown); simParallelBind('lz.bdmg', M.bdmg); simParallelBind('lz.hit', M.hit);
+        M.cap = cap;
+    }
+    for (let k = 0; k < ne; k++) { M.beam[k] = ent[2 * k]; M.next[k] = ent[2 * k + 1]; }
+    for (let b = 0; b < nb; b++) { M.bown[b] = Number.isFinite(beams[b].owner) ? beams[b].owner : -999; M.bdmg[b] = beams[b].dmg; }
+    M.beams = beams; M.aTowers = aTowers;
+}
+// Once a tick, before the towers' updates (gameTick): every beam's damage.
+function laserBeamsTick() {
+    if (typeof ensureLaserConnections === 'function') ensureLaserConnections();
+    const M = _laserMap;
+    if (M.stale) _laserMapBuild();
+    const nb = M.beams.length;
+    if (!nb) return;
+    M.hit.fill(0, 0, nb);
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null, n = S ? S.owners.length : 0;
+    if (n > 0) {
+        const chunks = Math.ceil(n / 8192);
+        if (!M.count || M.count.length < chunks) { M.count = simSharedArray(Int32Array, Math.max(64, chunks * 2)); simParallelBind('lz.count', M.count); }
+        const P = _simParams;
+        P[0] = n; P[1] = 8192; P[2] = TILE; P[3] = GRID_W; P[4] = GRID_H; P[5] = gameTime; P[6] = LASER_REPORT_TICKS; P[7] = SIM_SEP_ABSENT;
+        simParallelRun(SIM_KERNEL_LASER_HITS, chunks);
+        // The records of the units reporting (in slot order).
+        const C = S.columns, EV = C.lzEv, ACC = C.lzAcc, LB = C.lzBeam, owners = S.owners;
+        for (let k = 0; k < chunks; k++) {
+            if (M.count[k] === 0) continue;
+            for (let s = k * 8192, end = Math.min(n, s + 8192); s < end; s++) {
+                if (!EV[s]) continue;
+                const u = owners[s], d = ACC[s], beam = M.beams[LB[s]];
+                ACC[s] = 0;
+                if (!u || !beam || !(d > 0)) continue;
+                pushHostileDamageAlert(u, d, beam.owner);
+                recordDamageVisual(u, d, beam.owner); shrineDamageTaken(u, d);
+                tryAutoRetaliateOnHostileDamage(u, beam.a, beam.a.x, beam.a.y);
+                createExplosion(u.x, u.y, "#f00", 1);
+            }
+        }
+    }
+    // Structures on the beams (in the map's order), then which lasers show lit.
+    for (let b = 0; b < nb; b++) {
+        const beam = M.beams[b], dmg = beam.dmg;
+        for (const e of beam.structs) {
+            if (e.owner === beam.owner || !(e.energy > 0) || getTileEntityRef(e.gx, e.gy) !== e) continue;
+            M.hit[b] = 1;
+            const prev = e.energy;
+            e.energy -= dmg;
+            pushHostileDamageAlert(e, prev - e.energy, beam.owner);
+            recordDamageVisual(e, prev - e.energy, beam.owner); shrineDamageTaken(e, prev - e.energy);
+            if ((gameTime % 10) === 0) createExplosion(e.x, e.y, "#f84", 1);
+            if (e.energy <= 0) destroyBuilding(e);
+        }
+    }
+    for (const t of M.aTowers) t.laserState = 0;
+    let lit = false;
+    for (let b = 0; b < nb; b++) if (M.hit[b]) { M.beams[b].a.laserState = 1; lit = true; }
+    if (lit && (gameTime % 40) === 0) { const bm = M.beams[0]; playSound('laser_tick', bm.a.x, bm.a.y); }
+}
+// At a resync, on every peer: the map made again (its structures by object)
+// and the units' unreported sums dropped.
+function laserBeamsReset() {
+    _laserMap.stale = true;
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    if (S) S.columns.lzAcc.fill(0);
+}
 function _getTowerAttackRangeArea(tower) {
     return Math.max(0, Number(tower && tower.currentStats && tower.currentStats.attackRangeArea) || 0);
 }
@@ -141,7 +248,7 @@ class Tower {
 
     update() {
         if (this.energy <= 0) return;
-        tickStatusEffects(this);
+        thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (this.underConstruction) {
             let requiredEnergy = Math.max(1, Math.floor(getUpgrademaxEnergy(this, 1) || this.maxEnergy || 1));
@@ -151,66 +258,11 @@ class Tower {
         if (this.type.startsWith('cloud')) return;
 
         if (this.type === 'laser') {
-            // Beam reach depends on effectiveLevel, which is 0 while under
-            // construction and changes with adjacency/upgrades. Relink when it
-            // moves so a finished tower connects without another placement.
-            ensureLaserConnections();
-            if (this._laserLinkLevel !== this.effectiveLevel) recalculateLaserConnections();
-            this.laserState = 0;
-            for (let other of this.connectedLasers) {
-                if (this.gx < other.gx || (this.gx === other.gx && this.gy < other.gy)) {
-                    let dmg = this.currentStats.damage + other.currentStats.damage;
-                    let sx = this.x, sy = this.y, ex = other.x, ey = other.y;
-                    let isVert = (this.gx === other.gx);
-                    let mn = isVert ? Math.min(sy, ey) : Math.min(sx, ex);
-                    let mx = isVert ? Math.max(sy, ey) : Math.max(sx, ex);
-                    let hitAny = false;
-                    let nearUnits = getUnitsInRange((sx + ex) / 2, (sy + ey) / 2, Math.max(Math.abs(ex - sx), Math.abs(ey - sy)) / 2 + TILE);
-                    for (let u of nearUnits) {
-                        if (u.owner === this.owner) continue;
-                        if (u.turretImmune) continue;
-                        let hit = false;
-                        if (isVert) { hit = Math.abs(u.x - sx) < u.r + 4 && u.y >= mn && u.y <= mx; }
-                        else { hit = Math.abs(u.y - sy) < u.r + 4 && u.x >= mn && u.x <= mx; }
-                        if (hit) {
-                            hitAny = true;
-                            if (gameTime % 40 === 0) playSound('laser_tick', (this.x + other.x) / 2, (this.y + other.y) / 2);
-                            if (u.laserResistant) { if (gameTime % 10 === 0) createExplosion(u.x, u.y, "#888", 1); }
-                            else {
-                                let prevEnergy = u.energy;
-                                u.energy -= dmg / 60;
-                                pushHostileDamageAlert(u, prevEnergy - u.energy, this.owner);
-                                recordDamageVisual(u, prevEnergy - u.energy, this.owner); shrineDamageTaken(u, prevEnergy - u.energy);
-                                tryAutoRetaliateOnHostileDamage(u, this, this.x, this.y);
-                                if (gameTime % 10 === 0) createExplosion(u.x, u.y, "#f00", 1);
-                                if (u.energy <= 0 && !u.dead) { u.dead = true; }
-                            }
-                        }
-                    }
-                    // Keep list priority and stable ID order, but only sort
-                    // buildings in the beam's narrow strip. The shared spatial
-                    // index refreshes after same-tick placement/destruction.
-                    for (let list of [towers, barracks, collectorSpawners]) {
-                        let sortedList = getLaserStructureCandidates(list, sx, sy, ex, ey);
-                        for (let b of sortedList) {
-                            if (b.owner === this.owner || b.energy <= 0) continue;
-                            let hit = false;
-                            if (isVert) { hit = Math.abs(b.x - sx) < 18 && b.y >= mn && b.y <= mx; }
-                            else { hit = Math.abs(b.y - sy) < 18 && b.x >= mn && b.x <= mx; }
-                            if (hit) {
-                                hitAny = true;
-                                let prevEnergy = b.energy;
-                                b.energy -= dmg / 60;
-                                pushHostileDamageAlert(b, prevEnergy - b.energy, this.owner);
-                                recordDamageVisual(b, prevEnergy - b.energy, this.owner); shrineDamageTaken(b, prevEnergy - b.energy);
-                                if (gameTime % 10 === 0) createExplosion(b.x, b.y, "#f84", 1);
-                                if (b.energy <= 0) destroyBuilding(b);
-                            }
-                        }
-                    }
-                    if (hitAny) this.laserState = 1;
-                }
-            }
+            // Its beams are the map's (laserBeamsTick). Reach depends on its
+            // effective level (0 while under construction, adjacency,
+            // upgrades), damage on its stats: relinked when they move.
+            if (this._laserLinkLevel !== this.effectiveLevel) { if (typeof markLaserConnectionsDirty === 'function') markLaserConnectionsDirty(); laserMapDirty(); }
+            else if (this.currentStats && this._laserDmgSeen !== this.currentStats.damage && this.connectedLasers && this.connectedLasers.length) laserMapDirty();
             return;
         }
 

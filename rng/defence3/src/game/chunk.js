@@ -26,7 +26,8 @@ function initSpatialHash() {
     simParallelBind('spatial.cplx', spatialUnitsComplex);
     spatialBlockCols = Math.ceil(CHUNKS_W / SPATIAL_BLOCK_SIZE);
     spatialBlockRows = Math.ceil(CHUNKS_H / SPATIAL_BLOCK_SIZE);
-    spatialBlockCounts = new Int32Array(spatialBlockCols * spatialBlockRows * spatialUnitsComplexPlayerCount);
+    spatialBlockCounts = simSharedArray(Int32Array, spatialBlockCols * spatialBlockRows * spatialUnitsComplexPlayerCount);
+    simParallelBind('ix.complex', spatialUnitsComplex); simParallelBind('ix.bcount', spatialBlockCounts);
 }
 
 // Units per owner in blocks of 8x8 chunks, kept exactly in step with the
@@ -144,11 +145,23 @@ function _spatialCountAdd(chunkKey, owner, typeIdx, delta) {
     _adjustSpatialBlockCount(chunkKey, owner, delta);
 }
 function spatialCountsDeferBegin() { _spatialCountDefer = true; }
+// (Set by simMoveRun when its kernel moved units into other chunks.)
+let _spatialKernelMoves = false;
 function spatialCountsDeferEnd() {
     _spatialCountDefer = false;
     const q = _spatialCountQ;
     for (let i = 0; i < q.length; i += 4) _spatialCountAdd(q[i], q[i + 1], q[i + 2], q[i + 3]);
     q.length = 0;
+    if (_spatialKernelMoves) {
+        _spatialKernelMoves = false;
+        const S = _simUnitState;
+        if (S && typeof SIM_KERNEL_SP_COUNTS === 'number') {
+            const P = _simParams, n = S.owners.length;
+            P[0] = n; P[1] = 16384; P[2] = spatialUnitsComplexPlayerCount; P[3] = spatialUnitsComplexStridePerChunk; P[4] = spatialUnitsComplexStridePerPlayer;
+            P[5] = CHUNKS_W; P[6] = spatialBlockCols; P[7] = SPATIAL_BLOCK_SIZE;
+            simParallelRun(SIM_KERNEL_SP_COUNTS, Math.ceil(n / 16384));
+        }
+    }
 }
 
 function _moveUnitSpatial(u, gx, gy, tile) {
@@ -239,6 +252,8 @@ let _sxPar = null;
 // both builds give the same queries).
 let SPATIAL_PARALLEL_MIN_UNITS = 4096;
 function spatialIndexRebuild() {
+    // (A posted acquisition scan reads the index in place.)
+    if (typeof acqTierIndexWait === 'function') acqTierIndexWait();
     _sxDirty = false;
     if (typeof simUnitStateReleaseFreed === 'function') simUnitStateReleaseFreed();
     const n = units.length;

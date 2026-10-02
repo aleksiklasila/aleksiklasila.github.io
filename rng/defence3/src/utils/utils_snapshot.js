@@ -58,6 +58,7 @@ const SNAP_SKIP_KEYS = new Set([
     '_statsVer', '_spatialKey', '_spatialMember', '_spatialAreaId', '_spatialAreaOwner', '_spatialUnitTypeIdx', '_spatialLastVisScaled', '_spatialTile', '_spatialOwner', '_spatialEpoch',
     '_damageFlashStart', '_damageFlashUntil', '_damageFlashStrength', '_damageFlashColor', '_ambientSoundTicks',
     '_historyGhost', '_historyTick', '_droppedIndex', '_areaBucketId', '_laserLinkLevel', '_r3d', '_r3dSig', '_r3dTex', '_visStill', '_r3dStatic', '_rslot', '_sslot', '_pslot', '_simLabelKey', '_simLabel', '_fpPath', '_fpTile', '_fpIdx', '_fpVer',
+    '_detSortStamp', '_laserDmgSeen',
     '_vsGen', '_vsR', '_vsA', '_vsP1', '_vsP2', '_vsAreas', '_vsListId', '_okTile', '_okVer', '_okNodeTile', '_okNodeVer', '_pendingDueStamp', '_thingStatsRefreshStamp', '_effectiveStatsStamp',
     // (Charges already made this tick: nothing between ticks.)
     '_astarLastChargedTick', '_astarLastChargedFromKey', '_astarLastChargedToKey'
@@ -378,7 +379,9 @@ function _snapHDeep(h, x, depth) {
 }
 
 // (Areas: the slice's tenth of them, by index, as regions; slice < 0 all.)
-function _snapHashGlobals(slice = -1) {
+// (Areas: those of this slice in one rotation of SNAP_HASH_GRID_ROUNDS, as
+// the grid rows; `round` the rotation.)
+function _snapHashGlobals(slice = -1, round = 0) {
     let h = 2166136261 | 0;
     h = _snapHNum(h, gameTime);
     h = _snapHNum(h, nextUnitId);
@@ -389,7 +392,7 @@ function _snapHashGlobals(slice = -1) {
     h = _snapHDeep(h, (rng && typeof rng.getState === 'function') ? rng.getState() : null, 1);
     if (pathfindBudgetByPlayer) for (let i = 0; i < pathfindBudgetByPlayer.length; i++) h = _snapHNum(h, pathfindBudgetByPlayer[i]);
     if (astarNodeBudgetRemainingByPlayer) for (let i = 0; i < astarNodeBudgetRemainingByPlayer.length; i++) h = _snapHNum(h, astarNodeBudgetRemainingByPlayer[i]);
-    if (areas) for (let i = slice < 0 ? 0 : slice, step = slice < 0 ? 1 : SNAP_HASH_SLICES; i < areas.length; i += step) {
+    if (areas) for (let i = slice < 0 ? 0 : slice + SNAP_HASH_SLICES * (round % SNAP_HASH_GRID_ROUNDS), step = slice < 0 ? 1 : SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS; i < areas.length; i += step) {
         const ar = areas[i];
         if (ar) { h = _snapHV(h, !!ar.active); h = _snapHDeep(h, ar.multiplierLevel, 1); }
     }
@@ -412,8 +415,9 @@ function _snapHashGlobals(slice = -1) {
     return h >>> 0;
 }
 
-// Membership and order of one list. Units (the long list): its length and
-// the ids at the positions of this tick's slice (slice < 0: all).
+// Membership and order of one list: its length and the entries at the
+// positions of this tick's slice (slice < 0: all); units by id, the others
+// by tile.
 function _snapHashOrder(list, slice = -1) {
     let h = 2166136261 | 0;
     if (list === 'u') {
@@ -426,7 +430,14 @@ function _snapHashOrder(list, slice = -1) {
             h = Math.imul(h ^ (si >= 0 && owners[si] === units[i] ? ID[si] : units[i].id), 16777619);
         }
     }
-    else for (let e of _snapListEntities(list)) h = Math.imul(Math.imul(h ^ e.gx, 16777619) ^ e.gy, 16777619);
+    else {
+        const L = _snapListEntities(list);
+        h = Math.imul(h ^ L.length, 16777619);
+        for (let i = slice < 0 ? 0 : slice, step = slice < 0 ? 1 : SNAP_HASH_SLICES; i < L.length; i += step) {
+            const e = L[i];
+            h = Math.imul(Math.imul(h ^ e.gx, 16777619) ^ e.gy, 16777619);
+        }
+    }
     return h >>> 0;
 }
 
@@ -436,19 +447,28 @@ let _snapRegions = new Int32Array(0), _snapColHash = new Int32Array(0);
 // per region (ry * 1024 + rx) its sum, cleared as read; the stamp of the
 // call that listed it; the lists and their counts.
 const SNAP_ACC_REGIONS = 1 << 20;
+// With the kernel's sums, units' object fields (beyond the columns) are
+// hashed for one group by id of this many a rotation (each unit's every
+// SNAP_HASH_SLICES * SNAP_HASH_OBJ_GROUPS ticks).
+const SNAP_HASH_OBJ_GROUPS = 10;
+// Grid rows: those of this slice, one in this many rotations (each row
+// every SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS ticks).
+const SNAP_HASH_GRID_ROUNDS = 10;
 // (Tests turn it off to compare with the summing below; both agree.)
 let SNAP_HASH_KERNEL_SUMS = true;
 let _snapAcc = null, _snapAccStamp = null, _snapAccStampNow = 0, _snapAccList = null, _snapAccRot = new Int32Array(0), _snapAccNoSlot = new Int32Array(0), _snapAccCnt = null;
 
-// Per slice: the tile entities (buildings, floor items, mines) of its
-// regions, as tile -> [entity, hasher kind, seed, region]: kept from the tile
-// entity journal (only changed tiles are looked at again); made anew when
-// the tile index was rebuilt. Region sums do not depend on the order.
+// Per slice and rotation (SNAP_HASH_GRID_ROUNDS: each region's buildings
+// every SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS ticks): the tile entities
+// (buildings, floor items, mines) of its regions, as tile -> [entity, hasher
+// kind, seed, region]: kept from the tile entity journal (only changed
+// tiles are looked at again); made anew when the tile index was rebuilt.
+// Region sums do not depend on the order.
 function _snapStaticSlices() {
     let c = _snapStaticSliceCache;
     const changes = c && c.w === GRID_W && c.h === GRID_H ? tileEntityChangesSince(c.cursor) : null;
     if (changes === null) {
-        c = _snapStaticSliceCache = { w: GRID_W, h: GRID_H, cursor: { epoch: -1, pos: 0 }, slices: Array.from({ length: SNAP_HASH_SLICES }, () => new Map()) };
+        c = _snapStaticSliceCache = { w: GRID_W, h: GRID_H, cursor: { epoch: -1, pos: 0 }, slices: Array.from({ length: SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS }, () => new Map()) };
         tileEntityChangesSince(c.cursor);
         for (const e of _activeTileEntities) if (e && getTileEntityRef(e.gx, e.gy) === e) _snapStaticPut(c, e.gy * GRID_W + e.gx, e);
         return c.slices;
@@ -461,9 +481,27 @@ function _snapStaticSlices() {
     }
     return c.slices;
 }
+// A building's or mine's core fields (every slice; the rest by rotation):
+// owner, energy, construction, level and stacks; a mine's resources; its
+// statuses while one runs (a hit one peer alone saw, a watch say, shows at
+// once, not a rotation later).
+function _snapStaticCore(e, kind, seed) {
+    let h = seed | 0;
+    if (kind === 'm') { h = _snapHNum(h, Number(e.gold)); h = _snapHNum(h, Number(e.astar)); return h; }
+    h = _snapHNum(h, Number(e.owner)); h = _snapHNum(h, Number(e.energy)); h = _snapHV(h, !!e.underConstruction);
+    h = _snapHNum(h, Number(e.effectiveLevel)); h = _snapHNum(h, Number(e.stacks));
+    if (e.burning > 0 || e.poisoned > 0 || e.frozen > 0 || e.wet > 0 || e.sandy > 0 || e.watched > 0) {
+        h = _snapHNum(h, Number(e.burning)); h = _snapHNum(h, Number(e.poisoned)); h = _snapHNum(h, Number(e.frozen));
+        h = _snapHNum(h, Number(e.wet)); h = _snapHNum(h, Number(e.sandy)); h = _snapHNum(h, Number(e.watched)); h = _snapHNum(h, Number(e.watchedByTeam));
+    }
+    return h;
+}
+function _snapStaticBucket(r) {
+    return (r % SNAP_HASH_SLICES) + SNAP_HASH_SLICES * (Math.floor(r / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS);
+}
 function _snapStaticSliceOf(gx, gy, c) {
     const rt = SNAP_REGION_TILES, r = Math.floor(gy / rt) * 1024 + Math.floor(gx / rt);
-    return c.slices[r % SNAP_HASH_SLICES];
+    return c.slices[_snapStaticBucket(r)];
 }
 // The tile entity at tile t, by its kind: towers, barracks, spawners and
 // other floor items hashed as buildings, mines as mines.
@@ -476,7 +514,7 @@ function _snapStaticPut(c, t, e) {
     else if (e instanceof Barrack) code = 0x33;
     else if (isSpawnerEntity(e)) code = 0x44;
     const rt = SNAP_REGION_TILES, r = Math.floor(gy / rt) * 1024 + Math.floor(gx / rt);
-    c.slices[r % SNAP_HASH_SLICES].set(t, [e, kind, (Math.imul(gx, 4099) + gy) ^ code, r]);
+    c.slices[_snapStaticBucket(r)].set(t, [e, kind, (Math.imul(gx, 4099) + gy) ^ code, r]);
 }
 
 // Worker reservations (target tile and worker type -> unit). The table is
@@ -603,7 +641,7 @@ function snapTickHash(tick, allSlices = false) {
         let hp = Math.imul(2166136261 ^ projectiles.length, 16777619);
         for (let pr of projectiles) hp = Math.imul(hp ^ _snapHashEntity('p', pr, 0), 16777619);
         push(SNAP_PART_PROJECTILES * SNAP_CODE_SHIFT, hp >>> 0);
-        push(SNAP_PART_GLOBALS * SNAP_CODE_SHIFT, _snapHashGlobals(allSlices ? -1 : slice));
+        push(SNAP_PART_GLOBALS * SNAP_CODE_SHIFT, _snapHashGlobals(allSlices ? -1 : slice, Math.floor(t / SNAP_HASH_SLICES)));
         for (let list of SNAP_ORDER_LISTS) push(SNAP_PART_ORDER * SNAP_CODE_SHIFT + SNAP_LIST_CODE[list], _snapHashOrder(list, allSlices ? -1 : slice));
     }
     // Entities of this slice's regions, summed per region (order-free).
@@ -637,7 +675,7 @@ function snapTickHash(tick, allSlices = false) {
             }
             if (++_snapAccStampNow >= 0x7fffffff) { _snapAccStamp.fill(0); _snapAccStampNow = 1; }
             _snapAccCnt.fill(0);
-            P[5] = 1; P[6] = rot; P[7] = SNAP_HASH_UNIT_GROUPS; P[8] = _snapAccStampNow; P[9] = SNAP_ACC_REGIONS;
+            P[5] = 1; P[6] = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_OBJ_GROUPS; P[7] = SNAP_HASH_OBJ_GROUPS; P[8] = _snapAccStampNow; P[9] = SNAP_ACC_REGIONS;
         }
         simParallelRun(SIM_KERNEL_SNAP_REGION, Math.ceil(units.length / 8192));
     }
@@ -666,8 +704,8 @@ function snapTickHash(tick, allSlices = false) {
             if ((r % SNAP_HASH_SLICES) !== slice) continue;
             let h;
             if (si >= 0 && owners[si] === u) {
-                const id = CID[si], seed = Math.imul(id, 7919) ^ 0x11;
-                h = ((((id % SNAP_HASH_UNIT_GROUPS) + SNAP_HASH_UNIT_GROUPS) % SNAP_HASH_UNIT_GROUPS) === rot
+                const id = CID[si], seed = Math.imul(id, 7919) ^ 0x11, G = SNAP_HASH_OBJ_GROUPS;
+                h = ((((id % G) + G) % G) === Math.floor(t / SNAP_HASH_SLICES) % G
                     ? (_snapUnitObjHasher(u, seed, _snapF64, _snapI32, _snapHV, _snapHPath) + HC[i]) : (seed + HC[i])) | 0;
             }
             else h = hu(u, Math.imul(u.id, 7919) ^ 0x11, _snapF64, _snapI32, _snapHV, _snapHPath);
@@ -693,8 +731,8 @@ function snapTickHash(tick, allSlices = false) {
         // the object's own fields, all of them, for the units of this
         // rotation's group by id: reading the objects is most of the cost.)
         if (HC !== null && si >= 0 && owners[si] === u) {
-            const id = CID[si], seed = Math.imul(id, 7919) ^ 0x11;
-            h = ((((id % SNAP_HASH_UNIT_GROUPS) + SNAP_HASH_UNIT_GROUPS) % SNAP_HASH_UNIT_GROUPS) === rot
+            const id = CID[si], seed = Math.imul(id, 7919) ^ 0x11, G = SNAP_HASH_OBJ_GROUPS;
+            h = ((((id % G) + G) % G) === Math.floor(t / SNAP_HASH_SLICES) % G
                 ? (_snapUnitObjHasher(u, seed, _snapF64, _snapI32, _snapHV, _snapHPath) + HC[i]) : (seed + HC[i])) | 0;
         }
         else h = hu(u, Math.imul(u.id, 7919) ^ 0x11, _snapF64, _snapI32, _snapHV, _snapHPath);
@@ -714,8 +752,22 @@ function snapTickHash(tick, allSlices = false) {
             regions.set(r, prev === undefined ? h : ((prev + h) >>> 0));
         }
     };
-    if (allSlices) for (let k = 0; k < SNAP_HASH_SLICES; k++) hashStatic(slices[k]);
-    else hashStatic(slices[slice]);
+    // (This slice's: all of them by their core fields, and this rotation's
+    // round by all their fields.)
+    let hashStaticCore = (entries) => {
+        for (const en of entries.values()) {
+            let h = _snapStaticCore(en[0], en[1], en[2]);
+            h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
+            let r = en[3];
+            let prev = regions.get(r);
+            regions.set(r, prev === undefined ? h : ((prev + h) >>> 0));
+        }
+    };
+    if (allSlices) for (let k = 0; k < slices.length; k++) hashStatic(slices[k]);
+    else {
+        const round = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS;
+        for (let k = 0; k < SNAP_HASH_GRID_ROUNDS; k++) (k === round ? hashStatic : hashStaticCore)(slices[slice + SNAP_HASH_SLICES * k]);
+    }
     for (let i = 0; i < droppedItems.length; i++) {
         let e = droppedItems[i];
         let r = Math.floor(e.gy / rt) * 1024 + Math.floor(e.gx / rt);
@@ -730,10 +782,12 @@ function snapTickHash(tick, allSlices = false) {
         regions.set(r, prev === undefined ? h : ((prev + h) >>> 0));
     });
     for (let [r, h] of regions) push(SNAP_PART_REGION * SNAP_CODE_SHIFT + r, h);
-    // Grid rows of this slice: cell types and owners.
+    // Grid rows of this slice, in one rotation of SNAP_HASH_GRID_ROUNDS:
+    // cell types and owners.
     {
         let h = 2166136261 | 0;
-        for (let gy = allSlices ? 0 : slice; gy < GRID_H; gy += allSlices ? 1 : SNAP_HASH_SLICES) {
+        const gstep = SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS, g0 = slice + SNAP_HASH_SLICES * (Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS);
+        for (let gy = allSlices ? 0 : g0; gy < GRID_H; gy += allSlices ? 1 : gstep) {
             let row = grid[gy];
             if (!row) continue;
             for (let gx = 0; gx < GRID_W; gx++) {
@@ -1725,8 +1779,10 @@ function _snapResetWorkerCaches() {
     _activeBuilderPathTiles = new Set();
     _healerDamagedCandidatesTick = NaN;
     _healerDamagedCandidatesByOwner = [];
+    if (typeof _healerScanBest !== 'undefined') _healerScanBest = null;
     _workerSpawnerIndex = null;
     if (typeof _salvageMarksCache !== 'undefined') _salvageMarksCache.ver = -1;
+    if (typeof _workerWorkListGen !== 'undefined') _workerWorkListGen++;
     if (typeof _ownedQueueSpawnersCache !== 'undefined') _ownedQueueSpawnersCache.vb = -1;
     if (typeof _collectorSpawnerSetCache !== 'undefined') _collectorSpawnerSetCache.ver = -1;
     if (typeof _upKeepAccum !== 'undefined') _upKeepAccum = null;
@@ -2065,6 +2121,8 @@ function snapDecodeState(S, options = null) {
             _adjacencyPassiveRefreshMode = !!g.adjacency[4];
         }
 
+        // (A whole world: its units in slots from 0, see simUnitStateCompact.)
+        if (!partial && typeof simUnitStateCompact === 'function') simUnitStateCompact();
         if (partial) {
             for (let u of removed.u) removeUnitSpatial(u);
             for (let u of shells.u) { let p = keptPrev.get(u); if (p) { u.prevX = p[0]; u.prevY = p[1]; } else { u.prevX = u.x; u.prevY = u.y; } updateUnitSpatial(u); }
@@ -2078,7 +2136,7 @@ function snapDecodeState(S, options = null) {
         // Movement caches (flows, armed units, the unit index, walls) start
         // over from the restored world, as on every peer's flush.
         if (typeof resetGroupRoutes === 'function') resetGroupRoutes();
-        if (typeof simMoveDisarmAll === 'function') simMoveDisarmAll(); if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsInvalidateAll === 'function') effStatsInvalidateAll(); if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset(); if (typeof shrineResetPending === 'function') shrineResetPending();
+        if (typeof simMoveDisarmAll === 'function') { simMoveDisarmAll(); simMoveResetLookCaches(); } if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsInvalidateAll === 'function') { effStatsInvalidateAll(); effStatsAppliedSync(); } if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset(); if (typeof shrineResetPending === 'function') shrineResetPending();
         if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
         if (typeof simMoveWallsDirty === 'function') simMoveWallsDirty();
         // The navigation as the snapshot's peer has it (the same walls).
@@ -2086,6 +2144,8 @@ function snapDecodeState(S, options = null) {
         if (typeof navFieldsRestore === 'function') navFieldsRestore();
         // Rebuilt from the restored world on its first query.
         if (typeof resetVisibilityCoverage === 'function') resetVisibilityCoverage();
+        // Statuses as restored (buildings running them tick them: woken).
+        if (typeof thingStatusRebuild === 'function') thingStatusRebuild();
         if (!partial || shells.t.length > 0 || removed.t.length > 0) recalculateLaserConnections();
         // Idle workers' work versions as sent (last: the tile entities and
         // drops set again above count as changes here).
@@ -2149,10 +2209,16 @@ function snapFlushHistoryCaches() {
     if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
     // Armed and parked units go back to Unit.update everywhere (a restored
     // peer's units start that way).
-    if (typeof simMoveDisarmAll === 'function') simMoveDisarmAll(); if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsInvalidateAll === 'function') effStatsInvalidateAll(); if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset(); if (typeof shrineResetPending === 'function') shrineResetPending();
+    if (typeof simMoveDisarmAll === 'function') { simMoveDisarmAll(); simMoveResetLookCaches(); } if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsInvalidateAll === 'function') { effStatsInvalidateAll(); effStatsAppliedSync(); } if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset(); if (typeof shrineResetPending === 'function') shrineResetPending();
     // Gameplay visibility is reused between ticks (see VISIBILITY_TICK_INTERVAL).
     if (typeof clearGameplayVisibilityCache === 'function') clearGameplayVisibilityCache();
     if (typeof thingStatusRebuild === 'function') thingStatusRebuild();
+    if (typeof statusDotAccReset === 'function') statusDotAccReset();
+    // (The acquisition tier: a pending run dropped, no result until the next.)
+    if (typeof acqTierReset === 'function') acqTierReset();
+    if (typeof laserBeamsReset === 'function') laserBeamsReset();
+    if (typeof workerSearchTierReset === 'function') workerSearchTierReset();
+    if (typeof healerCandidatesTierReset === 'function') healerCandidatesTierReset();
     closestEnemyChunkQueryCache.clear();
     // Worker caches stamped with gameTime: the previous tick's last part and
     // the next tick's first part share it, so a peer that restores would

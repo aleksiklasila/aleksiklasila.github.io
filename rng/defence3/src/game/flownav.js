@@ -413,7 +413,7 @@ const _navFields = { pools: [_navNewPool(false), _navNewPool(true)], seenCycle: 
 function _navFieldKey(profile, dest) { return profile * 16777216 + dest; }
 function _navPoolEnsure(F, C) {
     if (F.C === C && F.pool) return F;
-    F.C = C; F.span = F.wide ? 3 * C : C; F.cap = 0; F.pool = null; F.meta = null; F.byKey = new Map(); F.free = []; F.pending = []; F.seen = null;
+    F.C = C; F.span = F.wide ? 3 * C : C; F.cap = 0; F.pool = null; F.meta = null; F.byKey = new Map(); F.free = []; F.pending = []; F.seen = null; F.remake = null;
     _navFieldsGrow(F, F.wide ? 64 : 1024);
     return F;
 }
@@ -460,6 +460,7 @@ function navFieldGen(id) { return id >= 0 ? _navFieldPool(id).meta[_navFieldInde
 function navFieldsFlush() {
     _navFields.flushedTick = gameTime;
     for (const F of _navFields.pools) if (F.pending.length) { _navFieldsMake(F, F.pending); F.pending = []; }
+    _navFieldsRemakeStep();
     navFieldsSweepStep();
 }
 function _navFieldsMake(F, slots) {
@@ -521,14 +522,32 @@ function navFieldsSweepStep() {
     }
     _navFields.seenCycle++;
 }
-// Every field again (a new build installed).
+// Every field again (a new build installed), all at the next flush (one
+// parallel job). Not a share a tick: which fields a peer keeps differs (the
+// sweep, a restore), and a field must hold the same build on every peer at
+// every tick (its content a function of its destination and the build),
+// whichever peer had it already. (To do: made over the new build on a tier
+// lane into a second pool while the old one serves, swapped at a fixed tick.)
+const NAV_FIELD_REMAKE_PER_TICK = [Infinity, Infinity];
 function _navFieldsRemakeAll() {
     for (const F of _navFields.pools) {
         if (!F.pool) continue;
         const all = [];
         for (const s of F.byKey.values()) all.push(s);
-        _navFieldsMake(F, all);
-        F.pending = [];
+        all.sort((a, b) => a - b);
+        F.remake = all; F.remakePos = 0;
+    }
+}
+function _navFieldsRemakeStep() {
+    for (let w = 0; w < _navFields.pools.length; w++) {
+        const F = _navFields.pools[w];
+        if (!F.pool || !F.remake || F.remakePos >= F.remake.length) continue;
+        const batch = [];
+        while (F.remakePos < F.remake.length && batch.length < NAV_FIELD_REMAKE_PER_TICK[w]) {
+            const s = F.remake[F.remakePos++];
+            if (F.meta[s * NAV_FIELD_META] >= 0) batch.push(s);
+        }
+        _navFieldsMake(F, batch);
     }
 }
 // After a restore: the fields of every route, made now.
@@ -557,6 +576,8 @@ let _navVersion = 0;
 function navPublish(nav) {
     _nav[nav.profile] = nav;
     _navVersion++;
+    // (Its version, as the kernels read it from its meta: look-ahead keys.)
+    nav.version = _navVersion;
     const p = nav.profile;
     simParallelBind('nav.' + p + '.fields', nav.fields); simParallelBind('nav.' + p + '.hop', nav.hop);
     const meta = simSharedArray(Int32Array, 8);
@@ -564,7 +585,8 @@ function navPublish(nav) {
     simParallelBind('nav.' + p + '.meta', meta);
     simParallelBind('nav.' + p + '.nb', nav.nodeBase); simParallelBind('nav.' + p + '.nt', nav.nodeTile); simParallelBind('nav.' + p + '.np', nav.nodePair);
     // Every destination field again over the new build (same slots: the
-    // routes keep following them).
+    // routes keep following them), at the next flush (navFieldsFlush):
+    // until then the old build's.
     for (const F of _navFields.pools) _navPoolEnsure(F, nav.C);
     _navFieldsRemakeAll();
     if (p === NAV_PROFILE_GROUND) _navWallDiffReset();
@@ -585,7 +607,7 @@ function navReset() {
     if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait();
     for (const F of _navFields.pools) {
         if (F.meta) for (const s of F.byKey.values()) { F.meta[s * NAV_FIELD_META] = -1; F.meta[s * NAV_FIELD_META + 6]++; F.free.push(s); }
-        F.byKey = new Map(); F.pending = [];
+        F.byKey = new Map(); F.pending = []; F.remake = null;
     }
     _navFields.flushedTick = -1;
     _nav = [null, null];
@@ -689,7 +711,9 @@ function navPathTo(u, tx, ty) {
 // build starts once the last is installed, when the walls differ from the
 // newest build's (_navWallDiff tiles: kept as walls change, and worked
 // out again after a restore, which rebuilds from the snapshot's walls).
-const NAV_BUILD_SLICES = 16;
+// (Long enough for the helpers to finish each background stage between the
+// tick's own jobs: a collect that waits would stall the tick.)
+const NAV_BUILD_SLICES = 64;
 const NAV_BUILD_TICKS = 2 * NAV_BUILD_SLICES + 4;
 let _navJob = null, _navWallDiff = 0;
 // Tiles whose walls differ from those of the newest build (the one being

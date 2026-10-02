@@ -3,29 +3,30 @@
 // ============================================================
 // PROJECTILE CLASS
 // ============================================================
-// The structure a shot at (x, y) hits: the first tower, then barrack, then
-// spawner (in their arrays' order) of another owner, alive, within 18 px.
-// During the projectile phase (projectilesBegin/End) the structures are
-// ranked in that order once, and a shot looks only at the tiles around it
-// (structures stand at their tile's centre); otherwise the lists are scanned.
-let _projBuildingRank = null;
-function projectilesBegin() {
-    const m = new Map();
-    let k = 0;
-    for (const list of [towers, barracks, collectorSpawners]) for (const b of list) if (!m.has(b)) m.set(b, k++);
-    _projBuildingRank = m;
+// The structure a shot at (x, y) hits: of another owner, alive, within 18
+// px: a tower first, then a barrack, then a spawner, each kind by its tile
+// (row-major). During the projectile phase (projectilesBegin/End) a shot
+// looks only at the tiles around it (structures stand at their tile's
+// centre); otherwise the lists are scanned, with the same order.
+let _projPhase = false;
+function projectilesBegin() { _projPhase = true; }
+function projectilesEnd() { _projPhase = false; }
+// 0 tower, 1 barrack, 2 spawner, -1 none of these.
+function _projBuildingKind(b) {
+    return b instanceof Tower ? 0 : b instanceof Barrack ? 1 : isSpawnerEntity(b) ? 2 : -1;
 }
-function projectilesEnd() { _projBuildingRank = null; }
 function _projectileBuildingHit(p) {
-    const rank = _projBuildingRank;
-    if (!rank) {
-        for (let list of [towers, barracks, collectorSpawners]) for (let b of list) {
-            if (b.owner === p.sourceOwner || b.energy <= 0) continue;
-            if (detHypot(b.x - p.x, b.y - p.y) <= 18) return b;
-        }
-        return null;
-    }
     let best = null, bestRank = Infinity;
+    const consider = (b, kind) => {
+        if (b.owner === p.sourceOwner || b.energy <= 0) return;
+        const r = kind * GRID_W * GRID_H + (Math.floor(b.gy) * GRID_W + Math.floor(b.gx));
+        if (r >= bestRank) return;
+        if (detHypot(b.x - p.x, b.y - p.y) <= 18) { best = b; bestRank = r; }
+    };
+    if (!_projPhase) {
+        [towers, barracks, collectorSpawners].forEach((list, kind) => { for (const b of list) consider(b, kind); });
+        return best;
+    }
     const gx0 = Math.max(0, Math.floor((p.x - 18) / TILE) - 1), gx1 = Math.min(GRID_W - 1, Math.floor((p.x + 18) / TILE) + 1);
     const gy0 = Math.max(0, Math.floor((p.y - 18) / TILE) - 1), gy1 = Math.min(GRID_H - 1, Math.floor((p.y + 18) / TILE) + 1);
     for (let gy = gy0; gy <= gy1; gy++) {
@@ -34,10 +35,8 @@ function _projectileBuildingHit(p) {
         for (let gx = gx0; gx <= gx1; gx++) {
             const b = refs[gx];
             if (!b) continue;
-            const r = rank.get(b);
-            if (r === undefined || r >= bestRank) continue;
-            if (b.owner === p.sourceOwner || b.energy <= 0) continue;
-            if (detHypot(b.x - p.x, b.y - p.y) <= 18) { best = b; bestRank = r; }
+            const kind = _projBuildingKind(b);
+            if (kind >= 0) consider(b, kind);
         }
     }
     return best;

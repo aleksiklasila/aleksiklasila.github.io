@@ -22,6 +22,12 @@ const SIM_UNIT_MIRROR_COLUMNS = ['r', 'collisionR'];
 // plain reference behind a setter that disarms the movement kernel.
 const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved'];
 
+// (Unit.maxEnergy into its column: called where unit stats are applied, the
+// same on every peer.)
+function simUnitMaxE(u) {
+    const c = u && u._us;
+    if (c) c.maxE[u._si] = Number(u.maxEnergy);
+}
 function simUnitMirror(u) {
     const c = u._us;
     if (!c) return;
@@ -43,15 +49,31 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // without reading them (see simMoveStatsChanged).
     ['mvFlow', Int32Array, 1], ['mvFGen', Int32Array, 1], ['mvDest', Int32Array, 1],
     ['mvReachD', Uint8Array, 1], ['mvReachA', Uint8Array, 1], ['mvShoot', Uint8Array, 1],
+    // Whole area steps of its attack range (floor), for the kernel's
+    // drive-by look.
+    ['mvRangeK', Uint8Array, 1],
     // Flow mode's look-ahead from tile mvNavT (-1 none), made with the
     // navigation build mvNavV, wall version mvNavW and destination field
     // generation mvNavG: the next tile, the one after, the farthest one
     // it heads straight for, and whether that is over open ground.
-    ['mvNavT', Int32Array, 1], ['mvNavV', Int32Array, 1], ['mvNavW', Int32Array, 1], ['mvNavG', Int32Array, 1],
+    // A long-range hold (mvReach above 1): held while the unit's window (tile
+    // * 9 + zone, mvHWin) and its target's tile (mvHTT) are those it was
+    // found in range by areas at, under area layout mvHVer.
+    ['mvHWin', Int32Array, 1], ['mvHTT', Int32Array, 1], ['mvHVer', Int32Array, 1],
+    ['mvNavT', Int32Array, 1], ['mvNavV', Int32Array, 1], ['mvNavW', Int32Array, 1], ['mvNavG', Int32Array, 1], ['mvNavD', Int32Array, 1],
     ['mvNavN1', Int32Array, 1], ['mvNavN2', Int32Array, 1], ['mvNavFar', Int32Array, 1], ['mvNavOpen', Uint8Array, 1],
     // The combat scan (SIM_KERNEL_COMBAT_SCAN): its aggro range (pixels),
     // and at tick cbTick the nearest visible enemy's slot (-1 none).
     ['cbRange', Float64Array, 1], ['cbT', Int32Array, 1], ['cbTick', Int32Array, 1],
+    // (The acquisition tier's result as committed: its target's id and the
+    // range it was looked for with; see unit.js _acqTierStep.)
+    ['cbTId', Int32Array, 1], ['cbRangeS', Float64Array, 1],
+    // (And the structure it found: its tile, -1 none.)
+    ['cbS', Int32Array, 1],
+    // The drive-by look's answer (SIM_KERNEL_DRIVEBY) at tick dbTick: a unit
+    // (dbT its slot, dbTI its id), -1 none (then dbS a structure's tile, -1
+    // none), -2 not worked out there (Unit.update looks).
+    ['dbT', Int32Array, 1], ['dbTI', Int32Array, 1], ['dbS', Int32Array, 1], ['dbTick', Int32Array, 1],
     // A moving unit with an idle or waiting unit of its owner in its tile or
     // one beside it at the tick's start (cwNear 1) as of tick cwTick (the
     // combat scan): waiting in a crowd (see NAV_CROWD_TILES).
@@ -86,6 +108,15 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // The status pre-pass's events (1 damaged, 2 its watch ended, 4 died)
     // and the damage dealt.
     ['stEv', Uint8Array, 1], ['stDot', Float64Array, 1],
+    // Damage over time dealt since its last report (SIM_KERNEL_STATUS).
+    ['stAcc', Float64Array, 1],
+    // Dead at the unit pass's start (written by SIM_KERNEL_MOVE for every
+    // slot): what decisions in the pass go by (_unitTickDead).
+    ['dead0', Uint8Array, 1],
+    // Laser beams (tower.js laserBeamsTick): 1 immune to towers, 2 laser
+    // resistant (its type's); the damage not yet reported, the last beam that
+    // hit it, its report this tick.
+    ['lzFlags', Uint8Array, 1], ['lzAcc', Float64Array, 1], ['lzBeam', Int32Array, 1], ['lzEv', Uint8Array, 1],
     // Its position at the start of the unit pass (the pre-pass copies it):
     // where other units see it during the pass (see _unitTickX).
     ['x0', Float64Array, 1], ['y0', Float64Array, 1],
@@ -105,7 +136,23 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // renderer.js), so their updates need not read the unit object.
     ['spTile', Int32Array, 1], ['spArea', Int32Array, 1], ['spOwner', Int32Array, 1], ['spEpoch', Int32Array, 1],
     ['spType', Int16Array, 1], ['vsGen', Int32Array, 1], ['vsR', Int8Array, 1],
-    ['vsA', Int32Array, 1], ['vsP1', Int8Array, 1], ['vsP2', Int8Array, 1]];
+    ['vsA', Int32Array, 1], ['vsP1', Int8Array, 1], ['vsP2', Int8Array, 1],
+    // Unit.maxEnergy as of its last stat change (simUnitMaxE, where the
+    // stats are applied), and 1 while the slot holds a unit: the healer
+    // candidates' kernel (worker.js healerCandidatesStep).
+    ['maxE', Float64Array, 1], ['live', Uint8Array, 1],
+    // A chunk move the movement kernel made (spMvOwn: its owner + 1, 0
+    // none; from spMvOld to spMvNew): counted at the unit pass's end
+    // (SIM_KERNEL_SP_COUNTS, see spatialCountsDeferEnd). mvBlk: a node step
+    // its owner's budget could not cover (the budget glyph, set after it).
+    ['spMvOld', Int32Array, 1], ['spMvNew', Int32Array, 1], ['spMvOwn', Int8Array, 1], ['mvBlk', Uint8Array, 1],
+    // Flow movement's committed step (SIM_STEER_TICKS): its destination tile
+    // (-1 none), the tick and the step its last steer committed.
+    ['mvCD', Int32Array, 1], ['mvCT', Int32Array, 1], ['mvCVx', Float64Array, 1], ['mvCVy', Float64Array, 1],
+    // (The tile it steered in, and for how many ticks the step holds.)
+    ['mvCTl', Int32Array, 1], ['mvCN', Uint8Array, 1],
+    // The tick (+ 1) SIM_KERNEL_MOVE_STEP moved it (SIM_KERNEL_MOVE leaves it).
+    ['mvStepT', Int32Array, 1]];
 // Accessor defaults (the "not indexed / not registered" values).
 const SIM_SPATIAL_DEFAULTS = { spTile: -1, spArea: -2, spOwner: -1, spEpoch: 0, spType: -1, vsGen: 0, vsR: -1, vsA: -1, vsP1: -1, vsP2: -1 };
 let _simUnitState = null;
@@ -173,10 +220,11 @@ function simUnitStateAllocate(u) {
     }
     S.sepKey[s] = SIM_SEP_ABSENT;
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNavT[s] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
-    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0;
+    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = 0; S.columns.lzAcc[s] = 0;
     for (const k of SIM_UNIT_LEVEL_COLUMNS) S.columns[k][s] = NaN;
     for (const k in SIM_SPATIAL_DEFAULTS) S.columns[k][s] = SIM_SPATIAL_DEFAULTS[k];
     S.owners[s] = u;
+    S.columns.live[s] = 1; S.columns.maxE[s] = Number(u.maxEnergy); S.columns.spMvOwn[s] = 0; S.columns.mvBlk[s] = 0; S.columns.mvCD[s] = -1;
     Object.defineProperties(u, { _us: { value: S.columns, writable: true }, _si: { value: s, writable: true }, _det: { value: null, writable: true },
         _path: { value: null, writable: true }, _ws: { value: undefined, writable: true }, _wnr: { value: undefined, writable: true } });
 }
@@ -198,7 +246,7 @@ function simUnitStateDetach(S, s) {
     u._det = values;
     u._us = null; u._si = -1;
     S.sepKey[s] = SIM_SEP_ABSENT;
-    S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0;
+    S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.live[s] = 0;
     // (Reused from the next unit index rebuild on: its entries name units
     // by slot for the rest of the tick, see simUnitStateReleaseFreed.)
     S.owners[s] = null; (S.freeLater || (S.freeLater = [])).push(s);
@@ -216,6 +264,58 @@ function simUnitSetSepKey(u, key, layer) {
 // Every slot leaves the index (the spatial buckets were replaced).
 function simUnitClearSepKeys() {
     if (_simUnitState) _simUnitState.sepKey.fill(SIM_SEP_ABSENT);
+}
+
+// After a whole-world restore (snapDecodeState): the restored units took
+// new slots above the old ones, which the collection frees: every per-slot
+// kernel would walk the gap for the rest of the match. When over a third of
+// the slots would be free, the units of the units list move into slots 0..
+// (in its order) of a new state: every column copied, the slots other units
+// hold in cbT and dbT (the tiers' results) moved with them; the rest
+// detached. Slots are local to each peer (no decision goes by them), and
+// at a restore every slot-keyed cache was dropped (snapFlushHistoryCaches,
+// the disarm, the index made again).
+function simUnitStateCompact() {
+    const S = _simUnitState;
+    if (!S) return false;
+    let live = 0;
+    for (let i = 0; i < units.length; i++) { const u = units[i]; if (u && u._us === S.columns && S.owners[u._si] === u) live++; }
+    if (S.owners.length - live < Math.max(4096, S.owners.length / 3)) return false;
+    if (typeof simParallelBackgroundWait === 'function' && typeof SIM_PAR_BG_LANES === 'number') for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) simParallelBackgroundWait(lane);
+    const old = S.columns, n0 = S.owners.length, map = new Int32Array(n0).fill(-1);
+    let cap = 1024;
+    while (cap < live * 1.25) cap *= 2;
+    const N = { cap, owners: [], free: [], columns: _simUnitColumnsObject(), stamp: new Uint32Array(cap), epoch: 0, unitsRef: units };
+    const C = N.columns;
+    for (const k of SIM_UNIT_COLUMNS) C[k] = simSharedArray(Float64Array, cap);
+    for (const [k, Type, per] of SIM_MOVE_COLUMNS) C[k] = simSharedArray(Type, cap * per);
+    N.sepKey = simSharedArray(Uint32Array, cap); N.sepLayer = simSharedArray(Uint8Array, cap);
+    N.sepKey.fill(SIM_SEP_ABSENT); C.sepKey = N.sepKey;
+    let ns = 0;
+    for (let i = 0; i < units.length; i++) {
+        const u = units[i];
+        if (!u || u._us !== old || S.owners[u._si] !== u) continue;
+        const s = u._si;
+        for (const k of SIM_UNIT_COLUMNS) C[k][ns] = old[k][s];
+        for (const [k, , per] of SIM_MOVE_COLUMNS) { const a = old[k], b = C[k]; for (let j = 0; j < per; j++) b[ns * per + j] = a[s * per + j]; }
+        N.sepKey[ns] = S.sepKey[s]; N.sepLayer[ns] = S.sepLayer[s];
+        N.owners[ns] = u; map[s] = ns;
+        u._us = C; u._si = ns;
+        ns++;
+    }
+    for (let s = 0; s < ns; s++) {
+        const a = C.cbT[s], b = C.dbT[s];
+        if (a >= 0) C.cbT[s] = a < n0 ? map[a] : -1;
+        if (b >= 0) C.dbT[s] = b < n0 ? map[b] : -1;
+    }
+    // The rest (removed, not yet collected): detached from the old state.
+    for (let s = 0; s < n0; s++) if (S.owners[s] && map[s] < 0) simUnitStateDetach(S, s);
+    _simUnitState = N;
+    for (const k of SIM_UNIT_COLUMNS) simParallelBind('unit.' + k, C[k]);
+    for (const [k] of SIM_MOVE_COLUMNS) simParallelBind('unit.' + k, C[k]);
+    simParallelBind('unit.sepKey', N.sepKey); simParallelBind('unit.sepLayer', N.sepLayer);
+    if (typeof unitSlotMapInvalidate === 'function') unitSlotMapInvalidate();
+    return true;
 }
 
 // Slots of removed units are reclaimed by a sliced sweep: every removal

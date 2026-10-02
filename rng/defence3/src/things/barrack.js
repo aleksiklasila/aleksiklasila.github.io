@@ -120,6 +120,7 @@ function spawnQueuedUnitFromSpawner(spawner) {
     let queued = spawner.spawnQueue.shift();
     // The queue moved on: its next item may need healers' energy.
     if (typeof workerWorkChanged === 'function') workerWorkChanged(spawner.owner, 'healer', spawner.gx, spawner.gy);
+    if (typeof workSiteDirty === 'function') workSiteDirty(spawner.gx, spawner.gy);
     let spawnInfo = getQueuedSpawnInfo(queued, fallbackType, effLvl, owner);
     let spawnPos = findNearestWalkable(spawner.gx, spawner.gy);
     let u = new Unit(spawnInfo.unitType, owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
@@ -263,7 +264,7 @@ class Barrack {
     }
 
     update() {
-        tickStatusEffects(this);
+        thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
         let effLvl = getThingBaseLevel(this);
@@ -319,6 +320,20 @@ function spawnerQuiet(b) {
         && b.energy > 0 && !thingStatusPending(b);
 }
 
+// Production is a tier below the tick: a barrack or spawner brings its
+// queue's front up to date (timer from the energy paid, its ready order
+// once paid; a research building also its player's research task: a
+// finished one completes) every SPAWNER_UPDATE_TICKS ticks, staggered by
+// tile (payments and research work themselves are not delayed; a spawn is
+// ready, research completes, up to that many ticks later).
+const SPAWNER_UPDATE_TICKS = 4;
+// Per player, the tick its research task was last moved on (by a research
+// building's update; idempotent within a tick, so this only saves calls).
+const _researchAdvancedTick = [];
+function spawnerDue(b) {
+    return ((gameTime + b.gx + b.gy * 7) % SPAWNER_UPDATE_TICKS) === 0;
+}
+
 class CollectorSpawner {
     constructor(gx, gy, owner, stacks = 1) {
         this.gx = gx; this.gy = gy; this.owner = owner;
@@ -350,7 +365,7 @@ class CollectorSpawner {
         return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
     }
     update() {
-        tickStatusEffects(this);
+        thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
         let effLvl = getThingBaseLevel(this);
@@ -419,7 +434,7 @@ class AstarSpawner {
         return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
     }
     update() {
-        tickStatusEffects(this);
+        thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
         let effLvl = getThingBaseLevel(this);
@@ -485,7 +500,7 @@ class SalvagerSpawner {
         return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
     }
     update() {
-        tickStatusEffects(this);
+        thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
         let effLvl = getThingBaseLevel(this);
@@ -557,7 +572,7 @@ class BuilderSpawner {
         return Math.max(1, Math.round(Number.isFinite(dps) ? dps : fallback));
     }
     update() {
-        tickStatusEffects(this);
+        thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
         let effLvl = getThingBaseLevel(this);
@@ -629,7 +644,7 @@ class HealerSpawner {
         return Math.max(1, Math.round(Number.isFinite(dps) ? dps : fallback));
     }
     update() {
-        tickStatusEffects(this);
+        thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
         let effLvl = getThingBaseLevel(this);
@@ -708,7 +723,7 @@ class ResearchSpawner {
     }
 
     update() {
-        tickStatusEffects(this);
+        thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
 
@@ -721,7 +736,11 @@ class ResearchSpawner {
             this._spawnReadyOrder = undefined;
         }
 
-        let task = tryAdvancePlayerResearchTask(this.owner);
+        // (The player's research is one global pool: moved on at most once a
+        // tick, by the first of its research buildings to update.)
+        let task;
+        if (_researchAdvancedTick[this.owner] === gameTime) task = getPlayerResearchTask(this.owner);
+        else { _researchAdvancedTick[this.owner] = gameTime; task = tryAdvancePlayerResearchTask(this.owner); }
         this.researchTask = task || null;
         this.isResearching = !!(
             task

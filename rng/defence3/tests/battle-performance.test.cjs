@@ -8,7 +8,8 @@ const worker = read('src/things/worker.js');
 function functionSource(source, name) {
     const start = source.indexOf(`function ${name}(`);
     const end = source.indexOf('\nfunction ', start + 1);
-    return source.slice(start, end < 0 ? undefined : end);
+    // (Ended by a newline: a last comment line must not swallow the next source.)
+    return source.slice(start, end < 0 ? undefined : end) + '\n';
 }
 
 // Compare indexed occupancy against the original exhaustive fallback, including
