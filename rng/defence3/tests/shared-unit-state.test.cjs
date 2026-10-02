@@ -54,7 +54,15 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
         simFrameReturn(actual.buf); simFrameReturn(expected.buf);
     }
     const saved = snapEncodeState(), hash = computeLockstepStateHashFast(gameTime);
-    snapDecodeState(saved); simUnitStateCollect();
+    const beforeRestore = units.slice();
+    snapDecodeState(saved);
+    const restored = new Set(units);
+    for (let s = 0; s < _simUnitState.owners.length; s++) {
+        const u = _simUnitState.owners[s];
+        if (u && !restored.has(u)) fail('restore left stale slot live');
+        if (!!_simUnitState.columns.live[s] !== !!u) fail('restore live membership');
+    }
+    if (beforeRestore.some(u => u._us)) fail('replaced units not detached at decode');
     if (computeLockstepStateHashFast(gameTime) !== hash) fail('snapshot columns');
     if (!units.every(u => u._us && u._us.x[u._si] === u.x)) fail('restored units not column-backed');
     return { compared, units:units.length, capacity:_simUnitState.cap };

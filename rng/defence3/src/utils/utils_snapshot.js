@@ -2121,6 +2121,10 @@ function snapDecodeState(S, options = null) {
             _adjacencyPassiveRefreshMode = !!g.adjacency[4];
         }
 
+        // Reconcile membership before any tier can snapshot the columns.
+        // The tick's normal collection runs after tier posts; waiting for
+        // it leaves replaced units live in those inputs for a whole round.
+        if (typeof simUnitStateCollect === 'function') simUnitStateCollect();
         // (A whole world: its units in slots from 0, see simUnitStateCompact.)
         if (!partial && typeof simUnitStateCompact === 'function') simUnitStateCompact();
         // (Max energy and the movement stats into the columns, as the

@@ -670,7 +670,25 @@ function _resolveDeferredPathsByGroup(pending) {
 // with the other cross-tick caches at a resync, on every peer.
 let _upKeepAccum = null;
 
-let _removedMarks = new Uint8Array(0);
+const UNIT_RETIRE_BLOCK = 8192;
+let _unitRetireList = new Int32Array(0), _unitRetireCounts = new Int32Array(0);
+function unitRetirePrepare() {
+    const S = _simUnitState, n = units.length, ns = S ? S.owners.length : n;
+    const blocks = Math.ceil(Math.max(n, ns) / UNIT_RETIRE_BLOCK);
+    if (_unitRetireList.length < n) { _unitRetireList = simSharedArray(Int32Array, Math.max(1024, n * 2)); simParallelBind('retire.list', _unitRetireList); }
+    if (_unitRetireCounts.length < blocks) { _unitRetireCounts = simSharedArray(Int32Array, Math.max(16, blocks * 2)); simParallelBind('retire.count', _unitRetireCounts); }
+    if (S) {
+        simParallelBind('ix.slots', _unitSlotMapEnsure());
+        const P = _simParams;
+        P[0] = n; P[1] = UNIT_RETIRE_BLOCK; P[2] = ns;
+        simParallelRun(SIM_KERNEL_UNIT_RETIRE, blocks);
+    } else for (let b = 0; b < blocks; b++) {
+        let count = 0, start = b * UNIT_RETIRE_BLOCK;
+        for (let i = start; i < Math.min(n, start + UNIT_RETIRE_BLOCK); i++) if (units[i].dead) _unitRetireList[start + count++] = i;
+        _unitRetireCounts[b] = count;
+    }
+    return blocks;
+}
 function gameTick() {
     if (gameOver) return;
     gameTime++;
@@ -840,38 +858,42 @@ function gameTick() {
     } finally { unitPassEnd(); }
     unitHitsResolve();
     visCoverHoldEnd();
-    simMoveEndTick();
+    const retireBlocks = unitRetirePrepare();
 
     // Dead units are processed in the same order as ever and removed in one
     // pass afterwards: a splice per death shifted the whole list each time,
     // which in big fights (hundreds of deaths a tick) cost most of the tick.
     // Dead units are found in the dead column (through the slot map, no
     // object reads) and marked by index; the compaction moves references.
-    let removedAny = false;
+    const removedIndices = [], removedSet = selectedUnits.length ? new Set() : null;
     const DS = _simUnitState, dslots = DS ? _unitSlotMapEnsure() : null, DEAD = DS ? DS.columns.dead : null, downers = DS ? DS.owners : null;
-    if (_removedMarks.length < units.length) _removedMarks = new Uint8Array(units.length * 2);
-    const marks = _removedMarks;
     let compactRemovedUnits = () => {
-        if (!removedAny) return;
-        let w = 0, removedSet = selectedUnits.length ? new Set() : null;
+        if (!removedIndices.length) return;
+        let w = 0, from = 0;
         const M = _unitSlotMap, keep = M.ref === units && M.len === units.length, ms = M.slots;
-        for (let k = 0; k < units.length; k++) {
-            if (marks[k]) { marks[k] = 0; if (removedSet) removedSet.add(units[k]); continue; }
-            if (keep) ms[w] = ms[k];
-            units[w++] = units[k];
+        // Copy surviving runs natively; no JS visit to every survivor.
+        // The removals were recorded backwards, as death effects require.
+        for (let k = removedIndices.length - 1; k >= -1; k--) {
+            const end = k >= 0 ? removedIndices[k] : units.length;
+            if (w !== from && end > from) {
+                units.copyWithin(w, from, end);
+                if (keep) ms.copyWithin(w, from, end);
+            }
+            w += end - from; from = end + 1;
         }
         units.length = w;
         if (keep) M.len = w;
         if (removedSet) selectedUnits = selectedUnits.filter(su => !removedSet.has(su));
     };
-    for (let i = units.length - 1; i >= 0; i--) {
+    for (let b = retireBlocks - 1; b >= 0; b--) for (let j = _unitRetireCounts[b] - 1; j >= 0; j--) {
+        const i = _unitRetireList[b * UNIT_RETIRE_BLOCK + j];
         let u = units[i];
         const si = dslots ? dslots[i] : -1;
         if (si >= 0 && downers[si] === u ? DEAD[si] === 0 : !u.dead) continue;
         upkeepUnitGone(u);
         if (u._removedNow) {
             // Removed by removeUnitNow (spatial and population already done).
-            marks[i] = 1; removedAny = true;
+            removedIndices.push(i); if (removedSet) removedSet.add(u);
         } else {
             if (!u.isKing && !u.workerState) playSound('unit_death', u.x, u.y, u.unitType);
             // Energy on death (bounty), dropped where it fell (with shrines
@@ -893,7 +915,7 @@ function gameTick() {
             if (u.isKing) checkWinCondition();
             removeUnitSpatial(u);
             players[u.owner].popCount--;
-            marks[i] = 1; removedAny = true;
+            removedIndices.push(i); if (removedSet) removedSet.add(u);
             if (gameOver) { compactRemovedUnits(); return; }
         }
     }
