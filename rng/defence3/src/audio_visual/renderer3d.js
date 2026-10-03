@@ -91,6 +91,61 @@
     const FLAT_ATLAS_SIZE = 96;  // RENDERER3D_TOP_TEXTURE_SIZE panels
     const FLAT_ATLAS_LEVELS = 7; // 96 48 24 12 6 3 1
 
+    // Persistent instance storage. Compare/upload pages only when a published
+    // presentation changes; camera and interpolation frames do no buffer work.
+    class PersistentInstances {
+        constructor(stride) {
+            this.stride = stride;
+            this.data = new Float32Array(0);
+            this.uploaded = new Float32Array(0);
+            this.count = 0;
+            this.version = 0;
+            this.gpuVersion = -1;
+            this.uploadBytes = 0;
+        }
+        reserve(count) {
+            if (count * this.stride <= this.data.length) return;
+            const next = new Float32Array(Math.max(1024 * this.stride, count * this.stride, this.data.length * 2));
+            next.set(this.data);
+            this.data = next;
+        }
+        upload(gl) {
+            this.uploadBytes = 0;
+            if (this.gpuVersion === this.version) return this.buffer;
+            if (!this.buffer) this.buffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+            let fresh = this.uploaded.length !== this.data.length;
+            if (fresh) {
+                gl.bufferData(gl.ARRAY_BUFFER, this.data.byteLength, gl.DYNAMIC_DRAW);
+                this.uploaded = new Float32Array(this.data.length);
+            }
+            const size = this.count * this.stride, page = 256 * this.stride;
+            let start = -1;
+            const flush = end => {
+                if (start < 0) return;
+                gl.bufferSubData(gl.ARRAY_BUFFER, start * 4, this.data, start, end - start);
+                this.uploaded.set(this.data.subarray(start, end), start);
+                this.uploadBytes += (end - start) * 4;
+                start = -1;
+            };
+            for (let base = 0; base < size; base += page) {
+                const end = Math.min(size, base + page);
+                let dirty = fresh;
+                for (let i = base; !dirty && i < end; i++) dirty = this.data[i] !== this.uploaded[i];
+                if (dirty) { if (start < 0) start = base; }
+                else flush(base);
+            }
+            flush(size);
+            this.gpuVersion = this.version;
+            return this.buffer;
+        }
+        dispose(gl) {
+            if (this.buffer) gl.deleteBuffer(this.buffer);
+            this.buffer = null; this.gpuVersion = -1;
+            this.uploaded = new Float32Array(0);
+        }
+    }
+
     class FlatSpriteBatch {
         constructor(capacity = 1024) {
             this.data = new Float32Array(capacity * FLAT_STRIDE);
@@ -3098,7 +3153,9 @@
             let target = [centerX, 0, centerZ];
             // Overscan widens the field of view by exactly the margin, so the
             // view itself projects as without it.
-            perspective(this.tmpProjection, 2 * Math.atan(Math.tan(0.37) * growY), aspect, 0.1, 220);
+            // The old fixed far plane clipped the entire arena at scale.
+            const far = Math.max(220, distance + Math.hypot(snapshot.worldWidth || 0, snapshot.worldHeight || 0) * 2);
+            perspective(this.tmpProjection, 2 * Math.atan(Math.tan(0.37) * growY), aspect, Math.max(.1, distance / 10000), far);
             // CSS pixels per world unit at view depth 1; divide by a point's
             // depth along the view direction for its on-screen scale.
             this.lodProjectionScale = this.cssHeight * this.tmpProjection[5] / 2;
@@ -3230,6 +3287,7 @@
 
 
         pickRenderedSource(screenX, screenY, candidates) {
+            if (this.scaleLayers) return this.pickScaleSource(screenX, screenY, candidates);
             if (!this.pickInverseViewProjection || !this.pickObjects) return null;
             this.syncUnitLayerPickPositions();
             let pickPad = this.pickViewPad || 0;
@@ -3330,6 +3388,15 @@
         // bounds are projected first; only one straddling the box edge has
         // its triangles tested.
         boxRenderedSources(minX, minY, maxX, maxY, candidates = null) {
+            if (this.scaleLayers) {
+                const hits = new Set();
+                this.visitScaleCandidates(candidates, (source, x, z, size, height) => {
+                    const p = this.projectWorldToScreen(x, height, z);
+                    const radius = Math.max(1, this.pixelsPerWorldAt(x, height, z) * size * .5);
+                    if (p && p.x + radius >= minX && p.x - radius <= maxX && p.y + radius >= minY && p.y - radius <= maxY) hits.add(source);
+                });
+                return hits;
+            }
             const hits = new Set();
             let pickPad = this.pickViewPad || 0;
             minX += pickPad; maxX += pickPad;
@@ -4676,33 +4743,25 @@
         // prepareUnitLayer for a layer written through writeUnitLayerObject.
         joinUnitLayerBuckets(layer, atlas) {
             let gl = this.gl;
-            let total = 0, buckets = [];
-            for (let byMode of this.directBuckets.values()) for (let b of byMode) if (b && b.count) { buckets.push(b); total += b.count; }
-            let need = total * INSTANCE_STRIDE;
-            if (!this.unitLayerArray || this.unitLayerArray.length < need) {
-                this.unitLayerArray = new Float32Array(Math.max(need, 1024 * INSTANCE_STRIDE, (this.unitLayerArray ? this.unitLayerArray.length : 0) * 2));
-            }
-            if (!this.unitLayerBuffer) this.unitLayerBuffer = gl.createBuffer();
-            let data = this.unitLayerArray, at = 0, draws = [], picks = [];
+            let buckets = [];
+            for (let byMode of this.directBuckets.values()) for (let b of byMode) if (b && b.count) buckets.push(b);
+            let draws = [], picks = [];
             let recordPicks = [];
             for (let b of buckets) {
-                data.set(b.data.subarray(0, b.count * INSTANCE_STRIDE), at * INSTANCE_STRIDE);
+                // Keep each model bucket on the GPU: no second monolithic
+                // allocation/copy of every unit on each published tick.
+                const storage = b.storage || (b.storage = new PersistentInstances(INSTANCE_STRIDE));
+                storage.data = b.data; storage.count = b.count; storage.version = layer.version;
+                storage.upload(gl);
                 let mesh = this.getFigureMesh(b.kind);
-                if (b.pickUnits && b.pickUnits.length) { recordPicks.push({ b, mesh, first: at, units: b.pickUnits }); b.pickUnits = []; }
-                draws.push({ first: at, count: b.count, sample: b.sample, kind: b.kind, mesh, statusAtlas: atlas, buffer: this.unitLayerBuffer, fallback: null });
+                if (b.pickUnits && b.pickUnits.length) { recordPicks.push({ b, mesh, first: 0, data: b.data, units: b.pickUnits }); b.pickUnits = []; }
+                draws.push({ first: 0, count: b.count, sample: b.sample, kind: b.kind, mesh, statusAtlas: atlas, buffer: storage.buffer, fallback: null });
                 for (let o of b.picks) {
                     let entry = o._r3dPick || (o._r3dPick = { object: o, mesh: null });
                     entry.mesh = mesh;
                     picks.push(entry);
                 }
-                at += b.count;
             }
-            gl.bindBuffer(gl.ARRAY_BUFFER, this.unitLayerBuffer);
-            if ((this.unitLayerBufferBytes || 0) < data.byteLength) {
-                gl.bufferData(gl.ARRAY_BUFFER, data.byteLength, gl.DYNAMIC_DRAW);
-                this.unitLayerBufferBytes = data.byteLength;
-            }
-            if (at) gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, at * INSTANCE_STRIDE);
             for (let d of draws) d.mesh.instanceBuffer = null;
             let slots = Int32Array.from(this.directSlotList);
             for (let i = 0; i < slots.length; i++) atlas.lastUsed[slots[i]] = atlas.frame;
@@ -4734,8 +4793,8 @@
                 let built = this.unitLayerRecordPicksBuilt;
                 if (!built) {
                     built = this.unitLayerRecordPicksBuilt = [];
-                    let data = this.unitLayerArray;
                     for (let e of rp) {
+                        let data = e.data || this.unitLayerArray;
                         for (let k = 0; k < e.units.length; k += 2) {
                             let o = this.fillRecordProxy({}, data, (e.first + e.units[k + 1]) * INSTANCE_STRIDE, e.units[k]);
                             built.push({ object: o, mesh: e.mesh });
@@ -5080,6 +5139,103 @@
             gl.enable(gl.DEPTH_TEST);
         }
 
+        visitScaleCandidates(candidates, visit) {
+            for (const layer of this.scaleLayers || []) {
+                if (!layer.sourceIndex) layer.sourceIndex = new Map(layer.sources.map((source, i) => [source, i]));
+                const d = layer.data, a = layer.alpha;
+                for (const source of candidates || layer.sources) {
+                    const i = layer.sourceIndex.get(source);
+                    if (i === undefined || source.dead || source.energy <= 0 || source._historyGhost) continue;
+                    const o = i * 12;
+                    visit(source, d[o + 2] + (d[o] - d[o + 2]) * a, d[o + 3] + (d[o + 1] - d[o + 3]) * a,
+                        d[o + 4], this.lodPixelsPerWorld < 4 ? .015 : d[o + 5] * .5);
+                }
+            }
+        }
+
+        pickScaleSource(x, y, candidates) {
+            let best = null, distance = Infinity;
+            this.visitScaleCandidates(candidates, (source, wx, wz, size, height) => {
+                const p = this.projectWorldToScreen(wx, height, wz);
+                if (!p) return;
+                const radius = Math.max(2, this.pixelsPerWorldAt(wx, height, wz) * size * .7);
+                const d = (p.x - x) ** 2 + (p.y - y) ** 2;
+                if (d <= radius * radius && d < distance) { distance = d; best = source; }
+            });
+            return best;
+        }
+
+        // Small shared geometry replaces invisible panel/model detail at army
+        // scale. Positions, facing and interpolation remain entirely on GPU.
+        drawScaleInstances(layer, flat) {
+            if (!layer || !layer.count) return;
+            const gl = this.gl;
+            if (!this.scaleProgram) {
+                this.scaleProgram = createProgram(gl, `#version 300 es
+                    precision highp float;
+                    layout(location=0) in vec3 aPosition;
+                    layout(location=1) in vec3 aNormal;
+                    layout(location=3) in vec4 aMotion;
+                    layout(location=4) in vec4 aShape;
+                    layout(location=5) in vec4 aColor;
+                    uniform mat4 uViewProjection;
+                    uniform float uAlpha;
+                    uniform float uFlat;
+                    out vec4 vColor;
+                    out vec2 vLocal;
+                    flat out float vKind;
+                    void main() {
+                        vec3 p = aPosition;
+                        vLocal = p.xz * 2.0;
+                        vKind = aShape.w;
+                        if (aShape.w < .5 && uFlat < .5) p.xz *= 1.0 - p.y * .6;
+                        p *= vec3(aShape.x, aShape.y, aShape.x);
+                        float c = cos(aShape.z), s = sin(aShape.z);
+                        p.xz = mat2(c,-s,s,c) * p.xz;
+                        vec2 center = mix(aMotion.zw, aMotion.xy, uAlpha);
+                        p += vec3(center.x, .015, center.y);
+                        gl_Position = uViewProjection * vec4(p,1.0);
+                        float light = uFlat > .5 ? 1.0 : .65 + .35 * max(0.0, dot(aNormal, normalize(vec3(.4,1.,.3))));
+                        vColor = vec4(aColor.rgb * light, aColor.a);
+                    }`, `#version 300 es
+                    precision highp float;
+                    in vec4 vColor;
+                    in vec2 vLocal;
+                    flat in float vKind;
+                    uniform float uFlat;
+                    layout(location=0) out vec4 color;
+                    void main() {
+                        if (uFlat > .5 && vKind < .5 && dot(vLocal,vLocal) > 1.) discard;
+                        color = vColor;
+                    }`);
+                this.scaleUniforms = {};
+                for (const name of ['ViewProjection', 'Alpha', 'Flat']) this.scaleUniforms[name] = gl.getUniformLocation(this.scaleProgram, 'u' + name);
+                const cube = createCubeData(), plane = createPlaneData();
+                this.scaleMeshes = [createMesh(gl, cube.positions, cube.normals, cube.indices), createMesh(gl, plane.positions, plane.normals, plane.indices)];
+            }
+            const impostor = flat || this.lodPixelsPerWorld < 4;
+            const buffer = layer.upload(gl), mesh = this.scaleMeshes[impostor ? 1 : 0];
+            gl.useProgram(this.scaleProgram);
+            gl.uniformMatrix4fv(this.scaleUniforms.ViewProjection, false, this.tmpViewProjection);
+            gl.uniform1f(this.scaleUniforms.Alpha, layer.alpha);
+            gl.uniform1f(this.scaleUniforms.Flat, impostor ? 1 : 0);
+            gl.bindVertexArray(mesh.vao);
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            for (let i = 0; i < 3; i++) {
+                gl.enableVertexAttribArray(3 + i);
+                gl.vertexAttribPointer(3 + i, 4, gl.FLOAT, false, 48, i * 16);
+                gl.vertexAttribDivisor(3 + i, 1);
+            }
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+            if (flat) gl.disable(gl.DEPTH_TEST);
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, layer.count);
+            gl.disable(gl.BLEND);
+            gl.enable(gl.DEPTH_TEST);
+            gl.drawBuffers(this.sceneDrawBuffers);
+        }
+
         render(snapshot) {
             if (!this.enabled || !this.supported || !snapshot) return;
             this.resizeForSnapshot(snapshot);
@@ -5103,6 +5259,24 @@
             gl.depthMask(true);
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
             this.drawBackground(snapshot);
+            this.scaleLayers = snapshot.scaleLayers || null;
+            if (this.scaleLayers) {
+                this.pickObjects = [];
+                this.unitLayerObjects = this.unitLayerRecordPicks = null;
+                this.unitLayerDraws = this.staticGroups = null;
+                this.unitLayerVersion = this.staticLayerVersion = -1;
+                this.pickInverseViewProjection = new Float32Array(this.tmpInverseViewProjection);
+                this.pickViewProjection = new Float32Array(this.tmpViewProjection);
+                this.pickViewPad = this.viewPad;
+                this.shadowFrame = null;
+                for (const layer of this.scaleLayers) this.drawScaleInstances(layer, snapshot.flat2d);
+                this.drawFx(snapshot.fx, snapshot.flat2d);
+                this.drawGroundOverlays(overlays);
+                this.resolveScene();
+                this.presentSceneToCanvas(snapshot.flat2d);
+                this.trimTopTextures();
+                return;
+            }
             let objects = Array.isArray(snapshot.objects) ? snapshot.objects : [];
             if (snapshot.flat2d) {
                 if (snapshot.flatBatch) this.drawFlatBatch(snapshot.flatBatch);
@@ -5365,6 +5539,7 @@
     }
 
     Defence3Renderer3D.FlatSpriteBatch = FlatSpriteBatch;
+    Defence3Renderer3D.PersistentInstances = PersistentInstances;
     Defence3Renderer3D.FxBatch = FxBatch;
     Defence3Renderer3D.FX_MESH = { BOX: FX_MESH_BOX, ORB: FX_MESH_ORB, SPIKE: FX_MESH_SPIKE, DECAL: FX_MESH_DECAL };
     Defence3Renderer3D.FX_PATTERN = FX_PATTERN;

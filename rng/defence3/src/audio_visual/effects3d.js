@@ -66,6 +66,7 @@ function _fxHash(seed, k) {
 }
 
 function _fxPush(mesh, x, y, z, yaw, sx, sy, sz, pitch, rgb, alpha, pattern, param, roll, additive) {
+    if (_fx.batch.total >= 10000) return;
     _fx.batch.push(mesh, x, y, z, yaw, sx, sy, sz, pitch, rgb[0], rgb[1], rgb[2], alpha, pattern, param, roll, additive);
 }
 
@@ -497,17 +498,23 @@ function buildFrameEffects(projectiles, particles, towers) {
     if (!_fx.batch) return;
     _pushCombatRecordFx();
     const alpha = typeof tickAlpha === 'number' ? tickAlpha : 0;
-    for (let p of projectiles) {
+    const step = _fx.detail ? 1 : Math.max(1, Math.ceil((projectiles.length + particles.length) / 2000));
+    for (let i = 0; i < projectiles.length && _fx.batch.total < 10000; i += step) {
+        const p = projectiles[i];
         let px = (Number.isFinite(p.prevX) ? p.prevX + (p.x - p.prevX) * alpha : p.x) / TILE;
         let pz = (Number.isFinite(p.prevY) ? p.prevY + (p.y - p.prevY) * alpha : p.y) / TILE;
         if (_fxVisible(px, pz)) _pushProjectileFx(p, px, pz);
     }
-    for (let p of particles) {
+    for (let i = 0; i < particles.length && _fx.batch.total < 10000; i += step) {
+        const p = particles[i];
         let px = (Number.isFinite(p.prevX) ? p.prevX + (p.x - p.prevX) * alpha : p.x) / TILE;
         let pz = (Number.isFinite(p.prevY) ? p.prevY + (p.y - p.prevY) * alpha : p.y) / TILE;
         if (_fxVisible(px, pz)) _pushParticleFx(p, px, pz);
     }
-    for (let t of towers) if (t.type === 'laser') _pushLaserFenceFx(t);
+    for (let i = 0; i < towers.length && _fx.batch.total < 10000; i++) {
+        const t = towers[i];
+        if (t.type === 'laser') _pushLaserFenceFx(t);
+    }
 }
 
 function endFrameEffects() {

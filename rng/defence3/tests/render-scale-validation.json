@@ -1,0 +1,138 @@
+[
+  {
+    "mode": "0",
+    "file": "combat-effects.test.cjs",
+    "status": 0,
+    "output": "PASS: role-specific attack effects, runes, expiry, culling, rewinds, lobbed shots, 2D flattening and laser fences.\n",
+    "timedOut": false,
+    "elapsedMs": 228
+  },
+  {
+    "mode": "0",
+    "file": "flat-gpu-renderer.test.cjs",
+    "status": 1,
+    "output": "evalmachine.<anonymous>:11\r\n        : Math.max(0, Math.min((_tickAccumulator + _frameSimLeadMs) / netSimulationTickMs(), 1));\r\n                                                 ^\r\n\r\nReferenceError: netSimulationTickMs is not defined\r\n    at Object.processRenderFrame (evalmachine.<anonymous>:11:50)\r\n    at Object.<anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\flat-gpu-renderer.test.cjs:118:10)\r\n    at Module._compile (node:internal/modules/cjs/loader:1706:14)\r\n    at Object..js (node:internal/modules/cjs/loader:1839:10)\r\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\r\n    at Function._load (node:internal/modules/cjs/loader:1263:12)\r\n    at TracingChannel.traceSync (node:diagnostics_channel:322:14)\r\n    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)\r\n    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)\r\n    at node:internal/main/run_main_module:36:49\r\n\r\nNode.js v22.20.0\r\n",
+    "timedOut": false,
+    "elapsedMs": 245
+  },
+  {
+    "mode": "0",
+    "file": "box-selection-index.test.cjs",
+    "status": 0,
+    "output": "PASS: 40 randomized 3D selections match exhaustive tile traversal, including model-only hits, interpolation, fog, mines and duplicate building representations.\n",
+    "timedOut": false,
+    "elapsedMs": 390
+  },
+  {
+    "mode": "0",
+    "file": "graphics-settings.test.cjs",
+    "status": 0,
+    "output": "PASS: graphics presets, validation, persistence, shader variants and shadow-mode wiring.\n",
+    "timedOut": false,
+    "elapsedMs": 172
+  },
+  {
+    "mode": "0",
+    "file": "flat-sprite-batch.test.cjs",
+    "status": 0,
+    "output": "PASS: units write panel sprites straight into the batch (lookups once per tick, lit like scene objects); panel canvases are pooled and versioned.\n",
+    "timedOut": false,
+    "elapsedMs": 213
+  },
+  {
+    "mode": "0",
+    "file": "renderer3d-frustum.test.cjs",
+    "status": 0,
+    "output": "PASS: 3D same-type selection, render bounds, and minimap use the active camera frustum.\n",
+    "timedOut": false,
+    "elapsedMs": 145
+  },
+  {
+    "mode": "0",
+    "file": "render-scale.test.cjs",
+    "status": 0,
+    "output": "PASS persistent GPU pages, interpolation, removal, history, chunks and large-map projection\n",
+    "timedOut": false,
+    "elapsedMs": 226
+  },
+  {
+    "mode": "0",
+    "file": "renderer3d-overlap-fade.test.cjs",
+    "status": 0,
+    "output": "PASS: towers and mines ease symmetrically between full height and a partial occupied height.\n",
+    "timedOut": false,
+    "elapsedMs": 197
+  },
+  {
+    "mode": "0",
+    "file": "renderer3d-panels.test.cjs",
+    "status": 0,
+    "output": "PASS: unit panels use exact 2D renders at every LOD and barrack roof markers are absent.\n",
+    "timedOut": false,
+    "elapsedMs": 194
+  },
+  {
+    "mode": "0",
+    "file": "renderer3d-picking.test.cjs",
+    "status": 0,
+    "output": "PASS: mesh picking covers heads, silhouette gaps, squashing, depth, adjacent targets, animation and clipping; box selection follows the drawn mesh.\n",
+    "timedOut": false,
+    "elapsedMs": 161
+  },
+  {
+    "mode": "0",
+    "file": "snake-rendering.test.cjs",
+    "status": 0,
+    "output": "PASS: head-only snakes, no tail state, square model-mounted roof panel with nothing above it.\n",
+    "timedOut": false,
+    "elapsedMs": 147
+  },
+  {
+    "mode": "0",
+    "file": "selection-performance.test.cjs",
+    "status": 0,
+    "output": "PASS: 1200 selections -> 338 boundary edges; separated clusters, holes, interpolation, rally transforms, membership and depth-tested GPU batching.\n",
+    "timedOut": false,
+    "elapsedMs": 366
+  },
+  {
+    "mode": "0",
+    "file": "source-loading.test.cjs",
+    "status": 0,
+    "output": "PASS: 43 local scripts parse; 2D renderer exports its startup and drawing functions.\n",
+    "timedOut": false,
+    "elapsedMs": 419
+  },
+  {
+    "mode": "0",
+    "file": "unit-animations.test.cjs",
+    "status": 0,
+    "output": "PASS: 3D profession/attack animations and their shared audio cues are wired.\n",
+    "timedOut": false,
+    "elapsedMs": 317
+  },
+  {
+    "mode": "0",
+    "file": "structure-render-hotspots.test.cjs",
+    "status": 0,
+    "output": "PASS: 1000 queries against 10000 buildings read 16000 candidates; selection reuse, panel invalidation, and zoomed sprite resolution.\n",
+    "timedOut": false,
+    "elapsedMs": 2698
+  },
+  {
+    "mode": "0",
+    "file": "visibility-history-performance.test.cjs",
+    "status": 0,
+    "output": "PASS: immediate targeting, local visual hold/fade at 10/30/60 Hz, 83200 bytes for 80x80 tiles, freeze-on-hide entity records, retained mine resources, no repeat terrain uploads.\n",
+    "timedOut": false,
+    "elapsedMs": 2291
+  },
+  {
+    "mode": "0",
+    "file": "render-frame-stability.test.cjs",
+    "status": 1,
+    "output": "Error: Edge connection closed\n    at ws.onclose (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\render-frame-stability.test.cjs:60:93)\n    at [nodejs.internal.kHybridDispatch] (node:internal/event_target:827:20)\n    at WebSocket.dispatchEvent (node:internal/event_target:762:26)\n    at fireEvent (node:internal/deps/undici/undici:11663:14)\n    at Socket.onSocketClose (node:internal/deps/undici/undici:12062:7)\n    at Socket.emit (node:events:531:35)\n    at TCP.<anonymous> (node:net:346:12)\n",
+    "timedOut": false,
+    "elapsedMs": 10664
+  }
+]

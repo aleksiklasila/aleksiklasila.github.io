@@ -990,7 +990,8 @@ function _drawCombinedBackgroundRegion(c, minGx, minGy, maxGx, maxGy, redrawArea
     if (_combinedTerrainDirty || !_combinedTerrainCanvas || !_combinedTerrainCtx) {
         rebuildCombinedTerrainCache();
     }
-    c.drawImage(_combinedTerrainCanvas, startX, startY, width, height, startX, startY, width, height);
+    const tx = _combinedTerrainCanvas.width / WORLD_W, ty = _combinedTerrainCanvas.height / WORLD_H;
+    c.drawImage(_combinedTerrainCanvas, startX * tx, startY * ty, width * tx, height * ty, startX, startY, width, height);
 
     if (redrawAreaOutlines && _areaOutlinePathCache && _areaColorCache) {
         c.save();
@@ -1109,11 +1110,14 @@ function rebuildVisibilityMaskCacheIfNeeded() {
 }
 
 function ensureCombinedBgCanvas() {
-    if (!_combinedBgCanvas || _combinedBgCanvas.width !== WORLD_W || _combinedBgCanvas.height !== WORLD_H) {
+    const scale = Math.min(1, 2048 / Math.max(WORLD_W, WORLD_H));
+    const width = Math.ceil(WORLD_W * scale), height = Math.ceil(WORLD_H * scale);
+    if (!_combinedBgCanvas || _combinedBgCanvas.width !== width || _combinedBgCanvas.height !== height) {
         _combinedBgCanvas = document.createElement('canvas');
-        _combinedBgCanvas.width = WORLD_W;
-        _combinedBgCanvas.height = WORLD_H;
+        _combinedBgCanvas.width = width;
+        _combinedBgCanvas.height = height;
         _combinedBgCtx = _combinedBgCanvas.getContext('2d');
+        _combinedBgCtx.setTransform(width / WORLD_W, 0, 0, height / WORLD_H, 0, 0);
         _combinedBgCtx.imageSmoothingEnabled = false;
         _areaColorCache = null;
         _areaOutlinePathCache = null;
@@ -1124,16 +1128,21 @@ function ensureCombinedBgCanvas() {
 }
 
 function ensureCombinedTerrainCanvas() {
-    if (!_combinedTerrainCanvas || _combinedTerrainCanvas.width !== WORLD_W || _combinedTerrainCanvas.height !== WORLD_H) {
+    const scale = Math.min(1, 2048 / Math.max(WORLD_W, WORLD_H));
+    const width = Math.ceil(WORLD_W * scale), height = Math.ceil(WORLD_H * scale);
+    if (!_combinedTerrainCanvas || _combinedTerrainCanvas.width !== width || _combinedTerrainCanvas.height !== height) {
         _combinedTerrainCanvas = document.createElement('canvas');
-        _combinedTerrainCanvas.width = WORLD_W;
-        _combinedTerrainCanvas.height = WORLD_H;
+        _combinedTerrainCanvas.width = width;
+        _combinedTerrainCanvas.height = height;
         _combinedTerrainCtx = _combinedTerrainCanvas.getContext('2d');
+        _combinedTerrainCtx.setTransform(width / WORLD_W, 0, 0, height / WORLD_H, 0, 0);
         _combinedTerrainCtx.imageSmoothingEnabled = false;
         _markCombinedTerrainFullDirty();
     }
 }
 
+let _terrainOverviewCanvas = null;
+let _terrainOverviewPixels = null;
 function rebuildCombinedTerrainCache() {
     ensureCombinedTerrainCanvas();
     let c = _combinedTerrainCtx;
@@ -1142,6 +1151,33 @@ function rebuildCombinedTerrainCache() {
         : (_combinedTerrainDirtyBounds || null);
     if (!rect) {
         _combinedTerrainDirty = false;
+        return;
+    }
+
+    // At large world sizes one terrain sample per tile is enough for the
+    // bounded overview. Avoid millions of Canvas path/fill commands.
+    if (WORLD_W > 4096 || WORLD_H > 4096) {
+        if (!_terrainOverviewCanvas || _terrainOverviewCanvas.width !== GRID_W || _terrainOverviewCanvas.height !== GRID_H) {
+            _terrainOverviewCanvas = document.createElement('canvas');
+            _terrainOverviewCanvas.width = GRID_W; _terrainOverviewCanvas.height = GRID_H;
+            _terrainOverviewPixels = _terrainOverviewCanvas.getContext('2d').createImageData(GRID_W, GRID_H);
+        }
+        const pixels = _terrainOverviewPixels.data;
+        const parse = color => {
+            let hex = color.replace('#', '');
+            if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+            const n = parseInt(hex, 16); return [n >> 16 & 255, n >> 8 & 255, n & 255];
+        };
+        const floor = parse(C_FLOOR), wall = parse(C_WALL);
+        for (let y = rect.minGy; y <= rect.maxGy; y++) for (let x = rect.minGx; x <= rect.maxGx; x++) {
+            const color = grid[y][x].type === TYPE_WALL ? wall : floor, i = (y * GRID_W + x) * 4;
+            pixels[i] = color[0]; pixels[i + 1] = color[1]; pixels[i + 2] = color[2]; pixels[i + 3] = 255;
+        }
+        const w = rect.maxGx - rect.minGx + 1, h = rect.maxGy - rect.minGy + 1;
+        _terrainOverviewCanvas.getContext('2d').putImageData(_terrainOverviewPixels, 0, 0, rect.minGx, rect.minGy, w, h);
+        c.drawImage(_terrainOverviewCanvas, rect.minGx, rect.minGy, w, h, rect.minGx * TILE, rect.minGy * TILE, w * TILE, h * TILE);
+        _combinedTerrainDirty = _combinedTerrainDirtyFull = false;
+        _combinedTerrainDirtyBounds = null;
         return;
     }
 
@@ -1251,7 +1287,8 @@ function updateBackgroundMipLevels(rect) {
 }
 
 function getBackgroundMip(scale) {
-    let level = Math.max(0, Math.floor(Math.log2(1 / Math.max(0.001, scale))));
+    let sourceScale = _combinedBgCanvas ? _combinedBgCanvas.width / WORLD_W : 1;
+    let level = Math.max(0, Math.floor(Math.log2(sourceScale / Math.max(0.001, scale))));
     return level > 0 && _backgroundMipLevels.length
         ? _backgroundMipLevels[Math.min(level, _backgroundMipLevels.length) - 1]
         : _combinedBgCanvas;

@@ -2201,9 +2201,198 @@ function _r3dPhase(name, t0) {
     return now;
 }
 
+// Army-scale presentation owns only packed visual records, never simulation
+// state. Two buffers retain structures and units across frames; only changed
+// pages upload on a tick. Shader interpolation also handles stopping/teleports.
+let rendererScaleCache = null;
+let rendererScaleActive = false;
+let rendererChunkCache = null;
+function getChunkRenderView(view, bounds) {
+    if (!rendererChunkCache || rendererChunkCache.grid !== view.grid) rendererChunkCache = { grid: view.grid, lists: new Map() };
+    const result = { ...view }, columns = Math.ceil(GRID_W / 16);
+    // Match the detailed layers' overscan, plus one whole chunk for bodies
+    // and interpolation. Query results preserve the original painter order.
+    const padX = Math.max(4, Math.ceil((bounds.maxGx - bounds.minGx) * .3)) + 16;
+    const padY = Math.max(4, Math.ceil((bounds.maxGy - bounds.minGy) * .3)) + 16;
+    const x0 = Math.max(0, Math.floor((bounds.minGx - padX) / 16));
+    const y0 = Math.max(0, Math.floor((bounds.minGy - padY) / 16));
+    const x1 = Math.min(columns - 1, Math.floor((bounds.maxGx + padX) / 16));
+    const y1 = Math.min(Math.ceil(GRID_H / 16) - 1, Math.floor((bounds.maxGy + padY) / 16));
+    for (const name of ['units', 'towers', 'barracks', 'collectorSpawners', 'goldMines', 'astarMines', 'droppedItems']) {
+        const list = view[name];
+        if (list.length < 5000) continue;
+        let index = rendererChunkCache.lists.get(name);
+        if (!index || index.list !== list || index.tick !== gameTime || index.length !== list.length) {
+            index = { list, tick: gameTime, length: list.length, buckets: new Map(), overflow: [] };
+            rendererChunkCache.lists.set(name, index);
+            for (let i = 0; i < list.length; i++) {
+                const e = list[i], moving = name === 'units';
+                const x = moving ? e.x / TILE : e.gx, y = moving ? e.y / TILE : e.gy;
+                const px = moving && Number.isFinite(e.prevX) ? e.prevX / TILE : x;
+                const py = moving && Number.isFinite(e.prevY) ? e.prevY / TILE : y;
+                const left = Math.max(0, Math.floor(Math.min(x, px) / 16)), right = Math.min(columns - 1, Math.floor(Math.max(x, px) / 16));
+                const top = Math.max(0, Math.floor(Math.min(y, py) / 16)), bottom = Math.min(Math.ceil(GRID_H / 16) - 1, Math.floor(Math.max(y, py) / 16));
+                if ((right - left + 1) * (bottom - top + 1) > 16) { index.overflow.push(i); continue; }
+                for (let by = top; by <= bottom; by++) for (let bx = left; bx <= right; bx++) {
+                    const key = by * columns + bx;
+                    let bucket = index.buckets.get(key);
+                    if (!bucket) index.buckets.set(key, bucket = []);
+                    bucket.push(i);
+                }
+            }
+        }
+        const key = x0 + '|' + y0 + '|' + x1 + '|' + y1;
+        if (index.queryKey !== key) {
+            const ids = index.overflow.slice();
+            for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+                const bucket = index.buckets.get(y * columns + x);
+                if (bucket) for (const i of bucket) ids.push(i);
+            }
+            ids.sort((a, b) => a - b);
+            index.query = []; let previous = -1;
+            for (const i of ids) if (i !== previous) { index.query.push(list[i]); previous = i; }
+            index.queryKey = key;
+        }
+        result[name] = index.query;
+    }
+    return result;
+}
+function useScaleRendering(flat2d, view) {
+    if (!renderer3dInstance || typeof renderer3dInstance.buildViewProjection !== 'function' || window.__disableScaleRendering) return false;
+    const snapshot = get3DProjectionSnapshot(); snapshot.flat2d = flat2d;
+    renderer3dInstance.buildViewProjection(snapshot);
+    const pixels = flat2d ? camera.zoom * TILE : renderer3dInstance.lodPixelsPerWorld;
+    // In a large match, performance takes priority even at closer zooms.
+    // A population gate also catches dense armies with >12px nominal models.
+    const population = view ? view.units.length + view.towers.length + view.barracks.length + view.collectorSpawners.length : 0;
+    rendererScaleActive = population >= 5000 || pixels < (rendererScaleActive ? 16 : 12);
+    return rendererScaleActive;
+}
+
+function buildScaleFrameData(flat2d, view) {
+    let cache = rendererScaleCache;
+    if (!cache || cache.grid !== view.grid || cache.renderer !== renderer3dInstance) {
+        if (cache) for (const layer of cache.layers) layer.dispose(cache.renderer.gl);
+        const P = window.Defence3Renderer3D.PersistentInstances;
+        cache = rendererScaleCache = { grid: view.grid, renderer: renderer3dInstance,
+            layers: [new P(12), new P(12)], tick: NaN, colors: new Map() };
+    }
+    const refs = [view.towers, view.barracks, view.collectorSpawners, view.goldMines, view.astarMines, view.droppedItems, view.units];
+    const changed = cache.tick !== gameTime || cache.vis !== visibilityVersion || cache.full !== fullVisibility
+        || cache.player !== localPlayerId || cache.history !== teamVisibilityHistory
+        || !cache.refs || refs.some((list, i) => list !== cache.refs[i] || list.length !== cache.lengths[i]);
+    if (changed) {
+        cache.colors.clear();
+        const colorFor = owner => {
+            let c = cache.colors.get(owner);
+            if (!c) { c = _parseHexColor(get3DRenderOwnerColor(owner)) || { r: 200, g: 206, b: 216 }; cache.colors.set(owner, c); }
+            return c;
+        };
+        const push = (layer, e, kind, gx, gy, owner = e.owner) => {
+            if (!e || e.dead || e.energy <= 0 || e.teleportHideTicks > 0) return;
+            const x = kind === 0 ? e.x / TILE : gx + .5, z = kind === 0 ? e.y / TILE : gy + .5;
+            gx = Math.floor(x); gy = Math.floor(z);
+            const light = view.visibilityGrid[gy] && view.visibilityGrid[gy][gx];
+            if (!fullVisibility && !e._historyGhost && !(light > 0)) return;
+            layer.reserve(layer.count + 1);
+            const d = layer.data, o = layer.count++ * 12, c = colorFor(owner);
+            d[o] = x; d[o + 1] = z;
+            d[o + 2] = kind === 0 && !e._historyGhost && Number.isFinite(e.prevX) ? e.prevX / TILE : x;
+            d[o + 3] = kind === 0 && !e._historyGhost && Number.isFinite(e.prevY) ? e.prevY / TILE : z;
+            d[o + 4] = kind === 0 ? Math.max(.28, Math.min(.9, (e.r || 8) * 2.2 / TILE)) : .94;
+            d[o + 5] = kind === 0 ? (e.isFlying ? .9 : .5) : kind === 1 ? .85 : .2;
+            d[o + 6] = kind === 0 ? Math.atan2(e.vx || 0, e.vy || 1) : 0;
+            d[o + 7] = kind;
+            const brightness = fullVisibility ? 1 : .35 + .65 * Math.min(1, (light || 0) / VISIBILITY_LIGHT_NORMALIZATION_RANGE);
+            d[o + 8] = c.r / 255 * brightness; d[o + 9] = c.g / 255 * brightness; d[o + 10] = c.b / 255 * brightness;
+            d[o + 11] = e._historyGhost ? .3 : e.underConstruction ? .6 : 1;
+            layer.sources.push(e);
+        };
+        for (const layer of cache.layers) { layer.count = 0; layer.sources = layer.sources || []; layer.sources.length = 0; layer.sourceIndex = null; }
+        const structures = cache.layers[0], moving = cache.layers[1];
+        for (const list of refs.slice(0, 6)) for (const e of list) push(structures, e, 1, e.gx, e.gy);
+        if (_isLiveRenderGrid(view.grid)) {
+            for (const e of getCellItemsRowMajor()) {
+                const cell = view.grid[e.gy] && view.grid[e.gy][e.gx];
+                if (cell && cell.item === e) push(structures, e, 2, e.gx, e.gy, cell.owner);
+            }
+        } else if (visibilityHistoryState && visibilityHistoryState.memories) {
+            for (const record of visibilityHistoryState.memories.floorItems.values()) {
+                const e = record.snapshot || record.source;
+                if (e) push(structures, e, 2, record.gx, record.gy, view.grid[record.gy][record.gx].owner);
+            }
+        }
+        // Read worker columns directly: avoid millions of PageUnit getter
+        // calls when the authoritative frame is already packed for rendering.
+        const F = view.units === units && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+        if (F) {
+            moving.reserve(view.units.length);
+            const d = moving.data;
+            for (let i = 0; i < view.units.length; i++) {
+                const s = F.order[i];
+                if (F.energy[s] <= 0 || (F.flags[s] & 1024)) continue;
+                const x = F.x[s] / TILE, z = F.y[s] / TILE;
+                const row = view.visibilityGrid[Math.floor(z)], light = row && row[Math.floor(x)];
+                if (!fullVisibility && !(light > 0)) continue;
+                const o = moving.count++ * 12, c = colorFor(F.owner[s]);
+                d[o] = x; d[o + 1] = z; d[o + 2] = F.px[s] / TILE; d[o + 3] = F.py[s] / TILE;
+                d[o + 4] = Math.max(.28, Math.min(.9, F.r[s] * 2.2 / TILE));
+                d[o + 5] = F.flags[s] & 1 ? .9 : .5; d[o + 6] = F.facing[s]; d[o + 7] = 0;
+                const brightness = fullVisibility ? 1 : .35 + .65 * Math.min(1, (light || 0) / VISIBILITY_LIGHT_NORMALIZATION_RANGE);
+                d[o + 8] = c.r / 255 * brightness; d[o + 9] = c.g / 255 * brightness; d[o + 10] = c.b / 255 * brightness; d[o + 11] = 1;
+                moving.sources.push(view.units[i]);
+            }
+        } else for (const e of view.units) push(moving, e, 0);
+        for (const layer of cache.layers) layer.version++;
+        cache.tick = gameTime; cache.vis = visibilityVersion; cache.full = fullVisibility; cache.player = localPlayerId;
+        cache.history = teamVisibilityHistory; cache.refs = refs; cache.lengths = refs.map(list => list.length);
+    }
+    for (const layer of cache.layers) layer.alpha = tickAlpha;
+    if (_staticCacheCommitVersion < 0 || !_combinedBgCanvas) commitStaticCaches(true, 'background');
+    if (!fullVisibility) rebuildVisibilityMaskCacheIfNeeded();
+    const snapshot = get3DProjectionSnapshot();
+    const bounds = flat2d ? getVisibleWorldBounds(2) : get3DVisibleWorldBounds();
+    const fx = renderer3dFxBatch || (renderer3dFxBatch = new window.Defence3Renderer3D.FxBatch());
+    beginFrameEffects(fx, flat2d, bounds, getTeamLightingGrid(), camera.zoom * TILE, renderer3dInstance);
+    buildFrameEffects(view.projectiles, view.particles, view.towers);
+    endFrameEffects();
+    return Object.assign(snapshot, { flat2d, scaleLayers: cache.layers, objects: [], fx,
+        backgroundCanvas: getBackgroundMip(Math.min(1, 2048 / Math.max(WORLD_W, WORLD_H))), backgroundVersion: _backgroundContentVersion,
+        backgroundBounds: { centerX: GRID_W / 2, centerZ: GRID_H / 2, width: GRID_W, height: GRID_H },
+        fogCanvas: fullVisibility ? null : _visibilityMaskCanvas,
+        fogVersion: _visibilityMaskCanvas ? _visibilityMaskCanvas._visibilityContentVersion || 0 : 0,
+        overlays: buildScaleOverlays(cache), buildPreview: getCurrentBuildPreviewData() });
+}
+
+// Aggregate selection outlines by fixed world chunks. This bounds geometry
+// at full zoom-out while exact selection/commands remain untouched.
+function buildScaleOverlays(cache) {
+    const key = gameTime + '|' + selectedUnits.length + '|' + selectedEntities.length + '|' + JSON.stringify(activeSubGroups);
+    if (cache.overlayKey === key && cache.selectedUnits === selectedUnits && cache.selectedEntities === selectedEntities) return cache.overlays;
+    const overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: [], bars: [], texts: [], worldTileSize: TILE };
+    const groups = new Map();
+    for (const list of [getActiveUnitsForRender(), getActiveEntities()]) for (const e of list) {
+        if (!e || e.dead || e.energy <= 0) continue;
+        const x = Number.isFinite(e.x) ? e.x / TILE : e.gx + .5, z = Number.isFinite(e.y) ? e.y / TILE : e.gy + .5;
+        const k = Math.floor(z / 16) * Math.ceil(GRID_W / 16) + Math.floor(x / 16);
+        let b = groups.get(k);
+        if (!b) groups.set(k, b = [x, z, x, z]);
+        b[0] = Math.min(b[0], x); b[1] = Math.min(b[1], z); b[2] = Math.max(b[2], x); b[3] = Math.max(b[3], z);
+    }
+    for (const b of groups.values()) {
+        const x = b[0] - .5, z = b[1] - .5, r = b[2] + .5, t = b[3] + .5;
+        for (const p of [[x,z,r,z],[r,z,r,t],[r,t,x,t],[x,t,x,z]]) overlays.lines.push({ x1: p[0], z1: p[1], x2: p[2], z2: p[3], color: '#6f8', dashed: false });
+    }
+    cache.overlayKey = key; cache.selectedUnits = selectedUnits; cache.selectedEntities = selectedEntities;
+    return cache.overlays = overlays;
+}
+
 function build3DFrameData(flat2d = false) {
     let _ph = _r3dPhase('', 0);
-    const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = getLiveRenderView();
+    const sourceView = getLiveRenderView();
+    if (useScaleRendering(flat2d, sourceView)) return buildScaleFrameData(flat2d, sourceView);
+    const queryBounds = flat2d ? getVisibleWorldBounds(2 + Math.ceil(getRenderViewPad() / Math.max(.01, camera.zoom) / TILE)) : get3DVisibleWorldBounds();
+    const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = getChunkRenderView(sourceView, queryBounds);
 
     begin3DTextureFrame();
     renderer3dExactTextureBuildsRemaining = 12;
@@ -2756,7 +2945,7 @@ function build3DFrameData(flat2d = false) {
     // Building the layer from the worker's unit frame (sim_frame.js): a unit
     // whose cached object is still valid is written from its frame columns,
     // without the per-object logic below.
-    let unitVis = layerBuilding && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    let unitVis = layerBuilding && units === sourceView.units && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
     let statusCanvases = unitVis ? SIM_UNIT_STATUS_NAMES.map(name => get3DStatusTexture(name)) : null;
     let unitList = layerReuse ? unitLayer.perFrame : units;
     // With the records: units whose slot is valid are written from it; the
@@ -3162,6 +3351,17 @@ function ensure3DRendererInitialized() {
     renderer3dInstance = new window.Defence3Renderer3D({
         mount: renderer3dHost
     });
+    const renderer = renderer3dInstance;
+    renderer.canvas.addEventListener('webglcontextlost', event => {
+        event.preventDefault(); renderer.supported = false;
+    });
+    renderer.canvas.addEventListener('webglcontextrestored', () => {
+        if (renderer3dInstance !== renderer) return;
+        clearRendererTransientVisualCaches();
+        renderer.canvas.remove();
+        renderer3dInstance = null;
+        ensure3DRendererInitialized();
+    });
     renderer3dInstance.setEnabled(true);
     syncRenderModeUi();
     _applyRenderViewPad();
@@ -3272,14 +3472,23 @@ function rebuildMinimapStaticLayer(scale, tilePx) {
 // the camera moves (so the viewport box tracks panning), otherwise at ~10 Hz.
 let _minimapLastDrawMs = -Infinity;
 let _minimapLastCameraKey = '';
+let _minimapContentCanvas = null;
+let _minimapContentGrid = null;
+let _minimapContentMode = '';
+let _minimapUnitCanvas = null;
+let _minimapUnitPixels = null;
 function drawMinimap() {
     let nowMs = performance.now();
-    let cameraKey = camera.x + '|' + camera.y + '|' + camera.zoom + '|' + renderDimensionMode + '|' + GRID_W;
-    if (cameraKey === _minimapLastCameraKey && nowMs - _minimapLastDrawMs < 100 && nowMs >= _minimapLastDrawMs) return;
-    _minimapLastDrawMs = nowMs;
-    _minimapLastCameraKey = cameraKey;
-    const units = getLiveRenderView().units;
     let scale = MINIMAP_SIZE / GRID_W; // 2 px per tile
+    const mode = localPlayerId + '|' + fullVisibility + '|' + teamVisibilityHistory;
+    if (!_minimapContentCanvas) {
+        _minimapContentCanvas = document.createElement('canvas');
+        _minimapContentCanvas.width = _minimapContentCanvas.height = MINIMAP_SIZE;
+    }
+    if (nowMs - _minimapLastDrawMs >= 100 || nowMs < _minimapLastDrawMs || _minimapContentGrid !== grid || _minimapContentMode !== mode) {
+    _minimapLastDrawMs = nowMs; _minimapContentGrid = grid; _minimapContentMode = mode;
+    const minimapCtx = _minimapContentCanvas.getContext('2d');
+    const units = getLiveRenderView().units;
     let tilePx = Math.max(1, scale);
     let vis = visibilityGrid;
     let lastFill = null;
@@ -3343,8 +3552,30 @@ function drawMinimap() {
         }
     }
 
-    // Units
-    for (let u of units) {
+    // At army scale, compose directly into minimap pixels. Overlapping units
+    // no longer issue hundreds of thousands of Canvas draw commands.
+    if (units.length > 5000) {
+        if (!_minimapUnitCanvas) {
+            _minimapUnitCanvas = document.createElement('canvas');
+            _minimapUnitCanvas.width = _minimapUnitCanvas.height = MINIMAP_SIZE;
+            _minimapUnitPixels = _minimapUnitCanvas.getContext('2d').createImageData(MINIMAP_SIZE, MINIMAP_SIZE);
+        }
+        const pixels = _minimapUnitPixels.data, colors = new Map();
+        pixels.fill(0);
+        for (const u of units) {
+            if (u.dead) continue;
+            const gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
+            if (!fullVisibility && (!vis[gy] || vis[gy][gx] === 0) && !u._historyGhost) continue;
+            const x = Math.floor(u.x / TILE * scale), y = Math.floor(u.y / TILE * scale);
+            if (x < 0 || y < 0 || x >= MINIMAP_SIZE || y >= MINIMAP_SIZE) continue;
+            let color = colors.get(u.owner);
+            if (!color) { color = _parseHexColor(get3DRenderOwnerColor(u.owner)); colors.set(u.owner, color); }
+            const o = (y * MINIMAP_SIZE + x) * 4;
+            pixels[o] = color.r; pixels[o + 1] = color.g; pixels[o + 2] = color.b; pixels[o + 3] = u._historyGhost ? 59 : 255;
+        }
+        _minimapUnitCanvas.getContext('2d').putImageData(_minimapUnitPixels, 0, 0);
+        minimapCtx.drawImage(_minimapUnitCanvas, 0, 0);
+    } else for (let u of units) {
         if (u.dead) continue;
         let cgy = Math.floor(u.y / TILE), cgx = Math.floor(u.x / TILE);
         if (!fullVisibility && (!vis[cgy] || vis[cgy][cgx] === 0) && !u._historyGhost) continue;
@@ -3355,6 +3586,10 @@ function drawMinimap() {
     }
 
     minimapCtx.globalAlpha = 1;
+    }
+    // Camera/alerts update every frame without rescanning units or fog.
+    minimapCtx.clearRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
+    minimapCtx.drawImage(_minimapContentCanvas, 0, 0);
     // Damage alerts (minimap only)
     drawMinimapAlerts(minimapCtx, scale);
 
@@ -5497,6 +5732,12 @@ const UNIT_LEVEL_TEXT_SPRITE_CACHE = new Map();
 const UNIT_LEVEL_TEXT_SPRITE_CACHE_MAX = 256;
 
 function clearRendererTransientVisualCaches(options = null) {
+    if (rendererScaleCache) {
+        for (const layer of rendererScaleCache.layers) layer.dispose(rendererScaleCache.renderer.gl);
+        rendererScaleCache = null;
+    }
+    rendererChunkCache = null;
+    rendererScaleActive = false;
     let preserveTextSprites = !!(options && options.preserveTextSprites);
     if (!preserveTextSprites) {
         LEVEL_TEXT_SPRITE_CACHE.clear();
