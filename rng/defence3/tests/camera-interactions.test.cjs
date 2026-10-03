@@ -59,7 +59,8 @@ const H=require('./net-harness.cjs');
             game.dispatch('document','keydown',{key});
             game.eval('for(let i=0;i<1500;i++)updateCamera()');
             game.dispatch('document','keyup',{key});
-            assert.equal(game.eval('Number.isFinite(camera.x+camera.y+camera.zoom)&&camera.x>=0&&camera.y>=0&&camera.x<=Math.max(0,WORLD_W-viewW/camera.zoom)&&camera.y<=Math.max(0,WORLD_H-viewH/camera.zoom)'),true,'pan remains within map');
+            // (Within the map; zoomed out past it, the map centred: clampCamera.)
+            assert.equal(game.eval('(()=>{const mx=WORLD_W-viewW/camera.zoom,my=WORLD_H-viewH/camera.zoom,ok=(v,m)=>m<0?Math.abs(v-m/2)<1e-6:v>=0&&v<=m;return Number.isFinite(camera.x+camera.y+camera.zoom)&&ok(camera.x,mx)&&ok(camera.y,my);})()'),true,'pan remains within map');
         }
     }
     game.dispatch('game-area','mousedown',{button:1,clientX:300,clientY:300});

@@ -137,19 +137,20 @@ const SIM_FLOW_REFRESH_TICKS = 4;
 // worth.)
 const SIM_STEER_TICKS = 16, SIM_STEER_NEAR_TICKS = 4;
 // (The steps' tiles carried with their coordinates, a neighbour's from its
-// index's difference, and the destination's cluster worked out once: the
-// divisions by the map width were a quarter of the movement kernel.)
+// index's difference: the divisions by the map width were a quarter of the
+// movement kernel.) PL, PB: the build's parts (partL, partBase); ROWS, ro:
+// the destination's row (every part's exit toward it, flownav.js).
 function simFlowLook(LC, s, refresh, tl, gx, gy, dk, Wd, Hd, WL, navVer, wv, fgen,
-    nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh) {
+    nC, ncw, PL, PB, ROWS, ro, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh) {
     if (LC.mvNavT[s] === tl && LC.mvNavD[s] === dk && LC.mvNavG[s] === fgen && (!refresh || (LC.mvNavV[s] === navVer && LC.mvNavW[s] === wv))) return 1;
     // (Clusters are 16 or 32 tiles: a shift.)
-    const cs = 31 - Math.clz32(nC), ddx = dk % Wd, dct = (((dk - ddx) / Wd) >> cs) * ncw + (ddx >> cs);
-    let n1 = simNavStepXY(Wd, cs, nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, tl, gx, gy, dk, dct);
+    const cs = 31 - Math.clz32(nC);
+    let n1 = simNavStepXY(Wd, cs, nC, ncw, PL, PB, ROWS, ro, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, tl, gx, gy, dk);
     if (n1 < 0) return 0;
     let n2 = -1, far = n1, open = false;
     const n1x = _simStepX(n1, tl, gx, Wd), n1y = _simStepY(n1, tl, gx, gy, Wd);
     if (WL[n1]) {
-        let aim = simNavStepXY(Wd, cs, nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, n1, n1x, n1y, dk, dct);
+        let aim = simNavStepXY(Wd, cs, nC, ncw, PL, PB, ROWS, ro, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, n1, n1x, n1y, dk);
         if (!(aim >= 0) || WL[aim]) aim = dk;
         n1 = simNavDetour(WL, Wd, Hd, gx, gy, aim);
         if (n1 < 0) return -1;
@@ -159,7 +160,7 @@ function simFlowLook(LC, s, refresh, tl, gx, gy, dk, Wd, Hd, WL, navVer, wv, fge
         open = _simOpenBlockXY(WL, gx, gy, Wd, Hd) && _simOpenBlockXY(WL, n1x, n1y, Wd, Hd);
         let cur = n1, cx = n1x, cy = n1y;
         for (let k = 1; k < (open ? 6 : 2); k++) {
-            const nx = simNavStepXY(Wd, cs, nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, cur, cx, cy, dk, dct);
+            const nx = simNavStepXY(Wd, cs, nC, ncw, PL, PB, ROWS, ro, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, cur, cx, cy, dk);
             if (nx < 0 || WL[nx]) break;
             if (k === 1) n2 = nx;
             if (!open) break;
@@ -228,13 +229,20 @@ function simNavDetour(WL, W, H, gx, gy, aim) {
 // axis, x first, else stands. Returns which components to drop: 0 none,
 // 2 the y step, 1 the x step, 3 both.
 function simFlowSlide(WL, W, H, gx, gy, ngx, ngy) {
+    // (Staying in its tile: nothing to slide along, even standing in a wall
+    // tile (a building put down under it), which it could never leave.)
+    if (ngx === gx && ngy === gy) return 0;
     const ox = ngx >= 0 && ngx < W, oy = ngy >= 0 && ngy < H;
     if (ox && oy && WL[ngy * W + ngx] === 0) return 0;
     if (ox && gy >= 0 && gy < H && WL[gy * W + ngx] === 0) return 2;
     if (oy && gx >= 0 && gx < W && WL[ngy * W + gx] === 0) return 1;
     return 3;
 }
-function simNavStep(W, C, cw, nc, hop, fields, nodeBase, nodeTile, nodePair, dfield, doff, bx, by, bw, bh, t, dest) {
+// The next tile from t toward dest: the destination field where it reaches
+// the destination, else the exit of t's part in the destination's row
+// (rows at ro; part = partBase[cluster] + partL[t]) and that exit's local
+// field. -1: no way (or at dest).
+function simNavStep(W, C, cw, partL, partBase, rows, ro, fields, nodeBase, nodeTile, nodePair, dfield, doff, bx, by, bw, bh, t, dest) {
     if (t === dest) return -1;
     const tx = t % W, ty = (t - tx) / W;
     if (dfield) {
@@ -251,9 +259,9 @@ function simNavStep(W, C, cw, nc, hop, fields, nodeBase, nodeTile, nodePair, dfi
             }
         }
     }
-    const cxi = (tx / C) | 0, cyi = (ty / C) | 0, cf = cyi * cw + cxi;
-    const dx = dest % W, dy = (dest - dx) / W, ct = ((dy / C) | 0) * cw + ((dx / C) | 0);
-    const e = hop[cf * nc + ct];
+    const cxi = (tx / C) | 0, cyi = (ty / C) | 0, cf = cyi * cw + cxi, pl = partL[t];
+    if (pl === 0xFFFF) return _simWallStepOut(partL, partBase, rows, ro, W, C, cw, t, tx, ty);
+    const e = rows[ro + partBase[cf] + pl];
     if (e >= 254) return -1;
     const node = nodeBase[cf] + e;
     if (nodeTile[node] === t) { const p = nodePair[node]; return p >= 0 ? nodeTile[p] : -1; }
@@ -266,9 +274,27 @@ function simNavStep(W, C, cw, nc, hop, fields, nodeBase, nodeTile, nodePair, dfi
     return best;
 }
 
-// simNavStep from tile t at column tx, row ty, the destination's cluster
-// dct given, 2^cs-tile clusters (simFlowLook's steps).
-function simNavStepXY(W, cs, C, cw, nc, hop, fields, nodeBase, nodeTile, nodePair, dfield, doff, bx, by, bw, bh, t, tx, ty, dest, dct) {
+// Standing on a wall tile (a building put down under it): out to an open
+// side neighbour, N, S, W, E: the first whose part has a way in the
+// destination's row (rows null: the first open), else the first open; -1
+// none. (H: from the parts' length.)
+function _simWallStepOut(partL, partBase, rows, ro, W, C, cw, t, tx, ty) {
+    const H = (partL.length / W) | 0;
+    let first = -1;
+    for (let k = 0; k < 4; k++) {
+        const x = tx + (k === 2 ? -1 : k === 3 ? 1 : 0), y = ty + (k === 0 ? -1 : k === 1 ? 1 : 0);
+        if (x < 0 || y < 0 || x >= W || y >= H) continue;
+        const n = y * W + x, l = partL[n];
+        if (l === 0xFFFF) continue;
+        if (first < 0) first = n;
+        if (!rows) return n;
+        if (rows[ro + partBase[((y / C) | 0) * cw + ((x / C) | 0)] + l] !== 255) return n;
+    }
+    return first;
+}
+// simNavStep from tile t at column tx, row ty, 2^cs-tile clusters
+// (simFlowLook's steps).
+function simNavStepXY(W, cs, C, cw, partL, partBase, rows, ro, fields, nodeBase, nodeTile, nodePair, dfield, doff, bx, by, bw, bh, t, tx, ty, dest) {
     if (t === dest) return -1;
     if (dfield) {
         const lx = tx - bx, ly = ty - by;
@@ -284,8 +310,9 @@ function simNavStepXY(W, cs, C, cw, nc, hop, fields, nodeBase, nodeTile, nodePai
             }
         }
     }
-    const cxi = tx >> cs, cyi = ty >> cs, cf = cyi * cw + cxi;
-    const e = hop[cf * nc + dct];
+    const cxi = tx >> cs, cyi = ty >> cs, cf = cyi * cw + cxi, pl = partL[t];
+    if (pl === 0xFFFF) return _simWallStepOut(partL, partBase, rows, ro, W, C, cw, t, tx, ty);
+    const e = rows[ro + partBase[cf] + pl];
     if (e >= 254) return -1;
     const node = nodeBase[cf] + e;
     if (nodeTile[node] === t) { const p = nodePair[node]; return p >= 0 ? nodeTile[p] : -1; }
@@ -1012,13 +1039,13 @@ function _simMoveFlow(R, P, s0, end, Q, n, C) {
     const DEST = R['unit.mvDest'];
     const AIRW = R['mv.airwall'];
     const NF0 = R['nav.0.fields'];
-    const NH0 = R['nav.0.hop'];
+    const PL0 = R['nav.0.partL'], PB0 = R['nav.0.partB'];
     const NB0 = R['nav.0.nb'];
     const NT0 = R['nav.0.nt'];
     const NP0 = R['nav.0.np'];
     const NM0 = R['nav.0.meta'];
     const NF1 = R['nav.1.fields'];
-    const NH1 = R['nav.1.hop'];
+    const PL1 = R['nav.1.partL'], PB1 = R['nav.1.partB'], FRN = R['nav.frows.0'], FRW = R['nav.frows.1'], FHD = R['nav.fhdr'];
     const NB1 = R['nav.1.nb'];
     const NT1 = R['nav.1.nt'];
     const NP1 = R['nav.1.np'];
@@ -1108,9 +1135,11 @@ function _simMoveFlow(R, P, s0, end, Q, n, C) {
         }
         // (A steer: commits again below, if it moves.)
         CD[s] = -1;
-        const NF = prof ? NF1 : NF0, NH = prof ? NH1 : NH0, NB = prof ? NB1 : NB0, NT = prof ? NT1 : NT0, NP = prof ? NP1 : NP0, NM = prof ? NM1 : NM0;
-        if (!NF || !NM) { ON[s] = 0; continue; }
-        const nC = NM[0], ncw = NM[1], nnc = NM[3];
+        const NF = prof ? NF1 : NF0, PL = prof ? PL1 : PL0, PB = prof ? PB1 : PB0, NB = prof ? NB1 : NB0, NT = prof ? NT1 : NT0, NP = prof ? NP1 : NP0, NM = prof ? NM1 : NM0;
+        // (The destination's row: its field slot's.)
+        const ROWS = wide ? FRW : FRN, rw = FHD ? FHD[wide ? 1 : 0] : 0;
+        if (!NF || !NM || !PL || !PB || !ROWS || !(rw > 0)) { ON[s] = 0; continue; }
+        const nC = NM[0], ncw = NM[1];
         const span = wide ? 3 * nC : nC, df = FPOOL, doff = did * span * span, dbx = FMETA[dm + 2], dby = FMETA[dm + 3], dbw = FMETA[dm + 4], dbh = FMETA[dm + 5];
         // On the destination tile: Unit.update arrives.
         if (tl === dk) { ON[s] = 0; continue; }
@@ -1145,12 +1174,12 @@ function _simMoveFlow(R, P, s0, end, Q, n, C) {
         }
         // The look-ahead from this tile (simFlowLook, cached).
         const lk = simFlowLook(LC, s, ((t + id) & (SIM_FLOW_REFRESH_TICKS - 1)) === 0, tl, gx, gy, dk, W, H, WL, NM[6], simWallKey9(WBLK9, WBW, gx, gy, wver), wide ? 2 : 1,
-            nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh);
+            nC, ncw, PL, PB, ROWS, did * rw, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh);
         // No way there: a worker more than a tile away stands (as
         // _followNavNode), anything else is handed back (it arrives as
         // near as it gets). Walled in: it stands. A bad build:
         // Unit.update.
-        if (lk === 0) { if (WK[s] && (Math.abs(dx0 - gx) > 1 || Math.abs(dy0 - gy) > 1)) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; } ON[s] = 0; continue; }
+        if (lk === 0) { if (WK[s] === 1 && (Math.abs(dx0 - gx) > 1 || Math.abs(dy0 - gy) > 1)) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; } ON[s] = 0; continue; }
         if (lk === -1) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
         if (lk === -2) { ON[s] = 0; continue; }
         const n1 = NVN1[s], n2 = NVN2[s], far = NVF[s], open = NVO[s] === 1;

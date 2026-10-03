@@ -1,5 +1,5 @@
 // The navigation rebuild's background stages (simParallelBackground: the
-// helpers take the local fields and the hop table between the tick's other
+// helpers take the local fields and the parts between the tick's other
 // jobs) install exactly the build a synchronous navBuild makes from the same
 // walls, with real helper threads (and none), across several rebuilds.
 // Usage: node tests/nav-background.test.cjs
@@ -36,9 +36,9 @@ const same = (a, b) => a.length === b.length && Buffer.compare(Buffer.from(a.buf
             const ok = inst.eval(`(() => { const nav = _nav[NAV_PROFILE_GROUND];
                 const ref = navBuild(NAV_PROFILE_GROUND, nav.wall, true, nav.W, nav.H);
                 const eq = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
-                return JSON.stringify({ k: nav.nodeTile.length, fields: eq(nav.fields, ref.fields), hop: eq(nav.hop, ref.hop), nodes: eq(nav.nodeTile, ref.nodeTile) && eq(nav.nodeBase, ref.nodeBase) && eq(nav.nodePair, ref.nodePair), cost: eq(nav.cost, ref.cost) }); })()`);
+                return JSON.stringify({ k: nav.nodeTile.length, np: nav.np, ncomp: nav.ncomp, fields: eq(nav.fields, ref.fields), parts: nav.np === ref.np && eq(nav.partL, ref.partL) && eq(nav.partBase, ref.partBase) && eq(nav.nodePart, ref.nodePart) && eq(nav.partComp, ref.partComp) && eq(nav.compParts, ref.compParts), nodes: eq(nav.nodeTile, ref.nodeTile) && eq(nav.nodeBase, ref.nodeBase) && eq(nav.nodePair, ref.nodePair), cost: eq(nav.cost, ref.cost) }); })()`);
             const r = JSON.parse(ok);
-            assert.ok(r.fields && r.hop && r.nodes && r.cost, `helpers ${helpers} round ${round}: background build differs from the synchronous one ${ok}`);
+            assert.ok(r.fields && r.parts && r.nodes && r.cost, `helpers ${helpers} round ${round}: background build differs from the synchronous one ${ok}`);
         }
         assert.deepEqual(inst.errors.map(String), []);
         rows.push(`${helpers} helpers: ${builds} rebuilds equal`);

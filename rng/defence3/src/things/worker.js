@@ -154,8 +154,10 @@ function updateWorkerAI(u) {
             if (u.pathIsFallbackAstar) {
                 _tryUpgradeAstarFallbackPath(u);
             }
-            let issuedTick = Math.floor(Number(u._manualMoveIssuedTick) || 0);
-            if ((gameTime - issuedTick) >= WORKER_MANUAL_MOVE_MAX_PENDING_TICKS) {
+            // (Not while the navigation has it on its way to the closest tile
+            // it can reach, or waiting there: it has not arrived.)
+            let issuedTick = Math.floor(Number(u._manualMoveIssuedTick) || 0), pt = u._pendingPathTarget;
+            if (!(pt.sub > 0 || pt.ver > 0 || pt.at >= 0) && (gameTime - issuedTick) >= WORKER_MANUAL_MOVE_MAX_PENDING_TICKS) {
                 _workerFinishManualMoveToIdle(u);
             }
             return;

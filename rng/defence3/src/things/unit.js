@@ -1431,13 +1431,24 @@ class Unit {
         // from the line, or the next tile's centre on its lane.
         const wall = navWallTable(profile);
         const lk = _navFlowLook(this, profile, slot, t, gx, gy, dest, wall);
-        // No way there on the navigation: a worker more than a tile away
-        // stands and waits (its task looks again on its check ticks; a new
-        // build may open the way); anything else has arrived as near as it
-        // gets. Walled in: it stands.
+        // No way there on the navigation: it has not arrived. A worker at
+        // its task (a tile from it: at its work) stands and waits, its task
+        // looking again on its check ticks; anything else (a worker the
+        // player sent too) keeps its target (a pending one) and heads for
+        // the closest tile it can reach (the helpers' answer, see
+        // _tryUpgradeAstarFallbackPath). Walled in: it stands.
         if (lk === 0) {
-            if (this.workerState && (Math.abs(nd.x - gx) > 1 || Math.abs(nd.y - gy) > 1)) return false;
-            this.pathIndex = this.path.length; return true;
+            if (this.workerState && this.workerState !== 'MANUAL_MOVE') {
+                if (Math.abs(nd.x - gx) > 1 || Math.abs(nd.y - gy) > 1) return false;
+                this.pathIndex = this.path.length; return true;
+            }
+            let pt = this._pendingPathTarget;
+            if (pt) { pt.ver = 0; pt.at = -1; pt.sub = 0; }
+            else pt = this._pendingPathTarget = { gx: nd.x, gy: nd.y, cmd: this.commandState, src: 'nav_unreachable' };
+            this.path = null; this.pathIndex = 0; this._routeKey = null; this.pathIsFallbackAstar = true;
+            navPathSubstitute(this, gx, gy, pt);
+            notePendingPathUnit(this);
+            return false;
         }
         if (lk === -1) return false;
         const L = _navLookOut, n = L[0], n2 = L[1], far = L[2], open = L[3] === 1;
@@ -2413,9 +2424,9 @@ function simMoveStatsChanged(u) {
 
 // Unit._followNavNode's flow look-ahead (simFlowLook): with its destination
 // field made (the only case the movement kernel steers) on the unit's own
-// cache columns, exactly as the kernel; otherwise worked out uncached (the
-// cluster hops and local fields, without the destination field). The
-// result in _navLookOut: next tile, the one after, the farthest, open (1).
+// cache columns, exactly as the kernel; without it (asked for, made at the
+// next flush) it waits (-1: the way is the field's row). The result in
+// _navLookOut: next tile, the one after, the farthest, open (1).
 const _navLookOut = new Int32Array(4);
 const _navLookScratch = { mvNavT: new Int32Array(1), mvNavD: new Int32Array(1), mvNavV: new Int32Array(1), mvNavW: new Int32Array(1), mvNavG: new Int32Array(1),
     mvNavN1: new Int32Array(1), mvNavN2: new Int32Array(1), mvNavFar: new Int32Array(1), mvNavOpen: new Uint8Array(1) };
@@ -2423,13 +2434,14 @@ function _navFlowLook(u, profile, slot, t, gx, gy, dest, wall) {
     const nav = _nav[profile];
     if (!nav) return 0;
     const Fp = slot >= 0 ? _navFieldPool(slot) : null, i = slot >= 0 ? _navFieldIndex(slot) : 0, m = i * NAV_FIELD_META;
-    const has = !!(Fp && Fp.meta && Fp.meta[m] === profile && Fp.meta[m + 1] === dest && Fp.meta[m + 7] === 1);
+    const has = !!(Fp && Fp.meta && Fp.rows && Fp.meta[m] === profile && Fp.meta[m + 1] === dest && Fp.meta[m + 7] === 1);
+    if (!has) return -1;
     let LC = u._us, s = u._si;
-    if (!LC || !has) { LC = _navLookScratch; s = 0; LC.mvNavT[0] = -1; }
+    if (!LC) { LC = _navLookScratch; s = 0; LC.mvNavT[0] = -1; }
     const lk = simFlowLook(LC, s, ((gameTime + u.id) & (SIM_FLOW_REFRESH_TICKS - 1)) === 0, t, gx, gy, dest, GRID_W, GRID_H, wall, nav.version | 0,
-        _simMoveWallBlk9 ? simWallKey9(_simMoveWallBlk9, _simMoveWallBlkW, gx, gy, _simMoveWallVer) : simWallKey(_simMoveWallBlk, _simMoveWallBlkW, (GRID_H + 7) >> 3, gx, gy, _simMoveWallVer), has ? (slot >= NAV_WIDE_BASE ? 2 : 1) : 0,
-        nav.C, nav.cw, nav.nc, nav.hop, nav.fields, nav.nodeBase, nav.nodeTile, nav.nodePair,
-        has ? Fp.pool : null, has ? i * Fp.span * Fp.span : 0, has ? Fp.meta[m + 2] : 0, has ? Fp.meta[m + 3] : 0, has ? Fp.meta[m + 4] : 0, has ? Fp.meta[m + 5] : 0);
+        _simMoveWallBlk9 ? simWallKey9(_simMoveWallBlk9, _simMoveWallBlkW, gx, gy, _simMoveWallVer) : simWallKey(_simMoveWallBlk, _simMoveWallBlkW, (GRID_H + 7) >> 3, gx, gy, _simMoveWallVer), slot >= NAV_WIDE_BASE ? 2 : 1,
+        nav.C, nav.cw, nav.partL, nav.partBase, Fp.rows, i * Fp.rowW, nav.fields, nav.nodeBase, nav.nodeTile, nav.nodePair,
+        Fp.pool, i * Fp.span * Fp.span, Fp.meta[m + 2], Fp.meta[m + 3], Fp.meta[m + 4], Fp.meta[m + 5]);
     if (lk === -2) {
         // (A bad build's step to a tile that is not a neighbour: toward it.)
         const n = navStep(profile, t, dest, slot);
@@ -2446,6 +2458,9 @@ function _navFlowLook(u, profile, slot, t, gx, gy, dest, wall) {
 // from its columns alone (stats: simMoveStatsChanged). False when those do
 // not allow it (Unit.update keeps the unit).
 const SIM_FLOW_ARRIVE = 2;
+// A unit's worker kind for the kernel (mvWk): 0 none, 1 at its task, 2 sent
+// by the player.
+function _simWorkerKind(u) { return u.workerState ? (u.workerState === 'MANUAL_MOVE' ? 2 : 1) : 0; }
 function simFlowArm(c, s, fid, gen, dest, cmd, flying, ready = 0, worker = false, isWorker = false) {
     if (!(c.mvSpd[s] >= 0) || c.sepKey[s] === SIM_SEP_ABSENT) return false;
     // (Bit 128: no arriving in a crowd short of the tile: a worker's task
@@ -2463,7 +2478,9 @@ function simFlowArm(c, s, fid, gen, dest, cmd, flying, ready = 0, worker = false
         flags |= 1;
     }
     c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvFlow[s] = fid; c.mvFGen[s] = gen; c.mvDest[s] = dest; c.mvReady[s] = ready;
-    c.mvWk[s] = isWorker ? 1 : 0;
+    // (1: a worker at its task, which stands where the way ends; 2: one the
+    // player sent, handed back there.)
+    c.mvWk[s] = isWorker === 2 ? 2 : (isWorker ? 1 : 0);
     c.mvSpent[s] = 0;
     c.mvOn[s] = 1;
     return true;
@@ -2492,7 +2509,7 @@ function _simMoveTryFlowArm(u, c, s, cmd) {
     if (last && last.y * GRID_W + last.x === dest) return false;
     navEnsure(profile);
     const did = navFieldRequest(profile, dest, true);
-    return did >= 0 && simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, u._navReady | 0, !!u.workerState, !!u.workerState);
+    return did >= 0 && simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, u._navReady | 0, !!u.workerState, _simWorkerKind(u));
 }
 
 // A unit ends its Unit.update marching along its path with nothing to react
@@ -2503,6 +2520,8 @@ function simMoveTryArm(u) {
     if (!c || u.dead || u.holdPosition) return;
     const cmd = u.commandState;
     if (cmd !== CMD_MOVING && cmd !== CMD_ATTACK_MOVING) return;
+    // Waiting for its way (a pending target, no path): asleep till its look.
+    if ((!u.path || u.pathIndex >= u.path.length) && u._pendingPathTarget) { simMoveTryParkWait(u, cmd); return; }
     // A nav node next (workers too): flow mode toward its tile.
     const nd = u.path && u.pathIndex < u.path.length ? u.path[u.pathIndex] : null;
     if (nd && nd.nav) {
@@ -2511,7 +2530,7 @@ function simMoveTryArm(u) {
         if (Math.floor(c.y[s] / TILE) * GRID_W + Math.floor(c.x[s] / TILE) === dest) return;
         const did = navFieldRequest(profile, dest, !!nd.w);
         // (Arriving in a crowd short of the tile: groups only.)
-        if (did >= 0) simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, nd.ready | 0, !!u.workerState || !nd.w, !!u.workerState);
+        if (did >= 0) simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, nd.ready | 0, !!u.workerState || !nd.w, _simWorkerKind(u));
         return;
     }
     // (Workers walk their own paths: no group routes.)
@@ -2858,6 +2877,32 @@ function simMoveTryParkIdle(u) {
     if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT || reach === 255) return;
     const P = SIM_IDLE_PARK_TICKS, ph = (((gameTime + (u.id | 0)) % P) + P) % P;
     c.mvWake[s] = gameTime + P - ph; c.mvFlags[s] = 16; c.mvReach[s] = reach;
+    c.mvOn[s] = 2;
+}
+// A unit waiting for its way (a pending target, no path: the helpers'
+// answer, or a look again, at its retry tick): parked till then, so the
+// simulation thread does nothing for it meanwhile (the kernel stands it,
+// and hands an attack-mover back for what it would engage, as an idle one).
+function simMoveTryParkWait(u, cmd) {
+    const c = u._us, wake = u._astarBudgetRetryTick;
+    if (!c || !(wake > gameTime + 1) || u.unitType === 'scout') return;
+    const s = u._si;
+    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
+    // (Its looks as when it moves, simFlowArm: an attack-mover's aggro, a
+    // shooter's drive-by.)
+    let flags = 0, reach = 0;
+    if (cmd === CMD_ATTACK_MOVING) {
+        reach = c.mvReachA[s];
+        if (reach === 255) return;
+        flags = 16;
+    } else if (c.mvShoot[s]) {
+        reach = c.mvReachD[s];
+        const area = c.spArea[s];
+        if (reach === 255 || !(area >= 0)) return;
+        _simMoveEnsureAreaBox(area, reach);
+        flags = 1;
+    }
+    c.mvWake[s] = wake; c.mvFlags[s] = flags; c.mvReach[s] = reach;
     c.mvOn[s] = 2;
 }
 // A worker at its work (its path done, nothing pending) whose transfer

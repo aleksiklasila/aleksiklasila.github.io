@@ -573,103 +573,6 @@ function _accumulateUpKeepForThing(breakdowns, thing, isUnit) {
 // ============================================================
 // GAME TICK
 // ============================================================
-// Budget-deferred orders (fallback paths) are retried at tick start. Units
-// waiting for the same destination are routed by one shared search, in
-// pending order; anything it cannot answer takes the per-unit retry below.
-const _deferredDestCache = new WeakMap();
-// Members waiting for a route look again this many ticks later (the routes
-// themselves advance every tick, see advanceGroupRoutes).
-const GROUP_ROUTE_CHECK_TICKS = 2;
-
-function _resolveDeferredPathsByGroup(pending) {
-    let resolved = new Set();
-    let groups = [];
-    let groupByKey = new Map();
-    for (let u of pending) {
-        let pt = u && u._pendingPathTarget;
-        if (!u || u.dead || !pt || !u.pathIsFallbackAstar || u.isFlying) continue;
-        let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-        // The way on the flow navigation (no search, no budget); what it
-        // cannot answer goes to the unit's own budgeted search after this.
-        if (typeof navPathTo === 'function') {
-            let path = navPathTo(u, pt.gx, pt.gy);
-            if (!path || path.length <= 0) continue;
-            {
-                u.path = path;
-                u.pathIndex = (path.length > 1 && path[0].x === ugx && path[0].y === ugy) ? 1 : 0;
-                u.pathIsFallbackAstar = false;
-                u.commandState = pt.cmd;
-                u._pendingPathTarget = null;
-                u._awaitGroupPath = 0;
-                resolved.add(u);
-                continue;
-            }
-        }
-        if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) continue;
-        if (!_canUsePathfindRequestBudget(u.owner, u)) continue;
-        let canWalk = getPathCanWalkForUnit(u);
-        // The destination follows from the target, the unit's tile and the
-        // topology: remembered per pending target while those stay the same.
-        let tile = ugy * GRID_W + ugx, known = _deferredDestCache.get(pt), dest;
-        if (known && known.tile === tile && known.version === pathTopologyVersion && known.canWalk === canWalk) dest = known.dest;
-        else {
-            dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u);
-            // Plain ground units: a destination outside the unit's region is
-            // replaced by the region's tile nearest it (see getPathRegions), so
-            // the shared search can reach it.
-            if (!canWalk) {
-                let labels = getPathRegions(u.owner), sr = labels[ugy * GRID_W + ugx];
-                if (sr >= 0 && labels[dest.y * GRID_W + dest.x] !== sr) {
-                    let t = nearestTileInPathRegion(u.owner, labels, sr, dest.x, dest.y);
-                    if (t >= 0) dest = { x: t % GRID_W, y: (t / GRID_W) | 0 };
-                }
-            }
-            _deferredDestCache.set(pt, { tile, version: pathTopologyVersion, canWalk, dest });
-        }
-        let key = u.owner + '|' + (dest.y * GRID_W + dest.x);
-        let candidates = groupByKey.get(key);
-        if (!candidates) groupByKey.set(key, candidates = []);
-        let group = candidates.find(g => g.canWalk === canWalk);
-        if (!group) { group = { dest, canWalk, owner: u.owner, members: [] }; candidates.push(group); groups.push(group); }
-        group.members.push({ u, ugx, ugy, pt });
-    }
-    // Groups whose units wait for a shared search go first, then the others
-    // (which already had one and also retry on their own). Each list starts
-    // at a different group every tick, so none can hold the per-tick limit
-    // (see _takeGroupPathSearch) for good, e.g. a group ordered somewhere
-    // unreachable that stays pending.
-    let waiting = [], rest = [];
-    for (let group of groups) (group.members.some(m => m.u._awaitGroupPath > gameTime) ? waiting : rest).push(group);
-    let rotated = list => list.length ? list.slice(gameTime % list.length).concat(list.slice(0, gameTime % list.length)) : list;
-    for (let group of rotated(waiting).concat(rotated(rest))) {
-        // Alone: routed by its own search after all.
-        if (group.members.length < 2) { for (let m of group.members) m.u._awaitGroupPath = 0; continue; }
-        // The shared route (continued over ticks within the budget).
-        let paths = routeGroupMembers(group.owner, group.dest.x, group.dest.y, group.canWalk, group.members);
-        for (let i = 0; i < group.members.length; i++) {
-            let path = paths[i];
-            // Not reached yet: keeps waiting for the route.
-            if (path === undefined) {
-                let w = group.members[i].u;
-                w._awaitGroupPath = gameTime + GROUP_PATH_WAIT_TICKS;
-                w._astarBudgetRetryTick = gameTime + GROUP_ROUTE_CHECK_TICKS;
-                continue;
-            }
-            if (!path || path.length <= 0) { group.members[i].u._awaitGroupPath = 0; continue; }
-            let { u, ugx, ugy, pt } = group.members[i];
-            _consumePathfindRequestBudget(u.owner, u);
-            u.path = path;
-            u.pathIndex = (path.length > 1 && path[0].x === ugx && path[0].y === ugy) ? 1 : 0;
-            u.pathIsFallbackAstar = false;
-            u.commandState = pt.cmd;
-            u._pendingPathTarget = null;
-            u._awaitGroupPath = 0;
-            resolved.add(u);
-        }
-    }
-    return resolved;
-}
-
 // The upkeep breakdown of the second in progress (see gameTick). Dropped
 // with the other cross-tick caches at a resync, on every peer.
 let _upKeepAccum = null;
@@ -766,10 +669,11 @@ function _gameTickBody() {
     // Previous positions for interpolation: units set theirs in update().
     for (let p of projectiles) { p.prevX = p.x; p.prevY = p.y; }
 
-    // Resolve deferred pathfinding from previous ticks, in id order, by
-    // source priority. Only the waiting units due this tick are visited;
-    // those still waiting afterwards are scheduled again.
-    advanceGroupRoutes();
+    // Units waiting for their way (a pending target: the helpers' answer of
+    // the closest tile they can reach, or a look again), in id order, by
+    // source priority: O(1) each (_tryUpgradeAstarFallbackPath). Only the
+    // units due this tick are visited; those still waiting afterwards are
+    // scheduled again.
     if (_pendingPathDue.size > 0) {
         let waiting = takeDuePendingPathUnits(gameTime);
         let pendingBuckets = [[], [], [], [], []];
@@ -780,35 +684,7 @@ function _gameTickBody() {
         }
 
         for (let srcTier = 0; srcTier <= 4; srcTier++) {
-            let pending = pendingBuckets[srcTier];
-            let resolvedByGroup = _resolveDeferredPathsByGroup(pending);
-            for (let i = 0; i < pending.length; i++) {
-                let u = pending[i];
-                let pt = u && u._pendingPathTarget;
-                if (!u || u.dead || !pt || resolvedByGroup.has(u)) continue;
-                if (u.pathIsFallbackAstar) {
-                    _tryUpgradeAstarFallbackPath(u);
-                    continue;
-                }
-                if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) continue;
-                if (!_canUsePathfindRequestBudget(u.owner, u)) {
-                    _markUnitAstarBudgetBlocked(u);
-                    continue;
-                }
-
-                let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                let dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u);
-                let src = pt && pt.src ? pt.src : 'deferred_resolver';
-                _consumePathfindRequestBudget(u.owner, u);
-                u.path = _findPathForUnitTagged(src === 'player_commands' ? 'player_commands' : 'deferred_resolver', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                if (u.path && u.path.length > 0) {
-                    u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                    u.commandState = pt.cmd;
-                    u._pendingPathTarget = null;
-                } else {
-                    _markUnitAstarBudgetBlocked(u, 1);
-                }
-            }
+            for (let u of pendingBuckets[srcTier]) if (u && !u.dead && u._pendingPathTarget) _tryUpgradeAstarFallbackPath(u);
         }
         for (let u of waiting) {
             if (u.dead || !u._pendingPathTarget) _pendingPathUnits.delete(u);
@@ -3124,7 +3000,9 @@ function _pathStartInRegion(labels, region, gx, gy) {
 // died (callers skip dead ones), never one of another list.
 let _unitById = new Map(), _unitByIdFor = null;
 function _unitByIdMap() {
-    if (_unitByIdFor !== units) {
+    // (Kept as units are added and retired; a unit put into the list another
+    // way (tools, tests) shows as a size that does not match: made again.)
+    if (_unitByIdFor !== units || _unitById.size !== units.length) {
         _unitById = new Map();
         for (let i = 0; i < units.length; i++) { const u = units[i]; if (u) _unitById.set(u.id, u); }
         _unitByIdFor = units;
@@ -3154,25 +3032,29 @@ function _unitsInIdOrder(list) {
     return list;
 }
 
-const FLOW_MIN_GROUP = 8;
-// The ground combat units of a move order: their shared route (started
-// now, within this tick's search budget) as a flow each of them follows
-// from its columns. Units that cannot reach the destination search alone.
+// The units of a move order: the destination's flow, each following it
+// from its columns. Units that cannot reach it (another component of the
+// navigation: O(1) a unit) head for the closest tile they can reach,
+// their order kept (a pending target, _makeFallbackPathForUnit).
 // (members: the units, their tiles from their positions: no object per
 // unit, a click's 158k of them made garbage enough for several scavenges.)
+const NAV_GROUP_MIN = 8;
 function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
-    let labels = profile === NAV_PROFILE_GROUND ? getPathRegions(playerId) : null, region = labels ? labels[dest.y * GRID_W + dest.x] : -1;
-    let reachable = members, outliers = null;
-    if (region >= 0) {
-        reachable = [];
-        for (let u of members) (_pathStartInRegion(labels, region, Math.floor(u.x / TILE), Math.floor(u.y / TILE)) ? reachable : (outliers ||= [])).push(u);
-    }
+    navEnsure(profile);
+    // (The destination's open tile: the flow's.)
+    const to = navApproachTile(profile, dest.y * GRID_W + dest.x);
+    let reachable = [], outliers = null;
+    for (let u of members) (to >= 0 && navReachable(profile, Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE), to) ? reachable : (outliers ||= [])).push(u);
     if (reachable.length) {
-        navEnsure(profile);
-        const destKey = dest.y * GRID_W + dest.x, did = navFieldRequest(profile, destKey, true), ready = navFieldReadyTick();
+        dest = { x: to % GRID_W, y: (to - to % GRID_W) / GRID_W };
+        // A group (NAV_GROUP_MIN units or more): the wide field, and its units
+        // may arrive short of the tile in their own crowd; a few go all the
+        // way (no crowd settling beside idle units of their own).
+        const group = reachable.length >= NAV_GROUP_MIN;
+        const destKey = to, did = navFieldRequest(profile, destKey, group), ready = navFieldReadyTick();
         // (One path for the order's units: paths are replaced, never changed
         // in place.)
-        const navPath = [{ x: dest.x, y: dest.y, nav: profile + 1, w: 1, ready }];
+        const navPath = [group ? { x: dest.x, y: dest.y, nav: profile + 1, w: 1, ready } : { x: dest.x, y: dest.y, nav: profile + 1, ready }];
         for (let u of reachable) {
             u._routeKey = NAV_ROUTE_KEY; u._routeEnd = destKey; u._navReady = ready;
             if (Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE) === destKey) continue;
@@ -3181,23 +3063,22 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
             u.path = navPath; u.pathIndex = 0; u._routeSegEnd = destKey;
             // (A worker goes all the way and is looked at on its check ticks,
             // as simMoveTryArm arms it.)
-            if (did >= 0) simFlowArm(u._us, u._si, did, navFieldGen(did), destKey, u.workerState ? CMD_MOVING : cmd, profile === NAV_PROFILE_AIR, ready, !!u.workerState, !!u.workerState);
+            if (did >= 0) simFlowArm(u._us, u._si, did, navFieldGen(did), destKey, u.workerState ? CMD_MOVING : cmd, profile === NAV_PROFILE_AIR, ready, !!u.workerState || !group, _simWorkerKind(u));
         }
     }
     if (outliers) for (let u of outliers) {
         const ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
         u._routeKey = null;
-        applyPath(u, ugx, ugy, _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, !!u.isFlying, null, u.owner));
+        applyPath(u, ugx, ugy, null);
     }
 }
 
-// Move and attack-move orders. Units sharing a destination (and walking
-// rules) are routed by one shared reverse search, each along its own shortest
-// path from its own tile; anything that search cannot answer falls back to
-// the per-unit A*. Unit order and every tie-break are deterministic.
+// Move and attack-move orders: every unit on the destination's flow (the
+// flow navigation; flying ones on the air one); a unit the kernel cannot
+// arm (held, not indexed) a nav node of its own (Unit.update follows it).
+// No search: O(1) a unit. Unit order and every tie-break are deterministic.
 function _issueGroupMoveOrder(a, playerId, cmd) {
     let targetGx = Math.floor(a.targetX / TILE), targetGy = Math.floor(a.targetY / TILE);
-    let groups = [];
     // (One target position for the order's units: never changed in place,
     // only replaced.)
     const targetPos = { x: targetGx * TILE + 16, y: targetGy * TILE + 16 };
@@ -3208,20 +3089,17 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
         for (const id of a.unitIds) { const u = map.get(id); if (u !== undefined) list.push(u); }
         _unitsInIdOrder(list);
     } else list = _actionUnits(a);
-    let groupByDest = new Map();
     let applyPath = (u, ugx, ugy, path) => {
         if (path && path.length > 0) {
             u.path = path;
             u.pathIndex = (path.length > 1 && path[0].x === ugx && path[0].y === ugy) ? 1 : 0;
             u._pendingPathTarget = null;
         } else {
-            u.path = _makeFallbackPathForUnit(u, ugx, ugy, targetGx, targetGy, cmd, 'player_commands');
+            u.path = _makeFallbackPathForUnit(u, ugx, ugy, targetGx, targetGy, u.workerState ? CMD_MOVING : cmd, 'player_commands');
             u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
         }
     };
     let flowDest = [null, null], flowMembers = [null, null];
-    // Flows pay off for groups; a few units route alone as before.
-    let useFlows = (a.unitIds ? a.unitIds.length : 0) >= FLOW_MIN_GROUP;
     for (let u of list) {
         if (u.owner !== playerId || u.dead) continue;
         u.targetUnit = null; u.targetBuilding = null; u.forcedAttackTarget = false;
@@ -3239,14 +3117,12 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
         // Off any earlier flow (a route below sets it again).
         u._routeKey = null;
         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-        // Combat units follow a flow (the group's route as a distance field,
-        // in the movement kernel; flying ones the straight line): no path
-        // or search of their own. See simFlowArm. So do workers sent by the
-        // player (MANUAL_MOVE: they arrive where the flow ends, as at a
-        // path's end); a group route each (a reverse search over the map,
-        // 5 MB of tables) cost 30-120 ms a tick with a few thousand workers
-        // ordered around.
-        if (useFlows && (!u.workerState || u.workerState === 'MANUAL_MOVE') && !u.holdPosition && u._us && u._spatialEpoch === spatialEpoch) {
+        // Units follow the destination's flow (in the movement kernel): no
+        // path or search of their own. See simFlowArm. So do workers sent by
+        // the player (MANUAL_MOVE: they arrive where the flow ends, as at a
+        // path's end; a group route each, a reverse search over the map,
+        // cost 30-120 ms a tick with a few thousand workers ordered around).
+        if ((!u.workerState || u.workerState === 'MANUAL_MOVE') && !u.holdPosition && u._us && u._spatialEpoch === spatialEpoch) {
             let profile = u.isFlying ? 1 : 0;
             let fdest = flowDest[profile] || (flowDest[profile] = findNearestWalkable(targetGx, targetGy, ugx, ugy, u));
             u._pendingPathTarget = null; u.pathIsFallbackAstar = false; u._routeSegEnd = -1;
@@ -3256,59 +3132,10 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
             continue;
         }
         let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
-        if (!_canUsePathfindRequestBudget(u.owner, u)) {
-            u.path = _makeFallbackPathForUnit(u, ugx, ugy, dest.x, dest.y, cmd, 'player_commands');
-            u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-            continue;
-        }
-        _consumePathfindRequestBudget(u.owner, u);
-        let canWalk = getPathCanWalkForUnit(u);
-        if (u.isFlying) {
-            applyPath(u, ugx, ugy, _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, true, canWalk, u.owner));
-            continue;
-        }
-        let destKey = dest.y * GRID_W + dest.x;
-        let candidates = groupByDest.get(destKey);
-        if (!candidates) groupByDest.set(destKey, candidates = []);
-        let group = candidates.find(g => g.canWalk === canWalk);
-        if (!group) {
-            group = { dest, canWalk, members: [] };
-            candidates.push(group);
-            groups.push(group);
-        }
-        group.members.push({ u, ugx, ugy });
+        applyPath(u, ugx, ugy, _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, !!u.isFlying, null, u.owner));
     }
     if (flowMembers[0]) _issueFlowOrder(playerId, cmd, flowDest[0], flowMembers[0], applyPath, NAV_PROFILE_GROUND);
     if (flowMembers[1]) _issueFlowOrder(playerId, cmd, flowDest[1], flowMembers[1], applyPath, NAV_PROFILE_AIR);
-    for (let group of groups) {
-        let { dest, canWalk, members } = group;
-        // Only starts that can reach the destination go into the shared
-        // search: one walled-in unit would otherwise make it flood the whole
-        // map, run out of budget, and leave every member to its own search.
-        let shareable = members;
-        if (members.length >= 2 && !canWalk) {
-            let labels = getPathRegions(playerId), region = labels[dest.y * GRID_W + dest.x];
-            if (region >= 0) shareable = members.filter(m => _pathStartInRegion(labels, region, m.ugx, m.ugy));
-        }
-        // The shared route to this destination (it continues over the next
-        // ticks when it cannot finish within this one's budget).
-        let routed = shareable.length >= 2 ? routeGroupMembers(playerId, dest.x, dest.y, canWalk, shareable) : null;
-        let routedIndex = new Map();
-        if (routed) for (let i = 0; i < shareable.length; i++) routedIndex.set(shareable[i], routed[i]);
-        for (let m of members) {
-            let { u, ugx, ugy } = m;
-            let path = routedIndex.get(m);
-            // Not reached yet: waits for the route (the deferred resolver
-            // keeps it going) rather than searching on its own.
-            if (path === undefined && routedIndex.has(m)) {
-                _makeFallbackPathForUnit(u, ugx, ugy, dest.x, dest.y, cmd, 'player_commands');
-                u._awaitGroupPath = gameTime + GROUP_PATH_WAIT_TICKS;
-                continue;
-            }
-            if (!path) path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, false, canWalk, u.owner);
-            applyPath(u, ugx, ugy, path);
-        }
-    }
 }
 
 // Actions come from other players' machines. Malformed fields are dropped or

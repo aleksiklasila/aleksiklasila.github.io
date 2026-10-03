@@ -1,3 +1,6 @@
+// The A* engine (pathfinding.js findPathAStar) and the group routes: units
+// no longer use them (every unit's way is on the flow navigation, flownav.js;
+// tests/nav-reach.test.cjs); kept for tools, checked here as a library.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -19,7 +22,7 @@ function world(w = 160, h = 100, code = source) {
     return c;
 }
 function route(c, id, sx = 145, sy = 85, ex = 5, ey = 10) {
-    return c._findPathForUnitTagged('player_commands', { id, owner: 0 }, sx, sy, ex, ey, false, null, 0);
+    return c.findPathAStarTagged('player_commands', sx, sy, ex, ey, false, null, 0);
 }
 const c = world();
 const routes = Array.from({ length: 1000 }, (_, i) => route(c, i));
@@ -76,7 +79,7 @@ for (let scenario = 0; scenario < 40; scenario++) {
         if (grouped[i]) assert.ok(m._isPathValidForScenario(grouped[i], s.x, s.y, 24, 20, false, null, 0, true));
     });
     for (let id = 0; id < 12; id++) {
-        const actual = m._findPathForUnitTagged('player_commands', { id }, 1, 1, 24, 20, false, null, 0, null, false);
+        const actual = m.findPathAStarTagged('player_commands', 1, 1, 24, 20, false, null, 0, null, false);
         assert.equal(actual?.length, expected?.length, `shortest path: scenario ${scenario}, unit ${id}`);
         if (actual) assert.ok(m._isPathValidForScenario(actual, 1, 1, 24, 20, false, null, 0, true));
     }
@@ -86,7 +89,7 @@ const special = world(20, 20);
 for (const row of special.grid) row[10].type = 1;
 const canWalk = (x, y) => x === 10 && y === 8;
 canWalk._pathProfileKey = 'test-worker';
-const workerPath = special._findPathForUnitTagged('worker_ai', { id: 4 }, 1, 1, 18, 18, false, canWalk, 0);
+const workerPath = special.findPathAStarTagged('worker_ai', 1, 1, 18, 18, false, canWalk, 0);
 assert.ok(workerPath.some(n => n.x === 10 && n.y === 8));
 assert.equal(workerPath.length, 35);
 special._bumpPathTopologyVersion();
@@ -101,7 +104,7 @@ assert.ok(spaced.filter(n => n.x >= 6 && n.x <= 23).every(n => n.y >= 8),
     'use two free rows between the path and a parallel wall');
 const passMine = () => true;
 passMine._pathProfileKey = 'pass-mine';
-const mineWalker = roomy._findPathForUnitTagged('worker_ai', { id: 2 }, 3, 6, 26, 10, false, passMine, 0);
+const mineWalker = roomy.findPathAStarTagged('worker_ai', 3, 6, 26, 10, false, passMine, 0);
 assert.ok(mineWalker.some(n => n.x >= 6 && n.y < 8), 'passable mines do not push their workers away');
 assert.equal(roomy._getPathClearance(10, 6, null, 0, true), 1);
 assert.equal(roomy._getPathClearance(10, 7, null, 0, true), 2);
@@ -275,7 +278,7 @@ const gw = world(160, 100);
 for (const [x, y] of obstacles) gw.grid[y][x].type = unitGrid[y][x].type = 1;
 const groupStarts = Array.from({ length: 150 }, (_, i) => ({ x: 4 + i % 15, y: 45 + Math.floor(i / 15) }));
 const groupPaths = gw.findGroupPathsToTarget(groupStarts, 72, 12, null, 0);
-const astarPaths = groupStarts.map((s, i) => gw._findPathForUnitTagged('player_commands', { id: i, owner: 0 }, s.x, s.y, 72, 12, false, null, 0));
+const astarPaths = groupStarts.map((s, i) => gw.findPathAStarTagged('player_commands', s.x, s.y, 72, 12, false, null, 0));
 for (let i = 0; i < groupStarts.length; i++) {
     assert.ok(groupPaths[i], `group path ${i}`);
     assert.equal(groupPaths[i].length, astarPaths[i].length, 'group paths are shortest paths');
@@ -288,7 +291,7 @@ gw.findGroupPathsToTarget(groupStarts, 72, 12, null, 0);
 const groupNodes = gw.nodes;
 gw.nodes = 0;
 gw._bumpPathTopologyVersion();
-groupStarts.forEach((s, i) => gw._findPathForUnitTagged('player_commands', { id: i, owner: 0 }, s.x, s.y, 72, 12, false, null, 0));
+groupStarts.forEach((s, i) => gw.findPathAStarTagged('player_commands', s.x, s.y, 72, 12, false, null, 0));
 assert.ok(groupNodes * 3 < gw.nodes, `shared search expands far fewer nodes: ${groupNodes} vs ${gw.nodes}`);
 
 function crowdAlong(paths) {

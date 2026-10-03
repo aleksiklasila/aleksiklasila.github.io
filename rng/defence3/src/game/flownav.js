@@ -8,13 +8,20 @@
 // navigation data (a pure function of the walkable tiles and step costs):
 //  - per cluster and exit node, a local field: every tile's cost to reach
 //    that node inside the cluster;
-//  - hop[from cluster][to cluster]: the exit of `from` to take toward `to`
-//    (one Dijkstra over the exit graph per destination cluster);
-//  - near a destination (its 3x3 cluster block), a field toward the exact
-//    tile, made on first use and cached (navDestField).
-// A step: at most a destination field read, or a hop read and a local field
+//  - parts: a cluster's walkable tiles connected inside it (an exit serves
+//    the part it is in; walls may split a cluster, a maze many times), and
+//    components: the parts connected through exits (who can reach whom);
+//  - per destination (made on first use and cached, navFieldRequest): a
+//    field toward the exact tile over the clusters around it, and a row of
+//    every part's exit toward it (one search over the exit graph, by the
+//    helpers).
+// A step: at most a destination field read, or a row read and a local field
 // read (navStep, and the same in SIM_KERNEL_MOVE). Steps cost more next to
 // walls (stepCostTable), so units keep to the middle of corridors.
+// A destination a unit cannot reach (another component, or walls all around
+// it): it goes to the closest tile it can reach, worked out by the helpers
+// (navPathSubstitute). Nothing on the simulation thread searches: a unit's
+// way is O(1) there, whatever the map.
 // The data is built by navBuild; it only changes when navPublish installs a
 // new build (on every peer at the same tick), so it may be computed ahead,
 // off the simulation thread.
@@ -27,17 +34,21 @@ const NAV_PROFILE_GROUND = 0, NAV_PROFILE_AIR = 1;
 //   nodeBase: Int32Array(nc + 1) (a cluster's nodes are nodeBase[c]..),
 //   nodeTile, nodePair (the node across the border), fields: Uint16Array
 //   (per node C * C costs, cluster-local row-major, at node * C * C),
-//   hop: Uint8Array(nc * nc) (exit index, 255 none; the same cluster 254) }
-// Made in stages (navBuildStart, navBuildLocal, navBuildGraph, navBuildHop,
-// navBuildFinish) so that a rebuild can be spread over ticks (navTick); the
-// two heavy ones run as kernels on the helpers.
-const SIM_KERNEL_NAV_LOCAL = 15, SIM_KERNEL_NAV_HOP = 16;
+//   partL: Uint16Array per tile (its part in its cluster, 0xFFFF a wall),
+//   partBase: Int32Array(nc + 1) (a cluster's parts are partBase[c]..),
+//   nodePart, partComp (component per part), partCluster, compStart /
+//   compParts (a component's parts, by part), adjStart / adjA / adjC (the
+//   exit graph) }
+// Made in stages (navBuildStart, navBuildLocal, navBuildGraph,
+// navBuildParts, navBuildFinish) so that a rebuild can be spread over ticks
+// (navTick); the two heavy ones run as kernels on the helpers.
+const SIM_KERNEL_NAV_LOCAL = 15, SIM_KERNEL_NAV_PARTS = 16;
 function navBuild(profile, wall, costs, W, H) {
     const b = navBuildStart(profile, wall, !!costs, W, H);
     navBuildNodes(b);
     navBuildLocal(b, 0, b.k);
     navBuildGraph(b);
-    navBuildHop(b, 0, b.nc);
+    navBuildParts(b);
     return navBuildFinish(b);
 }
 // The walls (copied) and room for their step costs, bound for the kernels.
@@ -49,9 +60,11 @@ function navBuildStart(profile, wallLive, withCosts, W, H) {
     wall.set(wallLive.length === W * H ? wallLive : wallLive.subarray(0, W * H));
     const cost = withCosts ? simSharedArray(Uint8Array, W * H) : null, h = withCosts ? simSharedArray(Uint8Array, W * H) : null;
     const cw = Math.ceil(W / C), ch = Math.ceil(H / C), nc = cw * ch;
+    const partL = simSharedArray(Uint16Array, W * H), partN = simSharedArray(Int32Array, nc);
     const bld = { profile, C, cw, ch, nc, W, H, k: 0, wall, cost, h, nodeBase: null, nodeTile: null, nodePair: null, fields: null,
-        adjStart: null, adjA: null, adjC: null, B: 1, hop: null };
+        adjStart: null, adjA: null, adjC: null, B: 1, partL, partN };
     simParallelBind('navb.wall', wall); simParallelBind('navb.cost', cost || _navNoCost); if (h) simParallelBind('navb.h', h);
+    simParallelBind('navb.partL', partL); simParallelBind('navb.partN', partN);
     return bld;
 }
 // Step costs per tile (see navStepCosts; by the kernels; flyers pay 1
@@ -125,14 +138,14 @@ function _navBuildBind(b) {
     simParallelBind('navb.wall', b.wall); simParallelBind('navb.cost', b.cost || _navNoCost);
     simParallelBind('navb.nt', b.nodeTile); simParallelBind('navb.nb', b.nodeBase); simParallelBind('navb.np', b.nodePair);
     simParallelBind('navb.fields', b.fields);
-    if (b.adjStart) { simParallelBind('navb.adjS', b.adjStart); simParallelBind('navb.adjA', b.adjA); simParallelBind('navb.adjC', b.adjC); simParallelBind('navb.hop', b.hop); }
+    simParallelBind('navb.partL', b.partL); simParallelBind('navb.partN', b.partN);
 }
 const _navNoCost = new Uint8Array(0);
 function _navBuildParams(b, P = _simParams) {
     P[3] = b.W; P[4] = b.H; P[5] = b.C; P[6] = b.cw; P[7] = b.nc; P[8] = b.k; P[9] = b.B; P[10] = b.adjA ? b.adjA.length : 0;
     return P;
 }
-// The local fields of all nodes, or the hop table, as a background job
+// The local fields of all nodes, or the parts, as a background job
 // (simParallelBackground): collected by navBuildCollect before the next stage.
 function navBuildLocalBackground(b) {
     if (b.k <= 0) return;
@@ -140,11 +153,88 @@ function navBuildLocalBackground(b) {
     P[0] = 0; P[1] = b.k; P[2] = per;
     simParallelBackground(SIM_KERNEL_NAV_LOCAL, Math.ceil(b.k / per));
 }
-function navBuildHopBackground(b) {
+const NAV_PARTS_PER_JOB = 16;
+function navBuildPartsBackground(b) {
     if (b.nc <= 0) return;
-    const P = _navBuildParams(b, _simBgParams), per = 4;
-    P[0] = 0; P[1] = b.nc; P[2] = per;
-    simParallelBackground(SIM_KERNEL_NAV_HOP, Math.ceil(b.nc / per));
+    const P = _navBuildParams(b, _simBgParams);
+    P[0] = 0; P[1] = b.nc; P[2] = NAV_PARTS_PER_JOB;
+    simParallelBackground(SIM_KERNEL_NAV_PARTS, Math.ceil(b.nc / NAV_PARTS_PER_JOB));
+}
+// The parts now (a build made at once), and what follows from them.
+function navBuildParts(b) {
+    if (b.nc > 0) {
+        const P = _navBuildParams(b);
+        P[0] = 0; P[1] = b.nc; P[2] = NAV_PARTS_PER_JOB;
+        simParallelRun(SIM_KERNEL_NAV_PARTS, Math.ceil(b.nc / NAV_PARTS_PER_JOB));
+    }
+    navBuildPartsFinish(b);
+}
+// Parts per cluster (SIM_KERNEL_NAV_PARTS, P[2] clusters a job): the
+// walkable tiles connected inside it (4-way, as units step), numbered in
+// row-major order of their first tile: navb.partL per tile (0xFFFF a wall),
+// navb.partN the count per cluster.
+SIM_KERNELS[SIM_KERNEL_NAV_PARTS] = function (R, P, chunk) {
+    const wall = R['navb.wall'], partL = R['navb.partL'], partN = R['navb.partN'];
+    const W = P[3] | 0, H = P[4] | 0, C = P[5] | 0, cw = P[6] | 0, nc = P[7] | 0;
+    let Q = _navPartsQ;
+    if (!Q || Q.length < C * C) Q = _navPartsQ = new Int32Array(C * C);
+    for (let c = chunk * P[2], end = Math.min(nc, c + P[2]); c < end; c++) {
+        const cx = c % cw, cy = (c - cx) / cw, x0 = cx * C, y0 = cy * C, x1 = Math.min(W, x0 + C), y1 = Math.min(H, y0 + C);
+        for (let y = y0; y < y1; y++) partL.fill(0xFFFF, y * W + x0, y * W + x1);
+        let n = 0;
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+            const t0 = y * W + x;
+            if (wall[t0] || partL[t0] !== 0xFFFF) continue;
+            partL[t0] = n;
+            let qh = 0, qt = 0;
+            Q[qt++] = t0;
+            while (qh < qt) {
+                const t = Q[qh++], tx = t % W, ty = (t - tx) / W;
+                if (tx + 1 < x1 && !wall[t + 1] && partL[t + 1] === 0xFFFF) { partL[t + 1] = n; Q[qt++] = t + 1; }
+                if (tx > x0 && !wall[t - 1] && partL[t - 1] === 0xFFFF) { partL[t - 1] = n; Q[qt++] = t - 1; }
+                if (ty + 1 < y1 && !wall[t + W] && partL[t + W] === 0xFFFF) { partL[t + W] = n; Q[qt++] = t + W; }
+                if (ty > y0 && !wall[t - W] && partL[t - W] === 0xFFFF) { partL[t - W] = n; Q[qt++] = t - W; }
+            }
+            n++;
+        }
+        partN[c] = n;
+    }
+};
+let _navPartsQ = null;
+// From the parts: their numbering (partBase), each node's part, the
+// components (parts joined by an exit and its pair; a component numbered
+// by its first part) and each component's parts. O(clusters + nodes +
+// parts), at a build's end.
+function navBuildPartsFinish(b) {
+    const { nc, k, nodeBase, nodeTile, nodePair, partL, partN } = b;
+    const partBase = simSharedArray(Int32Array, nc + 1);
+    let np = 0;
+    for (let c = 0; c < nc; c++) { partBase[c] = np; np += partN[c]; }
+    partBase[nc] = np;
+    const partCluster = simSharedArray(Int32Array, Math.max(1, np));
+    for (let c = 0; c < nc; c++) for (let p = partBase[c]; p < partBase[c + 1]; p++) partCluster[p] = c;
+    const nodePart = simSharedArray(Int32Array, Math.max(1, k));
+    for (let c = 0; c < nc; c++) for (let i = nodeBase[c]; i < nodeBase[c + 1]; i++) nodePart[i] = partBase[c] + partL[nodeTile[i]];
+    // (Union-find; a set's root its smallest part.)
+    const uf = new Int32Array(np);
+    for (let p = 0; p < np; p++) uf[p] = p;
+    const find = x => { while (uf[x] !== x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; };
+    for (let i = 0; i < k; i++) {
+        const j = nodePair[i];
+        if (j < 0) continue;
+        const a = find(nodePart[i]), c = find(nodePart[j]);
+        if (a < c) uf[c] = a; else if (c < a) uf[a] = c;
+    }
+    const partComp = simSharedArray(Int32Array, Math.max(1, np)), compOfRoot = new Int32Array(np).fill(-1);
+    let ncomp = 0;
+    for (let p = 0; p < np; p++) { const r = find(p); if (compOfRoot[r] < 0) compOfRoot[r] = ncomp++; partComp[p] = compOfRoot[r]; }
+    const compStart = simSharedArray(Int32Array, ncomp + 1), compParts = simSharedArray(Int32Array, Math.max(1, np));
+    for (let p = 0; p < np; p++) compStart[partComp[p] + 1]++;
+    for (let i = 0; i < ncomp; i++) compStart[i + 1] += compStart[i];
+    const fill = new Int32Array(ncomp);
+    for (let p = 0; p < np; p++) { const q = partComp[p]; compParts[compStart[q] + fill[q]++] = p; }
+    b.np = np; b.partBase = partBase; b.partCluster = partCluster; b.nodePart = nodePart; b.partComp = partComp;
+    b.ncomp = ncomp; b.compStart = compStart; b.compParts = compParts;
 }
 function navBuildCollect() { simParallelBackgroundWait(); }
 // Local fields of nodes i0..i1-1 (Dijkstra inside the cluster from each).
@@ -218,77 +308,85 @@ function navBuildGraph(b) {
     let maxEdge = 0;
     for (let e = 0; e < adjCost.length; e++) if (adjCost[e] > maxEdge) maxEdge = adjCost[e];
     b.adjStart = adjStart; b.adjA = adjA; b.adjC = adjC; b.B = maxEdge + 1;
-    b.hop = simSharedArray(Uint8Array, nc * nc);
-    b.hop.fill(255);
     _navBuildBind(b);
 }
-// hop[a][d] for destination clusters d0..d1-1: for each, a Dijkstra toward
-// d's nodes (reversed edges: the graph is symmetric in steps, not in costs;
-// the cost of reaching node j from i is taken as i -> j's, close enough for
-// choosing an exit), then each cluster's cheapest node.
-function navBuildHop(b, d0, d1) {
-    if (d1 <= d0) return;
-    const P = _navBuildParams(b), per = 4;
-    P[0] = d0; P[1] = d1; P[2] = per;
-    simParallelRun(SIM_KERNEL_NAV_HOP, Math.ceil((d1 - d0) / per));
+function navBuildFinish(b) {
+    return { profile: b.profile, C: b.C, cs: 31 - Math.clz32(b.C), cw: b.cw, ch: b.ch, nc: b.nc, W: b.W, H: b.H, k: b.k,
+        nodeBase: b.nodeBase, nodeTile: b.nodeTile, nodePair: b.nodePair, fields: b.fields, wall: b.wall, cost: b.cost,
+        adjStart: b.adjStart, adjA: b.adjA, adjC: b.adjC, B: b.B,
+        partL: b.partL, partBase: b.partBase, np: b.np, nodePart: b.nodePart, partComp: b.partComp, partCluster: b.partCluster,
+        ncomp: b.ncomp, compStart: b.compStart, compParts: b.compParts };
 }
-SIM_KERNELS[SIM_KERNEL_NAV_HOP] = function (R, P, chunk) {
-    const nb = R['navb.nb'], np = R['navb.np'], adjStart = R['navb.adjS'], adjA = R['navb.adjA'], adjC = R['navb.adjC'], hop = R['navb.hop'];
-    const nc = P[7] | 0, k = P[8] | 0, B = P[9] | 0, edges = P[10] | 0;
-    let S = _navHopScratch;
-    if (!S || S.dist.length < k || S.head.length < B || S.val.length < edges + k + 16) {
-        S = _navHopScratch = { dist: new Int32Array(Math.max(1, k)), head: new Int32Array(Math.max(1, B)), val: new Int32Array(edges + k + 16), nxt: new Int32Array(edges + k + 16) };
+// A destination's row (in the field kernel, after its field): every part's
+// exit toward it (the exit's index among its cluster's nodes; 254: the
+// field covers it; 255: no way). One Dijkstra over the exit graph from the
+// nodes inside the field that reach the destination there (reversed edges:
+// the graph is symmetric in steps, not in costs; the cost of reaching node
+// j from i is taken as i -> j's, close enough for choosing an exit), then
+// each part's cheapest node to leave by (crossing to its pair).
+function _navFieldRow(R, p, pool, off, meta, m, rows, ro) {
+    const NM = R['nav.' + p + '.meta'];
+    if (!NM) return;
+    const C = NM[0] | 0, cw = NM[1] | 0, nc = NM[3] | 0, W = NM[4] | 0, np = NM[7] | 0, B = Math.max(1, NM[8] | 0), k = NM[9] | 0, edges = NM[10] | 0;
+    const nb = R['nav.' + p + '.nb'], nt = R['nav.' + p + '.nt'], npair = R['nav.' + p + '.np'], npart = R['nav.' + p + '.npart'];
+    const adjStart = R['nav.' + p + '.adjS'], adjA = R['nav.' + p + '.adjA'], adjC = R['nav.' + p + '.adjC'];
+    const partL = R['nav.' + p + '.partL'], partB = R['nav.' + p + '.partB'];
+    rows.fill(255, ro, ro + np);
+    if (!nb || !npart || !adjStart || !partL) return;
+    let S = _navRowScratch;
+    if (!S || S.dist.length < k || S.head.length < B || S.val.length < edges + k + 16 || S.best.length < np) {
+        S = _navRowScratch = { dist: new Int32Array(Math.max(1, k)), head: new Int32Array(Math.max(1, B)), val: new Int32Array(edges + k + 16),
+            nxt: new Int32Array(edges + k + 16), best: new Int32Array(Math.max(1, np)) };
     }
-    const dist = S.dist, head = S.head, val = S.val, nxt = S.nxt, INF = 0x3fffffff;
-    for (let d = (P[0] | 0) + chunk * P[2], end = Math.min(P[1], d + P[2]); d < end; d++) {
-        hop[d * nc + d] = 254;
-        const b0 = nb[d], b1 = nb[d + 1];
-        if (b0 === b1) continue;
-        dist.fill(INF, 0, k); head.fill(-1, 0, B);
-        // Dijkstra with a bucket queue (Dial): costs are small integers.
-        // Every push lowers a distance, so the pool (edges + nodes) holds
-        // them all. Only the distances matter below.
-        let pool = 0, count = 0;
-        for (let i = b0; i < b1; i++) { dist[i] = 0; val[pool] = i; nxt[pool] = head[0]; head[0] = pool++; count++; }
-        for (let cur = 0; count > 0; cur++) {
-            const bk = cur % B;
-            // (Zero-cost edges add to the bucket being emptied: again.)
-            while (head[bk] !== -1) {
-                let e = head[bk]; head[bk] = -1;
-                while (e !== -1) {
-                    const u = val[e], en = nxt[e]; count--;
-                    if (dist[u] === cur) {
-                        for (let x = adjStart[u], x1 = adjStart[u + 1]; x < x1; x++) {
-                            const v = adjA[x], nd = cur + adjC[x];
-                            if (nd < dist[v]) {
-                                dist[v] = nd;
-                                const nbk = nd % B; val[pool] = v; nxt[pool] = head[nbk]; head[nbk] = pool++; count++;
-                            }
+    const dist = S.dist, head = S.head, val = S.val, nxt = S.nxt, best = S.best, INF = 0x3fffffff;
+    const dest = meta[m + 1], bx = meta[m + 2], by = meta[m + 3], bw = meta[m + 4], bh = meta[m + 5];
+    // (The destination's own part: the field, even without exits.)
+    if (partL[dest] !== 0xFFFF) { const dx = dest % W, dc = ((((dest - dx) / W) / C) | 0) * cw + ((dx / C) | 0); rows[ro + partB[dc] + partL[dest]] = 254; }
+    dist.fill(INF, 0, k); head.fill(-1, 0, B);
+    // Dijkstra with a bucket queue (Dial): costs are small integers. Every
+    // push lowers a distance, so the pool (edges + nodes) holds them all.
+    let pool0 = 0, count = 0;
+    const cx0 = (bx / C) | 0, cy0 = (by / C) | 0, cx1 = ((bx + bw - 1) / C) | 0, cy1 = ((by + bh - 1) / C) | 0;
+    for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) {
+        const c = cy * cw + cx;
+        for (let i = nb[c]; i < nb[c + 1]; i++) {
+            const t = nt[i], tx = t % W, ty = (t - tx) / W;
+            if (pool[off + (ty - by) * bw + (tx - bx)] === NAV_UNREACHED) continue;
+            // (Its part reaches the destination inside the field.)
+            rows[ro + npart[i]] = 254;
+            dist[i] = 0; val[pool0] = i; nxt[pool0] = head[0]; head[0] = pool0++; count++;
+        }
+    }
+    for (let cur = 0; count > 0; cur++) {
+        const bk = cur % B;
+        // (Zero-cost edges add to the bucket being emptied: again.)
+        while (head[bk] !== -1) {
+            let e = head[bk]; head[bk] = -1;
+            while (e !== -1) {
+                const u = val[e], en = nxt[e]; count--;
+                if (dist[u] === cur) {
+                    for (let x = adjStart[u], x1 = adjStart[u + 1]; x < x1; x++) {
+                        const v = adjA[x], nd = cur + adjC[x];
+                        if (nd < dist[v]) {
+                            dist[v] = nd;
+                            const nbk = nd % B; val[pool0] = v; nxt[pool0] = head[nbk]; head[nbk] = pool0++; count++;
                         }
                     }
-                    e = en;
                 }
+                e = en;
             }
-        }
-        for (let a = 0; a < nc; a++) {
-            if (a === d) continue;
-            let best = 255, bd = INF;
-            for (let i = nb[a]; i < nb[a + 1]; i++) {
-                // Leaving through node i: cross to its pair (the pair's
-                // distance), since i itself is in a.
-                const p = np[i];
-                const di = p >= 0 ? dist[p] : INF;
-                if (di < bd) { bd = di; best = i - nb[a]; }
-            }
-            hop[a * nc + d] = best;
         }
     }
-};
-let _navHopScratch = null;
-function navBuildFinish(b) {
-    return { profile: b.profile, C: b.C, cw: b.cw, ch: b.ch, nc: b.nc, W: b.W, H: b.H, nodeBase: b.nodeBase, nodeTile: b.nodeTile, nodePair: b.nodePair,
-        fields: b.fields, hop: b.hop, wall: b.wall, cost: b.cost };
+    best.fill(INF, 0, np);
+    for (let c = 0; c < nc; c++) for (let i = nb[c]; i < nb[c + 1]; i++) {
+        const q = npart[i];
+        if (rows[ro + q] === 254) continue;
+        // Leaving through node i: cross to its pair (the pair's distance).
+        const j = npair[i], di = j >= 0 ? dist[j] : INF;
+        if (di < best[q]) { best[q] = di; rows[ro + q] = i - nb[c]; }
+    }
 }
+let _navRowScratch = null;
 
 // Step costs (the rule of _stepCostAt in pathfinding.js): 3 within one
 // tile (any direction; the map's edge counts as wall) of a wall, 2 within
@@ -409,23 +507,46 @@ let _nav = [null, null];
 // (navFieldsRestore).
 // (The sweep over 128 ticks: at 64 its share of the units' objects cost ~1.3
 // ms a tick at 200k.)
+// Each slot also holds its destination's row (rows, rowW bytes a slot: every
+// part's exit toward it, see _navFieldRow); rowW follows the builds' part
+// counts (nav.fhdr[w]).
 const NAV_FIELD_META = 8, NAV_FIELD_SWEEP_TICKS = 128, NAV_WIDE_BASE = 1 << 22;
-function _navNewPool(wide) { return { wide, span: 0, C: 0, cap: 0, pool: null, meta: null, byKey: new Map(), free: [], pending: [], seen: null }; }
-const _navFields = { pools: [_navNewPool(false), _navNewPool(true)], seenCycle: 0, flushedTick: -1 };
+function _navNewPool(wide) { return { wide, span: 0, C: 0, cap: 0, pool: null, meta: null, rows: null, rowW: 0, byKey: new Map(), free: [], pending: [], seen: null }; }
+const _navFields = { pools: [_navNewPool(false), _navNewPool(true)], seenCycle: 0, flushedTick: -1, hdr: null };
 function _navFieldKey(profile, dest) { return profile * 16777216 + dest; }
 function _navPoolEnsure(F, C) {
     if (F.C === C && F.pool) return F;
-    F.C = C; F.span = F.wide ? 3 * C : C; F.cap = 0; F.pool = null; F.meta = null; F.byKey = new Map(); F.free = []; F.pending = []; F.seen = null; F.remake = null;
+    F.C = C; F.span = F.wide ? 3 * C : C; F.cap = 0; F.pool = null; F.meta = null; F.rows = null; F.byKey = new Map(); F.free = []; F.pending = []; F.seen = null; F.remake = null;
     _navFieldsGrow(F, F.wide ? 64 : 1024);
     return F;
 }
 function _navFieldsGrow(F, cap) {
     const size = F.span * F.span, pool = simSharedArray(Uint16Array, cap * size), meta = simSharedArray(Int32Array, cap * NAV_FIELD_META), seen = new Int32Array(cap);
+    const rows = simSharedArray(Uint8Array, Math.max(1, cap * F.rowW));
     if (F.pool) { pool.set(F.pool); meta.set(F.meta); seen.set(F.seen); }
+    if (F.rows && F.rows.length <= rows.length) rows.set(F.rows);
     for (let s = cap - 1; s >= F.cap; s--) { F.free.push(s); meta[s * NAV_FIELD_META] = -1; }
-    F.pool = pool; F.meta = meta; F.seen = seen; F.cap = cap;
+    F.pool = pool; F.meta = meta; F.seen = seen; F.cap = cap; F.rows = rows;
     const w = F.wide ? 1 : 0;
-    simParallelBind('nav.fpool.' + w, pool); simParallelBind('nav.fmeta.' + w, meta);
+    simParallelBind('nav.fpool.' + w, pool); simParallelBind('nav.fmeta.' + w, meta); simParallelBind('nav.frows.' + w, rows);
+    _navFieldsHeader();
+}
+// Rows wide enough for the installed builds' parts (a build installed: every
+// field is made again anyway, see navPublish).
+function _navRowsEnsure() {
+    let w = 1;
+    for (const nav of _nav) if (nav && nav.np > w) w = nav.np;
+    for (const F of _navFields.pools) {
+        if (!F.pool || F.rowW >= w) continue;
+        F.rowW = w;
+        F.rows = simSharedArray(Uint8Array, Math.max(1, F.cap * w));
+        simParallelBind('nav.frows.' + (F.wide ? 1 : 0), F.rows);
+    }
+    _navFieldsHeader();
+}
+function _navFieldsHeader() {
+    if (!_navFields.hdr) { _navFields.hdr = simSharedArray(Int32Array, 2); simParallelBind('nav.fhdr', _navFields.hdr); }
+    for (const F of _navFields.pools) _navFields.hdr[F.wide ? 1 : 0] = F.rowW;
 }
 // The pool and index of a slot id.
 function _navFieldPool(id) { return id >= NAV_WIDE_BASE ? _navFields.pools[1] : _navFields.pools[0]; }
@@ -464,6 +585,7 @@ function navFieldsFlush() {
     for (const F of _navFields.pools) if (F.pending.length) { _navFieldsMake(F, F.pending); F.pending = []; }
     _navFieldsRemakeStep();
     navFieldsSweepStep();
+    _navSubstitutesMake();
 }
 function _navFieldsMake(F, slots) {
     if (!slots.length) return;
@@ -476,13 +598,14 @@ function _navFieldsMake(F, slots) {
         if (!nav) continue;
         simParallelBind('nav.fwall.' + p, nav.wall); simParallelBind('nav.fcost.' + p, nav.cost || _navNoCost);
     }
-    const P = _simParams, per = F.wide ? 1 : 8;
+    const P = _simParams, per = F.wide ? 1 : 2;
     P[0] = slots.length; P[1] = per; P[2] = F.span; P[3] = _nav[0] ? _nav[0].W : GRID_W; P[4] = _nav[0] ? _nav[0].H : GRID_H; P[5] = F.wide ? 1 : 0;
     simParallelRun(SIM_KERNEL_NAV_FIELDS, Math.ceil(slots.length / per));
 }
 const SIM_KERNEL_NAV_FIELDS = 21;
 SIM_KERNELS[SIM_KERNEL_NAV_FIELDS] = function (R, P, chunk) {
     const w = P[5] | 0, list = R['nav.flist'], pool = R['nav.fpool.' + w], meta = R['nav.fmeta.' + w];
+    const rows = R['nav.frows.' + w], hdr = R['nav.fhdr'], rowW = hdr ? hdr[w] | 0 : 0;
     const span = P[2] | 0, size = span * span, W = P[3] | 0, H = P[4] | 0;
     const S = _navKernelScratch && _navKernelScratch.q[0].length >= size * 3 ? _navKernelScratch : (_navKernelScratch = _navDialScratch(size));
     for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
@@ -492,6 +615,7 @@ SIM_KERNELS[SIM_KERNEL_NAV_FIELDS] = function (R, P, chunk) {
         const cost = costR && costR.length ? costR : null;
         pool.fill(NAV_UNREACHED, s * size, s * size + size);
         _navLocalFieldDial(pool, s * size, meta[m + 2], meta[m + 3], W, H, meta[m + 1], wall, cost, meta[m + 4], meta[m + 5], S);
+        if (rows && rowW > 0) _navFieldRow(R, p, pool, s * size, meta, m, rows, s * rowW);
         meta[m + 7] = 1;
     }
 };
@@ -562,6 +686,7 @@ function navFieldsRestore() {
         if (path) for (const nd of path) if (nd && nd.nav) navFieldRequest(nd.nav - 1, nd.y * GRID_W + nd.x, !!nd.w);
     }
     for (const F of _navFields.pools) if (F.pending.length) { _navFieldsMake(F, F.pending); F.pending = []; }
+    navSubstitutesRestore();
 }
 // A group's destination field (wide).
 function navDestField(profile, dest) { return navFieldRequest(profile, dest, true); }
@@ -574,23 +699,36 @@ function navWallTable(profile) {
 
 // Installs a build as the current one for its profile (every peer at the
 // same tick). Destination fields of the old build are dropped.
-let _navVersion = 0;
+// (_navVersion: this peer's count of installs, for caches; nav.seq: the
+// profile's build number, the same on every peer: snapshotted, so waiting
+// units can tell a new build, see _tryUpgradeAstarFallbackPath.)
+let _navVersion = 0, _navSeq = [0, 0];
 function navPublish(nav) {
     _nav[nav.profile] = nav;
     _navVersion++;
+    nav.seq = ++_navSeq[nav.profile];
     // (Its version, as the kernels read it from its meta: look-ahead keys.)
     nav.version = _navVersion;
     const p = nav.profile;
-    simParallelBind('nav.' + p + '.fields', nav.fields); simParallelBind('nav.' + p + '.hop', nav.hop);
-    const meta = simSharedArray(Int32Array, 8);
+    simParallelBind('nav.' + p + '.fields', nav.fields);
+    // meta: [C, cw, ch, nc, W, H, version, parts, the graph's bucket count
+    // (largest edge + 1), nodes, edges]
+    const meta = simSharedArray(Int32Array, 12);
     meta[0] = nav.C; meta[1] = nav.cw; meta[2] = nav.ch; meta[3] = nav.nc; meta[4] = nav.W; meta[5] = nav.H; meta[6] = _navVersion;
+    meta[7] = nav.np | 0; meta[8] = nav.B | 0; meta[9] = nav.k | 0; meta[10] = nav.adjA ? nav.adjA.length : 0;
     simParallelBind('nav.' + p + '.meta', meta);
     simParallelBind('nav.' + p + '.nb', nav.nodeBase); simParallelBind('nav.' + p + '.nt', nav.nodeTile); simParallelBind('nav.' + p + '.np', nav.nodePair);
+    simParallelBind('nav.' + p + '.partL', nav.partL); simParallelBind('nav.' + p + '.partB', nav.partBase); simParallelBind('nav.' + p + '.npart', nav.nodePart);
+    simParallelBind('nav.' + p + '.adjS', nav.adjStart); simParallelBind('nav.' + p + '.adjA', nav.adjA); simParallelBind('nav.' + p + '.adjC', nav.adjC);
+    simParallelBind('nav.' + p + '.pclu', nav.partCluster); simParallelBind('nav.' + p + '.cstart', nav.compStart); simParallelBind('nav.' + p + '.cparts', nav.compParts);
     // Every destination field again over the new build (same slots: the
     // routes keep following them), at the next flush (navFieldsFlush):
-    // until then the old build's.
+    // until then the old build's. (Rows: the new build's parts.)
     for (const F of _navFields.pools) _navPoolEnsure(F, nav.C);
+    _navRowsEnsure();
     _navFieldsRemakeAll();
+    // (Components changed: substitutes asked for again.)
+    _navSubReset();
     if (p === NAV_PROFILE_GROUND) _navWallDiffReset();
 }
 
@@ -613,18 +751,167 @@ function navReset() {
     }
     _navFields.flushedTick = -1;
     _nav = [null, null];
+    _navSeq = [0, 0];
     _navJob = null; _navWallDiff = 0;
+    _navSubReset();
 }
 
 // The next tile from `t` toward `dest` (profile), -1 when there is no way
-// (or `t` is `dest`). `destId`: its destination field (navDestField).
+// (or `t` is `dest`, or its field is not made: the rows are the field's).
+// `destId`: its destination field (navFieldRequest).
 function navStep(profile, t, dest, destId) {
     const nav = _nav[profile];
-    if (!nav || t === dest) return -1;
-    const F = destId >= 0 ? _navFieldPool(destId) : null, i = destId >= 0 ? _navFieldIndex(destId) : 0, m = i * NAV_FIELD_META;
-    const has = !!(F && F.meta && F.meta[m] === profile && F.meta[m + 1] === dest && F.meta[m + 7] === 1);
-    return simNavStep(nav.W, nav.C, nav.cw, nav.nc, nav.hop, nav.fields, nav.nodeBase, nav.nodeTile, nav.nodePair,
-        has ? F.pool : null, has ? i * F.span * F.span : 0, has ? F.meta[m + 2] : 0, has ? F.meta[m + 3] : 0, has ? F.meta[m + 4] : 0, has ? F.meta[m + 5] : 0, t, dest);
+    if (!nav || t === dest || !(destId >= 0)) return -1;
+    const F = _navFieldPool(destId), i = _navFieldIndex(destId), m = i * NAV_FIELD_META;
+    if (!(F && F.meta && F.rows && F.meta[m] === profile && F.meta[m + 1] === dest && F.meta[m + 7] === 1)) return -1;
+    return simNavStep(nav.W, nav.C, nav.cw, nav.partL, nav.partBase, F.rows, i * F.rowW, nav.fields, nav.nodeBase, nav.nodeTile, nav.nodePair,
+        F.pool, i * F.span * F.span, F.meta[m + 2], F.meta[m + 3], F.meta[m + 4], F.meta[m + 5], t, dest);
+}
+
+// ---- Reachability and the closest reachable tile ----
+// The component of tile t (profile): -1 for a wall, or without a build.
+function navCompOf(profile, t) {
+    const nav = _nav[profile];
+    if (!nav || !nav.partL || !(t >= 0 && t < nav.W * nav.H)) return -1;
+    const l = nav.partL[t];
+    if (l === 0xFFFF) return -1;
+    const x = t % nav.W, y = (t - x) / nav.W;
+    return nav.partComp[nav.partBase[(y >> nav.cs) * nav.cw + (x >> nav.cs)] + l];
+}
+// A unit's component at tile t: its tile's, or (standing on a wall: a
+// building put down under it) its way out's: the first open side
+// neighbour, N, S, W, E, as the kernel steps out (_simWallStepOut), else
+// the nearest open tile.
+function _navUnitComp(profile, t) {
+    const c = navCompOf(profile, t), nav = _nav[profile];
+    if (c >= 0 || !nav || !(t >= 0 && t < nav.W * nav.H)) return c;
+    const n = _simWallStepOut(nav.partL, nav.partBase, null, 0, nav.W, nav.C, nav.cw, t, t % nav.W, (t - t % nav.W) / nav.W);
+    if (n >= 0) return navCompOf(profile, n);
+    const a = navApproachTile(profile, t);
+    return a >= 0 ? navCompOf(profile, a) : -1;
+}
+// Whether a unit at tile `from` can get to the open tile `to`. O(1). (On
+// a wall tile: when any open side neighbour can, the one it steps out to,
+// _simWallStepOut.)
+function navReachable(profile, from, to) {
+    const ct = navCompOf(profile, to);
+    if (ct < 0) return false;
+    const c = navCompOf(profile, from), nav = _nav[profile];
+    if (c >= 0 || !nav) return c === ct;
+    const W = nav.W, H = nav.H, x = from % W, y = (from - x) / W;
+    if ((y > 0 && navCompOf(profile, from - W) === ct) || (y + 1 < H && navCompOf(profile, from + W) === ct)
+        || (x > 0 && navCompOf(profile, from - 1) === ct) || (x + 1 < W && navCompOf(profile, from + 1) === ct)) return true;
+    return _navUnitComp(profile, from) === ct;
+}
+// The path of a unit at (sx, sy) sent to tile (tx, ty): one nav node toward
+// it (its open tile, navApproachTile) when it can get there, else null (the
+// closest tile it can reach instead: navPathSubstitute). O(1).
+function navPathReach(u, sx, sy, tx, ty) {
+    if (!(tx >= 0 && ty >= 0 && tx < GRID_W && ty < GRID_H)) return null;
+    const profile = navProfileOf(u);
+    navEnsure(profile);
+    const to = navApproachTile(profile, ty * GRID_W + tx);
+    if (to < 0) return null;
+    const from = (sx >= 0 && sy >= 0 && sx < GRID_W && sy < GRID_H) ? sy * GRID_W + sx : Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE);
+    if (!navReachable(profile, from, to)) return null;
+    return [navNode(profile, to % GRID_W, (to - to % GRID_W) / GRID_W)];
+}
+// Substitutes: for a destination a unit cannot reach, the tile of its
+// component nearest it (straight-line; ties: the lower tile), worked out
+// by the helpers at the flush (SIM_KERNEL_NAV_SUBST) from a request. A unit
+// asks once (its pending target's `sub`: the tick it may take the answer,
+// NAV_SUB_TICKS later, whatever this peer has cached: the same tick on every
+// peer, and a restore asks again for the waiting units). Cached per
+// (profile, destination, component) until the next build.
+const NAV_SUB_TICKS = 2;
+const _navSub = { map: new Map(), req: [] };
+function _navSubReset() { _navSub.map = new Map(); _navSub.req = []; }
+function _navSubKey(profile, to, comp) { return (profile * 4194304 + comp) * 16777216 + to; }
+function navSubstituteRequest(profile, to, comp) {
+    const key = _navSubKey(profile, to, comp);
+    if (_navSub.map.has(key)) return;
+    _navSub.map.set(key, -2);
+    _navSub.req.push(profile, to, comp);
+}
+// The path of a unit at (sx, sy) toward its pending target pt ({ gx, gy,
+// ... }) that it cannot reach: toward the closest tile it can, once known
+// (null while waiting: asked for at the first call), [] when it is walled
+// in. O(1).
+function navPathSubstitute(u, sx, sy, pt) {
+    const profile = navProfileOf(u);
+    navEnsure(profile);
+    const to = Math.max(0, Math.min(GRID_H - 1, pt.gy | 0)) * GRID_W + Math.max(0, Math.min(GRID_W - 1, pt.gx | 0));
+    const from = (sx >= 0 && sy >= 0 && sx < GRID_W && sy < GRID_H) ? sy * GRID_W + sx : Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE);
+    const comp = _navUnitComp(profile, from);
+    if (comp < 0) return [];
+    const ask = () => { navSubstituteRequest(profile, to, comp); pt.sub = gameTime + NAV_SUB_TICKS; u._astarBudgetRetryTick = pt.sub; return null; };
+    if (!(pt.sub > 0) || gameTime < pt.sub) return pt.sub > 0 ? null : ask();
+    const r = _navSub.map.get(_navSubKey(profile, to, comp));
+    if (r === undefined || r === -2) return ask();
+    if (r < 0) return [];
+    return [navNode(profile, r % GRID_W, (r - r % GRID_W) / GRID_W)];
+}
+// The substitutes asked for (at the flush; one job each).
+function _navSubstitutesMake() {
+    const req = _navSub.req;
+    if (!req.length) return;
+    _navSub.req = [];
+    const n = req.length / 3, list = simSharedArray(Int32Array, req.length), out = simSharedArray(Int32Array, n);
+    list.set(req);
+    simParallelBind('nav.sreq', list); simParallelBind('nav.sout', out);
+    const P = _simParams;
+    P[0] = n; P[1] = 1;
+    simParallelRun(SIM_KERNEL_NAV_SUBST, n);
+    for (let i = 0; i < n; i++) _navSub.map.set(_navSubKey(list[i * 3], list[i * 3 + 1], list[i * 3 + 2]), out[i]);
+}
+const SIM_KERNEL_NAV_SUBST = 17;
+SIM_KERNELS[SIM_KERNEL_NAV_SUBST] = function (R, P, chunk) {
+    const req = R['nav.sreq'], out = R['nav.sout'];
+    for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) out[i] = _navSubstituteFind(R, req[i * 3], req[i * 3 + 1], req[i * 3 + 2]);
+};
+// Component K's tile nearest tile `to` (profile p): its parts by their
+// cluster's distance to `to`, nearest first; their tiles while a nearer one
+// may still be found. -1 none.
+function _navSubstituteFind(R, p, to, K) {
+    const NM = R['nav.' + p + '.meta'];
+    if (!NM) return -1;
+    const C = NM[0] | 0, cw = NM[1] | 0, W = NM[4] | 0, H = NM[5] | 0;
+    const partL = R['nav.' + p + '.partL'], partB = R['nav.' + p + '.partB'], pclu = R['nav.' + p + '.pclu'], cstart = R['nav.' + p + '.cstart'], cparts = R['nav.' + p + '.cparts'];
+    if (!partL || !cstart || !(K >= 0 && K + 1 < cstart.length)) return -1;
+    const tx = to % W, ty = (to - tx) / W, a = cstart[K], n = cstart[K + 1] - a;
+    if (n <= 0) return -1;
+    const SH = 2097152, keys = new Float64Array(n);
+    for (let j = 0; j < n; j++) {
+        const c = pclu[cparts[a + j]], cx = c % cw, cy = (c - cx) / cw, x0 = cx * C, y0 = cy * C, x1 = Math.min(W, x0 + C) - 1, y1 = Math.min(H, y0 + C) - 1;
+        const dx = tx < x0 ? x0 - tx : (tx > x1 ? tx - x1 : 0), dy = ty < y0 ? y0 - ty : (ty > y1 ? ty - y1 : 0);
+        keys[j] = (dx * dx + dy * dy) * SH + j;
+    }
+    keys.sort();
+    let best = -1, bd = Infinity;
+    for (let r = 0; r < n; r++) {
+        const d2 = Math.floor(keys[r] / SH);
+        if (d2 > bd) break;
+        const j = keys[r] - d2 * SH, q = cparts[a + j], c = pclu[q], l = q - partB[c];
+        const cx = c % cw, cy = (c - cx) / cw, x0 = cx * C, y0 = cy * C, x1 = Math.min(W, x0 + C), y1 = Math.min(H, y0 + C);
+        for (let y = y0; y < y1; y++) for (let x = x0, t = y * W + x0; x < x1; x++, t++) {
+            if (partL[t] !== l) continue;
+            const dd = (x - tx) * (x - tx) + (y - ty) * (y - ty);
+            if (dd < bd || (dd === bd && t < best)) { bd = dd; best = t; }
+        }
+    }
+    return best;
+}
+// After a restore: the substitutes the waiting units asked for, again (now).
+function navSubstitutesRestore() {
+    _navSubReset();
+    for (const u of units) {
+        const pt = u && !u.dead ? u._pendingPathTarget : null;
+        if (!pt || !(pt.sub > 0)) continue;
+        const profile = navProfileOf(u), gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
+        const comp = _navUnitComp(profile, gy * GRID_W + gx);
+        if (comp >= 0) navSubstituteRequest(profile, Math.max(0, Math.min(GRID_H - 1, pt.gy | 0)) * GRID_W + Math.max(0, Math.min(GRID_W - 1, pt.gx | 0)), comp);
+    }
+    _navSubstitutesMake();
 }
 
 
@@ -706,7 +993,7 @@ function navPathTo(u, tx, ty) {
 
 // Walls changed: the ground navigation is built again, spread over ticks
 // on every peer alike (navTick): the walls are copied at the start, the
-// heavy stages (the local fields, then the hop table and the destination
+// heavy stages (the local fields, then the parts and the destination
 // fields in use) run a slice a tick on the helpers, and the build is
 // installed NAV_BUILD_TICKS after its start whatever the machine. Units
 // follow the old one meanwhile (the kernel checks walls as they go). A new
@@ -747,8 +1034,8 @@ function navTick() {
 }
 // Step 0 copies the walls, 1 makes the costs and nodes and starts the local
 // fields in the background (the helpers between the tick's other jobs), S+2
-// collects them and makes the graph, then starts the hop table in the
-// background, 2S+3 collects it and installs the build. The steps' ticks are
+// collects them and makes the graph, then starts the parts in the
+// background, 2S+3 collects them and installs the build. The steps' ticks are
 // those of the build's start alone: when the helpers finish never changes
 // what any peer does (a collect waits, or runs what is left itself).
 function _navJobStep(J, step) {
@@ -762,9 +1049,10 @@ function _navJobStep(J, step) {
     } else if (step === S + 2) {
         navBuildCollect();
         navBuildGraph(J.b);
-        navBuildHopBackground(J.b);
+        navBuildPartsBackground(J.b);
     } else if (step === 2 * S + 3) {
         navBuildCollect();
+        navBuildPartsFinish(J.b);
         _navJob = null;
         navPublish(navBuildFinish(J.b));
     }
@@ -775,7 +1063,7 @@ function navSnapshotState() {
     const live = typeof _simMoveWall !== 'undefined' ? _simMoveWall : null, nav = _nav[NAV_PROFILE_GROUND];
     if (!nav || !live || live.length !== nav.wall.length) return null;
     const diff = w => { const out = []; for (let i = 0; i < w.length; i++) if (w[i] !== live[i]) out.push(i, w[i]); return out; };
-    return { built: diff(nav.wall), job: _navJob && _navJob.b ? { start: _navJob.start, step: _navJob.step, walls: diff(_navJob.b.wall) } : null };
+    return { built: diff(nav.wall), seq: nav.seq | 0, job: _navJob && _navJob.b ? { start: _navJob.start, step: _navJob.step, walls: diff(_navJob.b.wall) } : null };
 }
 // After a restore (the live walls restored): the same builds again.
 function navRestoreState(st) {
@@ -784,6 +1072,10 @@ function navRestoreState(st) {
     const live = simMoveWallGrid();
     const walls = d => { const w = new Uint8Array(live.length); w.set(live); if (Array.isArray(d)) for (let i = 0; i + 1 < d.length; i += 2) if (d[i] >= 0 && d[i] < w.length) w[d[i]] = d[i + 1] ? 1 : 0; return w; };
     navPublish(navBuild(NAV_PROFILE_GROUND, walls(st.built), true, GRID_W, GRID_H));
+    if (st.seq > 0) _nav[NAV_PROFILE_GROUND].seq = _navSeq[NAV_PROFILE_GROUND] = st.seq | 0;
+    // (The air one too, as the match's first tick made it: flyers' fields
+    // need it now.)
+    navEnsure(NAV_PROFILE_AIR);
     if (st.job && Number.isFinite(st.job.start)) {
         // Its stages up to now run at once (the same result as spread out).
         const J = _navJob = { start: st.job.start, step: 0, b: null, dests: null, destNew: null };

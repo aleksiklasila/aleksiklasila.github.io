@@ -88,6 +88,14 @@ const RECORD = `(async (ms) => {
     const orig = r3.render;
     r3.render = function (snap) {
         const res = orig.apply(this, arguments);
+        // (The scale path (far zoom, big matches): instanced layers, or the
+        // frame's columns; counted, not tracked per entity.)
+        if (snap.scaleLayers) {
+            const C = snap.columnLayers, L = snap.scaleLayers;
+            frames.push({ tick: gameTime, alpha: tickAlpha, structures: [], units: [], pos: [],
+                scale: [C ? (C.structureSources ? C.structureSources.length : 0) : (L[0] ? L[0].count : 0), C ? (C.unitSources ? C.unitSources.length : 0) : (L[1] ? L[1].count : 0)] });
+            return res;
+        }
         const structures = new Set(), unitsDrawn = new Set();
         const add = o => { const s = o && o.pickSource; if (!s) return; if (s.unitType && units.includes(s)) unitsDrawn.add(key(s)); else structures.add(key(s)); };
         for (const o of snap.objects || []) add(o);
@@ -167,6 +175,21 @@ function flickers(frames, field) {
                 targetX: (0.15 + 0.7 * ((i * 7) % 10) / 9) * GRID_W * TILE, targetY: (0.15 + 0.7 * ((i * 3) % 10) / 9) * GRID_H * TILE });
             return 1;
         })()`);
+        // The scale path at full zoom-out: every frame draws the scene.
+        {
+            const frames = JSON.parse(await b.ev(`(async () => {
+                window.__disableScaleRendering = false;
+                camera.zoom = getMinCameraZoom(); camera.x = GRID_W * TILE * .5 - viewW / camera.zoom / 2; camera.y = GRID_H * TILE * .5 - viewH / camera.zoom / 2;
+                await new Promise(r => setTimeout(r, 1500));
+                return ${RECORD}(2000);
+            })()`));
+            const scale = frames.filter(f => f.scale);
+            console.log(`scale path: ${scale.length} of ${frames.length} frames; least drawn ${JSON.stringify(scale.reduce((m, f) => [Math.min(m[0], f.scale[0]), Math.min(m[1], f.scale[1])], [Infinity, Infinity]))}`);
+            assert.ok(scale.length > 30 && scale.length === frames.length, 'full zoom-out draws by the scale path');
+            assert.ok(scale.every(f => f.scale[0] > 100 && f.scale[1] > 100), 'the scene is drawn on every scale frame');
+        }
+        // The layered path (what the frames below check): scale rendering off.
+        await b.ev('window.__disableScaleRendering = true, 1');
         for (const zoom of ['getMinCameraZoom()', '1.5']) {
             const frames = JSON.parse(await b.ev(`(async () => {
                 camera.zoom = ${zoom}; camera.x = GRID_W * TILE * .5 - viewW / camera.zoom / 2; camera.y = GRID_H * TILE * .5 - viewH / camera.zoom / 2;

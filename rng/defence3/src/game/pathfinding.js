@@ -226,71 +226,88 @@ function _markUnitAstarBudgetBlocked(u, cooldownTicks = null) {
     _setUnitAstarBudgetBlockedIndicator(u, cooldownTicks);
 }
 
+// Every unit's way is on the flow navigation (flownav.js; flyers on the air
+// one), O(1) here: nothing on this thread searches. A unit that cannot get
+// where it was sent has not arrived: it keeps its target (a pending one)
+// and heads for the closest tile it can reach, which the helpers work out
+// (navPathSubstitute); there it waits, asleep (parked) between looks, until a
+// new navigation build could change the answer.
 function _makeFallbackPathForUnit(u, sx, sy, ex, ey, cmd = CMD_MOVING, src = 'fallback') {
     if (!u) return null;
-    if (u.isFlying) {
-        let path = _buildDeterministicOpenGridPath(sx, sy, ex, ey);
+    let path = navPathReach(u, sx, sy, ex, ey);
+    if (path && path.length > 0) {
         u.pathIsFallbackAstar = false;
         u.path = path;
-        u.pathIndex = (path && path.length > 1 && path[0].x === sx && path[0].y === sy) ? 1 : 0;
+        u.pathIndex = (path.length > 1 && path[0].x === sx && path[0].y === sy) ? 1 : 0;
         u._pendingPathTarget = null;
         u.commandState = cmd;
         return path;
-    }
-    // Walkers: the way on the flow navigation at once (no search to wait for).
-    if (typeof navPathTo === 'function') {
-        let navPath = navPathTo(u, ex, ey);
-        if (navPath && navPath.length > 0) {
-            u.pathIsFallbackAstar = false;
-            u.path = navPath;
-            u.pathIndex = (navPath.length > 1 && navPath[0].x === sx && navPath[0].y === sy) ? 1 : 0;
-            u._pendingPathTarget = null;
-            u.commandState = cmd;
-            return navPath;
-        }
     }
     u.pathIsFallbackAstar = true;
     u.path = null;
     u.pathIndex = 0;
     u._pendingPathTarget = { gx: ex, gy: ey, cmd, src };
-    notePendingPathUnit(u);
     u.commandState = cmd;
-    _setUnitAstarBudgetBlockedIndicator(u, 1);
+    // (The closest tile: asked for now; its retry tick is the answer's.)
+    navPathSubstitute(u, sx, sy, u._pendingPathTarget);
+    notePendingPathUnit(u);
     return null;
 }
 
+// A waiting unit's look again (looks wait for its retry tick): every
+// NAV_GOAL_RECHECK_TICKS ticks at its own phase (by id).
+const NAV_GOAL_RECHECK_TICKS = 256;
+function _navGoalRecheckTick(u) {
+    const P = NAV_GOAL_RECHECK_TICKS, ph = (((gameTime + (u.id | 0)) % P) + P) % P;
+    return gameTime + P - ph;
+}
+// A unit with a pending target (_pendingPathTarget pt: { gx, gy, cmd, src },
+// and the navigation's state of it: sub, the tick of the helpers' answer;
+// at, the closest tile it heads for; ver, the build it waits under), O(1):
+// its way when it can get there now (its order then goes on as given);
+// else toward the closest tile it can reach (pt kept: not arrived); there,
+// or walled in, it waits until a new navigation build. Looks before its
+// retry tick (u._astarBudgetRetryTick) do nothing.
 function _tryUpgradeAstarFallbackPath(u) {
-    if (!u || !u.pathIsFallbackAstar || !u._pendingPathTarget || u.dead) return;
-    // Waiting for its group's shared search (see _takeGroupPathSearch).
-    if (u._awaitGroupPath > gameTime) return;
-    let pt = u._pendingPathTarget;
-    let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-    let dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u);
-    // Walkers: the way on the flow navigation (no search, no budget).
-    if (typeof navPathTo === 'function') {
-        let navPath = navPathTo(u, dest.x, dest.y);
-        if (navPath && navPath.length > 0) {
-            u.path = navPath;
-            u.pathIndex = (navPath.length > 1 && navPath[0].x === ugx && navPath[0].y === ugy) ? 1 : 0;
-            u.pathIsFallbackAstar = false;
-            u.commandState = pt.cmd;
-            u._pendingPathTarget = null;
-            return;
-        }
-    }
+    if (!u || !u._pendingPathTarget || u.dead) return;
     if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) return;
-    if (!_canUsePathfindRequestBudget(u.owner, u)) return;
-    _consumePathfindRequestBudget(u.owner, u);
-    let path = _findPathForUnitTagged(pt.src || 'deferred_resolver', u, ugx, ugy, dest.x, dest.y, !!u.isFlying, getPathCanWalkForUnit(u), u.owner);
-    if (path && path.length > 0) {
-        u.path = path;
-        u.pathIndex = (path.length > 1 && path[0].x === ugx && path[0].y === ugy) ? 1 : 0;
+    // (On its way to the closest tile: looks again when there, or at its look.)
+    if (u.path && u.pathIndex < u.path.length) { u._astarBudgetRetryTick = _navGoalRecheckTick(u); return; }
+    const pt = u._pendingPathTarget, profile = navProfileOf(u), nav = _nav[profile];
+    const ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE), here = ugy * GRID_W + ugx;
+    // Waiting where it got to: only a new build changes the answer.
+    if (pt.ver > 0 && nav && pt.ver === nav.seq) { u._astarBudgetRetryTick = _navGoalRecheckTick(u); return; }
+    pt.ver = 0;
+    const dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u);
+    const way = navPathReach(u, ugx, ugy, dest.x, dest.y);
+    if (way && way.length > 0) {
+        u.path = way;
+        u.pathIndex = 0;
         u.pathIsFallbackAstar = false;
         u.commandState = pt.cmd;
         u._pendingPathTarget = null;
         return;
     }
-    if (_lastPathfindAbortedByBudget) _setUnitAstarBudgetBlockedIndicator(u);
+    const path = navPathSubstitute(u, ugx, ugy, pt);
+    if (path === null) return;
+    const at = path.length ? path[0].y * GRID_W + path[0].x : -1;
+    // Walled in, or as near as it gets (on that tile, or a step from it in
+    // a crowd): it waits (its order stays).
+    if (at < 0 || at === here || (Math.abs(path[0].x - ugx) <= 1 && Math.abs(path[0].y - ugy) <= 1 && pt.at === at)) {
+        pt.ver = nav ? nav.seq : 1;
+        pt.at = at;
+        u.path = null;
+        u.pathIndex = 0;
+        u.pathIsFallbackAstar = true;
+        u._astarBudgetRetryTick = _navGoalRecheckTick(u);
+        return;
+    }
+    pt.at = at;
+    u.path = path;
+    u.pathIndex = 0;
+    u.pathIsFallbackAstar = true;
+    u.commandState = pt.cmd;
+    u._astarBudgetRetryTick = _navGoalRecheckTick(u);
 }
 
 function _recordAstarUsage(owner, usedNodes, unit = null, sourceTag = null) {
@@ -361,16 +378,12 @@ function _withPathfindContext(source, owner, unit, fn) {
     }
 }
 
+// A unit's path to (ex, ey) on the flow navigation, O(1), no search: null
+// when it cannot get there (callers keep a pending target: the closest tile
+// it can reach, see _tryUpgradeAstarFallbackPath). (The other arguments are
+// the old search's.)
 function _findPathForUnitTagged(sourceTag, unit, sx, sy, ex, ey, ignoreWalls = false, canWalk = null, pathOwner = null, cacheProfileHint = null, allowClosestReachableFallback = true) {
-    // Walkers to an open tile: the way on the flow navigation, no search
-    // (the search remains for what it cannot answer: a walled-off tile, a
-    // way only through tiles this unit alone may enter).
-    if (unit && typeof navPathTo === 'function') {
-        let path = navPathTo(unit, ex, ey);
-        if (path) return path;
-    }
-    let owner = _normalizeOwnerId(pathOwner);
-    return _withPathfindContext(sourceTag, owner, unit, () => findPathAStar(sx, sy, ex, ey, ignoreWalls, canWalk, pathOwner, cacheProfileHint, allowClosestReachableFallback));
+    return unit ? navPathReach(unit, sx, sy, ex, ey) : null;
 }
 
 function _newPathfindPerfTick() {

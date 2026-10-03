@@ -63,6 +63,66 @@ is next. Newest entries first within each section.
 
 ## Session log
 
+### 2026-10-04 (twelfth round) — every unit on the flow navigation, no searches on the simulation thread
+
+User direction: no A* (or other search) on the main thread, ever; every unit
+(normal, attacking, worker, flyer) moves by the flow navigation; a
+destination it cannot reach sends it to the closest tile it can reach,
+worked out in the background; no unit counts as arrived until it is on its
+tile; the main thread only makes O(1) checks, the helpers do the rest.
+
+Navigation (flownav.js):
+- Parts: a cluster's walkable tiles connected inside it (helper kernel
+  SIM_KERNEL_NAV_PARTS, a background stage of a rebuild); components: parts
+  joined by exits (union-find at the build's end). Per tile partL (Uint16),
+  per part its component; navCompOf / navReachable are O(1).
+- The global hop table (one Dijkstra per destination cluster per rebuild,
+  ~1024 on the 1000 map, and wrong for clusters split by walls: a unit on the
+  other side of a wall inside a cluster had no way, as in mazes) is gone.
+  Each destination field now carries a row: every part's exit toward it
+  (_navFieldRow: one Dijkstra over the exit graph from the field's nodes
+  that reach the destination, by the helpers in SIM_KERNEL_NAV_FIELDS).
+  simNavStep / simFlowLook read the row by the tile's part.
+- Unreachable destinations: navPathSubstitute asks the helpers for the
+  closest tile of the unit's component (SIM_KERNEL_NAV_SUBST at the flush:
+  the component's parts by cluster distance, then their tiles while a nearer
+  one may be found); the answer is used NAV_SUB_TICKS later on every peer
+  (whatever a peer has cached; a restore asks again for the waiting units).
+  The unit keeps its target (_pendingPathTarget: sub, at, ver): it goes to
+  the closest tile and waits there, parked (simMoveTryParkWait) between
+  looks every NAV_GOAL_RECHECK_TICKS (at its own phase); a look is O(1)
+  (the build's seq unchanged: nothing to do); a new build (nav.seq,
+  snapshotted) makes it ask again, and it goes on when it can.
+- A unit standing on a wall tile (a building put down under it) steps out
+  to a side neighbour whose part has a way (_simWallStepOut); the reach test
+  takes any open neighbour. simFlowSlide never blocks a step inside the
+  unit's own tile (pre-existing: a builder on its tower's tile froze for good,
+  its committed step zeroed every steer: tests/laser-activation).
+Callers: _findPathForUnitTagged / _makeFallbackPathForUnit /
+_tryUpgradeAstarFallbackPath are navigation only; move orders put every unit
+on the destination's flow (workers sent by the player too; small orders, under
+NAV_GROUP_MIN = 8, on the narrow field without crowd settling); the group
+routes and the deferred group search are no longer used (advanceGroupRoutes
+was 30-120 ms a tick in the ACTIONS workload); flow orders split units by
+component, not by the path regions. Kernel worker kind (mvWk): 1 a worker at
+its task (stands where the way ends, its task looks again), 2 one the player
+sent (handed back: goes to the closest tile). The one deliberate "short of
+the tile": a group's units settling beside their own idle crowd within 8
+tiles of the group's destination.
+
+Also fixed (failing before this round): the unit-by-id map rebuilds when
+its size disagrees with the unit list (units pushed directly: tests; the
+corruption fuzz's injected unit); camera-interactions accepts the centred
+camera when zoomed out past the map; render-frame-stability checks the new
+scale-rendering path separately (counts per frame) and its layered checks
+with __disableScaleRendering; pathfinding-routing tests the A* engine as a
+library (findPathAStarTagged; units no longer use it).
+
+Tests: tests/nav-reach.test.cjs (new: a split cluster crossed; units outside
+a walled ring wait at its nearest side with their order kept, then reach the
+destination after a wall opens; a walled-in unit at the ring's side nearest
+its target; no search ran), nav-background compares the parts.
+
 ### 2026-10-03 (eleventh round) — click ticks, cold kernels (deopts), split movement kernels
 
 Same target and bench as the tenth round. New bench option RALLY_ROUNDS=2
