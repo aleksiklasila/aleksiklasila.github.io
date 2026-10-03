@@ -5140,6 +5140,22 @@
         }
 
         visitScaleCandidates(candidates, visit) {
+            if (this.columnLayers) {
+                const C = this.columnLayers;
+                for (const source of candidates || C.unitSources.concat(C.structureSources)) {
+                    if (!source || source.dead || source.energy <= 0 || source._historyGhost) continue;
+                    const F = source._structView ? C.structures : C.units, s = source._s;
+                    if (!(s >= 0)) continue;
+                    const moving = !source._structView;
+                    if (moving && (F.flags[s] & 1024)) continue;
+                    const x = F.x[s] / C.tile, z = F.y[s] / C.tile;
+                    if (!C.fullVisibility && !(C.visibility[Math.floor(z)] && C.visibility[Math.floor(z)][Math.floor(x)] > 0)) continue;
+                    visit(source, moving ? (F.px[s] + (F.x[s] - F.px[s]) * C.alpha) / C.tile : x,
+                        moving ? (F.py[s] + (F.y[s] - F.py[s]) * C.alpha) / C.tile : z,
+                        moving ? Math.max(.28, Math.min(.9, F.r[s] * 2.2 / C.tile)) : .94, .02);
+                }
+                return;
+            }
             for (const layer of this.scaleLayers || []) {
                 if (!layer.sourceIndex) layer.sourceIndex = new Map(layer.sources.map((source, i) => [source, i]));
                 const d = layer.data, a = layer.alpha;
@@ -5163,6 +5179,125 @@
                 if (d <= radius * radius && d < distance) { distance = d; best = source; }
             });
             return best;
+        }
+
+        // Consume the worker's existing SoA columns without visiting entities,
+        // building matrices, copying records or sorting. Each GPU point is a
+        // screen-facing unit/building glyph. Visibility and transforms are GPU work.
+        drawFrameColumns(C, snapshot) {
+            const gl = this.gl;
+            if (!this.columnProgram) {
+                this.columnProgram = createProgram(gl, `#version 300 es
+                    precision highp float;
+                    layout(location=0) in float aX;
+                    layout(location=1) in float aZ;
+                    layout(location=2) in float aPX;
+                    layout(location=3) in float aPZ;
+                    layout(location=4) in float aRadius;
+                    layout(location=5) in float aEnergy;
+                    layout(location=6) in float aOwner;
+                    layout(location=7) in float aFlags;
+                    layout(location=8) in float aAlive;
+                    uniform mat4 uViewProjection;
+                    uniform float uAlpha, uTile, uScale, uFlat;
+                    uniform int uStructure, uFull;
+                    uniform vec3 uColors[9];
+                    uniform sampler2D uVisibility;
+                    out vec4 vColor;
+                    void main() {
+                        vec2 current = vec2(aX,aZ) / uTile;
+                        vec2 p = uStructure != 0 ? current : mix(vec2(aPX,aPZ) / uTile,current,uAlpha);
+                        int flags = int(aFlags);
+                        bool alive = uStructure != 0 ? aAlive > 0. : aAlive >= 0. && (flags & 1024) == 0;
+                        float light = uFull != 0 ? 1. : texelFetch(uVisibility,ivec2(current),0).r;
+                        if (!alive || aEnergy <= 0. || light <= 0.) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
+                        gl_Position = uViewProjection * vec4(p.x,.02,p.y,1.);
+                        float size = uStructure != 0 ? .94 : clamp(aRadius * 2.2 / uTile,.28,.9);
+                        gl_PointSize = clamp(size * uScale / (uFlat > .5 ? 1. : max(.01,gl_Position.w)),1.,64.);
+                        float shade = .35 + .65 * clamp(light,0.,1.);
+                        vColor = vec4(uColors[clamp(int(aOwner)+1,0,8)] * shade, uStructure != 0 && (flags & 1) != 0 ? .6 : 1.);
+                    }`, `#version 300 es
+                    precision highp float;
+                    uniform int uStructure;
+                    in vec4 vColor;
+                    out vec4 color;
+                    void main() {
+                        if (vColor.a <= 0.) discard;
+                        vec2 p = gl_PointCoord * 2. - 1.;
+                        if (uStructure == 0 && dot(p,p) > 1.) discard;
+                        color = vColor;
+                    }`);
+                this.columnUniforms = {};
+                for (const n of ['ViewProjection','Alpha','Tile','Scale','Flat','Structure','Full','Colors','Visibility']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
+                this.columnStores = [{},{}];
+                this.columnVisibilityTexture = createTexture(gl);
+            }
+            const U = this.columnUniforms;
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, this.columnVisibilityTexture);
+            if (!C.fullVisibility && (this.columnVisibilityVersion !== C.visibilityVersion || this.columnVisibilitySource !== C.visibility)) {
+                const width = snapshot.worldWidth, height = snapshot.worldHeight;
+                if (!this.columnVisibilityData || this.columnVisibilityData.length !== width * height) this.columnVisibilityData = new Float32Array(width * height);
+                const data = this.columnVisibilityData;
+                for (let y=0; y<height; y++) data.set(C.visibility[y],y*width);
+                // Normalization on GPU would cost a uniform; normalize through
+                // the shader below by supplying raw light with its multiplier.
+                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+                gl.pixelStorei(gl.UNPACK_ALIGNMENT,4);
+                if (this.columnVisibilityWidth !== width || this.columnVisibilityHeight !== height) {
+                    gl.texImage2D(gl.TEXTURE_2D,0,gl.R32F,width,height,0,gl.RED,gl.FLOAT,data);
+                    this.columnVisibilityWidth=width;this.columnVisibilityHeight=height;
+                } else gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,width,height,gl.RED,gl.FLOAT,data);
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+                this.columnVisibilityVersion=C.visibilityVersion;this.columnVisibilitySource=C.visibility;
+            } else if (!this.columnVisibilityWidth) {
+                gl.texImage2D(gl.TEXTURE_2D,0,gl.R32F,1,1,0,gl.RED,gl.FLOAT,new Float32Array([1]));
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+            }
+            gl.useProgram(this.columnProgram);
+            gl.uniformMatrix4fv(U.ViewProjection,false,this.tmpViewProjection);
+            gl.uniform1f(U.Alpha,C.alpha);gl.uniform1f(U.Tile,C.tile);
+            gl.uniform1f(U.Flat,snapshot.flat2d?1:0);
+            gl.uniform1f(U.Scale,snapshot.flat2d ? this.sceneTargetSize.width / (snapshot.camera.visibleWidth * (this.cssWidth / snapshot.viewportWidth)) : this.lodProjectionScale * this.pixelRatio);
+            gl.uniform1i(U.Full,C.fullVisibility?1:0);gl.uniform1i(U.Visibility,0);
+            const colors = this.columnColors || (this.columnColors = new Float32Array(27));
+            for (let i=0;i<9;i++) colors.set(hexToRgb(C.colors[i]),i*3);
+            gl.uniform3fv(U.Colors,colors);
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0,gl.NONE]);
+            if (snapshot.flat2d) gl.disable(gl.DEPTH_TEST);
+            gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+            for (let kind=0;kind<2;kind++) {
+                const F = kind ? C.units : C.structures, S = this.columnStores[kind], structure = !kind;
+                const fields = structure ? ['x','y','x','y',null,'energy','owner','flags','alive'] : ['x','y','px','py','r','energy','owner','flags','id'];
+                if (!S.buffer) { S.buffer=gl.createBuffer();S.vao=gl.createVertexArray(); }
+                gl.bindVertexArray(S.vao);gl.bindBuffer(gl.ARRAY_BUFFER,S.buffer);
+                if (S.frame !== F) {
+                    const bytes = F.buf.byteLength;
+                    if (!S.bytes || S.bytes < bytes) { S.bytes=bytes;gl.bufferData(gl.ARRAY_BUFFER,bytes,gl.DYNAMIC_DRAW); }
+                    const seen = new Set();
+                    for (let i=0;i<fields.length;i++) {
+                        const name=fields[i];
+                        if (!name) {gl.disableVertexAttribArray(i);gl.vertexAttrib1f(i,1);continue;}
+                        const a=F[name], type=a instanceof Float32Array?gl.FLOAT:a instanceof Int32Array?gl.INT:a instanceof Int16Array?gl.SHORT:gl.UNSIGNED_BYTE;
+                        if (!seen.has(name)) {gl.bufferSubData(gl.ARRAY_BUFFER,a.byteOffset,a);seen.add(name);}
+                        gl.enableVertexAttribArray(i);gl.vertexAttribPointer(i,1,type,false,0,a.byteOffset);
+                    }
+                    S.frame=F;
+                }
+                gl.uniform1i(U.Structure,structure?1:0);
+                gl.drawArrays(gl.POINTS,0,F.n);
+            }
+            gl.disable(gl.BLEND);gl.enable(gl.DEPTH_TEST);gl.drawBuffers(this.sceneDrawBuffers);
+        }
+
+        disposeFrameColumns() {
+            for (const S of this.columnStores || []) {
+                if (S.buffer) this.gl.deleteBuffer(S.buffer);
+                if (S.vao) this.gl.deleteVertexArray(S.vao);
+            }
+            this.columnStores=[{},{}];this.columnLayers=null;
         }
 
         // Small shared geometry replaces invisible panel/model detail at army
@@ -5260,6 +5395,7 @@
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
             this.drawBackground(snapshot);
             this.scaleLayers = snapshot.scaleLayers || null;
+            this.columnLayers = snapshot.columnLayers || null;
             if (this.scaleLayers) {
                 this.pickObjects = [];
                 this.unitLayerObjects = this.unitLayerRecordPicks = null;
@@ -5270,10 +5406,13 @@
                 this.pickViewPad = this.viewPad;
                 this.shadowFrame = null;
                 for (const layer of this.scaleLayers) this.drawScaleInstances(layer, snapshot.flat2d);
+                if (this.columnLayers) this.drawFrameColumns(this.columnLayers,snapshot);
                 this.drawFx(snapshot.fx, snapshot.flat2d);
                 this.drawGroundOverlays(overlays);
                 this.resolveScene();
-                this.presentSceneToCanvas(snapshot.flat2d);
+                // Glyphs have no model depth to shade: skip SSAO/shadow/outline
+                // passes. Keep the user's color grading and antialiasing.
+                this.presentSceneToCanvas(true);
                 this.trimTopTextures();
                 return;
             }

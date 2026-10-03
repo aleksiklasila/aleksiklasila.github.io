@@ -205,6 +205,9 @@ function simFrameEncode() {
     let R = _simRenderSlots;
     let stampTick = ++R.tick;
     let list = units, count = list.length;
+    // Large matches use the GPU's compact shapes at every zoom. Do not
+    // spend simulation time making signatures/poses for panels never drawn.
+    const compact = count >= 5000;
     // Slots first (a new unit takes one), so the size is known.
     let live = 0;
     for (let i = 0; i < count; i++) { let u = list[i]; if (!u.dead) { _simRenderSlotOf(u); live++; } }
@@ -249,6 +252,14 @@ function simFrameEncode() {
         let flash = Number(u.attackFlash) || 0;
         F.flash[s] = flash <= 0 ? 0 : flash >= 255 ? 255 : flash;
         // Look: activity, facing, walk phase, status face, own light, panel.
+        if (compact) {
+            input.still[s] = gameTime; input.flash[s] = 0;
+            input.targetX[s] = input.targetY[s] = NaN;
+            F.mode[s] = 0; F.amount[s] = 0; F.status[s] = 0;
+            F.light[s] = getVisualUnitSourceLight(u);
+            F.sig[s] = 0;
+            continue;
+        }
         let activity = getUnit3DActivity(u);
         if (!u.isSnake && (activity.mode !== 0 || activity.amount > 0 || u._visStill === undefined)) u._visStill = gameTime;
         input.still[s] = u._visStill;

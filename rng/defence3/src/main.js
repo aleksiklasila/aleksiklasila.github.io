@@ -3021,7 +3021,7 @@ function initInput() {
 
             // Zoom
             let zoomRatio = dist / touchDistInitial;
-            let minZoom = Math.max(viewW / WORLD_W, viewH / WORLD_H, 0.4);
+            let minZoom = getMinCameraZoom();
             camera.zoom = Math.max(minZoom, Math.min(MAX_CAMERA_ZOOM, cameraZoomInitial * zoomRatio));
 
             if (renderDimensionMode !== '3d') {
@@ -4101,8 +4101,8 @@ function processAction(a, playerId) {
 function clampCamera() {
     let maxX = WORLD_W - viewW / camera.zoom;
     let maxY = WORLD_H - viewH / camera.zoom;
-    camera.x = Math.max(0, Math.min(maxX, camera.x));
-    camera.y = Math.max(0, Math.min(maxY, camera.y));
+    camera.x = maxX < 0 ? maxX / 2 : Math.max(0, Math.min(maxX, camera.x));
+    camera.y = maxY < 0 ? maxY / 2 : Math.max(0, Math.min(maxY, camera.y));
 }
 
 // Settings > Target FPS: the Auto option shows the rate it currently uses.
@@ -4118,7 +4118,7 @@ function refreshFpsTargetAutoLabel() {
 }
 
 function getMinCameraZoom() {
-    return Math.max(viewW / WORLD_W, viewH / WORLD_H, 0.4);
+    return Math.max(.001, Math.min(viewW / WORLD_W, viewH / WORLD_H) * .9);
 }
 
 // Camera motion is time based, from the frame clock (see _runLoopFrame):

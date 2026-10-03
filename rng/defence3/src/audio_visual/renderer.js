@@ -2278,10 +2278,16 @@ function buildScaleFrameData(flat2d, view) {
             layers: [new P(12), new P(12)], tick: NaN, colors: new Map() };
     }
     const refs = [view.towers, view.barracks, view.collectorSpawners, view.goldMines, view.astarMines, view.droppedItems, view.units];
+    const frame = view.units === units && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    const structuresFrame = frame && typeof _pageTables !== 'undefined' && _isLiveRenderGrid(view.grid) ? _pageTables.s : null;
+    const columns = frame && structuresFrame ? { units: frame, structures: structuresFrame,
+        unitSources: units, structureSources: _pageStructViews, alpha: tickAlpha,
+        visibility: view.visibilityGrid, visibilityVersion, fullVisibility, tile: TILE,
+        colors: Array.from({length:9}, (_, i) => get3DRenderOwnerColor(i - 1)) } : null;
     const changed = cache.tick !== gameTime || cache.vis !== visibilityVersion || cache.full !== fullVisibility
         || cache.player !== localPlayerId || cache.history !== teamVisibilityHistory
         || !cache.refs || refs.some((list, i) => list !== cache.refs[i] || list.length !== cache.lengths[i]);
-    if (changed) {
+    if (changed && !columns) {
         cache.colors.clear();
         const colorFor = owner => {
             let c = cache.colors.get(owner);
@@ -2356,7 +2362,7 @@ function buildScaleFrameData(flat2d, view) {
     beginFrameEffects(fx, flat2d, bounds, getTeamLightingGrid(), camera.zoom * TILE, renderer3dInstance);
     buildFrameEffects(view.projectiles, view.particles, view.towers);
     endFrameEffects();
-    return Object.assign(snapshot, { flat2d, scaleLayers: cache.layers, objects: [], fx,
+    return Object.assign(snapshot, { flat2d, scaleLayers: columns ? [] : cache.layers, columnLayers: columns, objects: [], fx,
         backgroundCanvas: getBackgroundMip(Math.min(1, 2048 / Math.max(WORLD_W, WORLD_H))), backgroundVersion: _backgroundContentVersion,
         backgroundBounds: { centerX: GRID_W / 2, centerZ: GRID_H / 2, width: GRID_W, height: GRID_H },
         fogCanvas: fullVisibility ? null : _visibilityMaskCanvas,
@@ -3475,6 +3481,7 @@ let _minimapLastCameraKey = '';
 let _minimapContentCanvas = null;
 let _minimapContentGrid = null;
 let _minimapContentMode = '';
+let _minimapContentTick = -1;
 let _minimapUnitCanvas = null;
 let _minimapUnitPixels = null;
 function drawMinimap() {
@@ -3485,8 +3492,9 @@ function drawMinimap() {
         _minimapContentCanvas = document.createElement('canvas');
         _minimapContentCanvas.width = _minimapContentCanvas.height = MINIMAP_SIZE;
     }
-    if (nowMs - _minimapLastDrawMs >= 100 || nowMs < _minimapLastDrawMs || _minimapContentGrid !== grid || _minimapContentMode !== mode) {
+    if ((gameTime !== _minimapContentTick && nowMs - _minimapLastDrawMs >= 100) || nowMs < _minimapLastDrawMs || _minimapContentGrid !== grid || _minimapContentMode !== mode) {
     _minimapLastDrawMs = nowMs; _minimapContentGrid = grid; _minimapContentMode = mode;
+    _minimapContentTick = gameTime;
     const minimapCtx = _minimapContentCanvas.getContext('2d');
     const units = getLiveRenderView().units;
     let tilePx = Math.max(1, scale);
@@ -3562,16 +3570,20 @@ function drawMinimap() {
         }
         const pixels = _minimapUnitPixels.data, colors = new Map();
         pixels.fill(0);
-        for (const u of units) {
-            if (u.dead) continue;
-            const gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
-            if (!fullVisibility && (!vis[gy] || vis[gy][gx] === 0) && !u._historyGhost) continue;
-            const x = Math.floor(u.x / TILE * scale), y = Math.floor(u.y / TILE * scale);
+        const F = (!teamVisibilityHistory || fullVisibility) && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+        for (let i = 0; i < units.length; i++) {
+            const u = F ? null : units[i], slot = F ? F.order[i] : 0;
+            if (F ? F.energy[slot] <= 0 : u.dead) continue;
+            const ux = F ? F.x[slot] : u.x, uy = F ? F.y[slot] : u.y, owner = F ? F.owner[slot] : u.owner;
+            const ghost = !F && u._historyGhost;
+            const gx = Math.floor(ux / TILE), gy = Math.floor(uy / TILE);
+            if (!fullVisibility && (!vis[gy] || vis[gy][gx] === 0) && !ghost) continue;
+            const x = Math.floor(ux / TILE * scale), y = Math.floor(uy / TILE * scale);
             if (x < 0 || y < 0 || x >= MINIMAP_SIZE || y >= MINIMAP_SIZE) continue;
-            let color = colors.get(u.owner);
-            if (!color) { color = _parseHexColor(get3DRenderOwnerColor(u.owner)); colors.set(u.owner, color); }
+            let color = colors.get(owner);
+            if (!color) { color = _parseHexColor(get3DRenderOwnerColor(owner)); colors.set(owner, color); }
             const o = (y * MINIMAP_SIZE + x) * 4;
-            pixels[o] = color.r; pixels[o + 1] = color.g; pixels[o + 2] = color.b; pixels[o + 3] = u._historyGhost ? 59 : 255;
+            pixels[o] = color.r; pixels[o + 1] = color.g; pixels[o + 2] = color.b; pixels[o + 3] = ghost ? 59 : 255;
         }
         _minimapUnitCanvas.getContext('2d').putImageData(_minimapUnitPixels, 0, 0);
         minimapCtx.drawImage(_minimapUnitCanvas, 0, 0);
