@@ -324,13 +324,15 @@ function navBuildFinish(b) {
 // the graph is symmetric in steps, not in costs; the cost of reaching node
 // j from i is taken as i -> j's, close enough for choosing an exit), then
 // each part's cheapest node to leave by (crossing to its pair).
-function _navFieldRow(R, p, pool, off, meta, m, rows, ro) {
-    const NM = R['nav.' + p + '.meta'];
+// (pre: the build's names, 'nav.' the installed one's, 'navn.' the next's:
+// _navNextStage.)
+function _navFieldRow(R, p, pool, off, meta, m, rows, ro, pre = 'nav.') {
+    const NM = R[pre + p + '.meta'];
     if (!NM) return;
     const C = NM[0] | 0, cw = NM[1] | 0, nc = NM[3] | 0, W = NM[4] | 0, np = NM[7] | 0, B = Math.max(1, NM[8] | 0), k = NM[9] | 0, edges = NM[10] | 0;
-    const nb = R['nav.' + p + '.nb'], nt = R['nav.' + p + '.nt'], npair = R['nav.' + p + '.np'], npart = R['nav.' + p + '.npart'];
-    const adjStart = R['nav.' + p + '.adjS'], adjA = R['nav.' + p + '.adjA'], adjC = R['nav.' + p + '.adjC'];
-    const partL = R['nav.' + p + '.partL'], partB = R['nav.' + p + '.partB'];
+    const nb = R[pre + p + '.nb'], nt = R[pre + p + '.nt'], npair = R[pre + p + '.np'], npart = R[pre + p + '.npart'];
+    const adjStart = R[pre + p + '.adjS'], adjA = R[pre + p + '.adjA'], adjC = R[pre + p + '.adjC'];
+    const partL = R[pre + p + '.partL'], partB = R[pre + p + '.partB'];
     rows.fill(255, ro, ro + np);
     if (!nb || !npart || !adjStart || !partL) return;
     let S = _navRowScratch;
@@ -511,25 +513,47 @@ let _nav = [null, null];
 // part's exit toward it, see _navFieldRow); rowW follows the builds' part
 // counts (nav.fhdr[w]).
 const NAV_FIELD_META = 8, NAV_FIELD_SWEEP_TICKS = 128, NAV_WIDE_BASE = 1 << 22;
-function _navNewPool(wide) { return { wide, span: 0, C: 0, cap: 0, pool: null, meta: null, rows: null, rowW: 0, byKey: new Map(), free: [], pending: [], seen: null }; }
+// (rowSrc: a slot holding each row made under the installed builds, by row
+// key: the destination's part (rows depend on that alone, see _navFieldRow);
+// rowKeyOf: each slot's.)
+function _navNewPool(wide) { return { wide, span: 0, C: 0, cap: 0, pool: null, meta: null, rows: null, rowW: 0, byKey: new Map(), free: [], pending: [], seen: null, rowSrc: new Map(), rowKeyOf: null }; }
 const _navFields = { pools: [_navNewPool(false), _navNewPool(true)], seenCycle: 0, flushedTick: -1, hdr: null };
+// A rebuild's window (NAV_SWAP_TICKS ticks, _navJobStep): the next build
+// made but not installed; every live field made over it in the background
+// (SIM_LANE_NAVX) into second arrays (per pool: pool, rows, row keys and
+// sources, the same slots), the fields asked for meanwhile over both builds
+// (their jobs' second batches); at the window's end both installed at once
+// (_navNextInstall), the same tick on every peer: no tick makes them all.
+const NAV_SWAP_TICKS = 10;
+const _navNext = { nav: null, rowW: 0, pools: [null, null] };
 function _navFieldKey(profile, dest) { return profile * 16777216 + dest; }
 function _navPoolEnsure(F, C) {
     if (F.C === C && F.pool) return F;
+    // (The fields' job finished; its slots of this pool dropped: new ones.)
+    _navFieldsLaneWait();
+    const J = _navFieldsJob.slots;
+    if (J) { const keep = []; for (let i = 0; i < J.length; i += 3) if (J[i] !== F) keep.push(J[i], J[i + 1], J[i + 2]); _navFieldsJob.slots = keep.length ? keep : null; }
     F.C = C; F.span = F.wide ? 3 * C : C; F.cap = 0; F.pool = null; F.meta = null; F.rows = null; F.byKey = new Map(); F.free = []; F.pending = []; F.seen = null; F.remake = null;
+    F.rowSrc = new Map(); F.rowKeyOf = null;
     _navFieldsGrow(F, F.wide ? 64 : 1024);
     return F;
 }
 function _navFieldsGrow(F, cap) {
+    // (The fields' job finished first: its slots copied whole; taken at the
+    // next flush as always.)
+    _navFieldsLaneWait();
     const size = F.span * F.span, pool = simSharedArray(Uint16Array, cap * size), meta = simSharedArray(Int32Array, cap * NAV_FIELD_META), seen = new Int32Array(cap);
     const rows = simSharedArray(Uint8Array, Math.max(1, cap * F.rowW));
-    if (F.pool) { pool.set(F.pool); meta.set(F.meta); seen.set(F.seen); }
+    const rowKeyOf = new Float64Array(cap).fill(-1);
+    if (F.pool) { pool.set(F.pool); meta.set(F.meta); seen.set(F.seen); rowKeyOf.set(F.rowKeyOf); }
     if (F.rows && F.rows.length <= rows.length) rows.set(F.rows);
+    F.rowKeyOf = rowKeyOf;
     for (let s = cap - 1; s >= F.cap; s--) { F.free.push(s); meta[s * NAV_FIELD_META] = -1; }
     F.pool = pool; F.meta = meta; F.seen = seen; F.cap = cap; F.rows = rows;
     const w = F.wide ? 1 : 0;
     simParallelBind('nav.fpool.' + w, pool); simParallelBind('nav.fmeta.' + w, meta); simParallelBind('nav.frows.' + w, rows);
     _navFieldsHeader();
+    if (_navNext.nav) _navNextPoolEnsure(F);
 }
 // Rows wide enough for the installed builds' parts (a build installed: every
 // field is made again anyway, see navPublish).
@@ -540,20 +564,25 @@ function _navRowsEnsure() {
         if (!F.pool || F.rowW >= w) continue;
         F.rowW = w;
         F.rows = simSharedArray(Uint8Array, Math.max(1, F.cap * w));
+        F.rowSrc = new Map();
         simParallelBind('nav.frows.' + (F.wide ? 1 : 0), F.rows);
     }
     _navFieldsHeader();
 }
+// (nav.fhdr: the pools' row widths, then the next build's: _navNext.)
 function _navFieldsHeader() {
-    if (!_navFields.hdr) { _navFields.hdr = simSharedArray(Int32Array, 2); simParallelBind('nav.fhdr', _navFields.hdr); }
+    if (!_navFields.hdr) { _navFields.hdr = simSharedArray(Int32Array, 4); simParallelBind('nav.fhdr', _navFields.hdr); }
     for (const F of _navFields.pools) _navFields.hdr[F.wide ? 1 : 0] = F.rowW;
+    for (let w = 0; w < 2; w++) _navFields.hdr[2 + w] = _navNext.pools[w] ? _navNext.pools[w].rowW : 0;
 }
 // The pool and index of a slot id.
 function _navFieldPool(id) { return id >= NAV_WIDE_BASE ? _navFields.pools[1] : _navFields.pools[0]; }
 function _navFieldIndex(id) { return id >= NAV_WIDE_BASE ? id - NAV_WIDE_BASE : id; }
-// Whether a route asked for now uses its field this tick (asked before the
-// tick's flush) or the next.
-function navFieldReadyTick() { return _navFields.flushedTick === gameTime ? gameTime + 1 : gameTime; }
+// The tick a route asked for now may use its field: the fields asked for
+// before a tick's flush are made by the helpers meanwhile and taken at the
+// next tick's flush (navFieldsFlush), before anything moves; asked after it,
+// a tick later.
+function navFieldReadyTick() { return _navFields.flushedTick === gameTime ? gameTime + 2 : gameTime + 1; }
 // The slot id of the field toward `dest` (profile; wide or narrow), asked
 // for if new; -1 without a build.
 function navFieldRequest(profile, dest, wide = false) {
@@ -579,44 +608,168 @@ function navFieldRequest(profile, dest, wide = false) {
     return wide ? NAV_WIDE_BASE + s : s;
 }
 function navFieldGen(id) { return id >= 0 ? _navFieldPool(id).meta[_navFieldIndex(id) * NAV_FIELD_META + 6] : 0; }
-// Makes the fields asked for (every tick, after the orders; see above).
+// Every tick, after the orders: the fields started at the last flush taken
+// (made: marked so, the same tick on every peer, whenever the helpers
+// finished), and those asked for since started in the background
+// (SIM_LANE_NAV). Nothing waits for them on this thread but the taking,
+// normally finished long before.
+// (A build's remake, at once: before this tick's job; the slots it made
+// leave the job. In a rebuild's window the job makes its fields over the
+// next build too: _navNextStage.)
 function navFieldsFlush() {
+    _navFieldsCommit();
     _navFields.flushedTick = gameTime;
-    for (const F of _navFields.pools) if (F.pending.length) { _navFieldsMake(F, F.pending); F.pending = []; }
-    _navFieldsRemakeStep();
+    if (_navFieldsRemakeStep()) for (const F of _navFields.pools) if (F.pending.length) F.pending = F.pending.filter(s => F.meta[s * NAV_FIELD_META + 7] !== 1);
+    _navFieldsStart();
     navFieldsSweepStep();
     _navSubstitutesMake();
 }
+// Batches of fields: list ids (the kernel's lists, nav.flist.<w>.<id>):
+// 0 the installed build's, 1 the next build's (this tick's job, or made
+// now), 2 the next build's every live field (SIM_LANE_NAVX).
+// The fields' job: [pool, slot, gen] of each slot it makes.
+const _navFieldsJob = { slots: null };
+function _navFieldsLaneWait() {
+    if (typeof simParallelBackgroundWait === 'function' && typeof SIM_LANE_NAV === 'number') simParallelBackgroundWait(SIM_LANE_NAV);
+}
+function _navFieldsStart() {
+    const lane = typeof SIM_LANE_NAV === 'number' ? SIM_LANE_NAV : -1;
+    if (lane < 0) { for (const F of _navFields.pools) if (F.pending.length) { _navFieldsMake(F, F.pending); F.pending = []; } return; }
+    // (Stages: the fields and rows of both pools, then the copies; then the
+    // same over the next build.)
+    const stages = [];
+    for (let i = 0; i < 8; i++) stages.push([SIM_KERNEL_NAV_FIELDS, 0]);
+    const taken = [];
+    let any = false;
+    for (const F of _navFields.pools) {
+        if (!F.pending.length) continue;
+        if (!any) { _navFieldsBindWalls(); any = true; }
+        const w = F.wide ? 1 : 0;
+        F.pending.sort((a, b) => a - b);
+        _navFieldsStage(lane, stages, w, _navFieldsBatch(F, F.pending, false, 0, true));
+        if (_navNext.nav) _navFieldsStage(lane, stages, 4 + w, _navFieldsBatch(F, F.pending, true, 1, true));
+        for (const s of F.pending) taken.push(F, s, F.meta[s * NAV_FIELD_META + 6]);
+        F.pending = [];
+    }
+    if (!taken.length) return;
+    _navFieldsJob.slots = taken;
+    simParallelBackgroundChain(lane, stages);
+}
+// A batch's two stages in a chain: its fields at stage st, its copies at
+// st + 2.
+function _navFieldsStage(lane, stages, st, b) {
+    for (let ph = 0; ph < 2; ph++) {
+        const P = simParallelStageParams(lane, st + 2 * ph);
+        P.set(b.P);
+        if (ph) { P[6] = 1; P[1] = 64; }
+        stages[st + 2 * ph][1] = ph ? b.copy : b.make;
+    }
+}
+function _navFieldsCommit() {
+    const T = _navFieldsJob.slots;
+    if (!T) return;
+    _navFieldsJob.slots = null;
+    simParallelBackgroundWait(SIM_LANE_NAV);
+    // (A slot let go meanwhile, and maybe asked for again: not this one's.)
+    for (let i = 0; i < T.length; i += 3) { const F = T[i], m = T[i + 1] * NAV_FIELD_META; if (F.meta && F.meta[m + 6] === T[i + 2] && F.meta[m] >= 0) F.meta[m + 7] = 1; }
+}
+// A slot's row key: its destination's part (+ profile), or (a wall
+// destination) its own (-2 - slot: not shared). (next: the next build.)
+function _navRowKey(F, s, next = null) {
+    const m = s * NAV_FIELD_META, p = F.meta[m], dest = F.meta[m + 1], nav = next && next.profile === p ? next : _nav[p];
+    if (!nav || !nav.partL || !(dest >= 0 && dest < nav.W * nav.H) || nav.partL[dest] === 0xFFFF) return -2 - s;
+    const x = dest % nav.W, y = (dest - x) / nav.W;
+    return p * 16777216 + nav.partBase[(y >> nav.cs) * nav.cw + (x >> nav.cs)] + nav.partL[dest];
+}
+// Makes fields now (and over the next build in a rebuild's window).
 function _navFieldsMake(F, slots) {
     if (!slots.length) return;
+    // (The job's lists rebound below: it is finished first.)
+    _navFieldsLaneWait();
     slots.sort((a, b) => a - b);
-    const list = simSharedArray(Int32Array, slots.length);
-    list.set(slots);
-    simParallelBind('nav.flist', list);
+    _navFieldsBindWalls();
+    _navFieldsRunNow(_navFieldsBatch(F, slots, false, 0, false));
+    if (_navNext.nav) _navFieldsRunNow(_navFieldsBatch(F, slots, true, 1, false));
+}
+function _navFieldsBindWalls() {
     for (let p = 0; p < 2; p++) {
         const nav = _nav[p];
         if (!nav) continue;
         simParallelBind('nav.fwall.' + p, nav.wall); simParallelBind('nav.fcost.' + p, nav.cost || _navNoCost);
     }
-    const P = _simParams, per = F.wide ? 1 : 2;
-    P[0] = slots.length; P[1] = per; P[2] = F.span; P[3] = _nav[0] ? _nav[0].W : GRID_W; P[4] = _nav[0] ? _nav[0].H : GRID_H; P[5] = F.wide ? 1 : 0;
-    simParallelRun(SIM_KERNEL_NAV_FIELDS, Math.ceil(slots.length / per));
+}
+function _navFieldsRunNow(b) {
+    const P = _simParams;
+    P.set(b.P);
+    simParallelRun(SIM_KERNEL_NAV_FIELDS, b.make);
+    // (Then the copies: their sources are made.)
+    if (b.copy) { P[1] = 64; P[6] = 1; simParallelRun(SIM_KERNEL_NAV_FIELDS, b.copy); }
+}
+// A batch of slots (sorted) to make into the installed arrays (next false)
+// or the next build's (next: _navNext; never marks made: its install does).
+// bg: made in the background (made marked at the job's taking,
+// _navFieldsCommit), else by the kernel. Binds its lists (list id), returns
+// its parameters (P: [count, per chunk, span, W, H, wide, phase, no made
+// mark, next, list id]) and chunk counts (make, copy).
+// Rows: one search per row key; the other slots of the key copy it (a slot
+// made before under these builds, or the batch's first; for the next build
+// the batch's only: its other batches may be running still).
+function _navFieldsBatch(F, slots, next, id, bg) {
+    const w = F.wide ? 1 : 0, n = slots.length, N = next ? _navNextPoolEnsure(F) : null;
+    const list = simSharedArray(Int32Array, n), src = simSharedArray(Int32Array, n);
+    list.set(slots);
+    let copies = 0;
+    if (!N) {
+        for (let i = 0; i < n; i++) {
+            const s = slots[i], key = _navRowKey(F, s), old = F.rowKeyOf[s];
+            if (old !== key && F.rowSrc.get(old) === s) F.rowSrc.delete(old);
+            F.rowKeyOf[s] = key;
+            const from = F.rowSrc.get(key);
+            if (from !== undefined && from !== s) { src[i] = from; copies++; }
+            else { src[i] = -1; F.rowSrc.set(key, s); }
+        }
+    } else {
+        const local = new Map();
+        for (let i = 0; i < n; i++) {
+            const s = slots[i], key = _navRowKey(F, s, _navNext.nav);
+            N.rowKeyOf[s] = key;
+            const from = local.get(key);
+            if (from !== undefined) { src[i] = from; copies++; }
+            else { src[i] = -1; local.set(key, s); if (!N.rowSrc.has(key)) N.rowSrc.set(key, s); }
+        }
+    }
+    simParallelBind('nav.flist.' + w + '.' + id, list); simParallelBind('nav.fsrc.' + w + '.' + id, src);
+    const per = F.wide ? 1 : 2, P = new Float64Array(10);
+    P[0] = n; P[1] = per; P[2] = F.span; P[3] = _nav[0] ? _nav[0].W : GRID_W; P[4] = _nav[0] ? _nav[0].H : GRID_H; P[5] = w; P[6] = 0; P[7] = bg || N ? 1 : 0; P[8] = N ? 1 : 0; P[9] = id;
+    return { P, make: Math.ceil(n / per), copy: copies ? Math.ceil(n / 64) : 0 };
 }
 const SIM_KERNEL_NAV_FIELDS = 21;
 SIM_KERNELS[SIM_KERNEL_NAV_FIELDS] = function (R, P, chunk) {
-    const w = P[5] | 0, list = R['nav.flist'], pool = R['nav.fpool.' + w], meta = R['nav.fmeta.' + w];
-    const rows = R['nav.frows.' + w], hdr = R['nav.fhdr'], rowW = hdr ? hdr[w] | 0 : 0;
+    const w = P[5] | 0, next = P[8] === 1, id = P[9] | 0, list = R['nav.flist.' + w + '.' + id], src = R['nav.fsrc.' + w + '.' + id], meta = R['nav.fmeta.' + w];
+    const pool = R[(next ? 'nav.npool.' : 'nav.fpool.') + w], rows = R[(next ? 'nav.nrows.' : 'nav.frows.') + w], hdr = R['nav.fhdr'], rowW = hdr ? hdr[(next ? 2 : 0) + w] | 0 : 0;
+    const pre = next ? 'navn.' : 'nav.';
     const span = P[2] | 0, size = span * span, W = P[3] | 0, H = P[4] | 0;
+    // (Phase 1: the rows copied from their key's slot, P[6].)
+    if (P[6] === 1) {
+        if (!rows || !(rowW > 0)) return;
+        for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
+            const from = src[i];
+            if (from >= 0) rows.copyWithin(list[i] * rowW, from * rowW, from * rowW + rowW);
+        }
+        return;
+    }
     const S = _navKernelScratch && _navKernelScratch.q[0].length >= size * 3 ? _navKernelScratch : (_navKernelScratch = _navDialScratch(size));
     for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
         const s = list[i], m = s * NAV_FIELD_META, p = meta[m];
-        const wall = R['nav.fwall.' + p], costR = R['nav.fcost.' + p];
+        const wall = R[pre + 'fwall.' + p], costR = R[pre + 'fcost.' + p];
         if (!wall) continue;
         const cost = costR && costR.length ? costR : null;
         pool.fill(NAV_UNREACHED, s * size, s * size + size);
         _navLocalFieldDial(pool, s * size, meta[m + 2], meta[m + 3], W, H, meta[m + 1], wall, cost, meta[m + 4], meta[m + 5], S);
-        if (rows && rowW > 0) _navFieldRow(R, p, pool, s * size, meta, m, rows, s * rowW);
-        meta[m + 7] = 1;
+        if (rows && rowW > 0 && !(src && src[i] >= 0)) _navFieldRow(R, p, pool, s * size, meta, m, rows, s * rowW, pre);
+        // (In the background, marked made at the job's taking; the next
+        // build's, at its install.)
+        if (P[7] !== 1) meta[m + 7] = 1;
     }
 };
 // Staggered sweep: over NAV_FIELD_SWEEP_TICKS ticks every unit marks the
@@ -638,26 +791,31 @@ function navFieldsSweepStep() {
         if (path && path.length) { const nd = path[path.length - 1]; if (nd && nd.nav) _navFieldMark(nd.nav - 1, nd.y * GRID_W + nd.x, !!nd.w, mark); }
     }
     if (k !== step - 1) return;
+    // (In a rebuild's window no slot is let go (the next build's batches
+    // keep theirs): the drop waits a cycle, the marks of both kept.)
+    if (_navNext.nav) return;
     for (const F of _navFields.pools) {
         if (!F.pool) continue;
         for (const [key, s] of F.byKey) {
             if (F.seen[s] >= mark) continue;
             F.byKey.delete(key); F.meta[s * NAV_FIELD_META] = -1; F.meta[s * NAV_FIELD_META + 6]++; F.free.push(s);
+            if (F.rowKeyOf && F.rowSrc.get(F.rowKeyOf[s]) === s) F.rowSrc.delete(F.rowKeyOf[s]);
         }
         F.pending = F.pending.filter(s => F.meta[s * NAV_FIELD_META] >= 0);
     }
     _navFields.seenCycle++;
 }
-// Every field again (a new build installed), all at the next flush (one
-// parallel job). Not a share a tick: which fields a peer keeps differs (the
-// sweep, a restore), and a field must hold the same build on every peer at
-// every tick (its content a function of its destination and the build),
-// whichever peer had it already. (To do: made over the new build on a tier
-// lane into a second pool while the old one serves, swapped at a fixed tick.)
+// Every field again (a build installed without a window: the map's first,
+// a restore), all at the next flush (one parallel job). Not a share a tick:
+// which fields a peer keeps differs (the sweep, a restore), and a field must
+// hold the same build on every peer at every tick (its content a function of
+// its destination and the build), whichever peer had it already. (A
+// rebuild's: made in its window, see _navNext.)
 const NAV_FIELD_REMAKE_PER_TICK = [Infinity, Infinity];
 function _navFieldsRemakeAll() {
     for (const F of _navFields.pools) {
         if (!F.pool) continue;
+        F.rowSrc = new Map();
         const all = [];
         for (const s of F.byKey.values()) all.push(s);
         all.sort((a, b) => a - b);
@@ -665,6 +823,7 @@ function _navFieldsRemakeAll() {
     }
 }
 function _navFieldsRemakeStep() {
+    let any = false;
     for (let w = 0; w < _navFields.pools.length; w++) {
         const F = _navFields.pools[w];
         if (!F.pool || !F.remake || F.remakePos >= F.remake.length) continue;
@@ -673,8 +832,9 @@ function _navFieldsRemakeStep() {
             const s = F.remake[F.remakePos++];
             if (F.meta[s * NAV_FIELD_META] >= 0) batch.push(s);
         }
-        _navFieldsMake(F, batch);
+        if (batch.length) { _navFieldsMake(F, batch); any = true; }
     }
+    return any;
 }
 // After a restore: the fields of every route, made now.
 function navFieldsRestore() {
@@ -703,33 +863,111 @@ function navWallTable(profile) {
 // profile's build number, the same on every peer: snapshotted, so waiting
 // units can tell a new build, see _tryUpgradeAstarFallbackPath.)
 let _navVersion = 0, _navSeq = [0, 0];
-function navPublish(nav) {
+// made: its fields made over it already (a rebuild's window, its arrays
+// installed: _navNextInstall).
+function navPublish(nav, made = false) {
+    // (The fields' jobs finished: the arrays they write may be replaced. A
+    // window still open is closed: its build installed as any, at its end.)
+    _navFieldsLaneWait();
+    if (!made && _navNext.nav) _navNextDrop();
     _nav[nav.profile] = nav;
     _navVersion++;
     nav.seq = ++_navSeq[nav.profile];
     // (Its version, as the kernels read it from its meta: look-ahead keys.)
     nav.version = _navVersion;
     const p = nav.profile;
-    simParallelBind('nav.' + p + '.fields', nav.fields);
-    // meta: [C, cw, ch, nc, W, H, version, parts, the graph's bucket count
-    // (largest edge + 1), nodes, edges]
-    const meta = simSharedArray(Int32Array, 12);
-    meta[0] = nav.C; meta[1] = nav.cw; meta[2] = nav.ch; meta[3] = nav.nc; meta[4] = nav.W; meta[5] = nav.H; meta[6] = _navVersion;
-    meta[7] = nav.np | 0; meta[8] = nav.B | 0; meta[9] = nav.k | 0; meta[10] = nav.adjA ? nav.adjA.length : 0;
-    simParallelBind('nav.' + p + '.meta', meta);
-    simParallelBind('nav.' + p + '.nb', nav.nodeBase); simParallelBind('nav.' + p + '.nt', nav.nodeTile); simParallelBind('nav.' + p + '.np', nav.nodePair);
-    simParallelBind('nav.' + p + '.partL', nav.partL); simParallelBind('nav.' + p + '.partB', nav.partBase); simParallelBind('nav.' + p + '.npart', nav.nodePart);
-    simParallelBind('nav.' + p + '.adjS', nav.adjStart); simParallelBind('nav.' + p + '.adjA', nav.adjA); simParallelBind('nav.' + p + '.adjC', nav.adjC);
-    simParallelBind('nav.' + p + '.pclu', nav.partCluster); simParallelBind('nav.' + p + '.cstart', nav.compStart); simParallelBind('nav.' + p + '.cparts', nav.compParts);
+    _navBindBuild('nav.', nav);
+    for (const F of _navFields.pools) _navPoolEnsure(F, nav.C);
+    _navRowsEnsure();
     // Every destination field again over the new build (same slots: the
     // routes keep following them), at the next flush (navFieldsFlush):
     // until then the old build's. (Rows: the new build's parts.)
-    for (const F of _navFields.pools) _navPoolEnsure(F, nav.C);
-    _navRowsEnsure();
-    _navFieldsRemakeAll();
+    if (!made) _navFieldsRemakeAll();
+    else _navFieldsHeader();
     // (Components changed: substitutes asked for again.)
     _navSubReset();
     if (p === NAV_PROFILE_GROUND) _navWallDiffReset();
+}
+// A build's arrays for the kernels under names pre + profile + '.' + name
+// ('nav.': the installed one, 'navn.': the next, _navNextStage).
+function _navBindBuild(pre, nav) {
+    const p = nav.profile;
+    simParallelBind(pre + p + '.fields', nav.fields);
+    // meta: [C, cw, ch, nc, W, H, version, parts, the graph's bucket count
+    // (largest edge + 1), nodes, edges]
+    const meta = simSharedArray(Int32Array, 12);
+    meta[0] = nav.C; meta[1] = nav.cw; meta[2] = nav.ch; meta[3] = nav.nc; meta[4] = nav.W; meta[5] = nav.H; meta[6] = nav.version | 0;
+    meta[7] = nav.np | 0; meta[8] = nav.B | 0; meta[9] = nav.k | 0; meta[10] = nav.adjA ? nav.adjA.length : 0;
+    simParallelBind(pre + p + '.meta', meta);
+    simParallelBind(pre + p + '.nb', nav.nodeBase); simParallelBind(pre + p + '.nt', nav.nodeTile); simParallelBind(pre + p + '.np', nav.nodePair);
+    simParallelBind(pre + p + '.partL', nav.partL); simParallelBind(pre + p + '.partB', nav.partBase); simParallelBind(pre + p + '.npart', nav.nodePart);
+    simParallelBind(pre + p + '.adjS', nav.adjStart); simParallelBind(pre + p + '.adjA', nav.adjA); simParallelBind(pre + p + '.adjC', nav.adjC);
+    simParallelBind(pre + p + '.pclu', nav.partCluster); simParallelBind(pre + p + '.cstart', nav.compStart); simParallelBind(pre + p + '.cparts', nav.compParts);
+}
+
+// ---- A rebuild's window (see _navNext) ----
+// Opens it: the next build's arrays bound (the other profile's: the
+// installed one), every live field made over it in the background. (Those
+// asked for since the last flush: in this tick's job, both builds.)
+function _navNextStage(nav) {
+    if (_navNext.nav) _navNextDrop();
+    _navNext.nav = nav;
+    const other = _nav[1 - nav.profile];
+    for (const b of [nav, other]) {
+        if (!b) continue;
+        _navBindBuild('navn.', b);
+        simParallelBind('navn.fwall.' + b.profile, b.wall); simParallelBind('navn.fcost.' + b.profile, b.cost || _navNoCost);
+    }
+    _navNext.rowW = Math.max(1, nav.np | 0, other ? other.np | 0 : 0);
+    const lane = SIM_LANE_NAVX, stages = [];
+    for (let i = 0; i < 4; i++) stages.push([SIM_KERNEL_NAV_FIELDS, 0]);
+    for (const F of _navFields.pools) {
+        if (!F.pool) continue;
+        _navNextPoolEnsure(F);
+        const pend = new Set(F.pending), slots = [];
+        for (const s of F.byKey.values()) if (!pend.has(s)) slots.push(s);
+        if (!slots.length) continue;
+        slots.sort((a, b) => a - b);
+        _navFieldsStage(lane, stages, F.wide ? 1 : 0, _navFieldsBatch(F, slots, true, 2, true));
+    }
+    _navFieldsHeader();
+    simParallelBackgroundChain(lane, stages);
+}
+// A pool's arrays over the next build (as many slots as the pool; grown
+// with it, after the background batches that write them).
+function _navNextPoolEnsure(F) {
+    const w = F.wide ? 1 : 0;
+    let N = _navNext.pools[w];
+    if (N && N.cap === F.cap) return N;
+    if (N) { _navFieldsLaneWait(); simParallelBackgroundWait(SIM_LANE_NAVX); }
+    const rowW = _navNext.rowW, pool = simSharedArray(Uint16Array, F.cap * F.span * F.span), rows = simSharedArray(Uint8Array, Math.max(1, F.cap * rowW)), rowKeyOf = new Float64Array(F.cap).fill(-1);
+    if (N) { pool.set(N.pool); rows.set(N.rows); rowKeyOf.set(N.rowKeyOf); }
+    N = _navNext.pools[w] = { cap: F.cap, pool, rows, rowW, rowKeyOf, rowSrc: N ? N.rowSrc : new Map() };
+    simParallelBind('nav.npool.' + w, pool); simParallelBind('nav.nrows.' + w, rows);
+    _navFieldsHeader();
+    return N;
+}
+// Closes it: the next build and its fields installed together.
+function _navNextInstall(nav) {
+    _navFieldsLaneWait();
+    simParallelBackgroundWait(SIM_LANE_NAVX);
+    // (Closed meanwhile: installed as any build.)
+    if (_navNext.nav !== nav) { navPublish(nav); return; }
+    for (let w = 0; w < 2; w++) {
+        const F = _navFields.pools[w], N = _navNext.pools[w];
+        if (!F.pool || !N || N.cap !== F.cap) continue;
+        F.pool = N.pool; F.rows = N.rows; F.rowW = N.rowW; F.rowSrc = N.rowSrc; F.rowKeyOf = N.rowKeyOf;
+        simParallelBind('nav.fpool.' + w, F.pool); simParallelBind('nav.frows.' + w, F.rows);
+    }
+    _navNext.nav = null; _navNext.pools = [null, null];
+    navPublish(nav, true);
+}
+// (Dropped: its batches finished, its arrays let go.)
+function _navNextDrop() {
+    _navFieldsLaneWait();
+    if (typeof SIM_LANE_NAVX === 'number') simParallelBackgroundWait(SIM_LANE_NAVX);
+    _navNext.nav = null; _navNext.pools = [null, null];
+    _navFieldsHeader();
 }
 
 // The current build of a profile, made now when there is none (the map's
@@ -743,10 +981,13 @@ function navEnsure(profile) {
     return nav;
 }
 function navReset() {
-    // (A build's background stage: finished, its result dropped.)
-    if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait();
+    // (A build's background stage, the fields' jobs: finished, dropped.)
+    if (typeof simParallelBackgroundWait === 'function') { simParallelBackgroundWait(); if (typeof SIM_LANE_NAV === 'number') simParallelBackgroundWait(SIM_LANE_NAV); }
+    _navFieldsJob.slots = null;
+    if (_navNext.nav) _navNextDrop();
     for (const F of _navFields.pools) {
         if (F.meta) for (const s of F.byKey.values()) { F.meta[s * NAV_FIELD_META] = -1; F.meta[s * NAV_FIELD_META + 6]++; F.free.push(s); }
+        F.rowSrc = new Map();
         F.byKey = new Map(); F.pending = []; F.remake = null;
     }
     _navFields.flushedTick = -1;
@@ -993,8 +1234,8 @@ function navPathTo(u, tx, ty) {
 
 // Walls changed: the ground navigation is built again, spread over ticks
 // on every peer alike (navTick): the walls are copied at the start, the
-// heavy stages (the local fields, then the parts and the destination
-// fields in use) run a slice a tick on the helpers, and the build is
+// heavy stages (the local fields, then the parts, then the destination
+// fields in use: _navNext) run on the helpers between ticks, and the build is
 // installed NAV_BUILD_TICKS after its start whatever the machine. Units
 // follow the old one meanwhile (the kernel checks walls as they go). A new
 // build starts once the last is installed, when the walls differ from the
@@ -1003,7 +1244,7 @@ function navPathTo(u, tx, ty) {
 // (Long enough for the helpers to finish each background stage between the
 // tick's own jobs: a collect that waits would stall the tick.)
 const NAV_BUILD_SLICES = 64;
-const NAV_BUILD_TICKS = 2 * NAV_BUILD_SLICES + 4;
+const NAV_BUILD_TICKS = 2 * NAV_BUILD_SLICES + 4 + NAV_SWAP_TICKS;
 let _navJob = null, _navWallDiff = 0;
 // Tiles whose walls differ from those of the newest build (the one being
 // made, else the installed one).
@@ -1035,9 +1276,11 @@ function navTick() {
 // Step 0 copies the walls, 1 makes the costs and nodes and starts the local
 // fields in the background (the helpers between the tick's other jobs), S+2
 // collects them and makes the graph, then starts the parts in the
-// background, 2S+3 collects them and installs the build. The steps' ticks are
-// those of the build's start alone: when the helpers finish never changes
-// what any peer does (a collect waits, or runs what is left itself).
+// background, 2S+3 collects them and opens the build's window (its fields
+// made in the background, see _navNext), 2S+3+NAV_SWAP_TICKS installs both.
+// The steps' ticks are those of the build's start alone: when the helpers
+// finish never changes what any peer does (a collect waits, or runs what is
+// left itself).
 function _navJobStep(J, step) {
     const S = NAV_BUILD_SLICES;
     if (step === 0) {
@@ -1053,8 +1296,11 @@ function _navJobStep(J, step) {
     } else if (step === 2 * S + 3) {
         navBuildCollect();
         navBuildPartsFinish(J.b);
+        J.next = navBuildFinish(J.b);
+        _navNextStage(J.next);
+    } else if (step === 2 * S + 3 + NAV_SWAP_TICKS) {
         _navJob = null;
-        navPublish(navBuildFinish(J.b));
+        _navNextInstall(J.next);
     }
 }
 // Snapshots: the walls of the installed ground build and of one being made,
@@ -1082,7 +1328,7 @@ function navRestoreState(st) {
         if (st.job.walls) {
             const w = walls(st.job.walls);
             // (Steps below `step` ran on the snapshot's peer.)
-            const upTo = Math.min(Number(st.job.step) || 1, 2 * NAV_BUILD_SLICES + 3);
+            const upTo = Math.min(Number(st.job.step) || 1, 2 * NAV_BUILD_SLICES + 3 + NAV_SWAP_TICKS);
             J.b = navBuildStart(NAV_PROFILE_GROUND, w, true, GRID_W, GRID_H);
             J.step = 1;
             for (; J.step < upTo; J.step++) _navJobStep(J, J.step);

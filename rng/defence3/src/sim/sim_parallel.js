@@ -31,7 +31,7 @@ const SIM_PAR_GEN = 0, SIM_PAR_KERNEL = 1, SIM_PAR_NEXT = 2, SIM_PAR_TOTAL = 3, 
 // the next one, so a pipeline runs to its end on the helpers. A lane is
 // rewritten only once closed and empty (no claim in flight), so a late
 // claim can never run a chunk of the next job.
-const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 8;
+const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 10;
 const SIM_PAR_BG_ID = 5, SIM_PAR_BG_READERS = 6, SIM_PAR_BG_STAGE = 7, SIM_PAR_BG_STAGES = 24;
 // (Control words: SIM_PAR_BG_BASE + lanes * 8, rounded up.)
 const SIM_PAR_CTL_WORDS = 128;
@@ -48,9 +48,12 @@ const SIM_PAR_CTL_WORDS = 128;
 // the state hash and the time between ticks run; chunk.js
 // spatialIndexPrebuild). SIM_LANE_BUILD: tables made once in a while and
 // taken when done (the area range boxes of a new layout, path regions),
-// never waited for by the tick's own work.
-const SIM_LANE_TICK = 0, SIM_LANE_LONG = 1, SIM_LANE_T10 = 2, SIM_LANE_T5 = 3, SIM_LANE_T1 = 4, SIM_LANE_T05 = 5, SIM_LANE_IX = 6, SIM_LANE_BUILD = 7;
-const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_IX, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_T1, SIM_LANE_T05, SIM_LANE_BUILD, SIM_LANE_LONG];
+// never waited for by the tick's own work. SIM_LANE_NAV: the navigation's
+// destination fields asked for in a tick, made by the next tick's flush
+// (flownav.js navFieldsFlush). SIM_LANE_NAVX: every live field over a new
+// navigation build, before it is installed (flownav.js _navNextStage).
+const SIM_LANE_TICK = 0, SIM_LANE_LONG = 1, SIM_LANE_T10 = 2, SIM_LANE_T5 = 3, SIM_LANE_T1 = 4, SIM_LANE_T05 = 5, SIM_LANE_IX = 6, SIM_LANE_BUILD = 7, SIM_LANE_NAV = 8, SIM_LANE_NAVX = 9;
+const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_IX, SIM_LANE_NAV, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_T1, SIM_LANE_T05, SIM_LANE_NAVX, SIM_LANE_BUILD, SIM_LANE_LONG];
 
 // A typed array in shared memory when helpers may use it.
 function simSharedArray(Type, n) {
@@ -1110,10 +1113,13 @@ function _simMoveFlow(R, P, s0, end, Q, n, C) {
         const prof = (f & 32) !== 0 ? 1 : 0, WL = prof ? AIRW : WALL;
         const fid = FLOWC[s], wide = fid >= 4194304, did = wide ? fid - 4194304 : fid, dm = did * 8;
         const FMETA = wide ? FMW : FMN, FPOOL = wide ? FPW : FPN;
-        // (Its field: the slot as armed, made.)
-        if (!(fid >= 0) || !FMETA || FMETA[dm + 6] !== MFGEN[s] || FMETA[dm + 1] !== dk || FMETA[dm + 7] !== 1) { ON[s] = 0; continue; }
-        // Its route starts next tick (asked for after this tick's flush).
+        // (Its field: the slot as armed; made by its ready tick.)
+        if (!(fid >= 0) || !FMETA || FMETA[dm + 6] !== MFGEN[s] || FMETA[dm + 1] !== dk) { ON[s] = 0; continue; }
+        // Its route starts at its ready tick (its field made in the
+        // background meanwhile; made already on a peer that restored it:
+        // the same either way).
         if (t < RDY[s]) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
+        if (FMETA[dm + 7] !== 1) { ON[s] = 0; continue; }
         // Between its steers: on along its committed step (see
         // SIM_STEER_TICKS); on its destination tile, Unit.update arrives.
         // (After the field's checks: a field made again or dropped hands
