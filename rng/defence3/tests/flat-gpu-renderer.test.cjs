@@ -109,7 +109,7 @@ assert.equal(clears,3,'disappearing content clears exactly once');
 const begin=source.indexOf('function processRenderFrame('),end=source.indexOf('\nfunction ',begin+1);
 let worldDraws=0,mode='2d',received;
 const pipeline=vm.createContext({ctx:{setTransform(){}},canvas:{},bgCtx:{},minimapCtx:{},window:{devicePixelRatio:1},
-    renderDimensionMode:mode,_tickAccumulator:0,_frameSimLeadMs:0,TICK_MS:50,tickAlpha:0,
+    renderDimensionMode:mode,_tickAccumulator:0,_frameSimLeadMs:0,TICK_MS:50,tickAlpha:0,netSimulationTickMs:()=>50,
     _fpsFrameCount:0,_fpsLastTime:0,_buildMenuRefreshCounter:0,_minimapRefreshCounter:0,_backgroundCacheRefreshCounter:0,
     updateVisibilityHistory(){},updateCamera(){},graphicsOptions:{},ensure3DRendererInitialized:()=>({setGraphicsOptions(){},render(s){received=s;}}),
     build3DFrameData:flat2d=>({flat2d}),draw(){worldDraws++;},drawMinimap(){},drawInteractionOverlay(){},
