@@ -7,11 +7,19 @@
 // once by SIM_KERNEL_STATUS (see statusPrepassRun in unit.js).
 const SIM_UNIT_STATUS_COLUMNS = ['teleportHideTicks', 'burning', 'burnTickDamage', 'poisoned', 'poisonTickDamage',
     'frozen', 'iceTickDamage', 'wet', 'sandy', 'watched', 'workerTransferCooldown'];
+// The timers among them that SIM_KERNEL_STATUS runs only for units flagged
+// stOn (the damage values matter only while their timer runs).
+const SIM_STATUS_TIMER_COLUMNS = ['teleportHideTicks', 'burning', 'poisoned', 'frozen', 'wet', 'sandy', 'watched'];
 // Stacks and levels (the effective-stats kernel, SIM_KERNEL_EFF_UNITS):
 // NaN stands for a field not set (its accessor reads undefined).
 const SIM_UNIT_LEVEL_COLUMNS = ['stackCount', 'unitLevel', 'baseLevel', 'effectiveStacks', 'effectiveLevel', '_lastAppliedEffectiveLevel'];
 const SIM_UNIT_COLUMNS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy',
     'energy', 'r', 'collisionR', 'pathIndex', 'commandState', 'attackTimer', 'attackFlash', ...SIM_UNIT_STATUS_COLUMNS, ...SIM_UNIT_LEVEL_COLUMNS];
+// Columns holding whole numbers only (ids, owners, commands, tick counts):
+// 32-bit integers, half the memory traffic of the kernels that read them
+// (the rest Float64: fractions, and NaN for "not set" in the level columns).
+const SIM_UNIT_INT_COLUMNS = new Set(['id', 'owner', 'commandState', 'attackFlash', 'teleportHideTicks', 'burning', 'poisoned', 'frozen', 'wet', 'sandy', 'watched', 'workerTransferCooldown']);
+function _simUnitColumnType(k) { return SIM_UNIT_INT_COLUMNS.has(k) ? Int32Array : Float64Array; }
 // Read and written through prototype accessors: the columns are the state
 // (the movement kernel moves units without touching their objects).
 const SIM_UNIT_ACCESSOR_COLUMNS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', 'pathIndex', 'commandState', 'attackTimer', 'attackFlash', ...SIM_UNIT_STATUS_COLUMNS, ...SIM_UNIT_LEVEL_COLUMNS];
@@ -118,6 +126,12 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['stEv', Uint8Array, 1], ['stDot', Float64Array, 1],
     // Damage over time dealt since its last report (SIM_KERNEL_STATUS).
     ['stAcc', Float64Array, 1],
+    // 1 while one of its status timers (SIM_STATUS_TIMER_COLUMNS) may run:
+    // set by their accessors (and at a slot's start, a restore), cleared by
+    // SIM_KERNEL_STATUS when all are out; the kernel looks at the timers of
+    // these units only (a dozen columns of every unit a tick were most of
+    // its cost).
+    ['stOn', Uint8Array, 1],
     // Dead at the unit pass's start (written by SIM_KERNEL_MOVE for every
     // slot): what decisions in the pass go by (_unitTickDead).
     ['dead0', Uint8Array, 1],
@@ -227,7 +241,7 @@ function simUnitStateAllocate(u) {
     if (s >= S.cap) {
         const cap = Math.max(1024, S.cap * 2);
         for (const k of SIM_UNIT_COLUMNS) {
-            const a = simSharedArray(Float64Array, cap);
+            const a = simSharedArray(_simUnitColumnType(k), cap);
             if (S.columns[k]) a.set(S.columns[k]);
             S.columns[k] = a;
             simParallelBind('unit.' + k, a);
@@ -250,7 +264,7 @@ function simUnitStateAllocate(u) {
     }
     S.sepKey[s] = SIM_SEP_ABSENT;
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNavT[s] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
-    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = 0; S.columns.lzAcc[s] = 0; S.columns.sepCx[s] = 0; S.columns.sepCy[s] = 0; S.columns.esVer[s] = -1;
+    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = 0; S.columns.stOn[s] = 1; S.columns.lzAcc[s] = 0; S.columns.sepCx[s] = 0; S.columns.sepCy[s] = 0; S.columns.esVer[s] = -1;
     for (const k of SIM_UNIT_LEVEL_COLUMNS) S.columns[k][s] = NaN;
     for (const k in SIM_SPATIAL_DEFAULTS) S.columns[k][s] = SIM_SPATIAL_DEFAULTS[k];
     S.owners[s] = u;
@@ -320,7 +334,7 @@ function simUnitStateCompact() {
     while (cap < live * 1.25) cap *= 2;
     const N = { cap, owners: [], free: [], columns: _simUnitColumnsObject(), stamp: new Uint32Array(cap), epoch: 0, unitsRef: units };
     const C = N.columns;
-    for (const k of SIM_UNIT_COLUMNS) C[k] = simSharedArray(Float64Array, cap);
+    for (const k of SIM_UNIT_COLUMNS) C[k] = simSharedArray(_simUnitColumnType(k), cap);
     for (const [k, Type, per] of SIM_MOVE_COLUMNS) C[k] = simSharedArray(Type, cap * per);
     N.sepKey = simSharedArray(Uint32Array, cap); N.sepLayer = simSharedArray(Uint8Array, cap);
     N.sepKey.fill(SIM_SEP_ABSENT); C.sepKey = N.sepKey;

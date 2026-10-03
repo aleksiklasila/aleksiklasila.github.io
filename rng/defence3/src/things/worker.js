@@ -3877,9 +3877,17 @@ function _workerReturnPath(u) {
 }
 
 
+// Orders that mean the same given to their units in parts: one with more
+// units than an action may carry (ACTION_MAX_UNIT_IDS, main.js; the rest
+// would be dropped) goes as several.
+const ACTION_SPLIT_BY_UNITS = new Set(['move', 'attackMove', 'attack', 'attackBuilding', 'stop', 'hold']);
 function queueAction(action) {
     if (localDefeated && action && action.action !== 'resign') return;
     if (gameOver) return;
+    if (action && Array.isArray(action.unitIds) && typeof ACTION_MAX_UNIT_IDS === 'number' && action.unitIds.length > ACTION_MAX_UNIT_IDS && ACTION_SPLIT_BY_UNITS.has(action.action)) {
+        for (let i = 0; i < action.unitIds.length; i += ACTION_MAX_UNIT_IDS) queueAction({ ...action, unitIds: action.unitIds.slice(i, i + ACTION_MAX_UNIT_IDS) });
+        return;
+    }
     // Just joined and still catching up: sent once the host counts us in.
     if (isMultiplayer && gameStarted && resyncGuestHoldAction(action)) return;
     if (isMultiplayer && gameStarted && !isHost && !netGetHostConnection()) {

@@ -504,6 +504,9 @@ function getAreaRangeTileBox(sources, distance) {
     for (let k = 0; k < sources.length; k++) {
         let aId = sources[k], o = aId * 4;
         if (!(aId >= 0 && o < row.length)) continue;
+        // (The movement kernels' table, made for the whole layout on the
+        // helpers, holds the same boxes: unit.js simMoveAreaBoxRead.)
+        if (row[o + 2] < 0 && typeof simMoveAreaBoxRead === 'function') simMoveAreaBoxRead(aId, dist, row, o);
         if (row[o + 2] < 0) {
             let x0 = GRID_W, y0 = GRID_H, x1 = -1, y1 = -1;
             for (let id of getAreaIdsWithinDistance(aId, dist)) {

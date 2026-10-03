@@ -407,7 +407,9 @@ let _nav = [null, null];
 // dropped by a staggered sweep (memory only); every field is made again
 // when a new build is installed; a restore makes those of every route
 // (navFieldsRestore).
-const NAV_FIELD_META = 8, NAV_FIELD_SWEEP_TICKS = 64, NAV_WIDE_BASE = 1 << 22;
+// (The sweep over 128 ticks: at 64 its share of the units' objects cost ~1.3
+// ms a tick at 200k.)
+const NAV_FIELD_META = 8, NAV_FIELD_SWEEP_TICKS = 128, NAV_WIDE_BASE = 1 << 22;
 function _navNewPool(wide) { return { wide, span: 0, C: 0, cap: 0, pool: null, meta: null, byKey: new Map(), free: [], pending: [], seen: null }; }
 const _navFields = { pools: [_navNewPool(false), _navNewPool(true)], seenCycle: 0, flushedTick: -1 };
 function _navFieldKey(profile, dest) { return profile * 16777216 + dest; }
@@ -733,7 +735,9 @@ function navWallChanged(t, was, now) {
     if (now !== w[t]) _navWallDiff++;
 }
 function navTick() {
-    if (!_nav[NAV_PROFILE_GROUND]) return;
+    // (The map's first builds at its first tick, not at the first order:
+    // on a big map that build takes long.)
+    if (!_nav[NAV_PROFILE_GROUND]) { navEnsure(NAV_PROFILE_GROUND); navEnsure(NAV_PROFILE_AIR); return; }
     if (!_navJob) {
         if (_navWallDiff <= 0) return;
         _navJob = { start: gameTime, step: 0, b: null, dests: null, destNew: null };

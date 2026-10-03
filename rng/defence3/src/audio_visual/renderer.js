@@ -3988,11 +3988,12 @@ function visWindowZone(wx, wy) {
 }
 
 // The sweeps are a safety net behind the hooks (every change is applied
-// where it happens): buildings over 64 ticks, units over 256 (a share of
-// each a tick, by list position: the same on every peer).
-const VIS_COVER_SWEEP_TICKS = 64;
+// where it happens): buildings over 128 ticks, units over 512 (a share of
+// each a tick, by list position: the same on every peer; at 64/256 they
+// cost ~1.5 ms a tick with 200k units and 35k buildings).
+const VIS_COVER_SWEEP_TICKS = 128;
 // Units' parameters (their range mostly: level and research changes).
-const VIS_COVER_UNIT_SWEEP_TICKS = 256;
+const VIS_COVER_UNIT_SWEEP_TICKS = 512;
 
 // Brings one source's registration up to date with the world (a unit: its
 // parameters, _visCoverSyncUnit). Buildings are live while on their tile,

@@ -285,12 +285,24 @@ function spatialIndexPrebuild() {
     const slots = _unitSlotMapEnsure();
     simParallelBind('ix.slots', slots); simParallelBind('ix.agrid', _spatialAreaGridFlat());
     simParallelBind('sep.eslot', _sxESlot); simParallelBind('sep.ekey', _sxEKey);
+    _spatialEntryIds();
     simParallelBind('spatial.keys.1', X.keys);
     const ep = _sxEpoch + 1, UJ = 8192, uj = Math.ceil(n / UJ);
     const base = [n, UJ, nChunks, A, players, SIM_SEP_ABSENT, Math.ceil(nChunks / 65536), 65536, 16384, TILE, GRID_W, GRID_H, CHUNK_SIZE, CHUNKS_W, 0, ep];
-    const order = simSpatialStableOrderStages(n, nChunks, 1);
-    simParallelBind('ix.ordC', order.out);
-    const stages = [[SIM_KERNEL_INDEX_KEYS, uj, base], ...order.stages, [SIM_KERNEL_INDEX_FILL, uj, base], [SIM_KERNEL_INDEX_RUNS, uj, base]];
+    // The order: merged from the index in use (its entries by slot, in key
+    // order: a parallel build's) when there is one (SIM_KERNEL_INDEX_MERGE:
+    // most units keep their chunk from one tick to the next), else sorted.
+    let sortStages;
+    if (SPATIAL_INDEX_MERGE && typeof SIM_KERNEL_INDEX_MERGE === 'number' && X.mergeOk && _sxBySlot && !_sxDirty) {
+        _spatialMergeArrays(X, n);
+        simParallelBind('ix.ordC', X.ordM);
+        sortStages = [[SIM_KERNEL_INDEX_MERGE, 1, [n, _sxListed, nChunks, ep]]];
+    } else {
+        const order = simSpatialStableOrderStages(n, nChunks, 1);
+        simParallelBind('ix.ordC', order.out);
+        sortStages = order.stages;
+    }
+    const stages = [[SIM_KERNEL_INDEX_KEYS, uj, base], ...sortStages, [SIM_KERNEL_INDEX_FILL, uj, base], [SIM_KERNEL_INDEX_RUNS, uj, base]];
     // (The owners per tile, for the next tick's combat scan, from it.)
     const OM = typeof _combatScanOwnerMask !== 'undefined' ? _combatScanOwnerMask : null, masks = !!OM && OM.length === nChunks;
     if (masks) { simParallelBind('ix.omask', OM); stages.push([SIM_KERNEL_TILE_OWNERS, uj, [n, UJ, 1]]); }
@@ -329,6 +341,7 @@ function _spatialIndexCollect() {
     _sxListed = X.listed[0];
     _sxBySlot = true;
     _sxTaken = true;
+    X.mergeOk = true;
     if (J.masks) _sxOwnerMaskEpoch = J.ep;
 }
 // (The index epoch the owners per tile were made for: see combatScanRun.)
@@ -376,6 +389,7 @@ function _spatialIndexRebuildParallel() {
     }
     if (_sxESlot.length < n) { _sxESlot = simSharedArray(Int32Array, Math.max(1024, n * 2)); _sxEKey = simSharedArray(Int32Array, Math.max(1024, n * 2)); }
     simParallelBind('sep.eslot', _sxESlot); simParallelBind('sep.ekey', _sxEKey);
+    _spatialEntryIds();
     const slots = _unitSlotMapEnsure();
     simParallelBind('ix.slots', slots);
     simParallelBind('ix.agrid', _spatialAreaGridFlat());
@@ -411,11 +425,26 @@ function _spatialIndexRebuildParallel() {
     }
     _sxListed = X.listed[0];
     _sxBySlot = true;
+    X.mergeOk = true;
     return true;
 }
+// The incremental index order (SIM_KERNEL_INDEX_MERGE) in the prebuild;
+// false: every build sorts (both give the same index).
+let SPATIAL_INDEX_MERGE = true;
+function _spatialMergeArrays(X, n) {
+    const S = _simUnitState, slotsCap = S ? S.cap : 0;
+    if (!X.ordM || X.ordM.length < n) { X.ordM = simSharedArray(Int32Array, Math.max(4096, n * 2)); X.kept = simSharedArray(Int32Array, X.ordM.length); X.chg = simSharedArray(Float64Array, X.ordM.length); simParallelBind('ix.kept', X.kept); simParallelBind('ix.chg', X.chg); }
+    if (!X.inv || X.inv.length < slotsCap) { X.inv = simSharedArray(Int32Array, Math.max(4096, slotsCap)); X.invStamp = simSharedArray(Int32Array, X.inv.length); simParallelBind('ix.inv', X.inv); simParallelBind('ix.invStamp', X.invStamp); }
+}
+// Per entry its unit's id (SIM_KERNEL_INDEX_FILL), sized with the entries.
+function _spatialEntryIds() {
+    if (!_sxEId || _sxEId.length !== _sxESlot.length) { _sxEId = simSharedArray(Int32Array, _sxESlot.length); simParallelBind('ix.eid', _sxEId); if (_sxPar) _sxPar.mergeOk = false; }
+}
+let _sxEId = null;
 function _spatialIndexRebuildSerial() {
     const nChunks = CHUNKS_W * CHUNKS_H, n = units.length, players = spatialUnitsComplexPlayerCount;
     _sxBySlot = false;
+    if (_sxPar) _sxPar.mergeOk = false;
     if (_sxPar) {
         // Back from the parallel build: arrays of its own.
         _sxPar = null; _sxStamp = new Int32Array(0); _sxAreaCap = 0;
