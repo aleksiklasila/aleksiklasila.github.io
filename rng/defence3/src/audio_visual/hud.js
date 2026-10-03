@@ -960,12 +960,9 @@ function _getOwnedInfoPanelBuildings(owner) {
     for (let b of barracks) tryAdd(b);
     for (let s of collectorSpawners) tryAdd(s);
 
-    for (let y = 0; y < GRID_H; y++) {
-        for (let x = 0; x < GRID_W; x++) {
-            let cell = grid[y] && grid[y][x];
-            if (!cell || cell.owner !== owner || !cell.item) continue;
-            tryAdd(cell.item);
-        }
+    for (const item of getCellItemsRowMajor()) {
+        const cell = grid[item.gy] && grid[item.gy][item.gx];
+        if (cell && cell.owner === owner && cell.item === item) tryAdd(item);
     }
     return out;
 }

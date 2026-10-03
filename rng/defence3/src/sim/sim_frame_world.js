@@ -138,7 +138,7 @@ function _simWriteStructure(F, s, e, kind, tick) {
         | (Number.isFinite(e.rallyX) && Number.isFinite(e.rallyY) ? SIM_SF_RALLY : 0) | (task ? SIM_SF_RESEARCH_TASK : 0)
         | (e.autoStackEnabled ? SIM_SF_AUTO_STACK : 0);
     // The level label, when its inputs change or on its staggered tick.
-    if (kind <= 3) {
+    if (kind <= 3 && units.length < 5000) {
         let key = F.level[s] * 7919 + F.elevel[s] * 131 + F.stacks[s] * 17 + F.mstacks[s] * 3 + F.estacks[s] + (e.underConstruction ? 0.5 : 0);
         if (e._simLabelKey !== key || ((tick + s) % SIM_STRUCT_LABEL_TICKS) === 0 || e._simLabel === undefined) {
             e._simLabelKey = key;

@@ -110,7 +110,26 @@ function _bbCollectThings(owner) {
         info.count++;
         if (idle) info.idle++;
     };
-    for (let u of units) {
+    const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    if (F) {
+        // Reduce by type over the published columns, without PageUnit getters
+        // or per-unit strings/objects. The bottom bar is a summary, not a path query.
+        const counts = new Map();
+        for (let i = 0; i < F.count; i++) {
+            const s = F.order[i];
+            if (F.owner[s] !== owner || F.energy[s] <= 0) continue;
+            const type = F.type[s];
+            let n = counts.get(type);
+            if (!n) counts.set(type, n = [0, 0]);
+            n[0]++;
+            if ((F.flags[s] & 8) || (F.wtype[s] ? _pageFrameStrings[F.wstate[s]] === 'IDLE' : F.cmd[s] === CMD_IDLE)) n[1]++;
+        }
+        for (const [type, n] of counts) {
+            const key = _pageFrameStrings[type]; if (!key) continue;
+            const id = 'unit:' + key;
+            map.set(id, {id,kind:'unit',key,isUnit:true,count:n[0],idle:n[1]});
+        }
+    } else for (let u of units) {
         if (!u || u.dead || u.owner !== owner) continue;
         add('unit', String(u.unitType || ''), _isInfoPanelUnitIdleLike(u));
     }
@@ -338,7 +357,10 @@ function updateBottomBar(now) {
     if (now - bb.lastRefresh < BB_REFRESH_MS) return;
     bb.lastRefresh = now;
 
-    bb.things = _bbCollectThings(localPlayerId);
+    if (bb.thingsTick !== gameTime || bb.thingsOwner !== localPlayerId || bb.thingsUnits !== units || bb.thingsGrid !== grid) {
+        bb.things = _bbCollectThings(localPlayerId);
+        bb.thingsTick = gameTime; bb.thingsOwner = localPlayerId; bb.thingsUnits = units; bb.thingsGrid = grid;
+    }
     _bbSyncOrder(bb.things);
     bb.rates = _bbComputeRates(localPlayerId);
     _bbRenderTotals();

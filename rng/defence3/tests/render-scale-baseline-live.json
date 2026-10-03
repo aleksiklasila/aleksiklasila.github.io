@@ -1,0 +1,423 @@
+{
+  "ref": "working-tree",
+  "fixture": "100000-1000.json",
+  "setup": {
+    "units": 200000,
+    "towers": 400,
+    "barracks": 7392,
+    "spawners": 5508,
+    "map": 1000
+  },
+  "info": {
+    "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 2060 (0x00001F15) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "zoom": 0.02965625,
+    "settings": {
+      "aa": "msaa",
+      "shadows": "high",
+      "ao": "low",
+      "outline": true,
+      "bloom": false,
+      "grade": true,
+      "sharpen": true,
+      "resolution": 1
+    },
+    "sim": {
+      "enabled": true,
+      "loaded": true,
+      "active": true,
+      "helpers": 7,
+      "shared": true,
+      "epoch": 2,
+      "appliedTick": 10,
+      "inFlight": 2,
+      "heals": 0,
+      "dropped": 0,
+      "errors": [],
+      "firstDiff": null,
+      "rowsPerTick": 0,
+      "rowsPerTickByList": {},
+      "applyMs": {
+        "mean": 18.01,
+        "p95": 91.03
+      },
+      "workerSimMs": {
+        "mean": 295.81,
+        "p95": 2562.96
+      },
+      "workerEncodeMs": {
+        "mean": 460.65,
+        "p95": 522.89
+      },
+      "latencyMs": {
+        "mean": 4608.71,
+        "p95": 21428.82,
+        "shown": 148
+      }
+    },
+    "start": 47161.86500000954,
+    "tick": 13
+  },
+  "results": {
+    "phases": {
+      "build3DFrameData": {
+        "n": 322,
+        "ms": 1121.7449991703033,
+        "max": 57.890000104904175
+      },
+      "gpuSubmit": {
+        "n": 322,
+        "ms": 585.9099969863892,
+        "max": 230.9649999141693
+      },
+      "drawMinimap": {
+        "n": 322,
+        "ms": 3892.7800006866455,
+        "max": 117.95499992370605
+      },
+      "updateHUD": {
+        "n": 322,
+        "ms": 23.085002660751343,
+        "max": 0.19500017166137695
+      },
+      "updateControlGroupBar": {
+        "n": 330,
+        "ms": 26.26499915122986,
+        "max": 0.690000057220459
+      },
+      "updateBottomBar": {
+        "n": 322,
+        "ms": 2404.0149989128113,
+        "max": 78.24499988555908
+      },
+      "processRenderFrame": {
+        "n": 322,
+        "ms": 8586.674999952316,
+        "max": 360.62999987602234
+      },
+      "_simClientApplyFrame": {
+        "n": 24,
+        "ms": 9.050000667572021,
+        "max": 7.644999980926514
+      },
+      "updateAudioReactiveState": {
+        "n": 24,
+        "ms": 0.5699999332427979,
+        "max": 0.08000016212463379
+      },
+      "updateVisualVisibility": {
+        "n": 24,
+        "ms": 0.04500079154968262,
+        "max": 0.005000114440917969
+      },
+      "_simClientPageTickWork": {
+        "n": 24,
+        "ms": 53.94000053405762,
+        "max": 50.53999996185303
+      },
+      "commitStaticCaches": {
+        "n": 22,
+        "ms": 0.08000016212463379,
+        "max": 0.014999866485595703
+      },
+      "sampleGameStats": {
+        "n": 1,
+        "ms": 50.27999997138977,
+        "max": 50.27999997138977
+      }
+    },
+    "sim": {
+      "enabled": true,
+      "loaded": true,
+      "active": true,
+      "helpers": 7,
+      "shared": true,
+      "epoch": 2,
+      "appliedTick": 34,
+      "inFlight": 2,
+      "heals": 0,
+      "dropped": 0,
+      "errors": [],
+      "firstDiff": null,
+      "rowsPerTick": 0,
+      "rowsPerTickByList": {},
+      "applyMs": {
+        "mean": 13.83,
+        "p95": 64.4
+      },
+      "workerSimMs": {
+        "mean": 108.48,
+        "p95": 191.93
+      },
+      "workerEncodeMs": {
+        "mean": 422.41,
+        "p95": 510.42
+      },
+      "latencyMs": {
+        "mean": 2029.47,
+        "p95": 20830.06,
+        "shown": 150
+      }
+    },
+    "fps": 38,
+    "tps": 2,
+    "end": 58661.25999999046,
+    "tick": 37,
+    "scale": [
+      {
+        "count": 35626,
+        "bytes": 3145728,
+        "upload": 0
+      },
+      {
+        "count": 200000,
+        "bytes": 12582912,
+        "upload": 0
+      }
+    ],
+    "hot": [
+      {
+        "fn": "(idle)",
+        "url": "",
+        "line": 0,
+        "ms": 1305.884
+      },
+      {
+        "fn": "_bbCollectThings",
+        "url": "http://127.0.0.1:59624/src/audio_visual/bottom_bar.js?v=20260930-deltacolor",
+        "line": 100,
+        "ms": 1238.369
+      },
+      {
+        "fn": "(program)",
+        "url": "",
+        "line": 0,
+        "ms": 1193.088
+      },
+      {
+        "fn": "_col",
+        "url": "http://127.0.0.1:59624/src/sim/sim_frame.js?v=20261008-a",
+        "line": 342,
+        "ms": 1043.266
+      },
+      {
+        "fn": "drawMinimap",
+        "url": "http://127.0.0.1:59624/src/audio_visual/renderer.js?v=20261007-a",
+        "line": 3480,
+        "ms": 878.614
+      },
+      {
+        "fn": "get x",
+        "url": "http://127.0.0.1:59624/src/sim/sim_frame.js?v=20261008-a",
+        "line": 361,
+        "ms": 702.341
+      },
+      {
+        "fn": "buildScaleFrameData",
+        "url": "http://127.0.0.1:59624/src/audio_visual/renderer.js?v=20261007-a",
+        "line": 2272,
+        "ms": 635.032
+      },
+      {
+        "fn": "_getOwnedInfoPanelBuildings",
+        "url": "http://127.0.0.1:59624/src/audio_visual/hud.js?v=20261001-slide2",
+        "line": 946,
+        "ms": 481.842
+      },
+      {
+        "fn": "_col",
+        "url": "http://127.0.0.1:59624/src/sim/sim_frame.js?v=20261008-a",
+        "line": 342,
+        "ms": 456.764
+      },
+      {
+        "fn": "_col",
+        "url": "http://127.0.0.1:59624/src/sim/sim_frame.js?v=20261008-a",
+        "line": 342,
+        "ms": 449.823
+      },
+      {
+        "fn": "_isInfoPanelUnitIdleLike",
+        "url": "http://127.0.0.1:59624/src/audio_visual/hud.js?v=20261001-slide2",
+        "line": 922,
+        "ms": 350.036
+      },
+      {
+        "fn": "_simClientApplyWorld",
+        "url": "http://127.0.0.1:59624/src/sim/sim_client.js?v=20261018-a",
+        "line": 333,
+        "ms": 228.65
+      },
+      {
+        "fn": "upload",
+        "url": "http://127.0.0.1:59624/src/audio_visual/renderer3d.js?v=20261004-a",
+        "line": 112,
+        "ms": 218.269
+      },
+      {
+        "fn": "push",
+        "url": "http://127.0.0.1:59624/src/audio_visual/renderer.js?v=20261007-a",
+        "line": 2291,
+        "ms": 174.397
+      },
+      {
+        "fn": "window.<computed>",
+        "url": "",
+        "line": 10,
+        "ms": 142.291
+      },
+      {
+        "fn": "_isInfoPanelUnitIdleLike",
+        "url": "http://127.0.0.1:59624/src/audio_visual/hud.js?v=20261001-slide2",
+        "line": 922,
+        "ms": 139.149
+      },
+      {
+        "fn": "updateBottomBar",
+        "url": "http://127.0.0.1:59624/src/audio_visual/bottom_bar.js?v=20260930-deltacolor",
+        "line": 327,
+        "ms": 112.401
+      },
+      {
+        "fn": "_getOwnedInfoPanelBuildings",
+        "url": "http://127.0.0.1:59624/src/audio_visual/hud.js?v=20261001-slide2",
+        "line": 946,
+        "ms": 101.923
+      },
+      {
+        "fn": "buildInfoPanelIdleWorkersHtml",
+        "url": "http://127.0.0.1:59624/src/audio_visual/hud.js?v=20261001-slide2",
+        "line": 1099,
+        "ms": 88.139
+      },
+      {
+        "fn": "_getOwnedInfoPanelUnits",
+        "url": "http://127.0.0.1:59624/src/audio_visual/hud.js?v=20261001-slide2",
+        "line": 930,
+        "ms": 86.483
+      },
+      {
+        "fn": "build3DFrameData",
+        "url": "http://127.0.0.1:59624/src/audio_visual/renderer.js?v=20261007-a",
+        "line": 2390,
+        "ms": 56.849
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:59624/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 333,
+        "ms": 48.361
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:59624/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 281,
+        "ms": 41.873
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:59624/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 286,
+        "ms": 37.591
+      },
+      {
+        "fn": "colorFor",
+        "url": "http://127.0.0.1:59624/src/audio_visual/renderer.js?v=20261007-a",
+        "line": 2286,
+        "ms": 35.296
+      },
+      {
+        "fn": "get unitType",
+        "url": "http://127.0.0.1:59624/src/sim/sim_frame.js?v=20261008-a",
+        "line": 376,
+        "ms": 35.014
+      },
+      {
+        "fn": "get dead",
+        "url": "http://127.0.0.1:59624/src/things/unit.js?v=20261018-a",
+        "line": 640,
+        "ms": 30.674
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:59624/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 310,
+        "ms": 24.386
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:59624/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 284,
+        "ms": 24.127
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:59624/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 280,
+        "ms": 23.187
+      },
+      {
+        "fn": "(garbage collector)",
+        "url": "",
+        "line": 0,
+        "ms": 21.925
+      },
+      {
+        "fn": "flush",
+        "url": "http://127.0.0.1:59624/src/audio_visual/renderer3d.js?v=20261004-a",
+        "line": 124,
+        "ms": 21.329
+      },
+      {
+        "fn": "get y",
+        "url": "http://127.0.0.1:59624/src/sim/sim_frame.js?v=20261008-a",
+        "line": 362,
+        "ms": 20.849
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:59624/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 333,
+        "ms": 20.836
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:59624/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 283,
+        "ms": 19.73
+      },
+      {
+        "fn": "drawImage",
+        "url": "",
+        "line": 0,
+        "ms": 19.128
+      },
+      {
+        "fn": "bufferSubData",
+        "url": "",
+        "line": 0,
+        "ms": 18.446
+      },
+      {
+        "fn": "drawScaleInstances",
+        "url": "http://127.0.0.1:59624/src/audio_visual/renderer3d.js?v=20261004-a",
+        "line": 5170,
+        "ms": 18.183
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:59624/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 286,
+        "ms": 16.937
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:59624/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 310,
+        "ms": 15.15
+      }
+    ]
+  },
+  "errors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}
