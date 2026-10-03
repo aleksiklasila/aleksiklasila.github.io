@@ -5198,8 +5198,9 @@
                     layout(location=6) in float aOwner;
                     layout(location=7) in float aFlags;
                     layout(location=8) in float aAlive;
+                    layout(location=9) in float aKind;
                     uniform mat4 uViewProjection;
-                    uniform float uAlpha, uTile, uScale, uFlat;
+                    uniform float uAlpha, uTile, uScale, uFlat, uLightNorm;
                     uniform int uStructure, uFull;
                     uniform vec3 uColors[9];
                     uniform sampler2D uVisibility;
@@ -5209,8 +5210,8 @@
                         vec2 p = uStructure != 0 ? current : mix(vec2(aPX,aPZ) / uTile,current,uAlpha);
                         int flags = int(aFlags);
                         bool alive = uStructure != 0 ? aAlive > 0. : aAlive >= 0. && (flags & 1024) == 0;
-                        float light = uFull != 0 ? 1. : texelFetch(uVisibility,ivec2(current),0).r;
-                        if (!alive || aEnergy <= 0. || light <= 0.) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
+                        float light = uFull != 0 ? 1. : texelFetch(uVisibility,ivec2(current),0).r / uLightNorm;
+                        if (!alive || (aEnergy <= 0. && (uStructure == 0 || aKind < 4.)) || light <= 0.) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
                         gl_Position = uViewProjection * vec4(p.x,.02,p.y,1.);
                         float size = uStructure != 0 ? .94 : clamp(aRadius * 2.2 / uTile,.28,.9);
                         gl_PointSize = clamp(size * uScale / (uFlat > .5 ? 1. : max(.01,gl_Position.w)),1.,64.);
@@ -5228,7 +5229,7 @@
                         color = vColor;
                     }`);
                 this.columnUniforms = {};
-                for (const n of ['ViewProjection','Alpha','Tile','Scale','Flat','Structure','Full','Colors','Visibility']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
+                for (const n of ['ViewProjection','Alpha','Tile','Scale','Flat','LightNorm','Structure','Full','Colors','Visibility']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
                 this.columnStores = [{},{}];
                 this.columnVisibilityTexture = createTexture(gl);
             }
@@ -5240,8 +5241,6 @@
                 if (!this.columnVisibilityData || this.columnVisibilityData.length !== width * height) this.columnVisibilityData = new Float32Array(width * height);
                 const data = this.columnVisibilityData;
                 for (let y=0; y<height; y++) data.set(C.visibility[y],y*width);
-                // Normalization on GPU would cost a uniform; normalize through
-                // the shader below by supplying raw light with its multiplier.
                 gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
                 gl.pixelStorei(gl.UNPACK_ALIGNMENT,4);
                 if (this.columnVisibilityWidth !== width || this.columnVisibilityHeight !== height) {
@@ -5259,6 +5258,7 @@
             gl.useProgram(this.columnProgram);
             gl.uniformMatrix4fv(U.ViewProjection,false,this.tmpViewProjection);
             gl.uniform1f(U.Alpha,C.alpha);gl.uniform1f(U.Tile,C.tile);
+            gl.uniform1f(U.LightNorm,Math.max(.001,C.lightNorm));
             gl.uniform1f(U.Flat,snapshot.flat2d?1:0);
             gl.uniform1f(U.Scale,snapshot.flat2d ? this.sceneTargetSize.width / (snapshot.camera.visibleWidth * (this.cssWidth / snapshot.viewportWidth)) : this.lodProjectionScale * this.pixelRatio);
             gl.uniform1i(U.Full,C.fullVisibility?1:0);gl.uniform1i(U.Visibility,0);
@@ -5270,7 +5270,7 @@
             gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
             for (let kind=0;kind<2;kind++) {
                 const F = kind ? C.units : C.structures, S = this.columnStores[kind], structure = !kind;
-                const fields = structure ? ['x','y','x','y',null,'energy','owner','flags','alive'] : ['x','y','px','py','r','energy','owner','flags','id'];
+                const fields = structure ? ['x','y','x','y',null,'energy','owner','flags','alive','kind'] : ['x','y','px','py','r','energy','owner','flags','id',null];
                 if (!S.buffer) { S.buffer=gl.createBuffer();S.vao=gl.createVertexArray(); }
                 gl.bindVertexArray(S.vao);gl.bindBuffer(gl.ARRAY_BUFFER,S.buffer);
                 if (S.frame !== F) {

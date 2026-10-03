@@ -110,24 +110,11 @@ function _bbCollectThings(owner) {
         info.count++;
         if (idle) info.idle++;
     };
-    const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
-    if (F) {
-        // Reduce by type over the published columns, without PageUnit getters
-        // or per-unit strings/objects. The bottom bar is a summary, not a path query.
-        const counts = new Map();
-        for (let i = 0; i < F.count; i++) {
-            const s = F.order[i];
-            if (F.owner[s] !== owner || F.energy[s] <= 0) continue;
-            const type = F.type[s];
-            let n = counts.get(type);
-            if (!n) counts.set(type, n = [0, 0]);
-            n[0]++;
-            if ((F.flags[s] & 8) || (F.wtype[s] ? _pageFrameStrings[F.wstate[s]] === 'IDLE' : F.cmd[s] === CMD_IDLE)) n[1]++;
-        }
-        for (const [type, n] of counts) {
-            const key = _pageFrameStrings[type]; if (!key) continue;
+    const groups = typeof getFrameUnitSummary === 'function' ? getFrameUnitSummary(owner) : null;
+    if (groups) {
+        for (const [key, n] of groups) {
             const id = 'unit:' + key;
-            map.set(id, {id,kind:'unit',key,isUnit:true,count:n[0],idle:n[1]});
+            map.set(id, {id,kind:'unit',key,isUnit:true,count:n.total,idle:n.idle});
         }
     } else for (let u of units) {
         if (!u || u.dead || u.owner !== owner) continue;
