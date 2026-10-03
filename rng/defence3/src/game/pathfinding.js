@@ -982,12 +982,22 @@ function _getCloudTowerFast(gx, gy, owner) {
 
 // ---- Connected regions of the plain ground graph ----
 // Tiles that are not walls (and the owner's live cloud portals, joined with
-// their pair) in 4-connected regions, per owner, rebuilt when the topology
-// or the live portals change. A search whose target lies in another region
-// than its start cannot reach it: rather than exhausting the start's whole
-// region (often over several ticks of budget), it goes straight to the
-// region's tile nearest the target (see findPathAStar).
-let _pathRegions = { version: -1, w: 0, h: 0, byOwner: new Map(), nearest: new Map() };
+// their pair) in 4-connected regions, per owner. A search whose target lies
+// in another region than its start cannot reach it: rather than exhausting
+// the start's whole region (often over several ticks of budget), it goes
+// straight to the region's tile nearest the target (see findPathAStar).
+// The plain labels (no portals) are kept as walls change
+// (pathRegionsTileChanged): a tile opened joins the regions around it; a
+// tile closed is left out, and only when its open neighbours are not
+// joined around it (the ring of tiles around it, then a search in a window
+// around it) are the labels made again. An owner with live portals gets
+// the plain labels joined through its portals (each plain region mapped to
+// its root: a pass over the tiles, not a flood of the map), then kept the
+// same way (made again when its portals change or a tile with one of them
+// changes). (Region numbers may differ from a fresh build's: only which
+// tiles share a region counts, the same on every peer.) Owners without
+// live portals share the plain labels (key -1).
+let _pathRegions = { w: 0, h: 0, grid: null, portalSig: 0, portalOwners: new Set(), byOwner: new Map(), nearest: new Map(), rebuilds: 0 };
 
 function _pathRegionPortalSignature() {
     if (_cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
@@ -995,25 +1005,58 @@ function _pathRegionPortalSignature() {
     for (let [key, t] of _cloudTileCache) if (t.energy > 0 && !t.underConstruction) sig = (Math.imul(sig ^ (key + 1), 16777619) + (t.owner + 3)) | 0;
     return sig;
 }
-
+function _pathRegionFind(E, a) {
+    const P = E.parent;
+    while (P[a] !== a) { P[a] = P[P[a]]; a = P[a]; }
+    return a;
+}
 // Region label per tile (-1: not walkable) for plain ground movement of
 // `owner` (null: no portals).
 function getPathRegions(owner) {
     let R = _pathRegions;
     let portalSig = _pathRegionPortalSignature();
-    if (R.version !== pathTopologyVersion || R.w !== GRID_W || R.h !== GRID_H || R.portalSig !== portalSig) {
-        R.version = pathTopologyVersion; R.w = GRID_W; R.h = GRID_H; R.portalSig = portalSig;
+    if (R.grid !== grid || R.w !== GRID_W || R.h !== GRID_H) {
+        R.grid = grid; R.w = GRID_W; R.h = GRID_H;
         R.byOwner = new Map(); R.nearest = new Map();
     }
+    if (R.portalSig !== portalSig || !R.portalOwners) {
+        // (The plain labels stay; the owners' are made again.)
+        R.portalSig = portalSig;
+        R.portalOwners = new Set();
+        for (let t of _cloudTileCache.values()) if (t.energy > 0 && !t.underConstruction) R.portalOwners.add(t.owner);
+        for (const k of [...R.byOwner.keys()]) if (k >= 0) R.byOwner.delete(k);
+        R.nearest = new Map();
+    }
     let key = owner === null || owner === undefined ? -1 : owner;
-    let labels = R.byOwner.get(key);
-    if (labels) return labels;
+    if (key >= 0 && !R.portalOwners.has(key)) key = -1;
+    const plain = _pathRegionsPlain(R);
+    if (key < 0) return plain.labels;
+    let E = R.byOwner.get(key);
+    if (E && !E.dirty) { _pathRegionsCanon(E); return E.labels; }
+    E = _pathRegionsOwner(R, key, plain, E);
+    R.byOwner.set(key, E);
+    return E.labels;
+}
+// (Regions joined since: every label its region's root.)
+function _pathRegionsCanon(E) {
+    if (!E.canon) return;
+    const L = E.labels;
+    for (let i = 0; i < L.length; i++) if (L[i] >= 0) L[i] = _pathRegionFind(E, L[i]);
+    E.canon = false;
+}
+// The plain labels, made (a flood of the map) when missing or after a
+// possible split.
+function _pathRegionsPlain(R) {
+    let E = R.byOwner.get(-1);
+    if (E && E.dirty) { R.byOwner.delete(-1); E = null; }
+    if (E) { _pathRegionsCanon(E); return E; }
+    R.rebuilds++;
     let w = GRID_W, h = GRID_H, n = w * h;
-    labels = new Int32Array(n).fill(-1);
+    let labels = new Int32Array(n).fill(-1);
     let walk = new Uint8Array(n);
     for (let y = 0; y < h; y++) {
         let row = grid[y];
-        for (let x = 0; x < w; x++) if (row[x].type !== TYPE_WALL || (key >= 0 && _getCloudTowerFast(x, y, key))) walk[y * w + x] = 1;
+        for (let x = 0; x < w; x++) if (row[x].type !== TYPE_WALL) walk[y * w + x] = 1;
     }
     let q = new Int32Array(n), next = 0;
     for (let i = 0; i < n; i++) {
@@ -1028,24 +1071,148 @@ function getPathRegions(owner) {
             if (y < h - 1 && walk[k + w] && labels[k + w] < 0) { labels[k + w] = id; q[tail++] = k + w; }
         }
     }
-    // Paired portals join their regions (union-find, then relabel).
-    if (key >= 0 && _cloudTileCache.size) {
-        let parent = new Int32Array(next);
-        for (let i = 0; i < next; i++) parent[i] = i;
-        let find = a => { while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; } return a; };
-        for (let [tileKey, t] of _cloudTileCache) {
-            if (t.owner !== key || !(t.energy > 0 && !t.underConstruction)) continue;
-            let partner = getPairedCloudTower(t, key);
-            if (!partner) continue;
-            let a = labels[tileKey], b = labels[partner.gy * w + partner.gx];
-            if (a < 0 || b < 0) continue;
-            let ra = find(a), rb = find(b);
-            if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb);
-        }
-        for (let i = 0; i < n; i++) if (labels[i] >= 0) labels[i] = find(labels[i]);
+    E = { key: -1, labels, parent: new Int32Array(Math.max(64, next * 2)), next, canon: false, dirty: false };
+    for (let i = 0; i < E.parent.length; i++) E.parent[i] = i;
+    R.byOwner.set(-1, E);
+    return E;
+}
+// An owner's labels from the plain ones (canonical: every label a root):
+// its live portals' tiles (walls to others) walkable, joined with their open
+// neighbours and their pair; each plain region then labelled by its root.
+function _pathRegionsOwner(R, key, plain, old) {
+    const PL = plain.labels, n = PL.length, w = GRID_W, h = GRID_H, M = plain.next;
+    const extra = new Map();
+    let more = 0;
+    for (let [tk, t] of _cloudTileCache) if (t.owner === key && t.energy > 0 && !t.underConstruction && PL[tk] < 0) extra.set(tk, M + more++);
+    const E = { key, labels: old && old.labels.length === n ? old.labels : new Int32Array(n), parent: new Int32Array(Math.max(64, (M + more) * 2)), next: M + more, canon: false, dirty: false };
+    for (let i = 0; i < E.parent.length; i++) E.parent[i] = i;
+    const label = k => { const l = PL[k]; if (l >= 0) return l; const e = extra.get(k); return e === undefined ? -1 : e; };
+    const join = (a, b) => { const ra = _pathRegionFind(E, a), rb = _pathRegionFind(E, b); if (ra !== rb) E.parent[Math.max(ra, rb)] = Math.min(ra, rb); };
+    for (const [tk, l] of extra) {
+        const x = tk % w, y = (tk / w) | 0;
+        if (x > 0) { const o = label(tk - 1); if (o >= 0) join(l, o); }
+        if (x < w - 1) { const o = label(tk + 1); if (o >= 0) join(l, o); }
+        if (y > 0) { const o = label(tk - w); if (o >= 0) join(l, o); }
+        if (y < h - 1) { const o = label(tk + w); if (o >= 0) join(l, o); }
     }
-    R.byOwner.set(key, labels);
-    return labels;
+    for (let [tk, t] of _cloudTileCache) {
+        if (t.owner !== key || !(t.energy > 0 && !t.underConstruction)) continue;
+        let partner = getPairedCloudTower(t, key);
+        if (!partner) continue;
+        let a = label(tk), b = label(partner.gy * w + partner.gx);
+        if (a >= 0 && b >= 0) join(a, b);
+    }
+    const map = new Int32Array(M);
+    for (let l = 0; l < M; l++) map[l] = _pathRegionFind(E, l);
+    const L = E.labels;
+    for (let i = 0; i < n; i++) { const l = PL[i]; L[i] = l >= 0 ? map[l] : -1; }
+    for (const [tk, l] of extra) L[tk] = _pathRegionFind(E, l);
+    return E;
+}
+// The ring of 8 tiles around a tile, in order (each 4-adjacent to the next).
+const _PATH_REGION_RING = [0, -1, 1, -1, 1, 0, 1, 1, 0, 1, -1, 1, -1, 0, -1, -1];
+// A closed tile's open 4-neighbours still joined by a way around it within a
+// window of PATH_REGION_LOCAL_RADIUS tiles (a breadth-first search from one
+// of them until it met the others): else the labels are made again.
+const PATH_REGION_LOCAL_RADIUS = 24;
+let _pathRegionStamp = null, _pathRegionStampNow = 0, _pathRegionQ = null;
+function _pathRegionJoinedAround(L, gx, gy) {
+    const W = GRID_W, H = GRID_H, n = W * H, r = PATH_REGION_LOCAL_RADIUS;
+    if (!_pathRegionStamp || _pathRegionStamp.length !== n) { _pathRegionStamp = new Int32Array(n); _pathRegionStampNow = 0; }
+    if (++_pathRegionStampNow >= 0x7fffffff) { _pathRegionStamp.fill(0); _pathRegionStampNow = 1; }
+    const S = _pathRegionStamp, now = _pathRegionStampNow, side = 2 * r + 1;
+    if (!_pathRegionQ || _pathRegionQ.length < side * side) _pathRegionQ = new Int32Array(side * side);
+    const Q = _pathRegionQ, x0 = Math.max(0, gx - r), y0 = Math.max(0, gy - r), x1 = Math.min(W - 1, gx + r), y1 = Math.min(H - 1, gy + r);
+    const t = gy * W + gx;
+    let want = 0, start = -1;
+    const nb = [gx > 0 ? t - 1 : -1, gx < W - 1 ? t + 1 : -1, gy > 0 ? t - W : -1, gy < H - 1 ? t + W : -1];
+    // (Targets stamped now - 1 would collide with the last search: a stamp
+    // of their own, -now.)
+    for (const k of nb) if (k >= 0 && L[k] >= 0) { if (start < 0) start = k; else { S[k] = -now; want++; } }
+    if (start < 0 || want === 0) return true;
+    let head = 0, tail = 0;
+    S[start] = now; Q[tail++] = start;
+    while (head < tail) {
+        const k = Q[head++], x = k % W, y = (k / W) | 0;
+        for (let d = 0; d < 4; d++) {
+            const nx = d === 0 ? x - 1 : d === 1 ? x + 1 : x, ny = d === 2 ? y - 1 : d === 3 ? y + 1 : y;
+            if (nx < x0 || nx > x1 || ny < y0 || ny > y1) continue;
+            const m = ny * W + nx;
+            if (S[m] === now || L[m] < 0) continue;
+            if (S[m] === -now && --want === 0) return true;
+            S[m] = now; Q[tail++] = m;
+        }
+    }
+    return false;
+}
+// A tile's wall changed (simMoveTileTypeChanged, as the grid changes): the
+// kept labels follow, the plain ones and each owner's (a tile with a
+// portal on it: that owner's made again from the plain ones).
+function pathRegionsTileChanged(gx, gy) {
+    const R = _pathRegions;
+    if (!R.byOwner.size || R.grid !== grid || R.w !== GRID_W || R.h !== GRID_H) return;
+    const W = GRID_W, row = grid[gy], cell = row ? row[gx] : null;
+    if (!cell || gx < 0 || gx >= W) return;
+    const t = gy * W + gx, open = cell.type !== TYPE_WALL;
+    R.nearest.clear();
+    for (const E of R.byOwner.values()) {
+        if (E.dirty) continue;
+        if (E.key >= 0 && _cloudTileCache && _cloudTileCache.has(t)) { E.dirty = true; continue; }
+        _pathRegionTileSet(E, gx, gy, open);
+    }
+}
+function _pathRegionTileSet(E, gx, gy, open) {
+    const W = GRID_W, H = GRID_H, t = gy * W + gx, L = E.labels;
+    if (open === (L[t] >= 0)) return;
+    if (open) {
+        let root = -1;
+        for (let i = 0; i < 4; i++) {
+            const k = i === 0 ? (gx > 0 ? t - 1 : -1) : i === 1 ? (gx < W - 1 ? t + 1 : -1) : i === 2 ? (gy > 0 ? t - W : -1) : (gy < H - 1 ? t + W : -1);
+            if (k < 0 || L[k] < 0) continue;
+            const r = _pathRegionFind(E, L[k]);
+            if (root < 0) root = r;
+            else if (r !== root) { if (r < root) { E.parent[root] = r; root = r; } else E.parent[r] = root; E.canon = true; }
+        }
+        if (root < 0) {
+            root = E.next++;
+            if (root >= E.parent.length) { const P = new Int32Array(E.parent.length * 2); P.set(E.parent); for (let i = E.parent.length; i < P.length; i++) P[i] = i; E.parent = P; }
+        }
+        L[t] = root;
+    } else {
+        L[t] = -1;
+        // Its open 4-neighbours stay joined when one run of open tiles
+        // around it holds them all, or a way around it in a window joins
+        // them; else the labels are made again.
+        let n4 = 0, firstClosed = -1;
+        const ring = _pathRegionRingScratch;
+        for (let i = 0; i < 8; i++) {
+            const x = gx + _PATH_REGION_RING[2 * i], y = gy + _PATH_REGION_RING[2 * i + 1];
+            const o = x >= 0 && y >= 0 && x < W && y < H && L[y * W + x] >= 0;
+            ring[i] = o ? 1 : 0;
+            if (o && (i & 1) === 0) n4++;
+            if (!o && firstClosed < 0) firstClosed = i;
+        }
+        if (n4 <= 1 || firstClosed < 0) return;
+        let runs = 0, has4 = false;
+        for (let k = 1; k <= 8; k++) {
+            const i = (firstClosed + k) % 8;
+            if (ring[i]) { if ((i & 1) === 0) has4 = true; }
+            else { if (has4) runs++; has4 = false; }
+        }
+        if (runs > 1 && !_pathRegionJoinedAround(L, gx, gy)) E.dirty = true;
+    }
+}
+const _pathRegionRingScratch = new Uint8Array(8);
+// Grid tiles set without the hook (a restore): made again at next use.
+function pathRegionsReset() { _pathRegions.byOwner = new Map(); _pathRegions.nearest = new Map(); }
+// The plain labels, made ahead (a match's first tick, after a restore): not
+// at the first order.
+// (Then the owners with live portals, one a tick.)
+function pathRegionsWarm() {
+    const R = _pathRegions;
+    if (!(R.grid === grid && R.w === GRID_W && R.h === GRID_H && R.byOwner.has(-1) && !R.byOwner.get(-1).dirty)) { getPathRegions(null); return; }
+    if (R.portalSig !== _pathRegionPortalSignature()) getPathRegions(null);
+    for (const o of R.portalOwners) { const E = R.byOwner.get(o); if (!E || E.dirty) { getPathRegions(o); return; } }
 }
 
 // The tile of `region` nearest (Manhattan, then lowest index) to (ex, ey):

@@ -1393,8 +1393,9 @@ function _snapEncodeGlobals() {
         // The upkeep breakdown of the second in progress (built over its ticks).
         upkeepAcc: (typeof _upKeepAccum !== 'undefined' && _upKeepAccum) ? JSON.parse(JSON.stringify(_upKeepAccum)) : null,
         // Move orders still being applied in slices (see runQueuedOrders).
-        orderQueue: typeof _orderQueue !== 'undefined' ? _orderQueue.map(e => [e.playerId, e.cmd, e.action, e.targetX, e.targetY, e.ids.slice(e.next)]) : [],
-        orderBudget: typeof _orderBudgetLeft !== 'undefined' ? _orderBudgetLeft : 0,
+        orderQueue: typeof orderQueueSnapshot === 'function' ? orderQueueSnapshot() : [],
+        orderBudget: typeof _orderBudgets !== 'undefined' ? Array.from(_orderBudgets, v => (v === undefined || v === null ? -1 : v)) : [],
+        orderBudgetAll: typeof _orderAllLeft !== 'undefined' ? _orderAllLeft : 0,
         workVer: typeof workerWorkVersionsSnapshot === 'function' ? workerWorkVersionsSnapshot() : null,
         healers: typeof healerCandidatesSnapshot === 'function' ? healerCandidatesSnapshot() : null,
         // The ground navigation's walls (as differences from the live walls).
@@ -2063,8 +2064,10 @@ function snapDecodeState(S, options = null) {
         winner = _snapD(g.winner);
         pendingPathResolveCursor = _snapD(g.cursor);
         if (typeof _orderQueue !== 'undefined') {
-            _orderQueue = Array.isArray(g.orderQueue) ? g.orderQueue.map(r => ({ playerId: r[0], cmd: r[1], action: r[2], targetX: r[3], targetY: r[4], ids: Array.isArray(r[5]) ? r[5] : [], next: 0 })) : [];
-            _orderBudgetLeft = Number.isFinite(g.orderBudget) ? g.orderBudget : ORDER_UNITS_PER_TICK;
+            orderQueueRestore(Array.isArray(g.orderQueue) ? g.orderQueue : []);
+            // (Per player; -1: untouched this tick.)
+            _orderBudgets = Array.isArray(g.orderBudget) ? g.orderBudget.map(v => (Number.isFinite(v) && v >= 0 ? v : undefined)) : [];
+            _orderAllLeft = Number.isFinite(g.orderBudgetAll) ? g.orderBudgetAll : ORDER_UNITS_PER_TICK_ALL;
         }
         globalSpawnerReadyOrderCounter = _snapD(g.spawnOrder);
         if (rng && typeof rng.setState === 'function' && g.rng !== null && g.rng !== undefined) rng.setState(g.rng);
@@ -2183,6 +2186,8 @@ function snapDecodeState(S, options = null) {
         if (typeof simUnitStateCollect === 'function') simUnitStateCollect();
         // (A whole world: its units in slots from 0, see simUnitStateCompact.)
         if (!partial && typeof simUnitStateCompact === 'function') simUnitStateCompact();
+        // (Every unit's status timers looked at by the next pre-pass.)
+        if (typeof _simUnitState !== 'undefined' && _simUnitState && _simUnitState.columns.stOn) _simUnitState.columns.stOn.fill(1);
         // (Max energy and the movement stats into the columns, as the
         // others' flush did: this peer's flush ran before its units came.)
         if (typeof simUnitMaxE === 'function') for (let u of (partial ? shells.u : units)) if (u && u._us) { simUnitMaxE(u); if (typeof simMoveStatsChanged === 'function') simMoveStatsChanged(u); }

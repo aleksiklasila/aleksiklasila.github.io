@@ -1862,10 +1862,14 @@ function _unitHitBuilding(a, tb, dmg) {
 }
 
 // Status effect fields: columns (SIM_UNIT_STATUS_COLUMNS), like x and y.
+// (A timer set running flags its unit for the status pre-pass: stOn.)
 for (const k of (typeof SIM_UNIT_STATUS_COLUMNS !== 'undefined' ? SIM_UNIT_STATUS_COLUMNS : [])) {
+    const timer = SIM_STATUS_TIMER_COLUMNS.includes(k);
     Object.defineProperty(Unit.prototype, k, {
         get() { const c = this._us; return c ? c[k][this._si] : (this._det ? this._det[k] : undefined); },
-        set(v) { const c = this._us; if (c) c[k][this._si] = v; else if (this._det) this._det[k] = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); },
+        set: timer
+            ? function (v) { const c = this._us; if (c) { c[k][this._si] = v; if (v > 0) c.stOn[this._si] = 1; } else if (this._det) this._det[k] = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); }
+            : function (v) { const c = this._us; if (c) c[k][this._si] = v; else if (this._det) this._det[k] = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); },
         configurable: true
     });
 }
@@ -1894,6 +1898,9 @@ function statusPrepassRun() {
     simParallelBind('ix.slots', slots);
     const P = _simParams;
     P[0] = n; P[1] = STATUS_PREPASS_CHUNK; P[2] = gameTime; P[3] = STATUS_DOT_REPORT_TICKS;
+    // (The separation's tick-start copy only when separationStart, next,
+    // will not take the prebuilt one.)
+    P[4] = _sepPrebuiltForTick() ? 0 : 1;
     simParallelRun(SIM_KERNEL_STATUS, chunks);
     const C = S.columns, EV = C.stEv, DOT = C.stDot, owners = S.owners;
     // (Each job's units with events, in index order: the kernel's lists.)
@@ -2836,14 +2843,19 @@ function simHoldUndo(c, s) {
 // An idle combat unit with nothing in reach parks too: the kernel checks its
 // floor and its aggro box (hostile units or structures there: back to
 // Unit.update, which engages) each tick, and wakes it every
-// SIM_IDLE_PARK_TICKS for its periodic checks.
-const SIM_IDLE_PARK_TICKS = 100;
+// SIM_IDLE_PARK_TICKS for its periodic checks, at its own phase of them
+// ((tick + id) % SIM_IDLE_PARK_TICKS === 0): the units parked on one tick
+// (a match's start) do not all wake on one later tick. (A safety net: the
+// kernel hands a parked unit back for anything its update would act on;
+// every 100 ticks cost ~1500 updates a tick with 150k idle units.)
+const SIM_IDLE_PARK_TICKS = 1000;
 function simMoveTryParkIdle(u) {
     const c = u._us;
     if (!c || u.dead || u.holdPosition || u.workerState || u.unitType === 'scout' || u._attackMoveGx != null) return;
     const s = u._si, reach = c.mvReachA[s];
     if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT || reach === 255) return;
-    c.mvWake[s] = gameTime + SIM_IDLE_PARK_TICKS; c.mvFlags[s] = 16; c.mvReach[s] = reach;
+    const P = SIM_IDLE_PARK_TICKS, ph = (((gameTime + (u.id | 0)) % P) + P) % P;
+    c.mvWake[s] = gameTime + P - ph; c.mvFlags[s] = 16; c.mvReach[s] = reach;
     c.mvOn[s] = 2;
 }
 // A worker at its work (its path done, nothing pending) whose transfer
@@ -2949,7 +2961,58 @@ function _simMoveAreaBoxes() {
         _simMoveAreaBoxOk = simSharedArray(Uint8Array, A * SIM_MOVE_BOX_STEPS);
         _simMoveAreaBoxFor = areaDistanceMatrix;
         simParallelBind('mv.areaBox', _simMoveAreaBox); simParallelBind('mv.areaBoxOk', _simMoveAreaBoxOk);
+        _simAreaBoxJob = { layout: areaDistanceMatrix, out: null };
     }
+    if (_simAreaBoxJob) _simAreaBoxStep();
+}
+// Every area's boxes at every distance, made on the helpers for a new layout
+// (SIM_KERNEL_AREA_BOX, lane SIM_LANE_BUILD) and taken whole when done: an
+// army's first order, or its march into new ground, made each area's box at
+// once in the tick (a 56k-unit order: ~100 ms). Until then a box is made
+// when first needed, the same box. (Without helpers: made at once.)
+let _simAreaBoxJob = null;
+function _simAreaBoxStep() {
+    const J = _simAreaBoxJob, lane = typeof SIM_LANE_BUILD === 'number' ? SIM_LANE_BUILD : -1;
+    if (J.layout !== areaDistanceMatrix || lane < 0 || typeof SIM_KERNEL_AREA_BOX !== 'number') { _simAreaBoxJob = null; return; }
+    const D = SIM_MOVE_BOX_STEPS, A = _simMoveAreaBoxOk.length / D;
+    if (!J.out) {
+        if (simParallelBackgroundPending(lane)) return;
+        _simAreaCsr();
+        const own = simSharedArray(Int32Array, A * 4), out = simSharedArray(Int32Array, A * D * 4);
+        for (let a = 0; a < A; a++) {
+            const ar = _areaById[a], o = a * 4;
+            if (ar) { own[o] = ar.minGx; own[o + 1] = ar.minGy; own[o + 2] = ar.maxGx; own[o + 3] = ar.maxGy; }
+            else { own[o] = 1; own[o + 1] = 1; own[o + 2] = 0; own[o + 3] = 0; }
+        }
+        simParallelBind('abox.own', own); simParallelBind('abox.out', out);
+        simParallelBind('abox.off', _simParReg['area.off']); simParallelBind('abox.nb', _simParReg['area.nb']);
+        const stages = [];
+        for (let d = 0; d < D; d++) {
+            const P = simParallelStageParams(lane, d);
+            P.fill(0); P[0] = A; P[1] = 4096; P[2] = D; P[3] = d;
+            stages.push([SIM_KERNEL_AREA_BOX, Math.ceil(A / 4096)]);
+        }
+        J.out = out;
+        simParallelBackgroundChain(lane, stages, true);
+    }
+    if (simParallelBackgroundPending(lane) && !simParallelBackgroundDone(lane)) return;
+    simParallelBackgroundWait(lane);
+    // (The same layout as the table's: k = area * D + distance.)
+    _simMoveAreaBox = J.out;
+    simParallelBind('mv.areaBox', _simMoveAreaBox);
+    _simMoveAreaBoxOk.fill(1);
+    _simAreaBoxJob = null;
+}
+// An area's box at a distance from the table (getAreaRangeTileBox's row
+// format: an empty box as [GRID_W, GRID_H, -1, -1]) when the table holds it
+// for the current layout; else nothing written.
+function simMoveAreaBoxRead(area, steps, out, o) {
+    if (_simMoveAreaBoxFor !== areaDistanceMatrix || !_simMoveAreaBoxOk || !(steps >= 0 && steps < SIM_MOVE_BOX_STEPS)) return;
+    const k = area * SIM_MOVE_BOX_STEPS + steps;
+    if (!(k >= 0 && k < _simMoveAreaBoxOk.length) || !_simMoveAreaBoxOk[k]) return;
+    const B = _simMoveAreaBox, b = k * 4;
+    if (B[b] > B[b + 2]) { out[o] = GRID_W; out[o + 1] = GRID_H; out[o + 2] = -1; out[o + 3] = -1; return; }
+    out[o] = B[b]; out[o + 1] = B[b + 1]; out[o + 2] = B[b + 2]; out[o + 3] = B[b + 3];
 }
 function _simMoveEnsureAreaBox(area, steps) {
     _simMoveAreaBoxes();
@@ -2983,6 +3046,8 @@ function simMoveWallsDeferEnd() {
     for (let i = 0; i < q.length; i += 2) simMoveTileTypeChanged(q[i], q[i + 1]);
 }
 function simMoveTileTypeChanged(gx, gy) {
+    // (The path regions follow the grid at once: pathfinding.js.)
+    if (typeof pathRegionsTileChanged === 'function') pathRegionsTileChanged(gx, gy);
     if (_unitPassOn) { _simMoveWallQ.push(gx, gy); return; }
     if (typeof stepCostsChanged === 'function') stepCostsChanged(gx, gy);
     if (!_simMoveWall || _simMoveWallGrid !== grid || _simMoveWall.length !== GRID_W * GRID_H) { _simMoveWallDirty = true; return; }
@@ -3010,7 +3075,7 @@ function _simMoveWallBlk9Add(bx, by) {
     if (!A) return;
     for (let y = by - 1; y <= by + 1; y++) for (let x = bx - 1; x <= bx + 1; x++) if (x >= 0 && y >= 0 && x < W && y < H) A[y * W + x] = (A[y * W + x] + 1) | 0;
 }
-function simMoveWallsDirty() { _simMoveWallDirty = true; if (typeof stepCostsReset === 'function') stepCostsReset(); }
+function simMoveWallsDirty() { _simMoveWallDirty = true; if (typeof stepCostsReset === 'function') stepCostsReset(); if (typeof pathRegionsReset === 'function') pathRegionsReset(); }
 // The wall table, current (1: grid type TYPE_WALL).
 function simMoveWallGrid() { _simMoveWalls(); return _simMoveWall; }
 function _simMoveWalls() {
@@ -3308,8 +3373,11 @@ let _simMoveRem = null, _simMoveChFix = null, _simMoveChUse = null;
 let SIM_MOVE_STEP_KERNEL = true;
 // Slots per job of the movement kernels: small jobs, so the helpers share
 // the work evenly (4096: ~49 jobs at 200k, the last ones' wait ~3 ms a
-// tick). (The charges' per-job sums: integers, or the usage log's.)
-const SIM_MOVE_CHUNK = 1024;
+// tick; 1024: an order's newly armed units, consecutive slots, still made
+// a few jobs far longer than the rest; 256 added claim overhead and did not
+// end those ticks' spikes).
+// (The charges' per-job sums: integers, or the usage log's.)
+const SIM_MOVE_CHUNK = 512;
 // (simMoveRun's own 'players' is the index's count.)
 function _simMoveGamePlayers() { return players.length; }
 
@@ -3560,6 +3628,12 @@ function _sepArrays(n) {
         ['sid', Float64Array, cap], ['px', Float64Array, cap], ['py', Float64Array, cap], ['ov', Float64Array, cap],
         ['hit', Uint32Array, cap], ['nextX', Float64Array, cap], ['nextY', Float64Array, cap], ['fast', Uint8Array, cap], ['ex', Int32Array, cap], ['exc', Int32Array, Math.ceil(cap / 512) + 1]]) _sepShared(S, name, Type, size);
     if (_sepDirty || S.sumsCap !== cap) { S.px.fill(0); S.py.fill(0); S.ov.fill(0); S.hit.fill(0); _sepDirty = false; S.sumsCap = cap; }
+}
+// Whether separationStart will take the separation prebuilt after the last
+// tick (its own test).
+function _sepPrebuiltForTick() {
+    const U = _simUnitState;
+    return !!(U && units.length >= SEPARATION_SLOT_MIN_UNITS && CHUNKS_W * CHUNKS_H < SIM_SEP_ABSENT && _sepPre && _sepPre.taken && _sepPre.tick === gameTime && _sepPre.n <= U.owners.length);
 }
 function separationStart() {
     _sepPending = null;

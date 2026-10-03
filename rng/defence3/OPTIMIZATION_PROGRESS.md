@@ -63,6 +63,81 @@ is next. Newest entries first within each section.
 
 ## Session log
 
+### 2026-10-03 (tenth round) — 100000-1000 rally benchmark, click spikes, tooling
+
+Target (user): every main tick < 50 ms (most of the time) on 100000-1000
+(200k units, ~43k buildings and mines) with both teams' combat units
+selected (79k each) and 10 ctrl rally clicks 250 ms apart
+(`DATA=tests/100000-1000.json HELPERS=7 RALLY10=all TOPPHASES=1 KTIME=1`).
+Later (user): more demanding scenarios (fights, interspersed units and
+towers, mazes / tower corridors, traps, player actions: tickbench ACTIONS).
+User allows approximations/rounding (fair on average, no visible
+artifacts), scaled-integer stats (x1000), big data-layout refactors.
+
+Baseline: whole tick mean 50.5, p50 46.4, p95 83, max 193 (first click).
+
+Fixed:
+- Orders over 20000 units were truncated (ACTION_MAX_UNIT_IDS): queueAction
+  splits move/attackMove/attack/attackBuilding/stop/hold into several
+  actions (worker.js ACTION_SPLIT_BY_UNITS). The bench's first clicks
+  ordered 20k of 79k before.
+- Path regions (pathfinding.js): plain labels kept across portal changes;
+  owners with portals derived from them (a pass, not a flood) and kept
+  incrementally like the plain ones; a closed tile's split checked by a
+  window search (PATH_REGION_LOCAL_RADIUS) before a full rebuild. A
+  1M-tile flood (~65 ms) ran at orders after any building change.
+  Tests: path-regions-incremental, path-regions-portals (new).
+- Idle parked combat units all woke on one tick (+100 after the match
+  start: 32k Unit.updates, ~60 ms): woken at their own phase, every 1000
+  ticks (SIM_IDLE_PARK_TICKS; the kernel hands them back for anything).
+- Drive-by area boxes (getAreaRangeTileBox) read the movement kernels'
+  table (simMoveAreaBoxRead) instead of a BFS per (area, distance) on the
+  main thread (~1 ms each after the first click).
+- Order queue: typed ids (Float64Array), entries count their live units;
+  an entry whose units were all ordered again is dropped at once (a
+  click's 158k superseded ids were walked one by one: ~9 ms a tick).
+  Sanitizing warmed at tick 3 (cold: ~4 ms per 20k ids, warm 0.4).
+  Sanitized actions skip the second dedupe.
+- towerTarget with a unit target: one lookup, not a units.find per tower.
+- Barrack/spawner rally points: one setRallyMany action per point (with
+  the buildings' tiles) instead of a setRally per building (a packet holds
+  256 actions). tests/mixed-rally-move.test.cjs accepts it.
+- Visibility safety sweeps 128/512 ticks, nav field sweep 128.
+- STATUS pre-pass: status timers gated by a per-unit flag (stOn, set by
+  the timers' accessors, a slot's start and a restore); the separation's
+  tick-start copies only when the prebuilt separation is not taken.
+  STATUS 2.7 -> 1.4 ms.
+- Integer unit columns as Int32 (id, owner, commandState, attackFlash,
+  status timers, workerTransferCooldown: whole numbers by construction).
+
+Measured (whole tick, 200 ticks): mean 50.5 -> ~45-48, p95 83 -> ~58-69,
+max 193 -> ~110-150 (first click, cold code). Run-to-run noise on this
+laptop is ~3 ms in the mean; judge by several runs.
+
+Found, not fixed:
+- multiplayer-chaos-determinism with tiny order budgets
+  (`CHAOS_SIM_EVAL="ORDER_UNITS_PER_PLAYER_TICK = 3; ORDER_UNITS_PER_TICK_ALL = 5; ORDER_UNITS_PER_ROUND = 2"`,
+  CHAOS_MAPS=island) fails: repeated repairs after a forced divergence
+  (pre-existing: fails on the previous session's staged code too). The
+  default chaos run passes.
+- Reading the MOVE kernel (sim_parallel.js ~494+) was blocked by the
+  auto-mode classifier in this session: movement restructuring waits.
+
+Tooling (.claude/): rsum.cjs (run summary), kdump.js + kbench.cjs (dump
+any kernel's inputs on the guest at a tick and replay/time it standalone,
+VARIANT=file to compare), sepdump/sepbench (pair stage), sepprobe (pair
+counts), hashprobe (static hash timing), tickbench UPDTICK=a,b (Unit.update
+by kind per tick), KTIMETICK (kernels per tick), DUMPBIN, ACTIONS=n
+(player-action bursts: select all, ctrl rally points to enemy / random /
+unreachable tiles, building rallies, unit and research queues, tower
+targets, hold/stop/attack/attackBuilding), ACTIONS_TRAPS=n.
+Findings: per-tick serial kernel work ~330 ms (8 cores x 50 ms is the
+ceiling): separation chain ~92 (pairs 42-64, pack 21, finish 15, agg 12),
+movement ~55, index prebuild ~43, hash region ~21; the per-unit passes are
+memory-bound (15-30 Float64 columns per unit). Static hash part ~2.8 ms:
+cold building objects (cache misses), not polymorphism. Kernel dispatch
+overhead ~20-50 us.
+
 ### 2026-10-03 (ninth round) — desyncs with helpers, holds, rally benchmark
 
 Desyncs (host with helpers vs a guest without), all found with the

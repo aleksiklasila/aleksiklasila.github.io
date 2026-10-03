@@ -710,6 +710,9 @@ function _gameTickBody() {
     // the orders that came in for it), then a fresh budget for the next.
     runQueuedOrders();
     navTick();
+    // (Made ahead of the orders that use them: the first tick, a restore.)
+    if (typeof pathRegionsWarm === 'function') pathRegionsWarm();
+    if (gameTime >= 3 && !_actionSanitizeWarm) actionSanitizeWarm();
     // The destination fields asked for so far (the orders'), for this tick.
     navFieldsFlush();
     _refillOrderBudget();
@@ -1148,14 +1151,22 @@ function initInput() {
         }
         if (multiRallyPoints.length === 0) multiRallyPoints = [{ x: targetX, y: targetY, targetUnitId }];
         let pick = _assignToNearestPoints(selSpawners, multiRallyPoints, _entityWorldXY, p => p);
+        // One action per point with its buildings' tiles (setRallyMany; at
+        // most ACTION_MAX_RALLY_COORDS each): an action per building could
+        // not carry thousands of them (a packet holds 256 actions).
+        let byPoint = multiRallyPoints.map(() => []);
         for (let i = 0; i < selSpawners.length; i++) {
             let b = selSpawners[i];
             let rp = multiRallyPoints[pick[i]];
-            queueAction({ action: 'setRally', gx: b.gx, gy: b.gy, targetX: rp.x, targetY: rp.y, targetUnitId: rp.targetUnitId || null });
+            byPoint[pick[i]].push(b.gx, b.gy);
             // Instant feedback only for an offline, page-owned structure.
             // Worker views are read-only: writing rallyX throws before the
             // same click can issue its selected units' move command.
             if (!isMultiplayer && !b._structView) { b.rallyX = rp.x; b.rallyY = rp.y; b.rallyTargetUnitId = rp.targetUnitId || null; }
+        }
+        for (let j = 0; j < byPoint.length; j++) {
+            let rp = multiRallyPoints[j], c = byPoint[j];
+            for (let k = 0; k < c.length; k += 2 * ACTION_MAX_RALLY_COORDS) queueAction({ action: 'setRallyMany', coords: c.slice(k, k + 2 * ACTION_MAX_RALLY_COORDS), targetX: rp.x, targetY: rp.y, targetUnitId: rp.targetUnitId || null });
         }
     }
 
@@ -3297,6 +3308,8 @@ const ACTION_MAX_COUNT = 100;
 const LOCKSTEP_MAX_ACTIONS_PER_PACKET = 256;
 const ACTION_MAX_UNIT_IDS = 20000;
 const ACTION_MAX_TOWER_COORDS = 5000;
+// Buildings per setRallyMany action (coords: gx, gy, ...).
+const ACTION_MAX_RALLY_COORDS = 5000;
 
 function _actionInt(v) {
     return (typeof v === 'number' && Number.isFinite(v)) ? Math.floor(v) : null;
@@ -3317,6 +3330,32 @@ function _actionStr(v) {
     return (typeof v === 'string' && !ACTION_RESERVED_STRINGS.has(v)) ? v.slice(0, 64) : null;
 }
 
+// The action ids' stamps (sanitizeAction's duplicates), by unit id.
+const ACTION_ID_STAMP_MAX = 1 << 26;
+let _actionIdStamp = new Int32Array(1 << 16), _actionIdStampNow = 0;
+function _actionIdStampNext() {
+    if (++_actionIdStampNow >= 0x7fffffff) { _actionIdStamp.fill(0); _actionIdStampNow = 1; }
+    return _actionIdStampNow;
+}
+function _actionIdStampGrow(id) {
+    let n = _actionIdStamp.length;
+    while (n <= id) n *= 2;
+    const a = new Int32Array(Math.min(n, ACTION_ID_STAMP_MAX));
+    a.set(_actionIdStamp);
+    _actionIdStamp = a;
+}
+
+// Big orders' sanitizing warmed up (compiled, the id stamps grown) early in
+// a match, not at its first big order (cold, a 20000-unit action took
+// ~4 ms, warm 0.4). Peer-local scratch only.
+let _actionSanitizeWarm = false;
+function actionSanitizeWarm() {
+    if (_actionSanitizeWarm) return;
+    _actionSanitizeWarm = true;
+    const ids = new Array(ACTION_MAX_UNIT_IDS);
+    for (let i = 0; i < ids.length; i++) ids[i] = i * 2;
+    for (let k = 0; k < 4; k++) { const a = sanitizeAction({ action: 'move', unitIds: ids, targetX: 0, targetY: 0 }); if (a) _actionDistinctIds(a); }
+}
 function sanitizeAction(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw) || typeof raw.action !== 'string') return null;
     let a = { ...raw };
@@ -3330,13 +3369,30 @@ function sanitizeAction(raw) {
     if ('count' in a) a.count = Math.max(1, Math.min(ACTION_MAX_COUNT, _actionInt(a.count) ?? 1));
     let ids = Array.isArray(a.unitIds) ? a.unitIds : [];
     let clean = [];
+    // (Each id once, in the order given: a stamp per id, no set of them.)
+    const now = _actionIdStampNext();
+    let odd = null;
     for (let i = 0; i < ids.length && clean.length < ACTION_MAX_UNIT_IDS; i++) {
         let id = ids[i];
-        if (typeof id === 'number' && Number.isInteger(id)) clean.push(id);
+        if (!(typeof id === 'number' && Number.isInteger(id))) continue;
+        if (id >= 0 && id < ACTION_ID_STAMP_MAX) {
+            if (id >= _actionIdStamp.length) _actionIdStampGrow(id);
+            if (_actionIdStamp[id] === now) continue;
+            _actionIdStamp[id] = now;
+        } else if ((odd || (odd = new Set())).has(id)) continue;
+        else odd.add(id);
+        clean.push(id);
     }
     a.unitIds = clean;
-    // Membership tests against every unit: a set, not a scan of the ids.
-    a.unitIdSet = new Set(clean);
+    // (Distinct now: the order queue takes them as they are.)
+    Object.defineProperty(a, '_idsDistinct', { value: clean, enumerable: false, configurable: true });
+    // Membership tests against every unit: a set, not a scan of the ids
+    // (made at its first use: a move order needs none).
+    Object.defineProperty(a, 'unitIdSet', {
+        configurable: true, enumerable: false,
+        get() { const set = new Set(this.unitIds); Object.defineProperty(this, 'unitIdSet', { value: set, writable: true, configurable: true }); return set; },
+        set(v) { Object.defineProperty(this, 'unitIdSet', { value: v, writable: true, configurable: true }); }
+    });
     if ('towerCoords' in a) {
         let coords = Array.isArray(a.towerCoords) ? a.towerCoords : [];
         a.towerCoords = [];
@@ -3344,6 +3400,14 @@ function sanitizeAction(raw) {
             let c = coords[i];
             let gx = c && _actionInt(c.gx), gy = c && _actionInt(c.gy);
             if (gx !== null && gy !== null) a.towerCoords.push({ gx, gy });
+        }
+    }
+    if ('coords' in a) {
+        let coords = Array.isArray(a.coords) ? a.coords : [];
+        a.coords = [];
+        for (let i = 0; i + 1 < coords.length && a.coords.length < 2 * ACTION_MAX_RALLY_COORDS; i += 2) {
+            let gx = _actionInt(coords[i]), gy = _actionInt(coords[i + 1]);
+            if (gx !== null && gy !== null) a.coords.push(gx, gy);
         }
     }
     if ('target' in a) {
@@ -3369,46 +3433,137 @@ function processActions(actions, playerId) {
     }
 }
 
-// Move orders over many units are applied in slices: at most
-// ORDER_UNITS_PER_TICK units a tick (over all orders), the rest queued and
-// applied at the start of the next ticks in order. The first slice moves at
-// once; a later order (or any other order) for a unit drops it from the
-// queued ones, so the latest order always wins. The queue is simulation
-// state (snapshotted with the globals).
-const ORDER_UNITS_PER_TICK = 10000;
-let _orderQueue = [], _orderBudgetLeft = ORDER_UNITS_PER_TICK;
+// Move orders over many units are applied in slices: each player at most
+// ORDER_UNITS_PER_PLAYER_TICK units a tick (a budget of its own: one
+// player's huge order never slows another player's orders, nor a tick by
+// more than its share), the rest queued and applied at the start of the next
+// ticks in order. The first slice moves at once; a later order (or any
+// other order) for a unit drops it from the queued ones, so the latest order
+// always wins. The queue and the budgets are simulation state (snapshotted
+// with the globals).
+let ORDER_UNITS_PER_PLAYER_TICK = 3000, ORDER_UNITS_PER_TICK_ALL = 4000, ORDER_UNITS_PER_ROUND = 500;
+let _orderQueue = [], _orderBudgets = [], _orderAllLeft = ORDER_UNITS_PER_TICK_ALL;
+function _orderBudgetOf(p) { const b = _orderBudgets[p]; return b === undefined || b === null ? ORDER_UNITS_PER_PLAYER_TICK : b; }
+// Per player, each unit's latest order (its queue entry's seq, or a drop's):
+// a queued unit is applied only by the entry that ordered it last, so a new
+// order supersedes the queued ones by stamping its own units (no pass over
+// everything queued: ten ctrl-click orders over 56k queued units scanned
+// 560k ids). Cleared when the queue empties. An applied unit's stamp is
+// cleared (0), and each entry counts its units still to apply (live, less
+// those ordered again since): an entry whose units were all ordered again
+// is dropped at once, not walked id by id (a click's 158k superseded ids
+// cost ~9 ms a tick).
+let _orderSeq = 0, _unitOrderSeq = [], _orderBySeq = new Map();
+// (A unit's stamp changing from `old`: that entry has one live unit less.)
+function _orderStampSuperseded(old) { if (old > 0) { const e = _orderBySeq.get(old); if (e) e.live--; } }
+// (Per player: { a: Int32Array by unit id, m: Map for ids past it }.)
+function _unitOrderSeqOf(p) { return _unitOrderSeq[p] || (_unitOrderSeq[p] = { a: new Int32Array(1 << 12), m: null }); }
+function _orderStampSet(T, id, seq) {
+    if (id >= 0 && id < ACTION_ID_STAMP_MAX) {
+        if (id >= T.a.length) { let n = T.a.length; while (n <= id) n *= 2; const a = new Int32Array(Math.min(n, ACTION_ID_STAMP_MAX)); a.set(T.a); T.a = a; }
+        T.a[id] = seq;
+    } else (T.m || (T.m = new Map())).set(id, seq);
+}
+function _orderStampGet(T, id) {
+    if (id >= 0 && id < ACTION_ID_STAMP_MAX) return id < T.a.length ? T.a[id] : 0;
+    const v = T.m ? T.m.get(id) : undefined;
+    return v === undefined ? 0 : v;
+}
+function _orderSeqNext() {
+    if (_orderSeq >= 0x7ffffff0) { _unitOrderSeq = []; _orderSeq = 0; }
+    return ++_orderSeq;
+}
+// An action's ids, each once in the order given (a set given with it: its order).
+function _actionDistinctIds(a) {
+    if (a._idsDistinct && a._idsDistinct === a.unitIds) return a.unitIds;
+    const d = Object.getOwnPropertyDescriptor(a, 'unitIdSet');
+    if (d && !d.get && d.value) return Array.from(d.value);
+    const now = _actionIdStampNext(), out = [];
+    let odd = null;
+    for (const id of a.unitIds || []) {
+        if (!(typeof id === 'number' && Number.isInteger(id))) continue;
+        if (id >= 0 && id < ACTION_ID_STAMP_MAX) {
+            if (id >= _actionIdStamp.length) _actionIdStampGrow(id);
+            if (_actionIdStamp[id] === now) continue;
+            _actionIdStamp[id] = now;
+        } else if ((odd || (odd = new Set())).has(id)) continue;
+        else odd.add(id);
+        out.push(id);
+    }
+    return out;
+}
 function _dropQueuedOrderUnits(idSet, playerId) {
     if (!_orderQueue.length || !idSet || !idSet.size) return;
-    for (let e of _orderQueue) {
-        if (e.playerId !== playerId) continue;
-        let w = e.next;
-        for (let i = e.next; i < e.ids.length; i++) if (!idSet.has(e.ids[i])) e.ids[w++] = e.ids[i];
-        e.ids.length = w;
-    }
-    _orderQueue = _orderQueue.filter(e => e.next < e.ids.length);
+    const T = _unitOrderSeqOf(playerId), seq = _orderSeqNext();
+    for (const id of idSet) { _orderStampSuperseded(_orderStampGet(T, id)); _orderStampSet(T, id, seq); }
 }
 function _queueGroupMoveOrder(a, playerId, cmd) {
-    _dropQueuedOrderUnits(a.unitIdSet, playerId);
-    // (Each id once, in the order given.)
-    _orderQueue.push({ playerId, cmd, action: a.action, targetX: a.targetX, targetY: a.targetY, ids: Array.from(a.unitIdSet || new Set(a.unitIds || [])), next: 0 });
+    // (Each id once, in the order given (sanitizeAction); the units' latest
+    // order now. Kept typed: queued ids are nothing for the collector to
+    // trace.)
+    const ids = Float64Array.from(_actionDistinctIds(a)), seq = _orderSeqNext(), T = _unitOrderSeqOf(playerId);
+    for (let i = 0; i < ids.length; i++) { _orderStampSuperseded(_orderStampGet(T, ids[i])); _orderStampSet(T, ids[i], seq); }
+    const e = { playerId, cmd, action: a.action, targetX: a.targetX, targetY: a.targetY, ids, next: 0, seq, live: ids.length };
+    _orderQueue.push(e); _orderBySeq.set(seq, e);
     runQueuedOrders();
 }
-// Applies queued orders within this tick's budget.
+// Applies queued orders within this tick's budgets, in queue order (a
+// player whose budget is spent waits, its later orders too). Units ordered
+// again since are passed over (no budget).
 function runQueuedOrders() {
-    while (_orderQueue.length && _orderBudgetLeft > 0) {
-        let e = _orderQueue[0];
-        let take = Math.min(_orderBudgetLeft, e.ids.length - e.next);
-        let ids = e.ids.slice(e.next, e.next + take);
-        e.next += take; _orderBudgetLeft -= take;
-        if (e.next >= e.ids.length) _orderQueue.shift();
-        // (The slice's ids are distinct: its units are looked up in order,
-        // no set of them.)
-        try { _issueGroupMoveOrder({ action: e.action, targetX: e.targetX, targetY: e.targetY, unitIds: ids, unitIdSet: null, distinct: true }, e.playerId, e.cmd); }
-        catch (err) { reportRuntimeError('queued order', err); }
+    // In rounds of at most ORDER_UNITS_PER_ROUND units per player (its
+    // first unfinished order only: its orders apply in turn), until the
+    // players' budgets or the tick's (ORDER_UNITS_PER_TICK_ALL) run out:
+    // players ordering at once share the tick evenly.
+    for (let progress = true; progress && _orderQueue.length && _orderAllLeft > 0;) {
+        progress = false;
+        const seen = new Set();
+        for (let qi = 0; qi < _orderQueue.length && _orderAllLeft > 0;) {
+            let e = _orderQueue[qi], p = e.playerId;
+            if (seen.has(p)) { qi++; continue; }
+            seen.add(p);
+            const left = Math.min(_orderBudgetOf(p), _orderAllLeft, ORDER_UNITS_PER_ROUND);
+            if (left <= 0) { qi++; continue; }
+            const T = _unitOrderSeqOf(p), ids = [];
+            while (e.live > 0 && e.next < e.ids.length && ids.length < left) {
+                const id = e.ids[e.next++];
+                if (_orderStampGet(T, id) === e.seq) { ids.push(id); _orderStampSet(T, id, 0); e.live--; }
+            }
+            _orderBudgets[p] = _orderBudgetOf(p) - ids.length; _orderAllLeft -= ids.length;
+            // (Finished: the player's next order may run in this round.)
+            if (e.live <= 0 || e.next >= e.ids.length) { _orderQueue.splice(qi, 1); _orderBySeq.delete(e.seq); seen.delete(p); } else qi++;
+            progress = true;
+            // (The slice's ids are distinct: its units are looked up in order,
+            // no set of them.)
+            if (ids.length) {
+                try { _issueGroupMoveOrder({ action: e.action, targetX: e.targetX, targetY: e.targetY, unitIds: ids, unitIdSet: null, distinct: true }, e.playerId, e.cmd); }
+                catch (err) { reportRuntimeError('queued order', err); }
+            }
+        }
     }
 }
-function _refillOrderBudget() { _orderBudgetLeft = ORDER_UNITS_PER_TICK; }
-function resetOrderQueue() { _orderQueue = []; _orderBudgetLeft = ORDER_UNITS_PER_TICK; }
+function _refillOrderBudget() { _orderBudgets.length = 0; _orderAllLeft = ORDER_UNITS_PER_TICK_ALL; }
+function resetOrderQueue() { _orderQueue = []; _orderBudgets = []; _unitOrderSeq = []; _orderBySeq = new Map(); _orderSeq = 0; _orderAllLeft = ORDER_UNITS_PER_TICK_ALL; }
+// The queue as state (snapshots): each entry's units still to apply that
+// it ordered last, entries with none left out.
+function orderQueueSnapshot() {
+    const out = [];
+    for (const e of _orderQueue) {
+        const T = _unitOrderSeqOf(e.playerId), ids = [];
+        for (let i = e.next; i < e.ids.length; i++) if (_orderStampGet(T, e.ids[i]) === e.seq) ids.push(e.ids[i]);
+        if (ids.length) out.push([e.playerId, e.cmd, e.action, e.targetX, e.targetY, ids]);
+    }
+    return out;
+}
+function orderQueueRestore(rows) {
+    resetOrderQueue();
+    for (const r of rows || []) {
+        const ids = Float64Array.from(Array.isArray(r[5]) ? r[5] : []), seq = _orderSeqNext(), T = _unitOrderSeqOf(r[0]);
+        for (const id of ids) { _orderStampSuperseded(_orderStampGet(T, id)); _orderStampSet(T, id, seq); }
+        const e = { playerId: r[0], cmd: r[1], action: r[2], targetX: r[3], targetY: r[4], ids, next: 0, seq, live: ids.length };
+        _orderQueue.push(e); _orderBySeq.set(seq, e);
+    }
+}
 
 function processAction(a, playerId) {
     {
@@ -3653,16 +3808,19 @@ function processAction(a, playerId) {
                     }
                 }
             }
-        } else if (a.action === 'setRally') {
-            let b = getTileEntityRef(a.gx, a.gy);
-            if (!(b && b.owner === playerId && ((b instanceof Barrack) || isSpawnerEntity(b)))) b = null;
-            if (b) {
-                b.rallyX = a.targetX;
-                b.rallyY = a.targetY;
-                b.rallyTargetUnitId = (a.targetUnitId != null) ? a.targetUnitId : null;
-                b._rallyLastSeenX = Number.isFinite(a.targetX) ? a.targetX : null;
-                b._rallyLastSeenY = Number.isFinite(a.targetY) ? a.targetY : null;
-                b._pendingRallyDetach = false;
+        } else if (a.action === 'setRally' || a.action === 'setRallyMany') {
+            const coords = a.action === 'setRally' ? [a.gx, a.gy] : (a.coords || []);
+            for (let k = 0; k + 1 < coords.length; k += 2) {
+                let b = getTileEntityRef(coords[k], coords[k + 1]);
+                if (!(b && b.owner === playerId && ((b instanceof Barrack) || isSpawnerEntity(b)))) b = null;
+                if (b) {
+                    b.rallyX = a.targetX;
+                    b.rallyY = a.targetY;
+                    b.rallyTargetUnitId = (a.targetUnitId != null) ? a.targetUnitId : null;
+                    b._rallyLastSeenX = Number.isFinite(a.targetX) ? a.targetX : null;
+                    b._rallyLastSeenY = Number.isFinite(a.targetY) ? a.targetY : null;
+                    b._pendingRallyDetach = false;
+                }
             }
         } else if (a.action === 'resign') {
             resignedTeams.add(playerId);
@@ -3867,14 +4025,18 @@ function processAction(a, playerId) {
             };
             resizeUnitSubgroup(playerId, a.unitIds || [], a.mode, subgroupFilter);
         } else if (a.action === 'towerTarget') {
-            // Set preferredTarget on own towers
+            // Set preferredTarget on own towers. (A unit target looked up
+            // once, by id: a scan of every unit per tower took seconds for
+            // thousands of towers.)
+            let targetUnit = null;
+            if (a.target && a.target.type === 'unit') { const tu = getUnitById(a.target.id); targetUnit = tu && !tu.dead && tu.owner !== playerId ? tu : null; }
             for (let tc of (a.towerCoords || [])) {
                 let t = getTowerAtTile(tc.gx, tc.gy);
                 if (!(t && t.owner === playerId)) t = null;
                 if (!t) continue;
                 if (!a.target) { t.preferredTarget = null; t.preferredTargetSpec = null; continue; }
                 if (a.target.type === 'unit') {
-                    let tu = units.find(u => u.id === a.target.id && !u.dead && u.owner !== playerId);
+                    let tu = targetUnit;
                     t.preferredTarget = tu || null;
                     t.preferredTargetSpec = tu ? { type: 'unit', id: tu.id } : null;
                 } else if (a.target.type === 'tower') {

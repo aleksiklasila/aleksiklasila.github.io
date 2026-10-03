@@ -31,7 +31,7 @@ const SIM_PAR_GEN = 0, SIM_PAR_KERNEL = 1, SIM_PAR_NEXT = 2, SIM_PAR_TOTAL = 3, 
 // the next one, so a pipeline runs to its end on the helpers. A lane is
 // rewritten only once closed and empty (no claim in flight), so a late
 // claim can never run a chunk of the next job.
-const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 7;
+const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 8;
 const SIM_PAR_BG_ID = 5, SIM_PAR_BG_READERS = 6, SIM_PAR_BG_STAGE = 7, SIM_PAR_BG_STAGES = 24;
 // (Control words: SIM_PAR_BG_BASE + lanes * 8, rounded up.)
 const SIM_PAR_CTL_WORDS = 128;
@@ -46,9 +46,11 @@ const SIM_PAR_CTL_WORDS = 128;
 // own, then the tiers fastest first, then the long jobs.
 // SIM_LANE_IX: the next tick's unit index, built after a tick's end (while
 // the state hash and the time between ticks run; chunk.js
-// spatialIndexPrebuild).
-const SIM_LANE_TICK = 0, SIM_LANE_LONG = 1, SIM_LANE_T10 = 2, SIM_LANE_T5 = 3, SIM_LANE_T1 = 4, SIM_LANE_T05 = 5, SIM_LANE_IX = 6;
-const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_IX, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_T1, SIM_LANE_T05, SIM_LANE_LONG];
+// spatialIndexPrebuild). SIM_LANE_BUILD: tables made once in a while and
+// taken when done (the area range boxes of a new layout, path regions),
+// never waited for by the tick's own work.
+const SIM_LANE_TICK = 0, SIM_LANE_LONG = 1, SIM_LANE_T10 = 2, SIM_LANE_T5 = 3, SIM_LANE_T1 = 4, SIM_LANE_T05 = 5, SIM_LANE_IX = 6, SIM_LANE_BUILD = 7;
+const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_IX, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_T1, SIM_LANE_T05, SIM_LANE_BUILD, SIM_LANE_LONG];
 
 // A typed array in shared memory when helpers may use it.
 function simSharedArray(Type, n) {
@@ -91,6 +93,7 @@ const SIM_KERNEL_HEAL_REDUCE = 47;
 const SIM_KERNEL_WS_ORDER = 48;
 const SIM_KERNEL_UNIT_RETIRE = 49;
 const SIM_KERNEL_SEP_PACK = 50, SIM_KERNEL_SEP_MARK = 51, SIM_KERNEL_SEP_PAIRS = 52, SIM_KERNEL_SEP_AGG = 53, SIM_KERNEL_SPATIAL_PREFIX = 54;
+const SIM_KERNEL_AREA_BOX = 55, SIM_KERNEL_INDEX_MERGE = 56;
 
 // One tick of an armed mover (see simMoveTryArm in unit.js): Unit.update
 // for a unit marching along its path with nothing to react to, straight on
@@ -1281,6 +1284,90 @@ SIM_KERNELS[SIM_KERNEL_SPATIAL_SCATTER] = function (R, P, chunk) {
 // The histograms' cursors (the serial step between SIM_KERNEL_SPATIAL_HISTOGRAM
 // and SCATTER, as one job of a chain): per digit, per partition in order.
 // P: [0] partitions.
+// The area range boxes (unit.js _simMoveAreaBoxes, getAreaRangeTileBox's
+// boxes) of every area at every distance d < P[2], one stage per d: the
+// areas within d steps of an area are itself and those within d - 1 of a
+// neighbour, so its box at d is its box at d - 1 joined with its
+// neighbours' at d - 1 (d = 0: its own tiles' box). abox.out[(a * P[2] + d)
+// * 4]: min gx, min gy, max gx, max gy; empty [1, 1, 0, 0] (an area without
+// tiles, which has no neighbours either). P: [0] areas, [1] per job, [2]
+// distances, [3] d.
+SIM_KERNELS[SIM_KERNEL_AREA_BOX] = function (R, P, chunk) {
+    const OWN = R['abox.own'], OUT = R['abox.out'], OFF = R['abox.off'], NB = R['abox.nb'];
+    const A = P[0] | 0, D = P[2] | 0, d = P[3] | 0;
+    for (let a = chunk * P[1], end = Math.min(A, a + P[1]); a < end; a++) {
+        const o = (a * D + d) * 4;
+        if (d === 0) { OUT[o] = OWN[a * 4]; OUT[o + 1] = OWN[a * 4 + 1]; OUT[o + 2] = OWN[a * 4 + 2]; OUT[o + 3] = OWN[a * 4 + 3]; continue; }
+        const p = o - 4;
+        let x0 = OUT[p], y0 = OUT[p + 1], x1 = OUT[p + 2], y1 = OUT[p + 3];
+        for (let k = OFF[a], e = OFF[a + 1]; k < e; k++) {
+            const q = (NB[k] * D + d - 1) * 4;
+            if (OUT[q] > OUT[q + 2]) continue;
+            if (x0 > x1) { x0 = OUT[q]; y0 = OUT[q + 1]; x1 = OUT[q + 2]; y1 = OUT[q + 3]; continue; }
+            if (OUT[q] < x0) x0 = OUT[q];
+            if (OUT[q + 1] < y0) y0 = OUT[q + 1];
+            if (OUT[q + 2] > x1) x1 = OUT[q + 2];
+            if (OUT[q + 3] > y1) y1 = OUT[q + 3];
+        }
+        OUT[o] = x0; OUT[o + 1] = y0; OUT[o + 2] = x1; OUT[o + 3] = y1;
+    }
+};
+
+// The unit index's order (ix.ordC: units indices by (chunk, index), the
+// radix sort's result) made from the last index instead of sorted anew
+// (chunk.js spatialIndexPrebuild): its entries (sep.eslot / sep.ekey /
+// ix.eid, P[1] of them, by (chunk, index) as the units list was then) whose
+// unit holds the same slot and stands in the same chunk keep their order
+// (removals keep the list's order, additions come last); the others (moved,
+// new, a slot given to another unit) sorted by (chunk, index) and merged
+// in. One job: a pass over the last entries and over the units, a sort of
+// the movers. Disorder (never expected): a counting sort of everything,
+// the same order. P: [0] units, [1] last entries, [2] chunks, [3] epoch.
+SIM_KERNELS[SIM_KERNEL_INDEX_MERGE] = function (R, P) {
+    const n = P[0] | 0, prev = P[1] | 0, nChunks = P[2] | 0, ep = P[3] | 0;
+    const ES = R['sep.eslot'], EK = R['sep.ekey'], EID = R['ix.eid'], KEY = R['ix.keys'], SL = R['ix.slots'], UID = R['unit.id'];
+    const INV = R['ix.inv'], INVS = R['ix.invStamp'], KEPT = R['ix.kept'], OUT = R['ix.ordC'], CH = R['ix.chg'];
+    // Each slot's units index now.
+    for (let i = 0; i < n; i++) { const s = SL[i]; if (s >= 0) { INV[s] = i; INVS[s] = ep; } }
+    // The last entries still standing: the same unit in its slot, the same
+    // chunk. (Written to the front of OUT for now: kept order.)
+    let kn = 0, sorted = true, lk = -1, li = -1;
+    for (let p = 0; p < prev; p++) {
+        const s = ES[p];
+        if (s < 0 || INVS[s] !== ep) continue;
+        const i = INV[s], k = KEY[i];
+        if (k >= nChunks || k !== EK[p] || (UID[s] | 0) !== EID[p]) continue;
+        KEPT[i] = ep;
+        if (k < lk || (k === lk && i < li)) sorted = false;
+        lk = k; li = i;
+        OUT[kn++] = i;
+    }
+    // The rest, in (chunk, index) order: chunk * 2^31 + index (exact in a
+    // double), sorted.
+    let m = 0;
+    for (let i = 0; i < n; i++) { const k = KEY[i]; if (k < nChunks && KEPT[i] !== ep) CH[m++] = k * 2147483648 + i; }
+    if (!sorted) {
+        // (Everything by (chunk, index).)
+        m = 0;
+        for (let i = 0; i < n; i++) { const k = KEY[i]; if (k < nChunks) CH[m++] = k * 2147483648 + i; }
+        kn = 0;
+    }
+    const C = CH.subarray(0, m).sort();
+    // Merge from the back (OUT's front holds the kept ones).
+    let a = kn - 1, b = m - 1, w = kn + m - 1;
+    while (b >= 0) {
+        const cb = C[b], kb = Math.floor(cb / 2147483648), ib = cb - kb * 2147483648;
+        if (a >= 0) {
+            const ia = OUT[a], ka = KEY[ia];
+            if (ka > kb || (ka === kb && ia > ib)) { OUT[w--] = ia; a--; continue; }
+        }
+        OUT[w--] = ib; b--;
+    }
+    // (The units without a chunk after them: FILL lists the valid ones.)
+    let t = kn + m;
+    for (let i = 0; i < n && t < n; i++) if (!(KEY[i] < nChunks)) OUT[t++] = i;
+};
+
 SIM_KERNELS[SIM_KERNEL_SPATIAL_PREFIX] = function (R, P, chunk) {
     const hist = R['spatial.hist'], parts = P[0] | 0;
     let cursor = 0;
@@ -3026,6 +3113,10 @@ SIM_KERNELS[SIM_KERNEL_STATUS] = function (R, P, chunk) {
     const X = R['unit.x'], Y = R['unit.y'], X0 = R['unit.x0'], Y0 = R['unit.y0'], WTC = R['unit.workerTransferCooldown'];
     const ACC = R['unit.stAcc'], UID = R['unit.id'], t = P[2] | 0, per = Math.max(1, P[3] | 0);
     const SD0 = R['unit.sepD0'], SR0 = R['unit.sepR0'], SL0 = R['unit.sepL0'], CR = R['unit.collisionR'], RAD = R['unit.r'], LAY = R['unit.sepLayer'];
+    // (P[4] 1: the separation runs from the tick-start copy this tick (no
+    // prebuilt one): its radius, layer and dead copied too. stOn: units whose
+    // status timers may run, the others' left alone.)
+    const sepCopy = P[4] === 1, ON = R['unit.stOn'];
     // (st.list: the job's units with events, in index order, from
     // chunk * P[1]: the simulation thread visits those only.)
     const LIST = R['st.list'], l0 = chunk * P[1];
@@ -3035,20 +3126,22 @@ SIM_KERNELS[SIM_KERNEL_STATUS] = function (R, P, chunk) {
         if (s < 0) continue;
         X0[s] = X[s]; Y0[s] = Y[s];
         // (The separation tier's copy: radius and layer, dead below.)
-        SR0[s] = Math.max(.1, CR[s] || RAD[s] || .1); SL0[s] = LAY[s];
         // (Dead as the tick starts, before this pass's damage: the prebuilt
         // separation (from the state after the last tick) sees the same.)
-        SD0[s] = DEAD[s];
+        if (sepCopy) { SR0[s] = Math.max(.1, CR[s] || RAD[s] || .1); SL0[s] = LAY[s]; SD0[s] = DEAD[s]; }
         if (DEAD[s]) continue;
         let ev = 0, dot = 0;
-        if (TH[s] > 0) TH[s]--;
-        if (BU[s] > 0) { BU[s]--; const d = BD[s]; if (d > 0) { EN[s] -= d; dot += d; ev = 1; } }
-        if (PO[s] > 0) { PO[s]--; const d = PD[s]; if (d > 0) { EN[s] -= d; dot += d; ev = 1; } }
-        if (FR[s] > 0 && WE[s] > 0 && ID[s] > 0) { const d = ID[s] * 1.5; EN[s] -= d; dot += d; ev = 1; }
-        if (FR[s] > 0) FR[s]--;
-        if (WE[s] > 0) WE[s]--;
-        if (SA[s] > 0) SA[s]--;
-        if (WA[s] > 0) { WA[s]--; if (WA[s] <= 0) ev |= 2; }
+        if (ON[s]) {
+            if (TH[s] > 0) TH[s]--;
+            if (BU[s] > 0) { BU[s]--; const d = BD[s]; if (d > 0) { EN[s] -= d; dot += d; ev = 1; } }
+            if (PO[s] > 0) { PO[s]--; const d = PD[s]; if (d > 0) { EN[s] -= d; dot += d; ev = 1; } }
+            if (FR[s] > 0 && WE[s] > 0 && ID[s] > 0) { const d = ID[s] * 1.5; EN[s] -= d; dot += d; ev = 1; }
+            if (FR[s] > 0) FR[s]--;
+            if (WE[s] > 0) WE[s]--;
+            if (SA[s] > 0) SA[s]--;
+            if (WA[s] > 0) { WA[s]--; if (WA[s] <= 0) ev |= 2; }
+            if (!(TH[s] > 0 || BU[s] > 0 || PO[s] > 0 || FR[s] > 0 || WE[s] > 0 || SA[s] > 0 || WA[s] > 0)) ON[s] = 0;
+        }
         if (EN[s] <= 0) { DEAD[s] = 1; ev |= 4; }
         else { if (AT[s] > 0) AT[s]--; if (AF[s] > 0) AF[s]--; if (WTC[s] > 0) WTC[s]--; }
         // (Reported every per ticks, or now that it died.)
@@ -3283,10 +3376,12 @@ SIM_KERNELS[SIM_KERNEL_INDEX_FILL] = function (R, P, chunk) {
     const OUTS = area ? R['ix.aslot'] : R['sep.eslot'], OUTK = area ? null : R['sep.ekey'];
     const START = area ? R['ix.astart'] : R['ix.start'], STAMP = area ? R['ix.astamp'] : R['ix.stamp'], LISTED = R['ix.listed'];
     const lim = area ? P[3] | 0 : P[2] | 0, ep = P[15] | 0, n = P[0] | 0;
+    const EID = area ? null : R['ix.eid'], UID = R['unit.id'];
     for (let pos = chunk * P[1], end = Math.min(n, pos + P[1]); pos < end; pos++) {
         const i = ORD[pos], k = KEY[i];
         if (k >= lim) { if (pos === 0 || KEY[ORD[pos - 1]] < lim) LISTED[area ? 1 : 0] = pos; continue; }
         OUTS[pos] = SL[i];
+        if (EID) EID[pos] = SL[i] >= 0 ? UID[SL[i]] | 0 : -1;
         if (OUTK) OUTK[pos] = k;
         if (pos === 0 || KEY[ORD[pos - 1]] !== k) { START[k] = pos; STAMP[k] = ep; }
     }

@@ -81,6 +81,106 @@ let seconds = Number(process.argv[2]) || 15;
         }
         console.log('rally clicks: selection', host.eval('__scratch.rallySel.length'), 'page ms per click', host.eval('JSON.stringify(__scratch.rallyMs)')); };
     }
+    // ACTIONS=n: a player-action workload on every peer, n bursts (default
+    // 15) RALLY_GAP ms apart (default 250), from a seeded schedule per peer.
+    // Each burst: every unit and every barrack and spawner of the player
+    // selected, and a ctrl click to a new point (by turns: the enemy's base,
+    // a random walkable tile, an unreachable one (a wall tile, a map
+    // corner)): the units split over the points so far, closest first (as
+    // RALLY10), move or attack-move by turns; the buildings' rally points
+    // the same way (setRallyMany per point); units queued at up to 300
+    // barracks; a research stat queued at each research building; every
+    // tower given a target (an enemy unit or building, or cleared); a tenth
+    // of the units hold, a tenth stop, a tenth attack an enemy unit, a tenth
+    // an enemy building. ACTIONS_TRAPS=n: n landmines (and n of the other
+    // traps) placed for each player along the middle at the setup.
+    let actionBursts = null;
+    if (process.env.ACTIONS !== undefined) {
+        const bursts = Number(process.env.ACTIONS) || 15, gap = Number(process.env.RALLY_GAP) || 250;
+        for (const g of peers) g.eval(`__scratch.actPts = []; __scratch.actMs = []; __scratch.actSeed = 9001 + localPlayerId * 7919; __scratch.actStats = {};`);
+        if (process.env.ACTIONS_TRAPS) {
+            const at = world.atNextSafeTick(`try { (() => {
+                let s = 4242; const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+                const kinds = ['mine', 'lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'sand'].filter(k => BASE_CARD_TYPES[k]);
+                let placed = 0;
+                for (let p = 0; p < players.length; p++) for (const k of kinds) for (let i = 0; i < ${Number(process.env.ACTIONS_TRAPS)}; i++) {
+                    const gx = Math.floor(GRID_W * (0.3 + 0.4 * rnd())), gy = Math.floor(GRID_H * (0.1 + 0.8 * rnd()));
+                    const c = grid[gy] && grid[gy][gx];
+                    if (!c || c.type !== TYPE_FLOOR || c.item || getTileEntityRef(gx, gy)) continue;
+                    if (placeBuilding(gx, gy, k, p, { ignorePlacementRules: true, silent: true })) { const it = grid[gy][gx].item; if (it) { it.underConstruction = false; it.energy = Math.max(1, it.maxEnergy || 1); } placed++; }
+                }
+                __scratch.trapsPlaced = placed;
+            })() } catch (e) { __scratch.trapsPlaced = String(e && e.stack || e).slice(0, 300); }`);
+            while (host.eval('currentTick') <= at + 2) await world.run(250);
+            console.log('traps placed', host.eval('JSON.stringify(__scratch.trapsPlaced)'));
+        }
+        actionBursts = async () => { for (let burst = 0; burst < bursts; burst++) {
+            for (const g of peers) g.eval(`(() => {
+                const t0 = __scratch.realNow ? __scratch.realNow() : Date.now();
+                let s = __scratch.actSeed + ${burst} * 104729; const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+                const me = localPlayerId, k = ${burst}, st = __scratch.actStats, inc = (n, v = 1) => { st[n] = (st[n] || 0) + v; };
+                const mine = units.filter(u => !u.dead && u.owner === me), foes = units.filter(u => !u.dead && u.owner !== me);
+                const foeB = [...barracks, ...collectorSpawners, ...towers].filter(b => b.owner !== me && b.energy > 0);
+                // The point: the enemy's base, a random walkable tile, an unreachable one.
+                let pt;
+                if (k % 3 === 0 && foeB.length) { const b = foeB[Math.floor(rnd() * foeB.length)]; pt = { x: b.gx * TILE + 16, y: b.gy * TILE + 16 }; inc('ptEnemy'); }
+                else if (k % 3 === 1) { const t = findNearestWalkable(Math.floor(rnd() * GRID_W), Math.floor(rnd() * GRID_H)); pt = { x: t.x * TILE + 16, y: t.y * TILE + 16 }; inc('ptRandom'); }
+                else {
+                    let w = null;
+                    for (let tries = 0; tries < 200 && !w; tries++) { const gx = Math.floor(rnd() * GRID_W), gy = Math.floor(rnd() * GRID_H); if (grid[gy][gx].type === TYPE_WALL) w = { gx, gy }; }
+                    if (!w) w = (k & 4) ? { gx: 0, gy: 0 } : { gx: GRID_W - 1, gy: GRID_H - 1 };
+                    pt = { x: w.gx * TILE + 16, y: w.gy * TILE + 16 }; inc('ptUnreachable');
+                }
+                const pts = __scratch.actPts; pts.push(pt);
+                // Closest unit/point pairs first, equal shares (main.js _assignToNearestPoints).
+                const assign = (xs, ys) => {
+                    const n = xs.length, kk = pts.length, cap = Math.ceil(n / kk), load = new Array(kk).fill(0), pick = new Int32Array(n);
+                    if (kk <= 1 || !n) return pick;
+                    const B = 65536, cnt = new Int32Array(B + 1), dist = new Int32Array(n), lists = [], keys = [];
+                    for (let j = 0; j < kk; j++) { cnt.fill(0); for (let i = 0; i < n; i++) { const dx = xs[i] - pts[j].x, dy = ys[i] - pts[j].y, d = Math.min(B - 1, Math.floor(Math.sqrt(dx * dx + dy * dy))); dist[i] = d; cnt[d + 1]++; }
+                        for (let d = 0; d < B; d++) cnt[d + 1] += cnt[d]; const L = new Int32Array(n), K = new Int32Array(n); for (let i = 0; i < n; i++) { const o = cnt[dist[i]]++; L[o] = i; K[o] = dist[i]; } lists.push(L); keys.push(K); }
+                    const head = new Int32Array(kk), done = new Uint8Array(n), alive = new Uint8Array(kk).fill(1); let left = n, open = kk;
+                    while (left && open) { let bj = -1, bk = Infinity, bi = 0; for (let j = 0; j < kk; j++) { if (!alive[j]) continue; const L = lists[j]; let h = head[j]; while (h < n && done[L[h]]) h++; head[j] = h; if (h >= n) { alive[j] = 0; open--; continue; } const q = keys[j][h]; if (q < bk || (q === bk && L[h] < bi)) { bk = q; bj = j; bi = L[h]; } }
+                        if (bj < 0) break; head[bj]++; done[bi] = 1; left--; load[bj]++; pick[bi] = bj; if (load[bj] >= cap) { alive[bj] = 0; open--; } }
+                    return pick;
+                };
+                // Units: move / attack-move to the points.
+                {
+                    const pick = assign(mine.map(u => u.x), mine.map(u => u.y)), buckets = pts.map(() => []);
+                    mine.forEach((u, i) => buckets[pick[i]].push(u.id));
+                    const action = (k & 1) ? 'attackMove' : 'move';
+                    buckets.forEach((b, j) => { if (b.length) { queueAction({ action, unitIds: b, targetX: pts[j].x, targetY: pts[j].y }); inc('unitOrders'); } });
+                }
+                // Buildings: rally points.
+                {
+                    const bs = [...barracks, ...collectorSpawners].filter(b => b.owner === me);
+                    const pick = assign(bs.map(b => b.gx * TILE + 16), bs.map(b => b.gy * TILE + 16)), coords = pts.map(() => []);
+                    bs.forEach((b, i) => coords[pick[i]].push(b.gx, b.gy));
+                    coords.forEach((c, j) => { for (let o = 0; o < c.length; o += 2 * ACTION_MAX_RALLY_COORDS) { queueAction({ action: 'setRallyMany', coords: c.slice(o, o + 2 * ACTION_MAX_RALLY_COORDS), targetX: pts[j].x, targetY: pts[j].y, targetUnitId: null }); inc('rallyActions'); } });
+                }
+                // Production and research.
+                { const bs = barracks.filter(b => b.owner === me && !b.underConstruction); for (let i = 0; i < Math.min(300, bs.length); i++) { const b = bs[Math.floor(rnd() * bs.length)]; queueAction({ action: 'queueUnit', gx: b.gx, gy: b.gy, count: 2 }); inc('queueUnit'); } }
+                { const things = Object.values(RESEARCH_THINGS_BY_ID || {}).filter(t => t && t.stats && t.stats.length); const labs = collectorSpawners.filter(b => b.owner === me && b.type === 'research' && !b.underConstruction);
+                  for (const lab of labs.slice(0, 50)) { const t = things[Math.floor(rnd() * things.length)]; if (!t) break; const stt = t.stats[Math.floor(rnd() * t.stats.length)]; queueAction({ action: 'queueResearch', gx: lab.gx, gy: lab.gy, kind: t.kind, key: t.key, statKey: stt.statKey, count: 1 }); inc('queueResearch'); } }
+                // Towers: a target each burst (enemy unit, enemy building, none).
+                { const ts = towers.filter(t => t.owner === me); const coords = ts.map(t => ({ gx: t.gx, gy: t.gy }));
+                  let target = null;
+                  if (k % 3 === 0 && foes.length) { const f = foes[Math.floor(rnd() * foes.length)]; target = { type: 'unit', id: f.id }; }
+                  else if (k % 3 === 1 && foeB.length) { const b = foeB[Math.floor(rnd() * foeB.length)]; target = { type: b instanceof Tower ? 'tower' : b instanceof Barrack ? 'barrack' : 'spawner', gx: b.gx, gy: b.gy }; }
+                  for (let o = 0; o < coords.length; o += ACTION_MAX_TOWER_COORDS) { queueAction({ action: 'towerTarget', towerCoords: coords.slice(o, o + ACTION_MAX_TOWER_COORDS), target }); inc('towerTarget'); } }
+                // Hold, stop, attack a unit, attack a building: a tenth each.
+                { const ids = mine.filter(u => !u.workerType).map(u => u.id), tenth = Math.floor(ids.length / 10), part = j => ids.slice(j * tenth, (j + 1) * tenth);
+                  if (tenth) {
+                    queueAction({ action: 'hold', unitIds: part(0) }); queueAction({ action: 'stop', unitIds: part(1) }); inc('holdStop', 2);
+                    if (foes.length) { const f = foes[Math.floor(rnd() * foes.length)]; queueAction({ action: 'attack', unitIds: part(2), targetId: f.id, targetX: f.x, targetY: f.y }); inc('attack'); }
+                    if (foeB.length) { const b = foeB[Math.floor(rnd() * foeB.length)]; queueAction({ action: 'attackBuilding', unitIds: part(3), targetGx: b.gx, targetGy: b.gy }); inc('attackBuilding'); }
+                  } }
+                __scratch.actMs.push(Math.round(((__scratch.realNow ? __scratch.realNow() : Date.now()) - t0) * 10) / 10);
+            })()`);
+            await world.run(gap);
+        }
+        console.log('action bursts', bursts, 'page ms per burst', host.eval('JSON.stringify(__scratch.actMs)'), 'host actions', host.eval('JSON.stringify(__scratch.actStats)')); };
+    }
     // ACTIVE=1: give the workers work (as players would have sent them to
     // it), on every peer at the same tick: each collector at a mine of its
     // own, builders with towers to build beside them, healers beside
@@ -314,6 +414,18 @@ let seconds = Number(process.argv[2]) || 15;
         S.columns.mvOut.fill(0, 0, S.owners.length); const c = __scratch.realNow(); let m = 0; _forEachUnitInTickOrder(u => { m++; }); const d = __scratch.realNow();
         __scratch.lc.push([currentTick, Math.round((b - a) * 10) / 10, n, Math.round((d - c) * 10) / 10, m]); return r; }; }`);
     // UPDSPLIT=1: Unit.update time and count by kind (worker state / command).
+    // UPDTICK=a,b,...: per listed tick, Unit.update calls (and ms) by kind:
+    // worker state or command, mvOn before the kernel, owner (printed as
+    // updTick).
+    if (process.env.UPDTICK) host.eval(`__scratch.ut = {}; { const want = new Set(${JSON.stringify((process.env.UPDTICK || '').split(',').map(Number))});
+        const f = Unit.prototype.update; let pre = null, preTick = -1;
+        const fr = simMoveRun; simMoveRun = function () { if (want.has(currentTick)) { const S = _simUnitState; pre = S.columns.mvOn.slice(0, S.owners.length); preTick = currentTick; } return fr.apply(this, arguments); };
+        Unit.prototype.update = function () {
+            if (!want.has(currentTick) || (this._us && this._us.mvOut[this._si])) return f.call(this);
+            const on = preTick === currentTick && this._us ? pre[this._si] : -1;
+            const k = (this.workerState ? 'w:' + this.workerState : 'c' + this.commandState) + ' on' + on + ' p' + this.owner;
+            const a = __scratch.realNow();
+            try { return f.call(this); } finally { const r = (__scratch.ut[currentTick] ||= {}); const e = (r[k] ||= [0, 0]); e[0] += __scratch.realNow() - a; e[1]++; } }; }`);
     if (process.env.UPDSPLIT) host.eval(`__scratch.us = {}; { const f = Unit.prototype.update; Unit.prototype.update = function () {
         if (this._us && this._us.mvOut[this._si]) return f.call(this);
         let k = this.workerState ? 'w:' + this.workerState + (this.workerState === 'IDLE' ? ':' + this.workerType : '') : 'c' + this.commandState;
@@ -411,6 +523,8 @@ let seconds = Number(process.argv[2]) || 15;
                 const k = 'c' + cmd + ':on' + (pre ? pre[s] : '-') + ':' + cb + ':' + pend + (st ? ':st' : '') + '->' + this.commandState + (this.targetBuilding ? 'b' : '');
                 const e = (__scratch.am[k] ||= [0, 0]); e[0] += ms; e[1]++; } } }; }`);
     // KTIME=1: wall time per kernel per tick (ms, averaged over the run).
+    // KTIMETICK=1: also per tick (ktick in the output: tick -> kernel -> ms).
+    if (process.env.KTIMETICK) host.eval(`__scratch.ktt = {}; { const f = simParallelRun; simParallelRun = function (k, total) { const a = __scratch.realNow(); try { return f.apply(this, arguments); } finally { const r = (__scratch.ktt[currentTick] ||= {}); r[k] = Math.round(((r[k] || 0) + __scratch.realNow() - a) * 100) / 100; } }; }`);
     if (process.env.KTIME) host.eval(`__scratch.kt = {}; { const f = simParallelRun; simParallelRun = function (k, total) { const a = __scratch.realNow(); try { return f.apply(this, arguments); } finally { __scratch.kt[k] = (__scratch.kt[k] || 0) + __scratch.realNow() - a; } }; }`);
     // KSHARE=1: per kernel, the share of chunks the main thread ran itself; binds per tick (by name).
     if (process.env.KSHARE) host.eval(`__scratch.ks = {}; __scratch.kb = {}; __scratch.kbt = {};
@@ -468,6 +582,7 @@ let seconds = Number(process.argv[2]) || 15;
     const t0 = Date.now();
     // (The ctrl clicks during the timed run: their ticks count.)
     if (rallyClicks) { await rallyClicks(); seconds = Math.max(0.5, seconds - 10 * (Number(process.env.RALLY_GAP) || 250) / 1000); }
+    if (actionBursts) { await actionBursts(); seconds = Math.max(0.5, seconds - (Number(process.env.ACTIONS) || 15) * (Number(process.env.RALLY_GAP) || 250) / 1000); }
     // REORDER=1: the same orders again after the run's first part (a second order's cost).
     if (process.env.REORDER) {
         await world.run(seconds * 500);
@@ -500,6 +615,7 @@ let seconds = Number(process.argv[2]) || 15;
         listChurn: process.env.LISTCHURN ? JSON.parse(host.eval(`JSON.stringify((() => { const { churn, counts } = __scratch.lchurn; const out = {};
             for (const l in churn) out[l] = { n: counts[l], fields: Object.fromEntries(Object.entries(churn[l]).sort((a, b) => b[1] - a[1]).slice(0, 30).map(([k, v]) => [k, Math.round(1e4 * v / counts[l]) / 100])) }; return out; })())`)) : undefined,
         arm: process.env.ARMSTAT ? JSON.parse(host.eval('JSON.stringify(__scratch.arm.filter(a => a[0] % 10 === 0))')) : undefined,
+        ktick: process.env.KTIMETICK ? JSON.parse(host.eval('JSON.stringify(__scratch.ktt)')) : undefined,
         ktime: process.env.KTIME ? JSON.parse(host.eval('JSON.stringify(Object.fromEntries(Object.entries(__scratch.kt).map(([k,v])=>[k, Math.round(v / __scratch.tickMs.length * 10) / 10])))')) : undefined,
         states: process.env.STATES ? JSON.parse(host.eval('JSON.stringify(units.reduce((m, u) => { const k = (u.workerType || "combat") + ":" + (u.workerState || u.commandState); m[k] = (m[k] || 0) + 1; return m; }, {}))')) : undefined,
         buildings: process.env.STATES ? host.eval('towers.length + "/" + barracks.length + "/" + collectorSpawners.length + "/" + getCellItemsRowMajor().length') : undefined,
@@ -512,6 +628,7 @@ let seconds = Number(process.argv[2]) || 15;
         amStat: process.env.AMSTAT ? JSON.parse(host.eval('(() => { const n = Math.max(1, __scratch.tickMs.length - 48); return JSON.stringify(Object.fromEntries(Object.entries(__scratch.am).sort((a,b)=>b[1][0]-a[1][0]).slice(0, 40).map(([k,v])=>[k,[Math.round(v[0]/n*10)/10, Math.round(v[1]/n)]]))); })()')) : undefined,
         wmoveStat: process.env.WMOVESTAT ? JSON.parse(host.eval('(() => { const n = Math.max(1, __scratch.tickMs.length - 48); return JSON.stringify(Object.fromEntries(Object.entries(__scratch.wm).sort((a,b)=>b[1][0]-a[1][0]).map(([k,v])=>[k,[Math.round(v[0]/n*10)/10, Math.round(v[1]/n)]]))); })()')) : undefined,
         wakeStat: process.env.WAKESTAT ? JSON.parse(host.eval('(() => { const n = Math.max(1, __scratch.tickMs.length - 48); return JSON.stringify(Object.fromEntries(Object.entries(__scratch.wk).sort((a,b)=>b[1][0]-a[1][0]).map(([k,v])=>[k,[Math.round(v[0]/n*10)/10, Math.round(v[1]/n)]]))); })()')) : undefined,
+        updTick: process.env.UPDTICK ? JSON.parse(host.eval('JSON.stringify(Object.fromEntries(Object.entries(__scratch.ut).map(([t, r]) => [t, Object.fromEntries(Object.entries(r).sort((a, b) => b[1][0] - a[1][0]).slice(0, 25).map(([k, v]) => [k, [Math.round(v[0] * 10) / 10, v[1]]]))])))')) : undefined,
         updSplit: process.env.UPDSPLIT ? JSON.parse(host.eval('(() => { const n = Math.max(1, __scratch.tickMs.length - 48); return JSON.stringify(Object.fromEntries(Object.entries(__scratch.us).sort((a,b)=>b[1][0]-a[1][0]).map(([k,v])=>[k,[Math.round(v[0]/n*10)/10, Math.round(v[1]/n)]]))); })()')) : undefined,
         orderSplit: process.env.ORDERSPLIT ? JSON.parse(host.eval('JSON.stringify(Object.fromEntries(Object.entries(__scratch.os).map(([k,v])=>[k,[Math.round(v[0]),v[1]]])))')) : undefined,
                 fastProps: process.env.FASTPROPS ? [host, ...guests].map(p => p.eval('(() => { let fast = 0, slow = 0; for (const u of units) { if (%HasFastProperties(u)) fast++; else slow++; } return fast + "/" + slow + " cols:" + %HasFastProperties(_simUnitState.columns); })()')) : undefined,
@@ -519,5 +636,9 @@ let seconds = Number(process.argv[2]) || 15;
         rallyStat: process.env.RALLYSTAT ? JSON.parse(host.eval('JSON.stringify(__scratch.rs.filter((r, i) => i < 40 || i % 10 === 0))')) : undefined,
         heaviest: JSON.parse(host.eval('JSON.stringify(__scratch.byTick.slice().sort((a, b) => b[1] - a[1]).slice(0, 8))')) }));
     if (process.env.DUMPSEP) require('node:fs').writeFileSync(process.env.DUMPSEP_OUT, host.scratch.sepDump || '{}');
+    // DUMPBIN=dir: typed arrays a probe left in a peer's __scratch.bin
+    // ({ name: TypedArray }), written as <dir>/<peer>-<name>.<Type>.bin.
+    if (process.env.DUMPBIN) peers.forEach((g, k) => { const b = g.scratch.bin; if (!b) return; for (const [name, arr] of Object.entries(b))
+        require('node:fs').writeFileSync(path.join(process.env.DUMPBIN, k + '-' + name + '.' + arr.constructor.name + '.bin'), Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength)); });
     process.exit(0);
 })().catch(e => { console.error(e); process.exit(1); });
