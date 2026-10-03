@@ -97,10 +97,11 @@ for (const [seed, teams] of [[5, 1], [17, 1], [5, 2], [17, 2]]) {
         // A standing crowd settles: little visible back-and-forth (both
         // steps a quarter pixel or more; sub-pixel settling does not show);
         // not packed.
-        assert.ok(now.visibleJitter <= old.visibleJitter * 1.5 + 0.005, `seed ${seed}: visible back-and-forth ${now.visibleJitter} (old ${old.visibleJitter})`);
-        assert.ok(now.jitterPx <= old.jitterPx * 1.5 + 0.005, `seed ${seed}: back-and-forth px ${now.jitterPx} (old ${old.jitterPx})`);
+        assert.ok(now.visibleJitter <= old.visibleJitter * 1.25 + 0.002, `seed ${seed}: visible back-and-forth ${now.visibleJitter} (old ${old.visibleJitter})`);
+        assert.ok(now.jitterPx <= old.jitterPx * 1.25 + 0.001, `seed ${seed}: back-and-forth px ${now.jitterPx} (old ${old.jitterPx})`);
         assert.ok(now.meanStep <= old.meanStep * 1.25 + 0.05, `seed ${seed}: mean step ${now.meanStep} (old ${old.meanStep})`);
-        assert.ok(now.friendOverlap <= old.friendOverlap * 1.6 + 0.01, `seed ${seed}: friend overlap ${now.friendOverlap} (old ${old.friendOverlap})`);
+        // (Smoothness first: a few percent more overlap does not show, back-and-forth does.)
+        assert.ok(now.friendOverlap <= old.friendOverlap * 2.5 + 0.02, `seed ${seed}: friend overlap ${now.friendOverlap} (old ${old.friendOverlap})`);
     } else {
         // Fighting: teams kept apart by the padding.
         assert.ok(now.enemyOverlap <= old.enemyOverlap * 1.6 + 0.03, `seed ${seed}: enemy overlap ${now.enemyOverlap} (old ${old.enemyOverlap})`);

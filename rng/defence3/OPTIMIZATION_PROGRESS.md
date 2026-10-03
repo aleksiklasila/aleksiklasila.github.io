@@ -63,6 +63,113 @@ is next. Newest entries first within each section.
 
 ## Session log
 
+### 2026-10-03 (ninth round) — desyncs with helpers, holds, rally benchmark
+
+Desyncs (host with helpers vs a guest without), all found with the
+tickbench desync probe (`EVAL="$(cat desyncprobe.js)"`, resync requests'
+differing parts) and fixed:
+1. Rally (75000-500, RALLY10=all: 112 desyncs): the end-of-tick index +
+   separation prebuild read live state but ran lazily (at its wait) on a
+   peer without helpers. Chains reading live state run eagerly there
+   (`simParallelBackgroundChain(lane, stages, true)`), and their live
+   stages finish before a tick's actions (`spatialIndexPrebuildSettle` in
+   processActions).
+2. ACTIVE/siege (36-38 desyncs): an invalidated prebuild left its
+   separation half-taken: the prebuilt separation is now dropped on every
+   invalidation (whether or not its chain still runs).
+3. ACTIVE (still 36, first diff the tick after a between-tick teleport):
+   lane 0 is shared by the separation chain and the state hash's region
+   kernel; stage params persist, and the hash left P[5] = 1, which made the
+   separation's pack read the live positions the unit pass was moving
+   (the helpers mid-pass, the guest after it). Found with per-phase column
+   hashes on both peers (tickbench `EVALALL=` / `AFTERALL=` / `AFTERALL_OUT=`,
+   every peer). Every stage's params are now written whole (fill(0) first;
+   also the index prebuild). Guard: `tests/lane-params-poison.test.cjs`
+   (poisons idle lanes' params before each tick and hash: same hashes;
+   fails at tick 0 without the fix).
+   Results: ACTIVE, siege, RALLY10 all 0 desyncs / 0 patches; chaos with
+   CHAOS_HOST_HELPERS=7 + thresholds passes.
+
+Holds (siege unit pass 57 -> 51 ms): a stat change (effective level from
+nearby counts, all the time in a battle) dropped every attack hold; holds
+now stay when their range steps (mvReach) are the same and the unit still
+deals damage (the chase step length follows the speed). A one-tick timer
+is held too (the kernel's attack-tick hand-back, simHoldFire, fires it).
+Probe of the in-range attackers still running Unit.update (siege): target
+died 23%, stat-change release 19% (fixed), chasing with a path 17%, chase
+13%, building approach 9%, forced targets 8%, 1-tick timers 7% (fixed).
+
+More main-thread cuts (siege gameTick p50 133 -> ~107, steady ~102):
+- Dead units' compaction: `Array.prototype.copyWithin` on the units array
+  (objects: per element, ~20 ms a battle tick at 200k) replaced by a plain
+  loop from the first removal (~1.5 ms); the typed slot map keeps
+  copyWithin (a memmove).
+- Kernel job sizes: MOVE/MOVE_STEP 4096 -> 1024 slots (SIM_MOVE_CHUNK; the
+  last jobs' wait was ~3 ms), EFF_UNITS 1024 -> 256 (4 jobs of ~2.7 ms),
+  STATUS 8192 -> 2048 with a per-job list of the units with events (the
+  simulation thread visits those, not every unit of a job with one).
+  MOVE wall 12.1 -> 9 ms, STATUS 4.2 -> 3, EFF 3.6 -> 2.1 (siege, 8 cores:
+  per-job cost on the host is ~2x the serial one, all cores busy).
+- State hash: the region sums in a typed accumulator (first-touch order and
+  mod 2^32 sums as before: the same hashes) instead of a Map get/set per
+  entity; the static slices iterated as arrays (remade when a slice changes).
+- Damage alerts (presentation): a control group's membership by a set made
+  once per list (a scan of a 50k-unit group per hit), groups marked this
+  tick skipped, at most 40 map alerts a tick (the map keeps 40).
+- Attack-move engagements that end (target dead, out of sight, leash,
+  structure gone) resume the attack-move in the same update (doIdle did it
+  a tick later: every kill sent each attacker through a whole idle update).
+  Steady siege JS updates before: ~4.6k/tick (idle resumes 1.2k, attack-
+  movers on paths 1k, held targets died 1.1k, forced 0.3k, chases 0.3k).
+
+Rally benchmark (75000-500, 56k selected per team, 10 ctrl points 250 ms
+apart, both teams): steady ticks 24-42 ms whole (gameTick p50 26.5);
+click ticks 70-100 ms (orders applied 10k units a tick, ~2 us each, plus
+the re-armed movers); the first click 195 ms (the units-by-id map was built
+then: now built at the first tick). RALLYSTAT adds ~30 ms a tick to the
+measured tick (its own loop): leave it off for timing. TOPPHASES no
+longer wraps processActions twice.
+
+Move orders: one target position and one flow path per order (never
+changed in place, only replaced), ids deduplicated when queued, each
+slice's units looked up in order (no set), the id sort skipped when in
+order. (Click ticks unchanged within noise: the cost is the volume.)
+
+Measured at the end (HELPERS=7, 0 desyncs / 0 patches everywhere):
+
+| Workload | whole tick p50 | gameTick p50 (steady) | notes |
+|---|---:|---:|---|
+| ACTIVE 200k | 49.8 (p90 54) | 42 | move kernels 13, hash 6.6, unit pass 6.9, separation commit 5.9, eff 3.9, combat scan 3.1, worker search 2.6 |
+| siege 200k + 16k towers | ~110 | ~100 (from ~115) | unit pass ~30 (4.6k JS updates/tick), move ~15, hits 8, status 6, adjacency 5, sep 5, towers 4, lasers 4; hash ~11 |
+| RALLY10 75000-500 (150k) | 31.9 (steady 25-35) | 25 | click ticks 40-70 for ~2.5 s; first click 230-300 (lazy area boxes + path regions on the first big order of a match) |
+
+Found by the regression suite and fixed: SIM_KERNEL_SEPARATION_YIELD had
+been overwritten by the staggered SEP_MARK loop in the eighth round
+(ReferenceError on `meta`: only the in-tick slot fallback,
+_prepareSharedUnitSeparation, runs it); the order queue now also takes
+actions without a sanitized id set (tests call processAction directly);
+tests/shared-separation-commit.test.cjs updated to the current FINISH
+(exception lists, gain/now params, sums cleared as read, positions
+committed to the columns).
+
+Separation quality unchanged (separation-jitter: 0 visible jitter, ~5%
+friend overlap, 0 enemy overlap). Tests: chaos (plain and with
+CHAOS_HOST_HELPERS=7 + thresholds), desync-recovery, snapshot, patch,
+lane-params-poison, kernel-object-equivalence (seeds 5/7/9/3/11/21).
+
+Next (largest first): siege unit pass (retargeting after kills and chases
+with paths in the kernels: each costs a whole Unit.update), hits resolve
+(8 ms: per-hit JS), MOVE kernel holds (per-tick revalidation of held units:
+~half the kernel; cache the range result by positions + versions), hash
+static/reservations part (~4 ms in ACTIVE), separation FINISH over every
+slot (2.7 ms), building-change handlers in sieges (adjacency, lasers).
+
+Noted, not fixed: kernel-object equivalence seed 13 crossroads (audit #2);
+with SEPARATION_SLOT_MIN_UNITS/SPATIAL_PARALLEL_MIN_UNITS = 0 on every peer
+and the hash/eff kernels on the host only, the object-path guest needs
+repairs (seed 5 islands, 37; pre-existing, first diff includes A* budget
+and _sepMoved): to bisect.
+
 ### 2026-10-02 (eighth round) — separation chain, index prebuild, total-work cuts
 
 User priorities (restated): main tick < 50 ms at 20 TPS; smooth jitter-free

@@ -387,26 +387,49 @@ function getUnitWorldPos(u) {
     return { x: gx * TILE + TILE / 2, y: gy * TILE + TILE / 2 };
 }
 
+// Whether a control group's list holds x: a big list by a set made once
+// per list (and its length: a list grown or cut in place is made again).
+// A battle hits thousands of units a tick; a scan of a 50k-unit group per
+// hit froze the page.
+const _controlGroupSets = new WeakMap();
+function _controlGroupHas(list, x) {
+    if (list.length < 64) return list.includes(x);
+    let m = _controlGroupSets.get(list);
+    if (!m || m.len !== list.length) { m = { set: new Set(list), len: list.length }; _controlGroupSets.set(list, m); }
+    return m.set.has(x);
+}
+
 function markControlGroupsDamaged(unit, isKing) {
     if (!unit) return;
+    const until = gameTime + CONTROL_GROUP_ALERT_TICKS;
     for (let n = 1; n <= 9; n++) {
         let key = String(n);
+        // (Marked this tick already: nothing a membership test could add.)
+        let st0 = controlGroupAlertState[key];
+        if (st0 && st0.damageUntil >= until && (!isKing || st0.kingUntil >= until)) continue;
         let grp = getControlGroupSnapshot(key);
         if (!grp) continue;
         if (grp.units.length === 0 && grp.entities.length === 0) continue;
-        if (!grp.units.includes(unit) && !grp.entities.includes(unit)) continue;
+        if (!_controlGroupHas(grp.units, unit) && !_controlGroupHas(grp.entities, unit)) continue;
         let st = ensureControlGroupAlertState(key);
-        st.damageUntil = Math.max(st.damageUntil, gameTime + CONTROL_GROUP_ALERT_TICKS);
-        if (isKing) st.kingUntil = Math.max(st.kingUntil, gameTime + CONTROL_GROUP_ALERT_TICKS);
+        st.damageUntil = Math.max(st.damageUntil, until);
+        if (isKing) st.kingUntil = Math.max(st.kingUntil, until);
     }
 }
 
+// (The map keeps the last 40 alerts: a tick adds at most that many, a
+// king's always.)
+let _damageAlertTick = -1, _damageAlertCount = 0;
 function pushDamageAlert(target, dmg) {
     if (!target || !Number.isFinite(dmg) || dmg <= 0.35) return;
     let isKing = !!target.isKing;
     let pos = getUnitWorldPos(target);
-    mapAlerts.push({ x: pos.x, y: pos.y, start: gameTime, dur: isKing ? MAP_KING_ALERT_DURATION : MAP_ALERT_DURATION, kind: isKing ? 'king' : 'damage' });
-    if (mapAlerts.length > 40) mapAlerts.splice(0, mapAlerts.length - 40);
+    if (_damageAlertTick !== gameTime) { _damageAlertTick = gameTime; _damageAlertCount = 0; }
+    if (isKing || _damageAlertCount < 40) {
+        _damageAlertCount++;
+        mapAlerts.push({ x: pos.x, y: pos.y, start: gameTime, dur: isKing ? MAP_KING_ALERT_DURATION : MAP_ALERT_DURATION, kind: isKing ? 'king' : 'damage' });
+        if (mapAlerts.length > 40) mapAlerts.splice(0, mapAlerts.length - 40);
+    }
 
     markControlGroupsDamaged(target, isKing);
 

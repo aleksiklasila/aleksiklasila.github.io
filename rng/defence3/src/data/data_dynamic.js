@@ -1117,7 +1117,7 @@ function eliminateTeamAssets(pid) {
         u.dead = true;
         removeUnitSpatial(u);
         selectedUnits = selectedUnits.filter(su => su !== u);
-        units.splice(i, 1); unitSlotMapInvalidate();
+        units.splice(i, 1); unitSlotMapInvalidate(); if (typeof unitByIdRemoved === 'function') unitByIdRemoved(u);
     }
     players[pid].popCount = 0;
     _bumpPathTopologyVersion();

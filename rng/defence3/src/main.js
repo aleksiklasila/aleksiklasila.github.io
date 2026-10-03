@@ -170,6 +170,7 @@ function _unitSlotMapEnsure() {
 }
 // After units.push(u).
 function unitSlotMapPushed(u) {
+    if (typeof unitByIdAdded === 'function') unitByIdAdded(u);
     const M = _unitSlotMap;
     if (M.ref !== units || M.len !== units.length - 1) return;
     if (M.slots.length < units.length) { const a = simSharedArray(Int32Array, units.length * 2); a.set(M.slots); M.slots = a; }
@@ -875,25 +876,27 @@ function _gameTickBody() {
     // which in big fights (hundreds of deaths a tick) cost most of the tick.
     // Dead units are found in the dead column (through the slot map, no
     // object reads) and marked by index; the compaction moves references.
-    const removedIndices = [], removedSet = selectedUnits.length ? new Set() : null;
+    const removedIndices = [], removedUnits = [], removedSet = selectedUnits.length ? new Set() : null;
     const DS = _simUnitState, dslots = DS ? _unitSlotMapEnsure() : null, DEAD = DS ? DS.columns.dead : null, downers = DS ? DS.owners : null;
     let compactRemovedUnits = () => {
         if (!removedIndices.length) return;
-        let w = 0, from = 0;
         const M = _unitSlotMap, keep = M.ref === units && M.len === units.length, ms = M.slots;
-        // Copy surviving runs natively; no JS visit to every survivor.
+        // The survivors after the first removal moved down: the slot map
+        // natively (typed: a memmove), the units array by a plain loop
+        // (Array.prototype.copyWithin on objects is per element and slow:
+        // ~20 ms a tick of a battle at 200k units, the loop ~1.5 ms).
         // The removals were recorded backwards, as death effects require.
+        let w = removedIndices[removedIndices.length - 1], from = w;
         for (let k = removedIndices.length - 1; k >= -1; k--) {
             const end = k >= 0 ? removedIndices[k] : units.length;
-            if (w !== from && end > from) {
-                units.copyWithin(w, from, end);
-                if (keep) ms.copyWithin(w, from, end);
-            }
-            w += end - from; from = end + 1;
+            if (w !== from && end > from && keep) ms.copyWithin(w, from, end);
+            for (let i = from; i < end; i++) units[w++] = units[i];
+            from = end + 1;
         }
         units.length = w;
         if (keep) { M.len = w; M.ver++; }
         if (removedSet) selectedUnits = selectedUnits.filter(su => !removedSet.has(su));
+        for (let k = 0; k < removedIndices.length; k++) unitByIdRemoved(removedUnits[k]);
     };
     for (let b = retireBlocks - 1; b >= 0; b--) for (let j = _unitRetireCounts[b] - 1; j >= 0; j--) {
         const i = _unitRetireList[b * UNIT_RETIRE_BLOCK + j];
@@ -903,7 +906,7 @@ function _gameTickBody() {
         upkeepUnitGone(u);
         if (u._removedNow) {
             // Removed by removeUnitNow (spatial and population already done).
-            removedIndices.push(i); if (removedSet) removedSet.add(u);
+            removedIndices.push(i); removedUnits.push(u); if (removedSet) removedSet.add(u);
         } else {
             if (!u.isKing && !u.workerState) playSound('unit_death', u.x, u.y, u.unitType);
             // Energy on death (bounty), dropped where it fell (with shrines
@@ -925,7 +928,7 @@ function _gameTickBody() {
             if (u.isKing) checkWinCondition();
             removeUnitSpatial(u);
             players[u.owner].popCount--;
-            removedIndices.push(i); if (removedSet) removedSet.add(u);
+            removedIndices.push(i); removedUnits.push(u); if (removedSet) removedSet.add(u);
             if (gameOver) { compactRemovedUnits(); return; }
         }
     }
@@ -1001,6 +1004,9 @@ function _gameTickBody() {
     _finalizePathfindPerfTick(_countPendingPathBacklog());
     // The next tick's unit index, on the helpers while the state hash runs.
     if (typeof spatialIndexPrebuild === 'function') spatialIndexPrebuild();
+    // (The units by id, made after a match's first tick or a restore, not at
+    // the first big order: a peer-local lookup, kept up to date from then.)
+    if (_unitByIdFor !== units) _unitByIdMap();
 }
 
 // ============================================================
@@ -1077,30 +1083,56 @@ function initInput() {
     // Split selected things across ctrl multi-points by proximity. Each point
     // still receives an equal share (as round-robin did), but the closest
     // thing/point pairs are matched first (squared distance, then index).
+    // (Per point, its things by distance in whole pixels, a counting sort
+    // (ties in thing order); then the points' lists merged, the closest pair
+    // first, as a sort of every pair would visit them: 56k units and 10
+    // points take tens of ms, not a second.)
     function _assignToNearestPoints(things, points, thingXY, pointXY) {
         let n = things.length, k = points.length;
         let result = new Array(n).fill(0);
         if (k <= 1 || n === 0) return result;
         let capacity = Math.ceil(n / k);
-        let load = new Array(k).fill(0);
+        let load = new Int32Array(k);
         let pts = points.map(pointXY);
-        let pairs = [];
-        for (let i = 0; i < n; i++) {
-            let a = thingXY(things[i]);
-            for (let j = 0; j < k; j++) {
-                let p = pts[j];
-                let dx = (a && p) ? a.x - p.x : 0, dy = (a && p) ? a.y - p.y : 0;
-                pairs.push({ i, j, d: dx * dx + dy * dy });
+        let xs = new Float64Array(n), ys = new Float64Array(n), has = new Uint8Array(n);
+        for (let i = 0; i < n; i++) { let a = thingXY(things[i]); if (a) { xs[i] = a.x; ys[i] = a.y; has[i] = 1; } }
+        const B = 65536, cnt = new Int32Array(B + 1), dist = new Int32Array(n);
+        // lists[j]: thing indices by distance; keys[j]: their distances.
+        let lists = [], keys = [];
+        for (let j = 0; j < k; j++) {
+            let p = pts[j];
+            cnt.fill(0);
+            for (let i = 0; i < n; i++) {
+                let dx = (has[i] && p) ? xs[i] - p.x : 0, dy = (has[i] && p) ? ys[i] - p.y : 0;
+                let d = Math.min(B - 1, Math.floor(Math.sqrt(dx * dx + dy * dy)));
+                dist[i] = d; cnt[d + 1]++;
             }
+            for (let d = 0; d < B; d++) cnt[d + 1] += cnt[d];
+            let L = new Int32Array(n), K = new Int32Array(n);
+            for (let i = 0; i < n; i++) { let o = cnt[dist[i]]++; L[o] = i; K[o] = dist[i]; }
+            lists.push(L); keys.push(K);
         }
-        pairs.sort((x, y) => (x.d - y.d) || (x.i - y.i) || (x.j - y.j));
-        let done = new Array(n).fill(false), left = n;
-        for (let pair of pairs) {
-            if (!left) break;
-            if (done[pair.i] || load[pair.j] >= capacity) continue;
-            done[pair.i] = true; left--;
-            load[pair.j]++;
-            result[pair.i] = pair.j;
+        // Merge: the smallest head of the k lists (k is small: a scan), a
+        // full point's list left out.
+        let head = new Int32Array(k), done = new Uint8Array(n), left = n, open = k;
+        let alive = new Uint8Array(k).fill(1);
+        while (left && open) {
+            let bj = -1, bk = Infinity, bi = 0;
+            for (let j = 0; j < k; j++) {
+                if (!alive[j]) continue;
+                let L = lists[j], h = head[j];
+                // (Things already placed are passed over.)
+                while (h < n && done[L[h]]) h++;
+                head[j] = h;
+                if (h >= n) { alive[j] = 0; open--; continue; }
+                let kk = keys[j][h];
+                if (kk < bk || (kk === bk && L[h] < bi)) { bk = kk; bj = j; bi = L[h]; }
+            }
+            if (bj < 0) break;
+            let i = bi;
+            head[bj]++;
+            done[i] = 1; left--; load[bj]++; result[i] = bj;
+            if (load[bj] >= capacity) { alive[bj] = 0; open--; }
         }
         return result;
     }
@@ -1628,7 +1660,8 @@ function initInput() {
         if (multiUnitCommandPoints.length === 0) multiUnitCommandPoints = [{ x: targetX, y: targetY }];
 
         let buckets = Array.from({ length: multiUnitCommandPoints.length }, () => []);
-        let unitById = new Map(units.map(u => [u.id, u]));
+        // (The kept id map: no map of every unit per click.)
+        let unitById = typeof _unitByIdMap === 'function' ? _unitByIdMap() : new Map(units.map(u => [u.id, u]));
         let pick = _assignToNearestPoints(unitIds, multiUnitCommandPoints, id => _entityWorldXY(unitById.get(id)), p => p);
         for (let i = 0; i < unitIds.length; i++) buckets[pick[i]].push(unitIds[i]);
 
@@ -3074,32 +3107,40 @@ function _pathStartInRegion(labels, region, gx, gy) {
 // Units by id with their index in the units array, rebuilt when the array
 // changed: actions look up their selected units instead of scanning every
 // unit per action.
-let _unitIndexById = null, _unitIndexFor = null, _unitIndexLen = -1, _unitIndexTick = -1, _unitIndexFirst = null, _unitIndexLast = null;
-function _unitIndexMap() {
-    let n = units.length;
-    if (_unitIndexById && _unitIndexFor === units && _unitIndexLen === n && _unitIndexTick === gameTime
-        && _unitIndexFirst === units[0] && _unitIndexLast === units[n - 1]) return _unitIndexById;
-    let map = new Map();
-    for (let i = 0; i < n; i++) { let u = units[i]; if (u) map.set(u.id, i); }
-    _unitIndexById = map; _unitIndexFor = units; _unitIndexLen = n; _unitIndexTick = gameTime;
-    _unitIndexFirst = units[0]; _unitIndexLast = units[n - 1];
-    return map;
-}
-function getUnitById(id) {
-    let i = _unitIndexMap().get(id);
-    return i === undefined ? null : units[i];
-}
-// An action's selected units that exist, in the units array's order.
-function _actionUnits(a) {
-    let map = _unitIndexMap(), idx = [];
-    for (let id of (a.unitIdSet || new Set(a.unitIds || []))) {
-        let i = map.get(id);
-        if (i !== undefined) idx.push(i);
+// Units by id, kept as the list changes (a unit added: unitSlotMapPushed;
+// removed: the dead-unit pass, eliminateTeamAssets) and made anew when the
+// list is replaced (a new match, a restore). It may still hold a unit that
+// died (callers skip dead ones), never one of another list.
+let _unitById = new Map(), _unitByIdFor = null;
+function _unitByIdMap() {
+    if (_unitByIdFor !== units) {
+        _unitById = new Map();
+        for (let i = 0; i < units.length; i++) { const u = units[i]; if (u) _unitById.set(u.id, u); }
+        _unitByIdFor = units;
     }
-    idx.sort((x, y) => x - y);
-    let out = new Array(idx.length);
-    for (let k = 0; k < idx.length; k++) out[k] = units[idx[k]];
-    return out;
+    return _unitById;
+}
+function unitByIdAdded(u) { if (_unitByIdFor === units && u) _unitById.set(u.id, u); }
+function unitByIdRemoved(u) { if (_unitByIdFor === units && u && _unitById.get(u.id) === u) _unitById.delete(u.id); }
+function getUnitById(id) {
+    const u = _unitByIdMap().get(id);
+    return u === undefined ? null : u;
+}
+// An action's selected units that exist, in the units array's order (the
+// list is in id order: units are added with rising ids and removed in
+// place, and a restore keeps the order).
+function _actionUnits(a) {
+    const map = _unitByIdMap(), out = [];
+    for (let id of (a.unitIdSet || new Set(a.unitIds || []))) {
+        const u = map.get(id);
+        if (u !== undefined) out.push(u);
+    }
+    return _unitsInIdOrder(out);
+}
+// (Selections are mostly in id order already: sorted only when not.)
+function _unitsInIdOrder(list) {
+    for (let i = 1; i < list.length; i++) if (list[i - 1].id > list[i].id) { list.sort((x, y) => x.id - y.id); break; }
+    return list;
 }
 
 const FLOW_MIN_GROUP = 8;
@@ -3116,13 +3157,16 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
     if (reachable.length) {
         navEnsure(profile);
         const destKey = dest.y * GRID_W + dest.x, did = navFieldRequest(profile, destKey, true), ready = navFieldReadyTick();
+        // (One path for the order's units: paths are replaced, never changed
+        // in place.)
+        const navPath = [{ x: dest.x, y: dest.y, nav: profile + 1, w: 1, ready }];
         for (let m of reachable) {
             let u = m.u;
             u._routeKey = NAV_ROUTE_KEY; u._routeEnd = destKey; u._navReady = ready;
             if (m.ugy * GRID_W + m.ugx === destKey) continue;
             // Its way: one nav node to the end (as continueUnitRoute gives),
             // walked by the kernel from its columns.
-            u.path = [{ x: dest.x, y: dest.y, nav: profile + 1, w: 1, ready }]; u.pathIndex = 0; u._routeSegEnd = destKey;
+            u.path = navPath; u.pathIndex = 0; u._routeSegEnd = destKey;
             if (did >= 0) simFlowArm(u._us, u._si, did, navFieldGen(did), destKey, cmd, profile === NAV_PROFILE_AIR, ready);
         }
     }
@@ -3139,8 +3183,17 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
 // the per-unit A*. Unit order and every tie-break are deterministic.
 function _issueGroupMoveOrder(a, playerId, cmd) {
     let targetGx = Math.floor(a.targetX / TILE), targetGy = Math.floor(a.targetY / TILE);
-    let ids = a.unitIdSet || new Set(a.unitIds);
     let groups = [];
+    // (One target position for the order's units: never changed in place,
+    // only replaced.)
+    const targetPos = { x: targetGx * TILE + 16, y: targetGy * TILE + 16 };
+    let list;
+    if (a.distinct && !a.unitIdSet) {
+        const map = _unitByIdMap();
+        list = [];
+        for (const id of a.unitIds) { const u = map.get(id); if (u !== undefined) list.push(u); }
+        _unitsInIdOrder(list);
+    } else list = _actionUnits(a);
     let groupByDest = new Map();
     let applyPath = (u, ugx, ugy, path) => {
         if (path && path.length > 0) {
@@ -3155,8 +3208,8 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
     let flowDest = [null, null], flowMembers = [null, null];
     // Flows pay off for groups; a few units route alone as before.
     let useFlows = (a.unitIds ? a.unitIds.length : 0) >= FLOW_MIN_GROUP;
-    for (let u of _actionUnits(a)) {
-        if (!ids.has(u.id) || u.owner !== playerId || u.dead) continue;
+    for (let u of list) {
+        if (u.owner !== playerId || u.dead) continue;
         u.targetUnit = null; u.targetBuilding = null; u.forcedAttackTarget = false;
         u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
         u.commandState = cmd;
@@ -3164,7 +3217,7 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
         u._attackMoveGx = cmd === CMD_ATTACK_MOVING ? targetGx : null;
         u._attackMoveGy = cmd === CMD_ATTACK_MOVING ? targetGy : null;
         if (u.workerState) interruptWorkerForManualMove(u);
-        u.targetPos = { x: targetGx * TILE + 16, y: targetGy * TILE + 16 };
+        u.targetPos = targetPos;
         u._awaitGroupPath = 0;
         // Off any earlier flow (a route below sets it again).
         u._routeKey = null;
@@ -3304,6 +3357,9 @@ function sanitizeAction(raw) {
 
 function processActions(actions, playerId) {
     if (!Array.isArray(actions)) return;
+    // (The unit index built after the last tick, and what of it reads live
+    // state, done before an action changes anything.)
+    if (typeof spatialIndexPrebuildSettle === 'function') spatialIndexPrebuildSettle();
     for (let raw of actions) {
         let a = sanitizeAction(raw);
         if (!a) continue;
@@ -3333,7 +3389,8 @@ function _dropQueuedOrderUnits(idSet, playerId) {
 }
 function _queueGroupMoveOrder(a, playerId, cmd) {
     _dropQueuedOrderUnits(a.unitIdSet, playerId);
-    _orderQueue.push({ playerId, cmd, action: a.action, targetX: a.targetX, targetY: a.targetY, ids: a.unitIds.slice(), next: 0 });
+    // (Each id once, in the order given.)
+    _orderQueue.push({ playerId, cmd, action: a.action, targetX: a.targetX, targetY: a.targetY, ids: Array.from(a.unitIdSet || new Set(a.unitIds || [])), next: 0 });
     runQueuedOrders();
 }
 // Applies queued orders within this tick's budget.
@@ -3344,7 +3401,9 @@ function runQueuedOrders() {
         let ids = e.ids.slice(e.next, e.next + take);
         e.next += take; _orderBudgetLeft -= take;
         if (e.next >= e.ids.length) _orderQueue.shift();
-        try { _issueGroupMoveOrder({ action: e.action, targetX: e.targetX, targetY: e.targetY, unitIds: ids, unitIdSet: new Set(ids) }, e.playerId, e.cmd); }
+        // (The slice's ids are distinct: its units are looked up in order,
+        // no set of them.)
+        try { _issueGroupMoveOrder({ action: e.action, targetX: e.targetX, targetY: e.targetY, unitIds: ids, unitIdSet: null, distinct: true }, e.playerId, e.cmd); }
         catch (err) { reportRuntimeError('queued order', err); }
     }
 }

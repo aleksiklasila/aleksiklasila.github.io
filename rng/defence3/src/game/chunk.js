@@ -249,13 +249,17 @@ function _sxOwners() { return _sxBySlot ? _simUnitState.owners : null; }
 function spatialIndexEntries() { spatialIndexEnsure(); return _sxListed; }
 
 function spatialIndexEnsure() { if (_sxPre) _spatialIndexCollect(); if (_sxDirty) spatialIndexRebuild(); }
+// Before anything changes units after a tick (a tick's actions, its start):
+// the prebuild chain's stages reading live state are done.
+function spatialIndexPrebuildSettle() { if (_sxPre) _spatialIndexCollect(); }
 function spatialIndexInvalidate() { if (_sxPre) _spatialIndexCollect(); _sxDirty = true; _spatialIndexChainDrop(); }
 // The prebuild chain's separation still running reads the index's arrays:
 // before they are rewritten (or the world changes), waited for and dropped
 // (the tick then separates itself, from the same state: the same result).
+// (Dropped whether or not the chain still runs: without helpers it ran at
+// once, and every peer must drop it on the same events.)
 function _spatialIndexChainDrop() {
-    if (typeof SIM_LANE_IX !== 'number' || !simParallelBackgroundPending(SIM_LANE_IX)) return;
-    simParallelBackgroundWait(SIM_LANE_IX);
+    if (typeof SIM_LANE_IX === 'number' && simParallelBackgroundPending(SIM_LANE_IX)) simParallelBackgroundWait(SIM_LANE_IX);
     if (typeof separationPrebuildDrop === 'function') separationPrebuildDrop();
 }
 
@@ -297,9 +301,11 @@ function spatialIndexPrebuild() {
     const sep = typeof separationPrebuildStages === 'function' ? separationPrebuildStages(n, ep, gameTime + 1) : null;
     if (sep) for (const st of sep) stages.push(st);
     if (stages.length > SIM_PAR_BG_STAGES) throw new Error('spatialIndexPrebuild: ' + stages.length + ' stages');
-    for (let i = 0; i < stages.length; i++) { const P = simParallelStageParams(SIM_LANE_IX, i), v = stages[i][2]; for (let k = 0; k < v.length; k++) P[k] = v[k]; }
+    for (let i = 0; i < stages.length; i++) { const P = simParallelStageParams(SIM_LANE_IX, i), v = stages[i][2]; P.fill(0); for (let k = 0; k < v.length; k++) P[k] = v[k]; }
     X.bad[0] = 0; X.listed[0] = n; X.listed[1] = n;
-    simParallelBackgroundChain(SIM_LANE_IX, stages.map(st => [st[0], st[1]]));
+    // (Eager without helpers: it reads the live state, which the next tick
+    // changes.)
+    simParallelBackgroundChain(SIM_LANE_IX, stages.map(st => [st[0], st[1]]), true);
     const M = _unitSlotMap;
     _sxPre = { units, n, ver: M.ver, ep, masks, indexStages, sep: !!sep };
 }
@@ -312,7 +318,9 @@ function _spatialIndexCollect() {
     const valid = !_sxDirty && !!X && J.units === units && J.n === units.length && M.ref === units && M.ver === J.ver && J.ep === _sxEpoch + 1;
     // (The index's stages; the separation's run on, taken after the unit
     // pass, unless the index is dropped: then the whole chain is waited for.)
-    if (J.sep && valid) simParallelBackgroundWaitStage(SIM_LANE_IX, J.indexStages - 1);
+    // (Through the separation's first stage too: it reads the live columns,
+    // which the tick is about to change.)
+    if (J.sep && valid) simParallelBackgroundWaitStage(SIM_LANE_IX, J.indexStages);
     else simParallelBackgroundWait(SIM_LANE_IX);
     if (!valid || X.bad[0]) { _sxDirty = true; _spatialIndexChainDrop(); return; }
     if (J.sep && typeof separationPrebuildTaken === 'function') separationPrebuildTaken(J.ep);
