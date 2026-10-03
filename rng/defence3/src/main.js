@@ -3158,12 +3158,14 @@ const FLOW_MIN_GROUP = 8;
 // The ground combat units of a move order: their shared route (started
 // now, within this tick's search budget) as a flow each of them follows
 // from its columns. Units that cannot reach the destination search alone.
+// (members: the units, their tiles from their positions: no object per
+// unit, a click's 158k of them made garbage enough for several scavenges.)
 function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
     let labels = profile === NAV_PROFILE_GROUND ? getPathRegions(playerId) : null, region = labels ? labels[dest.y * GRID_W + dest.x] : -1;
     let reachable = members, outliers = null;
     if (region >= 0) {
         reachable = [];
-        for (let m of members) (_pathStartInRegion(labels, region, m.ugx, m.ugy) ? reachable : (outliers ||= [])).push(m);
+        for (let u of members) (_pathStartInRegion(labels, region, Math.floor(u.x / TILE), Math.floor(u.y / TILE)) ? reachable : (outliers ||= [])).push(u);
     }
     if (reachable.length) {
         navEnsure(profile);
@@ -3171,20 +3173,21 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
         // (One path for the order's units: paths are replaced, never changed
         // in place.)
         const navPath = [{ x: dest.x, y: dest.y, nav: profile + 1, w: 1, ready }];
-        for (let m of reachable) {
-            let u = m.u;
+        for (let u of reachable) {
             u._routeKey = NAV_ROUTE_KEY; u._routeEnd = destKey; u._navReady = ready;
-            if (m.ugy * GRID_W + m.ugx === destKey) continue;
+            if (Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE) === destKey) continue;
             // Its way: one nav node to the end (as continueUnitRoute gives),
             // walked by the kernel from its columns.
             u.path = navPath; u.pathIndex = 0; u._routeSegEnd = destKey;
-            if (did >= 0) simFlowArm(u._us, u._si, did, navFieldGen(did), destKey, cmd, profile === NAV_PROFILE_AIR, ready);
+            // (A worker goes all the way and is looked at on its check ticks,
+            // as simMoveTryArm arms it.)
+            if (did >= 0) simFlowArm(u._us, u._si, did, navFieldGen(did), destKey, u.workerState ? CMD_MOVING : cmd, profile === NAV_PROFILE_AIR, ready, !!u.workerState, !!u.workerState);
         }
     }
-    if (outliers) for (let m of outliers) {
-        let u = m.u;
+    if (outliers) for (let u of outliers) {
+        const ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
         u._routeKey = null;
-        applyPath(u, m.ugx, m.ugy, _findPathForUnitTagged('player_commands', u, m.ugx, m.ugy, dest.x, dest.y, !!u.isFlying, null, u.owner));
+        applyPath(u, ugx, ugy, _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, !!u.isFlying, null, u.owner));
     }
 }
 
@@ -3223,10 +3226,13 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
         if (u.owner !== playerId || u.dead) continue;
         u.targetUnit = null; u.targetBuilding = null; u.forcedAttackTarget = false;
         u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
-        u.commandState = cmd;
+        // (Workers only move: MANUAL_MOVE keeps them moving, set here at
+        // once, as their flow is armed.)
+        const ucmd = u.workerState ? CMD_MOVING : cmd;
+        u.commandState = ucmd;
         // Attack-move resumes toward this tile after each engagement.
-        u._attackMoveGx = cmd === CMD_ATTACK_MOVING ? targetGx : null;
-        u._attackMoveGy = cmd === CMD_ATTACK_MOVING ? targetGy : null;
+        u._attackMoveGx = ucmd === CMD_ATTACK_MOVING ? targetGx : null;
+        u._attackMoveGy = ucmd === CMD_ATTACK_MOVING ? targetGy : null;
         if (u.workerState) interruptWorkerForManualMove(u);
         u.targetPos = targetPos;
         u._awaitGroupPath = 0;
@@ -3235,14 +3241,18 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
         // Combat units follow a flow (the group's route as a distance field,
         // in the movement kernel; flying ones the straight line): no path
-        // or search of their own. See simFlowArm.
-        if (useFlows && !u.workerState && !u.holdPosition && u._us && u._spatialEpoch === spatialEpoch) {
+        // or search of their own. See simFlowArm. So do workers sent by the
+        // player (MANUAL_MOVE: they arrive where the flow ends, as at a
+        // path's end); a group route each (a reverse search over the map,
+        // 5 MB of tables) cost 30-120 ms a tick with a few thousand workers
+        // ordered around.
+        if (useFlows && (!u.workerState || u.workerState === 'MANUAL_MOVE') && !u.holdPosition && u._us && u._spatialEpoch === spatialEpoch) {
             let profile = u.isFlying ? 1 : 0;
             let fdest = flowDest[profile] || (flowDest[profile] = findNearestWalkable(targetGx, targetGy, ugx, ugy, u));
             u._pendingPathTarget = null; u.pathIsFallbackAstar = false; u._routeSegEnd = -1;
             u._routeEnd = fdest.y * GRID_W + fdest.x;
             u.path = null; u.pathIndex = 0;
-            (flowMembers[profile] ||= []).push({ u, ugx, ugy });
+            (flowMembers[profile] ||= []).push(u);
             continue;
         }
         let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
@@ -3345,16 +3355,39 @@ function _actionIdStampGrow(id) {
     _actionIdStamp = a;
 }
 
-// Big orders' sanitizing warmed up (compiled, the id stamps grown) early in
-// a match, not at its first big order (cold, a 20000-unit action took
-// ~4 ms, warm 0.4). Peer-local scratch only.
+// Big orders' id loops warmed up (compiled, the id stamps grown) early in
+// a match, not at its first big order: a click's 180k ids took ~30 ms cold
+// (deopts and recompiles), ~5 warm. Fed as a packet's lists are (parsed:
+// packed small integers): warmed on other shapes they deopted at the first
+// real order. Peer-local scratch only (the order stamps' are a scratch
+// table; seqs no order has, the supersede cache kept).
 let _actionSanitizeWarm = false;
 function actionSanitizeWarm() {
     if (_actionSanitizeWarm) return;
     _actionSanitizeWarm = true;
-    const ids = new Array(ACTION_MAX_UNIT_IDS);
-    for (let i = 0; i < ids.length; i++) ids[i] = i * 2;
-    for (let k = 0; k < 4; k++) { const a = sanitizeAction({ action: 'move', unitIds: ids, targetX: 0, targetY: 0 }); if (a) _actionDistinctIds(a); }
+    const ids = JSON.parse(JSON.stringify(Array.from({ length: 5000 }, (_, i) => 3 + i * 61)));
+    for (let k = 0; k < 16; k++) _actionCleanIds(ids);
+    const T = { a: new Int32Array(1 << 12), m: null }, f = Float64Array.from(ids), sq = _orderSupSeq, se = _orderSupEntry;
+    for (let k = 0; k < 16; k++) _orderStampIds(T, f, 0x7ffffff1 + k);
+    _orderSupSeq = sq; _orderSupEntry = se;
+}
+// The distinct integer ids of a list in the order given, at most
+// ACTION_MAX_UNIT_IDS (sanitizeAction: a stamp per id, no set of them).
+function _actionCleanIds(ids) {
+    const clean = [], now = _actionIdStampNext();
+    let odd = null;
+    for (let i = 0; i < ids.length && clean.length < ACTION_MAX_UNIT_IDS; i++) {
+        const id = ids[i];
+        if (!(typeof id === 'number' && Number.isInteger(id))) continue;
+        if (id >= 0 && id < ACTION_ID_STAMP_MAX) {
+            if (id >= _actionIdStamp.length) _actionIdStampGrow(id);
+            if (_actionIdStamp[id] === now) continue;
+            _actionIdStamp[id] = now;
+        } else if ((odd || (odd = new Set())).has(id)) continue;
+        else odd.add(id);
+        clean.push(id);
+    }
+    return clean;
 }
 function sanitizeAction(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw) || typeof raw.action !== 'string') return null;
@@ -3367,22 +3400,8 @@ function sanitizeAction(raw) {
     for (let k of ['itemType', 'kind', 'key', 'statKey', 'targetType', 'mode', 'unitType']) if (k in a) a[k] = _actionStr(a[k]);
     if ('itemType' in a && !(a.itemType && Object.prototype.hasOwnProperty.call(BASE_CARD_TYPES, a.itemType))) a.itemType = null;
     if ('count' in a) a.count = Math.max(1, Math.min(ACTION_MAX_COUNT, _actionInt(a.count) ?? 1));
-    let ids = Array.isArray(a.unitIds) ? a.unitIds : [];
-    let clean = [];
-    // (Each id once, in the order given: a stamp per id, no set of them.)
-    const now = _actionIdStampNext();
-    let odd = null;
-    for (let i = 0; i < ids.length && clean.length < ACTION_MAX_UNIT_IDS; i++) {
-        let id = ids[i];
-        if (!(typeof id === 'number' && Number.isInteger(id))) continue;
-        if (id >= 0 && id < ACTION_ID_STAMP_MAX) {
-            if (id >= _actionIdStamp.length) _actionIdStampGrow(id);
-            if (_actionIdStamp[id] === now) continue;
-            _actionIdStamp[id] = now;
-        } else if ((odd || (odd = new Set())).has(id)) continue;
-        else odd.add(id);
-        clean.push(id);
-    }
+    // (Each id once, in the order given.)
+    const clean = Array.isArray(a.unitIds) ? _actionCleanIds(a.unitIds) : [];
     a.unitIds = clean;
     // (Distinct now: the order queue takes them as they are.)
     Object.defineProperty(a, '_idsDistinct', { value: clean, enumerable: false, configurable: true });
@@ -3454,8 +3473,15 @@ function _orderBudgetOf(p) { const b = _orderBudgets[p]; return b === undefined 
 // is dropped at once, not walked id by id (a click's 158k superseded ids
 // cost ~9 ms a tick).
 let _orderSeq = 0, _unitOrderSeq = [], _orderBySeq = new Map();
-// (A unit's stamp changing from `old`: that entry has one live unit less.)
-function _orderStampSuperseded(old) { if (old > 0) { const e = _orderBySeq.get(old); if (e) e.live--; } }
+// (A unit's stamp changing from `old`: that entry has one live unit less.
+// The last entry looked up is kept: a new order's units mostly come from
+// one earlier order.)
+let _orderSupSeq = 0, _orderSupEntry = null;
+function _orderStampSuperseded(old) {
+    if (!(old > 0)) return;
+    if (old !== _orderSupSeq) { _orderSupSeq = old; _orderSupEntry = _orderBySeq.get(old) || null; }
+    if (_orderSupEntry) _orderSupEntry.live--;
+}
 // (Per player: { a: Int32Array by unit id, m: Map for ids past it }.)
 function _unitOrderSeqOf(p) { return _unitOrderSeq[p] || (_unitOrderSeq[p] = { a: new Int32Array(1 << 12), m: null }); }
 function _orderStampSet(T, id, seq) {
@@ -3497,12 +3523,17 @@ function _dropQueuedOrderUnits(idSet, playerId) {
     const T = _unitOrderSeqOf(playerId), seq = _orderSeqNext();
     for (const id of idSet) { _orderStampSuperseded(_orderStampGet(T, id)); _orderStampSet(T, id, seq); }
 }
+// An order's ids made their units' latest order (seq) in T (the entries
+// ordering them before lose them).
+function _orderStampIds(T, ids, seq) {
+    for (let i = 0; i < ids.length; i++) { const id = ids[i]; _orderStampSuperseded(_orderStampGet(T, id)); _orderStampSet(T, id, seq); }
+}
 function _queueGroupMoveOrder(a, playerId, cmd) {
     // (Each id once, in the order given (sanitizeAction); the units' latest
     // order now. Kept typed: queued ids are nothing for the collector to
     // trace.)
     const ids = Float64Array.from(_actionDistinctIds(a)), seq = _orderSeqNext(), T = _unitOrderSeqOf(playerId);
-    for (let i = 0; i < ids.length; i++) { _orderStampSuperseded(_orderStampGet(T, ids[i])); _orderStampSet(T, ids[i], seq); }
+    _orderStampIds(T, ids, seq);
     const e = { playerId, cmd, action: a.action, targetX: a.targetX, targetY: a.targetY, ids, next: 0, seq, live: ids.length };
     _orderQueue.push(e); _orderBySeq.set(seq, e);
     runQueuedOrders();
@@ -3531,7 +3562,7 @@ function runQueuedOrders() {
             }
             _orderBudgets[p] = _orderBudgetOf(p) - ids.length; _orderAllLeft -= ids.length;
             // (Finished: the player's next order may run in this round.)
-            if (e.live <= 0 || e.next >= e.ids.length) { _orderQueue.splice(qi, 1); _orderBySeq.delete(e.seq); seen.delete(p); } else qi++;
+            if (e.live <= 0 || e.next >= e.ids.length) { _orderQueue.splice(qi, 1); _orderBySeq.delete(e.seq); if (_orderSupSeq === e.seq) { _orderSupSeq = 0; _orderSupEntry = null; } seen.delete(p); } else qi++;
             progress = true;
             // (The slice's ids are distinct: its units are looked up in order,
             // no set of them.)
@@ -3543,7 +3574,7 @@ function runQueuedOrders() {
     }
 }
 function _refillOrderBudget() { _orderBudgets.length = 0; _orderAllLeft = ORDER_UNITS_PER_TICK_ALL; }
-function resetOrderQueue() { _orderQueue = []; _orderBudgets = []; _unitOrderSeq = []; _orderBySeq = new Map(); _orderSeq = 0; _orderAllLeft = ORDER_UNITS_PER_TICK_ALL; }
+function resetOrderQueue() { _orderQueue = []; _orderBudgets = []; _unitOrderSeq = []; _orderBySeq = new Map(); _orderSupSeq = 0; _orderSupEntry = null; _orderSeq = 0; _orderAllLeft = ORDER_UNITS_PER_TICK_ALL; }
 // The queue as state (snapshots): each entry's units still to apply that
 // it ordered last, entries with none left out.
 function orderQueueSnapshot() {
@@ -3559,7 +3590,7 @@ function orderQueueRestore(rows) {
     resetOrderQueue();
     for (const r of rows || []) {
         const ids = Float64Array.from(Array.isArray(r[5]) ? r[5] : []), seq = _orderSeqNext(), T = _unitOrderSeqOf(r[0]);
-        for (const id of ids) { _orderStampSuperseded(_orderStampGet(T, id)); _orderStampSet(T, id, seq); }
+        _orderStampIds(T, ids, seq);
         const e = { playerId: r[0], cmd: r[1], action: r[2], targetX: r[3], targetY: r[4], ids, next: 0, seq, live: ids.length };
         _orderQueue.push(e); _orderBySeq.set(seq, e);
     }
@@ -4684,7 +4715,11 @@ function normalizeLockstepPayload(v) {
     let t = typeof v;
     if (t === 'number') return Number.isFinite(v) ? v : null;
     if (t === 'string' || t === 'boolean') return v;
-    if (Array.isArray(v)) return v.map(normalizeLockstepPayload);
+    if (Array.isArray(v)) {
+        const out = new Array(v.length);
+        for (let i = 0; i < v.length; i++) { const e = v[i]; out[i] = typeof e === 'number' ? (Number.isFinite(e) ? e : null) : normalizeLockstepPayload(e); }
+        return out;
+    }
     if (t === 'object') {
         let out = {};
         for (let k of Object.keys(v)) {
@@ -4706,13 +4741,62 @@ function hashStringLockstep(s) {
     return (h >>> 0).toString(16).padStart(8, '0');
 }
 
+// hashStringLockstep(stableSerializeForLockstep(v)) without the string: the
+// same characters fed to the same hash as they would be written (an order
+// of 20000 unit ids made ~20000 strings and their joins per checksum, the
+// most garbage of a click's tick on every peer).
+function hashStableLockstep(v) {
+    return (_lsHashValue(2166136261 | 0, v) >>> 0).toString(16).padStart(8, '0');
+}
+function _lsHashStr(h, s) { for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); return h; }
+const _lsDigits = new Uint8Array(24);
+function _lsHashValue(h, v) {
+    if (v === null || v === undefined) return _lsHashStr(h, 'null');
+    const t = typeof v;
+    if (t === 'number') {
+        // (Whole numbers below 1e21: JSON writes their digits; -0 as 0.)
+        if (Number.isInteger(v) && Math.abs(v) < 1e21) {
+            let n = v;
+            if (n < 0) { h = Math.imul(h ^ 45, 16777619); n = -n; }
+            if (n < 4294967296) {
+                let k = 0;
+                do { const q = Math.floor(n / 10); _lsDigits[k++] = n - q * 10; n = q; } while (n > 0);
+                while (k > 0) h = Math.imul(h ^ (48 + _lsDigits[--k]), 16777619);
+                return h;
+            }
+            return _lsHashStr(h, JSON.stringify(n));
+        }
+        return _lsHashStr(h, JSON.stringify(v));
+    }
+    if (t === 'boolean') return _lsHashStr(h, v ? 'true' : 'false');
+    if (t === 'string') return _lsHashStr(h, JSON.stringify(v));
+    if (Array.isArray(v) || ArrayBuffer.isView(v)) {
+        if (!Array.isArray(v)) return _lsHashStr(h, stableSerializeForLockstep(v));
+        h = Math.imul(h ^ 91, 16777619);
+        for (let i = 0; i < v.length; i++) { if (i) h = Math.imul(h ^ 44, 16777619); h = _lsHashValue(h, v[i]); }
+        return Math.imul(h ^ 93, 16777619);
+    }
+    if (t === 'object') {
+        const keys = Object.keys(v).sort();
+        h = Math.imul(h ^ 123, 16777619);
+        for (let i = 0; i < keys.length; i++) {
+            if (i) h = Math.imul(h ^ 44, 16777619);
+            h = _lsHashStr(h, JSON.stringify(keys[i]));
+            h = Math.imul(h ^ 58, 16777619);
+            h = _lsHashValue(h, v[keys[i]]);
+        }
+        return Math.imul(h ^ 125, 16777619);
+    }
+    return _lsHashStr(h, JSON.stringify(String(v)));
+}
+
 function computeTickPacketChecksum(tick, peerId, teamId, actions) {
-    return hashStringLockstep(stableSerializeForLockstep({
+    return hashStableLockstep({
         tick: Math.floor(tick),
         peerId: String(peerId || ''),
         teamId: Math.floor(Number(teamId) || 0),
         actions: Array.isArray(actions) ? actions : []
-    }));
+    });
 }
 
 function computeTickBundleChecksum(tick, packets, flush = 0) {
@@ -4728,7 +4812,7 @@ function computeTickBundleChecksum(tick, packets, flush = 0) {
     let body = { tick: Math.floor(tick), packets: sorted };
     // A resync tick: every peer drops its history caches before running it.
     if (flush) body.flush = 1;
-    return hashStringLockstep(stableSerializeForLockstep(body));
+    return hashStableLockstep(body);
 }
 
 let runtimeErrorCount = 0;

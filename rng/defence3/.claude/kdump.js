@@ -13,7 +13,10 @@
     for (const name of '__KERNEL__'.split('+')) {
         const id = globalThis[name] !== undefined ? globalThis[name] : eval(name);
         const orig = SIM_KERNELS[id];
-        const keys = [...new Set([...orig.toString().matchAll(/R\['([^']+)'\]/g)].map(m => m[1]))];
+        // (Its source and the _sim* functions it calls: e.g. the movement
+        // kernel's passes.)
+        const seen = new Set(), srcOf = fn => { let t = fn.toString(); for (const m of t.matchAll(/\b(_sim[A-Za-z0-9_]+)\(/g)) { if (seen.has(m[1])) continue; seen.add(m[1]); let g = null; try { g = eval(m[1]); } catch { } if (typeof g === 'function') t += srcOf(g); } return t; };
+        const keys = [...new Set([...srcOf(orig).matchAll(/R\['([^']+)'\]/g)].map(m => m[1]))];
         let state = 0, tick = -1;
         const calls = [], params = [];
         SIM_KERNELS[id] = function (R, P, chunk) {

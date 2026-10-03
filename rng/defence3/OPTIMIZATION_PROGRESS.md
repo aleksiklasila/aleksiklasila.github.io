@@ -63,6 +63,86 @@ is next. Newest entries first within each section.
 
 ## Session log
 
+### 2026-10-03 (eleventh round) — click ticks, cold kernels (deopts), split movement kernels
+
+Same target and bench as the tenth round. New bench option RALLY_ROUNDS=2
+(a second round of the 10 clicks 3 s after the first, other points): the
+first round is cold (a freshly loaded save), the second warm.
+
+Fixed / changed:
+- Lockstep packet and bundle checksums stream the stable serialization's
+  characters into FNV (main.js hashStableLockstep) instead of building the
+  string (a click's 180k ids made MBs of string). Same values
+  (tests/lockstep-hash-stream.test.cjs, 3000 random payloads).
+- Flow orders take the units directly (no {u, ugx, ugy} wrapper per unit);
+  the supersede lookups cache the last entry (_orderSupSeq/_orderSupEntry).
+- Effective stats: units behind the stat tables refreshed at most
+  EFF_BEHIND_PER_TICK (1500) a tick (a research step made 40k at once).
+- Unit constructor: the fields an order writes declared together (one or
+  two cache lines of the object): order application 1.5 -> ~1.2 us/unit.
+- Order id loops in functions of their own (_actionCleanIds,
+  _orderStampIds), warmed at tick 3 on packet-shaped input (JSON-parsed,
+  packed small integers). The old warm-up used literal objects and holey
+  arrays: the first real order deoptimized it ("wrong map") and a click's
+  180k ids took ~30 ms; now ~2 ms first click, ~1 ms after.
+- Movement kernels split into separately compiled passes (sim_parallel.js
+  SIM_KERNEL_MOVE: _simMovePre (checks, holds, chases, looks),
+  _simMoveFlow, _simMovePath, _simMoveEpilogue; SIM_KERNEL_MOVE_STEP:
+  _simStepParked, _simStepFlow), units handed on in per-chunk lists
+  (_simMoveLists). Why: the MOVE kernel was one 23 KB bytecode function;
+  every code path first taken (the flow section had never run before the
+  first click: four "insufficient type feedback" deopts at ticks 27-35)
+  threw away its optimized code, and TurboFan took 50-110 ms to recompile
+  it while the whole kernel ran ~10x slower on every helper. Replaying the
+  dumped ticks 26-35 in order on one thread (.claude/kseq.cjs): MOVE ticks
+  28/29/34/35 73/93/88/100 ms -> 8/28/26/26 (warm ~7); STEP 29/30
+  31/38 -> 15/20. Outputs equal on every dumped tick (kbench VARIANT),
+  steady cost within noise (a per-slot mode tested in six passes cost 2x:
+  hence lists, and only three MOVE passes). Generated from the kernel's own
+  text (scratchpad genmove/genstep: each pass declares exactly the arrays
+  and per-unit locals it reads).
+- Found: Node 22 runs V8 without Maglev (Chrome has it): --maglev changed
+  little here (deopt recovery is the TurboFan recompile of big functions).
+
+Runs (whole tick incl. actions + resync; this laptop drifted ~10-20%
+slower during the session under background load (Firefox, Discord): judge
+kernels by ratio to unchanged ones, or by replays):
+- run 15 (streaming checksum, eff cap): mean 36.0, p50 34.7, p95 45.3,
+  max 95; 5/200 over 50 (first click 95: processActions 41).
+- run 16 (2 rounds, sanitize warm fix): mean 37.3, p95 44.7, max 78; 3/240
+  over 50 (ticks 28, 29, 32: first round only; the warm round max 48.9).
+- runs 18/19 (split kernels): cold MOVE spikes gone (tick 28 MOVE 12 -> 5-6
+  ms) but the machine ran 8-20% slower overall (unchanged kernels SEPFIN,
+  EFF, SP_COUNTS up by as much): 10 and 17 of 240 over 50.
+
+Profiles (steady, host only: .claude/profpeer2.cjs): ~36 ms a tick, ~19 in
+foreground kernels (main takes its share of chunks; ~3.8 waiting), the rest
+many 0.3-1.3 ms serial parts (hash static, separation commit, eff stats,
+combat scan posts, visibility sync, nav sweep). At tick 26 196k of 200k
+units are parked (ON=2), at tick 150 157k flow and 43k parked. Single
+thread per tick at tick 150: MOVE ~22 ms, STEP ~17, SEPFIN ~14 (~100 ns a
+unit each: instructions and ~25 columns a unit, no one hot spot); MOVE's
+flow look-ahead (simFlowLook/simNavStep/_simOpenBlock) ~25-30% of it,
+mostly tile index <-> coordinate divisions.
+
+Harness note: the guest runs every kernel serially on the same isolate as
+the host (no helpers): its garbage (deoptimized kernels box doubles: MOVE
+~15 MB in 4 click ticks) and GC land in the host's ticks. Main-isolate
+scavenges cost 3-7 ms here (1.3 GB heap of two peers); in a browser each
+peer has its own heap.
+
+Tooling: tickbench RALLY_ROUNDS, TICKLOG=all, SUBPHASES (wrap any global
+function), HEAPPROF_RANGE/OUT (+ .claude/heapsum.cjs, per script id);
+.claude/kdump2.js (inputs of kernels at several ticks) + kseq.cjs (replay
+them in order, VARIANT=, with --trace-deopt --allow-natives-syntax the
+deopts land between tick markers); kalloc.cjs (bytes a kernel allocates);
+kbench/kseq take NAME~tick; kdump(2) follow the _sim* functions a kernel
+calls; profpeer2.cjs (one peer's samples of a tickbench profile).
+
+Next: flow look-ahead arithmetic (coordinates carried, destination chunk
+once per look), parked units' per-tick cost (an active set), order
+application per unit, main-thread serial parts; then the other scenarios.
+
 ### 2026-10-03 (tenth round) — 100000-1000 rally benchmark, click spikes, tooling
 
 Target (user): every main tick < 50 ms (most of the time) on 100000-1000
@@ -109,6 +189,21 @@ Fixed:
   STATUS 2.7 -> 1.4 ms.
 - Integer unit columns as Int32 (id, owner, commandState, attackFlash,
   status timers, workerTransferCooldown: whole numbers by construction).
+- Unit index prebuild: the order merged from the last index
+  (SIM_KERNEL_INDEX_MERGE: entries whose unit keeps its slot and chunk keep
+  their order, the rest sorted and merged; ix.eid per entry tells a reused
+  slot) instead of a 3-pass radix sort every tick (~40 ms serial of helper
+  work). tests/index-merge.test.cjs (merged == sorted, every tick, deaths
+  and spawns). This freed helpers and memory bandwidth: every foreground
+  kernel got faster (MOVE 5.8 -> 4.5 ms, step 3.7 -> 2.8, finish 3.1 -> 2.6)
+  and the steady game tick fell 36.6 -> 30.8 ms. The background lanes'
+  load is the lever: the separation chain (~77 ms serial) and the hash
+  region kernel (~21) next.
+
+Run 11 (all of the above): whole tick mean 38.4, p50 37.3, p95 48.8, max
+95 (first click); 5 of 200 ticks over 50 ms, all on click ticks (first
+click: cold code in processActions 47 ms; MOVE / step / finish spikes the
+ticks after).
 
 Measured (whole tick, 200 ticks): mean 50.5 -> ~45-48, p95 83 -> ~58-69,
 max 193 -> ~110-150 (first click, cold code). Run-to-run noise on this

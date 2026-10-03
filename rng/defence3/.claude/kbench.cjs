@@ -3,7 +3,8 @@
 // fresh copies of the inputs, repeated. VARIANT=file.js: a replacement
 // (assigning KBENCH_VARIANT, optional KBENCH_PREP(R) / KBENCH_POST(R)) timed
 // the same way; every array either run writes compared after one replay.
-//   node .claude/kbench.cjs <dumpdir> <KERNEL_NAME> [peer=1] [reps=10]
+//   node .claude/kbench.cjs <dumpdir> <KERNEL_NAME[~tick]> [peer=1] [reps=10]
+// (KERNEL_NAME~tick: a kdump2.js dump of that tick.)
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm');
 const dir = process.argv[2], name = process.argv[3], peer = process.argv[4] || '1', reps = +process.argv[5] || 10;
@@ -21,8 +22,9 @@ for (const f of fs.readdirSync(dir)) {
 if (!calls) throw new Error('no dump for ' + name);
 // (The real global: a vm context's sandboxed globals (Math...) are slow.)
 const ctx = globalThis;
-vm.runInThisContext(fs.readFileSync(path.join(__dirname, '../src/sim/sim_parallel.js'), 'utf8'), { filename: 'sim_parallel.js' });
-const K = vm.runInThisContext('SIM_KERNELS[' + name + ']');
+// (SIMPAR=file: another sim_parallel.js, e.g. a copy before a change.)
+vm.runInThisContext(fs.readFileSync(process.env.SIMPAR || path.join(__dirname, '../src/sim/sim_parallel.js'), 'utf8'), { filename: 'sim_parallel.js' });
+const K = vm.runInThisContext('SIM_KERNELS[' + name.split('~')[0] + ']');
 const copy = () => { const R = {}; for (const k in src) R[k] = src[k].slice(); return R; };
 const replay = (fn, R) => { for (let i = 0; i < calls.length; i += 2) fn(R, P[calls[i + 1]], calls[i]); };
 const time = (label, fn, prep, post) => {
@@ -33,6 +35,8 @@ const time = (label, fn, prep, post) => {
 };
 console.log(name, 'calls', calls.length / 2, 'param sets', P.length, 'arrays', Object.keys(src).length, Object.keys(src).map(k => k + ':' + src[k].length).join(' '));
 time('original', K);
+// OUTHASH=1: a hash of every array after one replay (compare two SIMPAR files' runs).
+if (process.env.OUTHASH) { const A = copy(); replay(K, A); const out = {}; for (const k of Object.keys(A).sort()) { const u = new Uint8Array(A[k].buffer, A[k].byteOffset, A[k].byteLength); let h = 2166136261; for (let i = 0; i < u.length; i++) h = Math.imul(h ^ u[i], 16777619); out[k] = (h >>> 0).toString(16); } console.log('OUTHASH', JSON.stringify(out)); }
 if (process.env.VARIANT) {
     vm.runInThisContext(fs.readFileSync(process.env.VARIANT, 'utf8'), { filename: process.env.VARIANT });
     time('variant', ctx.KBENCH_VARIANT, ctx.KBENCH_PREP, ctx.KBENCH_POST);

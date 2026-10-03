@@ -965,7 +965,13 @@ function recalculateUnitEffectiveStats() {
     // New units (their list is drained by recalculateThingPrecomputedStats,
     // which runs next).
     for (let u of _newUnitsForStats) if (u._needsStatsInit && !taken(u)) _effStatsFullUnit(u, canUseSpatialCounts, chunkPx);
-    // The strided share.
+    // The strided share. (Units behind their stat tables (a research done:
+    // every unit of the type) take the slow full path: at most
+    // EFF_BEHIND_PER_TICK a tick, in index order; the rest at their next
+    // turn, behind until then. Both paths count the same units.)
+    let behindLeft = EFF_BEHIND_PER_TICK;
+    const behindNow = u => { const c = u._us; return !!c && c.esVer[u._si] !== _unitStatsVerOf(u); };
+    const takenNow = u => { const c = u._us; return c ? c.esTaken[u._si] === stamp : u._effectiveStatsStamp === stamp; };
     let step = Math.max(1, intervalTicks | 0), phase = tick % step, n = units.length;
     let m = phase < n ? Math.ceil((n - phase) / step) : 0;
     if (m > 0 && S && canUseSpatialCounts && typeof SIM_KERNEL_EFF_UNITS === 'number' && n >= EFF_STATS_KERNEL_MIN_UNITS) {
@@ -993,10 +999,18 @@ function recalculateUnitEffectiveStats() {
                 const s = slots[i], lvl = c.effectiveLevel[s];
                 applyUnitEffectiveScaling(u, lvl);
                 c._lastAppliedEffectiveLevel[s] = lvl;
-            } else if (!taken(u)) _effStatsFullUnit(u, canUseSpatialCounts, chunkPx);
+            } else if (u && !u.dead && !takenNow(u)) {
+                if (behindNow(u)) { if (behindLeft <= 0) continue; behindLeft--; }
+                if (!taken(u)) _effStatsFullUnit(u, canUseSpatialCounts, chunkPx);
+            }
         }
     } else {
-        for (let i = phase; i < n; i += step) { const u = units[i]; if (!taken(u)) _effStatsFullUnit(u, canUseSpatialCounts, chunkPx); }
+        for (let i = phase; i < n; i += step) {
+            const u = units[i];
+            if (!u || u.dead || takenNow(u)) continue;
+            if (behindNow(u)) { if (behindLeft <= 0) continue; behindLeft--; }
+            if (!taken(u)) _effStatsFullUnit(u, canUseSpatialCounts, chunkPx);
+        }
     }
     // The selection (single player only: never local timing in multiplayer).
     if (selectedSet) for (let u of selectedSet) if (_isSelectionStatsRefreshDue(u, selectedSet.size) && !taken(u)) _effStatsFullUnit(u, canUseSpatialCounts, chunkPx);
@@ -1004,6 +1018,8 @@ function recalculateUnitEffectiveStats() {
 // From this many units the strided share runs in the kernels (tests lower
 // it; both ways give the same state).
 let EFF_STATS_KERNEL_MIN_UNITS = 2048;
+// Units behind their stat tables refreshed per tick at most (see above).
+let EFF_BEHIND_PER_TICK = 1500;
 
 // ============================================================
 // BUILDING PLACEMENT & DESTRUCTION

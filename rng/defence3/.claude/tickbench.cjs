@@ -61,9 +61,10 @@ let seconds = Number(process.argv[2]) || 15;
         rallyClicks = async () => { for (let click = 0; click < 10; click++) {
             for (const g of who) g.eval(`(() => {
                 const a = __scratch.realNow ? __scratch.realNow() : Date.now();
-                const k = ${click}, pts = __scratch.rallyPts;
+                const k = ${click} + 3 * (__scratch.rallyRound || 0), pts = __scratch.rallyPts;
                 pts.push({ x: (0.12 + 0.76 * ((k * 7) % 10) / 9) * GRID_W * TILE, y: (0.12 + 0.76 * ((k * 3 + 1) % 10) / 9) * GRID_H * TILE });
-                const byId = new Map(units.map(u => [u.id, u])), ids = __scratch.rallySel.filter(id => byId.has(id) && !byId.get(id).dead);
+                // (The kept id map, as the page uses: main.js applyUnitCommandTargets.)
+                const byId = _unitByIdMap(), ids = __scratch.rallySel.filter(id => { const u = byId.get(id); return u !== undefined && !u.dead; });
                 const n = ids.length, kk = pts.length, cap = Math.ceil(n / kk), load = new Array(kk).fill(0), pick = new Array(n).fill(0);
                 // (main.js _assignToNearestPoints: per point a counting sort by
                 // whole-pixel distance, then the lists merged closest first.)
@@ -80,6 +81,33 @@ let seconds = Number(process.argv[2]) || 15;
             await world.run(gap);
         }
         console.log('rally clicks: selection', host.eval('__scratch.rallySel.length'), 'page ms per click', host.eval('JSON.stringify(__scratch.rallyMs)')); };
+    }
+    // LEVELS=max|min|mid|L: every player's research at that level (max:
+    // MAX_RESEARCH_LEVEL, min 0, mid half), every unit's and building's
+    // stacks for that thing level (max: MAX_THING_LEVEL, min 1, mid half),
+    // and both stockpiles very high (upkeep and movement costs at those
+    // levels); on every peer at one tick (the stats follow at their
+    // refreshes). LEVELS_SKIP=a,b: research stat keys left alone (e.g. an
+    // upkeep reduction).
+    if (process.env.LEVELS) {
+        const mode = process.env.LEVELS, skip = JSON.stringify((process.env.LEVELS_SKIP || '').split(',').filter(Boolean));
+        const at = world.atNextSafeTick(`try { (() => {
+            const pick = (max, min) => '${mode}' === 'max' ? max : '${mode}' === 'min' ? min : '${mode}' === 'mid' ? Math.max(min, Math.round((max + min) / 2)) : Math.max(min, Math.min(max, Number('${mode}') || min));
+            const R = pick(MAX_RESEARCH_LEVEL, 0), L = pick(MAX_THING_LEVEL, 1), stacks = Math.pow(2, L - 1), skip = new Set(${skip});
+            let stats = 0;
+            for (let p = 0; p < players.length; p++) {
+                const levels = ensurePlayerResearchLevels(p);
+                for (const t of Object.values(RESEARCH_THINGS_BY_ID || {})) for (const st of (t && t.stats) || []) { if (skip.has(st.statKey)) continue; levels[makeResearchLevelId(t.kind, t.key, st.statKey)] = R; stats++; }
+                _setPlayerResourceValue(p, 'energy', 1e15); _setPlayerResourceValue(p, 'astar', 1e15);
+            }
+            rebuildPrecomputedStatsMapPlayer();
+            for (const u of units) if (!u.dead) { u.stackCount = stacks; }
+            for (const b of [...towers, ...barracks, ...collectorSpawners]) if (b && b.energy > 0) b.stacks = stacks;
+            for (const it of getCellItemsRowMajor()) if (it && it.energy > 0) it.stacks = stacks;
+            __scratch.levelsSet = { R, L, stacks, stats };
+        })() } catch (e) { __scratch.levelsSet = String(e && e.stack || e).slice(0, 400); }`);
+        while (host.eval('currentTick') <= at + 2) await world.run(250);
+        console.log('levels set', host.eval('JSON.stringify(__scratch.levelsSet)'));
     }
     // ACTIONS=n: a player-action workload on every peer, n bursts (default
     // 15) RALLY_GAP ms apart (default 250), from a seeded schedule per peer.
@@ -346,9 +374,20 @@ let seconds = Number(process.argv[2]) || 15;
     host.scratch.profStop = () => session && session.post('Profiler.stop', (err, { profile }) => {
         require('node:fs').writeFileSync(process.env.PROFILE_OUT || require('node:path').join(__dirname, 'tick' + profileTick + '.cpuprofile'), JSON.stringify(profile));
     });
+    // HEAPPROF_RANGE=a,b: the sampling heap profiler over ticks a..b, collected
+    // objects included (the garbage the ticks make), written to HEAPPROF_OUT.
+    const [heapA, heapB] = (process.env.HEAPPROF_RANGE || '-1,-1').split(',').map(Number);
+    const hsession = heapA >= 0 ? new inspector.Session() : null;
+    if (hsession) hsession.connect();
+    host.scratch.heapStart = () => hsession && hsession.post('HeapProfiler.startSampling', { samplingInterval: 16384, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true });
+    host.scratch.heapStop = () => hsession && hsession.post('HeapProfiler.stopSampling', (err, r) => {
+        require('node:fs').writeFileSync(process.env.HEAPPROF_OUT || require('node:path').join(__dirname, 'ticks.heapprofile'), JSON.stringify(err ? { err: String(err) } : r.profile));
+    });
     host.eval(`__scratch.tickMs = []; __scratch.byTick = [];
         { const f = runOneTick; runOneTick = function () {
             const tick = currentTick, prof = tick === ${profileTick} || tick === ${profB};
+            if (tick === ${heapA}) __scratch.heapStart();
+            if (tick === ${heapB}) __scratch.heapStop();
             if (tick === ${profileTick} || tick === ${profA}) __scratch.profStart();
             const a = __scratch.realNow();
             try { return f.apply(this, arguments); } finally {
@@ -532,7 +571,8 @@ let seconds = Number(process.argv[2]) || 15;
         { const f = simParallelRun; simParallelRun = function (k, total) { const e = (__scratch.ks[k] ||= [0, 0]); e[1] += total; return f.apply(this, arguments); }; }
         { const f = simParallelBind; simParallelBind = function (name, arr) { if (_simParReg[name] !== arr) { __scratch.kb[name] = (__scratch.kb[name] || 0) + 1; __scratch.kbt[currentTick] = 1; } return f.apply(this, arguments); }; }`);
     // TICKLOG=1: print each tick's time as it ends (interleaves with --trace-gc).
-    if (process.env.TICKLOG) host.scratch.tickLog = (t, ms) => { if (ms > 30) console.log('TICK', t, ms.toFixed(1), 'end@', Math.round(realPerf.now())); };
+    // (TICKLOG=all: every tick, e.g. to place --trace-deopt lines between ticks.)
+    if (process.env.TICKLOG) host.scratch.tickLog = (t, ms) => { if (ms > 30 || process.env.TICKLOG === 'all') console.log('TICK', t, ms.toFixed(1), 'end@', Math.round(realPerf.now())); };
     if (process.env.COLSTATS) host.eval('__scratch.colStats = []');
     // FIELDKINDS=a,b: which unit fields changed value kind between ticks a and b
     // (int -> fraction, only-undefined -> value, number -> object...): each such
@@ -581,7 +621,13 @@ let seconds = Number(process.argv[2]) || 15;
             __scratch.lchurn = { churn, counts }; return r; }; }`);
     const t0 = Date.now();
     // (The ctrl clicks during the timed run: their ticks count.)
-    if (rallyClicks) { await rallyClicks(); seconds = Math.max(0.5, seconds - 10 * (Number(process.env.RALLY_GAP) || 250) / 1000); }
+    // RALLY_ROUNDS=n: n rounds of the ctrl clicks, RALLY_ROUND_GAP s apart
+    // (default 3; the selection's points cleared, other points): a warm
+    // round's cost next to the first (cold) one's.
+    if (rallyClicks) for (let round = 0, rounds = Number(process.env.RALLY_ROUNDS) || 1; round < rounds; round++) {
+        if (round) { const gap = Number(process.env.RALLY_ROUND_GAP) || 3; await world.run(gap * 1000); seconds = Math.max(0.5, seconds - gap); for (const g of peers) g.eval(`__scratch.rallyPts = []; __scratch.rallyRound = ${round};`); }
+        await rallyClicks(); seconds = Math.max(0.5, seconds - 10 * (Number(process.env.RALLY_GAP) || 250) / 1000);
+    }
     if (actionBursts) { await actionBursts(); seconds = Math.max(0.5, seconds - (Number(process.env.ACTIONS) || 15) * (Number(process.env.RALLY_GAP) || 250) / 1000); }
     // REORDER=1: the same orders again after the run's first part (a second order's cost).
     if (process.env.REORDER) {
