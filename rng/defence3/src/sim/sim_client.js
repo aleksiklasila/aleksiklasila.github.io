@@ -176,7 +176,7 @@ function simClientSyncGlobals() {
 }
 
 function simClientStop() {
-    if (_simClient) { _simClient.active = false; _simClient.epoch++; }
+    if (_simClient) { _simClient.active = false; _simClient.epoch++; _simClient.worker.postMessage({type:'presentationStop'}); }
 }
 
 // ---- ticks ----
@@ -218,6 +218,15 @@ function _simClientOnMessage(msg) {
             if (msg.world) { if (msg.epoch === c.epoch) _simClientApplyWorld(msg.world, 1); else _simClientReturnBufs(_simClientWorldBufs(msg.world)); }
             break;
         case 'ticked': _simClientApplyTick(msg); break;
+        case 'presentation': {
+            if (msg.epoch !== c.epoch || !c.active) { _simClientReturnBufs(_simClientWorldBufs(msg.world)); break; }
+            const now=performance.now(), shown=c.arrivedAt>0 ? Math.max(0,c.drawnAlpha) : 1;
+            _simClientApplyWorld(msg.world,shown);
+            if (c.arrivedAt>0) c.intervalMs += (Math.max(10,Math.min(250,now-c.arrivedAt))-c.intervalMs)*.25;
+            c.arrivedAt=now;c.drawnAlpha=-1;c.presentationTick=msg.tick;
+            c.presentationBuildMs=msg.buildMs;
+            break;
+        }
         case 'reply': {
             let r = c.replies.get(msg.id);
             c.replies.delete(msg.id);
@@ -258,7 +267,8 @@ function _simClientApplyTick(msg) {
     // results arrive. (The alpha of the last frame drawn with the previous
     // result; none drawn since it arrived: from its start.)
     let shown = c.arrivedAt > 0 ? (c.drawnAlpha >= 0 ? c.drawnAlpha : 0) : 1;
-    c.drawnAlpha = -1;
+    c.presentation = !!msg.presentation;
+    if (!c.presentation) c.drawnAlpha = -1;
     try { _simClientApplyWorld(msg.world, shown); } catch (err) { reportRuntimeError('sim frame', err); }
     currentTick = pageTick;
     c.appliedTick = msg.tick;
@@ -267,12 +277,12 @@ function _simClientApplyTick(msg) {
     // next result is expected to take (the recent spacing of results), so
     // motion stays continuous whether results come on time, late or in a
     // burst while catching up.
-    if (c.arrivedAt > 0) {
+    if (!c.presentation && c.arrivedAt > 0) {
         let tickMs = netSimulationTickMs();
         let interval = Math.max(tickMs * 0.25, Math.min(tickMs * 3, t0 - c.arrivedAt));
         c.intervalMs += (interval - c.intervalMs) * 0.25;
     }
-    c.arrivedAt = t0;
+    if (!c.presentation) c.arrivedAt = t0;
     if (dispatchedAt !== undefined) {
         let latency = Math.max(0, t0 - dispatchedAt);
         c.latencyMs += (Math.min(latency, TICK_MS * 3) - c.latencyMs) * (latency > c.latencyMs ? 0.3 : 0.05);
@@ -339,8 +349,8 @@ function _simClientApplyWorld(w, shown) {
     if (w.structures) { let old = pageApplyStructures(w.structures, c); if (old) back.push(old.buf); }
     if (w.projectiles) { let old = pageApplyProjectiles(w.projectiles, c, shown); if (old) back.push(old.buf); }
     pageApplyState(w.state);
-    _simClientApplyDetails(w.details);
-    pageApplyStructureDetails(w.structureDetails, c);
+    if ('details' in w) _simClientApplyDetails(w.details);
+    if ('structureDetails' in w) pageApplyStructureDetails(w.structureDetails, c);
     _simClientWatch();
     // Selected structures replaced by new objects (a restore): the new ones.
     if (selectedEntities.length && selectedEntities.some(e => e && e._structView && e.dead)) {
@@ -566,7 +576,7 @@ window.simClientStats = function () {
     let s = c.stats;
     return {
         enabled: true, loaded: c.loaded, active: c.active, helpers: c.helpers || 0, shared: !!c.shared, epoch: c.epoch, appliedTick: c.appliedTick, inFlight: c.inFlight, heals: s.heals, dropped: s.dropped,
-        errors: c.errors.slice(0, 5), firstDiff: s.firstDiff || null, rowsPerTick: s.applied ? Math.round(s.rows / s.applied * 10) / 10 : 0,
+        presentation:!!c.presentation, presentationTick:c.presentationTick, presentationBuildMs:c.presentationBuildMs, errors: c.errors.slice(0, 5), firstDiff: s.firstDiff || null, rowsPerTick: s.applied ? Math.round(s.rows / s.applied * 10) / 10 : 0,
         rowsPerTickByList: s.applied ? Object.fromEntries(Object.entries(s.rowsBy || {}).map(([k, v]) => [k, Math.round(v / s.applied * 10) / 10])) : null,
         applyMs: { mean: m(s.applyMs), p95: q(s.applyMs, .95) }, workerSimMs: { mean: m(s.simMs), p95: q(s.simMs, .95) },
         workerEncodeMs: { mean: m(s.encodeMs), p95: q(s.encodeMs, .95) }, latencyMs: { mean: m(s.latencyMs), p95: q(s.latencyMs, .95), shown: Math.round(c.latencyMs) }

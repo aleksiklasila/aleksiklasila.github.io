@@ -48,6 +48,7 @@ const _FX_ARC = { 0: [.05, .3], 1: [.2, 1.1], 2: [.26, 1.3], 3: [.07, .35], 4: [
 
 const _fx = {
     batch: null, flat: false, detail: true, now: 0, tickScale: 1, rest: 1,
+    limit:10000, cells:new Set(), cellSize:1,
     minX: 0, minZ: 0, maxX: 0, maxZ: 0, vis: null, full: false, lastNow: -Infinity
 };
 let _FXM = null, _FXP = null;
@@ -66,7 +67,7 @@ function _fxHash(seed, k) {
 }
 
 function _fxPush(mesh, x, y, z, yaw, sx, sy, sz, pitch, rgb, alpha, pattern, param, roll, additive) {
-    if (_fx.batch.total >= 10000) return;
+    if (_fx.batch.total >= _fx.limit) return;
     _fx.batch.push(mesh, x, y, z, yaw, sx, sy, sz, pitch, rgb[0], rgb[1], rgb[2], alpha, pattern, param, roll, additive);
 }
 
@@ -309,6 +310,18 @@ function _pushCombatRecordFx() {
         let x1 = data[o + 3] / TILE, z1 = data[o + 4] / TILE;
         let x0 = data[o + 1] / TILE, z0 = data[o + 2] / TILE;
         if (!_fxVisible(x1, z1) && !_fxVisible(x0, z0)) continue;
+        if (_fx.batch.total >= _fx.limit) continue;
+        if (!_fx.detail) {
+            // At map scale thousands of overlapping multi-part attacks are
+            // smaller than a pixel. Keep one cheap flash per small world cell.
+            const cx=Math.floor((x1-_fx.minX)/_fx.cellSize),cz=Math.floor((z1-_fx.minZ)/_fx.cellSize);
+            const key=cz*1048576+cx;
+            if(_fx.cells.has(key)) continue;
+            _fx.cells.add(key);
+            _fxDecal(x1,.06,z1,0,Math.max(.7,_fx.cellSize*.6),_FX_SHOT_COLOR[data[o+6]] || '#fff4c8',
+                .7*(1-age/duration),_FXP.GLOW,0,1);
+            continue;
+        }
         _fxEvent(kind, x0, z0, x1, z1, data[o + 6], data[o + 7], age / duration);
     }
 }
@@ -480,7 +493,10 @@ function beginFrameEffects(batch, flat2d, bounds, visibility, pixelsPerTile, ren
     _fx.flat = !!flat2d;
     _fx.rest = flat2d ? .15 : 1;
     // Zoomed far out, secondary pieces (debris, trails, smoke) are subpixel.
+    if(!flat2d && renderer && renderer.lodPixelsPerWorld>0) pixelsPerTile=renderer.lodPixelsPerWorld;
     _fx.detail = !(pixelsPerTile < 14);
+    _fx.limit = pixelsPerTile < 4 ? 1024 : pixelsPerTile < 14 ? 2048 : pixelsPerTile < 32 ? 4096 : 10000;
+    _fx.cellSize=Math.max(1,3/Math.max(.1,pixelsPerTile));_fx.cells.clear();
     _fx.renderer = !flat2d && renderer && typeof renderer.pixelsPerWorldAt === 'function' ? renderer : null;
     _fx.tickScale = Math.max(.25, (typeof TICK_RATE === 'number' ? TICK_RATE : 20) / 20);
     let now = gameTime + (typeof tickAlpha === 'number' ? tickAlpha : 0);
@@ -499,19 +515,19 @@ function buildFrameEffects(projectiles, particles, towers) {
     _pushCombatRecordFx();
     const alpha = typeof tickAlpha === 'number' ? tickAlpha : 0;
     const step = _fx.detail ? 1 : Math.max(1, Math.ceil((projectiles.length + particles.length) / 2000));
-    for (let i = 0; i < projectiles.length && _fx.batch.total < 10000; i += step) {
+    for (let i = 0; i < projectiles.length && _fx.batch.total < _fx.limit; i += step) {
         const p = projectiles[i];
         let px = (Number.isFinite(p.prevX) ? p.prevX + (p.x - p.prevX) * alpha : p.x) / TILE;
         let pz = (Number.isFinite(p.prevY) ? p.prevY + (p.y - p.prevY) * alpha : p.y) / TILE;
         if (_fxVisible(px, pz)) _pushProjectileFx(p, px, pz);
     }
-    for (let i = 0; i < particles.length && _fx.batch.total < 10000; i += step) {
+    for (let i = 0; i < particles.length && _fx.batch.total < _fx.limit; i += step) {
         const p = particles[i];
         let px = (Number.isFinite(p.prevX) ? p.prevX + (p.x - p.prevX) * alpha : p.x) / TILE;
         let pz = (Number.isFinite(p.prevY) ? p.prevY + (p.y - p.prevY) * alpha : p.y) / TILE;
         if (_fxVisible(px, pz)) _pushParticleFx(p, px, pz);
     }
-    for (let i = 0; i < towers.length && _fx.batch.total < 10000; i++) {
+    for (let i = 0; i < towers.length && _fx.batch.total < _fx.limit; i++) {
         const t = towers[i];
         if (t.type === 'laser') _pushLaserFenceFx(t);
     }

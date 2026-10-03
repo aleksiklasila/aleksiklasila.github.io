@@ -1913,12 +1913,21 @@ SIM_KERNELS[SIM_KERNEL_UNIT_FRAME] = function (R, P, chunk) {
     const X = R['unit.x'], Y = R['unit.y'], VX = R['unit.vx'], VY = R['unit.vy'];
     const PREVX = R['unit.prevX'], PREVY = R['unit.prevY'], ID = R['unit.id'];
     const ENERGY = R['unit.energy'], OWNER = R['unit.owner'], RAD = R['unit.r'], CMD = R['unit.commandState'];
+    const BURN = R['unit.burning'], POISON = R['unit.poisoned'], FROZEN = R['unit.frozen'], WET = R['unit.wet'], SAND = R['unit.sandy'];
+    const WATCH = R['unit.watched'], HIDE = R['unit.teleportHideTicks'], TRANSFER = R['unit.workerTransferCooldown'];
+    const LEVEL = R['unit.effectiveLevel'], BASE = R['unit.unitLevel'], FLASH = R['unit.attackFlash'];
     const slots = R['frame.slot'], lastX = R['frame.lastX'], lastY = R['frame.lastY'];
     const targetX = R['frame.targetX'], targetY = R['frame.targetY'], still = R['frame.still'], flash = R['frame.flash'];
     const time = P[3], rate = P[4], tile = P[5];
     for (let i = chunk * P[2], end = Math.min(P[1], i + P[2]); i < end; i++) {
         const s = F.order[i], u = slots[s], x = X[u], y = Y[u], vx = VX[u] || 0, vy = VY[u] || 0;
         F.id[s] = ID[u]; F.owner[s] = OWNER[u]; F.energy[s] = ENERGY[u]; F.r[s] = RAD[u]; F.cmd[s] = CMD[u] | 0;
+        F.flags[s] |= (BURN[u] > 0 ? SIM_UF_BURNING : 0) | (POISON[u] > 0 ? SIM_UF_POISONED : 0)
+            | (FROZEN[u] > 0 ? SIM_UF_FROZEN : 0) | (WET[u] > 0 ? SIM_UF_WET : 0) | (SAND[u] > 0 ? SIM_UF_SANDY : 0)
+            | (WATCH[u] > 0 ? SIM_UF_WATCHED : 0) | (HIDE[u] > 0 ? SIM_UF_HIDDEN : 0) | (TRANSFER[u] > 0 ? SIM_UF_TRANSFER : 0);
+        F.level[s] = Number.isFinite(LEVEL[u]) ? LEVEL[u] : -1;
+        F.blevel[s] = Number.isFinite(BASE[u]) ? BASE[u] : -1;
+        F.flash[s] = Math.max(0, Math.min(255, FLASH[u]));
         F.x[s] = x; F.y[s] = y; F.vx[s] = vx; F.vy[s] = vy;
         F.px[s] = lastX[s]; F.py[s] = lastY[s]; lastX[s] = x; lastY[s] = y;
         if (F.flags[s] & SIM_UF_SNAKE) {

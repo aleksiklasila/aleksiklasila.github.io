@@ -1,0 +1,677 @@
+{
+  "ref": "working-tree",
+  "fixture": "100000-1000.json",
+  "setup": {
+    "units": 200000,
+    "towers": 400,
+    "barracks": 7392,
+    "spawners": 5508,
+    "map": 1000
+  },
+  "info": {
+    "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 2060 (0x00001F15) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "zoom": 0.02965625,
+    "settings": {
+      "aa": "msaa",
+      "shadows": "high",
+      "ao": "low",
+      "outline": true,
+      "bloom": false,
+      "grade": true,
+      "sharpen": true,
+      "resolution": 1
+    },
+    "sim": {
+      "enabled": true,
+      "loaded": true,
+      "active": true,
+      "helpers": 7,
+      "shared": true,
+      "epoch": 2,
+      "appliedTick": 12,
+      "inFlight": 2,
+      "heals": 0,
+      "dropped": 0,
+      "errors": [],
+      "firstDiff": null,
+      "rowsPerTick": 0,
+      "rowsPerTickByList": {},
+      "applyMs": {
+        "mean": 13.86,
+        "p95": 76.68
+      },
+      "workerSimMs": {
+        "mean": 170.88,
+        "p95": 1623.92
+      },
+      "workerEncodeMs": {
+        "mean": 227.96,
+        "p95": 270.51
+      },
+      "latencyMs": {
+        "mean": 3343.17,
+        "p95": 19094.27,
+        "shown": 149
+      }
+    },
+    "start": 44409.205000000075,
+    "tick": 15
+  },
+  "results": {
+    "phases": {
+      "build3DFrameData": {
+        "n": 1176,
+        "ms": 260.8749999916181,
+        "max": 2.529999999795109
+      },
+      "gpuSubmit": {
+        "n": 1176,
+        "ms": 433.92000000551343,
+        "max": 89.59499999973923
+      },
+      "drawMinimap": {
+        "n": 1176,
+        "ms": 461.9250000040047,
+        "max": 16.015000000130385
+      },
+      "updateHUD": {
+        "n": 1176,
+        "ms": 82.17500000726432,
+        "max": 0.34500000020489097
+      },
+      "updateControlGroupBar": {
+        "n": 1218,
+        "ms": 94.92499999608845,
+        "max": 0.4100000001490116
+      },
+      "updateBottomBar": {
+        "n": 1176,
+        "ms": 703.3349999943748,
+        "max": 20.174999999813735
+      },
+      "processRenderFrame": {
+        "n": 1176,
+        "ms": 2485.370000003837,
+        "max": 92.93000000016764
+      },
+      "_simClientApplyFrame": {
+        "n": 42,
+        "ms": 7.165000000502914,
+        "max": 5.195000000298023
+      },
+      "updateAudioReactiveState": {
+        "n": 42,
+        "ms": 0.7750000013038516,
+        "max": 0.03500000014901161
+      },
+      "updateVisualVisibility": {
+        "n": 42,
+        "ms": 0.06499999947845936,
+        "max": 0.009999999776482582
+      },
+      "_simClientPageTickWork": {
+        "n": 42,
+        "ms": 83.29999999981374,
+        "max": 39.330000000074506
+      },
+      "commitStaticCaches": {
+        "n": 78,
+        "ms": 0.3300000000745058,
+        "max": 0.125
+      },
+      "sampleGameStats": {
+        "n": 2,
+        "ms": 77.68999999947846,
+        "max": 39.21999999973923
+      }
+    },
+    "sim": {
+      "enabled": true,
+      "loaded": true,
+      "active": true,
+      "helpers": 7,
+      "shared": true,
+      "epoch": 2,
+      "appliedTick": 54,
+      "inFlight": 2,
+      "heals": 0,
+      "dropped": 0,
+      "errors": [],
+      "firstDiff": null,
+      "rowsPerTick": 0,
+      "rowsPerTickByList": {},
+      "applyMs": {
+        "mean": 11.17,
+        "p95": 47.06
+      },
+      "workerSimMs": {
+        "mean": 54.77,
+        "p95": 102.74
+      },
+      "workerEncodeMs": {
+        "mean": 233.53,
+        "p95": 258.18
+      },
+      "latencyMs": {
+        "mean": 1202.35,
+        "p95": 1667,
+        "shown": 150
+      }
+    },
+    "fps": 113,
+    "tps": 4,
+    "end": 55711.30000000028,
+    "tick": 57,
+    "scale": [
+      {
+        "count": 55626,
+        "bytes": 3145728,
+        "upload": 0
+      },
+      {
+        "count": 0,
+        "bytes": 12582912,
+        "upload": 0
+      }
+    ],
+    "hot": [
+      {
+        "fn": "(idle)",
+        "url": "",
+        "line": 0,
+        "ms": 6508.01
+      },
+      {
+        "fn": "(program)",
+        "url": "",
+        "line": 0,
+        "ms": 1416.097
+      },
+      {
+        "fn": "drawMinimap",
+        "url": "http://127.0.0.1:63281/src/audio_visual/renderer.js?v=20261007-a",
+        "line": 3487,
+        "ms": 341.902
+      },
+      {
+        "fn": "_simClientApplyWorld",
+        "url": "http://127.0.0.1:63281/src/sim/sim_client.js?v=20261018-a",
+        "line": 333,
+        "ms": 336.808
+      },
+      {
+        "fn": "_bbCollectThings",
+        "url": "http://127.0.0.1:63281/src/audio_visual/bottom_bar.js?v=20260930-deltacolor",
+        "line": 100,
+        "ms": 195.076
+      },
+      {
+        "fn": "_getOwnedInfoPanelBuildings",
+        "url": "http://127.0.0.1:63281/src/audio_visual/hud.js?v=20261001-slide2",
+        "line": 947,
+        "ms": 133.622
+      },
+      {
+        "fn": "getFrameUnitSummary",
+        "url": "http://127.0.0.1:63281/src/audio_visual/hud.js?v=20261001-slide2",
+        "line": 976,
+        "ms": 118.931
+      },
+      {
+        "fn": "_isInfoPanelBuildingIdleLike",
+        "url": "http://127.0.0.1:63281/src/audio_visual/hud.js?v=20261001-slide2",
+        "line": 1029,
+        "ms": 109.312
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:63281/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 333,
+        "ms": 79.972
+      },
+      {
+        "fn": "bufferSubData",
+        "url": "",
+        "line": 0,
+        "ms": 66.226
+      },
+      {
+        "fn": "updateControlGroupBar",
+        "url": "http://127.0.0.1:63281/src/audio_visual/audio.js?v=20261018-a",
+        "line": 505,
+        "ms": 61.3
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:63281/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 333,
+        "ms": 50.127
+      },
+      {
+        "fn": "drawImage",
+        "url": "",
+        "line": 0,
+        "ms": 46.074
+      },
+      {
+        "fn": "buildInfoPanelIdleWorkersHtml",
+        "url": "http://127.0.0.1:63281/src/audio_visual/hud.js?v=20261001-slide2",
+        "line": 1123,
+        "ms": 41.578
+      },
+      {
+        "fn": "querySelector",
+        "url": "",
+        "line": 0,
+        "ms": 34.459
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:63281/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 350,
+        "ms": 33.344
+      },
+      {
+        "fn": "window.<computed>",
+        "url": "",
+        "line": 10,
+        "ms": 32.099
+      },
+      {
+        "fn": "buildScaleFrameData",
+        "url": "http://127.0.0.1:63281/src/audio_visual/renderer.js?v=20261007-a",
+        "line": 2272,
+        "ms": 28.779
+      },
+      {
+        "fn": "buildInfoPanelPlayerStatusHtml",
+        "url": "http://127.0.0.1:63281/src/utils/utils_networking.js?v=20261008-a",
+        "line": 1578,
+        "ms": 28.032
+      },
+      {
+        "fn": "texImage2D",
+        "url": "",
+        "line": 0,
+        "ms": 27.995
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:63281/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 284,
+        "ms": 27.487
+      },
+      {
+        "fn": "_col",
+        "url": "http://127.0.0.1:63281/src/sim/sim_frame.js?v=20261008-a",
+        "line": 353,
+        "ms": 26.529
+      },
+      {
+        "fn": "_pushCombatRecordFx",
+        "url": "http://127.0.0.1:63281/src/audio_visual/effects3d.js?v=20260927-lod",
+        "line": 299,
+        "ms": 25.939
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:63281/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 281,
+        "ms": 22.959
+      },
+      {
+        "fn": "_renderHudResource",
+        "url": "http://127.0.0.1:63281/src/audio_visual/hud.js?v=20261001-slide2",
+        "line": 138,
+        "ms": 22.025
+      },
+      {
+        "fn": "updateInfoPanel",
+        "url": "http://127.0.0.1:63281/src/audio_visual/hud.js?v=20261001-slide2",
+        "line": 5504,
+        "ms": 21.483
+      },
+      {
+        "fn": "_displayKey",
+        "url": "http://127.0.0.1:63281/src/audio_visual/renderer.js?v=20261007-a",
+        "line": 5156,
+        "ms": 20.798
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:63281/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 283,
+        "ms": 20.789
+      },
+      {
+        "fn": "render",
+        "url": "http://127.0.0.1:63281/src/audio_visual/renderer3d.js?v=20261004-a",
+        "line": 5376,
+        "ms": 20.676
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:63281/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 284,
+        "ms": 20.66
+      },
+      {
+        "fn": "_getInfoPanelBuildingTypeKey",
+        "url": "http://127.0.0.1:63281/src/audio_visual/hud.js?v=20261001-slide2",
+        "line": 997,
+        "ms": 17.259
+      },
+      {
+        "fn": "r.render",
+        "url": "",
+        "line": 13,
+        "ms": 16.074
+      },
+      {
+        "fn": "get",
+        "url": "http://127.0.0.1:63281/src/sim/sim_frame_world.js?v=20261007-a",
+        "line": 284,
+        "ms": 15.6
+      },
+      {
+        "fn": "processRenderFrame",
+        "url": "http://127.0.0.1:63281/src/audio_visual/renderer.js?v=20261007-a",
+        "line": 4919,
+        "ms": 15.329
+      },
+      {
+        "fn": "clearRect",
+        "url": "",
+        "line": 0,
+        "ms": 15.104
+      },
+      {
+        "fn": "updateBottomBar",
+        "url": "http://127.0.0.1:63281/src/audio_visual/bottom_bar.js?v=20260930-deltacolor",
+        "line": 333,
+        "ms": 14.925
+      },
+      {
+        "fn": "_gameStatsSlice",
+        "url": "http://127.0.0.1:63281/src/data/data_dynamic.js?v=20261018-a",
+        "line": 1384,
+        "ms": 14.778
+      },
+      {
+        "fn": "drawArrays",
+        "url": "",
+        "line": 0,
+        "ms": 14.549
+      },
+      {
+        "fn": "_runLoopFrame",
+        "url": "http://127.0.0.1:63281/src/audio_visual/renderer.js?v=20261007-a",
+        "line": 5042,
+        "ms": 13.455
+      },
+      {
+        "fn": "_escapeHtml",
+        "url": "http://127.0.0.1:63281/src/data/data_dynamic.js?v=20261018-a",
+        "line": 1727,
+        "ms": 13.069
+      }
+    ]
+  },
+  "workerPhases": {
+    "simParallelRun": {
+      "n": 673,
+      "ms": 803.464999998454,
+      "max": 7.290000000037253
+    },
+    "gameTick": {
+      "n": 42,
+      "ms": 790.3950000000186,
+      "max": 27.354999999981374
+    },
+    "snapRecordTickHash": {
+      "n": 42,
+      "ms": 793.3100000014529,
+      "max": 582.0950000002049
+    },
+    "simFrameEncode": {
+      "n": 42,
+      "ms": 6715.7399999988265,
+      "max": 179.0449999999255
+    },
+    "simFrameEncodeStructures": {
+      "n": 42,
+      "ms": 2731.529999999795,
+      "max": 70.3249999997206
+    },
+    "simFrameEncodeProjectiles": {
+      "n": 42,
+      "ms": 0.9049999993294477,
+      "max": 0.034999999683350325
+    },
+    "simFrameEncodeState": {
+      "n": 42,
+      "ms": 388.320000000298,
+      "max": 10.589999999850988
+    },
+    "simFrameDetails": {
+      "n": 42,
+      "ms": 0.13000000175088644,
+      "max": 0.02000000001862645
+    }
+  },
+  "errors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ],
+  "workerHot": [
+    {
+      "fn": "get",
+      "url": "http://127.0.0.1:63281/src/things/unit.js?v=20261019-nav",
+      "line": 1882,
+      "ms": 2725.014
+    },
+    {
+      "fn": "simFrameEncode",
+      "url": "http://127.0.0.1:63281/src/sim/sim_frame.js?v=20261008-a",
+      "line": 204,
+      "ms": 1828.22
+    },
+    {
+      "fn": "_simWriteStructure",
+      "url": "http://127.0.0.1:63281/src/sim/sim_frame_world.js?v=20261007-a",
+      "line": 90,
+      "ms": 1603.63
+    },
+    {
+      "fn": "simFrameEncodeStructures",
+      "url": "http://127.0.0.1:63281/src/sim/sim_frame_world.js?v=20261007-a",
+      "line": 152,
+      "ms": 924.504
+    },
+    {
+      "fn": "SIM_KERNELS.<computed>",
+      "url": "http://127.0.0.1:63281/src/sim/sim_parallel.js?v=20261019-nav",
+      "line": 3457,
+      "ms": 613.363
+    },
+    {
+      "fn": "(idle)",
+      "url": "",
+      "line": 0,
+      "ms": 413.757
+    },
+    {
+      "fn": "self.<computed>",
+      "url": "",
+      "line": 5,
+      "ms": 390.086
+    },
+    {
+      "fn": "simFrameEncodeState",
+      "url": "http://127.0.0.1:63281/src/sim/sim_frame_world.js?v=20261007-a",
+      "line": 219,
+      "ms": 381.523
+    },
+    {
+      "fn": "getVisualUnitSourceLight",
+      "url": "http://127.0.0.1:63281/src/audio_visual/renderer.js?v=20261007-a",
+      "line": 1170,
+      "ms": 347.419
+    },
+    {
+      "fn": "SIM_KERNELS.<computed>",
+      "url": "http://127.0.0.1:63281/src/sim/sim_parallel.js?v=20261019-nav",
+      "line": 1909,
+      "ms": 257.356
+    },
+    {
+      "fn": "get dead",
+      "url": "http://127.0.0.1:63281/src/things/unit.js?v=20261019-nav",
+      "line": 640,
+      "ms": 222.161
+    },
+    {
+      "fn": "get effectiveLevel",
+      "url": "http://127.0.0.1:63281/src/things/unit.js?v=20261019-nav",
+      "line": 620,
+      "ms": 206.109
+    },
+    {
+      "fn": "get unitLevel",
+      "url": "http://127.0.0.1:63281/src/things/unit.js?v=20261019-nav",
+      "line": 614,
+      "ms": 199.717
+    },
+    {
+      "fn": "get attackFlash",
+      "url": "http://127.0.0.1:63281/src/things/unit.js?v=20261019-nav",
+      "line": 579,
+      "ms": 114.13
+    },
+    {
+      "fn": "_simRenderSlotOf",
+      "url": "http://127.0.0.1:63281/src/sim/sim_frame.js?v=20261008-a",
+      "line": 172,
+      "ms": 108.77
+    },
+    {
+      "fn": "_simFrameCode",
+      "url": "http://127.0.0.1:63281/src/sim/sim_frame.js?v=20261008-a",
+      "line": 114,
+      "ms": 73.966
+    },
+    {
+      "fn": "SIM_KERNELS.<computed>",
+      "url": "http://127.0.0.1:63281/src/sim/sim_parallel.js?v=20261019-nav",
+      "line": 1572,
+      "ms": 61.734
+    },
+    {
+      "fn": "_simStepParked",
+      "url": "http://127.0.0.1:63281/src/sim/sim_parallel.js?v=20261019-nav",
+      "line": 521,
+      "ms": 49.157
+    },
+    {
+      "fn": "SIM_KERNELS.<computed>",
+      "url": "http://127.0.0.1:63281/src/sim/sim_parallel.js?v=20261019-nav",
+      "line": 3511,
+      "ms": 39.937
+    },
+    {
+      "fn": "SIM_KERNELS.<computed>",
+      "url": "http://127.0.0.1:63281/src/sim/sim_parallel.js?v=20261019-nav",
+      "line": 2782,
+      "ms": 37.556
+    },
+    {
+      "fn": "_simPostResult",
+      "url": "http://127.0.0.1:63281/src/sim/sim_worker.js?v=20261018-a",
+      "line": 306,
+      "ms": 35.491
+    },
+    {
+      "fn": "_simMovePre",
+      "url": "http://127.0.0.1:63281/src/sim/sim_parallel.js?v=20261019-nav",
+      "line": 713,
+      "ms": 34.272
+    },
+    {
+      "fn": "hashStaticCore",
+      "url": "http://127.0.0.1:63281/src/utils/utils_snapshot.js?v=20261018-a",
+      "line": 674,
+      "ms": 33.388
+    },
+    {
+      "fn": "SIM_KERNELS.<computed>",
+      "url": "http://127.0.0.1:63281/src/sim/sim_parallel.js?v=20261019-nav",
+      "line": 1501,
+      "ms": 29.022
+    },
+    {
+      "fn": "_gameTickBody",
+      "url": "http://127.0.0.1:63281/src/main.js?v=20261019-nav",
+      "line": 607,
+      "ms": 26.219
+    },
+    {
+      "fn": "_snapStaticCore",
+      "url": "http://127.0.0.1:63281/src/utils/utils_snapshot.js?v=20261018-a",
+      "line": 492,
+      "ms": 25.932
+    },
+    {
+      "fn": "simParallelRun",
+      "url": "http://127.0.0.1:63281/src/sim/sim_parallel.js?v=20261019-nav",
+      "line": 2434,
+      "ms": 24.252
+    },
+    {
+      "fn": "_snapHashOrder",
+      "url": "http://127.0.0.1:63281/src/utils/utils_snapshot.js?v=20261018-a",
+      "line": 421,
+      "ms": 18.284
+    },
+    {
+      "fn": "_simMoveEpilogue",
+      "url": "http://127.0.0.1:63281/src/sim/sim_parallel.js?v=20261019-nav",
+      "line": 1411,
+      "ms": 17.535
+    },
+    {
+      "fn": "SIM_KERNELS.<computed>",
+      "url": "http://127.0.0.1:63281/src/sim/sim_parallel.js?v=20261019-nav",
+      "line": 2892,
+      "ms": 17.507
+    },
+    {
+      "fn": "simParallelBackgroundWait",
+      "url": "http://127.0.0.1:63281/src/sim/sim_parallel.js?v=20261019-nav",
+      "line": 2553,
+      "ms": 17.309
+    },
+    {
+      "fn": "(program)",
+      "url": "",
+      "line": 0,
+      "ms": 16.878
+    },
+    {
+      "fn": "_acqPost",
+      "url": "http://127.0.0.1:63281/src/things/unit.js?v=20261019-nav",
+      "line": 3569,
+      "ms": 16.678
+    },
+    {
+      "fn": "simParallelRun",
+      "url": "http://127.0.0.1:63281/src/sim/sim_parallel.js?v=20261019-nav",
+      "line": 2434,
+      "ms": 13.428
+    },
+    {
+      "fn": "",
+      "url": "",
+      "line": 3,
+      "ms": 13.294
+    }
+  ]
+}

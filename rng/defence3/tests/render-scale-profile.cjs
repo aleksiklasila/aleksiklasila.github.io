@@ -8,7 +8,7 @@ const {execFileSync} = require('node:child_process');
 const {chromium} = require('playwright');
 const root = path.resolve(__dirname, '..');
 const ref = process.env.BASELINE;
-const prefix = execFileSync('git',['rev-parse','--show-prefix'],{cwd:root,encoding:'utf8'}).trim();
+const prefix = ref ? execFileSync('git',['rev-parse','--show-prefix'],{cwd:root,encoding:'utf8'}).trim() : '';
 const cache = new Map();
 const mime = {'.js':'text/javascript','.html':'text/html','.css':'text/css','.json':'application/json','.png':'image/png','.svg':'image/svg+xml'};
 const server = http.createServer((req,res)=>{
@@ -45,7 +45,34 @@ let browser;
     },fixture);
     console.log('SETUP',JSON.stringify(setup));
     await page.waitForFunction(()=>simClientStats().appliedTick >= 10,{},{timeout:240000});
+    await page.evaluate(() => simClientRequest('debugEval', {expr: `(() => {
+        self.__timings = {};
+        for (const name of ['gameTick','snapRecordTickHash','simFrameEncode','simFrameEncodeStructures','simFrameEncodeProjectiles','simFrameEncodeState','simFrameDetails','simParallelRun']) {
+            const fn = self[name];
+            self[name] = function(...args) { const t = performance.now(); try { return fn.apply(this,args); }
+                finally { const s = self.__timings[name] || (self.__timings[name] = {n:0,ms:0,max:0}); const d = performance.now()-t; s.n++;s.ms+=d;s.max=Math.max(s.max,d); } };
+        }
+    })()`}));
     const cdp=await page.context().newCDPSession(page);
+    const rootCdp = await browser.newBrowserCDPSession();
+    const targets = await rootCdp.send('Target.getTargets');
+    const workerTarget = targets.targetInfos.find(t => t.type === 'worker' && t.url.includes('sim_worker.js'));
+    let workerSend = null;
+    if (workerTarget) {
+        const {sessionId} = await rootCdp.send('Target.attachToTarget', {targetId:workerTarget.targetId, flatten:false});
+        let id = 0; const pending = new Map();
+        rootCdp.on('Target.receivedMessageFromTarget', event => {
+            if (event.sessionId !== sessionId) return;
+            const data = JSON.parse(event.message), done = pending.get(data.id);
+            if (done) { pending.delete(data.id); done(data.result); }
+        });
+        workerSend = (method, params = {}) => new Promise(resolve => {
+            const seq = ++id; pending.set(seq, resolve);
+            rootCdp.send('Target.sendMessageToTarget', {sessionId, message:JSON.stringify({id:seq,method,params})});
+        });
+        await workerSend('Profiler.enable');
+        await workerSend('Profiler.start');
+    }
     await cdp.send('Profiler.enable');await cdp.send('Profiler.setSamplingInterval',{interval:500});
     const info=await page.evaluate(()=>{
         setRenderDimensionMode('3d');
@@ -66,12 +93,20 @@ let browser;
     await cdp.send('Profiler.start');
     await sleep(Number(process.env.PROFILE_MS)||10000);
     const {profile}=await cdp.send('Profiler.stop');
+    const workerProfile = workerSend ? (await workerSend('Profiler.stop')).profile : null;
+    const workerPhases = JSON.parse(await page.evaluate(() => simClientRequest('debugEval', {expr: 'self.__timings'})));
     const results=await page.evaluate(()=>({phases:window.__measure,sim:simClientStats(),fps:_fpsDisplay,tps:_tpsDisplay,end:performance.now(),tick:currentTick,
         scale:typeof rendererScaleCache!=='undefined'&&rendererScaleCache?rendererScaleCache.layers.map(x=>({count:x.count,bytes:x.data.byteLength,upload:x.uploadBytes})):null}));
     const times=new Map();for(let i=0;i<(profile.samples||[]).length;i++)times.set(profile.samples[i],(times.get(profile.samples[i])||0)+profile.timeDeltas[i]);
     results.hot=profile.nodes.map(n=>({fn:n.callFrame.functionName,url:n.callFrame.url,line:n.callFrame.lineNumber+1,ms:(times.get(n.id)||0)/1000})).sort((a,b)=>b.ms-a.ms).slice(0,40);
-    const output={ref:ref||'working-tree',fixture,setup,info,results,errors};
+    const output={ref:ref||'working-tree',fixture,setup,info,results,workerPhases,errors};
     const tag=process.env.PROFILE_TAG||'current';
+    if (workerProfile) {
+        fs.writeFileSync(path.join(__dirname,'render-scale-'+tag+'-worker.cpuprofile'),JSON.stringify(workerProfile));
+        const times = new Map();
+        for(let i=0;i<(workerProfile.samples||[]).length;i++) times.set(workerProfile.samples[i],(times.get(workerProfile.samples[i])||0)+workerProfile.timeDeltas[i]);
+        output.workerHot=workerProfile.nodes.map(n=>({fn:n.callFrame.functionName,url:n.callFrame.url,line:n.callFrame.lineNumber+1,ms:(times.get(n.id)||0)/1000})).sort((a,b)=>b.ms-a.ms).slice(0,35);
+    }
     fs.writeFileSync(path.join(__dirname,'render-scale-'+tag+'.json'),JSON.stringify(output,null,2)+'\n');
     fs.writeFileSync(path.join(__dirname,'render-scale-'+tag+'.cpuprofile'),JSON.stringify(profile));
     await page.screenshot({path:path.join(__dirname,'render-scale-'+tag+'.png')});

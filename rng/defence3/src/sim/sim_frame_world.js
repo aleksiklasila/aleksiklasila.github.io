@@ -216,7 +216,7 @@ function _simPlain(v, depth) {
     return out;
 }
 function simFrameResetState() { _simStateLast = { globals: '', cellTypes: null, cellOwners: null, w: 0, h: 0 }; }
-function simFrameEncodeState() {
+function simFrameEncodeState(includeCells = true) {
     let out = { players: players.map(p => _simPlain(p, 0)) };
     let areaState = [];
     for (let ar of (areas || [])) if (ar && (ar.active || ar.multiplierLevel)) areaState.push([ar.id, ar.active ? 1 : 0, ar.multiplierLevel || 0]);
@@ -226,6 +226,7 @@ function simFrameEncodeState() {
         astarBudget: astarNodeBudgetRemainingByPlayer ? Array.from(astarNodeBudgetRemainingByPlayer) : null };
     let gs = JSON.stringify(g);
     if (gs !== _simStateLast.globals) { out.globals = g; _simStateLast.globals = gs; }
+    if (!includeCells) return out;
     // Cells whose type or owner changed since the last frame.
     let L = _simStateLast, n = GRID_W * GRID_H;
     if (!L.cellTypes || L.w !== GRID_W || L.h !== GRID_H) { L.cellTypes = new Array(n).fill(null); L.cellOwners = new Int32Array(n).fill(-9); L.w = GRID_W; L.h = GRID_H; }

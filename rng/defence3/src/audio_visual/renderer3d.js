@@ -3042,7 +3042,7 @@
                 post.render(options, {
                     colorTex: this.sceneColorTexture, depthTex: this.sceneDepthTexture,
                     width: this.sceneTargetSize.width, height: this.sceneTargetSize.height,
-                    near: 0.1, far: 220, flat, quadVao: this.presentVao,
+                    near: this.projectionNear || .1, far: this.projectionFar || 220, flat, quadVao: this.presentVao,
                     pixelsPerWorld: this.lodPixelsPerWorld, pixelRatio: this.pixelRatio,
                     projectionScale: (this.lodProjectionScale || 0) * this.pixelRatio,
                     shadow: flat ? null : this.shadowFrame
@@ -3155,7 +3155,10 @@
             // view itself projects as without it.
             // The old fixed far plane clipped the entire arena at scale.
             const far = Math.max(220, distance + Math.hypot(snapshot.worldWidth || 0, snapshot.worldHeight || 0) * 2);
-            perspective(this.tmpProjection, 2 * Math.atan(Math.tan(0.37) * growY), aspect, Math.max(.1, distance / 10000), far);
+            // Keep useful depth precision for thin ground decals at map scale.
+            // The near plane stays well below the camera's ground clearance.
+            this.projectionNear=Math.max(.1,eye[1]*.05);this.projectionFar=far;
+            perspective(this.tmpProjection, 2 * Math.atan(Math.tan(0.37) * growY), aspect, this.projectionNear, far);
             // CSS pixels per world unit at view depth 1; divide by a point's
             // depth along the view direction for its on-screen scale.
             this.lodProjectionScale = this.cssHeight * this.tmpProjection[5] / 2;
@@ -5206,6 +5209,7 @@
                     uniform vec3 uColors[9];
                     uniform sampler2D uVisibility;
                     out vec4 vColor;
+                    out float vCoverage;
                     void main() {
                         vec2 current = vec2(aX,aZ) / uTile;
                         vec2 p = uStructure != 0 ? current : mix(vec2(aPX,aPZ) / uTile,current,uAlpha);
@@ -5215,7 +5219,9 @@
                         if (!alive || (aEnergy <= 0. && (uStructure == 0 || aKind < 4.)) || light <= 0.) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
                         gl_Position = uViewProjection * vec4(p.x,.02,p.y,1.);
                         float size = uStructure != 0 ? .94 : clamp(aRadius * 2.2 / uTile,.28,.9);
-                        gl_PointSize = clamp(size * uScale / (uFlat > .5 ? 1. : max(.01,gl_Position.w)),1.,64.);
+                        float pixels = size * uScale / (uFlat > .5 ? 1. : max(.01,gl_Position.w));
+                        gl_PointSize = clamp(pixels + 1.,2.,64.);
+                        vCoverage = min(1., pixels * pixels / (gl_PointSize * gl_PointSize));
                         float shade = .35 + .65 * clamp(light,0.,1.);
                         vColor = vec4(uColors[clamp(int(aOwner)+1,0,8)] * shade, uStructure != 0 && (flags & 1) != 0 ? .6 : 1.);
                     }`, `#version 300 es
@@ -5223,12 +5229,14 @@
                     precision highp int;
                     uniform int uStructure;
                     in vec4 vColor;
+                    in float vCoverage;
                     out vec4 color;
                     void main() {
                         if (vColor.a <= 0.) discard;
                         vec2 p = gl_PointCoord * 2. - 1.;
-                        if (uStructure == 0 && dot(p,p) > 1.) discard;
-                        color = vColor;
+                        float edge = uStructure == 0 ? length(p) : max(abs(p.x),abs(p.y));
+                        float coverage = 1. - smoothstep(1. - fwidth(edge), 1., edge);
+                        color = vec4(vColor.rgb, vColor.a * coverage * vCoverage);
                     }`);
                 this.columnUniforms = {};
                 for (const n of ['ViewProjection','Alpha','Tile','Scale','Flat','LightNorm','Structure','Full','Colors','Visibility']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
@@ -5268,7 +5276,11 @@
             for (let i=0;i<9;i++) colors.set(hexToRgb(C.colors[i]),i*3);
             gl.uniform3fv(U.Colors,colors);
             gl.drawBuffers([gl.COLOR_ATTACHMENT0,gl.NONE]);
-            if (snapshot.flat2d) gl.disable(gl.DEPTH_TEST);
+            // Screen-facing overview glyphs have one depth across their whole
+            // footprint. Testing that against tilted terrain cuts them into
+            // stripes. They are a map overlay, drawn buildings then units.
+            gl.disable(gl.DEPTH_TEST);
+            gl.depthMask(false);
             gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
             for (let kind=0;kind<2;kind++) {
                 const F = kind ? C.units : C.structures, S = this.columnStores[kind], structure = !kind;
@@ -5276,22 +5288,28 @@
                 if (!S.buffer) { S.buffer=gl.createBuffer();S.vao=gl.createVertexArray(); }
                 gl.bindVertexArray(S.vao);gl.bindBuffer(gl.ARRAY_BUFFER,S.buffer);
                 if (S.frame !== F) {
-                    const bytes = F.buf.byteLength;
+                    // Allocate only the columns the GPU consumes, rather than
+                    // an entire UI/simulation frame (mostly unused holes).
+                    const offsets=new Map();let bytes=0;
+                    for(const name of fields) if(name && !offsets.has(name)) {
+                        offsets.set(name,bytes);bytes=Math.ceil((bytes+F.cap*F[name].BYTES_PER_ELEMENT)/4)*4;
+                    }
                     if (!S.bytes || S.bytes < bytes) { S.bytes=bytes;gl.bufferData(gl.ARRAY_BUFFER,bytes,gl.DYNAMIC_DRAW); }
                     const seen = new Set();
                     for (let i=0;i<fields.length;i++) {
                         const name=fields[i];
                         if (!name) {gl.disableVertexAttribArray(i);gl.vertexAttrib1f(i,1);continue;}
                         const a=F[name], type=a instanceof Float32Array?gl.FLOAT:a instanceof Int32Array?gl.INT:a instanceof Int16Array?gl.SHORT:gl.UNSIGNED_BYTE;
-                        if (!seen.has(name)) {gl.bufferSubData(gl.ARRAY_BUFFER,a.byteOffset,a);seen.add(name);}
-                        gl.enableVertexAttribArray(i);gl.vertexAttribPointer(i,1,type,false,0,a.byteOffset);
+                        const offset=offsets.get(name);
+                        if (!seen.has(name)) {gl.bufferSubData(gl.ARRAY_BUFFER,offset,a.subarray(0,F.n));seen.add(name);}
+                        gl.enableVertexAttribArray(i);gl.vertexAttribPointer(i,1,type,false,0,offset);
                     }
                     S.frame=F;
                 }
                 gl.uniform1i(U.Structure,structure?1:0);
                 gl.drawArrays(gl.POINTS,0,F.n);
             }
-            gl.disable(gl.BLEND);gl.enable(gl.DEPTH_TEST);gl.drawBuffers(this.sceneDrawBuffers);
+            gl.depthMask(true);gl.disable(gl.BLEND);gl.enable(gl.DEPTH_TEST);gl.drawBuffers(this.sceneDrawBuffers);
         }
 
         disposeFrameColumns() {

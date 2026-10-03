@@ -2262,10 +2262,9 @@ function useScaleRendering(flat2d, view) {
     const snapshot = get3DProjectionSnapshot(); snapshot.flat2d = flat2d;
     renderer3dInstance.buildViewProjection(snapshot);
     const pixels = flat2d ? camera.zoom * TILE : renderer3dInstance.lodPixelsPerWorld;
-    // In a large match, performance takes priority even at closer zooms.
-    // A population gate also catches dense armies with >12px nominal models.
-    const population = view ? view.units.length + view.towers.length + view.barracks.length + view.collectorSpawners.length : 0;
-    rendererScaleActive = population >= 5000 || pixels < (rendererScaleActive ? 16 : 12);
+    // Detail follows projected size, not the population of the entire map.
+    // Close views use the chunk query below, so distant armies stay culled.
+    rendererScaleActive = pixels < (rendererScaleActive ? 16 : 12);
     return rendererScaleActive;
 }
 
@@ -4542,7 +4541,7 @@ function _visCoverRows(pid) {
     let C = _visCover;
     let rows = C.visual[pid];
     if (rows && rows.length === GRID_H) return rows;
-    let flat = new Float32Array(GRID_W * GRID_H);
+    let flat = simSharedArray(Float32Array, GRID_W * GRID_H);
     rows = new Array(GRID_H);
     for (let y = 0; y < GRID_H; y++) rows[y] = flat.subarray(y * GRID_W, (y + 1) * GRID_W);
     rows._flat = flat;

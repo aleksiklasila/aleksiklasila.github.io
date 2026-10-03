@@ -63,6 +63,39 @@ is next. Newest entries first within each section.
 
 ## Session log
 
+### 2026-10-04 (thirteenth round) — destination fields off the simulation thread
+
+- New fields in the background: lane SIM_LANE_NAV (sim_parallel.js). Fields
+  asked for before a tick's flush are started there and taken (marked made)
+  at the next tick's flush (_navFieldsStart / _navFieldsCommit), a fixed
+  tick on every peer; navFieldReadyTick is now +1 / +2. The movement
+  kernel checks a unit's ready tick before the made flag (a restored peer
+  has them made early: same result). Arrays a job writes are only replaced
+  after waiting for it (_navFieldsGrow, navPublish, sync makes).
+- Rebuild window (_navNext, NAV_SWAP_TICKS = 10, lane SIM_LANE_NAVX): at
+  step 2S+3 the new build is staged, not installed; every live field is
+  made over it in the background into second arrays (list id 2), fields
+  asked for meanwhile over both builds (list id 1 in their jobs); at step
+  2S+3+10 both are installed at once (navPublish(nav, true): no remake-all).
+  No sweep drops during a window. NAV_BUILD_TICKS includes the window.
+  Measured before the window: a rebuild's remake-all at 3923 live fields
+  was 61 ms on one flush (113 ms tick).
+- Rally (2 rounds, machine ~15% slower than rally21 that day): background
+  fields mean 36.9 / p95 44.2 vs synchronous 35.7 / 43.5 (noise);
+  navFieldsFlush max 10.5 -> 1.5 ms.
+- tests/nav-rows.test.cjs: fields and rows checked against their own
+  searches before / in / after a rebuild window, with 3 helpers and none.
+- Passed with the window: kernel-object equivalence (default + 5,3,11,21),
+  CHAOS_HOST_HELPERS=7 chaos (5 maps), snapshot, patch, nav-reach,
+  nav-background, background-chain. Still to do: the rebuild probe (AFTER=after_rebuild.js style: walls
+  toggled, gameTick and flush timed with __scratch.realNow) to confirm the
+  install tick no longer spikes. Bump `?v=` for flownav.js, sim_parallel.js.
+- Next: forced attack targets in the chase/hold kernels (flag bit 8 is
+  free; _forcedTargetLastSeenX/Y as column accessors (NaN = null), kernel
+  writes them on visibility with the previous value saved and restored at
+  the top of Unit.update when written this tick; leash skipped for forced),
+  then ACTIONS bench (UPDTICK), adjacency recalculation, order bursts.
+
 ### 2026-10-04 (twelfth round) — every unit on the flow navigation, no searches on the simulation thread
 
 User direction: no A* (or other search) on the main thread, ever; every unit

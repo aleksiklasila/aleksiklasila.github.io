@@ -210,7 +210,7 @@ function simFrameEncode() {
     const compact = count >= 5000;
     // Slots first (a new unit takes one), so the size is known.
     let live = 0;
-    for (let i = 0; i < count; i++) { let u = list[i]; if (!u.dead) { _simRenderSlotOf(u); live++; } }
+    for (let i = 0; i < count; i++) { let u = list[i]; if (!u._us.dead[u._si]) { _simRenderSlotOf(u); live++; } }
     let n = R.owner.length;
     let cap = Math.max(64, n);
     let buf = _simFrameAcquire(cap * SIM_FRAME_SLOT_BYTES, SIM_PAR_SHARED);
@@ -221,21 +221,20 @@ function simFrameEncode() {
     let flagsA = F.flags;
     for (let i = 0; i < count; i++) {
         let u = list[i];
-        if (u.dead) continue;
+        const C = u._us, slot = u._si;
+        if (C.dead[slot]) continue;
         let s = u._rslot;
         R.stamp[s] = stampTick;
         if (!orderChanged && _simFrameOrderLast[k] !== s) orderChanged = true;
         order[k++] = s;
         input.slot[s] = u._si;
         let pc = u.preComputed;
-        F.maxEnergy[s] = pc ? pc.maxEnergy : u.energy;
+        F.maxEnergy[s] = pc ? pc.maxEnergy : C.energy[slot];
         let at = u.attackTarget;
         let flags = (u.isFlying ? SIM_UF_FLYING : 0) | (u.isSnake ? SIM_UF_SNAKE : 0) | (u.isWorker ? SIM_UF_WORKER : 0)
-            | (u.holdPosition ? SIM_UF_HOLD : 0) | (u.burning > 0 ? SIM_UF_BURNING : 0) | (u.poisoned > 0 ? SIM_UF_POISONED : 0)
-            | (u.frozen > 0 ? SIM_UF_FROZEN : 0) | (u.wet > 0 ? SIM_UF_WET : 0) | (u.sandy > 0 ? SIM_UF_SANDY : 0)
-            | (u.watched > 0 ? SIM_UF_WATCHED : 0) | (u.teleportHideTicks > 0 ? SIM_UF_HIDDEN : 0)
+            | (u.holdPosition ? SIM_UF_HOLD : 0)
             | (Number.isFinite(u._energyBlockedUntil) && gameTime < u._energyBlockedUntil ? SIM_UF_ENERGY_BLOCKED : 0)
-            | (u.researcherHasMaterial ? SIM_UF_RESEARCH_MATERIAL : 0) | (u.workerTransferCooldown > 0 ? SIM_UF_TRANSFER : 0)
+            | (u.researcherHasMaterial ? SIM_UF_RESEARCH_MATERIAL : 0)
             | (at && Number.isFinite(at.x) ? SIM_UF_ATTACK_TARGET : 0) | (u.isKing ? SIM_UF_KING : 0);
         flagsA[s] = flags;
         F.tx[s] = at ? at.x : 0; F.ty[s] = at ? at.y : 0;
@@ -243,20 +242,21 @@ function simFrameEncode() {
         F.vision[s] = eff && Number.isFinite(eff.visionRangeArea) ? eff.visionRangeArea : getEntityEffectiveVisibilityRangeArea(u);
         F.cargo[s] = Number(u.carryingValue) || 0;
         F.watchedBy[s] = Number.isFinite(u.watchedByTeam) ? u.watchedByTeam : -1;
-        F.level[s] = Number.isFinite(u.effectiveLevel) ? u.effectiveLevel : -1;
-        F.blevel[s] = Number.isFinite(u.unitLevel) ? u.unitLevel : -1;
         F.type[s] = _simFrameCode(u.unitType);
         F.wtype[s] = _simFrameCode(u.workerType);
         F.wstate[s] = _simFrameCode(u.workerState);
         F.style[s] = _simFrameCode(u.attackStyle);
-        let flash = Number(u.attackFlash) || 0;
-        F.flash[s] = flash <= 0 ? 0 : flash >= 255 ? 255 : flash;
+        let flash = C.attackFlash[slot];
+        // Numeric status/level/flash fields are gathered by the frame kernel.
+        // Calling the generic status accessors here used most of the encoder's
+        // time at 100k units, despite the values already living in columns.
+        F.light[s] = C.owner[slot] === localPlayerId || (C.watched[slot] > 0 && u.watchedByTeam === localPlayerId)
+            ? Math.max(0, F.vision[s] * AREA_UNIT_TILE_EQUIVALENT) : 0;
         // Look: activity, facing, walk phase, status face, own light, panel.
         if (compact) {
             input.still[s] = gameTime; input.flash[s] = 0;
             input.targetX[s] = input.targetY[s] = NaN;
             F.mode[s] = 0; F.amount[s] = 0; F.status[s] = 0;
-            F.light[s] = getVisualUnitSourceLight(u);
             F.sig[s] = 0;
             continue;
         }
@@ -269,7 +269,6 @@ function simFrameEncode() {
         input.targetY[s] = target ? target.y : NaN;
         F.mode[s] = activity.mode; F.amount[s] = activity.amount;
         F.status[s] = _simUnitStatusCode[getUnit3DStatusState(u, activity)] || 0;
-        F.light[s] = getVisualUnitSourceLight(u);
         F.sig[s] = _simSignatureHash(u);
     }
     // Slots of units no longer in the list are free again (marked empty).
@@ -307,7 +306,7 @@ function _simPlainStats(o) {
 }
 function simFrameDetails() {
     if (!_simWatched.length) return null;
-    let R = _simRenderSlots, out = [];
+    let R = typeof _simPresentation !== 'undefined' && _simPresentation ? {owner:_simUnitState.owners} : _simRenderSlots, out = [];
     for (let j = 0; j + 1 < _simWatched.length; j += 2) {
         let id = _simWatched[j], slot = _simWatched[j + 1];
         let u = slot >= 0 ? R.owner[slot] : null;

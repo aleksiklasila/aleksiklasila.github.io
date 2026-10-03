@@ -197,11 +197,13 @@ self.onmessage = (ev) => {
             _simPost({ type: 'loaded', ms: performance.now() - t0, helpers, shared: SIM_PAR_SHARED });
         } else if (msg.type === 'start') {
             _simStart(msg);
+        } else if (msg.type === 'presentationStop') {
+            simPresentationStop();
         } else if (msg.type === 'tick') {
             _simTick(msg);
         } else if (msg.type === 'frameReturn') {
             // The page is done with these buffers: the next frames reuse them.
-            for (let b of msg.bufs || []) simFrameReturn(b);
+            for (let b of msg.bufs || []) if (!simPresentationReturn(b)) simFrameReturn(b);
         } else if (msg.type === 'watch') {
             simFrameWatch(msg.list);
             simFrameWatchStructures(msg.structures);
@@ -213,6 +215,7 @@ self.onmessage = (ev) => {
 
 // ---- match start: the page's lobby and config, then its start snapshot ----
 function _simStart(msg) {
+    simPresentationStop();
     let g = msg.globals || {};
     _simMode = msg.mode === 'authority' ? 'authority' : 'shadow';
     _simEpoch = msg.epoch || 0;
@@ -240,6 +243,7 @@ function _simStart(msg) {
     let transfer = [];
     let world = _simEncodeWorld(transfer);
     _simPost({ type: 'started', epoch: _simEpoch, tick: currentTick, hash: computeLockstepStateHashFast(currentTick), world }, transfer);
+    simPresentationStart();
 }
 
 // ---- one tick: the same work runOneTick does, with the page's commands ----
@@ -306,7 +310,13 @@ function _simEncodeWorld(transfer) {
 function _simPostResult(tick, hash, lock, simMs, report = null) {
     let t1 = performance.now();
     let transfer = [];
-    let world = _simEncodeWorld(transfer);
+    let world;
+    if (_simPresentation) {
+        // No unit/structure scans, animation, signatures, or buffer waits in
+        // the authority tick. The independent reader samples shared columns.
+        simPresentationPublish(tick);
+        world = {state:simFrameEncodeState(false), details:simFrameDetails(), structureDetails:simFrameStructureDetails()};
+    } else world = _simEncodeWorld(transfer);
     let events = _simEvents;
     _simEvents = [];
     // The local player's raw visibility grid (computed here anyway): the
@@ -316,12 +326,18 @@ function _simPostResult(tick, hash, lock, simMs, report = null) {
         // The grid this tick computed (asking for it now would compute the
         // next tick's: the clock has moved on).
         let rows = visibilityGridRawByPlayerCache.get(localPlayerId) || getRawVisibilityGridForPlayer(localPlayerId), n = GRID_W * GRID_H;
-        let buf = _simFrameAcquireExact(n * 4);
-        sight = new Float32Array(buf, 0, n);
-        for (let y = 0; y < GRID_H; y++) if (rows[y]) sight.set(rows[y], y * GRID_W);
-        transfer.push(buf);
+        if (_simPresentation && rows._flat && rows._flat.buffer instanceof SharedArrayBuffer) {
+            // A read-only presentation binding: no million-cell allocation or
+            // copy each tick. The renderer tolerates visibility advancing.
+            sight=rows._flat;
+        } else {
+            let buf = _simFrameAcquireExact(n * 4);
+            sight = new Float32Array(buf, 0, n);
+            for (let y = 0; y < GRID_H; y++) if (rows[y]) sight.set(rows[y], y * GRID_W);
+            transfer.push(buf);
+        }
     } catch (err) { sight = null; _simError('sight', err); }
-    _simPost({ type: 'ticked', epoch: _simEpoch, tick, world, hash, lockHashes: lock, events, sight, sightPlayer: localPlayerId, simMs, encodeMs: performance.now() - t1, report }, transfer);
+    _simPost({ type: 'ticked', epoch: _simEpoch, tick, world, presentation:!!_simPresentation, hash, lockHashes: lock, events, sight, sightPlayer: localPlayerId, simMs, encodeMs: performance.now() - t1, report }, transfer);
 }
 
 // ---- requests the page's network code needs in tick order ----
@@ -339,13 +355,17 @@ function _simRequest(msg) {
         // Guest: a resync patch before the next tick. (The page sees its
         // effects in the next frame and records.)
         case 'applyPatch': {
+            const presenting=!!_simPresentation;
+            if(presenting) simPresentationStop();
             snapDecodeState(JSON.parse(msg.args.text), { collectChanges: !msg.args.full });
             visibilityCacheTick = -1;
             updateVisibility(localPlayerId);
+            if(presenting) simPresentationStart();
             break;
         }
         // A whole-state restore; results before it belong to the old epoch.
         case 'applySnapshot': {
+            simPresentationStop();
             let snap = msg.args.snapshot || JSON.parse(msg.args.text);
             if (msg.args.globals) for (let [name, value] of Object.entries(msg.args.globals)) self.eval(name + ' = ' + JSON.stringify(value));
             applyAuthoritativeStateSnapshot(snap);
@@ -354,6 +374,7 @@ function _simRequest(msg) {
             _simLocalDefeat = '';
             // The page's world comes whole with the next frame.
             simFrameResetAll();
+            simPresentationStart();
             break;
         }
         case 'setGlobals':
