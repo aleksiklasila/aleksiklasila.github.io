@@ -493,6 +493,8 @@ class Unit {
         this.forcedAttackTarget = false;
         this._forcedTargetLastSeenX = null;
         this._forcedTargetLastSeenY = null;
+        // (The fields a move order writes, together: see _issueGroupMoveOrder.)
+        this._routeKey = null; this._routeEnd = -1; this._routeSegEnd = -1; this._navReady = 0; this._attackMoveGx = undefined; this._attackMoveGy = undefined; this.pathIsFallbackAstar = undefined; this._pendingPathTarget = undefined; this.holdPosition = undefined; this._awaitGroupPath = 0;
         this.dead = false;
         this.unitLevel = 1;
         this.stackCount = 1;
@@ -514,7 +516,7 @@ class Unit {
         // per-unit tick loops stay monomorphic instead of megamorphic.
         // Values stay undefined, as if the field had never been set.
         this._lastAppliedEffectiveLevel = undefined;
-        this._floorTile = -1; this._removedNow = false; this._routeKey = null; this._routeEnd = -1; this._routeSegEnd = -1; this._pendingDueStamp = -1; this._okTile = -1; this._okVer = 0; this._okNodeTile = -1; this._okNodeVer = 0; this._thingStatsRefreshStamp = 0; this._effectiveStatsStamp = 0; this._statsVer = -1; this._navReady = 0; this._navLastD = -1; this._vsGen = 0; this._vsR = -1; this._vsA = -1; this._vsP1 = -1; this._vsP2 = -1;
+        this._floorTile = -1; this._removedNow = false; this._pendingDueStamp = -1; this._okTile = -1; this._okVer = 0; this._okNodeTile = -1; this._okNodeVer = 0; this._thingStatsRefreshStamp = 0; this._effectiveStatsStamp = 0; this._statsVer = -1; this._navLastD = -1; this._vsGen = 0; this._vsR = -1; this._vsA = -1; this._vsP1 = -1; this._vsP2 = -1;
         this.workerState = undefined; this.workerType = undefined; this.carryingValue = undefined; this.workerTarget = undefined;
         this.workerTargetType = undefined; this._workerReservedTileIndex = undefined; this._resourceCollectorMemory = undefined;
         this._collectorPinnedTarget = undefined; this._collectorPinnedTargetType = undefined; this._collectorLastGatherX = undefined;
@@ -529,8 +531,8 @@ class Unit {
         this._healerQueueCommitTarget = undefined; this._healerQueueCommitRequired = undefined; this._healerQueueCommitMaxPaid = undefined;
         this.researcherHasMaterial = undefined;
         this._astarLastChargedTick = undefined; this._astarLastChargedFromKey = undefined; this._astarLastChargedToKey = undefined;
-        this._attackMoveGx = undefined; this._attackMoveGy = undefined; this.pathIsFallbackAstar = undefined;
-        this._pendingPathTarget = undefined; this._astarBudgetBlockedUntil = undefined; this._astarBudgetRetryTick = undefined;
+        
+        this._astarBudgetBlockedUntil = undefined; this._astarBudgetRetryTick = undefined;
         this._manualMoveIssuedTick = undefined; this._builderLastWorkX = undefined; this._builderLastWorkY = undefined;
         this._builderLastWorkGx = undefined; this._builderLastWorkGy = undefined; this._builderSpawnerTarget = undefined;
         this._healerPinnedQueueTarget = undefined; this._healerLastWorkX = undefined; this._healerLastWorkY = undefined;
@@ -544,9 +546,9 @@ class Unit {
         this._levelTextLabel = undefined;
         this._collectorLastMoveTick = undefined; this._collectorNextRecheckTick = undefined; this._healerLastMoveTick = undefined;
         this._healerNextRecheckTick = undefined; this._researchLastMoveTick = undefined; this._researchNextRecheckTick = undefined;
-        this.holdPosition = undefined; this._ambientSoundTicks = undefined;
+        this._ambientSoundTicks = undefined;
 
-        this._spatialKey = undefined; this._spatialAreaId = undefined; this._spatialTile = -1; this._spatialOwner = -1; this._spatialEpoch = 0; this._r3d = undefined; this._r3dSig = undefined; this._r3dTex = undefined; this._visStill = undefined; this._rslot = undefined; this._awaitGroupPath = 0;
+        this._spatialKey = undefined; this._spatialAreaId = undefined; this._spatialTile = -1; this._spatialOwner = -1; this._spatialEpoch = 0; this._r3d = undefined; this._r3dSig = undefined; this._r3dTex = undefined; this._visStill = undefined; this._rslot = undefined;
         if (!_unitFieldsMutable) _makeUnitFieldsMutable(this);
         // A snapshot restore writes every field itself (same order, so the
         // same layout) and indexes the unit afterwards.
@@ -2490,7 +2492,7 @@ function _simMoveTryFlowArm(u, c, s, cmd) {
     if (last && last.y * GRID_W + last.x === dest) return false;
     navEnsure(profile);
     const did = navFieldRequest(profile, dest, true);
-    return did >= 0 && simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, u._navReady | 0);
+    return did >= 0 && simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, u._navReady | 0, !!u.workerState, !!u.workerState);
 }
 
 // A unit ends its Unit.update marching along its path with nothing to react

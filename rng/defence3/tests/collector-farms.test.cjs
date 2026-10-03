@@ -50,7 +50,7 @@ function world(resource, localPlayerId = 0) {
     c.getUnitById = id => c.units.find(u => u.id === id) || null;
     vm.runInContext(main.match(/const ACTION_MAX_COUNT = [\s\S]*?const ACTION_MAX_TOWER_COORDS = \d+;/)[0], c);
     for (const name of ['_isCollectorGatherTargetType', '_getGatherTargetAtForCollectorWorkerType', '_isValidGatherTargetForCollectorWorkerType',
-        '_actionInt', '_actionNum', '_actionStr', 'sanitizeAction', 'processActions', 'processAction']) {
+        '_actionInt', '_actionNum', '_actionStr', '_actionIdStampNext', '_actionIdStampGrow', '_actionCleanIds', 'sanitizeAction', 'processActions', 'processAction']) {
         vm.runInContext(mainFunction(name), c);
     }
     // Isolate pathfinding and stat configuration; run real targeting, reservations,

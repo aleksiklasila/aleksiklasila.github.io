@@ -136,33 +136,58 @@ const SIM_FLOW_REFRESH_TICKS = 4;
 // the distance made good since its last steer: SIM_STEER_NEAR_TICKS ticks'
 // worth.)
 const SIM_STEER_TICKS = 16, SIM_STEER_NEAR_TICKS = 4;
+// (The steps' tiles carried with their coordinates, a neighbour's from its
+// index's difference, and the destination's cluster worked out once: the
+// divisions by the map width were a quarter of the movement kernel.)
 function simFlowLook(LC, s, refresh, tl, gx, gy, dk, Wd, Hd, WL, navVer, wv, fgen,
     nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh) {
     if (LC.mvNavT[s] === tl && LC.mvNavD[s] === dk && LC.mvNavG[s] === fgen && (!refresh || (LC.mvNavV[s] === navVer && LC.mvNavW[s] === wv))) return 1;
-    let n1 = simNavStep(Wd, nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, tl, dk);
+    // (Clusters are 16 or 32 tiles: a shift.)
+    const cs = 31 - Math.clz32(nC), ddx = dk % Wd, dct = (((dk - ddx) / Wd) >> cs) * ncw + (ddx >> cs);
+    let n1 = simNavStepXY(Wd, cs, nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, tl, gx, gy, dk, dct);
     if (n1 < 0) return 0;
     let n2 = -1, far = n1, open = false;
+    const n1x = _simStepX(n1, tl, gx, Wd), n1y = _simStepY(n1, tl, gx, gy, Wd);
     if (WL[n1]) {
-        let aim = simNavStep(Wd, nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, n1, dk);
+        let aim = simNavStepXY(Wd, cs, nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, n1, n1x, n1y, dk, dct);
         if (!(aim >= 0) || WL[aim]) aim = dk;
         n1 = simNavDetour(WL, Wd, Hd, gx, gy, aim);
         if (n1 < 0) return -1;
         far = n1;
     } else {
-        if (Math.abs(n1 % Wd - gx) + Math.abs(((n1 - n1 % Wd) / Wd) - gy) !== 1) return -2;
-        open = _simOpenBlock(WL, tl, Wd, Hd) && _simOpenBlock(WL, n1, Wd, Hd);
-        let cur = n1;
+        if (Math.abs(n1x - gx) + Math.abs(n1y - gy) !== 1) return -2;
+        open = _simOpenBlockXY(WL, gx, gy, Wd, Hd) && _simOpenBlockXY(WL, n1x, n1y, Wd, Hd);
+        let cur = n1, cx = n1x, cy = n1y;
         for (let k = 1; k < (open ? 6 : 2); k++) {
-            const nx = simNavStep(Wd, nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, cur, dk);
+            const nx = simNavStepXY(Wd, cs, nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, cur, cx, cy, dk, dct);
             if (nx < 0 || WL[nx]) break;
             if (k === 1) n2 = nx;
-            if (!open || !_simOpenBlock(WL, nx, Wd, Hd)) break;
-            far = cur = nx;
+            if (!open) break;
+            const nxx = _simStepX(nx, cur, cx, Wd), nxy = _simStepY(nx, cur, cx, cy, Wd);
+            if (!_simOpenBlockXY(WL, nxx, nxy, Wd, Hd)) break;
+            far = cur = nx; cx = nxx; cy = nxy;
         }
     }
     LC.mvNavT[s] = tl; LC.mvNavD[s] = dk; LC.mvNavV[s] = navVer; LC.mvNavW[s] = wv; LC.mvNavG[s] = fgen;
     LC.mvNavN1[s] = n1; LC.mvNavN2[s] = n2; LC.mvNavFar[s] = far; LC.mvNavOpen[s] = open ? 1 : 0;
     return 1;
+}
+// Tile n's column and row, n a step from tile t (column tx, row ty): a
+// side neighbour's from the difference, anything else (a portal's pair)
+// divided out.
+function _simStepX(n, t, tx, W) {
+    const d = n - t;
+    if (d === W || d === -W) return tx;
+    if (d === 1 && tx + 1 < W) return tx + 1;
+    if (d === -1 && tx > 0) return tx - 1;
+    return n % W;
+}
+function _simStepY(n, t, tx, ty, W) {
+    const d = n - t;
+    if (d === W) return ty + 1;
+    if (d === -W) return ty - 1;
+    if ((d === 1 && tx + 1 < W) || (d === -1 && tx > 0)) return ty;
+    return (n - n % W) / W;
 }
 // The look-ahead's wall key at tile (gx, gy): the wall change counts of the
 // 3x3 blocks of 8 tiles around it (WBLK; its walls within 8 tiles), else
@@ -241,6 +266,43 @@ function simNavStep(W, C, cw, nc, hop, fields, nodeBase, nodeTile, nodePair, dfi
     return best;
 }
 
+// simNavStep from tile t at column tx, row ty, the destination's cluster
+// dct given, 2^cs-tile clusters (simFlowLook's steps).
+function simNavStepXY(W, cs, C, cw, nc, hop, fields, nodeBase, nodeTile, nodePair, dfield, doff, bx, by, bw, bh, t, tx, ty, dest, dct) {
+    if (t === dest) return -1;
+    if (dfield) {
+        const lx = tx - bx, ly = ty - by;
+        if (lx >= 0 && ly >= 0 && lx < bw && ly < bh) {
+            const o = doff + ly * bw + lx, here = dfield[o];
+            if (here !== 0xFFFF) {
+                let best = -1, bv = here;
+                if (lx + 1 < bw && dfield[o + 1] < bv) { bv = dfield[o + 1]; best = t + 1; }
+                if (lx > 0 && dfield[o - 1] < bv) { bv = dfield[o - 1]; best = t - 1; }
+                if (ly + 1 < bh && dfield[o + bw] < bv) { bv = dfield[o + bw]; best = t + W; }
+                if (ly > 0 && dfield[o - bw] < bv) { bv = dfield[o - bw]; best = t - W; }
+                return best;
+            }
+        }
+    }
+    const cxi = tx >> cs, cyi = ty >> cs, cf = cyi * cw + cxi;
+    const e = hop[cf * nc + dct];
+    if (e >= 254) return -1;
+    const node = nodeBase[cf] + e;
+    if (nodeTile[node] === t) { const p = nodePair[node]; return p >= 0 ? nodeTile[p] : -1; }
+    const off = node * C * C, lx = tx - (cxi << cs), ly = ty - (cyi << cs), o = off + ly * C + lx;
+    let best = -1, bv = fields[o];
+    if (lx + 1 < C && fields[o + 1] < bv) { bv = fields[o + 1]; best = t + 1; }
+    if (lx > 0 && fields[o - 1] < bv) { bv = fields[o - 1]; best = t - 1; }
+    if (ly + 1 < C && fields[o + C] < bv) { bv = fields[o + C]; best = t + W; }
+    if (ly > 0 && fields[o - C] < bv) { bv = fields[o - C]; best = t - W; }
+    return best;
+}
+// _simOpenBlock at column x, row y.
+function _simOpenBlockXY(WALL, x, y, W, H) {
+    if (x < 1 || y < 1 || x >= W - 1 || y >= H - 1) return false;
+    for (let yy = y - 1; yy <= y + 1; yy++) { const r = yy * W; if (WALL[r + x - 1] | WALL[r + x] | WALL[r + x + 1]) return false; }
+    return true;
+}
 // Whether tile t's whole 3x3 block is open terrain (see _isTileBlockOpen).
 function _simOpenBlock(WALL, t, W, H) {
     const x = t % W, y = (t - x) / W;
@@ -411,23 +473,53 @@ function _simDriveByAny(D, cov, s, owner, x, y, x0, y0, x1, y1, k, structs) {
 // destination tile), takes the step exactly as SIM_KERNEL_MOVE would and is
 // stamped (mvStepT = tick + 1, which SIM_KERNEL_MOVE skips). Anything else is
 // left untouched for SIM_KERNEL_MOVE (which decides it the same way).
+// (The movement kernels' lists of units, by pass: see SIM_KERNEL_MOVE.)
+let _simMoveLists = new Int32Array(4096), _simMoveCounts = new Int32Array(4);
+// In two passes (see the movement kernel's): the parked units' ticks and
+// the flow units' candidates, then their steps (_simStepFlow, compiled on
+// its own: the flow section first taken at a big order's first units, its
+// first deoptimization and recompile were the whole kernel's, ~25 ms).
 SIM_KERNELS[SIM_KERNEL_MOVE_STEP] = function (R, P, chunk) {
-    const ON = R['unit.mvOn'], OUT = R['unit.mvOut'], FL = R['unit.mvFlags'], ID = R['unit.id'], DEST = R['unit.mvDest'];
-    const CD = R['unit.mvCD'], CTK = R['unit.mvCT'], CVX = R['unit.mvCVx'], CVY = R['unit.mvCVy'], STEPT = R['unit.mvStepT'], CTL = R['unit.mvCTl'], CN = R['unit.mvCN'];
-    const EN = R['unit.energy'], SEP = R['unit.sepKey'], DEADC = R['unit.dead'], OWN = R['unit.owner'];
-    const X = R['unit.x'], Y = R['unit.y'], PX = R['unit.prevX'], PY = R['unit.prevY'], VX = R['unit.vx'], VY = R['unit.vy'];
-    const FLOOR = R['unit.mvFloor'], SC = R['mv.struct'], SPENT = R['unit.mvSpent'], WALL = R['mv.wall'];
-    const AREA = R['unit.spArea'], REACH = R['unit.mvReach'], AB = R['mv.areaBox'], ABOK = R['mv.areaBoxOk'], HS = R['mv.hostile'];
-    const AT = R['unit.attackTimer'], DBT = R['unit.dbT'], DBS = R['unit.dbS'], DBTK = R['unit.dbTick'];
-    const WK = R['unit.mvWk'], WTC = R['unit.workerTransferCooldown'], FLOWC = R['unit.mvFlow'], MFGEN = R['unit.mvFGen'], RDY = R['unit.mvReady'];
-    const FMN = R['nav.fmeta.0'], FMW = R['nav.fmeta.1'];
-    const t = P[2] | 0, tr = P[3] | 0, W = P[5] | 0, H = P[6] | 0, tile = P[7], q = P[8];
-    // (x * itile for x / tile, n * iq for n / q: the same for powers of two.)
-    const itile = 1 / tile, iq = 1 / q;
-    const bc = P[9] | 0, br = P[10] | 0, players = P[11] | 0, B = P[14], absent = P[15], BOXSTEPS = P[17] | 0, wcheck = P[21] | 0, acqT = Math.max(1, P[38] | 0);
-    const stride = bc + 1, plane = stride * (br + 1), ST = SIM_STEER_TICKS;
-    const D0 = R['unit.dead0'], WAKE = R['unit.mvWake'], WKWX = R['unit.wkWx'], WKWY = R['unit.wkWy'], WKWATCH = Math.max(1, P[29] | 0);
-    for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) {
+    const s0 = chunk * P[1], end = Math.min(P[0], s0 + P[1]), n = Math.max(0, end - s0);
+    if (_simMoveLists.length < 4 * n) _simMoveLists = new Int32Array(8 * n);
+    const Q = _simMoveLists, C = _simMoveCounts;
+    C[0] = 0;
+    _simStepParked(R, P, s0, end, Q, n, C);
+    _simStepFlow(R, P, s0, end, Q, n, C);
+};
+// Every unit: a parked one's tick; flow units listed for the steps.
+function _simStepParked(R, P, s0, end, Q, n, C) {
+    const ON = R['unit.mvOn'];
+    const OUT = R['unit.mvOut'];
+    const FL = R['unit.mvFlags'];
+    const ID = R['unit.id'];
+    const STEPT = R['unit.mvStepT'];
+    const EN = R['unit.energy'];
+    const SEP = R['unit.sepKey'];
+    const DEADC = R['unit.dead'];
+    const OWN = R['unit.owner'];
+    const X = R['unit.x'];
+    const Y = R['unit.y'];
+    const PX = R['unit.prevX'];
+    const PY = R['unit.prevY'];
+    const FLOOR = R['unit.mvFloor'];
+    const SC = R['mv.struct'];
+    const t = P[2] | 0;
+    const tr = P[3] | 0;
+    const W = P[5] | 0;
+    const H = P[6] | 0;
+    const tile = P[7];
+    const itile = 1 / tile;
+    const players = P[11] | 0;
+    const absent = P[15];
+    const acqT = Math.max(1, P[38] | 0);
+    const D0 = R['unit.dead0'];
+    const WAKE = R['unit.mvWake'];
+    const WKWX = R['unit.wkWx'];
+    const WKWY = R['unit.wkWy'];
+    const WKWATCH = Math.max(1, P[29] | 0);
+    let _nf = 0;
+    for (let s = s0; s < end; s++) {
         D0[s] = DEADC[s];
         const on = ON[s];
         // A parked unit before its wake tick: stands (its floor and, on its
@@ -448,7 +540,73 @@ SIM_KERNELS[SIM_KERNEL_MOVE_STEP] = function (R, P, chunk) {
             PX[s] = x; PY[s] = y; OUT[s] = 1; STEPT[s] = t + 1;
             continue;
         }
-        if (on !== 1) continue;
+        if (on === 1 && (FL[s] & 64) !== 0) Q[_nf++] = s;
+    }
+    C[0] = _nf;
+}
+// The listed flow units' committed steps.
+function _simStepFlow(R, P, s0, end, Q, n, C) {
+    const OUT = R['unit.mvOut'];
+    const FL = R['unit.mvFlags'];
+    const ID = R['unit.id'];
+    const DEST = R['unit.mvDest'];
+    const CD = R['unit.mvCD'];
+    const CTK = R['unit.mvCT'];
+    const CVX = R['unit.mvCVx'];
+    const CVY = R['unit.mvCVy'];
+    const STEPT = R['unit.mvStepT'];
+    const CTL = R['unit.mvCTl'];
+    const CN = R['unit.mvCN'];
+    const EN = R['unit.energy'];
+    const SEP = R['unit.sepKey'];
+    const DEADC = R['unit.dead'];
+    const OWN = R['unit.owner'];
+    const X = R['unit.x'];
+    const Y = R['unit.y'];
+    const PX = R['unit.prevX'];
+    const PY = R['unit.prevY'];
+    const VX = R['unit.vx'];
+    const VY = R['unit.vy'];
+    const FLOOR = R['unit.mvFloor'];
+    const SC = R['mv.struct'];
+    const SPENT = R['unit.mvSpent'];
+    const WALL = R['mv.wall'];
+    const AREA = R['unit.spArea'];
+    const REACH = R['unit.mvReach'];
+    const AB = R['mv.areaBox'];
+    const ABOK = R['mv.areaBoxOk'];
+    const HS = R['mv.hostile'];
+    const AT = R['unit.attackTimer'];
+    const DBT = R['unit.dbT'];
+    const DBS = R['unit.dbS'];
+    const DBTK = R['unit.dbTick'];
+    const WK = R['unit.mvWk'];
+    const WTC = R['unit.workerTransferCooldown'];
+    const FLOWC = R['unit.mvFlow'];
+    const MFGEN = R['unit.mvFGen'];
+    const RDY = R['unit.mvReady'];
+    const FMN = R['nav.fmeta.0'];
+    const FMW = R['nav.fmeta.1'];
+    const t = P[2] | 0;
+    const tr = P[3] | 0;
+    const W = P[5] | 0;
+    const H = P[6] | 0;
+    const tile = P[7];
+    const q = P[8];
+    const itile = 1 / tile;
+    const iq = 1 / q;
+    const bc = P[9] | 0;
+    const br = P[10] | 0;
+    const players = P[11] | 0;
+    const B = P[14];
+    const absent = P[15];
+    const BOXSTEPS = P[17] | 0;
+    const wcheck = P[21] | 0;
+    const acqT = Math.max(1, P[38] | 0);
+    const stride = bc + 1;
+    const plane = stride * (br + 1);
+    for (let _i = 0, _k = C[0]; _i < _k; _i++) {
+        const s = Q[_i];
         const f = FL[s];
         if ((f & 64) === 0) continue;
         const id = ID[s] | 0, dk = DEST[s];
@@ -496,61 +654,126 @@ SIM_KERNELS[SIM_KERNEL_MOVE_STEP] = function (R, P, chunk) {
         OUT[s] = Math.floor(qx * itile) !== gx || Math.floor(qy * itile) !== gy ? 3 : 1;
         STEPT[s] = t + 1;
     }
-};
+}
 
+// The movement kernel in passes over the chunk, each a function of its own
+// (compiled on its own: a section first taken, e.g. the flow section at a
+// big order's first units, deoptimizes and recompiles that pass, not one
+// 23 KB kernel: TurboFan took 50-110 ms over it, the whole kernel at
+// baseline speed meanwhile, ~10x slower, on every helper at once). A unit
+// goes through them as through the one loop before (its sections in order;
+// units do not read what another unit's sections write): the checks, holds,
+// chases and looks, then the flow's or the path's step, handed on in the
+// chunk's lists (_simMoveLists, n slots each from 2n: the flow's, the
+// path's; their lengths in _simMoveCounts[2], [3]). (A pass visits its own
+// units: a mode per slot tested in each mispredicted on mixed chunks; in six
+// passes, ~2x the kernel.)
 SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
-    const ON = R['unit.mvOn'], OUT = R['unit.mvOut'], FL = R['unit.mvFlags'];
-    const SPD = R['unit.mvSpd'], LANE = R['unit.mvLane'], SPENT = R['unit.mvSpent'], REACH = R['unit.mvReach'];
-    const BASE = R['unit.mvBase'], WLEN = R['unit.mvWlen'], PLEN = R['unit.mvPlen'], SCAN = R['unit.mvScan'], FLOOR = R['unit.mvFloor'];
-    const NODES = R['unit.mvNodes'], AREA = R['unit.spArea'], WAKE = R['unit.mvWake'], DEADC = R['unit.dead'];
-    const FLOWC = R['unit.mvFlow'], MFGEN = R['unit.mvFGen'], DEST = R['unit.mvDest'];
-    const AIRW = R['mv.airwall'];
-    const NF0 = R['nav.0.fields'], NH0 = R['nav.0.hop'], NB0 = R['nav.0.nb'], NT0 = R['nav.0.nt'], NP0 = R['nav.0.np'], NM0 = R['nav.0.meta'];
-    const NF1 = R['nav.1.fields'], NH1 = R['nav.1.hop'], NB1 = R['nav.1.nb'], NT1 = R['nav.1.nt'], NP1 = R['nav.1.np'], NM1 = R['nav.1.meta'];
-    const FPN = R['nav.fpool.0'], FMN = R['nav.fmeta.0'], FPW = R['nav.fpool.1'], FMW = R['nav.fmeta.1'], RDY = R['unit.mvReady'];
-    const NVT = R['unit.mvNavT'], NVV = R['unit.mvNavV'], NVW = R['unit.mvNavW'], NVG = R['unit.mvNavG'];
-    const HT = R['unit.mvHT'], HTID = R['unit.mvHTId'], X0 = R['unit.x0'], Y0 = R['unit.y0'], CRC = R['unit.collisionR'], RRC = R['unit.r'];
-    const AOFF = R['area.off'], ANB = R['area.nb'];
-    const AT = R['unit.attackTimer'], COV = R['vis.cover'], AG = R['ix.agrid'];
-    // (Speed: halved while frozen, again while sandy, as in Unit.update.)
-    const FRZ = R['unit.frozen'], SND = R['unit.sandy'], NLD = R['unit.mvNavLD'];
-    const CD = R['unit.mvCD'], CTK = R['unit.mvCT'], CVX = R['unit.mvCVx'], CVY = R['unit.mvCVy'], CTL = R['unit.mvCTl'], CN = R['unit.mvCN'];
-    const NVN1 = R['unit.mvNavN1'], NVN2 = R['unit.mvNavN2'], NVF = R['unit.mvNavFar'], NVO = R['unit.mvNavOpen'];
-    const LC = { mvNavT: NVT, mvNavD: R['unit.mvNavD'], mvNavV: NVV, mvNavW: NVW, mvNavG: NVG, mvNavN1: NVN1, mvNavN2: NVN2, mvNavFar: NVF, mvNavOpen: NVO };
-    const X = R['unit.x'], Y = R['unit.y'], PX = R['unit.prevX'], PY = R['unit.prevY'], VX = R['unit.vx'], VY = R['unit.vy'];
-    const EN = R['unit.energy'], OWN = R['unit.owner'], ID = R['unit.id'], PIDX = R['unit.pathIndex'], SEP = R['unit.sepKey'];
-    const HS = R['mv.hostile'], SC = R['mv.struct'], WALL = R['mv.wall'], AB = R['mv.areaBox'], ABOK = R['mv.areaBoxOk'];
-    // This tick's combat scan (run before this kernel: the nearest enemy unit
-    // in aggro range or -1, cbTick = t) and hostile structures alone (summed
-    // area, as mv.hostile).
-    const CBT = R['unit.cbT'], CBTK = R['unit.cbTick'], HSS = R['mv.hstruct'], CHS = R['unit.mvChs'], RNG = R['unit.cbRange'];
-    // (The combat scan's crowd flag: arriving in a crowd, flow mode.)
-    const CWN = R['unit.cwNear'], CWT = R['unit.cwTick'], CWD = R['unit.cwDense'];
-    // Drive-by looks (_simDriveByAny): the unit index by chunk.
-    const DB = R['sep.rs'] && R['sep.rc'] && R['sep.rstamp'] && R['sep.eslot'] ? {
-        rs: R['sep.rs'], rc: R['sep.rc'], rst: R['sep.rstamp'], es: R['sep.eslot'], OM: P[37] ? R['ix.omask'] : null,
-        ep: P[33] | 0, CW: P[34] | 0, CH: P[35] | 0, cs: P[36] | 0, DEAD: DEADC, OWN, X0, Y0, AG, AOFF, ANB, WALL, CRC, RRC,
-        W: P[5] | 0, H: P[6] | 0, tile: P[7], pad: P[20], SC } : null;
-    const RK = R['unit.mvRangeK'];
-    // Parked idle workers' version checks (worker.js _workerWorkHash): the
-    // table, its layout (P[22..27]) and the healer candidates' generation (P[28]).
-    const WKV = R['wk.ver'], WKTY = R['unit.wkType'], WKD = R['unit.wkD'], WKOX = R['unit.wkOx'], WKOY = R['unit.wkOy'], WKTW = R['unit.wkTwice'];
-    const WKF = R['unit.wkFail'], WKU = R['unit.wkUntil'], WKSC = R['unit.wkSched'];
-    const WKNP = P[22] | 0, WKTYPES = P[23] | 0, WKRW = P[24] | 0, WKRH = P[25] | 0, WKR = P[26] | 0, WKPER = Math.max(1, P[27] | 0), WKHGEN = P[28] | 0;
-    const WKWATCH = Math.max(1, P[29] | 0), WKWX = R['unit.wkWx'], WKWY = R['unit.wkWy'];
-    const t = P[2] | 0, tr = P[3] | 0, W = P[5] | 0, H = P[6] | 0, tile = P[7], q = P[8];
-    // (x * itile for x / tile, n * iq for n / q: the same for powers of two.)
-    const itile = 1 / tile, iq = 1 / q;
+    const s0 = chunk * P[1], end = Math.min(P[0], s0 + P[1]), n = Math.max(0, end - s0);
+    if (_simMoveLists.length < 4 * n) _simMoveLists = new Int32Array(8 * n);
+    const Q = _simMoveLists, C = _simMoveCounts;
+    C[2] = C[3] = 0;
+    _simMovePre(R, P, s0, end, Q, n, C);
+    _simMoveFlow(R, P, s0, end, Q, n, C);
+    _simMovePath(R, P, s0, end, Q, n, C);
+    _simMoveEpilogue(R, P, chunk);
+};
+// Every unit to its move: done (held, chasing, parked...), or on to the
+// flow or the path.
+function _simMovePre(R, P, s0, end, Q, n, C) {
+    const ON = R['unit.mvOn'];
+    const OUT = R['unit.mvOut'];
+    const FL = R['unit.mvFlags'];
+    const SPD = R['unit.mvSpd'];
+    const REACH = R['unit.mvReach'];
+    const FLOOR = R['unit.mvFloor'];
+    const AREA = R['unit.spArea'];
+    const WAKE = R['unit.mvWake'];
+    const DEADC = R['unit.dead'];
+    const DEST = R['unit.mvDest'];
+    const HT = R['unit.mvHT'];
+    const HTID = R['unit.mvHTId'];
+    const X0 = R['unit.x0'];
+    const Y0 = R['unit.y0'];
+    const CRC = R['unit.collisionR'];
+    const RRC = R['unit.r'];
+    const AOFF = R['area.off'];
+    const ANB = R['area.nb'];
+    const AT = R['unit.attackTimer'];
+    const COV = R['vis.cover'];
+    const AG = R['ix.agrid'];
+    const FRZ = R['unit.frozen'];
+    const SND = R['unit.sandy'];
+    const X = R['unit.x'];
+    const Y = R['unit.y'];
+    const PX = R['unit.prevX'];
+    const PY = R['unit.prevY'];
+    const EN = R['unit.energy'];
+    const OWN = R['unit.owner'];
+    const ID = R['unit.id'];
+    const SEP = R['unit.sepKey'];
+    const HS = R['mv.hostile'];
+    const SC = R['mv.struct'];
+    const WALL = R['mv.wall'];
+    const AB = R['mv.areaBox'];
+    const ABOK = R['mv.areaBoxOk'];
+    const CBT = R['unit.cbT'];
+    const CBTK = R['unit.cbTick'];
+    const CHS = R['unit.mvChs'];
+    const RNG = R['unit.cbRange'];
+    const WKV = R['wk.ver'];
+    const WKTY = R['unit.wkType'];
+    const WKD = R['unit.wkD'];
+    const WKOX = R['unit.wkOx'];
+    const WKOY = R['unit.wkOy'];
+    const WKTW = R['unit.wkTwice'];
+    const WKF = R['unit.wkFail'];
+    const WKU = R['unit.wkUntil'];
+    const WKSC = R['unit.wkSched'];
+    const WKNP = P[22] | 0;
+    const WKTYPES = P[23] | 0;
+    const WKRW = P[24] | 0;
+    const WKRH = P[25] | 0;
+    const WKR = P[26] | 0;
+    const WKPER = Math.max(1, P[27] | 0);
+    const WKHGEN = P[28] | 0;
+    const WKWATCH = Math.max(1, P[29] | 0);
+    const WKWX = R['unit.wkWx'];
+    const WKWY = R['unit.wkWy'];
+    const t = P[2] | 0;
+    const tr = P[3] | 0;
+    const W = P[5] | 0;
+    const H = P[6] | 0;
+    const tile = P[7];
+    const q = P[8];
+    const itile = 1 / tile;
     const QZ = q;
-    const bc = P[9] | 0, br = P[10] | 0, players = P[11] | 0, B = P[14], absent = P[15], WIN = P[16] | 0, BOXSTEPS = P[17] | 0;
-    const wver = P[19] | 0, pad = P[20], wcheck = P[21] | 0, WK = R['unit.mvWk'], WTC = R['unit.workerTransferCooldown'];
-    const WBLK = R['mv.wallBlk'], WBLK9 = R['mv.wallBlk9'], WBW = P[30] | 0, WBH = P[31] | 0;
-    const HWIN = R['unit.mvHWin'], HTT = R['unit.mvHTT'], HVER = R['unit.mvHVer'], areaVer = P[32] | 0, D0 = R['unit.dead0'], acqT = Math.max(1, P[38] | 0);
-    const CTI = R['unit.cbTId'], CRS = R['unit.cbRangeS'], acqStamp = P[39] | 0, CBS = R['unit.cbS'];
-    const DBT = R['unit.dbT'], DBS = R['unit.dbS'], DBTK = R['unit.dbTick'];
-    const stride = bc + 1, plane = stride * (br + 1), maxSide = tile * 0.8;
-    const STEPT = R['unit.mvStepT'], stepRan = P[46] === 1;
-    for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) {
+    const bc = P[9] | 0;
+    const br = P[10] | 0;
+    const players = P[11] | 0;
+    const B = P[14];
+    const absent = P[15];
+    const BOXSTEPS = P[17] | 0;
+    const pad = P[20];
+    const HWIN = R['unit.mvHWin'];
+    const HTT = R['unit.mvHTT'];
+    const HVER = R['unit.mvHVer'];
+    const areaVer = P[32] | 0;
+    const D0 = R['unit.dead0'];
+    const acqT = Math.max(1, P[38] | 0);
+    const CTI = R['unit.cbTId'];
+    const CRS = R['unit.cbRangeS'];
+    const acqStamp = P[39] | 0;
+    const CBS = R['unit.cbS'];
+    const DBT = R['unit.dbT'];
+    const DBS = R['unit.dbS'];
+    const DBTK = R['unit.dbTick'];
+    const stride = bc + 1;
+    const plane = stride * (br + 1);
+    const STEPT = R['unit.mvStepT'];
+    const stepRan = P[46] === 1;
+    let _nf = 0, _np = 0;
+    for (let s = s0; s < end; s++) {
         // (dead0: the step kernel's, when it ran.)
         if (!stepRan) D0[s] = DEADC[s];
         // (Moved by SIM_KERNEL_MOVE_STEP this tick: done.)
@@ -771,147 +994,267 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
             }
         }
         if (parked) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
-        if ((f & 64) !== 0) {
-            // A worker's check tick: its task looked at (Unit.update), unless
-            // its transfer cooldown runs (then it only walks: updateWorkerAI).
-            if (WK[s] && ((t + id) | 0) % wcheck === 0 && !(WTC[s] > 0)) { ON[s] = 0; continue; }
-            // Following the flow navigation (flownav.js) toward its
-            // destination, steered like _followPathStep.
-            const dk = DEST[s], dx0 = dk % W, dy0 = (dk - dx0) / W;
-            const prof = (f & 32) !== 0 ? 1 : 0, WL = prof ? AIRW : WALL;
-            const fid = FLOWC[s], wide = fid >= 4194304, did = wide ? fid - 4194304 : fid, dm = did * 8;
-            const FMETA = wide ? FMW : FMN, FPOOL = wide ? FPW : FPN;
-            // (Its field: the slot as armed, made.)
-            if (!(fid >= 0) || !FMETA || FMETA[dm + 6] !== MFGEN[s] || FMETA[dm + 1] !== dk || FMETA[dm + 7] !== 1) { ON[s] = 0; continue; }
-            // Its route starts next tick (asked for after this tick's flush).
-            if (t < RDY[s]) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
-            // Between its steers: on along its committed step (see
-            // SIM_STEER_TICKS); on its destination tile, Unit.update arrives.
-            // (After the field's checks: a field made again or dropped hands
-            // it back, where Unit.update asks for it again.)
-            if (CD[s] === dk && CTL[s] === tl && t - CTK[s] < CN[s]) {
-                if (tl === dk) { ON[s] = 0; continue; }
-                let vx = CVX[s], vy = CVY[s];
-                const sgx = Math.floor((x + vx) * itile), sgy = Math.floor((y + vy) * itile);
-                if ((f & 32) === 0 && (sgx !== gx || sgy !== gy)) {
-                    const sl = simFlowSlide(WALL, W, H, gx, gy, sgx, sgy);
-                    if (sl) { if (sl & 1) vx = 0; if (sl & 2) vy = 0; CD[s] = -1; }
-                }
-                const nx = x + vx, ny = y + vy;
-                PX[s] = x; PY[s] = y; VX[s] = vx; VY[s] = vy; SPENT[s] = Math.floor(nx * itile) !== gx || Math.floor(ny * itile) !== gy ? 1 : 0; FLOOR[s] = tl;
-                const qx = Number.isFinite(nx) ? Math.round(nx * q) * iq : 0, qy = Number.isFinite(ny) ? Math.round(ny * q) * iq : 0;
-                X[s] = qx; Y[s] = qy;
-                OUT[s] = Math.floor(qx * itile) !== gx || Math.floor(qy * itile) !== gy ? 3 : 1;
-                continue;
-            }
-            // (A steer: commits again below, if it moves.)
-            CD[s] = -1;
-            const NF = prof ? NF1 : NF0, NH = prof ? NH1 : NH0, NB = prof ? NB1 : NB0, NT = prof ? NT1 : NT0, NP = prof ? NP1 : NP0, NM = prof ? NM1 : NM0;
-            if (!NF || !NM) { ON[s] = 0; continue; }
-            const nC = NM[0], ncw = NM[1], nnc = NM[3];
-            const span = wide ? 3 * nC : nC, df = FPOOL, doff = did * span * span, dbx = FMETA[dm + 2], dby = FMETA[dm + 3], dbw = FMETA[dm + 4], dbh = FMETA[dm + 5];
-            // On the destination tile: Unit.update arrives.
+        if ((f & 64) !== 0) Q[2 * n + _nf++] = s; else Q[3 * n + _np++] = s;
+    }
+    C[2] = _nf; C[3] = _np;
+}
+// Along its flow (flownav.js).
+function _simMoveFlow(R, P, s0, end, Q, n, C) {
+    const ON = R['unit.mvOn'];
+    const OUT = R['unit.mvOut'];
+    const FL = R['unit.mvFlags'];
+    const SPD = R['unit.mvSpd'];
+    const LANE = R['unit.mvLane'];
+    const SPENT = R['unit.mvSpent'];
+    const FLOOR = R['unit.mvFloor'];
+    const FLOWC = R['unit.mvFlow'];
+    const MFGEN = R['unit.mvFGen'];
+    const DEST = R['unit.mvDest'];
+    const AIRW = R['mv.airwall'];
+    const NF0 = R['nav.0.fields'];
+    const NH0 = R['nav.0.hop'];
+    const NB0 = R['nav.0.nb'];
+    const NT0 = R['nav.0.nt'];
+    const NP0 = R['nav.0.np'];
+    const NM0 = R['nav.0.meta'];
+    const NF1 = R['nav.1.fields'];
+    const NH1 = R['nav.1.hop'];
+    const NB1 = R['nav.1.nb'];
+    const NT1 = R['nav.1.nt'];
+    const NP1 = R['nav.1.np'];
+    const NM1 = R['nav.1.meta'];
+    const FPN = R['nav.fpool.0'];
+    const FMN = R['nav.fmeta.0'];
+    const FPW = R['nav.fpool.1'];
+    const FMW = R['nav.fmeta.1'];
+    const RDY = R['unit.mvReady'];
+    const NVT = R['unit.mvNavT'];
+    const NVV = R['unit.mvNavV'];
+    const NVW = R['unit.mvNavW'];
+    const NVG = R['unit.mvNavG'];
+    const FRZ = R['unit.frozen'];
+    const SND = R['unit.sandy'];
+    const NLD = R['unit.mvNavLD'];
+    const CD = R['unit.mvCD'];
+    const CTK = R['unit.mvCT'];
+    const CVX = R['unit.mvCVx'];
+    const CVY = R['unit.mvCVy'];
+    const CTL = R['unit.mvCTl'];
+    const CN = R['unit.mvCN'];
+    const NVN1 = R['unit.mvNavN1'];
+    const NVN2 = R['unit.mvNavN2'];
+    const NVF = R['unit.mvNavFar'];
+    const NVO = R['unit.mvNavOpen'];
+    const LC = { mvNavT: NVT, mvNavD: R['unit.mvNavD'], mvNavV: NVV, mvNavW: NVW, mvNavG: NVG, mvNavN1: NVN1, mvNavN2: NVN2, mvNavFar: NVF, mvNavOpen: NVO };
+    const X = R['unit.x'];
+    const Y = R['unit.y'];
+    const PX = R['unit.prevX'];
+    const PY = R['unit.prevY'];
+    const VX = R['unit.vx'];
+    const VY = R['unit.vy'];
+    const ID = R['unit.id'];
+    const WALL = R['mv.wall'];
+    const CWN = R['unit.cwNear'];
+    const CWT = R['unit.cwTick'];
+    const CWD = R['unit.cwDense'];
+    const t = P[2] | 0;
+    const W = P[5] | 0;
+    const H = P[6] | 0;
+    const tile = P[7];
+    const q = P[8];
+    const itile = 1 / tile;
+    const iq = 1 / q;
+    const wver = P[19] | 0;
+    const wcheck = P[21] | 0;
+    const WK = R['unit.mvWk'];
+    const WTC = R['unit.workerTransferCooldown'];
+    const WBLK9 = R['mv.wallBlk9'];
+    const WBW = P[30] | 0;
+    const maxSide = tile * 0.8;
+    for (let _i = 0, _o = 2 * n, _k = C[2]; _i < _k; _i++) {
+        const s = Q[_o + _i];
+        const f = FL[s], id = ID[s] | 0, x = X[s], y = Y[s], gx = Math.floor(x * itile), gy = Math.floor(y * itile), tl = gy * W + gx;
+        // A worker's check tick: its task looked at (Unit.update), unless
+        // its transfer cooldown runs (then it only walks: updateWorkerAI).
+        if (WK[s] && ((t + id) | 0) % wcheck === 0 && !(WTC[s] > 0)) { ON[s] = 0; continue; }
+        // Following the flow navigation (flownav.js) toward its
+        // destination, steered like _followPathStep.
+        const dk = DEST[s], dx0 = dk % W, dy0 = (dk - dx0) / W;
+        const prof = (f & 32) !== 0 ? 1 : 0, WL = prof ? AIRW : WALL;
+        const fid = FLOWC[s], wide = fid >= 4194304, did = wide ? fid - 4194304 : fid, dm = did * 8;
+        const FMETA = wide ? FMW : FMN, FPOOL = wide ? FPW : FPN;
+        // (Its field: the slot as armed, made.)
+        if (!(fid >= 0) || !FMETA || FMETA[dm + 6] !== MFGEN[s] || FMETA[dm + 1] !== dk || FMETA[dm + 7] !== 1) { ON[s] = 0; continue; }
+        // Its route starts next tick (asked for after this tick's flush).
+        if (t < RDY[s]) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
+        // Between its steers: on along its committed step (see
+        // SIM_STEER_TICKS); on its destination tile, Unit.update arrives.
+        // (After the field's checks: a field made again or dropped hands
+        // it back, where Unit.update asks for it again.)
+        if (CD[s] === dk && CTL[s] === tl && t - CTK[s] < CN[s]) {
             if (tl === dk) { ON[s] = 0; continue; }
-            // Near it and held back by the crowd (under a third of its speed
-            // made good toward it last tick, pushes included): arrived where
-            // it is (not all of a big group fit on one tile).
-            // (As _followNavNode, with its last distance, unit.mvNavLD: the
-            // arrival itself is Unit.update's.)
-            // Waiting in a crowd (mvNavLD -2 - dest, see Unit._followNavNode):
-            // still, but for its look every 16 ticks (by id: on when the crowd
-            // around thinned out) and a try every 64.
-            if (NLD[s] === -2 - dk) {
-                const look = ((t + id) & 15) === 0;
-                if (!look || (((t + id) & 63) !== 0 && !(CWT[s] === t && CWD[s] < 9))) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
-                NLD[s] = -1;
-            }
-            // (Further out, up to 64 tiles: held back beside an idle or
-            // waiting unit of its own, cwNear, it waits: a big crowd settles
-            // outward, and goes on as it thins.)
-            let navLD = -1;
-            if ((f & 128) === 0 && Math.abs(dx0 - gx) <= 64 && Math.abs(dy0 - gy) <= 64) {
-                const ex = dx0 * tile + 16 - x, ey = dy0 * tile + 16 - y, now = Math.sqrt(ex * ex + ey * ey), last = NLD[s];
-                let es = SPD[s];
-                if (FRZ[s] > 0) es *= 0.5;
-                if (SND[s] > 0) es *= 0.5;
-                const near = Math.abs(dx0 - gx) <= 8 && Math.abs(dy0 - gy) <= 8;
-                if (last >= 0 && last - now < es * 0.3 * SIM_STEER_NEAR_TICKS) {
-                    if (near && CWT[s] === t && CWN[s] === 1) { ON[s] = 0; continue; }
-                    if (CWT[s] === t && CWN[s] === 1) { NLD[s] = -2 - dk; PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
-                }
-                navLD = now;
-            }
-            // The look-ahead from this tile (simFlowLook, cached).
-            const lk = simFlowLook(LC, s, ((t + id) & (SIM_FLOW_REFRESH_TICKS - 1)) === 0, tl, gx, gy, dk, W, H, WL, NM[6], simWallKey9(WBLK9, WBW, gx, gy, wver), wide ? 2 : 1,
-                nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh);
-            // No way there: a worker more than a tile away stands (as
-            // _followNavNode), anything else is handed back (it arrives as
-            // near as it gets). Walled in: it stands. A bad build:
-            // Unit.update.
-            if (lk === 0) { if (WK[s] && (Math.abs(dx0 - gx) > 1 || Math.abs(dy0 - gy) > 1)) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; } ON[s] = 0; continue; }
-            if (lk === -1) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
-            if (lk === -2) { ON[s] = 0; continue; }
-            const n1 = NVN1[s], n2 = NVN2[s], far = NVF[s], open = NVO[s] === 1;
-            NLD[s] = navLD;
-            const kx = far % W, ky = (far - kx) / W;
-            const baseTx = kx * tile + 16, baseTy = ky * tile + 16;
-            let tx, ty;
-            if (open) {
-                // Its own side offset from the flow's line (through the tile
-                // centres), drifting back gently: a group moves as a wide
-                // stream, each unit in its lane.
-                const routeDx = kx - gx, routeDy = ky - gy, routeLen = Math.sqrt(routeDx * routeDx + routeDy * routeDy);
-                const sx = -routeDy / routeLen, sy = routeDx / routeLen;
-                let side = ((x - (gx * tile + 16)) * sx + (y - (gy * tile + 16)) * sy) * 0.875;
-                side = side > maxSide ? maxSide : (side < -maxSide ? -maxSide : side);
-                tx = baseTx + sx * side; ty = baseTy + sy * side;
-            } else {
-                const lane = LANE[s], segDx = kx - gx, segDy = ky - gy;
-                let lx = 0, ly = 0;
-                if (Math.abs(segDx) >= Math.abs(segDy)) ly = (segDx < 0 ? lane : -lane);
-                else lx = (segDy < 0 ? -lane : lane);
-                tx = baseTx + lx; ty = baseTy + ly;
-            }
-            let dx = tx - x, dy = ty - y, dist = Math.sqrt(dx * dx + dy * dy);
-            // Never turn back for a point it has passed (the next tile's
-            // centre behind it, stepping around a corner): the one after.
-            if (n2 >= 0 && far === n1 && VX[s] * dx + VY[s] * dy < 0) {
-                const n2x = n2 % W;
-                tx = n2x * tile + 16; ty = ((n2 - n2x) / W) * tile + 16;
-                dx = tx - x; dy = ty - y; dist = Math.sqrt(dx * dx + dy * dy);
-            }
-            if (dist < 4) {
-                // At the next tile's point already: on toward the one after.
-                if (n2 < 0) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
-                const n2x = n2 % W;
-                tx = n2x * tile + 16; ty = ((n2 - n2x) / W) * tile + 16;
-                dx = tx - x; dy = ty - y; dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist < 4) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
-            }
-            let spd = SPD[s];
-            if (FRZ[s] > 0) spd *= 0.5;
-            if (SND[s] > 0) spd *= 0.5;
-            let vx = (dx / dist) * spd, vy = (dy / dist) * spd;
-            // Into a wall (on the ground): along it, one axis, else it
-            // stands (simFlowSlide, as _followNavNode).
-            if ((f & 32) === 0) {
-                const sl = simFlowSlide(WALL, W, H, gx, gy, Math.floor((x + vx) * itile), Math.floor((y + vy) * itile));
-                if (sl & 1) vx = 0;
-                if (sl & 2) vy = 0;
+            let vx = CVX[s], vy = CVY[s];
+            const sgx = Math.floor((x + vx) * itile), sgy = Math.floor((y + vy) * itile);
+            if ((f & 32) === 0 && (sgx !== gx || sgy !== gy)) {
+                const sl = simFlowSlide(WALL, W, H, gx, gy, sgx, sgy);
+                if (sl) { if (sl & 1) vx = 0; if (sl & 2) vy = 0; CD[s] = -1; }
             }
             const nx = x + vx, ny = y + vy;
-            const ngx = Math.floor(nx * itile), ngy = Math.floor(ny * itile);
-            // Entering another tile is a step (charged like a path node).
-            const stepped = ngx !== gx || ngy !== gy;
-            PX[s] = x; PY[s] = y; VX[s] = vx; VY[s] = vy; SPENT[s] = stepped ? 1 : 0; FLOOR[s] = tl;
-            CD[s] = dk; CTK[s] = t; CVX[s] = vx; CVY[s] = vy; CTL[s] = tl;
-            CN[s] = Math.abs(dx0 - gx) <= 8 && Math.abs(dy0 - gy) <= 8 ? SIM_STEER_NEAR_TICKS : SIM_STEER_TICKS;
+            PX[s] = x; PY[s] = y; VX[s] = vx; VY[s] = vy; SPENT[s] = Math.floor(nx * itile) !== gx || Math.floor(ny * itile) !== gy ? 1 : 0; FLOOR[s] = tl;
             const qx = Number.isFinite(nx) ? Math.round(nx * q) * iq : 0, qy = Number.isFinite(ny) ? Math.round(ny * q) * iq : 0;
             X[s] = qx; Y[s] = qy;
-            const qgx = Math.floor(qx * itile), qgy = Math.floor(qy * itile);
-            OUT[s] = qgx !== gx || qgy !== gy ? 3 : 1;
+            OUT[s] = Math.floor(qx * itile) !== gx || Math.floor(qy * itile) !== gy ? 3 : 1;
             continue;
         }
+        // (A steer: commits again below, if it moves.)
+        CD[s] = -1;
+        const NF = prof ? NF1 : NF0, NH = prof ? NH1 : NH0, NB = prof ? NB1 : NB0, NT = prof ? NT1 : NT0, NP = prof ? NP1 : NP0, NM = prof ? NM1 : NM0;
+        if (!NF || !NM) { ON[s] = 0; continue; }
+        const nC = NM[0], ncw = NM[1], nnc = NM[3];
+        const span = wide ? 3 * nC : nC, df = FPOOL, doff = did * span * span, dbx = FMETA[dm + 2], dby = FMETA[dm + 3], dbw = FMETA[dm + 4], dbh = FMETA[dm + 5];
+        // On the destination tile: Unit.update arrives.
+        if (tl === dk) { ON[s] = 0; continue; }
+        // Near it and held back by the crowd (under a third of its speed
+        // made good toward it last tick, pushes included): arrived where
+        // it is (not all of a big group fit on one tile).
+        // (As _followNavNode, with its last distance, unit.mvNavLD: the
+        // arrival itself is Unit.update's.)
+        // Waiting in a crowd (mvNavLD -2 - dest, see Unit._followNavNode):
+        // still, but for its look every 16 ticks (by id: on when the crowd
+        // around thinned out) and a try every 64.
+        if (NLD[s] === -2 - dk) {
+            const look = ((t + id) & 15) === 0;
+            if (!look || (((t + id) & 63) !== 0 && !(CWT[s] === t && CWD[s] < 9))) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
+            NLD[s] = -1;
+        }
+        // (Further out, up to 64 tiles: held back beside an idle or
+        // waiting unit of its own, cwNear, it waits: a big crowd settles
+        // outward, and goes on as it thins.)
+        let navLD = -1;
+        if ((f & 128) === 0 && Math.abs(dx0 - gx) <= 64 && Math.abs(dy0 - gy) <= 64) {
+            const ex = dx0 * tile + 16 - x, ey = dy0 * tile + 16 - y, now = Math.sqrt(ex * ex + ey * ey), last = NLD[s];
+            let es = SPD[s];
+            if (FRZ[s] > 0) es *= 0.5;
+            if (SND[s] > 0) es *= 0.5;
+            const near = Math.abs(dx0 - gx) <= 8 && Math.abs(dy0 - gy) <= 8;
+            if (last >= 0 && last - now < es * 0.3 * SIM_STEER_NEAR_TICKS) {
+                if (near && CWT[s] === t && CWN[s] === 1) { ON[s] = 0; continue; }
+                if (CWT[s] === t && CWN[s] === 1) { NLD[s] = -2 - dk; PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
+            }
+            navLD = now;
+        }
+        // The look-ahead from this tile (simFlowLook, cached).
+        const lk = simFlowLook(LC, s, ((t + id) & (SIM_FLOW_REFRESH_TICKS - 1)) === 0, tl, gx, gy, dk, W, H, WL, NM[6], simWallKey9(WBLK9, WBW, gx, gy, wver), wide ? 2 : 1,
+            nC, ncw, nnc, NH, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh);
+        // No way there: a worker more than a tile away stands (as
+        // _followNavNode), anything else is handed back (it arrives as
+        // near as it gets). Walled in: it stands. A bad build:
+        // Unit.update.
+        if (lk === 0) { if (WK[s] && (Math.abs(dx0 - gx) > 1 || Math.abs(dy0 - gy) > 1)) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; } ON[s] = 0; continue; }
+        if (lk === -1) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
+        if (lk === -2) { ON[s] = 0; continue; }
+        const n1 = NVN1[s], n2 = NVN2[s], far = NVF[s], open = NVO[s] === 1;
+        NLD[s] = navLD;
+        const kx = far % W, ky = (far - kx) / W;
+        const baseTx = kx * tile + 16, baseTy = ky * tile + 16;
+        let tx, ty;
+        if (open) {
+            // Its own side offset from the flow's line (through the tile
+            // centres), drifting back gently: a group moves as a wide
+            // stream, each unit in its lane.
+            const routeDx = kx - gx, routeDy = ky - gy, routeLen = Math.sqrt(routeDx * routeDx + routeDy * routeDy);
+            const sx = -routeDy / routeLen, sy = routeDx / routeLen;
+            let side = ((x - (gx * tile + 16)) * sx + (y - (gy * tile + 16)) * sy) * 0.875;
+            side = side > maxSide ? maxSide : (side < -maxSide ? -maxSide : side);
+            tx = baseTx + sx * side; ty = baseTy + sy * side;
+        } else {
+            const lane = LANE[s], segDx = kx - gx, segDy = ky - gy;
+            let lx = 0, ly = 0;
+            if (Math.abs(segDx) >= Math.abs(segDy)) ly = (segDx < 0 ? lane : -lane);
+            else lx = (segDy < 0 ? -lane : lane);
+            tx = baseTx + lx; ty = baseTy + ly;
+        }
+        let dx = tx - x, dy = ty - y, dist = Math.sqrt(dx * dx + dy * dy);
+        // Never turn back for a point it has passed (the next tile's
+        // centre behind it, stepping around a corner): the one after.
+        if (n2 >= 0 && far === n1 && VX[s] * dx + VY[s] * dy < 0) {
+            const n2x = n2 % W;
+            tx = n2x * tile + 16; ty = ((n2 - n2x) / W) * tile + 16;
+            dx = tx - x; dy = ty - y; dist = Math.sqrt(dx * dx + dy * dy);
+        }
+        if (dist < 4) {
+            // At the next tile's point already: on toward the one after.
+            if (n2 < 0) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
+            const n2x = n2 % W;
+            tx = n2x * tile + 16; ty = ((n2 - n2x) / W) * tile + 16;
+            dx = tx - x; dy = ty - y; dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < 4) { PX[s] = x; PY[s] = y; OUT[s] = 1; continue; }
+        }
+        let spd = SPD[s];
+        if (FRZ[s] > 0) spd *= 0.5;
+        if (SND[s] > 0) spd *= 0.5;
+        let vx = (dx / dist) * spd, vy = (dy / dist) * spd;
+        // Into a wall (on the ground): along it, one axis, else it
+        // stands (simFlowSlide, as _followNavNode).
+        if ((f & 32) === 0) {
+            const sl = simFlowSlide(WALL, W, H, gx, gy, Math.floor((x + vx) * itile), Math.floor((y + vy) * itile));
+            if (sl & 1) vx = 0;
+            if (sl & 2) vy = 0;
+        }
+        const nx = x + vx, ny = y + vy;
+        const ngx = Math.floor(nx * itile), ngy = Math.floor(ny * itile);
+        // Entering another tile is a step (charged like a path node).
+        const stepped = ngx !== gx || ngy !== gy;
+        PX[s] = x; PY[s] = y; VX[s] = vx; VY[s] = vy; SPENT[s] = stepped ? 1 : 0; FLOOR[s] = tl;
+        CD[s] = dk; CTK[s] = t; CVX[s] = vx; CVY[s] = vy; CTL[s] = tl;
+        CN[s] = Math.abs(dx0 - gx) <= 8 && Math.abs(dy0 - gy) <= 8 ? SIM_STEER_NEAR_TICKS : SIM_STEER_TICKS;
+        const qx = Number.isFinite(nx) ? Math.round(nx * q) * iq : 0, qy = Number.isFinite(ny) ? Math.round(ny * q) * iq : 0;
+        X[s] = qx; Y[s] = qy;
+        const qgx = Math.floor(qx * itile), qgy = Math.floor(qy * itile);
+        OUT[s] = qgx !== gx || qgy !== gy ? 3 : 1;
+        continue;
+    }
+}
+// Along its path window.
+function _simMovePath(R, P, s0, end, Q, n, C) {
+    const ON = R['unit.mvOn'];
+    const OUT = R['unit.mvOut'];
+    const FL = R['unit.mvFlags'];
+    const SPD = R['unit.mvSpd'];
+    const LANE = R['unit.mvLane'];
+    const SPENT = R['unit.mvSpent'];
+    const BASE = R['unit.mvBase'];
+    const WLEN = R['unit.mvWlen'];
+    const PLEN = R['unit.mvPlen'];
+    const SCAN = R['unit.mvScan'];
+    const FLOOR = R['unit.mvFloor'];
+    const NODES = R['unit.mvNodes'];
+    const FRZ = R['unit.frozen'];
+    const SND = R['unit.sandy'];
+    const X = R['unit.x'];
+    const Y = R['unit.y'];
+    const PX = R['unit.prevX'];
+    const PY = R['unit.prevY'];
+    const VX = R['unit.vx'];
+    const VY = R['unit.vy'];
+    const ID = R['unit.id'];
+    const PIDX = R['unit.pathIndex'];
+    const WALL = R['mv.wall'];
+    const t = P[2] | 0;
+    const W = P[5] | 0;
+    const H = P[6] | 0;
+    const tile = P[7];
+    const q = P[8];
+    const itile = 1 / tile;
+    const iq = 1 / q;
+    const WIN = P[16] | 0;
+    const wcheck = P[21] | 0;
+    const WK = R['unit.mvWk'];
+    const WTC = R['unit.workerTransferCooldown'];
+    const maxSide = tile * 0.8;
+    for (let _i = 0, _o = 3 * n, _k = C[3]; _i < _k; _i++) {
+        const s = Q[_o + _i];
+        const f = FL[s], id = ID[s] | 0, x = X[s], y = Y[s], gx = Math.floor(x * itile), gy = Math.floor(y * itile), tl = gy * W + gx;
         // A worker's check tick, as in flow mode.
         if (WK[s] && ((t + id) | 0) % wcheck === 0 && !(WTC[s] > 0)) { ON[s] = 0; continue; }
         // The path window (see _simMoveNode): a node it does not hold means
@@ -1029,6 +1372,25 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
         const qgx = Math.floor(qx * itile), qgy = Math.floor(qy * itile);
         OUT[s] = qgx !== gx || qgy !== gy ? 3 : 1;
     }
+}
+function _simMoveEpilogue(R, P, chunk) {
+    const OUT = R['unit.mvOut'];
+    const FL = R['unit.mvFlags'];
+    const SPENT = R['unit.mvSpent'];
+    const REACH = R['unit.mvReach'];
+    const AREA = R['unit.spArea'];
+    const X = R['unit.x'];
+    const Y = R['unit.y'];
+    const OWN = R['unit.owner'];
+    const SEP = R['unit.sepKey'];
+    const ABOK = R['mv.areaBoxOk'];
+    const t = P[2] | 0;
+    const W = P[5] | 0;
+    const H = P[6] | 0;
+    const tile = P[7];
+    const itile = 1 / tile;
+    const absent = P[15];
+    const BOXSTEPS = P[17] | 0;
     // The chunk's epilogue, in slot order:
     //  - node steps charged (spatialSlotUpdate's twin for the budget): per
     //    owner the fixed-point spend (mv.chFix[chunk][owner]) and per owner
@@ -1092,7 +1454,7 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
         }
         PC[chunk] = m;
     }
-};
+}
 
 // The hostile tables (unit.js _simMoveBuildHostile) in two passes: per
 // player and block row, its prefix along the row (SIM_KERNEL_SAT_ROWS), then
@@ -1179,6 +1541,11 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION_FINISH] = function (R, P, chunk) {
     const CX = R['unit.sepCx'], CY = R['unit.sepCy'];
     const tile = P[2], quant = P[3], contacts = P[4], pushQuant = P[5], t = P[6] | 0, retry = P[7] | 0, per = P[1] | 0, gain = P[10] > 0 ? P[10] : 1;
     const now = P[11] > 0 ? P[11] : 1;
+    // (Divisions by a power of two as products with its reciprocal: the same
+    // numbers, several times cheaper. The quantizers are; the tile is unless
+    // configured otherwise.)
+    const p2 = v => v > 0 && 2 ** Math.round(Math.log2(v)) === v;
+    const tP2 = p2(tile), qP2 = p2(quant), pqP2 = p2(pushQuant), itile = 1 / tile, iquant = 1 / quant, ipq = 1 / pushQuant, iqt = 4 / tile, qtP2 = p2(tile / 4);
     const WALL = R['mv.wall'], LAYER = R['unit.sepLayer'], GW = P[8] | 0, GH = P[9] | 0;
     // Whether each unit moved by itself this tick (before the pushes), for
     // the next tick's separationStart.
@@ -1198,7 +1565,7 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION_FINISH] = function (R, P, chunk) {
         const hits = HIT[i];
         if (hits) {
             const scale = (hits <= contacts ? 1 : Math.sqrt(contacts / hits)) * gain;
-            let px = PX[i] * scale / pushQuant, py = PY[i] * scale / pushQuant;
+            let px = pqP2 ? PX[i] * scale * ipq : PX[i] * scale / pushQuant, py = pqP2 ? PY[i] * scale * ipq : PY[i] * scale / pushQuant;
             const length = Math.sqrt(px * px + py * py), limit = Math.max(0, OV[i]);
             PX[i] = 0; PY[i] = 0; OV[i] = 0; HIT[i] = 0;
             if (length > limit) { px *= limit / length; py *= limit / length; }
@@ -1211,11 +1578,12 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION_FINISH] = function (R, P, chunk) {
         outX[i] = dx; outY[i] = dy;
         // Preserve the sweep's last-step arithmetic (dx * steps / steps),
         // including its rounding before the final quantization.
-        const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / (tile / 4)));
-        const rawX = x + dx * steps / steps, rawY = y + dy * steps / steps;
-        const nx = Number.isFinite(rawX) ? Math.round(rawX * quant) / quant : 0;
-        const ny = Number.isFinite(rawY) ? Math.round(rawY * quant) / quant : 0;
-        const gx = Math.floor(nx / tile), gy = Math.floor(ny / tile), ox = Math.floor(x / tile), oy = Math.floor(y / tile);
+        const am = Math.max(Math.abs(dx), Math.abs(dy)), steps = Math.max(1, Math.ceil(qtP2 ? am * iqt : am / (tile / 4)));
+        // (One step: dx * 1 / 1 is dx.)
+        const rawX = steps === 1 ? x + dx : x + dx * steps / steps, rawY = steps === 1 ? y + dy : y + dy * steps / steps;
+        const nx = Number.isFinite(rawX) ? (qP2 ? Math.round(rawX * quant) * iquant : Math.round(rawX * quant) / quant) : 0;
+        const ny = Number.isFinite(rawY) ? (qP2 ? Math.round(rawY * quant) * iquant : Math.round(rawY * quant) / quant) : 0;
+        const gx = Math.floor(tP2 ? nx * itile : nx / tile), gy = Math.floor(tP2 ? ny * itile : ny / tile), ox = Math.floor(tP2 ? x * itile : x / tile), oy = Math.floor(tP2 ? y * itile : y / tile);
         if (gx !== ox || gy !== oy) {
             // Into another tile: committed here when the sweep cannot meet
             // a blocked tile (a flyer, or open ground over the tiles
