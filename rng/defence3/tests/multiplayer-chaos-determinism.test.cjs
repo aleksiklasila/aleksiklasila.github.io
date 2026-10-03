@@ -9,6 +9,7 @@
 //
 // Usage: node tests/multiplayer-chaos-determinism.test.cjs [seconds-per-map]
 const assert = require('node:assert/strict');
+if (Number(process.env.CHAOS_HOST_HELPERS) > 0) globalThis.self = { crossOriginIsolated: true };
 const H = require('./net-harness.cjs');
 
 const SECONDS = Number(process.argv[2]) || 40;
@@ -135,6 +136,15 @@ async function setupChaosWorld(mapType, seed, { guestOptions = [], exactHashes =
     // By default three teams, one of them shared by two players.
     const { host, guests } = await H.startHostedMatch(world, { guests: teams.length - 1, teams, maxMs: 90000, guestOptions });
     const all = [host, ...guests];
+    // CHAOS_HOST_HELPERS=n: the host's simulation gets n real helper threads
+    // (shared memory, as a cross-origin isolated browser), the guests none:
+    // background jobs then run at other times on the host than on the
+    // guests, which must not change anything.
+    if (Number(process.env.CHAOS_HOST_HELPERS) > 0) {
+        if (!(globalThis.self && globalThis.self.crossOriginIsolated)) throw new Error('CHAOS_HOST_HELPERS needs the shared-memory mode: run with CHAOS_HOST_HELPERS set before loading the harness');
+        host.scratch.Worker = require('./real-sim-helper.cjs');
+        host.eval(`Worker = __scratch.Worker; navigator.hardwareConcurrency = 32; simParallelInit('', ${Number(process.env.CHAOS_HOST_HELPERS)})`);
+    }
     // Every building and unit the game has is in the mix (new ones too).
     const missing = JSON.parse(host.eval(`JSON.stringify([...Object.keys(BASE_CARD_TYPES).filter(k => !BASE_CARD_TYPES[k].notBuildable && !${JSON.stringify(BUILDINGS)}.includes(k)), ...Object.keys(BASE_UNIT_STATS).filter(k => !${JSON.stringify(UNITS)}.includes(k))])`));
     assert.deepEqual(missing, [], 'chaos lists miss these buildings/units');
@@ -169,6 +179,11 @@ async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
     // Halfway, the third team resigns: its client keeps simulating with a
     // local full-visibility view, which must not affect its simulation.
     let resignAt = world.now + SECONDS * 500;
+    // A third of the way: every peer moves a few units and kills one between
+    // two ticks (as a restore or a scripted setup does): whatever was built
+    // ahead from the old positions (the unit index, the separation) must be
+    // dropped alike on every peer, with or without helpers.
+    let shiftAt = world.now + SECONDS * 333;
     for (let i = 1; i <= corruptions; i++) corruptAt.push(world.now + SECONDS * 1000 * i / (corruptions + 1));
     while (world.now < endAt) {
         for (const inst of all) {
@@ -185,6 +200,12 @@ async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
             selectedEntities = collectorSpawners.filter(s => s.owner === localPlayerId).slice(0, 3);
             for (const k of ['updateInfoPanel', 'updateHUD', 'updateBuildMenu', 'updateControlGroupBar']) { try { __orig[k](); } catch (e) {} }
         })()`);
+        if (shiftAt && world.now >= shiftAt) {
+            shiftAt = 0;
+            world.atNextSafeTick(`(() => { const us = units.filter(u => !u.dead).sort((a, b) => a.id - b.id);
+                for (let i = 0; i < us.length && i < 40; i += 4) { const u = us[i]; u.x += 3; u.y -= 2; updateUnitSpatial(u); }
+                const k = us[us.length >> 1]; if (k && !k.isKing) k.dead = true; })()`, 10);
+        }
         if (resignAt && world.now >= resignAt) {
             resignAt = 0;
             guests[1].eval("queueAction({ action: 'resign' }); enterSpectateMode('defeated'); connections[0].send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating' });");
@@ -264,4 +285,6 @@ if (require.main === module) (async () => {
         assert.ok(r.commandKinds >= 24, r.mapType + ' command kinds used ' + r.commandKinds);
     }
     console.log('PASS: chaos determinism\n  ' + results.map(r => `${r.mapType}: ${r.setupCounts.units} units + ${r.setupCounts.towers + r.setupCounts.barracks + r.setupCounts.spawners + r.setupCounts.floor} buildings at start (max ${r.maxUnits} units), ${r.unitTypesSeen} unit types, ${r.commandKinds} command kinds, ${r.compared} tick hashes compared, ${r.hostResyncs} patches for forced divergences`).join('\n  '));
+    // (Helper threads keep the process alive.)
+    if (Number(process.env.CHAOS_HOST_HELPERS) > 0) process.exit(0);
 })().catch(err => { console.error(err); process.exit(1); });

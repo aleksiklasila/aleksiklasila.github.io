@@ -973,14 +973,16 @@ function recalculateUnitEffectiveStats() {
         if (!_effFlags || _effFlags.length < m) { _effFlags = simSharedArray(Uint8Array, Math.max(1024, m * 2)); simParallelBind('eff.flag', _effFlags); }
         simParallelBind('ix.slots', slots); simParallelBind('spatial.cplx', spatialUnitsComplex);
         const P = _simParams;
-        P[0] = m; P[1] = 1024; P[2] = step; P[3] = phase; P[4] = chunkPx; P[5] = CHUNKS_W; P[6] = CHUNKS_H;
+        // (256 a job: a unit's window counts are costly, ~2.5 us; 1024 left
+        // a few long jobs and most helpers idle.)
+        P[0] = m; P[1] = 256; P[2] = step; P[3] = phase; P[4] = chunkPx; P[5] = CHUNKS_W; P[6] = CHUNKS_H;
         P[7] = spatialUnitsComplexStridePerChunk; P[8] = spatialUnitsComplexStridePerPlayer; P[9] = spatialUnitsComplexPlayerCount;
         P[10] = MAX_THING_LEVEL; P[11] = stamp;
         simParallelBind('eff.tver', _unitStatsVerTable(spatialUnitsComplexPlayerCount)); P[14] = UNIT_STATS_VER_TYPES;
         // (The upkeep bins, when kept: main.js _upkU.)
         const UK = typeof _upkU !== 'undefined' && _upkU && _upkU.cols === c && _upkU.cnt === _upkHist ? _upkU : null;
         P[12] = UK ? UK.np : 0; P[13] = UK ? UK.L1 : 0;
-        simParallelRun(SIM_KERNEL_EFF_UNITS, Math.ceil(m / 1024));
+        simParallelRun(SIM_KERNEL_EFF_UNITS, Math.ceil(m / 256));
         const F = _effFlags;
         for (let j = 0; j < m; j++) {
             const f = F[j];

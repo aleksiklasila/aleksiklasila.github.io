@@ -1109,7 +1109,7 @@ class Unit {
         }
         // Attack unit target
         if (this.targetUnit) {
-            if (_unitTickDead(this.targetUnit)) { this.targetUnit = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; return; }
+            if (_unitTickDead(this.targetUnit)) { this.targetUnit = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; this._resumeAttackMove(); return; }
             // (The target where it was at the pass's start: _unitTickX.)
             let tpx = _unitTickX(this.targetUnit), tpy = _unitTickY(this.targetUnit);
             let tgx = Math.floor(tpx / TILE), tgy = Math.floor(tpy / TILE);
@@ -1153,6 +1153,7 @@ class Unit {
                     this._pendingPathTarget = null;
                     this.forcedAttackTarget = false;
                     this.commandState = CMD_IDLE;
+                    this._resumeAttackMove();
                     return;
                 }
             }
@@ -1173,6 +1174,7 @@ class Unit {
             } else if (!this.forcedAttackTarget && d > 8 * TILE) {
                 // Leash
                 this.targetUnit = null; this.attackTarget = null; this.path = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE;
+                this._resumeAttackMove();
             } else if (this.holdPosition) {
                 // Held: keep the chosen target (attacked as soon as it is in
                 // range) but never chase it; fight whatever is in range.
@@ -1209,7 +1211,7 @@ class Unit {
         // Attack building target
         if (this.targetBuilding) {
             let tb = this.targetBuilding;
-            if (tb.energy <= 0 || !_isHostileThingVisibleToUnit(this, tb)) { this.targetBuilding = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; return; }
+            if (tb.energy <= 0 || !_isHostileThingVisibleToUnit(this, tb)) { this.targetBuilding = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; this._resumeAttackMove(); return; }
             let d = detHypot(tb.x - this.x, tb.y - this.y);
             if (_isTargetWithinUnitAttackAreaRange(this, tb)) {
                 this.attackTarget = tb;
@@ -1249,6 +1251,19 @@ class Unit {
         this.attackTarget = null;
         this.forcedAttackTarget = false;
         this.commandState = CMD_IDLE;
+    }
+
+    // An engagement on the way of an attack-move ended (its target died, went
+    // out of sight or out of leash, its structure fell): on toward the
+    // attack-move's tile at once, as doIdle does on the next tick (a new
+    // target is the attack-move's own look, on its acquisition ticks: the
+    // same cadence as doIdle's). In a big battle every kill sent each of
+    // its attackers through a whole idle update first.
+    _resumeAttackMove() {
+        if (this._attackMoveGx == null || this.holdPosition || this.workerState || this.unitType === 'scout' || this.dead) return;
+        let gx = this._attackMoveGx, gy = this._attackMoveGy;
+        this.targetPos = { x: gx * TILE + 16, y: gy * TILE + 16 };
+        _makeFallbackPathForUnit(this, Math.floor(this.x / TILE), Math.floor(this.y / TILE), gx, gy, CMD_ATTACK_MOVING, 'ai_combat');
     }
 
     doHolding() {
@@ -1859,7 +1874,7 @@ for (const k of (typeof SIM_UNIT_STATUS_COLUMNS !== 'undefined' ? SIM_UNIT_STATU
 // before the unit pass (SIM_KERNEL_STATUS; Unit.update did it per unit):
 // damage over time dealt, units it kills marked dead. Then the few events
 // that need the objects: damage shown, watches ended.
-const STATUS_PREPASS_CHUNK = 8192;
+const STATUS_PREPASS_CHUNK = 2048;
 // Units' damage over time is reported (its flash, the shrines' count) every
 // this many ticks, summed (see SIM_KERNEL_STATUS).
 const STATUS_DOT_REPORT_TICKS = 4;
@@ -1869,21 +1884,23 @@ function statusDotAccReset() {
     const S = _simUnitState;
     if (S) S.columns.stAcc.fill(0);
 }
-let _statusCounts = null;
+let _statusCounts = null, _statusList = null;
 function statusPrepassRun() {
     const S = _simUnitState, n = units.length;
     if (!S || n === 0) return;
     const slots = _unitSlotMapEnsure(), chunks = Math.ceil(n / STATUS_PREPASS_CHUNK);
     if (!_statusCounts || _statusCounts.length < chunks) { _statusCounts = simSharedArray(Int32Array, Math.max(64, chunks * 2)); simParallelBind('st.count', _statusCounts); }
+    if (!_statusList || _statusList.length < chunks * STATUS_PREPASS_CHUNK) { _statusList = simSharedArray(Int32Array, Math.max(4096, chunks * STATUS_PREPASS_CHUNK * 2)); simParallelBind('st.list', _statusList); }
     simParallelBind('ix.slots', slots);
     const P = _simParams;
     P[0] = n; P[1] = STATUS_PREPASS_CHUNK; P[2] = gameTime; P[3] = STATUS_DOT_REPORT_TICKS;
     simParallelRun(SIM_KERNEL_STATUS, chunks);
     const C = S.columns, EV = C.stEv, DOT = C.stDot, owners = S.owners;
+    // (Each job's units with events, in index order: the kernel's lists.)
+    const LIST = _statusList;
     for (let k = 0; k < chunks; k++) {
-        if (_statusCounts[k] === 0) continue;
-        for (let i = k * STATUS_PREPASS_CHUNK, end = Math.min(n, i + STATUS_PREPASS_CHUNK); i < end; i++) {
-            const s = slots[i];
+        for (let j = k * STATUS_PREPASS_CHUNK, je = j + _statusCounts[k]; j < je; j++) {
+            const i = LIST[j], s = slots[i];
             if (s < 0) continue;
             const ev = EV[s];
             if (ev === 0) continue;
@@ -2356,8 +2373,20 @@ function simMoveStatsChanged(u) {
             && o5 === c.mvShoot[s] && o6 === c.mvRangeK[s] && o7 === c.cbRange[s];
     }
     if (same) return;
-    // Parked or holding: its checks were made with the old stats.
-    if (c.mvOn[s] >= 2) { c.mvOn[s] = 0; return; }
+    // Holding (3: an enemy unit, 5: a structure): the hold stands on its
+    // range in area steps (mvReach, as simMoveTryHold took it) and on the
+    // unit dealing damage; its chase step's length follows the speed. The
+    // same range, still shooting: kept, as Unit.update would decide the same
+    // (in a battle effective levels change all the time: every change made
+    // each holder run Unit.update again).
+    const on = c.mvOn[s];
+    if (on === 3 || on === 5) {
+        const k = Math.floor(Math.max(0, Number(_getUnitAttackRangeArea(u)) || 0));
+        if (pc && pc.attackDamage > 0 && k === c.mvReach[s]) { if (on === 3) c.mvChs[s] = Math.max(TILE * 0.6, Number(pc.speed) || 1); return; }
+        c.mvOn[s] = 0; return;
+    }
+    // Parked or chasing: its checks were made with the old stats.
+    if (on >= 2) { c.mvOn[s] = 0; return; }
     if (c.mvOn[s] !== 1) return;
     let reach = 0, ok = spd >= 0;
     if (ok && (f & 16)) reach = Math.ceil(Math.max(TILE, pc.visionRange * TILE) / TILE) + 1;
@@ -2644,7 +2673,9 @@ function simMoveTryHold(u) {
     const c = u._us, tu = u.targetUnit;
     if (c && !tu && u.targetBuilding) { _simMoveTryHoldBuilding(u, c); return; }
     if (!c || u.dead || u.holdPosition || u.workerState || !tu || tu.dead || u.forcedAttackTarget || u.targetBuilding || u.attackTarget !== tu || u.path) return;
-    if (!(u.attackTimer > 1) || !(u.preComputed && u.preComputed.attackDamage > 0)) return;
+    // (A timer of one tick: held too, its attack next tick made by the
+    // kernel's hand-back, simHoldFire, not a whole Unit.update.)
+    if (!(u.attackTimer > 0) || !(u.preComputed && u.preComputed.attackDamage > 0)) return;
     const q = tu._si, tc = tu._us;
     if (tc !== c || !(q >= 0) || u._spatialEpoch !== spatialEpoch || c.sepKey[u._si] === SIM_SEP_ABSENT) return;
     // (Range in area steps; the kernel works out up to 1, touching included.
@@ -2676,7 +2707,7 @@ function simMoveTryHold(u) {
 function _simMoveTryHoldBuilding(u, c) {
     const tb = u.targetBuilding;
     if (u.dead || u.holdPosition || u.workerState || u.path || u.attackTarget !== tb || !(tb.energy > 0)) return;
-    if (!(u.attackTimer > 1) || !(u.preComputed && u.preComputed.attackDamage > 0)) return;
+    if (!(u.attackTimer > 0) || !(u.preComputed && u.preComputed.attackDamage > 0)) return;
     const s = u._si, gx = tb.gx, gy = tb.gy;
     if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
     // (The kernel knows the tile; a structure stands at its centre.)
@@ -3176,8 +3207,8 @@ function simMoveRun() {
             if (a >= 0 && !ok[a * SIM_MOVE_BOX_STEPS + RE[s]]) _simMoveEnsureAreaBox(a, RE[s]);
         }
     }
-    const P = _simParams;
-    P[0] = n; P[1] = 4096; P[2] = gameTime; P[3] = TICK_RATE; P[4] = 0; P[5] = GRID_W; P[6] = GRID_H;
+    const P = _simParams, CH = SIM_MOVE_CHUNK;
+    P[0] = n; P[1] = CH; P[2] = gameTime; P[3] = TICK_RATE; P[4] = 0; P[5] = GRID_W; P[6] = GRID_H;
     P[7] = TILE; P[8] = UNIT_POSITION_QUANTIZATION; P[9] = spatialBlockCols; P[10] = spatialBlockRows;
     P[11] = players; P[12] = CMD_MOVING; P[13] = CMD_ATTACK_MOVING; P[14] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; P[15] = SIM_SEP_ABSENT;
     P[16] = SIM_MOVE_WINDOW; P[17] = SIM_MOVE_BOX_STEPS; P[18] = SIM_FLOW_ARRIVE; P[19] = _simMoveWallVer;
@@ -3200,8 +3231,8 @@ function simMoveRun() {
     if (typeof _visCoverReady === 'function' && _visCoverReady()) simParallelBind('vis.cover', _visCover.cover);
     simParallelBind('ix.agrid', _spatialAreaGridFlat());
     if (typeof _flowTables === 'function') _flowTables();
-    const chunks = Math.ceil(n / 4096);
-    if (!_simMovePost || _simMovePost.length < chunks * 4096) { _simMovePost = simSharedArray(Int32Array, Math.max(8192, chunks * 4096 * 2)); simParallelBind('mv.post', _simMovePost); }
+    const chunks = Math.ceil(n / CH);
+    if (!_simMovePost || _simMovePost.length < chunks * CH) { _simMovePost = simSharedArray(Int32Array, Math.max(8192, chunks * CH * 2)); simParallelBind('mv.post', _simMovePost); }
     if (!_simMovePostC || _simMovePostC.length < chunks) { _simMovePostC = simSharedArray(Int32Array, Math.max(64, chunks * 2)); simParallelBind('mv.postc', _simMovePostC); }
     // (The kernel's epilogue: the index columns of units in other tiles, the
     // node steps' charges per chunk, owner and type.)
@@ -3229,7 +3260,7 @@ function simMoveRun() {
     // chunk by chunk in slot order: not every slot.
     const OUT = c.mvOut, owners = S.owners, PL = _simMovePost, PC = _simMovePostC;
     let slow = null;
-    for (let k = 0; k < chunks; k++) for (let i = k * 4096, e = i + PC[k]; i < e; i++) {
+    for (let k = 0; k < chunks; k++) for (let i = k * CH, e = i + PC[k]; i < e; i++) {
         const s = PL[i], o = OUT[s];
         if (o === 0) continue;
         if (c.mvBlk[s]) { c.mvBlk[s] = 0; if (owners[s]) _setUnitAstarBudgetBlockedIndicator(owners[s], 1); }
@@ -3275,6 +3306,10 @@ function _simMoveChargeSteps(chunks, NP, NT, names) {
 let _simMoveRem = null, _simMoveChFix = null, _simMoveChUse = null;
 // (The step kernel before the movement kernel: see SIM_KERNEL_MOVE_STEP.)
 let SIM_MOVE_STEP_KERNEL = true;
+// Slots per job of the movement kernels: small jobs, so the helpers share
+// the work evenly (4096: ~49 jobs at 200k, the last ones' wait ~3 ms a
+// tick). (The charges' per-job sums: integers, or the usage log's.)
+const SIM_MOVE_CHUNK = 1024;
 // (simMoveRun's own 'players' is the index's count.)
 function _simMoveGamePlayers() { return players.length; }
 
@@ -3511,7 +3546,7 @@ let SEPARATION_SLOT_MIN_UNITS = 4096;
 // still and spaced as every tick (tests/separation-jitter.test.cjs); every
 // unit at once (2) makes crowds sway.
 let UNIT_SEPARATION_MODE = 0;
-let UNIT_SEPARATION_TIER_GAIN = 1.1;
+let UNIT_SEPARATION_TIER_GAIN = 1.0;
 let _sepPending = null, _sepDirty = true;
 const SEP_PACK_PER = 512, SEP_MARK_PER = 2048;
 // The chain's arrays for n slots (the sums cleared once when new or after
@@ -3550,6 +3585,10 @@ function separationStart() {
     const pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0), maxR = Math.max(0.1, _maxUnitCollisionRadius()), cws = CHUNK_SIZE * TILE;
     const farAny = 2 * maxR + pad, reach = Math.max(1, Math.ceil(farAny / cws)), H = Math.max(2, reach);
     const bands = Math.ceil(CHUNKS_H / H);
+    // (Every stage's params written whole: lane 0 is the state hash's too
+    // (utils_snapshot.js SNAP_REGION), whose P[5] 1 would make the pack read
+    // the live columns the pass is moving.)
+    for (let st = 0; st < 5; st++) simParallelStageParams(0, st).fill(0);
     let P = simParallelStageParams(0, 0);
     P[0] = ne; P[1] = SEP_PACK_PER; P[2] = getUnitCollisionRecalcTicks(); P[3] = gameTime; P[4] = mode;
     P = simParallelStageParams(0, 1);
@@ -3595,7 +3634,7 @@ function separationPrebuildStages(n, ep, tick) {
 }
 // The prebuild chain's separation dropped (waited for: its sums are
 // stale, cleared before the next use).
-function separationPrebuildDrop() { _sepPre = null; _sepDirty = true; }
+function separationPrebuildDrop() { if (_sepPre) { _sepPre = null; _sepDirty = true; } }
 // The prebuilt index was taken (its epoch): its separation is this tick's.
 function separationPrebuildTaken(ep) {
     if (_sepPre && _sepPre.ep === ep) _sepPre.taken = true;

@@ -10,7 +10,7 @@ if (process.env.HELPERS) globalThis.self = { crossOriginIsolated: true };
 const H = require(path.join(__dirname, '../tests/net-harness.cjs'));
 // DATA=path: another lobby settings file (default tests/1500.json).
 const data = require(process.env.DATA ? path.resolve(process.env.DATA) : path.join(__dirname, '../tests/1500.json'));
-const seconds = Number(process.argv[2]) || 15;
+let seconds = Number(process.argv[2]) || 15;
 (async () => {
     const controls = { ...H.SMALL_MATCH_CONTROLS };
     for (const [k, v] of Object.entries(data.lobby.numbers)) controls[k] = String(v);
@@ -32,12 +32,55 @@ const seconds = Number(process.argv[2]) || 15;
         host.scratch.Worker = require(path.join(__dirname, '../tests/real-sim-helper.cjs'));
         console.log('helpers', host.eval(`Worker = __scratch.Worker; navigator.hardwareConcurrency = 32; simParallelInit('', ${Number(process.env.HELPERS)})`));
     }
+    // EVALALL=<code>: evaluated on every peer (host first) before the
+    // workloads' setups; AFTERALL=<expr> after the run on every peer, the
+    // results written as a JSON array to AFTERALL_OUT (default
+    // .claude/afterall.json).
+    if (process.env.EVALALL) for (const g of peers) g.eval(process.env.EVALALL);
     await world.run(1000);
-    for (const g of peers) g.eval(`(() => {
+    if (process.env.RALLY10 === undefined) for (const g of peers) g.eval(`(() => {
         const mine = units.filter(u => !u.dead && u.owner === localPlayerId && !u.workerType);
         for (let i = 0; i < 10; i++) queueAction({ action: 'move', unitIds: mine.filter((u, k) => k % 10 === i).map(u => u.id),
             targetX: (0.15 + 0.7 * ((i * 7) % 10) / 9) * GRID_W * TILE, targetY: (0.15 + 0.7 * ((i * 3) % 10) / 9) * GRID_H * TILE });
     })()`);
+    // RALLY10=all|mine: the ctrl multi-point order. Every combat unit of the
+    // peer's player (all: every peer, both teams; mine: the host's only)
+    // selected, then 10 ctrl right-clicks, one every RALLY_GAP ms (default
+    // 250): each click re-issues the whole selection over the points so far,
+    // closest unit/point pairs first with equal shares, as the page does
+    // (main.js applyUnitCommandTargets / _assignToNearestPoints). Prints the
+    // page-side assignment time per click; RALLYSTAT=1 then reports, per
+    // tick after the first click, the share of the selection moving.
+    let rallyClicks = null;
+    if (process.env.RALLY10 !== undefined) {
+        const who = process.env.RALLY10 === 'mine' ? [host] : peers, gap = Number(process.env.RALLY_GAP) || 250;
+        for (const g of peers) g.eval(`__scratch.rallySel = units.filter(u => !u.dead && u.owner === localPlayerId && !u.workerType).map(u => u.id); __scratch.rallyPts = []; __scratch.rallyMs = [];`);
+        if (process.env.RALLYSTAT) host.eval(`__scratch.rs = []; { const f = runOneTick; runOneTick = function () { const r = f.apply(this, arguments);
+            if (__scratch.rallyPts.length) { const ids = new Set(__scratch.rallySel); let mv = 0, n = 0; for (const u of units) { if (!ids.has(u.id) || u.dead) continue; n++; if (u.x !== u.prevX || u.y !== u.prevY) mv++; }
+                __scratch.rs.push([currentTick, Math.round(1000 * mv / Math.max(1, n)) / 10]); } return r; }; }`);
+        rallyClicks = async () => { for (let click = 0; click < 10; click++) {
+            for (const g of who) g.eval(`(() => {
+                const a = __scratch.realNow ? __scratch.realNow() : Date.now();
+                const k = ${click}, pts = __scratch.rallyPts;
+                pts.push({ x: (0.12 + 0.76 * ((k * 7) % 10) / 9) * GRID_W * TILE, y: (0.12 + 0.76 * ((k * 3 + 1) % 10) / 9) * GRID_H * TILE });
+                const byId = new Map(units.map(u => [u.id, u])), ids = __scratch.rallySel.filter(id => byId.has(id) && !byId.get(id).dead);
+                const n = ids.length, kk = pts.length, cap = Math.ceil(n / kk), load = new Array(kk).fill(0), pick = new Array(n).fill(0);
+                // (main.js _assignToNearestPoints: per point a counting sort by
+                // whole-pixel distance, then the lists merged closest first.)
+                if (kk > 1) { const B = 65536, cnt = new Int32Array(B + 1), dist = new Int32Array(n), lists = [], keys = [];
+                    for (let j = 0; j < kk; j++) { cnt.fill(0); for (let i = 0; i < n; i++) { const u = byId.get(ids[i]), dx = u.x - pts[j].x, dy = u.y - pts[j].y, d = Math.min(B - 1, Math.floor(Math.sqrt(dx * dx + dy * dy))); dist[i] = d; cnt[d + 1]++; }
+                        for (let d = 0; d < B; d++) cnt[d + 1] += cnt[d]; const L = new Int32Array(n), K = new Int32Array(n); for (let i = 0; i < n; i++) { const o = cnt[dist[i]]++; L[o] = i; K[o] = dist[i]; } lists.push(L); keys.push(K); }
+                    const head = new Int32Array(kk), done = new Uint8Array(n), alive = new Uint8Array(kk).fill(1); let left = n, open = kk;
+                    while (left && open) { let bj = -1, bk = Infinity, bi = 0; for (let j = 0; j < kk; j++) { if (!alive[j]) continue; const L = lists[j]; let h = head[j]; while (h < n && done[L[h]]) h++; head[j] = h; if (h >= n) { alive[j] = 0; open--; continue; } const q = keys[j][h]; if (q < bk || (q === bk && L[h] < bi)) { bk = q; bj = j; bi = L[h]; } }
+                        if (bj < 0) break; head[bj]++; done[bi] = 1; left--; load[bj]++; pick[bi] = bj; if (load[bj] >= cap) { alive[bj] = 0; open--; } } }
+                const buckets = Array.from({ length: kk }, () => []); for (let i = 0; i < n; i++) buckets[pick[i]].push(ids[i]);
+                for (let j = 0; j < kk; j++) if (buckets[j].length) queueAction({ action: 'move', unitIds: buckets[j], targetX: pts[j].x, targetY: pts[j].y });
+                __scratch.rallyMs.push(Math.round(((__scratch.realNow ? __scratch.realNow() : Date.now()) - a) * 10) / 10);
+            })()`);
+            await world.run(gap);
+        }
+        console.log('rally clicks: selection', host.eval('__scratch.rallySel.length'), 'page ms per click', host.eval('JSON.stringify(__scratch.rallyMs)')); };
+    }
     // ACTIVE=1: give the workers work (as players would have sent them to
     // it), on every peer at the same tick: each collector at a mine of its
     // own, builders with towers to build beside them, healers beside
@@ -245,7 +288,7 @@ const seconds = Number(process.argv[2]) || 15;
             'advanceGroupRoutes', '_resolveDeferredPathsByGroup', 'takeDuePendingPathUnits', 'syncVisibilityCoverage', 'flushPendingMovementAstarSpend',
             'recomputePlayerPopCaps', '_runAdjacencyRecalculation', 'sampleGameStats', 'gameTick', 'simMoveEndTick',
             'visCoverHoldEnd', 'unitHitsResolve', 'statusPrepassRun', 'runQueuedOrders', 'navTick', 'navFieldsFlush', 'compactRemovedUnits',
-            'updateVisibility', 'flushPendingResourceStatRebuilds', 'ensureLaserConnections', 'processActions', 'gameStatsStep', 'projectilesBegin',
+            'updateVisibility', 'flushPendingResourceStatRebuilds', 'ensureLaserConnections', 'gameStatsStep', 'projectilesBegin',
             '_buildDeterministicBuildingUpdateOrderForTick', 'healerCandidatesStep', 'tickStatusEffects', 'getCellItemsRowMajor', 'updateAudioReactiveState', '_finalizePathfindPerfTick',
             ...${JSON.stringify((process.env.SUBPHASES || '').split(',').filter(Boolean))}]) {
             let f; try { f = eval(name); } catch { continue; } if (typeof f !== 'function') continue;
@@ -423,6 +466,8 @@ const seconds = Number(process.argv[2]) || 15;
                     next.set(key, cur); }); prev[list] = next; }
             __scratch.lchurn = { churn, counts }; return r; }; }`);
     const t0 = Date.now();
+    // (The ctrl clicks during the timed run: their ticks count.)
+    if (rallyClicks) { await rallyClicks(); seconds = Math.max(0.5, seconds - 10 * (Number(process.env.RALLY_GAP) || 250) / 1000); }
     // REORDER=1: the same orders again after the run's first part (a second order's cost).
     if (process.env.REORDER) {
         await world.run(seconds * 500);
@@ -441,6 +486,7 @@ const seconds = Number(process.argv[2]) || 15;
     // AFTER=<expression>: evaluated on the host after the run (between
     // ticks, the world as it is); its result printed first (micro timings).
     if (process.env.AFTER) console.log('AFTER', host.eval(process.env.AFTER));
+    if (process.env.AFTERALL) require('node:fs').writeFileSync(process.env.AFTERALL_OUT || path.join(__dirname, 'afterall.json'), '[' + peers.map(g => g.eval(process.env.AFTERALL)).join(',') + ']');
     console.log(JSON.stringify({ ticks: a.length, units: host.eval('units.length'), meanMs: r(mean), p50: r(a[a.length >> 1]), p95: r(a[Math.floor(a.length * .95)]), max: r(a[a.length - 1]),
         wallS: r((Date.now() - t0) / 1000), tick: host.eval('currentTick'), hashAtTick: host.eval('__scratch.hashAt'),
         pathStats: process.env.PATHSTATS ? JSON.parse(host.eval('JSON.stringify(__scratch.ps)')) : undefined,
@@ -470,6 +516,7 @@ const seconds = Number(process.argv[2]) || 15;
         orderSplit: process.env.ORDERSPLIT ? JSON.parse(host.eval('JSON.stringify(Object.fromEntries(Object.entries(__scratch.os).map(([k,v])=>[k,[Math.round(v[0]),v[1]]])))')) : undefined,
                 fastProps: process.env.FASTPROPS ? [host, ...guests].map(p => p.eval('(() => { let fast = 0, slow = 0; for (const u of units) { if (%HasFastProperties(u)) fast++; else slow++; } return fast + "/" + slow + " cols:" + %HasFastProperties(_simUnitState.columns); })()')) : undefined,
         stuck: process.env.ARMSTAT ? JSON.parse(host.eval(`JSON.stringify(units.filter(u => !u.dead && !u.workerType && u.commandState === CMD_MOVING && (!u.path || u.pathIndex >= u.path.length) && u._routeKey && !u._us.mvOn[u._si]).slice(0, 6).map(u => { const r = _groupRoutes.get(u._routeKey); const t = Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE); return { id: u.id, rk: u._routeKey, seg: u._routeSegEnd, end: u._routeEnd, t, g: r ? r.g[t] : 'noroute', fl: r ? r.flags[t] : null, fid: r && r.fid, pend: !!u._pendingPathTarget, hold: u.holdPosition, path: u.path && u.path.length, pi: u.pathIndex, spd: u.preComputed.speed, fr: u.frozen, at: u.attackTimer }; }))`)) : undefined,
+        rallyStat: process.env.RALLYSTAT ? JSON.parse(host.eval('JSON.stringify(__scratch.rs.filter((r, i) => i < 40 || i % 10 === 0))')) : undefined,
         heaviest: JSON.parse(host.eval('JSON.stringify(__scratch.byTick.slice().sort((a, b) => b[1] - a[1]).slice(0, 8))')) }));
     if (process.env.DUMPSEP) require('node:fs').writeFileSync(process.env.DUMPSEP_OUT, host.scratch.sepDump || '{}');
     process.exit(0);

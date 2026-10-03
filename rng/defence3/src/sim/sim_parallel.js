@@ -1598,9 +1598,9 @@ SIM_KERNELS[SIM_KERNEL_VISIBILITY] = function (R, P, chunk) {
 // SEPARATION_PREPARE (sep.chunkC, valid where sep.rstamp is the epoch P[2]).
 SIM_KERNELS[SIM_KERNEL_SEPARATION_YIELD] = function (R, P, chunk) {
     const sc = R['sep.sc'], keys = R['sep.keys'], ord = R['sep.ord'], chunkC = R['sep.chunkC'], rstamp = R['sep.rstamp'];
-    const CW = P[3] | 0, CH = P[4] | 0, ep = P[2] | 0, t0 = P[5] | 0, stag = (P[6] | 0) === 0, NL = P[7] === 1 ? R['ix.listed'][0] | 0 : P[0] | 0;
-    for (let k = chunk * P[1], end = Math.min(NL, k + P[1]); k < end; k++) {
-        if ((meta[k] & 65536) || ord[k] < 0 || (stag && ((t0 + sid[k]) & 1) !== 0)) continue;
+    const CW = P[3] | 0, CH = P[4] | 0, ep = P[2] | 0;
+    for (let k = chunk * P[1], end = Math.min(P[0], k + P[1]); k < end; k++) {
+        if ((sc[k] & 1) || ord[k] < 0) continue;
         const key = keys[k] | 0, cx = key % CW, cy = (key - cx) / CW;
         let near = 0;
         for (let oy = -1; oy <= 1 && !near; oy++) {
@@ -1982,7 +1982,9 @@ function simParallelStageParams(lane, stage) { return _simBgStageParams[lane][st
 // A chain on one lane: stages [[kernel, total], ...] (at most
 // SIM_PAR_BG_STAGES), each run once the one before is done, with its own
 // parameters (simParallelStageParams). Stages of no chunks are left out.
-function simParallelBackgroundChain(lane, stages) {
+// eager: without helpers, run now (a chain reading live state, which must
+// not run later at its wait, after the state changed).
+function simParallelBackgroundChain(lane, stages, eager = false) {
     simParallelBackgroundWait(lane);
     const list = stages.filter(st => st[1] > 0);
     if (!list.length) return;
@@ -1993,7 +1995,7 @@ function simParallelBackgroundChain(lane, stages) {
     for (let i = 0; i < stages.length; i++) if (stages[i][1] > 0) slots.push(i);
     const pool = _simPool;
     _simBg[lane] = { stages: list, slots, sync: !pool };
-    if (!pool) return;
+    if (!pool) { if (eager) simParallelBackgroundWait(lane); return; }
     const ctl = pool.ctl, b = SIM_PAR_BG_BASE + lane * 8, CT = _simBgChain, cb = lane * (1 + 2 * SIM_PAR_BG_STAGES);
     _simBgClose(ctl, b, 0);
     CT[cb] = list.length;
@@ -3024,6 +3026,9 @@ SIM_KERNELS[SIM_KERNEL_STATUS] = function (R, P, chunk) {
     const X = R['unit.x'], Y = R['unit.y'], X0 = R['unit.x0'], Y0 = R['unit.y0'], WTC = R['unit.workerTransferCooldown'];
     const ACC = R['unit.stAcc'], UID = R['unit.id'], t = P[2] | 0, per = Math.max(1, P[3] | 0);
     const SD0 = R['unit.sepD0'], SR0 = R['unit.sepR0'], SL0 = R['unit.sepL0'], CR = R['unit.collisionR'], RAD = R['unit.r'], LAY = R['unit.sepLayer'];
+    // (st.list: the job's units with events, in index order, from
+    // chunk * P[1]: the simulation thread visits those only.)
+    const LIST = R['st.list'], l0 = chunk * P[1];
     let n = 0;
     for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
         const s = SL[i];
@@ -3052,7 +3057,7 @@ SIM_KERNELS[SIM_KERNEL_STATUS] = function (R, P, chunk) {
         if (acc > 0 && ((ev & 4) || ((t + (UID[s] | 0)) % per) === 0)) { ev |= 1; dot = acc; ACC[s] = 0; }
         else ACC[s] = acc;
         EV[s] = ev;
-        if (ev !== 0) { DOT[s] = dot; n++; }
+        if (ev !== 0) { DOT[s] = dot; if (LIST) LIST[l0 + n] = i; n++; }
     }
     CNT[chunk] = n;
 };
