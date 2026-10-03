@@ -943,7 +943,11 @@ function _compareInfoPanelUnitTypes(a, b) {
     return _prettyUnitTypeLabel(a).localeCompare(_prettyUnitTypeLabel(b));
 }
 
+let _ownedBuildingPresentation = new Map();
 function _getOwnedInfoPanelBuildings(owner) {
+    const cached = _ownedBuildingPresentation.get(owner);
+    if (cached && cached.tick === gameTime && cached.grid === grid && cached.version === _tileEntityVersion
+        && cached.towers === towers && cached.barracks === barracks && cached.spawners === collectorSpawners) return cached.out;
     let out = [];
     let seen = new Set();
 
@@ -964,7 +968,30 @@ function _getOwnedInfoPanelBuildings(owner) {
         const cell = grid[item.gy] && grid[item.gy][item.gx];
         if (cell && cell.owner === owner && cell.item === item) tryAdd(item);
     }
+    _ownedBuildingPresentation.set(owner, {tick:gameTime,grid,version:_tileEntityVersion,towers,barracks,spawners:collectorSpawners,out});
     return out;
+}
+
+let _frameUnitSummaries = new Map();
+function getFrameUnitSummary(owner) {
+    const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    if (!F) return null;
+    const previous = _frameUnitSummaries.get(owner);
+    if (previous && previous.frame === F) return previous.groups;
+    const counts = new Map(), groups = new Map();
+    for (let i=0;i<F.count;i++) {
+        const s=F.order[i]; if (F.owner[s]!==owner || F.energy[s]<=0) continue;
+        let n=counts.get(F.type[s]);
+        if (!n) counts.set(F.type[s],n=[0,0]);
+        n[0]++;
+        if ((F.flags[s]&8) || (F.wtype[s] ? _pageFrameStrings[F.wstate[s]]==='IDLE' : F.cmd[s]===CMD_IDLE)) n[1]++;
+    }
+    for (const [type,n] of counts) {
+        const key=_pageFrameStrings[type] || 'other';
+        groups.set(key,{label:_prettyUnitTypeLabel(key),total:n[0],idle:n[1]});
+    }
+    _frameUnitSummaries.set(owner,{frame:F,groups});
+    return groups;
 }
 
 function _getInfoPanelBuildingTypeKey(e) {
@@ -1096,11 +1123,12 @@ function selectInfoPanelPlayerRoster(domain, filterKey, mode, owner = localPlaye
 function buildInfoPanelIdleWorkersHtml(owner) {
     if (!Number.isFinite(owner) || owner < 0 || owner >= players.length) return '';
 
-    let ownedUnits = _getOwnedInfoPanelUnits(owner);
+    const frameGroups = getFrameUnitSummary(owner);
+    let ownedUnits = frameGroups ? {length:Array.from(frameGroups.values()).reduce((n,g)=>n+g.total,0)} : _getOwnedInfoPanelUnits(owner);
     let ownedBuildings = _getOwnedInfoPanelBuildings(owner);
 
-    let unitGroups = new Map();
-    for (let u of ownedUnits) {
+    let unitGroups = frameGroups || new Map();
+    if (!frameGroups) for (let u of ownedUnits) {
         let key = String(u.unitType || 'other');
         let entry = unitGroups.get(key);
         if (!entry) {
@@ -1123,7 +1151,7 @@ function buildInfoPanelIdleWorkersHtml(owner) {
         if (_isInfoPanelBuildingIdleLike(e)) entry.idle++;
     }
 
-    let unitIdleTotal = ownedUnits.filter(_isInfoPanelUnitIdleLike).length;
+    let unitIdleTotal = frameGroups ? Array.from(frameGroups.values()).reduce((n,g)=>n+g.idle,0) : ownedUnits.filter(_isInfoPanelUnitIdleLike).length;
     let buildingIdleTotal = ownedBuildings.filter(_isInfoPanelBuildingIdleLike).length;
 
     let unitHeaderControls = _buildInfoPanelRosterModeButtonHtml('units', 'total', 'all', 'All', 'Select all units', 28)

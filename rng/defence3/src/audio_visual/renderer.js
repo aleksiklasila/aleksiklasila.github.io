@@ -2282,7 +2282,7 @@ function buildScaleFrameData(flat2d, view) {
     const structuresFrame = frame && typeof _pageTables !== 'undefined' && _isLiveRenderGrid(view.grid) ? _pageTables.s : null;
     const columns = frame && structuresFrame ? { units: frame, structures: structuresFrame,
         unitSources: units, structureSources: _pageStructViews, alpha: tickAlpha,
-        visibility: view.visibilityGrid, visibilityVersion, fullVisibility, tile: TILE,
+        visibility: view.visibilityGrid, visibilityVersion, fullVisibility, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
         colors: Array.from({length:9}, (_, i) => get3DRenderOwnerColor(i - 1)) } : null;
     const changed = cache.tick !== gameTime || cache.vis !== visibilityVersion || cache.full !== fullVisibility
         || cache.player !== localPlayerId || cache.history !== teamVisibilityHistory
@@ -5746,6 +5746,7 @@ const UNIT_LEVEL_TEXT_SPRITE_CACHE_MAX = 256;
 function clearRendererTransientVisualCaches(options = null) {
     if (rendererScaleCache) {
         for (const layer of rendererScaleCache.layers) layer.dispose(rendererScaleCache.renderer.gl);
+        if (typeof rendererScaleCache.renderer.disposeFrameColumns === 'function') rendererScaleCache.renderer.disposeFrameColumns();
         rendererScaleCache = null;
     }
     rendererChunkCache = null;
