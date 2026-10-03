@@ -5189,6 +5189,7 @@
             if (!this.columnProgram) {
                 this.columnProgram = createProgram(gl, `#version 300 es
                     precision highp float;
+                    precision highp int;
                     layout(location=0) in float aX;
                     layout(location=1) in float aZ;
                     layout(location=2) in float aPX;
@@ -5219,6 +5220,7 @@
                         vColor = vec4(uColors[clamp(int(aOwner)+1,0,8)] * shade, uStructure != 0 && (flags & 1) != 0 ? .6 : 1.);
                     }`, `#version 300 es
                     precision highp float;
+                    precision highp int;
                     uniform int uStructure;
                     in vec4 vColor;
                     out vec4 color;
