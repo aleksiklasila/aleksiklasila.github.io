@@ -1,5 +1,5 @@
 "use strict";
-importScripts('sim_frame.js?v=20261004-stream','sim_frame_world.js?v=20261021-x');
+importScripts('sim_frame.js?v=20261022-n','sim_frame_world.js?v=20261021-x');
 const PRESENT_MAGIC=0x50524553;
 let source=null, meta=null, epoch=0, generation=0, latest=null, scheduled=false, strings=[''], ready=false;
 let structure=null, structureRevision=-1, sentStructureRevision=-1, cells=null, oldCells=null;
@@ -126,6 +126,79 @@ function fillUnits(F,C,meta,n,player,areaUnit,phase0,prate) {
     fillChanged=changed;
     return count;
 }
+// Team + history: what the player does not see now is drawn as it was
+// last seen, frozen until its tile is seen again (the same as full
+// visibility, but for the frozen ones outside the seen tiles). Per slot its
+// unit's last seen position (while its tile was seen); a unit not seen now
+// is drawn there (SIM_UF_GHOST) while that place is unseen, else hidden.
+// One pass a tick here, nothing per unit on the page. (A unit that dies or
+// whose slot is reused unseen loses its ghost: rare, harmless.)
+const ghost={x:null,y:null,id:null};
+function applyGhosts(F,n,T) {
+    // (Seen = the fog's eased light, as the page and the GPU see it: the raw
+    // sight flickers at vision's edges, units there went live, ghost, live.)
+    const gw=T.gw|0, gh=T.gh|0, tile=T.tile||32, it=1/tile, player=T.player;
+    const S=fogState.light && fogState.w===gw && fogState.h===gh ? fogState.light : T.sight;
+    if (!S || S.length<gw*gh) return;
+    if (!ghost.x || ghost.x.length<F.x.length) {const c=F.x.length;ghost.x=new Float32Array(c);ghost.y=new Float32Array(c);ghost.id=new Int32Array(c).fill(-1);}
+    const GX=ghost.x, GY=ghost.y, GI=ghost.id, FID=F.id, X=F.x, Y=F.y, PX=F.px, PY=F.py, FL=F.flags, OWN=F.owner;
+    for (let s=0;s<n;s++) {
+        const id=FID[s];
+        if (id<0) {GI[s]=-1;continue;}
+        if (OWN[s]===player) continue;
+        let tx=Math.floor(X[s]*it), ty=Math.floor(Y[s]*it);
+        tx=tx<0?0:tx>=gw?gw-1:tx; ty=ty<0?0:ty>=gh?gh-1:ty;
+        if (S[ty*gw+tx]>0) {GX[s]=X[s];GY[s]=Y[s];GI[s]=id;continue;}
+        if (GI[s]===id) {
+            let gx=Math.floor(GX[s]*it), gy=Math.floor(GY[s]*it);
+            gx=gx<0?0:gx>=gw?gw-1:gx; gy=gy<0?0:gy>=gh?gh-1:gy;
+            if (!(S[gy*gw+gx]>0)) {X[s]=PX[s]=GX[s];Y[s]=PY[s]=GY[s];FL[s]|=SIM_UF_GHOST;continue;}
+        }
+        FL[s]|=SIM_UF_HIDDEN;GI[s]=-1;
+    }
+}
+// The fog's light (each tile's light easing toward what is seen: up at
+// T.rise a second, down at T.fall after a second's hold) and the fog's own
+// grid (the light, plus with history a floor where once explored), as
+// visibility_history.js updateVisualVisibility made them on the page each
+// tick (a pass over every tile there). Shared: the page reads them as its
+// grids (and the GPU's fog); head[0] the version (the tick made for).
+const fogState={w:0,h:0,light:null,fog:null,explored:null,hold:null,head:null,tick:-1,history:null,bound:false};
+function updateFog(T) {
+    const S=T.sight, W=T.gw|0, H=T.gh|0, n=W*H;
+    if (!S || S.length<n) return;
+    const st=fogState;
+    let reset=false;
+    if (st.w!==W || st.h!==H || !st.light) {
+        st.w=W;st.h=H;
+        st.light=new Float32Array(new SharedArrayBuffer(n*4));st.fog=new Float32Array(new SharedArrayBuffer(n*4));
+        st.explored=new Uint8Array(new SharedArrayBuffer(n));st.hold=new Int32Array(n).fill(-1);st.head=new Int32Array(new SharedArrayBuffer(8));
+        st.tick=T.time;st.bound=false;reset=true;
+    }
+    const now=T.time, holdTicks=Math.max(1,T.rate|0);
+    if (now<st.tick) {const back=st.tick-now;for(let i=0;i<n;i++) st.hold[i]-=back;st.tick=now;}
+    const dt=Math.min(2,Math.max(0,now-st.tick))/holdTicks, rise=T.rise*dt, fall=T.fall*dt;
+    const full=reset || st.history!==!!T.history, hist=!!T.history, range=T.lightRange||6, floor=range*(T.historyFloor||.14);
+    st.history=hist;
+    const L=st.light, G=st.fog, E=st.explored, HD=st.hold;
+    for (let i=0;i<n;i++) {
+        const target=S[i], current=L[i];
+        if (target===0 && current===0 && !full) continue;
+        if (target>0) {HD[i]=now+holdTicks;E[i]=1;}
+        let next=target;
+        if (!reset) {
+            if (target===0 && now<=HD[i]) next=current;
+            else {const d=target-current;next=current+(d>rise?rise:d<-fall?-fall:d);}
+        }
+        L[i]=next;
+        let f=L[i];
+        if (hist && E[i]) {const dark=1-Math.min(1,f/range);f+=floor*dark*dark*dark;}
+        G[i]=f;
+    }
+    st.tick=now;
+    Atomics.store(st.head,0,now);
+    if (!st.bound) {(out || self).postMessage({type:'fogBind',epoch,light:st.light,fog:st.fog,explored:st.explored,head:st.head,width:W,height:H});st.bound=true;}
+}
 // The metadata columns copied whole each frame (the pump writes them).
 const META_COPY=['type','wtype','wstate','style','watchedBy','vision','maxEnergy','cargo','tx','ty'];
 function draw() {
@@ -146,6 +219,7 @@ function draw() {
     if (!last || last.length !== cap) last=new Int32Array(cap).fill(-1);
     const count=fillUnits(F,C,meta,Math.min(tick.n,got),tick.player,tick.areaUnit,tick.time/tick.rate*10,10/tick.rate);
     if (fillChanged) changed=true;
+    if (tick.history) applyGhosts(F,Math.min(tick.n,got),tick);
     const t2=performance.now();
     if(changed) membership++;
     // Stable simulation identity order even after authoritative slot reuse:
@@ -193,7 +267,11 @@ function onMessage(event) {
         }
         // A tick's end: its frame at once (no timer between: the copy must
         // be taken before the next tick starts).
-        if(m.type==='tick') {latest=m;if(!scheduled && source && ready) {scheduled=true;draw();}return;}
+        if(m.type==='tick') {
+            // (The fog first: cheap, and the frame's ghosts read the same tick.)
+            if (m.fog) {try {updateFog(m);} catch(err) {postMessage({type:'error',message:String(err.stack || err)});}}
+            latest=m;if(!scheduled && source && ready) {scheduled=true;draw();}return;
+        }
         if(m.type==='bind') {epoch=m.epoch;generation=m.generation;source=m.columns;meta=simFrameViews(m.meta.buf,m.meta.cap);last=null;schedule();}
         else if(m.type==='strings') strings=m.strings;
         else if(m.type==='ready') {ready=true;schedule();}

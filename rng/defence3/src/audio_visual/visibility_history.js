@@ -7,22 +7,58 @@ const HISTORY_LIGHT_FLOOR = .14;
 function getRenderGameTime() { return gameTime; }
 function getTeamLightingGrid() { return visibilityGrid; }
 function getLiveRenderView() {
-    if (teamVisibilityHistory && !fullVisibility && visibilityHistoryState && visibilityHistoryState.view) return visibilityHistoryState.view;
+    if (teamVisibilityHistory && !fullVisibility && visibilityHistoryState && visibilityHistoryState.view) {
+        // (Units are the live list, never a remembered one: a frame replaces
+        // the list between ticks, and a view kept with the old one drew its
+        // units another way until the next tick: groups blinked.)
+        const v = visibilityHistoryState.view;
+        v.units = units;
+        return v;
+    }
     return { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid };
 }
 
+// The fog made by the presentation reader (sim_client.js 'fogBind'): its
+// light and fog grids, shared; this page only follows their version.
+let visibilityPresentationFog = null;
+function _presentationFogState(playerId) {
+    const P = visibilityPresentationFog;
+    if (!P || P.player !== playerId || P.width !== GRID_W || P.height !== GRID_H || !P.head) return null;
+    if (!P.rows) {
+        const rows = flat => { const r = Array.from({ length: GRID_H }, (_, y) => flat.subarray(y * GRID_W, (y + 1) * GRID_W)); r._flat = flat; return r; };
+        P.rows = { light: rows(P.light), fog: rows(P.fog) };
+    }
+    return P;
+}
 function updateVisualVisibility(playerId, raw) {
     if (fullVisibility) {
         if (visibilityHistoryState) visibilityVersion++;
         visibilityHistoryState = null;
         return raw;
     }
+    // Made off this thread: the grids as they are, a new version as the
+    // reader moves on; the remembered structures (history) as before.
+    const P = _presentationFogState(playerId);
+    if (P) {
+        let h = visibilityHistoryState;
+        if (!h || h.presentation !== P || h.sourceGrid !== grid) {
+            h = visibilityHistoryState = { sourceGrid: grid, player: playerId, width: GRID_W, height: GRID_H, tick: gameTime,
+                light: P.rows.light, fog: P.rows.fog, explored: P.explored, presentation: P, version: -1 };
+        }
+        const v = Atomics.load(P.head, 0);
+        if (v !== h.version) { h.version = v; visibilityVersion++; }
+        h.historyMode = teamVisibilityHistory;
+        h.tick = gameTime;
+        if (teamVisibilityHistory) updateLocalVisibilityHistory(h);
+        return h.light;
+    }
     const now = gameTime, holdTicks = Math.max(1, TICK_RATE);
     let h = visibilityHistoryState;
     const reset = !h || h.sourceGrid !== grid || h.player !== playerId
         || h.width !== GRID_W || h.height !== GRID_H;
     if (reset) {
-        const rows = () => Array.from({ length: GRID_H }, () => new Float32Array(GRID_W));
+        // (Rows over one flat buffer: the GPU takes the grid as it is.)
+        const rows = () => { const flat = new Float32Array(GRID_W * GRID_H), r = Array.from({ length: GRID_H }, (_, y) => flat.subarray(y * GRID_W, (y + 1) * GRID_W)); r._flat = flat; return r; };
         h = visibilityHistoryState = { sourceGrid: grid, player: playerId, width: GRID_W, height: GRID_H,
             tick: now, light: rows(), fog: rows(), explored: new Uint8Array(GRID_W * GRID_H),
             holdUntil: new Int32Array(GRID_W * GRID_H).fill(-1) };
@@ -82,7 +118,13 @@ const HISTORY_RENDER_FIELDS = ('id owner type unitType gx gy x y vx vy energy ma
     + 'workerType workerState workerTransferCooldown carryingValue researcherHasMaterial attackFlash attackStyle '
     + 'burning poisoned frozen wet watched watchedByTeam underConstruction isUpgrading markedForSalvage '
     + 'angle laserState spawnTimer spawnCooldown _levelTextLabel _energyBlockedUntil').split(' ');
-const HISTORY_LISTS = ['units', 'towers', 'barracks', 'collectorSpawners', 'goldMines', 'astarMines', 'droppedItems'];
+// What is remembered where it was last seen: structures, mines, floor
+// items. Units are shown while seen only (the live list: the renderer draws
+// them from the frame's columns, hidden where nothing sees): remembering
+// 200k units each tick cost most of a frame.
+const HISTORY_LISTS = ['towers', 'barracks', 'collectorSpawners', 'goldMines', 'astarMines', 'droppedItems'];
+// (Structures change slowly: their memory is brought up to date this often.)
+const HISTORY_STRUCTURE_TICKS = 4;
 
 function freezeHistoryRecord(record) {
     const source = record.source;
@@ -116,10 +158,20 @@ function freezeHistoryRecord(record) {
 }
 
 function updateLocalVisibilityHistory(h) {
-    if (!h.memories) {
+    const first = !h.memories;
+    if (first) {
         h.memories = Object.fromEntries(HISTORY_LISTS.concat('floorItems').map(name => [name, new Map()]));
         h.view = { grid: grid.map(row => row.map(cell => ({ type: cell.type, owner: cell.owner, item: null }))) };
         for (const name of HISTORY_LISTS) h.view[name] = [];
+    }
+    // Units: the live ones (seen ones only are drawn).
+    h.view.units = units;
+    h.view.visibilityGrid = h.fog;
+    if (!first && h.view.units === units && (gameTime % HISTORY_STRUCTURE_TICKS) !== 0) {
+        const visibleNow = (x, y) => !!(h.light[y] && h.light[y][x] > 0);
+        h.view.projectiles = projectiles.filter(e => visibleNow(Math.floor(e.x / TILE), Math.floor(e.y / TILE)));
+        h.view.particles = particles.filter(e => visibleNow(Math.floor(e.x / TILE), Math.floor(e.y / TILE)));
+        return;
     }
     const generation = h.generation = (h.generation || 0) + 1;
     const visible = (x, y) => !!(h.light[y] && h.light[y][x] > 0);
@@ -132,7 +184,7 @@ function updateLocalVisibilityHistory(h) {
         record.tick = gameTime;
         return record;
     };
-    const live = { units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems };
+    const live = { towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems };
     for (const name of HISTORY_LISTS) {
         const memory = h.memories[name], shown = h.view[name];
         shown.length = 0;

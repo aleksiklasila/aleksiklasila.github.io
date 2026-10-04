@@ -32,7 +32,9 @@ const SIM_FRAME_SLOT_BYTES = 4 * (SIM_FRAME_F32.length + SIM_FRAME_I32.length + 
 // flags
 const SIM_UF_FLYING = 1, SIM_UF_SNAKE = 2, SIM_UF_WORKER = 4, SIM_UF_HOLD = 8, SIM_UF_BURNING = 16, SIM_UF_POISONED = 32,
     SIM_UF_FROZEN = 64, SIM_UF_WET = 128, SIM_UF_SANDY = 256, SIM_UF_WATCHED = 512, SIM_UF_HIDDEN = 1024, SIM_UF_ENERGY_BLOCKED = 2048,
-    SIM_UF_RESEARCH_MATERIAL = 4096, SIM_UF_TRANSFER = 8192, SIM_UF_ATTACK_TARGET = 16384, SIM_UF_KING = 32768;
+    SIM_UF_RESEARCH_MATERIAL = 4096, SIM_UF_TRANSFER = 8192, SIM_UF_ATTACK_TARGET = 16384, SIM_UF_KING = 32768,
+    // (Team + history: drawn where it was last seen, frozen; presentation_worker.js.)
+    SIM_UF_GHOST = 65536;
 
 const SIM_UNIT_STATUS_NAMES = ['walk', 'angry', 'work', 'sleep'];
 const _simUnitStatusCode = { walk: 0, angry: 1, work: 2, sleep: 3 };

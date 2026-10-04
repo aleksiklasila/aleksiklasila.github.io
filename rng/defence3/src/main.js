@@ -867,7 +867,13 @@ function _gameTickBody() {
     // between ticks has them; hashes and snapshots include them).
     ensureLaserConnections();
 
-    updateVisibility(localPlayerId);
+    // The fog's presentation (light smoothing, fading, the remembered view)
+    // is the page's: the simulation worker keeps the raw grid (gameplay
+    // reads only raw grids). It walked every tile, and in Team + history
+    // snapshotted what was seen, every tick: ~6% of a tick, and most of one
+    // with history.
+    if (typeof SIM_IN_WORKER !== 'undefined' && SIM_IN_WORKER) visibilityGrid = getRawVisibilityGridForPlayer(localPlayerId);
+    else updateVisibility(localPlayerId);
     _finalizePathfindPerfTick(_countPendingPathBacklog());
     // The next tick's unit index, on the helpers while the state hash runs.
     if (typeof spatialIndexPrebuild === 'function') spatialIndexPrebuild();

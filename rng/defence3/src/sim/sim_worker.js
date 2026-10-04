@@ -85,6 +85,9 @@ self.document = {
     hidden: false, visibilityState: 'visible', fullscreenElement: null
 };
 self.window = self;
+// (Presentation-only work the game's code skips in this context: see
+// gameTick's visibility.)
+self.SIM_IN_WORKER = true;
 self.innerWidth = 1280; self.innerHeight = 720; self.devicePixelRatio = 1;
 self.matchMedia = () => ({ matches: false, addEventListener() { }, removeEventListener() { } });
 self.screen = { width: 1920, height: 1080, availLeft: 0, availTop: 0 };
@@ -272,11 +275,20 @@ function _simStart(msg) {
     for (let [name, value] of Object.entries(g.assign || {})) self.eval(name + ' = ' + JSON.stringify(value));
     if (g.editableConfig) applyEditableRuntimeConfigObject(g.editableConfig, { fromTransport: true });
     if (g.startingResources) startingResourcesConfig = normalizeStartingResourcesConfig(g.startingResources);
+    // (Where a big match's start goes: sent back with 'started'.)
+    const T = {}, t0 = performance.now();
     startGame();
+    T.startGame = performance.now() - t0;
     _simStubUi();
     // gameStarted, isMultiplayer... as on the page (startGame may reset them).
     for (let [name, value] of Object.entries(g.assign || {})) self.eval(name + ' = ' + JSON.stringify(value));
-    applyAuthoritativeStateSnapshot(JSON.parse(msg.snapshotText));
+    const t1 = performance.now();
+    const snap = JSON.parse(msg.snapshotText);
+    T.parse = performance.now() - t1;
+    const t2 = performance.now();
+    applyAuthoritativeStateSnapshot(snap);
+    T.apply = performance.now() - t2;
+    _simStartTimings = T;
     _simEvents = [];
     _simLocalDefeat = '';
     if (_simMode !== 'authority') {
@@ -286,11 +298,14 @@ function _simStart(msg) {
     simFrameResetAll();
     // The page's world comes from frames: this one before the first tick.
     let transfer = [];
+    const t3 = performance.now();
     let world = _simEncodeWorld(transfer);
-    _simPost({ type: 'started', epoch: _simEpoch, tick: currentTick, hash: computeLockstepStateHashFast(currentTick), world }, transfer);
+    T.encodeWorld = performance.now() - t3;
+    _simPost({ type: 'started', epoch: _simEpoch, tick: currentTick, hash: computeLockstepStateHashFast(currentTick), world, timings: T }, transfer);
     simPresentationStart();
 }
 
+let _simStartTimings = null;
 // ---- one tick: the same work runOneTick does, with the page's commands ----
 function _simTick(msg) {
     let t0 = performance.now();

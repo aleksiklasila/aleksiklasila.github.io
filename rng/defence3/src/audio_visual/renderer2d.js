@@ -990,7 +990,9 @@ function _drawCombinedBackgroundRegion(c, minGx, minGy, maxGx, maxGy, redrawArea
     const tx = _combinedTerrainCanvas.width / WORLD_W, ty = _combinedTerrainCanvas.height / WORLD_H;
     c.drawImage(_combinedTerrainCanvas, startX * tx, startY * ty, width * tx, height * ty, startX, startY, width, height);
 
-    if (redrawAreaOutlines && _areaOutlinePathCache && _areaColorCache) {
+    // (Drawn by the GPU's ground shader instead, crisp at any zoom:
+    // renderer.js getAreaGridForGpu.)
+    if (redrawAreaOutlines && _areaOutlinePathCache && _areaColorCache && !(typeof AREA_OUTLINES_ON_GPU !== 'undefined' && AREA_OUTLINES_ON_GPU && renderer3dInstance)) {
         c.save();
         c.beginPath();
         c.rect(startX, startY, width, height);
@@ -1387,6 +1389,7 @@ function renderStaticLayer(minGx, minGy, maxGx, maxGy) {
 }
 
 function rebuildAreaColorCache() {
+    _areaColorVersion++;
     _areaColorCache = new Array(areas.length);
     for (let a of areas) {
         let color;

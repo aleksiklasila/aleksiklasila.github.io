@@ -195,6 +195,43 @@ is next. Newest entries first within each section.
   maxima to 270 ms), the tilted view, sim TPS margin at 200k (17-20),
   background texture detail on big maps, match start and the loading
   popup, click/selection scans, GPU-instanced detailed models.
+- Clicks with everything selected (CLICKS=n in render-tps-bench: real
+  ctrl + right clicks): one pass classifies the selection
+  (getActiveUnitClasses; the handler filtered 100k units through views
+  per worker type), click candidates and box selection from the frame's
+  columns near the point, the multi-point split on a page worker
+  (src/sim/assign_worker.js; the page packs positions, ~1 ms, the orders
+  follow its answer; a click's marker shows at once), no forced info
+  panel rebuild after a command while the panel is expensive. 10 rapid
+  ctrl clicks, select-all 2d-far: 66 -> 100 FPS, max frame 1.3 s -> 92 ms.
+- Presentation pump on the simulation thread: cells copied only when a
+  tile changed (or every 5 s), the metadata cycle rests 250 ms, a slice
+  waits for a tick due within 2 ms. Index wait 6-10 -> 0.75 ms a tick.
+- Fog modes on the GPU and off the threads that matter: the simulation
+  worker no longer runs updateVisualVisibility (presentation only; it
+  walked every tile each tick, and in Team + history snapshotted what was
+  seen: ~120 ms ticks); the fog is the ground shader's (a light grid
+  texture, bilinear, the same curve: no canvas, blur or upload made on the
+  page); the light easing, the explored grid and the history floor are
+  computed by the presentation worker into shared grids (updateFog); the
+  page follows their version. Team + history: units are drawn frozen where
+  last seen (presentation worker applyGhosts, by the eased light, SIM_UF_
+  GHOST, dimmed by the glyph shader), remembered structures refresh every
+  4 ticks; the history view always carries the live unit list (a stale
+  one between ticks drew units another way: groups blinked). Far structures
+  of a remembered view are an instance glyph layer. Team: 10 -> ~105 FPS;
+  Team + history: 2-9 -> 70-90 FPS.
+- Stable detail: the unit and structure splits start over 125% of their
+  budgets and end under 80%; per unit 85% / 115% hysteresis on an eased
+  threshold; the GPU skips exactly the units the CPU drew (a per-slot mask)
+  - units no longer flip between models and glyphs.
+- Area outlines drawn by the ground shader (per-tile area ids + area
+  colors as textures, a pixel-width line inside area borders, faded out
+  under ~3 px tiles): crisp on 1000x1000 maps; no longer baked.
+- Match start: peers report ready once their simulation worker has the
+  world ('started'), the host starts the countdown only when its own has
+  too (the popup used to close while workers still loaded). The worker
+  reports its start timings (startGame, parse, apply, encodeWorld).
 
 ### 2026-10-04 (fourteenth round) — rebuild steps off the simulation thread, forced targets in the kernels, shrines
 

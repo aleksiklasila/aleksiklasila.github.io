@@ -197,6 +197,23 @@ function setMatchLoadOverlay(visible, title = 'Loading Match', detail = 'Prepari
     if (visible) _updateMatchLoadOverlayPlayers();
 }
 
+// Host: the countdown once every peer said ready and this host's own
+// simulation has the world (checked again until it has).
+function _hostMaybeStartCountdown() {
+    if (!isHost || !matchStartWaitingForReady || _matchStartCountdownHandle || !areAllMatchStartPeersReady()) return;
+    if (typeof simClientWorldReady === 'function' && !simClientWorldReady()) {
+        if (_matchStartPlayerStatuses && myPeerId) { _matchStartPlayerStatuses[myPeerId] = 'loading'; _updateMatchLoadOverlayPlayers(); }
+        setTimeout(_hostMaybeStartCountdown, 100);
+        return;
+    }
+    let allStatuses = {};
+    for (let p of (matchStartLobbyPlayers || [])) if (p && p.peerId) allStatuses[p.peerId] = 'ready';
+    if (myPeerId) allStatuses[myPeerId] = 'ready';
+    if (_matchStartPlayerStatuses) Object.assign(_matchStartPlayerStatuses, allStatuses);
+    let cdPayload = { type: 'START_GAME_COUNTDOWN', seconds: 3, statuses: allStatuses, startSessionId: matchStartSessionId };
+    connections.forEach(c => { if (c && c.peer) try { c.send(cdPayload); } catch { } });
+    _startMatchCountdown(3);
+}
 function areAllMatchStartPeersReady() {
     if (!Array.isArray(matchStartExpectedReadyPeerIds) || matchStartExpectedReadyPeerIds.length <= 0) return true;
     for (let pid of matchStartExpectedReadyPeerIds) {
@@ -1372,16 +1389,31 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing') {
     }
 
     if (!snapshotText) requestHardLockstepResync(currentTick, 'start without snapshot');
-    if (hostConn) {
-        try {
-            hostConn.send({
-                type: 'START_GAME_READY',
-                startSessionId: matchStartSessionId,
-                teamId: localPlayerId,
-                role: normalizeMatchRole(role, 'playing')
-            });
-        } catch { }
-    }
+    // Ready once this peer's simulation has the world (its worker loaded
+    // it), not when the page has the state: the countdown then starts a
+    // match every peer can tick at once.
+    const sessionAtStart = matchStartSessionId;
+    const sendReady = () => {
+        if (matchStartSessionId !== sessionAtStart) return;
+        if (typeof simClientWorldReady === 'function' && !simClientWorldReady()) {
+            setMatchLoadOverlay(true, 'Loading Match', 'Loading units and world into the simulation\u2026');
+            setTimeout(sendReady, 100);
+            return;
+        }
+        if (matchStartWaitingForReady) setMatchLoadOverlay(true, 'Waiting for Players', 'Loaded! Waiting for other players\u2026');
+        let conn = netGetHostConnection();
+        if (conn) {
+            try {
+                conn.send({
+                    type: 'START_GAME_READY',
+                    startSessionId: matchStartSessionId,
+                    teamId: localPlayerId,
+                    role: normalizeMatchRole(role, 'playing')
+                });
+            } catch { }
+        }
+    };
+    sendReady();
 }
 
 // Guest: leave the resync pause once the host says everyone is restored.
@@ -2257,16 +2289,9 @@ function _handleConnectionMessage(conn, data) {
             try { conn.send({ type: 'START_GAME_ALL_READY', startSessionId: matchStartSessionId }); } catch { }
             return;
         }
-        // When all clients are ready, broadcast a countdown and start it locally.
-        if (areAllMatchStartPeersReady() && !_matchStartCountdownHandle) {
-            let allStatuses = {};
-            for (let p of (matchStartLobbyPlayers || [])) if (p && p.peerId) allStatuses[p.peerId] = 'ready';
-            if (myPeerId) allStatuses[myPeerId] = 'ready';
-            if (_matchStartPlayerStatuses) Object.assign(_matchStartPlayerStatuses, allStatuses);
-            let cdPayload = { type: 'START_GAME_COUNTDOWN', seconds: 3, statuses: allStatuses, startSessionId: matchStartSessionId };
-            connections.forEach(c => { if (c && c.peer) try { c.send(cdPayload); } catch { } });
-            _startMatchCountdown(3);
-        }
+        // When all clients (and this host's own simulation) are ready,
+        // broadcast a countdown and start it locally.
+        _hostMaybeStartCountdown();
     } else if (type === 'START_GAME_COUNTDOWN' && !isHost) {
         let incomingSessionId = String((data && data.startSessionId) || '');
         if (incomingSessionId && matchStartSessionId && incomingSessionId !== matchStartSessionId) return;

@@ -2485,8 +2485,28 @@
                 uniform sampler2D uTexture;
                 uniform sampler2D uFog;
                 uniform bool uHasFog;
+                // The fog from its light grid (renderer.js getFogGridForGpu).
+                uniform highp sampler2D uFogGrid;
+                uniform bool uHasFogGrid;
+                // Area outlines (renderer.js getAreaGridForGpu): each tile's
+                // area (id + 1, 24 bits), each area's color.
+                uniform highp sampler2D uAreaTiles;
+                uniform highp sampler2D uAreaColors;
+                uniform bool uHasAreas;
+                uniform vec2 uAreaSize;
+                int areaAt(ivec2 t) {
+                    if (t.x < 0 || t.y < 0 || t.x >= int(uAreaSize.x) || t.y >= int(uAreaSize.y)) return -1;
+                    vec4 v = texelFetch(uAreaTiles, t, 0) * 255.0;
+                    return int(v.r + .5) + int(v.g + .5) * 256 + int(v.b + .5) * 65536 - 1;
+                }
+                uniform vec4 uFogGridParams; // width, height, 1 / light range, gamma
+                uniform float uFogGridMin;
                 layout(location = 0) out vec4 outColor;
                 layout(location = 1) out vec4 outPackedDepth;
+                float fogLight(ivec2 t) {
+                    ivec2 size = ivec2(uFogGridParams.xy);
+                    return texelFetch(uFogGrid, clamp(t, ivec2(0), size - 1), 0).r;
+                }
                 vec4 packDepth(float depth) {
                     const vec4 bitShift = vec4(256.0 * 256.0 * 256.0, 256.0 * 256.0, 256.0, 1.0);
                     const vec4 bitMask = vec4(0.0, 1.0 / 256.0, 1.0 / 256.0, 1.0 / 256.0);
@@ -2496,7 +2516,38 @@
                 }
                 void main() {
                     outColor = texture(uTexture, vUv);
-                    if (uHasFog) {
+                    if (uHasAreas) {
+                        vec2 t = vec2(vUv.x, 1.0 - vUv.y) * uAreaSize;
+                        ivec2 c = ivec2(floor(t));
+                        int a = areaAt(c);
+                        if (a >= 0) {
+                            vec2 f = t - floor(t), px = max(fwidth(t), vec2(1e-5));
+                            // (Inside each side that borders another area: 2/32 of
+                            // a tile, at least ~1.2 px; faded out where tiles are
+                            // under ~3 px, no shimmer far away.)
+                            float d = 1e9;
+                            if (areaAt(c + ivec2(-1, 0)) != a) d = min(d, f.x / px.x);
+                            if (areaAt(c + ivec2(1, 0)) != a) d = min(d, (1.0 - f.x) / px.x);
+                            if (areaAt(c + ivec2(0, -1)) != a) d = min(d, f.y / px.y);
+                            if (areaAt(c + ivec2(0, 1)) != a) d = min(d, (1.0 - f.y) / px.y);
+                            float width = max(1.2, (2.0 / 32.0) / max(px.x, px.y));
+                            float tilePx = 1.0 / max(px.x, px.y);
+                            float k = (1.0 - smoothstep(width - .5, width + .5, d)) * smoothstep(1.5, 3.5, tilePx);
+                            if (k > 0.0) {
+                                vec4 ac = texelFetch(uAreaColors, ivec2(a % 1024, a / 1024), 0);
+                                outColor.rgb = mix(outColor.rgb, ac.rgb, ac.a * k);
+                            }
+                        }
+                    }
+                    if (uHasFogGrid) {
+                        vec2 p = vec2(vUv.x, 1.0 - vUv.y) * uFogGridParams.xy - 0.5;
+                        ivec2 i = ivec2(floor(p));
+                        vec2 f = p - floor(p);
+                        float light = mix(mix(fogLight(i), fogLight(i + ivec2(1, 0)), f.x), mix(fogLight(i + ivec2(0, 1)), fogLight(i + ivec2(1, 1)), f.x), f.y);
+                        float a = pow(1.0 - clamp(light * uFogGridParams.z, 0.0, 1.0), uFogGridParams.w);
+                        if (a <= uFogGridMin) a = 0.0;
+                        outColor = vec4(mix(outColor.rgb, vec3(10.0 / 255.0), a), 1.0);
+                    } else if (uHasFog) {
                         vec4 fog = texture(uFog, vUv);
                         outColor = vec4(mix(outColor.rgb, fog.rgb, fog.a), 1.0);
                     }
@@ -2549,7 +2600,15 @@
                 model: gl.getUniformLocation(this.planeProgram, 'uModel'),
                 texture: gl.getUniformLocation(this.planeProgram, 'uTexture'),
                 fog: gl.getUniformLocation(this.planeProgram, 'uFog'),
-                hasFog: gl.getUniformLocation(this.planeProgram, 'uHasFog')
+                hasFog: gl.getUniformLocation(this.planeProgram, 'uHasFog'),
+                fogGrid: gl.getUniformLocation(this.planeProgram, 'uFogGrid'),
+                hasFogGrid: gl.getUniformLocation(this.planeProgram, 'uHasFogGrid'),
+                fogGridParams: gl.getUniformLocation(this.planeProgram, 'uFogGridParams'),
+                fogGridMin: gl.getUniformLocation(this.planeProgram, 'uFogGridMin'),
+                areaTiles: gl.getUniformLocation(this.planeProgram, 'uAreaTiles'),
+                areaColors: gl.getUniformLocation(this.planeProgram, 'uAreaColors'),
+                hasAreas: gl.getUniformLocation(this.planeProgram, 'uHasAreas'),
+                areaSize: gl.getUniformLocation(this.planeProgram, 'uAreaSize')
             };
             this.presentUniforms = {
                 packDepth: gl.getUniformLocation(this.presentProgram, 'uPackDepth'),
@@ -3233,6 +3292,22 @@
             gl.generateMipmap(gl.TEXTURE_2D);
         }
 
+        // The fog's light grid (R32F, a texel a tile), when its version moves.
+        uploadFogGrid(G) {
+            if (!G || !G.data) return false;
+            const gl = this.gl;
+            if (!this.fogGridTexture) this.fogGridTexture = createTexture(gl);
+            gl.bindTexture(gl.TEXTURE_2D, this.fogGridTexture);
+            if (this.fogGridVersion === G.version && this.fogGridData === G.data && this.fogGridW === G.width && this.fogGridH === G.height) return true;
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+            gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+            if (this.fogGridW !== G.width || this.fogGridH !== G.height) gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, G.width, G.height, 0, gl.RED, gl.FLOAT, G.data);
+            else gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, G.width, G.height, gl.RED, gl.FLOAT, G.data);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            this.fogGridVersion = G.version; this.fogGridData = G.data; this.fogGridW = G.width; this.fogGridH = G.height;
+            return true;
+        }
         uploadFogTexture(source, version) {
             if (!source) return;
             let gl = this.gl;
@@ -4453,6 +4528,8 @@
             let planeHeight = Math.max(1, Number(backgroundBounds.height) || snapshot.camera.visibleHeight);
             this.uploadBackgroundTexture(snapshot.backgroundCanvas, Number.isFinite(snapshot.backgroundVersion) ? snapshot.backgroundVersion : 0);
             this.uploadFogTexture(snapshot.fogCanvas, snapshot.fogVersion);
+            const fogGrid = snapshot.fogGrid || null;
+            if (fogGrid) { gl.activeTexture(gl.TEXTURE2); this.uploadFogGrid(fogGrid); }
             gl.useProgram(this.planeProgram);
             gl.bindVertexArray(this.planeMesh.vao);
             gl.activeTexture(gl.TEXTURE0);
@@ -4462,6 +4539,46 @@
             gl.bindTexture(gl.TEXTURE_2D, this.fogTexture);
             gl.uniform1i(this.planeUniforms.fog, 1);
             gl.uniform1i(this.planeUniforms.hasFog, snapshot.fogCanvas ? 1 : 0);
+            gl.uniform1i(this.planeUniforms.hasFogGrid, fogGrid ? 1 : 0);
+            gl.activeTexture(gl.TEXTURE2);
+            gl.bindTexture(gl.TEXTURE_2D, fogGrid ? this.fogGridTexture : this.fogTexture);
+            gl.uniform1i(this.planeUniforms.fogGrid, 2);
+            if (fogGrid) {
+                gl.uniform4f(this.planeUniforms.fogGridParams, fogGrid.width, fogGrid.height, fogGrid.invNorm, fogGrid.gamma);
+                gl.uniform1f(this.planeUniforms.fogGridMin, fogGrid.minAlpha);
+            }
+            // The area outlines' data (textures 3 and 4): uploaded when changed.
+            const AG = snapshot.areaGrid || null;
+            if (AG) {
+                if (!this.areaTilesTexture) { this.areaTilesTexture = createTexture(gl); this.areaColorsTexture = createTexture(gl); }
+                gl.activeTexture(gl.TEXTURE3);
+                gl.bindTexture(gl.TEXTURE_2D, this.areaTilesTexture);
+                if (this.areaTilesVersion !== AG.tilesVersion) {
+                    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, AG.width, AG.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, AG.tiles);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+                    this.areaTilesVersion = AG.tilesVersion;
+                }
+                gl.activeTexture(gl.TEXTURE4);
+                gl.bindTexture(gl.TEXTURE_2D, this.areaColorsTexture);
+                if (this.areaColorsVersion !== AG.colorsVersion) {
+                    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1024, AG.colorRows, 0, gl.RGBA, gl.UNSIGNED_BYTE, AG.colors);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+                    this.areaColorsVersion = AG.colorsVersion;
+                }
+                gl.uniform1i(this.planeUniforms.areaTiles, 3);
+                gl.uniform1i(this.planeUniforms.areaColors, 4);
+                gl.uniform2f(this.planeUniforms.areaSize, AG.width, AG.height);
+            } else {
+                // (Samplers still need textures of their kind bound.)
+                gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.fogTexture);
+                gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, this.fogTexture);
+                gl.uniform1i(this.planeUniforms.areaTiles, 3);
+                gl.uniform1i(this.planeUniforms.areaColors, 4);
+            }
+            gl.uniform1i(this.planeUniforms.hasAreas, AG ? 1 : 0);
+            gl.activeTexture(gl.TEXTURE0);
             gl.uniformMatrix4fv(this.planeUniforms.viewProjection, false, this.tmpViewProjection);
             composeModelMatrix(
                 this.tmpModel,
@@ -5563,8 +5680,9 @@
                     layout(location=7) in float aFlags;
                     layout(location=8) in float aAlive;
                     layout(location=9) in float aKind;
+                    layout(location=10) in float aDetail;
                     uniform mat4 uViewProjection;
-                    uniform float uAlpha, uTile, uScale, uFlat, uLightNorm, uDetail, uDetailS;
+                    uniform float uAlpha, uTile, uScale, uFlat, uLightNorm, uDetail, uDetailS, uDetailMask;
                     uniform int uStructure, uFull;
                     uniform vec3 uColors[9];
                     uniform sampler2D uVisibility;
@@ -5575,14 +5693,20 @@
                         vec2 p = uStructure != 0 ? current : mix(vec2(aPX,aPZ) / uTile,current,uAlpha);
                         int flags = int(aFlags);
                         bool alive = uStructure != 0 ? aAlive > 0. : aAlive >= 0. && (flags & 1024) == 0;
-                        float light = uFull != 0 ? 1. : texelFetch(uVisibility,ivec2(current),0).r / uLightNorm;
+                        // (A unit drawn where it was last seen, Team + history: in
+                        // the dark by definition, dimmed.)
+                        bool ghost = uStructure == 0 && (flags & 65536) != 0;
+                        float light = uFull != 0 || ghost ? 1. : texelFetch(uVisibility,ivec2(current),0).r / uLightNorm;
                         if (!alive || (aEnergy <= 0. && (uStructure == 0 || aKind < 4.)) || light <= 0.) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
+                        if (ghost) light = .1;
                         gl_Position = uViewProjection * vec4(p.x,.02,p.y,1.);
                         float size = uStructure != 0 ? .94 : clamp(aRadius * 2.2 / uTile,.28,.9);
                         float pixels = size * uScale / (uFlat > .5 ? 1. : max(.01,gl_Position.w));
                         // (Drawn in detail by the CPU: renderer.js _unitDetailSplit,
                         // the same rule; a hair of overlap, never a gap.)
                         if (uDetail > 0. && uStructure == 0 && pixels > uDetail * 1.0001) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
+                        // (Picked for detail by the split: renderer.js _unitDetailSplit.)
+                        if (uDetailMask > .5 && uStructure == 0 && aDetail > .5) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
                         // (Structures and floor items over the split's threshold
                         // are the detailed pass's.)
                         if (uDetailS > 0. && uStructure != 0 && (aKind == 6. || pixels > uDetailS * 1.0001)) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
@@ -5605,7 +5729,7 @@
                         color = vec4(vColor.rgb, vColor.a * coverage * vCoverage);
                     }`);
                 this.columnUniforms = {};
-                for (const n of ['ViewProjection','Alpha','Tile','Scale','Flat','LightNorm','Structure','Full','Colors','Visibility','Detail','DetailS']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
+                for (const n of ['ViewProjection','Alpha','Tile','Scale','Flat','LightNorm','Structure','Full','Colors','Visibility','Detail','DetailS','DetailMask']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
                 this.columnStores = [{},{}];
                 this.columnVisibilityTexture = createTexture(gl);
             }
@@ -5615,8 +5739,9 @@
             if (!C.fullVisibility && (this.columnVisibilityVersion !== C.visibilityVersion || this.columnVisibilitySource !== C.visibility)) {
                 const width = snapshot.worldWidth, height = snapshot.worldHeight;
                 if (!this.columnVisibilityData || this.columnVisibilityData.length !== width * height) this.columnVisibilityData = new Float32Array(width * height);
-                const data = this.columnVisibilityData;
-                for (let y=0; y<height; y++) data.set(C.visibility[y],y*width);
+                const flat = C.visibility && C.visibility._flat;
+                const data = flat && flat.length === width * height ? flat : this.columnVisibilityData;
+                if (data !== flat) for (let y=0; y<height; y++) data.set(C.visibility[y],y*width);
                 gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
                 gl.pixelStorei(gl.UNPACK_ALIGNMENT,4);
                 if (this.columnVisibilityWidth !== width || this.columnVisibilityHeight !== height) {
@@ -5639,6 +5764,7 @@
             gl.uniform1f(U.Scale,this.columnPixelScale(snapshot.flat2d,snapshot.camera.visibleWidth,snapshot.viewportWidth));
             gl.uniform1f(U.Detail,C.detailPx > 0 ? C.detailPx : 0);
             gl.uniform1f(U.DetailS,C.detailPxS > 0 ? C.detailPxS : 0);
+            gl.uniform1f(U.DetailMask,C.detailMask ? 1 : 0);
             gl.uniform1i(U.Full,C.fullVisibility?1:0);gl.uniform1i(U.Visibility,0);
             const colors = this.columnColors || (this.columnColors = new Float32Array(27));
             for (let i=0;i<9;i++) colors.set(hexToRgb(C.colors[i]),i*3);
@@ -5674,7 +5800,18 @@
                         gl.enableVertexAttribArray(i);gl.vertexAttribPointer(i,1,type,false,0,offset);
                     }
                     S.frame=F;
+                    S.maskVersion=-1;
                 }
+                // The detail mask per slot (units): uploaded when it changes.
+                if (!structure && C.detailMask) {
+                    if (!S.maskBuf) S.maskBuf=gl.createBuffer();
+                    if (S.maskVersion!==C.detailMaskVersion || S.maskRef!==C.detailMask) {
+                        gl.bindBuffer(gl.ARRAY_BUFFER,S.maskBuf);
+                        gl.bufferData(gl.ARRAY_BUFFER,C.detailMask.subarray(0,F.n),gl.DYNAMIC_DRAW);
+                        gl.enableVertexAttribArray(10);gl.vertexAttribPointer(10,1,gl.UNSIGNED_BYTE,false,0,0);
+                        S.maskVersion=C.detailMaskVersion;S.maskRef=C.detailMask;
+                    }
+                } else { gl.disableVertexAttribArray(10); gl.vertexAttrib1f(10,0); S.maskVersion=-1; }
                 gl.uniform1i(U.Structure,structure?1:0);
                 gl.drawArrays(gl.POINTS,0,F.n);
             }
@@ -5816,6 +5953,11 @@
                 gl.bindVertexArray(null);
                 gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.disable(gl.BLEND);
                 gl.drawBuffers(this.sceneDrawBuffers);
+            }
+            // (Far structures of a remembered view: instance glyphs.)
+            if (snapshot.glyphLayers) {
+                for (const layer of snapshot.glyphLayers) if (layer) this.drawScaleInstances(layer, snapshot.flat2d);
+                gl.bindVertexArray(null);
             }
             let objects = Array.isArray(snapshot.objects) ? snapshot.objects : [];
             if (snapshot.flat2d) {

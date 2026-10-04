@@ -61,7 +61,7 @@ function _simClientScriptUrls() {
         .filter(src => /\/src\//.test(src) && !/bootstrap\.js|sim_shadow\.js|sim_worker\.js|sim_client\.js/.test(src));
 }
 
-const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261021-t';
+const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261022-t';
 
 function _simClientCreate() {
     let c = {
@@ -125,6 +125,13 @@ function simClientPreload() {
 // Whether ticks run in the worker for the current match.
 function simClientActive() {
     return !!(_simClient && _simClient.active);
+}
+// Whether this match's world is loaded where it is simulated (the worker
+// said 'started' for it), so the player can tick: a match start waits for
+// this on every peer (utils_networking.js), not only for the page's state.
+function simClientWorldReady() {
+    const c = _simClient;
+    return !c || !c.active || c.startedEpoch === c.epoch;
 }
 
 // ---- match start (first tick): the worker starts from the page's state ----
@@ -264,6 +271,7 @@ function _simClientOnMessage(msg) {
     switch (msg.type) {
         case 'loaded': c.loaded = true; c.helpers = msg.helpers || 0; c.shared = !!msg.shared; break;
         case 'started':
+            if (msg.epoch === c.epoch) { c.startedEpoch = msg.epoch; c.startTimings = msg.timings || null; }
             if (msg.world) { if (msg.epoch === c.epoch) _simClientApplyWorld(msg.world, 1); else _simClientReturnBufs(_simClientWorldBufs(msg.world)); }
             break;
         case 'ticked': _simClientApplyTick(msg); break;
@@ -273,6 +281,13 @@ function _simClientOnMessage(msg) {
             if (c.presentationPort) { try { c.presentationPort.close(); } catch { } }
             c.presentationPort = msg.port;
             msg.port.onmessage = ev => { try { _simClientOnMessage(ev.data || {}); } catch (err) { reportRuntimeError('presentation', err); } };
+            break;
+        }
+        // The fog's grids, made by the presentation reader (shared; see
+        // visibility_history.js updateVisualVisibility).
+        case 'fogBind': {
+            if (msg.epoch !== c.epoch) break;
+            visibilityPresentationFog = { light: msg.light, fog: msg.fog, explored: msg.explored, head: msg.head, width: msg.width, height: msg.height, player: localPlayerId, rows: null };
             break;
         }
         case 'presentation': {

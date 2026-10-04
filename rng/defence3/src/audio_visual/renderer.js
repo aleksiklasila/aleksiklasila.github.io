@@ -2225,14 +2225,19 @@ function buildScaleFrameData(flat2d, view) {
     const refs = [view.towers, view.barracks, view.collectorSpawners, view.goldMines, view.astarMines, view.droppedItems, view.units];
     const frame = view.units === units && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
     const structuresFrame = frame && typeof _pageTables !== 'undefined' && _isLiveRenderGrid(view.grid) ? _pageTables.s : null;
-    const columns = frame && structuresFrame ? { units: frame, structures: structuresFrame,
-        unitSources: units, structureSources: _pageStructViews, alpha: tickAlpha,
-        visibility: view.visibilityGrid, visibilityVersion, fullVisibility, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
+    // Units from the frame's columns whenever the view's units are the live
+    // ones (also with a remembered view's structures: Team + history), hidden
+    // where nothing sees now (the light grid, not the fog's memory).
+    const columns = frame ? { units: frame, structures: structuresFrame,
+        unitSources: units, structureSources: structuresFrame ? _pageStructViews : null, alpha: tickAlpha,
+        visibility: structuresFrame ? view.visibilityGrid : visibilityGrid, visibilityVersion, fullVisibility, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
         colors: Array.from({length:9}, (_, i) => get3DRenderOwnerColor(i - 1)) } : null;
+    // (Structures pushed as instances: a remembered view's, without a table.)
+    const pushStructures = !columns || !structuresFrame;
     const changed = cache.tick !== gameTime || cache.vis !== visibilityVersion || cache.full !== fullVisibility
         || cache.player !== localPlayerId || cache.history !== teamVisibilityHistory
         || !cache.refs || refs.some((list, i) => list !== cache.refs[i] || list.length !== cache.lengths[i]);
-    if (changed && !columns) {
+    if (changed && pushStructures) {
         cache.colors.clear();
         const colorFor = owner => {
             let c = cache.colors.get(owner);
@@ -2276,7 +2281,8 @@ function buildScaleFrameData(flat2d, view) {
         // Read worker columns directly: avoid millions of PageUnit getter
         // calls when the authoritative frame is already packed for rendering.
         const F = view.units === units && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
-        if (F) {
+        // (Units drawn from the columns: not here too.)
+        if (F && !columns) {
             moving.reserve(view.units.length);
             const d = moving.data;
             for (let i = 0; i < view.units.length; i++) {
@@ -2293,24 +2299,25 @@ function buildScaleFrameData(flat2d, view) {
                 d[o + 8] = c.r / 255 * brightness; d[o + 9] = c.g / 255 * brightness; d[o + 10] = c.b / 255 * brightness; d[o + 11] = 1;
                 moving.sources.push(view.units[i]);
             }
-        } else for (const e of view.units) push(moving, e, 0);
+        } else if (!columns) for (const e of view.units) push(moving, e, 0);
         for (const layer of cache.layers) layer.version++;
         cache.tick = gameTime; cache.vis = visibilityVersion; cache.full = fullVisibility; cache.player = localPlayerId;
         cache.history = teamVisibilityHistory; cache.refs = refs; cache.lengths = refs.map(list => list.length);
     }
     for (const layer of cache.layers) layer.alpha = tickAlpha;
     if (_staticCacheCommitVersion < 0 || !_combinedBgCanvas) commitStaticCaches(true, 'background');
-    if (!fullVisibility) rebuildVisibilityMaskCacheIfNeeded();
+    const fogGrid = getFogGridForGpu();
+    if (!fullVisibility && !fogGrid) rebuildVisibilityMaskCacheIfNeeded();
     const snapshot = get3DProjectionSnapshot();
     const bounds = flat2d ? getVisibleWorldBounds(2) : get3DVisibleWorldBounds();
     const fx = renderer3dFxBatch || (renderer3dFxBatch = new window.Defence3Renderer3D.FxBatch());
     beginFrameEffects(fx, flat2d, bounds, getTeamLightingGrid(), camera.zoom * TILE, renderer3dInstance);
     buildFrameEffects(view.projectiles, view.particles, view.towers);
     endFrameEffects();
-    return Object.assign(snapshot, { flat2d, scaleLayers: columns ? [] : cache.layers, columnLayers: columns, objects: [], fx,
-        backgroundCanvas: getBackgroundMip(Math.min(1, 2048 / Math.max(WORLD_W, WORLD_H))), backgroundVersion: _backgroundContentVersion,
+    return Object.assign(snapshot, { flat2d, scaleLayers: columns && !pushStructures ? [] : cache.layers, columnLayers: columns, objects: [], fx,
+        backgroundCanvas: getBackgroundMip(Math.min(1, 2048 / Math.max(WORLD_W, WORLD_H))), backgroundVersion: _backgroundContentVersion, areaGrid: getAreaGridForGpu(),
         backgroundBounds: { centerX: GRID_W / 2, centerZ: GRID_H / 2, width: GRID_W, height: GRID_H },
-        fogCanvas: fullVisibility ? null : _visibilityMaskCanvas,
+        fogCanvas: fullVisibility || fogGrid ? null : _visibilityMaskCanvas, fogGrid,
         fogVersion: _visibilityMaskCanvas ? _visibilityMaskCanvas._visibilityContentVersion || 0 : 0,
         overlays: buildScaleOverlays(cache), buildPreview: getCurrentBuildPreviewData() });
 }
@@ -2420,6 +2427,54 @@ function getSelectionMaskOverlay() {
         alpha: tickAlpha, tile: TILE, color: get3DRenderOwnerColor(localPlayerId) };
 }
 
+// The fog on the GPU (renderer3d: the ground's shader turns the grid's light
+// into fog, a bilinear sample): the grid of the fog's light as it is (one
+// flat buffer), no canvas made on this thread each tick (a pass over every
+// tile, a blur, an upload: ~25 ms a tick on a 1000x1000 map). null: full
+// visibility, or no flat grid (the canvas path).
+function getFogGridForGpu() {
+    if (fullVisibility || typeof getRenderVisibilityGrid !== 'function') return null;
+    const rows = getRenderVisibilityGrid(), flat = rows && rows._flat;
+    if (!flat || flat.length !== GRID_W * GRID_H) return null;
+    return { data: flat, width: GRID_W, height: GRID_H, version: visibilityVersion, invNorm: 1 / Math.max(.0001, VISIBILITY_LIGHT_NORMALIZATION_RANGE),
+        gamma: typeof _visibilityFogGamma === 'number' ? _visibilityFogGamma : 1.8, minAlpha: typeof _visibilityFogMinAlpha === 'number' ? _visibilityFogMinAlpha : .01 };
+}
+
+// ---- area outlines on the GPU ----
+// The ground's area outlines drawn by its shader (renderer3d drawBackground)
+// from the area of every tile (made once per map) and every area's color
+// (again when areas change): crisp at every zoom. (Baked into the ground's
+// texture, at ~2 px a tile on a 1000x1000 map, they were a blur.)
+const AREA_OUTLINES_ON_GPU = true;
+let _areaColorVersion = 0;
+let _areaGridGpu = { grid: null, w: 0, h: 0, tiles: null, colors: null, colorVersion: -1, count: 0 };
+const _AREA_LEVEL_RGBA = [[0, 255, 0, 153], [0, 255, 0, 204], [70, 170, 255, 204], [200, 0, 255, 204], [255, 150, 0, 204], [255, 220, 0, 230]];
+function getAreaGridForGpu() {
+    if (!AREA_OUTLINES_ON_GPU || !Array.isArray(areas) || !grid || !grid.length) return null;
+    const A = _areaGridGpu;
+    if (A.grid !== grid || A.w !== GRID_W || A.h !== GRID_H) {
+        const tiles = new Uint8Array(GRID_W * GRID_H * 4);
+        for (let y = 0; y < GRID_H; y++) {
+            const row = grid[y];
+            for (let x = 0; x < GRID_W; x++) {
+                const id = row[x].areaId, o = (y * GRID_W + x) * 4, v = id >= 0 ? id + 1 : 0;
+                tiles[o] = v & 255; tiles[o + 1] = (v >> 8) & 255; tiles[o + 2] = (v >> 16) & 255; tiles[o + 3] = 255;
+            }
+        }
+        A.grid = grid; A.w = GRID_W; A.h = GRID_H; A.tiles = tiles; A.tilesVersion = (A.tilesVersion || 0) + 1; A.colorVersion = -1;
+    }
+    if (A.colorVersion !== _areaColorVersion || !A.colors || A.count !== areas.length) {
+        const n = Math.max(1, areas.length), rows = Math.ceil(n / 1024), colors = new Uint8Array(1024 * rows * 4);
+        for (const a of areas) {
+            if (!a) continue;
+            const c = a.active ? (_AREA_LEVEL_RGBA[a.multiplierLevel || 0] || _AREA_LEVEL_RGBA[_AREA_LEVEL_RGBA.length - 1]) : [128, 128, 128, 26], o = a.id * 4;
+            if (o + 3 < colors.length) { colors[o] = c[0]; colors[o + 1] = c[1]; colors[o + 2] = c[2]; colors[o + 3] = c[3]; }
+        }
+        A.colors = colors; A.colorRows = rows; A.count = areas.length; A.colorVersion = _areaColorVersion; A.colorsVersion = (A.colorsVersion || 0) + 1;
+    }
+    return { tiles: A.tiles, tilesVersion: A.tilesVersion, colors: A.colors, colorRows: A.colorRows, colorsVersion: A.colorsVersion, width: A.w, height: A.h };
+}
+
 // The sight grid the page has for this player (the worker's, shared), as
 // the GPU range outline's source; null when the mode is not the team's
 // whole range or there is no such grid (the page computes its own).
@@ -2490,8 +2545,12 @@ function build3DFrameData(flat2d = false) {
     const unitDetail = _isLiveUnitList(sourceView.units) ? _unitDetailSplit(units, flat2d, queryBounds) : null;
     if (unitDetail) units = unitDetail.units;
     // The same for structures: the near ones in detail, the rest glyphs.
-    const structDetail = _isLiveUnitList(sourceView.units) && _isLiveRenderGrid(grid) ? _structureDetailSplit([towers, barracks, collectorSpawners, goldMines, astarMines], flat2d, queryBounds) : null;
+    // (A remembered view's structures, Team + history, too: its far ones are
+    // glyphs of an instance layer, there being no table of them.)
+    const structLive = _isLiveRenderGrid(grid);
+    const structDetail = _isLiveUnitList(sourceView.units) ? _structureDetailSplit([towers, barracks, collectorSpawners, goldMines, astarMines], flat2d, queryBounds, structLive) : null;
     if (structDetail) [towers, barracks, collectorSpawners, goldMines, astarMines] = structDetail.lists;
+    const farFloorItems = structDetail && !structLive ? [] : null;
 
     begin3DTextureFrame();
     renderer3dExactTextureBuildsRemaining = 12;
@@ -2522,7 +2581,8 @@ function build3DFrameData(flat2d = false) {
     let backgroundCanvasFor3D = getBackgroundMip(Math.min(1, 4096 / Math.max(WORLD_W, WORLD_H)));
     let backgroundVersionFor3D = _backgroundContentVersion;
     _ph = _r3dPhase('startPre', _ph);
-    if (!fullVisibility) rebuildVisibilityMaskCacheIfNeeded();
+    const fogGrid = getFogGridForGpu();
+    if (!fullVisibility && !fogGrid) rebuildVisibilityMaskCacheIfNeeded();
     _ph = _r3dPhase('visMask', _ph);
     let overlays = build3DOverlayData(bounds, alpha);
     _ph = _r3dPhase('overlays', _ph);
@@ -2806,6 +2866,8 @@ function build3DFrameData(flat2d = false) {
                 let cell = gridRow[x];
                 if (!cell || !cell.item) continue;
                 if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
+                // (Past the split's threshold: the glyph layer's.)
+                if (farFloorItems && structDetail.pxAt(x, y) <= structDetail.T) { farFloorItems.push([cell.item, x, y, cell.owner]); continue; }
                 structureStep(cell.item, pushCellItemStep, x, y);
             }
         }
@@ -3325,9 +3387,9 @@ function build3DFrameData(flat2d = false) {
         viewPad: getRenderViewPad(),
         worldWidth: GRID_W,
         worldHeight: GRID_H,
-        backgroundCanvas: backgroundCanvasFor3D,
+        backgroundCanvas: backgroundCanvasFor3D, areaGrid: getAreaGridForGpu(),
         backgroundVersion: backgroundVersionFor3D,
-        fogCanvas: fullVisibility ? null : _visibilityMaskCanvas,
+        fogCanvas: fullVisibility || fogGrid ? null : _visibilityMaskCanvas, fogGrid,
         fogVersion: _visibilityMaskCanvas ? _visibilityMaskCanvas._visibilityContentVersion || 0 : 0,
         backgroundBounds: {
             centerX: (backgroundMinX + backgroundMaxX) * 0.5 / TILE,
@@ -3347,12 +3409,44 @@ function build3DFrameData(flat2d = false) {
         objects,
         flatBatch,
         fx: fxBatch,
-        columnLayers: _detailColumns(unitDetail, structDetail)
+        columnLayers: _detailColumns(unitDetail, structDetail),
+        glyphLayers: structDetail && !structDetail.live ? [_structureGlyphLayer(structDetail, farFloorItems, grid)] : null
     };
+}
+// The far structures and floor items of a remembered view as an instance
+// layer (renderer3d drawScaleInstances), made again once per tick or
+// threshold change (they are frozen while remembered).
+let _structGlyph = { key: '', layer: null, renderer: null };
+function _structureGlyphLayer(D, floorItems, viewGrid) {
+    const P = window.Defence3Renderer3D && window.Defence3Renderer3D.PersistentInstances;
+    if (!P) return null;
+    const G = _structGlyph;
+    if (!G.layer || G.renderer !== renderer3dInstance) { G.layer = new P(12); G.renderer = renderer3dInstance; G.key = ''; }
+    const key = gameTime + '|' + Math.round(D.T * 4) + '|' + visibilityVersion + '|' + D.far.map(L => L.length).join(',') + '|' + (floorItems ? floorItems.length : 0);
+    if (G.key === key) return G.layer;
+    G.key = key;
+    const L = G.layer, colors = new Map();
+    const colorFor = owner => { let c = colors.get(owner); if (!c) { c = _parseHexColor(get3DRenderOwnerColor(owner)) || { r: 200, g: 206, b: 216 }; colors.set(owner, c); } return c; };
+    L.count = 0;
+    const push = (e, gx, gy, owner, kind) => {
+        if (!e || (e.energy !== undefined && e.energy <= 0 && kind !== 2)) return;
+        L.reserve(L.count + 1);
+        const d = L.data, o = L.count++ * 12, c = colorFor(owner), x = gx + .5, z = gy + .5;
+        d[o] = x; d[o + 1] = z; d[o + 2] = x; d[o + 3] = z; d[o + 4] = .94; d[o + 5] = kind === 1 ? .85 : .2; d[o + 6] = 0; d[o + 7] = kind;
+        d[o + 8] = c.r / 255; d[o + 9] = c.g / 255; d[o + 10] = c.b / 255; d[o + 11] = e._historyGhost ? .45 : e.underConstruction ? .6 : 1;
+    };
+    for (const list of D.far) for (const e of list) push(e, e.gx | 0, e.gy | 0, e.owner, 1);
+    if (floorItems) for (const [e, x, y, owner] of floorItems) push(e, x, y, owner, 2);
+    L.alpha = 1;
+    L.version++;
+    return L;
 }
 // The glyph layers of a detailed view: units and structures past their
 // detail thresholds (renderer3d drawFrameColumns skips those over them).
 function _detailColumns(unitDetail, structDetail) {
+    // (A remembered view's structures have no table: their glyphs are the
+    // instance layer's, _structureGlyphLayer.)
+    if (structDetail && !structDetail.live) structDetail = null;
     if (!unitDetail && !structDetail) return null;
     const base = unitDetail ? unitDetail.columns : { units: null, unitSources: null, alpha: tickAlpha, detailPx: 0,
         visibility: visibilityGridForColumns(), visibilityVersion, fullVisibility, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
@@ -3373,13 +3467,17 @@ function _detailThreshold(P, n, budget) {
     return S[m - 1 - keep];
 }
 const STRUCT_DETAIL_BUDGET = 600;
+let _structDetailMode = false;
 let _structDetailPx = new Float32Array(0);
-function _structureDetailSplit(lists, flat2d, bounds) {
+function _structureDetailSplit(lists, flat2d, bounds, live = true) {
     const R = renderer3dInstance;
-    if (!R || typeof R.columnPixelScale !== 'function' || typeof _pageTables === 'undefined' || !_pageTables.s) return null;
+    if (!R || typeof R.columnPixelScale !== 'function' || (live && (typeof _pageTables === 'undefined' || !_pageTables.s))) return null;
     let n = 0;
     for (const L of lists) n += L.length;
-    if (n <= STRUCT_DETAIL_BUDGET) return null;
+    // (Split from 125% of the budget, back under 80%: no blinking at its edge.)
+    if (!_structDetailMode && n > STRUCT_DETAIL_BUDGET * 1.25) _structDetailMode = true;
+    else if (_structDetailMode && n < STRUCT_DETAIL_BUDGET * .8) _structDetailMode = false;
+    if (!_structDetailMode) return null;
     const scale = R.columnPixelScale(flat2d, (bounds.vw || (bounds.maxGx - bounds.minGx + 1) * TILE) / TILE, viewW), M = R.tmpViewProjection;
     if (_structDetailPx.length < n) _structDetailPx = new Float32Array(Math.ceil(n * 1.5));
     const P = _structDetailPx;
@@ -3392,9 +3490,10 @@ function _structureDetailSplit(lists, flat2d, bounds) {
     let T = _detailThreshold(P, n, STRUCT_DETAIL_BUDGET);
     if (!(T >= UNIT_DETAIL_MIN_PX)) T = UNIT_DETAIL_MIN_PX;
     i = 0;
-    const out = lists.map(L => { const o = []; for (const e of L) { if (P[i++] > T) o.push(e); } return o; });
+    const far = lists.map(() => []);
+    const out = lists.map((L, k) => { const o = []; for (const e of L) { if (P[i++] > T) o.push(e); else if (!live) far[k].push(e); } return o; });
     const pxAt = (gx, gy) => { const x = gx + .5, z = gy + .5; return .94 * scale / (flat2d ? 1 : Math.max(.01, M[3] * x + M[7] * .02 + M[11] * z + M[15])); };
-    return { lists: out, T, pxAt };
+    return { lists: out, T, pxAt, live, far };
 }
 
 // Detailed models cost ~0.1 ms of CPU a unit; a close view of an army holds
@@ -3406,9 +3505,22 @@ function _structureDetailSplit(lists, flat2d, bounds) {
 // null: every unit in view in detail (few enough, or no frame).
 const UNIT_DETAIL_BUDGET = 600, UNIT_DETAIL_MIN_PX = 12;
 let _unitDetailPx = new Float32Array(0);
+// Stable detail (no blinking between models and glyphs): the split starts
+// over 125% of the budget and ends under 80% of it; a unit in detail stays so
+// down to 85% of the threshold, a glyph turns detailed over 115%; the
+// threshold eases between frames. The GPU draws as glyphs exactly the units
+// the split did not pick (a mask per slot, uploaded when it changes).
+let _detailMode = false, _detailT = 0, _detailMask = null, _detailSlots = [], _detailMaskVersion = 0;
+function _detailMaskClear() {
+    if (_detailMask) for (const s of _detailSlots) _detailMask[s] = 0;
+    if (_detailSlots.length) { _detailSlots = []; _detailMaskVersion++; }
+}
 function _unitDetailSplit(viewUnits, flat2d, bounds) {
     const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null, R = renderer3dInstance;
-    if (!F || !R || typeof R.columnPixelScale !== 'function' || viewUnits.length <= UNIT_DETAIL_BUDGET) return null;
+    const n0 = viewUnits.length;
+    if (!_detailMode && n0 > UNIT_DETAIL_BUDGET * 1.25) _detailMode = true;
+    else if (_detailMode && n0 < UNIT_DETAIL_BUDGET * .8) _detailMode = false;
+    if (!F || !R || typeof R.columnPixelScale !== 'function' || !_detailMode) { _detailMaskClear(); _detailT = 0; return null; }
     const scale = R.columnPixelScale(flat2d, (bounds.vw || (bounds.maxGx - bounds.minGx + 1) * TILE) / TILE, viewW), M = R.tmpViewProjection, a = tickAlpha;
     if (_unitDetailPx.length < viewUnits.length) _unitDetailPx = new Float32Array(Math.ceil(viewUnits.length * 1.5));
     const P = _unitDetailPx, n = viewUnits.length;
@@ -3416,22 +3528,42 @@ function _unitDetailSplit(viewUnits, flat2d, bounds) {
         const u = viewUnits[i], s = u ? u._s : -1;
         // (Not in the frame: as before, in detail.)
         if (!(s >= 0)) { P[i] = Infinity; continue; }
+        // (Frozen or hidden ones, Team + history: the glyphs' alone.)
+        if (F.flags[s] & (SIM_UF_GHOST | SIM_UF_HIDDEN)) { P[i] = 0; continue; }
         const x = (F.px[s] + (F.x[s] - F.px[s]) * a) / TILE, z = (F.py[s] + (F.y[s] - F.py[s]) * a) / TILE;
         const size = Math.max(.28, Math.min(.9, F.r[s] * 2.2 / TILE));
         const w = flat2d ? 1 : Math.max(.01, M[3] * x + M[7] * .02 + M[11] * z + M[15]);
         P[i] = size * scale / w;
     }
     // The threshold: the budget's worth of the largest (never below
-    // UNIT_DETAIL_MIN_PX: smaller ones are glyphs whatever the count).
-    let T = _detailThreshold(P, n, UNIT_DETAIL_BUDGET);
-    if (!(T >= UNIT_DETAIL_MIN_PX)) T = UNIT_DETAIL_MIN_PX;
-    const detailed = [];
-    for (let i = 0; i < n; i++) if (P[i] > T) detailed.push(viewUnits[i]);
-    return { units: detailed, columns: { units: F, structures: null, unitSources: _isLiveUnitList(null, true), alpha: a, detailPx: T,
+    // UNIT_DETAIL_MIN_PX: smaller ones are glyphs whatever the count), eased.
+    let T0 = _detailThreshold(P, n, UNIT_DETAIL_BUDGET);
+    if (!(T0 >= UNIT_DETAIL_MIN_PX)) T0 = UNIT_DETAIL_MIN_PX;
+    _detailT = _detailT > 0 ? _detailT + (T0 - _detailT) * .15 : T0;
+    const T = _detailT;
+    if (!_detailMask || _detailMask.length < F.cap) { _detailMask = new Uint8Array(F.cap); _detailSlots = []; }
+    const M8 = _detailMask, detailed = [], slots = [];
+    for (let i = 0; i < n; i++) {
+        const u = viewUnits[i], s = u ? u._s : -1;
+        if (!(P[i] > T * (s >= 0 && M8[s] ? .85 : 1.15))) continue;
+        detailed.push(u);
+        if (s >= 0) slots.push(s);
+    }
+    let same = slots.length === _detailSlots.length;
+    if (same) for (let k = 0; k < slots.length; k++) if (slots[k] !== _detailSlots[k]) { same = false; break; }
+    if (!same) {
+        for (const s of _detailSlots) M8[s] = 0;
+        for (const s of slots) M8[s] = 1;
+        _detailSlots = slots; _detailMaskVersion++;
+    }
+    return { units: detailed, columns: { units: F, structures: null, unitSources: _isLiveUnitList(null, true), alpha: a, detailPx: 0,
+        detailMask: M8, detailMaskVersion: _detailMaskVersion,
         visibility: visibilityGridForColumns(), visibilityVersion, fullVisibility, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
         colors: Array.from({ length: 9 }, (_, i) => get3DRenderOwnerColor(i - 1)) } };
 }
-function visibilityGridForColumns() { const v = getLiveRenderView(); return v ? v.visibilityGrid : null; }
+// (The light grid: what is seen now; a remembered view's fog grid would show
+// units where only the memory is.)
+function visibilityGridForColumns() { return visibilityGrid; }
 // (The live units list: a view's are the live ones, not a remembered
 // view's; with get, the list itself.)
 function _isLiveUnitList(list, get = false) { return get ? units : list === units; }
@@ -3706,7 +3838,8 @@ function drawMinimap() {
         }
         const pixels = _minimapUnitPixels.data, colors = new Map();
         pixels.fill(0);
-        const F = (!teamVisibilityHistory || fullVisibility) && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+        // (The live units, Team + history too: units are not remembered.)
+        const F = _isLiveUnitList(units) && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
         for (let i = 0; i < units.length; i++) {
             const u = F ? null : units[i], slot = F ? F.order[i] : 0;
             if (F ? F.energy[slot] <= 0 : u.dead) continue;

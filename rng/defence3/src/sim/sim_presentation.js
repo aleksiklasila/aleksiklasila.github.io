@@ -56,7 +56,7 @@ function simPresentationStart() {
     simPresentationStop();
     if (!SIM_PAR_SHARED || typeof Worker !== 'function') return false;
     const base = self.SIM_WORKER_BASE || location.href;
-    const worker = new Worker(new URL('presentation_worker.js?v=20261021-x', base).href);
+    const worker = new Worker(new URL('presentation_worker.js?v=20261022-t', base).href);
     const p = _simPresentation = { worker, epoch:_simEpoch, generation:++_simPresentationGeneration,
         timer:0, job:null, meta:null, projectileJob:null, projectileAt:0,
         structures:null, cells:null, columns:null, sourceBuffer:null, strings:0, revision:0 };
@@ -112,8 +112,19 @@ function simPresentationPublish(tick) {
     const p = _simPresentation;
     if (!p) return;
     simPresentationBind();
+    // (Team + history: this player's sight grid, shared, for the reader's
+    // last-seen positions; units are drawn frozen where last seen.)
+    // (With fog: also the fog's light and memory, made there, see
+    // presentation_worker.js updateFog.)
+    const fog = typeof fullVisibility !== 'undefined' && !fullVisibility;
+    const history = fog && typeof teamVisibilityHistory !== 'undefined' && teamVisibilityHistory;
+    const rows = fog && typeof visibilityGridRawByPlayerCache !== 'undefined' ? visibilityGridRawByPlayerCache.get(localPlayerId) : null;
+    const sight = rows && rows._flat && typeof SharedArrayBuffer === 'function' && rows._flat.buffer instanceof SharedArrayBuffer ? rows._flat : null;
     p.worker.postMessage({type:'tick', epoch:p.epoch, tick, time:gameTime, rate:TICK_RATE,
-        player:localPlayerId, areaUnit:AREA_UNIT_TILE_EQUIVALENT, n:_simUnitState.owners.length});
+        player:localPlayerId, areaUnit:AREA_UNIT_TILE_EQUIVALENT, n:_simUnitState.owners.length,
+        history: history && !!sight, fog: fog && !!sight, sight, gw: GRID_W, gh: GRID_H, tile: TILE,
+        lightRange: VISIBILITY_LIGHT_NORMALIZATION_RANGE, rise: VISIBILITY_LIGHT_MAX_CHANGE_PER_SECOND, fall: VISIBILITY_FADE_MAX_CHANGE_PER_SECOND,
+        historyFloor: typeof HISTORY_LIGHT_FLOOR === 'number' ? HISTORY_LIGHT_FLOOR : .14});
 }
 
 function simPresentationReturn(buf) {
