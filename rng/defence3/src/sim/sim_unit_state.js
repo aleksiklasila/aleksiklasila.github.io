@@ -349,18 +349,25 @@ function simUnitStateCompact() {
     for (const [k, Type, per] of SIM_MOVE_COLUMNS) C[k] = simSharedArray(Type, cap * per);
     N.sepKey = simSharedArray(Uint32Array, cap); N.sepLayer = simSharedArray(Uint8Array, cap);
     N.sepKey.fill(SIM_SEP_ABSENT); C.sepKey = N.sepKey;
+    // Units first, then the columns, one at a time, in runs of consecutive
+    // slots (restored units hold consecutive slots in list order: a few
+    // block copies). (Per unit and column, through the column's name, it was
+    // ~13 s at 200k units.)
     let ns = 0;
+    const runs = [];
     for (let i = 0; i < units.length; i++) {
         const u = units[i];
         if (!u || u._us !== old || S.owners[u._si] !== u) continue;
-        const s = u._si;
-        for (const k of SIM_UNIT_COLUMNS) C[k][ns] = old[k][s];
-        for (const [k, , per] of SIM_MOVE_COLUMNS) { const a = old[k], b = C[k]; for (let j = 0; j < per; j++) b[ns * per + j] = a[s * per + j]; }
-        N.sepKey[ns] = S.sepKey[s]; N.sepLayer[ns] = S.sepLayer[s];
+        const s = u._si, r = runs.length;
+        if (r && runs[r - 2] + runs[r - 1] === s) runs[r - 1]++;
+        else runs.push(ns, s, 1);
         N.owners[ns] = u; map[s] = ns;
         u._us = C; u._si = ns;
         ns++;
     }
+    for (const k of SIM_UNIT_COLUMNS) _simCopyRuns(old[k], C[k], runs, 1);
+    for (const [k, , per] of SIM_MOVE_COLUMNS) _simCopyRuns(old[k], C[k], runs, per);
+    _simCopyRuns(S.sepKey, N.sepKey, runs, 1); _simCopyRuns(S.sepLayer, N.sepLayer, runs, 1);
     for (let s = 0; s < ns; s++) {
         const a = C.cbT[s], b = C.dbT[s];
         if (a >= 0) C.cbT[s] = a < n0 ? map[a] : -1;
@@ -374,6 +381,15 @@ function simUnitStateCompact() {
     simParallelBind('unit.sepKey', N.sepKey); simParallelBind('unit.sepLayer', N.sepLayer);
     if (typeof unitSlotMapInvalidate === 'function') unitSlotMapInvalidate();
     return true;
+}
+
+// Copies runs [to, from, count, ...] of slots (per values a slot) from a to b.
+function _simCopyRuns(a, b, runs, per) {
+    for (let r = 0; r < runs.length; r += 3) {
+        const to = runs[r] * per, from = runs[r + 1] * per, n = runs[r + 2] * per;
+        if (n > 32) b.set(a.subarray(from, from + n), to);
+        else for (let j = 0; j < n; j++) b[to + j] = a[from + j];
+    }
 }
 
 // Slots of removed units are reclaimed by a sliced sweep: every removal

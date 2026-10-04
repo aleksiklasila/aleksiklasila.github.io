@@ -4455,6 +4455,8 @@ function startGame() {
         return { gx: tile.gx, gy: tile.gy, ox: off[0], oy: off[1] };
     };
 
+    // (A start snapshot replaces every entity at once: the simulation
+    // worker's start makes none; startGameSkipStarters.)
     let spawnStartingUnit = (pid, origin, unitType, level) => {
         let spawnTile = getNextStarterUnitSpawnTile(pid, origin);
         let u = new Unit(unitType, pid, spawnTile.gx * TILE + 16 + spawnTile.ox, spawnTile.gy * TILE + 16 + spawnTile.oy);
@@ -4492,7 +4494,7 @@ function startGame() {
         teamSpawnPos[pid] = pos;
     }
 
-    for (let pid of teams) {
+    for (let pid of (startGameSkipStarters ? [] : teams)) {
         let pos = teamSpawnPos[pid];
         let spawnByThing = startingResourcesConfig.spawnCounts || {};
         // Buildings first, then units on the tiles left free.
@@ -4581,6 +4583,11 @@ function startGame() {
     startMainThreadLoops();
     prewarmItemThumbnails();
 }
+
+// Set while a start that a whole-world snapshot follows runs startGame (the
+// simulation worker's): the starting units and buildings are not made (the
+// snapshot brings them; at 200k units they were seconds of work thrown away).
+let startGameSkipStarters = false;
 
 let _lastTickTime = 0;
 let _tickAccumulator = 0;

@@ -277,7 +277,9 @@ function _simStart(msg) {
     if (g.startingResources) startingResourcesConfig = normalizeStartingResourcesConfig(g.startingResources);
     // (Where a big match's start goes: sent back with 'started'.)
     const T = {}, t0 = performance.now();
-    startGame();
+    // (Its entities come with the snapshot.)
+    startGameSkipStarters = true;
+    try { startGame(); } finally { startGameSkipStarters = false; }
     T.startGame = performance.now() - t0;
     _simStubUi();
     // gameStarted, isMultiplayer... as on the page (startGame may reset them).
@@ -288,6 +290,12 @@ function _simStart(msg) {
     const t2 = performance.now();
     applyAuthoritativeStateSnapshot(snap);
     T.apply = performance.now() - t2;
+    // The map's first navigation builds, which its first tick makes
+    // (navTick) from this same state: made before the match is reported
+    // started, not in a first tick of ~1 s right after the start.
+    const t4 = performance.now();
+    if (typeof _navProfilesInUse === 'function' && !_nav[NAV_PROFILE_GROUND]) for (const p of _navProfilesInUse()) navEnsure(p);
+    T.nav = performance.now() - t4;
     _simStartTimings = T;
     _simEvents = [];
     _simLocalDefeat = '';

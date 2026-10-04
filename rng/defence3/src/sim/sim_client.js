@@ -61,7 +61,7 @@ function _simClientScriptUrls() {
         .filter(src => /\/src\//.test(src) && !/bootstrap\.js|sim_shadow\.js|sim_worker\.js|sim_client\.js/.test(src));
 }
 
-const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261022-t';
+const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261022-w';
 
 function _simClientCreate() {
     let c = {
@@ -134,8 +134,29 @@ function simClientWorldReady() {
     return !c || !c.active || c.startedEpoch === c.epoch;
 }
 
-// ---- match start (first tick): the worker starts from the page's state ----
-function simClientStartMatch() {
+// ---- match start: the worker starts from the page's state ----
+// Whether the worker takes the match about to start (it loaded, no exact
+// lockstep debugging): the page then needs no units of its own.
+function simClientWillTakeMatch() {
+    if (!simClientEnabled || lockstepStrictDebugMode) return false;
+    simClientPreload();
+    const c = _simClient;
+    return !!(c && c.loaded && !c.failed);
+}
+// A start state without its units, for the page: its units come from the
+// worker's frames (made and dropped at once, 200k of them were seconds);
+// references to them are the worker's business.
+function simClientStripUnits(state) {
+    if (state && state.lists) { state.lists.u = []; state.res = []; }
+}
+// At a match's load, on every peer (the host once its start snapshot is
+// made, a guest once it restored the host's, solo after startGame), so the
+// start waits for the worker to have the world (simClientWorldReady); the
+// first tick starts it otherwise. startText: the start snapshot (made from
+// the page's state when not given); decodePage: restores it on the page
+// (without units; a plain decode when not given). The worker gets the text
+// first: it loads while the page decodes.
+function simClientStartMatch(startText = null, decodePage = null) {
     if (!simClientEnabled || lockstepStrictDebugMode) return false;
     simClientPreload();
     let c = _simClient;
@@ -145,31 +166,12 @@ function simClientStartMatch() {
         console.warn('[sim worker] ' + (c.failed ? 'failed to load (' + c.failed + ')' : 'not loaded yet') + '; this match runs on the page');
         return false;
     }
-    // The worker restores this; the page's copy decodes the same state (the
-    // lockstep bookkeeping stays as it is). The page ran no tick since its
-    // last restore, so no peer has history caches to drop yet.
-    let text = JSON.stringify(buildHostAuthoritativeStateSnapshot({ includeConfig: false, includeStaticMapState: true, includeGridTypes: true }));
-    let pageTick = currentTick;
-    snapFlushHistoryCaches();
-    snapDecodeState(JSON.parse(text).state);
-    currentTick = pageTick;
-    // Units come from the worker's frames (the first one with 'started').
-    _simClientResetUnits();
-    recomputePlayerPopCaps();
-    // The worker simulates from here on: the page reads its grids.
-    _visCoverSimContext = false;
-    clearGameplayVisibilityCache();
-    updateVisibility(localPlayerId);
+    if (typeof _simClientStartedThisMatch !== 'undefined') _simClientStartedThisMatch = true;
+    let text = startText || JSON.stringify(buildHostAuthoritativeStateSnapshot({ includeConfig: false, includeStaticMapState: true, includeGridTypes: true }));
     let controls = {};
     for (let el of document.querySelectorAll('input[id], select[id]')) controls[el.id] = el.type === 'checkbox' ? { checked: el.checked } : { value: el.value };
     c.epoch++;
     c.active = true;
-    c.startTick = currentTick;
-    c.inFlight = 0;
-    c.dispatchAt.clear();
-    c.appliedTick = currentTick - 1;
-    c.appliedAt = 0; c.arrivedAt = 0;
-    c.gameOverShown = false;
     for (let [, r] of c.replies) r.reject(new Error('match restarted'));
     c.replies.clear();
     c.worker.postMessage({
@@ -180,6 +182,33 @@ function simClientStartMatch() {
             startingResources: typeof startingResourcesConfig !== 'undefined' ? startingResourcesConfig : null
         }
     });
+    // The page's copy decodes the same state (the lockstep bookkeeping stays
+    // as it is) while the worker loads it. Its own units go first: the
+    // restore has none to detach (200k took ~1 s). The page ran no tick since
+    // its last restore, so no peer has history caches to drop yet.
+    _simClientResetUnits();
+    if (decodePage) decodePage();
+    else {
+        let pageTick = currentTick;
+        snapFlushHistoryCaches();
+        let pageState = JSON.parse(text).state;
+        simClientStripUnits(pageState);
+        snapDecodeState(pageState);
+        currentTick = pageTick;
+    }
+    // Units come from the worker's frames (the first one with 'started').
+    _simClientResetUnits();
+    recomputePlayerPopCaps();
+    // The worker simulates from here on: the page reads its grids.
+    _visCoverSimContext = false;
+    clearGameplayVisibilityCache();
+    updateVisibility(localPlayerId);
+    c.startTick = currentTick;
+    c.inFlight = 0;
+    c.dispatchAt.clear();
+    c.appliedTick = currentTick - 1;
+    c.appliedAt = 0; c.arrivedAt = 0;
+    c.gameOverShown = false;
     return true;
 }
 

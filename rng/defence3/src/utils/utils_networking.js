@@ -1346,13 +1346,24 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing') {
     let earlyBundles = liveJoin ? { ...lockstepPendingBundleByTick } : null;
     let earlyCommits = liveJoin ? { ...lockstepPendingCommitByTick } : null;
     initAudio();
-    startGame();
+    // (The snapshot brings every entity: none made here.)
+    startGameSkipStarters = !!snapshotText;
+    try { startGame(); } finally { startGameSkipStarters = false; }
     matchStartSessionId = _savedSessionId;
     if (midMatchJoin) matchStartWaitingForReady = false;
 
     let applyStart = performance.now();
+    // A match start (not a join into a running one) with the simulation
+    // worker: the page restores the state without units, the worker loads
+    // the same text now; this peer is ready once it has (sendReady below).
+    let guestWorker = !!snapshotText && !liveJoin && !midMatchJoin && typeof simClientWillTakeMatch === 'function' && simClientWillTakeMatch();
     if (snapshotText) {
-        applyAuthoritativeStateSnapshot(JSON.parse(snapshotText));
+        const guestDecode = () => {
+            let parsed = JSON.parse(snapshotText);
+            if (guestWorker) simClientStripUnits(parsed.state);
+            applyAuthoritativeStateSnapshot(parsed);
+        };
+        if (!(guestWorker && simClientStartMatch(snapshotText, guestDecode))) { guestWorker = false; guestDecode(); }
         netCounters.snapshotApplyMs = performance.now() - applyStart;
         netCounters.snapshotBytes = netSnapshotPayloadBytes(data.snapshotPayload);
         netCounters.lastSnapshotAt = performance.now();
@@ -3105,7 +3116,15 @@ function startHostedGame() {
             // Guests restore this snapshot over their generated world; the host
             // restores the same text so the match starts identical everywhere
             // (fields the snapshot rebuilds would otherwise differ on the host).
-            applyAuthoritativeStateSnapshot(JSON.parse(startSnapshotText));
+            // With the simulation worker: the page without units, the worker
+            // loads the same text now (the countdown waits for it).
+            let hostWorker = typeof simClientWillTakeMatch === 'function' && simClientWillTakeMatch();
+            const hostDecode = () => {
+                let st = JSON.parse(startSnapshotText);
+                if (hostWorker) simClientStripUnits(st.state);
+                applyAuthoritativeStateSnapshot(st);
+            };
+            if (!(hostWorker && simClientStartMatch(startSnapshotText, hostDecode))) { hostWorker = false; hostDecode(); }
             let startSessionId = matchStartSessionId;
             let matchPeerIds = new Set(matchStartLobbyPlayers.map(p => String(p.peerId || '')));
             netEncodeSnapshotText(startSnapshotText).then(payload => {
@@ -3134,9 +3153,10 @@ function startHostedGame() {
                 // Show the player-list overlay; host clicks "Start Game" when all are ready.
                 setMatchLoadOverlay(true, 'Waiting for Players', 'Waiting for players to load\u2026');
             } else {
-                // Solo — nobody to wait for, start immediately.
+                // Solo — nobody to wait for, start immediately (once its
+                // simulation has the world).
                 _matchStartPlayerStatuses = null;
-                setMatchLoadOverlay(false);
+                if (hostWorker) _matchLoadOverlayUntilRunning(); else setMatchLoadOverlay(false);
             }
         } catch (err) {
             console.error('[STARTUP] Failed to start hosted game', err);
@@ -3535,6 +3555,33 @@ function startSoloGame() {
     localPlayerId = 0;
     initAudio();
     startGame();
+    // The simulation worker loads the world now, behind a popup; the match's
+    // clock starts once it has it (renderer.js pumpSimulationTicks).
+    if (typeof simClientWillTakeMatch === 'function' && simClientWillTakeMatch() && simClientStartMatch()) _matchLoadOverlayUntilRunning();
+}
+
+// The load popup until the simulation worker has the match's world and its
+// first tick is shown (units on the move): a start that nobody else waits
+// for (solo, a host alone).
+function _matchLoadOverlayUntilRunning() {
+    if (typeof _simClient === 'undefined' || !_simClient || !_simClient.active) { setMatchLoadOverlay(false); return; }
+    const c = _simClient, epoch = c.epoch;
+    let stage = 0;
+    const wait = () => {
+        if (c.epoch !== epoch || !gameStarted) return;
+        const ready = simClientWorldReady();
+        if (!ready || c.appliedTick < c.startTick) {
+            const want = ready ? 2 : 1;
+            if (stage !== want) {
+                stage = want;
+                setMatchLoadOverlay(true, 'Loading Match', ready ? 'Starting the simulation\u2026' : 'Loading units and world into the simulation\u2026');
+            }
+            setTimeout(wait, 50);
+            return;
+        }
+        setMatchLoadOverlay(false);
+    };
+    wait();
 }
 
 // ============================================================

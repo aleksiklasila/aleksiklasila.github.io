@@ -26,7 +26,7 @@ function _simShadowScriptUrls() {
 
 function simShadowLoad() {
     if (!simShadowEnabled || _simShadow) return _simShadow;
-    let worker = new Worker('./src/sim/sim_worker.js?v=20261022-t');
+    let worker = new Worker('./src/sim/sim_worker.js?v=20261022-w');
     _simShadow = {
         worker, loaded: false, started: false, loadMs: 0, pending: new Map(), compared: 0, mismatches: [], errors: [],
         workerMs: [], lastTick: -1, startTick: -1, queue: []

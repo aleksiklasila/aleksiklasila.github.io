@@ -4943,6 +4943,11 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
         // Simulation worker: a few ticks may be in flight; beyond that the
         // page waits for results rather than queueing more.
         let inWorker = typeof simClientActive === 'function' && simClientActive();
+        // (The worker is still loading the match's world: its clock waits.)
+        if (inWorker && !simClientWorldReady()) {
+            accumulator = Math.min(accumulator, tickMs);
+            break;
+        }
         // (Ahead: as many queued as the lead, and a bound on results the page
         // has not applied yet; otherwise results not back yet.)
         if (inWorker && (ahead ? (!early || simClientInFlight() >= SIM_CLIENT_MAX_IN_FLIGHT + 6)
