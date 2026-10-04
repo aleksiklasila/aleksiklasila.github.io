@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-const c = vm.createContext({ window: {}, console });
+const c = vm.createContext({ window: {}, console, performance });
 vm.runInContext(read('src/audio_visual/renderer3d.js'), c);
 const P = c.window.Defence3Renderer3D.PersistentInstances;
 const calls = [];
@@ -27,7 +27,7 @@ assert.equal(layer.uploadBytes, 10 * 48, 'context/resource reset restores all li
 const source = read('src/audio_visual/renderer.js');
 Object.assign(c, { gameTime: 1, visibilityVersion: 1, fullVisibility: true, localPlayerId: 0, teamVisibilityHistory: false,
     TILE: 32, GRID_W: 1000, GRID_H: 1000, WORLD_W: 32000, WORLD_H: 32000, tickAlpha: .25,
-    selectedUnits: [], selectedEntities: [], activeSubGroups: {},
+    selectedUnits: [], selectedEntities: [], activeSubGroups: {}, areas: [], grid: [], renderRangeMode: 0, RENDER_RANGE_ALL: 3,
     getActiveUnitsForRender: () => c.selectedUnits, getActiveEntities: () => c.selectedEntities,
     renderer3dInstance: { gl }, _parseHexColor: () => ({r:255,g:128,b:0}), get3DRenderOwnerColor: () => '#ff8000',
     _isLiveRenderGrid: () => true, getCellItemsRowMajor: () => [],

@@ -86,7 +86,7 @@ r.drawFlatSprites(Array.from({length:50},(_,i)=>({...object,topTextureCanvas:pan
 assert.equal(atlas.capacity,grownCapacity,'stale layers are reused before growing again');
 
 r.enabled=r.supported=true;r.overlayDepthCache=new Map();
-for(const method of ['resize','drawBackground','drawGroundOverlays','resolveScene','presentSceneToCanvas'])r[method]=()=>calls.push([method]);
+for(const method of ['resize','drawBackground','drawGroundOverlays','drawSelectionMask','resolveScene','presentSceneToCanvas'])r[method]=()=>calls.push([method]);
 for(const method of ['requestModel','drawShadows','drawTexturedCubeInstances'])r[method]=()=>{throw Error('2D must never draw models/shadows');};
 calls.length=0;
 r.render({...snapshot,objects:[object],overlays:{}});

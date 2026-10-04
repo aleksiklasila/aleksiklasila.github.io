@@ -2132,7 +2132,7 @@ function _r3dPhase(name, t0) {
 let rendererScaleCache = null;
 let rendererScaleActive = false;
 let rendererChunkCache = null;
-function getChunkRenderView(view, bounds) {
+function getChunkRenderView(view, bounds, flat2d) {
     if (!rendererChunkCache || rendererChunkCache.grid !== view.grid) rendererChunkCache = { grid: view.grid, lists: new Map() };
     const result = { ...view }, columns = Math.ceil(GRID_W / 16);
     // Match the detailed layers' overscan, plus one whole chunk for bodies
@@ -2148,14 +2148,32 @@ function getChunkRenderView(view, bounds) {
     // buckets rebuilt each tick through the units' views took ~100 ms.
     const F = view.units === units && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
     if (F && view.units.length >= 5000) {
-        const key = gameTime + '|' + x0 + '|' + y0 + '|' + x1 + '|' + y1 + '|' + view.units.length;
+        const detailCull = typeof flat2d === 'boolean';
+        const key = gameTime + '|' + x0 + '|' + y0 + '|' + x1 + '|' + y1 + '|' + view.units.length + (detailCull ? '|' + _detailViewKey(flat2d) : '');
         let U = rendererChunkCache.liveUnits;
         if (!U || U.key !== key || U.frame !== F || U.list !== view.units) {
             const list = view.units, ord = F.order, X = F.x, Y = F.y, PX = F.px, PY = F.py, n = Math.min(F.count, list.length);
             const minX = x0 * 16 * TILE, minY = y0 * 16 * TILE, maxX = (x1 + 1) * 16 * TILE, maxY = (y1 + 1) * 16 * TILE, out = [];
+            const R = renderer3dInstance, M = detailCull ? R.tmpViewProjection : null;
+            const projectionScale = detailCull ? (flat2d ? camera.zoom * TILE : R.lodProjectionScale) : 0;
+            const sx = detailCull ? viewW / R.cssWidth : 1, sy = detailCull ? viewH / R.cssHeight : 1;
             for (let k = 0; k < n; k++) {
                 const s = ord[k], x = X[s], y = Y[s], px = PX[s], py = PY[s];
                 if ((x < minX && px < minX) || (x >= maxX && px >= maxX) || (y < minY && py < minY) || (y >= maxY && py >= maxY)) continue;
+                if (detailCull) {
+                    // Conservative swept sphere: keep both tick endpoints and
+                    // any interpolated model crossing the viewport. Far glyphs
+                    // stay in the GPU column draw, without JS entity visits.
+                    const wx = (x + px) / (2 * TILE), wz = (y + py) / (2 * TILE);
+                    const radius = 1 + (Math.abs(x - px) + Math.abs(y - py)) / TILE;
+                    const w = M[3] * wx + M[11] * wz + M[15];
+                    if (w + radius <= 0) continue;
+                    const size = Math.max(.28, Math.min(.9, F.r[s] * 2.2 / TILE));
+                    if (size * projectionScale / (flat2d ? 1 : Math.max(.01, w - radius)) < UNIT_DETAIL_MIN_PX * .85) continue;
+                    const cx = M[0] * wx + M[8] * wz + M[12], cy = M[1] * wx + M[9] * wz + M[13];
+                    const margin = radius * (Math.abs(M[0]) + Math.abs(M[8]) + Math.abs(M[1]) + Math.abs(M[9]) + 1);
+                    if (Math.abs(cx) > w * sx + margin || Math.abs(cy) > w * sy + margin) continue;
+                }
                 out.push(list[k]);
             }
             U = rendererChunkCache.liveUnits = { key, frame: F, list, query: out };
@@ -2207,7 +2225,12 @@ function useScaleRendering(flat2d, view) {
     if (!renderer3dInstance || typeof renderer3dInstance.buildViewProjection !== 'function' || window.__disableScaleRendering) return false;
     const snapshot = get3DProjectionSnapshot(); snapshot.flat2d = flat2d;
     renderer3dInstance.buildViewProjection(snapshot);
-    const pixels = flat2d ? camera.zoom * TILE : renderer3dInstance.lodPixelsPerWorld;
+    let pixels = flat2d ? camera.zoom * TILE : renderer3dInstance.lodPixelsPerWorld;
+    if (!flat2d) {
+        // Low camera pitches magnify the foreground relative to the target.
+        const footprint = renderer3dInstance.getGroundFrustumPolygon(snapshot, true);
+        if (footprint) for (const p of footprint) pixels = Math.max(pixels, renderer3dInstance.pixelsPerWorldAt(p.x, 0, p.y));
+    }
     // Detail follows projected size, not the population of the entire map.
     // Close views use the chunk query below, so distant armies stay culled.
     rendererScaleActive = pixels < (rendererScaleActive ? 16 : 12);
@@ -2539,7 +2562,7 @@ function build3DFrameData(flat2d = false) {
     const sourceView = getLiveRenderView();
     if (useScaleRendering(flat2d, sourceView)) return buildScaleFrameData(flat2d, sourceView);
     const queryBounds = flat2d ? getVisibleWorldBounds(2 + Math.ceil(getRenderViewPad() / Math.max(.01, camera.zoom) / TILE)) : get3DVisibleWorldBounds();
-    let { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = getChunkRenderView(sourceView, queryBounds);
+    let { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = getChunkRenderView(sourceView, queryBounds, flat2d);
     // Detail per unit, by its drawn size, within a budget (see
     // _unitDetailSplit): the rest are the GPU's glyphs, drawn from the frame.
     const unitDetail = _isLiveUnitList(sourceView.units) ? _unitDetailSplit(units, flat2d, queryBounds) : null;
@@ -2707,7 +2730,7 @@ function build3DFrameData(flat2d = false) {
     if (!flat2d && RENDERER3D_UNIT_LAYER_ENABLED && renderer3dInstance) {
         let S = renderer3dStaticLayer;
         let sameView = !!(S && S.view === view3DKey && S.fullVis === fullVisibility && S.player === localPlayerId && S.grid === grid
-            && Math.abs(camera.zoom / S.zoom - 1) < 0.25
+            && S.detail === structDetail && Math.abs(camera.zoom / S.zoom - 1) < 0.25
             && bounds.minGx >= S.bounds.minGx && bounds.maxGx <= S.bounds.maxGx && bounds.minGy >= S.bounds.minGy && bounds.maxGy <= S.bounds.maxGy);
         staticReuse = sameView && S.tick === gameTime && S.visVersion === visibilityVersion && S.visGrid === visibilityGrid;
         // A tick frame also builds the unit layer: the structures keep the
@@ -2719,7 +2742,7 @@ function build3DFrameData(flat2d = false) {
         else {
             let mx = Math.max(4, Math.ceil((bounds.maxGx - bounds.minGx) * 0.3)), my = Math.max(4, Math.ceil((bounds.maxGy - bounds.minGy) * 0.3));
             staticLayer = renderer3dStaticLayer = {
-                tick: gameTime, view: view3DKey, fullVis: fullVisibility, player: localPlayerId, visVersion: visibilityVersion, visGrid: visibilityGrid, grid, zoom: camera.zoom,
+                tick: gameTime, view: view3DKey, fullVis: fullVisibility, player: localPlayerId, visVersion: visibilityVersion, visGrid: visibilityGrid, grid, zoom: camera.zoom, detail: structDetail,
                 bounds: { minGx: bounds.minGx - mx, maxGx: bounds.maxGx + mx, minGy: bounds.minGy - my, maxGy: bounds.maxGy + my },
                 objects: [], perFrame: [], activity: [], fadeKeys: [], version: ++renderer3dStaticLayerVersion
             };
@@ -2854,7 +2877,7 @@ function build3DFrameData(flat2d = false) {
             if (!fullVisibility && (!visibilityGrid[y] || visibilityGrid[y][x] === 0)) continue;
             // (Floor items are flat buildings: past the split's threshold,
             // the GPU's glyphs, as buildings.)
-            if (structDetail && structDetail.pxAt(x, y) <= structDetail.T) continue;
+            if (structDetail && !structDetail.selected.has(item)) continue;
             structureStep(cell.item, pushCellItemStep, x, y);
         }
     } else {
@@ -3057,7 +3080,7 @@ function build3DFrameData(flat2d = false) {
         unitLayer.objects.push(o);
         if (!renderer3dInstance.writeUnitLayerObject(o)) unitLayer.fallback.push(o);
         else if (unitVis && _uSlotVisIndex >= 0) {
-            let sl = unitVis.order[_uSlotVisIndex];
+            let sl = _uSlotVisIndex;
             _uSlotFill(sl, u, o, cached, unitVis.sig[sl], view3DKey);
         }
         if (u.isSnake || u.unitType === 'tank' || u.unitType === 'boss' || u.unitType === 'king') {
@@ -3067,7 +3090,7 @@ function build3DFrameData(flat2d = false) {
     // Building the layer from the worker's unit frame (sim_frame.js): a unit
     // whose cached object is still valid is written from its frame columns,
     // without the per-object logic below.
-    let unitVis = layerBuilding && units === sourceView.units && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    let unitVis = layerBuilding && _isLiveUnitList(sourceView.units) && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
     let statusCanvases = unitVis ? SIM_UNIT_STATUS_NAMES.map(name => get3DStatusTexture(name)) : null;
     let unitList = layerReuse ? unitLayer.perFrame : units;
     // With the records: units whose slot is valid are written from it; the
@@ -3086,7 +3109,8 @@ function build3DFrameData(flat2d = false) {
         if (camKey !== _uLodCamKey) { _uLodCamKey = camKey; _uLodCamStamp++; }
         let camStamp = _uLodCamStamp, KN = U_SLOT_KEY_N, keyArr = S.inKey, recArr = S.rec;
         for (let i = 0; i < units.length; i++) {
-            let slot = FO[i];
+            let slot = units === sourceView.units ? FO[i] : units[i]._s;
+            if (!(slot >= 0)) { slowIdx.push(i); continue; }
             let x = FV.x[slot], y = FV.y[slot], px = FV.px[slot], py = FV.py[slot];
             let ux = px + (x - px) * alpha, uy = py + (y - py) * alpha;
             let ugx = Math.floor(ux / TILE), ugy = Math.floor(uy / TILE);
@@ -3186,7 +3210,7 @@ function build3DFrameData(flat2d = false) {
     for (let li = 0; li < loopCount; li++) {
         let ui = slowIdx ? slowIdx[li] : li;
         let u = slowIdx ? units[ui] : unitList[ui];
-        _uSlotVisIndex = ui;
+        _uSlotVisIndex = unitVis ? (u._s ?? unitVis.order[ui]) : -1;
         if (flat2d) drainFlatObjects();
         if (u.dead) continue;
         let ux = u.prevX + (u.x - u.prevX) * alpha;
@@ -3199,7 +3223,7 @@ function build3DFrameData(flat2d = false) {
         if (flat2d && _pushFlatUnit(flatBatch, u, ux / TILE, uy / TILE, view3DKey)) continue;
         let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
         if (unitVis) {
-            let cached = u._r3d, sl = unitVis.order[ui];
+            let cached = u._r3d, sl = _uSlotVisIndex;
             let sig = unitVis.sig[sl];
             if (cached && cached.sigW !== sig) cached.tick = -1e9;   // panel changed: rebuild below
             else if (cached && (cached.snake ? !!u.isSnake : !u.isSnake) && cached.view === view3DKey
@@ -3453,99 +3477,177 @@ function _detailColumns(unitDetail, structDetail) {
         colors: Array.from({ length: 9 }, (_, i) => get3DRenderOwnerColor(i - 1)) };
     base.structures = structDetail ? _pageTables.s : null;
     base.structureSources = structDetail ? _pageStructViews : null;
-    base.detailPxS = structDetail ? structDetail.T : 0;
+    base.detailMaskS = structDetail ? structDetail.mask : null;
+    base.detailMaskVersionS = structDetail ? structDetail.version : 0;
     return base;
 }
-// A threshold that leaves about `budget` of n sizes above it, from a sample
-// (a sort of every unit's size each frame cost ~15 ms in a wide view).
-let _detailSample = new Float32Array(1024);
-function _detailThreshold(P, n, budget) {
-    const step = Math.max(1, Math.ceil(n / 1024)), m = Math.ceil(n / step), S = _detailSample.subarray(0, m);
-    for (let i = 0, j = 0; i < n && j < m; i += step) S[j++] = P[i];
-    S.sort();
-    const keep = Math.min(m - 1, Math.max(0, Math.floor(budget / n * m)));
-    return S[m - 1 - keep];
+// Rank only visible models. Chunk bounds are deliberately conservative and
+// include units behind/beside the camera; they must not consume detail slots.
+// CSS pixels keep LOD independent of render resolution / device pixel ratio.
+function _detailViewKey(flat2d) {
+    const R = renderer3dInstance;
+    return [flat2d, camera.x, camera.y, camera.zoom, R.orbitPitch, R.orbitYaw, R.cssWidth, R.cssHeight].join('|');
+}
+function _detailScore(x, z, size, flat2d, retained = false) {
+    const R = renderer3dInstance, M = R.tmpViewProjection;
+    const w = M[3] * x + M[7] * .02 + M[11] * z + M[15];
+    if (!(w > 0)) return 0;
+    const nx = (M[0] * x + M[4] * .02 + M[8] * z + M[12]) / w;
+    const ny = (M[1] * x + M[5] * .02 + M[9] * z + M[13]) / w;
+    const nz = (M[2] * x + M[6] * .02 + M[10] * z + M[14]) / w;
+    const scale = flat2d ? camera.zoom * TILE : R.lodProjectionScale / w;
+    const pixels = size * scale;
+    const sx = viewW / R.cssWidth, sy = viewH / R.cssHeight;
+    const margin = scale * 2 / R.cssHeight; // Bodies overlapping a screen edge.
+    if (nz < -1 || nz > 1 || Math.abs(nx) > sx + margin || Math.abs(ny) > sy + margin) return 0;
+    if (pixels < UNIT_DETAIL_MIN_PX * (retained ? .85 : 1)) return 0;
+    // Once a body is clearly readable, huge units must not permanently
+    // exclude smaller neighbours. Prefer the view centre for equal sizes.
+    const score = Math.min(pixels, 48) + (retained ? 2 : 0) + .1 / (1 + nx * nx + ny * ny);
+    return score * (Math.abs(nx) <= sx && Math.abs(ny) <= sy ? 1 : .05);
+}
+// Bounded min heap: O(n log budget), no population-sized sort or percentile
+// cutoff (a strict percentile comparison rejects every equal-sized unit).
+function _detailPick(scores, budget) {
+    const heap = [];
+    const less = (a, b) => scores[a] < scores[b] || (scores[a] === scores[b] && a > b);
+    for (let i = 0; i < scores.length; i++) {
+        if (!(scores[i] > 0)) continue;
+        if (heap.length < budget) {
+            let p = heap.length; heap.push(i);
+            while (p > 0) { const parent = (p - 1) >> 1; if (!less(heap[p], heap[parent])) break; [heap[p], heap[parent]] = [heap[parent], heap[p]]; p = parent; }
+        } else if (less(heap[0], i)) {
+            heap[0] = i;
+            let p = 0;
+            while (p * 2 + 1 < heap.length) {
+                let child = p * 2 + 1;
+                if (child + 1 < heap.length && less(heap[child + 1], heap[child])) child++;
+                if (!less(heap[child], heap[p])) break;
+                [heap[p], heap[child]] = [heap[child], heap[p]]; p = child;
+            }
+        }
+    }
+    return heap.sort((a, b) => a - b); // Preserve painter order.
 }
 const STRUCT_DETAIL_BUDGET = 600;
 let _structDetailMode = false;
 let _structDetailPx = new Float32Array(0);
+let _structDetailPrevious = null, _structDetailVersion = 0;
+let _structDetailCache = null;
 function _structureDetailSplit(lists, flat2d, bounds, live = true) {
     const R = renderer3dInstance;
     if (!R || typeof R.columnPixelScale !== 'function' || (live && (typeof _pageTables === 'undefined' || !_pageTables.s))) return null;
+    const cacheKey = _detailViewKey(flat2d) + '|' + gameTime + '|' + visibilityVersion + '|' + fullVisibility;
+    if (live && _structDetailCache?.key === cacheKey && _structDetailCache.frame === _pageTables.s) return _structDetailCache.value;
+    if (live && _pageTables.s.kind && _pageTables.s.n > STRUCT_DETAIL_BUDGET) {
+        // Work directly from the packed table. At a low pitch even a small
+        // view's ground AABB can contain the entire map's buildings.
+        const F = _pageTables.s, n = F.n, previous = _structDetailPrevious;
+        if (_structDetailPx.length < n) _structDetailPx = new Float32Array(Math.ceil(n * 1.5));
+        const P = _structDetailPx.subarray(0, n);
+        for (let s = 0; s < n; s++) {
+            P[s] = 0;
+            if (!F.alive[s] || F.kind[s] === 6 || (F.kind[s] < 4 && F.energy[s] <= 0)) continue;
+            const gx = F.gx[s], gy = F.gy[s];
+            if (!fullVisibility && !(visibilityGrid[gy]?.[gx] > 0)) continue;
+            P[s] = _detailScore(gx + .5, gy + .5, .94, flat2d, !!previous?.mask?.[s]);
+        }
+        const slots = _detailPick(P, STRUCT_DETAIL_BUDGET), selected = new Set();
+        const out = lists.map(() => []), byKind = [0, 1, 2, -1, 3, 4];
+        for (const s of slots) {
+            const e = _pageStructViews[s];
+            if (!e) continue;
+            selected.add(e);
+            const k = byKind[F.kind[s]];
+            if (k >= 0) out[k].push(e);
+        }
+        let value = previous;
+        if (!previous || !previous.live || previous.mask.length !== F.cap || previous.selected.size !== selected.size || [...selected].some(e => !previous.selected.has(e))) {
+            const mask = new Uint8Array(F.cap);
+            for (const s of slots) mask[s] = 1;
+            value = _structDetailPrevious = { lists: out, selected, mask, version: ++_structDetailVersion, live: true };
+        }
+        _structDetailCache = { key: cacheKey, frame: F, value };
+        return value;
+    }
+    const all = lists.concat(live ? [getCellItemsRowMajor()] : []);
     let n = 0;
-    for (const L of lists) n += L.length;
+    for (const L of all) n += L.length;
     // (Split from 125% of the budget, back under 80%: no blinking at its edge.)
     if (!_structDetailMode && n > STRUCT_DETAIL_BUDGET * 1.25) _structDetailMode = true;
     else if (_structDetailMode && n < STRUCT_DETAIL_BUDGET * .8) _structDetailMode = false;
-    if (!_structDetailMode) return null;
-    const scale = R.columnPixelScale(flat2d, (bounds.vw || (bounds.maxGx - bounds.minGx + 1) * TILE) / TILE, viewW), M = R.tmpViewProjection;
+    if (!_structDetailMode) { _structDetailPrevious = null; return null; }
     if (_structDetailPx.length < n) _structDetailPx = new Float32Array(Math.ceil(n * 1.5));
-    const P = _structDetailPx;
+    const P = _structDetailPx.subarray(0, n), previous = _structDetailPrevious;
     let i = 0;
-    for (const L of lists) for (const e of L) {
+    for (const L of all) for (const e of L) {
         const x = (e.gx | 0) + .5, z = (e.gy | 0) + .5;
-        const w = flat2d ? 1 : Math.max(.01, M[3] * x + M[7] * .02 + M[11] * z + M[15]);
-        P[i++] = .94 * scale / w;
+        const light = fullVisibility || e._historyGhost || visibilityGrid[e.gy]?.[e.gx] > 0;
+        P[i++] = light ? _detailScore(x, z, .94, flat2d, previous?.selected.has(e)) : 0;
     }
-    let T = _detailThreshold(P, n, STRUCT_DETAIL_BUDGET);
-    if (!(T >= UNIT_DETAIL_MIN_PX)) T = UNIT_DETAIL_MIN_PX;
+    const picked = new Set(_detailPick(P, STRUCT_DETAIL_BUDGET)), selected = new Set();
     i = 0;
-    const far = lists.map(() => []);
-    const out = lists.map((L, k) => { const o = []; for (const e of L) { if (P[i++] > T) o.push(e); else if (!live) far[k].push(e); } return o; });
-    const pxAt = (gx, gy) => { const x = gx + .5, z = gy + .5; return .94 * scale / (flat2d ? 1 : Math.max(.01, M[3] * x + M[7] * .02 + M[11] * z + M[15])); };
-    return { lists: out, T, pxAt, live, far };
+    const far = all.map(() => []);
+    const out = all.map((L, k) => { const o = []; for (const e of L) { if (picked.has(i++)) { o.push(e); selected.add(e); } else if (!live) far[k].push(e); } return o; });
+    if (previous && previous.live === live && previous.mask?.length === _pageTables.s.cap && previous.selected.size === selected.size && [...selected].every(e => previous.selected.has(e)) && live) {
+        _structDetailCache = { key: cacheKey, frame: _pageTables.s, value: previous };
+        return previous;
+    }
+    const mask = live ? new Uint8Array(_pageTables.s.cap) : null;
+    if (mask) for (const e of selected) if (e._s >= 0) mask[e._s] = 1;
+    const pxAt = (gx, gy) => _detailScore(gx + .5, gy + .5, .94, flat2d);
+    _structDetailPrevious = { lists: out.slice(0, lists.length), selected, mask, version: ++_structDetailVersion, T: 0, pxAt, live, far: far.slice(0, lists.length) };
+    if (live) _structDetailCache = { key: cacheKey, frame: _pageTables.s, value: _structDetailPrevious };
+    return _structDetailPrevious;
 }
 
 // Detailed models cost ~0.1 ms of CPU a unit; a close view of an army holds
-// thousands. Units are drawn in detail by their own drawn size (in 3D the
-// near ones: the view's zoom says nothing of a tilted view's far side), at
-// most UNIT_DETAIL_BUDGET of them, the largest first; every other unit in
-// view is the GPU's glyph, drawn from the frame's columns with the same
-// size rule (drawFrameColumns: a unit over the threshold is skipped there).
+// thousands. Visible readable units share a hard budget; all others use GPU
+// glyphs. The same slot mask selects exactly one representation on the GPU.
 // null: every unit in view in detail (few enough, or no frame).
 const UNIT_DETAIL_BUDGET = 600, UNIT_DETAIL_MIN_PX = 12;
 let _unitDetailPx = new Float32Array(0);
 // Stable detail (no blinking between models and glyphs): the split starts
 // over 125% of the budget and ends under 80% of it; a unit in detail stays so
-// down to 85% of the threshold, a glyph turns detailed over 115%; the
-// threshold eases between frames. The GPU draws as glyphs exactly the units
+// down to 85% of the minimum readable size, with a small retention bonus.
+// The GPU draws as glyphs exactly the units
 // the split did not pick (a mask per slot, uploaded when it changes).
-let _detailMode = false, _detailT = 0, _detailMask = null, _detailSlots = [], _detailMaskVersion = 0;
+let _detailMode = false, _detailMask = null, _detailSlots = [], _detailMaskVersion = 0, _detailUnits = [];
+let _unitDetailCache = null;
 function _detailMaskClear() {
+    _unitDetailCache = null;
     if (_detailMask) for (const s of _detailSlots) _detailMask[s] = 0;
     if (_detailSlots.length) { _detailSlots = []; _detailMaskVersion++; }
 }
 function _unitDetailSplit(viewUnits, flat2d, bounds) {
     const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null, R = renderer3dInstance;
-    const n0 = viewUnits.length;
+    const n0 = F ? F.count : viewUnits.length;
     if (!_detailMode && n0 > UNIT_DETAIL_BUDGET * 1.25) _detailMode = true;
     else if (_detailMode && n0 < UNIT_DETAIL_BUDGET * .8) _detailMode = false;
-    if (!F || !R || typeof R.columnPixelScale !== 'function' || !_detailMode) { _detailMaskClear(); _detailT = 0; return null; }
-    const scale = R.columnPixelScale(flat2d, (bounds.vw || (bounds.maxGx - bounds.minGx + 1) * TILE) / TILE, viewW), M = R.tmpViewProjection, a = tickAlpha;
+    if (!F || !R || typeof R.columnPixelScale !== 'function' || !_detailMode) { _detailMaskClear(); return null; }
+    const cacheKey = _detailViewKey(flat2d) + '|' + visibilityVersion + '|' + fullVisibility;
+    if (_unitDetailCache?.key === cacheKey && _unitDetailCache.frame === F && _unitDetailCache.source === viewUnits) {
+        _unitDetailCache.value.columns.alpha = tickAlpha;
+        return _unitDetailCache.value;
+    }
+    const a = tickAlpha;
     if (_unitDetailPx.length < viewUnits.length) _unitDetailPx = new Float32Array(Math.ceil(viewUnits.length * 1.5));
-    const P = _unitDetailPx, n = viewUnits.length;
+    const n = viewUnits.length, P = _unitDetailPx.subarray(0, n);
     for (let i = 0; i < n; i++) {
         const u = viewUnits[i], s = u ? u._s : -1;
         // (Not in the frame: as before, in detail.)
         if (!(s >= 0)) { P[i] = Infinity; continue; }
         // (Frozen or hidden ones, Team + history: the glyphs' alone.)
-        if (F.flags[s] & (SIM_UF_GHOST | SIM_UF_HIDDEN)) { P[i] = 0; continue; }
+        if (F.flags[s] & (SIM_UF_GHOST | SIM_UF_HIDDEN) || F.energy[s] <= 0) { P[i] = 0; continue; }
         const x = (F.px[s] + (F.x[s] - F.px[s]) * a) / TILE, z = (F.py[s] + (F.y[s] - F.py[s]) * a) / TILE;
         const size = Math.max(.28, Math.min(.9, F.r[s] * 2.2 / TILE));
-        const w = flat2d ? 1 : Math.max(.01, M[3] * x + M[7] * .02 + M[11] * z + M[15]);
-        P[i] = size * scale / w;
+        if (!fullVisibility && !(visibilityGrid[Math.floor(z)]?.[Math.floor(x)] > 0)) { P[i] = 0; continue; }
+        P[i] = _detailScore(x, z, size, flat2d, !!(_detailMask && _detailMask[s]));
     }
-    // The threshold: the budget's worth of the largest (never below
-    // UNIT_DETAIL_MIN_PX: smaller ones are glyphs whatever the count), eased.
-    let T0 = _detailThreshold(P, n, UNIT_DETAIL_BUDGET);
-    if (!(T0 >= UNIT_DETAIL_MIN_PX)) T0 = UNIT_DETAIL_MIN_PX;
-    _detailT = _detailT > 0 ? _detailT + (T0 - _detailT) * .15 : T0;
-    const T = _detailT;
     if (!_detailMask || _detailMask.length < F.cap) { _detailMask = new Uint8Array(F.cap); _detailSlots = []; }
     const M8 = _detailMask, detailed = [], slots = [];
-    for (let i = 0; i < n; i++) {
+    for (const i of _detailPick(P, UNIT_DETAIL_BUDGET)) {
         const u = viewUnits[i], s = u ? u._s : -1;
-        if (!(P[i] > T * (s >= 0 && M8[s] ? .85 : 1.15))) continue;
         detailed.push(u);
         if (s >= 0) slots.push(s);
     }
@@ -3556,10 +3658,15 @@ function _unitDetailSplit(viewUnits, flat2d, bounds) {
         for (const s of slots) M8[s] = 1;
         _detailSlots = slots; _detailMaskVersion++;
     }
-    return { units: detailed, columns: { units: F, structures: null, unitSources: _isLiveUnitList(null, true), alpha: a, detailPx: 0,
+    // Preserve the list identity when the selection is unchanged, so the
+    // persistent model layer can be reused between simulation ticks.
+    if (_detailUnits.length !== detailed.length || detailed.some((u, i) => u !== _detailUnits[i])) _detailUnits = detailed;
+    const value = { units: _detailUnits, columns: { units: F, structures: null, unitSources: _isLiveUnitList(null, true), alpha: a, detailPx: 0,
         detailMask: M8, detailMaskVersion: _detailMaskVersion,
         visibility: visibilityGridForColumns(), visibilityVersion, fullVisibility, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
         colors: Array.from({ length: 9 }, (_, i) => get3DRenderOwnerColor(i - 1)) } };
+    _unitDetailCache = { key: cacheKey, frame: F, source: viewUnits, value };
+    return value;
 }
 // (The light grid: what is seen now; a remembered view's fog grid would show
 // units where only the memory is.)

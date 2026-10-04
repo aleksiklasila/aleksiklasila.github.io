@@ -5706,7 +5706,7 @@
                         // the same rule; a hair of overlap, never a gap.)
                         if (uDetail > 0. && uStructure == 0 && pixels > uDetail * 1.0001) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
                         // (Picked for detail by the split: renderer.js _unitDetailSplit.)
-                        if (uDetailMask > .5 && uStructure == 0 && aDetail > .5) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
+                        if (uDetailMask > .5 && (aDetail > .5 || (uStructure != 0 && aKind == 6.))) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
                         // (Structures and floor items over the split's threshold
                         // are the detailed pass's.)
                         if (uDetailS > 0. && uStructure != 0 && (aKind == 6. || pixels > uDetailS * 1.0001)) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
@@ -5802,14 +5802,18 @@
                     S.frame=F;
                     S.maskVersion=-1;
                 }
-                // The detail mask per slot (units): uploaded when it changes.
-                if (!structure && C.detailMask) {
+                // Exact membership for both units and structures. Equal-sized
+                // models cannot be represented by a strict pixel threshold.
+                const mask = structure ? C.detailMaskS : C.detailMask;
+                const maskVersion = structure ? C.detailMaskVersionS : C.detailMaskVersion;
+                gl.uniform1f(U.DetailMask, mask ? 1 : 0);
+                if (mask) {
                     if (!S.maskBuf) S.maskBuf=gl.createBuffer();
-                    if (S.maskVersion!==C.detailMaskVersion || S.maskRef!==C.detailMask) {
+                    if (S.maskVersion!==maskVersion || S.maskRef!==mask) {
                         gl.bindBuffer(gl.ARRAY_BUFFER,S.maskBuf);
-                        gl.bufferData(gl.ARRAY_BUFFER,C.detailMask.subarray(0,F.n),gl.DYNAMIC_DRAW);
+                        gl.bufferData(gl.ARRAY_BUFFER,mask.subarray(0,F.n),gl.DYNAMIC_DRAW);
                         gl.enableVertexAttribArray(10);gl.vertexAttribPointer(10,1,gl.UNSIGNED_BYTE,false,0,0);
-                        S.maskVersion=C.detailMaskVersion;S.maskRef=C.detailMask;
+                        S.maskVersion=maskVersion;S.maskRef=mask;
                     }
                 } else { gl.disableVertexAttribArray(10); gl.vertexAttrib1f(10,0); S.maskVersion=-1; }
                 gl.uniform1i(U.Structure,structure?1:0);
