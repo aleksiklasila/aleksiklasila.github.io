@@ -528,7 +528,6 @@ function _simClientReplayEvents(events) {
 function _simClientPageTickWork(tick) {
     for (let i = particles.length - 1; i >= 0; i--) if (!particles[i].update()) particles.splice(i, 1);
     _simClientLaserSound();
-    updateAudioReactiveState();
     if (selectedUnits.length && selectedUnits.some(u => u.dead)) selectedUnits = selectedUnits.filter(u => !u.dead);
     // What this player sees: the worker's grid for this tick when it sent
     // one (rows are views of it), else computed here. Other players' grids

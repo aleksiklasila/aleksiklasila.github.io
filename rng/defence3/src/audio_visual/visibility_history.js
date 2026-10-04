@@ -76,7 +76,7 @@ function updateVisualVisibility(playerId, raw) {
     return h.light;
 }
 
-const HISTORY_RENDER_FIELDS = ('id owner type unitType gx gy x y vx vy energy maxEnergy gold astar amount value '
+const HISTORY_RENDER_FIELDS = ('id owner type unitType gx gy x y vx vy energy maxEnergy gold maxGold astar maxAstar amount value '
     + 'r color vis dead teleportHideTicks isSnake isFlying isWorker unitLevel baseLevel level effectiveLevel '
     + 'potentialEffectiveLevel stackCount stacks manualStacks stackingWorkDone stackingWorkRequired '
     + 'workerType workerState workerTransferCooldown carryingValue researcherHasMaterial attackFlash attackStyle '
@@ -136,8 +136,11 @@ function updateLocalVisibilityHistory(h) {
     for (const name of HISTORY_LISTS) {
         const memory = h.memories[name], shown = h.view[name];
         shown.length = 0;
+        // Resource frame views share the structure schema and report energy=0;
+        // that is not a health/death flag. Keep depleted mines visible too.
+        const hasHealth = name !== 'goldMines' && name !== 'astarMines' && name !== 'droppedItems';
         for (const e of live[name]) {
-            if (!e || e.dead || e.energy <= 0) continue;
+            if (!e || e.dead || (hasHealth && e.energy <= 0)) continue;
             const gx = Number.isFinite(e.x) ? Math.floor(e.x / TILE) : e.gx;
             const gy = Number.isFinite(e.y) ? Math.floor(e.y / TILE) : e.gy;
             if (!visible(gx, gy)) continue;

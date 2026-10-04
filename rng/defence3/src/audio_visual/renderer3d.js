@@ -1076,6 +1076,38 @@
             uvs.push(0,0,1,0,1,1,0,1);
             indices.push(base,base+1,base+2,base,base+2,base+3);
         }
+        // Cylinders are merged into the building mesh, preserving batching.
+        function cylinder(x, y, z, diameter, height, surface = 0) {
+            let data = createCylinderData(simplified ? 8 : 12), base = positions.length / 3;
+            for (let i = 0; i < data.positions.length / 3; i++) {
+                positions.push(x + data.positions[i * 3] * diameter, y + data.positions[i * 3 + 1] * height, z + data.positions[i * 3 + 2] * diameter);
+                uvs.push(data.uvs[i * 2], data.uvs[i * 2 + 1]);
+                details.push(surface, 0, 0, 0);
+            }
+            for (let index of data.indices) indices.push(base + index);
+        }
+        function workshopSign() {
+            // Flat timber arch: its faces sit almost flush with the sign so
+            // the frame cannot hide the emblem from an oblique camera angle.
+            // 1.39 * .62 ~= .82 * 1.05, the portal's world-space height.
+            for (let side of [-1, 1]) {
+                part(side * .43, .11, -.37, .08, 1.20, .04, 5);
+                part(side * .43, .11, -.37, .12, .10, .05, 5);
+                part(side * .24, 1.22, -.37, .035, .09, .035, 8);
+            }
+            part(0, 1.31, -.37, .96, .08, .04, 5);
+            part(0, .565, -.37, .74, .675, .035, 5);
+            // Opposite winding and UV orientation keep the R readable on both sides.
+            for (let face of [-1, 1]) {
+                let base = positions.length / 3;
+                for (let [x, y] of [[-.5, 0], [.5, 0], [.5, 1], [-.5, 1]]) {
+                    positions.push(face * x * .71, .585 + y * .635, -.37 + face * .020);
+                    details.push(15, 0, 0, 0);
+                }
+                uvs.push(0, 0, 1, 0, 1, 1, 0, 1);
+                indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+            }
+        }
         // Rear display: the canonical 2D render on a rigid backing plate.
         function backPanel(y, z, size) {
             part(0, y - .02, z, size + .04, size + .04, .04, 2);
@@ -1409,39 +1441,23 @@
             part(0, .08, -.205, .52, .012, .05, 7); // light spilling out, behind the display
             part(0, .08, -.475, .52, .012, .05, 7); // and out of the back
         } else if (kind === 'farm') {
-            if (weapon === 'astar') {
-                // A* farm: a mine entrance. A stepped rock mound with a
-                // timbered tunnel, rails and a cart of ore; display on top.
-                part(0, 0, 0, .98, .20, .98, 10);
-                part(0, .20, -.06, .86, .22, .80, 10);
-                part(-.30, .20, .30, .20, .10, .20, 10);
-                part(0, .06, .40, .32, .26, .02, 12); // tunnel mouth
-                for (let side of [-1, 1]) part(side * .19, .04, .415, .06, .32, .05, 5);
-                part(0, .34, .415, .46, .06, .07, 5);
-                for (let side of [-1, 1]) part(side * .07, .0, .45, .025, .02, .12, 1); // rails
-                part(.30, .04, .36, .18, .12, .15, 1); // cart
-                for (let side of [-1, 1]) part(.30 + side * .07, .0, .36, .04, .05, .17, 1);
-                part(.30, .16, .36, .15, .06, .12, 6); // ore heap
-                part(.27, .21, .34, .05, .05, .05, 7);
-                part(.33, .20, .39, .04, .04, .04, 7);
-                panel(0, .425, -.06, .80, .80, true, 0, 0, true);
-            } else {
-                // Energy farm: a blocky tree on a tilled plot, growing glowing
-                // energy fruit around its flat crown (the display on top).
-                part(0, 0, 0, .98, .07, .98, 5);
-                for (let z of [-.30, 0, .30]) part(0, .07, z, .90, .02, .06, 1); // furrows
-                part(0, .07, 0, .28, .05, .28, 5);
-                part(0, .07, 0, .16, .36, .16, 5); // trunk
-                part(0, .40, 0, .86, .30, .86, 11); // crown
-                part(0, .43, 0, .92, .20, .70, 11);
-                part(0, .43, 0, .70, .20, .92, 11);
-                for (let side of [-1, 1]) for (let t of [-.24, .22]) {
-                    part(side * .46, .44, t, .08, .10, .08, 7); // fruit
-                    part(t, .47, side * .46, .08, .10, .08, 7);
-                }
-                for (let [x, z] of [[.24, .26], [-.20, .30], [.30, -.18], [-.26, -.24]]) part(x, .32, z, .07, .08, .07, 7);
-                panel(0, .705, 0, .82, .82, true, 0, 0, true);
-            }
+            // Both farms share the timbered mine silhouette, with yellow rock
+            // for energy and gray rock for A*. Brown borders frame the top icon.
+            let rockSurface = weapon === 'astar' ? 10 : 8;
+            part(0, 0, 0, .98, .06, .98, 5);
+            part(0, .06, 0, .94, .14, .94, rockSurface);
+            part(0, .20, -.06, .86, .22, .80, rockSurface);
+            part(-.30, .20, .30, .20, .10, .20, rockSurface);
+            part(0, .06, .40, .32, .26, .02, 12);
+            for (let side of [-1, 1]) part(side * .19, .04, .415, .06, .32, .05, 5);
+            part(0, .34, .415, .46, .06, .07, 5);
+            for (let side of [-1, 1]) part(side * .07, .0, .45, .025, .02, .12, 1);
+            part(.30, .04, .36, .18, .12, .15, 1);
+            for (let side of [-1, 1]) part(.30 + side * .07, .0, .36, .04, .05, .17, 1);
+            part(.30, .16, .36, .15, .06, .12, weapon === 'astar' ? 6 : 8);
+            part(.27, .21, .34, .05, .05, .05, 7);
+            part(.33, .20, .39, .04, .04, .04, 7);
+            panel(0, .425, -.06, .80, .80, true, 0, 0, true);
         } else if (kind === 'barrack' || kind === 'workshop') {
             // Outdoor workshops: a flat deck carrying the 2D display, the
             // unit in production is assembled on it (a separate object), and
@@ -1455,6 +1471,19 @@
             part(0, .06, .47, .94, .03, .02, 2);
             part(0, .06, -.47, .94, .03, .02, 0);
             panel(0, .112, .09, .78, .78, true, 0, 0, true);
+            if (kind === 'workshop') workshopSign();
+            else if (style !== 'arcane') {
+                // Two small utility sheds at the back corners. Dark flues
+                // match the deck; only their upper collars carry the unit color.
+                for (let side of [-1, 1]) {
+                    part(side * .39, .11, -.37, .18, .35, .22, 14);
+                    part(side * .39, .46, -.37, .20, .07, .24, 14, 0, 0, .8);
+                    cylinder(side * .39, .51, -.37, .10, .68, 14);
+                    cylinder(side * .39, 1.19, -.37, .15, .20, 0);
+                    cylinder(side * .39, 1.391, -.37, .095, .004, 12);
+                }
+            }
+            let backDetailsStart = positions.length;
             if (style === 'rural') {
                 // Village smithy: a thatched lean-to over a bench and a rack.
                 for (let side of [-1, 1]) part(side * .43, .11, -.42, .06, .56, .06, 5);
@@ -1503,11 +1532,12 @@
                 for (let side of [-1, 1]) {
                     part(side * .40, .11, .09, .025, .012, .80, 7);
                     part(side * .38, .11, -.40, .18, .10, .18, 10);
-                    part(side * .38, .21, -.40, .12, .58, .12, 7, 0, 0, .25);
+                    part(side * .38, .21, -.40, .18, 1.18, .18, 7, 0, 0, .25);
                 }
                 part(0, .11, -.42, .30, .16, .14, 10);
-                part(0, .30, -.42, .14, .14, .14, 7);
-                part(0, .64, -.42, .56, .06, .08, 10);
+                part(0, .27, -.42, .16, .65, .14, 10);
+                part(0, .96, -.42, .26, .28, .20, 7, 0, 0, .5);
+                part(0, .88, -.42, .66, .08, .12, 10);
             } else if (style === 'aerie') {
                 // Aerie: a perch, a straw nest and hay for the mounts.
                 part(.34, .11, -.40, .07, .62, .07, 5);
@@ -1518,15 +1548,12 @@
                 part(.12, .44, -.445, .12, .16, .02, 0);
                 for (let side of [-1, 1]) part(side * .43, .11, .43, .10, .08, .10, 13);
             } else if (style === 'builder_spawner') {
-                // Builder yard: scaffolding, a crane with a hook, bricks.
-                for (let side of [-1, 1]) part(side * .40, .11, -.40, .05, .70, .05, 5);
-                part(0, .44, -.40, .86, .04, .06, 5);
-                part(0, .78, -.40, .86, .04, .06, 5);
-                part(.40, .81, -.40, .07, .16, .07, 1);
-                part(.08, .95, -.40, .70, .045, .06, 1); // jib
-                part(-.20, .64, -.40, .012, .31, .012, 1);
-                part(-.20, .59, -.40, .07, .05, .04, 8); // hook
-                part(-.28, .11, -.36, .24, .10, .14, 9); // bricks
+                // A short crane and brick stack beneath the common timber sign.
+                part(.30, .11, -.39, .07, .34, .07, 5);
+                part(.10, .43, -.39, .48, .06, .09, 1);
+                part(-.10, .30, -.39, .025, .13, .025, 1);
+                part(-.10, .26, -.39, .07, .05, .04, 8);
+                part(-.28, .11, -.36, .24, .10, .14, 9);
                 part(-.28, .21, -.36, .16, .08, .10, 9);
             } else if (style === 'salvager') {
                 // Scrap yard: a heap of scrap and a grinder with a turning blade.
@@ -1580,24 +1607,27 @@
                 part(.28, .46, -.36, .09, .09, .28, 1);
                 part(.28, .47, -.215, .07, .07, .02, 3);
             }
+            if (kind === 'barrack' && style !== 'arcane') {
+                // Reserve the rear corners for the sheds. Keep the smithy,
+                // battlements, palisade or perch entirely in the center bay.
+                for (let i = backDetailsStart; i < positions.length; i += 3) {
+                    if (positions[i + 2] < 0) positions[i] *= .52;
+                }
+            }
         } else if (kind === 'mine') {
             // Resource tiles: the slab and 2D display as before, with ore at
             // the corners: glowing energy crystals, or A* rock with glints.
-            part(0,.19,0,.91,.30,.91,0);
-            panel(0,.50,0,.98,.98,true);
+            part(0,0,0,.91,.30,.91,0);
+            panel(0,.31,0,.98,.98,true);
             let energy = weapon !== 'astar';
             for (let x of [-.40, .40]) for (let z of [-.40, .40]) {
                 if (energy) {
-                    part(x, .40, z, .10, .22, .10, 7, 0, 0, .25);
-                    part(x - Math.sign(x) * .06, .40, z, .06, .14, .06, 7, 0, 0, .3);
+                    part(x, .21, z, .10, .22, .10, 7, 0, 0, .25);
+                    part(x - Math.sign(x) * .06, .21, z, .06, .14, .06, 7, 0, 0, .3);
                 } else {
-                    part(x, .40, z, .15, .12, .15, 10);
-                    part(x, .52, z, .05, .05, .05, 6);
+                    part(x, .21, z, .15, .12, .15, 10);
+                    part(x, .33, z, .05, .05, .05, 6);
                 }
-            }
-            for (let side of [-1, 1]) {
-                if (energy) part(side * .46, .10, side * .12, .06, .26, .10, 7, 0, 0, .3);
-                else part(side * .46, .10, side * .12, .08, .18, .14, 10);
             }
         } else {
             part(0, 0, 0, 1, .12, 1, 1);
@@ -1631,6 +1661,11 @@
                     part(0,.195,.375,.25,.30,.035,1); // front door
                     for (let side of [-1,1]) part(side*.25,.33,.37,.12,.10,.02,8); // lit windows
                     panel(0,.63,0,.86,.78,true,0,0,true);
+                    // Front/lower-right corner, fully inside the tapered walls.
+                    // Start at roof height so no pipe protrudes below the eaves.
+                    cylinder(.25, .62, .22, .14, .37, 10);
+                    cylinder(.25, .97, .22, .20, .08, 10);
+                    cylinder(.25, 1.051, .22, .12, .004, 12);
                 } else {
                     part(0, .20, 0, .69, .47, .69, 0, 0, 0, .8);
                     panel(0, .85, 0, .96, .96, true, 0, 0, true);
@@ -1825,11 +1860,11 @@
     // building model; y is the top of the furniture it stands on, or the
     // deck at .112), turned a little toward the yard's center.
     const WORKSHOP_MINIATURES = {
-        rural: { x: -.01, y: .29, z: -.42, yaw: -.3 }, // on the smithy bench, by the anvil
+        rural: { x: -.0052, y: .29, z: -.42, yaw: -.3 }, // on the smithy bench, by the anvil
         castle: { x: 0, y: .53, z: -.43, yaw: 0 }, // on the battlements above the gate
-        boss: { x: -.17, y: .112, z: -.30, yaw: .3 }, // before the palisade
+        boss: { x: -.0884, y: .112, z: -.30, yaw: .3 }, // before the palisade
         arcane: { x: .22, y: .112, z: -.38, yaw: -.3 }, // beside the altar
-        aerie: { x: .34, y: .70, z: -.40, yaw: -.3 }, // on the perch
+        aerie: { x: .1768, y: .70, z: -.40, yaw: -.3 }, // on the perch
         builder_spawner: { x: -.28, y: .29, z: -.36, yaw: .3 }, // on the brick stack
         salvager: { x: 0, y: .112, z: -.38, yaw: 0 }, // between the scrap and the grinder
         spawner: { x: -.26, y: .365, z: -.40, yaw: .3 }, // on the log pile
@@ -2085,7 +2120,92 @@
     const SCENE_DRAW_BUFFERS_WITH_DEPTH = [0x8CE0, 0x8CE1];
     const SHADOW_DRAW_BUFFERS = [0];
 
+    // The walkable deck, not the building's rear decorations. Heights are in
+    // model space and match the horizontal panels in createFigureData.
+    function walkSurfaceModelHeight(key) {
+        if (key.startsWith('barrack_') || key.startsWith('spawner_')) return .112;
+        if (key.startsWith('tower_cloud')) return .085;
+        if (key === 'item_farm' || key === 'item_astar_farm') return .425;
+        if (key.startsWith('gold_mine_') || key.startsWith('astar_mine_')) return .31;
+        return 0;
+    }
+
+    // Smooth ramps at the tile edges, with a broad flat center. The GPU uses
+    // this same curve at the interpolated unit position, even on reused frames.
+    function walkSurfaceRamp(x, z) {
+        let ramp = v => {
+            let t = Math.max(0, Math.min(1, (.5 - Math.abs(v - Math.floor(v) - .5)) / .18));
+            return t * t * (3 - 2 * t);
+        };
+        return ramp(x) * ramp(z);
+    }
+
     class Defence3Renderer3D {
+        updateWalkSurfaces(snapshot) {
+            let next = new Map();
+            const width = Math.max(1, snapshot.worldWidth | 0);
+            const add = objects => {
+                if (!objects) return;
+                for (let o of objects) {
+                    // Remembered structures are deliberately unselectable, but
+                    // still have a floor. Placement previews have neither flag.
+                    if (!o.pickSource && !o.historyGhost) continue;
+                    let deck = walkSurfaceModelHeight(o.modelKey || '');
+                    if (!deck) continue;
+                    let x = Math.floor(o.x), z = Math.floor(o.z);
+                    if (x < 0 || z < 0 || x >= width || z >= snapshot.worldHeight) continue;
+                    let key = z * width + x;
+                    let height = Math.max(0, (o.y || 0) + deck * o.scaleY);
+                    next.set(key, Math.max(next.get(key) || 0, height));
+                }
+            };
+            if (!snapshot.flat2d) {
+                add(snapshot.staticLayer && snapshot.staticLayer.objects);
+                add(snapshot.objects);
+            }
+            let previous = this.walkSurfaces;
+            if (this.walkSurfaceWorldWidth === width && previous && previous.size === next.size
+                && [...next].every(([key, height]) => previous.get(key) === height)) return;
+            this.walkSurfaces = next;
+            this.walkSurfaceWorldWidth = width;
+            let minX = width, minZ = snapshot.worldHeight, maxX = 0, maxZ = 0;
+            for (let key of next.keys()) {
+                let x = key % width, z = Math.floor(key / width);
+                minX = Math.min(minX, x); minZ = Math.min(minZ, z);
+                maxX = Math.max(maxX, x); maxZ = Math.max(maxZ, z);
+            }
+            if (!next.size) minX = minZ = maxX = maxZ = 0;
+            let w = maxX - minX + 1, h = maxZ - minZ + 1;
+            let data = new Float32Array(w * h);
+            for (let [key, height] of next) data[(Math.floor(key / width) - minZ) * w + key % width - minX] = height;
+            this.walkSurfaceBounds = [minX, minZ, w, h];
+            let gl = this.gl;
+            if (!this.walkSurfaceTexture) this.walkSurfaceTexture = gl.createTexture();
+            // Sprite/canvas uploads flip image rows. This is world-grid data:
+            // row zero must stay at minZ, independent of the previous draw.
+            gl.activeTexture(gl.TEXTURE3);
+            gl.bindTexture(gl.TEXTURE_2D, this.walkSurfaceTexture);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+            gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+            gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, w, h, 0, gl.RED, gl.FLOAT, data);
+        }
+
+        walkSurfaceHeightAt(x, z) {
+            if (!this.walkSurfaces || x < 0 || z < 0 || x >= this.walkSurfaceWorldWidth) return 0;
+            let height = this.walkSurfaces.get(Math.floor(z) * this.walkSurfaceWorldWidth + Math.floor(x)) || 0;
+            return height * walkSurfaceRamp(x, z);
+        }
+
+        walkSurfaceObjectY(o) {
+            if (!(o.modelKey || '').startsWith('unit_') || o.isFlying || (o.pickSource && o.pickSource.isFlying)) return o.y;
+            return Math.max(o.y || 0, this.walkSurfaceHeightAt(o.x, o.z));
+        }
+
         constructor(options) {
             this.mount = options && options.mount;
             this.enabled = false;
@@ -2610,6 +2730,9 @@
                 // the flyer bob's time.
                 uniform float uLayerAlpha;
                 uniform float uFlyTime;
+                uniform sampler2D uWalkSurface;
+                uniform vec4 uWalkSurfaceBounds;
+                uniform float uFollowWalkSurface;
                 out vec3 vNormal;
                 out vec3 vColor;
                 out vec3 vTrim;
@@ -2733,6 +2856,15 @@
                     vec3 scale2 = vec3(dot(m0.xyz,m0.xyz), dot(m1.xyz,m1.xyz), dot(m2.xyz,m2.xyz));
                     vNormal = normalize(mat3(model) * (n / max(scale2, vec3(.00001))));
                     vec4 world = model * vec4(p, 1);
+                    if (uFollowWalkSurface > .5) {
+                        vec2 center = m3.xz + layerOffset.xz;
+                        vec2 tile = floor(center) - uWalkSurfaceBounds.xy;
+                        if (all(greaterThanEqual(tile, vec2(0))) && all(lessThan(tile, uWalkSurfaceBounds.zw))) {
+                            float deck = texelFetch(uWalkSurface, ivec2(tile), 0).r;
+                            vec2 ramp = smoothstep(vec2(0), vec2(.18), .5 - abs(fract(center) - .5));
+                            world.y += max(0.0, deck * ramp.x * ramp.y - (m3.y + layerOffset.y));
+                        }
+                    }
                     // A squashed structure (unit on its tile) packs the roof and
                     // its 2D panel into a sliver; lift the panel so it is not lost
                     // to depth fighting with the roof below.
@@ -2823,6 +2955,9 @@
                 time: gl.getUniformLocation(this.figureProgram, 'uTime'),
                 layerAlpha: gl.getUniformLocation(this.figureProgram, 'uLayerAlpha'),
                 flyTime: gl.getUniformLocation(this.figureProgram, 'uFlyTime'),
+                walkSurface: gl.getUniformLocation(this.figureProgram, 'uWalkSurface'),
+                walkSurfaceBounds: gl.getUniformLocation(this.figureProgram, 'uWalkSurfaceBounds'),
+                followWalkSurface: gl.getUniformLocation(this.figureProgram, 'uFollowWalkSurface'),
                 isFlying: gl.getUniformLocation(this.figureProgram, 'uIsFlying'),
                 isUnit: gl.getUniformLocation(this.figureProgram, 'uIsUnit'),
                 viewProjection: gl.getUniformLocation(this.figureProgram, 'uViewProjection'),
@@ -3308,7 +3443,7 @@
                 const c = Math.cos(o.rotationY), s = Math.sin(o.rotationY);
                 const local = p => {
                     const x = p[0] - o.x, z = p[2] - o.z;
-                    return [(c * x - s * z) / o.scaleX, (p[1] - o.y) / o.scaleY, (s * x + c * z) / o.scaleZ];
+                    return [(c * x - s * z) / o.scaleX, (p[1] - this.walkSurfaceObjectY(o)) / o.scaleY, (s * x + c * z) / o.scaleZ];
                 };
                 const a = local(near), b = local(far), d = b.map((v, i) => v - a[i]);
                 // Conservative animated bounds first; triangles only for objects under the pointer.
@@ -3420,7 +3555,7 @@
                     const lx = (k & 1 ? b[3] + margin : b[0] - margin) * o.scaleX;
                     const ly = k & 2 ? b[4] + margin : b[1] - margin;
                     const lz = (k & 4 ? b[5] + margin : b[2] - margin) * o.scaleZ;
-                    const wx = c * lx + s * lz + o.x, wy = ly * o.scaleY + o.y, wz = -s * lx + c * lz + o.z;
+                    const wx = c * lx + s * lz + o.x, wy = ly * o.scaleY + this.walkSurfaceObjectY(o), wz = -s * lx + c * lz + o.z;
                     const clipW = m[3] * wx + m[7] * wy + m[11] * wz + m[15];
                     if (!(clipW > 0)) return 1;
                     const sx = ((m[0] * wx + m[4] * wy + m[8] * wz + m[12]) / clipW * 0.5 + 0.5) * width;
@@ -3470,7 +3605,7 @@
                         z = s * px + c * z;
                     }
                     const lx = x * o.scaleX, lz = z * o.scaleZ;
-                    const wx = c * lx + s * lz + o.x, wy = y * o.scaleY + o.y, wz = -s * lx + c * lz + o.z;
+                    const wx = c * lx + s * lz + o.x, wy = y * o.scaleY + this.walkSurfaceObjectY(o), wz = -s * lx + c * lz + o.z;
                     const clipW = m[3] * wx + m[7] * wy + m[11] * wz + m[15];
                     if (!(clipW > 0)) continue;
                     inFront[i] = 1;
@@ -4916,6 +5051,12 @@
                 gl.uniform1f(uniforms.spriteLodBias, String(objects[0].topTextureKey).startsWith('2d:') ? -.5 : 0);
                 let key = objects[0].modelKey || '';
                 gl.uniform1f(uniforms.isUnit, key.startsWith('unit_') ? 1 : 0);
+                gl.uniform1f(uniforms.followWalkSurface, this.walkSurfaceTexture && key.startsWith('unit_')
+                    && !objects[0].isFlying && !(mesh.rig >= 4 && mesh.rig <= 6) ? 1 : 0);
+                gl.activeTexture(gl.TEXTURE3);
+                gl.bindTexture(gl.TEXTURE_2D, this.walkSurfaceTexture || null);
+                gl.uniform1i(uniforms.walkSurface, 3);
+                gl.uniform4fv(uniforms.walkSurfaceBounds, this.walkSurfaceBounds || [0, 0, 1, 1]);
             }
             gl.bindVertexArray(mesh.vao);
             this.setInstanceBase(mesh, draw.first, draw.buffer || this.cubeInstanceBuffer);
@@ -5393,6 +5534,7 @@
 
         render(snapshot) {
             if (!this.enabled || !this.supported || !snapshot) return;
+            this.updateWalkSurfaces(snapshot);
             this.resizeForSnapshot(snapshot);
             this.buildViewProjection(snapshot);
             this.textureFrame = (this.textureFrame || 0) + 1;

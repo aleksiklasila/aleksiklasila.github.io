@@ -842,7 +842,6 @@ function _gameTickBody() {
     }
     if (anyLaserActive) startLaserSound(laserSoundX, laserSoundY);
     else stopLaserSound();
-    updateAudioReactiveState();
 
     if (_adjacencyNeedsRecalc) {
         _runAdjacencyRecalculation();

@@ -11,288 +11,14 @@ let _kingHurtTimer = 0;
 let _damageAlertTimer = 0;
 let _kingDamageAlertTimer = 0;
 let _bgMusicNodes = null;
-let _bgMusicAnalyser = null;
-let _bgMusicAnalyserData = null;
-let _bgMusicReactiveSmoothedLevel = 0;
-let _bgMusicReactiveLevelHistory = [];
-
-let audioSpatialGrid = [];
-let audioSpatialGridBackground = [];
-let audioSpatialGridEffects = [];
-let audioReactiveGlobalOffsetX = 0;
-let audioReactiveGlobalOffsetY = 0;
-let audioReactiveBackgroundLevel = 0;
-let audioReactiveEffectsLevel = 0;
-let audioReactiveTextureVersion = 0;
-
-let AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG = 0;
-let AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX = 0;
-let AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG = 0.64;
-let AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX = 0.11;
-let AUDIO_REACTIVE_RENDER_2D_POSITION_FROM_BG = 0;
-let AUDIO_REACTIVE_RENDER_2D_POSITION_FROM_SFX = 0;
-let AUDIO_REACTIVE_RENDER_2D_SCALE_FROM_BG = 0;
-let AUDIO_REACTIVE_RENDER_2D_SCALE_FROM_SFX = 0;
-
+// Audio playback is independent of model movement and height.
 const AUDIO_MASTER_GAIN_MIN = 0;
 const AUDIO_MASTER_GAIN_MAX = 0.85;
-
 const AUDIO_AMBIENT_WORK_MIN_TICKS = 10;
-const AUDIO_REACTIVE_GRID_UPDATE_INTERVAL = 3;
-const AUDIO_REACTIVE_BG_PULSE_SCALE = 0.42;
-const AUDIO_REACTIVE_BG_SWELL_SCALE = 0.23;
-const AUDIO_REACTIVE_BG_RADIAL_WAVELENGTH_TILES = 5.5;
-const AUDIO_REACTIVE_BG_RADIAL_SCROLL_SPEED = 2.1;
-const AUDIO_REACTIVE_BG_EDGE_BLEND = 0.35;
-const AUDIO_REACTIVE_BG_ANALYSER_GAIN = 1.85;
-const AUDIO_REACTIVE_BG_ANALYSER_HISTORY = 8;
-const AUDIO_REACTIVE_BG_ANALYSER_SMOOTHING = 0.18;
-const AUDIO_REACTIVE_BG_TILE_SMOOTH_ACCEL = 0.34;
-const AUDIO_REACTIVE_BG_TILE_SMOOTH_DAMPING = 0.74;
-const AUDIO_REACTIVE_FX_EMITTER_MAX = 48;
-const AUDIO_REACTIVE_FX_DEFAULT_RADIUS_TILES = 4.2;
-const AUDIO_REACTIVE_FX_DEFAULT_LIFE_TICKS = 12;
 let CONTROL_GROUP_ALERT_TICKS = Math.floor(TICK_RATE * 2.2);
 let MAP_ALERT_DURATION = Math.floor(TICK_RATE * 1.8);
 let MAP_KING_ALERT_DURATION = Math.floor(TICK_RATE * 2.6);
-let _audioReactiveEmitters = [];
-let _audioSpatialGridBackgroundVelocity = [];
-// Static per-tile geometry of the radial background wave.
-let _audioBgTileDist = null, _audioBgTileWaveAmount = null, _audioBgTileSwell = null;
-// Whether the background spring still has nonzero tiles, and the tile rects
-// the effect emitters stamped last update (only those need clearing).
-let _audioBgSpringActive = false;
-let _audioFxStampedRects = [];
-let _audioReactiveLastGridTick = -1;
 let _audioTypeBurstState = Object.create(null);
-
-function _makeAudioReactiveGridRows() {
-    let rows = new Array(Math.max(0, GRID_H | 0));
-    for (let y = 0; y < rows.length; y++) rows[y] = new Float32Array(Math.max(0, GRID_W | 0));
-    return rows;
-}
-
-function _ensureAudioReactiveGrid() {
-    if (!Number.isFinite(GRID_W) || !Number.isFinite(GRID_H) || GRID_W <= 0 || GRID_H <= 0) return;
-    if (audioSpatialGrid.length === GRID_H && audioSpatialGrid[0] && audioSpatialGrid[0].length === GRID_W) return;
-    audioSpatialGrid = _makeAudioReactiveGridRows();
-    audioSpatialGridBackground = _makeAudioReactiveGridRows();
-    audioSpatialGridEffects = _makeAudioReactiveGridRows();
-    _audioSpatialGridBackgroundVelocity = _makeAudioReactiveGridRows();
-    let n = GRID_W * GRID_H;
-    _audioBgTileDist = new Float32Array(n);
-    _audioBgTileWaveAmount = new Float32Array(n);
-    _audioBgTileSwell = new Float32Array(n);
-    let centerX = GRID_W * 0.5, centerY = GRID_H * 0.5;
-    let maxDist = Math.max(1, Math.hypot(Math.max(centerX, GRID_W - centerX), Math.max(centerY, GRID_H - centerY)));
-    for (let y = 0, i = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++, i++) {
-        let dist = Math.hypot(x + 0.5 - centerX, y + 0.5 - centerY);
-        let centerWeight = Math.max(0, 1 - Math.max(0, Math.min(1, dist / maxDist)));
-        _audioBgTileDist[i] = dist;
-        _audioBgTileWaveAmount[i] = AUDIO_REACTIVE_BG_PULSE_SCALE * (AUDIO_REACTIVE_BG_EDGE_BLEND + centerWeight * (1 - AUDIO_REACTIVE_BG_EDGE_BLEND));
-        _audioBgTileSwell[i] = 1 + centerWeight * centerWeight * AUDIO_REACTIVE_BG_SWELL_SCALE;
-    }
-    _audioBgSpringActive = false;
-    _audioFxStampedRects = [];
-    _audioReactiveLastGridTick = -1;
-    audioReactiveTextureVersion = 0;
-}
-
-function _getAudioReactiveNowSeconds() {
-    if (audioCtx) return audioCtx.currentTime;
-    if (typeof performance !== 'undefined' && typeof performance.now === 'function') return performance.now() * 0.001;
-    return Date.now() * 0.001;
-}
-
-function _getBackgroundMusicReactiveLevel(nowSeconds) {
-    if (!audioEnabled || !_bgMusicNodes || !_bgMusicAnalyser || !_bgMusicAnalyserData) return 0;
-    let analyser = _bgMusicAnalyser;
-    let data = _bgMusicAnalyserData;
-    let rms = 0;
-    let peak = 0;
-    if (typeof analyser.getFloatTimeDomainData === 'function') {
-        analyser.getFloatTimeDomainData(data);
-        let sumSq = 0;
-        for (let i = 0; i < data.length; i++) {
-            let sample = Number(data[i]) || 0;
-            sumSq += sample * sample;
-            let absSample = Math.abs(sample);
-            if (absSample > peak) peak = absSample;
-        }
-        rms = Math.sqrt(sumSq / Math.max(1, data.length));
-    } else {
-        analyser.getByteTimeDomainData(data);
-        let sumSq = 0;
-        for (let i = 0; i < data.length; i++) {
-            let sample = ((Number(data[i]) || 128) - 128) / 128;
-            sumSq += sample * sample;
-            let absSample = Math.abs(sample);
-            if (absSample > peak) peak = absSample;
-        }
-        rms = Math.sqrt(sumSq / Math.max(1, data.length));
-    }
-
-    let rawLevel = Math.max(0, Math.min(1, (rms * 4.6 + peak * 1.15) * AUDIO_REACTIVE_BG_ANALYSER_GAIN));
-    _bgMusicReactiveLevelHistory.push(rawLevel);
-    if (_bgMusicReactiveLevelHistory.length > AUDIO_REACTIVE_BG_ANALYSER_HISTORY) {
-        _bgMusicReactiveLevelHistory.splice(0, _bgMusicReactiveLevelHistory.length - AUDIO_REACTIVE_BG_ANALYSER_HISTORY);
-    }
-    let averagedLevel = 0;
-    for (let i = 0; i < _bgMusicReactiveLevelHistory.length; i++) averagedLevel += _bgMusicReactiveLevelHistory[i];
-    averagedLevel /= Math.max(1, _bgMusicReactiveLevelHistory.length);
-    _bgMusicReactiveSmoothedLevel += (averagedLevel - _bgMusicReactiveSmoothedLevel) * AUDIO_REACTIVE_BG_ANALYSER_SMOOTHING;
-    return Math.max(0, Math.min(1, _bgMusicReactiveSmoothedLevel));
-}
-
-function _recordAudioReactiveEmitter(type, worldX, worldY, strength = 0.75) {
-    if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return;
-    let normalizedType = String(type || '').trim();
-    let radiusTiles = AUDIO_REACTIVE_FX_DEFAULT_RADIUS_TILES;
-    let lifeTicks = AUDIO_REACTIVE_FX_DEFAULT_LIFE_TICKS;
-    let baseStrength = Math.max(0.08, Math.min(1.4, Number(strength) || 0.75));
-
-    if (normalizedType === 'mine_explode' || normalizedType === 'building_destroyed') {
-        radiusTiles = 6.2;
-        lifeTicks = 18;
-        baseStrength = Math.max(baseStrength, 1.05);
-    } else if (normalizedType === 'laser_tick') {
-        radiusTiles = 5.4;
-        lifeTicks = 8;
-        baseStrength = Math.max(baseStrength, 0.62);
-    } else if (normalizedType === 'victory' || normalizedType === 'defeat') {
-        radiusTiles = 8.5;
-        lifeTicks = 28;
-        baseStrength = Math.max(baseStrength, 0.95);
-    } else if (normalizedType === 'melee_hit' || normalizedType === 'attack_swing' || normalizedType === 'attack_cast' ||
-        normalizedType === 'heal_tick' || normalizedType === 'builder_work' || normalizedType === 'collector_work' ||
-        normalizedType === 'astar_work' || normalizedType === 'salvager_work' || normalizedType === 'research_tick') {
-        radiusTiles = 2.8;
-        lifeTicks = 8;
-        baseStrength *= 0.78;
-    }
-
-    _audioReactiveEmitters.push({
-        x: worldX,
-        y: worldY,
-        radiusTiles,
-        life: lifeTicks,
-        maxLife: lifeTicks,
-        strength: baseStrength
-    });
-    if (_audioReactiveEmitters.length > AUDIO_REACTIVE_FX_EMITTER_MAX) {
-        _audioReactiveEmitters.splice(0, _audioReactiveEmitters.length - AUDIO_REACTIVE_FX_EMITTER_MAX);
-    }
-}
-
-function updateAudioReactiveState() {
-    _updateGeneratedAudioVoices();
-    _ensureAudioReactiveGrid();
-    if (!audioSpatialGrid.length) return;
-
-    let nowTick = Number.isFinite(gameTime) ? gameTime : 0;
-    let nowSeconds = _getAudioReactiveNowSeconds();
-
-    for (let i = _audioReactiveEmitters.length - 1; i >= 0; i--) {
-        let emitter = _audioReactiveEmitters[i];
-        emitter.life--;
-        if (emitter.life <= 0) _audioReactiveEmitters.splice(i, 1);
-    }
-
-    audioReactiveBackgroundLevel = _getBackgroundMusicReactiveLevel(nowSeconds);
-    let fxPeak = 0;
-    for (let i = 0; i < _audioReactiveEmitters.length; i++) {
-        let emitter = _audioReactiveEmitters[i];
-        let age = Math.max(0, Math.min(1, emitter.life / Math.max(1, emitter.maxLife)));
-        fxPeak = Math.max(fxPeak, emitter.strength * age);
-    }
-    audioReactiveEffectsLevel = Math.max(0, Math.min(1.2, fxPeak));
-
-    let offsetPulse = audioReactiveBackgroundLevel + audioReactiveEffectsLevel * 0.5;
-    audioReactiveGlobalOffsetX = Math.sin(nowSeconds * 1.45) * offsetPulse + Math.sin(nowSeconds * 3.6 + 0.9) * audioReactiveEffectsLevel * 0.22;
-    audioReactiveGlobalOffsetY = Math.cos(nowSeconds * 1.18 + 0.4) * offsetPulse + Math.cos(nowSeconds * 3.1 + 1.7) * audioReactiveEffectsLevel * 0.18;
-
-    // The grids change only every few ticks. Rendering reads them directly
-    // (the old per-tick interpolation always resolved to the latest target).
-    if (_audioReactiveLastGridTick >= 0 && nowTick >= _audioReactiveLastGridTick &&
-        nowTick - _audioReactiveLastGridTick < AUDIO_REACTIVE_GRID_UPDATE_INTERVAL) return;
-
-    let level = audioReactiveBackgroundLevel;
-    // Silent music with a settled spring leaves every background tile at 0:
-    // only the tiles last stamped by effect emitters need clearing.
-    let fullPass = level > 0 || _audioBgSpringActive;
-    if (fullPass) {
-        let active = false;
-        let phaseScale = 1 / Math.max(0.001, AUDIO_REACTIVE_BG_RADIAL_WAVELENGTH_TILES);
-        let phaseOffset = nowSeconds * AUDIO_REACTIVE_BG_RADIAL_SCROLL_SPEED;
-        for (let y = 0, i = 0; y < GRID_H; y++) {
-            let bgRow = audioSpatialGridBackground[y];
-            let bgVelocityRow = _audioSpatialGridBackgroundVelocity[y];
-            let fxRow = audioSpatialGridEffects[y];
-            let totalRow = audioSpatialGrid[y];
-            for (let x = 0; x < GRID_W; x++, i++) {
-                let rawBgValue = 0;
-                if (level > 0) {
-                    let wave = Math.sin((_audioBgTileDist[i] * phaseScale - phaseOffset) * Math.PI * 2);
-                    rawBgValue = Math.max(0, Math.min(1.5, level * (1 + wave * _audioBgTileWaveAmount[i]) * _audioBgTileSwell[i]));
-                }
-                let bgDelta = rawBgValue - bgRow[x];
-                let nextVelocity = (bgVelocityRow[x] + bgDelta * AUDIO_REACTIVE_BG_TILE_SMOOTH_ACCEL) * AUDIO_REACTIVE_BG_TILE_SMOOTH_DAMPING;
-                let nextValue = bgRow[x] + nextVelocity;
-                if (Math.abs(rawBgValue - nextValue) < 0.001 && Math.abs(nextVelocity) < 0.001) {
-                    nextValue = rawBgValue;
-                    nextVelocity = 0;
-                }
-                bgVelocityRow[x] = nextVelocity;
-                let bg = bgRow[x] = Math.max(0, Math.min(1.5, nextValue));
-                if (bg !== 0 || nextVelocity !== 0) active = true;
-                fxRow[x] = 0;
-                totalRow[x] = bg;
-            }
-        }
-        _audioBgSpringActive = active;
-    } else {
-        for (let r of _audioFxStampedRects) for (let y = r[1]; y <= r[3]; y++) {
-            audioSpatialGridEffects[y].fill(0, r[0], r[2] + 1);
-            audioSpatialGrid[y].fill(0, r[0], r[2] + 1);
-        }
-    }
-    _audioFxStampedRects.length = 0;
-
-    for (let i = 0; i < _audioReactiveEmitters.length; i++) {
-        let emitter = _audioReactiveEmitters[i];
-        let centerX = emitter.x / TILE;
-        let centerY = emitter.y / TILE;
-        let radiusTiles = Math.max(0.75, emitter.radiusTiles || AUDIO_REACTIVE_FX_DEFAULT_RADIUS_TILES);
-        let radiusSq = radiusTiles * radiusTiles;
-        let minX = Math.max(0, Math.floor(centerX - radiusTiles));
-        let maxX = Math.min(GRID_W - 1, Math.ceil(centerX + radiusTiles));
-        let minY = Math.max(0, Math.floor(centerY - radiusTiles));
-        let maxY = Math.min(GRID_H - 1, Math.ceil(centerY + radiusTiles));
-        if (minX > maxX || minY > maxY) continue;
-        _audioFxStampedRects.push([minX, minY, maxX, maxY]);
-        let age = Math.max(0, Math.min(1, emitter.life / Math.max(1, emitter.maxLife)));
-        let amplitude = emitter.strength * age;
-
-        for (let gy = minY; gy <= maxY; gy++) {
-            let fy = gy + 0.5 - centerY;
-            let fxRow = audioSpatialGridEffects[gy];
-            let totalRow = audioSpatialGrid[gy];
-            for (let gx = minX; gx <= maxX; gx++) {
-                let fx = gx + 0.5 - centerX;
-                let distSq = fx * fx + fy * fy;
-                if (distSq > radiusSq) continue;
-                let dist = Math.sqrt(distSq);
-                let falloff = 1 - dist / radiusTiles;
-                let value = amplitude * falloff * falloff;
-                fxRow[gx] = Math.min(1.5, fxRow[gx] + value);
-                totalRow[gx] = Math.min(1.75, totalRow[gx] + value);
-            }
-        }
-    }
-
-    _audioReactiveLastGridTick = nowTick;
-    audioReactiveTextureVersion++;
-}
 
 function applyTimingConfig(nextTickRate, nextPipelineMin) {
     let tps = Number.isFinite(nextTickRate) ? Math.floor(nextTickRate) : TICK_RATE;
@@ -684,27 +410,6 @@ function _applyBackgroundMusicVolume() {
     _bgMusicNodes.gain.gain.setTargetAtTime(_bgMusicNodes.volume, audioCtx.currentTime, .12);
 }
 
-function _attachBackgroundMusicAnalyser(loopNode) {
-    if (!audioCtx || !loopNode || !loopNode.gain) return;
-    try {
-        let analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 512;
-        analyser.smoothingTimeConstant = 0.82;
-        let usesFloatData = typeof analyser.getFloatTimeDomainData === 'function';
-        let data = usesFloatData ? new Float32Array(analyser.fftSize) : new Uint8Array(analyser.fftSize);
-        loopNode.gain.connect(analyser);
-        _bgMusicAnalyser = analyser;
-        _bgMusicAnalyserData = data;
-        _bgMusicReactiveSmoothedLevel = 0;
-        _bgMusicReactiveLevelHistory.length = 0;
-    } catch {
-        _bgMusicAnalyser = null;
-        _bgMusicAnalyserData = null;
-        _bgMusicReactiveSmoothedLevel = 0;
-        _bgMusicReactiveLevelHistory.length = 0;
-    }
-}
-
 // Per-frame global audio source cap: reset each game tick
 let _audioFrameSoundCount = 0;
 let _audioFrameSoundTick = -1;
@@ -966,7 +671,6 @@ function playSound(type, worldX, worldY, subtype = '') {
     // Inaudible/offscreen events do not consume the audible event budget.
     if (spatial.gain * recipe[5] < .0001) return;
     if (_activeAudioVoices.size >= AUDIO_MAX_ACTIVE_VOICES || !_canPlaySoundTypeNow(type)) return;
-    _recordAudioReactiveEmitter(type, worldX, worldY, recipe[5] * 3);
     let buffer = _generateEffectBuffer(type, subtype, (_audioVariation++) % 3, recipe);
     _createGeneratedVoice(buffer, recipe[5], worldX, worldY, recipe[6]);
 }
@@ -1006,7 +710,4 @@ function stopBackgroundMusic() {
     if (typeof Jukebox !== 'undefined') Jukebox.stopLocal();
     _stopGeneratedVoice(_bgMusicNodes, .6);
     _bgMusicNodes = null;
-    if (_bgMusicAnalyser) _bgMusicAnalyser.disconnect();
-    _bgMusicAnalyser = null; _bgMusicAnalyserData = null;
-    _bgMusicReactiveSmoothedLevel = 0; _bgMusicReactiveLevelHistory.length = 0;
 }

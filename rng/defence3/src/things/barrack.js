@@ -488,15 +488,7 @@ class CollectorSpawner {
             ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
             ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
         }
-        ctx.fillStyle = '#432'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
-        ctx.fillStyle = '#f3d55b';
-        ctx.fillRect(this.x - 7, this.y - 5, 14, 10);
-        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.strokeRect(this.x - 7, this.y - 5, 14, 10);
-        ctx.fillStyle = '#111';
-        ctx.font = 'bold 12px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('⚡', this.x, this.y + 1);
+        drawWorkerBuildingEmblem(ctx, this.x, this.y, 1, this.type);
         if (this.underConstruction) {
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 10, 24, 3);
         } else {
@@ -557,12 +549,7 @@ class AstarSpawner {
             ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
             ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
         }
-        ctx.fillStyle = '#432'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
-        ctx.fillStyle = '#f0f0f0';
-        ctx.font = 'bold 16px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('★', this.x, this.y + 1);
+        drawWorkerBuildingEmblem(ctx, this.x, this.y, 1, this.type);
         if (this.underConstruction) {
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 10, 24, 3);
         } else {
@@ -623,10 +610,7 @@ class SalvagerSpawner {
             ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
             ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
         }
-        ctx.fillStyle = '#543'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
-        ctx.fillStyle = '#8d8'; ctx.beginPath();
-        for (let i = 0; i < 3; i++) { let a = (i * 2 * Math.PI) / 3 - Math.PI / 2; ctx.lineTo(this.x + Math.cos(a) * 8, this.y + Math.sin(a) * 8); }
-        ctx.closePath(); ctx.fill();
+        drawWorkerBuildingEmblem(ctx, this.x, this.y, 1, this.type);
         if (this.underConstruction) {
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 10, 24, 3);
         } else {
@@ -695,11 +679,7 @@ class BuilderSpawner {
             ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
             ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
         }
-        ctx.fillStyle = '#354'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
-        // Rectangle icon
-        ctx.fillStyle = '#8b5';
-        ctx.fillRect(this.x - 7, this.y - 5, 14, 10);
-        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.strokeRect(this.x - 7, this.y - 5, 14, 10);
+        drawWorkerBuildingEmblem(ctx, this.x, this.y, 1, this.type);
         if (this.underConstruction) {
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 10, 24, 3);
         } else {
@@ -767,10 +747,7 @@ class HealerSpawner {
             ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
             ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
         }
-        ctx.fillStyle = '#355'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(this.x - 7, this.y - 5, 14, 10);
-        ctx.strokeStyle = '#ddd'; ctx.lineWidth = 1; ctx.strokeRect(this.x - 7, this.y - 5, 14, 10);
+        drawWorkerBuildingEmblem(ctx, this.x, this.y, 1, this.type);
         if (this.underConstruction) {
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 10, 24, 3);
         } else {
@@ -864,13 +841,7 @@ class ResearchSpawner {
             ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
             ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
         }
-        ctx.fillStyle = '#446'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
-        ctx.fillStyle = '#aef';
-        ctx.font = '11px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('R', this.x, this.y + 1);
-
+        drawWorkerBuildingEmblem(ctx, this.x, this.y, 1, this.type);
         if (this.underConstruction) {
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 10, 24, 3);
         } else {

@@ -37,22 +37,8 @@
         return Math.max(0, Math.min(1, Number(value) || 0));
     }
 
-    function getAudioRows(seed, version) {
-        let bgGrid = Array.isArray(audioSpatialGridBackground) ? audioSpatialGridBackground : [];
-        let waveGrid = Array.isArray(audioSpatialGrid) ? audioSpatialGrid : [];
-        let fxGrid = Array.isArray(audioSpatialGridEffects) ? audioSpatialGridEffects : [];
-        let rowCount = bgGrid.length;
-        let colCount = rowCount > 0 && bgGrid[0] ? bgGrid[0].length : 0;
-        let bgIndex = rowCount > 0 ? Math.abs((seed * 17 + version * 3) % rowCount) : 0;
-        let waveIndex = waveGrid.length > 0 ? Math.abs((seed * 29 + version * 5 + 7) % waveGrid.length) : 0;
-        let fxIndex = fxGrid.length > 0 ? Math.abs((seed * 13 + version * 7 + 11) % fxGrid.length) : 0;
-        return {
-            colCount,
-            bgRow: rowCount > 0 ? bgGrid[bgIndex] : null,
-            waveRow: waveGrid.length > 0 ? waveGrid[waveIndex] : null,
-            fxRow: fxGrid.length > 0 ? fxGrid[fxIndex] : null,
-            energy: Math.max(0, Math.min(1.3, (Number(audioReactiveBackgroundLevel) || 0) / 1.15))
-        };
+    function getAudioRows() {
+        return { colCount: 0, bgRow: null, waveRow: null, fxRow: null, energy: 0 };
     }
 
     function sampleRow(row, colCount, index, total) {

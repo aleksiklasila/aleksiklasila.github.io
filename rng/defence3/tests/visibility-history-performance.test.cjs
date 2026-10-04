@@ -96,4 +96,22 @@ assert.equal(uploads,1);assert.equal(mipmaps,1);
 assert.ok(!renderer.includes('getHistoryBackground('));
 assert.ok(!renderer.includes('updateVisibilityHistory('));
 assert.ok(!read('src/utils/utils_networking.js').includes('snapshotVisibilityAreaHold'));
+// The simulation worker exposes all structures through a shared frame schema.
+// Mines/drops have energy=0 there even though their resource amount is positive.
+c.units=[{id:999,x:16,y:16,energy:0}];
+c.goldMines=[{gx:0,gy:0,x:16,y:16,energy:0,gold:123,maxGold:200}];
+c.astarMines=[{gx:1,gy:0,x:48,y:16,energy:0,astar:0,maxAstar:300}];
+c.droppedItems=[{gx:0,gy:0,x:16,y:16,energy:0,value:4}];
+c.raw=raw();c.raw[0][0]=c.raw[0][1]=3;c.gameTime=0;
+vm.runInContext('visibilityHistoryState=null; teamVisibilityHistory=true;',c);
+update();
+assert.equal(c.getLiveRenderView().goldMines.length,1,'live frame energy mine survives health filter');
+assert.equal(c.getLiveRenderView().astarMines.length,1,'depleted frame A* mine stays visible');
+assert.equal(c.getLiveRenderView().droppedItems.length,1,'resource drops have no health');
+assert.equal(c.getLiveRenderView().units.length,0,'dead units are still excluded');
+c.raw=raw();
+for(let tick=1;tick<=180;tick++) {c.gameTime=tick;update();}
+const ghostGold=c.getLiveRenderView().goldMines[0],ghostAstar=c.getLiveRenderView().astarMines[0];
+assert.equal(ghostGold._historyGhost,true);assert.equal(ghostGold.gold,123);assert.equal(ghostGold.maxGold,200);
+assert.equal(ghostAstar._historyGhost,true);assert.equal(ghostAstar.astar,0);assert.equal(ghostAstar.maxAstar,300);
 console.log(`PASS: immediate targeting, local visual hold/fade at 10/30/60 Hz, ${bytes} bytes for 80x80 tiles, freeze-on-hide entity records, retained mine resources, no repeat terrain uploads.`);

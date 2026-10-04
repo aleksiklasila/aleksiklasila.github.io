@@ -121,7 +121,7 @@ function _simRef(e) {
 
 // Hooks that only drive sound, visuals or UI: recorded for the page or dropped.
 function _simStubUi() {
-    for (let name of ['startLaserSound', 'stopLaserSound', 'updateAudioReactiveState', 'initAudio', 'startBackgroundMusic',
+    for (let name of ['startLaserSound', 'stopLaserSound', 'initAudio', 'startBackgroundMusic',
         'applyAudioSettings', 'updateInfoPanel', 'updateHUD', 'requestBuildMenuRefresh', 'updateBuildMenu', 'updateControlGroupBar',
         'queueRenderFrame', 'queueSimulationFrame', 'startMainThreadLoops', 'invalidateStaticLayerCache', 'clearRendererTransientVisualCaches',
         'commitStaticCaches', '_requestStaticCacheCommit', 'showGameOver', 'renderGameGraph', 'setResearchPopupOpen', 'showUiBanner',
