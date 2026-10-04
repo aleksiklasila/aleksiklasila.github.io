@@ -517,6 +517,20 @@ SIM_KERNELS[SIM_KERNEL_MOVE_STEP] = function (R, P, chunk) {
     _simStepParked(R, P, s0, end, Q, n, C);
     _simStepFlow(R, P, s0, end, Q, n, C);
 };
+// The arrays of every navigation profile's build under a name (flownav.js
+// binds them as nav.<profile>.<name>), and their walls: the ground's, the
+// air's, a walk class's (mv.cwall.<profile>, see _navClassWalls).
+function _simNavArrays(R, name) {
+    const n = typeof NAV_PROFILES === 'number' ? NAV_PROFILES : 2, out = new Array(n);
+    for (let p = 0; p < n; p++) out[p] = R['nav.' + p + '.' + name];
+    return out;
+}
+function _simNavWalls(R) {
+    const n = typeof NAV_PROFILES === 'number' ? NAV_PROFILES : 2, out = new Array(n);
+    out[0] = R['mv.wall']; if (n > 1) out[1] = R['mv.airwall'];
+    for (let p = 2; p < n; p++) out[p] = R['mv.cwall.' + p];
+    return out;
+}
 // Every unit: a parked one's tick; flow units listed for the steps.
 function _simStepParked(R, P, s0, end, Q, n, C) {
     const ON = R['unit.mvOn'];
@@ -617,6 +631,7 @@ function _simStepFlow(R, P, s0, end, Q, n, C) {
     const RDY = R['unit.mvReady'];
     const FMN = R['nav.fmeta.0'];
     const FMW = R['nav.fmeta.1'];
+    const NPR = R['unit.mvNP'], WLS = _simNavWalls(R);
     const t = P[2] | 0;
     const tr = P[3] | 0;
     const W = P[5] | 0;
@@ -670,11 +685,12 @@ function _simStepFlow(R, P, s0, end, Q, n, C) {
         const fid = FLOWC[s], wide = fid >= 4194304, did = wide ? fid - 4194304 : fid, dm = did * 8, FMETA = wide ? FMW : FMN;
         if (!(fid >= 0) || !FMETA || FMETA[dm + 6] !== MFGEN[s] || FMETA[dm + 1] !== dk || FMETA[dm + 7] !== 1) continue;
         if (t < RDY[s]) continue;
-        // The step (as SIM_KERNEL_MOVE's between steers).
+        // The step (as SIM_KERNEL_MOVE's between steers; the walls of its
+        // navigation profile).
         let vx = CVX[s], vy = CVY[s];
         const sgx = Math.floor((x + vx) * itile), sgy = Math.floor((y + vy) * itile);
         if ((f & 32) === 0 && (sgx !== gx || sgy !== gy)) {
-            const sl = simFlowSlide(WALL, W, H, gx, gy, sgx, sgy);
+            const sl = simFlowSlide((NPR && WLS[NPR[s]]) || WALL, W, H, gx, gy, sgx, sgy);
             if (sl) { if (sl & 1) vx = 0; if (sl & 2) vy = 0; CD[s] = -1; }
         }
         const nx = x + vx, ny = y + vy;
@@ -1052,18 +1068,12 @@ function _simMoveFlow(R, P, s0, end, Q, n, C) {
     const MFGEN = R['unit.mvFGen'];
     const DEST = R['unit.mvDest'];
     const AIRW = R['mv.airwall'];
-    const NF0 = R['nav.0.fields'];
-    const PL0 = R['nav.0.partL'], PB0 = R['nav.0.partB'];
-    const NB0 = R['nav.0.nb'];
-    const NT0 = R['nav.0.nt'];
-    const NP0 = R['nav.0.np'];
-    const NM0 = R['nav.0.meta'];
-    const NF1 = R['nav.1.fields'];
-    const PL1 = R['nav.1.partL'], PB1 = R['nav.1.partB'], FRN = R['nav.frows.0'], FRW = R['nav.frows.1'], FHD = R['nav.fhdr'];
-    const NB1 = R['nav.1.nb'];
-    const NT1 = R['nav.1.nt'];
-    const NP1 = R['nav.1.np'];
-    const NM1 = R['nav.1.meta'];
+    const FRN = R['nav.frows.0'], FRW = R['nav.frows.1'], FHD = R['nav.fhdr'];
+    // Per navigation profile (flownav.js: ground, air, the walk classes): its
+    // build's arrays and its walls (a walk class's: mv.cwall.<profile>).
+    const NPR = R['unit.mvNP'];
+    const NFS = _simNavArrays(R, 'fields'), PLS = _simNavArrays(R, 'partL'), PBS = _simNavArrays(R, 'partB'), NBS = _simNavArrays(R, 'nb');
+    const NTS = _simNavArrays(R, 'nt'), NPS = _simNavArrays(R, 'np'), NMS = _simNavArrays(R, 'meta'), WLS = _simNavWalls(R);
     const FPN = R['nav.fpool.0'];
     const FMN = R['nav.fmeta.0'];
     const FPW = R['nav.fpool.1'];
@@ -1121,7 +1131,7 @@ function _simMoveFlow(R, P, s0, end, Q, n, C) {
         // Following the flow navigation (flownav.js) toward its
         // destination, steered like _followPathStep.
         const dk = DEST[s], dx0 = dk % W, dy0 = (dk - dx0) / W;
-        const prof = (f & 32) !== 0 ? 1 : 0, WL = prof ? AIRW : WALL;
+        const prof = NPR ? NPR[s] : ((f & 32) !== 0 ? 1 : 0), WL = WLS[prof] || ((f & 32) !== 0 ? AIRW : WALL);
         const fid = FLOWC[s], wide = fid >= 4194304, did = wide ? fid - 4194304 : fid, dm = did * 8;
         const FMETA = wide ? FMW : FMN, FPOOL = wide ? FPW : FPN;
         // (Its field: the slot as armed; made by its ready tick.)
@@ -1140,7 +1150,7 @@ function _simMoveFlow(R, P, s0, end, Q, n, C) {
             let vx = CVX[s], vy = CVY[s];
             const sgx = Math.floor((x + vx) * itile), sgy = Math.floor((y + vy) * itile);
             if ((f & 32) === 0 && (sgx !== gx || sgy !== gy)) {
-                const sl = simFlowSlide(WALL, W, H, gx, gy, sgx, sgy);
+                const sl = simFlowSlide(WL, W, H, gx, gy, sgx, sgy);
                 if (sl) { if (sl & 1) vx = 0; if (sl & 2) vy = 0; CD[s] = -1; }
             }
             const nx = x + vx, ny = y + vy;
@@ -1152,7 +1162,7 @@ function _simMoveFlow(R, P, s0, end, Q, n, C) {
         }
         // (A steer: commits again below, if it moves.)
         CD[s] = -1;
-        const NF = prof ? NF1 : NF0, PL = prof ? PL1 : PL0, PB = prof ? PB1 : PB0, NB = prof ? NB1 : NB0, NT = prof ? NT1 : NT0, NP = prof ? NP1 : NP0, NM = prof ? NM1 : NM0;
+        const NF = NFS[prof], PL = PLS[prof], PB = PBS[prof], NB = NBS[prof], NT = NTS[prof], NP = NPS[prof], NM = NMS[prof];
         // (The destination's row: its field slot's.)
         const ROWS = wide ? FRW : FRN, rw = FHD ? FHD[wide ? 1 : 0] : 0;
         if (!NF || !NM || !PL || !PB || !ROWS || !(rw > 0)) { ON[s] = 0; continue; }
@@ -1243,7 +1253,7 @@ function _simMoveFlow(R, P, s0, end, Q, n, C) {
         // Into a wall (on the ground): along it, one axis, else it
         // stands (simFlowSlide, as _followNavNode).
         if ((f & 32) === 0) {
-            const sl = simFlowSlide(WALL, W, H, gx, gy, Math.floor((x + vx) * itile), Math.floor((y + vy) * itile));
+            const sl = simFlowSlide(WL, W, H, gx, gy, Math.floor((x + vx) * itile), Math.floor((y + vy) * itile));
             if (sl & 1) vx = 0;
             if (sl & 2) vy = 0;
         }

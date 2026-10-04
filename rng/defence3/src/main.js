@@ -3051,7 +3051,7 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
             u.path = navPath; u.pathIndex = 0; u._routeSegEnd = destKey;
             // (A worker goes all the way and is looked at on its check ticks,
             // as simMoveTryArm arms it.)
-            if (did >= 0) simFlowArm(u._us, u._si, did, navFieldGen(did), destKey, u.workerState ? CMD_MOVING : cmd, profile === NAV_PROFILE_AIR, ready, !!u.workerState || !group, _simWorkerKind(u));
+            if (did >= 0) simFlowArm(u._us, u._si, did, navFieldGen(did), destKey, u.workerState ? CMD_MOVING : cmd, profile === NAV_PROFILE_AIR, ready, !!u.workerState || !group, _simWorkerKind(u), profile);
         }
     }
     if (outliers) for (let u of outliers) {
@@ -3111,7 +3111,9 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
         // path's end; a group route each, a reverse search over the map,
         // cost 30-120 ms a tick with a few thousand workers ordered around).
         if ((!u.workerState || u.workerState === 'MANUAL_MOVE') && !u.holdPosition && u._us && u._spatialEpoch === spatialEpoch) {
-            let profile = u.isFlying ? 1 : 0;
+            // (By navigation profile: ground, air, a walk class: workers that
+            // may walk over mines or their own buildings, navProfileOf.)
+            let profile = navProfileOf(u);
             let fdest = flowDest[profile] || (flowDest[profile] = findNearestWalkable(targetGx, targetGy, ugx, ugy, u));
             u._pendingPathTarget = null; u.pathIsFallbackAstar = false; u._routeSegEnd = -1;
             u._routeEnd = fdest.y * GRID_W + fdest.x;
@@ -3122,8 +3124,7 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
         let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
         applyPath(u, ugx, ugy, _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, !!u.isFlying, null, u.owner));
     }
-    if (flowMembers[0]) _issueFlowOrder(playerId, cmd, flowDest[0], flowMembers[0], applyPath, NAV_PROFILE_GROUND);
-    if (flowMembers[1]) _issueFlowOrder(playerId, cmd, flowDest[1], flowMembers[1], applyPath, NAV_PROFILE_AIR);
+    for (let p = 0; p < flowMembers.length; p++) if (flowMembers[p]) _issueFlowOrder(playerId, cmd, flowDest[p], flowMembers[p], applyPath, p);
 }
 
 // Actions come from other players' machines. Malformed fields are dropped or

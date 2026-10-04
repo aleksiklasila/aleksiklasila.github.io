@@ -1372,15 +1372,10 @@ function canUnitOccupyTile(unit, gx, gy) {
         }
     }
 
-    // Builders can stand on active build/upgrade targets.
-    if (unit.workerType === 'builder') {
+    // Builders and salvagers walk over their owner's buildings (their work
+    // is at those, in the middle of a base too: flownav.js navProfileOf).
+    if (unit.workerType === 'builder' || unit.workerType === 'salvager') {
         if (_canBuilderPassTile(unit.owner, gx, gy)) return true;
-    }
-
-    // Salvagers can stand on owned marked-for-salvage targets.
-    if (unit.workerType === 'salvager') {
-        let isOwnedMarkedTarget = (obj) => !!obj && obj.owner === unit.owner && !!obj.markedForSalvage && (!(obj.energy !== undefined) || obj.energy > 0);
-        if (isOwnedMarkedTarget(getTileEntityRef(gx, gy))) return true;
     }
 
     return false;

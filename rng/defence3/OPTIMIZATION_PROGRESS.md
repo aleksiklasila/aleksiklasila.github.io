@@ -76,6 +76,62 @@ is next. Newest entries first within each section.
 
 ## Session log
 
+### 2026-10-04 (fifteenth round) — workers walk and work again, browser scale
+
+- Workers (user: a builder in tests/oneofall.json sent 10 tiles up did not
+  move; collectors could not reach a mine among mines). Cause: the flow
+  navigation had two profiles (ground, air) and every ground unit used
+  the ground's walls, but builders may walk over their owner's buildings
+  and collectors over active mines (canUnitOccupyTile). A builder inside
+  its base's ring had no way out; a mine inside mines had none in. Now
+  walk classes (flownav.js navProfileOf): profile 2 collectors (active
+  gold and ★ mines open), 3 + p a player's builders and salvagers (its own
+  buildings open; up to NAV_BUILD_PLAYERS = 8 players, others keep the
+  ground's). Their walls (_navClassWalls, bound as mv.cwall.<p> for the
+  movement kernel's slides) follow tile and entity changes per tile
+  (navClassTileChanged from simMoveTileTypeChanged /
+  simMoveTileEntityChanged, deferred with the unit pass's wall changes);
+  each profile has its own build, rebuilt round-robin when its walls
+  differ (_navDiff per profile); all in-use profiles build at the first
+  tick. The kernel picks a unit's arrays by its profile column (mvNP,
+  set by simFlowArm). Snapshots carry the profiles' build numbers.
+- Salvagers (found by the new test): a marked building inside its
+  owner's cluster had no open neighbour on the ground, the salvager stood
+  in MOVING_TO forever. They now walk with the builders' class (navigation,
+  canUnitOccupyTile, getPathCanWalkForUnit): their work is at their own
+  buildings too.
+- Flyers' detour (found by the test: healers and researchers went a
+  cluster out of their way): _navFieldRow seeded every node of the
+  destination's field at distance 0, so any exit into the field was as
+  good as another. Seeds now start at their field distance (a sorted seed
+  list let into the bucket queue as the search reaches each distance);
+  rows are keyed per destination tile (no sharing between destinations
+  of one field: their seeds differ). nav-rows still equals its own
+  searches.
+- tests/worker-walk.test.cjs (multiplayer, host + guest): one worker of
+  every kind sent 10 tiles in four directions (must come within a tile
+  during the move; a builder starts inside its ring of towers), then
+  work left alone: collectors deliver, builders' building energy rises
+  (sites and repairs: the fixture's buildings start low), the salvager
+  takes down a marked tower in the middle of the base, healers spend
+  their loads (spawn queues, hurt units), the researcher researches
+  (queued research), and collectors sent to a gold mine ringed by ★ mines
+  collect from it (made on every peer at one safe tick). Peers agree.
+  Passes; nav-rows, nav-reach, nav-background, nav-build-kernels,
+  nav-crowd-arrival, kernel-object-equivalence, collector-farms,
+  worker-target-index, chaos determinism (7 host helpers, sim eval),
+  snapshot, desync-recovery, lane-params-poison, sim-frame-replica pass.
+- Left: a worker whose target has no way at all (walled in by others)
+  still stands in its moving state (navPathTo gives the node; the follow
+  waits); the A* era dropped such targets. navPathReach (reachability by
+  component, O(1)) could make _requestWorkerPath return null there, but
+  most callers re-ask every tick on null: needs a per-state look first.
+- tests/render-tps-bench.cjs: PHASES=1 (the simulation worker's time per
+  tick in the top-level parts, wrappers put in through its debugEval) and
+  PROFILE_WORKERS=1 with PROFILE_VIEW (CPU profiles of every worker: the
+  simulation worker, its helpers, the presentation worker, through a
+  browser CDP session).
+
 ### 2026-10-04 (fourteenth round) — rebuild steps off the simulation thread, forced targets in the kernels, shrines
 
 - Shrines (user): no bounty drops on the map any more (main.js removal

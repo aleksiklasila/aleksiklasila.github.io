@@ -1395,8 +1395,8 @@ class Unit {
             if (c.mvCD[s] === dest && c.mvCTl[s] === t && gameTime - c.mvCT[s] < c.mvCN[s]) {
                 let vx = c.mvCVx[s], vy = c.mvCVy[s];
                 const sgx = Math.floor((this.x + vx) / TILE), sgy = Math.floor((this.y + vy) / TILE);
-                if (nd.nav - 1 === NAV_PROFILE_GROUND && (sgx !== gx || sgy !== gy)) {
-                    const sl = simFlowSlide(navWallTable(NAV_PROFILE_GROUND), W, GRID_H, gx, gy, sgx, sgy);
+                if (nd.nav - 1 !== NAV_PROFILE_AIR && (sgx !== gx || sgy !== gy)) {
+                    const sl = simFlowSlide(navWallTable(nd.nav - 1), W, GRID_H, gx, gy, sgx, sgy);
                     if (sl) { if (sl & 1) vx = 0; if (sl & 2) vy = 0; c.mvCD[s] = -1; }
                 }
                 this.x += vx; this.y += vy; this.vx = vx; this.vy = vy;
@@ -1490,7 +1490,8 @@ class Unit {
         }
         let vx = (dx / dist) * spd, vy = (dy / dist) * spd;
         // Into a wall (on the ground): along it, one axis, else it stands.
-        if (profile === NAV_PROFILE_GROUND) {
+        // (The walls of its walk class: a builder's own buildings are none.)
+        if (profile !== NAV_PROFILE_AIR) {
             const sl = simFlowSlide(wall, W, GRID_H, gx, gy, Math.floor((this.x + vx) / TILE), Math.floor((this.y + vy) / TILE));
             if (sl & 1) vx = 0;
             if (sl & 2) vy = 0;
@@ -2471,7 +2472,8 @@ const SIM_FLOW_ARRIVE = 2;
 // A unit's worker kind for the kernel (mvWk): 0 none, 1 at its task, 2 sent
 // by the player.
 function _simWorkerKind(u) { return u.workerState ? (u.workerState === 'MANUAL_MOVE' ? 2 : 1) : 0; }
-function simFlowArm(c, s, fid, gen, dest, cmd, flying, ready = 0, worker = false, isWorker = false) {
+// (profile: its navigation's, flownav.js navProfileOf: its walls and fields.)
+function simFlowArm(c, s, fid, gen, dest, cmd, flying, ready = 0, worker = false, isWorker = false, profile = flying ? NAV_PROFILE_AIR : NAV_PROFILE_GROUND) {
     if (!(c.mvSpd[s] >= 0) || c.sepKey[s] === SIM_SEP_ABSENT) return false;
     // (Bit 128: no arriving in a crowd short of the tile: a worker's task
     // is at its tile, a lone unit's order too.)
@@ -2487,7 +2489,7 @@ function simFlowArm(c, s, fid, gen, dest, cmd, flying, ready = 0, worker = false
         _simMoveEnsureAreaBox(area, reach);
         flags |= 1;
     }
-    c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvFlow[s] = fid; c.mvFGen[s] = gen; c.mvDest[s] = dest; c.mvReady[s] = ready;
+    c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvFlow[s] = fid; c.mvFGen[s] = gen; c.mvDest[s] = dest; c.mvReady[s] = ready; c.mvNP[s] = profile;
     // (1: a worker at its task, which stands where the way ends; 2: one the
     // player sent, handed back there.)
     c.mvWk[s] = isWorker === 2 ? 2 : (isWorker ? 1 : 0);
@@ -2519,7 +2521,7 @@ function _simMoveTryFlowArm(u, c, s, cmd) {
     if (last && last.y * GRID_W + last.x === dest) return false;
     navEnsure(profile);
     const did = navFieldRequest(profile, dest, true);
-    return did >= 0 && simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, u._navReady | 0, !!u.workerState, _simWorkerKind(u));
+    return did >= 0 && simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, u._navReady | 0, !!u.workerState, _simWorkerKind(u), profile);
 }
 
 // A unit ends its Unit.update marching along its path with nothing to react
@@ -2540,7 +2542,7 @@ function simMoveTryArm(u) {
         if (Math.floor(c.y[s] / TILE) * GRID_W + Math.floor(c.x[s] / TILE) === dest) return;
         const did = navFieldRequest(profile, dest, !!nd.w);
         // (Arriving in a crowd short of the tile: groups only.)
-        if (did >= 0) simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, nd.ready | 0, !!u.workerState || !nd.w, _simWorkerKind(u));
+        if (did >= 0) simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, nd.ready | 0, !!u.workerState || !nd.w, _simWorkerKind(u), profile);
         return;
     }
     // (Workers walk their own paths: no group routes.)
@@ -2654,7 +2656,7 @@ function _simMoveTryApproachBuilding(u) {
         const did = navFieldRequest(profile, dest, !!nd.w);
         if (!(did >= 0)) return;
         const crowd = !!nd.w && idx === path.length - 1;
-        c.mvFlags[s] = 64 | (crowd ? 0 : 128) | (profile === NAV_PROFILE_AIR ? 32 : 0); c.mvReach[s] = k; c.mvSpd[s] = spd;
+        c.mvFlags[s] = 64 | (crowd ? 0 : 128) | (profile === NAV_PROFILE_AIR ? 32 : 0); c.mvReach[s] = k; c.mvSpd[s] = spd; c.mvNP[s] = profile;
         c.mvFlow[s] = did; c.mvFGen[s] = navFieldGen(did); c.mvDest[s] = dest; c.mvReady[s] = nd.ready | 0;
         c.mvWk[s] = 0; c.mvSpent[s] = 0;
         c.mvHT[s] = gy * GRID_W + gx; c.mvHTId[s] = u.forcedAttackTarget ? 1 : 0;
@@ -2795,7 +2797,7 @@ function simMoveTryChase(u) {
             if (did >= 0) {
                 const crowd = !!nd.w && u.pathIndex === u.path.length - 1;
                 flags |= 64 | (crowd ? 0 : 128);
-                c.mvSpd[s] = spd; c.mvFlow[s] = did; c.mvFGen[s] = navFieldGen(did); c.mvDest[s] = dest; c.mvReady[s] = nd.ready | 0;
+                c.mvSpd[s] = spd; c.mvFlow[s] = did; c.mvFGen[s] = navFieldGen(did); c.mvDest[s] = dest; c.mvReady[s] = nd.ready | 0; c.mvNP[s] = profile;
                 c.mvWk[s] = 0; c.mvSpent[s] = 0;
             }
         }
@@ -3137,10 +3139,27 @@ let _simMoveWallVer = 0;
 // applied at its end, in order. (Holds and chases check _simMoveWallQ.)
 let _simMoveWallQ = [];
 function simMoveWallsDeferEnd() {
-    if (!_simMoveWallQ.length) return;
-    const q = _simMoveWallQ;
-    _simMoveWallQ = [];
-    for (let i = 0; i < q.length; i += 2) simMoveTileTypeChanged(q[i], q[i + 1]);
+    if (_simMoveWallQ.length) {
+        const q = _simMoveWallQ;
+        _simMoveWallQ = [];
+        for (let i = 0; i < q.length; i += 2) simMoveTileTypeChanged(q[i], q[i + 1]);
+    }
+    if (_simClassQ.length) {
+        const q = _simClassQ;
+        _simClassQ = [];
+        for (let i = 0; i < q.length; i++) _simMoveClassTileChanged(q[i]);
+    }
+}
+// Tile entities changed during the pass: the walk classes' walls (see
+// navClassTileChanged) follow at its end, as the walls do.
+let _simClassQ = [];
+// The walk classes' walls at tile k (flownav.js), and when any changed the
+// wall versions the cached look-aheads check (as a wall change).
+function _simMoveClassTileChanged(k) {
+    if (typeof navClassTileChanged !== 'function' || !navClassTileChanged(k)) return;
+    const gx = k % GRID_W, gy = (k - gx) / GRID_W;
+    _simMoveWallVer = (_simMoveWallVer + 1) | 0;
+    if (_simMoveWallBlk) { _simMoveWallBlk[(gy >> 3) * _simMoveWallBlkW + (gx >> 3)]++; _simMoveWallBlk9Add(gx >> 3, gy >> 3); }
 }
 function simMoveTileTypeChanged(gx, gy) {
     // (The path regions follow the grid at once: pathfinding.js.)
@@ -3157,6 +3176,8 @@ function simMoveTileTypeChanged(gx, gy) {
             if (_simMoveWallBlk) { _simMoveWallBlk[(gy >> 3) * _simMoveWallBlkW + (gx >> 3)]++; _simMoveWallBlk9Add(gx >> 3, gy >> 3); }
             if (typeof navWallChanged === 'function') navWallChanged(k, was, w);
         }
+        // (The walk classes' walls: also when only its tile entity changed.)
+        _simMoveClassTileChanged(k);
     }
 }
 // Per 8x8 block, the sum of its 3x3 blocks' wall change counts (simWallKey's
@@ -3191,6 +3212,7 @@ function _simMoveWalls() {
     for (let i = 0; i < nb; i++) _simMoveWallBlk[i]++;
     _simMoveWallBlk9All();
     if (typeof _navWallDiffReset === 'function') _navWallDiffReset();
+    if (typeof navClassReset === 'function') navClassReset();
     if (typeof stepCostsReset === 'function') stepCostsReset();
 }
 
@@ -3222,6 +3244,9 @@ let _simMoveStructDirty = [];
 function simMoveStructsReset() { _simMoveStructDims = ''; }
 function simMoveTileEntityChanged(gx, gy) {
     if (_simMoveStruct) _simMoveStructDirty.push(gy * GRID_W + gx);
+    // (The walk classes' walls: a builder's own buildings, active mines; at
+    // the unit pass's end when in it, as the walls.)
+    if (gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) { if (_unitPassOn) _simClassQ.push(gy * GRID_W + gx); else _simMoveClassTileChanged(gy * GRID_W + gx); }
 }
 function _simMoveStructCode(gx, gy) {
     const refs = tileEntityRef[gy], e = refs ? refs[gx] : null;

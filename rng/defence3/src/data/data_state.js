@@ -887,9 +887,10 @@ function clearTileEntity(gx, gy, expectedRef = null) {
     _tileEntityVersion++;
     noteTileEntityChanged(gx, gy);
     if (prevRef && typeof workerWorkChanged === 'function') workerWorkChanged(Number.isFinite(prevRef.owner) ? prevRef.owner : -1, null, gx, gy);
-    if (typeof simMoveTileEntityChanged === 'function') simMoveTileEntityChanged(gx, gy);
     tileEntityType[gy][gx] = TILE_ENTITY_NONE;
     tileEntityRef[gy][gx] = null;
+    // (After the clear: the walk classes' walls read the tile as it is now.)
+    if (typeof simMoveTileEntityChanged === 'function') simMoveTileEntityChanged(gx, gy);
     if (prevRef && typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(prevRef);
     let tileIndex = gy * GRID_W + gx;
     let baseIndex = tileIndex * _WORKER_TARGET_LOAD_TYPE_COUNT;

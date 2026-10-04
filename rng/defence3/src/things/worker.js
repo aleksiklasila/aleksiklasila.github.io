@@ -2749,7 +2749,7 @@ function _pickDistributedWorkerTarget(u, candidates) {
 function getPathCanWalkForUnit(unit) {
     if (!unit || unit.isFlying) return null;
     if (isResourceCollectorWorkerType(unit.workerType)) return _resourceCollectorCanWalk;
-    if (unit.workerType === 'builder') return _builderCanWalk(unit.owner);
+    if (unit.workerType === 'builder' || unit.workerType === 'salvager') return _builderCanWalk(unit.owner);
     return null;
 }
 

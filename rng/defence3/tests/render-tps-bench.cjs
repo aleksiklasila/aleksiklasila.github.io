@@ -14,7 +14,11 @@
 //        VIEWS (comma list), LOADS (comma list), VIS (map visibility modes:
 //        full,team,history; default all three), HEADED=1, OUT (json path),
 //        QUERY (page URL query, e.g. simahead=0), PROFILE_VIEW (a view whose
-//        case is CPU-profiled on every page: <OUT>-<role>-<view>.cpuprofile)
+//        case is CPU-profiled on every page: <OUT>-<role>-<view>.cpuprofile;
+//        PROFILE_WORKERS=1: every worker too, the simulation worker, its
+//        helpers, the presentation worker: <OUT>-<view>-w<k>-<name>.cpuprofile),
+//        PHASES=1 (the simulation worker's time per tick in the top-level
+//        parts of a tick, as tickbench's TOPPHASES, and in the result post)
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -105,6 +109,62 @@ const PAGE_COLLECT = () => {
     };
 };
 
+// PHASES=1: the top-level parts of a tick, timed in the simulation worker
+// (wrappers put in by its diagnostics eval; nested parts count in their
+// callers too).
+const PHASE_NAMES = ['gameTick', 'processActions', '_simPostResult', 'snapRecordTickHash', 'computeLockstepStateHashFast', 'resyncAfterTick',
+    'updateAllPlayerVisibility', 'updateVisibility', 'syncVisibilityCoverage', 'recalculateUnitEffectiveStats', 'recalculateThingPrecomputedStats',
+    'processGlobalSpawnerQueue', 'simMoveRun', 'simMoveEndTick', 'spatialIndexRebuild', 'runUnitSeparationPass', '_forEachUnitInTickOrder', 'simUnitStateCollect',
+    'advanceGroupRoutes', 'takeDuePendingPathUnits', 'flushPendingMovementAstarSpend', 'recomputePlayerPopCaps', '_runAdjacencyRecalculation', 'sampleGameStats',
+    'visCoverHoldEnd', 'unitHitsResolve', 'statusPrepassRun', 'runQueuedOrders', 'navTick', 'navFieldsFlush', 'compactRemovedUnits', 'flushPendingResourceStatRebuilds',
+    'ensureLaserConnections', 'gameStatsStep', 'projectilesBegin', '_buildDeterministicBuildingUpdateOrderForTick', 'healerCandidatesStep', 'tickStatusEffects',
+    'simPresentationPublish', 'simFrameEncodeState', 'simFrameDetails', 'simFrameStructureDetails', 'getRawVisibilityGridForPlayer', 'simParallelBackgroundWait', 'simParallelRun'];
+const phasesStart = page => page.evaluate(names => simClientRequest('debugEval', { expr: `(() => {
+    if (self.__ph) { self.__ph.t = {}; self.__ph.c = {}; self.__ph.n0 = currentTick; return 1; }
+    const P = self.__ph = { t: {}, c: {}, n0: currentTick }, now = () => performance.now();
+    for (const name of ${JSON.stringify(names)}) {
+        let f; try { f = self.eval(name); } catch (e) { continue; }
+        if (typeof f !== 'function') continue;
+        self.__phw = function () { const a = now(); try { return f.apply(this, arguments); } finally { P.t[name] = (P.t[name] || 0) + now() - a; P.c[name] = (P.c[name] || 0) + 1; } };
+        self.eval(name + ' = self.__phw');
+    }
+    return 1; })()` }), PHASE_NAMES);
+const phasesCollect = async page => {
+    const r = JSON.parse(await page.evaluate(() => simClientRequest('debugEval', { expr: '({ t: self.__ph.t, c: self.__ph.c, n: currentTick - self.__ph.n0 })' })));
+    const out = {};
+    for (const [k, v] of Object.entries(r.t).sort((a, b) => b[1] - a[1])) out[k] = Math.round(v / Math.max(1, r.n) * 100) / 100;
+    return { ticks: r.n, msPerTick: out };
+};
+// PROFILE_WORKERS=1: CPU profiles of every worker (the browser's own CDP
+// session: a page's session reaches its page only), over the profiled case.
+async function workersProfileStart(browser) {
+    const cdp = await browser.newBrowserCDPSession();
+    const { targetInfos } = await cdp.send('Target.getTargets');
+    const pending = new Map();
+    let id = 1;
+    cdp.on('Target.receivedMessageFromTarget', e => { const m = JSON.parse(e.message); const p = pending.get(e.sessionId + ':' + m.id); if (p) { pending.delete(e.sessionId + ':' + m.id); p(m); } });
+    const sendTo = (sessionId, method, params = {}) => new Promise(res => { const mid = id++; pending.set(sessionId + ':' + mid, res); cdp.send('Target.sendMessageToTarget', { sessionId, message: JSON.stringify({ id: mid, method, params }) }); });
+    const workers = [];
+    for (const t of targetInfos.filter(t => t.type === 'worker')) {
+        try {
+            const { sessionId } = await cdp.send('Target.attachToTarget', { targetId: t.targetId, flatten: false });
+            await sendTo(sessionId, 'Profiler.enable'); await sendTo(sessionId, 'Profiler.setSamplingInterval', { interval: 500 }); await sendTo(sessionId, 'Profiler.start');
+            workers.push({ sessionId, url: t.url, title: t.title });
+        } catch (e) { console.log('worker profile: could not attach', t.url, e.message); }
+    }
+    return { cdp, sendTo, workers };
+}
+async function workersProfileStop(P, base, view) {
+    let k = 0;
+    for (const w of P.workers) {
+        const m = await P.sendTo(w.sessionId, 'Profiler.stop');
+        const name = (w.url.match(/([a-z_]+)\.js/) || [0, 'worker'])[1];
+        if (m.result && m.result.profile) fs.writeFileSync(`${base}-${view}-w${k++}-${name}.cpuprofile`, JSON.stringify(m.result.profile));
+    }
+    await P.cdp.detach();
+    return k;
+}
+
 let browser;
 // The page URL: the query (QUERY) and, in multiplayer, helpers per page
 // (two peers simulate the whole world on one machine: SIMHELPERS, default 3).
@@ -190,24 +250,30 @@ async function startMultiplayer(browser, port, fixture, vis, errors) {
                 w0[role] = Number(await page.evaluate(() => simClientRequest('debugEval', { expr: 'currentTick' })));
             }
             const profiling = process.env.PROFILE_VIEW === view ? [] : null;
+            const base = (process.env.OUT || path.join(__dirname, 'render-tps-bench.json')).replace(/\.json$/, '');
             if (profiling) for (const [role, page] of m.pages) {
                 const cdp = await page.context().newCDPSession(page);
                 await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', { interval: 500 }); await cdp.send('Profiler.start');
                 profiling.push([role, cdp]);
             }
+            const wprof = profiling && process.env.PROFILE_WORKERS ? await workersProfileStart(browser) : null;
+            if (process.env.PHASES) for (const [, page] of m.pages) await phasesStart(page);
             const a = Date.now();
             await sleep(CASE_S * 1000);
             if (profiling) for (const [role, cdp] of profiling) {
                 const { profile } = await cdp.send('Profiler.stop');
-                const base = (process.env.OUT || path.join(__dirname, 'render-tps-bench.json')).replace(/\.json$/, '');
                 fs.writeFileSync(`${base}-${role}-${view}.cpuprofile`, JSON.stringify(profile));
             }
+            if (wprof) console.log('worker profiles', await workersProfileStop(wprof, base, view), 'of', wprof.workers.map(w => w.url.replace(/^.*\//, '')).join(' '));
+            const phases = {};
+            if (process.env.PHASES) for (const [role, page] of m.pages) phases[role] = await phasesCollect(page);
             for (const [role, page] of m.pages) {
                 const w1 = Number(await page.evaluate(() => simClientRequest('debugEval', { expr: 'currentTick' })));
                 const secs = (Date.now() - a) / 1000;
                 const r = await page.evaluate(PAGE_COLLECT);
                 const row = { fixture, role, vis, load, view, ...v[role], setup: m.setup, ordered: ordered[role], workerTps: Math.round((w1 - w0[role]) / secs * 10) / 10, ...r };
                 if (row.sim) delete row.sim.errors;
+                if (phases[role]) { row.phases = phases[role]; console.log(role, 'phases ms/tick', JSON.stringify(Object.fromEntries(Object.entries(phases[role].msPerTick).slice(0, 16)))); }
                 console.log(JSON.stringify({ fixture, role, vis, load, view, workerTps: row.workerTps, appliedTps: row.appliedTps, simMs: row.workerSimMs,
                     late: row.sim && row.sim.workerLateMs, ahead: row.sim && row.sim.dispatchAhead, fps: row.fps, frameMs: row.frameMs, longMs: row.longMs, heapMB: row.heapMB }));
                 out.rows.push(row);

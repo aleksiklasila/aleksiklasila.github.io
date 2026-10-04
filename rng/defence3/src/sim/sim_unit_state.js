@@ -174,6 +174,9 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['mvCD', Int32Array, 1], ['mvCT', Int32Array, 1], ['mvCVx', Float64Array, 1], ['mvCVy', Float64Array, 1],
     // (The tile it steered in, and for how many ticks the step holds.)
     ['mvCTl', Int32Array, 1], ['mvCN', Uint8Array, 1],
+    // Flow mode: its navigation profile (flownav.js navProfileOf: ground, air,
+    // a walk class), whose fields and walls the kernel reads.
+    ['mvNP', Uint8Array, 1],
     // The tick (+ 1) SIM_KERNEL_MOVE_STEP moved it (SIM_KERNEL_MOVE leaves it).
     ['mvStepT', Int32Array, 1],
     // The worker search registry (worker.js wsRegister): an idle worker's

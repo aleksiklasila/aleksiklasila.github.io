@@ -28,6 +28,12 @@
 
 const NAV_UNREACHED = 0xFFFF;
 const NAV_PROFILE_GROUND = 0, NAV_PROFILE_AIR = 1;
+// Walk classes (navProfileOf): units that may walk over more than the ground
+// allows (canUnitOccupyTile) have a navigation of their own: collectors over
+// active mines, a player's builders and salvagers over the player's own
+// buildings (_navClassWalls: their work is at those, in the middle of a base
+// too). (Up to NAV_BUILD_PLAYERS players; others' keep the ground's.)
+const NAV_PROFILE_COLLECT = 2, NAV_PROFILE_BUILD0 = 3, NAV_BUILD_PLAYERS = 8, NAV_PROFILES = NAV_PROFILE_BUILD0 + NAV_BUILD_PLAYERS;
 
 // One build: { C, cw, ch, nc, W, H, profile,
 //   wall, cost: the walls it was made for (a copy) and their step costs,
@@ -441,28 +447,47 @@ function _navFieldRow(R, p, pool, off, meta, m, rows, ro, pre = 'nav.') {
     let S = _navRowScratch;
     if (!S || S.dist.length < k || S.head.length < B || S.val.length < edges + k + 16 || S.best.length < np) {
         S = _navRowScratch = { dist: new Int32Array(Math.max(1, k)), head: new Int32Array(Math.max(1, B)), val: new Int32Array(edges + k + 16),
-            nxt: new Int32Array(edges + k + 16), best: new Int32Array(Math.max(1, np)) };
+            nxt: new Int32Array(edges + k + 16), best: new Int32Array(Math.max(1, np)), seedN: new Int32Array(Math.max(1, k)), seedD: new Int32Array(Math.max(1, k)) };
     }
-    const dist = S.dist, head = S.head, val = S.val, nxt = S.nxt, best = S.best, INF = 0x3fffffff;
+    const dist = S.dist, head = S.head, val = S.val, nxt = S.nxt, best = S.best, seedN = S.seedN, seedD = S.seedD, INF = 0x3fffffff;
     const dest = meta[m + 1], bx = meta[m + 2], by = meta[m + 3], bw = meta[m + 4], bh = meta[m + 5];
     // (The destination's own part: the field, even without exits.)
     if (partL[dest] !== 0xFFFF) { const dx = dest % W, dc = ((((dest - dx) / W) / C) | 0) * cw + ((dx / C) | 0); rows[ro + partB[dc] + partL[dest]] = 254; }
     dist.fill(INF, 0, k); head.fill(-1, 0, B);
     // Dijkstra with a bucket queue (Dial): costs are small integers. Every
     // push lowers a distance, so the pool (edges + nodes) holds them all.
-    let pool0 = 0, count = 0;
+    // It starts from the field's nodes that reach the destination, each at
+    // its own distance to it (the field's value at its tile: an exit next to
+    // the destination is nearer than one across the cluster), let into the
+    // queue as the search's distance gets there (the queue holds a window of
+    // B distances). (All at 0, every exit into the destination's field was
+    // as good as another: units took the first, a detour of up to a
+    // cluster.)
+    let pool0 = 0, count = 0, ns = 0;
     const cx0 = (bx / C) | 0, cy0 = (by / C) | 0, cx1 = ((bx + bw - 1) / C) | 0, cy1 = ((by + bh - 1) / C) | 0;
     for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) {
         const c = cy * cw + cx;
         for (let i = nb[c]; i < nb[c + 1]; i++) {
-            const t = nt[i], tx = t % W, ty = (t - tx) / W;
-            if (pool[off + (ty - by) * bw + (tx - bx)] === NAV_UNREACHED) continue;
+            const t = nt[i], tx = t % W, ty = (t - tx) / W, v = pool[off + (ty - by) * bw + (tx - bx)];
+            if (v === NAV_UNREACHED) continue;
             // (Its part reaches the destination inside the field.)
             rows[ro + npart[i]] = 254;
-            dist[i] = 0; val[pool0] = i; nxt[pool0] = head[0]; head[0] = pool0++; count++;
+            dist[i] = v;
+            // (Seeds by distance, then node: an insertion into the sorted list.)
+            let j = ns++;
+            while (j > 0 && (seedD[j - 1] > v || (seedD[j - 1] === v && seedN[j - 1] > i))) { seedD[j] = seedD[j - 1]; seedN[j] = seedN[j - 1]; j--; }
+            seedD[j] = v; seedN[j] = i;
         }
     }
-    for (let cur = 0; count > 0; cur++) {
+    let si = 0;
+    for (let cur = 0; count > 0 || si < ns; cur++) {
+        // (Nothing queued: on to the next seed's distance.)
+        if (count === 0 && seedD[si] > cur) cur = seedD[si];
+        while (si < ns && seedD[si] === cur) {
+            const i = seedN[si++];
+            // (Reached cheaper through another seed: queued already.)
+            if (dist[i] === cur) { const bk0 = cur % B; val[pool0] = i; nxt[pool0] = head[bk0]; head[bk0] = pool0++; count++; }
+        }
         const bk = cur % B;
         // (Zero-cost edges add to the bucket being emptied: again.)
         while (head[bk] !== -1) {
@@ -593,7 +618,7 @@ class _NavHeap {
 const _NavQueue = _NavHeap;
 
 // ---- The installed builds (per profile) and destination fields ----
-let _nav = [null, null];
+let _nav = new Array(NAV_PROFILES).fill(null);
 // Destination fields: costs to reach tile `dest` from every tile of a box
 // around it, one field a slot of a shared pool with its meta [profile,
 // dest, bx, by, bw, bh, gen, made]. Two sizes: narrow (dest's cluster; a
@@ -776,13 +801,15 @@ function _navFieldsCommit() {
     // (A slot let go meanwhile, and maybe asked for again: not this one's.)
     for (let i = 0; i < T.length; i += 3) { const F = T[i], m = T[i + 1] * NAV_FIELD_META; if (F.meta && F.meta[m + 6] === T[i + 2] && F.meta[m] >= 0) F.meta[m + 7] = 1; }
 }
-// A slot's row key: its destination's part (+ profile), or (a wall
+// A slot's row key: its destination tile (+ profile), or (a wall
 // destination) its own (-2 - slot: not shared). (next: the next build.)
 function _navRowKey(F, s, next = null) {
     const m = s * NAV_FIELD_META, p = F.meta[m], dest = F.meta[m + 1], nav = next && next.profile === p ? next : _nav[p];
     if (!nav || !nav.partL || !(dest >= 0 && dest < nav.W * nav.H) || nav.partL[dest] === 0xFFFF) return -2 - s;
-    const x = dest % nav.W, y = (dest - x) / nav.W;
-    return p * 16777216 + nav.partBase[(y >> nav.cs) * nav.cw + (x >> nav.cs)] + nav.partL[dest];
+    // (Per destination tile: a row's searches start from the field's exits
+    // at their distances to the destination, see _navFieldRow; the same
+    // destination's fields share it.)
+    return p * 16777216 + dest;
 }
 // Makes fields now (and over the next build in a rebuild's window).
 function _navFieldsMake(F, slots) {
@@ -795,7 +822,7 @@ function _navFieldsMake(F, slots) {
     if (_navNext.nav) _navFieldsRunNow(_navFieldsBatch(F, slots, true, 1, false));
 }
 function _navFieldsBindWalls() {
-    for (let p = 0; p < 2; p++) {
+    for (let p = 0; p < NAV_PROFILES; p++) {
         const nav = _nav[p];
         if (!nav) continue;
         simParallelBind('nav.fwall.' + p, nav.wall); simParallelBind('nav.fcost.' + p, nav.cost || _navNoCost);
@@ -957,7 +984,70 @@ let _navQ = null;
 function _navScratchDial() { if (!_navQ) _navQ = _navDialScratch(1024); return _navQ; }
 
 function navWallTable(profile) {
-    return profile === NAV_PROFILE_AIR ? _airWallTable() : simMoveWallGrid();
+    if (profile === NAV_PROFILE_AIR) return _airWallTable();
+    if (profile === NAV_PROFILE_GROUND) return simMoveWallGrid();
+    return _navClassWalls(profile);
+}
+
+// ---- Walk classes' walls ----
+// A class profile's walls: the ground's, but for the tiles its units may
+// walk over (canUnitOccupyTile): active mines for collectors, the player's
+// own buildings for its builders. Kept per tile as walls and tile entities
+// change (navClassTileChanged: from simMoveTileTypeChanged and
+// simMoveTileEntityChanged, deferred through the unit pass as the walls
+// are), made whole when missing or the grid was replaced. Bound as
+// 'mv.cwall.<profile>' (the movement kernel's walls for its units). A pure
+// function of the grid and its tile entities: the same on every peer.
+const _navClassWall = new Array(NAV_PROFILES).fill(null);
+let _navClassGrid = null;
+function _navClassPass(profile, x, y) {
+    if (profile === NAV_PROFILE_COLLECT) return hasActiveGoldMineAt(x, y) || hasActiveAstarMineAt(x, y);
+    return _hasOwnedTileEntityAt(profile - NAV_PROFILE_BUILD0, x, y);
+}
+function _navClassWalls(profile) {
+    const ground = simMoveWallGrid();
+    if (_navClassGrid !== grid) { _navClassWall.fill(null); _navClassGrid = grid; }
+    let w = _navClassWall[profile];
+    if (w && w.length === ground.length) return w;
+    w = simSharedArray(Uint8Array, ground.length);
+    w.set(ground);
+    const W = GRID_W, H = GRID_H;
+    const open = (gx, gy) => { if (gx >= 0 && gy >= 0 && gx < W && gy < H) { const t = gy * W + gx; if (w[t] && _navClassPass(profile, gx, gy)) w[t] = 0; } };
+    if (profile === NAV_PROFILE_COLLECT) { for (const list of [goldMines, astarMines]) for (const m of list || []) if (m) open(m.gx, m.gy); }
+    else for (const e of _activeTileEntities) if (e && e.owner === profile - NAV_PROFILE_BUILD0) open(e.gx, e.gy);
+    _navClassWall[profile] = w;
+    if (typeof simParallelBind === 'function') simParallelBind('mv.cwall.' + profile, w);
+    return w;
+}
+// Tile t's wall or tile entity changed: the class walls there. True when
+// any changed.
+function navClassTileChanged(t) {
+    const ground = typeof _simMoveWall !== 'undefined' ? _simMoveWall : null;
+    if (_navClassGrid !== grid || !ground || !(t >= 0 && t < ground.length)) return false;
+    const x = t % GRID_W, y = (t - x) / GRID_W;
+    let changed = false;
+    for (let p = NAV_PROFILE_COLLECT; p < NAV_PROFILES; p++) {
+        const w = _navClassWall[p];
+        if (!w || w.length !== ground.length) continue;
+        const v = ground[t] && !_navClassPass(p, x, y) ? 1 : 0;
+        if (w[t] === v) continue;
+        const was = w[t];
+        w[t] = v; changed = true;
+        _navDiffChanged(p, t, was, v);
+    }
+    return changed;
+}
+// The ground walls were made whole again: the class walls too.
+function navClassReset() {
+    _navClassWall.fill(null);
+    for (let p = NAV_PROFILE_COLLECT; p < NAV_PROFILES; p++) if (_nav[p]) _navWallDiffReset(p);
+}
+// The profiles a match uses: ground, air, collectors, every player's
+// builders (made at its first tick, see navTick).
+function _navProfilesInUse() {
+    const n = Math.min(NAV_BUILD_PLAYERS, typeof players !== 'undefined' && players ? players.length : 0), out = [NAV_PROFILE_GROUND, NAV_PROFILE_AIR, NAV_PROFILE_COLLECT];
+    for (let p = 0; p < n; p++) out.push(NAV_PROFILE_BUILD0 + p);
+    return out;
 }
 
 // Installs a build as the current one for its profile (every peer at the
@@ -965,7 +1055,7 @@ function navWallTable(profile) {
 // (_navVersion: this peer's count of installs, for caches; nav.seq: the
 // profile's build number, the same on every peer: snapshotted, so waiting
 // units can tell a new build, see _tryUpgradeAstarFallbackPath.)
-let _navVersion = 0, _navSeq = [0, 0];
+let _navVersion = 0, _navSeq = new Array(NAV_PROFILES).fill(0);
 // made: its fields made over it already (a rebuild's window, its arrays
 // installed: _navNextInstall).
 function navPublish(nav, made = false) {
@@ -989,7 +1079,7 @@ function navPublish(nav, made = false) {
     else _navFieldsHeader();
     // (Components changed: substitutes asked for again.)
     _navSubReset();
-    if (p === NAV_PROFILE_GROUND) _navWallDiffReset();
+    if (p !== NAV_PROFILE_AIR) _navWallDiffReset(p);
 }
 // A build's arrays for the kernels under names pre + profile + '.' + name
 // ('nav.': the installed one, 'navn.': the next, _navNextStage).
@@ -1015,13 +1105,15 @@ function _navBindBuild(pre, nav) {
 function _navNextStage(nav) {
     if (_navNext.nav) _navNextDrop();
     _navNext.nav = nav;
-    const other = _nav[1 - nav.profile];
-    for (const b of [nav, other]) {
-        if (!b) continue;
+    // (The other profiles' installed builds under the next's names too: every
+    // live field is made again in the window, theirs over the same builds.)
+    let rowW = Math.max(1, nav.np | 0);
+    for (const b of [nav, ..._nav.filter(x => x && x.profile !== nav.profile)]) {
         _navBindBuild('navn.', b);
         simParallelBind('navn.fwall.' + b.profile, b.wall); simParallelBind('navn.fcost.' + b.profile, b.cost || _navNoCost);
+        rowW = Math.max(rowW, b.np | 0);
     }
-    _navNext.rowW = Math.max(1, nav.np | 0, other ? other.np | 0 : 0);
+    _navNext.rowW = rowW;
     const lane = SIM_LANE_NAVX, stages = [];
     for (let i = 0; i < 4; i++) stages.push([SIM_KERNEL_NAV_FIELDS, 0]);
     for (const F of _navFields.pools) {
@@ -1079,7 +1171,7 @@ function navEnsure(profile) {
     let nav = _nav[profile];
     if (nav && nav.W === GRID_W && nav.H === GRID_H) return nav;
     const wall = navWallTable(profile);
-    nav = navBuild(profile, wall, profile === NAV_PROFILE_GROUND, GRID_W, GRID_H);
+    nav = navBuild(profile, wall, profile !== NAV_PROFILE_AIR, GRID_W, GRID_H);
     navPublish(nav);
     return nav;
 }
@@ -1094,9 +1186,11 @@ function navReset() {
         F.byKey = new Map(); F.pending = []; F.remake = null;
     }
     _navFields.flushedTick = -1;
-    _nav = [null, null];
-    _navSeq = [0, 0];
-    _navJob = null; _navWallDiff = 0;
+    _nav = new Array(NAV_PROFILES).fill(null);
+    _navSeq = new Array(NAV_PROFILES).fill(0);
+    _navJob = null; _navDiff.fill(0); _navLastJobProfile = -1;
+    // (The class walls made again from the grid as it is now: a restore.)
+    _navClassWall.fill(null); _navClassGrid = null;
     _navSubReset();
 }
 
@@ -1264,7 +1358,14 @@ function navSubstitutesRestore() {
 // needs a path of theirs (near things to react to, the interface), it walks
 // the navigation: navPath.
 const NAV_ROUTE_KEY = 'nav';
-function navProfileOf(u) { return u && u.isFlying ? NAV_PROFILE_AIR : NAV_PROFILE_GROUND; }
+function navProfileOf(u) {
+    if (!u) return NAV_PROFILE_GROUND;
+    if (u.isFlying) return NAV_PROFILE_AIR;
+    const wt = u.workerType;
+    if (!wt) return NAV_PROFILE_GROUND;
+    if (wt === 'builder' || wt === 'salvager') { const o = u.owner; return o >= 0 && o < NAV_BUILD_PLAYERS ? NAV_PROFILE_BUILD0 + o : NAV_PROFILE_GROUND; }
+    return typeof isResourceCollectorWorkerType === 'function' && isResourceCollectorWorkerType(wt) ? NAV_PROFILE_COLLECT : NAV_PROFILE_GROUND;
+}
 // Up to maxLen tiles from (gx, gy) toward dest (the start first), as path
 // nodes; null when the navigation has no way from there. For the interface:
 // it changes nothing (a destination field it would ask for, or a build,
@@ -1305,7 +1406,7 @@ function navApproachTile(profile, t) {
     const wall = navWallTable(profile), W = GRID_W, H = GRID_H;
     if (!(t >= 0 && t < W * H)) return -1;
     if (!wall[t]) return t;
-    const ver = (typeof _simMoveWallVer === 'number' ? _simMoveWallVer : 0) * 2 + profile;
+    const ver = (typeof _simMoveWallVer === 'number' ? _simMoveWallVer : 0) * NAV_PROFILES + profile;
     if (_navApproachVer !== ver) { _navApproach = new Map(); _navApproachVer = ver; }
     let r = _navApproach.get(t);
     if (r !== undefined) return r;
@@ -1353,30 +1454,45 @@ const NAV_BUILD_SLICES = 64;
 const NAV_STEP_NODES = 1, NAV_STEP_LOCAL = 4, NAV_STEP_GRAPH = NAV_STEP_LOCAL + NAV_BUILD_SLICES + 1;
 const NAV_STEP_STAGE = NAV_STEP_GRAPH + NAV_BUILD_SLICES + 1, NAV_STEP_INSTALL = NAV_STEP_STAGE + NAV_SWAP_TICKS;
 const NAV_BUILD_TICKS = NAV_STEP_INSTALL + 1;
-let _navJob = null, _navWallDiff = 0;
-// Tiles whose walls differ from those of the newest build (the one being
-// made, else the installed one).
-function _navNewestWalls() { return _navJob ? _navJob.b.wall : (_nav[NAV_PROFILE_GROUND] ? _nav[NAV_PROFILE_GROUND].wall : null); }
-function _navWallDiffReset() {
-    const w = _navNewestWalls(), live = typeof _simMoveWall !== 'undefined' ? _simMoveWall : null;
-    _navWallDiff = 0;
+let _navJob = null;
+// Per profile: tiles whose walls differ from those of its newest build (the
+// one being made, else the installed one). (The air's never change.)
+const _navDiff = new Int32Array(NAV_PROFILES);
+// The profile the last job built (the next is looked for after it).
+let _navLastJobProfile = -1;
+function _navNewestWalls(p) { return _navJob && _navJob.profile === p && _navJob.b ? _navJob.b.wall : (_nav[p] ? _nav[p].wall : null); }
+function _navWallDiffReset(p = NAV_PROFILE_GROUND) {
+    _navDiff[p] = 0;
+    if (p === NAV_PROFILE_AIR) return;
+    const w = _navNewestWalls(p), live = p === NAV_PROFILE_GROUND ? (typeof _simMoveWall !== 'undefined' ? _simMoveWall : null) : _navClassWalls(p);
     if (!w || !live || live.length !== w.length) return;
-    for (let i = 0; i < w.length; i++) if (w[i] !== live[i]) _navWallDiff++;
+    let d = 0;
+    for (let i = 0; i < w.length; i++) if (w[i] !== live[i]) d++;
+    _navDiff[p] = d;
 }
-// A wall tile changed from `was` to `now` (simMoveTileTypeChanged).
-function navWallChanged(t, was, now) {
-    const w = _navNewestWalls();
+function _navDiffChanged(p, t, was, now) {
+    const w = _navNewestWalls(p);
     if (!w || t < 0 || t >= w.length) return;
-    if (was !== w[t]) _navWallDiff--;
-    if (now !== w[t]) _navWallDiff++;
+    if (was !== w[t]) _navDiff[p]--;
+    if (now !== w[t]) _navDiff[p]++;
 }
+// A ground wall tile changed from `was` to `now` (simMoveTileTypeChanged).
+function navWallChanged(t, was, now) { _navDiffChanged(NAV_PROFILE_GROUND, t, was, now); }
 function navTick() {
     // (The map's first builds at its first tick, not at the first order:
     // on a big map that build takes long.)
-    if (!_nav[NAV_PROFILE_GROUND]) { navEnsure(NAV_PROFILE_GROUND); navEnsure(NAV_PROFILE_AIR); return; }
+    if (!_nav[NAV_PROFILE_GROUND]) { for (const p of _navProfilesInUse()) navEnsure(p); return; }
     if (!_navJob) {
-        if (_navWallDiff <= 0) return;
-        _navJob = { start: gameTime, step: 0, b: null, dests: null, destNew: null };
+        // The next profile whose walls changed, round the profiles from the
+        // last one built: none waits long behind another's changes.
+        let p = -1;
+        for (let k = 1; k <= NAV_PROFILES && p < 0; k++) {
+            const q = (_navLastJobProfile + k + NAV_PROFILES) % NAV_PROFILES;
+            if (q !== NAV_PROFILE_AIR && _nav[q] && _navDiff[q] > 0) p = q;
+        }
+        if (p < 0) return;
+        _navLastJobProfile = p;
+        _navJob = { profile: p, start: gameTime, step: 0, b: null, dests: null, destNew: null };
     }
     const J = _navJob, off = gameTime - J.start;
     while (J.step <= off && _navJob === J) _navJobStep(J, J.step++);
@@ -1392,8 +1508,8 @@ function navTick() {
 // what any peer does (a collect waits, or runs what is left itself).
 function _navJobStep(J, step) {
     if (step === 0) {
-        J.b = navBuildStart(NAV_PROFILE_GROUND, navWallTable(NAV_PROFILE_GROUND), true, GRID_W, GRID_H);
-        _navWallDiffReset();
+        J.b = navBuildStart(J.profile, navWallTable(J.profile), J.profile !== NAV_PROFILE_AIR, GRID_W, GRID_H);
+        _navWallDiffReset(J.profile);
     } else if (step === NAV_STEP_NODES) {
         navBuildNodesBackground(J.b);
     } else if (step === NAV_STEP_LOCAL) {
@@ -1415,36 +1531,53 @@ function _navJobStep(J, step) {
         _navNextInstall(J.next);
     }
 }
-// Snapshots: the walls of the installed ground build and of one being made,
-// as their differences from the live walls, and when that one started.
+// Snapshots: the walls of every installed build (but the air's: its walls
+// never change) and of one being made, as their differences from the
+// profile's live walls, and when that one started; the profile the last job
+// built (the next job's choice). (Older snapshots: the ground's alone.)
 function navSnapshotState() {
-    const live = typeof _simMoveWall !== 'undefined' ? _simMoveWall : null, nav = _nav[NAV_PROFILE_GROUND];
-    if (!nav || !live || live.length !== nav.wall.length) return null;
-    const diff = w => { const out = []; for (let i = 0; i < w.length; i++) if (w[i] !== live[i]) out.push(i, w[i]); return out; };
-    return { built: diff(nav.wall), seq: nav.seq | 0, job: _navJob && _navJob.b ? { start: _navJob.start, step: _navJob.step, walls: diff(_navJob.b.wall) } : null };
+    const nav = _nav[NAV_PROFILE_GROUND];
+    if (!nav) return null;
+    const diff = (w, live) => { const out = []; for (let i = 0; i < w.length; i++) if (w[i] !== live[i]) out.push(i, w[i]); return out; };
+    const profiles = [];
+    for (let p = 0; p < NAV_PROFILES; p++) {
+        const b = _nav[p];
+        if (!b || p === NAV_PROFILE_AIR) continue;
+        const live = navWallTable(p);
+        if (!live || live.length !== b.wall.length) return null;
+        profiles.push({ p, built: diff(b.wall, live), seq: b.seq | 0 });
+    }
+    const J = _navJob && _navJob.b ? _navJob : null, g = profiles[0];
+    return { built: g.built, seq: g.seq, profiles, last: _navLastJobProfile,
+        job: J ? { profile: J.profile, start: J.start, step: J.step, walls: diff(J.b.wall, navWallTable(J.profile)) } : null };
 }
 // After a restore (the live walls restored): the same builds again.
 function navRestoreState(st) {
     navReset();
     if (!st || !Array.isArray(st.built)) return;
-    const live = simMoveWallGrid();
-    const walls = d => { const w = new Uint8Array(live.length); w.set(live); if (Array.isArray(d)) for (let i = 0; i + 1 < d.length; i += 2) if (d[i] >= 0 && d[i] < w.length) w[d[i]] = d[i + 1] ? 1 : 0; return w; };
-    navPublish(navBuild(NAV_PROFILE_GROUND, walls(st.built), true, GRID_W, GRID_H));
-    if (st.seq > 0) _nav[NAV_PROFILE_GROUND].seq = _navSeq[NAV_PROFILE_GROUND] = st.seq | 0;
+    const walls = (live, d) => { const w = new Uint8Array(live.length); w.set(live); if (Array.isArray(d)) for (let i = 0; i + 1 < d.length; i += 2) if (d[i] >= 0 && d[i] < w.length) w[d[i]] = d[i + 1] ? 1 : 0; return w; };
+    const list = Array.isArray(st.profiles) ? st.profiles : [{ p: NAV_PROFILE_GROUND, built: st.built, seq: st.seq }];
+    for (const e of list) {
+        const p = e.p | 0;
+        if (p === NAV_PROFILE_AIR || p < 0 || p >= NAV_PROFILES) continue;
+        navPublish(navBuild(p, walls(navWallTable(p), e.built), true, GRID_W, GRID_H));
+        if (e.seq > 0) _nav[p].seq = _navSeq[p] = e.seq | 0;
+    }
     // (The air one too, as the match's first tick made it: flyers' fields
     // need it now.)
     navEnsure(NAV_PROFILE_AIR);
+    _navLastJobProfile = Number.isFinite(st.last) ? st.last | 0 : -1;
     if (st.job && Number.isFinite(st.job.start)) {
         // Its stages up to now run at once (the same result as spread out).
-        const J = _navJob = { start: st.job.start, step: 0, b: null, dests: null, destNew: null };
+        const p = Number.isFinite(st.job.profile) ? st.job.profile | 0 : NAV_PROFILE_GROUND;
+        const J = _navJob = { profile: p, start: st.job.start, step: 0, b: null, dests: null, destNew: null };
         if (st.job.walls) {
-            const w = walls(st.job.walls);
             // (Steps below `step` ran on the snapshot's peer.)
             const upTo = Math.min(Number(st.job.step) || 1, NAV_STEP_INSTALL);
-            J.b = navBuildStart(NAV_PROFILE_GROUND, w, true, GRID_W, GRID_H);
+            J.b = navBuildStart(p, walls(navWallTable(p), st.job.walls), p !== NAV_PROFILE_AIR, GRID_W, GRID_H);
             J.step = 1;
             for (; J.step < upTo; J.step++) _navJobStep(J, J.step);
         }
-        _navWallDiffReset();
     }
+    for (let p = 0; p < NAV_PROFILES; p++) if (_nav[p] && p !== NAV_PROFILE_AIR) _navWallDiffReset(p);
 }
