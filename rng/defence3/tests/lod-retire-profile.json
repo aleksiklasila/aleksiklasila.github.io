@@ -1,0 +1,51 @@
+{
+  "fixture": "200000-1000.json",
+  "setup": {
+    "units": 400000,
+    "structures": 60262,
+    "map": 1000,
+    "viewport": {
+      "width": 776,
+      "height": 669
+    },
+    "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 2060 (0x00001F15) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "graphics": {
+      "aa": "msaa",
+      "shadows": "high",
+      "ao": "low",
+      "outline": true,
+      "bloom": false,
+      "grade": true,
+      "sharpen": true,
+      "resolution": 1
+    }
+  },
+  "results": [
+    {
+      "mode": "3d",
+      "zoom": 1.5,
+      "pitch": 0.38,
+      "yaw": 1.5707963267948966,
+      "fps": 27.277747841917723,
+      "p95": 83.24500000000262,
+      "buildMs": 14.318770491930305,
+      "detail": 600,
+      "visibleDetail": 600,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 600,
+      "units": 399868,
+      "tps": 13,
+      "unitLayerStats": {
+        "reuse": 622,
+        "build": 128,
+        "why": {
+          "none": 1,
+          "tick": 127
+        }
+      }
+    }
+  ],
+  "errors": []
+}

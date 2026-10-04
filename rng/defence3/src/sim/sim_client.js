@@ -486,6 +486,32 @@ function _simClientApplyWorld(w, shown) {
 // A new units table: where drawn units continue from, which views live (new
 // ones made, gone ones frozen dead), then it becomes the current one and the
 // previous buffer goes back.
+function _simClientUpdateStableSlots(F, old) {
+    // Most membership changes are a few deaths/births in stable slots. Do
+    // not stamp and revisit every PageUnit (and all its render-cache fields)
+    // when the packed ID columns already identify exactly what changed.
+    const changed = [], n = Math.max(F.n, old.n);
+    for (let s = 0; s < n; s++) {
+        const id = s < F.n ? F.id[s] : -1, before = s < old.n ? old.id[s] : -1;
+        if (id === before) continue;
+        // A restore can move an existing ID between slots. Leave it to the
+        // general path, which preserves object identity across that remap.
+        if (id >= 0 && _pageUnitsById.has(id)) return null;
+        changed.push(s);
+    }
+    for (const s of changed) {
+        const v = _pageSlotViews[s];
+        if (v && !v.dead) { v._freeze(); v.dead = true; _pageUnitsById.delete(v.id); }
+        const id = s < F.n ? F.id[s] : -1;
+        if (id >= 0) {
+            const next = new PageUnit(id, s);
+            _pageUnitsById.set(id, next); _pageSlotViews[s] = next;
+        } else _pageSlotViews[s] = undefined;
+    }
+    const list = new Array(F.count), order = F.order;
+    for (let k = 0; k < F.count; k++) list[k] = _pageSlotViews[order[k]];
+    return list;
+}
 function _simClientApplyFrame(frame, shown) {
     let c = _simClient;
     let F = simFrameViews(frame.buf, frame.cap);
@@ -500,21 +526,25 @@ function _simClientApplyFrame(frame, shown) {
         }
     }
     if (frame.mver !== c.mver || c.frameUnits !== units) {
-        let stamp = ++_pageViewStamp, list = new Array(frame.count), order = F.order, ids = F.id;
-        for (let k = 0; k < frame.count; k++) {
-            let s = order[k], id = ids[s], v = _pageSlotViews[s];
-            if (!v || v.id !== id || v.dead) {
-                v = _pageUnitsById.get(id);
-                if (!v || v.dead) { v = new PageUnit(id, s); _pageUnitsById.set(id, v); }
-                _pageSlotViews[s] = v;
+        let list = old && c.frameUnits === units ? _simClientUpdateStableSlots(F, old) : null;
+        if (!list) {
+            let stamp = ++_pageViewStamp, order = F.order, ids = F.id;
+            list = new Array(frame.count);
+            for (let k = 0; k < frame.count; k++) {
+                let s = order[k], id = ids[s], v = _pageSlotViews[s];
+                if (!v || v.id !== id || v.dead) {
+                    v = _pageUnitsById.get(id);
+                    if (!v || v.dead) { v = new PageUnit(id, s); _pageUnitsById.set(id, v); }
+                    _pageSlotViews[s] = v;
+                }
+                v._stamp = stamp;
+                list[k] = v;
             }
-            v._stamp = stamp;
-            list[k] = v;
+            // Gone: their last values, from the frame they were last in.
+            let prev = c.frameUnits || [];
+            for (let v of prev) if (v._stamp !== stamp && !v.dead) { v._freeze(); v.dead = true; _pageUnitsById.delete(v.id); }
+            for (let k = 0; k < list.length; k++) list[k]._s = order[k];
         }
-        // Gone: their last values, from the frame they were last in.
-        let prev = c.frameUnits || [];
-        for (let v of prev) if (v._stamp !== stamp && !v.dead) { v._freeze(); v.dead = true; _pageUnitsById.delete(v.id); }
-        for (let k = 0; k < list.length; k++) list[k]._s = order[k];
         units = list;
         c.frameUnits = list;
         c.mver = frame.mver;

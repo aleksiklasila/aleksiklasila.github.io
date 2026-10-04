@@ -2157,7 +2157,45 @@ function getChunkRenderView(view, bounds, flat2d) {
             const R = renderer3dInstance, M = detailCull ? R.tmpViewProjection : null;
             const projectionScale = detailCull ? (flat2d ? camera.zoom * TILE : R.lodProjectionScale) : 0;
             const sx = detailCull ? viewW / R.cssWidth : 1, sy = detailCull ? viewH / R.cssHeight : 1;
-            for (let k = 0; k < n; k++) {
+            let candidates = null;
+            if (detailCull) {
+                // A packed spatial index is built once per received frame.
+                // Camera rotation then rejects whole distant/off-screen
+                // chunks instead of projecting the entire army each frame.
+                const side = 16, bw = Math.ceil(GRID_W / side), bh = Math.ceil(GRID_H / side), cells = bw * bh;
+                let B = rendererChunkCache.unitBuckets;
+                if (!B || B.head.length !== cells || B.next.length < n) B = rendererChunkCache.unitBuckets = {
+                    head: new Int32Array(cells), next: new Int32Array(Math.max(n, F.cap)), motion: new Float32Array(cells)
+                };
+                if (B.frame !== F || B.list !== list) {
+                    B.head.fill(-1); B.motion.fill(0);
+                    const invCell = 1 / (TILE * side), invTile = 1 / TILE;
+                    for (let k = 0; k < n; k++) {
+                        const s = ord[k], x = X[s], y = Y[s];
+                        const bx = Math.max(0, Math.min(bw - 1, Math.floor(x * invCell))), by = Math.max(0, Math.min(bh - 1, Math.floor(y * invCell)));
+                        const b = by * bw + bx;
+                        B.next[k] = B.head[b]; B.head[b] = k;
+                        const motion = Math.max(Math.abs(PX[s] - x), Math.abs(PY[s] - y)) * invTile;
+                        if (motion > B.motion[b]) B.motion[b] = motion;
+                    }
+                    B.frame = F; B.list = list;
+                }
+                candidates = [];
+                for (let b = 0; b < cells; b++) {
+                    if (B.head[b] < 0) continue;
+                    const x = (b % bw + .5) * side, z = (Math.floor(b / bw) + .5) * side, radius = side / 2 + 2 + B.motion[b];
+                    const w = M[3] * x + M[11] * z + M[15], dw = radius * (Math.abs(M[3]) + Math.abs(M[11]));
+                    if (w + dw <= 0 || .9 * projectionScale / (flat2d ? 1 : Math.max(.01, w - dw)) < UNIT_DETAIL_MIN_PX * .85) continue;
+                    const cx = M[0] * x + M[8] * z + M[12], cy = M[1] * x + M[9] * z + M[13];
+                    if (Math.abs(cx) > sx * w + radius * (Math.abs(M[0]) + Math.abs(M[8])) + sx * dw
+                        || Math.abs(cy) > sy * w + radius * (Math.abs(M[1]) + Math.abs(M[9])) + sy * dw) continue;
+                    for (let k = B.head[b]; k >= 0; k = B.next[k]) candidates.push(k);
+                }
+                candidates.sort((a, b) => a - b);
+            }
+            const count = candidates ? candidates.length : n;
+            for (let i = 0; i < count; i++) {
+                const k = candidates ? candidates[i] : i;
                 const s = ord[k], x = X[s], y = Y[s], px = PX[s], py = PY[s];
                 if ((x < minX && px < minX) || (x >= maxX && px >= maxX) || (y < minY && py < minY) || (y >= maxY && py >= maxY)) continue;
                 if (detailCull) {
@@ -2182,6 +2220,10 @@ function getChunkRenderView(view, bounds, flat2d) {
     }
     for (const name of ['units', 'towers', 'barracks', 'collectorSpawners', 'goldMines', 'astarMines', 'droppedItems']) {
         const list = view[name];
+        // The live structure split reads the packed table itself. Building
+        // and sorting object buckets here would immediately be discarded.
+        if (name !== 'units' && name !== 'droppedItems' && typeof flat2d === 'boolean' && F
+            && typeof _pageTables !== 'undefined' && _pageTables.s?.n > STRUCT_DETAIL_BUDGET && _isLiveRenderGrid(view.grid)) continue;
         if (list.length < 5000 || (name === 'units' && F)) continue;
         let index = rendererChunkCache.lists.get(name);
         // (Structures do not move: their index stands until their list is
@@ -2867,7 +2909,7 @@ function build3DFrameData(flat2d = false) {
     if (staticReuse) {
         // Nothing to walk: only what could not be kept.
     } else if (_isLiveRenderGrid(grid)) {
-        let items = getCellItemsRowMajor();
+        let items = structDetail?.floors || getCellItemsRowMajor();
         for (let i = findCellItemRowStart(items, sBounds.minGy); i < items.length; i++) {
             let item = items[i], x = item.gx, y = item.gy;
             if (y > sBounds.maxGy) break;
@@ -3446,7 +3488,7 @@ function _structureGlyphLayer(D, floorItems, viewGrid) {
     if (!P) return null;
     const G = _structGlyph;
     if (!G.layer || G.renderer !== renderer3dInstance) { G.layer = new P(12); G.renderer = renderer3dInstance; G.key = ''; }
-    const key = gameTime + '|' + Math.round(D.T * 4) + '|' + visibilityVersion + '|' + D.far.map(L => L.length).join(',') + '|' + (floorItems ? floorItems.length : 0);
+    const key = gameTime + '|' + D.version + '|' + visibilityVersion + '|' + D.far.map(L => L.length).join(',') + '|' + (floorItems ? floorItems.length : 0);
     if (G.key === key) return G.layer;
     G.key = key;
     const L = G.layer, colors = new Map();
@@ -3465,8 +3507,7 @@ function _structureGlyphLayer(D, floorItems, viewGrid) {
     L.version++;
     return L;
 }
-// The glyph layers of a detailed view: units and structures past their
-// detail thresholds (renderer3d drawFrameColumns skips those over them).
+// Glyphs for every unit/structure outside the selected detail masks.
 function _detailColumns(unitDetail, structDetail) {
     // (A remembered view's structures have no table: their glyphs are the
     // instance layer's, _structureGlyphLayer.)
@@ -3553,19 +3594,21 @@ function _structureDetailSplit(lists, flat2d, bounds, live = true) {
             P[s] = _detailScore(gx + .5, gy + .5, .94, flat2d, !!previous?.mask?.[s]);
         }
         const slots = _detailPick(P, STRUCT_DETAIL_BUDGET), selected = new Set();
-        const out = lists.map(() => []), byKind = [0, 1, 2, -1, 3, 4];
+        const out = lists.map(() => []), floors = [], byKind = [0, 1, 2, -1, 3, 4];
         for (const s of slots) {
             const e = _pageStructViews[s];
             if (!e) continue;
             selected.add(e);
             const k = byKind[F.kind[s]];
             if (k >= 0) out[k].push(e);
+            else if (F.kind[s] === 3) floors.push(e);
         }
         let value = previous;
         if (!previous || !previous.live || previous.mask.length !== F.cap || previous.selected.size !== selected.size || [...selected].some(e => !previous.selected.has(e))) {
             const mask = new Uint8Array(F.cap);
             for (const s of slots) mask[s] = 1;
-            value = _structDetailPrevious = { lists: out, selected, mask, version: ++_structDetailVersion, live: true };
+            floors.sort((a, b) => a.gy - b.gy || a.gx - b.gx);
+            value = _structDetailPrevious = { lists: out, floors, selected, mask, version: ++_structDetailVersion, live: true };
         }
         _structDetailCache = { key: cacheKey, frame: F, value };
         return value;
@@ -3589,7 +3632,7 @@ function _structureDetailSplit(lists, flat2d, bounds, live = true) {
     i = 0;
     const far = all.map(() => []);
     const out = all.map((L, k) => { const o = []; for (const e of L) { if (picked.has(i++)) { o.push(e); selected.add(e); } else if (!live) far[k].push(e); } return o; });
-    if (previous && previous.live === live && previous.mask?.length === _pageTables.s.cap && previous.selected.size === selected.size && [...selected].every(e => previous.selected.has(e)) && live) {
+    if (live && previous && previous.live && previous.mask?.length === _pageTables.s.cap && previous.selected.size === selected.size && [...selected].every(e => previous.selected.has(e))) {
         _structDetailCache = { key: cacheKey, frame: _pageTables.s, value: previous };
         return previous;
     }

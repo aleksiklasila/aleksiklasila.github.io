@@ -1,9 +1,9 @@
 'use strict';
 const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const read = p => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
-const c = vm.createContext({window:{}, console, TILE:32, viewW:1280,viewH:800,camera:{zoom:3},tickAlpha:1,
+const c = vm.createContext({window:{}, console, TILE:32, GRID_W:1000,GRID_H:1000,viewW:1280,viewH:800,camera:{zoom:3},tickAlpha:1,
     fullVisibility:true,visibilityGrid:[],visibilityVersion:1,gameTime:1,VISIBILITY_LIGHT_NORMALIZATION_RANGE:6,
-    SIM_UF_GHOST:65536,SIM_UF_HIDDEN:1024,get3DRenderOwnerColor:()=> '#fff'});
+    SIM_UF_GHOST:65536,SIM_UF_HIDDEN:1024,get3DRenderOwnerColor:()=> '#fff',_isLiveRenderGrid:()=>true});
 vm.runInContext(read('src/audio_visual/renderer3d.js'), c);
 const R=c.renderer3dInstance=Object.create(c.window.Defence3Renderer3D.prototype);
 Object.assign(R,{cssWidth:1280,cssHeight:800,pixelRatio:1,sceneTargetSize:{width:1280,height:800},orbitPitch:.18,orbitYaw:0});
@@ -11,7 +11,7 @@ for(const key of ['tmpViewProjection','tmpInverseViewProjection','tmpProjection'
 const source=read('src/audio_visual/renderer.js');
 vm.runInContext(source.slice(source.indexOf('// Rank only visible models.'),source.indexOf('function drawInteractionOverlay')),c);
 function populate(points) {
-    const n=points.length,F={cap:n,count:n};
+    const n=points.length,F={cap:n,count:n,order:Int32Array.from(points,(_,i)=>i)};
     for(const field of ['x','y','px','py','r','flags','energy']) F[field]=new Float32Array(n);
     c.units=points.map(([x,z,r=8],s)=>{F.x[s]=F.px[s]=x*32;F.y[s]=F.py[s]=z*32;F.r[s]=r;F.energy[s]=10;return {_s:s};});
     c.simClientCurrentUnitVis=()=>F;
@@ -54,4 +54,30 @@ const buildings=c._structureDetailSplit([structures],true,{},true);
 assert.equal(buildings.selected.size,600,'equal-sized structures also fill a bounded budget');
 assert.equal(buildings.mask.reduce((a,b)=>a+b,0),600);
 assert.equal(c._structureDetailSplit([structures],true,{},true),buildings,'unchanged structures reuse their model layer');
+// The packed structure path rejects off-screen slots without touching views.
+const T={cap:2000,n:2000};
+for(const name of ['kind','alive','energy','gx','gy']) T[name]=new Float32Array(2000);
+for(let i=0;i<2000;i++) {T.alive[i]=1;T.energy[i]=10;T.kind[i]=i%6;T.gx[i]=495+i%10;T.gy[i]=497+Math.floor(i/10)%6;}
+c._pageTables.s=T;c._pageStructViews=structures;c.gameTime++;
+const packed=c._structureDetailSplit([[],[],[],[],[]],true,{},true);
+assert.equal(packed.selected.size,600);
+assert.equal(packed.mask.reduce((a,b)=>a+b,0),600);
+T.alive.fill(0);c.gameTime++;
+assert.equal(c._structureDetailSplit([[],[],[],[],[]],true,{},true).selected.size,0,'retired structures cannot hold detail slots');
+// A zoomed camera in a huge world still needs columns for its far population
+// even when the CPU query yields fewer units than the model budget.
+project(true,3);
+const sparse=c.units.slice(0,1);
+assert.ok(c._unitDetailSplit(sparse,true,{}).columns.units,'small query preserves the distant GPU army');
+vm.runInContext('let rendererChunkCache=null;'+source.slice(source.indexOf('function getChunkRenderView('),source.indexOf('function useScaleRendering(')),c);
+const world={grid:[],units:c.units,towers:[],barracks:[],collectorSpawners:[],goldMines:[],astarMines:[],droppedItems:[]};
+for(const flat of [true,false])for(const zoom of [.6,3,15])for(const yaw of [0,Math.PI/2,Math.PI]) {
+    project(flat,zoom,.38,yaw);c.gameTime++;
+    const subset=new Set(c.getChunkRenderView(world,{minGx:0,minGy:0,maxGx:999,maxGy:999},flat).units);
+    for(let i=0;i<c.units.length;i++) if(c._detailScore(F.x[i]/32,F.y[i]/32,.55,flat)>0) assert.ok(subset.has(c.units[i]),'early packed-column culling retains every readable visible model');
+}
+// Long movement across chunk boundaries must not disappear mid-tick.
+F.px[0]=470*32;F.py[0]=500*32;F.x[0]=530*32;F.y[0]=500*32;
+c.simClientCurrentUnitVis=()=>({...F});c.tickAlpha=.5;project(true,15);c.gameTime++;
+assert.ok(c.getChunkRenderView(world,{minGx:495,minGy:495,maxGx:505,maxGy:505},true).units.includes(c.units[0]));
 console.log('PASS visible detail, equal sizes, small-unit zoom, hard budgets, exact masks, reuse, and 12 low/high camera rotations');
