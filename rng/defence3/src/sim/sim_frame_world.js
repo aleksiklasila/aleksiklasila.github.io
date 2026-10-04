@@ -215,12 +215,22 @@ function _simPlain(v, depth) {
     for (let k in v) { if (k[0] === '_' && k !== '_resourceFixedValues') continue; let x = _simPlain(v[k], depth + 1); if (x !== undefined) out[k] = x; }
     return out;
 }
-function simFrameResetState() { _simStateLast = { globals: '', cellTypes: null, cellOwners: null, w: 0, h: 0 }; }
+function simFrameResetState() { _simStateLast = { globals: '', cellTypes: null, cellOwners: null, w: 0, h: 0, areas: null }; }
 function simFrameEncodeState(includeCells = true) {
     let out = { players: players.map(p => _simPlain(p, 0)) };
-    let areaState = [];
-    for (let ar of (areas || [])) if (ar && (ar.active || ar.multiplierLevel)) areaState.push([ar.id, ar.active ? 1 : 0, ar.multiplierLevel || 0]);
-    let g = { gameTime, gameOver: !!gameOver, winner, resigned: [...resignedTeams], teams: activeTeamIds, areaState,
+    // The areas' state only when it changed (dirtyAreas: set by the
+    // simulation as areas turn on or off or level up; nothing in this
+    // worker draws, so it is cleared here): a pass over every area and a
+    // list of them each tick, on both threads, cost ~5 ms a tick on a big map.
+    if (dirtyAreas || !_simStateLast.areas || _simStateLast.areas.list !== areas) {
+        let areaState = [];
+        for (let ar of (areas || [])) if (ar && (ar.active || ar.multiplierLevel)) areaState.push([ar.id, ar.active ? 1 : 0, ar.multiplierLevel || 0]);
+        let key = areaState.join(';');
+        if (!_simStateLast.areas || _simStateLast.areas.key !== key || _simStateLast.areas.list !== areas) out.areas = areaState;
+        _simStateLast.areas = { key, list: areas };
+        dirtyAreas = false;
+    }
+    let g = { gameTime, gameOver: !!gameOver, winner, resigned: [...resignedTeams], teams: activeTeamIds,
         defeat: typeof _simLocalDefeat === 'string' ? _simLocalDefeat : '',
         pathBudget: pathfindBudgetByPlayer ? Array.from(pathfindBudgetByPlayer) : null,
         astarBudget: astarNodeBudgetRemainingByPlayer ? Array.from(astarNodeBudgetRemainingByPlayer) : null };
@@ -540,7 +550,10 @@ function pageApplyState(st) {
         if (Array.isArray(g.teams) && g.teams.length) activeTeamIds = g.teams;
         if (g.pathBudget) for (let i = 0; i < g.pathBudget.length; i++) pathfindBudgetByPlayer[i] = g.pathBudget[i];
         if (g.astarBudget) for (let i = 0; i < g.astarBudget.length; i++) astarNodeBudgetRemainingByPlayer[i] = g.astarBudget[i];
-        let now = new Map((g.areaState || []).map(e => [e[0], e]));
+    }
+    // (Only when the areas changed: see simFrameEncodeState.)
+    if (st.areas) {
+        let now = new Map(st.areas.map(e => [e[0], e]));
         for (let ar of (areas || [])) {
             if (!ar) continue;
             let e = now.get(ar.id), active = !!(e && e[1]), level = e ? e[2] : 0;

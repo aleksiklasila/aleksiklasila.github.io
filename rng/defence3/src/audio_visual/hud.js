@@ -1572,8 +1572,26 @@ function updateHUD() {
         _hudCache.fps = _fpsDisplay;
         _hudCache.tps = _tpsDisplay;
         _hudCache.net = netText;
-        _hudEls.fps.textContent = `${_fpsDisplay} FPS / ${_tpsDisplay} TPS${netText}`;
+        _hudEls.fps.textContent = `${_fpsDisplay} FPS / ${_tpsDisplay} TPS${netText}${_hudIsolationText()}`;
     }
+}
+
+// Without cross-origin isolation the page has no shared memory: the
+// simulation runs on one thread, no helpers (a big map ticks a few times a
+// second). Said on the counter, not left to be guessed (FPS_TPS_STABILITY.md).
+let _hudIsolationNoted = false;
+function _hudIsolationText() {
+    if (typeof window === 'undefined' || window.crossOriginIsolated !== false) return '';
+    if (!_hudIsolationNoted && _hudEls.fps) {
+        _hudIsolationNoted = true;
+        _hudEls.fps.style.color = '#f86';
+        _hudEls.fps.title = 'This page is not cross-origin isolated, so it has no SharedArrayBuffer: the simulation runs on one thread without its helpers, '
+            + 'and large maps run far below 20 TPS. Serve it with COOP/COEP headers (python rng/defence3/serve.py, or GitHub Pages), '
+            + 'not a plain python -m http.server (on Windows it serves .js as text/plain, so the coi-serviceworker cannot start). '
+            + 'A hard reload (Ctrl+F5) also bypasses the service worker once.';
+        console.warn('[defence3] ' + _hudEls.fps.title);
+    }
+    return ' / 1 thread';
 }
 
 // Pop: current / house capacity / max population.
@@ -2957,6 +2975,11 @@ function getUnitGroupKey(u) {
 
 function getActiveUnits() {
     if (selectedUnits.length === 0) return [];
+    // (No subgroup turned off, the usual case: the live ones, without a
+    // group key string per unit: 100k selected units made 100k strings.)
+    let anyOff = false;
+    for (let key in activeSubGroups) if (activeSubGroups[key] === false) { anyOff = true; break; }
+    if (!anyOff) return selectedUnits.filter(u => !u.dead);
     return selectedUnits.filter(u => !u.dead && activeSubGroups[getUnitGroupKey(u)] !== false);
 }
 
@@ -2979,6 +3002,10 @@ function getActiveUnitsForRender() {
 // Returns selected entities filtered by active sub-group toggles
 function getActiveEntities() {
     if (selectedEntities.length === 0) return [];
+    // (No subgroup turned off: all of them, no key string per entity.)
+    let anyOff = false;
+    for (let key in activeSubGroups) if (activeSubGroups[key] === false) { anyOff = true; break; }
+    if (!anyOff) return selectedEntities.slice();
     return selectedEntities.filter(e => {
         return activeSubGroups[getEntityGroupKey(e)] !== false;
     });

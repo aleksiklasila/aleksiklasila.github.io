@@ -53,7 +53,101 @@ const PAGE_SETUP = () => {
     try { new PerformanceObserver(list => { if (!W.on) return; for (const e of list.getEntries()) { W.longTasks++; W.longMs += e.duration; } }).observe({ type: 'longtask', buffered: false }); } catch { }
     const apply = _simClientApplyTick;
     _simClientApplyTick = function (msg) { if (W.on && msg && msg.epoch === _simClient.epoch) W.ticks.push([performance.now(), msg.tick, Number(msg.simMs) || 0]); return apply.apply(this, arguments); };
-    W.render = processRenderFrame;
+    // Motion smoothness: per drawn frame, where sampled moving units of the
+    // local player are drawn (their frame position at the frame's alpha, as
+    // the renderer interpolates), and which tick the units table shows.
+    const render = processRenderFrame;
+    W.jit = { ids: null, rows: [] };
+    W.render = function (ts) {
+        const r = render.apply(this, arguments);
+        if (W.on && typeof _pageFrame !== 'undefined' && _pageFrame && typeof _pageUnitsById !== 'undefined') {
+            const J = W.jit, F = _pageFrame, a = tickAlpha;
+            if (!J.ids) {
+                J.ids = [];
+                for (const u of units) { if (J.ids.length >= 256) break; const s = u && u._s; if (s >= 0 && F.owner[s] === localPlayerId && Math.hypot(F.x[s] - F.px[s], F.y[s] - F.py[s]) > .3) J.ids.push(u.id); }
+            }
+            const pos = new Float64Array(J.ids.length * 2);
+            for (let i = 0; i < J.ids.length; i++) {
+                const u = _pageUnitsById.get(J.ids[i]), s = u && !u.dead ? u._s : -1;
+                if (s >= 0) { pos[i * 2] = F.px[s] + (F.x[s] - F.px[s]) * a; pos[i * 2 + 1] = F.py[s] + (F.y[s] - F.py[s]) * a; } else { pos[i * 2] = NaN; pos[i * 2 + 1] = NaN; }
+            }
+            const tk = typeof _simClient !== 'undefined' && _simClient ? (_simClient.presentation ? _simClient.presentationTick : _simClient.appliedTick) : -1;
+            // (Each new table: the sampled units' steps that tick, |x - px|.)
+            if (tk !== J.lastTick) {
+                J.lastTick = tk;
+                const st = new Float64Array(J.ids.length);
+                for (let i = 0; i < J.ids.length; i++) { const u = _pageUnitsById.get(J.ids[i]), s = u && !u.dead ? u._s : -1; st[i] = s >= 0 ? Math.hypot(F.x[s] - F.px[s], F.y[s] - F.py[s]) : NaN; }
+                (J.steps || (J.steps = [])).push(st);
+            }
+            J.rows.push([ts, a, tk, pos]);
+        }
+        return r;
+    };
+};
+// Per sampled unit, its drawn speed frame to frame against its own median:
+// stalls (under a quarter of it: drawn standing while it moves) and jumps
+// (over 2.5 times), and how many ticks each frame's table moved on.
+const JITTER_SUMMARY = () => {
+    const J = window.__bench.jit, R = J.rows;
+    // The simulation's own steps per tick (not the drawing): per unit, ticks
+    // with a step under a quarter of its median (stood that tick) and over
+    // 2.5 times, and the steps' variation.
+    const stepStats = J => {
+        const S = J.steps || [];
+        let n = 0, low = 0, high = 0, cv = 0, cvN = 0;
+        for (let i = 0; J.ids && i < J.ids.length; i++) {
+            const v = S.map(r => r[i]).filter(Number.isFinite), o = v.slice().sort((x, y) => x - y);
+            if (o.length < 10) continue;
+            const med = o[o.length >> 1];
+            if (!(med > 0.05)) continue;
+            let m = 0, d = 0; for (const x of v) m += x; m /= v.length; for (const x of v) d += (x - m) * (x - m);
+            cv += Math.sqrt(d / v.length) / m; cvN++;
+            for (const x of v) { n++; if (x < med * 0.25) low++; else if (x > med * 2.5) high++; }
+        }
+        const sample = J.ids ? J.ids.slice(0, 4).map((id, i) => S.slice(0, 60).map(r => Number.isFinite(r[i]) ? Math.round(r[i] * 10) / 10 : -1).join(',')) : [];
+        return { sample, ticks: S.length, standPct: n ? Math.round(low / n * 1000) / 10 : 0, bigPct: n ? Math.round(high / n * 1000) / 10 : 0, cv: cvN ? Math.round(cv / cvN * 100) / 100 : 0 };
+    };
+    if (!J.ids || R.length < 10) return null;
+    // (Only units the simulation moves steadily, steps varying under 35%:
+    // a unit stopping and starting in a crowd is the simulation, not the
+    // drawing.)
+    const S = J.steps || [];
+    const steady = J.ids.map((id, i) => {
+        const v = S.map(r => r[i]).filter(Number.isFinite);
+        if (v.length < 10) return false;
+        let m = 0, d = 0; for (const x of v) m += x; m /= v.length; for (const x of v) d += (x - m) * (x - m);
+        return m > 0.3 && Math.sqrt(d / v.length) / m < 0.35;
+    });
+    let frames = 0, stalls = 0, jumps = 0, cvSum = 0, cvN = 0;
+    for (let i = 0; i < J.ids.length; i++) {
+        if (!steady[i]) continue;
+        const sp = [];
+        for (let f = 1; f < R.length; f++) {
+            const dt = R[f][0] - R[f - 1][0], a = R[f - 1][3], b = R[f][3];
+            if (!(dt > 0) || !Number.isFinite(a[i * 2]) || !Number.isFinite(b[i * 2])) { sp.push(NaN); continue; }
+            sp.push(Math.hypot(b[i * 2] - a[i * 2], b[i * 2 + 1] - a[i * 2 + 1]) / dt);
+        }
+        const ok = sp.filter(Number.isFinite).sort((x, y) => x - y);
+        if (ok.length < 10) continue;
+        const med = ok[ok.length >> 1];
+        if (!(med > 0.005)) continue;
+        let m = 0, v = 0;
+        for (const x of ok) m += x; m /= ok.length;
+        for (const x of ok) v += (x - m) * (x - m); v = Math.sqrt(v / ok.length);
+        cvSum += v / m; cvN++;
+        for (const x of sp) { if (!Number.isFinite(x)) continue; frames++; if (x < med * 0.25) stalls++; else if (x > med * 2.5) jumps++; }
+    }
+    const adv = [0, 0, 0, 0];
+    for (let f = 1; f < R.length; f++) { const d = R[f][2] - R[f - 1][2]; adv[d <= 0 ? 0 : d === 1 ? 1 : d === 2 ? 2 : 3]++; }
+    const alphaOne = R.filter(r => r[1] >= 1).length;
+    // (When the table moved on: the gaps between those frames.)
+    const at = []; for (let f = 1; f < R.length; f++) if (R[f][2] !== R[f - 1][2]) at.push(R[f][0]);
+    const gaps = []; for (let i = 1; i < at.length; i++) gaps.push(at[i] - at[i - 1]);
+    gaps.sort((x, y) => x - y);
+    const gq = p => gaps.length ? Math.round(gaps[Math.min(gaps.length - 1, Math.floor(gaps.length * p))]) : 0;
+    return { units: cvN, frames, stallPct: frames ? Math.round(stalls / frames * 1000) / 10 : 0, jumpPct: frames ? Math.round(jumps / frames * 1000) / 10 : 0,
+        speedCv: cvN ? Math.round(cvSum / cvN * 100) / 100 : 0, alphaAtOnePct: Math.round(alphaOne / R.length * 1000) / 10, tableAdvance: adv,
+        tableGapMs: [gq(.05), gq(.25), gq(.5), gq(.75), gq(.95)], tickStep: stepStats(J) };
 };
 // The view: rendering off (no frame drawn: processRenderFrame does nothing),
 // or a camera.
@@ -87,12 +181,25 @@ const PAGE_LOAD = load => {
         for (let i = 0; i < 10; i++) queueAction({ action: 'move', unitIds: mine.filter((u, k) => k % 10 === i), targetX: (0.15 + 0.7 * ((i * 7) % 10) / 9) * W, targetY: (0.15 + 0.7 * ((i * 3) % 10) / 9) * H });
     } else if (load === 'combat') {
         queueAction({ action: 'attackMove', unitIds: mine, targetX: W / 2, targetY: H / 2 });
+    } else if (load === 'selectall') {
+        // (The user's case: everything of the player selected, its units sent
+        // on and every spawner given a rally point, then just watched.)
+        selectedUnits = units.filter(u => u && !u.dead && u.owner === localPlayerId);
+        selectedEntities = [...towers, ...barracks, ...collectorSpawners].filter(e => e && e.owner === localPlayerId && e.energy > 0);
+        for (let i = 0; i < 10; i++) queueAction({ action: 'move', unitIds: mine.filter((u, k) => k % 10 === i), targetX: (0.15 + 0.7 * ((i * 7) % 10) / 9) * W, targetY: (0.15 + 0.7 * ((i * 3) % 10) / 9) * H });
+        const coords = [];
+        for (const b of [...barracks, ...collectorSpawners]) if (b.owner === localPlayerId && b.energy > 0) coords.push(b.gx, b.gy);
+        const per = 2 * (typeof ACTION_MAX_RALLY_COORDS === 'number' ? ACTION_MAX_RALLY_COORDS : 512);
+        for (let k = 0; k < coords.length; k += per) queueAction({ action: 'setRallyMany', coords: coords.slice(k, k + per), targetX: W / 2, targetY: H / 2, targetUnitId: null });
+        if (typeof updateInfoPanel === 'function') updateInfoPanel();
+        return { load, ordered: mine.length, selectedUnits: selectedUnits.length, selectedEntities: selectedEntities.length, rallies: coords.length / 2 };
     }
     return { load, ordered: mine.length };
 };
 const PAGE_COLLECT = () => {
     const W = window.__bench;
     W.on = false;
+    W.jitSummary = W.jitSummaryFn ? W.jitSummaryFn() : null;
     const q = (a, p) => { if (!a.length) return 0; const b = a.slice().sort((x, y) => x - y); return Math.round(b[Math.min(b.length - 1, Math.floor(b.length * p))] * 100) / 100; };
     const d = []; for (let i = 1; i < W.frames.length; i++) d.push(W.frames[i] - W.frames[i - 1]);
     const t = W.ticks, secs = t.length > 1 ? (t[t.length - 1][0] - t[0][0]) / 1000 : 0;
@@ -105,7 +212,7 @@ const PAGE_COLLECT = () => {
         workerSimMs: { mean: sim.length ? Math.round(sim.reduce((a, b) => a + b, 0) / sim.length * 10) / 10 : 0, p95: q(sim, .95), max: q(sim, 1) },
         fps: d.length ? Math.round(d.length / (d.reduce((a, b) => a + b, 0) / 1000) * 10) / 10 : 0,
         frameMs: { p50: q(d, .5), p95: q(d, .95), p99: q(d, .99), max: q(d, 1) },
-        longTasks: W.longTasks, longMs: Math.round(W.longMs), heapMB: mem, sim: simClientStats()
+        longTasks: W.longTasks, longMs: Math.round(W.longMs), heapMB: mem, sim: simClientStats(), jitter: W.jitSummary
     };
 };
 
@@ -246,7 +353,7 @@ async function startMultiplayer(browser, port, fixture, vis, errors) {
             await sleep(WARM_S * 1000);
             const w0 = {};
             for (const [role, page] of m.pages) {
-                await page.evaluate(() => { const W = window.__bench; W.frames = []; W.ticks = []; W.longTasks = 0; W.longMs = 0; W.on = true; });
+                await page.evaluate(src => { const W = window.__bench; W.frames = []; W.ticks = []; W.longTasks = 0; W.longMs = 0; W.jit = { ids: null, rows: [], steps: null, lastTick: -1 }; W.jitSummaryFn = (0, eval)('(' + src + ')'); W.on = true; }, JITTER_SUMMARY.toString());
                 w0[role] = Number(await page.evaluate(() => simClientRequest('debugEval', { expr: 'currentTick' })));
             }
             const profiling = process.env.PROFILE_VIEW === view ? [] : null;
@@ -275,7 +382,7 @@ async function startMultiplayer(browser, port, fixture, vis, errors) {
                 if (row.sim) delete row.sim.errors;
                 if (phases[role]) { row.phases = phases[role]; console.log(role, 'phases ms/tick', JSON.stringify(Object.fromEntries(Object.entries(phases[role].msPerTick).slice(0, 16)))); }
                 console.log(JSON.stringify({ fixture, role, vis, load, view, workerTps: row.workerTps, appliedTps: row.appliedTps, simMs: row.workerSimMs,
-                    late: row.sim && row.sim.workerLateMs, ahead: row.sim && row.sim.dispatchAhead, fps: row.fps, frameMs: row.frameMs, longMs: row.longMs, heapMB: row.heapMB }));
+                    late: row.sim && row.sim.workerLateMs, ahead: row.sim && row.sim.dispatchAhead, fps: row.fps, frameMs: row.frameMs, longMs: row.longMs, heapMB: row.heapMB, jitter: row.jitter }));
                 out.rows.push(row);
             }
         }

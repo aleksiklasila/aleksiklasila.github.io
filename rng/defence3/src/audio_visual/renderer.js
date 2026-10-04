@@ -2298,17 +2298,40 @@ function buildScaleFrameData(flat2d, view) {
 // Aggregate selection outlines by fixed world chunks. This bounds geometry
 // at full zoom-out while exact selection/commands remain untouched.
 function buildScaleOverlays(cache) {
-    const key = gameTime + '|' + selectedUnits.length + '|' + selectedEntities.length + '|' + JSON.stringify(activeSubGroups);
-    if (cache.overlayKey === key && cache.selectedUnits === selectedUnits && cache.selectedEntities === selectedEntities) return cache.overlays;
+    // (Boxes of 16-tile chunks: made again for a new selection at once, as
+    // its units move at most 5 times a second: 100k selected units each
+    // tick cost ~13 ms.)
+    const key = selectedUnits.length + '|' + selectedEntities.length + '|' + JSON.stringify(activeSubGroups), nowMs = performance.now();
+    if (cache.overlayKey === key && cache.selectedUnits === selectedUnits && cache.selectedEntities === selectedEntities
+        && (cache.overlayTick === gameTime || nowMs - (cache.overlayAt || 0) < 200)) return cache.overlays;
+    cache.overlayTick = gameTime; cache.overlayAt = nowMs;
     const overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: [], bars: [], texts: [], worldTileSize: TILE };
-    const groups = new Map();
-    for (const list of [getActiveUnitsForRender(), getActiveEntities()]) for (const e of list) {
+    const cw = Math.ceil(GRID_W / 16), nb = cw * Math.ceil(GRID_H / 16);
+    let B = cache.overlayBoxes;
+    if (!B || B.n !== nb) B = cache.overlayBoxes = { n: nb, box: new Float32Array(nb * 4), stamp: new Int32Array(nb), now: 0, used: new Int32Array(nb), count: 0 };
+    const stamp = ++B.now, box = B.box, used = B.used;
+    B.count = 0;
+    const add = (x, z) => {
+        const k = Math.floor(z / 16) * cw + Math.floor(x / 16);
+        if (!(k >= 0 && k < nb)) return;
+        const o = k * 4;
+        if (B.stamp[k] !== stamp) { B.stamp[k] = stamp; used[B.count++] = k; box[o] = x; box[o + 1] = z; box[o + 2] = x; box[o + 3] = z; return; }
+        if (x < box[o]) box[o] = x; if (z < box[o + 1]) box[o + 1] = z; if (x > box[o + 2]) box[o + 2] = x; if (z > box[o + 3]) box[o + 3] = z;
+    };
+    const groups = { values() { const out = []; for (let i = 0; i < B.count; i++) { const o = used[i] * 4; out.push([box[o], box[o + 1], box[o + 2], box[o + 3]]); } return out; } };
+    // Units: from the frame's columns (no getters: 100k selected units read
+    // through views took ~10 ms a tick).
+    const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    for (const e of getActiveUnitsForRender()) {
+        if (!e || e.dead) continue;
+        const s = e._s;
+        if (F && s >= 0) { if (F.energy[s] <= 0) continue; add(F.x[s] / TILE, F.y[s] / TILE); continue; }
+        if (e.energy <= 0) continue;
+        add(Number.isFinite(e.x) ? e.x / TILE : e.gx + .5, Number.isFinite(e.y) ? e.y / TILE : e.gy + .5);
+    }
+    for (const e of getActiveEntities()) {
         if (!e || e.dead || e.energy <= 0) continue;
-        const x = Number.isFinite(e.x) ? e.x / TILE : e.gx + .5, z = Number.isFinite(e.y) ? e.y / TILE : e.gy + .5;
-        const k = Math.floor(z / 16) * Math.ceil(GRID_W / 16) + Math.floor(x / 16);
-        let b = groups.get(k);
-        if (!b) groups.set(k, b = [x, z, x, z]);
-        b[0] = Math.min(b[0], x); b[1] = Math.min(b[1], z); b[2] = Math.max(b[2], x); b[3] = Math.max(b[3], z);
+        add(Number.isFinite(e.x) ? e.x / TILE : e.gx + .5, Number.isFinite(e.y) ? e.y / TILE : e.gy + .5);
     }
     for (const b of groups.values()) {
         const x = b[0] - .5, z = b[1] - .5, r = b[2] + .5, t = b[3] + .5;
@@ -2323,7 +2346,11 @@ function build3DFrameData(flat2d = false) {
     const sourceView = getLiveRenderView();
     if (useScaleRendering(flat2d, sourceView)) return buildScaleFrameData(flat2d, sourceView);
     const queryBounds = flat2d ? getVisibleWorldBounds(2 + Math.ceil(getRenderViewPad() / Math.max(.01, camera.zoom) / TILE)) : get3DVisibleWorldBounds();
-    const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = getChunkRenderView(sourceView, queryBounds);
+    let { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = getChunkRenderView(sourceView, queryBounds);
+    // Detail per unit, by its drawn size, within a budget (see
+    // _unitDetailSplit): the rest are the GPU's glyphs, drawn from the frame.
+    const unitDetail = _isLiveUnitList(sourceView.units) ? _unitDetailSplit(units, flat2d, queryBounds) : null;
+    if (unitDetail) units = unitDetail.units;
 
     begin3DTextureFrame();
     renderer3dExactTextureBuildsRemaining = 12;
@@ -3175,9 +3202,50 @@ function build3DFrameData(flat2d = false) {
         buildPreview,
         objects,
         flatBatch,
-        fx: fxBatch
+        fx: fxBatch,
+        columnLayers: unitDetail ? unitDetail.columns : null
     };
 }
+
+// Detailed models cost ~0.1 ms of CPU a unit; a close view of an army holds
+// thousands. Units are drawn in detail by their own drawn size (in 3D the
+// near ones: the view's zoom says nothing of a tilted view's far side), at
+// most UNIT_DETAIL_BUDGET of them, the largest first; every other unit in
+// view is the GPU's glyph, drawn from the frame's columns with the same
+// size rule (drawFrameColumns: a unit over the threshold is skipped there).
+// null: every unit in view in detail (few enough, or no frame).
+const UNIT_DETAIL_BUDGET = 1500, UNIT_DETAIL_MIN_PX = 12;
+let _unitDetailPx = new Float32Array(0);
+function _unitDetailSplit(viewUnits, flat2d, bounds) {
+    const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null, R = renderer3dInstance;
+    if (!F || !R || typeof R.columnPixelScale !== 'function' || viewUnits.length <= UNIT_DETAIL_BUDGET) return null;
+    const scale = R.columnPixelScale(flat2d, (bounds.vw || (bounds.maxGx - bounds.minGx + 1) * TILE) / TILE, viewW), M = R.tmpViewProjection, a = tickAlpha;
+    if (_unitDetailPx.length < viewUnits.length) _unitDetailPx = new Float32Array(Math.ceil(viewUnits.length * 1.5));
+    const P = _unitDetailPx, n = viewUnits.length;
+    for (let i = 0; i < n; i++) {
+        const u = viewUnits[i], s = u ? u._s : -1;
+        // (Not in the frame: as before, in detail.)
+        if (!(s >= 0)) { P[i] = Infinity; continue; }
+        const x = (F.px[s] + (F.x[s] - F.px[s]) * a) / TILE, z = (F.py[s] + (F.y[s] - F.py[s]) * a) / TILE;
+        const size = Math.max(.28, Math.min(.9, F.r[s] * 2.2 / TILE));
+        const w = flat2d ? 1 : Math.max(.01, M[3] * x + M[7] * .02 + M[11] * z + M[15]);
+        P[i] = size * scale / w;
+    }
+    // The threshold: the budget's worth of the largest (never below
+    // UNIT_DETAIL_MIN_PX: smaller ones are glyphs whatever the count).
+    const sorted = P.slice(0, n).sort();
+    let T = sorted[n - 1 - UNIT_DETAIL_BUDGET];
+    if (!(T >= UNIT_DETAIL_MIN_PX)) T = UNIT_DETAIL_MIN_PX;
+    const detailed = [];
+    for (let i = 0; i < n; i++) if (P[i] > T) detailed.push(viewUnits[i]);
+    return { units: detailed, columns: { units: F, structures: null, unitSources: _isLiveUnitList(null, true), alpha: a, detailPx: T,
+        visibility: visibilityGridForColumns(), visibilityVersion, fullVisibility, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
+        colors: Array.from({ length: 9 }, (_, i) => get3DRenderOwnerColor(i - 1)) } };
+}
+function visibilityGridForColumns() { const v = getLiveRenderView(); return v ? v.visibilityGrid : null; }
+// (The live units list: a view's are the live ones, not a remembered
+// view's; with get, the list itself.)
+function _isLiveUnitList(list, get = false) { return get ? units : list === units; }
 
 function drawInteractionOverlay(renderer3dSnapshot = null) {
     if (!overlayCtx || !overlayCanvas) return;
@@ -3369,7 +3437,9 @@ function drawMinimap() {
         _minimapContentCanvas = document.createElement('canvas');
         _minimapContentCanvas.width = _minimapContentCanvas.height = MINIMAP_SIZE;
     }
-    if ((gameTime !== _minimapContentTick && nowMs - _minimapLastDrawMs >= 100) || nowMs < _minimapLastDrawMs || _minimapContentGrid !== grid || _minimapContentMode !== mode) {
+    // (An army-scale map walks every unit: 4 times a second; smaller ones 10.)
+    const minimapEveryMs = units.length > 20000 ? 250 : 100;
+    if ((gameTime !== _minimapContentTick && nowMs - _minimapLastDrawMs >= minimapEveryMs) || nowMs < _minimapLastDrawMs || _minimapContentGrid !== grid || _minimapContentMode !== mode) {
     _minimapLastDrawMs = nowMs; _minimapContentGrid = grid; _minimapContentMode = mode;
     _minimapContentTick = gameTime;
     const minimapCtx = _minimapContentCanvas.getContext('2d');

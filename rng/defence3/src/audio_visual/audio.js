@@ -228,6 +228,7 @@ function isPopupControlGroupSelected(key) {
     return doesCurrentSelectionMatchSnapshot(grp);
 }
 
+let _cgBarCache = { units: null, unitsLen: -1, entities: null, entitiesLen: -1, groupsKey: '', at: -Infinity, buttons: [] };
 function updateControlGroupBar() {
     let bar = document.getElementById('control-group-bar');
     if (!bar) return;
@@ -270,7 +271,31 @@ function updateControlGroupBar() {
         });
     }
 
-    let membership = { units: new Set(selectedUnits), entities: new Set(selectedEntities) };
+    // The groups' membership checks walk the selection and the groups (100k
+    // units: a set of them each frame cost ~5 ms): at most 4 times a
+    // second, or at once when the selection or a group changed. The alert
+    // marks (cheap) every frame.
+    const now = performance.now(), C = _cgBarCache;
+    let groupsKey = '';
+    for (let n = 1; n <= 9; n++) { const g = controlGroups[n]; groupsKey += g ? (g.units ? g.units.length : 0) + '.' + (g.entities ? g.entities.length : 0) + ',' : '-,'; }
+    for (let key of POPUP_CONTROL_GROUP_KEYS) { const g = popupControlGroups[key]; groupsKey += g ? (g.units ? g.units.length : 0) + '.' + (g.entities ? g.entities.length : 0) + ',' : '-,'; }
+    const full = C.units !== selectedUnits || C.unitsLen !== selectedUnits.length || C.entities !== selectedEntities || C.entitiesLen !== selectedEntities.length
+        || C.groupsKey !== groupsKey || now - C.at >= 250;
+    if (!full) {
+        for (let n = 1; n <= 9; n++) {
+            let btn = C.buttons[n] || (C.buttons[n] = bar.querySelector(`.control-group-btn[data-group="${n}"]`));
+            if (!btn) continue;
+            let st = ensureControlGroupAlertState(String(n));
+            btn.classList.toggle('damaged', st.damageUntil > gameTime);
+            btn.classList.toggle('king-damaged', st.kingUntil > gameTime);
+        }
+        return;
+    }
+    C.units = selectedUnits; C.unitsLen = selectedUnits.length; C.entities = selectedEntities; C.entitiesLen = selectedEntities.length; C.groupsKey = groupsKey; C.at = now;
+    // (Sets of the selection only when some group is its size.)
+    let membership = null;
+    const lazyMembership = () => membership || (membership = { units: new Set(selectedUnits), entities: new Set(selectedEntities) });
+    const matches = grp => !!grp && grp.units.length === selectedUnits.length && grp.entities.length === selectedEntities.length && doesCurrentSelectionMatchSnapshot(grp, lazyMembership());
     for (let n = 1; n <= 9; n++) {
         let key = String(n);
         normalizeControlGroup(key);
@@ -285,7 +310,7 @@ function updateControlGroupBar() {
 
         btn.classList.toggle('empty', !hasAssigned);
         btn.classList.toggle('assigned', hasAssigned);
-        btn.classList.toggle('active', doesCurrentSelectionMatchSnapshot(grp, membership));
+        btn.classList.toggle('active', matches(grp));
         btn.classList.toggle('damaged', hasDamage);
         btn.classList.toggle('king-damaged', hasKingDamage);
         btn.title = hasKingDamage ? `Group ${key}: king under attack` : hasDamage ? `Group ${key}: taking damage` : hasAssigned ? `Group ${key}: ${count} item(s)` : `Group ${key}: empty`;
@@ -300,7 +325,7 @@ function updateControlGroupBar() {
         let hasAssigned = count > 0;
         btn.classList.toggle('empty', !hasAssigned);
         btn.classList.toggle('assigned', hasAssigned);
-        btn.classList.toggle('active', doesCurrentSelectionMatchSnapshot(grp, membership));
+        btn.classList.toggle('active', matches(grp));
         btn.title = hasAssigned
             ? `Popup group ${key.toUpperCase()}: ${count} item(s)`
             : `Popup group ${key.toUpperCase()}: empty`;

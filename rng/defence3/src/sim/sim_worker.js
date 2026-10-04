@@ -303,6 +303,8 @@ function _simTick(msg) {
     pathfindBudget = 0;
     // A resync tick: every peer starts it without history caches.
     if (msg.flush) snapFlushHistoryCaches();
+    // (The presentation reader keeps off the state while it changes.)
+    if (typeof simPresentTickBegin === 'function') simPresentTickBegin();
     let teams = msg.teams;
     let firstTeam = currentTick % teams.length;
     let actions = msg.actions || [];
@@ -314,6 +316,7 @@ function _simTick(msg) {
         }
     }
     try { gameTick(); } catch (err) { _simError('gameTick', err); }
+    if (typeof simPresentTickEnd === 'function') simPresentTickEnd();
     let tick = currentTick;
     currentTick++;
     let simMs = performance.now() - t0;

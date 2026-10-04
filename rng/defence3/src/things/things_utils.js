@@ -1178,6 +1178,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         addPlayerResource(playerId, 'energy', -upgradeCost);
         recordEnergyDelta(playerId, 'builder', -upgradeCost);
         area.multiplierLevel = (area.multiplierLevel || 0) + 1;
+        dirtyAreas = true;
         _markCombinedBgAreaDirty(aId, 1);
         for (let cp of areaCells) {
             if (!cp || !Number.isFinite(cp.x) || !Number.isFinite(cp.y)) continue;

@@ -5328,6 +5328,11 @@
         // Consume the worker's existing SoA columns without visiting entities,
         // building matrices, copying records or sorting. Each GPU point is a
         // screen-facing unit/building glyph. Visibility and transforms are GPU work.
+        // Pixels per world unit of size for the column glyphs (their size
+        // rule, shared with the detail split: renderer.js _unitDetailSplit).
+        columnPixelScale(flat2d, visibleWidthTiles, viewportWidth) {
+            return flat2d ? this.sceneTargetSize.width / (visibleWidthTiles * (this.cssWidth / viewportWidth)) : this.lodProjectionScale * this.pixelRatio;
+        }
         drawFrameColumns(C, snapshot) {
             const gl = this.gl;
             if (!this.columnProgram) {
@@ -5345,7 +5350,7 @@
                     layout(location=8) in float aAlive;
                     layout(location=9) in float aKind;
                     uniform mat4 uViewProjection;
-                    uniform float uAlpha, uTile, uScale, uFlat, uLightNorm;
+                    uniform float uAlpha, uTile, uScale, uFlat, uLightNorm, uDetail;
                     uniform int uStructure, uFull;
                     uniform vec3 uColors[9];
                     uniform sampler2D uVisibility;
@@ -5361,6 +5366,9 @@
                         gl_Position = uViewProjection * vec4(p.x,.02,p.y,1.);
                         float size = uStructure != 0 ? .94 : clamp(aRadius * 2.2 / uTile,.28,.9);
                         float pixels = size * uScale / (uFlat > .5 ? 1. : max(.01,gl_Position.w));
+                        // (Drawn in detail by the CPU: renderer.js _unitDetailSplit,
+                        // the same rule; a hair of overlap, never a gap.)
+                        if (uDetail > 0. && uStructure == 0 && pixels > uDetail * 1.0001) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
                         gl_PointSize = clamp(pixels + 1.,2.,64.);
                         vCoverage = min(1., pixels * pixels / (gl_PointSize * gl_PointSize));
                         float shade = .35 + .65 * clamp(light,0.,1.);
@@ -5380,7 +5388,7 @@
                         color = vec4(vColor.rgb, vColor.a * coverage * vCoverage);
                     }`);
                 this.columnUniforms = {};
-                for (const n of ['ViewProjection','Alpha','Tile','Scale','Flat','LightNorm','Structure','Full','Colors','Visibility']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
+                for (const n of ['ViewProjection','Alpha','Tile','Scale','Flat','LightNorm','Structure','Full','Colors','Visibility','Detail']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
                 this.columnStores = [{},{}];
                 this.columnVisibilityTexture = createTexture(gl);
             }
@@ -5411,7 +5419,8 @@
             gl.uniform1f(U.Alpha,C.alpha);gl.uniform1f(U.Tile,C.tile);
             gl.uniform1f(U.LightNorm,Math.max(.001,C.lightNorm));
             gl.uniform1f(U.Flat,snapshot.flat2d?1:0);
-            gl.uniform1f(U.Scale,snapshot.flat2d ? this.sceneTargetSize.width / (snapshot.camera.visibleWidth * (this.cssWidth / snapshot.viewportWidth)) : this.lodProjectionScale * this.pixelRatio);
+            gl.uniform1f(U.Scale,this.columnPixelScale(snapshot.flat2d,snapshot.camera.visibleWidth,snapshot.viewportWidth));
+            gl.uniform1f(U.Detail,C.detailPx > 0 ? C.detailPx : 0);
             gl.uniform1i(U.Full,C.fullVisibility?1:0);gl.uniform1i(U.Visibility,0);
             const colors = this.columnColors || (this.columnColors = new Float32Array(27));
             for (let i=0;i<9;i++) colors.set(hexToRgb(C.colors[i]),i*3);
@@ -5425,6 +5434,7 @@
             gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
             for (let kind=0;kind<2;kind++) {
                 const F = kind ? C.units : C.structures, S = this.columnStores[kind], structure = !kind;
+                if (!F) continue;
                 const fields = structure ? ['x','y','x','y',null,'energy','owner','flags','alive','kind'] : ['x','y','px','py','r','energy','owner','flags','id',null];
                 if (!S.buffer) { S.buffer=gl.createBuffer();S.vao=gl.createVertexArray(); }
                 gl.bindVertexArray(S.vao);gl.bindBuffer(gl.ARRAY_BUFFER,S.buffer);
@@ -5577,6 +5587,15 @@
                 this.presentSceneToCanvas(true);
                 this.trimTopTextures();
                 return;
+            }
+            // A detailed view with more units than its detail budget: the rest
+            // as glyphs, under the models (drawn first, no depth: the models
+            // drawn after cover them).
+            if (this.columnLayers) {
+                this.drawFrameColumns(this.columnLayers,snapshot);
+                gl.bindVertexArray(null);
+                gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.disable(gl.BLEND);
+                gl.drawBuffers(this.sceneDrawBuffers);
             }
             let objects = Array.isArray(snapshot.objects) ? snapshot.objects : [];
             if (snapshot.flat2d) {

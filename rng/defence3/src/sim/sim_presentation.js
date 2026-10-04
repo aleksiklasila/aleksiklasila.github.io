@@ -6,6 +6,41 @@
 // visual updates without delaying the authority or its helper jobs.
 let _simPresentation = null;
 let _simPresentationGeneration = 0;
+// Every tick's positions for the presentation: at the tick's end this
+// thread copies x, y, prevX, prevY (memcpy, ~1 ms at 200k units) into the
+// oldest of SIM_PRESENT_SNAPS shared snapshots; the reader takes the newest
+// whenever it gets to it. (Read from the live columns, a reader racing the
+// next tick dropped its copy: when ticks ran back to back most were lost,
+// and units stood, then jumped.) Each snapshot's header: [tick (-1 while
+// written), units]; ctl[0] the newest snapshot's index.
+const SIM_PRESENT_SNAPS = 3;
+let _simPresentSnaps = null;
+function simPresentTickBegin() { }
+function simPresentTickEnd() {
+    const p = _simPresentation, S = _simUnitState;
+    if (!p || !S || typeof SharedArrayBuffer !== 'function') return;
+    const n = S.owners.length, cap = S.columns.x.length;
+    let Q = _simPresentSnaps;
+    if (!Q || Q.cap < cap || Q.worker !== p.worker) {
+        const ctl = Q && Q.cap >= cap ? Q.ctl : new Int32Array(new SharedArrayBuffer(8));
+        Q = _simPresentSnaps = { cap, worker: p.worker, ctl, next: 0, snaps: [] };
+        for (let i = 0; i < SIM_PRESENT_SNAPS; i++) {
+            const buf = new SharedArrayBuffer(8 + cap * 32);
+            Q.snaps.push({ buf, head: new Int32Array(buf, 0, 2), x: new Float64Array(buf, 8, cap), y: new Float64Array(buf, 8 + cap * 8, cap),
+                px: new Float64Array(buf, 8 + cap * 16, cap), py: new Float64Array(buf, 8 + cap * 24, cap) });
+            Q.snaps[i].head[0] = -1;
+        }
+        ctl[0] = -1;
+        p.worker.postMessage({ type: 'snaps', ctl, cap, bufs: Q.snaps.map(q => q.buf) });
+    }
+    const i = Q.next, q = Q.snaps[i], C = S.columns;
+    Q.next = (i + 1) % SIM_PRESENT_SNAPS;
+    Atomics.store(q.head, 0, -1);
+    q.x.set(C.x.subarray(0, n)); q.y.set(C.y.subarray(0, n)); q.px.set(C.prevX.subarray(0, n)); q.py.set(C.prevY.subarray(0, n));
+    q.head[1] = n;
+    Atomics.store(q.head, 0, typeof currentTick === 'number' ? currentTick : 0);
+    Atomics.store(Q.ctl, 0, i);
+}
 const SIM_PRESENT_MAGIC = 0x50524553;
 const SIM_PRESENT_COLUMNS = ['id','owner','x','y','prevX','prevY','vx','vy','energy','r','commandState',
     'attackFlash','burning','poisoned','frozen','wet','sandy','watched','teleportHideTicks',
@@ -21,7 +56,7 @@ function simPresentationStart() {
     simPresentationStop();
     if (!SIM_PAR_SHARED || typeof Worker !== 'function') return false;
     const base = self.SIM_WORKER_BASE || location.href;
-    const worker = new Worker(new URL('presentation_worker.js?v=20261004-stream', base).href);
+    const worker = new Worker(new URL('presentation_worker.js?v=20261021-x', base).href);
     const p = _simPresentation = { worker, epoch:_simEpoch, generation:++_simPresentationGeneration,
         timer:0, job:null, meta:null, projectileJob:null, projectileAt:0,
         structures:null, cells:null, columns:null, sourceBuffer:null, strings:0, revision:0 };
@@ -32,6 +67,16 @@ function simPresentationStart() {
         else if (m.type === 'error') _simError('presentation', new Error(m.message));
     };
     worker.onerror = event => _simError('presentation', new Error(event.message || 'presentation reader failed'));
+    _simPresentSnaps = null;
+    // Frames go to the page, and their buffers come back, over a channel of
+    // their own: never queued behind a tick on this thread (a frame waiting
+    // here for a 30-40 ms tick reached the page late, then two at once: units
+    // stood, then jumped).
+    if (typeof MessageChannel === 'function') {
+        const ch = new MessageChannel();
+        worker.postMessage({ type: 'port', port: ch.port1 }, [ch.port1]);
+        _simPost({ type: 'presentationPort', epoch: _simEpoch, generation: p.generation, port: ch.port2 }, [ch.port2]);
+    }
     simPresentationBind();
     const baseline=_simStateLast;
     if(baseline.cellTypes && baseline.w===GRID_W && baseline.h===GRID_H) {

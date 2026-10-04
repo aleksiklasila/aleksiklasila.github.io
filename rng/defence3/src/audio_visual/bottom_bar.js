@@ -344,7 +344,10 @@ function updateBottomBar(now) {
     if (now - bb.lastRefresh < BB_REFRESH_MS) return;
     bb.lastRefresh = now;
 
-    if (bb.thingsTick !== gameTime || bb.thingsOwner !== localPlayerId || bb.thingsUnits !== units || bb.thingsGrid !== grid) {
+    // (The counts walk every unit and building: twice a second at most, and
+    // at once for another player or map.)
+    if (bb.thingsOwner !== localPlayerId || bb.thingsGrid !== grid || ((bb.thingsTick !== gameTime || bb.thingsUnits !== units) && !(now - (bb.thingsAt || -Infinity) < 500))) {
+        bb.thingsAt = now;
         bb.things = _bbCollectThings(localPlayerId);
         bb.thingsTick = gameTime; bb.thingsOwner = localPlayerId; bb.thingsUnits = units; bb.thingsGrid = grid;
     }

@@ -197,11 +197,14 @@ function computeRenderRangeBoundary(selectedBuildings, selected) {
         if (!e || e.dead || e.energy <= 0 || (!unit && e.underConstruction)
             || (renderRangeAllTeam && e.owner !== localPlayerId)) return;
         let range = getEntityEffectiveVisibilityRangeArea(e);
+        let wx = Number.isFinite(e.x) ? e.x : (e.gx + .5) * TILE;
+        let wy = Number.isFinite(e.y) ? e.y : (e.gy + .5) * TILE;
+        addAt(wx, wy, range);
+    };
+    const addAt = (wx, wy, range) => {
         // A fractional range includes the source area (distance zero).
         // Floor only after the positive-range check, as gameplay does.
         if (!(range > 0)) return;
-        let wx = Number.isFinite(e.x) ? e.x : (e.gx + .5) * TILE;
-        let wy = Number.isFinite(e.y) ? e.y : (e.gy + .5) * TILE;
         if (!Number.isFinite(wx) || !Number.isFinite(wy)) return;
         let r = Math.min(32767, Math.floor(range));
         // Every area under the source's +-0.3 tile window, as gameplay.
@@ -217,7 +220,14 @@ function computeRenderRangeBoundary(selectedBuildings, selected) {
     };
     let includeUnits = [RENDER_RANGE_ALL, RENDER_RANGE_UNITS, RENDER_RANGE_TURRETS_AND_UNITS].includes(renderRangeMode);
     let includeBuildings = renderRangeMode !== RENDER_RANGE_UNITS;
-    if (includeUnits) for (let u of renderRangeAllTeam ? units : selected) add(u, true);
+    // The team's units from the frame's columns (its vision column is what a
+    // unit view's effective stats give): every unit through its view's
+    // getters took ~200 ms on a 200k-unit map, a hitch every few ticks.
+    const F = includeUnits && renderRangeAllTeam && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    if (F) {
+        const me = localPlayerId, ord = F.order, own = F.owner, en = F.energy, vis = F.vision, X = F.x, Y = F.y;
+        for (let k = 0; k < F.count; k++) { const sl = ord[k]; if (own[sl] === me && en[sl] > 0) addAt(X[sl], Y[sl], vis[sl]); }
+    } else if (includeUnits) for (let u of renderRangeAllTeam ? units : selected) add(u, true);
     if (includeBuildings) {
         let allBuildings = renderRangeMode === RENDER_RANGE_ALL || renderRangeMode === RENDER_RANGE_BUILDINGS;
         for (let list of renderRangeAllTeam ? (allBuildings ? [towers, barracks, collectorSpawners] : [towers]) : [selectedBuildings]) {

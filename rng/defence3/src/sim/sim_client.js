@@ -61,7 +61,7 @@ function _simClientScriptUrls() {
         .filter(src => /\/src\//.test(src) && !/bootstrap\.js|sim_shadow\.js|sim_worker\.js|sim_client\.js/.test(src));
 }
 
-const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261021-w';
+const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261021-t';
 
 function _simClientCreate() {
     let c = {
@@ -267,13 +267,21 @@ function _simClientOnMessage(msg) {
             if (msg.world) { if (msg.epoch === c.epoch) _simClientApplyWorld(msg.world, 1); else _simClientReturnBufs(_simClientWorldBufs(msg.world)); }
             break;
         case 'ticked': _simClientApplyTick(msg); break;
+        // The presentation reader's own channel (frames come over it, their
+        // buffers go back over it: not through the simulation worker).
+        case 'presentationPort': {
+            if (c.presentationPort) { try { c.presentationPort.close(); } catch { } }
+            c.presentationPort = msg.port;
+            msg.port.onmessage = ev => { try { _simClientOnMessage(ev.data || {}); } catch (err) { reportRuntimeError('presentation', err); } };
+            break;
+        }
         case 'presentation': {
             if (msg.epoch !== c.epoch || !c.active) { _simClientReturnBufs(_simClientWorldBufs(msg.world)); break; }
             const now=performance.now(), shown=c.arrivedAt>0 ? Math.max(0,c.drawnAlpha) : 1;
             _simClientApplyWorld(msg.world,shown);
             if (c.arrivedAt>0) c.intervalMs += (Math.max(10,Math.min(250,now-c.arrivedAt))-c.intervalMs)*.25;
             c.arrivedAt=now;c.drawnAlpha=-1;c.presentationTick=msg.tick;
-            c.presentationBuildMs=msg.buildMs;
+            c.presentationBuildMs=msg.buildMs;c.presentationPhases=msg.phases;c.presentationTorn=msg.torn;
             break;
         }
         case 'reply': {
@@ -365,9 +373,19 @@ function _simClientApplyTick(msg) {
 let _pageSlotViews = [];
 let _pageViewStamp = 0;
 
+// (The presentation reader's buffers: a trailer, its magic last.)
+function _simClientIsPresentBuf(b) {
+    return typeof SharedArrayBuffer === 'function' && b instanceof SharedArrayBuffer && b.byteLength >= 12
+        && new DataView(b, b.byteLength - 4).getInt32(0, true) === 0x50524553;
+}
 function _simClientReturnBufs(bufs) {
     let c = _simClient;
     bufs = bufs.filter(b => b && b.byteLength);
+    if (c && c.presentationPort && bufs.length) {
+        const rest = [];
+        for (const b of bufs) { if (_simClientIsPresentBuf(b)) c.presentationPort.postMessage({ type: 'release', buf: b }); else rest.push(b); }
+        bufs = rest;
+    }
     if (c && bufs.length) c.worker.postMessage({ type: 'frameReturn', bufs }, bufs.filter(b => !(typeof SharedArrayBuffer === 'function' && b instanceof SharedArrayBuffer)));
 }
 
@@ -633,7 +651,7 @@ window.simClientStats = function () {
     let s = c.stats;
     return {
         enabled: true, loaded: c.loaded, active: c.active, helpers: c.helpers || 0, shared: !!c.shared, epoch: c.epoch, appliedTick: c.appliedTick, inFlight: c.inFlight, heals: s.heals, dropped: s.dropped,
-        presentation:!!c.presentation, presentationTick:c.presentationTick, presentationBuildMs:c.presentationBuildMs, errors: c.errors.slice(0, 5), firstDiff: s.firstDiff || null, rowsPerTick: s.applied ? Math.round(s.rows / s.applied * 10) / 10 : 0,
+        presentation:!!c.presentation, presentationTick:c.presentationTick, presentationBuildMs:c.presentationBuildMs, presentationPhases:c.presentationPhases, presentationTorn:c.presentationTorn, errors: c.errors.slice(0, 5), firstDiff: s.firstDiff || null, rowsPerTick: s.applied ? Math.round(s.rows / s.applied * 10) / 10 : 0,
         rowsPerTickByList: s.applied ? Object.fromEntries(Object.entries(s.rowsBy || {}).map(([k, v]) => [k, Math.round(v / s.applied * 10) / 10])) : null,
         applyMs: { mean: m(s.applyMs), p95: q(s.applyMs, .95) }, workerSimMs: { mean: m(s.simMs), p95: q(s.simMs, .95) },
         workerEncodeMs: { mean: m(s.encodeMs), p95: q(s.encodeMs, .95) }, latencyMs: { mean: m(s.latencyMs), p95: q(s.latencyMs, .95), shown: Math.round(c.latencyMs) },
