@@ -187,7 +187,9 @@ function simClientStartMatch(startText = null, decodePage = null) {
     // restore has none to detach (200k took ~1 s). The page ran no tick since
     // its last restore, so no peer has history caches to drop yet.
     _simClientResetUnits();
-    if (decodePage) decodePage();
+    // (The page's restore of the start state is not a resync for the
+    // worker, which loads the full text: simClientAfterSnapshotApplied.)
+    if (decodePage) { c.decodingStart = true; try { decodePage(); } finally { c.decodingStart = false; } }
     else {
         let pageTick = currentTick;
         snapFlushHistoryCaches();
@@ -671,7 +673,7 @@ function simClientAfterPatchApplied(text, full) {
 // A whole-state restore on the page (join, hard resync...): the worker
 // restores the same, and results of ticks dispatched before are dropped.
 function simClientAfterSnapshotApplied(snapshot) {
-    if (!simClientActive()) return;
+    if (!simClientActive() || _simClient.decodingStart) return;
     let c = _simClient;
     c.epoch++;
     c.inFlight = 0;
