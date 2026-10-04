@@ -32,7 +32,50 @@ let tileEntityType = []; // 2D lookup [y][x] -> string type
 let tileEntityRef = [];  // 2D lookup [y][x] -> entity reference
 let _activeTileEntities = new Set();
 let _tileEntityVersion = 0; // bumped whenever the tile entity index changes
-let _adjacencyDirtyTiles = new Set();
+// Tiles whose adjacency is to be worked out again (_runAdjacencyRecalculation
+// takes them lowest tile first, ADJACENCY_TILES_PER_TICK a tick): a flag per
+// tile, their count, the lowest flagged tile (nothing below it is flagged)
+// and the order-free sum the state hash takes (sum of (k + 1) * 2654435761),
+// kept as tiles come and go. (A Set copied and sorted every tick cost ~60 ms
+// with 230k tiles waiting after a mass placement.) Set-like: add, delete,
+// has, size, clear, iteration (ascending).
+class _AdjDirtySet {
+    constructor() { this.flag = new Uint8Array(0); this.n = 0; this.min = 0; this.sum = 0; }
+    get size() { return this.n; }
+    has(k) { return k >= 0 && k < this.flag.length && this.flag[k] === 1; }
+    add(k) {
+        k = k | 0;
+        if (k < 0) return this;
+        if (k >= this.flag.length) { const f = new Uint8Array(Math.max(k + 1, GRID_W * GRID_H, this.flag.length * 2)); f.set(this.flag); this.flag = f; }
+        if (this.flag[k]) return this;
+        this.flag[k] = 1;
+        if (this.n++ === 0 || k < this.min) this.min = k;
+        this.sum = (this.sum + Math.imul(k + 1, 2654435761)) | 0;
+        return this;
+    }
+    delete(k) {
+        if (!this.has(k)) return false;
+        this.flag[k] = 0; this.n--;
+        this.sum = (this.sum - Math.imul(k + 1, 2654435761)) | 0;
+        return true;
+    }
+    clear() { if (this.n) this.flag.fill(0); this.n = 0; this.min = 0; this.sum = 0; }
+    // The first `max` tiles by index, taken out.
+    takeFirst(max) {
+        const out = [], f = this.flag;
+        let k = this.min;
+        for (; k < f.length && out.length < max && this.n > 0; k++) {
+            if (!f[k]) continue;
+            f[k] = 0; this.n--;
+            this.sum = (this.sum - Math.imul(k + 1, 2654435761)) | 0;
+            out.push(k);
+        }
+        this.min = k;
+        return out;
+    }
+    *[Symbol.iterator]() { const f = this.flag; let left = this.n; for (let k = this.min; k < f.length && left > 0; k++) if (f[k]) { left--; yield k; } }
+}
+let _adjacencyDirtyTiles = new _AdjDirtySet();
 let _adjacencyNeedsRecalc = true;
 let _adjacencyDirtyAll = true;
 let _adjacencyLastRecalcTick = -1;

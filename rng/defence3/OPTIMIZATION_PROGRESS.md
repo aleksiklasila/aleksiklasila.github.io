@@ -4,6 +4,19 @@ Working log for `SIMULATION_OPTIMIZATION_REFINEMENT.md` (the plan). Update this
 file at the end of every work session: what changed, what was measured, what
 is next. Newest entries first within each section.
 
+## Ground rules (user)
+
+- Multiplayer is the game's main and only real mode. Solo play exists only
+  to test changes (optimizations, visuals...). Every optimization must apply
+  to multiplayer (host and guests, sealed ticks, patches, pace control);
+  solo-only fast paths are useless as deliverables. Measure in multiplayer
+  (tickbench is host + guest; tests/render-tps-bench.cjs runs a host and a
+  guest page by default).
+- Rendering / TPS work: test in Edge (not the app's built-in browser), in
+  all three map visibility modes (Full, Team, Team + history), on large
+  fixtures (50k-100k units per team) for performance; small maps are fine
+  for functionality. Plan: FPS_TPS_STABILITY.md.
+
 ## How to verify and measure
 
 - Determinism suite (both simulation modes, ~15 min):
@@ -62,6 +75,176 @@ is next. Newest entries first within each section.
   caches or pools: only the peer that shows a unit runs it.
 
 ## Session log
+
+### 2026-10-04 (fourteenth round) — rebuild steps off the simulation thread, forced targets in the kernels, shrines
+
+- Shrines (user): no bounty drops on the map any more (main.js removal
+  loop). A unit's lost energy always goes to its owner's 💀 shrine
+  (shrineDamageTaken no longer gated); the shrines setting only decides
+  draining: off = drain mode 0, shrineDrain orders ignored, no drain
+  buttons (the 💀 count and its rate stay in the HUD). tests/shrine.test.cjs
+  checks the off mode too. (droppedItems and the workers' pickup of them
+  are now unused: nothing creates drops.)
+- Rebuild timing probe kept in the repo: `.claude/probes/rebuild_walls.js`
+  (EVALALL: a 500-tile wall line at gameTime 200 on every peer),
+  `rebuild_time.js` (EVAL: per tick gameTick / navTick / flush ms, the
+  job step, stage/install events, sub-timings of the build stages and
+  simParallelRun by kernel for ticks with navTick > 2 ms),
+  `rebuild_after.js` (AFTER). With DATA=tests/100000-1000.json HELPERS=7
+  RALLY10=all, 20 s.
+  Before this round: install tick 4.2 ms (the window works: no remake-all
+  spike), stage 3-6.7 ms, but step 1 (navBuildNodes) 46 ms (107-119 ms
+  tick): the two step-cost passes as synchronous kernels 33 ms (helpers
+  busy with lane work), the exit-node loop ~13 ms; step S+2 navBuildGraph
+  11 ms (JS arrays of 108k edges).
+- Now every pass over the map or the nodes of a rebuild is a background
+  kernel on lane SIM_LANE_LONG, the simulation thread only does
+  O(clusters + nodes) at a step (flownav.js NAV_STEP_*): step 1 posts
+  costs (2 passes) + exit nodes (new SIM_KERNEL_NAV_NODES: per cluster its
+  N, W, E, S border spans into slots), step 4 numbers them
+  (navBuildNodesFinish: pairs by place) and posts local fields + edge
+  counts (new SIM_KERNEL_NAV_GRAPH mode 0), NAV_STEP_GRAPH places the
+  edges (prefix sums) and posts edges (mode 1) + parts, NAV_STEP_STAGE
+  finishes and stages, NAV_STEP_INSTALL installs. NAV_BUILD_TICKS 142 ->
+  145. Same nodes, order, pairs, edges and costs as before
+  (tests/nav-build-kernels.test.cjs: against the old loops as a
+  reference, at once and staged, 6 random maps).
+  Probe after: navTick at step 1 0.3 ms (was 46), node numbering 2 ms,
+  graph step 0.8 (was 11.7), stage 7.6 (parts union-find 3.6 + staging
+  3.7: next candidate), install 3.8. Whole run mean 32.9 / p95 40.8 / max
+  60 ms (before 41-45 / 52-78 / 107-170 over two runs); the state hash at
+  tick 300 equal to before's (e2f426ad/e432d63e), 0 desyncs.
+- Forced attack targets (orders, retaliation) in the hold and chase
+  kernels: mvFlags 8. The last seen position became columns fLsX/fLsY
+  (NaN = null; accessors on Unit, SIM_UNIT_EXTRA_ACCESSORS for snapshots,
+  detach copies them); the kernel writes it when the target's area is in
+  sight (its previous value saved in fLsPX/fLsPY, fLsT = tick) and
+  Unit.update puts it back first thing when the unit runs after all that
+  tick (simForcedSeenUndo); out of sight the kernel hands back (contact
+  counts in doAttacking). No leash for forced chases. simChaseStillValid
+  checks the forced flag against bit 8.
+- Versions bumped: index.html, sim_helper.js imports, sim_worker.js
+  (helper URL and its blob parts were stale: 20261018/20261012),
+  sim_client.js / sim_shadow.js worker URL.
+- Passed: nav-rows, nav-reach, nav-background, nav-build-kernels,
+  lane-params-poison, background-chain, kernel-object equivalence (default
+  seeds and 5:crossroads,3:islands,11:crossroads,21:solar_system; forced
+  kernel unit-ticks 696 / 289 / 177 on the first three: the test now
+  counts them), CHAOS_HOST_HELPERS=7 + CHAOS_SIM_EVAL chaos (6 maps),
+  snapshot, patch, shrine.
+- ACTIONS bench (`DATA=tests/100000-1000.json HELPERS=7 ACTIONS=15
+  ACTIONS_TRAPS=1000 TOPPHASES=1 UPDSPLIT=1`, 20 s; 44570 traps placed at
+  the setup): mean 88.5, p95 149, max 644 ms. Adjacency 17.3 ms a tick on
+  average, 50-77 ms on every tick for ~200 ticks after the placement: the
+  dirty-tile Set (230k tiles) copied and sorted every tick to take its
+  first 1200. Now _AdjDirtySet (data_state.js): a flag per tile, count,
+  lowest tile, and the hash's order-free sum kept as tiles come and go
+  (same hash values); takeFirst scans from the lowest tile; the state hash
+  reads the sum instead of walking the set. tests/adjacency-dirty-set
+  (against a Set and a sort, 200k random operations). After: adjacency
+  0.55 ms a tick; mean 73.7, p95 104, max 327.
+- Forced targets in that bench: the 337 forced chasers a tick in
+  Unit.update are all units on their first update after an attack order,
+  never armed, target out of sight (doAttacking sends them to its last
+  seen position): an order's cost, not a chase the kernel could take
+  (`.claude/probes/forced_why.js`). The kernel change shows in fights
+  (retaliation, targets in sight): equivalence test counts.
+  Still in that bench: 9k moving combat units and 1.4k MANUAL_MOVE workers
+  run Unit.update a tick (12.7 + 6.6 ms; probe `move_why.js`), simMoveRun
+  14, resyncAfterTick 9.5; burst ticks: processActions 90-119 ms (per-unit
+  attack / attackBuilding / hold / stop application, id Sets, 300
+  queueUnit) and the unit pass after them 87-178 ms.
+- Held movers parked (unit.js simMoveTryParkHeld): ~9k units a tick in
+  that bench were moving with holdPosition (a hold, then a move order:
+  hold keeps orders, followPath stands them) and never armed, each running
+  a near-empty Unit.update. Now parked (mvOn 2) with a waiting mover's
+  looks: drive-by (flags 1, mvReachD) when moving, aggro (16, mvReachA)
+  when attack-moving; woken at its phase of SIM_IDLE_PARK_TICKS, by a
+  release (stop disarms) or new orders (setters disarm). Only with a path
+  left (without one, its look for a way is Unit.update's). Equivalence
+  (default seeds) passed. ACTIONS: moving combat updates 9056 -> 467 a
+  tick, unit pass 23 -> 12 ms, mean 73.7 -> 62.8, p95 104 -> 84.6.
+- Player-sent workers (MANUAL_MOVE, flow mvWk 2) are no longer handed
+  back on their WORKER_MOVE_CHECK_TICKS ticks: with their path not done
+  the check only re-sets commandState (a disarm and re-arm). Only task
+  workers (mvWk 1) are (sim_parallel.js, three places). ACTIONS:
+  MANUAL_MOVE updates 1376 -> 24 a tick, unit pass 12 -> 4.6 ms; mean
+  62.8 -> 54.2, p50 46.5, p95 78.9, max 257 (from 88.5 / 149 / 644 at
+  the round's start). Equivalence passed.
+- Next for order bursts: a burst tick is still ~200-250 ms here
+  (processActions 63-105: per-unit application of hold / stop / attack /
+  attackBuilding, 4 x 7.9k units a player; the unit pass after it 80-100:
+  one Unit.update per re-ordered unit). Ideas: arm units in the order
+  handler where their next update would only arm them (hold: park held
+  movers at once), cheaper per-unit application (no id Sets), or the
+  order queue for those actions too (bounded per tick, more latency).
+  Also resyncAfterTick ~9.4 ms a tick there (the unit-region hash kernel
+  waited for, the static part with 44k traps).
+- Rendering phase, step 1 (FPS_TPS_STABILITY.md section 1, started):
+  ticks dispatched ahead to the simulation worker with deadlines.
+  sim_worker.js: ticks and requests are one ordered stream (_simStream): a
+  tick runs at its deadline (absolute time, the page's tick clock) or at
+  once when late / without one; requests run in order (patches, encodes,
+  test evals land between the right ticks); applySnapshot drops the queued
+  old-epoch ticks (requests before it still run); the worker publishes its
+  last tick in a shared block (_simCtl: [epoch, tick]) and reports each
+  tick's lateness and finish time. sim_client.js: with shared memory
+  (crossOriginIsolated), ready ticks (multiplayer: sealed, commands final:
+  no added input delay) are kept SIM_CLIENT_LEAD_TICKS = 3 ahead of the
+  worker, gated by its shared progress (never by results the page applied;
+  a bound of 8 unapplied results stays), catch-up ticks (a guest behind)
+  without deadline; ?simahead=0 turns it off for comparisons. Pace feedback:
+  netNoteSimulationTick takes the worker's finish time and cost (not the
+  page's apply time); netSimulationBusy (dispatch-ahead) counts the worker's
+  cost, its lateness and page frames longer than the lead, not ordinary
+  frame times. Page: the once-a-second stats sample gathers a slice a tick
+  (gameStatsStep; it scanned all units, up to ~70 ms). The harness: page
+  window.crossOriginIsolated under SIM_SHARED=1; the worker's progress
+  block reaches the page with each reply (simWorkerMs models a tick that
+  long). tests/render-tps-bench.cjs: Edge, multiplayer host + guest pages
+  (separate contexts, PeerJS loopback), FIXTURES, VIS, LOADS, VIEWS,
+  QUERY, SIMHELPERS. (A first solo-only version of this was replaced: see
+  the ground rules.) Early ticks take their slot of the page's tick
+  accumulator (it goes below zero while ahead): without that "due" stayed
+  true and every not-yet-sealed tick counted as a stall (netCounters,
+  the auto input delay), which failed multiplayer-patch ("host waited
+  450ms for someone else's patch") and desync-recovery under
+  SIM_SHARED=1 SIM_WORKER=1. Chaos determinism, snapshot and
+  sim-frame-replica passed in that mode; patch then passed too (first
+  patch after ~500 ms instead of 740-1120). Two more fixes: early
+  dispatch is also bounded by the real-time schedule (accumulator above
+  -(lead - 1) ticks; without deadlines (the harness has no timeOrigin)
+  desync-recovery ran at 41 of 20 TPS), and a tick due while the worker
+  holds the whole lead marks the peer behind for a second
+  (simClientNoteBehind -> netSimulationBusy), the old "results in flight
+  at the limit" signal the pace control needs (backlog-fairness: a slow
+  guest worker). Then, with SIM_SHARED=1 SIM_WORKER=1 (multiplayer through
+  the worker, dispatch ahead): backlog-fairness passed with lower visible
+  command latency (slow guest 1509 / 1495 ms vs 1707 / 1753 before; slow
+  host 1716 / 1696 vs 2617 / 2613), desync-recovery 20.0 of 20 TPS, patch,
+  chaos (6 maps), snapshot, sim-frame-replica. Default mode (no shared
+  memory: the old dispatch) passes as before.
+- First Edge multiplayer runs (host + guest pages on this laptop, 3
+  helpers each, 100000-1000, Team + history, moving): both peers simulate
+  all 200k units on 4 threads while sharing 8 cores, ~150-190 ms a tick
+  (~3 TPS) with rendering off; the tilted 3D view made the host's frames
+  ~1.2 s (0.8 TPS for both: lockstep waits for the slowest page). Two
+  peers x 100k per team on one machine is not a usable setup (CPU-bound
+  before rendering): multiplayer measurements on 50000-200, single-peer
+  scale on the solo test bed. Frame times must come down: no dispatch
+  lead hides second-long frames.
+- Found by testing Team + history (pre-existing): every barrack threw in
+  the 3D renderer each frame in the non-full visibility modes
+  (getVisualUnitSourceLight: a barrack view has a unitType and _frameView
+  but no _col: "unit._col is not a function"). Unit views only now.
+- Found, pre-existing (the committed code fails the same way): the
+  equivalence test's HOST_SIM_EVAL mode; render-frame-stability
+  ("interpolation never runs backwards within a tick": 4 back steps). With the four thresholds at 0
+  on the host only, seed 5 islands differs at tick 17 (positions,
+  _sepMoved: the separation slot path is not the object path); without
+  SEPARATION_SLOT_MIN_UNITS it ends with 38 repairs on the object guest
+  (likely the host-only hash kernel). The mode needs revisiting (which
+  host-only paths are meant to equal the object path).
 
 ### 2026-10-04 (thirteenth round) — destination fields off the simulation thread
 

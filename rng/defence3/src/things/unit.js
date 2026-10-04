@@ -630,6 +630,13 @@ class Unit {
     set _sepMoved(v) { const c = this._us; if (c) c.sepMov[this._si] = v ? 1 : 0; else if (this._det) this._det._sepMoved = v ? 1 : 0; else Object.defineProperty(this, '_smv', { value: v ? 1 : 0, writable: true, configurable: true }); }
     get _navLastD() { const c = this._us; return c ? c.mvNavLD[this._si] : (this._det ? this._det._navLastD : this._nld); }
     set _navLastD(v) { const c = this._us; if (c) c.mvNavLD[this._si] = v; else if (this._det) this._det._navLastD = v; else Object.defineProperty(this, '_nld', { value: v, writable: true, configurable: true }); }
+    // A forced target's last seen position (null: none): columns fLsX/fLsY
+    // (NaN for null), which the movement kernel writes for forced holds and
+    // chases (see simMoveTryHold).
+    get _forcedTargetLastSeenX() { const c = this._us; if (c) { const v = c.fLsX[this._si]; return v === v ? v : null; } return this._det ? this._det._forcedTargetLastSeenX : (this._flsx ?? null); }
+    set _forcedTargetLastSeenX(v) { const c = this._us; if (c) c.fLsX[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det._forcedTargetLastSeenX = v; else Object.defineProperty(this, '_flsx', { value: v, writable: true, configurable: true }); }
+    get _forcedTargetLastSeenY() { const c = this._us; if (c) { const v = c.fLsY[this._si]; return v === v ? v : null; } return this._det ? this._det._forcedTargetLastSeenY : (this._flsy ?? null); }
+    set _forcedTargetLastSeenY(v) { const c = this._us; if (c) c.fLsY[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det._forcedTargetLastSeenY = v; else Object.defineProperty(this, '_flsy', { value: v, writable: true, configurable: true }); }
     // Whether its stats are behind its stat tables (research it has not
     // taken yet, see things_utils.js _unitStatsVerOf): kept in esVer as a
     // version (peer-local), sent as a flag; a restore sets markers that
@@ -707,6 +714,9 @@ class Unit {
         // Moved by the movement kernel this tick (simMoveRun).
         let cols = this._us;
         if (cols && cols.mvOut[this._si] !== 0) return;
+        // (A forced target's last seen position the kernel wrote this tick
+        // before handing the unit back: as it was, doAttacking decides.)
+        if (cols && cols.fLsT[this._si] === gameTime) simForcedSeenUndo(cols, this._si);
         // Previous position for interpolation and the collision pass.
         this.prevX = this.x; this.prevY = this.y;
         if (this.dead) return;
@@ -806,7 +816,7 @@ class Unit {
         updateUnitSpatial(this);
         if (cols) {
             let cmd = this.commandState;
-            if (cmd === CMD_MOVING || cmd === CMD_ATTACK_MOVING) simMoveTryArm(this);
+            if (cmd === CMD_MOVING || cmd === CMD_ATTACK_MOVING) { if (this.holdPosition) simMoveTryParkHeld(this, cmd); else simMoveTryArm(this); }
             else if (cmd === CMD_IDLE && this.workerState && this.workerTransferCooldown > 0) simMoveTryParkWork(this);
             else if (cmd === CMD_IDLE && this.workerState === 'IDLE') simMoveTryPark(this);
             else if (cmd === CMD_IDLE && !this.workerState) simMoveTryParkIdle(this);
@@ -2694,13 +2704,14 @@ function _isChaseStepOpen(u, t, d, px = t.x, py = t.y) {
 // counts its timers down). The kernel hands the unit back on the tick of
 // its attack, or at once when the target dies or leaves its tile, the unit
 // leaves its tile (the range is a matter of that), or the target's area
-// leaves its owner's sight. Forced targets (their last seen
-// position is kept each tick), held units and structures stay in
-// Unit.update.
+// leaves its owner's sight. A forced target (an order, retaliation:
+// mvFlags 8): the kernel keeps its last seen position as doAttacking does
+// (fLsX/fLsY, while its area is in sight; out of sight Unit.update decides,
+// contact counts there). Held units and structures stay in Unit.update.
 function simMoveTryHold(u) {
     const c = u._us, tu = u.targetUnit;
     if (c && !tu && u.targetBuilding) { _simMoveTryHoldBuilding(u, c); return; }
-    if (!c || u.dead || u.holdPosition || u.workerState || !tu || tu.dead || u.forcedAttackTarget || u.targetBuilding || u.attackTarget !== tu || u.path) return;
+    if (!c || u.dead || u.holdPosition || u.workerState || !tu || tu.dead || u.targetBuilding || u.attackTarget !== tu || u.path) return;
     // (A timer of one tick: held too, its attack next tick made by the
     // kernel's hand-back, simHoldFire, not a whole Unit.update.)
     if (!(u.attackTimer > 0) || !(u.preComputed && u.preComputed.attackDamage > 0)) return;
@@ -2720,7 +2731,7 @@ function simMoveTryHold(u) {
     // (Its target stepping out of range: the kernel takes the chase's step,
     // see simMoveTryChase.)
     c.mvChs[s] = Math.max(TILE * 0.6, Number(u.preComputed.speed) || 1);
-    c.mvFlags[s] = u.isFlying ? 32 : 0;
+    c.mvFlags[s] = (u.isFlying ? 32 : 0) | (u.forcedAttackTarget ? 8 : 0);
     c.mvOn[s] = 3;
 }
 
@@ -2752,13 +2763,14 @@ function _simMoveTryHoldBuilding(u, c) {
 // its own, steps straight at it while _isChaseStepOpen (or it is close, or
 // flies) in doAttacking. The kernel does those ticks: it hands the unit back
 // when the target dies, leaves its owner's sight, comes in range or out of
-// leash, when the straight step is not open or would enter a wall or a
-// structure's tile, and on a hostile floor. Forced targets (last seen
-// positions), structures, held units and workers stay in Unit.update.
+// leash (a forced target has none: mvFlags 8, its last seen position kept
+// as for a hold), when the straight step is not open or would enter a wall
+// or a structure's tile, and on a hostile floor. Structures, held units and
+// workers stay in Unit.update.
 // Checked again at the unit's turn in the pass (simChaseStillValid).
 function simMoveTryChase(u) {
     const c = u._us, tu = u.targetUnit;
-    if (!c || u.dead || u.holdPosition || u.workerState || !tu || tu.dead || u.forcedAttackTarget || u.targetBuilding || u.attackTarget === tu) return;
+    if (!c || u.dead || u.holdPosition || u.workerState || !tu || tu.dead || u.targetBuilding || u.attackTarget === tu) return;
     // (With a path of its own, doAttacking steps straight only when close or
     // the step is open, flying or not; otherwise it follows the path:
     // Unit.update. Bit 1 tells the kernel.)
@@ -2770,7 +2782,7 @@ function simMoveTryChase(u) {
     // (Range in area steps; the kernel works out up to 2, touching included.)
     const k = Math.floor(Math.max(0, Number(_getUnitAttackRangeArea(u)) || 0));
     if (!(k <= 1)) return;
-    let flags = (u.isFlying ? 32 : 0) | (hasPath ? 2 : 0);
+    let flags = (u.isFlying ? 32 : 0) | (hasPath ? 2 : 0) | (u.forcedAttackTarget ? 8 : 0);
     // Its path's next node a nav node (navPathTo): the kernel follows its
     // flow field when the straight step is not open (followPath ->
     // _followNavNode), as _simMoveTryApproachBuilding arms it.
@@ -2802,11 +2814,17 @@ function simChaseStillValid(c, s, on = 4) {
     const q = c.mvHT[s];
     if (!(q >= 0) || c.dead0[q] || (c.id[q] | 0) !== c.mvHTId[s]) return false;
     const u = _simUnitState.owners[s], tu = u && u.targetUnit;
-    return !!tu && tu._si === q && u.commandState === CMD_ATTACKING && !u.forcedAttackTarget && !u.targetBuilding && !u.holdPosition;
+    return !!tu && tu._si === q && u.commandState === CMD_ATTACKING && !!u.forcedAttackTarget === ((c.mvFlags[s] & 8) !== 0) && !u.targetBuilding && !u.holdPosition;
 }
 function simChaseUndo(c, s) {
     c.mvOn[s] = 0; c.mvOut[s] = 0;
     c.x[s] = c.prevX[s]; c.y[s] = c.prevY[s];
+}
+// The last seen position of a forced target as before the kernel's write
+// this tick (fLsT): the unit runs Unit.update after all (handed back, or its
+// hold or chase no longer standing at its turn).
+function simForcedSeenUndo(c, s) {
+    c.fLsX[s] = c.fLsPX[s]; c.fLsY[s] = c.fLsPY[s]; c.fLsT[s] = -1;
 }
 
 // A held unit at its turn in the update pass (kernel output 6): whether the
@@ -2903,6 +2921,38 @@ function simMoveTryParkWait(u, cmd) {
         flags = 1;
     }
     c.mvWake[s] = wake; c.mvFlags[s] = flags; c.mvReach[s] = reach;
+    c.mvOn[s] = 2;
+}
+// A held unit with orders to move (hold keeps its orders, path and
+// progress; followPath stands it): Unit.update only looks for what to shoot
+// (a drive-by shooter: tryDriveByAttack) or to engage (an attack-mover:
+// doAttackMoving's looks) and checks its floor. Parked with those looks, as
+// a waiting one (simMoveTryParkWait); released (stop: hold off, disarmed),
+// ordered again (the setters disarm) or woken at its own phase of
+// SIM_IDLE_PARK_TICKS (a safety net). (Thousands of held movers ran a
+// near-empty Unit.update every tick: ~9k a tick in the ACTIONS bench.)
+function simMoveTryParkHeld(u, cmd) {
+    const c = u._us;
+    if (!c || u.dead || !u.holdPosition || u.workerState || u.unitType === 'scout') return;
+    // (A way to keep: without one, its looks for a way and its arrival are
+    // Unit.update's.)
+    if (!u.path || !(u.pathIndex < u.path.length)) return;
+    const s = u._si;
+    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
+    let flags = 0, reach = 0;
+    if (cmd === CMD_ATTACK_MOVING) {
+        reach = c.mvReachA[s];
+        if (reach === 255) return;
+        flags = 16;
+    } else if (c.mvShoot[s]) {
+        reach = c.mvReachD[s];
+        const area = c.spArea[s];
+        if (reach === 255 || !(area >= 0)) return;
+        _simMoveEnsureAreaBox(area, reach);
+        flags = 1;
+    }
+    const P = SIM_IDLE_PARK_TICKS, ph = (((gameTime + (u.id | 0)) % P) + P) % P;
+    c.mvWake[s] = gameTime + P - ph; c.mvFlags[s] = flags; c.mvReach[s] = reach;
     c.mvOn[s] = 2;
 }
 // A worker at its work (its path done, nothing pending) whose transfer

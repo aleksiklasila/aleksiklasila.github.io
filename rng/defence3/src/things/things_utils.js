@@ -145,11 +145,7 @@ function _runAdjacencyRecalculation() {
     // structure at once.)
     let runFull = _adjacencyDirtyAll;
     let dirtyKeys = null;
-    if (!runFull) {
-        dirtyKeys = Array.from(_adjacencyDirtyTiles);
-        if (dirtyKeys.length > ADJACENCY_TILES_PER_TICK) { dirtyKeys.sort((a, b) => a - b); dirtyKeys.length = ADJACENCY_TILES_PER_TICK; }
-        for (const k of dirtyKeys) _adjacencyDirtyTiles.delete(k);
-    }
+    if (!runFull) dirtyKeys = _adjacencyDirtyTiles.takeFirst(ADJACENCY_TILES_PER_TICK);
     // (Each touched area's state before: the whole list only for a full run.)
     let prevAreaActive = runFull ? areas.map(a => !!(a && a.active)) : null, prevActive = new Map();
     let areaVisualsChanged = false;

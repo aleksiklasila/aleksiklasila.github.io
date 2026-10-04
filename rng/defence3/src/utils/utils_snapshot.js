@@ -405,8 +405,10 @@ function _snapHashGlobals(slice = -1, round = 0) {
     h = _snapHV(h, !!_adjacencyNeedsRecalc);
     h = _snapHV(h, !!_adjacencyDirtyAll);
     h = _snapHDeep(h, _adjacencyLastRecalcTick, 1);
+    // (The dirty tiles' order-free sum, kept as they come and go: _AdjDirtySet.)
     let dirty = 0;
-    for (let k of (_adjacencyDirtyTiles || [])) dirty = (dirty + Math.imul((k | 0) + 1, 2654435761)) | 0;
+    if (_adjacencyDirtyTiles && typeof _adjacencyDirtyTiles.sum === 'number') dirty = _adjacencyDirtyTiles.sum;
+    else for (let k of (_adjacencyDirtyTiles || [])) dirty = (dirty + Math.imul((k | 0) + 1, 2654435761)) | 0;
     h = Math.imul(Math.imul(h ^ dirty, 16777619) ^ (_adjacencyDirtyTiles ? _adjacencyDirtyTiles.size : 0), 16777619);
     // Bookkeeping built over several ticks (a patch must carry it too).
     if (typeof _upKeepAccum !== 'undefined' && _upKeepAccum) for (let row of _upKeepAccum) h = _snapHNum(h, row ? row.total : 0);
@@ -2176,7 +2178,8 @@ function snapDecodeState(S, options = null) {
             _adjacencyNeedsRecalc = !!g.adjacency[0];
             _adjacencyDirtyAll = !!g.adjacency[1];
             _adjacencyLastRecalcTick = _snapD(g.adjacency[2]);
-            _adjacencyDirtyTiles = new Set((g.adjacency[3] || []).map(_snapD));
+            _adjacencyDirtyTiles = new _AdjDirtySet();
+            for (const k of (g.adjacency[3] || [])) _adjacencyDirtyTiles.add(_snapD(k));
             _adjacencyPassiveRefreshMode = !!g.adjacency[4];
         }
 

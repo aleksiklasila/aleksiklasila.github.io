@@ -369,6 +369,13 @@ function netSimulationTickMs() {
 function netSimulationBusy() {
     let meanWork = netSimulationWorkTimes.length
         ? netSimulationWorkTimes.reduce((sum, ms) => sum + ms, 0) / netSimulationWorkTimes.length : 0;
+    // Ticks dispatched ahead to the simulation worker (sim_client.js): its own
+    // cost, its ticks starting late against their deadlines, or page frames
+    // longer than the queued lead (only those stall it), not the page's
+    // drawing as such.
+    if (typeof simClientDispatchAhead === 'function' && simClientDispatchAhead()) {
+        return meanWork > TICK_MS * 0.8 || _simClient.lateMs > TICK_MS * 0.5 || simClientBehind() || netFrameMs() > TICK_MS * SIM_CLIENT_LEAD_TICKS;
+    }
     return meanWork > TICK_MS * 0.8 || netFrameMs() > TICK_MS * 1.25
         || (typeof simClientActive === 'function' && simClientActive() && simClientInFlight() >= SIM_CLIENT_MAX_IN_FLIGHT);
 }

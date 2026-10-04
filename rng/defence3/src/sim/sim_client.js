@@ -31,6 +31,17 @@ const simClientEnabled = (() => {
 let _simClient = null;
 // Ticks dispatched to the worker whose results have not come back yet.
 const SIM_CLIENT_MAX_IN_FLIGHT = 2;
+// With shared memory: ticks ready to run (multiplayer: sealed, their
+// commands final) are dispatched ahead of the worker, each with its deadline
+// on the tick clock. The worker runs them on time whatever the page is doing
+// (drawing, applying results); the page tops the queue up when it can,
+// reading the worker's progress from shared memory (never waiting for
+// results). A sealed tick's commands are fixed, so queueing it adds no
+// input delay; a page stalled up to the lead's worth of ticks no longer
+// stalls the simulation.
+const SIM_CLIENT_LEAD_TICKS = 3;
+// (?simahead=0: as before, ticks dispatched when due; for comparisons.)
+const simClientAheadEnabled = (() => { try { return new URLSearchParams(location.search).get('simahead') !== '0'; } catch { return true; } })();
 // The current units' frame (sim_frame.js views) while `units` is its list.
 function simClientCurrentUnitVis() {
     let c = _simClient;
@@ -50,14 +61,18 @@ function _simClientScriptUrls() {
         .filter(src => /\/src\//.test(src) && !/bootstrap\.js|sim_shadow\.js|sim_worker\.js|sim_client\.js/.test(src));
 }
 
-const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261018-a';
+const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261020-a';
 
 function _simClientCreate() {
     let c = {
         worker: null, loaded: false, active: false, epoch: 0, startTick: -1, nextRequestId: 1, replies: new Map(),
         inFlight: 0, lastDispatchAt: 0, tickClock: 0, dispatchAt: new Map(), appliedTick: -1, appliedAt: 0, latencyMs: TICK_MS, arrivedAt: 0, intervalMs: TICK_MS, drawnAlpha: -1, errors: [],
-        stats: { applied: 0, applyMs: [], simMs: [], encodeMs: [], latencyMs: [], rows: 0, heals: 0, dropped: 0 }
+        // [epoch, last tick the worker ran] (shared memory only).
+        ctl: (typeof SharedArrayBuffer === 'function' && typeof window !== 'undefined' && window.crossOriginIsolated) ? new Int32Array(new SharedArrayBuffer(16)) : null,
+        lateMs: 0,
+        stats: { applied: 0, applyMs: [], simMs: [], encodeMs: [], latencyMs: [], lateMs: [], rows: 0, heals: 0, dropped: 0 }
     };
+    if (c.ctl) c.ctl[0] = -1;
     // ?simhelpers=N: at most N helper workers for the parallel jobs (0: none).
     let maxHelpers = null;
     try { let q = new URLSearchParams(location.search).get('simhelpers'); if (q !== null && q !== '') maxHelpers = Math.max(0, Math.floor(Number(q)) || 0); } catch { }
@@ -98,7 +113,7 @@ function _simClientSpawn(c, viaBlob, maxHelpers) {
         let text = (ev.message || 'worker error, no message (script failed to load?)') + where;
         c.errors.push(text); if (!c.loaded) c.failed = text; console.error('[sim worker]', text, ev);
     };
-    worker.postMessage({ type: 'load', scripts: _simClientScriptUrls(), maxHelpers });
+    worker.postMessage({ type: 'load', scripts: _simClientScriptUrls(), maxHelpers, ctl: c.ctl });
 }
 
 // Loaded ahead (the scripts take a few hundred ms), so matches start at once.
@@ -180,19 +195,53 @@ function simClientStop() {
 }
 
 // ---- ticks ----
+// A catch-up tick (a guest behind its host): no deadline, the worker runs it
+// at once (set by the page's pump for the next dispatch).
+let simClientNextAsap = false;
 function simClientRunTick(tick, actions, teams, flush) {
     let c = _simClient;
+    let asap = simClientNextAsap;
+    simClientNextAsap = false;
     c.inFlight++;
     // Ticks on the shared wall clock: one interval after the previous, unless
     // the match stalled (then from now), so frame timing does not jitter it.
     let now = performance.now();
     let tickMs = netSimulationTickMs();
     let at = c.tickClock + tickMs;
-    if (!(at >= now - tickMs)) at = now;
+    if (!(at >= now - tickMs) || asap) at = now;
     c.tickClock = at;
     c.dispatchAt.set(tick, at);
-    c.worker.postMessage({ type: 'tick', tick, actions, teams, flush: !!flush, hash: true });
+    // (Its deadline as absolute time: the worker's clock has another origin.
+    // Only when dispatched ahead: otherwise at once, as before.)
+    let due = simClientDispatchAhead() && !asap && typeof performance.timeOrigin === 'number' ? performance.timeOrigin + at : undefined;
+    c.worker.postMessage({ type: 'tick', tick, actions, teams, flush: !!flush, hash: true, due });
 }
+
+// Whether ticks go to the worker ahead of time (shared memory).
+function simClientDispatchAhead() {
+    let c = _simClient;
+    return !!(c && c.active && c.ctl && simClientAheadEnabled);
+}
+// Ticks dispatched that the worker has not run yet (its shared progress;
+// without shared memory, the results not back yet).
+function simClientWorkerAhead() {
+    let c = _simClient;
+    if (!c || !c.active) return 0;
+    if (c.ctl && Atomics.load(c.ctl, 0) === c.epoch) return Math.max(0, (currentTick - 1) - Atomics.load(c.ctl, 1));
+    return c.inFlight;
+}
+// A tick came due while the worker still had the whole lead queued (the
+// page's pump): the worker is not keeping up (netSimulationBusy).
+function simClientNoteBehind(now) { if (_simClient) _simClient.behindAt = now; }
+function simClientBehind(now = performance.now()) { let c = _simClient; return !!(c && c.behindAt && now - c.behindAt < 1000); }
+// The last tick the worker ran (shared memory), else the last result applied.
+function simClientWorkerTick() {
+    let c = _simClient;
+    if (!c || !c.active) return currentTick - 1;
+    if (c.ctl && Atomics.load(c.ctl, 0) === c.epoch) return Atomics.load(c.ctl, 1);
+    return c.appliedTick;
+}
+
 
 // Tests: code the worker runs at this point of the tick stream.
 function simClientWorkerEval(code) {
@@ -298,10 +347,16 @@ function _simClientApplyTick(msg) {
     }
     if (simClientTickAppliedHook) simClientTickAppliedHook(msg.tick, msg.lockHashes ? msg.lockHashes[0] : undefined, msg.report);
     let ms = performance.now() - t0;
-    netNoteSimulationTick(performance.now(), (Number(msg.simMs) || 0) + (Number(msg.encodeMs) || 0) + ms);
+    // The simulation's own pace (multiplayer feedback): when the worker
+    // finished the tick and what it cost there, not when or how fast the
+    // page got to its result.
+    let doneAt = Number.isFinite(msg.doneAt) && typeof performance.timeOrigin === 'number' ? msg.doneAt - performance.timeOrigin : performance.now();
+    netNoteSimulationTick(doneAt, (Number(msg.simMs) || 0) + (Number(msg.encodeMs) || 0));
+    let late = Number(msg.lateMs) || 0;
+    c.lateMs += (late - c.lateMs) * 0.2;
     c.stats.applied++;
-    c.stats.applyMs.push(ms); c.stats.simMs.push(msg.simMs); c.stats.encodeMs.push(msg.encodeMs);
-    for (let k of ['applyMs', 'simMs', 'encodeMs', 'latencyMs']) if (c.stats[k].length > 600) c.stats[k].splice(0, 300);
+    c.stats.applyMs.push(ms); c.stats.simMs.push(msg.simMs); c.stats.encodeMs.push(msg.encodeMs); c.stats.lateMs.push(late);
+    for (let k of ['applyMs', 'simMs', 'encodeMs', 'latencyMs', 'lateMs']) if (c.stats[k].length > 600) c.stats[k].splice(0, 300);
 }
 
 // ---- units: frames and their views ----
@@ -488,6 +543,9 @@ function _simClientPageTickWork(tick) {
     }
     _simClient.lastSight = null;
     visibilityGrid = updateVisualVisibility(localPlayerId, getRawVisibilityGridForPlayer(localPlayerId));
+    // The graph's counts a slice a tick (sampleGameStats otherwise gathers
+    // every unit at once: up to ~70 ms on the page at 200k units).
+    gameStatsStep(tick);
     if ((tick + 1) % TICK_RATE === 0) sampleGameStats();
     requestResearchPopupRefresh();
     let c = _simClient;
@@ -579,7 +637,8 @@ window.simClientStats = function () {
         presentation:!!c.presentation, presentationTick:c.presentationTick, presentationBuildMs:c.presentationBuildMs, errors: c.errors.slice(0, 5), firstDiff: s.firstDiff || null, rowsPerTick: s.applied ? Math.round(s.rows / s.applied * 10) / 10 : 0,
         rowsPerTickByList: s.applied ? Object.fromEntries(Object.entries(s.rowsBy || {}).map(([k, v]) => [k, Math.round(v / s.applied * 10) / 10])) : null,
         applyMs: { mean: m(s.applyMs), p95: q(s.applyMs, .95) }, workerSimMs: { mean: m(s.simMs), p95: q(s.simMs, .95) },
-        workerEncodeMs: { mean: m(s.encodeMs), p95: q(s.encodeMs, .95) }, latencyMs: { mean: m(s.latencyMs), p95: q(s.latencyMs, .95), shown: Math.round(c.latencyMs) }
+        workerEncodeMs: { mean: m(s.encodeMs), p95: q(s.encodeMs, .95) }, latencyMs: { mean: m(s.latencyMs), p95: q(s.latencyMs, .95), shown: Math.round(c.latencyMs) },
+        workerLateMs: { mean: m(s.lateMs), p95: q(s.lateMs, .95) }, dispatchAhead: simClientDispatchAhead(), workerAhead: simClientWorkerAhead()
     };
 };
 

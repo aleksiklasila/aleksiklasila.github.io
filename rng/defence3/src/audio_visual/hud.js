@@ -1530,6 +1530,7 @@ function _bindHudShrineDrain(el) {
 }
 
 function _hudShrineGlyphHtml(owner) {
+    if (!SHRINES_ENABLED) return `<span class="hud-shrine-glyph" title="${_escapeHtml('💀 Shrine: damage taken (energy your units and buildings lost to damage).\nShrines are off in this game: nothing drains from it.')}" style="color:#c9b;user-select:none;text-align:center">💀</span>`;
     let mult = Number(getBuildingStatForOwner(owner, 'shrine', 1, 'multiplier'));
     let rate = Number(getBuildingStatForOwner(owner, 'shrine', 1, 'drainRate'));
     let title = `\uD83D\uDC80 Shrine: damage taken (energy your units and buildings lost to damage).\nDrains up to ${formatCompactNumber(Number.isFinite(rate) ? rate : 0)} \uD83D\uDC80/s into \u26A1/\u2605, times ${Number.isFinite(mult) ? mult.toFixed(2) : '0'}.\nResearch: Shrine (multiplier, drain / s).`;
@@ -1555,11 +1556,10 @@ function updateHUD() {
     let astarCur = Math.floor(_getPlayerAstarBudgetRemaining(localPlayerId));
     _renderHudResource(_hudEls.astar, 'astarText', localPlayerId, 'astar', '★', '#9aa', astarCur, _hudRateHtml(rates ? rates.astarTotal : 0, 'astar'));
     if (_hudEls.shrine) {
-        if (SHRINES_ENABLED) {
-            let shrine = Number(p.shrine) || 0;
-            _renderHudResource(_hudEls.shrine, 'shrineText', localPlayerId, 'shrine', '', '', shrine, _hudRateHtml(_hudShrineRate(localPlayerId, shrine), 'shrine'),
-                _hudShrineDrainHtml(localPlayerId), _hudShrineGlyphHtml(localPlayerId));
-        } else if (_hudCache.shrineText !== '') { _hudCache.shrineText = ''; _hudEls.shrine.innerHTML = ''; }
+        // Shrines off: the count of damage taken only, no drain buttons.
+        let shrine = Number(p.shrine) || 0;
+        _renderHudResource(_hudEls.shrine, 'shrineText', localPlayerId, 'shrine', '', '', shrine, _hudRateHtml(_hudShrineRate(localPlayerId, shrine), 'shrine'),
+            SHRINES_ENABLED ? _hudShrineDrainHtml(localPlayerId) : '<span></span>', _hudShrineGlyphHtml(localPlayerId));
     }
     refreshResourcePenaltyPopupContent(localPlayerId);
     let playerCap = getPlayerPopCap(localPlayerId);

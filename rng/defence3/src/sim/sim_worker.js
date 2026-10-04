@@ -167,10 +167,10 @@ function _simImport(url) {
 // sources in one blob too: a relative URL or a text/plain script would fail.
 function _simHelperUrl() {
     let base = self.SIM_WORKER_BASE || location.href;
-    let url = new URL('sim_helper.js?v=20261018-a', base).href;
+    let url = new URL('sim_helper.js?v=20261020-a', base).href;
     if (!self.SIM_WORKER_BASE && !_simImportViaBlob) return url;
     let nl = String.fromCharCode(10);
-    let parts = ['sim_parallel.js?v=20261018-a', 'sim_frame.js?v=20261008-a', '../game/flownav.js?v=20261012-a'].map(f => {
+    let parts = ['sim_parallel.js?v=20261020-nav', 'sim_frame.js?v=20261008-a', '../game/flownav.js?v=20261020-nav'].map(f => {
         let xhr = new XMLHttpRequest();
         xhr.open('GET', new URL(f, base).href, false);
         xhr.send();
@@ -188,6 +188,8 @@ self.onmessage = (ev) => {
     try {
         if (msg.type === 'load') {
             let t0 = performance.now();
+            // (The page's shared control block: [epoch, last tick run].)
+            _simCtl = msg.ctl instanceof Int32Array ? msg.ctl : null;
             for (let url of msg.scripts) _simImport(url);
             _simStubUi();
             _simLoaded = true;
@@ -196,11 +198,13 @@ self.onmessage = (ev) => {
             try { helpers = simParallelInit(_simHelperUrl(), msg.maxHelpers); } catch (err) { _simError('helpers', err); }
             _simPost({ type: 'loaded', ms: performance.now() - t0, helpers, shared: SIM_PAR_SHARED });
         } else if (msg.type === 'start') {
+            _simStreamClear(false);
             _simStart(msg);
+            _simCtlPublish(currentTick - 1);
         } else if (msg.type === 'presentationStop') {
             simPresentationStop();
         } else if (msg.type === 'tick') {
-            _simTick(msg);
+            _simStreamPush(msg);
         } else if (msg.type === 'frameReturn') {
             // The page is done with these buffers: the next frames reuse them.
             for (let b of msg.bufs || []) if (!simPresentationReturn(b)) simFrameReturn(b);
@@ -208,10 +212,51 @@ self.onmessage = (ev) => {
             simFrameWatch(msg.list);
             simFrameWatchStructures(msg.structures);
         } else if (msg.type === 'request') {
-            _simRequest(msg);
+            // A whole-state restore: the ticks queued before it belong to the
+            // old epoch (dropped; requests before it still run, in order).
+            if (msg.op === 'applySnapshot') { _simStreamClear(true); _simRequest(msg); _simCtlPublish(currentTick - 1); }
+            else _simStreamPush(msg);
         }
     } catch (err) { _simError(msg.type, err); }
 };
+
+// ---- the tick stream ----
+// Ticks and the requests between them are one ordered stream. A tick runs
+// at its deadline (absolute time on the page's tick clock, sim_client.js) or
+// at once when late or without one; a request runs once every tick before
+// it has. So ticks the page dispatched ahead run on time however busy the
+// page is (drawing, applying results), and patches and snapshots still
+// land between the right ticks.
+const _simStream = [];
+let _simStreamTimer = 0;
+// The shared control block (when the page has shared memory): the epoch and
+// the last tick run, for the page's dispatch (it never waits for results).
+let _simCtl = null;
+function _simCtlPublish(tick) {
+    if (!_simCtl) return;
+    Atomics.store(_simCtl, 1, tick | 0);
+    Atomics.store(_simCtl, 0, _simEpoch | 0);
+}
+function _simNowAbs() { return typeof performance.timeOrigin === 'number' ? performance.timeOrigin + performance.now() : NaN; }
+function _simStreamPush(msg) { _simStream.push(msg); _simStreamRun(); }
+function _simStreamRun() {
+    if (_simStreamTimer) { clearTimeout(_simStreamTimer); _simStreamTimer = 0; }
+    while (_simStream.length) {
+        const m = _simStream[0];
+        if (m.type === 'tick' && Number.isFinite(m.due)) {
+            const wait = m.due - _simNowAbs();
+            if (wait > 0.5) { _simStreamTimer = setTimeout(_simStreamRun, wait); return; }
+        }
+        _simStream.shift();
+        try { if (m.type === 'tick') _simTick(m); else _simRequest(m); } catch (err) { _simError(m.type, err); }
+    }
+}
+// (keepRequests: the requests run now, in order; the ticks are dropped.)
+function _simStreamClear(keepRequests) {
+    if (_simStreamTimer) { clearTimeout(_simStreamTimer); _simStreamTimer = 0; }
+    const list = _simStream.splice(0);
+    if (keepRequests) for (const m of list) if (m.type === 'request') { try { _simRequest(m); } catch (err) { _simError('request', err); } }
+}
 
 // ---- match start: the page's lobby and config, then its start snapshot ----
 function _simStart(msg) {
@@ -253,14 +298,17 @@ function _simTick(msg) {
         _simPost({ type: 'error', where: 'tick', message: `tick ${msg.tick} arrived at ${currentTick}` });
         return;
     }
+    // (How late it starts against its deadline.)
+    let lateMs = Number.isFinite(msg.due) ? Math.max(0, _simNowAbs() - msg.due) : 0;
     pathfindBudget = 0;
     // A resync tick: every peer starts it without history caches.
     if (msg.flush) snapFlushHistoryCaches();
     let teams = msg.teams;
     let firstTeam = currentTick % teams.length;
+    let actions = msg.actions || [];
     for (let k = 0; k < teams.length; k++) {
         let teamId = teams[(firstTeam + k) % teams.length];
-        let acts = (msg.actions || []).filter(a => (a.teamId ?? 0) === teamId);
+        let acts = actions.filter(a => (a.teamId ?? 0) === teamId);
         if (acts.length > 0) {
             try { processActions(acts, teamId); } catch (err) { _simError('actions', err); }
         }
@@ -269,6 +317,8 @@ function _simTick(msg) {
     let tick = currentTick;
     currentTick++;
     let simMs = performance.now() - t0;
+    _simCtlPublish(tick);
+    _simTickLateMs = lateMs;
     if (_simMode !== 'authority') {
         _simPost({ type: 'ticked', tick, hash: computeLockstepStateHashFast(tick), ms: simMs });
         return;
@@ -279,6 +329,8 @@ function _simTick(msg) {
     _simPostResult(tick, hash, simReportLockstepHashes ? [computeLockstepStateHashFast(tick)] : null, simMs, report);
 }
 
+// (The last tick's lateness against its deadline, reported with it.)
+let _simTickLateMs = 0;
 // Tests: each tick's lockstep hash goes out too, and what the hook reports.
 let simReportLockstepHashes = false;
 let simTickReportHook = null;
@@ -337,7 +389,8 @@ function _simPostResult(tick, hash, lock, simMs, report = null) {
             transfer.push(buf);
         }
     } catch (err) { sight = null; _simError('sight', err); }
-    _simPost({ type: 'ticked', epoch: _simEpoch, tick, world, presentation:!!_simPresentation, hash, lockHashes: lock, events, sight, sightPlayer: localPlayerId, simMs, encodeMs: performance.now() - t1, report }, transfer);
+    _simPost({ type: 'ticked', epoch: _simEpoch, tick, world, presentation:!!_simPresentation, hash, lockHashes: lock, events, sight, sightPlayer: localPlayerId, simMs, encodeMs: performance.now() - t1, report,
+        lateMs: _simTickLateMs, doneAt: _simNowAbs() }, transfer);
 }
 
 // ---- requests the page's network code needs in tick order ----

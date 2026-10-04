@@ -22,10 +22,26 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
         out.overkill = (_shrinePendingFixed[0] - f1) / RESOURCE_FIXED_POINT_SCALE;
         u.energy = e0; _shrinePendingFixed[0] = f0;
         out.drops = droppedItems.length;
+        // Shrines off: damage still counts, nothing drains, drain orders ignored.
+        const was = SHRINES_ENABLED, fx = p._resourceFixedValues || (p._resourceFixedValues = {});
+        const sh0 = fx.shrine, en0 = p.energy, as0 = p.astar, dr0 = p.shrineDrain;
+        SHRINES_ENABLED = false;
+        fx.shrine = 50 * RESOURCE_FIXED_POINT_SCALE;
+        u.energy -= 10; shrineDamageTaken(u, 10);
+        out.offMode = getPlayerShrineDrainMode(0);
+        shrineTick();
+        out.offShrine = fx.shrine / RESOURCE_FIXED_POINT_SCALE;
+        out.offEnergy = p.energy - en0; out.offAstar = p.astar - as0;
+        SHRINES_ENABLED = was; fx.shrine = sh0; if (sh0 === undefined) delete fx.shrine; p.shrine = (Number(sh0) || 0) / RESOURCE_FIXED_POINT_SCALE;
+        u.energy = e0; p.shrineDrain = dr0;
         return JSON.stringify(out);
     })()`));
     assert.equal(unit.normal, 10, 'damage taken goes to the shrine');
     assert.equal(unit.overkill, 3, 'only the energy actually lost counts');
+    assert.equal(unit.drops, 0, 'nothing dropped on the map');
+    assert.equal(unit.offMode, 0, 'shrines off: no drain mode');
+    assert.equal(unit.offShrine, 60, 'shrines off: damage still counts, nothing drained');
+    assert.equal(unit.offEnergy, 0); assert.equal(unit.offAstar, 0);
     // Fight: both teams attack-move into each other for a while.
     for (const i of all) i.eval(`(() => { const mine = units.filter(u => !u.dead && u.owner === localPlayerId && !u.workerType);
         queueAction({ action: 'attackMove', unitIds: mine.map(u => u.id), targetX: GRID_W * TILE / 2, targetY: GRID_H * TILE / 2 }); })()`);

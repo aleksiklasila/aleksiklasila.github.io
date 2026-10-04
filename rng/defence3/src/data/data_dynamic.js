@@ -231,11 +231,13 @@ function addPlayerResource(playerId, resourceKey, delta) {
 // matter) and drains up to drainRate / TICK_RATE of it (research: building
 // 'shrine') into energy and \u2605, times its multiplier, as the player set
 // with the shrineDrain action (player.shrineDrain: 1 energy, 2 \u2605, 3
-// half each, 0 none; 3 at the start).
+// half each, 0 none; 3 at the start). Shrines off (the game's setting): the
+// shrine still counts damage taken, but nothing drains from it (the drain
+// mode reads 0; the HUD has no drain buttons).
 const SHRINE_DRAIN_ENERGY = 1, SHRINE_DRAIN_ASTAR = 2, SHRINE_DRAIN_DEFAULT = 3;
 let _shrinePendingFixed = new Float64Array(8);
 function shrineDamageTaken(target, amount) {
-    if (!SHRINES_ENABLED || !target || !(amount > 0)) return;
+    if (!target || !(amount > 0)) return;
     let o = target.owner;
     if (!Number.isInteger(o) || o < 0) return;
     let after = Number(target.energy);
@@ -246,7 +248,7 @@ function shrineDamageTaken(target, amount) {
 }
 function getPlayerShrineDrainMode(playerId) {
     let p = players[playerId];
-    if (!p) return 0;
+    if (!p || !SHRINES_ENABLED) return 0;
     return p.shrineDrain === undefined ? SHRINE_DRAIN_DEFAULT : (Math.floor(Number(p.shrineDrain)) || 0) & 3;
 }
 // What the player's shrine gives this tick: [shrine drained, energy, \u2605]

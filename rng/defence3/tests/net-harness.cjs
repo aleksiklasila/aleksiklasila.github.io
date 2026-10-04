@@ -486,6 +486,8 @@ function createInstance(world, name, options = {}) {
     location.searchParams.set('simworker', (world.simWorker || process.env.SIM_WORKER === '1') && options.simWorker !== false ? '1' : '0');
     const window = {
         innerWidth: 1280, innerHeight: 720, devicePixelRatio: 1,
+        // (SIM_SHARED=1: shared memory, as a cross-origin isolated page.)
+        crossOriginIsolated: process.env.SIM_SHARED === '1',
         addEventListener: (type, fn) => { (inst.winListeners[type] ||= []).push(fn); }, removeEventListener: () => { },
         dispatchEvent: ev => { for (const fn of (inst.winListeners[ev && ev.type] || []).slice()) fn(ev); return true; },
         getComputedStyle: () => ({ getPropertyValue: () => '' }), open: () => null, focus: () => { },
@@ -562,7 +564,14 @@ function createInstance(world, name, options = {}) {
                 importScripts: () => { if (worker._imported) return; worker._imported = true; for (const sc of scripts.game) { try { sc.runInContext(ctx); } catch (err) { inst.errors.push(new Error("[sim worker] loading " + sc.__file + ": " + (err && err.stack || err))); } } },
                 postMessage: (msg, transfer = []) => {
                     const data = process.env.SIM_SHARED === '1' ? structuredClone(msg, { transfer }) : structuredClone(msg);
-                    sched.at(sched.now + (options.simWorkerMs ?? 5), () => { if (!worker._terminated && worker.onmessage) worker.onmessage({ data }); }, inst);
+                    // (The shared progress block: the page learns of a tick
+                    // when its result arrives, as simWorkerMs models a tick
+                    // that long; the worker writes its own copy at once.)
+                    const ctl = worker._ctl ? [worker._ctl[0], worker._ctl[1]] : null;
+                    sched.at(sched.now + (options.simWorkerMs ?? 5), () => {
+                        if (ctl && worker._pageCtl) { worker._pageCtl[1] = ctl[1]; worker._pageCtl[0] = ctl[0]; }
+                        if (!worker._terminated && worker.onmessage) worker.onmessage({ data });
+                    }, inst);
                 }
             };
             sandbox.self = sandbox;
@@ -578,6 +587,8 @@ function createInstance(world, name, options = {}) {
             const data = process.env.SIM_SHARED === '1' ? structuredClone(msg, { transfer }) : structuredClone(msg);
             // The page lists no script tags here: one entry loads them all.
             if (data && data.type === 'load' && !(data.scripts && data.scripts.length)) data.scripts = ['harness:all'];
+            // (The worker's own progress block; the page's follows replies.)
+            if (data && data.type === 'load' && data.ctl) { this._pageCtl = msg.ctl; this._ctl = new Int32Array(new SharedArrayBuffer(16)); this._ctl[0] = -1; data.ctl = this._ctl; }
             // Tests compare every tick: each tick's lockstep hash, and (when
             // the world records them) its parts and exact fingerprint.
             sched.at(sched.now, () => {

@@ -28,7 +28,7 @@ const SIM_UNIT_ACCESSOR_COLUMNS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'v
 const SIM_UNIT_MIRROR_COLUMNS = ['r', 'collisionR'];
 // Accessor keys that are not columns (see simUnitStateKeys): the path is a
 // plain reference behind a setter that disarms the movement kernel.
-const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved', '_statsBehind'];
+const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved', '_statsBehind', '_forcedTargetLastSeenX', '_forcedTargetLastSeenY'];
 
 // Unit types by first sight (peer-local indices: only ever mapped back to
 // the type's name).
@@ -142,8 +142,9 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // Its position at the start of the unit pass (the pre-pass copies it):
     // where other units see it during the pass (see _unitTickX).
     ['x0', Float64Array, 1], ['y0', Float64Array, 1],
-    // Flow mode: 1 for a worker (handed back on its check ticks, see
-    // WORKER_MOVE_CHECK_TICKS).
+    // Flow mode: 1 for a worker at its task (handed back on its check ticks,
+    // see WORKER_MOVE_CHECK_TICKS), 2 for one the player sent (MANUAL_MOVE:
+    // its check does nothing while it has a way, so it is not handed back).
     ['mvWk', Uint8Array, 1],
     // Unit._navLastD (-1 none): its distance to a group's destination last
     // tick (arriving in a crowd), one value for Unit.update and the kernel.
@@ -195,7 +196,12 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['sepCx', Float64Array, 1], ['sepCy', Float64Array, 1],
     // The version of its (owner, type) stat tables its stats were applied at
     // (things_utils.js _unitStatsVerOf).
-    ['esVer', Int32Array, 1]];
+    ['esVer', Int32Array, 1],
+    // Unit._forcedTargetLastSeenX/Y (NaN: null): a forced target's last seen
+    // position, which the movement kernel writes for forced holds and chases
+    // (mvFlags 8); the values before its write (fLsPX/fLsPY) and the tick of
+    // it (fLsT), put back when the unit runs Unit.update after all that tick.
+    ['fLsX', Float64Array, 1], ['fLsY', Float64Array, 1], ['fLsPX', Float64Array, 1], ['fLsPY', Float64Array, 1], ['fLsT', Int32Array, 1]];
 // Accessor defaults (the "not indexed / not registered" values).
 const SIM_SPATIAL_DEFAULTS = { spTile: -1, spArea: -2, spOwner: -1, spEpoch: 0, spType: -1, vsGen: 0, vsR: -1, vsA: -1, vsP1: -1, vsP2: -1 };
 let _simUnitState = null;
@@ -265,6 +271,7 @@ function simUnitStateAllocate(u) {
     S.sepKey[s] = SIM_SEP_ABSENT;
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNavT[s] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
     S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = 0; S.columns.stOn[s] = 1; S.columns.lzAcc[s] = 0; S.columns.sepCx[s] = 0; S.columns.sepCy[s] = 0; S.columns.esVer[s] = -1;
+    S.columns.fLsX[s] = NaN; S.columns.fLsY[s] = NaN; S.columns.fLsT[s] = -1;
     for (const k of SIM_UNIT_LEVEL_COLUMNS) S.columns[k][s] = NaN;
     for (const k in SIM_SPATIAL_DEFAULTS) S.columns[k][s] = SIM_SPATIAL_DEFAULTS[k];
     S.owners[s] = u;
@@ -290,6 +297,7 @@ function simUnitStateDetach(S, s) {
     values._floorTile = S.columns.mvFloor[s];
     values._sepMoved = S.columns.sepMov[s];
     values._statsBehind = typeof _unitStatsBehind === 'function' ? _unitStatsBehind(u, S.columns.esVer[s]) : false;
+    { const lx = S.columns.fLsX[s], ly = S.columns.fLsY[s]; values._forcedTargetLastSeenX = lx === lx ? lx : null; values._forcedTargetLastSeenY = ly === ly ? ly : null; }
     u._det = values;
     u._us = null; u._si = -1;
     S.sepKey[s] = SIM_SEP_ABSENT;

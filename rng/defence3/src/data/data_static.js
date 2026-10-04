@@ -21,7 +21,8 @@ let STARTING_MONEY = 2000;
 let STARTING_ASTAR = 9000;
 // Shrines (menu, Resources): damage a player's units and buildings take
 // goes to the player's shrine (resource 💀), drained passively into energy
-// and ★ (see shrineTick). Off: no shrine; dying units drop their bounty.
+// and ★ (see shrineTick). Off: it still counts damage taken, but cannot be
+// drained (no drain buttons, no shrine research).
 let SHRINES_ENABLED = true;
 let MAP_TYPE = 'random';
 let TYPE_FLOOR = 0, TYPE_WALL = 1;

@@ -788,17 +788,6 @@ function _gameTickBody() {
             removedIndices.push(i); removedUnits.push(u); if (removedSet) removedSet.add(u);
         } else {
             if (!u.isKing && !u.workerState) playSound('unit_death', u.x, u.y, u.unitType);
-            // Energy on death (bounty), dropped where it fell (with shrines
-            // on, damage taken feeds the owner's shrine instead).
-            let cost = BASE_UNIT_STATS[u.unitType] ? BASE_UNIT_STATS[u.unitType].energy * 0.5 : 5;
-            let bounty = Math.floor(cost * 0.1);
-            if (bounty > 0 && !SHRINES_ENABLED) {
-                let gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
-                if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && !getDroppedItemAt(gx, gy)) {
-                    let drop = { type: 'energy', value: bounty, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, timer: TICK_RATE * 120 };
-                    addDroppedItem(drop);
-                }
-            }
             // Release worker lock on target
             _clearWorkerTarget(u);
             if (u.workerTarget && u.workerTarget.lockedBy === u) {
@@ -3870,8 +3859,9 @@ function processAction(a, playerId) {
                 }
             }
         } else if (a.action === 'shrineDrain') {
-            // Where the player's shrine drains to: 1 energy, 2 \u2605, 3 both, 0 neither.
-            if (players[playerId]) players[playerId].shrineDrain = (Math.floor(Number(a.drain)) || 0) & 3;
+            // Where the player's shrine drains to: 1 energy, 2 \u2605, 3 both, 0 neither
+            // (shrines off: no draining, the order is ignored).
+            if (SHRINES_ENABLED && players[playerId]) players[playerId].shrineDrain = (Math.floor(Number(a.drain)) || 0) & 3;
         } else if (a.action === 'killUnit') {
             let u = units.find(u => u.id === a.unitId && u.owner === playerId);
             // gameTick's dead-unit sweep releases the population slot.

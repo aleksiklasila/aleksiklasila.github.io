@@ -153,8 +153,8 @@
                         <input id="cfg-astar-mine-max" type="number" min="10" max="500000000000" value="20000" >
                     </div>
                     <div class="lobby-setting-row compact">
-                        <label for="cfg-shrines" title="&#128128; is damage taken: the energy your units and buildings lose to damage goes to your shrine and drains passively into &#9889; and &#9733; (multiplier and drain rate are researched). Off: dying units drop energy where they fall.">&#128128; Shrines</label>
-                        <input id="cfg-shrines" type="checkbox" checked title="&#128128; is damage taken: the energy your units and buildings lose to damage goes to your shrine and drains passively into &#9889; and &#9733; (multiplier and drain rate are researched). Off: dying units drop energy where they fall.">
+                        <label for="cfg-shrines" title="&#128128; is damage taken: the energy your units and buildings lose to damage goes to your shrine and drains passively into &#9889; and &#9733; (multiplier and drain rate are researched). Off: the shrine still counts damage taken, but nothing drains from it.">&#128128; Shrines</label>
+                        <input id="cfg-shrines" type="checkbox" checked title="&#128128; is damage taken: the energy your units and buildings lose to damage goes to your shrine and drains passively into &#9889; and &#9733; (multiplier and drain rate are researched). Off: the shrine still counts damage taken, but nothing drains from it.">
                     </div>
                     <div class="lobby-setting-row compact">
                         <label>Max Research Level</label>
@@ -752,19 +752,19 @@
 
     <script src="./plotly-2.35.2.min.js"></script>
     
-    <script src="./src/sim/sim_parallel.js?v=20261019-nav"></script>
-    <script src="./src/sim/sim_unit_state.js?v=20261012-a"></script>
+    <script src="./src/sim/sim_parallel.js?v=20261020-nav"></script>
+    <script src="./src/sim/sim_unit_state.js?v=20261020-a"></script>
     <script src="./src/utils/utils_common.js?v=20260930-compact"></script>
-    <script src="./src/utils/utils_net_quality.js?v=20260928-lateseal"></script>
+    <script src="./src/utils/utils_net_quality.js?v=20261020-a"></script>
     <script src="./src/utils/utils_networking.js?v=20261008-a"></script>
-    <script src="./src/utils/utils_snapshot.js?v=20261018-a"></script>
+    <script src="./src/utils/utils_snapshot.js?v=20261020-a"></script>
     <script src="./src/utils/utils_resync.js?v=20261006-b"></script>
     <script src="./src/utils/utils_host_migration.js?v=20261006-c"></script>
     <script src="./src/utils/utils_storage.js?v=20261002-sim2"></script>
 
-    <script src="./src/data/data_static.js?v=20261004-a"></script>
-    <script src="./src/data/data_dynamic.js?v=20261018-a"></script>
-    <script src="./src/data/data_state.js?v=20260927-lod"></script>
+    <script src="./src/data/data_static.js?v=20261020-shrine"></script>
+    <script src="./src/data/data_dynamic.js?v=20261020-shrine"></script>
+    <script src="./src/data/data_state.js?v=20261020-a"></script>
 
     <script src="./src/audio_visual/visibility_history.js?v=20261006-b"></script>
     <script src="./src/audio_visual/range_overlay.js?v=20261005-a"></script>
@@ -774,33 +774,33 @@
     <script src="./src/audio_visual/renderer2d.js?v=20261005-a"></script>
     <script src="./src/audio_visual/side_visualizations.js?v=20260925-crowd-perf"></script>
     <script src="./src/audio_visual/effects3d.js?v=20260927-lod"></script>
-    <script src="./src/audio_visual/renderer.js?v=20261007-a"></script>
+    <script src="./src/audio_visual/renderer.js?v=20261020-a"></script>
     <script src="./src/audio_visual/audio.js?v=20261018-a"></script>
     <script src="./src/audio_visual/jukebox.js?v=20261007-a"></script>
-    <script src="./src/audio_visual/hud.js?v=20261001-slide2"></script>
+    <script src="./src/audio_visual/hud.js?v=20261020-shrine"></script>
     <script src="./src/audio_visual/bottom_bar.js?v=20260930-deltacolor"></script>
 
     <script src="./src/game/chunk.js?v=20261018-a"></script>
     <script src="./src/game/map.js?v=20260926-netcode"></script>
     <script src="./src/game/pathfinding.js?v=20261019-nav"></script>
-    <script src="./src/game/flownav.js?v=20261019-nav"></script>
+    <script src="./src/game/flownav.js?v=20261020-nav"></script>
     <script src="./src/game/player.js?v=20260516d"></script>
 
     <script src="./src/things/barrack.js?v=20260927-dist"></script>
-    <script src="./src/things/unit.js?v=20261019-nav"></script>
-    <script src="./src/things/worker.js?v=20261019-nav"></script>
+    <script src="./src/things/unit.js?v=20261020-a"></script>
+    <script src="./src/things/worker.js?v=20261020-a"></script>
     <script src="./src/things/particle.js?v=20260929-fx"></script>
     <script src="./src/things/projectile.js?v=20260929-fx"></script>
-    <script src="./src/things/things_utils.js?v=20261018-a"></script>
+    <script src="./src/things/things_utils.js?v=20261020-a"></script>
     <script src="./src/things/tower.js?v=20260927-dist"></script>
 
-    <script src="./src/main.js?v=20261019-nav"></script>
+    <script src="./src/main.js?v=20261020-shrine"></script>
 
     <script src="./src/sim/sim_frame.js?v=20261008-a"></script>
     <script src="./src/sim/sim_frame_world.js?v=20261007-a"></script>
     <script src="./src/sim/sim_presentation.js?v=20261004-stream"></script>
-    <script src="./src/sim/sim_shadow.js?v=20261018-a"></script>
-    <script src="./src/sim/sim_client.js?v=20261018-a"></script>
+    <script src="./src/sim/sim_shadow.js?v=20261020-a"></script>
+    <script src="./src/sim/sim_client.js?v=20261020-a"></script>
 
     <script src="./src/bootstrap.js?v=20260924-settings"></script>
 </body>

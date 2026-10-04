@@ -15,7 +15,8 @@ let seconds = Number(process.argv[2]) || 15;
     const controls = { ...H.SMALL_MATCH_CONTROLS };
     for (const [k, v] of Object.entries(data.lobby.numbers)) controls[k] = String(v);
     for (const [k, v] of Object.entries(data.lobby.selects)) controls[k] = String(v);
-    controls['cfg-full-vis'] = data.lobby.selects['cfg-full-vis'] || 'full';
+    // VIS=full|team|history: the map visibility mode (default: the fixture's, else full).
+    controls['cfg-full-vis'] = process.env.VIS || data.lobby.selects['cfg-full-vis'] || 'full';
     const world = new H.World({ controls, hashEvery: Number(process.env.HASHEVERY) || 1e9 });
     // The gameplay parts of applyMainMenuSettingsSnapshot (the rest is DOM).
     const hostSetup = `
@@ -469,7 +470,7 @@ let seconds = Number(process.argv[2]) || 15;
         if (this._us && this._us.mvOut[this._si]) return f.call(this);
         let k = this.workerState ? 'w:' + this.workerState + (this.workerState === 'IDLE' ? ':' + this.workerType : '') : 'c' + this.commandState;
         // (Attacking: a building target, a unit in range (its attack tick), or a chase.)
-        if (!this.workerState && this.commandState === CMD_ATTACKING) k += this.targetBuilding ? ':bld' : this.attackTarget === this.targetUnit && this.targetUnit ? ':inrange' : ':chase';
+        if (!this.workerState && this.commandState === CMD_ATTACKING) k += (this.targetBuilding ? ':bld' : this.attackTarget === this.targetUnit && this.targetUnit ? ':inrange' : ':chase') + (this.forcedAttackTarget ? ':forced' : '');
         const a = __scratch.realNow();
         try { return f.call(this); } finally { if (currentTick >= 48) { const e = (__scratch.us[k] ||= [0, 0]); e[0] += __scratch.realNow() - a; e[1]++; } } }; }`);
     // WMOVESTAT=1: workers in a moving state that ran Unit.update, by why:

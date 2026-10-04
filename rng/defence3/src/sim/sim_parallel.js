@@ -666,7 +666,7 @@ function _simStepFlow(R, P, s0, end, Q, n, C) {
                 if (HS[i11] - HS[i01] - HS[i10] + HS[i00] > 0 && !(AT[s] > 0) && (DBTK[s] !== t || DBT[s] !== -1 || DBS[s] >= 0)) continue;
             }
         }
-        if (WK[s] && ((t + id) | 0) % wcheck === 0 && !(WTC[s] > 0)) continue;
+        if (WK[s] === 1 && ((t + id) | 0) % wcheck === 0 && !(WTC[s] > 0)) continue;
         const fid = FLOWC[s], wide = fid >= 4194304, did = wide ? fid - 4194304 : fid, dm = did * 8, FMETA = wide ? FMW : FMN;
         if (!(fid >= 0) || !FMETA || FMETA[dm + 6] !== MFGEN[s] || FMETA[dm + 1] !== dk || FMETA[dm + 7] !== 1) continue;
         if (t < RDY[s]) continue;
@@ -801,6 +801,11 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
     const stride = bc + 1;
     const plane = stride * (br + 1);
     const STEPT = R['unit.mvStepT'];
+    const LSX = R['unit.fLsX'];
+    const LSY = R['unit.fLsY'];
+    const LSPX = R['unit.fLsPX'];
+    const LSPY = R['unit.fLsPY'];
+    const LST = R['unit.fLsT'];
     const stepRan = P[46] === 1;
     let _nf = 0, _np = 0;
     for (let s = s0; s < end; s++) {
@@ -867,6 +872,9 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
             if (qgx < 0 || qgy < 0 || qgx >= W || qgy >= H) { ON[s] = 0; continue; }
             const cov = COV ? COV[owner] : null, a = AG ? AG[qgy * W + qgx] : -1;
             if (!cov || !(a >= 0) || !(cov[a] > 0)) { ON[s] = 0; continue; }
+            // (A forced target in sight: its last seen position, as
+            // doAttacking keeps it; put back if Unit.update runs after all.)
+            if ((f & 8) !== 0) { LSPX[s] = LSX[s]; LSPY[s] = LSY[s]; LST[s] = t; LSX[s] = tx; LSY[s] = ty; }
             if (REACH[s] <= 1) {
                 const ir = _simUnitInAttackRange(AG, AOFF, ANB, WALL, CRC, RRC, W, H, tile, pad, s, q, x, y, tx, ty, REACH[s]);
                 // (Out of range: doAttacking steps after it, below.)
@@ -902,7 +910,8 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
         if (ON[s] === 4 || hchase) {
             // Chase (see simMoveTryChase in unit.js), as doAttacking: the
             // target where it was at the pass's start, in sight, not in range,
-            // within leash, and the straight step taken (close, flying, or
+            // within leash (forced: bit 8, no leash, its last seen position
+            // kept), and the straight step taken (close, flying, or
             // _isChaseStepOpen), not into a wall tile. (Also a hold whose
             // target stepped out of range, checked above: outputs 11, 12 as
             // 7, 9.) Come in range: held from now on (output 13).
@@ -914,12 +923,14 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
                 if (qgx < 0 || qgy < 0 || qgx >= W || qgy >= H) { ON[s] = 0; continue; }
                 const cov = COV ? COV[owner] : null, a = AG ? AG[qgy * W + qgx] : -1;
                 if (!cov || !(a >= 0) || !(cov[a] > 0)) { ON[s] = 0; continue; }
+                if ((f & 8) !== 0) { LSPX[s] = LSX[s]; LSPY[s] = LSY[s]; LST[s] = t; LSX[s] = tx; LSY[s] = ty; }
                 const ir = _simUnitInAttackRange(AG, AOFF, ANB, WALL, CRC, RRC, W, H, tile, pad, s, q, x, y, tx, ty, REACH[s]);
                 if (ir === 1) { ON[s] = 3; PX[s] = x; PY[s] = y; OUT[s] = 13; continue; }
                 if (ir !== 0) { ON[s] = 0; continue; }
             }
             const dx = tx - x, dy = ty - y, d = Math.sqrt(dx * dx + dy * dy);
-            if (!(d > 0) || d > 8 * tile) { ON[s] = 0; continue; }
+            // (The leash: none for a forced target.)
+            if (!(d > 0) || (d > 8 * tile && (f & 8) === 0)) { ON[s] = 0; continue; }
             const fly = (f & 32) !== 0;
             if (!fly && WALL[tl]) { ON[s] = 0; continue; }
             // (With a path of its own (bit 2), flying is no reason: the path.)
@@ -1106,7 +1117,7 @@ function _simMoveFlow(R, P, s0, end, Q, n, C) {
         const f = FL[s], id = ID[s] | 0, x = X[s], y = Y[s], gx = Math.floor(x * itile), gy = Math.floor(y * itile), tl = gy * W + gx;
         // A worker's check tick: its task looked at (Unit.update), unless
         // its transfer cooldown runs (then it only walks: updateWorkerAI).
-        if (WK[s] && ((t + id) | 0) % wcheck === 0 && !(WTC[s] > 0)) { ON[s] = 0; continue; }
+        if (WK[s] === 1 && ((t + id) | 0) % wcheck === 0 && !(WTC[s] > 0)) { ON[s] = 0; continue; }
         // Following the flow navigation (flownav.js) toward its
         // destination, steered like _followPathStep.
         const dk = DEST[s], dx0 = dk % W, dy0 = (dk - dx0) / W;
@@ -1291,7 +1302,7 @@ function _simMovePath(R, P, s0, end, Q, n, C) {
         const s = Q[_o + _i];
         const f = FL[s], id = ID[s] | 0, x = X[s], y = Y[s], gx = Math.floor(x * itile), gy = Math.floor(y * itile), tl = gy * W + gx;
         // A worker's check tick, as in flow mode.
-        if (WK[s] && ((t + id) | 0) % wcheck === 0 && !(WTC[s] > 0)) { ON[s] = 0; continue; }
+        if (WK[s] === 1 && ((t + id) | 0) % wcheck === 0 && !(WTC[s] > 0)) { ON[s] = 0; continue; }
         // The path window (see _simMoveNode): a node it does not hold means
         // the tick needs the path itself.
         const len = PLEN[s], base = BASE[s], wl = WLEN[s], nb = s * WIN;

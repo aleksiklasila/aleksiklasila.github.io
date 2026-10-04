@@ -1169,8 +1169,10 @@ function build3DOverlayData(bounds, alpha) {
 
 function getVisualUnitSourceLight(unit) {
     if (!unit || !unit.unitType || unit.dead || unit._historyGhost) return 0;
-    // A unit view (sim_frame.js): the worker's value for this player.
-    if (unit._frameView) return unit._col('light');
+    // A unit view (sim_frame.js): the worker's value for this player. (A
+    // barrack's view comes here too, as a light source with a unitType: the
+    // structure path below.)
+    if (unit._frameView && typeof unit._col === 'function') return unit._col('light');
     if (unit.owner !== localPlayerId && !(unit.watched > 0 && unit.watchedByTeam === localPlayerId)) return 0;
     let range = getEntityEffectiveVisibilityRangeTiles(unit);
     return Number.isFinite(range) ? Math.max(0, range) : 0;
@@ -4646,9 +4648,19 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
     let processed = 0;
     let limit = maxTicks + catchUp;
     let tickMs = netSimulationTickMs();
+    // Simulation worker with shared memory: a few ready (in multiplayer:
+    // sealed) ticks are kept queued in the worker, due or not, each with its
+    // deadline (it runs them on time whatever this page is doing; see
+    // sim_client.js). Catching up (a guest behind): two more, run at once.
+    let ahead = typeof simClientDispatchAhead === 'function' && simClientDispatchAhead();
     while (processed < limit) {
         let due = accumulator >= tickMs;
-        if (!due && catchUp <= 0) break;
+        // (Early: at most the lead's worth ahead of the real-time schedule
+        // too (the accumulator below zero while ahead), so the pace never
+        // depends on the worker's deadlines alone.)
+        let early = ahead && simClientWorkerAhead() < SIM_CLIENT_LEAD_TICKS + (catchUp > 0 ? 2 : 0)
+            && (catchUp > 0 || accumulator > -(SIM_CLIENT_LEAD_TICKS - 1) * tickMs);
+        if (!due && catchUp <= 0 && !early) break;
         if (isMultiplayer && processed > 0) driveStrictLockstep(now, currentTick);
         if (isMultiplayer && !isStrictTickReady(currentTick)) {
             if (due) {
@@ -4664,8 +4676,13 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
         // Simulation worker: a few ticks may be in flight; beyond that the
         // page waits for results rather than queueing more.
         let inWorker = typeof simClientActive === 'function' && simClientActive();
-        if (inWorker && simClientInFlight() >= SIM_CLIENT_MAX_IN_FLIGHT + (catchUp > 0 ? 2 : 0)) {
-            if (due) accumulator = Math.min(accumulator, tickMs);
+        // (Ahead: as many queued as the lead, and a bound on results the page
+        // has not applied yet; otherwise results not back yet.)
+        if (inWorker && (ahead ? (!early || simClientInFlight() >= SIM_CLIENT_MAX_IN_FLIGHT + 6)
+            : simClientInFlight() >= SIM_CLIENT_MAX_IN_FLIGHT + (catchUp > 0 ? 2 : 0))) {
+            // (A tick due while the worker still has the whole lead queued:
+            // it is not keeping up, the shared pace hears of it.)
+            if (due) { accumulator = Math.min(accumulator, tickMs); if (ahead) simClientNoteBehind(now); }
             break;
         }
         if (isMultiplayer) {
@@ -4689,8 +4706,11 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
                 if (hadPatch) break;
             }
         }
-        if (due) accumulator -= tickMs;
-        else catchUp--;
+        // (An early tick takes its slot of the clock too: the accumulator
+        // goes below zero while ahead, so "due" stays real time and a tick
+        // not sealed yet only counts as waiting when it is due.)
+        if (due || (early && catchUp <= 0)) accumulator -= tickMs;
+        else if (catchUp > 0) { catchUp--; if (ahead) simClientNextAsap = true; }
         if (isMultiplayer) netNoteSimWaiting(false, now);
         waitingForRemoteSince = 0;
         runOneTick();

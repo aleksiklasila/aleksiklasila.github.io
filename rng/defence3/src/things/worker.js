@@ -97,7 +97,8 @@ function _workerFinishManualMoveToIdle(u) {
 // A worker on its way (a moving state, its path not done) looks at its task
 // (still there? still its own?) every WORKER_MOVE_CHECK_TICKS ticks,
 // staggered by id; between those it only walks, exactly as the movement
-// kernel walks it (which hands it back on those ticks).
+// kernel walks it (which hands it back on those ticks; not a MANUAL_MOVE
+// one: its look, with its path not done, only keeps it moving).
 const WORKER_MOVE_CHECK_TICKS = 32;
 const BUILDER_WATCH_TICKS = WORKER_MOVE_CHECK_TICKS * 2;
 const _WORKER_MOVING_STATES = new Set(['MANUAL_MOVE', 'MOVING_TO', 'MOVING_TO_ASTAR', 'RETURNING', 'RETURNING_ASTAR', 'MOVING_TO_BUILD', 'RETURNING_FOR_GOLD', 'MOVING_TO_HEAL', 'MOVING_TO_RESEARCH']);
