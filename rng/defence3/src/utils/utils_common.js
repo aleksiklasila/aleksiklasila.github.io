@@ -93,6 +93,10 @@ function detPow(base, exponent) {
 // floor(log2(n)) for n >= 1.
 function detFloorLog2(n) {
     let v = Math.floor(Math.max(1, Number(n) || 1));
+    // (Infinity never halves: past every finite value's 1023. A huge
+    // adjacency group, stacks x members x area multipliers, overflows to it;
+    // the loop never ended and a 200k-a-side start hung.)
+    if (v === Infinity) return 1024;
     let k = 0;
     while (v >= 2) { v = Math.floor(v / 2); k++; }
     return k;
