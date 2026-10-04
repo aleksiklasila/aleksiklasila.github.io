@@ -954,7 +954,7 @@ function initInput() {
     // (ties in thing order); then the points' lists merged, the closest pair
     // first, as a sort of every pair would visit them: 56k units and 10
     // points take tens of ms, not a second.)
-    function _assignToNearestPoints(things, points, thingXY, pointXY) {
+    function _assignToNearestPoints(things, points, thingXY, pointXY, fillXY = null) {
         let n = things.length, k = points.length;
         let result = new Array(n).fill(0);
         if (k <= 1 || n === 0) return result;
@@ -962,7 +962,8 @@ function initInput() {
         let load = new Int32Array(k);
         let pts = points.map(pointXY);
         let xs = new Float64Array(n), ys = new Float64Array(n), has = new Uint8Array(n);
-        for (let i = 0; i < n; i++) { let a = thingXY(things[i]); if (a) { xs[i] = a.x; ys[i] = a.y; has[i] = 1; } }
+        if (fillXY) fillXY(xs, ys, has);
+        else for (let i = 0; i < n; i++) { let a = thingXY(things[i]); if (a) { xs[i] = a.x; ys[i] = a.y; has[i] = 1; } }
         const B = 65536, cnt = new Int32Array(B + 1), dist = new Int32Array(n);
         // lists[j]: thing indices by distance; keys[j]: their distances.
         let lists = [], keys = [];
@@ -1214,10 +1215,27 @@ function initInput() {
         return bestPointHit || bestFallback;
     }
 
+    // Units within `reach` px of a point (own ones or the others'), from the
+    // frame's columns: a click's candidates (every unit's view, twice a
+    // click, cost tens of ms at 200k units). Without a frame: every unit.
+    const CLICK_UNIT_REACH = TILE * 4;
+    function _unitsNearPoint(x, y, reach, own) {
+        const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+        if (!F) return units;
+        const out = [], ord = F.order, X = F.x, Y = F.y, O = F.owner, n = Math.min(F.count, units.length), me = localPlayerId;
+        for (let k = 0; k < n; k++) {
+            const s = ord[k];
+            if ((O[s] === me) !== own) continue;
+            const dx = X[s] - x, dy = Y[s] - y;
+            if (dx > reach || dx < -reach || dy > reach || dy < -reach) continue;
+            out.push(units[k]);
+        }
+        return out;
+    }
     function collectEnemyClickTargetCandidates(worldX, worldY, includeUnits = true) {
         let out = [];
         if (includeUnits) {
-            for (let u of units) {
+            for (let u of _unitsNearPoint(worldX, worldY, CLICK_UNIT_REACH, false)) {
                 if (u.owner === localPlayerId || u.dead) continue;
                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                 if (!isGameplayTargetVisibleToPlayer(localPlayerId, ugx, ugy)) continue;
@@ -1276,7 +1294,7 @@ function initInput() {
 
     function findNearestOwnedSelectableClickTarget(worldX, worldY, screenX = NaN, screenY = NaN) {
         let candidates = [];
-        for (let u of units) {
+        for (let u of _unitsNearPoint(worldX, worldY, CLICK_UNIT_REACH, true)) {
             if (u.owner !== localPlayerId || u.dead) continue;
             let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
             if (!isTileVisible(ugx, ugy)) continue;
@@ -1525,7 +1543,30 @@ function initInput() {
         return best ? best.ref : null;
     }
 
-    function applyUnitCommandTargets(unitIds, targetX, targetY, appendToMultiPoints, actionName = 'move') {
+    // The multi-point split's worker (lazily; null without workers).
+    const ASSIGN_ASYNC_MIN = 2000;
+    let _assignWorker = null, _assignSeq = 0, _assignPending = null, _assignWorkerFailed = false;
+    function _assignWorkerGet() {
+        if (_assignWorker || _assignWorkerFailed) return _assignWorker;
+        try {
+            _assignWorker = new Worker('./src/sim/assign_worker.js?v=20261022-j');
+            _assignWorker.onmessage = ev => {
+                const m = ev.data || {}, P = _assignPending;
+                if (!P || m.seq !== P.seq) return;
+                _assignPending = null;
+                if (!m.pick) { console.error('[assign worker]', m.error); return; }
+                const buckets = Array.from({ length: P.points.length }, () => []);
+                for (let i = 0; i < P.unitIds.length; i++) buckets[m.pick[i]].push(P.unitIds[i]);
+                for (let i = 0; i < buckets.length; i++) {
+                    if (buckets[i].length === 0) continue;
+                    queueAction({ action: P.actionName, unitIds: buckets[i], targetX: P.points[i].x, targetY: P.points[i].y });
+                }
+            };
+            _assignWorker.onerror = () => { _assignWorkerFailed = true; _assignWorker = null; };
+        } catch (err) { _assignWorkerFailed = true; _assignWorker = null; }
+        return _assignWorker;
+    }
+    function applyUnitCommandTargets(unitIds, targetX, targetY, appendToMultiPoints, actionName = 'move', unitObjs = null) {
         if (!unitIds || unitIds.length === 0) return;
         if (appendToMultiPoints && multiUnitCommandPoints.length > 0) {
             multiUnitCommandPoints.push({ x: targetX, y: targetY });
@@ -1535,9 +1576,40 @@ function initInput() {
         if (multiUnitCommandPoints.length === 0) multiUnitCommandPoints = [{ x: targetX, y: targetY }];
 
         let buckets = Array.from({ length: multiUnitCommandPoints.length }, () => []);
-        // (The kept id map: no map of every unit per click.)
-        let unitById = typeof _unitByIdMap === 'function' ? _unitByIdMap() : new Map(units.map(u => [u.id, u]));
-        let pick = _assignToNearestPoints(unitIds, multiUnitCommandPoints, id => _entityWorldXY(unitById.get(id)), p => p);
+        let pick;
+        // The units given (in the ids' order): their positions straight from
+        // the frame's columns (no map of every unit, no views' getters).
+        const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+        // A big multi-point split runs on a worker (assign_worker.js): this
+        // thread only packs the positions; the orders go when the answer
+        // comes (a click's own later answer replaces an earlier one's).
+        if (unitObjs && unitObjs.length === unitIds.length && multiUnitCommandPoints.length > 1 && unitIds.length >= ASSIGN_ASYNC_MIN && _assignWorkerGet()) {
+            const n = unitObjs.length, xs = new Float32Array(n), ys = new Float32Array(n), has = new Uint8Array(n);
+            for (let i = 0; i < n; i++) {
+                const u = unitObjs[i], s = u ? u._s : -1;
+                if (F && s >= 0) { xs[i] = F.x[s]; ys[i] = F.y[s]; has[i] = 1; }
+                else { const a = _entityWorldXY(u); if (a) { xs[i] = a.x; ys[i] = a.y; has[i] = 1; } }
+            }
+            const seq = ++_assignSeq, points = multiUnitCommandPoints.map(p => ({ x: p.x, y: p.y }));
+            _assignPending = { seq, unitIds: unitIds.slice(), points, actionName };
+            // (The click's point at once: the orders follow.)
+            if (typeof noteOrderMarker === 'function') noteOrderMarker({ action: actionName, targetX, targetY });
+            _assignWorker.postMessage({ seq, xs, ys, has, points }, [xs.buffer, ys.buffer, has.buffer]);
+            return;
+        }
+        if (unitObjs && unitObjs.length === unitIds.length) {
+            pick = _assignToNearestPoints(unitObjs, multiUnitCommandPoints, _entityWorldXY, p => p, (xs, ys, has) => {
+                for (let i = 0; i < unitObjs.length; i++) {
+                    const u = unitObjs[i], s = u ? u._s : -1;
+                    if (F && s >= 0) { xs[i] = F.x[s]; ys[i] = F.y[s]; has[i] = 1; }
+                    else { const a = _entityWorldXY(u); if (a) { xs[i] = a.x; ys[i] = a.y; has[i] = 1; } }
+                }
+            });
+        } else {
+            // (The kept id map: no map of every unit per click.)
+            let unitById = typeof _unitByIdMap === 'function' ? _unitByIdMap() : new Map(units.map(u => [u.id, u]));
+            pick = _assignToNearestPoints(unitIds, multiUnitCommandPoints, id => _entityWorldXY(unitById.get(id)), p => p);
+        }
         for (let i = 0; i < unitIds.length; i++) buckets[pick[i]].push(unitIds[i]);
 
         for (let i = 0; i < buckets.length; i++) {
@@ -1767,7 +1839,8 @@ function initInput() {
                     issuedStructureCommand = true;
                 }
             }
-            let activeUnits = getActiveUnits();
+            const SC = getActiveUnitClasses();
+            let activeUnits = SC.active;
             if (issuedStructureCommand && activeUnits.length === 0) {
                 requestInfoPanelRefresh();
                 return;
@@ -1775,8 +1848,7 @@ function initInput() {
 
             // Non-visible tiles must always use direct location commands (no target snapping).
             if (!clickTileVisible && activeUnits.length > 0) {
-                let allIds = activeUnits.map(u => u.id);
-                applyUnitCommandTargets(allIds, world.x, world.y, isCtrlMulti, 'move');
+                applyUnitCommandTargets(SC.allIds, world.x, world.y, isCtrlMulti, 'move', SC.active);
                 requestInfoPanelRefresh();
                 return;
             }
@@ -1798,24 +1870,18 @@ function initInput() {
             if (activeUnits.length > 0) {
                 let forceManualWorkerMove = issuedStructureCommand;
                 // --- Worker targeting logic ---
-                let builderUnits = activeUnits.filter(u => u.workerType === 'builder');
+                let builderUnits = SC.of('builder');
                 let collectorUnitGroups = RESOURCE_TYPE_LIST.map(cfg => {
                     return cfg ? {
                         resourceKey: cfg.key,
                         cfg,
-                        units: activeUnits.filter(u => u.workerType === cfg.collectorUnitKey)
+                        units: SC.of(cfg.collectorUnitKey)
                     } : null;
                 }).filter(group => group && group.units.length > 0);
-                let salvagerUnits = activeUnits.filter(u => u.workerType === 'salvager');
-                let healerUnits = activeUnits.filter(u => u.workerType === 'healer');
-                let researcherUnits = activeUnits.filter(u => u.workerType === 'researcher');
-                let workerIds = [
-                    ...builderUnits,
-                    ...collectorUnitGroups.flatMap(group => group.units),
-                    ...salvagerUnits,
-                    ...healerUnits,
-                    ...researcherUnits
-                ].map(u => u.id);
+                let salvagerUnits = SC.of('salvager');
+                let healerUnits = SC.of('healer');
+                let researcherUnits = SC.of('researcher');
+                let workerIds = SC.workerIds;
 
                 if (!forceManualWorkerMove && builderUnits.length > 0) {
                     // Generic builder-targeting for any placeable object that can be built/upgraded.
@@ -1824,7 +1890,7 @@ function initInput() {
                         applyWorkerAssignTargets(builderUnits, 'build', buildTarget.gx, buildTarget.gy, isCtrlMulti);
                         requestInfoPanelRefresh();
                         // If no non-worker units, return
-                        let nonWorkers = activeUnits.filter(u => !u.workerType);
+                        let nonWorkers = SC.combat;
                         if (nonWorkers.length === 0) return;
                     }
                 } else if (!isCtrlMulti) {
@@ -1844,7 +1910,7 @@ function initInput() {
                     }
                     if (issuedCollectorAssign) {
                         requestInfoPanelRefresh();
-                        let nonWorkers = activeUnits.filter(u => !u.workerType);
+                        let nonWorkers = SC.combat;
                         if (nonWorkers.length === 0) return;
                     }
                 } else if (!isCtrlMulti) {
@@ -1856,7 +1922,7 @@ function initInput() {
                     if (queueTarget) {
                         applyWorkerAssignTargets(healerUnits, 'queue', queueTarget.gx, queueTarget.gy, isCtrlMulti);
                         requestInfoPanelRefresh();
-                        let nonWorkers = activeUnits.filter(u => !u.workerType);
+                        let nonWorkers = SC.combat;
                         if (nonWorkers.length === 0) return;
                     }
                 } else if (!isCtrlMulti) {
@@ -1877,7 +1943,7 @@ function initInput() {
                     if (researchTarget) {
                         applyWorkerAssignTargets(researcherUnits, 'research', researchTarget.gx, researchTarget.gy, isCtrlMulti);
                         requestInfoPanelRefresh();
-                        let nonWorkers = activeUnits.filter(u => !u.workerType);
+                        let nonWorkers = SC.combat;
                         if (nonWorkers.length === 0) return;
                     }
                 } else if (!isCtrlMulti) {
@@ -1885,7 +1951,7 @@ function initInput() {
                 }
 
                 // --- Normal combat unit targeting ---
-                let combatUnits = activeUnits.filter(u => !u.workerType);
+                let combatUnits = SC.combat;
                 if (combatUnits.length > 0) {
                     let targetUnit = null, targetBuilding = null;
                     let targetBuildingGx = null, targetBuildingGy = null;
@@ -1903,11 +1969,11 @@ function initInput() {
                             }
                         }
                     }
-                    let unitIds = combatUnits.map(u => u.id);
+                    let unitIds = SC.combatIds;
                     if (targetUnit) {
                         if (isCtrlMulti) {
                             // Allow enemy clicks to be part of multi-point command chains.
-                            applyUnitCommandTargets(unitIds, targetUnit.x, targetUnit.y, true, 'attackMove');
+                            applyUnitCommandTargets(unitIds, targetUnit.x, targetUnit.y, true, 'attackMove', combatUnits);
                         } else {
                             queueAction({ action: 'attack', unitIds, targetId: targetUnit.id, targetX: targetUnit.x, targetY: targetUnit.y });
                             multiUnitCommandPoints = [];
@@ -1921,7 +1987,7 @@ function initInput() {
                         let targetBuildingY = Number.isFinite(targetBuilding.y) ? targetBuilding.y : (targetBuildingGy * TILE + TILE * 0.5);
                         if (isCtrlMulti) {
                             // Allow enemy clicks to be part of multi-point command chains.
-                            applyUnitCommandTargets(unitIds, targetBuildingX, targetBuildingY, true, 'attackMove');
+                            applyUnitCommandTargets(unitIds, targetBuildingX, targetBuildingY, true, 'attackMove', combatUnits);
                         } else {
                             queueAction({ action: 'attackBuilding', unitIds, targetGx: targetBuildingGx, targetGy: targetBuildingGy });
                             multiUnitCommandPoints = [];
@@ -1931,16 +1997,15 @@ function initInput() {
                             queueAction({ action: 'move', unitIds: workerIds, targetX: targetBuildingX, targetY: targetBuildingY });
                         }
                     } else if (attackMoveMode) {
-                        applyUnitCommandTargets(unitIds, world.x, world.y, isCtrlMulti, 'attackMove');
+                        applyUnitCommandTargets(unitIds, world.x, world.y, isCtrlMulti, 'attackMove', combatUnits);
                         attackMoveMode = false;
                     } else {
                         // Workers also move to the position if no special target found
-                        let allIds = activeUnits.map(u => u.id);
-                        applyUnitCommandTargets(allIds, world.x, world.y, isCtrlMulti, 'move');
+                        applyUnitCommandTargets(SC.allIds, world.x, world.y, isCtrlMulti, 'move', SC.active);
                     }
                 } else if (workerIds.length > 0) {
                     // Only workers selected and no special target - move them
-                    applyUnitCommandTargets(workerIds, world.x, world.y, isCtrlMulti, 'move');
+                    applyUnitCommandTargets(workerIds, world.x, world.y, isCtrlMulti, 'move', SC.workers);
                 }
             } else if (!isCtrlMulti) {
                 multiUnitCommandPoints = [];
@@ -2046,7 +2111,8 @@ function initInput() {
                         newUnits = projectedSelection.units;
                         newEntities = projectedSelection.entities;
                     } else {
-                        for (let u of units) {
+                        const boxReach = Math.max(ex - sx, ey - sy) / 2;
+                        for (let u of _unitsNearPoint((sx + ex) / 2, (sy + ey) / 2, boxReach, true)) {
                             if (u.owner !== localPlayerId || u.dead) continue;
                             let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                             if (!isTileVisible(ugx, ugy)) continue;

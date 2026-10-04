@@ -17,6 +17,7 @@
 //        case is CPU-profiled on every page: <OUT>-<role>-<view>.cpuprofile;
 //        PROFILE_WORKERS=1: every worker too, the simulation worker, its
 //        helpers, the presentation worker: <OUT>-<view>-w<k>-<name>.cpuprofile),
+//        CLICKS=n (ctrl + right clicks during each case, CLICK_GAP ms apart),
 //        PHASES=1 (the simulation worker's time per tick in the top-level
 //        parts of a tick, as tickbench's TOPPHASES, and in the result post)
 'use strict';
@@ -366,7 +367,22 @@ async function startMultiplayer(browser, port, fixture, vis, errors) {
             const wprof = profiling && process.env.PROFILE_WORKERS ? await workersProfileStart(browser) : null;
             if (process.env.PHASES) for (const [, page] of m.pages) await phasesStart(page);
             const a = Date.now();
-            await sleep(CASE_S * 1000);
+            // CLICKS=n: n ctrl + right clicks spread over the view during the
+            // case (multi-point orders / rallies of what is selected), CLICK_GAP
+            // ms apart, from the case's second second.
+            const clicks = Number(process.env.CLICKS) || 0;
+            if (clicks) {
+                await sleep(1000);
+                const gap = Number(process.env.CLICK_GAP) || 150, [, page] = m.pages[0];
+                for (let i = 0; i < clicks; i++) {
+                    const x = 300 + ((i * 397) % 1200), y = 200 + ((i * 251) % 600);
+                    await page.keyboard.down('Control');
+                    await page.mouse.click(x, y, { button: 'right' });
+                    await page.keyboard.up('Control');
+                    await sleep(gap);
+                }
+                await sleep(Math.max(0, CASE_S * 1000 - (Date.now() - a)));
+            } else await sleep(CASE_S * 1000);
             if (profiling) for (const [role, cdp] of profiling) {
                 const { profile } = await cdp.send('Profiler.stop');
                 fs.writeFileSync(`${base}-${role}-${view}.cpuprofile`, JSON.stringify(profile));

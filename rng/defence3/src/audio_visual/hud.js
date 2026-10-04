@@ -2983,6 +2983,34 @@ function getActiveUnits() {
     return selectedUnits.filter(u => !u.dead && activeSubGroups[getUnitGroupKey(u)] !== false);
 }
 
+// The active selection by kind, from one pass (kept for the selection: a
+// command handler filtered 100k selected units through their views several
+// times a click): active, combat (no worker type), byType (worker type ->
+// units), and their ids.
+let _selClassCache = { sel: null, len: -1, sub: null, out: null };
+function getActiveUnitClasses() {
+    let sub = '';
+    for (let key in activeSubGroups) if (activeSubGroups[key] === false) sub += key + ';';
+    const C = _selClassCache;
+    if (C.out && C.sel === selectedUnits && C.len === selectedUnits.length && C.sub === sub && !C.out.active.some(_selDeadFirst)) return C.out;
+    const active = getActiveUnits(), combat = [], byType = new Map();
+    for (const u of active) {
+        const wt = u.workerType;
+        if (!wt) combat.push(u);
+        else { let a = byType.get(wt); if (!a) byType.set(wt, a = []); a.push(u); }
+    }
+    const ids = list => list.map(u => u.id);
+    const workers = [];
+    for (const k of ['builder', ...RESOURCE_TYPE_LIST.map(c => c && c.collectorUnitKey).filter(Boolean), 'salvager', 'healer', 'researcher']) { const a = byType.get(k); if (a) for (const u of a) workers.push(u); }
+    C.sel = selectedUnits; C.len = selectedUnits.length; C.sub = sub;
+    C.out = { active, combat, byType, workers, get allIds() { return this._all || (this._all = ids(active)); }, get combatIds() { return this._combat || (this._combat = ids(combat)); },
+        get workerIds() { return this._workers || (this._workers = ids(workers)); }, of(type) { return byType.get(type) || []; } };
+    return C.out;
+}
+// (Only the first dead unit is looked for: a dead one changes the selection
+// on the next tick anyway.)
+function _selDeadFirst(u) { return u.dead; }
+
 // getActiveUnits() for renderers, shared between the frames of a tick while
 // the selection and its subgroup toggles are unchanged (deaths and levels
 // change only on ticks). Read-only: callers must not modify the array.

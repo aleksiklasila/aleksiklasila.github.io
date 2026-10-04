@@ -67,6 +67,9 @@ let _infoPanelRefreshCostMs = 0;
 // issued shows nothing new yet costs a full refresh on the input frame. Pull
 // the periodic refresh forward to just after that tick instead.
 function requestInfoPanelRefresh(delayMs = TICK_MS * 1.5) {
+    // (A panel that takes long to make, a big selection's: on its own
+    // schedule, not forced by every command: a click's frame stays short.)
+    if (_infoPanelRefreshCostMs > 8) delayMs = Math.max(delayMs, 1000);
     _infoPanelNextRefreshAt = Math.min(_infoPanelNextRefreshAt, performance.now() + delayMs);
 }
 
@@ -974,7 +977,8 @@ function build3DOverlayData(bounds, alpha) {
     let overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: [], bars: [], texts: [] };
     let activeSelectedEntities = getActiveEntities();
     let activeSelectedUnits = getActiveUnitsForRender();
-    overlays.selectionContours = getSelectionContours(activeSelectedEntities, activeSelectedUnits, alpha, get3DRenderOwnerColor);
+    overlays.selectionMask = getSelectionMaskOverlay();
+    overlays.selectionContours = overlays.selectionMask ? [] : getSelectionContours(activeSelectedEntities, activeSelectedUnits, alpha, get3DRenderOwnerColor);
     overlays.selectionDashed = selectionOutlineType === OVERLAY_LINE_DOTTED;
     overlays.selectionSeeThrough = selectionOutlineSeeThrough;
     overlays.worldTileSize = TILE;
@@ -991,12 +995,15 @@ function build3DOverlayData(bounds, alpha) {
         pushLine(worldX - span, worldY - span, worldX + span, worldY + span, '#f44');
         pushLine(worldX + span, worldY - span, worldX - span, worldY + span, '#f44');
     };
-    for (let ent of activeSelectedEntities) {
+    // (Big selections: their rally points as markers only, getOrderMarkers.)
+    const fewEntities = activeSelectedEntities.length <= SELECTED_UNIT_LINES_MAX;
+    for (let m of getOrderMarkers()) pushMarker(m.x * TILE, m.z * TILE, m.kind, m.color);
+    for (let ent of fewEntities ? activeSelectedEntities : []) {
         if (!ent || (ent.energy !== undefined && ent.energy <= 0)) continue;
         let ex = ent.x || (ent.gx * TILE + TILE * 0.5);
         let ey = ent.y || (ent.gy * TILE + TILE * 0.5);
 
-        if (['barrack', 'spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research'].includes(ent.type)) {
+        if (_isRallySpawnerType(ent.type)) {
             let rallyTarget = getSpawnerRallyTargetWorld(ent);
             if (rallyTarget) {
                 if (showRallyLinesForBuildings()) pushLine(ex, ey, rallyTarget.x, rallyTarget.y, '#9aa', rallyLineType === OVERLAY_LINE_DOTTED);
@@ -1014,11 +1021,14 @@ function build3DOverlayData(bounds, alpha) {
 
     }
 
-    overlays.rangeLines = clipRangeBoundaryToBounds(getRenderRangeBoundary(activeSelectedEntities, activeSelectedUnits),
+    // The team's whole range: what it sees, drawn on the GPU from the sight
+    // grid (renderer3d drawRangeVisibility); other modes trace their sources.
+    overlays.rangeVisibility = getRangeVisibilityOverlay();
+    overlays.rangeLines = overlays.rangeVisibility ? [] : clipRangeBoundaryToBounds(getRenderRangeBoundary(activeSelectedEntities, activeSelectedUnits),
         bounds.minGx - 1, bounds.minGy - 1, bounds.maxGx + 2, bounds.maxGy + 2);
     overlays.rangeSeeThrough = renderRangeSeeThrough;
 
-    for (let u of activeSelectedUnits) {
+    for (let u of activeSelectedUnits.length <= SELECTED_UNIT_LINES_MAX ? activeSelectedUnits : []) {
         if (!u || u.dead) continue;
         let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
         let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
@@ -1047,29 +1057,18 @@ function build3DOverlayData(bounds, alpha) {
         }
     }
 
-    for (let t of towers) {
+    // (Marked structures gathered once a tick, not every structure a frame.)
+    for (let t of _salvageMarkedStructures()) {
         if (t.gx < bounds.minGx - 1 || t.gx > bounds.maxGx + 1 || t.gy < bounds.minGy - 1 || t.gy > bounds.maxGy + 1) continue;
         if (!fullVisibility && (!visibilityGrid[t.gy] || visibilityGrid[t.gy][t.gx] === 0)) continue;
-        if (t.markedForSalvage) pushSalvageCross(t.x, t.y);
+        pushSalvageCross(t.x, t.y);
     }
 
-    for (let b of barracks) {
-        if (b.gx < bounds.minGx || b.gx > bounds.maxGx || b.gy < bounds.minGy || b.gy > bounds.maxGy) continue;
-        if (!fullVisibility && (!visibilityGrid[b.gy] || visibilityGrid[b.gy][b.gx] === 0)) continue;
-        if (b.markedForSalvage) pushSalvageCross(b.x, b.y);
-    }
-
-    for (let s of collectorSpawners) {
-        if (s.gx < bounds.minGx || s.gx > bounds.maxGx || s.gy < bounds.minGy || s.gy > bounds.maxGy) continue;
-        if (!fullVisibility && (!visibilityGrid[s.gy] || visibilityGrid[s.gy][s.gx] === 0)) continue;
-        if (s.markedForSalvage) pushSalvageCross(s.x, s.y);
-    }
-
-    // The tile index already tracks floor entities; empty terrain has no markers.
+    // Marked floor items: gathered once a tick with the structures.
     if (typeof _activeTileEntities !== 'undefined') {
-        for (const item of _activeTileEntities) {
+        for (const item of _salvageMarkedFloorItems()) {
             const x = item.gx, y = item.gy;
-            if (!item.markedForSalvage || x < bounds.minGx || x > bounds.maxGx || y < bounds.minGy || y > bounds.maxGy) continue;
+            if (x < bounds.minGx || x > bounds.maxGx || y < bounds.minGy || y > bounds.maxGy) continue;
             if (grid[y] && grid[y][x] && grid[y][x].item === item && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0)))
                 pushSalvageCross(x * TILE + TILE * .5, y * TILE + TILE * .5);
         }
@@ -2144,11 +2143,32 @@ function getChunkRenderView(view, bounds) {
     const y0 = Math.max(0, Math.floor((bounds.minGy - padY) / 16));
     const x1 = Math.min(columns - 1, Math.floor((bounds.maxGx + padX) / 16));
     const y1 = Math.min(Math.ceil(GRID_H / 16) - 1, Math.floor((bounds.maxGy + padY) / 16));
+    // The live units: from the frame's columns (a tight pass, ~1 ms for 200k
+    // units, once per tick and view) in their list's order; an index of
+    // buckets rebuilt each tick through the units' views took ~100 ms.
+    const F = view.units === units && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    if (F && view.units.length >= 5000) {
+        const key = gameTime + '|' + x0 + '|' + y0 + '|' + x1 + '|' + y1 + '|' + view.units.length;
+        let U = rendererChunkCache.liveUnits;
+        if (!U || U.key !== key || U.frame !== F || U.list !== view.units) {
+            const list = view.units, ord = F.order, X = F.x, Y = F.y, PX = F.px, PY = F.py, n = Math.min(F.count, list.length);
+            const minX = x0 * 16 * TILE, minY = y0 * 16 * TILE, maxX = (x1 + 1) * 16 * TILE, maxY = (y1 + 1) * 16 * TILE, out = [];
+            for (let k = 0; k < n; k++) {
+                const s = ord[k], x = X[s], y = Y[s], px = PX[s], py = PY[s];
+                if ((x < minX && px < minX) || (x >= maxX && px >= maxX) || (y < minY && py < minY) || (y >= maxY && py >= maxY)) continue;
+                out.push(list[k]);
+            }
+            U = rendererChunkCache.liveUnits = { key, frame: F, list, query: out };
+        }
+        result.units = U.query;
+    }
     for (const name of ['units', 'towers', 'barracks', 'collectorSpawners', 'goldMines', 'astarMines', 'droppedItems']) {
         const list = view[name];
-        if (list.length < 5000) continue;
+        if (list.length < 5000 || (name === 'units' && F)) continue;
         let index = rendererChunkCache.lists.get(name);
-        if (!index || index.list !== list || index.tick !== gameTime || index.length !== list.length) {
+        // (Structures do not move: their index stands until their list is
+        // replaced or changes size; units' every tick.)
+        if (!index || index.list !== list || index.length !== list.length || (name === 'units' && index.tick !== gameTime)) {
             index = { list, tick: gameTime, length: list.length, buckets: new Map(), overflow: [] };
             rendererChunkCache.lists.set(name, index);
             for (let i = 0; i < list.length; i++) {
@@ -2297,15 +2317,133 @@ function buildScaleFrameData(flat2d, view) {
 
 // Aggregate selection outlines by fixed world chunks. This bounds geometry
 // at full zoom-out while exact selection/commands remain untouched.
+// ---- order and rally markers ----
+// The points of the player's recent orders (moves, attack moves, rallies:
+// queueAction notes them as they are given) for ORDER_MARKER_MS, and the
+// rally points of the selected spawners (one per point, at most
+// RALLY_MARKERS_MAX), drawn at a fixed screen size at every zoom: the
+// click's answer on screen at once, however many units it moves.
+const ORDER_MARKER_MS = 4000, ORDER_MARKERS_MAX = 48, RALLY_MARKERS_MAX = 64;
+let _orderMarkers = [];
+function noteOrderMarker(a) {
+    if (!a || typeof performance === 'undefined') return;
+    const kind = a.action;
+    if (kind !== 'move' && kind !== 'attackMove' && kind !== 'setRally' && kind !== 'setRallyMany') return;
+    const x = Number(a.targetX), y = Number(a.targetY);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    const color = kind === 'attackMove' ? '#f66' : kind === 'move' ? '#4f4' : '#9aa', now = performance.now();
+    for (const m of _orderMarkers) if (Math.abs(m.wx - x) < 4 && Math.abs(m.wy - y) < 4 && m.color === color) { m.at = now; return; }
+    _orderMarkers.push({ wx: x, wy: y, color, kind: kind === 'move' || kind === 'attackMove' ? 'plus' : 'arrow', at: now });
+    if (_orderMarkers.length > ORDER_MARKERS_MAX) _orderMarkers.splice(0, _orderMarkers.length - ORDER_MARKERS_MAX);
+}
+let _rallyMarkerCache = { tick: -1, sel: null, len: -1, markers: [] };
+function getOrderMarkers() {
+    const now = typeof performance !== 'undefined' ? performance.now() : 0, out = [];
+    if (_orderMarkers.length) _orderMarkers = _orderMarkers.filter(m => now - m.at < ORDER_MARKER_MS);
+    for (const m of _orderMarkers) out.push({ x: m.wx / TILE, z: m.wy / TILE, kind: m.kind, color: m.color });
+    // The selected spawners' rally points: once per tick, one per point.
+    const C = _rallyMarkerCache;
+    // (Twice a second, or at once for another selection: thousands of
+    // spawners rallied to one point were walked every tick.)
+    if (C.sel !== selectedEntities || C.len !== selectedEntities.length || (C.tick !== gameTime && !(now - (C.at || -Infinity) < 500))) {
+        C.tick = gameTime; C.at = now; C.sel = selectedEntities; C.len = selectedEntities.length; C.markers = [];
+        const seen = new Set();
+        for (const ent of selectedEntities) {
+            if (C.markers.length >= RALLY_MARKERS_MAX) break;
+            if (!ent || (ent.energy !== undefined && ent.energy <= 0) || !_isRallySpawnerType(ent.type)) continue;
+            const t = getSpawnerRallyTargetWorld(ent);
+            if (!t) continue;
+            const k = Math.round(t.x / 8) + ',' + Math.round(t.y / 8);
+            if (seen.has(k)) continue;
+            seen.add(k);
+            C.markers.push({ x: t.x / TILE, z: t.y / TILE, kind: 'arrow', color: '#9aa' });
+        }
+    }
+    for (const m of C.markers) out.push(m);
+    return out;
+}
+const _RALLY_SPAWNER_TYPES = new Set(['barrack', 'spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research']);
+function _isRallySpawnerType(t) { return _RALLY_SPAWNER_TYPES.has(t); }
+// Floor items marked for salvage, gathered once per tick (twice a second).
+let _salvageFloorCache = { tick: -1, at: -Infinity, list: [] };
+function _salvageMarkedFloorItems() {
+    const C = _salvageFloorCache, now = performance.now();
+    if (C.tick === gameTime || now - C.at < 500) return C.list;
+    C.tick = gameTime; C.at = now; C.list = [];
+    for (const item of _activeTileEntities) if (item && item.markedForSalvage) C.list.push(item);
+    return C.list;
+}
+// Structures marked for salvage (crosses), gathered once per tick.
+let _salvageMarkCache = { tick: -1, list: [] };
+function _salvageMarkedStructures() {
+    const C = _salvageMarkCache;
+    if (C.tick === gameTime) return C.list;
+    C.tick = gameTime; C.list = [];
+    for (const L of [towers, barracks, collectorSpawners]) for (const e of L) if (e && e.markedForSalvage) C.list.push(e);
+    return C.list;
+}
+// Per-unit move lines and target lines only for a selection this small
+// (each costs a few views' reads a frame); bigger ones show their orders'
+// points (getOrderMarkers).
+const SELECTED_UNIT_LINES_MAX = 300;
+
+// A selection this big (units and buildings) is outlined on the GPU
+// (renderer3d drawSelectionMask: a mask of its footprints, outlined), not
+// by tracing contours here (100k units: ~0.5 s each time).
+const SELECTION_GPU_MIN = 120;
+let _selMaskState = { sel: null, len: -1, sub: '', mver: -1, frame: null, mask: null, version: 0, ents: null, elen: -1, buildings: null, count: 0, bversion: 0 };
+function getSelectionMaskOverlay() {
+    const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    if (!F || selectedUnits.length + selectedEntities.length < SELECTION_GPU_MIN) return null;
+    if (!showSelectionOutlinesForUnits() && !showSelectionOutlinesForBuildings()) return null;
+    const S = _selMaskState, mver = typeof _simClient !== 'undefined' && _simClient ? _simClient.mver : -1;
+    let sub = ''; for (const k in activeSubGroups) if (activeSubGroups[k] === false) sub += k + ';';
+    // The mask per slot: again when the selection, its subgroups or the
+    // units' slots changed.
+    if (S.sel !== selectedUnits || S.len !== selectedUnits.length || S.sub !== sub || S.mver !== mver || S.frame !== F.buf || !S.mask || S.mask.length < F.cap) {
+        if (!S.mask || S.mask.length < F.cap) S.mask = new Uint8Array(F.cap); else S.mask.fill(0);
+        if (showSelectionOutlinesForUnits()) for (const u of sub ? getActiveUnits() : selectedUnits) { const s = u && !u.dead ? u._s : -1; if (s >= 0 && s < S.mask.length) S.mask[s] = 1; }
+        S.sel = selectedUnits; S.len = selectedUnits.length; S.sub = sub; S.mver = mver; S.frame = F.buf; S.version++;
+    }
+    if (S.ents !== selectedEntities || S.elen !== selectedEntities.length) {
+        const ents = showSelectionOutlinesForBuildings() ? getActiveEntities() : [];
+        const B = new Float32Array(Math.max(6, ents.length * 6));
+        let n = 0;
+        for (const e of ents) {
+            if (!e || (e.energy !== undefined && e.energy <= 0)) continue;
+            const x = Number.isFinite(e.x) ? e.x : e.gx * TILE + TILE / 2, y = Number.isFinite(e.y) ? e.y : e.gy * TILE + TILE / 2, o = n++ * 6;
+            B[o] = x; B[o + 1] = y; B[o + 2] = x; B[o + 3] = y; B[o + 4] = 17; B[o + 5] = 1;
+        }
+        S.ents = selectedEntities; S.elen = selectedEntities.length; S.buildings = B; S.count = n; S.bversion++;
+    }
+    return { units: F, mask: S.mask, maskVersion: S.version, buildings: S.buildings, buildingCount: S.count, buildingsVersion: S.bversion,
+        alpha: tickAlpha, tile: TILE, color: get3DRenderOwnerColor(localPlayerId) };
+}
+
+// The sight grid the page has for this player (the worker's, shared), as
+// the GPU range outline's source; null when the mode is not the team's
+// whole range or there is no such grid (the page computes its own).
+function getRangeVisibilityOverlay() {
+    if (renderRangeMode !== RENDER_RANGE_ALL || !renderRangeAllTeam || typeof visibilityRawFlat === 'undefined' || !visibilityRawFlat) return null;
+    const V = visibilityRawFlat;
+    if (V.player !== localPlayerId || !V.data || V.data.length < GRID_W * GRID_H) return null;
+    return { data: V.data, width: GRID_W, height: GRID_H, version: V.version, seeThrough: renderRangeSeeThrough };
+}
 function buildScaleOverlays(cache) {
+    // A big selection: outlined on the GPU (drawSelectionMask), every frame.
+    const selectionMask = getSelectionMaskOverlay();
+    if (selectionMask) {
+        return cache.overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: getOrderMarkers(), bars: [], texts: [], worldTileSize: TILE,
+            rangeVisibility: getRangeVisibilityOverlay(), selectionMask };
+    }
     // (Boxes of 16-tile chunks: made again for a new selection at once, as
     // its units move at most 5 times a second: 100k selected units each
     // tick cost ~13 ms.)
     const key = selectedUnits.length + '|' + selectedEntities.length + '|' + JSON.stringify(activeSubGroups), nowMs = performance.now();
     if (cache.overlayKey === key && cache.selectedUnits === selectedUnits && cache.selectedEntities === selectedEntities
-        && (cache.overlayTick === gameTime || nowMs - (cache.overlayAt || 0) < 200)) return cache.overlays;
+        && (cache.overlayTick === gameTime || nowMs - (cache.overlayAt || 0) < 200)) { cache.overlays.rangeVisibility = getRangeVisibilityOverlay(); cache.overlays.markers = getOrderMarkers(); return cache.overlays; }
     cache.overlayTick = gameTime; cache.overlayAt = nowMs;
-    const overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: [], bars: [], texts: [], worldTileSize: TILE };
+    const overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: getOrderMarkers(), bars: [], texts: [], worldTileSize: TILE, rangeVisibility: getRangeVisibilityOverlay() };
     const cw = Math.ceil(GRID_W / 16), nb = cw * Math.ceil(GRID_H / 16);
     let B = cache.overlayBoxes;
     if (!B || B.n !== nb) B = cache.overlayBoxes = { n: nb, box: new Float32Array(nb * 4), stamp: new Int32Array(nb), now: 0, used: new Int32Array(nb), count: 0 };
@@ -2351,6 +2489,9 @@ function build3DFrameData(flat2d = false) {
     // _unitDetailSplit): the rest are the GPU's glyphs, drawn from the frame.
     const unitDetail = _isLiveUnitList(sourceView.units) ? _unitDetailSplit(units, flat2d, queryBounds) : null;
     if (unitDetail) units = unitDetail.units;
+    // The same for structures: the near ones in detail, the rest glyphs.
+    const structDetail = _isLiveUnitList(sourceView.units) && _isLiveRenderGrid(grid) ? _structureDetailSplit([towers, barracks, collectorSpawners, goldMines, astarMines], flat2d, queryBounds) : null;
+    if (structDetail) [towers, barracks, collectorSpawners, goldMines, astarMines] = structDetail.lists;
 
     begin3DTextureFrame();
     renderer3dExactTextureBuildsRemaining = 12;
@@ -2651,6 +2792,9 @@ function build3DFrameData(flat2d = false) {
             let cell = grid[y][x];
             if (!cell || cell.item !== item) continue;
             if (!fullVisibility && (!visibilityGrid[y] || visibilityGrid[y][x] === 0)) continue;
+            // (Floor items are flat buildings: past the split's threshold,
+            // the GPU's glyphs, as buildings.)
+            if (structDetail && structDetail.pxAt(x, y) <= structDetail.T) continue;
             structureStep(cell.item, pushCellItemStep, x, y);
         }
     } else {
@@ -3203,8 +3347,54 @@ function build3DFrameData(flat2d = false) {
         objects,
         flatBatch,
         fx: fxBatch,
-        columnLayers: unitDetail ? unitDetail.columns : null
+        columnLayers: _detailColumns(unitDetail, structDetail)
     };
+}
+// The glyph layers of a detailed view: units and structures past their
+// detail thresholds (renderer3d drawFrameColumns skips those over them).
+function _detailColumns(unitDetail, structDetail) {
+    if (!unitDetail && !structDetail) return null;
+    const base = unitDetail ? unitDetail.columns : { units: null, unitSources: null, alpha: tickAlpha, detailPx: 0,
+        visibility: visibilityGridForColumns(), visibilityVersion, fullVisibility, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
+        colors: Array.from({ length: 9 }, (_, i) => get3DRenderOwnerColor(i - 1)) };
+    base.structures = structDetail ? _pageTables.s : null;
+    base.structureSources = structDetail ? _pageStructViews : null;
+    base.detailPxS = structDetail ? structDetail.T : 0;
+    return base;
+}
+// A threshold that leaves about `budget` of n sizes above it, from a sample
+// (a sort of every unit's size each frame cost ~15 ms in a wide view).
+let _detailSample = new Float32Array(1024);
+function _detailThreshold(P, n, budget) {
+    const step = Math.max(1, Math.ceil(n / 1024)), m = Math.ceil(n / step), S = _detailSample.subarray(0, m);
+    for (let i = 0, j = 0; i < n && j < m; i += step) S[j++] = P[i];
+    S.sort();
+    const keep = Math.min(m - 1, Math.max(0, Math.floor(budget / n * m)));
+    return S[m - 1 - keep];
+}
+const STRUCT_DETAIL_BUDGET = 600;
+let _structDetailPx = new Float32Array(0);
+function _structureDetailSplit(lists, flat2d, bounds) {
+    const R = renderer3dInstance;
+    if (!R || typeof R.columnPixelScale !== 'function' || typeof _pageTables === 'undefined' || !_pageTables.s) return null;
+    let n = 0;
+    for (const L of lists) n += L.length;
+    if (n <= STRUCT_DETAIL_BUDGET) return null;
+    const scale = R.columnPixelScale(flat2d, (bounds.vw || (bounds.maxGx - bounds.minGx + 1) * TILE) / TILE, viewW), M = R.tmpViewProjection;
+    if (_structDetailPx.length < n) _structDetailPx = new Float32Array(Math.ceil(n * 1.5));
+    const P = _structDetailPx;
+    let i = 0;
+    for (const L of lists) for (const e of L) {
+        const x = (e.gx | 0) + .5, z = (e.gy | 0) + .5;
+        const w = flat2d ? 1 : Math.max(.01, M[3] * x + M[7] * .02 + M[11] * z + M[15]);
+        P[i++] = .94 * scale / w;
+    }
+    let T = _detailThreshold(P, n, STRUCT_DETAIL_BUDGET);
+    if (!(T >= UNIT_DETAIL_MIN_PX)) T = UNIT_DETAIL_MIN_PX;
+    i = 0;
+    const out = lists.map(L => { const o = []; for (const e of L) { if (P[i++] > T) o.push(e); } return o; });
+    const pxAt = (gx, gy) => { const x = gx + .5, z = gy + .5; return .94 * scale / (flat2d ? 1 : Math.max(.01, M[3] * x + M[7] * .02 + M[11] * z + M[15])); };
+    return { lists: out, T, pxAt };
 }
 
 // Detailed models cost ~0.1 ms of CPU a unit; a close view of an army holds
@@ -3214,7 +3404,7 @@ function build3DFrameData(flat2d = false) {
 // view is the GPU's glyph, drawn from the frame's columns with the same
 // size rule (drawFrameColumns: a unit over the threshold is skipped there).
 // null: every unit in view in detail (few enough, or no frame).
-const UNIT_DETAIL_BUDGET = 1500, UNIT_DETAIL_MIN_PX = 12;
+const UNIT_DETAIL_BUDGET = 600, UNIT_DETAIL_MIN_PX = 12;
 let _unitDetailPx = new Float32Array(0);
 function _unitDetailSplit(viewUnits, flat2d, bounds) {
     const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null, R = renderer3dInstance;
@@ -3233,8 +3423,7 @@ function _unitDetailSplit(viewUnits, flat2d, bounds) {
     }
     // The threshold: the budget's worth of the largest (never below
     // UNIT_DETAIL_MIN_PX: smaller ones are glyphs whatever the count).
-    const sorted = P.slice(0, n).sort();
-    let T = sorted[n - 1 - UNIT_DETAIL_BUDGET];
+    let T = _detailThreshold(P, n, UNIT_DETAIL_BUDGET);
     if (!(T >= UNIT_DETAIL_MIN_PX)) T = UNIT_DETAIL_MIN_PX;
     const detailed = [];
     for (let i = 0; i < n; i++) if (P[i] > T) detailed.push(viewUnits[i]);

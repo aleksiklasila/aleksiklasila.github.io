@@ -1174,7 +1174,10 @@ function eliminateTeamAssets(pid) {
 
 function getSpawnerRallyTargetWorld(spawner) {
     if (spawner.rallyTargetUnitId != null) {
-        let tu = units.find(u => u.id === spawner.rallyTargetUnitId && !u.dead && u.owner !== spawner.owner);
+        // (By id: a search of every unit per spawner per frame stalled the
+        // page with thousands of spawners selected.)
+        let tu = typeof getUnitById === 'function' ? getUnitById(spawner.rallyTargetUnitId) : units.find(u => u.id === spawner.rallyTargetUnitId);
+        if (tu && (tu.dead || tu.owner === spawner.owner)) tu = null;
         if (tu) {
             let tgx = Math.floor(tu.x / TILE), tgy = Math.floor(tu.y / TILE);
             if (isTileVisibleToPlayer(spawner.owner, tgx, tgy)) {

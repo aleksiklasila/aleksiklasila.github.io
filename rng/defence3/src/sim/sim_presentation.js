@@ -216,7 +216,11 @@ function* simPresentationMetadata() {
     p.worker.postMessage({type:'structures', table:{buf:F.buf,cap:F.cap,n:S.owner.length,count:j,mver:S.version}, revision:++p.revision});
     // Grid data is not shared by the simulation yet. Publish its primitive
     // columns in small slices too; the reader computes the display delta.
-    const size = GRID_W * GRID_H;
+    // (Only when a tile changed, or every few seconds: a million cells
+    // copied each cycle took this thread's time between ticks for nothing.)
+    const size = GRID_W * GRID_H, tev = typeof _tileEntityVersion === 'number' ? _tileEntityVersion : -1, nowMs = performance.now();
+    if (p.cells && p.cells.length === size * 2 && p.cellsVersion === tev && nowMs - (p.cellsAt || 0) < 5000) return;
+    p.cellsVersion = tev; p.cellsAt = nowMs;
     if (!p.cells || p.cells.length !== size * 2) p.cells = new Int32Array(new SharedArrayBuffer(size * 8));
     for (let y=0;y<GRID_H;y++) {
         const row=grid[y];
@@ -226,9 +230,18 @@ function* simPresentationMetadata() {
     p.worker.postMessage({type:'cells', cells:p.cells, width:GRID_W});
 }
 
+// (The metadata cycle again SIM_PRESENT_PUMP_REST_MS after one ends: types,
+// worker states and levels change slowly; the positions go every tick on
+// their own path. A slice waits for a tick due within it.)
+const SIM_PRESENT_PUMP_REST_MS = 250;
 function simPresentationPump() {
     const p = _simPresentation;
     if (!p) return;
+    const next = typeof _simStream !== 'undefined' && _simStream.length ? _simStream[0] : null;
+    if (next && next.type === 'tick' && Number.isFinite(next.due)) {
+        const wait = next.due - _simNowAbs();
+        if (wait < 2) { p.timer = setTimeout(simPresentationPump, Math.max(1, wait + 1)); return; }
+    }
     const start=performance.now();
     let done=false;
     try {
@@ -239,5 +252,5 @@ function simPresentationPump() {
         do { done=p.job.next().done; } while (!done && performance.now()-start < 1);
     } catch (err) { _simError('presentation metadata',err);done=true; }
     if (done) p.job=simPresentationMetadata();
-    p.timer=setTimeout(simPresentationPump,done ? 25 : 0);
+    p.timer=setTimeout(simPresentationPump,done ? SIM_PRESENT_PUMP_REST_MS : 0);
 }

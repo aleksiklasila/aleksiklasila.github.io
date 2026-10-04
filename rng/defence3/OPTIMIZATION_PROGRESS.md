@@ -131,6 +131,70 @@ is next. Newest entries first within each section.
   PROFILE_WORKERS=1 with PROFILE_VIEW (CPU profiles of every worker: the
   simulation worker, its helpers, the presentation worker, through a
   browser CDP session).
+- Browser at 200k (the user saw ~2 TPS locally): a plain `python -m
+  http.server` on Windows serves .js as text/plain, the coi-serviceworker
+  is refused (SecurityError), the page is not cross-origin isolated: no
+  SharedArrayBuffer, no helpers, one thread. `rng/defence3/serve.py` serves
+  with COOP/COEP (credentialless) and right MIME types; the FPS counter
+  says "/ 1 thread" (red, with a tooltip) when not isolated. One solo Edge
+  page at 100000-1000 (moving) runs 20 TPS (sim ~25-38 ms a tick); two
+  peers on this laptop do not (each gets half of it).
+- Jitter (units drawn "smooth, hitch, smooth"): the presentation table
+  advanced 2-3 ticks at a time, ~8 updates a second. Causes and fixes:
+  presentation frames were relayed through the simulation worker (queued
+  behind ticks): now a MessageChannel page <-> presentation worker (frames
+  and buffer returns); the reader's frame build took 120-400 ms at 200k:
+  its loop ran mostly in the interpreter (a long loop inside draw() was
+  compiled on the stack before draw's later code had run and deoptimized
+  at its end every frame) and wrote ~30 columns a unit: now fillUnits, its
+  own function, column by column (memcpy for the metadata): ~25 ms; the
+  reader copied positions from the live columns and lost the race with
+  the next tick: the simulation now snapshots x, y, prevX, prevY at each
+  tick's end (3 rotating shared buffers, ~1 ms memcpy) and the reader
+  takes the newest. Result: the table advances exactly one tick per
+  update, gaps 33-67 ms (p5-p95). The remaining unevenness was the
+  simulation's own steps (crowd pushes: a free unit's step 1.9-5 px tick
+  to tick; crowd stop-and-go): the reader now draws positions smoothed
+  (VIS_FOLLOW 0.35 of the way to the simulation's each tick, snap past 64
+  px or on slot reuse): the user prefers smooth with lag to exact.
+  tests/render-tps-bench.cjs reports jitter (drawn speed per frame of
+  sampled moving units, the table's advance and arrival gaps, the
+  simulation's own step regularity) and LOADS=selectall (everything
+  selected, rallies set, units moving).
+- Page work (the user's Edge profile: _col getters, rally clicks,
+  selection): getActiveUnits / getActiveEntities fast path (no subgroup
+  off: no key string per thing); updateControlGroupBar's O(selection) part
+  at most 4x a second; bottom bar counts twice a second; minimap 4 Hz for
+  big maps; area state sent and applied only when it changes (dirtyAreas;
+  it was a pass over every area plus a Map each tick on both threads); the
+  click target scans and box selection still walk all units (to do: the
+  frame's columns); selection overlay boxes from columns; watch lists 32
+  units / 32 structures for big selections. Select-all far view 5.6 -> 105
+  FPS.
+- Close zoom (4-6 FPS at 200k): getChunkRenderView rebuilt a bucket index
+  of all units each tick through views (now a column scan per tick, ~1
+  ms; structures' index only when their lists change); the team range
+  outline walked every unit's view (now the GPU: drawRangeVisibility
+  outlines the simulation's sight grid, a texture uploaded per tick; other
+  range modes still trace sources, from columns); per-unit detail by drawn
+  size within budgets (600 units, 600 structures incl. floor items; the
+  rest the GPU's column glyphs with the same size rule, uDetail /
+  uDetailS), not by zoom: a tilted view's far side is glyphs; large
+  selections outlined on the GPU (drawSelectionMask: a footprint mask of
+  the selected slots and buildings, outlined, interpolated every frame:
+  no lag); order markers (moves, attack moves, rallies) at a fixed screen
+  size at every zoom for 4 s, rally points of selected spawners
+  (deduplicated, 64 max) twice a second; per-unit move lines only for
+  selections <= 300; salvage crosses from per-tick lists;
+  getSpawnerRallyTargetWorld by id (was units.find per spawner per frame).
+- Edge 100000-1000, Full visibility (FPS / frame p50,p95,p99 / TPS):
+  moving 2d-close 112 / 8.3,8.6,25 / 20; 3d-close 109 / 8.3,16.6,33 / 18.6;
+  tilted 72 / 8.4,33,42 / 17.2; 3d-far 111; 2d-far 105. Select-all:
+  2d-close 106, 3d-close 103, tilted 59, 3d-far 105, 2d-far 105 (from
+  2-6 FPS at the start of this round). Next: frame spikes (p99 25-90 ms,
+  maxima to 270 ms), the tilted view, sim TPS margin at 200k (17-20),
+  background texture detail on big maps, match start and the loading
+  popup, click/selection scans, GPU-instanced detailed models.
 
 ### 2026-10-04 (fourteenth round) — rebuild steps off the simulation thread, forced targets in the kernels, shrines
 

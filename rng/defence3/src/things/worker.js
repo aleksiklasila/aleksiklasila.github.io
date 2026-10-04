@@ -3891,6 +3891,8 @@ function queueAction(action) {
         for (let i = 0; i < action.unitIds.length; i += ACTION_MAX_UNIT_IDS) queueAction({ ...action, unitIds: action.unitIds.slice(i, i + ACTION_MAX_UNIT_IDS) });
         return;
     }
+    // The order's point, shown at once at every zoom (renderer.js).
+    if (typeof noteOrderMarker === 'function') noteOrderMarker(action);
     // Just joined and still catching up: sent once the host counts us in.
     if (isMultiplayer && gameStarted && resyncGuestHoldAction(action)) return;
     if (isMultiplayer && gameStarted && !isHost && !netGetHostConnection()) {

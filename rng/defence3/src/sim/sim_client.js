@@ -496,14 +496,17 @@ function _simClientApplyDetails(details) {
 // What the page watches: the selected units and structures (up to caps).
 function _simClientWatch() {
     let c = _simClient, list = [], structures = [], key = '';
-    for (let i = 0; i < selectedUnits.length && list.length < SIM_CLIENT_WATCH_MAX * 2; i++) {
+    // (A big selection is shown by groups: a few of its units' details do;
+    // each watched unit's details cross the threads every tick.)
+    const maxUnits = selectedUnits.length > 300 ? 32 : SIM_CLIENT_WATCH_MAX, maxStructures = selectedEntities.length > 300 ? 32 : 128;
+    for (let i = 0; i < selectedUnits.length && list.length < maxUnits * 2; i++) {
         let u = selectedUnits[i];
         if (!(u instanceof PageUnit) || u.dead) continue;
         list.push(u.id, u._s);
         key += u.id + ':' + u._s + ',';
     }
     key += '|';
-    for (let i = 0; i < selectedEntities.length && structures.length < 128; i++) {
+    for (let i = 0; i < selectedEntities.length && structures.length < maxStructures; i++) {
         let e = selectedEntities[i];
         if (!e || !Number.isFinite(e.gx) || !Number.isFinite(e.gy)) continue;
         structures.push(e.gx, e.gy);
@@ -542,6 +545,8 @@ function _simClientReplayEvents(events) {
     }
 }
 
+// This player's sight grid as the worker sent it (flat), with its tick.
+let visibilityRawFlat = null;
 // What the page did as part of a tick: visuals, audio state and UI.
 function _simClientPageTickWork(tick) {
     for (let i = particles.length - 1; i >= 0; i--) if (!particles[i].update()) particles.splice(i, 1);
@@ -552,6 +557,8 @@ function _simClientPageTickWork(tick) {
     // are computed on the page only when asked for.
     let sight = _simClient.lastSight;
     if (sight && sight.player === localPlayerId && sight.data.length === GRID_W * GRID_H) {
+        // (Flat, for the GPU range outline: renderer.js getRangeVisibilityOverlay.)
+        visibilityRawFlat = { data: sight.data, player: sight.player, version: tick };
         let rows = new Array(GRID_H);
         for (let y = 0; y < GRID_H; y++) rows[y] = sight.data.subarray(y * GRID_W, (y + 1) * GRID_W);
         visibilityGridRawByPlayerCache.set(localPlayerId, rows);

@@ -3703,6 +3703,220 @@
             return texture;
         }
 
+        // The team's range (what its units and buildings see): the outline of
+        // the simulation's sight grid, drawn on the GPU at every zoom (a quad
+        // over the map; the fragment shader draws a fixed pixel width inside
+        // every seen tile's border with an unseen one). The grid is uploaded
+        // once per tick (a texture), nothing per unit or per frame on the CPU.
+        // A big selection's outline on the GPU: its units (interpolated, from
+        // the frame's columns, those whose slot's mask is set) and buildings
+        // drawn as discs and squares into a screen mask, then a pass outlines
+        // the mask's union. Smooth at any zoom (it moves with the drawn
+        // units every frame); the CPU only sets the mask when the selection
+        // or the units change (renderer.js getSelectionMaskOverlay).
+        drawSelectionMask(overlays, snapshot) {
+            const S = overlays && overlays.selectionMask;
+            const gl = this.gl, W = this.sceneTargetSize.width, H = this.sceneTargetSize.height;
+            if (!S || !W || !H || (!S.units && !S.buildingCount)) return;
+            if (!this.selMask) {
+                const pointVs = `#version 300 es
+                    precision highp float;
+                    layout(location=0) in float aX; layout(location=1) in float aZ;
+                    layout(location=2) in float aPX; layout(location=3) in float aPZ;
+                    layout(location=4) in float aRadius; layout(location=5) in float aOn;
+                    uniform mat4 uViewProjection;
+                    uniform float uAlpha, uTile, uScale, uFlat, uMinPx, uBox;
+                    out float vBox;
+                    void main() {
+                        vec2 p = mix(vec2(aPX, aPZ), vec2(aX, aZ), uAlpha) / uTile;
+                        if (aOn <= 0.) { gl_Position = vec4(2., 2., 2., 1.); gl_PointSize = 1.; vBox = 0.; return; }
+                        gl_Position = uViewProjection * vec4(p.x, .02, p.y, 1.);
+                        float size = aRadius * 2. / uTile;
+                        gl_PointSize = clamp(max(uMinPx, size * uScale / (uFlat > .5 ? 1. : max(.01, gl_Position.w))), 1., 512.);
+                        vBox = uBox;
+                    }`;
+                const pointFs = `#version 300 es
+                    precision highp float;
+                    in float vBox;
+                    layout(location=0) out vec4 outColor;
+                    void main() {
+                        vec2 q = gl_PointCoord * 2. - 1.;
+                        if (vBox < .5 && dot(q, q) > 1.) discard;
+                        outColor = vec4(1.);
+                    }`;
+                const edgeVs = `#version 300 es
+                    void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2. - 1., 0., 1.); }`;
+                const edgeFs = `#version 300 es
+                    precision highp float;
+                    uniform sampler2D uMask;
+                    uniform vec4 uColor;
+                    uniform float uWidth;
+                    layout(location=0) out vec4 outColor;
+                    void main() {
+                        ivec2 c = ivec2(gl_FragCoord.xy), size = textureSize(uMask, 0);
+                        if (texelFetch(uMask, c, 0).r > .5) discard;
+                        float hit = 0.;
+                        for (int i = 0; i < 8; i++) {
+                            float a = float(i) * .7853982;
+                            ivec2 q = clamp(c + ivec2(round(vec2(cos(a), sin(a)) * uWidth)), ivec2(0), size - 1);
+                            hit = max(hit, texelFetch(uMask, q, 0).r);
+                        }
+                        if (hit <= .5) discard;
+                        outColor = uColor;
+                    }`;
+                const M = this.selMask = { point: createProgram(gl, pointVs, pointFs), edge: createProgram(gl, edgeVs, edgeFs), tex: createTexture(gl), fbo: gl.createFramebuffer(),
+                    unitVao: gl.createVertexArray(), unitBuf: gl.createBuffer(), maskBuf: gl.createBuffer(), bVao: gl.createVertexArray(), bBuf: gl.createBuffer(), edgeVao: gl.createVertexArray(),
+                    w: 0, h: 0, frame: null, maskVersion: -1, bVersion: -1, pu: {}, eu: {} };
+                for (const n of ['ViewProjection', 'Alpha', 'Tile', 'Scale', 'Flat', 'MinPx', 'Box']) M.pu[n] = gl.getUniformLocation(M.point, 'u' + n);
+                for (const n of ['Mask', 'Color', 'Width']) M.eu[n] = gl.getUniformLocation(M.edge, 'u' + n);
+            }
+            const M = this.selMask;
+            if (M.w !== W || M.h !== H) {
+                gl.bindTexture(gl.TEXTURE_2D, M.tex);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, W, H, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+                gl.bindFramebuffer(gl.FRAMEBUFFER, M.fbo);
+                gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, M.tex, 0);
+                M.w = W; M.h = H;
+            }
+            // Pass 1: the mask.
+            gl.bindFramebuffer(gl.FRAMEBUFFER, M.fbo);
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+            gl.viewport(0, 0, W, H);
+            gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+            gl.disable(gl.DEPTH_TEST); gl.depthMask(false); gl.disable(gl.BLEND);
+            gl.useProgram(M.point);
+            const flat = !!snapshot.flat2d, scale = this.columnPixelScale(flat, snapshot.camera.visibleWidth, snapshot.viewportWidth);
+            gl.uniformMatrix4fv(M.pu.ViewProjection, false, this.tmpViewProjection);
+            gl.uniform1f(M.pu.Alpha, S.alpha); gl.uniform1f(M.pu.Tile, S.tile); gl.uniform1f(M.pu.Scale, scale);
+            gl.uniform1f(M.pu.Flat, flat ? 1 : 0); gl.uniform1f(M.pu.MinPx, 4 * this.pixelRatio);
+            const F = S.units;
+            if (F && S.mask) {
+                gl.uniform1f(M.pu.Box, 0);
+                gl.bindVertexArray(M.unitVao);
+                if (M.frame !== F) {
+                    // (The columns the mask needs, as the glyphs' draw uploads them.)
+                    const cols = ['x', 'y', 'px', 'py', 'r'], n = F.cap;
+                    gl.bindBuffer(gl.ARRAY_BUFFER, M.unitBuf);
+                    if ((M.unitBytes | 0) < n * 4 * cols.length) { M.unitBytes = n * 4 * cols.length; gl.bufferData(gl.ARRAY_BUFFER, M.unitBytes, gl.DYNAMIC_DRAW); }
+                    for (let i = 0; i < cols.length; i++) {
+                        gl.bufferSubData(gl.ARRAY_BUFFER, i * n * 4, F[cols[i]].subarray(0, F.n));
+                        gl.enableVertexAttribArray(i); gl.vertexAttribPointer(i, 1, gl.FLOAT, false, 0, i * n * 4);
+                    }
+                    M.frame = F;
+                }
+                if (M.maskVersion !== S.maskVersion) {
+                    gl.bindBuffer(gl.ARRAY_BUFFER, M.maskBuf);
+                    gl.bufferData(gl.ARRAY_BUFFER, S.mask, gl.DYNAMIC_DRAW);
+                    gl.enableVertexAttribArray(5); gl.vertexAttribPointer(5, 1, gl.UNSIGNED_BYTE, false, 0, 0);
+                    M.maskVersion = S.maskVersion;
+                }
+                gl.drawArrays(gl.POINTS, 0, Math.min(F.n, S.mask.length));
+            }
+            if (S.buildingCount) {
+                gl.uniform1f(M.pu.Alpha, 1); gl.uniform1f(M.pu.Box, 1);
+                gl.bindVertexArray(M.bVao);
+                if (M.bVersion !== S.buildingsVersion) {
+                    // [x, z, x, z, size, 1] per building (world pixels).
+                    gl.bindBuffer(gl.ARRAY_BUFFER, M.bBuf);
+                    gl.bufferData(gl.ARRAY_BUFFER, S.buildings, gl.DYNAMIC_DRAW);
+                    for (let i = 0; i < 6; i++) { gl.enableVertexAttribArray(i); gl.vertexAttribPointer(i, 1, gl.FLOAT, false, 24, i * 4); }
+                    M.bVersion = S.buildingsVersion;
+                }
+                gl.drawArrays(gl.POINTS, 0, S.buildingCount);
+            }
+            gl.bindVertexArray(null);
+            // Pass 2: the outline into the scene.
+            gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneSamples ? this.msaaFramebuffer : this.sceneFramebuffer);
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+            gl.viewport(0, 0, W, H);
+            gl.useProgram(M.edge);
+            gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, M.tex);
+            gl.uniform1i(M.eu.Mask, 0);
+            const c = hexToRgb(S.color || '#66ff88');
+            gl.uniform4f(M.eu.Color, c[0], c[1], c[2], .9);
+            gl.uniform1f(M.eu.Width, Math.max(1.5, 1.5 * this.pixelRatio));
+            gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            gl.bindVertexArray(M.edgeVao);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+            gl.bindVertexArray(null);
+            gl.depthMask(true); gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
+            gl.drawBuffers(this.sceneDrawBuffers);
+        }
+        drawRangeVisibility(overlays) {
+            const R = overlays && overlays.rangeVisibility;
+            if (!R || !R.data || !(R.width > 0) || !(R.height > 0)) return;
+            const gl = this.gl;
+            if (!this.rangeVisProgram) {
+                this.rangeVisProgram = createProgram(gl, `#version 300 es
+                    precision highp float;
+                    uniform mat4 uViewProjection;
+                    uniform vec2 uSize;
+                    out vec2 vTile;
+                    void main() {
+                        vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * uSize;
+                        vTile = c;
+                        gl_Position = uViewProjection * vec4(c.x, .05, c.y, 1.);
+                    }`, `#version 300 es
+                    precision highp float;
+                    precision highp sampler2D;
+                    uniform sampler2D uVis;
+                    uniform vec2 uSize;
+                    uniform vec4 uColor;
+                    in vec2 vTile;
+                    layout(location=0) out vec4 outColor;
+                    float seen(ivec2 t) {
+                        if (t.x < 0 || t.y < 0 || float(t.x) >= uSize.x || float(t.y) >= uSize.y) return 0.;
+                        return texelFetch(uVis, t, 0).r > 0. ? 1. : 0.;
+                    }
+                    void main() {
+                        ivec2 cell = ivec2(floor(vTile));
+                        if (seen(cell) == 0.) discard;
+                        vec2 f = vTile - vec2(cell), px = max(fwidth(vTile), vec2(1e-5));
+                        // Distance in pixels to each side whose neighbour is unseen.
+                        float d = 1e9;
+                        if (seen(cell + ivec2(-1, 0)) == 0.) d = min(d, f.x / px.x);
+                        if (seen(cell + ivec2(1, 0)) == 0.) d = min(d, (1. - f.x) / px.x);
+                        if (seen(cell + ivec2(0, -1)) == 0.) d = min(d, f.y / px.y);
+                        if (seen(cell + ivec2(0, 1)) == 0.) d = min(d, (1. - f.y) / px.y);
+                        float a = 1. - smoothstep(1.4, 2.4, d);
+                        if (a <= 0.) discard;
+                        outColor = vec4(uColor.rgb, uColor.a * a);
+                    }`);
+                this.rangeVisUniforms = {};
+                for (const n of ['ViewProjection', 'Size', 'Vis', 'Color']) this.rangeVisUniforms[n] = gl.getUniformLocation(this.rangeVisProgram, 'u' + n);
+                this.rangeVisTexture = createTexture(gl);
+                this.rangeVisVao = gl.createVertexArray();
+            }
+            const U = this.rangeVisUniforms;
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, this.rangeVisTexture);
+            if (this.rangeVisVersion !== R.version || this.rangeVisData !== R.data || this.rangeVisWidth !== R.width || this.rangeVisHeight !== R.height) {
+                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+                gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+                const view = R.data.length === R.width * R.height ? R.data : R.data.subarray(0, R.width * R.height);
+                if (this.rangeVisWidth !== R.width || this.rangeVisHeight !== R.height) gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, R.width, R.height, 0, gl.RED, gl.FLOAT, view);
+                else gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, R.width, R.height, gl.RED, gl.FLOAT, view);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+                this.rangeVisVersion = R.version; this.rangeVisData = R.data; this.rangeVisWidth = R.width; this.rangeVisHeight = R.height;
+            }
+            gl.useProgram(this.rangeVisProgram);
+            gl.bindVertexArray(this.rangeVisVao);
+            gl.uniformMatrix4fv(U.ViewProjection, false, this.tmpViewProjection);
+            gl.uniform2f(U.Size, R.width, R.height);
+            gl.uniform1i(U.Vis, 0);
+            gl.uniform4f(U.Color, 120 / 255, 220 / 255, 1, .65);
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+            gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            gl.depthMask(false);
+            if (R.seeThrough) gl.disable(gl.DEPTH_TEST); else { gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); }
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            gl.bindVertexArray(null);
+            gl.depthMask(true); gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
+            gl.drawBuffers(this.sceneDrawBuffers);
+        }
         drawGroundOverlays(overlays) {
             if (!overlays) return;
             let groups = overlays.selectionContours || [], lines = overlays.lines || [];
@@ -5350,7 +5564,7 @@
                     layout(location=8) in float aAlive;
                     layout(location=9) in float aKind;
                     uniform mat4 uViewProjection;
-                    uniform float uAlpha, uTile, uScale, uFlat, uLightNorm, uDetail;
+                    uniform float uAlpha, uTile, uScale, uFlat, uLightNorm, uDetail, uDetailS;
                     uniform int uStructure, uFull;
                     uniform vec3 uColors[9];
                     uniform sampler2D uVisibility;
@@ -5369,6 +5583,9 @@
                         // (Drawn in detail by the CPU: renderer.js _unitDetailSplit,
                         // the same rule; a hair of overlap, never a gap.)
                         if (uDetail > 0. && uStructure == 0 && pixels > uDetail * 1.0001) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
+                        // (Structures and floor items over the split's threshold
+                        // are the detailed pass's.)
+                        if (uDetailS > 0. && uStructure != 0 && (aKind == 6. || pixels > uDetailS * 1.0001)) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
                         gl_PointSize = clamp(pixels + 1.,2.,64.);
                         vCoverage = min(1., pixels * pixels / (gl_PointSize * gl_PointSize));
                         float shade = .35 + .65 * clamp(light,0.,1.);
@@ -5388,7 +5605,7 @@
                         color = vec4(vColor.rgb, vColor.a * coverage * vCoverage);
                     }`);
                 this.columnUniforms = {};
-                for (const n of ['ViewProjection','Alpha','Tile','Scale','Flat','LightNorm','Structure','Full','Colors','Visibility','Detail']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
+                for (const n of ['ViewProjection','Alpha','Tile','Scale','Flat','LightNorm','Structure','Full','Colors','Visibility','Detail','DetailS']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
                 this.columnStores = [{},{}];
                 this.columnVisibilityTexture = createTexture(gl);
             }
@@ -5421,6 +5638,7 @@
             gl.uniform1f(U.Flat,snapshot.flat2d?1:0);
             gl.uniform1f(U.Scale,this.columnPixelScale(snapshot.flat2d,snapshot.camera.visibleWidth,snapshot.viewportWidth));
             gl.uniform1f(U.Detail,C.detailPx > 0 ? C.detailPx : 0);
+            gl.uniform1f(U.DetailS,C.detailPxS > 0 ? C.detailPxS : 0);
             gl.uniform1i(U.Full,C.fullVisibility?1:0);gl.uniform1i(U.Visibility,0);
             const colors = this.columnColors || (this.columnColors = new Float32Array(27));
             for (let i=0;i<9;i++) colors.set(hexToRgb(C.colors[i]),i*3);
@@ -5580,6 +5798,8 @@
                 for (const layer of this.scaleLayers) this.drawScaleInstances(layer, snapshot.flat2d);
                 if (this.columnLayers) this.drawFrameColumns(this.columnLayers,snapshot);
                 this.drawFx(snapshot.fx, snapshot.flat2d);
+                this.drawRangeVisibility(overlays);
+                this.drawSelectionMask(overlays, snapshot);
                 this.drawGroundOverlays(overlays);
                 this.resolveScene();
                 // Glyphs have no model depth to shade: skip SSAO/shadow/outline
@@ -5602,6 +5822,8 @@
                 if (snapshot.flatBatch) this.drawFlatBatch(snapshot.flatBatch);
                 else this.drawFlatSprites(objects);
                 this.drawFx(snapshot.fx, true);
+                this.drawRangeVisibility(snapshot.overlays);
+                this.drawSelectionMask(snapshot.overlays, snapshot);
                 this.drawGroundOverlays(snapshot.overlays);
                 this.resolveScene();
                 this.presentSceneToCanvas(true);
@@ -5752,6 +5974,8 @@
             }
             if (atlas) atlas.endFrame();
             this.drawFx(snapshot.fx, false);
+            this.drawRangeVisibility(overlays);
+            this.drawSelectionMask(overlays, snapshot);
             this.drawGroundOverlays(overlays);
             let postNeedsDepth = !!(this.postProcess && this.graphicsOptions && this.postProcess.needsDepth(this.graphicsOptions, false));
             this.resolveScene(needsOverlayDepth || postNeedsDepth);
