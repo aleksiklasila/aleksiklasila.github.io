@@ -991,6 +991,10 @@ let towers = [];
 // Bumped whenever a tower joins or leaves towers.
 let towersVersion = 0;
 function towersChanged() { towersVersion++; }
+// Bumped when a cloud tower joins or leaves towers (pathfinding.js keeps
+// its cloud tables by it: other towers falling in a battle leave them).
+let cloudTowersVersion = 0;
+function towerJoinedOrLeft(t) { towersVersion++; if (t && t.baseStats && t.baseStats.isCloud) cloudTowersVersion++; }
 let units = [];
 let projectiles = [];
 let particles = [];

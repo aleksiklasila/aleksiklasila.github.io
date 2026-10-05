@@ -63,6 +63,9 @@ function simSharedArray(Type, n) {
 // Arrays by name and scalar parameters (the same objects in every thread).
 const _simParReg = {};
 let _simParRegVer = 0;
+// Every binding made in this thread (the simulation thread's or a helper's):
+// caches of registry lookups go by it (_simNavArrays).
+let _simParBinds = 0;
 const _simParams = simSharedArray(Float64Array, 64);
 // The background jobs' parameters, per lane and stage (their own:
 // foreground jobs rewrite _simParams): _simBgStageParams[lane][stage], views
@@ -409,6 +412,10 @@ function _simInAreaRange(AG, OFF, NB, W, H, tile, x, y, tx, ty, k) {
 function _simUnitInAttackRange(AG, OFF, NB, WALL, CR, RR, W, H, tile, pad, s, q, x, y, tx, ty, k) {
     const r = _simInAreaRange(AG, OFF, NB, W, H, tile, x, y, tx, ty, k);
     if (r !== 0) return r;
+    return _simUnitInContactRange(AG, OFF, NB, WALL, CR, RR, W, H, tile, pad, s, q, x, y, tx, ty, k);
+}
+// Its second half: not in range by areas, touching one step beyond.
+function _simUnitInContactRange(AG, OFF, NB, WALL, CR, RR, W, H, tile, pad, s, q, x, y, tx, ty, k) {
     const rs = Math.max(0.1, CR[s] || RR[s] || 0.1), rq = Math.max(0.1, CR[q] || RR[q] || 0.1);
     const reach = rs + rq + pad, dx = tx - x, dy = ty - y;
     if (dx * dx + dy * dy > reach * reach) return 0;
@@ -520,15 +527,32 @@ SIM_KERNELS[SIM_KERNEL_MOVE_STEP] = function (R, P, chunk) {
 // The arrays of every navigation profile's build under a name (flownav.js
 // binds them as nav.<profile>.<name>), and their walls: the ground's, the
 // air's, a walk class's (mv.cwall.<profile>, see _navClassWalls).
+// (Kept until a binding changes in this thread, or another registry is
+// passed: each kernel job built them from ~80 string keys, ~5 ms a tick of
+// the movement kernels' time at 200k.)
+const _simNavArraysCache = new Map();
+let _simNavArraysR = null, _simNavArraysBinds = -1;
+function _simNavArraysCached(R, key) {
+    if (_simNavArraysR !== R || _simNavArraysBinds !== _simParBinds) { _simNavArraysCache.clear(); _simNavArraysR = R; _simNavArraysBinds = _simParBinds; }
+    return _simNavArraysCache.get(key);
+}
 function _simNavArrays(R, name) {
-    const n = typeof NAV_PROFILES === 'number' ? NAV_PROFILES : 2, out = new Array(n);
+    let out = _simNavArraysCached(R, name);
+    if (out) return out;
+    const n = typeof NAV_PROFILES === 'number' ? NAV_PROFILES : 2;
+    out = new Array(n);
     for (let p = 0; p < n; p++) out[p] = R['nav.' + p + '.' + name];
+    _simNavArraysCache.set(name, out);
     return out;
 }
 function _simNavWalls(R) {
-    const n = typeof NAV_PROFILES === 'number' ? NAV_PROFILES : 2, out = new Array(n);
+    let out = _simNavArraysCached(R, ' walls');
+    if (out) return out;
+    const n = typeof NAV_PROFILES === 'number' ? NAV_PROFILES : 2;
+    out = new Array(n);
     out[0] = R['mv.wall']; if (n > 1) out[1] = R['mv.airwall'];
     for (let p = 2; p < n; p++) out[p] = R['mv.cwall.' + p];
+    _simNavArraysCache.set(' walls', out);
     return out;
 }
 // Every unit: a parked one's tick; flow units listed for the steps.
@@ -892,10 +916,20 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
             // doAttacking keeps it; put back if Unit.update runs after all.)
             if ((f & 8) !== 0) { LSPX[s] = LSX[s]; LSPY[s] = LSY[s]; LST[s] = t; LSX[s] = tx; LSY[s] = ty; }
             if (REACH[s] <= 1) {
-                const ir = _simUnitInAttackRange(AG, AOFF, ANB, WALL, CRC, RRC, W, H, tile, pad, s, q, x, y, tx, ty, REACH[s]);
-                // (Out of range: doAttacking steps after it, below.)
-                if (ir === 0) hchase = true;
-                else if (ir !== 1) { ON[s] = 0; continue; }
+                // (In range by areas alone depends on its window, the target's
+                // tile and the area layout: kept in mvHWin / mvHTT / mvHVer
+                // (unused by a short hold; simMoveTryHold clears mvHVer) and
+                // not worked out again while they stand: most held units of
+                // a fight, every tick.)
+                const win = simWindowKey(x, y, tile), tt = qgy * W + qgx;
+                if (!(HVER[s] === areaVer && HWIN[s] === win && HTT[s] === tt)) {
+                    let ir = _simInAreaRange(AG, AOFF, ANB, W, H, tile, x, y, tx, ty, REACH[s]);
+                    if (ir === 1) { HWIN[s] = win; HTT[s] = tt; HVER[s] = areaVer; }
+                    else if (ir === 0) ir = _simUnitInContactRange(AG, AOFF, ANB, WALL, CRC, RRC, W, H, tile, pad, s, q, x, y, tx, ty, REACH[s]);
+                    // (Out of range: doAttacking steps after it, below.)
+                    if (ir === 0) hchase = true;
+                    else if (ir !== 1) { ON[s] = 0; continue; }
+                }
             }
             // (Longer range: still in its window, the target on its tile, the
             // area layout the same, as when found in range by areas.)
@@ -941,7 +975,7 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
                 if (!cov || !(a >= 0) || !(cov[a] > 0)) { ON[s] = 0; continue; }
                 if ((f & 8) !== 0) { LSPX[s] = LSX[s]; LSPY[s] = LSY[s]; LST[s] = t; LSX[s] = tx; LSY[s] = ty; }
                 const ir = _simUnitInAttackRange(AG, AOFF, ANB, WALL, CRC, RRC, W, H, tile, pad, s, q, x, y, tx, ty, REACH[s]);
-                if (ir === 1) { ON[s] = 3; PX[s] = x; PY[s] = y; OUT[s] = 13; continue; }
+                if (ir === 1) { ON[s] = 3; HVER[s] = -1; PX[s] = x; PY[s] = y; OUT[s] = 13; continue; }
                 if (ir !== 0) { ON[s] = 0; continue; }
             }
             const dx = tx - x, dy = ty - y, d = Math.sqrt(dx * dx + dy * dy);
@@ -1038,7 +1072,9 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
                     }
                     // (Only on its acquisition tick, every P[38], and for a
                     // target the tier found: _simAcqHit.)
-                    else if (((t + id) % acqT) === 0 && _simAcqHit(CBTK, CBT, CTI, CRS, RNG, ID, DEADC, s, acqStamp)) { ON[s] = 0; continue; }
+                    // (Output 14: it engages that unit at its turn, as doAttackMoving
+                    // / doIdle do, without a whole Unit.update: simEngageCommit.)
+                    else if (((t + id) % acqT) === 0 && _simAcqHit(CBTK, CBT, CTI, CRS, RNG, ID, DEADC, s, acqStamp)) { ON[s] = 0; PX[s] = x; PY[s] = y; OUT[s] = 14; continue; }
                     // (The look, _findAutoStructureTarget, finds nothing
                     // unless a hostile structure's tile comes within its
                     // aggro range: checked tile by tile when the blocks
@@ -1551,14 +1587,17 @@ SIM_KERNELS[SIM_KERNEL_SAT_COLS] = function (R, P, chunk) {
 };
 
 // The movement kernel's chunk moves into the counts (chunk.js
-// spatialCountsDeferEnd): per slot with one (spMvOwn), its owner's and type's
-// counts of the chunk it left less one, of the chunk it entered plus one,
-// and the 8x8 blocks' (Atomics: chunks are shared between slots).
+// spatialCountsDeferEnd): per slot with one (spMvOwn), its owner's total of
+// the chunk it left less one, of the chunk it entered plus one, its type's
+// count of their type blocks (spatial.types) and the 8x8 blocks' totals
+// (Atomics: chunks are shared between slots).
 // P: [0] slots, [1] per job, [2] players, [3] stride per chunk, [4] stride
-// per player, [5] chunks wide, [6] blocks wide, [7] block size.
+// per player, [5] chunks wide, [6] blocks wide, [7] block size, [8] unit
+// types, [9] type blocks wide, [10] type block size.
 SIM_KERNELS[SIM_KERNEL_SP_COUNTS] = function (R, P, chunk) {
-    const MVO = R['unit.spMvOld'], MVN = R['unit.spMvNew'], MVW = R['unit.spMvOwn'], SPTY = R['unit.spType'], CX = R['ix.complex'], BC = R['ix.bcount'];
+    const MVO = R['unit.spMvOld'], MVN = R['unit.spMvNew'], MVW = R['unit.spMvOwn'], SPTY = R['unit.spType'], CX = R['ix.complex'], BC = R['ix.bcount'], TC = R['spatial.types'];
     const NP = P[2] | 0, SC = P[3] | 0, SP = P[4] | 0, CW = P[5] | 0, BW = P[6] | 0, BS = P[7] | 0, nb = BC.length;
+    const NT = P[8] | 0, TW = P[9] | 0, TB = P[10] | 0, TS = NP * NT;
     for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) {
         const w = MVW[s];
         if (!w) continue;
@@ -1567,10 +1606,11 @@ SIM_KERNELS[SIM_KERNEL_SP_COUNTS] = function (R, P, chunk) {
         if (!(owner < NP)) continue;
         const ty = SPTY[s];
         for (let pass = 0; pass < 2; pass++) {
-            const key = pass ? MVN[s] : MVO[s], d = pass ? 1 : -1, base = key * SC + owner * SP;
-            Atomics.add(CX, base, d); Atomics.add(CX, base + 1 + ty, d);
+            const key = pass ? MVN[s] : MVO[s], d = pass ? 1 : -1;
+            Atomics.add(CX, key * SC + owner * SP, d);
             const cx = key % CW, cy = (key - cx) / CW, bi = (Math.floor(cy / BS) * BW + Math.floor(cx / BS)) * NP + owner;
             if (bi >= 0 && bi < nb) Atomics.add(BC, bi, d);
+            if (ty >= 0) Atomics.add(TC, (Math.floor(cy / TB) * TW + Math.floor(cx / TB)) * TS + owner * NT + ty, d);
         }
     }
 };
@@ -2456,7 +2496,7 @@ function simParallelHelpers() { return _simPool ? _simPool.helpers.length : 0; }
 function simParallelBind(name, arr) {
     if (_simParReg[name] === arr) return;
     _simParReg[name] = arr;
-    _simParRegVer++;
+    _simParRegVer++; _simParBinds++;
     if (_simPool) for (let w of _simPool.helpers) w.postMessage({ type: 'bind', name, arr, ver: _simParRegVer });
 }
 
@@ -2659,6 +2699,7 @@ function simParallelHelperMain() {
             loop();
         } else if (m.type === 'bind') {
             _simParReg[m.name] = m.arr;
+            _simParBinds++;
             if (m.ver > regVer) regVer = m.ver;
         }
     };
@@ -2794,9 +2835,10 @@ SIM_KERNELS[SIM_KERNEL_INDEX_ORDER] = function (R, P, chunk) {
 };
 
 // Same-owner same-type units around each due unit (things_utils.js
-// _countNearbySameTypeUnits): the sum of its window of the per-chunk counts
-// (spatial.cplx). eff.win per due unit: x1, y1, x2, y2, lane (-1: none).
-// P: [0] due units, [1] per job, [2] chunks per row, [3] ints per chunk.
+// _countNearbySameTypeUnits): the sum of its window of the per-type block
+// counts (spatial.types). eff.win per due unit: x1, y1, x2, y2 (blocks),
+// lane (-1: none). P: [0] due units, [1] per job, [2] blocks per row, [3]
+// ints per block.
 // Units' effective stats (things_utils.js recalculateUnitEffectiveStats):
 // for the strided share (entry j: units[P[3] + j * P[2]]), from the columns,
 // as _effStatsFullUnit does it: base stacks and level, the same-owner
@@ -2805,15 +2847,16 @@ SIM_KERNELS[SIM_KERNEL_INDEX_ORDER] = function (R, P, chunk) {
 // changed (the caller applies its tables), 2 for the caller (no slot, base
 // tables to make, no window or count), 3 nothing (dead, taken already).
 // P: [0] entries, [1] per job, [2] step, [3] phase, [4] chunk px,
-// [5]/[6] chunks wide/high, [7] stride per chunk, [8] per player,
-// [9] players, [10] MAX_THING_LEVEL, [11] stamp (unit.esTaken); [12] the
+// [5]/[6] chunks wide/high, [7] type counts' stride per block, [8] unit
+// types, [9] players, [15]/[16] type blocks wide / their size in chunks, [10] MAX_THING_LEVEL, [11] stamp (unit.esTaken); [12] the
 // upkeep bins' players (0: no bins), [13] their levels + 1: a unit whose
 // levels it wrote moves bins (unit.upB, upk.h; main.js _upkUnitBin).
 SIM_KERNELS[SIM_KERNEL_EFF_UNITS] = function (R, P, chunk) {
     const SL = R['ix.slots'], DEAD = R['unit.dead'], OK = R['unit.esOk'], RAD = R['unit.esRad'], TYP = R['unit.esType'], TAKEN = R['unit.esTaken'];
     const STK = R['unit.stackCount'], ULV = R['unit.unitLevel'], BLV = R['unit.baseLevel'], ESK = R['unit.effectiveStacks'], ELV = R['unit.effectiveLevel'], LAST = R['unit._lastAppliedEffectiveLevel'];
-    const X = R['unit.x'], Y = R['unit.y'], OWN = R['unit.owner'], data = R['spatial.cplx'], F = R['eff.flag'];
-    const step = P[2] | 0, phase = P[3] | 0, chunkPx = P[4], CW = P[5] | 0, CH = P[6] | 0, strideC = P[7] | 0, strideP = P[8] | 0, players = P[9] | 0, maxL = P[10], stamp = P[11] | 0;
+    const X = R['unit.x'], Y = R['unit.y'], OWN = R['unit.owner'], data = R['spatial.types'], F = R['eff.flag'];
+    const step = P[2] | 0, phase = P[3] | 0, chunkPx = P[4], CW = P[5] | 0, CH = P[6] | 0, strideB = P[7] | 0, NT = P[8] | 0, players = P[9] | 0, maxL = P[10], stamp = P[11] | 0;
+    const TW = P[15] | 0, TB = P[16] | 0;
     const UNP = P[12] | 0, UL1 = P[13] | 0, UT = R['unit.upT'], UB = R['unit.upB'], UH = R['upk.h'];
     // (A unit behind its (owner, type) stat tables' version: the full path.)
     const TV = R['eff.tver'], EV = R['unit.esVer'], NTV = P[14] | 0;
@@ -2839,11 +2882,12 @@ SIM_KERNELS[SIM_KERNEL_EFF_UNITS] = function (R, P, chunk) {
         const x1 = Math.max(0, Math.min(CW - 1, cx - r)), y1 = Math.max(0, Math.min(CH - 1, cy - r));
         const x2 = Math.max(0, Math.min(CW - 1, cx + r)), y2 = Math.max(0, Math.min(CH - 1, cy + r));
         if (!(x1 <= x2 && y1 <= y2)) { F[j] = 2; continue; }
-        const lane = o * strideP + 1 + TYP[s];
+        // (Its window's type blocks: things_utils.js _effWindowCount.)
+        const lane = o * NT + TYP[s], bx1 = Math.floor(x1 / TB), bx2 = Math.floor(x2 / TB), by2 = Math.floor(y2 / TB);
         let sum = 0;
-        for (let y = y1; y <= y2; y++) {
-            let idx = (y * CW + x1) * strideC + lane;
-            for (let x = x1; x <= x2; x++, idx += strideC) sum += data[idx];
+        for (let by = Math.floor(y1 / TB); by <= by2; by++) {
+            let idx = (by * TW + bx1) * strideB + lane;
+            for (let bx = bx1; bx <= bx2; bx++, idx += strideB) sum += data[idx];
         }
         sum |= 0;
         if (sum <= 0) { F[j] = 2; continue; }
@@ -3450,7 +3494,7 @@ function _simVisSeed(SEED, LIST, CNT, p, base, a, val, stamp) {
 }
 
 SIM_KERNELS[SIM_KERNEL_EFF_COUNT] = function (R, P, chunk) {
-    const win = R['eff.win'], out = R['eff.out'], data = R['spatial.cplx'];
+    const win = R['eff.win'], out = R['eff.out'], data = R['spatial.types'];
     const CW = P[2] | 0, stride = P[3] | 0;
     for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
         const o = i * 5, lane = win[o + 4];
@@ -3496,6 +3540,47 @@ SIM_KERNELS[SIM_KERNEL_SNAP_REGION] = function (R, P, chunk) {
     // slice's positions (i % P[3] === P[4]) of the position's mix with the
     // unit's id, snap.ord[chunk]; units without a slot are the caller's.)
     const ORDS = P[10] === 1 ? R['snap.ord'] : null;
+    // With the sums (P[10] 1, one slice): the slots walked in order (the
+    // live ones not dead are the units of the list), only their positions
+    // and this slice's columns read; then the list for its order and the
+    // units without a slot. (By the list, every unit's position was read
+    // through the slot map, out of order: most of the hash's work.) snap.reg
+    // and snap.hc are then by slot; snap.rot lists slots; snap.noslot lists
+    // units without a slot (i) and slots outside the regions (-(s + 1)).
+    // P[11]: slots.
+    if (ORDS) {
+        const LIVE = R['unit.live'], DEAD = R['unit.dead'], nSlots = P[11] | 0, slices = P[3] | 0, slice = P[4] | 0;
+        for (let s = chunk * P[1], end = Math.min(nSlots, s + P[1]); s < end; s++) {
+            if (!LIVE[s] || DEAD[s]) continue;
+            const r = Math.floor(Y[s] / ts) * 1024 + Math.floor(X[s] / ts);
+            if (slices > 0 && r % slices !== slice) continue;
+            let h = 0;
+            for (let k = 0; k < cols.length; k++) {
+                const x = cols[k][s], kc = KC[k];
+                let v;
+                if ((x | 0) === x && (x !== 0 || 1 / x > 0)) v = Math.imul(kc ^ x, 16777619);
+                else if (x !== x) v = kc ^ 0x7ff8;
+                else { _snapKF64[0] = x; v = Math.imul(Math.imul(kc ^ _snapKI32[0], 16777619) ^ _snapKI32[1], 0x5bd1e995); }
+                h = (h + Math.imul(v, 2654435761)) | 0;
+            }
+            HC[s] = h; out[s] = r;
+            if (!(r >= 0 && r < rmax)) { NOSL[Atomics.add(CNT, 2, 1)] = -(s + 1); continue; }
+            if (Atomics.exchange(STAMP, r, stamp) !== stamp) LIST[Atomics.add(CNT, 0, 1)] = r;
+            const id = ID[s];
+            if ((((id % groups) + groups) % groups) === rot) { ROTL[Atomics.add(CNT, 1, 1)] = s; continue; }
+            let hh = (Math.imul(id, 7919) ^ 0x11) + h | 0;
+            hh = Math.imul(hh ^ (hh >>> 15), 2246822519);
+            Atomics.add(ACC, r, hh);
+        }
+        let ordL = 0;
+        for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
+            const si = SL[i];
+            if (si < 0) { NOSL[Atomics.add(CNT, 2, 1)] = i; continue; }
+            if (i % slices === slice) ordL = (ordL + _snapOrderMix(i, ID[si])) | 0;
+        }
+        ORDS[chunk] = ordL;
+        return;
+    }
     let ord = 0;
     for (let i = chunk * P[1], end = Math.min(P[0], i + P[1]); i < end; i++) {
         const si = SL[i];
@@ -3669,13 +3754,19 @@ SIM_KERNELS[SIM_KERNEL_COMBAT_SCAN] = function (R, P, chunk) {
 // [2] SIM_SEP_ABSENT.
 SIM_KERNELS[SIM_KERNEL_ACQ_SNAP] = function (R, P, chunk) {
     const X0 = R['unit.x0'], Y0 = R['unit.y0'], OWN = R['unit.owner'], DEAD = R['unit.dead'], SEP = R['unit.sepKey'], CMD = R['unit.commandState'];
-    const RNG = R['unit.cbRange'], ID = R['unit.id'];
+    const RNG = R['unit.cbRange'], ID = R['unit.id'], ACQB = R['unit.acqB'], TID = R['acq.tid'], SOUT = R['acq.sout'];
     const SX = R['acq.x'], SY = R['acq.y'], SO = R['acq.own'], SF = R['acq.flags'], SC = R['acq.cmd'], SR = R['acq.rng'], SI = R['acq.id'], OUTA = R['acq.out'];
-    const absent = P[2];
+    const absent = P[2], cmdAtk = P[3];
     for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) {
         SX[s] = X0[s]; SY[s] = Y0[s]; SO[s] = OWN[s]; SC[s] = CMD[s]; SR[s] = RNG[s]; SI[s] = ID[s]; OUTA[s] = -2;
-        // (1 dead, 2 absent from the index.)
-        SF[s] = (DEAD[s] ? 1 : 0) | (SEP[s] === absent ? 2 : 0);
+        // (1 dead, 2 absent from the index, 4 attacking a unit: its look's
+        // answer is read only with a structure target (doAttacking) or idle /
+        // attack-moving.) Every live unit commits "none" unless the scan
+        // finds something for it: one left as it was could keep a result from
+        // before a restore that set the clock back, with a stamp equal to a
+        // later commit's.
+        SF[s] = (DEAD[s] ? 1 : 0) | (SEP[s] === absent ? 2 : 0) | (CMD[s] === cmdAtk && !ACQB[s] ? 4 : 0);
+        if (!DEAD[s]) { OUTA[s] = -1; TID[s] = 0; SOUT[s] = -1; }
     }
 };
 // The scan (a tier job on the helpers, over the snapshot alone): for each
@@ -3706,7 +3797,7 @@ SIM_KERNELS[SIM_KERNEL_ACQ_SCAN] = function (R, P, chunk) {
     const stride = bc + 1, plane = stride * (br + 1);
     for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) {
         const fl = FLG[s];
-        if (fl & 3) continue;
+        if (fl & 7) continue;
         const cmd = CMD[s];
         if (cmd !== cmdIdle && cmd !== cmdAM && cmd !== cmdAtk) continue;
         const owner = OWN[s] | 0, r = RNG[s];

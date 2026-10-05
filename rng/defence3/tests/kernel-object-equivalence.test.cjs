@@ -55,12 +55,28 @@ async function runCase(seed, map, lowAstar = Number(process.env.LOWASTAR) || 0) 
         (globalThis.__plog ||= []).push(currentTick + ' ' + b + ' -> ' + st(this)); return r; }; }`);
     // Kernel outcomes on the host (moves by mode), to show what was compared.
     if (!process.env.NOKOUT) host.evalSim(`{ globalThis.__kout = {}; const run = simMoveRun; simMoveRun = function () { const r = run.apply(this, arguments); const S = _simUnitState; if (!S) return r; const O = S.columns.mvOut;
-        for (let s = 0; s < S.owners.length; s++) { const o = O[s]; if (o) { const k = o === 10 ? 'fire' : o >= 7 ? 'chase' : o === 6 ? 'hold' : 'move'; globalThis.__kout[k] = (globalThis.__kout[k] || 0) + 1;
+        for (let s = 0; s < S.owners.length; s++) { const o = O[s]; if (o) { const k = o === 14 ? 'engage' : o === 10 ? 'fire' : o >= 7 ? 'chase' : o === 6 ? 'hold' : 'move'; globalThis.__kout[k] = (globalThis.__kout[k] || 0) + 1;
             // (Forced targets' holds and chases: mvFlags 8.)
             const on = S.columns.mvOn[s]; if ((on === 3 || on === 4) && (S.columns.mvFlags[s] & 8)) globalThis.__kout.forced = (globalThis.__kout.forced || 0) + 1; } } return r; }; }`);
     // LOWASTAR=n: every player starts with n A* (movement then runs the
     // budget out: steps that are not covered mark their units).
     if (lowAstar) world.atTick(host.eval('currentTick') + 5, `for (let p = 0; p < players.length; p++) _setPlayerResourceValue(p, 'astar', ${lowAstar})`);
+    // EQ_TOWERS=n: n weak built towers per team scattered over the middle
+    // of the map (every peer, one tick): units chasing and holding around
+    // them while they fall, i.e. walls changing during the unit pass
+    // (_simMoveWallQNear decides which kernel holds and chases stand).
+    if (Number(process.env.EQ_TOWERS) > 0) world.atNextSafeTick(`(() => {
+        let s = ${seed} * 7919 + 17; const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+        const keys = BUILD_CATEGORIES.towers.filter(k => k !== 'watch_tower');
+        for (let p = 0; p < players.length; p++) for (let i = 0, placed = 0; i < ${Number(process.env.EQ_TOWERS)} * 20 && placed < ${Number(process.env.EQ_TOWERS)}; i++) {
+            const gx = Math.floor(GRID_W * (0.2 + 0.6 * rnd())), gy = Math.floor(GRID_H * (0.2 + 0.6 * rnd())), c = grid[gy] && grid[gy][gx];
+            if (!c || c.type !== TYPE_FLOOR || c.item || getTileEntityRef(gx, gy)) continue;
+            if (!placeBuilding(gx, gy, keys[i % keys.length], p, { ignorePlacementRules: true, silent: true })) continue;
+            const e = getTileEntityRef(gx, gy); if (e) { e.underConstruction = false; e.buildProgress = 1; e.energy = 3 + Math.floor(rnd() * 40); }
+            placed++;
+        }
+        recalculateAdjacency(true);
+    })()`, 20);
     // HOST_SIM_EVAL: code for the host's simulation alone (a kernel path
     // switched on there only, e.g. EFF_STATS_KERNEL_MIN_UNITS = 0: the guest
     // keeps the object path, and every field is compared).
@@ -89,7 +105,7 @@ async function runCase(seed, map, lowAstar = Number(process.env.LOWASTAR) || 0) 
     assert.equal(g.patchesApplied + g.snapshotsApplied - repairs0, 0, `seed ${seed} ${map}: repairs on the object-update guest`);
     assert.ok(compared >= 5, `seed ${seed} ${map}: sampled ticks compared (${compared})`);
     const armed = host.evalSim('(() => { let a = 0; const c = _simUnitState.columns; for (let s = 0; s < _simUnitState.owners.length; s++) if (c.mvOn[s]) a++; return a; })()');
-    const kout = host.evalSim('JSON.stringify(globalThis.__kout || null)') + (process.env.HOST_SIM_EVAL ? ' host extra ' + host.evalSim('JSON.stringify(globalThis.__hostStat || null)') : '');
+    const kout = host.evalSim('JSON.stringify(globalThis.__kout || null)') + ' wall-change holds/chases kept ' + host.evalSim('typeof _simMoveWallQKept === "number" ? _simMoveWallQKept : -1') + (process.env.HOST_SIM_EVAL ? ' host extra ' + host.evalSim('JSON.stringify(globalThis.__hostStat || null)') : '');
     return `seed ${seed} ${map}${lowAstar ? ' (A* ' + lowAstar + ')' : ''}: ${compared} sampled ticks equal field by field, exact hashes equal (${armed} units armed on the host at the end; kernel unit-ticks ${kout})`;
 }
 

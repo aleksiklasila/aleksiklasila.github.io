@@ -76,6 +76,171 @@ is next. Newest entries first within each section.
 
 ## Session log
 
+### 2026-10-05 (sixteenth round) — 400k goal, memory first
+
+- New goal (user): 400k units, 2 teams, ~100k buildings, 100k energy and
+  ★ mines; mainly the simulation thread's tick cost, jitter low, clicks
+  responsive. Note: tests/300000-1000.json is 300k units *per team*
+  (600k in all; spawnCounts are per player), 200000-1000 is 400k in all.
+- Two peers of 300000-1000 in one tickbench process did not fit this
+  16 GB laptop (paging-bound: CPU advancing ~0.5 s/s; useless timings);
+  200000-1000 (400k) barely: rss 6.2 GB, typed arrays 3.85 GB, heap 1.8 GB.
+- Memory probes kept in the repo: `.claude/probes/typed_mem.js` (typed
+  arrays per peer by where they are reachable from; with
+  `.claude/probes/topnames.cjs` for the script-level names:
+  `AFTERALL="globalThis.__typedMemNames = $(cat .claude/probes/topnames.json); $(cat .claude/probes/typed_mem.js)"`),
+  `.claude/probes/heapcomp.cjs` (heap snapshot of a small hosted match by
+  constructor, Unit fields, holders, plain-object shapes), tickbench
+  `MEMSTAT=1` (process memory after the start and the run).
+- Found: `spatialUnitsComplex` was [tile][8 player slots][1 + 19 types]
+  Int32 = 641 MB per peer on a 1000x1000 map (more than everything else
+  together; 1531 MB of typed arrays per peer at 200k units). Now totals
+  only per tile and owner (stride per player 1: 32 MB) and the per-type
+  counts by 4x4-tile blocks (`spatialTypeCounts`, SPATIAL_TYPE_BLOCK,
+  ~5 MB): the effective stats' same-type window sums the blocks its tile
+  window touches (kernel SIM_KERNEL_EFF_UNITS / EFF_COUNT, serial
+  _effWindowCount / _countNearbySameTypeUnits: the same rule), and the
+  unit-type filter of range queries rules chunks out by their block
+  (_spatialChunkPassesFilters; units still checked). 400k: typed arrays
+  3853 -> 2708 MB (both peers). Passed: spatial-index-builds,
+  shared-spatial-*, shared-unit-state, index-merge, resource-penalty-stats,
+  kernel-object equivalence (default; and HOST_SIM_EVAL
+  EFF_STATS_KERNEL_MIN_UNITS = 0), chaos determinism (CHAOS_HOST_HELPERS=7
+  + CHAOS_SIM_EVAL, 6 maps). (Equivalence with SEPARATION_SLOT_MIN_UNITS
+  = 0 on the host fails at tick 17 the same way before this change:
+  pre-existing, the slot separation is not the object path's.)
+- Remaining typed arrays per peer (200k): nav fields 173 MB (per node
+  C*C Uint16, 5 in-use profiles), _sourceAreaZoneIds 34, _visCover.dense
+  30, nav partL 21, ws.score 18, mv.areaBox 17, sep.box 15, ~20 per-tile
+  Int32 grids of 4 MB, unit columns ~850 B a slot (capacity a power of
+  two over 1.25x the units). Heap: Unit objects ~1.1 KB each in node
+  (half with Chrome's pointer compression); no big per-unit satellites.
+- Match start: the host's own row said 'ready' right after its world was
+  generated while its simulation worker still loaded; now 'loading' until
+  simClientWorldReady (_hostShowOwnLoadStatus).
+- Unit columns grow by half in 4096-slot steps (was doubling: 1M slots of
+  ~850 bytes for 600k units); a restore's compaction sizes 1.125x live.
+- 400k bench before this round's tick work (200000-1000, ACTIVE=1
+  BATTLE=mix, HELPERS=7, 8 s): mean 203 ms, p50 198, p95 301, 0 desyncs;
+  unit pass 111 (chasers 54 ms / 12.8k calls, in range 28 / 6k, worker
+  MOVING_TO 22 / 168 at 129 us each), simMoveRun 26, hash 9, separation 8.
+- Kernel holds and chases were thrown away at their turn whenever any wall
+  changed during the pass (_simMoveWallQ: a mine depleting anywhere, ~every
+  tick with collectors at work): ~9k units a tick at 200k ran Unit.update
+  for nothing. Both paths read the walls of the pass's start
+  (simMoveWallGrid; changes are applied at its end), only the end of
+  Unit.update reads the unit's own tile live (pushUnitOutOfBlockedTile), so
+  the turn check now fails only for a change within a tile of where the
+  unit started or ended (_simMoveWallQNear: a per-pass stamp grid).
+  Kernel movers (outputs 1, 3) never had that check.
+- Chasers whose attackTarget still named their target from a tick in range
+  (doAttacking's chase leaves it) were never armed (simMoveTryChase's
+  `attackTarget === tu` exclusion): ~730 a tick at 200k. Dropped: nothing
+  on the chase reads attackTarget; a unit in range the hold did not take
+  comes out as "come in range" (output 13, simHoldChaseCommit: what
+  doAttacking's in-range branch does).
+- Collectors' return trip: _findClosestSpawner walked rings of 16-tile
+  buckets out from a far mine (thousands of empty buckets, ~100 us a
+  return); now a scan of the owned list's tiles as typed arrays (per list,
+  lists are remade on spawner changes), objects read only for candidates
+  that would win (same order: distance, row, column, id).
+- Status-effect column accessors are generated per column (one closure did
+  c[k] for every key: a megamorphic lookup on every read).
+- 200k (100000-1000, ACTIVE=1 BATTLE=mix, 6 s): mean 117.5 -> ~89-94 ms,
+  p50 103 -> 77-82; chasers in Unit.update 8187 -> 788 a tick.
+- Probes: `.claude/probes/attack_why.js` (attacking units that ran
+  Unit.update by kind and why: armed and handed back, or the first unmet
+  arming condition), `still_valid.js` (why kernel holds/chases fail their
+  turn check), `handback_sites.js` (which `ON[s] = 0` site of _simMovePre
+  fired, by armed mode; run with HELPERS=0: the patched copy must run on
+  the simulation thread; plain no-HELPERS runs another (non-shared) mode
+  that hardly fights), `.claude/srcline.cjs` (harness profile line ->
+  file:line; ~3 lines early). Probe pitfall: the harness evaluates the game
+  in a function scope, so a re-evaluated game function must be made with a
+  direct eval in a block whose names the function does not use (a helper
+  with `H` in scope, or a global eval, desynced the peer).
+- At 200k, hand-backs left per tick (HELPERS=0 probe): 2404 attack-movers
+  engaging (the acquisition tier found a target), 1212 holds and 564 chases
+  whose target died, 547 drive-by finds: state transitions, a whole
+  Unit.update each (~3-4 us).
+- 400k after the hold/chase/spawner changes: mean 203 -> 160 ms, p50 198
+  -> 141 (unit pass 111 -> 67), 0 desyncs; rss at start 6111 -> 5451 MB.
+- Engagements without Unit.update: an attack-mover or idle unit whose aggro
+  look (the acquisition tier's target, on its acquisition tick) found a
+  unit was handed back (~2.4k a tick at 200k) for doAttackMoving/doIdle's
+  first branch. Now kernel output 14 (it stands); at its turn
+  simEngageCommit does what Unit.update would there (target, unforced,
+  attacking; push out, index, re-armed), after checks as a hold's (alive,
+  no wall change by it, the same tier answer via _combatScanTarget); else
+  Unit.update. 200k: c2 updates 2945 -> 163 a tick.
+- Cloud-tower tables (pathfinding.js) were keyed on pathTopologyVersion:
+  every mine depleted or building placed or lost anywhere rebuilt them by
+  walking all towers (~20k) at the next lookup - ~4 times a tick in a
+  battle, inside canUnitOccupyTile (pushUnitOutOfBlockedTile of collectors
+  on mine tiles: ~30 us a call). Now keyed on cloudTowersVersion (bumped by
+  towerJoinedOrLeft only for clouds) and the towers list's identity; the
+  cloud signature (live state) stays per topology version. Worker
+  MOVING_TO 7.3 -> 2.7 ms a tick at 200k.
+- pushUnitOutOfBlockedTile answers from the live tile type first (not a
+  wall: occupiable), before the unit's cache fields.
+- 200k now: mean 85.1, p50 73.2, p95 125.8 (from 117.5 / 103 / 188).
+- Total CPU per tick (HELPERS=0, all kernels on the simulation thread,
+  200k ACTIVE+BATTLE): ~290 ms, i.e. ~580 ms at 400k: over the 8 cores x
+  50 ms ceiling, so total work must shrink. By kernel (ms a tick):
+  acquisition scan 38, separation ~60 (pairs 32, aggregate 9, finish 8.6,
+  pack 6.3, mark 3.8), movement ~35 (pre-pass 14, step 8, flow 6.3, rows
+  6.4, _simNavArrays 4.5), unit index ~16 (merge 7, keys 4.4, fill 4.1),
+  hash region 12.6, worker search 9, status 5, drive-by 4.4.
+- Acquisition scan: attacking units (most of a battle's) were scanned every
+  cycle though only units attacking a structure read the answer (and idle /
+  attack-moving ones). Unit.targetBuilding is now an accessor (value in
+  _tb, SIM_UNIT_EXTRA_ACCESSORS) mirroring "has a structure target" into a
+  column (acqB); ACQ_SNAP flags units attacking a unit (4) and the scan
+  skips them. Every live unit now commits "none" unless scanned (one left
+  as it was kept a result from before a restore that set the clock back,
+  whose stamp could equal a later commit's: multiplayer-snapshot caught it
+  with the skip).
+- State hash region kernel (SIM_KERNEL_SNAP_REGION, the sums path): walks
+  the slots in order (live and not dead: the listed units) instead of the
+  units list through the slot map (every unit's position read out of order
+  each tick); a second pass over the list gives its order hash and the
+  units without a slot. snap.reg / snap.hc / snap.rot are by slot then;
+  snap.noslot holds unit indexes and -(slot + 1) for slots outside the
+  summed regions. CPU -17% (its float divisions and modulo per slot left).
+- _simNavArrays / _simNavWalls (each movement job built ~80 registry keys
+  as strings): cached per thread until a binding changes (_simParBinds,
+  counted by simParallelBind and the helpers' bind handler) or another
+  registry is passed (tests).
+- Short attack holds (reach <= 1): an in-range-by-areas result depends only
+  on the unit's window, the target's tile and the area layout, so the
+  kernel keeps it in mvHWin / mvHTT / mvHVer (the long holds' keys, unused
+  by short ones; simMoveTryHold and the chase->hold step clear mvHVer) and
+  skips _simUnitInAttackRange while they stand; contact (touching) results
+  are not kept.
+- 400k (ACTIVE+BATTLE) before the hold cache: mean 139.6, p50 127.3, p95
+  195, max 507, 0 desyncs (from 203 / 198 / 301 at the round's start).
+  Main thread per tick: unit pass 48.3 (in range 7.3 / 1683 calls, moving
+  6.9 / 1238, chasing 6.6 / 1349, RETURNING_FOR_GOLD 5.5 / 857, MOVING_TO
+  3.6 / 168, attack-moving 3.0 / 662), simMoveRun 24.8 (kernel wall: move
+  11.1, drive-by 7.3, step 3.9), hash 8.8, separation commit 6.4 (finish
+  kernel 3.7), hits 6.0, adjacency 5.0, effective stats 5.0, collect 3.6,
+  status 3.5 (kernel 2.1), visibility sync 2.1, nav fields flush 2.0.
+- Tools: `.claude/profbreak.cjs` (host thread per tick by phase: inclusive
+  and self per function with file:line; needs the profiled code unchanged,
+  line numbers map through the current files).
+- Pre-existing, not from this round (the stashed baseline fails the same
+  way): tests/multiplayer-patch.test.cjs ("restored guest differs from host
+  N ticks after the restore": attackTarget of a unit pointing at a dead
+  unit, which is serialized by value).
+- Kernel/object equivalence: new EQ_TOWERS=n (weak towers scattered over
+  the middle at a safe tick) and the count of holds/chases kept next to a
+  mid-pass wall change ('wall-change holds/chases kept': 0-7 per default
+  seed). Pre-existing, not from this round (same on the stashed baseline):
+  with EQ_TOWERS=40, seeds 13:crossroads and 9:crossroads differ in
+  effectiveStacks (host 8, objects 12) at ticks 42-67, and 11:crossroads in
+  exact hashes from tick 27 for 13 ticks: to look into (the guest there
+  disarms every unit each tick, which may take another stats path).
+
 ### 2026-10-04 (fifteenth round) — workers walk and work again, browser scale
 
 - Workers (user: a builder in tests/oneofall.json sent 10 tiles up did not

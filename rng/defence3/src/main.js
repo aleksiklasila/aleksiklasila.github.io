@@ -243,6 +243,8 @@ function _forEachUnitInTickOrder(fn) {
                         if (simHoldStillValid(S.columns, s)) { if (o === 10) simHoldFire(S.columns, s); continue; }
                         simHoldUndo(S.columns, s);
                     }
+                    // (An aggro look's target: engaged at its turn.)
+                    else if (o === 14) { if (simEngageCommit(S.columns, s)) continue; S.columns.mvOut[s] = 0; }
                     // (A hold's chase step, a chase come in range.)
                     else if (o >= 11) { if (simChaseStillValid(S.columns, s, 3)) { simHoldChaseCommit(S.columns, s, o); continue; } simChaseUndo(S.columns, s); }
                     else { if (simChaseStillValid(S.columns, s)) continue; simChaseUndo(S.columns, s); }

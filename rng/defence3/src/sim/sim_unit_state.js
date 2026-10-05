@@ -28,7 +28,7 @@ const SIM_UNIT_ACCESSOR_COLUMNS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'v
 const SIM_UNIT_MIRROR_COLUMNS = ['r', 'collisionR'];
 // Accessor keys that are not columns (see simUnitStateKeys): the path is a
 // plain reference behind a setter that disarms the movement kernel.
-const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved', '_statsBehind', '_forcedTargetLastSeenX', '_forcedTargetLastSeenY'];
+const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'targetBuilding', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved', '_statsBehind', '_forcedTargetLastSeenX', '_forcedTargetLastSeenY'];
 
 // Unit types by first sight (peer-local indices: only ever mapped back to
 // the type's name).
@@ -204,7 +204,10 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // position, which the movement kernel writes for forced holds and chases
     // (mvFlags 8); the values before its write (fLsPX/fLsPY) and the tick of
     // it (fLsT), put back when the unit runs Unit.update after all that tick.
-    ['fLsX', Float64Array, 1], ['fLsY', Float64Array, 1], ['fLsPX', Float64Array, 1], ['fLsPY', Float64Array, 1], ['fLsT', Int32Array, 1]];
+    ['fLsX', Float64Array, 1], ['fLsY', Float64Array, 1], ['fLsPX', Float64Array, 1], ['fLsPY', Float64Array, 1], ['fLsT', Int32Array, 1],
+    // 1 while Unit.targetBuilding holds a structure (its accessor writes it):
+    // the acquisition tier skips units attacking a unit (SIM_KERNEL_ACQ_SNAP).
+    ['acqB', Uint8Array, 1]];
 // Accessor defaults (the "not indexed / not registered" values).
 const SIM_SPATIAL_DEFAULTS = { spTile: -1, spArea: -2, spOwner: -1, spEpoch: 0, spType: -1, vsGen: 0, vsR: -1, vsA: -1, vsP1: -1, vsP2: -1 };
 let _simUnitState = null;
@@ -248,7 +251,9 @@ function simUnitStateAllocate(u) {
     if (!S) S = _simUnitState = { cap: 0, owners: [], free: [], columns: _simUnitColumnsObject(), stamp: null, epoch: 0, unitsRef: null };
     const s = S.free.length ? S.free.pop() : S.owners.length;
     if (s >= S.cap) {
-        const cap = Math.max(1024, S.cap * 2);
+        // (Grown by half, in whole 4096-slot steps: doubling left up to half
+        // of ~850 bytes a slot unused, 1M slots for 600k units.)
+        const cap = Math.max(1024, Math.ceil(S.cap * 1.5 / 4096) * 4096);
         for (const k of SIM_UNIT_COLUMNS) {
             const a = simSharedArray(_simUnitColumnType(k), cap);
             if (S.columns[k]) a.set(S.columns[k]);
@@ -280,9 +285,10 @@ function simUnitStateAllocate(u) {
     S.owners[s] = u;
     S.columns.live[s] = 1; S.columns.maxE[s] = Number(u.maxEnergy); S.columns.spMvOwn[s] = 0; S.columns.mvBlk[s] = 0; S.columns.mvCD[s] = -1; S.columns.wsKind[s] = 0;
     // (Tick-stamped answers of the slot's last unit are not this one's.)
+    S.columns.acqB[s] = 0;
     S.columns.cbTick[s] = -1; S.columns.cbT[s] = -1; S.columns.dbTick[s] = -1; S.columns.dbT[s] = -1; S.columns.cwTick[s] = -1; S.columns.mvStepT[s] = -1; S.columns.upT[s] = -1; S.columns.upB[s] = -1;
     Object.defineProperties(u, { _us: { value: S.columns, writable: true }, _si: { value: s, writable: true }, _det: { value: null, writable: true },
-        _path: { value: null, writable: true }, _ws: { value: undefined, writable: true }, _wnr: { value: undefined, writable: true } });
+        _path: { value: null, writable: true }, _ws: { value: undefined, writable: true }, _wnr: { value: undefined, writable: true }, _tb: { value: null, writable: true } });
 }
 
 // Removed units may still be attack targets, selected, or referenced in a
@@ -341,8 +347,7 @@ function simUnitStateCompact() {
     if (S.owners.length - live < Math.max(4096, S.owners.length / 3)) return false;
     if (typeof simParallelBackgroundWait === 'function' && typeof SIM_PAR_BG_LANES === 'number') for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) simParallelBackgroundWait(lane);
     const old = S.columns, n0 = S.owners.length, map = new Int32Array(n0).fill(-1);
-    let cap = 1024;
-    while (cap < live * 1.25) cap *= 2;
+    const cap = Math.max(1024, Math.ceil(live * 1.125 / 4096) * 4096);
     const N = { cap, owners: [], free: [], columns: _simUnitColumnsObject(), stamp: new Uint32Array(cap), epoch: 0, unitsRef: units };
     const C = N.columns;
     for (const k of SIM_UNIT_COLUMNS) C[k] = simSharedArray(_simUnitColumnType(k), cap);

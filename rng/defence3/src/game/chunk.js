@@ -20,10 +20,16 @@ function initSpatialHash() {
     spatialNormUnitTypeIndex = Number.isFinite(spatialUnitTypeToIndex.norm) ? spatialUnitTypeToIndex.norm : 0;
     spatialUnitsComplexUnitTypeCount = unitKeys.length;
     spatialUnitsComplexPlayerCount = Math.max(1, Math.floor(Number(players && players.length) || 0));
-    spatialUnitsComplexStridePerPlayer = 1 + spatialUnitsComplexUnitTypeCount; // total + perUnitType
-    spatialUnitsComplexStridePerChunk = spatialUnitsComplexPlayerCount * spatialUnitsComplexStridePerPlayer;
+    // Totals per chunk and owner; the per-type counts by blocks of chunks.
+    spatialUnitsComplexStridePerPlayer = 1;
+    spatialUnitsComplexStridePerChunk = spatialUnitsComplexPlayerCount;
     spatialUnitsComplex = simSharedArray(Int32Array, (CHUNKS_W * CHUNKS_H) * spatialUnitsComplexStridePerChunk);
     simParallelBind('spatial.cplx', spatialUnitsComplex);
+    spatialTypeBlocksW = Math.ceil(CHUNKS_W / SPATIAL_TYPE_BLOCK);
+    spatialTypeBlocksH = Math.ceil(CHUNKS_H / SPATIAL_TYPE_BLOCK);
+    spatialTypeStridePerBlock = spatialUnitsComplexPlayerCount * spatialUnitsComplexUnitTypeCount;
+    spatialTypeCounts = simSharedArray(Int32Array, spatialTypeBlocksW * spatialTypeBlocksH * spatialTypeStridePerBlock);
+    simParallelBind('spatial.types', spatialTypeCounts);
     spatialBlockCols = Math.ceil(CHUNKS_W / SPATIAL_BLOCK_SIZE);
     spatialBlockRows = Math.ceil(CHUNKS_H / SPATIAL_BLOCK_SIZE);
     spatialBlockCounts = simSharedArray(Int32Array, spatialBlockCols * spatialBlockRows * spatialUnitsComplexPlayerCount);
@@ -141,10 +147,14 @@ let _spatialCountDefer = false, _spatialCountQ = [];
 function _spatialCountAdd(chunkKey, owner, typeIdx, delta) {
     if (!(owner >= 0 && owner < spatialUnitsComplexPlayerCount)) return;
     if (_spatialCountDefer) { _spatialCountQ.push(chunkKey, owner, typeIdx, delta); return; }
-    const base = chunkKey * spatialUnitsComplexStridePerChunk + owner * spatialUnitsComplexStridePerPlayer;
-    spatialUnitsComplex[base] += delta;
-    spatialUnitsComplex[base + 1 + typeIdx] += delta;
+    spatialUnitsComplex[chunkKey * spatialUnitsComplexStridePerChunk + owner] += delta;
+    if (typeIdx >= 0) spatialTypeCounts[spatialTypeBlockOf(chunkKey) * spatialTypeStridePerBlock + owner * spatialUnitsComplexUnitTypeCount + typeIdx] += delta;
     _adjustSpatialBlockCount(chunkKey, owner, delta);
+}
+// The per-type count block of a chunk (spatialTypeCounts).
+function spatialTypeBlockOf(chunkKey) {
+    const cx = chunkKey % CHUNKS_W, cy = (chunkKey - cx) / CHUNKS_W;
+    return Math.floor(cy / SPATIAL_TYPE_BLOCK) * spatialTypeBlocksW + Math.floor(cx / SPATIAL_TYPE_BLOCK);
 }
 function spatialCountsDeferBegin() { _spatialCountDefer = true; }
 // (Set by simMoveRun when its kernel moved units into other chunks.)
@@ -164,6 +174,8 @@ function spatialCountsDeferEnd(keepKernel = false) {
             const P = _simParams, n = S.owners.length;
             P[0] = n; P[1] = 16384; P[2] = spatialUnitsComplexPlayerCount; P[3] = spatialUnitsComplexStridePerChunk; P[4] = spatialUnitsComplexStridePerPlayer;
             P[5] = CHUNKS_W; P[6] = spatialBlockCols; P[7] = SPATIAL_BLOCK_SIZE;
+            P[8] = spatialUnitsComplexUnitTypeCount; P[9] = spatialTypeBlocksW; P[10] = SPATIAL_TYPE_BLOCK;
+            simParallelBind('spatial.types', spatialTypeCounts);
             simParallelRun(SIM_KERNEL_SP_COUNTS, Math.ceil(n / 16384));
         }
     }
@@ -604,6 +616,19 @@ function getUnitsInRange(wx, wy, rangePx) {
     return result;
 }
 
+// Whether a chunk may hold units passing a range query's owner / enemy /
+// unit-type filters (totals per chunk and owner; the type's counts by
+// block, so true may come for a chunk without one; false is exact).
+function _spatialChunkPassesFilters(ck, cplx, SC, tcnt, tStride, tT, nPlayers, hasPlayer, player, hasEnemy, enemy, hasType, typeIdx) {
+    const cb = ck * SC, tb = hasType ? spatialTypeBlockOf(ck) * tStride + typeIdx : 0;
+    if (hasPlayer) return cplx[cb + player] > 0 && (!hasType || tcnt[tb + player * tT] > 0);
+    for (let pid = 0; pid < nPlayers; pid++) {
+        if (hasEnemy && pid === enemy) continue;
+        if (cplx[cb + pid] > 0 && (!hasType || tcnt[tb + pid * tT] > 0)) return true;
+    }
+    return false;
+}
+
 function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
     if (typeof visitor !== 'function') return false;
     let r = Math.max(0, Number(rangePx) || 0);
@@ -647,7 +672,11 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
         }
     }
     let useFilters = canCplx && (hasPlayerFilter || hasEnemyFilter || hasUnitTypeFilter);
-    let typeOff = 1 + unitTypeFilterIdx; // only valid when hasUnitTypeFilter
+    // (The unit-type filter reads the per-type block counts: a block with
+    // none rules its chunks out; the units themselves are still checked.)
+    const tcnt = spatialTypeCounts, tStride = spatialTypeStridePerBlock, tT = spatialUnitsComplexUnitTypeCount;
+    let canTypes = canCplx && tcnt.length > 0 && tStride > 0;
+    if (hasUnitTypeFilter && !canTypes) useFilters = false;
     let chunkCols = CHUNKS_W;
     spatialIndexEnsure();
     const sxEp = _sxEpoch, sxStamp = _sxStamp, sxStart = _sxStart, sxCount = _sxCount, own = _sxOwners(), sxList = own ? null : _sxList, ES = _sxESlot;
@@ -689,27 +718,7 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
             let rowBase = cy * chunkCols;
             for (let cx = minCx; cx <= maxCx; cx++) {
                 let ck = rowBase + cx;
-                if (useFilters) {
-                    let cb = ck * cplxSC;
-                    if (hasPlayerFilter) {
-                        let pb = cb + playerFilter * cplxSP;
-                        if (hasUnitTypeFilter ? cplx[pb + typeOff] <= 0 : cplx[pb] <= 0) continue;
-                    } else if (hasEnemyFilter) {
-                        let ok = false;
-                        for (let pid = 0; pid < nPlayers; pid++) {
-                            if (pid === enemyFilter) continue;
-                            let pb = cb + pid * cplxSP;
-                            if (hasUnitTypeFilter ? cplx[pb + typeOff] > 0 : cplx[pb] > 0) { ok = true; break; }
-                        }
-                        if (!ok) continue;
-                    } else {
-                        let ok = false;
-                        for (let pid = 0; pid < nPlayers; pid++) {
-                            if (cplx[cb + pid * cplxSP + typeOff] > 0) { ok = true; break; }
-                        }
-                        if (!ok) continue;
-                    }
-                }
+                if (useFilters && !_spatialChunkPassesFilters(ck, cplx, cplxSC, tcnt, tStride, tT, nPlayers, hasPlayerFilter, playerFilter, hasEnemyFilter, enemyFilter, hasUnitTypeFilter, unitTypeFilterIdx)) continue;
                 if (sxStamp[ck] !== sxEp) continue;
                 let minX = cx * cws, minY = cy * cws;
                 let nx = wx < minX ? minX : (wx > minX + cws ? minX + cws : wx);
@@ -738,27 +747,7 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
         let rowBase = cy * chunkCols;
         for (let cx = minCx; cx <= maxCx; cx++) {
             let ck = rowBase + cx;
-            if (useFilters) {
-                let cb = ck * cplxSC;
-                if (hasPlayerFilter) {
-                    let pb = cb + playerFilter * cplxSP;
-                    if (hasUnitTypeFilter ? cplx[pb + typeOff] <= 0 : cplx[pb] <= 0) continue;
-                } else if (hasEnemyFilter) {
-                    let ok = false;
-                    for (let pid = 0; pid < nPlayers; pid++) {
-                        if (pid === enemyFilter) continue;
-                        let pb = cb + pid * cplxSP;
-                        if (hasUnitTypeFilter ? cplx[pb + typeOff] > 0 : cplx[pb] > 0) { ok = true; break; }
-                    }
-                    if (!ok) continue;
-                } else {
-                    let ok = false;
-                    for (let pid = 0; pid < nPlayers; pid++) {
-                        if (cplx[cb + pid * cplxSP + typeOff] > 0) { ok = true; break; }
-                    }
-                    if (!ok) continue;
-                }
-            }
+            if (useFilters && !_spatialChunkPassesFilters(ck, cplx, cplxSC, tcnt, tStride, tT, nPlayers, hasPlayerFilter, playerFilter, hasEnemyFilter, enemyFilter, hasUnitTypeFilter, unitTypeFilterIdx)) continue;
             if (sxStamp[ck] !== sxEp) continue;
             if (exact) {
                 let minX = cx * cws, minY = cy * cws;

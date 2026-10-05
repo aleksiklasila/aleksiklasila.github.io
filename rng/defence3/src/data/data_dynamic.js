@@ -1127,7 +1127,7 @@ function eliminateTeamAssets(pid) {
     for (let i = towers.length - 1; i >= 0; i--) {
         let t = towers[i];
         if (t.owner !== pid) continue;
-        towers.splice(i, 1); towersChanged();
+        towers.splice(i, 1); towerJoinedOrLeft(t);
         clearTileEntity(t.gx, t.gy, t);
         if (grid[t.gy] && grid[t.gy][t.gx]) {
             grid[t.gy][t.gx].type = TYPE_FLOOR;

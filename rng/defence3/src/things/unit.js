@@ -672,6 +672,16 @@ class Unit {
     }
     // The path: a plain reference (non-enumerable _path, see
     // simUnitStateAllocate); a new one disarms the movement kernel.
+    // A structure target (its value in _tb), mirrored into the acqB column:
+    // the acquisition tier looks for units only for units that may use the
+    // answer (idle, attack-moving, or attacking a structure).
+    get targetBuilding() { return this._tb; }
+    set targetBuilding(v) {
+        const c = this._us;
+        if (c === undefined) { Object.defineProperty(this, '_tb', { value: v, writable: true, configurable: true }); return; }
+        this._tb = v;
+        if (c) c.acqB[this._si] = v ? 1 : 0;
+    }
     get path() { return this._path; }
     set path(v) {
         const c = this._us;
@@ -1887,15 +1897,13 @@ function _unitHitBuilding(a, tb, dmg) {
 
 // Status effect fields: columns (SIM_UNIT_STATUS_COLUMNS), like x and y.
 // (A timer set running flags its unit for the status pre-pass: stOn.)
+// (Made per column with its name in the code: one closure over the key did
+// c[k] for every column at one site, a megamorphic lookup on every read.)
 for (const k of (typeof SIM_UNIT_STATUS_COLUMNS !== 'undefined' ? SIM_UNIT_STATUS_COLUMNS : [])) {
     const timer = SIM_STATUS_TIMER_COLUMNS.includes(k);
-    Object.defineProperty(Unit.prototype, k, {
-        get() { const c = this._us; return c ? c[k][this._si] : (this._det ? this._det[k] : undefined); },
-        set: timer
-            ? function (v) { const c = this._us; if (c) { c[k][this._si] = v; if (v > 0) c.stOn[this._si] = 1; } else if (this._det) this._det[k] = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); }
-            : function (v) { const c = this._us; if (c) c[k][this._si] = v; else if (this._det) this._det[k] = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); },
-        configurable: true
-    });
+    const get = new Function(`return function () { const c = this._us; return c ? c.${k}[this._si] : (this._det ? this._det.${k} : undefined); };`)();
+    const set = new Function('k', `return function (v) { const c = this._us; if (c) { c.${k}[this._si] = v;${timer ? ' if (v > 0) c.stOn[this._si] = 1;' : ''} } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(k);
+    Object.defineProperty(Unit.prototype, k, { get, set, configurable: true });
 }
 
 // Status effects and attack timers of every unit, counted down at once
@@ -2729,6 +2737,9 @@ function simMoveTryHold(u) {
         if (!(tgx >= 0 && tgy >= 0 && tgx < GRID_W && tgy < GRID_H) || !isWorldTargetWithinAreaRange(u.x, u.y, tx, ty, k)) return;
         c.mvHWin[s] = simWindowKey(u.x, u.y, TILE); c.mvHTT[s] = tgy * GRID_W + tgx; c.mvHVer[s] = _simAreaLayoutVer;
     }
+    // (A short hold: the kernel keeps its last in-range-by-areas look in
+    // mvHWin / mvHTT / mvHVer; none yet.)
+    else c.mvHVer[s] = -1;
     c.mvHT[s] = q; c.mvHTId[s] = tu.id; c.mvReach[s] = k;
     // (Its target stepping out of range: the kernel takes the chase's step,
     // see simMoveTryChase.)
@@ -2772,7 +2783,11 @@ function _simMoveTryHoldBuilding(u, c) {
 // Checked again at the unit's turn in the pass (simChaseStillValid).
 function simMoveTryChase(u) {
     const c = u._us, tu = u.targetUnit;
-    if (!c || u.dead || u.holdPosition || u.workerState || !tu || tu.dead || u.targetBuilding || u.attackTarget === tu) return;
+    // (attackTarget may still name its target from a tick it was in range:
+    // doAttacking's chase leaves it, nothing on the way reads it. A unit in
+    // range the hold did not take (its attack tick, a path left) comes out
+    // of the kernel as come in range: simHoldChaseCommit, the same.)
+    if (!c || u.dead || u.holdPosition || u.workerState || !tu || tu.dead || u.targetBuilding) return;
     // (With a path of its own, doAttacking steps straight only when close or
     // the step is open, flying or not; otherwise it follows the path:
     // Unit.update. Bit 1 tells the kernel.)
@@ -2812,7 +2827,7 @@ function simMoveTryChase(u) {
 // walls as they were). Otherwise the move is undone and Unit.update runs.
 // (on: 3 for a hold's chase step or a chase come in range, outputs 11-13.)
 function simChaseStillValid(c, s, on = 4) {
-    if (c.mvOn[s] !== on || c.dead[s] || !(c.energy[s] > 0) || _simMoveWallDirty || _simMoveWallVer !== _simMoveRunWallVer || _simMoveWallQ.length) return false;
+    if (c.mvOn[s] !== on || c.dead[s] || !(c.energy[s] > 0) || _simMoveWallDirty || _simMoveWallVer !== _simMoveRunWallVer || (_simMoveWallQ.length && _simMoveWallQNear(c, s))) return false;
     const q = c.mvHT[s];
     if (!(q >= 0) || c.dead0[q] || (c.id[q] | 0) !== c.mvHTId[s]) return false;
     const u = _simUnitState.owners[s], tu = u && u.targetUnit;
@@ -2837,7 +2852,7 @@ function simHoldStillValid(c, s) {
     // (Targets are seen where they were at the pass's start, hits land
     // after it: only a death during the pass, or walls changed, matter.)
     const on = c.mvOn[s];
-    if ((on !== 3 && on !== 5) || c.dead[s] || !(c.energy[s] > 0) || _simMoveWallDirty || _simMoveWallVer !== _simMoveRunWallVer || _simMoveWallQ.length) return false;
+    if ((on !== 3 && on !== 5) || c.dead[s] || !(c.energy[s] > 0) || _simMoveWallDirty || _simMoveWallVer !== _simMoveRunWallVer || (_simMoveWallQ.length && _simMoveWallQNear(c, s))) return false;
     if (on === 5) {
         // A structure: still standing, still the unit's target.
         const u = _simUnitState.owners[s], tb = u && u.targetBuilding;
@@ -2879,6 +2894,34 @@ function simHoldChaseCommit(c, s, o) {
 }
 function simHoldUndo(c, s) {
     c.mvOn[s] = 0; c.mvOut[s] = 0;
+}
+// An attack-mover or idle combat unit whose aggro look (the acquisition
+// tier's target, on its acquisition tick) found a unit: kernel output 14 (it
+// stood: no move). At its turn, what Unit.update would do there: the
+// preamble (the floor was the kernel's check), doAttackMoving's / doIdle's
+// first branch (that target, unforced, attacking), the end (push out of a
+// blocked tile, the index, re-armed as an attacker). False: the unit runs
+// Unit.update after all (not as the kernel saw it, or a wall changed by it).
+function simEngageCommit(c, s) {
+    if (c.dead[s] || !(c.energy[s] > 0) || _simMoveWallDirty || _simMoveWallVer !== _simMoveRunWallVer || (_simMoveWallQ.length && _simMoveWallQNear(c, s))) return false;
+    const u = _simUnitState.owners[s];
+    if (!u || u.dead || u.workerState || u.holdPosition) return false;
+    const cmd = u.commandState;
+    if (cmd !== CMD_ATTACK_MOVING && !(cmd === CMD_IDLE && u.unitType !== 'scout')) return false;
+    if (c.fLsT[s] === gameTime || !_unitAcquireTick(u)) return false;
+    const e = _combatScanTarget(u, Math.max(TILE, u.preComputed.visionRange * TILE));
+    if (!e) return false;
+    u.prevX = u.x; u.prevY = u.y;
+    u.targetUnit = e;
+    u.forcedAttackTarget = false;
+    u.commandState = CMD_ATTACKING;
+    pushUnitOutOfBlockedTile(u);
+    u.x = _quantizeUnitWorldCoord(u.x);
+    u.y = _quantizeUnitWorldCoord(u.y);
+    updateUnitSpatial(u);
+    simMoveTryHold(u);
+    if (c.mvOn[s] !== 3 && c.mvOn[s] !== 5) { simMoveTryChase(u); if (c.mvOn[s] !== 4) _simMoveTryApproachBuilding(u); }
+    return true;
 }
 
 // An idle combat unit with nothing in reach parks too: the kernel checks its
@@ -3136,8 +3179,38 @@ let _simMoveWallBlk = null, _simMoveWallBlkW = 0;
 let _simMoveWallVer = 0;
 // During the unit pass the wall table stands still (the kernel and every
 // Unit.update see the walls of the pass's start): tile type changes are
-// applied at its end, in order. (Holds and chases check _simMoveWallQ.)
+// applied at its end, in order. (Holds and chases check _simMoveWallQNear.)
 let _simMoveWallQ = [];
+// The tiles changed so far this pass (stamped with the pass's number): a
+// kernel hold or chase at its turn stands unless one is within a tile of
+// where the unit started or ended up. Its decisions read the walls of the
+// pass's start (simMoveWallGrid: the same as the kernel's); only the end of
+// Unit.update reads its own tile live (pushUnitOutOfBlockedTile). Any change
+// anywhere sent every later hold and chase through Unit.update: towers
+// falling in a battle, ~9k units a tick at 200k.
+let _simMoveWallQT = null, _simMoveWallQGen = 0;
+function _simMoveWallQMark(gx, gy) {
+    const n = GRID_W * GRID_H;
+    if (!_simMoveWallQT || _simMoveWallQT.length !== n) { _simMoveWallQT = new Uint8Array(n); _simMoveWallQGen = 0; }
+    if (_simMoveWallQ.length === 2) { if (++_simMoveWallQGen > 255) { _simMoveWallQT.fill(0); _simMoveWallQGen = 1; } }
+    if (gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) _simMoveWallQT[gy * GRID_W + gx] = _simMoveWallQGen;
+}
+let _simMoveWallQKept = 0;
+function _simMoveWallQNear(c, s) {
+    const T = _simMoveWallQT, g = _simMoveWallQGen;
+    if (!T) return true;
+    _simMoveWallQKept++;
+    const W = GRID_W, H = GRID_H;
+    for (let pass = 0; pass < 2; pass++) {
+        const gx = Math.floor((pass ? c.x[s] : c.prevX[s]) / TILE), gy = Math.floor((pass ? c.y[s] : c.prevY[s]) / TILE);
+        if (!(gx >= 0 && gy >= 0 && gx < W && gy < H)) return true;
+        for (let y = gy - 1; y <= gy + 1; y++) {
+            if (y < 0 || y >= H) continue;
+            for (let x = gx - 1; x <= gx + 1; x++) if (x >= 0 && x < W && T[y * W + x] === g) { _simMoveWallQKept--; return true; }
+        }
+    }
+    return false;
+}
 function simMoveWallsDeferEnd() {
     if (_simMoveWallQ.length) {
         const q = _simMoveWallQ;
@@ -3164,7 +3237,7 @@ function _simMoveClassTileChanged(k) {
 function simMoveTileTypeChanged(gx, gy) {
     // (The path regions follow the grid at once: pathfinding.js.)
     if (typeof pathRegionsTileChanged === 'function') pathRegionsTileChanged(gx, gy);
-    if (_unitPassOn) { _simMoveWallQ.push(gx, gy); return; }
+    if (_unitPassOn) { _simMoveWallQ.push(gx, gy); _simMoveWallQMark(gx, gy); return; }
     if (typeof stepCostsChanged === 'function') stepCostsChanged(gx, gy);
     if (!_simMoveWall || _simMoveWallGrid !== grid || _simMoveWall.length !== GRID_W * GRID_H) { _simMoveWallDirty = true; return; }
     const row = grid[gy], cell = row ? row[gx] : null;
@@ -3451,7 +3524,7 @@ function simMoveRun() {
         const s = PL[i], o = OUT[s];
         if (o === 0) continue;
         if (c.mvBlk[s]) { c.mvBlk[s] = 0; if (owners[s]) _setUnitAstarBudgetBlockedIndicator(owners[s], 1); }
-        if (o === 1 || o === 6 || o === 7 || o === 10 || o === 11 || o === 13) continue;
+        if (o === 1 || o === 6 || o === 7 || o === 10 || o === 11 || o === 13 || o === 14) continue;
         // Arrived in the crowd at its destination: the move is done.
         if (o === 5) { const u = owners[s]; if (u && !u.dead) simFlowArrive(u); continue; }
         // Into a wall tile: the end of Unit.update (pushed out; can start
@@ -3656,7 +3729,7 @@ function _acqPost() {
         _acq.cap = cap;
     }
     const P = _simParams;
-    P[0] = n; P[1] = 8192; P[2] = SIM_SEP_ABSENT;
+    P[0] = n; P[1] = 8192; P[2] = SIM_SEP_ABSENT; P[3] = CMD_ATTACKING;
     simParallelRun(SIM_KERNEL_ACQ_SNAP, Math.ceil(n / 8192));
     // The index, the owners per chunk and the hostile tables as they are:
     // the job reads them in place, done before the next tick's index
@@ -4141,6 +4214,10 @@ function applyUnitSeparation(unit, dx, dy, maxOverlap = unit.getCollisionRadius(
 function pushUnitOutOfBlockedTile(unit) {
     if (!unit || unit.dead || unit.isFlying) return;
     let gx = Math.floor(unit.x / TILE), gy = Math.floor(unit.y / TILE);
+    // (Any tile not a wall: canUnitOccupyTile's first answer, read before the
+    // unit's cache fields, which miss whenever any tile changed anywhere.)
+    const row = gx >= 0 && gx < GRID_W ? grid[gy] : null, cell = row ? row[gx] : null;
+    if (cell && cell.type !== TYPE_WALL) return;
     if (canUnitOccupyTileCached(unit, gx, gy, 0)) return;
 
     let fromGx = Number.isFinite(unit.prevX) ? Math.floor(unit.prevX / TILE) : gx;

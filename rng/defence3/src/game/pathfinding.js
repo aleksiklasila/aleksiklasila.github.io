@@ -746,7 +746,7 @@ function _makePathCacheKey(sx, sy, ex, ey, movementProfile, pathOwner, usePortal
 }
 
 function _hasUsablePathPortal(owner) {
-    if (_cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+    if (!_cloudTablesCurrent()) _rebuildCloudTileCache();
     for (let list of _cloudPairIndexCache.values()) {
         let active = 0;
         for (let t of list) {
@@ -765,7 +765,7 @@ function _hasUsablePathPortal(owner) {
 // Returns entries [x, y, cost] (cost: 1 + the partner's distance), and
 // h(x, y) = min(targetH(x, y), min over entries |x - ex| + |y - ey| + cost).
 function _portalHeuristicEntries(owner, targetH) {
-    if (_cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+    if (!_cloudTablesCurrent()) _rebuildCloudTileCache();
     let ends = [];
     for (let t of _cloudTileCache.values()) {
         if (t.owner !== owner || !(t.energy > 0) || t.underConstruction) continue;
@@ -980,12 +980,21 @@ function _rebuildCloudTileCache() {
     }
     _cloudTileCache = m;
     _cloudPairIndexCache = pairIndex;
-    _cloudTileCacheVer = pathTopologyVersion;
+    _cloudTileCacheVer = _cloudTowersVersion(); _cloudTileCacheList = towers;
 }
+// Whether the cloud tables are those of the towers list as it is: they hold
+// only which towers are clouds and where (energy and construction are read
+// live), so the clouds among the list's members decide (cloudTowersVersion;
+// a restore makes a new list). (They were rebuilt at every path topology
+// change: a mine depleted or a building placed or lost anywhere walked all
+// the towers, ~20k, at the next lookup, several times a tick in a battle.)
+let _cloudTileCacheList = null;
+function _cloudTowersVersion() { return typeof cloudTowersVersion === 'number' ? cloudTowersVersion : 0; }
+function _cloudTablesCurrent() { return _cloudTileCacheVer === _cloudTowersVersion() && _cloudTileCacheList === towers; }
 
 // Fast O(1) cloud-tower lookup with live energy/construction check
 function _getCloudTowerFast(gx, gy, owner) {
-    if (_cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+    if (!_cloudTablesCurrent()) _rebuildCloudTileCache();
     let t = _cloudTileCache.get(gy * GRID_W + gx);
     if (!t) return null;
     if (!(t.energy > 0 && !t.underConstruction)) return null;
@@ -1013,7 +1022,7 @@ function _getCloudTowerFast(gx, gy, owner) {
 let _pathRegions = { w: 0, h: 0, grid: null, portalSig: 0, portalOwners: new Set(), byOwner: new Map(), nearest: new Map(), rebuilds: 0 };
 
 function _pathRegionPortalSignature() {
-    if (_cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+    if (!_cloudTablesCurrent()) _rebuildCloudTileCache();
     let sig = 0;
     for (let [key, t] of _cloudTileCache) if (t.energy > 0 && !t.underConstruction) sig = (Math.imul(sig ^ (key + 1), 16777619) + (t.owner + 3)) | 0;
     return sig;
@@ -1334,7 +1343,7 @@ function getPairedCloudTower(cloud, owner = null) {
     let pairId = cloud.baseStats.pairId;
     if (pairId === undefined || pairId === null) return null;
     let matchOwner = owner !== null ? owner : cloud.owner;
-    if (_cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+    if (!_cloudTablesCurrent()) _rebuildCloudTileCache();
     let list = _cloudPairIndexCache.get(_makeCloudPairKey(pairId, matchOwner));
     if (!list || list.length <= 0) return null;
     for (let i = 0; i < list.length; i++) {
@@ -1462,7 +1471,7 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
     }
 
     // Resolve cloud tile cache once per call (O(1) per lookup in hot path)
-    if (usePortalEdges && _cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+    if (usePortalEdges && !_cloudTablesCurrent()) _rebuildCloudTileCache();
     // Only inspect live pairs on cache misses. Unpaired cloud tiles stay
     // walkable, but do not require disabling the Manhattan heuristic.
     let usePortalHeuristic = usePortalEdges && _hasUsablePathPortal(pathOwner);
@@ -1774,7 +1783,7 @@ function findGroupPathsToTarget(starts, ex, ey, canWalk = null, pathOwner = null
     let gridW = GRID_W, gridH = GRID_H, gridData = grid;
     if (!(starts.length > 0) || !(ex >= 0 && ey >= 0 && ex < gridW && ey < gridH)) return result;
     let usePortalEdges = pathOwner !== null;
-    if (usePortalEdges && _cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+    if (usePortalEdges && !_cloudTablesCurrent()) _rebuildCloudTileCache();
     let cloudsExist = usePortalEdges && !!(_cloudTileCache && _cloudTileCache.size);
     let walkable = (x, y) => gridData[y][x].type !== TYPE_WALL
         || (cloudsExist && !!_getCloudTowerFast(x, y, pathOwner)) || !!(canWalk && canWalk(x, y));
@@ -2002,18 +2011,20 @@ let _groupRoutePathTick = -1, _groupRoutePathsLeft = 0;
 // stays valid until the portals change (_cloudSignature). Today every tile
 // is open to flyers (a void or border tile would close it: _airWallTable).
 const AIR_CAN_WALK = Object.assign(() => true, { _pathProfileKey: 'air', _air: true });
-let _airWall = null, _cloudSig = 0, _cloudSigVer = -1;
+let _airWall = null, _cloudSig = 0, _cloudSigVer = -1, _cloudSigTables = null;
 // The portals as they are (cloud towers: tile, owner, pair, usable).
 function _cloudSignature() {
-    if (_cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
-    if (_cloudSigVer === _cloudTileCacheVer) return _cloudSig;
+    if (!_cloudTablesCurrent()) _rebuildCloudTileCache();
+    // (It reads the clouds' live state: made again at each path topology
+    // change, as before, or with new tables.)
+    if (_cloudSigVer === pathTopologyVersion && _cloudSigTables === _cloudTileCache) return _cloudSig;
     let h = 2166136261 | 0;
     for (const [k, t] of _cloudTileCache) {
         h = Math.imul(h ^ k, 16777619); h = Math.imul(h ^ (t.owner | 0), 16777619);
         h = Math.imul(h ^ ((t.baseStats && t.baseStats.pairId) | 0), 16777619);
         h = Math.imul(h ^ (t.energy > 0 && !t.underConstruction ? 1 : 0), 16777619);
     }
-    _cloudSig = h; _cloudSigVer = _cloudTileCacheVer;
+    _cloudSig = h; _cloudSigVer = pathTopologyVersion; _cloudSigTables = _cloudTileCache;
     return h;
 }
 function _airWallTable() {
@@ -2249,7 +2260,7 @@ class GroupRoute {
         // the grid's cell objects (a cache miss per node on large maps).
         const wall = this.air ? _airWallTable() : (typeof simMoveWallGrid === 'function' ? simMoveWallGrid() : _gridWallTable());
         const costs = this.air ? null : stepCostTable(wall);
-        if (this.usePortals && _cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+        if (this.usePortals && !_cloudTablesCurrent()) _rebuildCloudTileCache();
         let searchClouds = this.usePortals && !!(_cloudTileCache && _cloudTileCache.size);
         let budgetArr = astarNodeBudgetRemainingByPlayer;
         let fastBudget = (owner | 0) === owner && owner >= 0 && owner < budgetArr.length && owner < players.length;

@@ -27,6 +27,10 @@ let seconds = Number(process.argv[2]) || 15;
         applyEditableRuntimeConfigObject(${JSON.stringify(data.editableConfig)}, { fromTransport: true });`;
     const { host, guests } = await H.startHostedMatch(world, { guests: 1, maxMs: 60000, controls, hostSetup });
     const peers = [host, ...guests];
+    // MEMSTAT=1: the process's memory after the match start and after the run.
+    const memStat = (when) => { if (!process.env.MEMSTAT) return; const m = process.memoryUsage(), g = v => Math.round(v / 1048576);
+        console.log('mem', when, JSON.stringify({ rssMB: g(m.rss), heapUsedMB: g(m.heapUsed), externalMB: g(m.external), arrayBuffersMB: g(m.arrayBuffers), unitsPerPeer: host.eval('units.length') })); };
+    memStat('start');
     // (Helpers before the workloads' setups: as in the game, they run from
     // the match's start, so background jobs posted by the setups use them.)
     if (process.env.HELPERS) {
@@ -641,6 +645,7 @@ let seconds = Number(process.argv[2]) || 15;
         await world.run(seconds * 500);
     } else
     await world.run(seconds * 1000);
+    memStat('end');
     const ms = host.eval('JSON.stringify(__scratch.tickMs)');
     const a = JSON.parse(ms).sort((x, y) => x - y);
     const mean = a.reduce((s, v) => s + v, 0) / a.length;

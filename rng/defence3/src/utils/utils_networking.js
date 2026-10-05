@@ -197,6 +197,16 @@ function setMatchLoadOverlay(visible, title = 'Loading Match', detail = 'Prepari
     if (visible) _updateMatchLoadOverlayPlayers();
 }
 
+// Host: its own row in the start popup says 'loading' until its simulation
+// worker has the world, then 'ready'.
+function _hostShowOwnLoadStatus(sessionId) {
+    if (!isHost || matchStartSessionId !== sessionId || !_matchStartPlayerStatuses || !myPeerId) return;
+    if (_matchStartPlayerStatuses[myPeerId] === 'ready') return;
+    if (typeof simClientWorldReady === 'function' && !simClientWorldReady()) { setTimeout(() => _hostShowOwnLoadStatus(sessionId), 100); return; }
+    _matchStartPlayerStatuses[myPeerId] = 'ready';
+    _updateMatchLoadOverlayPlayers();
+}
+
 // Host: the countdown once every peer said ready and this host's own
 // simulation has the world (checked again until it has).
 function _hostMaybeStartCountdown() {
@@ -3103,8 +3113,9 @@ function startHostedGame() {
             matchStartReadyByPeerId = _savedReadyByPeerId;
             matchStartWaitingForReady = _savedExpectedPeerIds.length > 0;
 
-            // Host world is generated — mark host as ready in the status map.
-            if (_matchStartPlayerStatuses && myPeerId) _matchStartPlayerStatuses[myPeerId] = 'ready';
+            // Host world is generated: ready once its simulation has it too
+            // (the worker loads the start text below; _hostShowOwnLoadStatus).
+            if (_matchStartPlayerStatuses && myPeerId) _matchStartPlayerStatuses[myPeerId] = 'loading';
 
             // Terrain travels too: guests must not depend on generating the
             // exact same map (floating-point differences between browsers).
@@ -3125,6 +3136,7 @@ function startHostedGame() {
                 applyAuthoritativeStateSnapshot(st);
             };
             if (!(hostWorker && simClientStartMatch(startSnapshotText, hostDecode))) { hostWorker = false; hostDecode(); }
+            _hostShowOwnLoadStatus(matchStartSessionId);
             let startSessionId = matchStartSessionId;
             let matchPeerIds = new Set(matchStartLobbyPlayers.map(p => String(p.peerId || '')));
             netEncodeSnapshotText(startSnapshotText).then(payload => {

@@ -3809,8 +3809,7 @@ function _forEachStructureInTileBox(list, x0, y0, x1, y1, fn) {
 }
 
 // Nearest working spawner of the type and owner by tile Manhattan distance,
-// ties to the lower row then column: rings of buckets outward until no
-// closer one can remain.
+// ties to the lower row then column (_findClosestSpawner).
 // A type's spawners of one owner (in the type list's order), made again with
 // the type list (a new list when spawners change).
 const _ownedSpawnerLists = new WeakMap();
@@ -3822,38 +3821,44 @@ function _ownedSpawnersOfType(type, owner) {
     if (!l) { l = []; for (const s of all) if (s && s.owner === owner) l.push(s); m.set(owner, l); }
     return l;
 }
+// Per owned spawner list (lists are made anew when spawners change: see
+// _getWorkerSpawnersByType), their tiles as typed arrays: the nearest-spawner
+// scan reads two Int32Arrays and looks at an object only when it would win.
+const _spawnerScanTables = new WeakMap();
+function _spawnerScanTable(list) {
+    let t = _spawnerScanTables.get(list);
+    if (t && t.n === list.length) return t;
+    const n = list.length, gx = new Int32Array(n), gy = new Int32Array(n);
+    for (let i = 0; i < n; i++) {
+        const s = list[i];
+        gx[i] = s ? Math.floor(Number(s.gx) || 0) : -0x3fffffff;
+        gy[i] = s ? Math.floor(Number(s.gy) || 0) : -0x3fffffff;
+    }
+    t = { n, gx, gy };
+    _spawnerScanTables.set(list, t);
+    return t;
+}
 function _findClosestSpawner(u, type) {
     // (The owner's own: the others never pass the test below.)
     let list = _ownedSpawnersOfType(type, u && u.owner);
     if (list.length === 0) return null;
-    let index = _structureBuckets(list), B = STRUCTURE_BUCKET_TILES;
     let ux = Math.floor(Number(u && u.x) / TILE);
     let uy = Math.floor(Number(u && u.y) / TILE);
-    let ubx = Math.max(0, Math.min(index.cols - 1, Math.floor(ux / B)));
-    let uby = Math.max(0, Math.min(index.rows - 1, Math.floor(uy / B)));
+    // Nearest by tile distance, then row, column, id; whatever the order
+    // they are looked at in. (A scan of the typed tiles: the bucket rings
+    // it replaced walked thousands of empty buckets from a far mine, ~100 us
+    // a collector's return at 200k units.)
+    const T = _spawnerScanTable(list), GX = T.gx, GY = T.gy, owner = u.owner;
     let closest = null, bestDist = Infinity, cx = 0, cy = 0;
-    let consider = (s) => {
-        if (s.type !== type || s.owner !== u.owner || !(s.energy > 0) || s.underConstruction) return;
-        let sx = Math.floor(Number(s.gx) || 0), sy = Math.floor(Number(s.gy) || 0);
-        let d = Math.abs(sx - ux) + Math.abs(sy - uy);
-        if (d < bestDist || (d === bestDist && (sy < cy || (sy === cy && (sx < cx || (sx === cx && (Number(s.id) || 0) < (Number(closest.id) || 0))))))) { bestDist = d; closest = s; cx = sx; cy = sy; }
-    };
-    // (A few hundred: all of them, cheaper than rings of empty buckets when
-    // the nearest is far; the same order decides.)
-    if (list.length <= 512) { for (let i = 0; i < list.length; i++) if (list[i]) consider(list[i]); return closest; }
-    let maxRing = Math.max(index.cols, index.rows);
-    for (let r = 0; r <= maxRing; r++) {
-        // Every tile in ring r is at least (r - 1) * B + 1 tiles away.
-        if (r > 0 && (r - 1) * B + 1 > bestDist) break;
-        for (let by = uby - r; by <= uby + r; by++) {
-            if (by < 0 || by >= index.rows) continue;
-            let edge = by === uby - r || by === uby + r;
-            for (let bx = ubx - r; bx <= ubx + r; bx += (edge || r === 0) ? 1 : 2 * r) {
-                if (bx < 0 || bx >= index.cols) continue;
-                let bucket = index.buckets[by * index.cols + bx];
-                if (bucket) for (let i = 0; i < bucket.length; i++) consider(bucket[i]);
-            }
-        }
+    for (let i = 0, n = T.n; i < n; i++) {
+        const sx = GX[i], sy = GY[i];
+        const d = Math.abs(sx - ux) + Math.abs(sy - uy);
+        if (d > bestDist) continue;
+        if (d === bestDist && (sy > cy || (sy === cy && sx > cx))) continue;
+        const s = list[i];
+        if (!s || s.type !== type || s.owner !== owner || !(s.energy > 0) || s.underConstruction) continue;
+        if (d === bestDist && sy === cy && sx === cx && !((Number(s.id) || 0) < (Number(closest.id) || 0))) continue;
+        bestDist = d; closest = s; cx = sx; cy = sy;
     }
     return closest;
 }

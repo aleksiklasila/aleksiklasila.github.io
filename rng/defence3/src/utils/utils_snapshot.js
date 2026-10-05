@@ -747,7 +747,9 @@ function snapTickHash(tick, allSlices = false) {
     let REG = null, HC = null, unitOrderHash = null, kernelPending = false;
     const rot = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_UNIT_GROUPS, CID = S ? S.columns.id : null;
     if (slots && units.length >= SNAP_HASH_KERNEL_MIN_UNITS && typeof SIM_KERNEL_SNAP_REGION === 'number') {
-        if (_snapRegions.length < units.length) { _snapRegions = simSharedArray(Int32Array, units.length * 2); _snapColHash = simSharedArray(Int32Array, units.length * 2); }
+        // (By unit index, or by slot with the sums: room for either.)
+        const nReg = Math.max(units.length, S.owners.length);
+        if (_snapRegions.length < nReg) { _snapRegions = simSharedArray(Int32Array, nReg * 2); _snapColHash = simSharedArray(Int32Array, nReg * 2); }
         if (!_snapColCodes) { _snapColCodes = simSharedArray(Int32Array, SNAP_HASH_UNIT_COLUMNS.length); SNAP_HASH_UNIT_COLUMNS.forEach((k, i) => { _snapColCodes[i] = _snapStrCode(k); }); simParallelBind('snap.kc', _snapColCodes); }
         REG = _snapRegions; HC = allSlices ? null : _snapColHash;
         simParallelBind('ix.slots', slots); simParallelBind('snap.reg', REG); simParallelBind('snap.hc', _snapColHash);
@@ -766,18 +768,22 @@ function snapTickHash(tick, allSlices = false) {
             if (++_snapAccStampNow >= 0x7fffffff) { _snapAccStamp.fill(0); _snapAccStampNow = 1; }
             _snapAccCnt.fill(0);
             P[5] = 1; P[6] = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_OBJ_GROUPS; P[7] = SNAP_HASH_OBJ_GROUPS; P[8] = _snapAccStampNow; P[9] = SNAP_ACC_REGIONS;
-            const jobs = Math.ceil(units.length / 8192);
+            // (The slots and the list in the same jobs: as many as the longer.)
+            P[11] = S.owners.length;
+            const jobs = Math.ceil(Math.max(units.length, S.owners.length) / 8192);
             if (!_snapOrdSums || _snapOrdSums.length < jobs) { _snapOrdSums = simSharedArray(Int32Array, Math.max(64, jobs * 2)); simParallelBind('snap.ord', _snapOrdSums); }
             P[10] = 1;
         } else P[10] = 0;
+        const jobsN = Math.ceil((P[10] === 1 ? Math.max(units.length, S.owners.length) : units.length) / 8192);
         if (P[10] === 1 && typeof simParallelBackground === 'function') {
             // (In the background: the buildings', drops', reservations' and
             // grid's parts are hashed meanwhile; taken below.)
             const B = simParallelStageParams(0, 0);
-            for (let k = 0; k <= 10; k++) B[k] = P[k];
-            simParallelBackground(SIM_KERNEL_SNAP_REGION, Math.ceil(units.length / 8192), 0);
+            B.fill(0);
+            for (let k = 0; k <= 11; k++) B[k] = P[k];
+            simParallelBackground(SIM_KERNEL_SNAP_REGION, jobsN, 0);
             kernelPending = true;
-        } else simParallelRun(SIM_KERNEL_SNAP_REGION, Math.ceil(units.length / 8192));
+        } else simParallelRun(SIM_KERNEL_SNAP_REGION, jobsN);
     }
     // The parts without the units (while the kernel runs).
     _snapTickHashStatic(t, slice, allSlices, regions, push);
@@ -787,7 +793,7 @@ function snapTickHash(tick, allSlices = false) {
         if (kernelPending || (!allSlices && SNAP_HASH_KERNEL_SUMS && P[10] === 1)) {
             // The units' order: the jobs' sums, and the slice's units without a slot.
             let h = Math.imul(2166136261 ^ units.length, 16777619);
-            for (let k = 0, jobs = Math.ceil(units.length / 8192); k < jobs; k++) h = (h + _snapOrdSums[k]) | 0;
+            for (let k = 0, jobs = Math.ceil(Math.max(units.length, S.owners.length) / 8192); k < jobs; k++) h = (h + _snapOrdSums[k]) | 0;
             for (let k = 0, n = _snapAccCnt[2]; k < n; k++) { const i = _snapAccNoSlot[k]; if (i % SNAP_HASH_SLICES === slice && !(slots[i] >= 0)) h = (h + _snapOrderMix(i, units[i].id)) | 0; }
             unitOrderHash = h >>> 0;
         }
@@ -798,11 +804,12 @@ function snapTickHash(tick, allSlices = false) {
     // slot or outside the summed regions, as below).
     if (REG !== null && !allSlices && SNAP_HASH_KERNEL_SUMS) {
         const ACC = _snapAcc, RL = _snapAccRot, NL = _snapAccNoSlot, LIST = _snapAccList;
+        // (The kernel's lists are by slot: see SIM_KERNEL_SNAP_REGION.)
         for (let k = 0, n = _snapAccCnt[1]; k < n; k++) {
-            const i = RL[k], si = slots[i], u = units[i], seed = Math.imul(CID[si], 7919) ^ 0x11;
-            let h = (_snapUnitObjHasher(u, seed, _snapF64, _snapI32, _snapHV, _snapHPath) + HC[i]) | 0;
+            const s = RL[k], u = owners[s], seed = Math.imul(CID[s], 7919) ^ 0x11;
+            let h = (_snapUnitObjHasher(u, seed, _snapF64, _snapI32, _snapHV, _snapHPath) + HC[s]) | 0;
             h = Math.imul(h ^ (h >>> 15), 2246822519);
-            ACC[REG[i]] = (ACC[REG[i]] + h) | 0;
+            ACC[REG[s]] = (ACC[REG[s]] + h) | 0;
         }
         for (let k = 0, n = _snapAccCnt[0]; k < n; k++) {
             const r = LIST[k], h = ACC[r] >>> 0;
@@ -810,16 +817,18 @@ function snapTickHash(tick, allSlices = false) {
             _snapRegionAdd(regions, r, h);
         }
         for (let k = 0, n = _snapAccCnt[2]; k < n; k++) {
-            const i = NL[k], u = units[i], si = slots[i];
+            // (A slot outside the summed regions: -(s + 1); else a unit
+            // without a slot, by its index.)
+            const e = NL[k], si = e < 0 ? -e - 1 : -1, u = e < 0 ? owners[si] : units[e];
             let r;
-            if (si >= 0 && owners[si] === u) r = Math.floor(CY[si] / ts) * 1024 + Math.floor(CX[si] / ts);
+            if (si >= 0) r = Math.floor(CY[si] / ts) * 1024 + Math.floor(CX[si] / ts);
             else r = Math.floor(u.y / ts) * 1024 + Math.floor(u.x / ts);
             if ((r % SNAP_HASH_SLICES) !== slice) continue;
             let h;
-            if (si >= 0 && owners[si] === u) {
+            if (si >= 0) {
                 const id = CID[si], seed = Math.imul(id, 7919) ^ 0x11, G = SNAP_HASH_OBJ_GROUPS;
                 h = ((((id % G) + G) % G) === Math.floor(t / SNAP_HASH_SLICES) % G
-                    ? (_snapUnitObjHasher(u, seed, _snapF64, _snapI32, _snapHV, _snapHPath) + HC[i]) : (seed + HC[i])) | 0;
+                    ? (_snapUnitObjHasher(u, seed, _snapF64, _snapI32, _snapHV, _snapHPath) + HC[si]) : (seed + HC[si])) | 0;
             }
             else h = hu(u, Math.imul(u.id, 7919) ^ 0x11, _snapF64, _snapI32, _snapHV, _snapHPath);
             h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;

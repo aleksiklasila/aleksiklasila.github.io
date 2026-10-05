@@ -725,34 +725,34 @@ function _countNearbySameTypeUnits(dueUnits, n, similarOut, chunkPx) {
         if (!(x1 <= x2 && y1 <= y2)) continue; // NaN positions
         let key = owner * typeCount + typeIdx;
         let o = i * 5;
-        win[o] = x1; win[o + 1] = y1; win[o + 2] = x2; win[o + 3] = y2; win[o + 4] = key;
+        // (In type blocks: the counts are kept by blocks of chunks.)
+        win[o] = Math.floor(x1 / SPATIAL_TYPE_BLOCK); win[o + 1] = Math.floor(y1 / SPATIAL_TYPE_BLOCK);
+        win[o + 2] = Math.floor(x2 / SPATIAL_TYPE_BLOCK); win[o + 3] = Math.floor(y2 / SPATIAL_TYPE_BLOCK); win[o + 4] = key;
         let list = groups.get(key);
         if (!list) { list = []; groups.set(key, list); }
         list.push(i);
     }
 
-    let strideChunk = spatialUnitsComplexStridePerChunk;
-    let data = spatialUnitsComplex;
+    let strideChunk = spatialTypeStridePerBlock, rowW = spatialTypeBlocksW;
+    let data = spatialTypeCounts;
     // Many due units (large worlds): every window summed by the kernels.
     if (n >= 2048 && typeof SIM_KERNEL_EFF_COUNT === 'number') {
         for (let i = 0; i < n; i++) {
             let o = i * 5, key = win[o + 4];
             if (key < 0) continue;
-            let owner = Math.floor(key / typeCount), typeIdx = key - owner * typeCount;
-            win[o + 4] = owner * spatialUnitsComplexStridePerPlayer + 1 + typeIdx;
+            // (The lane: key = owner * types + type.)
         }
         if (_effCountOut.length < n) { _effCountOut = simSharedArray(Int32Array, win.length / 5); }
-        simParallelBind('eff.win', win); simParallelBind('eff.out', _effCountOut); simParallelBind('spatial.cplx', data);
+        simParallelBind('eff.win', win); simParallelBind('eff.out', _effCountOut); simParallelBind('spatial.types', data);
         const P = _simParams;
-        P[0] = n; P[1] = 512; P[2] = CHUNKS_W; P[3] = strideChunk;
+        P[0] = n; P[1] = 512; P[2] = rowW; P[3] = strideChunk;
         simParallelRun(SIM_KERNEL_EFF_COUNT, Math.ceil(n / 512));
         for (let i = 0; i < n; i++) if (win[i * 5 + 4] >= 0) similarOut[i] = _effCountOut[i];
         return;
     }
     for (let [key, list] of groups) {
-        let owner = Math.floor(key / typeCount), typeIdx = key - owner * typeCount;
-        let lane = owner * spatialUnitsComplexStridePerPlayer + 1 + typeIdx;
-        let bx1 = CHUNKS_W, by1 = CHUNKS_H, bx2 = -1, by2 = -1, directCost = 0;
+        let lane = key;
+        let bx1 = spatialTypeBlocksW, by1 = spatialTypeBlocksH, bx2 = -1, by2 = -1, directCost = 0;
         for (let i of list) {
             let o = i * 5;
             let x1 = win[o], y1 = win[o + 1], x2 = win[o + 2], y2 = win[o + 3];
@@ -770,7 +770,7 @@ function _countNearbySameTypeUnits(dueUnits, n, similarOut, chunkPx) {
                 let x1 = win[o], y1 = win[o + 1], x2 = win[o + 2], y2 = win[o + 3];
                 let sum = 0;
                 for (let y = y1; y <= y2; y++) {
-                    let idx = (y * CHUNKS_W + x1) * strideChunk + lane;
+                    let idx = (y * rowW + x1) * strideChunk + lane;
                     for (let x = x1; x <= x2; x++, idx += strideChunk) sum += data[idx];
                 }
                 similarOut[i] = sum | 0;
@@ -787,7 +787,7 @@ function _countNearbySameTypeUnits(dueUnits, n, similarOut, chunkPx) {
             let out = ry * pStride, prev = out - pStride;
             prefix[out] = 0;
             let rowAccum = 0;
-            let idx = ((by1 + ry - 1) * CHUNKS_W + bx1) * strideChunk + lane;
+            let idx = ((by1 + ry - 1) * rowW + bx1) * strideChunk + lane;
             for (let rx = 1; rx <= bw; rx++, idx += strideChunk) {
                 rowAccum += data[idx];
                 prefix[out + rx] = prefix[prev + rx] + rowAccum;
@@ -862,11 +862,14 @@ function _effWindowCount(u, chunkPx) {
     let x1 = Math.max(0, Math.min(CHUNKS_W - 1, cx - chunkRadius)), y1 = Math.max(0, Math.min(CHUNKS_H - 1, cy - chunkRadius));
     let x2 = Math.max(0, Math.min(CHUNKS_W - 1, cx + chunkRadius)), y2 = Math.max(0, Math.min(CHUNKS_H - 1, cy + chunkRadius));
     if (!(x1 <= x2 && y1 <= y2)) return 0;
-    let strideChunk = spatialUnitsComplexStridePerChunk, data = spatialUnitsComplex;
-    let lane = owner * spatialUnitsComplexStridePerPlayer + 1 + typeIdx, sum = 0;
-    for (let y = y1; y <= y2; y++) {
-        let idx = (y * CHUNKS_W + x1) * strideChunk + lane;
-        for (let x = x1; x <= x2; x++, idx += strideChunk) sum += data[idx];
+    // The window's type blocks (the counts are kept by blocks of
+    // SPATIAL_TYPE_BLOCK chunks: the blocks it touches count whole).
+    const TB = SPATIAL_TYPE_BLOCK, strideB = spatialTypeStridePerBlock, data = spatialTypeCounts, TW = spatialTypeBlocksW;
+    let lane = owner * spatialUnitsComplexUnitTypeCount + typeIdx, sum = 0;
+    const bx1 = Math.floor(x1 / TB), bx2 = Math.floor(x2 / TB), by2 = Math.floor(y2 / TB);
+    for (let by = Math.floor(y1 / TB); by <= by2; by++) {
+        let idx = (by * TW + bx1) * strideB + lane;
+        for (let bx = bx1; bx <= bx2; bx++, idx += strideB) sum += data[idx];
     }
     return sum | 0;
 }
@@ -943,9 +946,8 @@ function recalculateUnitEffectiveStats() {
     let stamp = ++_effectiveStatsStamp;
     // (Changed stat tables: each unit behind takes them at its refresh, see
     // _unitStatsVerOf; not every unit at once.)
-    let canUseSpatialCounts = spatialUnitsComplexStridePerChunk > 0
-        && spatialUnitsComplexStridePerPlayer > 0
-        && spatialUnitsComplex.length > 0
+    let canUseSpatialCounts = spatialTypeStridePerBlock > 0
+        && spatialTypeCounts.length > 0
         && CHUNKS_W > 0
         && CHUNKS_H > 0;
     let chunkPx = Math.max(1, CHUNK_SIZE * TILE);
@@ -973,12 +975,13 @@ function recalculateUnitEffectiveStats() {
     if (m > 0 && S && canUseSpatialCounts && typeof SIM_KERNEL_EFF_UNITS === 'number' && n >= EFF_STATS_KERNEL_MIN_UNITS) {
         const slots = _unitSlotMapEnsure(), c = S.columns;
         if (!_effFlags || _effFlags.length < m) { _effFlags = simSharedArray(Uint8Array, Math.max(1024, m * 2)); simParallelBind('eff.flag', _effFlags); }
-        simParallelBind('ix.slots', slots); simParallelBind('spatial.cplx', spatialUnitsComplex);
+        simParallelBind('ix.slots', slots); simParallelBind('spatial.types', spatialTypeCounts);
         const P = _simParams;
         // (256 a job: a unit's window counts are costly, ~2.5 us; 1024 left
         // a few long jobs and most helpers idle.)
         P[0] = m; P[1] = 256; P[2] = step; P[3] = phase; P[4] = chunkPx; P[5] = CHUNKS_W; P[6] = CHUNKS_H;
-        P[7] = spatialUnitsComplexStridePerChunk; P[8] = spatialUnitsComplexStridePerPlayer; P[9] = spatialUnitsComplexPlayerCount;
+        P[7] = spatialTypeStridePerBlock; P[8] = spatialUnitsComplexUnitTypeCount; P[9] = spatialUnitsComplexPlayerCount;
+        P[15] = spatialTypeBlocksW; P[16] = SPATIAL_TYPE_BLOCK;
         P[10] = MAX_THING_LEVEL; P[11] = stamp;
         simParallelBind('eff.tver', _unitStatsVerTable(spatialUnitsComplexPlayerCount)); P[14] = UNIT_STATS_VER_TYPES;
         // (The upkeep bins, when kept: main.js _upkU.)
@@ -1211,7 +1214,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             t.buildEnabled = useDefaultBuild;
             t.level = 0; t.effectiveLevel = 0; t.potentialEffectiveLevel = 0;
             t.updateTextCache();
-            towers.push(t); towersChanged();
+            towers.push(t); towerJoinedOrLeft(t);
             setTileEntity(gx, gy, itemKey, t);
             placedNewStructure = true;
             placedNewWallStructure = true;
@@ -1382,7 +1385,7 @@ function destroyBuilding(building) {
 
     if (building instanceof Tower || (building.constructor && building.constructor.name === 'Tower') || isWallTargetType) {
         let idx = towers.indexOf(building);
-        if (idx !== -1) { towers.splice(idx, 1); towersChanged(); }
+        if (idx !== -1) { towers.splice(idx, 1); towerJoinedOrLeft(building); }
         clearTileEntity(building.gx, building.gy, building);
         grid[building.gy][building.gx].type = TYPE_FLOOR;
         grid[building.gy][building.gx].owner = -1;

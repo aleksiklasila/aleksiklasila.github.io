@@ -796,7 +796,14 @@ const CHUNK_SIZE = 1;
 let CHUNKS_W = Math.ceil(GRID_W / CHUNK_SIZE);
 let CHUNKS_H = Math.ceil(GRID_H / CHUNK_SIZE);
 let spatialUnits = []; // flat array of Sets
-let spatialUnitsComplex = new Int32Array(0); // [chunk][player][total + perUnitType...]
+let spatialUnitsComplex = new Int32Array(0); // [chunk][player]: unit totals (stride per player 1)
+// Units per owner and unit type, by blocks of SPATIAL_TYPE_BLOCK x
+// SPATIAL_TYPE_BLOCK chunks ([block][player][type]): the effective stats'
+// same-type windows and the unit-type filter of range queries. Per chunk
+// (with every player slot) it was 640 MB on a 1000x1000 map.
+const SPATIAL_TYPE_BLOCK = 4;
+let spatialTypeCounts = new Int32Array(0);
+let spatialTypeBlocksW = 0, spatialTypeBlocksH = 0, spatialTypeStridePerBlock = 0;
 let spatialUnitTypeToIndex = Object.create(null);
 let spatialNormUnitTypeIndex = 0;
 let spatialUnitsComplexUnitTypeCount = 0;
