@@ -64,15 +64,23 @@ function simSharedArray(Type, n) {
 // the arrays the Rust kernels read are allocated with simHeapArray, and an
 // array replaced by another is given back with simHeapFree (its memory is
 // reused only after SIM_HEAP_FREE_TICKS, once no name binds it).
-let _simHeapAlloc = null, _simHeapRelease = null, _simHeapPtrOf = null;
+let _simHeapAlloc = null, _simHeapRelease = null, _simHeapPtrOf = null, _simHeapAllocAuto = null;
 function simHeapArray(Type, n) { return _simHeapAlloc !== null ? _simHeapAlloc(Type, n) : simSharedArray(Type, n); }
 function simHeapFree(arr) { if (_simHeapRelease !== null && arr) _simHeapRelease(arr); }
+// An array given back by the collector (no simHeapFree): for arrays whose
+// owners are dropped by many paths (a navigation build). Never take
+// subarrays of one that could outlive it.
+function simHeapArrayAuto(Type, n) { return _simHeapAllocAuto !== null ? _simHeapAllocAuto(Type, n) : simSharedArray(Type, n); }
 // This thread's wasm kernels (null: none) and whether they run (shared by
 // every thread of the simulation; sim_wasm.js simWasmKernels).
 let _simWasmX = null, _simWasmOn = new Int32Array(1);
 // This thread's view of the wasm memory and its scratch region (an
 // address, a size in 32-bit words) for kernels that need work space.
 let _simWasmMem = null, _simWasmScratch = 0, _simWasmScratchWords = 0;
+// This thread's argument block for big kernels (sim_wasm.js): 1024 32-bit
+// words (array addresses) at _simWasmArgs, then 512 doubles (parameters);
+// views _simWasmArgI / _simWasmArgF.
+let _simWasmArgs = 0, _simWasmArgI = null, _simWasmArgF = null;
 
 // Arrays by name and scalar parameters (the same objects in every thread).
 const _simParReg = {};
@@ -534,6 +542,7 @@ let _simMoveLists = new Int32Array(4096), _simMoveCounts = new Int32Array(4);
 // first deoptimization and recompile were the whole kernel's, ~25 ms).
 SIM_KERNELS[SIM_KERNEL_MOVE_STEP] = function (R, P, chunk) {
     const s0 = chunk * P[1], end = Math.min(P[0], s0 + P[1]), n = Math.max(0, end - s0);
+    if (_simMoveWasm(R, P)) { _simWasmX.mv_step(_simWasmArgs, s0, end); return; }
     if (_simMoveLists.length < 4 * n) _simMoveLists = new Int32Array(8 * n);
     const Q = _simMoveLists, C = _simMoveCounts;
     C[0] = 0;
@@ -756,6 +765,7 @@ function _simStepFlow(R, P, s0, end, Q, n, C) {
 // passes, ~2x the kernel.)
 SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
     const s0 = chunk * P[1], end = Math.min(P[0], s0 + P[1]), n = Math.max(0, end - s0);
+    if (_simMoveWasm(R, P)) { _simWasmX.mv_move(_simWasmArgs, s0, end, chunk); return; }
     if (_simMoveLists.length < 4 * n) _simMoveLists = new Int32Array(8 * n);
     const Q = _simMoveLists, C = _simMoveCounts;
     C[2] = C[3] = 0;
@@ -863,8 +873,12 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
     const LSPY = R['unit.fLsPY'];
     const LST = R['unit.fLsT'];
     const stepRan = P[46] === 1;
+    const FIRE = R['unit.mvFire'];
+    const HITA = R['mv.hita'], HITT = R['mv.hitt'], HITC = R['mv.hitc'], ACD = R['unit.atkCd'], FLASH = R['unit.attackFlash'], hchunk = Math.floor(s0 / P[1]);
+    if (HITA) HITC[hchunk] = 0;
     let _nf = 0, _np = 0;
     for (let s = s0; s < end; s++) {
+        FIRE[s] = 0;
         // (dead0: the step kernel's, when it ran.)
         if (!stepRan) D0[s] = DEADC[s];
         // (Moved by SIM_KERNEL_MOVE_STEP this tick: done.)
@@ -923,7 +937,11 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
             // Attack hold (see simMoveTryHold in unit.js): the target where
             // it was at the pass's start (x0, y0), as Unit.update sees it.
             const q = HT[s];
-            if (!(q >= 0) || DEADC[q] || (ID[q] | 0) !== HTID[s] || WALL[tl] || !AOFF) { ON[s] = 0; continue; }
+            // (Its target dead, as at the pass's start: output 15, the rest
+            // of Unit.update at its turn, simTargetDiedCommit.)
+            if (!(q >= 0) || DEADC[q] || (ID[q] | 0) !== HTID[s]) { ON[s] = 0; PX[s] = x; PY[s] = y; OUT[s] = 15; continue; }
+            // (A flier over a wall tile holds on: nothing pushes it out.)
+            if ((WALL[tl] && (f & 32) === 0) || !AOFF) { ON[s] = 0; continue; }
             const tx = X0[q], ty = Y0[q], qgx = Math.floor(tx * itile), qgy = Math.floor(ty * itile);
             if (qgx < 0 || qgy < 0 || qgx >= W || qgy >= H) { ON[s] = 0; continue; }
             const cov = COV ? COV[owner] : null, a = AG ? AG[qgy * W + qgx] : -1;
@@ -951,8 +969,17 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
             // area layout the same, as when found in range by areas.)
             else if (HVER[s] !== areaVer || HTT[s] !== qgy * W + qgx || HWIN[s] !== simWindowKey(x, y, tile)) { ON[s] = 0; continue; }
             // (6: held; 10: its attack tick (the status pre-pass counted the
-            // timer down), the attack made at its turn: simHoldFire.)
-            if (!hchase) { PX[s] = x; PY[s] = y; OUT[s] = AT[s] > 0 ? 6 : 10; continue; }
+            // timer down), the attack made at its turn: simHoldFire. A plain
+            // attacker's (bit 4) made here: its timer and flash, its hit
+            // listed for unitHitsResolve (mv.hita/hitt from the chunk's
+            // first slot, mv.hitc[chunk] of them); held on.)
+            if (!hchase) {
+                PX[s] = x; PY[s] = y;
+                if (AT[s] > 0) OUT[s] = 6;
+                else if ((f & 4) !== 0 && HITA) { AT[s] = ACD[s]; FLASH[s] = 8; const k = s0 + HITC[hchunk]++; HITA[k] = s; HITT[k] = q; OUT[s] = 6; }
+                else OUT[s] = 10;
+                continue;
+            }
         }
         if (bhold) {
             // Building hold (see _simMoveTryHoldBuilding in unit.js): the
@@ -983,7 +1010,8 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
             // 7, 9.) Come in range: held from now on (output 13).
             // (11-13: the rest of Unit.update at its turn, simHoldChaseCommit.)
             const q = HT[s];
-            if (!hchase && (!(q >= 0) || DEADC[q] || (ID[q] | 0) !== HTID[s] || !AOFF)) { ON[s] = 0; continue; }
+            if (!hchase && (!(q >= 0) || DEADC[q] || (ID[q] | 0) !== HTID[s])) { ON[s] = 0; PX[s] = x; PY[s] = y; OUT[s] = 15; continue; }
+            if (!hchase && !AOFF) { ON[s] = 0; continue; }
             const tx = X0[q], ty = Y0[q], qgx = Math.floor(tx * itile), qgy = Math.floor(ty * itile);
             if (!hchase) {
                 if (qgx < 0 || qgy < 0 || qgx >= W || qgy >= H) { ON[s] = 0; continue; }
@@ -991,7 +1019,13 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
                 if (!cov || !(a >= 0) || !(cov[a] > 0)) { ON[s] = 0; continue; }
                 if ((f & 8) !== 0) { LSPX[s] = LSX[s]; LSPY[s] = LSY[s]; LST[s] = t; LSX[s] = tx; LSY[s] = ty; }
                 const ir = _simUnitInAttackRange(AG, AOFF, ANB, WALL, CRC, RRC, W, H, tile, pad, s, q, x, y, tx, ty, REACH[s]);
-                if (ir === 1) { ON[s] = 3; HVER[s] = -1; PX[s] = x; PY[s] = y; OUT[s] = 13; continue; }
+                // (Come in range: held from now on; a plain attacker's attack
+                // made here when its timer has run out, as for a hold.)
+                if (ir === 1) {
+                    ON[s] = 3; HVER[s] = -1; PX[s] = x; PY[s] = y; OUT[s] = 13;
+                    if (!(AT[s] > 0) && (f & 4) !== 0 && HITA) { AT[s] = ACD[s]; FLASH[s] = 8; const k = s0 + HITC[hchunk]++; HITA[k] = s; HITT[k] = q; }
+                    continue;
+                }
                 if (ir !== 0) { ON[s] = 0; continue; }
             }
             const dx = tx - x, dy = ty - y, d = Math.sqrt(dx * dx + dy * dy);
@@ -1055,7 +1089,9 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
             if (!(AREA[s] >= 0)) { ON[s] = 0; continue; }
             if (AT[s] > 0) dbLook = false;
             else if (DBTK[s] === t && DBT[s] !== -2) {
-                if (DBT[s] !== -1 || DBS[s] >= 0) { ON[s] = 0; continue; }
+                // (It found something: it moves on, the shot at its turn,
+                // after its step, as Unit.update: simDriveByFire.)
+                if (DBT[s] !== -1 || DBS[s] >= 0) FIRE[s] = 1;
                 dbLook = false;
             }
         }
@@ -2569,6 +2605,56 @@ function _simWPtrs(K) {
 // Whether a kernel call may run its wasm twin (on the registry's arrays).
 function _simWasmOk(R) { return _simWasmX !== null && _simWasmOn[0] === 1 && R === _simParReg; }
 
+// The movement kernels' Rust twins (wasm/src/mv.rs: SIM_KERNEL_MOVE_STEP,
+// SIM_KERNEL_MOVE, SIM_KERNEL_DRIVEBY) take their arrays in the thread's
+// argument block: word i the address of _SIM_MOVE_WNAMES[i] (mv.rs W_*, the
+// same order; '?' optional, 0 unbound), from word 160 eight per navigation
+// profile (its build's fields, partL, partB, nb, nt, np, meta, its walls),
+// then lengths (partL per profile at 250, area.off, wk.ver, nav.fmeta.0/1,
+// the cover's players and stride at 262..267); the params P as doubles.
+const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 'unit.mvStepT', 'unit.energy', 'unit.sepKey', 'unit.dead',
+    'unit.owner', 'unit.x', 'unit.y', 'unit.prevX', 'unit.prevY', 'unit.mvFloor', 'mv.struct', 'unit.dead0', 'unit.mvWake', 'unit.wkWx', 'unit.wkWy',
+    'unit.mvDest', 'unit.mvCD', 'unit.mvCT', 'unit.mvCVx', 'unit.mvCVy', 'unit.mvCTl', 'unit.mvCN', 'unit.vx', 'unit.vy', 'unit.mvSpent', 'mv.wall',
+    'unit.spArea', 'unit.mvReach', 'mv.areaBox', 'mv.areaBoxOk', '?mv.hostile', 'unit.attackTimer', 'unit.dbT', 'unit.dbS', 'unit.dbTick', 'unit.mvWk',
+    'unit.workerTransferCooldown', 'unit.mvFlow', 'unit.mvFGen', 'unit.mvReady', '?nav.fmeta.0', '?nav.fmeta.1', 'unit.mvNP', 'unit.mvSpd', 'unit.mvHT',
+    'unit.mvHTId', 'unit.x0', 'unit.y0', 'unit.collisionR', 'unit.r', '?area.off', '?area.nb', '?vis.coverf', '?ix.agrid', 'unit.frozen', 'unit.sandy',
+    'unit.cbT', 'unit.cbTick', 'unit.mvChs', 'unit.cbRange', '?wk.ver', 'unit.wkType', 'unit.wkD', 'unit.wkOx', 'unit.wkOy', 'unit.wkTwice',
+    'unit.wkFail', 'unit.wkUntil', 'unit.wkSched', 'unit.mvHWin', 'unit.mvHTT', 'unit.mvHVer', 'unit.cbTId', 'unit.cbRangeS', 'unit.cbS',
+    'unit.fLsX', 'unit.fLsY', 'unit.fLsPX', 'unit.fLsPY', 'unit.fLsT', 'unit.mvLane', '?mv.airwall', '?nav.frows.0', '?nav.frows.1', '?nav.fhdr',
+    '?nav.fpool.0', '?nav.fpool.1', 'unit.mvNavT', 'unit.mvNavV', 'unit.mvNavW', 'unit.mvNavG', 'unit.mvNavD', 'unit.mvNavN1', 'unit.mvNavN2',
+    'unit.mvNavFar', 'unit.mvNavOpen', 'unit.mvNavLD', 'unit.cwNear', 'unit.cwTick', 'unit.cwDense', '?mv.wallBlk9', 'unit.mvBase', 'unit.mvWlen',
+    'unit.mvPlen', 'unit.mvScan', 'unit.mvNodes', 'unit.pathIndex', '?mv.post', '?mv.postc', 'unit.spEpoch', 'unit.spOwner', 'unit.spTile',
+    'unit.spType', 'unit.vsGen', 'unit.spMvOld', 'unit.spMvNew', 'unit.spMvOwn', 'unit.mvBlk', '?mv.astarRem', '?mv.chFix', '?mv.chUse', 'unit.mvCost',
+    'unit.commandState', 'unit.mvShoot', 'unit.mvReachD', 'unit.mvRangeK', 'unit.lzFlags', '?sep.rs', '?sep.rc', '?sep.rstamp', '?sep.eslot',
+    '?ix.omask', '?mv.scls', '?mv.hstruct', 'unit.dbTI', 'unit.mvFire',
+    'unit.atkCd', 'unit.attackFlash', '?mv.hita', '?mv.hitt', '?mv.hitc'];
+const _SIM_MOVE_NAV = 11, _SIM_MOVE_WNAV = 160;
+const _simMoveW = _simWK([..._SIM_MOVE_WNAMES, ...Array.from({ length: _SIM_MOVE_NAV * 8 }, (_, i) => {
+    const p = i >> 3, j = i & 7;
+    return '?' + (j < 7 ? 'nav.' + p + '.' + ['fields', 'partL', 'partB', 'nb', 'nt', 'np', 'meta'][j] : p === 0 ? 'mv.wall' : p === 1 ? 'mv.airwall' : 'mv.cwall.' + p);
+})]);
+let _simMoveWFill = -1, _simMoveWArgs = 0;
+// Fills the argument block for a movement kernel's Rust twin; false: the
+// JavaScript kernel runs (no wasm, or an array not in the heap).
+function _simMoveWasm(R, P) {
+    if (!_simWasmOk(R) || _simWasmArgI === null) return false;
+    const A = _simWPtrs(_simMoveW);
+    if (A === null) return false;
+    if (_simMoveWFill !== _simMoveW.binds || _simMoveWArgs !== _simWasmArgs) {
+        const I = _simWasmArgI, nb = _SIM_MOVE_WNAMES.length;
+        I.fill(0, 0, 280);
+        for (let i = 0; i < nb; i++) I[i] = A[i];
+        for (let i = 0; i < _SIM_MOVE_NAV * 8; i++) I[_SIM_MOVE_WNAV + i] = A[nb + i];
+        for (let p = 0; p < _SIM_MOVE_NAV; p++) { const a = R['nav.' + p + '.partL']; I[250 + p] = a ? a.length : 0; }
+        const len = nm => R[nm] ? R[nm].length : 0, COV = R['vis.cover'];
+        I[262] = len('area.off'); I[263] = len('wk.ver'); I[264] = len('nav.fmeta.0'); I[265] = len('nav.fmeta.1');
+        I[266] = COV ? COV.length : 0; I[267] = COV && COV[0] ? COV[0].length : 0;
+        _simMoveWFill = _simMoveW.binds; _simMoveWArgs = _simWasmArgs;
+    }
+    _simWasmArgF.set(P);
+    return true;
+}
+
 // Runs a kernel over chunks 0..total-1 (with the helpers when there are).
 function simParallelRun(kernel, total) {
     let fn = SIM_KERNELS[kernel];
@@ -2762,6 +2848,9 @@ function simParallelBackgroundDone(lane = 1) {
 // ---- a helper's side (sim_helper.js) ----
 function simParallelHelperMain() {
     let ctl = null, seen = 0, regVer = 0, bgParams = null, bgChain = null;
+    // (A helper allocates nothing in the wasm heap: the simulation thread
+    // owns it; anything made here is plain shared memory.)
+    _simHeapAlloc = null; _simHeapAllocAuto = null;
     self.onmessage = ev => {
         let m = ev.data || {};
         if (m.type === 'init') {
@@ -2966,7 +3055,9 @@ SIM_KERNELS[SIM_KERNEL_EFF_UNITS] = function (R, P, chunk) {
         }
         sum |= 0;
         if (sum <= 0) { F[j] = 2; continue; }
-        const effS = Math.max(1, Math.floor(sum * base)), el = lvl(effS);
+        // (Sticky: things_utils.js _effSticky.)
+        const effS = Math.max(1, Math.floor(sum * base)), el0 = lvl(effS), last = LAST[s];
+        const el = !(last >= 1) || el0 === last ? el0 : el0 === last - 1 ? (effS * 5 >= 4 * Math.pow(2, last - 1) ? last : el0) : el0 === last + 1 ? (effS * 4 < 5 * Math.pow(2, last) ? last : el0) : el0;
         ESK[s] = effS; ELV[s] = el; TAKEN[s] = stamp;
         F[j] = LAST[s] === el ? 0 : 1;
         if (UNP) {
@@ -3099,6 +3190,8 @@ SIM_KERNELS[SIM_KERNEL_DRIVEBY] = function (R, P, chunk) {
     const cs = P[11] | 0, absent = P[12], BOXSTEPS = P[13] | 0, pad = P[14], Bk = P[15] | 0, bc = P[16] | 0, br = P[17] | 0;
     const stride = bc + 1, plane = stride * (br + 1), half = tile / 2;
     if (!AG || !AOFF || !AB || !ABOK || !COV || !rs || !SC || !SCLS) return;
+    // (Its Rust twin: wasm/src/mv.rs mv_driveby.)
+    if (_simMoveWasm(R, P)) { const s0 = chunk * P[1]; _simWasmX.mv_driveby(_simWasmArgs, s0, Math.min(P[0], s0 + P[1])); return; }
     for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) {
         if (CMD[s] !== cmdMove || DEAD[s] || SEP[s] === absent || !SHOOT[s] || AT[s] > 0) continue;
         const id = ID[s] | 0;
@@ -3465,23 +3558,34 @@ SIM_KERNELS[SIM_KERNEL_UNIT_RETIRE] = function (R, P, chunk) {
 // in index order at upd.cand[block * P[1]...], how many at upd.cnt[block].
 // P: [0] units, [1] block size, [2] blocks per job.
 SIM_KERNELS[SIM_KERNEL_UPD_CAND] = function (R, P, chunk) {
-    const SL = R['ix.slots'], OUT = R['unit.mvOut'], CAND = R['upd.cand'], CNT = R['upd.cnt'], n = P[0] | 0, B = P[1] | 0, per = P[2] | 0;
+    const SL = R['ix.slots'], OUT = R['unit.mvOut'], FIRE = R['unit.mvFire'], CAND = R['upd.cand'], CNT = R['upd.cnt'], n = P[0] | 0, B = P[1] | 0, per = P[2] | 0;
     const nb = Math.ceil(n / B);
     for (let b = chunk * per, bend = Math.min(nb, b + per); b < bend; b++) {
         let m = 0;
         for (let idx = b * B, end = Math.min(n, idx + B); idx < end; idx++) {
             const sl = SL[idx];
-            if (sl >= 0) { const o = OUT[sl]; if (o !== 0 && o <= 6) continue; }
+            // (Not visited: the kernel's moves, holds and chase steps (1-9,
+            // 11, 12): nothing during the pass changes them but a death or a
+            // wall, worked out after it. Visited: Unit.update's (0), the
+            // commits (10, 13-15), a drive-by shot.)
+            if (sl >= 0) { const o = OUT[sl]; if (o !== 0 && o !== 10 && o < 13 && !FIRE[sl]) continue; }
             CAND[b * B + m++] = idx;
         }
         CNT[b] = m;
     }
 };
-// After the pass: held units (output 6) whose energy ran out during it are
-// dead now, as Unit.update would have marked them. P: [0] slots, [1] per job.
+// After the pass: units the kernel moved or held (outputs 1-9, 11, 12, not
+// visited in the pass) whose energy ran out during it (a mine) are dead now,
+// where they stood, as Unit.update would have left them at their turn.
+// P: [0] slots, [1] per job.
 SIM_KERNELS[SIM_KERNEL_HELD_DEAD] = function (R, P, chunk) {
-    const OUT = R['unit.mvOut'], EN = R['unit.energy'], DEAD = R['unit.dead'];
-    for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) if (OUT[s] === 6 && !(EN[s] > 0) && !DEAD[s]) DEAD[s] = 1;
+    const OUT = R['unit.mvOut'], EN = R['unit.energy'], DEAD = R['unit.dead'], X = R['unit.x'], Y = R['unit.y'], PX = R['unit.prevX'], PY = R['unit.prevY'];
+    for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) {
+        const o = OUT[s];
+        if (o === 0 || o === 10 || o >= 13 || o === 4 || o === 5 || EN[s] > 0 || DEAD[s]) continue;
+        DEAD[s] = 1;
+        if (o !== 6) { X[s] = PX[s]; Y[s] = PY[s]; }
+    }
 };
 
 // The units' cover of one player (chunk = player; renderer.js
@@ -4009,6 +4113,44 @@ function _simAcqStructure(SCLS, SOWN, HSS, AG, COVF, cbase, owner, x, y, r, tile
 // looked for takes the result: unit.cbT (slot, -1 none), cbTId (its id),
 // cbRangeS (the range looked with), cbTick = P[2] (the commit tick, see
 // _acqTierStep). P: [0] slots, [1] per job, [2] tick.
+// The tick's hits on units (unit.js unitHitsResolve): hits ranked by their
+// attackers' ids (hit.* by rank), grouped by target (hit.g: ranks, by
+// target then rank; job j's groups hit.jb[j]..hit.jb[j + 1]). Per target in
+// rank order, as _unitHitUnit: none once it has fallen; its energy, its
+// statuses by the attack's style (hit.sty: 1 fire, 2 water, 3 ice, 4 poison),
+// fallen at none left. hit.flag[rank]: 1 landed, 2 on an idle unit (a
+// retaliation to look at); hit.shr: the energy lost per owner (fixed point,
+// the shrines'), per job. P: [0] owners (shr stride), [1] fixed-point
+// scale, [2] CMD_IDLE.
+const SIM_KERNEL_HITS = 60;
+SIM_KERNELS[SIM_KERNEL_HITS] = function (R, P, job) {
+    const G = R['hit.g'], JB = R['hit.jb'], Q = R['hit.q'], DMG = R['hit.dmg'], STY = R['hit.sty'], FLAG = R['hit.flag'], SHR = R['hit.shr'];
+    const EN = R['unit.energy'], DEAD = R['unit.dead'], OWN = R['unit.owner'], CMD = R['unit.commandState'], STON = R['unit.stOn'];
+    const BURN = R['unit.burning'], BTD = R['unit.burnTickDamage'], WET = R['unit.wet'], FRZ = R['unit.frozen'], POI = R['unit.poisoned'], PTD = R['unit.poisonTickDamage'];
+    const NO = P[0] | 0, SCALE = P[1], idle = P[2], sh = job * NO;
+    for (let o = 0; o < NO; o++) SHR[sh + o] = 0;
+    for (let g = JB[job], g1 = JB[job + 1]; g < g1; g++) {
+        const r = G[g], q = Q[r];
+        if (DEAD[q]) { FLAG[r] = 0; continue; }
+        const dmg = DMG[r], before = EN[q];
+        EN[q] = before - dmg;
+        const after = EN[q], amount = before - after;
+        let fl = 1;
+        if (amount > 0) {
+            const o = OWN[q], lost = after < 0 ? amount + after : amount;
+            if (lost > 0 && o >= 0 && o < NO && Number.isFinite(lost)) SHR[sh + o] += Math.round(lost * SCALE);
+        }
+        if (CMD[q] === idle) fl |= 2;
+        const st = STY[r];
+        if (st === 1) { BURN[q] = Math.max(BURN[q], 45); BTD[q] = Math.max(BTD[q], dmg * 0.04); STON[q] = 1; }
+        else if (st === 2) { WET[q] = Math.max(WET[q], 60); STON[q] = 1; }
+        else if (st === 3) { FRZ[q] = Math.max(FRZ[q], 40); STON[q] = 1; }
+        else if (st === 4) { POI[q] = Math.max(POI[q], 50); PTD[q] = Math.max(PTD[q], dmg * 0.04); STON[q] = 1; }
+        if (after <= 0) DEAD[q] = 1;
+        FLAG[r] = fl;
+    }
+};
+
 SIM_KERNELS[SIM_KERNEL_ACQ_COMMIT] = function (R, P, chunk) {
     const OUTA = R['acq.out'], TID = R['acq.tid'], SI = R['acq.id'], SR = R['acq.rng'], ID = R['unit.id'], SOUT = R['acq.sout'], CBS = R['unit.cbS'];
     const CT = R['unit.cbT'], CTK = R['unit.cbTick'], CTI = R['unit.cbTId'], CRS = R['unit.cbRangeS'], t = P[2] | 0;

@@ -76,6 +76,32 @@ is next. Newest entries first within each section.
 
 ## Session log
 
+### 2026-10-08 (eighteenth round, in progress) — 400k main thread, decisions off it
+
+- Goal (user): main-thread tick < 50 ms at 400k (200000-1000 ACTIVE+BATTLE);
+  big changes, bench, repeat; main thread O(1) per event, decisions on helpers.
+- 400k mean 161 -> 125 -> 109 ms (p50 146 -> 101), 0 desyncs. Done:
+  movement kernels in Rust (wasm/src/mv.rs mv_step/mv_move/mv_driveby, bit-exact,
+  arg block words = sim_parallel.js _SIM_MOVE_WNAMES; nav tables from word 160);
+  drive-by shots after the step (Unit.update and kernel alike; mvFire + simDriveByFire);
+  target died -> output 15, simTargetDiedCommit; held/chase-come-in-range attacks made
+  in the kernel (mvFlags 4, atkCd/atkDmg/atkSty columns, mv.hita/hitt/hitc);
+  unitHitsResolve: hits ranked by attacker id, SIM_KERNEL_HITS (60) per target on
+  helpers, retaliation/watch/looks (first 512) after; chase steps (7, 9, 11, 12) not
+  visited in the pass (HELD_DEAD undoes moves of units dead mid-pass, simPassWallFixups);
+  lean o13/o14 commits; WORKER_MOVE_CHECK_TICKS 128; detach via one constructor;
+  hash: buildings and reservations on the rotation round only, obj groups 80;
+  sticky effective levels (_effSticky, kernel twin); adjacency dirty set skips empty
+  256-tile blocks; separation finish 2048 a job; fliers hold over walls; statuses no
+  longer disarm the movement kernel.
+- Measured: MOVE/MOVE_STEP are memory bound (wbench replay 200k: wasm x1.26 / x1.0):
+  next is fewer columns per unit or fewer units a tick, merging STEP into MOVE (one
+  pass, P[47]), floor-item effects in the kernel (~500 hand-backs a tick at 400k),
+  structure engage commit, SP_COUNTS/finish, hash remainder, worker MOVING_TO (~30 us
+  a call). Round 3 bench (all of the above) was running: scratchpad p400_r3.txt.
+- Probes added: .claude/probes/cand_stats.js (pass candidates by kernel output);
+  kdump.js also dumps nav.*/mv.cwall.* for _simNavArrays kernels.
+
 ### 2026-10-08 (seventeenth round) — Rust/wasm kernels
 
 - User: a Rust/wasm implementation of the separation and other heavy

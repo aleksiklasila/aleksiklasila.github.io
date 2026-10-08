@@ -238,7 +238,10 @@ function _forEachUnitInTickOrder(fn) {
                 if (s >= 0 && OUT[s] !== 0 && owners[s] === u) {
                     // Held attackers and chasers: checked again at their turn.
                     const o = OUT[s];
-                    if (o < 6) continue;
+                    // (A drive-by shooter's shot after its step: simDriveByFire.)
+                    if (o < 6) { if (S.columns.mvFire[s]) simDriveByFire(S.columns, s, u); continue; }
+                    // (Its target dead: the rest of Unit.update, simTargetDiedCommit.)
+                    if (o === 15) { if (simTargetDiedCommit(S.columns, s, u)) continue; S.columns.mvOut[s] = 0; fn(u); continue; }
                     if (o === 6 || o === 10) {
                         if (simHoldStillValid(S.columns, s)) { if (o === 10) simHoldFire(S.columns, s); continue; }
                         simHoldUndo(S.columns, s);
@@ -246,6 +249,9 @@ function _forEachUnitInTickOrder(fn) {
                     // (An aggro look's target: engaged at its turn.)
                     else if (o === 14) { if (simEngageCommit(S.columns, s)) continue; S.columns.mvOut[s] = 0; }
                     // (A hold's chase step, a chase come in range.)
+                    // (A chase come in range: its commit; nothing during the
+                    // pass changes the kernel's look but a death or a wall.)
+                    else if (o === 13) { const C = S.columns; if (C.mvOn[s] === 3 && !C.dead[s] && C.energy[s] > 0 && !_simMoveWallDirty && _simMoveWallVer === _simMoveRunWallVer) { simChaseInRangeCommit(C, s); continue; } simChaseUndo(C, s); }
                     else if (o >= 11) { if (simChaseStillValid(S.columns, s, 3)) { simHoldChaseCommit(S.columns, s, o); continue; } simChaseUndo(S.columns, s); }
                     else { if (simChaseStillValid(S.columns, s)) continue; simChaseUndo(S.columns, s); }
                 }
@@ -259,6 +265,8 @@ function _forEachUnitInTickOrder(fn) {
         const P = _simParams, ns = S.owners.length;
         P[0] = ns; P[1] = 8192;
         simParallelRun(SIM_KERNEL_HELD_DEAD, Math.ceil(ns / 8192));
+        // (And those on a tile that became a wall during the pass.)
+        simPassWallFixups(S);
     }
 }
 

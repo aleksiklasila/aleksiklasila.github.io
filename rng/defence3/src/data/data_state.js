@@ -40,40 +40,47 @@ let _tileEntityVersion = 0; // bumped whenever the tile entity index changes
 // with 230k tiles waiting after a mass placement.) Set-like: add, delete,
 // has, size, clear, iteration (ascending).
 class _AdjDirtySet {
-    constructor() { this.flag = new Uint8Array(0); this.n = 0; this.min = 0; this.sum = 0; }
+    // (blk: flagged tiles per 256: empty stretches skipped by takeFirst and
+    // the iteration; scanning the flags of a 1M-tile map was ~1 ms a tick.)
+    constructor() { this.flag = new Uint8Array(0); this.blk = new Int32Array(0); this.n = 0; this.min = 0; this.sum = 0; }
     get size() { return this.n; }
     has(k) { return k >= 0 && k < this.flag.length && this.flag[k] === 1; }
     add(k) {
         k = k | 0;
         if (k < 0) return this;
-        if (k >= this.flag.length) { const f = new Uint8Array(Math.max(k + 1, GRID_W * GRID_H, this.flag.length * 2)); f.set(this.flag); this.flag = f; }
+        if (k >= this.flag.length) {
+            const f = new Uint8Array(Math.max(k + 1, GRID_W * GRID_H, this.flag.length * 2)); f.set(this.flag); this.flag = f;
+            const b = new Int32Array((f.length + 255) >> 8); b.set(this.blk); this.blk = b;
+        }
         if (this.flag[k]) return this;
-        this.flag[k] = 1;
+        this.flag[k] = 1; this.blk[k >> 8]++;
         if (this.n++ === 0 || k < this.min) this.min = k;
         this.sum = (this.sum + Math.imul(k + 1, 2654435761)) | 0;
         return this;
     }
     delete(k) {
         if (!this.has(k)) return false;
-        this.flag[k] = 0; this.n--;
+        this.flag[k] = 0; this.n--; this.blk[k >> 8]--;
         this.sum = (this.sum - Math.imul(k + 1, 2654435761)) | 0;
         return true;
     }
-    clear() { if (this.n) this.flag.fill(0); this.n = 0; this.min = 0; this.sum = 0; }
+    clear() { if (this.n) { this.flag.fill(0); this.blk.fill(0); } this.n = 0; this.min = 0; this.sum = 0; }
     // The first `max` tiles by index, taken out.
     takeFirst(max) {
-        const out = [], f = this.flag;
+        const out = [], f = this.flag, B = this.blk;
         let k = this.min;
         for (; k < f.length && out.length < max && this.n > 0; k++) {
+            if ((k & 255) === 0) while (k < f.length && B[k >> 8] === 0) k += 256;
+            if (k >= f.length) break;
             if (!f[k]) continue;
-            f[k] = 0; this.n--;
+            f[k] = 0; this.n--; B[k >> 8]--;
             this.sum = (this.sum - Math.imul(k + 1, 2654435761)) | 0;
             out.push(k);
         }
         this.min = k;
         return out;
     }
-    *[Symbol.iterator]() { const f = this.flag; let left = this.n; for (let k = this.min; k < f.length && left > 0; k++) if (f[k]) { left--; yield k; } }
+    *[Symbol.iterator]() { const f = this.flag, B = this.blk; let left = this.n; for (let k = this.min; k < f.length && left > 0; k++) { if ((k & 255) === 0) while (k < f.length && B[k >> 8] === 0) k += 256; if (k >= f.length) break; if (f[k]) { left--; yield k; } } }
 }
 let _adjacencyDirtyTiles = new _AdjDirtySet();
 let _adjacencyNeedsRecalc = true;

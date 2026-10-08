@@ -4547,6 +4547,7 @@ const VIS_COVER_DENSE_STEPS = 8;
 const _visCover = {
     gen: 1, adm: null, areaCount: 0, players: 0,
     cover: [],         // [player] Int32Array(areaCount): covering entries
+    coverFlat: null, coverStride: 0, // (cover's one array, areaCount a player)
     steps: [],         // [player] Int8Array(areaCount): the area's range as a source (steps), -1 none
     dense: null,       // Int32Array((player * areaCount + area) * DENSE + steps): sources
     sparse: new Map(), // same key * 64 + steps, for steps >= DENSE
@@ -4576,8 +4577,14 @@ function _visCoverEnsure() {
     // Entities registered under an older generation count as unregistered.
     C.gen++;
     C.adm = areaDistanceMatrix; C.areaCount = A; C.players = n;
-    // (Shared: the combat scan reads it on the helpers.)
-    C.cover = Array.from({ length: n }, () => simSharedArray(Int32Array, Math.max(1, A)));
+    // (Shared: the combat scan reads it on the helpers. One array, player by
+    // player (coverFlat, A per player, in the wasm heap: the Rust kernels
+    // read it), cover[p] its parts; bound as vis.coverf with vis.cover.)
+    if (typeof simHeapFree === 'function') simHeapFree(C.coverFlat);
+    const flatA = Math.max(1, A);
+    C.coverFlat = typeof simHeapArray === 'function' ? simHeapArray(Int32Array, n * flatA) : new Int32Array(n * flatA);
+    C.cover = Array.from({ length: n }, (_, p) => C.coverFlat.subarray(p * flatA, p * flatA + flatA));
+    C.coverStride = flatA;
     C.steps = Array.from({ length: n }, () => new Int8Array(A).fill(-1));
     C.dense = new Int32Array(n * A * VIS_COVER_DENSE_STEPS);
     C.sparse = new Map();
@@ -6048,8 +6055,10 @@ function applyStatusEffect(target, effect, level, baseDamage = 0, sourceOwner = 
     if (!target) return false;
     ensureStatusState(target);
     if (isEffectImmune(target, effect)) return false;
-    // An armed mover (see simMoveTryArm) is handed back to Unit.update.
-    if (typeof simMoveDisarm === 'function' && target instanceof Unit) simMoveDisarm(target);
+    // (An armed unit stays armed: the movement kernel reads the slowing
+    // statuses (frozen, sandy) from the columns each tick, as Unit.update
+    // does; disarming every unit a tower or floor item touched sent each
+    // through Unit.update again.)
 
     let lvl = Math.max(1, level || 1);
     let mappedDuration = _getEffectStat(sourceOwner, sourceType, lvl, effect, 'duration');

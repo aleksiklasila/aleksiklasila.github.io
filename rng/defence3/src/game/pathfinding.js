@@ -2029,7 +2029,7 @@ function _cloudSignature() {
 }
 function _airWallTable() {
     if (!_airWall || _airWall.length !== GRID_W * GRID_H) {
-        _airWall = simSharedArray(Uint8Array, GRID_W * GRID_H);
+        _airWall = simHeapArrayAuto(Uint8Array, GRID_W * GRID_H);
         if (typeof simParallelBind === 'function') simParallelBind('mv.airwall', _airWall);
     }
     return _airWall;

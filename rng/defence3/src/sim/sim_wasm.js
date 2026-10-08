@@ -37,6 +37,14 @@ const SIM_HEAP_PAGE = 65536, SIM_HEAP_MAX_PAGES = 65536;
 const SIM_WASM_STACK = 256 * 1024;
 // Each thread's scratch for kernels' work arrays (a flow field's row search).
 const SIM_WASM_SCRATCH = 4 * 1024 * 1024;
+// Each thread's argument block (sim_parallel.js _simWasmArgs): 4 KB of
+// addresses, 4 KB of doubles.
+const SIM_WASM_ARGS = 8192;
+function _simWasmArgsAt(p) {
+    _simWasmArgs = p;
+    _simWasmArgI = p > 0 ? new Int32Array(_simWasmMem.buffer, p, 1024) : null;
+    _simWasmArgF = p > 0 ? new Float64Array(_simWasmMem.buffer, p + 4096, 512) : null;
+}
 const _simHeap = {
     tried: false, ready: false, memory: null, module: null, top: 0,
     // Free blocks [ptr, size, ...] by address; freed arrays waiting
@@ -86,6 +94,8 @@ function simWasmInit() {
         H.ready = true;
         const scratch = _simHeapTake(SIM_WASM_SCRATCH);
         if (scratch > 0) { _simWasmScratch = scratch; _simWasmScratchWords = SIM_WASM_SCRATCH >> 2; }
+        const args = _simHeapTake(SIM_WASM_ARGS);
+        _simWasmArgsAt(args > 0 ? args : 0);
     } catch (err) { H.ready = false; H.error = String(err && err.message || err); _simWasmX = null; }
     return H.ready;
 }
@@ -138,15 +148,33 @@ function _simHeapTake(bytes) {
 }
 function _simHeapReleaseImpl(arr) {
     const H = _simHeap;
-    if (!arr) return;
+    if (!arr || _simHeapAuto.has(arr)) return;
     const p = H.ptr.get(arr);
     if (p === undefined) return;
     const s = H.size.get(arr);
     H.ptr.delete(arr); H.size.delete(arr);
+    _simHeapQueue(arr, p, s);
+}
+// A block to give back once nothing can read it (arr: its array while
+// alive, for the binding check; null when the collector took it).
+function _simHeapQueue(arr, p, s) {
+    const H = _simHeap;
     // (The chains in flight now: each lane's posted count.)
     const waits = [];
     for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) if (simParallelBackgroundPending(lane)) waits.push(lane, _simBgPosted[lane]);
     H.pending.push({ arr, p, s, t: H.clock, waits });
+}
+// Arrays the collector gives back (simHeapArrayAuto): when one is
+// collected, nothing on this thread reaches it any more (no name binds it
+// either); a helper's copy is read only by a job, which the queue waits for.
+const _simHeapAuto = new WeakSet();
+const _simHeapAutoGone = typeof FinalizationRegistry === 'function' ? new FinalizationRegistry(h => _simHeapQueue(null, h.p, h.s)) : null;
+function _simHeapAllocAutoImpl(Type, n) {
+    const arr = _simHeapAllocImpl(Type, n), H = _simHeap, p = H.ptr.get(arr);
+    if (p === undefined || !_simHeapAutoGone) return arr;
+    _simHeapAuto.add(arr);
+    _simHeapAutoGone.register(arr, { p, s: H.size.get(arr) });
+    return arr;
 }
 // Once per tick (gameTick): freed arrays that nothing can still read go
 // back to the free blocks.
@@ -163,7 +191,7 @@ function simHeapTick() {
         for (let j = 0; done && j < e.waits.length; j += 2) if (simParallelBackgroundPending(e.waits[j]) && _simBgPosted[e.waits[j]] === e.waits[j + 1]) done = false;
         if (done) {
             if (!bound) { bound = new Set(); for (const k in _simParReg) if (_simParReg[k]) bound.add(_simParReg[k]); }
-            if (!bound.has(e.arr)) { _simHeapGive(e.p, e.s); continue; }
+            if (e.arr === null || !bound.has(e.arr)) { _simHeapGive(e.p, e.s); continue; }
         }
         Q[w++] = e;
     }
@@ -200,9 +228,9 @@ function simWasmHelperPayload() {
     if (!_simHeap.ready) return null;
     const p = _simHeapTake(SIM_WASM_STACK);
     if (p < 0) return null;
-    const scratch = _simHeapTake(SIM_WASM_SCRATCH);
+    const scratch = _simHeapTake(SIM_WASM_SCRATCH), args = _simHeapTake(SIM_WASM_ARGS);
     return { module: _simHeap.module, memory: _simHeap.memory, stackTop: p + SIM_WASM_STACK, on: _simWasmOn,
-        scratch: scratch > 0 ? scratch : 0, scratchWords: scratch > 0 ? SIM_WASM_SCRATCH >> 2 : 0 };
+        scratch: scratch > 0 ? scratch : 0, scratchWords: scratch > 0 ? SIM_WASM_SCRATCH >> 2 : 0, args: args > 0 ? args : 0 };
 }
 // In a helper: its instance (none if it fails: its chunks run in JS).
 function simWasmHelperInit(w) {
@@ -212,10 +240,12 @@ function simWasmHelperInit(w) {
         _simWasmOn = w.on;
         _simWasmMem = w.memory;
         _simWasmScratch = w.scratch | 0; _simWasmScratchWords = w.scratchWords | 0;
+        _simWasmArgsAt(w.args | 0);
         _simWasmX = exp;
     } catch (err) { _simWasmX = null; console.error('[sim helper] wasm kernels unavailable, JS kernels run here:', err && err.message || err); }
 }
 
 _simHeapAlloc = _simHeapAllocImpl;
+_simHeapAllocAuto = _simHeapAllocAutoImpl;
 _simHeapRelease = _simHeapReleaseImpl;
 _simHeapPtrOf = _simHeapPtrImpl;

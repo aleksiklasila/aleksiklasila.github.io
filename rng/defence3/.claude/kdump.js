@@ -16,13 +16,17 @@
         // (Its source and the _sim* functions it calls: e.g. the movement
         // kernel's passes.)
         const seen = new Set(), srcOf = fn => { let t = fn.toString(); for (const m of t.matchAll(/\b(_sim[A-Za-z0-9_]+)\(/g)) { if (seen.has(m[1])) continue; seen.add(m[1]); let g = null; try { g = eval(m[1]); } catch { } if (typeof g === 'function') t += srcOf(g); } return t; };
-        const keys = [...new Set([...srcOf(orig).matchAll(/R\['([^']+)'\]/g)].map(m => m[1]))];
+        const full = srcOf(orig), keys = [...new Set([...full.matchAll(/R\['([^']+)'\]/g)].map(m => m[1]))];
         let state = 0, tick = -1;
         const calls = [], params = [];
         SIM_KERNELS[id] = function (R, P, chunk) {
             if (state === 0 && gameTime >= T) {
                 state = 1; tick = gameTime;
                 for (const k of keys) if (R[k] && ArrayBuffer.isView(R[k])) bin[name + '@' + k] = R[k].slice();
+                // (Names made in the kernels' helpers, e.g. _simNavArrays:
+                // every navigation build's arrays and walls.)
+                if (/_simNav(Arrays|Walls)\(/.test(full))
+                    for (const k in R) if (/^(nav\.\d+\.|mv\.cwall\.|mv\.airwall$)/.test(k) && ArrayBuffer.isView(R[k])) bin[name + '@' + k] = R[k].slice();
             }
             if (state === 1) {
                 if (gameTime !== tick) state = 2;

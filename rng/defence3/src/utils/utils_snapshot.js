@@ -453,7 +453,9 @@ const SNAP_ACC_REGIONS = 1 << 20;
 // hashed for one group by id of this many a rotation (each unit's every
 // SNAP_HASH_SLICES * SNAP_HASH_OBJ_GROUPS ticks: 400; the columns, where
 // nearly all of a unit's changing state is, every rotation).
-const SNAP_HASH_OBJ_GROUPS = 40;
+const SNAP_HASH_OBJ_GROUPS = 80;
+// (Buildings' core fields every tick of their slice: off, see _snapTickHashStatic.)
+let SNAP_HASH_STATIC_CORE_ALL = false;
 // Grid rows: those of this slice, one in this many rotations (each row
 // every SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS ticks).
 const SNAP_HASH_GRID_ROUNDS = 10;
@@ -583,7 +585,7 @@ function _snapForRegionReservations(r, fn) {
 
 // fn(slot, unit, region) for every entry, or (slice >= 0) for the entries of
 // that hash slice's regions only (a tenth of the table).
-function _snapForReservations(slice, fn) {
+function _snapForReservations(slice, fn, round = -1) {
     let table = workerReservedTiles;
     if (!table || table.length === 0) return;
     if (slice < 0) {
@@ -602,6 +604,8 @@ function _snapForReservations(slice, fn) {
         for (let rx = rx0; rx < rw; rx += SNAP_HASH_SLICES) {
             if (counts && counts[ry * rw + rx] === 0) continue;
             let r = ry * 1024 + rx;
+            // (One rotation round's regions, as the buildings': round >= 0.)
+            if (round >= 0 && Math.floor(r / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS !== round) continue;
             _snapForRegionReservations(r, (slot, u) => fn(slot, u, r));
         }
     }
@@ -683,8 +687,12 @@ function _snapTickHashStatic(t, slice, allSlices, regions, push) {
     };
     if (allSlices) for (let k = 0; k < slices.length; k++) hashStatic(listOf(k));
     else {
+        // (Only this rotation's round: each building every SNAP_HASH_SLICES *
+        // SNAP_HASH_GRID_ROUNDS ticks. The core fields of all the slice's
+        // every tick cost ~4 ms a tick with 10k+ buildings.)
         const round = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS;
-        for (let k = 0; k < SNAP_HASH_GRID_ROUNDS; k++) (k === round ? hashStatic : hashStaticCore)(listOf(slice + SNAP_HASH_SLICES * k));
+        if (SNAP_HASH_STATIC_CORE_ALL) for (let k = 0; k < SNAP_HASH_GRID_ROUNDS; k++) (k === round ? hashStatic : hashStaticCore)(listOf(slice + SNAP_HASH_SLICES * k));
+        else hashStatic(listOf(slice + SNAP_HASH_SLICES * round));
     }
     for (let i = 0; i < droppedItems.length; i++) {
         let e = droppedItems[i];
@@ -693,10 +701,13 @@ function _snapTickHashStatic(t, slice, allSlices, regions, push) {
         let h = _snapHashEntity('d', e, (Math.imul(e.gx, 4099) + e.gy) ^ 0x88);
         _snapRegionAdd(regions, r, h);
     }
+    // (Each region's reservations every SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS
+    // ticks, with its buildings' round: walking a tenth of the table's slots
+    // a tick was ~1.2 ms at 400k units.)
     _snapForReservations(allSlices ? -1 : slice, (slot, u, r) => {
         let h = _snapReservationHash(slot, u);
         _snapRegionAdd(regions, r, h);
-    });
+    }, allSlices || SNAP_HASH_STATIC_CORE_ALL ? -1 : Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS);
     // Grid rows of this slice, in one rotation of SNAP_HASH_GRID_ROUNDS:
     // cell types and owners.
     {

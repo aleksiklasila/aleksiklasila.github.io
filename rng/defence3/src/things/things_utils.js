@@ -902,6 +902,17 @@ function _unitStatsVerOf(u) {
     if (!(o >= 0) || !(ti >= 0 && ti < UNIT_STATS_VER_TYPES) || o * UNIT_STATS_VER_TYPES + ti >= _unitStatsVer.length) return 0;
     return _unitStatsVer[o * UNIT_STATS_VER_TYPES + ti];
 }
+// A unit's effective level from its effective stacks, sticky around the
+// level it has (last): one level down only below 0.8 of its threshold, one
+// up only from 1.25 of the next one's, so counts around a power of two do not
+// flip it every refresh (in a battle ~1.7k units a tick at 400k took new
+// tables). The kernel's twin: SIM_KERNEL_EFF_UNITS.
+function _effSticky(el, effS, last) {
+    if (!(last >= 1) || el === last) return el;
+    if (el === last - 1) return effS * 5 >= 4 * Math.pow(2, last - 1) ? last : el;
+    if (el === last + 1) return effS * 4 < 5 * Math.pow(2, last) ? last : el;
+    return el;
+}
 function _effStatsFullUnit(u, canUseSpatialCounts, chunkPx) {
     let baseStacks = getUnitStackCount(u);
     let baseLevel = stackCountToLevel(baseStacks);
@@ -923,7 +934,7 @@ function _effStatsFullUnit(u, canUseSpatialCounts, chunkPx) {
     if (similarCount < 1) similarCount = 1;
     let effStacks = Math.max(1, Math.floor(similarCount * baseStacks));
     u.effectiveStacks = effStacks;
-    u.effectiveLevel = stackCountToLevel(effStacks);
+    u.effectiveLevel = _effSticky(stackCountToLevel(effStacks), effStacks, u._lastAppliedEffectiveLevel);
     let nextEffLevel = getUnitEffectiveLevel(u);
     if (needsRefresh || u._lastAppliedEffectiveLevel !== nextEffLevel) {
         applyUnitEffectiveScaling(u, nextEffLevel);

@@ -14,7 +14,8 @@ vm.createContext(ctx);
 vm.runInContext(`var SIM_KERNELS = {}; var _simParams = new Float64Array(64); var _simParReg = {};
     var _stage = Array.from({ length: 10 }, () => Array.from({ length: 8 }, () => new Float64Array(64))); var _simBgParams = _stage[1][0];
     var SIM_LANE_LONG = 1, _bgJob = null;
-    function simSharedArray(T, n) { return new T(n); } function simParallelBind(n, a) { _simParReg[n] = a; }
+    function simSharedArray(T, n) { return new T(n); } function simHeapArrayAuto(T, n) { return new T(n); }
+    function simParallelBind(n, a) { _simParReg[n] = a; }
     function simParallelRun(k, total) { for (let c = 0; c < total; c++) SIM_KERNELS[k](_simParReg, _simParams, c); }
     function simParallelStageParams(lane, st) { return _stage[lane][st]; }
     function simParallelBackgroundChain(lane, stages) { simParallelBackgroundWait(lane); _bgJob = { lane, stages }; }

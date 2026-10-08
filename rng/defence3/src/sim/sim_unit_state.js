@@ -179,6 +179,12 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['mvNP', Uint8Array, 1],
     // The tick (+ 1) SIM_KERNEL_MOVE_STEP moved it (SIM_KERNEL_MOVE leaves it).
     ['mvStepT', Int32Array, 1],
+    // A drive-by shooter the movement kernel moved whose look found
+    // something (SIM_KERNEL_DRIVEBY): its shot at its turn (simDriveByFire).
+    ['mvFire', Uint8Array, 1],
+    // A unit's attack cooldown and damage (its stats: simMoveStatsChanged),
+    // for the attacks the movement kernel makes for held units.
+    ['atkCd', Float64Array, 1], ['atkDmg', Float64Array, 1], ['atkSty', Uint8Array, 1],
     // The worker search registry (worker.js wsRegister): an idle worker's
     // search, done on the tier (wsKind 0 none, 1 collector, 3 builder or
     // salvager, 4 healer, 5 researcher): its resource type, the tick it
@@ -331,17 +337,20 @@ function _simUnitSlotStart(S, s, u) {
 // Removed units may still be attack targets, selected, or referenced in a
 // snapshot. Detach their values before reusing the slot; stale object references
 // must never read or overwrite a newly spawned unit.
+let _simDetValues = null;
+function _simDetValuesCtor() {
+    const body = SIM_UNIT_ACCESSOR_COLUMNS.map(k => 'this.' + k + ' = C.' + k + '[s];').join(' ')
+        + ' this.dead = C.dead[s] === 1; this._navLastD = C.mvNavLD[s]; this._floorTile = C.mvFloor[s]; this._sepMoved = C.sepMov[s];'
+        + ' this._statsBehind = false; this._forcedTargetLastSeenX = null; this._forcedTargetLastSeenY = null;';
+    return new Function('C', 's', body);
+}
 function simUnitStateDetach(S, s) {
     const u = S.owners[s];
     if (!u) return;
     // Its values move to one plain object the accessors fall back to (a
-    // property definition per column made releasing many units slow).
-    const values = {};
-    for (const k of SIM_UNIT_ACCESSOR_COLUMNS) values[k] = S.columns[k][s];
-    values.dead = S.columns.dead[s] === 1;
-    values._navLastD = S.columns.mvNavLD[s];
-    values._floorTile = S.columns.mvFloor[s];
-    values._sepMoved = S.columns.sepMov[s];
+    // property definition per column made releasing many units slow; one
+    // constructor: one shape, no dictionary transitions per key).
+    const values = new (_simDetValues || (_simDetValues = _simDetValuesCtor()))(S.columns, s);
     values._statsBehind = typeof _unitStatsBehind === 'function' ? _unitStatsBehind(u, S.columns.esVer[s]) : false;
     { const lx = S.columns.fLsX[s], ly = S.columns.fLsY[s]; values._forcedTargetLastSeenX = lx === lx ? lx : null; values._forcedTargetLastSeenY = ly === ly ? ly : null; }
     u._det = values;

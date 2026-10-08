@@ -19,6 +19,8 @@
 
 use core::arch::wasm32::*;
 
+mod mv;
+
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     unreachable()

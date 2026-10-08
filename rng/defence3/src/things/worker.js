@@ -99,8 +99,9 @@ function _workerFinishManualMoveToIdle(u) {
 // staggered by id; between those it only walks, exactly as the movement
 // kernel walks it (which hands it back on those ticks; not a MANUAL_MOVE
 // one: its look, with its path not done, only keeps it moving).
-const WORKER_MOVE_CHECK_TICKS = 32;
-const BUILDER_WATCH_TICKS = WORKER_MOVE_CHECK_TICKS * 2;
+// (128: at 400k units ~2.5k workers a tick ran Unit.update for it at 32.)
+const WORKER_MOVE_CHECK_TICKS = 128;
+const BUILDER_WATCH_TICKS = 64;
 const _WORKER_MOVING_STATES = new Set(['MANUAL_MOVE', 'MOVING_TO', 'MOVING_TO_ASTAR', 'RETURNING', 'RETURNING_ASTAR', 'MOVING_TO_BUILD', 'RETURNING_FOR_GOLD', 'MOVING_TO_HEAL', 'MOVING_TO_RESEARCH']);
 function isWorkerBetweenMoveChecks(u) {
     return ((gameTime + u.id) | 0) % WORKER_MOVE_CHECK_TICKS !== 0 && _WORKER_MOVING_STATES.has(u.workerState)
@@ -2225,7 +2226,7 @@ function _workerWorkTable() {
     const dims = np + ':' + rw + 'x' + rh;
     if (!_workerWorkVer || _workerWorkDims !== dims) {
         // (Shared: the movement kernel checks parked idle workers' versions.)
-        _workerWorkVer = simSharedArray(Int32Array, np * _WORKER_WORK_TYPES.length * (1 + rw * rh)); _workerWorkDims = dims;
+        _workerWorkVer = simHeapArrayAuto(Int32Array, np * _WORKER_WORK_TYPES.length * (1 + rw * rh)); _workerWorkDims = dims;
         simParallelBind('wk.ver', _workerWorkVer);
         _workerWorkVer.rw = rw; _workerWorkVer.rh = rh; _workerWorkVer.np = np; _workerWorkVer.sum = 0;
     }
