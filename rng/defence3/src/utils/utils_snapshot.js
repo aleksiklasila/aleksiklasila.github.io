@@ -45,6 +45,13 @@
 // ============================================================
 
 const SNAP_FORMAT = 7;
+// The simulation's numeric rules (storage precision, rounding points): peers
+// of different revisions cannot stay in lockstep, so joins, match starts and
+// snapshots carry it and a mismatch is refused before any simulation. A
+// snapshot without one (older saves) is accepted: its values are normalized
+// by the stores into the current columns (Float32 gameplay quantities).
+// 2: Float32 unit quantities, rounded stats.
+const SIM_RULES_REVISION = 2;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
 // Each tick hashes one slice (regions, grid rows) of the world. The resync
@@ -1471,7 +1478,7 @@ function snapEncodeState(options = null) {
         shapes: [], tpls: [], scratch: [], track: only ? new Set() : null, unitSet: null, unitsSorted: null, projIndex: null, defs: null
     };
     try {
-        let out = { v: SNAP_FORMAT, g: _snapEncodeGlobals(), lists: {} };
+        let out = { v: SNAP_FORMAT, rules: SIM_RULES_REVISION, g: _snapEncodeGlobals(), lists: {} };
         let rows = {}, mru = {};
         for (let list of SNAP_LISTS) { rows[list] = []; mru[list] = []; }
         let floor = null;
@@ -1872,6 +1879,7 @@ function snapDecodeState(S, options = null) {
     // (A prebuilt unit index reads what this rewrites: waited for, dropped.)
     if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
     if (!S || S.v !== SNAP_FORMAT) return null;
+    if (S.rules !== undefined && S.rules !== SIM_RULES_REVISION) { console.error('snapshot of simulation rules ' + S.rules + ', this peer runs ' + SIM_RULES_REVISION); return null; }
     let collect = !!(options && options.collectChanges);
     let partial = !!S.partial;
     let pool = S.pool || [];

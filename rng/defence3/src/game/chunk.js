@@ -399,7 +399,7 @@ function _spatialIndexRebuildParallel() {
         _sxEpoch = 1;
     }
     if (X.cap < n) {
-        X.cap = Math.max(4096, n * 2);
+        X.cap = simReserveCap(n, 4096);
         for (const k of ['keys', 'areas', 'ent', 'aent', 'aslot']) { X[k] = simSharedArray(Int32Array, X.cap); simParallelBind('ix.' + k, X[k]); }
     }
     _spatialEntryArrays(n);
@@ -448,14 +448,14 @@ function _spatialIndexRebuildParallel() {
 let SPATIAL_INDEX_MERGE = true;
 function _spatialMergeArrays(X, n) {
     const S = _simUnitState, slotsCap = S ? S.cap : 0;
-    if (!X.ordM || X.ordM.length < n) { X.ordM = simSharedArray(Int32Array, Math.max(4096, n * 2)); X.kept = simSharedArray(Int32Array, X.ordM.length); X.chg = simSharedArray(Float64Array, X.ordM.length); simParallelBind('ix.kept', X.kept); simParallelBind('ix.chg', X.chg); }
+    if (!X.ordM || X.ordM.length < n) { X.ordM = simSharedArray(Int32Array, simReserveCap(n, 4096)); X.kept = simSharedArray(Int32Array, X.ordM.length); X.chg = simSharedArray(Float64Array, X.ordM.length); simParallelBind('ix.kept', X.kept); simParallelBind('ix.chg', X.chg); }
     if (!X.inv || X.inv.length < slotsCap) { X.inv = simSharedArray(Int32Array, Math.max(4096, slotsCap)); X.invStamp = simSharedArray(Int32Array, X.inv.length); simParallelBind('ix.inv', X.inv); simParallelBind('ix.invStamp', X.invStamp); }
 }
 // The entries' slots and chunks for n units (in the wasm heap, see above).
 function _spatialEntryArrays(n) {
     if (_sxESlot.length >= n) return;
     const a = _sxESlot, b = _sxEKey;
-    _sxESlot = simHeapArray(Int32Array, Math.max(1024, n * 2)); _sxEKey = simHeapArray(Int32Array, Math.max(1024, n * 2));
+    _sxESlot = simHeapArray(Int32Array, simReserveCap(n)); _sxEKey = simHeapArray(Int32Array, simReserveCap(n));
     simHeapFree(a); simHeapFree(b);
 }
 // The parallel build's arrays given back (replaced, or back to the serial build).

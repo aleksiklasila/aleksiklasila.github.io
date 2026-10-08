@@ -12,7 +12,9 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     // (Positions quantized, as every unit's is between ticks.)
     for(let i=0;i<n;i++) samples.push(new Unit(i%4===0?'flying':'norm',i%2,_quantizeUnitWorldCoord((4+rand()*12)*TILE),_quantizeUnitWorldCoord((4+rand()*12)*TILE)));
     const slots=_simUnitState.owners.length; _sepGrow(slots);
-    for(const key of ['px','py','ov','nextX','nextY']) _sepShared(S,key,Float64Array,slots);
+    for(const key of ['px','py']) _sepShared(S,key,Float64Array,slots);
+    // (Overlap and next positions Float32, as the game allocates them: the Rust twin reads them so.)
+    for(const key of ['ov','nextX','nextY']) _sepShared(S,key,Float32Array,slots);
     _sepShared(S,'hit',Uint32Array,slots); _sepShared(S,'fast',Uint8Array,slots);
     // (The kernel's lists of units left to the scalar commit.)
     _sepShared(S,'ex',Int32Array,slots); _sepShared(S,'exc',Int32Array,Math.ceil(slots/512)+1);

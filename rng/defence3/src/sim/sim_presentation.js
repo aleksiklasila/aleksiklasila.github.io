@@ -25,26 +25,27 @@ function simPresentTickEnd() {
         const ctl = Q && Q.cap >= cap ? Q.ctl : new Int32Array(new SharedArrayBuffer(8));
         Q = _simPresentSnaps = { cap, worker: p.worker, ctl, next: 0, snaps: [] };
         for (let i = 0; i < SIM_PRESENT_SNAPS; i++) {
-            const buf = new SharedArrayBuffer(8 + cap * 32);
-            Q.snaps.push({ buf, head: new Int32Array(buf, 0, 2), x: new Float64Array(buf, 8, cap), y: new Float64Array(buf, 8 + cap * 8, cap),
-                px: new Float64Array(buf, 8 + cap * 16, cap), py: new Float64Array(buf, 8 + cap * 24, cap) });
+            const buf = new SharedArrayBuffer(8 + cap * 16);
+            Q.snaps.push({ buf, head: new Int32Array(buf, 0, 2), x: new Float32Array(buf, 8, cap), y: new Float32Array(buf, 8 + cap * 4, cap),
+                px: new Float32Array(buf, 8 + cap * 8, cap), py: new Float32Array(buf, 8 + cap * 12, cap) });
             Q.snaps[i].head[0] = -1;
         }
-        ctl[0] = -1;
+        ctl[0] = -1; ctl[1] = 1;
         p.worker.postMessage({ type: 'snaps', ctl, cap, bufs: Q.snaps.map(q => q.buf) });
     }
+    if (Atomics.exchange(Q.ctl, 1, 0) !== 1) return;
     const i = Q.next, q = Q.snaps[i], C = S.columns;
     Q.next = (i + 1) % SIM_PRESENT_SNAPS;
     Atomics.store(q.head, 0, -1);
     q.x.set(C.x.subarray(0, n)); q.y.set(C.y.subarray(0, n)); q.px.set(C.prevX.subarray(0, n)); q.py.set(C.prevY.subarray(0, n));
     q.head[1] = n;
     Atomics.store(q.head, 0, typeof currentTick === 'number' ? currentTick : 0);
-    Atomics.store(Q.ctl, 0, i);
+    Atomics.store(Q.ctl, 0, i); Q.publishedTick = typeof currentTick === 'number' ? currentTick : 0;
 }
 const SIM_PRESENT_MAGIC = 0x50524553;
 const SIM_PRESENT_COLUMNS = ['id','owner','x','y','prevX','prevY','vx','vy','energy','r','commandState',
     'attackFlash','burning','poisoned','frozen','wet','sandy','watched','teleportHideTicks',
-    'workerTransferCooldown','effectiveLevel','unitLevel','live','dead','maxE'];
+    'workerTransferCooldown','effectiveLevel','unitLevel','live','dead','maxE','stOn'];
 
 function simPresentationStop() {
     const p = _simPresentation;
@@ -56,7 +57,7 @@ function simPresentationStart() {
     simPresentationStop();
     if (!SIM_PAR_SHARED || typeof Worker !== 'function') return false;
     const base = self.SIM_WORKER_BASE || location.href;
-    const worker = new Worker(new URL('presentation_worker.js?v=20261022-t', base).href);
+    const worker = new Worker(new URL('presentation_worker.js?v=20261008-mem2', base).href);
     const p = _simPresentation = { worker, epoch:_simEpoch, generation:++_simPresentationGeneration,
         timer:0, job:null, meta:null, projectileJob:null, projectileAt:0,
         structures:null, cells:null, columns:null, sourceBuffer:null, strings:0, revision:0 };
@@ -102,7 +103,12 @@ function simPresentationBind() {
         p.meta = simFrameViews(new SharedArrayBuffer(S.cap * SIM_FRAME_SLOT_BYTES), S.cap);
         p.meta.id.fill(-1);
         if (old) for (const k of [...SIM_FRAME_F32, ...SIM_FRAME_I32, ...SIM_FRAME_I16, ...SIM_FRAME_U8]) p.meta[k].set(old[k].subarray(0,p.meta.cap));
-        p.worker.postMessage({type:'bind', epoch:p.epoch, generation:p.generation, columns, meta:{buf:p.meta.buf,cap:p.meta.cap}});
+        // (metaRev: bumped when the metadata table changed in a way a frame
+        // must show at once (a slot's new unit) and at each cycle's end; the
+        // reader copies the table into a frame only when its revision moved.)
+        if (!p.metaRev) p.metaRev = new Int32Array(new SharedArrayBuffer(4));
+        Atomics.add(p.metaRev, 0, 1);
+        p.worker.postMessage({type:'bind', epoch:p.epoch, generation:p.generation, columns, meta:{buf:p.meta.buf,cap:p.meta.cap}, metaRev:p.metaRev});
     }
     const strings = _simFrameStrings.list;
     if (p.strings !== strings.length) {
@@ -169,7 +175,8 @@ function simPresentationWriteMetadata(u, F) {
     if (!C || s < 0 || s >= F.cap || C.dead[s]) return;
     // Publish identity last: a reader never assigns a recycled slot the old
     // unit's type. Dynamic positions/statuses come straight from authority.
-    if (F.id[s] !== C.id[s]) F.id[s] = -1;
+    const fresh = F.id[s] !== C.id[s];
+    if (fresh) F.id[s] = -1;
     F.type[s] = _simFrameCode(u.unitType); F.wtype[s] = _simFrameCode(u.workerType);
     F.wstate[s] = _simFrameCode(u.workerState); F.style[s] = _simFrameCode(u.attackStyle);
     F.watchedBy[s] = Number.isFinite(u.watchedByTeam) ? u.watchedByTeam : -1;
@@ -185,6 +192,8 @@ function simPresentationWriteMetadata(u, F) {
         | (u.researcherHasMaterial ? SIM_UF_RESEARCH_MATERIAL : 0)
         | (Number.isFinite(u._energyBlockedUntil) && gameTime < u._energyBlockedUntil ? SIM_UF_ENERGY_BLOCKED : 0);
     F.id[s] = C.id[s];
+    const p = _simPresentation;
+    if (fresh && p && p.metaRev) Atomics.add(p.metaRev, 0, 1);
 }
 
 function* simPresentationMetadata() {
@@ -196,6 +205,7 @@ function* simPresentationMetadata() {
         simPresentationWriteMetadata(list[i], p.meta);
         if ((i & 127) === 127) yield;
     }
+    if (p.metaRev) Atomics.add(p.metaRev, 0, 1);
     simPresentationBind();
     p.worker.postMessage({type:'ready'});
     const S = _simStructSlots, stamp = ++S.tick, lists = _simStructLists();

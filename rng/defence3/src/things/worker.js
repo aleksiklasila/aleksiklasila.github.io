@@ -1181,7 +1181,7 @@ const WS_BUCKET = 8;
 function _wsGroupBuild(G, sites, spawners) {
     const n = sites.length, np = spawners.length, pre = 'wsg' + G.id + '.';
     const arr = (name, Type, len) => { let a = G.arrays[name]; if (!a || a.length < len) { a = G.arrays[name] = simSharedArray(Type, Math.max(64, len * 2)); simParallelBind(pre + name, a); } return a; };
-    const SX = arr('sx', Float64Array, n), SY = arr('sy', Float64Array, n), ST = arr('st', Int32Array, n), SO = arr('so', Int32Array, n);
+    const SX = arr('sx', Float32Array, n), SY = arr('sy', Float32Array, n), ST = arr('st', Int32Array, n), SO = arr('so', Int32Array, n);
     const objs = new Array(n), types = new Array(n);
     for (let s = 0; s < n; s++) {
         const e = sites[s];
@@ -1196,7 +1196,7 @@ function _wsGroupBuild(G, sites, spawners) {
     for (let b = 0; b < nb; b++) { BS[b] = fill; fill += BC[b]; BC[b] = 0; }
     for (let s = 0; s < n; s++) if (SX[s] === SX[s] && SY[s] === SY[s]) { const b = bk(s); BI[BS[b] + BC[b]++] = s; }
     const PGX = arr('pgx', Int32Array, np), PGY = arr('pgy', Int32Array, np), PO = arr('po', Int32Array, np), PID = arr('pid', Int32Array, np);
-    const PX = arr('px', Float64Array, np), PY = arr('py', Float64Array, np);
+    const PX = arr('px', Float32Array, np), PY = arr('py', Float32Array, np);
     for (let p = 0; p < np; p++) { const sp = spawners[p]; PGX[p] = Math.floor(Number(sp.gx) || 0); PGY[p] = Math.floor(Number(sp.gy) || 0); PO[p] = Number.isFinite(sp.owner) ? sp.owner : -9; PID[p] = Number(sp.id) || 0; PX[p] = Number(sp.x); PY[p] = Number(sp.y); }
     const meta = arr('meta', Int32Array, 5);
     meta[0] = n; meta[1] = np; meta[2] = 1; meta[3] = bcols; meta[4] = brows;
@@ -1220,7 +1220,7 @@ function _wsCollectorGroup(cfg) {
 }
 function _wsArr(name, Type, n) {
     let a = _simParReg[name];
-    if (!a || a.constructor !== Type || a.length < n) { a = simSharedArray(Type, Math.max(256, n * 2)); simParallelBind(name, a); }
+    if (!a || a.constructor !== Type || a.length < n) { a = simSharedArray(Type, Math.max(256, Math.ceil(n * 1.125 / 256) * 256)); simParallelBind(name, a); }
     return a;
 }
 function _wsPost() {
@@ -1230,19 +1230,25 @@ function _wsPost() {
     if (!S) return;
     const n = S.owners.length;
     if (!n) return;
-    const CH = WS_SEL_CHUNK, chunks = Math.ceil(n / CH), cap = chunks * CH;
-    for (const k of ['ws.rslot', 'ws.rid', 'ws.rwt', 'ws.rkind', 'ws.rowner', 'ws.rak', 'ws.rgrp', 'ws.rneed', 'ws.rjid', 'ws.rcur', 'ws.rmy']) _wsArr(k, Int32Array, cap);
-    for (const k of ['ws.rox', 'ws.roy', 'ws.rux', 'ws.ruy', 'ws.rr', 'ws.rax', 'ws.ray']) _wsArr(k, Float64Array, cap);
+    const CH = WS_SEL_CHUNK, chunks = Math.ceil(n / CH);
     const CNT = _wsArr('ws.rcnt', Int32Array, chunks), PRE = _wsArr('ws.rpre', Int32Array, chunks + 1);
-    _wsArr('ws.res', Int32Array, cap * WS_K); _wsArr('ws.score', Float64Array, cap * WS_K); _wsArr('ws.ures', Int32Array, cap * 3);
-    // The registered workers due (the kernel, from their columns).
     const P = _simParams;
-    P[0] = n; P[1] = CH; P[2] = gameTime; P[3] = WS_TICKS; P[4] = WS_RETRY;
+    P[0] = n; P[1] = CH; P[2] = gameTime; P[3] = WS_TICKS; P[4] = WS_RETRY; P[5] = 1;
+    // Count before allocating payloads. Both phases observe the same state:
+    // no simulation writes occur between these synchronous jobs.
     simParallelRun(SIM_KERNEL_WS_SELECT, chunks);
     let total = 0;
     for (let c = 0; c < chunks; c++) { PRE[c] = total; total += CNT[c]; }
     PRE[chunks] = total;
     if (!total) return;
+    const cap = total;
+    for (const k of ['ws.rslot', 'ws.rid', 'ws.rwt', 'ws.rkind', 'ws.rowner', 'ws.rak', 'ws.rgrp', 'ws.rneed', 'ws.rjid', 'ws.rcur', 'ws.rmy']) _wsArr(k, Int32Array, cap);
+    for (const k of ['ws.rox', 'ws.roy', 'ws.rux', 'ws.ruy', 'ws.rr', 'ws.rax', 'ws.ray']) _wsArr(k, Float32Array, cap);
+    _wsArr('ws.res', Int32Array, cap * WS_K); _wsArr('ws.score', Float32Array, cap * WS_K); _wsArr('ws.ures', Int32Array, cap * 3);
+    // The registered workers due (the kernel, from their columns).
+    P[5] = 2;
+    simParallelRun(SIM_KERNEL_WS_SELECT, chunks);
+    CNT[0] = total; // Compact requests are one logical region for ordering.
     const Bp = _simBgParamsByLane[WS_LANE];
     // The collectors' groups, per resource type.
     const groups = [];
@@ -1250,7 +1256,7 @@ function _wsPost() {
     // Per owner: its healers' damaged units (where they are now) and the
     // research its researchers serve.
     const np = Math.max(1, Math.floor(Number(players && players.length) || 0)), HM = HEALER_DAMAGED_CANDIDATE_LIMIT;
-    const HX = _wsArr('wsh.x', Float64Array, np * HM), HY = _wsArr('wsh.y', Float64Array, np * HM), HA = _wsArr('wsh.a', Int32Array, np * HM), HN = _wsArr('wsh.n', Int32Array, np);
+    const HX = _wsArr('wsh.x', Float32Array, np * HM), HY = _wsArr('wsh.y', Float32Array, np * HM), HA = _wsArr('wsh.a', Int32Array, np * HM), HN = _wsArr('wsh.n', Int32Array, np);
     _ensureHealerDamagedCandidatesCacheCurrent();
     const heal = [];
     for (let o = 0; o < np; o++) {
@@ -1268,9 +1274,9 @@ function _wsPost() {
     simParallelBind('ws.agrid', _spatialAreaGridFlat());
     if (typeof _simAreaCsr === 'function') { _simAreaCsr(); simParallelBind('ws.aoff', _simParReg['area.off']); simParallelBind('ws.anb', _simParReg['area.nb']); }
     Bp[0] = total; Bp[1] = 16; Bp[2] = WS_K; Bp[3] = TILE; Bp[4] = WS_BUCKET; Bp[7] = TILE * 0.5; Bp[8] = GRID_W; Bp[9] = GRID_H;
-    Bp[10] = _wsw ? _wsw.bw : 0; Bp[11] = chunks; Bp[12] = CH; Bp[13] = HM;
+    Bp[10] = _wsw ? _wsw.bw : 0; Bp[11] = 1; Bp[12] = total; Bp[13] = HM; Bp[14] = 1;
     simParallelBackground(SIM_KERNEL_WS_SCAN, Math.ceil(total / 16), WS_LANE);
-    _wsPosted = { chunks, CH, groups, heal, ordered: false };
+    _wsPosted = { chunks: 1, CH: total, groups, heal, ordered: false };
 }
 function _wsOrder() {
     const J = _wsPosted;
@@ -3379,14 +3385,14 @@ function _hcArr(name, Type, n) {
 function _hcPost(ownerCount, cap) {
     simParallelBackgroundWait(HC_LANE);
     const S = _simUnitState, c = S.columns, n = S.owners.length;
-    _hcArr('hc.e', Float64Array, n).set(c.energy.subarray(0, n));
-    _hcArr('hc.m', Float64Array, n).set(c.maxE.subarray(0, n));
-    _hcArr('hc.o', Float64Array, n).set(c.owner.subarray(0, n));
-    _hcArr('hc.id', Float64Array, n).set(c.id.subarray(0, n));
+    _hcArr('hc.e', Float32Array, n).set(c.energy.subarray(0, n));
+    _hcArr('hc.m', Float32Array, n).set(c.maxE.subarray(0, n));
+    _hcArr('hc.o', Int16Array, n).set(c.owner.subarray(0, n));
+    _hcArr('hc.id', Int32Array, n).set(c.id.subarray(0, n));
     _hcArr('hc.l', Uint8Array, n).set(c.live.subarray(0, n));
     _hcArr('hc.d', Uint8Array, n).set(c.dead.subarray(0, n));
     const chunks = Math.max(1, Math.ceil(n / HC_CHUNK));
-    _hcArr('hc.res', Int32Array, chunks * ownerCount * cap); _hcArr('hc.rat', Float64Array, chunks * ownerCount * cap);
+    _hcArr('hc.res', Int32Array, chunks * ownerCount * cap); _hcArr('hc.rat', Float32Array, chunks * ownerCount * cap);
     const P = _simBgParamsByLane[HC_LANE];
     P[0] = n; P[1] = HC_CHUNK; P[2] = ownerCount; P[3] = cap;
     simParallelBackground(SIM_KERNEL_HEAL_CAND, chunks, HC_LANE);
@@ -3399,7 +3405,7 @@ function _hcReduce() {
     if (!J || J.reduced) return;
     simParallelBackgroundWait(HC_LANE);
     _hcArr('hc.best', Int32Array, J.ownerCount * J.cap);
-    _hcArr('hc.bestRat', Float64Array, J.ownerCount * J.cap);
+    _hcArr('hc.bestRat', Float32Array, J.ownerCount * J.cap);
     const P = _simBgParamsByLane[HC_LANE];
     P[0] = J.chunks; P[1] = J.ownerCount; P[2] = J.cap;
     simParallelBackground(SIM_KERNEL_HEAL_REDUCE, J.ownerCount, HC_LANE);

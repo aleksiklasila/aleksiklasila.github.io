@@ -13,8 +13,8 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
         for (const k of keys) { if (layout[k].byteOffset !== offset) fail('frame layout '+k); offset += bytes*64; }
     if (offset !== 64 * SIM_FRAME_SLOT_BYTES) fail('frame size');
     // Growth must update every live accessor, including objects that existed
-    // before reallocation. Fractions stay Float64, not render precision.
-    const first = units[0], x = first.x = 123.1234567890123;
+    // before reallocation. Fractions are stored as Float32 (simulation rules 2).
+    const first = units[0]; first.x = 123.1234567890123; const x = Math.fround(123.1234567890123);
     for (let i = 0; i < 2100; i++) { const u = new Unit('norm', i & 1, 50+i%20, 50+(i%19)); units.push(u); }
     // (Positions are unit fields, copied into the columns after each move.)
     simUnitMirror(first);
@@ -69,4 +69,4 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
 })())`));
 assert.deepEqual(inst.errors.map(String), []);
 assert.ok(result.compared > 100000);
-console.log('PASS: shared unit growth, Float64 precision, stale references, slot reuse, snapshot restore; scalar frame oracle:', result);
+console.log('PASS: shared unit growth, Float32 precision, stale references, slot reuse, snapshot restore; scalar frame oracle:', result);

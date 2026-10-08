@@ -81,6 +81,8 @@ async function runCase(seed, map, lowAstar = Number(process.env.LOWASTAR) || 0) 
     // switched on there only, e.g. EFF_STATS_KERNEL_MIN_UNITS = 0: the guest
     // keeps the object path, and every field is compared).
     if (process.env.HOST_SIM_EVAL) host.evalSim(process.env.HOST_SIM_EVAL);
+    // (BOTH_SIM_EVAL: code for both, after the host's: probes.)
+    if (process.env.BOTH_SIM_EVAL) for (const inst of [host, g]) inst.evalSim(process.env.BOTH_SIM_EVAL);
     const repairs0 = g.patchesApplied + g.snapshotsApplied;
     const shared = { rec: {} };
     for (const i of all) i.scratch.shared = shared;

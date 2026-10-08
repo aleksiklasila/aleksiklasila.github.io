@@ -55,7 +55,7 @@ const COMBAT_FX_STYLE = {
     default: 0, fire: 1, water: 2, ice: 3, poison: 4, laser: 5, pistol: 6, smg: 7,
     sniper: 8, sand_gun: 9, elements: 10, watch_tower: 11, king: 12, boss: 13, tank: 14, building: 15
 };
-const combatFxData = new Float64Array(COMBAT_FX_CAPACITY * COMBAT_FX_STRIDE);
+const combatFxData = new Float32Array(COMBAT_FX_CAPACITY * COMBAT_FX_STRIDE);
 let combatFxHead = 0;
 let combatFxSerial = 0;
 

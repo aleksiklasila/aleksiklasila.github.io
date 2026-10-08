@@ -1,5 +1,5 @@
 "use strict";
-importScripts('sim_frame.js?v=20261022-n','sim_frame_world.js?v=20261021-x');
+importScripts('sim_frame.js?v=20261008-mem2','sim_frame_world.js?v=20261021-x');
 const PRESENT_MAGIC=0x50524553;
 let source=null, meta=null, epoch=0, generation=0, latest=null, scheduled=false, strings=[''], ready=false;
 let structure=null, structureRevision=-1, sentStructureRevision=-1, cells=null, oldCells=null;
@@ -11,14 +11,23 @@ const buffers=new Map();
 // simPresentTickEnd), the newest at snapCtl[0]. mot: this worker's copy of
 // the newest (and the live velocities: facing only).
 let out=null, snapCtl=null, snaps=null, torn=0;
+// The simulation's metadata revision (sim_presentation.js simPresentationBind)
+// and the buffer being filled (its entry: the revision its metadata holds).
+let metaRev=null, filling=null;
 const mot={x:null,y:null,px:null,py:null,vx:null,vy:null};
-function copyMotion(C,n) {
+// The simulation publishes a snapshot only while snapCtl[1] is 1 (this
+// worker asks for the next one when it took the newest, or found it older
+// than the tick it draws: then it waits for the next tick, -3; a newer one
+// is drawn, as before).
+function copyMotion(C,n,want) {
     const i=snapCtl ? Atomics.load(snapCtl,0) : -1, q=i>=0 && snaps ? snaps[i] : null;
     const src=q ? [['x',q.x],['y',q.y],['px',q.px],['py',q.py],['vx',C.vx],['vy',C.vy]] : [['x',C.x],['y',C.y],['px',C.prevX],['py',C.prevY],['vx',C.vx],['vy',C.vy]];
     const tick=q ? Atomics.load(q.head,0) : 0;
     if (q && tick<0) return -2;
+    if (snapCtl) Atomics.store(snapCtl,1,1);
+    if (q && tick<want) return -3;
     for (const [k,a] of src) {
-        if (!mot[k] || mot[k].length<a.length) mot[k]=new Float64Array(a.length);
+        if (!mot[k] || mot[k].length<a.length) mot[k]=new Float32Array(a.length);
         mot[k].set(n<a.length ? a.subarray(0,n) : a);
     }
     // (Rewritten while copied: dropped.)
@@ -27,13 +36,13 @@ function copyMotion(C,n) {
 }
 function release(buf) {const t=new DataView(buf,buf.byteLength-12);if(t.getInt32(0,true)!==generation)return;const e=buffers.get(t.getInt32(4,true));if(e)e.busy=false;}
 function acquire(bytes, kind='units') {
-    for (const entry of buffers.values()) if (entry.kind===kind && !entry.busy && entry.buf.byteLength >= bytes+12) {entry.busy=true;return entry.buf;}
+    for (const entry of buffers.values()) if (entry.kind===kind && !entry.busy && entry.buf.byteLength >= bytes+12) {entry.busy=true;filling=entry;return entry.buf;}
     // Three page-owned snapshots maximum. No growing queue when rendering stops.
     if ([...buffers.values()].filter(e=>e.kind===kind && e.busy).length >= 3) return null;
     for (const [id,e] of buffers) if (e.kind===kind && !e.busy) buffers.delete(id);
     const buf=new SharedArrayBuffer(bytes+12), id=++sequence;
     const trailer=new DataView(buf,buf.byteLength-12);trailer.setInt32(0,generation,true);trailer.setInt32(4,id,true);trailer.setInt32(8,PRESENT_MAGIC,true);
-    buffers.set(id,{buf,busy:true,kind});return buf;
+    filling={buf,busy:true,kind,metaRev:-1,metaN:0};buffers.set(id,filling);return buf;
 }
 function schedule() {
     if (scheduled || !latest || !source || !ready) return;
@@ -72,7 +81,7 @@ function fillUnits(F,C,meta,n,player,areaUnit,phase0,prate) {
     // drawn as is, units sped up and stalled tick to tick. A unit new to its
     // slot, or one that jumped (over VIS_SNAP px: a teleport, a resync)
     // starts where the simulation has it.
-    if (!vis.x || vis.x.length<F.x.length) {const c=F.x.length;vis.x=new Float64Array(c);vis.y=new Float64Array(c);vis.id=new Int32Array(c).fill(-1);}
+    if (!vis.x || vis.x.length<F.x.length) {const c=F.x.length;vis.x=new Float32Array(c);vis.y=new Float32Array(c);vis.id=new Int32Array(c).fill(-1);}
     {
         const DX=F.x, DY=F.y, DPX=F.px, DPY=F.py, SX=mot.x, SY=mot.y, SPX=mot.px, SPY=mot.py, VX=vis.x, VY=vis.y, VI=vis.id;
         for (let s=0;s<n;s++) {
@@ -87,8 +96,12 @@ function fillUnits(F,C,meta,n,player,areaUnit,phase0,prate) {
     }
     {const D=F.vx,S=mot.vx;for(let s=0;s<n;s++) D[s]=S[s];}
     {const D=F.vy,S=mot.vy;for(let s=0;s<n;s++) D[s]=S[s];}
-    // Metadata (the pump's table, the frame's own layout): copied whole.
-    for (const k of META_COPY) F[k].set(meta[k].subarray(0,n));
+    // Metadata (the pump's table, the frame's own layout): copied whole, when
+    // it changed since this buffer last had it (or covers more slots now).
+    {
+        const rev=metaRev ? Atomics.load(metaRev,0) : -2, e=filling;
+        if (!e || e.metaRev!==rev || rev===-2 || e.metaN<n) {for (const k of META_COPY) F[k].set(meta[k].subarray(0,n)); if (e) {e.metaRev=rev;e.metaN=n;}}
+    }
     {const D=F.owner,S=C.owner;for(let s=0;s<n;s++) D[s]=S[s];}
     {const D=F.energy,S=C.energy;for(let s=0;s<n;s++) D[s]=S[s];}
     {const D=F.r,S=C.r;for(let s=0;s<n;s++) D[s]=S[s];}
@@ -98,13 +111,15 @@ function fillUnits(F,C,meta,n,player,areaUnit,phase0,prate) {
     {const D=F.blevel,S=C.unitLevel;for(let s=0;s<n;s++) {const v=S[s];D[s]=v>=0 && v<32767 ? v|0 : -1;}}
     {const D=F.flash,S=C.attackFlash;for(let s=0;s<n;s++) {const v=S[s];D[s]=v>255?255:v>0?v:0;}}
     {
-        const D=F.flags, M=meta.flags, B=C.burning, P=C.poisoned, Z=C.frozen, W=C.wet, Y=C.sandy, V=C.watched, H=C.teleportHideTicks, T=C.workerTransferCooldown;
-        for (let s=0;s<n;s++) D[s]=M[s] | (B[s]>0?SIM_UF_BURNING:0) | (P[s]>0?SIM_UF_POISONED:0) | (Z[s]>0?SIM_UF_FROZEN:0) | (W[s]>0?SIM_UF_WET:0)
-            | (Y[s]>0?SIM_UF_SANDY:0) | (V[s]>0?SIM_UF_WATCHED:0) | (H[s]>0?SIM_UF_HIDDEN:0) | (T[s]>0?SIM_UF_TRANSFER:0);
+        // (The status timers only of units with one running, stOn: the
+        // rest read one byte instead of seven columns.)
+        const D=F.flags, M=meta.flags, B=C.burning, P=C.poisoned, Z=C.frozen, W=C.wet, Y=C.sandy, V=C.watched, H=C.teleportHideTicks, T=C.workerTransferCooldown, ON=C.stOn;
+        for (let s=0;s<n;s++) D[s]=M[s] | (T[s]>0?SIM_UF_TRANSFER:0) | (ON && !ON[s] ? 0 : (B[s]>0?SIM_UF_BURNING:0) | (P[s]>0?SIM_UF_POISONED:0) | (Z[s]>0?SIM_UF_FROZEN:0) | (W[s]>0?SIM_UF_WET:0)
+            | (Y[s]>0?SIM_UF_SANDY:0) | (V[s]>0?SIM_UF_WATCHED:0) | (H[s]>0?SIM_UF_HIDDEN:0));
     }
     {
-        const D=F.light, O=F.owner, V=C.watched, WB=F.watchedBy, VIS=F.vision;
-        for (let s=0;s<n;s++) D[s]=O[s]===player || (V[s]>0 && WB[s]===player) ? VIS[s]*areaUnit : 0;
+        const D=F.light, O=F.owner, V=C.watched, WB=F.watchedBy, VIS=F.vision, ON=C.stOn;
+        for (let s=0;s<n;s++) D[s]=O[s]===player || ((!ON || ON[s]) && V[s]>0 && WB[s]===player) ? VIS[s]*areaUnit : 0;
     }
     {
         const X=F.x, Y=F.y, PX=F.px, PY=F.py, FL=F.flash, MO=F.mode, ST=F.status, AM=F.amount;
@@ -211,8 +226,9 @@ function draw() {
     latest=null;
     const C=source;
     const t0=performance.now();
-    const got=copyMotion(C,tick.n);
+    const got=copyMotion(C,tick.n,tick.tick);
     const t1=performance.now();
+    if (got===-3) {release(buf);return;}
     if (got<0) {torn++;release(buf);return;}
     const F=simFrameViews(buf,cap);
     let changed=!last || last.length !== cap;
@@ -262,7 +278,7 @@ function onMessage(event) {
         if(m.type==='port') {out=m.port;out.onmessage=onMessage;return;}
         if(m.type==='snaps') {
             snapCtl=m.ctl;
-            snaps=m.bufs.map(buf=>({head:new Int32Array(buf,0,2),x:new Float64Array(buf,8,m.cap),y:new Float64Array(buf,8+m.cap*8,m.cap),px:new Float64Array(buf,8+m.cap*16,m.cap),py:new Float64Array(buf,8+m.cap*24,m.cap)}));
+            snaps=m.bufs.map(buf=>({head:new Int32Array(buf,0,2),x:new Float32Array(buf,8,m.cap),y:new Float32Array(buf,8+m.cap*4,m.cap),px:new Float32Array(buf,8+m.cap*8,m.cap),py:new Float32Array(buf,8+m.cap*12,m.cap)}));
             return;
         }
         // A tick's end: its frame at once (no timer between: the copy must
@@ -272,14 +288,14 @@ function onMessage(event) {
             if (m.fog) {try {updateFog(m);} catch(err) {postMessage({type:'error',message:String(err.stack || err)});}}
             latest=m;if(!scheduled && source && ready) {scheduled=true;draw();}return;
         }
-        if(m.type==='bind') {epoch=m.epoch;generation=m.generation;source=m.columns;meta=simFrameViews(m.meta.buf,m.meta.cap);last=null;schedule();}
+        if(m.type==='bind') {epoch=m.epoch;generation=m.generation;source=m.columns;meta=simFrameViews(m.meta.buf,m.meta.cap);metaRev=m.metaRev||null;for(const e of buffers.values()) e.metaRev=-1;last=null;schedule();}
         else if(m.type==='strings') strings=m.strings;
         else if(m.type==='ready') {ready=true;schedule();}
         else if(m.type==='structures') {structure=m.table;structureRevision=m.revision;}
         else if(m.type==='projectiles') {projectiles=m.table;projectileRevision=m.revision;}
         else if(m.type==='cellBaseline') oldCells=m.cells.slice();
         else if(m.type==='cells') cells=m.cells;
-        else if(m.type==='release') {release(m.buf);schedule();}
+        else if(m.type==='release') {release(m.buf);if(snapCtl)Atomics.store(snapCtl,1,1);schedule();}
     } catch(err) {postMessage({type:'error',message:String(err.stack || err)});}
 }
 self.onmessage=onMessage;

@@ -2666,6 +2666,11 @@ function _normalizePlayerPrecomputedBuildingKey(buildingKey) {
     return PRECOMPUTED_STATS_MAP.building[buildingKey] ? buildingKey : 'farm';
 }
 
+function _simF32Stats(entry) {
+    for (const k of Object.keys(entry)) if (typeof entry[k] === 'number') entry[k] = Math.fround(entry[k]);
+    return entry;
+}
+
 function _getUnitPlayerPrecomputedEntry(playerId, unitType, level) {
     let key = _normalizePlayerPrecomputedUnitKey(unitType);
     let lvl = Math.max(1, clampThingLevel(level || 1));
@@ -2685,7 +2690,7 @@ function _getUnitPlayerPrecomputedEntry(playerId, unitType, level) {
     let visionRangeArea = Math.max(0.05, Number(values.visionRange) || 0.05);
     let transferCooldownSec = Math.max(0.01, Number(values.transferCooldown) || 0.01);
 
-    return {
+    return _simF32Stats({
         maxEnergy,
         attackDamage: Math.max(0, Number(values.atk) || 0),
         attackCooldownSec,
@@ -2705,7 +2710,7 @@ function _getUnitPlayerPrecomputedEntry(playerId, unitType, level) {
         transferCooldownTicks: secondsToTicks(transferCooldownSec),
         astarCost: Math.max(0.01, Number(values.astarCost) || 0.1),
         upKeep: Math.max(0.01, Number(values.upKeep) || 0.01),
-    };
+    });
 }
 
 function _getBuildingPlayerPrecomputedEntry(playerId, buildingKey, level) {
@@ -2727,7 +2732,7 @@ function _getBuildingPlayerPrecomputedEntry(playerId, buildingKey, level) {
     let visionRange = Number(values.visionRange);
     let attackRangeArea = Math.max(0, Number(values.attackRange) || 0);
 
-    return {
+    return _simF32Stats({
         maxEnergy: Number.isFinite(maxEnergy) ? Math.max(1, Math.floor(maxEnergy)) : NaN,
         damage: Number(values.damage),
         blastDamage: Number(values.blastDamage),
@@ -2755,7 +2760,7 @@ function _getBuildingPlayerPrecomputedEntry(playerId, buildingKey, level) {
         efficiency: Number(values.efficiency),
         upKeep: Math.max(0.01, Number(values.upKeep) || 0.01),
         drainRate: Number(values.drainRate),
-    };
+    });
 }
 
 function rebuildPrecomputedStatsMapPlayer(targetPlayerId = null) {
@@ -2848,7 +2853,7 @@ function _applyUnitPlayerPrecomputedStat(entry, statKey, value) {
     }
     else if (statKey === 'astarCost') entry.astarCost = Math.max(0.01, Number(value) || 0.01);
     else if (statKey === 'upKeep') entry.upKeep = Math.max(0.01, Number(value) || 0.01);
-    return entry;
+    return _simF32Stats(entry);
 }
 
 function _applyBuildingPlayerPrecomputedStat(entry, statKey, value) {
@@ -2872,7 +2877,7 @@ function _applyBuildingPlayerPrecomputedStat(entry, statKey, value) {
     }
     else if (statKey === 'blastRadius') entry.blastRadius = Number.isFinite(value) ? Math.max(0, Number(value)) : NaN;
     else entry[statKey] = Number(value);
-    return entry;
+    return _simF32Stats(entry);
 }
 
 function rebuildPrecomputedStatsMapPlayerThingStat(playerId, kind, key, statKey = null) {

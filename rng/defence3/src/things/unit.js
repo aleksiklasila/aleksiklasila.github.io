@@ -600,9 +600,9 @@ class Unit {
     get vy() { return this._us ? this._us.vy[this._si] : (this._det ? this._det.vy : undefined); }
     set vy(v) { if (this._us) this._us.vy[this._si] = v; else if (this._det) this._det.vy = v; else Object.defineProperty(this, 'vy', { value: v, writable: true, enumerable: true, configurable: true }); }
     get attackTimer() { return this._us ? this._us.attackTimer[this._si] : (this._det ? this._det.attackTimer : undefined); }
-    set attackTimer(v) { if (this._us) this._us.attackTimer[this._si] = v; else if (this._det) this._det.attackTimer = v; else Object.defineProperty(this, 'attackTimer', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set attackTimer(v) { if (this._us) { this._us.attackTimer[this._si] = v; if (v > 0) this._us.tmOn[this._si] = 1; } else if (this._det) this._det.attackTimer = v; else Object.defineProperty(this, 'attackTimer', { value: v, writable: true, enumerable: true, configurable: true }); }
     get attackFlash() { return this._us ? this._us.attackFlash[this._si] : (this._det ? this._det.attackFlash : undefined); }
-    set attackFlash(v) { if (this._us) this._us.attackFlash[this._si] = v; else if (this._det) this._det.attackFlash = v; else Object.defineProperty(this, 'attackFlash', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set attackFlash(v) { if (this._us) { this._us.attackFlash[this._si] = v; if (v > 0) this._us.tmOn[this._si] = 1; } else if (this._det) this._det.attackFlash = v; else Object.defineProperty(this, 'attackFlash', { value: v, writable: true, enumerable: true, configurable: true }); }
     get energy() { return this._us ? this._us.energy[this._si] : (this._det ? this._det.energy : undefined); }
     set energy(v) { if (this._us) this._us.energy[this._si] = v; else if (this._det) this._det.energy = v; else Object.defineProperty(this, 'energy', { value: v, writable: true, enumerable: true, configurable: true }); }
     get pathIndex() { return this._us ? this._us.pathIndex[this._si] : (this._det ? this._det.pathIndex : undefined); }
@@ -711,6 +711,7 @@ class Unit {
     set path(v) {
         const c = this._us;
         if (c === undefined) { Object.defineProperty(this, '_path', { value: v, writable: true, configurable: true }); return; }
+        if (this._us) simUnitPathRelease(this._us, this._si);
         this._path = v;
         if (c) { c.mvOn[this._si] = 0; c.mvCD[this._si] = -1; }
     }
@@ -793,10 +794,10 @@ class Unit {
         }
 
         // Speed modifier
-        let spd = this.preComputed.speed;
+        let spd = Math.fround(this.preComputed.speed * _getUnitAstarSpeedMultiplier(this));
         if (this.frozen > 0) spd *= 0.5;
         if (this.sandy > 0) spd *= 0.5;
-        spd *= _getUnitAstarSpeedMultiplier(this);
+
 
         // Worker AI (collector/salvager units)
         if (this.workerState) {
@@ -1372,7 +1373,7 @@ class Unit {
             let nextNodeInTile = this.path[this.pathIndex + 1];
             if (nextNodeInTile && isCloudPortalLink(curNode.x, curNode.y, nextNodeInTile.x, nextNodeInTile.y, this.owner)) {
                 if (!_tryConsumeAstarMoveCostForTransition(this, curNode, nextNodeInTile)) return false;
-                let laneOffsetNow = Math.max(1.5, Math.min(4, this.r * 0.6));
+                let laneOffsetNow = Math.fround(Math.max(1.5, Math.min(4, this.r * 0.6)));
                 let nTx = nextNodeInTile.x * TILE + 16;
                 let nTy = nextNodeInTile.y * TILE + 16;
                 let postNodeNow = this.path[this.pathIndex + 2] || null;
@@ -1492,7 +1493,7 @@ class Unit {
             side = side > maxSide ? maxSide : (side < -maxSide ? -maxSide : side);
             tx = kx * TILE + 16 + sx * side; ty = ky * TILE + 16 + sy * side;
         } else {
-            const lane = Math.max(1.5, Math.min(4, this.r * 0.6)), sdx = kx - gx, sdy = ky - gy;
+            const lane = Math.fround(Math.max(1.5, Math.min(4, this.r * 0.6))), sdx = kx - gx, sdy = ky - gy;
             let lx = 0, ly = 0;
             if (Math.abs(sdx) >= Math.abs(sdy)) ly = (sdx < 0 ? lane : -lane); else lx = (sdy < 0 ? -lane : lane);
             tx = kx * TILE + 16 + lx; ty = ky * TILE + 16 + ly;
@@ -1545,7 +1546,7 @@ class Unit {
             }
             return true;
         }
-        let laneOffset = Math.max(1.5, Math.min(4, this.r * 0.6));
+        let laneOffset = Math.fround(Math.max(1.5, Math.min(4, this.r * 0.6)));
         let baseTx = node.x * TILE + 16;
         let baseTy = node.y * TILE + 16;
         let tx = baseTx;
@@ -1862,7 +1863,7 @@ function _hitStyleCode(a) {
 function _hitArrays(total) {
     const K = _hitK;
     if (K.cap >= total) return K;
-    const cap = Math.max(4096, total * 2);
+    const cap = simReserveCap(total, 4096);
     K.q = simSharedArray(Int32Array, cap); K.dmg = simSharedArray(Float64Array, cap); K.sty = simSharedArray(Uint8Array, cap);
     K.flag = simSharedArray(Uint8Array, cap); K.g = simSharedArray(Int32Array, cap); K.src = new Int32Array(cap);
     K.cap = cap;
@@ -2038,7 +2039,7 @@ function _unitHitBuilding(a, tb, dmg) {
 for (const k of (typeof SIM_UNIT_STATUS_COLUMNS !== 'undefined' ? SIM_UNIT_STATUS_COLUMNS : [])) {
     const timer = SIM_STATUS_TIMER_COLUMNS.includes(k);
     const get = new Function(`return function () { const c = this._us; return c ? c.${k}[this._si] : (this._det ? this._det.${k} : undefined); };`)();
-    const set = new Function('k', `return function (v) { const c = this._us; if (c) { c.${k}[this._si] = v;${timer ? ' if (v > 0) c.stOn[this._si] = 1;' : ''} } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(k);
+    const set = new Function('k', `return function (v) { const c = this._us; if (c) { c.${k}[this._si] = v;${timer ? ' if (v > 0) c.stOn[this._si] = 1;' : k === 'workerTransferCooldown' ? ' if (v > 0) c.tmOn[this._si] = 1;' : ''} } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(k);
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true });
 }
 
@@ -2062,7 +2063,7 @@ function statusPrepassRun() {
     if (!S || n === 0) return;
     const slots = _unitSlotMapEnsure(), chunks = Math.ceil(n / STATUS_PREPASS_CHUNK);
     if (!_statusCounts || _statusCounts.length < chunks) { _statusCounts = simSharedArray(Int32Array, Math.max(64, chunks * 2)); simParallelBind('st.count', _statusCounts); }
-    if (!_statusList || _statusList.length < chunks * STATUS_PREPASS_CHUNK) { _statusList = simSharedArray(Int32Array, Math.max(4096, chunks * STATUS_PREPASS_CHUNK * 2)); simParallelBind('st.list', _statusList); }
+    if (!_statusList || _statusList.length < chunks * STATUS_PREPASS_CHUNK) { _statusList = simSharedArray(Int32Array, simReserveCap(chunks * STATUS_PREPASS_CHUNK, 4096)); simParallelBind('st.list', _statusList); }
     simParallelBind('ix.slots', slots);
     const P = _simParams;
     P[0] = n; P[1] = STATUS_PREPASS_CHUNK; P[2] = gameTime; P[3] = STATUS_DOT_REPORT_TICKS;
@@ -2739,7 +2740,7 @@ function simMoveTryArm(u) {
     }
     // The path window: nodes from pathIndex - 1, up to a portal link (the
     // kernel leaves those to Unit.update).
-    const base = idx > 0 ? idx - 1 : 0, nb = s * SIM_MOVE_WINDOW, nodes = c.mvNodes;
+    const base = idx > 0 ? idx - 1 : 0, nb = simUnitPathWindow(c, s), nodes = c.mvNodes;
     // (Adjacent portal pairs only exist with cloud towers.)
     const clouds = _cloudTileCache && _cloudTileCache.size > 0;
     let wl = 0, px = 0, py = 0;
@@ -2810,7 +2811,7 @@ function _simMoveTryApproachBuilding(u) {
         return;
     }
     // The path window, as simMoveTryArm's (and ending before a nav node).
-    const base = idx > 0 ? idx - 1 : 0, nb = s * SIM_MOVE_WINDOW, nodes = c.mvNodes;
+    const base = idx > 0 ? idx - 1 : 0, nb = simUnitPathWindow(c, s), nodes = c.mvNodes;
     const clouds = _cloudTileCache && _cloudTileCache.size > 0;
     let wl = 0, px = 0, py = 0;
     for (; wl < SIM_MOVE_WINDOW && base + wl < path.length; wl++) {
@@ -3224,6 +3225,9 @@ function simMoveTryParkWork(u) {
     c.mvWake[s] = gameTime + Math.ceil(u.workerTransferCooldown); c.mvFlags[s] = 0;
     c.mvOn[s] = 2;
 }
+// A tick bound for an Int32 column the kernels compare as t < bound: the
+// same answer for every integer tick t (NaN: never, Infinity: always).
+function _simTickBound(v) { return v === v ? (v >= 2147483647 ? 2147483647 : v <= -2147483648 ? -2147483648 : Math.ceil(v)) : -2147483648; }
 function simMoveTryPark(u) {
     const c = u._us;
     if (!c || u.dead || u.holdPosition || u.workerTransferCooldown > 0) return;
@@ -3292,7 +3296,7 @@ function simMoveTryPark(u) {
         c.wkType[s] = _workerWorkType(u.workerType); c.wkD[s] = Math.ceil(_getWorkerAutoSearchDistancePx(u) / TILE) + 1;
         c.wkOx[s] = Math.floor(org.x / TILE); c.wkOy[s] = Math.floor(org.y / TILE);
         c.wkTwice[s] = org !== u ? 1 : 0;
-        c.wkFail[s] = failVer | 0; c.wkUntil[s] = failUntil; c.wkSched[s] = sched;
+        c.wkFail[s] = failVer | 0; c.wkUntil[s] = _simTickBound(failUntil); c.wkSched[s] = _simTickBound(sched);
         c.mvFlags[s] |= 2;
     }
     c.mvOn[s] = 2;
@@ -3705,15 +3709,15 @@ function simMoveRun() {
     P[33] = _sxEpoch; P[34] = CHUNKS_W; P[35] = CHUNKS_H; P[36] = CHUNK_SIZE; P[37] = _combatScanTick === gameTime ? 1 : 0;
     P[38] = SIM_ACQUIRE_TICKS; P[39] = _acqCommitTick;
     // (Attack holds: sight by area, the area of each tile.)
-    if (typeof _visCoverReady === 'function' && _visCoverReady()) { simParallelBind('vis.cover', _visCover.cover); simParallelBind('vis.coverf', _visCover.coverFlat); }
+    if (typeof _visCoverReady === 'function' && _visCoverReady()) { simParallelBind('vis.cover', _visCover.visible); simParallelBind('vis.coverf', _visCover.visibleFlat); }
     simParallelBind('ix.agrid', _spatialAreaGridFlat());
     if (typeof _flowTables === 'function') _flowTables();
     const chunks = Math.ceil(n / CH);
-    if (!_simMovePost || _simMovePost.length < chunks * CH) { _simMovePost = simHeapArrayAuto(Int32Array, Math.max(8192, chunks * CH * 2)); simParallelBind('mv.post', _simMovePost); }
+    if (!_simMovePost || _simMovePost.length < chunks * CH) { _simMovePost = simHeapArrayAuto(Int32Array, simReserveCap(chunks * CH, 8192)); simParallelBind('mv.post', _simMovePost); }
     if (!_simMovePostC || _simMovePostC.length < chunks) { _simMovePostC = simHeapArrayAuto(Int32Array, Math.max(64, chunks * 2)); simParallelBind('mv.postc', _simMovePostC); }
     // (The attacks the kernel made, per chunk: see unitHitsResolve.)
     if (!_simMoveHitA || _simMoveHitA.length < chunks * CH) {
-        _simMoveHitA = simHeapArrayAuto(Int32Array, Math.max(8192, chunks * CH * 2)); _simMoveHitT = simHeapArrayAuto(Int32Array, _simMoveHitA.length);
+        _simMoveHitA = simHeapArrayAuto(Int32Array, simReserveCap(chunks * CH, 8192)); _simMoveHitT = simHeapArrayAuto(Int32Array, _simMoveHitA.length);
         simParallelBind('mv.hita', _simMoveHitA); simParallelBind('mv.hitt', _simMoveHitT);
     }
     if (!_simMoveHitC || _simMoveHitC.length < chunks) { _simMoveHitC = simHeapArrayAuto(Int32Array, Math.max(64, chunks * 2)); simParallelBind('mv.hitc', _simMoveHitC); }
@@ -3734,7 +3738,7 @@ function simMoveRun() {
     // movement kernel does the rest.)
     const stepK = SIM_MOVE_STEP_KERNEL && typeof SIM_KERNEL_MOVE_STEP === 'number';
     P[46] = stepK ? 1 : 0;
-    if (stepK) simParallelRun(SIM_KERNEL_MOVE_STEP, chunks);
+    // The fast step and remaining movement share each scheduled chunk.
     simParallelRun(SIM_KERNEL_MOVE, chunks);
     _simMoveRunWallVer = _simMoveWallVer; _simDead0Tick = gameTime;
     _spatialKernelMoves = true;
@@ -3865,7 +3869,7 @@ function combatScanRun() {
     const n = S.owners.length;
     if (!n || !_visCoverReady() || !_simMoveHostile || !spatialBlockCols) return;
     if (spatialIndexEntries() <= 0) return;
-    simParallelBind('vis.cover', _visCover.cover); simParallelBind('vis.coverf', _visCover.coverFlat);
+    simParallelBind('vis.cover', _visCover.visible); simParallelBind('vis.coverf', _visCover.visibleFlat);
     simParallelBind('sep.eslot', _sxESlot); simParallelBind('sep.rs', _sxStart); simParallelBind('sep.rc', _sxCount); simParallelBind('sep.rstamp', _sxStamp);
     const P = _simParams;
     P[0] = n; P[1] = 2048; P[2] = gameTime; P[3] = CHUNKS_W; P[4] = CHUNKS_H; P[5] = TILE; P[6] = _sxEpoch;
@@ -3946,10 +3950,10 @@ function _acqPost() {
     if (!S || !_visCoverReady() || !_simMoveHostile || !_simMoveStruct || !_simStructCls || !spatialBlockCols || spatialIndexEntries() <= 0) return;
     const n = S.owners.length, nc = CHUNKS_W * CHUNKS_H, ne = spatialIndexEntries(), C = _visCover, A = C.areaCount, np = C.players;
     if (!n || !_combatScanOwnerMask) return;
-    const cap = Math.max(1024, n * 2);
+    const cap = simReserveCap(n);
     if (_acq.cap < n) {
-        _acqArray('acq.x', Float64Array, cap); _acqArray('acq.y', Float64Array, cap); _acqArray('acq.own', Int32Array, cap); _acqArray('acq.flags', Uint8Array, cap);
-        _acqArray('acq.cmd', Int32Array, cap); _acqArray('acq.rng', Float64Array, cap); _acqArray('acq.id', Int32Array, cap);
+        _acqArray('acq.x', Float32Array, cap); _acqArray('acq.y', Float32Array, cap); _acqArray('acq.own', Int8Array, cap); _acqArray('acq.flags', Uint8Array, cap);
+        _acqArray('acq.cmd', Uint8Array, cap); _acqArray('acq.rng', Float32Array, cap); _acqArray('acq.id', Int32Array, cap);
         _acqArray('acq.out', Int32Array, cap); _acqArray('acq.tid', Int32Array, cap); _acqArray('acq.sout', Int32Array, cap);
         _acq.cap = cap;
     }
@@ -3966,16 +3970,16 @@ function _acqPost() {
     simParallelBind('acq.hs', _simMoveHostile); if (_simMoveHostStruct) simParallelBind('acq.hss', _simMoveHostStruct);
     _acqArray('acq.sown', Int8Array, GRID_W * GRID_H).set(_simMoveStruct.subarray(0, GRID_W * GRID_H));
     _acqArray('acq.scls', Int8Array, GRID_W * GRID_H).set(_simStructCls.subarray(0, GRID_W * GRID_H));
-    const cov = _acqArray('acq.cover', Int32Array, Math.max(1, np * A));
-    for (let p = 0; p < np; p++) cov.set(C.cover[p].subarray(0, A), p * A);
+    const cov = _acqArray('acq.cover', Uint8Array, Math.max(1, np * A));
+    for (let p = 0; p < np; p++) cov.set(C.visible[p].subarray(0, A), p * A);
     simParallelBind('acq.agrid', _spatialAreaGridFlat());
     // First the owners per chunk transposed (SIM_KERNEL_ACQ_OMT: the Rust
     // scan reads a ring's columns as runs), then the scan. (Each stage's
     // params written whole.)
     _acqArray('acq.omt', Uint8Array, CHUNKS_W * CHUNKS_H);
     // (And the index's entries packed in its order: acq.ex... .)
-    const ecap = Math.max(1024, ne * 2);
-    _acqArray('acq.ex', Float64Array, ecap); _acqArray('acq.ey', Float64Array, ecap);
+    const ecap = simReserveCap(ne);
+    _acqArray('acq.ex', Float32Array, ecap); _acqArray('acq.ey', Float32Array, ecap);
     _acqArray('acq.eo', Int32Array, ecap); _acqArray('acq.ea', Int32Array, ecap); _acqArray('acq.eid', Int32Array, ecap);
     const T = simParallelStageParams(ACQ_LANE, 0), B = simParallelStageParams(ACQ_LANE, 1);
     T.fill(0); B.fill(0);
@@ -4057,8 +4061,8 @@ function _sepArrays(n) {
     const S = _sep, cap = S.cap;
     // (Nothing per chunk: mark and pairs find neighbours through the entries.)
     for (const [name, Type, size] of [['ord', Int32Array, cap], ['qx', Float32Array, cap], ['qy', Float32Array, cap],
-        ['qr', Float32Array, cap], ['meta', Int32Array, cap], ['qid', Int32Array, cap], ['px', Float64Array, cap], ['py', Float64Array, cap], ['ov', Float64Array, cap],
-        ['hit', Uint32Array, cap], ['nextX', Float64Array, cap], ['nextY', Float64Array, cap], ['fast', Uint8Array, cap], ['ex', Int32Array, cap], ['exc', Int32Array, Math.ceil(cap / 512) + 1]]) _sepShared(S, name, Type, size);
+        ['qr', Float32Array, cap], ['meta', Int32Array, cap], ['qid', Int32Array, cap], ['px', Float64Array, cap], ['py', Float64Array, cap], ['ov', Float32Array, cap],
+        ['hit', Uint32Array, cap], ['nextX', Float32Array, cap], ['nextY', Float32Array, cap], ['fast', Uint8Array, cap], ['ex', Int32Array, cap], ['exc', Int32Array, Math.ceil(cap / 512) + 1]]) _sepShared(S, name, Type, size);
     if (_sepDirty || S.sumsCap !== cap) { S.px.fill(0); S.py.fill(0); S.ov.fill(0); S.hit.fill(0); _sepDirty = false; S.sumsCap = cap; }
 }
 // Whether separationStart will take the separation prebuilt after the last
@@ -4200,7 +4204,7 @@ function runUnitSeparationPass() {
     let jobs = _sepShared(S, 'jobs', Int32Array, cap), jobCount = 0;
     let sdx = _sepShared(S, 'sdx', Float64Array, cap), sdy = _sepShared(S, 'sdy', Float64Array, cap);
     let PX = _sepShared(S, 'px', Float64Array, cap), PY = _sepShared(S, 'py', Float64Array, cap);
-    let OV = _sepShared(S, 'ov', Float64Array, cap), HIT = _sepShared(S, 'hit', Uint32Array, cap);
+    let OV = _sepShared(S, 'ov', Float32Array, cap), HIT = _sepShared(S, 'hit', Uint32Array, cap);
     let K = S.key;
     PX.fill(0, 0, n); PY.fill(0, 0, n); OV.fill(0, 0, n); HIT.fill(0, 0, n);
     let epoch = 1;
@@ -4300,7 +4304,7 @@ function runUnitSeparationPass() {
     if (bySlot) { _commitUnitSeparationPushes(n); return; }
     const useSharedFinish = false;
     if (useSharedFinish) {
-        _sepShared(S, 'nextX', Float64Array, cap); _sepShared(S, 'nextY', Float64Array, cap);
+        _sepShared(S, 'nextX', Float32Array, cap); _sepShared(S, 'nextY', Float32Array, cap);
         _sepShared(S, 'fast', Uint8Array, cap);
         P[0] = n; P[1] = 512; P[2] = TILE; P[3] = UNIT_POSITION_QUANTIZATION;
         P[4] = UNIT_SEPARATION_CONTACTS; P[5] = UNIT_SEPARATION_Q; P[6] = gameTime; P[7] = UNIT_SEPARATION_PATH_RETRY_TICKS;

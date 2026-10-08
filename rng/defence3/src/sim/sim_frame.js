@@ -83,7 +83,7 @@ function simFrameViews(buf, cap) {
 
 // Render slots: a small index per living unit, reused after it dies.
 // lastX/lastY: where the unit was in the last frame (its next frame's start).
-const _simRenderSlots = { owner: [], free: [], stamp: new Int32Array(0), tick: 0, lastX: new Float64Array(0), lastY: new Float64Array(0), version: 0 };
+const _simRenderSlots = { owner: [], free: [], stamp: new Int32Array(0), tick: 0, lastX: new Float32Array(0), lastY: new Float32Array(0), version: 0 };
 // String codes: 0 is none (null, undefined or '').
 const _simFrameStrings = { codes: new Map(), list: [''], sent: 1 };
 // Buffers the page gave back.
@@ -180,7 +180,7 @@ function _simRenderSlotOf(u) {
     R.version++;
     if (R.lastX.length <= slot) {
         let cap = Math.max(1024, (slot + 1) * 2);
-        let gx = simSharedArray(Float64Array, cap), gy = simSharedArray(Float64Array, cap);
+        let gx = simSharedArray(Float32Array, cap), gy = simSharedArray(Float32Array, cap);
         gx.set(R.lastX); gy.set(R.lastY);
         R.lastX = gx; R.lastY = gy;
         simParallelBind('frame.lastX', gx); simParallelBind('frame.lastY', gy);
@@ -196,7 +196,7 @@ function _simFrameGrowInput(n) {
     if (S.cap >= n) return S;
     S.cap = Math.max(1024, n, S.cap * 2);
     for (const k of ['slot', 'targetX', 'targetY', 'still', 'flash']) {
-        S[k] = simSharedArray(Float64Array, S.cap);
+        S[k] = simSharedArray(k === 'slot' ? Int32Array : k === 'flash' ? Uint8Array : Float32Array, S.cap);
         simParallelBind('frame.' + k, S[k]);
     }
     return S;
@@ -218,7 +218,7 @@ function simFrameEncode() {
     let buf = _simFrameAcquire(cap * SIM_FRAME_SLOT_BYTES, SIM_PAR_SHARED);
     let F = simFrameViews(buf, cap);
     let input = _simFrameGrowInput(cap);
-    if (R.stamp.length < n) { let grown = new Int32Array(Math.max(1024, n * 2)); grown.set(R.stamp); R.stamp = grown; }
+    if (R.stamp.length < n) { let grown = new Int32Array(Math.max(1024, Math.ceil(n * 1.125 / 4096) * 4096)); grown.set(R.stamp); R.stamp = grown; }
     let order = F.order, k = 0, orderChanged = !_simFrameOrderLast || _simFrameOrderLast.length !== live;
     let flagsA = F.flags;
     for (let i = 0; i < count; i++) {

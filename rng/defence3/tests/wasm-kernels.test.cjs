@@ -81,22 +81,22 @@ function separationCase(seed) {
     const unitOf = new Int32Array(slots).fill(-1);
     slotOf.forEach((s, i) => { unitOf[s] = i; });
     const U = s => unitOf[s];
-    const X = col('x', Float64Array, s => U(s) >= 0 ? xs[U(s)] : 0), Y = col('y', Float64Array, s => U(s) >= 0 ? ys[U(s)] : 0);
+    const X = col('x', Float32Array, s => U(s) >= 0 ? xs[U(s)] : 0), Y = col('y', Float32Array, s => U(s) >= 0 ? ys[U(s)] : 0);
     // (The tick-start copy: a little behind.)
-    col('x0', Float64Array, s => X[s] + (rnd() < 0.3 ? (rnd() - 0.5) * 4 : 0)); col('y0', Float64Array, s => Y[s]);
-    col('prevX', Float64Array, s => rnd() < 0.5 ? X[s] : X[s] - 1); col('prevY', Float64Array, s => Y[s]);
+    col('x0', Float32Array, s => X[s] + (rnd() < 0.3 ? (rnd() - 0.5) * 4 : 0)); col('y0', Float32Array, s => Y[s]);
+    col('prevX', Float32Array, s => rnd() < 0.5 ? X[s] : X[s] - 1); col('prevY', Float32Array, s => Y[s]);
     const dead = col('dead', Uint8Array, () => rnd() < 0.03 ? 1 : 0);
     col('sepD0', Uint8Array, s => rnd() < 0.02 ? 1 : dead[s]);
-    const cr = col('collisionR', Float64Array, () => pick([4, 6, 8, 9, 12, 0, NaN]));
-    const rr = col('r', Float64Array, () => pick([5, 7, 0, 0.05]));
-    col('sepR0', Float64Array, s => Math.max(.1, cr[s] || rr[s] || .1));
+    const cr = col('collisionR', Float32Array, () => pick([4, 6, 8, 9, 12, 0, NaN]));
+    const rr = col('r', Float32Array, () => pick([5, 7, 0, 0.05]));
+    col('sepR0', Float32Array, s => Math.max(.1, cr[s] || rr[s] || .1));
     col('sepLayer', Uint8Array, () => pick([0, 0, 0, 1, 2])); col('sepL0', Uint8Array, s => W.reg['unit.sepLayer'][s]);
-    col('owner', Int32Array, () => Math.floor(rnd() * 4));
+    col('owner', Int8Array, () => Math.floor(rnd() * 4));
     col('id', Int32Array, s => pick([s * 13 + 1, 2147483000 + s, 1 + Math.floor(rnd() * 1e6)]));
     col('sepMov', Uint8Array, () => rnd() < 0.5 ? 1 : 0);
     col('mvOn', Uint8Array, () => pick([0, 0, 1, 3])); col('mvFlags', Uint8Array, () => pick([0, 4, 64, 68]));
-    col('sepCx', Float64Array, () => pick([0, 0, 0, -0, 0.75, -1.5, 3.25])); col('sepCy', Float64Array, () => pick([0, 0, -0, 0.5, -2]));
-    col('spEpoch', Int32Array, () => rnd() < 0.9 ? 77 : 76); col('spOwner', Int32Array, s => rnd() < 0.95 ? W.reg['unit.owner'][s] : 3);
+    col('sepCx', Float32Array, () => pick([0, 0, 0, -0, 0.75, -1.5, 3.25])); col('sepCy', Float32Array, () => pick([0, 0, -0, 0.5, -2]));
+    col('spEpoch', Int32Array, () => rnd() < 0.9 ? 77 : 76); col('spOwner', Int8Array, s => rnd() < 0.95 ? W.reg['unit.owner'][s] : 3);
     col('sepKey', Uint32Array, () => rnd() < 0.95 ? Math.floor(rnd() * nc) : 0xFFFFFF); col('vsGen', Int32Array, () => rnd() < 0.9 ? 5 : 4);
     col('spTile', Int32Array, () => Math.floor(rnd() * nc)); col('spArea', Int32Array, () => -1);
     col('spMvOld', Int32Array, () => 0); col('spMvNew', Int32Array, () => 0); col('spMvOwn', Int8Array, () => rnd() < 0.1 ? 2 : 0);
@@ -120,8 +120,8 @@ function separationCase(seed) {
     S.add('ix.listed', Int32Array, 2, () => ne);
     for (const [nm, T, len] of [['ord', Int32Array, cap], ['qx', Float32Array, cap], ['qy', Float32Array, cap], ['qr', Float32Array, cap], ['meta', Int32Array, cap], ['qid', Int32Array, cap],
         ['chunkR', Float64Array, nc], ['chunkC', Uint8Array, nc], ['chunkP', Uint8Array, nc], ['sole', Int32Array, nc], ['box', Int32Array, nc * 4],
-        ['px', Float64Array, slots], ['py', Float64Array, slots], ['ov', Float64Array, slots], ['hit', Uint32Array, slots],
-        ['nextX', Float64Array, slots], ['nextY', Float64Array, slots], ['fast', Uint8Array, slots], ['ex', Int32Array, slots + 512], ['exc', Int32Array, Math.ceil(slots / 512) + 1], ['moves', Int32Array, 1]])
+        ['px', Float64Array, slots], ['py', Float64Array, slots], ['ov', Float32Array, slots], ['hit', Uint32Array, slots],
+        ['nextX', Float32Array, slots], ['nextY', Float32Array, slots], ['fast', Uint8Array, slots], ['ex', Int32Array, slots + 512], ['exc', Int32Array, Math.ceil(slots / 512) + 1], ['moves', Int32Array, 1]])
         S.add('sep.' + nm, T, len, () => 0);
 
     const mode = pick([0, 0, 1, 2]), rest = pick([4, 1, 6]), tick = 100 + Math.floor(rnd() * 50), live = rnd() < 0.5 ? 1 : 0;
@@ -157,17 +157,17 @@ function acquisitionCase(seed) {
         xs[i] = Math.max(0, Math.min(CW * tile - 1, xs[i])); ys[i] = Math.max(0, Math.min(CH * tile - 1, ys[i]));
         if (rnd() < 0.01) xs[i] = -5;
     }
-    S.add('acq.x', Float64Array, n, i => xs[i]); S.add('acq.y', Float64Array, n, i => ys[i]);
-    S.add('acq.own', Int32Array, n, () => pick([0, 1, 2, 2, 5]));
+    S.add('acq.x', Float32Array, n, i => xs[i]); S.add('acq.y', Float32Array, n, i => ys[i]);
+    S.add('acq.own', Int8Array, n, () => pick([0, 1, 2, 2, 5]));
     S.add('acq.flags', Uint8Array, n, () => pick([0, 0, 0, 1, 2, 4]));
-    S.add('acq.cmd', Int32Array, n, () => pick([0, 3, 2, 1]));
-    S.add('acq.rng', Float64Array, n, () => pick([96, 160, 250, 0, 400.5]));
+    S.add('acq.cmd', Uint8Array, n, () => pick([0, 3, 2, 1]));
+    S.add('acq.rng', Float32Array, n, () => pick([96, 160, 250, 0, 400.5]));
     S.add('acq.id', Int32Array, n, i => pick([i * 3 + 1, 1000 - i, 77]));
     for (const nm of ['out', 'tid', 'sout']) S.add('acq.' + nm, Int32Array, n, () => 5);
     S.add('acq.scls', Int8Array, nc, () => rnd() < 0.85 ? 0 : pick([1, 2, 3, 4, 5, -1]));
     S.add('acq.sown', Int8Array, nc, () => pick([-1, 0, 1, 2, -2]));
     S.add('acq.agrid', Int32Array, nc, () => rnd() < 0.05 ? -1 : Math.floor(rnd() * Ar));
-    S.add('acq.cover', Int32Array, Math.max(1024, players * Ar), () => rnd() < 0.8 ? 1 : 0);
+    S.add('acq.cover', Uint8Array, Math.max(1024, players * Ar), () => rnd() < 0.8 ? 1 : 0);
     S.add('acq.hs', Int32Array, players * plane, () => pick([0, 1, 3]));
     if (rnd() < 0.7) S.add('acq.hss', Int32Array, players * plane, () => pick([0, 2])); else W.bind('acq.hss', null);
     const ent = [];
@@ -183,7 +183,7 @@ function acquisitionCase(seed) {
     const omt = seed % 2 === 1;
     if (omt) {
         S.add('acq.omt', Uint8Array, nc, () => 7);
-        for (const [nm, T] of [['ex', Float64Array], ['ey', Float64Array], ['eo', Int32Array], ['ea', Int32Array], ['eid', Int32Array]]) S.add('acq.' + nm, T, ent.length + 8, () => 3);
+        for (const [nm, T] of [['ex', Float32Array], ['ey', Float32Array], ['eo', Int32Array], ['ea', Int32Array], ['eid', Int32Array]]) S.add('acq.' + nm, T, ent.length + 8, () => 3);
         runBoth(S, W.ids.OMT, [CW, CH, 16, ent.length, 333, tile, GW, GH], Math.max(Math.ceil(CH / 16), Math.ceil(ent.length / 333)));
         S.check(`seed ${seed} acquisition transpose and packing`);
     }

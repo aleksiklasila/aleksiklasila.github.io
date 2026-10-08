@@ -32,7 +32,7 @@ const VIS_CHECK = `(() => {
 const SEP_CHECK = `(() => {
     const S = _sep, nChunks = CHUNKS_W * CHUNKS_H;
     if (!S.start) return JSON.stringify({ units: 0 });
-    const n = units.length, px = new Float64Array(n), py = new Float64Array(n), ov = new Float64Array(n), hit = new Float64Array(n);
+    const n = units.length, px = new Float64Array(n), py = new Float64Array(n), ov = new Float32Array(n), hit = new Float64Array(n);
     const { ord, sx, sy, sr, so, sl, sc, sid, sdx, sdy, start, chunkR, chunkC, sole } = S;
     const pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0), farAny = 2 * Math.max(0.1, _maxUnitCollisionRadius()) + pad, cws = CHUNK_SIZE * TILE;
     const reach = Math.max(1, Math.ceil(farAny / cws));

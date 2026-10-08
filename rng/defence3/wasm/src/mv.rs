@@ -18,7 +18,7 @@ const W_ON: usize = 0;
 const W_OUT: usize = 1;
 const W_FL: usize = 2;
 const W_ID: usize = 3;
-const W_STEPT: usize = 4;
+const W_PATH: usize = 4;
 const W_EN: usize = 5;
 const W_SEP: usize = 6;
 const W_DEAD: usize = 7;
@@ -159,6 +159,7 @@ const W_FLASH: usize = 141;
 const W_HITA: usize = 142;
 const W_HITT: usize = 143;
 const W_HITC: usize = 144;
+const W_TMON: usize = 145;
 /// Per navigation profile p: 8 words from W_NAV + 8p (fields, partL, partB,
 /// nb, nt, np, meta, walls).
 const W_NAV: usize = 160;
@@ -196,30 +197,32 @@ struct Mv {
     out: *mut u8,
     fl: *mut u8,
     id: *const i32,
-    stept: *mut i32,
-    en: *const f64,
+    path: *const i32,
+    stept: *mut u8,
+    stepbase: usize,
+    en: *const F32,
     sep: *mut u32,
     dead: *const u8,
-    own: *const i32,
-    x: *mut f64,
-    y: *mut f64,
-    px: *mut f64,
-    py: *mut f64,
+    own: *const I8I32,
+    x: *mut F32,
+    y: *mut F32,
+    px: *mut F32,
+    py: *mut F32,
     floor: *mut i32,
     sc: *const i8,
     d0: *mut u8,
     wake: *mut i32,
-    wkwx: *const f64,
-    wkwy: *const f64,
+    wkwx: *const F32,
+    wkwy: *const F32,
     dest: *const i32,
     cd: *mut i32,
     ct: *mut i32,
-    cvx: *mut f64,
-    cvy: *mut f64,
+    cvx: *mut F32,
+    cvy: *mut F32,
     ctl: *mut i32,
     cn: *mut u8,
-    vx: *mut f64,
-    vy: *mut f64,
+    vx: *mut F32,
+    vy: *mut F32,
     spent: *mut u8,
     wall: *const u8,
     area: *mut i32,
@@ -227,7 +230,7 @@ struct Mv {
     ab: *const i32,
     abok: *const u8,
     hs: *const i32,
-    at: *const f64,
+    at: *const F32,
     dbt: *mut i32,
     dbs: *mut i32,
     dbtk: *mut i32,
@@ -239,23 +242,23 @@ struct Mv {
     fmn: *const i32,
     fmw: *const i32,
     npr: *const u8,
-    spd: *const f64,
+    spd: *const F32,
     ht: *const i32,
     htid: *const i32,
-    x0: *const f64,
-    y0: *const f64,
-    crc: *const f64,
-    rrc: *const f64,
+    x0: *const F32,
+    y0: *const F32,
+    crc: *const F32,
+    rrc: *const F32,
     aoff: *const i32,
     anb: *const i32,
-    covf: *const i32,
+    covf: *const u8,
     ag: *const i32,
     frz: *const i32,
     snd: *const i32,
     cbt: *const i32,
     cbtk: *const i32,
-    chs: *const f64,
-    rng: *const f64,
+    chs: *const F32,
+    rng: *const F32,
     wkv: *const i32,
     wkty: *const i32,
     wkd: *const i32,
@@ -263,20 +266,20 @@ struct Mv {
     wkoy: *const i32,
     wktw: *const u8,
     wkf: *const i32,
-    wku: *const f64,
-    wksc: *const f64,
+    wku: *const I32Number,
+    wksc: *const I32Number,
     hwin: *mut i32,
     htt: *mut i32,
     hver: *mut i32,
     cti: *const i32,
-    crs: *const f64,
+    crs: *const F32,
     cbs: *const i32,
-    lsx: *mut f64,
-    lsy: *mut f64,
-    lspx: *mut f64,
-    lspy: *mut f64,
+    lsx: *mut F32,
+    lsy: *mut F32,
+    lspx: *mut F32,
+    lspy: *mut F32,
     lst: *mut i32,
-    lane: *const f64,
+    lane: *const F32,
     airw: *const u8,
     frn: *const u8,
     frw: *const u8,
@@ -292,7 +295,7 @@ struct Mv {
     nvn2: *mut i32,
     nvf: *mut i32,
     nvo: *mut u8,
-    nld: *mut f64,
+    nld: *mut F32,
     cwn: *const u8,
     cwt: *const i32,
     cwd: *const u16,
@@ -302,11 +305,11 @@ struct Mv {
     plen: *const i32,
     scan: *mut i32,
     nodes: *const i32,
-    pidx: *mut f64,
+    pidx: *mut I32Number,
     post: *mut i32,
     postc: *mut i32,
     spe: *const i32,
-    spo: *const i32,
+    spo: *const I8I32,
     spt: *mut i32,
     spty: *const i16,
     vsg: *const i32,
@@ -317,8 +320,8 @@ struct Mv {
     rem: *const f64,
     fix: *mut f64,
     use_: *mut f64,
-    cost: *const f64,
-    cmd: *const i32,
+    cost: *const F32,
+    cmd: *const U8I32,
     shoot: *const u8,
     rd_: *const u8,
     rk: *const u8,
@@ -332,11 +335,12 @@ struct Mv {
     hss: *const i32,
     dbti: *mut i32,
     fire: *mut u8,
-    acd: *const f64,
-    flash: *mut i32,
+    acd: *const F32,
+    flash: *mut U8I32,
     hita: *mut i32,
     hitt: *mut i32,
     hitc: *mut i32,
+    tmon: *mut u8,
     nav: [NavP; NAV_PROFILES],
     offn: usize,
     wkvn: usize,
@@ -396,7 +400,9 @@ impl Mv {
             out: p!(W_OUT),
             fl: p!(W_FL),
             id: p!(W_ID),
-            stept: p!(W_STEPT),
+            path: p!(W_PATH),
+            stept: a.add(300) as *mut u8,
+            stepbase: rd(a, 299) as usize,
             en: p!(W_EN),
             sep: p!(W_SEP),
             dead: p!(W_DEAD),
@@ -537,6 +543,7 @@ impl Mv {
             hita: p!(W_HITA),
             hitt: p!(W_HITT),
             hitc: p!(W_HITC),
+            tmon: p!(W_TMON),
             nav,
             offn: word(a, W_OFFN),
             wkvn: word(a, W_WKVN),
@@ -1052,8 +1059,9 @@ unsafe fn flow_look(m: &Mv, v: &Nav, s: usize, refresh: bool, tl: i32, gx: i32, 
 #[inline(always)]
 unsafe fn commit_step(m: &Mv, s: usize, x: f64, y: f64, vx: f64, vy: f64, gx: i32, gy: i32, tl: i32, q: f64, iq: f64) {
     let itile = m.itile;
-    let nx = x + vx;
-    let ny = y + vy;
+    // (Rounded as the position column stores it: Unit.update's x += vx.)
+    let nx = (x + vx) as f32 as f64;
+    let ny = (y + vy) as f32 as f64;
     wr(m.px, s, x);
     wr(m.py, s, y);
     wr(m.vx, s, vx);
@@ -1092,7 +1100,7 @@ pub unsafe extern "C" fn mv_step(a: *const i32, s0: i32, end: i32) {
     let end = if end > 0 { end as usize } else { 0 };
     while s < end {
         let dead = rd(m.dead, s);
-        wr(m.d0, s, dead);
+        if rd(m.d0, s) != dead { wr(m.d0, s, dead); }
         let on = rd(m.on, s);
         if on == 2 {
             // A parked unit before its wake tick: stands.
@@ -1133,7 +1141,7 @@ pub unsafe extern "C" fn mv_step(a: *const i32, s0: i32, end: i32) {
             wr(m.px, s, x);
             wr(m.py, s, y);
             wr(m.out, s, 1);
-            wr(m.stept, s, t + 1);
+            wr(m.stept, s - m.stepbase, 1);
             s += 1;
             continue;
         }
@@ -1255,7 +1263,7 @@ unsafe fn step_flow(
         }
     }
     commit_step(m, s, x, y, vx, vy, gx, gy, tl, q, iq);
-    wr(m.stept, s, t + 1);
+    wr(m.stept, s - m.stepbase, 1);
 }
 
 /// The look's box clamped to the map, as the kernels clamp it.
@@ -1305,6 +1313,9 @@ struct MoveP {
 /// SIM_KERNEL_MOVE over slots s0..end (chunk: the epilogue's).
 #[no_mangle]
 pub unsafe extern "C" fn mv_move(a: *const i32, s0: i32, end: i32, chunk: i32) {
+    wr(a as *mut i32, 299, s0);
+    core::ptr::write_bytes(a.add(300) as *mut u8, 0, (end - s0).max(0) as usize);
+    if rd((a as usize + 4096) as *const f64, 46) == 1.0 { mv_step(a, s0, end); }
     let m = Mv::load(a);
     let f = (a as usize + 4096) as *const f64;
     let q = rd(f, 8);
@@ -1357,11 +1368,13 @@ pub unsafe extern "C" fn mv_move(a: *const i32, s0: i32, end: i32, chunk: i32) {
 /// _simMovePre for slot s: 0 done, 1 on to the flow, 2 on to the path.
 unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
     let (t, w, h, tile, itile) = (m.t, m.w, m.h, m.tile, m.itile);
-    wr(m.fire, s, 0);
+    // (Stores only where the value changes: most slots keep 0 / their copy.)
+    if rd(m.fire, s) != 0 { wr(m.fire, s, 0); }
     if !p.step_ran {
-        wr(m.d0, s, rd(m.dead, s));
+        let dead = rd(m.dead, s);
+        if rd(m.d0, s) != dead { wr(m.d0, s, dead); }
     }
-    if rd(m.stept, s) == t + 1 {
+    if rd(m.stept, s - m.stepbase) == 1 {
         return 0;
     }
     wr(m.out, s, 0);
@@ -1486,8 +1499,9 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
                 wr(m.out, s, 6);
             } else if (f & 4) != 0 && !m.hita.is_null() {
                 // (A plain attacker's attack made here, its hit listed.)
-                wr(m.at as *mut f64, s, rd(m.acd, s));
+                wr(m.at as *mut F32, s, rd(m.acd, s));
                 wr(m.flash, s, 8);
+                wr(m.tmon, s, 1);
                 let c = rd(m.hitc, p.chunk);
                 wr(m.hita, p.s0 + c as usize, s as i32);
                 wr(m.hitt, p.s0 + c as usize, qq);
@@ -1565,8 +1579,9 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
                 wr(m.py, s, y);
                 wr(m.out, s, 13);
                 if !(rd(m.at, s) > 0.0) && (f & 4) != 0 && !m.hita.is_null() {
-                    wr(m.at as *mut f64, s, rd(m.acd, s));
+                    wr(m.at as *mut F32, s, rd(m.acd, s));
                     wr(m.flash, s, 8);
+                wr(m.tmon, s, 1);
                     let c = rd(m.hitc, p.chunk);
                     wr(m.hita, p.s0 + c as usize, s as i32);
                     wr(m.hitt, p.s0 + c as usize, qq);
@@ -1610,8 +1625,8 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
             if rd(m.snd, s) > 0 {
                 spd *= 0.5;
             }
-            let nx = x + (dx / d) * spd;
-            let ny = y + (dy / d) * spd;
+            let nx = (x + (dx / d) * spd) as f32 as f64;
+            let ny = (y + (dy / d) * spd) as f32 as f64;
             let ngx = floor(nx * itile);
             let ngy = floor(ny * itile);
             // (JavaScript: WALL[NaN] is undefined, no wall.)
@@ -2086,7 +2101,7 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
     let len = rd(m.plen, s);
     let base = rd(m.base, s);
     let wl = rd(m.wlen, s) as i32;
-    let nb = s * p.win as usize;
+    let nb = rd(m.path, s) as usize * p.win as usize;
     let mut idx = to_i32(rd(m.pidx, s));
     let mut spent: i32 = 0;
     if idx >= len {
@@ -2289,8 +2304,9 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
     }
     let vx = (dx / dist) * spd;
     let vy = (dy / dist) * spd;
-    let nx = x + vx;
-    let ny = y + vy;
+    // (Rounded as the position column stores it: Unit.update's x += vx.)
+    let nx = (x + vx) as f32 as f64;
+    let ny = (y + vy) as f32 as f64;
     wr(m.px, s, x);
     wr(m.py, s, y);
     wr(m.vx, s, vx);

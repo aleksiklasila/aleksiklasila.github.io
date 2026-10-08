@@ -1117,7 +1117,7 @@ function _lightGradientIndex(gx, gy) {
     const width = GRID_W + 4, size = width * ((_vis ? _vis.length : 0) + 4);
     if (!cache.stamps || cache.stamps.length !== size) {
         cache.stamps = new Int32Array(size);
-        cache.values = new Float64Array(size * 8 + 8); // + one uncached slot
+        cache.values = new Float32Array(size * 8 + 8); // + one uncached slot
         cache.stamp = 0;
         cache.grid = null;
     }
@@ -4398,7 +4398,7 @@ function _runVisibilityJobs(jobs) {
     let maxPid = 0, total = 0;
     for (let pid = 0; pid < lists.lengths.length; pid++) { if (lists.lengths[pid]) { maxPid = pid; total += lists.lengths[pid]; } }
     for (let j = 0; j < jobs.length; j += 2) maxPid = Math.max(maxPid, jobs[j]);
-    if (!_visibilityKernelSrc || _visibilityKernelSrc.length < total) { _visibilityKernelSrc = simSharedArray(Float64Array, Math.max(3072, total * 2)); simParallelBind('vis.src', _visibilityKernelSrc); }
+    if (!_visibilityKernelSrc || _visibilityKernelSrc.length < total) { _visibilityKernelSrc = simSharedArray(Float32Array, simReserveCap(total, 3072)); simParallelBind('vis.src', _visibilityKernelSrc); }
     if (!_visibilityKernelSrcOff || _visibilityKernelSrcOff.length < (maxPid + 1) * 2) { _visibilityKernelSrcOff = simSharedArray(Int32Array, Math.max(64, (maxPid + 1) * 4)); simParallelBind('vis.srcOff', _visibilityKernelSrcOff); }
     if (!_visibilityKernelJobs || _visibilityKernelJobs.length < jobs.length) { _visibilityKernelJobs = simSharedArray(Int32Array, Math.max(64, jobs.length * 2)); simParallelBind('vis.jobs', _visibilityKernelJobs); }
     let src = _visibilityKernelSrc, off = _visibilityKernelSrcOff, at = 0;
@@ -4414,7 +4414,7 @@ function _runVisibilityJobs(jobs) {
 }
 
 const VISIBILITY_SIGNATURE_BACKOFF_TICKS = 8;
-let _visibilitySourceSignatureScratch = new Float64Array(1024);
+let _visibilitySourceSignatureScratch = new Float32Array(1024);
 
 function _visibilitySignaturesEqual(a, b, length) {
     if (!a) return false;
@@ -4428,7 +4428,7 @@ function _visibilitySignaturesEqual(a, b, length) {
 function _collectVisibilitySourceSignature(playerId, out, sources = null, sourceLength = 0) {
     let length = 0;
     if (sources) {
-        if (sourceLength > out.length) out = _visibilitySourceSignatureScratch = new Float64Array(Math.max(sourceLength, out.length * 2));
+        if (sourceLength > out.length) out = _visibilitySourceSignatureScratch = new Float32Array(Math.max(sourceLength, out.length * 2));
         for (let i = 0; i < sourceLength; i += 3) {
             let fx = sources[i] / TILE, fy = sources[i + 1] / TILE;
             let bx = Math.floor(fx), by = Math.floor(fy);
@@ -4447,7 +4447,7 @@ function _collectVisibilitySourceSignature(playerId, out, sources = null, source
             || (owner !== (owner | 0) && Math.floor(Number(owner)) === target));
     let push = (wx, wy, rangeArea) => {
         if (length + 3 > out.length) {
-            let grown = new Float64Array(out.length * 2);
+            let grown = new Float32Array(out.length * 2);
             grown.set(out);
             out = _visibilitySourceSignatureScratch = grown;
         }
@@ -4489,7 +4489,7 @@ function _buildVisibilitySourceLists() {
     const pushTo = (pid, wx, wy, range) => {
         let list = lists[pid], n = lengths[pid] || 0;
         if (!list || n + 3 > list.length) {
-            let grown = new Float64Array(Math.max(96, list ? list.length * 2 : 0));
+            let grown = new Float32Array(Math.max(96, list ? list.length * 2 : 0));
             if (list) grown.set(list.subarray(0, n));
             lists[pid] = list = grown;
         }
@@ -4584,6 +4584,9 @@ function _visCoverEnsure() {
     const flatA = Math.max(1, A);
     C.coverFlat = typeof simHeapArray === 'function' ? simHeapArray(Int32Array, n * flatA) : new Int32Array(n * flatA);
     C.cover = Array.from({ length: n }, (_, p) => C.coverFlat.subarray(p * flatA, p * flatA + flatA));
+    if (typeof simHeapFree === 'function') simHeapFree(C.visibleFlat);
+    C.visibleFlat = simHeapArray(Uint8Array, n * flatA);
+    C.visible = Array.from({ length: n }, (_, p) => C.visibleFlat.subarray(p * flatA, p * flatA + flatA));
     C.coverStride = flatA;
     C.steps = Array.from({ length: n }, () => new Int8Array(A).fill(-1));
     C.dense = new Int32Array(n * A * VIS_COVER_DENSE_STEPS);
@@ -4601,7 +4604,7 @@ function _visCoverApplyRing(p, area, fromSteps, toSteps, delta) {
         let ring = getAreaIdsAtDistance(area, d);
         for (let i = 0; i < ring.length; i++) {
             let a = ring[i], before = cover[a], after = before + delta;
-            cover[a] = after;
+            cover[a] = after; C.visible[p][a] = after > 0 ? 1 : 0;
             if (rows && (before > 0) !== (after > 0)) _visCoverPaintArea(rows, a, after > 0);
         }
     }
@@ -4888,9 +4891,11 @@ function _visCoverUnitsPost() {
     _visCoverUnitsAlloc();
     simParallelBackgroundWait(VIS_COVER_UNITS_LANE);
     const n = S ? S.owners.length : 0, A = C.areaCount, np = C.players;
+    // (The tick's positions and sight keys, snapshotted for the background
+    // seed: Float32 like the columns, 12 bytes a unit.)
     if (!C.vtx || C.vtx.length < n) {
-        const cap = Math.max(1024, n * 2);
-        C.vtx = simSharedArray(Float64Array, cap); C.vty = simSharedArray(Float64Array, cap); C.vtkey = simSharedArray(Int32Array, cap);
+        const cap = simReserveCap(n);
+        C.vtx = simSharedArray(Float32Array, cap); C.vty = simSharedArray(Float32Array, cap); C.vtkey = simSharedArray(Int32Array, cap);
         simParallelBind('vt.x', C.vtx); simParallelBind('vt.y', C.vty); simParallelBind('vt.key', C.vtkey);
     }
     if (n > 0) {
@@ -4908,6 +4913,7 @@ function _visCoverUnitsPost() {
     C.ucnt.fill(0);
     const B = _simBgParamsByLane[VIS_COVER_UNITS_LANE];
     B[0] = n; B[1] = 1024; B[2] = TILE; B[3] = GRID_W; B[4] = GRID_H; B[6] = A; B[7] = np; B[8] = C.ustamp;
+    B[9] = 0;
     simParallelBackground(SIM_KERNEL_VIS_SEED, Math.ceil(n / 1024), VIS_COVER_UNITS_LANE);
     C.uStage = 1;
 }
@@ -4932,8 +4938,8 @@ function _visCoverUnitsCommit() {
     const A = C.areaCount, D = C.udiff, PL = C.uplus, MI = C.uminus;
     for (let p = 0; p < C.players; p++) {
         const cover = C.cover[p], rows = C.visual[p], base = p * A;
-        for (let i = 0, e = D[2 * p + 1]; i < e; i++) { const a = MI[base + i]; if (--cover[a] === 0 && rows) _visCoverPaintArea(rows, a, false); }
-        for (let i = 0, e = D[2 * p]; i < e; i++) { const a = PL[base + i]; if (++cover[a] === 1 && rows) _visCoverPaintArea(rows, a, true); }
+        for (let i = 0, e = D[2 * p + 1]; i < e; i++) { const a = MI[base + i]; if (--cover[a] === 0) { C.visible[p][a] = 0; if (rows) _visCoverPaintArea(rows, a, false); } }
+        for (let i = 0, e = D[2 * p]; i < e; i++) { const a = PL[base + i]; if (++cover[a] === 1) { C.visible[p][a] = 1; if (rows) _visCoverPaintArea(rows, a, true); } }
     }
 }
 

@@ -113,13 +113,30 @@ fn truthy(v: f64) -> bool {
 }
 
 #[inline(always)]
-unsafe fn rd<T: Copy>(p: *const T, i: usize) -> T {
-    *p.add(i)
-}
+unsafe fn rd<T: Scalar>(p: *const T, i: usize) -> T::Value { (*p.add(i)).load() }
 #[inline(always)]
-unsafe fn wr<T>(p: *mut T, i: usize, v: T) {
-    *p.add(i) = v
-}
+unsafe fn wr<T: Scalar>(p: *mut T, i: usize, v: T::Value) { *p.add(i) = T::store(v); }
+trait Scalar: Copy { type Value; fn load(self) -> Self::Value; fn store(v: Self::Value) -> Self; }
+macro_rules! scalar { ($($t:ty),*) => { $(impl Scalar for $t { type Value = $t; #[inline(always)] fn load(self)->$t { self } #[inline(always)] fn store(v:$t)->Self { v } })* }; }
+scalar!(u8,i8,u16,i16,u32,i32,u64,i64,usize,f32,f64);
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct F32(f32);
+impl Scalar for F32 { type Value=f64; #[inline(always)] fn load(self)->f64 { self.0 as f64 } #[inline(always)] fn store(v:f64)->Self { Self(v as f32) } }
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct I32Number(i32);
+impl Scalar for I32Number { type Value=f64; #[inline(always)] fn load(self)->f64 { self.0 as f64 } #[inline(always)] fn store(v:f64)->Self { Self(to_i32(v)) } }
+// Narrow integer columns read and written as i32 (owners: Int8Array, -1 none;
+// commands and flash timers: Uint8Array), as the JS typed arrays convert.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct I8I32(i8);
+impl Scalar for I8I32 { type Value=i32; #[inline(always)] fn load(self)->i32 { self.0 as i32 } #[inline(always)] fn store(v:i32)->Self { Self(v as i8) } }
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct U8I32(u8);
+impl Scalar for U8I32 { type Value=i32; #[inline(always)] fn load(self)->i32 { self.0 as i32 } #[inline(always)] fn store(v:i32)->Self { Self(v as u8) } }
 
 // =====================================================================
 // SEPARATION
@@ -152,14 +169,14 @@ fn sep_radius(cr: f64, r: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn sep_pack(
     eslot: *const i32,
-    xs: *const f64,
-    ys: *const f64,
+    xs: *const F32,
+    ys: *const F32,
     dead: *const u8,
-    r0: *const f64,
+    r0: *const F32,
     layer: *const u8,
-    crl: *const f64,
-    rdl: *const f64,
-    owner: *const i32,
+    crl: *const F32,
+    rdl: *const F32,
+    owner: *const I8I32,
     id: *const i32,
     smv: *const u8,
     ord: *mut i32,
@@ -395,7 +412,7 @@ struct PairOut {
     qid: *const i32,
     px_out: *mut f64,
     py_out: *mut f64,
-    ov_out: *mut f64,
+    ov_out: *mut F32,
     hit_out: *mut u32,
     pad: f64,
     qscale: f64,
@@ -533,7 +550,7 @@ pub unsafe extern "C" fn sep_pairs(
     keys: *const i32,
     px_out: *mut f64,
     py_out: *mut f64,
-    ov_out: *mut f64,
+    ov_out: *mut F32,
     hit_out: *mut u32,
     cw: i32,
     ch: i32,
@@ -705,31 +722,31 @@ pub unsafe extern "C" fn sep_pairs(
 /// 8 tile / 4; 16 walls given.
 #[no_mangle]
 pub unsafe extern "C" fn sep_finish(
-    xs: *mut f64,
-    ys: *mut f64,
+    xs: *mut F32,
+    ys: *mut F32,
     on: *const u8,
     fl: *const u8,
     id: *const i32,
     dead: *const u8,
     pxs: *mut f64,
     pys: *mut f64,
-    ovs: *mut f64,
+    ovs: *mut F32,
     hits: *mut u32,
-    out_x: *mut f64,
-    out_y: *mut f64,
+    out_x: *mut F32,
+    out_y: *mut F32,
     fast: *mut u8,
     ex: *mut i32,
     exc: *mut i32,
-    cxs: *mut f64,
-    cys: *mut f64,
+    cxs: *mut F32,
+    cys: *mut F32,
     wall: *const u8,
     layer: *const u8,
     smv: *mut u8,
-    prx: *const f64,
-    pry: *const f64,
+    prx: *const F32,
+    pry: *const F32,
     spe: *const i32,
-    spo: *const i32,
-    owno: *const i32,
+    spo: *const I8I32,
+    owno: *const I8I32,
     sepk: *mut u32,
     vsg: *const i32,
     spt: *mut i32,
@@ -777,7 +794,6 @@ pub unsafe extern "C" fn sep_finish(
     let mut ne = 0usize;
     let mut moves = false;
     let retry_hit = |s: usize| -> bool { retry != 0 && irem(t.wrapping_add(rd(id, s)), retry) == 0 };
-    let zero64 = f64x2_splat(0.0);
     let mut i = base;
     while i < end {
         // Four slots with no push found and none carried over: only whether
@@ -785,20 +801,13 @@ pub unsafe extern "C" fn sep_finish(
         if i + 4 <= end && (i & 3) == 0 {
             let h4 = v128_load(hits.add(i) as *const v128);
             if !v128_any_true(h4) {
-                let c0 = f64x2_eq(v128_load(cxs.add(i) as *const v128), zero64);
-                let c1 = f64x2_eq(v128_load(cxs.add(i + 2) as *const v128), zero64);
-                let c2 = f64x2_eq(v128_load(cys.add(i) as *const v128), zero64);
-                let c3 = f64x2_eq(v128_load(cys.add(i + 2) as *const v128), zero64);
-                if i64x2_all_true(v128_and(v128_and(c0, c1), v128_and(c2, c3))) {
+                let c0 = f32x4_eq(v128_load(cxs.add(i) as *const v128), f32x4_splat(0.0));
+                let c1 = f32x4_eq(v128_load(cys.add(i) as *const v128), f32x4_splat(0.0));
+                if i32x4_all_true(v128_and(c0, c1)) {
                     let m0 = v128_or(
-                        f64x2_ne(v128_load(xs.add(i) as *const v128), v128_load(prx.add(i) as *const v128)),
-                        f64x2_ne(v128_load(ys.add(i) as *const v128), v128_load(pry.add(i) as *const v128)),
-                    );
-                    let m1 = v128_or(
-                        f64x2_ne(v128_load(xs.add(i + 2) as *const v128), v128_load(prx.add(i + 2) as *const v128)),
-                        f64x2_ne(v128_load(ys.add(i + 2) as *const v128), v128_load(pry.add(i + 2) as *const v128)),
-                    );
-                    let mb = i64x2_bitmask(m0) as u32 | (i64x2_bitmask(m1) as u32) << 2;
+                        f32x4_ne(v128_load(xs.add(i) as *const v128), v128_load(prx.add(i) as *const v128)),
+                        f32x4_ne(v128_load(ys.add(i) as *const v128), v128_load(pry.add(i) as *const v128)));
+                    let mb = i32x4_bitmask(m0) as u32;
                     // (One byte per slot: 1 where it moved.)
                     let bytes = (mb & 1) | (mb & 2) << 7 | (mb & 4) << 14 | (mb & 8) << 21;
                     (smv.add(i) as *mut u32).write_unaligned(bytes);
@@ -1109,7 +1118,7 @@ unsafe fn acq_structure(
     sown: *const i8,
     hss: *const i32,
     ag: *const i32,
-    covf: *const i32,
+    covf: *const u8,
     covf_len: usize,
     cbase: i32,
     owner: i32,
@@ -1182,7 +1191,7 @@ unsafe fn acq_structure(
 unsafe fn acq_structure_tile(
     sown: *const i8,
     ag: *const i32,
-    covf: *const i32,
+    covf: *const u8,
     covf_len: usize,
     cbase: i32,
     owner: i32,
@@ -1247,14 +1256,14 @@ pub unsafe extern "C" fn acq_omt(om: *const u8, omt: *mut u8, cw: i32, ch: i32, 
 #[no_mangle]
 pub unsafe extern "C" fn acq_pack(
     es: *const i32,
-    xs: *const f64,
-    ys: *const f64,
-    own: *const i32,
+    xs: *const F32,
+    ys: *const F32,
+    own: *const I8I32,
     flg: *const u8,
     id: *const i32,
     ag: *const i32,
-    ex: *mut f64,
-    ey: *mut f64,
+    ex: *mut F32,
+    ey: *mut F32,
     eo: *mut i32,
     ea: *mut i32,
     eid: *mut i32,
@@ -1299,11 +1308,11 @@ struct AcqCtx {
     rc: *const i32,
     es: *const i32,
     flg: *const u8,
-    own: *const i32,
-    xs: *const f64,
-    ys: *const f64,
+    own: *const I8I32,
+    xs: *const F32,
+    ys: *const F32,
     ag: *const i32,
-    covf: *const i32,
+    covf: *const u8,
     covf_len: usize,
     id: *const i32,
     ep: i32,
@@ -1315,8 +1324,8 @@ struct AcqCtx {
     x: f64,
     y: f64,
     // (The entries packed by acq_pack, or null.)
-    ex: *const f64,
-    ey: *const f64,
+    ex: *const F32,
+    ey: *const F32,
     eo: *const i32,
     ea: *const i32,
     eid: *const i32,
@@ -1390,7 +1399,7 @@ unsafe fn acq_chunk(c: &AcqCtx, k: usize, best: &mut i32, bd2: &mut f64, best_id
 
 /// COVF[i] > 0, undefined (past the array) false.
 #[inline(always)]
-unsafe fn cover(covf: *const i32, len: usize, i: i32) -> bool {
+unsafe fn cover(covf: *const u8, len: usize, i: i32) -> bool {
     i >= 0 && (i as usize) < len && rd(covf, i as usize) > 0
 }
 
@@ -1404,17 +1413,17 @@ pub unsafe extern "C" fn acq_scan(
     sown: *const i8,
     hss: *const i32,
     sout: *mut i32,
-    xs: *const f64,
-    ys: *const f64,
-    own: *const i32,
+    xs: *const F32,
+    ys: *const F32,
+    own: *const I8I32,
     flg: *const u8,
-    cmds: *const i32,
-    rng: *const f64,
+    cmds: *const U8I32,
+    rng: *const F32,
     id: *const i32,
     outa: *mut i32,
     tid: *mut i32,
     ag: *const i32,
-    covf: *const i32,
+    covf: *const u8,
     hs: *const i32,
     rs: *const i32,
     rc: *const i32,
@@ -1422,8 +1431,8 @@ pub unsafe extern "C" fn acq_scan(
     es: *const i32,
     om: *const u8,
     omt: *const u8,
-    ex: *const f64,
-    ey: *const f64,
+    ex: *const F32,
+    ey: *const F32,
     eo: *const i32,
     ea: *const i32,
     eid: *const i32,

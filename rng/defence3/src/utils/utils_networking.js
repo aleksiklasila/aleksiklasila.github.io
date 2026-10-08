@@ -2173,6 +2173,7 @@ function _handleConnectionMessage(conn, data) {
         setMatchLoadOverlay(true, 'Match Starting', 'Waiting for host to generate world…');
     } else if (type === 'START_GAME' && !isHost) {
         _clearGuestJoinTimeout();
+        if (data.rules !== undefined && data.rules !== SIM_RULES_REVISION) { _returnToMainMenuWithStatus('Version mismatch: the host runs simulation rules ' + data.rules + ', this page ' + SIM_RULES_REVISION + '. Reload the page.', '#fa4'); return; }
         let midMatchJoin = !!data.resyncSessionId || Number.isFinite(data.joinTick);
         if (!midMatchJoin && !_matchStartPlayerStatuses) {
             // Fallback: if START_GAME_PREPARE was missed, set up statuses from this packet.
@@ -2515,6 +2516,11 @@ function _hostResolveDuplicateJoin(conn, data, oldPeerIds) {
 
 // Host: a client (re)joined the lobby, or a running match.
 function _hostHandleLobbyJoin(conn, data) {
+    // (Other simulation rules: refused before it joins anything.)
+    if (Number(data && data.rules) !== SIM_RULES_REVISION) {
+        try { conn.send({ type: 'HOST_CLOSED_LOBBY', reason: 'Version mismatch: the host runs simulation rules ' + SIM_RULES_REVISION + ', this page ' + (data && data.rules !== undefined ? data.rules : 'an older version') + '. Reload the page.' }); } catch { }
+        return;
+    }
     if (conn && conn.peer) peerPresenceById[conn.peer] = true;
     if (conn && conn.peer) netNotePeerCapabilities(conn.peer, data && data.caps);
     let joiningUid = String((data && data.uid) || peerUidByPeerId[conn.peer] || conn.peer || '').trim();
@@ -3143,7 +3149,7 @@ function startHostedGame() {
                 if (!gameStarted || matchStartSessionId !== startSessionId) return;
                 netCounters.snapshotBytes = netSnapshotPayloadBytes(payload);
                 let msg = {
-                    type: 'START_GAME', seed: gameSeed,
+                    type: 'START_GAME', seed: gameSeed, rules: SIM_RULES_REVISION,
                     startSessionId,
                     lobbyPlayers: matchStartLobbyPlayers,
                     roleByPeer: buildHostRoleSnapshot(),
@@ -3238,6 +3244,7 @@ function joinGame(hostId, opts = null) {
             conn.send({
                 type: 'LOBBY_JOIN', name: me.name, color: me.color || null, desiredRole, uid: localPersistentPeerId || myPeerId,
                 caps: netLocalCapabilities(),
+                rules: SIM_RULES_REVISION,
                 migrate,
                 // A client that still runs the match can resume from its tick.
                 resumeTick: gameStarted ? currentTick : -1,

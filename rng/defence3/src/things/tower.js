@@ -42,7 +42,7 @@ function _laserMapBuild() {
     if (M.cap < Math.max(ne, nb)) {
         const cap = Math.max(1024, 2 * Math.max(ne, nb));
         M.next = simSharedArray(Int32Array, cap); M.beam = simSharedArray(Int32Array, cap);
-        M.bown = simSharedArray(Int32Array, cap); M.bdmg = simSharedArray(Float64Array, cap); M.hit = simSharedArray(Uint8Array, cap);
+        M.bown = simSharedArray(Int32Array, cap); M.bdmg = simSharedArray(Float32Array, cap); M.hit = simSharedArray(Uint8Array, cap);
         simParallelBind('lz.next', M.next); simParallelBind('lz.beam', M.beam); simParallelBind('lz.bown', M.bown); simParallelBind('lz.bdmg', M.bdmg); simParallelBind('lz.hit', M.hit);
         M.cap = cap;
     }

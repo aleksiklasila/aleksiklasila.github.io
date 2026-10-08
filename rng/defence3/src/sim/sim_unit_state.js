@@ -1,7 +1,8 @@
 "use strict";
-// Authoritative numeric unit state. Float64 preserves JavaScript arithmetic;
-// Float32 is reserved for render frames. Unit objects retain cold/reference
-// fields and expose these columns through prototype accessors during migration.
+// Authoritative numeric unit state. Float32 stores gameplay quantities;
+// kernels (JS and Rust) compute in doubles and round at each store, as the
+// objects' accessors do. Objects retain cold/reference fields and expose
+// these columns through prototype accessors.
 // Slots are local addresses, never IDs or part of snapshots/lockstep hashes.
 // Status effects: counted down (and their damage dealt) for every unit at
 // once by SIM_KERNEL_STATUS (see statusPrepassRun in unit.js).
@@ -16,10 +17,13 @@ const SIM_UNIT_LEVEL_COLUMNS = ['stackCount', 'unitLevel', 'baseLevel', 'effecti
 const SIM_UNIT_COLUMNS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy',
     'energy', 'r', 'collisionR', 'pathIndex', 'commandState', 'attackTimer', 'attackFlash', ...SIM_UNIT_STATUS_COLUMNS, ...SIM_UNIT_LEVEL_COLUMNS];
 // Columns holding whole numbers only (ids, owners, commands, tick counts):
-// 32-bit integers, half the memory traffic of the kernels that read them
-// (the rest Float64: fractions, and NaN for "not set" in the level columns).
+// 32-bit integers (the rest Float32: fractions, and NaN for "not set" in the
+// level columns; tests/storage-abi.test.cjs checks the Rust twins' types).
 const SIM_UNIT_INT_COLUMNS = new Set(['id', 'owner', 'commandState', 'attackFlash', 'teleportHideTicks', 'burning', 'poisoned', 'frozen', 'wet', 'sandy', 'watched', 'workerTransferCooldown']);
-function _simUnitColumnType(k) { return SIM_UNIT_INT_COLUMNS.has(k) ? Int32Array : Float64Array; }
+// (Narrower where the values fit, read every tick by most kernels: owners
+// Int8 (players, -1 none), commands and the attack flash timer Uint8.)
+const SIM_UNIT_NARROW_COLUMNS = { owner: Int8Array, commandState: Uint8Array, attackFlash: Uint8Array };
+function _simUnitColumnType(k) { return SIM_UNIT_NARROW_COLUMNS[k] || (k === 'pathIndex' || SIM_UNIT_INT_COLUMNS.has(k) ? Int32Array : Float32Array); }
 // Read and written through prototype accessors: the columns are the state
 // (the movement kernel moves units without touching their objects).
 const SIM_UNIT_ACCESSOR_COLUMNS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', 'pathIndex', 'commandState', 'attackTimer', 'attackFlash', ...SIM_UNIT_STATUS_COLUMNS, ...SIM_UNIT_LEVEL_COLUMNS];
@@ -55,9 +59,9 @@ function simUnitMirror(u) {
 // object too (unit accessors disarm through it). [name, type, per slot].
 const SIM_MOVE_WINDOW = 16;
 const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['mvFlags', Uint8Array, 1],
-    ['mvSpd', Float64Array, 1], ['mvLane', Float64Array, 1], ['mvCost', Float64Array, 1],
+    ['mvSpd', Float32Array, 1], ['mvLane', Float32Array, 1], ['mvCost', Float32Array, 1],
     ['mvSpent', Uint8Array, 1], ['mvReach', Uint8Array, 1], ['mvBase', Int32Array, 1], ['mvWlen', Uint8Array, 1],
-    ['mvPlen', Int32Array, 1], ['mvScan', Int32Array, 1], ['mvFloor', Int32Array, 1], ['mvNodes', Int32Array, SIM_MOVE_WINDOW],
+    ['mvPlen', Int32Array, 1], ['mvScan', Int32Array, 1], ['mvFloor', Int32Array, 1], ['mvPath', Int32Array, 1],
     // Parked idle workers (mvOn 2): the tick their Unit.update next does anything.
     ['mvWake', Int32Array, 1],
     // Flow mode (mvFlags 64): the flow slot and its generation, and the
@@ -80,10 +84,10 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['mvNavN1', Int32Array, 1], ['mvNavN2', Int32Array, 1], ['mvNavFar', Int32Array, 1], ['mvNavOpen', Uint8Array, 1],
     // The combat scan (SIM_KERNEL_COMBAT_SCAN): its aggro range (pixels),
     // and at tick cbTick the nearest visible enemy's slot (-1 none).
-    ['cbRange', Float64Array, 1], ['cbT', Int32Array, 1], ['cbTick', Int32Array, 1],
+    ['cbRange', Float32Array, 1], ['cbT', Int32Array, 1], ['cbTick', Int32Array, 1],
     // (The acquisition tier's result as committed: its target's id and the
     // range it was looked for with; see unit.js _acqTierStep.)
-    ['cbTId', Int32Array, 1], ['cbRangeS', Float64Array, 1],
+    ['cbTId', Int32Array, 1], ['cbRangeS', Float32Array, 1],
     // (And the structure it found: its tile, -1 none.)
     ['cbS', Int32Array, 1],
     // The drive-by look's answer (SIM_KERNEL_DRIVEBY) at tick dbTick: a unit
@@ -102,10 +106,10 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // Attack hold (mvOn 3; see simMoveTryHold): the target's slot and id,
     // the target's tile, and the unit's own tile and window zone, as when
     // the hold began.
-    ['mvHT', Int32Array, 1], ['mvHTId', Int32Array, 1], ['mvHTT', Int32Array, 1], ['mvHOT', Int32Array, 1], ['mvHOZ', Int8Array, 1],
+    ['mvHT', Int32Array, 1], ['mvHTId', Int32Array, 1],
     // Chase (mvOn 4; see simMoveTryChase): the target in mvHT/mvHTId, the
     // range in mvReach, and the look-ahead of its direct step (_isChaseStepOpen).
-    ['mvChs', Float64Array, 1],
+    ['mvChs', Float32Array, 1],
     // Effective stats (SIM_KERNEL_EFF_UNITS): 1 when the unit's base tables
     // fit its baseLevel and its window is known (esRad chunks around it,
     // esType its spatial type); esTaken the pass that took it; esFlag the
@@ -117,38 +121,43 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // a healer), the version its last search failed at and that backoff's
     // end, and the tick of its next wake for anything else.
     ['wkType', Int32Array, 1], ['wkD', Int32Array, 1], ['wkOx', Int32Array, 1], ['wkOy', Int32Array, 1], ['wkTwice', Uint8Array, 1],
-    ['wkFail', Int32Array, 1], ['wkUntil', Float64Array, 1], ['wkSched', Float64Array, 1],
+    ['wkFail', Int32Array, 1], ['wkUntil', Int32Array, 1], ['wkSched', Int32Array, 1],
     // A parked builder's last watchdog sample (mvFlags 4): woken at a sample
     // tick only when it no longer stands there.
-    ['wkWx', Float64Array, 1], ['wkWy', Float64Array, 1],
+    ['wkWx', Float32Array, 1], ['wkWy', Float32Array, 1],
     // The status pre-pass's events (1 damaged, 2 its watch ended, 4 died)
     // and the damage dealt.
-    ['stEv', Uint8Array, 1], ['stDot', Float64Array, 1],
+    ['stEv', Uint8Array, 1], ['stDot', Float32Array, 1],
     // Damage over time dealt since its last report (SIM_KERNEL_STATUS).
-    ['stAcc', Float64Array, 1],
+    ['stAcc', Float32Array, 1],
     // 1 while one of its status timers (SIM_STATUS_TIMER_COLUMNS) may run:
     // set by their accessors (and at a slot's start, a restore), cleared by
     // SIM_KERNEL_STATUS when all are out; the kernel looks at the timers of
     // these units only (a dozen columns of every unit a tick were most of
     // its cost).
     ['stOn', Uint8Array, 1],
+    // 1 while its attack timer, attack flash or worker transfer cooldown may
+    // run (set where they are set above 0, at a slot's start; cleared by
+    // SIM_KERNEL_STATUS when all three are out): the kernel reads those three
+    // columns of these units only.
+    ['tmOn', Uint8Array, 1],
     // Dead at the unit pass's start (written by SIM_KERNEL_MOVE for every
     // slot): what decisions in the pass go by (_unitTickDead).
     ['dead0', Uint8Array, 1],
     // Laser beams (tower.js laserBeamsTick): 1 immune to towers, 2 laser
     // resistant (its type's); the damage not yet reported, the last beam that
     // hit it, its report this tick.
-    ['lzFlags', Uint8Array, 1], ['lzAcc', Float64Array, 1], ['lzBeam', Int32Array, 1], ['lzEv', Uint8Array, 1],
+    ['lzFlags', Uint8Array, 1], ['lzAcc', Float32Array, 1], ['lzBeam', Int32Array, 1], ['lzEv', Uint8Array, 1],
     // Its position at the start of the unit pass (the pre-pass copies it):
     // where other units see it during the pass (see _unitTickX).
-    ['x0', Float64Array, 1], ['y0', Float64Array, 1],
+    ['x0', Float32Array, 1], ['y0', Float32Array, 1],
     // Flow mode: 1 for a worker at its task (handed back on its check ticks,
     // see WORKER_MOVE_CHECK_TICKS), 2 for one the player sent (MANUAL_MOVE:
     // its check does nothing while it has a way, so it is not handed back).
     ['mvWk', Uint8Array, 1],
     // Unit._navLastD (-1 none): its distance to a group's destination last
     // tick (arriving in a crowd), one value for Unit.update and the kernel.
-    ['mvNavLD', Float64Array, 1],
+    ['mvNavLD', Float32Array, 1],
     // Unit._sepMoved: 1 when it moved by itself last tick (the separation
     // started at the next tick's start reads it; see separationStart).
     ['sepMov', Uint8Array, 1],
@@ -157,13 +166,13 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // Where the spatial index and the visibility coverage have the unit
     // (Unit accessors _spatialTile... and _vsGen...; see chunk.js and
     // renderer.js), so their updates need not read the unit object.
-    ['spTile', Int32Array, 1], ['spArea', Int32Array, 1], ['spOwner', Int32Array, 1], ['spEpoch', Int32Array, 1],
+    ['spTile', Int32Array, 1], ['spArea', Int32Array, 1], ['spOwner', Int8Array, 1], ['spEpoch', Int32Array, 1],
     ['spType', Int16Array, 1], ['vsGen', Int32Array, 1], ['vsR', Int8Array, 1],
     ['vsA', Int32Array, 1], ['vsP1', Int8Array, 1], ['vsP2', Int8Array, 1],
     // Unit.maxEnergy as of its last stat change (simUnitMaxE, where the
     // stats are applied), and 1 while the slot holds a unit: the healer
     // candidates' kernel (worker.js healerCandidatesStep).
-    ['maxE', Float64Array, 1], ['live', Uint8Array, 1],
+    ['maxE', Float32Array, 1], ['live', Uint8Array, 1],
     // A chunk move the movement kernel made (spMvOwn: its owner + 1, 0
     // none; from spMvOld to spMvNew): counted at the unit pass's end
     // (SIM_KERNEL_SP_COUNTS, see spatialCountsDeferEnd). mvBlk: a node step
@@ -171,20 +180,18 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['spMvOld', Int32Array, 1], ['spMvNew', Int32Array, 1], ['spMvOwn', Int8Array, 1], ['mvBlk', Uint8Array, 1],
     // Flow movement's committed step (SIM_STEER_TICKS): its destination tile
     // (-1 none), the tick and the step its last steer committed.
-    ['mvCD', Int32Array, 1], ['mvCT', Int32Array, 1], ['mvCVx', Float64Array, 1], ['mvCVy', Float64Array, 1],
+    ['mvCD', Int32Array, 1], ['mvCT', Int32Array, 1], ['mvCVx', Float32Array, 1], ['mvCVy', Float32Array, 1],
     // (The tile it steered in, and for how many ticks the step holds.)
     ['mvCTl', Int32Array, 1], ['mvCN', Uint8Array, 1],
     // Flow mode: its navigation profile (flownav.js navProfileOf: ground, air,
     // a walk class), whose fields and walls the kernel reads.
     ['mvNP', Uint8Array, 1],
-    // The tick (+ 1) SIM_KERNEL_MOVE_STEP moved it (SIM_KERNEL_MOVE leaves it).
-    ['mvStepT', Int32Array, 1],
     // A drive-by shooter the movement kernel moved whose look found
     // something (SIM_KERNEL_DRIVEBY): its shot at its turn (simDriveByFire).
     ['mvFire', Uint8Array, 1],
     // A unit's attack cooldown and damage (its stats: simMoveStatsChanged),
     // for the attacks the movement kernel makes for held units.
-    ['atkCd', Float64Array, 1], ['atkDmg', Float64Array, 1], ['atkSty', Uint8Array, 1],
+    ['atkCd', Float32Array, 1], ['atkDmg', Float32Array, 1], ['atkSty', Uint8Array, 1],
     // The worker search registry (worker.js wsRegister): an idle worker's
     // search, done on the tier (wsKind 0 none, 1 collector, 3 builder or
     // salvager, 4 healer, 5 researcher): its resource type, the tick it
@@ -192,7 +199,7 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // radius, anchor, area steps, need bits, jitter id, current target tile,
     // own reserved tile.
     ['wsKind', Uint8Array, 1], ['wsCfg', Int8Array, 1], ['wsT', Int32Array, 1], ['wsOU', Int32Array, 1],
-    ['wsOx', Float64Array, 1], ['wsOy', Float64Array, 1], ['wsR', Float64Array, 1], ['wsAx', Float64Array, 1], ['wsAy', Float64Array, 1],
+    ['wsOx', Float32Array, 1], ['wsOy', Float32Array, 1], ['wsR', Float32Array, 1], ['wsAx', Float32Array, 1], ['wsAy', Float32Array, 1],
     ['wsAk', Int8Array, 1], ['wsNeed', Int32Array, 1], ['wsJid', Int32Array, 1], ['wsCur', Int32Array, 1], ['wsMy', Int32Array, 1],
     // Its unit type's index in simUnitTypeIndex's list (-1 not known), and
     // its upkeep bin (main.js upkeepUnitRefresh; -1 none).
@@ -201,8 +208,8 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // x0/y0, its tier job reads it while the pass moves units): dead, radius,
     // layer; and the push it found that is still to be applied next tick
     // (sepCx/sepCy: a push is spread over two ticks).
-    ['sepD0', Uint8Array, 1], ['sepR0', Float64Array, 1], ['sepL0', Uint8Array, 1],
-    ['sepCx', Float64Array, 1], ['sepCy', Float64Array, 1],
+    ['sepD0', Uint8Array, 1], ['sepR0', Float32Array, 1], ['sepL0', Uint8Array, 1],
+    ['sepCx', Float32Array, 1], ['sepCy', Float32Array, 1],
     // The version of its (owner, type) stat tables its stats were applied at
     // (things_utils.js _unitStatsVerOf).
     ['esVer', Int32Array, 1],
@@ -210,7 +217,7 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // position, which the movement kernel writes for forced holds and chases
     // (mvFlags 8); the values before its write (fLsPX/fLsPY) and the tick of
     // it (fLsT), put back when the unit runs Unit.update after all that tick.
-    ['fLsX', Float64Array, 1], ['fLsY', Float64Array, 1], ['fLsPX', Float64Array, 1], ['fLsPY', Float64Array, 1], ['fLsT', Int32Array, 1],
+    ['fLsX', Float32Array, 1], ['fLsY', Float32Array, 1], ['fLsPX', Float32Array, 1], ['fLsPY', Float32Array, 1], ['fLsT', Int32Array, 1],
     // 1 while Unit.targetBuilding holds a structure (its accessor writes it):
     // the acquisition tier skips units attacking a unit (SIM_KERNEL_ACQ_SNAP).
     ['acqB', Uint8Array, 1]];
@@ -237,7 +244,7 @@ function simUnitStateReset() {
 let _SimUnitColumns = null;
 function _simUnitColumnsObject() {
     if (!_SimUnitColumns) {
-        const names = [...SIM_UNIT_COLUMNS, ...SIM_MOVE_COLUMNS.map(c => c[0]), 'sepKey'];
+        const names = [...SIM_UNIT_COLUMNS, ...SIM_MOVE_COLUMNS.map(c => c[0]), 'sepKey', 'mvNodes'];
         _SimUnitColumns = new Function(names.map(n => 'this.' + n + ' = null;').join(' '));
     }
     return new _SimUnitColumns();
@@ -313,6 +320,7 @@ function _simUnitStateGrow(S, cap) {
         S.sepKey = sepKey; S.sepLayer = sepLayer; S.columns.sepKey = sepKey;
         simParallelBind('unit.sepKey', sepKey); simParallelBind('unit.sepLayer', sepLayer);
         S.cap = cap;
+        if (!S.pathPool) { S.pathPool = { next: 0, free: [], cap: 0, held: { array: null } }; S.columns.mvNodes = simHeapArray(Int32Array, 1); S.pathPool.held.array = S.columns.mvNodes; if (_simPathPoolsGone) _simPathPoolsGone.register(S.pathPool, S.pathPool.held); simParallelBind('unit.mvNodes', S.columns.mvNodes); }
         _simUnitColumnsHeld(S);
         for (const a of old) simHeapFree(a);
     }
@@ -321,15 +329,16 @@ function _simUnitStateGrow(S, cap) {
 function _simUnitSlotStart(S, s, u) {
     S.sepKey[s] = SIM_SEP_ABSENT;
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNavT[s] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
-    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = 0; S.columns.stOn[s] = 1; S.columns.lzAcc[s] = 0; S.columns.sepCx[s] = 0; S.columns.sepCy[s] = 0; S.columns.esVer[s] = -1;
+    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = 0; S.columns.stEv[s] = 0; S.columns.stOn[s] = 1; S.columns.tmOn[s] = 1; S.columns.lzAcc[s] = 0; S.columns.sepCx[s] = 0; S.columns.sepCy[s] = 0; S.columns.esVer[s] = -1;
     S.columns.fLsX[s] = NaN; S.columns.fLsY[s] = NaN; S.columns.fLsT[s] = -1;
     for (const k of SIM_UNIT_LEVEL_COLUMNS) S.columns[k][s] = NaN;
     for (const k in SIM_SPATIAL_DEFAULTS) S.columns[k][s] = SIM_SPATIAL_DEFAULTS[k];
     S.owners[s] = u;
+    S.columns.mvPath[s] = -1;
     S.columns.live[s] = 1; S.columns.maxE[s] = Number(u.maxEnergy); S.columns.spMvOwn[s] = 0; S.columns.mvBlk[s] = 0; S.columns.mvCD[s] = -1; S.columns.wsKind[s] = 0;
     // (Tick-stamped answers of the slot's last unit are not this one's.)
     S.columns.acqB[s] = 0;
-    S.columns.cbTick[s] = -1; S.columns.cbT[s] = -1; S.columns.dbTick[s] = -1; S.columns.dbT[s] = -1; S.columns.cwTick[s] = -1; S.columns.mvStepT[s] = -1; S.columns.upT[s] = -1; S.columns.upB[s] = -1;
+    S.columns.cbTick[s] = -1; S.columns.cbT[s] = -1; S.columns.dbTick[s] = -1; S.columns.dbT[s] = -1; S.columns.cwTick[s] = -1; S.columns.upT[s] = -1; S.columns.upB[s] = -1;
     Object.defineProperties(u, { _us: { value: S.columns, writable: true }, _si: { value: s, writable: true }, _det: { value: null, writable: true },
         _path: { value: null, writable: true }, _ws: { value: undefined, writable: true }, _wnr: { value: undefined, writable: true }, _tb: { value: null, writable: true } });
 }
@@ -354,6 +363,8 @@ function simUnitStateDetach(S, s) {
     values._statsBehind = typeof _unitStatsBehind === 'function' ? _unitStatsBehind(u, S.columns.esVer[s]) : false;
     { const lx = S.columns.fLsX[s], ly = S.columns.fLsY[s]; values._forcedTargetLastSeenX = lx === lx ? lx : null; values._forcedTargetLastSeenY = ly === ly ? ly : null; }
     u._det = values;
+    // (Its path window back to the pool: the slot's next unit starts with none.)
+    simUnitPathRelease(S.columns, s);
     u._us = null; u._si = -1;
     S.sepKey[s] = SIM_SEP_ABSENT;
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.live[s] = 0;
@@ -396,6 +407,7 @@ function simUnitStateCompact() {
     const cap = Math.max(1024, Math.ceil(live * 1.125 / 4096) * 4096);
     const N = { cap, owners: [], free: [], columns: _simUnitColumnsObject(), stamp: new Uint32Array(cap), epoch: 0, unitsRef: units, held: null };
     const C = N.columns;
+    N.pathPool = S.pathPool; C.mvNodes = old.mvNodes;
     for (const k of SIM_UNIT_COLUMNS) C[k] = simHeapArray(_simUnitColumnType(k), cap);
     for (const [k, Type, per] of SIM_MOVE_COLUMNS) C[k] = simHeapArray(Type, cap * per);
     N.sepKey = simHeapArray(Uint32Array, cap); N.sepLayer = simHeapArray(Uint8Array, cap);
@@ -431,6 +443,7 @@ function simUnitStateCompact() {
     _simUnitState = N;
     for (const k of SIM_UNIT_COLUMNS) simParallelBind('unit.' + k, C[k]);
     for (const [k] of SIM_MOVE_COLUMNS) simParallelBind('unit.' + k, C[k]);
+    simParallelBind('unit.mvNodes', C.mvNodes);
     simParallelBind('unit.sepKey', N.sepKey); simParallelBind('unit.sepLayer', N.sepLayer);
     if (typeof unitSlotMapInvalidate === 'function') unitSlotMapInvalidate();
     return true;
@@ -479,4 +492,54 @@ function simUnitStateKeys(u) {
     if (u._us || u._det) for (const k of SIM_UNIT_ACCESSOR_COLUMNS) keys.push(k);
     if (u instanceof Unit) for (const k of SIM_UNIT_EXTRA_ACCESSORS) if (!Object.prototype.hasOwnProperty.call(u, k)) keys.push(k);
     return keys;
+}
+
+// Scratch sized by population: the expected count plus 12.5% headroom, in
+// whole 4096-element blocks (doubling left up to half of each large pool
+// unused, and its copies with it).
+function simReserveCap(n, min = 1024) { return Math.max(min, Math.ceil(n * 1.125 / 4096) * 4096); }
+
+// Explicit paths alone own a window. Flow movers keep only a -1 handle.
+function simUnitPathWindow(c, s) {
+    const S = _simUnitState;
+    if (!S || S.columns !== c) throw new Error('path window belongs to retired state');
+    const P = S.pathPool;
+    let h = c.mvPath[s];
+    if (h < 0) { h = P.free.length ? P.free.pop() : P.next++; c.mvPath[s] = h; }
+    if (h >= P.cap) {
+        const cap = Math.max(64, Math.ceil((h + 1) * 1.125 / 64) * 64), old = c.mvNodes;
+        c.mvNodes = simHeapArray(Int32Array, cap * SIM_MOVE_WINDOW);
+        c.mvNodes.set(old); P.cap = cap; P.held.array = c.mvNodes;
+        simParallelBind('unit.mvNodes', c.mvNodes); simHeapFree(old); _simUnitColumnsHeld(S);
+    }
+    return h * SIM_MOVE_WINDOW;
+}
+function simUnitPathRelease(c, s) {
+    const S = _simUnitState;
+    if (S && S.columns === c && S.pathPool && c.mvPath[s] >= 0) { S.pathPool.free.push(c.mvPath[s]); c.mvPath[s] = -1; }
+}
+
+const _simPathPoolsGone = typeof FinalizationRegistry === 'function' ? new FinalizationRegistry(h => simHeapFree(h.array)) : null;
+// Schema is also consumed by allocation reports and ABI validation tooling.
+const SIM_UNIT_SCHEMA = Object.freeze((() => {
+    const out = Object.create(null);
+    for (const [name, Type, count] of [...SIM_UNIT_COLUMNS.map(k => [k, _simUnitColumnType(k), 1]), ...SIM_MOVE_COLUMNS]) {
+        if (out[name]) throw new Error('Duplicate unit column: ' + name);
+        out[name] = Object.freeze({ Type, count, bytes: Type.BYTES_PER_ELEMENT * count,
+            snapshot: SIM_UNIT_ACCESSOR_COLUMNS.includes(name),
+            group: /^(ws|wk)/.test(name) ? 'worker' : /^fLs/.test(name) ? 'forcedTarget' : 'unit',
+            default: name in SIM_SPATIAL_DEFAULTS ? SIM_SPATIAL_DEFAULTS[name] : SIM_UNIT_LEVEL_COLUMNS.includes(name) || /^fLs[XY]$/.test(name) ? NaN : 0 });
+    }
+    return out;
+})());
+function simMemoryStats() {
+    const S = _simUnitState, groups = {}, seen = new Set();
+    for (const [name, a] of Object.entries(_simParReg)) {
+        if (!ArrayBuffer.isView(a) || seen.has(a)) continue;
+        seen.add(a); const k = name.split('.')[0]; groups[k] = (groups[k] || 0) + a.byteLength;
+    }
+    return { slots: S ? S.owners.length : 0, capacity: S ? S.cap : 0,
+        bytesPerSlot: Object.values(SIM_UNIT_SCHEMA).reduce((n, e) => n + e.bytes, 5),
+        pathWindows: S && S.pathPool ? S.pathPool.next - S.pathPool.free.length : 0,
+        boundBytes: groups, heap: typeof simHeapStats === 'function' ? simHeapStats() : null };
 }
