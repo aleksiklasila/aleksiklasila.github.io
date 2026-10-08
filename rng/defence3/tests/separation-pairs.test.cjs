@@ -2,15 +2,19 @@
 // pushes) gives each slot exactly the sums the per-unit kernel gathers
 // (SIM_KERNEL_SEPARATION) on the same packed entries: crowded tiles, mixed
 // owners, layers and radii, units taking part or not, moved or at rest,
-// exact overlaps, empty and dead entries, and band boundaries.
+// exact overlaps, empty and dead entries, and band boundaries. Its Rust
+// twin (wasm/src/lib.rs sep_pairs, on the arrays copied into the wasm heap)
+// gives the same sums bit for bit.
 'use strict';
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const ctx = vm.createContext({ Math, Atomics, Infinity, Float64Array, Int32Array, Uint8Array, Uint32Array, Array, Number });
-vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/sim/sim_parallel.js'), 'utf8') +
-    '\nglobalThis.K = { gather: SIM_KERNELS[SIM_KERNEL_SEPARATION], pairs: SIM_KERNELS[SIM_KERNEL_SEP_PAIRS] };', ctx);
+vm.runInContext(['sim_parallel.js', 'sim_wasm_bin.js', 'sim_wasm.js'].map(f => fs.readFileSync(path.join(__dirname, '../src/sim', f), 'utf8')).join('\n;\n') +
+    '\nglobalThis.K = { gather: SIM_KERNELS[SIM_KERNEL_SEPARATION], pairs: SIM_KERNELS[SIM_KERNEL_SEP_PAIRS] };' +
+    '\nglobalThis.W = { reg: _simParReg, bind: simParallelBind, heap: simHeapArray, ok: () => simWasmInit() };', ctx);
+const wasm = ctx.W.ok();
 
 function world(seed, CW, CH, n, opts) {
     let s = seed;
@@ -44,10 +48,10 @@ function world(seed, CW, CH, n, opts) {
         R['sep.sx'][k] = Math.fround(u.x); R['sep.sy'][k] = Math.fround(u.y); R['sep.sr'][k] = Math.fround(u.r); R['sep.so'][k] = u.o; R['sep.sl'][k] = u.l; R['sep.sc'][k] = u.sc; R['sep.sid'][k] = u.id;
         const d = u.id & 3; R['sep.sdx'][k] = d === 0 ? 1 : d === 2 ? -1 : 0; R['sep.sdy'][k] = d === 1 ? 1 : d === 3 ? -1 : 0;
     });
-    // The pair kernel's records (from the same values).
-    R['sep.rec'] = new Float32Array(n * 4); R['sep.meta'] = new Int32Array(n);
+    // The pair kernel's packed entries (from the same values).
+    for (const [nm, T] of [['qx', Float32Array], ['qy', Float32Array], ['qr', Float32Array], ['qid', Int32Array], ['meta', Int32Array]]) R['sep.' + nm] = new T(n);
     for (let k = 0; k < n; k++) {
-        R['sep.rec'][k * 4] = R['sep.sx'][k]; R['sep.rec'][k * 4 + 1] = R['sep.sy'][k]; R['sep.rec'][k * 4 + 2] = R['sep.sr'][k];
+        R['sep.qx'][k] = R['sep.sx'][k]; R['sep.qy'][k] = R['sep.sy'][k]; R['sep.qr'][k] = R['sep.sr'][k]; R['sep.qid'][k] = R['sep.sid'][k];
         R['sep.meta'][k] = R['sep.ord'][k] < 0 ? (255 << 8 | 255) : (R['sep.sc'][k] << 16 | (R['sep.sl'][k] & 255) << 8 | (R['sep.so'][k] & 255));
     }
     for (let k = 0; k < n; k++) {
@@ -69,7 +73,7 @@ const pad = 16, Q = 1024, BOTH = 0.42, ONE = 0.6, MOVER = 0.2, YIELD = 0.65;
 let cases = 0, contacts = 0;
 for (const [seed, CW, CH, n, spread, radii] of [[3, 40, 30, 3000, 300, [4, 6, 8]], [11, 25, 25, 2500, 120, [8, 12]], [29, 60, 9, 1800, 500, [3, 12, 20]], [41, 12, 50, 2200, 200, [8]]]) {
     const { R, n: N } = world(seed, CW, CH, n, { spread, radii });
-    const maxR = Math.max(...radii), farAny = 2 * maxR + pad, cws = 32, reach = Math.max(1, Math.ceil(farAny / cws)), H = Math.max(2, reach);
+    const maxR = Math.max(...radii), farAny = 2 * maxR + pad, cws = 32, reach = Math.max(1, Math.ceil(farAny / cws)), H = Math.max(2, 2 * reach);
     const out = () => ({ px: new Float64Array(N), py: new Float64Array(N), ov: new Float64Array(N), hit: new Uint32Array(N) });
     const G = out(), Pp = out();
     const bind = o => { R['sep.px'] = o.px; R['sep.py'] = o.py; R['sep.ov'] = o.ov; R['sep.hit'] = o.hit; };
@@ -87,6 +91,19 @@ for (const [seed, CW, CH, n, spread, radii] of [[3, 40, 30, 3000, 300, [4, 6, 8]
         assert.equal(Pp.ov[s], G.ov[s], `seed ${seed}: slot ${s} overlap`);
         contacts += G.hit[s];
     }
+    // The Rust twin on heap copies of the same arrays.
+    if (wasm) {
+        for (const name in R) { const src = R[name], h = ctx.W.heap(src.constructor, src.length); h.set(src); ctx.W.bind(name, h); }
+        for (const k of ['sep.px', 'sep.py', 'sep.ov', 'sep.hit']) ctx.W.reg[k].fill(0);
+        for (const parity of [0, 1]) for (let c = 0; c < (parity ? Math.floor(bands / 2) : Math.ceil(bands / 2)); c++)
+            ctx.K.pairs(ctx.W.reg, [CW, CH, H, pad, farAny, Q, BOTH, ONE, 0, N, cws, 5, MOVER, YIELD, parity], c);
+        const Wr = ctx.W.reg;
+        for (let s = 0; s < N; s++) {
+            assert.equal(Wr['sep.hit'][s], G.hit[s], `seed ${seed}: wasm slot ${s} contacts`);
+            assert.ok(Object.is(Wr['sep.px'][s], Pp.px[s]) && Object.is(Wr['sep.py'][s], Pp.py[s]), `seed ${seed}: wasm slot ${s} push ${Wr['sep.px'][s]},${Wr['sep.py'][s]} vs ${Pp.px[s]},${Pp.py[s]}`);
+            assert.ok(Object.is(Wr['sep.ov'][s], Pp.ov[s]), `seed ${seed}: wasm slot ${s} overlap`);
+        }
+    }
     cases++;
 }
-console.log(`PASS: pair kernel sums equal the per-unit kernel's (${cases} worlds, ${contacts} contact sides)`);
+console.log(`PASS: pair kernel sums equal the per-unit kernel's${wasm ? ' and the Rust twin\'s' : ' (no wasm here)'} (${cases} worlds, ${contacts} contact sides)`);

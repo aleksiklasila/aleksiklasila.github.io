@@ -608,6 +608,8 @@ function gameTick() {
 }
 function _gameTickBody() {
     gameTime++;
+    // (The wasm heap's clock: freed arrays are reused some ticks later.)
+    if (typeof simHeapTick === 'function') simHeapTick();
     // The unit index for this tick's queries and collision pass, from the
     // state as the tick begins (the same on a peer that just restored it).
     spatialIndexRebuild();
@@ -4496,6 +4498,16 @@ function startGame() {
         teamSpawnPos[pid] = pos;
     }
 
+    // (Room for every starting unit at once: see simUnitStateReserve.)
+    if (!startGameSkipStarters && typeof simUnitStateReserve === 'function') {
+        let spawnByThing = startingResourcesConfig.spawnCounts || {}, perTeam = 0;
+        for (let thingId in spawnByThing) {
+            let parsed = parseStartingThingId(thingId), levelMap = spawnByThing[thingId];
+            if (!parsed || parsed.kind === 'building' || !levelMap || typeof levelMap !== 'object') continue;
+            for (let levelText in levelMap) perTeam += Math.max(0, Math.min(10000, Math.floor(Number(levelMap[levelText]) || 0)));
+        }
+        simUnitStateReserve(perTeam * teams.length);
+    }
     for (let pid of (startGameSkipStarters ? [] : teams)) {
         let pos = teamSpawnPos[pid];
         let spawnByThing = startingResourcesConfig.spawnCounts || {};

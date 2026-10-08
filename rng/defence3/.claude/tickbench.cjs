@@ -41,6 +41,11 @@ let seconds = Number(process.argv[2]) || 15;
     // workloads' setups; AFTERALL=<expr> after the run on every peer, the
     // results written as a JSON array to AFTERALL_OUT (default
     // .claude/afterall.json).
+    // WASM=0: every peer runs the JS kernels (the wasm heap stays);
+    // WASM_GUEST=0: only the guests (host wasm vs guests JS in lockstep).
+    if (process.env.WASM === '0') for (const g of peers) g.eval('typeof simWasmKernels === "function" && simWasmKernels(false)');
+    if (process.env.WASM_GUEST === '0') for (const g of guests) g.eval('typeof simWasmKernels === "function" && simWasmKernels(false)');
+    console.log('wasm', JSON.stringify(peers.map(g => g.eval('typeof simHeapStats === "function" ? simHeapStats() : null'))));
     if (process.env.EVALALL) for (const g of peers) g.eval(process.env.EVALALL);
     await world.run(1000);
     if (process.env.RALLY10 === undefined) for (const g of peers) g.eval(`(() => {
@@ -569,6 +574,12 @@ let seconds = Number(process.argv[2]) || 15;
     // KTIME=1: wall time per kernel per tick (ms, averaged over the run).
     // KTIMETICK=1: also per tick (ktick in the output: tick -> kernel -> ms).
     if (process.env.KTIMETICK) host.eval(`__scratch.ktt = {}; { const f = simParallelRun; simParallelRun = function (k, total) { const a = __scratch.realNow(); try { return f.apply(this, arguments); } finally { const r = (__scratch.ktt[currentTick] ||= {}); r[k] = Math.round(((r[k] || 0) + __scratch.realNow() - a) * 100) / 100; } }; }`);
+    // KCPU=1: CPU per kernel per tick, every call of every lane (ms; with
+    // HELPERS=0 every chunk runs on the host's thread, so this is the
+    // kernels' whole cost), by kernel name.
+    if (process.env.KCPU) host.eval(`__scratch.kc = {}; { const names = {};
+        for (const nm of ${JSON.stringify(['SIM_KERNEL_SEP_PACK', 'SIM_KERNEL_SEP_MARK', 'SIM_KERNEL_SEP_PAIRS', 'SIM_KERNEL_SEPARATION_FINISH', 'SIM_KERNEL_ACQ_SCAN', 'SIM_KERNEL_ACQ_SNAP', 'SIM_KERNEL_ACQ_COMMIT', 'SIM_KERNEL_MOVE', 'SIM_KERNEL_MOVE_STEP', 'SIM_KERNEL_DRIVEBY', 'SIM_KERNEL_COMBAT_SCAN', 'SIM_KERNEL_STATUS', 'SIM_KERNEL_SNAP_REGION', 'SIM_KERNEL_INDEX_KEYS', 'SIM_KERNEL_INDEX_MERGE', 'SIM_KERNEL_INDEX_FILL', 'SIM_KERNEL_INDEX_RUNS', 'SIM_KERNEL_TILE_OWNERS', 'SIM_KERNEL_EFF_UNITS', 'SIM_KERNEL_EFF_COUNT', 'SIM_KERNEL_WS_SCAN', 'SIM_KERNEL_WS_SELECT', 'SIM_KERNEL_WS_ORDER', 'SIM_KERNEL_UPD_CAND', 'SIM_KERNEL_HELD_DEAD', 'SIM_KERNEL_LASER_HITS', 'SIM_KERNEL_VIS_SNAP', 'SIM_KERNEL_VIS_SEED', 'SIM_KERNEL_VIS_SPREAD', 'SIM_KERNEL_VISIBILITY', 'SIM_KERNEL_UNIT_FRAME', 'SIM_KERNEL_SP_COUNTS', 'SIM_KERNEL_SAT_ROWS', 'SIM_KERNEL_SAT_COLS', 'SIM_KERNEL_UPKEEP', 'SIM_KERNEL_HEAL_CAND', 'SIM_KERNEL_AREA_BOX', 'SIM_KERNEL_UNIT_RETIRE', 'SIM_KERNEL_SPATIAL_HISTOGRAM', 'SIM_KERNEL_SPATIAL_SCATTER', 'SIM_KERNEL_SPATIAL_PREFIX', 'SIM_KERNEL_NAV_FIELDS', 'SIM_KERNEL_NAV_LOCAL', 'SIM_KERNEL_NAV_PARTS', 'SIM_KERNEL_NAV_COST', 'SIM_KERNEL_NAV_SUBST', 'SIM_KERNEL_NAV_NODES', 'SIM_KERNEL_NAV_GRAPH'])}) { let id; try { id = eval(nm); } catch { continue; } if (typeof id === 'number') names[id] = nm.replace('SIM_KERNEL_', ''); }
+        for (const id in SIM_KERNELS) { const f = SIM_KERNELS[id], nm = names[id] || ('k' + id); SIM_KERNELS[id] = function () { const a = __scratch.realNow(); try { return f.apply(this, arguments); } finally { if (__scratch.tickMs.length) __scratch.kc[nm] = (__scratch.kc[nm] || 0) + __scratch.realNow() - a; } }; } }`);
     if (process.env.KTIME) host.eval(`__scratch.kt = {}; { const f = simParallelRun; simParallelRun = function (k, total) { const a = __scratch.realNow(); try { return f.apply(this, arguments); } finally { __scratch.kt[k] = (__scratch.kt[k] || 0) + __scratch.realNow() - a; } }; }`);
     // KSHARE=1: per kernel, the share of chunks the main thread ran itself; binds per tick (by name).
     if (process.env.KSHARE) host.eval(`__scratch.ks = {}; __scratch.kb = {}; __scratch.kbt = {};
@@ -668,10 +679,12 @@ let seconds = Number(process.argv[2]) || 15;
             for (const l in churn) out[l] = { n: counts[l], fields: Object.fromEntries(Object.entries(churn[l]).sort((a, b) => b[1] - a[1]).slice(0, 30).map(([k, v]) => [k, Math.round(1e4 * v / counts[l]) / 100])) }; return out; })())`)) : undefined,
         arm: process.env.ARMSTAT ? JSON.parse(host.eval('JSON.stringify(__scratch.arm.filter(a => a[0] % 10 === 0))')) : undefined,
         ktick: process.env.KTIMETICK ? JSON.parse(host.eval('JSON.stringify(__scratch.ktt)')) : undefined,
+        kcpu: process.env.KCPU ? JSON.parse(host.eval('JSON.stringify(Object.fromEntries(Object.entries(__scratch.kc).sort((a, b) => b[1] - a[1]).map(([k,v])=>[k, Math.round(v / __scratch.tickMs.length * 100) / 100])))')) : undefined,
         ktime: process.env.KTIME ? JSON.parse(host.eval('JSON.stringify(Object.fromEntries(Object.entries(__scratch.kt).map(([k,v])=>[k, Math.round(v / __scratch.tickMs.length * 10) / 10])))')) : undefined,
         states: process.env.STATES ? JSON.parse(host.eval('JSON.stringify(units.reduce((m, u) => { const k = (u.workerType || "combat") + ":" + (u.workerState || u.commandState); m[k] = (m[k] || 0) + 1; return m; }, {}))')) : undefined,
         buildings: process.env.STATES ? host.eval('towers.length + "/" + barracks.length + "/" + collectorSpawners.length + "/" + getCellItemsRowMajor().length') : undefined,
         desyncs: guests.map(g => g.eval('netCounters.desyncsDetected')), patches: guests.map(g => g.patchesApplied),
+        wasm: peers.map(g => g.eval('typeof simHeapStats === "function" ? (s => [s.kernels, s.memoryMB, s.liveMB, s.arrays])(simHeapStats()) : null')),
         kshare: process.env.KSHARE ? JSON.parse(host.eval('JSON.stringify({ share: __scratch.ks, binds: __scratch.kb, bindTicks: Object.keys(__scratch.kbt).length })')) : undefined,
         slotMapRebuilds:process.env.SLOTMAP ? host.eval('__scratch.smr') : undefined,
         loopCost: process.env.LOOPCOST ? JSON.parse(host.eval('JSON.stringify(__scratch.lc.filter(a => a[0] % 10 === 0))')) : undefined,

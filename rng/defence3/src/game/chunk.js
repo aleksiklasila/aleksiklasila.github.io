@@ -388,8 +388,11 @@ function _spatialIndexRebuildParallel() {
     const A = Math.max(areaDistanceMatrix ? areaDistanceMatrix.length : 0, Array.isArray(areas) ? areas.length : 0, 1);
     let X = _sxPar;
     if (!X || X.nChunks !== nChunks || X.A < A || X.players !== players) {
+        _sxParFree(X);
+        // (The chunk ranges in the wasm heap: the separation's and the
+        // acquisition scan's Rust kernels read them in place.)
         X = _sxPar = { nChunks, A, players, bad: simSharedArray(Int32Array, 1),
-            stamp: simSharedArray(Int32Array, nChunks), start: simSharedArray(Int32Array, nChunks), cnt: simSharedArray(Int32Array, nChunks), fill: simSharedArray(Int32Array, nChunks),
+            stamp: simHeapArray(Int32Array, nChunks), start: simHeapArray(Int32Array, nChunks), cnt: simHeapArray(Int32Array, nChunks), fill: simSharedArray(Int32Array, nChunks),
             astamp: simSharedArray(Int32Array, A), astart: simSharedArray(Int32Array, A), acnt: simSharedArray(Int32Array, A), afill: simSharedArray(Int32Array, A), aown: simSharedArray(Int32Array, A * players),
             listed: simSharedArray(Int32Array, 2), keys: null, areas: null, ent: null, aent: null, aslot: null, cap: 0 };
         for (const k of ['bad', 'stamp', 'start', 'cnt', 'fill', 'astamp', 'astart', 'acnt', 'afill', 'aown', 'listed']) simParallelBind('ix.' + k, X[k]);
@@ -399,7 +402,7 @@ function _spatialIndexRebuildParallel() {
         X.cap = Math.max(4096, n * 2);
         for (const k of ['keys', 'areas', 'ent', 'aent', 'aslot']) { X[k] = simSharedArray(Int32Array, X.cap); simParallelBind('ix.' + k, X[k]); }
     }
-    if (_sxESlot.length < n) { _sxESlot = simSharedArray(Int32Array, Math.max(1024, n * 2)); _sxEKey = simSharedArray(Int32Array, Math.max(1024, n * 2)); }
+    _spatialEntryArrays(n);
     simParallelBind('sep.eslot', _sxESlot); simParallelBind('sep.ekey', _sxEKey);
     _spatialEntryIds();
     const slots = _unitSlotMapEnsure();
@@ -448,6 +451,18 @@ function _spatialMergeArrays(X, n) {
     if (!X.ordM || X.ordM.length < n) { X.ordM = simSharedArray(Int32Array, Math.max(4096, n * 2)); X.kept = simSharedArray(Int32Array, X.ordM.length); X.chg = simSharedArray(Float64Array, X.ordM.length); simParallelBind('ix.kept', X.kept); simParallelBind('ix.chg', X.chg); }
     if (!X.inv || X.inv.length < slotsCap) { X.inv = simSharedArray(Int32Array, Math.max(4096, slotsCap)); X.invStamp = simSharedArray(Int32Array, X.inv.length); simParallelBind('ix.inv', X.inv); simParallelBind('ix.invStamp', X.invStamp); }
 }
+// The entries' slots and chunks for n units (in the wasm heap, see above).
+function _spatialEntryArrays(n) {
+    if (_sxESlot.length >= n) return;
+    const a = _sxESlot, b = _sxEKey;
+    _sxESlot = simHeapArray(Int32Array, Math.max(1024, n * 2)); _sxEKey = simHeapArray(Int32Array, Math.max(1024, n * 2));
+    simHeapFree(a); simHeapFree(b);
+}
+// The parallel build's arrays given back (replaced, or back to the serial build).
+function _sxParFree(X) {
+    if (!X) return;
+    for (const k of ['stamp', 'start', 'cnt']) simHeapFree(X[k]);
+}
 // Per entry its unit's id (SIM_KERNEL_INDEX_FILL), sized with the entries.
 function _spatialEntryIds() {
     if (!_sxEId || _sxEId.length !== _sxESlot.length) { _sxEId = simSharedArray(Int32Array, _sxESlot.length); simParallelBind('ix.eid', _sxEId); if (_sxPar) _sxPar.mergeOk = false; }
@@ -459,6 +474,7 @@ function _spatialIndexRebuildSerial() {
     if (_sxPar) _sxPar.mergeOk = false;
     if (_sxPar) {
         // Back from the parallel build: arrays of its own.
+        _sxParFree(_sxPar);
         _sxPar = null; _sxStamp = new Int32Array(0); _sxAreaCap = 0;
     }
     if (_sxStamp.length !== nChunks) {
@@ -471,7 +487,7 @@ function _spatialIndexRebuildSerial() {
         _sxAOwner = new Int32Array(A * players);
     }
     if (_sxKeys.length < n) { _sxKeys = new Int32Array(n * 2); _sxAreas = new Int32Array(n * 2); _sxSi = new Int32Array(n * 2); }
-    if (_sxESlot.length < n) { _sxESlot = simSharedArray(Int32Array, Math.max(1024, n * 2)); _sxEKey = simSharedArray(Int32Array, Math.max(1024, n * 2)); }
+    _spatialEntryArrays(n);
     if (++_sxEpoch >= 0x3fffffff) { _sxEpoch = 1; _sxStamp.fill(0); _sxAStamp.fill(0); }
     const ep = _sxEpoch;
     const S = _simUnitState, slots = S ? _unitSlotMapEnsure() : null, owners = S ? S.owners : null;
@@ -519,7 +535,9 @@ function _spatialIndexRebuildSerial() {
 let _spatialAreaFlat = null, _spatialAreaFlatOf = null;
 function _spatialAreaGridFlat() {
     if (_spatialAreaFlatOf === areaIdGrid && _spatialAreaFlat && _spatialAreaFlat.length === GRID_W * GRID_H) return _spatialAreaFlat;
-    const f = simSharedArray(Int32Array, Math.max(1, GRID_W * GRID_H));
+    // (In the wasm heap: read by the Rust kernels.)
+    const f = simHeapArray(Int32Array, Math.max(1, GRID_W * GRID_H));
+    simHeapFree(_spatialAreaFlat);
     for (let y = 0; y < GRID_H; y++) { const row = areaIdGrid[y]; if (row) f.set(row.length === GRID_W ? row : Array.from({ length: GRID_W }, (_, x) => row[x] ?? -1), y * GRID_W); else f.fill(-1, y * GRID_W, (y + 1) * GRID_W); }
     _spatialAreaFlat = f; _spatialAreaFlatOf = areaIdGrid;
     return f;

@@ -76,6 +76,76 @@ is next. Newest entries first within each section.
 
 ## Session log
 
+### 2026-10-08 (seventeenth round) — Rust/wasm kernels
+
+- User: a Rust/wasm implementation of the separation and other heavy
+  operations, as optimized as possible (SIMD; data layout reworks fine),
+  benchmarked. Toolchain installed (winget Rustlang.Rustup, target
+  wasm32-unknown-unknown); build `node wasm/build.cjs` (wasm/README.md).
+- wasm/src/lib.rs (`no_std`, simd128) has twins of SEP_PACK, SEP_MARK,
+  SEP_PAIRS, SEPARATION_FINISH, ACQ_OMT (new: the acquisition's first
+  stage) and ACQ_SCAN, and flownav.js `_navFieldRow` (nav_row). A twin
+  writes what its JS kernel writes, bit for bit (tests/wasm-kernels.test.cjs
+  on random edge-heavy inputs, tests/separation-pairs.test.cjs, tickbench
+  `WASM_GUEST=0`: a wasm host and a JS guest in lockstep, 0 desyncs in the
+  200k battle and the 150k rally burst), so chunks of one job may run in
+  either and peers with and without wasm agree.
+- The wasm heap (src/sim/sim_wasm.js): one shared WebAssembly.Memory in
+  the simulation worker; the arrays those kernels read are allocated in it
+  (simHeapArray: unit columns, the unit index's entry/chunk arrays, the
+  separation and acquisition buffers, mv.wall, ix.agrid, hostile tables),
+  so kernels work in place; helpers instantiate the module over it (own
+  stack, 4 MB scratch). Freed arrays (simHeapFree, FinalizationRegistry for
+  old unit columns and the navigation's graph copies) are reused once the
+  chains in flight then are done and no name binds them. Wasm memory never
+  shrinks: simUnitStateReserve sizes the unit columns once before bulk
+  creation (match start, whole restore): host heap 1.7 GB -> 750 MB at 200k
+  (254 MB live). A page whose simulation runs in its worker keeps no heap.
+  The presentation bind compared column *buffers* (all one buffer now):
+  compares the arrays.
+- Layout/algorithm reworks (both twins): the separation's entries as SoA
+  (sep.qx/qy/qr Float32, meta, qid), PACK no longer writes per-chunk
+  aggregates (139k scattered writes into 1M-chunk arrays); MARK and PAIRS
+  find neighbours through the sorted entries (no chunk grid reads); pairs
+  are found by the unit taking part (both: the earlier entry), over its
+  full neighbourhood, bands 2 * reach rows (most units do not take part on
+  a tick: they no longer pay a unit's setup). Rust only: per-row tables of
+  chunk starts (pairs, on the stack), an f32x4 conservative prefilter with
+  the exact f64 test for candidates, a byte table of "moved" chunks (mark),
+  idle FINISH slots four at a time, acquisition rings 16 chunks at a time
+  (rows; columns from the transposed owners), structures 16 tiles at a time,
+  entries packed in index order, units scanned in the index's order.
+  Tried and dropped: per-row narrowing of the pair window by its vertical
+  gap (slower: the sqrt costs more than the candidates it saves here).
+- Kernel replay on a 162k battle tick (`.claude/wbench.cjs`, one thread,
+  kdump.js dumps): pairs 27.2 ms (JS before) / 22.0 (JS now) / 12.6
+  (wasm); pack (+aggregates before) 11.6 / 5.9 / 3.5; mark 4.6 / 4.8 /
+  2.2; finish 7.5 / 7.0 / 4.7; acquisition scan 74.4 / 73.3 / 19.5.
+- Whole CPU per tick (tickbench KCPU=1, HELPERS=0, 100000-1000 ACTIVE+
+  BATTLE, 6 s): JS mean 305.9 / p50 233.5 ms, wasm 250.0 / 200.0. By
+  kernel (JS -> wasm, ms a tick): NAV_FIELDS 56.5 -> 34.9, SEP_PAIRS 25.4
+  -> 12.6, ACQ_SCAN 19.3 -> 5.5, FINISH 7.7 -> 5.2, PACK 5.9 -> 3.4, MARK
+  3.9 -> 2.0 (the ported kernels 120 -> 65 ms).
+- Main thread with 7 helpers (same workload): wasm 76.4 / 65.8 / p95 122.9
+  vs JS 77.1 / 66.3 / 124.6: unchanged (these kernels ran on helpers, off
+  the critical path; the gain is helper capacity, the 8 x 50 ms ceiling).
+  Main thread per tick: unit pass 24, simMoveRun 13, state hash 6.4, hits
+  4, separation commit 3.2, status 3.0.
+- Top remaining CPU (a tick, wasm): MOVE 35.6, NAV_FIELDS 34.9 (the row
+  search in Rust ~12 ms a peer; KCPU counts both peers' setup ticks too),
+  SEP_PAIRS 12.6, DRIVEBY 12.0, MOVE_STEP 9.8, SNAP_REGION 9.4, WS_SCAN 8.8,
+  INDEX_MERGE 6.2 (serial). Next for wasm: the movement family (MOVE /
+  MOVE_STEP / DRIVEBY, ~57 ms, and simMoveRun on the main thread); its
+  inputs include non-heap and nested arrays (vis.cover per player) to
+  flatten first.
+- Tools: tickbench `WASM=0` / `WASM_GUEST=0`, `KCPU=1` (CPU per kernel,
+  timed ticks only), `.claude/wbench.cjs` (JS vs wasm replay of dumps).
+- Tests: the regression set (both simulation modes) passes but for
+  multiplayer-patch, which fails the same way on HEAD (mode 0 flaky,
+  mode 1 the same repairs at the same ticks; checked with
+  DEFENCE_TEST_BASELINE=HEAD). Edge (serve-like COOP/COEP, sim worker with
+  7 helpers): heap ready, no errors.
+
 ### 2026-10-05 (sixteenth round) — 400k goal, memory first
 
 - New goal (user): 400k units, 2 teams, ~100k buildings, 100k energy and

@@ -479,6 +479,9 @@ function _navFieldRow(R, p, pool, off, meta, m, rows, ro, pre = 'nav.') {
             seedD[j] = v; seedN[j] = i;
         }
     }
+    // (The search and each part's exit by the Rust twin, when this thread
+    // has it and the graph is in the wasm heap: the same row.)
+    if (_navFieldRowWasm(pre, p, NM, ns, seedN, seedD, rows, ro)) return;
     let si = 0;
     for (let cur = 0; count > 0 || si < ns; cur++) {
         // (Nothing queued: on to the next seed's distance.)
@@ -517,6 +520,26 @@ function _navFieldRow(R, p, pool, off, meta, m, rows, ro, pre = 'nav.') {
     }
 }
 let _navRowScratch = null;
+// _navFieldRow's search in Rust (wasm/src/lib.rs nav_row): the seeds and
+// the row (255 / 254 set) copied into this thread's scratch, the row copied
+// back. False: not here (no module, the graph not in the heap, too big).
+function _navFieldRowWasm(pre, p, NM, ns, seedN, seedD, rows, ro) {
+    if (_simWasmX === null || _simWasmOn[0] !== 1 || _simWasmScratch <= 0) return false;
+    const W = _simParWPtr, nb = W[pre + p + '.wnb'], npair = W[pre + p + '.wnp'], npart = W[pre + p + '.wnpart'];
+    const adjS = W[pre + p + '.wadjS'], adjA = W[pre + p + '.wadjA'], adjC = W[pre + p + '.wadjC'];
+    if (!(nb >= 0 && npair >= 0 && npart >= 0 && adjS >= 0 && adjA >= 0 && adjC >= 0)) return false;
+    const nc = NM[3] | 0, np = NM[7] | 0, B = Math.max(1, NM[8] | 0), k = NM[9] | 0, edges = NM[10] | 0;
+    const rowWords = (np + 3) >> 2, used = 2 * k + rowWords, work = _simWasmScratchWords - used;
+    if (work < k + B + 2 * (edges + k + 16) + np) return false;
+    const buf = _simWasmMem.buffer, base = _simWasmScratch, rowPtr = base + 8 * k;
+    new Int32Array(buf, base, ns).set(seedN.subarray(0, ns));
+    new Int32Array(buf, base + 4 * k, ns).set(seedD.subarray(0, ns));
+    const row = new Uint8Array(buf, rowPtr, np);
+    row.set(rows.subarray(ro, ro + np));
+    if (!_simWasmX.nav_row(nb, npair, npart, adjS, adjA, adjC, nc, k, np, B, edges, base, base + 4 * k, ns, rowPtr, base + 4 * used, work)) return false;
+    rows.set(row, ro);
+    return true;
+}
 
 // Step costs (the rule of _stepCostAt in pathfinding.js): 3 within one
 // tile (any direction; the map's edge counts as wall) of a wall, 2 within
@@ -1096,6 +1119,28 @@ function _navBindBuild(pre, nav) {
     simParallelBind(pre + p + '.partL', nav.partL); simParallelBind(pre + p + '.partB', nav.partBase); simParallelBind(pre + p + '.npart', nav.nodePart);
     simParallelBind(pre + p + '.adjS', nav.adjStart); simParallelBind(pre + p + '.adjA', nav.adjA); simParallelBind(pre + p + '.adjC', nav.adjC);
     simParallelBind(pre + p + '.pclu', nav.partCluster); simParallelBind(pre + p + '.cstart', nav.compStart); simParallelBind(pre + p + '.cparts', nav.compParts);
+    // (The exit graph again in the wasm heap, for the row search's Rust
+    // twin: copies, made once per build, see _navHeapCopy.)
+    for (const [nm, arr] of [['nb', nav.nodeBase], ['np', nav.nodePair], ['npart', nav.nodePart], ['adjS', nav.adjStart], ['adjA', nav.adjA], ['adjC', nav.adjC]])
+        simParallelBind(pre + p + '.w' + nm, _navHeapCopy(arr));
+}
+// A build's array copied into the wasm heap (null without it): its arrays
+// are made before the heap exists for them and dropped by the collector,
+// so a copy goes back to the heap once its source is collected (and no
+// name binds it any more, sim_wasm.js). (A build's graph does not change
+// once bound.)
+const _navHeapCopies = new WeakMap();
+const _navHeapCopyGone = typeof FinalizationRegistry === 'function' ? new FinalizationRegistry(c => simHeapFree(c)) : null;
+function _navHeapCopy(src) {
+    if (!src || !_navHeapCopyGone || _simHeapPtrOf === null) return null;
+    let c = _navHeapCopies.get(src);
+    if (c) return c;
+    c = simHeapArray(src.constructor, src.length);
+    if (_simHeapPtrOf(c) < 0) return null;
+    c.set(src);
+    _navHeapCopies.set(src, c);
+    _navHeapCopyGone.register(src, c);
+    return c;
 }
 
 // ---- A rebuild's window (see _navNext) ----

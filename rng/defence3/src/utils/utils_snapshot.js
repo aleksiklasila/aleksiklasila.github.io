@@ -1912,6 +1912,9 @@ function snapDecodeState(S, options = null) {
             let made = new Array(rows.length);
             let byKey = new Map();
             let fresh = 0, freshUnits = null;
+            // (A whole restore makes every unit anew: room for them at once,
+            // see simUnitStateReserve.)
+            if (list === 'u' && !partial && typeof simUnitStateReserve === 'function') simUnitStateReserve(rows.length);
             for (let r = 0; r < rows.length; r++) {
                 let row = rows[r];
                 let key = row[0];

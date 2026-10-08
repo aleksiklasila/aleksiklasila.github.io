@@ -2334,7 +2334,8 @@ function _sepGrow(n) {
 // read before and written after, here.
 function _sepShared(S, name, Type, n) {
     let arr = S[name];
-    if (!arr || arr.length < n) { arr = S[name] = simSharedArray(Type, n); simParallelBind('sep.' + name, arr); }
+    // (In the wasm heap: the chain's Rust kernels read them in place.)
+    if (!arr || arr.length < n) { const old = arr; arr = S[name] = simHeapArray(Type, n); simParallelBind('sep.' + name, arr); simHeapFree(old); }
     return arr;
 }
 // Work is split into small batches of checking units, including within one
@@ -3271,7 +3272,7 @@ function simMoveWallsDirty() { _simMoveWallDirty = true; if (typeof stepCostsRes
 function simMoveWallGrid() { _simMoveWalls(); return _simMoveWall; }
 function _simMoveWalls() {
     if (!_simMoveWallDirty && _simMoveWallGrid === grid && _simMoveWall && _simMoveWall.length === GRID_W * GRID_H) return;
-    if (!_simMoveWall || _simMoveWall.length !== GRID_W * GRID_H) { _simMoveWall = simSharedArray(Uint8Array, GRID_W * GRID_H); simParallelBind('mv.wall', _simMoveWall); }
+    if (!_simMoveWall || _simMoveWall.length !== GRID_W * GRID_H) { const old = _simMoveWall; _simMoveWall = simHeapArray(Uint8Array, GRID_W * GRID_H); simParallelBind('mv.wall', _simMoveWall); simHeapFree(old); }
     for (let y = 0; y < GRID_H; y++) {
         const row = grid[y], o = y * GRID_W;
         for (let x = 0; x < GRID_W; x++) _simMoveWall[o + x] = row && row[x] && row[x].type === TYPE_WALL ? 1 : 0;
@@ -3376,11 +3377,13 @@ function _simMoveBuildHostile() {
     const players = spatialUnitsComplexPlayerCount, bc = spatialBlockCols, br = spatialBlockRows;
     const stride = bc + 1, plane = stride * (br + 1);
     if (!_simMoveHostile || _simMoveHostile.length < players * plane) {
-        _simMoveHostile = simSharedArray(Int32Array, Math.max(1, players * plane));
+        simHeapFree(_simMoveHostile);
+        _simMoveHostile = simHeapArray(Int32Array, Math.max(1, players * plane));
         simParallelBind('mv.hostile', _simMoveHostile);
     }
     if (!_simMoveHostStruct || _simMoveHostStruct.length < players * plane) {
-        _simMoveHostStruct = simSharedArray(Int32Array, Math.max(1, players * plane));
+        simHeapFree(_simMoveHostStruct);
+        _simMoveHostStruct = simHeapArray(Int32Array, Math.max(1, players * plane));
         simParallelBind('mv.hstruct', _simMoveHostStruct);
     }
     // (In parallel: the rows, then the columns; see SIM_KERNEL_SAT_ROWS.)
@@ -3654,7 +3657,7 @@ function combatScanRun() {
     // tiles holding only its own player's units.
     {
         const nc = CHUNKS_W * CHUNKS_H, ne = spatialIndexEntries();
-        if (!_combatScanOwnerMask || _combatScanOwnerMask.length !== nc) { _combatScanOwnerMask = simSharedArray(Uint8Array, nc); _sxOwnerMaskEpoch = -1; }
+        if (!_combatScanOwnerMask || _combatScanOwnerMask.length !== nc) { simHeapFree(_combatScanOwnerMask); _combatScanOwnerMask = simHeapArray(Uint8Array, nc); _sxOwnerMaskEpoch = -1; }
         simParallelBind('ix.omask', _combatScanOwnerMask); simParallelBind('sep.ekey', _sxEKey);
         // (Made with the index after the last tick: spatialIndexPrebuild.)
         if (_sxOwnerMaskEpoch !== _sxEpoch) {
@@ -3711,7 +3714,8 @@ function acqTierReset() {
 }
 function _acqArray(name, Type, n) {
     let a = _simParReg[name];
-    if (!a || a.constructor !== Type || a.length < n) { a = simSharedArray(Type, Math.max(1024, n)); simParallelBind(name, a); }
+    // (In the wasm heap: the scan's Rust twin reads them in place.)
+    if (!a || a.constructor !== Type || a.length < n) { const old = a; a = simHeapArray(Type, Math.max(1024, n)); simParallelBind(name, a); simHeapFree(old); }
     return a;
 }
 function _acqPost() {
@@ -3744,13 +3748,25 @@ function _acqPost() {
     const cov = _acqArray('acq.cover', Int32Array, Math.max(1, np * A));
     for (let p = 0; p < np; p++) cov.set(C.cover[p].subarray(0, A), p * A);
     simParallelBind('acq.agrid', _spatialAreaGridFlat());
-    const B = _simBgParamsByLane[ACQ_LANE];
+    // First the owners per chunk transposed (SIM_KERNEL_ACQ_OMT: the Rust
+    // scan reads a ring's columns as runs), then the scan. (Each stage's
+    // params written whole.)
+    _acqArray('acq.omt', Uint8Array, CHUNKS_W * CHUNKS_H);
+    // (And the index's entries packed in its order: acq.ex... .)
+    const ecap = Math.max(1024, ne * 2);
+    _acqArray('acq.ex', Float64Array, ecap); _acqArray('acq.ey', Float64Array, ecap);
+    _acqArray('acq.eo', Int32Array, ecap); _acqArray('acq.ea', Int32Array, ecap); _acqArray('acq.eid', Int32Array, ecap);
+    const T = simParallelStageParams(ACQ_LANE, 0), B = simParallelStageParams(ACQ_LANE, 1);
+    T.fill(0); B.fill(0);
+    const EPER = 4096, prepJobs = Math.max(Math.ceil(CHUNKS_H / 64), Math.ceil(ne / EPER));
+    T[0] = CHUNKS_W; T[1] = CHUNKS_H; T[2] = 64; T[3] = ne; T[4] = EPER; T[5] = TILE; T[6] = GRID_W; T[7] = GRID_H;
     // (Small chunks: a helper takes the tick's own jobs between them.)
     B[0] = n; B[1] = 256; B[3] = CHUNKS_W; B[4] = CHUNKS_H; B[5] = TILE; B[6] = _sxEpoch;
     B[7] = Math.min(spatialUnitsComplexPlayerCount, np); B[8] = CMD_IDLE; B[9] = CMD_ATTACK_MOVING;
     B[10] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; B[11] = spatialBlockCols; B[12] = spatialBlockRows; B[14] = CHUNK_SIZE;
-    B[15] = GRID_W; B[16] = GRID_H; B[18] = CMD_ATTACKING; B[20] = A;
-    simParallelBackground(SIM_KERNEL_ACQ_SCAN, Math.ceil(n / 256), ACQ_LANE);
+    // (The units in the index's order: B[22], its entries B[23].)
+    B[15] = GRID_W; B[16] = GRID_H; B[18] = CMD_ATTACKING; B[20] = A; B[21] = 1; B[22] = 1; B[23] = ne;
+    simParallelBackgroundChain(ACQ_LANE, [[SIM_KERNEL_ACQ_OMT, prepJobs], [SIM_KERNEL_ACQ_SCAN, Math.ceil(ne / 256)]]);
     _acqStage = 1; _acqN = n;
 }
 function _acqCommit() {
@@ -3793,7 +3809,7 @@ function _prepareSharedUnitSeparation(S, restTicks, early = false) {
 // built (a unit's step plus a push), for the collision pass's culling.
 const UNIT_SEPARATION_INDEX_MARGIN = TILE * 0.5;
 // Large worlds (slots) run the separation as a chain on the helpers (lane
-// 0, see SIM_KERNEL_SEP_PACK: pack, chunk aggregates, mark, pairs twice): started at the tick's start from the
+// 0, see SIM_KERNEL_SEP_PACK: pack with the chunk aggregates, mark, pairs twice; Rust twins in wasm/src/lib.rs): started at the tick's start from the
 // tick-start copy of the units (SIM_KERNEL_STATUS: x0/y0, sepD0/R0/L0) and
 // the unit index, while the simulation thread does the unit pass; collected
 // and applied after it (runUnitSeparationPass). Movers: units that moved by
@@ -3811,16 +3827,16 @@ let SEPARATION_SLOT_MIN_UNITS = 4096;
 let UNIT_SEPARATION_MODE = 0;
 let UNIT_SEPARATION_TIER_GAIN = 1.0;
 let _sepPending = null, _sepDirty = true;
-const SEP_PACK_PER = 512, SEP_MARK_PER = 2048;
+const SEP_PACK_PER = 1024, SEP_MARK_PER = 2048;
 // The chain's arrays for n slots (the sums cleared once when new or after
 // the small-world pass wrote them by unit index: the commit clears them as
 // it reads them).
 function _sepArrays(n) {
     _sepGrow(n);
-    const S = _sep, cap = S.cap, nChunks = CHUNKS_W * CHUNKS_H;
-    for (const [name, Type, size] of [['chunkR', Float64Array, nChunks], ['chunkC', Uint8Array, nChunks], ['chunkP', Uint8Array, nChunks], ['sole', Int32Array, nChunks],
-        ['box', Int32Array, nChunks * 4], ['ord', Int32Array, cap], ['rec', Float32Array, cap * 4], ['meta', Int32Array, cap],
-        ['sid', Float64Array, cap], ['px', Float64Array, cap], ['py', Float64Array, cap], ['ov', Float64Array, cap],
+    const S = _sep, cap = S.cap;
+    // (Nothing per chunk: mark and pairs find neighbours through the entries.)
+    for (const [name, Type, size] of [['ord', Int32Array, cap], ['qx', Float32Array, cap], ['qy', Float32Array, cap],
+        ['qr', Float32Array, cap], ['meta', Int32Array, cap], ['qid', Int32Array, cap], ['px', Float64Array, cap], ['py', Float64Array, cap], ['ov', Float64Array, cap],
         ['hit', Uint32Array, cap], ['nextX', Float64Array, cap], ['nextY', Float64Array, cap], ['fast', Uint8Array, cap], ['ex', Int32Array, cap], ['exc', Int32Array, Math.ceil(cap / 512) + 1]]) _sepShared(S, name, Type, size);
     if (_sepDirty || S.sumsCap !== cap) { S.px.fill(0); S.py.fill(0); S.ov.fill(0); S.hit.fill(0); _sepDirty = false; S.sumsCap = cap; }
 }
@@ -3852,7 +3868,9 @@ function separationStart() {
     simParallelBind('sep.eslot', _sxESlot); simParallelBind('sep.ekey', _sxEKey);
     simParallelBind('sep.rs', _sxStart); simParallelBind('sep.rc', _sxCount); simParallelBind('sep.rstamp', _sxStamp);
     const pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0), maxR = Math.max(0.1, _maxUnitCollisionRadius()), cws = CHUNK_SIZE * TILE;
-    const farAny = 2 * maxR + pad, reach = Math.max(1, Math.ceil(farAny / cws)), H = Math.max(2, reach);
+    // (Bands 2 * reach rows high: a unit's pushes reach that far around it,
+    // see SIM_KERNEL_SEP_PAIRS.)
+    const farAny = 2 * maxR + pad, reach = Math.max(1, Math.ceil(farAny / cws)), H = Math.max(2, 2 * reach);
     const bands = Math.ceil(CHUNKS_H / H);
     // (Every stage's params written whole: lane 0 is the state hash's too
     // (utils_snapshot.js SNAP_REGION), whose P[5] 1 would make the pack read
@@ -3861,16 +3879,14 @@ function separationStart() {
     let P = simParallelStageParams(0, 0);
     P[0] = ne; P[1] = SEP_PACK_PER; P[2] = getUnitCollisionRecalcTicks(); P[3] = gameTime; P[4] = mode;
     P = simParallelStageParams(0, 1);
-    P[0] = ne; P[1] = SEP_MARK_PER;
-    P = simParallelStageParams(0, 2);
     P[0] = ne; P[1] = SEP_MARK_PER; P[2] = _sxEpoch; P[3] = CHUNKS_W; P[4] = CHUNKS_H; P[5] = gameTime; P[6] = mode;
     for (let parity = 0; parity < 2; parity++) {
-        P = simParallelStageParams(0, 3 + parity);
+        P = simParallelStageParams(0, 2 + parity);
         P[0] = CHUNKS_W; P[1] = CHUNKS_H; P[2] = H; P[3] = pad; P[4] = farAny; P[5] = UNIT_SEPARATION_Q;
         P[6] = UNIT_SEPARATION_SHARE_BOTH; P[7] = UNIT_SEPARATION_SHARE_ONE; P[9] = ne; P[10] = cws; P[11] = _sxEpoch;
         P[12] = UNIT_SEPARATION_SHARE_MOVER; P[13] = UNIT_SEPARATION_SHARE_YIELD; P[14] = parity;
     }
-    simParallelBackgroundChain(0, [[SIM_KERNEL_SEP_PACK, Math.ceil(ne / SEP_PACK_PER)], [SIM_KERNEL_SEP_AGG, Math.ceil(ne / SEP_MARK_PER)], [SIM_KERNEL_SEP_MARK, Math.ceil(ne / SEP_MARK_PER)],
+    simParallelBackgroundChain(0, [[SIM_KERNEL_SEP_PACK, Math.ceil(ne / SEP_PACK_PER)], [SIM_KERNEL_SEP_MARK, Math.ceil(ne / SEP_MARK_PER)],
         [SIM_KERNEL_SEP_PAIRS, Math.ceil(bands / 2)], [SIM_KERNEL_SEP_PAIRS, Math.floor(bands / 2)]]);
 }
 // The next tick's separation as stages of the unit index's prebuild chain
@@ -3891,13 +3907,12 @@ function separationPrebuildStages(n, ep, tick) {
     simParallelBind('sep.eslot', _sxESlot); simParallelBind('sep.ekey', _sxEKey);
     simParallelBind('sep.rs', _sxStart); simParallelBind('sep.rc', _sxCount); simParallelBind('sep.rstamp', _sxStamp);
     const pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0), maxR = Math.max(0.1, _maxUnitCollisionRadius()), cws = CHUNK_SIZE * TILE;
-    const farAny = 2 * maxR + pad, reach = Math.max(1, Math.ceil(farAny / cws)), H = Math.max(2, reach), bands = Math.ceil(CHUNKS_H / H);
+    const farAny = 2 * maxR + pad, reach = Math.max(1, Math.ceil(farAny / cws)), H = Math.max(2, 2 * reach), bands = Math.ceil(CHUNKS_H / H);
     // (Job counts for every unit: the kernels stop at the entries listed.)
     const pairs = parity => [CHUNKS_W, CHUNKS_H, H, pad, farAny, UNIT_SEPARATION_Q, UNIT_SEPARATION_SHARE_BOTH, UNIT_SEPARATION_SHARE_ONE, 0, n, cws, ep,
         UNIT_SEPARATION_SHARE_MOVER, UNIT_SEPARATION_SHARE_YIELD, parity, 1];
     _sepPre = { tick, n: ns, ep };
     return [[SIM_KERNEL_SEP_PACK, Math.ceil(n / SEP_PACK_PER), [n, SEP_PACK_PER, getUnitCollisionRecalcTicks(), tick, mode, 1]],
-        [SIM_KERNEL_SEP_AGG, Math.ceil(n / SEP_MARK_PER), [n, SEP_MARK_PER, 0, 0, 0, 0, 0, 1]],
         [SIM_KERNEL_SEP_MARK, Math.ceil(n / SEP_MARK_PER), [n, SEP_MARK_PER, ep, CHUNKS_W, CHUNKS_H, tick, mode, 1]],
         [SIM_KERNEL_SEP_PAIRS, Math.ceil(bands / 2), pairs(0)], [SIM_KERNEL_SEP_PAIRS, Math.floor(bands / 2), pairs(1)]];
 }

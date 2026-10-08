@@ -92,10 +92,12 @@ function simPresentationStart() {
 function simPresentationBind() {
     const p = _simPresentation, S = _simUnitState;
     if (!p || !S) return;
-    if (p.sourceBuffer !== S.columns.x.buffer) {
+    // (By the column itself, not its buffer: columns in the wasm heap all
+    // share one, see sim_wasm.js.)
+    if (p.sourceBuffer !== S.columns.x) {
         const columns = {};
         for (const k of SIM_PRESENT_COLUMNS) columns[k] = S.columns[k];
-        p.columns = columns; p.sourceBuffer = S.columns.x.buffer;
+        p.columns = columns; p.sourceBuffer = S.columns.x;
         const old = p.meta;
         p.meta = simFrameViews(new SharedArrayBuffer(S.cap * SIM_FRAME_SLOT_BYTES), S.cap);
         p.meta.id.fill(-1);

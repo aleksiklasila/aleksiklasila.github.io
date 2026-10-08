@@ -1,0 +1,13 @@
+[build]
+target = "wasm32-unknown-unknown"
+
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "-C", "target-feature=+simd128,+bulk-memory,+nontrapping-fptoint,+sign-ext,+mutable-globals",
+    "-C", "link-arg=--import-memory",
+    "-C", "link-arg=--max-memory=4294967296",
+    "-C", "link-arg=-zstack-size=262144",
+    "-C", "link-arg=--stack-first",
+    "-C", "link-arg=--export=__stack_pointer",
+    "-C", "link-arg=--export=__heap_base",
+]

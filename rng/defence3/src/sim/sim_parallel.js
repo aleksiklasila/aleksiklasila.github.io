@@ -60,8 +60,24 @@ function simSharedArray(Type, n) {
     return SIM_PAR_SHARED ? new Type(new SharedArrayBuffer(Math.max(1, n) * Type.BYTES_PER_ELEMENT)) : new Type(n);
 }
 
+// The wasm heap (sim_wasm.js installs it; without it, plain shared arrays):
+// the arrays the Rust kernels read are allocated with simHeapArray, and an
+// array replaced by another is given back with simHeapFree (its memory is
+// reused only after SIM_HEAP_FREE_TICKS, once no name binds it).
+let _simHeapAlloc = null, _simHeapRelease = null, _simHeapPtrOf = null;
+function simHeapArray(Type, n) { return _simHeapAlloc !== null ? _simHeapAlloc(Type, n) : simSharedArray(Type, n); }
+function simHeapFree(arr) { if (_simHeapRelease !== null && arr) _simHeapRelease(arr); }
+// This thread's wasm kernels (null: none) and whether they run (shared by
+// every thread of the simulation; sim_wasm.js simWasmKernels).
+let _simWasmX = null, _simWasmOn = new Int32Array(1);
+// This thread's view of the wasm memory and its scratch region (an
+// address, a size in 32-bit words) for kernels that need work space.
+let _simWasmMem = null, _simWasmScratch = 0, _simWasmScratchWords = 0;
+
 // Arrays by name and scalar parameters (the same objects in every thread).
 const _simParReg = {};
+// Each bound array's address in the wasm heap (-1: not there).
+const _simParWPtr = {};
 let _simParRegVer = 0;
 // Every binding made in this thread (the simulation thread's or a helper's):
 // caches of registry lookups go by it (_simNavArrays).
@@ -98,7 +114,7 @@ const SIM_KERNEL_TILE_OWNERS = 29;
 const SIM_KERNEL_HEAL_REDUCE = 47;
 const SIM_KERNEL_WS_ORDER = 48;
 const SIM_KERNEL_UNIT_RETIRE = 49;
-const SIM_KERNEL_SEP_PACK = 50, SIM_KERNEL_SEP_MARK = 51, SIM_KERNEL_SEP_PAIRS = 52, SIM_KERNEL_SEP_AGG = 53, SIM_KERNEL_SPATIAL_PREFIX = 54;
+const SIM_KERNEL_SEP_PACK = 50, SIM_KERNEL_SEP_MARK = 51, SIM_KERNEL_SEP_PAIRS = 52, SIM_KERNEL_SPATIAL_PREFIX = 54;
 const SIM_KERNEL_AREA_BOX = 55, SIM_KERNEL_INDEX_MERGE = 56;
 
 // One tick of an armed mover (see simMoveTryArm in unit.js): Unit.update
@@ -1630,11 +1646,11 @@ SIM_KERNELS[SIM_KERNEL_SP_COUNTS] = function (R, P, chunk) {
 // [10] the pushes' gain (a unit looked at every other tick corrects more),
 // [11] the share applied now (the rest next tick; 1: all now); [12]-[18]
 // the unit index's (below). fast 3: committed and indexed here.
+// (Its Rust twin: wasm/src/lib.rs sep_finish.)
+const _simSepFinishW = _simWK(['unit.x', 'unit.y', 'unit.mvOn', 'unit.mvFlags', 'unit.id', 'unit.dead', 'sep.px', 'sep.py', 'sep.ov', 'sep.hit',
+    'sep.nextX', 'sep.nextY', 'sep.fast', 'sep.ex', 'sep.exc', 'unit.sepCx', 'unit.sepCy', '?mv.wall', 'unit.sepLayer', 'unit.sepMov', 'unit.prevX', 'unit.prevY',
+    'unit.spEpoch', 'unit.spOwner', 'unit.owner', 'unit.sepKey', 'unit.vsGen', 'unit.spTile', 'unit.spArea', 'unit.spMvOld', 'unit.spMvNew', 'unit.spMvOwn', '?ix.agrid', '?sep.moves']);
 SIM_KERNELS[SIM_KERNEL_SEPARATION_FINISH] = function (R, P, chunk) {
-    const X = R['unit.x'], Y = R['unit.y'], ON = R['unit.mvOn'], FL = R['unit.mvFlags'], ID = R['unit.id'], DEAD = R['unit.dead'];
-    const PX = R['sep.px'], PY = R['sep.py'], OV = R['sep.ov'], HIT = R['sep.hit'];
-    const outX = R['sep.nextX'], outY = R['sep.nextY'], fast = R['sep.fast'], EX = R['sep.ex'], EXC = R['sep.exc'];
-    const CX = R['unit.sepCx'], CY = R['unit.sepCy'];
     const tile = P[2], quant = P[3], contacts = P[4], pushQuant = P[5], t = P[6] | 0, retry = P[7] | 0, per = P[1] | 0, gain = P[10] > 0 ? P[10] : 1;
     const now = P[11] > 0 ? P[11] : 1;
     // (Divisions by a power of two as products with its reciprocal: the same
@@ -1642,6 +1658,22 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION_FINISH] = function (R, P, chunk) {
     // configured otherwise.)
     const p2 = v => v > 0 && 2 ** Math.round(Math.log2(v)) === v;
     const tP2 = p2(tile), qP2 = p2(quant), pqP2 = p2(pushQuant), itile = 1 / tile, iquant = 1 / quant, ipq = 1 / pushQuant, iqt = 4 / tile, qtP2 = p2(tile / 4);
+    if (_simWasmOk(R)) {
+        const A = _simWPtrs(_simSepFinishW);
+        // (The index columns are read only with P[12] 1, which needs the area grid.)
+        if (A !== null && (P[12] !== 1 || A[32] !== 0)) {
+            const flags = (tP2 ? 1 : 0) | (qP2 ? 2 : 0) | (pqP2 ? 4 : 0) | (qtP2 ? 8 : 0) | (A[17] !== 0 ? 16 : 0);
+            _simWasmX.sep_finish(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10], A[11], A[12], A[13], A[14], A[15], A[16], A[17], A[18], A[19],
+                A[20], A[21], A[22], A[23], A[24], A[25], A[26], A[27], A[28], A[29], A[30], A[31], A[32], A[33],
+                P[0] | 0, per, tile, quant, contacts, pushQuant, t, retry, P[8] | 0, P[9] | 0, gain, now,
+                P[12] === 1 ? 1 : 0, P[13] | 0, P[14] | 0, P[15] === 1 ? 1 : 0, P[16] | 0, P[17] | 0, P[18] >>> 0, flags, itile, iquant, ipq, iqt, chunk);
+            return;
+        }
+    }
+    const X = R['unit.x'], Y = R['unit.y'], ON = R['unit.mvOn'], FL = R['unit.mvFlags'], ID = R['unit.id'], DEAD = R['unit.dead'];
+    const PX = R['sep.px'], PY = R['sep.py'], OV = R['sep.ov'], HIT = R['sep.hit'];
+    const outX = R['sep.nextX'], outY = R['sep.nextY'], fast = R['sep.fast'], EX = R['sep.ex'], EXC = R['sep.exc'];
+    const CX = R['unit.sepCx'], CY = R['unit.sepCy'];
     const WALL = R['mv.wall'], LAYER = R['unit.sepLayer'], GW = P[8] | 0, GH = P[9] | 0;
     // Whether each unit moved by itself this tick (before the pushes), for
     // the next tick's separationStart.
@@ -2181,19 +2213,23 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION_YIELD] = function (R, P, chunk) {
 // started at the tick's start and collected after the unit pass, reading
 // the tick-start copy (x0/y0, sepD0/sepR0/sepL0, written by
 // SIM_KERNEL_STATUS) while the pass moves units:
-//   SEP_PACK: each entry of the unit index packed: sep.rec (Float32: x, y,
-//     radius, -; quantized positions are exact), sep.meta (owner, layer << 8,
-//     bits << 16: 1 takes part, 2 moved by itself last tick), sep.sid,
-//     sep.ord its slot or -1.
-//   SEP_AGG: at a chunk's first entry, from the packed entries, the chunk's
-//     largest radius, sole owner, whether a unit in it moved (sep.chunkC) or
-//     takes part (sep.chunkP), and its members' box.
+//   SEP_PACK: each entry of the unit index packed (Float32 position and
+//     radius in sep.qx / qy / qr: quantized positions are exact; sep.meta:
+//     owner, layer << 8, bits << 16: 1 takes part, 2 moved by itself last
+//     tick; sep.qid; sep.ord its slot or -1).
 //   SEP_MARK: units at rest beside a chunk where one moved take part too.
 //   SEP_PAIRS (twice: even bands of chunk rows, then odd): every touching
 //     pair once, from the side of its first entry, the push of each side
 //     that takes part summed into its slot (integers: the order of the sums
 //     does not change them). Bands are P[2] rows high, at least the reach,
 //     so two bands of one stage never write the same slot.
+// Mark and pairs find a unit's neighbouring chunks' units through the
+// entries alone (sorted by chunk key): per neighbouring row a cursor that
+// only moves forward with the entry, so nothing of the chunk grid (a
+// million chunks on a 1000 x 1000 map, most of them empty) is read.
+// Each has a Rust twin (wasm/src/lib.rs: sep_pack, sep_mark, sep_pairs;
+// longer runs of pairs four at a time with SIMD), the same results bit for
+// bit: it runs when the arrays are in the wasm heap (see sim_wasm.js).
 // Staggered (UNIT_SEPARATION_MODE 0): a unit takes part on its own ticks,
 // (t + id) even (each unit's contacts 10 times a second;
 // SIM_KERNEL_SEPARATION_FINISH spreads its push over that tick and the
@@ -2201,77 +2237,38 @@ SIM_KERNELS[SIM_KERNEL_SEPARATION_YIELD] = function (R, P, chunk) {
 // P (PACK): [0] entries, [1] per job, [2] rest ticks, [3] tick, [4] mode.
 // (P[5] 1: between ticks, from the live columns (x, y, dead, radii, layer:
 // the next tick's start state) and the entries the unit index build listed.)
+const _simSepPackW = [false, true].map(live => _simWK(['sep.eslot', live ? 'unit.x' : 'unit.x0', live ? 'unit.y' : 'unit.y0', live ? 'unit.dead' : 'unit.sepD0', 'unit.sepR0',
+    live ? 'unit.sepLayer' : 'unit.sepL0', 'unit.collisionR', 'unit.r', 'unit.owner', 'unit.id', 'unit.sepMov',
+    'sep.ord', 'sep.qx', 'sep.qy', 'sep.qr', 'sep.meta', 'sep.qid']));
 SIM_KERNELS[SIM_KERNEL_SEP_PACK] = function (R, P, chunk) {
-    const eslot = R['sep.eslot'], live = P[5] === 1;
+    const live = P[5] === 1, NL = live ? R['ix.listed'][0] | 0 : P[0] | 0, per = P[1] | 0;
+    const mode = P[4] | 0, t0 = P[3] | 0, rest0 = P[2] | 0;
+    if (_simWasmOk(R)) {
+        const A = _simWPtrs(_simSepPackW[live ? 1 : 0]);
+        if (A !== null) {
+            _simWasmX.sep_pack(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10], A[11], A[12], A[13], A[14], A[15], A[16],
+                NL, per, rest0, t0, mode, live ? 1 : 0, chunk);
+            return;
+        }
+    }
+    const eslot = R['sep.eslot'];
     const X = live ? R['unit.x'] : R['unit.x0'], Y = live ? R['unit.y'] : R['unit.y0'], D0 = live ? R['unit.dead'] : R['unit.sepD0'];
     const R0 = live ? null : R['unit.sepR0'], L0 = live ? R['unit.sepLayer'] : R['unit.sepL0'], CRL = R['unit.collisionR'], RDL = R['unit.r'];
-    const NL = live ? R['ix.listed'][0] | 0 : P[0] | 0;
     const OWNER = R['unit.owner'], ID = R['unit.id'], SMV = R['unit.sepMov'];
-    const ord = R['sep.ord'], rec = R['sep.rec'], meta = R['sep.meta'], sid = R['sep.sid'];
+    const ord = R['sep.ord'], QX = R['sep.qx'], QY = R['sep.qy'], QR = R['sep.qr'], meta = R['sep.meta'], QID = R['sep.qid'];
     // (P[4]: 0 staggered, a unit on its own ticks ((t + id) even) only; 1
     // every tick; 2 every unit, on the even ticks this runs on. A unit at
     // rest looks on every rest-th of its own ticks, by id.)
-    const mode = P[4] | 0, t0 = P[3] | 0, rest0 = P[2] | 0, rest = mode === 2 ? Math.max(1, rest0 >> 1) : rest0, run = mode === 2 ? t0 >> 1 : t0;
-    for (let k = chunk * P[1], end = Math.min(NL, k + P[1]); k < end; k++) {
+    const rest = mode === 2 ? Math.max(1, rest0 >> 1) : rest0, run = mode === 2 ? t0 >> 1 : t0;
+    for (let k = chunk * per, end = Math.min(NL, k + per); k < end; k++) {
         const s0 = eslot[k];
         const s = s0 >= 0 && D0[s0] ? -1 : s0;
         ord[k] = s;
-        const r4 = k * 4;
-        if (s < 0) { meta[k] = 255 << 8 | 255; rec[r4] = 1e9; rec[r4 + 1] = 1e9; rec[r4 + 2] = .1; sid[k] = 0; continue; }
+        if (s < 0) { meta[k] = 255 << 8 | 255; QX[k] = 1e9; QY[k] = 1e9; QR[k] = .1; QID[k] = 0; continue; }
         const id = ID[s] || 0, moved = SMV[s] === 1, own = mode !== 0 || ((t0 + id) & 1) === 0;
-        rec[r4] = X[s]; rec[r4 + 1] = Y[s]; rec[r4 + 2] = R0 ? R0[s] : Math.max(.1, CRL[s] || RDL[s] || .1); sid[k] = id;
+        QX[k] = X[s]; QY[k] = Y[s]; QR[k] = R0 ? R0[s] : Math.max(.1, CRL[s] || RDL[s] || .1); QID[k] = id;
         const sc = (moved ? 2 : 0) | (own && (moved || rest <= 1 || ((run + id) | 0) % rest === 0) ? 1 : 0);
         meta[k] = sc << 16 | (L0[s] & 255) << 8 | (OWNER[s] & 255);
-    }
-};
-// P: [0] entries, [1] per job.
-SIM_KERNELS[SIM_KERNEL_SEP_AGG] = function (R, P, chunk) {
-    const ekey = R['sep.ekey'], rs = R['sep.rs'], rc = R['sep.rc'], NL = P[7] === 1 ? R['ix.listed'][0] | 0 : P[0] | 0;
-    const ord = R['sep.ord'], rec = R['sep.rec'], meta = R['sep.meta'];
-    const chunkR = R['sep.chunkR'], sole = R['sep.sole'], chunkC = R['sep.chunkC'], chunkP = R['sep.chunkP'], box = R['sep.box'];
-    for (let k = chunk * P[1], end = Math.min(NL, k + P[1]); k < end; k++) {
-        const key = ekey[k];
-        // (A chunk's first entry: the previous entry's chunk differs; entries
-        // are in chunk order.)
-        if (k > 0 && ekey[k - 1] === key) continue;
-        let maxR = 0, oneOwner = -2, anyMoved = 0, anyPart = 0, x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-        for (let j = k, e = k + rc[key]; j < e; j++) {
-            if (ord[j] < 0) continue;
-            const m = meta[j], r = rec[j * 4 + 2], o = m & 255, c = m >>> 16;
-            if (r > maxR) maxR = r;
-            oneOwner = oneOwner === -2 ? o : (o === oneOwner ? oneOwner : -1);
-            if (c & 2) anyMoved = 1;
-            if (c & 1) anyPart = 1;
-            const ux = rec[j * 4], uy = rec[j * 4 + 1];
-            if (ux < x0) x0 = ux; if (ux > x1) x1 = ux; if (uy < y0) y0 = uy; if (uy > y1) y1 = uy;
-        }
-        chunkR[key] = maxR; sole[key] = oneOwner; chunkC[key] = anyMoved; chunkP[key] = anyPart;
-        const b = key * 4;
-        if (x0 <= x1 && y0 <= y1) { box[b] = Math.floor(x0); box[b + 1] = Math.ceil(x1); box[b + 2] = Math.floor(y0); box[b + 3] = Math.ceil(y1); }
-        else { box[b] = 2e9; box[b + 1] = 2e9; box[b + 2] = 2e9; box[b + 3] = 2e9; }
-    }
-};
-// P: [0] entries, [1] per job, [2] index epoch, [3] chunks across, [4]
-// chunks down, [5] tick, [6] mode. (A chunk gaining a member that takes part: 1
-// written by any of them, the same value.)
-SIM_KERNELS[SIM_KERNEL_SEP_MARK] = function (R, P, chunk) {
-    const meta = R['sep.meta'], keys = R['sep.ekey'], ord = R['sep.ord'], sid = R['sep.sid'], chunkC = R['sep.chunkC'], chunkP = R['sep.chunkP'], rstamp = R['sep.rstamp'];
-    const CW = P[3] | 0, CH = P[4] | 0, ep = P[2] | 0, t0 = P[5] | 0, stag = (P[6] | 0) === 0, NL = P[7] === 1 ? R['ix.listed'][0] | 0 : P[0] | 0;
-    for (let k = chunk * P[1], end = Math.min(NL, k + P[1]); k < end; k++) {
-        if ((meta[k] & 65536) || ord[k] < 0 || (stag && ((t0 + sid[k]) & 1) !== 0)) continue;
-        const key = keys[k] | 0, cx = key % CW, cy = (key - cx) / CW;
-        let near = 0;
-        for (let oy = -1; oy <= 1 && !near; oy++) {
-            const ny = cy + oy;
-            if (ny < 0 || ny >= CH) continue;
-            for (let ox = -1; ox <= 1; ox++) {
-                const nx = cx + ox;
-                if (nx < 0 || nx >= CW) continue;
-                const k2 = ny * CW + nx;
-                if (rstamp[k2] === ep && chunkC[k2]) { near = 1; break; }
-            }
-        }
-        if (near) { meta[k] |= 65536; chunkP[key] = 1; }
     }
 };
 // The first entry at or after `from` whose key is at least `k` (keys sorted).
@@ -2280,6 +2277,44 @@ function _simSepLowerBound(keys, from, to, k) {
     while (lo < hi) { const m = (lo + hi) >> 1; if (keys[m] < k) lo = m + 1; else hi = m; }
     return lo;
 }
+// P: [0] entries, [1] per job, [3] chunks across, [4] chunks down, [5]
+// tick, [6] mode, [7] 1: the entries the index build listed. A chunk is
+// one where a unit moved when an entry in it has the moved bit (empty and
+// dead entries never do).
+const _simSepMarkW = _simWK(['sep.meta', 'sep.ekey', 'sep.ord', 'sep.qid']);
+SIM_KERNELS[SIM_KERNEL_SEP_MARK] = function (R, P, chunk) {
+    const CW = P[3] | 0, CH = P[4] | 0, t0 = P[5] | 0, stag = (P[6] | 0) === 0, NL = P[7] === 1 ? R['ix.listed'][0] | 0 : P[0] | 0;
+    if (_simWasmOk(R)) {
+        const A = _simWPtrs(_simSepMarkW);
+        if (A !== null) { _simWasmX.sep_mark(A[0], A[1], A[2], A[3], NL, P[1] | 0, CW, CH, t0, stag ? 1 : 0, chunk); return; }
+    }
+    const meta = R['sep.meta'], keys = R['sep.ekey'], ord = R['sep.ord'], qid = R['sep.qid'];
+    // (Entries come grouped by chunk: the 3x3 look once per chunk. Cursors
+    // of the rows above, at and below.)
+    let lastKey = -1, lastNear = 0, c0r = -1, c1r = -1, c2r = -1;
+    for (let k = chunk * P[1], end = Math.min(NL, k + P[1]); k < end; k++) {
+        const m = meta[k];
+        if ((m & 65536) || ord[k] < 0 || (stag && ((t0 + qid[k]) & 1) !== 0)) continue;
+        const key = keys[k] | 0;
+        if (key !== lastKey) {
+            lastKey = key;
+            const cx = key % CW, cy = (key - cx) / CW, x0 = cx > 0 ? cx - 1 : 0, x1 = cx + 1 < CW ? cx + 1 : CW - 1;
+            let near = 0;
+            for (let r = 0; r < 3 && !near; r++) {
+                const ny = cy + r - 1;
+                if (ny < 0 || ny >= CH) continue;
+                const k0 = ny * CW + x0, k1 = ny * CW + x1;
+                let e = r === 0 ? c0r : r === 1 ? c1r : c2r;
+                if (e < 0) e = _simSepLowerBound(keys, 0, NL, k0);
+                while (e < NL && keys[e] < k0) e++;
+                if (r === 0) c0r = e; else if (r === 1) c1r = e; else c2r = e;
+                for (; e < NL && keys[e] <= k1; e++) if (meta[e] & 131072) { near = 1; break; }
+            }
+            lastNear = near;
+        }
+        if (lastNear) meta[k] = m | 65536;
+    }
+};
 // One side's push of a touching pair into its slot's sums (the terms
 // SIM_KERNEL_SEPARATION sums from that side): away from the other unit
 // (ux, uy: from the other to it), or, exactly on top of it, sideways by id.
@@ -2299,58 +2334,66 @@ function _simSepSide(PX, PY, OV, HIT, a, ux, uy, d, id, oid, overlap, share, Q) 
 }
 // P: [0] chunks across, [1] chunks down, [2] band rows, [3] pad, [4] farAny,
 // [5] Q, [6] BOTH, [7] ONE, [9] listed entries, [10] chunk px, [11] index
-// epoch, [12] MOVER, [13] YIELD, [14] band parity (job c: band 2c + it).
+// epoch, [12] MOVER, [13] YIELD, [14] band parity (job c: band 2c + it),
+// [15] 1: the entries the index build listed.
+// Every touching pair of units of the same layer, at least one taking part,
+// once: found by the unit that takes part (both: the earlier entry), which
+// looks at every chunk around it in reach. The units of a band of chunk
+// rows look; a band's pushes reach P[2] (at least 2 * the reach) rows past
+// it, so two bands of one stage never write the same slot.
+const _simSepPairsW = _simWK(['sep.ord', 'sep.qx', 'sep.qy', 'sep.qr', 'sep.meta', 'sep.qid', 'sep.ekey', 'sep.px', 'sep.py', 'sep.ov', 'sep.hit']);
 SIM_KERNELS[SIM_KERNEL_SEP_PAIRS] = function (R, P, chunk) {
     const CW = P[0] | 0, CH = P[1] | 0, H = P[2] | 0, pad = P[3], farAny = P[4], Q = P[5], BOTH = P[6], ONE = P[7];
     const listed = P[15] === 1 ? R['ix.listed'][0] | 0 : P[9] | 0, cws = P[10], ep = P[11] | 0, MOVER = P[12], YIELD = P[13];
     const band = chunk * 2 + (P[14] | 0), row0 = band * H, row1 = Math.min(CH, row0 + H);
     if (row0 >= CH) return;
-    const ord = R['sep.ord'], rec = R['sep.rec'], meta = R['sep.meta'], sid = R['sep.sid'];
+    if (_simWasmOk(R)) {
+        const A = _simWPtrs(_simSepPairsW);
+        if (A !== null) {
+            _simWasmX.sep_pairs(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10],
+                CW, CH, H, pad, farAny, Q, BOTH, ONE, listed, cws, MOVER, YIELD, P[14] | 0, chunk);
+            return;
+        }
+    }
+    const ord = R['sep.ord'], QX = R['sep.qx'], QY = R['sep.qy'], QR = R['sep.qr'], meta = R['sep.meta'], sid = R['sep.qid'];
     const keys = R['sep.ekey'], rs = R['sep.rs'], rc = R['sep.rc'], rstamp = R['sep.rstamp'];
-    const chunkR = R['sep.chunkR'], sole = R['sep.sole'], BOX = R['sep.box'], CP = R['sep.chunkP'];
     const PX = R['sep.px'], PY = R['sep.py'], OV = R['sep.ov'], HIT = R['sep.hit'];
     const reach = Math.max(1, Math.ceil(farAny / cws)), maxR = (farAny - pad) / 2;
     const lo = _simSepLowerBound(keys, 0, listed, row0 * CW), hi = _simSepLowerBound(keys, lo, listed, row1 * CW);
     for (let p = lo; p < hi; p++) {
+        const pm = meta[p];
+        // (Only units taking part look.)
+        if (!(pm & 65536)) continue;
         const a = ord[p];
         if (a < 0) continue;
-        const pm = meta[p], pPart = (pm >>> 16) & 1, pMoved = (pm & 131072) !== 0, op = pm & 255, pl = pm & 65280;
+        const pMoved = (pm & 131072) !== 0, op = pm & 255, pl = pm & 65280;
         const key = keys[p] | 0, cx = key % CW, cy = (key - cx) / CW;
-        const xp = rec[p * 4], yp = rec[p * 4 + 1], rp = rec[p * 4 + 2], ip = sid[p];
-        const ex0 = xp - cx * cws, ex1 = (cx + 1) * cws - xp, ey1 = (cy + 1) * cws - yp;
+        const xp = QX[p], yp = QY[p], rp = QR[p], ip = sid[p];
+        const ex0 = xp - cx * cws, ex1 = (cx + 1) * cws - xp, ey0 = yp - cy * cws, ey1 = (cy + 1) * cws - yp;
         const lim = rp + maxR + pad;
         const ox0 = ex0 >= lim ? 0 : -Math.min(reach, Math.ceil((lim - ex0) / cws)), ox1 = ex1 >= lim ? 0 : Math.min(reach, Math.ceil((lim - ex1) / cws));
-        const oy1 = ey1 >= lim ? 0 : Math.min(reach, Math.ceil((lim - ey1) / cws));
-        for (let oy = 0; oy <= oy1; oy++) {
+        const oy0 = ey0 >= lim ? 0 : -Math.min(reach, Math.ceil((lim - ey0) / cws)), oy1 = ey1 >= lim ? 0 : Math.min(reach, Math.ceil((lim - ey1) / cws));
+        for (let oy = oy0; oy <= oy1; oy++) {
             const ny = cy + oy;
-            if (ny >= CH) break;
-            for (let ox = oy === 0 ? 0 : ox0; ox <= ox1; ox++) {
-                let b0, b1;
-                if (ox === 0 && oy === 0) { b0 = p + 1; b1 = rs[key] + rc[key]; }
-                else {
-                    const nx = cx + ox;
-                    if (nx < 0 || nx >= CW) continue;
-                    const key2 = ny * CW + nx;
-                    if (rstamp[key2] !== ep || (!pPart && !CP[key2])) continue;
-                    const b = key2 * 4, bx = xp < BOX[b] ? BOX[b] - xp : (xp > BOX[b + 1] ? xp - BOX[b + 1] : 0);
-                    const by = yp < BOX[b + 2] ? BOX[b + 2] - yp : (yp > BOX[b + 3] ? yp - BOX[b + 3] : 0);
-                    const reachB = rp + chunkR[key2] + (sole[key2] === op ? 0 : pad);
-                    if (bx * bx + by * by >= reachB * reachB) continue;
-                    b0 = rs[key2]; b1 = b0 + rc[key2];
-                }
-                for (let q = b0; q < b1; q++) {
+            if (ny < 0 || ny >= CH) continue;
+            for (let ox = ox0; ox <= ox1; ox++) {
+                const nx = cx + ox;
+                if (nx < 0 || nx >= CW) continue;
+                const key2 = ny * CW + nx;
+                if (rstamp[key2] !== ep) continue;
+                for (let q = rs[key2], b1 = q + rc[key2]; q < b1; q++) {
+                    if (q === p) continue;
                     const qm = meta[q], qPart = (qm >>> 16) & 1;
-                    if (!(pPart | qPart) || (qm & 65280) !== pl) continue;
-                    const q4 = q * 4, dx = rec[q4] - xp, dy = rec[q4 + 1] - yp, d2 = dx * dx + dy * dy;
-                    const minDist = rp + rec[q4 + 2] + ((qm & 255) === op ? 0 : pad);
+                    // (A pair of two units taking part: the earlier entry's.)
+                    if ((qPart && q < p) || (qm & 65280) !== pl) continue;
+                    const dx = QX[q] - xp, dy = QY[q] - yp, d2 = dx * dx + dy * dy;
+                    const minDist = rp + QR[q] + ((qm & 255) === op ? 0 : pad);
                     if (d2 >= minDist * minDist) continue;
                     const bq = ord[q];
                     if (bq < 0) continue;
                     const d = Math.sqrt(d2), overlap = minDist - Math.max(d, 0.001), qMoved = (qm & 131072) !== 0, iq = sid[q];
-                    if (pPart) _simSepSide(PX, PY, OV, HIT, a, -dx, -dy, d, ip, iq, overlap,
-                        pMoved === qMoved ? (qPart ? BOTH : ONE) : (pMoved ? (qPart ? MOVER : ONE) : YIELD), Q);
-                    if (qPart) _simSepSide(PX, PY, OV, HIT, bq, dx, dy, d, iq, ip, overlap,
-                        qMoved === pMoved ? (pPart ? BOTH : ONE) : (qMoved ? (pPart ? MOVER : ONE) : YIELD), Q);
+                    _simSepSide(PX, PY, OV, HIT, a, -dx, -dy, d, ip, iq, overlap, pMoved === qMoved ? (qPart ? BOTH : ONE) : (pMoved ? (qPart ? MOVER : ONE) : YIELD), Q);
+                    if (qPart) _simSepSide(PX, PY, OV, HIT, bq, dx, dy, d, iq, ip, overlap, qMoved === pMoved ? BOTH : (qMoved ? MOVER : YIELD), Q);
                 }
             }
         }
@@ -2473,6 +2516,8 @@ function simParallelInit(helperUrl, maxHelpers = null) {
     if (n < 1) return 0;
     let ctl = new Int32Array(new SharedArrayBuffer(SIM_PAR_CTL_WORDS * 4));
     for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) ctl[SIM_PAR_BG_BASE + lane * 8 + SIM_PAR_BG_ID] = -1;
+    // (The wasm heap first: the helpers instantiate the kernels over it.)
+    if (typeof simWasmInit === 'function') simWasmInit();
     let helpers = [];
     for (let i = 0; i < n; i++) {
         try {
@@ -2480,8 +2525,9 @@ function simParallelInit(helperUrl, maxHelpers = null) {
             // A failed helper is not fatal (the worker takes its chunks): keep
             // its error from propagating up to the page's worker as well.
             w.onerror = e => { e.preventDefault(); console.error('[sim helper]', e.message || 'failed to load', e.filename ? `${e.filename}:${e.lineno}` : helperUrl); };
-            w.postMessage({ type: 'init', ctl, params: _simParams, bgParams: _simBgStageParams, bgChain: _simBgChain, index: i });
-            for (let name in _simParReg) w.postMessage({ type: 'bind', name, arr: _simParReg[name], ver: _simParRegVer });
+            const wasm = typeof simWasmHelperPayload === 'function' ? simWasmHelperPayload() : null;
+            w.postMessage({ type: 'init', ctl, params: _simParams, bgParams: _simBgStageParams, bgChain: _simBgChain, index: i, wasm });
+            for (let name in _simParReg) w.postMessage({ type: 'bind', name, arr: _simParReg[name], ver: _simParRegVer, wptr: _simParWPtr[name] ?? -1 });
             helpers.push(w);
         } catch (err) { break; }
     }
@@ -2496,9 +2542,32 @@ function simParallelHelpers() { return _simPool ? _simPool.helpers.length : 0; }
 function simParallelBind(name, arr) {
     if (_simParReg[name] === arr) return;
     _simParReg[name] = arr;
+    const wptr = _simParWPtr[name] = _simHeapPtrOf !== null ? _simHeapPtrOf(arr) : -1;
     _simParRegVer++; _simParBinds++;
-    if (_simPool) for (let w of _simPool.helpers) w.postMessage({ type: 'bind', name, arr, ver: _simParRegVer });
+    if (_simPool) for (let w of _simPool.helpers) w.postMessage({ type: 'bind', name, arr, ver: _simParRegVer, wptr });
 }
+
+// A wasm kernel's arrays by name ('?name': optional, address 0 when
+// unbound): their addresses, cached until a binding changes, or null when
+// one is not in the heap (the JS kernel runs).
+function _simWK(names) {
+    return { names: names.map(n => n.replace(/^\?/, '')), opt: names.map(n => n[0] === '?'), binds: -1, ok: false, ptrs: new Array(names.length).fill(0) };
+}
+function _simWPtrs(K) {
+    if (K.binds !== _simParBinds) {
+        K.binds = _simParBinds; K.ok = true;
+        for (let i = 0; i < K.names.length; i++) {
+            const nm = K.names[i];
+            if (!_simParReg[nm]) { if (K.opt[i]) { K.ptrs[i] = 0; continue; } K.ok = false; break; }
+            const p = _simParWPtr[nm];
+            if (!(p >= 0)) { K.ok = false; break; }
+            K.ptrs[i] = p;
+        }
+    }
+    return K.ok ? K.ptrs : null;
+}
+// Whether a kernel call may run its wasm twin (on the registry's arrays).
+function _simWasmOk(R) { return _simWasmX !== null && _simWasmOn[0] === 1 && R === _simParReg; }
 
 // Runs a kernel over chunks 0..total-1 (with the helpers when there are).
 function simParallelRun(kernel, total) {
@@ -2536,6 +2605,9 @@ const _simBg = new Array(SIM_PAR_BG_LANES).fill(null);
 // (Per lane: the first stage's job id of its current chain, and the next
 // chain's: stages take consecutive ids.)
 const _simBgIds = new Int32Array(SIM_PAR_BG_LANES), _simBgNextIds = new Int32Array(SIM_PAR_BG_LANES);
+// (Per lane: chains posted so far. The wasm heap reuses a freed array once
+// every chain in flight when it was freed is done: sim_wasm.js.)
+const _simBgPosted = new Int32Array(SIM_PAR_BG_LANES);
 function simParallelBackground(kernel, total, lane = 1) { simParallelBackgroundChain(lane, [[kernel, total]]); }
 // The parameters of a lane's chain stage (stage 0: _simBgParamsByLane[lane]).
 function simParallelStageParams(lane, stage) { return _simBgStageParams[lane][stage]; }
@@ -2555,6 +2627,7 @@ function simParallelBackgroundChain(lane, stages, eager = false) {
     for (let i = 0; i < stages.length; i++) if (stages[i][1] > 0) slots.push(i);
     const pool = _simPool;
     _simBg[lane] = { stages: list, slots, sync: !pool };
+    _simBgPosted[lane]++;
     if (!pool) { if (eager) simParallelBackgroundWait(lane); return; }
     const ctl = pool.ctl, b = SIM_PAR_BG_BASE + lane * 8, CT = _simBgChain, cb = lane * (1 + 2 * SIM_PAR_BG_STAGES);
     _simBgClose(ctl, b, 0);
@@ -2696,9 +2769,11 @@ function simParallelHelperMain() {
             _simParHelperParams = m.params;
             bgParams = m.bgParams;
             bgChain = m.bgChain;
+            if (m.wasm && typeof simWasmHelperInit === 'function') simWasmHelperInit(m.wasm);
             loop();
         } else if (m.type === 'bind') {
             _simParReg[m.name] = m.arr;
+            _simParWPtr[m.name] = m.wptr >= 0 ? m.wptr : -1;
             _simParBinds++;
             if (m.ver > regVer) regVer = m.ver;
         }
@@ -3787,7 +3862,29 @@ SIM_KERNELS[SIM_KERNEL_ACQ_SNAP] = function (R, P, chunk) {
 // nearer than the range (by its centre), lowest tile first on a tie;
 // hostile (acq.sown, see mv.struct) and in sight; the blocks around holding
 // none (acq.hss) end it at once.
+// (Its Rust twin: wasm/src/lib.rs acq_scan; the structure look skips
+// sixteen empty tiles at a time.)
+const _simAcqScanW = _simWK(['acq.scls', 'acq.sown', '?acq.hss', 'acq.sout', 'acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.rng', 'acq.id',
+    'acq.out', 'acq.tid', 'acq.agrid', 'acq.cover', 'acq.hs', 'acq.rs', 'acq.rc', 'acq.rst', 'acq.es', 'acq.om', '?acq.omt',
+    '?acq.ex', '?acq.ey', '?acq.eo', '?acq.ea', '?acq.eid']);
 SIM_KERNELS[SIM_KERNEL_ACQ_SCAN] = function (R, P, chunk) {
+    // (The commands as integers: the snapshot's column is Int32. P[21] 1:
+    // acq.omt and the packed entries made by the job's first stage,
+    // SIM_KERNEL_ACQ_OMT.)
+    if (_simWasmOk(R) && (P[8] | 0) === P[8] && (P[9] | 0) === P[9] && (P[18] | 0) === P[18]) {
+        const A = _simWPtrs(_simAcqScanW);
+        if (A !== null) {
+            _simWasmX.acq_scan(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10], A[11], A[12], A[13], A[14], A[15], A[16], A[17], A[18], A[19], A[20],
+                P[21] === 1 ? A[21] : 0, P[21] === 1 ? A[22] : 0, P[21] === 1 ? A[23] : 0, P[21] === 1 ? A[24] : 0, P[21] === 1 ? A[25] : 0, P[21] === 1 ? A[26] : 0,
+                P[0] | 0, P[1] | 0, P[3] | 0, P[4] | 0, P[5], P[6] | 0, P[7] | 0, P[8], P[9], P[10] | 0, P[11] | 0, P[12] | 0, P[14] | 0, P[15] | 0, P[16] | 0, P[18], P[20] | 0,
+                R['acq.cover'].length, P[22] === 1 ? 1 : 0, P[23] | 0, chunk);
+            return;
+        }
+    }
+    // (P[22] 1: the units in the index's order, P[23] entries: neighbours
+    // one after another look at the same chunks, which stay in the caches.
+    // Every unit the scan looks for is listed there, once.)
+    const byEntry = P[22] === 1, total = byEntry ? P[23] | 0 : P[0] | 0;
     const SCLS = R['acq.scls'], SOWN = R['acq.sown'], HSSn = R['acq.hss'], SOUT = R['acq.sout'];
     const X = R['acq.x'], Y = R['acq.y'], OWN = R['acq.own'], FLG = R['acq.flags'], CMD = R['acq.cmd'], RNG = R['acq.rng'], ID = R['acq.id'];
     const OUTA = R['acq.out'], TID = R['acq.tid'], AG = R['acq.agrid'], COVF = R['acq.cover'], HS = R['acq.hs'];
@@ -3795,7 +3892,9 @@ SIM_KERNELS[SIM_KERNEL_ACQ_SCAN] = function (R, P, chunk) {
     const CW = P[3] | 0, CH = P[4] | 0, tile = P[5], ep = P[6] | 0, players = P[7] | 0, cmdIdle = P[8], cmdAM = P[9];
     const B = P[10] | 0, bc = P[11] | 0, br = P[12] | 0, cs = P[14] | 0, cws = tile * cs, GW = P[15] | 0, GH = P[16] | 0, cmdAtk = P[18], A = P[20] | 0;
     const stride = bc + 1, plane = stride * (br + 1);
-    for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) {
+    for (let i = chunk * P[1], end = Math.min(total, i + P[1]); i < end; i++) {
+        const s = byEntry ? es[i] : i;
+        if (s < 0) continue;
         const fl = FLG[s];
         if (fl & 7) continue;
         const cmd = CMD[s];
@@ -3841,6 +3940,41 @@ SIM_KERNELS[SIM_KERNEL_ACQ_SCAN] = function (R, P, chunk) {
             }
         }
         OUTA[s] = best; TID[s] = best >= 0 ? (ID[best] | 0) : 0;
+    }
+};
+// The scan's first stage, for its Rust twin (the JS scan reads neither):
+// the owners per chunk transposed (acq.omt[tx * CH + ty] = acq.om[ty * CW
+// + tx]: a ring's left and right columns are runs too), and each entry of
+// the index packed in its order (acq.ex / ey its position, acq.eo its
+// owner, acq.ea its area where its player looks it up, -1 when the scan
+// passes it over (dead, empty, off the map, no area), acq.eid its id): a
+// chunk's units read as one run, not by slot. P: [0] chunks wide, [1]
+// high, [2] rows per job, [3] entries, [4] entries per job, [5] TILE, [6]
+// / [7] grid.
+const SIM_KERNEL_ACQ_OMT = 59;
+const _simAcqOmtW = _simWK(['acq.om', 'acq.omt', 'acq.es', 'acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.id', 'acq.agrid', 'acq.ex', 'acq.ey', 'acq.eo', 'acq.ea', 'acq.eid']);
+SIM_KERNELS[SIM_KERNEL_ACQ_OMT] = function (R, P, chunk) {
+    const CW = P[0] | 0, CH = P[1] | 0, per = P[2] | 0, y0 = chunk * per, y1 = Math.min(CH, y0 + per);
+    const ne = P[3] | 0, eper = P[4] | 0, e0 = chunk * eper, e1 = Math.min(ne, e0 + eper), tile = P[5], GW = P[6] | 0, GH = P[7] | 0;
+    if (_simWasmOk(R)) {
+        const A = _simWPtrs(_simAcqOmtW);
+        if (A !== null) {
+            if (y0 < y1) _simWasmX.acq_omt(A[0], A[1], CW, CH, y0, y1);
+            if (e0 < e1) _simWasmX.acq_pack(A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10], A[11], A[12], A[13], e0, e1, tile, GW, GH);
+            return;
+        }
+    }
+    const OM = R['acq.om'], OMT = R['acq.omt'];
+    for (let x = 0; x < CW && y0 < y1; x++) for (let y = y0, o = x * CH; y < y1; y++) OMT[o + y] = OM[y * CW + x];
+    const es = R['acq.es'], X = R['acq.x'], Y = R['acq.y'], OWN = R['acq.own'], FLG = R['acq.flags'], ID = R['acq.id'], AG = R['acq.agrid'];
+    const EX = R['acq.ex'], EY = R['acq.ey'], EO = R['acq.eo'], EA = R['acq.ea'], EID = R['acq.eid'];
+    for (let e = e0; e < e1; e++) {
+        const q = es[e];
+        if (q < 0 || (FLG[q] & 1)) { EA[e] = -1; EO[e] = 0; EX[e] = 0; EY[e] = 0; EID[e] = 0; continue; }
+        const qx = X[q], qy = Y[q], qgx = Math.floor(qx / tile), qgy = Math.floor(qy / tile);
+        EX[e] = qx; EY[e] = qy; EO[e] = OWN[q] | 0; EID[e] = ID[q] | 0;
+        const a = qgx < 0 || qgy < 0 || qgx >= GW || qgy >= GH ? -1 : AG[qgy * GW + qgx];
+        EA[e] = a >= 0 ? a : -1;
     }
 };
 // The structure an idle or attack-moving unit at (x, y) of player owner

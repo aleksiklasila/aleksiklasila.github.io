@@ -246,36 +246,73 @@ function simUnitStateReleaseFreed() {
     S.freeLater.length = 0;
 }
 
+// The columns live in the wasm heap (simHeapArray: the Rust kernels read
+// them in place). Old unit objects keep their generation's columns object
+// (a whole-world replacement, a compaction): its arrays go back to the
+// heap only once nothing reaches that object (_simUnitColumnsGone), never
+// while a stale unit could still read or write them.
+const _simUnitColumnsGone = typeof FinalizationRegistry === 'function' ? new FinalizationRegistry(h => { for (const a of h.arrays) simHeapFree(a); }) : null;
+function _simUnitColumnsHeld(S) {
+    if (!S.held) { S.held = { arrays: [] }; if (_simUnitColumnsGone) _simUnitColumnsGone.register(S.columns, S.held); }
+    const list = S.held.arrays;
+    list.length = 0;
+    for (const k of SIM_UNIT_COLUMNS) list.push(S.columns[k]);
+    for (const [k] of SIM_MOVE_COLUMNS) list.push(S.columns[k]);
+    list.push(S.sepKey, S.sepLayer);
+}
+function _simUnitStateNew() {
+    return _simUnitState = { cap: 0, owners: [], free: [], columns: _simUnitColumnsObject(), stamp: null, epoch: 0, unitsRef: null, held: null };
+}
+// Room for n more units in one step (before many are made at once: the
+// match's starting units, a restore): growing by half each time kept every
+// size's columns until the heap could reuse them (2-3 times the last).
+function simUnitStateReserve(n) {
+    // (Nothing to make: no state made either; one is always made with its
+    // columns, simUnitStateAllocate.)
+    if (!(n > 0)) return;
+    const S = _simUnitState || _simUnitStateNew();
+    const need = S.owners.length + Math.max(0, n - S.free.length);
+    if (need > S.cap) _simUnitStateGrow(S, Math.max(1024, Math.ceil(need / 4096) * 4096));
+}
 function simUnitStateAllocate(u) {
-    let S = _simUnitState;
-    if (!S) S = _simUnitState = { cap: 0, owners: [], free: [], columns: _simUnitColumnsObject(), stamp: null, epoch: 0, unitsRef: null };
+    let S = _simUnitState || _simUnitStateNew();
     const s = S.free.length ? S.free.pop() : S.owners.length;
-    if (s >= S.cap) {
-        // (Grown by half, in whole 4096-slot steps: doubling left up to half
-        // of ~850 bytes a slot unused, 1M slots for 600k units.)
-        const cap = Math.max(1024, Math.ceil(S.cap * 1.5 / 4096) * 4096);
+    // (Grown by half, in whole 4096-slot steps: doubling left up to half of
+    // ~850 bytes a slot unused, 1M slots for 600k units.)
+    if (s >= S.cap) _simUnitStateGrow(S, Math.max(1024, Math.ceil(S.cap * 1.5 / 4096) * 4096));
+    _simUnitSlotStart(S, s, u);
+}
+function _simUnitStateGrow(S, cap) {
+    // (The arrays replaced: given back to the heap, see above.)
+    {
+        const old = [];
         for (const k of SIM_UNIT_COLUMNS) {
-            const a = simSharedArray(_simUnitColumnType(k), cap);
-            if (S.columns[k]) a.set(S.columns[k]);
+            const a = simHeapArray(_simUnitColumnType(k), cap);
+            if (S.columns[k]) { a.set(S.columns[k]); old.push(S.columns[k]); }
             S.columns[k] = a;
             simParallelBind('unit.' + k, a);
         }
         for (const [k, Type, per] of SIM_MOVE_COLUMNS) {
-            const a = simSharedArray(Type, cap * per);
-            if (S.columns[k]) a.set(S.columns[k]);
+            const a = simHeapArray(Type, cap * per);
+            if (S.columns[k]) { a.set(S.columns[k]); old.push(S.columns[k]); }
             S.columns[k] = a;
             simParallelBind('unit.' + k, a);
         }
         const stamp = new Uint32Array(cap);
         if (S.stamp) stamp.set(S.stamp);
         S.stamp = stamp;
-        const sepKey = simSharedArray(Uint32Array, cap), sepLayer = simSharedArray(Uint8Array, cap);
+        const sepKey = simHeapArray(Uint32Array, cap), sepLayer = simHeapArray(Uint8Array, cap);
         sepKey.fill(SIM_SEP_ABSENT);
-        if (S.sepKey) { sepKey.set(S.sepKey); sepLayer.set(S.sepLayer); }
+        if (S.sepKey) { sepKey.set(S.sepKey); sepLayer.set(S.sepLayer); old.push(S.sepKey, S.sepLayer); }
         S.sepKey = sepKey; S.sepLayer = sepLayer; S.columns.sepKey = sepKey;
         simParallelBind('unit.sepKey', sepKey); simParallelBind('unit.sepLayer', sepLayer);
         S.cap = cap;
+        _simUnitColumnsHeld(S);
+        for (const a of old) simHeapFree(a);
     }
+}
+// Slot s taken by unit u: its defaults, and u's accessors pointed at it.
+function _simUnitSlotStart(S, s, u) {
     S.sepKey[s] = SIM_SEP_ABSENT;
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNavT[s] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
     S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = 0; S.columns.stOn[s] = 1; S.columns.lzAcc[s] = 0; S.columns.sepCx[s] = 0; S.columns.sepCy[s] = 0; S.columns.esVer[s] = -1;
@@ -348,12 +385,14 @@ function simUnitStateCompact() {
     if (typeof simParallelBackgroundWait === 'function' && typeof SIM_PAR_BG_LANES === 'number') for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) simParallelBackgroundWait(lane);
     const old = S.columns, n0 = S.owners.length, map = new Int32Array(n0).fill(-1);
     const cap = Math.max(1024, Math.ceil(live * 1.125 / 4096) * 4096);
-    const N = { cap, owners: [], free: [], columns: _simUnitColumnsObject(), stamp: new Uint32Array(cap), epoch: 0, unitsRef: units };
+    const N = { cap, owners: [], free: [], columns: _simUnitColumnsObject(), stamp: new Uint32Array(cap), epoch: 0, unitsRef: units, held: null };
     const C = N.columns;
-    for (const k of SIM_UNIT_COLUMNS) C[k] = simSharedArray(_simUnitColumnType(k), cap);
-    for (const [k, Type, per] of SIM_MOVE_COLUMNS) C[k] = simSharedArray(Type, cap * per);
-    N.sepKey = simSharedArray(Uint32Array, cap); N.sepLayer = simSharedArray(Uint8Array, cap);
+    for (const k of SIM_UNIT_COLUMNS) C[k] = simHeapArray(_simUnitColumnType(k), cap);
+    for (const [k, Type, per] of SIM_MOVE_COLUMNS) C[k] = simHeapArray(Type, cap * per);
+    N.sepKey = simHeapArray(Uint32Array, cap); N.sepLayer = simHeapArray(Uint8Array, cap);
     N.sepKey.fill(SIM_SEP_ABSENT); C.sepKey = N.sepKey;
+    // (The old columns go back to the heap once no unit reaches them.)
+    _simUnitColumnsHeld(N);
     // Units first, then the columns, one at a time, in runs of consecutive
     // slots (restored units hold consecutive slots in list order: a few
     // block copies). (Per unit and column, through the column's name, it was
