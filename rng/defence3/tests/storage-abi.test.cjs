@@ -36,7 +36,7 @@ const sm = /struct Mv \{([\s\S]*?)\n\}/.exec(rs);
 assert.ok(sm, 'struct Mv not found');
 const fieldType = {};
 for (const f of sm[1].matchAll(/^\s*([a-z_0-9]+): \*(?:const|mut) ([A-Za-z0-9]+),/gm)) fieldType[f[1]] = f[2];
-const rustToArray = { I8I32: 'Int8Array', U8I32: 'Uint8Array', F32: 'Float32Array', f32: 'Float32Array', f64: 'Float64Array', i32: 'Int32Array', I32Number: 'Int32Array', u32: 'Uint32Array',
+const rustToArray = { I8I32: 'Int8Array', i8: 'Int8Array', U8I32: 'Uint8Array', F32: 'Float32Array', f32: 'Float32Array', f64: 'Float64Array', i32: 'Int32Array', I32Number: 'Int32Array', u32: 'Uint32Array',
     i16: 'Int16Array', u16: 'Uint16Array', i8: 'Int8Array', u8: 'Uint8Array' };
 
 let checked = 0;

@@ -3273,7 +3273,9 @@ function _ownedQueueSpawners(owner) {
     return c.byOwner.get(owner) || [];
 }
 
-function _isResearcherTargetBuilding(target, owner) {
+// (readOnly: the page's question (its mirrors are read-only): no task is
+// started, a building with auto-research on counts.)
+function _isResearcherTargetBuilding(target, owner, readOnly = false) {
     if (!target || target.type !== 'research') return false;
     if (target.owner !== owner) return false;
     if (target.energy <= 0 || target.underConstruction || target.markedForSalvage) return false;
@@ -3282,6 +3284,7 @@ function _isResearcherTargetBuilding(target, owner) {
     let task = getPlayerResearchTask(owner);
     if (!task) {
         if (!isAutoResearchEnabled(target)) return false;
+        if (readOnly) return true;
         task = tryAdvancePlayerResearchTask(owner);
         target.researchTask = task || null;
     }

@@ -1478,7 +1478,9 @@ pub unsafe extern "C" fn acq_scan(
             continue;
         }
         let cmd = rd(cmds, s);
-        if cmd != cmd_idle && cmd != cmd_am && cmd != cmd_atk {
+        // (Flag 16: a moving shooter, looked for too: the combat brain's
+        // fire on the move.)
+        if cmd != cmd_idle && cmd != cmd_am && cmd != cmd_atk && (fl & 16) == 0 {
             continue;
         }
         let owner = rd(own, s);
@@ -1495,7 +1497,7 @@ pub unsafe extern "C" fn acq_scan(
         let y = rd(ys, s);
         let cx = floor(x / cws);
         let cy = floor(y / cws);
-        if cmd != cmd_atk {
+        if cmd == cmd_idle || cmd == cmd_am {
             wr(sout, s, acq_structure(scls, sown, hss, ag, covf, covf_len, cbase, owner, x, y, r, tile, gw, gh, b, bc, br, stride, plane));
         }
         let rt = ceil(r / cws) + 1.0;
@@ -1610,3 +1612,117 @@ pub unsafe extern "C" fn acq_scan(
         wr(tid, s, if best >= 0 { rd(id, best as usize) } else { 0 });
     }
 }
+
+// =====================================================================
+// STATE HASH (utils_snapshot.js snapTickHash, SIM_KERNEL_SNAP_REGION with
+// the slice's sums): per job, its slots (live, not dead): the region of
+// each, and for the slice's ones the hash of its column fields (snap.hc),
+// listed per job without atomics: (region, sum) pairs, the rotation group's
+// slots, slots outside the regions; then the units list's order sum over
+// the job's positions and its units without a slot. The caller merges the
+// jobs' lists. Same values as the JavaScript kernel.
+// =====================================================================
+#[inline(always)]
+fn imul(a: i32, b: i32) -> i32 { a.wrapping_mul(b) }
+#[inline(always)]
+fn mix_i(h: i32, kc: i32, x: i32) -> i32 { h.wrapping_add(imul(imul(kc ^ x, 16777619), 2654435761u32 as i32)) }
+#[inline(always)]
+fn mix_f(h: i32, kc: i32, x: f64) -> i32 {
+    let v;
+    if x >= -2147483648.0 && x < 2147483648.0 && (x as i32) as f64 == x && !(x == 0.0 && x.is_sign_negative()) {
+        v = imul(kc ^ (x as i32), 16777619);
+    } else if x != x {
+        v = kc ^ 0x7ff8;
+    } else {
+        let b = x.to_bits();
+        v = imul(imul(kc ^ (b as u32 as i32), 16777619) ^ ((b >> 32) as u32 as i32), 0x5bd1e995);
+    }
+    h.wrapping_add(imul(v, 2654435761u32 as i32))
+}
+#[inline(always)]
+fn order_mix(i: i32, id: i32) -> i32 {
+    let mut h = imul(i.wrapping_add(1), 2654435761u32 as i32) ^ imul(id.wrapping_add(0x3c6ef372), 2246822519u32 as i32);
+    h = imul(h ^ ((h as u32) >> 15) as i32, 3266489917u32 as i32);
+    h ^ ((h as u32) >> 13) as i32
+}
+#[no_mangle]
+pub unsafe extern "C" fn snap_region(
+    live: *const u8, dead: *const u8, xs: *const F32, ys: *const F32, id: *const i32, sl: *const i32, kc: *const i32,
+    own: *const I8I32, vx: *const F32, vy: *const F32, en: *const F32, cmd: *const U8I32, at: *const F32, af: *const U8I32,
+    st: *const *const i32,
+    reg: *mut i32, hc: *mut i32, pr: *mut i32, ph: *mut i32, rl: *mut i32, nl: *mut i32, nu: *mut i32, cc: *mut i32, ords: *mut i32,
+    n_units: i32, _n_slots: i32, per: i32, ts: f64, slices: i32, slice: i32, rot: i32, groups: i32, rmax: i32, chunk: i32,
+) {
+    // The slice: the units list's positions slice, slice + slices, ... (a
+    // tenth of the units a tick, each once in SNAP_HASH_SLICES ticks), the
+    // job's run of them; per unit its region, its column hash, its region
+    // sum entry (or the rotation group's list, or outside the regions), and
+    // the list's order sum.
+    let base = chunk as usize * per as usize;
+    let (mut n0, mut n1, mut n2, mut n3) = (0usize, 0usize, 0usize, 0usize);
+    let k = |i: usize| rd(kc, i);
+    let sl_n = slices.max(1) as usize;
+    let mut ord: i32 = 0;
+    let mut j = base;
+    let j_end = base + per as usize;
+    loop {
+        let ii = slice.max(0) as usize + j * sl_n;
+        if j >= j_end || ii >= n_units.max(0) as usize {
+            break;
+        }
+        j += 1;
+        let si = rd(sl, ii);
+        if si < 0 {
+            wr(nu, base + n3, ii as i32);
+            n3 += 1;
+            continue;
+        }
+        let si = si as usize;
+        ord = ord.wrapping_add(order_mix(ii as i32, rd(id, si)));
+        if rd(live, si) == 0 || rd(dead, si) != 0 {
+            continue;
+        }
+        let r = floor(rd(ys, si) / ts) * 1024.0 + floor(rd(xs, si) / ts);
+        let mut h = mix_i(0, k(0), rd(own, si));
+        h = mix_f(h, k(1), rd(xs, si));
+        h = mix_f(h, k(2), rd(ys, si));
+        h = mix_f(h, k(3), rd(vx, si));
+        h = mix_f(h, k(4), rd(vy, si));
+        h = mix_f(h, k(5), rd(en, si));
+        h = mix_i(h, k(6), rd(cmd, si));
+        h = mix_i(h, k(7), rd(dead, si) as i32);
+        h = mix_f(h, k(8), rd(at, si));
+        h = mix_i(h, k(9), rd(af, si));
+        let mut c = 0usize;
+        while c < 8 {
+            h = mix_i(h, k(10 + c), rd(*st.add(c), si));
+            c += 1;
+        }
+        wr(hc, si, h);
+        let ri = to_i32(r);
+        wr(reg, si, ri);
+        if !(r >= 0.0 && r < rmax as f64) {
+            wr(nl, base + n2, -(si as i32 + 1));
+            n2 += 1;
+            continue;
+        }
+        let uid = rd(id, si);
+        if irem(irem(uid, groups) + groups, groups) == rot {
+            wr(rl, base + n1, si as i32);
+            n1 += 1;
+            continue;
+        }
+        let mut hh = (imul(uid, 7919) ^ 0x11).wrapping_add(h);
+        hh = imul(hh ^ ((hh as u32) >> 15) as i32, 2246822519u32 as i32);
+        wr(pr, base + n0, ri);
+        wr(ph, base + n0, hh);
+        n0 += 1;
+    }
+    wr(ords, chunk as usize, ord);
+    let cb = chunk as usize * 4;
+    wr(cc, cb, n0 as i32);
+    wr(cc, cb + 1, n1 as i32);
+    wr(cc, cb + 2, n2 as i32);
+    wr(cc, cb + 3, n3 as i32);
+}
+

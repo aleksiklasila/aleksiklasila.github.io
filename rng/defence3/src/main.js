@@ -163,7 +163,8 @@ function _unitSlotMapEnsure() {
     const M = _unitSlotMap, n = units.length;
     if (M.ref === units && M.len === n) return M.slots;
     // (Shared: the index kernels read it.)
-    if (M.slots.length < n) M.slots = simSharedArray(Int32Array, Math.max(1024, n * 2));
+    // (In the wasm heap: Rust kernels read it.)
+    if (M.slots.length < n) { const old = M.slots; M.slots = simHeapArray(Int32Array, simReserveCap(n)); if (old.length) simHeapFree(old); }
     for (let i = 0; i < n; i++) { const u = units[i]; M.slots[i] = u && u._us ? u._si : -1; }
     M.ref = units; M.len = n; M.ver++;
     return M.slots;
@@ -173,7 +174,7 @@ function unitSlotMapPushed(u) {
     if (typeof unitByIdAdded === 'function') unitByIdAdded(u);
     const M = _unitSlotMap;
     if (M.ref !== units || M.len !== units.length - 1) return;
-    if (M.slots.length < units.length) { const a = simSharedArray(Int32Array, units.length * 2); a.set(M.slots); M.slots = a; }
+    if (M.slots.length < units.length) { const a = simHeapArray(Int32Array, simReserveCap(units.length)); a.set(M.slots); if (M.slots.length) simHeapFree(M.slots); M.slots = a; }
     M.slots[M.len++] = u && u._us ? u._si : -1;
     M.ver++;
 }
@@ -855,9 +856,12 @@ function _gameTickBody() {
     if (anyLaserActive) startLaserSound(laserSoundX, laserSoundY);
     else stopLaserSound();
 
-    if (_adjacencyNeedsRecalc) {
-        _runAdjacencyRecalculation();
-    }
+    // (Adjacency is not lag-sensitive: its dirty tiles are taken in batches
+    // every ADJACENCY_BATCH_TICKS ticks (fixed ticks, every peer): a group
+    // dirtied again and again is flooded once per batch.)
+    if (ADJACENCY_LANE) adjacencyLaneStep();
+    if (_winCheckDue) { _winCheckDue = false; checkWinCondition(); }
+    else if (_adjacencyNeedsRecalc && gameTime % ADJACENCY_BATCH_TICKS === 3) _runAdjacencyRecalculation();
 
     // Upkeep, once a second: worked out now (_upKeepSecond; the info panel
     // shows it), deducted.
@@ -1056,11 +1060,11 @@ function initInput() {
     function _findResearchRallyTargetNear(worldX, worldY, owner, radius = 48) {
         let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
         let exact = getTileEntityRef(gx, gy);
-        if (_isResearcherTargetBuilding(exact, owner)) return exact;
+        if (_isResearcherTargetBuilding(exact, owner, true)) return exact;
         let best = null;
         let bestDist = Infinity;
         for (let s of collectorSpawners) {
-            if (!_isResearcherTargetBuilding(s, owner)) continue;
+            if (!_isResearcherTargetBuilding(s, owner, true)) continue;
             if (!isTileVisible(s.gx, s.gy)) continue;
             let d = detHypot(s.x - worldX, s.y - worldY);
             if (d > radius || d >= bestDist) continue;
@@ -1951,7 +1955,7 @@ function initInput() {
                     let researchTarget = null;
                     let researchBestDist = Infinity;
                     for (let s of collectorSpawners) {
-                        if (!_isResearcherTargetBuilding(s, localPlayerId)) continue;
+                        if (!_isResearcherTargetBuilding(s, localPlayerId, true)) continue;
                         if (!isTileVisible(s.gx, s.gy)) continue;
                         let d = detHypot(s.x - world.x, s.y - world.y);
                         if (d > 22 || d >= researchBestDist) continue;

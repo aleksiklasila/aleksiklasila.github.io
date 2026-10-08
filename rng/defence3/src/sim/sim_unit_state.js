@@ -220,7 +220,13 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['fLsX', Float32Array, 1], ['fLsY', Float32Array, 1], ['fLsPX', Float32Array, 1], ['fLsPY', Float32Array, 1], ['fLsT', Int32Array, 1],
     // 1 while Unit.targetBuilding holds a structure (its accessor writes it):
     // the acquisition tier skips units attacking a unit (SIM_KERNEL_ACQ_SNAP).
-    ['acqB', Uint8Array, 1]];
+    ['acqB', Uint8Array, 1],
+    // The combat brain's instruction (SIM_KERNEL_COMBAT_BRAIN on a helper
+    // lane, committed by SIM_KERNEL_COMBAT_COMMIT): cmMode 0 none (the order's
+    // own movement), 1 hold (stand, fire when the timer is out), 2 chase
+    // (step toward the target); the target's slot and id. isWk: a worker
+    // (the brain leaves workers alone).
+    ['cmMode', Uint8Array, 1], ['cmT', Int32Array, 1], ['cmTId', Int32Array, 1], ['isWk', Uint8Array, 1]];
 // Accessor defaults (the "not indexed / not registered" values).
 const SIM_SPATIAL_DEFAULTS = { spTile: -1, spArea: -2, spOwner: -1, spEpoch: 0, spType: -1, vsGen: 0, vsR: -1, vsA: -1, vsP1: -1, vsP2: -1 };
 let _simUnitState = null;
@@ -337,7 +343,7 @@ function _simUnitSlotStart(S, s, u) {
     S.columns.mvPath[s] = -1;
     S.columns.live[s] = 1; S.columns.maxE[s] = Number(u.maxEnergy); S.columns.spMvOwn[s] = 0; S.columns.mvBlk[s] = 0; S.columns.mvCD[s] = -1; S.columns.wsKind[s] = 0;
     // (Tick-stamped answers of the slot's last unit are not this one's.)
-    S.columns.acqB[s] = 0;
+    S.columns.acqB[s] = 0; S.columns.cmMode[s] = 0; S.columns.cmT[s] = -1; S.columns.cmTId[s] = 0; S.columns.isWk[s] = u.workerType ? 1 : 0;
     S.columns.cbTick[s] = -1; S.columns.cbT[s] = -1; S.columns.dbTick[s] = -1; S.columns.dbT[s] = -1; S.columns.cwTick[s] = -1; S.columns.upT[s] = -1; S.columns.upB[s] = -1;
     Object.defineProperties(u, { _us: { value: S.columns, writable: true }, _si: { value: s, writable: true }, _det: { value: null, writable: true },
         _path: { value: null, writable: true }, _ws: { value: undefined, writable: true }, _wnr: { value: undefined, writable: true }, _tb: { value: null, writable: true } });

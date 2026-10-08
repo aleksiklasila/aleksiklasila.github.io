@@ -31,7 +31,7 @@ const SIM_PAR_GEN = 0, SIM_PAR_KERNEL = 1, SIM_PAR_NEXT = 2, SIM_PAR_TOTAL = 3, 
 // the next one, so a pipeline runs to its end on the helpers. A lane is
 // rewritten only once closed and empty (no claim in flight), so a late
 // claim can never run a chunk of the next job.
-const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 10;
+const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 11;
 const SIM_PAR_BG_ID = 5, SIM_PAR_BG_READERS = 6, SIM_PAR_BG_STAGE = 7, SIM_PAR_BG_STAGES = 24;
 // (Control words: SIM_PAR_BG_BASE + lanes * 8, rounded up.)
 const SIM_PAR_CTL_WORDS = 128;
@@ -52,8 +52,8 @@ const SIM_PAR_CTL_WORDS = 128;
 // destination fields asked for in a tick, made by the next tick's flush
 // (flownav.js navFieldsFlush). SIM_LANE_NAVX: every live field over a new
 // navigation build, before it is installed (flownav.js _navNextStage).
-const SIM_LANE_TICK = 0, SIM_LANE_LONG = 1, SIM_LANE_T10 = 2, SIM_LANE_T5 = 3, SIM_LANE_T1 = 4, SIM_LANE_T05 = 5, SIM_LANE_IX = 6, SIM_LANE_BUILD = 7, SIM_LANE_NAV = 8, SIM_LANE_NAVX = 9;
-const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_IX, SIM_LANE_NAV, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_T1, SIM_LANE_T05, SIM_LANE_NAVX, SIM_LANE_BUILD, SIM_LANE_LONG];
+const SIM_LANE_TICK = 0, SIM_LANE_LONG = 1, SIM_LANE_T10 = 2, SIM_LANE_T5 = 3, SIM_LANE_T1 = 4, SIM_LANE_T05 = 5, SIM_LANE_IX = 6, SIM_LANE_BUILD = 7, SIM_LANE_NAV = 8, SIM_LANE_NAVX = 9, SIM_LANE_HASH = 10;
+const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_NAV, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_T1, SIM_LANE_T05, SIM_LANE_NAVX, SIM_LANE_BUILD, SIM_LANE_LONG];
 
 // A typed array in shared memory when helpers may use it.
 function simSharedArray(Type, n) {
@@ -616,8 +616,10 @@ function _simStepParked(R, P, s0, end, Q, n, C) {
     const WKWY = R['unit.wkWy'];
     const WKWATCH = Math.max(1, P[29] | 0);
     let _nf = 0;
+    const brainOn = P[48] === 1, CMODE = R['unit.cmMode'];
     for (let s = s0; s < end; s++) {
         if (D0[s] !== DEADC[s]) D0[s] = DEADC[s];
+        if (brainOn && CMODE[s] !== 0) continue;
         const on = ON[s];
         // A parked unit before its wake tick: stands (its floor and, on its
         // acquisition ticks, its look are SIM_KERNEL_MOVE's).
@@ -781,6 +783,52 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
     _simMovePath(R, P, s0, end, Q, n, C);
     _simMoveEpilogue(R, P, chunk);
 };
+// The combat brain's instruction for slot s (cmMode: bits 0-1 the move, 0
+// its own order's, 1 stand, 2 step toward the target; bit 4 fire at the
+// target), O(1): a target dead or replaced in its slot ends it (false: the
+// unit's own move this tick). Fire: its attack whenever the timer is out,
+// whatever it does meanwhile (a hit record, unitHitsResolve). Facing is the
+// presentation's (movement and attack direction). True: moved here (output
+// 1, or 3 into another tile: the update pass passes it over).
+function _simMoveCombat(R, P, s, s0, hchunk) {
+    const DEAD = R['unit.dead'], EN = R['unit.energy'], SEP = R['unit.sepKey'], CM = R['unit.cmMode'], CT = R['unit.cmT'], CTID = R['unit.cmTId'], ID = R['unit.id'];
+    const ON = R['unit.mvOn'], OUT = R['unit.mvOut'];
+    if (!(EN[s] > 0) || SEP[s] === P[15] || DEAD[s]) { CM[s] = 0; ON[s] = 0; return false; }
+    const q = CT[s];
+    if (!(q >= 0) || DEAD[q] || (ID[q] | 0) !== CTID[s]) { CM[s] = 0; return false; }
+    const cm = CM[s];
+    if (cm & 4) {
+        const AT = R['unit.attackTimer'], HITA = R['mv.hita'];
+        if (!(AT[s] > 0) && HITA) {
+            AT[s] = R['unit.atkCd'][s]; R['unit.attackFlash'][s] = 8; R['unit.tmOn'][s] = 1;
+            const k = s0 + R['mv.hitc'][hchunk]++; HITA[k] = s; R['mv.hitt'][k] = q;
+        }
+    }
+    const mv = cm & 3;
+    if (mv === 0) return false;
+    const X = R['unit.x'], Y = R['unit.y'], PX = R['unit.prevX'], PY = R['unit.prevY'], VX = R['unit.vx'], VY = R['unit.vy'];
+    const x = X[s], y = Y[s];
+    PX[s] = x; PY[s] = y;
+    if (mv === 1) { VX[s] = 0; VY[s] = 0; OUT[s] = 1; return true; }
+    const tx = R['unit.x0'][q], ty = R['unit.y0'][q], dx = tx - x, dy = ty - y, d = Math.sqrt(dx * dx + dy * dy);
+    let spd = R['unit.mvSpd'][s];
+    if (R['unit.frozen'][s] > 0) spd *= 0.5;
+    if (R['unit.sandy'][s] > 0) spd *= 0.5;
+    if (!(d > spd) || !(spd > 0)) { VX[s] = 0; VY[s] = 0; OUT[s] = 1; return true; }
+    const tile = P[7], itile = 1 / tile, W = P[5] | 0, H = P[6] | 0, q8 = P[8], iq = 1 / q8;
+    let vx = dx / d * spd, vy = dy / d * spd;
+    const gx = Math.floor(x * itile), gy = Math.floor(y * itile);
+    if (R['unit.sepLayer'][s] !== 1) {
+        const sl = simFlowSlide(R['mv.wall'], W, H, gx, gy, Math.floor((x + vx) * itile), Math.floor((y + vy) * itile));
+        if (sl & 1) vx = 0;
+        if (sl & 2) vy = 0;
+    }
+    const nx = Math.fround(x + vx), ny = Math.fround(y + vy);
+    const qx = Number.isFinite(nx) ? Math.round(nx * q8) * iq : x, qy = Number.isFinite(ny) ? Math.round(ny * q8) * iq : y;
+    X[s] = qx; Y[s] = qy; VX[s] = vx; VY[s] = vy;
+    OUT[s] = Math.floor(qx * itile) !== gx || Math.floor(qy * itile) !== gy ? 3 : 1;
+    return true;
+}
 // Every unit to its move: done (held, chasing, parked...), or on to the
 // flow or the path.
 function _simMovePre(R, P, s0, end, Q, n, C) {
@@ -882,6 +930,8 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
     const stepRan = P[46] === 1;
     const FIRE = R['unit.mvFire'];
     const HITA = R['mv.hita'], HITT = R['mv.hitt'], HITC = R['mv.hitc'], ACD = R['unit.atkCd'], FLASH = R['unit.attackFlash'], TMON = R['unit.tmOn'], hchunk = Math.floor(s0 / P[1]);
+    // (The combat brain's instructions, P[48] 1: see _simMoveCombat.)
+    const brainOn = P[48] === 1, CMODE = R['unit.cmMode'];
     if (HITA) HITC[hchunk] = 0;
     let _nf = 0, _np = 0;
     for (let s = s0; s < end; s++) {
@@ -892,6 +942,8 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
         // (Moved by SIM_KERNEL_MOVE_STEP this tick: done.)
         if (STEPT[s - s0] === 1) continue;
         OUT[s] = 0;
+        // (An instruction of the combat brain: followed in O(1).)
+        if (brainOn && CMODE[s] !== 0 && _simMoveCombat(R, P, s, s0, hchunk)) continue;
         if (!ON[s]) continue;
         if (!(EN[s] > 0) || SEP[s] === absent || DEADC[s]) { ON[s] = 0; continue; }
         const parked = ON[s] === 2, hold = ON[s] === 3, bhold = ON[s] === 5;
@@ -1092,7 +1144,7 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
         // (tryDriveByAttack returns at once); the drive-by kernel's verdict
         // when it looked this tick (its box and tables are these: something
         // found, or nothing); else the box, as below.)
-        let dbLook = !atk && (f & 1) !== 0 && ((t + id) & 1) === 0;
+        let dbLook = !brainOn && !atk && (f & 1) !== 0 && ((t + id) & 1) === 0;
         if (dbLook) {
             if (!(AREA[s] >= 0)) { ON[s] = 0; continue; }
             if (AT[s] > 0) dbLook = false;
@@ -1103,7 +1155,7 @@ function _simMovePre(R, P, s0, end, Q, n, C) {
                 dbLook = false;
             }
         }
-        if (atk ? ((t + id) % acqT) === 0 || ((t + id) & 3) === 0 : dbLook) {
+        if (atk ? !brainOn && (((t + id) % acqT) === 0 || ((t + id) & 3) === 0) : dbLook) {
             let x0, y0, x1, y1;
             if (atk) { const r = REACH[s]; x0 = gx - r; y0 = gy - r; x1 = gx + r; y1 = gy + r; }
             else {
@@ -1665,12 +1717,15 @@ SIM_KERNELS[SIM_KERNEL_SP_COUNTS] = function (R, P, chunk) {
         const owner = w - 1;
         if (!(owner < NP)) continue;
         const ty = SPTY[s];
-        for (let pass = 0; pass < 2; pass++) {
-            const key = pass ? MVN[s] : MVO[s], d = pass ? 1 : -1;
-            Atomics.add(CX, key * SC + owner * SP, d);
-            const cx = key % CW, cy = (key - cx) / CW, bi = (Math.floor(cy / BS) * BW + Math.floor(cx / BS)) * NP + owner;
-            if (bi >= 0 && bi < nb) Atomics.add(BC, bi, d);
-            if (ty >= 0) Atomics.add(TC, (Math.floor(cy / TB) * TW + Math.floor(cx / TB)) * TS + owner * NT + ty, d);
+        // (A move within one block or type block leaves that count alone.)
+        const ko = MVO[s], kn = MVN[s];
+        Atomics.add(CX, ko * SC + owner * SP, -1); Atomics.add(CX, kn * SC + owner * SP, 1);
+        const ox = ko % CW, oy = (ko - ox) / CW, nx = kn % CW, ny = (kn - nx) / CW;
+        const bo = (Math.floor(oy / BS) * BW + Math.floor(ox / BS)) * NP + owner, bn = (Math.floor(ny / BS) * BW + Math.floor(nx / BS)) * NP + owner;
+        if (bo !== bn) { if (bo >= 0 && bo < nb) Atomics.add(BC, bo, -1); if (bn >= 0 && bn < nb) Atomics.add(BC, bn, 1); }
+        if (ty >= 0) {
+            const to = (Math.floor(oy / TB) * TW + Math.floor(ox / TB)) * TS + owner * NT + ty, tn = (Math.floor(ny / TB) * TW + Math.floor(nx / TB)) * TS + owner * NT + ty;
+            if (to !== tn) { Atomics.add(TC, to, -1); Atomics.add(TC, tn, 1); }
         }
     }
 };
@@ -2635,7 +2690,7 @@ const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 
     'unit.spType', 'unit.vsGen', 'unit.spMvOld', 'unit.spMvNew', 'unit.spMvOwn', 'unit.mvBlk', '?mv.astarRem', '?mv.chFix', '?mv.chUse', 'unit.mvCost',
     'unit.commandState', 'unit.mvShoot', 'unit.mvReachD', 'unit.mvRangeK', 'unit.lzFlags', '?sep.rs', '?sep.rc', '?sep.rstamp', '?sep.eslot',
     '?ix.omask', '?mv.scls', '?mv.hstruct', 'unit.dbTI', 'unit.mvFire',
-    'unit.atkCd', 'unit.attackFlash', '?mv.hita', '?mv.hitt', '?mv.hitc', 'unit.tmOn'];
+    'unit.atkCd', 'unit.attackFlash', '?mv.hita', '?mv.hitt', '?mv.hitc', 'unit.tmOn', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.sepLayer'];
 const _SIM_MOVE_NAV = 11, _SIM_MOVE_WNAV = 160;
 const _simMoveW = _simWK([..._SIM_MOVE_WNAMES, ...Array.from({ length: _SIM_MOVE_NAV * 8 }, (_, i) => {
     const p = i >> 3, j = i & 7;
@@ -3188,6 +3243,187 @@ SIM_KERNELS[SIM_KERNEL_LASER_HITS] = function (R, P, chunk) {
 // CHUNK_SIZE, [12] SIM_SEP_ABSENT, [13] SIM_MOVE_BOX_STEPS, [14] contact
 // padding, [15] block size (tiles), [16]/[17] blocks wide/high, [18] 1 when
 // ix.omask is this tick's.
+// The combat brain (a helper lane, chained after the acquisition scan; see
+// BRAIN_OFF_MAIN_THREAD_PLAN.md): per unit of the snapshot (acq.*), its
+// instruction: keep its target while alive and in sight, else take the
+// scan's (acq.out); in its attack range by areas (any number of steps: a
+// search over the area graph, here on the helpers) -> 1 hold, else 2 chase;
+// none -> 0. acq.bm 255: no instruction (not the brain's unit).
+// P: [0] slots, [1] per job, [2] CMD_IDLE, [3] CMD_ATTACK_MOVING, [4] TILE,
+// [5]/[6] grid, [7] players, [8] areas.
+const SIM_KERNEL_COMBAT_BRAIN = 62, SIM_KERNEL_COMBAT_COMMIT = 63;
+let _cbStamp = new Int32Array(0), _cbQ = new Int32Array(0), _cbEpoch = 0;
+function _cbAreaWithin(OFF, NB, src, ns, b, k) {
+    for (let i = 0; i < ns; i++) if (src[i] === b) return true;
+    if (k <= 0) return false;
+    const A = OFF.length - 1;
+    if (_cbStamp.length < A) { _cbStamp = new Int32Array(A); _cbQ = new Int32Array(A); _cbEpoch = 0; }
+    if (++_cbEpoch >= 0x7fffffff) { _cbStamp.fill(0); _cbEpoch = 1; }
+    const ST = _cbStamp, Q = _cbQ, ep = _cbEpoch;
+    let qh = 0, qt = 0;
+    for (let i = 0; i < ns; i++) { const a = src[i]; if (a >= 0 && a < A && ST[a] !== ep) { ST[a] = ep; Q[qt++] = a; } }
+    for (let d = 1; d <= k && qh < qt; d++) {
+        const end = qt;
+        while (qh < end) {
+            const a = Q[qh++];
+            for (let j = OFF[a], j1 = OFF[a + 1]; j < j1; j++) {
+                const c = NB[j];
+                if (c === b) return true;
+                if (ST[c] !== ep) { ST[c] = ep; Q[qt++] = c; }
+            }
+        }
+    }
+    return false;
+}
+const _cbSrc = new Int32Array(4);
+SIM_KERNELS[SIM_KERNEL_COMBAT_BRAIN] = function (R, P, chunk) {
+    const X = R['acq.x'], Y = R['acq.y'], OWN = R['acq.own'], FLG = R['acq.flags'], CMD = R['acq.cmd'], ID = R['acq.id'];
+    const OUTA = R['acq.out'], CM = R['acq.cm'], CT = R['acq.ct'], CTID = R['acq.ctid'], RK = R['acq.rk'], AG = R['acq.agrid'], COVF = R['acq.cover'];
+    const OFF = R['acq.aoff'], NB = R['acq.anb'], BM = R['acq.bm'], BT = R['acq.bt'], BTID = R['acq.btid'];
+    const cmdIdle = P[2], cmdAM = P[3], tile = P[4], GW = P[5] | 0, GH = P[6] | 0, players = P[7] | 0, A = P[8] | 0;
+    const areaOf = (x, y) => { const gx = Math.floor(x / tile), gy = Math.floor(y / tile); return gx < 0 || gy < 0 || gx >= GW || gy >= GH ? -1 : AG[gy * GW + gx]; };
+    const sees = (o, q) => { const a = areaOf(X[q], Y[q]); return a >= 0 && COVF[o * A + a] > 0; };
+    for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) {
+        BM[s] = 255;
+        const fl = FLG[s];
+        if (fl & 11) continue;
+        const cmd = CMD[s], mover = (fl & 16) !== 0;
+        if (cmd !== cmdIdle && cmd !== cmdAM && !mover) continue;
+        const owner = OWN[s];
+        if (!(owner >= 0 && owner < players)) continue;
+        let q = -1;
+        const c = CT[s];
+        if (!mover && CM[s] !== 0 && c >= 0 && !(FLG[c] & 1) && (ID[c] | 0) === CTID[s] && OWN[c] !== owner && sees(owner, c)) q = c;
+        else if (OUTA[s] >= 0) q = OUTA[s];
+        if (q < 0) { BM[s] = 0; continue; }
+        // (In range by areas: any area of its window within its range in
+        // steps of the target's area.)
+        const ta = areaOf(X[q], Y[q]);
+        let inRange = false;
+        if (ta >= 0 && OFF) {
+            const fx = X[s] / tile, fy = Y[s] / tile, gx = Math.floor(fx), gy = Math.floor(fy), rx = fx - gx, ry = fy - gy;
+            const x0 = rx < .3 ? gx - 1 : gx, x1 = rx < .7 ? gx : gx + 1, y0 = ry < .3 ? gy - 1 : gy, y1 = ry < .7 ? gy : gy + 1;
+            let ns = 0;
+            for (let yy = y0; yy <= y1; yy++) for (let xx = x0; xx <= x1; xx++) {
+                if (xx < 0 || yy < 0 || xx >= GW || yy >= GH) continue;
+                const a = AG[yy * GW + xx];
+                if (a >= 0) _cbSrc[ns++] = a;
+            }
+            inRange = ns > 0 && _cbAreaWithin(OFF, NB, _cbSrc, ns, ta, RK[s]);
+        }
+        // (A moving shooter: fire at a target in range, its own move; others:
+        // stand and fire in range, else step toward it.)
+        if (mover) { BM[s] = inRange ? 4 : 0; if (inRange) { BT[s] = q; BTID[s] = ID[q] | 0; } continue; }
+        BM[s] = inRange ? 5 : 2; BT[s] = q; BTID[s] = ID[q] | 0;
+    }
+};
+// The brain's instructions into the units' columns at the commit tick (the
+// same unit still in the slot, alive): O(1) a slot.
+// P: [0] slots, [1] per job.
+SIM_KERNELS[SIM_KERNEL_COMBAT_COMMIT] = function (R, P, chunk) {
+    const BM = R['acq.bm'], BT = R['acq.bt'], BTID = R['acq.btid'], SID = R['acq.id'];
+    const ID = R['unit.id'], DEAD = R['unit.dead'], CM = R['unit.cmMode'], CT = R['unit.cmT'], CTID = R['unit.cmTId'];
+    for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) {
+        const m = BM[s];
+        if (m === 255 || (ID[s] | 0) !== (SID[s] | 0) || DEAD[s]) continue;
+        CM[s] = m; CT[s] = m ? BT[s] : -1; CTID[s] = m ? BTID[s] : 0;
+    }
+};
+// Adjacency groups on a helper lane (things_utils.js adjacencyLaneStep):
+// from the signature grid's snapshot (adj.sig: an id per operational
+// structure's (owner, type) signature, -1 none), the groups (4-connected,
+// equal signature, joined through paired cloud portals: adj.cloud [tile,
+// partner tile or -1, owner] triples) reached from the dirty tiles
+// (adj.seed, each with its 3x3), their member tiles in order (adj.otile,
+// adj.ogrp the group), each group's size and area multiplier (adj.gsize,
+// adj.gmul: each touched area whose cells all bear the group's signature
+// multiplies it by cells^(level + 1)), and every touched area with whether
+// it is uniform (adj.oarea, adj.oact). Counts in adj.ocnt [members, groups,
+// areas]. One job (P: [0] W, [1] H, [2] seeds, [3] cloud triples, [4] areas).
+const SIM_KERNEL_ADJ_FLOOD = 64;
+let _adjVis = new Int32Array(0), _adjVisEp = 0, _adjAreaSeen = new Int32Array(0), _adjAreaSig = new Int32Array(0), _adjQ = new Int32Array(0);
+SIM_KERNELS[SIM_KERNEL_ADJ_FLOOD] = function (R, P) {
+    const W = P[0] | 0, H = P[1] | 0, ns = P[2] | 0, nc = P[3] | 0, A = P[4] | 0, N = W * H;
+    const SIG = R['adj.sig'], SEED = R['adj.seed'], CL = R['adj.cloud'], AG = R['adj.ag'], COFF = R['adj.coff'], CT = R['adj.ctile'], MUL = R['adj.mul'];
+    const OT = R['adj.otile'], OG = R['adj.ogrp'], GS = R['adj.gsize'], GM = R['adj.gmul'], OA = R['adj.oarea'], OACT = R['adj.oact'], CNT = R['adj.ocnt'];
+    if (_adjVis.length < N) { _adjVis = new Int32Array(N); _adjQ = new Int32Array(N); _adjVisEp = 0; }
+    if (_adjAreaSeen.length < A) { _adjAreaSeen = new Int32Array(A); _adjAreaSig = new Int32Array(A); }
+    if (++_adjVisEp >= 0x7fffffff) { _adjVis.fill(0); _adjAreaSeen.fill(0); _adjVisEp = 1; }
+    const ep = _adjVisEp, VIS = _adjVis, Q = _adjQ;
+    // (An area's signature: its cells' one signature, -1 mixed or none; per job.)
+    const areaSig = a => {
+        if (_adjAreaSeen[a] === ep) return _adjAreaSig[a];
+        _adjAreaSeen[a] = ep;
+        let sg = -2;
+        for (let i = COFF[a], i1 = COFF[a + 1]; i < i1; i++) { const v = SIG[CT[i]]; if (v < 0 || (sg !== -2 && v !== sg)) { sg = -1; break; } sg = v; }
+        if (sg === -2) sg = -1;
+        _adjAreaSig[a] = sg;
+        return sg;
+    };
+    const cloudAt = new Map();
+    for (let i = 0; i < nc; i++) cloudAt.set(CL[3 * i], i);
+    let no = 0, ng = 0, na = 0;
+    const areaListed = new Set();
+    const noteArea = a => { if (a >= 0 && !areaListed.has(a)) { areaListed.add(a); OA[na++] = a; } };
+    for (let k = 0; k < ns; k++) {
+        const t0 = SEED[k], sx = t0 % W, sy = (t0 - sx) / W;
+        if (t0 >= 0 && t0 < N) noteArea(AG[t0]);
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const x = sx + dx, y = sy + dy;
+            if (x < 0 || y < 0 || x >= W || y >= H) continue;
+            const r = y * W + x, sig = SIG[r];
+            if (sig < 0 || VIS[r] === ep) continue;
+            // A group: breadth first over equal signatures.
+            const g = ng++, first = no;
+            let qh = 0, qt = 0;
+            VIS[r] = ep; Q[qt++] = r; OT[no] = r; OG[no++] = g;
+            const owner = CL.length ? -1 : -1;
+            while (qh < qt) {
+                const cur = Q[qh++], cx = cur % W, cy = (cur - cx) / W;
+                for (let d = 0; d < 4; d++) {
+                    const nx = cx + (d === 2 ? 1 : d === 3 ? -1 : 0), ny = cy + (d === 0 ? 1 : d === 1 ? -1 : 0);
+                    if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+                    const nt = ny * W + nx;
+                    if (VIS[nt] !== ep && SIG[nt] === sig) { VIS[nt] = ep; Q[qt++] = nt; OT[no] = nt; OG[no++] = g; }
+                    // (A paired cloud portal of the group's owner beside it:
+                    // the tiles around both ends join too.)
+                    const ci = nc ? cloudAt.get(nt) : undefined;
+                    if (ci !== undefined && CL[3 * ci + 2] === (sig & 255)) {
+                        for (const e of [CL[3 * ci], CL[3 * ci + 1]]) {
+                            if (e < 0) continue;
+                            const ex = e % W, ey = (e - ex) / W;
+                            for (let d2 = 0; d2 < 4; d2++) {
+                                const mx = ex + (d2 === 2 ? 1 : d2 === 3 ? -1 : 0), my = ey + (d2 === 0 ? 1 : d2 === 1 ? -1 : 0);
+                                if (mx < 0 || my < 0 || mx >= W || my >= H) continue;
+                                const mt = my * W + mx;
+                                if (VIS[mt] !== ep && SIG[mt] === sig) { VIS[mt] = ep; Q[qt++] = mt; OT[no] = mt; OG[no++] = g; }
+                            }
+                        }
+                    }
+                }
+            }
+            // Its areas: the multiplier of those uniform in its signature.
+            let mult = 1;
+            const seen = new Set();
+            for (let i = first; i < no; i++) {
+                const a = AG[OT[i]];
+                if (a < 0 || seen.has(a)) continue;
+                seen.add(a); noteArea(a);
+                if (areaSig(a) !== sig) continue;
+                const cells = Math.max(1, COFF[a + 1] - COFF[a]);
+                let n = (MUL[a] | 0) + 1, res = 1, p = cells;
+                while (n > 0) { if (n % 2 === 1) res *= p; p *= p; n = Math.floor(n / 2); }
+                mult *= res;
+            }
+            GS[g] = no - first; GM[g] = mult;
+        }
+    }
+    for (let i = 0; i < na; i++) OACT[i] = areaSig(OA[i]) >= 0 ? 1 : 0;
+    CNT[0] = no; CNT[1] = ng; CNT[2] = na;
+};
+
+// (Its candidates' list, per thread: slot and squared distance.)
+const SIM_DB_CANDS = 64, _simDbCandQ = new Int32Array(SIM_DB_CANDS), _simDbCandD = new Float64Array(SIM_DB_CANDS);
 SIM_KERNELS[SIM_KERNEL_DRIVEBY] = function (R, P, chunk) {
     const CMD = R['unit.commandState'], DEAD = R['unit.dead'], SEP = R['unit.sepKey'], AT = R['unit.attackTimer'], SHOOT = R['unit.mvShoot'];
     const ID = R['unit.id'], OWN = R['unit.owner'], X = R['unit.x'], Y = R['unit.y'], AREA = R['unit.spArea'], RD = R['unit.mvReachD'], RK = R['unit.mvRangeK'], LZF = R['unit.lzFlags'];
@@ -3222,10 +3458,17 @@ SIM_KERNELS[SIM_KERNEL_DRIVEBY] = function (R, P, chunk) {
             const bx0 = Math.floor(x0 / Bk), by0 = Math.floor(y0 / Bk), bx1 = Math.min(bc - 1, Math.floor(x1 / Bk)), by1 = Math.min(br - 1, Math.floor(y1 / Bk)), o = owner * plane;
             if (bx0 <= bx1 && by0 <= by1 && HS[o + (by1 + 1) * stride + bx1 + 1] - HS[o + by0 * stride + bx1 + 1] - HS[o + (by1 + 1) * stride + bx0] + HS[o + by0 * stride + bx0] <= 0) { DBT[s] = -1; continue; }
         }
-        let best = -1, bd2 = Infinity, unknown = false;
+        // The nearest enemy unit in range (then the lower id). Candidates
+        // (past the cheap checks) are listed, then range-checked nearest
+        // first: the first in range is the answer (a nearer one not worked
+        // out here hands the look back, -2). Over SIM_DB_CANDS candidates:
+        // the scan again, range-checking each that would be a new best.
+        let best = -1, unknown = false;
         if (x0 <= x1 && y0 <= y1) {
             const cx0 = Math.floor(x0 / cs), cy0 = Math.floor(y0 / cs), cx1 = Math.min(CW - 1, Math.floor(x1 / cs)), cy1 = Math.min(CH - 1, Math.floor(y1 / cs));
-            for (let cy = cy0; cy <= cy1 && !unknown; cy++) for (let cx = cx0; cx <= cx1 && !unknown; cx++) {
+            const CQ = _simDbCandQ, CD = _simDbCandD;
+            let nc = 0, over = false;
+            for (let cy = cy0; cy <= cy1 && !over; cy++) for (let cx = cx0; cx <= cx1 && !over; cx++) {
                 const ck = cy * CW + cx;
                 if (rst[ck] !== ep || (OM && (OM[ck] & foe) === 0)) continue;
                 for (let e = rs[ck], e1 = e + rc[ck]; e < e1; e++) {
@@ -3235,11 +3478,40 @@ SIM_KERNELS[SIM_KERNEL_DRIVEBY] = function (R, P, chunk) {
                     if (qgx < x0 || qgy < y0 || qgx > x1 || qgy > y1) continue;
                     const a = AG[qgy * W + qgx];
                     if (!(a >= 0) || !(cov[a] > 0)) continue;
+                    if (nc === SIM_DB_CANDS) { over = true; break; }
+                    const dx = tx - x, dy = ty - y;
+                    CQ[nc] = q; CD[nc] = dx * dx + dy * dy; nc++;
+                }
+            }
+            if (!over) {
+                for (let i = 0; i < nc; i++) {
+                    let m = i;
+                    for (let j = i + 1; j < nc; j++) if (CD[j] < CD[m] || (CD[j] === CD[m] && (ID[CQ[j]] | 0) < (ID[CQ[m]] | 0))) m = j;
+                    const q = CQ[m], d2 = CD[m]; CQ[m] = CQ[i]; CD[m] = CD[i]; CQ[i] = q; CD[i] = d2;
+                    const tx = X0[q], ty = Y0[q];
                     const r = whole ? _simInAreaRange(AG, AOFF, ANB, W, H, tile, x, y, tx, ty, k) : _simUnitInAttackRange(AG, AOFF, ANB, WALL, CRC, RRC, W, H, tile, pad, s, q, x, y, tx, ty, k);
                     if (r < 0) { unknown = true; break; }
-                    if (r !== 1) continue;
-                    const dx = tx - x, dy = ty - y, d2 = dx * dx + dy * dy;
-                    if (d2 < bd2 || (d2 === bd2 && (ID[q] | 0) < (ID[best] | 0))) { best = q; bd2 = d2; }
+                    if (r === 1) { best = q; break; }
+                }
+            } else {
+                let bd2 = Infinity;
+                for (let cy = cy0; cy <= cy1 && !unknown; cy++) for (let cx = cx0; cx <= cx1 && !unknown; cx++) {
+                    const ck = cy * CW + cx;
+                    if (rst[ck] !== ep || (OM && (OM[ck] & foe) === 0)) continue;
+                    for (let e = rs[ck], e1 = e + rc[ck]; e < e1; e++) {
+                        const q = es[e];
+                        if (q < 0 || DEAD[q] || (OWN[q] | 0) === owner) continue;
+                        const tx = X0[q], ty = Y0[q], qgx = Math.floor(tx / tile), qgy = Math.floor(ty / tile);
+                        if (qgx < x0 || qgy < y0 || qgx > x1 || qgy > y1) continue;
+                        const a = AG[qgy * W + qgx];
+                        if (!(a >= 0) || !(cov[a] > 0)) continue;
+                        const dx = tx - x, dy = ty - y, d2 = dx * dx + dy * dy;
+                        if (!(d2 < bd2 || (d2 === bd2 && (ID[q] | 0) < (ID[best] | 0)))) continue;
+                        const r = whole ? _simInAreaRange(AG, AOFF, ANB, W, H, tile, x, y, tx, ty, k) : _simUnitInAttackRange(AG, AOFF, ANB, WALL, CRC, RRC, W, H, tile, pad, s, q, x, y, tx, ty, k);
+                        if (r < 0) { unknown = true; break; }
+                        if (r !== 1) continue;
+                        best = q; bd2 = d2;
+                    }
                 }
             }
         }
@@ -3252,7 +3524,18 @@ SIM_KERNELS[SIM_KERNEL_DRIVEBY] = function (R, P, chunk) {
             if (bx0 <= bx1 && by0 <= by1 && HSS[o + (by1 + 1) * stride + bx1 + 1] - HSS[o + by0 * stride + bx1 + 1] - HSS[o + (by1 + 1) * stride + bx0] + HSS[o + by0 * stride + bx0] <= 0) continue;
         }
         let bestT = -1, bestR = 9, bestD = Infinity;
-        for (let gy = y0; gy <= y1 && !unknown; gy++) for (let gx = x0, tt = gy * W + x0; gx <= x1; gx++, tt++) {
+        // (Row by row as before; a block of the row with no hostile
+        // structure (mv.hstruct) is passed over whole: same order, same
+        // answer, without reading its tiles.)
+        const so = owner * plane;
+        for (let gy = y0; gy <= y1 && !unknown; gy++) for (let gx = x0, tt = gy * W + x0, by = Math.floor(gy / Bk); gx <= x1; gx++, tt++) {
+            if (HSS && (gx === x0 || gx % Bk === 0)) {
+                const bx = Math.floor(gx / Bk);
+                if (bx < bc && by < br && HSS[so + (by + 1) * stride + bx + 1] - HSS[so + by * stride + bx + 1] - HSS[so + (by + 1) * stride + bx] + HSS[so + by * stride + bx] <= 0) {
+                    const last = Math.min(x1, (bx + 1) * Bk - 1);
+                    tt += last - gx; gx = last; continue;
+                }
+            }
             const cls = SCLS[tt];
             if (cls <= 0) continue;
             const rank = cls === 1 ? 0 : cls === 2 ? 2 : 3;
@@ -3720,7 +4003,31 @@ function _snapOrderMix(i, id) {
     h = Math.imul(h ^ (h >>> 15), 3266489917);
     return h ^ (h >>> 13);
 }
+// One column value into a unit's column hash: integers (the integer
+// columns always), and numbers of the Float32 columns (an integer value as
+// one, NaN, else its bits).
+function _snapMixI(h, kc, x) { return (h + Math.imul(Math.imul(kc ^ x, 16777619), 2654435761)) | 0; }
+function _snapMixF(h, kc, x) {
+    let v;
+    if ((x | 0) === x && (x !== 0 || 1 / x > 0)) v = Math.imul(kc ^ x, 16777619);
+    else if (x !== x) v = kc ^ 0x7ff8;
+    else { _snapKF64[0] = x; v = Math.imul(Math.imul(kc ^ _snapKI32[0], 16777619) ^ _snapKI32[1], 0x5bd1e995); }
+    return (h + Math.imul(v, 2654435761)) | 0;
+}
+// (Its Rust twin's arrays: wasm/src/lib.rs snap_region; the status timers
+// through a pointer table, snap.stp.)
+const _simSnapW = _simWK(['unit.live', 'unit.dead', 'unit.x', 'unit.y', 'unit.id', 'ix.slots', 'snap.kc', 'unit.owner', 'unit.vx', 'unit.vy', 'unit.energy', 'unit.commandState',
+    'unit.attackTimer', 'unit.attackFlash', 'snap.stp', 'snap.reg', 'snap.hc', 'snap.pr', 'snap.ph', 'snap.rl', 'snap.nl', 'snap.nu', 'snap.cc', 'snap.ord']);
 SIM_KERNELS[SIM_KERNEL_SNAP_REGION] = function (R, P, chunk) {
+    // (The slice with its sums, P[10] 1: the Rust kernel, its lists per job.)
+    if (P[10] === 1 && P[12] === 1 && _simWasmOk(R)) {
+        const A = _simWPtrs(_simSnapW);
+        if (A !== null) {
+            _simWasmX.snap_region(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10], A[11], A[12], A[13], A[14],
+                A[15], A[16], A[17], A[18], A[19], A[20], A[21], A[22], A[23], P[0] | 0, P[11] | 0, P[1] | 0, P[2], P[3] | 0, P[4] | 0, P[6] | 0, P[7] | 0, P[9] | 0, chunk);
+            return;
+        }
+    }
     const SL = R['ix.slots'], X = R['unit.x'], Y = R['unit.y'], out = R['snap.reg'], ts = P[2];
     const HC = R['snap.hc'], KC = R['snap.kc'];
     const acc = P[5] === 1, ACC = R['snap.acc'], STAMP = R['snap.stamp'], LIST = R['snap.list'], ROTL = R['snap.rot'], NOSL = R['snap.noslot'], CNT = R['snap.cnt'], ID = R['unit.id'];
@@ -3746,15 +4053,15 @@ SIM_KERNELS[SIM_KERNEL_SNAP_REGION] = function (R, P, chunk) {
             if (!LIVE[s] || DEAD[s]) continue;
             const r = Math.floor(Y[s] / ts) * 1024 + Math.floor(X[s] / ts);
             if (slices > 0 && r % slices !== slice) continue;
-            let h = 0;
-            for (let k = 0; k < cols.length; k++) {
-                const x = cols[k][s], kc = KC[k];
-                let v;
-                if ((x | 0) === x && (x !== 0 || 1 / x > 0)) v = Math.imul(kc ^ x, 16777619);
-                else if (x !== x) v = kc ^ 0x7ff8;
-                else { _snapKF64[0] = x; v = Math.imul(Math.imul(kc ^ _snapKI32[0], 16777619) ^ _snapKI32[1], 0x5bd1e995); }
-                h = (h + Math.imul(v, 2654435761)) | 0;
-            }
+            // (Column by column, each read at its own site: one loop over
+            // the columns of mixed array types was megamorphic, most of the
+            // hash's time. The same values as before.)
+            const C = cols;
+            let h = _snapMixI(0, KC[0], C[0][s]);
+            h = _snapMixF(h, KC[1], C[1][s]); h = _snapMixF(h, KC[2], C[2][s]); h = _snapMixF(h, KC[3], C[3][s]); h = _snapMixF(h, KC[4], C[4][s]); h = _snapMixF(h, KC[5], C[5][s]);
+            h = _snapMixI(h, KC[6], C[6][s]); h = _snapMixI(h, KC[7], C[7][s]); h = _snapMixF(h, KC[8], C[8][s]); h = _snapMixI(h, KC[9], C[9][s]);
+            h = _snapMixI(h, KC[10], C[10][s]); h = _snapMixI(h, KC[11], C[11][s]); h = _snapMixI(h, KC[12], C[12][s]); h = _snapMixI(h, KC[13], C[13][s]);
+            h = _snapMixI(h, KC[14], C[14][s]); h = _snapMixI(h, KC[15], C[15][s]); h = _snapMixI(h, KC[16], C[16][s]); h = _snapMixI(h, KC[17], C[17][s]);
             HC[s] = h; out[s] = r;
             if (!(r >= 0 && r < rmax)) { NOSL[Atomics.add(CNT, 2, 1)] = -(s + 1); continue; }
             if (Atomics.exchange(STAMP, r, stamp) !== stamp) LIST[Atomics.add(CNT, 0, 1)] = r;
@@ -3953,6 +4260,10 @@ SIM_KERNELS[SIM_KERNEL_ACQ_SNAP] = function (R, P, chunk) {
     const RNG = R['unit.cbRange'], ID = R['unit.id'], ACQB = R['unit.acqB'], TID = R['acq.tid'], SOUT = R['acq.sout'];
     const SX = R['acq.x'], SY = R['acq.y'], SO = R['acq.own'], SF = R['acq.flags'], SC = R['acq.cmd'], SR = R['acq.rng'], SI = R['acq.id'], OUTA = R['acq.out'];
     const absent = P[2], cmdAtk = P[3];
+    // (The combat brain's: its instruction now, its range in area steps;
+    // flag 8: a worker or a unit that deals no damage.)
+    const UCM = R['unit.cmMode'], UCT = R['unit.cmT'], UCTID = R['unit.cmTId'], UWK = R['unit.isWk'], ADMG = R['unit.atkDmg'], RANGEK = R['unit.mvRangeK'];
+    const SCM = R['acq.cm'], SCT = R['acq.ct'], SCTID = R['acq.ctid'], SRK = R['acq.rk'];
     for (let s = chunk * P[1], end = Math.min(P[0], s + P[1]); s < end; s++) {
         SX[s] = X0[s]; SY[s] = Y0[s]; SO[s] = OWN[s]; SC[s] = CMD[s]; SR[s] = RNG[s]; SI[s] = ID[s]; OUTA[s] = -2;
         // (1 dead, 2 absent from the index, 4 attacking a unit: its look's
@@ -3961,7 +4272,9 @@ SIM_KERNELS[SIM_KERNEL_ACQ_SNAP] = function (R, P, chunk) {
         // finds something for it: one left as it was could keep a result from
         // before a restore that set the clock back, with a stamp equal to a
         // later commit's.
-        SF[s] = (DEAD[s] ? 1 : 0) | (SEP[s] === absent ? 2 : 0) | (CMD[s] === cmdAtk && !ACQB[s] ? 4 : 0);
+        SF[s] = (DEAD[s] ? 1 : 0) | (SEP[s] === absent ? 2 : 0) | (CMD[s] === cmdAtk && !ACQB[s] ? 4 : 0) | (UWK[s] || !(ADMG[s] > 0) ? 8 : 0)
+            | (P[4] === 1 && CMD[s] === P[5] && !UWK[s] && ADMG[s] > 0 ? 16 : 0);
+        SCM[s] = UCM[s]; SCT[s] = UCT[s]; SCTID[s] = UCTID[s]; SRK[s] = RANGEK[s];
         if (!DEAD[s]) { OUTA[s] = -1; TID[s] = 0; SOUT[s] = -1; }
     }
 };
@@ -4019,14 +4332,14 @@ SIM_KERNELS[SIM_KERNEL_ACQ_SCAN] = function (R, P, chunk) {
         const fl = FLG[s];
         if (fl & 7) continue;
         const cmd = CMD[s];
-        if (cmd !== cmdIdle && cmd !== cmdAM && cmd !== cmdAtk) continue;
+        if (cmd !== cmdIdle && cmd !== cmdAM && cmd !== cmdAtk && (fl & 16) === 0) continue;
         const owner = OWN[s] | 0, r = RNG[s];
         if (!(owner >= 0 && owner < players) || !(r > 0)) continue;
         const cbase = owner * A;
         const foe = owner < 8 ? (0xFF ^ (1 << owner)) : 0xFF;
         OUTA[s] = -1; TID[s] = 0; SOUT[s] = -1;
         const x = X[s], y = Y[s], cx = Math.floor(x / cws), cy = Math.floor(y / cws);
-        if (cmd !== cmdAtk) SOUT[s] = _simAcqStructure(SCLS, SOWN, HSSn, AG, COVF, cbase, owner, x, y, r, tile, GW, GH, B, bc, br, stride, plane);
+        if (cmd === cmdIdle || cmd === cmdAM) SOUT[s] = _simAcqStructure(SCLS, SOWN, HSSn, AG, COVF, cbase, owner, x, y, r, tile, GW, GH, B, bc, br, stride, plane);
         const rt = Math.ceil(r / cws) + 1;
         // Nothing hostile in the blocks around: none.
         {

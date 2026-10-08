@@ -732,6 +732,20 @@ function _snapTickHashStatic(t, slice, allSlices, regions, push) {
     }
 }
 
+let _snapStp = null, _snapRegionsHeap = null, _snapColHashHeap = null, _snapOrdHeap = null, _snapJobsN = 0;
+function _snapMergeJobs(jobs) {
+    const R = _simParReg, CC = R['snap.cc'], PR = R['snap.pr'], PH = R['snap.ph'], RLj = R['snap.rl'], NLj = R['snap.nl'], NUj = R['snap.nu'];
+    const ACC = _snapAcc, ST = _snapAccStamp, LIST = _snapAccList, RL = _snapAccRot, NL = _snapAccNoSlot, CNT = _snapAccCnt, stamp = _snapAccStampNow;
+    let n0 = 0, n1 = 0, n2 = 0;
+    for (let j = 0; j < jobs; j++) {
+        const b = j * 8192, c0 = CC[j * 4], c1 = CC[j * 4 + 1], c2 = CC[j * 4 + 2], c3 = CC[j * 4 + 3];
+        for (let k = 0; k < c0; k++) { const r = PR[b + k]; if (ST[r] !== stamp) { ST[r] = stamp; LIST[n0++] = r; } ACC[r] = (ACC[r] + PH[b + k]) | 0; }
+        for (let k = 0; k < c1; k++) RL[n1++] = RLj[b + k];
+        for (let k = 0; k < c2; k++) NL[n2++] = NLj[b + k];
+        for (let k = 0; k < c3; k++) NL[n2++] = NUj[b + k];
+    }
+    CNT[0] = n0; CNT[1] = n1; CNT[2] = n2;
+}
 function snapTickHash(tick, allSlices = false) {
     let t = Math.floor(tick);
     let slice = ((t % SNAP_HASH_SLICES) + SNAP_HASH_SLICES) % SNAP_HASH_SLICES;
@@ -768,7 +782,7 @@ function snapTickHash(tick, allSlices = false) {
         // (By unit index, or by slot with the sums: room for either.)
         const nReg = Math.max(units.length, S.owners.length);
         if (_snapRegions.length < nReg) { _snapRegions = simSharedArray(Int32Array, nReg * 2); _snapColHash = simSharedArray(Int32Array, nReg * 2); }
-        if (!_snapColCodes) { _snapColCodes = simSharedArray(Int32Array, SNAP_HASH_UNIT_COLUMNS.length); SNAP_HASH_UNIT_COLUMNS.forEach((k, i) => { _snapColCodes[i] = _snapStrCode(k); }); simParallelBind('snap.kc', _snapColCodes); }
+        if (!_snapColCodes) { _snapColCodes = simHeapArray(Int32Array, SNAP_HASH_UNIT_COLUMNS.length); SNAP_HASH_UNIT_COLUMNS.forEach((k, i) => { _snapColCodes[i] = _snapStrCode(k); }); simParallelBind('snap.kc', _snapColCodes); }
         REG = _snapRegions; HC = allSlices ? null : _snapColHash;
         simParallelBind('ix.slots', slots); simParallelBind('snap.reg', REG); simParallelBind('snap.hc', _snapColHash);
         const P = _simParams;
@@ -791,27 +805,58 @@ function snapTickHash(tick, allSlices = false) {
             const jobs = Math.ceil(Math.max(units.length, S.owners.length) / 8192);
             if (!_snapOrdSums || _snapOrdSums.length < jobs) { _snapOrdSums = simSharedArray(Int32Array, Math.max(64, jobs * 2)); simParallelBind('snap.ord', _snapOrdSums); }
             P[10] = 1;
+            // (The Rust kernel's per-job lists: room for every slot / unit.)
+            const room = jobs * 8192;
+            P[12] = 0;
+            if (typeof simWasmActive === 'function' && simWasmActive()) {
+                for (const nm of ['snap.pr', 'snap.ph', 'snap.rl', 'snap.nl', 'snap.nu']) { const a = _simParReg[nm]; if (!a || a.length < room) simParallelBind(nm, simHeapArray(Int32Array, simReserveCap(room))); }
+                if (!_simParReg['snap.cc'] || _simParReg['snap.cc'].length < jobs * 4) simParallelBind('snap.cc', simHeapArray(Int32Array, Math.max(256, jobs * 8)));
+                if (!_snapStp) {
+                    _snapStp = simHeapArray(Int32Array, 8);
+                    simParallelBind('snap.stp', _snapStp);
+                }
+                // (The status timers' addresses, in SNAP_HASH_UNIT_COLUMNS order.)
+                const W = _simParWPtr;
+                ['teleportHideTicks', 'poisoned', 'burning', 'frozen', 'wet', 'sandy', 'watched', 'workerTransferCooldown'].forEach((k, i) => { _snapStp[i] = W['unit.' + k]; });
+                if (_snapStp.every(v => v > 0) && _snapRegions.length && _snapColHash.length) {
+                    // (snap.reg / snap.hc / snap.ord in the heap too.)
+                    if (!_snapRegionsHeap || _snapRegionsHeap.length < _snapRegions.length) {
+                        _snapRegionsHeap = simHeapArray(Int32Array, _snapRegions.length); _snapColHashHeap = simHeapArray(Int32Array, _snapRegions.length);
+                    }
+                    if (!_snapOrdHeap || _snapOrdHeap.length < jobs) _snapOrdHeap = simHeapArray(Int32Array, Math.max(64, jobs * 2));
+                    REG = _snapRegionsHeap; HC = _snapColHashHeap; _snapOrdSums = _snapOrdHeap;
+                    simParallelBind('snap.reg', REG); simParallelBind('snap.hc', HC); simParallelBind('snap.ord', _snapOrdSums);
+                    P[12] = 1;
+                }
+            }
         } else P[10] = 0;
-        const jobsN = Math.ceil((P[10] === 1 ? Math.max(units.length, S.owners.length) : units.length) / 8192);
+        // (The Rust kernel visits the slice's positions only: a tenth.)
+        const jobsN = P[12] === 1 ? Math.max(1, Math.ceil(Math.ceil(units.length / SNAP_HASH_SLICES) / 8192)) : Math.ceil((P[10] === 1 ? Math.max(units.length, S.owners.length) : units.length) / 8192);
+        _snapJobsN = jobsN;
         if (P[10] === 1 && typeof simParallelBackground === 'function') {
             // (In the background: the buildings', drops', reservations' and
             // grid's parts are hashed meanwhile; taken below.)
-            const B = simParallelStageParams(0, 0);
+            // (Its own lane: lane 0 holds the next tick's separation, which a
+            // post there waited for, run by this thread.)
+            const B = simParallelStageParams(SIM_LANE_HASH, 0);
             B.fill(0);
-            for (let k = 0; k <= 11; k++) B[k] = P[k];
-            simParallelBackground(SIM_KERNEL_SNAP_REGION, jobsN, 0);
+            for (let k = 0; k <= 12; k++) B[k] = P[k];
+            simParallelBackground(SIM_KERNEL_SNAP_REGION, jobsN, SIM_LANE_HASH);
             kernelPending = true;
         } else simParallelRun(SIM_KERNEL_SNAP_REGION, jobsN);
     }
     // The parts without the units (while the kernel runs).
     _snapTickHashStatic(t, slice, allSlices, regions, push);
-    if (kernelPending) simParallelBackgroundWait(0);
+    if (kernelPending) simParallelBackgroundWait(SIM_LANE_HASH);
+    // (The Rust kernel: its jobs' lists into the sums and lists below.)
+    const bySliceIdx = kernelPending && _simParams[12] === 1;
+    if (bySliceIdx) _snapMergeJobs(_snapJobsN);
     if (REG !== null) {
         const P = _simParams;
         if (kernelPending || (!allSlices && SNAP_HASH_KERNEL_SUMS && P[10] === 1)) {
             // The units' order: the jobs' sums, and the slice's units without a slot.
             let h = Math.imul(2166136261 ^ units.length, 16777619);
-            for (let k = 0, jobs = Math.ceil(Math.max(units.length, S.owners.length) / 8192); k < jobs; k++) h = (h + _snapOrdSums[k]) | 0;
+            for (let k = 0, jobs = bySliceIdx ? _snapJobsN : Math.ceil(Math.max(units.length, S.owners.length) / 8192); k < jobs; k++) h = (h + _snapOrdSums[k]) | 0;
             for (let k = 0, n = _snapAccCnt[2]; k < n; k++) { const i = _snapAccNoSlot[k]; if (i % SNAP_HASH_SLICES === slice && !(slots[i] >= 0)) h = (h + _snapOrderMix(i, units[i].id)) | 0; }
             unitOrderHash = h >>> 0;
         }
@@ -841,7 +886,8 @@ function snapTickHash(tick, allSlices = false) {
             let r;
             if (si >= 0) r = Math.floor(CY[si] / ts) * 1024 + Math.floor(CX[si] / ts);
             else r = Math.floor(u.y / ts) * 1024 + Math.floor(u.x / ts);
-            if ((r % SNAP_HASH_SLICES) !== slice) continue;
+            // (By position slices (the Rust kernel), every listed unit is the slice's.)
+            if (!bySliceIdx && (r % SNAP_HASH_SLICES) !== slice) continue;
             let h;
             if (si >= 0) {
                 const id = CID[si], seed = Math.imul(id, 7919) ^ 0x11, G = SNAP_HASH_OBJ_GROUPS;
@@ -2320,6 +2366,8 @@ function snapFlushHistoryCaches() {
     if (typeof separationReset === 'function') separationReset();
     // (The acquisition tier: a pending run dropped, no result until the next.)
     if (typeof acqTierReset === 'function') acqTierReset();
+    if (typeof adjacencyLaneReset === 'function') adjacencyLaneReset();
+    if (typeof combatBrainReset === 'function') combatBrainReset();
     if (typeof laserBeamsReset === 'function') laserBeamsReset();
     if (typeof workerSearchTierReset === 'function') workerSearchTierReset();
     if (typeof healerCandidatesTierReset === 'function') healerCandidatesTierReset();

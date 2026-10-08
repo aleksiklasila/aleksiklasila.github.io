@@ -45,7 +45,7 @@ function simPresentTickEnd() {
 const SIM_PRESENT_MAGIC = 0x50524553;
 const SIM_PRESENT_COLUMNS = ['id','owner','x','y','prevX','prevY','vx','vy','energy','r','commandState',
     'attackFlash','burning','poisoned','frozen','wet','sandy','watched','teleportHideTicks',
-    'workerTransferCooldown','effectiveLevel','unitLevel','live','dead','maxE','stOn'];
+    'workerTransferCooldown','effectiveLevel','unitLevel','live','dead','maxE','stOn','cmMode','cmT'];
 
 function simPresentationStop() {
     const p = _simPresentation;
@@ -57,7 +57,7 @@ function simPresentationStart() {
     simPresentationStop();
     if (!SIM_PAR_SHARED || typeof Worker !== 'function') return false;
     const base = self.SIM_WORKER_BASE || location.href;
-    const worker = new Worker(new URL('presentation_worker.js?v=20261008-mem2', base).href);
+    const worker = new Worker(new URL('presentation_worker.js?v=20261008-brain1', base).href);
     const p = _simPresentation = { worker, epoch:_simEpoch, generation:++_simPresentationGeneration,
         timer:0, job:null, meta:null, projectileJob:null, projectileAt:0,
         structures:null, cells:null, columns:null, sourceBuffer:null, strings:0, revision:0 };

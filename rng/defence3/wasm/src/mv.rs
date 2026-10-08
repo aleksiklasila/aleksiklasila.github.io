@@ -160,6 +160,10 @@ const W_HITA: usize = 142;
 const W_HITT: usize = 143;
 const W_HITC: usize = 144;
 const W_TMON: usize = 145;
+const W_CMODE: usize = 146;
+const W_CMT: usize = 147;
+const W_CTID: usize = 148;
+const W_SLAYER: usize = 149;
 /// Per navigation profile p: 8 words from W_NAV + 8p (fields, partL, partB,
 /// nb, nt, np, meta, walls).
 const W_NAV: usize = 160;
@@ -341,6 +345,11 @@ struct Mv {
     hitt: *mut i32,
     hitc: *mut i32,
     tmon: *mut u8,
+    cmode: *mut u8,
+    cmt: *const i32,
+    ctid: *const i32,
+    slayer: *const u8,
+    brain: bool,
     nav: [NavP; NAV_PROFILES],
     offn: usize,
     wkvn: usize,
@@ -544,6 +553,11 @@ impl Mv {
             hitt: p!(W_HITT),
             hitc: p!(W_HITC),
             tmon: p!(W_TMON),
+            cmode: p!(W_CMODE),
+            cmt: p!(W_CMT),
+            ctid: p!(W_CTID),
+            slayer: p!(W_SLAYER),
+            brain: rd((a as usize + 4096) as *const f64, 48) == 1.0,
             nav,
             offn: word(a, W_OFFN),
             wkvn: word(a, W_WKVN),
@@ -590,6 +604,7 @@ fn quant_div(v: f64, q: f64) -> f64 {
 fn inb(v: f64, n: i32) -> bool {
     v >= 0.0 && v < n as f64
 }
+
 
 // ---- areas ----
 /// Area a's neighbours in the CSR (none beyond it: JavaScript's undefined).
@@ -1101,6 +1116,10 @@ pub unsafe extern "C" fn mv_step(a: *const i32, s0: i32, end: i32) {
     while s < end {
         let dead = rd(m.dead, s);
         if rd(m.d0, s) != dead { wr(m.d0, s, dead); }
+        if m.brain && rd(m.cmode, s) != 0 {
+            s += 1;
+            continue;
+        }
         let on = rd(m.on, s);
         if on == 2 {
             // A parked unit before its wake tick: stands.
@@ -1365,6 +1384,86 @@ pub unsafe extern "C" fn mv_move(a: *const i32, s0: i32, end: i32, chunk: i32) {
     move_epilogue(&m, f, s0.max(0) as usize, e, chunk);
 }
 
+/// _simMoveCombat: the combat brain's instruction for slot s (cmMode bits
+/// 0-1 the move: 0 own, 1 stand, 2 toward the target; bit 4 fire). False:
+/// the unit's own move this tick (ended, or fire only).
+unsafe fn move_combat(m: &Mv, p: &MoveP, s: usize) -> bool {
+    if !(rd(m.en, s) > 0.0) || rd(m.sep, s) as f64 == p.absent || rd(m.dead, s) != 0 {
+        wr(m.cmode, s, 0);
+        wr(m.on, s, 0);
+        return false;
+    }
+    let q = rd(m.cmt, s);
+    if q < 0 || rd(m.dead, q as usize) != 0 || rd(m.id, q as usize) != rd(m.ctid, s) {
+        wr(m.cmode, s, 0);
+        return false;
+    }
+    let cm = rd(m.cmode, s);
+    if (cm & 4) != 0 && !(rd(m.at, s) > 0.0) && !m.hita.is_null() {
+        wr(m.at as *mut F32, s, rd(m.acd, s));
+        wr(m.flash, s, 8);
+        wr(m.tmon, s, 1);
+        let c = rd(m.hitc, p.chunk);
+        wr(m.hita, p.s0 + c as usize, s as i32);
+        wr(m.hitt, p.s0 + c as usize, q);
+        wr(m.hitc, p.chunk, c + 1);
+    }
+    let mv = cm & 3;
+    if mv == 0 {
+        return false;
+    }
+    let qu = q as usize;
+    let x = rd(m.x, s);
+    let y = rd(m.y, s);
+    wr(m.px, s, x);
+    wr(m.py, s, y);
+    if mv == 1 {
+        wr(m.vx, s, 0.0);
+        wr(m.vy, s, 0.0);
+        wr(m.out, s, 1);
+        return true;
+    }
+    let dx = rd(m.x0, qu) - x;
+    let dy = rd(m.y0, qu) - y;
+    let d = sqrt(dx * dx + dy * dy);
+    let mut spd = rd(m.spd, s);
+    if rd(m.frz, s) > 0 {
+        spd *= 0.5;
+    }
+    if rd(m.snd, s) > 0 {
+        spd *= 0.5;
+    }
+    if !(d > spd) || !(spd > 0.0) {
+        wr(m.vx, s, 0.0);
+        wr(m.vy, s, 0.0);
+        wr(m.out, s, 1);
+        return true;
+    }
+    let (w, h, itile) = (m.w, m.h, m.itile);
+    let mut vx = dx / d * spd;
+    let mut vy = dy / d * spd;
+    let gx = floor(x * itile) as i32;
+    let gy = floor(y * itile) as i32;
+    if rd(m.slayer, s) != 1 {
+        let sl = flow_slide(m.wall, w, h, gx, gy, floor((x + vx) * itile), floor((y + vy) * itile));
+        if (sl & 1) != 0 {
+            vx = 0.0;
+        }
+        if (sl & 2) != 0 {
+            vy = 0.0;
+        }
+    }
+    let nx = (x + vx) as f32 as f64;
+    let ny = (y + vy) as f32 as f64;
+    let qx = if nx.is_finite() { js_round(nx * p.q) * p.iq } else { x };
+    let qy = if ny.is_finite() { js_round(ny * p.q) * p.iq } else { y };
+    wr(m.x, s, qx);
+    wr(m.y, s, qy);
+    wr(m.vx, s, vx);
+    wr(m.vy, s, vy);
+    wr(m.out, s, if floor(qx * itile) as i32 != gx || floor(qy * itile) as i32 != gy { 3 } else { 1 });
+    true
+}
 /// _simMovePre for slot s: 0 done, 1 on to the flow, 2 on to the path.
 unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
     let (t, w, h, tile, itile) = (m.t, m.w, m.h, m.tile, m.itile);
@@ -1378,6 +1477,11 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
         return 0;
     }
     wr(m.out, s, 0);
+    // (An instruction of the combat brain: followed in O(1); see the
+    // JavaScript twin, _simMoveCombat.)
+    if m.brain && rd(m.cmode, s) != 0 && move_combat(m, p, s) {
+        return 0;
+    }
     let on = rd(m.on, s);
     if on == 0 {
         return 0;
@@ -1667,7 +1771,7 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
         }
     }
     let atk = (f & 16) != 0;
-    let mut db_look = !atk && (f & 1) != 0 && (tw & 1) == 0;
+    let mut db_look = !m.brain && !atk && (f & 1) != 0 && (tw & 1) == 0;
     let at = rd(m.at, s);
     if db_look {
         if !(rd(m.area, s) >= 0) {
@@ -1683,7 +1787,7 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
             db_look = false;
         }
     }
-    if if atk { rem64(ts, p.acq_t) == 0 || (tw & 3) == 0 } else { db_look } {
+    if if atk { !m.brain && (rem64(ts, p.acq_t) == 0 || (tw & 3) == 0) } else { db_look } {
         let (x0, y0, x1, y1);
         if atk {
             let r = rd(m.reach, s) as f64;
@@ -2426,6 +2530,33 @@ unsafe fn move_epilogue(m: &Mv, f: *const f64, b0: usize, end: usize, chunk: i32
     wr(m.postc, chunk, cnt as i32);
 }
 
+/// A drive-by look's candidate q (the JavaScript twin's cheap checks): its
+/// squared distance, or None.
+const DB_CANDS: usize = 64;
+#[inline(always)]
+unsafe fn db_candidate(m: &Mv, q: i32, owner: i32, x: f64, y: f64, x0: i32, y0: i32, x1: i32, y1: i32, tile: f64, w: i32) -> Option<f64> {
+    if q < 0 || rd(m.dead, q as usize) != 0 || rd(m.own, q as usize) == owner {
+        return None;
+    }
+    let qu = q as usize;
+    let tx = rd(m.x0, qu);
+    let ty = rd(m.y0, qu);
+    let qgx = floor(tx / tile);
+    let qgy = floor(ty / tile);
+    // (Not numbers: no area there, skipped as in JavaScript.)
+    if !(qgx >= x0 as f64 && qgy >= y0 as f64 && qgx <= x1 as f64 && qgy <= y1 as f64) {
+        return None;
+    }
+    let a = rd(m.ag, (qgy as i32 * w + qgx as i32) as usize);
+    if !covered(m, owner, a) {
+        return None;
+    }
+    let dx = tx - x;
+    let dy = ty - y;
+    Some(dx * dx + dy * dy)
+}
+
+
 /// SIM_KERNEL_DRIVEBY over slots s0..end.
 #[no_mangle]
 pub unsafe extern "C" fn mv_driveby(a: *const i32, s0: i32, end: i32) {
@@ -2508,18 +2639,44 @@ pub unsafe extern "C" fn mv_driveby(a: *const i32, s0: i32, end: i32) {
                 continue;
             }
         }
+        // The nearest enemy unit in range (then the lower id): candidates
+        // listed, then range-checked nearest first; over DB_CANDS, the scan
+        // again range-checking each new best. See the JavaScript twin.
         let mut best: i32 = -1;
-        let mut bd2 = f64::INFINITY;
         let mut unknown = false;
         if x0 <= x1 && y0 <= y1 {
             let cx0 = floor(x0 as f64 / cs as f64) as i32;
             let cy0 = floor(y0 as f64 / cs as f64) as i32;
             let cx1 = (cw - 1).min(floor(x1 as f64 / cs as f64) as i32);
             let cy1 = (ch - 1).min(floor(y1 as f64 / cs as f64) as i32);
+            // (Each cell's owner mask, 8 cells at a time as one u64: runs
+            // with no foe bit are passed over whole. Same cells, same order.)
+            let rep = (foe as u64).wrapping_mul(0x0101_0101_0101_0101);
+            let mut cqa = [0i32; DB_CANDS];
+            let mut cda = [0f64; DB_CANDS];
+            // (Unchecked: indices stay under DB_CANDS; no panic paths in the module.)
+            let cq = cqa.as_mut_ptr();
+            let cd = cda.as_mut_ptr();
+            let mut nc = 0usize;
+            let mut over = false;
             let mut cy = cy0;
-            'rows: while cy <= cy1 {
+            'scan: while cy <= cy1 {
                 let mut cx = cx0;
                 while cx <= cx1 {
+                    if !om.is_null() {
+                        while cx + 7 <= cx1 {
+                            let hit = (om.add((cy * cw + cx) as usize) as *const u64).read_unaligned() & rep;
+                            if hit == 0 {
+                                cx += 8;
+                                continue;
+                            }
+                            cx += (hit.trailing_zeros() / 8) as i32;
+                            break;
+                        }
+                        if cx > cx1 {
+                            break;
+                        }
+                    }
                     let ck = (cy * cw + cx) as usize;
                     cx += 1;
                     if rd(m.rst, ck) != ep || (!om.is_null() && (rd(om, ck) & foe) == 0) {
@@ -2531,41 +2688,89 @@ pub unsafe extern "C" fn mv_driveby(a: *const i32, s0: i32, end: i32) {
                     while e < e1 {
                         let q = rd(m.es, e as usize);
                         e += 1;
-                        if q < 0 || rd(m.dead, q as usize) != 0 || rd(m.own, q as usize) == owner {
-                            continue;
-                        }
-                        let qu = q as usize;
-                        let tx = rd(m.x0, qu);
-                        let ty = rd(m.y0, qu);
-                        let qgx = floor(tx / tile);
-                        let qgy = floor(ty / tile);
-                        // (Not numbers: no area there, skipped as in JavaScript.)
-                        if !(qgx >= x0 as f64 && qgy >= y0 as f64 && qgx <= x1 as f64 && qgy <= y1 as f64) {
-                            continue;
-                        }
-                        let a = rd(m.ag, (qgy as i32 * w + qgx as i32) as usize);
-                        if !covered(m, owner, a) {
-                            continue;
-                        }
-                        let r = if whole { in_area_range(m, x, y, tx, ty, k) } else { in_attack_range(m, pad, su, qu, x, y, tx, ty, k) };
-                        if r < 0 {
-                            unknown = true;
-                            break 'rows;
-                        }
-                        if r != 1 {
-                            continue;
-                        }
-                        let dx = tx - x;
-                        let dy = ty - y;
-                        let d2 = dx * dx + dy * dy;
-                        let best_id = if best >= 0 { rd(m.id, best as usize) } else { 0 };
-                        if d2 < bd2 || (d2 == bd2 && rd(m.id, qu) < best_id) {
-                            best = q;
-                            bd2 = d2;
+                        if let Some(d2) = db_candidate(m, q, owner, x, y, x0, y0, x1, y1, tile, w) {
+                            if nc == DB_CANDS {
+                                over = true;
+                                break 'scan;
+                            }
+                            *cq.add(nc) = q;
+                            *cd.add(nc) = d2;
+                            nc += 1;
                         }
                     }
                 }
                 cy += 1;
+            }
+            if !over {
+                let mut i = 0;
+                while i < nc {
+                    let mut k2 = i;
+                    let mut j = i + 1;
+                    while j < nc {
+                        let (dj, dk) = (*cd.add(j), *cd.add(k2));
+                        if dj < dk || (dj == dk && rd(m.id, *cq.add(j) as usize) < rd(m.id, *cq.add(k2) as usize)) {
+                            k2 = j;
+                        }
+                        j += 1;
+                    }
+                    core::ptr::swap(cq.add(i), cq.add(k2));
+                    core::ptr::swap(cd.add(i), cd.add(k2));
+                    let qu = *cq.add(i) as usize;
+                    let tx = rd(m.x0, qu);
+                    let ty = rd(m.y0, qu);
+                    let r = if whole { in_area_range(m, x, y, tx, ty, k) } else { in_attack_range(m, pad, su, qu, x, y, tx, ty, k) };
+                    if r < 0 {
+                        unknown = true;
+                        break;
+                    }
+                    if r == 1 {
+                        best = *cq.add(i);
+                        break;
+                    }
+                    i += 1;
+                }
+            } else {
+                let mut bd2 = f64::INFINITY;
+                let mut cy = cy0;
+                'rows: while cy <= cy1 {
+                    let mut cx = cx0;
+                    while cx <= cx1 {
+                        let ck = (cy * cw + cx) as usize;
+                        cx += 1;
+                        if rd(m.rst, ck) != ep || (!om.is_null() && (rd(om, ck) & foe) == 0) {
+                            continue;
+                        }
+                        let e0 = rd(m.rs, ck);
+                        let e1 = e0 + rd(m.rc, ck);
+                        let mut e = e0;
+                        while e < e1 {
+                            let q = rd(m.es, e as usize);
+                            e += 1;
+                            let d2 = match db_candidate(m, q, owner, x, y, x0, y0, x1, y1, tile, w) {
+                                Some(d) => d,
+                                None => continue,
+                            };
+                            let qu = q as usize;
+                            let best_id = if best >= 0 { rd(m.id, best as usize) } else { 0 };
+                            if !(d2 < bd2 || (d2 == bd2 && rd(m.id, qu) < best_id)) {
+                                continue;
+                            }
+                            let tx = rd(m.x0, qu);
+                            let ty = rd(m.y0, qu);
+                            let r = if whole { in_area_range(m, x, y, tx, ty, k) } else { in_attack_range(m, pad, su, qu, x, y, tx, ty, k) };
+                            if r < 0 {
+                                unknown = true;
+                                break 'rows;
+                            }
+                            if r != 1 {
+                                continue;
+                            }
+                            best = q;
+                            bd2 = d2;
+                        }
+                    }
+                    cy += 1;
+                }
             }
         }
         if unknown {
@@ -2596,7 +2801,19 @@ pub unsafe extern "C" fn mv_driveby(a: *const i32, s0: i32, end: i32) {
         'srows: while gy <= y1 {
             let mut gx = x0;
             let mut tt = gy * w + x0;
+            let by = idiv(gy, bk);
             while gx <= x1 {
+                // (A block of the row with no hostile structure: passed
+                // over whole; see the JavaScript twin.)
+                if !m.hss.is_null() && (gx == x0 || irem(gx, bk) == 0) {
+                    let bx = idiv(gx, bk);
+                    if bx < bc && by < br && box_sum(m.hss, owner as i64 * plane, stride, bx as i64, by as i64, bx as i64, by as i64) <= 0 {
+                        let last = x1.min((bx + 1) * bk - 1);
+                        tt += last - gx + 1;
+                        gx = last + 1;
+                        continue;
+                    }
+                }
                 let (cgx, ctt) = (gx, tt);
                 gx += 1;
                 tt += 1;

@@ -122,6 +122,31 @@ Float32 snapshot.
 - Not yet run: the 5-round suite to completion, CHAOS_SIM_EVAL threshold-0
   variants, Edge (render/visibility modes), 800k and the helper-count matrix.
 
+## Third pass (compute, unit pass)
+
+- Object area-range checks (`isWorldTargetWithinAreaRange`, ~1,300 a tick)
+  use the kernels' twin (`simAreaRangeFast`: flat area grid + CSR graph, up
+  to 2 steps), general path above: unit pass 30.4 -> 26.0 ms.
+- Drive-by look (JS + Rust): candidates listed (up to 64) and range-checked
+  nearest first; Rust scans owner masks 8 cells at a time (u64 SWAR); the
+  structure search skips blocks with no hostile structure. Same answers
+  (kernel/object equivalence, drive-by test, host wasm vs guest JS lockstep:
+  0 desyncs). Wall time stayed ~4 ms: the look's cost is elsewhere (it is
+  58 ms CPU without helpers, the largest kernel by CPU); left for later.
+- Tried and removed: a per-tick packed entry table for the looks (0.9 ms to
+  build, more than it saved).
+- 400k ACTIVE+BATTLE: mean ~100 ms, p50 ~91 ms (from 105.7 / 96.9).
+- KTIME in tickbench counts setup ticks too: use KTIMETICK for kernel walls.
+
+Next: BRAIN_OFF_MAIN_THREAD_PLAN.md (the user's direction: only motor
+kernels on the main thread, every decision on helper lanes).
+
+## Continued in BRAIN_OFF_MAIN_THREAD_PLAN.md
+
+From 2026-10-08 the work follows the user's direction: no brains on the
+main thread (motor kernels only, decisions on helper lanes). Progress,
+results and next steps are kept there; 400k mean is 76.6 ms (p50 69.7).
+
 ## Remaining column candidates (by likely traffic, every unit every tick)
 
 1. x0/y0 pass-start copy (16 B/unit/tick through ix.slots) and prevX/prevY

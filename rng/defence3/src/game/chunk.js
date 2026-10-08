@@ -23,16 +23,17 @@ function initSpatialHash() {
     // Totals per chunk and owner; the per-type counts by blocks of chunks.
     spatialUnitsComplexStridePerPlayer = 1;
     spatialUnitsComplexStridePerChunk = spatialUnitsComplexPlayerCount;
-    spatialUnitsComplex = simSharedArray(Int32Array, (CHUNKS_W * CHUNKS_H) * spatialUnitsComplexStridePerChunk);
+    // (In the wasm heap: the Rust count kernel, sp_counts.)
+    spatialUnitsComplex = simHeapArray(Int32Array, (CHUNKS_W * CHUNKS_H) * spatialUnitsComplexStridePerChunk);
     simParallelBind('spatial.cplx', spatialUnitsComplex);
     spatialTypeBlocksW = Math.ceil(CHUNKS_W / SPATIAL_TYPE_BLOCK);
     spatialTypeBlocksH = Math.ceil(CHUNKS_H / SPATIAL_TYPE_BLOCK);
     spatialTypeStridePerBlock = spatialUnitsComplexPlayerCount * spatialUnitsComplexUnitTypeCount;
-    spatialTypeCounts = simSharedArray(Int32Array, spatialTypeBlocksW * spatialTypeBlocksH * spatialTypeStridePerBlock);
+    spatialTypeCounts = simHeapArray(Int32Array, spatialTypeBlocksW * spatialTypeBlocksH * spatialTypeStridePerBlock);
     simParallelBind('spatial.types', spatialTypeCounts);
     spatialBlockCols = Math.ceil(CHUNKS_W / SPATIAL_BLOCK_SIZE);
     spatialBlockRows = Math.ceil(CHUNKS_H / SPATIAL_BLOCK_SIZE);
-    spatialBlockCounts = simSharedArray(Int32Array, spatialBlockCols * spatialBlockRows * spatialUnitsComplexPlayerCount);
+    spatialBlockCounts = simHeapArray(Int32Array, spatialBlockCols * spatialBlockRows * spatialUnitsComplexPlayerCount);
     simParallelBind('ix.complex', spatialUnitsComplex); simParallelBind('ix.bcount', spatialBlockCounts);
 }
 

@@ -478,6 +478,9 @@ function getGridCellsWithinDistanceOfSources(sources, distance) {
 // a source at another: any source window area counts, the target's own tile
 // decides its area.
 function isWorldTargetWithinAreaRange(sourceX, sourceY, targetX, targetY, maxDistance) {
+    // (Up to 2 steps: the kernels' answer, the same one, without the maps.)
+    const fast = typeof simAreaRangeFast === 'function' ? simAreaRangeFast(Number(sourceX), Number(sourceY), Number(targetX), Number(targetY), maxDistance) : -1;
+    if (fast >= 0) return fast === 1;
     let targetAreaId = getAreaIdAtWorld(targetX, targetY);
     if (targetAreaId < 0) return false;
     for (let source of getSourceAreaIdsAtWorld(sourceX, sourceY)) {

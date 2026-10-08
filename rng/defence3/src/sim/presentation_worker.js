@@ -1,5 +1,5 @@
 "use strict";
-importScripts('sim_frame.js?v=20261008-mem2','sim_frame_world.js?v=20261021-x');
+importScripts('sim_frame.js?v=20261008-brain1','sim_frame_world.js?v=20261021-x');
 const PRESENT_MAGIC=0x50524553;
 let source=null, meta=null, epoch=0, generation=0, latest=null, scheduled=false, strings=[''], ready=false;
 let structure=null, structureRevision=-1, sentStructureRevision=-1, cells=null, oldCells=null;
@@ -65,6 +65,11 @@ let fillChanged=false;
 // variation: smooth before prompt, the user's choice); VIS_SNAP:
 // a gap past which it is drawn at the simulation's position at once.
 const vis={x:null,y:null,id:null}, VIS_FOLLOW=.35, VIS_SNAP=64;
+// Facing (presentation only: the simulation keeps none): toward the unit's
+// fire target (the combat brain's, cmMode bit 4) when it has one, else its
+// movement, else as it was; turning VIS_TURN of the way a frame, so a few
+// ticks' change of mind is not a snap.
+const face={a:null,id:null}, VIS_TURN=.3, TAU=Math.PI*2;
 function fillUnits(F,C,meta,n,player,areaUnit,phase0,prate) {
     let count=0, changed=false;
     const L=last, FID=F.id, FORD=F.order, CID=C.id, CLIVE=C.live, CDEAD=C.dead, MID=meta.id;
@@ -128,7 +133,20 @@ function fillUnits(F,C,meta,n,player,areaUnit,phase0,prate) {
             MO[s]=flash?1:moving?0:7;ST[s]=flash?1:moving?0:3;AM[s]=moving || flash ? 1 : .7;
         }
     }
-    {const D=F.facing,VX=F.vx,VY=F.vy;for(let s=0;s<n;s++) D[s]=Math.atan2(VX[s],VY[s] || .0001);}
+    {
+        if (!face.a || face.a.length<F.x.length) {const c=F.x.length;face.a=new Float32Array(c);face.id=new Int32Array(c).fill(-1);}
+        const D=F.facing, VX=F.vx, VY=F.vy, CM=C.cmMode, CT=C.cmT, SX=mot.x, SY=mot.y, FA=face.a, FI=face.id;
+        for (let s=0;s<n;s++) {
+            const id=FID[s];
+            if (id<0) {FI[s]=-1;continue;}
+            let want=NaN;
+            if (CM && (CM[s]&4)) {const q=CT[s];if (q>=0 && q<n) {const dx=SX[q]-SX[s], dy=SY[q]-SY[s];if (dx || dy) want=Math.atan2(dx,dy);}}
+            if (want!==want) {const vx=VX[s], vy=VY[s];if (vx*vx+vy*vy>1e-6) want=Math.atan2(vx,vy);}
+            let f=FI[s]===id ? FA[s] : (want===want ? want : 0);
+            if (want===want) {let d=want-f;d-=Math.round(d/TAU)*TAU;f+=d*VIS_TURN;}
+            FA[s]=f;FI[s]=id;D[s]=f;
+        }
+    }
     {const D=F.phase,I=F.id;for(let s=0;s<n;s++) D[s]=phase0+I[s]*2.399;}
     F.prate.fill(prate,0,n);F.sig.fill(0,0,n);
     // The simulation may recycle a slot during the scan: dropped rather than

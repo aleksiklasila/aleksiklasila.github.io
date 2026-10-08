@@ -977,6 +977,8 @@ class Unit {
     }
 
     tryDriveByAttack() {
+        // (The combat brain fires on the move: cmMode 3.)
+        if (SIM_COMBAT_BRAIN && !this.workerState) return;
         if (this.workerState || this.attackTimer > 0 || this.preComputed.attackDamage <= 0) return;
         // Scanning on the move is staggered to every other tick (by unit id):
         // a ready shot waits at most one tick.
@@ -2127,6 +2129,8 @@ function _issueRetaliationPath(unit, targetGx, targetGy, forcedAttackTarget) {
 }
 
 function tryAutoRetaliateOnHostileDamage(unit, attacker, lastKnownX = null, lastKnownY = null) {
+    // (The combat brain engages: no object retaliation.)
+    if (SIM_COMBAT_BRAIN) return false;
     if (!canUnitAutoRetaliate(unit)) return false;
     if (!attacker) return false;
     if (attacker === unit) return false;
@@ -3640,6 +3644,15 @@ let _simMoveRunWallVer = -1;
 // (Bumped with every new area layout: long-range holds made under another
 // are handed back.)
 let _simAreaLayoutVer = 1;
+// isWorldTargetWithinAreaRange through the kernels' twin (_simInAreaRange
+// on the flat area grid and the CSR area graph): 1 / 0, or -1 where that
+// does not work it out (over 2 steps): then the general path.
+function simAreaRangeFast(x, y, tx, ty, k) {
+    if (!(k >= 0 && k <= 2) || k !== Math.floor(k) || typeof _simInAreaRange !== 'function') return -1;
+    _simAreaCsr();
+    const R = _simParReg;
+    return _simInAreaRange(_spatialAreaGridFlat(), R['area.off'], R['area.nb'], GRID_W, GRID_H, TILE, x, y, tx, ty, k);
+}
 function _simAreaCsr() {
     if (_simAreaCsrFor === areaNeighborIds) return;
     _simAreaLayoutVer = (_simAreaLayoutVer + 1) | 0;
@@ -3737,7 +3750,7 @@ function simMoveRun() {
     // (Flow units between steers first, a small kernel of their own; the
     // movement kernel does the rest.)
     const stepK = SIM_MOVE_STEP_KERNEL && typeof SIM_KERNEL_MOVE_STEP === 'number';
-    P[46] = stepK ? 1 : 0;
+    P[46] = stepK ? 1 : 0; P[48] = SIM_COMBAT_BRAIN ? 1 : 0;
     // The fast step and remaining movement share each scheduled chunk.
     simParallelRun(SIM_KERNEL_MOVE, chunks);
     _simMoveRunWallVer = _simMoveWallVer; _simDead0Tick = gameTime;
@@ -3852,6 +3865,8 @@ function _combatScanHit(u, range) {
     const c = u._us;
     if (!c) return null;
     const s = u._si;
+    // (The combat brain engages combat units: not their objects.)
+    if (SIM_COMBAT_BRAIN && !c.isWk[s]) return null;
     if (c.cbTick[s] !== _acqCommitTick || c.cbRangeS[s] !== range) return null;
     const q = c.cbT[s];
     if (q < 0) return null;
@@ -3894,7 +3909,7 @@ function combatScanRun() {
     }
     simParallelRun(SIM_KERNEL_COMBAT_SCAN, Math.ceil(n / 2048));
     // The drive-by looks (SIM_KERNEL_DRIVEBY).
-    if (typeof SIM_KERNEL_DRIVEBY === 'number' && _simStructCls) {
+    if (!SIM_COMBAT_BRAIN && typeof SIM_KERNEL_DRIVEBY === 'number' && _simStructCls) {
         _simAreaCsr(); simMoveWallGrid();
         P[0] = n; P[1] = 2048; P[2] = gameTime; P[3] = CHUNKS_W; P[4] = CHUNKS_H; P[5] = TILE; P[6] = _sxEpoch;
         P[7] = Math.min(spatialUnitsComplexPlayerCount, _visCover.players); P[8] = CMD_MOVING; P[9] = GRID_W; P[10] = GRID_H;
@@ -3918,6 +3933,9 @@ function combatScanRun() {
 // up to 2-5 ticks before, alive and the same unit still. Every peer posts
 // and commits at the same ticks; a resync drops a pending run on all.
 const ACQ_LANE = typeof SIM_LANE_T10 === 'number' ? SIM_LANE_T10 : 2;
+// Combat decisions on the helpers (BRAIN_OFF_MAIN_THREAD_PLAN.md, stage 1):
+// the brain's instructions drive engaged units in the movement kernel.
+let SIM_COMBAT_BRAIN = true, _acqBrain = false;
 let _acqCommitTick = -1, _acqStage = 0, _acqStepTick = -1, _acqN = 0;
 const _acq = { cap: 0, chunks: 0, entries: 0, A: 0, cover: null, hs: null };
 function _acqTierStep() {
@@ -3932,6 +3950,11 @@ function _acqTierStep() {
 // (it was posted a tick before; done by now as a rule).
 function acqTierIndexWait() {
     if (_acqStage === 1) simParallelBackgroundWait(ACQ_LANE);
+}
+// (A resync: every peer's combat instructions dropped on the same tick.)
+function combatBrainReset() {
+    const S = _simUnitState;
+    if (S) S.columns.cmMode.fill(0);
 }
 function acqTierReset() {
     simParallelBackgroundWait(ACQ_LANE);
@@ -3955,10 +3978,13 @@ function _acqPost() {
         _acqArray('acq.x', Float32Array, cap); _acqArray('acq.y', Float32Array, cap); _acqArray('acq.own', Int8Array, cap); _acqArray('acq.flags', Uint8Array, cap);
         _acqArray('acq.cmd', Uint8Array, cap); _acqArray('acq.rng', Float32Array, cap); _acqArray('acq.id', Int32Array, cap);
         _acqArray('acq.out', Int32Array, cap); _acqArray('acq.tid', Int32Array, cap); _acqArray('acq.sout', Int32Array, cap);
+        // (The combat brain's: its inputs and its instructions.)
+        _acqArray('acq.cm', Uint8Array, cap); _acqArray('acq.ct', Int32Array, cap); _acqArray('acq.ctid', Int32Array, cap); _acqArray('acq.rk', Uint8Array, cap);
+        _acqArray('acq.bm', Uint8Array, cap); _acqArray('acq.bt', Int32Array, cap); _acqArray('acq.btid', Int32Array, cap);
         _acq.cap = cap;
     }
     const P = _simParams;
-    P[0] = n; P[1] = 8192; P[2] = SIM_SEP_ABSENT; P[3] = CMD_ATTACKING;
+    P[0] = n; P[1] = 8192; P[2] = SIM_SEP_ABSENT; P[3] = CMD_ATTACKING; P[4] = SIM_COMBAT_BRAIN ? 1 : 0; P[5] = CMD_MOVING;
     simParallelRun(SIM_KERNEL_ACQ_SNAP, Math.ceil(n / 8192));
     // The index, the owners per chunk and the hostile tables as they are:
     // the job reads them in place, done before the next tick's index
@@ -3991,7 +4017,18 @@ function _acqPost() {
     B[10] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; B[11] = spatialBlockCols; B[12] = spatialBlockRows; B[14] = CHUNK_SIZE;
     // (The units in the index's order: B[22], its entries B[23].)
     B[15] = GRID_W; B[16] = GRID_H; B[18] = CMD_ATTACKING; B[20] = A; B[21] = 1; B[22] = 1; B[23] = ne;
-    simParallelBackgroundChain(ACQ_LANE, [[SIM_KERNEL_ACQ_OMT, prepJobs], [SIM_KERNEL_ACQ_SCAN, Math.ceil(ne / 256)]]);
+    // Then the combat brain on the scan's results (its own copy of the area
+    // graph: the layout may change before the commit).
+    const C3 = simParallelStageParams(ACQ_LANE, 2);
+    C3.fill(0);
+    if (SIM_COMBAT_BRAIN) {
+        _simAreaCsr();
+        _acqArray('acq.aoff', Int32Array, _simParReg['area.off'].length).set(_simParReg['area.off']);
+        _acqArray('acq.anb', Int32Array, _simParReg['area.nb'].length).set(_simParReg['area.nb']);
+        C3[0] = n; C3[1] = 2048; C3[2] = CMD_IDLE; C3[3] = CMD_ATTACK_MOVING; C3[4] = TILE; C3[5] = GRID_W; C3[6] = GRID_H; C3[7] = Math.min(spatialUnitsComplexPlayerCount, np); C3[8] = A;
+    }
+    simParallelBackgroundChain(ACQ_LANE, [[SIM_KERNEL_ACQ_OMT, prepJobs], [SIM_KERNEL_ACQ_SCAN, Math.ceil(ne / 256)], [SIM_KERNEL_COMBAT_BRAIN, SIM_COMBAT_BRAIN ? Math.ceil(n / 2048) : 0]]);
+    _acqBrain = SIM_COMBAT_BRAIN;
     _acqStage = 1; _acqN = n;
 }
 function _acqCommit() {
@@ -4003,6 +4040,7 @@ function _acqCommit() {
     const n = Math.min(_acqN, S.owners.length), P = _simParams;
     P[0] = n; P[1] = 8192; P[2] = gameTime;
     simParallelRun(SIM_KERNEL_ACQ_COMMIT, Math.ceil(n / 8192));
+    if (_acqBrain) { P[0] = n; P[1] = 8192; simParallelRun(SIM_KERNEL_COMBAT_COMMIT, Math.ceil(n / 8192)); }
     _acqCommitTick = gameTime;
 }
 

@@ -298,108 +298,9 @@ function _runAdjacencyRecalculation() {
 
         let groupSize = group.length;
         for (let obj of group) {
-            let nextStacks = getThingStackedStacks(obj);
-            let nextManualStacks = getThingManualStacks(obj);
-            let actualStacks = nextStacks || 1;
-            let nextEffectiveStacks = actualStacks * groupSize * areaMult;
-            let nextPotentialStacks = Math.max(actualStacks, nextManualStacks) * groupSize * areaMult;
-            let nextPotentialLevel = stackCountToLevel(nextPotentialStacks);
-            let nextEffectiveLevel = stackCountToLevel(nextEffectiveStacks);
-            let nextIsUpgrading = !!obj.isUpgrading;
-
-            if (!passiveRefresh) {
-                if (nextEffectiveLevel < Math.max(1, Math.floor(Number(obj.effectiveLevel) || 1))) {
-                    nextIsUpgrading = false;
-                }
-
-                if (!isAutoUpgradeEnabled(obj) && nextIsUpgrading) {
-                    nextIsUpgrading = false;
-                }
-            }
-
-            // Passive area refresh should only affect adjacency-derived values.
-            if (!passiveRefresh) {
-                obj.stacks = nextStacks;
-                obj.manualStacks = nextManualStacks;
-            }
-            obj.effectiveStacks = nextEffectiveStacks;
-            obj.potentialEffectiveLevel = nextPotentialLevel;
-            // (An upgrade may come due: the workers' sites.)
-            if (obj.effectiveLevel !== nextEffectiveLevel && typeof workSiteDirty === 'function') workSiteDirty(obj.gx, obj.gy);
-            obj.effectiveLevel = nextEffectiveLevel;
-            if (!passiveRefresh) obj.isUpgrading = nextIsUpgrading;
-
-            let baseLevel = getThingBaseLevel(obj);
-            let researchedMaxLevel = getThingResearchedMaxLevel(obj);
-            let maxAutoUpgradeLevel = Math.min(obj.effectiveLevel, researchedMaxLevel);
-            if (!passiveRefresh && baseLevel < maxAutoUpgradeLevel && !obj.underConstruction && !obj.isUpgrading && isAutoUpgradeEnabled(obj)) {
-                beginUpgradeProgress(obj, baseLevel + 1);
-            }
-
-            if (!passiveRefresh) {
-                if (!obj.underConstruction && !obj.isUpgrading) {
-                    // Only set isStacking if there are remaining stacks AND they won't exceed max level
-                    if (getThingRemainingStacks(obj) > 0 && isAutoStackEnabled(obj)) {
-                        let nextStackLevel = stackCountToLevel(getThingStackedStacks(obj) + 1);
-                        let maxLevel = getThingResearchedMaxLevel(obj);
-                        obj.isStacking = nextStackLevel <= maxLevel;
-                    } else {
-                        obj.isStacking = false;
-                    }
-                    if (!obj.isStacking) obj.stackingWorkDone = 0;
-                } else if (obj.isUpgrading) {
-                    obj.isStacking = false;
-                }
-            }
-
-            // Stats follow from these (research changes reach them through
-            // the periodic refresh): members of a big group whose inputs did
-            // not change keep theirs instead of rebuilding every table.
-            // Snapshotted, so every peer skips the same members.
-            let statsSig = baseLevel + '|' + obj.effectiveLevel + '|' + nextPotentialLevel + '|' + (obj.isUpgrading ? 1 : 0)
-                + '|' + (obj.underConstruction ? 1 : 0) + '|' + obj.upgrademaxEnergy + '|' + groupSize + '|' + areaMult + '|' + obj.owner;
-            if (obj._adjStatsSig === statsSig && obj.effectiveGroupSize === groupSize && obj.effectiveAreaMult === areaMult) continue;
-            obj._adjStatsSig = statsSig;
-
-            if (obj.updateStats) {
-                obj.effectiveGroupSize = groupSize;
-                obj.effectiveAreaMult = areaMult;
-                obj.updateStats();
-                let statsType = (obj.type === 'barrack' && obj.unitType) ? ('barrack_' + obj.unitType) : obj.type;
-                if (statsType) {
-                    let baseStats = calculateItemStats(statsType, getThingBaseLevel(obj), obj.owner);
-                    let potentialStats = clonePrecomputedWithBaseMaxEnergy(baseStats, calculateItemStats(statsType, nextPotentialLevel, obj.owner), false);
-                    obj.preComputedPotential = potentialStats;
-                }
-            } else {
-                obj.effectiveGroupSize = groupSize;
-                obj.effectiveAreaMult = areaMult;
-                let statsType = (obj.type === 'barrack' && obj.unitType) ? ('barrack_' + obj.unitType) : obj.type;
-                let baseStats = calculateItemStats(statsType, getThingBaseLevel(obj), obj.owner);
-                let stats = clonePrecomputedWithBaseMaxEnergy(baseStats, calculateItemStats(statsType, obj.effectiveLevel, obj.owner), false);
-                let potentialStats = clonePrecomputedWithBaseMaxEnergy(baseStats, calculateItemStats(statsType, nextPotentialLevel, obj.owner), false);
-                obj.preComputedBase = baseStats;
-                obj.preComputedEffective = stats;
-                obj.preComputedPotential = potentialStats;
-                obj.preComputed = obj.preComputedBase;
-                if (obj.isUpgrading && obj.upgrademaxEnergy > 0) {
-                    obj.maxEnergy = Math.max(1, Math.floor(obj.upgrademaxEnergy));
-                    if (!Number.isFinite(obj.energy) || obj.energy < 1) obj.energy = 1;
-                    obj.energy = Math.min(obj.energy, obj.maxEnergy);
-                    if (stats.damage) obj.damage = stats.damage;
-                } else {
-                    let prevEnergy = Number(obj.energy);
-                    if (!Number.isFinite(prevEnergy)) prevEnergy = Number(baseStats.maxEnergy) || 1;
-                    obj.maxEnergy = baseStats.maxEnergy;
-                    if (stats.damage) obj.damage = stats.damage;
-                    obj.energy = Math.max(1, Math.min(obj.maxEnergy, Math.floor(prevEnergy)));
-                }
-                updateItemTextCache(obj);
-                if (typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(obj);
-            }
+            _adjApplyMember(obj, groupSize, areaMult, passiveRefresh);
         }
     }
-
     for (let aId of touchedAreaIds) {
         let a = getAreaById(aId);
         if (!a) continue;
@@ -426,7 +327,238 @@ function _runAdjacencyRecalculation() {
     _adjacencyLastRecalcTick = gameTime;
     _adjacencyPassiveRefreshMode = false;
 }
-const ADJACENCY_TILES_PER_TICK = 1200;
+
+// One member of an adjacency group: its stacks, levels, upgrade/stacking
+// state and stats from the group's size and area multiplier.
+function _adjApplyMember(obj, groupSize, areaMult, passiveRefresh) {
+    let nextStacks = getThingStackedStacks(obj);
+    let nextManualStacks = getThingManualStacks(obj);
+    let actualStacks = nextStacks || 1;
+    let nextEffectiveStacks = actualStacks * groupSize * areaMult;
+    let nextPotentialStacks = Math.max(actualStacks, nextManualStacks) * groupSize * areaMult;
+    let nextPotentialLevel = stackCountToLevel(nextPotentialStacks);
+    let nextEffectiveLevel = stackCountToLevel(nextEffectiveStacks);
+    let nextIsUpgrading = !!obj.isUpgrading;
+
+    if (!passiveRefresh) {
+        if (nextEffectiveLevel < Math.max(1, Math.floor(Number(obj.effectiveLevel) || 1))) {
+            nextIsUpgrading = false;
+        }
+
+        if (!isAutoUpgradeEnabled(obj) && nextIsUpgrading) {
+            nextIsUpgrading = false;
+        }
+    }
+
+    // Passive area refresh should only affect adjacency-derived values.
+    if (!passiveRefresh) {
+        obj.stacks = nextStacks;
+        obj.manualStacks = nextManualStacks;
+    }
+    obj.effectiveStacks = nextEffectiveStacks;
+    obj.potentialEffectiveLevel = nextPotentialLevel;
+    // (An upgrade may come due: the workers' sites.)
+    if (obj.effectiveLevel !== nextEffectiveLevel && typeof workSiteDirty === 'function') workSiteDirty(obj.gx, obj.gy);
+    obj.effectiveLevel = nextEffectiveLevel;
+    if (!passiveRefresh) obj.isUpgrading = nextIsUpgrading;
+
+    let baseLevel = getThingBaseLevel(obj);
+    let researchedMaxLevel = getThingResearchedMaxLevel(obj);
+    let maxAutoUpgradeLevel = Math.min(obj.effectiveLevel, researchedMaxLevel);
+    if (!passiveRefresh && baseLevel < maxAutoUpgradeLevel && !obj.underConstruction && !obj.isUpgrading && isAutoUpgradeEnabled(obj)) {
+        beginUpgradeProgress(obj, baseLevel + 1);
+    }
+
+    if (!passiveRefresh) {
+        if (!obj.underConstruction && !obj.isUpgrading) {
+            // Only set isStacking if there are remaining stacks AND they won't exceed max level
+            if (getThingRemainingStacks(obj) > 0 && isAutoStackEnabled(obj)) {
+                let nextStackLevel = stackCountToLevel(getThingStackedStacks(obj) + 1);
+                let maxLevel = getThingResearchedMaxLevel(obj);
+                obj.isStacking = nextStackLevel <= maxLevel;
+            } else {
+                obj.isStacking = false;
+            }
+            if (!obj.isStacking) obj.stackingWorkDone = 0;
+        } else if (obj.isUpgrading) {
+            obj.isStacking = false;
+        }
+    }
+
+    // Stats follow from these (research changes reach them through
+    // the periodic refresh): members of a big group whose inputs did
+    // not change keep theirs instead of rebuilding every table.
+    // Snapshotted, so every peer skips the same members.
+    let statsSig = baseLevel + '|' + obj.effectiveLevel + '|' + nextPotentialLevel + '|' + (obj.isUpgrading ? 1 : 0)
+        + '|' + (obj.underConstruction ? 1 : 0) + '|' + obj.upgrademaxEnergy + '|' + groupSize + '|' + areaMult + '|' + obj.owner;
+    if (obj._adjStatsSig === statsSig && obj.effectiveGroupSize === groupSize && obj.effectiveAreaMult === areaMult) return;
+    obj._adjStatsSig = statsSig;
+
+    if (obj.updateStats) {
+        obj.effectiveGroupSize = groupSize;
+        obj.effectiveAreaMult = areaMult;
+        obj.updateStats();
+        let statsType = (obj.type === 'barrack' && obj.unitType) ? ('barrack_' + obj.unitType) : obj.type;
+        if (statsType) {
+            let baseStats = calculateItemStats(statsType, getThingBaseLevel(obj), obj.owner);
+            let potentialStats = clonePrecomputedWithBaseMaxEnergy(baseStats, calculateItemStats(statsType, nextPotentialLevel, obj.owner), false);
+            obj.preComputedPotential = potentialStats;
+        }
+    } else {
+        obj.effectiveGroupSize = groupSize;
+        obj.effectiveAreaMult = areaMult;
+        let statsType = (obj.type === 'barrack' && obj.unitType) ? ('barrack_' + obj.unitType) : obj.type;
+        let baseStats = calculateItemStats(statsType, getThingBaseLevel(obj), obj.owner);
+        let stats = clonePrecomputedWithBaseMaxEnergy(baseStats, calculateItemStats(statsType, obj.effectiveLevel, obj.owner), false);
+        let potentialStats = clonePrecomputedWithBaseMaxEnergy(baseStats, calculateItemStats(statsType, nextPotentialLevel, obj.owner), false);
+        obj.preComputedBase = baseStats;
+        obj.preComputedEffective = stats;
+        obj.preComputedPotential = potentialStats;
+        obj.preComputed = obj.preComputedBase;
+        if (obj.isUpgrading && obj.upgrademaxEnergy > 0) {
+            obj.maxEnergy = Math.max(1, Math.floor(obj.upgrademaxEnergy));
+            if (!Number.isFinite(obj.energy) || obj.energy < 1) obj.energy = 1;
+            obj.energy = Math.min(obj.energy, obj.maxEnergy);
+            if (stats.damage) obj.damage = stats.damage;
+        } else {
+            let prevEnergy = Number(obj.energy);
+            if (!Number.isFinite(prevEnergy)) prevEnergy = Number(baseStats.maxEnergy) || 1;
+            obj.maxEnergy = baseStats.maxEnergy;
+            if (stats.damage) obj.damage = stats.damage;
+            obj.energy = Math.max(1, Math.min(obj.maxEnergy, Math.floor(prevEnergy)));
+        }
+        updateItemTextCache(obj);
+        if (typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(obj);
+    }
+}
+const ADJACENCY_TILES_PER_TICK = 1200 * 8;
+const ADJACENCY_BATCH_TICKS = 8;
+
+// ---- Adjacency on a helper lane (BRAIN_OFF_MAIN_THREAD_PLAN.md) ----
+// The main thread keeps a signature grid current (O(1) per dirty tile at
+// the post), posts the flood (SIM_KERNEL_ADJ_FLOOD) every
+// ADJACENCY_BATCH_TICKS ticks at phase 3 and takes the last post's result
+// then: its groups' members are applied (_adjApplyMember) at most
+// ADJ_APPLY_PER_TICK a tick, in order; areas' active flags at once. Every
+// peer posts, commits and applies on the same ticks; a resync drops it all
+// and marks every tile (adjacencyLaneReset).
+let ADJACENCY_LANE = true;
+const ADJ_LANE = typeof SIM_LANE_T5 === 'number' ? SIM_LANE_T5 : 3;
+const ADJ_APPLY_PER_TICK = 2000;
+const _adjL = { sig: null, sigIds: new Map(), posted: false, passive: false, paths: false, outs: 0, queue: null, qHead: 0, qLen: 0, coff: null, ctile: null, cfor: null, mul: null };
+function _adjSigCode(gx, gy) {
+    const sig = _getAdjacencySignatureAt(gx, gy);
+    if (!sig) return -1;
+    let id = _adjL.sigIds.get(sig.sigKey);
+    // (Ids: owner in the low byte, then a per-signature index; the same on
+    // every peer: interned in the order signatures are first met, which is
+    // the same ticks' same tiles everywhere.)
+    if (id === undefined) { id = ((_adjL.sigIds.size + 1) << 8) | (sig.owner & 255); _adjL.sigIds.set(sig.sigKey, id); }
+    return id;
+}
+function _adjArr(name, Type, n) {
+    let a = _simParReg[name];
+    if (!a || a.constructor !== Type || a.length < n) { a = simSharedArray(Type, simReserveCap(Math.max(1, n), 64)); simParallelBind(name, a); }
+    return a;
+}
+function adjacencyLaneReset() {
+    if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(ADJ_LANE);
+    _adjL.posted = false; _adjL.qLen = 0; _adjL.qHead = 0; _adjL.cfor = null;
+    _adjacencyDirtyAll = true; _adjacencyNeedsRecalc = true;
+}
+// Every tick: the apply queue; on the batch tick, the commit and the post.
+function adjacencyLaneStep() {
+    const L = _adjL;
+    if (L.queue && L.qHead < L.qLen) {
+        const Qt = L.queue.t, Qs = L.queue.s, Qm = L.queue.m, Qg = L.queue.g, end = Math.min(L.qLen, L.qHead + ADJ_APPLY_PER_TICK);
+        for (let i = L.qHead; i < end; i++) {
+            const t = Qt[i], gx = t % GRID_W, gy = (t - gx) / GRID_W, obj = getTileEntityRef(gx, gy);
+            // (Still that structure, with the group's signature.)
+            if (!obj || L.sig[t] !== Qg[i] || obj.gx !== gx || obj.gy !== gy) continue;
+            _adjApplyMember(obj, Qs[i], Qm[i], L.queue.passive);
+        }
+        L.qHead = end;
+    }
+    if (gameTime % ADJACENCY_BATCH_TICKS !== 3) return;
+    // The last post's result.
+    if (L.posted) {
+        simParallelBackgroundWait(ADJ_LANE);
+        L.posted = false;
+        const R = _simParReg, CNT = R['adj.ocnt'], no = CNT[0], na = CNT[2];
+        const OT = R['adj.otile'], OG = R['adj.ogrp'], GS = R['adj.gsize'], GM = R['adj.gmul'], OA = R['adj.oarea'], OACT = R['adj.oact'];
+        if (!L.queue || L.queue.t.length < no) L.queue = { t: new Int32Array(simReserveCap(no, 1024)), s: new Int32Array(simReserveCap(no, 1024)), m: new Float64Array(simReserveCap(no, 1024)), g: new Int32Array(simReserveCap(no, 1024)), passive: false };
+        const Q = L.queue, SN = R['adj.sig'];
+        // (Leftovers of the last batch: superseded.)
+        for (let i = 0; i < no; i++) { const g = OG[i], t = OT[i]; Q.t[i] = t; Q.s[i] = GS[g]; Q.m[i] = GM[g]; Q.g[i] = SN[t]; }
+        Q.passive = L.passive; L.qHead = 0; L.qLen = no;
+        let changed = false;
+        for (let i = 0; i < na; i++) {
+            const a = getAreaById(OA[i]);
+            if (!a) continue;
+            const next = OACT[i] === 1;
+            if (!L.passive && !next && a.multiplierLevel > 0) { a.multiplierLevel = 0; if (L.mul && OA[i] < L.mul.length) L.mul[OA[i]] = 0; changed = true; }
+            if (!!a.active !== next) changed = true;
+            a.active = next;
+        }
+        if (changed) dirtyAreas = true;
+        if (L.paths) _bumpPathTopologyVersion();
+    }
+    if (!_adjacencyNeedsRecalc) return;
+    // The post: the signature grid brought up to date for the dirty tiles
+    // (all of them after a reset), then its snapshot and the seeds.
+    const N = GRID_W * GRID_H;
+    if (!L.sig || L.sig.length !== N) { L.sig = new Int32Array(N).fill(-1); _adjacencyDirtyAll = true; }
+    const all = _adjacencyDirtyAll;
+    let seeds;
+    if (all) {
+        for (let gy = 0; gy < GRID_H; gy++) for (let gx = 0; gx < GRID_W; gx++) L.sig[gy * GRID_W + gx] = _adjSigCode(gx, gy);
+        seeds = [];
+        for (const ent of _activeTileEntities) if (ent && Number.isFinite(ent.gx) && Number.isFinite(ent.gy)) seeds.push(ent.gy * GRID_W + ent.gx);
+        _adjacencyDirtyTiles.clear();
+    } else {
+        seeds = _adjacencyDirtyTiles.takeFirst(ADJACENCY_TILES_PER_TICK);
+    }
+    let paths = all;
+    for (const key of seeds) {
+        const gx = key % GRID_W, gy = (key - gx) / GRID_W;
+        if (!all) L.sig[key] = _adjSigCode(gx, gy);
+        if (!paths) { const ref = getTileEntityRef(gx, gy); if (ref && _adjacencyObjAffectsPaths(ref)) paths = true; }
+    }
+    // The area tables (when the layout changed: rare).
+    const A = Array.isArray(areas) ? areas.length : 0;
+    if (L.cfor !== gridCellsByArea || !L.coff || L.coff.length < A + 1) {
+        let total = 0;
+        for (let a = 0; a < A; a++) total += Array.isArray(gridCellsByArea[a]) ? gridCellsByArea[a].length : 0;
+        L.coff = _adjArr('adj.coff', Int32Array, A + 1); L.ctile = _adjArr('adj.ctile', Int32Array, total);
+        let k = 0;
+        for (let a = 0; a < A; a++) { L.coff[a] = k; const cs = gridCellsByArea[a]; if (Array.isArray(cs)) for (const c of cs) L.ctile[k++] = c.y * GRID_W + c.x; }
+        L.coff[A] = k; L.cfor = gridCellsByArea;
+        L.mul = _adjArr('adj.mul', Int32Array, A);
+        for (let a = 0; a < A; a++) L.mul[a] = (areas[a] && areas[a].multiplierLevel) | 0;
+    }
+    // Paired cloud portals.
+    const cl = [];
+    for (const t of towers) if (t && t.baseStats && t.baseStats.isCloud && _isOperationalAdjacencyEntity(t)) {
+        const p = typeof getPairedCloudTower === 'function' ? getPairedCloudTower(t, t.owner) : null;
+        cl.push(t.gy * GRID_W + t.gx, p ? p.gy * GRID_W + p.gx : -1, t.owner & 255);
+    }
+    _adjArr('adj.sig', Int32Array, N).set(L.sig);
+    const SD = _adjArr('adj.seed', Int32Array, seeds.length);
+    for (let i = 0; i < seeds.length; i++) SD[i] = seeds[i];
+    const CLA = _adjArr('adj.cloud', Int32Array, cl.length);
+    for (let i = 0; i < cl.length; i++) CLA[i] = cl[i];
+    simParallelBind('adj.ag', _spatialAreaGridFlat());
+    // (Outputs: up to every tile once.)
+    _adjArr('adj.otile', Int32Array, N); _adjArr('adj.ogrp', Int32Array, N); _adjArr('adj.gsize', Int32Array, N); _adjArr('adj.gmul', Float64Array, N);
+    _adjArr('adj.oarea', Int32Array, Math.max(1, A)); _adjArr('adj.oact', Uint8Array, Math.max(1, A)); _adjArr('adj.ocnt', Int32Array, 4);
+    const B = _simBgParamsByLane[ADJ_LANE];
+    B.fill(0); B[0] = GRID_W; B[1] = GRID_H; B[2] = seeds.length; B[3] = cl.length / 3; B[4] = A;
+    simParallelBackground(SIM_KERNEL_ADJ_FLOOD, 1, ADJ_LANE);
+    L.posted = true; L.passive = !!_adjacencyPassiveRefreshMode; L.paths = paths;
+    _adjacencyNeedsRecalc = _adjacencyDirtyTiles.size > 0;
+    _adjacencyDirtyAll = false; _adjacencyPassiveRefreshMode = false;
+    _adjacencyLastRecalcTick = gameTime;
+}
 
 function recalculateAdjacency(forceFull = false, options = null) {
     if (forceFull && typeof forceFull === 'object') {
@@ -436,6 +568,8 @@ function recalculateAdjacency(forceFull = false, options = null) {
     if (forceFull) _adjacencyDirtyAll = true;
     _adjacencyPassiveRefreshMode = !!(options && options.passiveRefresh);
     _adjacencyNeedsRecalc = true;
+    // (The lane: marked; it takes it at its next batch.)
+    if (ADJACENCY_LANE && typeof gameStarted !== 'undefined' && gameStarted) return;
     // (During a tick: once, at its end (gameTick); outside one, now.)
     if (_adjacencyLastRecalcTick === gameTime || (typeof _inGameTick !== 'undefined' && _inGameTick)) return;
     _runAdjacencyRecalculation();
@@ -1192,6 +1326,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         addPlayerResource(playerId, 'energy', -upgradeCost);
         recordEnergyDelta(playerId, 'builder', -upgradeCost);
         area.multiplierLevel = (area.multiplierLevel || 0) + 1;
+        if (_adjL.mul && area.id >= 0 && area.id < _adjL.mul.length) _adjL.mul[area.id] = area.multiplierLevel;
         dirtyAreas = true;
         _markCombinedBgAreaDirty(aId, 1);
         for (let cp of areaCells) {
@@ -1431,8 +1566,11 @@ function destroyBuilding(building) {
     visCoverOnBuildingChanged(building);
     createExplosion(building.x, building.y, '#f44', 10);
     playSound('building_destroyed', building.x, building.y);
-    checkWinCondition();
+    // (Once a tick, at its end: a scan of the assets per destroyed building
+    // was O(buildings) each.)
+    if (typeof _inGameTick !== 'undefined' && _inGameTick) _winCheckDue = true; else checkWinCondition();
 }
+let _winCheckDue = false;
 
 
 // ============================================================
