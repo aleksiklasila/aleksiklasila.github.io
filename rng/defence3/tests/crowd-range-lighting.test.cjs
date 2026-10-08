@@ -13,55 +13,8 @@ vm.runInContext(read('src/utils/utils_common.js'),c);
 vm.runInContext(read('src/sim/sim_parallel.js'),c);
 vm.runInContext(read('src/sim/sim_unit_state.js'),c);
 vm.runInContext(src,c);
-// Run the actual separation pass of a tick (after all units moved), while
-// 100 units keep moving towards the same waypoint.
-function crowdRun() {
-    let crowd=Array.from({length:100},(_,id)=>({id,owner:0,x:500+(id%10)*2,y:500+Math.floor(id/10)*2,
-        vx:0,vy:0,r:8,unitType:'norm',dead:false,isFlying:false,_spatialKey:0,getCollisionRadius:()=>8,getCollisionLayer:()=> 'ground'}));
-    // One chunk covering the whole crowd: the pass still filters by distance.
-    c.spatialUnits=[crowd];
-    c.units=crowd;
-    vm.runInContext(`function adoptTestUnits() { for (const u of units) {
-        const saved = { ...u };
-        simUnitStateAllocate(u);
-        Object.setPrototypeOf(u, Unit.prototype);
-        for (const k of SIM_UNIT_COLUMNS) { delete u[k]; u[k] = saved[k] === undefined ? 0 : saved[k]; }
-    } } adoptTestUnits();`, c);
-    for(let tick=0;tick<180;tick++) {
-        c.gameTime=tick;
-        for(let u of crowd) {
-            u.prevX=u.x;u.prevY=u.y;
-            let dx=509-u.x,dy=509-u.y,d=Math.hypot(dx,dy);
-            if(d>8){u.vx=dx/d*2;u.vy=dy/d*2;u.x+=u.vx;u.y+=u.vy;}
-        }
-        c.runUnitSeparationPass();
-    }
-    let maxPacked=0;
-    for(let u of crowd) maxPacked=Math.max(maxPacked,crowd.filter(v=>Math.abs(u.x-v.x)<=32&&Math.abs(u.y-v.y)<=32).length);
-    let meanNearest=crowd.reduce((sum,u)=>sum+Math.min(...crowd.filter(v=>v!==u).map(v=>Math.hypot(u.x-v.x,u.y-v.y))),0)/crowd.length;
-    return {positions:crowd.map(u=>[u.x,u.y]),maxPacked,meanNearest};
-}
-const crowd=crowdRun();
-assert.deepEqual(crowdRun(),crowd,'crowd resolution replays deterministically');
-{
-    // Pushes are summed as integers: another bucket order (as a peer may
-    // have) gives the same positions.
-    const orig=crowdRun; const units0=[];
-    let crowd2=Array.from({length:100},(_,id)=>({id,owner:0,x:500+(id%10)*2,y:500+Math.floor(id/10)*2,
-        vx:0,vy:0,r:8,unitType:'norm',dead:false,isFlying:false,_spatialKey:0,getCollisionRadius:()=>8,getCollisionLayer:()=> 'ground'}));
-    c.units=crowd2; c.spatialUnits=[crowd2.slice().reverse()];
-    vm.runInContext('adoptTestUnits()', c);
-    for(let tick=0;tick<180;tick++) {
-        c.gameTime=tick;
-        for(let u of crowd2) { u.prevX=u.x;u.prevY=u.y; let dx=509-u.x,dy=509-u.y,d=Math.hypot(dx,dy); if(d>8){u.vx=dx/d*2;u.vy=dy/d*2;u.x+=u.vx;u.y+=u.vy;} }
-        c.runUnitSeparationPass();
-    }
-    assert.deepEqual(crowd2.map(u=>[u.x,u.y]),crowd.positions,'separation does not depend on bucket order');
-}
-// (Units at rest give way to movers pressing into them, so a pile that is
-// pressed from every side for ever, as here, packs a little tighter.)
-assert.ok(crowd.maxPacked<70,`crowd should spread beyond 2x2 tiles: ${crowd.maxPacked}`);
-assert.ok(crowd.meanNearest>5,`nearest-neighbor spacing recovers promptly: ${crowd.meanNearest}`);
+// (The crowd's separation itself: tests/separation-jitter.test.cjs and
+// unit-collision-smoothness.test.cjs, on the real Rust chain.)
 // A huge accumulated push cannot skip a wall even if its endpoint is empty.
 c.canUnitOccupyTile=(_u,x)=>x!==1;
 let u={x:16,y:16,getCollisionRadius:()=>64};c.applyUnitSeparation(u,10000,0,128);
@@ -91,4 +44,4 @@ let team=[],history=[],object={x:1.4,z:1.4,scaleX:1,scaleY:1,scaleZ:1};
 light.push3DRenderObject(team,object);
 light.getHistoryRenderView=()=>({});light.push3DRenderObject(history,object);
 assert.deepEqual(history,team,'visible object light, shadow direction and length exactly match Team mode');
-console.log(`PASS: 100 moving units spread to ${crowd.maxPacked} per 2x2 tiles; mean nearest ${crowd.meanNearest.toFixed(1)}px; deterministic sweep, clipped perimeter and identical live shadows.`);
+console.log('PASS: swept push stops at walls, clipped perimeter and identical live shadows.');

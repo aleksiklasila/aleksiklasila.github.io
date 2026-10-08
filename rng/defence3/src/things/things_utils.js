@@ -551,6 +551,7 @@ function adjacencyLaneStep() {
     // (Outputs: up to every tile once.)
     _adjArr('adj.otile', Int32Array, N); _adjArr('adj.ogrp', Int32Array, N); _adjArr('adj.gsize', Int32Array, N); _adjArr('adj.gmul', Float64Array, N);
     _adjArr('adj.oarea', Int32Array, Math.max(1, A)); _adjArr('adj.oact', Uint8Array, Math.max(1, A)); _adjArr('adj.ocnt', Int32Array, 4);
+    _adjArr('adj.wk', Int32Array, 8 + 4 * N + 4 * Math.max(1, A));
     const B = _simBgParamsByLane[ADJ_LANE];
     B.fill(0); B[0] = GRID_W; B[1] = GRID_H; B[2] = seeds.length; B[3] = cl.length / 3; B[4] = A;
     simParallelBackground(SIM_KERNEL_ADJ_FLOOD, 1, ADJ_LANE);
@@ -1021,7 +1022,8 @@ const UNIT_STATS_VER_TYPES = 64;
 let _unitStatsVer = new Int32Array(16 * UNIT_STATS_VER_TYPES);
 function _unitStatsVerTable(players) {
     if (_unitStatsVer.length < players * UNIT_STATS_VER_TYPES) { const t = typeof simSharedArray === 'function' ? simSharedArray(Int32Array, players * 2 * UNIT_STATS_VER_TYPES) : new Int32Array(players * 2 * UNIT_STATS_VER_TYPES); t.set(_unitStatsVer); _unitStatsVer = t; }
-    else if (typeof simSharedArray === 'function' && typeof SharedArrayBuffer === 'function' && !(_unitStatsVer.buffer instanceof SharedArrayBuffer) && typeof SIM_PAR_SHARED !== 'undefined' && SIM_PAR_SHARED) { const t = simSharedArray(Int32Array, _unitStatsVer.length); t.set(_unitStatsVer); _unitStatsVer = t; }
+    // (Into the wasm heap once it is up: the Rust kernels read it.)
+    else if (typeof simSharedArray === 'function' && typeof _simHeapPtrOf !== 'undefined' && _simHeapPtrOf !== null && _simHeapPtrOf(_unitStatsVer) < 0) { const t = simSharedArray(Int32Array, _unitStatsVer.length); t.set(_unitStatsVer); _unitStatsVer = t; }
     return _unitStatsVer;
 }
 function unitStatsTablesChanged(owner, unitType) {
@@ -1131,7 +1133,7 @@ function recalculateUnitEffectiveStats() {
         simParallelBind('eff.tver', _unitStatsVerTable(spatialUnitsComplexPlayerCount)); P[14] = UNIT_STATS_VER_TYPES;
         // (The upkeep bins, when kept: main.js _upkU.)
         const UK = typeof _upkU !== 'undefined' && _upkU && _upkU.cols === c && _upkU.cnt === _upkHist ? _upkU : null;
-        P[12] = UK ? UK.np : 0; P[13] = UK ? UK.L1 : 0;
+        P[12] = UK ? UK.np : 0; P[13] = UK ? UK.L1 : 0; P[17] = UK && _simParReg['upk.h'] ? _simParReg['upk.h'].length : 0;
         simParallelRun(SIM_KERNEL_EFF_UNITS, Math.ceil(m / 256));
         const F = _effFlags;
         for (let j = 0; j < m; j++) {

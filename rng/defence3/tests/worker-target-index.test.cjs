@@ -7,7 +7,7 @@ let TILE=32, GRID_W=128, GRID_H=128, gameTime=1, CMD_IDLE=0;
 let RESOURCE_COLLECTOR_UNIT_KEYS=['collector','astar_collector'], units=[], collectorSpawners=[], _tileEntityVersion=0;
 const _resolveMovementProfile=()=>null;
 const _thingTickX=t=>t.x, _thingTickY=t=>t.y, _unitTickX=t=>t.x, _unitTickY=t=>t.y;
-const simSharedArray=(T,n)=>new T(n), simParallelBind=()=>{};
+const simSharedArray=(T,n)=>new T(n), simHeapArrayAuto=(T,n)=>new T(n), simParallelBind=()=>{};
 const navPathTo=(u,x,y)=>[{x,y,nav:1,ready:0}];
 ${source}
 return { units, spawners:collectorSpawners, set:_setWorkerTarget, clear:_clearWorkerTarget,

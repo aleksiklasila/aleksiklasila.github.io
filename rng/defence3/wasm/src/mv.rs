@@ -182,6 +182,8 @@ const W_COVS: usize = 267;
 const SIM_FLOW_REFRESH_TICKS: i32 = 4;
 const SIM_STEER_TICKS: u8 = 16;
 const SIM_STEER_NEAR_TICKS: u8 = 4;
+/// sim_parallel.js SIM_REROUTE_TICKS.
+const SIM_REROUTE_TICKS: i32 = 16;
 
 #[derive(Clone, Copy)]
 struct NavP {
@@ -574,6 +576,14 @@ impl Mv {
     }
 }
 
+/// Whether a hostile structure on tile tl does anything to a unit standing
+/// there: only traps do (mv.scls class 2; Unit.update's floor check). Without
+/// the class grid, any.
+#[inline(always)]
+unsafe fn floor_acts(m: &Mv, tl: i32) -> bool {
+    m.scls.is_null() || rd(m.scls, tl as usize) == 2
+}
+
 // ---- JavaScript helpers ----
 /// (t + id) as a double (no wrap): for `%` by a tick count.
 #[inline(always)]
@@ -583,6 +593,31 @@ fn tsum(t: i32, id: i32) -> i64 {
 #[inline(always)]
 fn rem64(a: i64, b: i64) -> i64 {
     if b == 0 { 0 } else { a.wrapping_rem(b) }
+}
+/// irem / rem64 for the kernels' tick tests ((t + id) % ticks): a
+/// non-negative dividend by a positive divisor as unsigned 32-bit (a power
+/// of two by its mask, the usual tick counts by constants); the same
+/// results, without a division in most calls (a 64-bit remainder is ~40
+/// cycles in wasm, and the step pass made up to three per moving unit).
+#[inline(always)]
+fn urem_f(a: u32, b: u32) -> u32 {
+    if b & (b - 1) == 0 {
+        return a & (b - 1);
+    }
+    match b {
+        20 => a % 20,
+        10 => a % 10,
+        30 => a % 30,
+        _ => a % b,
+    }
+}
+#[inline(always)]
+fn irem_f(a: i32, b: i32) -> i32 {
+    if a >= 0 && b > 0 { urem_f(a as u32, b as u32) as i32 } else { irem(a, b) }
+}
+#[inline(always)]
+fn rem64_f(a: i64, b: i64) -> i64 {
+    if a >= 0 && b > 0 && a <= u32::MAX as i64 && b <= u32::MAX as i64 { urem_f(a as u32, b as u32) as i64 } else { rem64(a, b) }
 }
 /// Math.imul.
 #[inline(always)]
@@ -802,7 +837,7 @@ fn step_x(n: i32, t: i32, tx: i32, w: i32) -> i32 {
     if d == -1 && tx > 0 {
         return tx - 1;
     }
-    irem(n, w)
+    irem_f(n, w)
 }
 /// _simStepY.
 #[inline(always)]
@@ -817,7 +852,7 @@ fn step_y(n: i32, t: i32, tx: i32, ty: i32, w: i32) -> i32 {
     if (d == 1 && tx + 1 < w) || (d == -1 && tx > 0) {
         return ty;
     }
-    idiv(n - irem(n, w), w)
+    idiv(n - irem_f(n, w), w)
 }
 /// _simOpenBlockXY.
 #[inline(always)]
@@ -837,7 +872,7 @@ unsafe fn open_block(wall: *const u8, x: i32, y: i32, w: i32, h: i32) -> bool {
 }
 /// simNavDetour.
 unsafe fn nav_detour(wl: *const u8, w: i32, h: i32, gx: i32, gy: i32, aim: i32) -> i32 {
-    let ax = irem(aim, w);
+    let ax = irem_f(aim, w);
     let ay = idiv(aim - ax, w);
     let mut best = -1;
     let mut bd = i64::MAX;
@@ -1127,11 +1162,11 @@ pub unsafe extern "C" fn mv_step(a: *const i32, s0: i32, end: i32) {
             let id = rd(m.id, s);
             let ts = tsum(t, id);
             let tw = t.wrapping_add(id);
-            if t >= rd(m.wake, s) || (fl & 1) != 0 || ((fl & 16) != 0 && (rem64(ts, acq_t) == 0 || (tw & 3) == 0)) {
+            if t >= rd(m.wake, s) || (fl & 1) != 0 || ((fl & 16) != 0 && (rem64_f(ts, acq_t) == 0 || (tw & 3) == 0)) {
                 s += 1;
                 continue;
             }
-            if (fl & 4) != 0 && rem64(ts, wkwatch) == 0 && (rd(m.x, s) != rd(m.wkwx, s) || rd(m.y, s) != rd(m.wkwy, s)) {
+            if (fl & 4) != 0 && rem64_f(ts, wkwatch) == 0 && (rd(m.x, s) != rd(m.wkwx, s) || rd(m.y, s) != rd(m.wkwy, s)) {
                 s += 1;
                 continue;
             }
@@ -1149,9 +1184,9 @@ pub unsafe extern "C" fn mv_step(a: *const i32, s0: i32, end: i32) {
                 continue;
             }
             let tl = gy as i32 * w + gx as i32;
-            if rd(m.floor, s) != tl || irem(tw, tr) == 0 {
+            if rd(m.floor, s) != tl || irem_f(tw, tr) == 0 {
                 let code = rd(m.sc, tl as usize) as i32;
-                if code != -1 && code != owner {
+                if code != -1 && code != owner && floor_acts(&m, tl) {
                     s += 1;
                     continue;
                 }
@@ -1202,16 +1237,16 @@ unsafe fn step_flow(
         return;
     }
     let tw = t.wrapping_add(id);
-    if rd(m.floor, s) != tl || irem(tw, tr) == 0 {
+    if rd(m.floor, s) != tl || irem_f(tw, tr) == 0 {
         let code = rd(m.sc, tl as usize) as i32;
-        if code != -1 && code != owner {
+        if code != -1 && code != owner && floor_acts(m, tl) {
             return;
         }
     }
     let ts = tsum(t, id);
     let at = rd(m.at, s);
     if (f & 16) != 0 {
-        if rem64(ts, acq_t) == 0 || (tw & 3) == 0 {
+        if rem64_f(ts, acq_t) == 0 || (tw & 3) == 0 {
             return;
         }
     } else if (f & 1) != 0 && (tw & 1) == 0 && !(rd(m.area, s) >= 0) {
@@ -1246,7 +1281,7 @@ unsafe fn step_flow(
             }
         }
     }
-    if rd(m.wk, s) == 1 && irem(tw, wcheck) == 0 && !(rd(m.wtc, s) > 0) {
+    if rd(m.wk, s) == 1 && irem_f(tw, wcheck) == 0 && !(rd(m.wtc, s) > 0) {
         return;
     }
     let fid = rd(m.flow, s);
@@ -1499,12 +1534,12 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
     let hold = on == 3;
     let bhold = on == 5;
     let id0 = rd(m.id, s);
-    if parked && (rd(m.fl, s) & 4) != 0 && rem64(tsum(t, id0), p.wkwatch) == 0 && (rd(m.x, s) != rd(m.wkwx, s) || rd(m.y, s) != rd(m.wkwy, s)) {
+    if parked && (rd(m.fl, s) & 4) != 0 && rem64_f(tsum(t, id0), p.wkwatch) == 0 && (rd(m.x, s) != rd(m.wkwx, s) || rd(m.y, s) != rd(m.wkwy, s)) {
         back!();
     }
     if parked && t >= rd(m.wake, s) {
         let mut stay = false;
-        if (rd(m.fl, s) & 2) != 0 && !m.wkv.is_null() && (t as f64) < rd(m.wksc, s) && (t as f64) < rd(m.wku, s) && rem64(tsum(t, id0), p.wkper as i64) == 0 {
+        if (rd(m.fl, s) & 2) != 0 && !m.wkv.is_null() && (t as f64) < rd(m.wksc, s) && (t as f64) < rd(m.wku, s) && rem64_f(tsum(t, id0), p.wkper as i64) == 0 {
             let gx = floor(rd(m.x, s) * itile);
             let gy = floor(rd(m.y, s) * itile);
             let o = rd(m.own, s);
@@ -1533,9 +1568,9 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
     let tl = gy * w + gx;
     let tw = t.wrapping_add(id);
     let ts = tsum(t, id);
-    if rd(m.floor, s) != tl || irem(tw, p.tr) == 0 {
+    if rd(m.floor, s) != tl || irem_f(tw, p.tr) == 0 {
         let code = rd(m.sc, tl as usize) as i32;
-        if code != -1 && code != owner {
+        if code != -1 && code != owner && floor_acts(m, tl) {
             back!();
         }
         wr(m.floor, s, tl);
@@ -1626,14 +1661,14 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
         if code == -1 || code == owner {
             back!();
         }
-        if (rd(m.fl, s) & 1) == 0 && rem64(ts, 8) == 0 && acq_hit(m, s, p.acq_stamp) {
+        if (rd(m.fl, s) & 1) == 0 && rem64_f(ts, 8) == 0 && acq_hit(m, s, p.acq_stamp) {
             back!();
         }
         let a = rd(m.ag, bt as usize);
         if !covered(m, owner, a) {
             back!();
         }
-        let bgx = irem(bt, w);
+        let bgx = irem_f(bt, w);
         let bgy = idiv(bt - bgx, w);
         if in_area_range(m, x, y, bgx as f64 * tile + tile / 2.0, bgy as f64 * tile + tile / 2.0, rd(m.reach, s) as i32) != 1 {
             back!();
@@ -1757,14 +1792,14 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
         if code == -1 || code == owner {
             back!();
         }
-        if rd(m.htid, s) == 0 && rem64(ts, 8) == 0 && acq_hit(m, s, p.acq_stamp) {
+        if rd(m.htid, s) == 0 && rem64_f(ts, 8) == 0 && acq_hit(m, s, p.acq_stamp) {
             back!();
         }
         let a = rd(m.ag, bt as usize);
         if !covered(m, owner, a) {
             back!();
         }
-        let bgx = irem(bt, w);
+        let bgx = irem_f(bt, w);
         let bgy = idiv(bt - bgx, w);
         if in_area_range(m, x, y, bgx as f64 * tile + tile / 2.0, bgy as f64 * tile + tile / 2.0, rd(m.reach, s) as i32) != 0 {
             back!();
@@ -1787,7 +1822,7 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
             db_look = false;
         }
     }
-    if if atk { !m.brain && (rem64(ts, p.acq_t) == 0 || (tw & 3) == 0) } else { db_look } {
+    if if atk { !m.brain && (rem64_f(ts, p.acq_t) == 0 || (tw & 3) == 0) } else { db_look } {
         let (x0, y0, x1, y1);
         if atk {
             let r = rd(m.reach, s) as f64;
@@ -1820,7 +1855,7 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
                     if !(at > 0.0) && (rd(m.dbtk, s) != t || rd(m.dbt, s) != -1 || rd(m.dbs, s) >= 0) {
                         back!();
                     }
-                } else if rem64(ts, p.acq_t) == 0 && acq_hit(m, s, p.acq_stamp) {
+                } else if rem64_f(ts, p.acq_t) == 0 && acq_hit(m, s, p.acq_stamp) {
                     wr(m.on, s, 0);
                     wr(m.px, s, x);
                     wr(m.py, s, y);
@@ -1927,11 +1962,11 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
             return;
         }};
     }
-    if rd(m.wk, s) == 1 && irem(tw, p.wcheck) == 0 && !(rd(m.wtc, s) > 0) {
+    if rd(m.wk, s) == 1 && irem_f(tw, p.wcheck) == 0 && !(rd(m.wtc, s) > 0) {
         back!();
     }
     let dk = rd(m.dest, s);
-    let dx0 = irem(dk, w);
+    let dx0 = irem_f(dk, w);
     let dy0 = idiv(dk - dx0, w);
     let fly = (f & 32) != 0;
     let np = rd(m.npr, s) as usize;
@@ -2056,7 +2091,9 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     let refresh = (tw & (SIM_FLOW_REFRESH_TICKS - 1)) == 0;
     let lk = flow_look(m, &v, s, refresh, tl, gx, gy, dk, wl, rd(nv.meta, 6), wv, if wide { 2 } else { 1 });
     if lk == 0 {
-        if rd(m.wk, s) == 1 && ((dx0 - gx).abs() > 1 || (dy0 - gy).abs() > 1) {
+        // (No way: re-routed by Unit.update on its own tick of
+        // SIM_REROUTE_TICKS, standing until then; see the JS kernel.)
+        if (rd(m.wk, s) == 1 && ((dx0 - gx).abs() > 1 || (dy0 - gy).abs() > 1)) || (tw & (SIM_REROUTE_TICKS - 1)) != 0 {
             stand!();
         }
         back!();
@@ -2072,7 +2109,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     let far = rd(m.nvf, s);
     let open = rd(m.nvo, s) == 1;
     wr(m.nld, s, nav_ld);
-    let kx = irem(far, w);
+    let kx = irem_f(far, w);
     let ky = idiv(far - kx, w);
     let base_tx = kx as f64 * tile + 16.0;
     let base_ty = ky as f64 * tile + 16.0;
@@ -2106,7 +2143,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     let mut dy = ty - y;
     let mut dist = sqrt(dx * dx + dy * dy);
     if n2 >= 0 && far == n1 && rd(m.vx, s) * dx + rd(m.vy, s) * dy < 0.0 {
-        let n2x = irem(n2, w);
+        let n2x = irem_f(n2, w);
         tx = n2x as f64 * tile + 16.0;
         ty = idiv(n2 - n2x, w) as f64 * tile + 16.0;
         dx = tx - x;
@@ -2117,7 +2154,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
         if n2 < 0 {
             stand!();
         }
-        let n2x = irem(n2, w);
+        let n2x = irem_f(n2, w);
         tx = n2x as f64 * tile + 16.0;
         ty = idiv(n2 - n2x, w) as f64 * tile + 16.0;
         dx = tx - x;
@@ -2170,9 +2207,9 @@ unsafe fn roomy(m: &Mv, nb: usize, base: i32, wl: i32, len: i32, i: i32) -> i32 
     if k < 0 || nk < 0 {
         return -1;
     }
-    let kx = irem(k, w);
+    let kx = irem_f(k, w);
     let ky = idiv(k - kx, w);
-    let nx = irem(nk, w);
+    let nx = irem_f(nk, w);
     let ny = idiv(nk - nx, w);
     if (nx - kx).abs() + (ny - ky).abs() != 1 {
         return 0;
@@ -2199,7 +2236,7 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
             return;
         }};
     }
-    if rd(m.wk, s) == 1 && irem(t.wrapping_add(id), p.wcheck) == 0 && !(rd(m.wtc, s) > 0) {
+    if rd(m.wk, s) == 1 && irem_f(t.wrapping_add(id), p.wcheck) == 0 && !(rd(m.wtc, s) > 0) {
         back!();
     }
     let len = rd(m.plen, s);
@@ -2222,7 +2259,7 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
             if k < 0 {
                 back!();
             }
-            let kx = irem(k, w);
+            let kx = irem_f(k, w);
             let ky = idiv(k - kx, w);
             let dx = kx - gx;
             let dy = ky - gy;
@@ -2231,7 +2268,7 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
                 if nk < 0 {
                     back!();
                 }
-                let nx = irem(nk, w);
+                let nx = irem_f(nk, w);
                 let ny = idiv(nk - nx, w);
                 if (nx - kx).abs() + (ny - ky).abs() != 1 {
                     back!();
@@ -2283,7 +2320,7 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
     if (f & (8 | 32)) == 0 && rd(m.wall, k as usize) != 0 {
         back!();
     }
-    let kx = irem(k, w);
+    let kx = irem_f(k, w);
     let ky = idiv(k - kx, w);
     let base_tx = kx as f64 * tile + 16.0;
     let base_ty = ky as f64 * tile + 16.0;
@@ -2296,7 +2333,7 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
     let mut px = 0;
     let mut py = 0;
     if idx > 0 {
-        px = irem(pk, w);
+        px = irem_f(pk, w);
         py = idiv(pk - px, w);
         seg_dx = kx - px;
         seg_dy = ky - py;
@@ -2305,7 +2342,7 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
         if nk < 0 {
             back!();
         }
-        let nx = irem(nk, w);
+        let nx = irem_f(nk, w);
         seg_dx = nx - kx;
         seg_dy = idiv(nk - nx, w) - ky;
     }
@@ -2319,7 +2356,7 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
             if nk < 0 {
                 back!();
             }
-            let nx = irem(nk, w);
+            let nx = irem_f(nk, w);
             seg_dx = nx - kx;
             seg_dy = idiv(nk - nx, w) - ky;
         } else {
@@ -2345,10 +2382,10 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
         if ak < 0 || (idx + 2 < len && fk < 0) {
             back!();
         }
-        let mut ax = irem(ak, w);
+        let mut ax = irem_f(ak, w);
         let mut ay = idiv(ak - ax, w);
         if fk >= 0 {
-            let fx = irem(fk, w);
+            let fx = irem_f(fk, w);
             let fy = idiv(fk - fx, w);
             if (fx - ax).abs() + (fy - ay).abs() == 1 {
                 ax = fx;
@@ -2805,7 +2842,7 @@ pub unsafe extern "C" fn mv_driveby(a: *const i32, s0: i32, end: i32) {
             while gx <= x1 {
                 // (A block of the row with no hostile structure: passed
                 // over whole; see the JavaScript twin.)
-                if !m.hss.is_null() && (gx == x0 || irem(gx, bk) == 0) {
+                if !m.hss.is_null() && (gx == x0 || irem_f(gx, bk) == 0) {
                     let bx = idiv(gx, bk);
                     if bx < bc && by < br && box_sum(m.hss, owner as i64 * plane, stride, bx as i64, by as i64, bx as i64, by as i64) <= 0 {
                         let last = x1.min((bx + 1) * bk - 1);

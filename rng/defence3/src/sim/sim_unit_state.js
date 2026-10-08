@@ -32,7 +32,7 @@ const SIM_UNIT_ACCESSOR_COLUMNS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'v
 const SIM_UNIT_MIRROR_COLUMNS = ['r', 'collisionR'];
 // Accessor keys that are not columns (see simUnitStateKeys): the path is a
 // plain reference behind a setter that disarms the movement kernel.
-const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'targetBuilding', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved', '_statsBehind', '_forcedTargetLastSeenX', '_forcedTargetLastSeenY'];
+const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'targetBuilding', 'pathIsFallbackAstar', '_pendingPathTarget', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved', '_statsBehind', '_forcedTargetLastSeenX', '_forcedTargetLastSeenY'];
 
 // Unit types by first sight (peer-local indices: only ever mapped back to
 // the type's name).
@@ -186,6 +186,9 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // Flow mode: its navigation profile (flownav.js navProfileOf: ground, air,
     // a walk class), whose fields and walls the kernel reads.
     ['mvNP', Uint8Array, 1],
+    // Unit.pathIsFallbackAstar && Unit._pendingPathTarget (their accessors):
+    // the separation's commit retries such a unit's path on its retry ticks.
+    ['mvPF', Uint8Array, 1],
     // A drive-by shooter the movement kernel moved whose look found
     // something (SIM_KERNEL_DRIVEBY): its shot at its turn (simDriveByFire).
     ['mvFire', Uint8Array, 1],
@@ -346,7 +349,9 @@ function _simUnitSlotStart(S, s, u) {
     S.columns.acqB[s] = 0; S.columns.cmMode[s] = 0; S.columns.cmT[s] = -1; S.columns.cmTId[s] = 0; S.columns.isWk[s] = u.workerType ? 1 : 0;
     S.columns.cbTick[s] = -1; S.columns.cbT[s] = -1; S.columns.dbTick[s] = -1; S.columns.dbT[s] = -1; S.columns.cwTick[s] = -1; S.columns.upT[s] = -1; S.columns.upB[s] = -1;
     Object.defineProperties(u, { _us: { value: S.columns, writable: true }, _si: { value: s, writable: true }, _det: { value: null, writable: true },
-        _path: { value: null, writable: true }, _ws: { value: undefined, writable: true }, _wnr: { value: undefined, writable: true }, _tb: { value: null, writable: true } });
+        _path: { value: null, writable: true }, _ws: { value: undefined, writable: true }, _wnr: { value: undefined, writable: true }, _tb: { value: null, writable: true },
+        _pfa: { value: u._pfa, writable: true }, _ppt: { value: u._ppt, writable: true } });
+    S.columns.mvPF[s] = u._pfa && u._ppt ? 1 : 0;
 }
 
 // Removed units may still be attack targets, selected, or referenced in a

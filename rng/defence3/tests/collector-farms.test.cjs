@@ -35,7 +35,7 @@ function world(resource, localPlayerId = 0) {
         // Cell items for the farm index (rebuilt on every query here).
         getCellItemsRowMajor: () => c.grid.flatMap(row => row.map(cell => cell.item).filter(Boolean)),
         // (The work version table is shared with the kernels in the game.)
-        simSharedArray: (Type, n) => new Type(n), simParallelBind: () => {},
+        simSharedArray: (Type, n) => new Type(n), simHeapArrayAuto: (Type, n) => new Type(n), simParallelBind: () => {},
     });
     let version = 0;
     Object.defineProperty(c, '_tileEntityVersion', { get: () => ++version });

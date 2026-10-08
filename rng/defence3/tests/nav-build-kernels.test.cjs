@@ -7,22 +7,11 @@
 // rebuild (navBuildNodesBackground ... navBuildGraphBackground).
 // Usage: node tests/nav-build-kernels.test.cjs
 const fs = require('fs'), vm = require('vm'), path = require('path');
-const ctx = { console, Math, Uint8Array, Uint16Array, Int32Array, Float64Array, Uint32Array, Int8Array, Map, Set, Array, Object, Number };
-ctx.globalThis = ctx;
-vm.createContext(ctx);
-// (Kernels run on this thread; background chains at their wait.)
-vm.runInContext(`var SIM_KERNELS = {}; var _simParams = new Float64Array(64); var _simParReg = {};
-    var _stage = Array.from({ length: 10 }, () => Array.from({ length: 8 }, () => new Float64Array(64))); var _simBgParams = _stage[1][0];
-    var SIM_LANE_LONG = 1, _bgJob = null;
-    function simSharedArray(T, n) { return new T(n); } function simHeapArrayAuto(T, n) { return new T(n); }
-    function simParallelBind(n, a) { _simParReg[n] = a; }
-    function simParallelRun(k, total) { for (let c = 0; c < total; c++) SIM_KERNELS[k](_simParReg, _simParams, c); }
-    function simParallelStageParams(lane, st) { return _stage[lane][st]; }
-    function simParallelBackgroundChain(lane, stages) { simParallelBackgroundWait(lane); _bgJob = { lane, stages }; }
-    function simParallelBackground(k, total, lane = 1) { simParallelBackgroundChain(lane, [[k, total]]); }
-    function simParallelBackgroundWait(lane = 1) { const J = _bgJob; if (!J || J.lane !== lane) return; _bgJob = null;
-        J.stages.forEach(([k, total], i) => { for (let c = 0; c < total; c++) SIM_KERNELS[k](_simParReg, _stage[lane][i], c); }); }`, ctx);
-vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/game/flownav.js'), 'utf8'), ctx);
+// (The real kernel runtime: the kernels are Rust, in the wasm heap; no
+// helpers, so kernels and background chains run on this thread.)
+for (const f of ['sim/sim_parallel.js', 'sim/sim_wasm_bin.js', 'sim/sim_wasm.js', 'game/flownav.js'])
+    vm.runInThisContext(fs.readFileSync(path.join(__dirname, '../src', f), 'utf8'), { filename: f });
+const ctx = vm.runInThisContext('({ navBuild, navBuildStart, navBuildNodesBackground, navBuildCollect, navBuildNodesFinish, navBuildLocalBackground, navBuildGraphAlloc, navBuildGraphBackground, navBuildGraphFinish, navBuildPartsFinish, navBuildFinish })');
 
 // The reference: nodes cluster by cluster (east and south borders make both
 // sides), then each node's edges from the local fields and its pair.

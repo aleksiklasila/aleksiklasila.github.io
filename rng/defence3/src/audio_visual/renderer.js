@@ -4389,7 +4389,7 @@ function _visibilityKernelAreas() {
     _visibilityKernelAreaKey = { grid: areaIdGrid, cells: gridCellsByArea, nb: areaNeighborIds, byId: _areaById, w: W, h: H, count };
     return count;
 }
-let _visibilityKernelSrc = null, _visibilityKernelSrcOff = null, _visibilityKernelJobs = null;
+let _visibilityKernelSrc = null, _visibilityKernelSrcOff = null, _visibilityKernelJobs = null, _visibilityKernelWork = null;
 // Runs the queued grids (the visibility kernel, sim_parallel.js).
 function _runVisibilityJobs(jobs) {
     let lists = _visibilitySourceLists;
@@ -4410,6 +4410,13 @@ function _runVisibilityJobs(jobs) {
     }
     _visibilityKernelJobs.set(jobs);
     _simParams[0] = GRID_W; _simParams[1] = GRID_H; _simParams[2] = TILE; _simParams[3] = AREA_UNIT_TILE_EQUIVALENT; _simParams[4] = count;
+    // (The kernel's work: the thread's scratch, or for a big map, its own.)
+    const need = Math.ceil(GRID_W * GRID_H / 4) + 2 * GRID_H + 5 * count + 8, nj = jobs.length / 2;
+    _simParams[5] = 0;
+    if (typeof _simWasmScratchWords === 'number' && need + 4 > _simWasmScratchWords) {
+        if (!_visibilityKernelWork || _visibilityKernelWork.length < need * nj) { _visibilityKernelWork = simHeapArrayAuto(Int32Array, need * nj, false); simParallelBind('vis.wk', _visibilityKernelWork); }
+        _simParams[5] = need;
+    }
     simParallelRun(SIM_KERNEL_VISIBILITY, jobs.length / 2);
 }
 

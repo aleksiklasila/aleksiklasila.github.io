@@ -1,4 +1,4 @@
-// Destination rows (flownav.js _navFieldRow) depend on the destination's
+// Destination rows (wasm/src/lib.rs nav_field) depend on the destination's
 // part alone (and the field's width), so fields share them (_navFieldsMake:
 // one search per part, copies for the rest): every field's row, computed or
 // copied, equals its own search, for many destinations on several maps,
@@ -42,12 +42,11 @@ for (const helpers of [3, 0]) for (const [map, seed] of [['crossroads', 3], ['is
                 if (F.meta[m] !== 0) continue;
                 if (F.meta[m + 7] !== 1) { bad = 'field ' + id + ' not made'; break; }
                 // Its field: the installed build's.
-                const own = new Uint16Array(size).fill(NAV_UNREACHED);
-                _navLocalFieldDial(own, 0, F.meta[m + 2], F.meta[m + 3], nav.W, nav.H, F.meta[m + 1], nav.wall, nav.cost && nav.cost.length ? nav.cost : null, F.meta[m + 4], F.meta[m + 5], _navDialScratch(size));
+                // (Its own search: the Rust kernel again, into fresh heap arrays.)
+                const own = simHeapArray(Uint16Array, size), mine = simHeapArray(Uint8Array, RW);
+                _navFieldRust(_simParReg, 'nav.', 0, _simHeapPtrOf(own), 0, size, F.meta, m, _simHeapPtrOf(mine), 0, nav.W, nav.H);
                 for (let k = 0; k < size; k++) if (own[k] !== F.pool[off + k]) { bad = 'field ' + id + ' tile ' + k + ': ' + F.pool[off + k] + ' vs ' + own[k]; break; }
                 if (bad) break;
-                const mine = new Uint8Array(RW);
-                _navFieldRow(_simParReg, 0, F.pool, off, F.meta, m, mine, 0);
                 for (let p = 0; p < nav.np; p++) if (mine[p] !== F.rows[i * RW + p]) { bad = 'field ' + id + ' part ' + p + ': ' + F.rows[i * RW + p] + ' vs ' + mine[p]; break; }
                 if (bad) break;
                 const k = (F.wide ? 'w' : 'n') + F.rowKeyOf[i];

@@ -41,10 +41,6 @@ let seconds = Number(process.argv[2]) || 15;
     // workloads' setups; AFTERALL=<expr> after the run on every peer, the
     // results written as a JSON array to AFTERALL_OUT (default
     // .claude/afterall.json).
-    // WASM=0: every peer runs the JS kernels (the wasm heap stays);
-    // WASM_GUEST=0: only the guests (host wasm vs guests JS in lockstep).
-    if (process.env.WASM === '0') for (const g of peers) g.eval('typeof simWasmKernels === "function" && simWasmKernels(false)');
-    if (process.env.WASM_GUEST === '0') for (const g of guests) g.eval('typeof simWasmKernels === "function" && simWasmKernels(false)');
     console.log('wasm', JSON.stringify(peers.map(g => g.eval('typeof simHeapStats === "function" ? simHeapStats() : null'))));
     if (process.env.EVALALL) for (const g of peers) g.eval(process.env.EVALALL);
     await world.run(1000);
@@ -688,7 +684,7 @@ let seconds = Number(process.argv[2]) || 15;
         // Unit storage: bytes per slot (schema), slots/capacity, explicit-path
         // windows, and the bound arrays' MB by name prefix (largest first).
         memory: JSON.parse(host.eval(`typeof simMemoryStats !== "function" ? "null" : JSON.stringify((m => ({ bytesPerSlot: m.bytesPerSlot, slots: m.slots, capacity: m.capacity, pathWindows: m.pathWindows,
-            unitMB: Math.round(m.bytesPerSlot * m.capacity / 1048576), boundMB: Object.fromEntries(Object.entries(m.boundBytes).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, v]) => [k, Math.round(v / 1048576 * 10) / 10])) }))(simMemoryStats()))`)),
+            unitMB: Math.round(m.bytesPerSlot * m.capacity / 1048576), boundMB: Object.fromEntries(Object.entries(m.boundBytes).filter(([k]) => k !== 'zero').sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, v]) => [k, Math.round(v / 1048576 * 10) / 10])) }))(simMemoryStats()))`)),
         kshare: process.env.KSHARE ? JSON.parse(host.eval('JSON.stringify({ share: __scratch.ks, binds: __scratch.kb, bindTicks: Object.keys(__scratch.kbt).length })')) : undefined,
         slotMapRebuilds:process.env.SLOTMAP ? host.eval('__scratch.smr') : undefined,
         loopCost: process.env.LOOPCOST ? JSON.parse(host.eval('JSON.stringify(__scratch.lc.filter(a => a[0] % 10 === 0))')) : undefined,

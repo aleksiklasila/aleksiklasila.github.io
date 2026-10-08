@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const RealWorker = require('./real-sim-helper.cjs');
-const source = fs.readFileSync(path.join(__dirname, '../src/sim/sim_parallel.js'), 'utf8');
+// (The kernels are Rust: the wasm module and its heap, where the keys live.)
+const source = ['sim_parallel.js', 'sim_wasm_bin.js', 'sim_wasm.js'].map(f => fs.readFileSync(path.join(__dirname, '../src/sim', f), 'utf8')).join('\n');
 
 (async () => {
     for (const helpers of [0, 1, 7, 11]) {
@@ -13,6 +14,7 @@ const source = fs.readFileSync(path.join(__dirname, '../src/sim/sim_parallel.js'
         const ctx = vm.createContext({ self: { crossOriginIsolated: true }, Worker,
             navigator: { hardwareConcurrency: 16 }, console });
         vm.runInContext(source, ctx);
+        assert.ok(vm.runInContext('simWasmInit()', ctx), 'wasm module');
         vm.runInContext(`simParallelInit('', ${helpers})`, ctx);
         assert.equal(vm.runInContext('simParallelHelpers()', ctx), helpers);
         try {
@@ -20,7 +22,7 @@ const source = fs.readFileSync(path.join(__dirname, '../src/sim/sim_parallel.js'
             // map-independent storage and all four bytes of a uint32 key.
             for (const [n, maxKey] of [[0, 0], [19, 1], [100003, 999999], [70000, 255], [4101, 0xffffffff], [8000, 0]]) {
                 let seed = 31;
-                const keys = new Uint32Array(new SharedArrayBuffer(Math.max(1, n) * 4));
+                const keys = vm.runInContext(`simHeapArray(Uint32Array, ${Math.max(1, n)})`, ctx);
                 for (let i = 0; i < n; i++) {
                     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
                     keys[i] = i % 7 === 0 ? maxKey : seed % (maxKey + 1);

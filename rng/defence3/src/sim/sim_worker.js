@@ -350,7 +350,7 @@ function _simTick(msg) {
         return;
     }
     // The rolling state hash, as every peer records it after a tick.
-    let hash = msg.hash ? snapRecordTickHash(tick) : null;
+    let hash = msg.hash && snapHashDue(tick) ? snapRecordTickHash(tick) : null;
     let report = typeof simTickReportHook === 'function' ? simTickReportHook(tick) : null;
     _simPostResult(tick, hash, simReportLockstepHashes ? [computeLockstepStateHashFast(tick)] : null, simMs, report);
 }

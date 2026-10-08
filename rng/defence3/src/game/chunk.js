@@ -66,13 +66,6 @@ function _regionMayHaveEnemyUnits(ownerId, minCx, minCy, maxCx, maxCy) {
     return false;
 }
 
-function getSpatialKey(wx, wy) {
-    let cx = Math.floor(wx / (CHUNK_SIZE * TILE));
-    let cy = Math.floor(wy / (CHUNK_SIZE * TILE));
-    cx = Math.max(0, Math.min(CHUNKS_W - 1, cx));
-    cy = Math.max(0, Math.min(CHUNKS_H - 1, cy));
-    return cy * CHUNKS_W + cx;
-}
 
 // Replaced bucket arrays (initSpatialHash) bump this: a unit whose
 // _spatialEpoch differs is in none of the current buckets.
@@ -176,7 +169,7 @@ function spatialCountsDeferEnd(keepKernel = false) {
             P[0] = n; P[1] = 16384; P[2] = spatialUnitsComplexPlayerCount; P[3] = spatialUnitsComplexStridePerChunk; P[4] = spatialUnitsComplexStridePerPlayer;
             P[5] = CHUNKS_W; P[6] = spatialBlockCols; P[7] = SPATIAL_BLOCK_SIZE;
             P[8] = spatialUnitsComplexUnitTypeCount; P[9] = spatialTypeBlocksW; P[10] = SPATIAL_TYPE_BLOCK;
-            simParallelBind('spatial.types', spatialTypeCounts);
+            simParallelBind('spatial.types', spatialTypeCounts); P[11] = _simParReg['ix.bcount'] ? _simParReg['ix.bcount'].length : 0;
             simParallelRun(SIM_KERNEL_SP_COUNTS, Math.ceil(n / 16384));
         }
     }
@@ -367,7 +360,7 @@ let _sxTaken = false;
 let _sxPar = null;
 // From this many units the index is built by the kernels (tests lower it;
 // both builds give the same queries).
-let SPATIAL_PARALLEL_MIN_UNITS = 4096;
+let SPATIAL_PARALLEL_MIN_UNITS = 0;
 function spatialIndexRebuild() {
     // (Chunk moves a tick left pending, a tick that ended early: counted.)
     if (_spatialKernelMoves) spatialCountsDeferEnd();
@@ -381,7 +374,7 @@ function spatialIndexRebuild() {
     _sxDirty = false;
     _spatialIndexChainDrop();
     const n = units.length;
-    if (n >= SPATIAL_PARALLEL_MIN_UNITS && _simUnitState && typeof SIM_KERNEL_INDEX_COUNT === 'number' && _spatialIndexRebuildParallel()) return;
+    if (n >= SPATIAL_PARALLEL_MIN_UNITS && _simUnitState && typeof SIM_KERNEL_INDEX_KEYS === 'number' && _spatialIndexRebuildParallel()) return;
     _spatialIndexRebuildSerial();
 }
 function _spatialIndexRebuildParallel() {

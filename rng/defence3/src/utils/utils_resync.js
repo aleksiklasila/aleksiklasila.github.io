@@ -99,6 +99,8 @@ function resyncNoteRestored(tick) {
 // Called after every simulated tick in multiplayer. With the simulation
 // worker, `record` is the hash it computed for the tick.
 function resyncAfterTick(tick, record = null) {
+    // (Hashed ticks only: snapHashDue.)
+    if (!record && !snapHashDue(tick)) return;
     let r = record ? snapStoreTickHash(record) : snapRecordTickHash(tick);
     if (isHost) {
         _resyncHostHashQueue.push(r.tick, r.sum);
@@ -182,7 +184,7 @@ function resyncGuestMaybeRequest(now) {
     // shows again after it.
     if (g.T >= currentTick || g.divergedAt < g.graceTick) { g.divergedAt = -1; return; }
     let upTo = g.lastHashedTick;
-    if (upTo < g.divergedAt + SNAP_HASH_SLICES - 1 && !g.forceFull) return;
+    if (upTo < g.divergedAt + SNAP_HASH_ROTATION_TICKS - 1 && !g.forceFull) return;
     if (g.outstanding && (now - g.requestedAt) < RESYNC_REQUEST_RETRY_MS) return;
     let from = g.divergedAt;
     g.divergedAt = -1;

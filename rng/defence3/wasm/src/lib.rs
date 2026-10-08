@@ -20,6 +20,7 @@
 use core::arch::wasm32::*;
 
 mod mv;
+mod k;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -756,6 +757,7 @@ pub unsafe extern "C" fn sep_finish(
     mvw: *mut i8,
     agf: *const i32,
     moves_out: *mut i32,
+    pf: *const u8,
     n: i32,
     per: i32,
     tile: f64,
@@ -930,7 +932,7 @@ pub unsafe extern "C" fn sep_finish(
                         wr(area, i, if a >= 0 { a } else { -1 });
                         wr(spt, i, tl);
                     }
-                    if !(h != 0 && retry_hit(i)) {
+                    if !(h != 0 && retry_hit(i) && (pf.is_null() || rd(pf, i) != 0)) {
                         wr(fast, i, 3);
                         i += 1;
                         continue;
@@ -944,7 +946,21 @@ pub unsafe extern "C" fn sep_finish(
         }
         wr(xs, i, nx);
         wr(ys, i, ny);
-        let f = if h != 0 && retry_hit(i) && !(rd(on, i) != 0 && (rd(fl, i) & 4) == 0) { 2 } else { 1 };
+        // (On a retry tick: listed for its fallback path (mvPF), or for an
+        // index entry that is not current, put right by the simulation
+        // thread for a listed unit.)
+        let mut f = 1u8;
+        if h != 0 && retry_hit(i) && !(rd(on, i) != 0 && (rd(fl, i) & 4) == 0) {
+            if pf.is_null() || rd(pf, i) != 0 {
+                f = 2;
+            } else {
+                let cgx = if !(gx >= 0.0) { 0 } else if gx >= gw as f64 { gw - 1 } else { gx as i32 };
+                let cgy = if !(gy >= 0.0) { 0 } else if gy >= gh as f64 { gh - 1 } else { gy as i32 };
+                if !(ix && rd(spe, i) == epoch && rd(spo, i) == rd(owno, i) && rd(sepk, i) != absent && rd(spt, i) == cgy * gw + cgx) {
+                    f = 2;
+                }
+            }
+        }
         wr(fast, i, f);
         if f == 2 {
             wr(ex, base + ne, i as i32);
@@ -955,6 +971,168 @@ pub unsafe extern "C" fn sep_finish(
     wr(exc, chunk as usize, ne as i32);
     if moves && !moves_out.is_null() {
         wr(moves_out, 0, 1);
+    }
+}
+
+// =====================================================================
+// FLOW NAVIGATION: A DESTINATION'S FIELD (SIM_KERNEL_NAV_FIELDS)
+// =====================================================================
+
+const NAV_UNREACHED: u16 = 0xFFFF;
+
+/// One destination field: the costs to reach `dest` from every tile of the
+/// box (bx, by, bw x bh) into pool[off..off + bw * bh] (stepping onto a tile
+/// costs its step cost, 1 without costs; walls never entered: a Dial queue
+/// of four buckets), then (make_row) its row over the exit graph: 255 no
+/// way, 254 the field covers the part, else the part's node to leave by.
+/// `work`: this thread's scratch (words). Returns 0 when it does not fit.
+#[no_mangle]
+pub unsafe extern "C" fn nav_field(
+    pool: *mut u16, off: i32, slot_size: i32, bx: i32, by: i32, bw: i32, bh: i32, w: i32, h: i32, dest: i32,
+    wall: *const u8, cost: *const u8,
+    make_row: i32, nb: *const i32, nt: *const i32, npair: *const i32, npart: *const i32,
+    adj_s: *const i32, adj_a: *const i32, adj_c: *const i32, part_l: *const u16, part_b: *const i32,
+    csz: i32, cw: i32, nc: i32, np: i32, bcount: i32, k: i32, edges: i32,
+    rows: *mut u8, ro: i32, work: *mut i32, work_words: i32,
+) -> i32 {
+    // (The scratch's first four words: a kernel's tag and state, see k.rs
+    // scratch(): cleared, as this overwrites what follows.)
+    if work.is_null() || work_words < 4 {
+        return 0;
+    }
+    *work = 0;
+    let work = work.add(4);
+    let work_words = work_words - 4;
+    let (bwu, bhu) = (bw.max(0) as usize, bh.max(0) as usize);
+    let n = bwu * bhu;
+    let out = pool.add(off.max(0) as usize);
+    // (The whole slot: a made slot is written whole.)
+    for i in 0..(slot_size.max(0) as usize).max(n) {
+        *out.add(i) = NAV_UNREACHED;
+    }
+    let ww = work_words.max(0) as usize;
+    // ---- the field: Dial, four buckets of tile indices ----
+    let tx = irem(dest, w);
+    let ty = idiv(dest, w);
+    let (lx0, ly0) = (tx - bx, ty - by);
+    if lx0 >= 0 && ly0 >= 0 && lx0 < bw && ly0 < bh {
+        let qcap = n * 3;
+        if 4 + 4 * qcap > ww {
+            return 0;
+        }
+        // (Bucket b's count at work[b], its tiles from work[4 + b * qcap].)
+        let qn = work;
+        let qs = work.add(4);
+        for b in 0..4 {
+            *qn.add(b) = 0;
+        }
+        let l0 = (ly0 * bw + lx0) as usize;
+        *out.add(l0) = 0;
+        *qs = l0 as i32;
+        *qn = 1;
+        let mut pending = 1usize;
+        let mut d: u32 = 0;
+        while pending > 0 {
+            let b = (d & 3) as usize;
+            let qb = qs.add(b * qcap);
+            let mut i = 0usize;
+            while i < *qn.add(b) as usize {
+                let l = *qb.add(i) as usize;
+                i += 1;
+                pending -= 1;
+                if *out.add(l) as u32 != d {
+                    continue;
+                }
+                let ly = idiv(l as i32, bw);
+                let lx = l as i32 - ly * bw;
+                let (x, y) = (bx + lx, by + ly);
+                let t = (y * w + x) as usize;
+                let nd = d + if cost.is_null() { 1 } else { *cost.add(t) as u32 };
+                if nd > 0xFFFE {
+                    continue;
+                }
+                let nbk = (nd & 3) as usize;
+                let ndv = nd as u16;
+                let nq = qs.add(nbk * qcap);
+                let nc_ = qn.add(nbk);
+                macro_rules! push {
+                    ($l:expr) => {{ *out.add($l) = ndv; *nq.add(*nc_ as usize) = $l as i32; *nc_ += 1; pending += 1; }};
+                }
+                if lx + 1 < bw && x + 1 < w && *wall.add(t + 1) == 0 && ndv < *out.add(l + 1) { push!(l + 1); }
+                if lx > 0 && *wall.add(t - 1) == 0 && ndv < *out.add(l - 1) { push!(l - 1); }
+                if ly + 1 < bh && y + 1 < h && *wall.add(t + w as usize) == 0 && ndv < *out.add(l + bwu) { push!(l + bwu); }
+                if ly > 0 && *wall.add(t - w as usize) == 0 && ndv < *out.add(l - bwu) { push!(l - bwu); }
+            }
+            *qn.add(b) = 0;
+            d += 1;
+        }
+    }
+    if make_row == 0 || rows.is_null() || np <= 0 {
+        return 1;
+    }
+    // ---- the row: seeds (exits inside the field reaching the destination,
+    // by distance then node), then the search over the exit graph ----
+    let npu = np as usize;
+    let row = rows.add(ro.max(0) as usize);
+    for i in 0..npu {
+        *row.add(i) = 255;
+    }
+    if nb.is_null() || npart.is_null() || adj_s.is_null() || part_l.is_null() {
+        return 1;
+    }
+    let pl = *part_l.add(dest as usize);
+    if pl != 0xFFFF {
+        let dc = idiv(ty, csz) * cw + idiv(tx, csz);
+        *row.add((*part_b.add(dc as usize) + pl as i32) as usize) = 254;
+    }
+    let ku = k.max(0) as usize;
+    if 2 * ku > ww {
+        return 0;
+    }
+    let seed_n = work;
+    let seed_d = work.add(ku);
+    let mut ns = 0usize;
+    let (cx0, cy0, cx1, cy1) = (idiv(bx, csz), idiv(by, csz), idiv(bx + bw - 1, csz), idiv(by + bh - 1, csz));
+    for cy in cy0..=cy1 {
+        for cx in cx0..=cx1 {
+            let c = (cy * cw + cx) as usize;
+            for i in *nb.add(c)..*nb.add(c + 1) {
+                let t = *nt.add(i as usize);
+                let nty = idiv(t, w);
+                let ntx = t - nty * w;
+                let v = *out.add(((nty - by) * bw + (ntx - bx)) as usize);
+                if v == NAV_UNREACHED {
+                    continue;
+                }
+                *row.add(*npart.add(i as usize) as usize) = 254;
+                let v = v as i32;
+                // (Sorted by distance, then node: an insertion.)
+                let mut j = ns;
+                ns += 1;
+                while j > 0 && (*seed_d.add(j - 1) > v || (*seed_d.add(j - 1) == v && *seed_n.add(j - 1) > i)) {
+                    *seed_d.add(j) = *seed_d.add(j - 1);
+                    *seed_n.add(j) = *seed_n.add(j - 1);
+                    j -= 1;
+                }
+                *seed_d.add(j) = v;
+                *seed_n.add(j) = i;
+            }
+        }
+    }
+    nav_row(nb, npair, npart, adj_s, adj_a, adj_c, nc, k, np, bcount, edges, seed_n, seed_d, ns as i32, row,
+        work.add(2 * ku), (ww - 2 * ku) as i32)
+}
+
+/// Rows copied from their key's slot (the batch's other slots of a key):
+/// list[i]'s row from src[i]'s, for i in i0..i1 with src[i] >= 0.
+#[no_mangle]
+pub unsafe extern "C" fn nav_rows_copy(rows: *mut u8, list: *const i32, src: *const i32, row_w: i32, i0: i32, i1: i32) {
+    let rw = row_w.max(0) as usize;
+    for i in i0.max(0) as usize..i1.max(0) as usize {
+        let from = *src.add(i);
+        if from >= 0 {
+            core::ptr::copy(rows.add(from as usize * rw), rows.add(*list.add(i) as usize * rw), rw);
+        }
     }
 }
 
@@ -971,8 +1149,7 @@ pub unsafe extern "C" fn sep_finish(
 /// `row` (np bytes) comes with 255 (no way) and 254 (the field covers the
 /// part) set; the rest is written here. Work arrays in `work` (this
 /// thread's scratch): returns 0 when they do not fit (the JS search then).
-#[no_mangle]
-pub unsafe extern "C" fn nav_row(
+unsafe fn nav_row(
     nb: *const i32,
     npair: *const i32,
     npart: *const i32,
@@ -1331,6 +1508,109 @@ struct AcqCtx {
     eid: *const i32,
 }
 
+/// The packed entries e0..e1 against the best so far (b2 its squared
+/// distance): four at a time (f32), within the best distance, another
+/// owner's, in an area; then the cover and the tie, one by one.
+#[inline(always)]
+unsafe fn acq_run(c: &AcqCtx, e0: usize, e1: usize, best: &mut i32, b2: &mut f32, best_id: &mut i32) {
+    let (ex, ey) = (c.ex as *const f32, c.ey as *const f32);
+    let (xf, yf) = (c.x as f32, c.y as f32);
+    let (ox, oy, ow, zero) = (f32x4_splat(xf), f32x4_splat(yf), i32x4_splat(c.owner), i32x4_splat(0));
+    let mut take = |e: usize, d2: f32, b2: &mut f32| {
+        let a = *c.ea.add(e);
+        if !cover(c.covf, c.covf_len, c.cbase + a) || d2 > *b2 {
+            return;
+        }
+        let qid = *c.eid.add(e);
+        if *best < 0 || d2 < *b2 || qid < *best_id {
+            *best = *c.es.add(e);
+            *b2 = d2;
+            *best_id = qid;
+        }
+    };
+    let mut e = e0;
+    while e + 4 <= e1 {
+        let dx = f32x4_sub(v128_load(ex.add(e) as *const v128), ox);
+        let dy = f32x4_sub(v128_load(ey.add(e) as *const v128), oy);
+        let d2 = f32x4_add(f32x4_mul(dx, dx), f32x4_mul(dy, dy));
+        let m = v128_and(
+            v128_and(f32x4_le(d2, f32x4_splat(*b2)), v128_not(i32x4_eq(v128_load(c.eo.add(e) as *const v128), ow))),
+            i32x4_ge(v128_load(c.ea.add(e) as *const v128), zero),
+        );
+        let mut bits = i32x4_bitmask(m);
+        if bits != 0 {
+            let mut d = [0f32; 4];
+            v128_store(d.as_mut_ptr() as *mut v128, d2);
+            while bits != 0 {
+                let l = bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                take(e + l, *d.as_ptr().add(l), b2);
+            }
+        }
+        e += 4;
+    }
+    while e < e1 {
+        if *c.ea.add(e) >= 0 && *c.eo.add(e) != c.owner {
+            let dx = *ex.add(e) - xf;
+            let dy = *ey.add(e) - yf;
+            take(e, dx * dx + dy * dy, b2);
+        }
+        e += 1;
+    }
+}
+
+/// A row of chunks for the row search: the chunks of row ty within the
+/// best distance of the unit (gap: the row's distance from it), from the
+/// first to the last with an enemy owner in it, one run of entries (the
+/// index lists them by chunk, row-major).
+#[inline(always)]
+unsafe fn acq_row(c: &AcqCtx, om: *const u8, foe: u8, cw: i32, cws: f32, ty: i32, gap: f32, xf: f32, best: &mut i32, b2: &mut f32, best_id: &mut i32) {
+    let xr = sqrt32((*b2 - gap * gap).max(0.0)) + 0.01;
+    let x0 = (floor32((xf - xr) / cws) as i32).max(0);
+    let x1 = (floor32((xf + xr) / cws) as i32).min(cw - 1);
+    if x0 > x1 {
+        return;
+    }
+    let row = (ty * cw) as usize;
+    let (foe16, zero16) = (u8x16_splat(foe), u8x16_splat(0));
+    let (mut first, mut last) = (usize::MAX, 0usize);
+    let mut tx = x0;
+    while tx <= x1 {
+        let k = row + tx as usize;
+        let mut bits = i8x16_bitmask(i8x16_ne(v128_and(v128_load(om.add(k) as *const v128), foe16), zero16)) as u32;
+        let rem = x1 - tx + 1;
+        if rem < 16 {
+            bits &= (1u32 << rem) - 1;
+        }
+        while bits != 0 {
+            let kk = k + bits.trailing_zeros() as usize;
+            bits &= bits - 1;
+            if *c.rst.add(kk) == c.ep {
+                if first == usize::MAX {
+                    first = kk;
+                }
+                last = kk;
+            }
+        }
+        tx += 16;
+    }
+    if first == usize::MAX {
+        return;
+    }
+    let e0 = *c.rs.add(first) as usize;
+    let e1 = (*c.rs.add(last) + *c.rc.add(last)) as usize;
+    acq_run(c, e0, e1, best, b2, best_id);
+}
+
+#[inline(always)]
+fn floor32(x: f32) -> f32 {
+    f32x4_extract_lane::<0>(f32x4_floor(f32x4_splat(x)))
+}
+#[inline(always)]
+fn sqrt32(x: f32) -> f32 {
+    f32x4_extract_lane::<0>(f32x4_sqrt(f32x4_splat(x)))
+}
+
 /// The enemies listed in chunk k (stamped this epoch) against the best so
 /// far: nearer, or as near with a lower id (best_id: the best's).
 #[inline(always)]
@@ -1341,25 +1621,9 @@ unsafe fn acq_chunk(c: &AcqCtx, k: usize, best: &mut i32, bd2: &mut f64, best_id
     let e0 = rd(c.rs, k) as usize;
     let e1 = e0 + rd(c.rc, k) as usize;
     if !c.ea.is_null() {
-        // The packed entries: one run, the scan's tests made already.
-        for e in e0..e1 {
-            let a = rd(c.ea, e);
-            if a < 0 || rd(c.eo, e) == c.owner || !cover(c.covf, c.covf_len, c.cbase + a) {
-                continue;
-            }
-            let dx = rd(c.ex, e) - c.x;
-            let dy = rd(c.ey, e) - c.y;
-            let d2 = dx * dx + dy * dy;
-            if d2 > *bd2 {
-                continue;
-            }
-            let qid = rd(c.eid, e);
-            if *best < 0 || d2 < *bd2 || qid < *best_id {
-                *best = rd(c.es, e);
-                *bd2 = d2;
-                *best_id = qid;
-            }
-        }
+        let mut b2 = *bd2 as f32;
+        acq_run(c, e0, e1, best, &mut b2, best_id);
+        *bd2 = b2 as f64;
         return;
     }
     for e in e0..e1 {
@@ -1511,8 +1775,13 @@ pub unsafe extern "C" fn acq_scan(
             let by0 = floor(y0 / b as f64);
             let bx1 = js_min((bc - 1) as f64, floor(x1 / b as f64));
             let by1 = js_min((br - 1) as f64, floor(y1 / b as f64));
-            if bx0 <= bx1 && by0 <= by1 && sat_sum(hs, (owner * plane) as usize, stride as usize, bx0 as usize, by0 as usize, bx1 as usize, by1 as usize) <= 0 {
-                continue;
+            if bx0 <= bx1 && by0 <= by1 {
+                let (o, st) = ((owner * plane) as usize, stride as usize);
+                let all = sat_sum(hs, o, st, bx0 as usize, by0 as usize, bx1 as usize, by1 as usize);
+                // (No enemy units: the hostile count less the structures'.)
+                if all <= 0 || (!hss.is_null() && all - sat_sum(hss, o, st, bx0 as usize, by0 as usize, bx1 as usize, by1 as usize) <= 0) {
+                    continue;
+                }
             }
         }
         let mut best = -1i32;
@@ -1527,12 +1796,55 @@ pub unsafe extern "C" fn acq_scan(
         // chunk is stamped, so tested first); the ring's top and bottom rows
         // sixteen chunks at a time.
         let c = AcqCtx { rst, rs, rc, es, flg, own, xs, ys, ag, covf, covf_len, id, ep, owner, cbase, tile, gw, gh, x, y, ex, ey, eo, ea, eid };
+        // The row search (with the packed entries): the unit's row, then the
+        // rows above and below in turn, each direction until a row lies
+        // farther than the best; each row within the best distance only.
+        if !ea.is_null() {
+            let mut b2 = bd2 as f32;
+            let cwsf = cws as f32;
+            let (xf, yf) = (x as f32, y as f32);
+            if cyi >= 0 && cyi < ch {
+                acq_row(&c, om, foe, cw, cwsf, cyi, 0.0, xf, &mut best, &mut b2, &mut best_id);
+            }
+            let (mut up, mut dn, mut k) = (true, true, 1i32);
+            while up || dn {
+                if up {
+                    let ty = cyi - k;
+                    let gap = (yf - (ty + 1) as f32 * cwsf - 0.01).max(0.0);
+                    if ty < 0 || gap * gap > b2 {
+                        up = false;
+                    } else if ty < ch {
+                        acq_row(&c, om, foe, cw, cwsf, ty, gap, xf, &mut best, &mut b2, &mut best_id);
+                    }
+                }
+                if dn {
+                    let ty = cyi + k;
+                    let gap = (ty as f32 * cwsf - yf - 0.01).max(0.0);
+                    if ty >= ch || gap * gap > b2 {
+                        dn = false;
+                    } else if ty >= 0 {
+                        acq_row(&c, om, foe, cw, cwsf, ty, gap, xf, &mut best, &mut b2, &mut best_id);
+                    }
+                }
+                k += 1;
+            }
+            wr(outa, s, best);
+            wr(tid, s, if best >= 0 { rd(id, best as usize) } else { 0 });
+            continue;
+        }
         let foe16 = u8x16_splat(foe);
         let zero16 = u8x16_splat(0);
         let mut ring = 0i32;
         while ring <= rti {
-            if best >= 0 && (ring - 2) as f64 * cws > sqrt(bd2) {
-                break;
+            // (Every chunk of this ring is at least the distance from the unit
+            // to the ring's inner edge away: none nearer than the best.)
+            if ring > 0 {
+                let gx = (x - (cxi - ring + 1) as f64 * cws).min((cxi + ring) as f64 * cws - x);
+                let gy = (y - (cyi - ring + 1) as f64 * cws).min((cyi + ring) as f64 * cws - y);
+                let lb = gx.min(gy) - 0.01;
+                if lb > 0.0 && lb * lb > bd2 {
+                    break;
+                }
             }
             let (ty0, ty1) = (cyi - ring, cyi + ring);
             let (t0, t1) = (if cxi - ring > 0 { cxi - ring } else { 0 }, if cxi + ring < cw { cxi + ring } else { cw - 1 });

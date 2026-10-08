@@ -2,20 +2,15 @@
 // ============================================================
 // RUST/WASM KERNELS AND THE SHARED HEAP THEY READ
 //
-// The heaviest kernels (the separation chain, the acquisition scan) have
-// Rust twins (wasm/src/lib.rs, built by wasm/build.cjs into
-// sim_wasm_bin.js). They work on the game's own typed arrays in place: the
-// arrays those kernels read are allocated in one shared WebAssembly.Memory
-// (simHeapArray, sim_parallel.js), and every thread of the simulation (the
-// simulation worker and each helper) instantiates the module over that
-// memory, each with a stack of its own. A kernel call passes the arrays'
-// addresses (simParallelBind records them, _simWPtrs reads them).
-//
-// A twin gives the JS kernel's results bit for bit, so either may run any
-// chunk: a thread without the module, an array not in the heap (the heap
-// full, a test's own arrays) or simWasmKernels(false) runs the JS kernel.
-// Peers with and without wasm (a browser without SIMD, a page that is not
-// cross-origin isolated) stay in lockstep.
+// The kernels are Rust (wasm/src/lib.rs, mv.rs; built by wasm/build.cjs into
+// sim_wasm_bin.js): there are no JavaScript versions. They work on the
+// game's own typed arrays in place: the arrays kernels read are allocated in
+// one shared WebAssembly.Memory (simHeapArray / simSharedArray,
+// sim_parallel.js), and every thread of the simulation (the simulation
+// worker and each helper) instantiates the module over that memory, each
+// with a stack of its own. A kernel call passes the arrays' addresses
+// (simParallelBind records them, _simWPtrs reads them). A kernel that cannot
+// run (no module, an array outside the heap) is an error (_simNoWasm).
 //
 // Load after sim_parallel.js (it installs that file's heap hooks) and
 // sim_wasm_bin.js.
@@ -47,6 +42,12 @@ function _simWasmArgsAt(p) {
 }
 const _simHeap = {
     tried: false, ready: false, memory: null, module: null, top: 0,
+    // The highest address ever handed out: memory above it has never been
+    // written since the memory grew (zero), so a take from there is not
+    // cleared again (clearing it only made the system commit every page:
+    // ~100 ms for a navigation rebuild's fields at 400k a team); fresh: the
+    // first such address of the last take.
+    hw: 0, fresh: 0,
     // Free blocks [ptr, size, ...] by address; freed arrays waiting
     // { arr, p, s, t, waits: [lane, chains posted then, ...] }.
     free: [], pending: [], clock: 0,
@@ -86,6 +87,7 @@ function simWasmInit() {
         const exp = new WebAssembly.Instance(module, { env: { memory } }).exports;
         H.memory = memory; H.module = module;
         H.top = _simHeapRound(exp.__heap_base.value);
+        H.hw = H.top;
         const on = new Int32Array(new SharedArrayBuffer(4));
         on[0] = 1;
         _simWasmOn = on;
@@ -111,13 +113,20 @@ function simWasmKernels(on) {
 function simWasmActive() { return _simHeap.ready && _simWasmX !== null && _simWasmOn[0] === 1; }
 
 // ---- the heap ----
-function _simHeapAllocImpl(Type, n) {
+function _simHeapAllocImpl(Type, n, clear = true) {
     if (!simWasmInit()) return simSharedArray(Type, n);
     const H = _simHeap, len = Math.max(1, n | 0), bytes = _simHeapRound(len * Type.BYTES_PER_ELEMENT + SIM_HEAP_PAD);
     const ptr = _simHeapTake(bytes);
-    if (ptr < 0) return simSharedArray(Type, n);
+    // (The heap full: plain shared memory, which the Rust kernels cannot read.)
+    if (ptr < 0) return new Type(new SharedArrayBuffer(Math.max(1, n) * Type.BYTES_PER_ELEMENT));
     const buf = H.memory.buffer;
-    new Uint8Array(buf, ptr, bytes).fill(0);
+    // (Only below the high-water mark; big ones by the helpers too:
+    // simParallelZeroHeap.)
+    const used = clear ? Math.min(bytes, H.fresh - ptr) : 0;
+    if (used > 0) {
+        if (typeof simParallelZeroHeap === 'function') simParallelZeroHeap(buf, ptr, used);
+        else new Uint8Array(buf, ptr, used).fill(0);
+    }
     const arr = new Type(buf, ptr, len);
     H.ptr.set(arr, ptr); H.size.set(arr, bytes);
     H.live += bytes; H.arrays++;
@@ -133,6 +142,7 @@ function _simHeapTake(bytes) {
         const p = F[best];
         if (F[best + 1] === bytes) F.splice(best, 2);
         else { F[best] += bytes; F[best + 1] -= bytes; }
+        H.fresh = p + bytes;
         return p;
     }
     const p = H.top, end = p + bytes, have = H.memory.buffer.byteLength;
@@ -144,6 +154,8 @@ function _simHeapTake(bytes) {
         try { H.memory.grow(step); } catch (err) { try { H.memory.grow(need); } catch (err2) { return -1; } }
     }
     H.top = end;
+    H.fresh = Math.max(p, H.hw);
+    if (end > H.hw) H.hw = end;
     return p;
 }
 function _simHeapReleaseImpl(arr) {
@@ -169,8 +181,8 @@ function _simHeapQueue(arr, p, s) {
 // either); a helper's copy is read only by a job, which the queue waits for.
 const _simHeapAuto = new WeakSet();
 const _simHeapAutoGone = typeof FinalizationRegistry === 'function' ? new FinalizationRegistry(h => _simHeapQueue(null, h.p, h.s)) : null;
-function _simHeapAllocAutoImpl(Type, n) {
-    const arr = _simHeapAllocImpl(Type, n), H = _simHeap, p = H.ptr.get(arr);
+function _simHeapAllocAutoImpl(Type, n, clear = true) {
+    const arr = _simHeapAllocImpl(Type, n, clear), H = _simHeap, p = H.ptr.get(arr);
     if (p === undefined || !_simHeapAutoGone) return arr;
     _simHeapAuto.add(arr);
     _simHeapAutoGone.register(arr, { p, s: H.size.get(arr) });
