@@ -2157,33 +2157,18 @@ function getChunkRenderView(view, bounds, flat2d) {
             const R = renderer3dInstance, M = detailCull ? R.tmpViewProjection : null;
             const projectionScale = detailCull ? (flat2d ? camera.zoom * TILE : R.lodProjectionScale) : 0;
             const sx = detailCull ? viewW / R.cssWidth : 1, sy = detailCull ? viewH / R.cssHeight : 1;
+            // The presentation worker builds immutable buckets with the frame.
+            // Camera frames only inspect nearby buckets, never rebuild an index
+            // over the whole army. Old/non-worker frames use the linear fallback.
+            const B = detailCull && F.renderBuckets;
             let candidates = null;
-            if (detailCull) {
-                // A packed spatial index is built once per received frame.
-                // Camera rotation then rejects whole distant/off-screen
-                // chunks instead of projecting the entire army each frame.
-                const side = 16, bw = Math.ceil(GRID_W / side), bh = Math.ceil(GRID_H / side), cells = bw * bh;
-                let B = rendererChunkCache.unitBuckets;
-                if (!B || B.head.length !== cells || B.next.length < n) B = rendererChunkCache.unitBuckets = {
-                    head: new Int32Array(cells), next: new Int32Array(Math.max(n, F.cap)), motion: new Float32Array(cells)
-                };
-                if (B.frame !== F || B.list !== list) {
-                    B.head.fill(-1); B.motion.fill(0);
-                    const invCell = 1 / (TILE * side), invTile = 1 / TILE;
-                    for (let k = 0; k < n; k++) {
-                        const s = ord[k], x = X[s], y = Y[s];
-                        const bx = Math.max(0, Math.min(bw - 1, Math.floor(x * invCell))), by = Math.max(0, Math.min(bh - 1, Math.floor(y * invCell)));
-                        const b = by * bw + bx;
-                        B.next[k] = B.head[b]; B.head[b] = k;
-                        const motion = Math.max(Math.abs(PX[s] - x), Math.abs(PY[s] - y)) * invTile;
-                        if (motion > B.motion[b]) B.motion[b] = motion;
-                    }
-                    B.frame = F; B.list = list;
-                }
+            if (B && B.columns === columns && B.rows === Math.ceil(GRID_H / 16) && B.tile === TILE) {
                 candidates = [];
-                for (let b = 0; b < cells; b++) {
+                const motionPad = (F.renderMotionPad || 0) / TILE;
+                for (let b = 0; b < B.head.length; b++) {
                     if (B.head[b] < 0) continue;
-                    const x = (b % bw + .5) * side, z = (Math.floor(b / bw) + .5) * side, radius = side / 2 + 2 + B.motion[b];
+                    const x = (b % B.columns + .5) * 16, z = (Math.floor(b / B.columns) + .5) * 16;
+                    const radius = 10 + Math.max(B.motion[b], motionPad);
                     const w = M[3] * x + M[11] * z + M[15], dw = radius * (Math.abs(M[3]) + Math.abs(M[11]));
                     if (w + dw <= 0 || .9 * projectionScale / (flat2d ? 1 : Math.max(.01, w - dw)) < UNIT_DETAIL_MIN_PX * .85) continue;
                     const cx = M[0] * x + M[8] * z + M[12], cy = M[1] * x + M[9] * z + M[13];
@@ -2275,7 +2260,7 @@ function useScaleRendering(flat2d, view) {
     }
     // Detail follows projected size, not the population of the entire map.
     // Close views use the chunk query below, so distant armies stay culled.
-    rendererScaleActive = pixels < (rendererScaleActive ? 16 : 12);
+    rendererScaleActive = pixels < (rendererScaleActive ? 24 : 22);
     return rendererScaleActive;
 }
 
@@ -3507,7 +3492,54 @@ function _structureGlyphLayer(D, floorItems, viewGrid) {
     L.version++;
     return L;
 }
-// Glyphs for every unit/structure outside the selected detail masks.
+// Shared appearances, indexed by the frame's type codes rather than entities.
+// Canonical 2D geometry and the real procedural model feed the same atlas.
+let _columnLodCatalog = null;
+function getColumnLodCatalog() {
+    if (typeof _pageFrameStrings === 'undefined') return null;
+    const key = _pageFrameStrings.join('|');
+    if (_columnLodCatalog?.key === key) return _columnLodCatalog;
+    const width = Math.max(1, 2 ** Math.ceil(Math.log2(_pageFrameStrings.length))), styles = [];
+    const lookup = new Float32Array(width * 8 * 4);
+    function add(row, code, style) {
+        lookup[(row * width + code) * 4] = styles.length * 9 + 1;
+        styles.push(style);
+    }
+    for (let code = 0; code < _pageFrameStrings.length; code++) {
+        const type = _pageFrameStrings[code], unit = BASE_UNIT_STATS[type], card = BASE_CARD_TYPES[type];
+        if (unit) {
+            const scale = type === 'fast' ? 1.35 : type === 'scout' ? 1.2 : type === 'flying' ? 1.3 : unit.isFlying ? .8 : 1;
+            add(7, code, {modelKey:'unit_'+type, type, unit:true, isFlying:!!unit.isFlying, isWorker:!!unit.isWorker,
+                weaponType:getUnit3DWeaponType({unitType:type,attackStyle:unit.attackStyle}),
+                color:UNIT_3D_BODY_COLORS[type] || unit.color, scaleX:scale, scaleY:scale*(MOUNTED_UNIT_TYPES.has(type)?MOUNT_HEIGHT_RATIO:1.45),
+                draw(g) { drawUnitBodyGeometry(g,{...unit,unitType:type,x:32,y:32,r:22,isSnake:type==='snake',carryingValue:0},'#151923',2); }
+            });
+            add(1, code, {modelKey:'barrack_'+type, type, color:unit.color, scaleX:1, scaleY:.62/.94,
+                draw(g) { g.fillStyle='#543';g.fillRect(5,5,54,54);drawUnitBodyGeometry(g,{...unit,unitType:type,x:32,y:32,r:18,isSnake:type==='snake'},'#111',2); }
+            });
+        }
+        if (card) {
+            const spawner = ['spawner','astar_spawner','salvager','builder_spawner','healer_spawner','research'].includes(type);
+            const floor = card.target === 'floor';
+            const row = spawner ? 2 : floor ? 3 : 0;
+            add(row,code,{modelKey:(spawner?'spawner_':floor?'item_':'tower_')+type,type,color:card.color||'#aaa',
+                scaleX:1,scaleY:spawner?.62/.94:floor?.7:1.05/.94,
+                draw(g) {
+                    if(spawner) {g.fillStyle='#543';g.fillRect(5,5,54,54);drawWorkerBuildingEmblem(g,32,32,1.8,type);}
+                    else {const sprite=floor?_getFloorItemSprite({type,energy:100,maxEnergy:100}):_getTowerIconSprite(card.color||'#aaa',0,type,true);if(sprite)g.drawImage(sprite,4,4,56,56);}
+                }
+            });
+        }
+    }
+    for (const [row,type,color] of [[4,'gold','#ffd34d'],[5,'astar','#eefaff']]) {
+        const base=styles.length*9+1;
+        styles.push({modelKey:type+'_mine_base',type,color,scaleX:1,scaleY:.5,
+            draw(g){g.fillStyle=color;g.beginPath();g.moveTo(32,5);g.lineTo(58,32);g.lineTo(32,59);g.lineTo(6,32);g.closePath();g.fill();}});
+        for(let code=0;code<width;code++)lookup[(row*width+code)*4]=base;
+    }
+    return _columnLodCatalog = {key,width,styles,lookup};
+}
+// Shared sprites for every unit/structure outside the selected detail masks.
 function _detailColumns(unitDetail, structDetail) {
     // (A remembered view's structures have no table: their glyphs are the
     // instance layer's, _structureGlyphLayer.)
@@ -3575,6 +3607,7 @@ let _structDetailMode = false;
 let _structDetailPx = new Float32Array(0);
 let _structDetailPrevious = null, _structDetailVersion = 0;
 let _structDetailCache = null;
+let _structProjectionCache = null;
 function _structureDetailSplit(lists, flat2d, bounds, live = true) {
     const R = renderer3dInstance;
     if (!R || typeof R.columnPixelScale !== 'function' || (live && (typeof _pageTables === 'undefined' || !_pageTables.s))) return null;
@@ -3586,13 +3619,27 @@ function _structureDetailSplit(lists, flat2d, bounds, live = true) {
         const F = _pageTables.s, n = F.n, previous = _structDetailPrevious;
         if (_structDetailPx.length < n) _structDetailPx = new Float32Array(Math.ceil(n * 1.5));
         const P = _structDetailPx.subarray(0, n);
+        // Buildings do not move every simulation tick. Cache their projected
+        // scores, while still checking life/visibility and changed slots live.
+        const viewKey = _detailViewKey(flat2d);
+        let projection = _structProjectionCache;
+        if (!projection || projection.x.length < n) {
+            projection = _structProjectionCache = { x: new Float32Array(F.cap).fill(NaN),
+                y: new Float32Array(F.cap), retained: new Uint8Array(F.cap), scores: new Float32Array(F.cap), key: null };
+        }
+        const moved = projection.key !== viewKey;
         for (let s = 0; s < n; s++) {
             P[s] = 0;
+            const gx = F.gx[s], gy = F.gy[s], retained = previous?.mask?.[s] ? 1 : 0;
+            if (moved || projection.x[s] !== gx || projection.y[s] !== gy || projection.retained[s] !== retained) {
+                projection.scores[s] = _detailScore(gx + .5, gy + .5, .94, flat2d, !!retained);
+                projection.x[s] = gx; projection.y[s] = gy; projection.retained[s] = retained;
+            }
             if (!F.alive[s] || F.kind[s] === 6 || (F.kind[s] < 4 && F.energy[s] <= 0)) continue;
-            const gx = F.gx[s], gy = F.gy[s];
             if (!fullVisibility && !(visibilityGrid[gy]?.[gx] > 0)) continue;
-            P[s] = _detailScore(gx + .5, gy + .5, .94, flat2d, !!previous?.mask?.[s]);
+            P[s] = projection.scores[s];
         }
+        projection.key = viewKey;
         const slots = _detailPick(P, STRUCT_DETAIL_BUDGET), selected = new Set();
         const out = lists.map(() => []), floors = [], byKind = [0, 1, 2, -1, 3, 4];
         for (const s of slots) {
@@ -3648,7 +3695,9 @@ function _structureDetailSplit(lists, flat2d, bounds, live = true) {
 // thousands. Visible readable units share a hard budget; all others use GPU
 // glyphs. The same slot mask selects exactly one representation on the GPU.
 // null: every unit in view in detail (few enough, or no frame).
-const UNIT_DETAIL_BUDGET = 600, UNIT_DETAIL_MIN_PX = 12;
+// GPU silhouettes cover the middle distances; reserve model/texture work for
+// bodies large enough to show it. Thresholds are CSS pixels, not render pixels.
+const UNIT_DETAIL_BUDGET = 600, UNIT_DETAIL_MIN_PX = 24;
 let _unitDetailPx = new Float32Array(0);
 // Stable detail (no blinking between models and glyphs): the split starts
 // over 125% of the budget and ends under 80% of it; a unit in detail stays so

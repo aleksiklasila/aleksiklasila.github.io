@@ -24,4 +24,10 @@ assert.equal(reused[n-8].id,n+1);assert.equal(c._pageUnitsById.get(50),retained)
 const remap={...reuse,id:reuse.id.slice()};[remap.id[49],remap.id[50]]=[remap.id[50],remap.id[49]];
 assert.equal(c._simClientUpdateStableSlots(remap,reuse),null,'restores that remap existing IDs use the general identity-preserving path');
 assert.equal(retained.dead,false,'fallback detection mutates nothing');
+const previous={n:3,id:new Int32Array([1,2,3]),x:new Float32Array([100,200,300]),y:new Float32Array([30,40,50]),px:new Float32Array([0,100,200]),py:new Float32Array([10,20,30])};
+const rebased={n:3,id:new Int32Array([1,9,-1]),x:new Float32Array([150,900,0]),y:new Float32Array([30,0,0]),px:new Float32Array([100,900,0]),py:new Float32Array([30,0,0]),renderBuckets:{}};
+c._simClientRebaseFrame(rebased,previous,.5);
+assert.deepEqual(Array.from(rebased.px),[50,900,0],'only matching live identities are rebased');
+assert.equal(rebased.py[0],20);
+assert.equal(rebased.renderMotionPad,100,'worker culling includes the entire rebased path');
 console.log('PASS 100k-slot death, frozen final position, slot reuse, ordering and restore fallback without survivor writes');

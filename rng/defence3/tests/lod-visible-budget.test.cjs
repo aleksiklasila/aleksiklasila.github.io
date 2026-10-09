@@ -39,6 +39,18 @@ project(true,4);assert.equal(c._unitDetailSplit(c.units,true,{}).units.length,20
 // A tilted camera's padded ground AABB contains nearby off-screen objects.
 const points=Array.from({length:20000},(_,i)=>[460+(i%200)*.4,460+Math.floor(i/200)*.8]);
 const F=populate(points);
+// Worker-owned buckets must agree with the fallback for camera rotations and
+// a long rebased interpolation. They share the frame's buffer lifetime.
+const worker=read('src/sim/presentation_worker.js');
+vm.runInContext(worker.slice(worker.indexOf('function buildRenderBuckets('),worker.indexOf('function draw()')),c);
+c.SIM_FRAME_SLOT_BYTES=108;
+F.buf=new ArrayBuffer(F.cap*108+63*63*8+F.cap*4);
+const B=c.buildRenderBuckets(F,F.count,63,63,32), cells=B.columns*B.rows;
+F.renderBuckets={...B,head:new Int32Array(F.buf,B.offset,cells),motion:new Float32Array(F.buf,B.offset+cells*4,cells),next:new Int32Array(F.buf,B.offset+cells*8,F.cap)};
+const indexed=[];
+for(let b=0;b<cells;b++)for(let k=F.renderBuckets.head[b];k>=0;k=F.renderBuckets.next[k])indexed.push(k);
+assert.equal(new Set(indexed).size,F.count,'every unit occurs in exactly one worker bucket');
+assert.equal(indexed.length,F.count);
 for(const pitch of [.18,.55,1.35]) for(const yaw of [0,Math.PI/2,Math.PI,3*Math.PI/2]) {
     project(false,3,pitch,yaw);
     split=c._unitDetailSplit(c.units,false,{});
@@ -78,6 +90,17 @@ for(const flat of [true,false])for(const zoom of [.6,3,15])for(const yaw of [0,M
 }
 // Long movement across chunk boundaries must not disappear mid-tick.
 F.px[0]=470*32;F.py[0]=500*32;F.x[0]=530*32;F.y[0]=500*32;
+// Rebuild at the destination, then emulate a page interpolation rebase.
+F.px[0]=F.x[0];F.py[0]=F.y[0];c.buildRenderBuckets(F,F.count,63,63,32);
+F.px[0]=470*32;F.renderMotionPad=60*32;
 c.simClientCurrentUnitVis=()=>({...F});c.tickAlpha=.5;project(true,15);c.gameTime++;
 assert.ok(c.getChunkRenderView(world,{minGx:495,minGy:495,maxGx:505,maxGy:505},true).units.includes(c.units[0]));
 console.log('PASS visible detail, equal sizes, small-unit zoom, hard budgets, exact masks, reuse, and 12 low/high camera rotations');
+const lod=c.window.figureLodLevel;
+assert.equal(lod(0,80),0);
+assert.equal(lod(0,55),1,'medium mesh is visible before the detail cutoff');
+assert.equal(lod(1,32),2,'coarse mesh bridges to GPU silhouettes');
+assert.equal(lod(1,67),1,'medium mesh does not flicker near the full boundary');
+assert.equal(lod(2,42),2,'coarse mesh does not flicker near the medium boundary');
+assert.equal(lod(2,45),1);
+assert.equal(lod(1,71),0);

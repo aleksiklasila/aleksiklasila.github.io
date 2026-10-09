@@ -1,0 +1,423 @@
+{
+  "fixture": "200000-1000.json",
+  "setup": {
+    "units": 400000,
+    "structures": 60262,
+    "map": 1000,
+    "viewport": {
+      "width": 776,
+      "height": 669
+    },
+    "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 2060 (0x00001F15) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "graphics": {
+      "aa": "msaa",
+      "shadows": "high",
+      "ao": "low",
+      "outline": true,
+      "bloom": false,
+      "grade": true,
+      "sharpen": true,
+      "resolution": 1
+    }
+  },
+  "results": [
+    {
+      "mode": "2d",
+      "zoom": 0.025,
+      "pitch": 1.35,
+      "yaw": 0,
+      "fps": 83.03575074620115,
+      "p95": 33.25,
+      "buildMs": 0.671174862997128,
+      "detail": 0,
+      "visibleDetail": 0,
+      "scale": true,
+      "flat": true,
+      "objects": 0,
+      "modelCount": 0,
+      "meshLods": null,
+      "units": 400000,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 0,
+        "build": 1,
+        "why": {
+          "none": 1
+        }
+      }
+    },
+    {
+      "mode": "2d",
+      "zoom": 0.6,
+      "pitch": 1.35,
+      "yaw": 0,
+      "fps": 79.77192481418503,
+      "p95": 33.35000000000582,
+      "buildMs": 0.7323011322454973,
+      "detail": 0,
+      "visibleDetail": 0,
+      "scale": true,
+      "flat": true,
+      "objects": 0,
+      "modelCount": 0,
+      "meshLods": null,
+      "units": 400000,
+      "tps": 21,
+      "unitLayerStats": {
+        "reuse": 0,
+        "build": 1,
+        "why": {
+          "none": 1
+        }
+      }
+    },
+    {
+      "mode": "2d",
+      "zoom": 3,
+      "pitch": 1.35,
+      "yaw": 0,
+      "fps": 67.87806384522806,
+      "p95": 41.63999999999942,
+      "buildMs": 2.1803333334128063,
+      "detail": 269,
+      "visibleDetail": 172,
+      "scale": false,
+      "flat": true,
+      "objects": 0,
+      "flatCount": 269,
+      "modelCount": 0,
+      "meshLods": null,
+      "units": 400000,
+      "tps": 21,
+      "unitLayerStats": {
+        "reuse": 0,
+        "build": 1,
+        "why": {
+          "none": 1
+        }
+      }
+    },
+    {
+      "mode": "2d",
+      "zoom": 15,
+      "pitch": 1.35,
+      "yaw": 0,
+      "fps": 64.99571619157372,
+      "p95": 41.93000000000029,
+      "buildMs": 2.0059090923596097,
+      "detail": 44,
+      "visibleDetail": 10,
+      "scale": false,
+      "flat": true,
+      "objects": 0,
+      "flatCount": 44,
+      "modelCount": 0,
+      "meshLods": null,
+      "units": 400000,
+      "tps": 18,
+      "unitLayerStats": {
+        "reuse": 0,
+        "build": 1,
+        "why": {
+          "none": 1
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 0.025,
+      "pitch": 1.35,
+      "yaw": 0,
+      "fps": 80.54025315856892,
+      "p95": 33.30500000000029,
+      "buildMs": 0.7967415743329552,
+      "detail": 0,
+      "visibleDetail": 0,
+      "scale": true,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 0,
+      "units": 400000,
+      "tps": 21,
+      "unitLayerStats": {
+        "reuse": 0,
+        "build": 1,
+        "why": {
+          "none": 1
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 0.6,
+      "pitch": 1.35,
+      "yaw": 0,
+      "fps": 91.60146108647274,
+      "p95": 24.959999999999127,
+      "buildMs": 0.6956930685751509,
+      "detail": 0,
+      "visibleDetail": 0,
+      "scale": true,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 0,
+      "units": 400000,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 0,
+        "build": 1,
+        "why": {
+          "none": 1
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 3,
+      "pitch": 0.38,
+      "yaw": 0,
+      "fps": 73.86176973538986,
+      "p95": 33.599999999998545,
+      "buildMs": 2.3435276081225624,
+      "detail": 600,
+      "visibleDetail": 476,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 600,
+      "meshLods": {
+        "full": 100,
+        "medium": 144,
+        "far": 356
+      },
+      "units": 400000,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 260,
+        "build": 100,
+        "why": {
+          "none": 2,
+          "tick": 98
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 3,
+      "pitch": 0.38,
+      "yaw": 1.5707963267948966,
+      "fps": 78.44877630948258,
+      "p95": 33.29000000000815,
+      "buildMs": 2.3738571429252624,
+      "detail": 600,
+      "visibleDetail": 555,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 600,
+      "meshLods": {
+        "full": 52,
+        "medium": 162,
+        "far": 386
+      },
+      "units": 400000,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 521,
+        "build": 204,
+        "why": {
+          "none": 2,
+          "tick": 201,
+          "units": 1
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 3,
+      "pitch": 0.38,
+      "yaw": 3.141592653589793,
+      "fps": 65.40504572689835,
+      "p95": 49.830000000001746,
+      "buildMs": 2.849444442325168,
+      "detail": 600,
+      "visibleDetail": 551,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 600,
+      "meshLods": {
+        "full": 62,
+        "medium": 156,
+        "far": 382
+      },
+      "units": 400000,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 761,
+        "build": 308,
+        "why": {
+          "none": 2,
+          "tick": 304,
+          "units": 2
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 3,
+      "pitch": 0.38,
+      "yaw": 4.71238898038469,
+      "fps": 70.0023936290278,
+      "p95": 41.84000000001106,
+      "buildMs": 2.3349032232838294,
+      "detail": 599,
+      "visibleDetail": 468,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 599,
+      "meshLods": {
+        "full": 86,
+        "medium": 141,
+        "far": 372
+      },
+      "units": 400000,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 1007,
+        "build": 412,
+        "why": {
+          "none": 2,
+          "tick": 405,
+          "units": 5
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 15,
+      "pitch": 0.38,
+      "yaw": 0,
+      "fps": 79.40937575069398,
+      "p95": 33.33999999999651,
+      "buildMs": 2.2017142837388173,
+      "detail": 586,
+      "visibleDetail": 455,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 586,
+      "meshLods": {
+        "full": 117,
+        "medium": 103,
+        "far": 366
+      },
+      "units": 400000,
+      "tps": 22,
+      "unitLayerStats": {
+        "reuse": 1285,
+        "build": 513,
+        "why": {
+          "none": 2,
+          "tick": 505,
+          "units": 6
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 15,
+      "pitch": 0.38,
+      "yaw": 1.5707963267948966,
+      "fps": 52.999764194715866,
+      "p95": 66.56999999999243,
+      "buildMs": 3.4968220359188016,
+      "detail": 600,
+      "visibleDetail": 539,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 600,
+      "meshLods": {
+        "full": 123,
+        "medium": 127,
+        "far": 350
+      },
+      "units": 400000,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 1468,
+        "build": 621,
+        "why": {
+          "none": 2,
+          "tick": 610,
+          "units": 9
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 15,
+      "pitch": 0.38,
+      "yaw": 3.141592653589793,
+      "fps": 56.16094640240759,
+      "p95": 49.970000000001164,
+      "buildMs": 3.354072582337164,
+      "detail": 600,
+      "visibleDetail": 542,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 600,
+      "meshLods": {
+        "full": 114,
+        "medium": 133,
+        "far": 353
+      },
+      "units": 400000,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 1684,
+        "build": 726,
+        "why": {
+          "none": 2,
+          "tick": 714,
+          "units": 10
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 15,
+      "pitch": 0.38,
+      "yaw": 4.71238898038469,
+      "fps": 59.51083006115541,
+      "p95": 41.70999999999185,
+      "buildMs": 3.103511453129863,
+      "detail": 583,
+      "visibleDetail": 449,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 583,
+      "meshLods": {
+        "full": 114,
+        "medium": 103,
+        "far": 366
+      },
+      "units": 400000,
+      "tps": 19,
+      "unitLayerStats": {
+        "reuse": 1871,
+        "build": 822,
+        "why": {
+          "none": 2,
+          "tick": 809,
+          "units": 11
+        }
+      }
+    }
+  ],
+  "errors": []
+}

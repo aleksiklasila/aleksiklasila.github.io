@@ -234,12 +234,37 @@ function updateFog(T) {
 }
 // The metadata columns copied whole each frame (the pump writes them).
 const META_COPY=['type','wtype','wstate','style','watchedBy','vision','maxEnergy','cargo','tx','ty'];
+// Append the render-only spatial index to the immutable presentation buffer.
+// Its lifetime follows the existing three-buffer pool; no extra messages or
+// population-sized indexing pass on the animation thread.
+function buildRenderBuckets(F, count, columns, rows, tile) {
+    const cells = columns * rows, offset = F.cap * SIM_FRAME_SLOT_BYTES;
+    const head = new Int32Array(F.buf, offset, cells);
+    const motion = new Float32Array(F.buf, offset + cells * 4, cells);
+    const next = new Int32Array(F.buf, offset + cells * 8, F.cap);
+    head.fill(-1); motion.fill(0);
+    const invCell = 1 / (tile * 16), invTile = 1 / tile;
+    for (let k = 0; k < count; k++) {
+        const s = F.order[k], x = F.x[s], y = F.y[s];
+        const bx = Math.max(0, Math.min(columns - 1, Math.floor(x * invCell)));
+        const by = Math.max(0, Math.min(rows - 1, Math.floor(y * invCell)));
+        const b = by * columns + bx;
+        next[k] = head[b]; head[b] = k;
+        const distance = Math.max(Math.abs(F.px[s] - x), Math.abs(F.py[s] - y)) * invTile;
+        if (distance > motion[b]) motion[b] = distance;
+    }
+    return { columns, rows, tile, offset };
+}
 function draw() {
     const started=performance.now();
     scheduled=false;
     const tick=latest;
     if (!tick || !source) return;
-    const cap=source.id.length, buf=acquire(cap*SIM_FRAME_SLOT_BYTES);
+    const cap=source.id.length;
+    const columns = tick.n >= 5000 && tick.gw > 0 ? Math.ceil(tick.gw / 16) : 0;
+    const rows = columns ? Math.ceil(tick.gh / 16) : 0;
+    const indexBytes = columns * rows ? columns * rows * 8 + cap * 4 : 0;
+    const buf=acquire(cap*SIM_FRAME_SLOT_BYTES + indexBytes);
     if (!buf) return;
     latest=null;
     const C=source;
@@ -269,6 +294,7 @@ function draw() {
     } else FORD.set(lastOrder);
     const t3=performance.now();
     const world={units:{buf,cap,n:tick.n,count,mver:membership},strings:[0,strings]};
+    if (indexBytes) world.units.renderBuckets = buildRenderBuckets(F, count, columns, rows, tick.tile || 32);
     if(structure && structureRevision!==sentStructureRevision) {
         const b=acquire(structure.buf.byteLength,'structures');
         if(b) {new Uint8Array(b,0,structure.buf.byteLength).set(new Uint8Array(structure.buf));world.structures={...structure,buf:b};sentStructureRevision=structureRevision;}

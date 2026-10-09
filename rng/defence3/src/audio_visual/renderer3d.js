@@ -1785,9 +1785,9 @@
     // Figure detail level (0 full, 1 simplified, 2 far) from the on-screen
     // size in CSS pixels, with hysteresis around each threshold.
     function figureLodLevel(previous, pixels) {
-        let level1 = previous >= 1 ? pixels < 27 : pixels < 24;
+        let level1 = previous >= 1 ? pixels < 70 : pixels < 64;
         if (!level1) return 0;
-        return (previous >= 2 ? pixels < 13.5 : pixels < 12) ? 2 : 1;
+        return (previous >= 2 ? pixels < 44 : pixels < 40) ? 2 : 1;
     }
     if (typeof window !== 'undefined') window.figureLodLevel = figureLodLevel;
     function proceduralKind(object) {
@@ -5661,11 +5661,106 @@
         // screen-facing unit/building glyph. Visibility and transforms are GPU work.
         // Pixels per world unit of size for the column glyphs (their size
         // rule, shared with the detail split: renderer.js _unitDetailSplit).
+        prepareColumnAtlas() {
+            const catalog = typeof getColumnLodCatalog === 'function' ? getColumnLodCatalog() : null;
+            if (!catalog || this.columnAtlas?.catalog === catalog) return this.columnAtlas;
+            const gl = this.gl, cell = 64, grid = 2 ** Math.ceil(Math.log2(Math.ceil(Math.sqrt(catalog.styles.length * 9 + 1))));
+            const old = this.columnAtlas;
+            if (old) for (const name of ['color','mask','meta','lookup']) gl.deleteTexture(old[name]);
+            const A = this.columnAtlas = {catalog,grid,metaData:new Float32Array(grid*grid*4)};
+            gl.activeTexture(gl.TEXTURE0);
+            for (const name of ['color','mask']) {
+                A[name] = gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,A[name]);
+                gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,grid*cell,grid*cell,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+            }
+            const makeCanvas = () => {const c=document.createElement('canvas');c.width=c.height=cell;return c;};
+            const color=makeCanvas(), mask=makeCanvas(), g=color.getContext('2d'), m=mask.getContext('2d');
+            const upload = (index, meta) => {
+                A.metaData.set(meta,index*4);
+                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+                for (const [name,canvas] of [['color',color],['mask',mask]]) {
+                    gl.bindTexture(gl.TEXTURE_2D,A[name]);
+                    gl.texSubImage2D(gl.TEXTURE_2D,0,(index%grid)*cell,Math.floor(index/grid)*cell,gl.RGBA,gl.UNSIGNED_BYTE,canvas);
+                }
+            };
+            catalog.styles.forEach((style,i) => {
+                g.clearRect(0,0,cell,cell);m.clearRect(0,0,cell,cell);
+                style.draw(g);
+                // Type colors occupy the body; ownership stays on a thin rim.
+                if (!style.unit) {
+                    for (const ctx of [g,m]) {ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.strokeRect(4,4,56,56);}
+                }
+                upload(i*9+1,[1.35,0,0,1]);
+                const panel=makeCanvas();panel.getContext('2d').drawImage(color,0,0);
+                const kind=proceduralKind(style), data=kind?createFigureData(kind,1):null;
+                if (!data) return;
+                for(let direction=0;direction<8;direction++) {
+                    const meta=this.bakeColumnModel(g,m,data,style,direction*Math.PI/4,panel);
+                    upload(i*9+2+direction,meta);
+                }
+            });
+            for (const name of ['color','mask']) {gl.bindTexture(gl.TEXTURE_2D,A[name]);gl.generateMipmap(gl.TEXTURE_2D);}
+            for (const [name,width,height,data] of [['meta',grid,grid,A.metaData],['lookup',catalog.width,8,catalog.lookup]]) {
+                A[name]=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,A[name]);
+                gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,width,height,0,gl.RGBA,gl.FLOAT,data);
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+            }
+            return A;
+        }
+
+        // Bake the actual model's colored surfaces, equipment and panels once
+        // per type/view. Hundreds of thousands of entities share these images.
+        bakeColumnModel(g,m,data,style,yaw,panel) {
+            const c=Math.cos(yaw),s=Math.sin(yaw),sp=Math.sin(.65),cp=Math.cos(.65);
+            const P=data.positions,N=data.normals,D=data.details,I=data.indices,U=data.uvs;
+            const vertices=[],faces=[];let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+            for(let i=0;i<P.length;i+=3) {
+                const x=P[i]*style.scaleX,y=P[i+1]*style.scaleY,z=P[i+2]*style.scaleX;
+                const px=c*x-s*z,py=cp*y-sp*(s*x+c*z),depth=sp*y+cp*(s*x+c*z);
+                vertices.push([px,py,depth]);minX=Math.min(minX,px);maxX=Math.max(maxX,px);minY=Math.min(minY,py);maxY=Math.max(maxY,py);
+            }
+            const size=Math.max(maxX-minX,maxY-minY)*1.12,cx=(minX+maxX)/2,cy=(minY+maxY)/2,scale=64/size;
+            for(const v of vertices) {v[0]=32+(v[0]-cx)*scale;v[1]=32-(v[1]-cy)*scale;}
+            for(let i=0;i<I.length;i+=3)faces.push([I[i],I[i+1],I[i+2],(vertices[I[i]][2]+vertices[I[i+1]][2]+vertices[I[i+2]][2])/3]);
+            faces.sort((a,b)=>a[3]-b[3]);g.clearRect(0,0,64,64);m.clearRect(0,0,64,64);
+            let tint=hexToRgb(style.color||'#aaa');const peak=Math.max(...tint,.01);tint=tint.map(v=>v*Math.max(1,.62/peak));
+            const palette={1:[.07,.08,.10],2:[1,1,1],3:[.48,.94,1],4:tint,5:[.42,.29,.18],6:[.88,.86,.80],7:tint,8:[.96,.74,.24],9:[.88,.18,.2],10:[.44,.45,.49],11:[.24,.54,.22],12:[.035,.02,.06],13:[.8,.67,.36],14:[.19,.2,.23],15:[1,1,1]};
+            for(const face of faces) {
+                const [a,b,c]=face,points=[vertices[a],vertices[b],vertices[c]],surface=D[a*4]|0;
+                const light=.72+.28*Math.max(0,-.42*N[a*3]+.86*N[a*3+1]+.31*N[a*3+2]);
+                const rgb=(palette[surface]||tint).map(v=>Math.round(Math.min(1,v*light)*255));
+                for(const ctx of [g,m]) {ctx.beginPath();ctx.moveTo(points[0][0],points[0][1]);ctx.lineTo(points[1][0],points[1][1]);ctx.lineTo(points[2][0],points[2][1]);ctx.closePath();}
+                g.fillStyle=`rgb(${rgb.join(',')})`;g.strokeStyle=g.fillStyle;g.lineWidth=.4;g.fill();g.stroke();
+                m.fillStyle=surface===2||surface===15?'#fff':'#000';m.strokeStyle=m.fillStyle;m.lineWidth=.4;m.fill();m.stroke();
+                if(surface===4 && U) {
+                    const u0=U[a*2]*64,v0=(1-U[a*2+1])*64,u1=U[b*2]*64,v1=(1-U[b*2+1])*64,u2=U[c*2]*64,v2=(1-U[c*2+1])*64;
+                    const det=(u1-u0)*(v2-v0)-(u2-u0)*(v1-v0);
+                    if(Math.abs(det)>.001) {
+                        const [p0,p1,p2]=points;
+                        const ax=((p1[0]-p0[0])*(v2-v0)-(p2[0]-p0[0])*(v1-v0))/det;
+                        const ay=((p1[1]-p0[1])*(v2-v0)-(p2[1]-p0[1])*(v1-v0))/det;
+                        const bx=((p2[0]-p0[0])*(u1-u0)-(p1[0]-p0[0])*(u2-u0))/det;
+                        const by=((p2[1]-p0[1])*(u1-u0)-(p1[1]-p0[1])*(u2-u0))/det;
+                        g.save();g.clip();g.transform(ax,ay,bx,by,p0[0]-ax*u0-bx*v0,p0[1]-ay*u0-by*v0);g.drawImage(panel,0,0);g.restore();
+                    }
+                }
+            }
+            return [size,cx,cy,1];
+        }
+
         columnPixelScale(flat2d, visibleWidthTiles, viewportWidth) {
             return flat2d ? this.sceneTargetSize.width / (visibleWidthTiles * (this.cssWidth / viewportWidth)) : this.lodProjectionScale * this.pixelRatio;
         }
         drawFrameColumns(C, snapshot) {
             const gl = this.gl;
+            const atlas = this.prepareColumnAtlas();
             if (!this.columnProgram) {
                 this.columnProgram = createProgram(gl, `#version 300 es
                     precision highp float;
@@ -5681,13 +5776,24 @@
                     layout(location=8) in float aAlive;
                     layout(location=9) in float aKind;
                     layout(location=10) in float aDetail;
+                    layout(location=11) in float aFacing;
+                    layout(location=12) in float aType;
+                    layout(location=13) in float aUnitType;
                     uniform mat4 uViewProjection;
-                    uniform float uAlpha, uTile, uScale, uFlat, uLightNorm, uDetail, uDetailS, uDetailMask;
+                    uniform float uAlpha, uTile, uScale, uPixelRatio, uAspect, uFlat, uLightNorm, uDetail, uDetailS, uDetailMask;
                     uniform int uStructure, uFull;
                     uniform vec3 uColors[9];
                     uniform sampler2D uVisibility;
+                    uniform sampler2D uStyles, uMeta;
+                    uniform float uAtlasGrid, uStyleWidth, uYaw, uPointMax;
+                    uniform vec2 uViewport;
                     out vec4 vColor;
                     out float vCoverage;
+                    out float vPixels;
+                    out vec2 vFacing;
+                    flat out int vFlags;
+                    flat out float vLayer;
+                    out float vLod, vDotScale, vLight;
                     void main() {
                         vec2 current = vec2(aX,aZ) / uTile;
                         vec2 p = uStructure != 0 ? current : mix(vec2(aPX,aPZ) / uTile,current,uAlpha);
@@ -5702,6 +5808,16 @@
                         gl_Position = uViewProjection * vec4(p.x,.02,p.y,1.);
                         float size = uStructure != 0 ? .94 : clamp(aRadius * 2.2 / uTile,.28,.9);
                         float pixels = size * uScale / (uFlat > .5 ? 1. : max(.01,gl_Position.w));
+                        vPixels = pixels / uPixelRatio;
+                        vFlags = flags;
+                        vFacing = vec2(1.,0.);
+                        if (uStructure == 0 && vPixels > 4.) {
+                            vec4 heading = uViewProjection * vec4(cos(aFacing),0.,sin(aFacing),0.);
+                            // Perspective derivative, including camera tilt and rotation.
+                            vec2 direction = (heading.xy * gl_Position.w - gl_Position.xy * heading.w)
+                                * vec2(uAspect, -1.);
+                            vFacing = direction / max(.0001,length(direction));
+                        }
                         // (Drawn in detail by the CPU: renderer.js _unitDetailSplit,
                         // the same rule; a hair of overlap, never a gap.)
                         if (uDetail > 0. && uStructure == 0 && pixels > uDetail * 1.0001) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
@@ -5710,26 +5826,64 @@
                         // (Structures and floor items over the split's threshold
                         // are the detailed pass's.)
                         if (uDetailS > 0. && uStructure != 0 && (aKind == 6. || pixels > uDetailS * 1.0001)) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
-                        gl_PointSize = clamp(pixels + 1.,2.,64.);
-                        vCoverage = min(1., pixels * pixels / (gl_PointSize * gl_PointSize));
+                        int row = uStructure == 0 ? 7 : clamp(int(aKind),0,6);
+                        int code = int(uStructure == 0 ? aKind : aKind == 1. ? aUnitType : aType);
+                        float base = texelFetch(uStyles,ivec2(clamp(code,0,int(uStyleWidth)-1),row),0).r;
+                        float facing = uStructure == 0 ? aFacing : aKind == 0. ? 1.5707963-aFacing : 0.;
+                        float direction = mod(floor(mod(uYaw-facing+12.5663706,6.2831853)/.78539816+.5),8.);
+                        vLayer = base + (uFlat > .5 ? 0. : 1.+direction);
+                        vec4 meta = texelFetch(uMeta,ivec2(mod(vLayer,uAtlasGrid),floor(vLayer/uAtlasGrid)),0);
+                        vLod = base > 0. && meta.w > .5 ? smoothstep(2.5,6.,vPixels) : 0.;
+                        float extent = mix(1.,meta.x,vLod);
+                        gl_PointSize = clamp(pixels * extent + 1.,2.,uPointMax);
+                        // Keep the miniature's base on the unit's actual position.
+                        gl_Position.xy += meta.yz * vLod * pixels * 2. / uViewport * gl_Position.w;
+                        vDotScale = gl_PointSize / max(pixels,1.);
+                        vCoverage = min(1., pixels * pixels / 4.);
                         float shade = .35 + .65 * clamp(light,0.,1.);
-                        vColor = vec4(uColors[clamp(int(aOwner)+1,0,8)] * shade, uStructure != 0 && (flags & 1) != 0 ? .6 : 1.);
+                        vLight = shade;
+                        vColor = vec4(uColors[clamp(int(aOwner)+1,0,8)], uStructure != 0 && (flags & 1) != 0 ? .6 : 1.);
                     }`, `#version 300 es
                     precision highp float;
                     precision highp int;
                     uniform int uStructure;
                     in vec4 vColor;
                     in float vCoverage;
+                    in float vPixels;
+                    in vec2 vFacing;
+                    flat in int vFlags;
+                    flat in float vLayer;
+                    in float vLod, vDotScale, vLight;
+                    uniform sampler2D uSprites, uOwnerMask;
+                    uniform float uAtlasGrid, uFlat;
                     out vec4 color;
                     void main() {
                         if (vColor.a <= 0.) discard;
                         vec2 p = gl_PointCoord * 2. - 1.;
-                        float edge = uStructure == 0 ? length(p) : max(abs(p.x),abs(p.y));
-                        float coverage = 1. - smoothstep(1. - fwidth(edge), 1., edge);
-                        color = vec4(vColor.rgb, vColor.a * coverage * vCoverage);
+                        float edge = (uStructure == 0 ? length(p) : max(abs(p.x),abs(p.y))) * vDotScale;
+                        float dotAlpha = (1.-smoothstep(1.-fwidth(edge),1.,edge))*vCoverage;
+                        vec4 sprite = vec4(vColor.rgb,dotAlpha);
+                        if (vLod > 0.) {
+                            vec2 cell = vec2(mod(vLayer,uAtlasGrid),floor(vLayer/uAtlasGrid));
+                            vec2 uv = (cell + clamp(gl_PointCoord,vec2(.5/64.),vec2(63.5/64.))) / uAtlasGrid;
+                            vec4 texel = texture(uSprites,uv);
+                            float owner = texture(uOwnerMask,uv).r;
+                            texel.rgb *= mix(vec3(1.),vColor.rgb,owner);
+                            if (uStructure == 0 && uFlat > .5) {
+                                float ring = 1.-smoothstep(.025,.025+fwidth(edge),abs(length(p)-.83));
+                                texel = vec4(mix(vColor.rgb,texel.rgb,texel.a),max(texel.a,ring*.85));
+                            }
+                            // Premultiplied interpolation avoids dark fringes and
+                            // gives continuous transitions down to subpixel dots.
+                            float alpha = mix(dotAlpha,texel.a,vLod);
+                            vec3 rgb = mix(vColor.rgb*dotAlpha,texel.rgb*texel.a,vLod);
+                            sprite = vec4(rgb/max(alpha,.001),alpha);
+                        }
+                        if (sprite.a < .015) discard;
+                        color = vec4(sprite.rgb*vLight,sprite.a*vColor.a);
                     }`);
                 this.columnUniforms = {};
-                for (const n of ['ViewProjection','Alpha','Tile','Scale','Flat','LightNorm','Structure','Full','Colors','Visibility','Detail','DetailS','DetailMask']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
+                for (const n of ['ViewProjection','Alpha','Tile','Scale','PixelRatio','Aspect','Flat','LightNorm','Structure','Full','Colors','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','OwnerMask','AtlasGrid','StyleWidth','Yaw','PointMax','Viewport']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
                 this.columnStores = [{},{}];
                 this.columnVisibilityTexture = createTexture(gl);
             }
@@ -5757,11 +5911,23 @@
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
             }
             gl.useProgram(this.columnProgram);
+            if (atlas) {
+                for (const [unit,name,uniform] of [[1,'color','Sprites'],[2,'mask','OwnerMask'],[3,'meta','Meta'],[4,'lookup','Styles']]) {
+                    gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(gl.TEXTURE_2D,atlas[name]);gl.uniform1i(U[uniform],unit);
+                }
+            }
+            gl.uniform1f(U.AtlasGrid,atlas?.grid||1);gl.uniform1f(U.StyleWidth,atlas?.catalog.width||1);
+            gl.uniform1f(U.Yaw,this.orbitYaw||0);
+            if (!this.columnPointMax) this.columnPointMax = Math.min(256,gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)?.[1]||256);
+            gl.uniform1f(U.PointMax,this.columnPointMax);
+            gl.uniform2f(U.Viewport,this.sceneTargetSize.width,this.sceneTargetSize.height);
             gl.uniformMatrix4fv(U.ViewProjection,false,this.tmpViewProjection);
             gl.uniform1f(U.Alpha,C.alpha);gl.uniform1f(U.Tile,C.tile);
             gl.uniform1f(U.LightNorm,Math.max(.001,C.lightNorm));
             gl.uniform1f(U.Flat,snapshot.flat2d?1:0);
             gl.uniform1f(U.Scale,this.columnPixelScale(snapshot.flat2d,snapshot.camera.visibleWidth,snapshot.viewportWidth));
+            gl.uniform1f(U.PixelRatio,this.sceneTargetSize.height / this.cssHeight);
+            gl.uniform1f(U.Aspect,this.cssWidth / this.cssHeight);
             gl.uniform1f(U.Detail,C.detailPx > 0 ? C.detailPx : 0);
             gl.uniform1f(U.DetailS,C.detailPxS > 0 ? C.detailPxS : 0);
             gl.uniform1f(U.DetailMask,C.detailMask ? 1 : 0);
@@ -5779,7 +5945,7 @@
             for (let kind=0;kind<2;kind++) {
                 const F = kind ? C.units : C.structures, S = this.columnStores[kind], structure = !kind;
                 if (!F) continue;
-                const fields = structure ? ['x','y','x','y',null,'energy','owner','flags','alive','kind'] : ['x','y','px','py','r','energy','owner','flags','id',null];
+                const fields = structure ? ['x','y','x','y',null,'energy','owner','flags','alive','kind',null,'angle','type','utype'] : ['x','y','px','py','r','energy','owner','flags','id','type',null,'facing',null,null];
                 if (!S.buffer) { S.buffer=gl.createBuffer();S.vao=gl.createVertexArray(); }
                 gl.bindVertexArray(S.vao);gl.bindBuffer(gl.ARRAY_BUFFER,S.buffer);
                 if (S.frame !== F) {
@@ -5826,7 +5992,10 @@
             for (const S of this.columnStores || []) {
                 if (S.buffer) this.gl.deleteBuffer(S.buffer);
                 if (S.vao) this.gl.deleteVertexArray(S.vao);
+                if (S.maskBuf) this.gl.deleteBuffer(S.maskBuf);
             }
+            if (this.columnAtlas) for (const name of ['color','mask','meta','lookup']) this.gl.deleteTexture(this.columnAtlas[name]);
+            this.columnAtlas=null;
             this.columnStores=[{},{}];this.columnLayers=null;
         }
 

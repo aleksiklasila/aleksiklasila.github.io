@@ -512,18 +512,35 @@ function _simClientUpdateStableSlots(F, old) {
     for (let k = 0; k < F.count; k++) list[k] = _pageSlotViews[order[k]];
     return list;
 }
+// Keep the population loop separate from frame installation so V8 can
+// optimize it without the object/membership slow paths in that function.
+function _simClientRebaseFrame(F, old, shown) {
+    const n = Math.min(F.n, old.n), oid = old.id, ox = old.x, oy = old.y, opx = old.px, opy = old.py;
+    const id = F.id, px = F.px, py = F.py, x = F.x, y = F.y, indexed = !!F.renderBuckets;
+    let motionPad = 0;
+    for (let s = 0; s < n; s++) {
+        if (id[s] < 0 || oid[s] !== id[s]) continue;
+        const rx = opx[s] + (ox[s] - opx[s]) * shown, ry = opy[s] + (oy[s] - opy[s]) * shown;
+        px[s] = rx; py[s] = ry;
+        if (indexed) motionPad = Math.max(motionPad, Math.abs(rx - x[s]), Math.abs(ry - y[s]));
+    }
+    F.renderMotionPad = motionPad;
+}
 function _simClientApplyFrame(frame, shown) {
     let c = _simClient;
     let F = simFrameViews(frame.buf, frame.cap);
     F.n = frame.n; F.count = frame.count;
+    if (frame.renderBuckets) {
+        const B = frame.renderBuckets, cells = B.columns * B.rows;
+        F.renderBuckets = { ...B, head: new Int32Array(F.buf, B.offset, cells),
+            motion: new Float32Array(F.buf, B.offset + cells * 4, cells),
+            next: new Int32Array(F.buf, B.offset + cells * 8, F.cap) };
+    }
+    F.renderMotionPad = 0;
     let old = _pageFrame;
     if (old && shown < 1) {
-        let n = Math.min(F.n, old.n), oid = old.id, ox = old.x, oy = old.y, opx = old.px, opy = old.py, id = F.id, px = F.px, py = F.py;
-        for (let s = 0; s < n; s++) {
-            if (id[s] < 0 || oid[s] !== id[s]) continue;
-            px[s] = opx[s] + (ox[s] - opx[s]) * shown;
-            py[s] = opy[s] + (oy[s] - opy[s]) * shown;
-        }
+        // Keep worker buckets conservative after rebasing to the last drawn position.
+        _simClientRebaseFrame(F, old, shown);
     }
     if (frame.mver !== c.mver || c.frameUnits !== units) {
         let list = old && c.frameUnits === units ? _simClientUpdateStableSlots(F, old) : null;
