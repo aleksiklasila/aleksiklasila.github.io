@@ -583,51 +583,13 @@ function _navFieldsRunNow(b) {
 // made before under these builds, or the batch's first; for the next build
 // the batch's only: its other batches may be running still).
 function _navFieldsBatch(F, slots, next, id, bg) {
+    // (A slot's row is its destination's: one slot a destination in a pool,
+    // so every slot makes its own; nav.fsrc all -1, no copies.)
     const w = F.wide ? 1 : 0, n = slots.length, N = next ? _navNextPoolEnsure(F) : null;
-    const list = simHeapArrayAuto(Int32Array, n), src = simHeapArrayAuto(Int32Array, n);
+    const list = simHeapArrayAuto(Int32Array, n), src = simHeapArrayAuto(Int32Array, n, false);
     list.set(slots);
-    let copies = 0;
-    if (!N) {
-        for (let i = 0; i < n; i++) {
-            const s = slots[i], key = _navRowKey(F, s), old = F.rowKeyOf[s];
-            if (old !== key && F.rowSrc.get(old) === s) F.rowSrc.delete(old);
-            F.rowKeyOf[s] = key;
-            const from = F.rowSrc.get(key);
-            if (from !== undefined && from !== s) { src[i] = from; copies++; }
-            else { src[i] = -1; F.rowSrc.set(key, s); }
-        }
-    } else {
-        // (Each key's first slot of the batch is its source: by one numeric
-        // sort of key * 2^21 + position, not a map lookup per slot: every
-        // live field at a rebuild's start, ~27 ms at 400k a team.)
-        const next = _navNext.nav, ord = new Float64Array(n);
-        let typed = n < 2097152, m = 0;
-        for (let i = 0; i < n; i++) {
-            const s = slots[i], key = _navRowKey(F, s, next);
-            N.rowKeyOf[s] = key;
-            // (Keys of no row are -2 - slot, each its own source.)
-            if (key < 0) { src[i] = -1; if (!N.rowSrc.has(key)) N.rowSrc.set(key, s); continue; }
-            if (key >= 4294967296) typed = false;
-            ord[m++] = key * 2097152 + i;
-        }
-        if (typed) {
-            const o = ord.subarray(0, m).sort();
-            let lastKey = -1, from = -1;
-            for (let k = 0; k < m; k++) {
-                const v = o[k], key = Math.floor(v / 2097152), i = v - key * 2097152, s = slots[i];
-                if (key !== lastKey) { lastKey = key; from = s; src[i] = -1; if (!N.rowSrc.has(key)) N.rowSrc.set(key, s); }
-                else { src[i] = from; copies++; }
-            }
-        } else {
-            const local = new Map();
-            for (let i = 0; i < n; i++) {
-                const s = slots[i], key = N.rowKeyOf[s];
-                const from = local.get(key);
-                if (from !== undefined) { src[i] = from; copies++; }
-                else { src[i] = -1; local.set(key, s); if (!N.rowSrc.has(key)) N.rowSrc.set(key, s); }
-            }
-        }
-    }
+    src.fill(-1);
+    const copies = 0;
     simParallelBind('nav.flist.' + w + '.' + id, list); simParallelBind('nav.fsrc.' + w + '.' + id, src);
     const per = F.wide ? 1 : 2, P = new Float64Array(10);
     P[0] = n; P[1] = per; P[2] = F.span; P[3] = _nav[0] ? _nav[0].W : GRID_W; P[4] = _nav[0] ? _nav[0].H : GRID_H; P[5] = w; P[6] = 0; P[7] = bg || N ? 1 : 0; P[8] = N ? 1 : 0; P[9] = id;
@@ -882,11 +844,12 @@ function _navNextStage(nav) {
     for (const F of _navFields.pools) {
         if (!F.pool) continue;
         _navNextPoolEnsure(F);
-        const pend = new Set(F.pending), slots = [];
-        for (const s of F.byKey.values()) if (!pend.has(s)) slots.push(s);
-        if (!slots.length) continue;
-        slots.sort((a, b) => a - b);
-        _navFieldsStage(lane, stages, F.wide ? 1 : 0, _navFieldsBatch(F, slots, true, 2, true));
+        // (Its live slots not pending, in order: from the meta, not the map.)
+        const pend = F.pending.length ? new Set(F.pending) : null, meta = F.meta;
+        let slots = new Int32Array(F.cap), n = 0;
+        for (let s = 0; s < F.cap; s++) if (meta[s * NAV_FIELD_META] >= 0 && !(pend && pend.has(s))) slots[n++] = s;
+        if (!n) continue;
+        _navFieldsStage(lane, stages, F.wide ? 1 : 0, _navFieldsBatch(F, slots.subarray(0, n), true, 2, true));
     }
     _navFieldsHeader();
     simParallelBackgroundChain(lane, stages);

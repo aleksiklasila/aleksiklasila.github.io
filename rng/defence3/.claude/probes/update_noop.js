@@ -3,7 +3,7 @@
 // whether the call changed anything a unit's fields show (state, command,
 // path, position, target, cargo, cooldown, timers): "noop" calls are ticks
 // the kernel could have handled itself. AFTER: JSON.stringify(__scratch.un)
-__scratch.un = {};
+__scratch.un = {}; __scratch.unT = new Set();
 {
     let pre = null;
     const fr = simMoveRun;
@@ -14,6 +14,7 @@ __scratch.un = {};
     Unit.prototype.update = function () {
         const c = this._us, s = this._si;
         if (!c || c.mvOut[s] || currentTick < 120 || this.dead) return f.call(this);
+        __scratch.unT.add(currentTick);
         const before = keys.map(k => this[k]);
         const r = f.call(this);
         let ch = '';

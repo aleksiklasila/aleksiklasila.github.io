@@ -1038,6 +1038,95 @@ function _unitStatsVerOf(u) {
     if (!(o >= 0) || !(ti >= 0 && ti < UNIT_STATS_VER_TYPES) || o * UNIT_STATS_VER_TYPES + ti >= _unitStatsVer.length) return 0;
     return _unitStatsVer[o * UNIT_STATS_VER_TYPES + ti];
 }
+// ---- Effective stat rows ----
+// A unit's effective stat tables are one of few shared objects (those of its
+// owner, type, base and effective level: clonePrecomputedWithBaseMaxEnergy
+// hands out the same object), kept as rows: the object (_effRowObj) and what
+// the kernels need of it (eff.r* columns), found by (owner, spatial type,
+// base level, effective level) in eff.rowOf and valid for the (owner, type)
+// stat tables' version it was made at (eff.rowVer, as unit.esVer). A unit
+// with a row (unit.statRow >= 0) reads its tables from it (Unit.preComputed);
+// SIM_KERNEL_EFF_UNITS gives a unit the row of its new effective level and
+// the movement columns from it (simMoveStatsChanged's); the JavaScript only
+// makes rows (_effRowAttach, when it applies a unit's tables itself).
+const EFF_ROW_MAX = 1 << 16;
+let _effRowObj = [], _effRowN = 0, _effRowCap = 0, _effRowLk = null, _effRowLkDims = '';
+const _EFF_ROW_COLS = [['rowVer', Int32Array], ['rSpd', Float32Array], ['rCost', Float32Array], ['rRD', Int32Array], ['rRA', Int32Array], ['rRK', Uint8Array],
+    ['rLzW', Uint8Array], ['rCb', Float32Array], ['rCd', Float32Array], ['rDmg', Float32Array], ['rVis', Float32Array], ['rChs', Float32Array]];
+const _effRowCols = {};
+function _effRowDims() { return [spatialUnitsComplexPlayerCount | 0, spatialUnitsComplexUnitTypeCount | 0, (MAX_THING_LEVEL | 0) + 1]; }
+function _effRowLookup() {
+    const [NP, NT, L1] = _effRowDims(), dims = NP + ':' + NT + ':' + L1;
+    if (_effRowLk === null || _effRowLkDims !== dims) {
+        if (_effRowLk !== null) _effRowsReset();
+        _effRowLk = simSharedArray(Int32Array, Math.max(1, NP * NT * L1 * L1));
+        _effRowLk.fill(-1);
+        _effRowLkDims = dims;
+        simParallelBind('eff.rowOf', _effRowLk);
+    }
+    return _effRowLk;
+}
+function _effRowGrow(n) {
+    if (n <= _effRowCap) return;
+    const cap = Math.max(256, _effRowCap * 2, n);
+    for (const [k, T] of _EFF_ROW_COLS) {
+        const a = simSharedArray(T, cap);
+        if (_effRowCols[k]) a.set(_effRowCols[k].subarray(0, _effRowN));
+        _effRowCols[k] = a;
+        simParallelBind('eff.' + k, a);
+    }
+    _effRowCap = cap;
+}
+// Every row dropped (too many, or the lookup's dimensions changed): units
+// keep their objects.
+function _effRowsReset() {
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    if (S) {
+        const c = S.columns, n = S.owners.length;
+        for (let s = 0; s < n; s++) {
+            const r = c.statRow[s];
+            if (r < 0) continue;
+            const u = S.owners[s];
+            if (u) u._effRowKeep(_effRowObj[r]);
+            c.statRow[s] = -1;
+        }
+    }
+    _effRowObj = []; _effRowN = 0;
+    if (_effRowLk) _effRowLk.fill(-1);
+}
+// u's tables (just applied: preComputed, the effective ones) as its row.
+function _effRowAttach(u) {
+    const c = u && u._us;
+    if (!c || typeof simSharedArray !== 'function') return;
+    const s = u._si, pc = u._pc;
+    if (!pc || typeof pc !== 'object' || pc !== u._pce || !c.esOk[s]) return;
+    const [NP, NT, L1] = _effRowDims();
+    const o = c.owner[s], ty = c.esType[s], bl = c.baseLevel[s], el = c.effectiveLevel[s];
+    if (!(o >= 0 && o < NP && ty >= 0 && ty < NT && bl >= 1 && bl < L1 && el >= 1 && el < L1) || bl !== Math.floor(bl) || el !== Math.floor(el)) return;
+    const lk = _effRowLookup(), key = ((o * NT + ty) * L1 + bl) * L1 + el, ver = c.esVer[s];
+    let r = lk[key];
+    if (!(r >= 0 && _effRowObj[r] === pc && _effRowCols.rowVer[r] === ver)) {
+        if (_effRowN >= EFF_ROW_MAX) _effRowsReset();
+        r = _effRowN;
+        _effRowGrow(r + 1);
+        _effRowN = r + 1;
+        _effRowObj[r] = pc;
+        const R = _effRowCols, range = _getUnitAttackRangeArea(u), vis = Number(pc.visionRange);
+        R.rowVer[r] = ver;
+        R.rSpd[r] = pc.speed * _getUnitAstarSpeedMultiplier(u);
+        R.rCost[r] = _resolveUnitAstarTileCost(u);
+        R.rRD[r] = Math.ceil(range) + 1;
+        R.rRA[r] = Math.ceil(Math.max(TILE, vis * TILE) / TILE) + 1;
+        R.rRK[r] = Math.min(255, Math.floor(range));
+        R.rLzW[r] = Math.floor(range) === Math.ceil(range) ? 1 : 0;
+        R.rCb[r] = Math.max(TILE, vis * TILE);
+        R.rCd[r] = pc.attackCooldown; R.rDmg[r] = pc.attackDamage; R.rVis[r] = vis;
+        R.rChs[r] = Math.max(TILE * 0.6, Number(pc.speed) || 1);
+        lk[key] = r;
+    }
+    c.statRow[s] = r;
+}
+
 // A unit's effective level from its effective stacks, sticky around the
 // level it has (last): one level down only below 0.8 of its threshold, one
 // up only from 1.25 of the next one's, so counts around a power of two do not
@@ -1130,6 +1219,9 @@ function recalculateUnitEffectiveStats() {
         P[7] = spatialTypeStridePerBlock; P[8] = spatialUnitsComplexUnitTypeCount; P[9] = spatialUnitsComplexPlayerCount;
         P[15] = spatialTypeBlocksW; P[16] = SPATIAL_TYPE_BLOCK;
         P[10] = MAX_THING_LEVEL; P[11] = stamp;
+        // (Stat rows: the kernel gives a unit of a new level its row.)
+        _effRowLookup(); _effRowGrow(1);
+        P[18] = _effRowN; P[19] = SIM_MOVE_BOX_STEPS;
         simParallelBind('eff.tver', _unitStatsVerTable(spatialUnitsComplexPlayerCount)); P[14] = UNIT_STATS_VER_TYPES;
         // (The upkeep bins, when kept: main.js _upkU.)
         const UK = typeof _upkU !== 'undefined' && _upkU && _upkU.cols === c && _upkU.cnt === _upkHist ? _upkU : null;
@@ -1140,7 +1232,10 @@ function recalculateUnitEffectiveStats() {
             const f = F[j];
             if (f === 0 || f === 3) continue;
             const i = phase + j * step, u = units[i];
-            if (f === 1) {
+            if (f === 4) {
+                // (Its row taken in the kernel, another vision range.)
+                if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(u);
+            } else if (f === 1) {
                 // (The kernel set its stacks and levels.)
                 const s = slots[i], lvl = c.effectiveLevel[s];
                 applyUnitEffectiveScaling(u, lvl);

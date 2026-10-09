@@ -164,6 +164,11 @@ const W_CMODE: usize = 146;
 const W_CMT: usize = 147;
 const W_CTID: usize = 148;
 const W_SLAYER: usize = 149;
+const W_TGX: usize = 150;
+const W_TGY: usize = 151;
+const W_TGTOL: usize = 152;
+const W_STEADY: usize = 153;
+const W_WKLMT: usize = 154;
 /// Per navigation profile p: 8 words from W_NAV + 8p (fields, partL, partB,
 /// nb, nt, np, meta, walls).
 const W_NAV: usize = 160;
@@ -183,7 +188,7 @@ const SIM_FLOW_REFRESH_TICKS: i32 = 4;
 const SIM_STEER_TICKS: u8 = 16;
 const SIM_STEER_NEAR_TICKS: u8 = 4;
 /// sim_parallel.js SIM_REROUTE_TICKS.
-const SIM_REROUTE_TICKS: i32 = 16;
+const SIM_REROUTE_TICKS: i32 = 32;
 
 #[derive(Clone, Copy)]
 struct NavP {
@@ -218,8 +223,8 @@ struct Mv {
     sc: *const i8,
     d0: *mut u8,
     wake: *mut i32,
-    wkwx: *const F32,
-    wkwy: *const F32,
+    wkwx: *mut F32,
+    wkwy: *mut F32,
     dest: *const i32,
     cd: *mut i32,
     ct: *mut i32,
@@ -243,7 +248,7 @@ struct Mv {
     wk: *const u8,
     wtc: *const i32,
     flow: *const i32,
-    fgen: *const i32,
+    fgen: *mut i32,
     rdy: *const i32,
     fmn: *const i32,
     fmw: *const i32,
@@ -351,6 +356,11 @@ struct Mv {
     cmt: *const i32,
     ctid: *const i32,
     slayer: *const u8,
+    tgx: *const F32,
+    tgy: *const F32,
+    tgtol: *const F32,
+    steady: *mut i32,
+    wklmt: *mut i32,
     brain: bool,
     nav: [NavP; NAV_PROFILES],
     offn: usize,
@@ -559,6 +569,11 @@ impl Mv {
             cmt: p!(W_CMT),
             ctid: p!(W_CTID),
             slayer: p!(W_SLAYER),
+            tgx: p!(W_TGX),
+            tgy: p!(W_TGY),
+            tgtol: p!(W_TGTOL),
+            steady: p!(W_STEADY),
+            wklmt: p!(W_WKLMT),
             brain: rd((a as usize + 4096) as *const f64, 48) == 1.0,
             nav,
             offn: word(a, W_OFFN),
@@ -1125,88 +1140,241 @@ unsafe fn commit_step(m: &Mv, s: usize, x: f64, y: f64, vx: f64, vy: f64, gx: i3
     wr(m.out, s, if floor(qx * itile) != gx as f64 || floor(qy * itile) != gy as f64 { 3 } else { 1 });
 }
 
-/// SIM_KERNEL_MOVE_STEP over slots s0..end.
+/// The params of the step kernel (from F).
+struct StepP {
+    tr: i32,
+    q: f64,
+    iq: f64,
+    players: i32,
+    bsz: f64,
+    absent: f64,
+    boxsteps: i32,
+    wcheck: i32,
+    acq_t: i64,
+    wkwatch: i64,
+    stride: i64,
+    plane: i64,
+}
+
+/// SIM_KERNEL_MOVE_STEP over slots s0..end: four slots at a time through the
+/// steady step (step4: a flow unit walking its committed step inside its
+/// tile, nothing to look at this tick), the rest one by one (step_slot).
 #[no_mangle]
 pub unsafe extern "C" fn mv_step(a: *const i32, s0: i32, end: i32) {
     let m = Mv::load(a);
     let f = (a as usize + 4096) as *const f64;
-    let t = m.t;
-    let tr = to_i32(rd(f, 3));
-    let (w, h, itile) = (m.w, m.h, m.itile);
     let q = rd(f, 8);
-    let iq = 1.0 / q;
     let bc = to_i32(rd(f, 9)) as i64;
     let br = to_i32(rd(f, 10)) as i64;
-    let players = to_i32(rd(f, 11));
-    let bsz = rd(f, 14);
-    let absent = rd(f, 15);
-    let boxsteps = to_i32(rd(f, 17));
-    let wcheck = to_i32(rd(f, 21));
-    let acq_t = js_max(1.0, to_i32(rd(f, 38)) as f64) as i64;
-    let wkwatch = js_max(1.0, to_i32(rd(f, 29)) as f64) as i64;
-    let stride = bc + 1;
-    let plane = stride * (br + 1);
+    let p = StepP {
+        tr: to_i32(rd(f, 3)),
+        q,
+        iq: 1.0 / q,
+        players: to_i32(rd(f, 11)),
+        bsz: rd(f, 14),
+        absent: rd(f, 15),
+        boxsteps: to_i32(rd(f, 17)),
+        wcheck: to_i32(rd(f, 21)),
+        acq_t: js_max(1.0, to_i32(rd(f, 38)) as f64) as i64,
+        wkwatch: js_max(1.0, to_i32(rd(f, 29)) as f64) as i64,
+        stride: bc + 1,
+        plane: (bc + 1) * (br + 1),
+    };
     let mut s = s0.max(0) as usize;
     let end = if end > 0 { end as usize } else { 0 };
-    while s < end {
-        let dead = rd(m.dead, s);
-        if rd(m.d0, s) != dead { wr(m.d0, s, dead); }
-        if m.brain && rd(m.cmode, s) != 0 {
-            s += 1;
-            continue;
-        }
-        let on = rd(m.on, s);
-        if on == 2 {
-            // A parked unit before its wake tick: stands.
-            let fl = rd(m.fl, s);
-            let id = rd(m.id, s);
-            let ts = tsum(t, id);
-            let tw = t.wrapping_add(id);
-            if t >= rd(m.wake, s) || (fl & 1) != 0 || ((fl & 16) != 0 && (rem64_f(ts, acq_t) == 0 || (tw & 3) == 0)) {
-                s += 1;
-                continue;
-            }
-            if (fl & 4) != 0 && rem64_f(ts, wkwatch) == 0 && (rd(m.x, s) != rd(m.wkwx, s) || rd(m.y, s) != rd(m.wkwy, s)) {
-                s += 1;
-                continue;
-            }
-            if !(rd(m.en, s) > 0.0) || rd(m.sep, s) as f64 == absent || dead != 0 {
-                s += 1;
-                continue;
-            }
-            let owner = rd(m.own, s);
-            let x = rd(m.x, s);
-            let y = rd(m.y, s);
-            let gx = floor(x * itile);
-            let gy = floor(y * itile);
-            if !(owner >= 0 && owner < players) || !(inb(gx, w) && inb(gy, h)) {
-                s += 1;
-                continue;
-            }
-            let tl = gy as i32 * w + gx as i32;
-            if rd(m.floor, s) != tl || irem_f(tw, tr) == 0 {
-                let code = rd(m.sc, tl as usize) as i32;
-                if code != -1 && code != owner && floor_acts(&m, tl) {
-                    s += 1;
-                    continue;
+    // (The steady step's tick tests as masks: the aggro look ticks are
+    // (t + id) & 3 with four acquisition ticks; else every lane one by one.)
+    let fast = p.acq_t == 4 && p.tr > 0;
+    while fast && s + 4 <= end {
+        let done = step4(&m, &p, s);
+        if done != 15 {
+            for l in 0..4 {
+                if done & (1 << l) == 0 {
+                    step_slot(&m, &p, s + l);
                 }
-                wr(m.floor, s, tl);
             }
-            wr(m.px, s, x);
-            wr(m.py, s, y);
-            wr(m.out, s, 1);
-            wr(m.stept, s - m.stepbase, 1);
-            s += 1;
-            continue;
         }
-        if on != 1 || (rd(m.fl, s) & 64) == 0 {
-            s += 1;
-            continue;
-        }
-        // A flow unit's committed step (_simStepFlow).
-        step_flow(&m, s, t, tr, w, h, itile, q, iq, bsz, absent, boxsteps, wcheck, acq_t, stride, plane, players);
+        s += 4;
+    }
+    while s < end {
+        step_slot(&m, &p, s);
         s += 1;
     }
+}
+
+#[inline(always)]
+unsafe fn ld_u8x4(p: *const u8) -> v128 {
+    u32x4_extend_low_u16x8(u16x8_extend_low_u8x16(v128_load32_zero(p as *const u32)))
+}
+#[inline(always)]
+unsafe fn ld_i8x4(p: *const i8) -> v128 {
+    i32x4_extend_low_i16x8(i16x8_extend_low_i8x16(v128_load32_zero(p as *const u32)))
+}
+
+/// Slots s..s + 4 through the steady step: those that take it (bits of the
+/// result) are done, the others are for step_slot. A lane takes it when the
+/// slot is a flow unit (on 1, mvFlags 64; no brain instruction) inside its
+/// committed step's steady window (mvSteady, steady_until: the step good and
+/// nothing to look at), alive and indexed, in the map on the step's tile
+/// (mvCTl) and its floor's, with its flow field as made (its generation,
+/// destination, ready) and a step that stays in its tile (or a flyer's, 32).
+/// Then the step as commit_step (in f32: x + vx, quantized to the nearest;
+/// spent and output by tile).
+#[inline(always)]
+unsafe fn step4(m: &Mv, p: &StepP, s: usize) -> i32 {
+    let t = m.t;
+    let ti = i32x4_splat(t);
+    let zero = i32x4_splat(0);
+    let one = i32x4_splat(1);
+    let on = ld_u8x4(m.on.add(s));
+    let fl = ld_u8x4(m.fl.add(s));
+    let dead = ld_u8x4(m.dead.add(s));
+    let mut ok = v128_and(v128_and(i32x4_eq(on, one), i32x4_ne(v128_and(fl, i32x4_splat(64)), zero)), i32x4_eq(dead, zero));
+    if m.brain {
+        ok = v128_and(ok, i32x4_eq(ld_u8x4(m.cmode.add(s)), zero));
+    }
+    if m.steady.is_null() {
+        return 0;
+    }
+    ok = v128_and(ok, i32x4_lt(ti, v128_load(m.steady.add(s) as *const v128)));
+    if i32x4_bitmask(ok) == 0 {
+        return 0;
+    }
+    ok = v128_and(ok, f32x4_gt(v128_load(m.en.add(s) as *const v128), f32x4_splat(0.0)));
+    ok = v128_and(ok, v128_not(i32x4_eq(v128_load(m.sep.add(s) as *const v128), i32x4_splat(p.absent as u32 as i32))));
+    let itile = f32x4_splat(m.itile as f32);
+    let x = v128_load(m.x.add(s) as *const v128);
+    let y = v128_load(m.y.add(s) as *const v128);
+    let gxf = f32x4_floor(f32x4_mul(x, itile));
+    let gyf = f32x4_floor(f32x4_mul(y, itile));
+    ok = v128_and(ok, v128_and(f32x4_ge(gxf, f32x4_splat(0.0)), f32x4_lt(gxf, f32x4_splat(m.w as f32))));
+    ok = v128_and(ok, v128_and(f32x4_ge(gyf, f32x4_splat(0.0)), f32x4_lt(gyf, f32x4_splat(m.h as f32))));
+    let gx = i32x4_trunc_sat_f32x4(gxf);
+    let gy = i32x4_trunc_sat_f32x4(gyf);
+    let tl = i32x4_add(i32x4_mul(gy, i32x4_splat(m.w)), gx);
+    ok = v128_and(ok, i32x4_eq(tl, v128_load(m.ctl.add(s) as *const v128)));
+    ok = v128_and(ok, i32x4_eq(tl, v128_load(m.floor.add(s) as *const v128)));
+    let vx = v128_load(m.cvx.add(s) as *const v128);
+    let vy = v128_load(m.cvy.add(s) as *const v128);
+    let nx = f32x4_add(x, vx);
+    let ny = f32x4_add(y, vy);
+    let stay = v128_and(f32x4_eq(f32x4_floor(f32x4_mul(nx, itile)), gxf), f32x4_eq(f32x4_floor(f32x4_mul(ny, itile)), gyf));
+    ok = v128_and(ok, v128_or(stay, i32x4_ne(v128_and(fl, i32x4_splat(32)), zero)));
+    let mut bits = i32x4_bitmask(ok) as i32;
+    if bits == 0 {
+        return 0;
+    }
+    // (One by one: the floor's look tick, the flow field.)
+    for l in 0..4usize {
+        if bits & (1 << l) == 0 {
+            continue;
+        }
+        let q = s + l;
+        let fid = rd(m.flow, q);
+        let wide = fid >= 4194304;
+        let did = if wide { fid - 4194304 } else { fid };
+        let (fmeta, fmn) = if wide { (m.fmw, m.fmwn) } else { (m.fmn, m.fmnn) };
+        let dm = (did.max(0)) as usize * 8;
+        if !(fid >= 0) || fmeta.is_null() || dm + 7 >= fmn || rd(fmeta, dm + 6) != rd(m.fgen, q) || rd(fmeta, dm + 1) != rd(m.dest, q) || rd(fmeta, dm + 7) != 1 {
+            bits &= !(1 << l);
+        }
+    }
+    if bits == 0 {
+        return 0;
+    }
+    // The step (lanes of `bits`).
+    let mk = i32x4_ne(v128_and(i32x4_splat(bits), i32x4(1, 2, 4, 8)), zero);
+    let q4 = f32x4_splat(p.q as f32);
+    let iq4 = f32x4_splat(p.iq as f32);
+    // (Halves up, as quant_mul: the same positions as the step one by one.)
+    let half = f32x4_splat(0.5);
+    let qx = f32x4_mul(f32x4_floor(f32x4_add(f32x4_mul(nx, q4), half)), iq4);
+    let qy = f32x4_mul(f32x4_floor(f32x4_add(f32x4_mul(ny, q4), half)), iq4);
+    let st = |ptr: *mut F32, v: v128| {
+        let pp = ptr.add(s) as *mut v128;
+        v128_store(pp, v128_bitselect(v, v128_load(pp), mk));
+    };
+    st(m.px, x);
+    st(m.py, y);
+    st(m.vx, vx);
+    st(m.vy, vy);
+    st(m.x, qx);
+    st(m.y, qy);
+    let moved = i32x4_bitmask(v128_or(f32x4_ne(f32x4_floor(f32x4_mul(qx, itile)), gxf), f32x4_ne(f32x4_floor(f32x4_mul(qy, itile)), gyf))) as i32;
+    let spent = i32x4_bitmask(v128_not(stay)) as i32;
+    for l in 0..4usize {
+        if bits & (1 << l) == 0 {
+            continue;
+        }
+        let q = s + l;
+        if rd(m.d0, q) != 0 {
+            wr(m.d0, q, 0);
+        }
+        wr(m.spent, q, if spent & (1 << l) != 0 { 1 } else { 0 });
+        wr(m.out, q, if moved & (1 << l) != 0 { 3 } else { 1 });
+        wr(m.stept, q - m.stepbase, 1);
+    }
+    bits
+}
+
+/// One slot of SIM_KERNEL_MOVE_STEP.
+#[inline(always)]
+unsafe fn step_slot(m: &Mv, p: &StepP, s: usize) {
+    let t = m.t;
+    let (tr, w, h, itile, q, iq, bsz, absent, boxsteps, wcheck, acq_t, wkwatch, stride, plane, players) =
+        (p.tr, m.w, m.h, m.itile, p.q, p.iq, p.bsz, p.absent, p.boxsteps, p.wcheck, p.acq_t, p.wkwatch, p.stride, p.plane, p.players);
+    let dead = rd(m.dead, s);
+    if rd(m.d0, s) != dead { wr(m.d0, s, dead); }
+    if m.brain && rd(m.cmode, s) != 0 {
+        return;
+    }
+    let on = rd(m.on, s);
+    // (A builder on its way back: its watchdog sample on its watch tick.)
+    if on == 1 && rd(m.wk, s) == 3 && rem64_f(tsum(t, rd(m.id, s)), wkwatch) == 0 && rd(m.wkwx, s) == rd(m.wkwx, s) {
+        wk_watch(m, s, t);
+    }
+    if on == 2 {
+        // A parked unit before its wake tick: stands.
+        let fl = rd(m.fl, s);
+        let id = rd(m.id, s);
+        let ts = tsum(t, id);
+        let tw = t.wrapping_add(id);
+        if t >= rd(m.wake, s) || (fl & 9) != 0 || ((fl & 16) != 0 && (rem64_f(ts, acq_t) == 0 || (tw & 3) == 0)) {
+            return;
+        }
+        if (fl & 4) != 0 && rem64_f(ts, wkwatch) == 0 {
+            wk_watch(m, s, t);
+        }
+        if !(rd(m.en, s) > 0.0) || rd(m.sep, s) as f64 == absent || dead != 0 {
+            return;
+        }
+        let owner = rd(m.own, s);
+        let x = rd(m.x, s);
+        let y = rd(m.y, s);
+        let gx = floor(x * itile);
+        let gy = floor(y * itile);
+        if !(owner >= 0 && owner < players) || !(inb(gx, w) && inb(gy, h)) {
+            return;
+        }
+        let tl = gy as i32 * w + gx as i32;
+        if rd(m.floor, s) != tl || irem_f(tw, tr) == 0 {
+            let code = rd(m.sc, tl as usize) as i32;
+            if code != -1 && code != owner && floor_acts(m, tl) {
+                return;
+            }
+            wr(m.floor, s, tl);
+        }
+        wr(m.px, s, x);
+        wr(m.py, s, y);
+        wr(m.out, s, 1);
+        wr(m.stept, s - m.stepbase, 1);
+        return;
+    }
+    if on != 1 || (rd(m.fl, s) & 64) == 0 {
+        return;
+    }
+    // A flow unit's committed step (_simStepFlow).
+    step_flow(m, s, t, tr, w, h, itile, q, iq, bsz, absent, boxsteps, wcheck, acq_t, stride, plane, players);
 }
 
 #[inline(always)]
@@ -1245,7 +1413,9 @@ unsafe fn step_flow(
     }
     let ts = tsum(t, id);
     let at = rd(m.at, s);
-    if (f & 16) != 0 {
+    // (With the combat brain the looks are its own: _simMovePre makes none.)
+    if m.brain {
+    } else if (f & 16) != 0 {
         if rem64_f(ts, acq_t) == 0 || (tw & 3) == 0 {
             return;
         }
@@ -1314,6 +1484,7 @@ unsafe fn step_flow(
                 vy = 0.0;
             }
             wr(m.cd, s, -1);
+            if !m.steady.is_null() { wr(m.steady, s, 0); }
         }
     }
     commit_step(m, s, x, y, vx, vy, gx, gy, tl, q, iq);
@@ -1409,6 +1580,16 @@ pub unsafe extern "C" fn mv_move(a: *const i32, s0: i32, end: i32, chunk: i32) {
     let mut s = s0.max(0) as usize;
     let e = if end > 0 { end as usize } else { 0 };
     while s < e {
+        // (Sixteen slots the step kernel stepped, none with a shot flag:
+        // nothing more for them here.)
+        if p.step_ran && s + 16 <= e {
+            let st = v128_load(m.stept.add(s - m.stepbase) as *const v128);
+            let fi = v128_load(m.fire.add(s) as *const v128);
+            if u8x16_all_true(i8x16_eq(st, u8x16_splat(1))) && !v128_any_true(fi) {
+                s += 16;
+                continue;
+            }
+        }
         match move_pre(&m, &p, s) {
             1 => move_flow(&m, &p, s),
             2 => move_path(&m, &p, s),
@@ -1534,8 +1715,8 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
     let hold = on == 3;
     let bhold = on == 5;
     let id0 = rd(m.id, s);
-    if parked && (rd(m.fl, s) & 4) != 0 && rem64_f(tsum(t, id0), p.wkwatch) == 0 && (rd(m.x, s) != rd(m.wkwx, s) || rd(m.y, s) != rd(m.wkwy, s)) {
-        back!();
+    if parked && (rd(m.fl, s) & 4) != 0 && rem64_f(tsum(t, id0), p.wkwatch) == 0 {
+        wk_watch(m, s, t);
     }
     if parked && t >= rd(m.wake, s) {
         let mut stay = false;
@@ -1878,12 +2059,39 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
         }
     }
     if parked {
+        // (Waiting for its way: near enough to where it was sent, Unit.update
+        // ends the order.)
+        if (f & 8) != 0 && !m.tgx.is_null() && !m.tgy.is_null() && !m.tgtol.is_null() {
+            let dx = rd(m.tgx, s) - x;
+            let dy = rd(m.tgy, s) - y;
+            if !(sqrt(dx * dx + dy * dy) > rd(m.tgtol, s)) {
+                back!();
+            }
+        }
         wr(m.px, s, x);
         wr(m.py, s, y);
         wr(m.out, s, 1);
         return 0;
     }
     if (f & 64) != 0 { 1 } else { 2 }
+}
+
+/// A parked builder's watchdog sample (worker.js updateWorkerAI's): moved two
+/// pixels or more since the last one: it moved now; the sample where it is.
+#[inline(always)]
+unsafe fn wk_watch(m: &Mv, s: usize, t: i32) {
+    let (x, y) = (rd(m.x, s), rd(m.y, s));
+    let (wx, wy) = (rd(m.wkwx, s), rd(m.wkwy, s));
+    if wx - wx != 0.0 || wy - wy != 0.0 {
+        if !m.wklmt.is_null() { wr(m.wklmt, s, t); }
+    } else {
+        let (dx, dy) = (x - wx, y - wy);
+        if sqrt(dx * dx + dy * dy) >= 2.0 && !m.wklmt.is_null() {
+            wr(m.wklmt, s, t);
+        }
+    }
+    wr(m.wkwx, s, x);
+    wr(m.wkwy, s, y);
 }
 
 /// An idle worker's search would return at once (its work hash as at its
@@ -1982,8 +2190,19 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     let did = if wide { fid - 4194304 } else { fid };
     let dm = (did as i64 * 8) as usize;
     let (fmeta, fmn, fpool) = if wide { (m.fmw, m.fmwn, m.fpw) } else { (m.fmn, m.fmnn, m.fpn) };
-    if !(fid >= 0) || fmeta.is_null() || dm + 7 >= fmn || rd(fmeta, dm + 6) != rd(m.fgen, s) || rd(fmeta, dm + 1) != dk {
+    if !(fid >= 0) || fmeta.is_null() || dm + 7 >= fmn || rd(fmeta, dm + 1) != dk {
         back!();
+    }
+    if rd(fmeta, dm + 6) != rd(m.fgen, s) {
+        // (Its destination's field made again (a navigation build installed):
+        // the same slot and destination, its new generation taken here, as
+        // _simMoveTryFlowArm would; its committed step dropped.)
+        if rd(fmeta, dm + 7) != 1 {
+            back!();
+        }
+        wr(m.fgen, s, rd(fmeta, dm + 6));
+        wr(m.cd, s, -1);
+        if !m.steady.is_null() { wr(m.steady, s, 0); }
     }
     if t < rd(m.rdy, s) {
         stand!();
@@ -2009,12 +2228,14 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
                     vy = 0.0;
                 }
                 wr(m.cd, s, -1);
+            if !m.steady.is_null() { wr(m.steady, s, 0); }
             }
         }
         commit_step(m, s, x, y, vx, vy, gx, gy, tl, p.q, p.iq);
         return;
     }
     wr(m.cd, s, -1);
+            if !m.steady.is_null() { wr(m.steady, s, 0); }
     let nv = match navp {
         Some(n) => n,
         None => back!(),
@@ -2093,7 +2314,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     if lk == 0 {
         // (No way: re-routed by Unit.update on its own tick of
         // SIM_REROUTE_TICKS, standing until then; see the JS kernel.)
-        if (rd(m.wk, s) == 1 && ((dx0 - gx).abs() > 1 || (dy0 - gy).abs() > 1)) || (tw & (SIM_REROUTE_TICKS - 1)) != 0 {
+        if ((rd(m.wk, s) == 1 || rd(m.wk, s) == 3) && ((dx0 - gx).abs() > 1 || (dy0 - gy).abs() > 1)) || (tw & (SIM_REROUTE_TICKS - 1)) != 0 {
             stand!();
         }
         back!();
@@ -2187,9 +2408,43 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     wr(m.cvx, s, vx);
     wr(m.cvy, s, vy);
     wr(m.ctl, s, tl);
-    wr(m.cn, s, if (dx0 - gx).abs() <= 8 && (dy0 - gy).abs() <= 8 { SIM_STEER_NEAR_TICKS } else { SIM_STEER_TICKS });
+    let cn = if (dx0 - gx).abs() <= 8 && (dy0 - gy).abs() <= 8 { SIM_STEER_NEAR_TICKS } else { SIM_STEER_TICKS };
+    wr(m.cn, s, cn);
     commit_step(m, s, x, y, vx, vy, gx, gy, tl, p.q, p.iq);
+    if !m.steady.is_null() {
+        wr(m.steady, s, if tl != dk { steady_until(m, s, t, t + cn as i32, f, p.tr, p.acq_t, p.wcheck) } else { 0 });
+    }
 }
+
+/// A committed step's steady window: the first tick after t on which the
+/// step kernel looks at more than the step (the steer's end; an aggro
+/// look, a drive-by shooter's even tick, the floor's look, a worker's
+/// check), so its steady step may be taken before it.
+#[inline(always)]
+unsafe fn steady_until(m: &Mv, s: usize, t: i32, end: i32, f: u8, tr: i32, acq_t: i64, wcheck: i32) -> i32 {
+    let tw = t.wrapping_add(rd(m.id, s));
+    if tw < 0 || tr <= 0 {
+        return 0;
+    }
+    let next = |k: i32| -> i32 { if k <= 0 { t + 1 } else { t + (k - irem_f(tw, k)) } };
+    let mut u = end.min(next(tr));
+    if (f & 16) != 0 && !m.brain {
+        u = u.min(next(4)).min(next(acq_t.max(1).min(1 << 20) as i32));
+    }
+    if (f & 1) != 0 && !m.brain {
+        u = u.min(next(2));
+    }
+    if rd(m.wk, s) == 1 {
+        u = u.min(next(wcheck));
+    }
+    // (A returning builder's watchdog sample: step_slot's.)
+    if rd(m.wk, s) == 3 && rd(m.wkwx, s) == rd(m.wkwx, s) {
+        u = u.min(next(BUILDER_WATCH_TICKS));
+    }
+    u
+}
+/// worker.js BUILDER_WATCH_TICKS (P[29] of the movement kernel).
+const BUILDER_WATCH_TICKS: i32 = 64;
 
 /// _simMoveNode.
 #[inline(always)]
@@ -2502,6 +2757,16 @@ unsafe fn move_epilogue(m: &Mv, f: *const f64, b0: usize, end: usize, chunk: i32
     let mut cnt = 0usize;
     let mut s = b0;
     while s < end {
+        // (Sixteen slots that stood or stepped in their tile, nothing spent:
+        // nothing here.)
+        if s + 16 <= end {
+            let o16 = v128_load(m.out.add(s) as *const v128);
+            let k16 = v128_load(m.spent.add(s) as *const v128);
+            if u8x16_all_true(u8x16_le(o16, u8x16_splat(1))) && !v128_any_true(k16) {
+                s += 16;
+                continue;
+            }
+        }
         let o = rd(m.out, s);
         if o == 0 {
             s += 1;

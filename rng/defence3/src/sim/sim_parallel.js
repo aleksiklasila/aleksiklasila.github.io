@@ -142,7 +142,7 @@ const SIM_KERNEL_WS_ORDER = 48;
 const SIM_KERNEL_UNIT_RETIRE = 49;
 // Ticks over which units whose flow look finds no way go back to Unit.update
 // to re-route, each on its own (t + id) tick (a power of two).
-const SIM_REROUTE_TICKS = 16;
+const SIM_REROUTE_TICKS = 32;
 const SIM_KERNEL_SEP_PACK = 50, SIM_KERNEL_SEP_MARK = 51, SIM_KERNEL_SEP_PAIRS = 52, SIM_KERNEL_ZERO = 53, SIM_KERNEL_SPATIAL_PREFIX = 54;
 const SIM_KERNEL_AREA_BOX = 55, SIM_KERNEL_INDEX_MERGE = 56;
 
@@ -946,7 +946,8 @@ const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 
     'unit.spType', 'unit.vsGen', 'unit.spMvOld', 'unit.spMvNew', 'unit.spMvOwn', 'unit.mvBlk', '?mv.astarRem', '?mv.chFix', '?mv.chUse', 'unit.mvCost',
     'unit.commandState', 'unit.mvShoot', 'unit.mvReachD', 'unit.mvRangeK', 'unit.lzFlags', '?sep.rs', '?sep.rc', '?sep.rstamp', '?sep.eslot',
     '?ix.omask', '?mv.scls', '?mv.hstruct', 'unit.dbTI', 'unit.mvFire',
-    'unit.atkCd', 'unit.attackFlash', '?mv.hita', '?mv.hitt', '?mv.hitc', 'unit.tmOn', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.sepLayer'];
+    'unit.atkCd', 'unit.attackFlash', '?mv.hita', '?mv.hitt', '?mv.hitc', 'unit.tmOn', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.sepLayer',
+    '?unit.mvTgX', '?unit.mvTgY', '?unit.mvTgTol', '?unit.mvSteady', '?unit.wkLmt'];
 const _SIM_MOVE_NAV = 11, _SIM_MOVE_WNAV = 160;
 const _simMoveW = _simWK([..._SIM_MOVE_WNAMES, ...Array.from({ length: _SIM_MOVE_NAV * 8 }, (_, i) => {
     const p = i >> 3, j = i & 7;
@@ -1265,7 +1266,10 @@ let _simParHelperParams = null;
 // levels it wrote moves bins (unit.upB, upk.h; main.js _upkUnitBin).
 const _simEffUnitsW = _simWK(['ix.slots', 'unit.dead', 'unit.esOk', 'unit.esRad', 'unit.esType', 'unit.esTaken', 'unit.stackCount', 'unit.unitLevel', 'unit.baseLevel',
     'unit.effectiveStacks', 'unit.effectiveLevel', 'unit._lastAppliedEffectiveLevel', 'unit.x', 'unit.y', 'unit.owner', 'spatial.types', 'eff.flag', '?unit.upT', '?unit.upB',
-    '?upk.h', '?eff.tver', 'unit.esVer']);
+    '?upk.h', '?eff.tver', 'unit.esVer', 'unit.statRow', '?eff.rowOf', '?eff.rowVer', '?eff.rSpd', '?eff.rCost', '?eff.rRD', '?eff.rRA', '?eff.rRK', '?eff.rLzW',
+    '?eff.rCb', '?eff.rCd', '?eff.rDmg', '?eff.rVis', '?eff.rChs', 'unit.mvOn', 'unit.mvFlags', 'unit.mvReach', 'unit.mvChs', 'unit.mvSpd', 'unit.mvCost',
+    'unit.mvReachD', 'unit.mvReachA', 'unit.mvShoot', 'unit.mvRangeK', 'unit.lzFlags', 'unit.cbRange', 'unit.atkCd', 'unit.atkDmg', 'unit.spArea', 'unit.energy',
+    'unit.maxE', '?mv.areaBoxOk']);
 SIM_KERNELS[SIM_KERNEL_EFF_UNITS] = function (R, P, chunk) { _simRust(_simEffUnitsW, P, chunk, 'k_eff_units', 'EFF_UNITS'); };
 
 // The units' visibility snapshot (renderer.js _visCoverUnits, a tier's
@@ -1486,41 +1490,26 @@ SIM_KERNELS[SIM_KERNEL_VIS_SPREAD] = function (R, P, chunk) { _simRust(_simVisSp
 const _simEffCountW = _simWK(['eff.win', 'eff.out', 'spatial.types']);
 SIM_KERNELS[SIM_KERNEL_EFF_COUNT] = function (R, P, chunk) { _simRust(_simEffCountW, P, chunk, 'k_eff_count', 'EFF_COUNT'); };
 
-// The state hash's region of each unit (utils_snapshot.js snapTickHash),
-// from its position columns: snap.reg[i] for units[i] (-1: no slot).
-// P: [0] units, [1] per job, [2] region size in pixels.
-// With it, snap.hc[i]: the hash of the unit's column fields (snap.kc: the
-// fields' codes, in utils_snapshot.js SNAP_HASH_UNIT_COLUMNS order), as the
-// generated field hashers mix numbers.
-// P[5] 1 (one slice): each unit of the slice is also summed into its
-// region (snap.acc[region], mod 2^32), the region listed once (snap.list,
-// snap.cnt[0]; snap.stamp: P[8]) - except the units of this rotation's
-// group (id % P[7] === P[6]: their object fields too; snap.rot, cnt[1]),
-// and units without a slot or outside 0..P[9] regions (snap.noslot,
-// cnt[2]), left to the caller.
-const _snapKF64 = new Float64Array(1), _snapKI32 = new Int32Array(_snapKF64.buffer);
+// The state hash's units (utils_snapshot.js snapTickHash): one slice of the
+// units list, every hashed field from the columns (the object fields
+// through their digest, unit.hObj), summed per region and listed per job;
+// the list's order sum (wasm/src/k.rs k_snap_units). Then
+// SIM_KERNEL_SNAP_MERGE (one job, on the caller): the jobs' lists into the
+// tick's region sums, every region as a pair (k_snap_merge).
 // One position of the units list in the state hash's order part.
 function _snapOrderMix(i, id) {
     let h = Math.imul((i + 1) | 0, 2654435761) ^ Math.imul(((id | 0) + 0x3c6ef372) | 0, 2246822519);
     h = Math.imul(h ^ (h >>> 15), 3266489917);
     return h ^ (h >>> 13);
 }
-// (Its Rust twin's arrays: wasm/src/lib.rs snap_region; the status timers
-// through a pointer table, snap.stp.)
-const _simSnapW = _simWK(['unit.live', 'unit.dead', 'unit.x', 'unit.y', 'unit.id', 'ix.slots', 'snap.kc', 'unit.owner', 'unit.vx', 'unit.vy', 'unit.energy', 'unit.commandState',
-    'unit.attackTimer', 'unit.attackFlash', 'snap.stp', 'snap.reg', 'snap.hc', 'snap.pr', 'snap.ph', 'snap.rl', 'snap.nl', 'snap.nu', 'snap.cc', 'snap.ord']);
-SIM_KERNELS[SIM_KERNEL_SNAP_REGION] = function (R, P, chunk) {
-    // (The slice with its sums, P[10] 1: the Rust kernel, its lists per job.)
-    if (P[10] === 1 && P[12] === 1 && _simWasmOk(R)) {
-        const A = _simWPtrs(_simSnapW);
-        if (A !== null) {
-            _simWasmX.snap_region(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10], A[11], A[12], A[13], A[14],
-                A[15], A[16], A[17], A[18], A[19], A[20], A[21], A[22], A[23], P[0] | 0, P[11] | 0, P[1] | 0, P[2], P[3] | 0, P[4] | 0, P[6] | 0, P[7] | 0, P[9] | 0, chunk);
-            return;
-        }
-    }
-    _simNoWasm('SNAP_REGION');
-};
+const SIM_KERNEL_SNAP_MERGE = 65;
+const _simSnapW = _simWK(['unit.live', 'unit.dead', 'unit.x', 'unit.y', 'unit.id', 'ix.slots', 'unit.owner', 'unit.vx', 'unit.vy', 'unit.energy', 'unit.commandState',
+    'unit.attackTimer', 'unit.attackFlash', 'unit.teleportHideTicks', 'unit.poisoned', 'unit.burning', 'unit.frozen', 'unit.wet', 'unit.sandy', 'unit.watched',
+    'unit.workerTransferCooldown', 'unit.stackCount', 'unit.unitLevel', 'unit.effectiveStacks', 'unit.effectiveLevel', 'unit.pathIndex', 'unit.hObj',
+    'snap.pr', 'snap.ph', 'snap.nl', 'snap.nlh', 'snap.nu', 'snap.cc', 'snap.ord']);
+SIM_KERNELS[SIM_KERNEL_SNAP_REGION] = function (R, P, chunk) { _simRust(_simSnapW, P, chunk, 'k_snap_units', 'SNAP_REGION'); };
+const _simSnapMergeW = _simWK(['snap.pr', 'snap.ph', 'snap.cc', 'snap.racc', 'snap.rstamp', 'snap.rlist', 'snap.pout', 'snap.pres']);
+SIM_KERNELS[SIM_KERNEL_SNAP_MERGE] = function (R, P, chunk) { _simRust(_simSnapMergeW, P, chunk, 'k_snap_merge', 'SNAP_MERGE'); };
 
 // The status pre-pass (unit.js statusPrepassRun): for each unit (units[i]
 // at slot ix.slots[i]) its position copied (unit.x0, y0), and if not dead,

@@ -54,7 +54,10 @@ const SNAP_FORMAT = 7;
 // 3: the movement kernels hand units back on hostile trap tiles only, and
 // units whose flow look finds no way re-route on their own tick of
 // SIM_REROUTE_TICKS.
-const SIM_RULES_REVISION = 3;
+// 4: every kernel in Rust (native f32, not JavaScript's numbers); a hash
+// every SNAP_HASH_EVERY ticks; units waiting for their way parked in the
+// kernel; the steady step; stat rows; re-routes every 32 ticks.
+const SIM_RULES_REVISION = 4;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
 // Each hash covers one slice (regions, grid rows) of the world. The resync
@@ -63,8 +66,9 @@ const SNAP_REGION_TILES = 4;
 const SNAP_HASH_SLICES = 20;
 // A hash every this many ticks (the strict debug mode: every tick); its
 // slice and rotations by the hash's index (tick / SNAP_HASH_EVERY), so the
-// hashed ticks still visit every slice. 2: every region's units checked
-// within 1 s at 20 ticks a second, for half the main thread's hashing.
+// hashed ticks still visit every slice. 1 with 20 slices: every region's
+// units checked within 1 s at 20 ticks a second, an even share each tick
+// (every other tick with 10 slices doubled the hashed ticks' cost).
 const SNAP_HASH_EVERY = 1;
 const SNAP_HASH_ROTATION_TICKS = SNAP_HASH_SLICES * SNAP_HASH_EVERY;
 // Whether tick's state is hashed (every peer alike).
@@ -349,24 +353,15 @@ function _snapMakeFieldHasher(fields) {
     return new Function('S', 'C', '_snapStrCode', 'return function (o, h, F, I, V, P) {\n' + body + '\n};')(S, C, _snapStrCode);
 }
 
-// Units, the many: the fields that change all the time every rotation, the
-// rest in SNAP_HASH_UNIT_GROUPS groups, one a rotation (a divergence there
-// shows within that many rotations; it reaches the core fields sooner).
-const SNAP_HASH_UNIT_CORE = ['owner', 'unitType', 'x', 'y', 'vx', 'vy', 'energy', 'commandState', 'dead', 'workerState', 'path'];
-const SNAP_HASH_UNIT_GROUPS = 3;
-const _snapUnitGroupFields = Array.from({ length: SNAP_HASH_UNIT_GROUPS }, (_, g) =>
-    [...SNAP_HASH_UNIT_CORE, ...SNAP_HASH_FIELDS.u.filter(k => !SNAP_HASH_UNIT_CORE.includes(k)).filter((k, i) => i % SNAP_HASH_UNIT_GROUPS === g)]);
-const _snapUnitGroupHashers = _snapUnitGroupFields.map(f => _snapMakeFieldHasher(f));
-// The hashed fields that are unit state columns: hashed for every unit by
-// the kernels (SIM_KERNEL_SNAP_REGION, no object read); the slice's units
-// then only have their other fields read here.
-const SNAP_HASH_UNIT_COLUMNS = ['owner', 'x', 'y', 'vx', 'vy', 'energy', 'commandState', 'dead', 'attackTimer', 'attackFlash',
-    'teleportHideTicks', 'poisoned', 'burning', 'frozen', 'wet', 'sandy', 'watched', 'workerTransferCooldown'];
-// From this many units the column fields are hashed by the kernels (tests
-// lower it to cover that path on small worlds; every peer must agree).
-let SNAP_HASH_KERNEL_MIN_UNITS = 8192;
-const _snapUnitObjHasher = _snapMakeFieldHasher(SNAP_HASH_FIELDS.u.filter(k => !SNAP_HASH_UNIT_COLUMNS.includes(k)));
-let _snapColCodes = null;
+// Units, the many: every hashed field from the unit state columns, by the
+// kernel (SIM_KERNEL_SNAP_REGION, wasm/src/k.rs k_snap_units: four units a
+// lane, the object fields through their digest column, unit.hObj, which
+// their setters keep: sim_unit_state.js SIM_HASH_DIGEST_FIELDS). No unit
+// object is read. (SNAP_HASH_FIELDS.u: what a unit's hash covers.)
+// Positions of the list a job of the kernel takes.
+const SNAP_HASH_UNITS_PER_JOB = 2048;
+// (Unused: every unit count goes through the kernel; tests still set it.)
+let SNAP_HASH_KERNEL_MIN_UNITS = 0;
 const _snapHashers = {
     u: _snapMakeFieldHasher(SNAP_HASH_FIELDS.u),
     b: _snapMakeFieldHasher(SNAP_HASH_FIELDS.b),
@@ -440,7 +435,7 @@ function _snapHashGlobals(slice = -1, round = 0) {
 // Membership and order of one list: its length and the entries at the
 // positions of this tick's slice (slice < 0: all); units by id, the others
 // by tile.
-function _snapHashOrder(list, slice = -1) {
+function _snapHashOrder(list, slice = -1, round = -1) {
     let h = 2166136261 | 0;
     if (list === 'u') {
         let S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
@@ -453,9 +448,14 @@ function _snapHashOrder(list, slice = -1) {
         }
     }
     else {
+        // (The structures' lists: their lengths every slice, the order of one
+        // rotation round's positions (each every SNAP_HASH_SLICES *
+        // SNAP_HASH_GRID_ROUNDS ticks): a structure built or lost changes the
+        // length and its region.)
         const L = _snapListEntities(list);
         h = Math.imul(h ^ L.length, 16777619);
-        for (let i = slice < 0 ? 0 : slice, step = slice < 0 ? 1 : SNAP_HASH_SLICES; i < L.length; i += step) {
+        const step = slice < 0 ? 1 : round < 0 ? SNAP_HASH_SLICES : SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS;
+        for (let i = slice < 0 ? 0 : round < 0 ? slice : slice + SNAP_HASH_SLICES * round; i < L.length; i += step) {
             const e = L[i];
             h = Math.imul(Math.imul(h ^ e.gx, 16777619) ^ e.gy, 16777619);
         }
@@ -464,25 +464,15 @@ function _snapHashOrder(list, slice = -1) {
 }
 
 let _snapStaticSliceCache = null;
-let _snapRegions = new Int32Array(0), _snapColHash = new Int32Array(0);
-// The region sums of one slice's units (SIM_KERNEL_SNAP_REGION, P[5] 1):
-// per region (ry * 1024 + rx) its sum, cleared as read; the stamp of the
-// call that listed it; the lists and their counts.
+// A tick hash's regions: ry * 1024 + rx below this many in the typed sums
+// (the rest in a Map).
 const SNAP_ACC_REGIONS = 1 << 20;
-// With the kernel's sums, units' object fields (beyond the columns) are
-// hashed for one group by id of this many a rotation (each unit's every
-// SNAP_HASH_OBJ_GROUPS rotations: 800 ticks; the columns, where nearly all
-// of a unit's changing state is, every rotation).
-const SNAP_HASH_OBJ_GROUPS = 40;
-// (Buildings' core fields every tick of their slice: off, see _snapTickHashStatic.)
-let SNAP_HASH_STATIC_CORE_ALL = false;
+// (Buildings' core fields every rotation (1 s), their other fields in their
+// round, see _snapTickHashStatic.)
+let SNAP_HASH_STATIC_CORE_ALL = true;
 // Grid rows (and buildings' full fields): those of this slice, one in this
-// many rotations (each row every SNAP_HASH_GRID_ROUNDS rotations: 100 ticks).
-const SNAP_HASH_GRID_ROUNDS = 5;
-// (Tests turn it off to compare with the summing below; both agree.)
-let SNAP_HASH_KERNEL_SUMS = true;
-let _snapOrdSums = null;
-let _snapAcc = null, _snapAccStamp = null, _snapAccStampNow = 0, _snapAccList = null, _snapAccRot = new Int32Array(0), _snapAccNoSlot = new Int32Array(0), _snapAccCnt = null;
+// many rotations (each row every SNAP_HASH_GRID_ROUNDS rotations: 400 ticks).
+const SNAP_HASH_GRID_ROUNDS = 20;
 
 // Per slice and rotation (SNAP_HASH_GRID_ROUNDS: each region's buildings
 // every SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS ticks): the tile entities
@@ -510,19 +500,15 @@ function _snapStaticSlices() {
     return c.slices;
 }
 // A building's or mine's core fields (every slice; the rest by rotation):
-// owner, energy, construction, level and stacks; a mine's resources; its
-// statuses while one runs (a hit one peer alone saw, a watch say, shows at
-// once, not a rotation later).
+// owner, energy and construction; a mine's resources. (Levels, stacks,
+// timers and statuses are in the round's full fields: a divergence there
+// shows in the units it spawns or the damage it deals within seconds; the
+// core of every structure every second was most of the hash's cost.)
 function _snapStaticCore(e, kind, seed) {
-    let h = seed | 0;
-    if (kind === 'm') { h = _snapHNum(h, Number(e.gold)); h = _snapHNum(h, Number(e.astar)); return h; }
-    h = _snapHNum(h, Number(e.owner)); h = _snapHNum(h, Number(e.energy)); h = _snapHV(h, !!e.underConstruction);
-    h = _snapHNum(h, Number(e.effectiveLevel)); h = _snapHNum(h, Number(e.stacks));
-    if (e.burning > 0 || e.poisoned > 0 || e.frozen > 0 || e.wet > 0 || e.sandy > 0 || e.watched > 0) {
-        h = _snapHNum(h, Number(e.burning)); h = _snapHNum(h, Number(e.poisoned)); h = _snapHNum(h, Number(e.frozen));
-        h = _snapHNum(h, Number(e.wet)); h = _snapHNum(h, Number(e.sandy)); h = _snapHNum(h, Number(e.watched)); h = _snapHNum(h, Number(e.watchedByTeam));
-    }
-    return h;
+    if (kind === 'm') return _snapHNum(_snapHNum(seed | 0, Number(e.gold)), Number(e.astar));
+    const o = e.owner, en = e.energy;
+    let h = Math.imul(Math.imul(seed ^ ((o | 0) === o ? o : 0x7ff9), 16777619) ^ (e.underConstruction ? 0x3bd : 0x2bd), 16777619);
+    return (en | 0) === en ? Math.imul(h ^ en, 16777619) : _snapHNum(h, Number(en));
 }
 function _snapStaticBucket(r) {
     return (r % SNAP_HASH_SLICES) + SNAP_HASH_SLICES * (Math.floor(r / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS);
@@ -549,10 +535,16 @@ function _snapStaticPut(c, t, e) {
 // A tick hash's region sums (region -> its entities' hashes summed mod
 // 2^32), in first-touch order: typed (a Map's get and set per entity were
 // most of the static part's cost); regions past the table in a Map.
+// (In the wasm heap: SIM_KERNEL_SNAP_MERGE adds the units' sums and lists
+// every region as a pair.)
 const _snapRS = { acc: null, stamp: null, list: null, n: 0, now: 0, extra: null };
 function _snapRegionsBegin() {
     const R = _snapRS;
-    if (!R.acc) { R.acc = new Int32Array(SNAP_ACC_REGIONS); R.stamp = new Int32Array(SNAP_ACC_REGIONS); R.list = new Int32Array(SNAP_ACC_REGIONS); }
+    if (!R.acc || R.acc !== _simParReg['snap.racc']) {
+        R.acc = simHeapArray(Int32Array, SNAP_ACC_REGIONS); R.stamp = simHeapArray(Int32Array, SNAP_ACC_REGIONS); R.list = simHeapArray(Int32Array, SNAP_ACC_REGIONS);
+        simParallelBind('snap.racc', R.acc); simParallelBind('snap.rstamp', R.stamp); simParallelBind('snap.rlist', R.list);
+        R.now = 0;
+    }
     if (++R.now >= 0x7fffffff) { R.stamp.fill(0); R.now = 1; }
     R.n = 0; R.extra = null;
     return R;
@@ -675,8 +667,6 @@ function _snapDecodeReservations(enc, partial = null) {
     }
 }
 
-// Hashes one slice of the regions (or all of them) and the small parts.
-// Returns { tick, sum, pairs: [code, hash, ...] }.
 // snapTickHash's parts other than the units': buildings and mines (their
 // slices cached until the tile index changes), drops, reservations (summed
 // into `regions`) and the grid rows (pushed).
@@ -722,12 +712,12 @@ function _snapTickHashStatic(t, slice, allSlices, regions, push) {
         _snapRegionAdd(regions, r, h);
     }
     // (Each region's reservations every SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS
-    // ticks, with its buildings' round: walking a tenth of the table's slots
-    // a tick was ~1.2 ms at 400k units.)
+    // ticks, with its buildings' round: walking a slice's slots every tick
+    // was ~0.8 ms at 400k units; a divergence there shows in the workers.)
     _snapForReservations(allSlices ? -1 : slice, (slot, u, r) => {
         let h = _snapReservationHash(slot, u);
         _snapRegionAdd(regions, r, h);
-    }, allSlices || SNAP_HASH_STATIC_CORE_ALL ? -1 : Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS);
+    }, allSlices ? -1 : Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS);
     // Grid rows of this slice, in one rotation of SNAP_HASH_GRID_ROUNDS:
     // cell types and owners.
     {
@@ -745,28 +735,47 @@ function _snapTickHashStatic(t, slice, allSlices, regions, push) {
     }
 }
 
-let _snapStp = null, _snapRegionsHeap = null, _snapColHashHeap = null, _snapOrdHeap = null, _snapJobsN = 0;
-function _snapMergeJobs(jobs) {
-    const R = _simParReg, CC = R['snap.cc'], PR = R['snap.pr'], PH = R['snap.ph'], RLj = R['snap.rl'], NLj = R['snap.nl'], NUj = R['snap.nu'];
-    const ACC = _snapAcc, ST = _snapAccStamp, LIST = _snapAccList, RL = _snapAccRot, NL = _snapAccNoSlot, CNT = _snapAccCnt, stamp = _snapAccStampNow;
-    let n0 = 0, n1 = 0, n2 = 0;
-    for (let j = 0; j < jobs; j++) {
-        const b = j * 8192, c0 = CC[j * 4], c1 = CC[j * 4 + 1], c2 = CC[j * 4 + 2], c3 = CC[j * 4 + 3];
-        for (let k = 0; k < c0; k++) { const r = PR[b + k]; if (ST[r] !== stamp) { ST[r] = stamp; LIST[n0++] = r; } ACC[r] = (ACC[r] + PH[b + k]) | 0; }
-        for (let k = 0; k < c1; k++) RL[n1++] = RLj[b + k];
-        for (let k = 0; k < c2; k++) NL[n2++] = NLj[b + k];
-        for (let k = 0; k < c3; k++) NL[n2++] = NUj[b + k];
+// The units kernel's per-job lists (SIM_KERNEL_SNAP_REGION): room for
+// `room` positions over `jobs` jobs.
+function _snapUnitLists(room, jobs) {
+    for (const nm of ['snap.pr', 'snap.ph', 'snap.nl', 'snap.nlh', 'snap.nu']) {
+        const a = _simParReg[nm];
+        if (!a || a.length < room) simParallelBind(nm, simHeapArray(Int32Array, simReserveCap(room)));
     }
-    CNT[0] = n0; CNT[1] = n1; CNT[2] = n2;
+    if (!_simParReg['snap.cc'] || _simParReg['snap.cc'].length < jobs * 4) simParallelBind('snap.cc', simHeapArray(Int32Array, Math.max(256, jobs * 8)));
+    if (!_simParReg['snap.ord'] || _simParReg['snap.ord'].length < jobs) simParallelBind('snap.ord', simHeapArray(Int32Array, Math.max(64, jobs * 2)));
 }
+// The merge kernel's output: room for n pairs.
+function _snapPairsOut(n) {
+    let a = _simParReg['snap.pout'];
+    if (!a || a.length < 2 * n) simParallelBind('snap.pout', a = simHeapArray(Int32Array, simReserveCap(2 * n)));
+    if (!_simParReg['snap.pres']) simParallelBind('snap.pres', simHeapArray(Int32Array, 4));
+    return a;
+}
+const _snapMergeP = new Float64Array(8);
+// A hash's pairs: a view of a buffer that an evicted record left, when one is
+// large enough (a new ArrayBuffer every tick, external memory, made V8 force
+// memory-reducing full collections: 0.3-0.8 s pauses at 800k units).
+const _snapPairsFree = [];
+function _snapPairsBuf(n) {
+    for (let i = _snapPairsFree.length - 1; i >= 0; i--) {
+        const b = _snapPairsFree[i];
+        if (b.byteLength >= n * 4) { _snapPairsFree[i] = _snapPairsFree[_snapPairsFree.length - 1]; _snapPairsFree.pop(); return new Uint32Array(b, 0, n); }
+    }
+    return new Uint32Array(new ArrayBuffer(Math.ceil(n * 1.25 / 1024) * 4096), 0, n);
+}
+let _snapUnitJobs = 0;
+// Hashes one slice of the regions (or all of them) and the small parts.
+// Returns { tick, sum, pairs: Uint32Array [code, hash, ...] }.
 function snapTickHash(tick, allSlices = false) {
     // (The hash's index: its slice and rotations.)
     let t = allSlices ? Math.floor(tick) : Math.floor(Math.floor(tick) / SNAP_HASH_EVERY);
     let slice = ((t % SNAP_HASH_SLICES) + SNAP_HASH_SLICES) % SNAP_HASH_SLICES;
-    let pairs = [];
+    // (The few parts' pairs here; the regions' from the merge kernel.)
+    const fixed = [];
     let sum = 0;
-    let push = (code, h) => {
-        pairs.push(code, h);
+    const push = (code, h) => {
+        fixed.push(code, h);
         sum = (sum + Math.imul(h ^ Math.imul(code + 1, 2654435761), 2246822519)) >>> 0;
     };
     {
@@ -777,172 +786,67 @@ function snapTickHash(tick, allSlices = false) {
         for (let pr of projectiles) hp = Math.imul(hp ^ _snapHashEntity('p', pr, 0), 16777619);
         push(SNAP_PART_PROJECTILES * SNAP_CODE_SHIFT, hp >>> 0);
         push(SNAP_PART_GLOBALS * SNAP_CODE_SHIFT, _snapHashGlobals(allSlices ? -1 : slice, Math.floor(t / SNAP_HASH_SLICES)));
-        // (The units' order: from the region kernel below, when it runs.)
-        for (let list of SNAP_ORDER_LISTS) if (list !== 'u') push(SNAP_PART_ORDER * SNAP_CODE_SHIFT + SNAP_LIST_CODE[list], _snapHashOrder(list, allSlices ? -1 : slice));
+        // (The units' order: from the units kernel below.)
+        for (let list of SNAP_ORDER_LISTS) if (list !== 'u') push(SNAP_PART_ORDER * SNAP_CODE_SHIFT + SNAP_LIST_CODE[list], _snapHashOrder(list, allSlices ? -1 : slice, Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS));
     }
     // Entities of this slice's regions, summed per region (order-free).
-    let regions = _snapRegionsBegin();
-    let rt = SNAP_REGION_TILES, ts = TILE * SNAP_REGION_TILES;
-    let hu = allSlices ? _snapHashers.u : _snapUnitGroupHashers[Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_UNIT_GROUPS];
-    // Positions from the unit state columns (by the tick loop's slot map;
-    // many units: each one's region worked out by the kernels): only the
-    // slice's units are read as objects.
-    let S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
-    let slots = S && typeof _unitSlotMapEnsure === 'function' ? _unitSlotMapEnsure() : null;
-    let owners = S ? S.owners : null, CX = S ? S.columns.x : null, CY = S ? S.columns.y : null;
-    let REG = null, HC = null, unitOrderHash = null, kernelPending = false;
-    const rot = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_UNIT_GROUPS, CID = S ? S.columns.id : null;
-    // (The Rust kernel (SIM_KERNEL_SNAP_REGION) for one slice with its sums;
-    // every slice at once (the strict debug mode) and small worlds hash the
-    // objects below.)
-    if (slots && units.length >= SNAP_HASH_KERNEL_MIN_UNITS && !allSlices && SNAP_HASH_KERNEL_SUMS && typeof SIM_KERNEL_SNAP_REGION === 'number') {
-        // (By unit index, or by slot with the sums: room for either.)
-        const nReg = Math.max(units.length, S.owners.length);
-        if (_snapRegions.length < nReg) { _snapRegions = simSharedArray(Int32Array, nReg * 2); _snapColHash = simSharedArray(Int32Array, nReg * 2); }
-        if (!_snapColCodes) { _snapColCodes = simHeapArray(Int32Array, SNAP_HASH_UNIT_COLUMNS.length); SNAP_HASH_UNIT_COLUMNS.forEach((k, i) => { _snapColCodes[i] = _snapStrCode(k); }); simParallelBind('snap.kc', _snapColCodes); }
-        REG = _snapRegions; HC = allSlices ? null : _snapColHash;
-        simParallelBind('ix.slots', slots); simParallelBind('snap.reg', REG); simParallelBind('snap.hc', _snapColHash);
-        const P = _simParams;
-        P[0] = units.length; P[1] = 8192; P[2] = ts; P[3] = SNAP_HASH_SLICES; P[4] = slice; P[5] = 0;
-        {
-            if (!_snapAcc) {
-                _snapAcc = simSharedArray(Int32Array, SNAP_ACC_REGIONS); _snapAccStamp = simSharedArray(Int32Array, SNAP_ACC_REGIONS);
-                _snapAccList = simSharedArray(Int32Array, SNAP_ACC_REGIONS); _snapAccCnt = simSharedArray(Int32Array, 3);
-                simParallelBind('snap.acc', _snapAcc); simParallelBind('snap.stamp', _snapAccStamp); simParallelBind('snap.list', _snapAccList); simParallelBind('snap.cnt', _snapAccCnt);
-            }
-            if (_snapAccRot.length < units.length) {
-                _snapAccRot = simSharedArray(Int32Array, units.length * 2); _snapAccNoSlot = simSharedArray(Int32Array, units.length * 2);
-                simParallelBind('snap.rot', _snapAccRot); simParallelBind('snap.noslot', _snapAccNoSlot);
-            }
-            if (++_snapAccStampNow >= 0x7fffffff) { _snapAccStamp.fill(0); _snapAccStampNow = 1; }
-            _snapAccCnt.fill(0);
-            P[5] = 1; P[6] = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_OBJ_GROUPS; P[7] = SNAP_HASH_OBJ_GROUPS; P[8] = _snapAccStampNow; P[9] = SNAP_ACC_REGIONS;
-            // (The slots and the list in the same jobs: as many as the longer.)
-            P[11] = S.owners.length;
-            const jobs = Math.ceil(Math.max(units.length, S.owners.length) / 8192);
-            if (!_snapOrdSums || _snapOrdSums.length < jobs) { _snapOrdSums = simSharedArray(Int32Array, Math.max(64, jobs * 2)); simParallelBind('snap.ord', _snapOrdSums); }
-            P[10] = 1;
-            // (The Rust kernel's per-job lists: room for every slot / unit.)
-            const room = jobs * 8192;
-            P[12] = 0;
-            {
-                for (const nm of ['snap.pr', 'snap.ph', 'snap.rl', 'snap.nl', 'snap.nu']) { const a = _simParReg[nm]; if (!a || a.length < room) simParallelBind(nm, simHeapArray(Int32Array, simReserveCap(room))); }
-                if (!_simParReg['snap.cc'] || _simParReg['snap.cc'].length < jobs * 4) simParallelBind('snap.cc', simHeapArray(Int32Array, Math.max(256, jobs * 8)));
-                if (!_snapStp) {
-                    _snapStp = simHeapArray(Int32Array, 8);
-                    simParallelBind('snap.stp', _snapStp);
-                }
-                // (The status timers' addresses, in SNAP_HASH_UNIT_COLUMNS order.)
-                const W = _simParWPtr;
-                ['teleportHideTicks', 'poisoned', 'burning', 'frozen', 'wet', 'sandy', 'watched', 'workerTransferCooldown'].forEach((k, i) => { _snapStp[i] = W['unit.' + k]; });
-                if (_snapStp.every(v => v > 0) && _snapRegions.length && _snapColHash.length) {
-                    // (snap.reg / snap.hc / snap.ord in the heap too.)
-                    if (!_snapRegionsHeap || _snapRegionsHeap.length < _snapRegions.length) {
-                        _snapRegionsHeap = simHeapArray(Int32Array, _snapRegions.length); _snapColHashHeap = simHeapArray(Int32Array, _snapRegions.length);
-                    }
-                    if (!_snapOrdHeap || _snapOrdHeap.length < jobs) _snapOrdHeap = simHeapArray(Int32Array, Math.max(64, jobs * 2));
-                    REG = _snapRegionsHeap; HC = _snapColHashHeap; _snapOrdSums = _snapOrdHeap;
-                    simParallelBind('snap.reg', REG); simParallelBind('snap.hc', HC); simParallelBind('snap.ord', _snapOrdSums);
-                    P[12] = 1;
-                } else _simNoWasm('SNAP_REGION');
-            }
-        }
-        // (The Rust kernel visits the slice's positions only: a tenth.)
-        const jobsN = Math.max(1, Math.ceil(Math.ceil(units.length / SNAP_HASH_SLICES) / 8192));
-        _snapJobsN = jobsN;
-        {
-            // (In the background: the buildings', drops', reservations' and
-            // grid's parts are hashed meanwhile; taken below.)
-            // (Its own lane: lane 0 holds the next tick's separation, which a
-            // post there waited for, run by this thread.)
-            const B = simParallelStageParams(SIM_LANE_HASH, 0);
-            B.fill(0);
-            for (let k = 0; k <= 12; k++) B[k] = P[k];
-            simParallelBackground(SIM_KERNEL_SNAP_REGION, jobsN, SIM_LANE_HASH);
-            kernelPending = true;
-        }
+    const regions = _snapRegionsBegin();
+    const ts = TILE * SNAP_REGION_TILES;
+    // Units: the slice's block of the list (all of it with all slices; a
+    // block, not every SNAP_HASH_SLICES-th: units listed together mostly hold
+    // slots together, read in runs) through the kernel in the background,
+    // while the structures' parts are hashed here.
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    const slots = S && units.length && typeof _unitSlotMapEnsure === 'function' ? _unitSlotMapEnsure() : null;
+    const per = SNAP_HASH_UNITS_PER_JOB;
+    const u0 = allSlices ? 0 : Math.floor(slice * units.length / SNAP_HASH_SLICES), u1 = allSlices ? units.length : Math.floor((slice + 1) * units.length / SNAP_HASH_SLICES);
+    let jobs = 0;
+    if (slots) {
+        jobs = Math.max(1, Math.ceil((u1 - u0) / per));
+        _snapUnitLists(jobs * per, jobs);
+        simParallelBind('ix.slots', slots);
+        // (Its own lane: lane 0 holds the next tick's separation, which a
+        // post there waited for, run by this thread.)
+        const B = simParallelStageParams(SIM_LANE_HASH, 0);
+        B.fill(0);
+        B[0] = units.length; B[1] = per; B[2] = ts; B[3] = u0; B[4] = u1; B[9] = SNAP_ACC_REGIONS;
+        simParallelBackground(SIM_KERNEL_SNAP_REGION, jobs, SIM_LANE_HASH);
     }
+    _snapUnitJobs = jobs;
     // The parts without the units (while the kernel runs).
     _snapTickHashStatic(t, slice, allSlices, regions, push);
-    if (kernelPending) simParallelBackgroundWait(SIM_LANE_HASH);
-    // (The Rust kernel: its jobs' lists into the sums and lists below.)
-    const bySliceIdx = kernelPending && _simParams[12] === 1;
-    if (bySliceIdx) _snapMergeJobs(_snapJobsN);
-    if (REG !== null) {
-        const P = _simParams;
-        if (kernelPending || (!allSlices && SNAP_HASH_KERNEL_SUMS && P[10] === 1)) {
-            // The units' order: the jobs' sums, and the slice's units without a slot.
-            let h = Math.imul(2166136261 ^ units.length, 16777619);
-            for (let k = 0, jobs = bySliceIdx ? _snapJobsN : Math.ceil(Math.max(units.length, S.owners.length) / 8192); k < jobs; k++) h = (h + _snapOrdSums[k]) | 0;
-            for (let k = 0, n = _snapAccCnt[2]; k < n; k++) { const i = _snapAccNoSlot[k]; if (i % SNAP_HASH_SLICES === slice && !(slots[i] >= 0)) h = (h + _snapOrderMix(i, units[i].id)) | 0; }
-            unitOrderHash = h >>> 0;
+    let unitOrder;
+    let unitPairs = 0;
+    if (jobs) {
+        simParallelBackgroundWait(SIM_LANE_HASH);
+        // The units' order: the jobs' sums and the positions without a slot;
+        // units outside the summed regions into the others.
+        const R = _simParReg, CC = R['snap.cc'], ORD = R['snap.ord'], NU = R['snap.nu'], NL = R['snap.nl'], NLH = R['snap.nlh'];
+        const CX = S.columns.x, CY = S.columns.y;
+        let h = Math.imul(2166136261 ^ units.length, 16777619);
+        for (let j = 0; j < jobs; j++) {
+            const b = j * per;
+            h = (h + ORD[j]) | 0;
+            unitPairs += CC[j * 4];
+            for (let k = 0, c = CC[j * 4 + 3]; k < c; k++) { const i = NU[b + k]; h = (h + _snapOrderMix(i, units[i].id)) | 0; }
+            for (let k = 0, c = CC[j * 4 + 2]; k < c; k++) { const si = NL[b + k]; _snapRegionAdd(regions, Math.floor(CY[si] / ts) * 1024 + Math.floor(CX[si] / ts), NLH[b + k] >>> 0); }
         }
-    }
-    push(SNAP_PART_ORDER * SNAP_CODE_SHIFT + SNAP_LIST_CODE.u, unitOrderHash !== null ? unitOrderHash : _snapHashOrder('u', allSlices ? -1 : slice));
-    // One slice through the kernel: its sums, then the units it left (this
-    // rotation's group by id, with their objects' fields; units without a
-    // slot or outside the summed regions, as below).
-    if (REG !== null && !allSlices && SNAP_HASH_KERNEL_SUMS) {
-        const ACC = _snapAcc, RL = _snapAccRot, NL = _snapAccNoSlot, LIST = _snapAccList;
-        // (The kernel's lists are by slot: see SIM_KERNEL_SNAP_REGION.)
-        for (let k = 0, n = _snapAccCnt[1]; k < n; k++) {
-            const s = RL[k], u = owners[s], seed = Math.imul(CID[s], 7919) ^ 0x11;
-            let h = (_snapUnitObjHasher(u, seed, _snapF64, _snapI32, _snapHV, _snapHPath) + HC[s]) | 0;
-            h = Math.imul(h ^ (h >>> 15), 2246822519);
-            ACC[REG[s]] = (ACC[REG[s]] + h) | 0;
-        }
-        for (let k = 0, n = _snapAccCnt[0]; k < n; k++) {
-            const r = LIST[k], h = ACC[r] >>> 0;
-            ACC[r] = 0;
-            _snapRegionAdd(regions, r, h);
-        }
-        for (let k = 0, n = _snapAccCnt[2]; k < n; k++) {
-            // (A slot outside the summed regions: -(s + 1); else a unit
-            // without a slot, by its index.)
-            const e = NL[k], si = e < 0 ? -e - 1 : -1, u = e < 0 ? owners[si] : units[e];
-            let r;
-            if (si >= 0) r = Math.floor(CY[si] / ts) * 1024 + Math.floor(CX[si] / ts);
-            else r = Math.floor(u.y / ts) * 1024 + Math.floor(u.x / ts);
-            // (By position slices (the Rust kernel), every listed unit is the slice's.)
-            if (!bySliceIdx && (r % SNAP_HASH_SLICES) !== slice) continue;
-            let h;
-            if (si >= 0) {
-                const id = CID[si], seed = Math.imul(id, 7919) ^ 0x11, G = SNAP_HASH_OBJ_GROUPS;
-                h = ((((id % G) + G) % G) === Math.floor(t / SNAP_HASH_SLICES) % G
-                    ? (_snapUnitObjHasher(u, seed, _snapF64, _snapI32, _snapHV, _snapHPath) + HC[si]) : (seed + HC[si])) | 0;
-            }
-            else h = hu(u, Math.imul(u.id, 7919) ^ 0x11, _snapF64, _snapI32, _snapHV, _snapHPath);
-            h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
-            _snapRegionAdd(regions, r, h);
-        }
-    }
-    else for (let i = 0; i < units.length; i++) {
-        let r;
-        if (REG !== null && REG[i] >= 0) {
-            r = REG[i];
-            if (!allSlices && (r % SNAP_HASH_SLICES) !== slice) continue;
-        }
-        let u = units[i];
-        let si = slots ? slots[i] : -1;
-        if (r !== undefined) { /* (the kernel's) */ }
-        else if (si >= 0 && owners[si] === u) r = Math.floor(CY[si] / ts) * 1024 + Math.floor(CX[si] / ts);
-        else r = Math.floor(u.y / ts) * 1024 + Math.floor(u.x / ts);
-        if (!allSlices && (r % SNAP_HASH_SLICES) !== slice) continue;
-        let h;
-        // (The column fields from the kernels for every unit of the slice;
-        // the object's own fields, all of them, for the units of this
-        // rotation's group by id: reading the objects is most of the cost.)
-        if (HC !== null && si >= 0 && owners[si] === u) {
-            const id = CID[si], seed = Math.imul(id, 7919) ^ 0x11, G = SNAP_HASH_OBJ_GROUPS;
-            h = ((((id % G) + G) % G) === Math.floor(t / SNAP_HASH_SLICES) % G
-                ? (_snapUnitObjHasher(u, seed, _snapF64, _snapI32, _snapHV, _snapHPath) + HC[i]) : (seed + HC[i])) | 0;
-        }
-        else h = hu(u, Math.imul(u.id, 7919) ^ 0x11, _snapF64, _snapI32, _snapHV, _snapHPath);
-        h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
-        _snapRegionAdd(regions, r, h);
-    }
-    for (let k = 0, L = regions.list, A = regions.acc; k < regions.n; k++) push(SNAP_PART_REGION * SNAP_CODE_SHIFT + L[k], A[L[k]] >>> 0);
+        unitOrder = h >>> 0;
+    } else unitOrder = _snapHashOrder('u', allSlices ? -1 : slice);
+    push(SNAP_PART_ORDER * SNAP_CODE_SHIFT + SNAP_LIST_CODE.u, unitOrder);
+    // The units' region sums added to the others', and every region as a
+    // pair (SIM_KERNEL_SNAP_MERGE, here: one job).
+    const out = _snapPairsOut(regions.n + unitPairs);
+    const MP = _snapMergeP;
+    MP[0] = jobs; MP[1] = per; MP[2] = regions.now; MP[3] = regions.n; MP[4] = SNAP_ACC_REGIONS; MP[5] = SNAP_PART_REGION * SNAP_CODE_SHIFT;
+    SIM_KERNELS[SIM_KERNEL_SNAP_MERGE](_simParReg, MP, 0);
+    const res = _simParReg['snap.pres'], nReg = res[0];
+    regions.n = nReg;
+    sum = (sum + res[1]) >>> 0;
     if (regions.extra) for (let [r, h] of regions.extra) push(SNAP_PART_REGION * SNAP_CODE_SHIFT + r, h);
+    const pairs = _snapPairsBuf(fixed.length + 2 * nReg);
+    pairs.set(fixed);
+    pairs.set(out.subarray(0, 2 * nReg), fixed.length);
     return { tick: Math.floor(tick), sum, pairs };
 }
 
@@ -960,9 +864,13 @@ function snapRecordTickHash(tick) {
 function snapStoreTickHash(r) {
     _snapHashHistory.set(r.tick, r);
     if (_snapHashHistory.size > SNAP_HASH_HISTORY_TICKS) {
-        for (let k of _snapHashHistory.keys()) {
+        for (let [k, old] of _snapHashHistory) {
             if (k > r.tick - SNAP_HASH_HISTORY_TICKS) break;
             _snapHashHistory.delete(k);
+            // (Its pairs' buffer for a later hash: nothing else holds a
+            // record this old.)
+            const p = old.pairs;
+            if (p instanceof Uint32Array && p.byteOffset === 0 && _snapPairsFree.length < 8) _snapPairsFree.push(p.buffer);
         }
     }
     return r;
@@ -979,7 +887,8 @@ function snapHashRotation(tick) {
     let out = [];
     for (let t = Math.floor(tick) - SNAP_HASH_ROTATION_TICKS - SNAP_HASH_EVERY + 1; t <= tick; t++) {
         let r = _snapHashHistory.get(t);
-        if (r) out.push(r);
+        // (As plain arrays: the rotation goes over the network.)
+        if (r) out.push({ tick: r.tick, sum: r.sum, pairs: Array.from(r.pairs) });
     }
     return out;
 }

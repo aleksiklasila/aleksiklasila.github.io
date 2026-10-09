@@ -243,10 +243,129 @@ emulation). Determinism-suite fixes come after the optimization work.
 - B400 (`.claude/s4-400k-a.log`, 7 helpers): mean 77.7, p50 72.1, p95 131.5,
   max 171.8, 0 desyncs (HEAD control earlier this session: 88.4 mean).
 
+### 2026-10-09 — main thread: structural batches (target: B800 main ≤ 40-50 ms)
+
+- **Hash cadence** (the requirement is quick detection and resync, not a
+  hash every tick): SNAP_HASH_EVERY 2, slices and rotations by the hash's
+  index (snapHashDue), the resync's rotation window and wait scaled
+  (SNAP_HASH_ROTATION_TICKS; snapHashRotation takes one hash more: a
+  request comes at the first hashed tick a rotation after the divergence).
+  Building/grid rounds 10 → 5, unit object groups 80 → 40: detection delays
+  as before (≤ 100 ticks buildings, 1 s units). Corruption fuzz: every
+  corruption repaired (its final bit-exact check fails on the existing
+  recurring divergence, as before the change).
+- **Kernel-owned waits**: setters (commandState, workerState, pathIndex,
+  owner, _workerNextIdleRetargetTick) disarm only on a change; a stats
+  change keeps a parked unit unless its park uses stats (mvFlags 1/2/16); a
+  worker on its cooldown parks whatever its command; units waiting for their
+  way (pending target, no path) park in the kernel with an arrival check
+  (mvFlags 8, mvTgX/Y/Tol). Idle researchers (~440 updates a tick at 400k)
+  no longer run Unit.update.
+- **Steady step** (MOVE_STEP): a committed step's window (mvSteady: steer
+  end, look ticks without the brain, floor look, worker check) checked four
+  slots at a time; half-up quantization as the scalar step (same results);
+  move_pre / epilogue skip 16 slots at a time. With the combat brain the
+  step kernel no longer gates on the old look ticks. MOVE replay 37 → 32 ms.
+- **Field generations adopted** in the kernel after a build install (same
+  slot and destination, field made): no hand-back.
+- **Next-build staging**: one slot per destination per pool, so rows are
+  never copied: the sort/dedup and rowSrc lookups dropped, live slots from
+  the meta. Tick 201 navTick 52 → 18 ms.
+- **Stat rows**: (owner, type, base, effective level) rows (eff.rowOf,
+  eff.r*), Unit.preComputed through unit.statRow; EFF_UNITS assigns a new
+  level's row and the movement columns (simMoveStatsChanged's keeps and
+  disarms) itself, JS only for missing rows / drive-by boxes.
+  recalculateUnitEffectiveStats 5.0 → 3.3 ms at 800k.
+- ACQ_SCAN row search (rows outward with the best distance's span, one
+  entry run per row, SIMD entries): replay 117 → 90 ms, same outputs.
+- Re-routes every 32 ticks (SIM_REROUTE_TICKS): an install leaving ~20k
+  units without a way spreads over 1.6 s. SIM_RULES_REVISION 4.
+- Desyncs on the 10k bench (30, 2 patches): the same at HEAD (33, 3).
+- B800 (`.claude/s4-800k-rest.log`): mean 103.7 → 92.5, p50 99.1 → 89.9,
+  p95 143.9 → 122.9, max 216 → 184. Steady main: MOVE 15.9, separation
+  9.7, unit pass 9.4, hash 5.8, worker tier 4.3, eff 3.2, status 3.2, orders
+  2.7, vis 2.6, combat scan 2.5, nav flush 2.4, hits 2.1, laser links 2.1,
+  collect 2.0, stats 1.8, acq tier 1.7, adjacency 1.6, lasers 1.4, towers 1.2.
+
+- **Later the same day**: stat rows mirror the JS path exactly (cover sync
+  on every new level, a missing drive-by box falls back to JS); an
+  attack-mover's park keeps its aggro reach through stats changes; fallback
+  A* waiters park too (their upgrades are the pending resolver's); the
+  builder watchdog samples in the kernel (wkWx/wkWy/wkLmt columns behind
+  Unit._builderLastWatchX/Y/_builderLastMoveTick, mvFlags 4); workers on
+  their way back for material and salvagers' returns are worker kind 3 (no
+  check ticks); simUnitStateCollect reads the typed dead column; worker
+  search takes at most WS_TAKE_MAX (384) a tick. Hash: 20 slices every tick
+  (an even share; every other tick doubled the hashed ticks: 13-33 ms).
+  B800 (`.claude/s4-800k-e.log`, before the last two): mean 92.3, p50 88.7,
+  p95 121.4; unit pass 9.4 → 6.2, collect 2.0 → 1.0.
+- **Known broken (determinism, deferred)**: multiplayer-snapshot "restored
+  peers evolve differently" and a corruption-fuzz unitGone repair: the
+  kernel-owned waits (route-wait parks, kept parks, steady windows, the
+  watchdog) hold state the snapshot does not carry, so a restored peer runs
+  Unit.update where the original keeps units parked. Fix with the
+  determinism pass: snapshot the movement columns (mvOn, mvFlags, mvWake,
+  mvTg*, mvSteady, steer state) or make every park recomputable (no cached
+  tolerances: compute the arrival tolerance in the kernel from mvSpd and
+  statuses).
+
+### 2026-10-09 (later) — state hash: every unit field from columns (plan C)
+
+- **Units hashed from columns only.** The hashed object fields (targets,
+  hold/forced flags, attack-move goal, worker target/type/carry/reservation/
+  materials, budget retry, scout target, watcher team: SIM_UNIT_OBJ_FIELDS)
+  live in per-slot arrays beside the typed columns (columns.oc_<field>, a
+  detached unit's in its _det); every set that changes a value moves the
+  slot's digest (unit.hObj) by its term change, as do the accessors of the
+  structure target, pending way, fallback flag, worker state and its idle
+  search (SIM_HASH_DIGEST_FIELDS). Restores set every field through the
+  same setters, so the digest equals simUnitHashDigest(u) (checked on every
+  unit). Not in the digest: unitType (a plain field again: its accessor cost
+  ~50 ns a read) and path (set on every re-route; positions, velocity and
+  pathIndex show where it leads).
+- **k_snap_units** (SIM_KERNEL_SNAP_REGION, k.rs): 22 columns + digest +
+  id seed, four units a lane (i32x4 mix: (key ^ word) * M; NaN one word);
+  slices are blocks of the units list (units listed together hold slots
+  together: consecutive slots are one v128 load per column), 2048 positions
+  a job; regions per lane in f32x4. **k_snap_merge** (one job, on the main
+  thread): the jobs' (region, hash) lists into the region sums the
+  structures left (snap.racc/rstamp/rlist, heap), every region as a pair,
+  the sum. Pairs are a Uint32Array (rotations go out as plain arrays). The
+  JS object hashers, rotation groups and per-job JS merging are gone.
+- **Structures**: core fields every second are owner, energy and
+  construction (mines: resources); levels, stacks, timers and statuses in
+  the 20 s full round; reservations and the structure lists' order also in
+  that round (their lengths every slice).
+- Pitfalls found: simUnitStateCompact must carry the object arrays (it
+  built empty ones: restored hosts read undefined targets, and sparse writes
+  turned the arrays into dictionary mode: 300 ms ticks at 400k); arrays are
+  preallocated packed at the slot capacity. A path-digest WeakMap made the
+  mass order's full GC slow.
+- **V8 memory reducer**: a "Mark-Compact (reduce)" after the mass order
+  (tick 212) pauses 0.3-0.8 s at 800k (two peers, ~3 GB heap, 16 GB
+  machine); gone with --no-memory-reducer (max 184 ms). A heuristic full GC,
+  not this change's, but a hitch a browser can hit too: fewer JS objects
+  (more state in typed columns) is the lasting fix.
+- B800 (`.claude/s5-800k-e.log`, --no-memory-reducer): mean 90.9, p50 85.5,
+  p95 135.9, max 184, 0 desyncs. Hash 3.85 ms a tick (was 8.0): structures
+  3.0 (cold JS objects: ~4k a tick), merge 0.19, globals 0.16, units kernel
+  wait 0.02. MOVE 17.4, unit pass 10.8, separation 10.4, orders 3.9,
+  status 3.5, eff 3.4, vis 3.3, nav flush 2.6.
+- Tests: desync recovery unit/player/building repaired (mine: detected
+  when its slice comes, 0.8 s, then 1.2 s to patch: over the test's 1.5 s
+  with 20 slices); the patch test's restored-guest shrine difference and the
+  snapshot test's positions 4 ticks after a restore are the known
+  kernel-state gaps (object fields restore identically).
+
 ## Next
 
-0. Optimize the Rust kernels (SIMD, layouts; no JS emulation), then the
-   main-thread serial work; then the determinism suite failures (above).
+0. Main thread: the items above, biggest first: MOVE (layouts, steering
+   shared per route/cell), separation commit, unit pass (worker events in
+   the kernel), worker tier takes; battle-setup spikes (visibility cover
+   rebuild, first updates). Hash: a typed structure table (towers, barracks,
+   spawners as accessor-backed columns; floor items and mines made class
+   instances) so the structures' part is a kernel too (or region sums kept
+   by their setters). Then the determinism suite failures (above).
 1. Navigation (plan E.4/E.5), for the p99 gate: the rebuild's remaining
    serial start (batching every live field, binding), foreground kernels
    starved by the remake of every live field (smaller background jobs or
@@ -254,5 +373,5 @@ emulation). Determinism-suite fixes come after the optimization work.
    re-routing after an install.
 2. MOVE kernel CPU (74.6 ms at 800k; 14 ms of foreground wall): dump and
    replay (kdump + wbench) to split its passes, then the motor plan (A).
-3. Hash (~10 ms serial at 800k), effective-stats apply (~5 ms), separation
-   FINISH (30 ms CPU): see the profiles above.
+3. Effective-stats apply (~3.4 ms), separation FINISH (30 ms CPU): see the
+   profiles above. (Hash: 3.85 ms, see the structure table above.)

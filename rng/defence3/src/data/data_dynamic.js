@@ -3703,4 +3703,6 @@ function applyUnitEffectiveScaling(unit, effectiveLevel) {
 
     unit.effectiveLevel = lvl;
     if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(unit);
+    // (Its tables as a stat row: units of the same tables take it in the kernel.)
+    if (typeof _effRowAttach === 'function') _effRowAttach(unit);
 }

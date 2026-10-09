@@ -949,7 +949,7 @@ const WSR_COLLECT = 1, WSR_GRID = 3, WSR_HEAL = 4, WSR_RESEARCH = 5;
 const WS_WAITING = Object.freeze({ wsWaiting: true });
 let _wsPosted = null, _wsResults = new Map(), _wsCommitTick = -1, _wsStepTick = -1, _wsInCommit = false, _wsPending = null;
 // (The commit's takes are spread over this many ticks.)
-const WS_TAKE_TICKS = 3;
+const WS_TAKE_TICKS = 3, WS_TAKE_MAX = 1e9;
 const _wsGroups = new Map();
 function _wsAvailable() { return typeof SIM_KERNEL_WS_SCAN === 'number' && typeof simParallelBackground === 'function' && typeof _simUnitState !== 'undefined' && !!_simUnitState; }
 function _wsRegistered(u) { const c = u && u._us; return !!c && c.wsKind[u._si] !== 0 && _wsAvailable(); }
@@ -1226,6 +1226,9 @@ function _wsArr(name, Type, n) {
 function _wsPost() {
     simParallelBackgroundWait(WS_LANE);
     _wsPosted = null;
+    // (Takes the last commit's cap left: dropped before its arrays are written
+    // again; those workers are searched again on their retry ticks.)
+    _wsPending = null;
     const S = _simUnitState;
     if (!S) return;
     const n = S.owners.length;
@@ -1322,7 +1325,10 @@ function _wsTakeSome() {
     if (!Q || !S) { _wsPending = null; return; }
     const J = Q.J, c = S.columns, owners = S.owners, R = _simParReg, K = WS_K;
     const OUT = R['ws.res'], OSC = R['ws.score'], UOUT = R['ws.ures'], RS = R['ws.rslot'], RID = R['ws.rid'], RWT = R['ws.rwt'], RK = R['ws.rkind'], RG = R['ws.rgrp'], RO = R['ws.rowner'];
-    const found = Q.found, end = Math.min(found.length, Q.pos + Math.ceil((found.length - Q.pos) / Math.max(1, Q.end - gameTime + 1)));
+    // (Its share, at most WS_TAKE_MAX a tick: what the cap leaves by the next
+    // post is dropped there, see _wsPost.)
+    const found = Q.found, share = Math.ceil((found.length - Q.pos) / Math.max(1, Q.end - gameTime + 1));
+    const end = Math.min(found.length, Q.pos + Math.min(WS_TAKE_MAX, share));
     _wsInCommit = true;
     try {
         for (; Q.pos < end; Q.pos++) {

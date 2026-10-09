@@ -32,7 +32,79 @@ const SIM_UNIT_ACCESSOR_COLUMNS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'v
 const SIM_UNIT_MIRROR_COLUMNS = ['r', 'collisionR'];
 // Accessor keys that are not columns (see simUnitStateKeys): the path is a
 // plain reference behind a setter that disarms the movement kernel.
-const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'targetBuilding', 'pathIsFallbackAstar', '_pendingPathTarget', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved', '_statsBehind', '_forcedTargetLastSeenX', '_forcedTargetLastSeenY'];
+// The state hash's object fields (not numbers of their own column): per-slot
+// JavaScript arrays beside the columns (columns.oc_<field>, behind the
+// unit's accessors; a detached unit's in its _det), each set summed into
+// the slot's digest (hObj: see _simHTerm), so the hash kernel reads one
+// column for all of them.
+const SIM_UNIT_OBJ_FIELDS = ['holdPosition', 'forcedAttackTarget', 'targetUnit', 'targetPos', '_attackMoveGx', '_attackMoveGy', 'watchedByTeam',
+    'workerTarget', 'workerTargetType', 'carryingValue', '_workerReservedTileIndex', 'builderHasMaterial', 'healerHasMaterial', 'researcherHasMaterial',
+    '_astarBudgetRetryTick', '_scoutTarget'];
+const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'targetBuilding', 'pathIsFallbackAstar', '_pendingPathTarget', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved', '_statsBehind', '_forcedTargetLastSeenX', '_forcedTargetLastSeenY',
+    '_builderLastWatchX', '_builderLastWatchY', '_builderLastMoveTick', ...SIM_UNIT_OBJ_FIELDS];
+// Every field in the digest: the object fields and the accessors' plain
+// values (structure target, pending way, worker state and its search). Not
+// the unit type (set once, read everywhere: a plain field; a wrong type
+// shows in its stats at once) nor the path (set on every re-route; where it
+// leads shows in the position, velocity and pathIndex columns).
+const SIM_HASH_DIGEST_FIELDS = [...SIM_UNIT_OBJ_FIELDS, 'targetBuilding', '_pendingPathTarget', 'pathIsFallbackAstar', 'workerState', '_workerNextIdleRetargetTick'];
+
+// ---- The digest ----
+// A field's term: (its key ^ the value's word) * M, summed mod 2^32 (the
+// hash kernel, wasm/src/k.rs k_snap_units, mixes its columns the same way).
+// Words: a unit its id; a structure or tile target (gx, gy) its tile; a
+// point its Float32 bits; whole numbers themselves, others their bits;
+// strings a code. Only what never changes in place is read, so a restore
+// (setting every field anew) gets the same digest.
+const SIM_H_M = Math.imul(16777619, 2654435761);
+const SIM_H_UNDEF = -2147483648, SIM_H_NULL = -2147483647, SIM_H_NAN = -2147483646, SIM_H_OBJ = -2147483645;
+const _simHF64 = new Float64Array(1), _simHI32 = new Int32Array(_simHF64.buffer), _simHF32 = new Float32Array(2), _simHU32 = new Int32Array(_simHF32.buffer);
+const _simHStrCodes = new Map();
+function _simHStr(s) {
+    let c = _simHStrCodes.get(s);
+    if (c !== undefined) return c;
+    c = 2166136261 | 0;
+    for (let i = 0; i < s.length; i++) c = Math.imul(c ^ s.charCodeAt(i), 16777619);
+    c = Math.imul(c ^ 0x9e37, 16777619);
+    if (_simHStrCodes.size > 4096) _simHStrCodes.clear();
+    _simHStrCodes.set(s, c);
+    return c;
+}
+function _simHKey(name) { return Math.imul(_simHStr(name) ^ 0x2c1b3c6d, 2246822519); }
+function _simHEnc(v) {
+    switch (typeof v) {
+        case 'number':
+            if ((v | 0) === v && !(v === 0 && 1 / v < 0)) return v < -2147483640 ? Math.imul(v, 31) : v;
+            if (v !== v) return SIM_H_NAN;
+            _simHF64[0] = v;
+            return Math.imul(_simHI32[0] ^ 0x5bd1e995, 16777619) ^ _simHI32[1];
+        case 'undefined': return SIM_H_UNDEF;
+        case 'boolean': return v ? 0x3bd : 0x2bd;
+        case 'string': return _simHStr(v);
+        case 'object':
+            if (v === null) return SIM_H_NULL;
+            if (v instanceof Unit) return v.id | 0;
+            if (typeof v.gx === 'number') return -16 - ((v.gy | 0) * 65536 + (v.gx | 0));
+            if (typeof v.x === 'number') { _simHF32[0] = v.x; _simHF32[1] = v.y; return Math.imul(_simHU32[0] ^ 0x27d4eb2d, 16777619) ^ _simHU32[1]; }
+            return SIM_H_OBJ;
+    }
+    return SIM_H_OBJ;
+}
+// A field's term for value v (key: _simHKey(field)).
+function _simHTerm(key, v) { return Math.imul(key ^ _simHEnc(v), SIM_H_M); }
+// The digest at a slot's start: its fields unset (the structure target null,
+// see _simUnitSlotStart).
+let _simH0 = null;
+function _simHDigest0() {
+    if (_simH0 === null) { let h = 0; for (const k of SIM_HASH_DIGEST_FIELDS) h = (h + _simHTerm(_simHKey(k), k === 'targetBuilding' ? null : undefined)) | 0; _simH0 = h; }
+    return _simH0;
+}
+// The digest from a unit's values (checks and tests: it equals the column).
+function simUnitHashDigest(u) {
+    let h = 0;
+    for (const k of SIM_HASH_DIGEST_FIELDS) h = (h + _simHTerm(_simHKey(k), u[k])) | 0;
+    return h;
+}
 
 // Unit types by first sight (peer-local indices: only ever mapped back to
 // the type's name).
@@ -110,6 +182,12 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // Chase (mvOn 4; see simMoveTryChase): the target in mvHT/mvHTId, the
     // range in mvReach, and the look-ahead of its direct step (_isChaseStepOpen).
     ['mvChs', Float32Array, 1],
+    // A parked unit waiting for its way (mvFlags 8: simMoveTryParkRoute): the
+    // target it was sent to and how near counts as there.
+    ['mvTgX', Float32Array, 1], ['mvTgY', Float32Array, 1], ['mvTgTol', Float32Array, 1],
+    // A flow unit's steady window (SIM_KERNEL_MOVE_STEP's steady step): its
+    // committed step is taken as it is until this tick (0: not steady).
+    ['mvSteady', Int32Array, 1],
     // Effective stats (SIM_KERNEL_EFF_UNITS): 1 when the unit's base tables
     // fit its baseLevel and its window is known (esRad chunks around it,
     // esType its spatial type); esTaken the pass that took it; esFlag the
@@ -124,7 +202,10 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['wkFail', Int32Array, 1], ['wkUntil', Int32Array, 1], ['wkSched', Int32Array, 1],
     // A parked builder's last watchdog sample (mvFlags 4): woken at a sample
     // tick only when it no longer stands there.
-    ['wkWx', Float32Array, 1], ['wkWy', Float32Array, 1],
+    // A builder's watchdog (worker.js): its last sampled position and the
+    // tick it last moved (Unit._builderLastWatchX/Y, _builderLastMoveTick;
+    // NaN / INT_MIN unset), sampled by the kernel for a parked builder.
+    ['wkWx', Float32Array, 1], ['wkWy', Float32Array, 1], ['wkLmt', Int32Array, 1],
     // The status pre-pass's events (1 damaged, 2 its watch ended, 4 died)
     // and the damage dealt.
     ['stEv', Uint8Array, 1], ['stDot', Float32Array, 1],
@@ -216,6 +297,8 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // The version of its (owner, type) stat tables its stats were applied at
     // (things_utils.js _unitStatsVerOf).
     ['esVer', Int32Array, 1],
+    // Its effective stat tables' row (things_utils.js _effRowAttach; -1: its own).
+    ['statRow', Int32Array, 1],
     // Unit._forcedTargetLastSeenX/Y (NaN: null): a forced target's last seen
     // position, which the movement kernel writes for forced holds and chases
     // (mvFlags 8); the values before its write (fLsPX/fLsPY) and the tick of
@@ -229,7 +312,10 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // own movement), 1 hold (stand, fire when the timer is out), 2 chase
     // (step toward the target); the target's slot and id. isWk: a worker
     // (the brain leaves workers alone).
-    ['cmMode', Uint8Array, 1], ['cmT', Int32Array, 1], ['cmTId', Int32Array, 1], ['isWk', Uint8Array, 1]];
+    ['cmMode', Uint8Array, 1], ['cmT', Int32Array, 1], ['cmTId', Int32Array, 1], ['isWk', Uint8Array, 1],
+    // The digest of its hashed object fields (SIM_HASH_DIGEST_FIELDS: their
+    // setters keep it), hashed with its columns (SIM_KERNEL_SNAP_REGION).
+    ['hObj', Int32Array, 1]];
 // Accessor defaults (the "not indexed / not registered" values).
 const SIM_SPATIAL_DEFAULTS = { spTile: -1, spArea: -2, spOwner: -1, spEpoch: 0, spType: -1, vsGen: 0, vsR: -1, vsA: -1, vsP1: -1, vsP2: -1 };
 let _simUnitState = null;
@@ -254,7 +340,7 @@ let _SimUnitColumns = null;
 function _simUnitColumnsObject() {
     if (!_SimUnitColumns) {
         const names = [...SIM_UNIT_COLUMNS, ...SIM_MOVE_COLUMNS.map(c => c[0]), 'sepKey', 'mvNodes'];
-        _SimUnitColumns = new Function(names.map(n => 'this.' + n + ' = null;').join(' '));
+        _SimUnitColumns = new Function(names.map(n => 'this.' + n + ' = null;').join(' ') + ' ' + SIM_UNIT_OBJ_FIELDS.map(k => 'this.oc_' + k + ' = [];').join(' '));
     }
     return new _SimUnitColumns();
 }
@@ -320,6 +406,13 @@ function _simUnitStateGrow(S, cap) {
             S.columns[k] = a;
             simParallelBind('unit.' + k, a);
         }
+        // (The object fields' arrays: packed, as long as the columns; written
+        // by index, never past the end: no sparse, dictionary-mode arrays.)
+        for (const k of SIM_UNIT_OBJ_FIELDS) {
+            const was = S.columns['oc_' + k], a = new Array(cap).fill(undefined);
+            if (was) for (let i = 0, n = Math.min(was.length, cap); i < n; i++) a[i] = was[i];
+            S.columns['oc_' + k] = a;
+        }
         const stamp = new Uint32Array(cap);
         if (S.stamp) stamp.set(S.stamp);
         S.stamp = stamp;
@@ -338,8 +431,10 @@ function _simUnitStateGrow(S, cap) {
 function _simUnitSlotStart(S, s, u) {
     S.sepKey[s] = SIM_SEP_ABSENT;
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNavT[s] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
-    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = 0; S.columns.stEv[s] = 0; S.columns.stOn[s] = 1; S.columns.tmOn[s] = 1; S.columns.lzAcc[s] = 0; S.columns.sepCx[s] = 0; S.columns.sepCy[s] = 0; S.columns.esVer[s] = -1;
+    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = 0; S.columns.stEv[s] = 0; S.columns.stOn[s] = 1; S.columns.tmOn[s] = 1; S.columns.lzAcc[s] = 0; S.columns.sepCx[s] = 0; S.columns.sepCy[s] = 0; S.columns.esVer[s] = -1; S.columns.statRow[s] = -1;
     S.columns.fLsX[s] = NaN; S.columns.fLsY[s] = NaN; S.columns.fLsT[s] = -1;
+    S.columns.wkWx[s] = typeof u._bwx === 'number' ? u._bwx : NaN; S.columns.wkWy[s] = typeof u._bwy === 'number' ? u._bwy : NaN;
+    S.columns.wkLmt[s] = typeof u._bmt === 'number' && u._bmt === Math.floor(u._bmt) ? u._bmt : -2147483648;
     for (const k of SIM_UNIT_LEVEL_COLUMNS) S.columns[k][s] = NaN;
     for (const k in SIM_SPATIAL_DEFAULTS) S.columns[k][s] = SIM_SPATIAL_DEFAULTS[k];
     S.owners[s] = u;
@@ -348,6 +443,9 @@ function _simUnitSlotStart(S, s, u) {
     // (Tick-stamped answers of the slot's last unit are not this one's.)
     S.columns.acqB[s] = 0; S.columns.cmMode[s] = 0; S.columns.cmT[s] = -1; S.columns.cmTId[s] = 0; S.columns.isWk[s] = u.workerType ? 1 : 0;
     S.columns.cbTick[s] = -1; S.columns.cbT[s] = -1; S.columns.dbTick[s] = -1; S.columns.dbT[s] = -1; S.columns.cwTick[s] = -1; S.columns.upT[s] = -1; S.columns.upB[s] = -1;
+    // (Its object fields unset: their digest that of none.)
+    _simUnitObjClear(S.columns, s);
+    S.columns.hObj[s] = _simHDigest0();
     Object.defineProperties(u, { _us: { value: S.columns, writable: true }, _si: { value: s, writable: true }, _det: { value: null, writable: true },
         _path: { value: null, writable: true }, _ws: { value: undefined, writable: true }, _wnr: { value: undefined, writable: true }, _tb: { value: null, writable: true },
         _pfa: { value: u._pfa, writable: true }, _ppt: { value: u._ppt, writable: true } });
@@ -358,10 +456,14 @@ function _simUnitSlotStart(S, s, u) {
 // snapshot. Detach their values before reusing the slot; stale object references
 // must never read or overwrite a newly spawned unit.
 let _simDetValues = null;
+// (A slot's object fields unset; on detach the references let go.)
+const _simUnitObjClear = new Function('C', 's', SIM_UNIT_OBJ_FIELDS.map(k => 'C.oc_' + k + '[s] = undefined;').join(' '));
 function _simDetValuesCtor() {
     const body = SIM_UNIT_ACCESSOR_COLUMNS.map(k => 'this.' + k + ' = C.' + k + '[s];').join(' ')
+        + ' ' + SIM_UNIT_OBJ_FIELDS.map(k => 'this.' + k + ' = C.oc_' + k + '[s];').join(' ')
         + ' this.dead = C.dead[s] === 1; this._navLastD = C.mvNavLD[s]; this._floorTile = C.mvFloor[s]; this._sepMoved = C.sepMov[s];'
-        + ' this._statsBehind = false; this._forcedTargetLastSeenX = null; this._forcedTargetLastSeenY = null;';
+        + ' this._statsBehind = false; this._forcedTargetLastSeenX = null; this._forcedTargetLastSeenY = null;'
+        + ' { const a = C.wkWx[s], b = C.wkWy[s], m = C.wkLmt[s]; this._builderLastWatchX = a === a ? a : undefined; this._builderLastWatchY = b === b ? b : undefined; this._builderLastMoveTick = m === -2147483648 ? undefined : m; }';
     return new Function('C', 's', body);
 }
 function simUnitStateDetach(S, s) {
@@ -370,6 +472,9 @@ function simUnitStateDetach(S, s) {
     // Its values move to one plain object the accessors fall back to (a
     // property definition per column made releasing many units slow; one
     // constructor: one shape, no dictionary transitions per key).
+    // (Its row's tables as its own.)
+    if (S.columns.statRow[s] >= 0 && typeof _effRowObj !== 'undefined') u._effRowKeep(_effRowObj[S.columns.statRow[s]]);
+    S.columns.statRow[s] = -1;
     const values = new (_simDetValues || (_simDetValues = _simDetValuesCtor()))(S.columns, s);
     values._statsBehind = typeof _unitStatsBehind === 'function' ? _unitStatsBehind(u, S.columns.esVer[s]) : false;
     { const lx = S.columns.fLsX[s], ly = S.columns.fLsY[s]; values._forcedTargetLastSeenX = lx === lx ? lx : null; values._forcedTargetLastSeenY = ly === ly ? ly : null; }
@@ -377,6 +482,7 @@ function simUnitStateDetach(S, s) {
     // (Its path window back to the pool: the slot's next unit starts with none.)
     simUnitPathRelease(S.columns, s);
     u._us = null; u._si = -1;
+    _simUnitObjClear(S.columns, s);
     S.sepKey[s] = SIM_SEP_ABSENT;
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.live[s] = 0;
     // (Reused from the next unit index rebuild on: its entries name units
@@ -444,6 +550,11 @@ function simUnitStateCompact() {
     for (const k of SIM_UNIT_COLUMNS) _simCopyRuns(old[k], C[k], runs, 1);
     for (const [k, , per] of SIM_MOVE_COLUMNS) _simCopyRuns(old[k], C[k], runs, per);
     _simCopyRuns(S.sepKey, N.sepKey, runs, 1); _simCopyRuns(S.sepLayer, N.sepLayer, runs, 1);
+    // (The object fields' arrays: packed at the new size, copied the same way.)
+    for (const k of SIM_UNIT_OBJ_FIELDS) {
+        const a = old['oc_' + k], b = C['oc_' + k] = new Array(cap).fill(undefined);
+        for (let r = 0; r < runs.length; r += 3) for (let to = runs[r], from = runs[r + 1], e = from + runs[r + 2]; from < e; to++, from++) b[to] = a[from];
+    }
     for (let s = 0; s < ns; s++) {
         const a = C.cbT[s], b = C.dbT[s];
         if (a >= 0) C.cbT[s] = a < n0 ? map[a] : -1;
@@ -490,10 +601,14 @@ function simUnitStateCollect(all = false) {
         for (let s = 0; s < owners.length; s++) if (owners[s] && S.stamp[s] !== S.epoch) simUnitStateDetach(S, s);
         return;
     }
-    const step = all ? 1 : SIM_UNIT_COLLECT_SLICES;
+    // (A slot's unit reads dead from the slot's column: the typed column, not
+    // the unit's getter, ~10x faster over a slice.)
+    const step = all ? 1 : SIM_UNIT_COLLECT_SLICES, DEAD = S.columns.dead;
     for (let s = all ? 0 : (typeof gameTime === 'number' ? gameTime : 0) % step; s < owners.length; s += step) {
+        if (DEAD[s] !== 1) continue;
         const u = owners[s];
-        if (u && u.dead) simUnitStateDetach(S, s);
+        if (u && u._us === S.columns && u._si === s) simUnitStateDetach(S, s);
+        else if (u && u.dead) simUnitStateDetach(S, s);
     }
 }
 

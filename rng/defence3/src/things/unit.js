@@ -301,6 +301,9 @@ function _unitUpdateEnd(u, cols, driveBy) {
 }
 function _unitArmAgain(u, cols) {
     const cmd = u.commandState;
+    // (A worker at its task standing out its cooldown, whatever its command.)
+    if (u.workerState && u.workerState !== 'MANUAL_MOVE' && u.workerTransferCooldown > 0) { simMoveTryParkWork(u); if (cols.mvOn[u._si] !== 0) return; }
+    if ((cmd === CMD_MOVING || cmd === CMD_ATTACK_MOVING) && !u.holdPosition && simMoveTryParkRoute(u, cmd)) return;
     if (cmd === CMD_MOVING || cmd === CMD_ATTACK_MOVING) { if (u.holdPosition) simMoveTryParkHeld(u, cmd); else simMoveTryArm(u); }
     else if (cmd === CMD_IDLE && u.workerState && u.workerTransferCooldown > 0) simMoveTryParkWork(u);
     else if (cmd === CMD_IDLE && u.workerState === 'IDLE') simMoveTryPark(u);
@@ -502,9 +505,10 @@ class Unit {
         this.attackFlash = 0; // visual: flash timer for attack animation
 
         this.commandState = CMD_IDLE;
-        this.targetUnit = this; this.targetUnit = _UNIT_FIELD_WIDEN; this.targetUnit = null;
-        this.targetBuilding = this; this.targetBuilding = _UNIT_FIELD_WIDEN; this.targetBuilding = null;
-        this.targetPos = this; this.targetPos = _UNIT_FIELD_WIDEN; this.targetPos = null;
+        // (Targets: per-slot arrays behind accessors, SIM_UNIT_OBJ_FIELDS.)
+        this.targetUnit = null;
+        this.targetBuilding = null;
+        this.targetPos = null;
         this.path = null;
         this.pathIndex = 0;
         this.forcedAttackTarget = false;
@@ -578,7 +582,7 @@ class Unit {
     get id() { return this._us ? this._us.id[this._si] : (this._det ? this._det.id : undefined); }
     set id(v) { if (this._us) this._us.id[this._si] = v; else if (this._det) this._det.id = v; else Object.defineProperty(this, 'id', { value: v, writable: true, enumerable: true, configurable: true }); }
     get owner() { return this._us ? this._us.owner[this._si] : (this._det ? this._det.owner : undefined); }
-    set owner(v) { if (this._us) { this._us.owner[this._si] = v; this._us.mvOn[this._si] = 0; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.owner = v; else Object.defineProperty(this, 'owner', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set owner(v) { if (this._us) { if (this._us.owner[this._si] !== v) this._us.mvOn[this._si] = 0; this._us.owner[this._si] = v; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.owner = v; else Object.defineProperty(this, 'owner', { value: v, writable: true, enumerable: true, configurable: true }); }
     get x() { return this._us ? this._us.x[this._si] : (this._det ? this._det.x : undefined); }
     set x(v) { if (this._us) this._us.x[this._si] = v; else if (this._det) this._det.x = v; else Object.defineProperty(this, 'x', { value: v, writable: true, enumerable: true, configurable: true }); }
     get y() { return this._us ? this._us.y[this._si] : (this._det ? this._det.y : undefined); }
@@ -598,9 +602,9 @@ class Unit {
     get energy() { return this._us ? this._us.energy[this._si] : (this._det ? this._det.energy : undefined); }
     set energy(v) { if (this._us) this._us.energy[this._si] = v; else if (this._det) this._det.energy = v; else Object.defineProperty(this, 'energy', { value: v, writable: true, enumerable: true, configurable: true }); }
     get pathIndex() { return this._us ? this._us.pathIndex[this._si] : (this._det ? this._det.pathIndex : undefined); }
-    set pathIndex(v) { if (this._us) { this._us.pathIndex[this._si] = v; this._us.mvOn[this._si] = 0; } else if (this._det) this._det.pathIndex = v; else Object.defineProperty(this, 'pathIndex', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set pathIndex(v) { if (this._us) { if (this._us.pathIndex[this._si] !== v) this._us.mvOn[this._si] = 0; this._us.pathIndex[this._si] = v; } else if (this._det) this._det.pathIndex = v; else Object.defineProperty(this, 'pathIndex', { value: v, writable: true, enumerable: true, configurable: true }); }
     get commandState() { return this._us ? this._us.commandState[this._si] : (this._det ? this._det.commandState : undefined); }
-    set commandState(v) { if (this._us) { this._us.commandState[this._si] = v; this._us.mvOn[this._si] = 0; } else if (this._det) this._det.commandState = v; else Object.defineProperty(this, 'commandState', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set commandState(v) { if (this._us) { if (this._us.commandState[this._si] !== v) this._us.mvOn[this._si] = 0; this._us.commandState[this._si] = v; } else if (this._det) this._det.commandState = v; else Object.defineProperty(this, 'commandState', { value: v, writable: true, enumerable: true, configurable: true }); }
     // Spatial index and visibility registration (columns; see SIM_MOVE_COLUMNS).
     get _spatialTile() { const c = this._us; return c ? c.spTile[this._si] : -1; }
     set _spatialTile(v) { const c = this._us; if (c) c.spTile[this._si] = v; else if (c === undefined) Object.defineProperty(this, '_spatialTile', { value: v, writable: true, configurable: true }); }
@@ -650,6 +654,14 @@ class Unit {
     // A forced target's last seen position (null: none): columns fLsX/fLsY
     // (NaN for null), which the movement kernel writes for forced holds and
     // chases (see simMoveTryHold).
+    // A builder's watchdog (worker.js): columns the kernel samples (wkWx,
+    // wkWy, wkLmt) for a parked builder.
+    get _builderLastWatchX() { const c = this._us; if (c) { const v = c.wkWx[this._si]; return v === v ? v : undefined; } return this._det ? this._det._builderLastWatchX : this._bwx; }
+    set _builderLastWatchX(v) { const c = this._us; if (c) c.wkWx[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det._builderLastWatchX = v; else Object.defineProperty(this, '_bwx', { value: v, writable: true, configurable: true }); }
+    get _builderLastWatchY() { const c = this._us; if (c) { const v = c.wkWy[this._si]; return v === v ? v : undefined; } return this._det ? this._det._builderLastWatchY : this._bwy; }
+    set _builderLastWatchY(v) { const c = this._us; if (c) c.wkWy[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det._builderLastWatchY = v; else Object.defineProperty(this, '_bwy', { value: v, writable: true, configurable: true }); }
+    get _builderLastMoveTick() { const c = this._us; if (c) { const v = c.wkLmt[this._si]; return v === -2147483648 ? undefined : v; } return this._det ? this._det._builderLastMoveTick : this._bmt; }
+    set _builderLastMoveTick(v) { const c = this._us; if (c) c.wkLmt[this._si] = typeof v === 'number' && v === Math.floor(v) && Math.abs(v) < 2147483647 ? v : -2147483648; else if (this._det) this._det._builderLastMoveTick = v; else Object.defineProperty(this, '_bmt', { value: v, writable: true, configurable: true }); }
     get _forcedTargetLastSeenX() { const c = this._us; if (c) { const v = c.fLsX[this._si]; return v === v ? v : null; } return this._det ? this._det._forcedTargetLastSeenX : (this._flsx ?? null); }
     set _forcedTargetLastSeenX(v) { const c = this._us; if (c) c.fLsX[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det._forcedTargetLastSeenX = v; else Object.defineProperty(this, '_flsx', { value: v, writable: true, configurable: true }); }
     get _forcedTargetLastSeenY() { const c = this._us; if (c) { const v = c.fLsY[this._si]; return v === v ? v : null; } return this._det ? this._det._forcedTargetLastSeenY : (this._flsy ?? null); }
@@ -677,15 +689,16 @@ class Unit {
     set workerState(v) {
         const c = this._us;
         if (c === undefined) { Object.defineProperty(this, '_ws', { value: v, writable: true, configurable: true }); return; }
+        // (A change only: the same state set again keeps a parked worker.)
+        if (c && this._ws !== v) { c.mvOn[this._si] = 0; if (v !== 'IDLE') c.wsKind[this._si] = 0; _unitHD(c, this._si, _UH_WS, this._ws, v); }
         this._ws = v;
-        if (c) { c.mvOn[this._si] = 0; if (v !== 'IDLE') c.wsKind[this._si] = 0; }
     }
     get _workerNextIdleRetargetTick() { return this._wnr; }
     set _workerNextIdleRetargetTick(v) {
         const c = this._us;
         if (c === undefined) { Object.defineProperty(this, '_wnr', { value: v, writable: true, configurable: true }); return; }
+        if (c && this._wnr !== v) { c.mvOn[this._si] = 0; _unitHD(c, this._si, _UH_WNR, this._wnr, v); }
         this._wnr = v;
-        if (c) c.mvOn[this._si] = 0;
     }
     // The path: a plain reference (non-enumerable _path, see
     // simUnitStateAllocate); a new one disarms the movement kernel.
@@ -696,6 +709,7 @@ class Unit {
     set targetBuilding(v) {
         const c = this._us;
         if (c === undefined) { Object.defineProperty(this, '_tb', { value: v, writable: true, configurable: true }); return; }
+        if (c && this._tb !== v) _unitHD(c, this._si, _UH_TB, this._tb, v);
         this._tb = v;
         if (c) c.acqB[this._si] = v ? 1 : 0;
     }
@@ -707,6 +721,7 @@ class Unit {
     set pathIsFallbackAstar(v) {
         const c = this._us;
         if (c === undefined) { Object.defineProperty(this, '_pfa', { value: v, writable: true, configurable: true }); return; }
+        if (c && this._pfa !== v) _unitHD(c, this._si, _UH_PFA, this._pfa, v);
         this._pfa = v;
         if (c) c.mvPF[this._si] = v && this._ppt ? 1 : 0;
     }
@@ -714,8 +729,29 @@ class Unit {
     set _pendingPathTarget(v) {
         const c = this._us;
         if (c === undefined) { Object.defineProperty(this, '_ppt', { value: v, writable: true, configurable: true }); return; }
+        if (c && this._ppt !== v) _unitHD(c, this._si, _UH_PPT, this._ppt, v);
         this._ppt = v;
         if (c) c.mvPF[this._si] = v && this._pfa ? 1 : 0;
+    }
+    // The effective stat tables: its stat row's (unit.statRow >= 0, see
+    // things_utils.js _effRowAttach), else its own (_pc, _pce: non-enumerable,
+    // as the snapshot leaves derived tables out). Setting them drops the row.
+    get preComputed() { const c = this._us; if (c) { const r = c.statRow[this._si]; if (r >= 0) return _effRowObj[r]; } return this._pc; }
+    set preComputed(v) {
+        if (!('_pc' in this)) Object.defineProperty(this, '_pc', { value: v, writable: true, configurable: true }); else this._pc = v;
+        const c = this._us;
+        if (c) c.statRow[this._si] = -1;
+    }
+    get preComputedEffective() { const c = this._us; if (c) { const r = c.statRow[this._si]; if (r >= 0) return _effRowObj[r]; } return this._pce; }
+    set preComputedEffective(v) {
+        if (!('_pce' in this)) Object.defineProperty(this, '_pce', { value: v, writable: true, configurable: true }); else this._pce = v;
+        const c = this._us;
+        if (c) c.statRow[this._si] = -1;
+    }
+    // (Its row's tables as its own: the row is going away.)
+    _effRowKeep(t) {
+        if (!('_pc' in this)) Object.defineProperty(this, '_pc', { value: t, writable: true, configurable: true }); else this._pc = t;
+        if (!('_pce' in this)) Object.defineProperty(this, '_pce', { value: t, writable: true, configurable: true }); else this._pce = t;
     }
     get path() { return this._path; }
     set path(v) {
@@ -2044,6 +2080,20 @@ function _unitHitBuilding(a, tb, dmg) {
     if (tb.energy <= 0) destroyBuilding(tb);
 }
 
+// The state hash's object fields (SIM_UNIT_OBJ_FIELDS): per-slot arrays
+// beside the columns (columns.oc_<field>); a set that changes the value
+// moves the slot's digest (hObj) by the change of its term.
+for (const k of (typeof SIM_UNIT_OBJ_FIELDS !== 'undefined' ? SIM_UNIT_OBJ_FIELDS : [])) {
+    const key = _simHKey(k);
+    const get = new Function(`return function () { const c = this._us; return c ? c.oc_${k}[this._si] : (this._det ? this._det.${k} : undefined); };`)();
+    const set = new Function('k', 'E', `return function (v) { const c = this._us; if (c) { const s = this._si, a = c.oc_${k}, o = a[s]; a[s] = v; if (o !== v) c.hObj[s] = (c.hObj[s] + Math.imul(${key} ^ E(v), ${SIM_H_M}) - Math.imul(${key} ^ E(o), ${SIM_H_M})) | 0; } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(k, _simHEnc);
+    Object.defineProperty(Unit.prototype, k, { get, set, configurable: true });
+}
+// (The accessors' plain values in the digest: their keys.)
+const _UH_WS = _simHKey('workerState'), _UH_WNR = _simHKey('_workerNextIdleRetargetTick'), _UH_TB = _simHKey('targetBuilding'), _UH_PFA = _simHKey('pathIsFallbackAstar'),
+    _UH_PPT = _simHKey('_pendingPathTarget');
+function _unitHD(c, s, key, o, v) { c.hObj[s] = (c.hObj[s] + _simHTerm(key, v) - _simHTerm(key, o)) | 0; }
+
 // Status effect fields: columns (SIM_UNIT_STATUS_COLUMNS), like x and y.
 // (A timer set running flags its unit for the status pre-pass: stOn.)
 // (Made per column with its name in the code: one closure over the key did
@@ -2577,7 +2627,11 @@ function simMoveStatsChanged(u) {
         if (pc && pc.attackDamage > 0 && k === c.mvReach[s]) { if (on === 3) c.mvChs[s] = Math.max(TILE * 0.6, Number(pc.speed) || 1); return; }
         c.mvOn[s] = 0; return;
     }
-    // Parked or chasing: its checks were made with the old stats.
+    // Parked or chasing: its checks were made with the old stats (a parked
+    // one's only with a look of its own: drive-by 1, search reach 2, aggro 16).
+    if (on === 2 && (c.mvFlags[s] & 19) === 0) return;
+    // (An attack-mover's park (its aggro look, 16, alone): its new reach.)
+    if (on === 2 && (c.mvFlags[s] & 19) === 16) { if (c.mvReachA[s] !== 255) { c.mvReach[s] = c.mvReachA[s]; return; } c.mvOn[s] = 0; return; }
     if (on >= 2) { c.mvOn[s] = 0; return; }
     if (c.mvOn[s] !== 1) return;
     let reach = 0, ok = spd >= 0;
@@ -2632,7 +2686,17 @@ function _navFlowLook(u, profile, slot, t, gx, gy, dest, wall) {
 const SIM_FLOW_ARRIVE = 2;
 // A unit's worker kind for the kernel (mvWk): 0 none, 1 at its task, 2 sent
 // by the player.
-function _simWorkerKind(u) { return u.workerState ? (u.workerState === 'MANUAL_MOVE' ? 2 : 1) : 0; }
+// (3: on its way back for material (RETURNING_FOR_GOLD) or a salvager's
+// return: its AI looks at nothing until its way ends, so no check ticks; a
+// builder's watchdog samples in the kernel.)
+function _simWorkerKind(u) {
+    const ws = u.workerState;
+    if (!ws) return 0;
+    if (ws === 'MANUAL_MOVE') return 2;
+    // (Collectors' returns keep their check ticks: a player's assignment
+    // while one carries a load is looked at then.)
+    return ws === 'RETURNING_FOR_GOLD' || (ws === 'RETURNING' && u.workerType === 'salvager') ? 3 : 1;
+}
 // (profile: its navigation's, flownav.js navProfileOf: its walls and fields.)
 function simFlowArm(c, s, fid, gen, dest, cmd, flying, ready = 0, worker = false, isWorker = false, profile = flying ? NAV_PROFILE_AIR : NAV_PROFILE_GROUND) {
     if (!(c.mvSpd[s] >= 0) || c.sepKey[s] === SIM_SEP_ABSENT) return false;
@@ -2650,10 +2714,10 @@ function simFlowArm(c, s, fid, gen, dest, cmd, flying, ready = 0, worker = false
         _simMoveEnsureAreaBox(area, reach);
         flags |= 1;
     }
-    c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvFlow[s] = fid; c.mvFGen[s] = gen; c.mvDest[s] = dest; c.mvReady[s] = ready; c.mvNP[s] = profile;
+    c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvFlow[s] = fid; c.mvFGen[s] = gen; c.mvDest[s] = dest; c.mvReady[s] = ready; c.mvNP[s] = profile; c.mvSteady[s] = 0;
     // (1: a worker at its task, which stands where the way ends; 2: one the
     // player sent, handed back there.)
-    c.mvWk[s] = isWorker === 2 ? 2 : (isWorker ? 1 : 0);
+    c.mvWk[s] = isWorker === 2 || isWorker === 3 ? isWorker : (isWorker ? 1 : 0);
     c.mvSpent[s] = 0;
     c.mvOn[s] = 1;
     return true;
@@ -2775,10 +2839,10 @@ function simMoveTryArm(u) {
         _simMoveEnsureAreaBox(area, reach);
     }
     c.mvBase[s] = base; c.mvWlen[s] = wl; c.mvPlen[s] = path.length;
-    c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvSpd[s] = spd;
+    c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvSpd[s] = spd; c.mvSteady[s] = 0;
     c.mvLane[s] = Math.max(1.5, Math.min(4, u.r * 0.6));
     c.mvCost[s] = _resolveUnitAstarTileCost(u);
-    c.mvScan[s] = -1; c.mvSpent[s] = 0; c.mvWk[s] = worker ? 1 : 0;
+    c.mvScan[s] = -1; c.mvSpent[s] = 0; c.mvWk[s] = worker ? (_simWorkerKind(u) === 3 ? 3 : 1) : 0;
     c.mvOn[s] = 1;
 }
 
@@ -3194,6 +3258,35 @@ function simMoveTryParkWait(u, cmd) {
     c.mvWake[s] = wake; c.mvFlags[s] = flags; c.mvReach[s] = reach;
     c.mvOn[s] = 2;
 }
+// A unit with orders to move waiting for its way (no path, a pending target
+// of that order: the pending resolver, main.js, gives it one, and the path
+// disarms it): Unit.update only ends the order when it stands near enough
+// to the target (_isNearIssuedTarget), which the kernel checks (mvFlags 8,
+// mvTgX / mvTgY / mvTgTol), and an attack-mover's looks (16). A fallback
+// path's upgrade is the pending resolver's (main.js, on its due ticks). Not
+// for a scout.
+function simMoveTryParkRoute(u, cmd) {
+    const c = u._us, pt = u._pendingPathTarget;
+    if (!c || u.dead || !pt || pt.cmd !== cmd || (u.path && u.pathIndex < u.path.length) || u.unitType === 'scout' || u.workerState) return false;
+    const s = u._si;
+    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return false;
+    const t = u.targetPos;
+    if (!(t && Number.isFinite(t.x) && Number.isFinite(t.y))) return false;
+    let flags = 8, reach = 0;
+    if (cmd === CMD_ATTACK_MOVING) {
+        reach = c.mvReachA[s];
+        if (reach === 255) return false;
+        flags |= 16;
+    }
+    let spd = Math.fround(u.preComputed.speed * _getUnitAstarSpeedMultiplier(u));
+    if (u.frozen > 0) spd *= 0.5;
+    if (u.sandy > 0) spd *= 0.5;
+    c.mvTgX[s] = Number(t.x); c.mvTgY[s] = Number(t.y); c.mvTgTol[s] = Math.max(8, Math.min(TILE, Math.floor((Number(spd) || 1) * 2)));
+    const P = SIM_IDLE_PARK_TICKS, ph = (((gameTime + (u.id | 0)) % P) + P) % P;
+    c.mvWake[s] = gameTime + P - ph; c.mvFlags[s] = flags; c.mvReach[s] = reach;
+    c.mvOn[s] = 2;
+    return true;
+}
 // A held unit with orders to move (hold keeps its orders, path and
 // progress; followPath stands it): Unit.update only looks for what to shoot
 // (a drive-by shooter: tryDriveByAttack) or to engage (an attack-mover:
@@ -3256,12 +3349,11 @@ function simMoveTryPark(u) {
         let wake = gameTime + 0x3fffffff;
         if (u.workerType === 'builder') {
             if (u.workerTarget && Number.isFinite(u._builderNextRecheckTick) && u._builderNextRecheckTick < wake) wake = u._builderNextRecheckTick;
-            const w = gameTime + 1 + (((BUILDER_WATCH_TICKS - ((gameTime + 1 + u.id) % BUILDER_WATCH_TICKS)) % BUILDER_WATCH_TICKS) + BUILDER_WATCH_TICKS) % BUILDER_WATCH_TICKS;
-            if (w < wake && !watchStill) wake = w;
         }
         if (!(wake > gameTime + 1)) return;
-        c.mvWake[s] = wake; c.mvFlags[s] = watchStill ? 4 : 0;
-        if (watchStill) { c.wkWx[s] = u._builderLastWatchX; c.wkWy[s] = u._builderLastWatchY; }
+        // (A builder's watchdog samples: the kernel's, mvFlags 4.)
+        c.mvWake[s] = wake; c.mvFlags[s] = u.workerType === 'builder' && Number.isFinite(u._builderLastWatchX) && Number.isFinite(u._builderLastWatchY) ? 4 : 0;
+        void watchStill;
         c.mvOn[s] = 2;
         return;
     }
@@ -3291,8 +3383,6 @@ function simMoveTryPark(u) {
     if (originUntil < sched) sched = originUntil;
     if (u.workerType === 'builder') {
         if (u.workerTarget && Number.isFinite(u._builderNextRecheckTick) && u._builderNextRecheckTick < sched) sched = u._builderNextRecheckTick;
-        const w = gameTime + 1 + (((BUILDER_WATCH_TICKS - ((gameTime + 1 + id) % BUILDER_WATCH_TICKS)) % BUILDER_WATCH_TICKS) + BUILDER_WATCH_TICKS) % BUILDER_WATCH_TICKS;
-        if (w < sched && !watchStill) sched = w;
     }
     // Then its periodic search tick (see shouldRunWorkerIdleRetarget).
     let wake = sched;
@@ -3300,8 +3390,8 @@ function simMoveTryPark(u) {
         if (((t + id) % delay) === 0 && (Math.floor((t + id) / delay) % per) === 0) { wake = t; break; }
     }
     if (!(wake > gameTime + 1)) return;
-    c.mvWake[s] = wake; c.mvFlags[s] = watchStill ? 4 : 0;
-    if (watchStill) { c.wkWx[s] = u._builderLastWatchX; c.wkWy[s] = u._builderLastWatchY; }
+    c.mvWake[s] = wake; c.mvFlags[s] = u.workerType === 'builder' && Number.isFinite(u._builderLastWatchX) && Number.isFinite(u._builderLastWatchY) ? 4 : 0;
+    void watchStill;
     // Its search ticks while nothing changed (its last search failed at work
     // version wkFail, until wkUntil): the kernel checks the version and keeps
     // it parked (shouldRunWorkerIdleRetarget would return at once).

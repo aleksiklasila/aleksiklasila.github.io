@@ -907,7 +907,19 @@ pub unsafe extern "C" fn k_eff_units(a: *const i32, chunk: i32) {
         s(esk, q, effs);
         s(elv, q, el as f32);
         s(taken, q, stamp);
-        s(fl, j, if lst == el as f32 { 0 } else { 1 });
+        // (A new level: its stat row's tables (4: another vision range), else
+        // the JavaScript's, 1.)
+        let mut fv = 0u8;
+        if lst != el as f32 {
+            let mut vis = false;
+            if k.i(18) > 0 && eff_row_apply(&k, q, o, ty, bl, el, g(ev, q), &mut vis) {
+                s(last, q, el as f32);
+                fv = if vis { 4 } else { 0 };
+            } else {
+                fv = 1;
+            }
+        }
+        s(fl, j, fv);
         if unp != 0 && !ut.is_null() {
             let t = g(ut, q) as i32;
             let b = if t >= 0 && o < unp { (t * unp + o) * ul1 + el.min(ul1 - 1).max(1) } else { -1 };
@@ -3139,4 +3151,352 @@ pub unsafe extern "C" fn k_visibility(a: *const i32, chunk: i32) {
 #[inline(always)]
 fn ceilf(v: f32) -> f32 {
     f32x4_extract_lane::<0>(f32x4_ceil(f32x4_splat(v)))
+}
+
+/// A unit's new effective level from its stat row (SIM_KERNEL_EFF_UNITS,
+/// things_utils.js _effRowAttach): the row of (owner, type, base, level) at
+/// the unit's stat tables' version, else false (the JavaScript applies its
+/// tables). The movement columns as simMoveStatsChanged writes them, with
+/// its keeps and disarms; energy floored into [1, max]. *vis: its vision
+/// changed (renderer.js visCoverOnUnitSpatialChanged).
+#[inline(always)]
+unsafe fn eff_row_apply(k: &K, q: usize, o: i32, ty: i32, bl: i32, el: i32, ver: i32, vis: &mut bool) -> bool {
+    let (row_of, row_ver) = (k.p::<i32>(23), k.p::<i32>(24));
+    if row_of.is_null() || row_ver.is_null() {
+        return false;
+    }
+    let (np, nt, l1) = (k.i(9), k.i(8), k.i(10) + 1);
+    if !(o >= 0 && o < np && ty >= 0 && ty < nt && bl >= 1 && bl < l1 && el >= 1 && el < l1) {
+        return false;
+    }
+    let r = g(row_of, (((o * nt + ty) * l1 + bl) * l1 + el) as usize);
+    if r < 0 || r >= k.i(18) || g(row_ver, r as usize) != ver {
+        return false;
+    }
+    let ru = r as usize;
+    let (r_spd, r_cost, r_rd, r_ra, r_rk, r_lzw) = (k.p::<f32>(25), k.p::<f32>(26), k.p::<i32>(27), k.p::<i32>(28), k.p::<u8>(29), k.p::<u8>(30));
+    let (r_cb, r_cd, r_dmg, _r_vis, r_chs) = (k.p::<f32>(31), k.p::<f32>(32), k.p::<f32>(33), k.p::<f32>(34), k.p::<f32>(35));
+    let (srow, on, fl, reach, chs, spd) = (k.p::<i32>(22), k.p::<u8>(36), k.p::<u8>(37), k.p::<u8>(38), k.p::<f32>(39), k.p::<f32>(40));
+    let (cost, rdc, rac, shoot, rkc, lz) = (k.p::<f32>(41), k.p::<u8>(42), k.p::<u8>(43), k.p::<u8>(44), k.p::<u8>(45), k.p::<u8>(46));
+    let (cb, acd, admg, area, en, maxe, abok) = (k.p::<f32>(47), k.p::<f32>(48), k.p::<f32>(49), k.p::<i32>(50), k.p::<f32>(51), k.p::<f32>(52), k.p::<u8>(53));
+    let boxsteps = k.i(19);
+    // (A moving drive-by shooter whose new reach's box is not made: the
+    // JavaScript applies its tables, making the box, as on every peer.)
+    {
+        let f = g(fl, q);
+        let rdv = g(r_rd, ru);
+        if g(on, q) == 1 && (f & 16) == 0 && (f & 1) != 0 && g(r_spd, ru) >= 0.0 && rdv >= 0 && rdv < boxsteps && rdv != g(reach, q) as i32 {
+            let a = g(area, q);
+            if !(a >= 0) || abok.is_null() || g(abok, (a * boxsteps + rdv) as usize) == 0 {
+                return false;
+            }
+        }
+    }
+    let old = g(srow, q);
+    // (The cover is synced for every new level, as the JavaScript does.)
+    *vis = true;
+    let _ = old;
+    s(srow, q, r);
+    // (simMoveStatsChanged)
+    let rsp = g(r_spd, ru);
+    let rdv = g(r_rd, ru);
+    let rav = g(r_ra, ru);
+    let dmg = g(r_dmg, ru);
+    let nrd = if rdv >= 0 && rdv < boxsteps { rdv as u8 } else { 255 };
+    let nra = if rav >= 0 && rav < 255 { rav as u8 } else { 255 };
+    let nsh = if dmg > 0.0 { 1u8 } else { 0 };
+    let same = g(spd, q).to_bits() == rsp.to_bits() && g(cost, q).to_bits() == g(r_cost, ru).to_bits() && g(rdc, q) == nrd && g(rac, q) == nra
+        && g(shoot, q) == nsh && g(rkc, q) == g(r_rk, ru) && g(cb, q) == g(r_cb, ru);
+    s(acd, q, g(r_cd, ru));
+    s(admg, q, dmg);
+    s(spd, q, rsp);
+    s(cost, q, g(r_cost, ru));
+    s(rdc, q, nrd);
+    s(rac, q, nra);
+    s(shoot, q, nsh);
+    s(rkc, q, g(r_rk, ru));
+    s(lz, q, (g(lz, q) & 3) | (g(r_lzw, ru) << 2));
+    s(cb, q, g(r_cb, ru));
+    if !same {
+        let o_on = g(on, q);
+        let f = g(fl, q);
+        if o_on == 3 || o_on == 5 {
+            if dmg > 0.0 && g(r_rk, ru) == g(reach, q) {
+                if o_on == 3 {
+                    s(chs, q, g(r_chs, ru));
+                }
+            } else {
+                s(on, q, 0);
+            }
+        } else if o_on == 2 && (f & 19) == 0 {
+        } else if o_on == 2 && (f & 19) == 16 {
+            // (An attack-mover's park: its new aggro reach.)
+            if nra != 255 { s(reach, q, nra); } else { s(on, q, 0); }
+        } else if o_on >= 2 {
+            s(on, q, 0);
+        } else if o_on == 1 {
+            let ok = rsp >= 0.0;
+            let rch = if ok && (f & 16) != 0 { rav } else if ok && (f & 1) != 0 { rdv } else { 0 };
+            if !ok || ((f & 16) == 0 && ((f & 1) != 0) != (dmg > 0.0)) || !(rch >= 0 && rch < if (f & 16) != 0 { 256 } else { boxsteps }) {
+                s(on, q, 0);
+            } else {
+                s(reach, q, rch as u8);
+            }
+        }
+    }
+    // (applyUnitEffectiveScaling: energy floored into [1, max].)
+    let mx = g(maxe, q);
+    let e = g(en, q);
+    s(en, q, if e - e != 0.0 { mx.max(1.0) } else { floorf(e).min(mx).max(1.0) });
+    true
+}
+
+// =====================================================================
+// STATE HASH (utils_snapshot.js snapTickHash)
+// =====================================================================
+
+/// The hash's word mix: field c's term for word w, (c's key ^ w) * M (the
+/// unit setters' digest, sim_unit_state.js _simHTerm, mixes the same way).
+const SNAP_M: i32 = 16777619u32.wrapping_mul(2654435761u32) as i32;
+#[inline(always)]
+fn snap_key(c: i32) -> i32 {
+    (c + 1).wrapping_mul(0x9e3779b9u32 as i32) ^ 0x5bd1e995
+}
+#[inline(always)]
+fn snap_order_mix(i: i32, id: i32) -> i32 {
+    let mut h = i.wrapping_add(1).wrapping_mul(2654435761u32 as i32) ^ id.wrapping_add(0x3c6ef372).wrapping_mul(2246822519u32 as i32);
+    h = (h ^ ((h as u32) >> 15) as i32).wrapping_mul(3266489917u32 as i32);
+    h ^ ((h as u32) >> 13) as i32
+}
+
+/// SIM_KERNEL_SNAP_REGION: one slice of the units list, its positions
+/// P[3]..P[4] (a block: units listed together mostly hold slots together,
+/// so their columns are read in runs), the job's run of P[1] of them, four
+/// units a lane (consecutive slots: one vector load per column). Per
+/// position with a slot, the list's order sum (snap.ord[job]); per live
+/// unit not dead, the hash of every hashed field from its columns (the
+/// object fields through their digest, unit.hObj: sim_unit_state.js), seeded
+/// by its id, and its region (floor(y / P[2]) * 1024 + floor(x / P[2])):
+/// listed per job from job * P[1] as (snap.pr region, snap.ph hash); a
+/// region outside 0..P[9] as (snap.nl slot, snap.nlh hash); positions
+/// without a slot in snap.nu. Counts in snap.cc[4 * job ..]: pairs, 0,
+/// outside, without a slot.
+/// Arrays: unit.live, unit.dead, unit.x, unit.y, unit.id, ix.slots,
+/// unit.owner, unit.vx, unit.vy, unit.energy, unit.commandState,
+/// unit.attackTimer, unit.attackFlash, unit.teleportHideTicks, unit.poisoned,
+/// unit.burning, unit.frozen, unit.wet, unit.sandy, unit.watched,
+/// unit.workerTransferCooldown, unit.stackCount, unit.unitLevel,
+/// unit.effectiveStacks, unit.effectiveLevel, unit.pathIndex, unit.hObj,
+/// snap.pr, snap.ph, snap.nl, snap.nlh, snap.nu, snap.cc, snap.ord.
+/// P: [0] units, [1] per job, [2] region size in pixels, [3] first
+/// position, [4] end, [9] regions.
+#[no_mangle]
+pub unsafe extern "C" fn k_snap_units(a: *const i32, chunk: i32) {
+    let k = K::new(a);
+    let (live, dead, xs, ys, uid, sl) = (k.p::<u8>(0), k.p::<u8>(1), k.p::<f32>(2), k.p::<f32>(3), k.p::<i32>(4), k.p::<i32>(5));
+    let (own, vx, vy, en, cmd, at, af) = (k.p::<i8>(6), k.p::<f32>(7), k.p::<f32>(8), k.p::<f32>(9), k.p::<u8>(10), k.p::<f32>(11), k.p::<u8>(12));
+    let (tp, po, bu, fr, we, sa, wa, wt) = (k.p::<i32>(13), k.p::<i32>(14), k.p::<i32>(15), k.p::<i32>(16), k.p::<i32>(17), k.p::<i32>(18), k.p::<i32>(19), k.p::<i32>(20));
+    let (sc, ul, es, el, pi, ho) = (k.p::<f32>(21), k.p::<f32>(22), k.p::<f32>(23), k.p::<f32>(24), k.p::<i32>(25), k.p::<i32>(26));
+    let (pr, ph, nl, nlh, nu, cc, ords) = (k.p::<i32>(27), k.p::<i32>(28), k.p::<i32>(29), k.p::<i32>(30), k.p::<i32>(31), k.p::<i32>(32), k.p::<i32>(33));
+    let n = k.i(0).max(0) as usize;
+    let per = k.i(1).max(0) as usize;
+    let its = (1.0 / k.f(2)) as f32;
+    let p0 = k.i(3).max(0) as usize;
+    let p1 = (k.i(4).max(0) as usize).min(n);
+    let rmax = k.i(9);
+    let base = chunk.max(0) as usize * per;
+    let (mut n0, mut n2, mut n3) = (0usize, 0usize, 0usize);
+    let mut ord: i32 = 0;
+    let mm = i32x4_splat(SNAP_M);
+    let qnan = i32x4_splat(0x7fc00000);
+    let mut ii = p0 + base;
+    let i1 = (p0 + base + per).min(p1);
+    while ii < i1 {
+        // (Up to four positions: their slots, the order sum, which hash.)
+        let (mut q0, mut q1, mut q2, mut q3) = (0usize, 0usize, 0usize, 0usize);
+        let mut okm = 0u32;
+        let mut q = 0usize;
+        while q < 4 && ii < i1 {
+            let at_i = ii;
+            ii += 1;
+            let si = g(sl, at_i);
+            if si < 0 {
+                s(nu, base + n3, at_i as i32);
+                n3 += 1;
+                continue;
+            }
+            let su = si as usize;
+            ord = ord.wrapping_add(snap_order_mix(at_i as i32, g(uid, su)));
+            if g(live, su) == 0 || g(dead, su) != 0 {
+                continue;
+            }
+            match q {
+                0 => q0 = su,
+                1 => q1 = su,
+                2 => q2 = su,
+                _ => q3 = su,
+            }
+            okm |= 1 << q;
+            q += 1;
+        }
+        if okm == 0 {
+            continue;
+        }
+        // Four consecutive slots: vector loads; else gathered (lanes past
+        // the units read slot 0, not listed).
+        let run = okm == 15 && q1 == q0 + 1 && q2 == q0 + 2 && q3 == q0 + 3;
+        macro_rules! g32 {
+            ($p:expr) => {
+                if run {
+                    v128_load($p.add(q0) as *const v128)
+                } else {
+                    i32x4(g($p as *const i32, q0), g($p as *const i32, q1), g($p as *const i32, q2), g($p as *const i32, q3))
+                }
+            };
+        }
+        macro_rules! gu8 {
+            ($p:expr) => {
+                if run {
+                    u32x4_extend_low_u16x8(u16x8_extend_low_u8x16(v128_load32_zero($p.add(q0) as *const u32)))
+                } else {
+                    i32x4(g($p, q0) as i32, g($p, q1) as i32, g($p, q2) as i32, g($p, q3) as i32)
+                }
+            };
+        }
+        macro_rules! gi8 {
+            ($p:expr) => {
+                if run {
+                    i32x4_extend_low_i16x8(i16x8_extend_low_i8x16(v128_load32_zero($p.add(q0) as *const u32)))
+                } else {
+                    i32x4(g($p, q0) as i32, g($p, q1) as i32, g($p, q2) as i32, g($p, q3) as i32)
+                }
+            };
+        }
+        macro_rules! gf {
+            ($p:expr) => {{
+                let v = g32!($p);
+                // (NaN as one word: its bits may differ.)
+                v128_bitselect(qnan, v, f32x4_ne(v, v))
+            }};
+        }
+        let mut h = g32!(ho);
+        macro_rules! mix {
+            ($c:expr, $v:expr) => {
+                h = i32x4_add(h, i32x4_mul(v128_xor(i32x4_splat(snap_key($c)), $v), mm));
+            };
+        }
+        mix!(0, gi8!(own));
+        mix!(1, gf!(xs));
+        mix!(2, gf!(ys));
+        mix!(3, gf!(vx));
+        mix!(4, gf!(vy));
+        mix!(5, gf!(en));
+        mix!(6, gu8!(cmd));
+        mix!(7, gf!(at));
+        mix!(8, gu8!(af));
+        mix!(9, g32!(tp));
+        mix!(10, g32!(po));
+        mix!(11, g32!(bu));
+        mix!(12, g32!(fr));
+        mix!(13, g32!(we));
+        mix!(14, g32!(sa));
+        mix!(15, g32!(wa));
+        mix!(16, g32!(wt));
+        mix!(17, gf!(sc));
+        mix!(18, gf!(ul));
+        mix!(19, gf!(es));
+        mix!(20, gf!(el));
+        mix!(21, g32!(pi));
+        // (Seeded by id, then finished; the regions from the positions.)
+        let ids = g32!(uid);
+        let mut hh = i32x4_add(v128_xor(i32x4_mul(ids, i32x4_splat(7919)), i32x4_splat(0x11)), h);
+        hh = i32x4_mul(v128_xor(hh, u32x4_shr(hh, 15)), i32x4_splat(2246822519u32 as i32));
+        let vits = f32x4_splat(its);
+        let fy = f32x4_floor(f32x4_mul(g32!(ys), vits));
+        let fx = f32x4_floor(f32x4_mul(g32!(xs), vits));
+        let rr = f32x4_add(f32x4_mul(fy, f32x4_splat(1024.0)), fx);
+        let inr = v128_and(
+            v128_and(f32x4_ge(rr, f32x4_splat(0.0)), f32x4_lt(rr, f32x4_splat(rmax as f32))),
+            v128_and(f32x4_ge(fx, f32x4_splat(0.0)), f32x4_lt(fx, f32x4_splat(1024.0))),
+        );
+        let ri = i32x4_trunc_sat_f32x4(rr);
+        let mut l = 0u32;
+        while l < 4 {
+            if okm & (1 << l) != 0 {
+                let (su, v, r, ok) = match l {
+                    0 => (q0, i32x4_extract_lane::<0>(hh), i32x4_extract_lane::<0>(ri), i32x4_extract_lane::<0>(inr)),
+                    1 => (q1, i32x4_extract_lane::<1>(hh), i32x4_extract_lane::<1>(ri), i32x4_extract_lane::<1>(inr)),
+                    2 => (q2, i32x4_extract_lane::<2>(hh), i32x4_extract_lane::<2>(ri), i32x4_extract_lane::<2>(inr)),
+                    _ => (q3, i32x4_extract_lane::<3>(hh), i32x4_extract_lane::<3>(ri), i32x4_extract_lane::<3>(inr)),
+                };
+                if ok != 0 {
+                    s(pr, base + n0, r);
+                    s(ph, base + n0, v);
+                    n0 += 1;
+                } else {
+                    s(nl, base + n2, su as i32);
+                    s(nlh, base + n2, v);
+                    n2 += 1;
+                }
+            }
+            l += 1;
+        }
+    }
+    s(ords, chunk.max(0) as usize, ord);
+    let cb = chunk.max(0) as usize * 4;
+    s(cc, cb, n0 as i32);
+    s(cc, cb + 1, 0);
+    s(cc, cb + 2, n2 as i32);
+    s(cc, cb + 3, n3 as i32);
+}
+
+/// SIM_KERNEL_SNAP_MERGE (one job): the units kernel's jobs' (region, hash)
+/// lists summed into the tick's region sums (snap.racc, first touch by
+/// snap.rstamp = P[2], listed in snap.rlist after the P[3] regions already
+/// there: the structures' and others', utils_snapshot.js _snapRegionAdd),
+/// then every listed region as a pair (code P[5] + region, its sum) into
+/// snap.pout; snap.pres: [0] regions listed, [1] their part of the hash's
+/// sum (as snapTickHash's push).
+/// Arrays: snap.pr, snap.ph, snap.cc, snap.racc, snap.rstamp, snap.rlist,
+/// snap.pout, snap.pres. P: [0] jobs, [1] per job, [2] stamp, [3] listed,
+/// [4] regions, [5] code base.
+#[no_mangle]
+pub unsafe extern "C" fn k_snap_merge(a: *const i32, _chunk: i32) {
+    let k = K::new(a);
+    let (pr, ph, cc, acc, st, list, out, res) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6), k.p::<i32>(7));
+    let (jobs, per, now) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.i(2));
+    let mut n = k.i(3).max(0) as usize;
+    let rmax = k.i(4);
+    let code = k.i(5);
+    for jb in 0..jobs {
+        let b = jb * per;
+        let c = g(cc, jb * 4).max(0) as usize;
+        for i in b..b + c {
+            let r = g(pr, i);
+            if r < 0 || r >= rmax {
+                continue;
+            }
+            let ru = r as usize;
+            let h = g(ph, i);
+            if g(st, ru) != now {
+                s(st, ru, now);
+                s(acc, ru, h);
+                s(list, n, r);
+                n += 1;
+            } else {
+                s(acc, ru, g(acc, ru).wrapping_add(h));
+            }
+        }
+    }
+    let mut sum: i32 = 0;
+    for i in 0..n {
+        let r = g(list, i);
+        let h = g(acc, r as usize);
+        let c = code.wrapping_add(r);
+        s(out, 2 * i, c);
+        s(out, 2 * i + 1, h);
+        sum = sum.wrapping_add((h ^ c.wrapping_add(1).wrapping_mul(2654435761u32 as i32)).wrapping_mul(2246822519u32 as i32));
+    }
+    s(res, 0, n as i32);
+    s(res, 1, sum);
 }

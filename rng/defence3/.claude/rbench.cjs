@@ -58,5 +58,7 @@ if (process.env.CMP) {
     }
     console.log('vs', process.env.CMP, diff.length ? 'differ ' + diff.join(' ') : 'identical');
 }
+// ARGW=a,b: argument block words to print (kernel debug counters).
+if (process.env.ARGW) console.log('argw', process.env.ARGW.split(',').map(i => vm.runInThisContext('_simWasmArgI')[+i]));
 const s = t.slice().sort((x, y) => x - y);
 console.log(`${name} calls ${calls.length / 2}  median ${s[s.length >> 1].toFixed(2)} ms  min ${s[0].toFixed(2)}  digest ${h.toString(16)}  writes ${changed.join(' ')}`);
