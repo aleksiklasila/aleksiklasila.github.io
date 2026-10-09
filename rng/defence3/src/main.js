@@ -3112,8 +3112,11 @@ function _unitsInIdOrder(list) {
 // (members: the units, their tiles from their positions: no object per
 // unit, a click's 158k of them made garbage enough for several scavenges.)
 const NAV_GROUP_MIN = 8;
+// (The members' route fields (path, pathIndex, _routeEnd, _routeSegEnd) are
+// written here, once each: _issueGroupMoveOrder leaves them.)
 function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
     navEnsure(profile);
+    const destTile = dest.y * GRID_W + dest.x;
     // (The destination's open tile: the flow's.)
     const to = navApproachTile(profile, dest.y * GRID_W + dest.x);
     let reachable = [], outliers = null;
@@ -3129,11 +3132,11 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
         // in place.)
         const navPath = [group ? { x: dest.x, y: dest.y, nav: profile + 1, w: 1, ready } : { x: dest.x, y: dest.y, nav: profile + 1, ready }];
         for (let u of reachable) {
-            u._routeKey = NAV_ROUTE_KEY; u._routeEnd = destKey; u._navReady = ready;
-            if (Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE) === destKey) continue;
+            u._routeKey = NAV_ROUTE_KEY; u._routeEnd = destKey; u._navReady = ready; u.pathIndex = 0;
+            if (Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE) === destKey) { u.path = null; u._routeSegEnd = -1; continue; }
             // Its way: one nav node to the end (as continueUnitRoute gives),
             // walked by the kernel from its columns.
-            u.path = navPath; u.pathIndex = 0; u._routeSegEnd = destKey;
+            u.path = navPath; u._routeSegEnd = destKey;
             // (A worker goes all the way and is looked at on its check ticks,
             // as simMoveTryArm arms it.)
             if (did >= 0) simFlowArm(u._us, u._si, did, navFieldGen(did), destKey, u.workerState ? CMD_MOVING : cmd, profile === NAV_PROFILE_AIR, ready, !!u.workerState || !group, _simWorkerKind(u), profile);
@@ -3141,7 +3144,7 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
     }
     if (outliers) for (let u of outliers) {
         const ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-        u._routeKey = null;
+        u._routeSegEnd = -1; u._routeEnd = destTile;
         applyPath(u, ugx, ugy, null);
     }
 }
@@ -3200,9 +3203,7 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
             // may walk over mines or their own buildings, navProfileOf.)
             let profile = navProfileOf(u);
             let fdest = flowDest[profile] || (flowDest[profile] = findNearestWalkable(targetGx, targetGy, ugx, ugy, u));
-            u._pendingPathTarget = null; u.pathIsFallbackAstar = false; u._routeSegEnd = -1;
-            u._routeEnd = fdest.y * GRID_W + fdest.x;
-            u.path = null; u.pathIndex = 0;
+            u._pendingPathTarget = null; u.pathIsFallbackAstar = false;
             (flowMembers[profile] ||= []).push(u);
             continue;
         }

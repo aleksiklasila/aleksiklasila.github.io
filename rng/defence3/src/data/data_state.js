@@ -646,7 +646,125 @@ function _requestAdjacencyRecalcForThing(thing, pad = 1) {
     requestAdjacencyRecalc(thing.gx, thing.gy, pad);
 }
 
+// ---- The structure table ----
+// Per tile, the hashed core of the structure standing there (towers,
+// barracks, spawners, floor items, mines): a kind code, owner, construction
+// and energy (a mine: its gold or A*), in typed columns that the
+// structures' own accessors keep (structTableAccessors). The state hash
+// sweeps these instead of the objects (cold: ~4k a tick at 800k units).
+// Derived state: an entity joins when set on its tile (setTileEntity, a
+// restore's _snapSetTile) and leaves at its clear; reset with the lookup.
+// Entities carry their tile in _stT (-1: on none); the page's structure
+// views have no _stT and stay out.
+// (rcnt: structures per hash region (SNAP_REGION_TILES square, ry * rw +
+// rx), so the hash skips empty regions.)
+const _ST = { n: 0, code: null, own: null, uc: null, val: null, rcnt: null, rw: 0 };
+const ST_OWNER_NONE = 0x7ff9;
+function _stOwnerWord(v) { return (v | 0) === v ? v : ST_OWNER_NONE; }
+// (Made at the first entity joining: the page's lookup holds views only.)
+function structTableReset() {
+    for (const e of _activeTileEntities) if (e && e._stT >= 0) e._stT = -1;
+    const T = _ST;
+    if (T.n !== GRID_W * GRID_H) { T.n = 0; T.code = T.own = T.uc = T.val = T.rcnt = null; }
+    else { T.code.fill(0); T.own.fill(0); T.uc.fill(0); T.val.fill(0); T.rcnt.fill(0); }
+}
+function _stRegion(t) { const gx = t % GRID_W, gy = (t - gx) / GRID_W, rt = SNAP_REGION_TILES; return Math.floor(gy / rt) * _ST.rw + Math.floor(gx / rt); }
+function _stClear(t) { const T = _ST; if (T.code[t] !== 0) T.rcnt[_stRegion(t)]--; T.code[t] = 0; T.own[t] = 0; T.uc[t] = 0; T.val[t] = 0; }
+// Tile (gx, gy) held `prev` and now holds `ref` (null: nothing).
+function structTableSet(gx, gy, prev, ref) {
+    const t = gy * GRID_W + gx, T = _ST, n = GRID_W * GRID_H;
+    if (t < 0 || t >= n) return;
+    if (prev && prev !== ref && prev._stT === t) prev._stT = -1;
+    const joins = !!ref && typeof ref._stT === 'number' && !!ref._stCode;
+    if (T.n !== n) {
+        if (!joins) return;
+        T.n = n; T.code = new Uint8Array(n); T.own = new Int32Array(n); T.uc = new Uint8Array(n); T.val = new Float64Array(n);
+        T.rw = Math.ceil(GRID_W / SNAP_REGION_TILES); T.rcnt = new Uint8Array(T.rw * Math.ceil(GRID_H / SNAP_REGION_TILES));
+    }
+    _stClear(t);
+    if (!joins) return;
+    // (An entity moved to another tile leaves its old one.)
+    if (ref._stT >= 0 && ref._stT !== t) _stClear(ref._stT);
+    ref._stT = t;
+    T.code[t] = ref._stCode; T.rcnt[_stRegion(t)]++;
+    if (ref._stMine) { T.own[t] = ST_OWNER_NONE; T.val[t] = Number(ref._mv); }
+    else { T.own[t] = _stOwnerWord(ref._ow); T.uc[t] = ref._uc ? 1 : 0; T.val[t] = Number(ref._en); }
+}
+// The structure lists (towers, barracks, collectorSpawners): an entry
+// removed in O(1), the last entry taking its place (indexOf and splice over
+// tens of thousands of spawners per destroyed building were ~1 ms a tick
+// under salvage). Each entry's place in e._li; a list replaced or spliced
+// elsewhere (a restore, a cleanup) is indexed again at its first removal
+// that finds a stale place. The order changes alike on every peer.
+function structListPush(list, e) { e._li = list.length; list.push(e); }
+function structListRemove(list, e) {
+    let i = e._li;
+    if (!(i >= 0 && i < list.length && list[i] === e)) {
+        for (let k = 0; k < list.length; k++) if (list[k]) list[k]._li = k;
+        i = e._li;
+        if (!(i >= 0 && i < list.length && list[i] === e)) return -1;
+    }
+    const last = list.pop();
+    if (last !== e) { list[i] = last; last._li = i; }
+    e._li = -1;
+    return i;
+}
+// First thing in a structure's constructor (and a restore's shell): its
+// backing fields, in one order (one hidden class).
+function structTableInit(o) {
+    o._stT = -1;
+    o._li = -1;
+    if (o._stMine) o._mv = 0;
+    else { o._ow = -1; o._uc = false; o._en = 0; }
+}
+// Accessors of the hashed core on a structure class (code: the hash's kind
+// code; mineKey: a mine's amount field, gold or astar).
+function structTableAccessors(C, code, mineKey = null) {
+    const P = C.prototype;
+    Object.defineProperty(P, '_stCode', { value: code, enumerable: false });
+    if (mineKey) {
+        Object.defineProperty(P, '_stMine', { value: true, enumerable: false });
+        Object.defineProperty(P, mineKey, { enumerable: true, configurable: true,
+            get() { return this._mv; },
+            set(v) { this._mv = v; const t = this._stT; if (t >= 0) _ST.val[t] = Number(v); } });
+        return;
+    }
+    Object.defineProperty(P, 'owner', { enumerable: true, configurable: true,
+        get() { return this._ow; },
+        set(v) { this._ow = v; const t = this._stT; if (t >= 0) _ST.own[t] = _stOwnerWord(v); } });
+    Object.defineProperty(P, 'underConstruction', { enumerable: true, configurable: true,
+        get() { return this._uc; },
+        set(v) { this._uc = v; const t = this._stT; if (t >= 0) _ST.uc[t] = v ? 1 : 0; } });
+    Object.defineProperty(P, 'energy', { enumerable: true, configurable: true,
+        get() { return this._en; },
+        set(v) { this._en = v; const t = this._stT; if (t >= 0) _ST.val[t] = Number(v); } });
+}
+// Floor items (traps, walls, roads...) are structures like the buildings;
+// mines hold an amount. Their other fields are set by whoever places or
+// restores them (Object.assign(new FloorItem(), {...}): through the
+// accessors).
+class FloorItem { constructor() { structTableInit(this); } }
+class GoldMine { constructor() { structTableInit(this); } }
+class AstarMine { constructor() { structTableInit(this); } }
+structTableAccessors(FloorItem, 0x55);
+structTableAccessors(GoldMine, 0x66, 'gold');
+structTableAccessors(AstarMine, 0x77, 'astar');
+// A structure's snapshot keys: the accessors' names in place of their
+// backing fields (the table tile and list place are not state).
+const _ST_KEY_OF = { _ow: 'owner', _uc: 'underConstruction', _en: 'energy' };
+function structTableKeys(e, keys) {
+    const out = [];
+    for (const k of keys) {
+        if (k === '_stT' || k === '_li') continue;
+        if (k === '_mv') { out.push(e instanceof AstarMine ? 'astar' : 'gold'); continue; }
+        const a = _ST_KEY_OF[k];
+        out.push(a === undefined ? k : a);
+    }
+    return out;
+}
+
 function initTileEntityLookup() {
+    structTableReset();
     tileEntityType = Array.from({ length: GRID_H }, () => Array(GRID_W).fill(TILE_ENTITY_NONE));
     tileEntityRef = Array.from({ length: GRID_H }, () => Array(GRID_W).fill(null));
     _activeTileEntities = new Set();
@@ -874,6 +992,7 @@ function setTileEntity(gx, gy, type, ref) {
     if (!tileEntityType[gy] || !tileEntityRef[gy]) return;
     let prevRef = tileEntityRef[gy][gx];
     if (prevRef && prevRef !== ref) _activeTileEntities.delete(prevRef);
+    structTableSet(gx, gy, prevRef, ref || null);
     tileEntityType[gy][gx] = type || TILE_ENTITY_NONE;
     tileEntityRef[gy][gx] = ref || null;
     if (ref) _activeTileEntities.add(ref);
@@ -894,6 +1013,7 @@ function clearTileEntity(gx, gy, expectedRef = null) {
     if (expectedRef && tileEntityRef[gy][gx] !== expectedRef) return;
     let prevRef = tileEntityRef[gy][gx];
     if (prevRef) _activeTileEntities.delete(prevRef);
+    structTableSet(gx, gy, prevRef, null);
     _tileEntityVersion++;
     noteTileEntityChanged(gx, gy);
     if (prevRef && typeof workerWorkChanged === 'function') workerWorkChanged(Number.isFinite(prevRef.owner) ? prevRef.owner : -1, null, gx, gy);
@@ -1004,7 +1124,7 @@ function towersChanged() { towersVersion++; }
 // Bumped when a cloud tower joins or leaves towers (pathfinding.js keeps
 // its cloud tables by it: other towers falling in a battle leave them).
 let cloudTowersVersion = 0;
-function towerJoinedOrLeft(t) { towersVersion++; if (t && t.baseStats && t.baseStats.isCloud) cloudTowersVersion++; if (t && t.type === 'laser') laserTowersVersion++; }
+function towerJoinedOrLeft(t) { towersVersion++; if (t && t.baseStats && t.baseStats.isCloud) cloudTowersVersion++; if (t && t.type === 'laser') { laserTowersVersion++; if (typeof laserListToggle === 'function') laserListToggle(t); } }
 // Bumped when a laser tower joins or leaves towers (the laser links' list).
 let laserTowersVersion = 0;
 let units = [];
@@ -1200,7 +1320,7 @@ const RENDER_RANGE_UNITS = 4;
 const RENDER_RANGE_BUILDINGS = 5;
 let renderRangeAllTeam = true;
 let renderRangeSeeThrough = false;
-let renderRangeMode = RENDER_RANGE_ALL;
+let renderRangeMode = RENDER_RANGE_NONE;
 let showGoldMineAmountText = false;
 let audioVolume = 1;
 let audioBackgroundVolume = 0.1;

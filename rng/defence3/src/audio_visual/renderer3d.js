@@ -257,8 +257,8 @@
             if (this.texture) gl.deleteTexture(this.texture);
             this.texture = gl.createTexture();
             gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
             gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
             gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
             gl.texStorage3D(gl.TEXTURE_2D_ARRAY, FLAT_ATLAS_LEVELS, gl.RGBA8, FLAT_ATLAS_SIZE, FLAT_ATLAS_SIZE, capacity);
@@ -2949,6 +2949,7 @@
                 uniform float uIsUnit;
                 uniform float uIsFlying;
                 uniform float uSpriteLodBias;
+                uniform float uCoverageFade;
                 ${CEL_LIGHTING_GLSL}
                 uniform sampler2D uTopTexture;
                 uniform highp sampler2DArray uAtlas;
@@ -2962,7 +2963,7 @@
                     // yellow, builder green, etc.); vColor identifies the owner.
                     // Lift dark palettes without replacing their hue with white.
                     float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy,vec2(.06711056,.00583715))));
-                    if (noise >= vModelBlend) discard;
+                    if (uCoverageFade < .5 && noise >= vModelBlend) discard;
                     float peak = max(vTrim.r, max(vTrim.g, vTrim.b));
                     vec3 typeColor = vTrim * max(1.0, .62 / max(peak, .01));
                     // Keep 2D's type colors on the body and owner colors on trim.
@@ -3007,13 +3008,14 @@
                     float light = vLight < 0.0 ? -vLight - 1.0 : vLight;
                     float memoryShade = vLight < 0.0 ? mix(.55, 1.0, smoothstep(.14, .74, light)) : 1.0;
                     float fog = (1.0 - pow(1.0-clamp(light,0.0,1.0),1.3)*.42) * memoryShade;
-                    outColor = vec4(shaded * fog,vAlpha);
+                    outColor = vec4(shaded * fog,vAlpha * (uCoverageFade > .5 ? vModelBlend : 1.));
                     vec4 depth = fract(gl_FragCoord.z * vec4(16777216.0,65536.0,256.0,1.0));
                     outPackedDepth = depth - depth.xxyz * vec4(0.0,1.0/256.0,1.0/256.0,1.0/256.0);
                 }
             `);
             this.figureUniforms = {
                 spriteLodBias: gl.getUniformLocation(this.figureProgram, 'uSpriteLodBias'),
+                coverageFade: gl.getUniformLocation(this.figureProgram, 'uCoverageFade'),
                 animationMode: gl.getUniformLocation(this.figureProgram, 'uAnimationMode'),
                 rig: gl.getUniformLocation(this.figureProgram, 'uRig'),
                 time: gl.getUniformLocation(this.figureProgram, 'uTime'),
@@ -3762,15 +3764,12 @@
             }
             let texture = createTexture(this.gl);
             this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
-            // Mipmaps stabilize distant symbols; non-sprite textures also use anisotropy.
-            let exactSprite = String(key).startsWith('2d:');
+            // Filter within mip levels as well as between them: nearest texels
+            // make thin panel strokes crawl as the camera moves.
             let mipmapped = !String(key).startsWith('shared_audio');
-            // 2D uses unsmoothed pixels. Do the same within each sprite mip,
-            // blending levels only to avoid hard transitions while zooming.
-            if (exactSprite) this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.NEAREST);
             if (mipmapped) {
-                this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, exactSprite ? this.gl.NEAREST_MIPMAP_LINEAR : this.gl.LINEAR_MIPMAP_LINEAR);
-                if (this.textureAnisotropy && !exactSprite) {
+                this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR_MIPMAP_LINEAR);
+                if (this.textureAnisotropy) {
                     let ext = this.textureAnisotropy;
                     this.gl.texParameterf(this.gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(4, this.gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
                 }
@@ -5382,13 +5381,18 @@
             let { kind, mesh, statusAtlas } = draw;
             let objects = [draw.sample];
             let uniforms = kind ? this.figureUniforms : this.texturedCubeUniforms;
+            // Resolve model fades through MSAA coverage instead of crawling
+            // screen-space noise. The full sprite remains underneath the model.
+            // The depth-only shadow target is single-sampled.
+            const coverageFade = !!kind && !!this.sceneSamples && this.sceneDrawBuffers !== SHADOW_DRAW_BUFFERS;
             gl.useProgram(kind ? this.figureProgram : this.texturedCubeProgram);
             if (kind) {
+                gl.uniform1f(uniforms.coverageFade, coverageFade ? 1 : 0);
                 gl.uniform1f(uniforms.isFlying, kind.startsWith('bird') ? 1 : 0);
                 gl.uniform1f(uniforms.rig, mesh.rig);
                 gl.uniform1f(uniforms.time, this.animationTime || 0);
                 gl.uniform1f(uniforms.animationMode, Number(objects[0].animationMode) || 0);
-                gl.uniform1f(uniforms.spriteLodBias, String(objects[0].topTextureKey).startsWith('2d:') ? -.5 : 0);
+                gl.uniform1f(uniforms.spriteLodBias, 0);
                 let key = objects[0].modelKey || '';
                 gl.uniform1f(uniforms.isUnit, key.startsWith('unit_') ? 1 : 0);
                 gl.uniform1f(uniforms.followWalkSurface, this.walkSurfaceTexture && key.startsWith('unit_')
@@ -5420,7 +5424,9 @@
                 gl.uniform1f(uniforms.useAtlas, atlas ? 1 : 0);
                 gl.activeTexture(gl.TEXTURE0);
             }
+            if (coverageFade) gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE);
             gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, draw.count);
+            if (coverageFade) gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
         }
 
         ensureFxResources() {
@@ -5685,6 +5691,8 @@
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+                // Stop before mip levels can mix neighbouring 64px cells.
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAX_LEVEL,4);
             }
             const makeCanvas = () => {const c=document.createElement('canvas');c.width=c.height=cell;return c;};
             const color=makeCanvas(), mask=makeCanvas(), g=color.getContext('2d'), m=mask.getContext('2d');
@@ -5803,7 +5811,7 @@
                     layout(location=12) in float aType;
                     layout(location=13) in float aUnitType;
                     uniform mat4 uViewProjection;
-                    uniform float uAlpha, uTile, uScale, uPixelRatio, uAspect, uFlat, uLightNorm, uDetail, uDetailS, uDetailMask;
+                    uniform float uAlpha, uTile, uScale, uPixelRatio, uFlat, uLightNorm, uDetail, uDetailS, uDetailMask;
                     uniform int uStructure, uFull;
                     uniform vec3 uColors[9];
                     uniform sampler2D uVisibility;
@@ -5812,12 +5820,11 @@
                     uniform vec2 uViewport;
                     out vec4 vColor;
                     out float vCoverage;
-                    out float vPixels;
-                    out vec2 vFacing;
-                    flat out int vFlags;
                     flat out float vLayer;
                     out float vLod, vDotScale, vLight;
                     out float vModelBlend;
+                    flat out vec2 vSpriteCenter;
+                    flat out float vSpriteSize;
                     void main() {
                         vec2 current = vec2(aX,aZ) / uTile;
                         vec2 p = uStructure != 0 ? current : mix(vec2(aPX,aPZ) / uTile,current,uAlpha);
@@ -5831,17 +5838,8 @@
                         if (ghost) light = .1;
                         gl_Position = uViewProjection * vec4(p.x,.02,p.y,1.);
                         float size = uStructure != 0 ? .94 : clamp(aRadius * 2.2 / uTile,.28,.9);
-                        float pixels = size * uScale / (uFlat > .5 ? 1. : max(.01,gl_Position.w));
-                        vPixels = pixels / uPixelRatio;
-                        vFlags = flags;
-                        vFacing = vec2(1.,0.);
-                        if (uStructure == 0 && vPixels > 4.) {
-                            vec4 heading = uViewProjection * vec4(cos(aFacing),0.,sin(aFacing),0.);
-                            // Perspective derivative, including camera tilt and rotation.
-                            vec2 direction = (heading.xy * gl_Position.w - gl_Position.xy * heading.w)
-                                * vec2(uAspect, -1.);
-                            vFacing = direction / max(.0001,length(direction));
-                        }
+                        float tilePixels = uScale / (uFlat > .5 ? 1. : max(.01,gl_Position.w));
+                        float pixels = size * tilePixels;
                         // (Drawn in detail by the CPU: renderer.js _unitDetailSplit,
                         // the same rule; a hair of overlap, never a gap.)
                         if (uDetail > 0. && uStructure == 0 && pixels > uDetail * 1.0001) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
@@ -5858,12 +5856,17 @@
                         float direction = mod(floor(mod(uYaw-facing+12.5663706,6.2831853)/.78539816+.5),8.);
                         vLayer = base + (uFlat > .5 ? 0. : 1.+direction);
                         vec4 meta = texelFetch(uMeta,ivec2(mod(vLayer,uAtlasGrid),floor(vLayer/uAtlasGrid)),0);
-                        vLod = base > 0. && meta.w > .5 ? smoothstep(2.5,6.,vPixels) : 0.;
+                        // All types at the same depth keep their type image.
+                        // A small body must not turn into an owner-colour dot
+                        // before a larger neighbour further from the camera.
+                        vLod = base > 0. && meta.w > .5 ? smoothstep(2.,5.,tilePixels / uPixelRatio) : 0.;
                         float extent = mix(1.,meta.x,vLod);
-                        gl_PointSize = clamp(pixels * extent + 1.,2.,uPointMax);
+                        vSpriteSize = clamp(pixels * extent,2.,uPointMax-2.);
+                        gl_PointSize = ceil(vSpriteSize + 2.);
                         // Keep the miniature's base on the unit's actual position.
                         gl_Position.xy += meta.yz * vLod * pixels * 2. / uViewport * gl_Position.w;
-                        vDotScale = gl_PointSize / max(pixels,1.);
+                        vSpriteCenter = (gl_Position.xy / gl_Position.w * .5 + .5) * uViewport;
+                        vDotScale = vSpriteSize / max(pixels,1.);
                         vCoverage = min(1., pixels * pixels / 4.);
                         float shade = .35 + .65 * clamp(light,0.,1.);
                         vLight = shade;
@@ -5874,26 +5877,30 @@
                     uniform int uStructure;
                     in vec4 vColor;
                     in float vCoverage;
-                    in float vPixels;
-                    in vec2 vFacing;
-                    flat in int vFlags;
                     flat in float vLayer;
                     in float vLod, vDotScale, vLight;
                     in float vModelBlend;
+                    flat in vec2 vSpriteCenter;
+                    flat in float vSpriteSize;
                     uniform sampler2D uSprites, uOwnerMask;
-                    uniform float uAtlasGrid, uFlat;
+                    uniform float uAtlasGrid, uFlat, uCoverageFade;
                     out vec4 color;
                     void main() {
                         if (vColor.a <= 0.) discard;
                         float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy,vec2(.06711056,.00583715))));
-                        if (uFlat < .5 && noise < vModelBlend) discard;
-                        vec2 p = gl_PointCoord * 2. - 1.;
+                        if (uFlat < .5 && uCoverageFade < .5 && noise < vModelBlend) discard;
+                        // Point rasterization rounds size to whole pixels. UVs
+                        // anchored to the unrounded centre/extent stay stable
+                        // during subpixel camera movement and continuous zoom.
+                        vec2 coord = (gl_FragCoord.xy-vSpriteCenter)*vec2(1.,-1.)/vSpriteSize+.5;
+                        if (any(lessThan(coord,vec2(0.))) || any(greaterThan(coord,vec2(1.)))) discard;
+                        vec2 p = coord * 2. - 1.;
                         float edge = (uStructure == 0 ? length(p) : max(abs(p.x),abs(p.y))) * vDotScale;
                         float dotAlpha = (1.-smoothstep(1.-fwidth(edge),1.,edge))*vCoverage;
                         vec4 sprite = vec4(vColor.rgb,dotAlpha);
                         if (vLod > 0.) {
                             vec2 cell = vec2(mod(vLayer,uAtlasGrid),floor(vLayer/uAtlasGrid));
-                            vec2 uv = (cell + clamp(gl_PointCoord,vec2(.5/64.),vec2(63.5/64.))) / uAtlasGrid;
+                            vec2 uv = (cell + clamp(coord,vec2(.5/64.),vec2(63.5/64.))) / uAtlasGrid;
                             vec4 texel = texture(uSprites,uv);
                             float owner = texture(uOwnerMask,uv).r;
                             texel.rgb *= mix(vec3(1.),vColor.rgb,owner);
@@ -5911,7 +5918,7 @@
                         color = vec4(sprite.rgb*vLight,sprite.a*vColor.a);
                     }`);
                 this.columnUniforms = {};
-                for (const n of ['ViewProjection','Alpha','Tile','Scale','PixelRatio','Aspect','Flat','LightNorm','Structure','Full','Colors','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','OwnerMask','AtlasGrid','StyleWidth','Yaw','PointMax','Viewport']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
+                for (const n of ['ViewProjection','Alpha','Tile','Scale','PixelRatio','Flat','LightNorm','Structure','Full','Colors','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','OwnerMask','AtlasGrid','StyleWidth','Yaw','PointMax','Viewport','CoverageFade']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
                 this.columnStores = [{},{}];
                 this.columnVisibilityTexture = createTexture(gl);
             }
@@ -5953,9 +5960,9 @@
             gl.uniform1f(U.Alpha,C.alpha);gl.uniform1f(U.Tile,C.tile);
             gl.uniform1f(U.LightNorm,Math.max(.001,C.lightNorm));
             gl.uniform1f(U.Flat,snapshot.flat2d?1:0);
+            gl.uniform1f(U.CoverageFade,this.sceneSamples ? 1 : 0);
             gl.uniform1f(U.Scale,this.columnPixelScale(snapshot.flat2d,snapshot.camera.visibleWidth,snapshot.viewportWidth));
             gl.uniform1f(U.PixelRatio,this.sceneTargetSize.height / this.cssHeight);
-            gl.uniform1f(U.Aspect,this.cssWidth / this.cssHeight);
             gl.uniform1f(U.Detail,C.detailPx > 0 ? C.detailPx : 0);
             gl.uniform1f(U.DetailS,C.detailPxS > 0 ? C.detailPxS : 0);
             gl.uniform1f(U.DetailMask,C.detailMask ? 1 : 0);

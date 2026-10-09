@@ -62,7 +62,10 @@ const SNAP_FORMAT = 7;
 // unit columns and the object fields' digest.
 // 6: unit positions Int32 eighths of a pixel (steps, chases and pushes
 // added as whole eighths, tiles by shifts).
-const SIM_RULES_REVISION = 6;
+// 7: structures hashed from the structure table (owner, energy,
+// construction; mines' amounts); a flow unit's steady window no longer ends
+// on its second's tick (the floor's look taken in the steady step).
+const SIM_RULES_REVISION = 7;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
 // Each hash covers one slice (regions, grid rows) of the world. The resync
@@ -201,16 +204,24 @@ function _snapNewShell(list, typeKey) {
             try { return new Unit(typeof typeKey === 'string' && typeKey ? typeKey : 'norm', 0, 0, 0); }
             finally { _snapUnitShellMode = false; nextUnitId = savedId; }
         }
-        case 't': return Object.create(Tower.prototype);
-        case 'b': return Object.create(Barrack.prototype);
-        case 's': return Object.create(_snapSpawnerClass(typeKey).prototype);
+        // (Structures: their table fields first, as their constructors do.)
+        case 't': return _snapStructShell(Tower);
+        case 'b': return _snapStructShell(Barrack);
+        case 's': return _snapStructShell(_snapSpawnerClass(typeKey));
+        case 'f': return new FloorItem();
+        case 'g': return new GoldMine();
+        case 'a': return new AstarMine();
         case 'p': return Object.create(Projectile.prototype);
     }
     return {};
 }
+function _snapStructShell(C) { const o = Object.create(C.prototype); structTableInit(o); return o; }
 
 function _snapClassByName(name) {
     switch (name) {
+        case 'FloorItem': return FloorItem;
+        case 'GoldMine': return GoldMine;
+        case 'AstarMine': return AstarMine;
         case 'Unit': return Unit;
         case 'Tower': return Tower;
         case 'Barrack': return Barrack;
@@ -504,16 +515,42 @@ function _snapStaticSlices() {
     }
     return c.slices;
 }
-// A building's or mine's core fields (every slice; the rest by rotation):
-// owner, energy and construction; a mine's resources. (Levels, stacks,
-// timers and statuses are in the round's full fields: a divergence there
-// shows in the units it spawns or the damage it deals within seconds; the
-// core of every structure every second was most of the hash's cost.)
-function _snapStaticCore(e, kind, seed) {
-    if (kind === 'm') return _snapHNum(_snapHNum(seed | 0, Number(e.gold)), Number(e.astar));
-    const o = e.owner, en = e.energy;
-    let h = Math.imul(Math.imul(seed ^ ((o | 0) === o ? o : 0x7ff9), 16777619) ^ (e.underConstruction ? 0x3bd : 0x2bd), 16777619);
-    return (en | 0) === en ? Math.imul(h ^ en, 16777619) : _snapHNum(h, Number(en));
+// The structures' core fields (every slice; the rest by rotation) from the
+// structure table (data_state.js _ST): owner, energy and construction; a
+// mine's amount. (Levels, stacks, timers and statuses are in the round's
+// full fields: a divergence there shows in the units it spawns or the
+// damage it deals within seconds.) Regions r of this slice (r %
+// SNAP_HASH_SLICES), but those of rotation round `skipRound` (hashed whole).
+function _snapStaticCoreSweep(slice, skipRound, regions) {
+    const T = _ST, W = GRID_W, rt = SNAP_REGION_TILES, S = SNAP_HASH_SLICES;
+    if (T.n !== W * GRID_H) return;
+    const CODE = T.code, OWN = T.own, UC = T.uc, VAL = T.val, CNT = T.rcnt;
+    const rw = Math.ceil(W / rt), rh = Math.ceil(GRID_H / rt);
+    for (let ry = 0; ry < rh; ry++) {
+        // (region = ry * 1024 + rx, region % S === slice)
+        const rx0 = (((slice - (1024 % S) * ry) % S) + S) % S;
+        const gy0 = ry * rt, gy1 = Math.min(GRID_H, gy0 + rt);
+        for (let rx = rx0; rx < rw; rx += S) {
+            if (CNT[ry * rw + rx] === 0) continue;
+            const r = ry * 1024 + rx;
+            if (Math.floor(r / S) % SNAP_HASH_GRID_ROUNDS === skipRound) continue;
+            const gx0 = rx * rt, gx1 = Math.min(W, gx0 + rt);
+            let acc = 0, n = 0;
+            for (let gy = gy0; gy < gy1; gy++) {
+                for (let t = gy * W + gx0, te = gy * W + gx1; t < te; t++) {
+                    const c = CODE[t];
+                    if (c === 0) continue;
+                    const gx = t - gy * W, v = VAL[t];
+                    let h = (Math.imul(gx, 4099) + gy) ^ c;
+                    if (c < 0x66) h = Math.imul(Math.imul(h ^ OWN[t], 16777619) ^ (UC[t] ? 0x3bd : 0x2bd), 16777619);
+                    h = (v | 0) === v ? Math.imul(h ^ v, 16777619) : _snapHNum(h, v);
+                    acc = (acc + (Math.imul(h ^ (h >>> 15), 2246822519) >>> 0)) | 0;
+                    n++;
+                }
+            }
+            if (n) _snapRegionAdd(regions, r, acc);
+        }
+    }
 }
 function _snapStaticBucket(r) {
     return (r % SNAP_HASH_SLICES) + SNAP_HASH_SLICES * (Math.floor(r / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS);
@@ -690,24 +727,15 @@ function _snapTickHashStatic(t, slice, allSlices, regions, push) {
             _snapRegionAdd(regions, r, h);
         }
     };
-    // (This slice's: all of them by their core fields, and this rotation's
-    // round by all their fields.)
-    let hashStaticCore = (entries) => {
-        for (const en of entries) {
-            let h = _snapStaticCore(en[0], en[1], en[2]);
-            h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
-            let r = en[3];
-            _snapRegionAdd(regions, r, h);
-        }
-    };
     if (allSlices) for (let k = 0; k < slices.length; k++) hashStatic(listOf(k));
     else {
-        // (Only this rotation's round: each building every SNAP_HASH_SLICES *
-        // SNAP_HASH_GRID_ROUNDS ticks. The core fields of all the slice's
-        // every tick cost ~4 ms a tick with 10k+ buildings.)
+        // (This slice's regions: this rotation's round by all their fields
+        // (each building every SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS
+        // ticks), the others' structures by their core fields, from the
+        // structure table.)
         const round = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS;
-        if (SNAP_HASH_STATIC_CORE_ALL) for (let k = 0; k < SNAP_HASH_GRID_ROUNDS; k++) (k === round ? hashStatic : hashStaticCore)(listOf(slice + SNAP_HASH_SLICES * k));
-        else hashStatic(listOf(slice + SNAP_HASH_SLICES * round));
+        hashStatic(listOf(slice + SNAP_HASH_SLICES * round));
+        if (SNAP_HASH_STATIC_CORE_ALL) _snapStaticCoreSweep(slice, round, regions);
     }
     for (let i = 0; i < droppedItems.length; i++) {
         let e = droppedItems[i];
@@ -1808,6 +1836,7 @@ function _snapSetTile(gx, gy, type, ref) {
     let ownerNow = nextRef && Number.isFinite(nextRef.owner) ? nextRef.owner : -8;
     if (prev === nextRef && tileEntityType[gy][gx] === nextType && owners[gy * GRID_W + gx] === ownerNow) return;
     if (prev && prev !== ref) _activeTileEntities.delete(prev);
+    if (typeof structTableSet === 'function') structTableSet(gx, gy, prev, nextRef);
     tileEntityType[gy][gx] = nextType;
     row[gx] = nextRef;
     if (ref) _activeTileEntities.add(ref);
@@ -2201,6 +2230,12 @@ function snapDecodeState(S, options = null) {
         if (!partial && typeof simUnitStateCompact === 'function') simUnitStateCompact();
         // (Every unit's status timers looked at by the next pre-pass.)
         if (typeof _simUnitState !== 'undefined' && _simUnitState && _simUnitState.columns.stOn) _simUnitState.columns.stOn.fill(1);
+        // (A unit's effective tables are derived, not sent (preComputed /
+        // preComputedEffective: non-enumerable, or its stat row): made again
+        // from its base tables (sent) at its effective level, from the current
+        // tables, with nothing else touched. A unit not initialized yet gets
+        // them at its first stats pass, as on the peer it came from.)
+        if (typeof unitDerivedStatsRestore === 'function') for (let u of (partial ? shells.u : units)) if (u && !u.dead) unitDerivedStatsRestore(u);
         // (Max energy and the movement stats into the columns, as the
         // others' flush did: this peer's flush ran before its units came.)
         if (typeof simUnitMaxE === 'function') for (let u of (partial ? shells.u : units)) if (u && u._us) { simUnitMaxE(u); if (typeof simMoveStatsChanged === 'function') simMoveStatsChanged(u); }

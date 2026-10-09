@@ -13,6 +13,9 @@ function saveUiSettingsToStorage() {
         let ui = {};
         if (Number.isFinite(levelVisibilityMode)) ui.levelVisibilityMode = Math.floor(levelVisibilityMode);
         if (Number.isFinite(renderRangeMode)) ui.renderRangeMode = Math.floor(renderRangeMode);
+        // (Range overlays are off by default now: a mode saved before this
+        // version is not restored, see loadUiSettingsFromStorage.)
+        ui.renderRangeVer = RENDER_RANGE_SETTINGS_VER;
         ui.renderRangeAllTeam = renderRangeAllTeam;
         ui.renderRangeSeeThrough = renderRangeSeeThrough;
         if (typeof audioEnabled === 'boolean') ui.audioEnabled = !!audioEnabled;
@@ -42,6 +45,9 @@ function saveUiSettingsToStorage() {
     } catch { }
 }
 
+// (Bumped when the range overlay's default changes: older saved modes are
+// dropped once, a choice made since is kept.)
+const RENDER_RANGE_SETTINGS_VER = 2;
 function loadUiSettingsFromStorage() {
     try {
         let s = readStoredSettings(LS_UI_SETTINGS_KEY);
@@ -49,7 +55,7 @@ function loadUiSettingsFromStorage() {
                 if (Number.isFinite(s.levelVisibilityMode)) {
                     levelVisibilityMode = Math.max(0, Math.min(2, Math.floor(s.levelVisibilityMode)));
                 }
-                if (Number.isFinite(s.renderRangeMode)) {
+                if (Number.isFinite(s.renderRangeMode) && s.renderRangeVer === RENDER_RANGE_SETTINGS_VER) {
                     renderRangeMode = Math.max(0, Math.min(5, Math.floor(s.renderRangeMode)));
                 }
                 if (typeof s.renderRangeAllTeam === 'boolean') renderRangeAllTeam = s.renderRangeAllTeam;

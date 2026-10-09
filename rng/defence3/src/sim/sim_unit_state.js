@@ -150,6 +150,8 @@ function simUnitMirror(u) {
 // Per-slot state of the movement kernel (see sim_move.js), in the columns
 // object too (unit accessors disarm through it). [name, type, per slot].
 const SIM_MOVE_WINDOW = 16;
+// Words of a slot's flow look-ahead record (unit.mvNav).
+const SIM_NAV_STRIDE = 8;
 const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['mvFlags', Uint8Array, 1],
     ['mvSpd', Float32Array, 1], ['mvLane', Float32Array, 1], ['mvCost', Float32Array, 1],
     ['mvSpent', Uint8Array, 1], ['mvReach', Uint8Array, 1], ['mvBase', Int32Array, 1], ['mvWlen', Uint8Array, 1],
@@ -164,16 +166,17 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // Whole area steps of its attack range (floor), for the kernel's
     // drive-by look.
     ['mvRangeK', Uint8Array, 1],
-    // Flow mode's look-ahead from tile mvNavT (-1 none), made with the
-    // navigation build mvNavV, wall version mvNavW and destination field
-    // generation mvNavG: the next tile, the one after, the farthest one
-    // it heads straight for, and whether that is over open ground.
+    // Flow mode's look-ahead (mvNav) from tile T (-1 none), made with the
+    // navigation build V, wall version W and destination field kind G: the
+    // next tile, the one after, the farthest one it heads straight for, and
+    // whether that is over open ground.
     // A long-range hold (mvReach above 1): held while the unit's window (tile
     // * 9 + zone, mvHWin) and its target's tile (mvHTT) are those it was
     // found in range by areas at, under area layout mvHVer.
     ['mvHWin', Int32Array, 1], ['mvHTT', Int32Array, 1], ['mvHVer', Int32Array, 1],
-    ['mvNavT', Int32Array, 1], ['mvNavV', Int32Array, 1], ['mvNavW', Int32Array, 1], ['mvNavG', Int32Array, 1], ['mvNavD', Int32Array, 1],
-    ['mvNavN1', Int32Array, 1], ['mvNavN2', Int32Array, 1], ['mvNavFar', Int32Array, 1], ['mvNavOpen', Uint8Array, 1],
+    // (One record a slot, SIM_NAV_STRIDE words: T, D, V, W, G, N1, N2,
+    // Far << 1 | Open; a steer touches one cache line. See simFlowLook.)
+    ['mvNav', Int32Array, SIM_NAV_STRIDE],
     // The combat scan (SIM_KERNEL_COMBAT_SCAN): its aggro range (pixels),
     // and at tick cbTick the nearest visible enemy's slot (-1 none).
     ['cbRange', Float32Array, 1], ['cbT', Int32Array, 1], ['cbTick', Int32Array, 1],
@@ -422,11 +425,27 @@ function simUnitStateReserve(n) {
 }
 function simUnitStateAllocate(u) {
     let S = _simUnitState || _simUnitStateNew();
-    const s = S.free.length ? S.free.pop() : S.owners.length;
+    const reused = S.free.length > 0;
+    const s = reused ? S.free.pop() : S.owners.length;
     // (Grown by half, in whole 4096-slot steps: doubling left up to half of
     // ~850 bytes a slot unused, 1M slots for 600k units.)
     if (s >= S.cap) _simUnitStateGrow(S, Math.max(1024, Math.ceil(S.cap * 1.5 / 4096) * 4096));
+    // A slot that held a unit before: every column zeroed, as a fresh slot's
+    // (its last unit's kernel state (committed steps, steady windows, flags,
+    // speeds) must not reach the new one: which slot a unit gets depends on
+    // the peer's history, a restore's above all, so a leftover there made
+    // peers diverge).
+    if (reused) { (_simSlotZero || (_simSlotZero = _simSlotZeroFn()))(S.columns, s); S.sepLayer[s] = 0; }
     _simUnitSlotStart(S, s, u);
+}
+// (One straight-line function over every column: a fill call per column was
+// ~10 us a unit.)
+let _simSlotZero = null;
+function _simSlotZeroFn() {
+    const body = [];
+    for (const k of SIM_UNIT_COLUMNS) body.push('C.' + k + '[s] = 0;');
+    for (const [k, , per] of SIM_MOVE_COLUMNS) body.push(per === 1 ? 'C.' + k + '[s] = 0;' : 'C.' + k + '.fill(0, s * ' + per + ', s * ' + per + ' + ' + per + ');');
+    return new Function('C', 's', body.join('\n'));
 }
 function _simUnitStateGrow(S, cap) {
     // (The arrays replaced: given back to the heap, see above.)
@@ -468,7 +487,7 @@ function _simUnitStateGrow(S, cap) {
 // Slot s taken by unit u: its defaults, and u's accessors pointed at it.
 function _simUnitSlotStart(S, s, u) {
     S.sepKey[s] = SIM_SEP_ABSENT;
-    S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNavT[s] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
+    S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNav[s * SIM_NAV_STRIDE] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
     S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = 0; S.columns.stEv[s] = 0; S.columns.stOn[s] = 1; S.columns.tmOn[s] = 1; S.columns.lzAcc[s] = 0; S.columns.sepCx[s] = 0; S.columns.sepCy[s] = 0; S.columns.esVer[s] = -1; S.columns.statRow[s] = -1;
     S.columns.fLsX[s] = NaN; S.columns.fLsY[s] = NaN; S.columns.fLsT[s] = -1;
     S.columns.wkWx[s] = typeof u._bwx === 'number' ? u._bwx : NaN; S.columns.wkWy[s] = typeof u._bwy === 'number' ? u._bwy : NaN;
@@ -656,6 +675,8 @@ function simUnitStateCollect(all = false) {
 // Serialization enumerates gameplay fields, including prototype columns.
 function simUnitStateKeys(u) {
     const keys = Object.keys(u);
+    // (Structures: their table accessors' names, see structTableKeys.)
+    if (u._stT !== undefined && typeof structTableKeys === 'function') return structTableKeys(u, keys);
     if (u._us || u._det) for (const k of SIM_UNIT_ACCESSOR_COLUMNS) keys.push(k);
     if (u instanceof Unit) for (const k of SIM_UNIT_EXTRA_ACCESSORS) if (!Object.prototype.hasOwnProperty.call(u, k)) keys.push(k);
     return keys;

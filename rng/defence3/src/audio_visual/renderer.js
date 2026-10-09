@@ -3497,16 +3497,23 @@ function _structureGlyphLayer(D, floorItems, viewGrid) {
 let _columnLodCatalog = null;
 function getColumnLodCatalog() {
     if (typeof _pageFrameStrings === 'undefined') return null;
-    const key = _pageFrameStrings.join('|');
+    // The frame string table also grows with labels/status text. Only type
+    // codes affect these images; unrelated strings must never rebake the atlas.
+    const types = [];
+    for (let code = 0; code < _pageFrameStrings.length; code++) {
+        const type = _pageFrameStrings[code];
+        if (Object.hasOwn(BASE_UNIT_STATS, type) || Object.hasOwn(BASE_CARD_TYPES, type)) types.push([code, type]);
+    }
+    const key = types.map(([code,type]) => code + ':' + type).join('|');
     if (_columnLodCatalog?.key === key) return _columnLodCatalog;
-    const width = Math.max(1, 2 ** Math.ceil(Math.log2(_pageFrameStrings.length))), styles = [];
+    const width = 2 ** Math.ceil(Math.log2(Math.max(1, (types.at(-1)?.[0] || 0) + 1))), styles = [];
     const lookup = new Float32Array(width * 8 * 4);
     function add(row, code, style) {
         lookup[(row * width + code) * 4] = styles.length * 9 + 1;
         styles.push(style);
     }
-    for (let code = 0; code < _pageFrameStrings.length; code++) {
-        const type = _pageFrameStrings[code], unit = BASE_UNIT_STATS[type], card = BASE_CARD_TYPES[type];
+    for (const [code, type] of types) {
+        const unit = BASE_UNIT_STATS[type], card = BASE_CARD_TYPES[type];
         if (unit) {
             const scale = type === 'fast' ? 1.35 : type === 'scout' ? 1.2 : type === 'flying' ? 1.3 : unit.isFlying ? .8 : 1;
             add(7, code, {modelKey:'unit_'+type, type, unit:true, isFlying:!!unit.isFlying, isWorker:!!unit.isWorker,
@@ -3620,6 +3627,41 @@ let _structDetailPx = new Float32Array(0);
 let _structDetailPrevious = null, _structDetailVersion = 0;
 let _structDetailCache = null;
 let _structProjectionCache = null;
+let _structSpatialCache = null;
+function _structureDetailCandidates(F, flat2d) {
+    const client = typeof _simClient === 'undefined' ? null : _simClient;
+    const revision = client ? client.structMver : F;
+    const columns = Math.ceil(GRID_W / 16), rows = Math.ceil(GRID_H / 16);
+    let C = _structSpatialCache;
+    if (!C || C.client !== client || C.revision !== revision || C.n !== F.n || C.cap !== F.cap || C.columns !== columns || C.rows !== rows) {
+        const head = new Int32Array(columns * rows).fill(-1), next = new Int32Array(F.cap);
+        for (let s = 0; s < F.n; s++) {
+            if (F.kind[s] === 6) continue; // Dropped items can move; never model-detail candidates.
+            const bx = Math.max(0,Math.min(columns-1,F.gx[s]>>4)), by = Math.max(0,Math.min(rows-1,F.gy[s]>>4));
+            const b = by * columns + bx; next[s] = head[b]; head[b] = s;
+        }
+        C = _structSpatialCache = {client,revision,n:F.n,cap:F.cap,columns,rows,head,next,key:null,slots:[]};
+    }
+    const key = _detailViewKey(flat2d);
+    if (C.key === key) return C.slots;
+    const R = renderer3dInstance, M = R.tmpViewProjection;
+    const projectionScale = flat2d ? camera.zoom * TILE : R.lodProjectionScale;
+    const sx = viewW / R.cssWidth, sy = viewH / R.cssHeight;
+    const dw = 10 * (Math.abs(M[3]) + Math.abs(M[11]));
+    const dx = 10 * (Math.abs(M[0]) + Math.abs(M[8])), dy = 10 * (Math.abs(M[1]) + Math.abs(M[9]));
+    const slots = C.slots; slots.length = 0;
+    for (let b = 0; b < C.head.length; b++) {
+        if (C.head[b] < 0) continue;
+        const x = (b % columns + .5) * 16, z = (Math.floor(b / columns) + .5) * 16;
+        const w = M[3]*x + M[7]*.02 + M[11]*z + M[15];
+        if (w + dw <= 0 || .94 * projectionScale / (flat2d ? 1 : Math.max(.01,w-dw)) < UNIT_DETAIL_MIN_PX * .85) continue;
+        const cx = M[0]*x + M[4]*.02 + M[8]*z + M[12], cy = M[1]*x + M[5]*.02 + M[9]*z + M[13];
+        if (Math.abs(cx) > sx*(w+dw)+dx || Math.abs(cy) > sy*(w+dw)+dy) continue;
+        for (let s = C.head[b]; s >= 0; s = C.next[s]) slots.push(s);
+    }
+    C.key = key;
+    return slots;
+}
 function _structureDetailSplit(lists, flat2d, bounds, live = true) {
     const R = renderer3dInstance;
     if (!R || typeof R.columnPixelScale !== 'function' || (live && (typeof _pageTables === 'undefined' || !_pageTables.s))) return null;
@@ -3640,8 +3682,8 @@ function _structureDetailSplit(lists, flat2d, bounds, live = true) {
                 y: new Float32Array(F.cap), retained: new Uint8Array(F.cap), scores: new Float32Array(F.cap), key: null };
         }
         const moved = projection.key !== viewKey;
-        for (let s = 0; s < n; s++) {
-            P[s] = 0;
+        P.fill(0);
+        for (const s of _structureDetailCandidates(F, flat2d)) {
             const gx = F.gx[s], gy = F.gy[s], retained = previous?.mask?.[s] ? 1 : 0;
             if (moved || projection.x[s] !== gx || projection.y[s] !== gy || projection.retained[s] !== retained) {
                 projection.scores[s] = _detailScore(gx + .5, gy + .5, .94, flat2d, !!retained);
@@ -3967,6 +4009,21 @@ let _minimapContentMode = '';
 let _minimapContentTick = -1;
 let _minimapUnitCanvas = null;
 let _minimapUnitPixels = null;
+// Keep the population loop out of the large Canvas/UI function so the JIT
+// can optimize it. One packed write per pixel, no per-unit Map/color lookup.
+function paintMinimapUnitColumns(F, pixels, size, tile, scale, full, vis, colors) {
+    const order = F.order, X = F.x, Y = F.y, E = F.energy, O = F.owner;
+    const unitScale = scale / tile;
+    for (let i = 0; i < F.count; i++) {
+        const s = order[i];
+        if (E[s] <= 0) continue;
+        const ux = X[s], uy = Y[s];
+        if (!full && !(vis[Math.floor(uy / tile)]?.[Math.floor(ux / tile)] > 0)) continue;
+        const x = Math.floor(ux * unitScale), y = Math.floor(uy * unitScale);
+        if (x < 0 || y < 0 || x >= size || y >= size) continue;
+        pixels[y * size + x] = colors[O[s] + 1];
+    }
+}
 function drawMinimap() {
     let nowMs = performance.now();
     let scale = MINIMAP_SIZE / GRID_W; // 2 px per tile
@@ -4057,11 +4114,19 @@ function drawMinimap() {
         pixels.fill(0);
         // (The live units, Team + history too: units are not remembered.)
         const F = _isLiveUnitList(units) && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
-        for (let i = 0; i < units.length; i++) {
-            const u = F ? null : units[i], slot = F ? F.order[i] : 0;
-            if (F ? F.energy[slot] <= 0 : u.dead) continue;
-            const ux = F ? F.x[slot] : u.x, uy = F ? F.y[slot] : u.y, owner = F ? F.owner[slot] : u.owner;
-            const ghost = !F && u._historyGhost;
+        if (F) {
+            const palette = new Uint8Array(9 * 4);
+            for (let owner = -1; owner < 8; owner++) {
+                const c = _parseHexColor(get3DRenderOwnerColor(owner)), o = (owner + 1) * 4;
+                palette[o] = c.r; palette[o + 1] = c.g; palette[o + 2] = c.b; palette[o + 3] = 255;
+            }
+            paintMinimapUnitColumns(F, new Uint32Array(pixels.buffer, pixels.byteOffset, pixels.byteLength / 4),
+                MINIMAP_SIZE, TILE, scale, fullVisibility, vis, new Uint32Array(palette.buffer));
+        } else for (let i = 0; i < units.length; i++) {
+            const u = units[i];
+            if (u.dead) continue;
+            const ux = u.x, uy = u.y, owner = u.owner;
+            const ghost = u._historyGhost;
             const gx = Math.floor(ux / TILE), gy = Math.floor(uy / TILE);
             if (!fullVisibility && (!vis[gy] || vis[gy][gx] === 0) && !ghost) continue;
             const x = Math.floor(ux / TILE * scale), y = Math.floor(uy / TILE * scale);

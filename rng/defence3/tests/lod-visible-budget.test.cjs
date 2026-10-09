@@ -44,7 +44,7 @@ const F=populate(points);
 const worker=read('src/sim/presentation_worker.js');
 vm.runInContext(worker.slice(worker.indexOf('function buildRenderBuckets('),worker.indexOf('function draw()')),c);
 c.SIM_FRAME_SLOT_BYTES=108;
-F.buf=new ArrayBuffer(F.cap*108+63*63*8+F.cap*4);
+F.buf=new ArrayBuffer(F.cap*108+63*63*8+F.cap*8);
 const B=c.buildRenderBuckets(F,F.count,63,63,32), cells=B.columns*B.rows;
 F.renderBuckets={...B,head:new Int32Array(F.buf,B.offset,cells),motion:new Float32Array(F.buf,B.offset+cells*4,cells),next:new Int32Array(F.buf,B.offset+cells*8,F.cap)};
 const indexed=[];

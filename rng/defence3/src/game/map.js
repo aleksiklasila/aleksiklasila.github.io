@@ -271,7 +271,7 @@ function generateResourceMinesMixed() {
 
     let placeGoldMine = (gx, gy) => {
         let gold = GOLD_MINE_MIN + Math.floor(rng() * goldRange);
-        let mine = { gx, gy, gold, maxGold: gold, x: gx * TILE + 16, y: gy * TILE + 16 };
+        let mine = Object.assign(new GoldMine(), { gx, gy, gold, maxGold: gold, x: gx * TILE + 16, y: gy * TILE + 16 });
         goldMines.push(mine);
         setTileEntity(gx, gy, TILE_ENTITY_GOLDMINE, mine);
         return mine;
@@ -279,7 +279,7 @@ function generateResourceMinesMixed() {
 
     let placeAstarMine = (gx, gy) => {
         let astar = ASTAR_MINE_MIN + Math.floor(rng() * astarRange);
-        let mine = { gx, gy, astar, maxAstar: astar, x: gx * TILE + 16, y: gy * TILE + 16 };
+        let mine = Object.assign(new AstarMine(), { gx, gy, astar, maxAstar: astar, x: gx * TILE + 16, y: gy * TILE + 16 });
         astarMines.push(mine);
         setTileEntity(gx, gy, TILE_ENTITY_ASTARMINE, mine);
         return mine;
@@ -367,7 +367,7 @@ function generateGoldMines() {
         if (MAP_TYPE !== 'arena' && nearAnySpawn(gx, gy)) return false;
         placed.add(`${gx},${gy}`);
         let gold = GOLD_MINE_MIN + Math.floor(rng() * goldRange);
-        let mine = { gx, gy, gold, maxGold: gold, x: gx * TILE + 16, y: gy * TILE + 16 };
+        let mine = Object.assign(new GoldMine(), { gx, gy, gold, maxGold: gold, x: gx * TILE + 16, y: gy * TILE + 16 });
         goldMines.push(mine);
         setTileEntity(gx, gy, TILE_ENTITY_GOLDMINE, mine);
         grid[gy][gx].type = TYPE_WALL;
@@ -573,7 +573,7 @@ function generateAstarMines() {
         if (getGoldMineAt(gx, gy) || getAstarMineAt(gx, gy)) return false;
         placed.add(`${gx},${gy}`);
         let astar = ASTAR_MINE_MIN + Math.floor(rng() * astarRange);
-        let mine = { gx, gy, astar, maxAstar: astar, x: gx * TILE + 16, y: gy * TILE + 16 };
+        let mine = Object.assign(new AstarMine(), { gx, gy, astar, maxAstar: astar, x: gx * TILE + 16, y: gy * TILE + 16 });
         astarMines.push(mine);
         setTileEntity(gx, gy, TILE_ENTITY_ASTARMINE, mine);
         grid[gy][gx].type = TYPE_WALL;

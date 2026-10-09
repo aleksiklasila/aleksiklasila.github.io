@@ -170,11 +170,12 @@ const SIM_KERNEL_AREA_BOX = 55, SIM_KERNEL_INDEX_MERGE = 56;
 // Flow navigation (see flownav.js): the next tile from t toward dest, -1
 // none. dfield: the destination field (costs over the box bx, by, bw x bh),
 // used inside its box; elsewhere the cluster hop and the exit's local field.
-// The flow look-ahead of a unit (unit state columns LC: the cache key
-// mvNavT tile, mvNavD destination, mvNavV navigation build, mvNavW nearby walls, mvNavG
+// The flow look-ahead of a unit (unit state columns LC, its record
+// LC.mvNav[s * SIM_NAV_STRIDE ..]: the cache key T tile, D destination, V
+// navigation build, W nearby walls, G
 // destination field kind: 1 narrow, 2 wide (its slot and slot generation
 // are this peer's own history, not a key: a field's content is a function
-// of its destination, kind and build), and mvNavN1/N2/Far/Open; slot s) at tile tl
+// of its destination, kind and build), then N1, N2, Far << 1 | Open; slot s) at tile tl
 // = (gx, gy) toward dk, for the movement kernel and Unit._followNavNode
 // alike: the next tile n1 (a wall the navigation predates in the way: the
 // open side neighbour toward where the flow leads past it), the one after
@@ -202,7 +203,8 @@ const SIM_STEER_TICKS = 16, SIM_STEER_NEAR_TICKS = 4;
 // the destination's row (every part's exit toward it, flownav.js).
 function simFlowLook(LC, s, refresh, tl, gx, gy, dk, Wd, Hd, WL, navVer, wv, fgen,
     nC, ncw, PL, PB, ROWS, ro, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh) {
-    if (LC.mvNavT[s] === tl && LC.mvNavD[s] === dk && LC.mvNavG[s] === fgen && (!refresh || (LC.mvNavV[s] === navVer && LC.mvNavW[s] === wv))) return 1;
+    const NV = LC.mvNav, r = s * SIM_NAV_STRIDE;
+    if (NV[r] === tl && NV[r + 1] === dk && NV[r + 4] === fgen && (!refresh || (NV[r + 2] === navVer && NV[r + 3] === wv))) return 1;
     // (Clusters are 16 or 32 tiles: a shift.)
     const cs = 31 - Math.clz32(nC);
     let n1 = simNavStepXY(Wd, cs, nC, ncw, PL, PB, ROWS, ro, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, tl, gx, gy, dk);
@@ -229,8 +231,8 @@ function simFlowLook(LC, s, refresh, tl, gx, gy, dk, Wd, Hd, WL, navVer, wv, fge
             far = cur = nx; cx = nxx; cy = nxy;
         }
     }
-    LC.mvNavT[s] = tl; LC.mvNavD[s] = dk; LC.mvNavV[s] = navVer; LC.mvNavW[s] = wv; LC.mvNavG[s] = fgen;
-    LC.mvNavN1[s] = n1; LC.mvNavN2[s] = n2; LC.mvNavFar[s] = far; LC.mvNavOpen[s] = open ? 1 : 0;
+    NV[r] = tl; NV[r + 1] = dk; NV[r + 2] = navVer; NV[r + 3] = wv; NV[r + 4] = fgen;
+    NV[r + 5] = n1; NV[r + 6] = n2; NV[r + 7] = (far << 1) | (open ? 1 : 0);
     return 1;
 }
 // Tile n's column and row, n a step from tile t (column tx, row ty): a
@@ -919,8 +921,8 @@ const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 
     'unit.cbT', 'unit.cbTick', 'unit.mvChs', 'unit.cbRange', '?wk.ver', 'unit.wkType', 'unit.wkD', 'unit.wkOx', 'unit.wkOy', 'unit.wkTwice',
     'unit.wkFail', 'unit.wkUntil', 'unit.wkSched', 'unit.mvHWin', 'unit.mvHTT', 'unit.mvHVer', 'unit.cbTId', 'unit.cbRangeS', 'unit.cbS',
     'unit.fLsX', 'unit.fLsY', 'unit.fLsPX', 'unit.fLsPY', 'unit.fLsT', 'unit.mvLane', '?mv.airwall', '?nav.frows.0', '?nav.frows.1', '?nav.fhdr',
-    '?nav.fpool.0', '?nav.fpool.1', 'unit.mvNavT', 'unit.mvNavV', 'unit.mvNavW', 'unit.mvNavG', 'unit.mvNavD', 'unit.mvNavN1', 'unit.mvNavN2',
-    'unit.mvNavFar', 'unit.mvNavOpen', 'unit.mvNavLD', 'unit.cwNear', 'unit.cwTick', 'unit.cwDense', '?mv.wallBlk9', 'unit.mvBase', 'unit.mvWlen',
+    '?nav.fpool.0', '?nav.fpool.1', 'unit.mvNav', '?-', '?-', '?-', '?-', '?-', '?-',
+    '?-', '?-', 'unit.mvNavLD', 'unit.cwNear', 'unit.cwTick', 'unit.cwDense', '?mv.wallBlk9', 'unit.mvBase', 'unit.mvWlen',
     'unit.mvPlen', 'unit.mvScan', 'unit.mvNodes', 'unit.pathIndex', '?mv.post', '?mv.postc', 'unit.spEpoch', 'unit.spOwner', 'unit.spTile',
     'unit.spType', 'unit.vsGen', 'unit.spMvOld', 'unit.spMvNew', 'unit.spMvOwn', 'unit.mvBlk', '?mv.astarRem', '?mv.chFix', '?mv.chUse', 'unit.mvCost',
     'unit.commandState', 'unit.mvShoot', 'unit.mvReachD', 'unit.mvRangeK', 'unit.lzFlags', '?sep.rs', '?sep.rc', '?sep.rstamp', '?sep.eslot',
@@ -1261,7 +1263,7 @@ const _simEffUnitsW = _simWK(['ix.slots', 'unit.dead', 'unit.esOk', 'unit.esRad'
     '?upk.h', '?eff.tver', 'unit.esVer', 'unit.statRow', '?eff.rowOf', '?eff.rowVer', '?eff.rSpd', '?eff.rCost', '?eff.rRD', '?eff.rRA', '?eff.rRK', '?eff.rLzW',
     '?eff.rCb', '?eff.rCd', '?eff.rDmg', '?eff.rVis', '?eff.rChs', 'unit.mvOn', 'unit.mvFlags', 'unit.mvReach', 'unit.mvChs', 'unit.mvSpd', 'unit.mvCost',
     'unit.mvReachD', 'unit.mvReachA', 'unit.mvShoot', 'unit.mvRangeK', 'unit.lzFlags', 'unit.cbRange', 'unit.atkCd', 'unit.atkDmg', 'unit.spArea', 'unit.energy',
-    'unit.maxE', '?mv.areaBoxOk']);
+    'unit.maxE', '?mv.areaBoxOk', '?eff.rVsA', 'unit.watched', 'unit.wTeam', 'unit.sepKey', 'unit.vsGen', 'unit.vsR', 'unit.vsA', 'unit.vsP1', 'unit.vsP2']);
 SIM_KERNELS[SIM_KERNEL_EFF_UNITS] = function (R, P, chunk) { _simRust(_simEffUnitsW, P, chunk, 'k_eff_units', 'EFF_UNITS'); };
 
 // The units' visibility snapshot (renderer.js _visCoverUnits, a tier's
@@ -1296,7 +1298,7 @@ SIM_KERNELS[SIM_KERNEL_VIS_SEED] = function (R, P, chunk) { _simRust(_simVisSeed
 // P: [0] slots, [1] per job, [2] TILE, [3]/[4] grid, [5] tick, [6] report
 // period, [7] SIM_SEP_ABSENT.
 const _simLaserHitsW = _simWK(['unit.x', 'unit.y', 'unit.dead', 'unit.sepKey', 'unit.owner', 'unit.energy', 'unit.id', 'unit.lzFlags', 'unit.lzAcc', 'unit.lzBeam', 'unit.lzEv',
-    'lz.head', 'lz.next', 'lz.beam', 'lz.bown', 'lz.bdmg', 'lz.hit', 'lz.count']);
+    'lz.head', 'lz.next', 'lz.beam', 'lz.bown', 'lz.bdmg', 'lz.hit', 'lz.count', '?lz.list']);
 SIM_KERNELS[SIM_KERNEL_LASER_HITS] = function (R, P, chunk) { _simRust(_simLaserHitsW, P, chunk, 'k_laser_hits', 'LASER_HITS'); };
 
 // The drive-by look (unit.js _driveByScan) of every moving shooter whose

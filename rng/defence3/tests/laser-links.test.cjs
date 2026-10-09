@@ -1,5 +1,6 @@
 // Indexed laser links (things_utils.js recalculateLaserConnections) equal the
-// original all-pairs computation, partner order included, on random layouts:
+// original all-pairs computation, partners in tile order (gy * GRID_W + gx:
+// the same on every peer whatever the towers' order), on random layouts:
 // mixed owners, other tower types in between, walls, levels 0..12 and
 // missing levels.
 const assert = require('node:assert/strict');
@@ -12,7 +13,7 @@ const start = src.indexOf('const _laserLines = new Map();');
 const end = src.indexOf('function _isOperationalAdjacencyEntity');
 assert.ok(start >= 0 && end > start, 'laser link source found');
 
-function reference(towers, grid, TYPE_WALL) {
+function reference(towers, grid, TYPE_WALL, W) {
     towers.forEach(t => { if (t.type === 'laser') { t.connectedLasers = []; t._laserLinkLevel = t.effectiveLevel; } });
     for (let i = 0; i < towers.length; i++) {
         let t1 = towers[i]; if (t1.type !== 'laser') continue;
@@ -28,6 +29,7 @@ function reference(towers, grid, TYPE_WALL) {
             if (!blocked) { t1.connectedLasers.push(t2); t2.connectedLasers.push(t1); }
         }
     }
+    towers.forEach(t => { if (t.connectedLasers) t.connectedLasers.sort((a, b) => (a.gy * W + a.gx) - (b.gy * W + b.gx)); });
 }
 
 let seed = 12345;
@@ -50,9 +52,9 @@ for (let round = 0; round < 300; round++) {
     };
     const towers = make();
     const copy = towers.map(t => ({ ...t }));
-    const ctx = vm.createContext({ towers, grid, TYPE_WALL: 1, Map });
+    const ctx = vm.createContext({ towers, grid, TYPE_WALL: 1, Map, GRID_W: W });
     vm.runInContext(src.slice(start, end) + '\nrecalculateLaserConnections();', ctx);
-    reference(copy, grid, 1);
+    reference(copy, grid, 1, W);
     for (let i = 0; i < towers.length; i++) {
         if (towers[i].type !== 'laser') { assert.equal(towers[i].connectedLasers, undefined); continue; }
         assert.deepEqual(Array.from(towers[i].connectedLasers, t => t.id), copy[i].connectedLasers.map(t => t.id), `round ${round} tower ${i}`);

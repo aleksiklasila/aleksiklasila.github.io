@@ -105,15 +105,8 @@ const W_FRW: usize = 87;
 const W_FHD: usize = 88;
 const W_FPN: usize = 89;
 const W_FPW: usize = 90;
-const W_NVT: usize = 91;
-const W_NVV: usize = 92;
-const W_NVW: usize = 93;
-const W_NVG: usize = 94;
-const W_NVD: usize = 95;
-const W_NVN1: usize = 96;
-const W_NVN2: usize = 97;
-const W_NVF: usize = 98;
-const W_NVO: usize = 99;
+// (The flow look-ahead record, unit.mvNav: NV_STRIDE words a slot, see nv.)
+const W_NV: usize = 91;
 const W_NLD: usize = 100;
 const W_CWN: usize = 101;
 const W_CWT: usize = 102;
@@ -330,15 +323,7 @@ struct Mv {
     fhd: *const i32,
     fpn: *const u16,
     fpw: *const u16,
-    nvt: *mut i32,
-    nvv: *mut i32,
-    nvw: *mut i32,
-    nvg: *mut i32,
-    nvd: *mut i32,
-    nvn1: *mut i32,
-    nvn2: *mut i32,
-    nvf: *mut i32,
-    nvo: *mut u8,
+    nv: *mut i32,
     nld: *mut F32,
     cwn: *const u8,
     cwt: *const i32,
@@ -619,15 +604,7 @@ impl Mv {
             fhd: p!(W_FHD),
             fpn: p!(W_FPN),
             fpw: p!(W_FPW),
-            nvt: p!(W_NVT),
-            nvv: p!(W_NVV),
-            nvw: p!(W_NVW),
-            nvg: p!(W_NVG),
-            nvd: p!(W_NVD),
-            nvn1: p!(W_NVN1),
-            nvn2: p!(W_NVN2),
-            nvf: p!(W_NVF),
-            nvo: p!(W_NVO),
+            nv: p!(W_NV),
             nld: p!(W_NLD),
             cwn: p!(W_CWN),
             cwt: p!(W_CWT),
@@ -1321,11 +1298,37 @@ unsafe fn look_put(m: &Mv, tl: i32, dk: i32, kp: i32, ver: i32, wv: i32, code: i
     (*e).store(if nx < 2 { 2 } else { nx }, Ordering::Release);
 }
 
-/// simFlowLook: 1 in the look-ahead columns, 0 no way, -1 walled in, -2 a
+// A slot's flow look-ahead record (unit.mvNav, sim_unit_state.js): its key
+// (tile, destination, build, wall version, field kind) and result (next
+// tile, the one after, the farthest tile << 1 | open), one 32-byte record:
+// a steer reads and writes one cache line, not nine columns' lines.
+const NV_STRIDE: usize = 8;
+const NV_D: usize = 1;
+const NV_V: usize = 2;
+const NV_W: usize = 3;
+const NV_G: usize = 4;
+const NV_N1: usize = 5;
+const NV_N2: usize = 6;
+const NV_FO: usize = 7;
+#[inline(always)]
+unsafe fn nv_put(m: &Mv, s: usize, tl: i32, dk: i32, ver: i32, wv: i32, fgen: i32, n1: i32, n2: i32, far: i32, open: bool) {
+    let r = m.nv.add(s * NV_STRIDE);
+    *r = tl;
+    *r.add(NV_D) = dk;
+    *r.add(NV_V) = ver;
+    *r.add(NV_W) = wv;
+    *r.add(NV_G) = fgen;
+    *r.add(NV_N1) = n1;
+    *r.add(NV_N2) = n2;
+    *r.add(NV_FO) = (far << 1) | (open as i32);
+}
+
+/// simFlowLook: 1 in the look-ahead record, 0 no way, -1 walled in, -2 a
 /// bad build.
 #[cfg_attr(feature = "prof", inline(never))]
 unsafe fn flow_look(m: &Mv, v: &Nav, s: usize, refresh: bool, tl: i32, gx: i32, gy: i32, dk: i32, wl: *const u8, nav_ver: i32, wv: i32, fgen: i32) -> i32 {
-    if rd(m.nvt, s) == tl && rd(m.nvd, s) == dk && rd(m.nvg, s) == fgen && (!refresh || (rd(m.nvv, s) == nav_ver && rd(m.nvw, s) == wv)) {
+    let r = m.nv.add(s * NV_STRIDE);
+    if *r == tl && *r.add(NV_D) == dk && *r.add(NV_G) == fgen && (!refresh || (*r.add(NV_V) == nav_ver && *r.add(NV_W) == wv)) {
         return 1;
     }
     // (The shared looks: the field kind and the profile in one key word.)
@@ -1334,15 +1337,7 @@ unsafe fn flow_look(m: &Mv, v: &Nav, s: usize, refresh: bool, tl: i32, gx: i32, 
     let kp = fgen | ((rd(m.npr, s) as i32) << 8) | (if wl == m.airw { 1 << 20 } else { 0 });
     if let Some((code, n1, n2, far, open)) = look_get(m, tl, dk, kp, nav_ver, wv) {
         if code == 1 {
-            wr(m.nvt, s, tl);
-            wr(m.nvd, s, dk);
-            wr(m.nvv, s, nav_ver);
-            wr(m.nvw, s, wv);
-            wr(m.nvg, s, fgen);
-            wr(m.nvn1, s, n1);
-            wr(m.nvn2, s, n2);
-            wr(m.nvf, s, far);
-            wr(m.nvo, s, open);
+            nv_put(m, s, tl, dk, nav_ver, wv, fgen, n1, n2, far, open != 0);
         }
         return code;
     }
@@ -1351,7 +1346,9 @@ unsafe fn flow_look(m: &Mv, v: &Nav, s: usize, refresh: bool, tl: i32, gx: i32, 
     if code != 1 {
         look_put(m, tl, dk, kp, nav_ver, wv, code, 0, 0, 0, false);
     } else {
-        look_put(m, tl, dk, kp, nav_ver, wv, 1, rd(m.nvn1, s), rd(m.nvn2, s), rd(m.nvf, s), rd(m.nvo, s) == 1);
+        let r = m.nv.add(s * NV_STRIDE);
+        let fo = *r.add(NV_FO);
+        look_put(m, tl, dk, kp, nav_ver, wv, 1, *r.add(NV_N1), *r.add(NV_N2), fo >> 1, (fo & 1) != 0);
     }
     code
 }
@@ -1411,15 +1408,7 @@ unsafe fn flow_look_calc(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, d
             k += 1;
         }
     }
-    wr(m.nvt, s, tl);
-    wr(m.nvd, s, dk);
-    wr(m.nvv, s, nav_ver);
-    wr(m.nvw, s, wv);
-    wr(m.nvg, s, fgen);
-    wr(m.nvn1, s, n1);
-    wr(m.nvn2, s, n2);
-    wr(m.nvf, s, far);
-    wr(m.nvo, s, if open { 1 } else { 0 });
+    nv_put(m, s, tl, dk, nav_ver, wv, fgen, n1, n2, far, open);
     1
 }
 
@@ -1475,11 +1464,16 @@ pub unsafe extern "C" fn mv_step(a: *const i32, s0: i32, end: i32) {
     // (The steady step's tick tests as masks: the aggro look ticks are
     // (t + id) & 3 with four acquisition ticks; else every lane one by one.)
     let fast = p.acq_t == 4 && p.tr > 0;
-    while fast && s + 4 <= end {
+    // (The last group too, its missing lanes masked: which path a unit takes
+    // must not depend on where its slot falls, which differs between peers;
+    // the vector and scalar steps leave different steady windows.)
+    while fast && s < end {
+        let n = (end - s).min(4);
+        let valid = (1i32 << n) - 1;
         let mut mvd = 0;
-        let done = step4(&m, &p, s, &mut mvd);
-        if done != 15 {
-            for l in 0..4 {
+        let done = step4(&m, &p, s, &mut mvd, valid);
+        if done != valid {
+            for l in 0..n {
                 if done & (1 << l) == 0 {
                     step_slot(&m, &p, s + l);
                 }
@@ -1513,7 +1507,7 @@ unsafe fn ld_i8x4(p: *const i8) -> v128 {
 /// spent and output by tile).
 #[cfg_attr(not(feature = "prof"), inline(always))]
 #[cfg_attr(feature = "prof", inline(never))]
-unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32) -> i32 {
+unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
     let t = m.t;
     let ti = i32x4_splat(t);
     let zero = i32x4_splat(0);
@@ -1521,14 +1515,31 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32) -> i32 {
     let on = ld_u8x4(m.on.add(s));
     let fl = ld_u8x4(m.fl.add(s));
     let dead = ld_u8x4(m.dead.add(s));
-    let mut ok = v128_and(v128_and(i32x4_eq(on, one), i32x4_ne(v128_and(fl, i32x4_splat(64)), zero)), i32x4_eq(dead, zero));
+    // (valid: the group's lanes holding slots, the last group's fewer.)
+    let vm = i32x4_ne(v128_and(i32x4_splat(valid), i32x4(1, 2, 4, 8)), zero);
+    let mut ok = v128_and(vm, v128_and(v128_and(i32x4_eq(on, one), i32x4_ne(v128_and(fl, i32x4_splat(64)), zero)), i32x4_eq(dead, zero)));
     if m.brain {
         ok = v128_and(ok, i32x4_eq(ld_u8x4(m.cmode.add(s)), zero));
     }
     if m.steady.is_null() {
         return 0;
     }
+    // (Counters: why flow lanes leave the vector step. 20 candidates, 21
+    // window over, 22 rejected after the window (state, tile, floor), 23
+    // leaving their tile, 24 field not as made, 25 on 1 without flag 64.)
+    #[cfg(feature = "dbgc")]
+    let cand0 = i32x4_bitmask(ok) as i32;
+    #[cfg(feature = "dbgc")]
+    {
+        dbgc!(m, 20, cand0.count_ones());
+        let on1 = i32x4_bitmask(v128_and(i32x4_eq(on, one), i32x4_eq(v128_and(fl, i32x4_splat(64)), zero))) as i32;
+        dbgc!(m, 25, on1.count_ones());
+    }
     ok = v128_and(ok, i32x4_lt(ti, v128_load(m.steady.add(s) as *const v128)));
+    #[cfg(feature = "dbgc")]
+    let cand1 = i32x4_bitmask(ok) as i32;
+    #[cfg(feature = "dbgc")]
+    dbgc!(m, 21, (cand0 & !cand1).count_ones());
     if i32x4_bitmask(ok) == 0 {
         return 0;
     }
@@ -1550,8 +1561,46 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32) -> i32 {
     let nx = i32x4_add(x, q8x4(vx));
     let ny = i32x4_add(y, q8x4(vy));
     let stay = v128_and(i32x4_eq(tile4(m, nx), gx), i32x4_eq(tile4(m, ny), gy));
-    ok = v128_and(ok, v128_or(stay, i32x4_ne(v128_and(fl, i32x4_splat(32)), zero)));
+    #[cfg(feature = "dbgc")]
+    {
+        // (26 dead energy / absent from the index, 27 committed tile not
+        // this one, 28 floor tile not this one.)
+        let alive = v128_and(f32x4_gt(v128_load(m.en.add(s) as *const v128), f32x4_splat(0.0)), v128_not(i32x4_eq(v128_load(m.sep.add(s) as *const v128), i32x4_splat(p.absent as u32 as i32))));
+        let a = cand1 & !(i32x4_bitmask(alive) as i32);
+        dbgc!(m, 26, a.count_ones());
+        let c = cand1 & !a & !(i32x4_bitmask(i32x4_eq(tl, v128_load(m.ctl.add(s) as *const v128))) as i32);
+        dbgc!(m, 27, c.count_ones());
+        let f = cand1 & !a & !c & !(i32x4_bitmask(i32x4_eq(tl, v128_load(m.floor.add(s) as *const v128))) as i32);
+        dbgc!(m, 28, f.count_ones());
+        let c2 = i32x4_bitmask(ok) as i32;
+        dbgc!(m, 22, (cand1 & !c2).count_ones());
+        let c3 = c2 & i32x4_bitmask(v128_or(stay, i32x4_ne(v128_and(fl, i32x4_splat(32)), zero))) as i32;
+        dbgc!(m, 23, (c2 & !c3).count_ones());
+    }
+    let fly4 = i32x4_ne(v128_and(fl, i32x4_splat(32)), zero);
+    // (Ground lanes stepping into another tile: taken when that tile is open
+    // to them (step_flow's commit without a slide, flow_slide 0), checked
+    // one by one: few lanes cross on a tick.)
+    let cross = i32x4_bitmask(v128_andnot(ok, v128_or(stay, fly4))) as i32;
+    ok = v128_and(ok, v128_or(stay, fly4));
     let mut bits = i32x4_bitmask(ok) as i32;
+    if cross != 0 {
+        let ngx: [i32; 4] = core::mem::transmute(tile4(m, nx));
+        let ngy: [i32; 4] = core::mem::transmute(tile4(m, ny));
+        for l in 0..4usize {
+            if cross & (1 << l) == 0 || ngx[l] < 0 || ngx[l] >= m.w || ngy[l] < 0 || ngy[l] >= m.h {
+                continue;
+            }
+            let np = rd(m.npr, s + l) as usize;
+            let wl = if np < NAV_PROFILES && !m.nav.get_unchecked(np).walls.is_null() { m.nav.get_unchecked(np).walls } else { m.wall };
+            if rd(wl, (ngy[l] * m.w + ngx[l]) as usize) == 0 {
+                bits |= 1 << l;
+                dbgc!(m, 30);
+            }
+        }
+    }
+    #[cfg(feature = "dbgc")]
+    let cand4 = bits;
     if bits == 0 {
         return 0;
     }
@@ -1571,6 +1620,7 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32) -> i32 {
     };
     if same(fl4) && same(fg4) && same(dk4) {
         if !field_ok(i32x4_extract_lane::<0>(fl4), i32x4_extract_lane::<0>(fg4), i32x4_extract_lane::<0>(dk4)) {
+            dbgc!(m, 24, cand4.count_ones());
             return 0;
         }
     } else {
@@ -1584,6 +1634,27 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32) -> i32 {
             }
         }
     }
+    #[cfg(feature = "dbgc")]
+    dbgc!(m, 24, (cand4 & !bits).count_ones());
+    // The floor's once-a-second look (step_flow's: a trap may have been
+    // built under a unit standing in its tile), here rather than ending the
+    // steady window: a lane on its second's tick standing on a hostile
+    // structure goes to step_slot.
+    if bits != 0 && p.tr > 0 {
+        let due = i32x4_bitmask(i32x4_eq(urem4(i32x4_add(ti, v128_load(m.id.add(s) as *const v128)), p.tr), zero)) as i32 & bits;
+        if due != 0 {
+            let tla: [i32; 4] = core::mem::transmute(tl);
+            for l in 0..4usize {
+                if due & (1 << l) != 0 {
+                    let code = rd(m.sc, tla[l] as usize) as i32;
+                    if code != -1 && code != rd(m.own, s + l) as i32 {
+                        bits &= !(1 << l);
+                        dbgc!(m, 29);
+                    }
+                }
+            }
+        }
+    }
     if bits == 0 {
         return 0;
     }
@@ -1594,15 +1665,25 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32) -> i32 {
     };
     st(m.px.add(s) as *mut v128, x);
     st(m.py.add(s) as *mut v128, y);
-    st(m.vx.add(s) as *mut v128, vx);
-    st(m.vy.add(s) as *mut v128, vy);
+    // (The velocity is the committed step's after its first tick: stored
+    // only when a lane's differs, so a steady stepper's lines stay clean.)
+    let pvx = m.vx.add(s) as *mut v128;
+    let pvy = m.vy.add(s) as *mut v128;
+    let ovx = v128_load(pvx);
+    let ovy = v128_load(pvy);
+    if v128_any_true(v128_and(mk, v128_or(v128_xor(ovx, vx), v128_xor(ovy, vy)))) {
+        v128_store(pvx, v128_bitselect(vx, ovx, mk));
+        v128_store(pvy, v128_bitselect(vy, ovy, mk));
+    }
     st(m.x.add(s) as *mut v128, nx);
     st(m.y.add(s) as *mut v128, ny);
     // (Bytes of the four lanes at once: d0 0, spent 1 when it left its
     // tile, out 3 then else 1, the step mark.)
     let gone = v128_not(stay);
     *mvd |= (i32x4_bitmask(v128_or(i32x4_ne(nx, x), i32x4_ne(ny, y))) as i32) & bits;
-    st_u8x4(m.d0.add(s), zero, mk);
+    if (m.d0.add(s) as *const u32).read_unaligned() != 0 {
+        st_u8x4(m.d0.add(s), zero, mk);
+    }
     st_u8x4(m.spent.add(s), v128_and(gone, one), mk);
     st_u8x4(m.out.add(s), v128_bitselect(i32x4_splat(3), one, gone), mk);
     st_u8x4(m.stept.add(s - m.stepbase), one, mk);
@@ -1998,31 +2079,36 @@ pub unsafe extern "C" fn mv_move(a: *const i32, s0: i32, end: i32, chunk: i32) {
     let mut s = b0;
     while s < e {
         let n = (e - s).min(4);
-        let mut done = 0i32;
+        // (The last group's missing lanes count as done for the vector
+        // passes, which then run on every group: which path a unit takes must
+        // not depend on where its slot falls (that differs between peers:
+        // the vector and scalar paths keep different caches, e.g. steady
+        // windows). `done` and `known` below hold the group's own lanes.)
+        let valid = (1i32 << n) - 1;
+        let pad = 15 & !valid;
+        let mut done = pad;
         // (Lanes whose sepMov the vector paths know: known, moved.)
         let mut mvd = 0i32;
-        let mut known = 0i32;
-        if n == 4 {
-            if fast {
-                done = step4(&m, &sp, s, &mut mvd);
-            }
-            if m.brain && done != 15 {
-                let c = combat4(&m, &p, s, done, &mut mvd);
-                dbgc!(m, 2, (c & 15).count_ones());
-                done |= c;
-            }
-            if fast && done != 15 {
-                let c = park4(&m, &sp, s, done);
-                dbgc!(m, 3, (c & 15).count_ones());
-                done |= c;
-            }
-            known = done;
-            if done != 15 {
-                let c = idle4(&m, s, done);
-                dbgc!(m, 19, (c & 15).count_ones());
-                done |= c;
-            }
+        if fast {
+            done |= step4(&m, &sp, s, &mut mvd, valid);
         }
+        if m.brain && done != 15 {
+            let c = combat4(&m, &p, s, done, &mut mvd);
+            dbgc!(m, 2, (c & 15).count_ones());
+            done |= c;
+        }
+        if fast && done != 15 {
+            let c = park4(&m, &sp, s, done);
+            dbgc!(m, 3, (c & 15).count_ones());
+            done |= c;
+        }
+        let known = done & valid;
+        if done != 15 {
+            let c = idle4(&m, s, done);
+            dbgc!(m, 19, (c & 15).count_ones());
+            done |= c;
+        }
+        done &= valid;
         dbgc!(m, 0, n);
         dbgc!(m, 1, (done & 15).count_ones());
         // (The lanes done: their fire bytes cleared, four at once.)
@@ -2034,7 +2120,7 @@ pub unsafe extern "C" fn mv_move(a: *const i32, s0: i32, end: i32, chunk: i32) {
                 fp.write_unaligned(fv & !km);
             }
         }
-        if done == 15 && n == 4 {
+        if done == valid {
             // (Nothing scalar left in the group.)
         } else {
         for l in 0..n {
@@ -2938,10 +3024,11 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     if lk == -2 {
         back!();
     }
-    let n1 = rd(m.nvn1, s);
-    let n2 = rd(m.nvn2, s);
-    let far = rd(m.nvf, s);
-    let open = rd(m.nvo, s) == 1;
+    let nr = m.nv.add(s * NV_STRIDE);
+    let n1 = *nr.add(NV_N1);
+    let n2 = *nr.add(NV_N2);
+    let far = *nr.add(NV_FO) >> 1;
+    let open = (*nr.add(NV_FO) & 1) != 0;
     wr(m.nld, s, nav_ld);
     let kx = irem_f(far, w);
     let ky = idiv(far - kx, w);
@@ -3016,12 +3103,16 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
             vy = 0.0;
         }
     }
+    if rd(m.ctl, s) == tl { dbgc!(m, 33); }
     wr(m.cd, s, dk);
     wr(m.ct, s, t);
     wr(m.cvx, s, vx);
     wr(m.cvy, s, vy);
     wr(m.ctl, s, tl);
     let cn = if (dx0 - gx).abs() <= 8 && (dy0 - gy).abs() <= 8 { SIM_STEER_NEAR_TICKS } else { SIM_STEER_TICKS };
+    // (Counters: 31 steers near the destination, 32 far, 33 steers in the
+    // tile the last one was made in.)
+    dbgc!(m, if cn == SIM_STEER_NEAR_TICKS { 31 } else { 32 });
     wr(m.cn, s, cn);
     commit_step(m, s, x, y, vx, vy, gx, gy, tl, p.q, p.iq);
     if !m.steady.is_null() {
@@ -3041,7 +3132,8 @@ unsafe fn steady_until(m: &Mv, s: usize, t: i32, end: i32, f: u8, tr: i32, acq_t
         return 0;
     }
     let next = |k: i32| -> i32 { if k <= 0 { t + 1 } else { t + (k - irem_f(tw, k)) } };
-    let mut u = end.min(next(tr));
+    // (Not the second's tick: step4 takes the floor's look itself.)
+    let mut u = end;
     if (f & 16) != 0 && !m.brain {
         u = u.min(next(4)).min(next(acq_t.max(1).min(1 << 20) as i32));
     }

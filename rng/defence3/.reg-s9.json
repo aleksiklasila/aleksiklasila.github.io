@@ -1,0 +1,874 @@
+[
+  {
+    "mode": "0",
+    "file": "adjacency-dirty-set.test.cjs",
+    "status": 0,
+    "output": "PASS: adjacency dirty set (1977 takes)\n",
+    "timedOut": false,
+    "elapsedMs": 844
+  },
+  {
+    "mode": "0",
+    "file": "box-selection-index.test.cjs",
+    "status": 0,
+    "output": "PASS: 40 randomized 3D selections match exhaustive tile traversal, including model-only hits, interpolation, fog, mines and duplicate building representations.\n",
+    "timedOut": false,
+    "elapsedMs": 378
+  },
+  {
+    "mode": "0",
+    "file": "background-chain.test.cjs",
+    "status": 0,
+    "output": "PASS: background chains run in order, each chunk once, across lane reuse (0 helpers: 1016 chains, 1 helpers: 995 chains, 7 helpers: 1048 chains)\n",
+    "timedOut": false,
+    "elapsedMs": 1561
+  },
+  {
+    "mode": "0",
+    "file": "collector-farms.test.cjs",
+    "status": 0,
+    "output": "PASS: farm discovery, group orders, collection, mixed targets and deterministic peer replay.\n",
+    "timedOut": false,
+    "elapsedMs": 265
+  },
+  {
+    "mode": "0",
+    "file": "combat-effects.test.cjs",
+    "status": 0,
+    "output": "PASS: role-specific attack effects, runes, expiry, culling, rewinds, lobbed shots, 2D flattening and laser fences.\n",
+    "timedOut": false,
+    "elapsedMs": 189
+  },
+  {
+    "mode": "0",
+    "file": "crowd-range-lighting.test.cjs",
+    "status": 0,
+    "output": "PASS: swept push stops at walls, clipped perimeter and identical live shadows.\n",
+    "timedOut": false,
+    "elapsedMs": 288
+  },
+  {
+    "mode": "0",
+    "file": "area-box-kernel.test.cjs",
+    "status": 0,
+    "output": "arena 971 areas, 8739 boxes equal\nislands 971 areas, 8739 boxes equal\ncrossroads 971 areas, 8739 boxes equal\nrandom 971 areas, 8739 boxes equal\nPASS: area box kernel\n",
+    "timedOut": false,
+    "elapsedMs": 3586
+  },
+  {
+    "mode": "0",
+    "file": "drive-by-attack.test.cjs",
+    "status": 1,
+    "output": "evalmachine.<anonymous>:2117\r\nconst _UH_WS = _simHKey('workerState'), _UH_WNR = _simHKey('_workerNextIdleRetargetTick'), _UH_TB = _simHKey('targetBuilding'), _UH_PFA = _simHKey('pathIsFallbackAstar'),\r\n               ^\r\n\r\nReferenceError: _simHKey is not defined\r\n    at evalmachine.<anonymous>:2117:16\r\n    at Script.runInContext (node:vm:149:12)\r\n    at Object.runInContext (node:vm:301:6)\r\n    at Object.<anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\drive-by-attack.test.cjs:34:4)\r\n    at Module._compile (node:internal/modules/cjs/loader:1706:14)\r\n    at Object..js (node:internal/modules/cjs/loader:1839:10)\r\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\r\n    at Function._load (node:internal/modules/cjs/loader:1263:12)\r\n    at TracingChannel.traceSync (node:diagnostics_channel:322:14)\r\n    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)\r\n\r\nNode.js v22.20.0\r\n",
+    "timedOut": false,
+    "elapsedMs": 174
+  },
+  {
+    "mode": "0",
+    "file": "flat-gpu-renderer.test.cjs",
+    "status": 0,
+    "output": "PASS: flat projection/input mapping; 1500 sprites and 400 distinct panels/particles in one GPU draw; layer reuse, GPU-only uploads, painter order, direct GPU presentation and Canvas fallback.\n",
+    "timedOut": false,
+    "elapsedMs": 254
+  },
+  {
+    "mode": "0",
+    "file": "flat-sprite-batch.test.cjs",
+    "status": 0,
+    "output": "PASS: units write panel sprites straight into the batch (lookups once per tick, lit like scene objects); panel canvases are pooled and versioned.\n",
+    "timedOut": false,
+    "elapsedMs": 218
+  },
+  {
+    "mode": "0",
+    "file": "floor-trap-kernel.test.cjs",
+    "status": 0,
+    "output": "trap statuses {\"lava\":30,\"sand\":10,\"poison_puddle\":30} Unit.update calls on trap tiles 0 columns walked [9,10,10,10,10]\nPASS: floor traps applied by the movement kernel\n",
+    "timedOut": false,
+    "elapsedMs": 1560
+  },
+  {
+    "mode": "0",
+    "file": "camera-interactions.test.cjs",
+    "status": 0,
+    "output": "PASS: 2D/3D zoom anchors, 1,120 wheels, 80 rotations, pan limits, focus/view transitions, unchanged gameplay and matching peer hashes.\n",
+    "timedOut": false,
+    "elapsedMs": 4740
+  },
+  {
+    "mode": "0",
+    "file": "graphics-settings.test.cjs",
+    "status": 0,
+    "output": "PASS: graphics presets, validation, persistence, shader variants and shadow-mode wiring.\n",
+    "timedOut": false,
+    "elapsedMs": 144
+  },
+  {
+    "mode": "0",
+    "file": "frame-membership-delta.test.cjs",
+    "status": 0,
+    "output": "PASS 100k-slot death, frozen final position, slot reuse, ordering and restore fallback without survivor writes\n",
+    "timedOut": false,
+    "elapsedMs": 484
+  },
+  {
+    "mode": "0",
+    "file": "group-path-limit.test.cjs",
+    "status": 0,
+    "output": "PASS: 194/194 units of a 5-point order routed while a group whose searches keep failing stays pending ahead of them.\n",
+    "timedOut": false,
+    "elapsedMs": 1367
+  },
+  {
+    "mode": "0",
+    "file": "input-stress.test.cjs",
+    "status": 0,
+    "output": "PASS: 12,000 same-type units, 9,702 buildings, repeated unions, ownership, shared mines, wheel anchoring and inactive input.\n",
+    "timedOut": false,
+    "elapsedMs": 892
+  },
+  {
+    "mode": "0",
+    "file": "jukebox.test.cjs",
+    "status": 0,
+    "output": "PASS: shared links, independent local playback, local volumes, host authority, stale packets, URL validation and autoplay recovery.\n",
+    "timedOut": false,
+    "elapsedMs": 178
+  },
+  {
+    "mode": "0",
+    "file": "deterministic-sort.test.cjs",
+    "status": 0,
+    "output": "PASS: cached deterministic building order equals the comparator sort (1200 checks)\n",
+    "timedOut": false,
+    "elapsedMs": 6726
+  },
+  {
+    "mode": "0",
+    "file": "lane-params-poison.test.cjs",
+    "status": 0,
+    "output": "PASS: lane params poison (160 ticks, 426 units)\n",
+    "timedOut": false,
+    "elapsedMs": 3496
+  },
+  {
+    "mode": "0",
+    "file": "battle-performance.test.cjs",
+    "status": 0,
+    "output": "PASS: worker search visits 655146 -> 1200; 18 visibility comparisons; 1500 stable panels rasterize once across 6 frames.\n",
+    "timedOut": false,
+    "elapsedMs": 14764
+  },
+  {
+    "mode": "0",
+    "file": "laser-links.test.cjs",
+    "status": 1,
+    "output": "evalmachine.<anonymous>:67\r\nfunction _laserTileKey(t) { return t.gy * GRID_W + t.gx; }\r\n                                          ^\r\n\r\nReferenceError: GRID_W is not defined\r\n    at _laserTileKey (evalmachine.<anonymous>:67:43)\r\n    at evalmachine.<anonymous>:83:76\r\n    at Array.sort (<anonymous>)\r\n    at _laserTowerList (evalmachine.<anonymous>:83:61)\r\n    at recalculateLaserConnections (evalmachine.<anonymous>:11:15)\r\n    at evalmachine.<anonymous>:96:1\r\n    at Script.runInContext (node:vm:149:12)\r\n    at Object.runInContext (node:vm:301:6)\r\n    at Object.<anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\laser-links.test.cjs:54:8)\r\n    at Module._compile (node:internal/modules/cjs/loader:1706:14)\r\n\r\nNode.js v22.20.0\r\n",
+    "timedOut": false,
+    "elapsedMs": 155
+  },
+  {
+    "mode": "0",
+    "file": "index-merge.test.cjs",
+    "status": 0,
+    "output": "arena 260 ticks checked, 260 merged builds, 1751 units\nislands 260 ticks checked, 260 merged builds, 1705 units\ncrossroads 260 ticks checked, 260 merged builds, 1717 units\nPASS: merged unit index equals the sorted one\n",
+    "timedOut": false,
+    "elapsedMs": 9667
+  },
+  {
+    "mode": "0",
+    "file": "laser-performance.test.cjs",
+    "status": 0,
+    "output": "PASS: 1000 laser rectangles match exhaustive stable damage order, strict edges, replacement/removal and tick reset; candidates 23433 / 3000000.\n",
+    "timedOut": false,
+    "elapsedMs": 2052
+  },
+  {
+    "mode": "0",
+    "file": "laser-activation.test.cjs",
+    "status": 0,
+    "output": "PASS: lasers placed 2 tiles apart link on construction completion (no extra placement) and fire; [{\"gx\":10,\"gy\":23,\"uc\":false,\"lvl\":1,\"links\":1},{\"gx\":12,\"gy\":23,\"uc\":false,\"lvl\":1,\"links\":1}]\n",
+    "timedOut": false,
+    "elapsedMs": 4711
+  },
+  {
+    "mode": "0",
+    "file": "lod-catalog-cache.test.cjs",
+    "status": 0,
+    "output": "PASS: atlas cache ignores labels, includes new types, and remaps codes after restart.\n",
+    "timedOut": false,
+    "elapsedMs": 186
+  },
+  {
+    "mode": "0",
+    "file": "lockstep-hash-stream.test.cjs",
+    "status": 0,
+    "output": "PASS: streaming lockstep checksum equals the string hash (3000 payloads)\n",
+    "timedOut": false,
+    "elapsedMs": 1167
+  },
+  {
+    "mode": "0",
+    "file": "main-menu-settings.test.cjs",
+    "status": 1,
+    "output": "src/sim/sim_rebase.js:7\r\n    ? WebAssembly.instantiate(Uint8Array.from(atob(SIM_REBASE_WASM_BIN), c => c.charCodeAt(0)))\r\n                                         ^\r\n\r\nReferenceError: atob is not defined\r\n    at src/sim/sim_rebase.js:7:42\r\n    at Script.runInContext (node:vm:149:12)\r\n    at Object.runInContext (node:vm:301:6)\r\n    at Object.<anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\main-menu-settings.test.cjs:38:44)\r\n    at Module._compile (node:internal/modules/cjs/loader:1706:14)\r\n    at Object..js (node:internal/modules/cjs/loader:1839:10)\r\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\r\n    at Function._load (node:internal/modules/cjs/loader:1263:12)\r\n    at TracingChannel.traceSync (node:diagnostics_channel:322:14)\r\n    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)\r\n\r\nNode.js v22.20.0\r\n",
+    "timedOut": false,
+    "elapsedMs": 381
+  },
+  {
+    "mode": "0",
+    "file": "minimap-columns.test.cjs",
+    "status": 0,
+    "output": "PASS: packed minimap matches reference pixels in full/team visibility at both scales.\n",
+    "timedOut": false,
+    "elapsedMs": 248
+  },
+  {
+    "mode": "0",
+    "file": "local-visual-snapshot.test.cjs",
+    "status": 0,
+    "output": "PASS: gameplay projectiles and units survive snapshots; local history, particles and visual RNG stay client-side.\n",
+    "timedOut": false,
+    "elapsedMs": 3498
+  },
+  {
+    "mode": "0",
+    "file": "lod-visible-budget.test.cjs",
+    "status": 0,
+    "output": "PASS visible detail, equal sizes, small-unit zoom, hard budgets, exact masks, reuse, and 12 low/high camera rotations\n",
+    "timedOut": false,
+    "elapsedMs": 2910
+  },
+  {
+    "mode": "0",
+    "file": "mixed-rally-move.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: solo has a unit and barrack\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\mixed-rally-move.test.cjs:24:16 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: null,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 7312
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-border-combat.test.cjs",
+    "status": 0,
+    "output": "PASS: kings fight visible soldiers across area borders in lockstep (153 tick hashes compared, [[0,\"king\",250],[0,\"norm\",28],[0,\"norm\",40],[0,\"norm\",40],[0,\"laser_resistant\",35],[1,\"king\",230],[1,\"laser_resistant\",55],[1,\"norm\",40],[1,\"norm\",40]]).\n",
+    "timedOut": false,
+    "elapsedMs": 3805
+  },
+  {
+    "mode": "0",
+    "file": "kernel-object-equivalence.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: seed 5 islands: kernel and object updates differ at tick 17: 10 fields: P2.astar host=4999693.75 objects=4999752.703125 | P2._resourceFixedValues host=\"{\\\"energy\\\":5120000000,\\\"astar\\\":5119686400,\\\"shrine\\\":0}\" objects=\"{\\\"energy\\\":5120000000,\\\"astar\\\":5119746768,\\\"shrine\\\":0}\" | u48._builderLastWatchY host=864.875 objects=848 | u48._builderLastMoveTick host=16 objects=1 | u49._builderLastWatchX host=31 objects=16 | u49._builderLastWatchY host=846 objects=848 | u49._builderLastMoveTick host=15 objects=1 | u50._builderLastWatchX host=50.625 objects=48 | u50._builderLastWatchY host=829.125 objects=816 | u50._builderLastMoveTick host=14 objects=1\n    at runCase (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\kernel-object-equivalence.test.cjs:104:16)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\kernel-object-equivalence.test.cjs:118:55 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 24077
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-backlog-fairness.test.cjs",
+    "status": 1,
+    "output": "Error: match never started: [[\"host\",true,true,0],[\"guest1\",true,false,0]]\n    at Object.startHostedMatch (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:969:25)\n    at async latencyCase (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-backlog-fairness.test.cjs:8:30)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-backlog-fairness.test.cjs:58:5\n",
+    "timedOut": false,
+    "elapsedMs": 15179
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-concurrency.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: host desynced\n\n12 !== 0\n\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-concurrency.test.cjs:165:16 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 12,\n  expected: 0,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 17307
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-chaos-determinism.test.cjs",
+    "status": 1,
+    "output": "Error: arena: nondeterministic divergence at tick 121 (host vs guest1) in [players]; forced [{\"victim\":\"guest1\",\"tick\":272},{\"victim\":\"guest3\",\"tick\":540}], repairs [[\"host\",[0]],[\"guest1\",[144,308,337,537,562,0]],[\"guest2\",[145,337,537,561,0]],[\"guest3\",[145,337,537,562,0]]]: [{\"tick\":121,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":121,\"a\":\"host\",\"b\":\"guest2\"},{\"tick\":121,\"a\":\"host\",\"b\":\"guest3\"},{\"tick\":122,\"a\":\"host\",\"b\":\"guest1\"}]\n  host saw: [{\"peer\":\"autof4ff6c4a00\",\"tick\":140,\"differs\":[\"players\"]},{\"peer\":\"auto409a0b0500\",\"tick\":140,\"differs\":[\"players\"]},{\"peer\":\"auto7df714df00\",\"tick\":140,\"differs\":[\"players\"]},{\"peer\":\"autof4ff6c4a00\",\"tick\":303,\"differs\":[\"globals\",\"tiles 20-23,28-31: unit 38 snake, unit 199 mole\"]},{\"peer\":\"autof4ff6c4a00\",\"tick\":332,\"differs\":[\"players\"]},{\"peer\":\"auto7df714df00\",\"tick\":332,\"differs\":[\"players\"]},{\"peer\":\"auto409a0b0500\",\"tick\":332,\"differs\":[\"players\"]},{\"peer\":\"autof4ff6c4a00\",\"tick\":533,\"differs\":[\"tiles 32-35,8-11: unit 66 fast, unit 74 boss, unit 77 flying, unit 79 mole, unit 80 mole, unit 204 flying\"]},{\"peer\":\"auto7df714df00\",\"tick\":533,\"differs\":[\"tiles 32-35,8-11: unit 66 fast, unit 74 boss, unit 77 flying, unit 79 mole, unit 80 mole, unit 204 flying\"]},{\"peer\":\"auto409a0b0500\",\"tick\":533,\"differs\":[\"tiles 32-35,8-11: unit 66 fast, unit 74 boss, unit 77 flying, unit 79 mole, unit 80 mole, unit 204 flying\"]},{\"peer\":\"auto409a0b0500\",\"tick\":558,\"differs\":[\"tiles 16-19,24-27: unit 201 norm, unit 199 mole\"]},{\"peer\":\"auto7df714df00\",\"tick\":558,\"differs\":[\"globals\",\"tiles 16-19,24-27: unit 201 norm, unit 199 mole\",\"tiles 12-15,4-7: unit 159 snake, unit 157 laser_resistant, unit 122 norm, elements at 12,4\"]},{\"peer\":\"autof4ff6c4a00\",\"tick\":558,\"differs\":[\"tiles 16-19,24-27: unit 201 norm, unit 199 mole\"]}]\n  patched: host []\n  guest1 [\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":144,\\\"fields\\\":[\\\"P0:astar,_resourceFixedValues\\\"]}]\",\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":308,\\\"fields\\\":[\\\"u38:x,energy\\\"]}]\",\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":337,\\\"fields\\\":[\\\"P0:astar,_resourceFixedValues\\\"]}]\",\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":562,\\\"fields\\\":[\\\"u173:targetUnit\\\"]}]\"]\n  guest2 [\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":145,\\\"fields\\\":[\\\"P0:astar,_resourceFixedValues\\\"]}]\",\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":337,\\\"fields\\\":[\\\"P0:astar,_resourceFixedValues\\\"]}]\",\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":561,\\\"fields\\\":[\\\"u173:targetUnit\\\"]}]\"]\n  guest3 [\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":145,\\\"fields\\\":[\\\"P0:astar,_resourceFixedValues\\\"]}]\",\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":337,\\\"fields\\\":[\\\"P0:astar,_resourceFixedValues\\\"]}]\",\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":562,\\\"fields\\\":[\\\"u159:x,energy,_floorTile\\\",\\\"u173:targetUnit\\\"]}]\"]\n    at chaosMatch (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-chaos-determinism.test.cjs:254:15)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-chaos-determinism.test.cjs:281:40\n",
+    "timedOut": false,
+    "elapsedMs": 23489
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-corruption-fuzz.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: unitTarget: a late repair\n\n3 !== 2\n\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-corruption-fuzz.test.cjs:95:20 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 3,\n  expected: 2,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 19804
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-disconnect.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: blackhole-6s state diverged: [{\"tick\":65,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":65,\"a\":\"host\",\"b\":\"guest2\"},{\"tick\":65,\"a\":\"host\",\"b\":\"guest3\"}]\n\n27 !== 0\n\n    at Object.checkHealthy (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:1020:12)\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-disconnect.test.cjs:40:11 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 27,\n  expected: 0,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 10811
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-cross-engine.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: solar_system: host desynced with foreign math\n\n12 !== 0\n\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-cross-engine.test.cjs:23:20 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 12,\n  expected: 0,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 24784
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-desync-recovery.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: mine: repair took 2000\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-desync-recovery.test.cjs:75:16 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 23027
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-features.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: queues: diverged [{\"tick\":390,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":391,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":392,\"a\":\"host\",\"b\":\"guest1\"}]\n\n18 !== 0\n\n    at assertInSync (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-features.test.cjs:29:12)\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-features.test.cjs:100:9 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 18,\n  expected: 0,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 10003
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-fairness.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: 40ms RTT state diverged: [{\"tick\":320,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":320,\"a\":\"host\",\"b\":\"guest2\"},{\"tick\":325,\"a\":\"host\",\"b\":\"guest1\"}]\n\n10 !== 0\n\n    at Object.checkHealthy (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:1020:12)\n    at latencyCase (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-fairness.test.cjs:43:7)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-fairness.test.cjs:50:15 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 10,\n  expected: 0,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 12745
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-host-migration.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: host left guest1 threw\n+ actual - expected\n\n+ [\n+   \"Error: [tick error, tick 107, total 1] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942',\n+   \"Error: [tick error, tick 129, total 23] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:5294',\n+   \"Error: [tick error, tick 150, total 44] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:5294',\n+   \"Error: [tick error, tick 171, total 65] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:5294',\n+   \"Error: [tick error, tick 192, total 86] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:5294',\n+   \"Error: [tick error, tick 213, total 107] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:529',\n+   \"Error: [tick error, tick 234, total 128] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:529',\n+   \"Error: [tick error, tick 254, total 148] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:529',\n+   \"Error: [tick error, tick 274, total 168] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:529',\n+   \"Error: [tick error, tick 295, total 189] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:529',\n+   \"Error: [tick error, tick 315, total 209] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:529'\n+ ]\n- []\n\n    at Object.checkHealthy (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:1017:16)\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-host-migration.test.cjs:54:11 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: [Array],\n  expected: [],\n  operator: 'deepStrictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 6431
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-late-seal.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: slow link state diverged: [{\"tick\":65,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":70,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":75,\"a\":\"host\",\"b\":\"guest1\"}]\n\n5 !== 0\n\n    at Object.checkHealthy (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:1020:12)\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-late-seal.test.cjs:106:11 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 5,\n  expected: 0,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 18085
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-lobby.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: late spectator late threw\n+ actual - expected\n\n+ [\n+   \"Error: [tick error, tick 65, total 1] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:',\n+   \"Error: [tick error, tick 87, total 23] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942',\n+   \"Error: [tick error, tick 113, total 37] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:5294',\n+   \"Error: [tick error, tick 135, total 59] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:5294',\n+   \"Error: [tick error, tick 156, total 80] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:5294',\n+   \"Error: [tick error, tick 181, total 100] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:529',\n+   \"Error: [tick error, tick 202, total 121] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:529',\n+   \"Error: [tick error, tick 223, total 143] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:529',\n+   \"Error: [tick error, tick 244, total 164] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:529'\n+ ]\n- []\n\n    at Object.checkHealthy (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:1017:16)\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-lobby.test.cjs:120:11 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: [Array],\n  expected: [],\n  operator: 'deepStrictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 12924
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-network-profiles.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: wan state diverged: [{\"tick\":130,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":135,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":140,\"a\":\"host\",\"b\":\"guest1\"}]\n\n10 !== 0\n\n    at Object.checkHealthy (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:1020:12)\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-network-profiles.test.cjs:30:11 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 10,\n  expected: 0,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 9457
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-action-fuzz.test.cjs",
+    "status": 0,
+    "output": "PASS: action fuzz\n  targeted: 2 of the host's buildings and 3 units attacked with every command kind: untouched\n  30s of malformed commands from one guest: no errors, no divergence, 20.0 TPS\n",
+    "timedOut": false,
+    "elapsedMs": 96054
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-patch.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: crossroads: restored guest differs from host 1 ticks after the restore: 148 fields: P0._resourceFixedValues differs in shrine:322936/322987 | P0.shrine host=315.3671875 guest=315.4169921875 | P0.shrineCarry host=\"[\\\"~a\\\",0.7749994015321136,0.7749994015321136]\" guest=\"[\\\"~a\\\",0.5199994072318077,0.5199994072318077]\" | P1._resourceFixedValues differs in shrine:210548/210599 | P1.shrine host=205.61328125 guest=205.6630859375 | P1.shrineCarry host=\"[\\\"~a\\\",0.7549994243308902,0.7549994243308902]\" guest=\"[\\\"~a\\\",0.49999943003058434,0.49999943003058434]\" | P2._resourceFixedValues differs in shrine:631252/630934 | P2.shrine host=616.45703125 guest=616.146484375\n    at mapCase (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-patch.test.cjs:78:20)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-patch.test.cjs:171:56 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 10726
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-rematch.test.cjs",
+    "status": 0,
+    "output": "PASS: rematch\n  vote shown to all; one-click rematch running for everyone 4200ms later, same teams and settings, in sync\n  guest gone at game over: rematch started without them after 4200ms\n  three back-to-back rematches: clean start and in sync each time\n",
+    "timedOut": false,
+    "elapsedMs": 17561
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-scenarios.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: build/stack/research: diverged at tick 328 (host/guest1) in [players]\n    at assertLockstepClean (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-scenarios.test.cjs:37:16)\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-scenarios.test.cjs:115:9 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: undefined,\n  expected: undefined,\n  operator: 'fail',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 5471
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-snapshot.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: round 0: restored peers evolve differently\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-snapshot.test.cjs:32:16 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 9336
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-scale-interactions.test.cjs",
+    "status": 0,
+    "output": "PASS: tiny-eight-teams: 24 starting norm, 576 gestures, 833 exact comparisons, no repairs.\nPASS: huge-four-teams-mines: 320 starting collector, 288 gestures, 357 exact comparisons, no repairs.\nPASS: dense-snakes: 1200 starting snake, 144 gestures, 119 exact comparisons, no repairs.\nPASS: healers-portals: 800 starting healer_unit, 144 gestures, 119 exact comparisons, no repairs.\n",
+    "timedOut": false,
+    "elapsedMs": 34060
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-matrix.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: 2v1v1 random unstable: [{\"tick\":273,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":273,\"a\":\"host\",\"b\":\"guest2\"},{\"tick\":273,\"a\":\"host\",\"b\":\"guest3\"}]\n\n51 !== 0\n\n    at runCase (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-matrix.test.cjs:58:12)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-matrix.test.cjs:78:37 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 51,\n  expected: 0,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 58097
+  },
+  {
+    "mode": "0",
+    "file": "nav-background.test.cjs",
+    "status": 0,
+    "output": "PASS: navigation background build 3 helpers: 3 rebuilds equal, 0 helpers: 3 rebuilds equal\n",
+    "timedOut": false,
+    "elapsedMs": 3194
+  },
+  {
+    "mode": "0",
+    "file": "nav-build-kernels.test.cjs",
+    "status": 0,
+    "output": "PASS: nav build kernels 6 maps\n",
+    "timedOut": false,
+    "elapsedMs": 2605
+  },
+  {
+    "mode": "0",
+    "file": "nav-crowd-arrival.test.cjs",
+    "status": 0,
+    "output": "PASS: move and attack-move require a friendly crowd before arriving short.\n",
+    "timedOut": false,
+    "elapsedMs": 968
+  },
+  {
+    "mode": "0",
+    "file": "nav-reach.test.cjs",
+    "status": 0,
+    "output": "{\"build\":\"39 parts, 2 components\",\"aTicks\":207,\"aTile\":[42,36],\"aCmd\":1,\"bTiles\":[[63,32],[62,32],[63,32]],\"bCmd\":[1,1,1],\"bPending\":[true,true,true],\"bDist\":[5,5,5],\"bTicks\":433,\"bAfter\":[[62,37],[63,37],[62,37]],\"bCmdAfter\":[1,0,1],\"cTile\":[35,54],\"cCmd\":1,\"cPending\":false,\"searches\":0}\nPASS: flow navigation reach (39 parts, 2 components; A in 207 ticks, B on after opening in 433)\n",
+    "timedOut": false,
+    "elapsedMs": 2144
+  },
+  {
+    "mode": "0",
+    "file": "nav-rows.test.cjs",
+    "status": 0,
+    "output": "crossroads (3 helpers): 64 parts; fields and rows equal their own: 300 before the rebuild, then 300 / 300 / 300 asked before / in its window / after (298 / 298 rows shared)\nislands (3 helpers): 64 parts; fields and rows equal their own: 300 before the rebuild, then 300 / 300 / 300 asked before / in its window / after (298 / 298 rows shared)\narena (3 helpers): 64 parts; fields and rows equal their own: 300 before the rebuild, then 300 / 300 / 300 asked before / in its window / after (298 / 298 rows shared)\ncrossroads (0 helpers): 64 parts; fields and rows equal their own: 300 before the rebuild, then 300 / 300 / 300 asked before / in its window / after (298 / 298 rows shared)\nislands (0 helpers): 64 parts; fields and rows equal their own: 300 before the rebuild, then 300 / 300 / 300 asked before / in its window / after (298 / 298 rows shared)\narena (0 helpers): 64 parts; fields and rows equal their own: 300 before the rebuild, then 300 / 300 / 300 asked before / in its window / after (298 / 298 rows shared)\nPASS: destination fields and shared rows equal their own searches, across a rebuild window\n",
+    "timedOut": false,
+    "elapsedMs": 6919
+  },
+  {
+    "mode": "0",
+    "file": "parallel-kernels.test.cjs",
+    "status": 0,
+    "output": "PASS: parallel kernels match the serial code (visibility: 18 checks, 987 lit tiles at most).\n",
+    "timedOut": false,
+    "elapsedMs": 3908
+  },
+  {
+    "mode": "0",
+    "file": "path-regions-incremental.test.cjs",
+    "status": 0,
+    "output": "arena 1459 wall changes, 114 full rebuilds, partitions equal\nislands 1500 wall changes, 108 full rebuilds, partitions equal\ncrossroads 1469 wall changes, 120 full rebuilds, partitions equal\nPASS: path regions kept incrementally\n",
+    "timedOut": false,
+    "elapsedMs": 3880
+  },
+  {
+    "mode": "0",
+    "file": "path-regions-portals.test.cjs",
+    "status": 0,
+    "output": "arena 322 checks, 26 portals, 1 plain rebuilds, partitions equal\nislands 318 checks, 25 portals, 1 plain rebuilds, partitions equal\ncrossroads 320 checks, 18 portals, 1 plain rebuilds, partitions equal\nPASS: path regions with portals\n",
+    "timedOut": false,
+    "elapsedMs": 2908
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-ui-fuzz.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: diverged: [{\"tick\":128,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":128,\"a\":\"host\",\"b\":\"guest2\"},{\"tick\":128,\"a\":\"host\",\"b\":\"guest3\"}]\n\n294 !== 0\n\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-ui-fuzz.test.cjs:121:12 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 294,\n  expected: 0,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 31227
+  },
+  {
+    "mode": "0",
+    "file": "performance-regressions.test.cjs",
+    "status": 1,
+    "output": "evalmachine.<anonymous>:3798\r\n            const gl = this.gl, W = this.sceneTargetSize.width, H = this.sceneTargetSize.height;\r\n                                                         ^\r\n\r\nTypeError: Cannot read properties of undefined (reading 'width')\r\n    at Defence3Renderer3D.drawSelectionMask (evalmachine.<anonymous>:3798:58)\r\n    at Defence3Renderer3D.render (evalmachine.<anonymous>:6328:18)\r\n    at Object.<anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\performance-regressions.test.cjs:223:3)\r\n    at Module._compile (node:internal/modules/cjs/loader:1706:14)\r\n    at Object..js (node:internal/modules/cjs/loader:1839:10)\r\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\r\n    at Function._load (node:internal/modules/cjs/loader:1263:12)\r\n    at TracingChannel.traceSync (node:diagnostics_channel:322:14)\r\n    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)\r\n    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)\r\n\r\nNode.js v22.20.0\r\n",
+    "timedOut": false,
+    "elapsedMs": 409
+  },
+  {
+    "mode": "0",
+    "file": "presentation-worker.test.cjs",
+    "status": 0,
+    "output": "PASS: independent shared reader, bounded pool, newest-frame backpressure, slot reuse, immutable outputs and stale returns\n",
+    "timedOut": false,
+    "elapsedMs": 164
+  },
+  {
+    "mode": "0",
+    "file": "rebase-frame.test.cjs",
+    "status": 0,
+    "output": "PASS: interpolation rebase matches reference for idle/moving/dead/reused/new slots and conservative bounds.\n",
+    "timedOut": false,
+    "elapsedMs": 234
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-extremes.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: guest1 needed a repair\n\n3 !== 1\n\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-extremes.test.cjs:74:16 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 3,\n  expected: 1,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 130560
+  },
+  {
+    "mode": "0",
+    "file": "render-scale.test.cjs",
+    "status": 0,
+    "output": "PASS persistent GPU pages, interpolation, removal, history, chunks and large-map projection\n",
+    "timedOut": false,
+    "elapsedMs": 350
+  },
+  {
+    "mode": "0",
+    "file": "renderer3d-frustum.test.cjs",
+    "status": 0,
+    "output": "PASS: 3D same-type selection, render bounds, and minimap use the active camera frustum.\n",
+    "timedOut": false,
+    "elapsedMs": 212
+  },
+  {
+    "mode": "0",
+    "file": "renderer3d-overlap-fade.test.cjs",
+    "status": 0,
+    "output": "PASS: towers and mines ease symmetrically between full height and a partial occupied height.\n",
+    "timedOut": false,
+    "elapsedMs": 224
+  },
+  {
+    "mode": "0",
+    "file": "renderer3d-panels.test.cjs",
+    "status": 0,
+    "output": "PASS: unit panels use exact 2D renders at every LOD and barrack roof markers are absent.\n",
+    "timedOut": false,
+    "elapsedMs": 208
+  },
+  {
+    "mode": "0",
+    "file": "renderer3d-picking.test.cjs",
+    "status": 0,
+    "output": "PASS: mesh picking covers heads, silhouette gaps, squashing, depth, adjacent targets, animation and clipping; box selection follows the drawn mesh.\n",
+    "timedOut": false,
+    "elapsedMs": 273
+  },
+  {
+    "mode": "0",
+    "file": "renderer3d-walk-surfaces.test.cjs",
+    "status": 0,
+    "output": "PASS: low floors, smooth ramps, flat centers, flight, snake heads, cached layers, removal and preview exclusion.\n",
+    "timedOut": false,
+    "elapsedMs": 232
+  },
+  {
+    "mode": "0",
+    "file": "render-frame-stability.test.cjs",
+    "status": 1,
+    "output": "scale path: 233 of 233 frames; least drawn [710,3000]\nzoom getMinCameraZoom(): 323 frames over 61 ticks, ~0 structures, ~0 units drawn; structures {\"gaps\":0,\"pops\":0,\"example\":null} units {\"gaps\":0,\"pops\":0,\"example\":null}\nAssertionError [ERR_ASSERTION]: the scene is drawn\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\render-frame-stability.test.cjs:205:20 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 20199
+  },
+  {
+    "mode": "0",
+    "file": "resource-penalty-stats.test.cjs",
+    "status": 0,
+    "output": "PASS: resource penalty rebuild matches a full stat rebuild at 6 stockpile values (worst 0.00 ms vs full 0.00 ms).\n",
+    "timedOut": false,
+    "elapsedMs": 4560
+  },
+  {
+    "mode": "0",
+    "file": "selection-performance.test.cjs",
+    "status": 0,
+    "output": "PASS: 1200 selections -> 338 boundary edges; separated clusters, holes, interpolation, rally transforms, membership and depth-tested GPU batching.\n",
+    "timedOut": false,
+    "elapsedMs": 468
+  },
+  {
+    "mode": "0",
+    "file": "separation-jitter.test.cjs",
+    "status": 0,
+    "output": "PASS: crowd separation (helpers, 10/s per unit, spread pushes) about as smooth and spaced as every-tick separation: seed 5/1: visible back-and-forth 0.0000/0.0000 (0.0000/0.0000 px), step 0.040/0.080, overlap 0.054/0.534 (teams 0.000/0.000), max move 10.6/2.7; seed 17/1: visible back-and-forth 0.0001/0.0000 (0.0000/0.0000 px), step 0.044/0.078, overlap 0.052/0.559 (teams 0.000/0.000), max move 9.6/2.7; seed 5/2: visible back-and-forth 0.0002/0.0000 (0.0000/0.0000 px), step 0.047/0.080, overlap 0.036/0.518 (teams 0.000/0.000), max move 10.6/2.7; seed 17/2: visible back-and-forth 0.0003/0.0000 (0.0001/0.0000 px), step 0.050/0.078, overlap 0.035/0.554 (teams 0.000/0.000), max move 9.6/2.7\n",
+    "timedOut": false,
+    "elapsedMs": 11618
+  },
+  {
+    "mode": "0",
+    "file": "settings-persistence.test.cjs",
+    "status": 0,
+    "output": "PASS: settings defaults, round trip, legacy outlines, and audio recovery.\n",
+    "timedOut": false,
+    "elapsedMs": 183
+  },
+  {
+    "mode": "0",
+    "file": "pathfinding-routing.test.cjs",
+    "status": 0,
+    "output": "group order: 4566 vs 14775 nodes; crowd 1118 vs 1118 ticks; identical routes 150\nPASS: 1000 shared requests, 215 expansions, 39.1ms; shortest paths, replay and movement checks passed.\n",
+    "timedOut": false,
+    "elapsedMs": 47003
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-soak.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: guest2-reloaded threw\n+ actual - expected\n\n+ [\n+   \"Error: [tick error, tick 771, total 1] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io',\n+   \"Error: [tick error, tick 793, total 23] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.i',\n+   \"Error: [tick error, tick 814, total 44] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.i',\n+   \"Error: [tick error, tick 835, total 65] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.i',\n+   \"Error: [tick error, tick 856, total 86] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.i',\n+   \"Error: [tick error, tick 877, total 107] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.',\n+   \"Error: [tick error, tick 897, total 129] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.',\n+   \"Error: [tick error, tick 918, total 150] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.',\n+   \"Error: [tick error, tick 939, total 171] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.',\n+   \"Error: [tick error, tick 959, total 191] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.',\n+   \"Error: [tick error, tick 980, total 212] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.',\n+   \"Error: [tick error, tick 1001, total 233] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1022, total 254] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1043, total 275] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1065, total 297] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1086, total 318] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1106, total 338] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1126, total 358] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1147, total 379] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1166, total 398] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1188, total 420] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1209, total 441] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1229, total 461] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1249, total 481] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1270, total 502] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1289, total 521] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1311, total 543] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1331, total 563] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1352, total 584] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1371, total 603] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1392, total 624] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1412, total 644] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1431, total 663] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1449, total 681] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1469, total 701] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1488, total 720] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1506, total 738] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1525, total 757] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1544, total 776] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1564, total 796] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1584, total 816] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1606, total 838] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1626, total 858] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1646, total 878] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1667, total 899] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1688, total 920] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1706, total 938] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1728, total 960] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1749, total 981] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github',\n+   \"Error: [tick error, tick 1768, total 1000] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.githu',\n+   \"Error: [tick error, tick 1789, total 1021] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.githu',\n+   \"Error: [tick error, tick 1808, total 1040] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.githu',\n+   \"Error: [tick error, tick 1831, total 1063] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.githu',\n+   \"Error: [tick error, tick 1853, total 1085] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.githu',\n+   \"Error: [tick error, tick 1873, total 1105] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.githu',\n+   \"Error: [tick error, tick 1893, total 1125] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.githu',\n+   \"Error: [tick error, tick 1913, total 1145] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.githu',\n+   \"Error: [tick error, tick 1933, total 1165] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.githu',\n+   \"Error: [tick error, tick 1953, total 1185] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.githu',\n+   \"Error: [tick error, tick 1973, total 1205] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.githu',\n+   \"Error: [tick error, tick 1993, total 1225] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.githu',\n+   \"Error: [tick error, tick 2013, total 1245] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.githu',\n+   \"Error: [tick error, tick 2033, total 1265] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.githu',\n+   \"Error: [tick error, tick 2052, total 1284] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.githu',\n+   \"Error: [tick error, tick 2074, total 1306] TypeError: Cannot read properties of null (reading 'speed')\\n\" +\n+     '    at Unit.update (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:53437:48)\\n' +\n+     '    at _unitPassUpdate (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\net-harness.cjs:635:21), <anonymous>:52942:7)\\n' +\n+     '    at _forEachUnitInTickOrder (eval at createInstance (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.githu'\n+ ]\n- []\n\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-soak.test.cjs:78:16 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: [Array],\n  expected: [],\n  operator: 'deepStrictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 90413
+  },
+  {
+    "mode": "0",
+    "file": "shared-kernel-threads.test.cjs",
+    "status": 0,
+    "output": "PASS: actual SharedArrayBuffer workers: every separation/frame output byte identical with 0, 1 and 7 helpers over repeated rebindings.\n",
+    "timedOut": false,
+    "elapsedMs": 2095
+  },
+  {
+    "mode": "0",
+    "file": "shared-spatial-order.test.cjs",
+    "status": 0,
+    "output": "PASS: stable shared spatial ordering matches scalar sort with 0, 1, 7 and 11 real helpers, including resize/reuse and uint32 keys.\n",
+    "timedOut": false,
+    "elapsedMs": 1363
+  },
+  {
+    "mode": "0",
+    "file": "shared-unit-state.test.cjs",
+    "status": 0,
+    "output": "PASS: shared unit growth, Float32 precision, stale references, slot reuse, snapshot restore; scalar frame oracle: { compared: 1343958, units: 2024, capacity: 8192 }\n",
+    "timedOut": false,
+    "elapsedMs": 2488
+  },
+  {
+    "mode": "0",
+    "file": "research-queue.test.cjs",
+    "status": 0,
+    "output": "PASS: research queue\n  reported case: R4 moved above R3 stays second, progress 621 kept on R3; queue drained to +2/+1\n  stale queue state heals on the next reorder or dequeue, identically on every peer\n  fuzz seed 1: 3 players, queueResearch:insertAt 42, setAutoResearch 15, queueResearch 45, reorderResearch:top 79, reorderResearch:active 18, dequeueResearch 50, reorderResearch:down 49, moveResearch 11; 27 levels researched, in sync\n  fuzz seed 7: 3 players, reorderResearch:top 79, queueResearch:insertAt 43, setAutoResearch 21, queueResearch 59, reorderResearch:down 37, moveResearch 10, dequeueResearch 54, reorderResearch:active 17; 25 levels researched, in sync\n  fuzz seed 42: 3 players, queueResearch 51, queueResearch:insertAt 31, dequeueResearch 53, reorderResearch:top 90, setAutoResearch 18, reorderResearch:active 14, reorderResearch:down 37, moveResearch 9; 29 levels researched, in sync\n",
+    "timedOut": false,
+    "elapsedMs": 45089
+  },
+  {
+    "mode": "0",
+    "file": "shared-spatial-determinism.test.cjs",
+    "status": 1,
+    "output": "TypeError: Cannot read properties of null (reading 'speed')\n    at Unit.update (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:635:21), <anonymous>:53437:48)\n    at _unitPassUpdate (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:635:21), <anonymous>:52942:7)\n    at _forEachUnitInTickOrder (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:635:21), <anonymous>:64798:13)\n    at _gameTickBody (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:635:21), <anonymous>:65300:9)\n    at gameTick (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:635:21), <anonymous>:65156:11)\n    at eval (eval at eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:635:21)), <anonymous>:1:1)\n    at Object.eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:635:21), <anonymous>:73001:21)\n    at inst.eval (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:652:35)\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\shared-spatial-determinism.test.cjs:33:49\n",
+    "timedOut": false,
+    "elapsedMs": 5195
+  },
+  {
+    "mode": "0",
+    "file": "snake-rendering.test.cjs",
+    "status": 0,
+    "output": "PASS: head-only snakes, no tail state, square model-mounted roof panel with nothing above it.\n",
+    "timedOut": false,
+    "elapsedMs": 134
+  },
+  {
+    "mode": "0",
+    "file": "source-loading.test.cjs",
+    "status": 0,
+    "output": "PASS: 48 local scripts parse; 2D renderer exports its startup and drawing functions.\n",
+    "timedOut": false,
+    "elapsedMs": 356
+  },
+  {
+    "mode": "0",
+    "file": "shrine.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: exact hashes equal\n\n23 !== 0\n\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\shrine.test.cjs:62:12 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 23,\n  expected: 0,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 6559
+  },
+  {
+    "mode": "0",
+    "file": "spawner-queue-performance.test.cjs",
+    "status": 0,
+    "output": "PASS: 120 scheduler replays; ready orders from payments, full queues, caps, failures and 2048 limit; 1000 ready buildings: 500500 -> 1998 readiness checks.\n",
+    "timedOut": false,
+    "elapsedMs": 803
+  },
+  {
+    "mode": "0",
+    "file": "storage-abi.test.cjs",
+    "status": 0,
+    "output": "PASS: storage ABI (114 movement kernel columns match their Rust types; 185 columns, 614 bytes per slot)\n",
+    "timedOut": false,
+    "elapsedMs": 204
+  },
+  {
+    "mode": "0",
+    "file": "structure-render-hotspots.test.cjs",
+    "status": 0,
+    "output": "PASS: 1000 queries against 10000 buildings read 16000 candidates; selection reuse, panel invalidation, and zoomed sprite resolution.\n",
+    "timedOut": false,
+    "elapsedMs": 2286
+  },
+  {
+    "mode": "0",
+    "file": "structure-table.test.cjs",
+    "status": 0,
+    "output": "placed {\"found\":{\"gx\":4,\"gy\":4},\"out\":[[\"pistol\",true,4,4],[\"barrack_norm\",true,5,4],[\"lava\",true,6,4],[\"sand\",true,7,4]],\"mines\":14,\"floorClass\":\"FloorItem\"}\nstructures 23\nPASS: structure table\n",
+    "timedOut": false,
+    "elapsedMs": 2089
+  },
+  {
+    "mode": "0",
+    "file": "structure-targeting.test.cjs",
+    "status": 0,
+    "output": "PASS: +-0.3 tile source windows, structure threat order (turret > trap > building), floor-target projectiles (9 ticks).\n",
+    "timedOut": false,
+    "elapsedMs": 151
+  },
+  {
+    "mode": "0",
+    "file": "team-watch-effects.test.cjs",
+    "status": 0,
+    "output": "PASS: watch effects are team-exclusive, replaceable, deterministic, and granted by scouts.\n",
+    "timedOut": false,
+    "elapsedMs": 145
+  },
+  {
+    "mode": "0",
+    "file": "tier-result-reduction.test.cjs",
+    "status": 1,
+    "output": "evalmachine.<anonymous>:889\r\n    throw new Error('SIM_KERNEL_' + name + ': the Rust kernel cannot run here (wasm module missing or an array outside the wasm heap)');\r\n    ^\r\n\r\nError: SIM_KERNEL_HEAL_CAND: the Rust kernel cannot run here (wasm module missing or an array outside the wasm heap)\r\n    at _simNoWasm (evalmachine.<anonymous>:889:11)\r\n    at _simRust (evalmachine.<anonymous>:897:68)\r\n    at SIM_KERNELS.<computed> [as scan] (evalmachine.<anonymous>:1433:62)\r\n    at Object.<anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\tier-result-reduction.test.cjs:22:50)\r\n    at Module._compile (node:internal/modules/cjs/loader:1706:14)\r\n    at Object..js (node:internal/modules/cjs/loader:1839:10)\r\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\r\n    at Function._load (node:internal/modules/cjs/loader:1263:12)\r\n    at TracingChannel.traceSync (node:diagnostics_channel:322:14)\r\n    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)\r\n\r\nNode.js v22.20.0\r\n",
+    "timedOut": false,
+    "elapsedMs": 134
+  },
+  {
+    "mode": "0",
+    "file": "unit-animations.test.cjs",
+    "status": 0,
+    "output": "PASS: 3D profession/attack animations and their shared audio cues are wired.\n",
+    "timedOut": false,
+    "elapsedMs": 135
+  },
+  {
+    "mode": "0",
+    "file": "unit-collision-smoothness.test.cjs",
+    "status": 1,
+    "output": "collision smoothness {\"reversals\":391,\"samples\":25858,\"ticks\":800,\"back\":297.13229595314414,\"penetration\":0.02381564555532766,\"rate\":0.0151}\nAssertionError [ERR_ASSERTION]: back-and-forth steps: 1.5% of moving unit-ticks\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\unit-collision-smoothness.test.cjs:72:12 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 6670
+  },
+  {
+    "mode": "0",
+    "file": "unit-hidden-class.test.cjs",
+    "status": 1,
+    "output": "<anonymous_script>:72903\r\nplaySound = startLaserSound = stopLaserSound = updateAudioReactiveState = updateItemTextCache = () => {};\r\n                                                                        ^\r\n\r\nReferenceError: updateAudioReactiveState is not defined\r\n    at eval (eval at <anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\large-battle.bench.cjs:110:14), <anonymous>:72903:73)\r\n    at Object.<anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\large-battle.bench.cjs:110:110)\r\n    at Module._compile (node:internal/modules/cjs/loader:1706:14)\r\n    at Object..js (node:internal/modules/cjs/loader:1839:10)\r\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\r\n    at Function._load (node:internal/modules/cjs/loader:1263:12)\r\n    at TracingChannel.traceSync (node:diagnostics_channel:322:14)\r\n    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)\r\n    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)\r\n    at node:internal/main/run_main_module:36:49\r\n\r\nNode.js v22.20.0\r\nnode:child_process:955\r\n    throw err;\r\n    ^\r\n\r\nError: Command failed: C:\\nvm4w\\nodejs\\node.exe Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\large-battle.bench.cjs working\r\n<anonymous_script>:72903\r\r\nplaySound = startLaserSound = stopLaserSound = updateAudioReactiveState = updateItemTextCache = () => {};\r\r\n                                                                        ^\r\r\n\r\r\nReferenceError: updateAudioReactiveState is not defined\r\r\n    at eval (eval at <anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\large-battle.bench.cjs:110:14), <anonymous>:72903:73)\r\r\n    at Object.<anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\large-battle.bench.cjs:110:110)\r\r\n    at Module._compile (node:internal/modules/cjs/loader:1706:14)\r\r\n    at Object..js (node:internal/modules/cjs/loader:1839:10)\r\r\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\r\r\n    at Function._load (node:internal/modules/cjs/loader:1263:12)\r\r\n    at TracingChannel.traceSync (node:diagnostics_channel:322:14)\r\r\n    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)\r\r\n    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)\r\r\n    at node:internal/main/run_main_module:36:49\r\r\n\r\r\nNode.js v22.20.0\r\r\n\r\n    at genericNodeError (node:internal/errors:983:15)\r\n    at wrappedFn (node:internal/errors:537:14)\r\n    at checkExecSyncError (node:child_process:916:11)\r\n    at execFileSync (node:child_process:952:15)\r\n    at Object.<anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\unit-hidden-class.test.cjs:11:17)\r\n    at Module._compile (node:internal/modules/cjs/loader:1706:14)\r\n    at Object..js (node:internal/modules/cjs/loader:1839:10)\r\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\r\n    at Function._load (node:internal/modules/cjs/loader:1263:12)\r\n    at TracingChannel.traceSync (node:diagnostics_channel:322:14) {\r\n  status: 1,\r\n  signal: null,\r\n  output: [\r\n    null,\r\n    '',\r\n    '<anonymous_script>:72903\\r\\n' +\r\n      'playSound = startLaserSound = stopLaserSound = updateAudioReactiveState = updateItemTextCache = () => {};\\r\\n' +\r\n      '                                                                        ^\\r\\n' +\r\n      '\\r\\n' +\r\n      'ReferenceError: updateAudioReactiveState is not defined\\r\\n' +\r\n      '    at eval (eval at <anonymous> (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\large-battle.bench.cjs:110:14), <anonymous>:72903:73)\\r\\n' +\r\n      '    at Object.<anonymous> (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\large-battle.bench.cjs:110:110)\\r\\n' +\r\n      '    at Module._compile (node:internal/modules/cjs/loader:1706:14)\\r\\n' +\r\n      '    at Object..js (node:internal/modules/cjs/loader:1839:10)\\r\\n' +\r\n      '    at Module.load (node:internal/modules/cjs/loader:1441:32)\\r\\n' +\r\n      '    at Function._load (node:internal/modules/cjs/loader:1263:12)\\r\\n' +\r\n      '    at TracingChannel.traceSync (node:diagnostics_channel:322:14)\\r\\n' +\r\n      '    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)\\r\\n' +\r\n      '    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)\\r\\n' +\r\n      '    at node:internal/main/run_main_module:36:49\\r\\n' +\r\n      '\\r\\n' +\r\n      'Node.js v22.20.0\\r\\n'\r\n  ],\r\n  pid: 13620,\r\n  stdout: '',\r\n  stderr: '<anonymous_script>:72903\\r\\n' +\r\n    'playSound = startLaserSound = stopLaserSound = updateAudioReactiveState = updateItemTextCache = () => {};\\r\\n' +\r\n    '                                                                        ^\\r\\n' +\r\n    '\\r\\n' +\r\n    'ReferenceError: updateAudioReactiveState is not defined\\r\\n' +\r\n    '    at eval (eval at <anonymous> (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\large-battle.bench.cjs:110:14), <anonymous>:72903:73)\\r\\n' +\r\n    '    at Object.<anonymous> (Z:\\\\data\\\\gitrepos\\\\aleksiklasila.github.io\\\\rng\\\\defence3\\\\tests\\\\large-battle.bench.cjs:110:110)\\r\\n' +\r\n    '    at Module._compile (node:internal/modules/cjs/loader:1706:14)\\r\\n' +\r\n    '    at Object..js (node:internal/modules/cjs/loader:1839:10)\\r\\n' +\r\n    '    at Module.load (node:internal/modules/cjs/loader:1441:32)\\r\\n' +\r\n    '    at Function._load (node:internal/modules/cjs/loader:1263:12)\\r\\n' +\r\n    '    at TracingChannel.traceSync (node:diagnostics_channel:322:14)\\r\\n' +\r\n    '    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)\\r\\n' +\r\n    '    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)\\r\\n' +\r\n    '    at node:internal/main/run_main_module:36:49\\r\\n' +\r\n    '\\r\\n' +\r\n    'Node.js v22.20.0\\r\\n'\r\n}\r\n\r\nNode.js v22.20.0\r\n",
+    "timedOut": false,
+    "elapsedMs": 394
+  },
+  {
+    "mode": "0",
+    "file": "unit-retirement.test.cjs",
+    "status": 1,
+    "output": "node:assert:150\r\n  throw new AssertionError(obj);\r\n  ^\r\n\r\nAssertionError [ERR_ASSERTION]: sparse compaction preserves every survivor in order\r\n+ actual - expected\r\n... Skipped lines\r\n\r\n  [\r\n    1,\r\n    2,\r\n    3,\r\n+   17002,\r\n+   17003,\r\n    6,\r\n    7,\r\n    8,\r\n    9,\r\n    10,\r\n...\r\n    8191,\r\n+   17004,\r\n+   17005,\r\n    8194,\r\n    8195,\r\n    8196,\r\n    8197,\r\n    8198,\r\n...\r\n    17001,\r\n-   17002,\r\n-   17003,\r\n-   17004,\r\n-   17005\r\n  ]\r\n\r\n    at Object.<anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\unit-retirement.test.cjs:24:8)\r\n    at Module._compile (node:internal/modules/cjs/loader:1706:14)\r\n    at Object..js (node:internal/modules/cjs/loader:1839:10)\r\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\r\n    at Function._load (node:internal/modules/cjs/loader:1263:12)\r\n    at TracingChannel.traceSync (node:diagnostics_channel:322:14)\r\n    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)\r\n    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)\r\n    at node:internal/main/run_main_module:36:49 {\r\n  generatedMessage: false,\r\n  code: 'ERR_ASSERTION',\r\n  actual: [\r\n      1,  2,  3, 17002, 17003,  6,  7,  8,  9, 10, 11,\r\n     12, 13, 14,    15,    16, 17, 18, 19, 20, 21, 22,\r\n     23, 24, 25,    26,    27, 28, 29, 30, 31, 32, 33,\r\n     34, 35, 36,    37,    38, 39, 40, 41, 42, 43, 44,\r\n     45, 46, 47,    48,    49, 50, 51, 52, 53, 54, 55,\r\n     56, 57, 58,    59,    60, 61, 62, 63, 64, 65, 66,\r\n     67, 68, 69,    70,    71, 72, 73, 74, 75, 76, 77,\r\n     78, 79, 80,    81,    82, 83, 84, 85, 86, 87, 88,\r\n     89, 90, 91,    92,    93, 94, 95, 96, 97, 98, 99,\r\n    100,\r\n    ... 16901 more items\r\n  ],\r\n  expected: [\r\n     1,   2,   3,   6,  7,  8,  9, 10, 11, 12, 13, 14,\r\n    15,  16,  17,  18, 19, 20, 21, 22, 23, 24, 25, 26,\r\n    27,  28,  29,  30, 31, 32, 33, 34, 35, 36, 37, 38,\r\n    39,  40,  41,  42, 43, 44, 45, 46, 47, 48, 49, 50,\r\n    51,  52,  53,  54, 55, 56, 57, 58, 59, 60, 61, 62,\r\n    63,  64,  65,  66, 67, 68, 69, 70, 71, 72, 73, 74,\r\n    75,  76,  77,  78, 79, 80, 81, 82, 83, 84, 85, 86,\r\n    87,  88,  89,  90, 91, 92, 93, 94, 95, 96, 97, 98,\r\n    99, 100, 101, 102,\r\n    ... 16901 more items\r\n  ],\r\n  operator: 'deepStrictEqual',\r\n  diff: 'simple'\r\n}\r\n\r\nNode.js v22.20.0\r\n",
+    "timedOut": false,
+    "elapsedMs": 2593
+  },
+  {
+    "mode": "0",
+    "file": "visibility-border-overlap.test.cjs",
+    "status": 0,
+    "output": "PASS: border/corner overlap, effective ranges, immediate gameplay visibility and visual outline hold.\n",
+    "timedOut": false,
+    "elapsedMs": 160
+  },
+  {
+    "mode": "0",
+    "file": "visibility-history-performance.test.cjs",
+    "status": 1,
+    "output": "node:assert:150\r\n  throw new AssertionError(obj);\r\n  ^\r\n\r\nAssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\r\n+ actual - expected\r\n\r\n+ undefined\r\n- true\r\n\r\n    at Object.<anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\visibility-history-performance.test.cjs:63:8)\r\n    at Module._compile (node:internal/modules/cjs/loader:1706:14)\r\n    at Object..js (node:internal/modules/cjs/loader:1839:10)\r\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\r\n    at Function._load (node:internal/modules/cjs/loader:1263:12)\r\n    at TracingChannel.traceSync (node:diagnostics_channel:322:14)\r\n    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)\r\n    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)\r\n    at node:internal/main/run_main_module:36:49 {\r\n  generatedMessage: true,\r\n  code: 'ERR_ASSERTION',\r\n  actual: undefined,\r\n  expected: true,\r\n  operator: 'strictEqual',\r\n  diff: 'simple'\r\n}\r\n\r\nNode.js v22.20.0\r\n",
+    "timedOut": false,
+    "elapsedMs": 326
+  },
+  {
+    "mode": "0",
+    "file": "visibility-range-collision.test.cjs",
+    "status": 0,
+    "output": "PASS: fractional/union/team ranges, 10k-tile perimeter, bounded corner pushes, deterministic replay and automatic retargeting.\n",
+    "timedOut": false,
+    "elapsedMs": 194
+  },
+  {
+    "mode": "0",
+    "file": "visibility-source-mask.test.cjs",
+    "status": 0,
+    "output": "PASS: moving source stays lit in the blurred mask without changing gameplay visibility.\n",
+    "timedOut": false,
+    "elapsedMs": 163
+  },
+  {
+    "mode": "0",
+    "file": "worker-target-index.test.cjs",
+    "status": 0,
+    "output": "PASS: 3000-worker occupancy agrees with exhaustive scans; assignment, release, death, mobile targets, tick/reset and live spawner eligibility.\n",
+    "timedOut": false,
+    "elapsedMs": 212
+  },
+  {
+    "mode": "0",
+    "file": "spatial-index-builds.test.cjs",
+    "status": 0,
+    "output": "PASS: serial and parallel unit index builds\n  crossroads: 400 queries over 166 units, identical (4615 results)\n  islands: 400 queries over 169 units, identical (3699 results)\n  solar_system: 400 queries over 192 units, identical (4426 results)\n",
+    "timedOut": false,
+    "elapsedMs": 25780
+  },
+  {
+    "mode": "0",
+    "file": "zero-resource-config.test.cjs",
+    "status": 0,
+    "output": "PASS: zero resource startup, no generated mines, finite fallbacks, negative/fractional normalization and ordered mine amounts.\n",
+    "timedOut": false,
+    "elapsedMs": 977
+  },
+  {
+    "mode": "0",
+    "file": "zoom-contour-performance.test.cjs",
+    "status": 0,
+    "output": "PASS: 7000 zoomed bodies use two sharp sprite tiers; 30 contour frames match exhaustive geometry exactly.\n",
+    "timedOut": false,
+    "elapsedMs": 510
+  },
+  {
+    "mode": "0",
+    "file": "worker-walk.test.cjs",
+    "status": 1,
+    "output": "workers 6 builder,healer,collector,astar_collector,salvager,researcher\nworker states seen astar_collector:IDLE astar_collector:MOVING_TO astar_collector:RETURNING astar_collector:delivered builder:IDLE builder:MOVING_TO_BUILD builder:RETURNING_FOR_GOLD builder:spent collector:IDLE collector:MOVING_TO collector:RETURNING collector:delivered healer:IDLE healer:MOVING_TO_HEAL healer:RETURNING_FOR_GOLD healer:spent researcher:IDLE researcher:MOVING_TO_RESEARCH salvager:IDLE salvager:MOVING_TO salvager:RETURNING salvager:delivered\nwork {\"before\":{\"build\":3129.387,\"sites\":0,\"research\":0},\"after\":{\"build\":3353.275,\"sites\":1,\"research\":101.49348305353942},\"end\":{\"site\":{\"uc\":true,\"energy\":1},\"salvaged\":true}}\nmine cluster at [47,37] collector on it true middle gold 4980\nAssertionError [ERR_ASSERTION]: worker walk state diverged: [{\"tick\":1300,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":1305,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":1310,\"a\":\"host\",\"b\":\"guest1\"}]\n\n27 !== 0\n\n    at Object.checkHealthy (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:1020:12)\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\worker-walk.test.cjs:168:7 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 27,\n  expected: 0,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 20562
+  },
+  {
+    "mode": "0",
+    "file": "shared-frame-ownership.test.cjs",
+    "status": null,
+    "output": "",
+    "timedOut": true,
+    "elapsedMs": 900052
+  },
+  {
+    "mode": "0",
+    "file": "sim-frame-replica.test.cjs",
+    "status": null,
+    "output": "",
+    "timedOut": true,
+    "elapsedMs": 900053
+  }
+]

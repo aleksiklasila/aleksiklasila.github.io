@@ -2841,6 +2841,8 @@ pub unsafe extern "C" fn k_laser_hits(a: *const i32, chunk: i32) {
     let (xs, ys, dead, sep, own, en, uid) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<u8>(2), k.p::<u32>(3), k.p::<i8>(4), k.p::<f32>(5), k.p::<i32>(6));
     let (lzf, acc, lb, ev) = (k.p::<u8>(7), k.p::<f32>(8), k.p::<i32>(9), k.p::<u8>(10));
     let (head, next, beam, bown, bdmg, hit, cnt) = (k.p::<i32>(11), k.p::<i32>(12), k.p::<i32>(13), k.p::<i32>(14), k.p::<f32>(15), k.p::<u8>(16), k.p::<i32>(17));
+    // (lz.list: the job's reporting slots from its first slot on, in slot order.)
+    let list = k.p::<i32>(18);
     let itile = (1.0 / (k.f(2) * 8.0)) as f32;
     let (w, h, t, per) = (k.i(3), k.i(4), k.i(5), k.i(6).max(1));
     let absent = k.f(7) as u32;
@@ -2895,6 +2897,9 @@ pub unsafe extern "C" fn k_laser_hits(a: *const i32, chunk: i32) {
         }
         if died || (t as i64 + g(uid, q) as i64).rem_euclid(per as i64) == 0 {
             s(ev, q, 1);
+            if !list.is_null() {
+                s(list, s0 + n as usize, q as i32);
+            }
             n += 1;
         }
     }
@@ -3752,8 +3757,39 @@ unsafe fn eff_row_apply(k: &K, q: usize, o: i32, ty: i32, bl: i32, el: i32, ver:
         }
     }
     let old = g(srow, q);
-    // (The cover is synced for every new level, as the JavaScript does.)
-    *vis = true;
+    // (The cover is synced for every new level, as the JavaScript does: here
+    // from the columns when the row knows its steps (eff.rVsA >= -1) and the
+    // cover is kept (P[20] its generation), as _visCoverSyncUnit; else by
+    // the JavaScript (*vis).)
+    let rvsa = k.p::<i8>(54);
+    let gen = k.i(20);
+    if gen < 0 {
+        *vis = false;
+    } else if !rvsa.is_null() && g(rvsa, ru) >= -1 {
+        let st = g(rvsa, ru) as i32;
+        let (watched, wteam, sepk) = (k.p::<i32>(55), k.p::<i8>(56), k.p::<u32>(57));
+        let (vgen, vr, va, vp1, vp2) = (k.p::<i32>(58), k.p::<i8>(59), k.p::<i32>(60), k.p::<i8>(61), k.p::<i8>(62));
+        let cp = k.i(21);
+        let active = g(k.p::<u8>(1), q) == 0 && g(sepk, q) != k.f(22) as u32;
+        let (mut steps, mut p1, mut p2) = (-1i32, -1i32, -1i32);
+        if active && st >= 0 {
+            let ow = o;
+            p1 = if ow >= 0 && ow < cp { ow } else { -1 };
+            if g(watched, q) > 0 {
+                let w = g(wteam, q) as i32;
+                if w >= 0 && w < cp && w != p1 { p2 = w; }
+            }
+            steps = if p1 < 0 && p2 < 0 { -1 } else { st };
+        }
+        s(vgen, q, gen);
+        s(vr, q, steps as i8);
+        s(vp1, q, p1 as i8);
+        s(vp2, q, p2 as i8);
+        s(va, q, if active { 1 } else { 0 });
+        *vis = false;
+    } else {
+        *vis = true;
+    }
     let _ = old;
     s(srow, q, r);
     // (simMoveStatsChanged)

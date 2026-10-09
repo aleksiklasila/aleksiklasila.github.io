@@ -3737,6 +3737,21 @@ function applyUnitLevelScaling(unit, level) {
     if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(unit);
 }
 
+// A restored unit's effective tables (utils_snapshot.js decode): its base
+// tables came with it, the effective ones are derived; made as
+// applyUnitEffectiveScaling makes them, with no energy, level or cover side
+// effects (the unit's fields are the snapshot's).
+function unitDerivedStatsRestore(unit) {
+    if (!unit || unit._needsStatsInit || unit.preComputed) return;
+    const base = unit.preComputedBase || unit.basePreComputed;
+    if (!base) { unit._needsStatsInit = true; return; }
+    const lvl = Math.max(1, Math.floor(Number(unit.effectiveLevel) || Number(unit.unitLevel) || 1));
+    const scaled = computeUnitLevelScaledStats(unit, lvl);
+    if (!scaled) { unit._needsStatsInit = true; return; }
+    unit.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(base, scaled);
+    unit.preComputed = unit.preComputedEffective;
+}
+
 function applyUnitEffectiveScaling(unit, effectiveLevel) {
     if (!unit) return;
     let lvl = Math.max(1, Math.floor(effectiveLevel || 1));

@@ -6,7 +6,7 @@
 // on beam tiles (one look-up each); the structures on a beam's tiles are
 // listed with it. Units' records come every LASER_REPORT_TICKS ticks, summed.
 const LASER_REPORT_TICKS = 4;
-const _laserMap = { stale: true, head: null, cap: 0, next: null, beam: null, bown: null, bdmg: null, hit: null, count: null, beams: [], aTowers: [], set: [] };
+const _laserMap = { stale: true, head: null, cap: 0, next: null, beam: null, bown: null, bdmg: null, hit: null, count: null, list: null, beams: [], aTowers: [], set: [] };
 function laserMapDirty() { _laserMap.stale = true; }
 function _laserMapBuild() {
     const M = _laserMap, W = GRID_W, H = GRID_H;
@@ -62,15 +62,16 @@ function laserBeamsTick() {
     if (n > 0) {
         const chunks = Math.ceil(n / 8192);
         if (!M.count || M.count.length < chunks) { M.count = simSharedArray(Int32Array, Math.max(64, chunks * 2)); simParallelBind('lz.count', M.count); }
+        // (The kernel lists each job's reporting slots: no pass over the job's slots here.)
+        if (!M.list || M.list.length < n) { M.list = simSharedArray(Int32Array, simReserveCap(n)); simParallelBind('lz.list', M.list); }
         const P = _simParams;
         P[0] = n; P[1] = 8192; P[2] = TILE; P[3] = GRID_W; P[4] = GRID_H; P[5] = gameTime; P[6] = LASER_REPORT_TICKS; P[7] = SIM_SEP_ABSENT;
         simParallelRun(SIM_KERNEL_LASER_HITS, chunks);
         // The records of the units reporting (in slot order).
-        const C = S.columns, EV = C.lzEv, ACC = C.lzAcc, LB = C.lzBeam, owners = S.owners;
+        const C = S.columns, ACC = C.lzAcc, LB = C.lzBeam, owners = S.owners, LIST = M.list;
         for (let k = 0; k < chunks; k++) {
-            if (M.count[k] === 0) continue;
-            for (let s = k * 8192, end = Math.min(n, s + 8192); s < end; s++) {
-                if (!EV[s]) continue;
+            for (let j = k * 8192, end = j + M.count[k]; j < end; j++) {
+                const s = LIST[j];
                 const u = owners[s], d = ACC[s], beam = M.beams[LB[s]];
                 ACC[s] = 0;
                 if (!u || !beam || !(d > 0)) continue;
@@ -232,6 +233,7 @@ class Tower {
     get cd() { return Math.max(0, (Number(this._cdUntil) || 0) - gameTime); }
     set cd(v) { this._cdUntil = gameTime + Math.max(0, Number(v) || 0); towerSchedule(this); }
     constructor(gx, gy, type, owner, startStacks = 1) {
+        if (typeof structTableInit === 'function') structTableInit(this);
         this.gx = gx; this.gy = gy; this.type = type; this.owner = owner;
         this.x = gx * TILE + 16; this.y = gy * TILE + 16;
         this.stacks = startStacks;
@@ -467,3 +469,4 @@ class Tower {
         }
     }
 }
+if (typeof structTableAccessors === 'function') structTableAccessors(Tower, 0x22);

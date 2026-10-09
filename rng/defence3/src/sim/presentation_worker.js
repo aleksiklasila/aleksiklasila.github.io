@@ -244,6 +244,13 @@ function buildRenderBuckets(F, count, columns, rows, tile) {
     const head = new Int32Array(F.buf, offset, cells);
     const motion = new Float32Array(F.buf, offset + cells * 4, cells);
     const next = new Int32Array(F.buf, offset + cells * 8, F.cap);
+    const movingOffset = offset + cells * 8 + F.cap * 4;
+    const moving = new Int32Array(F.buf, movingOffset, F.cap);
+    let previous = buildRenderBuckets.previous;
+    if (!previous || previous.x.length !== F.cap) previous = buildRenderBuckets.previous = {
+        x:new Float32Array(F.cap),y:new Float32Array(F.cap),ready:false
+    };
+    let movingCount = 0;
     head.fill(-1); motion.fill(0);
     const invCell = 1 / (tile * 16), invTile = 1 / tile;
     for (let k = 0; k < count; k++) {
@@ -254,8 +261,13 @@ function buildRenderBuckets(F, count, columns, rows, tile) {
         next[k] = head[b]; head[b] = k;
         const distance = Math.max(Math.abs(F.px[s] - x), Math.abs(F.py[s] - y)) * invTile;
         if (distance > motion[b]) motion[b] = distance;
+        // Include teleports/stops even when the simulation's previous position
+        // already equals its destination. The page merges with its old movers.
+        if (distance > 0 || (previous.ready && (previous.x[s] !== x || previous.y[s] !== y))) moving[movingCount++] = s;
+        previous.x[s] = x; previous.y[s] = y;
     }
-    return { columns, rows, tile, offset };
+    previous.ready = true;
+    return { columns, rows, tile, offset, movingOffset, movingCount };
 }
 function draw() {
     const started=performance.now();
@@ -265,7 +277,7 @@ function draw() {
     const cap=source.id.length;
     const columns = tick.n >= 5000 && tick.gw > 0 ? Math.ceil(tick.gw / 16) : 0;
     const rows = columns ? Math.ceil(tick.gh / 16) : 0;
-    const indexBytes = columns * rows ? columns * rows * 8 + cap * 4 : 0;
+    const indexBytes = columns * rows ? columns * rows * 8 + cap * 8 : 0;
     const buf=acquire(cap*SIM_FRAME_SLOT_BYTES + indexBytes);
     if (!buf) return;
     latest=null;
@@ -334,7 +346,7 @@ function onMessage(event) {
             if (m.fog) {try {updateFog(m);} catch(err) {postMessage({type:'error',message:String(err.stack || err)});}}
             latest=m;if(!scheduled && source && ready) {scheduled=true;draw();}return;
         }
-        if(m.type==='bind') {epoch=m.epoch;generation=m.generation;source=m.columns;meta=simFrameViews(m.meta.buf,m.meta.cap);metaRev=m.metaRev||null;for(const e of buffers.values()) e.metaRev=-1;last=null;schedule();}
+        if(m.type==='bind') {epoch=m.epoch;generation=m.generation;source=m.columns;meta=simFrameViews(m.meta.buf,m.meta.cap);metaRev=m.metaRev||null;for(const e of buffers.values()) e.metaRev=-1;last=null;buildRenderBuckets.previous=null;schedule();}
         else if(m.type==='strings') strings=m.strings;
         else if(m.type==='ready') {ready=true;schedule();}
         else if(m.type==='structures') {structure=m.table;structureRevision=m.revision;}

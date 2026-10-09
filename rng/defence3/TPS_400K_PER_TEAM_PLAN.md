@@ -538,6 +538,101 @@ re-registration ~25% of it), visibility 3.0, worker search 2.9 (phase wait),
 status 2.1, SP_COUNTS 1.7, adjacency 1.6, hits 1.6, lasers 1.5, collect
 1.5, towers 1.3 (targets searched on the main thread).
 
+### 2026-10-09 (night) — structure table, MOVE scalar lanes
+
+Measurement note: B800 run-to-run noise is ±2-4 ms on the steady gameTick
+(UPDSPLIT/KTIME/SUBPHASES wrappers add ~8 ms: compare runs with the same
+flags). A probe of `simParallelStageParams` (`.claude/probes/
+stage_param_waits.js`) found no waits on pending lanes: last session's
+lane-params fix costs nothing. Baseline this session (TOPPHASES only,
+`.claude/s9-800k-spw.log`): steady gameTick 67.0, MOVE 22.7 (kernel ~19.6).
+
+- **Structure table** (SIM_RULES_REVISION 7; data_state.js `_ST`): per tile
+  the hash core of the structure on it (kind code, owner, construction,
+  energy; a mine's amount) in typed columns, kept by prototype accessors
+  (`structTableAccessors`: owner / underConstruction / energy, gold / astar)
+  over backing fields (_ow, _uc, _en, _mv); an entity joins at
+  setTileEntity / a restore's _snapSetTile (its tile in _stT), leaves at its
+  clear; reset with the tile lookup; made at the first join (the page's
+  views never join). Floor items and mines are classes now (FloorItem,
+  GoldMine, AstarMine; snapshot shells and '~c' names). Snapshot keys map
+  the backing fields to the public names (`structTableKeys` via
+  simUnitStateKeys): the snapshot format is unchanged. The hash's
+  structure core is a sweep of the slice's regions over the table
+  (`_snapStaticCoreSweep`, regions skipped by a per-region count), the
+  round's full fields from the objects as before. Hash 4.3 → 2.9 ms
+  (`.claude/probes/hash_split.js`: core sweep ~1.0 before the region
+  counts; the rest the round's full fields + journal ~0.9, merge 0.28,
+  reservations 0.22, globals 0.22). tests/structure-table.test.cjs.
+- Pre-existing (identical at HEAD, checked in a worktree): a full restore
+  into another solo instance differs in the globals hash part and in towers'
+  status fields (undefined until set, 0 once restored); structure-targeting
+  (`_simHKey`), laser-links (`laserTowersVersion`), worker-walk,
+  multiplayer-snapshot, desync-recovery (mine 2 s) fail the same.
+- **MOVE lane census** (dbgc build, `.claude/dump-mv800` tick 180 /
+  `dump-mv800b` tick 200 B800 dumps, `.claude/probes/kdump_move_only.js`;
+  rbench counters 20-33 now explain why flow lanes leave step4): of 401k
+  flow candidates, 46.7k had their steady window over, 30.3k stood in
+  another tile than their committed step's, 24.5k were stepping into
+  another tile. Profile by pass (`--features prof`, **build without
+  wasm-opt**: it re-inlines the passes; `CARGO_PROFILE_RELEASE_STRIP=false`
+  keeps names): the scalar flow path (move_flow, nav_step, step_flow,
+  move_pre, step_slot, commit, flow_look) was ~half of the kernel's CPU.
+- **Steady window no longer ends on the unit's second's tick** (that was
+  only the floor's once-a-second trap look): step4 takes that look itself
+  (lanes on a hostile structure's tile go scalar). Window-over lanes 46.7k
+  → 18.1k.
+- **step4 takes tile crossings**: a ground lane stepping into an open tile
+  (its profile's walls; step_flow's commit without a slide) stays in the
+  vector step (24.4k of 24.5k a tick). Vector-done lanes 74.6% → 83.8%.
+- **Flow look record packed**: the nine mvNav* columns are one 8-word
+  record a slot (`unit.mvNav`, SIM_NAV_STRIDE: T, D, V, W, G, N1, N2,
+  far << 1 | open): a steer touches one line. Replay −6%.
+  `.claude/dump_navpack.cjs` converts older dumps.
+- B800 (`.claude/s9-800k-nav.log`, ticks 150-199): gameTick 58.5, MOVE
+  kernel 17.0 (from 19.6), 0 desyncs.
+- What is left in MOVE (replay, packed): step4 19%, flow_look 12% (the
+  shared look cache: a random 16 MB table, ~2 cold lines a look), move_flow
+  10%, push4 10%, epilogue 8%, nav_step 6%. step4 streams ~26 columns (16
+  loads, 10 stores) per lane: an AoS steady-step record (steady, ctl, cvx,
+  cvy, flow, fgen, dest) is the next candidate.
+- step4 stores vx/vy only when a lane's differs (the committed step's after
+  its first tick) and d0 only when set: same outputs (replay digest), the
+  steady steppers' lines stay clean.
+- **Crowd gate**: unit-collision-smoothness reversal rate 1.51% (gate
+  1.5%; HEAD 1.49%). Caused by the steady-window change alone (with the
+  window ending on the second's tick again the test matches HEAD exactly:
+  crossing, packing and store changes are output-neutral there): on that
+  tick the scalar commit (f32 x + vx, quantized) took the step, now step4
+  (whole eighths) does; trajectories differ slightly. Kept (−28k scalar
+  lanes a tick); to be looked at with the crowd tuning.
+- Main thread JS (host profile ticks 150-199, `profpeer2.cjs` with SUB=fn
+  for a subtree): structure lists' removal was indexOf + splice over tens of
+  thousands of spawners per destroyed building: now O(1) swap-removal
+  (`structListPush` / `structListRemove`, place in e._li, self-healing
+  reindex); destroyBuilding 0.44 ms a tick. The laser list (link
+  recompute) is kept in tile order by laser joins/leaves
+  (`laserListToggle`: canonical on every peer whatever the towers' order);
+  rebuilding it by filtering every tower on each tower change cost ~2 ms.
+  The laser hits kernel lists its reporting slots (`lz.list`): no JS pass
+  over whole chunks. The worker search's take hand-off is one variable
+  (`_wsCur`), not a Map. Flow orders write each route field once
+  (`.claude/orderbench.cjs`: 1.18 → 1.12-1.17 µs a unit; the rest is ~20
+  setters a unit, spread).
+- **Cover registration in the effective-stats kernel**: a stat row carries
+  its visibility cover steps (`eff.rVsA`, −2: for the JavaScript); a unit
+  given a new row is registered (vsGen/vsR/vsP1/vsP2/vsA) by k.rs
+  eff_row_apply from its columns, as _visCoverSyncUnit, instead of being
+  handed back to JS (~1.8 ms a tick in the host profile). Checked at B400
+  (`.claude/probes/vis_reg_check.js`): 0 of ~380k units differ from
+  _visCoverSyncUnit at ticks 160/180/200; 0 desyncs.
+- Machine note: the user's Firefox used ~3.3 cores during the later runs
+  (51% CPU with no benchmark): whole-tick numbers of those runs are high.
+- Pre-existing failures (identical at HEAD): shrine "exact hashes equal",
+  multiplayer-scenarios build/stack/research divergence at tick 328,
+  pathfinding-routing and visibility-range-collision (`_simHKey` in their
+  sandbox), plus the ones listed above.
+
 ## Next
 
 Order set by the user (2026-10-09): main thread stable below 50 ms (aim

@@ -5,7 +5,7 @@
 // ============================================================
 // Laser links: two lasers of one owner in the same row or column, 1 to
 // min(effective levels) tiles apart, no wall between (other towers do not
-// block). Each tower's partners are in towers-array order. Lasers of a
+// block). Each tower's partners are in tile order (_laserTowerList). Lasers of a
 // line are only compared with the next ones along it within reach, so a
 // recompute is O(lasers log lasers + links), not O(towers^2).
 const _laserLines = new Map();
@@ -54,7 +54,7 @@ function recalculateLaserConnections() {
         }
     }
     if (!partners.length) return;
-    // Each tower's partners in towers-array order.
+    // Each tower's partners in the laser list's (tile) order.
     const byTower = new Map();
     for (let k = 0; k < partners.length; k += 2) {
         const i = partners[k], j = partners[k + 1];
@@ -67,9 +67,32 @@ function recalculateLaserConnections() {
         for (const j of list) out.push(towers[j]);
     }
 }
-let _laserListVer = -1, _laserListRef = null, _laserList = [];
+// The laser towers in tile order (gy * GRID_W + gx: the same on every peer
+// whatever the towers' order, which removals change, structListRemove): kept
+// as lasers join and leave (laserListToggle, from towerJoinedOrLeft), made
+// again from towers when that list was replaced (a restore) or the grid's
+// width changed (a filter over every tower, cold objects, on each tower
+// change was ~2 ms a tick in battle).
+let _laserListRef = null, _laserListW = -1, _laserList = [];
+function _laserTileKey(t) { return t.gy * GRID_W + t.gx; }
+function _laserListAt(t) {
+    const L = _laserList, k = _laserTileKey(t);
+    let lo = 0, hi = L.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (_laserTileKey(L[m]) < k) lo = m + 1; else hi = m; }
+    return lo;
+}
+function laserListToggle(t) {
+    if (_laserListRef !== towers || _laserListW !== GRID_W) return;
+    const i = _laserListAt(t), L = _laserList;
+    if (i < L.length && L[i] === t) L.splice(i, 1);
+    else if (i < L.length && _laserTileKey(L[i]) === _laserTileKey(t)) L[i] = t;
+    else L.splice(i, 0, t);
+}
 function _laserTowerList() {
-    if (_laserListVer !== laserTowersVersion || _laserListRef !== towers) { _laserList = towers.filter(t => t.type === 'laser'); _laserListVer = laserTowersVersion; _laserListRef = towers; }
+    if (_laserListRef !== towers || _laserListW !== GRID_W) {
+        _laserList = towers.filter(t => t.type === 'laser').sort((a, b) => _laserTileKey(a) - _laserTileKey(b));
+        _laserListRef = towers; _laserListW = GRID_W;
+    }
     return _laserList;
 }
 // Structures placed or removed: the links are made again before they are
@@ -1065,7 +1088,10 @@ function _unitStatsVerOf(u) {
 const EFF_ROW_MAX = 1 << 16;
 let _effRowObj = [], _effRowN = 0, _effRowCap = 0, _effRowLk = null, _effRowLkDims = '';
 const _EFF_ROW_COLS = [['rowVer', Int32Array], ['rSpd', Float32Array], ['rCost', Float32Array], ['rRD', Int32Array], ['rRA', Int32Array], ['rRK', Uint8Array],
-    ['rLzW', Uint8Array], ['rCb', Float32Array], ['rCd', Float32Array], ['rDmg', Float32Array], ['rVis', Float32Array], ['rChs', Float32Array]];
+    ['rLzW', Uint8Array], ['rCb', Float32Array], ['rCd', Float32Array], ['rDmg', Float32Array], ['rVis', Float32Array], ['rChs', Float32Array],
+    // (The visibility cover's steps of a unit with the row, as _visCoverSyncUnit
+    // works them out: -1 none, -2 for the JavaScript.)
+    ['rVsA', Int8Array]];
 const _effRowCols = {};
 function _effRowDims() { return [spatialUnitsComplexPlayerCount | 0, spatialUnitsComplexUnitTypeCount | 0, (MAX_THING_LEVEL | 0) + 1]; }
 function _effRowLookup() {
@@ -1135,6 +1161,10 @@ function _effRowAttach(u) {
         R.rCb[r] = Math.max(TILE, vis * TILE);
         R.rCd[r] = pc.attackCooldown; R.rDmg[r] = pc.attackDamage; R.rVis[r] = vis;
         R.rChs[r] = Math.max(TILE * 0.6, Number(pc.speed) || 1);
+        // (getEntityEffectiveVisibilityRangeArea of a unit whose effective
+        // tables are pc.)
+        const va = Number.isFinite(pc.visionRangeArea) ? pc.visionRangeArea : Number.isFinite(pc.visionRange) ? pc.visionRange / AREA_UNIT_TILE_EQUIVALENT : NaN;
+        R.rVsA[r] = !Number.isFinite(va) || typeof VIS_COVER_MAX_STEPS !== 'number' ? -2 : va > 0 ? Math.min(VIS_COVER_MAX_STEPS, Math.floor(va)) : -1;
         lk[key] = r;
     }
     c.statRow[s] = r;
@@ -1235,6 +1265,11 @@ function recalculateUnitEffectiveStats() {
         // (Stat rows: the kernel gives a unit of a new level its row.)
         _effRowLookup(); _effRowGrow(1);
         P[18] = _effRowN; P[19] = SIM_MOVE_BOX_STEPS;
+        // (A unit of a new row is registered in the visibility cover by the
+        // kernel (_visCoverSyncUnit from its columns): the cover's generation
+        // and players; -1: the cover is not kept now (nothing to do).)
+        const VC = typeof _visCover !== 'undefined' ? _visCover : null, vcOn = !!VC && VC.syncedTick >= 0 && VC.adm === areaDistanceMatrix;
+        P[20] = vcOn ? VC.gen : -1; P[21] = vcOn ? VC.players : 0; P[22] = SIM_SEP_ABSENT;
         simParallelBind('eff.tver', _unitStatsVerTable(spatialUnitsComplexPlayerCount)); P[14] = UNIT_STATS_VER_TYPES;
         // (The upkeep bins, when kept: main.js _upkU.)
         const UK = typeof _upkU !== 'undefined' && _upkU && _upkU.cols === c && _upkU.cnt === _upkHist ? _upkU : null;
@@ -1470,7 +1505,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             t.buildEnabled = useDefaultBuild;
             t.level = 0; t.effectiveLevel = 0; t.potentialEffectiveLevel = 0;
             t.updateTextCache();
-            towers.push(t); towerJoinedOrLeft(t);
+            structListPush(towers, t); towerJoinedOrLeft(t);
             setTileEntity(gx, gy, itemKey, t);
             placedNewStructure = true;
             placedNewWallStructure = true;
@@ -1490,7 +1525,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             b.buildEnabled = useDefaultBuild;
             b.level = 0; b.effectiveLevel = 0; b.potentialEffectiveLevel = 0;
             updateItemTextCache(b);
-            barracks.push(b); barracksChanged();
+            structListPush(barracks, b); barracksChanged();
             grid[gy][gx].item = b;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, b);
@@ -1509,7 +1544,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            collectorSpawners.push(s); collectorSpawnersChanged();
+            structListPush(collectorSpawners, s); collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1528,7 +1563,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            collectorSpawners.push(s); collectorSpawnersChanged();
+            structListPush(collectorSpawners, s); collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1547,7 +1582,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            collectorSpawners.push(s); collectorSpawnersChanged();
+            structListPush(collectorSpawners, s); collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1567,7 +1602,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            collectorSpawners.push(s); collectorSpawnersChanged();
+            structListPush(collectorSpawners, s); collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1586,7 +1621,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            collectorSpawners.push(s); collectorSpawnersChanged();
+            structListPush(collectorSpawners, s); collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1605,7 +1640,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            collectorSpawners.push(s); collectorSpawnersChanged();
+            structListPush(collectorSpawners, s); collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1618,7 +1653,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             addManualStackToThing(cell.item, 1);
         } else {
             let stats = calculateItemStats(itemKey, 1, playerId);
-            let item = { type: itemKey, stacks: 1, manualStacks: 1, effectiveStacks: 1, level: 0, effectiveLevel: 0, potentialEffectiveLevel: 0, isStacking: false, stackingWorkDone: 0, energy: 1, maxEnergy: stats.maxEnergy, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true, owner: playerId, markedForSalvage: false, autoUpgradeEnabled: useDefaultAutoUpgrade, buildEnabled: useDefaultBuild };
+            let item = Object.assign(new FloorItem(), { type: itemKey, stacks: 1, manualStacks: 1, effectiveStacks: 1, level: 0, effectiveLevel: 0, potentialEffectiveLevel: 0, isStacking: false, stackingWorkDone: 0, energy: 1, maxEnergy: stats.maxEnergy, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true, owner: playerId, markedForSalvage: false, autoUpgradeEnabled: useDefaultAutoUpgrade, buildEnabled: useDefaultBuild });
             cell.item = item;
             cell.owner = playerId;
             setTileEntity(gx, gy, itemKey, item);
@@ -1640,8 +1675,7 @@ function destroyBuilding(building) {
     let isWallTargetType = !!(typeDef && typeDef.target === 'wall');
 
     if (building instanceof Tower || (building.constructor && building.constructor.name === 'Tower') || isWallTargetType) {
-        let idx = towers.indexOf(building);
-        if (idx !== -1) { towers.splice(idx, 1); towerJoinedOrLeft(building); }
+        if (structListRemove(towers, building) !== -1) towerJoinedOrLeft(building);
         clearTileEntity(building.gx, building.gy, building);
         grid[building.gy][building.gx].type = TYPE_FLOOR;
         grid[building.gy][building.gx].owner = -1;
@@ -1650,16 +1684,14 @@ function destroyBuilding(building) {
         recalculateAdjacency();
         markLaserConnectionsDirty();
     } else if (building instanceof Barrack || (building.type === 'barrack')) {
-        let idx = barracks.indexOf(building);
-        if (idx !== -1) { barracks.splice(idx, 1); barracksChanged(); }
+        if (structListRemove(barracks, building) !== -1) barracksChanged();
         clearTileEntity(building.gx, building.gy, building);
         grid[building.gy][building.gx].item = null;
         grid[building.gy][building.gx].owner = -1;
         _markCombinedBgTileDirty(building.gx, building.gy, 0, false);
         recalculateAdjacency();
     } else if (building instanceof CollectorSpawner || building instanceof AstarSpawner || building instanceof SalvagerSpawner || building instanceof BuilderSpawner || building instanceof HealerSpawner || building instanceof ResearchSpawner) {
-        let idx = collectorSpawners.indexOf(building);
-        if (idx !== -1) { collectorSpawners.splice(idx, 1); collectorSpawnersChanged(); }
+        if (structListRemove(collectorSpawners, building) !== -1) collectorSpawnersChanged();
         clearTileEntity(building.gx, building.gy, building);
         grid[building.gy][building.gx].item = null;
         grid[building.gy][building.gx].owner = -1;

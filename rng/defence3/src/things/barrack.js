@@ -339,6 +339,7 @@ function processGlobalSpawnerQueue() {
 
 class Barrack {
     constructor(gx, gy, owner, unitType = 'norm', stacks = 1) {
+        if (typeof structTableInit === 'function') structTableInit(this);
         this.gx = gx; this.gy = gy; this.owner = owner;
         this.x = gx * TILE + 16; this.y = gy * TILE + 16;
         this.stacks = stacks; this.type = 'barrack'; this.unitType = unitType;
@@ -415,6 +416,7 @@ class Barrack {
         if (this.textCanvas && shouldShowBuildingLevels(this)) drawLevelTextCache(ctx, this, this.x, this.y);
     }
 }
+if (typeof structTableAccessors === 'function') structTableAccessors(Barrack, 0x33);
 
 // ============================================================
 // COLLECTOR / SALVAGER (barrack-like spawners + worker units)
@@ -444,6 +446,7 @@ function spawnerDue(b) {
 
 class CollectorSpawner {
     constructor(gx, gy, owner, stacks = 1) {
+        if (typeof structTableInit === 'function') structTableInit(this);
         this.gx = gx; this.gy = gy; this.owner = owner;
         this.x = gx * TILE + 16; this.y = gy * TILE + 16;
         this.stacks = stacks; this.type = 'spawner';
@@ -502,9 +505,11 @@ class CollectorSpawner {
         if (this.textCanvas && shouldShowBuildingLevels(this)) drawLevelTextCache(ctx, this, this.x, this.y);
     }
 }
+if (typeof structTableAccessors === 'function') structTableAccessors(CollectorSpawner, 0x44);
 
 class AstarSpawner {
     constructor(gx, gy, owner, stacks = 1) {
+        if (typeof structTableInit === 'function') structTableInit(this);
         this.gx = gx; this.gy = gy; this.owner = owner;
         this.x = gx * TILE + 16; this.y = gy * TILE + 16;
         this.stacks = stacks; this.type = 'astar_spawner';
@@ -563,9 +568,11 @@ class AstarSpawner {
         if (this.textCanvas && shouldShowBuildingLevels(this)) drawLevelTextCache(ctx, this, this.x, this.y);
     }
 }
+if (typeof structTableAccessors === 'function') structTableAccessors(AstarSpawner, 0x44);
 
 class SalvagerSpawner {
     constructor(gx, gy, owner, stacks = 1) {
+        if (typeof structTableInit === 'function') structTableInit(this);
         this.gx = gx; this.gy = gy; this.owner = owner;
         this.x = gx * TILE + 16; this.y = gy * TILE + 16;
         this.stacks = stacks; this.type = 'salvager';
@@ -624,9 +631,11 @@ class SalvagerSpawner {
         if (this.textCanvas && shouldShowBuildingLevels(this)) drawLevelTextCache(ctx, this, this.x, this.y);
     }
 }
+if (typeof structTableAccessors === 'function') structTableAccessors(SalvagerSpawner, 0x44);
 
 class BuilderSpawner {
     constructor(gx, gy, owner, stacks = 1) {
+        if (typeof structTableInit === 'function') structTableInit(this);
         this.gx = gx; this.gy = gy; this.owner = owner;
         this.x = gx * TILE + 16; this.y = gy * TILE + 16;
         this.stacks = stacks; this.type = 'builder_spawner';
@@ -693,9 +702,11 @@ class BuilderSpawner {
         if (this.textCanvas && shouldShowBuildingLevels(this)) drawLevelTextCache(ctx, this, this.x, this.y);
     }
 }
+if (typeof structTableAccessors === 'function') structTableAccessors(BuilderSpawner, 0x44);
 
 class HealerSpawner {
     constructor(gx, gy, owner, stacks = 1) {
+        if (typeof structTableInit === 'function') structTableInit(this);
         this.gx = gx; this.gy = gy; this.owner = owner;
         this.x = gx * TILE + 16; this.y = gy * TILE + 16;
         this.stacks = stacks; this.type = 'healer_spawner';
@@ -761,9 +772,11 @@ class HealerSpawner {
         if (this.textCanvas && shouldShowBuildingLevels(this)) drawLevelTextCache(ctx, this, this.x, this.y);
     }
 }
+if (typeof structTableAccessors === 'function') structTableAccessors(HealerSpawner, 0x44);
 
 class ResearchSpawner {
     constructor(gx, gy, owner, stacks = 1) {
+        if (typeof structTableInit === 'function') structTableInit(this);
         this.gx = gx; this.gy = gy; this.owner = owner;
         this.x = gx * TILE + 16; this.y = gy * TILE + 16;
         this.stacks = stacks; this.type = 'research';
@@ -861,6 +874,7 @@ class ResearchSpawner {
         if (this.textCanvas && shouldShowBuildingLevels(this)) drawLevelTextCache(ctx, this, this.x, this.y);
     }
 }
+if (typeof structTableAccessors === 'function') structTableAccessors(ResearchSpawner, 0x44);
 
 
 function _makeSpawnerRallyTemplateKey(spawner, startGx, startGy, endGx, endGy, unit) {

@@ -30,7 +30,7 @@ function session() {
 
 const first = session();
 assert.equal(first.get('levelVisibilityMode'), 1);
-assert.equal(first.get('renderRangeMode'), 3);
+assert.equal(first.get('renderRangeMode'), 2);
 assert.equal(first.get('renderRangeAllTeam'), true);
 assert.equal(first.get('rallyLineScope'), 'none');
 assert.equal(first.get('selectionOutlineType'), 'solid');
@@ -58,6 +58,12 @@ const legacy = session();
 legacy.run('loadUiSettingsFromStorage()');
 assert.equal(legacy.get('selectionOutlineScope'), 'buildings_units');
 assert.equal(legacy.get('audioBackgroundVolume'), .6);
+
+// A range overlay mode saved before ranges were off by default is not restored.
+values.set('defence3_ui_settings_v1', JSON.stringify({ renderRangeMode: 3 }));
+const oldRanges = session();
+oldRanges.run('loadUiSettingsFromStorage()');
+assert.equal(oldRanges.get('renderRangeMode'), 2, 'old saved range mode dropped');
 values.set('defence3_ui_settings_v1', '{bad json');
 const corrupt = session();
 corrupt.run('loadUiSettingsFromStorage()');

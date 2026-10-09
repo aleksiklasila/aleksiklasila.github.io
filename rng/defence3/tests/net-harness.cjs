@@ -554,7 +554,10 @@ function createInstance(world, name, options = {}) {
             const worker = this;
             const scripts = simWorkerScripts();
             const sandbox = {
-                crossOriginIsolated: process.env.SIM_SHARED === '1', SharedArrayBuffer,
+                // (WebAssembly from the same realm as SharedArrayBuffer: a wasm
+                // memory's buffer must pass `instanceof SharedArrayBuffer`.
+                // atob/btoa as a browser worker has them.)
+                crossOriginIsolated: process.env.SIM_SHARED === '1', SharedArrayBuffer, WebAssembly, atob, btoa,
                 console: { log() { }, info() { }, debug() { }, warn() { }, error: (...a) => inst.errors.push(new Error('[sim worker] ' + a.map(x => (x && x.stack) || String(x)).join(' '))) },
                 MessageChannel: class { constructor() { this.port1 = { onmessage: null, unref() { } }; this.port2 = { postMessage() { }, unref() { } }; } },
                 performance: { now: () => sched.now }, setTimeout: () => 0, clearTimeout() { }, setInterval: () => 0, clearInterval() { },
@@ -656,6 +659,10 @@ function createInstance(world, name, options = {}) {
     inst.set = (n, v) => inst.game.set(n, v);
     // Shared object for passing values into eval'd code: inst.scratch.x -> __scratch.x
     inst.scratch = inst.eval('__scratch');
+    // DIVTRACE=1: each tick's fingerprint of every unit, player and structure
+    // (the last DIVTRACE_TICKS ticks, page-side simulation only), so a failed
+    // comparison (checkHealthy) names the first tick and fields that differ.
+    if (process.env.DIVTRACE) inst.eval(DIVTRACE_SRC);
     // Schedule a command for a given future tick, as queueAction would.
     // Lets tests make several players act on exactly the same tick.
     inst.queueAt = (tick, action) => {
@@ -1010,6 +1017,39 @@ async function playFor(world, instances, ms, { stepMs = 250, chance = 0.5, seed 
 }
 
 // Common invariants for a scenario; returns a summary for logging.
+// (DIVTRACE: see createInstance.)
+const DIVTRACE_TICKS = Number(process.env.DIVTRACE_TICKS) || 400;
+const DIVTRACE_SRC = `(() => {
+    const D = __scratch.div = new Map();
+    const r = v => typeof v === 'number' ? (v === v ? +v.toFixed(4) : 'NaN') : v === undefined ? 'u' : v === null ? 'n' : typeof v === 'object' ? (v.id !== undefined ? 'U' + v.id : v.gx !== undefined ? 'B' + v.gx + ',' + v.gy : 'O') : v;
+    const f = runOneTick;
+    runOneTick = function () {
+        const out = f.apply(this, arguments);
+        try {
+            const t = currentTick - 1, o = {};
+            for (const u of units) o['u' + u.id] = [u.owner, u.x, u.y, u.vx, u.vy, u.energy, u.commandState, u.workerState, u.path ? u.path.length : -1, u.pathIndex,
+                u.targetUnit, u.targetBuilding, u.workerTarget, u.carryingValue, u.attackTimer, u.dead, u.effectiveLevel, u._pendingPathTarget ? 'P' : '-'].map(r).join(',');
+            players.forEach((p, i) => { if (p) o['p' + i] = [p.energy, p.astar, p.shrine, p.popCount, p.researchTask ? p.researchTask.key + ':' + p.researchTask.workDone : '-'].map(r).join(','); });
+            for (const L of [towers, barracks, collectorSpawners]) for (const b of L) o['b' + b.gx + ',' + b.gy] = [b.type, b.owner, b.energy, b.level, b.stacks, b.underConstruction, b.spawnTimer, Array.isArray(b.spawnQueue) ? b.spawnQueue.length : -1, b.stackingWorkDone].map(r).join(',');
+            D.set(t, o);
+            if (D.size > ${DIVTRACE_TICKS}) D.delete(D.keys().next().value);
+        } catch (e) { }
+        return out;
+    };
+})()`;
+// The first traced tick at which two instances' fingerprints differ, and how.
+function divergenceReport(a, b) {
+    const A = a.scratch && a.scratch.div, B = b.scratch && b.scratch.div;
+    if (!A || !B) return null;
+    const ticks = [...A.keys()].filter(t => B.has(t)).sort((x, y) => x - y);
+    for (const t of ticks) {
+        const x = A.get(t), y = B.get(t), diff = [];
+        for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) if (x[k] !== y[k]) diff.push(k + ': ' + (x[k] ?? 'none') + '  |  ' + (y[k] ?? 'none'));
+        if (diff.length) return { tick: t, entities: diff.length, first: diff.slice(0, 8) };
+    }
+    return { tick: null, compared: ticks.length };
+}
+
 function checkHealthy(world, instances, { minCompared = 10, fromTick = 0, label = '' } = {}) {
     const assert = require('node:assert/strict');
     const live = instances.filter(i => !i.dead);
@@ -1017,6 +1057,10 @@ function checkHealthy(world, instances, { minCompared = 10, fromTick = 0, label 
         assert.deepEqual(inst.errors.map(e => String(e && e.stack || e).slice(0, 400)), [], label + ' ' + inst.name + ' threw');
     }
     const cmp = world.compareHashes(live, fromTick);
+    if (process.env.DIVTRACE && cmp.mismatches.length) {
+        const m = cmp.mismatches[0], byName = n => live.find(i => i.name === n);
+        if (byName(m.a) && byName(m.b)) console.error('DIVTRACE', label, m.a, 'vs', m.b, JSON.stringify(divergenceReport(byName(m.a), byName(m.b)), null, 1));
+    }
     assert.equal(cmp.mismatches.length, 0, label + ' state diverged: ' + JSON.stringify(cmp.mismatches.slice(0, 3)));
     assert.ok(cmp.compared >= minCompared, label + ' too few hash comparisons: ' + cmp.compared);
     return cmp;

@@ -514,15 +514,61 @@ function _simClientUpdateStableSlots(F, old) {
 }
 // Keep the population loop separate from frame installation so V8 can
 // optimize it without the object/membership slow paths in that function.
+let _simRebaseMarks = new Uint32Array(0), _simRebaseStamp = 0;
+function _simClientRebaseMovingFrame(F, old, shown) {
+    if (_simRebaseMarks.length < F.cap) _simRebaseMarks = new Uint32Array(F.cap);
+    if (!(_simRebaseStamp = (_simRebaseStamp + 1) >>> 0)) { _simRebaseMarks.fill(0); _simRebaseStamp = 1; }
+    const stamp = _simRebaseStamp, marks = _simRebaseMarks, moving = F.renderMoving;
+    const initialCount = F.renderMovingCount, n = Math.min(F.n, old.n);
+    const id = F.id, px = F.px, py = F.py, x = F.x, y = F.y;
+    const oid = old.id, ox = old.x, oy = old.y, opx = old.px, opy = old.py;
+    let count = 0, pad = 0;
+    for (let pass = 0; pass < 2; pass++) {
+        const list = pass ? old.renderMoving : moving, length = pass ? old.renderMovingCount : initialCount;
+        for (let k = 0; k < length; k++) {
+            const s = list[k];
+            if (s >= F.n || marks[s] === stamp) continue;
+            marks[s] = stamp;
+            let rx = px[s], ry = py[s];
+            if (s < n && id[s] >= 0 && oid[s] === id[s]) {
+                rx = opx[s] + (ox[s] - opx[s]) * shown;
+                ry = opy[s] + (oy[s] - opy[s]) * shown;
+                px[s] = rx; py[s] = ry;
+            }
+            const dx = rx - x[s], dy = ry - y[s];
+            if (dx > pad) pad = dx; else if (-dx > pad) pad = -dx;
+            if (dy > pad) pad = dy; else if (-dy > pad) pad = -dy;
+            // Carry stopped-but-still-interpolating units into the next frame.
+            if (px[s] !== x[s] || py[s] !== y[s]) moving[count++] = s;
+        }
+    }
+    F.renderMovingCount = count;
+    F.renderMotionPad = pad;
+}
 function _simClientRebaseFrame(F, old, shown) {
+    // Sparse lists are for small moving groups only. Dense armies use bulk
+    // native interpolation, including the cost of copying frame columns.
+    const sparse = F.renderMoving && old.renderMoving && F.renderMovingCount + old.renderMovingCount < 8192;
+    if (!sparse && F.n >= 8192 && typeof simRebaseNative === 'function' && simRebaseNative(F, old, shown)) return;
+    if (F.renderMoving && old.renderMoving) { _simClientRebaseMovingFrame(F, old, shown); return; }
     const n = Math.min(F.n, old.n), oid = old.id, ox = old.x, oy = old.y, opx = old.px, opy = old.py;
     const id = F.id, px = F.px, py = F.py, x = F.x, y = F.y, indexed = !!F.renderBuckets;
     let motionPad = 0;
     for (let s = 0; s < n; s++) {
         if (id[s] < 0 || oid[s] !== id[s]) continue;
+        // An unchanged position has an exact interpolation result.
+        const cx = x[s], cy = y[s];
+        if (cx === ox[s] && cy === oy[s] && cx === opx[s] && cy === opy[s]) {
+            px[s] = cx; py[s] = cy;
+            continue;
+        }
         const rx = opx[s] + (ox[s] - opx[s]) * shown, ry = opy[s] + (oy[s] - opy[s]) * shown;
         px[s] = rx; py[s] = ry;
-        if (indexed) motionPad = Math.max(motionPad, Math.abs(rx - x[s]), Math.abs(ry - y[s]));
+        if (indexed) {
+            const dx = rx - cx, dy = ry - cy;
+            if (dx > motionPad) motionPad = dx; else if (-dx > motionPad) motionPad = -dx;
+            if (dy > motionPad) motionPad = dy; else if (-dy > motionPad) motionPad = -dy;
+        }
     }
     F.renderMotionPad = motionPad;
 }
@@ -535,6 +581,10 @@ function _simClientApplyFrame(frame, shown) {
         F.renderBuckets = { ...B, head: new Int32Array(F.buf, B.offset, cells),
             motion: new Float32Array(F.buf, B.offset + cells * 4, cells),
             next: new Int32Array(F.buf, B.offset + cells * 8, F.cap) };
+        if (Number.isFinite(B.movingOffset)) {
+            F.renderMoving = new Int32Array(F.buf, B.movingOffset, F.cap);
+            F.renderMovingCount = B.movingCount;
+        }
     }
     F.renderMotionPad = 0;
     let old = _pageFrame;

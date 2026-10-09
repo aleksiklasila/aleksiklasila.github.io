@@ -2114,8 +2114,10 @@ for (const k of (typeof SIM_UNIT_OBJ_FIELDS !== 'undefined' ? SIM_UNIT_OBJ_FIELD
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true });
 }
 // (The accessors' plain values in the digest: their keys.)
-const _UH_WS = _simHKey('workerState'), _UH_WNR = _simHKey('_workerNextIdleRetargetTick'), _UH_TB = _simHKey('targetBuilding'), _UH_PFA = _simHKey('pathIsFallbackAstar'),
-    _UH_PPT = _simHKey('_pendingPathTarget');
+// (Guarded as the loops above: tests load unit.js without sim_unit_state.js.)
+const _uhKey = typeof _simHKey === 'function' ? _simHKey : () => 0;
+const _UH_WS = _uhKey('workerState'), _UH_WNR = _uhKey('_workerNextIdleRetargetTick'), _UH_TB = _uhKey('targetBuilding'), _UH_PFA = _uhKey('pathIsFallbackAstar'),
+    _UH_PPT = _uhKey('_pendingPathTarget');
 function _unitHD(c, s, key, o, v) { c.hObj[s] = (c.hObj[s] + _simHTerm(key, v) - _simHTerm(key, o)) | 0; }
 
 // Status effect fields: columns (SIM_UNIT_STATUS_COLUMNS), like x and y.
@@ -2623,7 +2625,7 @@ function simMoveDisarmAll() {
 // contents count (a restoring peer starts without them).
 function simMoveResetLookCaches() {
     const S = _simUnitState;
-    if (S) { S.columns.mvNavT.fill(-1); S.columns.mvCD.fill(-1); }
+    if (S) { const NV = S.columns.mvNav; for (let i = 0; i < NV.length; i += SIM_NAV_STRIDE) NV[i] = -1; S.columns.mvCD.fill(-1); }
 }
 
 // New stats (a level or stacking change): an armed unit takes them into its
@@ -2691,8 +2693,7 @@ function simMoveStatsChanged(u) {
 // next flush) it waits (-1: the way is the field's row). The result in
 // _navLookOut: next tile, the one after, the farthest, open (1).
 const _navLookOut = new Int32Array(4);
-const _navLookScratch = { mvNavT: new Int32Array(1), mvNavD: new Int32Array(1), mvNavV: new Int32Array(1), mvNavW: new Int32Array(1), mvNavG: new Int32Array(1),
-    mvNavN1: new Int32Array(1), mvNavN2: new Int32Array(1), mvNavFar: new Int32Array(1), mvNavOpen: new Uint8Array(1) };
+const _navLookScratch = { mvNav: new Int32Array(typeof SIM_NAV_STRIDE === 'number' ? SIM_NAV_STRIDE : 8) };
 function _navFlowLook(u, profile, slot, t, gx, gy, dest, wall) {
     const nav = _nav[profile];
     if (!nav) return 0;
@@ -2700,7 +2701,7 @@ function _navFlowLook(u, profile, slot, t, gx, gy, dest, wall) {
     const has = !!(Fp && Fp.meta && Fp.rows && Fp.meta[m] === profile && Fp.meta[m + 1] === dest && Fp.meta[m + 7] === 1);
     if (!has) return -1;
     let LC = u._us, s = u._si;
-    if (!LC) { LC = _navLookScratch; s = 0; LC.mvNavT[0] = -1; }
+    if (!LC) { LC = _navLookScratch; s = 0; LC.mvNav[0] = -1; }
     const lk = simFlowLook(LC, s, ((gameTime + u.id) & (SIM_FLOW_REFRESH_TICKS - 1)) === 0, t, gx, gy, dest, GRID_W, GRID_H, wall, nav.version | 0,
         _simMoveWallBlk9 ? simWallKey9(_simMoveWallBlk9, _simMoveWallBlkW, gx, gy, _simMoveWallVer) : simWallKey(_simMoveWallBlk, _simMoveWallBlkW, (GRID_H + 7) >> 3, gx, gy, _simMoveWallVer), slot >= NAV_WIDE_BASE ? 2 : 1,
         nav.C, nav.cw, nav.partL, nav.partBase, Fp.rows, i * Fp.rowW, nav.fields, nav.nodeBase, nav.nodeTile, nav.nodePair,
@@ -2711,7 +2712,7 @@ function _navFlowLook(u, profile, slot, t, gx, gy, dest, wall) {
         _navLookOut[0] = n; _navLookOut[1] = -1; _navLookOut[2] = n; _navLookOut[3] = 0;
         return 1;
     }
-    if (lk === 1) { _navLookOut[0] = LC.mvNavN1[s]; _navLookOut[1] = LC.mvNavN2[s]; _navLookOut[2] = LC.mvNavFar[s]; _navLookOut[3] = LC.mvNavOpen[s]; }
+    if (lk === 1) { const r = s * SIM_NAV_STRIDE, fo = LC.mvNav[r + 7]; _navLookOut[0] = LC.mvNav[r + 5]; _navLookOut[1] = LC.mvNav[r + 6]; _navLookOut[2] = fo >> 1; _navLookOut[3] = fo & 1; }
     return lk;
 }
 

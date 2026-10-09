@@ -32,6 +32,9 @@ const context = {
 vm.createContext(context);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'src/utils/utils_common.js'), 'utf8'), context);
 vm.runInContext(source, context);
+// (The object path, as without the combat brain: with it, drive-by shots are
+// the brain's, cmMode 3 in the movement kernel.)
+vm.runInContext('SIM_COMBAT_BRAIN = false', context);
 const Unit = vm.runInContext('Unit', context);
 const moving = vm.runInContext('CMD_MOVING', context);
 

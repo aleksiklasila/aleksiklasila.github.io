@@ -947,7 +947,10 @@ const WS_COLLECT = 1, WS_GRID = 3;
 const WSR_COLLECT = 1, WSR_GRID = 3, WSR_HEAL = 4, WSR_RESEARCH = 5;
 // (A search's answer: registered, wait for it.)
 const WS_WAITING = Object.freeze({ wsWaiting: true });
-let _wsPosted = null, _wsResults = new Map(), _wsCommitTick = -1, _wsStepTick = -1, _wsInCommit = false, _wsPending = null;
+// (_wsCur: the result of the take being made, { s: slot, id, kind, stamp,
+// res, units }; a Map by slot set and emptied around each take was ~1.5 ms
+// a tick of lookups.)
+let _wsPosted = null, _wsCur = null, _wsCommitTick = -1, _wsStepTick = -1, _wsInCommit = false, _wsPending = null;
 // (The commit's takes are spread over this many ticks.)
 const WS_TAKE_TICKS = 3, WS_TAKE_MAX = 1e9;
 const _wsGroups = new Map();
@@ -969,9 +972,9 @@ function wsRegister(u, kind, req) {
 // u's committed result for this kind (its sites, best first), once; null
 // when there is none (then register).
 function wsTake(u, kind) {
-    const r = _wsResults.get(u._si);
-    if (!r || r.id !== u.id || r.kind !== kind || r.stamp !== _wsCommitTick) return null;
-    _wsResults.delete(u._si);
+    const r = _wsCur;
+    if (r === null || r.s !== u._si || r.id !== u.id || r.kind !== kind || r.stamp !== _wsCommitTick) return null;
+    _wsCur = null;
     return r.res;
 }
 // A registered worker: idle, parked till the tier hands it work (see
@@ -981,7 +984,7 @@ function _wsWait(u) {
 }
 function workerSearchTierReset() {
     if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(WS_LANE);
-    _wsPosted = null; _wsResults = new Map(); _wsCommitTick = -1; _wsStepTick = -1; _wsInCommit = false; _wsPending = null;
+    _wsPosted = null; _wsCur = null; _wsCommitTick = -1; _wsStepTick = -1; _wsInCommit = false; _wsPending = null;
     _wsGroups.clear();
     _wsw = null; _wswDirty = []; _wswResvDirty = [];
     if (typeof _simUnitState !== 'undefined' && _simUnitState) _simUnitState.columns.wsKind.fill(0);
@@ -1345,9 +1348,9 @@ function _wsTakeSome() {
             } else for (let k = 0; k < K; k++) { const x = OUT[o0 + k]; if (x < 0) break; res.push({ site: x, dist: OSC[o0 + k] }); }
             let units = null;
             if (kind === WSR_HEAL) { units = []; const L = J.heal[RO[i]] || []; for (let k = 0; k < 3; k++) { const q = UOUT[i * 3 + k]; if (q >= 0 && L[q]) units.push(L[q]); } }
-            _wsResults.set(s, { id: u.id, kind: kind === WSR_COLLECT ? WS_COLLECT : WS_GRID, stamp: _wsCommitTick, res, units });
+            _wsCur = { s, id: u.id, kind: kind === WSR_COLLECT ? WS_COLLECT : WS_GRID, stamp: _wsCommitTick, res, units };
             _wsTakeNow(u);
-            _wsResults.delete(s);
+            _wsCur = null;
             // (Still searching: nothing it could take; its next searches
             // further apart.)
             if (c.wsKind[s] !== 0) { if (c.wsFail[s] < 255) c.wsFail[s]++; } else c.wsFail[s] = 0;
@@ -3598,7 +3601,7 @@ function _healerFindTarget(u, myGx, myGy) {
     let healUnits = null;
     if (!queueTarget) {
         if (_wsAvailable() && u._us) {
-            const entry = _wsResults.get(u._si);
+            const entry = _wsCur !== null && _wsCur.s === u._si ? _wsCur : null;
             const q = _wsGridPick(u, WSW_QUEUE, origin, maxSearch, true, e => _isHealerQueueTarget(e, u.owner), 'queue', WSR_HEAL);
             if (q === WS_WAITING) { _wsWait(u); return; }
             queueTarget = q;
