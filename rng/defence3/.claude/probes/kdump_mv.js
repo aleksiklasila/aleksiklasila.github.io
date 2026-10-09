@@ -1,16 +1,16 @@
 // tickbench EVALALL probe (with DUMPBIN=dir): one kernel's inputs on the
 // guest (no helpers: every chunk runs on its thread), for .claude/kbench.cjs.
-// Placeholders set by the caller (sed): __KERNEL__ (e.g. SIM_KERNEL_SEP_PAIRS,
-// several separated by +), __TICK__ (gameTime at or after which the first
+// Placeholders set by the caller (sed): SIM_KERNEL_MOVE+SIM_KERNEL_SEP_PAIRS+SIM_KERNEL_STATUS+SIM_KERNEL_SEP_PACK+SIM_KERNEL_SEP_MARK (e.g. SIM_KERNEL_SEP_PAIRS,
+// several separated by +), 180 (gameTime at or after which the first
 // call of each is taken). Saved per kernel K: the arrays its source names
 // (R['...']), its params (K.P), the calls it got that tick with each
 // chunk's params when they differ (K.chunks: chunk, param set), as
 // __scratch.bin entries.
 (() => {
     if (typeof _simPool !== 'undefined' && _simPool) return;
-    const T = Number('__TICK__') || 150;
+    const T = Number('180') || 150;
     const bin = __scratch.bin || (__scratch.bin = {});
-    for (const name of '__KERNEL__'.split('+')) {
+    for (const name of 'SIM_KERNEL_MOVE+SIM_KERNEL_SEP_PAIRS+SIM_KERNEL_STATUS+SIM_KERNEL_SEP_PACK+SIM_KERNEL_SEP_MARK'.split('+')) {
         const id = globalThis[name] !== undefined ? globalThis[name] : eval(name);
         const orig = SIM_KERNELS[id];
         // (Its source and the _sim* functions it calls: e.g. the movement

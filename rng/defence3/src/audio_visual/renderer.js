@@ -2112,7 +2112,7 @@ function _pushFlatUnit(batch, u, x, z, view) {
     let remembered = !!u._historyGhost;
     let light = _flatLightAt(x, z, state.sourceLight, remembered);
     if (remembered) light *= 0.65;
-    batch.push(x, z + (panel._flatOffsetZ || 0), size, size, light, light, light, 1, 0, panel);
+    batch.push(x, z + (panel._flatOffsetZ || 0), size, size, light, light, light, u._r3dDetailBlend ?? 1, 0, panel);
     return true;
 }
 
@@ -2708,7 +2708,7 @@ function build3DFrameData(flat2d = false) {
         let L = renderer3dUnitLayer;
         // (A big zoom change rebuilds too: model detail follows on-screen size.)
         layerReuse = !!(L && L.tick === gameTime && L.view === view3DKey && L.fullVis === fullVisibility && L.player === localPlayerId
-            && L.units === units && L.unitCount === units.length && Math.abs(camera.zoom / L.zoom - 1) < 0.25
+            && L.units === units && L.unitCount === units.length && L.detailVersion === (unitDetail?.columns.detailMaskVersion || 0) && Math.abs(camera.zoom / L.zoom - 1) < 0.25
             && bounds.minGx >= L.bounds.minGx && bounds.maxGx <= L.bounds.maxGx && bounds.minGy >= L.bounds.minGy && bounds.maxGy <= L.bounds.maxGy);
         if (layerReuse) { unitLayer = L; renderer3dUnitLayerStats.reuse++; }
         else {
@@ -2720,7 +2720,7 @@ function build3DFrameData(flat2d = false) {
             // A margin around the view, so panning between ticks keeps it.
             let mx = Math.max(4, Math.ceil((bounds.maxGx - bounds.minGx) * 0.3)), my = Math.max(4, Math.ceil((bounds.maxGy - bounds.minGy) * 0.3));
             unitLayer = renderer3dUnitLayer = {
-                tick: gameTime, view: view3DKey, fullVis: fullVisibility, player: localPlayerId, units, unitCount: units.length, zoom: camera.zoom,
+                tick: gameTime, view: view3DKey, fullVis: fullVisibility, player: localPlayerId, units, unitCount: units.length, zoom: camera.zoom, detailVersion: unitDetail?.columns.detailMaskVersion || 0,
                 bounds: { minGx: bounds.minGx - mx, maxGx: bounds.maxGx + mx, minGy: bounds.minGy - my, maxGy: bounds.maxGy + my },
                 objects: [], occupied: [], perFrame: [], motion: [], fallback: [], version: ++renderer3dUnitLayerVersion
             };
@@ -3603,6 +3603,18 @@ function _detailPick(scores, budget) {
     return heap.sort((a, b) => a - b); // Preserve painter order.
 }
 const STRUCT_DETAIL_BUDGET = 600;
+// Fade across both the readable-size boundary and the edge of the model
+// budget. A hard top-N cutoff otherwise draws a conspicuous line in an army.
+function _detailWeights(scores, picked, budget) {
+    const ranked = picked.slice().sort((a,b)=>scores[b]-scores[a] || a-b), weights = new Map();
+    const smooth = x => {x=Math.max(0,Math.min(1,x));return x*x*(3-2*x);};
+    for (let rank=0;rank<ranked.length;rank++) {
+        const i=ranked[rank], size=smooth((scores[i]-UNIT_DETAIL_MIN_PX)/16);
+        const edge=ranked.length===budget?smooth((budget-rank)/(budget*.3)):1;
+        weights.set(i,Math.max(1,Math.round(255*size*edge)));
+    }
+    return weights;
+}
 let _structDetailMode = false;
 let _structDetailPx = new Float32Array(0);
 let _structDetailPrevious = null, _structDetailVersion = 0;
@@ -3640,20 +3652,21 @@ function _structureDetailSplit(lists, flat2d, bounds, live = true) {
             P[s] = projection.scores[s];
         }
         projection.key = viewKey;
-        const slots = _detailPick(P, STRUCT_DETAIL_BUDGET), selected = new Set();
+        const slots = _detailPick(P, STRUCT_DETAIL_BUDGET), weights = _detailWeights(P,slots,STRUCT_DETAIL_BUDGET), selected = new Set();
         const out = lists.map(() => []), floors = [], byKind = [0, 1, 2, -1, 3, 4];
         for (const s of slots) {
             const e = _pageStructViews[s];
             if (!e) continue;
             selected.add(e);
+            e._r3dDetailBlend = weights.get(s)/255;
             const k = byKind[F.kind[s]];
             if (k >= 0) out[k].push(e);
             else if (F.kind[s] === 3) floors.push(e);
         }
         let value = previous;
-        if (!previous || !previous.live || previous.mask.length !== F.cap || previous.selected.size !== selected.size || [...selected].some(e => !previous.selected.has(e))) {
+        if (!previous || !previous.live || previous.mask.length !== F.cap || previous.selected.size !== selected.size || [...selected].some(e => !previous.selected.has(e)) || slots.some(s=>previous.mask[s]!==weights.get(s))) {
             const mask = new Uint8Array(F.cap);
-            for (const s of slots) mask[s] = 1;
+            for (const s of slots) mask[s] = weights.get(s);
             floors.sort((a, b) => a.gy - b.gy || a.gx - b.gx);
             value = _structDetailPrevious = { lists: out, floors, selected, mask, version: ++_structDetailVersion, live: true };
         }
@@ -3666,7 +3679,7 @@ function _structureDetailSplit(lists, flat2d, bounds, live = true) {
     // (Split from 125% of the budget, back under 80%: no blinking at its edge.)
     if (!_structDetailMode && n > STRUCT_DETAIL_BUDGET * 1.25) _structDetailMode = true;
     else if (_structDetailMode && n < STRUCT_DETAIL_BUDGET * .8) _structDetailMode = false;
-    if (!_structDetailMode) { _structDetailPrevious = null; return null; }
+    if (!_structDetailMode) { for(const e of _structDetailPrevious?.selected || []) e._r3dDetailBlend=1; _structDetailPrevious = null; return null; }
     if (_structDetailPx.length < n) _structDetailPx = new Float32Array(Math.ceil(n * 1.5));
     const P = _structDetailPx.subarray(0, n), previous = _structDetailPrevious;
     let i = 0;
@@ -3684,7 +3697,7 @@ function _structureDetailSplit(lists, flat2d, bounds, live = true) {
         return previous;
     }
     const mask = live ? new Uint8Array(_pageTables.s.cap) : null;
-    if (mask) for (const e of selected) if (e._s >= 0) mask[e._s] = 1;
+    if (mask) for (const e of selected) if (e._s >= 0) {mask[e._s] = 255;e._r3dDetailBlend=1;}
     const pxAt = (gx, gy) => _detailScore(gx + .5, gy + .5, .94, flat2d);
     _structDetailPrevious = { lists: out.slice(0, lists.length), selected, mask, version: ++_structDetailVersion, T: 0, pxAt, live, far: far.slice(0, lists.length) };
     if (live) _structDetailCache = { key: cacheKey, frame: _pageTables.s, value: _structDetailPrevious };
@@ -3708,6 +3721,7 @@ let _detailMode = false, _detailMask = null, _detailSlots = [], _detailMaskVersi
 let _unitDetailCache = null;
 function _detailMaskClear() {
     _unitDetailCache = null;
+    for(const u of _detailUnits) u._r3dDetailBlend=1;
     if (_detailMask) for (const s of _detailSlots) _detailMask[s] = 0;
     if (_detailSlots.length) { _detailSlots = []; _detailMaskVersion++; }
 }
@@ -3737,17 +3751,21 @@ function _unitDetailSplit(viewUnits, flat2d, bounds) {
         P[i] = _detailScore(x, z, size, flat2d, !!(_detailMask && _detailMask[s]));
     }
     if (!_detailMask || _detailMask.length < F.cap) { _detailMask = new Uint8Array(F.cap); _detailSlots = []; }
-    const M8 = _detailMask, detailed = [], slots = [];
-    for (const i of _detailPick(P, UNIT_DETAIL_BUDGET)) {
+    const M8 = _detailMask, detailed = [], slots = [], picked = _detailPick(P, UNIT_DETAIL_BUDGET), weights = _detailWeights(P,picked,UNIT_DETAIL_BUDGET);
+    let weightChanged=false;
+    for (const i of picked) {
         const u = viewUnits[i], s = u ? u._s : -1;
+        const weight=weights.get(i);
+        u._r3dDetailBlend=weight/255;
+        if(s>=0 && M8[s]!==weight) weightChanged=true;
         detailed.push(u);
         if (s >= 0) slots.push(s);
     }
     let same = slots.length === _detailSlots.length;
     if (same) for (let k = 0; k < slots.length; k++) if (slots[k] !== _detailSlots[k]) { same = false; break; }
-    if (!same) {
+    if (!same || weightChanged) {
         for (const s of _detailSlots) M8[s] = 0;
-        for (const s of slots) M8[s] = 1;
+        for (const u of detailed) if(u._s>=0) M8[u._s]=Math.round(u._r3dDetailBlend*255);
         _detailSlots = slots; _detailMaskVersion++;
     }
     // Preserve the list identity when the selection is unchanged, so the

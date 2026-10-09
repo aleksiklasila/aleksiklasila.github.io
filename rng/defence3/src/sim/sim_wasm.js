@@ -261,3 +261,4 @@ _simHeapAlloc = _simHeapAllocImpl;
 _simHeapAllocAuto = _simHeapAllocAutoImpl;
 _simHeapRelease = _simHeapReleaseImpl;
 _simHeapPtrOf = _simHeapPtrImpl;
+_simHeapViewReg = (arr, v, off) => { const p = _simHeap.ptr.get(arr); if (p !== undefined) _simHeap.ptr.set(v, p + off); };

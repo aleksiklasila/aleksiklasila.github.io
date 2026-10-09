@@ -27,7 +27,7 @@ project(true);
 populate(Array.from({length:2000},(_,i)=>[495+(i%50)*.2,497+Math.floor(i/50)*.15]));
 let split=c._unitDetailSplit(c.units,true,{});
 assert.equal(split.units.length,600,'equal sizes fill the hard budget instead of selecting none');
-assert.equal(split.columns.detailMask.reduce((a,b)=>a+b,0),600,'each detailed unit has exactly one GPU exclusion');
+assert.equal(split.columns.detailMask.reduce((a,b)=>a+(b>0),0),600,'each detailed unit has exactly one GPU exclusion');
 assert.equal(c._unitDetailSplit(c.units,true,{}).units,split.units,'stable selection reuses the persistent layer');
 // Big units outside the viewport must never starve visible small units.
 populate([...Array.from({length:2000},()=>[530,500,30]),...Array.from({length:200},(_,i)=>[499+(i%20)*.1,499+Math.floor(i/20)*.1,5])]);
@@ -64,7 +64,7 @@ c.getCellItemsRowMajor=()=>[];
 const structures=Array.from({length:2000},(_,i)=>({_s:i,gx:495+i%10,gy:497+Math.floor(i/10)%6}));
 const buildings=c._structureDetailSplit([structures],true,{},true);
 assert.equal(buildings.selected.size,600,'equal-sized structures also fill a bounded budget');
-assert.equal(buildings.mask.reduce((a,b)=>a+b,0),600);
+assert.equal(buildings.mask.reduce((a,b)=>a+(b>0),0),600);
 assert.equal(c._structureDetailSplit([structures],true,{},true),buildings,'unchanged structures reuse their model layer');
 // The packed structure path rejects off-screen slots without touching views.
 const T={cap:2000,n:2000};
@@ -73,7 +73,7 @@ for(let i=0;i<2000;i++) {T.alive[i]=1;T.energy[i]=10;T.kind[i]=i%6;T.gx[i]=495+i
 c._pageTables.s=T;c._pageStructViews=structures;c.gameTime++;
 const packed=c._structureDetailSplit([[],[],[],[],[]],true,{},true);
 assert.equal(packed.selected.size,600);
-assert.equal(packed.mask.reduce((a,b)=>a+b,0),600);
+assert.equal(packed.mask.reduce((a,b)=>a+(b>0),0),600);
 T.alive.fill(0);c.gameTime++;
 assert.equal(c._structureDetailSplit([[],[],[],[],[]],true,{},true).selected.size,0,'retired structures cannot hold detail slots');
 // A zoomed camera in a huge world still needs columns for its far population

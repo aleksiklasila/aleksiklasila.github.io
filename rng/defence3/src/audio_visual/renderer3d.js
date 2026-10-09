@@ -188,7 +188,7 @@
             const light = o.historyGhost ? o.lightLevel * .65 : o.lightLevel;
             const color = source ? null : hexToRgb(o.tint);
             this.push(o.x, o.z + (exact ? source._flatOffsetZ || 0 : 0), size || o.scaleX, size || o.scaleZ,
-                source ? light : color[0], source ? light : color[1], source ? light : color[2], o.alpha,
+                source ? light : color[0], source ? light : color[1], source ? light : color[2], o.alpha * (o.pickSource?._r3dDetailBlend ?? 1),
                 exact || tile ? 0 : -(o.rotationY || 0), source);
         }
     }
@@ -2799,6 +2799,7 @@
                 out float vAlpha;
                 out float vLight;
                 flat out int vSurface;
+                flat out float vModelBlend;
                 flat out float vLayer;
                 flat out float vStatusLayer;
                 void main() {
@@ -2931,6 +2932,7 @@
                     gl_Position = uViewProjection * world;
                     vColor = color; vTrim = trim; vUv = aUv;
                     vAlpha = alpha; vLight = light; vSurface = int(detail.x + .5); vLayer = atlasLayer; vStatusLayer = statusLayer;
+                    vModelBlend = m3.w;
                 }
             `, `#version 300 es
                 precision highp float;
@@ -2941,6 +2943,7 @@
                 in float vAlpha;
                 in float vLight;
                 flat in int vSurface;
+                flat in float vModelBlend;
                 flat in float vLayer;
                 flat in float vStatusLayer;
                 uniform float uIsUnit;
@@ -2958,6 +2961,8 @@
                     // vTrim is the functional color used by the 2D sprite (farm
                     // yellow, builder green, etc.); vColor identifies the owner.
                     // Lift dark palettes without replacing their hue with white.
+                    float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy,vec2(.06711056,.00583715))));
+                    if (noise >= vModelBlend) discard;
                     float peak = max(vTrim.r, max(vTrim.g, vTrim.b));
                     vec3 typeColor = vTrim * max(1.0, .62 / max(peak, .01));
                     // Keep 2D's type colors on the body and owner colors on trim.
@@ -5041,6 +5046,7 @@
             }
             let data = b.data, base = b.count * INSTANCE_STRIDE;
             writeObjectMatrix(data, base, o);
+            data[base + 15] = o.pickSource?._r3dDetailBlend ?? 1;
             data[base + 3] = o._pdx; data[base + 7] = o._pdz; data[base + 11] = o._phaseRate;
             data[base + 4] = o._flySeed; data[base + 6] = o._flyOn;
             let color = objectRgb(o);
@@ -5100,6 +5106,7 @@
             }
             let base = b.count * INSTANCE_STRIDE;
             b.data.set(rec, base);
+            b.data[base + 15] = unit?._r3dDetailBlend ?? 1;
             b.data[base + 26] = top;
             this.markDirectSlot(top);
             (b.pickUnits || (b.pickUnits = [])).push(unit, b.count);
@@ -5169,6 +5176,7 @@
                 for (let o of g.objects) {
                     let base = at * INSTANCE_STRIDE;
                     writeObjectMatrix(data, base, o);
+                    data[base + 15] = o.pickSource?._r3dDetailBlend ?? 1;
                     data[base + 3] = o._pdx; data[base + 7] = o._pdz; data[base + 11] = o._phaseRate;
                     data[base + 4] = o._flySeed; data[base + 6] = o._flyOn;
                     let color = objectRgb(o);
@@ -5347,6 +5355,7 @@
                 data[base + 18] = color[2];
                 data[base + 19] = Math.max(0.05, Math.min(1, Number(object.alpha) || 1));
                 if (kind) {
+                    data[base + 15] = object.pickSource?._r3dDetailBlend ?? 1;
                     data[base + 20] = object.moveAmount || 0;
                     data[base + 21] = object.walkPhase || 0;
                 } else {
@@ -5731,13 +5740,27 @@
             for(let i=0;i<I.length;i+=3)faces.push([I[i],I[i+1],I[i+2],(vertices[I[i]][2]+vertices[I[i+1]][2]+vertices[I[i+2]][2])/3]);
             faces.sort((a,b)=>a[3]-b[3]);g.clearRect(0,0,64,64);m.clearRect(0,0,64,64);
             let tint=hexToRgb(style.color||'#aaa');const peak=Math.max(...tint,.01);tint=tint.map(v=>v*Math.max(1,.62/peak));
-            const palette={1:[.07,.08,.10],2:[1,1,1],3:[.48,.94,1],4:tint,5:[.42,.29,.18],6:[.88,.86,.80],7:tint,8:[.96,.74,.24],9:[.88,.18,.2],10:[.44,.45,.49],11:[.24,.54,.22],12:[.035,.02,.06],13:[.8,.67,.36],14:[.19,.2,.23],15:[1,1,1]};
+            const palette={1:[.07,.08,.10],2:[1,1,1],3:[.48,.94,1],4:[.055,.065,.08],5:[.42,.29,.18],6:[.88,.86,.80],7:tint.map(v=>Math.min(1,v*1.3+.1)),8:[.96,.74,.24],9:[.88,.18,.2],10:[.44,.45,.49],11:[.24,.54,.22],12:[.035,.02,.06],13:[.8,.67,.36],14:[.19,.2,.23],15:[1,1,1]};
             for(const face of faces) {
                 const [a,b,c]=face,points=[vertices[a],vertices[b],vertices[c]],surface=D[a*4]|0;
-                const light=.72+.28*Math.max(0,-.42*N[a*3]+.86*N[a*3+1]+.31*N[a*3+2]);
+                const diffuse=Math.max(0,(-.42*N[a*3]+.86*N[a*3+1]+.31*N[a*3+2])/Math.hypot(.42,.86,.31));
+                const step=(lo,hi,x)=>{x=Math.max(0,Math.min(1,(x-lo)/(hi-lo)));return x*x*(3-2*x);};
+                const glowing=[3,4,7,12,15].includes(surface);
+                const light=glowing?1:(.72+.28*(.42+.26*step(.195,.245,diffuse)+.32*step(.635,.685,diffuse)))*(style.unit?1:.86);
                 const rgb=(palette[surface]||tint).map(v=>Math.round(Math.min(1,v*light)*255));
                 for(const ctx of [g,m]) {ctx.beginPath();ctx.moveTo(points[0][0],points[0][1]);ctx.lineTo(points[1][0],points[1][1]);ctx.lineTo(points[2][0],points[2][1]);ctx.closePath();}
                 g.fillStyle=`rgb(${rgb.join(',')})`;g.strokeStyle=g.fillStyle;g.lineWidth=.4;g.fill();g.stroke();
+                if(!glowing && U) {
+                    // Match the full model's face borders, without outlining the
+                    // internal diagonal of every triangulated rectangular face.
+                    g.strokeStyle='rgba(6,9,14,.75)';g.lineWidth=style.unit?1.1:1.5;
+                    for(let e=0;e<3;e++) {
+                        const ia=face[e],ib=face[(e+1)%3];
+                        if((U[ia*2]===U[ib*2] && (U[ia*2]===0||U[ia*2]===1)) || (U[ia*2+1]===U[ib*2+1] && (U[ia*2+1]===0||U[ia*2+1]===1))) {
+                            g.beginPath();g.moveTo(vertices[ia][0],vertices[ia][1]);g.lineTo(vertices[ib][0],vertices[ib][1]);g.stroke();
+                        }
+                    }
+                }
                 m.fillStyle=surface===2||surface===15?'#fff':'#000';m.strokeStyle=m.fillStyle;m.lineWidth=.4;m.fill();m.stroke();
                 if(surface===4 && U) {
                     const u0=U[a*2]*64,v0=(1-U[a*2+1])*64,u1=U[b*2]*64,v1=(1-U[b*2+1])*64,u2=U[c*2]*64,v2=(1-U[c*2+1])*64;
@@ -5748,7 +5771,7 @@
                         const ay=((p1[1]-p0[1])*(v2-v0)-(p2[1]-p0[1])*(v1-v0))/det;
                         const bx=((p2[0]-p0[0])*(u1-u0)-(p1[0]-p0[0])*(u2-u0))/det;
                         const by=((p2[1]-p0[1])*(u1-u0)-(p1[1]-p0[1])*(u2-u0))/det;
-                        g.save();g.clip();g.transform(ax,ay,bx,by,p0[0]-ax*u0-bx*v0,p0[1]-ay*u0-by*v0);g.drawImage(panel,0,0);g.restore();
+                        g.save();g.beginPath();g.moveTo(p0[0],p0[1]);g.lineTo(p1[0],p1[1]);g.lineTo(p2[0],p2[1]);g.closePath();g.clip();g.transform(ax,ay,bx,by,p0[0]-ax*u0-bx*v0,p0[1]-ay*u0-by*v0);g.drawImage(panel,0,0);g.restore();
                     }
                 }
             }
@@ -5794,6 +5817,7 @@
                     flat out int vFlags;
                     flat out float vLayer;
                     out float vLod, vDotScale, vLight;
+                    out float vModelBlend;
                     void main() {
                         vec2 current = vec2(aX,aZ) / uTile;
                         vec2 p = uStructure != 0 ? current : mix(vec2(aPX,aPZ) / uTile,current,uAlpha);
@@ -5822,7 +5846,8 @@
                         // the same rule; a hair of overlap, never a gap.)
                         if (uDetail > 0. && uStructure == 0 && pixels > uDetail * 1.0001) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
                         // (Picked for detail by the split: renderer.js _unitDetailSplit.)
-                        if (uDetailMask > .5 && (aDetail > .5 || (uStructure != 0 && aKind == 6.))) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
+                        vModelBlend = uDetailMask > .5 ? aDetail / 255. : 0.;
+                        if (uDetailMask > .5 && (aDetail > 254.5 || (uStructure != 0 && aKind == 6.))) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
                         // (Structures and floor items over the split's threshold
                         // are the detailed pass's.)
                         if (uDetailS > 0. && uStructure != 0 && (aKind == 6. || pixels > uDetailS * 1.0001)) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
@@ -5854,11 +5879,14 @@
                     flat in int vFlags;
                     flat in float vLayer;
                     in float vLod, vDotScale, vLight;
+                    in float vModelBlend;
                     uniform sampler2D uSprites, uOwnerMask;
                     uniform float uAtlasGrid, uFlat;
                     out vec4 color;
                     void main() {
                         if (vColor.a <= 0.) discard;
+                        float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy,vec2(.06711056,.00583715))));
+                        if (uFlat < .5 && noise < vModelBlend) discard;
                         vec2 p = gl_PointCoord * 2. - 1.;
                         float edge = (uStructure == 0 ? length(p) : max(abs(p.x),abs(p.y))) * vDotScale;
                         float dotAlpha = (1.-smoothstep(1.-fwidth(edge),1.,edge))*vCoverage;

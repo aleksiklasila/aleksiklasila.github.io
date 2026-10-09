@@ -357,6 +357,46 @@ emulation). Determinism-suite fixes come after the optimization work.
   snapshot test's positions 4 ticks after a restore are the known
   kernel-state gaps (object fields restore identically).
 
+### 2026-10-09 (later) — MOVE fused: one visit per unit (separation finish, combat, push)
+
+- **Separation finish fused into MOVE** (SIM_RULES_REVISION 5): the pair
+  kernel's pushes (prebuilt after the last tick, waited for before MOVE:
+  ~0 ms) are applied where each unit moved, in the movement kernel; the
+  SEPARATION_FINISH kernel, its JS commit pass and
+  tests/shared-separation-commit.test.cjs are gone. Pair sums are Int32
+  (px/py), one heap block (sep.sums, views by simHeapView) zeroed by the
+  chain's first stage (k_zero) instead of in MOVE.
+- **MOVE in 4-slot groups** (mv_move): step4 (steady flow) and the new
+  combat4 (brain hold / chase in f32x4, target checks by gather) four a
+  lane; the rest scalar per lane; then push4 (scale, clamp, now/carry,
+  quantize, tile test, sepMov, retry filter in f32x4) and the epilogue only
+  for lanes with something left (epi_slot). Blocked pushes are swept in the
+  kernel against the unit's profile walls (applyUnitSeparation's rule); JS
+  only for a unit left on a blocked tile. A scalar flow step reopens its
+  steady window (61k of 193k flow lanes per tick had fallen off the vector
+  step for the rest of their committed step).
+- Replay (B400 tick, one thread; `.claude/rbench.cjs` with PSET / DBGC
+  switches for deletion and counters): MOVE 30 + finish 13.5 → MOVE 38-40.
+  Split: vector paths + scalar loop ~8, push ~9 (memory: sums written by
+  other threads), epilogue small, steering looks (move_flow / flow_look)
+  ~12.6 (21.6k looks, ~580 ns each). A per-chunk look cache hit 2.5%:
+  dropped.
+- Crowd tests pass (separation-jitter, unit-collision-smoothness 1.48%,
+  nav-crowd-arrival); the small bench's divergence is the pre-existing one
+  (players + list membership, now from tick 223).
+- B400: mean 61.3 (was ~66). B800 (`.claude/s5-800k-i.log`,
+  --no-memory-reducer): mean 88.6, p50 84.0, p95 117.8, max 213 (battle
+  setup), 0 desyncs; steady ticks ~74 ms; MOVE kernel 15.5 ms foreground.
+- Where MOVE's time is: ~130 ms CPU per tick at 800k (~165 ns a unit,
+  1.6x the single-thread replay: memory contention). It touches ~170 bytes
+  per unit per tick (13 columns for the steady step alone, read-modify-
+  write stores, sums from other threads). Next: data reduction (plan 2):
+  i32 1/8-px positions or at least narrower motor state (i16 steps and
+  carries, one tile/steady word), stores only of changed values, the
+  remaining scalar lanes (parked units, steering looks) vectorized or
+  made rarer, and the pair kernel (32 ms a tick at 400k, one thread) as
+  plan B's 4x4 contact tiles.
+
 ## Next
 
 0. Main thread: the items above, biggest first: MOVE (layouts, steering

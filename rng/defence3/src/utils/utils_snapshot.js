@@ -57,7 +57,10 @@ const SNAP_FORMAT = 7;
 // 4: every kernel in Rust (native f32, not JavaScript's numbers); a hash
 // every SNAP_HASH_EVERY ticks; units waiting for their way parked in the
 // kernel; the steady step; stat rows; re-routes every 32 ticks.
-const SIM_RULES_REVISION = 4;
+// 5: the separation's pushes applied in the movement kernel's epilogue
+// (where each unit moved, before the unit pass); the state hash from the
+// unit columns and the object fields' digest.
+const SIM_RULES_REVISION = 5;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
 // Each hash covers one slice (regions, grid rows) of the world. The resync

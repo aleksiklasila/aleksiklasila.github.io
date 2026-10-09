@@ -169,6 +169,21 @@ const W_TGY: usize = 151;
 const W_TGTOL: usize = 152;
 const W_STEADY: usize = 153;
 const W_WKLMT: usize = 154;
+// (The separation's, for the epilogue's fused finish: sim_parallel.js
+// _SIM_MOVE_WNAMES then _SIM_MOVE_WNAMES2 from word 268.)
+const W_SPX: usize = 155;
+const W_SPY: usize = 156;
+const W_SOV: usize = 157;
+const W_SHIT: usize = 158;
+const W_SCX: usize = 159;
+const W_SCY: usize = 268;
+const W_SMV: usize = 269;
+const W_SNX: usize = 270;
+const W_SNY: usize = 271;
+const W_SFAST: usize = 272;
+const W_SEX: usize = 273;
+const W_SEXC: usize = 274;
+const W_PF: usize = 275;
 /// Per navigation profile p: 8 words from W_NAV + 8p (fields, partL, partB,
 /// nb, nt, np, meta, walls).
 const W_NAV: usize = 160;
@@ -361,6 +376,19 @@ struct Mv {
     tgtol: *const F32,
     steady: *mut i32,
     wklmt: *mut i32,
+    spx: *mut i32,
+    spy: *mut i32,
+    sov: *mut F32,
+    shit: *mut u32,
+    scx: *mut F32,
+    scy: *mut F32,
+    smv: *mut u8,
+    snx: *mut F32,
+    sny: *mut F32,
+    sfast: *mut u8,
+    sex: *mut i32,
+    sexc: *mut i32,
+    pf: *const u8,
     brain: bool,
     nav: [NavP; NAV_PROFILES],
     offn: usize,
@@ -574,6 +602,19 @@ impl Mv {
             tgtol: p!(W_TGTOL),
             steady: p!(W_STEADY),
             wklmt: p!(W_WKLMT),
+            spx: p!(W_SPX),
+            spy: p!(W_SPY),
+            sov: p!(W_SOV),
+            shit: p!(W_SHIT),
+            scx: p!(W_SCX),
+            scy: p!(W_SCY),
+            smv: p!(W_SMV),
+            snx: p!(W_SNX),
+            sny: p!(W_SNY),
+            sfast: p!(W_SFAST),
+            sex: p!(W_SEX),
+            sexc: p!(W_SEXC),
+            pf: p!(W_PF),
             brain: rd((a as usize + 4096) as *const f64, 48) == 1.0,
             nav,
             offn: word(a, W_OFFN),
@@ -1163,23 +1204,7 @@ struct StepP {
 pub unsafe extern "C" fn mv_step(a: *const i32, s0: i32, end: i32) {
     let m = Mv::load(a);
     let f = (a as usize + 4096) as *const f64;
-    let q = rd(f, 8);
-    let bc = to_i32(rd(f, 9)) as i64;
-    let br = to_i32(rd(f, 10)) as i64;
-    let p = StepP {
-        tr: to_i32(rd(f, 3)),
-        q,
-        iq: 1.0 / q,
-        players: to_i32(rd(f, 11)),
-        bsz: rd(f, 14),
-        absent: rd(f, 15),
-        boxsteps: to_i32(rd(f, 17)),
-        wcheck: to_i32(rd(f, 21)),
-        acq_t: js_max(1.0, to_i32(rd(f, 38)) as f64) as i64,
-        wkwatch: js_max(1.0, to_i32(rd(f, 29)) as f64) as i64,
-        stride: bc + 1,
-        plane: (bc + 1) * (br + 1),
-    };
+    let p = step_params(f);
     let mut s = s0.max(0) as usize;
     let end = if end > 0 { end as usize } else { 0 };
     // (The steady step's tick tests as masks: the aggro look ticks are
@@ -1489,6 +1514,12 @@ unsafe fn step_flow(
     }
     commit_step(m, s, x, y, vx, vy, gx, gy, tl, q, iq);
     wr(m.stept, s - m.stepbase, 1);
+    // (Its window again, to the step's end or its next look: the steady step
+    // takes the next ticks. Not after a slide: the step ends.)
+    if !m.steady.is_null() && rd(m.cd, s) == dk {
+        let end = rd(m.ct, s).wrapping_add(rd(m.cn, s) as i32);
+        wr(m.steady, s, if end > t + 1 { steady_until(m, s, t, end, f, tr, acq_t, wcheck) } else { 0 });
+    }
 }
 
 /// The look's box clamped to the map, as the kernels clamp it.
@@ -1535,12 +1566,18 @@ struct MoveP {
     chunk: usize,
 }
 
-/// SIM_KERNEL_MOVE over slots s0..end (chunk: the epilogue's).
+/// SIM_KERNEL_MOVE over slots s0..end (chunk: the epilogue's lists), four
+/// slots at a time, each unit once: a flow unit's steady step (step4) and a
+/// combat brain instruction (combat4) four a lane; the other lanes one by
+/// one (step_slot, then move_pre / move_flow / move_path); then the group's
+/// separation pushes (push4) and, for the lanes with anything left (another
+/// tile, a node step's charge, a push leaving its tile, a listing), the
+/// epilogue (epi_slot). (Units' passes read nothing another unit's write
+/// in the same tick: the order between units does not show.)
 #[no_mangle]
 pub unsafe extern "C" fn mv_move(a: *const i32, s0: i32, end: i32, chunk: i32) {
     wr(a as *mut i32, 299, s0);
     core::ptr::write_bytes(a.add(300) as *mut u8, 0, (end - s0).max(0) as usize);
-    if rd((a as usize + 4096) as *const f64, 46) == 1.0 { mv_step(a, s0, end); }
     let m = Mv::load(a);
     let f = (a as usize + 4096) as *const f64;
     let q = rd(f, 8);
@@ -1574,30 +1611,199 @@ pub unsafe extern "C" fn mv_move(a: *const i32, s0: i32, end: i32, chunk: i32) {
         s0: s0.max(0) as usize,
         chunk: chunk.max(0) as usize,
     };
+    let sp = step_params(f);
     if !m.hita.is_null() {
         wr(m.hitc, p.chunk, 0);
     }
-    let mut s = s0.max(0) as usize;
+    let b0 = s0.max(0) as usize;
     let e = if end > 0 { end as usize } else { 0 };
+    let mut ep = epi_begin(&m, f, chunk, b0, e);
+    let pc = push_consts(&m, f);
+    let fast = p.step_ran && sp.acq_t == 4 && sp.tr > 0 && !m.steady.is_null();
+    let zero = i32x4_splat(0);
+    let mut s = b0;
     while s < e {
-        // (Sixteen slots the step kernel stepped, none with a shot flag:
-        // nothing more for them here.)
-        if p.step_ran && s + 16 <= e {
-            let st = v128_load(m.stept.add(s - m.stepbase) as *const v128);
-            let fi = v128_load(m.fire.add(s) as *const v128);
-            if u8x16_all_true(i8x16_eq(st, u8x16_splat(1))) && !v128_any_true(fi) {
-                s += 16;
-                continue;
+        let n = (e - s).min(4);
+        let mut done = 0i32;
+        if n == 4 {
+            if fast {
+                done = step4(&m, &sp, s);
+            }
+            if m.brain && done != 15 {
+                done |= combat4(&m, &p, s, done);
             }
         }
-        match move_pre(&m, &p, s) {
-            1 => move_flow(&m, &p, s),
-            2 => move_path(&m, &p, s),
-            _ => {}
+        for l in 0..n {
+            let u = s + l;
+            if done & (1 << l) != 0 {
+                if rd(m.fire, u) != 0 {
+                    wr(m.fire, u, 0);
+                }
+                continue;
+            }
+            if p.step_ran {
+                step_slot(&m, &sp, u);
+            }
+            match move_pre(&m, &p, u) {
+                1 => move_flow(&m, &p, u),
+                2 => move_path(&m, &p, u),
+                _ => {}
+            }
         }
-        s += 1;
+        let nd = if ep.push { push4(&m, &pc, s, e) } else { 0 };
+        // (The lanes with anything for the epilogue.)
+        let o4 = ld_u8x4(m.out.add(s));
+        let k4 = ld_u8x4(m.spent.add(s));
+        let eb = i32x4_bitmask(v128_or(i32x4_gt(o4, i32x4_splat(1)), i32x4_ne(k4, zero))) as i32 | nd | (nd >> 4);
+        if eb & 15 != 0 {
+            for l in 0..n {
+                if eb & (1 << l) != 0 {
+                    epi_slot(&m, f, &mut ep, s + l, (nd >> l) & 0x11 != 0);
+                }
+            }
+        }
+        s += 4;
     }
-    move_epilogue(&m, f, s0.max(0) as usize, e, chunk);
+    epi_end(&m, &ep, chunk);
+}
+
+/// Four slots' combat brain instructions, move_combat's common cases four a
+/// lane: a unit holding (cmMode move 1) stands; one chasing (2) steps toward
+/// its target (where it was at the pass's start, unit.x0/y0) at its speed
+/// (halved frozen, halved sandy), staying in its tile or flying (in f32,
+/// quantized half up). Left to move_combat: a unit not alive or not indexed,
+/// its target gone (dead, another unit in its slot), its shot due (fire bit,
+/// timer out), a ground step into another tile (the wall slide). Returns the
+/// lanes done (not in `done`).
+#[inline(always)]
+unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32) -> i32 {
+    let zero = i32x4_splat(0);
+    let fz = f32x4_splat(0.0);
+    let cm = ld_u8x4(m.cmode.add(s));
+    let mk = v128_and(cm, i32x4_splat(3));
+    let hold = i32x4_eq(mk, i32x4_splat(1));
+    let chase = i32x4_eq(mk, i32x4_splat(2));
+    let free = i32x4_eq(v128_and(i32x4_splat(done), i32x4(1, 2, 4, 8)), zero);
+    let mut ok = v128_and(free, v128_or(hold, chase));
+    if !v128_any_true(ok) {
+        return 0;
+    }
+    if !m.hita.is_null() {
+        let firing = v128_andnot(i32x4_ne(v128_and(cm, i32x4_splat(4)), zero), f32x4_gt(v128_load(m.at.add(s) as *const v128), fz));
+        ok = v128_andnot(ok, firing);
+    }
+    ok = v128_and(ok, f32x4_gt(v128_load(m.en.add(s) as *const v128), fz));
+    ok = v128_and(ok, v128_not(i32x4_eq(v128_load(m.sep.add(s) as *const v128), i32x4_splat(p.absent as u32 as i32))));
+    ok = v128_and(ok, i32x4_eq(ld_u8x4(m.dead.add(s)), zero));
+    ok = v128_and(ok, i32x4_ge(v128_load(m.cmt.add(s) as *const v128), zero));
+    let mut bits = i32x4_bitmask(ok) as i32;
+    if bits == 0 {
+        return 0;
+    }
+    // (The targets: alive and the same unit; where they were.)
+    let mut tx = fz;
+    let mut ty = fz;
+    for l in 0..4usize {
+        if bits & (1 << l) == 0 {
+            continue;
+        }
+        let q = rd(m.cmt, s + l) as usize;
+        if rd(m.dead, q) != 0 || rd(m.id, q) != rd(m.ctid, s + l) {
+            bits &= !(1 << l);
+            continue;
+        }
+        let (a, b) = (rd(m.x0, q) as f32, rd(m.y0, q) as f32);
+        match l {
+            0 => { tx = f32x4_replace_lane::<0>(tx, a); ty = f32x4_replace_lane::<0>(ty, b); }
+            1 => { tx = f32x4_replace_lane::<1>(tx, a); ty = f32x4_replace_lane::<1>(ty, b); }
+            2 => { tx = f32x4_replace_lane::<2>(tx, a); ty = f32x4_replace_lane::<2>(ty, b); }
+            _ => { tx = f32x4_replace_lane::<3>(tx, a); ty = f32x4_replace_lane::<3>(ty, b); }
+        }
+    }
+    if bits == 0 {
+        return 0;
+    }
+    let lane = i32x4_ne(v128_and(i32x4_splat(bits), i32x4(1, 2, 4, 8)), zero);
+    let x = v128_load(m.x.add(s) as *const v128);
+    let y = v128_load(m.y.add(s) as *const v128);
+    let dx = f32x4_sub(tx, x);
+    let dy = f32x4_sub(ty, y);
+    let d = f32x4_sqrt(f32x4_add(f32x4_mul(dx, dx), f32x4_mul(dy, dy)));
+    let half = f32x4_splat(0.5);
+    let one = f32x4_splat(1.0);
+    let mut spd = v128_load(m.spd.add(s) as *const v128);
+    spd = f32x4_mul(spd, v128_bitselect(half, one, i32x4_gt(v128_load(m.frz.add(s) as *const v128), zero)));
+    spd = f32x4_mul(spd, v128_bitselect(half, one, i32x4_gt(v128_load(m.snd.add(s) as *const v128), zero)));
+    let go = v128_and(v128_and(lane, chase), v128_and(f32x4_gt(d, spd), f32x4_gt(spd, fz)));
+    let stand = v128_andnot(lane, go);
+    let k = f32x4_div(spd, d);
+    let vx = v128_and(f32x4_mul(dx, k), go);
+    let vy = v128_and(f32x4_mul(dy, k), go);
+    let it = f32x4_splat(m.itile as f32);
+    let gx = f32x4_floor(f32x4_mul(x, it));
+    let gy = f32x4_floor(f32x4_mul(y, it));
+    let ax = f32x4_add(x, vx);
+    let ay = f32x4_add(y, vy);
+    let cross = v128_or(f32x4_ne(f32x4_floor(f32x4_mul(ax, it)), gx), f32x4_ne(f32x4_floor(f32x4_mul(ay, it)), gy));
+    let fly = i32x4_eq(ld_u8x4(m.slayer.add(s)), i32x4_splat(1));
+    // (A ground step into another tile: move_combat's wall slide.)
+    let slide = v128_andnot(v128_and(go, cross), fly);
+    let take = v128_andnot(v128_or(stand, go), slide);
+    let tb = i32x4_bitmask(take) as i32;
+    if tb == 0 {
+        return 0;
+    }
+    let qf = f32x4_splat(p.q as f32);
+    let iqf = f32x4_splat(p.iq as f32);
+    let fin = v128_and(f32x4_eq(f32x4_sub(ax, ax), fz), f32x4_eq(f32x4_sub(ay, ay), fz));
+    let qx = v128_bitselect(f32x4_mul(f32x4_floor(f32x4_add(f32x4_mul(ax, qf), half)), iqf), x, fin);
+    let qy = v128_bitselect(f32x4_mul(f32x4_floor(f32x4_add(f32x4_mul(ay, qf), half)), iqf), y, fin);
+    let nx = v128_bitselect(qx, x, go);
+    let ny = v128_bitselect(qy, y, go);
+    let moved = i32x4_bitmask(v128_and(go, v128_or(f32x4_ne(f32x4_floor(f32x4_mul(nx, it)), gx), f32x4_ne(f32x4_floor(f32x4_mul(ny, it)), gy)))) as i32;
+    let st = |ptr: *mut F32, v: v128| {
+        let pp = ptr.add(s) as *mut v128;
+        v128_store(pp, v128_bitselect(v, v128_load(pp), take));
+    };
+    st(m.px, x);
+    st(m.py, y);
+    st(m.vx, vx);
+    st(m.vy, vy);
+    st(m.x, nx);
+    st(m.y, ny);
+    for l in 0..4usize {
+        if tb & (1 << l) == 0 {
+            continue;
+        }
+        let u = s + l;
+        if rd(m.d0, u) != 0 {
+            wr(m.d0, u, 0);
+        }
+        wr(m.out, u, if moved & (1 << l) != 0 { 3 } else { 1 });
+    }
+    tb
+}
+
+/// The step kernel's params (from F).
+#[inline(always)]
+unsafe fn step_params(f: *const f64) -> StepP {
+    let q = rd(f, 8);
+    let bc = to_i32(rd(f, 9)) as i64;
+    let br = to_i32(rd(f, 10)) as i64;
+    StepP {
+        tr: to_i32(rd(f, 3)),
+        q,
+        iq: 1.0 / q,
+        players: to_i32(rd(f, 11)),
+        bsz: rd(f, 14),
+        absent: rd(f, 15),
+        boxsteps: to_i32(rd(f, 17)),
+        wcheck: to_i32(rd(f, 21)),
+        acq_t: js_max(1.0, to_i32(rd(f, 38)) as f64) as i64,
+        wkwatch: js_max(1.0, to_i32(rd(f, 29)) as f64) as i64,
+        stride: bc + 1,
+        plane: (bc + 1) * (br + 1),
+    }
 }
 
 /// _simMoveCombat: the combat brain's instruction for slot s (cmMode bits
@@ -2727,109 +2933,408 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
     wr(m.out, s, if floor(qx * itile) != gx as f64 || floor(qy * itile) != gy as f64 { 3 } else { 1 });
 }
 
-/// _simMoveEpilogue over the chunk's slots b0..end.
-unsafe fn move_epilogue(m: &Mv, f: *const f64, b0: usize, end: usize, chunk: i32) {
-    if m.post.is_null() || m.postc.is_null() {
-        return;
+/// The push pass's constants (P[49]-[54]).
+struct PushC {
+    contacts: v128,
+    k: v128,
+    now: v128,
+    q: v128,
+    iq: v128,
+    itile: v128,
+    retry: i32,
+    rmask: v128,
+    rpow2: bool,
+    tid: v128,
+}
+#[inline(always)]
+unsafe fn push_consts(m: &Mv, f: *const f64) -> PushC {
+    let q = rd(f, 8) as f32;
+    let retry = to_i32(rd(f, 51));
+    PushC {
+        contacts: f32x4_splat(rd(f, 49) as f32),
+        k: f32x4_splat((rd(f, 52) / rd(f, 50)) as f32),
+        now: f32x4_splat(rd(f, 53) as f32),
+        q: f32x4_splat(q),
+        iq: f32x4_splat(1.0 / q),
+        itile: f32x4_splat(m.itile as f32),
+        retry,
+        rmask: i32x4_splat(retry - 1),
+        rpow2: retry > 0 && (retry & (retry - 1)) == 0,
+        tid: i32x4_splat(m.t),
     }
-    let (w, h, itile) = (m.w, m.h, m.itile);
-    let absent = rd(f, 15);
-    let boxsteps = to_i32(rd(f, 17));
-    let epoch = to_i32(rd(f, 40));
-    let vis_gen = to_i32(rd(f, 41));
-    let vis_all = to_i32(rd(f, 42));
-    let cwn = to_i32(rd(f, 34));
-    let csz = to_i32(rd(f, 36));
+}
+
+/// The separation's pushes of slots s..s + 4 (the lanes past `end` are
+/// unused slots, past the last: their sums and carries 0): whether each
+/// moved by itself this tick (unit.sepMov, from where the kernel left it;
+/// out 0: the simulation thread's update sets it); the push the pair kernel
+/// summed (sep.px/py/ov/hit, cleared by the separation chain's first stage:
+/// scaled by its contacts,
+/// bounded by its deepest overlap, `now` of it applied now, the rest carried
+/// to the next tick in unit.sepCx/Cy) applied where it moved, quantized half
+/// up, when that stays in its tile (every lane's arithmetic its own: the
+/// same in whichever lane a unit is). Returns the lanes for push_slot: bits
+/// 0-3 leaving their tile (sep.fast 4, the push in sep.nextX/Y), 4-7 on
+/// their path retry tick with a push (sep.fast 5).
+#[inline(always)]
+unsafe fn push4(m: &Mv, c: &PushC, s: usize, end: usize) -> i32 {
+    let zero = i32x4_splat(0);
+    let fz = f32x4_splat(0.0);
+    let x = v128_load(m.x.add(s) as *const v128);
+    let y = v128_load(m.y.add(s) as *const v128);
+    let o4 = ld_u8x4(m.out.add(s));
+    {
+        let mv = v128_and(v128_or(f32x4_ne(x, v128_load(m.px.add(s) as *const v128)), f32x4_ne(y, v128_load(m.py.add(s) as *const v128))), i32x4_splat(1));
+        let old = i32x4_extend_low_i16x8(i16x8_extend_low_i8x16(v128_load32_zero(m.smv.add(s) as *const u32)));
+        let v = v128_bitselect(old, mv, i32x4_eq(o4, zero));
+        let b = i8x16_narrow_i16x8(i16x8_narrow_i32x4(v, v), i16x8_narrow_i32x4(v, v));
+        (m.smv.add(s) as *mut u32).write_unaligned(i32x4_extract_lane::<0>(b) as u32);
+    }
+    let hits = v128_load(m.shit.add(s) as *const v128);
+    let cx = v128_load(m.scx.add(s) as *const v128);
+    let cy = v128_load(m.scy.add(s) as *const v128);
+    if !v128_any_true(v128_or(hits, v128_or(cx, cy))) {
+        return 0;
+    }
+    let dead = i32x4_ne(ld_u8x4(m.dead.add(s)), zero);
+    let hf = f32x4_convert_u32x4(hits);
+    let one = f32x4_splat(1.0);
+    let sc = f32x4_mul(v128_bitselect(one, f32x4_sqrt(f32x4_div(c.contacts, f32x4_max(hf, one))), f32x4_le(hf, c.contacts)), c.k);
+    let mut px = f32x4_mul(f32x4_convert_i32x4(v128_load(m.spx.add(s) as *const v128)), sc);
+    let mut py = f32x4_mul(f32x4_convert_i32x4(v128_load(m.spy.add(s) as *const v128)), sc);
+    let len = f32x4_sqrt(f32x4_add(f32x4_mul(px, px), f32x4_mul(py, py)));
+    let lim = f32x4_max(fz, v128_load(m.sov.add(s) as *const v128));
+    let r = v128_bitselect(f32x4_div(lim, len), one, f32x4_gt(len, lim));
+    px = f32x4_mul(px, r);
+    py = f32x4_mul(py, r);
+    let hx = f32x4_mul(px, c.now);
+    let hy = f32x4_mul(py, c.now);
+    let dx = f32x4_add(cx, hx);
+    let dy = f32x4_add(cy, hy);
+    v128_store(m.scx.add(s) as *mut v128, v128_andnot(f32x4_sub(px, hx), dead));
+    v128_store(m.scy.add(s) as *mut v128, v128_andnot(f32x4_sub(py, hy), dead));
+    let lanes = i32x4_lt(i32x4(0, 1, 2, 3), i32x4_splat(end as i32 - s as i32));
+    let apply = v128_andnot(v128_or(f32x4_ne(dx, fz), f32x4_ne(dy, fz)), dead);
+    let mut nd = 0i32;
+    if v128_any_true(apply) {
+        let ax = f32x4_add(x, dx);
+        let ay = f32x4_add(y, dy);
+        let half = f32x4_splat(0.5);
+        let fin = v128_and(f32x4_eq(f32x4_sub(ax, ax), fz), f32x4_eq(f32x4_sub(ay, ay), fz));
+        let nx = v128_bitselect(f32x4_mul(f32x4_floor(f32x4_add(f32x4_mul(ax, c.q), half)), c.iq), x, fin);
+        let ny = v128_bitselect(f32x4_mul(f32x4_floor(f32x4_add(f32x4_mul(ay, c.q), half)), c.iq), y, fin);
+        let it = c.itile;
+        let same = v128_and(f32x4_eq(f32x4_floor(f32x4_mul(nx, it)), f32x4_floor(f32x4_mul(x, it))), f32x4_eq(f32x4_floor(f32x4_mul(ny, it)), f32x4_floor(f32x4_mul(y, it))));
+        let stay = v128_and(apply, same);
+        v128_store(m.x.add(s) as *mut v128, v128_bitselect(nx, x, stay));
+        v128_store(m.y.add(s) as *mut v128, v128_bitselect(ny, y, stay));
+        let cross = v128_and(v128_andnot(apply, same), lanes);
+        if v128_any_true(cross) {
+            v128_store(m.snx.add(s) as *mut v128, dx);
+            v128_store(m.sny.add(s) as *mut v128, dy);
+            nd = i32x4_bitmask(cross) as i32;
+        }
+    }
+    // (Pushed on its path retry tick: push_slot looks.)
+    if c.retry > 0 {
+        // (A unit with a fallback path and a pending target (mvPF), not armed
+        // (or a builder's watch), pushed, on its retry tick.)
+        let mut hit = v128_and(i32x4_ne(hits, zero), lanes);
+        if !m.pf.is_null() {
+            hit = v128_and(hit, i32x4_ne(ld_u8x4(m.pf.add(s)), zero));
+        }
+        hit = v128_and(hit, v128_or(i32x4_eq(ld_u8x4(m.on.add(s)), zero), i32x4_ne(v128_and(ld_u8x4(m.fl.add(s)), i32x4_splat(4)), zero)));
+        if v128_any_true(hit) {
+            let due = if c.rpow2 { i32x4_eq(v128_and(i32x4_add(c.tid, v128_load(m.id.add(s) as *const v128)), c.rmask), zero) } else { hit };
+            nd |= (i32x4_bitmask(v128_and(hit, due)) as i32) << 4;
+        }
+    }
+    if nd != 0 {
+        for l in 0..4usize {
+            if nd & (1 << l) != 0 {
+                wr(m.sfast, s + l, 4);
+            } else if nd & (16 << l) != 0 {
+                wr(m.sfast, s + l, 5);
+            }
+        }
+    }
+    nd
+}
+#[inline(always)]
+fn floor32(v: f32) -> f32 {
+    unsafe { f32x4_extract_lane::<0>(f32x4_floor(f32x4_splat(v))) }
+}
+
+/// One slot's push in the scalar part (push4 marked it, sep.fast: 4 it
+/// leaves its tile, the push in sep.nextX/Y; 5 its retry tick, the push in
+/// its tile applied): into an open neighbouring tile (flyers anywhere), else
+/// listed for the swept commit (sep.fast 0). In f32 as push4 (whichever part
+/// a unit takes, the same position). Returns (moved into another tile,
+/// listed).
+#[inline(never)]
+unsafe fn push_slot(m: &Mv, f: *const f64, s: usize) -> (bool, bool) {
+    let mode = rd(m.sfast, s);
+    let (w, h) = (m.w, m.h);
+    let it = m.itile as f32;
+    let mut moved = false;
+    if mode == 4 {
+        let dx = rd(m.snx, s) as f32;
+        let dy = rd(m.sny, s) as f32;
+        let q = rd(f, 8) as f32;
+        let iq = 1.0 / q;
+        let x = rd(m.x, s) as f32;
+        let y = rd(m.y, s) as f32;
+        let (ax, ay) = (x + dx, y + dy);
+        let nx = if ax - ax == 0.0 { floor32(ax * q + 0.5) * iq } else { x };
+        let ny = if ay - ay == 0.0 { floor32(ay * q + 0.5) * iq } else { y };
+        let gx = floor32(nx * it) as f64;
+        let gy = floor32(ny * it) as f64;
+        let ox = floor32(x * it) as f64;
+        let oy = floor32(y * it) as f64;
+        let mut open = !m.wall.is_null();
+        if open && rd(m.slayer, s) != 1 {
+            if abs(gx - ox) > 1.0 || abs(gy - oy) > 1.0 {
+                open = false;
+            } else {
+                let x0 = if gx < ox { gx } else { ox };
+                let x1 = if gx < ox { ox } else { gx };
+                let y0 = if gy < oy { gy } else { oy };
+                let y1 = if gy < oy { oy } else { gy };
+                if !(x0 >= 0.0 && y0 >= 0.0 && x1 < w as f64 && y1 < h as f64) {
+                    open = false;
+                } else {
+                    let (ix0, ix1, iy0, iy1) = (x0 as usize, x1 as usize, y0 as usize, y1 as usize);
+                    let g = w as usize;
+                    if (rd(m.wall, iy0 * g + ix0) | rd(m.wall, iy0 * g + ix1) | rd(m.wall, iy1 * g + ix0) | rd(m.wall, iy1 * g + ix1)) != 0 {
+                        open = false;
+                    }
+                }
+            }
+        }
+        if open {
+            wr(m.x, s, nx as f64);
+            wr(m.y, s, ny as f64);
+        } else {
+            // Blocked on the way (unit.js applyUnitSeparation): in steps of a
+            // quarter tile against its profile's walls, sliding along one
+            // axis where the other is blocked; a unit left on a blocked tile
+            // goes to the simulation thread (pushUnitOutOfBlockedTile).
+            let fly = rd(m.slayer, s) == 1;
+            let np = rd(m.npr, s) as usize;
+            let wl = if np < NAV_PROFILES && !m.nav.get_unchecked(np).walls.is_null() { m.nav.get_unchecked(np).walls } else { m.wall };
+            let occ = |gx: f32, gy: f32| -> bool {
+                gx >= 0.0 && gy >= 0.0 && gx < w as f32 && gy < h as f32 && (fly || wl.is_null() || rd(wl, (gy as usize) * w as usize + gx as usize) == 0)
+            };
+            let tq = m.tile as f32 / 4.0;
+            let am = if dx.abs() > dy.abs() { dx.abs() } else { dy.abs() };
+            let steps = (-floor32(-(am / tq))).max(1.0).min(64.0) as i32;
+            let (mut cx, mut cy) = (x, y);
+            let mut i = 1;
+            while i <= steps {
+                let fi = i as f32 / steps as f32;
+                let (tx, ty) = (x + dx * fi, y + dy * fi);
+                let sx = if tx - tx == 0.0 { floor32(tx * q + 0.5) * iq } else { cx };
+                let sy = if ty - ty == 0.0 { floor32(ty * q + 0.5) * iq } else { cy };
+                if !fly {
+                    let (gx, gy) = (floor32(cx * it), floor32(cy * it));
+                    let (ngx, ngy) = (floor32(sx * it), floor32(sy * it));
+                    let side_x = occ(ngx, gy);
+                    let side_y = occ(gx, ngy);
+                    if !occ(ngx, ngy) || (gx != ngx && gy != ngy && (!side_x || !side_y)) {
+                        if side_x && ngx != gx {
+                            cx = sx;
+                        } else if side_y && ngy != gy {
+                            cy = sy;
+                        }
+                        break;
+                    }
+                }
+                cx = sx;
+                cy = sy;
+                i += 1;
+            }
+            wr(m.x, s, cx as f64);
+            wr(m.y, s, cy as f64);
+            if !occ(floor32(cx * it), floor32(cy * it)) {
+                wr(m.snx, s, 0.0);
+                wr(m.sny, s, 0.0);
+                wr(m.sfast, s, 0);
+                return (floor32(cx * it) != ox as f32 || floor32(cy * it) != oy as f32, true);
+            }
+        }
+        moved = floor32(rd(m.x, s) as f32 * it) as f64 != ox || floor32(rd(m.y, s) as f32 * it) as f64 != oy;
+    }
+    // (Pushed on its retry tick: its fallback path tried again.)
+    let retry = to_i32(rd(f, 51));
+    if retry > 0 && irem_f(m.t.wrapping_add(rd(m.id, s)), retry) == 0 && !(rd(m.on, s) != 0 && (rd(m.fl, s) & 4) == 0) && (m.pf.is_null() || rd(m.pf, s) != 0) {
+        wr(m.sfast, s, 2);
+        return (moved, true);
+    }
+    wr(m.sfast, s, 1);
+    (moved, false)
+}
+
+/// The epilogue's state over a chunk (_simMoveEpilogue).
+struct Epi {
+    absent: f64,
+    boxsteps: i32,
+    epoch: i32,
+    vis_gen: i32,
+    vis_all: i32,
+    cwn: i32,
+    csz: i32,
+    np: i32,
+    nt: i32,
+    scale: f64,
+    f0: usize,
+    u0: usize,
+    pb: usize,
+    cnt: usize,
+    ne: usize,
+    on: bool,
+    push: bool,
+}
+/// The chunk's charge sums cleared; the separation's pushes when P[54] 1.
+#[inline(always)]
+unsafe fn epi_begin(m: &Mv, f: *const f64, chunk: i32, b0: usize, end: usize) -> Epi {
+    let on = !m.post.is_null() && !m.postc.is_null();
     let np = to_i32(rd(f, 43));
     let nt = to_i32(rd(f, 44));
-    let scale = rd(f, 45);
     let per = to_i32(rd(f, 1)) as usize;
     let chunk = chunk.max(0) as usize;
     let f0 = chunk * np.max(0) as usize;
     let u0 = f0 * nt.max(0) as usize;
-    for i in 0..np.max(0) as usize {
-        wr(m.fix, f0 + i, 0.0);
+    if on {
+        for i in 0..np.max(0) as usize {
+            wr(m.fix, f0 + i, 0.0);
+        }
+        for i in 0..(np.max(0) * nt.max(0)) as usize {
+            wr(m.use_, u0 + i, 0.0);
+        }
     }
-    for i in 0..(np.max(0) * nt.max(0)) as usize {
-        wr(m.use_, u0 + i, 0.0);
+    let push = on && rd(f, 54) == 1.0 && end > b0 && !m.shit.is_null() && !m.spx.is_null() && !m.spy.is_null() && !m.sov.is_null() && !m.scx.is_null()
+        && !m.scy.is_null() && !m.smv.is_null() && !m.snx.is_null() && !m.sny.is_null() && !m.sfast.is_null() && !m.sex.is_null() && !m.sexc.is_null();
+    Epi {
+        absent: rd(f, 15),
+        boxsteps: to_i32(rd(f, 17)),
+        epoch: to_i32(rd(f, 40)),
+        vis_gen: to_i32(rd(f, 41)),
+        vis_all: to_i32(rd(f, 42)),
+        cwn: to_i32(rd(f, 34)),
+        csz: to_i32(rd(f, 36)),
+        np,
+        nt,
+        scale: rd(f, 45),
+        f0,
+        u0,
+        pb: chunk * per,
+        cnt: 0,
+        ne: 0,
+        on,
+        push,
     }
-    let pb = chunk * per;
-    let mut cnt = 0usize;
-    let mut s = b0;
-    while s < end {
-        // (Sixteen slots that stood or stepped in their tile, nothing spent:
-        // nothing here.)
-        if s + 16 <= end {
-            let o16 = v128_load(m.out.add(s) as *const v128);
-            let k16 = v128_load(m.spent.add(s) as *const v128);
-            if u8x16_all_true(u8x16_le(o16, u8x16_splat(1))) && !v128_any_true(k16) {
-                s += 16;
-                continue;
-            }
-        }
-        let o = rd(m.out, s);
-        if o == 0 {
-            s += 1;
-            continue;
-        }
-        let mut list = o == 4 || o == 5;
-        let k = rd(m.spent, s);
-        if k != 0 {
-            wr(m.spent, s, 0);
-            let pid = rd(m.own, s);
-            let cost = rd(m.cost, s);
-            if cost > 0.0 && pid >= 0 && pid < np {
-                if rd(m.rem, pid as usize) < cost {
-                    wr(m.blk, s, 1);
-                    list = true;
-                }
-                let fi = f0 + pid as usize;
-                wr(m.fix, fi, rd(m.fix, fi) + k as f64 * js_round(-cost * scale));
-                let ty = rd(m.spty, s) as i32;
-                let r = u0 + (pid * nt) as usize + (if ty >= 0 && ty < nt - 1 { ty } else { nt - 1 }) as usize;
-                for _ in 0..k {
-                    wr(m.use_, r, rd(m.use_, r) + cost);
-                }
-            }
-        }
-        if o == 3 || o == 9 || o == 12 {
-            let gxf = floor(rd(m.x, s) * itile);
-            let gyf = floor(rd(m.y, s) * itile);
-            let gx = if !(gxf >= 0.0) { 0 } else if gxf >= w as f64 { w - 1 } else { gxf as i32 };
-            let gy = if !(gyf >= 0.0) { 0 } else if gyf >= h as f64 { h - 1 } else { gyf as i32 };
-            let tt = gy * w + gx;
-            let sep = rd(m.sep, s);
-            if rd(m.spe, s) == epoch && rd(m.spo, s) == rd(m.own, s) && sep as f64 != absent && (vis_all != 0 || rd(m.vsg, s) == vis_gen) {
-                if tt != rd(m.spt, s) {
-                    let key = if csz == 1 { tt } else { idiv(gy, csz) * cwn + idiv(gx, csz) };
-                    if sep as f64 != key as f64 {
-                        if rd(m.mvw, s) == 0 {
-                            wr(m.mvo, s, sep as i32);
-                        }
-                        wr(m.mvn, s, key);
-                        wr(m.mvw, s, rd(m.spo, s).wrapping_add(1) as i8);
-                        wr(m.sep, s, key as u32);
-                    }
-                    let a = rd(m.ag, tt as usize);
-                    let a0 = rd(m.area, s);
-                    let na = if a >= 0 { a } else { -1 };
-                    wr(m.area, s, na);
-                    wr(m.spt, s, tt);
-                    if o == 3 && (rd(m.fl, s) & 1) != 0 && na != a0 && na >= 0 && rd(m.abok, (na * boxsteps + rd(m.reach, s) as i32) as usize) == 0 {
-                        list = true;
-                    }
-                }
-            } else {
+}
+/// One slot of the epilogue (one with anything left: another tile, a node
+/// step's charge, a listing, a push for push_slot): its charges, its push,
+/// then its index entry for its new tile once; what the kernel cannot do is
+/// listed (mv.post by out code; a pushed unit in sep.ex: sep.fast 0 the
+/// swept commit, 2 its index, a path retry, a drive-by box).
+#[inline(never)]
+unsafe fn epi_slot(m: &Mv, f: *const f64, e: &mut Epi, s: usize, need: bool) {
+    if !e.on {
+        return;
+    }
+    let (w, h, itile) = (m.w, m.h, m.itile);
+    let (np, nt) = (e.np, e.nt);
+    let o = rd(m.out, s);
+    let mut list = o == 4 || o == 5;
+    let k = rd(m.spent, s);
+    if k != 0 {
+        wr(m.spent, s, 0);
+        let pid = rd(m.own, s);
+        let cost = rd(m.cost, s);
+        if cost > 0.0 && pid >= 0 && pid < np {
+            if rd(m.rem, pid as usize) < cost {
+                wr(m.blk, s, 1);
                 list = true;
             }
+            let fi = e.f0 + pid as usize;
+            wr(m.fix, fi, rd(m.fix, fi) + k as f64 * js_round(-cost * e.scale));
+            let ty = rd(m.spty, s) as i32;
+            let r = e.u0 + (pid * nt) as usize + (if ty >= 0 && ty < nt - 1 { ty } else { nt - 1 }) as usize;
+            for _ in 0..k {
+                wr(m.use_, r, rd(m.use_, r) + cost);
+            }
         }
-        if list {
-            wr(m.post, pb + cnt, s as i32);
-            cnt += 1;
-        }
-        s += 1;
     }
-    wr(m.postc, chunk, cnt as i32);
+    let mut retile = o == 3 || o == 9 || o == 12;
+    let mut pushed = false;
+    let mut exl = false;
+    if e.push && need {
+        let (mv, l) = push_slot(m, f, s);
+        pushed = mv;
+        retile |= mv;
+        exl = l;
+    }
+    if retile {
+        let gxf = floor(rd(m.x, s) * itile);
+        let gyf = floor(rd(m.y, s) * itile);
+        let gx = if !(gxf >= 0.0) { 0 } else if gxf >= w as f64 { w - 1 } else { gxf as i32 };
+        let gy = if !(gyf >= 0.0) { 0 } else if gyf >= h as f64 { h - 1 } else { gyf as i32 };
+        let tt = gy * w + gx;
+        let sep = rd(m.sep, s);
+        if rd(m.spe, s) == e.epoch && rd(m.spo, s) == rd(m.own, s) && sep as f64 != e.absent && (e.vis_all != 0 || rd(m.vsg, s) == e.vis_gen) {
+            if tt != rd(m.spt, s) {
+                let key = if e.csz == 1 { tt } else { idiv(gy, e.csz) * e.cwn + idiv(gx, e.csz) };
+                if sep as f64 != key as f64 {
+                    if rd(m.mvw, s) == 0 {
+                        wr(m.mvo, s, sep as i32);
+                    }
+                    wr(m.mvn, s, key);
+                    wr(m.mvw, s, rd(m.spo, s).wrapping_add(1) as i8);
+                    wr(m.sep, s, key as u32);
+                }
+                let a = rd(m.ag, tt as usize);
+                let a0 = rd(m.area, s);
+                let na = if a >= 0 { a } else { -1 };
+                wr(m.area, s, na);
+                wr(m.spt, s, tt);
+                if (rd(m.fl, s) & 1) != 0 && na != a0 && na >= 0 && rd(m.abok, (na * e.boxsteps + rd(m.reach, s) as i32) as usize) == 0 {
+                    if o == 3 {
+                        list = true;
+                    } else if pushed && !exl {
+                        wr(m.sfast, s, 2);
+                        exl = true;
+                    }
+                }
+            }
+        } else if o == 3 || o == 9 || o == 12 {
+            list = true;
+        } else if pushed && !exl {
+            wr(m.sfast, s, 2);
+            exl = true;
+        }
+    }
+    if list {
+        wr(m.post, e.pb + e.cnt, s as i32);
+        e.cnt += 1;
+    }
+    if exl {
+        wr(m.sex, e.pb + e.ne, s as i32);
+        e.ne += 1;
+    }
+}
+/// The chunk's list counts.
+#[inline(always)]
+unsafe fn epi_end(m: &Mv, e: &Epi, chunk: i32) {
+    if !e.on {
+        return;
+    }
+    let chunk = chunk.max(0) as usize;
+    wr(m.postc, chunk, e.cnt as i32);
+    if e.push {
+        wr(m.sexc, chunk, e.ne as i32);
+    }
 }
 
 /// A drive-by look's candidate q (the JavaScript twin's cheap checks): its

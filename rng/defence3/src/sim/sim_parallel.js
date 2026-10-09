@@ -83,6 +83,15 @@ function simSharedArray(Type, n) {
 let _simHeapAlloc = null, _simHeapRelease = null, _simHeapPtrOf = null, _simHeapAllocAuto = null;
 function simHeapArray(Type, n) { return _simHeapAlloc !== null ? _simHeapAlloc(Type, n) : simSharedArray(Type, n); }
 function simHeapFree(arr) { if (_simHeapRelease !== null && arr) _simHeapRelease(arr); }
+// A view of part of a heap array (byte offset `off`, n elements of Type)
+// with its heap address: the kernels take it like any array. Freed with its
+// array, never alone.
+let _simHeapViewReg = null;
+function simHeapView(arr, Type, off, n) {
+    const v = new Type(arr.buffer, arr.byteOffset + off, n);
+    if (_simHeapViewReg !== null) _simHeapViewReg(arr, v, off);
+    return v;
+}
 // An array given back by the collector (no simHeapFree): for arrays whose
 // owners are dropped by many paths (a navigation build). Never take
 // subarrays of one that could outlive it.
@@ -519,47 +528,8 @@ SIM_KERNELS[SIM_KERNEL_SAT_COLS] = function (R, P, chunk) { _simRust(_simSatCols
 const _simSpCountsW = _simWK(['unit.spMvOld', 'unit.spMvNew', 'unit.spMvOwn', 'unit.spType', 'ix.complex', 'ix.bcount', 'spatial.types']);
 SIM_KERNELS[SIM_KERNEL_SP_COUNTS] = function (R, P, chunk) { _simRust(_simSpCountsW, P, chunk, 'k_sp_counts', 'SP_COUNTS'); };
 
-// The collision correction of every slot, after the unit pass: the pushes
-// found (summed by slot), damped beyond a few contacts and bounded by the
-// deepest overlap, are spread over two ticks (half now, half next tick:
-// unit.sepCx/sepCy; a unit's contacts are looked at every other tick), so
-// a crowd eases apart instead of stepping. A correction that stays in the
-// unit's tile, or crosses into an open one, is committed here (fast 1);
-// fast 2: the simulation thread still updates the unit index or its path
-// retry; fast 0: blocked ground on the way, the swept object commit. Those
-// (2 and 0) are listed per job (sep.ex, sep.exc), so the simulation thread
-// visits them only. The sums are cleared as read (the pair kernel adds).
-// P: [0] slots, [1] per job, [2] tile, [3] quantization, [4] contacts,
-// [5] push Q, [6] tick, [7] path retry ticks, [8] grid width, [9] height,
-// [10] the pushes' gain (a unit looked at every other tick corrects more),
-// [11] the share applied now (the rest next tick; 1: all now); [12]-[18]
-// the unit index's (below). fast 3: committed and indexed here.
-// (Its Rust twin: wasm/src/lib.rs sep_finish.)
-const _simSepFinishW = _simWK(['unit.x', 'unit.y', 'unit.mvOn', 'unit.mvFlags', 'unit.id', 'unit.dead', 'sep.px', 'sep.py', 'sep.ov', 'sep.hit',
-    'sep.nextX', 'sep.nextY', 'sep.fast', 'sep.ex', 'sep.exc', 'unit.sepCx', 'unit.sepCy', '?mv.wall', 'unit.sepLayer', 'unit.sepMov', 'unit.prevX', 'unit.prevY',
-    'unit.spEpoch', 'unit.spOwner', 'unit.owner', 'unit.sepKey', 'unit.vsGen', 'unit.spTile', 'unit.spArea', 'unit.spMvOld', 'unit.spMvNew', 'unit.spMvOwn', '?ix.agrid', '?sep.moves', '?unit.mvPF']);
-SIM_KERNELS[SIM_KERNEL_SEPARATION_FINISH] = function (R, P, chunk) {
-    const tile = P[2], quant = P[3], contacts = P[4], pushQuant = P[5], t = P[6] | 0, retry = P[7] | 0, per = P[1] | 0, gain = P[10] > 0 ? P[10] : 1;
-    const now = P[11] > 0 ? P[11] : 1;
-    // (Divisions by a power of two as products with its reciprocal: the same
-    // numbers, several times cheaper. The quantizers are; the tile is unless
-    // configured otherwise.)
-    const p2 = v => v > 0 && 2 ** Math.round(Math.log2(v)) === v;
-    const tP2 = p2(tile), qP2 = p2(quant), pqP2 = p2(pushQuant), itile = 1 / tile, iquant = 1 / quant, ipq = 1 / pushQuant, iqt = 4 / tile, qtP2 = p2(tile / 4);
-    if (_simWasmOk(R)) {
-        const A = _simWPtrs(_simSepFinishW);
-        // (The index columns are read only with P[12] 1, which needs the area grid.)
-        if (A !== null && (P[12] !== 1 || A[32] !== 0)) {
-            const flags = (tP2 ? 1 : 0) | (qP2 ? 2 : 0) | (pqP2 ? 4 : 0) | (qtP2 ? 8 : 0) | (A[17] !== 0 ? 16 : 0);
-            _simWasmX.sep_finish(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10], A[11], A[12], A[13], A[14], A[15], A[16], A[17], A[18], A[19],
-                A[20], A[21], A[22], A[23], A[24], A[25], A[26], A[27], A[28], A[29], A[30], A[31], A[32], A[33], A[34],
-                P[0] | 0, per, tile, quant, contacts, pushQuant, t, retry, P[8] | 0, P[9] | 0, gain, now,
-                P[12] === 1 ? 1 : 0, P[13] | 0, P[14] | 0, P[15] === 1 ? 1 : 0, P[16] | 0, P[17] | 0, P[18] >>> 0, flags, itile, iquant, ipq, iqt, chunk);
-            return;
-        }
-    }
-    _simNoWasm('SEPARATION_FINISH');
-};
+// (The collision correction: the movement kernel's epilogue, wasm/src/mv.rs
+// move_epilogue, applies the pair kernel's pushes where each unit moved.)
 
 // Stable radix ordering: each partition owns one histogram and scatter cursor.
 // Prefixes are reduced in partition order, never in worker claim order. Memory
@@ -947,12 +917,16 @@ const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 
     'unit.commandState', 'unit.mvShoot', 'unit.mvReachD', 'unit.mvRangeK', 'unit.lzFlags', '?sep.rs', '?sep.rc', '?sep.rstamp', '?sep.eslot',
     '?ix.omask', '?mv.scls', '?mv.hstruct', 'unit.dbTI', 'unit.mvFire',
     'unit.atkCd', 'unit.attackFlash', '?mv.hita', '?mv.hitt', '?mv.hitc', 'unit.tmOn', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.sepLayer',
-    '?unit.mvTgX', '?unit.mvTgY', '?unit.mvTgTol', '?unit.mvSteady', '?unit.wkLmt'];
-const _SIM_MOVE_NAV = 11, _SIM_MOVE_WNAV = 160;
+    '?unit.mvTgX', '?unit.mvTgY', '?unit.mvTgTol', '?unit.mvSteady', '?unit.wkLmt',
+    // (The separation's finish, fused into the epilogue: mv.rs W_SPX...)
+    '?sep.px', '?sep.py', '?sep.ov', '?sep.hit', '?unit.sepCx'];
+// (From word 268, after the navigation profiles' words and their lengths.)
+const _SIM_MOVE_WNAMES2 = ['?unit.sepCy', '?unit.sepMov', '?sep.nextX', '?sep.nextY', '?sep.fast', '?sep.ex', '?sep.exc', '?unit.mvPF'];
+const _SIM_MOVE_NAV = 11, _SIM_MOVE_WNAV = 160, _SIM_MOVE_W2 = 268;
 const _simMoveW = _simWK([..._SIM_MOVE_WNAMES, ...Array.from({ length: _SIM_MOVE_NAV * 8 }, (_, i) => {
     const p = i >> 3, j = i & 7;
     return '?' + (j < 7 ? 'nav.' + p + '.' + ['fields', 'partL', 'partB', 'nb', 'nt', 'np', 'meta'][j] : p === 0 ? 'mv.wall' : p === 1 ? 'mv.airwall' : 'mv.cwall.' + p);
-})]);
+}), ..._SIM_MOVE_WNAMES2]);
 let _simMoveWFill = -1, _simMoveWArgs = 0;
 // Fills the argument block for a movement kernel's Rust twin; false: the
 // JavaScript kernel runs (no wasm, or an array not in the heap).
@@ -962,9 +936,10 @@ function _simMoveWasm(R, P) {
     if (A === null) return false;
     if (_simMoveWFill !== _simMoveW.binds || _simMoveWArgs !== _simWasmArgs) {
         const I = _simWasmArgI, nb = _SIM_MOVE_WNAMES.length;
-        I.fill(0, 0, 280);
+        I.fill(0, 0, 299);
         for (let i = 0; i < nb; i++) I[i] = A[i];
         for (let i = 0; i < _SIM_MOVE_NAV * 8; i++) I[_SIM_MOVE_WNAV + i] = A[nb + i];
+        for (let i = 0; i < _SIM_MOVE_WNAMES2.length; i++) I[_SIM_MOVE_W2 + i] = A[nb + _SIM_MOVE_NAV * 8 + i];
         for (let p = 0; p < _SIM_MOVE_NAV; p++) { const a = R['nav.' + p + '.partL']; I[250 + p] = a ? a.length : 0; }
         const len = nm => R[nm] ? R[nm].length : 0, COV = R['vis.cover'];
         I[262] = len('area.off'); I[263] = len('wk.ver'); I[264] = len('nav.fmeta.0'); I[265] = len('nav.fmeta.1');

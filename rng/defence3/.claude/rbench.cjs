@@ -26,6 +26,8 @@ for (const f of fs.readdirSync(dir)) {
     else src[m[3]] = arr;
 }
 if (!calls) { console.log(name, ': no dump in', dir); process.exit(1); }
+// PSET=i=v,...: params overridden in every dumped param set (debug switches).
+if (process.env.PSET) for (const kv of process.env.PSET.split(',')) { const [i, v] = kv.split('=').map(Number); for (const q of P) if (q) q[i] = v; }
 const H = {};
 for (const k in src) { H[k] = G.heap(src[k].constructor, Math.max(1, src[k].length)); G.bind(k, H[k]); }
 const refill = () => { for (const k in src) H[k].set(src[k]); };
@@ -36,6 +38,8 @@ for (let r = 0; r < reps; r++) {
     refill();
     const t0 = process.hrtime.bigint(); replay(); t.push(Number(process.hrtime.bigint() - t0) / 1e6);
 }
+// (DBGC=1: the debug counters of a counting build, mv_dbgc, after one more replay.)
+if (process.env.DBGC) { const X = vm.runInThisContext('_simWasmX'); for (let i = 0; i < 32; i++) X.mv_dbgc(i); refill(); replay(); const c = []; for (let i = 0; i < 32; i++) c.push(X.mv_dbgc(i)); console.log('dbgc', c.join(' ')); }
 // What the replay changed: per array, how many bytes, and an FNV digest of all.
 let h = 2166136261 >>> 0, changed = [];
 for (const k of Object.keys(src).sort()) {

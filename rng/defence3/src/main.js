@@ -757,7 +757,7 @@ function _gameTickBody() {
     try {
         simMoveRun();
         combatScanRun();
-        _forEachUnitInTickOrder(u => u.update());
+        _forEachUnitInTickOrder(_unitPassUpdate);
     } finally { unitPassEnd(); }
     unitHitsResolve();
     visCoverHoldEnd();

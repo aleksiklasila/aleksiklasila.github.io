@@ -149,7 +149,7 @@ impl Scalar for U8I32 { type Value=i32; #[inline(always)] fn load(self)->i32 { s
 //   sep_mark: units at rest beside a chunk where one moved take part too.
 //   sep_pairs (twice: even bands of chunk rows, then odd): every touching
 //     pair once, both sides' pushes summed into their slots.
-//   sep_finish: the summed pushes applied (by slot).
+//   (applied by the movement kernel's epilogue, mv.rs move_epilogue).
 // Mark and pairs look at neighbouring chunks through the entries alone
 // (sorted by chunk key): a cursor per neighbouring row moves forward with
 // the entry, so nothing of the (mostly empty) chunk grid is read.
@@ -411,8 +411,8 @@ struct PairOut {
     qr: *const f32,
     meta: *const i32,
     qid: *const i32,
-    px_out: *mut f64,
-    py_out: *mut f64,
+    px_out: *mut i32,
+    py_out: *mut i32,
     ov_out: *mut F32,
     hit_out: *mut u32,
     pad: f64,
@@ -474,8 +474,8 @@ unsafe fn pair_exact(o: &PairOut, p: &mut PairP, q: usize) {
         let (nx, ny) = push_dir(dxe, dye, d, iq, p.ip);
         let f = overlap * share * o.qscale;
         let b = bq as usize;
-        wr(o.px_out, b, rd(o.px_out, b) + js_round(nx * f));
-        wr(o.py_out, b, rd(o.py_out, b) + js_round(ny * f));
+        wr(o.px_out, b, rd(o.px_out, b).wrapping_add(js_round(nx * f) as i32));
+        wr(o.py_out, b, rd(o.py_out, b).wrapping_add(js_round(ny * f) as i32));
         if overlap > rd(o.ov_out, b) {
             wr(o.ov_out, b, overlap);
         }
@@ -549,8 +549,8 @@ pub unsafe extern "C" fn sep_pairs(
     meta: *const i32,
     qid: *const i32,
     keys: *const i32,
-    px_out: *mut f64,
-    py_out: *mut f64,
+    px_out: *mut i32,
+    py_out: *mut i32,
     ov_out: *mut F32,
     hit_out: *mut u32,
     cw: i32,
@@ -703,274 +703,13 @@ pub unsafe extern "C" fn sep_pairs(
         }
         if st.acc_hit != 0 {
             let au = a as usize;
-            wr(px_out, au, rd(px_out, au) + st.acc_px);
-            wr(py_out, au, rd(py_out, au) + st.acc_py);
+            wr(px_out, au, rd(px_out, au).wrapping_add(st.acc_px as i32));
+            wr(py_out, au, rd(py_out, au).wrapping_add(st.acc_py as i32));
             if st.acc_ov > rd(ov_out, au) {
                 wr(ov_out, au, st.acc_ov);
             }
             wr(hit_out, au, rd(hit_out, au) + st.acc_hit);
         }
-    }
-}
-
-/// The summed pushes of the slots of a job applied (SIM_KERNEL_SEPARATION_FINISH):
-/// spread over this tick and the next, committed here when the unit stays in
-/// its tile or crosses into an open one (fast 1/3, or 2: the simulation
-/// thread updates its index or path retry), else listed for the swept
-/// object commit (fast 0). Slots with nothing to apply (the most) go four
-/// at a time.
-/// flags: 1 tile a power of two, 2 quantization, 4 push quantization,
-/// 8 tile / 4; 16 walls given.
-#[no_mangle]
-pub unsafe extern "C" fn sep_finish(
-    xs: *mut F32,
-    ys: *mut F32,
-    on: *const u8,
-    fl: *const u8,
-    id: *const i32,
-    dead: *const u8,
-    pxs: *mut f64,
-    pys: *mut f64,
-    ovs: *mut F32,
-    hits: *mut u32,
-    out_x: *mut F32,
-    out_y: *mut F32,
-    fast: *mut u8,
-    ex: *mut i32,
-    exc: *mut i32,
-    cxs: *mut F32,
-    cys: *mut F32,
-    wall: *const u8,
-    layer: *const u8,
-    smv: *mut u8,
-    prx: *const F32,
-    pry: *const F32,
-    spe: *const i32,
-    spo: *const I8I32,
-    owno: *const I8I32,
-    sepk: *mut u32,
-    vsg: *const i32,
-    spt: *mut i32,
-    area: *mut i32,
-    mvo: *mut i32,
-    mvn: *mut i32,
-    mvw: *mut i8,
-    agf: *const i32,
-    moves_out: *mut i32,
-    pf: *const u8,
-    n: i32,
-    per: i32,
-    tile: f64,
-    quant: f64,
-    contacts: f64,
-    push_q: f64,
-    t: i32,
-    retry: i32,
-    gw: i32,
-    gh: i32,
-    gain: f64,
-    now: f64,
-    ix: i32,
-    epoch: i32,
-    vis_gen: i32,
-    vis_all: i32,
-    cs: i32,
-    cwk: i32,
-    absent: u32,
-    flags: i32,
-    itile: f64,
-    iquant: f64,
-    ipq: f64,
-    iqt: f64,
-    chunk: i32,
-) {
-    let t_p2 = flags & 1 != 0;
-    let q_p2 = flags & 2 != 0;
-    let pq_p2 = flags & 4 != 0;
-    let qt_p2 = flags & 8 != 0;
-    let has_wall = flags & 16 != 0;
-    let ix = ix != 0;
-    let vis_all = vis_all != 0;
-    let base = chunk as usize * per as usize;
-    let end = core::cmp::min(if n > 0 { n as usize } else { 0 }, base + per as usize);
-    let mut ne = 0usize;
-    let mut moves = false;
-    let retry_hit = |s: usize| -> bool { retry != 0 && irem(t.wrapping_add(rd(id, s)), retry) == 0 };
-    let mut i = base;
-    while i < end {
-        // Four slots with no push found and none carried over: only whether
-        // each moved by itself.
-        if i + 4 <= end && (i & 3) == 0 {
-            let h4 = v128_load(hits.add(i) as *const v128);
-            if !v128_any_true(h4) {
-                let c0 = f32x4_eq(v128_load(cxs.add(i) as *const v128), f32x4_splat(0.0));
-                let c1 = f32x4_eq(v128_load(cys.add(i) as *const v128), f32x4_splat(0.0));
-                if i32x4_all_true(v128_and(c0, c1)) {
-                    let m0 = v128_or(
-                        f32x4_ne(v128_load(xs.add(i) as *const v128), v128_load(prx.add(i) as *const v128)),
-                        f32x4_ne(v128_load(ys.add(i) as *const v128), v128_load(pry.add(i) as *const v128)));
-                    let mb = i32x4_bitmask(m0) as u32;
-                    // (One byte per slot: 1 where it moved.)
-                    let bytes = (mb & 1) | (mb & 2) << 7 | (mb & 4) << 14 | (mb & 8) << 21;
-                    (smv.add(i) as *mut u32).write_unaligned(bytes);
-                    (fast.add(i) as *mut u32).write_unaligned(0x0101_0101);
-                    i += 4;
-                    continue;
-                }
-            }
-        }
-        let x = rd(xs, i);
-        let y = rd(ys, i);
-        wr(smv, i, if x != rd(prx, i) || y != rd(pry, i) { 1 } else { 0 });
-        wr(fast, i, 0);
-        let mut dx = rd(cxs, i);
-        let mut dy = rd(cys, i);
-        if dx != 0.0 || dy != 0.0 {
-            wr(cxs, i, 0.0);
-            wr(cys, i, 0.0);
-        }
-        let h = rd(hits, i);
-        let is_dead = rd(dead, i) != 0;
-        if h != 0 {
-            let hf = h as f64;
-            let scale = (if hf <= contacts { 1.0 } else { sqrt(contacts / hf) }) * gain;
-            let mut px = if pq_p2 { rd(pxs, i) * scale * ipq } else { rd(pxs, i) * scale / push_q };
-            let mut py = if pq_p2 { rd(pys, i) * scale * ipq } else { rd(pys, i) * scale / push_q };
-            let length = sqrt(px * px + py * py);
-            let ov = rd(ovs, i);
-            let limit = js_max(0.0, ov);
-            wr(pxs, i, 0.0);
-            wr(pys, i, 0.0);
-            wr(ovs, i, 0.0);
-            wr(hits, i, 0);
-            if length > limit {
-                px *= limit / length;
-                py *= limit / length;
-            }
-            let hx = px * now;
-            let hy = py * now;
-            dx += hx;
-            dy += hy;
-            if !is_dead {
-                wr(cxs, i, px - hx);
-                wr(cys, i, py - hy);
-            }
-        }
-        if (dx == 0.0 && dy == 0.0) || is_dead {
-            wr(fast, i, 1);
-            i += 1;
-            continue;
-        }
-        wr(out_x, i, dx);
-        wr(out_y, i, dy);
-        let am = js_max(abs(dx), abs(dy));
-        let steps = js_max(1.0, ceil(if qt_p2 { am * iqt } else { am / (tile / 4.0) }));
-        let raw_x = if steps == 1.0 { x + dx } else { x + dx * steps / steps };
-        let raw_y = if steps == 1.0 { y + dy } else { y + dy * steps / steps };
-        let nx = if raw_x.is_finite() {
-            if q_p2 { js_round(raw_x * quant) * iquant } else { js_round(raw_x * quant) / quant }
-        } else {
-            0.0
-        };
-        let ny = if raw_y.is_finite() {
-            if q_p2 { js_round(raw_y * quant) * iquant } else { js_round(raw_y * quant) / quant }
-        } else {
-            0.0
-        };
-        let gx = floor(if t_p2 { nx * itile } else { nx / tile });
-        let gy = floor(if t_p2 { ny * itile } else { ny / tile });
-        let ox = floor(if t_p2 { x * itile } else { x / tile });
-        let oy = floor(if t_p2 { y * itile } else { y / tile });
-        if gx != ox || gy != oy {
-            let mut open = has_wall;
-            if open && rd(layer, i) != 1 {
-                if abs(gx - ox) > 1.0 || abs(gy - oy) > 1.0 {
-                    open = false;
-                } else {
-                    let x0 = if gx < ox { gx } else { ox };
-                    let x1 = if gx < ox { ox } else { gx };
-                    let y0 = if gy < oy { gy } else { oy };
-                    let y1 = if gy < oy { oy } else { gy };
-                    if x0 < 0.0 || y0 < 0.0 || x1 >= gw as f64 || y1 >= gh as f64 {
-                        open = false;
-                    } else if x0 == x0 && x1 == x1 && y0 == y0 && y1 == y1 {
-                        // (A NaN corner reads undefined in JS: 0.)
-                        let (ix0, ix1, iy0, iy1) = (x0 as usize, x1 as usize, y0 as usize, y1 as usize);
-                        let g = gw as usize;
-                        if (rd(wall, iy0 * g + ix0) | rd(wall, iy0 * g + ix1) | rd(wall, iy1 * g + ix0) | rd(wall, iy1 * g + ix1)) != 0 {
-                            open = false;
-                        }
-                    }
-                }
-            }
-            if open {
-                wr(xs, i, nx);
-                wr(ys, i, ny);
-                wr(fast, i, 2);
-                if ix
-                    && rd(spe, i) == epoch
-                    && rd(spo, i) == rd(owno, i)
-                    && rd(sepk, i) != absent
-                    && (vis_all || rd(vsg, i) == vis_gen)
-                {
-                    let cgx = if gx < 0.0 { 0 } else if gx >= gw as f64 { gw - 1 } else { gx as i32 };
-                    let cgy = if gy < 0.0 { 0 } else if gy >= gh as f64 { gh - 1 } else { gy as i32 };
-                    let tl = cgy * gw + cgx;
-                    if tl != rd(spt, i) {
-                        let key = if cs == 1 { tl } else { idiv(cgy, cs) * cwk + idiv(cgx, cs) } as u32;
-                        let old = rd(sepk, i);
-                        if old != key {
-                            if rd(mvw, i) == 0 {
-                                wr(mvo, i, old as i32);
-                            }
-                            wr(mvn, i, key as i32);
-                            wr(mvw, i, (rd(spo, i).wrapping_add(1)) as i8);
-                            wr(sepk, i, key);
-                            moves = true;
-                        }
-                        let a = rd(agf, tl as usize);
-                        wr(area, i, if a >= 0 { a } else { -1 });
-                        wr(spt, i, tl);
-                    }
-                    if !(h != 0 && retry_hit(i) && (pf.is_null() || rd(pf, i) != 0)) {
-                        wr(fast, i, 3);
-                        i += 1;
-                        continue;
-                    }
-                }
-            }
-            wr(ex, base + ne, i as i32);
-            ne += 1;
-            i += 1;
-            continue;
-        }
-        wr(xs, i, nx);
-        wr(ys, i, ny);
-        // (On a retry tick: listed for its fallback path (mvPF), or for an
-        // index entry that is not current, put right by the simulation
-        // thread for a listed unit.)
-        let mut f = 1u8;
-        if h != 0 && retry_hit(i) && !(rd(on, i) != 0 && (rd(fl, i) & 4) == 0) {
-            if pf.is_null() || rd(pf, i) != 0 {
-                f = 2;
-            } else {
-                let cgx = if !(gx >= 0.0) { 0 } else if gx >= gw as f64 { gw - 1 } else { gx as i32 };
-                let cgy = if !(gy >= 0.0) { 0 } else if gy >= gh as f64 { gh - 1 } else { gy as i32 };
-                if !(ix && rd(spe, i) == epoch && rd(spo, i) == rd(owno, i) && rd(sepk, i) != absent && rd(spt, i) == cgy * gw + cgx) {
-                    f = 2;
-                }
-            }
-        }
-        wr(fast, i, f);
-        if f == 2 {
-            wr(ex, base + ne, i as i32);
-            ne += 1;
-        }
-        i += 1;
-    }
-    wr(exc, chunk as usize, ne as i32);
-    if moves && !moves_out.is_null() {
-        wr(moves_out, 0, 1);
     }
 }
 
