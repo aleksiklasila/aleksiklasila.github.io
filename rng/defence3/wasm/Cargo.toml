@@ -8,6 +8,13 @@ publish = false
 crate-type = ["cdylib"]
 path = "src/lib.rs"
 
+[features]
+# Debug counters of the movement kernel (mv.rs dbg!): words 1536.. of the
+# thread's argument block. cargo build --release --features dbgc
+dbgc = []
+# The movement kernel's passes kept as functions (profiles by pass).
+prof = []
+
 [profile.release]
 opt-level = 3
 lto = "fat"

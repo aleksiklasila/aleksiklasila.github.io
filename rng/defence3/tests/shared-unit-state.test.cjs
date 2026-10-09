@@ -13,12 +13,12 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
         for (const k of keys) { if (layout[k].byteOffset !== offset) fail('frame layout '+k); offset += bytes*64; }
     if (offset !== 64 * SIM_FRAME_SLOT_BYTES) fail('frame size');
     // Growth must update every live accessor, including objects that existed
-    // before reallocation. Fractions are stored as Float32 (simulation rules 2).
-    const first = units[0]; first.x = 123.1234567890123; const x = Math.fround(123.1234567890123);
+    // before reallocation. Positions are Int32 eighths of a pixel (rules 6).
+    const first = units[0]; first.x = 123.1234567890123; const x = Math.round(123.1234567890123 * 8) / 8;
     for (let i = 0; i < 2100; i++) { const u = new Unit('norm', i & 1, 50+i%20, 50+(i%19)); units.push(u); }
     // (Positions are unit fields, copied into the columns after each move.)
     simUnitMirror(first);
-    if (first.x !== x || first._us.x[first._si] !== x) fail('growth/precision');
+    if (first.x !== x || first._us.x[first._si] !== x * 8) fail('growth/precision');
     const retired = units.pop(), oldX = retired.x, slot = retired._si;
     removeUnitSpatial(retired); retired.dead = true; simUnitStateCollect(true);
     // (Freed slots are reused from the next unit index rebuild on.)
@@ -64,7 +64,7 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     }
     if (beforeRestore.some(u => u._us)) fail('replaced units not detached at decode');
     if (computeLockstepStateHashFast(gameTime) !== hash) fail('snapshot columns');
-    if (!units.every(u => u._us && u._us.x[u._si] === u.x)) fail('restored units not column-backed');
+    if (!units.every(u => u._us && u._us.x[u._si] * 0.125 === u.x)) fail('restored units not column-backed');
     return { compared, units:units.length, capacity:_simUnitState.cap };
 })())`));
 assert.deepEqual(inst.errors.map(String), []);

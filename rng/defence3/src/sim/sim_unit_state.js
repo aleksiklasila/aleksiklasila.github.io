@@ -23,7 +23,15 @@ const SIM_UNIT_INT_COLUMNS = new Set(['id', 'owner', 'commandState', 'attackFlas
 // (Narrower where the values fit, read every tick by most kernels: owners
 // Int8 (players, -1 none), commands and the attack flash timer Uint8.)
 const SIM_UNIT_NARROW_COLUMNS = { owner: Int8Array, commandState: Uint8Array, attackFlash: Uint8Array };
-function _simUnitColumnType(k) { return SIM_UNIT_NARROW_COLUMNS[k] || (k === 'pathIndex' || SIM_UNIT_INT_COLUMNS.has(k) ? Int32Array : Float32Array); }
+// Positions (x, y, prevX, prevY; and x0, y0 below): Int32 in eighths of a
+// pixel (UNIT_POSITION_QUANTIZATION: every position is a whole eighth), so
+// the kernels move units with integer vector arithmetic and find tiles by a
+// shift. The accessors read and write pixels (a store rounds to the nearest
+// eighth, halves up: _quantizeUnitWorldCoord). Range: +-2^28 px.
+const SIM_POS_SCALE = 8, SIM_POS_INV = 0.125;
+const SIM_UNIT_POS_COLUMNS = new Set(['x', 'y', 'prevX', 'prevY']);
+function simPosQ(v) { return Math.round(v * SIM_POS_SCALE); }
+function _simUnitColumnType(k) { return SIM_UNIT_NARROW_COLUMNS[k] || (k === 'pathIndex' || SIM_UNIT_INT_COLUMNS.has(k) || SIM_UNIT_POS_COLUMNS.has(k) ? Int32Array : Float32Array); }
 // Read and written through prototype accessors: the columns are the state
 // (the movement kernel moves units without touching their objects).
 const SIM_UNIT_ACCESSOR_COLUMNS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', 'pathIndex', 'commandState', 'attackTimer', 'attackFlash', ...SIM_UNIT_STATUS_COLUMNS, ...SIM_UNIT_LEVEL_COLUMNS];
@@ -243,7 +251,7 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['lzFlags', Uint8Array, 1], ['lzAcc', Float32Array, 1], ['lzBeam', Int32Array, 1], ['lzEv', Uint8Array, 1],
     // Its position at the start of the unit pass (the pre-pass copies it):
     // where other units see it during the pass (see _unitTickX).
-    ['x0', Float32Array, 1], ['y0', Float32Array, 1],
+    ['x0', Int32Array, 1], ['y0', Int32Array, 1],
     // Flow mode: 1 for a worker at its task (handed back on its check ticks,
     // see WORKER_MOVE_CHECK_TICKS), 2 for one the player sent (MANUAL_MOVE:
     // its check does nothing while it has a way, so it is not handed back).
@@ -492,7 +500,7 @@ let _simDetValues = null;
 // (A slot's object fields unset; on detach the references let go.)
 const _simUnitObjClear = new Function('C', 's', SIM_UNIT_OBJ_FIELDS.map(k => 'C.oc_' + k + '[s] = undefined;').join(' '));
 function _simDetValuesCtor() {
-    const body = SIM_UNIT_ACCESSOR_COLUMNS.map(k => 'this.' + k + ' = C.' + k + '[s];').join(' ')
+    const body = SIM_UNIT_ACCESSOR_COLUMNS.map(k => 'this.' + k + ' = C.' + k + '[s]' + (SIM_UNIT_POS_COLUMNS.has(k) ? ' * ' + SIM_POS_INV : '') + ';').join(' ')
         + ' ' + SIM_UNIT_OBJ_FIELDS.map(k => 'this.' + k + ' = C.oc_' + k + '[s];').join(' ') + ' this._routeEnd = C.rtEnd[s]; this.watchedByTeam = C.wTeam[s];'
         + ' this.dead = C.dead[s] === 1; this._navLastD = C.mvNavLD[s]; this._floorTile = C.mvFloor[s]; this._sepMoved = C.sepMov[s];'
         + ' this._statsBehind = false; this._forcedTargetLastSeenX = null; this._forcedTargetLastSeenY = null;'

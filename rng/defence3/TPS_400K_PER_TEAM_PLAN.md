@@ -465,6 +465,79 @@ over chunk x player x type 1.6.
   tickbench's shared `__scratch.x`) and `peer_fields.js` (field diffs of
   chosen units and the players).
 
+### 2026-10-09 (evening) — int positions, vector paths, waits removed, traps in the kernel
+
+Baseline this session (`.claude/s8-800k-base.log`): B800 mean 77.9, steady
+(tick >= 150) gameTick 66.7; every 4th tick ~82 (a 17-20 ms wait).
+
+- **Unit positions are Int32 eighths of a pixel** (x, y, prevX, prevY, x0,
+  y0, vt.x/y; SIM_RULES_REVISION 6). Accessors read/write pixels (a store
+  rounds to the eighth, halves up: what every move already quantized to);
+  Rust: `Q8` scalar (lib.rs) for cold code, integer SIMD in the hot paths
+  (step4, combat4, push4: steps added as whole eighths, tiles by a shift,
+  mv.rs tile4/q8x4). The frame kernel and the presentation worker scale
+  (snapshots are Int32 copies). Alone: MOVE wall unchanged (17.2 -> 17.9,
+  noise): the step arithmetic was not the cost.
+- **MOVE vector paths**: park4 (parked units, ~54k lanes/tick at B400) and
+  idle4 (unarmed/dead slots) four a lane; step4's byte stores and the field
+  check once per group when four lanes share a field; done lanes' fire bytes
+  cleared four at once; sepMov written by the vector paths (push4 loads no
+  position unless a push applies). Shared flow-look cache (mv.lookc, 2^18
+  seqlocked entries keyed by tile, destination, kind, profile, build, wall
+  version: misses 21.5k -> 1.5k/tick at B400; cleared at navReset / wall
+  rebuild). Replay counters: `cargo build --features dbgc` (mv.rs dbgc!,
+  words 1536.. of the argument block; rbench DBGC=1); `--features prof`
+  keeps the passes as functions for profiles (rbench + --cpu-prof).
+  MOVE replay split (B400 battle tick, one thread, ~37 ms): step4 14.5%,
+  push4 11.8%, move_flow + flow_look ~21%, combat4 8%, epilogue 7.8%.
+- **wasm-opt -O3** (binaryen version_133 in gitignored wasm/tools/, found by
+  build.cjs; README): MOVE replay -3..6%, same outputs.
+- **Main-thread waits removed**: the acquisition chain copies the live
+  index (ranges, stamps, owners, entry slots) into its own arrays in its
+  first stage; the index prebuild waits for that stage only (was 17-20 ms
+  every 4th tick). The units' cover seeds and spread are one chain (the
+  phase-2 post waited for the seeds).
+- **Parallel index merge** (k.rs k_ixm_*: inverse, per-band keep, per-block
+  changed lists, plan, per-band merge): the merge was one serial job of
+  ~109 ms CPU at 800k (deaths' swap-removes reorder unit indices, so the
+  kept entries were out of order and everything was heapsorted). Same
+  order as before (tests/index-merge).
+- **Vectorized slot kernels**: k_status by slot (bulk copies, 16-slot skip
+  of slots with nothing running; its list holds slots), k_acq_snap (bulk
+  copies + SIMD flags), k_combat_scan (4-lane prefilter).
+- **Floor traps in the movement kernel** (mv.rs floor_hit): per tile the
+  trap's kind and level (mv.trapK/trapL), its strength per owner, kind and
+  level a mirror of PRECOMPUTED_STATS_MAP_PLAYER (mv.trapT/TG, rebuilt for an
+  owner when its building stats are rebuilt), unit resistances by type
+  (mv.tres). Movers on hostile traps no longer go to Unit.update (mines
+  still do). tests/floor-trap-kernel.test.cjs.
+- **Building research staggered**: research rebuilds the owner's tables
+  (in place: buildings reference the entries); derived per-building values
+  catch up in buildingResearchSweep (a TICK_RATE-th of the lists a tick, by
+  the owner's bResVer / the building's _bResVer, both in snapshots).
+- **Bug found**: lane-params poisoning between the adjacency post and the
+  units' cover chain (shared lane T5): the adjacency wrote the lane's params
+  before its post waited for the lane, so the guest's pending cover stages
+  ran with them (89 desyncs at B400). simParallelStageParams now finishes a
+  pending job on its lane first; the adjacency post waits before writing.
+- Rejected: chaining the worker search's scan and ordering (the scan reads
+  the collector groups in place, which the unit pass changes: keeps its
+  phase wait). A per-second trap-table sweep (re-resolved stats for every
+  trap tile from inside _simMoveStructs: 118 ms ticks).
+- Lost and recovered: a patch script truncated mv.rs / unit.js; restored
+  from the git index (`git show :path`).
+- B800 after the first batches (`.claude/s8-800k-b3c.log`): mean 73.6, p95
+  109, steady 61.6, 0 desyncs. B400 at the end (`.claude/s8-400k-bis2.log`):
+  mean 54.2, steady 45.1, 0 desyncs.
+
+Remaining main thread at B800 (b3c, steady ms): MOVE kernel 17.9 (+3.5 JS),
+unit pass 8 (worker arrivals ~2.2: return-route search on the main thread;
+handed-back movers 1.5; push-outs 0.6), orders 3.8 (~1 us/unit of setters),
+hash 3.8 (structures' cold objects ~2), effective stats 3.6 (vision
+re-registration ~25% of it), visibility 3.0, worker search 2.9 (phase wait),
+status 2.1, SP_COUNTS 1.7, adjacency 1.6, hits 1.6, lasers 1.5, collect
+1.5, towers 1.3 (targets searched on the main thread).
+
 ## Next
 
 Order set by the user (2026-10-09): main thread stable below 50 ms (aim

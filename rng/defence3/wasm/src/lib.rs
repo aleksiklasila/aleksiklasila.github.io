@@ -124,6 +124,18 @@ scalar!(u8,i8,u16,i16,u32,i32,u64,i64,usize,f32,f64);
 #[derive(Clone, Copy)]
 pub struct F32(f32);
 impl Scalar for F32 { type Value=f64; #[inline(always)] fn load(self)->f64 { self.0 as f64 } #[inline(always)] fn store(v:f64)->Self { Self(v as f32) } }
+// Unit positions (unit.x, y, prevX, prevY, x0, y0, vt.x/y): Int32 in eighths
+// of a pixel (UNIT_POSITION_QUANTIZATION), read as pixels; a store rounds to
+// the nearest eighth, halves up (the quantization every move ends with).
+pub const Q8_SCALE: f64 = 8.0;
+pub const Q8_INV: f64 = 0.125;
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct Q8(i32);
+impl Scalar for Q8 { type Value=f64; #[inline(always)] fn load(self)->f64 { self.0 as f64 * Q8_INV } #[inline(always)] fn store(v:f64)->Self { Self(to_i32(floor(v * Q8_SCALE + 0.5))) } }
+/// A pixel offset as whole eighths, halves up (NaN, infinities: 0).
+#[inline(always)]
+fn q8_of(v: f64) -> i32 { to_i32(floor(v * Q8_SCALE + 0.5)) }
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct I32Number(i32);
@@ -170,8 +182,8 @@ fn sep_radius(cr: f64, r: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn sep_pack(
     eslot: *const i32,
-    xs: *const F32,
-    ys: *const F32,
+    xs: *const Q8,
+    ys: *const Q8,
     dead: *const u8,
     r0: *const F32,
     layer: *const u8,
@@ -1143,6 +1155,25 @@ unsafe fn acq_structure_tile(
     *best_c = cls;
     *best_d = d2;
     *best = t as i32;
+}
+
+/// The acquisition job's own copy of the unit index (SIM_KERNEL_ACQ_OMT):
+/// rows y0..y1 of the chunks' entry ranges, stamps and owners, so the scan
+/// may run on while the next index is built in the live arrays.
+#[no_mangle]
+pub unsafe extern "C" fn acq_copy(rs: *const i32, rc: *const i32, rst: *const i32, om: *const u8, ors: *mut i32, orc: *mut i32, orst: *mut i32, oom: *mut u8, cw: i32, y0: i32, y1: i32) {
+    let a = (y0.max(0) as usize) * cw.max(0) as usize;
+    let n = ((y1 - y0).max(0) as usize) * cw.max(0) as usize;
+    core::ptr::copy_nonoverlapping(rs.add(a), ors.add(a), n);
+    core::ptr::copy_nonoverlapping(rc.add(a), orc.add(a), n);
+    core::ptr::copy_nonoverlapping(rst.add(a), orst.add(a), n);
+    core::ptr::copy_nonoverlapping(om.add(a), oom.add(a), n);
+}
+/// Entries e0..e1 of the index's slots copied (the scan's own).
+#[no_mangle]
+pub unsafe extern "C" fn acq_copy_es(es: *const i32, oes: *mut i32, e0: i32, e1: i32) {
+    let a = e0.max(0) as usize;
+    core::ptr::copy_nonoverlapping(es.add(a), oes.add(a), (e1 - e0).max(0) as usize);
 }
 
 /// The owners per chunk transposed (omt[tx * ch + ty] = om[ty * cw + tx]),

@@ -60,7 +60,9 @@ const SNAP_FORMAT = 7;
 // 5: the separation's pushes applied in the movement kernel's epilogue
 // (where each unit moved, before the unit pass); the state hash from the
 // unit columns and the object fields' digest.
-const SIM_RULES_REVISION = 5;
+// 6: unit positions Int32 eighths of a pixel (steps, chases and pushes
+// added as whole eighths, tiles by shifts).
+const SIM_RULES_REVISION = 6;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
 // Each hash covers one slice (regions, grid rows) of the world. The resync
@@ -832,7 +834,7 @@ function snapTickHash(tick, allSlices = false) {
             h = (h + ORD[j]) | 0;
             unitPairs += CC[j * 4];
             for (let k = 0, c = CC[j * 4 + 3]; k < c; k++) { const i = NU[b + k]; h = (h + _snapOrderMix(i, units[i].id)) | 0; }
-            for (let k = 0, c = CC[j * 4 + 2]; k < c; k++) { const si = NL[b + k]; _snapRegionAdd(regions, Math.floor(CY[si] / ts) * 1024 + Math.floor(CX[si] / ts), NLH[b + k] >>> 0); }
+            for (let k = 0, c = CC[j * 4 + 2]; k < c; k++) { const si = NL[b + k]; _snapRegionAdd(regions, Math.floor(CY[si] * 0.125 / ts) * 1024 + Math.floor(CX[si] * 0.125 / ts), NLH[b + k] >>> 0); }
         }
         unitOrder = h >>> 0;
     } else unitOrder = _snapHashOrder('u', allSlices ? -1 : slice);

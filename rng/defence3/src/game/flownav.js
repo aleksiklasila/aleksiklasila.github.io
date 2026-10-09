@@ -928,6 +928,8 @@ function navReset() {
     // (The class walls made again from the grid as it is now: a restore.)
     _navClassWall.fill(null); _navClassGrid = null;
     _navSubReset();
+    // (Build versions start again: the movement kernel's shared looks go.)
+    if (typeof simMoveLookCacheClear === 'function') simMoveLookCacheClear();
 }
 
 // The next tile from `t` toward `dest` (profile), -1 when there is no way

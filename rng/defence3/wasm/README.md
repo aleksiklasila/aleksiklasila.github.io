@@ -70,6 +70,16 @@ rebuilding `core`), checks that the module has no data segments and links to
 a shared memory, and writes `src/sim/sim_wasm_bin.js`.
 `node wasm/build.cjs --no-build` repackages an existing build.
 
+Between cargo and the patch it runs binaryen's `wasm-opt -O3` (SIMD,
+threads, bulk memory, non-trapping float-to-int, sign-ext, mutable globals;
+no fast-math) when it finds it: `WASM_OPT=path`, `wasm/tools/binaryen-*/bin/`
+(gitignored: unpack a release from
+https://github.com/WebAssembly/binaryen/releases there), or `PATH`. Without
+it the module is used as linked. The committed `sim_wasm_bin.js` is the
+optimized build (MOVE replay ~3-6% faster than without, same outputs).
+`--no-wasm-opt` skips it; `WASM_OPT_LEVEL=-O4` picks another level;
+`--keep-names` keeps function names (profiles).
+
 No Visual Studio / MSVC is needed: the crate has no dependencies and links
 with the bundled `rust-lld`.
 

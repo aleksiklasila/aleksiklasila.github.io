@@ -29,7 +29,38 @@ if (!process.argv.includes('--no-build')) {
     const r = cp.spawnSync('cargo', ['build', '--release'], { cwd: here, env, stdio: 'inherit', shell: process.platform === 'win32' });
     if (r.status !== 0) { console.error('cargo build failed (is rustup installed, with `rustup target add wasm32-unknown-unknown`?)'); process.exit(r.status || 1); }
 }
-const bytes = new Uint8Array(fs.readFileSync(wasmPath));
+// ---- wasm-opt (binaryen), when found: WASM_OPT, wasm/tools/binaryen-*/bin,
+// or PATH. Speed passes (no fast-math: float results as written). Skipped
+// with --no-wasm-opt or when not installed (the module works either way;
+// the committed build is the optimized one).
+function findWasmOpt() {
+    const exe = process.platform === 'win32' ? 'wasm-opt.exe' : 'wasm-opt';
+    if (process.env.WASM_OPT && fs.existsSync(process.env.WASM_OPT)) return process.env.WASM_OPT;
+    const tools = path.join(here, 'tools');
+    if (fs.existsSync(tools)) for (const d of fs.readdirSync(tools).sort().reverse()) {
+        const f = path.join(tools, d, 'bin', exe);
+        if (fs.existsSync(f)) return f;
+    }
+    const r = cp.spawnSync(exe, ['--version'], { encoding: 'utf8', shell: process.platform === 'win32' });
+    return r.status === 0 ? exe : null;
+}
+const WASM_OPT_LEVEL = process.env.WASM_OPT_LEVEL || '-O3';
+let wasmIn = wasmPath;
+if (!process.argv.includes('--no-wasm-opt')) {
+    const wo = findWasmOpt();
+    if (wo) {
+        const tmp = path.join(os.tmpdir(), 'defence3_sim.opt.' + process.pid + '.wasm');
+        const args = [wasmPath, '-o', tmp, WASM_OPT_LEVEL, '--enable-simd', '--enable-threads', '--enable-bulk-memory', '--enable-nontrapping-float-to-int',
+            '--enable-sign-ext', '--enable-mutable-globals', '--strip-debug', '--strip-producers'];
+        if (process.argv.includes('--keep-names')) args.push('--debuginfo');
+        const r = cp.spawnSync(wo, args, { stdio: 'inherit' });
+        if (r.status !== 0) { console.error('wasm-opt failed'); process.exit(r.status || 1); }
+        wasmIn = tmp;
+        console.log('wasm-opt ' + WASM_OPT_LEVEL + ': ' + fs.statSync(wasmPath).size + ' -> ' + fs.statSync(tmp).size + ' bytes');
+    } else console.log('(wasm-opt not found: the module as linked)');
+}
+const bytes = new Uint8Array(fs.readFileSync(wasmIn));
+if (wasmIn !== wasmPath) fs.unlinkSync(wasmIn);
 
 // ---- read the sections ----
 function leb(buf, o) { let v = 0, s = 0, c; do { c = buf[o++]; v += (c & 127) * 2 ** s; s += 7; } while (c & 128); return [v, o]; }

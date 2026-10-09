@@ -99,7 +99,7 @@ function updateUnitSpatial(u) {
 
 // updateUnitSpatial for a unit by its slot, from the columns (x, y).
 function spatialSlotUpdate(c, s) {
-    let gx = Math.floor(c.x[s] / TILE), gy = Math.floor(c.y[s] / TILE);
+    let gx = Math.floor(c.x[s] * 0.125 / TILE), gy = Math.floor(c.y[s] * 0.125 / TILE);
     if (!(gx >= 0)) gx = 0; else if (gx >= GRID_W) gx = GRID_W - 1;
     if (!(gy >= 0)) gy = 0; else if (gy >= GRID_H) gy = GRID_H - 1;
     const tile = gy * GRID_W + gx;
@@ -302,7 +302,13 @@ function spatialIndexPrebuild() {
     if (SPATIAL_INDEX_MERGE && typeof SIM_KERNEL_INDEX_MERGE === 'number' && X.mergeOk && _sxBySlot && !_sxDirty) {
         _spatialMergeArrays(X, n);
         simParallelBind('ix.ordC', X.ordM);
-        sortStages = [[SIM_KERNEL_INDEX_MERGE, 1, [n, _sxListed, nChunks, ep]]];
+        if (SPATIAL_INDEX_MERGE_PAR && typeof SIM_KERNEL_IXM_WRITE === 'number') {
+            // (In parallel: bands of chunks, blocks of units; see k.rs k_ixm_*.)
+            const MB = SPATIAL_IXM_BANDS, KB = Math.ceil(nChunks / MB), MJ = Math.ceil(n / UJ);
+            _spatialMergeParArrays(X, n, MB, MJ);
+            const mp = [n, _sxListed, nChunks, ep, MB, KB, UJ, MJ];
+            sortStages = [[SIM_KERNEL_IXM_INV, MJ, mp], [SIM_KERNEL_IXM_KEEP, MB, mp], [SIM_KERNEL_IXM_CHG, MJ, mp], [SIM_KERNEL_IXM_PLAN, 1, mp], [SIM_KERNEL_IXM_WRITE, MB + MJ, mp]];
+        } else sortStages = [[SIM_KERNEL_INDEX_MERGE, 1, [n, _sxListed, nChunks, ep]]];
     } else {
         const order = simSpatialStableOrderStages(n, nChunks, 1);
         simParallelBind('ix.ordC', order.out);
@@ -440,6 +446,16 @@ function _spatialIndexRebuildParallel() {
 // The incremental index order (SIM_KERNEL_INDEX_MERGE) in the prebuild;
 // false: every build sorts (both give the same index).
 let SPATIAL_INDEX_MERGE = true;
+// The parallel merge's arrays (k.rs k_ixm_*): per last entry its kept unit,
+// a second u64 scratch, the chunkless units per block, the plan.
+let SPATIAL_INDEX_MERGE_PAR = true;
+const SPATIAL_IXM_BANDS = 64;
+function _spatialMergeParArrays(X, n, B, J) {
+    const cap = Math.max(X.ordM.length, simReserveCap(Math.max(n, _sxListed), 4096));
+    if (!X.kt || X.kt.length < cap) { X.kt = simHeapArray(Int32Array, cap); X.ch2 = simHeapArray(Float64Array, cap); X.ncl = simHeapArray(Int32Array, cap); simParallelBind('ix.kt', X.kt); simParallelBind('ix.ch2', X.ch2); simParallelBind('ix.ncl', X.ncl); }
+    const pl = 3 * J + 3 * B + 1 + (B + 1) * J;
+    if (!X.mplan || X.mplan.length < pl) { X.mplan = simHeapArray(Int32Array, Math.max(1024, pl * 2)); simParallelBind('ix.mplan', X.mplan); }
+}
 function _spatialMergeArrays(X, n) {
     const S = _simUnitState, slotsCap = S ? S.cap : 0;
     if (!X.ordM || X.ordM.length < n) { X.ordM = simSharedArray(Int32Array, simReserveCap(n, 4096)); X.kept = simSharedArray(Int32Array, X.ordM.length); X.chg = simSharedArray(Float64Array, X.ordM.length); simParallelBind('ix.kept', X.kept); simParallelBind('ix.chg', X.chg); }

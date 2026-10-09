@@ -389,8 +389,8 @@ function unitPassEnd() {
     spatialCountsDeferEnd(!!(_sepPending && _sepPending.tick === gameTime));
     astarPassEnd(); simMoveWallsDeferEnd();
 }
-function _unitTickX(t) { const c = t._us; return c && _unitPassOn ? c.x0[t._si] : t.x; }
-function _unitTickY(t) { const c = t._us; return c && _unitPassOn ? c.y0[t._si] : t.y; }
+function _unitTickX(t) { const c = t._us; return c && _unitPassOn ? c.x0[t._si] * 0.125 : t.x; }
+function _unitTickY(t) { const c = t._us; return c && _unitPassOn ? c.y0[t._si] * 0.125 : t.y; }
 // Any target (units as _unitTickX, other things where they are).
 // Whether another unit counts as dead during the pass: as at its start
 // (the movement kernel's dead0, this tick), whatever fell since (a ram's
@@ -477,7 +477,7 @@ class Unit {
         this.owner = owner;
         this.x = x; this.y = y;
         this.prevX = x; this.prevY = y;
-        if (this._us) { this._us.x0[this._si] = x; this._us.y0[this._si] = y; this._us.upT[this._si] = simUnitTypeIndex(unitType); if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); }
+        if (this._us) { this._us.x0[this._si] = this._us.x[this._si]; this._us.y0[this._si] = this._us.y[this._si]; this._us.upT[this._si] = simUnitTypeIndex(unitType); if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); }
         // followPath: inputs of the last completed node scan (a cache).
         this._fpPath = null; this._fpTile = -1; this._fpIdx = -1; this._fpVer = -1;
         this.teleportHideTicks = 0;
@@ -591,14 +591,14 @@ class Unit {
     set id(v) { if (this._us) this._us.id[this._si] = v; else if (this._det) this._det.id = v; else Object.defineProperty(this, 'id', { value: v, writable: true, enumerable: true, configurable: true }); }
     get owner() { return this._us ? this._us.owner[this._si] : (this._det ? this._det.owner : undefined); }
     set owner(v) { if (this._us) { if (this._us.owner[this._si] !== v) this._us.mvOn[this._si] = 0; this._us.owner[this._si] = v; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.owner = v; else Object.defineProperty(this, 'owner', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get x() { return this._us ? this._us.x[this._si] : (this._det ? this._det.x : undefined); }
-    set x(v) { if (this._us) this._us.x[this._si] = v; else if (this._det) this._det.x = v; else Object.defineProperty(this, 'x', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get y() { return this._us ? this._us.y[this._si] : (this._det ? this._det.y : undefined); }
-    set y(v) { if (this._us) this._us.y[this._si] = v; else if (this._det) this._det.y = v; else Object.defineProperty(this, 'y', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get prevX() { return this._us ? this._us.prevX[this._si] : (this._det ? this._det.prevX : undefined); }
-    set prevX(v) { if (this._us) this._us.prevX[this._si] = v; else if (this._det) this._det.prevX = v; else Object.defineProperty(this, 'prevX', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get prevY() { return this._us ? this._us.prevY[this._si] : (this._det ? this._det.prevY : undefined); }
-    set prevY(v) { if (this._us) this._us.prevY[this._si] = v; else if (this._det) this._det.prevY = v; else Object.defineProperty(this, 'prevY', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get x() { return this._us ? this._us.x[this._si] * 0.125 : (this._det ? this._det.x : undefined); }
+    set x(v) { if (this._us) this._us.x[this._si] = Math.round(v * 8); else if (this._det) this._det.x = v; else Object.defineProperty(this, 'x', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get y() { return this._us ? this._us.y[this._si] * 0.125 : (this._det ? this._det.y : undefined); }
+    set y(v) { if (this._us) this._us.y[this._si] = Math.round(v * 8); else if (this._det) this._det.y = v; else Object.defineProperty(this, 'y', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get prevX() { return this._us ? this._us.prevX[this._si] * 0.125 : (this._det ? this._det.prevX : undefined); }
+    set prevX(v) { if (this._us) this._us.prevX[this._si] = Math.round(v * 8); else if (this._det) this._det.prevX = v; else Object.defineProperty(this, 'prevX', { value: v, writable: true, enumerable: true, configurable: true }); }
+    get prevY() { return this._us ? this._us.prevY[this._si] * 0.125 : (this._det ? this._det.prevY : undefined); }
+    set prevY(v) { if (this._us) this._us.prevY[this._si] = Math.round(v * 8); else if (this._det) this._det.prevY = v; else Object.defineProperty(this, 'prevY', { value: v, writable: true, enumerable: true, configurable: true }); }
     get vx() { return this._us ? this._us.vx[this._si] : (this._det ? this._det.vx : undefined); }
     set vx(v) { if (this._us) this._us.vx[this._si] = v; else if (this._det) this._det.vx = v; else Object.defineProperty(this, 'vx', { value: v, writable: true, enumerable: true, configurable: true }); }
     get vy() { return this._us ? this._us.vy[this._si] : (this._det ? this._det.vy : undefined); }
@@ -2032,7 +2032,7 @@ function unitHitsResolve() {
             const e = PL[p];
             let a, t, ax, ay, dmg, sty;
             if (e < n) { a = Q.a[e]; t = Q.t[e]; ax = Q.x[e]; ay = Q.y[e]; dmg = Q.dmg[e]; sty = HS[e]; }
-            else { const j = e - n, s = HA[j]; a = owners[s]; t = owners[HT[j]]; ax = C.x[s]; ay = C.y[s]; dmg = C.atkDmg[s]; sty = C.atkSty[s]; }
+            else { const j = e - n, s = HA[j]; a = owners[s]; t = owners[HT[j]]; ax = C.x[s] * 0.125; ay = C.y[s] * 0.125; dmg = C.atkDmg[s]; sty = C.atkSty[s]; }
             if (!a || !t) continue;
             // (A kernel attack's own look and sound, as _attackerSide's.)
             if (e >= n) { recordUnitAttackFx(a, t); playSound(sty >= 1 && sty <= 4 || a.attackStyle === 'laser' ? 'attack_cast' : 'attack_swing', ax, ay, a.unitType); }
@@ -2146,12 +2146,12 @@ function statusDotAccReset() {
 }
 let _statusCounts = null, _statusList = null;
 function statusPrepassRun() {
-    const S = _simUnitState, n = units.length;
-    if (!S || n === 0) return;
-    const slots = _unitSlotMapEnsure(), chunks = Math.ceil(n / STATUS_PREPASS_CHUNK);
+    const S = _simUnitState, n = S ? S.owners.length : 0;
+    if (!S || n === 0 || units.length === 0) return;
+    // (By slot: every unit's slot, the free ones passed over by unit.live.)
+    const chunks = Math.ceil(n / STATUS_PREPASS_CHUNK);
     if (!_statusCounts || _statusCounts.length < chunks) { _statusCounts = simSharedArray(Int32Array, Math.max(64, chunks * 2)); simParallelBind('st.count', _statusCounts); }
     if (!_statusList || _statusList.length < chunks * STATUS_PREPASS_CHUNK) { _statusList = simSharedArray(Int32Array, simReserveCap(chunks * STATUS_PREPASS_CHUNK, 4096)); simParallelBind('st.list', _statusList); }
-    simParallelBind('ix.slots', slots);
     const P = _simParams;
     P[0] = n; P[1] = STATUS_PREPASS_CHUNK; P[2] = gameTime; P[3] = STATUS_DOT_REPORT_TICKS;
     // (The separation's tick-start copy only when separationStart, next,
@@ -2173,17 +2173,16 @@ function statusPrepassRun() {
         }
     }
     const C = S.columns, EV = C.stEv, DOT = C.stDot, owners = S.owners;
-    // (Each job's units with events, in index order: the kernel's lists.)
+    // (Each job's slots with events, in slot order: the kernel's lists;
+    // what is done with them does not depend on their order.)
     const LIST = _statusList;
     for (let k = 0; k < chunks; k++) {
         for (let j = k * STATUS_PREPASS_CHUNK, je = j + _statusCounts[k]; j < je; j++) {
-            const i = LIST[j], s = slots[i];
-            if (s < 0) continue;
-            const ev = EV[s];
+            const s = LIST[j], ev = EV[s];
             if (ev === 0) continue;
             EV[s] = 0;
             const u = owners[s];
-            if (!u || u !== units[i]) continue;
+            if (!u || u._si !== s) continue;
             if (ev & 1) recordDamageVisual(u, DOT[s]);
             if (ev & 2) { u.watchedByTeam = -1; if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(u); }
         }
@@ -2775,7 +2774,7 @@ function simFlowArrive(u) {
 // flow mode. (A path of its own first, as Unit.update follows it.)
 function _simMoveTryFlowArm(u, c, s, cmd) {
     if (u._routeKey !== NAV_ROUTE_KEY || (u.path && u.pathIndex < u.path.length)) return false;
-    const x = c.x[s], y = c.y[s], gx = Math.floor(x / TILE), gy = Math.floor(y / TILE), t = gy * GRID_W + gx;
+    const x = c.x[s] * 0.125, y = c.y[s] * 0.125, gx = Math.floor(x / TILE), gy = Math.floor(y / TILE), t = gy * GRID_W + gx;
     const dest = u._routeEnd, profile = navProfileOf(u);
     if (!(dest >= 0) || t === dest) return false;
     // (Its path's last node the route's end: the route is done, as
@@ -2802,7 +2801,7 @@ function simMoveTryArm(u) {
     if (nd && nd.nav) {
         if (u._spatialEpoch !== spatialEpoch) return;
         const s = u._si, profile = nd.nav - 1, dest = nd.y * GRID_W + nd.x;
-        if (Math.floor(c.y[s] / TILE) * GRID_W + Math.floor(c.x[s] / TILE) === dest) return;
+        if (Math.floor(c.y[s] * 0.125 / TILE) * GRID_W + Math.floor(c.x[s] * 0.125 / TILE) === dest) return;
         const did = navFieldRequest(profile, dest, !!nd.w);
         // (Arriving in a crowd short of the tile: groups only.)
         if (did >= 0) simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, nd.ready | 0, !!u.workerState || !nd.w, _simWorkerKind(u), profile);
@@ -2915,7 +2914,7 @@ function _simMoveTryApproachBuilding(u) {
     const nd = path[idx];
     if (nd.nav) {
         const dest = nd.y * GRID_W + nd.x, profile = nd.nav - 1;
-        if (Math.floor(c.y[s] / TILE) * GRID_W + Math.floor(c.x[s] / TILE) === dest) return;
+        if (Math.floor(c.y[s] * 0.125 / TILE) * GRID_W + Math.floor(c.x[s] * 0.125 / TILE) === dest) return;
         const did = navFieldRequest(profile, dest, !!nd.w);
         if (!(did >= 0)) return;
         const crowd = !!nd.w && idx === path.length - 1;
@@ -3069,7 +3068,7 @@ function simMoveTryChase(u) {
     if (nd && nd.nav && ((nd.nav - 1) === NAV_PROFILE_AIR) === !!u.isFlying) {
         const dest = nd.y * GRID_W + nd.x, profile = nd.nav - 1;
         const spd = pc.speed * _getUnitAstarSpeedMultiplier(u);
-        if (Math.floor(c.y[s] / TILE) * GRID_W + Math.floor(c.x[s] / TILE) !== dest && spd >= 0) {
+        if (Math.floor(c.y[s] * 0.125 / TILE) * GRID_W + Math.floor(c.x[s] * 0.125 / TILE) !== dest && spd >= 0) {
             const did = navFieldRequest(profile, dest, !!nd.w);
             if (did >= 0) {
                 const crowd = !!nd.w && u.pathIndex === u.path.length - 1;
@@ -3189,7 +3188,7 @@ function simPassWallFixups(S) {
             if (!(s >= 0) || u._us !== c || seen.has(u)) return;
             const o = OUT[s];
             if (o === 0 || o === 10 || o >= 13 || o === 4 || o === 5 || u.dead || u.isFlying) return;
-            if (Math.floor(c.x[s] / TILE) !== gx || Math.floor(c.y[s] / TILE) !== gy) return;
+            if (Math.floor(c.x[s] * 0.125 / TILE) !== gx || Math.floor(c.y[s] * 0.125 / TILE) !== gy) return;
             seen.add(u); list.push(u);
         });
     }
@@ -3383,7 +3382,7 @@ function simMoveTryPark(u) {
     // or its recheck (with a target) wakes it.
     if (c.wsKind[s] && typeof _wsRegistered === 'function' && _wsRegistered(u)) {
         const watchStill = u.workerType === 'builder' && Number.isFinite(u._builderLastWatchX) && Number.isFinite(u._builderLastWatchY)
-            && u._builderLastWatchX === c.x[s] && u._builderLastWatchY === c.y[s];
+            && u._builderLastWatchX === c.x[s] * 0.125 && u._builderLastWatchY === c.y[s] * 0.125;
         let wake = gameTime + 0x3fffffff;
         if (u.workerType === 'builder') {
             if (u.workerTarget && Number.isFinite(u._builderNextRecheckTick) && u._builderNextRecheckTick < wake) wake = u._builderNextRecheckTick;
@@ -3405,7 +3404,7 @@ function simMoveTryPark(u) {
     // the last one was taken: the kernel wakes it at a sample tick only when
     // it was pushed away, mvFlags 4.)
     const watchStill = u.workerType === 'builder' && Number.isFinite(u._builderLastWatchX) && Number.isFinite(u._builderLastWatchY)
-        && u._builderLastWatchX === c.x[s] && u._builderLastWatchY === c.y[s];
+        && u._builderLastWatchX === c.x[s] * 0.125 && u._builderLastWatchY === c.y[s] * 0.125;
     // Its next wake for anything but a search: its scheduled search (none
     // while a failed search's backoff runs: its end wakes it), a builder's
     // recheck (with a target) and watchdog sample, its search origin
@@ -3559,7 +3558,7 @@ function _simMoveWallQNear(c, s) {
     _simMoveWallQKept++;
     const W = GRID_W, H = GRID_H;
     for (let pass = 0; pass < 2; pass++) {
-        const gx = Math.floor((pass ? c.x[s] : c.prevX[s]) / TILE), gy = Math.floor((pass ? c.y[s] : c.prevY[s]) / TILE);
+        const gx = Math.floor((pass ? c.x[s] : c.prevX[s]) * 0.125 / TILE), gy = Math.floor((pass ? c.y[s] : c.prevY[s]) * 0.125 / TILE);
         if (!(gx >= 0 && gy >= 0 && gx < W && gy < H)) return true;
         for (let y = gy - 1; y <= gy + 1; y++) {
             if (y < 0 || y >= H) continue;
@@ -3634,6 +3633,7 @@ function _simMoveWalls() {
         for (let x = 0; x < GRID_W; x++) _simMoveWall[o + x] = row && row[x] && row[x].type === TYPE_WALL ? 1 : 0;
     }
     _simMoveWallGrid = grid; _simMoveWallDirty = false; _simMoveWallVer = (_simMoveWallVer + 1) | 0;
+    simMoveLookCacheClear();
     // (Every block's version moves on: the look-aheads cached anywhere are
     // made again.)
     _simMoveWallBlkW = (GRID_W + 7) >> 3;
@@ -3698,6 +3698,7 @@ function _simMoveStructs() {
         if (!_simMoveStruct || _simMoveStruct.length !== GRID_W * GRID_H) { _simMoveStruct = simHeapArrayAuto(Int8Array, GRID_W * GRID_H); simParallelBind('mv.struct', _simMoveStruct); }
         if (!_simStructCls || _simStructCls.length !== GRID_W * GRID_H) { _simStructCls = simHeapArrayAuto(Int8Array, GRID_W * GRID_H); simParallelBind('mv.scls', _simStructCls); }
         _simMoveStruct.fill(-1); _simStructCls.fill(0);
+        _simTrapAlloc();
         _simMoveStructBlocks = simHeapArrayAuto(Int32Array, spatialBlockCols * spatialBlockRows * players);
         for (const e of _activeTileEntities) {
             const gx = e.gx, gy = e.gy;
@@ -3707,6 +3708,7 @@ function _simMoveStructs() {
             const code = _simMoveStructCode(gx, gy);
             _simMoveStruct[t] = code; _simStructCls[t] = _simStructClass(gx, gy);
             if (code !== -1) _simMoveStructCount(t, code, 1);
+            if (_simStructCls[t] === 2) _simTrapRefresh(t);
         }
         _simMoveStructSet = _activeTileEntities; _simMoveStructDims = dims; _simMoveStructDirty.length = 0;
         return;
@@ -3716,12 +3718,105 @@ function _simMoveStructs() {
         const t = dirty[i], gx = t % GRID_W, gy = (t - gx) / GRID_W;
         const old = _simMoveStruct[t], code = _simMoveStructCode(gx, gy);
         _simStructCls[t] = _simStructClass(gx, gy);
+        _simTrapRefresh(t);
         if (old === code) continue;
         if (old !== -1) _simMoveStructCount(t, old, -1);
         if (code !== -1) _simMoveStructCount(t, code, 1);
         _simMoveStruct[t] = code;
     }
     dirty.length = 0;
+    _simTrapStep();
+}
+
+// Floor traps for the movement kernel (mv.rs floor_hit): per tile the trap
+// a unit hostile to its owner meets there (mv.trapK: 0 none or not built, 1
+// fire, 2 poison, 3 ice, 4 water, 5 sand, 6 a mine: Unit.update's) and its
+// level (mv.trapL), redone with its tile's structure, at construction's end
+// and level changes (simTrapDirty). The strength (status ticks mv.trapT,
+// damage per tick mv.trapTG) per owner, kind and level: a mirror of the
+// owner's PRECOMPUTED_STATS_MAP_PLAYER entries (per thing and level, with
+// its research), made again for an owner when its building stats are
+// rebuilt (simTrapResearchDone): no trap tile is visited then. Per unit type
+// its resistances (mv.tres by simUnitTypeIndex, bit kind - 1).
+let _simTrapK = null, _simTrapL = null, _simTrapT = null, _simTrapTG = null, _simTrapRes = null, _simTrapResN = 0;
+const _simTrapDirtyQ = [], _simTrapOwnersDirty = new Set();
+let _simTrapTPlayers = 0, _simTrapTLevels = 0;
+const SIM_TRAP_KIND = { lava: [1, 'fire'], poison_puddle: [2, 'poison'], ice_patch: [3, 'ice'], water_puddle: [4, 'water'], sand: [5, 'sand'], mine: [6, ''] };
+const SIM_TRAP_TYPE_OF = [null, 'lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'sand'];
+const SIM_TRAP_STAT = [null, ['burnDuration', 'burnDps'], ['poisonDuration', 'poisonDps'], ['freezeDuration', 'freezeDps'], ['wetDuration', null], ['sandDuration', null]];
+function _simTrapAlloc() {
+    const N = GRID_W * GRID_H;
+    if (!_simTrapK || _simTrapK.length !== N) {
+        _simTrapK = simHeapArrayAuto(Uint8Array, N); _simTrapL = simHeapArrayAuto(Uint8Array, N);
+        simParallelBind('mv.trapK', _simTrapK); simParallelBind('mv.trapL', _simTrapL);
+    }
+    _simTrapK.fill(0); _simTrapL.fill(0);
+    _simTrapOwnersDirty.add(-1);
+}
+function simTrapDirty(gx, gy) { if (_simTrapK && gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) _simTrapDirtyQ.push(gy * GRID_W + gx); }
+function simTrapResearchDone(owner) { _simTrapOwnersDirty.add(Number.isInteger(owner) ? owner : -1); }
+function _simTrapRefresh(t) {
+    if (!_simTrapK) return;
+    const gx = t % GRID_W, gy = (t - gx) / GRID_W, cell = grid[gy] && grid[gy][gx], item = cell ? cell.item : null;
+    let k = 0, l = 0;
+    const spec = item && !item.underConstruction ? SIM_TRAP_KIND[item.type] : null;
+    if (spec && tileEntityRef[gy] && tileEntityRef[gy][gx] === item) {
+        k = spec[0];
+        l = Math.max(1, Math.min(255, clampThingLevel(getThingEffectiveLevel(item, stackCountToLevel(item.stacks || 1)) || 1)));
+    }
+    _simTrapK[t] = k; _simTrapL[t] = l;
+}
+// One owner's strengths: kinds 1-5 at every level, from its precomputed
+// stats map (the entries applyStatusEffect reads), the defaults where a stat
+// has no value.
+function _simTrapTableOwner(o) {
+    const L = _simTrapTLevels, pm = PRECOMPUTED_STATS_MAP_PLAYER[o], bm = pm && pm.building;
+    for (let k = 1; k <= 5; k++) {
+        const type = SIM_TRAP_TYPE_OF[k], effect = SIM_TRAP_KIND[type][1], base = Number((BASE_CARD_TYPES[type] || {}).damage) || 1;
+        const rows = bm ? bm[_normalizePlayerPrecomputedBuildingKey(type)] : null, dk = SIM_TRAP_STAT[k][0], gk = SIM_TRAP_STAT[k][1];
+        for (let lvl = 1; lvl < L; lvl++) {
+            const e = rows ? rows[Math.max(1, clampThingLevel(lvl))] : null;
+            const md = e ? Number(e[dk]) : NaN, mp = e && gk ? Number(e[gk]) : NaN;
+            const def = effect === 'fire' || effect === 'ice' ? 3 + lvl * 0.5 : effect === 'poison' ? 5 + lvl : effect === 'water' ? 6 + lvl : 9;
+            let g = 0;
+            if (effect === 'fire' || effect === 'poison') g = Number.isFinite(mp) ? mp : Math.max(0.1, base);
+            else if (effect === 'ice') g = Number.isFinite(mp) ? mp : Math.max(0.2, base);
+            const i = (o * 6 + k) * L + lvl;
+            _simTrapT[i] = secondsToTicks(Number.isFinite(md) ? md : def); _simTrapTG[i] = g;
+        }
+    }
+}
+let SIM_TRAP_KERNEL = true;
+function _simTrapStep() {
+    if (!_simTrapK) return;
+    if (!SIM_TRAP_KERNEL) { simParallelBind('mv.trapK', null); return; }
+    if (_simParReg['mv.trapK'] !== _simTrapK) simParallelBind('mv.trapK', _simTrapK);
+    const q = _simTrapDirtyQ;
+    for (let i = 0; i < q.length; i++) _simTrapRefresh(q[i]);
+    q.length = 0;
+    // The strength table (all owners when its size changed or after a reset).
+    const NP = Math.max(1, players.length), L = Math.min(255, MAX_THING_LEVEL + 1);
+    if (!_simTrapT || _simTrapTPlayers !== NP || _simTrapTLevels !== L) {
+        _simTrapTPlayers = NP; _simTrapTLevels = L;
+        const n = NP * 6 * L;
+        if (!_simTrapT || _simTrapT.length < n) { _simTrapT = simHeapArrayAuto(Int32Array, n); _simTrapTG = simHeapArrayAuto(Float32Array, n); simParallelBind('mv.trapT', _simTrapT); simParallelBind('mv.trapTG', _simTrapTG); }
+        _simTrapOwnersDirty.add(-1);
+    }
+    if (_simTrapOwnersDirty.size) {
+        if (_simTrapOwnersDirty.has(-1)) { for (let o = 0; o < NP; o++) _simTrapTableOwner(o); }
+        else for (const o of _simTrapOwnersDirty) if (o >= 0 && o < NP) _simTrapTableOwner(o);
+        _simTrapOwnersDirty.clear();
+    }
+    // Resistances by unit type (types are added as units of them appear).
+    const names = _simUnitTypeNames;
+    if (!_simTrapRes || _simTrapResN !== names.length) {
+        if (!_simTrapRes || _simTrapRes.length < names.length) { _simTrapRes = simHeapArrayAuto(Uint8Array, Math.max(64, names.length * 2)); simParallelBind('mv.tres', _simTrapRes); }
+        for (let i = 0; i < names.length; i++) {
+            const st = BASE_UNIT_STATS[names[i]] || {};
+            _simTrapRes[i] = (st.fireResistant ? 1 : 0) | (st.poisonResistant ? 2 : 0) | (st.iceResistant ? 4 : 0) | (st.waterResistant ? 8 : 0) | (st.sandResistant ? 16 : 0);
+        }
+        _simTrapResN = names.length;
+    }
 }
 
 // Per player and block of the spatial index: enemy units plus structures
@@ -3864,6 +3959,8 @@ function simMoveRun() {
     simParallelBind('ix.agrid', _spatialAreaGridFlat());
     if (typeof _flowTables === 'function') _flowTables();
     const chunks = Math.ceil(n / CH);
+    // (The flow looks shared by the kernel's threads: see mv.rs look_cache.)
+    if (!_simMoveLookC) { _simMoveLookC = simHeapArray(Int32Array, SIM_MOVE_LOOKC_ENTRIES * 16); _simMoveLookC.fill(0); simParallelBind('mv.lookc', _simMoveLookC); }
     if (!_simMovePost || _simMovePost.length < chunks * CH) { _simMovePost = simHeapArrayAuto(Int32Array, simReserveCap(chunks * CH, 8192)); simParallelBind('mv.post', _simMovePost); }
     if (!_simMovePostC || _simMovePostC.length < chunks) { _simMovePostC = simHeapArrayAuto(Int32Array, Math.max(64, chunks * 2)); simParallelBind('mv.postc', _simMovePostC); }
     // (The attacks the kernel made, per chunk: see unitHitsResolve.)
@@ -3884,6 +3981,7 @@ function simMoveRun() {
         const V = typeof _visCover !== 'undefined' ? _visCover : null;
         P[40] = spatialEpoch; P[41] = V ? V.gen : 0; P[42] = !V || V.syncedTick < 0 || V.adm !== areaDistanceMatrix ? 1 : 0;
         P[43] = NPa; P[44] = NT; P[45] = RESOURCE_FIXED_POINT_SCALE;
+    P[55] = _simTrapResN; P[56] = _simTrapTLevels; P[57] = _simTrapTPlayers;
     }
     // (Flow units between steers first, a small kernel of their own; the
     // movement kernel does the rest.)
@@ -4006,6 +4104,13 @@ function _simMoveChargeSteps(chunks, NP, NT, names) {
     }
 }
 let _simMoveRem = null, _simMoveChFix = null, _simMoveChUse = null;
+// The movement kernel's shared flow looks (mv.rs LOOKC_ENTRIES entries of 16
+// words): keyed by what a look depends on, among them the navigation build
+// and wall block versions, counters that start again after a navigation
+// reset or a wall rebuild: emptied then (peer-local, results unchanged).
+const SIM_MOVE_LOOKC_ENTRIES = 1 << 18;
+let _simMoveLookC = null;
+function simMoveLookCacheClear() { if (_simMoveLookC) _simMoveLookC.fill(0); }
 // (The step kernel before the movement kernel: see SIM_KERNEL_MOVE_STEP.)
 let SIM_MOVE_STEP_KERNEL = true;
 // Slots per job of the movement kernels: small jobs, so the helpers share
@@ -4150,7 +4255,9 @@ function _acqTierStep() {
 // made again: a posted scan reads them in place, so it is waited for here
 // (it was posted a tick before; done by now as a rule).
 function acqTierIndexWait() {
-    if (_acqStage === 1) simParallelBackgroundWait(ACQ_LANE);
+    // (Only its first stage reads the live index: the rest reads the copies
+    // it made, and runs on until the commit.)
+    if (_acqStage === 1) simParallelBackgroundWaitStage(ACQ_LANE, 0);
 }
 // (A resync: every peer's combat instructions dropped on the same tick.)
 function combatBrainReset() {
@@ -4165,6 +4272,15 @@ function _acqArray(name, Type, n) {
     let a = _simParReg[name];
     // (In the wasm heap: the scan's Rust twin reads them in place.)
     if (!a || a.constructor !== Type || a.length < n) { const old = a; a = simHeapArray(Type, Math.max(1024, n)); simParallelBind(name, a); simHeapFree(old); }
+    return a;
+}
+// The job's own arrays (never another's: these names were bound to live
+// arrays once), bound under their names.
+const _acqOwn = {};
+function _acqOwnArray(name, Type, n) {
+    let a = _acqOwn[name];
+    if (!a || a.constructor !== Type || a.length < n) { const old = a; a = _acqOwn[name] = simHeapArray(Type, Math.max(1024, n)); if (old) simHeapFree(old); }
+    if (_simParReg[name] !== a) simParallelBind(name, a);
     return a;
 }
 function _acqPost() {
@@ -4192,9 +4308,15 @@ function _acqPost() {
     // rebuild rewrites them (acqTierIndexWait; they change nowhere else).
     // The structure tables (queries refresh them mid-tick) and the cover:
     // copies.
-    simParallelBind('acq.rs', _sxStart); simParallelBind('acq.rc', _sxCount); simParallelBind('acq.rst', _sxStamp);
-    simParallelBind('acq.es', _sxESlot); simParallelBind('acq.om', _combatScanOwnerMask);
-    simParallelBind('acq.hs', _simMoveHostile); if (_simMoveHostStruct) simParallelBind('acq.hss', _simMoveHostStruct);
+    // (The live index for the job's first stage, which copies it into the
+    // job's own arrays: see SIM_KERNEL_ACQ_OMT. The hostile tables copied
+    // here: the next tick's movement run makes them again.)
+    simParallelBind('acq.rsL', _sxStart); simParallelBind('acq.rcL', _sxCount); simParallelBind('acq.rstL', _sxStamp);
+    simParallelBind('acq.esL', _sxESlot); simParallelBind('acq.omL', _combatScanOwnerMask);
+    _acqOwnArray('acq.rs', Int32Array, nc); _acqOwnArray('acq.rc', Int32Array, nc); _acqOwnArray('acq.rst', Int32Array, nc);
+    _acqOwnArray('acq.om', Uint8Array, nc); _acqOwnArray('acq.es', Int32Array, simReserveCap(ne));
+    _acqOwnArray('acq.hs', Int32Array, _simMoveHostile.length).set(_simMoveHostile);
+    if (_simMoveHostStruct) _acqOwnArray('acq.hss', Int32Array, _simMoveHostStruct.length).set(_simMoveHostStruct);
     _acqArray('acq.sown', Int8Array, GRID_W * GRID_H).set(_simMoveStruct.subarray(0, GRID_W * GRID_H));
     _acqArray('acq.scls', Int8Array, GRID_W * GRID_H).set(_simStructCls.subarray(0, GRID_W * GRID_H));
     const cov = _acqArray('acq.cover', Uint8Array, Math.max(1, np * A));

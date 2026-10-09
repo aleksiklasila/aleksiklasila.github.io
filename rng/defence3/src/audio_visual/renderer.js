@@ -4966,10 +4966,10 @@ function _visCoverUnitsPost() {
     simParallelBackgroundWait(VIS_COVER_UNITS_LANE);
     const n = S ? S.owners.length : 0, A = C.areaCount, np = C.players;
     // (The tick's positions and sight keys, snapshotted for the background
-    // seed: Float32 like the columns, 12 bytes a unit.)
+    // seed: Int32 eighths like the columns, 12 bytes a unit.)
     if (!C.vtx || C.vtx.length < n) {
         const cap = simReserveCap(n);
-        C.vtx = simSharedArray(Float32Array, cap); C.vty = simSharedArray(Float32Array, cap); C.vtkey = simSharedArray(Int32Array, cap);
+        C.vtx = simSharedArray(Int32Array, cap); C.vty = simSharedArray(Int32Array, cap); C.vtkey = simSharedArray(Int32Array, cap);
         simParallelBind('vt.x', C.vtx); simParallelBind('vt.y', C.vty); simParallelBind('vt.key', C.vtkey);
     }
     if (n > 0) {
@@ -4985,12 +4985,26 @@ function _visCoverUnitsPost() {
     for (let a = 0; a < A; a++) aok[a] = _areaById[a] ? 1 : 0;
     if (++C.ustamp >= (1 << 24)) { C.useed.fill(0); C.ustamp = 1; }
     C.ucnt.fill(0);
-    const B = _simBgParamsByLane[VIS_COVER_UNITS_LANE];
+    // The seeds, then the spread, as one chain (the spread no longer posted
+    // at phase 2: that waited there for the seeds on the simulation thread).
+    // (Each stage's params written whole.)
+    if (!VIS_COVER_CHAIN) {
+        const B = _simBgParamsByLane[VIS_COVER_UNITS_LANE];
+        B[0] = n; B[1] = 1024; B[2] = TILE; B[3] = GRID_W; B[4] = GRID_H; B[6] = A; B[7] = np; B[8] = C.ustamp;
+        B[9] = 0;
+        simParallelBackground(SIM_KERNEL_VIS_SEED, Math.ceil(n / 1024), VIS_COVER_UNITS_LANE);
+        C.uStage = 1;
+        return;
+    }
+    const B = simParallelStageParams(VIS_COVER_UNITS_LANE, 0), B2 = simParallelStageParams(VIS_COVER_UNITS_LANE, 1);
+    B.fill(0); B2.fill(0);
     B[0] = n; B[1] = 1024; B[2] = TILE; B[3] = GRID_W; B[4] = GRID_H; B[6] = A; B[7] = np; B[8] = C.ustamp;
     B[9] = 0;
-    simParallelBackground(SIM_KERNEL_VIS_SEED, Math.ceil(n / 1024), VIS_COVER_UNITS_LANE);
-    C.uStage = 1;
+    B2[0] = A; B2[1] = np; B2[2] = C.ustamp;
+    simParallelBackgroundChain(VIS_COVER_UNITS_LANE, [[SIM_KERNEL_VIS_SEED, Math.ceil(n / 1024)], [SIM_KERNEL_VIS_SPREAD, np]]);
+    C.uStage = 2;
 }
+let VIS_COVER_CHAIN = true;
 // Phase 2: the spread, once the seeds are in.
 function _visCoverUnitsSpreadPost() {
     const C = _visCover;

@@ -821,6 +821,8 @@ function _gameTickBody() {
     // with payments and queue changes, construction with builders): their
     // statuses, removals and the players' research (spawnerStructuresTick).
     spawnerStructuresTick();
+    // (Buildings behind their owner's research: a TICK_RATE-th a tick.)
+    if (typeof buildingResearchSweep === 'function') buildingResearchSweep();
 
     processGlobalSpawnerQueue();
 

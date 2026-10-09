@@ -1283,6 +1283,8 @@ function _wsPost() {
     simParallelBackground(SIM_KERNEL_WS_SCAN, Math.ceil(total / 16), WS_LANE);
     _wsPosted = { chunks: 1, CH: total, groups, heal, ordered: false };
 }
+// (Waited for here, the next phase: the scan reads the collectors' groups
+// in place, which the unit pass may change; not chained with the ordering.)
 function _wsOrder() {
     const J = _wsPosted;
     if (!J || J.ordered) return;

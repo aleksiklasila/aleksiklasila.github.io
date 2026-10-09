@@ -17,7 +17,7 @@ for (const [map, seed] of [['arena', 3], ['islands', 7], ['crossroads', 11]]) {
         const spawn = k => { for (let i = 0; i < k; i++) { const t = findNearestWalkable(2 + Math.floor(rnd() * (GRID_W - 4)), 2 + Math.floor(rnd() * (GRID_H - 4))); const u = new Unit(i % 5 === 0 ? 'tank' : 'norm', i & 1, t.x * TILE + 4 + rnd() * 24, t.y * TILE + 4 + rnd() * 24); units.push(u); updateUnitSpatial(u); } };
         spawn(2500);
         let merges = 0, checks = 0, bad = '';
-        { const f = SIM_KERNELS[SIM_KERNEL_INDEX_MERGE]; SIM_KERNELS[SIM_KERNEL_INDEX_MERGE] = function () { merges++; return f.apply(this, arguments); }; }
+        for (const K of [SIM_KERNEL_INDEX_MERGE, typeof SIM_KERNEL_IXM_PLAN === 'number' ? SIM_KERNEL_IXM_PLAN : -1]) { if (K < 0) continue; const f = SIM_KERNELS[K]; SIM_KERNELS[K] = function () { merges++; return f.apply(this, arguments); }; }
         for (let t = 0; t < 260 && !bad; t++) {
             if (t % 20 === 0) for (const p of [0, 1]) processAction({ action: 'move', unitIds: units.filter(u => !u.dead && u.owner === p && rnd() < 0.7).map(u => u.id), targetX: rnd() * GRID_W * TILE, targetY: rnd() * GRID_H * TILE }, p);
             if (t % 7 === 3) for (const u of units) if (!u.dead && rnd() < 0.01) { u.energy = 0; u.dead = true; }

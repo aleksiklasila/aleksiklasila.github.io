@@ -28,7 +28,9 @@ function copyMotion(C,n,want) {
     if (q && tick<want) return -3;
     for (const [k,a] of src) {
         if (!mot[k] || mot[k].length<a.length) mot[k]=new Float32Array(a.length);
-        mot[k].set(n<a.length ? a.subarray(0,n) : a);
+        // (Positions are Int32 eighths of a pixel: scaled here.)
+        if (a instanceof Int32Array) {const D=mot[k], e=Math.min(n,a.length); for (let s=0;s<e;s++) D[s]=a[s]*.125;}
+        else mot[k].set(n<a.length ? a.subarray(0,n) : a);
     }
     // (Rewritten while copied: dropped.)
     if (q && Atomics.load(q.head,0)!==tick) return -2;
@@ -322,7 +324,7 @@ function onMessage(event) {
         if(m.type==='port') {out=m.port;out.onmessage=onMessage;return;}
         if(m.type==='snaps') {
             snapCtl=m.ctl;
-            snaps=m.bufs.map(buf=>({head:new Int32Array(buf,0,2),x:new Float32Array(buf,8,m.cap),y:new Float32Array(buf,8+m.cap*4,m.cap),px:new Float32Array(buf,8+m.cap*8,m.cap),py:new Float32Array(buf,8+m.cap*12,m.cap)}));
+            snaps=m.bufs.map(buf=>({head:new Int32Array(buf,0,2),x:new Int32Array(buf,8,m.cap),y:new Int32Array(buf,8+m.cap*4,m.cap),px:new Int32Array(buf,8+m.cap*8,m.cap),py:new Int32Array(buf,8+m.cap*12,m.cap)}));
             return;
         }
         // A tick's end: its frame at once (no timer between: the copy must

@@ -366,8 +366,9 @@ function _adjApplyMember(obj, groupSize, areaMult, passiveRefresh) {
     }
     obj.effectiveStacks = nextEffectiveStacks;
     obj.potentialEffectiveLevel = nextPotentialLevel;
-    // (An upgrade may come due: the workers' sites.)
+    // (An upgrade may come due: the workers' sites; a trap's status strength.)
     if (obj.effectiveLevel !== nextEffectiveLevel && typeof workSiteDirty === 'function') workSiteDirty(obj.gx, obj.gy);
+    if (obj.effectiveLevel !== nextEffectiveLevel && typeof simTrapDirty === 'function') simTrapDirty(obj.gx, obj.gy);
     obj.effectiveLevel = nextEffectiveLevel;
     if (!passiveRefresh) obj.isUpgrading = nextIsUpgrading;
 
@@ -561,6 +562,9 @@ function adjacencyLaneStep() {
     _adjArr('adj.otile', Int32Array, N); _adjArr('adj.ogrp', Int32Array, N); _adjArr('adj.gsize', Int32Array, N); _adjArr('adj.gmul', Float64Array, N);
     _adjArr('adj.oarea', Int32Array, Math.max(1, A)); _adjArr('adj.oact', Uint8Array, Math.max(1, A)); _adjArr('adj.ocnt', Int32Array, 4);
     _adjArr('adj.wk', Int32Array, 8 + 4 * N + 4 * Math.max(1, A));
+    // (The lane is shared (the units' cover): its job finished before its
+    // params are written, else a pending stage of it runs with these.)
+    simParallelBackgroundWait(ADJ_LANE);
     const B = _simBgParamsByLane[ADJ_LANE];
     B.fill(0); B[0] = GRID_W; B[1] = GRID_H; B[2] = seeds.length; B[3] = cl.length / 3; B[4] = A;
     simParallelBackground(SIM_KERNEL_ADJ_FLOOD, 1, ADJ_LANE);
@@ -2076,6 +2080,8 @@ function markConstructionComplete(item) {
     // Built: it sees from now (visibility coverage).
     if (typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(item);
     if (typeof workSiteBuilt === 'function') workSiteBuilt(item);
+    // (A trap working from now: the movement kernel's trap table.)
+    if (typeof simTrapDirty === 'function' && Number.isFinite(item.gx)) simTrapDirty(item.gx, item.gy);
     if (typeof upkeepThingDirty === 'function') upkeepThingDirty(item);
     if (typeof spawnerProductionChanged === 'function' && Array.isArray(item.spawnQueue)) spawnerProductionChanged(item);
     if (typeof Tower === 'function' && item instanceof Tower) { towerSchedule(item); item.laserCheck(); }

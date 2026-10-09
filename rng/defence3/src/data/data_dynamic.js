@@ -2801,6 +2801,7 @@ function rebuildPrecomputedStatsMapPlayer(targetPlayerId = null) {
                 for (let key in template[kind]) copy[kind][key] = template[kind][key].map(entry => entry ? { ...entry } : entry);
             }
             PRECOMPUTED_STATS_MAP_PLAYER[playerId] = copy;
+            if (typeof simTrapResearchDone === 'function') simTrapResearchDone(playerId);
             continue;
         }
         let playerEntry = { unit: {}, building: {} };
@@ -2818,6 +2819,7 @@ function rebuildPrecomputedStatsMapPlayer(targetPlayerId = null) {
         }
         PRECOMPUTED_STATS_MAP_PLAYER[playerId] = playerEntry;
         if (signature !== null) builtBySignature.set(signature, playerEntry);
+        if (typeof simTrapResearchDone === 'function') simTrapResearchDone(playerId);
     }
 
     return PRECOMPUTED_STATS_MAP_PLAYER;
@@ -2895,6 +2897,7 @@ function rebuildPrecomputedStatsMapPlayerThingStat(playerId, kind, key, statKey 
         : _normalizePlayerPrecomputedBuildingKey(key);
 
     if (!statKey) {
+        if (branch === 'building' && typeof simTrapResearchDone === 'function') simTrapResearchDone(pid);
         if (!playerEntry[branch][normalizedKey]) playerEntry[branch][normalizedKey] = [];
         let levels = playerEntry[branch][normalizedKey];
         for (let lvl = 0; lvl <= MAX_THING_LEVEL; lvl++) {
@@ -2904,6 +2907,8 @@ function rebuildPrecomputedStatsMapPlayerThingStat(playerId, kind, key, statKey 
         }
         return levels;
     }
+    // (Building stats: the movement kernel's trap strengths, its owner's.)
+    if (branch === 'building' && typeof simTrapResearchDone === 'function') simTrapResearchDone(pid);
     return _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey, _getPlayerStatPenaltyMultiplier(pid, branch, statKey));
 }
 
@@ -3520,12 +3525,54 @@ function applyUnitResearchUpgradeToExistingUnits(owner, unitType, statKey) {
     rebuildPrecomputedStatsMapPlayerThingStat(owner, 'unit', unitType, statKey);
 }
 
-// A building research: the tables, then every building of that kind at
-// once, in list order (towers, barracks, spawners, then the floor items by
-// tile: the cells' items list, not a pass over every grid cell).
-// (To do: spread over ticks with the pending state in snapshots, as units'.)
+// A building research: the tables now; the owner's buildings take them at
+// their turn of the research sweep (buildingResearchSweep: each a
+// TICK_RATE-th of the lists a tick, so no tick refreshes every building of a
+// kind: thousands of towers were a spike). The owner's research version
+// (players[o].bResVer) and each building's (_bResVer) are state (snapshots
+// carry both); a building behind takes its stats from the tables again (the
+// same values whenever it does: a refresh is idempotent).
 function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
     rebuildPrecomputedStatsMapPlayerThingStat(owner, 'building', buildingKey, statKey);
+    const p = players[owner];
+    if (p) {
+        p.bResVer = (p.bResVer | 0) + 1;
+        if (statKey === 'maxLevel') p.bResMaxLv = p.bResVer;
+        return;
+    }
+    _applyBuildingResearchNow(owner, buildingKey, statKey);
+}
+// One building at its research turn: behind its owner's version, its stats
+// from the tables (and its progress state after a max level research).
+function buildingResearchCatchUp(e, kind, owner = e ? e.owner : -1) {
+    if (!e) return;
+    const p = players[owner];
+    if (!p) return;
+    const v = p.bResVer | 0, have = e._bResVer | 0;
+    if (have >= v) return;
+    _buildingResearchApply(e, '', kind);
+    // (Energy over a lower maximum: down to it; never up, never revived.)
+    if (e.energy > e.maxEnergy) e.energy = e.maxEnergy;
+    if ((p.bResMaxLv | 0) > have) refreshThingProgressState(e);
+    e._bResVer = v;
+}
+// The sweep (gameTick): a TICK_RATE-th of the towers, barracks, spawners and
+// floor items by their place in their lists (the same on every peer).
+function buildingResearchSweep() {
+    let any = false;
+    for (let i = 0; i < players.length && !any; i++) if (players[i] && (players[i].bResVer | 0) > 0) any = true;
+    if (!any) return;
+    const ph = gameTime % TICK_RATE;
+    for (let i = ph; i < towers.length; i += TICK_RATE) buildingResearchCatchUp(towers[i], 0);
+    for (let i = ph; i < barracks.length; i += TICK_RATE) buildingResearchCatchUp(barracks[i], 1);
+    for (let i = ph; i < collectorSpawners.length; i += TICK_RATE) buildingResearchCatchUp(collectorSpawners[i], 1);
+    const items = typeof getCellItemsRowMajor === 'function' ? getCellItemsRowMajor() : [];
+    for (let i = ph; i < items.length; i += TICK_RATE) {
+        const item = items[i], cell = item && grid[item.gy] && grid[item.gy][item.gx];
+        if (cell && cell.item === item) buildingResearchCatchUp(item, 2, cell.owner);
+    }
+}
+function _applyBuildingResearchNow(owner, buildingKey, statKey) {
     const list = [];
     for (let t of towers) if (t && t.owner === owner && t.type === buildingKey) list.push(t, 0);
     for (let b of barracks) if (b && b.owner === owner && `barrack_${b.unitType}` === buildingKey) list.push(b, 1);

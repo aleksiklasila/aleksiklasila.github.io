@@ -569,6 +569,15 @@ SIM_KERNELS[SIM_KERNEL_AREA_BOX] = function (R, P, chunk) { _simRust(_simAreaBox
 // the same order. P: [0] units, [1] last entries, [2] chunks, [3] epoch.
 const _simIxMergeW = _simWK(['sep.eslot', 'sep.ekey', 'ix.eid', 'ix.keys', 'ix.slots', 'unit.id', 'ix.inv', 'ix.invStamp', 'ix.kept', 'ix.ordC', 'ix.chg']);
 SIM_KERNELS[SIM_KERNEL_INDEX_MERGE] = function (R, P, chunk) { _simRust(_simIxMergeW, P, chunk, 'k_ix_merge', 'INDEX_MERGE'); };
+// The index order merged in parallel (wasm/src/k.rs k_ixm_*: the same order
+// as INDEX_MERGE), five stages of the prebuild chain.
+const SIM_KERNEL_IXM_INV = 68, SIM_KERNEL_IXM_KEEP = 69, SIM_KERNEL_IXM_CHG = 70, SIM_KERNEL_IXM_PLAN = 71, SIM_KERNEL_IXM_WRITE = 72;
+const _simIxmW = _simWK(['sep.eslot', 'sep.ekey', 'ix.eid', 'ix.keys', 'ix.slots', 'unit.id', 'ix.inv', 'ix.invStamp', 'ix.kept', 'ix.ordC', 'ix.chg', 'ix.kt', 'ix.ch2', 'ix.ncl', 'ix.mplan']);
+SIM_KERNELS[SIM_KERNEL_IXM_INV] = function (R, P, chunk) { _simRust(_simIxmW, P, chunk, 'k_ixm_inv', 'IXM_INV'); };
+SIM_KERNELS[SIM_KERNEL_IXM_KEEP] = function (R, P, chunk) { _simRust(_simIxmW, P, chunk, 'k_ixm_keep', 'IXM_KEEP'); };
+SIM_KERNELS[SIM_KERNEL_IXM_CHG] = function (R, P, chunk) { _simRust(_simIxmW, P, chunk, 'k_ixm_chg', 'IXM_CHG'); };
+SIM_KERNELS[SIM_KERNEL_IXM_PLAN] = function (R, P, chunk) { _simRust(_simIxmW, P, chunk, 'k_ixm_plan', 'IXM_PLAN'); };
+SIM_KERNELS[SIM_KERNEL_IXM_WRITE] = function (R, P, chunk) { _simRust(_simIxmW, P, chunk, 'k_ixm_write', 'IXM_WRITE'); };
 
 // A range of the wasm heap zeroed in jobs (bytes P[0] to P[0] + P[1], P[2]
 // a job): simParallelZeroHeap. (Over the memory's current buffer, which
@@ -667,7 +676,7 @@ SIM_KERNELS[SIM_KERNEL_UNIT_FRAME] = function (R, P, chunk) {
     const targetX = R['frame.targetX'], targetY = R['frame.targetY'], still = R['frame.still'], flash = R['frame.flash'];
     const time = P[3], rate = P[4], tile = P[5];
     for (let i = chunk * P[2], end = Math.min(P[1], i + P[2]); i < end; i++) {
-        const s = F.order[i], u = slots[s], x = X[u], y = Y[u], vx = VX[u] || 0, vy = VY[u] || 0;
+        const s = F.order[i], u = slots[s], x = X[u] * 0.125, y = Y[u] * 0.125, vx = VX[u] || 0, vy = VY[u] || 0;
         F.id[s] = ID[u]; F.owner[s] = OWNER[u]; F.energy[s] = ENERGY[u]; F.r[s] = RAD[u]; F.cmd[s] = CMD[u] | 0;
         F.flags[s] |= (BURN[u] > 0 ? SIM_UF_BURNING : 0) | (POISON[u] > 0 ? SIM_UF_POISONED : 0)
             | (FROZEN[u] > 0 ? SIM_UF_FROZEN : 0) | (WET[u] > 0 ? SIM_UF_WET : 0) | (SAND[u] > 0 ? SIM_UF_SANDY : 0)
@@ -689,7 +698,7 @@ SIM_KERNELS[SIM_KERNEL_UNIT_FRAME] = function (R, P, chunk) {
         let fx = vx, fy = vy;
         if (Number.isFinite(targetX[s])) { fx = targetX[s] - x; fy = targetY[s] - y; }
         F.mode[s] = mode;
-        F.amount[s] = Math.max(0, Math.min(1, amount || Math.min(1, Math.hypot(x - PREVX[u], y - PREVY[u]) / Math.max(.01, tile * .025)) || 0));
+        F.amount[s] = Math.max(0, Math.min(1, amount || Math.min(1, Math.hypot(x - PREVX[u] * 0.125, y - PREVY[u] * 0.125) / Math.max(.01, tile * .025)) || 0));
         F.facing[s] = Math.atan2(fx, fy || .0001) || 0;
         if (mode === 1) {
             const b = (8 - flash[s]) / 8;
@@ -921,7 +930,11 @@ const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 
     // (The separation's finish, fused into the epilogue: mv.rs W_SPX...)
     '?sep.px', '?sep.py', '?sep.ov', '?sep.hit', '?unit.sepCx'];
 // (From word 268, after the navigation profiles' words and their lengths.)
-const _SIM_MOVE_WNAMES2 = ['?unit.sepCy', '?unit.sepMov', '?sep.nextX', '?sep.nextY', '?sep.fast', '?sep.ex', '?sep.exc', '?unit.mvPF'];
+// (?mv.lookc: the flow looks shared by every thread, see mv.rs look_cache.)
+// (?unit.burning... ?mv.tres: floor traps applied in the kernel, mv.rs floor_hit.)
+const _SIM_MOVE_WNAMES2 = ['?unit.sepCy', '?unit.sepMov', '?sep.nextX', '?sep.nextY', '?sep.fast', '?sep.ex', '?sep.exc', '?unit.mvPF', '?mv.lookc',
+    '?unit.burning', '?unit.burnTickDamage', '?unit.poisoned', '?unit.poisonTickDamage', '?unit.frozen', '?unit.iceTickDamage', '?unit.wet', '?unit.sandy', '?unit.stOn', '?unit.upT',
+    '?mv.trapK', '?mv.trapL', '?mv.trapT', '?mv.tres', '?mv.trapTG'];
 const _SIM_MOVE_NAV = 11, _SIM_MOVE_WNAV = 160, _SIM_MOVE_W2 = 268;
 const _simMoveW = _simWK([..._SIM_MOVE_WNAMES, ...Array.from({ length: _SIM_MOVE_NAV * 8 }, (_, i) => {
     const p = i >> 3, j = i & 7;
@@ -995,7 +1008,11 @@ const _simBgIds = new Int32Array(SIM_PAR_BG_LANES), _simBgNextIds = new Int32Arr
 const _simBgPosted = new Int32Array(SIM_PAR_BG_LANES);
 function simParallelBackground(kernel, total, lane = 1) { simParallelBackgroundChain(lane, [[kernel, total]]); }
 // The parameters of a lane's chain stage (stage 0: _simBgParamsByLane[lane]).
-function simParallelStageParams(lane, stage) { return _simBgStageParams[lane][stage]; }
+// (A pending job on the lane is finished first: its stages read these, and
+// lanes are shared, so a poster writing its params before posting (where
+// the lane is waited for) would hand them to the job still pending; the
+// harness's guest, without helpers, runs its stages at the wait.)
+function simParallelStageParams(lane, stage) { if (_simBg[lane]) simParallelBackgroundWait(lane); return _simBgStageParams[lane][stage]; }
 // A chain on one lane: stages [[kernel, total], ...] (at most
 // SIM_PAR_BG_STAGES), each run once the one before is done, with its own
 // parameters (simParallelStageParams). Stages of no chunks are left out.
@@ -1497,7 +1514,7 @@ SIM_KERNELS[SIM_KERNEL_SNAP_MERGE] = function (R, P, chunk) { _simRust(_simSnapM
 // since the last report (unit.stAcc): the same damage, its record later by
 // at most P[3] - 1 ticks.
 // P: [0] units, [1] per job, [2] tick, [3] report period.
-const _simStatusW = _simWK(['ix.slots', 'unit.dead', 'unit.energy', 'unit.attackTimer', 'unit.attackFlash', 'unit.teleportHideTicks', 'unit.burning',
+const _simStatusW = _simWK(['unit.live', 'unit.dead', 'unit.energy', 'unit.attackTimer', 'unit.attackFlash', 'unit.teleportHideTicks', 'unit.burning',
     'unit.burnTickDamage', 'unit.poisoned', 'unit.poisonTickDamage', 'unit.frozen', 'unit.iceTickDamage', 'unit.wet', 'unit.sandy', 'unit.watched', 'unit.stEv',
     'unit.stDot', 'st.count', 'unit.x', 'unit.y', 'unit.x0', 'unit.y0', 'unit.workerTransferCooldown', 'unit.stAcc', 'unit.id', 'unit.sepD0', 'unit.sepR0',
     'unit.sepL0', 'unit.collisionR', 'unit.r', 'unit.sepLayer', 'unit.stOn', 'unit.tmOn', '?st.list', 'unit.owner', 'st.shr']);
@@ -1579,13 +1596,24 @@ SIM_KERNELS[SIM_KERNEL_ACQ_SCAN] = function (R, P, chunk) {
 // high, [2] rows per job, [3] entries, [4] entries per job, [5] TILE, [6]
 // / [7] grid.
 const SIM_KERNEL_ACQ_OMT = 59;
-const _simAcqOmtW = _simWK(['acq.om', 'acq.omt', 'acq.es', 'acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.id', 'acq.agrid', 'acq.ex', 'acq.ey', 'acq.eo', 'acq.ea', 'acq.eid']);
+// The job's first stage also copies what it reads of the live unit index
+// (acq.rsL / rcL / rstL / omL / esL: the chunks' entry ranges, stamps,
+// owners and the entries' slots) into the job's own arrays (acq.rs ...): the
+// rest of the job reads only those, so the next index may be built (the
+// tick's end, spatialIndexPrebuild) while the scan runs on; only this stage
+// is waited for there (acqTierIndexWait).
+const _simAcqOmtW = _simWK(['acq.om', 'acq.omt', 'acq.es', 'acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.id', 'acq.agrid', 'acq.ex', 'acq.ey', 'acq.eo', 'acq.ea', 'acq.eid',
+    'acq.rsL', 'acq.rcL', 'acq.rstL', 'acq.omL', 'acq.esL', 'acq.rs', 'acq.rc', 'acq.rst']);
 SIM_KERNELS[SIM_KERNEL_ACQ_OMT] = function (R, P, chunk) {
     const CW = P[0] | 0, CH = P[1] | 0, per = P[2] | 0, y0 = chunk * per, y1 = Math.min(CH, y0 + per);
     const ne = P[3] | 0, eper = P[4] | 0, e0 = chunk * eper, e1 = Math.min(ne, e0 + eper), tile = P[5], GW = P[6] | 0, GH = P[7] | 0;
     if (_simWasmOk(R)) {
         const A = _simWPtrs(_simAcqOmtW);
         if (A !== null) {
+            // (The copies first: the transposition reads the job's own rows,
+            // the packing its own entries.)
+            if (y0 < y1) _simWasmX.acq_copy(A[14], A[15], A[16], A[17], A[19], A[20], A[21], A[0], CW, y0, y1);
+            if (e0 < e1) _simWasmX.acq_copy_es(A[18], A[2], e0, e1);
             if (y0 < y1) _simWasmX.acq_omt(A[0], A[1], CW, CH, y0, y1);
             if (e0 < e1) _simWasmX.acq_pack(A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10], A[11], A[12], A[13], e0, e1, tile, GW, GH);
             return;

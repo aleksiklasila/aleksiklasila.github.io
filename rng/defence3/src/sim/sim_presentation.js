@@ -26,8 +26,10 @@ function simPresentTickEnd() {
         Q = _simPresentSnaps = { cap, worker: p.worker, ctl, next: 0, snaps: [] };
         for (let i = 0; i < SIM_PRESENT_SNAPS; i++) {
             const buf = new SharedArrayBuffer(8 + cap * 16);
-            Q.snaps.push({ buf, head: new Int32Array(buf, 0, 2), x: new Float32Array(buf, 8, cap), y: new Float32Array(buf, 8 + cap * 4, cap),
-                px: new Float32Array(buf, 8 + cap * 8, cap), py: new Float32Array(buf, 8 + cap * 12, cap) });
+            // (Positions as the columns hold them, Int32 eighths: a copy, scaled
+            // by the presentation worker.)
+            Q.snaps.push({ buf, head: new Int32Array(buf, 0, 2), x: new Int32Array(buf, 8, cap), y: new Int32Array(buf, 8 + cap * 4, cap),
+                px: new Int32Array(buf, 8 + cap * 8, cap), py: new Int32Array(buf, 8 + cap * 12, cap) });
             Q.snaps[i].head[0] = -1;
         }
         ctl[0] = -1; ctl[1] = 1;
