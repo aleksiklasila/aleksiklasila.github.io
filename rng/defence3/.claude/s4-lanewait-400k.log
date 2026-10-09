@@ -1,6 +1,0 @@
-helpers 7
-wasm [{"ready":true,"kernels":true,"hash":"f92bd42d6b8e0fe7","error":null,"memoryMB":1831,"liveMB":970,"peakMB":1628,"freeMB":628,"arrays":604,"pendingFrees":0},{"ready":true,"kernels":true,"hash":"f92bd42d6b8e0fe7","error":null,"memoryMB":1143,"liveMB":944,"peakMB":1020,"freeMB":76,"arrays":604,"pendingFrees":0}]
-active setup at 66 {"mine":2500,"build":12000,"queue":7392,"salvage":8983,"research":9792}
-battle setup at 111 {"placed":[135934,117134],"buildings":5370}
-AFTER {"Wait:2:?":0.37,"Wait:10:resyncAfterTick":0.02,"Wait:6:runUnitSeparationPass":0.02,"Wait:8:navFieldsFlush":0.02,"Wait:3:syncVisibilityCoverage":0.01,"Wait:4:?":0.01,"Wait:2:simMoveRun":0.01,"WaitStage:6:spatialIndexRebuild":0.01,"Wait:5:healerCandidatesStep":0,"Wait:6:?":0,"Wait:3:?":0,"Wait:2:spatialIndexRebuild":0,"Wait:1:navTick":0}
-{"ticks":60,"units":379818,"meanMs":75.39,"p50":70.59,"p95":112.8,"max":144.65,"wallS":20.25,"tick":176,"desyncs":[0],"patches":[0],"wasm":[[true,1831,1155,1051],[true,1286,1129,1049]],"memory":{"bytesPerSlot":553,"slots":400000,"capacity":450560,"pathWindows":0,"unitMB":238,"boundMB":{"nav":324.1,"unit":237.6,"vis":74.1,"spatial":71.8,"adj":51.4,"ix":48.4,"mv":38.9,"acq":36.9,"snap":32.9,"sep":26.7,"navb":21.7,"ws":15.4}},"heaviest":[[116,144.6],[121,129.1],[146,112.8],[117,110.8],[119,109.3],[153,101.3],[148,93.5],[125,93.2]]}

@@ -3153,14 +3153,41 @@ unsafe fn push_slot(m: &Mv, f: *const f64, s: usize) -> (bool, bool) {
                 cy = sy;
                 i += 1;
             }
+            // Left on a blocked tile: toward the open neighbouring tile
+            // whose centre is nearest, at most half a tile a tick (none
+            // open: it stays).
+            let (fgx, fgy) = (floor32(cx * it), floor32(cy * it));
+            if !occ(fgx, fgy) {
+                let half = m.tile as f32 * 0.5;
+                let (mut best, mut bx, mut by) = (f32::MAX, 0.0f32, 0.0f32);
+                let mut k = 0;
+                while k < 9 {
+                    let (ox_, oy_) = ((k % 3) as f32 - 1.0, (k / 3) as f32 - 1.0);
+                    k += 1;
+                    if ox_ == 0.0 && oy_ == 0.0 {
+                        continue;
+                    }
+                    let (tx, ty) = (fgx + ox_, fgy + oy_);
+                    if !occ(tx, ty) {
+                        continue;
+                    }
+                    let (ccx, ccy) = (tx * m.tile as f32 + half, ty * m.tile as f32 + half);
+                    let d = (ccx - cx) * (ccx - cx) + (ccy - cy) * (ccy - cy);
+                    if d < best {
+                        best = d;
+                        bx = ccx;
+                        by = ccy;
+                    }
+                }
+                if best < f32::MAX {
+                    let d = f32x4_extract_lane::<0>(f32x4_sqrt(f32x4_splat(best)));
+                    let st = if d > half { half / d } else { 1.0 };
+                    cx = floor32((cx + (bx - cx) * st) * q + 0.5) * iq;
+                    cy = floor32((cy + (by - cy) * st) * q + 0.5) * iq;
+                }
+            }
             wr(m.x, s, cx as f64);
             wr(m.y, s, cy as f64);
-            if !occ(floor32(cx * it), floor32(cy * it)) {
-                wr(m.snx, s, 0.0);
-                wr(m.sny, s, 0.0);
-                wr(m.sfast, s, 0);
-                return (floor32(cx * it) != ox as f32 || floor32(cy * it) != oy as f32, true);
-            }
         }
         moved = floor32(rd(m.x, s) as f32 * it) as f64 != ox || floor32(rd(m.y, s) as f32 * it) as f64 != oy;
     }
@@ -3202,10 +3229,12 @@ unsafe fn epi_begin(m: &Mv, f: *const f64, chunk: i32, b0: usize, end: usize) ->
     let nt = to_i32(rd(f, 44));
     let per = to_i32(rd(f, 1)) as usize;
     let chunk = chunk.max(0) as usize;
-    let f0 = chunk * np.max(0) as usize;
-    let u0 = f0 * nt.max(0) as usize;
+    // (Per chunk np + 1 sums: the last 1 when any is charged, so the
+    // simulation thread skips the chunks without.)
+    let f0 = chunk * (np.max(0) as usize + 1);
+    let u0 = chunk * np.max(0) as usize * nt.max(0) as usize;
     if on {
-        for i in 0..np.max(0) as usize {
+        for i in 0..=np.max(0) as usize {
             wr(m.fix, f0 + i, 0.0);
         }
         for i in 0..(np.max(0) * nt.max(0)) as usize {
@@ -3260,6 +3289,7 @@ unsafe fn epi_slot(m: &Mv, f: *const f64, e: &mut Epi, s: usize, need: bool) {
             }
             let fi = e.f0 + pid as usize;
             wr(m.fix, fi, rd(m.fix, fi) + k as f64 * js_round(-cost * e.scale));
+            wr(m.fix, e.f0 + np as usize, 1.0);
             let ty = rd(m.spty, s) as i32;
             let r = e.u0 + (pid * nt) as usize + (if ty >= 0 && ty < nt - 1 { ty } else { nt - 1 }) as usize;
             for _ in 0..k {

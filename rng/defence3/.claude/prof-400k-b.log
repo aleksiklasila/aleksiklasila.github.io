@@ -1,5 +1,0 @@
-helpers 7
-wasm [{"ready":true,"kernels":true,"hash":"4902b5742a85b528","error":null,"memoryMB":1352,"liveMB":624,"peakMB":1297,"freeMB":643,"arrays":449,"pendingFrees":0},{"ready":true,"kernels":true,"hash":"4902b5742a85b528","error":null,"memoryMB":750,"liveMB":599,"peakMB":675,"freeMB":76,"arrays":449,"pendingFrees":0}]
-active setup at 66 {"mine":2500,"build":12000,"queue":7392,"salvage":8983,"research":9792}
-battle setup at 111 {"placed":[135934,117134],"buildings":5370}
-{"ticks":100,"units":361168,"meanMs":106.71,"p50":100.07,"p95":187.91,"max":336.99,"wallS":55.71,"tick":216,"desyncs":[0],"patches":[0],"wasm":[[true,1352,823,735],[true,844,798,735]],"memory":{"bytesPerSlot":542,"slots":400000,"capacity":450560,"pathWindows":0,"unitMB":233,"boundMB":{"nav":327.3,"unit":232.9,"vis":74.1,"spatial":71.8,"ix":49.7,"mv":38.9,"sep":26.7,"acq":25.7,"snap":24.2,"navb":21.7,"ws":15.4,"hc":7.7}},"heaviest":[[116,337],[117,251.2],[202,242.7],[201,205.7],[144,187.9],[140,161.1],[141,159],[142,157.7]]}

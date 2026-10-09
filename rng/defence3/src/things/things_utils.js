@@ -15,9 +15,13 @@ function recalculateLaserConnections() {
     if (typeof laserMapDirty === 'function') laserMapDirty();
     const lines = _laserLines, partners = [];
     lines.clear();
+    // (The laser towers, in towers order: listed again only when one joins
+    // or leaves; another structure's change walks them alone, not every
+    // tower.)
+    const L = _laserTowerList();
+    const towers = L;
     for (let i = 0; i < towers.length; i++) {
         const t = towers[i];
-        if (t.type !== 'laser') continue;
         t.connectedLasers = []; t._laserLinkLevel = t.effectiveLevel;
         // (Lines by owner and row/column: string keys, owners may be anything.)
         const kc = 'c' + t.owner + ':' + t.gx, kr = 'r' + t.owner + ':' + t.gy;
@@ -62,6 +66,11 @@ function recalculateLaserConnections() {
         const out = towers[i].connectedLasers;
         for (const j of list) out.push(towers[j]);
     }
+}
+let _laserListVer = -1, _laserListRef = null, _laserList = [];
+function _laserTowerList() {
+    if (_laserListVer !== laserTowersVersion || _laserListRef !== towers) { _laserList = towers.filter(t => t.type === 'laser'); _laserListVer = laserTowersVersion; _laserListRef = towers; }
+    return _laserList;
 }
 // Structures placed or removed: the links are made again before they are
 // next used (a laser's update, the end of the tick: ensureLaserConnections),

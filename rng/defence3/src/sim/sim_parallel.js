@@ -1363,7 +1363,7 @@ SIM_KERNELS[SIM_KERNEL_DRIVEBY] = function (R, P, chunk) {
 const _simWsSelectW = _simWK(['unit.wsKind', 'unit.wsCfg', 'unit.wsT', 'unit.wsOU', 'unit.wsOx', 'unit.wsOy', 'unit.wsR', 'unit.wsAx', 'unit.wsAy', 'unit.wsAk',
     'unit.wsNeed', 'unit.wsJid', 'unit.wsCur', 'unit.wsMy', 'unit.x', 'unit.y', 'unit.owner', 'unit.id', 'unit.dead',
     '?ws.rslot', '?ws.rid', '?ws.rwt', '?ws.rkind', '?ws.rowner', '?ws.rox', '?ws.roy', '?ws.rux', '?ws.ruy', '?ws.rr', '?ws.rak', '?ws.rax', '?ws.ray', '?ws.rgrp',
-    '?ws.rneed', '?ws.rjid', '?ws.rcur', '?ws.rmy', 'ws.rcnt', '?ws.rpre']);
+    '?ws.rneed', '?ws.rjid', '?ws.rcur', '?ws.rmy', 'ws.rcnt', '?ws.rpre', 'unit.wsFail']);
 SIM_KERNELS[SIM_KERNEL_WS_SELECT] = function (R, P, chunk) { _simRust(_simWsSelectW, P, chunk, 'k_ws_select', 'WS_SELECT'); };
 // SIM_KERNEL_WS_SCAN (a tier job, P[1] requests a job over the selected ones:
 // request g the m-th of select chunk c, ws.rpre[c] <= g < ws.rpre[c + 1], at
@@ -1481,7 +1481,7 @@ const SIM_KERNEL_SNAP_MERGE = 65;
 const _simSnapW = _simWK(['unit.live', 'unit.dead', 'unit.x', 'unit.y', 'unit.id', 'ix.slots', 'unit.owner', 'unit.vx', 'unit.vy', 'unit.energy', 'unit.commandState',
     'unit.attackTimer', 'unit.attackFlash', 'unit.teleportHideTicks', 'unit.poisoned', 'unit.burning', 'unit.frozen', 'unit.wet', 'unit.sandy', 'unit.watched',
     'unit.workerTransferCooldown', 'unit.stackCount', 'unit.unitLevel', 'unit.effectiveStacks', 'unit.effectiveLevel', 'unit.pathIndex', 'unit.hObj',
-    'snap.pr', 'snap.ph', 'snap.nl', 'snap.nlh', 'snap.nu', 'snap.cc', 'snap.ord']);
+    'snap.pr', 'snap.ph', 'snap.nl', 'snap.nlh', 'snap.nu', 'snap.cc', 'snap.ord', 'unit.wTeam']);
 SIM_KERNELS[SIM_KERNEL_SNAP_REGION] = function (R, P, chunk) { _simRust(_simSnapW, P, chunk, 'k_snap_units', 'SNAP_REGION'); };
 const _simSnapMergeW = _simWK(['snap.pr', 'snap.ph', 'snap.cc', 'snap.racc', 'snap.rstamp', 'snap.rlist', 'snap.pout', 'snap.pres']);
 SIM_KERNELS[SIM_KERNEL_SNAP_MERGE] = function (R, P, chunk) { _simRust(_simSnapMergeW, P, chunk, 'k_snap_merge', 'SNAP_MERGE'); };
@@ -1500,7 +1500,7 @@ SIM_KERNELS[SIM_KERNEL_SNAP_MERGE] = function (R, P, chunk) { _simRust(_simSnapM
 const _simStatusW = _simWK(['ix.slots', 'unit.dead', 'unit.energy', 'unit.attackTimer', 'unit.attackFlash', 'unit.teleportHideTicks', 'unit.burning',
     'unit.burnTickDamage', 'unit.poisoned', 'unit.poisonTickDamage', 'unit.frozen', 'unit.iceTickDamage', 'unit.wet', 'unit.sandy', 'unit.watched', 'unit.stEv',
     'unit.stDot', 'st.count', 'unit.x', 'unit.y', 'unit.x0', 'unit.y0', 'unit.workerTransferCooldown', 'unit.stAcc', 'unit.id', 'unit.sepD0', 'unit.sepR0',
-    'unit.sepL0', 'unit.collisionR', 'unit.r', 'unit.sepLayer', 'unit.stOn', 'unit.tmOn', '?st.list']);
+    'unit.sepL0', 'unit.collisionR', 'unit.r', 'unit.sepLayer', 'unit.stOn', 'unit.tmOn', '?st.list', 'unit.owner', 'st.shr']);
 SIM_KERNELS[SIM_KERNEL_STATUS] = function (R, P, chunk) { _simRust(_simStatusW, P, chunk, 'k_status', 'STATUS'); };
 
 // Owners per tile of the unit index (ix.omask: bit p set when a unit of
@@ -1625,19 +1625,19 @@ function _simAcqStructure(SCLS, SOWN, HSS, AG, COVF, cbase, owner, x, y, r, tile
 // looked for takes the result: unit.cbT (slot, -1 none), cbTId (its id),
 // cbRangeS (the range looked with), cbTick = P[2] (the commit tick, see
 // _acqTierStep). P: [0] slots, [1] per job, [2] tick.
-// The tick's hits on units (unit.js unitHitsResolve): hits ranked by their
-// attackers' ids (hit.* by rank), grouped by target (hit.g: ranks, by
-// target then rank; job j's groups hit.jb[j]..hit.jb[j + 1]). Per target in
-// rank order, as _unitHitUnit: none once it has fallen; its energy, its
-// statuses by the attack's style (hit.sty: 1 fire, 2 water, 3 ice, 4 poison),
-// fallen at none left. hit.flag[rank]: 1 landed, 2 on an idle unit (a
-// retaliation to look at); hit.shr: the energy lost per owner (fixed point,
-// the shrines'), per job. P: [0] owners (shr stride), [1] fixed-point
-// scale, [2] CMD_IDLE.
+// The tick's hits on units (unit.js unitHitsResolve), in no order: the
+// queued attacks' entries and the movement kernel's attack lists into the
+// targets' sums (wasm/src/k.rs k_hits).
 const SIM_KERNEL_HITS = 60;
-const _simHitsW = _simWK(['hit.g', 'hit.jb', 'hit.q', 'hit.dmg', 'hit.sty', 'hit.flag', 'hit.shr', 'unit.energy', 'unit.dead', 'unit.owner', 'unit.commandState', 'unit.stOn',
-    'unit.burning', 'unit.burnTickDamage', 'unit.wet', 'unit.frozen', 'unit.poisoned', 'unit.poisonTickDamage']);
+const _simHitsW = _simWK(['hit.q', 'hit.dmg', 'hit.sty', 'hit.wk', '?mv.hita', '?mv.hitt', '?mv.hitc', 'unit.atkDmg', 'unit.atkSty', 'unit.atkWatch', 'unit.owner', 'unit.id',
+    'unit.hAcc', 'unit.hTouch', 'unit.hSty', 'unit.hBurnD', 'unit.hPoiD', 'unit.hWatchK', 'hit.tlist', 'hit.plist', 'hit.cnt']);
 SIM_KERNELS[SIM_KERNEL_HITS] = function (R, P, chunk) { _simRust(_simHitsW, P, chunk, 'k_hits', 'HITS'); };
+// The units hit this tick: their hits' sum off their energy, statuses, a
+// watch, fallen (wasm/src/k.rs k_hits_apply).
+const SIM_KERNEL_HITS_APPLY = 66;
+const _simHitsApplyW = _simWK(['hit.tlist', 'unit.hAcc', 'unit.hTouch', 'unit.hSty', 'unit.hBurnD', 'unit.hPoiD', 'unit.energy', 'unit.dead', 'unit.owner', 'unit.stOn',
+    'unit.burning', 'unit.burnTickDamage', 'unit.wet', 'unit.frozen', 'unit.poisoned', 'unit.poisonTickDamage', 'hit.shr', 'unit.hWatchK', 'unit.watched', 'unit.wTeam', 'hit.wlist', 'hit.cnt']);
+SIM_KERNELS[SIM_KERNEL_HITS_APPLY] = function (R, P, chunk) { _simRust(_simHitsApplyW, P, chunk, 'k_hits_apply', 'HITS_APPLY'); };
 
 const _simAcqCommitW = _simWK(['acq.out', 'acq.tid', 'acq.id', 'acq.rng', 'unit.id', 'acq.sout', 'unit.cbS', 'unit.cbT', 'unit.cbTick', 'unit.cbTId', 'unit.cbRangeS']);
 SIM_KERNELS[SIM_KERNEL_ACQ_COMMIT] = function (R, P, chunk) { _simRust(_simAcqCommitW, P, chunk, 'k_acq_commit', 'ACQ_COMMIT'); };

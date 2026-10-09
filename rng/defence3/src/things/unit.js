@@ -698,7 +698,7 @@ class Unit {
         const c = this._us;
         if (c === undefined) { Object.defineProperty(this, '_ws', { value: v, writable: true, configurable: true }); return; }
         // (A change only: the same state set again keeps a parked worker.)
-        if (c && this._ws !== v) { c.mvOn[this._si] = 0; if (v !== 'IDLE') c.wsKind[this._si] = 0; _unitHD(c, this._si, _UH_WS, this._ws, v); }
+        if (c && this._ws !== v) { c.mvOn[this._si] = 0; if (v !== 'IDLE') c.wsKind[this._si] = 0; _unitHD(c, this._si, _UH_WS, this._ws, v); c.wkIdle[this._si] = v === 'IDLE' ? 1 : 0; }
         this._ws = v;
     }
     get _workerNextIdleRetargetTick() { return this._wnr; }
@@ -761,10 +761,33 @@ class Unit {
         if (!('_pc' in this)) Object.defineProperty(this, '_pc', { value: t, writable: true, configurable: true }); else this._pc = t;
         if (!('_pce' in this)) Object.defineProperty(this, '_pce', { value: t, writable: true, configurable: true }); else this._pce = t;
     }
+    // The team watching it (column wTeam, -1 none: the hits kernel sets it
+    // with a scout's watch).
+    get watchedByTeam() { const c = this._us; return c ? c.wTeam[this._si] : (this._det ? this._det.watchedByTeam : this._wbt); }
+    set watchedByTeam(v) {
+        const c = this._us;
+        if (c) c.wTeam[this._si] = Number.isFinite(v) ? v : -1;
+        else if (this._det) this._det.watchedByTeam = v;
+        else Object.defineProperty(this, '_wbt', { value: v, writable: true, configurable: true });
+    }
+    // Its flow route's end (column rtEnd; with its profile, nvProf: the
+    // field sweep's).
+    get _routeEnd() { const c = this._us; return c ? c.rtEnd[this._si] : (this._det ? this._det._routeEnd : this._ree); }
+    set _routeEnd(v) {
+        const c = this._us;
+        if (c) { const s = this._si; c.rtEnd[s] = typeof v === 'number' && v >= 0 ? v : -1; c.nvProf[s] = navProfileOf(this); }
+        else if (this._det) this._det._routeEnd = v;
+        else Object.defineProperty(this, '_ree', { value: v, writable: true, configurable: true });
+    }
     get path() { return this._path; }
     set path(v) {
         const c = this._us;
         if (c === undefined) { Object.defineProperty(this, '_path', { value: v, writable: true, configurable: true }); return; }
+        if (c) {
+            // (Its last flow node's field, for the field sweep.)
+            const nd = v && v.length ? v[v.length - 1] : null;
+            c.nvPK[this._si] = nd && nd.nav ? ((nd.nav - 1) * 16777216 + nd.y * GRID_W + nd.x) * 2 + (nd.w ? 1 : 0) : -1;
+        }
         if (this._us) simUnitPathRelease(this._us, this._si);
         this._path = v;
         if (c) { c.mvOn[this._si] = 0; c.mvCD[this._si] = -1; }
@@ -783,8 +806,9 @@ class Unit {
     pickScoutDestination() {
         if (Number.isFinite(this._nextScoutRetargetTick) && gameTime < this._nextScoutRetargetTick) return;
         let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
-        let rgx = Math.floor((typeof rng === 'function' ? rng() : Math.random()) * GRID_W);
-        let rgy = Math.floor((typeof rng === 'function' ? rng() : Math.random()) * GRID_H);
+        // (Its own draws, by tick and id: no shared sequence.)
+        let rgx = Math.floor(simHashRand(gameTime, this.id, 1) * GRID_W);
+        let rgy = Math.floor(simHashRand(gameTime, this.id, 2) * GRID_H);
         rgx = Math.max(0, Math.min(GRID_W - 1, rgx));
         rgy = Math.max(0, Math.min(GRID_H - 1, rgy));
         this._scoutTarget = { gx: rgx, gy: rgy };
@@ -1901,29 +1925,53 @@ function _isHitBuildingStanding(tb) {
     const row = grid[tb.gy], cell = row && row[tb.gx];
     return !!cell && cell.item === tb;
 }
-// The hits, ranked by their attackers' ids (one attack a unit a tick): the
-// attacks made in the pass (_hitQ) and the movement kernel's (held units'
-// attacks at the pass's start, _simMoveHitA...) alike, whichever made them.
-// Hits on units: per target in rank order on the helpers (SIM_KERNEL_HITS:
-// energy, statuses, fallen; a target already fallen takes no more); then
-// here, in rank order: hits on structures, retaliations of units hit while
-// idle, scouts' watches, and the looks (flash, sound, effect) of the first
-// SIM_HITS_PRESENT hits of the tick.
-let _hitOrder = new Float64Array(1024), _hitKeys = new Float64Array(1024);
-const _hitK = { cap: 0, q: null, dmg: null, sty: null, flag: null, g: null, jb: null, shr: null, src: null };
-const SIM_HITS_PRESENT = 512, SIM_HITS_PER_JOB = 512;
+// The tick's hits. On units, on the helpers and in no order: SIM_KERNEL_HITS
+// takes the queued attacks (_hitQ, as entries) and the movement kernel's
+// per-chunk attack lists in place (_simMoveHitA...), each hit into its
+// target's sums (damage in 1/16ths: integers, the same sum in any order;
+// statuses and their tick damage by max; a scout's watch, the longest);
+// SIM_KERNEL_HITS_APPLY then takes the sums off the units hit (energy,
+// statuses, watch, fallen). Here: hits on structures and on units without
+// columns (in queue order), the newly watched units' vision cover, and the
+// looks of up to SIM_HITS_PRESENT hits (whichever the helpers listed). (The
+// combat brain engages: no retaliation, see tryAutoRetaliateOnHostileDamage.)
+const _hitK = { cap: 0, q: null, dmg: null, sty: null, wk: null, tcap: 0, tlist: null, wlist: null, plist: null, cnt: null, shr: null };
+const SIM_HITS_PRESENT = 512, SIM_HITS_PER_JOB = 2048, SIM_HITS_CHUNKS_JOB = 16;
 function _hitStyleCode(a) {
     const st = a.attackStyle;
     return st === 'fire' ? 1 : st === 'water' ? 2 : st === 'ice' ? 3 : st === 'poison' ? 4 : (st === 'swoop' && a.unitType === 'scout') ? 5 : 0;
 }
-function _hitArrays(total) {
+// A scout's watch from its swoop: ticks (its stats' watchDuration), else 0.
+function _unitWatchTicks(u) {
+    const pc = u.preComputed;
+    return _hitStyleCode(u) === 5 && pc ? secondsToTicks(Number(pc.watchDuration) || 0) : 0;
+}
+// A scout's watch as the kernels' key: the longest, then the highest id, the
+// team (wasm/src/k.rs k_hits).
+function _hitWatchKey(a) {
+    const w = _unitWatchTicks(a);
+    return w > 0 ? (Math.min(w, 2047) << 20) | ((a.id & 0xFFFF) << 4) | ((a.owner + 1) & 15) : 0;
+}
+function _hitArrays(n, total) {
     const K = _hitK;
-    if (K.cap >= total) return K;
-    const cap = simReserveCap(total, 4096);
-    K.q = simSharedArray(Int32Array, cap); K.dmg = simSharedArray(Float64Array, cap); K.sty = simSharedArray(Uint8Array, cap);
-    K.flag = simSharedArray(Uint8Array, cap); K.g = simSharedArray(Int32Array, cap); K.src = new Int32Array(cap);
-    K.cap = cap;
-    simParallelBind('hit.q', K.q); simParallelBind('hit.dmg', K.dmg); simParallelBind('hit.sty', K.sty); simParallelBind('hit.flag', K.flag); simParallelBind('hit.g', K.g);
+    if (!K.q || K.cap < n) {
+        const cap = simReserveCap(Math.max(1, n), 4096);
+        K.q = simSharedArray(Int32Array, cap); K.dmg = simSharedArray(Float32Array, cap); K.sty = simSharedArray(Uint8Array, cap); K.wk = simSharedArray(Int32Array, cap);
+        K.cap = cap;
+        simParallelBind('hit.q', K.q); simParallelBind('hit.dmg', K.dmg); simParallelBind('hit.sty', K.sty); simParallelBind('hit.wk', K.wk);
+    }
+    if (K.tcap < total) {
+        const cap = simReserveCap(total, 8192);
+        K.tlist = simSharedArray(Int32Array, cap); K.wlist = simSharedArray(Int32Array, cap);
+        K.tcap = cap;
+        simParallelBind('hit.tlist', K.tlist); simParallelBind('hit.wlist', K.wlist);
+    }
+    if (!K.cnt) {
+        K.cnt = simSharedArray(Int32Array, 4); K.plist = simSharedArray(Int32Array, SIM_HITS_PRESENT);
+        simParallelBind('hit.cnt', K.cnt); simParallelBind('hit.plist', K.plist);
+    }
+    const NO = Math.max(16, players.length);
+    if (!K.shr || K.shr.length < 64 * NO) { K.shr = simSharedArray(Float64Array, 64 * NO * 2); simParallelBind('hit.shr', K.shr); }
     return K;
 }
 function unitHitsResolve() {
@@ -1934,103 +1982,70 @@ function unitHitsResolve() {
     for (let k = 0; k < KC; k++) nk += HC[k];
     const total = n + nk;
     if (total === 0) return;
-    // (id * 2^22 + entry: ids below 2^30, entries below 2^22; a native sort.)
-    if (_hitOrder.length < total) _hitOrder = new Float64Array(total * 2);
-    const O = _hitOrder, SH = 4194304;
-    for (let i = 0; i < n; i++) O[i] = (Q.a[i].id | 0) * SH + i;
-    if (nk) {
-        const ID = S.columns.id;
-        let m = n;
-        for (let k = 0; k < KC; k++) for (let j = k * CH, e = j + HC[k]; j < e; j++) O[m++] = (ID[HA[j]] | 0) * SH + n + j;
-    }
-    const ord = total > 1 ? O.subarray(0, total).sort() : O;
     if (!S || typeof SIM_KERNEL_HITS !== 'number') {
-        for (let r = 0; r < total; r++) {
-            const i = ord[r] % SH, a = Q.a[i], target = Q.t[i];
+        for (let i = 0; i < n; i++) {
+            const a = Q.a[i], t = Q.t[i];
             Q.a[i] = null; Q.t[i] = null;
-            if (Q.b[i] === 0) _unitHitUnit(a, target, Q.dmg[i], Q.x[i], Q.y[i]);
-            else _unitHitBuilding(a, target, Q.dmg[i]);
+            if (Q.b[i] === 0) _unitHitUnit(a, t, Q.dmg[i], Q.x[i], Q.y[i]);
+            else _unitHitBuilding(a, t, Q.dmg[i]);
         }
         Q.n = 0;
         return;
     }
-    const C = S.columns, owners = S.owners, K = _hitArrays(total);
-    const HQ = K.q, HD = K.dmg, HS = K.sty, SRC = K.src;
-    if (_hitKeys.length < total) _hitKeys = new Float64Array(total * 2);
-    const KEYS = _hitKeys;
-    let nu = 0;
-    for (let r = 0; r < total; r++) {
-        const i = ord[r] % SH;
-        SRC[r] = i;
-        if (i < n) {
-            const t = Q.t[i];
-            // (A structure, or a unit without its columns: here, below.)
-            if (Q.b[i] !== 0 || t._us !== C || !(t._si >= 0)) { HQ[r] = -1; continue; }
-            HQ[r] = t._si; HD[r] = Q.dmg[i]; HS[r] = _hitStyleCode(Q.a[i]);
-        } else {
-            const j = i - n, s = HA[j];
-            HQ[r] = HT[j]; HD[r] = C.atkDmg[s]; HS[r] = C.atkSty[s];
-        }
-        KEYS[nu++] = HQ[r] * SH + r;
+    const C = S.columns, owners = S.owners, K = _hitArrays(n, total);
+    const HQ = K.q, HD = K.dmg, HS = K.sty, HW = K.wk, CNT = K.cnt;
+    // (Structures and units without columns: here, below.)
+    let nl = 0;
+    for (let i = 0; i < n; i++) {
+        const t = Q.t[i];
+        if (Q.b[i] !== 0 || t._us !== C || !(t._si >= 0)) { HQ[i] = -1; nl++; continue; }
+        const a = Q.a[i], sty = _hitStyleCode(a);
+        HQ[i] = t._si; HD[i] = Q.dmg[i]; HS[i] = sty; HW[i] = sty === 5 ? _hitWatchKey(a) : 0;
     }
-    // By target, then rank; jobs split between targets.
-    const G = K.g;
-    if (nu) {
-        const kk = nu > 1 ? KEYS.subarray(0, nu).sort() : KEYS;
-        for (let g = 0; g < nu; g++) G[g] = kk[g] % SH;
-        const jobs = Math.max(1, Math.min(64, Math.ceil(nu / SIM_HITS_PER_JOB)));
-        if (!K.jb || K.jb.length < jobs + 1) { K.jb = simSharedArray(Int32Array, 130); simParallelBind('hit.jb', K.jb); }
-        const NO = Math.max(16, players.length);
-        if (!K.shr || K.shr.length < 64 * NO) { K.shr = simSharedArray(Float64Array, 64 * NO * 2); simParallelBind('hit.shr', K.shr); }
-        const JB = K.jb;
-        JB[0] = 0;
-        for (let j = 1; j < jobs; j++) {
-            let b = Math.max(JB[j - 1], Math.floor(j * nu / jobs));
-            while (b > 0 && b < nu && HQ[G[b]] === HQ[G[b - 1]]) b++;
-            JB[j] = b;
-        }
-        JB[jobs] = nu;
+    if (nl < total) {
+        CNT[0] = 0; CNT[1] = 0; CNT[2] = 0; CNT[3] = 0;
         const P = _simParams;
-        P[0] = NO; P[1] = RESOURCE_FIXED_POINT_SCALE; P[2] = CMD_IDLE;
-        simParallelRun(SIM_KERNEL_HITS, jobs);
-        // (The shrines' share: integers, any order.)
-        const SHR = K.shr;
-        for (let j = 0; j < jobs; j++) for (let o = 0; o < NO; o++) {
-            const v = SHR[j * NO + o];
-            if (!v) continue;
-            if (o >= _shrinePendingFixed.length) { const a = new Float64Array(o + 8); a.set(_shrinePendingFixed); _shrinePendingFixed = a; }
-            _shrinePendingFixed[o] += v;
+        const per = Math.max(SIM_HITS_PER_JOB, Math.ceil(n / 16)), jj = n ? Math.ceil(n / per) : 0;
+        const cj = Math.max(SIM_HITS_CHUNKS_JOB, Math.ceil(KC / 48)), kj = nk ? Math.ceil(KC / cj) : 0;
+        P[0] = n; P[1] = per; P[2] = SIM_HITS_PRESENT; P[3] = jj; P[4] = cj; P[5] = nk ? KC : 0; P[6] = CH;
+        simParallelRun(SIM_KERNEL_HITS, jj + kj);
+        const nt = CNT[0];
+        if (nt > 0) {
+            const NO = Math.max(16, players.length), pa = Math.max(SIM_HITS_PER_JOB, Math.ceil(nt / 48)), ja = Math.min(64, Math.ceil(nt / pa));
+            P[0] = nt; P[1] = pa; P[2] = NO; P[3] = RESOURCE_FIXED_POINT_SCALE;
+            simParallelRun(SIM_KERNEL_HITS_APPLY, ja);
+            // (The shrines' share: integers, any order.)
+            const SHR = K.shr;
+            for (let j = 0; j < ja; j++) for (let o = 0; o < NO; o++) {
+                const v = SHR[j * NO + o];
+                if (!v) continue;
+                if (o >= _shrinePendingFixed.length) { const a = new Float64Array(o + 8); a.set(_shrinePendingFixed); _shrinePendingFixed = a; }
+                _shrinePendingFixed[o] += v;
+            }
+            // (Newly watched: their vision cover; each its own.)
+            const WL = K.wlist, nw = CNT[2];
+            if (nw > 0 && typeof visCoverOnEntityChanged === 'function') for (let i = 0; i < nw; i++) { const u = owners[WL[i]]; if (u) visCoverOnEntityChanged(u); }
         }
-    }
-    const FL = K.flag;
-    let pres = 0;
-    for (let r = 0; r < total; r++) {
-        const i = SRC[r];
-        if (HQ[r] < 0) {
-            const a = Q.a[i], t = Q.t[i];
-            if (Q.b[i] === 0) _unitHitUnit(a, t, Q.dmg[i], Q.x[i], Q.y[i]);
-            else _unitHitBuilding(a, t, Q.dmg[i]);
-            continue;
-        }
-        const fl = FL[r];
-        if (!fl) continue;
-        const look = pres < SIM_HITS_PRESENT, sty = HS[r];
-        if (!look && !(fl & 2) && sty !== 5) continue;
-        let a, t, ax, ay;
-        if (i < n) { a = Q.a[i]; t = Q.t[i]; ax = Q.x[i]; ay = Q.y[i]; }
-        else { const j = i - n, s = HA[j]; a = owners[s]; t = owners[HT[j]]; ax = C.x[s]; ay = C.y[s]; }
-        if (!a || !t) continue;
-        const dmg = HD[r];
-        if (look) {
-            pres++;
+        // The looks (presentation only: which hits differs between peers).
+        const PL = K.plist, np = Math.min(CNT[1], SIM_HITS_PRESENT);
+        for (let p = 0; p < np; p++) {
+            const e = PL[p];
+            let a, t, ax, ay, dmg, sty;
+            if (e < n) { a = Q.a[e]; t = Q.t[e]; ax = Q.x[e]; ay = Q.y[e]; dmg = Q.dmg[e]; sty = HS[e]; }
+            else { const j = e - n, s = HA[j]; a = owners[s]; t = owners[HT[j]]; ax = C.x[s]; ay = C.y[s]; dmg = C.atkDmg[s]; sty = C.atkSty[s]; }
+            if (!a || !t) continue;
             // (A kernel attack's own look and sound, as _attackerSide's.)
-            if (i >= n) { recordUnitAttackFx(a, t); playSound(sty >= 1 && sty <= 4 || a.attackStyle === 'laser' ? 'attack_cast' : 'attack_swing', ax, ay, a.unitType); }
+            if (e >= n) { recordUnitAttackFx(a, t); playSound(sty >= 1 && sty <= 4 || a.attackStyle === 'laser' ? 'attack_cast' : 'attack_swing', ax, ay, a.unitType); }
             pushHostileDamageAlert(t, dmg, a.owner);
             recordDamageVisual(t, dmg, a.owner);
             if (dmg > 0) playSound('melee_hit', t.x, t.y, a.unitType);
         }
-        if (fl & 2) tryAutoRetaliateOnHostileDamage(t, a, ax, ay);
-        if (sty === 5) applyStatusEffect(t, 'watch', getUnitEffectiveLevel(a), 0, a.owner, a.unitType);
+    }
+    if (nl) for (let i = 0; i < n; i++) {
+        if (HQ[i] >= 0) continue;
+        const a = Q.a[i], t = Q.t[i];
+        if (Q.b[i] === 0) _unitHitUnit(a, t, Q.dmg[i], Q.x[i], Q.y[i]);
+        else _unitHitBuilding(a, t, Q.dmg[i]);
     }
     for (let i = 0; i < n; i++) { Q.a[i] = null; Q.t[i] = null; }
     Q.n = 0;
@@ -2094,7 +2109,8 @@ function _unitHitBuilding(a, tb, dmg) {
 for (const k of (typeof SIM_UNIT_OBJ_FIELDS !== 'undefined' ? SIM_UNIT_OBJ_FIELDS : [])) {
     const key = _simHKey(k);
     const get = new Function(`return function () { const c = this._us; return c ? c.oc_${k}[this._si] : (this._det ? this._det.${k} : undefined); };`)();
-    const set = new Function('k', 'E', `return function (v) { const c = this._us; if (c) { const s = this._si, a = c.oc_${k}, o = a[s]; a[s] = v; if (o !== v) c.hObj[s] = (c.hObj[s] + Math.imul(${key} ^ E(v), ${SIM_H_M}) - Math.imul(${key} ^ E(o), ${SIM_H_M})) | 0; } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(k, _simHEnc);
+    const hook = (typeof SIM_UNIT_OBJ_HOOKS !== 'undefined' && SIM_UNIT_OBJ_HOOKS[k]) || '';
+    const set = new Function('k', 'E', `return function (v) { const c = this._us; if (c) { const s = this._si, a = c.oc_${k}, o = a[s]; a[s] = v; ${hook} if (o !== v) c.hObj[s] = (c.hObj[s] + Math.imul(${key} ^ E(v), ${SIM_H_M}) - Math.imul(${key} ^ E(o), ${SIM_H_M})) | 0; } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(k, _simHEnc);
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true });
 }
 // (The accessors' plain values in the digest: their keys.)
@@ -2117,7 +2133,8 @@ for (const k of (typeof SIM_UNIT_STATUS_COLUMNS !== 'undefined' ? SIM_UNIT_STATU
 // before the unit pass (SIM_KERNEL_STATUS; Unit.update did it per unit):
 // damage over time dealt, units it kills marked dead. Then the few events
 // that need the objects: damage shown, watches ended.
-const STATUS_PREPASS_CHUNK = 2048;
+const STATUS_PREPASS_CHUNK = 2048, STATUS_LOOKS_PER_JOB = 4;
+let _statusShr = null;
 // Units' damage over time is reported (its flash, the shrines' count) every
 // this many ticks, summed (see SIM_KERNEL_STATUS).
 const STATUS_DOT_REPORT_TICKS = 4;
@@ -2140,7 +2157,21 @@ function statusPrepassRun() {
     // (The separation's tick-start copy only when separationStart, next,
     // will not take the prebuilt one.)
     P[4] = _sepPrebuiltForTick() ? 0 : 1;
+    // (The shrines' share per job, fixed point; looks of the first few a job.)
+    const NO = Math.max(16, players.length);
+    if (!_statusShr || _statusShr.length < chunks * NO) { _statusShr = simSharedArray(Float64Array, Math.max(1024, chunks * NO * 2)); simParallelBind('st.shr', _statusShr); }
+    P[5] = NO; P[6] = RESOURCE_FIXED_POINT_SCALE; P[7] = STATUS_LOOKS_PER_JOB;
     simParallelRun(SIM_KERNEL_STATUS, chunks);
+    {
+        const SHR = _statusShr;
+        for (let j = 0, e = chunks * NO; j < e; j++) {
+            const v = SHR[j];
+            if (!v) continue;
+            const o = j % NO;
+            if (o >= _shrinePendingFixed.length) { const a = new Float64Array(o + 8); a.set(_shrinePendingFixed); _shrinePendingFixed = a; }
+            _shrinePendingFixed[o] += v;
+        }
+    }
     const C = S.columns, EV = C.stEv, DOT = C.stDot, owners = S.owners;
     // (Each job's units with events, in index order: the kernel's lists.)
     const LIST = _statusList;
@@ -2153,7 +2184,7 @@ function statusPrepassRun() {
             EV[s] = 0;
             const u = owners[s];
             if (!u || u !== units[i]) continue;
-            if (ev & 1) { recordDamageVisual(u, DOT[s]); shrineDamageTaken(u, DOT[s]); }
+            if (ev & 1) recordDamageVisual(u, DOT[s]);
             if (ev & 2) { u.watchedByTeam = -1; if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(u); }
         }
     }
@@ -2351,9 +2382,7 @@ function spawnUnitNearUnit(templateUnit) {
 
 function shuffleInPlaceDeterministic(arr) {
     for (let i = arr.length - 1; i > 0; i--) {
-        let r = (typeof rng === 'function')
-            ? rng()
-            : ((((i + 1) * 1103515245 + (gameTime + 1) * 12345) >>> 0) / 4294967296);
+        let r = simHashRand(gameTime, i, arr.length);
         let j = Math.floor(r * (i + 1));
         [arr[i], arr[j]] = [arr[j], arr[i]];
     }
@@ -2612,7 +2641,7 @@ function simMoveStatsChanged(u) {
     if (pc) {
         const o0 = c.mvSpd[s], o1 = c.mvLane[s], o2 = c.mvCost[s], o3 = c.mvReachD[s], o4 = c.mvReachA[s], o5 = c.mvShoot[s], o6 = c.mvRangeK[s], o7 = c.cbRange[s];
         const rd = Math.ceil(_getUnitAttackRangeArea(u)) + 1, ra = Math.ceil(Math.max(TILE, pc.visionRange * TILE) / TILE) + 1;
-        c.atkCd[s] = pc.attackCooldown; c.atkDmg[s] = pc.attackDamage; c.atkSty[s] = _hitStyleCode(u);
+        c.atkCd[s] = pc.attackCooldown; c.atkDmg[s] = pc.attackDamage; c.atkSty[s] = _hitStyleCode(u); c.atkWatch[s] = _unitWatchTicks(u);
         c.mvSpd[s] = spd; c.mvLane[s] = Math.max(1.5, Math.min(4, u.r * 0.6)); c.mvCost[s] = _resolveUnitAstarTileCost(u);
         c.mvReachD[s] = rd >= 0 && rd < SIM_MOVE_BOX_STEPS ? rd : 255; c.mvReachA[s] = ra >= 0 && ra < 255 ? ra : 255;
         c.mvShoot[s] = pc.attackDamage > 0 ? 1 : 0;
@@ -2973,7 +3002,7 @@ function simMoveTryHold(u) {
     // (Bit 4: its attacks made by the kernel, simHoldFire's work at the
     // pass's start; not a ram's, whose recoil is the object's.)
     const kf = SIM_KERNEL_FIRE && u.attackStyle !== 'ram';
-    if (kf) { c.atkCd[s] = u.preComputed.attackCooldown; c.atkDmg[s] = u.preComputed.attackDamage; c.atkSty[s] = _hitStyleCode(u); }
+    if (kf) { c.atkCd[s] = u.preComputed.attackCooldown; c.atkDmg[s] = u.preComputed.attackDamage; c.atkSty[s] = _hitStyleCode(u); c.atkWatch[s] = _unitWatchTicks(u); }
     c.mvFlags[s] = (u.isFlying ? 32 : 0) | (u.forcedAttackTarget ? 8 : 0) | (kf ? 4 : 0);
     c.mvOn[s] = 3;
 }
@@ -3031,7 +3060,7 @@ function simMoveTryChase(u) {
     if (!(k <= 1)) return;
     // (Bit 4: come in range, its attack made by the kernel, as a hold's.)
     const kf = SIM_KERNEL_FIRE && u.attackStyle !== 'ram';
-    if (kf) { c.atkCd[s] = pc.attackCooldown; c.atkDmg[s] = pc.attackDamage; c.atkSty[s] = _hitStyleCode(u); }
+    if (kf) { c.atkCd[s] = pc.attackCooldown; c.atkDmg[s] = pc.attackDamage; c.atkSty[s] = _hitStyleCode(u); c.atkWatch[s] = _unitWatchTicks(u); }
     let flags = (u.isFlying ? 32 : 0) | (hasPath ? 2 : 0) | (u.forcedAttackTarget ? 8 : 0) | (kf ? 4 : 0);
     // Its path's next node a nav node (navPathTo): the kernel follows its
     // flow field when the straight step is not open (followPath ->
@@ -3850,7 +3879,7 @@ function simMoveRun() {
     {
         if (!_simMoveRem || _simMoveRem.length < NPa) { _simMoveRem = simHeapArrayAuto(Float64Array, Math.max(8, NPa * 2)); simParallelBind('mv.astarRem', _simMoveRem); }
         for (let pid = 0; pid < NPa; pid++) _simMoveRem[pid] = _astarAtPassStart ? (_astarAtPassStart[pid] ?? 0) : _getPlayerAstarBudgetRemaining(pid) + _fromFixedResourceUnits(_pendingMovementAstarFixed[pid] || 0);
-        if (!_simMoveChFix || _simMoveChFix.length < chunks * NPa) { _simMoveChFix = simHeapArrayAuto(Float64Array, Math.max(64, chunks * NPa * 2)); simParallelBind('mv.chFix', _simMoveChFix); }
+        if (!_simMoveChFix || _simMoveChFix.length < chunks * (NPa + 1)) { _simMoveChFix = simHeapArrayAuto(Float64Array, Math.max(64, chunks * (NPa + 1) * 2)); simParallelBind('mv.chFix', _simMoveChFix); }
         if (!_simMoveChUse || _simMoveChUse.length < chunks * NPa * NT) { _simMoveChUse = simHeapArrayAuto(Float64Array, Math.max(256, chunks * NPa * NT * 2)); simParallelBind('mv.chUse', _simMoveChUse); }
         const V = typeof _visCover !== 'undefined' ? _visCover : null;
         P[40] = spatialEpoch; P[41] = V ? V.gen : 0; P[42] = !V || V.syncedTick < 0 || V.adm !== areaDistanceMatrix ? 1 : 0;
@@ -3871,7 +3900,9 @@ function simMoveRun() {
         // (Slots past the chain's arrays (made since): none this tick.)
         if (_sep && _sep.cap >= n && _sep.px && _sep.ex && _sep.exc && _sep.exc.length >= chunks) {
             const once = (UNIT_SEPARATION_MODE | 0) === 1;
-            P[49] = UNIT_SEPARATION_CONTACTS; P[50] = UNIT_SEPARATION_Q; P[51] = UNIT_SEPARATION_PATH_RETRY_TICKS;
+            // (P[51] 0: no path retry on a push; waiting units' looks are the
+            // pending-path schedule's alone.)
+            P[49] = UNIT_SEPARATION_CONTACTS; P[50] = UNIT_SEPARATION_Q; P[51] = 0;
             P[52] = once ? 1 : UNIT_SEPARATION_TIER_GAIN; P[53] = once ? 1 : 0.5; P[54] = 1;
         } else _sepDirty = true;
     }
@@ -3956,15 +3987,21 @@ function _simMoveSepListed(chunks, per) {
 // it: mvBlk): the kernel's sums per chunk and owner into the pending spend,
 // per owner and unit type into the usage log.
 function _simMoveChargeSteps(chunks, NP, NT, names) {
-    const FIX = _simMoveChFix, USE = _simMoveChUse;
+    const FIX = _simMoveChFix, USE = _simMoveChUse, W = NP + 1;
+    let fix = null, used = null;
+    // (Only the chunks that charged anything: the flag after their sums.)
+    for (let k = 0; k < chunks; k++) {
+        if (FIX[k * W + NP] === 0) continue;
+        fix ||= new Float64Array(NP); used ||= new Float64Array(NP * NT);
+        for (let pid = 0; pid < NP; pid++) fix[pid] += FIX[k * W + pid];
+        for (let i = 0, o = k * NP * NT; i < NP * NT; i++) used[i] += USE[o + i];
+    }
+    if (!fix) return;
     for (let pid = 0; pid < NP; pid++) {
-        let fix = 0;
-        for (let k = 0; k < chunks; k++) fix += FIX[k * NP + pid];
-        if (fix) _pendingMovementAstarFixed[pid] = (_pendingMovementAstarFixed[pid] || 0) + fix;
+        if (fix[pid]) _pendingMovementAstarFixed[pid] = (_pendingMovementAstarFixed[pid] || 0) + fix[pid];
         for (let ti = 0; ti < NT; ti++) {
-            let used = 0;
-            for (let k = 0; k < chunks; k++) used += USE[(k * NP + pid) * NT + ti];
-            if (used > 0) _recordAstarUsage(pid, used, { unitType: (ti < NT - 1 && names[ti]) || 'norm' }, 'movement');
+            const u = used[pid * NT + ti];
+            if (u > 0) _recordAstarUsage(pid, u, { unitType: (ti < NT - 1 && names[ti]) || 'norm' }, 'movement');
         }
     }
 }

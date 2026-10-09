@@ -587,6 +587,8 @@ function _accumulateUpKeepForThing(breakdowns, thing, isUnit) {
 // The upkeep breakdown of the second in progress (see gameTick). Dropped
 // with the other cross-tick caches at a resync, on every peer.
 let _upKeepAccum = null;
+// The laser towers the buzzer sound looks at (see _gameTickBody).
+let _laserSoundList = null;
 
 const UNIT_RETIRE_BLOCK = 8192;
 let _unitRetireList = new Int32Array(0), _unitRetireCounts = new Int32Array(0);
@@ -773,20 +775,18 @@ function _gameTickBody() {
     let compactRemovedUnits = () => {
         if (!removedIndices.length) return;
         const M = _unitSlotMap, keep = M.ref === units && M.len === units.length, ms = M.slots;
-        // The survivors after the first removal moved down: the slot map
-        // natively (typed: a memmove), the units array by a plain loop
-        // (Array.prototype.copyWithin on objects is per element and slow:
-        // ~20 ms a tick of a battle at 200k units, the loop ~1.5 ms).
-        // The removals were recorded backwards, as death effects require.
-        let w = removedIndices[removedIndices.length - 1], from = w;
-        for (let k = removedIndices.length - 1; k >= -1; k--) {
-            const end = k >= 0 ? removedIndices[k] : units.length;
-            if (w !== from && end > from && keep) ms.copyWithin(w, from, end);
-            for (let i = from; i < end; i++) units[w++] = units[i];
-            from = end + 1;
+        // Swap-remove, highest index first (the order they were recorded
+        // in): the list's last unit takes each removed one's place, O(1) a
+        // removal (the same order on every peer; copying the list's tail
+        // down behind every removal was ~5 ms a tick of a battle at 800k).
+        let n = units.length;
+        for (let k = 0; k < removedIndices.length; k++) {
+            const i = removedIndices[k];
+            n--;
+            if (i !== n) { units[i] = units[n]; if (keep) ms[i] = ms[n]; }
         }
-        units.length = w;
-        if (keep) { M.len = w; M.ver++; }
+        units.length = n;
+        if (keep) { M.len = n; M.ver++; }
         if (removedSet) selectedUnits = selectedUnits.filter(su => !removedSet.has(su));
         for (let k = 0; k < removedIndices.length; k++) unitByIdRemoved(removedUnits[k]);
     };
@@ -835,26 +835,21 @@ function _gameTickBody() {
     // Particles
     for (let i = particles.length - 1; i >= 0; i--) { if (!particles[i].update()) particles.splice(i, 1); }
 
-    // Laser buzzer sound control
-    let anyLaserActive = false;
-    let laserSoundX = 0, laserSoundY = 0;
-    let cameraCx = camera.x + viewW / camera.zoom / 2;
-    let cameraCy = camera.y + viewH / camera.zoom / 2;
-    let bestLaserDist2 = Infinity;
-    for (let t of towers) {
-        if (t.type !== 'laser' || t.laserState !== 1 || t.underConstruction) continue;
-        anyLaserActive = true;
-        let dx = t.x - cameraCx;
-        let dy = t.y - cameraCy;
-        let dist2 = dx * dx + dy * dy;
-        if (dist2 < bestLaserDist2) {
-            bestLaserDist2 = dist2;
-            laserSoundX = t.x;
-            laserSoundY = t.y;
+    // Laser buzzer sound control (presentation): the active laser nearest
+    // the camera, from the laser towers (listed again every TICK_RATE ticks).
+    if (!_laserSoundList || gameTime % TICK_RATE === 0) _laserSoundList = towers.filter(t => t.type === 'laser');
+    {
+        let anyLaserActive = false, laserSoundX = 0, laserSoundY = 0, bestLaserDist2 = Infinity;
+        const cameraCx = camera.x + viewW / camera.zoom / 2, cameraCy = camera.y + viewH / camera.zoom / 2;
+        for (const t of _laserSoundList) {
+            if (t.laserState !== 1 || t.underConstruction || t.dead) continue;
+            anyLaserActive = true;
+            const dx = t.x - cameraCx, dy = t.y - cameraCy, dist2 = dx * dx + dy * dy;
+            if (dist2 < bestLaserDist2) { bestLaserDist2 = dist2; laserSoundX = t.x; laserSoundY = t.y; }
         }
+        if (anyLaserActive) startLaserSound(laserSoundX, laserSoundY);
+        else stopLaserSound();
     }
-    if (anyLaserActive) startLaserSound(laserSoundX, laserSoundY);
-    else stopLaserSound();
 
     // (Adjacency is not lag-sensitive: its dirty tiles are taken in batches
     // every ADJACENCY_BATCH_TICKS ticks (fixed ticks, every peer): a group

@@ -397,7 +397,78 @@ emulation). Determinism-suite fixes come after the optimization work.
   made rarer, and the pair kernel (32 ms a tick at 400k, one thread) as
   plan B's 4x4 contact tiles.
 
+### 2026-10-09 (later) — main-thread JS long tail, first groups
+
+Section timers in the tick body (B800 steady) found: dead-unit compaction
++ collection 6.6 ms, the laser buzzer loop over every tower 3.0, the pushed
+units' JS (sweeps, path retries) 5.3, the field sweep over unit paths 2.6,
+the worker tier's takes 5.5 (~1,030 a tick, mostly surplus researchers
+failing for the same labs every 20 ticks), laser links over every tower on
+any structure change 2.1, game stats over unit objects 2.1, charge sums
+over chunk x player x type 1.6.
+
+- Dead units leave the units list by swap-remove (O(1) each; the list's
+  order changes deterministically).
+- The laser sound walks the laser towers (listed every second); laser links
+  from a laser-tower list kept by laserTowersVersion.
+- A unit left on a blocked tile after its push steps toward the nearest open
+  neighbouring tile in the kernel (half a tile a tick); no push-triggered
+  path retries (the pending-path schedule's alone).
+- Field sweep from columns: rtEnd/nvProf (Unit._routeEnd's accessor), the
+  path setter's nvPK, _routeKey a per-slot field.
+- Charge sums only for the chunks flagged as charged.
+- Game stats from columns (wkIdle kept by the workerState setter);
+  workerType is a per-slot field whose setter keeps isWk (it was set at the
+  slot's start only, before the type: every worker read as not one).
+- Worker search backoff: a take that found nothing it could have doubles
+  the worker's search period (20 → 160 ticks at most; wsFail column,
+  k_ws_select).
+- B800 (`.claude/s6-800k-b.log`): mean 88.6 → 71.7, p50 84.0 → 67.1, p95
+  117.8 → 103.5, steady ticks ~74 → 57.8, 0 desyncs.
+
+### 2026-10-09 (later) — hits off the serial path, status DoT in the kernel
+
+- Hits on units: no sort, no per-hit main-thread loop. SIM_KERNEL_HITS
+  (k.rs k_hits) takes the queued JS attacks (hit.q/dmg/sty/wk) and the
+  MOVE kernel's per-chunk attack lists in place; each hit goes into its
+  target's sums by atomics (unit.hAcc damage in 1/16ths: an integer sum,
+  any order; hSty status bits, hBurnD/hPoiD the largest tick damage;
+  hWatchK the longest scout watch, then the highest attacker id). Targets
+  are listed at their first hit (hTouch, hit.tlist). SIM_KERNEL_HITS_APPLY
+  (66) applies the sums: energy, statuses by max, the watch (wTeam), fallen,
+  the shrine share per job (fixed point), units newly watched (hit.wlist:
+  vision cover on the main thread).
+- Gameplay changes: hits are no longer ranked by attacker id (sums are
+  order-free); statuses by max; no object retaliation (the combat brain
+  already made it a no-op); the looks are capped at SIM_HITS_PRESENT
+  (512), and which hits get them may differ between peers (presentation
+  only).
+- watchedByTeam is a typed column (unit.wTeam, Int8, -1 none) behind an
+  accessor, hashed in k_snap_units (word 34). The scout watch duration
+  comes from the precomputed stats (preComputed.watchDuration, in ticks):
+  the atkWatch column, set with atkDmg/atkSty.
+- Status DoT: the status kernel credits the shrines (st.shr per job, fixed
+  point) and lists only watch ends plus STATUS_LOOKS_PER_JOB damage looks
+  a job; no main-thread shrineDamageTaken per DoT event.
+- Structure hits and hits on units without columns are still on the main
+  thread, in queue order.
+- B800 (`.claude/s7-800k-hits.log`): mean 71.8, p50 68.4, p95 115.9, 0
+  desyncs; steady (tick ≥ 150) gameTick mean 62.1 / p50 56.6. Hits 1.7 ms,
+  status 2.5 ms (was 3.3). Biggest steady phases: simMoveRun 19.0, unit
+  pass (excl. MOVE) ~9, hash 3.3, orders 3.2, effective stats 3.2,
+  visibility 2.5.
+- The small bench now shows 7-16 desync detections from tick 260 (players
+  and builder regions). The count varies run to run, and was 0 once with
+  a probe attached, so it is timing-dependent. Deferred, by the user's
+  ordering: main thread first, determinism fixes after. Probes for it:
+  `.claude/probes/diff_codes.js` (per-tick hash diff between peers, via
+  tickbench's shared `__scratch.x`) and `peer_fields.js` (field diffs of
+  chosen units and the players).
+
 ## Next
+
+Order set by the user (2026-10-09): main thread stable below 50 ms (aim
+~40) at B800 first; the determinism fixes after that.
 
 0. Main thread: the items above, biggest first: MOVE (layouts, steering
    shared per route/cell), separation commit, unit pass (worker events in
@@ -414,4 +485,14 @@ emulation). Determinism-suite fixes come after the optimization work.
 2. MOVE kernel CPU (74.6 ms at 800k; 14 ms of foreground wall): dump and
    replay (kdump + wbench) to split its passes, then the motor plan (A).
 3. Effective-stats apply (~3.4 ms), separation FINISH (30 ms CPU): see the
-   profiles above. (Hash: 3.85 ms, see the structure table above.)
+   profiles above.
+4. Next batch, in order (B800 steady ms): MOVE 19 (a fresh kdump at B800
+   with `.claude/probes/kdump_mv.js` + rbench DBGC: which lanes leave
+   step4/combat4 for the scalar path, the bytes touched per unit; narrow
+   columns, i32 1/8 px coordinates, then SIMD); the unit pass's ~290
+   Unit.update calls (worker trips via helper pathfinding, node advance,
+   worker checks and wakes in the kernel); the structure table and
+   structure hits kernel (then the structures hash as a kernel: 3.3);
+   orders (typed target/order fields); effective stats (count the eff.flag
+   kinds first); visibility (phase-0 commit/post of _visCoverUnitsStep:
+   measure first). Then the desyncs above. (Hash: 3.85 ms, see the structure table above.)

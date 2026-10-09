@@ -958,6 +958,7 @@ function _wsRegistered(u) { const c = u && u._us; return !!c && c.wsKind[u._si] 
 function wsRegister(u, kind, req) {
     const c = u._us, s = u._si;
     c.wsKind[s] = kind; c.wsT[s] = _wsInCommit ? gameTime - WS_TICKS : gameTime;
+    if (!_wsInCommit) c.wsFail[s] = 0;
     c.wsCfg[s] = Number.isFinite(req.cfg) ? req.cfg : -1; c.wsOU[s] = Number.isFinite(req.ou) ? req.ou : 0;
     c.wsOx[s] = Number.isFinite(req.ox) ? req.ox : NaN; c.wsOy[s] = Number.isFinite(req.oy) ? req.oy : NaN;
     c.wsR[s] = Number(req.r) || 0; c.wsAk[s] = Number.isFinite(req.areaSteps) ? Math.max(0, Math.min(127, Math.floor(req.areaSteps))) : -1;
@@ -1345,6 +1346,9 @@ function _wsTakeSome() {
             _wsResults.set(s, { id: u.id, kind: kind === WSR_COLLECT ? WS_COLLECT : WS_GRID, stamp: _wsCommitTick, res, units });
             _wsTakeNow(u);
             _wsResults.delete(s);
+            // (Still searching: nothing it could take; its next searches
+            // further apart.)
+            if (c.wsKind[s] !== 0) { if (c.wsFail[s] < 255) c.wsFail[s]++; } else c.wsFail[s] = 0;
         }
     } finally { _wsInCommit = false; }
     if (Q.pos >= found.length) _wsPending = null;

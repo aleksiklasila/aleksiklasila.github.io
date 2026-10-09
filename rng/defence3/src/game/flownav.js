@@ -640,13 +640,20 @@ function _navFieldMark(profile, dest, wide, mark) {
 }
 function navFieldsSweepStep() {
     const step = NAV_FIELD_SWEEP_TICKS, k = gameTime % step, mark = _navFields.seenCycle + 1;
-    for (let i = k, n = units.length; i < n; i += step) {
-        const u = units[i];
-        if (!u || u.dead) continue;
-        const p = navProfileOf(u);
-        if (u._routeKey === NAV_ROUTE_KEY && u._routeEnd >= 0) _navFieldMark(p, u._routeEnd, true, mark);
-        const path = u.path;
-        if (path && path.length) { const nd = path[path.length - 1]; if (nd && nd.nav) _navFieldMark(nd.nav - 1, nd.y * GRID_W + nd.x, !!nd.w, mark); }
+    // (From the slots' columns: a unit's route field (rtEnd, nvProf, its
+    // route key in oc__routeKey) and its path's last flow node's (nvPK, the
+    // path setter's). No unit object is read.)
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    if (S) {
+        const C = S.columns, LIVE = C.live, DEAD = C.dead, RE = C.rtEnd, PR = C.nvProf, PK = C.nvPK, RK = C.oc__routeKey, n = S.owners.length;
+        const Fn = _navFields.pools[0], Fw = _navFields.pools[1];
+        for (let s = k; s < n; s += step) {
+            if (!LIVE[s] || DEAD[s]) continue;
+            const e = RE[s];
+            if (e >= 0 && RK[s] === NAV_ROUTE_KEY) { const sl = Fw.byKey.get(PR[s] * 16777216 + e); if (sl !== undefined) Fw.seen[sl] = mark; }
+            const pk = PK[s];
+            if (pk >= 0) { const F = (pk & 1) ? Fw : Fn, sl = F.byKey.get(pk >> 1); if (sl !== undefined) F.seen[sl] = mark; }
+        }
     }
     if (k !== step - 1) return;
     // (In a rebuild's window no slot is let go (the next build's batches

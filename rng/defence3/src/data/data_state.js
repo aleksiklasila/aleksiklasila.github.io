@@ -1004,7 +1004,9 @@ function towersChanged() { towersVersion++; }
 // Bumped when a cloud tower joins or leaves towers (pathfinding.js keeps
 // its cloud tables by it: other towers falling in a battle leave them).
 let cloudTowersVersion = 0;
-function towerJoinedOrLeft(t) { towersVersion++; if (t && t.baseStats && t.baseStats.isCloud) cloudTowersVersion++; }
+function towerJoinedOrLeft(t) { towersVersion++; if (t && t.baseStats && t.baseStats.isCloud) cloudTowersVersion++; if (t && t.type === 'laser') laserTowersVersion++; }
+// Bumped when a laser tower joins or leaves towers (the laser links' list).
+let laserTowersVersion = 0;
 let units = [];
 let projectiles = [];
 let particles = [];

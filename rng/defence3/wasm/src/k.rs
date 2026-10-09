@@ -413,8 +413,11 @@ pub unsafe extern "C" fn k_sp_counts(a: *const i32, chunk: i32) {
 /// energy, its attack timers counted down (tmOn units only). Events
 /// (unit.stEv: 1 damage reported, unit.stDot the amount; 2 its watch ended;
 /// 4 died): damage over time summed in unit.stAcc and reported every P[3]
-/// ticks by id or at death; the job's units with events listed at
-/// st.list[chunk * P[1]..], how many at st.count[chunk].
+/// ticks by id or at death, what the unit lost (no more than it had) into
+/// its owner's shrine count (st.shr[chunk * P[5] + owner], fixed point
+/// P[6]); listed (st.list[chunk * P[1]..], how many at st.count[chunk]):
+/// the job's units whose watch ended, and the first P[7] reporting damage
+/// (their looks); the rest's events not written.
 /// Arrays (in order): ix.slots, unit.dead, unit.energy, unit.attackTimer,
 /// unit.attackFlash, unit.teleportHideTicks, unit.burning,
 /// unit.burnTickDamage, unit.poisoned, unit.poisonTickDamage, unit.frozen,
@@ -422,8 +425,9 @@ pub unsafe extern "C" fn k_sp_counts(a: *const i32, chunk: i32) {
 /// unit.stDot, st.count, unit.x, unit.y, unit.x0, unit.y0,
 /// unit.workerTransferCooldown, unit.stAcc, unit.id, unit.sepD0, unit.sepR0,
 /// unit.sepL0, unit.collisionR, unit.r, unit.sepLayer, unit.stOn,
-/// unit.tmOn, ?st.list. P: [0] units, [1] per job, [2] tick, [3] report
-/// period, [4] 1: the separation's copy.
+/// unit.tmOn, ?st.list, unit.owner, st.shr. P: [0] units, [1] per job, [2]
+/// tick, [3] report period, [4] 1: the separation's copy, [5] owners (shr
+/// stride), [6] fixed-point scale, [7] looks a job.
 #[no_mangle]
 pub unsafe extern "C" fn k_status(a: *const i32, chunk: i32) {
     let k = K::new(a);
@@ -451,6 +455,15 @@ pub unsafe extern "C" fn k_status(a: *const i32, chunk: i32) {
     let uid = k.p::<i32>(24);
     let (sd0, sr0, sl0, cr, rad, lay) = (k.p::<u8>(25), k.p::<f32>(26), k.p::<u8>(27), k.p::<f32>(28), k.p::<f32>(29), k.p::<u8>(30));
     let (on, ton, list) = (k.p::<u8>(31), k.p::<u8>(32), k.p::<i32>(33));
+    let (own, shr) = (k.p::<i8>(34), k.p::<f64>(35));
+    let no = k.i(5).max(0) as usize;
+    let scale = k.f(6);
+    let looks = k.i(7).max(0) as usize;
+    let sh = chunk.max(0) as usize * no;
+    for o in 0..no {
+        s(shr, sh + o, 0.0);
+    }
+    let mut nl = 0usize;
     let t = k.i(2);
     let per = k.i(3).max(1);
     let sep_copy = k.i(4) == 1;
@@ -526,7 +539,20 @@ pub unsafe extern "C" fn k_status(a: *const i32, chunk: i32) {
         } else if dot != 0.0 {
             s(acc_, s_, acc);
         }
-        if ev != 0 {
+        if ev & 1 != 0 {
+            // (shrineDamageTaken: the energy after, the amount past it not.)
+            let after = g(en, s_) as f64;
+            let lost = if after < 0.0 { dot as f64 + after } else { dot as f64 };
+            let o = g(own, s_) as i32;
+            if lost > 0.0 && o >= 0 && (o as usize) < no {
+                *shr.add(sh + o as usize) += round_half_up(lost * scale);
+            }
+        }
+        let shown = ev & 2 != 0 || (ev & 1 != 0 && nl < looks);
+        if shown {
+            if ev & 2 == 0 {
+                nl += 1;
+            }
             s(ev_, s_, ev);
             s(dotp, s_, dot);
             if !list.is_null() {
@@ -933,65 +959,181 @@ pub unsafe extern "C" fn k_eff_units(a: *const i32, chunk: i32) {
     }
 }
 
-/// SIM_KERNEL_HITS (unit.js unitHitsResolve): per target (the job's groups
-/// hit.jb[job]..hit.jb[job + 1] of hit.g, by target then attacker rank), in
-/// rank order: none once it has fallen; its energy, its status by the
-/// attack's style (1 fire, 2 water, 3 ice, 4 poison), fallen at none left.
-/// hit.flag[rank]: 1 landed, 2 on an idle unit; hit.shr[job * owners + o]
-/// the energy lost per owner (fixed point). Arrays: hit.g, hit.jb, hit.q,
-/// hit.dmg, hit.sty, hit.flag, hit.shr, unit.energy, unit.dead, unit.owner,
-/// unit.commandState, unit.stOn, unit.burning, unit.burnTickDamage,
-/// unit.wet, unit.frozen, unit.poisoned, unit.poisonTickDamage.
-/// P: [0] owners, [1] fixed-point scale, [2] CMD_IDLE.
+/// One hit on unit slot q (SIM_KERNEL_HITS): its damage in 1/16ths
+/// (rounded half up) into q's sum (unit.hAcc, an atomic add: integers, the
+/// same sum in any order); its style's status (unit.hSty bits: 1 fire, 2
+/// water, 4 ice, 8 poison) with the largest fire / poison tick damage
+/// (unit.hBurnD / hPoiD: Float32 bits of positive values, their integer
+/// max); a scout's watch as its key (unit.hWatchK, the max: the longest,
+/// then the highest attacker id); q listed at its first hit (unit.hTouch,
+/// hit.tlist, cnt[0]); e (the entry: JS entries their index, the movement
+/// kernel's P[0] + their list position) listed for its looks while fewer
+/// than `looks` are (hit.plist, cnt[1]).
+#[inline(always)]
+unsafe fn hit_one(q: usize, dmg: f32, st: i32, wk: i32, e: i32, looks: i32, acc: *mut i32, touch: *mut u8, sty: *mut u8, bd: *mut i32, pd: *mut i32, wkk: *mut i32, tl: *mut i32, pl: *mut i32, cnt: *mut i32) {
+    use core::sync::atomic::{AtomicI32, AtomicU8, Ordering::Relaxed};
+    let ai = |p: *mut i32, i: usize| -> &AtomicI32 { &*(p.add(i) as *const AtomicI32) };
+    let dq = {
+        let f = floorf(dmg * 16.0 + 0.5);
+        if f > 0.0 { if f < 1.0e9 { f as i32 } else { 1_000_000_000 } } else { 0 }
+    };
+    if dq != 0 {
+        ai(acc, q).fetch_add(dq, Relaxed);
+    }
+    let bit = match st { 1 => 1u8, 2 => 2, 3 => 4, 4 => 8, _ => 0 };
+    if bit != 0 {
+        (&*(sty.add(q) as *const AtomicU8)).fetch_or(bit, Relaxed);
+        if st == 1 && dmg > 0.0 { ai(bd, q).fetch_max((dmg * 0.04).to_bits() as i32, Relaxed); }
+        if st == 4 && dmg > 0.0 { ai(pd, q).fetch_max((dmg * 0.04).to_bits() as i32, Relaxed); }
+    }
+    if st == 5 && wk > 0 {
+        ai(wkk, q).fetch_max(wk, Relaxed);
+    }
+    if (&*(touch.add(q) as *const AtomicU8)).swap(1, Relaxed) == 0 {
+        let t = ai(cnt, 0).fetch_add(1, Relaxed);
+        s(tl, t as usize, q as i32);
+    }
+    if looks > 0 && g(cnt, 1) < looks {
+        let p = ai(cnt, 1).fetch_add(1, Relaxed);
+        if p < looks {
+            s(pl, p as usize, e);
+        }
+    }
+}
+
+/// SIM_KERNEL_HITS: the tick's hits on units, in no order (hit_one): jobs
+/// 0..P[3] the JS entries (P[0] of them, P[1] a job: hit.q target slot or
+/// -1, hit.dmg, hit.sty, hit.wk the watch key), the rest the movement
+/// kernel's attack lists (P[5] chunks of P[6] slots, P[4] chunks a job:
+/// mv.hita attacker, mv.hitt target, mv.hitc per chunk; the attacker's
+/// damage, style and watch key from its columns: unit.atkDmg, atkSty,
+/// atkWatch, owner, id).
+/// Arrays: hit.q, hit.dmg, hit.sty, hit.wk, mv.hita, mv.hitt, mv.hitc,
+/// unit.atkDmg, unit.atkSty, unit.atkWatch, unit.owner, unit.id, unit.hAcc,
+/// unit.hTouch, unit.hSty, unit.hBurnD, unit.hPoiD, unit.hWatchK,
+/// hit.tlist, hit.plist, hit.cnt. P: [0] JS entries, [1] per job, [2]
+/// looks, [3] JS jobs, [4] chunks a job, [5] chunks, [6] chunk slots.
 #[no_mangle]
-pub unsafe extern "C" fn k_hits(a: *const i32, job_: i32) {
+pub unsafe extern "C" fn k_hits(a: *const i32, chunk: i32) {
     let k = K::new(a);
-    let (gg, jb, qq, dmgp, sty, flag, shr) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<f64>(3), k.p::<u8>(4), k.p::<u8>(5), k.p::<f64>(6));
-    let (en, dead, own, cmd, ston) = (k.p::<f32>(7), k.p::<u8>(8), k.p::<i8>(9), k.p::<u8>(10), k.p::<u8>(11));
-    let (burn, btd, wet, frz, poi, ptd) = (k.p::<i32>(12), k.p::<f32>(13), k.p::<i32>(14), k.p::<i32>(15), k.p::<i32>(16), k.p::<f32>(17));
-    let no = k.i(0).max(0) as usize;
-    let scale = k.f(1);
-    let idle = k.i(2) as u8;
-    let jbu = job_.max(0) as usize;
-    let sh = jbu * no;
+    let (hq, hd, hs, hw) = (k.p::<i32>(0), k.p::<f32>(1), k.p::<u8>(2), k.p::<i32>(3));
+    let (ha, ht, hc) = (k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6));
+    let (adm, ast, awt, own, uid) = (k.p::<f32>(7), k.p::<u8>(8), k.p::<i32>(9), k.p::<i8>(10), k.p::<i32>(11));
+    let (acc, touch, sty, bd, pd, wkk) = (k.p::<i32>(12), k.p::<u8>(13), k.p::<u8>(14), k.p::<i32>(15), k.p::<i32>(16), k.p::<i32>(17));
+    let (tl, pl, cnt) = (k.p::<i32>(18), k.p::<i32>(19), k.p::<i32>(20));
+    let n = k.i(0);
+    let looks = k.i(2);
+    let js_jobs = k.i(3);
+    if chunk < js_jobs {
+        let (i0, i1) = job(chunk, k.i(1), n);
+        for i in i0..i1 {
+            let q = g(hq, i);
+            if q < 0 {
+                continue;
+            }
+            hit_one(q as usize, g(hd, i), g(hs, i) as i32, g(hw, i), i as i32, looks, acc, touch, sty, bd, pd, wkk, tl, pl, cnt);
+        }
+        return;
+    }
+    if ha.is_null() || ht.is_null() || hc.is_null() {
+        return;
+    }
+    let per = k.i(4).max(1);
+    let (c0, c1) = job(chunk - js_jobs, per, k.i(5));
+    let ch = k.i(6).max(0) as usize;
+    for c in c0..c1 {
+        let b = c * ch;
+        for j in b..b + g(hc, c).max(0) as usize {
+            let at = g(ha, j) as usize;
+            let q = g(ht, j);
+            if q < 0 {
+                continue;
+            }
+            let st = g(ast, at) as i32;
+            let wk = if st == 5 { let w = g(awt, at); if w > 0 { (w.min(2047) << 20) | ((g(uid, at) & 0xFFFF) << 4) | ((g(own, at) as i32 + 1) & 15) } else { 0 } } else { 0 };
+            hit_one(q as usize, g(adm, at), st, wk, n + j as i32, looks, acc, touch, sty, bd, pd, wkk, tl, pl, cnt);
+        }
+    }
+}
+
+/// SIM_KERNEL_HITS_APPLY: the units hit this tick (hit.tlist, P[0] of
+/// them, P[1] a job): the sum of their hits off their energy (none for a
+/// unit fallen already), what it lost (no more than it had) into its
+/// owner's shrine count (hit.shr[job * P[2] + owner], fixed point P[3]),
+/// their hits' statuses (the longer timer, the larger tick damage), a
+/// scout's watch (its team: the timer kept longer when the same team, else
+/// set; unit.wTeam; a unit watched anew, by another team, listed: hit.wlist,
+/// cnt[2]), fallen at no energy left; their sums cleared.
+/// Arrays: hit.tlist, unit.hAcc, unit.hTouch, unit.hSty, unit.hBurnD,
+/// unit.hPoiD, unit.energy, unit.dead, unit.owner, unit.stOn, unit.burning,
+/// unit.burnTickDamage, unit.wet, unit.frozen, unit.poisoned,
+/// unit.poisonTickDamage, hit.shr, unit.hWatchK, unit.watched, unit.wTeam,
+/// hit.wlist, hit.cnt.
+#[no_mangle]
+pub unsafe extern "C" fn k_hits_apply(a: *const i32, chunk: i32) {
+    let k = K::new(a);
+    let tl = k.p::<i32>(0);
+    let (acc, touch, sty, bd, pd) = (k.p::<i32>(1), k.p::<u8>(2), k.p::<u8>(3), k.p::<i32>(4), k.p::<i32>(5));
+    let (en, dead, own, ston) = (k.p::<f32>(6), k.p::<u8>(7), k.p::<i8>(8), k.p::<u8>(9));
+    let (burn, btd, wet, frz, poi, ptd, shr) = (k.p::<i32>(10), k.p::<f32>(11), k.p::<i32>(12), k.p::<i32>(13), k.p::<i32>(14), k.p::<f32>(15), k.p::<f64>(16));
+    let (wkk, wch, wtm) = (k.p::<i32>(17), k.p::<i32>(18), k.p::<i8>(19));
+    let (wl, cnt) = (k.p::<i32>(20), k.p::<i32>(21));
+    let no = k.i(2).max(0) as usize;
+    let scale = k.f(3);
+    let sh = chunk.max(0) as usize * no;
     for o in 0..no {
         s(shr, sh + o, 0.0);
     }
-    for gi in g(jb, jbu)..g(jb, jbu + 1) {
-        let r = g(gg, gi as usize) as usize;
-        let q = g(qq, r) as usize;
+    let (i0, i1) = job(chunk, k.i(1), k.i(0));
+    for i in i0..i1 {
+        let q = g(tl, i) as usize;
+        let dq = g(acc, q);
+        let st = g(sty, q);
+        let wk = g(wkk, q);
+        let (b, p) = (f32::from_bits(g(bd, q) as u32), f32::from_bits(g(pd, q) as u32));
+        s(acc, q, 0);
+        s(touch, q, 0);
+        s(sty, q, 0);
+        s(bd, q, 0);
+        s(pd, q, 0);
+        s(wkk, q, 0);
         if g(dead, q) != 0 {
-            s(flag, r, 0);
             continue;
         }
-        let dmg = g(dmgp, r) as f32;
         let before = g(en, q);
-        let after = before - dmg;
+        let after = before - dq as f32 * 0.0625;
         s(en, q, after);
-        let amount = before - after;
-        let mut fl = 1u8;
-        if amount > 0.0 {
+        let lost = if after < 0.0 { before } else { before - after };
+        if lost > 0.0 && lost.is_finite() {
             let o = g(own, q) as i32;
-            let lost = if after < 0.0 { amount + after } else { amount };
-            if lost > 0.0 && o >= 0 && (o as usize) < no && lost.is_finite() {
+            if o >= 0 && (o as usize) < no {
                 let c = shr.add(sh + o as usize);
                 *c += round_half_up(lost as f64 * scale);
             }
         }
-        if g(cmd, q) == idle {
-            fl |= 2;
+        if st != 0 {
+            if st & 1 != 0 { s(burn, q, g(burn, q).max(45)); s(btd, q, g(btd, q).max(b)); }
+            if st & 2 != 0 { s(wet, q, g(wet, q).max(60)); }
+            if st & 4 != 0 { s(frz, q, g(frz, q).max(40)); }
+            if st & 8 != 0 { s(poi, q, g(poi, q).max(50)); s(ptd, q, g(ptd, q).max(p)); }
+            s(ston, q, 1);
         }
-        match g(sty, r) {
-            1 => { s(burn, q, g(burn, q).max(45)); s(btd, q, g(btd, q).max(dmg * 0.04)); s(ston, q, 1); }
-            2 => { s(wet, q, g(wet, q).max(60)); s(ston, q, 1); }
-            3 => { s(frz, q, g(frz, q).max(40)); s(ston, q, 1); }
-            4 => { s(poi, q, g(poi, q).max(50)); s(ptd, q, g(ptd, q).max(dmg * 0.04)); s(ston, q, 1); }
-            _ => {}
+        if wk > 0 {
+            let dur = wk >> 20;
+            let team = ((wk & 15) - 1) as i8;
+            if g(wch, q) > 0 && g(wtm, q) == team {
+                s(wch, q, g(wch, q).max(dur));
+            } else {
+                s(wch, q, dur);
+                let t = (&*(cnt.add(2) as *const core::sync::atomic::AtomicI32)).fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                s(wl, t as usize, q as i32);
+            }
+            s(wtm, q, team);
+            s(ston, q, 1);
         }
         if after <= 0.0 {
             s(dead, q, 1);
         }
-        s(flag, r, fl);
     }
 }
 
@@ -1457,7 +1599,7 @@ pub unsafe extern "C" fn k_ws_select(a: *const i32, chunk: i32) {
     let (rs, rid, rwt, rk, ro) = (k.p::<i32>(19), k.p::<i32>(20), k.p::<i32>(21), k.p::<i32>(22), k.p::<i32>(23));
     let (rox, roy, rux, ruy, rr) = (k.p::<f32>(24), k.p::<f32>(25), k.p::<f32>(26), k.p::<f32>(27), k.p::<f32>(28));
     let (rak, rax, ray, rg, rn, rj, rc, rm) = (k.p::<i32>(29), k.p::<f32>(30), k.p::<f32>(31), k.p::<i32>(32), k.p::<i32>(33), k.p::<i32>(34), k.p::<i32>(35), k.p::<i32>(36));
-    let (cnt, pre) = (k.p::<i32>(37), k.p::<i32>(38));
+    let (cnt, pre, fails) = (k.p::<i32>(37), k.p::<i32>(38), k.p::<u8>(39));
     let (t, wt4, retry, mode) = (k.i(2), k.i(3), k.i(4).max(1), k.i(5));
     let (s0, s1) = job(chunk, k.i(1), k.i(0));
     let base = if mode == 2 { g(pre, chunk as usize) as usize } else { s0 };
@@ -1468,7 +1610,11 @@ pub unsafe extern "C" fn k_ws_select(a: *const i32, chunk: i32) {
             continue;
         }
         let uid = g(id, q);
-        if !(t - g(wt, q) < wt4 || ((t as i64 + uid as i64).rem_euclid(retry as i64) as i32) < wt4) {
+        // (Its takes that found nothing it could have double its period, up
+        // to 8 times: workers in excess of their sites stop searching every
+        // retry.)
+        let rq = (retry as i64) << (g(fails, q).min(3) as i64);
+        if !(t - g(wt, q) < wt4 || ((t as i64 + uid as i64).rem_euclid(rq) as i32) < wt4) {
             continue;
         }
         let rank = m;
@@ -3298,6 +3444,7 @@ pub unsafe extern "C" fn k_snap_units(a: *const i32, chunk: i32) {
     let (tp, po, bu, fr, we, sa, wa, wt) = (k.p::<i32>(13), k.p::<i32>(14), k.p::<i32>(15), k.p::<i32>(16), k.p::<i32>(17), k.p::<i32>(18), k.p::<i32>(19), k.p::<i32>(20));
     let (sc, ul, es, el, pi, ho) = (k.p::<f32>(21), k.p::<f32>(22), k.p::<f32>(23), k.p::<f32>(24), k.p::<i32>(25), k.p::<i32>(26));
     let (pr, ph, nl, nlh, nu, cc, ords) = (k.p::<i32>(27), k.p::<i32>(28), k.p::<i32>(29), k.p::<i32>(30), k.p::<i32>(31), k.p::<i32>(32), k.p::<i32>(33));
+    let wtm = k.p::<i8>(34);
     let n = k.i(0).max(0) as usize;
     let per = k.i(1).max(0) as usize;
     let its = (1.0 / k.f(2)) as f32;
@@ -3407,6 +3554,7 @@ pub unsafe extern "C" fn k_snap_units(a: *const i32, chunk: i32) {
         mix!(19, gf!(es));
         mix!(20, gf!(el));
         mix!(21, g32!(pi));
+        mix!(22, gi8!(wtm));
         // (Seeded by id, then finished; the regions from the positions.)
         let ids = g32!(uid);
         let mut hh = i32x4_add(v128_xor(i32x4_mul(ids, i32x4_splat(7919)), i32x4_splat(0x11)), h);

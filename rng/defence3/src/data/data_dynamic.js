@@ -1394,14 +1394,19 @@ function _gameStatsSlice(k, step, into = null, sample = 1, rot = 0) {
         for (let pid = 0; pid < players.length; pid++) if (k === 0) a.units[pid] = players[pid] ? players[pid].popCount : 0;
     }
     k += step * (rot % sample); step *= sample;
-    for (let i = k, n = units.length; i < n; i += step) {
-        let u = units[i];
-        if (!u || u.dead) continue;
-        let pid = Number.isFinite(u.owner) ? u.owner : -1;
-        if (sample === 1) add(a.units, pid);
-        if (!u.workerType) continue;
-        add(a.workers, pid);
-        if (u.workerState === 'IDLE' || (!u.workerTarget && (!u.path || u.pathIndex >= u.path.length))) add(a.idle, pid);
+    // (Units from the unit state's columns: owner, worker, idle state; no
+    // object read.)
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    if (S) {
+        const C = S.columns, LIVE = C.live, DEAD = C.dead, OWN = C.owner, WK = C.isWk, IDLE = C.wkIdle;
+        for (let s = k, n = S.owners.length; s < n; s += step) {
+            if (!LIVE[s] || DEAD[s]) continue;
+            const pid = OWN[s];
+            if (sample === 1) add(a.units, pid);
+            if (!WK[s]) continue;
+            add(a.workers, pid);
+            if (IDLE[s]) add(a.idle, pid);
+        }
     }
     let items = getCellItemsRowMajor();
     for (let i = k, n = items.length; i < n; i += step) {

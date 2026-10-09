@@ -37,11 +37,14 @@ const SIM_UNIT_MIRROR_COLUMNS = ['r', 'collisionR'];
 // unit's accessors; a detached unit's in its _det), each set summed into
 // the slot's digest (hObj: see _simHTerm), so the hash kernel reads one
 // column for all of them.
-const SIM_UNIT_OBJ_FIELDS = ['holdPosition', 'forcedAttackTarget', 'targetUnit', 'targetPos', '_attackMoveGx', '_attackMoveGy', 'watchedByTeam',
+const SIM_UNIT_OBJ_FIELDS = ['holdPosition', 'forcedAttackTarget', 'targetUnit', 'targetPos', '_attackMoveGx', '_attackMoveGy',
     'workerTarget', 'workerTargetType', 'carryingValue', '_workerReservedTileIndex', 'builderHasMaterial', 'healerHasMaterial', 'researcherHasMaterial',
-    '_astarBudgetRetryTick', '_scoutTarget'];
+    '_astarBudgetRetryTick', '_scoutTarget', '_routeKey', 'workerType'];
+// (Statements a field's setter runs too, with c the columns, s the slot, v
+// the value: columns kept from it.)
+const SIM_UNIT_OBJ_HOOKS = { workerType: 'c.isWk[s] = v ? 1 : 0;' };
 const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'targetBuilding', 'pathIsFallbackAstar', '_pendingPathTarget', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved', '_statsBehind', '_forcedTargetLastSeenX', '_forcedTargetLastSeenY',
-    '_builderLastWatchX', '_builderLastWatchY', '_builderLastMoveTick', ...SIM_UNIT_OBJ_FIELDS];
+    '_builderLastWatchX', '_builderLastWatchY', '_builderLastMoveTick', '_routeEnd', 'watchedByTeam', ...SIM_UNIT_OBJ_FIELDS];
 // Every field in the digest: the object fields and the accessors' plain
 // values (structure target, pending way, worker state and its search). Not
 // the unit type (set once, read everywhere: a plain field; a wrong type
@@ -106,6 +109,15 @@ function simUnitHashDigest(u) {
     return h;
 }
 
+// Randomness without a sequence: a number in [0, 1) from what varies (the
+// tick, an entity's id or position, a salt), the same on every peer in any
+// order of evaluation (any thread). (The shared rng() is for map making.)
+function simHashRand(a, b, c = 0) {
+    let h = Math.imul((a | 0) ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul((b | 0) + 0x632be5ab, 0xc2b2ae35) ^ Math.imul((c | 0) + 0x27d4eb2f, 0x165667b1);
+    h = Math.imul(h ^ (h >>> 16), 0x7feb352d);
+    h = Math.imul(h ^ (h >>> 15), 0x846ca68b);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
 // Unit types by first sight (peer-local indices: only ever mapped back to
 // the type's name).
 const _simUnitTypeNames = [], _simUnitTypeIdx = new Map();
@@ -315,7 +327,25 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['cmMode', Uint8Array, 1], ['cmT', Int32Array, 1], ['cmTId', Int32Array, 1], ['isWk', Uint8Array, 1],
     // The digest of its hashed object fields (SIM_HASH_DIGEST_FIELDS: their
     // setters keep it), hashed with its columns (SIM_KERNEL_SNAP_REGION).
-    ['hObj', Int32Array, 1]];
+    ['hObj', Int32Array, 1],
+    // Its flow route's end tile (Unit._routeEnd; -1 none) and its navigation
+    // profile as of then; its path's last flow node's field (key * 2 + wide,
+    // -1 none; the path setter's): what the field sweep keeps
+    // (flownav.js navFieldsSweepStep), from columns.
+    ['rtEnd', Int32Array, 1], ['nvProf', Int8Array, 1], ['nvPK', Int32Array, 1],
+    // 1 while its worker state is IDLE (the workerState setter's: the game
+    // stats count idle workers from columns).
+    ['wkIdle', Uint8Array, 1],
+    // Its worker search's takes in a row that found nothing it could have
+    // (worker.js _wsTakeSome; the search tier backs off: k_ws_select).
+    ['wsFail', Uint8Array, 1],
+    // The tick's hits on it (SIM_KERNEL_HITS, cleared by HITS_APPLY): their
+    // damage in 1/16ths, whether listed, statuses (bits), the largest fire
+    // and poison damage (Float32 bits), a scout's watch key.
+    ['hAcc', Int32Array, 1], ['hTouch', Uint8Array, 1], ['hSty', Uint8Array, 1], ['hBurnD', Int32Array, 1], ['hPoiD', Int32Array, 1], ['hWatchK', Int32Array, 1],
+    // Unit.watchedByTeam (-1 none: the hits kernel sets it with the watch)
+    // and, for a scout, the watch its swoop gives (ticks; atkDmg's twin).
+    ['wTeam', Int8Array, 1], ['atkWatch', Int32Array, 1]];
 // Accessor defaults (the "not indexed / not registered" values).
 const SIM_SPATIAL_DEFAULTS = { spTile: -1, spArea: -2, spOwner: -1, spEpoch: 0, spType: -1, vsGen: 0, vsR: -1, vsA: -1, vsP1: -1, vsP2: -1 };
 let _simUnitState = null;
@@ -446,6 +476,9 @@ function _simUnitSlotStart(S, s, u) {
     // (Its object fields unset: their digest that of none.)
     _simUnitObjClear(S.columns, s);
     S.columns.hObj[s] = _simHDigest0();
+    S.columns.rtEnd[s] = -1; S.columns.nvProf[s] = 0; S.columns.nvPK[s] = -1; S.columns.wkIdle[s] = 0; S.columns.wsFail[s] = 0;
+    S.columns.hAcc[s] = 0; S.columns.hTouch[s] = 0; S.columns.hSty[s] = 0; S.columns.hBurnD[s] = 0; S.columns.hPoiD[s] = 0; S.columns.hWatchK[s] = 0;
+    S.columns.wTeam[s] = -1; S.columns.atkWatch[s] = 0;
     Object.defineProperties(u, { _us: { value: S.columns, writable: true }, _si: { value: s, writable: true }, _det: { value: null, writable: true },
         _path: { value: null, writable: true }, _ws: { value: undefined, writable: true }, _wnr: { value: undefined, writable: true }, _tb: { value: null, writable: true },
         _pfa: { value: u._pfa, writable: true }, _ppt: { value: u._ppt, writable: true } });
@@ -460,7 +493,7 @@ let _simDetValues = null;
 const _simUnitObjClear = new Function('C', 's', SIM_UNIT_OBJ_FIELDS.map(k => 'C.oc_' + k + '[s] = undefined;').join(' '));
 function _simDetValuesCtor() {
     const body = SIM_UNIT_ACCESSOR_COLUMNS.map(k => 'this.' + k + ' = C.' + k + '[s];').join(' ')
-        + ' ' + SIM_UNIT_OBJ_FIELDS.map(k => 'this.' + k + ' = C.oc_' + k + '[s];').join(' ')
+        + ' ' + SIM_UNIT_OBJ_FIELDS.map(k => 'this.' + k + ' = C.oc_' + k + '[s];').join(' ') + ' this._routeEnd = C.rtEnd[s]; this.watchedByTeam = C.wTeam[s];'
         + ' this.dead = C.dead[s] === 1; this._navLastD = C.mvNavLD[s]; this._floorTile = C.mvFloor[s]; this._sepMoved = C.sepMov[s];'
         + ' this._statsBehind = false; this._forcedTargetLastSeenX = null; this._forcedTargetLastSeenY = null;'
         + ' { const a = C.wkWx[s], b = C.wkWy[s], m = C.wkLmt[s]; this._builderLastWatchX = a === a ? a : undefined; this._builderLastWatchY = b === b ? b : undefined; this._builderLastMoveTick = m === -2147483648 ? undefined : m; }';
