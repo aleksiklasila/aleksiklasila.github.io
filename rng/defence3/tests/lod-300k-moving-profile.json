@@ -1,0 +1,112 @@
+{
+  "fixture": "300000-1000.json",
+  "setup": {
+    "units": 600000,
+    "structures": 60262,
+    "map": 1000,
+    "viewport": {
+      "width": 776,
+      "height": 669
+    },
+    "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 2060 (0x00001F15) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "graphics": {
+      "aa": "msaa",
+      "shadows": "high",
+      "ao": "low",
+      "outline": true,
+      "bloom": false,
+      "grade": true,
+      "sharpen": true,
+      "resolution": 1
+    }
+  },
+  "results": [
+    {
+      "mode": "3d",
+      "zoom": 3,
+      "pitch": 0.55,
+      "yaw": 0,
+      "motion": true,
+      "fps": 55.81838603178932,
+      "p95": 49.94000000000233,
+      "buildMs": 5.195609754663173,
+      "columnMs": 3.5055691086179843,
+      "renderCpuMs": 4.61345528441716,
+      "gpuMs": 10.408380903225805,
+      "timings": {
+        "getChunkRenderView": {
+          "calls": 123,
+          "mean": 1.3157723609024916,
+          "total": 161.84000039100647
+        },
+        "_unitDetailSplit": {
+          "calls": 123,
+          "mean": 0.7990243904958896,
+          "total": 98.28000003099442
+        },
+        "_structureDetailSplit": {
+          "calls": 123,
+          "mean": 0.25361788272857666,
+          "total": 31.19499957561493
+        },
+        "build3DOverlayData": {
+          "calls": 123,
+          "mean": 0.6545121994444995,
+          "total": 80.50500053167343
+        },
+        "drawMinimap": {
+          "calls": 123,
+          "mean": 1.2042276437689619,
+          "total": 148.1200001835823
+        },
+        "updateBottomBar": {
+          "calls": 123,
+          "mean": 0.33353658565660804,
+          "total": 41.02500003576279
+        },
+        "simRebaseNative": {
+          "calls": 13,
+          "mean": 22.80999999321424,
+          "total": 296.5299999117851
+        },
+        "_simClientRebaseFrame": {
+          "calls": 13,
+          "mean": 22.96192306280136,
+          "total": 298.5049998164177
+        },
+        "_simClientApplyWorld": {
+          "calls": 51,
+          "mean": 5.969411761152978,
+          "total": 304.4399998188019
+        }
+      },
+      "glError": 0,
+      "detail": 600,
+      "visibleDetail": 531,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 600,
+      "meshLods": {
+        "far": 459,
+        "medium": 113,
+        "full": 28
+      },
+      "units": 600000,
+      "moving": 534190,
+      "mediumModels": 955,
+      "nativeRebase": true,
+      "tps": 15,
+      "unitLayerStats": {
+        "reuse": 180,
+        "build": 134,
+        "why": {
+          "none": 1,
+          "tick": 82,
+          "units": 51
+        }
+      }
+    }
+  ],
+  "errors": []
+}

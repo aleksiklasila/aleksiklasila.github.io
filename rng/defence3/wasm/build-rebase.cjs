@@ -5,7 +5,7 @@ const out=path.join(__dirname,'target','presentation_rebase.wasm');
 fs.mkdirSync(path.dirname(out),{recursive:true});
 const rustc=path.join(os.homedir(),'.cargo','bin',process.platform==='win32'?'rustc.exe':'rustc');
 const result=cp.spawnSync(rustc,[path.join(__dirname,'src','rebase.rs'),'--crate-type=cdylib','--target=wasm32-unknown-unknown',
-    '-C','opt-level=3','-C','panic=abort','-C','strip=symbols','-C','link-arg=-zstack-size=65536',
+    '-C','opt-level=3','-C','target-feature=+simd128','-C','panic=abort','-C','strip=symbols','-C','link-arg=-zstack-size=65536',
     '-C','link-arg=--export=__heap_base','-o',out],{stdio:'inherit'});
 if(result.status!==0)process.exit(result.status||1);
 const bytes=fs.readFileSync(out);

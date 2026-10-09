@@ -48,7 +48,7 @@ let browser;
         window.__lodColumns=[];
         R.drawFrameColumns=function(...args){const t=performance.now(), result=drawColumns.apply(this,args);window.__lodColumns.push(performance.now()-t);return result;};
         window.__lodTimings={};window.__lodGpu=[];window.__lodRender=[];
-        for(const name of ['_simClientRebaseFrame','_simClientApplyWorld','drawMinimap','updateBottomBar','build3DOverlayData','getChunkRenderView','_unitDetailSplit','_structureDetailSplit']) {
+        for(const name of ['simRebaseNative','_simClientRebaseMovingFrame','_simClientRebaseFrame','_simClientApplyWorld','drawMinimap','updateBottomBar','build3DOverlayData','getChunkRenderView','_unitDetailSplit','_structureDetailSplit']) {
             const fn=window[name];if(typeof fn!=='function')continue;
             window[name]=function(...args){const t=performance.now(),result=fn.apply(this,args);(window.__lodTimings[name] ||= []).push(performance.now()-t);return result;};
         }
@@ -65,6 +65,14 @@ let browser;
         return {units:units.length,structures:_pageTables.s.n,map:GRID_W,viewport:{width:viewW,height:viewH},gpu:ext?gl.getParameter(ext.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER),graphics:graphicsOptions};
     });
     console.log('SETUP',JSON.stringify(setup));
+    if(process.env.LOD_ARMY_MOVE) {
+        console.log('MOVE',await page.evaluate(()=>simClientRequest('debugEval',{expr:`(() => {
+            const groups=new Map();for(const u of units)if(!u.dead){let ids=groups.get(u.owner);if(!ids)groups.set(u.owner,ids=[]);ids.push(u.id);}
+            for(const [owner,unitIds] of groups) processAction({action:'move',unitIds,targetX:GRID_W*TILE*.5,targetY:GRID_H*TILE*.5},owner);
+            return Array.from(groups,([owner,ids])=>({owner,count:ids.length}));
+        })()`})));
+        await page.waitForFunction(()=>{const F=simClientCurrentUnitVis();return F?.renderMovingCount>F.count*.5;},{},{timeout:180000});
+    }
     if(process.env.LOD_RETIRE) await page.evaluate(()=>simClientRequest('debugEval',{expr:`(() => { const tick=gameTick; self.gameTick=function(...args){const u=units[units.length-1];if(u)u.energy=0;return tick.apply(this,args);}; })()`}));
     const cases=[];
     for (const zoom of [.025,.6,1.5,3]) cases.push({mode:'2d',zoom,pitch:1.35,yaw:0});
@@ -122,7 +130,9 @@ let browser;
                 detail:slots.length,visibleDetail:visible,scale:!!s.scaleLayers,flat:!!s.flat2d,objects:s.objects.length,flatCount:s.flatBatch?.count,
                 modelCount:s.flat2d?0:R.unitLayerDraws?.reduce((n,d)=>n+d.count,0)||0,
                 meshLods:s.flat2d?null:R.unitLayerDraws?.reduce((n,d)=>{const level=d.kind?.endsWith(':lod2')?'far':d.kind?.endsWith(':lod')?'medium':'full';n[level]=(n[level]||0)+d.count;return n;},{}),
-                units:units.length,tps:_tpsDisplay,unitLayerStats:renderer3dUnitLayerStats};
+                units:units.length,moving:simClientCurrentUnitVis()?.renderMovingCount||0,mediumModels:R.columnModels?.count||0,
+                nativeRebase:typeof _simRebaseNative!=='undefined'&&!!_simRebaseNative,
+                tps:_tpsDisplay,unitLayerStats:renderer3dUnitLayerStats};
         },c);
         results.push({...c,...result});console.log(JSON.stringify(results[results.length-1]));
         if(result.glError) errors.push(`WebGL error ${result.glError} in ${JSON.stringify(c)}`);

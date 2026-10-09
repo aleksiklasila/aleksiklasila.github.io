@@ -120,7 +120,11 @@ function _bbCollectThings(owner) {
         if (!u || u.dead || u.owner !== owner) continue;
         add('unit', String(u.unitType || ''), _isInfoPanelUnitIdleLike(u));
     }
-    for (let e of _getOwnedInfoPanelBuildings(owner)) {
+    const buildings=typeof getFrameBuildingSummary==='function'?getFrameBuildingSummary(owner):null;
+    if(buildings)for(const [key,n] of buildings.stats){
+        const id='building:'+key;map.set(id,{id,kind:'building',key,isUnit:false,count:n.total,idle:n.idle});
+    }
+    else for (let e of _getOwnedInfoPanelBuildings(owner)) {
         add('building', String(getEntityStatsCalcType(e) || ''), _isInfoPanelBuildingIdleLike(e));
     }
     if (SHRINES_ENABLED && BASE_CARD_TYPES.shrine) add('building', 'shrine', false);

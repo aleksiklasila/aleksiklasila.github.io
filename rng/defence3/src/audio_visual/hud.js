@@ -978,20 +978,43 @@ function getFrameUnitSummary(owner) {
     if (!F) return null;
     const previous = _frameUnitSummaries.get(owner);
     if (previous && previous.frame === F) return previous.groups;
-    const counts = new Map(), groups = new Map();
+    const counts = new Uint32Array(_pageFrameStrings.length*2), groups = new Map(), idleCode=_pageFrameStrings.indexOf('IDLE');
     for (let i=0;i<F.count;i++) {
         const s=F.order[i]; if (F.owner[s]!==owner || F.energy[s]<=0) continue;
-        let n=counts.get(F.type[s]);
-        if (!n) counts.set(F.type[s],n=[0,0]);
-        n[0]++;
-        if ((F.flags[s]&8) || (F.wtype[s] ? _pageFrameStrings[F.wstate[s]]==='IDLE' : F.cmd[s]===CMD_IDLE)) n[1]++;
+        const k=F.type[s]*2;counts[k]++;
+        if ((F.flags[s]&8) || (F.wtype[s] ? F.wstate[s]===idleCode : F.cmd[s]===CMD_IDLE)) counts[k+1]++;
     }
-    for (const [type,n] of counts) {
+    for (let type=0;type<counts.length/2;type++) if(counts[type*2]) {
         const key=_pageFrameStrings[type] || 'other';
-        groups.set(key,{label:_prettyUnitTypeLabel(key),total:n[0],idle:n[1]});
+        groups.set(key,{label:_prettyUnitTypeLabel(key),total:counts[type*2],idle:counts[type*2+1]});
     }
     _frameUnitSummaries.set(owner,{frame:F,groups});
     return groups;
+}
+
+let _frameBuildingSummaries = new Map();
+function getFrameBuildingSummary(owner) {
+    const F=typeof _pageTables==='undefined'?null:_pageTables.s;
+    if(!F?.kind) return null;
+    const previous=_frameBuildingSummaries.get(owner);
+    if(previous?.frame===F&&previous.grid===grid&&previous.version===_tileEntityVersion)return previous.value;
+    const groups=new Map(),stats=new Map();let total=0,idle=0;
+    for(let s=0;s<F.n;s++) {
+        const kind=F.kind[s],flags=F.flags[s];
+        if(kind>3||!F.alive[s]||F.owner[s]!==owner||!(F.energy[s]>0||(flags&1)))continue;
+        if(kind===3) {
+            const cell=grid[F.gy[s]]?.[F.gx[s]];
+            if(!cell||cell.owner!==owner||cell.item!==_pageStructViews[s])continue;
+        }
+        const type=_pageFrameStrings[kind===1?F.utype[s]:F.type[s]]||'',statsKey=kind===1?'barrack_'+type:type;
+        const key=kind===1?'barrack:'+type:kind===0?'tower:'+type:type||'unknown';
+        let group=groups.get(key);
+        if(!group){group={label:getBuildingDisplayName(statsKey),total:0,idle:0};groups.set(key,group);}
+        let stat=stats.get(statsKey);if(!stat){stat={total:0,idle:0};stats.set(statsKey,stat);}
+        total++;group.total++;stat.total++;
+        if(!(flags&11)&&!F.qlen[s]&&!_pageStructViews[s]?.isResearching){idle++;group.idle++;stat.idle++;}
+    }
+    const value={groups,stats,total,idle};_frameBuildingSummaries.set(owner,{frame:F,grid,version:_tileEntityVersion,value});return value;
 }
 
 function _getInfoPanelBuildingTypeKey(e) {
@@ -1125,7 +1148,8 @@ function buildInfoPanelIdleWorkersHtml(owner) {
 
     const frameGroups = getFrameUnitSummary(owner);
     let ownedUnits = frameGroups ? {length:Array.from(frameGroups.values()).reduce((n,g)=>n+g.total,0)} : _getOwnedInfoPanelUnits(owner);
-    let ownedBuildings = _getOwnedInfoPanelBuildings(owner);
+    const frameBuildings=getFrameBuildingSummary(owner);
+    let ownedBuildings = frameBuildings?{length:frameBuildings.total}:_getOwnedInfoPanelBuildings(owner);
 
     let unitGroups = frameGroups || new Map();
     if (!frameGroups) for (let u of ownedUnits) {
@@ -1139,8 +1163,8 @@ function buildInfoPanelIdleWorkersHtml(owner) {
         if (_isInfoPanelUnitIdleLike(u)) entry.idle++;
     }
 
-    let buildingGroups = new Map();
-    for (let e of ownedBuildings) {
+    let buildingGroups = frameBuildings?frameBuildings.groups:new Map();
+    if(!frameBuildings) for (let e of ownedBuildings) {
         let key = _getInfoPanelBuildingTypeKey(e);
         let entry = buildingGroups.get(key);
         if (!entry) {
@@ -1152,7 +1176,7 @@ function buildInfoPanelIdleWorkersHtml(owner) {
     }
 
     let unitIdleTotal = frameGroups ? Array.from(frameGroups.values()).reduce((n,g)=>n+g.idle,0) : ownedUnits.filter(_isInfoPanelUnitIdleLike).length;
-    let buildingIdleTotal = ownedBuildings.filter(_isInfoPanelBuildingIdleLike).length;
+    let buildingIdleTotal = frameBuildings?frameBuildings.idle:ownedBuildings.filter(_isInfoPanelBuildingIdleLike).length;
 
     let unitHeaderControls = _buildInfoPanelRosterModeButtonHtml('units', 'total', 'all', 'All', 'Select all units', 28)
         + _buildInfoPanelRosterModeButtonHtml('units', 'total', 'idle', 'Idle', 'Select idle units', 35)

@@ -39,9 +39,9 @@ function serve() {
 async function browser(url) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'defence-frames-'));
     const port = 9800 + Math.floor(Math.random() * 150);
-    const proc = spawn(EDGE, [`--remote-debugging-port=${port}`, `--user-data-dir=${dir}`, '--no-first-run', '--no-default-browser-check',
+    const proc = spawn(EDGE, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${dir}`, '--no-first-run', '--no-default-browser-check',
         '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
-        '--window-size=1600,1000', '--disable-features=CalculateNativeWinOcclusion', 'about:blank'], { stdio: 'ignore' });
+        '--window-size=1600,1000', '--disable-features=CalculateNativeWinOcclusion', 'about:blank'], { stdio: 'ignore', windowsHide:true });
     let page;
     for (let i = 0; i < 100 && !page; i++) {
         try { page = (await (await fetch(`http://127.0.0.1:${port}/json`, {signal:AbortSignal.timeout(1000)})).json()).find(t => t.type === 'page'); } catch {}
@@ -103,6 +103,14 @@ const RECORD = `(async (ms) => {
         if (snap.unitLayer) {
             for (const o of this.unitLayerObjects || []) add(o);
             for (const rp of this.unitLayerRecordPicks || []) for (let i = 0; i < rp.units.length; i += 2) unitsDrawn.add(key(rp.units[i]));
+        }
+        // The bounded layers hand their other entities to the GPU column
+        // pass (including its instanced middle models). Track that ownership
+        // as well; a LOD promotion is not an entity disappearing.
+        const columns=snap.columnLayers;
+        if(columns) {
+            if(columns.units)for(const entity of columns.unitSources||[])if(entity&&!entity.dead)unitsDrawn.add(key(entity));
+            if(columns.structures)for(const entity of columns.structureSources||[])if(entity&&!entity.dead)structures.add(key(entity));
         }
         // Drawn positions of the first moving units (records and alpha).
         const vis = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;

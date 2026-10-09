@@ -1809,9 +1809,8 @@ function _unit3DWalkPhaseLinear(u, activity, out) {
         else { out[0] = Math.max(0, b) * Math.PI; out[1] = Math.PI / 8; }
         return out;
     }
-    let speed = activity.mode === 2 ? 8 : activity.mode === 4 ? 14 : activity.mode === 7 ? 2 : 10;
-    out[0] = gameTime / TICK_RATE * speed + (Number(u.id) || 0) * 2.399;
-    out[1] = speed / TICK_RATE;
+    out[0] = ((Number(u.id) || 0) * 2.399) % (Math.PI * 2);
+    out[1] = 0; // Continuous cyclic motion is evaluated on the GPU.
     return out;
 }
 const _unitLayerPhase = [0, 0];
@@ -1969,7 +1968,7 @@ function _refreshUnit3DObject(u, o, cached) {
 function _unit3DWalkPhase(u, activity) {
     return activity.mode === 1
         ? Math.max(0, Math.min(1, (8 - Number(u.attackFlash || 0) + (u._historyGhost ? 0 : tickAlpha)) / 8)) * Math.PI
-        : ((u._historyGhost ? u._historyTick : gameTime + tickAlpha)) / TICK_RATE * (activity.mode === 2 ? 8 : activity.mode === 4 ? 14 : activity.mode === 7 ? 2 : 10) + (Number(u.id) || 0) * 2.399;
+        : ((Number(u.id) || 0) * 2.399) % (Math.PI * 2);
 }
 
 // Lighting of an object at its current position, exactly as
@@ -2149,7 +2148,7 @@ function getChunkRenderView(view, bounds, flat2d) {
     const F = view.units === units && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
     if (F && view.units.length >= 5000) {
         const detailCull = typeof flat2d === 'boolean';
-        const key = gameTime + '|' + x0 + '|' + y0 + '|' + x1 + '|' + y1 + '|' + view.units.length + (detailCull ? '|' + _detailViewKey(flat2d) : '');
+        const key = gameTime + '|' + view.units.length + '|' + (detailCull ? _detailViewKey(flat2d) : [x0,y0,x1,y1].join('|'));
         let U = rendererChunkCache.liveUnits;
         if (!U || U.key !== key || U.frame !== F || U.list !== view.units) {
             const list = view.units, ord = F.order, X = F.x, Y = F.y, PX = F.px, PY = F.py, n = Math.min(F.count, list.length);
@@ -2170,13 +2169,13 @@ function getChunkRenderView(view, bounds, flat2d) {
                     const x = (b % B.columns + .5) * 16, z = (Math.floor(b / B.columns) + .5) * 16;
                     const radius = 10 + Math.max(B.motion[b], motionPad);
                     const w = M[3] * x + M[11] * z + M[15], dw = radius * (Math.abs(M[3]) + Math.abs(M[11]));
-                    if (w + dw <= 0 || .9 * projectionScale / (flat2d ? 1 : Math.max(.01, w - dw)) < UNIT_DETAIL_MIN_PX * .85) continue;
+                    if (w + dw <= 0 || .9 * projectionScale / (flat2d ? 1 : Math.max(.01, w - dw)) < (flat2d ? UNIT_DETAIL_MIN_PX : 8) * .85) continue;
                     const cx = M[0] * x + M[8] * z + M[12], cy = M[1] * x + M[9] * z + M[13];
                     if (Math.abs(cx) > sx * w + radius * (Math.abs(M[0]) + Math.abs(M[8])) + sx * dw
                         || Math.abs(cy) > sy * w + radius * (Math.abs(M[1]) + Math.abs(M[9])) + sy * dw) continue;
                     for (let k = B.head[b]; k >= 0; k = B.next[k]) candidates.push(k);
                 }
-                candidates.sort((a, b) => a - b);
+                if (flat2d) candidates.sort((a, b) => a - b); // 3D uses depth, not painter order.
             }
             const count = candidates ? candidates.length : n;
             for (let i = 0; i < count; i++) {
@@ -2192,7 +2191,7 @@ function getChunkRenderView(view, bounds, flat2d) {
                     const w = M[3] * wx + M[11] * wz + M[15];
                     if (w + radius <= 0) continue;
                     const size = Math.max(.28, Math.min(.9, F.r[s] * 2.2 / TILE));
-                    if (size * projectionScale / (flat2d ? 1 : Math.max(.01, w - radius)) < UNIT_DETAIL_MIN_PX * .85) continue;
+                    if (size * projectionScale / (flat2d ? 1 : Math.max(.01, w - radius)) < (flat2d ? UNIT_DETAIL_MIN_PX : 8) * .85) continue;
                     const cx = M[0] * wx + M[8] * wz + M[12], cy = M[1] * wx + M[9] * wz + M[13];
                     const margin = radius * (Math.abs(M[0]) + Math.abs(M[8]) + Math.abs(M[1]) + Math.abs(M[9]) + 1);
                     if (Math.abs(cx) > w * sx + margin || Math.abs(cy) > w * sy + margin) continue;
@@ -3509,19 +3508,23 @@ function getColumnLodCatalog() {
     const width = 2 ** Math.ceil(Math.log2(Math.max(1, (types.at(-1)?.[0] || 0) + 1))), styles = [];
     const lookup = new Float32Array(width * 8 * 4);
     function add(row, code, style) {
-        lookup[(row * width + code) * 4] = styles.length * 9 + 1;
+        const at=(row*width+code)*4;
+        lookup[at] = styles.length * 9 + 1;
+        lookup[at+1] = style.isFlying || style.mounted || style.modelKey.startsWith('tower_cloud') ? 1 : 0;
+        lookup[at+2] = style.mounted ? 1 : 0;
+        lookup[at+3] = style.isFlying ? (style.isWorker?.36:.30) : 0;
         styles.push(style);
     }
     for (const [code, type] of types) {
         const unit = BASE_UNIT_STATS[type], card = BASE_CARD_TYPES[type];
         if (unit) {
             const scale = type === 'fast' ? 1.35 : type === 'scout' ? 1.2 : type === 'flying' ? 1.3 : unit.isFlying ? .8 : 1;
-            add(7, code, {modelKey:'unit_'+type, type, unit:true, isFlying:!!unit.isFlying, isWorker:!!unit.isWorker,
+            add(7, code, {modelKey:'unit_'+type, type, unit:true, isFlying:!!unit.isFlying, isWorker:!!unit.isWorker, mounted:MOUNTED_UNIT_TYPES.has(type),
                 weaponType:getUnit3DWeaponType({unitType:type,attackStyle:unit.attackStyle}),
                 color:UNIT_3D_BODY_COLORS[type] || unit.color, scaleX:scale, scaleY:scale*(MOUNTED_UNIT_TYPES.has(type)?MOUNT_HEIGHT_RATIO:1.45),
                 draw(g) { drawUnitBodyGeometry(g,{...unit,unitType:type,x:32,y:32,r:22,isSnake:type==='snake',carryingValue:0},'#151923',2); }
             });
-            add(1, code, {modelKey:'barrack_'+type, type, color:unit.color, scaleX:1, scaleY:.62/.94,
+            add(1, code, {modelKey:'barrack_'+type, type, color:unit.color, scaleX:.98/.94, scaleY:.62/.94,
                 draw(g) { g.fillStyle='#543';g.fillRect(5,5,54,54);drawUnitBodyGeometry(g,{...unit,unitType:type,x:32,y:32,r:18,isSnake:type==='snake'},'#111',2); }
             });
         }
@@ -3530,7 +3533,7 @@ function getColumnLodCatalog() {
             const floor = card.target === 'floor';
             const row = spawner ? 2 : floor ? 3 : 0;
             add(row,code,{modelKey:(spawner?'spawner_':floor?'item_':'tower_')+type,type,color:card.color||'#aaa',
-                scaleX:1,scaleY:spawner?.62/.94:floor?.7:1.05/.94,
+                scaleX:(spawner?.95:floor?.84:type.startsWith('cloud')?.96:.82)/.94,scaleY:spawner?.62/.94:floor?.7:1.05/.94,
                 draw(g) {
                     if(spawner) {g.fillStyle='#543';g.fillRect(5,5,54,54);drawWorkerBuildingEmblem(g,32,32,1.8,type);}
                     else {const sprite=floor?_getFloorItemSprite({type,energy:100,maxEnergy:100}):_getTowerIconSprite(card.color||'#aaa',0,type,true);if(sprite)g.drawImage(sprite,4,4,56,56);}
@@ -3566,9 +3569,14 @@ function _detailColumns(unitDetail, structDetail) {
 // CSS pixels keep LOD independent of render resolution / device pixel ratio.
 function _detailViewKey(flat2d) {
     const R = renderer3dInstance;
+    // Cache selection within the conservative viewport/chunk margins. The
+    // camera matrices, positions and GPU animation still update every frame;
+    // only model membership waits for a meaningful camera change.
+    if(!flat2d) return [false,Math.round(camera.x*camera.zoom/24),Math.round(camera.y*camera.zoom/24),
+        Math.round(Math.log(camera.zoom)/.035),Math.round(R.orbitPitch/.025),Math.round(R.orbitYaw/.025),R.cssWidth,R.cssHeight].join('|');
     return [flat2d, camera.x, camera.y, camera.zoom, R.orbitPitch, R.orbitYaw, R.cssWidth, R.cssHeight].join('|');
 }
-function _detailScore(x, z, size, flat2d, retained = false) {
+function _detailScore(x, z, size, flat2d, retained = false, minPixels = UNIT_DETAIL_MIN_PX) {
     const R = renderer3dInstance, M = R.tmpViewProjection;
     const w = M[3] * x + M[7] * .02 + M[11] * z + M[15];
     if (!(w > 0)) return 0;
@@ -3580,7 +3588,7 @@ function _detailScore(x, z, size, flat2d, retained = false) {
     const sx = viewW / R.cssWidth, sy = viewH / R.cssHeight;
     const margin = scale * 2 / R.cssHeight; // Bodies overlapping a screen edge.
     if (nz < -1 || nz > 1 || Math.abs(nx) > sx + margin || Math.abs(ny) > sy + margin) return 0;
-    if (pixels < UNIT_DETAIL_MIN_PX * (retained ? .85 : 1)) return 0;
+    if (pixels < minPixels * (retained ? .85 : 1)) return 0;
     // Once a body is clearly readable, huge units must not permanently
     // exclude smaller neighbours. Prefer the view centre for equal sizes.
     const score = Math.min(pixels, 48) + (retained ? 2 : 0) + .1 / (1 + nx * nx + ny * ny);
@@ -3610,17 +3618,9 @@ function _detailPick(scores, budget) {
     return heap.sort((a, b) => a - b); // Preserve painter order.
 }
 const STRUCT_DETAIL_BUDGET = 600;
-// Fade across both the readable-size boundary and the edge of the model
-// budget. A hard top-N cutoff otherwise draws a conspicuous line in an army.
+// Solid geometry owns its pixels; translucent LODs expose units behind it.
 function _detailWeights(scores, picked, budget) {
-    const ranked = picked.slice().sort((a,b)=>scores[b]-scores[a] || a-b), weights = new Map();
-    const smooth = x => {x=Math.max(0,Math.min(1,x));return x*x*(3-2*x);};
-    for (let rank=0;rank<ranked.length;rank++) {
-        const i=ranked[rank], size=smooth((scores[i]-UNIT_DETAIL_MIN_PX)/16);
-        const edge=ranked.length===budget?smooth((budget-rank)/(budget*.3)):1;
-        weights.set(i,Math.max(1,Math.round(255*size*edge)));
-    }
-    return weights;
+    return new Map(picked.map(i => [i,255]));
 }
 let _structDetailMode = false;
 let _structDetailPx = new Float32Array(0);
@@ -3654,7 +3654,7 @@ function _structureDetailCandidates(F, flat2d) {
         if (C.head[b] < 0) continue;
         const x = (b % columns + .5) * 16, z = (Math.floor(b / columns) + .5) * 16;
         const w = M[3]*x + M[7]*.02 + M[11]*z + M[15];
-        if (w + dw <= 0 || .94 * projectionScale / (flat2d ? 1 : Math.max(.01,w-dw)) < UNIT_DETAIL_MIN_PX * .85) continue;
+        if (w + dw <= 0 || .94 * projectionScale / (flat2d ? 1 : Math.max(.01,w-dw)) < (flat2d ? UNIT_DETAIL_MIN_PX : 8) * .85) continue;
         const cx = M[0]*x + M[4]*.02 + M[8]*z + M[12], cy = M[1]*x + M[5]*.02 + M[9]*z + M[13];
         if (Math.abs(cx) > sx*(w+dw)+dx || Math.abs(cy) > sy*(w+dw)+dy) continue;
         for (let s = C.head[b]; s >= 0; s = C.next[s]) slots.push(s);
@@ -3813,7 +3813,7 @@ function _unitDetailSplit(viewUnits, flat2d, bounds) {
     // Preserve the list identity when the selection is unchanged, so the
     // persistent model layer can be reused between simulation ticks.
     if (_detailUnits.length !== detailed.length || detailed.some((u, i) => u !== _detailUnits[i])) _detailUnits = detailed;
-    const value = { units: _detailUnits, columns: { units: F, structures: null, unitSources: _isLiveUnitList(null, true), alpha: a, detailPx: 0,
+    const value = { units: _detailUnits, columns: { units: F, structures: null, unitSources: _isLiveUnitList(null, true), unitCandidates: viewUnits, alpha: a, detailPx: 0,
         detailMask: M8, detailMaskVersion: _detailMaskVersion,
         visibility: visibilityGridForColumns(), visibilityVersion, fullVisibility, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
         colors: Array.from({ length: 9 }, (_, i) => get3DRenderOwnerColor(i - 1)) } };

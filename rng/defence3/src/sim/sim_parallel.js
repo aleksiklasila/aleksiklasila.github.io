@@ -707,8 +707,7 @@ SIM_KERNELS[SIM_KERNEL_UNIT_FRAME] = function (R, P, chunk) {
             F.phase[s] = b >= 1 ? Math.PI : b <= -1 / 8 ? 0 : Math.max(0, b) * Math.PI;
             F.prate[s] = b >= 1 || b <= -1 / 8 ? 0 : Math.PI / 8;
         } else {
-            const speed = mode === 2 ? 8 : mode === 4 ? 14 : mode === 7 ? 2 : 10;
-            F.phase[s] = time / rate * speed + (ID[u] || 0) * 2.399; F.prate[s] = speed / rate;
+            F.phase[s] = ((ID[u] || 0) * 2.399) % (Math.PI * 2); F.prate[s] = 0;
         }
     }
 };

@@ -149,8 +149,13 @@ function fillUnits(F,C,meta,n,player,areaUnit,phase0,prate) {
             FA[s]=f;FI[s]=id;D[s]=f;
         }
     }
-    {const D=F.phase,I=F.id;for(let s=0;s<n;s++) D[s]=phase0+I[s]*2.399;}
-    F.prate.fill(prate,0,n);F.sig.fill(0,0,n);
+    {const D=F.phase,I=F.id,R=F.prate,FL=F.flash;
+        for(let s=0;s<n;s++) {
+            D[s]=FL[s]>0?Math.max(0,(8-FL[s])/8)*Math.PI:(I[s]*2.399)%TAU;
+            R[s]=FL[s]>0?Math.PI/8:0;
+        }
+    }
+    F.sig.fill(0,0,n);
     // The simulation may recycle a slot during the scan: dropped rather than
     // shown with the old unit's metadata at the new one's place.
     for (let k=0;k<count;k++) {
