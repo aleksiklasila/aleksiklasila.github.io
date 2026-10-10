@@ -13,13 +13,20 @@ const c = vm.createContext({
 vm.runInContext(source.slice(source.indexOf('let _columnLodCatalog = null;'), source.indexOf('// Shared sprites for every unit/structure')), c);
 const first = c.getColumnLodCatalog();
 const mineSprites={gold:{type:'gold-square'},astar:{type:'astar-gray-square'}};
-c._getGoldMineTileSprite=()=>mineSprites.gold;c._getAstarMineTileSprite=()=>mineSprites.astar;
+const mineStates=[];
+c._getGoldMineTileSprite=active=>{mineStates.push(active);return mineSprites.gold;};
+c._getAstarMineTileSprite=active=>{mineStates.push(active);return mineSprites.astar;};
 for(const type of ['gold','astar']) {
     const style=first.styles.find(s=>s.modelKey===type+'_mine_active');
     const calls=[];style.draw({drawImage:(...args)=>calls.push(args)});
     assert.equal(calls[0][0],mineSprites[type],'far mines reuse their real square tile sprite');
     assert.equal(style.neutral,true,'resource tiles do not acquire a player-colored rim');
     assert.equal(style.scaleX,.9/.94);assert.equal(style.scaleY,.35/.94);
+    assert.equal(mineStates.at(-1),true);
+    const empty=first.styles.find(s=>s.modelKey===type+'_mine_empty');
+    empty.draw({drawImage(){}});assert.equal(mineStates.at(-1),false,'depleted mines retain their real tile state');
+    const row=type==='gold'?4:5;
+    assert.notEqual(first.lookup[row*first.width*4],first.lookup[(row*first.width+1)*4]);
 }
 assert.equal(first.styles.length, 7);
 assert.equal(first.lookup[(7 * first.width + 1) * 4], 1);

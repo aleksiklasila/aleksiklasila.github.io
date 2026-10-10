@@ -24,7 +24,10 @@ let browser;
     const fixture = process.argv[2] || '200000-1000.json', tag = process.env.LOD_TAG || 'current';
     await page.evaluate(async ({fixture,million,population,mapSize}) => {
         const data=await (await fetch('tests/' + fixture)).json();
-        if(mapSize)data.lobby.selects['cfg-mapsize']=String(mapSize);
+        if(mapSize) {
+            data.lobby.selects['cfg-mapsize']=String(mapSize);
+            data.editableConfig.config.GRID_W=data.editableConfig.config.GRID_H=mapSize;
+        }
         if (million || population) {
             const groups=Object.entries(data.startingResources.spawnCounts).filter(([k])=>k.startsWith('unit:')).map(([,v])=>v);
             const total=groups.reduce((n,g)=>n+Object.values(g).reduce((a,b)=>a+b,0),0);let count=0;
