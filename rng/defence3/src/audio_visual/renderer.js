@@ -3509,7 +3509,7 @@ function getColumnLodCatalog() {
     }
     const key = types.map(([code,type]) => code + ':' + type).join('|');
     if (_columnLodCatalog?.key === key) return _columnLodCatalog;
-    const width = 2 ** Math.ceil(Math.log2(Math.max(1, (types.at(-1)?.[0] || 0) + 1))), styles = [];
+    const width = 2 ** Math.ceil(Math.log2(Math.max(2, (types.at(-1)?.[0] || 0) + 1))), styles = [];
     const lookup = new Float32Array(width * 8 * 4);
     function add(row, code, style) {
         const at=(row*width+code)*4;
@@ -3546,10 +3546,12 @@ function getColumnLodCatalog() {
         }
     }
     for (const [row,type,color] of [[4,'gold','#f0c83a'],[5,'astar','#d8d8e8']]) {
-        const base=styles.length*9+1;
-        styles.push({modelKey:type+'_mine_active',type,color,neutral:true,scaleX:.9/.94,scaleY:.35/.94,
-            draw(g){g.drawImage(type==='astar'?_getAstarMineTileSprite(true):_getGoldMineTileSprite(true),0,0,64,64);}});
-        for(let code=0;code<width;code++)lookup[(row*width+code)*4]=base;
+        for(const active of [true,false]) {
+            const code=active?0:1;
+            lookup[(row*width+code)*4]=styles.length*9+1;
+            styles.push({modelKey:type+'_mine_'+(active?'active':'empty'),type,color,neutral:true,scaleX:.9/.94,scaleY:.35/.94,
+                draw(g){g.drawImage(type==='astar'?_getAstarMineTileSprite(active):_getGoldMineTileSprite(active),0,0,64,64);}});
+        }
     }
     return _columnLodCatalog = {key,width,styles,lookup};
 }
@@ -3582,7 +3584,7 @@ function _structureRenderFrame(view) {
     for(const [name,kind] of [['towers',0],['barracks',1],['collectorSpawners',2],['goldMines',4],['astarMines',5]])
         for(const e of view[name]) add(e,kind);
     for(const record of h.memories.floorItems.values()) add(record.snapshot||record.source,3);
-    const n=sources.length,F={n,cap:n,sources,history:true};
+    const n=sources.length,F={n,cap:n,sources,sourceIndex:new Map(sources.map((e,s)=>[e,s])),history:true};
     for(const field of ['x','y','gx','gy','kind','alive','energy','owner','flags','type','utype','vision','angle','amount']) F[field]=new Float32Array(n);
     const codes=new Map(_pageFrameStrings.map((s,i)=>[s,i]));
     for(let s=0;s<n;s++) {
@@ -6387,6 +6389,7 @@ function clearRendererTransientVisualCaches(options = null) {
         rendererScaleCache = null;
     }
     rendererChunkCache = null;
+    _historyStructureFrame = null;
     rendererScaleActive = false;
     let preserveTextSprites = !!(options && options.preserveTextSprites);
     if (!preserveTextSprites) {

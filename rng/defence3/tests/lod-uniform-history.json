@@ -1,0 +1,1134 @@
+{
+  "fixture": "oneofall.json",
+  "setup": {
+    "units": 40,
+    "structures": 478,
+    "map": 60,
+    "viewport": {
+      "width": 776,
+      "height": 669
+    },
+    "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 2060 (0x00001F15) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "graphics": {
+      "aa": "msaa",
+      "shadows": "high",
+      "ao": "low",
+      "outline": true,
+      "bloom": false,
+      "grade": true,
+      "sharpen": true,
+      "resolution": 1
+    }
+  },
+  "results": [
+    {
+      "mode": "2d",
+      "zoom": 0.15,
+      "pitch": 1.35,
+      "yaw": 0,
+      "fps": 120.40583582278943,
+      "p95": 8.479999999999563,
+      "buildMs": 0.251849053940683,
+      "columnMs": 0.1007924570227569,
+      "renderCpuMs": 0.2901698112487793,
+      "gpuMs": 0.17173779104477618,
+      "timings": {
+        "getChunkRenderView": {
+          "calls": 265,
+          "mean": 0.007622641887304918,
+          "total": 2.0200001001358032
+        },
+        "_unitDetailSplit": {
+          "calls": 265,
+          "mean": 0.02630188510103046,
+          "total": 6.969999551773071
+        },
+        "_structureDetailSplit": {
+          "calls": 265,
+          "mean": 0.014716982391645324,
+          "total": 3.9000003337860107
+        },
+        "build3DOverlayData": {
+          "calls": 265,
+          "mean": 0.02183018720374917,
+          "total": 5.78499960899353
+        },
+        "drawMinimap": {
+          "calls": 265,
+          "mean": 0.13694339743200337,
+          "total": 36.290000319480896
+        },
+        "updateBottomBar": {
+          "calls": 265,
+          "mean": 0.010886791517149727,
+          "total": 2.8849997520446777
+        },
+        "_simClientApplyWorld": {
+          "calls": 86,
+          "mean": 0.06976743077122888,
+          "total": 5.999999046325684
+        },
+        "_simClientRebaseFrame": {
+          "calls": 29,
+          "mean": 0.0048275898242818895,
+          "total": 0.1400001049041748
+        }
+      },
+      "glError": 0,
+      "atlas": {
+        "styles": 76,
+        "next": 684,
+        "revision": 392,
+        "ready": 684,
+        "structureTypes": [
+          34,
+          36,
+          20,
+          16,
+          18,
+          37,
+          22,
+          38
+        ]
+      },
+      "detail": 0,
+      "visibleDetail": 0,
+      "scale": false,
+      "flat": true,
+      "objects": 0,
+      "flatCount": 0,
+      "modelCount": 0,
+      "meshLods": null,
+      "units": 40,
+      "moving": 0,
+      "mediumModels": 18,
+      "nativeRebase": true,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 0,
+        "build": 1,
+        "why": {
+          "none": 1
+        }
+      }
+    },
+    {
+      "mode": "2d",
+      "zoom": 0.3,
+      "pitch": 1.35,
+      "yaw": 0,
+      "fps": 120.4227976252975,
+      "p95": 8.494999999998981,
+      "buildMs": 0.1836226427330161,
+      "columnMs": 0.09909434183588568,
+      "renderCpuMs": 0.25384905698164456,
+      "gpuMs": 0.9098807272727273,
+      "timings": {
+        "getChunkRenderView": {
+          "calls": 265,
+          "mean": 0.00709434005449403,
+          "total": 1.880000114440918
+        },
+        "_unitDetailSplit": {
+          "calls": 265,
+          "mean": 0.016716980484296692,
+          "total": 4.429999828338623
+        },
+        "_structureDetailSplit": {
+          "calls": 265,
+          "mean": 0.01607547031258637,
+          "total": 4.259999632835388
+        },
+        "build3DOverlayData": {
+          "calls": 265,
+          "mean": 0.022471699174844994,
+          "total": 5.955000281333923
+        },
+        "drawMinimap": {
+          "calls": 265,
+          "mean": 0.08566038068735375,
+          "total": 22.700000882148743
+        },
+        "updateBottomBar": {
+          "calls": 265,
+          "mean": 0.011094342087799648,
+          "total": 2.9400006532669067
+        },
+        "_simClientApplyWorld": {
+          "calls": 86,
+          "mean": 0.06087208903113077,
+          "total": 5.234999656677246
+        },
+        "_simClientRebaseFrame": {
+          "calls": 32,
+          "mean": 0.004531249403953552,
+          "total": 0.14499998092651367
+        }
+      },
+      "glError": 0,
+      "atlas": {
+        "styles": 76,
+        "next": 684,
+        "revision": 392,
+        "ready": 684,
+        "structureTypes": [
+          34,
+          36,
+          20,
+          16,
+          18,
+          37,
+          22,
+          38
+        ]
+      },
+      "detail": 0,
+      "visibleDetail": 0,
+      "scale": false,
+      "flat": true,
+      "objects": 0,
+      "flatCount": 0,
+      "modelCount": 0,
+      "meshLods": null,
+      "units": 40,
+      "moving": 0,
+      "mediumModels": 18,
+      "nativeRebase": true,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 0,
+        "build": 1,
+        "why": {
+          "none": 1
+        }
+      }
+    },
+    {
+      "mode": "2d",
+      "zoom": 0.6,
+      "pitch": 1.35,
+      "yaw": 0,
+      "fps": 120.57832264621834,
+      "p95": 8.470000000001164,
+      "buildMs": 0.21225564013746448,
+      "columnMs": 0.09441729192446946,
+      "renderCpuMs": 0.23453007067056528,
+      "gpuMs": 0.737590447761194,
+      "timings": {
+        "getChunkRenderView": {
+          "calls": 266,
+          "mean": 0.011879698674481614,
+          "total": 3.1599998474121094
+        },
+        "_unitDetailSplit": {
+          "calls": 266,
+          "mean": 0.016766917436642756,
+          "total": 4.460000038146973
+        },
+        "_structureDetailSplit": {
+          "calls": 266,
+          "mean": 0.016917296370169276,
+          "total": 4.500000834465027
+        },
+        "build3DOverlayData": {
+          "calls": 266,
+          "mean": 0.022575184814912035,
+          "total": 6.004999160766602
+        },
+        "drawMinimap": {
+          "calls": 266,
+          "mean": 0.0750375981617691,
+          "total": 19.96000111103058
+        },
+        "updateBottomBar": {
+          "calls": 266,
+          "mean": 0.008796991710376022,
+          "total": 2.339999794960022
+        },
+        "_simClientApplyWorld": {
+          "calls": 88,
+          "mean": 0.06107954680919647,
+          "total": 5.3750001192092896
+        },
+        "_simClientRebaseFrame": {
+          "calls": 28,
+          "mean": 0.003928567681993757,
+          "total": 0.1099998950958252
+        }
+      },
+      "glError": 0,
+      "atlas": {
+        "styles": 76,
+        "next": 684,
+        "revision": 392,
+        "ready": 684,
+        "structureTypes": [
+          34,
+          36,
+          20,
+          16,
+          18,
+          37,
+          22,
+          38
+        ]
+      },
+      "detail": 0,
+      "visibleDetail": 0,
+      "scale": false,
+      "flat": true,
+      "objects": 0,
+      "flatCount": 0,
+      "modelCount": 0,
+      "meshLods": null,
+      "units": 39,
+      "moving": 0,
+      "mediumModels": 18,
+      "nativeRebase": true,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 0,
+        "build": 1,
+        "why": {
+          "none": 1
+        }
+      }
+    },
+    {
+      "mode": "2d",
+      "zoom": 1,
+      "pitch": 1.35,
+      "yaw": 0,
+      "fps": 120.53706968195812,
+      "p95": 8.459999999999127,
+      "buildMs": 0.585808267270712,
+      "columnMs": 0.11112782067822334,
+      "renderCpuMs": 0.30270676953451975,
+      "gpuMs": 1.4500615757575759,
+      "timings": {
+        "getChunkRenderView": {
+          "calls": 266,
+          "mean": 0.007537592174415302,
+          "total": 2.00499951839447
+        },
+        "_unitDetailSplit": {
+          "calls": 266,
+          "mean": 0.014830830401944039,
+          "total": 3.9450008869171143
+        },
+        "_structureDetailSplit": {
+          "calls": 266,
+          "mean": 0.033289474204070586,
+          "total": 8.855000138282776
+        },
+        "build3DOverlayData": {
+          "calls": 266,
+          "mean": 0.02546992472239903,
+          "total": 6.774999976158142
+        },
+        "drawMinimap": {
+          "calls": 266,
+          "mean": 0.08246240893700965,
+          "total": 21.935000777244568
+        },
+        "updateBottomBar": {
+          "calls": 266,
+          "mean": 0.011240602435922264,
+          "total": 2.9900002479553223
+        },
+        "_simClientApplyWorld": {
+          "calls": 88,
+          "mean": 0.07102274352853949,
+          "total": 6.250001430511475
+        },
+        "_simClientRebaseFrame": {
+          "calls": 28,
+          "mean": 0.005178570747375488,
+          "total": 0.14499998092651367
+        }
+      },
+      "glError": 0,
+      "atlas": {
+        "styles": 76,
+        "next": 684,
+        "revision": 392,
+        "ready": 684,
+        "structureTypes": [
+          34,
+          36,
+          20,
+          16,
+          18,
+          37,
+          22,
+          38
+        ]
+      },
+      "detail": 2,
+      "visibleDetail": 2,
+      "scale": false,
+      "flat": true,
+      "objects": 155,
+      "flatCount": 157,
+      "modelCount": 0,
+      "meshLods": null,
+      "units": 39,
+      "moving": 0,
+      "mediumModels": 18,
+      "nativeRebase": true,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 0,
+        "build": 1,
+        "why": {
+          "none": 1
+        }
+      }
+    },
+    {
+      "mode": "2d",
+      "zoom": 1.5,
+      "pitch": 1.35,
+      "yaw": 0,
+      "fps": 120.40036529094749,
+      "p95": 8.440000000002328,
+      "buildMs": 0.5120754678294344,
+      "columnMs": 0.10556603062827632,
+      "renderCpuMs": 0.29237736036192696,
+      "gpuMs": 1.2826474029850743,
+      "timings": {
+        "getChunkRenderView": {
+          "calls": 265,
+          "mean": 0.007603772631231344,
+          "total": 2.014999747276306
+        },
+        "_unitDetailSplit": {
+          "calls": 265,
+          "mean": 0.0186603789059621,
+          "total": 4.945000410079956
+        },
+        "_structureDetailSplit": {
+          "calls": 265,
+          "mean": 0.02560377615802693,
+          "total": 6.785000681877136
+        },
+        "build3DOverlayData": {
+          "calls": 265,
+          "mean": 0.025094336383747605,
+          "total": 6.649999141693115
+        },
+        "drawMinimap": {
+          "calls": 265,
+          "mean": 0.0796981136753874,
+          "total": 21.12000012397766
+        },
+        "updateBottomBar": {
+          "calls": 265,
+          "mean": 0.010358491483724343,
+          "total": 2.7450002431869507
+        },
+        "_simClientApplyWorld": {
+          "calls": 88,
+          "mean": 0.058863642540845,
+          "total": 5.18000054359436
+        },
+        "_simClientRebaseFrame": {
+          "calls": 30,
+          "mean": 0.0039999961853027345,
+          "total": 0.11999988555908203
+        }
+      },
+      "glError": 0,
+      "atlas": {
+        "styles": 76,
+        "next": 684,
+        "revision": 392,
+        "ready": 684,
+        "structureTypes": [
+          34,
+          36,
+          20,
+          16,
+          18,
+          37,
+          22,
+          38
+        ]
+      },
+      "detail": 10,
+      "visibleDetail": 10,
+      "scale": false,
+      "flat": true,
+      "objects": 89,
+      "flatCount": 99,
+      "modelCount": 0,
+      "meshLods": null,
+      "units": 39,
+      "moving": 0,
+      "mediumModels": 18,
+      "nativeRebase": true,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 0,
+        "build": 1,
+        "why": {
+          "none": 1
+        }
+      }
+    },
+    {
+      "mode": "2d",
+      "zoom": 3,
+      "pitch": 1.35,
+      "yaw": 0,
+      "fps": 120.5332463298092,
+      "p95": 8.445000000006985,
+      "buildMs": 0.45272556417866755,
+      "columnMs": 0.11392857571293537,
+      "renderCpuMs": 0.3375563894895683,
+      "gpuMs": 0.27001406060606065,
+      "timings": {
+        "getChunkRenderView": {
+          "calls": 266,
+          "mean": 0.007537592622570526,
+          "total": 2.0049996376037598
+        },
+        "_unitDetailSplit": {
+          "calls": 266,
+          "mean": 0.014981203509452647,
+          "total": 3.9850001335144043
+        },
+        "_structureDetailSplit": {
+          "calls": 266,
+          "mean": 0.01855263091567764,
+          "total": 4.9349998235702515
+        },
+        "build3DOverlayData": {
+          "calls": 266,
+          "mean": 0.02748119696638638,
+          "total": 7.309998393058777
+        },
+        "drawMinimap": {
+          "calls": 266,
+          "mean": 0.09468045539425728,
+          "total": 25.185001134872437
+        },
+        "updateBottomBar": {
+          "calls": 266,
+          "mean": 0.011334584171610667,
+          "total": 3.0149993896484375
+        },
+        "_simClientApplyWorld": {
+          "calls": 88,
+          "mean": 0.07124999842860481,
+          "total": 6.269999861717224
+        },
+        "_simClientRebaseFrame": {
+          "calls": 27,
+          "mean": 0.005370369663944951,
+          "total": 0.14499998092651367
+        }
+      },
+      "glError": 0,
+      "atlas": {
+        "styles": 76,
+        "next": 684,
+        "revision": 392,
+        "ready": 684,
+        "structureTypes": [
+          34,
+          36,
+          20,
+          16,
+          18,
+          37,
+          22,
+          38
+        ]
+      },
+      "detail": 8,
+      "visibleDetail": 4,
+      "scale": false,
+      "flat": true,
+      "objects": 35,
+      "flatCount": 43,
+      "modelCount": 0,
+      "meshLods": null,
+      "units": 39,
+      "moving": 0,
+      "mediumModels": 18,
+      "nativeRebase": true,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 0,
+        "build": 1,
+        "why": {
+          "none": 1
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 0.15,
+      "pitch": 0.55,
+      "yaw": 0,
+      "fps": 120.55591686793761,
+      "p95": 8.430000000007567,
+      "buildMs": 0.386654137668753,
+      "columnMs": 0.15110902364988973,
+      "renderCpuMs": 0.46969924833541526,
+      "gpuMs": 0.5926070447761198,
+      "timings": {
+        "getChunkRenderView": {
+          "calls": 266,
+          "mean": 0.015582706695212457,
+          "total": 4.144999980926514
+        },
+        "_unitDetailSplit": {
+          "calls": 266,
+          "mean": 0.025770672730037143,
+          "total": 6.85499894618988
+        },
+        "_structureDetailSplit": {
+          "calls": 266,
+          "mean": 0.02283834559576852,
+          "total": 6.074999928474426
+        },
+        "build3DOverlayData": {
+          "calls": 266,
+          "mean": 0.0246240608674243,
+          "total": 6.550000190734863
+        },
+        "drawMinimap": {
+          "calls": 266,
+          "mean": 0.16714285818257726,
+          "total": 44.46000027656555
+        },
+        "updateBottomBar": {
+          "calls": 266,
+          "mean": 0.010187969620066477,
+          "total": 2.709999918937683
+        },
+        "_simClientApplyWorld": {
+          "calls": 88,
+          "mean": 0.0688068148764697,
+          "total": 6.0549997091293335
+        },
+        "_simClientRebaseFrame": {
+          "calls": 28,
+          "mean": 0.004821423973355975,
+          "total": 0.13499987125396729
+        }
+      },
+      "glError": 0,
+      "atlas": {
+        "styles": 76,
+        "next": 684,
+        "revision": 392,
+        "ready": 684,
+        "structureTypes": [
+          34,
+          36,
+          20,
+          16,
+          18,
+          37,
+          22,
+          38
+        ]
+      },
+      "detail": 0,
+      "visibleDetail": 0,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 0,
+      "meshLods": {},
+      "units": 39,
+      "moving": 0,
+      "mediumModels": 0,
+      "nativeRebase": true,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 1024,
+        "build": 207,
+        "why": {
+          "none": 2,
+          "tick": 205
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 0.3,
+      "pitch": 0.55,
+      "yaw": 0,
+      "fps": 120.59718273735199,
+      "p95": 8.490000000005239,
+      "buildMs": 0.26738721670064713,
+      "columnMs": 0.3728007503918239,
+      "renderCpuMs": 0.5907142852482042,
+      "gpuMs": 1.0397697910447758,
+      "timings": {
+        "getChunkRenderView": {
+          "calls": 266,
+          "mean": 0.006466162832159745,
+          "total": 1.7199993133544922
+        },
+        "_unitDetailSplit": {
+          "calls": 266,
+          "mean": 0.015620302436943342,
+          "total": 4.155000448226929
+        },
+        "_structureDetailSplit": {
+          "calls": 266,
+          "mean": 0.01652255766373828,
+          "total": 4.395000338554382
+        },
+        "build3DOverlayData": {
+          "calls": 266,
+          "mean": 0.025300751951404084,
+          "total": 6.730000019073486
+        },
+        "drawMinimap": {
+          "calls": 266,
+          "mean": 0.1157330852702148,
+          "total": 30.785000681877136
+        },
+        "updateBottomBar": {
+          "calls": 266,
+          "mean": 0.00922932257329611,
+          "total": 2.454999804496765
+        },
+        "_simClientApplyWorld": {
+          "calls": 88,
+          "mean": 0.0587499968030236,
+          "total": 5.169999718666077
+        },
+        "_simClientRebaseFrame": {
+          "calls": 29,
+          "mean": 0.003620690312878839,
+          "total": 0.10500001907348633
+        }
+      },
+      "glError": 0,
+      "atlas": {
+        "styles": 76,
+        "next": 684,
+        "revision": 392,
+        "ready": 684,
+        "structureTypes": [
+          34,
+          36,
+          20,
+          16,
+          18,
+          37,
+          22,
+          38
+        ]
+      },
+      "detail": 0,
+      "visibleDetail": 0,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 0,
+      "meshLods": {},
+      "units": 39,
+      "moving": 0,
+      "mediumModels": 106,
+      "nativeRebase": true,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 2050,
+        "build": 413,
+        "why": {
+          "none": 2,
+          "tick": 410,
+          "bounds": 1
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 0.6,
+      "pitch": 0.55,
+      "yaw": 0,
+      "fps": 120.55537049118438,
+      "p95": 8.485000000000582,
+      "buildMs": 0.2701127833889839,
+      "columnMs": 0.6482518754507366,
+      "renderCpuMs": 0.8856202973459,
+      "gpuMs": 1.3704783283582092,
+      "timings": {
+        "getChunkRenderView": {
+          "calls": 266,
+          "mean": 0.0067669193547471125,
+          "total": 1.800000548362732
+        },
+        "_unitDetailSplit": {
+          "calls": 266,
+          "mean": 0.015601500980836108,
+          "total": 4.149999260902405
+        },
+        "_structureDetailSplit": {
+          "calls": 266,
+          "mean": 0.014304511977317637,
+          "total": 3.8050001859664917
+        },
+        "build3DOverlayData": {
+          "calls": 266,
+          "mean": 0.02441729459547459,
+          "total": 6.49500036239624
+        },
+        "drawMinimap": {
+          "calls": 266,
+          "mean": 0.1122932335487882,
+          "total": 29.87000012397766
+        },
+        "updateBottomBar": {
+          "calls": 266,
+          "mean": 0.010263158414596902,
+          "total": 2.730000138282776
+        },
+        "_simClientApplyWorld": {
+          "calls": 90,
+          "mean": 0.0543333371480306,
+          "total": 4.890000343322754
+        },
+        "_simClientRebaseFrame": {
+          "calls": 45,
+          "mean": 0.0031111107932196725,
+          "total": 0.13999998569488525
+        }
+      },
+      "glError": 0,
+      "atlas": {
+        "styles": 76,
+        "next": 684,
+        "revision": 392,
+        "ready": 684,
+        "structureTypes": [
+          34,
+          36,
+          20,
+          16,
+          18,
+          37,
+          22,
+          38
+        ]
+      },
+      "detail": 0,
+      "visibleDetail": 0,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 0,
+      "meshLods": {},
+      "units": 39,
+      "moving": 0,
+      "mediumModels": 210,
+      "nativeRebase": true,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 3074,
+        "build": 621,
+        "why": {
+          "none": 2,
+          "tick": 617,
+          "bounds": 2
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 1,
+      "pitch": 0.55,
+      "yaw": 0,
+      "fps": 120.5389814482113,
+      "p95": 8.464999999996508,
+      "buildMs": 0.5070676709476271,
+      "columnMs": 0.2734210495661972,
+      "renderCpuMs": 1.2553947397640772,
+      "gpuMs": 3.3854686060606056,
+      "timings": {
+        "getChunkRenderView": {
+          "calls": 266,
+          "mean": 0.006654132577709686,
+          "total": 1.7699992656707764
+        },
+        "_unitDetailSplit": {
+          "calls": 266,
+          "mean": 0.015488717340885248,
+          "total": 4.119998812675476
+        },
+        "_structureDetailSplit": {
+          "calls": 266,
+          "mean": 0.03308270613949998,
+          "total": 8.799999833106995
+        },
+        "build3DOverlayData": {
+          "calls": 266,
+          "mean": 0.01999999706010173,
+          "total": 5.3199992179870605
+        },
+        "drawMinimap": {
+          "calls": 266,
+          "mean": 0.11351503868748371,
+          "total": 30.195000290870667
+        },
+        "updateBottomBar": {
+          "calls": 266,
+          "mean": 0.008928573221192324,
+          "total": 2.375000476837158
+        },
+        "_simClientApplyWorld": {
+          "calls": 88,
+          "mean": 0.06369318609887903,
+          "total": 5.605000376701355
+        },
+        "_simClientRebaseFrame": {
+          "calls": 42,
+          "mean": 0.003452377659933908,
+          "total": 0.14499986171722412
+        }
+      },
+      "glError": 0,
+      "atlas": {
+        "styles": 76,
+        "next": 684,
+        "revision": 392,
+        "ready": 684,
+        "structureTypes": [
+          34,
+          36,
+          20,
+          16,
+          18,
+          37,
+          22,
+          38
+        ]
+      },
+      "detail": 2,
+      "visibleDetail": 2,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 2,
+      "meshLods": {
+        "far": 2
+      },
+      "units": 39,
+      "moving": 0,
+      "mediumModels": 44,
+      "nativeRebase": true,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 4109,
+        "build": 828,
+        "why": {
+          "none": 2,
+          "tick": 823,
+          "bounds": 2,
+          "units": 1
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 1.5,
+      "pitch": 0.55,
+      "yaw": 0,
+      "fps": 120.55099964684369,
+      "p95": 8.470000000001164,
+      "buildMs": 0.4754323318488616,
+      "columnMs": 0.19133458729077102,
+      "renderCpuMs": 1.2127067661823188,
+      "gpuMs": 2.780232119402984,
+      "timings": {
+        "getChunkRenderView": {
+          "calls": 266,
+          "mean": 0.0064661641766254165,
+          "total": 1.7199996709823608
+        },
+        "_unitDetailSplit": {
+          "calls": 266,
+          "mean": 0.018101500389271212,
+          "total": 4.814999103546143
+        },
+        "_structureDetailSplit": {
+          "calls": 266,
+          "mean": 0.027161654673124615,
+          "total": 7.2250001430511475
+        },
+        "build3DOverlayData": {
+          "calls": 266,
+          "mean": 0.01828947327190772,
+          "total": 4.864999890327454
+        },
+        "drawMinimap": {
+          "calls": 266,
+          "mean": 0.10909774428919743,
+          "total": 29.019999980926514
+        },
+        "updateBottomBar": {
+          "calls": 266,
+          "mean": 0.010150377015422162,
+          "total": 2.700000286102295
+        },
+        "_simClientApplyWorld": {
+          "calls": 88,
+          "mean": 0.06931818479841406,
+          "total": 6.100000262260437
+        },
+        "_simClientRebaseFrame": {
+          "calls": 33,
+          "mean": 0.0037878824002815017,
+          "total": 0.12500011920928955
+        }
+      },
+      "glError": 0,
+      "atlas": {
+        "styles": 76,
+        "next": 684,
+        "revision": 392,
+        "ready": 684,
+        "structureTypes": [
+          34,
+          36,
+          20,
+          16,
+          18,
+          37,
+          22,
+          38
+        ]
+      },
+      "detail": 10,
+      "visibleDetail": 7,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 10,
+      "meshLods": {
+        "far": 9,
+        "medium": 1
+      },
+      "units": 39,
+      "moving": 0,
+      "mediumModels": 8,
+      "nativeRebase": true,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 5155,
+        "build": 1033,
+        "why": {
+          "none": 2,
+          "tick": 1027,
+          "bounds": 2,
+          "units": 2
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 3,
+      "pitch": 0.55,
+      "yaw": 0,
+      "fps": 120.56028807250891,
+      "p95": 8.490000000005239,
+      "buildMs": 0.3237969911188111,
+      "columnMs": 0.12625939774333983,
+      "renderCpuMs": 0.7428007582972821,
+      "gpuMs": 1.9061861818181816,
+      "timings": {
+        "getChunkRenderView": {
+          "calls": 266,
+          "mean": 0.005620300321650684,
+          "total": 1.494999885559082
+        },
+        "_unitDetailSplit": {
+          "calls": 266,
+          "mean": 0.015526319356789267,
+          "total": 4.130000948905945
+        },
+        "_structureDetailSplit": {
+          "calls": 266,
+          "mean": 0.01714285513512174,
+          "total": 4.559999465942383
+        },
+        "build3DOverlayData": {
+          "calls": 266,
+          "mean": 0.01740601681228867,
+          "total": 4.630000472068787
+        },
+        "drawMinimap": {
+          "calls": 266,
+          "mean": 0.11349623499060035,
+          "total": 30.189998507499695
+        },
+        "updateBottomBar": {
+          "calls": 266,
+          "mean": 0.008721803364000823,
+          "total": 2.3199996948242188
+        },
+        "_simClientApplyWorld": {
+          "calls": 88,
+          "mean": 0.05585227364843542,
+          "total": 4.915000081062317
+        },
+        "_simClientRebaseFrame": {
+          "calls": 30,
+          "mean": 0.003833333651224772,
+          "total": 0.11500000953674316
+        }
+      },
+      "glError": 0,
+      "atlas": {
+        "styles": 76,
+        "next": 684,
+        "revision": 392,
+        "ready": 684,
+        "structureTypes": [
+          34,
+          36,
+          20,
+          16,
+          18,
+          37,
+          22,
+          38
+        ]
+      },
+      "detail": 4,
+      "visibleDetail": 3,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 4,
+      "meshLods": {
+        "medium": 3,
+        "full": 1
+      },
+      "units": 39,
+      "moving": 0,
+      "mediumModels": 0,
+      "nativeRebase": true,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 6195,
+        "build": 1242,
+        "why": {
+          "none": 2,
+          "tick": 1235,
+          "bounds": 2,
+          "units": 3
+        }
+      }
+    }
+  ],
+  "errors": []
+}

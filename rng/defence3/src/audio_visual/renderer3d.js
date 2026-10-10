@@ -5638,11 +5638,12 @@
         visitScaleCandidates(candidates, visit) {
             if (this.columnLayers) {
                 const C = this.columnLayers;
-                for (const source of candidates || C.unitSources.concat(C.structureSources)) {
+                for (const source of candidates || (C.unitSources||[]).concat(C.structureSources||[])) {
                     if (!source || source.dead || source.energy <= 0 || source._historyGhost) continue;
-                    const F = source._structView ? C.structures : C.units, s = source._s;
+                    const structure = source._structView || C.structures?.sourceIndex?.has(source);
+                    const F = structure ? C.structures : C.units, s = structure && F?.sourceIndex ? F.sourceIndex.get(source) : source._s;
                     if (!(s >= 0)) continue;
-                    const moving = !source._structView;
+                    const moving = !structure;
                     if (moving && (F.flags[s] & 1024)) continue;
                     const x = F.x[s] / C.tile, z = F.y[s] / C.tile;
                     if (!C.fullVisibility && !(C.visibility[Math.floor(z)] && C.visibility[Math.floor(z)][Math.floor(x)] > 0)) continue;
@@ -5863,7 +5864,7 @@
                     }
                     const picked=_detailPick(scores,kind?4000:1200);
                     for(const i of picked) {
-                        const s=candidates[i],row=kind?7:F.kind[s],code=kind?F.type[s]:row===1?F.utype[s]:F.type[s];
+                        const s=candidates[i],row=kind?7:F.kind[s],code=kind?F.type[s]:row===4||row===5?(F.amount[s]>0?0:1):row===1?F.utype[s]:F.type[s];
                         if(code<0||code>=A.catalog.width)continue;
                         const base=A.catalog.lookup[(row*A.catalog.width+code)*4],styleIndex=(base-1)/9,style=A.catalog.styles[styleIndex];
                         if(!style || !A.panels[styleIndex])continue;
@@ -5937,6 +5938,7 @@
                     layout(location=12) in float aType;
                     layout(location=13) in float aUnitType;
                     layout(location=14) in float aVision;
+                    layout(location=15) in float aResource;
                     uniform mat4 uViewProjection;
                     uniform float uAlpha, uTile, uScale, uPixelRatio, uFlat, uLightNorm, uDetail, uDetailS, uDetailMask;
                     uniform int uStructure, uFull;
@@ -5983,7 +5985,7 @@
                         // are the detailed pass's.)
                         if (uDetailS > 0. && uStructure != 0 && (aKind == 6. || pixels > uDetailS * 1.0001)) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
                         int row = uStructure == 0 ? 7 : clamp(int(aKind),0,6);
-                        int code = int(uStructure == 0 ? aKind : aKind == 1. ? aUnitType : aType);
+                        int code = int(uStructure == 0 ? aKind : aKind == 4. || aKind == 5. ? (aResource > 0. ? 0. : 1.) : aKind == 1. ? aUnitType : aType);
                         vec4 style = texelFetch(uStyles,ivec2(clamp(code,0,int(uStyleWidth)-1),row),0);
                         float base = style.r;
                         float facing = uStructure == 0 ? aFacing : aKind == 0. ? 1.5707963-aFacing : 0.;
@@ -6002,14 +6004,18 @@
                         float height = style.g > .5 || aVision <= 0. ? 1. : max(.18,aVision*uHeightScale);
                         if (uStructure == 0 && style.b < .5) height *= max(1.,.48/(size*1.45));
                         height = uFlat > .5 ? 1. : mix(1.,height,vLod);
-                        vSpriteExtent = clamp(pixels*extent*vec2(1.,height),vec2(2.),vec2(uPointMax-2.));
+                        // A three-pixel filtered footprint covers subpixel
+                        // motion without a one-pixel hole opening between
+                        // dense neighbours as the camera changes height.
+                        float markerPixels = 3. * uPixelRatio;
+                        vSpriteExtent = clamp(pixels*extent*vec2(1.,height),vec2(markerPixels),vec2(uPointMax-2.));
                         vSpriteSize = max(vSpriteExtent.x,vSpriteExtent.y);
                         gl_PointSize = ceil(vSpriteSize + 2.);
                         // Keep the miniature's base on the unit's actual position.
                         if (uFlat < .5 && style.a > 0.) {vGround.y += style.a;gl_Position=uViewProjection*vec4(vGround,1.);}
                         gl_Position.xy += meta.yz * vec2(1.,height) * vLod * pixels * 2. / uViewport * gl_Position.w;
                         vSpriteCenter = (gl_Position.xy / gl_Position.w * .5 + .5) * uViewport;
-                        vDotScale = vSpriteExtent.x / max(pixels,2.);
+                        vDotScale = vSpriteExtent.x / max(pixels,markerPixels);
                         vCoverage = 1.; // A minimum-size marker remains visible at any zoom.
                         vWorldSprite = vec4(meta.yz*vec2(1.,height)*vLod*size,vSpriteExtent/max(tilePixels,.00001));
                         float shade = 1.-pow(1.-clamp(light,0.,1.),1.3)*.42;
@@ -6018,8 +6024,8 @@
                         vColor = vec4(uColors[clamp(int(aOwner)+1,0,8)], uStructure != 0 && (flags & 1) != 0 ? .6 : 1.);
                         // Neutral resource tiles keep their material color even
                         // after the emblem becomes too small to resolve.
-                        if(uStructure != 0 && aKind == 4.) vColor.rgb=vec3(1.,.867,0.);
-                        if(uStructure != 0 && aKind == 5.) vColor.rgb=vec3(.541);
+                        if(uStructure != 0 && aKind == 4.) vColor.rgb=aResource>0.?vec3(1.,.867,0.):vec3(.17,.158,0.);
+                        if(uStructure != 0 && aKind == 5.) vColor.rgb=vec3(aResource>0.?.541:.333);
                     }`, `#version 300 es
                     precision highp float;
                     precision highp int;
@@ -6159,7 +6165,7 @@
             for (let kind=0;kind<2;kind++) {
                 const F = kind ? C.units : C.structures, S = this.columnStores[kind], structure = !kind;
                 if (!F) continue;
-                const fields = structure ? ['x','y','x','y',null,'energy','owner','flags','alive','kind',null,'angle','type','utype','vision'] : ['x','y','px','py','r','energy','owner','flags','id','type',null,'facing',null,null,'vision'];
+                const fields = structure ? ['x','y','x','y',null,'energy','owner','flags','alive','kind',null,'angle','type','utype','vision','amount'] : ['x','y','px','py','r','energy','owner','flags','id','type',null,'facing',null,null,'vision',null];
                 if (!S.buffer) { S.buffer=gl.createBuffer();S.vao=gl.createVertexArray(); }
                 gl.bindVertexArray(S.vao);gl.bindBuffer(gl.ARRAY_BUFFER,S.buffer);
                 if (S.frame !== F) {

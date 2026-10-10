@@ -2102,6 +2102,19 @@ function _handleConnectionClosed(conn) {
     }
 }
 
+// Host: a player stops playing (spectates, or left the match): its team
+// resigns unless a teammate still plays it.
+function _hostPeerStopsPlaying(pid) {
+    matchRoleByPeerId[pid] = 'spectating';
+    let uid = getPeerProfileUid(pid);
+    if (uid) matchRoleByUid[uid] = 'spectating';
+    let teamId = getTeamIdForPeer(pid);
+    let teammatesLeft = getActiveMatchPeerIds().some(other => other !== pid && getTeamIdForPeer(other) === teamId);
+    if (Number.isFinite(teamId) && teamId >= 0 && !resignedTeams.has(teamId) && !teammatesLeft && typeof queueAction === 'function') {
+        queueAction({ action: 'forceResignTeam', targetTeam: teamId });
+    }
+}
+
 function _handleConnectionMessage(conn, data) {
     let type = data.type;
     if (type === 'TICK_PACKETS') {
@@ -2226,6 +2239,13 @@ function _handleConnectionMessage(conn, data) {
     } else if (type === 'LOBBY_LEAVE' && isHost) {
         if (!gameStarted) {
             lobbyPlayers = lobbyPlayers.filter(p => p.peerId !== conn.peer);
+            broadcastLobbyState(true);
+            renderOnlineLobby();
+        } else if (!gameOver && conn && conn.peer && normalizeMatchRole(matchRoleByPeerId[conn.peer], 'playing') === 'playing') {
+            // Leaving mid-match is resigning. Its MATCH_ROLE_UPDATE is sent
+            // first but the channel is unordered: arriving after this close it
+            // was lost, and the match waited for the leaver for good.
+            _hostPeerStopsPlaying(conn.peer);
             broadcastLobbyState(true);
             renderOnlineLobby();
         }
@@ -2358,19 +2378,14 @@ function _handleConnectionMessage(conn, data) {
     } else if (type === 'MATCH_ROLE_UPDATE' && isHost) {
         let role = normalizeMatchRole(data.role, '');
         if (gameStarted && role && conn && conn.peer) {
-            matchRoleByPeerId[conn.peer] = role;
-            let uid = getPeerProfileUid(conn.peer);
-            if (uid) matchRoleByUid[uid] = role;
-
             // Treat explicit switch to spectating as an authoritative resignation signal.
             // This keeps resign working even if the client's lockstep resign action packet
             // is delayed or dropped during resync/tick-stall conditions.
-            if (role === 'spectating') {
-                let teamId = getTeamIdForPeer(conn.peer);
-                let teammatesLeft = getActiveMatchPeerIds().some(other => other !== conn.peer && getTeamIdForPeer(other) === teamId);
-                if (Number.isFinite(teamId) && teamId >= 0 && !resignedTeams.has(teamId) && !teammatesLeft && typeof queueAction === 'function') {
-                    queueAction({ action: 'forceResignTeam', targetTeam: teamId });
-                }
+            if (role === 'spectating') _hostPeerStopsPlaying(conn.peer);
+            else {
+                matchRoleByPeerId[conn.peer] = role;
+                let uid = getPeerProfileUid(conn.peer);
+                if (uid) matchRoleByUid[uid] = role;
             }
 
             broadcastLobbyState(true);

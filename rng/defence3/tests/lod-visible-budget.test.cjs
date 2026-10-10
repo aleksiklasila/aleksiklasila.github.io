@@ -146,3 +146,8 @@ assert.equal(c._detailColumns(null,D).structures,H,'history buildings use the sa
 project(true,4);c.gameTime++;
 assert.equal(c._structureDetailSplit([historyView.towers,[],[],[],historyView.astarMines],true,{},false,H).selected.size,3);
 assert.equal(H.amount[1],123,'LOD changes preserve frozen resource state');
+R.columnLayers=c._detailColumns(null,D);
+let pickedHistory=null;
+R.visitScaleCandidates([tower],(entity,x,z)=>{pickedHistory={entity,x,z};});
+assert.equal(pickedHistory.entity,tower);
+assert.equal(pickedHistory.x,500.5,'history picking uses the adapter slot, not the live structure slot');

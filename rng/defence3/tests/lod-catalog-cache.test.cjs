@@ -21,7 +21,7 @@ for(const type of ['gold','astar']) {
     assert.equal(style.neutral,true,'resource tiles do not acquire a player-colored rim');
     assert.equal(style.scaleX,.9/.94);assert.equal(style.scaleY,.35/.94);
 }
-assert.equal(first.styles.length, 5);
+assert.equal(first.styles.length, 7);
 assert.equal(first.lookup[(7 * first.width + 1) * 4], 1);
 // Runtime labels can grow beyond a texture-width boundary on any tick.
 // They must not trigger hundreds of model bakes and texture uploads.
@@ -30,7 +30,7 @@ assert.equal(c.getColumnLodCatalog(), first);
 strings.push('scout');
 const added = c.getColumnLodCatalog();
 assert.notEqual(added, first);
-assert.equal(added.styles.length, 7);
+assert.equal(added.styles.length, 9);
 assert.ok(added.lookup[(7 * added.width + strings.length - 1) * 4] > 0);
 // Restarting a game reuses the table object but may assign different codes.
 strings.splice(0, strings.length, '', 'fire', 'norm', 'L1');

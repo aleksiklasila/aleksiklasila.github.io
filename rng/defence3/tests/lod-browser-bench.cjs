@@ -22,8 +22,9 @@ let browser;
     await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);
     console.log('LOADED');
     const fixture = process.argv[2] || '200000-1000.json', tag = process.env.LOD_TAG || 'current';
-    await page.evaluate(async ({fixture,million,population}) => {
+    await page.evaluate(async ({fixture,million,population,mapSize}) => {
         const data=await (await fetch('tests/' + fixture)).json();
+        if(mapSize)data.lobby.selects['cfg-mapsize']=String(mapSize);
         if (million || population) {
             const groups=Object.entries(data.startingResources.spawnCounts).filter(([k])=>k.startsWith('unit:')).map(([,v])=>v);
             const total=groups.reduce((n,g)=>n+Object.values(g).reduce((a,b)=>a+b,0),0);let count=0;
@@ -35,7 +36,7 @@ let browser;
         applyMainMenuSettingsSnapshot(data);
         const now=Date.now; Date.now=()=>1790000000000;
         try { startSoloGame(); } finally { Date.now=now; }
-    }, {fixture,million:!!process.env.LOD_MILLION,population:Number(process.env.LOD_POP_PER_TEAM)||0});
+    }, {fixture,million:!!process.env.LOD_MILLION,population:Number(process.env.LOD_POP_PER_TEAM)||0,mapSize:Number(process.env.LOD_MAP_SIZE)||0});
     console.log('STARTED');
     await page.waitForFunction(()=>simClientStats().appliedTick>=10, {}, {timeout:240000});
     const setup=await page.evaluate(()=>{

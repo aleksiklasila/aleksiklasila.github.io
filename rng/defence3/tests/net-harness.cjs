@@ -564,7 +564,9 @@ function createInstance(world, name, options = {}) {
                 Date: HarnessDate, Math: options.foreignMath ? makeForeignMath() : Math, structuredClone, URLSearchParams, URL, TextEncoder, TextDecoder,
                 location: { search: '', href: 'http://localhost/rng/defence3/src/sim/sim_worker.js' }, navigator: { userAgent: 'harness-worker' },
                 crypto: window.crypto,
-                importScripts: () => { if (worker._imported) return; worker._imported = true; for (const sc of scripts.game) { try { sc.runInContext(ctx); } catch (err) { inst.errors.push(new Error("[sim worker] loading " + sc.__file + ": " + (err && err.stack || err))); } } },
+                importScripts: () => { if (worker._imported) return; worker._imported = true; for (const sc of scripts.game) { try { sc.runInContext(ctx); } catch (err) { inst.errors.push(new Error("[sim worker] loading " + sc.__file + ": " + (err && err.stack || err))); } }
+                    // (DIVTRACE in worker mode: the worker's ticks are the ones compared.)
+                    if (process.env.DIVTRACE) vm.runInContext(DIVTRACE_SRC.replace(/__DIVFN__/g, 'gameTick').replace('__DIVTICK__', 'currentTick'), ctx); },
                 postMessage: (msg, transfer = []) => {
                     const data = process.env.SIM_SHARED === '1' ? structuredClone(msg, { transfer }) : structuredClone(msg);
                     // (The shared progress block: the page learns of a tick
@@ -662,7 +664,7 @@ function createInstance(world, name, options = {}) {
     // DIVTRACE=1: each tick's fingerprint of every unit, player and structure
     // (the last DIVTRACE_TICKS ticks, page-side simulation only), so a failed
     // comparison (checkHealthy) names the first tick and fields that differ.
-    if (process.env.DIVTRACE) inst.eval(DIVTRACE_SRC);
+    if (process.env.DIVTRACE) inst.eval(DIVTRACE_SRC.replace(/__DIVFN__/g, 'runOneTick').replace('__DIVTICK__', 'currentTick - 1'));
     // Schedule a command for a given future tick, as queueAction would.
     // Lets tests make several players act on exactly the same tick.
     inst.queueAt = (tick, action) => {
@@ -1026,11 +1028,11 @@ const DIVTRACE_TICKS = Number(process.env.DIVTRACE_TICKS) || 400;
 const DIVTRACE_SRC = `(() => {
     const D = __scratch.div = new Map();
     const r = v => typeof v === 'number' ? (v === v ? +v.toFixed(4) : 'NaN') : v === undefined ? 'u' : v === null ? 'n' : typeof v === 'object' ? (v.id !== undefined ? 'U' + v.id : v.gx !== undefined ? 'B' + v.gx + ',' + v.gy : 'O') : v;
-    const f = runOneTick;
-    runOneTick = function () {
+    const f = __DIVFN__;
+    __DIVFN__ = function () {
         const out = f.apply(this, arguments);
         try {
-            const t = currentTick - 1, o = {};
+            const t = __DIVTICK__, o = {};
             for (const u of units) o['u' + u.id] = [u.owner, u.x, u.y, u.vx, u.vy, u.energy, u.commandState, u.workerState, u.path ? u.path.length : -1, u.pathIndex,
                 u.targetUnit, u.targetBuilding, u.workerTarget, u.carryingValue, u.attackTimer, u.dead, u.effectiveLevel, u._pendingPathTarget ? 'P' : '-',
                 u._us ? 'h' + u._us.hObj[u._si] : '-', u.stackCount, u.effectiveStacks, u.burning, u.poisoned, u.frozen, u.wet, u.sandy, u.watched].map(r).join(',')

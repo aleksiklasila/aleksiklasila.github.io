@@ -1742,5 +1742,53 @@
     "output": "PASS: 3000-worker occupancy agrees with exhaustive scans; assignment, release, death, mobile targets, tick/reset and live spawner eligibility.\n",
     "timedOut": false,
     "elapsedMs": 235
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-extremes.test.cjs",
+    "status": 0,
+    "output": "PASS: extremes\n  8 teams, 495 units + 536 buildings at start (max 147 units now), research 0 -> 10 on every stat, debt and back: 5456 tick fingerprints equal, 20.0 TPS\n  divergence on one of 8 peers after all that: 1 patch(es) of 445 KB, exact again\n",
+    "timedOut": false,
+    "elapsedMs": 1656906
+  },
+  {
+    "mode": "1",
+    "file": "zero-resource-config.test.cjs",
+    "status": 0,
+    "output": "PASS: zero resource startup, no generated mines, finite fallbacks, negative/fractional normalization and ordered mine amounts.\n",
+    "timedOut": false,
+    "elapsedMs": 1233
+  },
+  {
+    "mode": "1",
+    "file": "zoom-contour-performance.test.cjs",
+    "status": 0,
+    "output": "PASS: 7000 zoomed bodies use two sharp sprite tiers; 30 contour frames match exhaustive geometry exactly.\n",
+    "timedOut": false,
+    "elapsedMs": 480
+  },
+  {
+    "mode": "1",
+    "file": "spatial-index-builds.test.cjs",
+    "status": 0,
+    "output": "PASS: serial and parallel unit index builds\n  crossroads: 400 queries over 166 units, identical (4589 results)\n  islands: 400 queries over 169 units, identical (3697 results)\n  solar_system: 400 queries over 192 units, identical (4426 results)\n",
+    "timedOut": false,
+    "elapsedMs": 196710
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-soak.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: guest1 patched: [\"[LOCKSTEP]\",\"State hash mismatch; asking for a patch\",{\"tick\":1738,\"from\":1719,\"full\":false}] host saw: [{\"peer\":\"autof4ff6c4a00\",\"tick\":1738,\"differs\":[\"players\",\"tiles 12-15,32-35: unit 169 healer_unit, unit 151 snake, unit 260 boss, unit 297 healer_unit, barrack at 14,33, barrack at 13,34\"]}]\n\n1 !== 0\n\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-soak.test.cjs:84:48 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 1,\n  expected: 0,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 751180
+  },
+  {
+    "mode": "1",
+    "file": "worker-walk.test.cjs",
+    "status": 0,
+    "output": "workers 6 builder,healer,collector,astar_collector,salvager,researcher\nworker states seen astar_collector:IDLE astar_collector:MOVING_TO astar_collector:RETURNING astar_collector:delivered builder:IDLE builder:MOVING_TO_BUILD builder:RETURNING_FOR_GOLD builder:spent collector:IDLE collector:MOVING_TO collector:RETURNING collector:delivered healer:IDLE healer:MOVING_TO_HEAL healer:RETURNING_FOR_GOLD healer:spent researcher:IDLE researcher:MOVING_TO_RESEARCH salvager:IDLE salvager:MOVING_TO salvager:RETURNING salvager:delivered\nwork {\"before\":{\"build\":3132.7380000000003,\"sites\":0,\"research\":0},\"after\":{\"build\":3365.506,\"sites\":1,\"research\":54.039129961502965},\"end\":{\"site\":{\"uc\":true,\"energy\":1},\"salvaged\":true}}\nmine cluster at [53,36] collector on it true middle gold 4980\nPASS: worker walk and work builder, healer, collector, astar_collector, salvager, researcher\n",
+    "timedOut": false,
+    "elapsedMs": 369979
   }
 ]
