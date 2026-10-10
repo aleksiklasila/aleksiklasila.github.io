@@ -183,21 +183,17 @@ function flickers(frames, field) {
                 targetX: (0.15 + 0.7 * ((i * 7) % 10) / 9) * GRID_W * TILE, targetY: (0.15 + 0.7 * ((i * 3) % 10) / 9) * GRID_H * TILE });
             return 1;
         })()`);
-        // The scale path at full zoom-out: every frame draws the scene.
+        // Full zoom-out uses the same columns and model layers as close views.
         {
             const frames = JSON.parse(await b.ev(`(async () => {
-                window.__disableScaleRendering = false;
                 camera.zoom = getMinCameraZoom(); camera.x = GRID_W * TILE * .5 - viewW / camera.zoom / 2; camera.y = GRID_H * TILE * .5 - viewH / camera.zoom / 2;
                 await new Promise(r => setTimeout(r, 1500));
                 return ${RECORD}(2000);
             })()`));
-            const scale = frames.filter(f => f.scale);
-            console.log(`scale path: ${scale.length} of ${frames.length} frames; least drawn ${JSON.stringify(scale.reduce((m, f) => [Math.min(m[0], f.scale[0]), Math.min(m[1], f.scale[1])], [Infinity, Infinity]))}`);
-            assert.ok(scale.length > 30 && scale.length === frames.length, 'full zoom-out draws by the scale path');
-            assert.ok(scale.every(f => f.scale[0] > 100 && f.scale[1] > 100), 'the scene is drawn on every scale frame');
+            assert.ok(frames.length > 30 && frames.every(f=>!f.scale), 'zoom-out never switches render pipelines');
+            assert.ok(frames.every(f => f.structures.length > 100 && f.units.length > 100), 'the scene is drawn on every far frame');
         }
-        // The layered path (what the frames below check): scale rendering off.
-        await b.ev('window.__disableScaleRendering = true, 1');
+        // The same layers remain complete through closer zoom levels.
         for (const zoom of ['getMinCameraZoom()', '1.5']) {
             const frames = JSON.parse(await b.ev(`(async () => {
                 camera.zoom = ${zoom}; camera.x = GRID_W * TILE * .5 - viewW / camera.zoom / 2; camera.y = GRID_H * TILE * .5 - viewH / camera.zoom / 2;

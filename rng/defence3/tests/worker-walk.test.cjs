@@ -56,7 +56,14 @@ const data = require(path.join(__dirname, 'oneofall.json'));
                 best = Math.min(best, Math.max(Math.abs(last[0] - target[0]), Math.abs(last[1] - target[1])));
             }
             if (process.env.WALK_VERBOSE) console.log(kind, [dx, dy], 'from', at.slice(0, 2), 'to', target, 'closest', best, 'last', last);
-            if (best > 1) fails.push(`${kind} ${JSON.stringify([dx, dy])}: came no closer than ${best} tiles to ${JSON.stringify(target)} from ${JSON.stringify(at.slice(0, 2))} (last ${JSON.stringify(last)})`);
+            if (best > 1) {
+                // (The target tile and where the flow approaches it from the unit's tile.)
+                const why = q(`(() => { const u = units.find(x => x.id === ${w.id}), t = ${JSON.stringify(target)}, p = u ? navProfileOf(u) : -1;
+                    const at = u ? Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE) : -1, ap = p >= 0 ? navApproachTile(p, t[1] * GRID_W + t[0]) : -1;
+                    return { wall: grid[t[1]][t[0]].type === TYPE_WALL, entity: getTileEntityType(t[0], t[1]), profile: p, approach: ap >= 0 ? [ap % GRID_W, Math.floor(ap / GRID_W)] : null,
+                        reachable: p >= 0 && ap >= 0 ? navReachable(p, at, ap) : null }; })()`);
+                fails.push(`${kind} ${JSON.stringify([dx, dy])}: came no closer than ${best} tiles to ${JSON.stringify(target)} from ${JSON.stringify(at.slice(0, 2))} (last ${JSON.stringify(last)}; ${JSON.stringify(why)})`);
+            }
             await world.run(500);
         }
     }

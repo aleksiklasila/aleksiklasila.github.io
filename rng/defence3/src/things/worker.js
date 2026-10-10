@@ -2428,25 +2428,35 @@ function _getTargetPriorityLevel(target) {
 // Per-target worker load counters (updated on target set/clear).
 let workerReservedTiles = [];
 // Every write goes through workerReservedSet: per snapshot region, the
-// number of occupied slots (for the tick hash, which skips empty regions).
-// Recounted when the table is replaced (_workerReservedCounts).
-let _workerResCount = null, _workerResCountFor = null;
+// number of occupied slots (for the tick hash, which skips empty regions)
+// and an order-free digest of its entries (slot and unit id: the tick hash
+// takes it every slice; the full entries, with their units' deaths, only in
+// the region's round). Made again when the table is replaced
+// (_workerReservedCounts).
+let _workerResCount = null, _workerResSum = null, _workerResCountFor = null;
+function _workerResTerm(slot, u) { if (!u) return 0; const h = Math.imul((slot + 1) ^ Math.imul((Number(u.id) | 0) + 0x3c6ef372, 2654435761), 2246822519); return Math.imul(h ^ (h >>> 13), 3266489917); }
 function workerReservedSet(slot, v) {
     const t = workerReservedTiles, old = t[slot];
     t[slot] = v;
     // (The work site grid's copy, at its next step.)
     if (_wsw && old !== v) _wswResvDirty.push(slot);
-    if (_workerResCountFor === t && (!old) !== (!v)) _workerResCount[_snapReservationRegionIndex(slot)] += v ? 1 : -1;
+    if (_workerResCountFor === t && old !== v) {
+        const r = _snapReservationRegionIndex(slot);
+        if ((!old) !== (!v)) _workerResCount[r] += v ? 1 : -1;
+        _workerResSum[r] = (_workerResSum[r] + _workerResTerm(slot, v) - _workerResTerm(slot, old)) | 0;
+    }
 }
 function workerReservedCountsInvalidate() { _workerResCountFor = null; }
+// The per-region digests, current (with the counts).
+function _workerReservedSums() { return _workerReservedCounts() ? _workerResSum : null; }
 // The counts, current (null without the snapshot code).
 function _workerReservedCounts() {
     const t = workerReservedTiles;
     if (_workerResCountFor === t) return _workerResCount;
     if (typeof _snapReservationRegionIndex !== 'function') return null;
     const n = _snapReservationRegionCount();
-    if (!_workerResCount || _workerResCount.length !== n) _workerResCount = new Int32Array(n); else _workerResCount.fill(0);
-    for (let s = 0; s < t.length; s++) if (t[s]) _workerResCount[_snapReservationRegionIndex(s)]++;
+    if (!_workerResCount || _workerResCount.length !== n) { _workerResCount = new Int32Array(n); _workerResSum = new Int32Array(n); } else { _workerResCount.fill(0); _workerResSum.fill(0); }
+    for (let s = 0; s < t.length; s++) if (t[s]) { const r = _snapReservationRegionIndex(s); _workerResCount[r]++; _workerResSum[r] = (_workerResSum[r] + _workerResTerm(s, t[s])) | 0; }
     _workerResCountFor = t;
     return _workerResCount;
 }

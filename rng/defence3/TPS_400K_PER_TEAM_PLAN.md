@@ -633,6 +633,82 @@ lane-params fix costs nothing. Baseline this session (TOPPHASES only,
   pathfinding-routing and visibility-range-collision (`_simHKey` in their
   sandbox), plus the ones listed above.
 
+### 2026-10-10 — determinism and multiplayer bugs (user: fix them now, no perf loss)
+
+Tools: `DIVTRACE=1` (tests/net-harness.cjs) keeps every peer's per-tick
+fingerprint of units, players and structures; a failed hash comparison
+prints the first differing tick and entities (`DIVTRACE=2` adds the movement
+kernel's steering columns). `.claude/netdiag.cjs` (a hosted match with
+EXACT / UNITS / KCOLS / ARM / CHG / RES switches), `.claude/snapdiag.cjs`
+(restored peers compared per unit and kernel column).
+
+Fixed:
+- **Reused unit slots kept their last unit's kernel state** (committed
+  steps, steady windows, flags, stat-derived speeds): a new unit in a reused
+  slot inherited them, and slot assignment differs between peers (a restore
+  above all). simUnitStateAllocate zeroes every column of a reused slot
+  (one generated straight-line function; fresh slots are zero already).
+  Restored peers now evolve identically (snapdiag: equal hashes 12 ticks on).
+- **The movement kernel's path choice depended on slot alignment**: the
+  vector passes ran only on full groups of 4 slots, the last partial group
+  always scalar; the vector and scalar steps leave different steady
+  windows, so the same unit behaved differently on peers with other slot
+  layouts (network-profiles "wan" divergence at tick 129: an A* charge).
+  The passes now run on every group, missing lanes masked (mv_move, mv_step).
+- **Restored units had no effective stat tables** after a mid-match restore
+  (preComputed is derived and not sent; `_needsStatsInit` came false from
+  the host): "Cannot read properties of null (reading 'speed')" on every
+  late joiner, reloaded or restored peer. `unitDerivedStatsRestore`
+  (data_dynamic.js) remakes them at decode end from the sent base tables.
+- **Field eviction and game-stat samples strided over slots**: which units
+  a sweep cycle visited (and so which flow fields it dropped and remade,
+  bumping their generations: units adopting a new generation re-steer)
+  depended on the slot layout. Both now stride over the units list (synced
+  order) through the slot map (navFieldsSweepStep, data_dynamic stats).
+- Harness: the emulated simulation worker had no usable wasm (its
+  WebAssembly was another realm than its SharedArrayBuffer: `instanceof`
+  failed, every kernel threw): worker-mode tests (mode 1, mixed-rally-move)
+  could not run. Also atob/btoa there and in main-menu-settings' sandbox
+  (the other session's sim_rebase.js needs it).
+- Test sandboxes: unit.js's load-time `_simHKey` / `SIM_NAV_STRIDE` and the
+  structure-table hooks guarded (structure-targeting, pathfinding-routing,
+  visibility-range-collision, drive-by-attack); laser-links expects tile
+  order; unit-retirement expects swap-removal (survivors, not their order);
+  tier-result-reduction runs the Rust kernels on heap arrays; drive-by-attack
+  tests the object path with the combat brain off.
+- Render range overlays are off by default (the user): a mode saved before
+  is not restored once (RENDER_RANGE_SETTINGS_VER).
+- **Units' effective tables travel in snapshots again** ('preComputed',
+  'preComputedEffective' among the unit's snapshot accessors): since stat
+  rows they were non-enumerable and dropped; a restored unit's tables could
+  not be reproduced (computed under the tables of their time, e.g. another
+  resource penalty), so patched guests moved at other speeds.
+- **The object-field digest (hObj) is made again for every restored unit**
+  (it drifted from the fields on in-place patches: hash mismatch every
+  rotation afterwards, repeated patches).
+- **A resync flush (every peer) clears every arming-only movement column**
+  (SIM_MOVE_ARM_COLUMNS: committed steps, steady windows, flow slots, park
+  targets, worker kind, pending chunk moves, look records) as a fresh slot
+  has them: a parked unit's leftovers from an earlier arming made the host
+  move it where a restored guest did not.
+- Hash coverage (corruption fuzz): towers' cooldown deadlines and barracks'
+  / spawners' spawn timers in the structure table (`_ST.tim`, Tower cd
+  setter, spawnTimer accessor) and the per-second core; worker reservations
+  as an incremental per-region digest (workerReservedSet) every slice; the
+  towers', barracks' and spawners' list order every slice. multiplayer-patch
+  passes on every map (one patch per divergence, exact state after).
+- Still failing: corruption fuzz cellType / cellOwner (raw grid writes: grid
+  rows are hashed one per 400 ticks; covering the 1M-cell grid within the
+  fuzz's 6 s would cost ~0.2-0.4 ms a tick) and playerResearch (a research
+  completed on one peer: the staggered stat refresh leaves units' derived
+  tables behind after the delta patch); desync-recovery "mine: repair took
+  2000" (detection in a 40-tick rotation + patch round trip, over the
+  test's 1.5 s); worker-walk (a collector ordered onto its own cloud tower
+  inside a closed base ring: findNearestWalkable counts the portal tile as
+  walkable, the flow finds it unreachable); kernel-object-equivalence
+  (given up with the combat brain); performance-regressions /
+  render-frame-stability (the 3D renderer, the other session's work).
+
 ## Next
 
 Order set by the user (2026-10-09): main thread stable below 50 ms (aim

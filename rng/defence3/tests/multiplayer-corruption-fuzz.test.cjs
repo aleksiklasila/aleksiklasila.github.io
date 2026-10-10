@@ -11,6 +11,35 @@
 // Usage: node tests/multiplayer-corruption-fuzz.test.cjs [kind,kind,...]
 const assert = require('node:assert/strict');
 const C = require('./multiplayer-chaos-determinism.test.cjs');
+// (DIVTRACE: the codec's fields of every entity, for a failed comparison.)
+const FULL_VALUES = `(() => {
+    const S = snapEncodeState();
+    const out = {};
+    for (const list of Object.keys(S.lists)) for (const row of S.lists[list]) {
+        const tpl = S.tpls[row[1]];
+        const keys = _snapGetShape(S.shapes[tpl[0]]).cols;
+        const v = tpl[1].slice();
+        for (let j = 2; j < row.length; j += 2) v[row[j]] = row[j + 1];
+        const o = {};
+        const deref = (x, d) => { if (typeof x === 'string' && x.startsWith('~o') && d < 3) { const e = S.pool[+x.slice(2)]; return JSON.stringify(e, (k, y) => typeof y === 'string' && y.startsWith('~o') ? deref(y, d + 1) : y); } return x; };
+        keys.forEach((k, i) => { o[k] = deref(v[i], 0); });
+        out[list + row[0]] = o;
+    }
+    out.G = { g: JSON.stringify(S.g) };
+    return JSON.stringify(out);
+})()`;
+
+function describeDiff(hostText, guestText) {
+    const a = JSON.parse(hostText), b = JSON.parse(guestText);
+    const diffs = [];
+    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+        if (!a[k] || !b[k]) { diffs.push(k + ' only on ' + (a[k] ? 'host' : 'guest')); continue; }
+        for (const f of Object.keys(a[k])) if (JSON.stringify(a[k][f]) !== JSON.stringify(b[k][f])) { let x = a[k][f], y = b[k][f]; if (typeof x === 'string' && typeof y === 'string' && x[0] === '{') { try { x = JSON.parse(x); y = JSON.parse(y); } catch { } } let d = ''; if (x && y && typeof x === 'object' && typeof y === 'object') { for (const q of new Set([...Object.keys(x), ...Object.keys(y)])) if (JSON.stringify(x[q]) !== JSON.stringify(y[q])) d += ' ' + q + ':' + JSON.stringify(x[q]).slice(0, 80) + '/' + JSON.stringify(y[q]).slice(0, 80); } diffs.push(k + '.' + f + (d ? ' differs in' + d : ' host=' + JSON.stringify(x).slice(0, 120) + ' guest=' + JSON.stringify(y).slice(0, 120))); }
+    }
+    return diffs.length + ' fields: ' + diffs.slice(0, 8).join(' | ');
+}
+
+
 
 // Each returns a short description of what it changed, or '' when there
 // was nothing to change (then it is skipped).
@@ -104,6 +133,8 @@ const BROAD = new Set(['playerResearch', 'adjacency', 'unitIds', 'rng']);
         else assert.ok(patches <= 3, `${kind} (${what}): ${patches} patches`);
         await play(1500);
         const sums = await wholeState();
+        if (process.env.DIVTRACE && !same(sums)) { const h = host.evalSim(FULL_VALUES), v = victim.evalSim(FULL_VALUES); console.error('FIELDS', describeDiff(h, v)); }
+        if (process.env.DIVTRACE && !same(sums)) console.error('DIVTRACE', kind, JSON.stringify(require('./net-harness.cjs').divergenceReport(host, victim, (victim.patchTicks || [0]).slice(-1)[0] + 1), null, 1));
         assert.ok(same(sums), `${kind} (${what}) on ${victim.name}: state differs after the patch: ${sums}`);
         rows.push(`${kind} (${what}) on ${victim.name}: ${patches} patch${patches > 1 ? 'es' : ''}${full ? ` (${full} full)` : ''} after ${Math.round(patchedAt - t0)} ms, whole state equal`);
     }

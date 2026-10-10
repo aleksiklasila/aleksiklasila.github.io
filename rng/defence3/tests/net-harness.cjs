@@ -917,6 +917,10 @@ class World {
                 if (other[field].get(tick) !== hash) mismatches.push({ tick, a: first.name, b: other.name });
             }
         }
+        if (process.env.DIVTRACE && mismatches.length) {
+            const m = mismatches[0], A = instances.find(i => i.name === m.a), B = instances.find(i => i.name === m.b);
+            if (A && B) console.error('DIVTRACE', m.a, 'vs', m.b, 'from', fromTick, JSON.stringify(divergenceReport(A, B, fromTick), null, 1));
+        }
         return { compared, mismatches };
     }
     // Delay from issuing a command to executing it on the issuer, in ms.
@@ -1028,23 +1032,41 @@ const DIVTRACE_SRC = `(() => {
         try {
             const t = currentTick - 1, o = {};
             for (const u of units) o['u' + u.id] = [u.owner, u.x, u.y, u.vx, u.vy, u.energy, u.commandState, u.workerState, u.path ? u.path.length : -1, u.pathIndex,
-                u.targetUnit, u.targetBuilding, u.workerTarget, u.carryingValue, u.attackTimer, u.dead, u.effectiveLevel, u._pendingPathTarget ? 'P' : '-'].map(r).join(',');
+                u.targetUnit, u.targetBuilding, u.workerTarget, u.carryingValue, u.attackTimer, u.dead, u.effectiveLevel, u._pendingPathTarget ? 'P' : '-',
+                u._us ? 'h' + u._us.hObj[u._si] : '-', u.stackCount, u.effectiveStacks, u.burning, u.poisoned, u.frozen, u.wet, u.sandy, u.watched].map(r).join(',')
+                // (DIVTRACE=2: the movement kernel's steering state too.)
+                + (${process.env.DIVTRACE === '2'} && u._us ? ' K' + (() => { const c = u._us, s = u._si, nv = c.mvNav ? Array.from(c.mvNav.subarray(s * 8, s * 8 + 8)).join('/') : '';
+                    return [c.mvOn[s], c.mvFlags[s], c.mvCD[s], c.mvCT[s], c.mvCN[s], c.mvCTl[s], c.mvCVx[s], c.mvCVy[s], c.mvSteady[s], c.mvFlow[s], c.mvFGen[s], c.mvDest[s], c.mvNavLD[s], c.cwTick[s], c.cwNear[s], nv,
+                        'spd', c.mvSpd[s], u.preComputed && u.preComputed.speed, 'ver', c.esVer[s], 'row', c.statRow[s], 'stk', u.effectiveStacks, u.stackCount, u.unitLevel].map(r).join(','); })() : '');
             players.forEach((p, i) => { if (p) o['p' + i] = [p.energy, p.astar, p.shrine, p.popCount, p.researchTask ? p.researchTask.key + ':' + p.researchTask.workDone : '-'].map(r).join(','); });
-            for (const L of [towers, barracks, collectorSpawners]) for (const b of L) o['b' + b.gx + ',' + b.gy] = [b.type, b.owner, b.energy, b.level, b.stacks, b.underConstruction, b.spawnTimer, Array.isArray(b.spawnQueue) ? b.spawnQueue.length : -1, b.stackingWorkDone].map(r).join(',');
+            for (const L of [towers, barracks, collectorSpawners, _snapFloorItems(), goldMines, astarMines]) for (const b of L) o['b' + b.gx + ',' + b.gy] = [b.type, b.owner, b.energy, b.level, b.stacks, b.underConstruction, b.spawnTimer,
+                Array.isArray(b.spawnQueue) ? b.spawnQueue.length : -1, b.stackingWorkDone, b.cd, b.gold, b.astar, b.effectiveLevel, b.isUpgrading, b.markedForSalvage, b.burning, b.watched].map(r).join(',');
+            for (const d of droppedItems) o['d' + d.gx + ',' + d.gy] = [d.type, d.value, d.timer].map(r).join(',');
+            if (typeof workerReservedTiles !== 'undefined' && workerReservedTiles) { let h = 0; for (let i = 0; i < workerReservedTiles.length; i++) { const x = workerReservedTiles[i]; if (x) h = (Math.imul(h ^ i, 16777619) + (x.id | 0)) | 0; } o.reservations = h; }
             D.set(t, o);
             if (D.size > ${DIVTRACE_TICKS}) D.delete(D.keys().next().value);
+            // (DIVNEAR=id,tick: every column of the units within 80 px of unit id after that tick.)
+            const NEAR = ${JSON.stringify((process.env.DIVNEAR || '').split(',').filter(Boolean).map(Number))};
+            if (NEAR.length === 2 && (t === NEAR[1] || t === NEAR[1] - 1)) {
+                const c0 = units.find(u => u.id === NEAR[0]);
+                if (c0 && c0._us) {
+                    const C = c0._us, rec = {};
+                    for (const u of units) if (u._us && Math.hypot(u.x - c0.x, u.y - c0.y) < 80) { const s = u._si, row = {}; for (const k in C) { const a = C[k]; if (a && a.length !== undefined && typeof a[s] !== 'object' && !/^oc_|^mv(Flow|FGen|Nav$)|^(nvPK|esTaken|cwTick|vsGen|spEpoch|cbTick|dbTick)$/.test(k)) row[k] = r(a[s]); } rec['u' + u.id] = row; }
+                    (__scratch.near ||= {})[t] = rec;
+                }
+            }
         } catch (e) { }
         return out;
     };
 })()`;
 // The first traced tick at which two instances' fingerprints differ, and how.
-function divergenceReport(a, b) {
+function divergenceReport(a, b, fromTick = -Infinity) {
     const A = a.scratch && a.scratch.div, B = b.scratch && b.scratch.div;
     if (!A || !B) return null;
-    const ticks = [...A.keys()].filter(t => B.has(t)).sort((x, y) => x - y);
+    const ticks = [...A.keys()].filter(t => B.has(t) && t >= fromTick).sort((x, y) => x - y);
     for (const t of ticks) {
         const x = A.get(t), y = B.get(t), diff = [];
-        for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) if (x[k] !== y[k]) diff.push(k + ': ' + (x[k] ?? 'none') + '  |  ' + (y[k] ?? 'none'));
+        for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) if (x[k] !== y[k] && (!process.env.DIVPREFIX || k.startsWith(process.env.DIVPREFIX))) diff.push(k + ': ' + (x[k] ?? 'none') + '  |  ' + (y[k] ?? 'none'));
         if (diff.length) return { tick: t, entities: diff.length, first: diff.slice(0, 8) };
     }
     return { tick: null, compared: ticks.length };
@@ -1057,10 +1079,6 @@ function checkHealthy(world, instances, { minCompared = 10, fromTick = 0, label 
         assert.deepEqual(inst.errors.map(e => String(e && e.stack || e).slice(0, 400)), [], label + ' ' + inst.name + ' threw');
     }
     const cmp = world.compareHashes(live, fromTick);
-    if (process.env.DIVTRACE && cmp.mismatches.length) {
-        const m = cmp.mismatches[0], byName = n => live.find(i => i.name === n);
-        if (byName(m.a) && byName(m.b)) console.error('DIVTRACE', label, m.a, 'vs', m.b, JSON.stringify(divergenceReport(byName(m.a), byName(m.b)), null, 1));
-    }
     assert.equal(cmp.mismatches.length, 0, label + ' state diverged: ' + JSON.stringify(cmp.mismatches.slice(0, 3)));
     assert.ok(cmp.compared >= minCompared, label + ' too few hash comparisons: ' + cmp.compared);
     return cmp;
@@ -1083,4 +1101,4 @@ function percentile(values, p) {
     return s[Math.min(s.length - 1, Math.floor(p * s.length))];
 }
 
-module.exports = { World, startHostedMatch, issueRandomCommand, percentile, playFor, checkHealthy, assertAllCommandsExecuted, SMALL_MATCH_CONTROLS, SOURCE_FILES: files };
+module.exports = { World, startHostedMatch, issueRandomCommand, percentile, playFor, checkHealthy, assertAllCommandsExecuted, divergenceReport, SMALL_MATCH_CONTROLS, SOURCE_FILES: files };

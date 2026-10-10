@@ -2586,7 +2586,10 @@ function buildScaleOverlays(cache) {
 function build3DFrameData(flat2d = false) {
     let _ph = _r3dPhase('', 0);
     const sourceView = getLiveRenderView();
-    if (useScaleRendering(flat2d, sourceView)) return buildScaleFrameData(flat2d, sourceView);
+    // Every live scene uses the same per-entity LOD selection. Build the
+    // projection before culling; zoom never switches to a different renderer.
+    const projection = get3DProjectionSnapshot(); projection.flat2d = flat2d;
+    renderer3dInstance.buildViewProjection(projection);
     const queryBounds = flat2d ? getVisibleWorldBounds(2 + Math.ceil(getRenderViewPad() / Math.max(.01, camera.zoom) / TILE)) : get3DVisibleWorldBounds();
     let { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = getChunkRenderView(sourceView, queryBounds, flat2d);
     // Detail per unit, by its drawn size, within a budget (see
@@ -2597,9 +2600,10 @@ function build3DFrameData(flat2d = false) {
     // (A remembered view's structures, Team + history, too: its far ones are
     // glyphs of an instance layer, there being no table of them.)
     const structLive = _isLiveRenderGrid(grid);
-    const structDetail = _isLiveUnitList(sourceView.units) ? _structureDetailSplit([towers, barracks, collectorSpawners, goldMines, astarMines], flat2d, queryBounds, structLive) : null;
+    const structFrame = _structureRenderFrame(sourceView);
+    const structDetail = _isLiveUnitList(sourceView.units) ? _structureDetailSplit([towers, barracks, collectorSpawners, goldMines, astarMines], flat2d, queryBounds, structLive, structFrame) : null;
     if (structDetail) [towers, barracks, collectorSpawners, goldMines, astarMines] = structDetail.lists;
-    const farFloorItems = structDetail && !structLive ? [] : null;
+    const farFloorItems = structDetail && !structLive && !structDetail.frame ? [] : null;
 
     begin3DTextureFrame();
     renderer3dExactTextureBuildsRemaining = 12;
@@ -2892,7 +2896,7 @@ function build3DFrameData(flat2d = false) {
     // only a remembered (history) grid needs a scan of every visible tile.
     if (staticReuse) {
         // Nothing to walk: only what could not be kept.
-    } else if (_isLiveRenderGrid(grid)) {
+    } else if (structDetail?.frame || _isLiveRenderGrid(grid)) {
         let items = structDetail?.floors || getCellItemsRowMajor();
         for (let i = findCellItemRowStart(items, sBounds.minGy); i < items.length; i++) {
             let item = items[i], x = item.gx, y = item.gy;
@@ -3460,7 +3464,7 @@ function build3DFrameData(flat2d = false) {
         flatBatch,
         fx: fxBatch,
         columnLayers: _detailColumns(unitDetail, structDetail),
-        glyphLayers: structDetail && !structDetail.live ? [_structureGlyphLayer(structDetail, farFloorItems, grid)] : null
+        glyphLayers: structDetail && !structDetail.live && !structDetail.frame ? [_structureGlyphLayer(structDetail, farFloorItems, grid)] : null
     };
 }
 // The far structures and floor items of a remembered view as an instance
@@ -3541,10 +3545,10 @@ function getColumnLodCatalog() {
             });
         }
     }
-    for (const [row,type,color] of [[4,'gold','#ffd34d'],[5,'astar','#eefaff']]) {
+    for (const [row,type,color] of [[4,'gold','#f0c83a'],[5,'astar','#d8d8e8']]) {
         const base=styles.length*9+1;
-        styles.push({modelKey:type+'_mine_base',type,color,scaleX:1,scaleY:.5,
-            draw(g){g.fillStyle=color;g.beginPath();g.moveTo(32,5);g.lineTo(58,32);g.lineTo(32,59);g.lineTo(6,32);g.closePath();g.fill();}});
+        styles.push({modelKey:type+'_mine_active',type,color,neutral:true,scaleX:.9/.94,scaleY:.35/.94,
+            draw(g){g.drawImage(type==='astar'?_getAstarMineTileSprite(true):_getGoldMineTileSprite(true),0,0,64,64);}});
         for(let code=0;code<width;code++)lookup[(row*width+code)*4]=base;
     }
     return _columnLodCatalog = {key,width,styles,lookup};
@@ -3553,16 +3557,46 @@ function getColumnLodCatalog() {
 function _detailColumns(unitDetail, structDetail) {
     // (A remembered view's structures have no table: their glyphs are the
     // instance layer's, _structureGlyphLayer.)
-    if (structDetail && !structDetail.live) structDetail = null;
+    if (structDetail && !structDetail.live && !structDetail.frame) structDetail = null;
     if (!unitDetail && !structDetail) return null;
     const base = unitDetail ? unitDetail.columns : { units: null, unitSources: null, alpha: tickAlpha, detailPx: 0,
         visibility: visibilityGridForColumns(), visibilityVersion, fullVisibility, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
         colors: Array.from({ length: 9 }, (_, i) => get3DRenderOwnerColor(i - 1)) };
-    base.structures = structDetail ? _pageTables.s : null;
-    base.structureSources = structDetail ? _pageStructViews : null;
+    base.structures = structDetail ? structDetail.frame || _pageTables.s : null;
+    base.structureSources = structDetail ? structDetail.frame?.sources || _pageStructViews : null;
     base.detailMaskS = structDetail ? structDetail.mask : null;
     base.detailMaskVersionS = structDetail ? structDetail.version : 0;
     return base;
+}
+// Adapt a fog-history view to the same rendering columns. Never substitute
+// the live table here: unseen structures must retain their last-seen state.
+let _historyStructureFrame = null;
+function _structureRenderFrame(view) {
+    if (_isLiveRenderGrid(view.grid)) return typeof _pageTables !== 'undefined' ? _pageTables.s : null;
+    const h = typeof visibilityHistoryState !== 'undefined' ? visibilityHistoryState : null;
+    if (!h || h.view !== view || typeof _pageFrameStrings === 'undefined') return null;
+    const cached=_historyStructureFrame;
+    if(cached?.view===view && cached.tick===gameTime && cached.generation===h.generation) return cached.frame;
+    const sources=[], kinds=[], seen=new Set();
+    const add=(e,kind)=>{if(!e||seen.has(e))return;seen.add(e);sources.push(e);kinds.push(kind);};
+    for(const [name,kind] of [['towers',0],['barracks',1],['collectorSpawners',2],['goldMines',4],['astarMines',5]])
+        for(const e of view[name]) add(e,kind);
+    for(const record of h.memories.floorItems.values()) add(record.snapshot||record.source,3);
+    const n=sources.length,F={n,cap:n,sources,history:true};
+    for(const field of ['x','y','gx','gy','kind','alive','energy','owner','flags','type','utype','vision','angle','amount']) F[field]=new Float32Array(n);
+    const codes=new Map(_pageFrameStrings.map((s,i)=>[s,i]));
+    for(let s=0;s<n;s++) {
+        const e=sources[s],kind=kinds[s];
+        F.gx[s]=e.gx;F.gy[s]=e.gy;F.x[s]=(e.gx+.5)*TILE;F.y[s]=(e.gy+.5)*TILE;
+        F.kind[s]=kind;F.alive[s]=e.dead?0:1;F.energy[s]=Number(e.energy)||0;
+        F.owner[s]=Number.isFinite(e.owner)?e.owner:kind===3?view.grid[e.gy][e.gx].owner:-1;
+        F.flags[s]=(e.underConstruction?1:0)|(e._historyGhost?65536:0);
+        F.type[s]=codes.get(e.type)||0;F.utype[s]=codes.get(e.unitType)||0;
+        F.vision[s]=kind<4?Number(getEntityEffectiveVisibilityRangeArea(e))||0:0;
+        F.angle[s]=Number(e.angle)||0;F.amount[s]=Number(kind===4?e.gold:kind===5?e.astar:0)||0;
+    }
+    _historyStructureFrame={view,tick:gameTime,generation:h.generation,frame:F};
+    return F;
 }
 // Rank only visible models. Chunk bounds are deliberately conservative and
 // include units behind/beside the camera; they must not consume detail slots.
@@ -3630,7 +3664,7 @@ let _structProjectionCache = null;
 let _structSpatialCache = null;
 function _structureDetailCandidates(F, flat2d) {
     const client = typeof _simClient === 'undefined' ? null : _simClient;
-    const revision = client ? client.structMver : F;
+    const revision = F.history ? F : client ? client.structMver : F;
     const columns = Math.ceil(GRID_W / 16), rows = Math.ceil(GRID_H / 16);
     let C = _structSpatialCache;
     if (!C || C.client !== client || C.revision !== revision || C.n !== F.n || C.cap !== F.cap || C.columns !== columns || C.rows !== rows) {
@@ -3662,15 +3696,16 @@ function _structureDetailCandidates(F, flat2d) {
     C.key = key;
     return slots;
 }
-function _structureDetailSplit(lists, flat2d, bounds, live = true) {
+function _structureDetailSplit(lists, flat2d, bounds, live = true, renderFrame = null) {
     const R = renderer3dInstance;
     if (!R || typeof R.columnPixelScale !== 'function' || (live && (typeof _pageTables === 'undefined' || !_pageTables.s))) return null;
     const cacheKey = _detailViewKey(flat2d) + '|' + gameTime + '|' + visibilityVersion + '|' + fullVisibility;
-    if (live && _structDetailCache?.key === cacheKey && _structDetailCache.frame === _pageTables.s) return _structDetailCache.value;
-    if (live && _pageTables.s.kind && _pageTables.s.n > STRUCT_DETAIL_BUDGET) {
+    const packed = renderFrame || (live ? _pageTables.s : null);
+    if (packed && _structDetailCache?.key === cacheKey && _structDetailCache.frame === packed) return _structDetailCache.value;
+    if (packed?.kind) {
         // Work directly from the packed table. At a low pitch even a small
         // view's ground AABB can contain the entire map's buildings.
-        const F = _pageTables.s, n = F.n, previous = _structDetailPrevious;
+        const F = packed, n = F.n, previous = _structDetailPrevious;
         if (_structDetailPx.length < n) _structDetailPx = new Float32Array(Math.ceil(n * 1.5));
         const P = _structDetailPx.subarray(0, n);
         // Buildings do not move every simulation tick. Cache their projected
@@ -3690,14 +3725,14 @@ function _structureDetailSplit(lists, flat2d, bounds, live = true) {
                 projection.x[s] = gx; projection.y[s] = gy; projection.retained[s] = retained;
             }
             if (!F.alive[s] || F.kind[s] === 6 || (F.kind[s] < 4 && F.energy[s] <= 0)) continue;
-            if (!fullVisibility && !(visibilityGrid[gy]?.[gx] > 0)) continue;
+            if (!fullVisibility && !(F.flags?.[s]&65536) && !(visibilityGrid[gy]?.[gx] > 0)) continue;
             P[s] = projection.scores[s];
         }
         projection.key = viewKey;
         const slots = _detailPick(P, STRUCT_DETAIL_BUDGET), weights = _detailWeights(P,slots,STRUCT_DETAIL_BUDGET), selected = new Set();
         const out = lists.map(() => []), floors = [], byKind = [0, 1, 2, -1, 3, 4];
         for (const s of slots) {
-            const e = _pageStructViews[s];
+            const e = F.sources ? F.sources[s] : _pageStructViews[s];
             if (!e) continue;
             selected.add(e);
             e._r3dDetailBlend = weights.get(s)/255;
@@ -3706,22 +3741,19 @@ function _structureDetailSplit(lists, flat2d, bounds, live = true) {
             else if (F.kind[s] === 3) floors.push(e);
         }
         let value = previous;
-        if (!previous || !previous.live || previous.mask.length !== F.cap || previous.selected.size !== selected.size || [...selected].some(e => !previous.selected.has(e)) || slots.some(s=>previous.mask[s]!==weights.get(s))) {
+        if (!previous || previous.live!==live || previous.mask?.length !== F.cap || previous.selected.size !== selected.size || [...selected].some(e => !previous.selected.has(e)) || slots.some(s=>previous.mask[s]!==weights.get(s))) {
             const mask = new Uint8Array(F.cap);
             for (const s of slots) mask[s] = weights.get(s);
             floors.sort((a, b) => a.gy - b.gy || a.gx - b.gx);
-            value = _structDetailPrevious = { lists: out, floors, selected, mask, version: ++_structDetailVersion, live: true };
+            value = _structDetailPrevious = { lists: out, floors, selected, mask, version: ++_structDetailVersion, live };
         }
+        value.frame = F;
         _structDetailCache = { key: cacheKey, frame: F, value };
         return value;
     }
     const all = lists.concat(live ? [getCellItemsRowMajor()] : []);
     let n = 0;
     for (const L of all) n += L.length;
-    // (Split from 125% of the budget, back under 80%: no blinking at its edge.)
-    if (!_structDetailMode && n > STRUCT_DETAIL_BUDGET * 1.25) _structDetailMode = true;
-    else if (_structDetailMode && n < STRUCT_DETAIL_BUDGET * .8) _structDetailMode = false;
-    if (!_structDetailMode) { for(const e of _structDetailPrevious?.selected || []) e._r3dDetailBlend=1; _structDetailPrevious = null; return null; }
     if (_structDetailPx.length < n) _structDetailPx = new Float32Array(Math.ceil(n * 1.5));
     const P = _structDetailPx.subarray(0, n), previous = _structDetailPrevious;
     let i = 0;
@@ -3749,14 +3781,13 @@ function _structureDetailSplit(lists, flat2d, bounds, live = true) {
 // Detailed models cost ~0.1 ms of CPU a unit; a close view of an army holds
 // thousands. Visible readable units share a hard budget; all others use GPU
 // glyphs. The same slot mask selects exactly one representation on the GPU.
-// null: every unit in view in detail (few enough, or no frame).
+// null only when no packed frame / renderer is available.
 // GPU silhouettes cover the middle distances; reserve model/texture work for
 // bodies large enough to show it. Thresholds are CSS pixels, not render pixels.
 const UNIT_DETAIL_BUDGET = 600, UNIT_DETAIL_MIN_PX = 24;
 let _unitDetailPx = new Float32Array(0);
-// Stable detail (no blinking between models and glyphs): the split starts
-// over 125% of the budget and ends under 80% of it; a unit in detail stays so
-// down to 85% of the minimum readable size, with a small retention bonus.
+// A unit in detail stays so down to 85% of the minimum readable size,
+// with a small retention bonus. Population never changes the LOD policy.
 // The GPU draws as glyphs exactly the units
 // the split did not pick (a mask per slot, uploaded when it changes).
 let _detailMode = false, _detailMask = null, _detailSlots = [], _detailMaskVersion = 0, _detailUnits = [];
@@ -3769,10 +3800,7 @@ function _detailMaskClear() {
 }
 function _unitDetailSplit(viewUnits, flat2d, bounds) {
     const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null, R = renderer3dInstance;
-    const n0 = F ? F.count : viewUnits.length;
-    if (!_detailMode && n0 > UNIT_DETAIL_BUDGET * 1.25) _detailMode = true;
-    else if (_detailMode && n0 < UNIT_DETAIL_BUDGET * .8) _detailMode = false;
-    if (!F || !R || typeof R.columnPixelScale !== 'function' || !_detailMode) { _detailMaskClear(); return null; }
+    if (!F || !R || typeof R.columnPixelScale !== 'function') { _detailMaskClear(); return null; }
     const cacheKey = _detailViewKey(flat2d) + '|' + visibilityVersion + '|' + fullVisibility;
     if (_unitDetailCache?.key === cacheKey && _unitDetailCache.frame === F && _unitDetailCache.source === viewUnits) {
         _unitDetailCache.value.columns.alpha = tickAlpha;

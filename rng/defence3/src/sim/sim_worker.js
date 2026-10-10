@@ -454,6 +454,9 @@ function _simRequest(msg) {
             // The page's world comes whole with the next frame.
             simFrameResetAll();
             simPresentationStart();
+            // The page's clock waits for this epoch's world (simClientWorldReady):
+            // without it a match stopped for good after a mid-match restore.
+            _simPost({ type: 'started', epoch: _simEpoch, tick: currentTick });
             break;
         }
         case 'setGlobals':

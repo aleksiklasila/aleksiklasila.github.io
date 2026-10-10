@@ -658,18 +658,23 @@ function _requestAdjacencyRecalcForThing(thing, pad = 1) {
 // views have no _stT and stay out.
 // (rcnt: structures per hash region (SNAP_REGION_TILES square, ry * rw +
 // rx), so the hash skips empty regions.)
-const _ST = { n: 0, code: null, own: null, uc: null, val: null, rcnt: null, rw: 0 };
+// (tim: a tower's cooldown deadline, Tower._cdUntil; a barrack's or
+// spawner's spawn timer.)
+// (mines: the tiles holding mines (a Set: few; the hash takes every mine
+// every hash, see _snapTickHashStatic).)
+const _ST = { n: 0, code: null, own: null, uc: null, val: null, tim: null, rcnt: null, rw: 0, mines: new Set() };
 const ST_OWNER_NONE = 0x7ff9;
 function _stOwnerWord(v) { return (v | 0) === v ? v : ST_OWNER_NONE; }
 // (Made at the first entity joining: the page's lookup holds views only.)
 function structTableReset() {
     for (const e of _activeTileEntities) if (e && e._stT >= 0) e._stT = -1;
     const T = _ST;
-    if (T.n !== GRID_W * GRID_H) { T.n = 0; T.code = T.own = T.uc = T.val = T.rcnt = null; }
-    else { T.code.fill(0); T.own.fill(0); T.uc.fill(0); T.val.fill(0); T.rcnt.fill(0); }
+    T.mines.clear();
+    if (T.n !== GRID_W * GRID_H) { T.n = 0; T.code = T.own = T.uc = T.val = T.tim = T.rcnt = null; }
+    else { T.code.fill(0); T.own.fill(0); T.uc.fill(0); T.val.fill(0); T.tim.fill(0); T.rcnt.fill(0); }
 }
 function _stRegion(t) { const gx = t % GRID_W, gy = (t - gx) / GRID_W, rt = SNAP_REGION_TILES; return Math.floor(gy / rt) * _ST.rw + Math.floor(gx / rt); }
-function _stClear(t) { const T = _ST; if (T.code[t] !== 0) T.rcnt[_stRegion(t)]--; T.code[t] = 0; T.own[t] = 0; T.uc[t] = 0; T.val[t] = 0; }
+function _stClear(t) { const T = _ST; if (T.code[t] !== 0) { T.rcnt[_stRegion(t)]--; if (T.code[t] >= 0x66) T.mines.delete(t); } T.code[t] = 0; T.own[t] = 0; T.uc[t] = 0; T.val[t] = 0; T.tim[t] = 0; }
 // Tile (gx, gy) held `prev` and now holds `ref` (null: nothing).
 function structTableSet(gx, gy, prev, ref) {
     const t = gy * GRID_W + gx, T = _ST, n = GRID_W * GRID_H;
@@ -678,7 +683,7 @@ function structTableSet(gx, gy, prev, ref) {
     const joins = !!ref && typeof ref._stT === 'number' && !!ref._stCode;
     if (T.n !== n) {
         if (!joins) return;
-        T.n = n; T.code = new Uint8Array(n); T.own = new Int32Array(n); T.uc = new Uint8Array(n); T.val = new Float64Array(n);
+        T.n = n; T.code = new Uint8Array(n); T.own = new Int32Array(n); T.uc = new Uint8Array(n); T.val = new Float64Array(n); T.tim = new Float64Array(n);
         T.rw = Math.ceil(GRID_W / SNAP_REGION_TILES); T.rcnt = new Uint8Array(T.rw * Math.ceil(GRID_H / SNAP_REGION_TILES));
     }
     _stClear(t);
@@ -687,8 +692,18 @@ function structTableSet(gx, gy, prev, ref) {
     if (ref._stT >= 0 && ref._stT !== t) _stClear(ref._stT);
     ref._stT = t;
     T.code[t] = ref._stCode; T.rcnt[_stRegion(t)]++;
-    if (ref._stMine) { T.own[t] = ST_OWNER_NONE; T.val[t] = Number(ref._mv); }
-    else { T.own[t] = _stOwnerWord(ref._ow); T.uc[t] = ref._uc ? 1 : 0; T.val[t] = Number(ref._en); }
+    if (ref._stMine) T.mines.add(t);
+    _stWrite(ref, t);
+}
+function _stWrite(ref, t) {
+    const T = _ST;
+    if (ref._stMine) { T.own[t] = ST_OWNER_NONE; T.val[t] = Number(ref._mv); T.tim[t] = 0; }
+    else { T.own[t] = _stOwnerWord(ref._ow); T.uc[t] = ref._uc ? 1 : 0; T.val[t] = Number(ref._en); T.tim[t] = ref._stCode === 0x22 ? Number(ref._cdUntil) || 0 : ref._stTimer ? Number(ref._spt) || 0 : 0; }
+}
+// A structure's entry written again from its fields (a restore sets some
+// fields directly, not through the accessors).
+function structTableRefresh(e) {
+    if (e && e._stT >= 0 && _ST.n && _ST.code[e._stT] !== 0) _stWrite(e, e._stT);
 }
 // The structure lists (towers, barracks, collectorSpawners): an entry
 // removed in O(1), the last entry taking its place (indexOf and splice over
@@ -715,7 +730,7 @@ function structTableInit(o) {
     o._stT = -1;
     o._li = -1;
     if (o._stMine) o._mv = 0;
-    else { o._ow = -1; o._uc = false; o._en = 0; }
+    else { o._ow = -1; o._uc = false; o._en = 0; if (o._stTimer) o._spt = 0; }
 }
 // Accessors of the hashed core on a structure class (code: the hash's kind
 // code; mineKey: a mine's amount field, gold or astar).
@@ -738,6 +753,14 @@ function structTableAccessors(C, code, mineKey = null) {
     Object.defineProperty(P, 'energy', { enumerable: true, configurable: true,
         get() { return this._en; },
         set(v) { this._en = v; const t = this._stT; if (t >= 0) _ST.val[t] = Number(v); } });
+    // (Barracks and spawners: their spawn timer, hashed with the core: a
+    // timer that differs shows in the units made only seconds later.)
+    if (code === 0x33 || code === 0x44) {
+        Object.defineProperty(P, '_stTimer', { value: true, enumerable: false });
+        Object.defineProperty(P, 'spawnTimer', { enumerable: true, configurable: true,
+            get() { return this._spt; },
+            set(v) { this._spt = v; const t = this._stT; if (t >= 0) _ST.tim[t] = Number(v) || 0; } });
+    }
 }
 // Floor items (traps, walls, roads...) are structures like the buildings;
 // mines hold an amount. Their other fields are set by whoever places or
@@ -751,7 +774,7 @@ structTableAccessors(GoldMine, 0x66, 'gold');
 structTableAccessors(AstarMine, 0x77, 'astar');
 // A structure's snapshot keys: the accessors' names in place of their
 // backing fields (the table tile and list place are not state).
-const _ST_KEY_OF = { _ow: 'owner', _uc: 'underConstruction', _en: 'energy' };
+const _ST_KEY_OF = { _ow: 'owner', _uc: 'underConstruction', _en: 'energy', _spt: 'spawnTimer' };
 function structTableKeys(e, keys) {
     const out = [];
     for (const k of keys) {

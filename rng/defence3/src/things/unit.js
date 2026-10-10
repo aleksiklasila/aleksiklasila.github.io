@@ -2616,9 +2616,23 @@ function simMoveRefreshAllStats() {
     for (const u of units) if (u && u._us) simMoveStatsChanged(u);
 }
 
+// (At a resync, on every peer, and in a restore: every unit disarmed, and
+// what only an armed unit's kernel reads (its arming, steering, steady
+// window, parking, pending chunk move) as a fresh slot has it, so a unit
+// that was armed before and a restored one start alike: leftovers of an
+// earlier arming made the two peers' units move differently.)
+const SIM_MOVE_ARM_COLUMNS = ['mvFlags', 'mvReach', 'mvBase', 'mvWlen', 'mvPlen', 'mvScan', 'mvWake', 'mvFlow', 'mvFGen', 'mvDest', 'mvReady', 'mvNP',
+    'mvHWin', 'mvHTT', 'mvHVer', 'mvHT', 'mvHTId', 'mvChs', 'mvTgX', 'mvTgY', 'mvTgTol', 'mvSteady', 'mvCT', 'mvCN', 'mvCTl', 'mvCVx', 'mvCVy',
+    'mvWk', 'mvSpent', 'mvOut', 'spMvOld', 'spMvNew', 'mvNav'];
 function simMoveDisarmAll() {
     const S = _simUnitState;
-    if (S) S.columns.mvOn.fill(0);
+    if (!S) return;
+    const c = S.columns;
+    c.mvOn.fill(0);
+    for (const k of SIM_MOVE_ARM_COLUMNS) if (c[k]) c[k].fill(0);
+    c.mvCD.fill(-1);
+    // (Pending chunk moves are counted at the unit pass's end: none now.)
+    const NV = c.mvNav; if (NV) for (let i = 0; i < NV.length; i += SIM_NAV_STRIDE) NV[i] = -1;
 }
 // The flow look-aheads, at a resync on every peer: a new build or wall
 // change leaves them standing until the unit's refresh tick, so their

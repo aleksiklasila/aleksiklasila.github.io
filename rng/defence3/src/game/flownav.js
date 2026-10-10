@@ -643,12 +643,17 @@ function navFieldsSweepStep() {
     // (From the slots' columns: a unit's route field (rtEnd, nvProf, its
     // route key in oc__routeKey) and its path's last flow node's (nvPK, the
     // path setter's). No unit object is read.)
+    // (By the units list's order, the same on every peer, through the slot
+    // map: by slot, which units a cycle visits, and so which fields it
+    // drops, depended on each peer's slot layout (a restore, a join).)
     const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
-    if (S) {
-        const C = S.columns, LIVE = C.live, DEAD = C.dead, RE = C.rtEnd, PR = C.nvProf, PK = C.nvPK, RK = C.oc__routeKey, n = S.owners.length;
+    const slots = S && typeof _unitSlotMapEnsure === 'function' ? _unitSlotMapEnsure() : null;
+    if (S && slots) {
+        const C = S.columns, LIVE = C.live, DEAD = C.dead, RE = C.rtEnd, PR = C.nvProf, PK = C.nvPK, RK = C.oc__routeKey, n = units.length;
         const Fn = _navFields.pools[0], Fw = _navFields.pools[1];
-        for (let s = k; s < n; s += step) {
-            if (!LIVE[s] || DEAD[s]) continue;
+        for (let i = k; i < n; i += step) {
+            const s = slots[i];
+            if (!(s >= 0) || !LIVE[s] || DEAD[s]) continue;
             const e = RE[s];
             if (e >= 0 && RK[s] === NAV_ROUTE_KEY) { const sl = Fw.byKey.get(PR[s] * 16777216 + e); if (sl !== undefined) Fw.seen[sl] = mark; }
             const pk = PK[s];

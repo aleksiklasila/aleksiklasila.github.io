@@ -26,6 +26,8 @@ const CHECK = `(() => {
         if (_ST.own[t] !== ((e.owner | 0) === e.owner ? e.owner : ST_OWNER_NONE)) bad.push('owner ' + t);
         if (_ST.uc[t] !== (e.underConstruction ? 1 : 0)) bad.push('uc ' + t);
         if (!Object.is(_ST.val[t], Number(e.energy))) bad.push('energy ' + t + ' ' + _ST.val[t] + ' ' + e.energy);
+        if (e._stCode === 0x22 && !Object.is(_ST.tim[t], Number(e._cdUntil) || 0)) bad.push('cooldown ' + t);
+        if (e._stTimer && !Object.is(_ST.tim[t], Number(e.spawnTimer) || 0)) bad.push('spawn timer ' + t);
     }
     // (The per-region counts the hash skips empty regions by.)
     if (_ST.n) {
@@ -63,7 +65,7 @@ assert.equal(c.nbad, 0, 'after placing: ' + c.bad.join('; '));
 // Writes through the accessors; a destroyed structure leaves the table.
 a.eval(`(() => {
     const { gx, gy } = ${JSON.stringify(placed.found)};
-    const t = getTileEntityRef(gx, gy); t.energy = 7.5; t.underConstruction = false; t.owner = 1;
+    const t = getTileEntityRef(gx, gy); t.energy = 7.5; t.underConstruction = false; t.owner = 1; t.cd = 13;
     const f = getTileEntityRef(gx + 2, gy); f.energy = 3;
     const m = goldMines[0]; m.gold = m.gold - 11;
     destroyBuilding(getTileEntityRef(gx + 1, gy));

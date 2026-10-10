@@ -451,7 +451,10 @@ function _snapHashGlobals(slice = -1, round = 0) {
 // Membership and order of one list: its length and the entries at the
 // positions of this tick's slice (slice < 0: all); units by id, the others
 // by tile.
-function _snapHashOrder(list, slice = -1, round = -1) {
+// (Rotations over which a structure list's positions are all hashed: each
+// position every 80 ticks.)
+const SNAP_HASH_ORDER_ROUNDS = 2;
+function _snapHashOrder(list, slice = -1, round = -1, rounds = SNAP_HASH_GRID_ROUNDS) {
     let h = 2166136261 | 0;
     if (list === 'u') {
         let S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
@@ -470,8 +473,8 @@ function _snapHashOrder(list, slice = -1, round = -1) {
         // length and its region.)
         const L = _snapListEntities(list);
         h = Math.imul(h ^ L.length, 16777619);
-        const step = slice < 0 ? 1 : round < 0 ? SNAP_HASH_SLICES : SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS;
-        for (let i = slice < 0 ? 0 : round < 0 ? slice : slice + SNAP_HASH_SLICES * round; i < L.length; i += step) {
+        const step = slice < 0 ? 1 : round < 0 ? SNAP_HASH_SLICES : SNAP_HASH_SLICES * rounds;
+        for (let i = slice < 0 ? 0 : round < 0 ? slice : slice + SNAP_HASH_SLICES * (round % rounds); i < L.length; i += step) {
             const e = L[i];
             h = Math.imul(Math.imul(h ^ e.gx, 16777619) ^ e.gy, 16777619);
         }
@@ -544,6 +547,9 @@ function _snapStaticCoreSweep(slice, skipRound, regions) {
                     let h = (Math.imul(gx, 4099) + gy) ^ c;
                     if (c < 0x66) h = Math.imul(Math.imul(h ^ OWN[t], 16777619) ^ (UC[t] ? 0x3bd : 0x2bd), 16777619);
                     h = (v | 0) === v ? Math.imul(h ^ v, 16777619) : _snapHNum(h, v);
+                    // (A tower's cooldown deadline (its shots), a barrack's or
+                    // spawner's spawn timer.)
+                    if (c === 0x22 || c === 0x33 || c === 0x44) { const d = T.tim[t]; h = (d | 0) === d ? Math.imul(h ^ d, 16777619) : _snapHNum(h, d); }
                     acc = (acc + (Math.imul(h ^ (h >>> 15), 2246822519) >>> 0)) | 0;
                     n++;
                 }
@@ -736,6 +742,31 @@ function _snapTickHashStatic(t, slice, allSlices, regions, push) {
         const round = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS;
         hashStatic(listOf(slice + SNAP_HASH_SLICES * round));
         if (SNAP_HASH_STATIC_CORE_ALL) _snapStaticCoreSweep(slice, round, regions);
+        // (Every mine, every hash: few, read from the table, and a mine that
+        // differs shows nowhere else for a long time.)
+        if (typeof _ST !== 'undefined' && _ST.n && _ST.mines.size) {
+            const T = _ST;
+            for (const tl of T.mines) {
+                const gx = tl % GRID_W, gy = (tl - gx) / GRID_W, v = T.val[tl];
+                let h = ((Math.imul(gx, 4099) + gy) ^ T.code[tl]) ^ 0x6d1;
+                h = (v | 0) === v ? Math.imul(h ^ v, 16777619) : _snapHNum(h, v);
+                _snapRegionAdd(regions, Math.floor(gy / rt) * 1024 + Math.floor(gx / rt), (Math.imul(h ^ (h >>> 15), 2246822519)) >>> 0);
+            }
+        }
+        // (The worker reservations' per-region digests, every slice: kept by
+        // workerReservedSet; regions without entries passed over.)
+        if (typeof _workerReservedSums === 'function') {
+            const counts = _workerReservedCounts(), sums = _workerReservedSums();
+            if (counts && sums) {
+                const S = SNAP_HASH_SLICES, rw = Math.ceil(GRID_W / rt), rh = Math.ceil(GRID_H / rt);
+                for (let ry = 0; ry < rh; ry++) for (let rx = (((slice - (1024 % S) * ry) % S) + S) % S; rx < rw; rx += S) {
+                    const i = ry * rw + rx;
+                    if (counts[i] === 0) continue;
+                    const h = Math.imul(sums[i] ^ 0x51ed27, 2246822519);
+                    _snapRegionAdd(regions, ry * 1024 + rx, (h ^ (h >>> 15)) >>> 0);
+                }
+            }
+        }
     }
     for (let i = 0; i < droppedItems.length; i++) {
         let e = droppedItems[i];
@@ -820,7 +851,10 @@ function snapTickHash(tick, allSlices = false) {
         push(SNAP_PART_PROJECTILES * SNAP_CODE_SHIFT, hp >>> 0);
         push(SNAP_PART_GLOBALS * SNAP_CODE_SHIFT, _snapHashGlobals(allSlices ? -1 : slice, Math.floor(t / SNAP_HASH_SLICES)));
         // (The units' order: from the units kernel below.)
-        for (let list of SNAP_ORDER_LISTS) if (list !== 'u') push(SNAP_PART_ORDER * SNAP_CODE_SHIFT + SNAP_LIST_CODE[list], _snapHashOrder(list, allSlices ? -1 : slice, Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS));
+        // (The towers', barracks' and spawners' order in SNAP_HASH_ORDER_ROUNDS
+        // rotations (their updates go in that order); mines' and drops' in
+        // the grid's.)
+        for (let list of SNAP_ORDER_LISTS) if (list !== 'u') push(SNAP_PART_ORDER * SNAP_CODE_SHIFT + SNAP_LIST_CODE[list], _snapHashOrder(list, allSlices ? -1 : slice, Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS, list === 't' || list === 'b' || list === 's' ? SNAP_HASH_ORDER_ROUNDS : SNAP_HASH_GRID_ROUNDS));
     }
     // Entities of this slice's regions, summed per region (order-free).
     const regions = _snapRegionsBegin();
@@ -2235,7 +2269,13 @@ function snapDecodeState(S, options = null) {
         // from its base tables (sent) at its effective level, from the current
         // tables, with nothing else touched. A unit not initialized yet gets
         // them at its first stats pass, as on the peer it came from.)
+        if (typeof structTableRefresh === 'function') for (const list of ['t', 'b', 's', 'f', 'g', 'a']) for (const e of (shells[list] || [])) structTableRefresh(e);
         if (typeof unitDerivedStatsRestore === 'function') for (let u of (partial ? shells.u : units)) if (u && !u.dead) unitDerivedStatsRestore(u);
+        // (The object fields' digest, as their values give it: restored
+        // fields reach it through setters whose order and starting values
+        // the restore does not control (a shell's constructor, a slot's
+        // last unit); the hash reads the digest, so it is made again here.)
+        if (typeof simUnitHashDigest === 'function') for (let u of (partial ? shells.u : units)) if (u && u._us) u._us.hObj[u._si] = simUnitHashDigest(u);
         // (Max energy and the movement stats into the columns, as the
         // others' flush did: this peer's flush ran before its units came.)
         if (typeof simUnitMaxE === 'function') for (let u of (partial ? shells.u : units)) if (u && u._us) { simUnitMaxE(u); if (typeof simMoveStatsChanged === 'function') simMoveStatsChanged(u); }
@@ -2255,9 +2295,13 @@ function snapDecodeState(S, options = null) {
         if (typeof simMoveDisarmAll === 'function') { simMoveDisarmAll(); simMoveResetLookCaches(); } if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsInvalidateAll === 'function') { effStatsInvalidateAll(); effStatsAppliedSync(); } if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset(); if (typeof shrineResetPending === 'function') shrineResetPending();
         if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
         if (typeof simMoveWallsDirty === 'function') simMoveWallsDirty();
-        // The navigation as the snapshot's peer has it (the same walls).
-        if (typeof navRestoreState === 'function') navRestoreState(S.g ? S.g.nav : null);
-        if (typeof navFieldsRestore === 'function') navFieldsRestore();
+        // The navigation as the snapshot's peer has it (the same walls). Not
+        // on a page whose simulation runs in its worker (simClientEnabled: its
+        // copy of the world is for drawing; it has no kernels, and the worker
+        // restores its own): a join or host change there threw.
+        const pageOnly = typeof simClientEnabled !== 'undefined' && simClientEnabled;
+        if (!pageOnly && typeof navRestoreState === 'function') navRestoreState(S.g ? S.g.nav : null);
+        if (!pageOnly && typeof navFieldsRestore === 'function') navFieldsRestore();
         // Rebuilt from the restored world on its first query.
         if (typeof resetVisibilityCoverage === 'function') resetVisibilityCoverage();
         // Statuses as restored (buildings running them tick them: woken).

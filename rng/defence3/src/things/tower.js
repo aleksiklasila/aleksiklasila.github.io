@@ -231,7 +231,7 @@ function towersTick() {
 class Tower {
     // (The cooldown: see towerSchedule.)
     get cd() { return Math.max(0, (Number(this._cdUntil) || 0) - gameTime); }
-    set cd(v) { this._cdUntil = gameTime + Math.max(0, Number(v) || 0); towerSchedule(this); }
+    set cd(v) { this._cdUntil = gameTime + Math.max(0, Number(v) || 0); if (this._stT >= 0 && typeof _ST !== 'undefined' && _ST.n) _ST.tim[this._stT] = this._cdUntil; towerSchedule(this); }
     constructor(gx, gy, type, owner, startStacks = 1) {
         if (typeof structTableInit === 'function') structTableInit(this);
         this.gx = gx; this.gy = gy; this.type = type; this.owner = owner;

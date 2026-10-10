@@ -12,6 +12,15 @@ const c = vm.createContext({
 });
 vm.runInContext(source.slice(source.indexOf('let _columnLodCatalog = null;'), source.indexOf('// Shared sprites for every unit/structure')), c);
 const first = c.getColumnLodCatalog();
+const mineSprites={gold:{type:'gold-square'},astar:{type:'astar-gray-square'}};
+c._getGoldMineTileSprite=()=>mineSprites.gold;c._getAstarMineTileSprite=()=>mineSprites.astar;
+for(const type of ['gold','astar']) {
+    const style=first.styles.find(s=>s.modelKey===type+'_mine_active');
+    const calls=[];style.draw({drawImage:(...args)=>calls.push(args)});
+    assert.equal(calls[0][0],mineSprites[type],'far mines reuse their real square tile sprite');
+    assert.equal(style.neutral,true,'resource tiles do not acquire a player-colored rim');
+    assert.equal(style.scaleX,.9/.94);assert.equal(style.scaleY,.35/.94);
+}
 assert.equal(first.styles.length, 5);
 assert.equal(first.lookup[(7 * first.width + 1) * 4], 1);
 // Runtime labels can grow beyond a texture-width boundary on any tick.

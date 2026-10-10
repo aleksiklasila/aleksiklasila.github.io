@@ -66,6 +66,25 @@ const buildings=c._structureDetailSplit([structures],true,{},true);
 assert.equal(buildings.selected.size,600,'equal-sized structures also fill a bounded budget');
 assert.equal(buildings.mask.reduce((a,b)=>a+(b>0),0),600);
 assert.equal(c._structureDetailSplit([structures],true,{},true),buildings,'unchanged structures reuse their model layer');
+// One object has the same size-based representation as an army. Populations
+// below the old 600/750 cutoffs must not bypass the column renderer.
+for(const flat of [true,false]) {
+    project(flat,.15);
+    populate([[500,500]]);
+    const farUnit=c._unitDetailSplit(c.units,flat,{});
+    assert.ok(farUnit?.columns.units,'a single distant unit uses the shared columns');
+    assert.equal(farUnit.units.length,0);
+    project(flat,4);
+    assert.equal(c._unitDetailSplit(c.units,flat,{}).units.length,1);
+}
+project(true,.15);
+c._pageTables.s={cap:1,n:1,kind:new Float32Array([0]),alive:new Float32Array([1]),energy:new Float32Array([10]),gx:new Float32Array([500]),gy:new Float32Array([500])};
+c._pageStructViews=[{_s:0,gx:500,gy:500}];c.gameTime++;
+assert.equal(c._structureDetailSplit([c._pageStructViews,[],[],[],[]],true,{},true).selected.size,0,'one small building uses the same far LOD');
+project(true,4);c.gameTime++;
+assert.equal(c._structureDetailSplit([c._pageStructViews,[],[],[],[]],true,{},true).selected.size,1,'one readable building receives detail');
+c.units=points.map((_,s)=>({_s:s}));c.simClientCurrentUnitVis=()=>F;
+project(true);
 // The packed structure path rejects off-screen slots without touching views.
 const T={cap:2000,n:2000};
 for(const name of ['kind','alive','energy','gx','gy']) T[name]=new Float32Array(2000);
@@ -104,3 +123,26 @@ assert.equal(lod(1,67),1,'medium mesh does not flicker near the full boundary');
 assert.equal(lod(2,42),2,'coarse mesh does not flicker near the medium boundary');
 assert.equal(lod(2,45),1);
 assert.equal(lod(1,71),0);
+
+// Fog history is a source adapter, not a different rendering policy.
+vm.runInContext(source.slice(source.indexOf('let _historyStructureFrame ='),source.indexOf('// Rank only visible models.')),c);
+vm.runInContext(source.slice(source.indexOf('function _detailColumns('),source.indexOf('// Adapt a fog-history view')),c);
+c._pageFrameStrings=['','fire','norm'];c.getEntityEffectiveVisibilityRangeArea=()=>2;
+const liveGrid=[];c._isLiveRenderGrid=g=>g===liveGrid;
+const tower={_s:99,gx:500,gy:500,type:'fire',energy:10,owner:0};
+const mine={gx:501,gy:500,astar:123,_historyGhost:true};
+const floor={gx:502,gy:500,type:'fire',energy:10,owner:0,_historyGhost:true};
+const historyView={grid:[],towers:[tower],barracks:[],collectorSpawners:[],goldMines:[],astarMines:[mine]};
+c.visibilityHistoryState={view:historyView,generation:1,memories:{floorItems:new Map([[1,{snapshot:floor}],[2,{source:tower}]])}};
+const H=c._structureRenderFrame(historyView);
+assert.equal(H.n,3,'floor index does not duplicate barracks/towers');
+assert.equal(H.amount[1],123);assert.equal(H.flags[1],65536);
+assert.equal(tower._s,99,'history adaptation never overwrites live slots');
+assert.equal(c._structureRenderFrame(historyView),H,'camera changes reuse the packed history frame');
+project(true,.15);c.gameTime++;
+const D=c._structureDetailSplit([historyView.towers,[],[],[],historyView.astarMines],true,{},false,H);
+assert.equal(D.selected.size,0);
+assert.equal(c._detailColumns(null,D).structures,H,'history buildings use the same GPU columns at far zoom');
+project(true,4);c.gameTime++;
+assert.equal(c._structureDetailSplit([historyView.towers,[],[],[],historyView.astarMines],true,{},false,H).selected.size,3);
+assert.equal(H.amount[1],123,'LOD changes preserve frozen resource state');

@@ -52,7 +52,11 @@ const SIM_UNIT_OBJ_FIELDS = ['holdPosition', 'forcedAttackTarget', 'targetUnit',
 // the value: columns kept from it.)
 const SIM_UNIT_OBJ_HOOKS = { workerType: 'c.isWk[s] = v ? 1 : 0;' };
 const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'targetBuilding', 'pathIsFallbackAstar', '_pendingPathTarget', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved', '_statsBehind', '_forcedTargetLastSeenX', '_forcedTargetLastSeenY',
-    '_builderLastWatchX', '_builderLastWatchY', '_builderLastMoveTick', '_routeEnd', 'watchedByTeam', ...SIM_UNIT_OBJ_FIELDS];
+    '_builderLastWatchX', '_builderLastWatchY', '_builderLastMoveTick', '_routeEnd', 'watchedByTeam', ...SIM_UNIT_OBJ_FIELDS,
+    // (Its effective tables, as it has them: computed at its last stats
+    // change, from the tables of then, so not derivable from the state; one
+    // pool entry per distinct object, stat map entries by reference.)
+    'preComputedEffective', 'preComputed'];
 // Every field in the digest: the object fields and the accessors' plain
 // values (structure target, pending way, worker state and its search). Not
 // the unit type (set once, read everywhere: a plain field; a wrong type

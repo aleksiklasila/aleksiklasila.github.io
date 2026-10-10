@@ -37,7 +37,8 @@ const element = { style: {}, classList: { add: noop, remove: noop, contains: () 
 const document = { getElementById: () => null, createElement: () => element, addEventListener: noop, querySelectorAll: () => [] };
 const window = { innerWidth: 1280, innerHeight: 720, addEventListener: noop, matchMedia: () => ({matches:false}), location: {search:''} };
 const setup = `
-playSound = startLaserSound = stopLaserSound = updateAudioReactiveState = updateItemTextCache = () => {};
+playSound = startLaserSound = stopLaserSound = updateItemTextCache = () => {};
+if (typeof updateAudioReactiveState === "function") updateAudioReactiveState = () => {};
 Tower.prototype.updateTextCache = () => {};
 isMultiplayer = multiplayer; gameStarted = multiplayer;
 let productionTotal=0, productionMax=0;

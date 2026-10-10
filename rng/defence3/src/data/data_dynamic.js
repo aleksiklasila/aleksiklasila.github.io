@@ -1396,11 +1396,15 @@ function _gameStatsSlice(k, step, into = null, sample = 1, rot = 0) {
     k += step * (rot % sample); step *= sample;
     // (Units from the unit state's columns: owner, worker, idle state; no
     // object read.)
+    // (By the units list's order through the slot map, the same on every
+    // peer; by slot, a sample's units depended on each peer's slot layout.)
     const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
-    if (S) {
+    const slots = S && typeof _unitSlotMapEnsure === 'function' ? _unitSlotMapEnsure() : null;
+    if (S && slots) {
         const C = S.columns, LIVE = C.live, DEAD = C.dead, OWN = C.owner, WK = C.isWk, IDLE = C.wkIdle;
-        for (let s = k, n = S.owners.length; s < n; s += step) {
-            if (!LIVE[s] || DEAD[s]) continue;
+        for (let i = k, n = units.length; i < n; i += step) {
+            const s = slots[i];
+            if (!(s >= 0) || !LIVE[s] || DEAD[s]) continue;
             const pid = OWN[s];
             if (sample === 1) add(a.units, pid);
             if (!WK[s]) continue;
