@@ -2261,7 +2261,7 @@ function snapDecodeState(S, options = null) {
         // it leaves replaced units live in those inputs for a whole round.
         if (typeof simUnitStateCollect === 'function') simUnitStateCollect();
         // (A whole world: its units in slots from 0, see simUnitStateCompact.)
-        if (!partial && typeof simUnitStateCompact === 'function') simUnitStateCompact();
+        if (!partial && typeof simUnitStateCompact === 'function') simUnitStateCompact(true);
         // (Every unit's status timers looked at by the next pre-pass.)
         if (typeof _simUnitState !== 'undefined' && _simUnitState && _simUnitState.columns.stOn) _simUnitState.columns.stOn.fill(1);
         // (A unit's effective tables are derived, not sent (preComputed /

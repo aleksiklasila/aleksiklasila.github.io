@@ -577,12 +577,14 @@ function simUnitClearSepKeys() {
 // detached. Slots are local to each peer (no decision goes by them), and
 // at a restore every slot-keyed cache was dropped (snapFlushHistoryCaches,
 // the disarm, the index made again).
-function simUnitStateCompact() {
+// `force` (a whole-world restore): always, so every peer that restores the
+// same world has the same layout whatever it held before.
+function simUnitStateCompact(force = false) {
     const S = _simUnitState;
     if (!S) return false;
     let live = 0;
     for (let i = 0; i < units.length; i++) { const u = units[i]; if (u && u._us === S.columns && S.owners[u._si] === u) live++; }
-    if (S.owners.length - live < Math.max(4096, S.owners.length / 3)) return false;
+    if (!force && S.owners.length - live < Math.max(4096, S.owners.length / 3)) return false;
     if (typeof simParallelBackgroundWait === 'function' && typeof SIM_PAR_BG_LANES === 'number') for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) simParallelBackgroundWait(lane);
     const old = S.columns, n0 = S.owners.length, map = new Int32Array(n0).fill(-1);
     const cap = Math.max(1024, Math.ceil(live * 1.125 / 4096) * 4096);
