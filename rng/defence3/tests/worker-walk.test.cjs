@@ -45,8 +45,21 @@ const data = require(path.join(__dirname, 'oneofall.json'));
         for (const [dx, dy] of [[0, -10], [10, 0], [0, 10], [-10, 0]]) {
             const at = pos(w.id);
             if (!at) { fails.push(kind + ' died'); break; }
-            const target = q(`(() => { const gx = Math.max(1, Math.min(GRID_W - 2, ${at[0] + dx})), gy = Math.max(1, Math.min(GRID_H - 2, ${at[1] + dy}));
-                const u = units.find(x => x.id === ${w.id}); const t = findNearestWalkable(gx, gy, Math.floor(u.x / TILE), Math.floor(u.y / TILE), u); return [t.x, t.y]; })()`);
+            // (A tile it can reach: one walkable for it may still lie in a
+            // pocket closed to it, e.g. inside a ring of its base's towers;
+            // ordered there, a unit rightly stops at the closest point.)
+            const target = q(`(() => { const gx0 = Math.max(1, Math.min(GRID_W - 2, ${at[0] + dx})), gy0 = Math.max(1, Math.min(GRID_H - 2, ${at[1] + dy}));
+                const u = units.find(x => x.id === ${w.id}), ux = Math.floor(u.x / TILE), uy = Math.floor(u.y / TILE), p = navProfileOf(u), from = uy * GRID_W + ux;
+                let first = null;
+                for (let r = 0; r <= 4; r++) for (let oy = -r; oy <= r; oy++) for (let ox = -r; ox <= r; ox++) {
+                    if (Math.max(Math.abs(ox), Math.abs(oy)) !== r) continue;
+                    const gx = Math.max(1, Math.min(GRID_W - 2, gx0 + ox)), gy = Math.max(1, Math.min(GRID_H - 2, gy0 + oy));
+                    const t = findNearestWalkable(gx, gy, ux, uy, u);
+                    if (!first) first = [t.x, t.y];
+                    const ap = p >= 0 ? navApproachTile(p, t.y * GRID_W + t.x) : -1;
+                    if (p < 0 || (ap >= 0 && navReachable(p, from, ap))) return [t.x, t.y];
+                }
+                return first; })()`);
             host.eval(`queueAction({ action: 'move', unitIds: [${w.id}], targetX: ${target[0] * 32 + 16}, targetY: ${target[1] * 32 + 16} })`);
             let best = Infinity, last = null;
             for (let k = 0; k < 40 && best > 1; k++) {

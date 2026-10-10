@@ -586,6 +586,7 @@ function _navFieldsBatch(F, slots, next, id, bg) {
     // (A slot's row is its destination's: one slot a destination in a pool,
     // so every slot makes its own; nav.fsrc all -1, no copies.)
     const w = F.wide ? 1 : 0, n = slots.length, N = next ? _navNextPoolEnsure(F) : null;
+    if (N) for (let i = 0; i < n; i++) N.made[slots[i]] = 1;
     const list = simHeapArrayAuto(Int32Array, n), src = simHeapArrayAuto(Int32Array, n, false);
     list.set(slots);
     src.fill(-1);
@@ -877,12 +878,17 @@ function _navNextPoolEnsure(F) {
     // marked made, and nothing reads a slot not made; clearing ~300 MB at
     // 400k a team took 60-150 ms of the rebuild's first tick.)
     const rowW = _navNext.rowW, pool = simHeapArrayAuto(Uint16Array, F.cap * F.span * F.span, !!N), rows = simHeapArrayAuto(Uint8Array, Math.max(1, F.cap * rowW), !!N), rowKeyOf = new Float64Array(F.cap).fill(-1);
-    if (N) { pool.set(N.pool); rows.set(N.rows); rowKeyOf.set(N.rowKeyOf); }
-    N = _navNext.pools[w] = { cap: F.cap, pool, rows, rowW, rowKeyOf, rowSrc: N ? N.rowSrc : new Map() };
+    // (made: the slots a batch over this build was given, written before the
+    // install waits for them; see _navNextInstall.)
+    const made = new Uint8Array(F.cap);
+    if (N) { pool.set(N.pool); rows.set(N.rows); rowKeyOf.set(N.rowKeyOf); made.set(N.made); }
+    N = _navNext.pools[w] = { cap: F.cap, pool, rows, rowW, rowKeyOf, made, rowSrc: N ? N.rowSrc : new Map() };
     simParallelBind('nav.npool.' + w, pool); simParallelBind('nav.nrows.' + w, rows);
     _navFieldsHeader();
     return N;
 }
+// (Slots made only at an install, for want of a batch: diagnostics.)
+let _navNextMissed = 0, _navNextKept = 0;
 // Closes it: the next build and its fields installed together.
 function _navNextInstall(nav) {
     _navFieldsLaneWait();
@@ -892,6 +898,26 @@ function _navNextInstall(nav) {
     for (let w = 0; w < 2; w++) {
         const F = _navFields.pools[w], N = _navNext.pools[w];
         if (!F.pool || !N || N.cap !== F.cap) continue;
+        // Every live slot written over this build first: the pool is not
+        // cleared, and a slot no batch was given read what the memory held
+        // before (on each peer what its collector had freed there: desyncs).
+        // A slot let go but still made (the movement kernel takes a new
+        // generation of a made slot with its destination as the field made
+        // again, and goes on reading it) keeps what it held: copied over.
+        const missed = [], size = F.span * F.span;
+        for (let s = 0; s < F.cap; s++) {
+            if (N.made[s]) continue;
+            const m = s * NAV_FIELD_META;
+            if (F.meta[m] >= 0) missed.push(s);
+            else if (F.meta[m + 7] === 1) {
+                N.pool.set(F.pool.subarray(s * size, (s + 1) * size), s * size);
+                const rw = Math.min(F.rowW, N.rowW);
+                N.rows.set(F.rows.subarray(s * F.rowW, s * F.rowW + rw), s * N.rowW);
+                if (rw < N.rowW) N.rows.fill(0, s * N.rowW + rw, (s + 1) * N.rowW);
+                _navNextKept++;
+            }
+        }
+        if (missed.length) { _navNextMissed += missed.length; _navFieldsRunNow(_navFieldsBatch(F, Int32Array.from(missed), true, 1, false)); }
         F.pool = N.pool; F.rows = N.rows; F.rowW = N.rowW; F.rowSrc = N.rowSrc; F.rowKeyOf = N.rowKeyOf;
         simParallelBind('nav.fpool.' + w, F.pool); simParallelBind('nav.frows.' + w, F.rows);
     }

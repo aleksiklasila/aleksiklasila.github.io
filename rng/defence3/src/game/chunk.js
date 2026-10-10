@@ -346,7 +346,11 @@ function _spatialIndexCollect() {
     // which the tick is about to change.)
     if (J.sep && valid) simParallelBackgroundWaitStage(SIM_LANE_IX, J.indexStages);
     else simParallelBackgroundWait(SIM_LANE_IX);
-    if (!valid || X.bad[0]) { _sxDirty = true; _spatialIndexChainDrop(); return; }
+    // (Dropped: its epoch is used up. It stamped chunks with it, and a
+    // rebuild reusing it saw those chunks, empty now, as current, holding
+    // other units' entries: after a restore a peer that had prebuilt found
+    // other targets than one that had not.)
+    if (!valid || X.bad[0]) { if (_sxEpoch < J.ep) _sxEpoch = J.ep; _sxDirty = true; _spatialIndexChainDrop(); return; }
     if (J.sep && typeof separationPrebuildTaken === 'function') separationPrebuildTaken(J.ep);
     _sxStamp = X.stamp; _sxStart = X.start; _sxCount = X.cnt;
     _sxEpoch = J.ep;

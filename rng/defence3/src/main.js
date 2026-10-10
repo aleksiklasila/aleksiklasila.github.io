@@ -3291,9 +3291,63 @@ function _actionCleanIds(ids) {
     }
     return clean;
 }
+// An order's unit ids on the wire (`uidz`): per id its difference from the
+// previous one (zigzag, times two, plus one when a run follows) and then, if
+// so, how many more ids follow it one by one, as base-64 varints. The same ids in the same order; a big army's order was
+// ~7 bytes an id (2-3 MB for 400k units, sent to every player).
+const _UIDZ_ABC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+const _UIDZ_VAL = (() => { const t = new Int8Array(128).fill(-1); for (let i = 0; i < 64; i++) t[_UIDZ_ABC.charCodeAt(i)] = i; return t; })();
+// (Only plain non-negative integer ids; anything else stays a list.)
+function actionIdsEncode(ids) {
+    if (!Array.isArray(ids)) return null;
+    for (let i = 0; i < ids.length; i++) { const v = ids[i]; if (!(Number.isInteger(v) && v >= 0 && v <= 0x7fffffff)) return null; }
+    let out = '', prev = 0;
+    const put = v => { while (v >= 32) { out += _UIDZ_ABC[32 | (v & 31)]; v = Math.floor(v / 32); } out += _UIDZ_ABC[v]; };
+    for (let i = 0; i < ids.length;) {
+        const id = ids[i], d = id - prev;
+        let run = 0;
+        while (i + 1 + run < ids.length && ids[i + 1 + run] === id + 1 + run) run++;
+        put((d >= 0 ? d * 2 : -d * 2 - 1) * 2 + (run > 0 ? 1 : 0));
+        if (run > 0) put(run - 1);
+        prev = id + run;
+        i += 1 + run;
+    }
+    return out;
+}
+// Malformed or oversized input decodes to at most `max` ids (others' actions).
+function actionIdsDecode(s, max = ACTION_MAX_UNIT_IDS) {
+    const out = [];
+    if (typeof s !== 'string') return out;
+    let pos = 0, prev = 0;
+    const get = () => {
+        let v = 0, mul = 1;
+        for (let k = 0; k < 8 && pos < s.length; k++) {
+            const c = s.charCodeAt(pos++), x = c < 128 ? _UIDZ_VAL[c] : -1;
+            if (x < 0) return -1;
+            v += (x & 31) * mul;
+            if (!(x & 32)) return v;
+            mul *= 32;
+        }
+        return -1;
+    };
+    while (pos < s.length && out.length < max) {
+        const zf = get();
+        if (zf < 0) break;
+        const z = Math.floor(zf / 2), run = zf % 2 ? get() + 1 : 0;
+        if (run < 0) break;
+        const id = prev + (z % 2 === 0 ? z / 2 : -(z + 1) / 2);
+        if (!(id >= 0 && id <= 0x7fffffff)) break;
+        out.push(id);
+        for (let r = 1; r <= run && out.length < max; r++) out.push(id + r);
+        prev = id + run;
+    }
+    return out;
+}
 function sanitizeAction(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw) || typeof raw.action !== 'string') return null;
     let a = { ...raw };
+    // (Ids sent compactly: the list they stand for.)
+    if (typeof a.uidz === 'string') { if (!Array.isArray(a.unitIds)) a.unitIds = actionIdsDecode(a.uidz); delete a.uidz; }
     for (let k of ['gx', 'gy', 'targetGx', 'targetGy']) if (k in a) a[k] = _actionInt(a[k]) ?? -1;
     // World positions stay on the map (paths and tiles are looked up there).
     if ('targetX' in a) { let v = _actionNum(a.targetX); a.targetX = v === null ? null : Math.max(0, Math.min(GRID_W * TILE - 1, v)); }
@@ -5653,10 +5707,14 @@ function stopLockstepDebugMatch(reason, details = {}) {
     lockstepFatalStopReason = String(reason || 'lockstep mismatch');
     lockstepFatalStopDetails = details || null;
     try { console.error('[LOCKSTEP] Exact lockstep stopped the match:', lockstepFatalStopReason, details); } catch { }
+    // (Detailed: names what differs. A plain notice arriving later must not
+    // replace it: the channel is unordered.)
+    let detailed = !!(details && ((Array.isArray(details.differs) && details.differs.length > 0) || details.detailed));
+    if (lockstepFatalStopDetails) lockstepFatalStopDetails.detailed = detailed;
     if (isHost) {
         for (let c of connections) {
             if (!c) continue;
-            try { c.send({ type: 'LOCKSTEP_FATAL_STOP', reason: lockstepFatalStopReason, tick: lockstepFatalStopTick }); } catch { }
+            try { c.send({ type: 'LOCKSTEP_FATAL_STOP', reason: lockstepFatalStopReason, tick: lockstepFatalStopTick, detailed }); } catch { }
         }
     } else {
         let hostConn = netGetHostConnection();

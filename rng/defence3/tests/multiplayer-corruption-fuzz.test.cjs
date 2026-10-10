@@ -132,6 +132,17 @@ const BROAD = new Set(['playerResearch', 'adjacency', 'unitIds', 'rng']);
         if (!BROAD.has(kind)) assert.ok(patches <= 2 && full === 0, `${kind} (${what}): ${patches} patches, ${full} full`);
         else assert.ok(patches <= 3, `${kind} (${what}): ${patches} patches`);
         await play(1500);
+        // (A broad kind spreads while its patch is on the way: units that took
+        // the diverged tables after the request go in a follow-up patch, a
+        // rotation or two later. Settled: idle, no repair for 2 s.)
+        if (BROAD.has(kind)) {
+            let lastCount = repairs(victim), quietSince = world.now;
+            const end = world.now + 8000;
+            while (world.now < end && !(world.now - quietSince >= 2000 && all.every(idle))) {
+                await play(400);
+                if (repairs(victim) !== lastCount) { lastCount = repairs(victim); quietSince = world.now; }
+            }
+        }
         const sums = await wholeState();
         if (process.env.DIVTRACE && !same(sums)) { const h = host.evalSim(FULL_VALUES), v = victim.evalSim(FULL_VALUES); console.error('FIELDS', describeDiff(h, v)); }
         if (process.env.DIVTRACE && !same(sums)) console.error('DIVTRACE', kind, JSON.stringify(require('./net-harness.cjs').divergenceReport(host, victim, (victim.patchTicks || [0]).slice(-1)[0] + 1), null, 1));

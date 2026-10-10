@@ -1,0 +1,1860 @@
+{
+ "fixture": "3000.json",
+ "players": 2,
+ "controls": 256,
+ "desyncs": 0,
+ "compared": 199,
+ "mismatched": 0,
+ "stopped": false,
+ "ended": false,
+ "errors": [],
+ "slow": [],
+ "health": [
+  [
+   {
+    "tick": 48,
+    "desyncs": 0,
+    "patches": 0,
+    "full": 0,
+    "hard": 0,
+    "stop": false,
+    "started": true,
+    "over": false,
+    "mp": true,
+    "paused": false
+   },
+   {
+    "tick": 48,
+    "desyncs": 0,
+    "patches": 0,
+    "full": 0,
+    "hard": 0,
+    "stop": false,
+    "started": true,
+    "over": false,
+    "mp": true,
+    "paused": false
+   }
+  ],
+  [
+   {
+    "tick": 4034,
+    "desyncs": 0,
+    "patches": 0,
+    "full": 0,
+    "hard": 0,
+    "stop": false,
+    "started": true,
+    "over": false,
+    "mp": true,
+    "paused": false
+   },
+   {
+    "tick": 4034,
+    "desyncs": 0,
+    "patches": 0,
+    "full": 0,
+    "hard": 0,
+    "stop": false,
+    "started": true,
+    "over": false,
+    "mp": true,
+    "paused": false
+   }
+  ]
+ ],
+ "results": [
+  {
+   "page": "host",
+   "label": "jukebox-open ♫ Open music and sound settings Music and sound",
+   "maxLong": 0,
+   "tickGap": 69,
+   "per": "host:0/69 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "jukebox-music (range)",
+   "maxLong": 0,
+   "tickGap": 74,
+   "per": "host:0/74 guest1:0/64"
+  },
+  {
+   "page": "host",
+   "label": "jukebox-effects (range)",
+   "maxLong": 0,
+   "tickGap": 66,
+   "per": "host:0/66 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "Use shared link",
+   "maxLong": 0,
+   "tickGap": 68,
+   "per": "host:0/68 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "jukebox-close ✕ Close music settings",
+   "maxLong": 0,
+   "tickGap": 65,
+   "per": "host:0/64 guest1:0/65"
+  },
+  {
+   "page": "host",
+   "label": "btn-view-2d 2D",
+   "maxLong": 0,
+   "tickGap": 71,
+   "per": "host:0/71 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "btn-view-3d 3D",
+   "maxLong": 318,
+   "tickGap": 334,
+   "per": "host:318/334 guest1:0/274"
+  },
+  {
+   "page": "host",
+   "label": "btn-default-build 🔨 New: ON",
+   "maxLong": 0,
+   "tickGap": 100,
+   "per": "host:0/75 guest1:0/100"
+  },
+  {
+   "page": "host",
+   "label": "btn-default-build 🔨 New: OFF",
+   "maxLong": 0,
+   "tickGap": 109,
+   "per": "host:0/94 guest1:0/109"
+  },
+  {
+   "page": "host",
+   "label": "btn-default-auto-upgrade L+New: ON",
+   "maxLong": 0,
+   "tickGap": 84,
+   "per": "host:0/73 guest1:0/84"
+  },
+  {
+   "page": "host",
+   "label": "btn-default-auto-upgrade L+New: OFF",
+   "maxLong": 0,
+   "tickGap": 65,
+   "per": "host:0/65 guest1:0/58"
+  },
+  {
+   "page": "host",
+   "label": "btn-help ⚙ Controls & settings",
+   "maxLong": 0,
+   "tickGap": 83,
+   "per": "host:0/83 guest1:0/63"
+  },
+  {
+   "page": "host",
+   "label": "Keybinds",
+   "maxLong": 0,
+   "tickGap": 68,
+   "per": "host:0/68 guest1:0/65"
+  },
+  {
+   "page": "host",
+   "label": "Settings",
+   "maxLong": 0,
+   "tickGap": 169,
+   "per": "host:0/68 guest1:0/169"
+  },
+  {
+   "page": "host",
+   "label": "btn-show-statsmap Open JSON",
+   "maxLong": 65,
+   "tickGap": 99,
+   "per": "host:65/99 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "btn-refresh-statsmap Refresh",
+   "maxLong": 0,
+   "tickGap": 88,
+   "per": "host:0/88 guest1:0/61"
+  },
+  {
+   "page": "host",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/norm",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/fast",
+   "maxLong": 0,
+   "tickGap": 85,
+   "per": "host:0/85 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/tank",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/boss",
+   "maxLong": 65,
+   "tickGap": 125,
+   "per": "host:65/125 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/flying",
+   "maxLong": 53,
+   "tickGap": 118,
+   "per": "host:53/118 guest1:0/94"
+  },
+  {
+   "page": "host",
+   "label": "btn-statsmap-close Close",
+   "maxLong": 0,
+   "tickGap": 85,
+   "per": "host:0/85 guest1:0/85"
+  },
+  {
+   "page": "host",
+   "label": "btn-level-visibility EverythingBuildingsOff = 0",
+   "maxLong": 0,
+   "tickGap": 81,
+   "per": "host:0/77 guest1:0/81"
+  },
+  {
+   "page": "host",
+   "label": "btn-level-visibility EverythingBuildingsOff = 1",
+   "maxLong": 0,
+   "tickGap": 68,
+   "per": "host:0/68 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "btn-level-visibility EverythingBuildingsOff = 2",
+   "maxLong": 0,
+   "tickGap": 66,
+   "per": "host:0/66 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 2",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 0",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 4",
+   "maxLong": 0,
+   "tickGap": 79,
+   "per": "host:0/79 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 1",
+   "maxLong": 0,
+   "tickGap": 79,
+   "per": "host:0/79 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 5",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/59"
+  },
+  {
+   "page": "host",
+   "label": "setting-range-team Selected thingsAll team things = selected",
+   "maxLong": 0,
+   "tickGap": 65,
+   "per": "host:0/65 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "setting-range-team Selected thingsAll team things = team",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "setting-range-through Behind objectsThrough objects = false",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/54"
+  },
+  {
+   "page": "host",
+   "label": "setting-range-through Behind objectsThrough objects = true",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/60"
+  },
+  {
+   "page": "host",
+   "label": "setting-gold-mine-text (toggle)",
+   "maxLong": 0,
+   "tickGap": 74,
+   "per": "host:0/74 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "setting-gold-mine-text (toggle back)",
+   "maxLong": 0,
+   "tickGap": 64,
+   "per": "host:0/64 guest1:0/58"
+  },
+  {
+   "page": "host",
+   "label": "setting-rally-line-type Dotted Solid = dotted",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "setting-rally-line-type Dotted Solid = solid",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/71"
+  },
+  {
+   "page": "host",
+   "label": "setting-show-rally-lines Buildings Bu = buildings",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "setting-show-rally-lines Buildings Bu = buildings_units",
+   "maxLong": 0,
+   "tickGap": 66,
+   "per": "host:0/66 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "setting-show-rally-lines Buildings Bu = none",
+   "maxLong": 0,
+   "tickGap": 78,
+   "per": "host:0/78 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "setting-show-selection-outlines All Units = buildings_units",
+   "maxLong": 0,
+   "tickGap": 69,
+   "per": "host:0/69 guest1:0/62"
+  },
+  {
+   "page": "host",
+   "label": "setting-show-selection-outlines All Units = units",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/71 guest1:0/73"
+  },
+  {
+   "page": "host",
+   "label": "setting-show-selection-outlines All Units = none",
+   "maxLong": 0,
+   "tickGap": 88,
+   "per": "host:0/88 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "setting-selection-outline-type Dotted Solid = dotted",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "setting-selection-outline-type Dotted Solid = solid",
+   "maxLong": 0,
+   "tickGap": 69,
+   "per": "host:0/69 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "setting-selection-outline-see-through (toggle)",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "setting-selection-outline-see-through (toggle back)",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/62"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = off",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = fxaa",
+   "maxLong": 81,
+   "tickGap": 110,
+   "per": "host:81/110 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = msaa",
+   "maxLong": 0,
+   "tickGap": 67,
+   "per": "host:0/67 guest1:0/52"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = msaa_fxaa",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/52"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-ao OffLow (half res)High (full res) = off",
+   "maxLong": 61,
+   "tickGap": 117,
+   "per": "host:61/117 guest1:0/60"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-ao OffLow (half res)High (full res) = low",
+   "maxLong": 0,
+   "tickGap": 69,
+   "per": "host:0/69 guest1:0/60"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-ao OffLow (half res)High (full res) = high",
+   "maxLong": 0,
+   "tickGap": 81,
+   "per": "host:0/81 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-outline (toggle)",
+   "maxLong": 53,
+   "tickGap": 101,
+   "per": "host:53/101 guest1:0/58"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-outline (toggle back)",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/67"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-bloom (toggle)",
+   "maxLong": 97,
+   "tickGap": 161,
+   "per": "host:97/161 guest1:0/67"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-bloom (toggle back)",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-grade (toggle)",
+   "maxLong": 58,
+   "tickGap": 75,
+   "per": "host:58/75 guest1:0/59"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-grade (toggle back)",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-sharpen OffLowMediumHigh = false",
+   "maxLong": 58,
+   "tickGap": 96,
+   "per": "host:58/96 guest1:0/75"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-sharpen OffLowMediumHigh = low",
+   "maxLong": 0,
+   "tickGap": 80,
+   "per": "host:0/75 guest1:0/80"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-sharpen OffLowMediumHigh = true",
+   "maxLong": 0,
+   "tickGap": 63,
+   "per": "host:0/63 guest1:0/54"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-sharpen OffLowMediumHigh = high",
+   "maxLong": 0,
+   "tickGap": 80,
+   "per": "host:0/80 guest1:0/53"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 1",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.85",
+   "maxLong": 0,
+   "tickGap": 80,
+   "per": "host:0/80 guest1:0/60"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.75",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/60"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.67",
+   "maxLong": 0,
+   "tickGap": 63,
+   "per": "host:0/63 guest1:0/61"
+  },
+  {
+   "page": "host",
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.5",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/60"
+  },
+  {
+   "page": "host",
+   "label": "setting-fps-target Auto (53 Hz)3050607275901001201441651802 = auto",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "setting-fps-target Auto (53 Hz)3050607275901001201441651802 = 30",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "setting-fps-target Auto (53 Hz)3050607275901001201441651802 = 50",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "setting-fps-target Auto (53 Hz)3050607275901001201441651802 = 60",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "setting-fps-target Auto (53 Hz)3050607275901001201441651802 = 72",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "setting-camera-slide (toggle)",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/54"
+  },
+  {
+   "page": "host",
+   "label": "setting-camera-slide (toggle back)",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "setting-pixel-snap (toggle)",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "setting-pixel-snap (toggle back)",
+   "maxLong": 0,
+   "tickGap": 71,
+   "per": "host:0/71 guest1:0/63"
+  },
+  {
+   "page": "host",
+   "label": "Gameplay",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "Effects",
+   "maxLong": 0,
+   "tickGap": 65,
+   "per": "host:0/65 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "Objectives",
+   "maxLong": 0,
+   "tickGap": 61,
+   "per": "host:0/61 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "btn-help-close Close",
+   "maxLong": 0,
+   "tickGap": 65,
+   "per": "host:0/65 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "x1",
+   "maxLong": 0,
+   "tickGap": 80,
+   "per": "host:0/80 guest1:0/62"
+  },
+  {
+   "page": "host",
+   "label": "Barracks",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "Towers",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/58"
+  },
+  {
+   "page": "host",
+   "label": "Floor",
+   "maxLong": 0,
+   "tickGap": 74,
+   "per": "host:0/74 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "Special",
+   "maxLong": 0,
+   "tickGap": 67,
+   "per": "host:0/67 guest1:0/60"
+  },
+  {
+   "page": "host",
+   "label": "btn-minimap ▼",
+   "maxLong": 0,
+   "tickGap": 61,
+   "per": "host:0/61 guest1:0/60"
+  },
+  {
+   "page": "host",
+   "label": "btn-minimap ▲",
+   "maxLong": 0,
+   "tickGap": 67,
+   "per": "host:0/67 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "1 Group 1: empty",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "2 Group 2: empty",
+   "maxLong": 0,
+   "tickGap": 78,
+   "per": "host:0/78 guest1:0/54"
+  },
+  {
+   "page": "host",
+   "label": "3 Group 3: empty",
+   "maxLong": 0,
+   "tickGap": 68,
+   "per": "host:0/68 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "4 Group 4: empty",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "5 Group 5: empty",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "6 Group 6: empty",
+   "maxLong": 0,
+   "tickGap": 79,
+   "per": "host:0/79 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "7 Group 7: empty",
+   "maxLong": 0,
+   "tickGap": 68,
+   "per": "host:0/68 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "8 Group 8: empty",
+   "maxLong": 0,
+   "tickGap": 63,
+   "per": "host:0/63 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "9 Group 9: empty",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/59"
+  },
+  {
+   "page": "host",
+   "label": "R Popup group R: empty",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "T Popup group T: empty",
+   "maxLong": 0,
+   "tickGap": 71,
+   "per": "host:0/71 guest1:0/61"
+  },
+  {
+   "page": "host",
+   "label": "Y Popup group Y: empty",
+   "maxLong": 0,
+   "tickGap": 69,
+   "per": "host:0/68 guest1:0/69"
+  },
+  {
+   "page": "host",
+   "label": "U Popup group U: empty",
+   "maxLong": 0,
+   "tickGap": 66,
+   "per": "host:0/66 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "I Popup group I: empty",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "O Popup group O: empty",
+   "maxLong": 0,
+   "tickGap": 68,
+   "per": "host:0/68 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "P Popup group P: empty",
+   "maxLong": 0,
+   "tickGap": 68,
+   "per": "host:0/68 guest1:0/60"
+  },
+  {
+   "page": "host",
+   "label": "btn-ignore-level Collapse Same Type: ON",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "btn-ignore-level Collapse Same Type: OFF",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "x2",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "x4",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/54"
+  },
+  {
+   "page": "host",
+   "label": "x8",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "key h",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "key Escape",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "key Tab",
+   "maxLong": 0,
+   "tickGap": 68,
+   "per": "host:0/68 guest1:0/61"
+  },
+  {
+   "page": "host",
+   "label": "key m",
+   "maxLong": 0,
+   "tickGap": 68,
+   "per": "host:0/68 guest1:0/61"
+  },
+  {
+   "page": "host",
+   "label": "key g",
+   "maxLong": 0,
+   "tickGap": 64,
+   "per": "host:0/64 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "key 1",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "key Control+1",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "key 1",
+   "maxLong": 0,
+   "tickGap": 80,
+   "per": "host:0/80 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "key Escape",
+   "maxLong": 0,
+   "tickGap": 67,
+   "per": "host:0/67 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "key s",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/55"
+  },
+  {
+   "page": "host",
+   "label": "key a",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "key Delete",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/57"
+  },
+  {
+   "page": "host",
+   "label": "key Escape",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "view 3d",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/56"
+  },
+  {
+   "page": "host",
+   "label": "view 2d",
+   "maxLong": 0,
+   "tickGap": 71,
+   "per": "host:0/71 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "jukebox-open ♫ Open music and sound settings Music and sound",
+   "maxLong": 0,
+   "tickGap": 83,
+   "per": "host:0/83 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "jukebox-music (range)",
+   "maxLong": 0,
+   "tickGap": 74,
+   "per": "host:0/74 guest1:0/58"
+  },
+  {
+   "page": "guest1",
+   "label": "jukebox-effects (range)",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/54"
+  },
+  {
+   "page": "guest1",
+   "label": "Use shared link",
+   "maxLong": 0,
+   "tickGap": 89,
+   "per": "host:0/89 guest1:0/58"
+  },
+  {
+   "page": "guest1",
+   "label": "jukebox-close ✕ Close music settings",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-view-2d 2D",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-view-3d 3D",
+   "maxLong": 90,
+   "tickGap": 140,
+   "per": "host:0/76 guest1:90/140"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-default-build 🔨 New: ON",
+   "maxLong": 0,
+   "tickGap": 71,
+   "per": "host:0/71 guest1:0/65"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-default-build 🔨 New: OFF",
+   "maxLong": 0,
+   "tickGap": 67,
+   "per": "host:0/67 guest1:0/60"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-default-auto-upgrade L+New: ON",
+   "maxLong": 0,
+   "tickGap": 71,
+   "per": "host:0/71 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-default-auto-upgrade L+New: OFF",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-help ⚙ Controls & settings",
+   "maxLong": 0,
+   "tickGap": 74,
+   "per": "host:0/74 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "Keybinds",
+   "maxLong": 0,
+   "tickGap": 79,
+   "per": "host:0/79 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "Settings",
+   "maxLong": 0,
+   "tickGap": 79,
+   "per": "host:0/79 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-show-statsmap Open JSON",
+   "maxLong": 57,
+   "tickGap": 102,
+   "per": "host:0/71 guest1:57/102"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-refresh-statsmap Refresh",
+   "maxLong": 0,
+   "tickGap": 74,
+   "per": "host:0/74 guest1:0/65"
+  },
+  {
+   "page": "guest1",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/norm",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/fast",
+   "maxLong": 0,
+   "tickGap": 71,
+   "per": "host:0/64 guest1:0/71"
+  },
+  {
+   "page": "guest1",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/tank",
+   "maxLong": 0,
+   "tickGap": 81,
+   "per": "host:0/81 guest1:0/75"
+  },
+  {
+   "page": "guest1",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/boss",
+   "maxLong": 0,
+   "tickGap": 107,
+   "per": "host:0/75 guest1:0/107"
+  },
+  {
+   "page": "guest1",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/flying",
+   "maxLong": 0,
+   "tickGap": 80,
+   "per": "host:0/65 guest1:0/80"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-statsmap-close Close",
+   "maxLong": 0,
+   "tickGap": 99,
+   "per": "host:0/75 guest1:0/99"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-level-visibility EverythingBuildingsOff = 0",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/52"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-level-visibility EverythingBuildingsOff = 1",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/66 guest1:0/73"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-level-visibility EverythingBuildingsOff = 2",
+   "maxLong": 0,
+   "tickGap": 64,
+   "per": "host:0/64 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 2",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/54"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 0",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 4",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 1",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/68"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 5",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-range-team Selected thingsAll team things = selected",
+   "maxLong": 0,
+   "tickGap": 64,
+   "per": "host:0/64 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-range-team Selected thingsAll team things = team",
+   "maxLong": 0,
+   "tickGap": 67,
+   "per": "host:0/67 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-range-through Behind objectsThrough objects = false",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-range-through Behind objectsThrough objects = true",
+   "maxLong": 0,
+   "tickGap": 82,
+   "per": "host:0/82 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gold-mine-text (toggle)",
+   "maxLong": 0,
+   "tickGap": 74,
+   "per": "host:0/74 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gold-mine-text (toggle back)",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-rally-line-type Dotted Solid = dotted",
+   "maxLong": 0,
+   "tickGap": 67,
+   "per": "host:0/67 guest1:0/59"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-rally-line-type Dotted Solid = solid",
+   "maxLong": 0,
+   "tickGap": 65,
+   "per": "host:0/65 guest1:0/59"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-show-rally-lines Buildings Bu = buildings",
+   "maxLong": 0,
+   "tickGap": 69,
+   "per": "host:0/69 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-show-rally-lines Buildings Bu = buildings_units",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/59"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-show-rally-lines Buildings Bu = none",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/58"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-show-selection-outlines All Units = buildings_units",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/59"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-show-selection-outlines All Units = units",
+   "maxLong": 0,
+   "tickGap": 69,
+   "per": "host:0/69 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-show-selection-outlines All Units = none",
+   "maxLong": 0,
+   "tickGap": 74,
+   "per": "host:0/74 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-selection-outline-type Dotted Solid = dotted",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-selection-outline-type Dotted Solid = solid",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-selection-outline-see-through (toggle)",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-selection-outline-see-through (toggle back)",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = off",
+   "maxLong": 0,
+   "tickGap": 78,
+   "per": "host:0/78 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = fxaa",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/58"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = msaa",
+   "maxLong": 0,
+   "tickGap": 68,
+   "per": "host:0/68 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = msaa_fxaa",
+   "maxLong": 0,
+   "tickGap": 78,
+   "per": "host:0/78 guest1:0/60"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-ao OffLow (half res)High (full res) = off",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/60"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-ao OffLow (half res)High (full res) = low",
+   "maxLong": 0,
+   "tickGap": 65,
+   "per": "host:0/65 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-ao OffLow (half res)High (full res) = high",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/59"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-outline (toggle)",
+   "maxLong": 0,
+   "tickGap": 65,
+   "per": "host:0/65 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-outline (toggle back)",
+   "maxLong": 0,
+   "tickGap": 68,
+   "per": "host:0/68 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-bloom (toggle)",
+   "maxLong": 0,
+   "tickGap": 69,
+   "per": "host:0/69 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-bloom (toggle back)",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/58"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-grade (toggle)",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/61"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-grade (toggle back)",
+   "maxLong": 0,
+   "tickGap": 71,
+   "per": "host:0/71 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-sharpen OffLowMediumHigh = false",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/58"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-sharpen OffLowMediumHigh = low",
+   "maxLong": 0,
+   "tickGap": 68,
+   "per": "host:0/68 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-sharpen OffLowMediumHigh = true",
+   "maxLong": 0,
+   "tickGap": 71,
+   "per": "host:0/71 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-sharpen OffLowMediumHigh = high",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/53"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 1",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.85",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.75",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/70"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.67",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/70"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.5",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/58"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-fps-target Auto (110 Hz)305060727590100120144165180 = auto",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/59"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-fps-target Auto (110 Hz)305060727590100120144165180 = 30",
+   "maxLong": 0,
+   "tickGap": 65,
+   "per": "host:0/61 guest1:0/65"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-fps-target Auto (110 Hz)305060727590100120144165180 = 50",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/58"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-fps-target Auto (110 Hz)305060727590100120144165180 = 60",
+   "maxLong": 0,
+   "tickGap": 78,
+   "per": "host:0/78 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-fps-target Auto (110 Hz)305060727590100120144165180 = 72",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/60"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-camera-slide (toggle)",
+   "maxLong": 0,
+   "tickGap": 67,
+   "per": "host:0/67 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-camera-slide (toggle back)",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/58"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-pixel-snap (toggle)",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-pixel-snap (toggle back)",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "Gameplay",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "Effects",
+   "maxLong": 0,
+   "tickGap": 68,
+   "per": "host:0/68 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "Objectives",
+   "maxLong": 0,
+   "tickGap": 74,
+   "per": "host:0/74 guest1:0/54"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-help-close Close",
+   "maxLong": 0,
+   "tickGap": 68,
+   "per": "host:0/68 guest1:0/64"
+  },
+  {
+   "page": "guest1",
+   "label": "x1",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "Barracks",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "Towers",
+   "maxLong": 0,
+   "tickGap": 71,
+   "per": "host:0/71 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "Floor",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/69"
+  },
+  {
+   "page": "guest1",
+   "label": "Special",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/69"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-minimap ▼",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-minimap ▲",
+   "maxLong": 0,
+   "tickGap": 74,
+   "per": "host:0/74 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "1 Group 1: empty",
+   "maxLong": 0,
+   "tickGap": 64,
+   "per": "host:0/64 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "2 Group 2: empty",
+   "maxLong": 0,
+   "tickGap": 67,
+   "per": "host:0/67 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "3 Group 3: empty",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/58"
+  },
+  {
+   "page": "guest1",
+   "label": "4 Group 4: empty",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/59"
+  },
+  {
+   "page": "guest1",
+   "label": "5 Group 5: empty",
+   "maxLong": 0,
+   "tickGap": 65,
+   "per": "host:0/65 guest1:0/59"
+  },
+  {
+   "page": "guest1",
+   "label": "6 Group 6: empty",
+   "maxLong": 0,
+   "tickGap": 63,
+   "per": "host:0/63 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "7 Group 7: empty",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/58"
+  },
+  {
+   "page": "guest1",
+   "label": "8 Group 8: empty",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "9 Group 9: empty",
+   "maxLong": 0,
+   "tickGap": 64,
+   "per": "host:0/64 guest1:0/53"
+  },
+  {
+   "page": "guest1",
+   "label": "R Popup group R: empty",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "T Popup group T: empty",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "Y Popup group Y: empty",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "U Popup group U: empty",
+   "maxLong": 0,
+   "tickGap": 62,
+   "per": "host:0/62 guest1:0/54"
+  },
+  {
+   "page": "guest1",
+   "label": "I Popup group I: empty",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "O Popup group O: empty",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "P Popup group P: empty",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/53"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-ignore-level Collapse Same Type: ON",
+   "maxLong": 0,
+   "tickGap": 82,
+   "per": "host:0/82 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "btn-ignore-level Collapse Same Type: OFF",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/58"
+  },
+  {
+   "page": "guest1",
+   "label": "x2",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "⚡ Draining 💀 into energy (click to toggle; both: half each)",
+   "maxLong": 0,
+   "tickGap": 61,
+   "per": "host:0/61 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "⚡ Not draining 💀 into energy (click to toggle; both: half each)",
+   "maxLong": 0,
+   "tickGap": 74,
+   "per": "host:0/74 guest1:0/59"
+  },
+  {
+   "page": "guest1",
+   "label": "x4",
+   "maxLong": 0,
+   "tickGap": 63,
+   "per": "host:0/63 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "★ Draining 💀 into ★ (click to toggle; both: half each)",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "★ Not draining 💀 into ★ (click to toggle; both: half each)",
+   "maxLong": 0,
+   "tickGap": 67,
+   "per": "host:0/67 guest1:0/54"
+  },
+  {
+   "page": "guest1",
+   "label": "x8",
+   "maxLong": 0,
+   "tickGap": 67,
+   "per": "host:0/67 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "key h",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "key Escape",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "key Tab",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "key m",
+   "maxLong": 0,
+   "tickGap": 66,
+   "per": "host:0/66 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "key g",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "key 1",
+   "maxLong": 0,
+   "tickGap": 74,
+   "per": "host:0/74 guest1:0/57"
+  },
+  {
+   "page": "guest1",
+   "label": "key Control+1",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "key 1",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "key Escape",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/58"
+  },
+  {
+   "page": "guest1",
+   "label": "key s",
+   "maxLong": 51,
+   "tickGap": 141,
+   "per": "host:51/141 guest1:0/56"
+  },
+  {
+   "page": "guest1",
+   "label": "key a",
+   "maxLong": 0,
+   "tickGap": 141,
+   "per": "host:0/141 guest1:0/80"
+  },
+  {
+   "page": "guest1",
+   "label": "key Delete",
+   "maxLong": 0,
+   "tickGap": 80,
+   "per": "host:0/75 guest1:0/80"
+  },
+  {
+   "page": "guest1",
+   "label": "key Escape",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "view 3d",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/54"
+  },
+  {
+   "page": "guest1",
+   "label": "view 2d",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/55"
+  }
+ ]
+}

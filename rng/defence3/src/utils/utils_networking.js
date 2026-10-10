@@ -2168,8 +2168,15 @@ function _handleConnectionMessage(conn, data) {
     } else if (type === 'LOCKSTEP_FATAL_STOP') {
         if (!lockstepStrictDebugMode) return;
         // The host's account names what differs; it replaces a guest's own.
-        if (lockstepFatalStopActive && !isHost && data.reason) lockstepFatalStopReason = String(data.reason).slice(0, 2000);
-        else stopLockstepDebugMatch(String(data.reason || 'peer stopped the match').slice(0, 2000), { tick: data.tick, fromPeer: conn.peer });
+        // (Not a plain notice over a detailed one: they can arrive in any order.)
+        if (lockstepFatalStopActive && !isHost && data.reason) {
+            let have = !!(lockstepFatalStopDetails && lockstepFatalStopDetails.detailed);
+            if (data.detailed || !have) {
+                lockstepFatalStopReason = String(data.reason).slice(0, 2000);
+                if (data.detailed) lockstepFatalStopDetails = { ...(lockstepFatalStopDetails || {}), detailed: true };
+            }
+        }
+        else stopLockstepDebugMatch(String(data.reason || 'peer stopped the match').slice(0, 2000), { tick: data.tick, fromPeer: conn.peer, detailed: !!data.detailed });
     } else if (type === 'START_GAME_PREPARE' && !isHost) {
         // PREPARE is only meaningful before gameplay starts.
         // Late/retried PREPARE packets can interfere with startup flow and lockstep gating.

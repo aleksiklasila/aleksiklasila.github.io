@@ -137,10 +137,37 @@ function _penalizeStatValue(statKey, value, multiplier) {
         : (numericValue / multiplier);
 }
 
+// The multiplier each player's stat tables were last built with, per
+// stockpile. The current one (above) runs ahead of it until the tick's flush
+// (flushPendingResourceStatRebuilds); the tables follow this one only, so
+// they are a function of research and these, which a snapshot carries
+// (utils_snapshot.js statMult): a restored peer builds the same tables
+// whatever its own were (they followed its own history before).
+let _statAppliedMult = [];
+function _statAppliedGet(playerId, stockpileKey) {
+    let m = _statAppliedMult[playerId];
+    let v = m ? m[stockpileKey] : undefined;
+    return v >= 1 ? v : 1;
+}
+function _statAppliedSet(playerId, stockpileKey, multiplier) {
+    if (!stockpileKey) return;
+    (_statAppliedMult[playerId] || (_statAppliedMult[playerId] = {}))[stockpileKey] = Math.max(1, Number(multiplier) || 1);
+}
+function _statAppliedSetCurrent(playerId) {
+    for (let cfg of RESOURCE_TYPE_LIST) {
+        let stockpileKey = String(cfg.stockpileKey || cfg.key || '');
+        if (stockpileKey) _statAppliedSet(playerId, stockpileKey, _getPlayerResourcePenaltyMultiplier(playerId, stockpileKey));
+    }
+}
+function _getPlayerStatAppliedMultiplier(playerId, kind, statKey) {
+    if (RESOURCE_PENALTY_EXEMPT_STATS.has(statKey)) return 1;
+    return _statAppliedGet(playerId, _getResourceKeyForPrecomputedStat(kind, statKey));
+}
+
 function _applyPlayerResourcePenaltyToStatValue(playerId, kind, statKey, value) {
     let numericValue = Number(value);
     if (!Number.isFinite(numericValue)) return numericValue;
-    return _penalizeStatValue(statKey, numericValue, _getPlayerStatPenaltyMultiplier(playerId, kind, statKey));
+    return _penalizeStatValue(statKey, numericValue, _getPlayerStatAppliedMultiplier(playerId, kind, statKey));
 }
 
 function _updatePlayerResourcePenaltyMultipliers(playerId) {
@@ -304,14 +331,17 @@ function shrineResetPending() { _shrinePendingFixed.fill(0); }
 // While a stockpile is negative this runs on every upkeep payment, so it
 // only touches penalty-scaled stats (exempt ones cannot have changed; research
 // rebuilds its own stats) and resolves the multiplier once per stat.
-function rebuildPrecomputedStatsMapPlayerResource(playerId, resourceKey) {
+// (multiplierOverride: the one a snapshot's tables were built with, see
+// _statAppliedMult; else the current one.)
+function rebuildPrecomputedStatsMapPlayerResource(playerId, resourceKey, multiplierOverride) {
     if (!ensurePrecomputedStatsMap()) return;
     let pid = Math.max(0, Math.floor(playerId || 0));
     let stockpileKey = String(resourceKey || '');
     if (!stockpileKey) return;
 
     // Every stat handled here is scaled by this one stockpile's multiplier.
-    let multiplier = _getPlayerResourcePenaltyMultiplier(pid, stockpileKey);
+    let multiplier = multiplierOverride >= 1 ? multiplierOverride : _getPlayerResourcePenaltyMultiplier(pid, stockpileKey);
+    _statAppliedSet(pid, stockpileKey, multiplier);
     for (let [branch, statKeys] of [['unit', PRECOMPUTED_UNIT_STAT_KEYS], ['building', PRECOMPUTED_BUILDING_STAT_KEYS]]) {
         let scaled = statKeys.filter(statKey => !RESOURCE_PENALTY_EXEMPT_STATS.has(statKey) && _getResourceKeyForPrecomputedStat(branch, statKey) === stockpileKey);
         if (scaled.length === 0) continue;
@@ -1647,26 +1677,7 @@ function setResearchPopupOpen(open) {
     return wasOpen !== open;
 }
 
-function refreshStatsMapPopupText() {
-    ensurePrecomputedStatsMap();
-    let ta = document.getElementById('statsmap-json');
-    if (!ta) return;
-    try {
-        ta.value = JSON.stringify(PRECOMPUTED_STATS_MAP, null, 2);
-    } catch {
-        ta.value = '{"error":"Unable to serialize PRECOMPUTED_STATS_MAP"}';
-    }
-    ta.scrollTop = 0;
-}
-
-function setStatsMapPopupOpen(open) {
-    let popup = document.getElementById('statsmap-popup');
-    if (!popup) return false;
-    let wasOpen = !popup.classList.contains('hidden');
-    popup.classList.toggle('hidden', !open);
-    if (open) refreshStatsMapPopupText();
-    return wasOpen !== open;
-}
+// (The stats map popup: hud.js.)
 
 function buildResearchStatMatrixGrid(kind, key, statKey) {
     let grid = [];
@@ -2791,6 +2802,8 @@ function rebuildPrecomputedStatsMapPlayer(targetPlayerId = null) {
     for (let playerId of targetIds) {
         _ensurePlayerResourceState(playerId);
         _updatePlayerResourcePenaltyMultipliers(playerId);
+        // (Built with the current multipliers: they are the applied ones now.)
+        _statAppliedSetCurrent(playerId);
         let signature = null;
         try {
             signature = JSON.stringify([
@@ -2913,7 +2926,9 @@ function rebuildPrecomputedStatsMapPlayerThingStat(playerId, kind, key, statKey 
     }
     // (Building stats: the movement kernel's trap strengths, its owner's.)
     if (branch === 'building' && typeof simTrapResearchDone === 'function') simTrapResearchDone(pid);
-    return _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey, _getPlayerStatPenaltyMultiplier(pid, branch, statKey));
+    // (With the multiplier its table follows: a newer one comes with the
+    // tick's flush, for every stat of its stockpile at once.)
+    return _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey, _getPlayerStatAppliedMultiplier(pid, branch, statKey));
 }
 
 // Whether a building's precomputed stat has any finite value (any level,

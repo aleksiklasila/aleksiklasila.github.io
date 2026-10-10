@@ -6409,12 +6409,41 @@ function setResearchPopupOpen(open) {
 }
 
 
+// One entry (a unit or building kind) at a time: the whole map pretty
+// printed was ~7 MB, ~400k lines, and the textarea took seconds to lay out
+// (the page, and with it a multiplayer match's ticks, stood still).
+function _statsMapPicker() {
+    let ta = document.getElementById('statsmap-json');
+    if (!ta) return null;
+    let sel = document.getElementById('statsmap-key');
+    if (!sel) {
+        sel = document.createElement('select');
+        sel.id = 'statsmap-key';
+        sel.setAttribute('aria-label', 'Stats map entry');
+        sel.style.cssText = 'margin:4px 0; background:#1b2a35; border:1px solid #4a89c7; color:#d8ecff; font-size:12px; padding:2px 4px; border-radius:4px;';
+        sel.addEventListener('change', () => refreshStatsMapPopupText());
+        ta.parentNode.insertBefore(sel, ta);
+    }
+    return sel;
+}
 function refreshStatsMapPopupText() {
     ensurePrecomputedStatsMap();
     let ta = document.getElementById('statsmap-json');
-    if (!ta) return;
+    let sel = _statsMapPicker();
+    if (!ta || !sel) return;
+    let map = PRECOMPUTED_STATS_MAP || {};
+    let options = [];
+    for (let branch of Object.keys(map)) for (let key of Object.keys(map[branch] || {})) options.push(branch + '/' + key);
+    let current = sel.value;
+    if (sel.options.length !== options.length || [...sel.options].some((o, i) => o.value !== options[i])) {
+        sel.textContent = '';
+        for (let v of options) { let o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o); }
+    }
+    if (options.includes(current)) sel.value = current;
+    else if (options.length) sel.value = options[0];
+    let [branch, key] = String(sel.value || '').split('/');
     try {
-        ta.value = JSON.stringify(PRECOMPUTED_STATS_MAP, null, 2);
+        ta.value = branch && key ? JSON.stringify({ [branch]: { [key]: map[branch][key] } }, null, 2) : '{}';
     } catch {
         ta.value = '{"error":"Unable to serialize PRECOMPUTED_STATS_MAP"}';
     }

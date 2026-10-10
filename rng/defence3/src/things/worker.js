@@ -3958,6 +3958,12 @@ function queueAction(action) {
     if (!localInputBuffer[tick]) localInputBuffer[tick] = [];
     let actorId = myPeerId || `p${localPlayerId}`;
     let finalAction = { ...action, teamId: localPlayerId, netId: `${actorId}:${nextLocalActionSeq++}` };
+    // A long id list goes compactly (main.js actionIdsEncode; every peer,
+    // this one too, decodes it when it processes the action).
+    if (Array.isArray(finalAction.unitIds) && finalAction.unitIds.length >= 64 && typeof actionIdsEncode === 'function') {
+        const z = actionIdsEncode(finalAction.unitIds);
+        if (z !== null) { finalAction.uidz = z; delete finalAction.unitIds; }
+    }
     localInputBuffer[tick].push(finalAction);
 
     // The tick is unsent (guest) or unsealed (host): rebuild its packet.

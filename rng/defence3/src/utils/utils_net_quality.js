@@ -699,6 +699,7 @@ function netUpdateWaitingOverlay(now = performance.now(), forceHide = false) {
 // Per-frame housekeeping: heartbeats, reconnect triggers, auto-drop.
 function netMaintain(now = performance.now()) {
     if (!isMultiplayer) return;
+    if (!_netPumpWatchWorker && gameStarted) netPumpWatchdogEnsure();
     netNotePumpFrame(now);
     netUpdateAutoController(now);
     netMaybeBroadcastStats(now);
@@ -837,6 +838,35 @@ function netStartBackgroundTicker(intervalMs, fn) {
     }
     _netBackgroundWorker = setInterval(fn, intervalMs);
     return 'interval';
+}
+
+// The visible tab's tick pump runs from requestAnimationFrame (renderer.js
+// simulationFrame). Frames can stop while the tab still counts as visible
+// (another window in front, an unfocused window, a long GPU frame, a view
+// switch): ticks then stopped being dispatched and sealed, and in a match
+// every other player waited. A worker-timed watchdog runs the same pump
+// when no frame has advanced the tick clock for a few ticks. (A real
+// browser only: no Blob URL workers in the test harness.)
+let _netPumpWatchWorker = null;
+function netPumpWatchdogEnsure() {
+    if (_netPumpWatchWorker || typeof Worker !== 'function' || typeof Blob !== 'function' || typeof URL === 'undefined' || !URL.createObjectURL) return;
+    // (Not in the test harness: it has these, but its pages model a busy
+    // main thread by late frames alone, which a timer would step around.)
+    if (typeof navigator !== 'undefined' && /harness/i.test(String(navigator.userAgent || ''))) { _netPumpWatchWorker = 'off'; return; }
+    try {
+        let url = URL.createObjectURL(new Blob([`let h=0;onmessage=e=>{clearInterval(h);if(e.data>0)h=setInterval(()=>postMessage(0),e.data);};`], { type: 'text/javascript' }));
+        _netPumpWatchWorker = new Worker(url);
+        _netPumpWatchWorker.onmessage = netPumpWatchdogTick;
+        _netPumpWatchWorker.postMessage(Math.max(10, Math.floor(TICK_MS / 2)));
+        setTimeout(() => { try { URL.revokeObjectURL(url); } catch { } }, 10000);
+    } catch { _netPumpWatchWorker = null; }
+}
+function netPumpWatchdogTick() {
+    if (!gameStarted || gameOver || document.hidden) return;
+    if (typeof _scheduleSimulationUpTo !== 'function' || typeof _lastTickTime !== 'number') return;
+    let now = performance.now();
+    if (now - _lastTickTime < Math.max(120, netSimulationTickMs() * 2.5)) return;
+    _scheduleSimulationUpTo(now);
 }
 
 function netStopBackgroundTicker() {

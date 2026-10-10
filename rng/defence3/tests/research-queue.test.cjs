@@ -193,6 +193,9 @@ function rng(seed) {
         assert.ok(done, 'queue drained: ' + JSON.stringify(tasksOf(host, pid)));
         assert.equal(levelOf(host, pid, S), beforeS + 2, 'two S levels researched');
         assert.equal(levelOf(host, pid, T), beforeT + 1, 'one T level researched');
+        // (Guests run a few ticks behind the host, more with the worker: the
+        // last level reaches them a moment later.)
+        await world.runUntil(() => guests.every(g => levelOf(g, pid, S) === beforeS + 2 && levelOf(g, pid, T) === beforeT + 1), 5000, 50);
         for (const g of guests) {
             assert.equal(levelOf(g, pid, S), beforeS + 2);
             assert.equal(levelOf(g, pid, T), beforeT + 1);

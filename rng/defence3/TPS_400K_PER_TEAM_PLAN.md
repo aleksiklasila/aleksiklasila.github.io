@@ -709,6 +709,124 @@ Fixed:
   (given up with the combat brain); performance-regressions /
   render-frame-stability (the 3D renderer, the other session's work).
 
+### 2026-10-10 (later) — restores independent of history, worker-mode multiplayer, GUI
+
+User: finish the multiplayer fixes, then robustness (desync, resync), keep
+TPS, optimize, test in game and in the GUI (e.g. "show JSON" froze the game
+with many units): stable whatever the players do.
+
+Restores (a restored world must evolve the same whatever the peer ran
+before; `.claude/probes/rollback_restore.cjs` restores one snapshot after
+0, 1 and 40 ticks ahead on one instance and diffs per phase, columns and
+every global (`global_digest.cjs`)):
+- `_combatScanTick === gameTime` skipped the rerun tick's combat scan on a
+  peer that had run the restored tick (worker restores): reset at the flush
+  (combatScanReset), with the group path budgets keyed by gameTime.
+- A dropped prebuilt unit index's epoch was reused by the rebuild: chunks
+  it had stamped (empty now) looked current with other units' entries.
+  The epoch is used up when dropped (chunk.js _spatialIndexCollect).
+- Stat tables follow the resource-penalty multipliers they were *built*
+  with (rebuilds lag the resources until the tick's flush): now one applied
+  multiplier per player and stockpile (`_statAppliedMult`; research rebuilds
+  use it too), carried with the seen ones in snapshots (`g.statMult`);
+  decode rebuilds to them, into the existing entry objects (units a patch
+  does not carry keep live references). SIM_RULES_REVISION 8.
+- Whole restores always lay units out from slot 0 (simUnitStateCompact(true)).
+
+Worker mode (the default), multiplayer:
+- A mid-match restore on a page whose simulation runs in its worker built
+  navigation there (no kernels on such a page): every join, reload or host
+  change threw. Skipped on such pages; the worker restores its own.
+- The worker's whole-state restore never reported 'started' for its new
+  epoch: the page's clock waited for it, the match stopped for good after a
+  host migration or hard resync.
+- Exact-lockstep debug mode ran on the page, which has no kernels in worker
+  mode: matches never ticked. The worker takes them (and hashes every tick).
+- Messages travel on an unordered channel: LOBBY_LEAVE overtook the
+  leaver's MATCH_ROLE_UPDATE, the host closed the link and waited for the
+  leaver forever. A mid-match LOBBY_LEAVE is a resignation by itself. A
+  plain exact-lockstep stop notice no longer replaces a detailed one.
+- Tests made tick-exact where they compared peers at different ticks
+  (shrine, research-queue); multiplayer-snapshot always on the page's own
+  simulation (it drives the codec there directly).
+- Harness: DIVTRACE in worker mode hooks the worker's gameTick.
+
+Detection: grid cells on a rotation of their own (SNAP_HASH_CELL_ROUNDS 4:
+each row every 4 s, ~12k cells a tick at 1000x1000). Corruption fuzz: every
+kind detected and repaired, both modes.
+
+GUI (real Edge, playwright; NODE_PATH to a playwright install):
+- `tests/ui-longtask-survey.cjs [fixture]`: every control (depth first:
+  popups and tabs while open) in a running match; long tasks and gaps
+  between tick results. At 200k units (100000-1000.json): 125 controls, all
+  gaps under ~165 ms except 3D view switch (334 ms task; renderer3d, the
+  other session). "Open JSON" (stats map: 7 MB, 400k lines into a textarea,
+  seconds) now shows one entry at a time (~60 ms).
+- `tests/browser-mp-gui-fuzz.cjs [fixture]`: a match in real tabs over a
+  BroadcastChannel stand-in for PeerJS (tests/browser-fake-peer.js; per-tab
+  storage), every control on every player, keys, 2D/3D: 256 controls, 0
+  desyncs, 0 hash mismatches, no errors, no stalls.
+- The visible tick pump ran from requestAnimationFrame only: frames stopping
+  while the tab is not hidden (unfocused/occluded window, a long frame)
+  stopped ticks for every player (gaps up to ~1 s in the fuzz). A worker-
+  timed watchdog runs the same pump when no frame advanced the tick clock
+  for 2.5 ticks (utils_net_quality.js netPumpWatchdog*, multiplayer).
+
+B800 after all of this (`.claude/s11-800k-a.log`): mean 71.56 ms (71.6-72.3
+before), 0 desyncs, 0 patches.
+
+Then:
+- Orders' unit ids travel compactly (`uidz`, main.js actionIdsEncode /
+  actionIdsDecode; decoded by sanitizeAction on every peer, the issuer too;
+  bounded against hostile input): a 400k-unit order was 2-3 MB of JSON per
+  bundle, sent by the host to every player (seconds on a home upload). Runs
+  of ids take a few bytes, typical selections 5-25x smaller, random ids 65%.
+  tests/action-ids-codec.test.cjs.
+- The pump watchdog stays out of the node harness (it has Blob/Worker; its
+  pages model a busy main thread by late frames only, which a timer stepped
+  around: backlog-fairness "a sustained busy client adjusts the shared pace").
+- worker-walk: the test now orders walks to tiles the worker can reach (a
+  tile walkable for it can lie in a pocket closed to it; ordered there, a
+  unit rightly stops at the closest point).
+- unit-collision-smoothness 1.51% (gate 1.5%, HEAD 1.49%): reversals are
+  parked idle units shoved alternately by neighbours (178 of 391) and units
+  arriving into the crowd (212, 55 with a carried push), mostly in the first
+  100 ticks of the convergence. A separation-tuning job (Rust kernel), not a
+  determinism issue (.claude/probes/smooth_bins.cjs).
+- **Results depended on when the garbage collector ran** (worker-mode soak:
+  one peer diverged at tick ~1720; extra per-tick work anywhere, DIVTRACE or
+  a JSON capture, made it vanish). Auto heap arrays go back to the wasm heap
+  when collected (FinalizationRegistry), so later allocations land on other
+  memory per peer; the next navigation build's field pool is allocated
+  uncleared (clearing ~300 MB cost 60-150 ms at 400k), and after its install
+  slots no batch had written were read: (a) live slots missed (a pending
+  slot the flush dropped as already made in the installed pool): the next
+  pool now records the slots its batches were given (`made`) and the
+  install makes the live ones missed (6-8 a match in the soak); (b) slots
+  let go but still "made": releasing bumps the generation and the movement
+  kernel takes a new generation of a made slot with its destination as
+  "made again by a new build", so a unit still on it keeps reading it; the
+  install copies such slots' content over (what they held before;
+  SIM_RULES_REVISION 9). (Zeroing every dead slot at install cost an 80 ms
+  tick at B800; clearing "made" at release instead made releases change
+  behaviour, and release timing differs on a peer restored inside a
+  rebuild window: the soak's spectator diverged.) Follow-up: the sweep
+  should see every reference (armed kernel flows) so released slots are
+  never read, and release timing should be synced for restored peers.
+  B800 after (`.claude/s12-800k-b.log`): mean 64.7 ms, p95 94, max 148,
+  navTick max 21 ms, 0 desyncs; 6 slots made at the install, 0 copied.
+  Found by forcing
+  GC on one peer (node --expose-gc, SOAK_HOST_GC), then which collector
+  frees run (sim_wasm.js SIM_HEAP_GC_FREE bits, SIM_HEAP_GC_FREE_SITES by
+  allocating stack line) to bisect the site. Debug: SIM_HEAP_POISON (a
+  byte per peer for freed and uncleared heap). The soak forces host GC every
+  5 ticks and poisons by default now.
+- Still red, not ours: performance-regressions / render-frame-stability
+  (renderer3d sceneTargetSize), visibility-history-performance (history
+  ghosts, fails at HEAD); kernel-object-equivalence is obsolete (every peer
+  disarms at the resync flush now, so kernel and object paths need not
+  match).
+
 ## Next
 
 Order set by the user (2026-10-09): main thread stable below 50 ms (aim

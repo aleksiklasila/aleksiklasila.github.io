@@ -50,7 +50,11 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
     let s = 7;
     const rand = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
     for (let k = 0; k < 60; k++) { for (const i of all) if (rand() < 0.4) i.eval(C.CHAOS_COMMAND + '(' + rand() + ')'); await world.run(200); }
-    const st = i => JSON.parse(i.evalSim(`JSON.stringify(players.slice(0, 2).map(p => ({ shrine: p.shrine, drain: p.shrineDrain, fixed: p._resourceFixedValues && p._resourceFixedValues.shrine })))`));
+    // (Read after the same tick on both: shrines drain every tick, and with
+    // the worker the peers are a few ticks apart at any moment.)
+    world.atNextSafeTick(`__scratch.shrines = JSON.stringify(players.slice(0, 2).map(p => ({ shrine: p.shrine, drain: p.shrineDrain, fixed: p._resourceFixedValues && p._resourceFixedValues.shrine })))`);
+    await world.runUntil(() => all.every(i => i.scratch.shrines), 10000, 50);
+    const st = i => JSON.parse(i.scratch.shrines);
     const hs = st(host), gs = st(g);
     assert.deepEqual(gs, hs, 'peers agree on the shrines');
     assert.equal(hs[1].drain, 2, 'drain order applied');

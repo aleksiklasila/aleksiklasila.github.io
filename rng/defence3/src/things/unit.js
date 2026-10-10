@@ -4197,6 +4197,9 @@ function _combatScanHit(u, range) {
 // Runs the combat scan for every idle or attack-moving unit before the
 // update pass (in parallel; see SIM_KERNEL_COMBAT_SCAN).
 let _combatScanTick = -1, _combatScanOwnerMask = null;
+// At a restore (snapFlushHistoryCaches): a peer that had run the restored
+// tick already skipped its scan as done, and kept that tick's owner masks.
+function combatScanReset() { _combatScanTick = -1; _sxOwnerMaskEpoch = -1; }
 function combatScanRun() {
     if (_combatScanTick === gameTime) return;
 

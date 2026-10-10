@@ -404,7 +404,7 @@ function simUnitStateReleaseFreed() {
 // (a whole-world replacement, a compaction): its arrays go back to the
 // heap only once nothing reaches that object (_simUnitColumnsGone), never
 // while a stale unit could still read or write them.
-const _simUnitColumnsGone = typeof FinalizationRegistry === 'function' ? new FinalizationRegistry(h => { for (const a of h.arrays) simHeapFree(a); }) : null;
+const _simUnitColumnsGone = typeof FinalizationRegistry === 'function' ? new FinalizationRegistry(h => { if (SIM_HEAP_GC_FREE & 1) for (const a of h.arrays) simHeapFree(a); }) : null;
 function _simUnitColumnsHeld(S) {
     if (!S.held) { S.held = { arrays: [] }; if (_simUnitColumnsGone) _simUnitColumnsGone.register(S.columns, S.held); }
     const list = S.held.arrays;
@@ -713,7 +713,7 @@ function simUnitPathRelease(c, s) {
     if (S && S.columns === c && S.pathPool && c.mvPath[s] >= 0) { S.pathPool.free.push(c.mvPath[s]); c.mvPath[s] = -1; }
 }
 
-const _simPathPoolsGone = typeof FinalizationRegistry === 'function' ? new FinalizationRegistry(h => simHeapFree(h.array)) : null;
+const _simPathPoolsGone = typeof FinalizationRegistry === 'function' ? new FinalizationRegistry(h => { if (SIM_HEAP_GC_FREE & 2) simHeapFree(h.array); }) : null;
 // Schema is also consumed by allocation reports and ABI validation tooling.
 const SIM_UNIT_SCHEMA = Object.freeze((() => {
     const out = Object.create(null);

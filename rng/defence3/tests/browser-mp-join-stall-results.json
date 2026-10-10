@@ -1,0 +1,81 @@
+{
+ "fixture": "3000.json",
+ "units": 5995,
+ "rows": [
+  {
+   "label": "baseline",
+   "per": {
+    "host": {
+     "maxLong": 0,
+     "longSum": 0,
+     "tickGap": 84,
+     "ticks": 78
+    },
+    "guest1": {
+     "maxLong": 0,
+     "longSum": 0,
+     "tickGap": 70,
+     "ticks": 78
+    }
+   }
+  },
+  {
+   "label": "spectator joins",
+   "per": {
+    "host": {
+     "maxLong": 118,
+     "longSum": 190,
+     "tickGap": 229,
+     "ticks": 113
+    },
+    "guest1": {
+     "maxLong": 0,
+     "longSum": 0,
+     "tickGap": 217,
+     "ticks": 115
+    }
+   }
+  },
+  {
+   "label": "guest reloads",
+   "per": {
+    "host": {
+     "maxLong": 108,
+     "longSum": 179,
+     "tickGap": 2515,
+     "ticks": 108
+    }
+   }
+  }
+ ],
+ "health": [
+  {
+   "tick": 371,
+   "started": true,
+   "desyncs": 0,
+   "hard": 0,
+   "patches": 0,
+   "stop": false,
+   "mp": true
+  },
+  {
+   "tick": 373,
+   "started": true,
+   "desyncs": 0,
+   "hard": 0,
+   "patches": 0,
+   "stop": false,
+   "mp": true
+  },
+  {
+   "tick": 373,
+   "started": true,
+   "desyncs": 0,
+   "hard": 0,
+   "patches": 0,
+   "stop": false,
+   "mp": true
+  }
+ ],
+ "errors": []
+}

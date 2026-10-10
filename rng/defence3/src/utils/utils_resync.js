@@ -394,7 +394,8 @@ function resyncHostHandleRequest(conn, data) {
             // Already stopped (the guest's stop notice came first): pass on
             // what differs.
             lockstepFatalStopReason = reason;
-            for (let c of connections) { if (c) { try { c.send({ type: 'LOCKSTEP_FATAL_STOP', reason, tick: lockstepFatalStopTick }); } catch { } } }
+            if (lockstepFatalStopDetails) lockstepFatalStopDetails.detailed = true;
+            for (let c of connections) { if (c) { try { c.send({ type: 'LOCKSTEP_FATAL_STOP', reason, tick: lockstepFatalStopTick, detailed: true }); } catch { } } }
         }
         return;
     }

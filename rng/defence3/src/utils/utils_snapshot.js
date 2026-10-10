@@ -65,7 +65,11 @@ const SNAP_FORMAT = 7;
 // 7: structures hashed from the structure table (owner, energy,
 // construction; mines' amounts); a flow unit's steady window no longer ends
 // on its second's tick (the floor's look taken in the steady step).
-const SIM_RULES_REVISION = 7;
+// 8: stat tables follow the penalty multipliers they were built with
+// (a research rebuild too), which snapshots carry (statMult).
+// 9: a navigation build's install writes the slots no batch was given (live
+// ones made, ones let go but still made keep their content).
+const SIM_RULES_REVISION = 9;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
 // Each hash covers one slice (regions, grid rows) of the world. The resync
@@ -492,6 +496,10 @@ let SNAP_HASH_STATIC_CORE_ALL = true;
 // Grid rows (and buildings' full fields): those of this slice, one in this
 // many rotations (each row every SNAP_HASH_GRID_ROUNDS rotations: 400 ticks).
 const SNAP_HASH_GRID_ROUNDS = 20;
+// The grid's cells (type, owner) on a rotation of their own: each row every
+// SNAP_HASH_SLICES * SNAP_HASH_CELL_ROUNDS ticks (4 s; ~12k cells a tick on
+// a 1000x1000 map). At 20 rounds a changed cell went unnoticed for 20 s.
+const SNAP_HASH_CELL_ROUNDS = 4;
 
 // Per slice and rotation (SNAP_HASH_GRID_ROUNDS: each region's buildings
 // every SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS ticks): the tile entities
@@ -782,11 +790,11 @@ function _snapTickHashStatic(t, slice, allSlices, regions, push) {
         let h = _snapReservationHash(slot, u);
         _snapRegionAdd(regions, r, h);
     }, allSlices ? -1 : Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS);
-    // Grid rows of this slice, in one rotation of SNAP_HASH_GRID_ROUNDS:
+    // Grid rows of this slice, in one rotation of SNAP_HASH_CELL_ROUNDS:
     // cell types and owners.
     {
         let h = 2166136261 | 0;
-        const gstep = SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS, g0 = slice + SNAP_HASH_SLICES * (Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS);
+        const gstep = SNAP_HASH_SLICES * SNAP_HASH_CELL_ROUNDS, g0 = slice + SNAP_HASH_SLICES * (Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_CELL_ROUNDS);
         for (let gy = allSlices ? 0 : g0; gy < GRID_H; gy += allSlices ? 1 : gstep) {
             let row = grid[gy];
             if (!row) continue;
@@ -1460,6 +1468,11 @@ function _snapEncodeGlobals() {
         // lobby roster.
         teams: Array.from(activeTeamIds || [], _snapE),
         pendingStatRebuilds: Array.from(_pendingResourceStatRebuilds),
+        // Per player and stockpile the penalty multiplier last seen (what a
+        // spend compares with) and the one its stat tables were built with
+        // (data_dynamic.js _statAppliedMult): a restored peer's tables follow
+        // these, not its own history.
+        statMult: _snapStatMultEncode(),
         // The upkeep breakdown of the second in progress (built over its ticks).
         upkeepAcc: (typeof _upKeepAccum !== 'undefined' && _upKeepAccum) ? JSON.parse(JSON.stringify(_upKeepAccum)) : null,
         // Move orders still being applied in slices (see runQueuedOrders).
@@ -1843,17 +1856,85 @@ function _snapStatMapSignature(pid) {
     } catch { return ''; }
 }
 
+function _snapStatMultKeys() {
+    return (typeof RESOURCE_TYPE_LIST !== 'undefined' ? RESOURCE_TYPE_LIST : []).map(cfg => String(cfg.stockpileKey || cfg.key || '')).filter(Boolean);
+}
+function _snapStatMultEncode() {
+    if (typeof _statAppliedGet !== 'function') return null;
+    let keys = _snapStatMultKeys();
+    return players.map((_, pid) => keys.map(k => [Math.max(1, Number((PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] || {})[k]) || 1), _statAppliedGet(pid, k)]));
+}
+// Whether this peer's tables for pid were built as the snapshot's were.
+function _snapStatMultSame(pid, rows) {
+    if (!Array.isArray(rows)) return true;
+    let keys = _snapStatMultKeys();
+    for (let i = 0; i < keys.length && i < rows.length; i++) if (_statAppliedGet(pid, keys[i]) !== rows[i][1]) return false;
+    return true;
+}
+
+// A player's tables rebuilt into its existing entry objects: units and
+// buildings a partial restore does not carry hold references to them (as
+// the other peers' do to theirs), so new objects would leave those on the
+// old values, and later in-place rebuilds (research) would miss them.
+function _snapRebuildStatsInPlace(pid) {
+    let old = PRECOMPUTED_STATS_MAP_PLAYER[pid];
+    rebuildPrecomputedStatsMapPlayer(pid);
+    let neu = PRECOMPUTED_STATS_MAP_PLAYER[pid];
+    if (!old || !neu || old === neu) return;
+    for (let branch of ['unit', 'building']) {
+        if (!old[branch]) old[branch] = {};
+        for (let key in neu[branch]) {
+            let ol = old[branch][key], nl = neu[branch][key];
+            if (!Array.isArray(ol) || !Array.isArray(nl)) { old[branch][key] = nl; continue; }
+            for (let lvl = 0; lvl < nl.length; lvl++) {
+                let o = ol[lvl], n = nl[lvl];
+                if (o && n && typeof o === 'object' && typeof n === 'object') {
+                    for (let k of Object.keys(o)) if (!(k in n)) delete o[k];
+                    Object.assign(o, n);
+                } else ol[lvl] = n;
+            }
+            ol.length = nl.length;
+        }
+    }
+    PRECOMPUTED_STATS_MAP_PLAYER[pid] = old;
+    // (Clones made from the old values are not handed out again.)
+    if (typeof _precomputedStatsVersion !== 'undefined') _precomputedStatsVersion++;
+}
+
 function _snapEnsureStatMaps() {
     let ctx = _snapDec;
     ctx.statMapReady = true;
+    let target = Array.isArray(ctx.statMult) && typeof _statAppliedGet === 'function' ? ctx.statMult : null;
     let stale = [];
     for (let pid = 0; pid < players.length; pid++) {
-        if (!PRECOMPUTED_STATS_MAP_PLAYER[pid] || ctx.statSignaturesBefore[pid] !== _snapStatMapSignature(pid)) stale.push(pid);
+        if (!PRECOMPUTED_STATS_MAP_PLAYER[pid] || ctx.statSignaturesBefore[pid] !== _snapStatMapSignature(pid)
+            || (target && !_snapStatMultSame(pid, target[pid]))) stale.push(pid);
     }
-    if (stale.length === 0) return;
-    if (PRECOMPUTED_STATS_MAP_PLAYER.length !== players.length || stale.length === players.length) rebuildPrecomputedStatsMapPlayer();
-    else for (let pid of stale) rebuildPrecomputedStatsMapPlayer(pid);
-    ctx.statMapsRebuilt = stale.length;
+    if (stale.length > 0) {
+        if (PRECOMPUTED_STATS_MAP_PLAYER.length !== players.length || stale.length === players.length) rebuildPrecomputedStatsMapPlayer();
+        else for (let pid of stale) _snapRebuildStatsInPlace(pid);
+        // (Rebuilt with the current multipliers; the snapshot's tables may
+        // have been behind them for a stockpile (a rebuild pending).)
+        if (target) {
+            let keys = _snapStatMultKeys();
+            for (let pid = 0; pid < players.length; pid++) {
+                let rows = target[pid];
+                if (!Array.isArray(rows)) continue;
+                for (let i = 0; i < keys.length && i < rows.length; i++) if (_statAppliedGet(pid, keys[i]) !== rows[i][1]) rebuildPrecomputedStatsMapPlayerResource(pid, keys[i], rows[i][1]);
+            }
+        }
+        ctx.statMapsRebuilt = stale.length;
+    }
+    // What a spend compares with, as the snapshot's peer had it.
+    if (target) {
+        let keys = _snapStatMultKeys();
+        for (let pid = 0; pid < players.length; pid++) {
+            let rows = target[pid];
+            if (!Array.isArray(rows)) continue;
+            let seen = PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] || (PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] = {});
+            for (let i = 0; i < keys.length && i < rows.length; i++) seen[keys[i]] = rows[i][0];
+        }
+    }
 }
 
 // Tile index, written directly: the live helpers also release worker
@@ -1929,7 +2010,8 @@ function snapDecodeState(S, options = null) {
     _snapDec = {
         byRef: new Map(), pool, poolMemo: new Array(pool.length), statMemo: new Map(), statMapReady: false,
         statSignaturesBefore, missingRefs: 0, statMapsRebuilt: 0, lazyIndex: {}, finals: null,
-        partial: !!S.partial, unitFind: new Map()
+        partial: !!S.partial, unitFind: new Map(),
+        statMult: S.g && Array.isArray(S.g.statMult) ? S.g.statMult : null
     };
     let ctx = _snapDec;
     let changed = collect ? [] : null;
@@ -2378,6 +2460,10 @@ function snapFlushHistoryCaches() {
     if (typeof separationReset === 'function') separationReset();
     // (The acquisition tier: a pending run dropped, no result until the next.)
     if (typeof acqTierReset === 'function') acqTierReset();
+    if (typeof combatScanReset === 'function') combatScanReset();
+    // (Per-tick budgets and once-a-tick marks keyed by gameTime: a peer that
+    // had run the restored tick found them spent.)
+    if (typeof _groupPathSearchTick !== 'undefined') _groupPathSearchTick = -1;
     if (typeof adjacencyLaneReset === 'function') adjacencyLaneReset();
     if (typeof combatBrainReset === 'function') combatBrainReset();
     if (typeof laserBeamsReset === 'function') laserBeamsReset();

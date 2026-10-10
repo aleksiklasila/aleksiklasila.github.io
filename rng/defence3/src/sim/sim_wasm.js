@@ -123,6 +123,7 @@ function _simHeapAllocImpl(Type, n, clear = true) {
     // (Only below the high-water mark; big ones by the helpers too:
     // simParallelZeroHeap.)
     const used = clear ? Math.min(bytes, H.fresh - ptr) : 0;
+    if (!clear && SIM_HEAP_POISON >= 0) new Uint8Array(buf, ptr, bytes).fill(SIM_HEAP_POISON);
     if (used > 0) {
         if (typeof simParallelZeroHeap === 'function') simParallelZeroHeap(buf, ptr, used);
         else new Uint8Array(buf, ptr, used).fill(0);
@@ -180,12 +181,12 @@ function _simHeapQueue(arr, p, s) {
 // collected, nothing on this thread reaches it any more (no name binds it
 // either); a helper's copy is read only by a job, which the queue waits for.
 const _simHeapAuto = new WeakSet();
-const _simHeapAutoGone = typeof FinalizationRegistry === 'function' ? new FinalizationRegistry(h => _simHeapQueue(null, h.p, h.s)) : null;
+const _simHeapAutoGone = typeof FinalizationRegistry === 'function' ? new FinalizationRegistry(h => { if ((SIM_HEAP_GC_FREE & 4) && (!SIM_HEAP_GC_FREE_SITES || new RegExp(SIM_HEAP_GC_FREE_SITES).test(h.site))) _simHeapQueue(null, h.p, h.s); }) : null;
 function _simHeapAllocAutoImpl(Type, n, clear = true) {
     const arr = _simHeapAllocImpl(Type, n, clear), H = _simHeap, p = H.ptr.get(arr);
     if (p === undefined || !_simHeapAutoGone) return arr;
     _simHeapAuto.add(arr);
-    _simHeapAutoGone.register(arr, { p, s: H.size.get(arr) });
+    _simHeapAutoGone.register(arr, { p, s: H.size.get(arr), site: SIM_HEAP_GC_FREE_SITES ? String(new Error().stack).split('\n')[3] || '' : '' });
     return arr;
 }
 // Once per tick (gameTick): freed arrays that nothing can still read go
@@ -209,8 +210,19 @@ function simHeapTick() {
     }
     Q.length = w;
 }
+// (Debug, tests: a byte (0-255) freed blocks and uncleared allocations are
+// filled with, different on each peer, so that a read of memory no longer
+// or not yet owned shows as a desync. -1: off.)
+let SIM_HEAP_POISON = -1;
+// (Debug: which collector-driven frees run (bits: 1 unit columns, 2 path
+// pools, 4 auto arrays); 7: all, as normally.)
+let SIM_HEAP_GC_FREE = 7;
+// (Debug: only auto arrays allocated at a matching call site (a RegExp
+// source against the allocating stack line) go back when collected.)
+let SIM_HEAP_GC_FREE_SITES = '';
 function _simHeapGive(p, s) {
     const H = _simHeap, F = H.free;
+    if (SIM_HEAP_POISON >= 0 && H.memory) new Uint8Array(H.memory.buffer, p, s).fill(SIM_HEAP_POISON);
     H.live -= s; H.arrays--;
     let i = 0;
     while (i < F.length && F[i] < p) i += 2;

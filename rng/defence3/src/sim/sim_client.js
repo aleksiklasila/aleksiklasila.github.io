@@ -137,8 +137,14 @@ function simClientWorldReady() {
 // ---- match start: the worker starts from the page's state ----
 // Whether the worker takes the match about to start (it loaded, no exact
 // lockstep debugging): the page then needs no units of its own.
+// (Exact lockstep debugging runs on the page only where the page can run
+// the kernels: a page whose worker simulates has none (sim_wasm.js), and
+// its matches did not tick at all.)
+function _simClientPageSimulates() {
+    return lockstepStrictDebugMode && typeof _simHeap !== 'undefined' && !!_simHeap.ready;
+}
 function simClientWillTakeMatch() {
-    if (!simClientEnabled || lockstepStrictDebugMode) return false;
+    if (!simClientEnabled || _simClientPageSimulates()) return false;
     simClientPreload();
     const c = _simClient;
     return !!(c && c.loaded && !c.failed);
@@ -157,7 +163,7 @@ function simClientStripUnits(state) {
 // (without units; a plain decode when not given). The worker gets the text
 // first: it loads while the page decodes.
 function simClientStartMatch(startText = null, decodePage = null) {
-    if (!simClientEnabled || lockstepStrictDebugMode) return false;
+    if (!simClientEnabled || _simClientPageSimulates()) return false;
     simClientPreload();
     let c = _simClient;
     // A worker that is still loading, or could not load the game, does not
@@ -217,7 +223,7 @@ function simClientStartMatch(startText = null, decodePage = null) {
 // Page globals the simulation reads.
 function _simClientGlobals() {
     return {
-        isMultiplayer, isHost, localPlayerId, gameSeed, activeTeamIds, gameMode, fullVisibility, matchFullVisibility,
+        isMultiplayer, isHost, localPlayerId, gameSeed, activeTeamIds, gameMode, fullVisibility, matchFullVisibility, lockstepStrictDebugMode,
         myPeerId: typeof myPeerId !== 'undefined' ? myPeerId : null,
         lobbyPlayers: typeof lobbyPlayers !== 'undefined' ? lobbyPlayers : [], gameStarted: true
     };

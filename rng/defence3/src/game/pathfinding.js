@@ -2135,6 +2135,9 @@ function resetGroupRoutes() {
     for (let i = 0; i < FLOW_MAX; i++) _flowRelease(i);
     _groupRoutes = new Map();
     _flowBind();
+    // (This tick's budgets fresh: a restored tick a peer had already run
+    // found them spent.)
+    _groupRouteNodesTick = -1; _groupRoutePathTick = -1;
 }
 function flowRouteById(fid) { return fid >= 0 && fid < FLOW_MAX ? _flowSlots[fid] : null; }
 

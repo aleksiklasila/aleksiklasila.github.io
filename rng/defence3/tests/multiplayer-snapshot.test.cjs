@@ -4,6 +4,11 @@
 // - restore keeps unit objects on one hidden class (no slow property mode);
 // - snapshots stay compact, and the gzip transport works end to end.
 const assert = require('node:assert/strict');
+// (The codec on the page's own simulation: it builds, restores and ticks the
+// page's state directly. With the worker the page holds only what it
+// draws, so this test always runs the page simulation; the worker's
+// restores are covered by the multiplayer tests in worker mode.)
+process.env.SIM_WORKER = '0';
 const H = require('./net-harness.cjs');
 const C = require('./multiplayer-chaos-determinism.test.cjs');
 
