@@ -244,14 +244,23 @@ function flickers(frames, field) {
             const r = JSON.parse(await b.ev(`(async () => {
                 setRenderDimensionMode('${mode}');
                 const k = units.find(u => !u.dead && u.owner === localPlayerId && u.isKing) || units.find(u => !u.dead && u.owner === localPlayerId && !u.workerType);
-                camera.zoom = 2; camera.x = k.x - viewW / camera.zoom / 2; camera.y = k.y - viewH / camera.zoom / 2;
+                // (3D close up: the unit is in the unit layer, drawn from the
+                // layer's record of it and the layer's alpha: that position
+                // is the one checked, see RECORD.)
+                camera.zoom = '${mode}' === '3d' ? 4 : 2; camera.x = k.x - viewW / camera.zoom / 2; camera.y = k.y - viewH / camera.zoom / 2;
                 await new Promise(r => setTimeout(r, 500));
                 const ys = [];
+                const r3 = renderer3dInstance, wr = r3 && r3.writeUnitLayerRecord, wo = r3 && r3.writeUnitLayerObject, rr = r3 && r3.render;
+                let rec = null, layerAlpha = NaN;
+                if (wr) r3.writeUnitLayerRecord = function (kind, m, d, panel, unit) { if (unit === k) rec = [d[14], d[7]]; return wr.apply(this, arguments); };
+                if (wo) r3.writeUnitLayerObject = function (o) { if (o && o.pickSource === k) rec = [o.z, o._pdz]; return wo.apply(this, arguments); };
+                if (rr) r3.render = function (snap) { layerAlpha = snap && snap.unitLayer ? snap.unitLayer.alpha : NaN; return rr.apply(this, arguments); };
                 const orig = processRenderFrame;
                 window.processRenderFrame = function () {
+                    rec = rec && '${mode}' === '3d' ? rec : null;
                     const res = orig.apply(this, arguments);
-                    const i = units.indexOf(k), vis = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
-                    ys.push([k.prevY + (k.y - k.prevY) * tickAlpha, tickAlpha, performance.now()]);
+                    const fromLayer = '${mode}' === '3d' && rec && layerAlpha === layerAlpha && Number.isFinite(rec[1]);
+                    ys.push([fromLayer ? (rec[0] + rec[1] * (1 - layerAlpha)) * TILE : k.prevY + (k.y - k.prevY) * tickAlpha, tickAlpha, performance.now(), fromLayer ? 1 : 0]);
                     return res;
                 };
                 for (let n = 0; n < 8; n++) {
@@ -259,6 +268,9 @@ function flickers(frames, field) {
                     await new Promise(r => setTimeout(r, 300));
                 }
                 window.processRenderFrame = orig;
+                if (wr) r3.writeUnitLayerRecord = wr;
+                if (wo) r3.writeUnitLayerObject = wo;
+                if (rr) r3.render = rr;
                 return JSON.stringify(ys);
             })()`));
             const ry = r.map(x => x[0]);
@@ -272,7 +284,7 @@ function flickers(frames, field) {
                 if (Math.abs(dy) > 0.05 && Math.abs(last) > 0.05 && Math.sign(dy) !== Math.sign(last)) back++;
                 last = dy;
             }
-            console.log(`  ${mode} repeated orders: ${steps} moving frames, ${holds} held (${starved} waiting for a late result), ${back} back`);
+            console.log(`  ${mode} repeated orders: ${steps} moving frames, ${holds} held (${starved} waiting for a late result), ${back} back; ${r.filter(x => x[3]).length} of ${r.length} positions from the unit layer's record`);
             if (process.env.DUMP_MOTION) console.log(r.map(x => x.map(v => +v.toFixed(2)).join(' ')).join(String.fromCharCode(10)));
             assert.ok(first >= 0 && steps > 40, `${mode}: the unit moves`);
             assert.ok(back <= 2, `${mode}: repeated orders make the unit jitter back and forth (${back} reversals)`);

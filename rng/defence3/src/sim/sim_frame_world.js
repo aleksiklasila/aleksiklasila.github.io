@@ -69,7 +69,7 @@ const SIM_STRUCT_KINDS = ['t', 'b', 's', 'f', 'g', 'a', 'd'];
 const SIM_STRUCT_SPEC = simTableSpec({
     f32: ['x', 'y', 'energy', 'maxEnergy', 'spawnTimer', 'spawnCooldown', 'stackWork', 'stackReq', 'angle', 'amount', 'amountMax', 'cd',
         'tx', 'ty', 'vision', 'resDone', 'resReq', 'rallyX', 'rallyY', 'timer', 'damage'],
-    i32: ['serial', 'flags', 'l0', 'l1', 'l2', 'l3'],
+    i32: ['serial', 'flags', 'l0', 'l1', 'l2', 'l3', 'orderTick', 'rallyTargetId'],
     i16: ['kind', 'gx', 'gy', 'owner', 'type', 'utype', 'level', 'elevel', 'stacks', 'mstacks', 'estacks', 'qlen', 'qtype', 'laser',
         'watchedBy', 'label', 'stackCount'],
     u8: ['alive', 'flash']
@@ -90,6 +90,7 @@ function _simStructLists() {
 function _simWriteStructure(F, s, e, kind, tick) {
     F.alive[s] = 1;
     F.serial[s] = _simStructSlots.serials[s];
+    F.orderTick[s] = currentTick - 1;
     F.kind[s] = kind;
     let gx = e.gx | 0, gy = e.gy | 0;
     F.gx[s] = gx; F.gy[s] = gy;
@@ -111,6 +112,7 @@ function _simWriteStructure(F, s, e, kind, tick) {
     F.tx[s] = at ? Number(at.x) || 0 : 0; F.ty[s] = at ? Number(at.y) || 0 : 0;
     F.resDone[s] = task ? Number(task.workDone) || 0 : 0; F.resReq[s] = task ? Number(task.workRequired) || 0 : 0;
     F.rallyX[s] = Number(e.rallyX) || 0; F.rallyY[s] = Number(e.rallyY) || 0;
+    F.rallyTargetId[s] = e.rallyTargetUnitId == null ? -1 : e.rallyTargetUnitId;
     F.vision[s] = kind <= 3 ? (Number(getEntityEffectiveVisibilityRangeArea(e)) || 0) : 0;
     F.level[s] = Number.isFinite(e.level) ? e.level : -1;
     F.elevel[s] = Number.isFinite(e.effectiveLevel) ? e.effectiveLevel : -1;
@@ -286,6 +288,7 @@ function _pageStructFlag(v, bit) { return (_pageStructCol(v, 'flags') & bit) !==
 function _pageStructDetail(v, k) { let d = v._det; return d ? d[k] : undefined; }
 function _pageNum(v, col) { let x = _pageStructCol(v, col); return x >= 0 ? x : undefined; }
 const _PAGE_STRUCT_ACCESSORS = {
+    _orderVisualTick: { get() { return _pageStructCol(this, 'orderTick'); } },
     x: { get() { return _pageStructCol(this, 'x'); } },
     y: { get() { return _pageStructCol(this, 'y'); } },
     gx: { get() { return _pageStructCol(this, 'gx'); } },
@@ -335,6 +338,7 @@ const _PAGE_STRUCT_ACCESSORS = {
     sandy: { get() { let d = _pageStructDetail(this, 'sandy'); return d !== undefined ? d : _pageStructFlag(this, SIM_SF_SANDY) ? 1 : 0; } },
     rallyX: { get() { return _pageStructFlag(this, SIM_SF_RALLY) ? _pageStructCol(this, 'rallyX') : undefined; } },
     rallyY: { get() { return _pageStructFlag(this, SIM_SF_RALLY) ? _pageStructCol(this, 'rallyY') : undefined; } },
+    rallyTargetUnitId: { get() { const id = _pageStructCol(this, 'rallyTargetId'); return id >= 0 ? id : null; } },
     attackTarget: { get() {
         if (!_pageStructFlag(this, SIM_SF_ATTACK_TARGET)) return null;
         let t = this._at || (this._at = { x: 0, y: 0 }); t.x = _pageStructCol(this, 'tx'); t.y = _pageStructCol(this, 'ty'); return t;

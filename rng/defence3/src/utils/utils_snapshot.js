@@ -71,7 +71,10 @@ const SNAP_FORMAT = 7;
 // ones made, ones let go but still made keep their content).
 // 10: a tower that finds no unit to shoot looks again on a tick of its own
 // (towerIdleCooldown); a kill order may carry a group's units (unitIds).
-const SIM_RULES_REVISION = 10;
+// 11: the separation's share of a push (UNIT_SEPARATION_TIER_GAIN 0.8); a
+// patch that removes a unit takes it out of the count planes, and one that
+// rebuilds a player's stat tables refreshes that player's units at once.
+const SIM_RULES_REVISION = 11;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
 // Each hash covers one slice (regions, grid rows) of the world. The resync

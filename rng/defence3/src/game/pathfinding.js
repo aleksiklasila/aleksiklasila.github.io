@@ -2406,10 +2406,37 @@ class GroupRoute {
 // A unit's destination tile as the interface shows it ({x, y} or null): its
 // path's end, or its flow's destination. O(1): for markers drawn per frame.
 function unitDisplayDest(u) {
+    if (u && u._orderDestination !== undefined) {
+        const tile = Math.abs(u._orderDestination) - 1;
+        return tile >= 0 ? { x: tile % GRID_W, y: Math.floor(tile / GRID_W) } : null;
+    }
     let p = u && u.path;
     if (p && p.length) return p[p.length - 1];
     if (u && u._routeKey && u._routeEnd >= 0) return { x: u._routeEnd % GRID_W, y: (u._routeEnd / GRID_W) | 0 };
     return null;
+}
+
+// Compact presentation of the current order for every unit, including units
+// outside the watched-detail budget. Zero means no destination; negative is
+// attack-move. A queued group order supersedes its previous route immediately.
+function getUnitOrderDestinationCode(u) {
+    const stamps = typeof _unitOrderSeq !== 'undefined' && _unitOrderSeq[u.owner];
+    const queued = stamps && _orderBySeq.get(_orderStampGet(stamps, u.id));
+    let x, y, cmd = u.commandState;
+    if (queued) {
+        x = Math.max(0, Math.min(GRID_W - 1, Math.floor(queued.targetX / TILE)));
+        y = Math.max(0, Math.min(GRID_H - 1, Math.floor(queued.targetY / TILE)));
+        cmd = queued.cmd;
+    } else {
+        if (cmd < CMD_MOVING || cmd > CMD_ATTACK_MOVING) return 0;
+        const pending = u._pendingPathTarget;
+        const dest = pending ? { x: pending.gx, y: pending.gy } : unitDisplayDest(u);
+        if (!dest) return 0;
+        x = dest.x; y = dest.y;
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return 0;
+    const code = Math.floor(y) * GRID_W + Math.floor(x) + 1;
+    return cmd === CMD_ATTACK_MOVING ? -code : code;
 }
 
 // A unit's path as the interface shows it: its own, or for a unit following

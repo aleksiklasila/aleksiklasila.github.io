@@ -69,8 +69,12 @@ function _simClientCreate() {
         inFlight: 0, lastDispatchAt: 0, tickClock: 0, dispatchAt: new Map(), appliedTick: -1, appliedAt: 0, latencyMs: TICK_MS, arrivedAt: 0, intervalMs: TICK_MS, drawnAlpha: -1, errors: [],
         // (Presentation frames: their playout, see _simPlayArrived; when a frame was last drawn.)
         play: _simPlayNew(), drawAt: 0,
-        // [epoch, last tick the worker ran] (shared memory only).
-        ctl: (typeof SharedArrayBuffer === 'function' && typeof window !== 'undefined' && window.crossOriginIsolated) ? new Int32Array(new SharedArrayBuffer(16)) : null,
+        // [epoch, last tick the worker ran, ...the words of the worker's own
+        // ticks: SIM_CTL_*] (shared memory only).
+        ctl: (typeof SharedArrayBuffer === 'function' && typeof window !== 'undefined' && window.crossOriginIsolated) ? new Int32Array(new SharedArrayBuffer(64)) : null,
+        // (The heartbeat's origin, absolute ms: the worker's clock has another.)
+        ctlBase: typeof performance.timeOrigin === 'number' ? Math.floor(performance.timeOrigin + performance.now()) : NaN,
+        autoKey: '', autoDeferred: [], autoTicks: 0, autoSeals: 0,
         lateMs: 0,
         stats: { applied: 0, applyMs: [], simMs: [], encodeMs: [], latencyMs: [], lateMs: [], rows: 0, heals: 0, dropped: 0 }
     };
@@ -115,7 +119,7 @@ function _simClientSpawn(c, viaBlob, maxHelpers) {
         let text = (ev.message || 'worker error, no message (script failed to load?)') + where;
         c.errors.push(text); if (!c.loaded) c.failed = text; console.error('[sim worker]', text, ev);
     };
-    worker.postMessage({ type: 'load', scripts: _simClientScriptUrls(), maxHelpers, ctl: c.ctl });
+    worker.postMessage({ type: 'load', scripts: _simClientScriptUrls(), maxHelpers, ctl: c.ctl, ctlBase: c.ctlBase });
 }
 
 // Loaded ahead (the scripts take a few hundred ms), so matches start at once.
@@ -219,6 +223,7 @@ function simClientStartMatch(startText = null, decodePage = null) {
     c.appliedTick = currentTick - 1;
     c.appliedAt = 0; c.arrivedAt = 0;
     c.gameOverShown = false;
+    _simAutoSync(c);
     return true;
 }
 
@@ -237,7 +242,145 @@ function simClientSyncGlobals() {
 }
 
 function simClientStop() {
-    if (_simClient) { _simClient.active = false; _simClient.epoch++; _simClient.worker.postMessage({type:'presentationStop'}); }
+    if (_simClient) { _simClient.active = false; _simClient.epoch++; _simAutoSync(_simClient); _simClient.worker.postMessage({type:'presentationStop'}); }
+}
+
+// ---- ticks the worker takes by itself (a stalled page) ----
+// See sim_worker.js (_simAutoStep): while this page's pump is not heard
+// (its heartbeat in the shared block), the worker runs the ticks it holds
+// the commands of (sealed bundles, handed to it as they are sealed:
+// simClientNoteSealed; alone, ticks without commands), and a host's worker
+// seals and sends ticks without commands. A tick has one source: the page
+// claims each tick it dispatches (simClientClaimTick) and each a host seals
+// (simClientSealClaim) in the shared block, where the worker claims its
+// own; the worker's notes ('autoRan', 'autoSealed') move the page's lockstep
+// on (main.js lockstepAdoptAutoTick, lockstepAdoptAutoSeal).
+// ?simauto=0: off (a stalled page stalls its ticks, as before).
+const SIM_CTL_CLAIM = 2, SIM_CTL_SEALED = 3, SIM_CTL_LIMIT = 4, SIM_CTL_INTENT = 5, SIM_CTL_BEAT = 6, SIM_CTL_PEPOCH = 7, SIM_CTL_STALE = 8;
+// The pump not heard for this long: stalled (it runs with every drawn frame,
+// and from a worker's timer every 25 ms when frames stop; a hidden page's
+// from a timer every tick).
+const SIM_AUTO_STALE_MS = 70, SIM_AUTO_STALE_HIDDEN_MS = 170;
+const simClientAutoEnabled = (() => { try { return new URLSearchParams(location.search).get('simauto') !== '0'; } catch { return true; } })();
+function _simAutoCtl() {
+    let c = _simClient;
+    return c && c.active && c.ctl && c.ctl.length >= 16 && simClientAutoEnabled && simClientAheadEnabled && Number.isFinite(c.ctlBase) ? c.ctl : null;
+}
+// The first tick the worker must leave to the page (0: all of them). Lowered
+// only once the worker is out of a claim it began under the old limit.
+function _simAutoSetLimit(C, limit) {
+    let prev = Atomics.exchange(C, SIM_CTL_LIMIT, limit);
+    if (limit < prev) { let t = performance.now(); while (Atomics.load(C, SIM_CTL_INTENT) !== 0 && performance.now() - t < 50) { } }
+}
+// A match starts or is restored: the worker takes nothing until the pump
+// arms it again, and the words count from the page's tick.
+function _simAutoSync(c) {
+    let C = c.ctl;
+    if (!C || C.length < 16) return;
+    _simAutoSetLimit(C, 0);
+    Atomics.store(C, SIM_CTL_PEPOCH, c.epoch);
+    Atomics.store(C, SIM_CTL_CLAIM, currentTick - 1);
+    Atomics.store(C, SIM_CTL_SEALED, currentTick - 1);
+    c.autoKey = '';
+    for (let r of c.autoDeferred.splice(0)) r.reject(new Error('match restarted'));
+}
+// The page is alive (every pump, every frame).
+function simClientAutoBeat(now) {
+    let C = _simAutoCtl();
+    if (C) Atomics.store(C, SIM_CTL_BEAT, (performance.timeOrigin + now - _simClient.ctlBase) | 0);
+}
+// Every pump: how far the worker may go by itself, and what it needs to
+// know for it (sent when it changes).
+function simClientAutoArm(now) {
+    let c = _simClient, C = _simAutoCtl();
+    if (!C) return;
+    simClientAutoBeat(now);
+    Atomics.store(C, SIM_CTL_STALE, document.hidden ? SIM_AUTO_STALE_HIDDEN_MS : SIM_AUTO_STALE_MS);
+    _simAutoSetLimit(C, c.autoDeferred.length || typeof lockstepAutoLimit !== 'function' ? 0 : lockstepAutoLimit());
+    let info = lockstepAutoInfo(), key = JSON.stringify(info);
+    if (key !== c.autoKey) { c.autoKey = key; c.worker.postMessage({ type: 'auto', ...info }); }
+}
+// A tick of the page's plans (a resync point) that the worker must not
+// pass: from this moment, not from the next pump.
+function simClientAutoBarrier(tick) {
+    let C = _simAutoCtl();
+    if (C && Atomics.load(C, SIM_CTL_LIMIT) > tick) _simAutoSetLimit(C, Math.max(0, tick));
+}
+// The worker stops taking ticks (till the next pump); returns the first tick
+// neither the page nor the worker has sealed or taken.
+function simClientAutoFreeze() {
+    let C = _simAutoCtl();
+    if (!C) return currentTick;
+    _simAutoSetLimit(C, 0);
+    return Math.max(currentTick, Atomics.load(C, SIM_CTL_CLAIM) + 1, Atomics.load(C, SIM_CTL_SEALED) + 1);
+}
+// Whether the worker has not taken `tick` by itself (when it has, its note
+// is on its way and the page's lockstep waits for it).
+function simClientTickFree(tick) {
+    let C = _simAutoCtl();
+    return !C || Atomics.load(C, SIM_CTL_CLAIM) < tick;
+}
+function _simAutoClaimWord(word, tick) {
+    let C = _simAutoCtl();
+    if (!C) return true;
+    let got = Atomics.compareExchange(C, word, tick - 1, tick);
+    if (got === tick - 1) return true;
+    if (got >= tick) return false;
+    // (The word behind the page's count: never the worker's doing.)
+    _simAutoSetLimit(C, 0);
+    Atomics.store(C, word, tick);
+    return true;
+}
+// Before the page dispatches `tick` / a host seals it: false when the worker
+// did by itself.
+function simClientClaimTick(tick) { return _simAutoClaimWord(SIM_CTL_CLAIM, tick); }
+function simClientSealClaim(tick) { return _simAutoClaimWord(SIM_CTL_SEALED, tick); }
+// A tick's commands are final: the worker holds them from now on (a host's:
+// the bundle's message, which its worker sends on to the guests' workers).
+function simClientNoteSealed(tick, payload) {
+    let c = _simClient;
+    if (_simAutoCtl()) c.worker.postMessage({ type: 'sealed', epoch: c.epoch, tick, ...payload });
+}
+// The worker ran `tick` by itself (lockstepAdoptAutoTick): in flight like
+// one the page dispatched, on the worker's deadline for it.
+function simClientNoteAutoTick(tick, dueAbs) {
+    let c = _simClient;
+    c.inFlight++;
+    c.autoTicks++;
+    let at = Number.isFinite(dueAbs) ? dueAbs - performance.timeOrigin : performance.now();
+    c.tickClock = at;
+    c.dispatchAt.set(tick, at);
+    _simAutoFlushDeferred(c);
+}
+// Requests that waited for the page to hear of the worker's own ticks (the
+// state a request reads or writes is the page's tick's).
+function _simAutoFlushDeferred(c) {
+    if (!c.autoDeferred.length || !simClientTickFree(currentTick)) return;
+    for (let r of c.autoDeferred.splice(0)) {
+        if (r.epoch !== c.epoch) { r.reject(new Error('match restarted')); continue; }
+        let id = c.nextRequestId++;
+        c.replies.set(id, { resolve: r.resolve, reject: r.reject, epoch: c.epoch });
+        c.worker.postMessage({ type: 'request', id, op: r.op, args: r.args });
+    }
+}
+// The page's link to a peer has a second data channel for the worker (the
+// same peer connection; both ends make it, with the same id): a host's
+// worker sends bundles over it, a guest's receives them, whatever the pages
+// are doing. Where a channel cannot be handed to a worker, there is none
+// (the other end's then closes) and ticks go over the page's link alone.
+const SIM_NET_CHANNEL_ID = 64;
+function simClientNetAttach(conn) {
+    let c = _simClient;
+    if (!c || !c.worker || !c.ctl || c.ctl.length < 16 || !simClientAutoEnabled || !simClientAheadEnabled) return;
+    let pc = conn && conn.peerConnection;
+    if (!pc || typeof pc.createDataChannel !== 'function') return;
+    let dc = null;
+    try {
+        dc = pc.createDataChannel('defence3-ticks', { negotiated: true, id: SIM_NET_CHANNEL_ID });
+        c.worker.postMessage({ type: 'netChannel', peer: String(conn.peer), dc }, [dc]);
+    } catch (err) {
+        if (dc) { try { dc.close(); } catch { } }
+    }
 }
 
 // ---- ticks ----
@@ -297,6 +440,14 @@ function simClientWorkerEval(code) {
 // Commands and requests go out in order; a reply resolves its promise.
 function simClientRequest(op, args = null) {
     let c = _simClient;
+    // A request reads or writes the state as of the page's tick: the worker
+    // takes no tick by itself from here to the next pump, and when it has
+    // taken some the page has not heard of yet, the request waits for that.
+    let C = op !== 'debugEval' ? _simAutoCtl() : null;
+    if (C) {
+        _simAutoSetLimit(C, 0);
+        if (!simClientTickFree(currentTick)) return new Promise((resolve, reject) => { c.autoDeferred.push({ op, args, resolve, reject, epoch: c.epoch }); });
+    }
     let id = c.nextRequestId++;
     return new Promise((resolve, reject) => {
         c.replies.set(id, { resolve, reject, epoch: c.epoch });
@@ -314,6 +465,11 @@ function _simClientOnMessage(msg) {
             if (msg.world) { if (msg.epoch === c.epoch) _simClientApplyWorld(msg.world, 1); else _simClientReturnBufs(_simClientWorldBufs(msg.world)); }
             break;
         case 'ticked': _simClientApplyTick(msg); break;
+        // The worker's own ticks (a stalled page): one it ran, one a host's
+        // worker sealed, a bundle the host's worker sealed (to a guest).
+        case 'autoRan': if (msg.epoch === c.epoch && c.active) lockstepAdoptAutoTick(msg.tick, msg.due); break;
+        case 'autoSealed': if (msg.epoch === c.epoch && c.active) { c.autoSeals++; lockstepAdoptAutoSeal(msg.tick, msg.msg); } break;
+        case 'netBundle': if (msg.epoch === c.epoch && c.active && isMultiplayer && !isHost) handleIncomingTickBundle(netGetHostConnection(), msg.msg); break;
         // The presentation reader's own channel (frames come over it, their
         // buffers go back over it: not through the simulation worker).
         case 'presentationPort': {
@@ -883,6 +1039,7 @@ function simClientAfterSnapshotApplied(snapshot) {
     if (!simClientActive() || _simClient.decodingStart) return;
     let c = _simClient;
     c.epoch++;
+    _simAutoSync(c);
     c.inFlight = 0;
     c.dispatchAt.clear();
     c.appliedTick = currentTick - 1;
@@ -923,7 +1080,8 @@ window.simClientStats = function () {
         rowsPerTickByList: s.applied ? Object.fromEntries(Object.entries(s.rowsBy || {}).map(([k, v]) => [k, Math.round(v / s.applied * 10) / 10])) : null,
         applyMs: { mean: m(s.applyMs), p95: q(s.applyMs, .95) }, workerSimMs: { mean: m(s.simMs), p95: q(s.simMs, .95) },
         workerEncodeMs: { mean: m(s.encodeMs), p95: q(s.encodeMs, .95) }, latencyMs: { mean: m(s.latencyMs), p95: q(s.latencyMs, .95), shown: Math.round(c.latencyMs) },
-        workerLateMs: { mean: m(s.lateMs), p95: q(s.lateMs, .95) }, dispatchAhead: simClientDispatchAhead(), workerAhead: simClientWorkerAhead()
+        workerLateMs: { mean: m(s.lateMs), p95: q(s.lateMs, .95) }, dispatchAhead: simClientDispatchAhead(), workerAhead: simClientWorkerAhead(),
+        auto: !!_simAutoCtl(), autoTicks: c.autoTicks, autoSeals: c.autoSeals
     };
 };
 

@@ -193,6 +193,7 @@ self.onmessage = (ev) => {
             let t0 = performance.now();
             // (The page's shared control block: [epoch, last tick run].)
             _simCtl = msg.ctl instanceof Int32Array ? msg.ctl : null;
+            _simAuto.base = Number(msg.ctlBase) || 0;
             for (let url of msg.scripts) _simImport(url);
             _simStubUi();
             _simLoaded = true;
@@ -208,6 +209,13 @@ self.onmessage = (ev) => {
             simPresentationStop();
         } else if (msg.type === 'tick') {
             _simStreamPush(msg);
+        } else if (msg.type === 'sealed') {
+            _simAutoSealed(msg);
+        } else if (msg.type === 'auto') {
+            _simAuto.arm = msg;
+            _simAutoPoll();
+        } else if (msg.type === 'netChannel') {
+            _simNetAdd(String(msg.peer || ''), msg.dc);
         } else if (msg.type === 'frameReturn') {
             // The page is done with these buffers: the next frames reuse them.
             for (let b of msg.bufs || []) if (!simPresentationReturn(b)) simFrameReturn(b);
@@ -253,12 +261,199 @@ function _simStreamRun() {
         _simStream.shift();
         try { if (m.type === 'tick') _simTick(m); else _simRequest(m); } catch (err) { _simError(m.type, err); }
     }
+    _simAutoPoll();
 }
 // (keepRequests: the requests run now, in order; the ticks are dropped.)
 function _simStreamClear(keepRequests) {
     if (_simStreamTimer) { clearTimeout(_simStreamTimer); _simStreamTimer = 0; }
     const list = _simStream.splice(0);
+    _simSealed.clear();
+    _simAuto.dueTick = -1;
     if (keepRequests) for (const m of list) if (m.type === 'request') { try { _simRequest(m); } catch (err) { _simError('request', err); } }
+}
+
+// ---- its own ticks while the page is stalled ----
+// The page dispatches ticks (sim_client.js) a few ahead; a page whose main
+// thread is held up longer than that (a long task, a collection, a view
+// switch) left the worker without ticks, and in a match every other peer
+// waited for that page's bundles or its packets: one player's stall was
+// everyone's tick rate. So the worker goes on by itself when the page's
+// pump has not been heard for SIM_AUTO_STALE_MS (the page's heartbeat in the
+// shared block), on the page's tick clock (the deadlines of the ticks it
+// dispatched, continued at the match's pace):
+// - a tick whose commands it holds (sealed bundles the page handed it at
+//   once, 'sealed'; a guest's worker gets the host's over its own data
+//   channel too, below) runs at its deadline;
+// - alone (no match), a tick without commands: a stalled page gave none;
+// - a host's worker seals ticks the page has not, without anyone's commands
+//   (they run on a later tick, as a late packet's do: main.js), and sends
+//   those bundles to the guests over its own channels, as far ahead of their
+//   deadlines as the page seals.
+// Who takes a tick is settled in the shared block: the page claims each tick
+// it dispatches (and a host each tick it seals) by a compare-and-exchange,
+// the worker the same, so a tick has one source; the worker tells the page
+// of each tick it took ('autoRan', 'autoSealed'), and the page's lockstep
+// follows from those. The page bounds it (the limit: the first tick the
+// worker must leave to it, a resync point; none while a match is paused),
+// and lowers the limit only while the worker is not in the middle of a claim
+// (the intent word).
+const SIM_CTL_CLAIM = 2, SIM_CTL_SEALED = 3, SIM_CTL_LIMIT = 4, SIM_CTL_INTENT = 5, SIM_CTL_BEAT = 6, SIM_CTL_PEPOCH = 7, SIM_CTL_STALE = 8;
+// (The most ticks it takes in one stall, 3 s: a page gone longer is an
+// outage, which the match's own rules handle. How far before a tick's
+// deadline a host's worker seals it: the page's lead.)
+const SIM_AUTO_MAX_TICKS = 60, SIM_AUTO_SEAL_AHEAD_MS = 150;
+const _simAuto = { base: 0, due: NaN, dueTick: -1, teams: null, run: 0, arm: null, timer: 0, ran: 0, sealed: 0 };
+// Sealed ticks not run yet: tick -> { actions, flush }.
+const _simSealed = new Map();
+function _simAutoOn() {
+    const C = _simCtl, A = _simAuto;
+    return !!(C && C.length >= 16 && A.arm && _simMode === 'authority' && A.dueTick >= 0 && Atomics.load(C, SIM_CTL_PEPOCH) === _simEpoch);
+}
+function _simAutoPoll(ms = 15) {
+    const A = _simAuto;
+    if (A.timer) { clearTimeout(A.timer); A.timer = 0; }
+    if (!_simCtl || _simCtl.length < 16 || !A.arm) return;
+    A.timer = setTimeout(_simAutoStep, Math.max(1, Math.min(15, ms)));
+}
+// A tick's commands, sealed: from the page ({ tick, actions } or, a host's,
+// { tick, msg }: the bundle as it goes to the guests, sent on to them over
+// the worker's channels too), or from the host's worker (_simNetMessage).
+function _simAutoSealed(m) {
+    const t = m.tick | 0;
+    if (m.epoch !== _simEpoch || t < currentTick) return;
+    if (m.msg) _simNetBroadcast(m.msg);
+    // (The page's own word goes before a copy from the host's worker.)
+    const have = _simSealed.get(t);
+    if (have && !have.gen) return;
+    let actions = m.actions, flush = !!m.flush;
+    if (m.msg) {
+        const b = unpackTickBundleFromWire(m.msg.w);
+        if (!b || b.tick !== t) return;
+        actions = b.packets.flatMap(p => Array.isArray(p.actions) ? p.actions : []);
+        flush = !!b.flush;
+    }
+    _simSealed.set(t, { actions: actions || [], flush });
+}
+// Claims the next tick of a word (SEALED, CLAIM) unless the page did, or
+// lowered its limit to it.
+function _simAutoClaim(word, t) {
+    const C = _simCtl;
+    Atomics.store(C, SIM_CTL_INTENT, 1);
+    let ok = false;
+    if (Atomics.load(C, SIM_CTL_LIMIT) > t && Atomics.load(C, SIM_CTL_PEPOCH) === _simEpoch) ok = Atomics.compareExchange(C, word, t - 1, t) === t - 1;
+    Atomics.store(C, SIM_CTL_INTENT, 0);
+    return ok;
+}
+function _simAutoStep() {
+    const C = _simCtl, A = _simAuto;
+    A.timer = 0;
+    // (The page's ticks and requests first: a tick waiting for its deadline.)
+    if (_simStream.length || !_simAutoOn()) { _simAutoPoll(); return; }
+    const limit = Atomics.load(C, SIM_CTL_LIMIT);
+    let now = _simNowAbs();
+    if (limit <= 0 || now - (A.base + Atomics.load(C, SIM_CTL_BEAT)) < Math.max(40, Atomics.load(C, SIM_CTL_STALE))) { A.run = 0; _simAutoPoll(); return; }
+    const arm = A.arm, tickMs = Math.max(1, Number(arm.tickMs) || 50);
+    if (A.run >= SIM_AUTO_MAX_TICKS) { _simAutoPoll(); return; }
+    // A host: the ticks the page would have sealed by now.
+    if (arm.role === 'host' && Array.isArray(arm.participants) && _simNetReady(arm.peers)) {
+        let s = Atomics.load(C, SIM_CTL_SEALED);
+        while (s + 1 < limit && s + 1 >= currentTick && A.due + (s + 1 - A.dueTick) * tickMs - now < SIM_AUTO_SEAL_AHEAD_MS && s + 1 - currentTick < SIM_AUTO_MAX_TICKS - A.run) {
+            if (!_simAutoClaim(SIM_CTL_SEALED, s + 1)) break;
+            s++;
+            const bundle = buildEmptyTickBundle(s, arm.participants);
+            const msg = { type: 'TICK_BUNDLE', w: packTickBundleForWire(bundle), c: 1, d: arm.d, pace: arm.pace, l: arm.peers, auto: 1 };
+            _simSealed.set(s, { actions: [], flush: false });
+            _simNetBroadcast(msg);
+            A.sealed++;
+            _simPost({ type: 'autoSealed', epoch: _simEpoch, tick: s, msg });
+        }
+    }
+    const t = currentTick;
+    if (t >= limit) { _simAutoPoll(); return; }
+    const due = A.due + (t - A.dueTick) * tickMs;
+    if (now < due - 0.5) { _simAutoPoll(due - now); return; }
+    // (More than a tick late, the worker itself held up: from now, as the
+    // page's clock does.)
+    if (due < now - tickMs) { A.due = now - (t - A.dueTick) * tickMs; }
+    let e = _simSealed.get(t);
+    // (One from the host's worker: of the host's state as it is now, not of
+    // one a restore replaced.)
+    if (e && e.gen && e.gen !== _simNetGen) e = null;
+    if (!e && arm.role === 'solo') e = { actions: [], flush: false };
+    if (!e || !_simAutoClaim(SIM_CTL_CLAIM, t)) { _simAutoPoll(); return; }
+    A.run++; A.ran++;
+    const at = A.due + (t - A.dueTick) * tickMs;
+    _simPost({ type: 'autoRan', epoch: _simEpoch, tick: t, due: at });
+    try { _simTick({ type: 'tick', tick: t, actions: e.actions, teams: A.teams || [0, 1], flush: e.flush, hash: true, due: at, auto: true }); } catch (err) { _simError('tick', err); }
+    _simAutoPoll(1);
+}
+
+// ---- the worker's own data channels (a match's ticks past a stalled page) ----
+// One per link of the page (sim_client.js simClientNetAttach: a second
+// channel of the same peer connection, handed over as it is made). A host's
+// worker sends every sealed bundle over them (the page's, as it seals them,
+// and its own); a guest's worker keeps the host's (its page gets them over
+// its own link as before, and the worker's copy when the host's worker
+// sealed them: its page sent none). JSON text, long ones in parts.
+const _simNet = new Map();
+const SIM_NET_PART_CHARS = 60000;
+// A guest: the host's state its bundles are of (the host's epoch: a restore
+// there starts another; bundles of the one before no longer hold).
+let _simNetGen = 0;
+function _simNetAdd(peer, dc) {
+    if (!peer || !dc) return;
+    const old = _simNet.get(peer);
+    if (old) { try { old.dc.close(); } catch { } }
+    const e = { dc, ready: false, parts: null };
+    _simNet.set(peer, e);
+    const hello = () => { try { dc.send('{"t":"H"}'); } catch { } };
+    dc.onopen = hello;
+    dc.onclose = () => { if (_simNet.get(peer) === e) _simNet.delete(peer); };
+    dc.onmessage = ev => { try { _simNetMessage(peer, e, ev.data); } catch (err) { _simError('net', err); } };
+    if (dc.readyState === 'open') hello();
+}
+// Every one of these peers has a worker listening on its channel.
+function _simNetReady(peers) {
+    if (!Array.isArray(peers)) return false;
+    for (const p of peers) { const e = _simNet.get(p); if (!e || !e.ready || e.dc.readyState !== 'open') return false; }
+    return true;
+}
+function _simNetBroadcast(msg) {
+    if (_simNet.size === 0) return;
+    const text = JSON.stringify({ t: 'B', e: _simEpoch, m: msg });
+    for (const [, e] of _simNet) {
+        if (!e.ready || e.dc.readyState !== 'open') continue;
+        try {
+            if (text.length <= SIM_NET_PART_CHARS) { e.dc.send(text); continue; }
+            const n = Math.ceil(text.length / SIM_NET_PART_CHARS);
+            for (let i = 0; i < n; i++) e.dc.send(JSON.stringify({ t: 'C', i, n, s: text.slice(i * SIM_NET_PART_CHARS, (i + 1) * SIM_NET_PART_CHARS) }));
+        } catch { }
+    }
+}
+function _simNetMessage(peer, e, data) {
+    if (typeof data !== 'string') return;
+    let m = JSON.parse(data);
+    if (m.t === 'H') { e.ready = true; return; }
+    if (m.t === 'C') {
+        if (m.i === 0) e.parts = [];
+        if (!e.parts || e.parts.length !== m.i) { e.parts = null; return; }
+        e.parts.push(m.s);
+        if (e.parts.length < m.n) return;
+        m = JSON.parse(e.parts.join(''));
+        e.parts = null;
+    }
+    const arm = _simAuto.arm;
+    // (Bundles: from the match's host only, to a guest.)
+    if (m.t !== 'B' || !arm || arm.role !== 'guest' || peer !== arm.host || !m.m || _simMode !== 'authority') return;
+    const gen = (m.e | 0) + 1;
+    if (gen < _simNetGen) return;
+    _simNetGen = gen;
+    const b = unpackTickBundleFromWire(m.m.w);
+    if (!b || !validateTickBundle(b) || b.tick < currentTick) return;
+    const have = _simSealed.get(b.tick);
+    if (!have || (have.gen && have.gen !== gen)) _simSealed.set(b.tick, { actions: b.packets.flatMap(p => Array.isArray(p.actions) ? p.actions : []), flush: !!b.flush, gen });
+    // (One the host's worker sealed: its page did not send it.)
+    if (m.m.auto) _simPost({ type: 'netBundle', epoch: _simEpoch, msg: m.m });
 }
 
 // ---- match start: the page's lobby and config, then its start snapshot ----
@@ -323,6 +518,9 @@ function _simTick(msg) {
     }
     // (How late it starts against its deadline.)
     let lateMs = Number.isFinite(msg.due) ? Math.max(0, _simNowAbs() - msg.due) : 0;
+    // (The tick clock, for ticks the worker runs by itself: _simAutoStep.)
+    _simAuto.dueTick = msg.tick; _simAuto.due = Number.isFinite(msg.due) ? msg.due : _simNowAbs(); _simAuto.teams = msg.teams;
+    _simSealed.delete(msg.tick);
     pathfindBudget = 0;
     // A resync tick: every peer starts it without history caches.
     if (msg.flush) snapFlushHistoryCaches();

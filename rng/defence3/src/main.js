@@ -1043,10 +1043,6 @@ function initInput() {
             let b = selSpawners[i];
             let rp = multiRallyPoints[pick[i]];
             byPoint[pick[i]].push(b.gx, b.gy);
-            // Instant feedback only for an offline, page-owned structure.
-            // Worker views are read-only: writing rallyX throws before the
-            // same click can issue its selected units' move command.
-            if (!isMultiplayer && !b._structView) { b.rallyX = rp.x; b.rallyY = rp.y; b.rallyTargetUnitId = rp.targetUnitId || null; }
         }
         for (let j = 0; j < byPoint.length; j++) {
             let rp = multiRallyPoints[j], c = byPoint[j];
@@ -1647,8 +1643,6 @@ function initInput() {
             }
             const seq = ++_assignSeq, points = multiUnitCommandPoints.map(p => ({ x: p.x, y: p.y }));
             _assignPending = { seq, unitIds: unitIds.slice(), points, actionName };
-            // (The click's point at once: the orders follow.)
-            if (typeof noteOrderMarker === 'function') noteOrderMarker({ action: actionName, targetX, targetY });
             _assignWorker.postMessage({ seq, xs, ys, has, points }, [xs.buffer, ys.buffer, has.buffer]);
             return;
         }
@@ -4285,6 +4279,7 @@ let _simShadowMatchTick = -1;
 let _simClientStartedThisMatch = false;
 
 function startGame() {
+    resetOrderMarkers();
     _simShadowStartedThisMatch = false;
     _simClientStartedThisMatch = false;
     if (typeof simClientStop === 'function') simClientStop();

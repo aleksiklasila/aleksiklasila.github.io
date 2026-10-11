@@ -1010,11 +1010,10 @@ function build3DOverlayData(bounds, alpha) {
         let ex = ent.x || (ent.gx * TILE + TILE * 0.5);
         let ey = ent.y || (ent.gy * TILE + TILE * 0.5);
 
-        if (_isRallySpawnerType(ent.type)) {
-            let rallyTarget = getSpawnerRallyTargetWorld(ent);
+        if (_isRallySpawnerType(ent.type) && ent.owner === localPlayerId) {
+            let rallyTarget = getBuildingOrderTarget(ent);
             if (rallyTarget) {
                 if (showRallyLinesForBuildings()) pushLine(ex, ey, rallyTarget.x, rallyTarget.y, '#9aa', rallyLineType === OVERLAY_LINE_DOTTED);
-                pushMarker(rallyTarget.x, rallyTarget.y, showRallyLinesForBuildings() ? 'arrow' : 'plus', '#9aa');
             }
         }
 
@@ -1036,32 +1035,11 @@ function build3DOverlayData(bounds, alpha) {
     overlays.rangeSeeThrough = renderRangeSeeThrough;
 
     for (let u of activeSelectedUnits.length <= SELECTED_UNIT_LINES_MAX ? activeSelectedUnits : []) {
-        if (!u || u.dead) continue;
+        if (!u || u.dead || u.owner !== localPlayerId || !showRallyLinesForUnits()) continue;
         let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
         let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
-        if (u.commandState >= CMD_MOVING && u.commandState <= CMD_ATTACK_MOVING) {
-            let destX = null, destY = null;
-            let lastPt = typeof unitDisplayDest === 'function' ? unitDisplayDest(u) : (u.path && u.path.length ? u.path[u.path.length - 1] : null);
-            if (lastPt) {
-                destX = lastPt.x * TILE + 16;
-                destY = lastPt.y * TILE + 16;
-            } else if (u._pendingPathTarget) {
-                destX = u._pendingPathTarget.gx * TILE + 16;
-                destY = u._pendingPathTarget.gy * TILE + 16;
-            }
-            if (destX !== null && destY !== null) {
-                let color = u.commandState === CMD_ATTACK_MOVING ? 'rgba(255,100,100,0.5)' : 'rgba(100,255,100,0.5)';
-                if (showRallyLinesForUnits()) pushLine(ux, uy, destX, destY, color, rallyLineType === OVERLAY_LINE_DOTTED);
-                pushMarker(destX, destY, 'plus', u.commandState === CMD_ATTACK_MOVING ? '#f66' : '#4f4');
-            }
-        }
-        if (u.targetUnit && !u.targetUnit.dead && u.commandState === CMD_ATTACKING) {
-            if (showRallyLinesForUnits()) pushLine(ux, uy, u.targetUnit.x, u.targetUnit.y, 'rgba(255,0,0,0.6)');
-            else pushMarker(u.targetUnit.x, u.targetUnit.y, 'plus', '#f66');
-        } else if (u.targetBuilding && u.targetBuilding.energy > 0 && u.commandState === CMD_ATTACKING) {
-            if (showRallyLinesForUnits()) pushLine(ux, uy, u.targetBuilding.x, u.targetBuilding.y, 'rgba(255,0,0,0.6)');
-            else pushMarker(u.targetBuilding.x, u.targetBuilding.y, 'plus', '#f66');
-        }
+        const target = getUnitOrderTarget(u);
+        if (target) pushLine(ux, uy, target.x, target.y, target.color, rallyLineType === OVERLAY_LINE_DOTTED);
     }
 
     // (Marked structures gathered once a tick, not every structure a frame.)
@@ -2440,49 +2418,118 @@ function buildScaleFrameData(flat2d, view) {
 // Aggregate selection outlines by fixed world chunks. This bounds geometry
 // at full zoom-out while exact selection/commands remain untouched.
 // ---- order and rally markers ----
-// The points of the player's recent orders (moves, attack moves, rallies:
-// queueAction notes them as they are given) for ORDER_MARKER_MS, and the
-// rally points of the selected spawners (one per point, at most
-// RALLY_MARKERS_MAX), drawn at a fixed screen size at every zoom: the
-// click's answer on screen at once, however many units it moves.
-const ORDER_MARKER_MS = 4000, ORDER_MARKERS_MAX = 48, RALLY_MARKERS_MAX = 64;
-let _orderMarkers = [];
-function noteOrderMarker(a) {
-    if (!a || typeof performance === 'undefined') return;
-    const kind = a.action;
-    if (kind !== 'move' && kind !== 'attackMove' && kind !== 'setRally' && kind !== 'setRallyMany') return;
-    const x = Number(a.targetX), y = Number(a.targetY);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-    const color = kind === 'attackMove' ? '#f66' : kind === 'move' ? '#4f4' : '#9aa', now = performance.now();
-    for (const m of _orderMarkers) if (Math.abs(m.wx - x) < 4 && Math.abs(m.wy - y) < 4 && m.color === color) { m.at = now; return; }
-    _orderMarkers.push({ wx: x, wy: y, color, kind: kind === 'move' || kind === 'attackMove' ? 'plus' : 'arrow', at: now });
-    if (_orderMarkers.length > ORDER_MARKERS_MAX) _orderMarkers.splice(0, _orderMarkers.length - ORDER_MARKERS_MAX);
+// Pending feedback belongs to the commanded entities, never to a click
+// history. It supersedes their old destination until the displayed state
+// includes the command's tick. Authoritative orders then own the markers.
+const _pendingUnitOrderMarkers = new Map(), _pendingRallyMarkers = new Map();
+let _orderMarkerRevision = 0, _orderMarkerCache = null, _rallyVisualLastSeen = new WeakMap();
+function resetOrderMarkers() {
+    _pendingUnitOrderMarkers.clear(); _pendingRallyMarkers.clear();
+    _orderMarkerCache = null; _orderMarkerRevision++;
+    _rallyVisualLastSeen = new WeakMap();
 }
-let _rallyMarkerCache = { tick: -1, sel: null, len: -1, markers: [] };
-function getOrderMarkers() {
-    const now = typeof performance !== 'undefined' ? performance.now() : 0, out = [];
-    if (_orderMarkers.length) _orderMarkers = _orderMarkers.filter(m => now - m.at < ORDER_MARKER_MS);
-    for (const m of _orderMarkers) out.push({ x: m.wx / TILE, z: m.wy / TILE, kind: m.kind, color: m.color });
-    // The selected spawners' rally points: once per tick, one per point.
-    const C = _rallyMarkerCache;
-    // (Twice a second, or at once for another selection: thousands of
-    // spawners rallied to one point were walked every tick.)
-    if (C.sel !== selectedEntities || C.len !== selectedEntities.length || (C.tick !== gameTime && !(now - (C.at || -Infinity) < 500))) {
-        C.tick = gameTime; C.at = now; C.sel = selectedEntities; C.len = selectedEntities.length; C.markers = [];
-        const seen = new Set();
-        for (const ent of selectedEntities) {
-            if (C.markers.length >= RALLY_MARKERS_MAX) break;
-            if (!ent || (ent.energy !== undefined && ent.energy <= 0) || !_isRallySpawnerType(ent.type)) continue;
-            const t = getSpawnerRallyTargetWorld(ent);
-            if (!t) continue;
-            const k = Math.round(t.x / 8) + ',' + Math.round(t.y / 8);
-            if (seen.has(k)) continue;
-            seen.add(k);
-            C.markers.push({ x: t.x / TILE, z: t.y / TILE, kind: 'arrow', color: '#9aa' });
+function noteOrderMarker(a, tick = currentTick) {
+    if (!a) return;
+    const rally = a.action === 'setRally' || a.action === 'setRallyMany';
+    const move = a.action === 'move' || a.action === 'attackMove';
+    if (!rally && !move && !['stop', 'attack', 'attackBuilding', 'workerAssign'].includes(a.action)) return;
+    const x = Number(a.targetX), y = Number(a.targetY);
+    const target = (rally || move) && Number.isFinite(x) && Number.isFinite(y)
+        ? { x, y, kind: rally ? 'arrow' : 'plus', color: rally ? '#9aa' : a.action === 'attackMove' ? '#f66' : '#4f4', targetUnitId: a.targetUnitId } : null;
+    const pending = { tick, target };
+    if (rally) {
+        const coords = a.action === 'setRally' ? [a.gx, a.gy] : a.coords || [];
+        for (let i = 0; i + 1 < coords.length; i += 2) _pendingRallyMarkers.set(coords[i] + ',' + coords[i + 1], pending);
+    } else for (const id of a.unitIds || []) _pendingUnitOrderMarkers.set(id, pending);
+    _orderMarkerRevision++;
+}
+function _pendingOrderTarget(map, key, entity) {
+    const pending = map.get(key);
+    if (!pending) return undefined;
+    const shownTick = entity._orderVisualTick ?? (currentTick - 1);
+    if (shownTick >= pending.tick) { map.delete(key); return undefined; }
+    return pending.target;
+}
+function getBuildingOrderTarget(ent) {
+    const pending = _pendingOrderTarget(_pendingRallyMarkers, ent.gx + ',' + ent.gy, ent);
+    if (pending === null) return null;
+    const x = pending ? pending.x : ent.rallyX, y = pending ? pending.y : ent.rallyY;
+    const id = pending ? pending.targetUnitId : ent.rallyTargetUnitId;
+    // Follow visible targets without mutating simulation state or read-only
+    // worker views. A hidden target stays at its last displayed position.
+    if (id != null) {
+        const target = getUnitById(id);
+        if (target && !target.dead && target.owner !== ent.owner
+            && isTileVisibleToPlayer(ent.owner, Math.floor(target.x / TILE), Math.floor(target.y / TILE))) {
+            const marker = { x: target.x, y: target.y, kind: 'arrow', color: '#9aa' };
+            _rallyVisualLastSeen.set(ent, { id, marker });
+            return marker;
+        }
+        const last = _rallyVisualLastSeen.get(ent);
+        if (last && last.id === id) return last.marker;
+    } else _rallyVisualLastSeen.delete(ent);
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+        return { x, y, kind: 'arrow', color: '#9aa' };
+    }
+    return null;
+}
+function getUnitOrderTarget(u) {
+    const pending = _pendingOrderTarget(_pendingUnitOrderMarkers, u.id, u);
+    if (pending !== undefined) return pending;
+    if (u.commandState === CMD_ATTACKING) {
+        const target = u.targetUnit || u.targetBuilding || u.attackTarget;
+        if (target && !target.dead && (target.energy === undefined || target.energy > 0)
+            && isTileVisible(Math.floor(target.x / TILE), Math.floor(target.y / TILE))) {
+            return { x: target.x, y: target.y, kind: 'plus', color: '#f66' };
         }
     }
-    for (const m of C.markers) out.push(m);
-    return out;
+    const code = u._orderDestination ?? getUnitOrderDestinationCode(u);
+    if (!code) return null;
+    const tile = Math.abs(code) - 1;
+    return { x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' };
+}
+function getOrderMarkers() {
+    const frame = typeof _pageFrameSerial === 'number' ? _pageFrameSerial : -1;
+    const sub = JSON.stringify(activeSubGroups), version = selectionIndex().version;
+    const C = _orderMarkerCache;
+    if (C && C.tick === gameTime && C.frame === frame && C.version === version && C.revision === _orderMarkerRevision
+        && C.units === selectedUnits && C.ulen === selectedUnits.length && C.entities === selectedEntities
+        && C.elen === selectedEntities.length && C.sub === sub && C.ignore === ignoreLevelSubgroups) return C.markers;
+    const markers = [], seen = new Set();
+    const add = t => {
+        if (!t || !Number.isFinite(t.x) || !Number.isFinite(t.y)) return;
+        const key = t.x + ',' + t.y + ',' + t.kind + ',' + t.color;
+        if (seen.has(key)) return;
+        seen.add(key); markers.push({ x: t.x / TILE, z: t.y / TILE, kind: t.kind, color: t.color });
+    };
+    for (const ent of getActiveEntities()) {
+        if (!ent || ent.owner !== localPlayerId || (ent.energy !== undefined && ent.energy <= 0)) continue;
+        if (_isRallySpawnerType(ent.type)) add(getBuildingOrderTarget(ent));
+    }
+    const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    const destinations = new Set();
+    for (const u of getActiveUnitsForRender()) {
+        if (!u || u.dead) continue;
+        const s = u._s;
+        // Large selections usually share a few destinations. Read columns
+        // and deduplicate codes before allocating marker objects or strings.
+        if (F && s >= 0 && F.id[s] === u.id) {
+            if (F.owner[s] !== localPlayerId || F.energy[s] <= 0) continue;
+            if (_pendingUnitOrderMarkers.has(F.id[s]) || (F.cmd[s] === CMD_ATTACKING && (F.flags[s] & SIM_UF_ATTACK_TARGET))) {
+                add(getUnitOrderTarget(u));
+            } else {
+                const code = F.orderDest[s];
+                if (!code || destinations.has(code)) continue;
+                destinations.add(code);
+                const tile = Math.abs(code) - 1;
+                add({ x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' });
+            }
+        } else if (u.owner === localPlayerId) add(getUnitOrderTarget(u));
+    }
+    _orderMarkerCache = { tick: gameTime, frame, version, revision: _orderMarkerRevision,
+        units: selectedUnits, ulen: selectedUnits.length, entities: selectedEntities, elen: selectedEntities.length,
+        sub, ignore: ignoreLevelSubgroups, markers };
+    return markers;
 }
 const _RALLY_SPAWNER_TYPES = new Set(['barrack', 'spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research']);
 function _isRallySpawnerType(t) { return _RALLY_SPAWNER_TYPES.has(t); }

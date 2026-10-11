@@ -3932,8 +3932,6 @@ function queueAction(action) {
         for (let i = 0; i < action.unitIds.length; i += ACTION_MAX_UNIT_IDS) queueAction({ ...action, unitIds: action.unitIds.slice(i, i + ACTION_MAX_UNIT_IDS) });
         return;
     }
-    // The order's point, shown at once at every zoom (renderer.js).
-    if (typeof noteOrderMarker === 'function') noteOrderMarker(action);
     // Just joined and still catching up: sent once the host counts us in.
     if (isMultiplayer && gameStarted && resyncGuestHoldAction(action)) return;
     if (isMultiplayer && gameStarted && !isHost && !netGetHostConnection()) {
@@ -3958,6 +3956,7 @@ function queueAction(action) {
     if (!localInputBuffer[tick]) localInputBuffer[tick] = [];
     let actorId = myPeerId || `p${localPlayerId}`;
     let finalAction = { ...action, teamId: localPlayerId, netId: `${actorId}:${nextLocalActionSeq++}` };
+    if (typeof noteOrderMarker === 'function') noteOrderMarker(action, tick);
     // A long id list goes compactly (main.js actionIdsEncode; every peer,
     // this one too, decodes it when it processes the action).
     if (Array.isArray(finalAction.unitIds) && finalAction.unitIds.length >= 64 && typeof actionIdsEncode === 'function') {

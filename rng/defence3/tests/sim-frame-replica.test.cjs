@@ -12,7 +12,8 @@ const TICKS = Number(process.env.SIM_FRAME_TICKS) || 400;
 
 // Units by id: what a view reads, as the worker has it.
 const UNIT_FIELDS = `(u => [u.id, Math.fround(u.x), Math.fround(u.y), u.owner, u.unitType, Math.fround(u.energy), u.workerType || null, u.workerState || null,
-    u.effectiveLevel, u.commandState | 0, !!u.isFlying, !!u.isSnake, !!u.holdPosition, u.attackStyle || null, Math.fround(u.r)])`;
+    u.effectiveLevel, u.commandState | 0, !!u.isFlying, !!u.isSnake, !!u.holdPosition, u.attackStyle || null, Math.fround(u.r),
+    u._orderDestination ?? getUnitOrderDestinationCode(u)])`;
 const UNITS = `JSON.stringify(units.filter(u => !u.dead).map(${UNIT_FIELDS}).sort((a, b) => a[0] - b[0]))`;
 // Everything but units: structures (what their views carry), players,
 // projectiles and the grid.

@@ -14,7 +14,7 @@ vm.runInContext(`
 var C={};
 for(const k of ['id','owner','x','y','prevX','prevY','vx','vy','energy','r','commandState','attackFlash','burning','poisoned','frozen','wet','sandy','watched','teleportHideTicks','workerTransferCooldown','effectiveLevel','unitLevel','live','dead','maxE']) C[k]=new Float64Array(new SharedArrayBuffer(64*8));
 var M=simFrameViews(new SharedArrayBuffer(64*SIM_FRAME_SLOT_BYTES),64);M.id.fill(-1);
-for(let s=0;s<4;s++) { C.id[s]=10+s;C.live[s]=1;C.x[s]=100+s;C.energy[s]=20;C.r[s]=8;M.id[s]=10+s;M.type[s]=1;M.vision[s]=2; }
+for(let s=0;s<4;s++) { C.id[s]=10+s;C.live[s]=1;C.x[s]=100+s;C.energy[s]=20;C.r[s]=8;M.id[s]=10+s;M.type[s]=1;M.vision[s]=2;M.orderDest[s]=s===3?-41:23;M.orderTick[s]=7; }
 `,c);
 const send=data=>{c.onmessage({data});while(jobs.length)jobs.shift()();assert.equal(messages.some(m=>m.type==='error'),false,JSON.stringify(messages.filter(m=>m.type==='error')));};
 send({type:'bind',epoch:2,generation:7,columns:c.C,meta:{buf:c.M.buf,cap:64}});
@@ -25,6 +25,7 @@ send({type:'ready'});
 assert.equal(messages.length,1);
 const first=messages[0], f=c.simFrameViews(first.world.units.buf,64);
 assert.equal(first.world.units.count,4);assert.equal(f.x[0],100);
+assert.equal(f.orderDest[0],23);assert.equal(f.orderDest[3],-41);assert.equal(f.orderTick[0],7);
 const saved=Buffer.from(new Uint8Array(first.world.units.buf));
 c.C.x[0]=500;c.C.burning[0]=1;c.C.teleportHideTicks[2]=3;
 tick(1);tick(2);tick(3);tick(4);

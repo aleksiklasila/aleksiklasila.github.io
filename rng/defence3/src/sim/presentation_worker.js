@@ -253,7 +253,7 @@ function updateFog(T) {
     if (!st.bound) {(out || self).postMessage({type:'fogBind',epoch,light:st.light,fog:st.fog,explored:st.explored,head:st.head,width:W,height:H});st.bound=true;}
 }
 // The metadata columns copied whole each frame (the pump writes them).
-const META_COPY=['type','wtype','wstate','style','watchedBy','vision','maxEnergy','cargo','tx','ty'];
+const META_COPY=['type','wtype','wstate','style','watchedBy','vision','maxEnergy','cargo','tx','ty','orderDest','orderTick'];
 // Append the render-only spatial index to the immutable presentation buffer.
 // Its lifetime follows the existing three-buffer pool; no extra messages or
 // population-sized indexing pass on the animation thread.

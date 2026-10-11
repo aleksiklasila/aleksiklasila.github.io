@@ -1768,164 +1768,57 @@ function draw() {
 
     let activeSelectedEntities = getActiveEntities();
     let activeSelectedUnits = getActiveUnitsForRender();
-    let localOwnerIndex = players.findIndex(p => p.id === myPeerId);
     let overlayViewMinX = camera.x;
     let overlayViewMinY = camera.y;
     let overlayViewMaxX = camera.x + vw;
     let overlayViewMaxY = camera.y + vh;
     ctx.imageSmoothingEnabled = false;
-    let stationaryBuildingRallySegments = [];
-    let stationaryBuildingRallyMarkers = [];
-    let dynamicBuildingRallySegments = [];
-    let dynamicBuildingRallyMarkers = [];
-
-    // Selected entities highlight + rally + tower target/range metadata.
-    for (let ent of activeSelectedEntities) {
-        if (ent.energy !== undefined && ent.energy <= 0) continue;
-        let ex = ent.x || (ent.gx * TILE + 16);
-        let ey = ent.y || (ent.gy * TILE + 16);
-        let entOwnerColor = get2DRenderOwnerColor(ent.owner);
-
-        if (['barrack', 'spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research'].includes(ent.type) && ent.rallyX !== null) {
-            let rx = ent.rallyX, ry = ent.rallyY;
-            let segVisible = _overlayBoundsVisible(Math.min(ex, rx), Math.min(ey, ry), Math.max(ex, rx), Math.max(ey, ry), overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY, 20);
-            if (!segVisible) continue;
-            let isDynamicRally = ent.rallyTargetUnitId != null;
-            if (isDynamicRally) {
-                dynamicBuildingRallySegments.push([ex, ey, rx, ry, entOwnerColor]);
-                dynamicBuildingRallyMarkers.push([rx, ry, entOwnerColor]);
-            } else {
-                stationaryBuildingRallySegments.push([ex, ey, rx, ry, entOwnerColor]);
-                stationaryBuildingRallyMarkers.push([rx, ry, entOwnerColor]);
-            }
-        }
-
-        if (ent instanceof Tower && ent.owner === localPlayerId) {
-            let marker = resolveTowerPreferredTargetVisual(ent);
-            if (marker && Number.isFinite(marker.x) && Number.isFinite(marker.y)) {
-                let rx = marker.x, ry = marker.y;
+    // Both renderers use the same active targets and pending command state.
+    const orderSegments = new Map();
+    const addOrderLine = (x, y, target) => {
+        if (!target) return;
+        let group = orderSegments.get(target.color);
+        if (!group) orderSegments.set(target.color, group = []);
+        group.push([x, y, target.x, target.y]);
+    };
+    for (const ent of activeSelectedEntities.length <= SELECTED_UNIT_LINES_MAX ? activeSelectedEntities : []) {
+        if (!ent || ent.owner !== localPlayerId || (ent.energy !== undefined && ent.energy <= 0)) continue;
+        const ex = Number.isFinite(ent.x) ? ent.x : ent.gx * TILE + TILE / 2;
+        const ey = Number.isFinite(ent.y) ? ent.y : ent.gy * TILE + TILE / 2;
+        if (_isRallySpawnerType(ent.type) && showRallyLinesForBuildings()) addOrderLine(ex, ey, getBuildingOrderTarget(ent));
+        if (ent instanceof Tower) {
+            const target = resolveTowerPreferredTargetVisual(ent);
+            if (target && Number.isFinite(target.x) && Number.isFinite(target.y)) {
+                const color = get2DRenderOwnerColor(ent.owner);
                 ctx.save();
-                ctx.globalAlpha = marker.locked ? 1 : 0.55;
+                ctx.globalAlpha = target.locked ? 1 : .55;
                 if (showRallyLinesForBuildings()) {
-                    ctx.strokeStyle = entOwnerColor; ctx.lineWidth = 1.5;
-                    ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(rx, ry); ctx.stroke();
-                    ctx.fillStyle = entOwnerColor;
-                    ctx.beginPath(); ctx.arc(rx, ry, 4, 0, 6.28); ctx.fill();
+                    drawRallySegments2D(ctx, [[ex, ey, target.x, target.y]], color, false);
+                    ctx.fillStyle = color;
+                    ctx.beginPath(); ctx.arc(target.x, target.y, 4, 0, Math.PI * 2); ctx.fill();
                 } else {
-                    let markerSprite = _getOverlayMarkerSprite('plus', entOwnerColor);
-                    ctx.drawImage(markerSprite.canvas, Math.round(rx - markerSprite.offsetX), Math.round(ry - markerSprite.offsetY), markerSprite.drawW, markerSprite.drawH);
+                    const sprite = _getOverlayMarkerSprite('plus', color);
+                    ctx.drawImage(sprite.canvas, Math.round(target.x - sprite.offsetX), Math.round(target.y - sprite.offsetY), sprite.drawW, sprite.drawH);
                 }
                 ctx.restore();
             }
         }
-
     }
-
-    drawBuildingRallies2D(ctx, stationaryBuildingRallySegments.concat(dynamicBuildingRallySegments),
-        stationaryBuildingRallyMarkers.concat(dynamicBuildingRallyMarkers));
-
+    if (showRallyLinesForUnits() && activeSelectedUnits.length <= SELECTED_UNIT_LINES_MAX) {
+        for (const u of activeSelectedUnits) {
+            if (!u || u.dead || u.owner !== localPlayerId) continue;
+            const ux = Number.isFinite(u.prevX) ? u.prevX + (u.x - u.prevX) * alpha : u.x;
+            const uy = Number.isFinite(u.prevY) ? u.prevY + (u.y - u.prevY) * alpha : u.y;
+            addOrderLine(ux, uy, getUnitOrderTarget(u));
+        }
+    }
+    for (const [color, segments] of orderSegments) drawRallySegments2D(ctx, segments, color, rallyLineType === OVERLAY_LINE_DOTTED);
+    for (const marker of getOrderMarkers()) {
+        const sprite = _getOverlayMarkerSprite(marker.kind === 'arrow' ? 'rally_arrow' : 'plus', marker.color);
+        ctx.drawImage(sprite.canvas, Math.round(marker.x * TILE - sprite.offsetX), Math.round(marker.z * TILE - sprite.offsetY), sprite.drawW, sprite.drawH);
+    }
     drawRangeBoundary2D(ctx, getRenderRangeBoundary(activeSelectedEntities, activeSelectedUnits));
-
     drawSelectionContours2D(ctx, getSelectionContours(activeSelectedEntities, activeSelectedUnits, alpha, get2DRenderOwnerColor));
-
-    // Unit waypoints (move/attack-move destinations for selected units)
-    let moveSegments = [];
-    let attackMoveSegments = [];
-    let moveMarkers = new Map();
-    let attackMoveMarkers = new Map();
-    let attackTargetSegments = new Map();
-    let attackTargetMarkers = new Map();
-
-    for (let u of activeSelectedUnits) {
-        if (u.dead) continue;
-        let ux = u.prevX + (u.x - u.prevX) * alpha, uy = u.prevY + (u.y - u.prevY) * alpha;
-        let neutralEndpoint = null;
-        let shownDest = typeof unitDisplayDest === 'function' ? unitDisplayDest(u) : (u.path && u.path.length ? u.path[u.path.length - 1] : null);
-        if (shownDest) {
-            let last = shownDest;
-            neutralEndpoint = { x: last.x * TILE + 16, y: last.y * TILE + 16 };
-        } else if (u._pendingPathTarget) {
-            neutralEndpoint = { x: u._pendingPathTarget.gx * TILE + 16, y: u._pendingPathTarget.gy * TILE + 16 };
-        } else if (Number.isFinite(u._forcedTargetLastSeenX) && Number.isFinite(u._forcedTargetLastSeenY)) {
-            neutralEndpoint = { x: u._forcedTargetLastSeenX, y: u._forcedTargetLastSeenY };
-        }
-        if (u.commandState >= CMD_MOVING && u.commandState <= CMD_ATTACK_MOVING) {
-            let destX = null, destY = null, markerKey = null;
-            if (shownDest) {
-                let lastPt = shownDest;
-                destX = lastPt.x * TILE + 16;
-                destY = lastPt.y * TILE + 16;
-                markerKey = lastPt.x + ',' + lastPt.y;
-            } else if (u._pendingPathTarget) {
-                destX = u._pendingPathTarget.gx * TILE + 16;
-                destY = u._pendingPathTarget.gy * TILE + 16;
-                markerKey = u._pendingPathTarget.gx + ',' + u._pendingPathTarget.gy;
-            }
-
-            if (destX !== null && destY !== null) {
-                if (u.commandState === CMD_ATTACK_MOVING) {
-                    attackMoveSegments.push([ux, uy, destX, destY]);
-                    attackMoveMarkers.set(markerKey, [destX, destY]);
-                } else {
-                    moveSegments.push([ux, uy, destX, destY]);
-                    moveMarkers.set(markerKey, [destX, destY]);
-                }
-            }
-        }
-        // Attack target indicator
-        let drawAttackTarget = (tx, ty, lineColor, markerColor) => {
-            if (showRallyLinesForUnits()) {
-                let group = attackTargetSegments.get(lineColor);
-                if (!group) attackTargetSegments.set(lineColor, group = []);
-                group.push([ux, uy, tx, ty]);
-            } else {
-                attackTargetMarkers.set(tx + '|' + ty + '|' + markerColor, [tx, ty, markerColor]);
-            }
-        };
-        if (u.targetUnit && !u.targetUnit.dead && u.commandState === CMD_ATTACKING) {
-            let tgx = Math.floor(u.targetUnit.x / TILE), tgy = Math.floor(u.targetUnit.y / TILE);
-            let targetVisible = isTileVisible(tgx, tgy);
-            ctx.lineWidth = 1;
-            if (targetVisible) {
-                let tx = u.targetUnit.prevX + (u.targetUnit.x - u.targetUnit.prevX) * alpha;
-                let ty = u.targetUnit.prevY + (u.targetUnit.y - u.targetUnit.prevY) * alpha;
-                drawAttackTarget(tx, ty, 'rgba(255,0,0,0.6)', '#f66');
-            } else if (neutralEndpoint) {
-                drawAttackTarget(neutralEndpoint.x, neutralEndpoint.y, 'rgba(100,255,100,0.6)', '#4f4');
-            }
-        }
-        if (u.targetBuilding && u.targetBuilding.energy > 0 && u.commandState === CMD_ATTACKING) {
-            let targetVisible = isTileVisible(u.targetBuilding.gx, u.targetBuilding.gy);
-            ctx.lineWidth = 1;
-            if (targetVisible) {
-                drawAttackTarget(u.targetBuilding.x, u.targetBuilding.y, 'rgba(255,0,0,0.6)', '#f66');
-            } else if (neutralEndpoint) {
-                drawAttackTarget(neutralEndpoint.x, neutralEndpoint.y, 'rgba(100,255,100,0.6)', '#4f4');
-            }
-        }
-    }
-
-    if (showRallyLinesForUnits()) {
-        drawRallySegments2D(ctx, moveSegments, 'rgba(100,255,100,0.5)', rallyLineType === OVERLAY_LINE_DOTTED);
-        drawRallySegments2D(ctx, attackMoveSegments, 'rgba(255,100,100,0.5)', rallyLineType === OVERLAY_LINE_DOTTED);
-    }
-    for (let [color, segments] of attackTargetSegments) drawRallySegments2D(ctx, segments, color, false);
-    for (let [tx, ty, color] of attackTargetMarkers.values()) {
-        let sprite = _getOverlayMarkerSprite('plus', color);
-        ctx.drawImage(sprite.canvas, Math.round(tx - sprite.offsetX), Math.round(ty - sprite.offsetY), sprite.drawW, sprite.drawH);
-    }
-
-    let drawMarkers = (markers, color) => {
-        if (markers.size === 0) return;
-        let markerSprite = _getOverlayMarkerSprite('plus', color);
-        for (let pos of markers.values()) {
-            let dx = pos[0], dy = pos[1];
-            ctx.drawImage(markerSprite.canvas, Math.round(dx - markerSprite.offsetX), Math.round(dy - markerSprite.offsetY), markerSprite.drawW, markerSprite.drawH);
-        }
-    };
-
-    drawMarkers(moveMarkers, '#4f4');
-    drawMarkers(attackMoveMarkers, '#f66');
 
     // Build preview ghost
     let buildPreview = getCurrentBuildPreviewData();

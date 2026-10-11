@@ -188,6 +188,8 @@ function simPresentationWriteMetadata(u, F) {
     F.cargo[s] = Number(u.carryingValue) || 0;
     const at = u.attackTarget;
     F.tx[s] = at ? at.x : 0; F.ty[s] = at ? at.y : 0;
+    F.orderDest[s] = getUnitOrderDestinationCode(u);
+    F.orderTick[s] = currentTick - 1;
     F.flags[s] = (u.isFlying ? SIM_UF_FLYING : 0) | (u.isSnake ? SIM_UF_SNAKE : 0) | (u.isWorker ? SIM_UF_WORKER : 0)
         | (u.holdPosition ? SIM_UF_HOLD : 0) | (u.isKing ? SIM_UF_KING : 0)
         | (at && Number.isFinite(at.x) ? SIM_UF_ATTACK_TARGET : 0)

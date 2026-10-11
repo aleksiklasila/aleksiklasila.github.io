@@ -23,7 +23,7 @@
 
 const SIM_FRAME_F32 = ['x', 'y', 'px', 'py', 'vx', 'vy', 'energy', 'maxEnergy', 'tx', 'ty', 'facing', 'amount', 'phase', 'prate',
     'light', 'sig', 'r', 'vision', 'cargo'];
-const SIM_FRAME_I32 = ['id', 'flags'];
+const SIM_FRAME_I32 = ['id', 'flags', 'orderDest', 'orderTick'];
 const SIM_FRAME_I16 = ['owner', 'watchedBy', 'level', 'blevel', 'type', 'wtype', 'wstate', 'style'];
 const SIM_FRAME_U8 = ['mode', 'status', 'flash', 'cmd'];
 // Bytes per slot: the columns, and the order entry (int32).
@@ -76,6 +76,8 @@ function simFrameViews(buf, cap) {
         status: new Uint8Array(buf, 105 * cap, cap),
         flash: new Uint8Array(buf, 106 * cap, cap),
         cmd: new Uint8Array(buf, 107 * cap, cap),
+        orderDest: new Int32Array(buf, 108 * cap, cap),
+        orderTick: new Int32Array(buf, 112 * cap, cap),
     };
 }
 
@@ -240,6 +242,8 @@ function simFrameEncode() {
             | (at && Number.isFinite(at.x) ? SIM_UF_ATTACK_TARGET : 0) | (u.isKing ? SIM_UF_KING : 0);
         flagsA[s] = flags;
         F.tx[s] = at ? at.x : 0; F.ty[s] = at ? at.y : 0;
+        F.orderDest[s] = getUnitOrderDestinationCode(u);
+        F.orderTick[s] = currentTick - 1;
         let eff = u.preComputedEffective;
         F.vision[s] = eff && Number.isFinite(eff.visionRangeArea) ? eff.visionRangeArea : getEntityEffectiveVisibilityRangeArea(u);
         F.cargo[s] = Number(u.carryingValue) || 0;
@@ -326,7 +330,7 @@ function simFrameDetails() {
             d.path = pts; d.pathFrom = from; d.pathLength = p.length;
         } else d.path = null;
         let pt = u._pendingPathTarget;
-        d._pendingPathTarget = pt ? { x: pt.x, y: pt.y } : null;
+        d._pendingPathTarget = pt ? { gx: pt.gx, gy: pt.gy } : null;
         out.push(d);
     }
     return out;
@@ -399,6 +403,8 @@ class PageUnit {
     get attackStyle() { return this._str('style'); }
     get attackFlash() { return this._col('flash'); }
     get commandState() { return this._col('cmd'); }
+    get _orderDestination() { return this._col('orderDest'); }
+    get _orderVisualTick() { return this._col('orderTick'); }
     get carryingValue() { return this._col('cargo'); }
     get isFlying() { return this._flag(SIM_UF_FLYING); }
     get isSnake() { return this._flag(SIM_UF_SNAKE); }
