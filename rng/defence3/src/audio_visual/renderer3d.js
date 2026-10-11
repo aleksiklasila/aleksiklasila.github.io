@@ -3801,8 +3801,9 @@
         // or the units change (renderer.js getSelectionMaskOverlay).
         drawSelectionMask(overlays, snapshot) {
             const S = overlays && overlays.selectionMask;
+            if (!S || !this.sceneTargetSize || (!S.units && !S.buildingCount)) return;
             const gl = this.gl, W = this.sceneTargetSize.width, H = this.sceneTargetSize.height;
-            if (!S || !W || !H || (!S.units && !S.buildingCount)) return;
+            if (!W || !H) return;
             if (!this.selMask) {
                 const pointVs = `#version 300 es
                     precision highp float;

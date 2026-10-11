@@ -5,6 +5,8 @@
 'use strict';
 const assert = require('node:assert/strict');
 const H = require('./net-harness.cjs');
+// (SMOOTH_N: another crowd size, for tuning sweeps; the gates are for 400.)
+const COUNT = Math.max(50, Math.floor(Number(process.env.SMOOTH_N)) || 400);
 
 async function measure() {
     const controls = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '40', 'cfg-unit-collision-ticks': '10', 'cfg-max-pop': '5000',
@@ -13,7 +15,7 @@ async function measure() {
     const { host } = await H.startHostedMatch(world, { guests: 1, maxMs: 60000 });
     const T = world.atNextSafeTick(`(() => {
         let n = 0;
-        for (let i = 0; i < 400; i++) {
+        for (let i = 0; i < ${COUNT}; i++) {
             const type = ['norm', 'fast', 'tank', 'norm'][i % 4];
             const u = new Unit(type, 0, (8 + (i % 20) * 0.9) * TILE, (8 + Math.floor(i / 20) * 0.9) * TILE);
             units.push(u); players[0].popCount++; n++;
@@ -69,7 +71,10 @@ async function measure() {
     // A smooth crowd reverses rarely (units that genuinely turn around, or
     // a push from a newly arriving neighbour).
     assert.ok(J.penetration < 0.25, `crowds still separate (mean penetration ${J.penetration.toFixed(3)})`);
-    assert.ok(rate < 0.015, `back-and-forth steps: ${(rate * 100).toFixed(1)}% of moving unit-ticks`);
+    // (This scenario reads ~1.2% with the separation gain at 0.8, 1.5% at
+    // 1.0, 2.5% at 1.15: its own spread between settings that change
+    // nothing is ~0.1 points.)
+    assert.ok(rate < 0.015, `back-and-forth steps: ${(rate * 100).toFixed(2)}% of moving unit-ticks`);
     console.log('unit-collision-smoothness: ok');
     process.exit(0);
 })().catch(err => { console.error(err); process.exit(1); });

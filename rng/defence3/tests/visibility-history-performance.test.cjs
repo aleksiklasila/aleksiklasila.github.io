@@ -59,13 +59,18 @@ assert.equal(light[0][0],0,'live entities eventually stop rendering in a departe
 assert.ok(fog[0][0]>0 && fog[0][0]<1,'explored terrain alone remains dim');
 assert.equal(fog[0][1],0,'unexplored terrain remains black');
 assert.equal(c.isGameplayTargetVisibleToPlayer(0,0,0),false,'exploration does not reveal gameplay targets');
-const remembered=c.getLiveRenderView().units[0];
+// Units are the live list (drawn from the frame's columns while seen; their
+// last-seen places are the presentation reader's, presentation_worker.js
+// applyGhosts): what this page remembers is structures, mines and floor items.
+assert.equal(c.getLiveRenderView().units,c.units,'units are never copied into the history view');
+assert.equal(h.memories.units,undefined,'no unit is remembered on the page');
+const remembered=c.getLiveRenderView().goldMines[0];
 assert.equal(remembered._historyGhost,true);
-assert.equal(c.getLiveRenderView().goldMines[0].gold,123);
-assert.equal(h.memories.units.get(0).source,null,'hidden snapshots detach live world references');
-c.units[0].energy=0; c.goldMines[0].gold=0; c.gameTime++;update();
-assert.equal(c.getLiveRenderView().units[0],remembered,'hidden records are not copied repeatedly');
-assert.equal(remembered.energy,10);
+assert.equal(remembered.gold,123);
+assert.equal(h.memories.goldMines.get(0).source,null,'hidden snapshots detach live world references');
+c.units[0].energy=0; c.goldMines[0].gold=0; c.gameTime+=4;update();
+assert.equal(c.getLiveRenderView().goldMines[0],remembered,'hidden records are not copied repeatedly');
+assert.equal(remembered.gold,123);
 c.gameTime=12;update();
 assert.equal(vm.runInContext('visibilityHistoryState',c),h,'rewind retains local exploration/history');
 assert.equal(c.getLiveRenderView().goldMines[0].gold,123);
@@ -84,7 +89,7 @@ for(let rate of [10,30,60]) {
 
 // Visibility must not change background texture versions or add a history canvas.
 const gpuSource=read('src/audio_visual/renderer3d.js');
-const start=gpuSource.indexOf('        uploadBackgroundTexture('),end=gpuSource.indexOf('        uploadFogTexture(',start);
+const start=gpuSource.indexOf('        uploadBackgroundTexture('),end=gpuSource.indexOf('        uploadFogGrid(',start);
 const upload=vm.runInNewContext('({' + gpuSource.slice(start,end) + '})').uploadBackgroundTexture;
 let uploads=0,mipmaps=0;
 const gpu={backgroundTextureSize:{width:0,height:0},backgroundTextureVersion:-1,
@@ -108,7 +113,8 @@ update();
 assert.equal(c.getLiveRenderView().goldMines.length,1,'live frame energy mine survives health filter');
 assert.equal(c.getLiveRenderView().astarMines.length,1,'depleted frame A* mine stays visible');
 assert.equal(c.getLiveRenderView().droppedItems.length,1,'resource drops have no health');
-assert.equal(c.getLiveRenderView().units.length,0,'dead units are still excluded');
+// (Units are the live list as it is: the dead are not drawn, from the frame's columns.)
+assert.equal(c.getLiveRenderView().units,c.units,'units are the live list');
 c.raw=raw();
 for(let tick=1;tick<=180;tick++) {c.gameTime=tick;update();}
 const ghostGold=c.getLiveRenderView().goldMines[0],ghostAstar=c.getLiveRenderView().astarMines[0];

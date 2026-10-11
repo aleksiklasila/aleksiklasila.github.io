@@ -85,6 +85,10 @@ const RECORD = `(async (ms) => {
     const r3 = renderer3dInstance, frames = [];
     const idOf = new Map(); let next = 1;
     const key = e => { let k = idOf.get(e); if (k === undefined) idOf.set(e, k = next++); return k; };
+    // The tick the drawn units are of: with the presentation reader the units' table
+    // comes on its own channel (its interpolation starts anew when a table is
+    // shown, whatever tick the page's state has reached).
+    const shownTick = () => typeof _simClient !== 'undefined' && _simClient && _simClient.presentation ? _simClient.presentationTick : gameTime;
     const orig = r3.render;
     r3.render = function (snap) {
         const res = orig.apply(this, arguments);
@@ -92,7 +96,7 @@ const RECORD = `(async (ms) => {
         // frame's columns; counted, not tracked per entity.)
         if (snap.scaleLayers) {
             const C = snap.columnLayers, L = snap.scaleLayers;
-            frames.push({ tick: gameTime, alpha: tickAlpha, structures: [], units: [], pos: [],
+            frames.push({ tick: shownTick(), alpha: tickAlpha, structures: [], units: [], pos: [],
                 scale: [C ? (C.structureSources ? C.structureSources.length : 0) : (L[0] ? L[0].count : 0), C ? (C.unitSources ? C.unitSources.length : 0) : (L[1] ? L[1].count : 0)] });
             return res;
         }
@@ -125,7 +129,7 @@ const RECORD = `(async (ms) => {
             x = u.x; y = u.y; px = u.prevX; py = u.prevY;
             pos.push([key(u), px + (x - px) * a, py + (y - py) * a]);
         }
-        frames.push({ tick: gameTime, alpha: a, structures: [...structures], units: [...unitsDrawn], pos });
+        frames.push({ tick: shownTick(), alpha: a, structures: [...structures], units: [...unitsDrawn], pos });
         return res;
     };
     await new Promise(r => setTimeout(r, ms));

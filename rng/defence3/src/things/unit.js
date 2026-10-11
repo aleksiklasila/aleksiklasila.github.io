@@ -4413,7 +4413,14 @@ let SEPARATION_SLOT_MIN_UNITS = 0;
 // still and spaced as every tick (tests/separation-jitter.test.cjs); every
 // unit at once (2) makes crowds sway.
 let UNIT_SEPARATION_MODE = 0;
-let UNIT_SEPARATION_TIER_GAIN = 1.0;
+// (0.8, measured over crowds of 300, 400 and 600 walking to one point,
+// tests/unit-collision-smoothness.test.cjs with SMOOTH_N: back-and-forth
+// steps 1.45% of moving unit-ticks at 1.0, 1.10% at 0.8 and 0.7, 1.01% at
+// 0.6; 2.5% at 1.15 and 11.6% at 1.3 (pushes overshoot: crowds shake).
+// Overlap the other way: 5.4% of the collision distance at 1.0, 7.1% at
+// 0.8, 8.1% at 0.7, 9% at 0.6. The share applied on the first tick, 0.4 to
+// 0.55, changes nothing measurable.)
+let UNIT_SEPARATION_TIER_GAIN = 0.8;
 let _sepPending = null, _sepDirty = true;
 const SEP_PACK_PER = 1024, SEP_MARK_PER = 2048;
 // The chain's arrays for n slots (the sums cleared once when new or after

@@ -74,6 +74,19 @@ const KINDS = {
     projectile: `(() => { const p = projectiles[0]; if (!p) return ''; p.x += 13; return 'projectile'; })()`
 };
 
+// The unit count planes against a recount from the units (DIVTRACE).
+const COUNT_PLANES = `(() => {
+    const sum = a => { let t = 0; for (let i = 0; i < a.length; i++) t += a[i]; return t; };
+    const re = new Int32Array(spatialTypeCounts.length);
+    for (const u of units) {
+        if (u.dead || u._spatialKey === undefined) continue;
+        const k = spatialTypeBlockOf(u._spatialKey) * spatialTypeStridePerBlock + u._spatialOwner * spatialUnitsComplexUnitTypeCount + u._spatialUnitTypeIdx;
+        if (k >= 0 && k < re.length) re[k]++;
+    }
+    let off = 0; for (let i = 0; i < re.length; i++) if (re[i] !== spatialTypeCounts[i]) off++;
+    return JSON.stringify({ units: units.length, types: sum(spatialTypeCounts), complex: sum(spatialUnitsComplex), blocks: sum(spatialBlockCounts), typeCellsOff: off });
+})()`;
+
 // Kinds whose effect spreads to a whole team at once (a patch of much of
 // the map or a full one is fine for these).
 // (unitExtra: a unit that should not be there raises its neighbours'
@@ -91,7 +104,9 @@ const BROAD = new Set(['unitExtra', 'playerResearch', 'adjacency', 'unitIds', 'r
     const play = async ms => { const end = world.now + ms; while (world.now < end) { for (const i of all) if (rand() < 0.5) i.eval(C.CHAOS_COMMAND + '(' + rand() + ')'); await world.run(200); } };
     const idle = i => i.eval('isHost ? resyncHostPending.size === 0 : (resyncGuest.T < 0 && !resyncGuest.outstanding)');
     const repairs = i => i.patchesApplied + i.snapshotsApplied;
-    await play(4000);
+    // (SHIFT_MS: the corruptions land elsewhere in the hash rotations and the
+    // stat refresh cycles; a repair must not depend on where.)
+    await play(4000 + (Number(process.env.SHIFT_MS) || 0));
 
     // The whole state, every region at once, on every peer after one tick.
     const wholeState = async () => {
@@ -113,10 +128,10 @@ const BROAD = new Set(['unitExtra', 'playerResearch', 'adjacency', 'unitIds', 'r
         // Keep playing until the victim is patched and nothing is in flight
         // (or long enough that it would have been).
         let patchedAt = 0;
-        // (A building's level is in the structures' full round: each region
+        // (A building's level and an area's are in the full rounds: each region
         // once in SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS ticks, 20 s. The
         // others are found within a rotation or two.)
-        const noticeMs = kind === 'buildingLevel' ? 24000 : 6000;
+        const noticeMs = kind === 'buildingLevel' || kind === 'area' ? 24000 : 6000;
         while (world.now - t0 < noticeMs) {
             await play(400);
             if (repairs(victim) > before[all.indexOf(victim)] && all.every(idle)) { patchedAt = world.now; break; }
@@ -131,29 +146,33 @@ const BROAD = new Set(['unitExtra', 'playerResearch', 'adjacency', 'unitIds', 'r
             rows.push(`${kind} (${what}) on ${victim.name}: overwritten by the next ticks alike on every peer, no patch needed`);
             continue;
         }
+        // The first repair came. What the corruption did meanwhile may reach
+        // further (a neighbour's effective level, a status a projectile gave
+        // a building, a player's upkeep) and sit in fields of slower hash
+        // rounds (a structure's statuses: each region once in 20 s): the
+        // peers must end up equal, the victim alone repaired, in a few
+        // patches, within the slowest round's time.
+        const CONVERGE_MS = 26000;
+        let sums = null, equalAt = 0;
+        const until = world.now + CONVERGE_MS;
+        await play(1500);
+        for (;;) {
+            if (all.every(idle)) { sums = await wholeState(); if (same(sums)) { equalAt = world.now; break; } }
+            if (world.now >= until) break;
+            await play(800);
+        }
         const patches = repairs(victim) - before[all.indexOf(victim)];
         const full = victim.fullPatchesApplied - fullBefore;
         all.forEach((i, j) => { if (i !== victim) assert.equal(repairs(i), before[j], `${kind}: ${i.name} was repaired too`); });
         assert.equal(victim.snapshotsApplied, 1, `${kind}: match-wide resync`);
-        if (!BROAD.has(kind)) assert.ok(patches <= 2 && full === 0, `${kind} (${what}): ${patches} patches, ${full} full`);
-        else assert.ok(patches <= 3, `${kind} (${what}): ${patches} patches`);
-        await play(1500);
-        // (A broad kind spreads while its patch is on the way: units that took
-        // the diverged tables after the request go in a follow-up patch, a
-        // rotation or two later. Settled: idle, no repair for 2 s.)
-        if (BROAD.has(kind)) {
-            let lastCount = repairs(victim), quietSince = world.now;
-            const end = world.now + 8000;
-            while (world.now < end && !(world.now - quietSince >= 2000 && all.every(idle))) {
-                await play(400);
-                if (repairs(victim) !== lastCount) { lastCount = repairs(victim); quietSince = world.now; }
-            }
-        }
-        const sums = await wholeState();
-        if (process.env.DIVTRACE && !same(sums)) { const h = host.evalSim(FULL_VALUES), v = victim.evalSim(FULL_VALUES); console.error('FIELDS', describeDiff(h, v)); }
-        if (process.env.DIVTRACE && !same(sums)) console.error('DIVTRACE', kind, JSON.stringify(require('./net-harness.cjs').divergenceReport(host, victim, (victim.patchTicks || [0]).slice(-1)[0] + 1), null, 1));
-        assert.ok(same(sums), `${kind} (${what}) on ${victim.name}: state differs after the patch: ${sums}`);
-        rows.push(`${kind} (${what}) on ${victim.name}: ${patches} patch${patches > 1 ? 'es' : ''}${full ? ` (${full} full)` : ''} after ${Math.round(patchedAt - t0)} ms, whole state equal`);
+        if (process.env.DIVTRACE && !equalAt) { const h = host.evalSim(FULL_VALUES), v = victim.evalSim(FULL_VALUES); console.error('FIELDS', describeDiff(h, v)); }
+        // (Derived count planes: kept by changes, so a repair must leave them as a recount gives.)
+        if (process.env.DIVTRACE && !equalAt) console.error('COUNTS host', host.evalSim(COUNT_PLANES), 'victim', victim.evalSim(COUNT_PLANES));
+        if (process.env.DIVTRACE && !equalAt) console.error('DIVTRACE', kind, JSON.stringify(require('./net-harness.cjs').divergenceReport(host, victim, (victim.patchTicks || [0]).slice(-1)[0] + 1), null, 1));
+        assert.ok(equalAt, `${kind} (${what}) on ${victim.name}: state differs ${Math.round(world.now - patchedAt)} ms after the first patch (${patches} patches): ${sums}`);
+        if (!BROAD.has(kind)) assert.ok(patches <= 3 && full === 0, `${kind} (${what}): ${patches} patches, ${full} full`);
+        else assert.ok(patches <= 4, `${kind} (${what}): ${patches} patches`);
+        rows.push(`${kind} (${what}) on ${victim.name}: ${patches} patch${patches > 1 ? 'es' : ''}${full ? ` (${full} full)` : ''}, the first after ${Math.round(patchedAt - t0)} ms, whole state equal ${Math.round(equalAt - patchedAt)} ms later`);
     }
 
     // Everything settled: the fingerprints agree on every tick since the

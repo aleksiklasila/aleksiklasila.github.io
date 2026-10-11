@@ -1926,6 +1926,14 @@ function _snapEnsureStatMaps() {
             }
         }
         ctx.statMapsRebuilt = stale.length;
+        // Units of a player whose tables were made again here are behind
+        // them (as after a research of its own): each takes them at its next
+        // refresh. A unit this restore does not carry kept what it took from
+        // the tables as they were (a research this peer alone had counted:
+        // its units' max energy stayed doubled after the repair, unhashed,
+        // and they stood in the healers' lists for good). A unit the restore
+        // carries has its own flag (effStatsAppliedSync).
+        if (typeof unitStatsTablesChanged === 'function') for (let pid of stale) unitStatsTablesChanged(pid);
     }
     // What a spend compares with, as the snapshot's peer had it.
     if (target) {
@@ -2343,6 +2351,13 @@ function snapDecodeState(S, options = null) {
         // Reconcile membership before any tier can snapshot the columns.
         // The tick's normal collection runs after tier posts; waiting for
         // it leaves replaced units live in those inputs for a whole round.
+        // (First the units a patch takes away leave the unit counts and the
+        // visibility cover, while they still have their columns: once
+        // collected, a unit no longer reads as indexed, and its count stayed
+        // in the chunk, type and block planes for good (its neighbours'
+        // effective levels then differed on the patched peer after every
+        // repair: patched again and again).)
+        if (partial) for (let u of removed.u) removeUnitSpatial(u);
         if (typeof simUnitStateCollect === 'function') simUnitStateCollect();
         // (A whole world: its units in slots from 0, see simUnitStateCompact.)
         if (!partial && typeof simUnitStateCompact === 'function') simUnitStateCompact(true);
@@ -2364,7 +2379,6 @@ function snapDecodeState(S, options = null) {
         // others' flush did: this peer's flush ran before its units came.)
         if (typeof simUnitMaxE === 'function') for (let u of (partial ? shells.u : units)) if (u && u._us) { simUnitMaxE(u); if (typeof simMoveStatsChanged === 'function') simMoveStatsChanged(u); }
         if (partial) {
-            for (let u of removed.u) removeUnitSpatial(u);
             for (let u of shells.u) { let p = keptPrev.get(u); if (p) { u.prevX = p[0]; u.prevY = p[1]; } else { u.prevX = u.x; u.prevY = u.y; } updateUnitSpatial(u); }
         } else {
             initSpatialHash();
