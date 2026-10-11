@@ -89,6 +89,14 @@ const RECORD = `(async (ms) => {
     // comes on its own channel (its interpolation starts anew when a table is
     // shown, whatever tick the page's state has reached).
     const shownTick = () => typeof _simClient !== 'undefined' && _simClient && _simClient.presentation ? _simClient.presentationTick : gameTime;
+    // What the unit layer holds of each unit (its record: the tick position
+    // and the way back to the one before, in tiles), as written when the
+    // layer is built: the layer is drawn from these and its alpha, so a
+    // layer kept past its units' frame (built at the page's tick, drawn
+    // with the next frame's interpolation) shows here as steps backwards.
+    const recs = new Map(), wr = r3.writeUnitLayerRecord, wo = r3.writeUnitLayerObject;
+    if (wr) r3.writeUnitLayerRecord = function (kind, mode, rec, panel, unit) { if (unit) recs.set(unit, [rec[12], rec[14], rec[3], rec[7]]); return wr.apply(this, arguments); };
+    if (wo) r3.writeUnitLayerObject = function (o) { const src = o && o.pickSource; if (src && src.unitType) recs.set(src, [o.x, o.z, o._pdx, o._pdz]); return wo.apply(this, arguments); };
     const orig = r3.render;
     r3.render = function (snap) {
         const res = orig.apply(this, arguments);
@@ -127,13 +135,18 @@ const RECORD = `(async (ms) => {
             let x, y, px, py;
             // (With the worker, units read the frame the renderer draws from.)
             x = u.x; y = u.y; px = u.prevX; py = u.prevY;
-            pos.push([key(u), px + (x - px) * a, py + (y - py) * a]);
+            // (In the layer: where its record and the layer's alpha put it.)
+            const rec = snap.unitLayer ? recs.get(u) : null;
+            if (rec && Number.isFinite(rec[2]) && Number.isFinite(rec[3])) pos.push([key(u), (rec[0] + rec[2] * (1 - a)) * TILE, (rec[1] + rec[3] * (1 - a)) * TILE, 1]);
+            else pos.push([key(u), px + (x - px) * a, py + (y - py) * a, 0]);
         }
         frames.push({ tick: shownTick(), alpha: a, structures: [...structures], units: [...unitsDrawn], pos });
         return res;
     };
     await new Promise(r => setTimeout(r, ms));
     r3.render = orig;
+    if (wr) r3.writeUnitLayerRecord = wr;
+    if (wo) r3.writeUnitLayerObject = wo;
     return JSON.stringify(frames);
 })`;
 
@@ -156,7 +169,10 @@ function motion(frames) {
             if ((dx * ex + dy * ey) / (m * m0) < -0.5) back++;
         }
     }
-    return { between: between / frames.length, alphaBack, steps, backRate: back / Math.max(1, steps) };
+    // (How many of the positions came from the unit layer's own records.)
+    let fromRecords = 0, positions = 0;
+    for (const f of frames) for (const p of f.pos) { positions++; if (p[3]) fromRecords++; }
+    return { between: between / frames.length, alphaBack, steps, backRate: back / Math.max(1, steps), fromRecords: fromRecords / Math.max(1, positions) };
 }
 
 function flickers(frames, field) {

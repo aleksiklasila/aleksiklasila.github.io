@@ -1290,7 +1290,7 @@ let mouseScreenX = 0, mouseScreenY = 0;
 // Build
 let selectedBuildItem = null; // key from BASE_CARD_TYPES
 let activeBuildTab = 'barracks';
-const PURCHASE_MULTIPLIERS = [1, 2, 4, 8, 16, 32, 64, 128, 256];
+const PURCHASE_MULTIPLIERS = [0, 2, 4, 6, 8, 10, 12, 13, 14, 16].map(exponent => 2 ** exponent);
 let buildPurchaseMultiplier = 1;
 let queuePurchaseMultiplier = 1;
 let researchPanelOpenState = {};

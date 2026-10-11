@@ -1926,6 +1926,7 @@ function _snapEnsureStatMaps() {
             }
         }
         ctx.statMapsRebuilt = stale.length;
+        ctx.statMapsStale = stale;
         // Units of a player whose tables were made again here are behind
         // them (as after a research of its own): each takes them at its next
         // refresh. A unit this restore does not carry kept what it took from
@@ -2383,6 +2384,17 @@ function snapDecodeState(S, options = null) {
         } else {
             initSpatialHash();
             for (let u of units) { u.prevX = u.x; u.prevY = u.y; updateUnitSpatial(u); }
+        }
+        // (A patch that made a player's tables again: the units of that
+        // player it does not carry take them now, all of them, with the unit
+        // counts as they now are. Left to their turns (a share a tick: the
+        // refresh after a research), each share changed how its energy rounds
+        // on this peer alone when its turn came: a new difference a rotation,
+        // a patch each, six for one research counted wrongly.)
+        if (partial && ctx.statMapsStale && ctx.statMapsStale.length && typeof _effStatsFullUnit === 'function') {
+            const staleOwners = new Set(ctx.statMapsStale), carried = new Set(shells.u);
+            const counts = spatialTypeStridePerBlock > 0 && spatialTypeCounts.length > 0 && CHUNKS_W > 0 && CHUNKS_H > 0, chunkPx = Math.max(1, CHUNK_SIZE * TILE);
+            for (let u of units) if (u && !u.dead && staleOwners.has(u.owner) && !carried.has(u)) _effStatsFullUnit(u, counts, chunkPx);
         }
         for (let p of shells.p) { p.prevX = p.x; p.prevY = p.y; }
         resetPendingPathUnits();

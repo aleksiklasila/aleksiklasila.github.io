@@ -67,6 +67,12 @@ let fillChanged=false;
 // variation: smooth before prompt, the user's choice); VIS_SNAP:
 // a gap past which it is drawn at the simulation's position at once.
 const vis={x:null,y:null,id:null}, VIS_FOLLOW=.35, VIS_SNAP=64;
+// (VIS_FOLLOW is the share per tick: a frame made some ticks after the last
+// one goes the share those ticks add up to, so the drawn pace is the same
+// whether a frame is made every tick or every third.)
+let visFollow=VIS_FOLLOW, lastBuiltTick=-1;
+// (The fog's full light, VISIBILITY_LIGHT_NORMALIZATION_RANGE: with each tick.)
+let lightFull=6;
 // Facing (presentation only: the simulation keeps none): toward the unit's
 // fire target (the combat brain's, cmMode bit 4) when it has one, else its
 // movement, else as it was; turning VIS_TURN of the way a frame, so a few
@@ -97,7 +103,7 @@ function fillUnits(F,C,meta,n,player,areaUnit,phase0,prate) {
             const x=SX[s], y=SY[s];
             const ox=VX[s], oy=VY[s];
             if (VI[s]!==id || Math.abs(x-ox)+Math.abs(y-oy)>VIS_SNAP) {DPX[s]=SPX[s];DPY[s]=SPY[s];DX[s]=x;DY[s]=y;VX[s]=x;VY[s]=y;VI[s]=id;continue;}
-            const nx=ox+(x-ox)*VIS_FOLLOW, ny=oy+(y-oy)*VIS_FOLLOW;
+            const nx=ox+(x-ox)*visFollow, ny=oy+(y-oy)*visFollow;
             DPX[s]=ox;DPY[s]=oy;DX[s]=nx;DY[s]=ny;VX[s]=nx;VY[s]=ny;
         }
     }
@@ -125,8 +131,15 @@ function fillUnits(F,C,meta,n,player,areaUnit,phase0,prate) {
             | (Y[s]>0?SIM_UF_SANDY:0) | (V[s]>0?SIM_UF_WATCHED:0) | (H[s]>0?SIM_UF_HIDDEN:0));
     }
     {
-        const D=F.light, O=F.owner, V=C.watched, WB=F.watchedBy, VIS=F.vision, ON=C.stOn;
-        for (let s=0;s<n;s++) D[s]=O[s]===player || ((!ON || ON[s]) && V[s]>0 && WB[s]===player) ? VIS[s]*areaUnit : 0;
+        // The light a unit is drawn with at least: a unit that is a light
+        // source for the viewing player (its own, or one it watches) lights
+        // its own area to the full whatever its range, so it is drawn at the
+        // full at once. (Its range in tiles before: a unit seeing only its
+        // own area got half, and the fog's light of an area it had just
+        // walked into rises over most of a second: it dimmed and brightened
+        // at every border it crossed.)
+        const D=F.light, O=F.owner, V=C.watched, WB=F.watchedBy, VIS=F.vision, ON=C.stOn, full=lightFull;
+        for (let s=0;s<n;s++) D[s]=O[s]===player || ((!ON || ON[s]) && V[s]>0 && WB[s]===player) ? Math.max(VIS[s]*areaUnit,full) : 0;
     }
     {
         const X=F.x, Y=F.y, PX=F.px, PY=F.py, FL=F.flash, MO=F.mode, ST=F.status, AM=F.amount;
@@ -295,6 +308,8 @@ function draw() {
     const F=simFrameViews(buf,cap);
     let changed=!last || last.length !== cap;
     if (!last || last.length !== cap) last=new Int32Array(cap).fill(-1);
+    {const dk=lastBuiltTick>=0 ? Math.max(1,Math.min(16,tick.tick-lastBuiltTick)) : 1;visFollow=1-Math.pow(1-VIS_FOLLOW,dk);lastBuiltTick=tick.tick;}
+    if (tick.lightRange>0) lightFull=tick.lightRange;
     const count=fillUnits(F,C,meta,Math.min(tick.n,got),tick.player,tick.areaUnit,tick.time/tick.rate*10,10/tick.rate);
     if (fillChanged) changed=true;
     if (tick.history) applyGhosts(F,Math.min(tick.n,got),tick);
@@ -351,7 +366,7 @@ function onMessage(event) {
             if (m.fog) {try {updateFog(m);} catch(err) {postMessage({type:'error',message:String(err.stack || err)});}}
             latest=m;if(!scheduled && source && ready) {scheduled=true;draw();}return;
         }
-        if(m.type==='bind') {epoch=m.epoch;generation=m.generation;source=m.columns;meta=simFrameViews(m.meta.buf,m.meta.cap);metaRev=m.metaRev||null;for(const e of buffers.values()) e.metaRev=-1;last=null;buildRenderBuckets.previous=null;schedule();}
+        if(m.type==='bind') {epoch=m.epoch;generation=m.generation;source=m.columns;meta=simFrameViews(m.meta.buf,m.meta.cap);metaRev=m.metaRev||null;for(const e of buffers.values()) e.metaRev=-1;last=null;lastBuiltTick=-1;buildRenderBuckets.previous=null;schedule();}
         else if(m.type==='strings') strings=m.strings;
         else if(m.type==='ready') {ready=true;schedule();}
         else if(m.type==='structures') {structure=m.table;structureRevision=m.revision;}

@@ -7109,7 +7109,7 @@ function renderStartingResourcesThingRowsForPanel() {
         let maxRow = getStartingSpawnMaxForRow(thingId, lvl);
         html += `<div class="info-row" style="align-items:center;gap:8px;margin:1px 0;">`;
         html += `<span style="color:#bbb;flex:1 1 0">L${lvl}</span>`;
-        html += `<span style="color:#fff;flex:0 0 180px;text-align:center">${cur}/${maxRow}</span>`;
+        html += `<span style="color:#fff;flex:0 0 180px;text-align:center">${cur}${Number.isFinite(maxRow) ? `/${maxRow}` : ''}</span>`;
         html += `<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;flex:1 1 0">`;
         html += `<span class="info-startres-spawn-dec" data-thing-id="${thingId}" data-level="${lvl}" style="cursor:${cur > 0 ? 'pointer' : 'default'};color:${cur > 0 ? '#f66' : '#444'};font-weight:bold;">[-]</span>`;
         html += `<span class="info-startres-spawn-inc" data-thing-id="${thingId}" data-level="${lvl}" style="cursor:${cur < maxRow ? 'pointer' : 'default'};color:${cur < maxRow ? '#4f4' : '#444'};font-weight:bold;">[+]</span>`;

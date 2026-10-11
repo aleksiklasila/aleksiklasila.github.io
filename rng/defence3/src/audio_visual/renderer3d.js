@@ -5872,7 +5872,8 @@
                         if(!(s>=0) || mask[s] || (kind ? F.id[s]<0 || F.energy[s]<=0 || (F.flags[s]&66560)!==0
                             : !F.alive[s] || F.kind[s]===6 || (F.kind[s]<4&&F.energy[s]<=0))) continue;
                         const x=F.x[s]/C.tile,z=F.y[s]/C.tile;
-                        if(!C.fullVisibility && !(F.flags[s]&65536) && !(C.visibility[Math.floor(z)]?.[Math.floor(x)]>0))continue;
+                        // (The viewing player's own units: always drawn, at full light, as the glyphs' shader has them.)
+                        if(!C.fullVisibility && !(F.flags[s]&65536) && !(kind&&F.owner[s]===C.player) && !(C.visibility[Math.floor(z)]?.[Math.floor(x)]>0))continue;
                         const size=kind?Math.max(.28,Math.min(.9,F.r[s]*2.2/C.tile)):.94;
                         scores[i]=_detailScore(x,z,size,false,!!previous?.[s],8);
                     }
@@ -5911,7 +5912,7 @@
                         d[o+16]=owner[0];d[o+17]=owner[1];d[o+18]=owner[2];d[o+19]=1;
                         d[o+20]=kind?F.amount[s]:0;d[o+21]=kind?F.phase[s]:0;
                         d[o+22]=tint[0];d[o+23]=tint[1];d[o+24]=tint[2];
-                        d[o+25]=F.flags[s]&65536?-1.14:C.fullVisibility?1:Math.min(1,C.visibility[Math.floor(z)][Math.floor(x)]/C.lightNorm);
+                        d[o+25]=F.flags[s]&65536?-1.14:C.fullVisibility||(kind&&F.owner[s]===C.player)?1:Math.min(1,C.visibility[Math.floor(z)][Math.floor(x)]/C.lightNorm);
                         d[o+26]=atlas.layerFor(A.panels[styleIndex]);d[o+27]=-1;
                         mask[s]=255;S.count++;
                     }
@@ -5955,7 +5956,7 @@
                     layout(location=15) in float aResource;
                     uniform mat4 uViewProjection;
                     uniform float uAlpha, uTile, uScale, uPixelRatio, uFlat, uLightNorm, uDetail, uDetailS, uDetailMask;
-                    uniform int uStructure, uFull;
+                    uniform int uStructure, uFull, uPlayer;
                     uniform vec3 uColors[9];
                     uniform sampler2D uVisibility;
                     uniform sampler2D uStyles, uMeta;
@@ -5983,6 +5984,12 @@
                         // the dark by definition, dimmed.)
                         bool ghost = (flags & 65536) != 0;
                         float light = uFull != 0 || ghost ? 1. : texelFetch(uVisibility,ivec2(current),0).r / uLightNorm;
+                        // (The viewing player's own unit lights its area to the full:
+                        // drawn so at once. The fog's light of an area it has just
+                        // walked into rises over most of a second; read from there, a
+                        // unit that lights only its own area dimmed and brightened at
+                        // every border it crossed.)
+                        if (uStructure == 0 && uFull == 0 && !ghost && int(aOwner) == uPlayer) light = 1.;
                         if (!alive || (aEnergy <= 0. && (uStructure == 0 || aKind < 4.)) || light <= 0.) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
                         if (ghost) light = .14;
                         gl_Position = uViewProjection * vec4(p.x,.02,p.y,1.);
@@ -6114,7 +6121,7 @@
                         color = vec4(sprite.rgb*vLight,sprite.a*vColor.a);
                     }`);
                 this.columnUniforms = {};
-                for (const n of ['ViewProjection','Alpha','Tile','Scale','PixelRatio','Flat','LightNorm','Structure','Full','Colors','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','OwnerMask','AtlasGrid','StyleWidth','Yaw','Pitch','Time','HeightScale','PointMax','Viewport','CoverageFade']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
+                for (const n of ['ViewProjection','Alpha','Tile','Scale','PixelRatio','Flat','LightNorm','Structure','Full','Player','Colors','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','OwnerMask','AtlasGrid','StyleWidth','Yaw','Pitch','Time','HeightScale','PointMax','Viewport','CoverageFade']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
                 this.columnStores = [{},{}];
                 this.columnVisibilityTexture = createTexture(gl);
             }
@@ -6164,7 +6171,7 @@
             gl.uniform1f(U.Detail,C.detailPx > 0 ? C.detailPx : 0);
             gl.uniform1f(U.DetailS,C.detailPxS > 0 ? C.detailPxS : 0);
             gl.uniform1f(U.DetailMask,C.detailMask ? 1 : 0);
-            gl.uniform1i(U.Full,C.fullVisibility?1:0);gl.uniform1i(U.Visibility,0);
+            gl.uniform1i(U.Full,C.fullVisibility?1:0);gl.uniform1i(U.Player,Number.isFinite(C.player)?C.player:-99);gl.uniform1i(U.Visibility,0);
             const colors = this.columnColors || (this.columnColors = new Float32Array(27));
             for (let i=0;i<9;i++) colors.set(hexToRgb(C.colors[i]),i*3);
             gl.uniform3fv(U.Colors,colors);

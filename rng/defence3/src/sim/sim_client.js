@@ -67,8 +67,8 @@ function _simClientCreate() {
     let c = {
         worker: null, loaded: false, active: false, epoch: 0, startTick: -1, nextRequestId: 1, replies: new Map(),
         inFlight: 0, lastDispatchAt: 0, tickClock: 0, dispatchAt: new Map(), appliedTick: -1, appliedAt: 0, latencyMs: TICK_MS, arrivedAt: 0, intervalMs: TICK_MS, drawnAlpha: -1, errors: [],
-        // (Presentation frames: when the last arrived, one waiting to be shown, the shown motion's pace.)
-        presentAt: 0, heldPresentation: null, playScale: 1, drawAt: 0,
+        // (Presentation frames: their playout, see _simPlayArrived; when a frame was last drawn.)
+        play: _simPlayNew(), drawAt: 0,
         // [epoch, last tick the worker ran] (shared memory only).
         ctl: (typeof SharedArrayBuffer === 'function' && typeof window !== 'undefined' && window.crossOriginIsolated) ? new Int32Array(new SharedArrayBuffer(16)) : null,
         lateMs: 0,
@@ -331,33 +331,7 @@ function _simClientOnMessage(msg) {
         }
         case 'presentation': {
             if (msg.epoch !== c.epoch || !c.active) { _simClientReturnBufs(_simClientWorldBufs(msg.world)); break; }
-            const now = performance.now();
-            // (The interpolation's length: the frames' own spacing as they
-            // arrive, whenever each is shown.)
-            if (c.presentAt > 0) c.intervalMs += (Math.max(10, Math.min(250, now - c.presentAt)) - c.intervalMs) * .25;
-            c.presentAt = now;
-            // One waiting already (frames come faster than they are shown):
-            // shown now, from where its units are drawn (the rebase's pass).
-            // (Nearly at its end: from its end, the last tenths of a step
-            // are not worth the pass.)
-            if (c.heldPresentation) { const held = c.heldPresentation, a = Math.max(0, c.drawnAlpha); c.heldPresentation = null; _simClientShowPresentation(c, held, a >= SIM_CLIENT_HELD_SKIP_ALPHA ? 1 : a, now); }
-            // A frame that arrives while the shown one's motion is still
-            // being drawn waits for its end (simClientTickAlpha shows it
-            // then): the drawn motion runs on unbroken, at its own pace, and
-            // no unit's start has to be moved to where it is drawn now (the
-            // rebase: a pass over every unit, 17-27 ms on this thread at 600k
-            // units, each time a frame came). Without frames being drawn (a
-            // hidden page, tests): at once, as before.
-            const drawing = c.drawAt > 0 && now - c.drawAt < 100;
-            if (drawing && c.arrivedAt > 0 && now - c.arrivedAt < c.intervalMs * c.playScale) {
-                // (While one waits the shown motion runs a little faster, so
-                // the wait drains instead of the next frame finding this one
-                // still waiting; the drawn position stays where it is.)
-                if (c.playScale === 1) { c.arrivedAt = now - (now - c.arrivedAt) * SIM_CLIENT_HELD_PLAY_SCALE; c.playScale = SIM_CLIENT_HELD_PLAY_SCALE; }
-                c.heldPresentation = msg;
-                break;
-            }
-            _simClientShowPresentation(c, msg, c.arrivedAt > 0 ? (drawing ? 1 : Math.max(0, c.drawnAlpha)) : 1, now);
+            _simPlayArrived(c, msg, performance.now());
             break;
         }
         case 'reply': {
@@ -380,19 +354,101 @@ function _simClientOnMessage(msg) {
     }
 }
 
-// A presentation frame becomes the shown one; its motion is drawn from `at`.
-const SIM_CLIENT_HELD_PLAY_SCALE = 0.8, SIM_CLIENT_HELD_SKIP_ALPHA = 0.8;
-function _simClientShowPresentation(c, msg, shown, at) {
-    _simClientApplyWorld(msg.world, shown);
-    c.arrivedAt = at; c.drawnAlpha = -1; c.presentationTick = msg.tick; c.playScale = 1;
+// ---- the playout of presentation frames ----
+// Each frame holds its units where they are at its tick (x) and where the
+// frame before it had them (px): the stretch of motion between two ticks.
+// Drawn motion is the frames played end to end on one steady clock: a play
+// position in ticks (play.p) that advances with the drawn frames' time at
+// the pace the frames come at (play.period: ms a tick, a slow average), a
+// little behind the newest frame (play.want ticks: the frames' spacing plus
+// what their arrival times vary by). A frame is shown when the position
+// reaches the end of the one before it, at once from its start: no unit's
+// start is moved to where it is drawn (the rebase: a pass over every unit),
+// and when a frame happens to arrive no longer shapes the drawn speed.
+// (Before: each frame's motion ran from its arrival over the average gap
+// between arrivals; a frame a few ms early or late cut the last tenths of
+// a step short or held the unit still for a frame: a lone unit's drawn
+// speed varied +-50% from frame to frame at every tick.) The position waits
+// at a frame's end when no newer one has come (the frames are late: the
+// distance behind grows by that), and runs up to SIM_PLAY_RATE_MAX faster or
+// slower to hold its distance behind the newest. Without frames being drawn
+// (a hidden page, tests) every frame is shown as it comes.
+// (SIM_PLAY_MARGIN_TICKS: the least room for a late frame, 20 ms at 20 TPS.)
+const SIM_PLAY_QUEUE_MAX = 2, SIM_PLAY_SNAP_TICKS = 8, SIM_PLAY_RATE_MIN = 0.9, SIM_PLAY_RATE_MAX = 1.35, SIM_PLAY_MARGIN_TICKS = 0.4;
+function _simPlayNew() { return { started: false, p: 0, at: 0, k0: 0, k1: 0, period: 0, gap: 1, jit: 0, err: 0, rate: 1, want: 1.25, lastK: 0, lastAt: 0, queue: [], stalls: 0, snaps: 0 }; }
+function _simClientShowPresentation(c, msg, at) {
+    // (Shown from its start: its units begin where the frame before left them.)
+    _simClientApplyWorld(msg.world, 1);
+    c.arrivedAt = at; c.drawnAlpha = -1; c.presentationTick = msg.tick;
     c.presentationBuildMs = msg.buildMs; c.presentationPhases = msg.phases; c.presentationTorn = msg.torn;
 }
-// (A frame waiting to be shown, of a match that ended or was restored.)
+function _simPlayShow(c, P, msg, at) {
+    P.k0 = P.started ? P.k1 : msg.tick - 1;
+    P.k1 = Math.max(P.k0 + 1, msg.tick);
+    P.started = true;
+    _simClientShowPresentation(c, msg, at);
+}
+// A frame came (at `now`).
+function _simPlayArrived(c, msg, now) {
+    const P = c.play, K = msg.tick;
+    if (!(P.period > 0)) P.period = Math.max(10, netSimulationTickMs());
+    if (P.lastAt > 0 && K > P.lastK) {
+        const dk = K - P.lastK, per = (now - P.lastAt) / dk;
+        if (per > 4 && per < 1000) {
+            P.jit += (Math.min(250, Math.abs(now - P.lastAt - P.period * dk)) - P.jit) * 0.1;
+            P.period += (Math.max(10, Math.min(250, per)) - P.period) * 0.05;
+            P.gap += (Math.min(8, dk) - P.gap) * 0.1;
+        }
+    }
+    P.lastAt = now; P.lastK = K;
+    c.intervalMs = P.period * P.gap;
+    // Not drawing (or the first frame): shown as it comes, the clock at its end.
+    if (!P.started || !(c.drawAt > 0 && now - c.drawAt < 100)) {
+        while (P.queue.length) _simPlayShow(c, P, P.queue.shift(), now);
+        _simPlayShow(c, P, msg, now);
+        P.p = P.k1; P.at = 0; P.err = 0; P.rate = 1;
+        return;
+    }
+    // (More waiting than the page may hold of the reader's buffers: the
+    // oldest is shown now, the position at its start.)
+    if (P.queue.length >= SIM_PLAY_QUEUE_MAX) { _simPlayShow(c, P, P.queue.shift(), now); P.p = Math.max(P.p, P.k0); P.snaps++; }
+    P.queue.push(msg);
+    // How far behind the newest frame the position is against what it
+    // should be, measured as each frame comes (between frames the distance
+    // falls as the position advances: read then, it would sway the pace
+    // within every tick): the pace until the next frame.
+    P.want = P.gap + Math.min(P.gap, Math.max(SIM_PLAY_MARGIN_TICKS, 3 * P.jit / P.period));
+    P.err += ((K - P.p) - P.want - P.err) * 0.25;
+    P.rate = Math.max(SIM_PLAY_RATE_MIN, Math.min(SIM_PLAY_RATE_MAX, 1 + P.err * 0.12));
+}
+// A drawn frame's time: the play position moves on, frames whose turn has
+// come are shown; returns the shown frame's interpolation.
+function _simPlayAdvance(c, frameTime) {
+    const P = c.play;
+    if (!P.started) return 1;
+    let dt = P.at > 0 ? frameTime - P.at : 0;
+    P.at = frameTime;
+    if (!(dt > 0)) dt = 0; else if (dt > 250) dt = 250;
+    P.p += dt / P.period * P.rate;
+    // (Far behind, after a stall of the page: to the newest at once.)
+    const newest = P.queue.length ? P.queue[P.queue.length - 1].tick : P.k1;
+    if (newest - P.p > Math.max(SIM_PLAY_SNAP_TICKS, P.want * 3)) { P.p = newest; P.err = 0; P.rate = 1; P.snaps++; }
+    while (P.queue.length && P.p >= P.k1) {
+        const msg = P.queue.shift();
+        if (msg.epoch === c.epoch && c.active) { try { _simPlayShow(c, P, msg, frameTime); } catch (err) { reportRuntimeError('presentation', err); } }
+        else _simClientReturnBufs(_simClientWorldBufs(msg.world));
+    }
+    // (Nothing newer has come: it stands at this frame's end.)
+    if (P.p >= P.k1) { if (P.p > P.k1 + 0.02) P.stalls++; P.p = P.k1; return 1; }
+    const a = (P.p - P.k0) / (P.k1 - P.k0);
+    return a < 0 ? 0 : a > 1 ? 1 : a;
+}
+// (Frames waiting to be shown, of a match that ended or was restored.)
 function _simClientDropHeld(c) {
-    if (!c || !c.heldPresentation) return;
-    const held = c.heldPresentation;
-    c.heldPresentation = null;
-    _simClientReturnBufs(_simClientWorldBufs(held.world));
+    if (!c || !c.play) return;
+    const queue = c.play.queue;
+    c.play = _simPlayNew();
+    for (const msg of queue) _simClientReturnBufs(_simClientWorldBufs(msg.world));
 }
 
 function _simClientApplyTick(msg) {
@@ -485,7 +541,6 @@ function _simClientReturnBufs(bufs) {
 function _simClientResetUnits() {
     let c = _simClient;
     _simClientDropHeld(c);
-    if (c) c.presentAt = 0;
     for (let u of _pageUnitsById.values()) { u._freeze(); u.dead = true; }
     if (typeof selectionIndexRemapped === 'function') selectionIndexRemapped();
     _pageUnitsById = new Map();
@@ -672,6 +727,7 @@ function _simClientApplyFrame(frame, shown) {
         c.mver = frame.mver;
     }
     _pageFrame = F;
+    _pageFrameSerial++;
     if (old) _simClientReturnBufs([old.buf]);
 }
 
@@ -842,17 +898,14 @@ function simClientTickAlpha(frameTime) {
     let c = _simClient;
     if (!c) return 1;
     c.drawAt = performance.now();
-    if (!c.arrivedAt) return 1;
-    // A frame waiting for the shown one's motion to end: shown from that
-    // end on (see the 'presentation' message).
-    if (c.heldPresentation && frameTime - c.arrivedAt >= c.intervalMs * c.playScale) {
-        const held = c.heldPresentation, end = c.arrivedAt + c.intervalMs * c.playScale;
-        c.heldPresentation = null;
-        if (held.epoch === c.epoch && c.active) {
-            try { _simClientShowPresentation(c, held, 1, frameTime - end < c.intervalMs ? end : frameTime); } catch (err) { reportRuntimeError('presentation', err); }
-        } else _simClientReturnBufs(_simClientWorldBufs(held.world));
+    // The presentation reader's frames: on the playout clock.
+    if (c.presentation && c.play && c.play.started) {
+        const a = _simPlayAdvance(c, frameTime);
+        c.drawnAlpha = a;
+        return a;
     }
-    let alpha = (frameTime - c.arrivedAt) / Math.max(1, c.intervalMs * c.playScale);
+    if (!c.arrivedAt) return 1;
+    let alpha = (frameTime - c.arrivedAt) / Math.max(1, c.intervalMs);
     // Called once per drawn frame: remembered for the next result's start.
     c.drawnAlpha = alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
     return alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;

@@ -920,7 +920,7 @@ function _bbDropMenuHtml() {
         html += `<div class="bb-menu-note">Build a research lab to upgrade.</div>`;
     } else {
         let cap = getResearchQueueCapacityForPlayer(owner);
-        html += `<div class="bb-menu-section">Upgrades <span class="bb-muted">queue ${getPlayerResearchQueueTotalLength(owner)}/${cap} · x${Math.max(1, Math.floor(queuePurchaseMultiplier || 1))} per click</span></div>`;
+        html += `<div class="bb-menu-section">Upgrades <span class="bb-muted">queue ${getPlayerResearchQueueTotalLength(owner)}/${cap} · ${formatPurchaseMultiplier(Math.max(1, Math.floor(queuePurchaseMultiplier || 1)))} per click</span></div>`;
         html += _renderResearchSingleThingStatsPanel(owner, `single:${lab.gx},${lab.gy}`, lab, thing, false)
             .replace(/<div style="font-size:10px;color:#ddd;margin-bottom:3px">[^<]*<\/div>/, '');
     }

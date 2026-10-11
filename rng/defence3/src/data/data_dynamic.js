@@ -381,6 +381,11 @@ function ensureMainMenuPrecomputedStateReady() {
     ensureStartingResourcesSelectedThing();
 }
 
+function normalizeStartingSpawnCount(value) {
+    let count = Number(value);
+    return Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+}
+
 function normalizeStartingResourcesConfig(rawCfg) {
     ensureResearchThingsReady();
     let raw = (rawCfg && typeof rawCfg === 'object') ? rawCfg : {};
@@ -420,7 +425,7 @@ function normalizeStartingResourcesConfig(rawCfg) {
             if (typeof countMap === 'object' && countMap !== null) {
                 for (let levelText in countMap) {
                     let level = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(levelText) || 0)));
-                    let count = Math.max(0, Math.min(10000, Math.floor(Number(countMap[levelText]) || 0)));
+                    let count = normalizeStartingSpawnCount(countMap[levelText]);
                     if (!out.spawnCounts[id]) out.spawnCounts[id] = {};
                     if (count > 0) out.spawnCounts[id][level] = count;
                 }
@@ -478,7 +483,7 @@ function setStartingResearchLevel(thingId, statKey, value) {
 
 function setStartingSpawnCount(thingId, level, value) {
     let lvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(level) || 1)));
-    let count = Math.max(0, Math.min(10000, Math.floor(Number(value) || 0)));
+    let count = Math.min(getStartingSpawnMaxForRow(thingId, lvl), normalizeStartingSpawnCount(value));
     if (!startingResourcesConfig.spawnCounts[thingId]) startingResourcesConfig.spawnCounts[thingId] = {};
     if (count <= 0) {
         delete startingResourcesConfig.spawnCounts[thingId][lvl];
@@ -516,7 +521,7 @@ function getStartingSpawnCount(thingId, level) {
 
 function getStartingSpawnMaxForRow(thingId, level) {
     let parsed = parseStartingThingId(thingId);
-    if (!parsed || parsed.kind !== 'unit') return 1000;
+    if (!parsed || parsed.kind !== 'unit') return Infinity;
     let maxPop = getStartingResourcesMaxPopulation();
     let current = getStartingSpawnCount(thingId, level);
     let total = getStartingResourcesTotalSpawnCount();
@@ -1900,7 +1905,7 @@ function renderStartingResourcesThingRowsForPanel() {
         let maxRow = getStartingSpawnMaxForRow(thingId, lvl);
         html += `<div class="info-row" style="align-items:center;gap:8px;margin:1px 0;">`;
         html += `<span style="color:#bbb;flex:1 1 0">L${lvl}</span>`;
-        html += `<span style="color:#fff;flex:0 0 180px;text-align:center">${cur}/${maxRow}</span>`;
+        html += `<span style="color:#fff;flex:0 0 180px;text-align:center">${cur}${Number.isFinite(maxRow) ? `/${maxRow}` : ''}</span>`;
         html += `<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;flex:1 1 0">`;
         html += `<span class="info-startres-spawn-dec" data-thing-id="${thingId}" data-level="${lvl}" style="cursor:${cur > 0 ? 'pointer' : 'default'};color:${cur > 0 ? '#f66' : '#444'};font-weight:bold;">[-]</span>`;
         html += `<span class="info-startres-spawn-inc" data-thing-id="${thingId}" data-level="${lvl}" style="cursor:${cur < maxRow ? 'pointer' : 'default'};color:${cur < maxRow ? '#4f4' : '#444'};font-weight:bold;">[+]</span>`;

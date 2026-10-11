@@ -253,7 +253,8 @@ function simFrameEncode() {
         // Calling the generic status accessors here used most of the encoder's
         // time at 100k units, despite the values already living in columns.
         F.light[s] = C.owner[slot] === localPlayerId || (C.watched[slot] > 0 && u.watchedByTeam === localPlayerId)
-            ? Math.max(0, F.vision[s] * AREA_UNIT_TILE_EQUIVALENT) : 0;
+            // (At least the fog's full light: see presentation_worker.js.)
+            ? Math.max(VISIBILITY_LIGHT_NORMALIZATION_RANGE, F.vision[s] * AREA_UNIT_TILE_EQUIVALENT) : 0;
         // Look: activity, facing, walk phase, status face, own light, panel.
         if (compact) {
             input.still[s] = gameTime; input.flash[s] = 0;
@@ -336,6 +337,10 @@ function simFrameWatch(list) { _simWatched = Array.isArray(list) ? list.slice(0,
 
 // Where the current frame's columns are read from (PageUnit fields).
 let _pageFrame = null;
+// (Counts the frames made current: what is made from a frame's positions
+// (the renderer's unit layers) is made again when this moves, not when the
+// page's tick does: the two change at different moments.)
+let _pageFrameSerial = 0;
 const _pageFrameStrings = [''];
 
 // A unit as the page sees it: bound to its frame slot while it lives;

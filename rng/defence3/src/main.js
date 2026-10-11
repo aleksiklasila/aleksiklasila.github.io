@@ -4605,9 +4605,9 @@ function startGame() {
         for (let thingId in spawnByThing) {
             let parsed = parseStartingThingId(thingId), levelMap = spawnByThing[thingId];
             if (!parsed || parsed.kind === 'building' || !levelMap || typeof levelMap !== 'object') continue;
-            for (let levelText in levelMap) perTeam += Math.max(0, Math.min(10000, Math.floor(Number(levelMap[levelText]) || 0)));
+            for (let levelText in levelMap) perTeam += normalizeStartingSpawnCount(levelMap[levelText]);
         }
-        simUnitStateReserve(perTeam * teams.length);
+        simUnitStateReserve(Math.min(perTeam, getConfiguredMaxPop()) * teams.length);
     }
     for (let pid of (startGameSkipStarters ? [] : teams)) {
         let pos = teamSpawnPos[pid];
@@ -4617,9 +4617,9 @@ function startGame() {
         for (let thingId in spawnByThing) {
             let parsed = parseStartingThingId(thingId), levelMap = spawnByThing[thingId];
             if (!parsed || parsed.kind === 'building' || !levelMap || typeof levelMap !== 'object') continue;
-            for (let levelText in levelMap) unitCount += Math.max(0, Math.min(10000, Math.floor(Number(levelMap[levelText]) || 0)));
+            for (let levelText in levelMap) unitCount += normalizeStartingSpawnCount(levelMap[levelText]);
         }
-        starterUnitCountByTeam[pid] = unitCount;
+        starterUnitCountByTeam[pid] = Math.min(unitCount, getConfiguredMaxPop());
         for (let pass = 0; pass < 2; pass++) for (let thingId in spawnByThing) {
             let parsed = parseStartingThingId(thingId);
             if (!parsed) continue;
@@ -4629,10 +4629,11 @@ function startGame() {
             if (parsed.kind === 'building' && (BASE_CARD_TYPES[parsed.key] || {}).notBuildable) continue;
             for (let levelText in levelMap) {
                 let lvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(levelText) || 1)));
-                let count = Math.max(0, Math.min(10000, Math.floor(Number(levelMap[levelText]) || 0)));
+                let count = normalizeStartingSpawnCount(levelMap[levelText]);
+                if (parsed.kind === 'unit') count = Math.min(count, Math.max(0, getConfiguredMaxPop() - players[pid].popCount));
                 for (let i = 0; i < count; i++) {
                     if (parsed.kind === 'building') {
-                        spawnStartingBuilding(pid, pos, parsed.key, lvl);
+                        if (!spawnStartingBuilding(pid, pos, parsed.key, lvl)) break;
                     } else {
                         spawnStartingUnit(pid, pos, parsed.key, lvl);
                     }

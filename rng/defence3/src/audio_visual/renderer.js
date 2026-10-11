@@ -1103,8 +1103,10 @@ function getVisualUnitSourceLight(unit) {
     // structure path below.)
     if (unit._frameView && typeof unit._col === 'function') return unit._col('light');
     if (unit.owner !== localPlayerId && !(unit.watched > 0 && unit.watchedByTeam === localPlayerId)) return 0;
+    // (A source lights its own area to the full, whatever its range: see
+    // the frame's light column, presentation_worker.js.)
     let range = getEntityEffectiveVisibilityRangeTiles(unit);
-    return Number.isFinite(range) ? Math.max(0, range) : 0;
+    return Number.isFinite(range) && range > 0 ? Math.max(range, VISIBILITY_LIGHT_NORMALIZATION_RANGE) : 0;
 }
 
 function getRenderLightGradient(gx, gy) {
@@ -1215,6 +1217,16 @@ const RENDER_NO_MODEL_CANDIDATES = Object.freeze([]);
 
 // Whether a render view's grid is the live one (not a remembered history
 // grid), so the live tile indexes describe it.
+// What is made from the units' positions is made again when this changes:
+// the units' frame when they come from one (the simulation worker's: its
+// frames become current on the playout clock, sim_client.js, not when the
+// page's tick moves; a layer made at the page's tick from one frame and
+// drawn with the next frame's interpolation stepped its units back to the
+// old stretch's start, then forward again, every tick), else the tick.
+function unitsRenderStamp() {
+    return typeof simClientCurrentUnitVis === 'function' && simClientCurrentUnitVis() ? -1 - _pageFrameSerial : gameTime;
+}
+
 function _isLiveRenderGrid(viewGrid) {
     return viewGrid === grid && typeof getCellItemsRowMajor === 'function' && typeof findCellItemRowStart === 'function';
 }
@@ -2266,8 +2278,8 @@ function getChunkRenderView(view, bounds, flat2d) {
         let index = rendererChunkCache.lists.get(name);
         // (Structures do not move: their index stands until their list is
         // replaced or changes size; units' every tick.)
-        if (!index || index.list !== list || index.length !== list.length || (name === 'units' && index.tick !== gameTime)) {
-            index = { list, tick: gameTime, length: list.length, buckets: new Map(), overflow: [] };
+        if (!index || index.list !== list || index.length !== list.length || (name === 'units' && index.tick !== unitsRenderStamp())) {
+            index = { list, tick: name === 'units' ? unitsRenderStamp() : gameTime, length: list.length, buckets: new Map(), overflow: [] };
             rendererChunkCache.lists.set(name, index);
             for (let i = 0; i < list.length; i++) {
                 const e = list[i], moving = name === 'units';
@@ -2333,7 +2345,7 @@ function buildScaleFrameData(flat2d, view) {
     // where nothing sees now (the light grid, not the fog's memory).
     const columns = frame ? { units: frame, structures: structuresFrame,
         unitSources: units, structureSources: structuresFrame ? _pageStructViews : null, alpha: tickAlpha,
-        visibility: structuresFrame ? view.visibilityGrid : visibilityGrid, visibilityVersion, fullVisibility, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
+        visibility: structuresFrame ? view.visibilityGrid : visibilityGrid, visibilityVersion, fullVisibility, player: localPlayerId, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
         colors: Array.from({length:9}, (_, i) => get3DRenderOwnerColor(i - 1)) } : null;
     // (Structures pushed as instances: a remembered view's, without a table.)
     const pushStructures = !columns || !structuresFrame;
@@ -2774,20 +2786,20 @@ function build3DFrameData(flat2d = false) {
     if (!flat2d && RENDERER3D_UNIT_LAYER_ENABLED && renderer3dInstance) {
         let L = renderer3dUnitLayer;
         // (A big zoom change rebuilds too: model detail follows on-screen size.)
-        layerReuse = !!(L && L.tick === gameTime && L.view === view3DKey && L.fullVis === fullVisibility && L.player === localPlayerId
+        layerReuse = !!(L && L.tick === unitsRenderStamp() && L.view === view3DKey && L.fullVis === fullVisibility && L.player === localPlayerId
             && L.units === units && L.unitCount === units.length && L.detailVersion === (unitDetail?.columns.detailMaskVersion || 0) && Math.abs(camera.zoom / L.zoom - 1) < 0.25
             && bounds.minGx >= L.bounds.minGx && bounds.maxGx <= L.bounds.maxGx && bounds.minGy >= L.bounds.minGy && bounds.maxGy <= L.bounds.maxGy);
         if (layerReuse) { unitLayer = L; renderer3dUnitLayerStats.reuse++; }
         else {
             if (L && L.occupied && L.view === view3DKey) previousOccupied = L.occupied;
             renderer3dUnitLayerStats.build++;
-            let why = !L ? 'none' : L.tick !== gameTime ? 'tick' : L.view !== view3DKey ? 'view' : L.units !== units || L.unitCount !== units.length ? 'units'
+            let why = !L ? 'none' : L.tick !== unitsRenderStamp() ? 'tick' : L.view !== view3DKey ? 'view' : L.units !== units || L.unitCount !== units.length ? 'units'
                 : L.fullVis !== fullVisibility || L.player !== localPlayerId ? 'player' : 'bounds';
             renderer3dUnitLayerStats.why[why] = (renderer3dUnitLayerStats.why[why] || 0) + 1;
             // A margin around the view, so panning between ticks keeps it.
             let mx = Math.max(4, Math.ceil((bounds.maxGx - bounds.minGx) * 0.3)), my = Math.max(4, Math.ceil((bounds.maxGy - bounds.minGy) * 0.3));
             unitLayer = renderer3dUnitLayer = {
-                tick: gameTime, view: view3DKey, fullVis: fullVisibility, player: localPlayerId, units, unitCount: units.length, zoom: camera.zoom, detailVersion: unitDetail?.columns.detailMaskVersion || 0,
+                tick: unitsRenderStamp(), view: view3DKey, fullVis: fullVisibility, player: localPlayerId, units, unitCount: units.length, zoom: camera.zoom, detailVersion: unitDetail?.columns.detailMaskVersion || 0,
                 bounds: { minGx: bounds.minGx - mx, maxGx: bounds.maxGx + mx, minGy: bounds.minGy - my, maxGy: bounds.maxGy + my },
                 objects: [], occupied: [], perFrame: [], motion: [], fallback: [], version: ++renderer3dUnitLayerVersion
             };
@@ -3626,7 +3638,7 @@ function _detailColumns(unitDetail, structDetail) {
     if (structDetail && !structDetail.live && !structDetail.frame) structDetail = null;
     if (!unitDetail && !structDetail) return null;
     const base = unitDetail ? unitDetail.columns : { units: null, unitSources: null, alpha: tickAlpha, detailPx: 0,
-        visibility: visibilityGridForColumns(), visibilityVersion, fullVisibility, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
+        visibility: visibilityGridForColumns(), visibilityVersion, fullVisibility, player: localPlayerId, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
         colors: Array.from({ length: 9 }, (_, i) => get3DRenderOwnerColor(i - 1)) };
     base.structures = structDetail ? structDetail.frame || _pageTables.s : null;
     base.structureSources = structDetail ? structDetail.frame?.sources || _pageStructViews : null;
@@ -3909,7 +3921,7 @@ function _unitDetailSplit(viewUnits, flat2d, bounds) {
     if (_detailUnits.length !== detailed.length || detailed.some((u, i) => u !== _detailUnits[i])) _detailUnits = detailed;
     const value = { units: _detailUnits, columns: { units: F, structures: null, unitSources: _isLiveUnitList(null, true), unitCandidates: viewUnits, alpha: a, detailPx: 0,
         detailMask: M8, detailMaskVersion: _detailMaskVersion,
-        visibility: visibilityGridForColumns(), visibilityVersion, fullVisibility, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
+        visibility: visibilityGridForColumns(), visibilityVersion, fullVisibility, player: localPlayerId, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
         colors: Array.from({ length: 9 }, (_, i) => get3DRenderOwnerColor(i - 1)) } };
     _unitDetailCache = { key: cacheKey, frame: F, source: viewUnits, value };
     return value;
@@ -6210,13 +6222,17 @@ function updateIgnoreLevelButton() {
     }
 }
 
+function formatPurchaseMultiplier(value) {
+    return value >= 1024 ? `${Math.floor(value / 1024)}k` : String(value);
+}
+
 function renderMultiplierBar(containerId, currentValue, onChange, label) {
     let bar = document.getElementById(containerId);
     if (!bar) return;
     let html = '';
     for (let mult of PURCHASE_MULTIPLIERS) {
         let activeCls = mult === currentValue ? ' active' : '';
-        html += `<button class="mult-toggle-btn${activeCls}" data-mult="${mult}">x${mult}</button>`;
+        html += `<button class="mult-toggle-btn${activeCls}" data-mult="${mult}" title="${mult}">${formatPurchaseMultiplier(mult)}</button>`;
     }
     bar.innerHTML = html;
     bar.querySelectorAll('.mult-toggle-btn').forEach(btn => {
