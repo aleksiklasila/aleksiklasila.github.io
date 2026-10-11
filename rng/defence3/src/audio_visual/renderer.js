@@ -506,8 +506,13 @@ function get3DExact2DVisualSignature(entity, isUnit = false) {
     values[n++] = entity.underConstruction ? 1 : 0;
     values[n++] = entity.isUpgrading ? 1 : 0;
     values[n++] = quantize3DExactRatio(entity.stackingWorkDone, Number(entity.stackingWorkRequired) || 0);
-    values[n++] = quantize3DExactRatio(entity.spawnTimer, Number(entity.spawnCooldown) || 0);
-    values[n++] = researchTask ? quantize3DExactRatio(researchTask.workDone, Number(researchTask.workRequired) || 0) : 0;
+    // (Something queued, whatever its progress: the queue and research bars
+    // are drawn empty then, which says "queued, not being made". Keyed by
+    // progress alone, nothing queued and queued at 0% were one picture: the
+    // one without the bar, until progress first moved.)
+    let queued = !isUnit && entity.spawnQueue && entity.spawnQueue.length > 0 && entity.spawnCooldown > 0;
+    values[n++] = queued ? 1 + quantize3DExactRatio(entity.spawnTimer, Number(entity.spawnCooldown) || 0) : 0;
+    values[n++] = researchTask && researchTask.workRequired > 0 ? 1 + quantize3DExactRatio(researchTask.workDone, Number(researchTask.workRequired) || 0) : 0;
     values[n++] = Math.round((Number(entity.angle) || 0) * 128);
     values[n++] = Number(entity.laserState) || 0;
     values[n++] = Array.isArray(entity.connectedLasers) ? entity.connectedLasers.length : 0;
@@ -3165,11 +3170,11 @@ function build3DFrameData(flat2d = false) {
         let spawner2DTextureFallback = renderer3dExactTextureFallback;
         let spawnerExtraBars = spawner2DTexture ? null : [];
         if (!spawner2DTexture && !s.underConstruction && s.spawnQueue && s.spawnQueue.length > 0 && s.spawnCooldown > 0) {
-            spawnerExtraBars.push({ pct: s.spawnTimer / s.spawnCooldown, bgColor: '#333', fillColor: (s.spawnTimer / s.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
+            spawnerExtraBars.push({ pct: s.spawnTimer / s.spawnCooldown, bgColor: typeof QUEUE_BAR_TRACK === 'string' ? QUEUE_BAR_TRACK : '#6a6a6a', fillColor: (s.spawnTimer / s.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
         }
         if (!spawner2DTexture && !s.underConstruction && s.type === 'research' && s.researchTask && s.researchTask.workRequired > 0) {
             let pct = Math.max(0, Math.min(1, (s.researchTask.workDone || 0) / s.researchTask.workRequired));
-            spawnerExtraBars.push({ pct, bgColor: '#333', fillColor: pct > 0.8 ? '#4f4' : '#4af' });
+            spawnerExtraBars.push({ pct, bgColor: typeof QUEUE_BAR_TRACK === 'string' ? QUEUE_BAR_TRACK : '#6a6a6a', fillColor: pct > 0.8 ? '#4f4' : '#4af' });
         }
         let spawnerStatus = spawner2DTexture ? null : get3DBuildingTextureStatus(s, spawnerExtraBars);
         push3DRenderObject(objects, {
@@ -3213,7 +3218,7 @@ function build3DFrameData(flat2d = false) {
         let barrack2DTextureFallback = renderer3dExactTextureFallback;
         let barrackExtraBars = barrack2DTexture ? null : [];
         if (!barrack2DTexture && !b.underConstruction && b.spawnQueue && b.spawnQueue.length > 0 && b.spawnCooldown > 0) {
-            barrackExtraBars.push({ pct: b.spawnTimer / b.spawnCooldown, bgColor: '#333', fillColor: (b.spawnTimer / b.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
+            barrackExtraBars.push({ pct: b.spawnTimer / b.spawnCooldown, bgColor: typeof QUEUE_BAR_TRACK === 'string' ? QUEUE_BAR_TRACK : '#6a6a6a', fillColor: (b.spawnTimer / b.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
         }
         let barrackStatus = barrack2DTexture ? null : get3DBuildingTextureStatus(b, barrackExtraBars);
         push3DRenderObject(objects, {

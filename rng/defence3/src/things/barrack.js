@@ -157,6 +157,11 @@ function researchAdvanceTick() {
         }
     }
 }
+// The empty part of a production or research bar. A bar is drawn whenever
+// something is queued, empty too: queued and not being made (no workers, no
+// energy, production switched off) is what the player has to see, so its
+// track is light enough to read on a dark building.
+const QUEUE_BAR_TRACK = '#6a6a6a';
 function updateSpawnerProductionProgress(spawner) {
     if (!spawner) return;
     if (!Array.isArray(spawner.spawnQueue) || spawner.spawnQueue.length <= 0) {
@@ -408,7 +413,7 @@ class Barrack {
             if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
                 let pct = this.spawnTimer / this.spawnCooldown;
                 let bw = 24, bh = 3, bx = this.x - bw / 2, by = this.y + 12;
-                ctx.fillStyle = '#333'; ctx.fillRect(bx, by, bw, bh);
+                ctx.fillStyle = QUEUE_BAR_TRACK; ctx.fillRect(bx, by, bw, bh);
                 ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(bx, by, bw * pct, bh);
             }
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 17, 24, 3);
@@ -497,7 +502,7 @@ class CollectorSpawner {
         } else {
             if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
                 let pct = this.spawnTimer / this.spawnCooldown;
-                ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
+                ctx.fillStyle = QUEUE_BAR_TRACK; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
                 ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 6, 24 * pct, 3);
             }
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
@@ -560,7 +565,7 @@ class AstarSpawner {
         } else {
             if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
                 let pct = this.spawnTimer / this.spawnCooldown;
-                ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
+                ctx.fillStyle = QUEUE_BAR_TRACK; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
                 ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 6, 24 * pct, 3);
             }
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
@@ -623,7 +628,7 @@ class SalvagerSpawner {
         } else {
             if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
                 let pct = this.spawnTimer / this.spawnCooldown;
-                ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
+                ctx.fillStyle = QUEUE_BAR_TRACK; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
                 ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 6, 24 * pct, 3);
             }
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
@@ -694,7 +699,7 @@ class BuilderSpawner {
         } else {
             if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
                 let pct = this.spawnTimer / this.spawnCooldown;
-                ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
+                ctx.fillStyle = QUEUE_BAR_TRACK; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
                 ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 6, 24 * pct, 3);
             }
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
@@ -764,7 +769,7 @@ class HealerSpawner {
         } else {
             if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
                 let pct = this.spawnTimer / this.spawnCooldown;
-                ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
+                ctx.fillStyle = QUEUE_BAR_TRACK; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
                 ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 6, 24 * pct, 3);
             }
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
@@ -860,12 +865,12 @@ class ResearchSpawner {
         } else {
             if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
                 let pct = this.spawnTimer / this.spawnCooldown;
-                ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
+                ctx.fillStyle = QUEUE_BAR_TRACK; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
                 ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 6, 24 * pct, 3);
             }
             if (this.researchTask && this.researchTask.workRequired > 0) {
                 let pct = Math.max(0, Math.min(1, (this.researchTask.workDone || 0) / this.researchTask.workRequired));
-                ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 2, 24, 3);
+                ctx.fillStyle = QUEUE_BAR_TRACK; ctx.fillRect(this.x - 12, this.y + 2, 24, 3);
                 ctx.fillStyle = pct > 0.8 ? '#4f4' : '#4af'; ctx.fillRect(this.x - 12, this.y + 2, 24 * pct, 3);
             }
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
