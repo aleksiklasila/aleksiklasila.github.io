@@ -1641,6 +1641,11 @@ function updateHUD() {
     let rates = typeof bb !== 'undefined' && bb && bb.rates && bb.owner === localPlayerId ? bb.rates : null;
     let energy = Math.floor(p.energy);
     _renderHudResource(_hudEls.energy, 'energy', localPlayerId, 'energy', '⚡', '#da0', energy, _hudRateHtml(rates ? rates.energyTotal : 0, 'energy'));
+    // (Over which seconds: the right panel's windows.)
+    if (rates && _hudEls.energy && _hudEls.energy.parentNode) {
+        let tip = `Per second. Energy: income minus upkeep, over the last ${rates.energySec} s; ★: collected minus used moving, over the last ${rates.astarSec} s (the windows of the ⚡/s and ★/s totals in the right panel: click their buttons to change them); 💀: damage taken minus drained.`;
+        if (_hudCache.rateTip !== tip) { _hudCache.rateTip = tip; _hudEls.energy.parentNode.title = tip; }
+    }
     let astarCur = Math.floor(_getPlayerAstarBudgetRemaining(localPlayerId));
     _renderHudResource(_hudEls.astar, 'astarText', localPlayerId, 'astar', '★', '#9aa', astarCur, _hudRateHtml(rates ? rates.astarTotal : 0, 'astar'));
     if (_hudEls.shrine) {

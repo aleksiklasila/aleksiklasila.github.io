@@ -580,11 +580,19 @@ function pageApplyState(st) {
         }
     }
     if (st.cells) {
+        let redrawn = 0;
         for (let j = 0; j + 2 < st.cells.length; j += 3) {
             let idx = st.cells[j], row = grid[Math.floor(idx / GRID_W)];
             if (!row) continue;
-            let cell = row[idx % GRID_W];
-            cell.type = st.cells[j + 1]; cell.owner = st.cells[j + 2];
+            let cell = row[idx % GRID_W], type = st.cells[j + 1], owner = st.cells[j + 2];
+            // (Its piece of the cached background again: a wall or a mine
+            // that became floor, a tile that changed hands. The flag below
+            // alone redraws nothing: a mined-out mine kept its rock.)
+            if ((cell.type !== type || cell.owner !== owner) && typeof _markCombinedBgTileDirty === 'function') {
+                if (++redrawn <= 256) _markCombinedBgTileDirty(idx % GRID_W, Math.floor(idx / GRID_W), 0, cell.type !== type);
+                else if (redrawn === 257 && typeof _markCombinedBgFullDirty === 'function') _markCombinedBgFullDirty();
+            }
+            cell.type = type; cell.owner = owner;
         }
         _tileEntityVersion++;
         if (typeof tileEntityIndexesReset === 'function') tileEntityIndexesReset();

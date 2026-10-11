@@ -2090,6 +2090,9 @@ function _static3DLabelShown(entity) {
     return renderer3dStaticFrame.flat2d ? false : !!(entity && entity.textCanvas && shouldShowBuildingLevels(entity));
 }
 
+// Frames drawn since the simulation's tick changed (build3DFrameData).
+const STATIC_SIG_SLICES = 3;
+let _staticSigPhase = 0, _staticSigTick = -1;
 function _reuseStatic3DObject(target, entity, gx, gy) {
     let entry = entity._r3dStatic;
     let age = entry ? gameTime - entry.tick : -1;
@@ -2100,8 +2103,13 @@ function _reuseStatic3DObject(target, entity, gx, gy) {
         || (entry.object.overlapFadeKey !== undefined && entry.occupied !== renderer3dStaticFrame.occupied.has(gy * GRID_W + gx))
         || getDamageFlashState(entity)) return false;
     // Its panel's inputs (health, progress, aim...), checked once per tick:
-    // unchanged, the structure is kept however long.
-    if (entry.sigTick !== gameTime) {
+    // unchanged, the structure is kept however long. Not all structures in
+    // the tick's first frame (hundreds of signatures and the redrawn panels
+    // of those that changed: that frame took twice as long as the others,
+    // twenty times a second): by tile, a third of them in each of the
+    // tick's first three frames (STATIC_SIG_SLICES; at fewer frames a tick
+    // the rest with the next tick, never more than a tick late).
+    if (entry.sigTick !== gameTime && ((gx * 7 + gy * 13) % STATIC_SIG_SLICES <= _staticSigPhase || entry.sigTick < gameTime - 1)) {
         if (get3DExact2DVisualSignature(entity, false) !== entry.sig) return false;
         entry.sigTick = gameTime;
     }
@@ -2788,6 +2796,7 @@ function buildScaleOverlays(cache) {
 
 function build3DFrameData(flat2d = false) {
     let _ph = _r3dPhase('', 0);
+    if (_staticSigTick !== gameTime) { _staticSigTick = gameTime; _staticSigPhase = 0; } else _staticSigPhase++;
     const sourceView = getLiveRenderView();
     // Every live scene uses the same per-entity LOD selection. Build the
     // projection before culling; zoom never switches to a different renderer.
@@ -3806,13 +3815,38 @@ function _structureRenderFrame(view) {
 // Rank only visible models. Chunk bounds are deliberately conservative and
 // include units behind/beside the camera; they must not consume detail slots.
 // CSS pixels keep LOD independent of render resolution / device pixel ratio.
+const DETAIL_VIEW_HOLD_MS = 150;
+const _detailViewHeld = { key: '', at: -Infinity, tick: -1, x: NaN, y: NaN, zoom: NaN, pitch: NaN, yaw: NaN };
 function _detailViewKey(flat2d) {
     const R = renderer3dInstance;
     // Cache selection within the conservative viewport/chunk margins. The
     // camera matrices, positions and GPU animation still update every frame;
     // only model membership waits for a meaningful camera change.
-    if(!flat2d) return [false,Math.round(camera.x*camera.zoom/24),Math.round(camera.y*camera.zoom/24),
-        Math.round(Math.log(camera.zoom)/.035),Math.round(R.orbitPitch/.025),Math.round(R.orbitYaw/.025),R.cssWidth,R.cssHeight].join('|');
+    if(!flat2d) {
+        const key = [false,Math.round(camera.x*camera.zoom/24),Math.round(camera.y*camera.zoom/24),
+            Math.round(Math.log(camera.zoom)/.035),Math.round(R.orbitPitch/.025),Math.round(R.orbitYaw/.025),R.cssWidth,R.cssHeight].join('|');
+        // While the camera moves the key changes every 24 px: at pan speed
+        // every frame, and every change is a new selection of the models
+        // (scores, picks, new close models, the middle-distance instances:
+        // 8-10 ms). The simulation's tick, twenty times a second, already
+        // makes one frame do most of that work again (the units moved). So
+        // the key is held until the next tick's first frame: one heavier
+        // frame in six at 120 FPS, at an even beat, instead of that one and
+        // another whenever the camera had gone 24 px. (No ticks, a paused
+        // or stalled match: DETAIL_VIEW_HOLD_MS.) What comes into view
+        // meanwhile is drawn as its glyph: the margins above cover far more
+        // than the distance covered in a tick.
+        const V = _detailViewHeld, now = typeof performance !== 'undefined' ? performance.now() : 0;
+        // (A jump is taken at once: a zoom step, a turn, the camera put
+        // somewhere else. Holding is for the steady travel of a pan.)
+        const jump = Math.abs(Math.log(camera.zoom / V.zoom)) > 0.2 || Math.abs(R.orbitPitch - V.pitch) > 0.1 || Math.abs(R.orbitYaw - V.yaw) > 0.1
+            || Math.hypot(camera.x - V.x, camera.y - V.y) * camera.zoom > 0.4 * Math.min(R.cssWidth, R.cssHeight);
+        if (key !== V.key && (jump || gameTime !== V.tick || now - V.at >= DETAIL_VIEW_HOLD_MS || now < V.at)) {
+            V.key = key; V.at = now; V.tick = gameTime;
+            V.x = camera.x; V.y = camera.y; V.zoom = camera.zoom; V.pitch = R.orbitPitch; V.yaw = R.orbitYaw;
+        }
+        return V.key;
+    }
     return [flat2d, camera.x, camera.y, camera.zoom, R.orbitPitch, R.orbitYaw, R.cssWidth, R.cssHeight].join('|');
 }
 function _detailScore(x, z, size, flat2d, retained = false, minPixels = UNIT_DETAIL_MIN_PX) {

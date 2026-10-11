@@ -1351,6 +1351,33 @@ models were drawn solid by the middle-distance model pass
 own, see-through and lifted like the close model, drawn after the frame's
 solid things (`drawColumnModelGhosts`); the far glyph's opacity 0.6 → 0.35.
 
+### 2026-10-12 (later) — 3D pan hitching, queue bars, stale mine tiles, corner layout
+
+- **3D panning** (camera tilted, W+D / S+A back and forth; `.claude/pan3d_probe.cjs`,
+  Edge 1600x900, 20k units): 289 frames in 5.6 s, page time per frame p50 17.6 ms /
+  p95 26 / p99 44 (about 40 FPS) → about 600 frames, p50 2.6 ms / p95 12-14 / p99 17
+  (120 FPS with one heavier frame per simulation tick). What it was: the model
+  selection key (`_detailViewKey`) changes every 24 px of camera travel, at pan speed
+  every frame, and each change re-scored, re-picked and re-packed every model. It is
+  now held until the next tick's first frame (camera jumps at once); the baking of
+  the type pictures no longer forces the middle-distance instances to be packed again
+  on every frame while it runs; the structures' per-tick picture checks are spread
+  over the tick's first three frames. Left: the tick frame itself, ~10-13 ms (scene
+  building ~6, middle-distance instances ~3-4): over the 8.3 ms of a 120 Hz frame.
+- **Queue and research bars** show as soon as something is queued, at 0% too: the
+  cached building picture was keyed by progress alone, so "nothing queued" and
+  "queued at 0%" were one picture. The empty track is lighter (`QUEUE_BAR_TRACK`).
+- **A mined-out mine kept its rock** in the cached background: the page only set
+  its "something changed" flag when a tile's type changed, which redraws nothing.
+  Tiles whose type or owner changed are now marked (`pageApplyState`).
+- **Bottom-left rates** use the windows of the right panel's ⚡/s and ★/s totals;
+  resources sit at the top of the corner, Pop and Research at its bottom.
+- Energy/★ bookkeeping checked (`.claude/probe_energy_delta.js`): the logged gains
+  and spends plus the upkeep table account for the whole change of both stockpiles,
+  with and without boosts (unexplained 0/s on two fixtures). A total that reads
+  positive while energy falls is the window: income averaged over 60 s against
+  upkeep as it is now.
+
 ## Next
 
 Order set by the user (2026-10-09): main thread stable below 50 ms (aim

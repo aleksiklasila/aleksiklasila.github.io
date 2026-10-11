@@ -279,10 +279,22 @@ function _bbComputeRates(owner) {
         astarTotal += d;
     }
     for (let k in astarByUnit) astarByUnit[k] /= sec;
+    // The totals (the bottom-left corner): over the windows the right
+    // panel's totals use (its 1s/10s/30s/60s buttons), so both say the same.
+    let energySec = typeof getEnergyDeltaWindowSeconds === 'function' ? getEnergyDeltaWindowSeconds('total') : sec;
+    let astarSec = typeof getAstarWindowSeconds === 'function' ? getAstarWindowSeconds('total') : sec;
+    if (astarSec !== sec) {
+        astarTotal = 0;
+        let from = gameTime - Math.max(1, Math.floor(TICK_RATE * astarSec));
+        for (let ev of (_ensureAstarLogPlayer(owner) || [])) {
+            if (!ev || !(ev.tick >= from)) continue;
+            astarTotal += Number.isFinite(Number(ev.delta)) ? Number(ev.delta) : -(Math.max(0, Number(ev.used) || 0));
+        }
+    }
     return {
-        sec, upkeep, bySource, astarByUnit,
-        energyTotal: getPlayerEnergyDeltaRate(owner, '', sec) - (Number(upkeep.total) || 0),
-        astarTotal: astarTotal / sec,
+        sec, upkeep, bySource, astarByUnit, energySec, astarSec,
+        energyTotal: getPlayerEnergyDeltaRate(owner, '', energySec) - (Number(upkeep.total) || 0),
+        astarTotal: astarTotal / astarSec,
     };
 }
 

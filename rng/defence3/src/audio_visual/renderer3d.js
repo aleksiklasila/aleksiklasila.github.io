@@ -5828,13 +5828,19 @@
         advanceColumnAtlas(A) {
             if (!A.prepare) return;
             const gl=this.gl, start=performance.now();
+            // (Only the types' panels are the models' (drawColumnModels): the
+            // revision, which makes it pack its instances again, moves with
+            // those, not with every one of the eight directional pictures per
+            // type baked after them: that was the whole set packed again on
+            // every frame for the many seconds the baking takes.)
+            const panelsBefore=Math.min(A.next,A.catalog.styles.length);
             do { A.prepare(A.next++); } while(A.next<A.catalog.styles.length*9 && performance.now()-start<2);
             for(const name of ['color','mask']) {gl.bindTexture(gl.TEXTURE_2D,A[name]);gl.generateMipmap(gl.TEXTURE_2D);}
             gl.bindTexture(gl.TEXTURE_2D,A.meta);
             gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
             gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,A.grid,A.grid,gl.RGBA,gl.FLOAT,A.metaData);
             gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
-            A.revision++;
+            if(Math.min(A.next,A.catalog.styles.length)!==panelsBefore) A.revision++;
             if(A.next>=A.catalog.styles.length*9) {A.prepare=null;A.model=null;A.sources=null;}
         }
 
@@ -5936,7 +5942,8 @@
                         if(code<0||code>=A.catalog.width)continue;
                         const base=A.catalog.lookup[(row*A.catalog.width+code)*4],styleIndex=(base-1)/9,style=A.catalog.styles[styleIndex];
                         if(!style || !A.panels[styleIndex])continue;
-                        const figure=proceduralKind(style);if(!figure)continue;
+                        // (Per style, once: this ran for every instance.)
+                        const figure=style._lodFigure!==undefined?style._lodFigure:(style._lodFigure=proceduralKind(style)||null);if(!figure)continue;
                         const size=kind?Math.max(.28,Math.min(.9,F.r[s]*2.2/C.tile)):.94;
                         const x=F.x[s]/C.tile,z=F.y[s]/C.tile,sx=size*style.scaleX;
                         let sy=size*style.scaleY;
@@ -5952,7 +5959,7 @@
                         // with the scene's other see-through things, after the
                         // solid ones: drawColumnModelGhosts.)
                         const ghost=!kind&&(F.flags[s]&1)!==0;
-                        const mode=kind?F.mode[s]:0,meshKind=figure+':lod',groupKey=styleIndex+'|'+mode+(ghost?'|uc':'');
+                        const mode=kind?F.mode[s]:0,meshKind=figure+':lod',groupKey=(styleIndex*64+(mode&31))*2+(ghost?1:0);
                         let G=S.groups.get(groupKey);
                         if(!G) {
                             const sample={modelKey:style.modelKey,isFlying:style.isFlying,animationMode:mode};
