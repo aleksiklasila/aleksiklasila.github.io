@@ -1304,6 +1304,7 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing') {
         GRID_W = cfgGridW;
         GRID_H = cfgGridH;
         WORLD_W = GRID_W * TILE; WORLD_H = GRID_H * TILE;
+        RESOURCE_MINE_DENSITY = normalizeResourceMineDensity(data.cfg.mineDensity);
         GOLD_MINE_COUNT = data.cfg.goldCount;
         GOLD_MINE_MIN = data.cfg.goldMin;
         GOLD_MINE_MAX = data.cfg.goldMax;
@@ -1997,6 +1998,9 @@ function setupConnection(conn) {
     conn.on('open', () => {
         if (typeof Jukebox !== 'undefined') Jukebox.connected(conn);
         netNoteHeard(conn.peer);
+        // (The simulation worker's own channel on this link: a match's ticks
+        // past a stalled page, sim_client.js.)
+        if (typeof simClientNetAttach === 'function') simClientNetAttach(conn);
         if (conn && conn.peer) {
             peerPresenceById[conn.peer] = true;
             if (!isHost || conn.peer === wsHostId) {
@@ -3087,6 +3091,7 @@ function startHostedGame() {
             matchStartConfig = {
                 gridW: GRID_W,
                 gridH: GRID_H,
+                mineDensity: RESOURCE_MINE_DENSITY,
                 goldCount: GOLD_MINE_COUNT,
                 goldMin: GOLD_MINE_MIN,
                 goldMax: GOLD_MINE_MAX,
@@ -3468,6 +3473,7 @@ function _armMatchStartReadyTimeout(sessionId) {
 }
 
 function readConfigFromMenu() {
+    refreshResourceAbundanceMenu();
     // Zero is a valid resource configuration. Only missing/invalid input uses
     // the fallback; truthiness silently restored mines and starting resources.
     let readResource = (id, fallback, integer = true) => {
@@ -3479,6 +3485,7 @@ function readConfigFromMenu() {
     let size = parseInt(document.getElementById('cfg-mapsize').value) || 80;
     GRID_W = size; GRID_H = size;
     WORLD_W = GRID_W * TILE; WORLD_H = GRID_H * TILE;
+    RESOURCE_MINE_DENSITY = normalizeResourceMineDensity((document.getElementById('cfg-mine-density') || {}).value);
     GOLD_MINE_COUNT = readResource('cfg-gold-count', 18);
     GOLD_MINE_MIN = readResource('cfg-gold-min', 500);
     GOLD_MINE_MAX = Math.max(GOLD_MINE_MIN, readResource('cfg-gold-max', 1500));
@@ -3515,11 +3522,7 @@ function readConfigFromMenu() {
 }
 
 function initLobbySettingsCarousel() {
-    let mapVisibility = document.getElementById('cfg-full-vis');
-    if (mapVisibility && !mapVisibility.dataset.persistenceInit) {
-        mapVisibility.dataset.persistenceInit = '1';
-        mapVisibility.addEventListener('change', saveUiSettingsToStorage);
-    }
+    initResourceAbundanceMenu();
     let wrap = document.getElementById('lobby-settings');
     if (!wrap || wrap.dataset.carouselInit === '1') return;
     wrap.dataset.carouselInit = '1';

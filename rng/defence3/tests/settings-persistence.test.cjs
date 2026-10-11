@@ -11,17 +11,26 @@ const values = new Map();
 
 function session() {
     const mapVisibility = { value: 'history' };
+    const controls = {
+        'cfg-full-vis': mapVisibility,
+        'cfg-mine-density': { value: '10' },
+        'cfg-gold-abundance': { value: '8000' },
+        'cfg-astar-abundance': { value: '16000' },
+        'cfg-net-auto': { checked: true },
+        'cfg-tick-rate': { value: '20' }
+    };
     const context = vm.createContext({
         LS_UI_SETTINGS_KEY: 'defence3_ui_settings_v1',
         localStorage: {
             getItem(key) { return values.get(key) ?? null; },
             setItem(key, value) { values.set(key, value); }
         },
-        document: { getElementById(id) { return id === 'cfg-full-vis' ? mapVisibility : null; } },
+        document: { getElementById(id) { return controls[id] || null; } },
         applyAudioSettings() { context.audioApplied = true; }
     });
     vm.runInContext('let audioEnabled = true; let buildPlacementMode = 2; ' + defaults + storage, context);
     return {
+        controls,
         mapVisibility,
         get(expression) { return vm.runInContext(expression, context); },
         run(code) { vm.runInContext(code, context); }
@@ -38,6 +47,16 @@ assert.equal(first.get('audioBackgroundVolume'), .1);
 first.run("levelVisibilityMode = 0; renderRangeMode = 4; renderRangeAllTeam = false; renderRangeSeeThrough = true; showGoldMineAmountText = true; rallyLineType = 'solid'; rallyLineScope = 'buildings_units'; selectionOutlineType = 'dotted'; selectionOutlineScope = 'units'; selectionOutlineSeeThrough = true; audioVolume = .35; audioBackgroundVolume = .6; buildPlacementMode = 1; saveUiSettingsToStorage()");
 first.mapVisibility.value = 'team';
 first.run('saveUiSettingsToStorage()');
+const stored = JSON.parse(values.get('defence3_ui_settings_v1'));
+for (const field of ['mapVisibility', 'resourceAbundance', 'resourceMineDensity']) {
+    assert.equal(Object.hasOwn(stored, field), false, field + ' is excluded from player preferences');
+}
+// Old browser blobs must not override any match configuration on reload.
+values.set('defence3_ui_settings_v1', JSON.stringify({ ...stored,
+    mapVisibility: 'full', resourceMineDensity: 95,
+    resourceAbundance: { 'cfg-gold-abundance': '1000', 'cfg-astar-abundance': '1000' },
+    'cfg-net-auto': false, 'cfg-tick-rate': 120
+}));
 
 const second = session();
 second.run('loadUiSettingsFromStorage()');
@@ -48,7 +67,12 @@ for (const [name, expected] of Object.entries({
     selectionOutlineScope: 'units', selectionOutlineSeeThrough: true,
     audioVolume: .35, audioBackgroundVolume: .6, buildPlacementMode: 1
 })) assert.equal(second.get(name), expected, name);
-assert.equal(second.mapVisibility.value, 'team');
+assert.equal(second.mapVisibility.value, 'history');
+assert.equal(second.controls['cfg-mine-density'].value, '10');
+assert.equal(second.controls['cfg-gold-abundance'].value, '8000');
+assert.equal(second.controls['cfg-astar-abundance'].value, '16000');
+assert.equal(second.controls['cfg-net-auto'].checked, true);
+assert.equal(second.controls['cfg-tick-rate'].value, '20');
 assert.equal(second.get('showSelectionOutlinesForBuildings()'), false);
 assert.equal(second.get('showSelectionOutlinesForUnits()'), true);
 assert.equal(second.get('audioApplied'), true);
@@ -69,4 +93,4 @@ const corrupt = session();
 corrupt.run('loadUiSettingsFromStorage()');
 assert.equal(corrupt.get('audioVolume'), .35);
 assert.equal(corrupt.get('audioBackgroundVolume'), .6);
-console.log('PASS: settings defaults, round trip, legacy outlines, and audio recovery.');
+console.log('PASS: player preference persistence, match settings excluded from new and old browser storage, legacy outlines, and audio recovery.');

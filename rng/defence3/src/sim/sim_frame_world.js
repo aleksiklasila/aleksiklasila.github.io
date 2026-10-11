@@ -220,6 +220,11 @@ function _simPlain(v, depth) {
 function simFrameResetState() { _simStateLast = { globals: '', cellTypes: null, cellOwners: null, w: 0, h: 0, areas: null }; }
 function simFrameEncodeState(includeCells = true) {
     let out = { players: players.map(p => _simPlain(p, 0)) };
+    // (Each player's upkeep a second, by thing: the HUD's energy rates. When it changed.)
+    if (typeof _upKeepRateByPlayer !== 'undefined') {
+        let uk = JSON.stringify(_upKeepRateByPlayer);
+        if (uk !== _simStateLast.upkeep) { _simStateLast.upkeep = uk; out.upkeep = uk; }
+    }
     // The areas' state only when it changed (dirtyAreas: set by the
     // simulation as areas turn on or off or level up; nothing in this
     // worker draws, so it is cleared here): a pass over every area and a
@@ -234,6 +239,9 @@ function simFrameEncodeState(includeCells = true) {
     }
     let g = { gameTime, gameOver: !!gameOver, winner, resigned: [...resignedTeams], teams: activeTeamIds,
         defeat: typeof _simLocalDefeat === 'string' ? _simLocalDefeat : '',
+        // (The population caps: made each tick in the simulation, from its
+        // houses and their stats; the page's HUD reads them.)
+        caps: typeof playerPopCaps !== 'undefined' ? Array.from(playerPopCaps) : null,
         pathBudget: pathfindBudgetByPlayer ? Array.from(pathfindBudgetByPlayer) : null,
         astarBudget: astarNodeBudgetRemainingByPlayer ? Array.from(astarNodeBudgetRemainingByPlayer) : null };
     let gs = JSON.stringify(g);
@@ -297,8 +305,10 @@ const _PAGE_STRUCT_ACCESSORS = {
     owner: { get() { let o = _pageStructCol(this, 'owner'); return o === -1 && this._kind >= 4 ? undefined : o; } },
     type: { get() { return _pageFrameStrings[_pageStructCol(this, 'type')] || undefined; } },
     unitType: { get() { return _pageFrameStrings[_pageStructCol(this, 'utype')] || undefined; } },
-    energy: { get() { return _pageStructCol(this, 'energy'); } },
-    maxEnergy: { get() { return _pageStructCol(this, 'maxEnergy'); } },
+    // (Mines and drops have none either: a mine read as a structure of no
+    // energy counted as destroyed, and left the selection as it was clicked.)
+    energy: { get() { return this._kind >= 4 ? undefined : _pageStructCol(this, 'energy'); } },
+    maxEnergy: { get() { return this._kind >= 4 ? undefined : _pageStructCol(this, 'maxEnergy'); } },
     spawnTimer: { get() { return _pageStructCol(this, 'spawnTimer'); } },
     spawnCooldown: { get() { return _pageStructCol(this, 'spawnCooldown'); } },
     stackingWorkDone: { get() { return _pageStructCol(this, 'stackWork'); } },
@@ -527,6 +537,7 @@ function _pageResolveRefs(v) {
 }
 function pageApplyState(st) {
     if (!st) return;
+    if (typeof st.upkeep === 'string' && typeof _upKeepRateByPlayer !== 'undefined') { try { _upKeepRateByPlayer = JSON.parse(st.upkeep); } catch { } }
     if (st.players) {
         let sigBefore = players.map((_, pid) => typeof _snapStatMapSignature === 'function' ? _snapStatMapSignature(pid) : '');
         for (let i = 0; i < st.players.length; i++) {
@@ -552,6 +563,7 @@ function pageApplyState(st) {
         winner = g.winner;
         resignedTeams = new Set(g.resigned || []);
         if (Array.isArray(g.teams) && g.teams.length) activeTeamIds = g.teams;
+        if (Array.isArray(g.caps) && typeof playerPopCaps !== 'undefined') for (let i = 0; i < g.caps.length; i++) playerPopCaps[i] = g.caps[i];
         if (g.pathBudget) for (let i = 0; i < g.pathBudget.length; i++) pathfindBudgetByPlayer[i] = g.pathBudget[i];
         if (g.astarBudget) for (let i = 0; i < g.astarBudget.length; i++) astarNodeBudgetRemainingByPlayer[i] = g.astarBudget[i];
     }

@@ -36,7 +36,9 @@ Object.assign(c, { gameTime: 1, visibilityVersion: 1, fullVisibility: true, loca
     beginFrameEffects(){}, buildFrameEffects(){}, endFrameEffects(){}, getTeamLightingGrid: () => [],
     get3DProjectionSnapshot: () => ({camera:{}}), get3DVisibleWorldBounds: () => ({}), getVisibleWorldBounds: () => ({}),
     camera: { zoom:.02 }, getBackgroundMip: () => ({}), getCurrentBuildPreviewData: () => null,
-    rebuildVisibilityMaskCacheIfNeeded(){}, visibilityHistoryState: null });
+    rebuildVisibilityMaskCacheIfNeeded(){}, visibilityHistoryState: null,
+    selectionIndex: () => ({ version: 0, framed: false, n: 0 }), activeSubGroups: {}, selectedUnits: [], selectedEntities: [], ignoreLevelSubgroups: false });
+c.unitsRenderStamp = () => c.gameTime;
 vm.runInContext(source.slice(source.indexOf('let rendererScaleCache ='), source.indexOf('function build3DFrameData(')), c);
 const u = {id:1,x:100,y:100,prevX:90,prevY:95,owner:0,energy:10,r:8,vx:1,vy:0};
 const v = {grid:[],units:[u],towers:[],barracks:[],collectorSpawners:[],goldMines:[],astarMines:[],droppedItems:[],projectiles:[],particles:[],visibilityGrid:[]};

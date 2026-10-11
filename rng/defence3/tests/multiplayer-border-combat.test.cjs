@@ -37,6 +37,10 @@ startingResourcesConfig = ${JSON.stringify({ researchLevels: {}, spawnCounts: {
                 if (!floor(gx - 1, gy) || !floor(gx, gy) || !floor(gx + 1, gy) || !floor(gx + 2, gy)) continue;
                 if (getAreaIdAtTile(gx - 1, gy) !== a || getAreaIdAtTile(gx + 2, gy) !== b) continue;
                 if (borders.some(p => Math.abs(p.gy - gy) < 6 && Math.abs(p.gx - gx) < 6)) continue;
+                // (Away from where the players start: the units left there,
+                // and any building, would join the duels.)
+                if ([...towers, ...barracks, ...collectorSpawners].some(e => Math.abs(e.gx - gx) < 7 && Math.abs(e.gy - gy) < 7)) continue;
+                if (units.some(u => Math.abs(u.x / TILE - gx) < 6 && Math.abs(u.y / TILE - gy) < 6)) continue;
                 borders.push({ gx, gy });
             }
             const pick = (owner, type, used) => units.find(u => u.owner === owner && u.unitType === type && !used.has(u));
@@ -70,8 +74,11 @@ startingResourcesConfig = ${JSON.stringify({ researchLevels: {}, spawnCounts: {
     const kingsHit = () => {
         const now = host.eval(`JSON.stringify(units.map(u => [u.owner, u.unitType, u.dead ? -1 : Math.round(u.energy)]))`);
         const rows = JSON.parse(now);
-        // Each side lost a soldier or had one damaged next to the enemy king.
-        const hurt = owner => rows.filter(r => r[0] === owner && r[1] === 'norm' && r[2] < 40).length;
+        // Each side lost a soldier or had one damaged next to the enemy king
+        // (a soldier killed outright is gone from the list: counted by the
+        // unharmed ones left).
+        const whole = owner => rows.filter(r => r[0] === owner && r[1] === 'norm' && r[2] >= 40).length;
+        const hurt = owner => start.filter(r => r[0] === owner && r[1] === 'norm').length - whole(owner);
         return hurt(0) > 0 && hurt(1) > 0;
     };
     const ok = await world.runUntil(kingsHit, 30000, 100);

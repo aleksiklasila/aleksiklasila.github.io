@@ -160,6 +160,23 @@
             white-space: nowrap;
         }
 
+        .resource-abundance-row {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 4px;
+        }
+
+        .resource-abundance-select {
+            width: 100%;
+            min-width: 0;
+        }
+
+        .resource-abundance-help {
+            color: #929ba8;
+            font-size: 10px;
+            line-height: 1.4;
+        }
+
         .lobby-setting-row.compact label {
             font-size: 11px;
             color: #bbb;
@@ -263,12 +280,12 @@
         #hud .hud-btn:hover { filter: brightness(1.3); background: #1b1f24; }
         #hud .hud-btn-danger { border-color: #744; color: #f99; font-size: 13px; }
 
-        /* Left panel footer: as tall as #bottom-bar (2px border + 89px), four
+        /* Left panel footer: as tall as #bottom-bar (2px border + 107px), four
            lines: energy, star, shrine, population. */
         #left-footer {
             flex-shrink: 0;
             margin-top: auto;
-            height: 91px;
+            height: 109px;
             box-sizing: border-box;
             display: flex;
             flex-direction: column;
@@ -296,15 +313,28 @@
             column-gap: 3px;
             align-items: baseline;
             font-size: 14px;
-            line-height: 18px;
-            cursor: help;
+            line-height: 20px;
+            cursor: default;
         }
 
         .lf-stack .hud-energy, .lf-stack .hud-astar, .lf-stack .hud-shrine { display: contents; }
-        .lf-pop { height: 19px; }
-        /* Research count on one line beside the population. */
-        .lf-pop #bb-research-label { grid-template-columns: auto auto; column-gap: 4px; align-items: baseline; }
-        .lf-pop #bb-research-label .bb-lcap, .lf-pop #bb-research-label .bb-lcount { grid-column: auto; }
+        /* Population and research: a line each under the resources, the
+           label where their values and glyphs are, the numbers after it. */
+        .lf-pop {
+            position: relative;
+            display: grid;
+            grid-template-columns: max-content 1fr;
+            grid-auto-rows: 20px;
+            column-gap: 6px;
+            justify-content: start;
+            align-items: baseline;
+            font-size: 14px;
+            line-height: 20px;
+        }
+        .lf-pop #hud-pop, .lf-pop #bb-research-label { display: contents; }
+        .lf-pop .pop-label, .lf-pop #bb-research-label .bb-lcap { grid-column: 1; text-align: right; color: #8a949c; font-weight: normal; font-size: 12px; }
+        .lf-pop .pop-nums, .lf-pop #bb-research-label .bb-lcount { grid-column: 2; text-align: left; font-size: 13px; line-height: 20px; white-space: nowrap; letter-spacing: -0.2px; }
+        .lf-pop .pop-label, .lf-pop #bb-research-label .bb-lcap { line-height: 20px; }
         .lf-drain { display: inline-flex; gap: 2px; align-items: center; align-self: center; }
         .lf-drain-arrow { font-size: 12px; line-height: 12px; padding: 0 1px; color: #888; background: transparent; }
         .lf-stack .bb-lv { text-align: right; }
@@ -319,7 +349,7 @@
             color: #ccc;
             font-size: 14px;
             white-space: nowrap;
-            cursor: help;
+            cursor: default;
         }
 
         .hud-pop .pop-label { color: #8a949c; font-weight: normal; }

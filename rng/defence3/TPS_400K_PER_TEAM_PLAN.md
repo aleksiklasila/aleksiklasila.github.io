@@ -1026,6 +1026,184 @@ Spikes left, by what the bench shows (largest first):
   on this machine as it was loaded (45-60 ms a tick): the plan's kernel work
   (MOVE, the index, the worker tier) is still what TPS needs.
 
+### 2026-10-11 (later) — known failures; drawn motion; ticks past a stalled page
+
+User: fix the known failures or the tests; then the spikes, worst first,
+major reworks allowed; **a spike must not drop TPS** (one player's stall is
+every player's tick rate in a match); the page should not stall either.
+
+**Known failures (6 files).** `visibility-history-performance`,
+`render-frame-stability`, `performance-regressions`, `lod-visible-budget`:
+the tests followed the code (the units are the live list; the page shows the
+presentation's tick; a selection mask without a selection; the columns'
+`player`). `kernel-object-equivalence`: removed (its premise, JS kernels
+beside the Rust ones, is gone). `unit-collision-smoothness`: the
+separation's share of a push 1.0 → 0.8 (`UNIT_SEPARATION_TIER_GAIN`;
+reversals 1.45% → 1.10%, overlap 5.4% → 7.1%; 0.6 gives 1.01%, 1.15 gives
+2.5%, 1.3 gives 11.6%), gate kept at 1.5%. `multiplayer-corruption-fuzz`:
+two real bugs in the patch decode (`utils_snapshot.js`), found by shifting
+the fuzz's schedule (`SHIFT_MS`): a unit a patch removed stayed counted in
+the chunk/type/block planes and in its visibility cover (now taken out
+before the unit state is collected), and a patch that rebuilt a player's
+stat tables (a research rolled back) left that player's other units with
+their old effective stats until their staggered refresh (now refreshed in
+the decode). Passes in both modes at shifts 0, 600, 1150, 1900, 2750.
+`SIM_RULES_REVISION` 11.
+
+**Drawn motion (user: constant micro-jitter, back and forth).** Two causes.
+(1) A presentation frame's motion ran from its arrival over the average gap
+between arrivals: a frame a few ms early or late cut a step short or held a
+unit for a frame (a lone unit's drawn speed varied by half at every tick:
+CV 0.204, 24 held frames of 473). Now a playout clock (`sim_client.js`
+`_simPlayArrived` / `_simPlayAdvance`): frames queued by tick, a play
+position in ticks advancing with the drawn frames' time at the frames' own
+pace, a set distance behind the newest (their spacing plus what their
+arrivals vary by), its rate nudged to hold that distance; no rebase pass.
+CV 0.040, no held frames. (2) The detailed unit layer (3D models up close)
+was cached by `gameTime`, the page's tick, while the units came from the
+presentation's frame: on a frame between the two the layer drew the old
+tick's records at the new frame's alpha (back, then forth). Now keyed by the
+units' frame (`unitsRenderStamp()`, `_pageFrameSerial`). Guard:
+`render-frame-stability` reads the layer's own records (0 reversals; 24 with
+the old key). Probe: `tests/motion-jitter-probe.cjs`.
+**Own units' light** (flicker between areas): the frame's light column
+gives a unit of the player (or one it watches) at least the full-light
+range, as the 0.3 margin was meant to; the shader and the middle models
+follow.
+
+**Ticks past a stalled page.** Measured first
+(`tests/page-stall-tps-probe.cjs`: a host and a guest page in Edge over
+WebRTC, a page's main thread held busy on purpose, each worker's tick times
+around it): the page dispatches ticks 3 ahead, so a stall over ~150 ms
+starved its worker; a host page's stall stopped the sealing for everyone,
+and a guest page's stall left that guest behind, which the shared pace then
+slowed everyone down for.
+
+| stall | before: ticks lost, host / guest | now |
+| --- | --- | --- |
+| host page 250 ms | 5 / 5 | 0 / 0 |
+| host page 500 ms | 11 / 12 | 0 / 0 |
+| host page 1000 ms | 25 / 25 | 0 / 0 |
+| guest page 500 ms | 6 / 8 | 0 / 0 |
+| guest page 1000 ms | 9 / 9 | 0 / 0 |
+| alone, 500 ms | 7 | 0 |
+
+(Longest gap between two ticks through any of them: 55-70 ms. Ten stalls of
+120 ms in two seconds: 0 lost. The same at 100k units. Orders given right
+before a stall by the stalled page, and during it by the other, reach every
+unit; the peers' state hashes are equal afterwards.)
+
+How (`sim_worker.js` `_simAutoStep`, `sim_client.js` "ticks the worker
+takes by itself", `main.js` `lockstepAdoptAuto*`):
+- The page's heartbeat (every pump, frame and watchdog message) and the
+  tick clock live in the shared control block. When the pump has not been
+  heard for 70 ms (170 for a hidden page), the worker goes on by itself on
+  the page's tick clock.
+- It runs ticks whose commands it holds: every sealed bundle is handed to
+  the worker at once (`simClientNoteSealed`: a host's as it seals, a
+  guest's as it commits). Alone: ticks without commands.
+- A host's worker **seals** the ticks its page has not, without anyone's
+  commands, as far ahead of their deadlines as the page would (150 ms), and
+  sends those bundles itself.
+- **The worker's own data channel**: each page link gets a second,
+  negotiated RTCDataChannel on the same peer connection, transferred to the
+  simulation worker as it is made (`simClientNetAttach`; Edge and Chrome
+  hand channels to workers; where they do not, the other end closes and
+  nothing changes). A host's worker sends every sealed bundle over it (the
+  page's and its own); a guest's worker keeps them, so a guest's own stall
+  costs that guest no tick either, and passes on to its page the ones the
+  host's worker sealed.
+- One source per tick: the page claims each tick it dispatches, and a host
+  each tick it seals, by a compare-and-exchange in the shared block; the
+  worker claims the same way. The worker tells the page of each tick it
+  took (`autoRan`, `autoSealed`), and the page's lockstep moves on from
+  those notes alone (history, bookkeeping, the tick clock).
+- Commands are never lost: a tick the worker sealed is, for the page, a
+  tick sealed without every packet (the late-seal rule): packets that were
+  there or come later are carried to the next tick, the host's own too; a
+  guest sends its packet again for a tick its worker ran.
+- The page bounds it: the limit word is the first tick the worker must
+  leave alone (a resync patch's tick, a join, a flush tick; 0 while a match
+  is paused, restoring, migrating). Lowered only once the worker is out of a
+  claim (an intent word). Resync points are planned past everything sealed
+  or taken (`_resyncHostFirstOpenTick`). A request to the worker waits for
+  the page to have heard of every tick the worker took. At most 60 ticks a
+  stall (3 s): longer is an outage, the match's own rules.
+- Late packets no longer cost a tick either: with ticks dispatched ahead, a
+  tick still missing a guest's packet is sealed without it once the
+  worker's queue is down to 2 (`HOST_LATE_SEAL_LEAD_TICKS`), not 50 ms
+  after it was due; and while that guest stays behind, the next ticks are
+  sealed as early as ever. The shared pace no longer counts a stalled page
+  as a slow simulation.
+`?simauto=0` turns it off. Not covered by the node harness (its worker has
+no timers or shared block of its own): the probe with `GATE=1` is the check.
+
+**Page tasks (the page should not stall either).** New tool:
+`.claude/profspikes.cjs` (a page profile's longest busy stretches, or with
+`TASKS=1` its longest single tasks, with what ran in them). SEL300 in 3D,
+five boxes a second, on the tree as the order-marker work had left it: 9.8
+FPS, frames of 220-266 ms. Fixed:
+- `getOrderMarkers` walked every selected unit's view on every new frame
+  (60-80 ms at 300k) and made a marker with a string key for each of 20k
+  rally points: now from the selection's slots in the frame's columns
+  (views only for units with an order on its way or an attack target),
+  whole-number keys, at most 2000 markers, and a big selection's list kept
+  150 ms unless an order is pending.
+- 3D box release (`get3DBoxSelection` 52-68 ms): the far view's unit pass is
+  a function of typed reads only, its hits' slots handed to the selection's
+  index (no pass over the selection for them): ~18 ms.
+- `_infoPanelBinUnits`: a selection of a quarter of the slots or more is
+  read in slot order (the mask tells which), not in selection order.
+- `getUnitById` on the page is the frame's id map (it made a 600k-entry map
+  again after every birth or death when a rally-to-unit marker was drawn).
+After: 21.7 FPS in the same phase on the same (loaded) machine. Still the
+longest tasks there: the unit columns' upload on a new frame
+(`bufferSubData` 33-61 ms; 110-140 ms while the page was saturated), the
+info panel's building groups (`renderBarrackGroupInfo`: every member's
+stats through its view, ~20 ms per group of thousands; next: bins from the
+structure table as for units), `pushMarker` of up to 2000 markers a frame.
+
+### 2026-10-11 (evening) — boosts, map shapes, UI fixes (user's list)
+
+- **Research queue item's menu closed within a second**: it held the task
+  object, and beside the worker every tick brings new ones. Told now by
+  stat and target level.
+- **Mines could not be selected**: a mine's view read energy 0 (the
+  structure table's column) and the selection pruned it as destroyed.
+  Mines and drops have no energy again. The ★ mine has a thumbnail.
+- **Display settings apply at once** (`applyVisualSettingChange`: the
+  caches made under the old setting are dropped; mine amounts, rally lines,
+  outlines, level and range visibility).
+- **⚡/★ rates read 0** in the side panel and on the bar: their logs are
+  filled inside the worker. Each tick's sums by source now come with the
+  tick's events (`_simDeltaEvents`), and the upkeep table with the state.
+- **Negative stockpiles scale nothing; boosts instead** (`data_dynamic.js`
+  BOOSTS, rules 12). Per thing, an energy boost and (units) a ★ boost of
+  0-4 steps, a step one thing level: every stat but health, move speed and
+  ★ per tile is read `steps` levels up the thing's table for the energy
+  boost, move speed and ★ per tile for the ★ boost; the thing's own
+  level is untouched; upkeep and ★ per tile rise with it, which is the
+  cost. A stockpile below 0 switches that resource's boosts off (checked
+  every 20 ticks). Applied like a finished research: the tables rebuilt in
+  place, units at their staggered refresh, buildings at their research
+  sweep, pop cap and adjacency at once. Order: `setBoost`. UI: two rows of
+  slots on every tile of the bottom bar's top row (grey ★ over orange
+  ⚡; x1 x2 x4 x8 x16; one tall row for things without a ★ boost),
+  per-slot hover text, paler while that resource is in debt or the boost is
+  being taken up; the thing's menu says it in words. The effects popups are
+  gone. Test: `boost.test.cjs` (replaces `resource-penalty-stats`).
+- **Map types hold the density's mines in a shape of their own**
+  (`generateResourceMinesMixed`, `mapMineLayout`): the first N tiles by a
+  per-type order are the mines (so more mines make thicker roads, a wider
+  ring, bigger islands), the first of them by a per-type score are ★
+  (exact counts). Arena: a ring, the resources in wedges; island: one disc,
+  in rings; islands: four islets of one resource each by every spawn;
+  solar system: a sun of energy and planets of one resource each on four
+  orbits; crossroads: two roads, lines of one resource then the other;
+  random as before. Spawns follow the shapes (outside the island, inside
+  the ring, between the roads at equal distances). Pictures:
+  `node .claude/mapshots.cjs`.
+
 ## Next
 
 Order set by the user (2026-10-09): main thread stable below 50 ms (aim

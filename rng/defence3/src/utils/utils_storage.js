@@ -7,33 +7,38 @@ function readStoredSettings(key) {
     catch { return null; }
 }
 
+// Only per-player display, audio and interaction preferences belong here.
+// Match settings are read from menu controls by the explicit settings export.
+function createUiSettingsSnapshot() {
+    let ui = {};
+    if (Number.isFinite(levelVisibilityMode)) ui.levelVisibilityMode = Math.floor(levelVisibilityMode);
+    if (Number.isFinite(renderRangeMode)) ui.renderRangeMode = Math.floor(renderRangeMode);
+    // (Range overlays are off by default now: a mode saved before this
+    // version is not restored, see loadUiSettingsFromStorage.)
+    ui.renderRangeVer = RENDER_RANGE_SETTINGS_VER;
+    ui.renderRangeAllTeam = renderRangeAllTeam;
+    ui.renderRangeSeeThrough = renderRangeSeeThrough;
+    if (typeof audioEnabled === 'boolean') ui.audioEnabled = !!audioEnabled;
+    if (Number.isFinite(audioVolume)) ui.audioVolume = Math.max(0, Math.min(1, Number(audioVolume)));
+    if (Number.isFinite(audioBackgroundVolume)) ui.audioBackgroundVolume = Math.max(0, Math.min(1, Number(audioBackgroundVolume)));
+    if (typeof showGoldMineAmountText === 'boolean') ui.showGoldMineAmountText = !!showGoldMineAmountText;
+    if (typeof rallyLineType !== 'undefined') ui.rallyLineType = rallyLineType;
+    if (typeof rallyLineScope !== 'undefined') ui.rallyLineScope = rallyLineScope;
+    if (typeof selectionOutlineType !== 'undefined') ui.selectionOutlineType = selectionOutlineType;
+    if (typeof selectionOutlineSeeThrough === 'boolean') ui.selectionOutlineSeeThrough = selectionOutlineSeeThrough;
+    if (typeof selectionOutlineScope !== 'undefined') ui.selectionOutlineScope = selectionOutlineScope;
+    if (Number.isFinite(buildPlacementMode)) ui.buildPlacementMode = Math.floor(buildPlacementMode);
+    if (typeof graphicsOptions === 'object' && graphicsOptions) ui.graphicsOptions = { ...graphicsOptions };
+    if (typeof fpsTargetByDisplay === 'object' && fpsTargetByDisplay) ui.fpsTargetByDisplay = { ...fpsTargetByDisplay };
+    if (typeof cameraSlideEnabled === 'boolean') ui.cameraSlideEnabled = cameraSlideEnabled;
+    if (typeof pixelSnapCamera === 'boolean') ui.pixelSnapCamera = pixelSnapCamera;
+    return ui;
+}
+
 function saveUiSettingsToStorage() {
     try {
         // Build payload defensively so one missing setting does not block all persistence.
-        let ui = {};
-        if (Number.isFinite(levelVisibilityMode)) ui.levelVisibilityMode = Math.floor(levelVisibilityMode);
-        if (Number.isFinite(renderRangeMode)) ui.renderRangeMode = Math.floor(renderRangeMode);
-        // (Range overlays are off by default now: a mode saved before this
-        // version is not restored, see loadUiSettingsFromStorage.)
-        ui.renderRangeVer = RENDER_RANGE_SETTINGS_VER;
-        ui.renderRangeAllTeam = renderRangeAllTeam;
-        ui.renderRangeSeeThrough = renderRangeSeeThrough;
-        if (typeof audioEnabled === 'boolean') ui.audioEnabled = !!audioEnabled;
-        if (Number.isFinite(audioVolume)) ui.audioVolume = Math.max(0, Math.min(1, Number(audioVolume)));
-        if (Number.isFinite(audioBackgroundVolume)) ui.audioBackgroundVolume = Math.max(0, Math.min(1, Number(audioBackgroundVolume)));
-        if (typeof showGoldMineAmountText === 'boolean') ui.showGoldMineAmountText = !!showGoldMineAmountText;
-        if (typeof rallyLineType !== 'undefined') ui.rallyLineType = rallyLineType;
-        if (typeof rallyLineScope !== 'undefined') ui.rallyLineScope = rallyLineScope;
-        if (typeof selectionOutlineType !== 'undefined') ui.selectionOutlineType = selectionOutlineType;
-        if (typeof selectionOutlineSeeThrough === 'boolean') ui.selectionOutlineSeeThrough = selectionOutlineSeeThrough;
-        if (typeof selectionOutlineScope !== 'undefined') ui.selectionOutlineScope = selectionOutlineScope;
-        if (Number.isFinite(buildPlacementMode)) ui.buildPlacementMode = Math.floor(buildPlacementMode);
-        if (typeof graphicsOptions === 'object' && graphicsOptions) ui.graphicsOptions = graphicsOptions;
-        if (typeof fpsTargetByDisplay === 'object' && fpsTargetByDisplay) ui.fpsTargetByDisplay = fpsTargetByDisplay;
-        if (typeof cameraSlideEnabled === 'boolean') ui.cameraSlideEnabled = cameraSlideEnabled;
-        if (typeof pixelSnapCamera === 'boolean') ui.pixelSnapCamera = pixelSnapCamera;
-        let mapVisibility = document.getElementById('cfg-full-vis');
-        if (mapVisibility && ['full', 'team', 'history'].includes(mapVisibility.value)) ui.mapVisibility = mapVisibility.value;
+        const ui = createUiSettingsSnapshot();
         localStorage.setItem(LS_UI_SETTINGS_KEY, JSON.stringify(ui));
 
         // Keep audio in its own key as a robust fallback for older/corrupt UI blobs.
@@ -101,10 +106,6 @@ function loadUiSettingsFromStorage() {
                         let v = normalizeFpsTargetSetting(s.fpsTargetByDisplay[key]);
                         if (v !== 'auto') fpsTargetByDisplay[key] = v;
                     }
-                }
-                if (['full', 'team', 'history'].includes(s.mapVisibility)) {
-                    let mapVisibility = document.getElementById('cfg-full-vis');
-                    if (mapVisibility) mapVisibility.value = s.mapVisibility;
                 }
         }
 

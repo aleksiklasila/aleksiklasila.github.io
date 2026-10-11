@@ -15,6 +15,35 @@ body.app-fullscreen #bottom-bar { display: none; }
     height: 44px; flex-shrink: 0; padding: 1px 2px 3px;
 }
 .bb-row::-webkit-scrollbar { height: 4px; }
+/* The things' row: room above the tiles for their boost slots. */
+#bb-things.bb-row { height: 62px; padding-top: 19px; }
+
+/* Boost slots on top of a thing's tile: the ★ row (units) over the energy
+   row; filled from the left; hollow while that resource is in debt;
+   brightening while the thing's units and buildings take the boost. */
+.bb-boost { position: absolute; left: -2px; right: -2px; top: -20px; height: 17px; display: flex; flex-direction: column; gap: 1px; cursor: pointer; }
+.bb-boost-row { flex: 1; display: flex; gap: 1px; }
+.bb-boost-row > i { flex: 1; border-radius: 1px; }
+/* Empty slots: the row's colour, see-through. */
+.bb-boost-e > i { background: rgba(255, 154, 46, 0.24); }
+.bb-boost-a > i { background: rgba(201, 206, 211, 0.24); }
+.bb-boost-e > i:hover { background: rgba(255, 154, 46, 0.55); }
+.bb-boost-a > i:hover { background: rgba(201, 206, 211, 0.55); }
+.bb-boost-e > i.on { background: #ff9a1f; }
+.bb-boost-a > i.on { background: #d6dade; }
+.bb-boost-e > i.on:hover { background: #ffb85c; }
+.bb-boost-a > i.on:hover { background: #fff; }
+/* A boost chosen but not applied (that resource is in debt): tinted red. */
+.bb-boost-e.bb-boost-off.bb-boost-set > i.on { background: #e8553a; }
+.bb-boost-a.bb-boost-off.bb-boost-set > i.on { background: #d98f88; }
+/* Just set: from the paler colour to the full one while it is taken up. */
+.bb-boost-applying > i.on { animation: bb-boost-apply 2500ms linear both; }
+.bb-thing-body { display: contents; }
+@keyframes bb-boost-apply { from { opacity: 0.55; } to { opacity: 1; } }
+.bb-thing.bb-unowned .bb-boost, .bb-thing.bb-none .bb-boost { opacity: 0.6; }
+.bb-menu-boost { font-size: 10px; line-height: 13px; padding: 2px 6px 4px; max-width: 300px; white-space: normal; }
+.bb-boost-txt-e { color: #ffb45e; }
+.bb-boost-txt-a { color: #d5dade; }
 
 /* Thing tile: icon in the middle, ⚡/s in the top-right corner and ★/s in the
    bottom-right corner, both over the icon's edge with a dark outline. */
@@ -59,7 +88,7 @@ body.app-fullscreen #bottom-bar { display: none; }
 .bb-things-wrap > .bb-row, #bb-research { flex: 1; min-width: 0; }
 #bb-things-label, #bb-research-label {
     flex: 0 0 auto; display: grid; grid-template-columns: 7ch auto; column-gap: 4px; row-gap: 1px;
-    align-content: center; justify-content: end; align-items: baseline; cursor: help;
+    align-content: center; justify-content: end; align-items: baseline;
     font-size: 15px; line-height: 19px; font-weight: bold; font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 #bb-research-label { grid-template-columns: auto; font-size: 12px; line-height: 14px; }

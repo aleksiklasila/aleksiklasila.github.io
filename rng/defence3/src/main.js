@@ -2155,10 +2155,12 @@ function initInput() {
                     boxSelected = true;
                     let newUnits = [];
                     let newEntities = [];
+                    let projectedSlots = null, projectedSlotCount = 0;
                     if (renderDimensionMode === '3d' && selectionBoxScreen) {
                         let projectedSelection = get3DBoxSelection(selectionBoxScreen);
                         newUnits = projectedSelection.units;
                         newEntities = projectedSelection.entities;
+                        projectedSlots = projectedSelection.unitSlots; projectedSlotCount = projectedSelection.unitSlotCount;
                     } else {
                         newUnits = _ownUnitsInBox(sx, sy, ex, ey);
                         for (let b of barracks) {
@@ -2211,6 +2213,7 @@ function initInput() {
                             selectedEntities = newEntities;
                             // (Its slots are known already: no pass over its units for them.)
                             if (_boxUnitSlotsFor === newUnits) selectionIndexAdopt(newUnits, _boxUnitSlots, _boxUnitSlotCount);
+                            else if (projectedSlots) selectionIndexAdopt(newUnits, projectedSlots, projectedSlotCount);
                         }
                     }
                 }
@@ -2399,7 +2402,7 @@ function initInput() {
         selectionOutlineSeeThroughToggle.checked = selectionOutlineSeeThrough;
         selectionOutlineSeeThroughToggle.addEventListener('change', () => {
             selectionOutlineSeeThrough = selectionOutlineSeeThroughToggle.checked;
-            saveUiSettingsToStorage();
+            saveUiSettingsToStorage(); applyVisualSettingChange();
         });
     }
     // Settings > Rendering > Graphics. The preset select mirrors the
@@ -2483,14 +2486,14 @@ function initInput() {
         goldMineTextToggle.checked = !!showGoldMineAmountText;
         goldMineTextToggle.addEventListener('change', () => {
             showGoldMineAmountText = goldMineTextToggle.checked;
-            saveUiSettingsToStorage();
+            saveUiSettingsToStorage(); applyVisualSettingChange();
         });
     }
     if (rallyLineTypeSelect) {
         rallyLineTypeSelect.value = rallyLineType;
         rallyLineTypeSelect.addEventListener('change', () => {
             rallyLineType = rallyLineTypeSelect.value === OVERLAY_LINE_SOLID ? OVERLAY_LINE_SOLID : OVERLAY_LINE_DOTTED;
-            saveUiSettingsToStorage();
+            saveUiSettingsToStorage(); applyVisualSettingChange();
         });
     }
     if (rallyLineScopeSelect) {
@@ -2499,7 +2502,7 @@ function initInput() {
             let v = String(rallyLineScopeSelect.value || OVERLAY_SCOPE_BUILDINGS);
             if (v !== OVERLAY_SCOPE_BUILDINGS && v !== OVERLAY_SCOPE_BUILDINGS_UNITS && v !== OVERLAY_SCOPE_NONE) v = OVERLAY_SCOPE_BUILDINGS;
             rallyLineScope = v;
-            saveUiSettingsToStorage();
+            saveUiSettingsToStorage(); applyVisualSettingChange();
         });
     }
     if (selectionOutlineScopeSelect) {
@@ -2508,14 +2511,14 @@ function initInput() {
             let v = String(selectionOutlineScopeSelect.value || OVERLAY_SCOPE_BUILDINGS_UNITS);
             if (v !== OVERLAY_SCOPE_UNITS && v !== OVERLAY_SCOPE_BUILDINGS_UNITS && v !== OVERLAY_SCOPE_NONE) v = OVERLAY_SCOPE_BUILDINGS_UNITS;
             selectionOutlineScope = v;
-            saveUiSettingsToStorage();
+            saveUiSettingsToStorage(); applyVisualSettingChange();
         });
     }
     if (selectionOutlineTypeSelect) {
         selectionOutlineTypeSelect.value = selectionOutlineType;
         selectionOutlineTypeSelect.addEventListener('change', () => {
             selectionOutlineType = selectionOutlineTypeSelect.value === OVERLAY_LINE_SOLID ? OVERLAY_LINE_SOLID : OVERLAY_LINE_DOTTED;
-            saveUiSettingsToStorage();
+            saveUiSettingsToStorage(); applyVisualSettingChange();
         });
     }
 
@@ -2581,26 +2584,26 @@ function initInput() {
         updateLevelVisibilityButton();
         btnLevelVisibility.addEventListener('change', () => {
             levelVisibilityMode = Number(btnLevelVisibility.value);
-            saveUiSettingsToStorage();
+            saveUiSettingsToStorage(); applyVisualSettingChange();
         });
     }
 
     const rangeTeam = document.getElementById('setting-range-team');
     if (rangeTeam) {
         rangeTeam.value = renderRangeAllTeam ? 'team' : 'selected';
-        rangeTeam.addEventListener('change', () => { renderRangeAllTeam = rangeTeam.value === 'team'; saveUiSettingsToStorage(); });
+        rangeTeam.addEventListener('change', () => { renderRangeAllTeam = rangeTeam.value === 'team'; saveUiSettingsToStorage(); applyVisualSettingChange(); });
     }
     const rangeThrough = document.getElementById('setting-range-through');
     if (rangeThrough) {
         rangeThrough.value = String(renderRangeSeeThrough);
-        rangeThrough.addEventListener('change', () => { renderRangeSeeThrough = rangeThrough.value === 'true'; saveUiSettingsToStorage(); });
+        rangeThrough.addEventListener('change', () => { renderRangeSeeThrough = rangeThrough.value === 'true'; saveUiSettingsToStorage(); applyVisualSettingChange(); });
     }
     const btnRenderRange = document.getElementById('btn-render-range');
     if (btnRenderRange) {
         updateRenderRangeButton();
         btnRenderRange.addEventListener('change', () => {
             renderRangeMode = Number(btnRenderRange.value);
-            saveUiSettingsToStorage();
+            saveUiSettingsToStorage(); applyVisualSettingChange();
         });
     }
 
@@ -3099,6 +3102,10 @@ function _pathStartInRegion(labels, region, gx, gy) {
 // died (callers skip dead ones), never one of another list.
 let _unitById = new Map(), _unitByIdFor = null;
 function _unitByIdMap() {
+    // (The page beside a simulation worker: its units are the frame's views,
+    // kept by id as frames come. A map made here was made again after every
+    // birth or death: 600k entries.)
+    if (typeof simClientCurrentUnitVis === 'function' && simClientCurrentUnitVis()) return _pageUnitsById;
     // (Kept as units are added and retired; a unit put into the list another
     // way (tools, tests) shows as a size that does not match: made again.)
     if (_unitByIdFor !== units || _unitById.size !== units.length) {
@@ -4024,6 +4031,9 @@ function processAction(a, playerId) {
                     target.isResearching = false;
                 }
             }
+        } else if (a.action === 'setBoost') {
+            // A thing's energy or ★ boost (data_dynamic.js BOOSTS).
+            setPlayerThingBoost(playerId, a.kind, a.key, a.res, a.steps);
         } else if (a.action === 'shrineDrain') {
             // Where the player's shrine drains to: 1 energy, 2 \u2605, 3 both, 0 neither
             // (shrines off: no draining, the order is ignored).
@@ -4317,6 +4327,8 @@ function startGame() {
         p.researchTask = null;
         p.shrine = 0;
         p.shrineDrain = SHRINE_DRAIN_DEFAULT;
+        p.boosts = {};
+        p.boostOn = { energy: true, astar: true };
         if (p._resourceFixedValues) p._resourceFixedValues.shrine = 0;
     }
     shrineResetPending();
@@ -4331,6 +4343,8 @@ function startGame() {
     let teams = (activeTeamIds && activeTeamIds.length > 0) ? activeTeamIds : [0, 1];
     let spawns = pickPlayerSpawns(teams.length);
     generateResourceMinesMixed(spawns);
+    // (Every player starts within reach of both resources: map.js.)
+    spawns = settleSpawnsNearResources(spawns);
 
     let teamSpawnPos = {};
     let teamStarterSpawnState = {};
@@ -5281,6 +5295,12 @@ const HOST_LATE_SEAL_MAX_SILENCE_MS = 1000;
 function hostLateSealGraceMs() {
     return Math.max(TICK_MS, 40);
 }
+// Host, ticks dispatched ahead to the simulation worker: a tick still
+// missing a packet is sealed without it once the worker has this many ticks
+// left to run (of its lead of SIM_CLIENT_LEAD_TICKS): early enough that
+// neither this peer's worker nor the others', which get the bundle a
+// transit later, run a tick late for it.
+const HOST_LATE_SEAL_LEAD_TICKS = 2;
 
 function maybeBuildHostBundle(tick, participants = null, sealLate = false) {
     if (!isHost) return null;
@@ -5302,6 +5322,10 @@ function maybeBuildHostBundle(tick, participants = null, sealLate = false) {
         if (!sealLate) return null;
         (missing || (missing = [])).push(pid);
     }
+    // (The host's simulation worker seals ticks itself while this page is
+    // stalled: then this one is its, and its note brings the bundle,
+    // lockstepAdoptAutoSeal.)
+    if (typeof simClientSealClaim === 'function' && !simClientSealClaim(t)) return null;
     if (missing) {
         let late = lockstepHostLateByTick[t] || (lockstepHostLateByTick[t] = new Set());
         for (let pid of missing) { pmap[pid] = _hostLatePlaceholderPacket(t, pid); late.add(pid); }
@@ -5317,7 +5341,127 @@ function maybeBuildHostBundle(tick, participants = null, sealLate = false) {
     // Building a bundle seals and commits the tick in one step.
     lockstepBundleByTick[t] = bundle;
     lockstepCommittedByTick[t] = true;
+    // (The simulation worker holds it from now on, and sends it to the
+    // guests' workers: its ticks run whatever the pages are doing.)
+    if (typeof simClientNoteSealed === 'function') {
+        let msg = { type: 'TICK_BUNDLE', w: packTickBundleForWire(bundle), c: 1, d: netMatchInputDelay, pace: netSimulationTickMs() };
+        if (missing) msg.l = missing;
+        simClientNoteSealed(t, { msg });
+    }
     return bundle;
+}
+
+// A bundle without anyone's commands, for a tick sealed without waiting for
+// them: a stalled host page's simulation worker seals these (sim_worker.js),
+// and the page builds the same from its note. participants: [peer, team].
+function buildEmptyTickBundle(tick, participants) {
+    let packets = participants.map(([peerId, teamId]) => {
+        let p = { tick, peerId, teamId, actions: [] };
+        p.checksum = computeTickPacketChecksum(tick, peerId, teamId, p.actions);
+        return p;
+    }).sort((a, b) => String(a.peerId).localeCompare(String(b.peerId)));
+    return { tick, packets, combinedChecksum: computeTickBundleChecksum(tick, packets, 0) };
+}
+
+// How far the simulation worker may go by itself while this page is stalled
+// (sim_client.js simClientAutoArm): the first tick it must leave to the page
+// (one with work before it: a resync patch, a join, a flush), none while the
+// match is not simply running.
+function lockstepAutoLimit() {
+    if (!gameStarted || gameOver) return 0;
+    if (typeof simClientWorldReady === 'function' && !simClientWorldReady()) return 0;
+    if (!isMultiplayer) return 0x7fffffff;
+    if (lockstepFatalStopActive || lockstepResyncPauseActive || matchStartWaitingForReady) return 0;
+    let limit = 0x7fffffff;
+    if (isHost) {
+        for (let [, p] of resyncHostPending) if (p.T < limit) limit = p.T;
+        for (let t of resyncHostFlushTicks) if (t >= currentTick && t < limit) limit = t;
+    } else {
+        if (lockstepDesyncDetected || hostMigration) return 0;
+        if (resyncGuest && resyncGuest.T >= 0 && resyncGuest.T < limit) limit = resyncGuest.T;
+    }
+    return Math.max(0, limit);
+}
+// What the worker needs for it: the pace, and a host's bundle of nobody's
+// commands (who plays, on which team; whose links must have a worker's
+// channel for it: everyone following the match).
+function lockstepAutoInfo() {
+    let tickMs = netSimulationTickMs();
+    if (!isMultiplayer) return { role: 'solo', tickMs };
+    if (!isHost) return { role: 'guest', tickMs, host: String(wsHostId || '') };
+    let ids = getActiveMatchPeerIds(), setup = computeTeamSetupFromLobby();
+    return {
+        role: 'host', tickMs, d: netMatchInputDelay, pace: tickMs,
+        participants: ids.map(pid => [pid, pid === myPeerId ? localPlayerId : Math.floor(Number(setup.teamByPeer[pid]) || 0)]),
+        peers: connections.filter(c => c && c.peer).map(c => String(c.peer)).sort()
+    };
+}
+// Host: the worker sealed `tick` without anyone's commands (this page was
+// stalled; the guests have its bundle from the worker). The page's lockstep
+// takes the bundle as a tick sealed without every packet: commands that
+// were here for it, or come for it later, run on a later tick.
+const _lockstepAutoSealedTicks = new Set();
+function lockstepAdoptAutoSeal(tick, msg) {
+    if (!isHost || !isMultiplayer || lockstepBundleByTick[tick]) return;
+    let bundle = unpackTickBundleFromWire(msg && msg.w);
+    if (!bundle || bundle.tick !== tick) return;
+    let pmap = lockstepHostPacketsByTick[tick] || {};
+    let late = new Set();
+    for (let p of bundle.packets) {
+        let pid = String(p.peerId);
+        // (Its own: what was queued for this tick.)
+        let have = pid === myPeerId ? (lockstepLocalPacketByTick[tick] || ((localInputBuffer[tick] || []).length > 0 ? buildLocalTickPacket(tick) : null)) : pmap[pid];
+        if (!have) { if (pid !== myPeerId) late.add(pid); continue; }
+        if (!Array.isArray(have.actions) || have.actions.length === 0) continue;
+        let carry = lockstepHostCarryByPeer[pid] || (lockstepHostCarryByPeer[pid] = []);
+        for (let a of have.actions) carry.push(a);
+        netCounters.lateCommandsCarried = (netCounters.lateCommandsCarried || 0) + have.actions.length;
+    }
+    delete localInputBuffer[tick];
+    delete lockstepLocalPacketByTick[tick];
+    lockstepHostPacketsByTick[tick] = {};
+    for (let p of bundle.packets) lockstepHostPacketsByTick[tick][p.peerId] = p;
+    if (late.size > 0) lockstepHostLateByTick[tick] = late;
+    lockstepBundleByTick[tick] = bundle;
+    lockstepCommittedByTick[tick] = true;
+    _lockstepAutoSealedTicks.add(tick);
+    for (let t of _lockstepAutoSealedTicks) if (t < tick - 600) _lockstepAutoSealedTicks.delete(t);
+    netCounters.autoSeals = (netCounters.autoSeals || 0) + 1;
+    // (Over the page's links too: a peer whose worker has no channel, or
+    // missed it.)
+    sendHostBundle(tick);
+}
+// The worker ran `tick` by itself (this page was stalled): the page's
+// lockstep moves on as if it had dispatched it. Commands of this player
+// that were queued for it and did not make it run on a later tick.
+let _lockstepAdoptingTick = null;
+function lockstepAdoptAutoTick(tick, dueAbs) {
+    if (tick !== currentTick) { logLockstepWarning('The simulation worker ran a tick out of the page\'s order', { tick, currentTick }); return; }
+    if (!isMultiplayer) {
+        let acts = localInputBuffer[tick];
+        if (acts && acts.length) { localInputBuffer[tick + 1] = acts.concat(localInputBuffer[tick + 1] || []); delete localInputBuffer[tick]; }
+    } else if (isHost) {
+        if (!lockstepBundleByTick[tick]) logLockstepWarning('The simulation worker ran a tick the page has no bundle of', { tick });
+    } else {
+        // (The host tells from its own marks whether it sealed the tick
+        // without them: a copy of a packet it had in time is ignored.)
+        let bundle = lockstepBundleByTick[tick] || lockstepPendingBundleByTick[tick] || null;
+        let hostConn = netGetHostConnection();
+        if (bundle) _guestResendIfSealedWithout(tick, bundle, hostConn);
+        else if (hostConn) {
+            let own = lockstepLocalPacketByTick[tick] || ((localInputBuffer[tick] || []).length > 0 ? buildLocalTickPacket(tick) : null);
+            if (own && Array.isArray(own.actions) && own.actions.length > 0) { try { hostConn.send({ type: 'TICK_PACKETS', packets: [own] }); netCounters.messagesOut++; } catch { } }
+        }
+    }
+    netCounters.autoTicks = (netCounters.autoTicks || 0) + 1;
+    _lockstepAdoptingTick = { due: dueAbs };
+    try { runOneTick(); } finally { _lockstepAdoptingTick = null; }
+    // (Its slot of the tick clock is taken; the page may dispatch ahead
+    // again at once.)
+    let tickMs = netSimulationTickMs();
+    if (typeof _tickAccumulator === 'number') _tickAccumulator = Math.max(_tickAccumulator - tickMs, -tickMs);
+    if (typeof _hiddenTickAccumulator === 'number') _hiddenTickAccumulator = Math.max(_hiddenTickAccumulator - tickMs, -tickMs);
+    waitingForRemoteSince = 0;
 }
 
 function sendHostBundle(tick, force = false) {
@@ -5331,6 +5475,9 @@ function sendHostBundle(tick, force = false) {
     // Whose packet this tick was sealed without (they lengthen their lead).
     let late = lockstepHostLateByTick[t];
     if (late && late.size > 0) msg.l = Array.from(late);
+    // (One the host's worker sealed while this page was stalled: nobody's
+    // packet was late for it.)
+    if (_lockstepAutoSealedTicks.has(t)) msg.auto = 1;
     let prev = [];
     for (let k = NET_TICK_REDUNDANCY; k >= 1; k--) {
         let b = lockstepBundleByTick[t - k] || lockstepHistoryByTick[t - k];
@@ -5360,15 +5507,23 @@ function _hostAdvanceBundles(now) {
     // reload): then every peer waits for it, as its units cannot be
     // commanded meanwhile.
     let sealLate = false;
-    if (!lockstepBundleByTick[currentTick] && waitingForRemoteSince > 0) {
+    // With ticks dispatched ahead to the simulation worker, the tick is
+    // needed before it is due: once the worker has one tick or none left to
+    // run, waiting any longer for a packet costs every peer a late tick. The
+    // lead up to there is the packet's grace (no tick waits for it).
+    let ahead = typeof simClientDispatchAhead === 'function' && simClientDispatchAhead() && simClientWorldReady() && simClientTickFree(currentTick);
+    let needed = ahead && simClientWorkerAhead() <= HOST_LATE_SEAL_LEAD_TICKS;
+    if (!lockstepBundleByTick[currentTick] && (waitingForRemoteSince > 0 || ahead)) {
         let pmap = lockstepHostPacketsByTick[currentTick] || {};
         let missing = participants.filter(pid => pid !== myPeerId && !pmap[pid]);
         let behindLimit = Math.ceil(HOST_LATE_SEAL_MAX_SILENCE_MS / TICK_MS);
         let alive = pid => (now - (lockstepHostLastPacketAt[pid] || 0)) < HOST_LATE_SEAL_MAX_SILENCE_MS
             && (currentTick - (Number.isFinite(lockstepHostLastPacketTick[pid]) ? lockstepHostLastPacketTick[pid] : -Infinity)) <= behindLimit;
-        if (missing.every(alive)) {
-            sealLate = (now - waitingForRemoteSince) >= hostLateSealGraceMs();
+        if (missing.length > 0 && missing.every(alive)) {
+            sealLate = needed || (waitingForRemoteSince > 0 && (now - waitingForRemoteSince) >= hostLateSealGraceMs());
             if (!sealLate) {
+                // (Still behind: the bundles go out as early as ever, so the
+                // other peers keep their whole lead while this one is away.)
                 let prev = lockstepHostLateByTick[currentTick - 1];
                 sealLate = !!prev && missing.every(pid => prev.has(pid) && !lockstepHostOnTimeSince(pid, currentTick - 1));
             }
@@ -5411,7 +5566,7 @@ function handleIncomingTickBundle(conn, data) {
     if (data && data.h) resyncGuestReceiveHashes(data.h);
     if (data && Number.isFinite(data.d)) netMatchInputDelay = Math.max(0, Math.min(NET_MAX_INPUT_DELAY_TICKS, Math.floor(data.d)));
     if (data && Number.isFinite(data.pace) && data.pace >= TICK_MS) netMatchTickMs = data.pace;
-    if (data && Array.isArray(data.l) && myPeerId && data.l.includes(myPeerId)) netNoteOwnPacketLate();
+    if (data && Array.isArray(data.l) && myPeerId && data.l.includes(myPeerId) && !data.auto) netNoteOwnPacketLate();
     let bundle = data && data.bundle ? data.bundle : unpackTickBundleFromWire(data && data.w);
     if (!bundle || typeof bundle !== 'object') return;
     // Guests normally wait for START_GAME_ALL_READY; ticks from the host mean
@@ -5824,6 +5979,9 @@ function processDeferredGuestLockstepWindow(now, tick) {
             continue;
         }
         lockstepCommittedByTick[t] = true;
+        // (The simulation worker holds it from now on: it runs on time
+        // whatever this page is doing.)
+        if (typeof simClientNoteSealed === 'function') simClientNoteSealed(t, { actions: (bundle.packets || []).flatMap(p => Array.isArray(p.actions) ? p.actions : []), flush: !!bundle.flush });
         _guestResendIfSealedWithout(t, bundle, hostConn);
     }
 }
@@ -6092,8 +6250,10 @@ function runOneTick() {
     // hash and is repaired by a resync.
     if (inWorker) {
         // The worker runs it; the page applies the result when it comes
-        // (sim_client.js), including the per-tick page work below.
-        simClientRunTick(processedTick, allActs, teams, flushTick);
+        // (sim_client.js), including the per-tick page work below. (One the
+        // worker ran by itself, lockstepAdoptAutoTick: only noted.)
+        if (_lockstepAdoptingTick) simClientNoteAutoTick(processedTick, _lockstepAdoptingTick.due);
+        else simClientRunTick(processedTick, allActs, teams, flushTick);
     } else {
         try { gameTick(); } catch (err) { reportRuntimeError('tick', err); }
         netNoteSimulationTick(performance.now(), performance.now() - tickWorkStart);

@@ -6368,7 +6368,9 @@
             // A detailed view with more units than its detail budget: the rest
             // as glyphs, under the models (drawn first, no depth: the models
             // drawn after cover them).
-            if (this.columnLayers) {
+            // (In 2D units are always in front: their glyphs go after the
+            // sprites, below.)
+            if (this.columnLayers && !snapshot.flat2d) {
                 this.drawFrameColumns(this.columnLayers,snapshot);
                 gl.bindVertexArray(null);
                 gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.disable(gl.BLEND);
@@ -6383,6 +6385,7 @@
             if (snapshot.flat2d) {
                 if (snapshot.flatBatch) this.drawFlatBatch(snapshot.flatBatch);
                 else this.drawFlatSprites(objects);
+                if (this.columnLayers) this.drawFrameColumns(this.columnLayers,snapshot);
                 this.drawFx(snapshot.fx, true);
                 this.drawRangeVisibility(snapshot.overlays);
                 this.drawSelectionMask(snapshot.overlays, snapshot);

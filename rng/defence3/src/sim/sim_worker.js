@@ -347,8 +347,7 @@ function _simAutoClaim(word, t) {
 function _simAutoStep() {
     const C = _simCtl, A = _simAuto;
     A.timer = 0;
-    // (The page's ticks and requests first: a tick waiting for its deadline.)
-    if (_simStream.length || !_simAutoOn()) { _simAutoPoll(); return; }
+    if (!_simAutoOn()) { _simAutoPoll(); return; }
     const limit = Atomics.load(C, SIM_CTL_LIMIT);
     let now = _simNowAbs();
     if (limit <= 0 || now - (A.base + Atomics.load(C, SIM_CTL_BEAT)) < Math.max(40, Atomics.load(C, SIM_CTL_STALE))) { A.run = 0; _simAutoPoll(); return; }
@@ -368,8 +367,10 @@ function _simAutoStep() {
             _simPost({ type: 'autoSealed', epoch: _simEpoch, tick: s, msg });
         }
     }
+    // (Running: the page's ticks and requests first; the stream holds a
+    // tick waiting for its deadline.)
     const t = currentTick;
-    if (t >= limit) { _simAutoPoll(); return; }
+    if (_simStream.length || t >= limit) { _simAutoPoll(); return; }
     const due = A.due + (t - A.dueTick) * tickMs;
     if (now < due - 0.5) { _simAutoPoll(due - now); return; }
     // (More than a tick late, the worker itself held up: from now, as the
@@ -494,6 +495,7 @@ function _simStart(msg) {
     _simStartTimings = T;
     _simEvents = [];
     _simLocalDefeat = '';
+    _simDeltaLast = { e: [], a: [] };
     if (_simMode !== 'authority') {
         _simPost({ type: 'started', epoch: _simEpoch, tick: currentTick, hash: computeLockstepStateHashFast(currentTick) });
         return;
@@ -509,6 +511,34 @@ function _simStart(msg) {
 }
 
 let _simStartTimings = null;
+// What each player's energy and star stockpiles gained and paid this tick,
+// by source (the logs the HUD's rates are read from are filled here, in the
+// simulation: the page gets each tick's sums and keeps logs of its own).
+// (Per log, the last entry already sent.)
+let _simDeltaLast = { e: [], a: [] };
+function _simDeltaEvents(events) {
+    if (typeof energyDeltaEventLogByPlayer === 'undefined' || typeof astarUsageEventLogByPlayer === 'undefined') return;
+    for (const [tag, logs, last] of [['E', energyDeltaEventLogByPlayer, _simDeltaLast.e], ['A', astarUsageEventLogByPlayer, _simDeltaLast.a]]) {
+        for (let pid = 0; pid < logs.length; pid++) {
+            const b = logs[pid];
+            if (!Array.isArray(b) || b.length === 0) continue;
+            const stop = last[pid], sums = new Map();
+            for (let i = b.length - 1; i >= 0 && b[i] !== stop; i--) {
+                const ev = b[i];
+                if (!ev) continue;
+                const d = tag === 'E' ? Number(ev.delta) : (Number.isFinite(Number(ev.delta)) ? Number(ev.delta) : -Math.max(0, Number(ev.used) || 0));
+                if (!Number.isFinite(d) || d === 0) continue;
+                const key = tag === 'E' ? String(ev.source || '') : String(ev.unitType || 'other') + '|' + String(ev.source || '');
+                sums.set(key, (sums.get(key) || 0) + d);
+            }
+            last[pid] = b[b.length - 1];
+            for (const [key, d] of sums) {
+                if (tag === 'E') events.push(['E', pid, key, d]);
+                else { const cut = key.indexOf('|'); events.push(['A', pid, key.slice(0, cut), key.slice(cut + 1), d]); }
+            }
+        }
+    }
+}
 // ---- one tick: the same work runOneTick does, with the page's commands ----
 function _simTick(msg) {
     let t0 = performance.now();
@@ -593,6 +623,7 @@ function _simPostResult(tick, hash, lock, simMs, report = null) {
         simPresentationPublish(tick);
         world = {state:simFrameEncodeState(false), details:simFrameDetails(), structureDetails:simFrameStructureDetails()};
     } else world = _simEncodeWorld(transfer);
+    _simDeltaEvents(_simEvents);
     let events = _simEvents;
     _simEvents = [];
     // The local player's raw visibility grid (computed here anyway): the

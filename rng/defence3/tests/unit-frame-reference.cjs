@@ -52,6 +52,8 @@ module.exports = function simFrameEncode() {
         let flash = Number(u.attackFlash) || 0;
         F.flash[s] = flash <= 0 ? 0 : flash >= 255 ? 255 : flash;
         F.cmd[s] = u.commandState | 0;
+        F.orderDest[s] = getUnitOrderDestinationCode(u);
+        F.orderTick[s] = currentTick - 1;
         // Look: activity, facing, walk phase, status face, own light, panel.
         if (u.isSnake) {
             let act = getUnit3DActivity(u);

@@ -40,11 +40,16 @@ for (const [, file] of html.matchAll(/<script src="\.\/(src\/[^"?]+)(?:\?[^" ]*)
 const run = code => vm.runInContext(code, context);
 // These rebuild gameplay caches, unrelated to settings serialization.
 run('rebuildPrecomputedStatsMap = refreshStartingResourcesPreviewPrecomputedStats = () => {};');
+values.set('defence3_ui_settings_v1', JSON.stringify({ audioVolume: .99, mapVisibility: 'full', resourceMineDensity: 95 }));
+run('audioVolume = .23;');
 
 for (const mode of ['full', 'team', 'history']) {
     controls.get('cfg-full-vis').value = mode;
     controls.get('cfg-gamemode').value = 'killking';
     const snapshot = run('createMainMenuSettingsSnapshot()');
+    assert.equal(snapshot.ui.audioVolume, .23, 'export captures current player preferences');
+    assert.equal(Object.hasOwn(snapshot.ui, 'mapVisibility'), false);
+    assert.equal(Object.hasOwn(snapshot.ui, 'resourceMineDensity'), false);
     assert.equal(snapshot.editableConfig.config.MAP_VISIBILITY, mode);
     assert.equal(snapshot.editableConfig.config.GAME_MODE, 'killking');
     assert.equal(snapshot.lobby.selects['cfg-full-vis'], mode);
@@ -67,7 +72,7 @@ for (const mode of ['full', 'team', 'history']) {
     run('saveUiSettingsToStorage()');
     controls.get('cfg-full-vis').value = '';
     run('loadUiSettingsFromStorage()');
-    assert.equal(controls.get('cfg-full-vis').value, mode);
+    assert.equal(controls.get('cfg-full-vis').value, '', 'player preferences do not restore match visibility');
 }
 // Config-only imports work without lobby controls and ignore absent/invalid fields.
 run("applyEditableRuntimeConfigObject({config: {MAP_VISIBILITY: 'team', GAME_MODE: 'destroy'}})");
@@ -77,4 +82,4 @@ run("applyEditableRuntimeConfigObject({config: {MAP_VISIBILITY: 'invalid', GAME_
 run('applyEditableRuntimeConfigObject({config: {}})');
 assert.equal(controls.get('cfg-full-vis').value, 'team');
 assert.equal(controls.get('cfg-gamemode').value, 'destroy');
-console.log(`PASS: all ${controls.size} menu/display controls round trip; visibility modes, Config, browser storage and legacy config imports.`);
+console.log(`PASS: all ${controls.size} menu/display controls round trip; visibility modes, Config, match visibility excluded from browser storage and legacy config imports.`);

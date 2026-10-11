@@ -495,6 +495,17 @@ function getItemThumbnail(key, size, intoCanvas = null) {
         ctx.textBaseline = 'middle';
         ctx.strokeText('\u26A1', cx, cy + 1 * s);
         ctx.fillText('\u26A1', cx, cy + 1 * s);
+    } else if (key === 'astarmine') {
+        // (The star mine's tile: grey, its star.)
+        ctx.fillStyle = '#8f8f8f'; ctx.fillRect(cx - 10 * s, cy - 10 * s, 20 * s, 20 * s);
+        ctx.fillStyle = '#f4f4f4';
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = Math.max(1, s * 0.9);
+        ctx.font = `${Math.max(11, Math.round(15 * s))}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.strokeText('★', cx, cy + 1 * s);
+        ctx.fillText('★', cx, cy + 1 * s);
     } else if (def && def.target === 'wall' && def.isCloud) {
         // Cloud tower
         ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(cx, cy - 1 * s, 12 * s, 0, 6.28); ctx.fill();
@@ -569,10 +580,12 @@ function getItemThumbnail(key, size, intoCanvas = null) {
             ctx.beginPath(); ctx.arc(cx - 2 * s, cy - 2 * s, 2 * s, 0, 6.28); ctx.fill();
             ctx.beginPath(); ctx.arc(cx + 2 * s, cy - 2 * s, 2 * s, 0, 6.28); ctx.fill();
         } else if (us.vis === 'triangle') {
-            let tr = r * 0.5;
+            let marked = typeof unitTypeMark === 'function' ? unitTypeMark(key) : '';
+            let tr = r * (marked ? 0.95 : 0.5);
             ctx.fillStyle = us.color; ctx.beginPath();
             ctx.moveTo(cx, cy + tr); ctx.lineTo(cx - tr, cy - tr); ctx.lineTo(cx + tr, cy - tr);
             ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
+            if (marked) drawUnitTypeMark(ctx, marked, cx, cy - tr * 0.36, tr);
         } else if (us.vis === 'star') {
             if (key === 'collector' || key === 'astar_collector') {
                 ctx.font = `${Math.max(10, Math.round(r * 2.2))}px Arial`;

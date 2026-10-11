@@ -142,7 +142,7 @@ function _renderHudResource(el, cacheKey, owner, resourceKey, glyph, glyphColor,
     let flooredValue = Math.floor(numericValue);
     let valueColor = _getHudResourceValueColor(owner, resourceKey, flooredValue);
     let html = `<span class="hud-res-value" style="color:${valueColor}" title="${formatBigNumber(flooredValue)}">${formatCompactNumber(flooredValue)}</span>`
-        + (glyphHtml || `<span class="hud-resource-glyph-btn" data-resource-key="${resourceKey}" title="Show ${resourceKey} stat effect details" style="color:${glyphColor};cursor:pointer;user-select:none">${glyph}</span>`)
+        + (glyphHtml || `<span class="hud-resource-glyph-btn" data-resource-key="${resourceKey}" style="color:${glyphColor};user-select:none">${glyph}</span>`)
         + extraHtml + rateHtml;
     if (_hudCache[cacheKey] !== html) {
         _hudCache[cacheKey] = html;
@@ -355,16 +355,28 @@ function buildResourcePenaltyPopupHtml(resourceKey, owner = localPlayerId) {
     let currentValue = Number(player && player[stockpileKey]);
     if (!Number.isFinite(currentValue)) currentValue = 0;
     let maxSeen = Math.max(1, Number(player && player.resourceMaxValues && player.resourceMaxValues[stockpileKey]) || 0);
-    let penaltyMultiplier = Math.max(1, Number(_getPlayerResourcePenaltyMultiplier(owner, stockpileKey)) || 1);
-
+    // A stockpile in debt scales no stat: it switches the player's boosts of
+    // that resource off (data_dynamic.js BOOSTS). What this popup tells.
+    let on = typeof isPlayerBoostOn !== 'function' || isPlayerBoostOn(owner, stockpileKey);
+    let isAstar = stockpileKey === 'astar', boosts = (player && player.boosts) || {};
+    let rows = '';
+    for (let id of Object.keys(boosts).sort()) {
+        let steps = Math.floor(Number(boosts[id][isAstar ? 1 : 0]) || 0);
+        if (!(steps > 0)) continue;
+        let cut = id.indexOf(':'), kind = id.slice(0, cut), key = id.slice(cut + 1);
+        let name = kind === 'unit' ? getUnitDisplayName(key) : getBuildingDisplayName(key);
+        rows += `<div style="display:flex;justify-content:space-between;gap:12px"><span>${_escapeHtml(name)}</span><span style="color:${on ? cfg.color : '#888'}">x${formatCompactNumber(Math.pow(2, steps))} (+${steps} level${steps > 1 ? 's' : ''})${on ? '' : ' — off'}</span></div>`;
+    }
     let html = `<div style="display:flex;flex-direction:column;gap:10px">`;
-    html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">`
-        + `<div style="display:flex;align-items:center;gap:10px"><span style="font-size:28px;color:${cfg.color}">${cfg.icon}</span><div style="font-size:18px;color:#dff3ff;font-weight:600">${cfg.label === cfg.icon ? '' : _escapeHtml(cfg.label) + ' '}Effects</div></div>`
-        + `<div style="font-size:12px;color:#a7bed0">p = ${_escapeHtml(_formatResourcePenaltyPopupFactor(penaltyMultiplier))}</div>`
+    html += `<div style="display:flex;align-items:center;gap:10px"><span style="font-size:28px;color:${cfg.color}">${cfg.icon}</span><div style="font-size:18px;color:#dff3ff;font-weight:600">${cfg.label === cfg.icon ? '' : _escapeHtml(cfg.label) + ' '}Boosts</div></div>`;
+    html += `<div style="font-size:12px;color:#c9d6e0;line-height:17px">`
+        + (stockpileKey === 'energy' || isAstar
+            ? `Each thing in the bottom bar has ${isAstar ? 'a row of ★ slots (units)' : 'a row of ⚡ slots'} on top of its tile. A filled slot is one thing level: ${isAstar ? 'the unit moves, and pays ★ per tile, as that many levels higher' : 'every stat of the thing but move speed and ★ per tile is that many levels higher, upkeep too'} (never past the last level). Its own level and stacks stay what they are.`
+            : 'This resource has no boosts.')
         + `</div>`;
-    html += _buildResourcePenaltyBarHtml(currentValue, maxSeen);
-    html += _buildResourcePenaltyAlgorithmHtml(currentValue, maxSeen, penaltyMultiplier, stockpileKey);
-    html += _buildResourcePenaltyAffectedStatsHtml(stockpileKey, owner);
+    html += `<div style="font-size:13px;color:${on ? '#8fe28f' : '#f0a070'}">${on ? 'Boosts of this resource are applied.' : 'Below 0: boosts of this resource are not applied until it is back above 0. Nothing else changes.'}</div>`;
+    html += `<div style="font-size:12px;color:#a7bed0">Now ${_escapeHtml(formatBigNumber(currentValue, 1))} · most held ${_escapeHtml(formatBigNumber(maxSeen, 1))}</div>`;
+    if (rows) html += `<div style="font-size:12px;color:#dfe8ee;display:flex;flex-direction:column;gap:2px;border-top:1px solid #2a3a48;padding-top:6px">${rows}</div>`;
     html += `</div>`;
     return html;
 }
@@ -397,6 +409,9 @@ function refreshResourcePenaltyPopupContent(owner = localPlayerId) {
 }
 
 function _bindHudResourcePopupTrigger(el, resourceKey) {
+    // (No effects popup any more: a stockpile in debt only switches boosts
+    // off, which the bottom bar's slots show.)
+    return;
     if (!el || el.dataset.resourcePopupBound === '1') return;
     el.dataset.resourcePopupBound = '1';
     el.addEventListener('click', (ev) => {
@@ -1695,8 +1710,9 @@ function _renderHudPop(pop, houseCap, maxPop) {
         if (capCls === 'pop-warn') lines.push('Almost full: build or upgrade houses soon.');
     }
     if (!el._tip) {
-        el.innerHTML = `<span class="pop-label">Pop </span><span class="pop-n"></span><span class="pop-sep">/</span><span class="pop-n"></span>`
-            + `<span class="pop-sep">/</span><span class="pop-n"></span><span class="lf-tip" role="tooltip"></span>`;
+        // (The label and the numbers: two cells of the stack's lines.)
+        el.innerHTML = `<span class="pop-label">Pop</span><span class="pop-nums"><span class="pop-n"></span><span class="pop-sep">/</span><span class="pop-n"></span>`
+            + `<span class="pop-sep">/</span><span class="pop-n"></span></span><span class="lf-tip" role="tooltip"></span>`;
         el._nums = el.querySelectorAll('.pop-n');
         el._tip = el.querySelector('.lf-tip');
     }
@@ -2351,8 +2367,14 @@ function _infoPanelBinUnits(F, X, B) {
     const slots = X.slots, mask = X.mask, n = X.n;
     const T = F.type, BL = F.blevel, LV = F.level, FL = F.flags, OW = F.owner, EN = F.energy, ME = F.maxEnergy;
     let totalEnergy = 0, totalMax = 0, total = 0;
-    for (let i = 0; i < n; i++) {
-        const s = slots[i];
+    // A selection of a good part of every unit: the slots in memory order
+    // (the mask tells which), not in the selection's order: seven columns
+    // read at 300k scattered slots are that many cache misses, 20-30 ms
+    // beside a busy renderer; in order, a few. (The bins are then listed by
+    // their first slot.)
+    const dense = n * 4 >= F.n, end = dense ? Math.min(F.n, mask.length) : n;
+    for (let i = 0; i < end; i++) {
+        const s = dense ? i : slots[i];
         if (mask[s] === 0) continue;
         const fl = FL[s], blr = BL[s], bl = blr > 0 ? blr & 127 : 1;
         const k = (((((T[s] & 1023) * 128 + bl) * 128 + (LV[s] & 127)) * 16 + ((OW[s] + 1) & 15)) * 4) + ((fl & SIM_UF_FROZEN) !== 0 ? 1 : 0) + ((fl & SIM_UF_SANDY) !== 0 ? 2 : 0);

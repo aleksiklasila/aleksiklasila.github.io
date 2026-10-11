@@ -61,7 +61,7 @@ function _simClientScriptUrls() {
         .filter(src => /\/src\//.test(src) && !/bootstrap\.js|sim_shadow\.js|sim_worker\.js|sim_client\.js/.test(src));
 }
 
-const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261008-brain1';
+const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261011-boost2';
 
 function _simClientCreate() {
     let c = {
@@ -306,19 +306,26 @@ function simClientAutoBarrier(tick) {
     let C = _simAutoCtl();
     if (C && Atomics.load(C, SIM_CTL_LIMIT) > tick) _simAutoSetLimit(C, Math.max(0, tick));
 }
-// The worker stops taking ticks (till the next pump); returns the first tick
-// neither the page nor the worker has sealed or taken.
+// The worker stops taking ticks (till the next pump); returns the last tick
+// the page or the worker has sealed or taken.
 function simClientAutoFreeze() {
     let C = _simAutoCtl();
-    if (!C) return currentTick;
+    if (!C) return currentTick - 1;
     _simAutoSetLimit(C, 0);
-    return Math.max(currentTick, Atomics.load(C, SIM_CTL_CLAIM) + 1, Atomics.load(C, SIM_CTL_SEALED) + 1);
+    return Math.max(currentTick - 1, Atomics.load(C, SIM_CTL_CLAIM), Atomics.load(C, SIM_CTL_SEALED));
 }
 // Whether the worker has not taken `tick` by itself (when it has, its note
 // is on its way and the page's lockstep waits for it).
 function simClientTickFree(tick) {
     let C = _simAutoCtl();
     return !C || Atomics.load(C, SIM_CTL_CLAIM) < tick;
+}
+// The worker took `tick`, or (a host) sealed it, and the page has not had
+// its note yet: the page's lockstep waits for it.
+function simClientAutoPending(tick) {
+    let C = _simAutoCtl();
+    if (!C) return false;
+    return Atomics.load(C, SIM_CTL_CLAIM) >= tick || (isMultiplayer && isHost && Atomics.load(C, SIM_CTL_SEALED) >= tick && !lockstepBundleByTick[tick]);
 }
 function _simAutoClaimWord(word, tick) {
     let C = _simAutoCtl();
@@ -947,6 +954,9 @@ function _simClientReplayEvents(events) {
             case 'x': createExplosion(e[1], e[2], e[3], e[4]); break;
             case 'p': createDirectedParticles(e[1], e[2], e[3], e[4], e[5], e[6]); break;
             case 'f': recordCombatFx(e[1], e[2], e[3], e[4], e[5], e[6] === null ? undefined : e[6]); break;
+            // (A tick's energy and star gains and costs by source: the HUD's rates.)
+            case 'E': recordEnergyDelta(e[1], e[2], e[3]); break;
+            case 'A': recordAstarDelta(e[1], e[4], { unitType: e[2] }, e[3]); break;
         }
     }
 }

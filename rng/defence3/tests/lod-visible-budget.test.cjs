@@ -2,7 +2,7 @@
 const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const read = p => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 const c = vm.createContext({window:{}, console, TILE:32, GRID_W:1000,GRID_H:1000,viewW:1280,viewH:800,camera:{zoom:3},tickAlpha:1,
-    fullVisibility:true,visibilityGrid:[],visibilityVersion:1,gameTime:1,VISIBILITY_LIGHT_NORMALIZATION_RANGE:6,
+    fullVisibility:true,visibilityGrid:[],visibilityVersion:1,gameTime:1,localPlayerId:0,VISIBILITY_LIGHT_NORMALIZATION_RANGE:6,
     SIM_UF_GHOST:65536,SIM_UF_HIDDEN:1024,get3DRenderOwnerColor:()=> '#fff',_isLiveRenderGrid:()=>true});
 vm.runInContext(read('src/audio_visual/renderer3d.js'), c);
 const R=c.renderer3dInstance=Object.create(c.window.Defence3Renderer3D.prototype);

@@ -83,6 +83,9 @@ function _getResourcePenaltySteps(currentValue, maxValue) {
 }
 
 function _getPlayerResourcePenaltyMultiplier(playerId, resourceKey) {
+    // A stockpile in debt no longer scales any stat (it switches the
+    // player's boosts of that resource off instead: boostTick below).
+    return 1;
     let player = _ensurePlayerResourceState(playerId);
     if (!player) return 1;
     let stockpileKey = String(resourceKey || '');
@@ -218,7 +221,113 @@ function _setPlayerResourceValue(playerId, resourceKey, value) {
 
 const _pendingResourceStatRebuilds = new Set();
 
+// ============================================================
+// BOOSTS
+// ============================================================
+// A player may boost each of its things (a unit type, a building type) with
+// energy and, units only, with ★: BOOST_MAX_STEPS steps each, of +1, +2,
+// +4 and +8 thing levels (boostStepLevels). A boosted thing's stats are read a few levels up its tables:
+// every stat but its health (energy: as with effective levels, a thing's
+// health stays its own level's), move speed and ★ per tile at its
+// level + the energy boost; move speed and ★ per tile at its level +
+// the ★ boost (never past MAX_THING_LEVEL). The thing's own level, stacks and counts stay what they
+// are; upkeep and ★ per tile are stats like the rest, so a boost costs
+// what the higher level costs. A boost of a resource does nothing while the
+// player's stockpile of it is in debt (looked at every BOOST_CHECK_TICKS:
+// player.boostOn), which is all a negative stockpile does now.
+// State: player.boosts['unit:norm'] = [energy steps, ★ steps] (the
+// setBoost action), player.boostOn = { energy, astar }. The tables are a
+// function of research and these (snapshots carry both with the player).
+// A change rebuilds the thing's tables in place and its units and buildings
+// take them at their next staggered refresh, as after a research.
+const BOOST_MAX_STEPS = 4, BOOST_CHECK_TICKS = 20;
+const BOOST_ASTAR_STATS = new Set(['speed', 'astarCost']);
+const BOOST_EXEMPT_STATS = new Set(['energy', 'maxEnergy']);
+function _boostThingKey(branch, key) {
+    return branch === 'building' ? _normalizePlayerPrecomputedBuildingKey(key) : _normalizePlayerPrecomputedUnitKey(key);
+}
+// The steps a player chose for a thing (0: none).
+function getPlayerThingBoost(playerId, branch, key, resourceKey) {
+    let p = players[playerId], b = p && p.boosts ? p.boosts[branch + ':' + key] : null;
+    let v = b ? Math.floor(Number(b[resourceKey === 'astar' ? 1 : 0]) || 0) : 0;
+    return v > 0 ? Math.min(BOOST_MAX_STEPS, v) : 0;
+}
+function isPlayerBoostOn(playerId, resourceKey) {
+    let p = players[playerId];
+    return !(p && p.boostOn && p.boostOn[resourceKey] === false);
+}
+// The levels up a thing's tables one of its stats is read at.
+function _statBoostLevels(playerId, branch, key, statKey) {
+    let p = players[playerId];
+    if (!p || !p.boosts || BOOST_EXEMPT_STATS.has(statKey)) return 0;
+    let res = BOOST_ASTAR_STATS.has(statKey) ? (branch === 'unit' ? 'astar' : '') : 'energy';
+    return res && isPlayerBoostOn(playerId, res) ? getPlayerThingBoost(playerId, branch, key, res) : 0;
+}
+// (A step doubles the boost: +1, +2, +4, +8 levels.)
+function boostStepLevels(steps) { return steps > 0 ? 1 << (Math.min(BOOST_MAX_STEPS, steps) - 1) : 0; }
+function _boostedLevel(lvl, steps) {
+    return steps > 0 ? Math.min(MAX_THING_LEVEL, Math.max(1, lvl) + boostStepLevels(steps)) : lvl;
+}
+// A thing's tables made again after its boost changed (or went on or off).
+function rebuildPlayerThingBoost(playerId, branch, key) {
+    if (!ensurePrecomputedStatsMap()) return;
+    if (!(PRECOMPUTED_STATS_MAP[branch] || {})[key]) return;
+    if (branch === 'building' && typeof simTrapResearchDone === 'function') simTrapResearchDone(playerId);
+    for (let statKey of (branch === 'unit' ? PRECOMPUTED_UNIT_STAT_KEYS : PRECOMPUTED_BUILDING_STAT_KEYS)) {
+        if (branch === 'building' && !_buildingStatHasValues(key, statKey)) continue;
+        _rebuildPlayerThingStatLevels(playerId, branch, key, statKey, 1);
+    }
+    // What a finished research of the thing sets off (applyResearchCompletion):
+    // its buildings take the tables at their turn of the research sweep,
+    // the population cap follows the houses' at once, adjacency is made again.
+    if (branch === 'building') {
+        const p = players[playerId];
+        if (p) p.bResVer = (p.bResVer | 0) + 1;
+        if (key === 'house' && typeof recomputePlayerPopCaps === 'function') recomputePlayerPopCaps();
+    }
+    if (typeof gameStarted !== 'undefined' && gameStarted && typeof recalculateAdjacency === 'function') recalculateAdjacency();
+}
+// The setBoost action: steps of energy or ★ boost for one thing.
+function setPlayerThingBoost(playerId, kind, key, resourceKey, steps) {
+    let p = players[playerId];
+    if (!p || !ensurePrecomputedStatsMap()) return false;
+    let branch = kind === 'building' ? 'building' : 'unit', res = resourceKey === 'astar' ? 'astar' : 'energy';
+    if (branch === 'building' && res === 'astar') return false;
+    let k = _boostThingKey(branch, String(key || ''));
+    if (!(PRECOMPUTED_STATS_MAP[branch] || {})[k]) return false;
+    let next = Math.max(0, Math.min(BOOST_MAX_STEPS, Math.floor(Number(steps) || 0)));
+    if (getPlayerThingBoost(playerId, branch, k, res) === next) return false;
+    if (!p.boosts) p.boosts = {};
+    let b = p.boosts[branch + ':' + k] || (p.boosts[branch + ':' + k] = [0, 0]);
+    b[res === 'astar' ? 1 : 0] = next;
+    if (b[0] === 0 && b[1] === 0) delete p.boosts[branch + ':' + k];
+    if (isPlayerBoostOn(playerId, res)) rebuildPlayerThingBoost(playerId, branch, k);
+    return true;
+}
+// Every BOOST_CHECK_TICKS: a stockpile that went into debt, or out of it,
+// switches the player's boosts of that resource off or on.
+function boostTick() {
+    if (!(gameTime % BOOST_CHECK_TICKS === 0)) return;
+    for (let pid = 0; pid < players.length; pid++) {
+        let p = players[pid];
+        if (!p) continue;
+        for (let res of ['energy', 'astar']) {
+            let on = !(Number(p[res]) < 0), was = !(p.boostOn && p.boostOn[res] === false);
+            if (on === was) continue;
+            if (!p.boostOn) p.boostOn = { energy: true, astar: true };
+            p.boostOn[res] = on;
+            if (!p.boosts) continue;
+            for (let id of Object.keys(p.boosts).sort()) {
+                if (!(p.boosts[id][res === 'astar' ? 1 : 0] > 0)) continue;
+                let cut = id.indexOf(':');
+                rebuildPlayerThingBoost(pid, id.slice(0, cut), id.slice(cut + 1));
+            }
+        }
+    }
+}
+
 function flushPendingResourceStatRebuilds() {
+    boostTick();
     if (_pendingResourceStatRebuilds.size === 0) return;
     // Sort for a stable rebuild order regardless of which spend came first.
     let pending = Array.from(_pendingResourceStatRebuilds).sort();
@@ -549,6 +658,107 @@ function adjustStartingSpawnCountDelta(thingId, level, delta) {
 }
 
 
+const RESOURCE_ABUNDANCE_PRESETS = [
+    0,
+    ...Array.from({ length: 10 }, (_, i) => 1000 * 2 ** i),
+    ...Array.from({ length: 10 }, (_, i) => 1e6 * 2 ** i),
+    ...[1e9, 1e12, 1e15].flatMap(scale => Array.from({ length: 5 }, (_, i) => scale * 4 ** i)),
+    1e18
+].map(amount => ({ value: String(amount), name: _resourceReserveLabel(amount) }));
+const RESOURCE_ABUNDANCE_CONTROLS = [
+    { id: 'cfg-gold-abundance', fields: ['cfg-gold-count', 'cfg-gold-min', 'cfg-gold-max'] },
+    { id: 'cfg-astar-abundance', fields: ['cfg-astar-mine-count', 'cfg-astar-mine-min', 'cfg-astar-mine-max'] }
+];
+// Initial absolute values match the default 60x60 map, 8K energy / 16K stars per mine and 10% density. Keeping
+// these controls allows existing exports and advanced configs to retain
+// their exact settings while the regular menu uses fixed per-mine presets.
+const _resourceAbundanceState = new Map(RESOURCE_ABUNDANCE_CONTROLS.map(c => {
+    const amount = c.id === 'cfg-gold-abundance' ? '8000' : '16000';
+    return [c.id, { preset: amount, absolute: `180,${amount},${amount}` }];
+}));
+
+function deriveResourceAbundance(value, width, height = width, density = 10) {
+    const preset = RESOURCE_ABUNDANCE_PRESETS.find(p => p.value === String(value));
+    if (!preset) return null;
+    const amount = Number(preset.value);
+    const area = Math.max(8, Math.floor(Number(width) || 60)) * Math.max(8, Math.floor(Number(height) || 60));
+    // Each resource has half the density budget. Disabling one resource
+    // leaves the other resource's count unchanged.
+    const count = amount === 0 ? 0 : Math.floor(area * normalizeResourceMineDensity(density) / 200);
+    return { count, min: amount, max: amount, total: count * amount };
+}
+
+function normalizeResourceMineDensity(value) {
+    const number = String(value ?? '').trim() === '' ? NaN : Number(value);
+    return Number.isFinite(number) ? Math.max(0, Math.min(95, number)) : 10;
+}
+
+function _resourceReserveLabel(amount) {
+    for (const [scale, suffix] of [[1e18, 'Qi'], [1e15, 'Qa'], [1e12, 'T'], [1e9, 'B'], [1e6, 'M'], [1e3, 'K']]) {
+        if (amount >= scale) return `${Number((amount / scale).toFixed(3))}${suffix}`;
+    }
+    return String(Math.round(amount));
+}
+
+function refreshResourceAbundanceMenu(force = false) {
+    const size = Number((document.getElementById('cfg-mapsize') || {}).value) || GRID_W;
+    const density = normalizeResourceMineDensity((document.getElementById('cfg-mine-density') || {}).value);
+    for (const control of RESOURCE_ABUNDANCE_CONTROLS) {
+        const select = document.getElementById(control.id);
+        const fields = control.fields.map(id => document.getElementById(id));
+        if (!select || fields.some(el => !el)) continue;
+        const state = _resourceAbundanceState.get(control.id);
+        const absolute = fields.map(el => String(el.value)).join(',');
+        const derived = deriveResourceAbundance(select.value, size, size, density);
+        if (derived && (force || select.value !== state.preset || absolute === state.absolute)) {
+            [derived.count, derived.min, derived.max].forEach((value, i) => { fields[i].value = String(value); });
+        } else if (!derived || absolute !== state.absolute) select.value = 'custom';
+        state.preset = select.value;
+        state.absolute = fields.map(el => String(el.value)).join(',');
+        for (const option of select.options) {
+            const preset = RESOURCE_ABUNDANCE_PRESETS.find(p => p.value === option.value);
+            if (preset) {
+                option.textContent = preset.name;
+            } else if (option.value === 'custom') {
+                const [, min, max] = fields.map(el => Math.max(0, Number(el.value) || 0));
+                option.hidden = select.value !== 'custom';
+                option.textContent = `Custom (${min !== max ? '≈' : ''}${_resourceReserveLabel((min + max) / 2)})`;
+            }
+        }
+        const [count, min, max] = fields.map(el => Math.max(0, Number(el.value) || 0));
+        select.title = `${min.toLocaleString('en-US')}${min !== max ? '–' + max.toLocaleString('en-US') : ''} per mine; up to ${count.toLocaleString('en-US')} mines on a ${size}×${size} map.`;
+    }
+}
+
+function syncResourceAbundanceFromRuntime() {
+    const settings = [[GOLD_MINE_COUNT, GOLD_MINE_MIN, GOLD_MINE_MAX], [ASTAR_MINE_COUNT, ASTAR_MINE_MIN, ASTAR_MINE_MAX]];
+    RESOURCE_ABUNDANCE_CONTROLS.forEach((control, i) => {
+        const select = document.getElementById(control.id);
+        if (!select) return;
+        const values = settings[i];
+        const matches = preset => {
+            const d = deriveResourceAbundance(preset.value, GRID_W, GRID_H, RESOURCE_MINE_DENSITY);
+            return d.count === values[0] && d.min === values[1] && d.max === values[2];
+        };
+        const preset = RESOURCE_ABUNDANCE_PRESETS.find(p => p.value === select.value && matches(p))
+            || RESOURCE_ABUNDANCE_PRESETS.find(matches);
+        select.value = preset ? preset.value : 'custom';
+        const state = _resourceAbundanceState.get(control.id);
+        state.preset = select.value; state.absolute = values.join(',');
+    });
+    refreshResourceAbundanceMenu();
+}
+
+function initResourceAbundanceMenu() {
+    refreshResourceAbundanceMenu();
+    for (const id of ['cfg-mapsize', 'cfg-mine-density', ...RESOURCE_ABUNDANCE_CONTROLS.map(c => c.id)]) {
+        const el = document.getElementById(id);
+        if (!el || el.dataset.resourceAbundanceInit) continue;
+        el.dataset.resourceAbundanceInit = '1';
+        el.addEventListener('change', () => refreshResourceAbundanceMenu(true));
+    }
+}
+
 function parseConfigEditorObject(text) {
     let src = String(text || '').trim();
     if (!src) throw new Error('Config editor is empty.');
@@ -568,6 +778,7 @@ function createEditableRuntimeConfigSnapshot() {
             TILE,
             GRID_W,
             GRID_H,
+            RESOURCE_MINE_DENSITY,
             GOLD_MINE_COUNT,
             GOLD_MINE_MIN,
             GOLD_MINE_MAX,
@@ -658,12 +869,14 @@ function syncMainMenuFromRuntimeConfig() {
     };
 
     setValue('cfg-mapsize', GRID_W);
+    setValue('cfg-mine-density', RESOURCE_MINE_DENSITY);
     setValue('cfg-gold-count', GOLD_MINE_COUNT);
     setValue('cfg-gold-min', GOLD_MINE_MIN);
     setValue('cfg-gold-max', GOLD_MINE_MAX);
     setValue('cfg-astar-mine-count', ASTAR_MINE_COUNT);
     setValue('cfg-astar-mine-min', ASTAR_MINE_MIN);
     setValue('cfg-astar-mine-max', ASTAR_MINE_MAX);
+    syncResourceAbundanceFromRuntime();
     setValue('cfg-max-pop', CONFIG_MAX_POP);
     setValue('cfg-starting-energy', STARTING_MONEY);
     setValue('cfg-starting-astar', STARTING_ASTAR);
@@ -713,6 +926,7 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     WORLD_W = GRID_W * TILE;
     WORLD_H = GRID_H * TILE;
 
+    if (cfg.RESOURCE_MINE_DENSITY !== undefined) RESOURCE_MINE_DENSITY = normalizeResourceMineDensity(cfg.RESOURCE_MINE_DENSITY);
     if (Number.isFinite(Number(cfg.GOLD_MINE_COUNT))) GOLD_MINE_COUNT = Math.max(0, Math.floor(Number(cfg.GOLD_MINE_COUNT)));
     if (Number.isFinite(Number(cfg.GOLD_MINE_MIN))) GOLD_MINE_MIN = Math.max(0, Math.floor(Number(cfg.GOLD_MINE_MIN)));
     if (Number.isFinite(Number(cfg.GOLD_MINE_MAX))) GOLD_MINE_MAX = Math.max(0, Math.floor(Number(cfg.GOLD_MINE_MAX)));
@@ -899,6 +1113,7 @@ function resetConfigEditorToDefaults() {
 }
 
 function createEditableRuntimeConfigSnapshotFromMainMenu() {
+    refreshResourceAbundanceMenu();
     let snapshot = createEditableRuntimeConfigSnapshot();
     let cfg = snapshot.config;
     let getNumber = (id, fallback) => {
@@ -916,6 +1131,7 @@ function createEditableRuntimeConfigSnapshotFromMainMenu() {
 
     cfg.GRID_W = Math.max(8, Math.floor(getNumber('cfg-mapsize', cfg.GRID_W)));
     cfg.GRID_H = cfg.GRID_W;
+    cfg.RESOURCE_MINE_DENSITY = normalizeResourceMineDensity(getNumber('cfg-mine-density', cfg.RESOURCE_MINE_DENSITY));
     cfg.GOLD_MINE_COUNT = Math.max(0, Math.floor(getNumber('cfg-gold-count', cfg.GOLD_MINE_COUNT)));
     cfg.GOLD_MINE_MIN = Math.max(0, Math.floor(getNumber('cfg-gold-min', cfg.GOLD_MINE_MIN)));
     cfg.GOLD_MINE_MAX = Math.max(0, Math.floor(getNumber('cfg-gold-max', cfg.GOLD_MINE_MAX)));
@@ -954,6 +1170,7 @@ function applyMainMenuControlsToRuntimeState() {
     GRID_H = cfg.GRID_H;
     WORLD_W = GRID_W * TILE;
     WORLD_H = GRID_H * TILE;
+    RESOURCE_MINE_DENSITY = cfg.RESOURCE_MINE_DENSITY;
     GOLD_MINE_COUNT = cfg.GOLD_MINE_COUNT;
     GOLD_MINE_MIN = cfg.GOLD_MINE_MIN;
     GOLD_MINE_MAX = cfg.GOLD_MINE_MAX;
@@ -994,7 +1211,7 @@ function _getMainMenuSettingControls() {
 
 function createMainMenuSettingsSnapshot() {
     let out = {
-        version: 3,
+        version: 4,
         createdAt: Date.now(),
         lobby: {
             numbers: {},
@@ -1010,10 +1227,7 @@ function createMainMenuSettingsSnapshot() {
         else out.lobby.selects[el.id] = String(el.value);
     }
     // Display settings that have no control (audio, outlines, placement mode).
-    try {
-        let ui = JSON.parse(localStorage.getItem(LS_UI_SETTINGS_KEY) || 'null');
-        if (ui && typeof ui === 'object') out.ui = ui;
-    } catch { }
+    out.ui = createUiSettingsSnapshot();
     return out;
 }
 
@@ -1028,6 +1242,9 @@ function applyMainMenuSettingsSnapshot(rawData) {
         try {
             localStorage.setItem(LS_UI_SETTINGS_KEY, JSON.stringify(data.ui));
             loadUiSettingsFromStorage();
+            // Retain only player preferences, including for older exports
+            // whose UI blob also contained map settings.
+            saveUiSettingsToStorage();
         } catch { }
     }
     let changed = [];
@@ -2699,10 +2916,12 @@ function _simF32Stats(entry) {
 function _getUnitPlayerPrecomputedEntry(playerId, unitType, level) {
     let key = _normalizePlayerPrecomputedUnitKey(unitType);
     let lvl = Math.max(1, clampThingLevel(level || 1));
-    let levelEntry = (PRECOMPUTED_STATS_MAP.unit[key] || [])[lvl] || {};
+    let levelEntries = PRECOMPUTED_STATS_MAP.unit[key] || [];
     let values = {};
 
     for (let statKey of PRECOMPUTED_UNIT_STAT_KEYS) {
+        // (A boosted thing: the stat of a higher level, see BOOSTS.)
+        let levelEntry = levelEntries[_boostedLevel(lvl, _statBoostLevels(playerId, 'unit', key, statKey))] || {};
         let arr = levelEntry[statKey] || null;
         let rLvl = getPlayerResearchLevel(playerId, 'unit', key, statKey);
         let rawValue = arr ? arr[rLvl] : normalizePrecomputedUnitStatValue(key, statKey, NaN);
@@ -2741,10 +2960,11 @@ function _getUnitPlayerPrecomputedEntry(playerId, unitType, level) {
 function _getBuildingPlayerPrecomputedEntry(playerId, buildingKey, level) {
     let key = _normalizePlayerPrecomputedBuildingKey(buildingKey);
     let lvl = Math.max(1, clampThingLevel(level || 1));
-    let levelEntry = (PRECOMPUTED_STATS_MAP.building[key] || [])[lvl] || {};
+    let levelEntries = PRECOMPUTED_STATS_MAP.building[key] || [];
     let values = {};
 
     for (let statKey of PRECOMPUTED_BUILDING_STAT_KEYS) {
+        let levelEntry = levelEntries[_boostedLevel(lvl, _statBoostLevels(playerId, 'building', key, statKey))] || {};
         let arr = levelEntry[statKey] || null;
         let rLvl = getPlayerResearchLevel(playerId, 'building', key, statKey);
         let rawValue = arr ? arr[rLvl] : NaN;
@@ -2813,7 +3033,7 @@ function rebuildPrecomputedStatsMapPlayer(targetPlayerId = null) {
         try {
             signature = JSON.stringify([
                 previewLevels, (players[playerId] && players[playerId].researchLevels) || null,
-                RESOURCE_TYPE_LIST.map(cfg => _getPlayerResourcePenaltyMultiplier(playerId, String(cfg.stockpileKey || cfg.key || '')))
+                (players[playerId] && players[playerId].boosts) || null, (players[playerId] && players[playerId].boostOn) || null
             ]);
         } catch { signature = null; }
         let template = signature !== null ? builtBySignature.get(signature) : null;
@@ -2968,6 +3188,7 @@ function _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey, mult
     let levelSources = (PRECOMPUTED_STATS_MAP[branch] || {})[normalizedKey] || [];
     let isUnit = branch === 'unit';
     let rLvl = getPlayerResearchLevel(pid, branch, normalizedKey, statKey);
+    let boost = _statBoostLevels(pid, branch, normalizedKey, statKey);
     let fallback;
     for (let lvl = 0; lvl <= MAX_THING_LEVEL; lvl++) {
         let entry = levels[lvl];
@@ -2977,7 +3198,7 @@ function _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey, mult
                 : _getBuildingPlayerPrecomputedEntry(pid, normalizedKey, lvl);
             continue;
         }
-        let levelSource = levelSources[lvl];
+        let levelSource = levelSources[_boostedLevel(lvl, boost)];
         let source = levelSource ? levelSource[statKey] : null;
         let rawValue;
         if (source) rawValue = source[rLvl];

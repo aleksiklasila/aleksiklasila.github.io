@@ -1,6 +1,7 @@
 const assert=require('node:assert/strict');const fs=require('node:fs');const path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../src/audio_visual/renderer.js'),'utf8');
-const start=source.indexOf('function get3DBoxSelection('),end=source.indexOf('\nfunction ',start+1);
+// (With the far view's unit pass and its slots, kept right before it.)
+const start=source.indexOf('let _box3dSlots ='),end=source.indexOf('\nfunction ',source.indexOf('function get3DBoxSelection(')+1);
 const setup=new Function(`let TILE=32,localPlayerId=0,tickAlpha=.5,units=[],barracks=[],towers=[],collectorSpawners=[],goldMines=[],astarMines=[],items=[],grid=[];
     let reads=0,visible=(x,y)=>x%7!==0;
     const isTileVisible=(x,y)=>{reads++;return visible(x,y);};
@@ -30,7 +31,8 @@ for(let trial=0;trial<40;trial++) {
     for(const [list,lift] of [[s.barracks,.12],[s.towers,.18],[s.collectorSpawners,.14]])for(const e of list){if(e.energy>0&&e.owner===0&&visible(e.gx,e.gy)){considered.add(e);if(hits(e,e.x,e.y,lift))expected.entities.push(e);}}
     for(let gy=0;gy<120;gy++)for(let gx=0;gx<120;gx++){const c=grid[gy][gx],e=c.item;if(e&&c.owner===0&&!considered.has(e)&&visible(gx,gy)){considered.add(e);if(hits(e,e.x,e.y,.08))expected.entities.push(e);}}
     for(const e of [...s.goldMines,...s.astarMines])if(visible(e.gx,e.gy)&&hits(e,e.x,e.y,.06))expected.entities.push(e);
-    assert.deepEqual(api.run(rect),expected,'indexed box matches exhaustive ground + model hits in original order');
+    const got=api.run(rect);
+    assert.deepEqual({units:got.units,entities:got.entities},expected,'indexed box matches exhaustive ground + model hits in original order');
     assert.ok(api.reads()<700,'sparse 120x120 map visits occupied tiles, not every cell');
     assert.equal(new Set(expected.entities).size,expected.entities.length);
 }

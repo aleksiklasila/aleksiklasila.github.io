@@ -843,6 +843,8 @@ function get3DUnitTopTexture(unitOrType, owner, statusOptions = null) {
             g.closePath();
             g.fill();
             g.stroke();
+            let marked = typeof unitTypeMark === 'function' ? unitTypeMark(stats.unitType || unitType) : '';
+            if (marked) drawUnitTypeMark(g, marked, size * 0.5, size * 0.57, size * 0.2);
         } else if (vis === 'snake') {
             g.fillStyle = color;
             g.beginPath();
@@ -1375,6 +1377,25 @@ function get3DVisibleWorldBounds() {
     };
 }
 
+// The slots of this player's units whose ground point is drawn inside a
+// screen box (3D, a far view): one pass over the frame's columns.
+let _box3dSlots = new Int32Array(0), _box3dSlotCount = 0, _box3dSlotsFor = null;
+function _box3dUnitSlots(UF, VP, alpha, W, H, pad, minSx, minSy, maxSx, maxSy, lift, me) {
+    const n = UF.n, O = UF.owner, ID = UF.id, X = UF.x, Y = UF.y, PX = UF.px, PY = UF.py, it = 1 / TILE;
+    if (_box3dSlots.length < n) _box3dSlots = new Int32Array(Math.max(1024, Math.ceil(n * 1.25)));
+    const out = _box3dSlots;
+    const m0 = VP[0], m1 = VP[1], m3 = VP[3], m8 = VP[8], m9 = VP[9], m11 = VP[11];
+    const c0 = VP[4] * lift + VP[12], c1 = VP[5] * lift + VP[13], c3 = VP[7] * lift + VP[15];
+    let c = 0;
+    for (let s = 0; s < n; s++) {
+        if (O[s] !== me || ID[s] < 0) continue;
+        const wx = (PX[s] + (X[s] - PX[s]) * alpha) * it, wz = (PY[s] + (Y[s] - PY[s]) * alpha) * it, cw = m3 * wx + m11 * wz + c3;
+        if (!(cw > 0)) continue;
+        const px = ((m0 * wx + m8 * wz + c0) / cw * 0.5 + 0.5) * W - pad, py = (1 - ((m1 * wx + m9 * wz + c1) / cw * 0.5 + 0.5)) * H - pad;
+        if (px >= minSx && px <= maxSx && py >= minSy && py <= maxSy) out[c++] = s;
+    }
+    return c;
+}
 function get3DBoxSelection(screenRect) {
     if (!screenRect || !renderer3dInstance || typeof renderer3dInstance.projectWorldToScreen !== 'function') {
         return { units: [], entities: [] };
@@ -1429,8 +1450,23 @@ function get3DBoxSelection(screenRect) {
         const W = renderer3dInstance.cssWidth, H = renderer3dInstance.cssHeight, pad = renderer3dInstance.viewPad || 0;
         const m0 = VP[0], m1 = VP[1], m3 = VP[3], m8 = VP[8], m9 = VP[9], m11 = VP[11];
         const c0 = VP[4] * lift + VP[12], c1 = VP[5] * lift + VP[13], c3 = VP[7] * lift + VP[15];
-        if (!exact) pointUnits = [];
-        for (let s = 0; s < n; s++) {
+        if (!exact) {
+            // (The far view's pass in a function of its own, typed reads and
+            // arithmetic only; the units' views are taken for the hits
+            // alone, into a list of its final length; their slots go to the
+            // selection's index: selectionIndexAdopt.)
+            const c = _box3dUnitSlots(UF, VP, alpha, W, H, pad, minSx, minSy, maxSx, maxSy, lift, me);
+            const hits = _box3dSlots;
+            pointUnits = [];
+            let k = 0;
+            for (let i = 0; i < c; i++) {
+                const s = hits[i];
+                if (!full && !isTileVisible(Math.floor((PX[s] + (X[s] - PX[s]) * alpha) * it), Math.floor((PY[s] + (Y[s] - PY[s]) * alpha) * it))) continue;
+                const u = views[s];
+                if (u) { pointUnits.push(u); hits[k++] = s; }
+            }
+            _box3dSlotCount = k; _box3dSlotsFor = pointUnits;
+        } else for (let s = 0; s < n; s++) {
             if (O[s] !== me || ID[s] < 0) continue;
             const ux = PX[s] + (X[s] - PX[s]) * alpha, uy = PY[s] + (Y[s] - PY[s]) * alpha;
             if (!full && !isTileVisible(Math.floor(ux * it), Math.floor(uy * it))) continue;
@@ -1498,7 +1534,9 @@ function get3DBoxSelection(screenRect) {
         if (c.mark) c.mark(c.ref);
         newEntities.push(c.ref);
     }
-    return { units: newUnits, entities: newEntities };
+    const known = _box3dSlotsFor === newUnits && _box3dSlotCount === newUnits.length;
+    _box3dSlotsFor = null;
+    return { units: newUnits, entities: newEntities, unitSlots: known ? _box3dSlots : null, unitSlotCount: known ? _box3dSlotCount : 0 };
 }
 
 function getBackgroundWorldBoundsForRenderMode() {
@@ -2488,27 +2526,64 @@ function getUnitOrderTarget(u) {
     const tile = Math.abs(code) - 1;
     return { x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' };
 }
+// (The most markers a selection shows: an army sent to thousands of points
+// is not drawn as thousands of crosses.)
+const ORDER_MARKERS_MAX = 2000;
 function getOrderMarkers() {
     const frame = typeof _pageFrameSerial === 'number' ? _pageFrameSerial : -1;
     const sub = JSON.stringify(activeSubGroups), version = selectionIndex().version;
     const C = _orderMarkerCache;
-    if (C && C.tick === gameTime && C.frame === frame && C.version === version && C.revision === _orderMarkerRevision
+    const same = C && C.version === version && C.revision === _orderMarkerRevision
         && C.units === selectedUnits && C.ulen === selectedUnits.length && C.entities === selectedEntities
-        && C.elen === selectedEntities.length && C.sub === sub && C.ignore === ignoreLevelSubgroups) return C.markers;
+        && C.elen === selectedEntities.length && C.sub === sub && C.ignore === ignoreLevelSubgroups;
+    if (same && C.tick === gameTime && C.frame === frame) return C.markers;
+    // (A big selection's markers a few times a second: thousands of rally
+    // points and an army's destinations do not move by the frame.)
+    const big = selectedUnits.length + selectedEntities.length > SELECTED_UNIT_LINES_MAX, now = performance.now();
+    if (same && big && now - C.at < 150 && _pendingUnitOrderMarkers.size === 0 && _pendingRallyMarkers.size === 0) return C.markers;
     const markers = [], seen = new Set();
     const add = t => {
-        if (!t || !Number.isFinite(t.x) || !Number.isFinite(t.y)) return;
-        const key = t.x + ',' + t.y + ',' + t.kind + ',' + t.color;
+        if (!t || !Number.isFinite(t.x) || !Number.isFinite(t.y) || markers.length >= ORDER_MARKERS_MAX) return;
+        // (One marker a point and kind: a whole number key, by the eighth of a pixel.)
+        const key = (Math.round(t.x * 8) * 2097152 + Math.round(t.y * 8)) * 4 + (t.kind === 'arrow' ? 1 : 0) + (t.color === '#f66' ? 2 : 0);
         if (seen.has(key)) return;
         seen.add(key); markers.push({ x: t.x / TILE, z: t.y / TILE, kind: t.kind, color: t.color });
     };
     for (const ent of getActiveEntities()) {
+        if (markers.length >= ORDER_MARKERS_MAX) break;
         if (!ent || ent.owner !== localPlayerId || (ent.energy !== undefined && ent.energy <= 0)) continue;
         if (_isRallySpawnerType(ent.type)) add(getBuildingOrderTarget(ent));
     }
     const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
     const destinations = new Set();
-    for (const u of getActiveUnitsForRender()) {
+    // A big selection: by its slots in the frame's columns (the selection's
+    // index), never through its units' views (300k views read every frame
+    // took 60-80 ms). Units with an order still on its way or an attack
+    // target are the few whose views are read.
+    const X = selectionIndex();
+    const bySlots = F && X.framed && selectedUnits.length > SELECTED_UNIT_LINES_MAX && !Object.values(activeSubGroups).some(v => v === false);
+    if (bySlots) {
+        const slots = X.slots, mask = X.mask, n = X.n, O = F.owner, EN = F.energy, CM = F.cmd, FL = F.flags, OD = F.orderDest, ID = F.id;
+        const pendingAny = _pendingUnitOrderMarkers.size > 0, me = localPlayerId;
+        const dense = n * 4 >= F.n, end = dense ? Math.min(F.n, mask.length) : n;
+        let last = 0;
+        for (let i = 0; i < end; i++) {
+            const s = dense ? i : slots[i];
+            if (mask[s] === 0 || O[s] !== me || !(EN[s] > 0)) continue;
+            if ((pendingAny && _pendingUnitOrderMarkers.has(ID[s])) || (CM[s] === CMD_ATTACKING && (FL[s] & SIM_UF_ATTACK_TARGET) !== 0)) {
+                if (markers.length < ORDER_MARKERS_MAX) { const u = _pageSlotViews[s]; if (u && !u.dead) add(getUnitOrderTarget(u)); }
+                continue;
+            }
+            const code = OD[s];
+            if (code === 0 || code === last) continue;
+            last = code;
+            if (destinations.has(code)) continue;
+            destinations.add(code);
+            if (markers.length >= ORDER_MARKERS_MAX) continue;
+            const tile = Math.abs(code) - 1;
+            add({ x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' });
+        }
+    } else for (const u of getActiveUnitsForRender()) {
         if (!u || u.dead) continue;
         const s = u._s;
         // Large selections usually share a few destinations. Read columns
@@ -2526,7 +2601,7 @@ function getOrderMarkers() {
             }
         } else if (u.owner === localPlayerId) add(getUnitOrderTarget(u));
     }
-    _orderMarkerCache = { tick: gameTime, frame, version, revision: _orderMarkerRevision,
+    _orderMarkerCache = { tick: gameTime, frame, at: now, version, revision: _orderMarkerRevision,
         units: selectedUnits, ulen: selectedUnits.length, entities: selectedEntities, elen: selectedEntities.length,
         sub, ignore: ignoreLevelSubgroups, markers };
     return markers;
@@ -5413,6 +5488,9 @@ function processVisibleSimulationFrame(simTime) {
 // A guest that fell behind the host (hidden tab, slow frame, reconnect) runs
 // a few extra ticks per call until it is back to its normal buffer.
 function pumpSimulationTicks(now, accumulator, maxTicks) {
+    // (This page is alive; how far the simulation worker may go by itself
+    // if it stalls: sim_client.js.)
+    if (typeof simClientAutoArm === 'function') simClientAutoArm(now);
     if (isMultiplayer) {
         netMaintain(now);
         netHostUpdateSimulationPace(now);
@@ -5445,6 +5523,12 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
         let early = ahead && simClientWorkerAhead() < SIM_CLIENT_LEAD_TICKS + (catchUp > 0 ? 2 : 0)
             && (catchUp > 0 || accumulator > -(SIM_CLIENT_LEAD_TICKS - 1) * tickMs);
         if (!due && catchUp <= 0 && !early) break;
+        // (The worker took this tick, or a host's sealed it, by itself
+        // while the page was stalled: its note moves the page on.)
+        if (typeof simClientAutoPending === 'function' && simClientAutoPending(currentTick)) {
+            if (due) accumulator = Math.min(accumulator, tickMs);
+            break;
+        }
         if (isMultiplayer && processed > 0) driveStrictLockstep(now, currentTick);
         if (isMultiplayer && !isStrictTickReady(currentTick)) {
             if (due) {
@@ -5494,6 +5578,11 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
                 }
                 if (hadPatch) break;
             }
+        }
+        // (The tick is the page's to dispatch unless the worker just took it.)
+        if (inWorker && !simClientClaimTick(currentTick)) {
+            if (due) accumulator = Math.min(accumulator, tickMs);
+            break;
         }
         // (An early tick takes its slot of the clock too: the accumulator
         // goes below zero while ahead, so "due" stays real time and a tick
@@ -5853,6 +5942,7 @@ function _runLoopFrame(time, nextTime) {
     time = Math.max(time, _frameClock);
     _frameClock = time;
     _lastRenderFrameAt = performance.now();
+    if (typeof simClientAutoBeat === 'function') simClientAutoBeat(_lastRenderFrameAt);
     _frameSimLeadMs = gameStarted && !gameOver && !document.hidden ? Math.max(0, time - _lastTickTime) : 0;
     try { processRenderFrame(time); } catch (err) { reportRuntimeError('render', err); }
     _frameSimLeadMs = 0;
@@ -6559,6 +6649,18 @@ const LEVEL_TEXT_SPRITE_CACHE_MAX = 512;
 const UNIT_LEVEL_TEXT_SPRITE_CACHE = new Map();
 const UNIT_LEVEL_TEXT_SPRITE_CACHE_MAX = 256;
 
+// A display setting changed (mine amounts, lines, outlines, ranges): what
+// is drawn from caches made under the old setting is made again now, not at
+// the next view switch or resize.
+function applyVisualSettingChange() {
+    if (!gameStarted) return;
+    try { invalidateStaticLayerCache(); } catch { }
+    clearRendererTransientVisualCaches({ preserveTextSprites: true });
+    if (typeof _orderMarkerRevision === 'number') _orderMarkerRevision++;
+    dirtyGrid = true;
+    if (typeof _minimapStaticDirty !== 'undefined') _minimapStaticDirty = true;
+    if (typeof requestInfoPanelRefresh === 'function') requestInfoPanelRefresh(0);
+}
 function clearRendererTransientVisualCaches(options = null) {
     if (rendererScaleCache) {
         for (const layer of rendererScaleCache.layers) layer.dispose(rendererScaleCache.renderer.gl);

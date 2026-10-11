@@ -68,7 +68,7 @@ run(`
         __scratch.F.id[i] = i + 100; __scratch.F.owner[i] = 0; __scratch.F.energy[i] = 100; __scratch.F.order[i] = i;
         __scratch.F.cmd[i] = CMD_MOVING; __scratch.F.orderDest[i] = 4 * GRID_W + 4;
         __scratch.F.orderTick[i] = 502;
-        selectedUnits.push(new PageUnit(i + 100, i));
+        const pu = new PageUnit(i + 100, i); _pageSlotViews[i] = pu; selectedUnits.push(pu);
     }
     __scratch.F.orderDest[399] = -(8 * GRID_W + 8);
 `);

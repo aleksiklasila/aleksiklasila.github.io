@@ -219,7 +219,10 @@ function resyncGuestHandleAt(data) {
     let T = Math.floor(Number(data && data.tick));
     if (!Number.isFinite(T)) return;
     let g = resyncGuest;
-    if (T < currentTick) {
+    // (The simulation worker leaves that tick to the page from now on; it
+    // may have run it by itself already, the page stalled.)
+    if (typeof simClientAutoBarrier === 'function') simClientAutoBarrier(T);
+    if (T < currentTick || (typeof simClientTickFree === 'function' && !simClientTickFree(T))) {
         // Already past it: ask again for a later tick.
         g.outstanding = false;
         resyncGuestRequest(Math.max(0, currentTick - 1), performance.now());
@@ -451,13 +454,22 @@ function resyncHostHandleRequest(conn, data) {
         let guestTick = Math.floor(Number(data && data.at) || 0);
         let link = netGetLinkStats(pid);
         let aheadTicks = link && Number.isFinite(link.srtt) ? Math.ceil(link.srtt / 2 / TICK_MS) : 2;
-        let T = Math.max(currentTick + LOCKSTEP_HOST_PREBUILD_TICKS + 2, guestTick + aheadTicks + 2);
+        let T = Math.max(_resyncHostFirstOpenTick() + 1, guestTick + aheadTicks + 2);
         pending = { T, codes, full, id: ++_resyncPatchSeq, requestedAt: now };
         resyncHostPending.set(pid, pending);
         resyncHostFlushTicks.add(T);
     }
     netCounters.lastDesyncParts = full ? 'full' : (codes.size + ' buckets');
     try { conn.send({ type: 'RESYNC_AT', tick: pending.T, id: pending.id, full: pending.full }); } catch { }
+}
+
+// Host: the first tick no bundle is sealed for yet: past what this page
+// seals ahead, and past what its simulation worker sealed or ran by itself
+// while the page was stalled (it takes no more from here to the next pump,
+// which bounds it by the tick planned here: main.js lockstepAutoLimit).
+function _resyncHostFirstOpenTick() {
+    let open = currentTick + LOCKSTEP_HOST_PREBUILD_TICKS + 1;
+    return typeof simClientAutoFreeze === 'function' ? Math.max(open, simClientAutoFreeze() + 1) : open;
 }
 
 // Host pump, before running `tick`: encode and send the patches due now.
@@ -532,7 +544,7 @@ function resyncHostScheduleJoin(conn, role) {
     let normalizedRole = normalizeMatchRole(role, 'spectating');
     if (normalizedRole === 'playing') resyncHostJoining.set(pid, performance.now());
     else resyncHostJoining.delete(pid);
-    let T = currentTick + LOCKSTEP_HOST_PREBUILD_TICKS + 2;
+    let T = _resyncHostFirstOpenTick() + 1;
     resyncHostPending.set(pid, { T, codes: new Set(), full: true, id: ++_resyncPatchSeq, requestedAt: performance.now(), join: normalizedRole });
     resyncHostFlushTicks.add(T);
 }

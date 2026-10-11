@@ -9,9 +9,9 @@
          GitHub Pages cannot send itself): SharedArrayBuffer for the simulation
          workers. The first visit reloads once. Must be the first script. -->
     <script src="./coi-serviceworker.min.js"></script>
-    <link rel="stylesheet" href="./style/style.css?v=20261001-slide2">
-    <link rel="stylesheet" href="./style/bottom_bar.css?v=20261001-slide2">
-    <link rel="stylesheet" href="./style/scrollbars.css?v=20260930-scroll">
+    <link rel="stylesheet" href="./style/style.css?v=20261011-boost2">
+    <link rel="stylesheet" href="./style/bottom_bar.css?v=20261011-boost2">
+    <link rel="stylesheet" href="./style/scrollbars.css?v=20261011-boost2">
 </head>
 
 <body>
@@ -134,23 +134,124 @@
 
                 <div class="lobby-column" data-lobby-column="2">
                     <div class="lobby-column-title">Resources & Research</div>
-                    <div class="lobby-setting-row">
-                        <label>Energy Mines</label>
-                        <input id="cfg-gold-count" type="number" min="0" max="5000" value="2000" style="width:72px">
+                    <div class="lobby-setting-row compact">
+                        <label for="cfg-mine-density">Mine density</label>
+                        <select id="cfg-mine-density" style="width:72px" title="Target percentage of map tiles used by mines, shared between energy and ★. Terrain and spawn clearances can reduce coverage.">
+                            <option value="0">0%</option>
+                            <option value="5">5%</option>
+                            <option value="10" selected>10%</option>
+                            <option value="15">15%</option>
+                            <option value="20">20%</option>
+                            <option value="25">25%</option>
+                            <option value="30">30%</option>
+                            <option value="35">35%</option>
+                            <option value="40">40%</option>
+                            <option value="45">45%</option>
+                            <option value="50">50%</option>
+                            <option value="55">55%</option>
+                            <option value="60">60%</option>
+                            <option value="65">65%</option>
+                            <option value="70">70%</option>
+                            <option value="75">75%</option>
+                            <option value="80">80%</option>
+                            <option value="85">85%</option>
+                            <option value="90">90%</option>
+                            <option value="95">95%</option>
+                        </select>
                     </div>
-                    <div class="lobby-setting-row grouped">
-                        <input id="cfg-gold-min" type="number" min="100" max="500000000000" value="10000" >
-                        <span class="range-sep">-</span>
-                        <input id="cfg-gold-max" type="number" min="100" max="500000000000" value="10000" >
+                    <div class="lobby-setting-row resource-abundance-row">
+                        <label for="cfg-gold-abundance">&#9889; per mine</label>
+                        <select id="cfg-gold-abundance" class="resource-abundance-select">
+                            <option value="0">0</option>
+                            <option value="1000">1K</option>
+                            <option value="2000">2K</option>
+                            <option value="4000">4K</option>
+                            <option value="8000" selected>8K</option>
+                            <option value="16000">16K</option>
+                            <option value="32000">32K</option>
+                            <option value="64000">64K</option>
+                            <option value="128000">128K</option>
+                            <option value="256000">256K</option>
+                            <option value="512000">512K</option>
+                            <option value="1000000">1M</option>
+                            <option value="2000000">2M</option>
+                            <option value="4000000">4M</option>
+                            <option value="8000000">8M</option>
+                            <option value="16000000">16M</option>
+                            <option value="32000000">32M</option>
+                            <option value="64000000">64M</option>
+                            <option value="128000000">128M</option>
+                            <option value="256000000">256M</option>
+                            <option value="512000000">512M</option>
+                            <option value="1000000000">1B</option>
+                            <option value="4000000000">4B</option>
+                            <option value="16000000000">16B</option>
+                            <option value="64000000000">64B</option>
+                            <option value="256000000000">256B</option>
+                            <option value="1000000000000">1T</option>
+                            <option value="4000000000000">4T</option>
+                            <option value="16000000000000">16T</option>
+                            <option value="64000000000000">64T</option>
+                            <option value="256000000000000">256T</option>
+                            <option value="1000000000000000">1Qa</option>
+                            <option value="4000000000000000">4Qa</option>
+                            <option value="16000000000000000">16Qa</option>
+                            <option value="64000000000000000">64Qa</option>
+                            <option value="256000000000000000">256Qa</option>
+                            <option value="1000000000000000000">1Qi</option>
+                            <option value="custom" hidden>Custom</option>
+                        </select>
                     </div>
-                    <div class="lobby-setting-row">
-                        <label>★ Mines</label>
-                        <input id="cfg-astar-mine-count" type="number" min="0" max="5000" value="1200" style="width:72px">
+                    <div class="lobby-setting-row resource-abundance-row">
+                        <label for="cfg-astar-abundance">★ per mine</label>
+                        <select id="cfg-astar-abundance" class="resource-abundance-select">
+                            <option value="0">0</option>
+                            <option value="1000">1K</option>
+                            <option value="2000">2K</option>
+                            <option value="4000">4K</option>
+                            <option value="8000">8K</option>
+                            <option value="16000" selected>16K</option>
+                            <option value="32000">32K</option>
+                            <option value="64000">64K</option>
+                            <option value="128000">128K</option>
+                            <option value="256000">256K</option>
+                            <option value="512000">512K</option>
+                            <option value="1000000">1M</option>
+                            <option value="2000000">2M</option>
+                            <option value="4000000">4M</option>
+                            <option value="8000000">8M</option>
+                            <option value="16000000">16M</option>
+                            <option value="32000000">32M</option>
+                            <option value="64000000">64M</option>
+                            <option value="128000000">128M</option>
+                            <option value="256000000">256M</option>
+                            <option value="512000000">512M</option>
+                            <option value="1000000000">1B</option>
+                            <option value="4000000000">4B</option>
+                            <option value="16000000000">16B</option>
+                            <option value="64000000000">64B</option>
+                            <option value="256000000000">256B</option>
+                            <option value="1000000000000">1T</option>
+                            <option value="4000000000000">4T</option>
+                            <option value="16000000000000">16T</option>
+                            <option value="64000000000000">64T</option>
+                            <option value="256000000000000">256T</option>
+                            <option value="1000000000000000">1Qa</option>
+                            <option value="4000000000000000">4Qa</option>
+                            <option value="16000000000000000">16Qa</option>
+                            <option value="64000000000000000">64Qa</option>
+                            <option value="256000000000000000">256Qa</option>
+                            <option value="1000000000000000000">1Qi</option>
+                            <option value="custom" hidden>Custom</option>
+                        </select>
                     </div>
-                    <div class="lobby-setting-row grouped">
-                        <input id="cfg-astar-mine-min" type="number" min="10" max="500000000000" value="20000" >
-                        <span class="range-sep">-</span>
-                        <input id="cfg-astar-mine-max" type="number" min="10" max="500000000000" value="20000" >
+                    <div hidden>
+                        <input id="cfg-gold-count" type="number" min="0" value="180">
+                        <input id="cfg-gold-min" type="number" min="0" value="8000">
+                        <input id="cfg-gold-max" type="number" min="0" value="8000">
+                        <input id="cfg-astar-mine-count" type="number" min="0" value="180">
+                        <input id="cfg-astar-mine-min" type="number" min="0" value="16000">
+                        <input id="cfg-astar-mine-max" type="number" min="0" value="16000">
                     </div>
                     <div class="lobby-setting-row compact">
                         <label for="cfg-shrines" title="&#128128; is damage taken: the energy your units and buildings lose to damage goes to your shrine and drains passively into &#9889; and &#9733; (multiplier and drain rate are researched). Off: the shrine still counts damage taken, but nothing drains from it.">&#128128; Shrines</label>
@@ -752,61 +853,61 @@
 
     <script src="./plotly-2.35.2.min.js"></script>
     
-    <script src="./src/sim/sim_parallel.js?v=20261008-brain1"></script>
-    <script src="./src/sim/sim_wasm_bin.js?v=20261008-brain1"></script>
-    <script src="./src/sim/sim_wasm.js?v=20261008-brain1"></script>
-    <script src="./src/sim/sim_unit_state.js?v=20261008-brain1"></script>
-    <script src="./src/utils/utils_common.js?v=20261022-w"></script>
-    <script src="./src/utils/utils_net_quality.js?v=20261020-a"></script>
-    <script src="./src/utils/utils_networking.js?v=20261008-brain1"></script>
-    <script src="./src/utils/utils_snapshot.js?v=20261008-brain1"></script>
-    <script src="./src/utils/utils_resync.js?v=20261006-b"></script>
-    <script src="./src/utils/utils_host_migration.js?v=20261006-c"></script>
-    <script src="./src/utils/utils_storage.js?v=20261002-sim2"></script>
+    <script src="./src/sim/sim_parallel.js?v=20261011-boost2"></script>
+    <script src="./src/sim/sim_wasm_bin.js?v=20261011-boost2"></script>
+    <script src="./src/sim/sim_wasm.js?v=20261011-boost2"></script>
+    <script src="./src/sim/sim_unit_state.js?v=20261011-boost2"></script>
+    <script src="./src/utils/utils_common.js?v=20261011-boost2"></script>
+    <script src="./src/utils/utils_net_quality.js?v=20261011-boost2"></script>
+    <script src="./src/utils/utils_networking.js?v=20261011-boost2"></script>
+    <script src="./src/utils/utils_snapshot.js?v=20261011-boost2"></script>
+    <script src="./src/utils/utils_resync.js?v=20261011-boost2"></script>
+    <script src="./src/utils/utils_host_migration.js?v=20261011-boost2"></script>
+    <script src="./src/utils/utils_storage.js?v=20261011-boost2"></script>
 
-    <script src="./src/data/data_static.js?v=20261020-shrine"></script>
-    <script src="./src/data/data_dynamic.js?v=20261008-brain1"></script>
-    <script src="./src/data/data_state.js?v=20261008-brain1"></script>
+    <script src="./src/data/data_static.js?v=20261011-boost2"></script>
+    <script src="./src/data/data_dynamic.js?v=20261011-boost2"></script>
+    <script src="./src/data/data_state.js?v=20261011-boost2"></script>
 
-    <script src="./src/audio_visual/visibility_history.js?v=20261022-t"></script>
-    <script src="./src/audio_visual/range_overlay.js?v=20261021-z"></script>
-    <script src="./src/audio_visual/selection_overlay.js?v=20260927-dist"></script>
-    <script src="./src/audio_visual/postprocess3d.js?v=20260927-lod"></script>
-    <script src="./src/audio_visual/renderer3d.js?v=20261022-t"></script>
-    <script src="./src/audio_visual/renderer2d.js?v=20261022-t"></script>
-    <script src="./src/audio_visual/side_visualizations.js?v=20261004-walk-surfaces-b"></script>
-    <script src="./src/audio_visual/effects3d.js?v=20260927-lod"></script>
-    <script src="./src/audio_visual/renderer.js?v=20261008-brain1"></script>
-    <script src="./src/audio_visual/audio.js?v=20261021-x"></script>
-    <script src="./src/audio_visual/jukebox.js?v=20261007-a"></script>
-    <script src="./src/audio_visual/hud.js?v=20261022-i"></script>
-    <script src="./src/audio_visual/bottom_bar.js?v=20261021-x"></script>
+    <script src="./src/audio_visual/visibility_history.js?v=20261011-boost2"></script>
+    <script src="./src/audio_visual/range_overlay.js?v=20261011-boost2"></script>
+    <script src="./src/audio_visual/selection_overlay.js?v=20261011-boost2"></script>
+    <script src="./src/audio_visual/postprocess3d.js?v=20261011-boost2"></script>
+    <script src="./src/audio_visual/renderer3d.js?v=20261011-boost2"></script>
+    <script src="./src/audio_visual/renderer2d.js?v=20261011-boost2"></script>
+    <script src="./src/audio_visual/side_visualizations.js?v=20261011-boost2"></script>
+    <script src="./src/audio_visual/effects3d.js?v=20261011-boost2"></script>
+    <script src="./src/audio_visual/renderer.js?v=20261011-boost2"></script>
+    <script src="./src/audio_visual/audio.js?v=20261011-boost2"></script>
+    <script src="./src/audio_visual/jukebox.js?v=20261011-boost2"></script>
+    <script src="./src/audio_visual/hud.js?v=20261011-boost2"></script>
+    <script src="./src/audio_visual/bottom_bar.js?v=20261011-boost2"></script>
 
-    <script src="./src/game/chunk.js?v=20261008-brain1"></script>
-    <script src="./src/game/map.js?v=20260926-netcode"></script>
-    <script src="./src/game/pathfinding.js?v=20261021-w"></script>
-    <script src="./src/game/flownav.js?v=20261021-w"></script>
-    <script src="./src/game/player.js?v=20260516d"></script>
+    <script src="./src/game/chunk.js?v=20261011-boost2"></script>
+    <script src="./src/game/map.js?v=20261011-boost2"></script>
+    <script src="./src/game/pathfinding.js?v=20261011-boost2"></script>
+    <script src="./src/game/flownav.js?v=20261011-boost2"></script>
+    <script src="./src/game/player.js?v=20261011-boost2"></script>
 
-    <script src="./src/things/barrack.js?v=20261004-building-landmarks-b"></script>
-    <script src="./src/things/unit.js?v=20261008-brain1"></script>
-    <script src="./src/things/worker.js?v=20261008-brain1"></script>
-    <script src="./src/things/particle.js?v=20261008-brain1"></script>
-    <script src="./src/things/projectile.js?v=20260929-fx"></script>
-    <script src="./src/things/things_utils.js?v=20261008-brain1"></script>
-    <script src="./src/things/tower.js?v=20261008-brain1"></script>
+    <script src="./src/things/barrack.js?v=20261011-boost2"></script>
+    <script src="./src/things/unit.js?v=20261011-boost2"></script>
+    <script src="./src/things/worker.js?v=20261011-boost2"></script>
+    <script src="./src/things/particle.js?v=20261011-boost2"></script>
+    <script src="./src/things/projectile.js?v=20261011-boost2"></script>
+    <script src="./src/things/things_utils.js?v=20261011-boost2"></script>
+    <script src="./src/things/tower.js?v=20261011-boost2"></script>
 
-    <script src="./src/main.js?v=20261008-brain1"></script>
+    <script src="./src/main.js?v=20261011-boost2"></script>
 
-    <script src="./src/sim/sim_frame.js?v=20261008-brain1"></script>
-    <script src="./src/sim/sim_frame_world.js?v=20261021-x"></script>
-    <script src="./src/sim/sim_presentation.js?v=20261008-brain1"></script>
-    <script src="./src/sim/sim_shadow.js?v=20261008-brain1"></script>
-    <script src="./src/sim/sim_rebase_bin.js?v=20261009"></script>
-    <script src="./src/sim/sim_rebase.js?v=20261009"></script>
-    <script src="./src/sim/sim_client.js?v=20261008-brain1"></script>
+    <script src="./src/sim/sim_frame.js?v=20261011-boost2"></script>
+    <script src="./src/sim/sim_frame_world.js?v=20261011-boost2"></script>
+    <script src="./src/sim/sim_presentation.js?v=20261011-boost2"></script>
+    <script src="./src/sim/sim_shadow.js?v=20261011-boost2"></script>
+    <script src="./src/sim/sim_rebase_bin.js?v=20261011-boost2"></script>
+    <script src="./src/sim/sim_rebase.js?v=20261011-boost2"></script>
+    <script src="./src/sim/sim_client.js?v=20261011-boost2"></script>
 
-    <script src="./src/bootstrap.js?v=20260924-settings"></script>
+    <script src="./src/bootstrap.js?v=20261011-boost2"></script>
 </body>
 
 </html>

@@ -4689,6 +4689,25 @@ function drawCachedUnitStar(ctx, x, y, radius, color, strokeColor = '#000', line
     ctx.restore();
 }
 // Body geometry is shared by immediate drawing and the strategic sprite cache.
+// Units told apart by a mark on their shape: the healer's red cross, the
+// researcher's R (on a triangle whose centre is cx, cy and half width tr;
+// pointing down by default, up: the 3D top texture's).
+function unitTypeMark(unitType) { return unitType === 'healer_unit' ? 'cross' : unitType === 'researcher_unit' ? 'R' : ''; }
+function drawUnitTypeMark(ctx, mark, cx, cy, tr) {
+    ctx.save();
+    if (mark === 'cross') {
+        const arm = tr * 0.4, half = tr * 0.13;
+        ctx.fillStyle = '#e01818';
+        ctx.fillRect(cx - half, cy - arm, half * 2, arm * 2);
+        ctx.fillRect(cx - arm, cy - half, arm * 2, half * 2);
+    } else if (mark === 'R') {
+        ctx.fillStyle = '#06204a';
+        ctx.font = 'bold ' + Math.max(5, Math.round(tr * 1.05)) + 'px Arial';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('R', cx, cy + tr * 0.04);
+    }
+    ctx.restore();
+}
 function drawUnitBodyGeometry(ctx, unit, strokeColor, lw) {
         if (unit.isSnake) {
             // Snakes render as their head only; the tail was removed.
@@ -4703,9 +4722,13 @@ function drawUnitBodyGeometry(ctx, unit, strokeColor, lw) {
             ctx.restore();
         } else if (unit.vis === 'triangle') {
             ctx.fillStyle = unit.color; ctx.beginPath();
-            let tr = unit.r * 0.5;
+            // (The healer and the researcher: a bigger triangle with their
+            // mark on it, a red cross and an R; the scout a plain small one.)
+            let marked = unitTypeMark(unit.unitType);
+            let tr = unit.r * (marked ? 0.95 : 0.5);
             ctx.moveTo(unit.x, unit.y + tr); ctx.lineTo(unit.x - tr, unit.y - tr); ctx.lineTo(unit.x + tr, unit.y - tr);
             ctx.closePath(); ctx.fill(); ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
+            if (marked) drawUnitTypeMark(ctx, marked, unit.x, unit.y - tr * 0.36, tr);
         } else if (unit.vis === 'star') {
             if (unit.unitType === 'collector' || unit.unitType === 'astar_collector') {
                 ctx.save();

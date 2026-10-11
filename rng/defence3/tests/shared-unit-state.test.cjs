@@ -9,7 +9,9 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     const fail = msg => { throw new Error(msg); };
     const layout = simFrameViews(new ArrayBuffer(64 * SIM_FRAME_SLOT_BYTES), 64);
     let offset = 0;
-    for (const [keys, bytes] of [[SIM_FRAME_F32,4], [[...SIM_FRAME_I32,'order'],4], [SIM_FRAME_I16,2], [SIM_FRAME_U8,1]])
+    // (The order columns were added after the rest: at the end.)
+    const tail = ['orderDest', 'orderTick'];
+    for (const [keys, bytes] of [[SIM_FRAME_F32,4], [[...SIM_FRAME_I32.filter(k => !tail.includes(k)),'order'],4], [SIM_FRAME_I16,2], [SIM_FRAME_U8,1], [tail,4]])
         for (const k of keys) { if (layout[k].byteOffset !== offset) fail('frame layout '+k); offset += bytes*64; }
     if (offset !== 64 * SIM_FRAME_SLOT_BYTES) fail('frame size');
     // Growth must update every live accessor, including objects that existed

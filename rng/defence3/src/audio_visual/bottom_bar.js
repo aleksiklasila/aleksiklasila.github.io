@@ -89,6 +89,19 @@ function _bbThingColor(kind, key) {
 function _bbTaskStatId(t) {
     return `${t.kind}:${t.key}:${t.statKey}`;
 }
+// The open menu's task in the queue as it is now. The queue's task objects
+// are not kept: beside the simulation worker every tick's state brings new
+// ones (a menu told by the object closed within a second), so a task is told
+// by its stat and the level it researches to (one of each in a queue).
+function _bbTaskKey(t) { return _bbTaskStatId(t) + ':' + t.toLevel; }
+function _bbMenuTaskIndex(tasks) {
+    let menu = bb.menu;
+    if (!menu || menu.type !== 'task') return -1;
+    let i = tasks.indexOf(menu.task);
+    if (i < 0 && menu.taskKey) i = tasks.findIndex(t => _bbTaskKey(t) === menu.taskKey);
+    if (i >= 0) menu.task = tasks[i];
+    return i;
+}
 
 function _bbStatAbbrHtml(statKey, label) {
     let abbr = BB_STAT_ABBR[statKey] || String(label || statKey).replace(/[^a-z]/gi, '').slice(0, 3).toLowerCase();
@@ -376,6 +389,80 @@ function _bbRenderTotals() {
     if (bb.els.thingsLabel.innerHTML !== html) bb.els.thingsLabel.innerHTML = html;
 }
 
+// ---------------------------------------------------------------- boosts
+// Two rows of slots on top of each thing's tile: the ★ boost (units
+// only) over the energy boost; a slot is a step, a thing level (data_dynamic.js
+// BOOSTS). A click on a slot sets the boost to it (on the last filled one:
+// one less). What the simulation holds is shown filled; an order on its way
+// shows at once, and filled slots brighten over the time the thing's units
+// and buildings take to follow (their staggered refresh). A resource in debt:
+// its boosts are off, the slots hollow.
+const BB_BOOST_APPLY_MS = 2500;
+function _bbBoostState(info, res) {
+    let branch = info.kind === 'building' ? 'building' : 'unit';
+    let key = typeof _boostThingKey === 'function' ? _boostThingKey(branch, info.key) : info.key;
+    let steps = typeof getPlayerThingBoost === 'function' ? getPlayerThingBoost(localPlayerId, branch, key, res) : 0;
+    let id = info.id + '/' + res, pending = bb.boostPending && bb.boostPending[id], now = performance.now();
+    // (An order sent: shown until the simulation has it, or a few seconds.)
+    if (pending && (pending.steps === steps || now - pending.at > 3000)) { delete bb.boostPending[id]; pending = null; }
+    let shown = pending ? pending.steps : steps;
+    let seen = bb.boostSeen || (bb.boostSeen = {});
+    if (!seen[id] || seen[id].steps !== shown) seen[id] = { steps: shown, at: seen[id] ? now : -Infinity };
+    return { steps: shown, on: typeof isPlayerBoostOn !== 'function' || isPlayerBoostOn(localPlayerId, res), age: now - seen[id].at, at: seen[id].at };
+}
+// (A step's levels: +L1, +L2, +L4, +L8.)
+function _bbBoostLevels(steps) { return typeof boostStepLevels === 'function' ? boostStepLevels(steps) : steps; }
+function _bbBoostMult(steps) { return '+L' + _bbBoostLevels(steps); }
+function _bbBoostWhat(res) {
+    return res === 'astar' ? 'move speed and ★ per tile' : 'every stat but health, move speed and ★ per tile (upkeep too)';
+}
+function _bbBoostText(info, res, st) {
+    let glyph = res === 'astar' ? '★' : '⚡';
+    if (st.steps <= 0) return `${glyph} boost: none. The slots on the tile set it: ${_bbBoostWhat(res)} as of that many levels higher.`;
+    return `${glyph} boost ${_bbBoostMult(st.steps)}: ${_bbBoostWhat(res)} as ${_bbBoostLevels(st.steps)} level${_bbBoostLevels(st.steps) > 1 ? 's' : ''} higher (up to the last level)`
+        + (st.on ? '' : ` — not applied while ${glyph} is below 0`);
+}
+// One slot's own words (its hover text).
+function _bbBoostSlotText(res, step, st) {
+    let glyph = res === 'astar' ? '★' : '⚡';
+    if (step <= 0) return `${glyph} +L0: no boost${st.steps === 0 ? ' (now)' : ' — click to remove the boost'}`;
+    return `${glyph} ${_bbBoostMult(step)} — ${_bbBoostWhat(res)} as ${_bbBoostLevels(step)} level${_bbBoostLevels(step) > 1 ? 's' : ''} higher`
+        + (step === st.steps ? (st.on ? ' (now)' : ` (chosen; not applied while ${glyph} is below 0)`) : '');
+}
+function _bbBoostHtml(info) {
+    let max = typeof BOOST_MAX_STEPS === 'number' ? BOOST_MAX_STEPS : 4;
+    let row = res => {
+        let st = _bbBoostState(info, res);
+        let cls = 'bb-boost-row bb-boost-' + (res === 'astar' ? 'a' : 'e') + (st.on ? '' : ' bb-boost-off') + (st.steps > 0 ? ' bb-boost-set' : '');
+        // (The same text for the whole time it is taken up: the row is
+        // only made again when what it shows changes.)
+        let fresh = st.steps > 0 && st.on && st.age < BB_BOOST_APPLY_MS ? ` data-since="${Math.round(st.at)}"` : '';
+        let html = `<div class="${cls}${fresh ? ' bb-boost-applying' : ''}"${fresh}>`;
+        // (The first slot is x1, no boost: always there, always filled.)
+        for (let i = 0; i <= max; i++) html += `<i class="${i <= st.steps ? 'on' : ''}${i === 0 ? ' bb-boost-x1' : ''}" data-bb-boost="${res}" data-step="${i}" title="${_bbEscape(_bbBoostSlotText(res, i, st))}"></i>`;
+        return html + '</div>';
+    };
+    // (A thing without a ★ boost: its one row as tall as two.)
+    return `<div class="bb-boost">${info.isUnit ? row('astar') : ''}${row('energy')}</div>`;
+}
+function _bbBoostSig(info) {
+    let e = _bbBoostState(info, 'energy'), a = info.isUnit ? _bbBoostState(info, 'astar') : null;
+    return `${e.steps}${e.on ? '' : '!'}${e.age < BB_BOOST_APPLY_MS ? '~' : ''}${a ? '/' + a.steps + (a.on ? '' : '!') + (a.age < BB_BOOST_APPLY_MS ? '~' : '') : ''}`;
+}
+// A click on a slot: the order, shown at once.
+function _bbOnBoostClick(slot) {
+    let tile = slot.closest('.bb-thing');
+    if (!tile || !gameStarted || gameOver) return;
+    let info = _bbThingInfo(tile.dataset.id), res = slot.dataset.bbBoost === 'astar' ? 'astar' : 'energy';
+    let steps = Math.max(0, Math.floor(Number(slot.dataset.step) || 0));
+    if (steps === _bbBoostState(info, res).steps) return;
+    (bb.boostPending || (bb.boostPending = {}))[info.id + '/' + res] = { steps, at: performance.now() };
+    queueAction({ action: 'setBoost', kind: info.kind === 'building' ? 'building' : 'unit', key: info.key, res, steps });
+    bb.thingsSig = '';
+    if (!bb.press) _bbRenderThings();
+    if (bb.menu) _bbRenderMenu(true);
+}
+
 function _bbThingHtml(id, owned) {
     let info = _bbThingInfo(id);
     let label = _bbThingLabel(info.kind, info.key);
@@ -388,11 +475,18 @@ function _bbThingHtml(id, owned) {
     let title = `${label} (${cat}): ${info.count > 0 ? `${info.count}, ${info.idle} idle` : 'none owned'}\n`
         + `⚡ ${_bbFmtRateShort(rates.energy)}/s · ★ ${astarText}/s (last ${rates.sec}s)\n`
         + 'Click: menu · Hold + drag: reorder, or drop on the research row to upgrade';
-    return `<div class="${cls}" data-id="${_bbEscape(id)}" title="${_bbEscape(title)}">`
-        + `<img src="${getItemThumbnail(info.key, 20)}" width="20" height="20" alt="" draggable="false">`
+    // (In parts: _bbRenderThings changes only the parts that changed, so the
+    // tile and the slot under the mouse stay the same elements. Made anew
+    // every quarter second, they lost and regained their hover: a flicker.)
+    return { id, cls, title, boost: _bbBoostHtml(info), body: _bbThingBodyHtml(info, rates, astarText) };
+}
+function _bbThingBodyHtml(info, rates, astarText) {
+    return `<img src="${getItemThumbnail(info.key, 20)}" width="20" height="20" alt="" draggable="false">`
         + `<span class="bb-rate bb-rate-e ${_bbRateClass(rates.energy)}" style="color:${getDeltaRateColor(rates.energy, 'energy')}">${_bbFmtRateShort(rates.energy)}<span class="bb-glyph">⚡</span></span>`
-        + `<span class="bb-rate bb-rate-a ${rates.astar === null ? 'bb-r0' : _bbRateClass(rates.astar)}"${rates.astar === null ? '' : ` style="color:${getDeltaRateColor(rates.astar, 'astar')}"`}>${astarText}<span class="bb-glyph bb-star">★</span></span>`
-        + `</div>`;
+        + `<span class="bb-rate bb-rate-a ${rates.astar === null ? 'bb-r0' : _bbRateClass(rates.astar)}"${rates.astar === null ? '' : ` style="color:${getDeltaRateColor(rates.astar, 'astar')}"`}>${astarText}<span class="bb-glyph bb-star">★</span></span>`;
+}
+function _bbThingPartsHtml(p) {
+    return `<div class="${p.cls}" data-id="${_bbEscape(p.id)}" title="${_bbEscape(p.title)}">${p.boost}<span class="bb-thing-body">${p.body}</span></div>`;
 }
 
 function _bbRenderThings() {
@@ -401,19 +495,33 @@ function _bbRenderThings() {
     let part = (id) => {
         let info = _bbThingInfo(id);
         let rates = _bbThingRates(info);
-        return `${id}/${info.count}/${info.idle}/${_bbFmtRateShort(rates.energy)}/${rates.astar === null ? '' : _bbFmtRateShort(rates.astar)}`;
+        return `${id}/${info.count}/${info.idle}/${_bbFmtRateShort(rates.energy)}/${rates.astar === null ? '' : _bbFmtRateShort(rates.astar)}/${_bbBoostSig(info)}`;
     };
     let sig = bb.order.map(part).join('|') + '#' + rest.map(part).join('|') + '#' + (bb.menu && bb.menu.type === 'thing' ? bb.menu.id : '')
         + '#' + formatCompactNumber(getPlayerDeltaFlowScale(localPlayerId, 'energy')) + '/' + formatCompactNumber(getPlayerDeltaFlowScale(localPlayerId, 'astar'));
     if (sig === bb.thingsSig) return;
     bb.thingsSig = sig;
-    let html = '';
-    for (let id of bb.order) html += _bbThingHtml(id, true);
-    if (rest.length > 0) {
-        html += `<div class="bb-sep" title="Never owned yet (drag things across to pin them left of this line)"></div>`;
-        for (let id of rest) html += _bbThingHtml(id, false);
+    // (null: the line between owned and never owned.)
+    let parts = bb.order.map(id => _bbThingHtml(id, true));
+    if (rest.length > 0) { parts.push(null); for (let id of rest) parts.push(_bbThingHtml(id, false)); }
+    let kids = els.things.children, same = kids.length === parts.length;
+    for (let i = 0; same && i < parts.length; i++) same = parts[i] ? kids[i].dataset.id === parts[i].id : kids[i].classList.contains('bb-sep');
+    if (!same) {
+        let html = '';
+        for (let p of parts) html += p ? _bbThingPartsHtml(p) : `<div class="bb-sep" title="Never owned yet (drag things across to pin them left of this line)"></div>`;
+        els.things.innerHTML = html;
+        kids = els.things.children;
+        for (let i = 0; i < parts.length; i++) if (parts[i]) { kids[i]._bbBoost = parts[i].boost; kids[i]._bbBody = parts[i].body; }
+        return;
     }
-    els.things.innerHTML = html;
+    for (let i = 0; i < parts.length; i++) {
+        let p = parts[i], el = kids[i];
+        if (!p) continue;
+        if (el.className !== p.cls) el.className = p.cls;
+        if (el.getAttribute('title') !== p.title) el.setAttribute('title', p.title);
+        if (el._bbBoost !== p.boost) { el.firstElementChild.outerHTML = p.boost; el._bbBoost = p.boost; }
+        if (el._bbBody !== p.body) { el.lastElementChild.innerHTML = p.body; el._bbBody = p.body; }
+    }
 }
 
 function _bbResearchOrderSig(tasks) {
@@ -430,7 +538,7 @@ function _bbRenderResearch(now) {
     bb.freezeUntil = 0;
 
     let caret = (bb.menu && bb.menu.type === 'drop') ? Math.min(tasks.length, bb.menu.insertAt + bb.menu.added) : -1;
-    let openIndex = (bb.menu && bb.menu.type === 'task') ? tasks.indexOf(bb.menu.task) : -1;
+    let openIndex = _bbMenuTaskIndex(tasks);
     let parts = [];
     for (let t of tasks) {
         parts.push(`${_bbTaskStatId(t)}/${t.toLevel}/${Math.round(_bbTaskProgress(t) * 200)}/${Math.round(Number(t.cost) || 0)}`);
@@ -482,6 +590,10 @@ function _bbTaskHtml(t, index, open) {
 
 function _bbOnPointerDown(ev) {
     if (ev.button !== 0) return;
+    // (A boost slot: its own click, never the tile's press, menu or drag.)
+    let slot = ev.target instanceof Element ? ev.target.closest('[data-bb-boost]') : null;
+    if (slot) { ev.preventDefault(); ev.stopPropagation(); _bbOnBoostClick(slot); return; }
+    if (ev.target instanceof Element && ev.target.closest('.bb-boost')) { ev.preventDefault(); return; }
     let el = ev.target instanceof Element ? ev.target.closest('.bb-thing, .bb-task') : null;
     if (!el) return;
     ev.preventDefault();
@@ -769,7 +881,7 @@ function _bbToggleClickMenu(press) {
     }
     let task = _bbOrderedTasks(localPlayerId)[press.index];
     if (!task) return;
-    if (bb.menu && bb.menu.type === 'task' && bb.menu.task === task) { closeBottomBarMenus(); return; }
+    if (bb.menu && bb.menu.type === 'task' && (bb.menu.task === task || bb.menu.taskKey === _bbTaskKey(task))) { closeBottomBarMenus(); return; }
     _bbOpenMenu({ type: 'task', task });
 }
 
@@ -822,7 +934,7 @@ function _bbOpenMenu(spec) {
     el.setAttribute('role', 'dialog');
     document.body.appendChild(el);
     bb.menu = {
-        type: spec.type, id: spec.id || null, task: spec.task || null, el,
+        type: spec.type, id: spec.id || null, task: spec.task || null, taskKey: spec.task ? _bbTaskKey(spec.task) : '', el,
         anchor: spec.anchor || null, insertAt: spec.insertAt || 0, added: 0, html: '', pressed: false,
     };
     el.addEventListener('pointerdown', () => { if (bb.menu) bb.menu.pressed = true; });
@@ -850,7 +962,7 @@ function _bbMenuHeadHtml(kind, key, subHtml) {
     let cat = BB_CATEGORY[_bbThingCategory(kind, key)];
     return `<div class="bb-menu-head">`
         + `<span class="bb-menu-icon${isUnitCls}"><img src="${getItemThumbnail(key, 20)}" width="20" height="20" alt=""></span>`
-        + `<span class="bb-menu-title">${_bbEscape(_bbThingLabel(kind, key))} <span class="bb-menu-cat" style="color:${cat.color}">${cat.label}</span></span>`
+        + `<span class="bb-menu-title">${_bbEscape(_bbThingLabel(kind, key))}</span>`
         + `<span class="bb-menu-sub">${subHtml}</span>`
         + `</div>`;
 }
@@ -868,6 +980,15 @@ function _bbThingMenuHtml() {
             + `<span>Idle <b>${info.idle}/${info.count}</b> <span class="bb-muted">${idlePct}%</span></span>`
             + _bbFmtRate(rates.energy, '⚡', 'energy')
             + _bbFmtRate(rates.astar, '<span class="bb-star">★</span>', 'astar')
+            + `</div>`;
+    }
+
+    // Its boosts, in words (the slots on the tile set them).
+    {
+        let e = _bbBoostState(info, 'energy'), a = info.isUnit ? _bbBoostState(info, 'astar') : null;
+        html += `<div class="bb-menu-boost">`
+            + `<div class="${e.steps > 0 && e.on ? 'bb-boost-txt-e' : 'bb-muted'}">${_bbEscape(_bbBoostText(info, 'energy', e))}</div>`
+            + (a ? `<div class="${a.steps > 0 && a.on ? 'bb-boost-txt-a' : 'bb-muted'}">${_bbEscape(_bbBoostText(info, 'astar', a))}</div>` : '')
             + `</div>`;
     }
 
@@ -933,7 +1054,7 @@ function _bbDropMenuHtml() {
 function _bbTaskMenuHtml() {
     let owner = localPlayerId;
     let tasks = _bbOrderedTasks(owner);
-    let i = tasks.indexOf(bb.menu.task);
+    let i = _bbMenuTaskIndex(tasks);
     if (i < 0) return null;
     let t = tasks[i];
     let preview = getQueuedResearchTaskPreview(owner, tasks, i);
@@ -996,7 +1117,7 @@ function _bbPositionMenu() {
     let cur = null;
     if (menu.type === 'thing') cur = bb.els.things.querySelector(`.bb-thing[data-id="${CSS.escape(menu.id)}"]`);
     else if (menu.type === 'task') {
-        let i = _bbOrderedTasks(localPlayerId).indexOf(menu.task);
+        let i = _bbMenuTaskIndex(_bbOrderedTasks(localPlayerId));
         cur = i >= 0 ? bb.els.research.querySelector(`.bb-task[data-index="${i}"]`) : null;
     }
     if (cur) {
@@ -1072,9 +1193,9 @@ function _bbOnMenuClick(ev) {
 function _bbTaskAction(act) {
     let owner = localPlayerId;
     let tasks = _bbOrderedTasks(owner);
-    let t = bb.menu && bb.menu.task;
-    let i = tasks.indexOf(t);
+    let i = _bbMenuTaskIndex(tasks);
     if (i < 0) return;
+    let t = tasks[i];
     let last = tasks.length - 1;
     let lab = _bbResearchLab(owner);
     if (!lab) return;

@@ -10,6 +10,7 @@ let GRID_W = 80, GRID_H = 80;
 let WORLD_W = GRID_W * TILE, WORLD_H = GRID_H * TILE;
 
 // Gold mine config (adjustable from menu)
+let RESOURCE_MINE_DENSITY = 10; // combined target coverage of map tiles, in percent
 let GOLD_MINE_COUNT = 18;  // total mine tiles distributed across veins
 let GOLD_MINE_MIN = 500;
 let GOLD_MINE_MAX = 1500;

@@ -374,7 +374,9 @@ function netSimulationBusy() {
     // longer than the queued lead (only those stall it), not the page's
     // drawing as such.
     if (typeof simClientDispatchAhead === 'function' && simClientDispatchAhead()) {
-        return meanWork > TICK_MS * 0.8 || _simClient.lateMs > TICK_MS * 0.5 || simClientBehind() || netFrameMs() > TICK_MS * SIM_CLIENT_LEAD_TICKS;
+        // (With the worker's own ticks, a stalled page stalls none.)
+        let own = typeof _simAutoCtl === 'function' && !!_simAutoCtl();
+        return meanWork > TICK_MS * 0.8 || _simClient.lateMs > TICK_MS * 0.5 || simClientBehind() || (!own && netFrameMs() > TICK_MS * SIM_CLIENT_LEAD_TICKS);
     }
     return meanWork > TICK_MS * 0.8 || netFrameMs() > TICK_MS * 1.25
         || (typeof simClientActive === 'function' && simClientActive() && simClientInFlight() >= SIM_CLIENT_MAX_IN_FLIGHT);
@@ -865,6 +867,9 @@ function netPumpWatchdogTick() {
     if (!gameStarted || gameOver || document.hidden) return;
     if (typeof _scheduleSimulationUpTo !== 'function' || typeof _lastTickTime !== 'number') return;
     let now = performance.now();
+    // (The page's main thread is running: the simulation worker's own
+    // ticks are for when it is not, sim_client.js.)
+    if (typeof simClientAutoBeat === 'function') simClientAutoBeat(now);
     if (now - _lastTickTime < Math.max(120, netSimulationTickMs() * 2.5)) return;
     _scheduleSimulationUpTo(now);
 }

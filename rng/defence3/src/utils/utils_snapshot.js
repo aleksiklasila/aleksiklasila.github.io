@@ -74,7 +74,9 @@ const SNAP_FORMAT = 7;
 // 11: the separation's share of a push (UNIT_SEPARATION_TIER_GAIN 0.8); a
 // patch that removes a unit takes it out of the count planes, and one that
 // rebuilds a player's stat tables refreshes that player's units at once.
-const SIM_RULES_REVISION = 11;
+// 12: a stockpile in debt scales no stat; boosts (a thing's stats read a few
+// levels up its tables: data_dynamic.js BOOSTS).
+const SIM_RULES_REVISION = 12;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
 // Each hash covers one slice (regions, grid rows) of the world. The resync
@@ -1857,7 +1859,7 @@ function _snapStatMapSignature(pid) {
     let p = players[pid];
     if (!p) return '';
     try {
-        return JSON.stringify([p.researchLevels || null, p.researchMultipliers || null, p.resourceStatMultipliers || null]);
+        return JSON.stringify([p.researchLevels || null, p.researchMultipliers || null, p.resourceStatMultipliers || null, p.boosts || null, p.boostOn || null]);
     } catch { return ''; }
 }
 
