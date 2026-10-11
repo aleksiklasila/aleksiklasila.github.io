@@ -31,6 +31,7 @@ function createUiSettingsSnapshot() {
     if (typeof graphicsOptions === 'object' && graphicsOptions) ui.graphicsOptions = { ...graphicsOptions };
     if (typeof fpsTargetByDisplay === 'object' && fpsTargetByDisplay) ui.fpsTargetByDisplay = { ...fpsTargetByDisplay };
     if (typeof cameraSlideEnabled === 'boolean') ui.cameraSlideEnabled = cameraSlideEnabled;
+    if (typeof renderMaxHeight === 'number') ui.renderMaxHeight = renderMaxHeight;
     if (typeof pixelSnapCamera === 'boolean') ui.pixelSnapCamera = pixelSnapCamera;
     return ui;
 }
@@ -99,6 +100,7 @@ function loadUiSettingsFromStorage() {
                     graphicsOptions = normalizeGraphicsOptions(s.graphicsOptions);
                 }
                 if (typeof s.cameraSlideEnabled === 'boolean') cameraSlideEnabled = s.cameraSlideEnabled;
+                if (s.renderMaxHeight !== undefined && typeof normalizeRenderMaxHeight === 'function') renderMaxHeight = normalizeRenderMaxHeight(s.renderMaxHeight);
                 if (typeof s.pixelSnapCamera === 'boolean' && typeof pixelSnapCamera === 'boolean') pixelSnapCamera = s.pixelSnapCamera;
                 if (s.fpsTargetByDisplay && typeof s.fpsTargetByDisplay === 'object') {
                     fpsTargetByDisplay = {};

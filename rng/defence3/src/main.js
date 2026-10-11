@@ -2444,6 +2444,15 @@ function initInput() {
             saveUiSettingsToStorage();
         });
     }
+    const renderMaxHeightSelect = document.getElementById('setting-render-max-height');
+    if (renderMaxHeightSelect) {
+        renderMaxHeightSelect.value = String(renderMaxHeight);
+        renderMaxHeightSelect.addEventListener('change', () => {
+            setRenderMaxHeight(renderMaxHeightSelect.value);
+            renderMaxHeightSelect.value = String(renderMaxHeight);
+            saveUiSettingsToStorage();
+        });
+    }
     const pixelSnapToggle = document.getElementById('setting-pixel-snap');
     if (pixelSnapToggle) {
         pixelSnapToggle.checked = pixelSnapCamera;
@@ -2461,7 +2470,6 @@ function initInput() {
             setFpsTargetSetting(fpsTargetSelect.value);
             fpsTargetSelect.value = String(getFpsTargetSetting());
             saveUiSettingsToStorage();
-            if (typeof scheduleFillInFrame === 'function') scheduleFillInFrame();
         });
         // The window may have moved to another display since.
         let btnSettings = document.getElementById('btn-help');

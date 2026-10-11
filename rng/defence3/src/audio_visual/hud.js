@@ -1661,6 +1661,8 @@ function updateHUD() {
         _hudCache.tps = _tpsDisplay;
         _hudCache.net = netText;
         _hudEls.fps.textContent = `${_fpsDisplay} FPS / ${_tpsDisplay} TPS${netText}${_hudIsolationText()}`;
+        // (Hover: what the display, the browser and the GPU are doing.)
+        if (typeof renderDiagnosticsText === 'function') _hudEls.fps.title = renderDiagnosticsText();
     }
 }
 

@@ -1293,6 +1293,64 @@ Input to picture (all page-side, nothing of the match reads any of it):
   left above 60 ms there is not a response (All on a full selection, +L0 on
   no boost, kill).
 
+### 2026-10-12 — fullscreen on the TV turns sluggish after ~5 s; ghosts at a distance
+
+The user's displays: main 1920x1080 at 120 Hz, a TV 3840x2160 at 60 Hz
+(300% scale) above it. The game in real fullscreen on the TV feels fine for
+about five seconds, hitches, and is sluggish from then on. Only real
+fullscreen shows it; headless runs never did.
+
+**Measured** (`.claude/real_fullscreen_probe.cjs`: a real Edge window opened
+on the TV with `POS=-600,-2000`, the FS button, the window itself set
+fullscreen through CDP since the button alone leaves an automated window as
+it was; per half second the browser's frames, the GPU's time per frame, and
+the Event Timing API's input-to-presented-frame duration):
+
+| state | browser frames/s | GPU ms/frame | input to presented (p50 / p90) |
+| --- | --- | --- | --- |
+| window on the TV | ~120 | 1-2 | 32 / 56 |
+| fullscreen, first ~5.6 s | ~120 | 2 | 24 / 32 |
+| fullscreen after that | 60.0 | 12-14 | 64 / 72-88 |
+
+The browser paces every window by the main screen's 120 Hz; 5.6 s into
+fullscreen (in every run but one) presentation switches to the TV's own
+60 Hz, the queue between browser and display fills and stays full: four
+frames of delay at 60 Hz.
+
+**What did not fix it**, each tried on the TV:
+- Fill-in frames (drawn between browser frames when the browser is slower
+  than the target): never shown at all (`.claude/fillin_shown_probe.cjs`:
+  150 of 150 presented frames were the rAF callback's). Removed: they were a
+  third of all drawn frames in that state, for nothing.
+- A render resolution cap (Settings > Max render height, kept, default
+  none): not the cause.
+- Camera slide off; an always-on-top Picture-in-Picture window: no change.
+- Pacing frames under the display's rate (the "presentation queue guard",
+  renderer.js, now only with `?presentguard=1`): at 97% the queue empties
+  (16 ms p50) but two frames a second show twice; at exactly 60 with single
+  frames left out when the queue backs up, 32 ms but a frame left out every
+  ~2.5 s. Frames drawn on the browser's 120 Hz grid (59.8/s) never line up
+  with a display at 60.01. The user: clearly visible hitching, worse than
+  the browser's own steady 60.
+
+**What fixed it**: a low-latency canvas (`desynchronized: true` on the WebGL
+context, renderer3d.js; `?desync=0` off). With it the browser never leaves
+its fast rate in fullscreen on the TV: four runs of 22-40 s, ~117 frames/s
+throughout, GPU 1.7-1.9 ms, input to presented 32 / 40 ms (max 48), nothing
+left out; the control run without it dropped at 5.6 s as before.
+
+Also from this: the frame cap could not hold a target that is not a whole
+share of the browser's rate (its credit was clamped at zero: "50" of 120 was
+60); fixed. The FPS readout's hover text now says what the browser, the
+display and the GPU are doing (frames per second, drawn size, GPU ms per
+frame from EXT_disjoint_timer_query_webgl2, low-latency canvas on or off).
+
+**Ghosts at a distance**: buildings under construction beyond the 600 close
+models were drawn solid by the middle-distance model pass
+(`drawColumnModels`, opacity fixed at 1). They are now in groups of their
+own, see-through and lifted like the close model, drawn after the frame's
+solid things (`drawColumnModelGhosts`); the far glyph's opacity 0.6 → 0.35.
+
 ## Next
 
 Order set by the user (2026-10-09): main thread stable below 50 ms (aim

@@ -1746,3 +1746,8 @@
 #jukebox-link { min-width:0; width:100%; box-sizing:border-box; padding:8px; color:#ecf2fa; background:#0c121c; border:1px solid #52637b; border-radius:4px; }
 .jukebox-actions { display:flex; gap:8px; margin:12px 0; }
 #jukebox-panel a { color:#9bccff; font-size:12px; }
+
+/* The presentation queue guard paces the frames (renderer.js): nothing on
+   the page animates on its own, each animation frame would refill the queue
+   the guard keeps empty. */
+body.present-paced *, body.present-paced *::before, body.present-paced *::after { animation: none !important; transition: none !important; }

@@ -9,9 +9,9 @@
          GitHub Pages cannot send itself): SharedArrayBuffer for the simulation
          workers. The first visit reloads once. Must be the first script. -->
     <script src="./coi-serviceworker.min.js"></script>
-    <link rel="stylesheet" href="./style/style.css?v=20261011-ui9">
-    <link rel="stylesheet" href="./style/bottom_bar.css?v=20261011-ui9">
-    <link rel="stylesheet" href="./style/scrollbars.css?v=20261011-ui9">
+    <link rel="stylesheet" href="./style/style.css?v=20261012-fs11">
+    <link rel="stylesheet" href="./style/bottom_bar.css?v=20261012-fs11">
+    <link rel="stylesheet" href="./style/scrollbars.css?v=20261012-fs11">
 </head>
 
 <body>
@@ -652,11 +652,15 @@
                         <select id="setting-gfx-sharpen" style="width:150px"><option value="false">Off</option><option value="low">Low</option><option value="true">Medium</option><option value="high">High</option></select>
                     </div>
                     <div class="settings-row">
+                        <label for="setting-render-max-height" title="The scene is drawn with at most this many pixels on its short side and stretched to the window; panels and text stay sharp. A 4K screen is four times the pixels of 1080p for the graphics card: if the game turns sluggish on a big screen or in fullscreen, lower this. Hover the FPS readout to see what is drawn and how long the graphics card takes.">Max render height</label>
+                        <select id="setting-render-max-height" style="width:150px"><option value="720">720p</option><option value="900">900p</option><option value="1080">1080p</option><option value="1440">1440p</option><option value="2160">2160p (4K)</option><option value="0">Native (no cap)</option></select>
+                    </div>
+                    <div class="settings-row">
                         <label for="setting-gfx-resolution">Render resolution</label>
                         <select id="setting-gfx-resolution" style="width:150px"><option value="1">100%</option><option value="0.85">85%</option><option value="0.75">75%</option><option value="0.67">67%</option><option value="0.5">50%</option></select>
                     </div>
                     <div class="settings-row">
-                        <label for="setting-fps-target" title="Frame rate the game paces its frames to, set separately for each display. Auto: the refresh rate the browser runs this display at. If Auto shows more than the display really has (for example a 60 Hz display next to a 120 Hz one), pick the real rate here. Lower than the browser runs: frames are skipped evenly. Higher (for example Edge's 60 FPS fullscreen on a 120 Hz display): extra frames are drawn in between, as far as the frame cost allows.">Target FPS (this display)</label>
+                        <label for="setting-fps-target" title="Frame rate the game paces its frames to, set separately for each display. Auto: the refresh rate the browser runs this display at. If Auto shows more than the display really has (for example a 60 Hz display next to a 120 Hz one), pick the real rate here. Lower than the browser runs: frames are skipped evenly. Higher: the browser's own rate is used (a frame drawn between two of the browser's is never shown).">Target FPS (this display)</label>
                         <select id="setting-fps-target" style="width:150px"><option value="auto">Auto</option></select>
                     </div>
                     <div class="settings-row">
@@ -853,61 +857,61 @@
 
     <script src="./plotly-2.35.2.min.js"></script>
     
-    <script src="./src/sim/sim_parallel.js?v=20261011-ui9"></script>
-    <script src="./src/sim/sim_wasm_bin.js?v=20261011-ui9"></script>
-    <script src="./src/sim/sim_wasm.js?v=20261011-ui9"></script>
-    <script src="./src/sim/sim_unit_state.js?v=20261011-ui9"></script>
-    <script src="./src/utils/utils_common.js?v=20261011-ui9"></script>
-    <script src="./src/utils/utils_net_quality.js?v=20261011-ui9"></script>
-    <script src="./src/utils/utils_networking.js?v=20261011-ui9"></script>
-    <script src="./src/utils/utils_snapshot.js?v=20261011-ui9"></script>
-    <script src="./src/utils/utils_resync.js?v=20261011-ui9"></script>
-    <script src="./src/utils/utils_host_migration.js?v=20261011-ui9"></script>
-    <script src="./src/utils/utils_storage.js?v=20261011-ui9"></script>
+    <script src="./src/sim/sim_parallel.js?v=20261012-fs11"></script>
+    <script src="./src/sim/sim_wasm_bin.js?v=20261012-fs11"></script>
+    <script src="./src/sim/sim_wasm.js?v=20261012-fs11"></script>
+    <script src="./src/sim/sim_unit_state.js?v=20261012-fs11"></script>
+    <script src="./src/utils/utils_common.js?v=20261012-fs11"></script>
+    <script src="./src/utils/utils_net_quality.js?v=20261012-fs11"></script>
+    <script src="./src/utils/utils_networking.js?v=20261012-fs11"></script>
+    <script src="./src/utils/utils_snapshot.js?v=20261012-fs11"></script>
+    <script src="./src/utils/utils_resync.js?v=20261012-fs11"></script>
+    <script src="./src/utils/utils_host_migration.js?v=20261012-fs11"></script>
+    <script src="./src/utils/utils_storage.js?v=20261012-fs11"></script>
 
-    <script src="./src/data/data_static.js?v=20261011-ui9"></script>
-    <script src="./src/data/data_dynamic.js?v=20261011-ui9"></script>
-    <script src="./src/data/data_state.js?v=20261011-ui9"></script>
+    <script src="./src/data/data_static.js?v=20261012-fs11"></script>
+    <script src="./src/data/data_dynamic.js?v=20261012-fs11"></script>
+    <script src="./src/data/data_state.js?v=20261012-fs11"></script>
 
-    <script src="./src/audio_visual/visibility_history.js?v=20261011-ui9"></script>
-    <script src="./src/audio_visual/range_overlay.js?v=20261011-ui9"></script>
-    <script src="./src/audio_visual/selection_overlay.js?v=20261011-ui9"></script>
-    <script src="./src/audio_visual/postprocess3d.js?v=20261011-ui9"></script>
-    <script src="./src/audio_visual/renderer3d.js?v=20261011-ui9"></script>
-    <script src="./src/audio_visual/renderer2d.js?v=20261011-ui9"></script>
-    <script src="./src/audio_visual/side_visualizations.js?v=20261011-ui9"></script>
-    <script src="./src/audio_visual/effects3d.js?v=20261011-ui9"></script>
-    <script src="./src/audio_visual/renderer.js?v=20261011-ui9"></script>
-    <script src="./src/audio_visual/audio.js?v=20261011-ui9"></script>
-    <script src="./src/audio_visual/jukebox.js?v=20261011-ui9"></script>
-    <script src="./src/audio_visual/hud.js?v=20261011-ui9"></script>
-    <script src="./src/audio_visual/bottom_bar.js?v=20261011-ui9"></script>
+    <script src="./src/audio_visual/visibility_history.js?v=20261012-fs11"></script>
+    <script src="./src/audio_visual/range_overlay.js?v=20261012-fs11"></script>
+    <script src="./src/audio_visual/selection_overlay.js?v=20261012-fs11"></script>
+    <script src="./src/audio_visual/postprocess3d.js?v=20261012-fs11"></script>
+    <script src="./src/audio_visual/renderer3d.js?v=20261012-fs11"></script>
+    <script src="./src/audio_visual/renderer2d.js?v=20261012-fs11"></script>
+    <script src="./src/audio_visual/side_visualizations.js?v=20261012-fs11"></script>
+    <script src="./src/audio_visual/effects3d.js?v=20261012-fs11"></script>
+    <script src="./src/audio_visual/renderer.js?v=20261012-fs11"></script>
+    <script src="./src/audio_visual/audio.js?v=20261012-fs11"></script>
+    <script src="./src/audio_visual/jukebox.js?v=20261012-fs11"></script>
+    <script src="./src/audio_visual/hud.js?v=20261012-fs11"></script>
+    <script src="./src/audio_visual/bottom_bar.js?v=20261012-fs11"></script>
 
-    <script src="./src/game/chunk.js?v=20261011-ui9"></script>
-    <script src="./src/game/map.js?v=20261011-ui9"></script>
-    <script src="./src/game/pathfinding.js?v=20261011-ui9"></script>
-    <script src="./src/game/flownav.js?v=20261011-ui9"></script>
-    <script src="./src/game/player.js?v=20261011-ui9"></script>
+    <script src="./src/game/chunk.js?v=20261012-fs11"></script>
+    <script src="./src/game/map.js?v=20261012-fs11"></script>
+    <script src="./src/game/pathfinding.js?v=20261012-fs11"></script>
+    <script src="./src/game/flownav.js?v=20261012-fs11"></script>
+    <script src="./src/game/player.js?v=20261012-fs11"></script>
 
-    <script src="./src/things/barrack.js?v=20261011-ui9"></script>
-    <script src="./src/things/unit.js?v=20261011-ui9"></script>
-    <script src="./src/things/worker.js?v=20261011-ui9"></script>
-    <script src="./src/things/particle.js?v=20261011-ui9"></script>
-    <script src="./src/things/projectile.js?v=20261011-ui9"></script>
-    <script src="./src/things/things_utils.js?v=20261011-ui9"></script>
-    <script src="./src/things/tower.js?v=20261011-ui9"></script>
+    <script src="./src/things/barrack.js?v=20261012-fs11"></script>
+    <script src="./src/things/unit.js?v=20261012-fs11"></script>
+    <script src="./src/things/worker.js?v=20261012-fs11"></script>
+    <script src="./src/things/particle.js?v=20261012-fs11"></script>
+    <script src="./src/things/projectile.js?v=20261012-fs11"></script>
+    <script src="./src/things/things_utils.js?v=20261012-fs11"></script>
+    <script src="./src/things/tower.js?v=20261012-fs11"></script>
 
-    <script src="./src/main.js?v=20261011-ui9"></script>
+    <script src="./src/main.js?v=20261012-fs11"></script>
 
-    <script src="./src/sim/sim_frame.js?v=20261011-ui9"></script>
-    <script src="./src/sim/sim_frame_world.js?v=20261011-ui9"></script>
-    <script src="./src/sim/sim_presentation.js?v=20261011-ui9"></script>
-    <script src="./src/sim/sim_shadow.js?v=20261011-ui9"></script>
-    <script src="./src/sim/sim_rebase_bin.js?v=20261011-ui9"></script>
-    <script src="./src/sim/sim_rebase.js?v=20261011-ui9"></script>
-    <script src="./src/sim/sim_client.js?v=20261011-ui9"></script>
+    <script src="./src/sim/sim_frame.js?v=20261012-fs11"></script>
+    <script src="./src/sim/sim_frame_world.js?v=20261012-fs11"></script>
+    <script src="./src/sim/sim_presentation.js?v=20261012-fs11"></script>
+    <script src="./src/sim/sim_shadow.js?v=20261012-fs11"></script>
+    <script src="./src/sim/sim_rebase_bin.js?v=20261012-fs11"></script>
+    <script src="./src/sim/sim_rebase.js?v=20261012-fs11"></script>
+    <script src="./src/sim/sim_client.js?v=20261012-fs11"></script>
 
-    <script src="./src/bootstrap.js?v=20261011-ui9"></script>
+    <script src="./src/bootstrap.js?v=20261012-fs11"></script>
 </body>
 
 </html>

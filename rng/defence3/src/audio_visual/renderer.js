@@ -4063,7 +4063,9 @@ let _lastOverlaySnapshot = null, _overlayDrawStart = 0, _overlayDrawMs = 0, _pre
 // (now: a click, drawn whatever was drawn just before it.)
 function redrawBuildPreviewNow(now = false) {
     const S = _lastOverlaySnapshot, at = performance.now();
-    if (!S || !selectedBuildItem || !gameStarted || _overlayDrawMs > 4 || (!now && at - _previewRedrawAt < 6)) return;
+    // (Not while the presentation queue guard paces the frames: a redraw
+    // per mouse event is a frame per browser frame, which fills its queue.)
+    if (!S || !selectedBuildItem || !gameStarted || _overlayDrawMs > 4 || (!now && at - _previewRedrawAt < 6) || _presentGuard.rate > 0) return;
     _previewRedrawAt = at;
     try {
         S.buildPreview = getCurrentBuildPreviewData();
@@ -5678,6 +5680,23 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
 const CAMERA_SLIDE_PAD_PX = 64;
 const CAMERA_SLIDE_MAX_MS = 200;
 let cameraSlideEnabled = true;
+// Settings > Max render height: the 3D/2D scene is drawn with at most this
+// many pixels on the view's short side and stretched to the window by the
+// browser (the panels and the overlay stay at the display's own pixels). A
+// 4K display is four times the pixels of 1080p for every pass of the frame
+// (MSAA, post-processing, the resolve): on a TV that is the difference
+// between a GPU with time to spare and one that falls behind the display,
+// and a GPU that falls behind shows as lag on every input. 0: no cap.
+const RENDER_MAX_HEIGHT_CHOICES = [720, 900, 1080, 1440, 2160, 0];
+let renderMaxHeight = 0;
+function normalizeRenderMaxHeight(v) {
+    v = Math.round(Number(v));
+    return RENDER_MAX_HEIGHT_CHOICES.includes(v) ? v : 0;
+}
+function setRenderMaxHeight(v) {
+    renderMaxHeight = normalizeRenderMaxHeight(v);
+    _applyRenderViewPad();
+}
 // Settings > Pixel-snapped camera (2D): each frame is drawn with the camera
 // on a whole device pixel, so sprites are not resampled at a different
 // sub-pixel phase every frame while panning (shimmer and smear). The camera
@@ -5688,7 +5707,8 @@ let _cameraSnapSaved = null;
 function _applyRenderCameraSnap() {
     _cameraSnapSaved = null;
     if (!pixelSnapCamera || renderDimensionMode !== '2d') return;
-    let px = camera.zoom * (window.devicePixelRatio || 1);
+    // (The scene's own pixels: fewer than the display's under a resolution cap.)
+    let px = camera.zoom * ((renderer3dInstance && renderer3dInstance.supported && renderer3dInstance.pixelRatio) || window.devicePixelRatio || 1);
     if (!(px > 0)) return;
     _cameraSnapSaved = { x: camera.x, y: camera.y };
     camera.x = Math.round(camera.x * px) / px;
@@ -5796,7 +5816,9 @@ function updateCameraSlide(frameTime) {
     let r3 = renderer3dInstance;
     let flat = renderDimensionMode !== '3d';
     let m = r3 && r3.pickViewProjection;
-    if (!(pad > 0) || !gameStarted || document.hidden || !r3 || (!flat && !m)) {
+    // (Not while the presentation queue guard paces the frames: the slide
+    // is a frame per browser frame, which is what fills that queue.)
+    if (!(pad > 0) || !gameStarted || document.hidden || !r3 || (!flat && !m) || _presentGuard.rate > 0) {
         _cameraSlideFrame = null;
         if (_cameraSlideActive) _stopCameraSlide();
         return;
@@ -5900,7 +5922,9 @@ function processRenderFrame(timestamp) {
     if (renderer3d) {
         renderer3dSnapshot = build3DFrameData(renderDimensionMode === '2d');
         renderer3d.setGraphicsOptions(graphicsOptions);
-        renderer3d.render(renderer3dSnapshot);
+        if (typeof renderer3d.gpuTimerBegin === 'function') renderer3d.gpuTimerBegin();
+        try { renderer3d.render(renderer3dSnapshot); }
+        finally { if (typeof renderer3d.gpuTimerEnd === 'function') renderer3d.gpuTimerEnd(); }
         drawMinimap();
     } else {
         draw();
@@ -5942,9 +5966,8 @@ function processRenderFrame(timestamp) {
 
 // FRAME LOOP
 // One steady frame clock drives drawing, camera and unit interpolation:
-// browser frames use the rAF timestamp (vsync aligned) and fill-in frames
-// (below) use evenly spaced slots between two browser frames. Camera and
-// units therefore move by the same amount every frame, even when a frame
+// the browser frame's rAF timestamp (vsync aligned). Camera and units
+// therefore move by the same amount every frame, even when a frame
 // starts a little late, which is what makes panning look locked.
 //
 // Game ticks run right after a frame is drawn, in their own task, for the
@@ -5984,6 +6007,10 @@ if (_simChannel.port1.unref) { _simChannel.port1.unref(); _simChannel.port2.unre
 // Browser frame interval: median of the last 15 gaps, ignoring stalls.
 // Steady gaps also teach the display's refresh rate (see getDisplayRefreshRate).
 let _rafDisplayKey = '';
+// The last 15 browser frames came evenly spaced.
+let _rafSteady = false;
+// The gap before the latest browser frame (ms).
+let _rafLastGapMs = 0;
 
 function _noteRafTimestamp(ts) {
     let key = _displayKey();
@@ -6000,9 +6027,8 @@ function _noteRafTimestamp(ts) {
             if (_rafDeltas.length > 15) _rafDeltas.shift();
             let sorted = _rafDeltas.slice().sort((x, y) => x - y);
             _rafIntervalMs = sorted[sorted.length >> 1];
-            if (sorted.length >= 15 && !document.hidden && sorted[11] - sorted[3] < _rafIntervalMs * 0.12) {
-                _learnDisplayRefreshRate(1000 / _rafIntervalMs);
-            }
+            _rafSteady = sorted.length >= 15 && !document.hidden && sorted[11] - sorted[3] < _rafIntervalMs * 0.12;
+            if (_rafSteady) _learnDisplayRefreshRate(1000 / _rafIntervalMs);
         }
     }
     _rafLastTs = ts;
@@ -6028,10 +6054,118 @@ function _runLoopFrame(time, nextTime) {
 let _frameCapCredit = 0;
 let _frameCapLastTs = 0;
 
+// PRESENTATION QUEUE GUARD
+// A window that covers its screen is, a few seconds in (when the browser's
+// own fullscreen notice has gone), shown by the display directly, at the
+// display's own refresh rate. When that rate is below the rate the browser
+// makes frames at (a 60 Hz TV beside a 120 Hz monitor: the browser paces
+// every window by one clock), more frames are made than can be shown, the
+// queue between the browser and the display fills, and the browser then
+// makes exactly as many as are shown: the queue stays full, and every
+// frame waits its whole length before it is seen. The game turns sluggish
+// at that moment and stays so. Measured on such a pair
+// (.claude/real_fullscreen_probe.cjs, a real Edge window on the TV; the
+// browser's Event Timing, an input to the frame with its effect
+// presented): 24 ms before, 64-72 ms after, for good.
+//
+// The queue empties when fewer frames are made than shown, by everything
+// on the page: the game's frames, the camera slide (a compositor animation:
+// a frame per browser frame whatever the game draws), CSS animations, the
+// build preview redrawn on mouse moves. A lower pace (97%) keeps it empty
+// but shows two frames a second twice: a hitch the eye catches. So the
+// pace is the display's own, exactly, and the queue is watched instead:
+// while it is empty the browser's frames come at their fast rate (two per
+// display frame here, every second one drawn); the moment a frame waits in
+// it they come at the display's rate. Then ONE frame is left out, which
+// takes one frame out of the queue, and so on, PRESENT_GUARD_SKIP_GAP_MS
+// apart, until they come fast again. Two clocks that differ by a thousandth
+// cost a frame every quarter minute; nothing is paced down.
+//
+// What is seen from here, to begin with: the browser's frames, which came
+// fast and even, come at a lower common display rate, even again, with the
+// page far from busy. That rate is the display's, kept while the window
+// covers this screen; the camera slide and CSS animations stop
+// (body.present-paced), the build preview is drawn with the frames. A
+// browser that simply runs at the lower rate (leaving frames out does not
+// bring the fast ones back) is left alone after PRESENT_GUARD_GIVE_UP
+// tries: there is nothing to empty.
+const PRESENT_GUARD_DETECT_FRAMES = 20, PRESENT_GUARD_SKIP_GAP_MS = 150, PRESENT_GUARD_GIVE_UP = 14;
+// (That many of the browser's frames in a row a display frame apart: a page
+// hiccup makes one or two such gaps, a frame waiting in the queue makes all.)
+let presentGuardSlowRun = 5;
+// OFF unless the page is opened with ?presentguard=1. Tried on the pair of
+// displays above and judged by eye: every frame left out shows as a hitch,
+// and frames drawn on the browser's 120 Hz grid (59.8 a second) never line
+// up with a display at 60.01, so some are always left out or shown twice:
+// about one every 2.5 s as measured. Half the delay (32 ms for 64-72), but
+// the browser's own steady 60 looks better. Kept for another look.
+let presentGuardEnabled = (() => { try { return new URLSearchParams(location.search).get('presentguard') === '1'; } catch { return false; } })();
+// Frames are paced to this share of the display's rate (1: every display frame).
+let presentGuardPace = 1;
+const _presentGuard = { key: '', rate: 0, fast: 0, fastRate: 0, slow: 0, slowRun: 0, skips: 0, lastSkipAt: 0, noGain: 0, gaveUp: false };
+function _windowCoversScreen() {
+    return !!document.fullscreenElement || (window.innerHeight >= screen.height - 4 && window.innerWidth >= screen.width - 4);
+}
+// True: this browser frame is not drawn (a frame is taken out of the queue).
+function _presentGuardStep(ts) {
+    const G = _presentGuard, covers = _windowCoversScreen(), key = _displayKey() + (covers ? '|covers' : '');
+    if (G.key !== key) { G.key = key; G.rate = G.fast = G.fastRate = G.slow = G.slowRun = G.noGain = 0; G.gaveUp = false; }
+    if (!presentGuardEnabled || !covers || !gameStarted || document.hidden || G.gaveUp) { G.rate = G.slow = 0; _presentGuardApply(); return false; }
+    if (G.rate > 0) {
+        // Paced. A frame waits in the queue: the browser's frames come a
+        // display frame apart, not at their fast rate.
+        const fastMs = 1000 / G.fastRate, gap = _rafLastGapMs;
+        if (gap > 0 && gap < fastMs * 1.3) { G.slowRun = 0; G.noGain = 0; return false; }
+        if (!(gap > fastMs * 1.5 && gap < 60)) return false;
+        G.slowRun++;
+        // (Not for a page busy with its own frame: that is not the queue.)
+        if (G.slowRun < presentGuardSlowRun || ts - G.lastSkipAt < PRESENT_GUARD_SKIP_GAP_MS || _renderMsEma + _simMsEma > 1000 / G.rate * 0.4) return false;
+        if (++G.noGain > PRESENT_GUARD_GIVE_UP) { G.gaveUp = true; G.rate = 0; _presentGuardApply(); return false; }
+        G.lastSkipAt = ts; G.skips++; G.slowRun = 0;
+        return true;
+    }
+    const rate = _snapRefreshRate(1000 / _rafIntervalMs);
+    if (_rafSteady && rate > G.fast) G.fast = rate;
+    // (Even, at a display rate well under the fast one, the page idle most of each frame.)
+    if (_rafSteady && G.fast > 0 && rate >= 24 && rate <= G.fast * 0.8 && _renderMsEma + _simMsEma < _rafIntervalMs * 0.4) G.slow++;
+    else G.slow = 0;
+    if (G.slow < PRESENT_GUARD_DETECT_FRAMES) return false;
+    G.rate = rate; G.fastRate = G.fast; G.slow = G.slowRun = G.noGain = 0;
+    G.lastSkipAt = ts; G.skips++;
+    _presentGuardApply();
+    return true;
+}
+// The page while the guard paces it: no camera slide (updateCameraSlide), no
+// CSS animations or transitions (style.css body.present-paced).
+let _presentGuardApplied = false;
+function _presentGuardApply() {
+    const on = _presentGuard.rate > 0;
+    if (on === _presentGuardApplied) return;
+    _presentGuardApplied = on;
+    if (document.body) document.body.classList.toggle('present-paced', on);
+    if (on && _cameraSlideActive) _stopCameraSlide();
+}
+// The display's own rate, when the guard found it (0: not known).
+function presentGuardRate() {
+    return _presentGuard.rate;
+}
+
 function _rafLoopFrame(ts) {
     _renderFrameHandle = 0;
+    _rafLastGapMs = _rafLastTs ? ts - _rafLastTs : 0;
     _noteRafTimestamp(ts);
     queueRenderFrame();
+    if (_presentGuardStep(ts)) {
+        // (Not drawn; the simulation and its heartbeat go on. The frame left
+        // out is one frame fewer: its time is spent, the pacer below does not
+        // draw it on the next browser frame instead.)
+        let paceMs = 1000 / getTargetFrameRate();
+        _frameCapCredit = Math.max(-paceMs, Math.min(_frameCapCredit + (_frameCapLastTs ? ts - _frameCapLastTs : 0), paceMs * 2) - paceMs);
+        _frameCapLastTs = ts;
+        if (typeof simClientAutoBeat === 'function') simClientAutoBeat(performance.now());
+        _scheduleSimulationUpTo(ts + _rafIntervalMs);
+        return;
+    }
     // Browser faster than the target (say 120 Hz, target 60): draw on the
     // browser frames that keep the target pace, so every drawn frame is shown for
     // the same number of refreshes. Credit follows the real frame times, so
@@ -6039,18 +6173,22 @@ function _rafLoopFrame(ts) {
     let targetMs = 1000 / getTargetFrameRate();
     let gap = _frameCapLastTs ? ts - _frameCapLastTs : _rafIntervalMs;
     _frameCapLastTs = ts;
-    if (_rafIntervalMs < targetMs * 0.9) {
+    // (Paced by the presentation queue guard: by time alone, at whatever rate
+    // the browser's frames come just now: fast while its queue is empty, at
+    // the display's rate while a frame waits in it.)
+    let guarded = _presentGuard.rate > 0;
+    if (guarded || _rafIntervalMs < targetMs * 0.9) {
         _frameCapCredit = Math.min(_frameCapCredit + gap, targetMs * 2);
-        if (_frameCapCredit < targetMs - _rafIntervalMs * 0.5) return;
-        _frameCapCredit = Math.max(0, _frameCapCredit - targetMs);
-        _planFillInFrames(ts, 0);
+        if (_frameCapCredit < targetMs - (guarded ? 1000 / _presentGuard.fastRate : _rafIntervalMs) * 0.5) return;
+        // (The part of a target frame drawn early is owed: clamped at zero, a
+        // target that is not a whole share of the browser's rate, 50 of 120 or
+        // 54 of 60, was never held: every second frame, or every frame, was drawn.)
+        _frameCapCredit = Math.max(-targetMs, _frameCapCredit - targetMs);
         _runLoopFrame(ts, ts + targetMs);
         return;
     }
     _frameCapCredit = 0;
-    let slots = _planFillInFrames(ts);
-    _runLoopFrame(ts, ts + _rafIntervalMs / (slots + 1));
-    scheduleFillInFrame();
+    _runLoopFrame(ts, ts + _rafIntervalMs);
 }
 
 // Draws one frame now (benchmarks and tools); the loop uses _rafLoopFrame.
@@ -6060,18 +6198,18 @@ function renderFrame(timestamp) {
     try { processRenderFrame(t); } catch (err) { reportRuntimeError('render', err); }
 }
 
-// Browsers pace requestAnimationFrame to what they think the display runs at,
-// and Edge/Chrome drop it to 60 in fullscreen after a few seconds. When rAF
-// comes slower than the target FPS, extra frames run in between, evenly
-// spaced: at 60 Hz with a 120 target one frame goes exactly half way. The
-// count is the whole number of target frames that fit (60 -> 144 adds one,
-// 60 -> 240 adds three), so steps stay even. When rAF is faster than the
-// target, frames are skipped to keep the target pace instead.
-//
-// Timers are often only as precise as Windows' 15.6 ms tick (on battery for
-// example), too coarse to hit 8.3 ms gaps. Then the wait is a timer for the
-// part it can cover and MessageChannel hops (not clamped) for the rest, which
-// keeps the main thread polling part of the time; hence the setting.
+// Frames are drawn in the browser's own frames (requestAnimationFrame) and
+// nowhere else. The browser shows a canvas as it is when its frame is
+// committed, right after the frame's rAF callbacks: a frame drawn between
+// two browser frames (from a timer) is drawn over by the next callback
+// before anything is shown. Measured in Edge (.claude/fillin_shown_probe.cjs:
+// 150 of 150 presented frames were the callback's). The game used to draw
+// such frames when the browser ran slower than the target (Edge a few
+// seconds into fullscreen on a display slower than the rate learned for
+// it, a 60 Hz TV beside a 120 Hz monitor): half of all frames drawn for
+// nothing, the shown one queued behind them on the GPU, and the game
+// turned sluggish at that moment. A browser slower than the target is
+// simply followed; a faster one is capped (_rafLoopFrame).
 //
 // Target (Settings > Target FPS): 'auto' follows the refresh rate of the
 // display the window is on, or a fixed common rate. The choice is kept per
@@ -6100,7 +6238,9 @@ function setFpsTargetSetting(v) {
 
 function getTargetFrameRate() {
     let v = getFpsTargetSetting();
-    return v === 'auto' ? getDisplayRefreshRate() : v;
+    let target = v === 'auto' ? getDisplayRefreshRate() : v;
+    // (The rate the display itself shows this window at: see the presentation queue guard.)
+    return _presentGuard.rate > 0 ? Math.min(target, _presentGuard.rate * presentGuardPace) : target;
 }
 
 // Display refresh rate, per display. Browsers slow rAF down (fullscreen,
@@ -6150,104 +6290,28 @@ function getDisplayRefreshRate() {
     return Number(_displayRates[_displayKey()]) || 60;
 }
 
-let _lastRenderFrameAt = 0;
-let _fillInTimer = 0;
-let _fillInHopPending = false;
-let _timerGranularityMs = 16;
-// Fill-in slots after the latest browser frame: base time, spacing, next slot, slot count.
-let _fillInBase = 0;
-let _fillInSpacing = 0;
-let _fillInNext = 1;
-let _fillInCount = 0;
-const _fillInChannel = new MessageChannel();
-_fillInChannel.port1.onmessage = () => { _fillInHopPending = false; _fillInStep(); };
-if (_fillInChannel.port1.unref) { _fillInChannel.port1.unref(); _fillInChannel.port2.unref(); }
-
-// Measured once: how late a 1 ms timer fires. Precise timers make hops unnecessary.
-(function measureTimerGranularity() {
-    let samples = [], last = performance.now();
-    let step = () => {
-        let now = performance.now();
-        samples.push(now - last);
-        last = now;
-        if (samples.length < 8) setTimeout(step, 1);
-        else _timerGranularityMs = samples.slice(2).sort((a, b) => a - b)[3] || 16;
-    };
-    setTimeout(step, 1);
-})();
-
-// Only the target FPS decides: fill-in frames run when it is above the
-// browser's frame rate (for example Edge's fullscreen 60 on a 120 Hz display).
-function _fillInFramesWanted() {
-    return gameStarted && !document.hidden;
+// What the display, the browser and the GPU are doing, for the FPS readout's
+// hover text (hud.js): the numbers that tell a busy page from a busy GPU
+// from a browser running slower than it did.
+function renderDiagnosticsText() {
+    const R = renderer3dInstance, r1 = v => Math.round(v * 10) / 10;
+    const lines = [`Browser frames: ${r1(1000 / _rafIntervalMs)} per second (display learned as ${getDisplayRefreshRate()} Hz, target ${getTargetFrameRate()})`];
+    if (R && R.supported && R.canvas) {
+        lines.push(`Drawn at ${R.canvas.width} x ${R.canvas.height}${R.sceneSamples ? ', MSAA x' + R.sceneSamples : ''} for a ${Math.round(viewW)} x ${Math.round(viewH)} view (display scale ${r1(window.devicePixelRatio || 1)}, max render height ${renderMaxHeight || 'none'})`);
+        lines.push(R.gpuFrameMs >= 0 ? `GPU per frame: ${r1(R.gpuFrameMs)} ms (recent worst ${r1(R.gpuFrameMsMax)} ms)` : 'GPU per frame: not measurable in this browser');
+    }
+    if (R && R.gl && R.gl.getContextAttributes && R.gl.getContextAttributes().desynchronized) lines.push('Low-latency canvas: on');
+    lines.push(`Page per frame: ${r1(_renderMsEma)} ms drawing, ${r1(_simMsEma)} ms after it`);
+    lines.push(`Screen ${screen.width} x ${screen.height}${_windowCoversScreen() ? ', fullscreen' : ''}`);
+    if (_presentGuard.rate > 0) lines.push(`Display shows this window at ${_presentGuard.rate} Hz: frames paced to it, camera slide off (${_presentGuard.skips} frame${_presentGuard.skips === 1 ? '' : 's'} left out to keep its queue empty)`);
+    else if (_presentGuard.gaveUp) lines.push('Browser runs below its earlier frame rate here; leaving frames out did not bring it back');
+    return lines.join('\n');
 }
 
-// Plans the fill-in frames after the browser frame at `ts`; returns their count.
+let _lastRenderFrameAt = 0;
 // Recent cost of one frame and of the simulation work after it (ms).
 let _renderMsEma = 0;
 let _simMsEma = 0;
-
-// Fill-in frames are for a browser that throttles its frames (fullscreen
-// 60 on a faster display), never for frames that are slow because the game
-// is busy: extra frames would only slow it further. So none below 50 browser
-// FPS, and only as many as the measured frame cost leaves room for.
-function _planFillInFrames(ts, maxCount = 7) {
-    let count = 0;
-    if (_fillInFramesWanted() && _rafIntervalMs <= 20) {
-        // Never above the display's refresh rate: frames it cannot show only
-        // make the shown ones uneven (it shows whichever finished last).
-        let rate = Math.min(getTargetFrameRate(), getDisplayRefreshRate());
-        count = Math.max(0, Math.min(maxCount, Math.round(_rafIntervalMs * rate / 1000 + 0.05) - 1));
-        let perFrame = _renderMsEma + _simMsEma;
-        if (perFrame > 0) count = Math.min(count, Math.max(0, Math.floor(_rafIntervalMs * 0.7 / perFrame) - 1));
-    }
-    _fillInBase = ts;
-    _fillInCount = count;
-    _fillInSpacing = _rafIntervalMs / (count + 1);
-    _fillInNext = 1;
-    return count;
-}
-
-function _fillInDueAt() {
-    return _fillInBase + _fillInNext * _fillInSpacing;
-}
-
-function scheduleFillInFrame() {
-    if (_fillInTimer) { clearTimeout(_fillInTimer); _fillInTimer = 0; }
-    if (!_fillInFramesWanted() || _fillInNext > _fillInCount) return;
-    let wait = _fillInDueAt() - performance.now();
-    if (_timerGranularityMs <= 4) {
-        // Precise timers: just sleep until due.
-        _fillInTimer = setTimeout(_fillInStep, Math.max(0, wait));
-    } else if (wait > _timerGranularityMs + 1) {
-        // Coarse timers: sleep while the timer cannot overshoot, then hop.
-        _fillInTimer = setTimeout(scheduleFillInFrame, wait - _timerGranularityMs - 1);
-    } else {
-        _fillInStep();
-    }
-}
-
-function _fillInStep() {
-    _fillInTimer = 0;
-    if (!_fillInFramesWanted() || _fillInNext > _fillInCount) return;
-    let now = performance.now();
-    if (now >= _fillInDueAt()) {
-        // A slot missed by more than half a slot is skipped: the next one (or
-        // the next browser frame) shows the right moment instead.
-        while (_fillInNext <= _fillInCount && now > _fillInDueAt() + _fillInSpacing * 0.5) _fillInNext++;
-        if (_fillInNext > _fillInCount) return;
-        let time = _fillInDueAt();
-        _fillInNext++;
-        _runLoopFrame(time, time + _fillInSpacing);
-        scheduleFillInFrame();
-    } else if (_timerGranularityMs <= 4) {
-        scheduleFillInFrame();
-    } else if (!_fillInHopPending) {
-        // Not due yet: hop again (input and rAF still run in between).
-        _fillInHopPending = true;
-        _fillInChannel.port2.postMessage(0);
-    }
-}
 
 // The simulation's own browser-frame loop: it keeps ticks going even when
 // no frame is drawn (and headless). It only schedules the tick task, which

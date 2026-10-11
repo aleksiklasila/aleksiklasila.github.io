@@ -2219,7 +2219,20 @@
             this.canvas.setAttribute('aria-hidden', 'true');
             if (this.mount) this.mount.appendChild(this.canvas);
 
+            // A low-latency canvas (desynchronized), where the browser has one.
+            // What it is for here: a window that covers a display slower than
+            // the browser's frame clock (a 60 Hz TV beside a 120 Hz monitor) is,
+            // a few seconds into fullscreen, presented at the display's own
+            // rate with the browser's whole frame queue full: 64-72 ms from an
+            // input to its frame, for good (renderer.js PRESENTATION QUEUE
+            // GUARD has the measurements). With this canvas the browser stays
+            // at its fast rate there: three real fullscreen runs on that TV,
+            // 22-40 s each, ~118 frames a second throughout, 32 ms to the
+            // presented frame (.claude/real_fullscreen_probe.cjs). ?desync=0: off.
+            let desync = true;
+            try { desync = new URLSearchParams(location.search).get('desync') !== '0'; } catch { }
             this.gl = this.canvas.getContext('webgl2', {
+                desynchronized: desync,
                 alpha: false,
                 antialias: false, // The off-screen scene has its own MSAA target.
                 depth: true,
@@ -3122,6 +3135,39 @@
             this.canvas.style.display = this.enabled ? 'block' : 'none';
         }
 
+        // The GPU's time for a frame (EXT_disjoint_timer_query_webgl2, where
+        // the browser has it): begun and ended around render(), read a few
+        // frames later when the result is there. gpuFrameMs: smoothed; -1
+        // while unknown. One query at a time is in flight per frame drawn.
+        gpuTimerBegin() {
+            const gl = this.gl;
+            if (this.gpuTimerExt === undefined) { this.gpuTimerExt = gl.getExtension('EXT_disjoint_timer_query_webgl2') || null; this.gpuQueries = []; this.gpuFrameMs = -1; this.gpuFrameMsMax = 0; }
+            const ext = this.gpuTimerExt;
+            if (!ext) return;
+            // (Results of earlier frames, oldest first.)
+            while (this.gpuQueries.length) {
+                const q = this.gpuQueries[0];
+                if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
+                this.gpuQueries.shift();
+                if (!gl.getParameter(ext.GPU_DISJOINT_EXT)) {
+                    const ms = gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6;
+                    this.gpuFrameMs = this.gpuFrameMs < 0 ? ms : this.gpuFrameMs + (ms - this.gpuFrameMs) * 0.1;
+                    this.gpuFrameMsMax = Math.max(ms, this.gpuFrameMsMax * 0.995);
+                }
+                gl.deleteQuery(q);
+            }
+            this.gpuQuery = null;
+            if (this.gpuQueries.length >= 8) return;
+            this.gpuQuery = gl.createQuery();
+            gl.beginQuery(ext.TIME_ELAPSED_EXT, this.gpuQuery);
+        }
+        gpuTimerEnd() {
+            if (!this.gpuQuery) return;
+            this.gl.endQuery(this.gpuTimerExt.TIME_ELAPSED_EXT);
+            this.gpuQueries.push(this.gpuQuery);
+            this.gpuQuery = null;
+        }
+
         resizeForSnapshot(snapshot) {
             let pad = Math.max(0, Number(snapshot.viewPad) || 0);
             this.resize((Number(snapshot.viewportWidth) || 1) + 2 * pad, (Number(snapshot.viewportHeight) || 1) + 2 * pad);
@@ -3135,6 +3181,13 @@
             // rescale a 1.5x canvas on a 2x display. Bound large-screen GPU cost.
             const pixelBudget = 6000000;
             this.pixelRatio = Math.min(window.devicePixelRatio || 1, Math.max(1, Math.sqrt(pixelBudget / (safeWidth * safeHeight))));
+            // Settings > Max render height (renderer.js renderMaxHeight): the
+            // view's short side, without the slide's margin, in drawn pixels.
+            const maxHeight = typeof renderMaxHeight === 'number' ? renderMaxHeight : 0;
+            if (maxHeight > 0) {
+                const pad = typeof getRenderViewPad === 'function' ? getRenderViewPad() : 0;
+                this.pixelRatio = Math.min(this.pixelRatio, maxHeight / Math.max(1, Math.min(safeWidth, safeHeight) - 2 * pad));
+            }
             // Resolution scale renders fewer pixels; the canvas is stretched back by CSS.
             let resolution = this.graphicsOptions ? this.graphicsOptions.resolution : 1;
             if (resolution < 1) this.pixelRatio *= resolution;
@@ -5855,7 +5908,7 @@
                 || S.unitMask!==C.detailMaskVersion || S.structMask!==C.detailMaskVersionS || S.catalog!==A.catalog || S.atlasRevision!==A.revision) {
                 if(S.catalog!==A.catalog) {for(const G of S.groups.values())G.storage.dispose(gl);S.groups.clear();}
                 S.units=C.units;S.structures=C.structures;S.key=key;S.unitMask=C.detailMaskVersion;S.structMask=C.detailMaskVersionS;S.catalog=A.catalog;S.atlasRevision=A.revision;
-                S.version++;S.count=0;
+                S.version++;S.count=0;S.ghosts=0;S.atlas=A;S.alpha=C.alpha;
                 for(const G of S.groups.values()) G.storage.count=0;
                 const colors=C.colors.map(hexToRgb);
                 for(let kind=0;kind<2;kind++) {
@@ -5894,11 +5947,16 @@
                         if(!kind&&(row===0&&figure!=='portal'||row===3&&!figure.startsWith('farm'))
                             && typeof renderer3dStaticFrame!=='undefined' && renderer3dStaticFrame.occupied?.has(F.gy[s]*snapshot.worldWidth+F.gx[s]))
                             sy=Math.min(sy,Math.max(.05,Math.min(.14,sy*.25)));
-                        const mode=kind?F.mode[s]:0,meshKind=figure+':lod',groupKey=styleIndex+'|'+mode;
+                        // (Under construction: see-through, as its close model is
+                        // (renderer.js get3DConstructionAlpha). Those are drawn
+                        // with the scene's other see-through things, after the
+                        // solid ones: drawColumnModelGhosts.)
+                        const ghost=!kind&&(F.flags[s]&1)!==0;
+                        const mode=kind?F.mode[s]:0,meshKind=figure+':lod',groupKey=styleIndex+'|'+mode+(ghost?'|uc':'');
                         let G=S.groups.get(groupKey);
                         if(!G) {
                             const sample={modelKey:style.modelKey,isFlying:style.isFlying,animationMode:mode};
-                            G={styleIndex,sample,kind:meshKind,mesh:this.getFigureMesh(meshKind),storage:new PersistentInstances(INSTANCE_STRIDE)};
+                            G={styleIndex,sample,kind:meshKind,mesh:this.getFigureMesh(meshKind),storage:new PersistentInstances(INSTANCE_STRIDE),ghost};
                             S.groups.set(groupKey,G);
                         }
                         const L=G.storage;L.reserve(L.count+1);const d=L.data,o=L.count++*INSTANCE_STRIDE;
@@ -5907,9 +5965,10 @@
                         d[o]=c*sx;d[o+1]=0;d[o+2]=-sn*sx;d[o+3]=kind?(F.px[s]-F.x[s])/C.tile:0;
                         d[o+4]=flying?(F.id[s]*1.7)%(Math.PI*2):0;d[o+5]=sy;d[o+6]=flying?1:0;d[o+7]=kind?(F.py[s]-F.y[s])/C.tile:0;
                         d[o+8]=sn*sx;d[o+9]=0;d[o+10]=c*sx;d[o+11]=kind?F.prate[s]:0;
-                        d[o+12]=x;d[o+13]=kind?.012+(((F.id[s]*1103515245)>>>0)%7)*.003+(flying?(style.isWorker?.36:.30):0):0;d[o+14]=z;d[o+15]=1;
+                        d[o+12]=x;d[o+13]=kind?.012+(((F.id[s]*1103515245)>>>0)%7)*.003+(flying?(style.isWorker?.36:.30):0):ghost?.03:0;d[o+14]=z;d[o+15]=1;
                         const owner=colors[Math.max(0,Math.min(8,F.owner[s]+1))],tint=style._mediumTint||(style._mediumTint=hexToRgb(style.color||'#aaa'));
-                        d[o+16]=owner[0];d[o+17]=owner[1];d[o+18]=owner[2];d[o+19]=1;
+                        d[o+16]=owner[0];d[o+17]=owner[1];d[o+18]=owner[2];d[o+19]=ghost?.25:1;
+                        if(ghost)S.ghosts++;
                         d[o+20]=kind?F.amount[s]:0;d[o+21]=kind?F.phase[s]:0;
                         d[o+22]=tint[0];d[o+23]=tint[1];d[o+24]=tint[2];
                         d[o+25]=F.flags[s]&65536?-1.14:C.fullVisibility||(kind&&F.owner[s]===C.player)?1:Math.min(1,C.visibility[Math.floor(z)][Math.floor(x)]/C.lightNorm);
@@ -5921,19 +5980,39 @@
             }
             const alpha=this.layerAlpha,fly=this.layerFlyTime;
             this.layerAlpha=C.alpha;this.layerFlyTime=this.animationTime;
+            S.alpha=C.alpha;
             for(const G of S.groups.values())if(G.storage.count) {
                 // Pin the shared panel even on camera-only frames.
                 atlas.layerFor(A.panels[G.styleIndex]);
+                if(G.ghost)continue;
                 const buffer=G.storage.upload(gl);
                 this.drawTexturedInstanceRange({first:0,count:G.storage.count,sample:G.sample,kind:G.kind,mesh:G.mesh,statusAtlas:atlas,buffer},null,null,atlas);
             }
             this.layerAlpha=alpha;this.layerFlyTime=fly;
             return S;
         }
+        // The middle-distance models of buildings under construction, blended
+        // over what is behind them (no depth written: a see-through thing
+        // hides nothing). After the solid things of the frame.
+        drawColumnModelGhosts() {
+            const S=this.columnModels;
+            if(!S||!S.ghosts||!S.atlas)return;
+            const gl=this.gl,atlas=this.getFlatAtlas(),alpha=this.layerAlpha,fly=this.layerFlyTime;
+            this.layerAlpha=S.alpha;this.layerFlyTime=this.animationTime;
+            gl.enable(gl.DEPTH_TEST);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(false);
+            for(const G of S.groups.values())if(G.ghost&&G.storage.count) {
+                atlas.layerFor(S.atlas.panels[G.styleIndex]);
+                const buffer=G.storage.upload(gl);
+                this.drawTexturedInstanceRange({first:0,count:G.storage.count,sample:G.sample,kind:G.kind,mesh:G.mesh,statusAtlas:atlas,buffer},null,null,atlas);
+            }
+            gl.depthMask(true);gl.disable(gl.BLEND);
+            this.layerAlpha=alpha;this.layerFlyTime=fly;
+        }
         drawFrameColumns(C, snapshot) {
             const gl = this.gl;
             const atlas = this.prepareColumnAtlas();
             const models = this.drawColumnModels(C,snapshot,atlas);
+            if (models && this.scaleLayers) this.drawColumnModelGhosts();
             if (!this.columnProgram) {
                 this.columnProgram = createProgram(gl, `#version 300 es
                     precision highp float;
@@ -6042,7 +6121,7 @@
                         float shade = 1.-pow(1.-clamp(light,0.,1.),1.3)*.42;
                         if(ghost) shade *= .55;
                         vLight = shade;
-                        vColor = vec4(uColors[clamp(int(aOwner)+1,0,8)], uStructure != 0 && (flags & 1) != 0 ? .6 : 1.);
+                        vColor = vec4(uColors[clamp(int(aOwner)+1,0,8)], uStructure != 0 && aKind < 4. && (flags & 1) != 0 ? .35 : 1.);
                         // Neutral resource tiles keep their material color even
                         // after the emblem becomes too small to resolve.
                         if(uStructure != 0 && aKind == 4.) vColor.rgb=aResource>0.?vec3(1.,.867,0.):vec3(.17,.158,0.);
@@ -6537,6 +6616,7 @@
                 gl.depthMask(true);
                 gl.disable(gl.BLEND);
             }
+            if (this.columnLayers) this.drawColumnModelGhosts();
             if (atlas) atlas.endFrame();
             this.drawFx(snapshot.fx, false);
             this.drawRangeVisibility(overlays);
