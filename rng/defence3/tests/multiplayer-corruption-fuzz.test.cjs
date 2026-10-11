@@ -76,7 +76,9 @@ const KINDS = {
 
 // Kinds whose effect spreads to a whole team at once (a patch of much of
 // the map or a full one is fine for these).
-const BROAD = new Set(['playerResearch', 'adjacency', 'unitIds', 'rng']);
+// (unitExtra: a unit that should not be there raises its neighbours'
+// effective levels (and so their upkeep) while its patch is on the way.)
+const BROAD = new Set(['unitExtra', 'playerResearch', 'adjacency', 'unitIds', 'rng']);
 
 (async () => {
     const pick = process.argv[2] ? process.argv[2].split(',') : Object.keys(KINDS);
@@ -111,7 +113,11 @@ const BROAD = new Set(['playerResearch', 'adjacency', 'unitIds', 'rng']);
         // Keep playing until the victim is patched and nothing is in flight
         // (or long enough that it would have been).
         let patchedAt = 0;
-        while (world.now - t0 < 6000) {
+        // (A building's level is in the structures' full round: each region
+        // once in SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS ticks, 20 s. The
+        // others are found within a rotation or two.)
+        const noticeMs = kind === 'buildingLevel' ? 24000 : 6000;
+        while (world.now - t0 < noticeMs) {
             await play(400);
             if (repairs(victim) > before[all.indexOf(victim)] && all.every(idle)) { patchedAt = world.now; break; }
         }

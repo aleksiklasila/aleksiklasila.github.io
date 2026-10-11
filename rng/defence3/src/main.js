@@ -1251,6 +1251,42 @@ function initInput() {
         }
         return out;
     }
+    // This player's live units inside a world box, on tiles it sees: a box
+    // selection, from the frame's columns (through every unit's view the
+    // release of a box over 300k units took ~150 ms). Without a frame: the
+    // units' own fields.
+    let _boxUnitSlots = new Int32Array(0), _boxUnitSlotCount = 0, _boxUnitSlotsFor = null;
+    function _ownUnitsInBox(sx, sy, ex, ey) {
+        const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+        const out = [];
+        if (!F) {
+            for (let u of units) {
+                if (u.owner !== localPlayerId || u.dead) continue;
+                if (!isTileVisible(Math.floor(u.x / TILE), Math.floor(u.y / TILE))) continue;
+                if (u.x >= sx && u.x <= ex && u.y >= sy && u.y <= ey) out.push(u);
+            }
+            return out;
+        }
+        // (Slot by slot: the columns read in memory order, ~3x faster than
+        // in the list's order; the selection is then in slot order. Their
+        // slots are kept for the selection's index: selectionIndexAdopt.)
+        const X = F.x, Y = F.y, O = F.owner, ID = F.id, n = F.n, me = localPlayerId, full = fullVisibility, it = 1 / TILE, views = _pageSlotViews;
+        let slots = _boxUnitSlots;
+        if (slots.length < n) slots = _boxUnitSlots = new Int32Array(Math.max(1024, Math.ceil(n * 1.25)));
+        let c = 0;
+        for (let s = 0; s < n; s++) {
+            if (O[s] !== me || ID[s] < 0) continue;
+            const x = X[s], y = Y[s];
+            if (x < sx || x > ex || y < sy || y > ey) continue;
+            if (!full && !isTileVisible(Math.floor(x * it), Math.floor(y * it))) continue;
+            // (A slot with an id holds a live unit's view: the view itself
+            // is not read.)
+            const u = views[s];
+            if (u) { out.push(u); slots[c++] = s; }
+        }
+        _boxUnitSlotCount = c; _boxUnitSlotsFor = out;
+        return out;
+    }
     function collectEnemyClickTargetCandidates(worldX, worldY, includeUnits = true) {
         let out = [];
         if (includeUnits) {
@@ -2130,13 +2166,7 @@ function initInput() {
                         newUnits = projectedSelection.units;
                         newEntities = projectedSelection.entities;
                     } else {
-                        const boxReach = Math.max(ex - sx, ey - sy) / 2;
-                        for (let u of _unitsNearPoint((sx + ex) / 2, (sy + ey) / 2, boxReach, true)) {
-                            if (u.owner !== localPlayerId || u.dead) continue;
-                            let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                            if (!isTileVisible(ugx, ugy)) continue;
-                            if (u.x >= sx && u.x <= ex && u.y >= sy && u.y <= ey) newUnits.push(u);
-                        }
+                        newUnits = _ownUnitsInBox(sx, sy, ex, ey);
                         for (let b of barracks) {
                             if (b.energy > 0 && b.owner === localPlayerId && isTileVisible(b.gx, b.gy) && b.x >= sx && b.x <= ex && b.y >= sy && b.y <= ey) newEntities.push(b);
                         }
@@ -2185,6 +2215,8 @@ function initInput() {
                         if (!unchangedBoxSelection) {
                             selectedUnits = newUnits;
                             selectedEntities = newEntities;
+                            // (Its slots are known already: no pass over its units for them.)
+                            if (_boxUnitSlotsFor === newUnits) selectionIndexAdopt(newUnits, _boxUnitSlots, _boxUnitSlotCount);
                         }
                     }
                 }
@@ -4003,9 +4035,14 @@ function processAction(a, playerId) {
             // (shrines off: no draining, the order is ignored).
             if (SHRINES_ENABLED && players[playerId]) players[playerId].shrineDrain = (Math.floor(Number(a.drain)) || 0) & 3;
         } else if (a.action === 'killUnit') {
-            let u = units.find(u => u.id === a.unitId && u.owner === playerId);
+            // One unit (unitId) or a group's (unitIds: one order, not one per
+            // unit, each found by a scan of every unit: a 50k group's kill
+            // was 50k orders of 600k compares). By the id map.
             // gameTick's dead-unit sweep releases the population slot.
-            if (u && !u.dead && !u.isKing) { u.energy = 0; u.dead = true; }
+            const byId = _unitByIdMap();
+            const kill = u => { if (u && u.owner === playerId && !u.dead && !u.isKing) { u.energy = 0; u.dead = true; } };
+            if (a.unitId !== undefined && a.unitId !== null) kill(byId.get(a.unitId));
+            for (const id of a.unitIds) kill(byId.get(id));
         } else if (a.action === 'resizeUnitGroup') {
             let subgroupFilter = {
                 unitType: a.unitType || null,

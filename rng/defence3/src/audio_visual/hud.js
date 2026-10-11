@@ -973,9 +973,58 @@ function _getOwnedInfoPanelBuildings(owner) {
 }
 
 let _frameUnitSummaries = new Map();
+// An army's unit counts by owner and type (and how many of them idle): a
+// slice of the units a frame into counts of their own, taken when all are in
+// (frameUnitSummaryStep, each drawn frame; every unit in one go was 10-20 ms
+// at 600k units whenever the bottom bar or the panel asked after a new
+// frame). The counts are of the frames they were made over (a quarter of a
+// second at most).
+const FRAME_SUMMARY_SLICE = 100000, FRAME_SUMMARY_EVERY_MS = 250, FRAME_SUMMARY_OWNERS = 10;
+const _frameSummary = { running: false, next: 0, strings: 0, counts: null, done: null, doneStrings: 0, at: -Infinity, version: 0, byOwner: new Map() };
+function frameUnitSummaryStep() {
+    const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null, S = _frameSummary;
+    if (!F || F.count <= FRAME_SUMMARY_SLICE) { S.running = false; S.done = null; return; }
+    const strings = _pageFrameStrings.length;
+    if (!S.running) {
+        if (S.done && performance.now() - S.at < FRAME_SUMMARY_EVERY_MS) return;
+        S.running = true; S.next = 0; S.strings = strings; S.counts = new Uint32Array(strings * 2 * FRAME_SUMMARY_OWNERS);
+    } else if (S.strings !== strings) { S.next = 0; S.strings = strings; S.counts = new Uint32Array(strings * 2 * FRAME_SUMMARY_OWNERS); }
+    const end = Math.min(F.count, S.next + FRAME_SUMMARY_SLICE);
+    _frameSummarySlice(F, S.counts, strings, _pageFrameStrings.indexOf('IDLE'), S.next, end);
+    S.next = end;
+    if (end < F.count) return;
+    S.running = false; S.done = S.counts; S.doneStrings = strings; S.at = performance.now(); S.version++; S.byOwner.clear();
+}
+function _frameSummarySlice(F, counts, strings, idleCode, from, to) {
+    const order = F.order, O = F.owner, E = F.energy, T = F.type, FL = F.flags, W = F.wtype, WS = F.wstate, CM = F.cmd, max = FRAME_SUMMARY_OWNERS - 1;
+    for (let i = from; i < to; i++) {
+        const s = order[i];
+        if (E[s] <= 0) continue;
+        const o = O[s] + 1;
+        if (o < 0 || o > max) continue;
+        const k = (o * strings + T[s]) * 2;
+        counts[k]++;
+        if ((FL[s] & 8) || (W[s] ? WS[s] === idleCode : CM[s] === CMD_IDLE)) counts[k + 1]++;
+    }
+}
 function getFrameUnitSummary(owner) {
     const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
     if (!F) return null;
+    // (An army: the counts made a slice a frame, when there are any yet.)
+    const S = _frameSummary;
+    if (F.count > FRAME_SUMMARY_SLICE && S.done && owner + 1 >= 0 && owner + 1 < FRAME_SUMMARY_OWNERS) {
+        let groups = S.byOwner.get(owner);
+        if (!groups) {
+            groups = new Map();
+            const base = (owner + 1) * S.doneStrings * 2;
+            for (let type = 0; type < S.doneStrings; type++) if (S.done[base + type * 2]) {
+                const key = _pageFrameStrings[type] || 'other';
+                groups.set(key, { label: _prettyUnitTypeLabel(key), total: S.done[base + type * 2], idle: S.done[base + type * 2 + 1] });
+            }
+            S.byOwner.set(owner, groups);
+        }
+        return groups;
+    }
     const previous = _frameUnitSummaries.get(owner);
     if (previous && previous.frame === F) return previous.groups;
     const counts = new Uint32Array(_pageFrameStrings.length*2), groups = new Map(), idleCode=_pageFrameStrings.indexOf('IDLE');
@@ -2234,10 +2283,122 @@ function unitKillBtn(ids) {
 }
 
 // Hold toggle: ON = free to move, OFF = holding position.
-function unitHoldBtn(group) {
-    let holding = group.filter(u => u.holdPosition);
-    let label = holding.length === 0 ? 'ON' : (holding.length === group.length ? 'OFF' : 'MIXED');
-    return infoOnOffPill('info-hold-group-btn', `data-ids="${group.map(u => u.id).join(',')}" data-hold="${holding.length === 0 ? '1' : '0'}"`, '\ud83d\udeb6', label, holding.length === 0);
+// (A big group: its count and how many hold, its ids as a group token.)
+function unitHoldBtn(group, big = null) {
+    let holdCount = big ? big.hold : group.filter(u => u.holdPosition).length, count = big ? big.count : group.length;
+    let label = holdCount === 0 ? 'ON' : (holdCount === count ? 'OFF' : 'MIXED');
+    return infoOnOffPill('info-hold-group-btn', `data-ids="${big ? big.idsToken : group.map(u => u.id).join(',')}" data-hold="${holdCount === 0 ? '1' : '0'}"`, '\ud83d\udeb6', label, holdCount === 0);
+}
+
+// ---- a big selection's unit groups, from the frame's columns ----
+// The info panel of a selection past the watched units' cap shows what the
+// frame and the stat tables know of each unit anyway. Its groups are then
+// made in one pass over the selection's slots (selectionIndex): per group its
+// count and bins of units alike in everything the panel sums (owner, base
+// and effective level, slowed or not), each with one unit standing for all
+// (the first found), their count and their energy; the panel's sums are over
+// the bins. (Through the units' views a 300k selection's panel took 250 ms
+// each time, and wrote every unit's id into the page three times.)
+const INFO_PANEL_COLUMN_MIN = 300;
+function infoPanelUnitGroupsFromFrame() {
+    const X = selectionIndex();
+    if (!X.framed || selectedUnits.length <= INFO_PANEL_COLUMN_MIN) return null;
+    const F = simClientCurrentUnitVis();
+    if (!F) return null;
+    const B = _infoPanelBins;
+    let sums = _infoPanelBinUnits(F, X, B);
+    // (More bins than the table takes half full: a bigger table, again.)
+    while (!sums) { _infoPanelBinsAlloc(B, B.cap * 4); sums = _infoPanelBinUnits(F, X, B); }
+    // The bins in the order their first units stand in the selection (the
+    // groups' order on the panel, as when made unit by unit).
+    const order = Array.from(B.used.subarray(0, B.count)).sort((p, q) => B.first[p] - B.first[q]);
+    const groups = new Map(), out = {}, ignore = ignoreLevelSubgroups;
+    for (const h of order) {
+        const k = B.key[h], t = (k >>> 20) & 1023, bl = (k >>> 13) & 127, view = _pageSlotViews[B.slot[h]];
+        if (!view) continue;
+        const code = ignore ? t : t * 128 + bl;
+        let g = groups.get(code);
+        if (!g) {
+            const type = _pageFrameStrings[t] || undefined;
+            g = { key: ignore ? 'unit_' + type : 'unit_' + type + '_L' + bl, label: getUnitDisplayName(type), items: [view], isUnit: true,
+                big: true, count: 0, hold: 0, bins: new Map(), typeCode: t, blevel: ignore ? 0 : bl };
+            g.idsToken = '@group:' + g.key;
+            groups.set(code, g);
+            out[g.key] = g;
+        }
+        g.bins.set(k, { u: view, n: B.n[h], energy: B.energy[h], maxEnergy: B.maxEnergy[h] });
+        g.count += B.n[h]; g.hold += B.hold[h];
+    }
+    return { groups: out, totalEnergy: sums[0], totalMax: sums[1], count: sums[2] };
+}
+// The pass over the selection's slots: per unit a key of what the panel's
+// sums depend on (type, base level, effective level, owner, frozen, sandy),
+// its bin found in a small open table of typed arrays (its own function: a
+// loop of typed reads and writes only, ~10 ns a unit). Returns the totals
+// [energy, max energy, count], or null when the table got half full.
+const _infoPanelBins = { cap: 0, count: 0, key: null, n: null, hold: null, first: null, slot: null, energy: null, maxEnergy: null, used: null, sums: [0, 0, 0] };
+function _infoPanelBinsAlloc(B, cap) {
+    B.cap = cap; B.count = 0;
+    B.key = new Int32Array(cap).fill(-1); B.n = new Int32Array(cap); B.hold = new Int32Array(cap); B.first = new Int32Array(cap); B.slot = new Int32Array(cap);
+    B.energy = new Float64Array(cap); B.maxEnergy = new Float64Array(cap); B.used = new Int32Array(cap);
+}
+function _infoPanelBinUnits(F, X, B) {
+    if (!B.cap) _infoPanelBinsAlloc(B, 4096);
+    const key = B.key, cnt = B.n, hold = B.hold, first = B.first, slot = B.slot, energy = B.energy, maxEnergy = B.maxEnergy, used = B.used;
+    for (let i = 0; i < B.count; i++) key[used[i]] = -1;
+    let count = 0;
+    const capMask = B.cap - 1, limit = B.cap >> 1, shift = 32 - Math.round(Math.log2(B.cap));
+    const slots = X.slots, mask = X.mask, n = X.n;
+    const T = F.type, BL = F.blevel, LV = F.level, FL = F.flags, OW = F.owner, EN = F.energy, ME = F.maxEnergy;
+    let totalEnergy = 0, totalMax = 0, total = 0;
+    for (let i = 0; i < n; i++) {
+        const s = slots[i];
+        if (mask[s] === 0) continue;
+        const fl = FL[s], blr = BL[s], bl = blr > 0 ? blr & 127 : 1;
+        const k = (((((T[s] & 1023) * 128 + bl) * 128 + (LV[s] & 127)) * 16 + ((OW[s] + 1) & 15)) * 4) + ((fl & SIM_UF_FROZEN) !== 0 ? 1 : 0) + ((fl & SIM_UF_SANDY) !== 0 ? 2 : 0);
+        let h = (Math.imul(k, -1640531535) >>> shift) & capMask;
+        while (key[h] !== k) {
+            if (key[h] === -1) {
+                if (count >= limit) { B.count = count; return null; }
+                key[h] = k; cnt[h] = 0; hold[h] = 0; energy[h] = 0; maxEnergy[h] = 0; first[h] = i; slot[h] = s; used[count++] = h;
+                break;
+            }
+            h = (h + 1) & capMask;
+        }
+        const e = EN[s], m = ME[s];
+        cnt[h]++; energy[h] += e; maxEnergy[h] += m;
+        if ((fl & SIM_UF_HOLD) !== 0) hold[h]++;
+        totalEnergy += e; totalMax += m; total++;
+    }
+    B.count = count;
+    const sums = B.sums; sums[0] = totalEnergy; sums[1] = totalMax; sums[2] = total;
+    return sums;
+}
+function _infoPanelEntityGone(e) { return e.energy !== undefined && e.energy <= 0; }
+// A unit by its id, as the page has it (the frame's view, else the unit).
+function _infoPanelUnitById(id) {
+    if (typeof simClientCurrentUnitVis === 'function' && simClientCurrentUnitVis()) return _pageUnitsById.get(id) || null;
+    return typeof getUnitById === 'function' ? getUnitById(id) : (units.find(u => u.id === id) || null);
+}
+// How many things a panel group holds.
+function infoGroupCount(grp) { return grp.big ? grp.count : grp.items.length; }
+// A unit control's ids: the list it carries, or a big group's live members
+// (its token names the group by its key, looked up in the selection now).
+function infoPanelUnitIds(text) {
+    text = String(text || '');
+    if (!text.startsWith('@group:')) return text.split(',').map(v => parseInt(v)).filter(v => Number.isFinite(v));
+    const key = text.slice(7), X = selectionIndex(), out = [];
+    if (!X.framed) { for (const u of selectedUnits) if (u && !u.dead && getUnitGroupKey(u) === key) out.push(u.id); return out; }
+    const F = simClientCurrentUnitVis(), slots = X.slots, mask = X.mask, T = F.type, BL = F.blevel, ID = F.id, ignore = ignoreLevelSubgroups;
+    let lastT = -1, lastL = -1, hit = false;
+    for (let i = 0; i < X.n; i++) {
+        const s = slots[i];
+        if (!mask[s]) continue;
+        const t = T[s], bl = ignore ? 0 : (BL[s] > 0 ? BL[s] : 1);
+        if (t !== lastT || bl !== lastL) { lastT = t; lastL = bl; const type = _pageFrameStrings[t] || undefined; hit = (ignore ? 'unit_' + type : 'unit_' + type + '_L' + bl) === key; }
+        if (hit) out.push(ID[s]);
+    }
+    return out;
 }
 
 function infoButtonHelpBtn() {
@@ -2997,28 +3158,160 @@ function getUnitGroupKey(u) {
         : ('unit_' + u.unitType + '_L' + (u.unitLevel || 1));
 }
 
+// ---- the selection by the frame's slots ----
+// A big selection is never walked per frame or per tick (300k selected units
+// read through their views cost 10-30 ms each time): its units' slots (stable
+// while a unit lives), a mask per slot and how many of its units died, made
+// once per selection (its array and length tell: every change makes a new
+// array or changes the length) and kept by the frame's membership changes
+// (selectionNoteDead: a selected unit that died leaves the mask at once; the
+// array itself is compacted later, selectionCompactDead). framed: the units
+// are the frame's views (the page beside a simulation worker); otherwise the
+// callers walk the units as before.
+const _selIndex = { sel: null, len: -1, cap: -1, remap: -1, framed: false, slots: new Int32Array(0), n: 0, mask: new Uint8Array(0), dead: 0, version: 0, compactAt: 0 };
+// (Bumped when the frame's slots were dealt again: a restore.)
+let _selIndexRemap = 0;
+function selectionIndexRemapped() { _selIndexRemap++; }
+function selectionIndex() {
+    const X = _selIndex, sel = selectedUnits;
+    const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    const cap = F ? F.cap : 0;
+    if (X.sel === sel && X.len === sel.length && X.cap === cap && X.remap === _selIndexRemap) return X;
+    if (X.mask.length < cap) X.mask = new Uint8Array(cap); else X.mask.fill(0);
+    if (X.slots.length < sel.length) X.slots = new Int32Array(Math.max(1024, Math.ceil(sel.length * 1.25)));
+    const slots = X.slots, mask = X.mask;
+    let n = 0, dead = 0;
+    if (F) for (let i = 0; i < sel.length; i++) {
+        const u = sel[i], s = u && !u.dead && u._frameView ? u._s : -1;
+        if (s >= 0 && s < cap) { slots[n++] = s; mask[s] = 1; } else dead++;
+    }
+    X.sel = sel; X.len = sel.length; X.cap = cap; X.remap = _selIndexRemap; X.framed = !!F; X.n = n; X.dead = dead; X.version++;
+    return X;
+}
+// The index of a selection whose live units' slots are known already (a box
+// selection reads them from the frame): no pass over the selection's units.
+function selectionIndexAdopt(sel, slots, n) {
+    const X = _selIndex, F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    if (!F || sel !== selectedUnits || sel.length !== n) return;
+    const cap = F.cap;
+    if (X.mask.length < cap) X.mask = new Uint8Array(cap); else X.mask.fill(0);
+    if (X.slots.length < n) X.slots = new Int32Array(Math.max(1024, Math.ceil(n * 1.25)));
+    const mask = X.mask;
+    X.slots.set(slots.subarray(0, n));
+    for (let i = 0; i < n; i++) mask[slots[i]] = 1;
+    X.sel = sel; X.len = sel.length; X.cap = cap; X.remap = _selIndexRemap; X.framed = true; X.n = n; X.dead = 0; X.version++;
+}
+// A frame's unit died (its slot may be another unit's from the next frame on).
+function selectionNoteDead(slot) {
+    const X = _selIndex;
+    if (slot >= 0 && slot < X.mask.length && X.mask[slot]) { X.mask[slot] = 0; X.dead++; X.version++; }
+}
+// The dead leave the selection's array: at once for a small one, a few times
+// a second for a big one (a pass over it, and every cache keyed by the array
+// made again; what is drawn and ordered skips the dead meanwhile).
+const SELECTION_COMPACT_SMALL = 4096, SELECTION_COMPACT_MS = 500;
+function selectionCompactDead(force = false) {
+    if (selectedUnits.length === 0) return false;
+    const X = selectionIndex();
+    if (!X.framed) {
+        if (!selectedUnits.some(u => u.dead)) return false;
+    } else {
+        if (X.dead === 0) return false;
+        if (!force && selectedUnits.length > SELECTION_COMPACT_SMALL) {
+            const now = performance.now();
+            if (now - X.compactAt < SELECTION_COMPACT_MS) return false;
+            X.compactAt = now;
+        }
+    }
+    // (A restore's own unit objects: their views.)
+    const out = [];
+    for (let i = 0; i < selectedUnits.length; i++) {
+        let u = selectedUnits[i];
+        if (u && X.framed && !u._frameView) u = _pageUnitsById.get(u.id);
+        if (u && !u.dead) out.push(u);
+    }
+    selectedUnits = out;
+    return true;
+}
+
+// Whether a unit group (the frame's type code and base level) is turned on,
+// per distinct group: no key string per unit.
+function _unitGroupOnByCode() {
+    const on = new Map(), ignore = ignoreLevelSubgroups;
+    return (typeCode, blevel) => {
+        const k = ignore ? typeCode : typeCode * 1024 + (blevel > 0 ? blevel : 1);
+        let v = on.get(k);
+        if (v === undefined) {
+            const type = _pageFrameStrings[typeCode] || undefined;
+            v = activeSubGroups[ignore ? 'unit_' + type : 'unit_' + type + '_L' + (blevel > 0 ? blevel : 1)] !== false;
+            on.set(k, v);
+        }
+        return v;
+    };
+}
+
+let _activeUnitsCache = { sel: null, len: -1, off: null, ver: -1, tick: -1, ignore: null, out: null };
 function getActiveUnits() {
     if (selectedUnits.length === 0) return [];
     // (No subgroup turned off, the usual case: the live ones, without a
     // group key string per unit: 100k selected units made 100k strings.)
-    let anyOff = false;
-    for (let key in activeSubGroups) if (activeSubGroups[key] === false) { anyOff = true; break; }
-    if (!anyOff) return selectedUnits.filter(u => !u.dead);
-    return selectedUnits.filter(u => !u.dead && activeSubGroups[getUnitGroupKey(u)] !== false);
+    let off = '';
+    for (let key in activeSubGroups) if (activeSubGroups[key] === false) off += key + ';';
+    const X = selectionIndex();
+    if (!X.framed) {
+        if (!off) return selectedUnits.filter(u => !u.dead);
+        return selectedUnits.filter(u => !u.dead && activeSubGroups[getUnitGroupKey(u)] !== false);
+    }
+    // The same list while the selection, its dead and its toggles are the
+    // same (levels move a unit between groups on ticks only). Read-only: with
+    // nothing to leave out it is the selection's own array.
+    const C = _activeUnitsCache;
+    if (C.out && C.sel === selectedUnits && C.len === selectedUnits.length && C.off === off && C.ver === X.version
+        && C.ignore === ignoreLevelSubgroups && (!off || C.tick === gameTime)) return C.out;
+    let out;
+    if (!off) out = X.dead === 0 ? selectedUnits : selectedUnits.filter(u => !u.dead);
+    else {
+        const F = simClientCurrentUnitVis(), T = F.type, L = F.blevel, on = _unitGroupOnByCode();
+        out = [];
+        for (let i = 0; i < selectedUnits.length; i++) {
+            const u = selectedUnits[i];
+            if (!u || u.dead) continue;
+            const s = u._s;
+            if (s >= 0 ? on(T[s], L[s]) : activeSubGroups[getUnitGroupKey(u)] !== false) out.push(u);
+        }
+    }
+    C.sel = selectedUnits; C.len = selectedUnits.length; C.off = off; C.ver = X.version; C.tick = gameTime; C.ignore = ignoreLevelSubgroups; C.out = out;
+    return out;
 }
 
 // The active selection by kind, from one pass (kept for the selection: a
 // command handler filtered 100k selected units through their views several
 // times a click): active, combat (no worker type), byType (worker type ->
 // units), and their ids.
-let _selClassCache = { sel: null, len: -1, sub: null, out: null };
+let _selClassCache = { sel: null, len: -1, sub: null, ver: -1, out: null };
 function getActiveUnitClasses() {
     let sub = '';
     for (let key in activeSubGroups) if (activeSubGroups[key] === false) sub += key + ';';
     const C = _selClassCache;
-    if (C.out && C.sel === selectedUnits && C.len === selectedUnits.length && C.sub === sub && !C.out.active.some(_selDeadFirst)) return C.out;
+    const X = selectionIndex();
+    // (The frame's views: a death among them moves the index's version.)
+    if (C.out && C.sel === selectedUnits && C.len === selectedUnits.length && C.sub === sub
+        && (X.framed ? C.ver === X.version : !C.out.active.some(_selDeadFirst))) return C.out;
     const active = getActiveUnits(), combat = [], byType = new Map();
-    for (const u of active) {
+    const F = X.framed ? simClientCurrentUnitVis() : null;
+    if (F) {
+        // (Worker types from the frame's codes: no string through a view
+        // per unit.)
+        const W = F.wtype, lists = [];
+        for (let i = 0; i < active.length; i++) {
+            const u = active[i], s = u._s, c = s >= 0 ? W[s] : -1;
+            if (c === 0) { combat.push(u); continue; }
+            if (c < 0) { const wt = u.workerType; if (!wt) combat.push(u); else { let a = byType.get(wt); if (!a) byType.set(wt, a = []); a.push(u); } continue; }
+            let a = lists[c];
+            if (!a) { const wt = _pageFrameStrings[c]; a = byType.get(wt); if (!a) byType.set(wt, a = []); lists[c] = a; }
+            a.push(u);
+        }
+    } else for (const u of active) {
         const wt = u.workerType;
         if (!wt) combat.push(u);
         else { let a = byType.get(wt); if (!a) byType.set(wt, a = []); a.push(u); }
@@ -3026,7 +3319,7 @@ function getActiveUnitClasses() {
     const ids = list => list.map(u => u.id);
     const workers = [];
     for (const k of ['builder', ...RESOURCE_TYPE_LIST.map(c => c && c.collectorUnitKey).filter(Boolean), 'salvager', 'healer', 'researcher']) { const a = byType.get(k); if (a) for (const u of a) workers.push(u); }
-    C.sel = selectedUnits; C.len = selectedUnits.length; C.sub = sub;
+    C.sel = selectedUnits; C.len = selectedUnits.length; C.sub = sub; C.ver = X.version;
     C.out = { active, combat, byType, workers, get allIds() { return this._all || (this._all = ids(active)); }, get combatIds() { return this._combat || (this._combat = ids(combat)); },
         get workerIds() { return this._workers || (this._workers = ids(workers)); }, of(type) { return byType.get(type) || []; } };
     return C.out;
@@ -3074,6 +3367,15 @@ function _isAstarMineLikeEntity(e) {
 }
 
 function getEntityGroupKey(e) {
+    // (By type only: the same for as long as the entity is the same thing;
+    // a structure's view bound to another structure has another serial.
+    // 20k selected buildings' keys cost ~10 ms each time the panel was made.)
+    if (ignoreLevelSubgroups && e._tgk !== undefined && e._tgkSerial === e._serial) return e._tgk;
+    const key = _entityGroupKeyNow(e);
+    if (ignoreLevelSubgroups && e && typeof e === 'object') { e._tgk = key; e._tgkSerial = e._serial; }
+    return key;
+}
+function _entityGroupKeyNow(e) {
     if (_isGoldMineLikeEntity(e)) return 'goldmine';
     if (_isAstarMineLikeEntity(e)) return 'astarmine';
     if (ignoreLevelSubgroups) {
@@ -3354,7 +3656,7 @@ function renderBarrackGroupInfo(group) {
         let allBuildEnabled = group.every(b => isBuildEnabled(b));
         let anyBuildEnabled = group.some(b => isBuildEnabled(b));
         let queueReady = readyGroup;
-        let queueCoordStr = queueReady.map(b => `${b.gx},${b.gy}`).join(';');
+        let queueCoordStr = infoCoordAttr(queueReady.map(b => `${b.gx},${b.gy}`).join(';'));
         let queueCostSource = readyGroup[0] || e;
         let cost = queueCostSource.getUnitCost();
         let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
@@ -3366,7 +3668,7 @@ function renderBarrackGroupInfo(group) {
         let addBtn = canQueue
             ? `<span class="info-buy-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:#4f4;font-weight:bold;margin-left:4px;">[+]</span>`
             : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
-        let coordStr = group.map(b => `${b.gx},${b.gy}`).join(';');
+        let coordStr = infoCoordAttr(group.map(b => `${b.gx},${b.gy}`).join(';'));
         let salvBtn = `${salvageToggleGroupBtn(coordStr, group.every(g => g.markedForSalvage), anyMarked)}`;
         let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
         let stackBtn = autoStackGroupBtn(coordStr, group.every(b => isAutoStackEnabled(b)), group.some(b => isAutoStackEnabled(b)));
@@ -3537,7 +3839,7 @@ function renderTowerGroupInfo(group) {
         let hasUnderConstruction = group.some(t => t.underConstruction);
         let allBuildEnabled = group.every(t => isBuildEnabled(t));
         let anyBuildEnabled = group.some(t => isBuildEnabled(t));
-        let coordStr = group.map(t => `${t.gx},${t.gy}`).join(';');
+        let coordStr = infoCoordAttr(group.map(t => `${t.gx},${t.gy}`).join(';'));
         let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
         let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : '';
         let stackBtn = autoStackGroupBtn(coordStr, group.every(t => isAutoStackEnabled(t)), group.some(t => isAutoStackEnabled(t)));
@@ -3859,8 +4161,11 @@ function renderUnitInfo(u) {
     return html;
 }
 
-function renderUnitGroupInfo(group) {
+// big: a group made from the frame's columns (infoPanelUnitGroupsFromFrame):
+// its bins stand for its units, each bin's unit for the bin's count.
+function renderUnitGroupInfo(group, big = null) {
     let html = '';
+    const bins = big ? Array.from(big.bins.values()) : null, groupCount = big ? big.count : group.length;
     // Owner/type/level stats are shared across a subgroup. Cache only for this
     // synchronous render, so research and effective levels cannot go stale.
     let statCache = new Map();
@@ -3889,7 +4194,8 @@ function renderUnitGroupInfo(group) {
     let totalBaseNextStacks = 0, totalEffNextStacks = 0;
     let baseLevels = new Set(), effLevels = new Set();
 
-    for (let u of group) {
+    for (let bi = 0, bn = bins ? bins.length : group.length; bi < bn; bi++) {
+        const u = bins ? bins[bi].u : group[bi], n = bins ? bins[bi].n : 1, uEnergy = bins ? bins[bi].energy / n : u.energy;
         let lvl = getUnitBaseLevel(u);
         let effLvl = getUnitEffectiveLevel(u, lvl);
         let stacks = getUnitStackCount(u);
@@ -3897,7 +4203,7 @@ function renderUnitGroupInfo(group) {
         let baseStats = u.basePreComputed || u.preComputed || {};
         let effStats = u.preComputed || baseStats;
         let effmaxEnergy = Math.max(1, Math.floor(Number(effStats.maxEnergy) || 1));
-        let ratio = effmaxEnergy > 0 ? (u.energy / effmaxEnergy) : 1;
+        let ratio = effmaxEnergy > 0 ? (uEnergy / effmaxEnergy) : 1;
         let basemaxEnergy = Math.max(1, Math.floor(Number(baseStats.maxEnergy) || effmaxEnergy));
         let baseCurEnergy = Math.max(1, Math.floor(basemaxEnergy * ratio));
 
@@ -3910,58 +4216,58 @@ function renderUnitGroupInfo(group) {
         if (u.frozen > 0) slowMul *= 0.5;
         if (u.sandy > 0) slowMul *= 0.5;
 
-        totalEnergy += u.energy;
-        totalmaxEnergy += effmaxEnergy;
-        totalbaseEnergy += baseCurEnergy;
-        totalBasemaxEnergy += basemaxEnergy;
-        totalStacks += stacks;
-        totalEffStacks += effStacks;
-        totalBaseAttack += baseAtk;
-        totalEffAttack += effAtk;
-        totalBaseDps += baseCd > 0 ? (baseAtk / baseCd * TICK_RATE) : 0;
-        totalEffDps += effCd > 0 ? (effAtk / effCd * TICK_RATE) : 0;
-        totalBaseSpeed += (Number(baseStats.speed) || 0) * slowMul;
-        totalEffSpeed += (Number(effStats.speed) || 0) * slowMul;
-        totalBaseRange += Math.max(0, (Number(baseStats.attackRange) || 0) / TILE);
-        totalEffRange += Math.max(0, (Number(effStats.attackRange) || 0) / TILE);
-        totalBaseVision += Math.max(0, Number(baseStats.visionRange) || 0);
-        totalEffVision += Math.max(0, Number(effStats.visionRange) || 0);
+        totalEnergy += (uEnergy) * n;
+        totalmaxEnergy += (effmaxEnergy) * n;
+        totalbaseEnergy += (baseCurEnergy) * n;
+        totalBasemaxEnergy += (basemaxEnergy) * n;
+        totalStacks += (stacks) * n;
+        totalEffStacks += (effStacks) * n;
+        totalBaseAttack += (baseAtk) * n;
+        totalEffAttack += (effAtk) * n;
+        totalBaseDps += (baseCd > 0 ? (baseAtk / baseCd * TICK_RATE) : 0) * n;
+        totalEffDps += (effCd > 0 ? (effAtk / effCd * TICK_RATE) : 0) * n;
+        totalBaseSpeed += ((Number(baseStats.speed) || 0) * slowMul) * n;
+        totalEffSpeed += ((Number(effStats.speed) || 0) * slowMul) * n;
+        totalBaseRange += (Math.max(0, (Number(baseStats.attackRange) || 0) / TILE)) * n;
+        totalEffRange += (Math.max(0, (Number(effStats.attackRange) || 0) / TILE)) * n;
+        totalBaseVision += (Math.max(0, Number(baseStats.visionRange) || 0)) * n;
+        totalEffVision += (Math.max(0, Number(effStats.visionRange) || 0)) * n;
         if (u.unitType === 'scout') {
-            totalBaseWatchDuration += Number(readGroupStat(u.owner, u.unitType, lvl, 'watchDuration')) || 0;
-            totalEffWatchDuration += Number(readGroupStat(u.owner, u.unitType, effLvl, 'watchDuration')) || 0;
+            totalBaseWatchDuration += (Number(readGroupStat(u.owner, u.unitType, lvl, 'watchDuration')) || 0) * n;
+            totalEffWatchDuration += (Number(readGroupStat(u.owner, u.unitType, effLvl, 'watchDuration')) || 0) * n;
         }
-        totalBaseUpKeep += Number(readGroupStat(u.owner, u.unitType, lvl, 'upKeep')) || 0;
-        totalEffUpKeep += Number(readGroupStat(u.owner, u.unitType, effLvl, 'upKeep')) || 0;
-        totalBaseNextStacks += getRequiredStacksForLevel(lvl + 1);
-        totalEffNextStacks += getRequiredStacksForLevel(effLvl + 1);
+        totalBaseUpKeep += (Number(readGroupStat(u.owner, u.unitType, lvl, 'upKeep')) || 0) * n;
+        totalEffUpKeep += (Number(readGroupStat(u.owner, u.unitType, effLvl, 'upKeep')) || 0) * n;
+        totalBaseNextStacks += (getRequiredStacksForLevel(lvl + 1)) * n;
+        totalEffNextStacks += (getRequiredStacksForLevel(effLvl + 1)) * n;
         baseLevels.add(lvl);
         effLevels.add(effLvl);
 
         if (u.workerType === 'builder') {
-            totalBuildSpeed += (Number(baseStats.builderDps) || readGroupStat(u.owner, u.unitType, lvl, 'builderDps') || 0);
-            totalEffBuildSpeed += (Number(effStats.builderDps) || readGroupStat(u.owner, u.unitType, effLvl, 'builderDps') || 0);
-            totalTransferCd += (readGroupStat(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
-            totalEffTransferCd += (readGroupStat(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
+            totalBuildSpeed += ((Number(baseStats.builderDps) || readGroupStat(u.owner, u.unitType, lvl, 'builderDps') || 0)) * n;
+            totalEffBuildSpeed += ((Number(effStats.builderDps) || readGroupStat(u.owner, u.unitType, effLvl, 'builderDps') || 0)) * n;
+            totalTransferCd += ((readGroupStat(u.owner, u.unitType, lvl, 'transferCooldown') || 0)) * n;
+            totalEffTransferCd += ((readGroupStat(u.owner, u.unitType, effLvl, 'transferCooldown') || 0)) * n;
         } else if (u.workerType === 'healer') {
-            totalHealSpeed += (Number(baseStats.healerDps) || readGroupStat(u.owner, u.unitType, lvl, 'healerDps') || 0);
-            totalEffHealSpeed += (Number(effStats.healerDps) || readGroupStat(u.owner, u.unitType, effLvl, 'healerDps') || 0);
-            totalTransferCd += (readGroupStat(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
-            totalEffTransferCd += (readGroupStat(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
+            totalHealSpeed += ((Number(baseStats.healerDps) || readGroupStat(u.owner, u.unitType, lvl, 'healerDps') || 0)) * n;
+            totalEffHealSpeed += ((Number(effStats.healerDps) || readGroupStat(u.owner, u.unitType, effLvl, 'healerDps') || 0)) * n;
+            totalTransferCd += ((readGroupStat(u.owner, u.unitType, lvl, 'transferCooldown') || 0)) * n;
+            totalEffTransferCd += ((readGroupStat(u.owner, u.unitType, effLvl, 'transferCooldown') || 0)) * n;
         } else if (u.workerType === 'researcher') {
-            totalBuildSpeed += (Number(baseStats.researcherDps) || readGroupStat(u.owner, u.unitType, lvl, 'researcherDps') || 0);
-            totalEffBuildSpeed += (Number(effStats.researcherDps) || readGroupStat(u.owner, u.unitType, effLvl, 'researcherDps') || 0);
-            totalTransferCd += (readGroupStat(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
-            totalEffTransferCd += (readGroupStat(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
+            totalBuildSpeed += ((Number(baseStats.researcherDps) || readGroupStat(u.owner, u.unitType, lvl, 'researcherDps') || 0)) * n;
+            totalEffBuildSpeed += ((Number(effStats.researcherDps) || readGroupStat(u.owner, u.unitType, effLvl, 'researcherDps') || 0)) * n;
+            totalTransferCd += ((readGroupStat(u.owner, u.unitType, lvl, 'transferCooldown') || 0)) * n;
+            totalEffTransferCd += ((readGroupStat(u.owner, u.unitType, effLvl, 'transferCooldown') || 0)) * n;
         } else if (u.workerType === 'collector' || u.workerType === 'astar_collector') {
-            totalCollectorPerTrip += (Number(baseStats.gatherPerTrip) || readGroupStat(u.owner, u.unitType, lvl, 'gatherPerTrip') || 0);
-            totalEffCollectorPerTrip += (Number(effStats.gatherPerTrip) || readGroupStat(u.owner, u.unitType, effLvl, 'gatherPerTrip') || 0);
-            totalTransferCd += (readGroupStat(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
-            totalEffTransferCd += (readGroupStat(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
+            totalCollectorPerTrip += ((Number(baseStats.gatherPerTrip) || readGroupStat(u.owner, u.unitType, lvl, 'gatherPerTrip') || 0)) * n;
+            totalEffCollectorPerTrip += ((Number(effStats.gatherPerTrip) || readGroupStat(u.owner, u.unitType, effLvl, 'gatherPerTrip') || 0)) * n;
+            totalTransferCd += ((readGroupStat(u.owner, u.unitType, lvl, 'transferCooldown') || 0)) * n;
+            totalEffTransferCd += ((readGroupStat(u.owner, u.unitType, effLvl, 'transferCooldown') || 0)) * n;
         } else if (u.workerType === 'salvager') {
-            totalSalvagerLevel += lvl;
-            totalEffSalvagerLevel += effLvl;
-            totalTransferCd += (readGroupStat(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
-            totalEffTransferCd += (readGroupStat(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
+            totalSalvagerLevel += (lvl) * n;
+            totalEffSalvagerLevel += (effLvl) * n;
+            totalTransferCd += ((readGroupStat(u.owner, u.unitType, lvl, 'transferCooldown') || 0)) * n;
+            totalEffTransferCd += ((readGroupStat(u.owner, u.unitType, effLvl, 'transferCooldown') || 0)) * n;
         }
     }
 
@@ -3973,36 +4279,36 @@ function renderUnitGroupInfo(group) {
         : `L${getUnitBaseLevel(u0)}`;
     let effLevelSummary = isEffectiveMixed ? 'Mixed' : `L${getUnitEffectiveLevel(u0)}`;
 
-    html += infoRow('Count', group.length);
+    html += infoRow('Count', groupCount);
     html += infoRow('Energy', formatInfoFraction(Math.floor(totalbaseEnergy), totalBasemaxEnergy));
     html += infoRow('Level', levelSummary, effLevelSummary);
     html += infoRow('Stacks', formatStacksValueText(totalStacks), formatStacksValueText(totalEffStacks));
     html += infoRow(withInfoPanelStatMatrixButton('UpKeep', { title: `${u0.unitType} / UpKeep`, kind: 'unit', key: u0.unitType, statKey: 'upKeep' }), formatInfoRate(totalBaseUpKeep));
-    let avgBaseRange = totalBaseRange / Math.max(1, group.length);
-    let avgEffRange = totalEffRange / Math.max(1, group.length);
-    let avgBaseVision = totalBaseVision / Math.max(1, group.length);
-    let avgEffVision = totalEffVision / Math.max(1, group.length);
+    let avgBaseRange = totalBaseRange / Math.max(1, groupCount);
+    let avgEffRange = totalEffRange / Math.max(1, groupCount);
+    let avgBaseVision = totalBaseVision / Math.max(1, groupCount);
+    let avgEffVision = totalEffVision / Math.max(1, groupCount);
     html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u0.unitType} / Range`, kind: 'unit', key: u0.unitType, statKey: 'attackRange' }), `${formatRangeStatTiles(avgBaseRange)} avg`, `${formatRangeStatTiles(avgEffRange)} avg`);
     html += infoRow(withInfoPanelStatMatrixButton('Visibility', { title: `${u0.unitType} / Visibility`, kind: 'unit', key: u0.unitType, statKey: 'visionRange' }), `${formatRangeStatTiles(avgBaseVision)} avg`, `${formatRangeStatTiles(avgEffVision)} avg`);
     if (u0.unitType === 'scout') {
-        let count = Math.max(1, group.length);
+        let count = Math.max(1, groupCount);
         html += infoRow(withInfoPanelStatMatrixButton('Watch Duration', { title: `${u0.unitType} / Watch Duration`, kind: 'unit', key: u0.unitType, statKey: 'watchDuration' }), `${(totalBaseWatchDuration / count).toFixed(1)}s avg`, `${(totalEffWatchDuration / count).toFixed(1)}s avg`);
     }
     if (u0.workerType === 'builder') {
         html += infoRow(withInfoPanelStatMatrixButton('Work Speed', { title: `${u0.unitType} / Work Speed`, kind: 'unit', key: u0.unitType, statKey: 'builderDps' }), `${formatBigNumber(totalBuildSpeed, 1)}\u26A1`, `${formatBigNumber(totalEffBuildSpeed, 1)}\u26A1`);
-        html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`);
+        html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, groupCount)).toFixed(2)}s avg`, `${(totalEffTransferCd / Math.max(1, groupCount)).toFixed(2)}s avg`);
     } else if (u0.workerType === 'healer') {
         html += infoRow(withInfoPanelStatMatrixButton('Work Speed', { title: `${u0.unitType} / Work Speed`, kind: 'unit', key: u0.unitType, statKey: 'healerDps' }), `${formatBigNumber(totalHealSpeed, 1)}\u26A1`, `${formatBigNumber(totalEffHealSpeed, 1)}\u26A1`);
-        html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`);
+        html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, groupCount)).toFixed(2)}s avg`, `${(totalEffTransferCd / Math.max(1, groupCount)).toFixed(2)}s avg`);
     } else if (u0.workerType === 'researcher') {
         html += infoRow(withInfoPanelStatMatrixButton('Work Speed', { title: `${u0.unitType} / Work Speed`, kind: 'unit', key: u0.unitType, statKey: 'researcherDps' }), `${formatBigNumber(totalBuildSpeed, 1)}\u26A1`, `${formatBigNumber(totalEffBuildSpeed, 1)}\u26A1`);
-        html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`);
+        html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, groupCount)).toFixed(2)}s avg`, `${(totalEffTransferCd / Math.max(1, groupCount)).toFixed(2)}s avg`);
     } else if (u0.workerType === 'collector' || u0.workerType === 'astar_collector') {
         html += infoRow(withInfoPanelStatMatrixButton('Work Speed', { title: `${u0.unitType} / Work Speed`, kind: 'unit', key: u0.unitType, statKey: 'gatherPerTrip' }), `${formatBigNumber(totalCollectorPerTrip, 1)}\u26A1`, `${formatBigNumber(totalEffCollectorPerTrip, 1)}\u26A1`);
-        html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`);
+        html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, groupCount)).toFixed(2)}s avg`, `${(totalEffTransferCd / Math.max(1, groupCount)).toFixed(2)}s avg`);
     } else if (u0.workerType === 'salvager') {
         html += infoRow('Salvage Yield', `10% x SumL${totalSalvagerLevel}`, `10% x SumL${totalEffSalvagerLevel}`);
-        html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`);
+        html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, groupCount)).toFixed(2)}s avg`, `${(totalEffTransferCd / Math.max(1, groupCount)).toFixed(2)}s avg`);
     } else {
         html += infoRow(withInfoPanelStatMatrixButton('Attack', { title: `${u0.unitType} / Attack`, kind: 'unit', key: u0.unitType, statKey: 'atk' }), formatBigNumber(totalBaseAttack, 1), formatBigNumber(totalEffAttack, 1));
         html += infoRow(withInfoPanelStatMatrixButton('DPS', {
@@ -4015,8 +4321,8 @@ function renderUnitGroupInfo(group) {
             }
         }), totalBaseDps.toFixed(1), totalEffDps.toFixed(1));
     }
-    let avgBaseSpeed = totalBaseSpeed / Math.max(1, group.length);
-    let avgEffSpeed = totalEffSpeed / Math.max(1, group.length);
+    let avgBaseSpeed = totalBaseSpeed / Math.max(1, groupCount);
+    let avgEffSpeed = totalEffSpeed / Math.max(1, groupCount);
     html += infoRow(withInfoPanelStatMatrixButton('Speed', { title: `${u0.unitType} / Speed`, kind: 'unit', key: u0.unitType, statKey: 'speed' }), `${avgBaseSpeed.toFixed(1)} avg`, `${avgEffSpeed.toFixed(1)} avg`);
     if (isEffectiveMixed) html += infoRow('Levels (Eff)', `Mixed (L${minEffLevel}-L${maxEffLevel})`);
     let immunes = [];
@@ -4029,9 +4335,9 @@ function renderUnitGroupInfo(group) {
     if (s.isFlying) immunes.push('Walls');
     if (immunes.length > 0) html += infoRow('Immune', immunes.join(', '));
     if (u0.owner === localPlayerId) {
-        let ids = group.map(u => u.id).join(',');
+        let ids = big ? big.idsToken : group.map(u => u.id).join(',');
         let subgroupLevel = ignoreLevelSubgroups ? '' : getUnitBaseLevel(u0);
-        html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${unitKillBtn(ids)}${unitHoldBtn(group)}</div><div style="display:flex;align-items:center;gap:4px;">`;
+        html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${unitKillBtn(ids)}${unitHoldBtn(group, big)}</div><div style="display:flex;align-items:center;gap:4px;">`;
         html += `<span class="info-scale-group-btn" data-mode="x2" data-ids="${ids}" data-unit-type="${u0.unitType}" data-unit-level="${subgroupLevel}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#8cf">x2</span>`;
         html += `<span class="info-scale-group-btn" data-mode="d2" data-ids="${ids}" data-unit-type="${u0.unitType}" data-unit-level="${subgroupLevel}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#fc8">/2</span>`;
         html += `</div></div>`;
@@ -4154,7 +4460,7 @@ function renderSpawnerGroupInfo(group) {
         let allBuildEnabled = group.every(s => isBuildEnabled(s));
         let anyBuildEnabled = group.some(s => isBuildEnabled(s));
         let queueReady = readyGroup;
-        let queueCoordStr = queueReady.map(s => `${s.gx},${s.gy}`).join(';');
+        let queueCoordStr = infoCoordAttr(queueReady.map(s => `${s.gx},${s.gy}`).join(';'));
         let queueCostSource = readyGroup[0] || e;
         let cost = queueCostSource.getUnitCost();
         let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
@@ -4166,7 +4472,7 @@ function renderSpawnerGroupInfo(group) {
         let addBtn = canQueue
             ? `<span class="info-buy-worker-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:#4f4;font-weight:bold;margin-left:4px;">[+]</span>`
             : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
-        let coordStr = group.map(s => `${s.gx},${s.gy}`).join(';');
+        let coordStr = infoCoordAttr(group.map(s => `${s.gx},${s.gy}`).join(';'));
         let salvBtn = `${salvageToggleGroupBtn(coordStr, group.every(g => g.markedForSalvage), anyMarked)}`;
         let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
         let stackBtn = autoStackGroupBtn(coordStr, group.every(s => isAutoStackEnabled(s)), group.some(s => isAutoStackEnabled(s)));
@@ -4639,7 +4945,7 @@ function _buildResearchMultiStatEntries(selectedThings) {
 function _renderResearchSingleThingStatsPanel(owner, scope, targetArg, selectedThing, popupLayout = false) {
     let html = '';
     if (!selectedThing) return html;
-    let groupCoordStr = Array.isArray(targetArg) ? targetArg.map(r => `${r.gx},${r.gy}`).join(';') : '';
+    let groupCoordStr = Array.isArray(targetArg) ? infoCoordAttr(targetArg.map(r => `${r.gx},${r.gy}`).join(';')) : '';
     let panelClasses = popupLayout ? 'research-popup-stat-pane' : '';
     let panelStyle = popupLayout
         ? 'height:100%;min-height:0;overflow-y:auto;overflow-x:hidden;'
@@ -4718,7 +5024,7 @@ function _renderResearchSingleThingStatsPanel(owner, scope, targetArg, selectedT
 
 function _renderResearchMultiThingStatsPanel(owner, scope, targetArg, selectedThings, popupLayout = false) {
     let html = '';
-    let groupCoordStr = Array.isArray(targetArg) ? targetArg.map(r => `${r.gx},${r.gy}`).join(';') : '';
+    let groupCoordStr = Array.isArray(targetArg) ? infoCoordAttr(targetArg.map(r => `${r.gx},${r.gy}`).join(';')) : '';
     let panelClasses = popupLayout ? 'research-popup-stat-pane' : '';
     let panelStyle = popupLayout
         ? 'height:100%;min-height:0;overflow-y:auto;overflow-x:hidden;'
@@ -5017,7 +5323,7 @@ function renderResearchGroupInfo(group) {
             workerQueueCount += r.spawnQueue.length;
         }
         let queueReady = readyGroup;
-        let workerCoordStr = queueReady.map(r => `${r.gx},${r.gy}`).join(';');
+        let workerCoordStr = infoCoordAttr(queueReady.map(r => `${r.gx},${r.gy}`).join(';'));
         let queueCostSource = readyGroup[0] || group[0];
         let cost = queueCostSource ? queueCostSource.getUnitCost() : 0;
         let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
@@ -5058,7 +5364,7 @@ function renderResearchGroupInfo(group) {
         }
         html += `</div>`;
 
-        let coordStr = group.map(r => `${r.gx},${r.gy}`).join(';');
+        let coordStr = infoCoordAttr(group.map(r => `${r.gx},${r.gy}`).join(';'));
         let anyMarked = group.some(r => r.markedForSalvage);
         let allAutoEnabled = group.every(r => isAutoUpgradeEnabled(r));
         let anyAutoEnabled = group.some(r => isAutoUpgradeEnabled(r));
@@ -5120,7 +5426,7 @@ function bindResearchPopupControls(container) {
             if (Number.isFinite(gx) && Number.isFinite(gy)) anchor = { gx, gy };
         }
         if (!anchor) {
-            let coords = parseCoords(btn.dataset.coords);
+            let coords = parseCoords(infoCoordText(btn.dataset.coords));
             anchor = coords.find(c => {
                 let v = getSpawnerAtTile(c.gx, c.gy);
                 return !!(v && v.owner === owner && v.energy > 0 && !v.underConstruction && v.type === 'research');
@@ -5178,7 +5484,7 @@ function bindResearchPopupControls(container) {
 
         if (btn.classList.contains('info-research-buy-group-btn')) {
             let kind = btn.dataset.kind, key = btn.dataset.key, statKey = btn.dataset.statKey;
-            let coords = parseCoords(btn.dataset.coords);
+            let coords = parseCoords(infoCoordText(btn.dataset.coords));
             let anchor = coords.find(c => {
                 let v = getSpawnerAtTile(c.gx, c.gy);
                 return !!(v && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction && v.type === 'research');
@@ -5197,7 +5503,7 @@ function bindResearchPopupControls(container) {
 
         if (btn.classList.contains('info-research-dequeue-group-btn')) {
             let kind = btn.dataset.kind, key = btn.dataset.key, statKey = btn.dataset.statKey;
-            let coords = parseCoords(btn.dataset.coords);
+            let coords = parseCoords(infoCoordText(btn.dataset.coords));
             let anchor = coords.find(c => {
                 let v = getSpawnerAtTile(c.gx, c.gy);
                 return !!(v && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction && v.type === 'research');
@@ -5246,7 +5552,7 @@ function bindResearchPopupControls(container) {
 
         if (btn.classList.contains('info-auto-research-group-btn')) {
             let enabled = btn.dataset.enabled === '1';
-            let coords = parseCoords(btn.dataset.coords);
+            let coords = parseCoords(infoCoordText(btn.dataset.coords));
             for (let c of coords) queueAction({ action: 'setAutoResearch', gx: c.gx, gy: c.gy, enabled });
             updateInfoPanel();
             renderResearchPopupContent();
@@ -5353,7 +5659,7 @@ function renderFloorItemGroupInfo(group) {
         let hasUnderConstruction = group.some(f => f.underConstruction);
         let allBuildEnabled = group.every(f => isBuildEnabled(f));
         let anyBuildEnabled = group.some(f => isBuildEnabled(f));
-        let coordStr = group.map(f => { let gx = f.gx !== undefined ? f.gx : f._gx, gy = f.gy !== undefined ? f.gy : f._gy; return `${gx},${gy}`; }).join(';');
+        let coordStr = infoCoordAttr(group.map(f => { let gx = f.gx !== undefined ? f.gx : f._gx, gy = f.gy !== undefined ? f.gy : f._gy; return `${gx},${gy}`; }).join(';'));
         let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
         let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : '';
         let stackBtn = autoStackGroupBtn(coordStr, group.every(f => isAutoStackEnabled(f)), group.some(f => isAutoStackEnabled(f)));
@@ -5505,7 +5811,17 @@ function getInfoPanelVirtualWindow(panel, allGroups, subgroupState) {
 }
 
 // Heights of the header and the rendered group sections, after a rebuild.
+// (Measured after the browser has laid the new content out for its own
+// frame: asked for right after the content was set, the heights forced that
+// layout at once, ~25 ms of a rebuilt panel's task.)
+let _infoPanelHeightsPending = 0;
 function rememberInfoPanelSectionHeights(panel, sectionKeys, groupCount) {
+    const token = ++_infoPanelHeightsPending;
+    const measure = () => { if (token === _infoPanelHeightsPending && panel.isConnected) _measureInfoPanelSectionHeights(panel, sectionKeys, groupCount); };
+    if (typeof requestAnimationFrame === 'function' && typeof setTimeout === 'function') requestAnimationFrame(() => setTimeout(measure, 0));
+    else measure();
+}
+function _measureInfoPanelSectionHeights(panel, sectionKeys, groupCount) {
     let sections = panel.children;
     if (sections.length !== sectionKeys.length + 2) return;
     infoPanelSectionHeights.set('#header:' + groupCount, sections[0].offsetHeight);
@@ -5529,6 +5845,32 @@ function bindInfoPanelVirtualScroll(panel) {
             updateInfoPanel();
         });
     }, { passive: true });
+}
+
+// A group's controls carry their structures' tiles as a list in the markup
+// ("gx,gy;gx,gy..."). A long one (thousands of buildings: ~10 bytes each, in
+// half a dozen controls of the group, parsed into the page at every rebuild)
+// is kept here and the markup carries its token; a control reads its list
+// through infoCoordText. The same list gets the same token (unchanged
+// markup stays unchanged); the lists used longest ago go first.
+const INFO_COORD_TOKEN_MIN = 512, INFO_COORD_LISTS_MAX = 256;
+const _infoCoordTokens = new Map(), _infoCoordByToken = new Map();
+let _infoCoordSeq = 0;
+function infoCoordAttr(text) {
+    if (typeof text !== 'string' || text.length < INFO_COORD_TOKEN_MIN) return text;
+    let token = _infoCoordTokens.get(text);
+    if (token !== undefined) { _infoCoordTokens.delete(text); _infoCoordTokens.set(text, token); return token; }
+    if (_infoCoordTokens.size >= INFO_COORD_LISTS_MAX) {
+        let drop = INFO_COORD_LISTS_MAX >> 2;
+        for (const [oldText, oldToken] of _infoCoordTokens) { _infoCoordTokens.delete(oldText); _infoCoordByToken.delete(oldToken); if (--drop <= 0) break; }
+    }
+    token = '@c:' + (++_infoCoordSeq);
+    _infoCoordTokens.set(text, token); _infoCoordByToken.set(token, text);
+    return token;
+}
+function infoCoordText(text) {
+    text = String(text || '');
+    return text.startsWith('@c:') ? (_infoCoordByToken.get(text) || '') : text;
 }
 
 function parseInfoCoordList(coordStr) {
@@ -5607,8 +5949,10 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     }
 
     // Remove dead entities
-    selectedEntities = selectedEntities.filter(e => !(e.energy !== undefined && e.energy <= 0));
-    selectedUnits = selectedUnits.filter(u => !u.dead);
+    // (New arrays only when something went: what is kept per selection,
+    // by its array, stays.)
+    if (selectedEntities.some(_infoPanelEntityGone)) selectedEntities = selectedEntities.filter(e => !_infoPanelEntityGone(e));
+    selectionCompactDead(true);
 
     let totalSel = selectedEntities.length + selectedUnits.length;
     if (totalSel === 0) {
@@ -5639,9 +5983,12 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         if (!entityGroups[key]) entityGroups[key] = { label: getEntityGroupLabel(e), items: [], isEntity: true };
         entityGroups[key].items.push(e);
     }
-    // Group units by type
+    // Group units by type (a big selection: from the frame's columns, no
+    // unit read through its view).
     let unitGroups = {};
-    for (let u of selectedUnits) {
+    const frameUnitGroups = infoPanelUnitGroupsFromFrame();
+    if (frameUnitGroups) unitGroups = frameUnitGroups.groups;
+    else for (let u of selectedUnits) {
         let key = getUnitGroupKey(u);
         if (!unitGroups[key]) unitGroups[key] = { label: getUnitDisplayName(u.unitType), items: [], isUnit: true };
         unitGroups[key].items.push(u);
@@ -5671,7 +6018,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
             html += `<div class="subgroup-toggle" data-key="${key}" data-thumb="${thumbKey || ''}" style="cursor:pointer;opacity:${opacity};width:36px;text-align:center;position:relative">`;
             html += `<div class="${iconClass}" style="width:34px;height:34px;border:2px solid ${borderColor};border-radius:${iconRadius};background:#111;display:flex;align-items:center;justify-content:center;position:relative">`;
             if (lvl !== null) html += `<span style="position:absolute;top:-1px;${lvlPos}font-size:7px;color:#aaa;z-index:1">L${lvl}</span>`;
-            html += `<span style="position:absolute;bottom:-1px;${countPos}font-size:8px;color:#fd0;font-weight:bold;z-index:1">x${grp.items.length}</span>`;
+            html += `<span style="position:absolute;bottom:-1px;${countPos}font-size:8px;color:#fd0;font-weight:bold;z-index:1">x${infoGroupCount(grp)}</span>`;
             html += `</div></div>`;
         }
         // Select All / Deselect All
@@ -5687,7 +6034,8 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     if (totalSel > 1) {
         let totalEnergy = 0, totalmaxEnergy = 0;
         for (let e of selectedEntities) { if (e.energy !== undefined) { totalEnergy += e.energy; totalmaxEnergy += e.maxEnergy; } }
-        for (let u of selectedUnits) { totalEnergy += u.energy; totalmaxEnergy += u.maxEnergy; }
+        if (frameUnitGroups) { totalEnergy += frameUnitGroups.totalEnergy; totalmaxEnergy += frameUnitGroups.totalMax; }
+        else for (let u of selectedUnits) { totalEnergy += u.energy; totalmaxEnergy += u.maxEnergy; }
         html += `<div class="info-title">${totalSel} selected</div>`;
         html += infoRow('Total Energy', `${Math.floor(totalEnergy)}/${Math.floor(totalmaxEnergy)}`);
         html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
@@ -5723,20 +6071,27 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
 
         if (grp.isUnit) {
             let u0 = items[0];
-            let prefix = items.length > 1 ? `${items.length}x ` : '';
+            let itemCount = infoGroupCount(grp);
+            let prefix = itemCount > 1 ? `${itemCount}x ` : '';
             let mixedUnitLevels = false;
             let mixedEffectiveLevels = false;
-            if (items.length > 1) {
+            if (grp.big) {
+                // (One unit per bin stands for the bin's units.)
+                let unitLevels = new Set(), effectiveLevels = new Set();
+                for (const b of grp.bins.values()) { unitLevels.add(getUnitBaseLevel(b.u)); effectiveLevels.add(getUnitEffectiveLevel(b.u)); }
+                mixedUnitLevels = unitLevels.size > 1;
+                mixedEffectiveLevels = effectiveLevels.size > 1;
+            } else if (items.length > 1) {
                 let unitLevels = new Set(items.map(u => getUnitBaseLevel(u)));
                 let effectiveLevels = new Set(items.map(u => getUnitEffectiveLevel(u)));
                 mixedUnitLevels = unitLevels.size > 1;
                 mixedEffectiveLevels = effectiveLevels.size > 1;
             }
             html += infoHeaderUnit(prefix + label, u0, { mixedLevel: mixedUnitLevels || mixedEffectiveLevels, leftButtonHtml: subgroupPopupBtnHtml });
-            if (items.length === 1) {
+            if (itemCount === 1) {
                 html += runWithInfoPanelStatMatrixContext(getInfoPanelMatrixContextForUnit(items[0]), () => renderUnitInfo(items[0]));
             } else {
-                html += runWithInfoPanelStatMatrixContext(getInfoPanelMatrixContextForUnit(items[0]), () => renderUnitGroupInfo(items));
+                html += runWithInfoPanelStatMatrixContext(getInfoPanelMatrixContextForUnit(items[0]), () => renderUnitGroupInfo(items, grp.big ? grp : null));
             }
         } else {
             let e0 = items[0];
@@ -5778,10 +6133,12 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     // Keep existing nodes/listeners when both the displayed result and their
     // captured selection are unchanged. Refreshes still calculate live stats.
     let previousRender = panel._selectionRenderCache;
+    // (The same arrays at the same lengths, else the same members: a small
+    // selection's are compared one by one, as its array may be made again.)
     let sameSelection = !panelOverride && previousRender && previousRender.subgroups === subgroupState
-        && previousRender.units.length === selectedUnits.length && previousRender.entities.length === selectedEntities.length
-        && previousRender.units.every((u, i) => u === selectedUnits[i])
-        && previousRender.entities.every((e, i) => e === selectedEntities[i]);
+        && previousRender.unitsLen === selectedUnits.length && previousRender.entities.length === selectedEntities.length
+        && (previousRender.unitsRef === selectedUnits || (!!previousRender.units && previousRender.units.every((u, i) => u === selectedUnits[i])))
+        && (previousRender.entitiesRef === selectedEntities || previousRender.entities.every((e, i) => e === selectedEntities[i]));
     if (sameSelection && previousRender.html === html) {
         activeFormatBigNumberSuffixStart = prevFormatBigNumberSuffixStart;
         return;
@@ -5837,7 +6194,8 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
             sections = sectionHtml.map((sectionMarkup, i) => ({ html: sectionMarkup, element: elements[i], ...indexInfoPanelText(elements[i], sectionMarkup) }));
         }
         panel._selectionRenderCache = panelOverride ? null : {
-            html, subgroups: subgroupState, units: selectedUnits.slice(), entities: selectedEntities.slice(), sections
+            html, subgroups: subgroupState, unitsRef: selectedUnits, unitsLen: selectedUnits.length, entitiesRef: selectedEntities,
+            units: selectedUnits.length <= INFO_PANEL_COLUMN_MIN ? selectedUnits.slice() : null, entities: selectedEntities.slice(), sections
         };
         bindRoots.push(panel);
     }
@@ -5877,7 +6235,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     });
     // Wire up group buy buttons - dynamically find barrack with lowest queue
     panel.querySelectorAll('.info-buy-group-btn').forEach(btn => {
-        bindInstantPress(btn, () => queueGroupSpawns(parseInfoCoordList(btn.dataset.coords), false, queuePurchaseMultiplier));
+        bindInstantPress(btn, () => queueGroupSpawns(parseInfoCoordList(infoCoordText(btn.dataset.coords)), false, queuePurchaseMultiplier));
     });
 
     // Wire up worker buy buttons (single spawner)
@@ -5889,7 +6247,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     });
     // Wire up worker group buy buttons - distribute to lowest queue
     panel.querySelectorAll('.info-buy-worker-group-btn').forEach(btn => {
-        bindInstantPress(btn, () => queueGroupSpawns(parseInfoCoordList(btn.dataset.coords), true, queuePurchaseMultiplier));
+        bindInstantPress(btn, () => queueGroupSpawns(parseInfoCoordList(infoCoordText(btn.dataset.coords)), true, queuePurchaseMultiplier));
     });
 
     // Wire up research buy buttons (single research building)
@@ -5907,7 +6265,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         bindInstantPress(btn, () => {
             let kind = btn.dataset.kind, key = btn.dataset.key;
             let statKey = btn.dataset.statKey;
-            let coords = (btn.dataset.coords || '').split(';').map(c => {
+            let coords = (infoCoordText(btn.dataset.coords) || '').split(';').map(c => {
                 let [x, y] = c.split(',');
                 return { gx: parseInt(x), gy: parseInt(y) };
             }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
@@ -5936,7 +6294,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         bindInstantPress(btn, () => {
             let kind = btn.dataset.kind, key = btn.dataset.key;
             let statKey = btn.dataset.statKey;
-            let coords = (btn.dataset.coords || '').split(';').map(c => {
+            let coords = (infoCoordText(btn.dataset.coords) || '').split(';').map(c => {
                 let [x, y] = c.split(',');
                 return { gx: parseInt(x), gy: parseInt(y) };
             }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
@@ -5976,7 +6334,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
             if (Number.isFinite(gx) && Number.isFinite(gy)) anchor = { gx, gy };
         }
         if (!anchor) {
-            let coords = (btn.dataset.coords || '').split(';').map(c => {
+            let coords = (infoCoordText(btn.dataset.coords) || '').split(';').map(c => {
                 let [x, y] = c.split(',');
                 return { gx: Number.parseInt(x, 10), gy: Number.parseInt(y, 10) };
             }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
@@ -6153,7 +6511,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
 
     // Wire up dequeue group buttons (removes from building with highest queue)
     panel.querySelectorAll('.info-dequeue-group-btn').forEach(btn => {
-        bindInstantPress(btn, () => dequeueGroupSpawns(parseInfoCoordList(btn.dataset.coords), btn.dataset.type === 'worker', queuePurchaseMultiplier));
+        bindInstantPress(btn, () => dequeueGroupSpawns(parseInfoCoordList(infoCoordText(btn.dataset.coords)), btn.dataset.type === 'worker', queuePurchaseMultiplier));
     });
     // Wire up sub-group toggle buttons (simple toggle, doesn't affect others)
     panel.querySelectorAll('.subgroup-toggle').forEach(btn => {
@@ -6211,7 +6569,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     panel.querySelectorAll('.info-salvage-group-btn').forEach(btn => {
         bindInstantPress(btn, () => {
             let marked = btn.dataset.marked === '1';
-            let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
+            let coords = infoCoordText(btn.dataset.coords).split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
             for (let c of coords) queueAction({ action: 'setSalvage', gx: c.gx, gy: c.gy, marked: !marked });
             setTimeout(updateInfoPanel, 50);
         });
@@ -6229,7 +6587,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     panel.querySelectorAll('.info-auto-upgrade-group-btn').forEach(btn => {
         bindInstantPress(btn, () => {
             let enabled = btn.dataset.enabled === '1';
-            let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
+            let coords = infoCoordText(btn.dataset.coords).split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
             for (let c of coords) queueAction({ action: 'setAutoUpgrade', gx: c.gx, gy: c.gy, enabled });
             setTimeout(updateInfoPanel, 50);
         });
@@ -6247,7 +6605,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     panel.querySelectorAll('.info-auto-stack-group-btn').forEach(btn => {
         bindInstantPress(btn, () => {
             let enabled = btn.dataset.enabled === '1';
-            let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
+            let coords = infoCoordText(btn.dataset.coords).split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
             for (let c of coords) queueAction({ action: 'setAutoStack', gx: c.gx, gy: c.gy, enabled });
             setTimeout(updateInfoPanel, 50);
         });
@@ -6265,7 +6623,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     panel.querySelectorAll('.info-queue-toggle-group-btn').forEach(btn => {
         bindInstantPress(btn, () => {
             let enabled = btn.dataset.enabled === '1';
-            let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
+            let coords = infoCoordText(btn.dataset.coords).split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
             for (let c of coords) queueAction({ action: 'setQueueEnabled', gx: c.gx, gy: c.gy, enabled });
             setTimeout(updateInfoPanel, 50);
         });
@@ -6283,7 +6641,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     panel.querySelectorAll('.info-auto-research-group-btn').forEach(btn => {
         bindInstantPress(btn, () => {
             let enabled = btn.dataset.enabled === '1';
-            let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
+            let coords = infoCoordText(btn.dataset.coords).split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
             for (let c of coords) queueAction({ action: 'setAutoResearch', gx: c.gx, gy: c.gy, enabled });
             setTimeout(updateInfoPanel, 50);
         });
@@ -6301,7 +6659,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     panel.querySelectorAll('.info-build-toggle-group-btn').forEach(btn => {
         bindInstantPress(btn, () => {
             let enabled = btn.dataset.enabled === '1';
-            let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
+            let coords = infoCoordText(btn.dataset.coords).split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
             for (let c of coords) queueAction({ action: 'setBuildEnabled', gx: c.gx, gy: c.gy, enabled });
             setTimeout(updateInfoPanel, 50);
         });
@@ -6309,8 +6667,9 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     // Wire up kill group buttons (units)
     panel.querySelectorAll('.info-kill-group-btn').forEach(btn => {
         bindInstantPress(btn, () => {
-            let ids = btn.dataset.ids.split(',').map(Number);
-            for (let id of ids) queueAction({ action: 'killUnit', unitId: id });
+            // (One order for the group.)
+            let ids = infoPanelUnitIds(btn.dataset.ids);
+            if (ids.length) queueAction({ action: 'killUnit', unitIds: ids });
             setTimeout(updateInfoPanel, 50);
         });
     });
@@ -6318,8 +6677,8 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     // 'stop' would also cancel the orders of units that are not holding.
     panel.querySelectorAll('.info-hold-group-btn').forEach(btn => {
         bindInstantPress(btn, () => {
-            let ids = new Set(btn.dataset.ids.split(',').map(Number));
-            let group = units.filter(u => ids.has(u.id) && !u.dead);
+            // (By the id map: no pass over every unit.)
+            let group = infoPanelUnitIds(btn.dataset.ids).map(id => _infoPanelUnitById(id)).filter(u => u && !u.dead);
             if (btn.dataset.hold === '1') queueAction({ action: 'hold', unitIds: group.map(u => u.id) });
             else queueAction({ action: 'stop', unitIds: group.filter(u => u.holdPosition).map(u => u.id) });
             setTimeout(updateInfoPanel, 50);
@@ -6331,10 +6690,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     // Wire up x2 /2 subgroup resize buttons (units)
     panel.querySelectorAll('.info-scale-group-btn').forEach(btn => {
         bindInstantPress(btn, () => {
-            let ids = (btn.dataset.ids || '')
-                .split(',')
-                .map(v => parseInt(v))
-                .filter(v => Number.isFinite(v));
+            let ids = infoPanelUnitIds(btn.dataset.ids);
             if (ids.length === 0) return;
             let mode = (btn.dataset.mode === 'x2') ? 'x2' : 'd2';
             let unitType = btn.dataset.unitType || null;

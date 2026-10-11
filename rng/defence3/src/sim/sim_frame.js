@@ -342,10 +342,13 @@ const _pageFrameStrings = [''];
 // afterwards (dead) its last values. Page-only state (render caches,
 // flashes) is set on it as on a unit.
 class PageUnit {
+    // (Its own field, defined, not set: Unit's accessor of the same name
+    // would take a set, and a read through it cost ~30 ns a unit: 10 ms for
+    // a pass over 300k selected units.)
+    dead = false;
     constructor(id, slot) {
         Object.defineProperty(this, 'id', { value: id, writable: true, enumerable: true });
         this._s = slot;
-        this.dead = false;
         this._last = null;   // last values, once dead
         this._det = null;    // detail record (watched units)
         this._at = { x: 0, y: 0 };

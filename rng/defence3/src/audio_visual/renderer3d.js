@@ -3880,7 +3880,20 @@
             if (F && S.mask) {
                 gl.uniform1f(M.pu.Box, 0);
                 gl.bindVertexArray(M.unitVao);
-                if (M.frame !== F) {
+                // The columns the mask needs are among those the glyphs' draw
+                // uploaded for this frame (drawFrameColumns): drawn from its
+                // buffer, not uploaded a second time (12 MB a frame at 600k
+                // units). Its own upload only when the glyphs were not drawn.
+                const CS = this.columnStores ? this.columnStores[1] : null;
+                if (CS && CS.frame === F && CS.buffer && CS.offsets && CS.offsets.has('r')) {
+                    if (M.sharedFrame !== F || M.sharedBuf !== CS.buffer) {
+                        const cols = ['x', 'y', 'px', 'py', 'r'];
+                        gl.bindBuffer(gl.ARRAY_BUFFER, CS.buffer);
+                        for (let i = 0; i < cols.length; i++) { gl.enableVertexAttribArray(i); gl.vertexAttribPointer(i, 1, gl.FLOAT, false, 0, CS.offsets.get(cols[i])); }
+                        M.sharedFrame = F; M.sharedBuf = CS.buffer; M.frame = null;
+                    }
+                } else if (M.frame !== F) {
+                    M.sharedFrame = null; M.sharedBuf = null;
                     // (The columns the mask needs, as the glyphs' draw uploads them.)
                     const cols = ['x', 'y', 'px', 'py', 'r'], n = F.cap;
                     gl.bindBuffer(gl.ARRAY_BUFFER, M.unitBuf);
@@ -6187,6 +6200,9 @@
                     }
                     S.frame=F;
                     S.maskVersion=-1;
+                    // (Where each column lies: the selection mask draws from
+                    // the same buffer, drawSelectionMask.)
+                    S.offsets=offsets;
                 }
                 // Exact membership for both units and structures. Equal-sized
                 // models cannot be represented by a strict pixel threshold.

@@ -67,6 +67,8 @@ function _simClientCreate() {
     let c = {
         worker: null, loaded: false, active: false, epoch: 0, startTick: -1, nextRequestId: 1, replies: new Map(),
         inFlight: 0, lastDispatchAt: 0, tickClock: 0, dispatchAt: new Map(), appliedTick: -1, appliedAt: 0, latencyMs: TICK_MS, arrivedAt: 0, intervalMs: TICK_MS, drawnAlpha: -1, errors: [],
+        // (Presentation frames: when the last arrived, one waiting to be shown, the shown motion's pace.)
+        presentAt: 0, heldPresentation: null, playScale: 1, drawAt: 0,
         // [epoch, last tick the worker ran] (shared memory only).
         ctl: (typeof SharedArrayBuffer === 'function' && typeof window !== 'undefined' && window.crossOriginIsolated) ? new Int32Array(new SharedArrayBuffer(16)) : null,
         lateMs: 0,
@@ -329,11 +331,33 @@ function _simClientOnMessage(msg) {
         }
         case 'presentation': {
             if (msg.epoch !== c.epoch || !c.active) { _simClientReturnBufs(_simClientWorldBufs(msg.world)); break; }
-            const now=performance.now(), shown=c.arrivedAt>0 ? Math.max(0,c.drawnAlpha) : 1;
-            _simClientApplyWorld(msg.world,shown);
-            if (c.arrivedAt>0) c.intervalMs += (Math.max(10,Math.min(250,now-c.arrivedAt))-c.intervalMs)*.25;
-            c.arrivedAt=now;c.drawnAlpha=-1;c.presentationTick=msg.tick;
-            c.presentationBuildMs=msg.buildMs;c.presentationPhases=msg.phases;c.presentationTorn=msg.torn;
+            const now = performance.now();
+            // (The interpolation's length: the frames' own spacing as they
+            // arrive, whenever each is shown.)
+            if (c.presentAt > 0) c.intervalMs += (Math.max(10, Math.min(250, now - c.presentAt)) - c.intervalMs) * .25;
+            c.presentAt = now;
+            // One waiting already (frames come faster than they are shown):
+            // shown now, from where its units are drawn (the rebase's pass).
+            // (Nearly at its end: from its end, the last tenths of a step
+            // are not worth the pass.)
+            if (c.heldPresentation) { const held = c.heldPresentation, a = Math.max(0, c.drawnAlpha); c.heldPresentation = null; _simClientShowPresentation(c, held, a >= SIM_CLIENT_HELD_SKIP_ALPHA ? 1 : a, now); }
+            // A frame that arrives while the shown one's motion is still
+            // being drawn waits for its end (simClientTickAlpha shows it
+            // then): the drawn motion runs on unbroken, at its own pace, and
+            // no unit's start has to be moved to where it is drawn now (the
+            // rebase: a pass over every unit, 17-27 ms on this thread at 600k
+            // units, each time a frame came). Without frames being drawn (a
+            // hidden page, tests): at once, as before.
+            const drawing = c.drawAt > 0 && now - c.drawAt < 100;
+            if (drawing && c.arrivedAt > 0 && now - c.arrivedAt < c.intervalMs * c.playScale) {
+                // (While one waits the shown motion runs a little faster, so
+                // the wait drains instead of the next frame finding this one
+                // still waiting; the drawn position stays where it is.)
+                if (c.playScale === 1) { c.arrivedAt = now - (now - c.arrivedAt) * SIM_CLIENT_HELD_PLAY_SCALE; c.playScale = SIM_CLIENT_HELD_PLAY_SCALE; }
+                c.heldPresentation = msg;
+                break;
+            }
+            _simClientShowPresentation(c, msg, c.arrivedAt > 0 ? (drawing ? 1 : Math.max(0, c.drawnAlpha)) : 1, now);
             break;
         }
         case 'reply': {
@@ -354,6 +378,21 @@ function _simClientOnMessage(msg) {
             break;
         }
     }
+}
+
+// A presentation frame becomes the shown one; its motion is drawn from `at`.
+const SIM_CLIENT_HELD_PLAY_SCALE = 0.8, SIM_CLIENT_HELD_SKIP_ALPHA = 0.8;
+function _simClientShowPresentation(c, msg, shown, at) {
+    _simClientApplyWorld(msg.world, shown);
+    c.arrivedAt = at; c.drawnAlpha = -1; c.presentationTick = msg.tick; c.playScale = 1;
+    c.presentationBuildMs = msg.buildMs; c.presentationPhases = msg.phases; c.presentationTorn = msg.torn;
+}
+// (A frame waiting to be shown, of a match that ended or was restored.)
+function _simClientDropHeld(c) {
+    if (!c || !c.heldPresentation) return;
+    const held = c.heldPresentation;
+    c.heldPresentation = null;
+    _simClientReturnBufs(_simClientWorldBufs(held.world));
 }
 
 function _simClientApplyTick(msg) {
@@ -445,7 +484,10 @@ function _simClientReturnBufs(bufs) {
 // restore on the page are not the simulation's).
 function _simClientResetUnits() {
     let c = _simClient;
+    _simClientDropHeld(c);
+    if (c) c.presentAt = 0;
     for (let u of _pageUnitsById.values()) { u._freeze(); u.dead = true; }
+    if (typeof selectionIndexRemapped === 'function') selectionIndexRemapped();
     _pageUnitsById = new Map();
     _pageSlotViews = [];
     let bufs = pageResetWorldTables(c);
@@ -507,7 +549,7 @@ function _simClientUpdateStableSlots(F, old) {
     }
     for (const s of changed) {
         const v = _pageSlotViews[s];
-        if (v && !v.dead) { v._freeze(); v.dead = true; _pageUnitsById.delete(v.id); }
+        if (v && !v.dead) { if (typeof selectionNoteDead === 'function') selectionNoteDead(s); v._freeze(); v.dead = true; _pageUnitsById.delete(v.id); }
         const id = s < F.n ? F.id[s] : -1;
         if (id >= 0) {
             const next = new PageUnit(id, s);
@@ -617,14 +659,17 @@ function _simClientApplyFrame(frame, shown) {
             let prev = c.frameUnits || [];
             for (let v of prev) if (v._stamp !== stamp && !v.dead) { v._freeze(); v.dead = true; _pageUnitsById.delete(v.id); }
             for (let k = 0; k < list.length; k++) list[k]._s = order[k];
+            // (Slots dealt again: the selection's slots are found again.
+            // This path only: a restore, a match's first frame.)
+            if (typeof selectionIndexRemapped === 'function') selectionIndexRemapped();
+            // A restore brought new objects for units the page had selected.
+            if (selectedUnits.length && selectedUnits.some(u => !(u instanceof PageUnit))) {
+                selectedUnits = selectedUnits.map(u => u instanceof PageUnit ? u : _pageUnitsById.get(u.id)).filter(u => u && !u.dead);
+            }
         }
         units = list;
         c.frameUnits = list;
         c.mver = frame.mver;
-        // A restore brought new objects for units the page had selected.
-        if (selectedUnits.length && selectedUnits.some(u => !(u instanceof PageUnit))) {
-            selectedUnits = selectedUnits.map(u => u instanceof PageUnit ? u : _pageUnitsById.get(u.id)).filter(u => u && !u.dead);
-        }
     }
     _pageFrame = F;
     if (old) _simClientReturnBufs([old.buf]);
@@ -700,7 +745,10 @@ let visibilityRawFlat = null;
 function _simClientPageTickWork(tick) {
     for (let i = particles.length - 1; i >= 0; i--) if (!particles[i].update()) particles.splice(i, 1);
     _simClientLaserSound();
-    if (selectedUnits.length && selectedUnits.some(u => u.dead)) selectedUnits = selectedUnits.filter(u => !u.dead);
+    // (The selection's dead: known from the frame's membership changes, no
+    // pass over the selection each tick.)
+    if (typeof selectionCompactDead === 'function') selectionCompactDead();
+    else if (selectedUnits.length && selectedUnits.some(u => u.dead)) selectedUnits = selectedUnits.filter(u => !u.dead);
     // What this player sees: the worker's grid for this tick when it sent
     // one (rows are views of it), else computed here. Other players' grids
     // are computed on the page only when asked for.
@@ -792,8 +840,19 @@ function simClientAfterSnapshotApplied(snapshot) {
 // ---- interpolation between the last two applied ticks ----
 function simClientTickAlpha(frameTime) {
     let c = _simClient;
-    if (!c || !c.arrivedAt) return 1;
-    let alpha = (frameTime - c.arrivedAt) / Math.max(1, c.intervalMs);
+    if (!c) return 1;
+    c.drawAt = performance.now();
+    if (!c.arrivedAt) return 1;
+    // A frame waiting for the shown one's motion to end: shown from that
+    // end on (see the 'presentation' message).
+    if (c.heldPresentation && frameTime - c.arrivedAt >= c.intervalMs * c.playScale) {
+        const held = c.heldPresentation, end = c.arrivedAt + c.intervalMs * c.playScale;
+        c.heldPresentation = null;
+        if (held.epoch === c.epoch && c.active) {
+            try { _simClientShowPresentation(c, held, 1, frameTime - end < c.intervalMs ? end : frameTime); } catch (err) { reportRuntimeError('presentation', err); }
+        } else _simClientReturnBufs(_simClientWorldBufs(held.world));
+    }
+    let alpha = (frameTime - c.arrivedAt) / Math.max(1, c.intervalMs * c.playScale);
     // Called once per drawn frame: remembered for the next result's start.
     c.drawnAlpha = alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
     return alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;

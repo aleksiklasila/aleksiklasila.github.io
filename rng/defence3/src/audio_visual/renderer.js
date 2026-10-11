@@ -75,14 +75,21 @@ function requestInfoPanelRefresh(delayMs = TICK_MS * 1.5) {
 
 // Refresh after the next rendered frame, which itself stays free of it (see
 // the box-selection mouseup: that frame shows the new selection at once).
-let _infoPanelRefreshAfterFrames = 0;
+// A panel that takes long to make (a big selection's: tens of ms) waits
+// INFO_PANEL_SETTLE_MS after the last selection instead: boxes drawn in
+// quick succession make it once, when they stop, not a long frame each.
+const INFO_PANEL_SETTLE_MS = 160, INFO_PANEL_SETTLE_COST_MS = 10;
+let _infoPanelRefreshAfterFrames = 0, _infoPanelSettleUntil = 0;
 function requestInfoPanelRefreshAfterFrame() {
     _infoPanelRefreshAfterFrames = 2;
+    _infoPanelSettleUntil = _infoPanelRefreshCostMs > INFO_PANEL_SETTLE_COST_MS ? performance.now() + INFO_PANEL_SETTLE_MS : 0;
 }
 
 function _refreshInfoPanelPeriodic(now) {
     if (_infoPanelRefreshAfterFrames > 0) {
-        if (--_infoPanelRefreshAfterFrames > 0) return;
+        if (_infoPanelRefreshAfterFrames > 1) { _infoPanelRefreshAfterFrames--; return; }
+        if (performance.now() < _infoPanelSettleUntil) return;
+        _infoPanelRefreshAfterFrames = 0;
         _infoPanelNextRefreshAt = 0;
     }
     if (now < _infoPanelNextRefreshAt || researchQueueDragInProgress) return;
@@ -1392,7 +1399,17 @@ function get3DBoxSelection(screenRect) {
     let minSy = Math.min(screenRect.sy, screenRect.ey);
     let maxSy = Math.max(screenRect.sy, screenRect.ey);
     let alpha = tickAlpha;
-    let pointInBox = (worldX, worldY, lift) => {
+    // (Projected here when the renderer's matrix is at hand: its own
+    // projection makes two objects a point, and a box over a base asks for
+    // tens of thousands of points.)
+    const BVP = renderer3dInstance.tmpViewProjection, bvw = renderer3dInstance.cssWidth, bvh = renderer3dInstance.cssHeight, bpad = renderer3dInstance.viewPad || 0;
+    let pointInBox = BVP && bvw > 0 && bvh > 0 ? (worldX, worldY, lift) => {
+        const wx = worldX / TILE, wz = worldY / TILE, cw = BVP[3] * wx + BVP[7] * lift + BVP[11] * wz + BVP[15];
+        if (!(cw > 0)) return false;
+        const px = ((BVP[0] * wx + BVP[4] * lift + BVP[8] * wz + BVP[12]) / cw * 0.5 + 0.5) * bvw - bpad;
+        const py = (1 - ((BVP[1] * wx + BVP[5] * lift + BVP[9] * wz + BVP[13]) / cw * 0.5 + 0.5)) * bvh - bpad;
+        return px >= minSx && px <= maxSx && py >= minSy && py <= maxSy;
+    } : (worldX, worldY, lift) => {
         let projected = renderer3dInstance.projectWorldToScreen(worldX / TILE, lift, worldY / TILE);
         return !!projected && projected.x >= minSx && projected.x <= maxSx && projected.y >= minSy && projected.y <= maxSy;
     };
@@ -1407,7 +1424,42 @@ function get3DBoxSelection(screenRect) {
         if (!hit) pending.add(ref);
         list.push({ ref, hit, mark });
     };
-    for (let u of units) {
+    // Units: from the frame's columns, projected here (every unit's view and
+    // a projection object each took ~0.5 us a unit: a box over an army of
+    // 300k froze the page). Past BOX_MESH_TEST_MAX units in the frame the
+    // ground point alone decides (a far view: a unit is a few pixels).
+    const BOX_MESH_TEST_MAX = 20000;
+    const UF = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    const VP = renderer3dInstance.tmpViewProjection;
+    let pointUnits = null;
+    if (UF && VP && renderer3dInstance.cssWidth > 0) {
+        // (Slot by slot: the columns in memory order; see _ownUnitsInBox.)
+        const n = UF.n, O = UF.owner, ID = UF.id, X = UF.x, Y = UF.y, PX = UF.px, PY = UF.py, views = _pageSlotViews;
+        const me = localPlayerId, full = fullVisibility, it = 1 / TILE, lift = 0.28, exact = UF.count <= BOX_MESH_TEST_MAX;
+        const W = renderer3dInstance.cssWidth, H = renderer3dInstance.cssHeight, pad = renderer3dInstance.viewPad || 0;
+        const m0 = VP[0], m1 = VP[1], m3 = VP[3], m8 = VP[8], m9 = VP[9], m11 = VP[11];
+        const c0 = VP[4] * lift + VP[12], c1 = VP[5] * lift + VP[13], c3 = VP[7] * lift + VP[15];
+        if (!exact) pointUnits = [];
+        for (let s = 0; s < n; s++) {
+            if (O[s] !== me || ID[s] < 0) continue;
+            const ux = PX[s] + (X[s] - PX[s]) * alpha, uy = PY[s] + (Y[s] - PY[s]) * alpha;
+            if (!full && !isTileVisible(Math.floor(ux * it), Math.floor(uy * it))) continue;
+            const wx = ux * it, wz = uy * it, cw = m3 * wx + m11 * wz + c3;
+            let hit = false;
+            if (cw > 0) {
+                const px = ((m0 * wx + m8 * wz + c0) / cw * 0.5 + 0.5) * W - pad, py = (1 - ((m1 * wx + m9 * wz + c1) / cw * 0.5 + 0.5)) * H - pad;
+                hit = px >= minSx && px <= maxSx && py >= minSy && py <= maxSy;
+            }
+            if (!exact && !hit) continue;
+            // (A slot with an id holds a live unit's view: the view itself
+            // is not read, 300k of them are 300k cache misses.)
+            const u = views[s];
+            if (!u) continue;
+            if (!exact) { pointUnits.push(u); continue; }
+            if (!hit) pending.add(u);
+            unitCandidates.push({ ref: u, hit, mark: null });
+        }
+    } else for (let u of units) {
         if (u.owner !== localPlayerId || u.dead) continue;
         let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
         let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
@@ -1443,10 +1495,12 @@ function get3DBoxSelection(screenRect) {
         if (isTileVisible(m.gx, m.gy)) consider(entityCandidates, m, m.x, m.y, 0.06, mine => { mine._isAstarMine = true; });
     }
 
-    let drawnHits = pending.size && typeof renderer3dInstance.boxRenderedSources === 'function'
+    // (The drawn meshes of what the ground point missed: for a handful of
+    // things up close. A box over thousands is a far view: the point decides.)
+    let drawnHits = pending.size && pending.size <= 4000 && typeof renderer3dInstance.boxRenderedSources === 'function'
         ? renderer3dInstance.boxRenderedSources(minSx, minSy, maxSx, maxSy, pending)
         : null;
-    let newUnits = [];
+    let newUnits = pointUnits || [];
     let newEntities = [];
     for (let c of unitCandidates) if (c.hit || (drawnHits && drawnHits.has(c.ref))) newUnits.push(c.ref);
     for (let c of entityCandidates) {
@@ -2452,15 +2506,25 @@ function getSelectionMaskOverlay() {
     const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
     if (!F || selectedUnits.length + selectedEntities.length < SELECTION_GPU_MIN) return null;
     if (!showSelectionOutlinesForUnits() && !showSelectionOutlinesForBuildings()) return null;
-    const S = _selMaskState, mver = typeof _simClient !== 'undefined' && _simClient ? _simClient.mver : -1;
+    const S = _selMaskState;
     let sub = ''; for (const k in activeSubGroups) if (activeSubGroups[k] === false) sub += k + ';';
-    // The mask per slot: again when the selection, its subgroups or the
-    // units' slots changed.
-    if (S.sel !== selectedUnits || S.len !== selectedUnits.length || S.sub !== sub || S.mver !== mver || S.frame !== F.buf || !S.mask || S.mask.length < F.cap) {
-        if (!S.mask || S.mask.length < F.cap) S.mask = new Uint8Array(F.cap); else S.mask.fill(0);
-        if (showSelectionOutlinesForUnits()) for (const u of sub ? getActiveUnits() : selectedUnits) { const s = u && !u.dead ? u._s : -1; if (s >= 0 && s < S.mask.length) S.mask[s] = 1; }
-        S.sel = selectedUnits; S.len = selectedUnits.length; S.sub = sub; S.mver = mver; S.frame = F.buf; S.version++;
+    // The mask per slot: the selection's own (selectionIndex: kept as units
+    // die, made again only for another selection; a pass over 300k selected
+    // units on every new frame cost 10-30 ms). With a subgroup turned off or
+    // unit outlines hidden: one of its own, made when those or the selection
+    // change.
+    const X = selectionIndex(), showUnits = showSelectionOutlinesForUnits();
+    if (!sub && showUnits) {
+        if (S.xver !== X.version || S.mask !== X.mask) { S.mask = X.mask; S.xver = X.version; S.version++; S.own = null; }
+    } else {
+        const active = sub && showUnits ? getActiveUnits() : null;
+        if (S.sub !== sub || S.show !== showUnits || S.xver !== X.version || S.active !== active || !S.own || S.own.length < F.cap) {
+            if (!S.own || S.own.length < F.cap) S.own = new Uint8Array(F.cap); else S.own.fill(0);
+            if (active) for (let i = 0; i < active.length; i++) { const u = active[i], s = u && !u.dead ? u._s : -1; if (s >= 0 && s < S.own.length) S.own[s] = 1; }
+            S.mask = S.own; S.xver = X.version; S.active = active; S.version++;
+        }
     }
+    S.sub = sub; S.show = showUnits;
     if (S.ents !== selectedEntities || S.elen !== selectedEntities.length) {
         const ents = showSelectionOutlinesForBuildings() ? getActiveEntities() : [];
         const B = new Float32Array(Math.max(6, ents.length * 6));
@@ -4041,10 +4105,10 @@ let _minimapUnitCanvas = null;
 let _minimapUnitPixels = null;
 // Keep the population loop out of the large Canvas/UI function so the JIT
 // can optimize it. One packed write per pixel, no per-unit Map/color lookup.
-function paintMinimapUnitColumns(F, pixels, size, tile, scale, full, vis, colors) {
+function paintMinimapUnitColumns(F, pixels, size, tile, scale, full, vis, colors, from = 0, to = F.count) {
     const order = F.order, X = F.x, Y = F.y, E = F.energy, O = F.owner;
     const unitScale = scale / tile;
-    for (let i = 0; i < F.count; i++) {
+    for (let i = from; i < to; i++) {
         const s = order[i];
         if (E[s] <= 0) continue;
         const ux = X[s], uy = Y[s];
@@ -4053,6 +4117,39 @@ function paintMinimapUnitColumns(F, pixels, size, tile, scale, full, vis, colors
         if (x < 0 || y < 0 || x >= size || y >= size) continue;
         pixels[y * size + x] = colors[O[s] + 1];
     }
+}
+// An army's units on the minimap: a slice of them a frame into pixels of
+// their own, shown when all are in (every unit in one go was ~13 ms at 600k
+// units, four times a second: a long frame each time). The picture is of
+// the frames it was painted over, a few apart.
+const MINIMAP_UNIT_SLICE = 100000;
+const _minimapUnitPaint = { running: false, painted: false, next: 0, image: null, pixels: null, colors: null };
+function _minimapUnitPaintStart(P) {
+    if (!_minimapUnitCanvas) {
+        _minimapUnitCanvas = document.createElement('canvas');
+        _minimapUnitCanvas.width = _minimapUnitCanvas.height = MINIMAP_SIZE;
+    }
+    if (!P.image || P.image.width !== MINIMAP_SIZE) {
+        P.image = _minimapUnitCanvas.getContext('2d').createImageData(MINIMAP_SIZE, MINIMAP_SIZE);
+        P.pixels = new Uint32Array(P.image.data.buffer, P.image.data.byteOffset, P.image.data.byteLength / 4);
+    } else P.pixels.fill(0);
+    const palette = new Uint8Array(9 * 4);
+    for (let owner = -1; owner < 8; owner++) {
+        const c = _parseHexColor(get3DRenderOwnerColor(owner)), o = (owner + 1) * 4;
+        palette[o] = c.r; palette[o + 1] = c.g; palette[o + 2] = c.b; palette[o + 3] = 255;
+    }
+    P.colors = new Uint32Array(palette.buffer);
+    P.next = 0; P.running = true;
+}
+// (true: the picture is whole and on the units' canvas.)
+function _minimapUnitPaintStep(P, F, scale) {
+    const end = Math.min(F.count, P.next + MINIMAP_UNIT_SLICE);
+    paintMinimapUnitColumns(F, P.pixels, MINIMAP_SIZE, TILE, scale, fullVisibility, visibilityGrid, P.colors, P.next, end);
+    P.next = end;
+    if (end < F.count) return false;
+    _minimapUnitCanvas.getContext('2d').putImageData(P.image, 0, 0);
+    P.running = false; P.painted = true;
+    return true;
 }
 function drawMinimap() {
     let nowMs = performance.now();
@@ -4064,7 +4161,19 @@ function drawMinimap() {
     }
     // (An army-scale map walks every unit: 4 times a second; smaller ones 10.)
     const minimapEveryMs = units.length > 20000 ? 250 : 100;
-    if ((gameTime !== _minimapContentTick && nowMs - _minimapLastDrawMs >= minimapEveryMs) || nowMs < _minimapLastDrawMs || _minimapContentGrid !== grid || _minimapContentMode !== mode) {
+    const minimapTimed = gameTime !== _minimapContentTick && nowMs - _minimapLastDrawMs >= minimapEveryMs;
+    const minimapForced = nowMs < _minimapLastDrawMs || _minimapContentGrid !== grid || _minimapContentMode !== mode;
+    let minimapCompose = minimapTimed || minimapForced;
+    // (Army scale, the frame's columns: the units a slice a frame; the
+    // content is put together when their picture is whole.)
+    const slicedF = units.length > MINIMAP_UNIT_SLICE && _isLiveUnitList(getLiveRenderView().units) && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    if (slicedF) {
+        const P = _minimapUnitPaint;
+        if (minimapTimed && !P.running) { _minimapUnitPaintStart(P); _minimapLastDrawMs = nowMs; _minimapContentTick = gameTime; }
+        if (minimapTimed && P.painted && !minimapForced) minimapCompose = false;
+        if (P.running && _minimapUnitPaintStep(P, slicedF, scale)) minimapCompose = true;
+    } else _minimapUnitPaint.running = _minimapUnitPaint.painted = false;
+    if (minimapCompose) {
     _minimapLastDrawMs = nowMs; _minimapContentGrid = grid; _minimapContentMode = mode;
     _minimapContentTick = gameTime;
     const minimapCtx = _minimapContentCanvas.getContext('2d');
@@ -4134,12 +4243,15 @@ function drawMinimap() {
 
     // At army scale, compose directly into minimap pixels. Overlapping units
     // no longer issue hundreds of thousands of Canvas draw commands.
-    if (units.length > 5000) {
+    if (slicedF) {
+        // (Painted a slice a frame, above: its last whole picture.)
+        if (_minimapUnitPaint.painted) minimapCtx.drawImage(_minimapUnitCanvas, 0, 0);
+    } else if (units.length > 5000) {
         if (!_minimapUnitCanvas) {
             _minimapUnitCanvas = document.createElement('canvas');
             _minimapUnitCanvas.width = _minimapUnitCanvas.height = MINIMAP_SIZE;
-            _minimapUnitPixels = _minimapUnitCanvas.getContext('2d').createImageData(MINIMAP_SIZE, MINIMAP_SIZE);
         }
+        if (!_minimapUnitPixels) _minimapUnitPixels = _minimapUnitCanvas.getContext('2d').createImageData(MINIMAP_SIZE, MINIMAP_SIZE);
         const pixels = _minimapUnitPixels.data, colors = new Map();
         pixels.fill(0);
         // (The live units, Team + history too: units are not remembered.)
@@ -5580,6 +5692,8 @@ function processRenderFrame(timestamp) {
     }
     drawInteractionOverlay(renderer3dSnapshot);
     flushTickUiRequests();
+    // (An army's unit counts for the bars and the panel: a slice a frame.)
+    if (typeof frameUnitSummaryStep === 'function') frameUnitSummaryStep();
     updateHUD();
     updateControlGroupBar();
 

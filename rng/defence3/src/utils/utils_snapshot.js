@@ -69,7 +69,9 @@ const SNAP_FORMAT = 7;
 // (a research rebuild too), which snapshots carry (statMult).
 // 9: a navigation build's install writes the slots no batch was given (live
 // ones made, ones let go but still made keep their content).
-const SIM_RULES_REVISION = 9;
+// 10: a tower that finds no unit to shoot looks again on a tick of its own
+// (towerIdleCooldown); a kill order may carry a group's units (unitIds).
+const SIM_RULES_REVISION = 10;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
 // Each hash covers one slice (regions, grid rows) of the world. The resync

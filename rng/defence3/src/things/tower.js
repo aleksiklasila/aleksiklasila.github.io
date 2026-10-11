@@ -188,6 +188,20 @@ function towerSchedule(t) {
     if (!L) W.set(at, L = []);
     L.push(t);
 }
+// The cooldown of a tower that found no unit to shoot: its usual one,
+// lengthened (once: from then on it is exact) to end on the tower's own place
+// in the wheel of that cooldown (by its tile). Idle towers then look again
+// spread over the cooldown's ticks, not all on one: every tower of a base
+// finding nothing on the same tick looked again on the same later tick, for
+// good (their searches for a structure to shoot instead: a 45-60 ms tick
+// every cooldown with 6k towers). A function of the tick and the tile only.
+function towerIdleCooldown(t, base) {
+    base = Math.max(1, Math.ceil(Number(base) || 1));
+    // (A cooldown of N set now acts again at gameTime + N + 1 (towerSchedule):
+    // an idle tower's looks are N + 1 ticks apart, the wheel's size.)
+    const period = base + 1, at = gameTime + period, slot = (t.gy * GRID_W + t.gx) % period;
+    return base + (((slot - at) % period) + period) % period;
+}
 function _towerDueBuild(now) {
     const W = _towerDue = new Map();
     for (const t of towers) {
@@ -218,7 +232,13 @@ function towersTick() {
         for (const t of due) {
             if (t === prev) continue;
             prev = t;
-            if (t.energy > 0 && getTileEntityRef(t.gx, t.gy) === t) t.act();
+            if (!(t.energy > 0)) { dead = true; continue; }
+            // (Only once its cooldown is over, by its deadline: an entry
+            // left from a cooldown set again since never acts early, so
+            // what the wheel holds besides the deadlines is nothing a
+            // restored peer, whose wheel is made from them, could miss.)
+            if (gameTime <= Math.ceil(Number(t._cdUntil) || 0)) continue;
+            if (getTileEntityRef(t.gx, t.gy) === t) t.act();
             if (!(t.energy > 0)) dead = true;
         }
     }
@@ -390,11 +410,14 @@ class Tower {
         // first, then traps, then barracks and spawners, then other floor
         // buildings. Only the structures in the areas in range are visited.
         if (!target) {
-            this.cd = secondsToTicks(this.currentStats.cd || 1.5);
             target = _findTowerStructureTarget(this, wholeRange, 'tower');
             if (!target) target = _findTowerFloorTarget(this, rangeArea, true);
             if (!target) target = _findTowerStructureTarget(this, wholeRange, 'producer');
             if (!target) target = _findTowerFloorTarget(this, rangeArea, false);
+            // (Nothing to shoot: it looks again on a tick of its own. Set
+            // once, when nothing was found: a cooldown set twice with
+            // different ends leaves the tower in the wheel at both.)
+            if (!target) this.cd = towerIdleCooldown(this, secondsToTicks(this.currentStats.cd || 1.5));
         }
 
         if (target) {

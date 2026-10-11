@@ -17,6 +17,7 @@ Never run two benchmarks at once (the 800k world takes ~6.5 GB RSS of the
 | B400 (quick) | as B800 with `DATA=tests/200000-1000.json` and `3` seconds | 200k per team; for diagnosis probes (2-3 min). |
 | Probes | `EVAL="$(cat .claude/probes/move_why.js)" AFTER='JSON.stringify(__scratch.mw)'`, `WAKESTAT=1`, `.claude/probes/slow_updates.js`, `PROFILE_RANGE=130,160 PROFILE_OUT=...` | see OPTIMIZATION_PROGRESS.md "How to verify and measure" |
 | Kernel replay | `.claude/kdump.js` (EVALALL + DUMPBIN, guest's calls of one tick) then `node .claude/wbench.cjs <dir> SIM_KERNEL_X` | one thread, JS vs wasm, outputs compared |
+| SEL300 (spikes, in Edge) | `NODE_PATH=<playwright> SECS=12 WARM_S=15 PHASES=idle,selall,box,move,boxmove,groups TAG=<tag> node tests/selection-thrash-bench.cjs 300000-1000.json` | The real page, simulation worker, helpers and GPU, the mouse driven as a player's: nothing selected, everything selected, 5 boxes a second (all / a tenth / nine tenths), a 300k-unit order, boxes over the moving army, control groups. Per phase: frame times and how many frames over 33/50/100/250 ms, tick gaps, the worker's time per tick, long tasks, input handler times, and the page / worker functions with the longest single call (the spikes, not the means). `PROFILE=<phase>` writes CPU profiles of the page and every worker (`.claude/selbench-<tag>-<phase>-*.cpuprofile`; `node .claude/profsum.cjs <file>`). ~4 min. |
 
 Visibility modes (team, team + history) and Edge rendering runs are still to
 be added to the matrix (plan §5).
@@ -827,10 +828,210 @@ Then:
   disarms at the resync flush now, so kernel and object paths need not
   match).
 
+### 2026-10-11 — tick and frame time spikes (user: the session's main goal)
+
+Report: on `300000-1000.json` selecting things, above all repeatedly (all
+units, another 90%, and so on, ~5 times a second), drops FPS to 7-8 and TPS
+to 2-5. Reproduced in Edge with a new bench, `tests/selection-thrash-bench.cjs`
+(SEL300 above): 600k units, 2D far view, full visibility, solo.
+
+Machine note: every run of this session had the user's Firefox holding ~6 GB
+(2 GB available, 0.3 GB during a run): the simulation's own time per tick
+moved 45-65 ms between identical runs. Compare the spike counts and the
+longest single calls, not the means.
+
+**Why selections cost ticks.** The page never simulates, but it dispatches
+the ticks (three ahead at most): a page task of 150 ms and more leaves the
+worker without a tick to run. A selection made the page walk its units
+through their views many times a frame and a tick, so the page stalled, so
+the simulation did. Nothing in the worker depends on the selection.
+
+Where the page's time went (profile of the box phase, 12 s, the page thread
+90% busy): the info panel 2.9 s (17 rebuilds of 170 ms: every unit grouped by
+a key string, summed through its view, every unit's id written into the
+markup three times per group), the box's release 2.0 s (116-198 ms each:
+`u.x`, `u.y`, `u.owner` through the views' getters for every unit),
+`getActiveUnits` 1.1 s (a filter of 300k views every tick: `u.dead` went
+through Unit's accessor, ~30 ns), the selection mask made again on every new
+frame 0.5 s plus its own upload of five columns 0.46 s, the rebase of every
+unit's drawn position 1.0 s (17-27 ms each time a frame came, selection or
+not), the minimap's units 0.6 s (13 ms, 4 times a second), the bottom bar's
+counts 0.2 s.
+
+Changed (page; all of it applies to multiplayer, the page's work is the same
+there):
+- **The selection by the frame's slots** (hud.js `selectionIndex`): its
+  units' slots, a mask per slot and its dead count, made once per selection
+  (the array and its length tell) and kept by the frame's membership changes
+  (`selectionNoteDead` from `_simClientUpdateStableSlots`; a restore's remap
+  makes it again). Nothing walks the selection per frame or tick: the
+  per-tick dead filter is a counter check (`selectionCompactDead`: at once
+  for a small selection, twice a second for a big one), `getActiveUnits` is
+  the selection's own array while nothing died and no subgroup is off
+  (cached by the index's version otherwise), the GPU mask is the index's
+  mask.
+- `PageUnit.dead` is the view's own field (a class field: defined, not set
+  through Unit's accessor).
+- **Box selection from the columns** (main.js `_ownUnitsInBox`, renderer.js
+  `get3DBoxSelection`): slot by slot in memory order, the 3D one projected
+  inline; past 20k units in the frame the ground point alone decides (no
+  drawn-mesh test per unit). The selection is then in slot order; its index
+  is adopted from the slots just read (`selectionIndexAdopt`).
+- **The info panel of a big selection** (over 300 units, the watched units'
+  cap): unit groups from one pass over the selection's slots into bins of
+  units alike in everything the panel sums (type, base and effective level,
+  owner, frozen, sandy) in a small typed open table
+  (`infoPanelUnitGroupsFromFrame`, `_infoPanelBinUnits`);
+  `renderUnitGroupInfo` sums over the bins. A group's controls carry a token
+  (`@group:<key>`) instead of every id, resolved from the selection when
+  pressed (`infoPanelUnitIds`); long coordinate lists of building groups are
+  tokens too (`infoCoordAttr` / `infoCoordText`: the panel's markup with 20k
+  buildings selected is 84 KB, 978 nodes). Building group keys are kept per
+  entity while groups are by type. Section heights are measured after the
+  browser's own layout (asked for at once they forced it: ~25 ms). After a
+  box the panel waits 160 ms once it is known to be costly
+  (`INFO_PANEL_SETTLE_MS`): boxes in quick succession make it once.
+- **One kill order per group** (`killUnit` takes `unitIds`): the panel's
+  kill button sent one order per unit, each found by a scan of every unit
+  (a 50k group: 50k orders of 600k compares). SIM_RULES_REVISION 10.
+- **A new units frame waits for the shown one's motion to end**
+  (sim_client.js: `heldPresentation`, shown by `simClientTickAlpha`): no
+  unit's start is moved to where it is drawn now (the rebase's pass over
+  every unit). While one waits the shown motion runs at 1.25x so the wait
+  drains; a second frame arriving meanwhile shows the waiting one (with the
+  pass only when the shown motion is under 80% done). Rebase passes 60 → 14
+  per 12 s idle. Without frames being drawn (a hidden page, the node tests):
+  as before.
+- The selection mask draws from the glyphs' unit buffer (renderer3d.js
+  `drawSelectionMask`: no second upload of five columns, 12 MB a frame).
+- The minimap's units and the unit counts for the bars and the panel are
+  made a slice of 100k units a frame (`_minimapUnitPaintStep`,
+  `frameUnitSummaryStep`), shown when whole.
+
+Changed (simulation):
+- **Idle towers look again on a tick of their own** (tower.js
+  `towerIdleCooldown`; SIM_RULES_REVISION 10): a tower that finds no unit
+  sets its cooldown and searches for a structure; every tower of a base
+  finding nothing on one tick did so again on the same later tick, for good
+  (6k towers: a 45-60 ms `towersTick` every cooldown, most of it
+  `_findTowerFloorTarget`). The idle cooldown is lengthened once to end on
+  the tower's place (by tile) in the wheel of cooldown + 1 ticks; from then
+  on exact. A function of the tick and the tile only (nothing new in
+  snapshots). `towersTick` max 43-60 → 3-5 ms; its mean read 1.05 → 1.7 ms
+  a tick across these runs (not explained: the same searches, spread; the
+  shared structure lists are kept by changes, not per tick. To measure with
+  tickbench, alone).
+  With it: the idle cooldown is set once, after the structure searches found
+  nothing (set before them and again on a find, the tower sat in the wheel at
+  two different ticks), and `towersTick` lets a tower act only past its
+  deadline (`gameTime > _cdUntil`): an entry left from a cooldown set again
+  since never acts a tick early, so the wheel holds nothing a restored peer
+  (whose wheel is made from the deadlines) could miss.
+
+Tests. The corruption fuzz failed with the tower change, in a way that is
+not the towers': its repairs' timing depends on when each corruption lands
+(the trajectory moved, so they land elsewhere in the hash rotations). On
+HEAD it fails the same kind of way once its schedule is shifted
+(`await play(1150)` before the kinds: "playerResearch: state differs after
+the patch"; 350 ms passes, 2750 fails): it passed by phase. Two of its
+assumptions made explicit: `unitExtra` is a spreading kind (the extra unit
+raises its neighbours' effective levels and their upkeep while its patch is
+on the way: settled like the other broad kinds), and a building's level is
+waited for as long as its hash round takes (each region once in
+SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS = 400 ticks; it was given 6 s).
+Mode 0 passes; mode 1 still fails ("rng: guest1 was repaired too": a late
+follow-up of the playerResearch repair on guest1). **Open: a research
+corruption's repair is not complete in one patch plus a settle** (the units'
+derived tables after the delta patch: the gap noted on 2026-10-10), and the
+fuzz should draw its schedule from several phases so it cannot pass by
+phase. `frame-hud-summary` loads a slice of hud.js by text: the frame
+summary's new state sits inside that slice.
+
+SEL300, before → after (`.claude/selbench-s14-base300.log`,
+`-base300-move.log` → `selbench-s14-c.log`; frames over 100 ms in 12 s):
+
+| Phase | FPS | frame p95 ms | over 100 ms | TPS (applied) | tick gap p95 ms | worker tick max ms |
+|---|---|---|---|---|---|---|
+| nothing selected | 98 → 95 | 24.9 → 19.1 | 0 → 0 | 15.8 → 18.8 | 92 → 73 | 96 → 74 |
+| 300k + 20k buildings selected | 44 → 79 | 66.7 → 29.3 | 16 → 3 | 13.3 → 19.1 | 203 → 81 | 126 → 69 |
+| 5 boxes a second | 16 → 57 | 274 → 56.8 | 30 → 5 | 11.3 → 17.3 | 317 → 143 | 111 → 83 |
+| 300k-unit move order | 22 → 87 | 141 → 20 | 25 → 0 | 12.5 → 16.9 | 216 → 81 | 119 → 92 |
+| boxes over the moving army | 16 → 69 | 241 → 39.7 | 32 → 0 | 12.0 → 16.3 | 266 → 131 | 151 → 76 |
+| control groups | 56 → 86 | 50 → 20 | 11 → 2 | 12.9 → 15.1 | 235 → 97 | 97 → 104 |
+
+(Before, the page managed 17 of the 60 boxes asked for in 12 s; now all 61.
+A box's release: 198 → 48 ms, most of it now the buildings' part.)
+
+A second run of the final tree (`selbench-s14-d.log`, with the faster
+playout while a frame waits) on a slower machine state (the worker 59-70 ms
+a tick, so 12.5-16.3 TPS: the simulation's own time, not the page's): FPS
+110 / 94 / 64 / 102 / 67 / 93 over the six phases, frame p95 16.6 / 17 / 50 /
+16.7 / 49 / 19 ms, frames over 100 ms 0 / 3 / 4 / 1 / 6 / 0; rebase passes
+per phase 0 / 1 / 5 / 0 / 5 / 0 (60 before). Its worst frames (288 and 367
+ms, once each) fell in functions that take ~1 ms otherwise: the page's
+major collections (see below).
+
+3D (`MODE=3d`, `selbench-s14-3d*.log`): everything selected 85 FPS, frame
+p95 19.7 ms; 5 boxes a second 52-54 FPS, p95 68 ms. A 3D box's release is
+still 45-65 ms over 300k own units (`get3DBoxSelection`: the positions'
+four columns and the projection per unit ~25 ms, the buildings through
+their views ~10 ms); the last change there (no read of each unit's view) is
+not in those numbers.
+
+Verified on the final tree: `run-regressions` both modes 217/228 (218 at the
+last session: the ten known failures, and the corruption fuzz in worker mode,
+above); `browser-mp-gui-fuzz` (a match in two real Edge tabs, 258 controls,
+4149 ticks): 0 desyncs, 0 hash mismatches, 0 errors, 0 stalls;
+`ui-longtask-survey` at 200k units: 121 controls, 0 errors, the 3D view
+switch the only slow one (336 ms, as before). SEL300 was run solo only: the
+multiplayer bench (`render-tps-bench`, host and guest pages) was not run this
+session.
+
+Spikes left, by what the bench shows (largest first):
+- **The info panel** still takes 50-60 ms when made anew for 300k units and
+  20k buildings (126 ms the first time): the buildings' groups are still made
+  through their views (`renderEntityGroupBlock` ~12 ms, grouping ~10 ms, the
+  controls ~5 ms), the units' bins ~5 ms, the browser's style and layout of
+  ~1000 inline-styled nodes ~25 ms. Next: building groups from the structure
+  table's columns in bins like the units', and patching the panel in place
+  across selections of the same groups.
+- **A unit frame's arrival**: `renderer3d.render` 13-43 ms on a new frame
+  (`bufferSubData` of 48 bytes a unit, 29 MB at 600k: columns that changed
+  or not), and the membership pass (`_simClientUpdateStableSlots`: a new
+  600k-element list on every tick with a death or a birth, ~5 MB of garbage
+  a tick in a battle: the page's major collections, one 220 ms pause seen).
+  Next: upload only x/y/px/py/energy/flags/facing each frame (the rest when
+  the metadata revision moves); the list kept and patched, or made only for
+  code that asks for it.
+- **The presentation worker builds a frame in 95-120 ms at 600k units**
+  (fillUnits ~70 ms: ~20 passes over every slot; buildRenderBuckets ~18 ms),
+  so frames reach the page 7-9 times a second, not 20: the drawn motion is
+  interpolated over ~120 ms. Not a spike, but the visible smoothness at this
+  scale. Next: the slow columns (owner, r, levels, light, phase) only when
+  the metadata revision or membership moved; then the fill as a Rust kernel
+  on the shared heap (the frame inside the wasm memory: the UNIT_FRAME item).
+- **Orders of a whole army**: the tick that takes a 300k-unit order spends
+  57-76 ms in `processActions` (ids decoded, cleaned, stamped one call each:
+  `_orderStampGet`/`Set` ~15 ms, decode and clean ~8 ms), and the page's
+  click 79 ms (`getActiveUnitClasses` 17 ms, the ids' encoding). Applying
+  is sliced already (3000 units a tick).
+- Worker, steady: `workerSearchTierStep` max 30-33 ms (mean 7), 
+  `simParallelBackgroundWait` 10-17 ms a tick with max 30-39 (the helpers
+  are late in the browser, where the page, the presentation worker and the
+  GPU process compete for the cores; ~0 in node), `simMoveRun` max 28-54,
+  `_acqTierStep` max 14-23.
+- Group controls of thousands of buildings still send one order per
+  building (`setBuildEnabled` and the like per coordinate).
+- At 300k per team the simulation alone does not hold 20 TPS in the browser
+  on this machine as it was loaded (45-60 ms a tick): the plan's kernel work
+  (MOVE, the index, the worker tier) is still what TPS needs.
+
 ## Next
 
 Order set by the user (2026-10-09): main thread stable below 50 ms (aim
-~40) at B800 first; the determinism fixes after that.
+~40) at B800 first; the determinism fixes after that. 2026-10-11: no tick or
+frame time spikes of any kind is the goal; the list of those left is at the
+end of that day's entry.
 
 0. Main thread: the items above, biggest first: MOVE (layouts, steering
    shared per route/cell), separation commit, unit pass (worker events in
