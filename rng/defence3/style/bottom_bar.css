@@ -108,6 +108,10 @@ body.app-fullscreen #bottom-bar { display: none; }
     padding: 0 3px 0 9px; cursor: grab; touch-action: none;
 }
 .bb-task.bb-unit { border-radius: 12px; padding-left: 11px; }
+/* A research order on its way (not in the queue yet). */
+.bb-slot.bb-ahead { display: flex; align-items: center; gap: 3px; padding: 0 3px 0 9px; opacity: 0.55; border-style: dashed; border-color: #4af; font-size: 9px; pointer-events: none; }
+.bb-slot.bb-ahead img { display: block; flex: 0 0 auto; }
+.bb-slot.bb-ahead.bb-unit img { border-radius: 50%; }
 .bb-task.bb-unit .bb-task-progress { left: 4px; top: 6px; bottom: 6px; }
 .bb-task.bb-open, .bb-thing.bb-open { outline: 1px solid #fff; outline-offset: 1px; }
 .bb-task.bb-unit img { border-radius: 50%; }

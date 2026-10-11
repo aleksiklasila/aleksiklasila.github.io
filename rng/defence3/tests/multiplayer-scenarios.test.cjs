@@ -141,8 +141,14 @@ const ECONOMY = {
         for (const c of area.cells) q(host, { action: 'place', gx: c.gx, gy: c.gy, itemType: 'sand', count: 1, autoUpgradeEnabled: true, buildEnabled: true });
         const filled = await until(world, () => area.cells.every(c => { const t = thingAt(host, c); return t && !t.underConstruction; }), 120000, 'area filled and built');
         const c0 = area.cells[0];
-        q(host, { action: 'place', gx: c0.gx, gy: c0.gy, itemType: 'area_upgrader', count: 1 });
-        await until(world, () => all.every(i => i.eval(`(getAreaById(${area.id}) || {}).multiplierLevel || 0`) >= 1), 5000, 'area upgraded on every peer');
+        // (A thing just built shows its level at its first stats refresh: the
+        // upgrader is ordered again until the area takes it, as a player would.)
+        let lastTry = -Infinity;
+        await until(world, () => {
+            const done = all.every(i => i.eval(`(getAreaById(${area.id}) || {}).multiplierLevel || 0`) >= 1);
+            if (!done && world.now - lastTry > 1200 && host.eval(`(getAreaById(${area.id}) || {}).multiplierLevel || 0`) < 1) { lastTry = world.now; q(host, { action: 'place', gx: c0.gx, gy: c0.gy, itemType: 'area_upgrader', count: 1 }); }
+            return done;
+        }, 9000, 'area upgraded on every peer');
         await world.run(4000);
         const lifted = area.cells.map(c => thingAt(host, c)).filter(t => t.effectiveLevel > t.level).length;
         assert.ok(lifted > 0, 'area upgrade raises effective levels');

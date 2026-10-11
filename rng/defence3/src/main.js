@@ -1736,9 +1736,12 @@ function initInput() {
         return screenToWorld(clampedX, clampedY);
     }
 
+    // The tile of the drag's last mouse event (see tryBuildPlacementDragAtClient).
+    let buildPlacementDragLastTile = null;
     function stopBuildPlacementDrag() {
         buildPlacementDragActive = false;
         buildPlacementDragVisitedTiles = null;
+        buildPlacementDragLastTile = null;
     }
 
     function canPlaceSelectedBuildItemAt(gx, gy, purchaseCount) {
@@ -1779,6 +1782,8 @@ function initInput() {
             return false;
         }
         queueAction({ action: 'place', gx, gy, itemType: selectedBuildItem, autoUpgradeEnabled: defaultAutoUpgradeEnabled, buildEnabled: defaultAutoBuildEnabled, count: purchaseCount });
+        // (Shown at once on the tile: the order takes a few ticks to come back as a building.)
+        if (typeof notePendingBuildGhost === 'function') notePendingBuildGhost(gx, gy, selectedBuildItem);
         requestBuildMenuRefresh();
         return true;
     }
@@ -1788,10 +1793,19 @@ function initInput() {
         let world = screenToWorldClamped(clientX, clientY);
         let gx = Math.floor(world.x / TILE), gy = Math.floor(world.y / TILE);
         if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_H) return;
-        let tileKey = `${gx},${gy}`;
-        if (buildPlacementDragVisitedTiles.has(tileKey)) return;
-        buildPlacementDragVisitedTiles.add(tileKey);
-        tryPlaceSelectedBuildAt(gx, gy, false);
+        // Every tile the mouse passed since its last event, not only the one
+        // it is on now: a fast drag moves more than a tile between two mouse
+        // events and left holes in the row.
+        let last = buildPlacementDragLastTile || { gx, gy };
+        buildPlacementDragLastTile = { gx, gy };
+        let steps = Math.max(1, Math.abs(gx - last.gx), Math.abs(gy - last.gy));
+        for (let k = steps > 96 ? steps : 1; k <= steps; k++) {
+            let x = Math.round(last.gx + (gx - last.gx) * k / steps), y = Math.round(last.gy + (gy - last.gy) * k / steps);
+            let tileKey = `${x},${y}`;
+            if (buildPlacementDragVisitedTiles.has(tileKey)) continue;
+            buildPlacementDragVisitedTiles.add(tileKey);
+            tryPlaceSelectedBuildAt(x, y, false);
+        }
     }
 
     gameArea.addEventListener('mousedown', (e) => {
@@ -1823,11 +1837,14 @@ function initInput() {
                     buildPlacementDragActive = true;
                     buildPlacementDragVisitedTiles = new Set();
                     buildPlacementDragVisitedTiles.add(`${gx},${gy}`);
+                    buildPlacementDragLastTile = { gx, gy };
                     tryPlaceSelectedBuildAt(gx, gy, true);
                 } else {
                     stopBuildPlacementDrag();
                     tryPlaceSelectedBuildAt(gx, gy, true);
                 }
+                // (The ordered tile drawn now, not with the next frame.)
+                if (typeof redrawBuildPreviewNow === 'function') redrawBuildPreviewNow(true);
 
                 if (!keepSelected) {
                     selectedBuildItem = null;
@@ -2076,6 +2093,8 @@ function initInput() {
         mouseWorldX = world.x; mouseWorldY = world.y;
         mouseScreenX = e.clientX; mouseScreenY = e.clientY;
         tryBuildPlacementDragAtClient(e.clientX, e.clientY);
+        // (The build preview at the mouse's own rate: renderer.js.)
+        if (selectedBuildItem && typeof redrawBuildPreviewNow === 'function') redrawBuildPreviewNow();
         if (isBoxSelecting && selectionBox) {
             selectionBox.ex = world.x; selectionBox.ey = world.y;
             if (selectionBoxScreen) {
@@ -4121,11 +4140,22 @@ function getMinCameraZoom() {
 
 // Camera motion is time based, from the frame clock (see _runLoopFrame):
 // every frame moves by exactly its share of time, whatever the frame rate.
-// Keyboard panning: 1440 screen px/s (12 px per frame at 120 FPS), eased in
-// and out over a few frames. Wheel zoom: 1.2x per notch, eased toward the
+// Keyboard panning: 1440 screen px/s (12 px per frame at 120 FPS), eased
+// out over a few frames. Wheel zoom: 1.2x per notch, eased toward the
 // target around the cursor.
 const CAMERA_PAN_SPEED = 1440;
-const CAMERA_PAN_EASE_MS = 35;
+// A key pressed (or the direction changed): full speed at once, from the
+// moment of the key, so the very next frame has moved by the whole time since
+// (eased in, the first frames moved a few px and the camera felt late). Keys
+// released: eased out over CAMERA_PAN_EASE_MS, a short glide to a stop.
+const CAMERA_PAN_START_EASE_MS = 0;
+// A press from rest counts from this much before the key (at most from the
+// last drawn frame): the first frame after the key, and the slide at once,
+// show a whole step, however shortly before that frame the key came. (At its
+// own time a key 1 ms before a frame moved 1.4 px in it: nothing to see
+// until the frame after, 8 ms later at 120 Hz, 17 ms at 60.)
+const CAMERA_PAN_HEAD_START_MS = 12;
+const CAMERA_PAN_EASE_MS = 20;
 const CAMERA_ZOOM_EASE_MS = 45;
 let _cameraFrameTime = 0;
 let _cameraPanVel = { x: 0, y: 0 };
@@ -4202,20 +4232,24 @@ function noteCameraPanInput(time) {
     let last = _cameraPanInputs.length ? _cameraPanInputs[_cameraPanInputs.length - 1] : _cameraPanTarget;
     if (target.x === last.x && target.y === last.y) return;
     let t = Number.isFinite(time) && time > 0 ? Math.min(time, performance.now()) : performance.now();
+    if (last.x === 0 && last.y === 0 && _cameraPanVel.x === 0 && _cameraPanVel.y === 0) t -= CAMERA_PAN_HEAD_START_MS;
     _cameraPanInputs.push({ t, x: target.x, y: target.y });
     if (typeof refreshCameraSlideForInput === 'function') refreshCameraSlideForInput();
 }
 
 // Pan motion over `sec` seconds from time t0 (ms): velocity (v0x, v0y) eases
-// toward the target (tx, ty) with time constant CAMERA_PAN_EASE_MS, and the
+// toward the target (tx, ty) with time constant CAMERA_PAN_EASE_MS (none
+// toward a moving target: CAMERA_PAN_START_EASE_MS), and the
 // target switches at each input's time. Returns the distance moved (world
 // px) and the velocity and target at the end. Inputs from before t0 already
 // apply at t0.
 function cameraPanTravel(v0x, v0y, tx, ty, t0, sec, inputs) {
-    let x = 0, y = 0, vx = v0x, vy = v0y, t = t0, end = t0 + sec * 1000, tau = CAMERA_PAN_EASE_MS / 1000;
+    let x = 0, y = 0, vx = v0x, vy = v0y, t = t0, end = t0 + sec * 1000;
     let step = to => {
         let s = (to - t) / 1000;
         if (!(s > 0)) return;
+        let tau = (tx !== 0 || ty !== 0 ? CAMERA_PAN_START_EASE_MS : CAMERA_PAN_EASE_MS) / 1000;
+        if (!(tau > 0)) { x += tx * s; y += ty * s; vx = tx; vy = ty; t = to; return; }
         let k = Math.exp(-s / tau);
         x += tx * s + (vx - tx) * (1 - k) * tau;
         y += ty * s + (vy - ty) * (1 - k) * tau;

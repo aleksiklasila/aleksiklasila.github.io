@@ -1738,6 +1738,83 @@ function requestBuildMenuRefresh() {
     _buildMenuNeedsRefresh = true;
 }
 
+// A queue's count as the click just changed it, shown at once: the order
+// comes back from the simulation a few ticks later, and its count then
+// replaces this one (or, when nothing came of it, the old one returns).
+function optimisticQueueBump(fracEl, delta) {
+    if (!fracEl || !delta) return;
+    // (As it is printed: "3/20", or with decimals, "3.0/20.0".)
+    const text = fracEl.textContent || '', m = /^(\s*)(\d+(?:\.\d+)?)(\s*\/\s*)(\d+(?:\.\d+)?)(\s*)$/.exec(text);
+    if (!m) return;
+    const cur = Number(m[2]), cap = Number(m[4]), next = Math.max(0, Math.min(cap, cur + delta));
+    if (next === cur) return;
+    if (fracEl._optTimer) clearTimeout(fracEl._optTimer); else fracEl._optOrig = text;
+    const shown = m[1] + next.toFixed((m[2].split('.')[1] || '').length) + m[3] + m[4] + m[5];
+    fracEl.textContent = shown;
+    fracEl.style.opacity = '0.75';
+    fracEl._optTimer = setTimeout(() => {
+        fracEl._optTimer = 0;
+        fracEl.style.opacity = '';
+        if (fracEl.isConnected && fracEl.textContent === shown) fracEl.textContent = fracEl._optOrig;
+    }, 1200);
+}
+// ---- research orders on their way ----
+// A research order ([+] or [-] of a stat) comes back from the simulation a
+// few ticks later: until then the stat's row and the research row of the
+// bottom bar showed the old queue. What was ordered and has not arrived is
+// kept here, per stat, as a change of its queue depth from the depth the
+// simulation had at the order; the panels add it to what they show. It goes
+// as the simulation's depth follows (in part, for orders in a row), or after
+// RESEARCH_AHEAD_MS (an order that came to nothing). Shown only.
+const RESEARCH_AHEAD_MS = 1500;
+const _researchAhead = new Map();
+function researchOrdersAhead(kind, key, statKey, depth) {
+    if (_researchAhead.size === 0) return 0;
+    const k = kind + '|' + key + '|' + statKey, o = _researchAhead.get(k);
+    if (!o) return 0;
+    const got = depth - o.base;
+    if (got !== 0) {
+        // (The simulation moved: that much of it has arrived.)
+        if ((got > 0) !== (o.delta > 0) || Math.abs(got) >= Math.abs(o.delta)) { _researchAhead.delete(k); return 0; }
+        o.base = depth; o.delta -= got;
+    }
+    if (performance.now() - o.at > RESEARCH_AHEAD_MS) { _researchAhead.delete(k); return 0; }
+    return o.delta;
+}
+// The local player's orders not there yet, as [{ kind, key, statKey, delta }].
+function researchOrdersAheadList() {
+    if (_researchAhead.size === 0) return [];
+    const out = [];
+    for (const [k, o] of [..._researchAhead]) {
+        const delta = researchOrdersAhead(o.kind, o.key, o.statKey, getResearchQueuedDepthForPlayer(localPlayerId, o.kind, o.key, o.statKey));
+        if (delta) out.push({ kind: o.kind, key: o.key, statKey: o.statKey, delta });
+    }
+    return out;
+}
+// An order was given (queueAction): count levels more (or, negative, fewer).
+function noteResearchOrder(kind, key, statKey, count) {
+    if (typeof document === 'undefined' || typeof performance === 'undefined' || !gameStarted || !players[localPlayerId] || !count) return;
+    const owner = localPlayerId, depth = getResearchQueuedDepthForPlayer(owner, kind, key, statKey);
+    let ahead = researchOrdersAhead(kind, key, statKey, depth), delta;
+    if (count > 0) {
+        let room = getResearchQueueCapacityForPlayer(owner) - getPlayerResearchQueueTotalLength(owner);
+        for (const o of _researchAhead.values()) room -= o.delta;
+        delta = Math.max(0, Math.min(count, room, MAX_RESEARCH_LEVEL - getPlayerResearchLevel(owner, kind, key, statKey) - depth - ahead));
+    } else delta = -Math.min(-count, depth + ahead);
+    if (!delta) return;
+    const k = kind + '|' + key + '|' + statKey, o = _researchAhead.get(k) || { kind, key, statKey, base: depth, delta: 0, at: 0 };
+    o.delta += delta; o.at = performance.now();
+    if (o.delta) _researchAhead.set(k, o); else _researchAhead.delete(k);
+    // (Shown with the next frame.)
+    if (typeof requestInfoPanelRefresh === 'function') requestInfoPanelRefresh(0);
+    if (typeof bottomBarRefreshNow === 'function') bottomBarRefreshNow();
+}
+
+function _infoQueueFraction(btn) {
+    const row = btn && btn.closest ? btn.closest('.info-queue-row') : null;
+    return row ? row.querySelector('.info-base > span') : null;
+}
+
 function bindInstantPress(el, handler, opts = null) {
     if (!el || typeof handler !== 'function') return;
     let invoke = (ev) => {
@@ -1745,6 +1822,8 @@ function bindInstantPress(el, handler, opts = null) {
         ev.preventDefault();
         ev.stopPropagation();
         handler(ev);
+        // (A toggle: its new look at once, see infoTogglePressed.)
+        infoTogglePressed(el);
     };
 
     let onLongPress = opts && typeof opts.onLongPress === 'function' ? opts.onLongPress : null;
@@ -2278,6 +2357,68 @@ function initBuildTabs() {
     });
 }
 
+// ---- toggles shown as pressed ----
+// A toggle's order reaches the simulation a few ticks later, and the panel
+// is made from the simulation's state: a pressed toggle kept its old look
+// for a quarter to three quarters of a second. The state a press asks for is
+// kept here (by the toggle's class and what it is for) and shown at once,
+// by the pills below, until the simulation says the same or
+// INFO_TOGGLE_SHOWN_MS passed (an order that came to nothing: the old look
+// returns). Shown only: nothing of the match reads it.
+const INFO_TOGGLE_SHOWN_MS = 1500;
+const _infoToggleShown = new Map();
+function _infoToggleState(cls, id, on) {
+    if (_infoToggleShown.size === 0) return on;
+    const k = cls + '|' + id, o = _infoToggleShown.get(k);
+    if (!o) return on;
+    if (o.on === !!on || performance.now() - o.at > INFO_TOGGLE_SHOWN_MS) { _infoToggleShown.delete(k); return on; }
+    return o.on;
+}
+// (A group's: all of them, and any of them.)
+function _infoToggleGroupState(cls, id, all, any) {
+    if (_infoToggleShown.size === 0) return [all, any];
+    const k = cls + '|' + id, o = _infoToggleShown.get(k);
+    if (!o) return [all, any];
+    if ((o.on ? !!all : !any) || performance.now() - o.at > INFO_TOGGLE_SHOWN_MS) { _infoToggleShown.delete(k); return [all, any]; }
+    return [o.on, o.on];
+}
+// Per toggle class, from the pressed element's data: what it is for, the
+// state the press asks for, and its markup in a state.
+const INFO_TOGGLE_PRESS = {
+    'info-salvage-btn': d => d.unitId ? null : [d.gx + ',' + d.gy, d.marked !== '1', on => salvageToggleBtn(d.gx, d.gy, on)],
+    'info-salvage-group-btn': d => [d.coords, d.marked !== '1', on => salvageToggleGroupBtn(d.coords, on, on)],
+    'info-hold-group-btn': d => [d.ids, d.hold === '1', on => unitHoldBtn(null, { hold: on ? 1 : 0, count: 1, idsToken: d.ids })],
+    'info-auto-upgrade-btn': d => [d.gx + ',' + d.gy, d.enabled === '1', on => autoUpgradeBtn(d.gx, d.gy, on)],
+    'info-auto-research-btn': d => [d.gx + ',' + d.gy, d.enabled === '1', on => autoResearchBtn(d.gx, d.gy, on)],
+    'info-auto-stack-btn': d => [d.gx + ',' + d.gy, d.enabled === '1', on => autoStackBtn(d.gx, d.gy, on)],
+    'info-build-toggle-btn': d => [d.gx + ',' + d.gy, d.enabled === '1', on => buildToggleBtn(d.gx, d.gy, on)],
+    'info-queue-toggle-btn': d => [d.gx + ',' + d.gy, d.enabled === '1', on => queueToggleBtn(d.gx, d.gy, on)],
+    'info-auto-upgrade-group-btn': d => [d.coords, d.enabled === '1', on => autoUpgradeGroupBtn(d.coords, on, on)],
+    'info-auto-research-group-btn': d => [d.coords, d.enabled === '1', on => autoResearchGroupBtn(d.coords, on, on)],
+    'info-auto-stack-group-btn': d => [d.coords, d.enabled === '1', on => autoStackGroupBtn(d.coords, on, on)],
+    'info-build-toggle-group-btn': d => [d.coords, d.enabled === '1', on => buildToggleGroupBtn(d.coords, on, on)],
+    'info-queue-toggle-group-btn': d => [d.coords, d.enabled === '1', on => queueToggleGroupBtn(d.coords, on, on)],
+};
+// A toggle was pressed (its order is on its way): it takes the look of the
+// state it asked for now, in place (the same element: its press handler,
+// which reads its data at press time, toggles back on the next press).
+function infoTogglePressed(el) {
+    if (!el || !el.classList || typeof document === 'undefined') return;
+    for (const cls in INFO_TOGGLE_PRESS) {
+        if (!el.classList.contains(cls)) continue;
+        const p = INFO_TOGGLE_PRESS[cls](el.dataset);
+        if (!p || p[0] === undefined || p[0] === 'undefined,undefined') return;
+        _infoToggleShown.set(cls + '|' + p[0], { on: p[1], at: performance.now() });
+        const t = document.createElement('template');
+        t.innerHTML = p[2](p[1]);
+        const src = t.content.firstElementChild;
+        if (!src) return;
+        for (const a of src.attributes) if (el.getAttribute(a.name) !== a.value) el.setAttribute(a.name, a.value);
+        if (el.innerHTML !== src.innerHTML) el.innerHTML = src.innerHTML;
+        return;
+    }
+}
+
 // Green ON / gray OFF pill shared by the keep (heart) and hold toggles.
 function infoOnOffPill(cls, attrs, icon, label, on) {
     return `<span class="${cls}" ${attrs} style="cursor:pointer;background:${on ? '#232' : '#222'};padding:2px 8px;border:1px solid ${on ? '#6f6' : '#555'};border-radius:3px;font-size:9px;color:${on ? '#9f9' : '#888'}">${icon} ${label}</span>`;
@@ -2285,10 +2426,12 @@ function infoOnOffPill(cls, attrs, icon, label, on) {
 
 // Heart ON = kept, OFF = marked for salvage.
 function salvageToggleBtn(gx, gy, marked) {
+    marked = _infoToggleState('info-salvage-btn', gx + ',' + gy, !!marked);
     return infoOnOffPill('info-salvage-btn', `data-gx="${gx}" data-gy="${gy}" data-marked="${marked ? '1' : '0'}"`, '\u2764\ufe0f', marked ? 'OFF' : 'ON', !marked);
 }
 
 function salvageToggleGroupBtn(coordStr, allMarked, anyMarked) {
+    [allMarked, anyMarked] = _infoToggleGroupState('info-salvage-group-btn', coordStr, allMarked, anyMarked);
     let label = !anyMarked ? 'ON' : (allMarked ? 'OFF' : 'MIXED');
     return infoOnOffPill('info-salvage-group-btn', `data-coords="${coordStr}" data-marked="${anyMarked ? '1' : '0'}"`, '\u2764\ufe0f', label, !anyMarked);
 }
@@ -2302,6 +2445,10 @@ function unitKillBtn(ids) {
 // (A big group: its count and how many hold, its ids as a group token.)
 function unitHoldBtn(group, big = null) {
     let holdCount = big ? big.hold : group.filter(u => u.holdPosition).length, count = big ? big.count : group.length;
+    if (_infoToggleShown.size > 0) {
+        let [all, any] = _infoToggleGroupState('info-hold-group-btn', big ? big.idsToken : group.map(u => u.id).join(','), count > 0 && holdCount === count, holdCount > 0);
+        holdCount = all ? count : any ? holdCount : 0;
+    }
     let label = holdCount === 0 ? 'ON' : (holdCount === count ? 'OFF' : 'MIXED');
     return infoOnOffPill('info-hold-group-btn', `data-ids="${big ? big.idsToken : group.map(u => u.id).join(',')}" data-hold="${holdCount === 0 ? '1' : '0'}"`, '\ud83d\udeb6', label, holdCount === 0);
 }
@@ -2524,50 +2671,60 @@ function openInfoButtonHelpPopup(helpBtn) {
 }
 
 function autoUpgradeBtn(gx, gy, enabled) {
+    enabled = _infoToggleState('info-auto-upgrade-btn', gx + ',' + gy, !!enabled);
     return `<span class="info-auto-upgrade-btn" data-gx="${gx}" data-gy="${gy}" data-enabled="${enabled ? '0' : '1'}" style="cursor:pointer;background:${enabled ? '#223' : '#222'};padding:2px 8px;border:1px solid ${enabled ? '#4af' : '#555'};border-radius:3px;font-size:9px;color:${enabled ? '#8cf' : '#888'}">L+${enabled ? 'ON' : 'OFF'}</span>`;
 }
 
 function autoResearchBtn(gx, gy, enabled) {
+    enabled = _infoToggleState('info-auto-research-btn', gx + ',' + gy, !!enabled);
     return `<span class="info-auto-research-btn" data-gx="${gx}" data-gy="${gy}" data-enabled="${enabled ? '0' : '1'}" style="cursor:pointer;background:${enabled ? '#243025' : '#222'};padding:2px 8px;border:1px solid ${enabled ? '#6ccf7c' : '#555'};border-radius:3px;font-size:9px;color:${enabled ? '#9fdaab' : '#888'}">R ${enabled ? 'ON' : 'OFF'}</span>`;
 }
 
 function autoStackBtn(gx, gy, enabled) {
+    enabled = _infoToggleState('info-auto-stack-btn', gx + ',' + gy, !!enabled);
     return `<span class="info-auto-stack-btn" data-gx="${gx}" data-gy="${gy}" data-enabled="${enabled ? '0' : '1'}" style="cursor:pointer;background:${enabled ? '#2c261c' : '#222'};padding:2px 8px;border:1px solid ${enabled ? '#d9aa60' : '#555'};border-radius:3px;font-size:9px;color:${enabled ? '#ffd8a0' : '#888'}">\uD83E\uDDF1 ${enabled ? 'ON' : 'OFF'}</span>`;
 }
 
 function autoUpgradeGroupBtn(coordStr, allEnabled, anyEnabled) {
+    [allEnabled, anyEnabled] = _infoToggleGroupState('info-auto-upgrade-group-btn', coordStr, allEnabled, anyEnabled);
     let label = allEnabled ? 'ON' : (anyEnabled ? 'MIXED' : 'OFF');
     let nextAutoEnabled = allEnabled ? '0' : '1';
     return `<span class="info-auto-upgrade-group-btn" data-coords="${coordStr}" data-enabled="${nextAutoEnabled}" style="cursor:pointer;background:${allEnabled ? '#223' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#4af' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#8cf' : '#888'}">L+${label}</span>`;
 }
 
 function autoResearchGroupBtn(coordStr, allEnabled, anyEnabled) {
+    [allEnabled, anyEnabled] = _infoToggleGroupState('info-auto-research-group-btn', coordStr, allEnabled, anyEnabled);
     let label = allEnabled ? 'ON' : (anyEnabled ? 'MIXED' : 'OFF');
     let nextEnabled = allEnabled ? '0' : '1';
     return `<span class="info-auto-research-group-btn" data-coords="${coordStr}" data-enabled="${nextEnabled}" style="cursor:pointer;background:${allEnabled ? '#243025' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#6ccf7c' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#9fdaab' : '#888'}">R ${label}</span>`;
 }
 
 function autoStackGroupBtn(coordStr, allEnabled, anyEnabled) {
+    [allEnabled, anyEnabled] = _infoToggleGroupState('info-auto-stack-group-btn', coordStr, allEnabled, anyEnabled);
     let label = allEnabled ? 'ON' : (anyEnabled ? 'MIXED' : 'OFF');
     let nextEnabled = allEnabled ? '0' : '1';
     return `<span class="info-auto-stack-group-btn" data-coords="${coordStr}" data-enabled="${nextEnabled}" style="cursor:pointer;background:${allEnabled ? '#2c261c' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#d9aa60' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#ffd8a0' : '#888'}">\uD83E\uDDF1 ${label}</span>`;
 }
 
 function buildToggleBtn(gx, gy, enabled) {
+    enabled = _infoToggleState('info-build-toggle-btn', gx + ',' + gy, !!enabled);
     return `<span class="info-build-toggle-btn" data-gx="${gx}" data-gy="${gy}" data-enabled="${enabled ? '0' : '1'}" style="cursor:pointer;background:${enabled ? '#232' : '#222'};padding:2px 8px;border:1px solid ${enabled ? '#6f6' : '#555'};border-radius:3px;font-size:9px;color:${enabled ? '#9f9' : '#888'}">\uD83D\uDD28 ${enabled ? 'ON' : 'OFF'}</span>`;
 }
 
 function buildToggleGroupBtn(coordStr, allEnabled, anyEnabled) {
+    [allEnabled, anyEnabled] = _infoToggleGroupState('info-build-toggle-group-btn', coordStr, allEnabled, anyEnabled);
     let label = allEnabled ? 'ON' : (anyEnabled ? 'MIXED' : 'OFF');
     let nextEnabled = allEnabled ? '0' : '1';
     return `<span class="info-build-toggle-group-btn" data-coords="${coordStr}" data-enabled="${nextEnabled}" style="cursor:pointer;background:${allEnabled ? '#232' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#6f6' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#9f9' : '#888'}">\uD83D\uDD28 ${label}</span>`;
 }
 
 function queueToggleBtn(gx, gy, enabled) {
+    enabled = _infoToggleState('info-queue-toggle-btn', gx + ',' + gy, !!enabled);
     return `<span class="info-queue-toggle-btn" data-gx="${gx}" data-gy="${gy}" data-enabled="${enabled ? '0' : '1'}" style="cursor:pointer;background:${enabled ? '#222c34' : '#222'};padding:2px 8px;border:1px solid ${enabled ? '#6cb7ff' : '#555'};border-radius:3px;font-size:9px;color:${enabled ? '#a7d6ff' : '#888'}">Q ${enabled ? 'ON' : 'OFF'}</span>`;
 }
 
 function queueToggleGroupBtn(coordStr, allEnabled, anyEnabled) {
+    [allEnabled, anyEnabled] = _infoToggleGroupState('info-queue-toggle-group-btn', coordStr, allEnabled, anyEnabled);
     let label = allEnabled ? 'ON' : (anyEnabled ? 'MIXED' : 'OFF');
     let nextEnabled = allEnabled ? '0' : '1';
     return `<span class="info-queue-toggle-group-btn" data-coords="${coordStr}" data-enabled="${nextEnabled}" style="cursor:pointer;background:${allEnabled ? '#222c34' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#6cb7ff' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#a7d6ff' : '#888'}">Q ${label}</span>`;
@@ -4980,6 +5137,11 @@ function _renderResearchSingleThingStatsPanel(owner, scope, targetArg, selectedT
             : getResearchQueueDepthForStatInGroup(targetArg, selectedThing.kind, selectedThing.key, stat.statKey);
         let currentLevel = getPlayerResearchLevel(owner, selectedThing.kind, selectedThing.key, stat.statKey);
         let globalQueuedDepth = getResearchQueuedDepthForPlayer(owner, selectedThing.kind, selectedThing.key, stat.statKey);
+        // (With the orders on their way: the row as the click left it.)
+        if (owner === localPlayerId && _researchAhead.size > 0) {
+            let ahead = researchOrdersAhead(selectedThing.kind, selectedThing.key, stat.statKey, globalQueuedDepth);
+            queuedDepth = Math.max(0, queuedDepth + ahead); globalQueuedDepth = Math.max(0, globalQueuedDepth + ahead);
+        }
         let projectedLevel = currentLevel + globalQueuedDepth;
         let nextCost = getResearchCost(selectedThing.kind, selectedThing.key, stat.statKey, projectedLevel);
         let atMax = projectedLevel >= MAX_RESEARCH_LEVEL;
@@ -5568,6 +5730,7 @@ function bindResearchPopupControls(container) {
         if (btn.classList.contains('info-auto-research-btn')) {
             let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
             let enabled = btn.dataset.enabled === '1';
+            infoTogglePressed(btn);
             queueAndRefresh({ action: 'setAutoResearch', gx, gy, enabled });
             return;
         }
@@ -5576,6 +5739,7 @@ function bindResearchPopupControls(container) {
             let enabled = btn.dataset.enabled === '1';
             let coords = parseCoords(infoCoordText(btn.dataset.coords));
             for (let c of coords) queueAction({ action: 'setAutoResearch', gx: c.gx, gy: c.gy, enabled });
+            infoTogglePressed(btn);
             updateInfoPanel();
             renderResearchPopupContent();
             return;
@@ -6253,11 +6417,12 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         bindInstantPress(btn, () => {
             let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
             queueAction({ action: 'queueUnit', gx, gy, count: queuePurchaseMultiplier });
+            optimisticQueueBump(_infoQueueFraction(btn), Math.max(1, Math.floor(queuePurchaseMultiplier || 1)));
         });
     });
     // Wire up group buy buttons - dynamically find barrack with lowest queue
     panel.querySelectorAll('.info-buy-group-btn').forEach(btn => {
-        bindInstantPress(btn, () => queueGroupSpawns(parseInfoCoordList(infoCoordText(btn.dataset.coords)), false, queuePurchaseMultiplier));
+        bindInstantPress(btn, () => { queueGroupSpawns(parseInfoCoordList(infoCoordText(btn.dataset.coords)), false, queuePurchaseMultiplier); optimisticQueueBump(_infoQueueFraction(btn), Math.max(1, Math.floor(queuePurchaseMultiplier || 1))); });
     });
 
     // Wire up worker buy buttons (single spawner)
@@ -6265,11 +6430,12 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         bindInstantPress(btn, () => {
             let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
             queueAction({ action: 'queueWorker', gx, gy, count: queuePurchaseMultiplier });
+            optimisticQueueBump(_infoQueueFraction(btn), Math.max(1, Math.floor(queuePurchaseMultiplier || 1)));
         });
     });
     // Wire up worker group buy buttons - distribute to lowest queue
     panel.querySelectorAll('.info-buy-worker-group-btn').forEach(btn => {
-        bindInstantPress(btn, () => queueGroupSpawns(parseInfoCoordList(infoCoordText(btn.dataset.coords)), true, queuePurchaseMultiplier));
+        bindInstantPress(btn, () => { queueGroupSpawns(parseInfoCoordList(infoCoordText(btn.dataset.coords)), true, queuePurchaseMultiplier); optimisticQueueBump(_infoQueueFraction(btn), Math.max(1, Math.floor(queuePurchaseMultiplier || 1))); });
     });
 
     // Wire up research buy buttons (single research building)
@@ -6528,12 +6694,13 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
             let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
             let type = btn.dataset.type === 'unit' ? 'dequeueUnit' : 'dequeueWorker';
             queueAction({ action: type, gx, gy, count: queuePurchaseMultiplier });
+            optimisticQueueBump(_infoQueueFraction(btn), -Math.max(1, Math.floor(queuePurchaseMultiplier || 1)));
         });
     });
 
     // Wire up dequeue group buttons (removes from building with highest queue)
     panel.querySelectorAll('.info-dequeue-group-btn').forEach(btn => {
-        bindInstantPress(btn, () => dequeueGroupSpawns(parseInfoCoordList(infoCoordText(btn.dataset.coords)), btn.dataset.type === 'worker', queuePurchaseMultiplier));
+        bindInstantPress(btn, () => { dequeueGroupSpawns(parseInfoCoordList(infoCoordText(btn.dataset.coords)), btn.dataset.type === 'worker', queuePurchaseMultiplier); optimisticQueueBump(_infoQueueFraction(btn), -Math.max(1, Math.floor(queuePurchaseMultiplier || 1))); });
     });
     // Wire up sub-group toggle buttons (simple toggle, doesn't affect others)
     panel.querySelectorAll('.subgroup-toggle').forEach(btn => {

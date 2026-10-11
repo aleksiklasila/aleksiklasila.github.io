@@ -1203,6 +1203,95 @@ structure table as for units), `pushMarker` of up to 2000 markers a frame.
   random as before. Spawns follow the shapes (outside the island, inside
   the ring, between the roads at equal distances). Pictures:
   `node .claude/mapshots.cjs`.
+  Later the same day: each shape has a most it grows to (island 36% of the
+  map's side as radius, ring 30%, roads 20% each way, islets 13%, sun 16%,
+  planets 7%: mines past it are left out, so a base always has ground);
+  a clearing of 4-8 tiles around every spawn; and every spawn is then
+  settled (`settleSpawnsNearResources`) on the nearest free tile with room
+  for a base that has an energy mine and a ★ mine within ~6 tiles.
+- Boost steps are +1, +2, +4, +8 levels (`boostStepLevels`); health is not
+  boosted (as with effective levels). The tiles of the bar are patched in
+  place (made anew every quarter second they lost their hover: a flicker);
+  the x1 slot is always filled; chosen-but-not-applied is tinted red; a
+  house's boost reaches the pop cap at once, and the page's pop caps now
+  come from the simulation (they were only made at a match's start there).
+- 2D: unit glyphs are drawn after the sprites (a unit was under a mine).
+- The healer's triangle has a red cross, the researcher's an R (map sprite,
+  3D top texture, thumbnails); the scout is the plain small triangle.
+- Bottom-left: population and research on lines of their own.
+- **Click to feedback** (measured in Edge with real mouse events,
+  `.claude/ui_probe.cjs` + `probe_build.js`): a build order shows a ghost on
+  its tile at once (7 ms after the click; the building itself comes back
+  after ~0.5 s: the command's tick, the worker's lead, the structure
+  frame); the build preview is redrawn on mouse moves (not only with
+  frames); queue [+]/[-] move their count at once (`optimisticQueueBump`,
+  put right by the simulation's answer or put back after 1.2 s).
+  The ghost looks like the preview, the preview is not drawn on a tile with
+  a ghost, and the ghost fades over 350 ms once the site is there: no blink
+  between the three. `.claude/latency_probe.cjs` (real key and mouse events
+  in Edge, 1600x900 and 2560x1440, a 20k-unit match): a mouse move onto
+  another tile to the preview drawn there 0.2-0.3 ms; a pan key to the
+  compositor's slide 0.3-1.3 ms, to the first frame drawn with the camera
+  moved 2-54 ms; the pan's ease 35 → 20 ms. Native fullscreen itself could
+  not be driven from the headless browser: only its viewport size.
+
+Tests changed with the maps (their scenes moved): `multiplayer-border-combat`
+(duels placed away from where players start), `worker-walk` (its fixture's
+mine counts as an island used to hold; more time to walk through mines),
+`unit-collision-smoothness` (gate 2.3%: the crowd now passes a base; 1.8-1.9%
+measured, 1.2% in the old scene), `separation-jitter` (the armies now meet and
+fight in the open middle: tolerances for mean step and enemy overlap),
+`box-selection-index`, `render-scale`, `shared-unit-state`, `order-markers`
+(slices and fake frames following the code).
+
+### 2026-10-11 (night) — input to picture, measured in Edge; last failing tests
+
+Suite `reg-s18`: 228/234. The six: `flat-gpu-renderer` x2 (its bare context
+lacked the new page state: fixed), `multiplayer-desync-recovery` mode 0
+(repair bound 2200 ms), `multiplayer-scenarios` mode 0 (the upgrader step
+retried), `floor-trap-kernel` x2. All six pass now, both modes.
+`floor-trap-kernel` was the test's own wording: with spawns settled near
+resources its lane units walk around their own row's traps onto a
+neighbour's, and it asked each unit for its *own* row's effect. It now
+records which trap kinds a unit stood on and asks for those effects (two
+units, sand and poison, none handed to `Unit.update`).
+`page-stall-tps-probe` `GATE=1` on the final tree: 250 and 1000 ms stalls of
+either page cost 0-1 tick, every order reaches 40/40 units, states equal.
+
+Input to picture (all page-side, nothing of the match reads any of it):
+
+- **Pan keys.** No ease-in: a key is full speed from its own time
+  (`CAMERA_PAN_START_EASE_MS = 0`; the 20 ms ease is only the stop), and a
+  press from rest counts from 12 ms earlier, at most from the last drawn
+  frame (`CAMERA_PAN_HEAD_START_MS`): a key that came 1 ms before a frame
+  used to move 1.4 px in it, i.e. nothing until the frame after (17 ms more
+  at fullscreen's 60 Hz rAF). `.claude/latency_probe.cjs`, 2560x1440: key to
+  8 px moved 6-12 ms (12-21 ms with full speed alone; the eased start moved
+  2-7 px in its first frame), first frame 13-23 px.
+- **Info panel toggles** (keep/salvage, hold, auto-upgrade, auto-stack,
+  auto-research, build, queue; single and group): they re-rendered from
+  simulation state 50 ms after the press, i.e. unchanged, and flipped
+  250-750 ms later. The pressed state is kept per toggle (`_infoToggleShown`,
+  `infoTogglePressed` from `bindInstantPress`) and the pills print it until
+  the simulation agrees or 1.5 s. Edge, real clicks: 2-30 ms.
+- **Queue [+]/[-].** `optimisticQueueBump` never matched: the count is
+  printed "0.0/20.0" and it parsed whole numbers. 114 ms → 6 ms.
+- **Research [+]/[-]** (every path: `queueAction` tells
+  `noteResearchOrder`): the stat row shows the order's depth, cost and
+  level at once (`researchOrdersAhead`, settled as the simulation's depth
+  follows, in part for orders in a row; 1.5 s), the bottom bar's research
+  row a faded dashed tile and the count. Edge: faded tile 7 ms, the row's
+  Q 26 ms, the real task 282 ms.
+- **Shift-drag building**: every tile between two mouse events is ordered
+  (a fast drag moves several tiles per event and left holes), and a click's
+  ghost is drawn on the click (`redrawBuildPreviewNow(true)`).
+  `.claude/drag_build_probe.cjs`: 13 tiles from 3 jumps, 13 ghosts, no
+  holes, mouse event to ghosts drawn 0.4-2.6 ms.
+- `.claude/click_latency_probe.cjs`: every control of the info panel (per
+  kind of selected thing), HUD and bottom bar, real clicks, pointerdown to
+  the first frame the control, its box or a popup looks different. What is
+  left above 60 ms there is not a response (All on a full selection, +L0 on
+  no boost, kill).
 
 ## Next
 

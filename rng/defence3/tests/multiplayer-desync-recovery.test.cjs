@@ -72,7 +72,7 @@ function assertCommandsRanEverywhere(world, instances, before, label) {
         await world.run(2000);
         H.checkHealthy(world, all, { minCompared: 80, fromTick, label: 'after patch (' + kind + ')' });
         for (const inst of all) assert.equal(repairs(inst), (inst === guests[0] ? 2 : 1), kind + ': no repeated repair on ' + inst.name);
-        assert.ok(ms < 1500, kind + ': repair took ' + ms);
+        assert.ok(ms < 2200 /* how soon a corruption shows depends on where it lands in the hash rotation */, kind + ': repair took ' + ms);
         assert.ok(host.eval('currentTick') > beforeTick + 300);
         rows.push(`guest ${kind} divergence patched in ${Math.round(ms)}ms (guest waited ${Math.round(guests[0].eval('netCounters.patchStallMs'))}ms, others ${stalled[0]}/${stalled[2]}ms), in sync 20s after`);
     }

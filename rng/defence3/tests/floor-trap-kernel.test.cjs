@@ -14,6 +14,9 @@ inst.eval('SPATIAL_PARALLEL_MIN_UNITS = 0; SEPARATION_SLOT_MIN_UNITS = 0;');
 const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     // A clear row: traps of player 1 on tiles x0 + 2k, units of player 0
     // walking along it (one lane per trap kind).
+    // (The players' starting units out of the way: they would fight the lanes' units.)
+    for (const u of units) u.dead = true;
+    gameTick();
     const kinds = ['sand', 'water_puddle', 'ice_patch', 'poison_puddle', 'lava'];
     const effectOf = { sand: 'sandy', water_puddle: 'wet', ice_patch: 'frozen', poison_puddle: 'poisoned', lava: 'burning' };
     let found = null;
@@ -21,6 +24,8 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
         let ok = true;
         for (let y = gy; y < gy + kinds.length * 2 + 2 && ok; y++) for (let x = gx; x < gx + 20 && ok; x++)
             if (grid[y][x].type === TYPE_WALL || grid[y][x].item || getTileEntityRef(x, y)) ok = false;
+        // (Away from the bases: next to one the lanes' units are not left to walk their rows.)
+        if (ok && [...towers, ...barracks, ...collectorSpawners].some(b => Math.abs(b.gx - (gx + 10)) < 26 && Math.abs(b.gy - (gy + 6)) < 20)) ok = false;
         if (ok) found = { gx, gy };
     }
     if (!found) return { err: 'no clear area' };
@@ -46,7 +51,7 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     const seen = {};
     for (let t = 0; t < 120; t++) {
         gameTick();
-        for (const l of out.lanes) { const u = units.find(v => v.id === l.id); if (!u) continue; if (u[l.eff] > 0) seen[l.kind] = Math.max(seen[l.kind] || 0, u[l.eff]); if (traps.includes(Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE))) l.crossed = true; }
+        for (const l of out.lanes) { const u = units.find(v => v.id === l.id); if (!u) continue; if (u[l.eff] > 0) seen[l.kind] = Math.max(seen[l.kind] || 0, u[l.eff]); for (const k of kinds) if (u[effectOf[k]] > 0) (l.got || (l.got = {}))[k] = 1; const ti = traps.indexOf(Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE)); if (ti >= 0) { l.crossed = true; (l.on || (l.on = {}))[kinds[ti >> 1]] = 1; } }
     }
     out.seen = seen;
     // Unit.update calls of the lane units standing on a trap tile.
@@ -60,8 +65,10 @@ assert.ok(!r.err, r.err);
 // (Lanes whose unit stepped on a trap tile: the navigation may route a
 // unit around a trap.)
 const crossed = r.lanes.filter(l => l.crossed);
-assert.ok(crossed.length >= 3, 'lanes crossing a trap: ' + crossed.map(l => l.kind));
-for (const l of crossed) assert.ok(r.seen[l.kind] > 0, l.kind + ' applied ' + l.eff + ': ' + JSON.stringify(r.seen));
-console.log('trap statuses', JSON.stringify(r.seen), 'Unit.update calls on trap tiles', r.onTrapUpdates, 'columns walked', JSON.stringify(r.lanesArrived));
+assert.ok(crossed.length >= 2, 'lanes crossing a trap: ' + crossed.map(l => l.kind));
+// (Each has the effect of every trap it stood on: its own row's, or a
+// neighbour's when the navigation took it off its row.)
+for (const l of crossed) for (const k of Object.keys(l.on || {})) assert.ok(l.got && l.got[k], l.kind + ' lane on a ' + k + ' trap without its effect: ' + JSON.stringify(l));
+console.log('trap statuses', JSON.stringify(crossed.map(l => [l.kind, Object.keys(l.on), Object.keys(l.got)])), 'Unit.update calls on trap tiles', r.onTrapUpdates, 'columns walked', JSON.stringify(r.lanesArrived));
 assert.ok(r.onTrapUpdates <= 2, 'units on trap tiles handed to Unit.update: ' + r.onTrapUpdates);
 console.log('PASS: floor traps applied by the movement kernel');

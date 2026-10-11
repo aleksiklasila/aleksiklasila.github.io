@@ -4055,10 +4055,75 @@ function visibilityGridForColumns() { return visibilityGrid; }
 // view's; with get, the list itself.)
 function _isLiveUnitList(list, get = false) { return get ? units : list === units; }
 
+// The build preview follows the mouse at the mouse's rate, not the scene's
+// frame rate: the overlay (its own canvas over the scene) is drawn again as
+// the mouse moves, with the last frame's view. (Not when the overlay itself
+// is slow to draw, thousands of lines: then with the frames, as before.)
+let _lastOverlaySnapshot = null, _overlayDrawStart = 0, _overlayDrawMs = 0, _previewRedrawAt = 0;
+// (now: a click, drawn whatever was drawn just before it.)
+function redrawBuildPreviewNow(now = false) {
+    const S = _lastOverlaySnapshot, at = performance.now();
+    if (!S || !selectedBuildItem || !gameStarted || _overlayDrawMs > 4 || (!now && at - _previewRedrawAt < 6)) return;
+    _previewRedrawAt = at;
+    try {
+        S.buildPreview = getCurrentBuildPreviewData();
+        if (S.buildPreview && renderDimensionMode !== '2d' && typeof _pushBuildPreview3DObject === 'function') S.buildPreview.modelShown = false;
+        drawInteractionOverlay(S);
+    } catch (err) { _lastOverlaySnapshot = null; }
+}
+
+// ---- builds ordered, not there yet ----
+// A build order reaches the simulation a few ticks later (the command lead,
+// the worker's queue, the next frame): 200-400 ms in which a click showed
+// nothing. Each ordered tile shows the thing's picture at once, see-through,
+// until the building (or its site) is there, or a few seconds at most (an
+// order the simulation refused: gone again). Local, drawn only: nothing of
+// the match depends on it.
+// (Once the building is there the ghost fades over PENDING_BUILD_FADE_MS:
+// the site's own picture is drawn a frame or a few later, and the hover
+// preview is not drawn on a tile with a ghost: preview, ghost and site
+// follow each other without a blink.)
+const PENDING_BUILD_GHOST_MS = 2500, PENDING_BUILD_STACK_MS = 450, PENDING_BUILD_FADE_MS = 350;
+const _pendingBuildGhosts = new Map();
+function _tileHoldsStructure(gx, gy) {
+    const c = grid[gy] && grid[gy][gx];
+    return !!(c && (c.item || (typeof getTileEntityRef === 'function' && getTileEntityRef(gx, gy))));
+}
+function notePendingBuildGhost(gx, gy, key) {
+    _pendingBuildGhosts.set(gx + ',' + gy, { gx, gy, key, at: performance.now(), onTop: _tileHoldsStructure(gx, gy) });
+}
+function drawPendingBuildGhosts(ctx) {
+    if (_pendingBuildGhosts.size === 0 || !renderer3dInstance || typeof renderer3dInstance.projectWorldToCanvas !== 'function') return;
+    const now = performance.now();
+    for (const [k, g] of _pendingBuildGhosts) {
+        const age = now - g.at;
+        // (A stack onto a building: a short flash. A new building: until it shows.)
+        if (!g.onTop && !g.seenAt && age > 60 && _tileHoldsStructure(g.gx, g.gy)) g.seenAt = now;
+        const fade = g.seenAt ? 1 - (now - g.seenAt) / PENDING_BUILD_FADE_MS : g.onTop ? 1 - Math.max(0, age - PENDING_BUILD_STACK_MS + 150) / 150 : 1;
+        if (age > PENDING_BUILD_GHOST_MS || fade <= 0) { _pendingBuildGhosts.delete(k); continue; }
+        const p = [[0, 0], [1, 0], [1, 1], [0, 1]].map(([dx, dz]) => renderer3dInstance.projectWorldToCanvas(g.gx + dx, 0.06, g.gy + dz));
+        if (p.some(q => !q)) continue;
+        const minX = Math.min(p[0].x, p[1].x, p[2].x, p[3].x), maxX = Math.max(p[0].x, p[1].x, p[2].x, p[3].x);
+        const minY = Math.min(p[0].y, p[1].y, p[2].y, p[3].y), maxY = Math.max(p[0].y, p[1].y, p[2].y, p[3].y);
+        ctx.save();
+        ctx.beginPath(); ctx.moveTo(p[0].x, p[0].y); for (let i = 1; i < 4; i++) ctx.lineTo(p[i].x, p[i].y); ctx.closePath();
+        ctx.globalAlpha = Math.max(0, Math.min(1, fade));
+        ctx.fillStyle = 'rgba(0,255,0,0.22)'; ctx.strokeStyle = 'rgba(120,255,120,0.95)'; ctx.lineWidth = 1.5;
+        ctx.fill(); ctx.stroke();
+        const img = typeof getItemThumbnailImage === 'function' ? getItemThumbnailImage(g.key, 30) : null;
+        if (img && (img.complete === undefined || img.complete) && (img.width || img.naturalWidth)) {
+            const size = Math.max(6, Math.min(maxX - minX, maxY - minY) * 0.86);
+            ctx.globalAlpha = 0.8 * Math.max(0, Math.min(1, fade));
+            try { ctx.drawImage(img, (minX + maxX) / 2 - size / 2, (minY + maxY) / 2 - size / 2, size, size); } catch { }
+        }
+        ctx.restore();
+    }
+}
+
 function drawInteractionOverlay(renderer3dSnapshot = null) {
     if (!overlayCtx || !overlayCanvas) return;
     const o = renderer3dSnapshot && renderer3dSnapshot.overlays;
-    const hasContent = !!((isBoxSelecting && selectionBoxScreen)
+    const hasContent = !!((isBoxSelecting && selectionBoxScreen) || _pendingBuildGhosts.size > 0
         || (renderer3dSnapshot && renderer3dSnapshot.buildPreview)
         || (o && !o.groundLinesRendered && o.lines && o.lines.length)
         || (o && ['rects', 'areaTiles', 'rings', 'markers', 'bars', 'texts'].some(key => o[key] && o[key].length)));
@@ -4072,10 +4137,12 @@ function drawInteractionOverlay(renderer3dSnapshot = null) {
 
     if (renderer3dInstance && renderer3dSnapshot && renderer3dSnapshot.overlays && typeof renderer3dInstance.drawOverlay === 'function') {
         renderer3dInstance.drawOverlay(renderer3dSnapshot.overlays, overlayCtx);
-        if (renderer3dSnapshot.buildPreview && typeof renderer3dInstance.drawBuildPreview === 'function') {
-            renderer3dInstance.drawBuildPreview(renderer3dSnapshot.buildPreview, overlayCtx);
+        const bp = renderer3dSnapshot.buildPreview;
+        if (bp && typeof renderer3dInstance.drawBuildPreview === 'function' && !(bp.areaCells == null && _pendingBuildGhosts.has(bp.gx + ',' + bp.gy))) {
+            renderer3dInstance.drawBuildPreview(bp, overlayCtx);
         }
     }
+    if (_pendingBuildGhosts.size > 0) drawPendingBuildGhosts(overlayCtx);
 
     if (isBoxSelecting && selectionBoxScreen) {
         let sx = Math.min(selectionBoxScreen.sx, selectionBoxScreen.ex) + pad;
@@ -5838,7 +5905,10 @@ function processRenderFrame(timestamp) {
     } else {
         draw();
     }
+    _overlayDrawStart = performance.now();
     drawInteractionOverlay(renderer3dSnapshot);
+    _overlayDrawMs = performance.now() - _overlayDrawStart;
+    _lastOverlaySnapshot = renderer3dSnapshot;
     flushTickUiRequests();
     // (An army's unit counts for the bars and the panel: a slice a frame.)
     if (typeof frameUnitSummaryStep === 'function') frameUnitSummaryStep();

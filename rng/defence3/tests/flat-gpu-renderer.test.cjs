@@ -96,7 +96,7 @@ assert.equal(calls.filter(c=>c[0]==='readPixels'||c[0]==='drawImage').length,0,'
 
 const source=read('src/audio_visual/renderer.js');
 let clears=0;
-const overlay=vm.createContext({overlayCanvas:{},overlayCtx:{setTransform(){},clearRect(){clears++;}},
+const overlay=vm.createContext({performance,_pendingBuildGhosts:new Map(),drawPendingBuildGhosts(){},overlayCanvas:{},overlayCtx:{setTransform(){},clearRect(){clears++;}},
     renderer3dInstance:{drawOverlay(){}},window:{devicePixelRatio:1},viewW:800,viewH:600,isBoxSelecting:false,selectionBoxScreen:null});
 const overlayStart=source.indexOf('function drawInteractionOverlay(');
 vm.runInContext(source.slice(overlayStart,source.indexOf('\nfunction ',overlayStart+1)),overlay);
@@ -108,7 +108,7 @@ overlay.drawInteractionOverlay({overlays:{}});
 assert.equal(clears,3,'disappearing content clears exactly once');
 const begin=source.indexOf('function processRenderFrame('),end=source.indexOf('\nfunction ',begin+1);
 let worldDraws=0,mode='2d',received;
-const pipeline=vm.createContext({ctx:{setTransform(){}},canvas:{},bgCtx:{},minimapCtx:{},window:{devicePixelRatio:1},
+const pipeline=vm.createContext({performance,_overlayDrawStart:0,_overlayDrawMs:0,_lastOverlaySnapshot:null,ctx:{setTransform(){}},canvas:{},bgCtx:{},minimapCtx:{},window:{devicePixelRatio:1},
     renderDimensionMode:mode,_tickAccumulator:0,_frameSimLeadMs:0,TICK_MS:50,tickAlpha:0,netSimulationTickMs:()=>50,
     _fpsFrameCount:0,_fpsLastTime:0,_buildMenuRefreshCounter:0,_minimapRefreshCounter:0,_backgroundCacheRefreshCounter:0,
     updateVisibilityHistory(){},updateCamera(){},graphicsOptions:{},ensure3DRendererInitialized:()=>({setGraphicsOptions(){},render(s){received=s;}}),

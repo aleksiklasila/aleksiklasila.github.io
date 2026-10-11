@@ -1,0 +1,248 @@
+{
+  "fixture": "10000-160.json",
+  "mode": "multiplayer",
+  "query": "",
+  "setup": {
+    "units": 20000,
+    "map": 160,
+    "shared": true,
+    "tickMs": 50
+  },
+  "rows": [
+    {
+      "stalled": "host",
+      "stallMs": 250,
+      "times": 1,
+      "totalMs": 250,
+      "host": {
+        "maxGapMs": 64,
+        "ticks": 24,
+        "expected": 25,
+        "lostTicks": 1,
+        "paceMs": 50,
+        "lateMs": 15,
+        "order": "40/40"
+      },
+      "guest": {
+        "maxGapMs": 62,
+        "ticks": 25,
+        "expected": 25,
+        "lostTicks": 0,
+        "paceMs": 50,
+        "lateMs": 15,
+        "order": "40/40"
+      }
+    },
+    {
+      "stalled": "host",
+      "stallMs": 1000,
+      "times": 1,
+      "totalMs": 1000,
+      "host": {
+        "maxGapMs": 62,
+        "ticks": 40,
+        "expected": 40,
+        "lostTicks": 0,
+        "paceMs": 50,
+        "lateMs": 13,
+        "order": "40/40"
+      },
+      "guest": {
+        "maxGapMs": 65,
+        "ticks": 40,
+        "expected": 40.1,
+        "lostTicks": 0.1,
+        "paceMs": 49.9,
+        "lateMs": 15,
+        "order": "40/40"
+      }
+    },
+    {
+      "stalled": "guest",
+      "stallMs": 250,
+      "times": 1,
+      "totalMs": 250,
+      "host": {
+        "maxGapMs": 73,
+        "ticks": 25,
+        "expected": 25,
+        "lostTicks": 0,
+        "paceMs": 50,
+        "lateMs": 13,
+        "order": "40/40"
+      },
+      "guest": {
+        "maxGapMs": 63,
+        "ticks": 25,
+        "expected": 25,
+        "lostTicks": 0,
+        "paceMs": 50,
+        "lateMs": 14,
+        "order": "40/40"
+      }
+    },
+    {
+      "stalled": "guest",
+      "stallMs": 1000,
+      "times": 1,
+      "totalMs": 1000,
+      "host": {
+        "maxGapMs": 62,
+        "ticks": 40,
+        "expected": 40.2,
+        "lostTicks": 0.2,
+        "paceMs": 49.7,
+        "lateMs": 14,
+        "order": "40/40"
+      },
+      "guest": {
+        "maxGapMs": 67,
+        "ticks": 40,
+        "expected": 40,
+        "lostTicks": 0,
+        "paceMs": 50,
+        "lateMs": 16,
+        "order": "40/40"
+      }
+    }
+  ],
+  "errors": [],
+  "stateAt": {
+    "tick": 747,
+    "hashes": [
+      [
+        747,
+        "f2d00fe9"
+      ],
+      [
+        747,
+        "f2d00fe9"
+      ]
+    ],
+    "equal": true
+  },
+  "host": {
+    "net": {
+      "lateSeals": 12,
+      "autoTicks": 21,
+      "autoSeals": 26,
+      "carried": 1,
+      "desyncs": 0,
+      "patches": 0,
+      "hard": 0
+    },
+    "sim": {
+      "enabled": true,
+      "loaded": true,
+      "active": true,
+      "helpers": 3,
+      "shared": true,
+      "epoch": 2,
+      "appliedTick": 746,
+      "inFlight": 3,
+      "heals": 0,
+      "dropped": 0,
+      "presentation": true,
+      "presentationTick": 746,
+      "presentationBuildMs": 5.335000038146973,
+      "presentationPhases": [
+        1.9800000190734863,
+        2.715000033378601,
+        0.019999980926513672,
+        0.6150000095367432
+      ],
+      "presentationTorn": 0,
+      "firstDiff": null,
+      "rowsPerTick": 0,
+      "rowsPerTickByList": {},
+      "applyMs": {
+        "mean": 0.3,
+        "p95": 0.51
+      },
+      "workerSimMs": {
+        "mean": 3.99,
+        "p95": 5.5
+      },
+      "workerEncodeMs": {
+        "mean": 0.27,
+        "p95": 0.38
+      },
+      "latencyMs": {
+        "mean": 31.39,
+        "p95": 30.37,
+        "shown": 11
+      },
+      "workerLateMs": {
+        "mean": 2.66,
+        "p95": 12.71
+      },
+      "dispatchAhead": true,
+      "workerAhead": 3,
+      "auto": true,
+      "autoTicks": 21,
+      "autoSeals": 26
+    }
+  },
+  "guest": {
+    "net": {
+      "lateSeals": 12,
+      "autoTicks": 19,
+      "autoSeals": 0,
+      "carried": 0,
+      "desyncs": 0,
+      "patches": 0,
+      "hard": 0
+    },
+    "sim": {
+      "enabled": true,
+      "loaded": true,
+      "active": true,
+      "helpers": 3,
+      "shared": true,
+      "epoch": 2,
+      "appliedTick": 746,
+      "inFlight": 3,
+      "heals": 0,
+      "dropped": 0,
+      "presentation": true,
+      "presentationTick": 746,
+      "presentationBuildMs": 3.899999976158142,
+      "presentationPhases": [
+        0.2250000238418579,
+        3.0199999809265137,
+        0.019999980926513672,
+        0.6349999904632568
+      ],
+      "presentationTorn": 0,
+      "firstDiff": null,
+      "rowsPerTick": 0,
+      "rowsPerTickByList": {},
+      "applyMs": {
+        "mean": 0.26,
+        "p95": 0.44
+      },
+      "workerSimMs": {
+        "mean": 3.84,
+        "p95": 5.27
+      },
+      "workerEncodeMs": {
+        "mean": 0.26,
+        "p95": 0.37
+      },
+      "latencyMs": {
+        "mean": 32.87,
+        "p95": 91.22,
+        "shown": 10
+      },
+      "workerLateMs": {
+        "mean": 2.82,
+        "p95": 13.88
+      },
+      "dispatchAhead": true,
+      "workerAhead": 3,
+      "auto": true,
+      "autoTicks": 19,
+      "autoSeals": 0
+    }
+  }
+}

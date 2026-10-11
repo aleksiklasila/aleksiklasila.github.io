@@ -543,8 +543,13 @@ function _bbRenderResearch(now) {
     for (let t of tasks) {
         parts.push(`${_bbTaskStatId(t)}/${t.toLevel}/${Math.round(_bbTaskProgress(t) * 200)}/${Math.round(Number(t.cost) || 0)}`);
     }
-    let sig = parts.join('|') + `#${cap}#${caret}#${openIndex}`;
-    let labelHtml = `<span class="bb-lcap">Research</span><span class="bb-lcount">${tasks.length}<span class="bb-per">/${cap}</span></span>`;
+    // (Orders given and not there yet: faded tiles after the queue, counted in.)
+    let ahead = typeof researchOrdersAheadList === 'function' ? researchOrdersAheadList().filter(a => a.delta > 0) : [];
+    let aheadCount = 0;
+    for (let a of ahead) aheadCount += a.delta;
+    aheadCount = Math.max(0, Math.min(aheadCount, cap - tasks.length));
+    let sig = parts.join('|') + `#${cap}#${caret}#${openIndex}#${ahead.map(a => a.key + '/' + a.statKey + '/' + a.delta).join(',')}`;
+    let labelHtml = `<span class="bb-lcap">Research</span><span class="bb-lcount">${tasks.length + aheadCount}<span class="bb-per">/${cap}</span></span>`;
     if (els.researchLabel.innerHTML !== labelHtml) els.researchLabel.innerHTML = labelHtml;
     if (sig === bb.researchSig) return;
     bb.researchSig = sig;
@@ -555,7 +560,12 @@ function _bbRenderResearch(now) {
         html += _bbTaskHtml(tasks[i], i, i === openIndex);
     }
     if (caret >= tasks.length) html += `<div class="bb-caret"></div>`;
-    let empty = Math.min(BB_MAX_EMPTY_SLOTS, Math.max(0, cap - tasks.length));
+    let aheadLeft = aheadCount;
+    for (let a of ahead) for (let n = 0; n < a.delta && aheadLeft > 0; n++, aheadLeft--) {
+        let stat = getResearchStatEntry(a.kind, a.key, a.statKey);
+        html += `<div class="bb-slot bb-ahead${a.kind === 'unit' ? ' bb-unit' : ''}" title="Ordered: on its way"><img src="${getItemThumbnail(a.key, 20)}" width="20" height="20" alt="" draggable="false"><span class="bb-task-stat">${_bbStatAbbrHtml(a.statKey, stat ? stat.label : a.statKey)}</span></div>`;
+    }
+    let empty = Math.min(BB_MAX_EMPTY_SLOTS, Math.max(0, cap - tasks.length - aheadCount));
     for (let i = 0; i < empty; i++) html += `<div class="bb-slot"></div>`;
     if (cap <= 0 && tasks.length <= 0) {
         html += `<div class="bb-empty-msg">No research lab. Build one to research upgrades.</div>`;
@@ -1096,6 +1106,8 @@ function _bbRenderMenu(force = false) {
     let menu = bb.menu;
     if (!menu) return;
     if (!force && (menu.pressed || researchThingLevelDropdown)) return;
+    // (A count just changed by a click stays until the simulation's can differ.)
+    if (!force && bb.menuHoldUntil && performance.now() < bb.menuHoldUntil) return;
     let html = menu.type === 'thing' ? _bbThingMenuHtml() : menu.type === 'drop' ? _bbDropMenuHtml() : _bbTaskMenuHtml();
     if (html === null) { closeBottomBarMenus(); return; }
     if (html !== menu.html) {
@@ -1159,6 +1171,11 @@ function _bbOnMenuClickCapture(ev) {
     _bbRefreshSoon();
 }
 
+// The rows made again with the next frame (an order was just given).
+function bottomBarRefreshNow() {
+    bb.lastRefresh = 0; bb.researchSig = '';
+}
+
 function _bbRefreshSoon() {
     // Actions land after the input delay; refresh a little later.
     for (let ms of [60, 260]) setTimeout(() => { bb.lastRefresh = 0; bb.researchSig = ''; }, ms);
@@ -1184,6 +1201,12 @@ function _bbOnMenuClick(ev) {
         if (act === 'queue-add') queueGroupSpawns(coords, isWorker, queuePurchaseMultiplier);
         else dequeueGroupSpawns(coords, isWorker, queuePurchaseMultiplier);
         updateInfoPanel();
+        // (The count at once; the simulation's replaces it when it answers.)
+        if (typeof optimisticQueueBump === 'function') {
+            let frac = bb.menu && bb.menu.el ? bb.menu.el.querySelector('.bb-menu-queue-frac') : null;
+            optimisticQueueBump(frac, (act === 'queue-add' ? 1 : -1) * Math.max(1, Math.floor(queuePurchaseMultiplier || 1)));
+            bb.menuHoldUntil = performance.now() + 700;
+        }
     } else if (act.startsWith('task-')) {
         _bbTaskAction(act);
     }
@@ -1216,4 +1239,4 @@ function _bbTaskAction(act) {
     }
 }
 
-Object.assign(globalThis, { updateBottomBar, closeBottomBarMenus });
+Object.assign(globalThis, { updateBottomBar, closeBottomBarMenus, bottomBarRefreshNow });

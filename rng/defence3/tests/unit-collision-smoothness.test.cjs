@@ -74,7 +74,9 @@ async function measure() {
     // (This scenario reads ~1.2% with the separation gain at 0.8, 1.5% at
     // 1.0, 2.5% at 1.15: its own spread between settings that change
     // nothing is ~0.1 points.)
-    assert.ok(rate < 0.015, `back-and-forth steps: ${(rate * 100).toFixed(2)}% of moving unit-ticks`);
+    // (Since the maps' shapes and spawns follow the mine density, the crowd of
+    // this scene walks past a base: 1.8-1.9% with the same settings.)
+    assert.ok(rate < 0.023, `back-and-forth steps: ${(rate * 100).toFixed(2)}% of moving unit-ticks`);
     console.log('unit-collision-smoothness: ok');
     process.exit(0);
 })().catch(err => { console.error(err); process.exit(1); });

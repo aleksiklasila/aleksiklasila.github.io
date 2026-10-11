@@ -3928,6 +3928,10 @@ const ACTION_SPLIT_BY_UNITS = new Set(['move', 'attackMove', 'attack', 'attackBu
 function queueAction(action) {
     if (localDefeated && action && action.action !== 'resign') return;
     if (gameOver) return;
+    // (A research order: shown at once, see hud.js noteResearchOrder.)
+    if (action && (action.action === 'queueResearch' || action.action === 'dequeueResearch') && typeof noteResearchOrder === 'function') {
+        noteResearchOrder(action.kind, action.key, action.statKey, (action.action === 'queueResearch' ? 1 : -1) * Math.max(1, Math.floor(Number(action.count) || 1)));
+    }
     if (action && Array.isArray(action.unitIds) && typeof ACTION_MAX_UNIT_IDS === 'number' && action.unitIds.length > ACTION_MAX_UNIT_IDS && ACTION_SPLIT_BY_UNITS.has(action.action)) {
         for (let i = 0; i < action.unitIds.length; i += ACTION_MAX_UNIT_IDS) queueAction({ ...action, unitIds: action.unitIds.slice(i, i + ACTION_MAX_UNIT_IDS) });
         return;

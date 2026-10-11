@@ -23,6 +23,9 @@ const data = require(path.join(__dirname, 'oneofall.json'));
     const controls = { ...H.SMALL_MATCH_CONTROLS };
     for (const [k, v] of Object.entries(data.lobby.numbers)) controls[k] = String(v);
     for (const [k, v] of Object.entries(data.lobby.selects)) controls[k] = String(v);
+    // (The fixture's mine counts are from when an island held what fitted a small disc and no more:
+    // as many as that disc held, so the base has the ground it had.)
+    data.editableConfig.config.GOLD_MINE_COUNT = 230; data.editableConfig.config.ASTAR_MINE_COUNT = 150;
     const world = new H.World({ controls, network: { latencyMs: 20 } });
     const hostSetup = `
         startingResourcesConfig = normalizeStartingResourcesConfig(${JSON.stringify(data.startingResources)});
@@ -62,7 +65,7 @@ const data = require(path.join(__dirname, 'oneofall.json'));
                 return first; })()`);
             host.eval(`queueAction({ action: 'move', unitIds: [${w.id}], targetX: ${target[0] * 32 + 16}, targetY: ${target[1] * 32 + 16} })`);
             let best = Infinity, last = null;
-            for (let k = 0; k < 40 && best > 1; k++) {
+            for (let k = 0; k < 70 && best > 1; k++) {
                 await world.run(350);
                 last = pos(w.id);
                 if (!last) break;
