@@ -28,7 +28,7 @@ for(const type of ['gold','astar']) {
     const row=type==='gold'?4:5;
     assert.notEqual(first.lookup[row*first.width*4],first.lookup[(row*first.width+1)*4]);
 }
-assert.equal(first.styles.length, 7);
+assert.equal(first.styles.length, 9,'the full roster is prepared before every type has spawned');
 assert.equal(first.lookup[(7 * first.width + 1) * 4], 1);
 // Runtime labels can grow beyond a texture-width boundary on any tick.
 // They must not trigger hundreds of model bakes and texture uploads.
@@ -38,12 +38,31 @@ strings.push('scout');
 const added = c.getColumnLodCatalog();
 assert.notEqual(added, first);
 assert.equal(added.styles.length, 9);
+assert.equal(added.styles,first.styles,'new string codes reuse the baked style list');
 assert.ok(added.lookup[(7 * added.width + strings.length - 1) * 4] > 0);
 // Restarting a game reuses the table object but may assign different codes.
 strings.splice(0, strings.length, '', 'fire', 'norm', 'L1');
 const restarted = c.getColumnLodCatalog();
 assert.notEqual(restarted, added);
+assert.equal(restarted.styles,first.styles,'restarting a game keeps the same baked styles');
 assert.equal(restarted.lookup[(7 * restarted.width + 1) * 4], 0);
 assert.ok(restarted.lookup[(7 * restarted.width + 2) * 4] > 0);
 assert.equal(c.getColumnLodCatalog(), restarted);
+strings.push('house','farm','lava','builder_spawner');
+Object.assign(c.BASE_CARD_TYPES,{
+    house:{target:'floor',visionRange:.4},farm:{target:'floor',visionRange:0},
+    lava:{target:'floor',visionRange:0},builder_spawner:{target:'floor',visionRange:.6}
+});
+c.get3DWorkshopSignTexture=type=>({type});
+const buildings=c.getColumnLodCatalog();
+for(const [type,height,preserve] of [['house',.82,true],['farm',.72,true],['lava',.14,false],['builder_spawner',.62,true]]) {
+    const s=buildings.styles.find(s=>s.type===type);
+    assert.ok(Math.abs(s.scaleY*.94-height)<1e-7,`${type} matches the close model's height`);
+    assert.equal(s.preserveModelHeight,preserve);
+    assert.equal(s.bakeHeight,1);
+}
+assert.equal(buildings.styles.find(s=>s.type==='builder_spawner').statusTextureCanvas.type,'builder_spawner');
+assert.equal(buildings.stride,81);
+const fire=buildings.styles.find(s=>s.type==='fire');
+assert.equal(fire.scaleY,1.05/.94);
 console.log('PASS: atlas cache ignores labels, includes new types, and remaps codes after restart.');

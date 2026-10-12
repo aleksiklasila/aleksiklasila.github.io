@@ -1,0 +1,116 @@
+{
+  "fixture": "200000-1000.json",
+  "setup": {
+    "units": 400000,
+    "structures": 60262,
+    "map": 1000,
+    "viewport": {
+      "width": 776,
+      "height": 651
+    },
+    "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 2060 (0x00001F15) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "graphics": {
+      "aa": "msaa",
+      "shadows": "high",
+      "ao": "low",
+      "outline": true,
+      "bloom": false,
+      "grade": true,
+      "sharpen": true,
+      "resolution": 1
+    }
+  },
+  "results": [
+    {
+      "mode": "3d",
+      "zoom": 1.5,
+      "pitch": 0.38,
+      "yaw": 1.5707963267948966,
+      "fps": 59.137905199202464,
+      "p95": 41.49500000000262,
+      "buildMs": 4.509341217778824,
+      "columnMs": 4.437229726362872,
+      "renderCpuMs": 5.393597974165066,
+      "gpuMs": 5.462559135135132,
+      "timings": {
+        "_simClientApplyWorld": {
+          "calls": 138,
+          "mean": 0.1284057869427446,
+          "total": 17.719998598098755
+        },
+        "getChunkRenderView": {
+          "calls": 296,
+          "mean": 1.4315540532808047,
+          "total": 423.73999977111816
+        },
+        "_unitDetailSplit": {
+          "calls": 296,
+          "mean": 1.2132432432593525,
+          "total": 359.1200000047684
+        },
+        "_structureDetailSplit": {
+          "calls": 296,
+          "mean": 0.1931756750957386,
+          "total": 57.17999982833862
+        },
+        "build3DOverlayData": {
+          "calls": 296,
+          "mean": 0.8622973001486546,
+          "total": 255.24000084400177
+        },
+        "drawMinimap": {
+          "calls": 296,
+          "mean": 0.7342060800339725,
+          "total": 217.32499969005585
+        },
+        "updateBottomBar": {
+          "calls": 296,
+          "mean": 0.3552702705602388,
+          "total": 105.16000008583069
+        }
+      },
+      "glError": 0,
+      "atlas": {
+        "styles": 78,
+        "next": 2030,
+        "revision": 59,
+        "ready": 2030,
+        "structureTypes": [
+          28,
+          28,
+          28,
+          28,
+          28,
+          28,
+          28,
+          28
+        ]
+      },
+      "detail": 508,
+      "visibleDetail": 410,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 508,
+      "meshLods": {
+        "far": 421,
+        "medium": 87
+      },
+      "units": 400000,
+      "moving": 32872,
+      "mediumModels": 2400,
+      "nativeRebase": true,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 891,
+        "build": 181,
+        "why": {
+          "none": 1,
+          "units": 89,
+          "tick": 91
+        }
+      }
+    }
+  ],
+  "errors": []
+}

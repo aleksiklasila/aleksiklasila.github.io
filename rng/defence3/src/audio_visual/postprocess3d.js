@@ -221,9 +221,19 @@
         #endif
         #ifdef SHARPEN
             {
-                vec3 n = texture(uColor, vUv + vec2(uTexel.x, 0.0)).rgb + texture(uColor, vUv - vec2(uTexel.x, 0.0)).rgb
-                       + texture(uColor, vUv + vec2(0.0, uTexel.y)).rgb + texture(uColor, vUv - vec2(0.0, uTexel.y)).rgb;
-                c = clamp(c + (base * 4.0 - n) * uSharpen, 0.0, 1.0);
+                vec3 n = texture(uColor, vUv + vec2(uTexel.x, 0.0)).rgb;
+                vec3 s = texture(uColor, vUv - vec2(uTexel.x, 0.0)).rgb;
+                vec3 e = texture(uColor, vUv + vec2(0.0, uTexel.y)).rgb;
+                vec3 w = texture(uColor, vUv - vec2(0.0, uTexel.y)).rgb;
+                vec3 lo = min(base, min(min(n, s), min(e, w)));
+                vec3 hi = max(base, max(max(n, s), max(e, w)));
+                // Dense outlines must not turn into clipped black/white halos
+                // at rest, then change brightness when subpixel panning filters
+                // them. Bound the correction to the existing local contrast;
+                // keep FXAA, shadows and AO intact (only limit the correction).
+                vec3 correction = (base * 4.0 - n - s - e - w) * uSharpen;
+                correction *= 1.0 - smoothstep(.12, .6, luma(hi - lo));
+                c += clamp(correction, lo - base, hi - base);
             }
         #endif
         #ifdef AO
@@ -254,11 +264,12 @@
         #endif
         #ifdef GRADE
             {
-                // Gentle S-curve, a little saturation and a soft vignette.
+                // Soft contrast and a warm, restrained palette. Strong curves
+                // clip tiny saturated details differently at each sample phase.
                 c = clamp(c, 0.0, 1.0);
-                c = mix(c, c * c * (3.0 - 2.0 * c), 0.35);
+                c = mix(c, c * c * (3.0 - 2.0 * c), 0.18);
                 float l = luma(c);
-                c = mix(vec3(l), c, 1.14) * vec3(1.02, 1.0, 0.97);
+                c = mix(vec3(l), c, 1.04) * vec3(1.02, 1.0, 0.97);
                 vec2 v = vUv - 0.5;
                 c *= 1.0 - 0.32 * smoothstep(0.18, 0.62, dot(v, v));
             }

@@ -311,10 +311,11 @@ function _pushCombatRecordFx() {
         let x0 = data[o + 1] / TILE, z0 = data[o + 2] / TILE;
         if (!_fxVisible(x1, z1) && !_fxVisible(x0, z0)) continue;
         if (_fx.batch.total >= _fx.limit) continue;
-        if (!_fx.detail) {
+        if (!_fxDetailAt(x1, z1)) {
             // At map scale thousands of overlapping multi-part attacks are
             // smaller than a pixel. Keep one cheap flash per small world cell.
-            const cx=Math.floor((x1-_fx.minX)/_fx.cellSize),cz=Math.floor((z1-_fx.minZ)/_fx.cellSize);
+            // World anchored cells do not reshuffle flashes when the camera pans.
+            const cx=Math.floor(x1/_fx.cellSize),cz=Math.floor(z1/_fx.cellSize);
             const key=cz*1048576+cx;
             if(_fx.cells.has(key)) continue;
             _fx.cells.add(key);
@@ -495,7 +496,7 @@ function beginFrameEffects(batch, flat2d, bounds, visibility, pixelsPerTile, ren
     // Zoomed far out, secondary pieces (debris, trails, smoke) are subpixel.
     if(!flat2d && renderer && renderer.lodPixelsPerWorld>0) pixelsPerTile=renderer.lodPixelsPerWorld;
     _fx.detail = !(pixelsPerTile < 14);
-    _fx.limit = pixelsPerTile < 4 ? 1024 : pixelsPerTile < 14 ? 2048 : pixelsPerTile < 32 ? 4096 : 10000;
+    _fx.limit = pixelsPerTile < 4 ? 1024 : pixelsPerTile < 14 ? 2048 : pixelsPerTile < 32 ? 3072 : 6000;
     _fx.cellSize=Math.max(1,3/Math.max(.1,pixelsPerTile));_fx.cells.clear();
     _fx.renderer = !flat2d && renderer && typeof renderer.pixelsPerWorldAt === 'function' ? renderer : null;
     _fx.tickScale = Math.max(.25, (typeof TICK_RATE === 'number' ? TICK_RATE : 20) / 20);

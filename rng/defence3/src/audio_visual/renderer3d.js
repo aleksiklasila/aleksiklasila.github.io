@@ -1,4 +1,6 @@
 (function () {
+    const COLUMN_BAKE_WORKER_URL = typeof document !== 'undefined' && document.currentScript?.src
+        ? new URL('renderer3d-lod-worker.js?v=20261012-lod12',document.currentScript.src).href : null;
     function createShader(gl, type, source) {
         let shader = gl.createShader(type);
         gl.shaderSource(shader, source);
@@ -1044,9 +1046,15 @@
                 let middleSize = sx + sy + sz - Math.min(sx, sy, sz) - Math.max(sx, sy, sz);
                 let mainLimb = Math.abs(joint) === 1 && sy >= .25 && sx >= .13;
                 let readableEquipment = !!weapon && (sy >= .20 || sx >= .20 || sz >= .20);
+                // Thin does not mean invisible: roof edges, sign supports,
+                // crests and wings define the silhouette from a low camera.
+                const longest = Math.max(sx, sy, sz);
+                const silhouette = longest >= .28 || y + sy >= .9;
+                const broadFace = longest * middleSize >= (simplified === 2 ? .035 : .018);
                 // Eyes, doors and dark openings define the face/silhouette.
                 // Keep them at every mesh level, even when thinner than trim.
-                const landmark = surface === 1 || surface === 3 || surface === 12 || surface === 14;
+                const landmark = surface === 1 || surface === 3 || surface === 7 || surface === 12 || surface === 14
+                    || (surface === 8 && longest >= .1) || Math.abs(joint) === 7 || silhouette || broadFace;
                 if (middleSize < .18 && !mainLimb && !readableEquipment && !landmark) return;
                 // Far level (a unit a few pixels across): only the bulk of
                 // the figure, its limbs and large equipment.
@@ -1223,8 +1231,8 @@
             for (let side of [-1, 1]) part(side * .13, .56, .27, .03, .03, .085, 6); // bone pegs
             backPanel(.22, -.27, .49);
         } else if (kind === 'mage') {
-            // Every caster: long robe, wide-brimmed pointed hat and a staff whose
-            // head names the element. The robe and orb carry the element color.
+            // Every caster: long robe, wide-brimmed pointed hat and a plain
+            // staff. The robe carries the element color at every distance.
             part(0, 0, 0, .56, .62, .46, 0, 2, .62, .55);
             part(0, 0, 0, .60, .06, .50, 2, 2, .62);
             part(0, .33, 0, .46, .05, .40, 2, 2, .62); // sash
@@ -1419,14 +1427,8 @@
             // (toward the display) and -1 behind it.
             let swirl = (face) => {
                 let z0 = face > 0 ? -.335 : -.405;
-                if (simplified) {
-                    // Far away: three nested turning plates instead of thin
-                    // rings, which would drop out and leave a black hole.
-                    [[.44, 7, 1, 0], [.30, 12, -1, .5], [.20, 7, 1, 1.1]].forEach(([w, surface, dir, speed], k) => {
-                        part(0, .38 - w / 2, z0 + face * k * .012, w, w, .03, surface, dir * 7, .38, 1, 0, speed);
-                    });
-                    return;
-                }
+                // Keep the openings at every level. Replacing these rings
+                // with solid plates changes the whole gateway's brightness.
                 // Square rings, outer to inner, alternately glowing and dark,
                 // each turning at its own speed and direction.
                 [[.22, 7, 1, 0], [.16, 12, -1, .5], [.11, 7, 1, 1.1], [.06, 7, -1, 1.9]].forEach(([h, surface, dir, speed], k) => {
@@ -1701,23 +1703,8 @@
         } else if (weapon === 'warhammer') {
             wp(.43,.34,.15,.11,.78,.08,5); wp(.43,.78,.15,.62,.25,.13,1); wp(.43,.78,.245,.30,.16,.055,2);
         } else if (/_staff$/.test(weapon) && kind === 'mage') {
-            // Staff shaft, then an element-specific head (surface 7 glows).
+            // Plain shaft at every LOD; tip ornaments used to pop off on zoom.
             wp(.40,.06,.15,.06,1.02,.06,5);
-            if (weapon === 'fire_staff') {
-                wp(.40,1.06,.15,.17,.17,.17,7);
-                for (let side of [-1,1]) wp(.40+side*.10,1.00,.15,.04,.20,.04,8,handJoint,handPivot,.2);
-            } else if (weapon === 'water_staff') {
-                wp(.40,1.04,.15,.14,.14,.14,7);
-                for (let x of [.28,.40,.52]) wp(x,1.12,.15,.04,.16,.05,8,handJoint,handPivot,.15);
-            } else if (weapon === 'ice_staff') {
-                wp(.40,1.02,.15,.15,.34,.15,7,handJoint,handPivot,.05);
-            } else if (weapon === 'poison_staff') {
-                wp(.40,1.05,.15,.18,.15,.18,6);
-                wp(.40,.99,.15,.11,.07,.11,7);
-            } else {
-                wp(.40,1.00,.15,.28,.28,.05,7,handJoint,handPivot,.2);
-                wp(.40,1.10,.15,.08,.08,.08,3);
-            }
         } else if (weapon === 'hammer') {
             wp(.40,.35,.13,.09,.70,.07,5); wp(.40,.73,.13,.55,.23,.11,1); wp(.40,.73,.21,.28,.13,.05,2);
         } else if (weapon === 'pickaxe' || weapon === 'axe') {
@@ -2778,6 +2765,12 @@
                 this.getFigureMesh(kind + ':lod');
             }
             gl.bindVertexArray(null);
+            this.createFigureProgram();
+        }
+
+        // Shared by live meshes and the offscreen GPU snapshot baker.
+        createFigureProgram() {
+            const gl=this.gl;
             this.figureProgram = createProgram(gl, `#version 300 es
                 precision highp float;
                 layout(location=0) in vec3 aPosition;
@@ -3020,8 +3013,10 @@
                     vec3 shaded = base * shade;
                     if (!glowing) {
                         shaded *= mix(.86, 1.0, uIsUnit);
-                        shaded = mix(shaded, vec3(.025,.035,.055), faceInk(vUv, mix(.65, 1.05, uIsUnit)) * .88);
+                        shaded = mix(shaded, vec3(.025,.035,.055), faceInk(vUv, mix(.55, .75, uIsUnit)) * .65);
                     }
+                    // Painted panels retain their colors without looking emissive.
+                    if (vSurface == 4 || vSurface == 15) shaded *= .94;
                     float light = vLight < 0.0 ? -vLight - 1.0 : vLight;
                     float memoryShade = vLight < 0.0 ? mix(.55, 1.0, smoothstep(.14, .74, light)) : 1.0;
                     float fog = (1.0 - pow(1.0-clamp(light,0.0,1.0),1.3)*.42) * memoryShade;
@@ -5753,62 +5748,111 @@
         prepareColumnAtlas() {
             const catalog = typeof getColumnLodCatalog === 'function' ? getColumnLodCatalog() : null;
             if (!catalog) return this.columnAtlas;
+            if(this.columnAtlas && this.columnAtlas.catalog!==catalog && this.columnAtlas.catalog.styles===catalog.styles) {
+                const gl=this.gl,A=this.columnAtlas;A.catalog=catalog;
+                gl.bindTexture(gl.TEXTURE_2D,A.lookup);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+                gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,catalog.width,8,0,gl.RGBA,gl.FLOAT,catalog.lookup);
+            }
             if (this.columnAtlas?.catalog === catalog) {
-                this.advanceColumnAtlas(this.columnAtlas);
                 return this.columnAtlas;
             }
-            const gl = this.gl, cell = 64, grid = 2 ** Math.ceil(Math.log2(Math.ceil(Math.sqrt(catalog.styles.length * 9 + 1))));
+            // 32px miniatures are sufficient for the far pass; five elevations
+            // and sixteen directions capture equipment from tilted views.
+            const gl = this.gl, cell = 32, stride = catalog.stride || 9, views = stride - 1;
+            const grid = Math.ceil(Math.sqrt(catalog.styles.length * stride + 1));
             const old = this.columnAtlas;
+            old?.worker?.terminate();
+            if(old)old.prepare=null;
             if (old) for (const name of ['color','mask','meta','lookup']) gl.deleteTexture(old[name]);
             const A = this.columnAtlas = {catalog,grid,panels:[],sources:[],metaData:new Float32Array(grid*grid*4),next:0,revision:0};
+            if(COLUMN_BAKE_WORKER_URL && typeof Worker==='function' && typeof createImageBitmap==='function') {
+                try {
+                    A.worker=new Worker(COLUMN_BAKE_WORKER_URL);
+                    A.worker.onmessage=event=>{A.prepared=event.data;A.gpuBaked=event.data.gpuBaked;};
+                    A.worker.onerror=()=>{A.worker.terminate();A.worker=null;A.workerBusy=false;A.workerFailed=true;};
+                } catch (_) {A.worker=null;}
+            }
             gl.activeTexture(gl.TEXTURE0);
             for (const name of ['color','mask']) {
                 A[name] = gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,A[name]);
-                gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,grid*cell,grid*cell,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+                gl.texStorage2D(gl.TEXTURE_2D,4,gl.RGBA8,grid*cell,grid*cell);
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
-                // Stop before mip levels can mix neighbouring 64px cells.
-                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAX_LEVEL,4);
+                // Stop before mip levels can mix neighbouring 32px cells.
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAX_LEVEL,3);
             }
-            const makeCanvas = () => {const c=document.createElement('canvas');c.width=c.height=cell;return c;};
+            const makeCanvas = () => {const c=document.createElement('canvas');c.width=c.height=64;return c;};
             const color=makeCanvas(), mask=makeCanvas(), g=color.getContext('2d'), m=mask.getContext('2d');
-            const upload = (index, meta) => {
+            g.__drawImagesImmediately=true;
+            const mipCanvases=Array.from({length:4},(_,level)=>{const canvas=makeCanvas();canvas.width=canvas.height=cell>>level;return canvas;});
+            const upload = (index, meta, bakedLevels=null) => {
                 A.metaData.set(meta,index*4);
                 // Filter premultiplied colors so transparent padding cannot
                 // darken the miniature as its mip level changes.
                 gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,true);
                 for (const [name,canvas] of [['color',color],['mask',mask]]) {
                     gl.bindTexture(gl.TEXTURE_2D,A[name]);
-                    gl.texSubImage2D(gl.TEXTURE_2D,0,(index%grid)*cell,Math.floor(index/grid)*cell,gl.RGBA,gl.UNSIGNED_BYTE,canvas);
+                    let previous=canvas;
+                    for(let level=0;level<4;level++) {
+                        const scaled=mipCanvases[level],size=cell>>level,ctx=scaled.getContext('2d');
+                        if(bakedLevels)ctx.putImageData(new ImageData(bakedLevels[level][name],size,size),0,0);
+                        else {ctx.clearRect(0,0,size,size);ctx.drawImage(previous,0,0,size,size);}
+                        gl.texSubImage2D(gl.TEXTURE_2D,level,(index%grid)*size,Math.floor(index/grid)*size,gl.RGBA,gl.UNSIGNED_BYTE,scaled);
+                        previous=scaled;
+                    }
                 }
             };
             A.prepare = (job) => {
                 // Prepare every type's canonical panel before the directional
                 // models, so all types become recognizable together.
-                const n=catalog.styles.length, i=job<n?job:Math.floor((job-n)/8);
-                const direction=job<n?-1:(job-n)%8, style=catalog.styles[i];
+                const n=catalog.styles.length, i=job<n?job:Math.floor((job-n)/views);
+                const direction=job<n?-1:(job-n)%views, style=catalog.styles[i];
                 if(direction>=0) {
+                    if(A.worker) {
+                        if(!A.prepared) {
+                            if(!A.workerBusy) {
+                                A.workerBusy=true;
+                                const source=A.sources[i];
+                                Promise.all([createImageBitmap(source),createImageBitmap(source._ownerMask),
+                                    style.statusTextureCanvas?createImageBitmap(style.statusTextureCanvas):null]).then(([panel,ownerMask,status])=>{
+                                    if(!A.worker){panel.close();ownerMask.close();status?.close();return;}
+                                    const fields=['modelKey','type','color','scaleX','scaleY','bakeHeight','unit','isFlying','isWorker','weaponType'];
+                                    A.worker.postMessage({index:i,stride,style:Object.fromEntries(fields.map(key=>[key,style[key]])),panel,ownerMask,status},[panel,ownerMask,...(status?[status]:[])]);
+                                }).catch(()=>{A.worker?.terminate();A.worker=null;A.workerBusy=false;A.workerFailed=true;});
+                            }
+                            return false;
+                        }
+                        const baked=A.prepared.images[direction];
+                        if(baked) {
+                            if(!baked.levels) {g.putImageData(new ImageData(baked.color,64,64),0,0);m.putImageData(new ImageData(baked.mask,64,64),0,0);}
+                            upload(i*stride+2+direction,baked.meta,baked.levels);
+                        }
+                        if(direction===views-1){A.prepared=null;A.workerBusy=false;}
+                        return;
+                    }
                     if(direction===0) {const kind=proceduralKind(style);A.model=kind?createFigureData(kind,1):null;}
                     const data=A.model;
-                    if(data) upload(i*9+2+direction,this.bakeColumnModel(g,m,data,style,direction*Math.PI/4,A.sources[i]));
+                    if(data) {const [yaw,pitch]=Defence3Renderer3D.columnView(stride,direction);upload(i*stride+2+direction,this.bakeColumnModel(g,m,data,style,yaw,A.sources[i],pitch));}
                     return;
                 }
-                g.clearRect(0,0,cell,cell);m.clearRect(0,0,cell,cell);
-                style.draw(g);
+                g.clearRect(0,0,64,64);m.clearRect(0,0,64,64);
                 // Type colors occupy the body; ownership stays on a thin rim.
-                if (!style.unit && !style.neutral) {
+                if (style.drawOwnerRim) {
+                    style.drawOwnerRim(g,'#fff');style.drawOwnerRim(m,'#fff');
+                } else if (!style.unit && !style.neutral) {
                     for (const ctx of [g,m]) {ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.strokeRect(4,4,56,56);}
                 }
-                upload(i*9+1,[style.neutral?1/.94:1.35,0,0,1]);
+                style.draw(g);
+                upload(i*stride+1,[style.neutral?1/.94:1.35,0,0,1]);
                 const panel=makeCanvas();panel.getContext('2d').drawImage(color,0,0);
+                panel._ownerMask=makeCanvas();panel._ownerMask.getContext('2d').drawImage(mask,0,0);
                 A.sources[i]=panel;
                 const modelPanel=document.createElement('canvas');modelPanel.width=modelPanel.height=FLAT_ATLAS_SIZE;
                 modelPanel.getContext('2d').drawImage(panel,0,0,FLAT_ATLAS_SIZE,FLAT_ATLAS_SIZE);
                 A.panels[i]=modelPanel;
             };
-            for (const name of ['color','mask']) {gl.bindTexture(gl.TEXTURE_2D,A[name]);gl.generateMipmap(gl.TEXTURE_2D);}
             for (const [name,width,height,data] of [['meta',grid,grid,A.metaData],['lookup',catalog.width,8,catalog.lookup]]) {
                 gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
                 gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
@@ -5823,83 +5867,160 @@
             return A;
         }
 
-        // Preparation runs from the first frame, including close views. One
-        // camera change must never synchronously bake every type and direction.
+        // Only menu/loading code advances preparation. Rendering is read-only.
+        async preloadColumnAtlas(A=this.prepareColumnAtlas(),onProgress=null) {
+            if(!A?.prepare)return;
+            if(!A.loading)A.loading=(async()=>{
+                let progressTime=0;
+                while(A.prepare) {
+                    this.advanceColumnAtlas(A);
+                    if(onProgress && performance.now()-progressTime>100) {
+                        onProgress(A.next/(A.catalog.styles.length*A.catalog.stride));progressTime=performance.now();
+                    }
+                    if(A.prepare)await new Promise(resolve=>setTimeout(resolve,0));
+                }
+            })();
+            await A.loading;
+            onProgress?.(1);
+        }
+
         advanceColumnAtlas(A) {
             if (!A.prepare) return;
             const gl=this.gl, start=performance.now();
             // (Only the types' panels are the models' (drawColumnModels): the
             // revision, which makes it pack its instances again, moves with
-            // those, not with every one of the eight directional pictures per
+            // those, not with every one of the directional pictures per
             // type baked after them: that was the whole set packed again on
             // every frame for the many seconds the baking takes.)
             const panelsBefore=Math.min(A.next,A.catalog.styles.length);
-            do { A.prepare(A.next++); } while(A.next<A.catalog.styles.length*9 && performance.now()-start<2);
-            for(const name of ['color','mask']) {gl.bindTexture(gl.TEXTURE_2D,A[name]);gl.generateMipmap(gl.TEXTURE_2D);}
+            const jobs=A.catalog.styles.length*(A.catalog.stride||9);
+            const before=A.next;
+            do { if(A.prepare(A.next)===false)break;A.next++; } while(A.next<jobs && performance.now()-start<1);
+            if(A.next===before)return;
             gl.bindTexture(gl.TEXTURE_2D,A.meta);
             gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
             gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,A.grid,A.grid,gl.RGBA,gl.FLOAT,A.metaData);
             gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
             if(Math.min(A.next,A.catalog.styles.length)!==panelsBefore) A.revision++;
-            if(A.next>=A.catalog.styles.length*9) {A.prepare=null;A.model=null;A.sources=null;}
+            if(A.next>=jobs) {A.prepare=null;A.model=null;A.sources=null;A.worker?.terminate();A.worker=null;}
         }
 
         // Bake the actual model's colored surfaces, equipment and panels once
         // per type/view. Hundreds of thousands of entities share these images.
-        bakeColumnModel(g,m,data,style,yaw,panel) {
-            const c=Math.cos(yaw),s=Math.sin(yaw),sp=Math.sin(.65),cp=Math.cos(.65);
+        bakeColumnModel(g,m,data,style,yaw,panel,pitch=.65) {
+            const c=Math.cos(yaw),s=Math.sin(yaw),sp=Math.sin(pitch),cp=Math.cos(pitch);
             const P=data.positions,N=data.normals,D=data.details,I=data.indices,U=data.uvs;
-            const vertices=[],faces=[];let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+            const sy=style.scaleY*(style.bakeHeight||1),sx=style.scaleX;
+            const vertices=[];let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
             for(let i=0;i<P.length;i+=3) {
-                const x=P[i]*style.scaleX,y=P[i+1]*style.scaleY,z=P[i+2]*style.scaleX;
+                const x=P[i]*sx,z=P[i+2]*sx;
+                let y=P[i+1]*sy;
+                if(D[i/3*4]===4 && N[i+1]>.5)y+=.02*(1-Math.min(1,sy));
                 const px=c*x-s*z,py=cp*y-sp*(s*x+c*z),depth=sp*y+cp*(s*x+c*z);
                 vertices.push([px,py,depth]);minX=Math.min(minX,px);maxX=Math.max(maxX,px);minY=Math.min(minY,py);maxY=Math.max(maxY,py);
             }
             const size=Math.max(maxX-minX,maxY-minY)*1.12,cx=(minX+maxX)/2,cy=(minY+maxY)/2,scale=64/size;
             for(const v of vertices) {v[0]=32+(v[0]-cx)*scale;v[1]=32-(v[1]-cy)*scale;}
-            for(let i=0;i<I.length;i+=3)faces.push([I[i],I[i+1],I[i+2],(vertices[I[i]][2]+vertices[I[i+1]][2]+vertices[I[i+2]][2])/3]);
-            faces.sort((a,b)=>a[3]-b[3]);g.clearRect(0,0,64,64);m.clearRect(0,0,64,64);
+            const color=g.createImageData(64,64),mask=m.createImageData(64,64),depths=new Float32Array(4096).fill(-Infinity);
             let tint=hexToRgb(style.color||'#aaa');const peak=Math.max(...tint,.01);tint=tint.map(v=>v*Math.max(1,.62/peak));
-            const palette={1:[.07,.08,.10],2:[1,1,1],3:[.48,.94,1],4:[.055,.065,.08],5:[.42,.29,.18],6:[.88,.86,.80],7:tint.map(v=>Math.min(1,v*1.3+.1)),8:[.96,.74,.24],9:[.88,.18,.2],10:[.44,.45,.49],11:[.24,.54,.22],12:[.035,.02,.06],13:[.8,.67,.36],14:[.19,.2,.23],15:[1,1,1]};
-            for(const face of faces) {
-                const [a,b,c]=face,points=[vertices[a],vertices[b],vertices[c]],surface=D[a*4]|0;
-                const diffuse=Math.max(0,(-.42*N[a*3]+.86*N[a*3+1]+.31*N[a*3+2])/Math.hypot(.42,.86,.31));
-                const step=(lo,hi,x)=>{x=Math.max(0,Math.min(1,(x-lo)/(hi-lo)));return x*x*(3-2*x);};
-                const glowing=[3,4,7,12,15].includes(surface);
-                const light=glowing?1:(.72+.28*(.42+.26*step(.195,.245,diffuse)+.32*step(.635,.685,diffuse)))*(style.unit?1:.86);
-                const rgb=(palette[surface]||tint).map(v=>Math.round(Math.min(1,v*light)*255));
-                for(const ctx of [g,m]) {ctx.beginPath();ctx.moveTo(points[0][0],points[0][1]);ctx.lineTo(points[1][0],points[1][1]);ctx.lineTo(points[2][0],points[2][1]);ctx.closePath();}
-                g.fillStyle=`rgb(${rgb.join(',')})`;g.strokeStyle=g.fillStyle;g.lineWidth=.4;g.fill();g.stroke();
-                if(!glowing && U) {
-                    // Match the full model's face borders, without outlining the
-                    // internal diagonal of every triangulated rectangular face.
-                    g.strokeStyle='rgba(6,9,14,.75)';g.lineWidth=style.unit?1.1:1.5;
-                    for(let e=0;e<3;e++) {
-                        const ia=face[e],ib=face[(e+1)%3];
-                        if((U[ia*2]===U[ib*2] && (U[ia*2]===0||U[ia*2]===1)) || (U[ia*2+1]===U[ib*2+1] && (U[ia*2+1]===0||U[ia*2+1]===1))) {
-                            g.beginPath();g.moveTo(vertices[ia][0],vertices[ia][1]);g.lineTo(vertices[ib][0],vertices[ib][1]);g.stroke();
+            const palette={2:[1,1,1],3:[.48,.94,1],4:[.055,.065,.08],5:[.42,.29,.18],6:[.88,.86,.80],7:tint.map(v=>Math.min(1,v*1.3+.1)),8:[.96,.74,.24],9:[.88,.18,.2],10:[.44,.45,.49],11:[.24,.54,.22],12:[.035,.02,.06],13:[.8,.67,.36],14:[.19,.2,.23],15:[1,1,1]};
+            const flying=proceduralKind(style)?.startsWith('bird');
+            palette[1]=(flying?[.76,.84,.92]:[.055,.065,.08]).map((v,i)=>v*(flying?.8:.88)+tint[i]*(flying?.2:.12));
+            const step=(lo,hi,x)=>{x=Math.max(0,Math.min(1,(x-lo)/(hi-lo)));return x*x*(3-2*x);};
+            const pixels=canvas=>{
+                if(!canvas)return null;
+                if(!canvas._lodPixels) {
+                    const copy=document.createElement('canvas');copy.width=copy.height=64;
+                    const ctx=copy.getContext('2d');ctx.drawImage(canvas,0,0,64,64);
+                    const levels=[ctx.getImageData(0,0,64,64).data];
+                    // Match WebGL's straight-alpha mipmaps, including the
+                    // dark background mixed into partially covered HUD texels.
+                    for(let width=64;width>1;width>>=1) {
+                        const prev=levels.at(-1),next=new Uint8ClampedArray(width*width);
+                        for(let y=0;y<width/2;y++)for(let x=0;x<width/2;x++)for(let k=0;k<4;k++) {
+                            const at=(y*2*width+x*2)*4+k;
+                            next[(y*width/2+x)*4+k]=(prev[at]+prev[at+4]+prev[at+width*4]+prev[at+width*4+4])/4;
                         }
+                        levels.push(next);
+                    }
+                    canvas._lodPixels=levels;
+                }
+                return canvas._lodPixels;
+            };
+            const top=pixels(panel),ownerPixels=pixels(panel?._ownerMask),sign=pixels(style.statusTextureCanvas);
+            const sample=(levels,u,v,lod,out)=>{
+                const lo=Math.max(0,Math.min(6,Math.floor(lod))),hi=Math.min(6,lo+1),blend=Math.max(0,Math.min(1,lod-lo));
+                out.fill(0);
+                for(const [level,weight] of [[lo,1-blend],[hi,blend]]) {
+                    const width=64>>level,data=levels[level],x=u*width-.5,y=(1-v)*width-.5,ix=Math.floor(x),iy=Math.floor(y),fx=x-ix,fy=y-iy;
+                    for(let dy=0;dy<2;dy++)for(let dx=0;dx<2;dx++) {
+                        const at=(Math.max(0,Math.min(width-1,iy+dy))*width+Math.max(0,Math.min(width-1,ix+dx)))*4;
+                        const w=weight*(dx?fx:1-fx)*(dy?fy:1-fy)/255;
+                        for(let k=0;k<4;k++)out[k]+=data[at+k]*w;
                     }
                 }
-                m.fillStyle=surface===2||surface===15?'#fff':'#000';m.strokeStyle=m.fillStyle;m.lineWidth=.4;m.fill();m.stroke();
-                if(surface===4 && U) {
-                    const u0=U[a*2]*64,v0=(1-U[a*2+1])*64,u1=U[b*2]*64,v1=(1-U[b*2+1])*64,u2=U[c*2]*64,v2=(1-U[c*2+1])*64;
-                    const det=(u1-u0)*(v2-v0)-(u2-u0)*(v1-v0);
-                    if(Math.abs(det)>.001) {
-                        const [p0,p1,p2]=points;
-                        const ax=((p1[0]-p0[0])*(v2-v0)-(p2[0]-p0[0])*(v1-v0))/det;
-                        const ay=((p1[1]-p0[1])*(v2-v0)-(p2[1]-p0[1])*(v1-v0))/det;
-                        const bx=((p2[0]-p0[0])*(u1-u0)-(p1[0]-p0[0])*(u2-u0))/det;
-                        const by=((p2[1]-p0[1])*(u1-u0)-(p1[1]-p0[1])*(u2-u0))/det;
-                        g.save();g.beginPath();g.moveTo(p0[0],p0[1]);g.lineTo(p1[0],p1[1]);g.lineTo(p2[0],p2[1]);g.closePath();g.clip();g.transform(ax,ay,bx,by,p0[0]-ax*u0-bx*v0,p0[1]-ay*u0-by*v0);g.drawImage(panel,0,0);g.restore();
+            };
+            const texel=new Float32Array(4),ownerTexel=new Float32Array(4);
+            // Depth-test each texel, just like the live model. Average-depth
+            // triangle sorting painted bright roofs over intersecting details.
+            for(let i=0;i<I.length;i+=3) {
+                const a=I[i],b=I[i+1],d=I[i+2],p=vertices[a],q=vertices[b],r=vertices[d],surface=D[a*4]|0;
+                const det=(q[0]-p[0])*(r[1]-p[1])-(q[1]-p[1])*(r[0]-p[0]);
+                if(Math.abs(det)<1e-7)continue;
+                const u0=U[a*2],v0=U[a*2+1],du1=U[b*2]-u0,dv1=U[b*2+1]-v0,du2=U[d*2]-u0,dv2=U[d*2+1]-v0;
+                const ux=(du1*(r[1]-p[1])-du2*(q[1]-p[1]))/det,uy=(du2*(q[0]-p[0])-du1*(r[0]-p[0]))/det;
+                const vx=(dv1*(r[1]-p[1])-dv2*(q[1]-p[1]))/det,vy=(dv2*(q[0]-p[0])-dv1*(r[0]-p[0]))/det;
+                const fu=Math.max(1e-5,Math.abs(ux)+Math.abs(uy)),fv=Math.max(1e-5,Math.abs(vx)+Math.abs(vy));
+                const nx=N[a*3]/sx,ny=N[a*3+1]/sy,nz=N[a*3+2]/sx;
+                const diffuse=Math.max(0,(-.42*nx+.86*ny+.31*nz)/(Math.hypot(nx,ny,nz)*Math.hypot(.42,.86,.31)));
+                const glowing=surface===3||surface===4||surface===7||surface===12||surface===15;
+                const light=glowing?1:(.72+.28*(.42+.26*step(.195,.245,diffuse)+.32*step(.635,.685,diffuse)))*(style.unit?1:.86);
+                const base=palette[surface]||tint,texture=surface===4?top:surface===15?sign:null;
+                // Miniatures normally replace meshes around 16–32px wide.
+                // Supersampling geometry must not make their panels sharper
+                // and brighter than the live model's filtered panels.
+                const textureLod=Math.max(0,Math.log2(64*Math.max(Math.hypot(ux,vx),Math.hypot(uy,vy))*2));
+                for(let y=Math.max(0,Math.floor(Math.min(p[1],q[1],r[1])));y<Math.min(64,Math.ceil(Math.max(p[1],q[1],r[1])));y++)
+                for(let x=Math.max(0,Math.floor(Math.min(p[0],q[0],r[0])));x<Math.min(64,Math.ceil(Math.max(p[0],q[0],r[0])));x++) {
+                    const dx=x+.5-p[0],dy=y+.5-p[1],baryB=(dx*(r[1]-p[1])-dy*(r[0]-p[0]))/det,baryC=((q[0]-p[0])*dy-(q[1]-p[1])*dx)/det;
+                    if(baryB<0||baryC<0||baryB+baryC>1)continue;
+                    const at=y*64+x,z=p[2]+baryB*(q[2]-p[2])+baryC*(r[2]-p[2]);
+                    if(z<depths[at])continue;
+                    const u=u0+ux*dx+uy*dy,v=v0+vx*dx+vy*dy;
+                    if(texture)sample(texture,u,v,textureLod,texel);
+                    const alpha=texture?texel[3]:0;
+                    if(surface===4&&texture&&alpha<.1)continue;
+                    let owner=surface===2||surface===15?1:0;
+                    if(texture) {
+                        if(surface===4&&ownerPixels)sample(ownerPixels,u,v,textureLod,ownerTexel);
+                        owner=surface===4?(ownerPixels?ownerTexel[0]:0):1-alpha;
                     }
+                    const ink=glowing?0:(1-step((style.unit?.75:.55)-.5,(style.unit?.75:.55)+.5,Math.min(Math.min(u,1-u)/fu,Math.min(v,1-v)/fv)))*(1-step(.12,.40,Math.max(fu,fv)))*.65;
+                    for(let k=0;k<3;k++) {
+                        const value=texture?base[k]*(1-alpha)+texel[k]*alpha:base[k];
+                        let shaded=value*light*(1-ink)+[.025,.035,.055][k]*ink;
+                        if(surface===4||surface===15)shaded*=.94;
+                        color.data[at*4+k]=Math.round(shaded*255);mask.data[at*4+k]=Math.round(owner*255);
+                    }
+                    color.data[at*4+3]=mask.data[at*4+3]=255;depths[at]=z;
                 }
             }
+            g.putImageData(color,0,0);m.putImageData(mask,0,0);
             return [size,cx,cy,1];
         }
 
         columnPixelScale(flat2d, visibleWidthTiles, viewportWidth) {
             return flat2d ? this.sceneTargetSize.width / (visibleWidthTiles * (this.cssWidth / viewportWidth)) : this.lodProjectionScale * this.pixelRatio;
+        }
+        columnModelPanel(A, index, ownerColor) {
+            const style=A.catalog.styles[index];
+            if(!style.drawOwnerRim)return A.panels[index];
+            const cache=A.ownerPanels || (A.ownerPanels=new Map()),key=index+'|'+ownerColor;
+            if(cache.has(key))return cache.get(key);
+            const panel=document.createElement('canvas');panel.width=panel.height=FLAT_ATLAS_SIZE;
+            const g=panel.getContext('2d');g.scale(FLAT_ATLAS_SIZE/64,FLAT_ATLAS_SIZE/64);
+            g.__drawImagesImmediately=true;g.imageSmoothingEnabled=false;
+            style.drawOwnerRim(g,ownerColor);style.draw(g);cache.set(key,panel);return panel;
         }
         // Readable middle-distance bodies share models and type panels. Only
         // visible slots are packed; interpolation and every articulated pose
@@ -5936,11 +6057,16 @@
                         const size=kind?Math.max(.28,Math.min(.9,F.r[s]*2.2/C.tile)):.94;
                         scores[i]=_detailScore(x,z,size,false,!!previous?.[s],8);
                     }
-                    const picked=_detailPick(scores,kind?4000:1200);
+                    // Only projected size determines the mesh-to-image switch.
+                    // A population budget drew equally readable neighbours with
+                    // different projection and materials, creating moving bands.
+                    // These are shared instanced meshes with no scene objects.
+                    const picked=[];
+                    for(let i=0;i<scores.length;i++)if(scores[i]>0)picked.push(i);
                     for(const i of picked) {
                         const s=candidates[i],row=kind?7:F.kind[s],code=kind?F.type[s]:row===4||row===5?(F.amount[s]>0?0:1):row===1?F.utype[s]:F.type[s];
                         if(code<0||code>=A.catalog.width)continue;
-                        const base=A.catalog.lookup[(row*A.catalog.width+code)*4],styleIndex=(base-1)/9,style=A.catalog.styles[styleIndex];
+                        const base=A.catalog.lookup[(row*A.catalog.width+code)*4],styleIndex=(base-1)/(A.catalog.stride||9),style=A.catalog.styles[styleIndex];
                         if(!style || !A.panels[styleIndex])continue;
                         // (Per style, once: this ran for every instance.)
                         const figure=style._lodFigure!==undefined?style._lodFigure:(style._lodFigure=proceduralKind(style)||null);if(!figure)continue;
@@ -5948,7 +6074,7 @@
                         const x=F.x[s]/C.tile,z=F.y[s]/C.tile,sx=size*style.scaleX;
                         let sy=size*style.scaleY;
                         if(kind&&!style.mounted)sy=Math.max(.48*style.scaleX,sy);
-                        const preserve=style.isFlying||style.mounted||figure==='portal';
+                        const preserve=style.preserveModelHeight||style.isFlying||style.mounted||figure==='portal';
                         if(!preserve&&F.vision[s]>0)sy*=Math.max(.18,F.vision[s]*AREA_UNIT_TILE_EQUIVALENT/5);
                         // Match the low deck used when a unit occupies a tower.
                         if(!kind&&(row===0&&figure!=='portal'||row===3&&!figure.startsWith('farm'))
@@ -5959,11 +6085,14 @@
                         // with the scene's other see-through things, after the
                         // solid ones: drawColumnModelGhosts.)
                         const ghost=!kind&&(F.flags[s]&1)!==0;
-                        const mode=kind?F.mode[s]:0,meshKind=figure+':lod',groupKey=(styleIndex*64+(mode&31))*2+(ghost?1:0);
+                        // Middle bodies are smaller than the close layer, which
+                        // already uses lod2 below 40px. Spending more geometry
+                        // here made dense, tilted views needlessly expensive.
+                        const mode=kind?F.mode[s]:0,meshKind=figure+':lod2',groupKey=(styleIndex*64+(mode&31))*2+(ghost?1:0);
                         let G=S.groups.get(groupKey);
                         if(!G) {
                             const sample={modelKey:style.modelKey,isFlying:style.isFlying,animationMode:mode};
-                            G={styleIndex,sample,kind:meshKind,mesh:this.getFigureMesh(meshKind),storage:new PersistentInstances(INSTANCE_STRIDE),ghost};
+                            G={styleIndex,sample,panels:new Set(),kind:meshKind,mesh:this.getFigureMesh(meshKind),storage:new PersistentInstances(INSTANCE_STRIDE),ghost};
                             S.groups.set(groupKey,G);
                         }
                         const L=G.storage;L.reserve(L.count+1);const d=L.data,o=L.count++*INSTANCE_STRIDE;
@@ -5979,7 +6108,8 @@
                         d[o+20]=kind?F.amount[s]:0;d[o+21]=kind?F.phase[s]:0;
                         d[o+22]=tint[0];d[o+23]=tint[1];d[o+24]=tint[2];
                         d[o+25]=F.flags[s]&65536?-1.14:C.fullVisibility||(kind&&F.owner[s]===C.player)?1:Math.min(1,C.visibility[Math.floor(z)][Math.floor(x)]/C.lightNorm);
-                        d[o+26]=atlas.layerFor(A.panels[styleIndex]);d[o+27]=-1;
+                        const panel=this.columnModelPanel(A,styleIndex,C.colors[Math.max(0,Math.min(8,F.owner[s]+1))]);G.panels.add(panel);
+                        d[o+26]=atlas.layerFor(panel);d[o+27]=style.statusTextureCanvas?atlas.layerFor(style.statusTextureCanvas):-1;
                         mask[s]=255;S.count++;
                     }
                 }
@@ -5990,7 +6120,8 @@
             S.alpha=C.alpha;
             for(const G of S.groups.values())if(G.storage.count) {
                 // Pin the shared panel even on camera-only frames.
-                atlas.layerFor(A.panels[G.styleIndex]);
+                for(const panel of G.panels)atlas.layerFor(panel);
+                if(A.catalog.styles[G.styleIndex].statusTextureCanvas) atlas.layerFor(A.catalog.styles[G.styleIndex].statusTextureCanvas);
                 if(G.ghost)continue;
                 const buffer=G.storage.upload(gl);
                 this.drawTexturedInstanceRange({first:0,count:G.storage.count,sample:G.sample,kind:G.kind,mesh:G.mesh,statusAtlas:atlas,buffer},null,null,atlas);
@@ -6008,7 +6139,8 @@
             this.layerAlpha=S.alpha;this.layerFlyTime=this.animationTime;
             gl.enable(gl.DEPTH_TEST);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(false);
             for(const G of S.groups.values())if(G.ghost&&G.storage.count) {
-                atlas.layerFor(S.atlas.panels[G.styleIndex]);
+                for(const panel of G.panels)atlas.layerFor(panel);
+                if(S.atlas.catalog.styles[G.styleIndex].statusTextureCanvas) atlas.layerFor(S.atlas.catalog.styles[G.styleIndex].statusTextureCanvas);
                 const buffer=G.storage.upload(gl);
                 this.drawTexturedInstanceRange({first:0,count:G.storage.count,sample:G.sample,kind:G.kind,mesh:G.mesh,statusAtlas:atlas,buffer},null,null,atlas);
             }
@@ -6046,11 +6178,17 @@
                     uniform vec3 uColors[9];
                     uniform sampler2D uVisibility;
                     uniform sampler2D uStyles, uMeta;
-                    uniform float uAtlasGrid, uStyleWidth, uYaw, uPointMax, uHeightScale;
+                    uniform float uAtlasGrid, uStyleWidth, uYaw, uPitch, uPointMax, uHeightScale;
                     uniform vec2 uViewport;
+                    uniform vec3 uEye;
                     out vec4 vColor;
                     out float vCoverage;
                     flat out float vLayer;
+                    flat out float vLayerNext;
+                    flat out float vPitchBlend;
+                    flat out vec3 vViewMeta, vNextViewMeta, vFrameMeta;
+                    flat out vec2 vViewRotation;
+                    flat out float vGroundTile;
                     out float vLod, vDotScale, vLight;
                     out float vModelBlend;
                     flat out vec2 vSpriteCenter;
@@ -6063,6 +6201,7 @@
                         vec2 current = vec2(aX,aZ) / uTile;
                         vec2 p = uStructure != 0 ? current : mix(vec2(aPX,aPZ) / uTile,current,uAlpha);
                         vGround = vec3(p.x,.02,p.y);
+                        vGroundTile=0.;
                         vMotion = vec2(mod(aAlive*2.399,6.2831853),uStructure == 0 ? min(1.,length(vec2(aX-aPX,aZ-aPZ))/.8) : 0.);
                         int flags = int(aFlags);
                         bool alive = uStructure != 0 ? aAlive > 0. : aAlive >= 0. && (flags & 1024) == 0;
@@ -6096,20 +6235,58 @@
                         vec4 style = texelFetch(uStyles,ivec2(clamp(code,0,int(uStyleWidth)-1),row),0);
                         float base = style.r;
                         float facing = uStructure == 0 ? aFacing : aKind == 0. ? 1.5707963-aFacing : 0.;
-                        float direction = mod(floor(mod(uYaw-facing+12.5663706,6.2831853)/.78539816+.5),8.);
-                        vLayer = base + (uFlat > .5 ? 0. : 1.+direction);
+                        // A distant row is seen at a lower angle than the
+                        // camera target. Match each miniature to its own ray.
+                        vec3 eyeRay=uEye-vec3(p.x,.02,p.y);
+                        // One camera basis for the entire frame. Per-object
+                        // azimuth/elevation divided overhead views into eight
+                        // bright/dark wedges and a different central circle.
+                        float viewYaw=uYaw;
+                        float viewPitch=uPitch;
+                        float direction = mod(floor(mod(viewYaw-facing+12.5663706,6.2831853)/.39269908+.5),16.);
+                        float elevation = viewPitch < .35 ? (viewPitch-.08)/.27 : viewPitch < .65 ? 1.+(viewPitch-.35)/.30 : viewPitch < 1.05 ? 2.+(viewPitch-.65)/.40 : 3.+(viewPitch-1.05)/.52079633;
+                        elevation=clamp(elevation,0.,4.);
+                        float lower = floor(elevation), upper = min(4.,lower+1.);
+                        vPitchBlend = uFlat > .5 ? 0. : fract(elevation);
+                        vLayer = base + (uFlat > .5 ? 0. : 1.+direction+lower*16.);
+                        vLayerNext = base + (uFlat > .5 ? 0. : 1.+direction+upper*16.);
                         vec4 meta = texelFetch(uMeta,ivec2(mod(vLayer,uAtlasGrid),floor(vLayer/uAtlasGrid)),0);
+                        vec4 nextMeta = texelFetch(uMeta,ivec2(mod(vLayerNext,uAtlasGrid),floor(vLayerNext/uAtlasGrid)),0);
+                        if(nextMeta.w < .5) {vLayerNext=vLayer;vPitchBlend=0.;}
+                        else if(meta.w < .5) {vLayer=vLayerNext;meta=nextMeta;vPitchBlend=0.;}
                         if(meta.w < .5) {
-                            vLayer = base;
+                            vLayer = base;vLayerNext=base;vPitchBlend=0.;
                             meta = texelFetch(uMeta,ivec2(mod(vLayer,uAtlasGrid),floor(vLayer/uAtlasGrid)),0);
                         }
+                        vViewMeta=meta.xyz;vNextViewMeta=vPitchBlend>0.?nextMeta.xyz:meta.xyz;
+                        if(vPitchBlend>0.) {
+                            vec2 center=mix(meta.yz,nextMeta.yz,vPitchBlend);
+                            // Both views keep their own scale and ground anchor.
+                            // Blending normalized squares made roofs grow/shrink.
+                            vec2 a=abs(meta.yz-center),b=abs(nextMeta.yz-center);
+                            meta=vec4(max(meta.x+2.*max(a.x,a.y),nextMeta.x+2.*max(b.x,b.y)),center,1.);
+                        }
+                        vFrameMeta=meta.xyz;
+                        float yawDelta=mod(viewYaw-facing-direction*.39269908+9.42477796,6.2831853)-3.14159265;
+                        // A local view has a different screen roll, especially
+                        // overhead. Align its right axis to the camera's basis;
+                        // then compensate the quantized yaw within that view.
+                        float roll=atan(sin(uYaw-viewYaw)*sin(uPitch),cos(uYaw-viewYaw));
+                        float rotation=uFlat>.5?0.:roll+yawDelta*sin(viewPitch);
+                        vViewRotation=vec2(cos(rotation),sin(rotation));
+                        meta.yz=vec2(vViewRotation.x*meta.y+vViewRotation.y*meta.z,-vViewRotation.y*meta.y+vViewRotation.x*meta.z);
+                        meta.x*=abs(vViewRotation.x)+abs(vViewRotation.y);
+                        vFrameMeta=meta.xyz;
                         // All types at the same depth keep their type image.
                         // A small body must not turn into an owner-colour dot
                         // before a larger neighbour further from the camera.
-                        vLod = base > 0. && meta.w > .5 ? smoothstep(2.,8.,tilePixels / uPixelRatio) : 0.;
+                        vLod = base > 0. && meta.w > .5 ? smoothstep(1.25,6.,tilePixels / uPixelRatio) : 0.;
                         float extent = mix(1.,meta.x,vLod);
                         float height = style.g > .5 || aVision <= 0. ? 1. : max(.18,aVision*uHeightScale);
-                        if (uStructure == 0 && style.b < .5) height *= max(1.,.48/(size*1.45));
+                        if (uStructure == 0 && style.b >= 0.) height *= max(1.,.48/(size*1.45));
+                        // Vision is already baked into the model, not into its
+                        // ground footprint. Only upgrades need a residual stretch.
+                        height /= max(abs(style.b),.001);
                         height = uFlat > .5 ? 1. : mix(1.,height,vLod);
                         // A three-pixel filtered footprint covers subpixel
                         // motion without a one-pixel hole opening between
@@ -6133,6 +6310,13 @@
                         // after the emblem becomes too small to resolve.
                         if(uStructure != 0 && aKind == 4.) vColor.rgb=aResource>0.?vec3(1.,.867,0.):vec3(.17,.158,0.);
                         if(uStructure != 0 && aKind == 5.) vColor.rgb=vec3(aResource>0.?.541:.333);
+                        if(uFlat<.5 && vLod>.99 && uStructure!=0 && (aKind==4. || aKind==5.)) {
+                            // Resource slabs lie on the grid. A camera-facing
+                            // square cannot preserve their perspective/tilt.
+                            vGroundTile=1.;vLayer=base;vGround.y=.1215;
+                            gl_Position=uViewProjection*vec4(vGround,1.);
+                            gl_PointSize=min(uPointMax,ceil(tilePixels*1.7+4.));
+                        }
                     }`, `#version 300 es
                     precision highp float;
                     precision highp int;
@@ -6140,6 +6324,11 @@
                     in vec4 vColor;
                     in float vCoverage;
                     flat in float vLayer;
+                    flat in float vLayerNext;
+                    flat in float vPitchBlend;
+                    flat in vec3 vViewMeta, vNextViewMeta, vFrameMeta;
+                    flat in vec2 vViewRotation;
+                    flat in float vGroundTile;
                     in float vLod, vDotScale, vLight;
                     in float vModelBlend;
                     flat in vec2 vSpriteCenter;
@@ -6149,12 +6338,39 @@
                     flat in vec4 vWorldSprite;
                     flat in vec2 vMotion;
                     uniform mat4 uViewProjection;
+                    uniform mat4 uInverseViewProjection;
+                    uniform vec2 uViewport;
                     uniform float uYaw, uPitch, uTime;
                     uniform sampler2D uSprites, uOwnerMask;
                     uniform float uAtlasGrid, uFlat, uCoverageFade;
                     out vec4 color;
+                    vec4 sampleView(float layer, vec2 coord, vec2 dx, vec2 dy) {
+                        vec2 cell=vec2(mod(layer,uAtlasGrid),floor(layer/uAtlasGrid));
+                        vec2 uv=(cell+clamp(coord,vec2(.5/32.),vec2(31.5/32.)))/uAtlasGrid;
+                        vec4 texel=textureGrad(uSprites,uv,dx,dy);
+                        vec3 owner=clamp(textureGrad(uOwnerMask,uv,dx,dy).rgb/max(texel.a,.001),0.,1.);
+                        texel.rgb *= mix(vec3(1.),vColor.rgb,owner);
+                        return texel;
+                    }
                     void main() {
                         if (vColor.a <= 0.) discard;
+                        if(vGroundTile>.5) {
+                            vec2 ndc=gl_FragCoord.xy/uViewport*2.-1.;
+                            vec4 nearPoint=uInverseViewProjection*vec4(ndc,-1.,1.);
+                            vec4 farPoint=uInverseViewProjection*vec4(ndc,1.,1.);
+                            vec3 origin=nearPoint.xyz/nearPoint.w,ray=farPoint.xyz/farPoint.w-origin;
+                            float distance=(vGround.y-origin.y)/ray.y;
+                            vec3 world=origin+ray*distance;
+                            vec2 uv=(world.xz-vGround.xz)/.882+.5;
+                            if(any(lessThan(uv,vec2(0.)))||any(greaterThan(uv,vec2(1.))))discard;
+                            vec2 cell=vec2(mod(vLayer,uAtlasGrid),floor(vLayer/uAtlasGrid));
+                            vec4 texel=texture(uSprites,(cell+uv)/uAtlasGrid);
+                            if(texel.a<.1)discard;
+                            vec4 clip=uViewProjection*vec4(world,1.);
+                            gl_FragDepth=clip.z/clip.w*.5+.5;
+                            color=vec4(texel.rgb/max(texel.a,.001)*.94*vLight,texel.a*vColor.a);
+                            return;
+                        }
                         // Point rasterization rounds size to whole pixels. UVs
                         // anchored to the unrounded centre/extent stay stable
                         // during subpixel camera movement and continuous zoom.
@@ -6184,12 +6400,23 @@
                         float dotAlpha = (1.-smoothstep(1.-feather*.5,1.+feather*.5,edge))*vCoverage;
                         vec4 sprite = vec4(vColor.rgb,dotAlpha);
                         if (vLod > 0.) {
-                            vec2 cell = vec2(mod(vLayer,uAtlasGrid),floor(vLayer/uAtlasGrid));
-                            vec2 uv = (cell + clamp(coord,vec2(.5/64.),vec2(63.5/64.))) / uAtlasGrid;
-                            vec4 texel = texture(uSprites,uv);
+                            // Analytic gradients keep the mip level independent
+                            // of which fragments survived the point-edge discard.
+                            // Implicit derivatives there can change as a tiny
+                            // sprite crosses pixel quads, even at constant zoom.
+                            vec2 dx = vec2(1. / (vSpriteExtent.x*uAtlasGrid),0.);
+                            vec2 dy = vec2(0.,1. / (vSpriteExtent.y*uAtlasGrid));
+                            vec2 viewPoint=(coord-.5)*vec2(1.,-1.)*vFrameMeta.x+vFrameMeta.yz;
+                            viewPoint=vec2(vViewRotation.x*viewPoint.x-vViewRotation.y*viewPoint.y,vViewRotation.y*viewPoint.x+vViewRotation.x*viewPoint.y);
+                            vec2 viewCoord=(viewPoint-vViewMeta.yz)*vec2(1.,-1.)/max(vViewMeta.x,.001)+.5;
+                            float viewScale=vFrameMeta.x/max(vViewMeta.x,.001);
+                            vec4 texel = sampleView(vLayer,viewCoord,dx*viewScale,dy*viewScale);
+                            if(vPitchBlend > 0.) {
+                                vec2 nextCoord=(viewPoint-vNextViewMeta.yz)*vec2(1.,-1.)/vNextViewMeta.x+.5;
+                                float nextScale=vFrameMeta.x/vNextViewMeta.x;
+                                texel=mix(texel,sampleView(vLayerNext,nextCoord,dx*nextScale,dy*nextScale),vPitchBlend);
+                            }
                             texel.rgb /= max(texel.a,.001);
-                            float owner = texture(uOwnerMask,uv).r;
-                            texel.rgb *= mix(vec3(1.),vColor.rgb,owner);
                             if (uStructure == 0 && uFlat > .5) {
                                 float ring = 1.-smoothstep(.025,.025+fwidth(edge),abs(length(p)-.83));
                                 texel = vec4(mix(vColor.rgb,texel.rgb,texel.a),max(texel.a,ring*.85));
@@ -6207,7 +6434,7 @@
                         color = vec4(sprite.rgb*vLight,sprite.a*vColor.a);
                     }`);
                 this.columnUniforms = {};
-                for (const n of ['ViewProjection','Alpha','Tile','Scale','PixelRatio','Flat','LightNorm','Structure','Full','Player','Colors','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','OwnerMask','AtlasGrid','StyleWidth','Yaw','Pitch','Time','HeightScale','PointMax','Viewport','CoverageFade']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
+                for (const n of ['ViewProjection','InverseViewProjection','Alpha','Tile','Scale','PixelRatio','Flat','LightNorm','Structure','Full','Player','Colors','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','OwnerMask','AtlasGrid','StyleWidth','Yaw','Pitch','Time','HeightScale','PointMax','Viewport','Eye','CoverageFade']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
                 this.columnStores = [{},{}];
                 this.columnVisibilityTexture = createTexture(gl);
             }
@@ -6247,7 +6474,9 @@
             if (!this.columnPointMax) this.columnPointMax = Math.min(256,gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)?.[1]||256);
             gl.uniform1f(U.PointMax,this.columnPointMax);
             gl.uniform2f(U.Viewport,this.sceneTargetSize.width,this.sceneTargetSize.height);
+            gl.uniform3fv(U.Eye,this.lodEye||[0,1,0]);
             gl.uniformMatrix4fv(U.ViewProjection,false,this.tmpViewProjection);
+            gl.uniformMatrix4fv(U.InverseViewProjection,false,this.tmpInverseViewProjection);
             gl.uniform1f(U.Alpha,C.alpha);gl.uniform1f(U.Tile,C.tile);
             gl.uniform1f(U.LightNorm,Math.max(.001,C.lightNorm));
             gl.uniform1f(U.Flat,snapshot.flat2d?1:0);
@@ -6740,5 +6969,7 @@
     Defence3Renderer3D.FX_MESH = { BOX: FX_MESH_BOX, ORB: FX_MESH_ORB, SPIKE: FX_MESH_SPIKE, DECAL: FX_MESH_DECAL };
     Defence3Renderer3D.FX_PATTERN = FX_PATTERN;
     Defence3Renderer3D.workshopMiniature = workshopMiniature;
+    Defence3Renderer3D.columnBakeData = style => {const kind=proceduralKind(style);return kind?createFigureData(kind,0):null;};
+    Defence3Renderer3D.columnView = (stride,direction) => stride===81 ? [(direction%16)*Math.PI/8,[.08,.35,.65,1.05,Math.PI/2][Math.floor(direction/16)]] : [(direction%8)*Math.PI/4,stride===33?[.1,.4,.8,1.5][Math.floor(direction/8)]:.65];
     window.Defence3Renderer3D = Defence3Renderer3D;
 })();

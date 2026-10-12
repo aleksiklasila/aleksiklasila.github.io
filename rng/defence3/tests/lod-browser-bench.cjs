@@ -18,7 +18,7 @@ let browser;
     browser = await chromium.launch({channel:'msedge', headless:true, args:['--disable-background-timer-throttling','--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows']});
     const page = await browser.newPage({viewport:{width:Number(process.env.LOD_WIDTH)||1280,height:Number(process.env.LOD_HEIGHT)||800}}), errors=[];
     page.on('pageerror', e => { errors.push(e.message); console.error('PAGE ERROR',e.message); });
-    page.on('console',m=>{if(m.type()==='error' && /render|ReferenceError|TypeError|INVALID_OPERATION/i.test(m.text())) errors.push(m.text().slice(0,500));});
+    page.on('console',m=>{if(m.type()==='error' && /render|ReferenceError|TypeError|INVALID_OPERATION|GL pass/i.test(m.text())) {errors.push(m.text().slice(0,500));if(process.env.LOD_DEBUG_GL)console.error(m.text());}});
     await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);
     console.log('LOADED');
     const fixture = process.argv[2] || '200000-1000.json', tag = process.env.LOD_TAG || 'current';
@@ -42,9 +42,17 @@ let browser;
     }, {fixture,million:!!process.env.LOD_MILLION,population:Number(process.env.LOD_POP_PER_TEAM)||0,mapSize:Number(process.env.LOD_MAP_SIZE)||0});
     console.log('STARTED');
     await page.waitForFunction(()=>simClientStats().appliedTick>=10, {}, {timeout:240000});
-    const setup=await page.evaluate(()=>{
+    const setup=await page.evaluate(debugGl=>{
         setRenderDimensionMode('3d');
         const R=renderer3dInstance, gl=R.gl, ext=gl.getExtension('WEBGL_debug_renderer_info');
+        // The benchmark owns the timer; nesting the renderer's query causes
+        // INVALID_OPERATION and invalidates both measurements.
+        R.gpuTimerBegin=R.gpuTimerEnd=()=>{};
+        if (debugGl) for (const name of ['drawBackground','drawFrameColumns','drawColumnModels','drawFlatBatch','drawUnitLayer','renderShadowMap','drawFx','resolveScene','presentSceneToCanvas']) {
+            const fn=R[name];if(!fn)continue;
+            R[name]=function(...args){const prior=gl.getError(),result=fn.apply(this,args),error=gl.getError();
+                if(prior||error)console.error('GL pass '+name+' prior='+prior+' error='+error);return result;};
+        }
         const build=build3DFrameData;
         window.build3DFrameData=function(...args){const t=performance.now(), s=build(...args); window.__lodLast=s; window.__lodBuild.push(performance.now()-t); return s;};
         window.__lodBuild=[];
@@ -67,7 +75,7 @@ let browser;
             if(q){gl.endQuery(timer.TIME_ELAPSED_EXT);pending.push(q);}return result;
         };
         return {units:units.length,structures:_pageTables.s.n,map:GRID_W,viewport:{width:viewW,height:viewH},gpu:ext?gl.getParameter(ext.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER),graphics:graphicsOptions};
-    });
+    },!!process.env.LOD_DEBUG_GL);
     console.log('SETUP',JSON.stringify(setup));
     if(process.env.LOD_ARMY_MOVE) {
         console.log('MOVE',await page.evaluate(()=>simClientRequest('debugEval',{expr:`(() => {
@@ -102,6 +110,8 @@ let browser;
     if(process.env.LOD_CASE) cases.splice(0,cases.length,...cases.filter(c=>c.zoom===Number(process.env.LOD_CASE)));
     if(process.env.LOD_ZOOM) cases.splice(0,cases.length,...['2d','3d'].flatMap(mode=>['msaa','off'].map(aa=>
         ({mode,aa,zoom:1.5,pitch:.55,yaw:0,motion:true,zoomMotion:true}))));
+    if(process.env.LOD_POLISH) cases.splice(0,cases.length,...['2d','3d'].flatMap(mode=>
+        [false,true].map(motion=>({mode,zoom:3,pitch:.38,yaw:0,motion}))));
     const results=[];
     for (const c of cases) {
         await page.evaluate(c=>{
@@ -121,7 +131,7 @@ let browser;
             await new Promise(resolve=>{const frame=now=>{gaps.push(now-last);last=now;
                 if(c.motion){if(c.mode==='3d')renderer3dInstance.orbitYaw=c.yaw+(now-start)*.0004;else camera.x+=.5;}
                 if(c.zoomMotion)camera.zoom=c.zoom*(1+.45*Math.sin((now-start)*.004));
-                if(now-start<2200)requestAnimationFrame(frame);else resolve();};requestAnimationFrame(frame);});
+                if(now-start<c.duration)requestAnimationFrame(frame);else resolve();};requestAnimationFrame(frame);});
             const s=window.__lodLast, R=renderer3dInstance, slots=s.scaleLayers||typeof _detailSlots==='undefined'?[]:_detailSlots;
             const visible=slots.filter(slot=>{const F=simClientCurrentUnitVis(),p=R.projectWorldToScreenDetailed(F.x[slot]/TILE,0,F.y[slot]/TILE);return p&&p.x>=0&&p.y>=0&&p.x<viewW&&p.y<viewH&&p.ndcZ>=-1&&p.ndcZ<=1;}).length;
             gaps.sort((a,b)=>a-b);const build=window.__lodBuild;
@@ -140,11 +150,36 @@ let browser;
                 units:units.length,moving:simClientCurrentUnitVis()?.renderMovingCount||0,mediumModels:R.columnModels?.count||0,
                 nativeRebase:typeof _simRebaseNative!=='undefined'&&!!_simRebaseNative,
                 tps:_tpsDisplay,unitLayerStats:renderer3dUnitLayerStats};
-        },c);
+        },{...c,duration:Number(process.env.LOD_DURATION)||2200});
+        if(process.env.LOD_POLISH && !c.motion) result.sampling = await page.evaluate(()=>{
+            const R=renderer3dInstance,gl=R.gl,s=window.__lodLast,base=s.camera.centerX;
+            const now=performance.now.bind(performance),time=now(),rows=[];
+            // Render the SAME simulation snapshot at fractional pixel offsets:
+            // no movement, light changes or animation may hide sampling flicker.
+            performance.now=()=>time;
+            try {
+                for(const phase of [0,.25,.5,.75,0]) {
+                    s.camera.centerX=base+phase/(camera.zoom*TILE);
+                    R.render(s);
+                    const w=R.sceneTargetSize.width,h=R.sceneTargetSize.height,p=new Uint8Array(w*h*4);
+                    gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.readPixels(0,0,w,h,gl.RGBA,gl.UNSIGNED_BYTE,p);
+                    let sum=0,sum2=0;for(let i=0;i<p.length;i+=4){const l=.2126*p[i]+.7152*p[i+1]+.0722*p[i+2];sum+=l;sum2+=l*l;}
+                    rows.push({phase,mean:sum/(w*h),rms:Math.sqrt(sum2/(w*h))});
+                }
+            } finally {performance.now=now;s.camera.centerX=base;}
+            return rows;
+        });
         results.push({...c,...result});console.log(JSON.stringify(results[results.length-1]));
         if(result.glError) errors.push(`WebGL error ${result.glError} in ${JSON.stringify(c)}`);
+        if(result.sampling) {
+            const means=result.sampling.map(s=>s.mean),mean=means[0];
+            if(Math.max(...means)-Math.min(...means)>Math.max(1,mean)*.01)
+                errors.push(`Subpixel brightness varies by over 1% in ${c.mode}`);
+            if(Math.abs(mean-means[means.length-1])>.01)
+                errors.push(`Returning to the same camera changes brightness in ${c.mode}`);
+        }
         if(cdp) {const {profile}=await cdp.send('Profiler.stop');fs.writeFileSync(path.join(__dirname,`lod-${tag}.cpuprofile`),JSON.stringify(profile));const times=new Map();for(let i=0;i<(profile.samples||[]).length;i++)times.set(profile.samples[i],(times.get(profile.samples[i])||0)+profile.timeDeltas[i]); console.log(profile.nodes.map(n=>({fn:n.callFrame.functionName,line:n.callFrame.lineNumber+1,ms:(times.get(n.id)||0)/1000})).sort((a,b)=>b.ms-a.ms).slice(0,30));}
-        if (process.env.LOD_STABILITY || process.env.LOD_TRANSITIONS || c.zoom===3 && (c.mode==='2d'||c.pitch===.55&&c.yaw===0) || c.zoom===15&&c.pitch===.38&&c.yaw===0) await page.screenshot({path:path.join(__dirname,`lod-${tag}-${c.mode}-${c.zoom}.png`)});
+        if (process.env.LOD_POLISH || process.env.LOD_STABILITY || process.env.LOD_TRANSITIONS || c.zoom===3 && (c.mode==='2d'||c.pitch===.55&&c.yaw===0) || c.zoom===15&&c.pitch===.38&&c.yaw===0) await page.screenshot({path:path.join(__dirname,`lod-${tag}-${c.mode}-${c.zoom}${process.env.LOD_POLISH?(c.motion?'-moving':'-still'):''}.png`)});
     }
     fs.writeFileSync(path.join(__dirname,`lod-${tag}.json`),JSON.stringify({fixture,setup,results,errors},null,2));
     if(errors.length) throw new Error(errors.join('\n'));

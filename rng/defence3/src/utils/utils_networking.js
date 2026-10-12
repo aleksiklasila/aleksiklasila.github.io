@@ -1357,6 +1357,7 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing') {
     let earlyBundles = liveJoin ? { ...lockstepPendingBundleByTick } : null;
     let earlyCommits = liveJoin ? { ...lockstepPendingCommitByTick } : null;
     initAudio();
+    await prepareRendererLodAssets(true);
     // (The snapshot brings every entity: none made here.)
     startGameSkipStarters = !!snapshotText;
     try { startGame(); } finally { startGameSkipStarters = false; }
@@ -3060,7 +3061,7 @@ function startHostedGame() {
     sendPreparePayload();
 
     // Yield once so the loading overlay can paint before heavy world generation begins.
-    setTimeout(() => {
+    setTimeout(async () => {
         try {
             readConfigFromMenu();
             // Run the host's config through the same transport path guests
@@ -3069,6 +3070,7 @@ function startHostedGame() {
             applyEditableRuntimeConfigObject(serializeEditableRuntimeConfigForTransport(), { fromTransport: true });
             applyTimingConfig(menuTickRate, menuPipeline);
             lockstepStrictDebugMode = menuStrict;
+            await prepareRendererLodAssets(true);
             gameSeed = Date.now();
             // matchStartSessionId and matchStartLobbyPlayers already set above.
             removedFromMatchPeerIds = new Set();
@@ -3592,16 +3594,22 @@ function initLobbySettingsCarousel() {
     scrollToIndex(1, false);
 }
 
+let _soloStartPreparation=null;
 function startSoloGame() {
+    if(_soloStartPreparation)return _soloStartPreparation;
     readConfigFromMenu();
-    isMultiplayer = false;
-    gameSeed = Date.now();
-    localPlayerId = 0;
-    initAudio();
-    startGame();
-    // The simulation worker loads the world now, behind a popup; the match's
-    // clock starts once it has it (renderer.js pumpSimulationTicks).
-    if (typeof simClientWillTakeMatch === 'function' && simClientWillTakeMatch() && simClientStartMatch()) _matchLoadOverlayUntilRunning();
+    const begin=()=>{
+        isMultiplayer=false;
+        gameSeed=Date.now();
+        localPlayerId=0;
+        initAudio();
+        startGame();
+        if(typeof simClientWillTakeMatch==='function' && simClientWillTakeMatch() && simClientStartMatch())_matchLoadOverlayUntilRunning();
+        else setMatchLoadOverlay(false);
+    };
+    const preparation=prepareRendererLodAssets(true);
+    if(!preparation){begin();return;}
+    return _soloStartPreparation=preparation.then(begin).finally(()=>{_soloStartPreparation=null;});
 }
 
 // The load popup until the simulation worker has the match's world and its

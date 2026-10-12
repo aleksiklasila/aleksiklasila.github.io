@@ -1,0 +1,617 @@
+{
+  "setup": {
+    "styles": 93,
+    "backgroundBake": true,
+    "atlasPixels": 2048,
+    "rows": [
+      "unit_norm",
+      "unit_fast",
+      "unit_tank",
+      "unit_boss",
+      "unit_flying",
+      "unit_mole",
+      "unit_poison_resistant",
+      "unit_fire_resistant",
+      "unit_water_resistant",
+      "unit_ice_resistant",
+      "unit_laser_resistant",
+      "unit_snake",
+      "unit_scout",
+      "unit_collector",
+      "unit_astar_collector",
+      "unit_salvager_unit",
+      "unit_builder_unit",
+      "unit_healer_unit",
+      "unit_researcher_unit",
+      "unit_king",
+      "spawner_spawner",
+      "spawner_astar_spawner",
+      "spawner_salvager",
+      "spawner_builder_spawner",
+      "spawner_healer_spawner",
+      "spawner_research",
+      "barrack_norm",
+      "barrack_fast",
+      "barrack_tank",
+      "barrack_boss",
+      "barrack_flying",
+      "barrack_mole",
+      "barrack_poison_resistant",
+      "barrack_fire_resistant",
+      "barrack_water_resistant",
+      "barrack_ice_resistant",
+      "barrack_laser_resistant",
+      "barrack_snake",
+      "barrack_scout",
+      "tower_pistol",
+      "tower_smg",
+      "tower_water",
+      "tower_poison",
+      "tower_fire",
+      "tower_sand_gun",
+      "tower_ice",
+      "tower_sniper",
+      "tower_elements",
+      "tower_laser",
+      "tower_watch_tower",
+      "tower_cloud_0a",
+      "tower_cloud_0b",
+      "tower_cloud_1a",
+      "tower_cloud_1b",
+      "tower_cloud_2a",
+      "tower_cloud_2b",
+      "tower_cloud_3a",
+      "tower_cloud_3b",
+      "item_sand",
+      "item_lava",
+      "item_poison_puddle",
+      "item_ice_patch",
+      "item_water_puddle",
+      "item_mine",
+      "item_farm",
+      "item_astar_farm",
+      "item_house",
+      "gold_mine_active",
+      "gold_mine_empty",
+      "astar_mine_active",
+      "astar_mine_empty"
+    ],
+    "copiesPerType": 625,
+    "total": 44375,
+    "panelErrors": [
+      {
+        "type": "spawner_spawner",
+        "meanError": 0
+      },
+      {
+        "type": "spawner_astar_spawner",
+        "meanError": 0
+      },
+      {
+        "type": "spawner_salvager",
+        "meanError": 0
+      },
+      {
+        "type": "spawner_builder_spawner",
+        "meanError": 0
+      },
+      {
+        "type": "spawner_healer_spawner",
+        "meanError": 0
+      },
+      {
+        "type": "spawner_research",
+        "meanError": 0
+      },
+      {
+        "type": "barrack_norm",
+        "meanError": 0
+      },
+      {
+        "type": "barrack_fast",
+        "meanError": 0
+      },
+      {
+        "type": "barrack_tank",
+        "meanError": 0
+      },
+      {
+        "type": "barrack_boss",
+        "meanError": 0
+      },
+      {
+        "type": "barrack_flying",
+        "meanError": 0
+      },
+      {
+        "type": "barrack_mole",
+        "meanError": 0
+      },
+      {
+        "type": "barrack_poison_resistant",
+        "meanError": 0
+      },
+      {
+        "type": "barrack_fire_resistant",
+        "meanError": 0
+      },
+      {
+        "type": "barrack_water_resistant",
+        "meanError": 0
+      },
+      {
+        "type": "barrack_ice_resistant",
+        "meanError": 0
+      },
+      {
+        "type": "barrack_laser_resistant",
+        "meanError": 0
+      },
+      {
+        "type": "barrack_snake",
+        "meanError": 0
+      },
+      {
+        "type": "barrack_scout",
+        "meanError": 0
+      },
+      {
+        "type": "tower_pistol",
+        "meanError": 0
+      },
+      {
+        "type": "tower_smg",
+        "meanError": 0
+      },
+      {
+        "type": "tower_water",
+        "meanError": 0
+      },
+      {
+        "type": "tower_poison",
+        "meanError": 0
+      },
+      {
+        "type": "tower_fire",
+        "meanError": 0
+      },
+      {
+        "type": "tower_sand_gun",
+        "meanError": 0
+      },
+      {
+        "type": "tower_ice",
+        "meanError": 0
+      },
+      {
+        "type": "tower_sniper",
+        "meanError": 0
+      },
+      {
+        "type": "tower_elements",
+        "meanError": 0
+      },
+      {
+        "type": "tower_laser",
+        "meanError": 0
+      },
+      {
+        "type": "tower_watch_tower",
+        "meanError": 0
+      },
+      {
+        "type": "tower_cloud_0a",
+        "meanError": 0
+      },
+      {
+        "type": "tower_cloud_0b",
+        "meanError": 0
+      },
+      {
+        "type": "tower_cloud_1a",
+        "meanError": 0
+      },
+      {
+        "type": "tower_cloud_1b",
+        "meanError": 0
+      },
+      {
+        "type": "tower_cloud_2a",
+        "meanError": 0
+      },
+      {
+        "type": "tower_cloud_2b",
+        "meanError": 0
+      },
+      {
+        "type": "tower_cloud_3a",
+        "meanError": 0
+      },
+      {
+        "type": "tower_cloud_3b",
+        "meanError": 0
+      },
+      {
+        "type": "item_sand",
+        "meanError": 0
+      },
+      {
+        "type": "item_lava",
+        "meanError": 0
+      },
+      {
+        "type": "item_poison_puddle",
+        "meanError": 0
+      },
+      {
+        "type": "item_ice_patch",
+        "meanError": 0
+      },
+      {
+        "type": "item_water_puddle",
+        "meanError": 0
+      },
+      {
+        "type": "item_mine",
+        "meanError": 0
+      },
+      {
+        "type": "item_farm",
+        "meanError": 0
+      },
+      {
+        "type": "item_astar_farm",
+        "meanError": 0
+      },
+      {
+        "type": "item_house",
+        "meanError": 0
+      }
+    ]
+  },
+  "results": [
+    {
+      "name": "checker-overview",
+      "pitch": 0.65,
+      "yaw": 0.52,
+      "reference": false,
+      "glError": 0,
+      "coverage": 0.2894010416666667,
+      "middle": 0,
+      "objects": 0,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-overview",
+      "pitch": 0.65,
+      "yaw": 0.52,
+      "reference": true,
+      "glError": 0,
+      "coverage": 0.20435329861111112,
+      "middle": 0,
+      "objects": 44375,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-item_house",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "item_house",
+      "reference": false,
+      "glError": 0,
+      "coverage": 0.48848234953703706,
+      "middle": 7791,
+      "objects": 600,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-item_house",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "item_house",
+      "reference": true,
+      "glError": 0,
+      "coverage": 0.47339192708333333,
+      "middle": 0,
+      "objects": 44375,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-barrack_norm",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "barrack_norm",
+      "reference": false,
+      "glError": 0,
+      "coverage": 0.555441261574074,
+      "middle": 4068,
+      "objects": 600,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-barrack_norm",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "barrack_norm",
+      "reference": true,
+      "glError": 0,
+      "coverage": 0.5585373263888889,
+      "middle": 0,
+      "objects": 44375,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-spawner_builder_spawner",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "spawner_builder_spawner",
+      "reference": false,
+      "glError": 0,
+      "coverage": 0.6445457175925926,
+      "middle": 4444,
+      "objects": 600,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-spawner_builder_spawner",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "spawner_builder_spawner",
+      "reference": true,
+      "glError": 0,
+      "coverage": 0.6493149594907407,
+      "middle": 0,
+      "objects": 44375,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-tower_sniper",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "tower_sniper",
+      "reference": false,
+      "glError": 0,
+      "coverage": 0.4882269965277778,
+      "middle": 3876,
+      "objects": 600,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-tower_sniper",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "tower_sniper",
+      "reference": true,
+      "glError": 0,
+      "coverage": 0.5028197337962963,
+      "middle": 0,
+      "objects": 44375,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-tower_watch_tower",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "tower_watch_tower",
+      "reference": false,
+      "glError": 0,
+      "coverage": 0.42576605902777775,
+      "middle": 7784,
+      "objects": 600,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-tower_watch_tower",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "tower_watch_tower",
+      "reference": true,
+      "glError": 0,
+      "coverage": 0.4459490740740741,
+      "middle": 0,
+      "objects": 44375,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-tower_elements",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "tower_elements",
+      "reference": false,
+      "glError": 0,
+      "coverage": 0.5152322048611111,
+      "middle": 5791,
+      "objects": 600,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-tower_elements",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "tower_elements",
+      "reference": true,
+      "glError": 0,
+      "coverage": 0.5332313368055556,
+      "middle": 0,
+      "objects": 44375,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-unit_fire_resistant",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "unit_fire_resistant",
+      "reference": false,
+      "glError": 0,
+      "coverage": 0.20441840277777779,
+      "middle": 1058,
+      "objects": 698,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-unit_fire_resistant",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "unit_fire_resistant",
+      "reference": true,
+      "glError": 0,
+      "coverage": 0.20438585069444445,
+      "middle": 0,
+      "objects": 44375,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-houses-low",
+      "pitch": 0.16,
+      "yaw": 0.52,
+      "focus": "item_house",
+      "reference": false,
+      "glError": 0,
+      "coverage": 0.18970341435185184,
+      "middle": 11502,
+      "objects": 600,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-houses-low",
+      "pitch": 0.16,
+      "yaw": 0.52,
+      "focus": "item_house",
+      "reference": true,
+      "glError": 0,
+      "coverage": 0.18169560185185185,
+      "middle": 0,
+      "objects": 44375,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-houses-overhead",
+      "pitch": 1.5,
+      "yaw": 0.52,
+      "focus": "item_house",
+      "reference": false,
+      "glError": 0,
+      "coverage": 0.40887514467592595,
+      "middle": 461,
+      "objects": 600,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-houses-overhead",
+      "pitch": 1.5,
+      "yaw": 0.52,
+      "focus": "item_house",
+      "reference": true,
+      "glError": 0,
+      "coverage": 0.4141869212962963,
+      "middle": 0,
+      "objects": 44375,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-houses-pan",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "item_house",
+      "dx": 6,
+      "dz": 6,
+      "reference": false,
+      "glError": 0,
+      "coverage": 0.3941999421296296,
+      "middle": 7710,
+      "objects": 600,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-houses-pan",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "item_house",
+      "dx": 6,
+      "dz": 6,
+      "reference": true,
+      "glError": 0,
+      "coverage": 0.3783550347222222,
+      "middle": 0,
+      "objects": 44375,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-mines",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "gold_mine_active",
+      "reference": false,
+      "glError": 0,
+      "coverage": 0.46393952546296297,
+      "middle": 7964,
+      "objects": 600,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-mines",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "gold_mine_active",
+      "reference": true,
+      "glError": 0,
+      "coverage": 0.44311704282407405,
+      "middle": 0,
+      "objects": 44375,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-15-wheel-steps",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "item_house",
+      "span": 46.22106472375908,
+      "reference": false,
+      "glError": 0,
+      "coverage": 0.4305910011574074,
+      "middle": 12571,
+      "objects": 600,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-15-wheel-steps",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "item_house",
+      "span": 46.22106472375908,
+      "reference": true,
+      "glError": 0,
+      "coverage": 0.40741319444444446,
+      "middle": 0,
+      "objects": 44375,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-forced-boundaries",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "item_house",
+      "forceBands": true,
+      "reference": false,
+      "glError": 0,
+      "coverage": 0.4827300347222222,
+      "middle": 1380,
+      "objects": 8875,
+      "atlasReady": 3069
+    },
+    {
+      "name": "checker-forced-boundaries",
+      "pitch": 0.52,
+      "yaw": 0.52,
+      "focus": "item_house",
+      "forceBands": true,
+      "reference": true,
+      "glError": 0,
+      "coverage": 0.46915870949074073,
+      "middle": 0,
+      "objects": 44375,
+      "atlasReady": 3069
+    }
+  ],
+  "errors": []
+}

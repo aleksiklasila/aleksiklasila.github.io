@@ -3710,25 +3710,42 @@ function _structureGlyphLayer(D, floorItems, viewGrid) {
 // Shared appearances, indexed by the frame's type codes rather than entities.
 // Canonical 2D geometry and the real procedural model feed the same atlas.
 let _columnLodCatalog = null;
+let _columnLodStyleCatalog = null;
 function getColumnLodCatalog() {
     if (typeof _pageFrameStrings === 'undefined') return null;
     // The frame string table also grows with labels/status text. Only type
     // codes affect these images; unrelated strings must never rebake the atlas.
-    const types = [];
+    const codes = new Map();
     for (let code = 0; code < _pageFrameStrings.length; code++) {
         const type = _pageFrameStrings[code];
-        if (Object.hasOwn(BASE_UNIT_STATS, type) || Object.hasOwn(BASE_CARD_TYPES, type)) types.push([code, type]);
+        if (Object.hasOwn(BASE_UNIT_STATS, type) || Object.hasOwn(BASE_CARD_TYPES, type)) codes.set(type,code);
     }
+    // Prepare the complete roster once. A newly spawned type only changes
+    // its string-code lookup; it must not restart thousands of image bakes.
+    const types=[...new Set([...Object.keys(BASE_UNIT_STATS),...Object.keys(BASE_CARD_TYPES)])].map(type=>[codes.get(type)??-1,type]);
     const key = types.map(([code,type]) => code + ':' + type).join('|');
     if (_columnLodCatalog?.key === key) return _columnLodCatalog;
-    const width = 2 ** Math.ceil(Math.log2(Math.max(2, (types.at(-1)?.[0] || 0) + 1))), styles = [];
+    const styleKey=JSON.stringify(types.map(([,type])=>[type,BASE_UNIT_STATS[type],BASE_CARD_TYPES[type]]));
+    const width = 2 ** Math.ceil(Math.log2(Math.max(2,...types.map(([code])=>code+1)))), styles = [];
     const lookup = new Float32Array(width * 8 * 4);
     function add(row, code, style) {
+        if (!style.unit) style.drawOwnerRim = (g, color) => {
+            // Same tile capture and padding as get3DExact2DTexture (96px).
+            const scale = 64 / 96 * (96 - 8) / TILE;
+            g.save();g.translate(32,32);g.scale(scale,scale);
+            g.strokeStyle=color;g.lineWidth=1;g.strokeRect(-15,-15,30,30);g.restore();
+        };
         const at=(row*width+code)*4;
-        lookup[at] = styles.length * 9 + 1;
-        lookup[at+1] = style.isFlying || style.mounted || style.modelKey.startsWith('tower_cloud') ? 1 : 0;
-        lookup[at+2] = style.mounted ? 1 : 0;
-        lookup[at+3] = style.isFlying ? (style.isWorker?.36:.30) : 0;
+        // One panel plus sixteen directions at five camera elevations.
+        const preserve=style.preserveModelHeight || style.isFlying || style.mounted || style.modelKey.startsWith('tower_cloud') ? 1 : 0;
+        const stats = style.unit ? BASE_UNIT_STATS[style.type] : BASE_CARD_TYPES[style.type];
+        const vision = Number(stats?.visionRange) || 0;
+        style.bakeHeight = preserve || vision <= 0 ? 1 : Math.max(.18, vision * (typeof AREA_UNIT_TILE_EQUIVALENT === 'number' ? AREA_UNIT_TILE_EQUIVALENT : 5) / 5);
+        if(code>=0) {
+            lookup[at] = styles.length * 81 + 1;lookup[at+1]=preserve;
+            lookup[at+2] = style.bakeHeight * (style.mounted ? -1 : 1);
+            lookup[at+3] = style.isFlying ? (style.isWorker?.36:.30) : 0;
+        }
         styles.push(style);
     }
     for (const [code, type] of types) {
@@ -3740,19 +3757,32 @@ function getColumnLodCatalog() {
                 color:UNIT_3D_BODY_COLORS[type] || unit.color, scaleX:scale, scaleY:scale*(MOUNTED_UNIT_TYPES.has(type)?MOUNT_HEIGHT_RATIO:1.45),
                 draw(g) { drawUnitBodyGeometry(g,{...unit,unitType:type,x:32,y:32,r:22,isSnake:type==='snake',carryingValue:0},'#151923',2); }
             });
-            add(1, code, {modelKey:'barrack_'+type, type, color:unit.color, scaleX:.98/.94, scaleY:.62/.94,
-                draw(g) { g.fillStyle='#543';g.fillRect(5,5,54,54);drawUnitBodyGeometry(g,{...unit,unitType:type,x:32,y:32,r:18,isSnake:type==='snake'},'#111',2); }
+            add(1, code, {modelKey:'barrack_'+type, type, color:unit.color, scaleX:.98/.94, scaleY:.62/.94, preserveModelHeight:true,
+                draw(g) {
+                    const scale=64/96*(96-8)/TILE;
+                    g.save();g.translate(32,32);g.scale(scale,scale);
+                    Barrack.prototype.draw.call({x:0,y:0,owner:-1,unitType:type,spawnQueue:[],maxEnergy:0},g);
+                    g.restore();
+                }
             });
         }
         if (card) {
             const spawner = ['spawner','astar_spawner','salvager','builder_spawner','healer_spawner','research'].includes(type);
             const floor = card.target === 'floor';
+            const farm = type === 'farm' || type === 'astar_farm';
             const row = spawner ? 2 : floor ? 3 : 0;
             add(row,code,{modelKey:(spawner?'spawner_':floor?'item_':'tower_')+type,type,color:card.color||'#aaa',
-                scaleX:(spawner?.95:floor?.84:type.startsWith('cloud')?.96:.82)/.94,scaleY:spawner?.62/.94:floor?.7:1.05/.94,
+                scaleX:(spawner?.95:floor?.84:type.startsWith('cloud')?.96:.82)/.94,
+                scaleY:(spawner?.62:floor?(type==='house'?.82:farm?.72:.14):1.05)/.94,
+                preserveModelHeight:spawner || type==='house' || farm || type.startsWith('cloud'),
+                statusTextureCanvas:spawner?get3DWorkshopSignTexture(type):null,
                 draw(g) {
-                    if(spawner) {g.fillStyle='#543';g.fillRect(5,5,54,54);drawWorkerBuildingEmblem(g,32,32,1.8,type);}
-                    else {const sprite=floor?_getFloorItemSprite({type,energy:100,maxEnergy:100}):_getTowerIconSprite(card.color||'#aaa',0,type,true);if(sprite)g.drawImage(sprite,4,4,56,56);}
+                    const scale=64/96*(96-8)/TILE;
+                    g.save();g.translate(32,32);g.scale(scale,scale);
+                    if(spawner) drawWorkerBuildingEmblem(g,0,0,1,type);
+                    else if(floor) {const sprite=_getFloorItemSprite({type,energy:100,maxEnergy:100});if(sprite)g.drawImage(sprite,-TILE/2,-TILE/2,TILE,TILE);}
+                    else drawTowerIcon(g,0,0,card.color||'#aaa',0,1,type,type==='laser'?false:undefined);
+                    g.restore();
                 }
             });
         }
@@ -3760,12 +3790,14 @@ function getColumnLodCatalog() {
     for (const [row,type,color] of [[4,'gold','#f0c83a'],[5,'astar','#d8d8e8']]) {
         for(const active of [true,false]) {
             const code=active?0:1;
-            lookup[(row*width+code)*4]=styles.length*9+1;
+            lookup[(row*width+code)*4]=styles.length*81+1;
+            lookup[(row*width+code)*4+2]=1;
             styles.push({modelKey:type+'_mine_'+(active?'active':'empty'),type,color,neutral:true,scaleX:.9/.94,scaleY:.35/.94,
                 draw(g){g.drawImage(type==='astar'?_getAstarMineTileSprite(active):_getGoldMineTileSprite(active),0,0,64,64);}});
         }
     }
-    return _columnLodCatalog = {key,width,styles,lookup};
+    if(_columnLodStyleCatalog?.key!==styleKey)_columnLodStyleCatalog={key:styleKey,styles};
+    return _columnLodCatalog = {key,width,styles:_columnLodStyleCatalog.styles,lookup,stride:81};
 }
 // Shared sprites for every unit/structure outside the selected detail masks.
 function _detailColumns(unitDetail, structDetail) {
@@ -3822,8 +3854,8 @@ function _detailViewKey(flat2d) {
     // Cache selection within the conservative viewport/chunk margins. The
     // camera matrices, positions and GPU animation still update every frame;
     // only model membership waits for a meaningful camera change.
-    if(!flat2d) {
-        const key = [false,Math.round(camera.x*camera.zoom/24),Math.round(camera.y*camera.zoom/24),
+    {
+        const key = [flat2d,Math.round(camera.x*camera.zoom/24),Math.round(camera.y*camera.zoom/24),
             Math.round(Math.log(camera.zoom)/.035),Math.round(R.orbitPitch/.025),Math.round(R.orbitYaw/.025),R.cssWidth,R.cssHeight].join('|');
         // While the camera moves the key changes every 24 px: at pan speed
         // every frame, and every change is a new selection of the models
@@ -3839,15 +3871,14 @@ function _detailViewKey(flat2d) {
         const V = _detailViewHeld, now = typeof performance !== 'undefined' ? performance.now() : 0;
         // (A jump is taken at once: a zoom step, a turn, the camera put
         // somewhere else. Holding is for the steady travel of a pan.)
-        const jump = Math.abs(Math.log(camera.zoom / V.zoom)) > 0.2 || Math.abs(R.orbitPitch - V.pitch) > 0.1 || Math.abs(R.orbitYaw - V.yaw) > 0.1
+        const jump = V.flat !== flat2d || Math.abs(Math.log(camera.zoom / V.zoom)) > 0.2 || Math.abs(R.orbitPitch - V.pitch) > 0.1 || Math.abs(R.orbitYaw - V.yaw) > 0.1
             || Math.hypot(camera.x - V.x, camera.y - V.y) * camera.zoom > 0.4 * Math.min(R.cssWidth, R.cssHeight);
         if (key !== V.key && (jump || gameTime !== V.tick || now - V.at >= DETAIL_VIEW_HOLD_MS || now < V.at)) {
             V.key = key; V.at = now; V.tick = gameTime;
-            V.x = camera.x; V.y = camera.y; V.zoom = camera.zoom; V.pitch = R.orbitPitch; V.yaw = R.orbitYaw;
+            V.flat = flat2d; V.x = camera.x; V.y = camera.y; V.zoom = camera.zoom; V.pitch = R.orbitPitch; V.yaw = R.orbitYaw;
         }
         return V.key;
     }
-    return [flat2d, camera.x, camera.y, camera.zoom, R.orbitPitch, R.orbitYaw, R.cssWidth, R.cssHeight].join('|');
 }
 function _detailScore(x, z, size, flat2d, retained = false, minPixels = UNIT_DETAIL_MIN_PX) {
     const R = renderer3dInstance, M = R.tmpViewProjection;
@@ -4233,6 +4264,20 @@ function ensure3DRendererInitialized() {
     syncRenderModeUi();
     _applyRenderViewPad();
     return renderer3dInstance.supported ? renderer3dInstance : null;
+}
+
+// Start in the menu and await again after applying match configuration.
+// Reusing the same styles returns immediately; frame string remaps never bake.
+function prepareRendererLodAssets(showProgress=false) {
+    const R=ensure3DRendererInitialized();
+    if(!R)return;
+    if(showProgress && typeof setMatchLoadOverlay==='function')setMatchLoadOverlay(true,'Loading Match','Preparing model views…');
+    _columnLodCatalog=null; // Recheck edited match rules before loading.
+    const A=R.prepareColumnAtlas();
+    if(!A)return;
+    return R.preloadColumnAtlas(A,showProgress?fraction=>{
+        if(typeof setMatchLoadOverlay==='function')setMatchLoadOverlay(true,'Loading Match','Preparing model views… '+Math.floor(fraction*100)+'%');
+    }:null);
 }
 
 function setRenderDimensionMode(nextMode) {

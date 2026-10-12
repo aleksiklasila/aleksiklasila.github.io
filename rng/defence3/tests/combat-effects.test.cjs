@@ -106,4 +106,21 @@ c.clearCombatFx();
 frame(false, [], [], [a, b]);
 assert.equal(c.batch.count[M.BOX], 2, 'one burning fence: glow and core, drawn once per pair');
 
+// A tilted close camera still sees a distant battle. Use depth at the attack,
+// not the camera centre, to aggregate unreadable flashes before building parts.
+c.clearCombatFx();
+for (let i=0;i<100;i++) c.recordCombatFx(FX.CAST,5*32,5*32,6*32,5*32,'fire');
+const tilted={lodPixelsPerWorld:64,pixelsPerWorldAt:()=>3};
+c.beginFrameEffects(c.batch,false,bounds,[],64,tilted);
+c.buildFrameEffects([],[],[]);c.endFrameEffects();
+assert.equal(c.batch.total,1,'distant attacks share one flash even in a close tilted view');
+const distant=instances(M.DECAL);
+c.beginFrameEffects(c.batch,false,{...bounds,minGx:.2,minGy:.2},[],64,tilted);
+c.buildFrameEffects([],[],[]);c.endFrameEffects();
+assert.deepEqual(instances(M.DECAL),distant,'panning leaves aggregation anchored to the world');
+tilted.pixelsPerWorldAt=()=>64;
+c.beginFrameEffects(c.batch,false,bounds,[],64,tilted);
+c.buildFrameEffects([],[],[]);c.endFrameEffects();
+assert.ok(c.batch.total>100,'nearby spell effects retain their individual shapes');
+
 console.log('PASS: role-specific attack effects, runes, expiry, culling, rewinds, lobbed shots, 2D flattening and laser fences.');

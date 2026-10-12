@@ -7,6 +7,7 @@ window.addEventListener('load', () => {
     invalidateStaticLayerCache();
     refreshBackgroundTickMode();
     syncRenderModeUi();
+    prepareRendererLodAssets()?.catch(error=>console.error('Model view preparation failed',error));
 
     initInput();
     initBuildTabs();

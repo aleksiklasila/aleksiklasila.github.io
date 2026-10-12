@@ -151,3 +151,17 @@ let pickedHistory=null;
 R.visitScaleCandidates([tower],(entity,x,z)=>{pickedHistory={entity,x,z};});
 assert.equal(pickedHistory.entity,tower);
 assert.equal(pickedHistory.x,500.5,'history picking uses the adapter slot, not the live structure slot');
+
+// Small 2D pans must reuse the same bounded selection between simulation
+// ticks, just like 3D. Projection still updates each frame; a jump or mode
+// switch cannot reuse a selection for a different view.
+c.performance={now:()=>1000};c.camera.x=100;c.camera.y=100;c.gameTime++;
+const flatKey=c._detailViewKey(true);
+c.camera.x+=10;
+assert.equal(c._detailViewKey(true),flatKey,'2D pan does not rescan the population every display frame');
+c.gameTime++;
+assert.notEqual(c._detailViewKey(true),flatKey,'next tick admits newly visible detail');
+const panKey=c._detailViewKey(true);
+c.camera.x+=1000;
+assert.notEqual(c._detailViewKey(true),panKey,'camera jumps refresh immediately');
+assert.notEqual(c._detailViewKey(false),c._detailViewKey(true),'2D and 3D never share a held selection');

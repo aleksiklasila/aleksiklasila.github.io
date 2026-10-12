@@ -3,14 +3,21 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const read=f=>fs.readFileSync(path.join(__dirname,'..',f),'utf8');
 const c=vm.createContext({window:{},console,AREA_UNIT_TILE_EQUIVALENT:5});
 vm.runInContext(read('src/audio_visual/renderer3d.js').replace('window.figureLodLevel = figureLodLevel','window.figureLodLevel = figureLodLevel; window.figureData = createFigureData'),c);
-for(const kind of ['figure:sword','worker:hammer','mage:fire_staff','tower','item:house','barrack:castle']) {
+for(const kind of ['figure:sword','worker:hammer','mage:fire_staff','mage:water_staff','mage:ice_staff','mage:poison_staff','mage:laser_staff','tower','tower:fire','tower:sniper','tower:watch','tower:elements','portal','item:house','item','barrack:castle','barrack:arcane','workshop:builder_spawner','workshop:research']) {
     const full=c.window.figureData(kind,0);
+    const height=data=>Math.max(...Array.from(data.positions).filter((_,i)=>i%3===1));
     for(const level of [1,2]) {
         const reduced=c.window.figureData(kind,level);
-        for(const surface of [1,3,12,14]) {
+        assert.equal(height(reduced),height(full),`${kind} keeps its skyline at level ${level}`);
+        for(const surface of [1,3,7,12,14]) {
             const vertices=data=>{let count=0;for(let i=0;i<data.details.length;i+=4)if(data.details[i]===surface)count++;return count;};
             // Cylindrical openings retain their surface with fewer segments.
             assert.ok(vertices(reduced)>=vertices(full)*.60,`${kind} retains eyes/dark openings at level ${level}`);
+        }
+    }
+    if(kind.startsWith('mage:')) {
+        for(let i=0;i<full.positions.length/3;i++)if(full.details[i*4+1]===-1&&full.positions[i*3+1]>1) {
+            assert.equal(full.details[i*4],5,'only the plain wooden shaft remains above the staff hand');
         }
     }
 }
@@ -41,4 +48,17 @@ C.detailMask[1]=255;C.detailMaskVersion++;R.drawColumnModels(C,{worldWidth:1000}
 assert.equal(S.count,2,'promotion to full detail removes exactly one middle instance');
 assert.equal(S.masks[1][1],255,'promotion never opens a hole in the far mask');
 F.energy[5]=0;c.view=1;R.drawColumnModels(C,{worldWidth:1000},A);assert.equal(S.count,1,'retirement cannot retain a stale middle model');
+// Workshops keep their fixed height and the actual timber sign in the middle
+// pass. Losing either makes a whole row flash to short player-colored boards.
+const B={n:1,cap:1};
+for(const key of ['x','y','gx','gy','alive','energy','kind','type','utype','vision','flags','owner','amount','angle'])B[key]=new Float32Array(1);
+B.x[0]=B.y[0]=32;B.kind[0]=2;B.alive[0]=1;B.energy[0]=100;B.vision[0]=.6;
+const sign={timber:true};R.getFlatAtlas=()=>({layerFor:canvas=>canvas===sign?7:0});
+c._structureDetailCandidates=()=>[0];
+const lookupB=new Float32Array(32);lookupB[8]=1;
+const AB={catalog:{width:1,stride:25,lookup:lookupB,styles:[{modelKey:'spawner_builder_spawner',color:'#354',scaleX:.95/.94,scaleY:.62/.94,preserveModelHeight:true,statusTextureCanvas:sign}]},panels:[{}]};
+const CB={structures:B,detailMaskS:new Uint8Array(1),detailMaskVersionS:1,colors:Array(9).fill('#08f'),fullVisibility:true,tile:32,alpha:1};
+const SB=R.drawColumnModels(CB,{worldWidth:100},AB),db=Array.from(SB.groups.values())[0].storage.data;
+assert.ok(Math.abs(db[5]-.62)<1e-6,'workshop height does not shrink with vision');
+assert.equal(db[27],7,'middle workshop displays the timber sign instead of bare owner color');
 console.log('PASS: dark landmarks, opaque middle models, matching scale, disjoint masks, interpolation and buffer reuse.');
