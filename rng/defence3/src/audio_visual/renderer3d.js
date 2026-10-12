@@ -5763,7 +5763,7 @@
             const old = this.columnAtlas;
             old?.worker?.terminate();
             if(old)old.prepare=null;
-            if (old) for (const name of ['color','mask','meta','lookup']) gl.deleteTexture(old[name]);
+            if (old) for (const target of [old,old.animation])if(target)for(const name of ['color','mask','meta','lookup'])if(target[name])gl.deleteTexture(target[name]);
             const A = this.columnAtlas = {catalog,grid,panels:[],sources:[],metaData:new Float32Array(grid*grid*4),next:0,revision:0};
             if(COLUMN_BAKE_WORKER_URL && typeof Worker==='function' && typeof createImageBitmap==='function') {
                 try {
@@ -5772,34 +5772,44 @@
                     A.worker.onerror=()=>{A.worker.terminate();A.worker=null;A.workerBusy=false;A.workerFailed=true;};
                 } catch (_) {A.worker=null;}
             }
+            A.cell=32;A.levels=4;A.animationBatches=[];A.animationBases=[];
+            for(let i=0;i<catalog.styles.length;i++) {
+                const style=catalog.styles[i];
+                if(style.snake||!style.unit&&!style.modelKey.startsWith('tower_cloud'))continue;
+                A.animationBases[i]=A.animationBatches.length*views;
+                for(const mode of (style.unit?[0,7]:[0]))for(let frame=0;frame<8;frame++)
+                    A.animationBatches.push({style:i,mode,phase:frame*Math.PI/4,time:frame*Math.PI/4/.6});
+            }
+            const ag=Math.max(1,Math.ceil(Math.sqrt(A.animationBatches.length*views)));
+            A.animation={grid:ag,cell:32,levels:4,metaData:new Float32Array(ag*ag*4)};
+            A.jobs=catalog.styles.length*stride+A.animationBatches.length*views;
             gl.activeTexture(gl.TEXTURE0);
-            for (const name of ['color','mask']) {
-                A[name] = gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,A[name]);
-                gl.texStorage2D(gl.TEXTURE_2D,4,gl.RGBA8,grid*cell,grid*cell);
+            for(const target of [A,A.animation])for(const name of ['color','mask']) {
+                target[name]=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,target[name]);
+                gl.texStorage2D(gl.TEXTURE_2D,target.levels,gl.RGBA8,target.grid*target.cell,target.grid*target.cell);
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
-                // Stop before mip levels can mix neighbouring 32px cells.
-                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAX_LEVEL,3);
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAX_LEVEL,target.levels-1);
             }
             const makeCanvas = () => {const c=document.createElement('canvas');c.width=c.height=64;return c;};
             const color=makeCanvas(), mask=makeCanvas(), g=color.getContext('2d'), m=mask.getContext('2d');
             g.__drawImagesImmediately=true;
             const mipCanvases=Array.from({length:4},(_,level)=>{const canvas=makeCanvas();canvas.width=canvas.height=cell>>level;return canvas;});
-            const upload = (index, meta, bakedLevels=null) => {
-                A.metaData.set(meta,index*4);
+            const upload = (index, meta, bakedLevels=null, target=A) => {
+                target.metaData.set(meta,index*4);
                 // Filter premultiplied colors so transparent padding cannot
                 // darken the miniature as its mip level changes.
                 gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,true);
                 for (const [name,canvas] of [['color',color],['mask',mask]]) {
-                    gl.bindTexture(gl.TEXTURE_2D,A[name]);
+                    gl.bindTexture(gl.TEXTURE_2D,target[name]);
                     let previous=canvas;
-                    for(let level=0;level<4;level++) {
-                        const scaled=mipCanvases[level],size=cell>>level,ctx=scaled.getContext('2d');
+                    for(let level=0;level<target.levels;level++) {
+                        const scaled=mipCanvases[level],size=target.cell>>level,ctx=scaled.getContext('2d');
                         if(bakedLevels)ctx.putImageData(new ImageData(bakedLevels[level][name],size,size),0,0);
                         else {ctx.clearRect(0,0,size,size);ctx.drawImage(previous,0,0,size,size);}
-                        gl.texSubImage2D(gl.TEXTURE_2D,level,(index%grid)*size,Math.floor(index/grid)*size,gl.RGBA,gl.UNSIGNED_BYTE,scaled);
+                        gl.texSubImage2D(gl.TEXTURE_2D,level,(index%target.grid)*size,Math.floor(index/target.grid)*size,gl.RGBA,gl.UNSIGNED_BYTE,scaled);
                         previous=scaled;
                     }
                 }
@@ -5807,8 +5817,11 @@
             A.prepare = (job) => {
                 // Prepare every type's canonical panel before the directional
                 // models, so all types become recognizable together.
-                const n=catalog.styles.length, i=job<n?job:Math.floor((job-n)/views);
-                const direction=job<n?-1:(job-n)%views, style=catalog.styles[i];
+                const n=catalog.styles.length,animationJob=job-n*stride;
+                const batch=animationJob>=0?A.animationBatches[Math.floor(animationJob/views)]:null;
+                const i=batch?batch.style:job<n?job:Math.floor((job-n)/views);
+                const direction=batch?animationJob%views:job<n?-1:(job-n)%views,style=catalog.styles[i];
+                const target=batch?A.animation:A,index=batch?animationJob:i*stride+2+direction;
                 if(direction>=0) {
                     if(A.worker) {
                         if(!A.prepared) {
@@ -5819,7 +5832,7 @@
                                     style.statusTextureCanvas?createImageBitmap(style.statusTextureCanvas):null]).then(([panel,ownerMask,status])=>{
                                     if(!A.worker){panel.close();ownerMask.close();status?.close();return;}
                                     const fields=['modelKey','type','color','scaleX','scaleY','bakeHeight','unit','isFlying','isWorker','weaponType'];
-                                    A.worker.postMessage({index:i,stride,style:Object.fromEntries(fields.map(key=>[key,style[key]])),panel,ownerMask,status},[panel,ownerMask,...(status?[status]:[])]);
+                                    A.worker.postMessage({index:i,stride,animation:batch,style:Object.fromEntries(fields.map(key=>[key,style[key]])),panel,ownerMask,status},[panel,ownerMask,...(status?[status]:[])]);
                                 }).catch(()=>{A.worker?.terminate();A.worker=null;A.workerBusy=false;A.workerFailed=true;});
                             }
                             return false;
@@ -5827,14 +5840,16 @@
                         const baked=A.prepared.images[direction];
                         if(baked) {
                             if(!baked.levels) {g.putImageData(new ImageData(baked.color,64,64),0,0);m.putImageData(new ImageData(baked.mask,64,64),0,0);}
-                            upload(i*stride+2+direction,baked.meta,baked.levels);
+                            upload(index,baked.meta,baked.levels,target);
                         }
                         if(direction===views-1){A.prepared=null;A.workerBusy=false;}
                         return;
                     }
                     if(direction===0) {const kind=proceduralKind(style);A.model=kind?createFigureData(kind,1):null;}
                     const data=A.model;
-                    if(data) {const [yaw,pitch]=Defence3Renderer3D.columnView(stride,direction);upload(i*stride+2+direction,this.bakeColumnModel(g,m,data,style,yaw,A.sources[i],pitch));}
+                    if(data) {const [yaw,pitch]=Defence3Renderer3D.columnView(stride,direction);
+                        let posed=data;if(batch)posed={...data,positions:Defence3Renderer3D.columnPose(style,data,batch.phase,batch.mode,style.unit?1:0,batch.time)};
+                        upload(index,this.bakeColumnModel(g,m,posed,style,yaw,A.sources[i],pitch),null,target);}
                     return;
                 }
                 g.clearRect(0,0,64,64);m.clearRect(0,0,64,64);
@@ -5845,7 +5860,7 @@
                     for (const ctx of [g,m]) {ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.strokeRect(4,4,56,56);}
                 }
                 style.draw(g);
-                upload(i*stride+1,[style.neutral?1/.94:1.35,0,0,1]);
+                upload(i*stride+1,[style.neutral?1/.94:1.35,0,0,A.animationBases[i]===undefined?1:A.animationBases[i]+2]);
                 const panel=makeCanvas();panel.getContext('2d').drawImage(color,0,0);
                 panel._ownerMask=makeCanvas();panel._ownerMask.getContext('2d').drawImage(mask,0,0);
                 A.sources[i]=panel;
@@ -5863,19 +5878,24 @@
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
             }
+            gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+            A.animation.meta=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,A.animation.meta);
+            gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,ag,ag,0,gl.RGBA,gl.FLOAT,A.animation.metaData);
+            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
             this.advanceColumnAtlas(A);
             return A;
         }
 
         // Only menu/loading code advances preparation. Rendering is read-only.
         async preloadColumnAtlas(A=this.prepareColumnAtlas(),onProgress=null) {
+            this.ensureColumnProgram();
             if(!A?.prepare)return;
             if(!A.loading)A.loading=(async()=>{
                 let progressTime=0;
                 while(A.prepare) {
-                    this.advanceColumnAtlas(A);
+                    this.advanceColumnAtlas(A,8);
                     if(onProgress && performance.now()-progressTime>100) {
-                        onProgress(A.next/(A.catalog.styles.length*A.catalog.stride));progressTime=performance.now();
+                        onProgress(A.next/A.jobs);progressTime=performance.now();
                     }
                     if(A.prepare)await new Promise(resolve=>setTimeout(resolve,0));
                 }
@@ -5884,7 +5904,7 @@
             onProgress?.(1);
         }
 
-        advanceColumnAtlas(A) {
+        advanceColumnAtlas(A,budget=1) {
             if (!A.prepare) return;
             const gl=this.gl, start=performance.now();
             // (Only the types' panels are the models' (drawColumnModels): the
@@ -5893,13 +5913,17 @@
             // type baked after them: that was the whole set packed again on
             // every frame for the many seconds the baking takes.)
             const panelsBefore=Math.min(A.next,A.catalog.styles.length);
-            const jobs=A.catalog.styles.length*(A.catalog.stride||9);
+            const jobs=A.jobs||A.catalog.styles.length*(A.catalog.stride||9);
             const before=A.next;
-            do { if(A.prepare(A.next)===false)break;A.next++; } while(A.next<jobs && performance.now()-start<1);
+            do { if(A.prepare(A.next)===false)break;A.next++; } while(A.next<jobs && performance.now()-start<budget);
             if(A.next===before)return;
-            gl.bindTexture(gl.TEXTURE_2D,A.meta);
+            const changed=before<A.catalog.styles.length*(A.catalog.stride||9)?A:A.animation;
+            gl.bindTexture(gl.TEXTURE_2D,changed.meta);
             gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
-            gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,A.grid,A.grid,gl.RGBA,gl.FLOAT,A.metaData);
+            gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,changed.grid,changed.grid,gl.RGBA,gl.FLOAT,changed.metaData);
+            if(changed===A&&A.next>A.catalog.styles.length*(A.catalog.stride||9)) {
+                gl.bindTexture(gl.TEXTURE_2D,A.animation.meta);gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,A.animation.grid,A.animation.grid,gl.RGBA,gl.FLOAT,A.animation.metaData);
+            }
             gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
             if(Math.min(A.next,A.catalog.styles.length)!==panelsBefore) A.revision++;
             if(A.next>=jobs) {A.prepare=null;A.model=null;A.sources=null;A.worker?.terminate();A.worker=null;}
@@ -6055,7 +6079,7 @@
                         // (The viewing player's own units: always drawn, at full light, as the glyphs' shader has them.)
                         if(!C.fullVisibility && !(F.flags[s]&65536) && !(kind&&F.owner[s]===C.player) && !(C.visibility[Math.floor(z)]?.[Math.floor(x)]>0))continue;
                         const size=kind?Math.max(.28,Math.min(.9,F.r[s]*2.2/C.tile)):.94;
-                        scores[i]=_detailScore(x,z,size,false,!!previous?.[s],8);
+                        scores[i]=_detailScore(x,z,size,false,!!previous?.[s],12);
                     }
                     // Only projected size determines the mesh-to-image switch.
                     // A population budget drew equally readable neighbours with
@@ -6073,7 +6097,7 @@
                         const size=kind?Math.max(.28,Math.min(.9,F.r[s]*2.2/C.tile)):.94;
                         const x=F.x[s]/C.tile,z=F.y[s]/C.tile,sx=size*style.scaleX;
                         let sy=size*style.scaleY;
-                        if(kind&&!style.mounted)sy=Math.max(.48*style.scaleX,sy);
+                        if(kind&&!style.mounted)sy=style.snake?Math.max(.24,sy):Math.max(.48*style.scaleX,sy);
                         const preserve=style.preserveModelHeight||style.isFlying||style.mounted||figure==='portal';
                         if(!preserve&&F.vision[s]>0)sy*=Math.max(.18,F.vision[s]*AREA_UNIT_TILE_EQUIVALENT/5);
                         // Match the low deck used when a unit occupies a tower.
@@ -6107,7 +6131,8 @@
                         if(ghost)S.ghosts++;
                         d[o+20]=kind?F.amount[s]:0;d[o+21]=kind?F.phase[s]:0;
                         d[o+22]=tint[0];d[o+23]=tint[1];d[o+24]=tint[2];
-                        d[o+25]=F.flags[s]&65536?-1.14:C.fullVisibility||(kind&&F.owner[s]===C.player)?1:Math.min(1,C.visibility[Math.floor(z)][Math.floor(x)]/C.lightNorm);
+                        const light=F.flags[s]&65536?.14:C.fullVisibility||(kind&&F.owner[s]===C.player)?1:Math.min(1,C.visibility[Math.floor(z)][Math.floor(x)]/C.lightNorm);
+                        d[o+25]=F.flags[s]&65536?-1-light:light;
                         const panel=this.columnModelPanel(A,styleIndex,C.colors[Math.max(0,Math.min(8,F.owner[s]+1))]);G.panels.add(panel);
                         d[o+26]=atlas.layerFor(panel);d[o+27]=style.statusTextureCanvas?atlas.layerFor(style.statusTextureCanvas):-1;
                         mask[s]=255;S.count++;
@@ -6147,11 +6172,8 @@
             gl.depthMask(true);gl.disable(gl.BLEND);
             this.layerAlpha=alpha;this.layerFlyTime=fly;
         }
-        drawFrameColumns(C, snapshot) {
-            const gl = this.gl;
-            const atlas = this.prepareColumnAtlas();
-            const models = this.drawColumnModels(C,snapshot,atlas);
-            if (models && this.scaleLayers) this.drawColumnModelGhosts();
+        ensureColumnProgram() {
+            const gl=this.gl;
             if (!this.columnProgram) {
                 this.columnProgram = createProgram(gl, `#version 300 es
                     precision highp float;
@@ -6177,7 +6199,8 @@
                     uniform int uStructure, uFull, uPlayer;
                     uniform vec3 uColors[9];
                     uniform sampler2D uVisibility;
-                    uniform sampler2D uStyles, uMeta;
+                    uniform sampler2D uStyles, uMeta, uAnimMeta;
+                    uniform float uAnimGrid,uTime;
                     uniform float uAtlasGrid, uStyleWidth, uYaw, uPitch, uPointMax, uHeightScale;
                     uniform vec2 uViewport;
                     uniform vec3 uEye;
@@ -6186,8 +6209,12 @@
                     flat out float vLayer;
                     flat out float vLayerNext;
                     flat out float vPitchBlend;
-                    flat out vec3 vViewMeta, vNextViewMeta, vFrameMeta;
-                    flat out vec2 vViewRotation;
+                    flat out vec4 vViewA,vViewB,vViewC,vViewD;
+                    flat out vec3 vFrameMeta;
+                    flat out float vYawBlend;
+                    flat out float vAnimated;
+                    flat out vec4 vViewWeights;
+                    flat out vec4 vViewBasis;
                     flat out float vGroundTile;
                     out float vLod, vDotScale, vLight;
                     out float vModelBlend;
@@ -6238,60 +6265,84 @@
                         // A distant row is seen at a lower angle than the
                         // camera target. Match each miniature to its own ray.
                         vec3 eyeRay=uEye-vec3(p.x,.02,p.y);
-                        // One camera basis for the entire frame. Per-object
-                        // azimuth/elevation divided overhead views into eight
-                        // bright/dark wedges and a different central circle.
-                        float viewYaw=uYaw;
-                        float viewPitch=uPitch;
-                        float direction = mod(floor(mod(viewYaw-facing+12.5663706,6.2831853)/.39269908+.5),16.);
+                        // Perspective sees distant rows at a lower elevation.
+                        // Continuous four-view interpolation avoids the radial
+                        // sectors that nearest-angle selection produced here.
+                        float horizontal=length(eyeRay.xz);
+                        float viewYaw=horizontal>.0001?atan(eyeRay.x,eyeRay.z):uYaw;
+                        float viewPitch=atan(eyeRay.y,max(horizontal,.0001));
+                        float azimuth=mod(viewYaw-facing+12.5663706,6.2831853)/.39269908;
+                        float direction=floor(azimuth);vYawBlend=uFlat>.5?0.:fract(azimuth);
                         float elevation = viewPitch < .35 ? (viewPitch-.08)/.27 : viewPitch < .65 ? 1.+(viewPitch-.35)/.30 : viewPitch < 1.05 ? 2.+(viewPitch-.65)/.40 : 3.+(viewPitch-1.05)/.52079633;
                         elevation=clamp(elevation,0.,4.);
                         float lower = floor(elevation), upper = min(4.,lower+1.);
                         vPitchBlend = uFlat > .5 ? 0. : fract(elevation);
                         vLayer = base + (uFlat > .5 ? 0. : 1.+direction+lower*16.);
                         vLayerNext = base + (uFlat > .5 ? 0. : 1.+direction+upper*16.);
-                        vec4 meta = texelFetch(uMeta,ivec2(mod(vLayer,uAtlasGrid),floor(vLayer/uAtlasGrid)),0);
-                        vec4 nextMeta = texelFetch(uMeta,ivec2(mod(vLayerNext,uAtlasGrid),floor(vLayerNext/uAtlasGrid)),0);
-                        if(nextMeta.w < .5) {vLayerNext=vLayer;vPitchBlend=0.;}
-                        else if(meta.w < .5) {vLayer=vLayerNext;meta=nextMeta;vPitchBlend=0.;}
-                        if(meta.w < .5) {
-                            vLayer = base;vLayerNext=base;vPitchBlend=0.;
-                            meta = texelFetch(uMeta,ivec2(mod(vLayer,uAtlasGrid),floor(vLayer/uAtlasGrid)),0);
+                        vec4 canonical=texelFetch(uMeta,ivec2(mod(base,uAtlasGrid),floor(base/uAtlasGrid)),0);
+                        float mode=uStructure==0?aResource:0.;
+                        bool hasMotion=uStructure!=0||style.a>0.||vMotion.y>.01||mode==7.;
+                        vAnimated=uFlat<.5&&pixels/uPixelRatio>3.&&canonical.w>=2.&&hasMotion&&(mode==0.||mode==7.)?1.:0.;
+                        float phase=uStructure==0?aType+(ghost?0.:uTime*(mode==7.?2.:10.)):uTime*.6;
+                        float cycle=mod(phase,6.2831853)/6.2831853*8.;
+                        vec3 f=vec3(vYawBlend,vPitchBlend,vAnimated>.5?fract(cycle):0.);
+                        // Tetrahedral interpolation uses four snapshots for
+                        // direction, elevation AND animation, avoiding eight
+                        // image pairs per fragment for an animated billboard.
+                        vec3 first,second;
+                        if(f.x>=f.y) {
+                            if(f.y>=f.z){first=vec3(1,0,0);second=vec3(1,1,0);vViewWeights=vec4(1.-f.x,f.x-f.y,f.y-f.z,f.z);}
+                            else if(f.x>=f.z){first=vec3(1,0,0);second=vec3(1,0,1);vViewWeights=vec4(1.-f.x,f.x-f.z,f.z-f.y,f.y);}
+                            else {first=vec3(0,0,1);second=vec3(1,0,1);vViewWeights=vec4(1.-f.z,f.z-f.x,f.x-f.y,f.y);}
+                        } else {
+                            if(f.x>=f.z){first=vec3(0,1,0);second=vec3(1,1,0);vViewWeights=vec4(1.-f.y,f.y-f.x,f.x-f.z,f.z);}
+                            else if(f.y>=f.z){first=vec3(0,1,0);second=vec3(0,1,1);vViewWeights=vec4(1.-f.y,f.y-f.z,f.z-f.x,f.x);}
+                            else {first=vec3(0,0,1);second=vec3(0,1,1);vViewWeights=vec4(1.-f.z,f.z-f.y,f.y-f.x,f.x);}
                         }
-                        vViewMeta=meta.xyz;vNextViewMeta=vPitchBlend>0.?nextMeta.xyz:meta.xyz;
-                        if(vPitchBlend>0.) {
-                            vec2 center=mix(meta.yz,nextMeta.yz,vPitchBlend);
-                            // Both views keep their own scale and ground anchor.
-                            // Blending normalized squares made roofs grow/shrink.
-                            vec2 a=abs(meta.yz-center),b=abs(nextMeta.yz-center);
-                            meta=vec4(max(meta.x+2.*max(a.x,a.y),nextMeta.x+2.*max(b.x,b.y)),center,1.);
+                        vec4 layers=mod(direction+vec4(0.,first.x,second.x,1.),16.)+min(vec4(4.),lower+vec4(0.,first.y,second.y,1.))*16.;
+                        layers+=vAnimated>.5?canonical.w-2.+(mode==7.?640.:0.)+mod(floor(cycle)+vec4(0.,first.z,second.z,1.),8.)*80.:vec4(base+1.);
+                        if(uFlat>.5)layers=vec4(base);
+                        float grid=vAnimated>.5?uAnimGrid:uAtlasGrid;
+                        vec4 meta=vAnimated>.5?texelFetch(uAnimMeta,ivec2(mod(layers.x,grid),floor(layers.x/grid)),0):texelFetch(uMeta,ivec2(mod(layers.x,grid),floor(layers.x/grid)),0);
+                        vec4 nextMeta=vAnimated>.5?texelFetch(uAnimMeta,ivec2(mod(layers.y,grid),floor(layers.y/grid)),0):texelFetch(uMeta,ivec2(mod(layers.y,grid),floor(layers.y/grid)),0);
+                        vec4 metaC=vAnimated>.5?texelFetch(uAnimMeta,ivec2(mod(layers.z,grid),floor(layers.z/grid)),0):texelFetch(uMeta,ivec2(mod(layers.z,grid),floor(layers.z/grid)),0);
+                        vec4 metaD=vAnimated>.5?texelFetch(uAnimMeta,ivec2(mod(layers.w,grid),floor(layers.w/grid)),0):texelFetch(uMeta,ivec2(mod(layers.w,grid),floor(layers.w/grid)),0);
+                        if(min(min(meta.w,nextMeta.w),min(metaC.w,metaD.w))<.5) {
+                            layers=vec4(base);vAnimated=0.;meta=canonical;nextMeta=meta;metaC=meta;metaD=meta;
                         }
-                        vFrameMeta=meta.xyz;
-                        float yawDelta=mod(viewYaw-facing-direction*.39269908+9.42477796,6.2831853)-3.14159265;
-                        // A local view has a different screen roll, especially
-                        // overhead. Align its right axis to the camera's basis;
-                        // then compensate the quantized yaw within that view.
-                        float roll=atan(sin(uYaw-viewYaw)*sin(uPitch),cos(uYaw-viewYaw));
-                        float rotation=uFlat>.5?0.:roll+yawDelta*sin(viewPitch);
-                        vViewRotation=vec2(cos(rotation),sin(rotation));
-                        meta.yz=vec2(vViewRotation.x*meta.y+vViewRotation.y*meta.z,-vViewRotation.y*meta.y+vViewRotation.x*meta.z);
-                        meta.x*=abs(vViewRotation.x)+abs(vViewRotation.y);
+                        vLayer=layers.x;
+                        vViewA=vec4(meta.xyz,layers.x);vViewB=vec4(nextMeta.xyz,layers.y);
+                        vViewC=vec4(metaC.xyz,layers.z);vViewD=vec4(metaD.xyz,layers.w);
+                        vec2 center=meta.yz*vViewWeights.x+nextMeta.yz*vViewWeights.y+metaC.yz*vViewWeights.z+metaD.yz*vViewWeights.w;
+                        vec2 bounds=max(max(abs(meta.yz-center)+meta.x*.5,abs(nextMeta.yz-center)+nextMeta.x*.5),
+                            max(abs(metaC.yz-center)+metaC.x*.5,abs(metaD.yz-center)+metaD.x*.5));
+                        meta.xyz=vec3(2.*max(bounds.x,bounds.y),center);
+                        // Interpolate actual views in a common ground-anchored
+                        // frame, rather than snapping and rotating one picture.
+                        float delta=uYaw-viewYaw;
+                        // Project the local image's right/up axes into the real
+                        // camera plane. A screen-facing square alone changes
+                        // roof area and height at the mesh/image boundary.
+                        vViewBasis=uFlat>.5?vec4(1.,0.,0.,1.):vec4(cos(delta),-sin(uPitch)*sin(delta),
+                            sin(viewPitch)*sin(delta),sin(uPitch)*sin(viewPitch)*cos(delta)+cos(uPitch)*cos(viewPitch));
+                        mat2 basis=mat2(vViewBasis.xy,vViewBasis.zw);
+                        meta.yz=basis*meta.yz;
+                        meta.x*=max(abs(vViewBasis.x)+abs(vViewBasis.z),abs(vViewBasis.y)+abs(vViewBasis.w));
                         vFrameMeta=meta.xyz;
                         // All types at the same depth keep their type image.
                         // A small body must not turn into an owner-colour dot
                         // before a larger neighbour further from the camera.
-                        vLod = base > 0. && meta.w > .5 ? smoothstep(1.25,6.,tilePixels / uPixelRatio) : 0.;
+                        vLod = base > 0. && meta.w > .5 ? (uFlat>.5?smoothstep(1.25,6.,tilePixels/uPixelRatio):1.) : 0.;
                         float extent = mix(1.,meta.x,vLod);
                         float height = style.g > .5 || aVision <= 0. ? 1. : max(.18,aVision*uHeightScale);
-                        if (uStructure == 0 && style.b >= 0.) height *= max(1.,.48/(size*1.45));
+                        if (uStructure == 0 && style.b >= 0.) height *= style.g<-.5?max(1.,.24/(size*.52)):max(1.,.48/(size*1.45));
                         // Vision is already baked into the model, not into its
                         // ground footprint. Only upgrades need a residual stretch.
                         height /= max(abs(style.b),.001);
                         height = uFlat > .5 ? 1. : mix(1.,height,vLod);
-                        // A three-pixel filtered footprint covers subpixel
-                        // motion without a one-pixel hole opening between
-                        // dense neighbours as the camera changes height.
-                        float markerPixels = 3. * uPixelRatio;
+                        // 3D views retain their physical footprint and material colors.
+                        // Enlarged owner-colored dots made distant blocks brighter.
+                        float markerPixels = (uFlat>.5?3.:.75) * uPixelRatio;
                         vSpriteExtent = clamp(pixels*extent*vec2(1.,height),vec2(markerPixels),vec2(uPointMax-2.));
                         vSpriteSize = max(vSpriteExtent.x,vSpriteExtent.y);
                         gl_PointSize = ceil(vSpriteSize + 2.);
@@ -6326,8 +6377,12 @@
                     flat in float vLayer;
                     flat in float vLayerNext;
                     flat in float vPitchBlend;
-                    flat in vec3 vViewMeta, vNextViewMeta, vFrameMeta;
-                    flat in vec2 vViewRotation;
+                    flat in vec4 vViewA,vViewB,vViewC,vViewD;
+                    flat in vec3 vFrameMeta;
+                    flat in float vYawBlend;
+                    flat in float vAnimated;
+                    flat in vec4 vViewWeights;
+                    flat in vec4 vViewBasis;
                     flat in float vGroundTile;
                     in float vLod, vDotScale, vLight;
                     in float vModelBlend;
@@ -6341,16 +6396,24 @@
                     uniform mat4 uInverseViewProjection;
                     uniform vec2 uViewport;
                     uniform float uYaw, uPitch, uTime;
-                    uniform sampler2D uSprites, uOwnerMask;
+                    uniform sampler2D uSprites, uOwnerMask,uAnimSprites,uAnimOwnerMask;
+                    uniform float uAnimGrid;
                     uniform float uAtlasGrid, uFlat, uCoverageFade;
                     out vec4 color;
                     vec4 sampleView(float layer, vec2 coord, vec2 dx, vec2 dy) {
-                        vec2 cell=vec2(mod(layer,uAtlasGrid),floor(layer/uAtlasGrid));
-                        vec2 uv=(cell+clamp(coord,vec2(.5/32.),vec2(31.5/32.)))/uAtlasGrid;
-                        vec4 texel=textureGrad(uSprites,uv,dx,dy);
-                        vec3 owner=clamp(textureGrad(uOwnerMask,uv,dx,dy).rgb/max(texel.a,.001),0.,1.);
+                        if(any(lessThan(coord,vec2(0.)))||any(greaterThan(coord,vec2(1.))))return vec4(0.);
+                        float grid=vAnimated>.5?uAnimGrid:uAtlasGrid,cellSize=32.;
+                        vec2 cell=vec2(mod(layer,grid),floor(layer/grid));
+                        vec2 uv=(cell+clamp(coord,vec2(.5/cellSize),vec2(1.-.5/cellSize)))/grid;
+                        vec4 texel=vAnimated>.5?textureGrad(uAnimSprites,uv,dx,dy):textureGrad(uSprites,uv,dx,dy);
+                        vec3 owner=clamp((vAnimated>.5?textureGrad(uAnimOwnerMask,uv,dx,dy):textureGrad(uOwnerMask,uv,dx,dy)).rgb/max(texel.a,.001),0.,1.);
                         texel.rgb *= mix(vec3(1.),vColor.rgb,owner);
                         return texel;
+                    }
+                    vec4 sampleBakedView(vec4 view,vec2 point,vec2 dx,vec2 dy) {
+                        vec2 coord=(point-view.yz)*vec2(1.,-1.)/max(view.x,.001)+.5;
+                        float scale=vFrameMeta.x/max(view.x,.001);
+                        return sampleView(view.w,coord,dx*scale,dy*scale);
                     }
                     void main() {
                         if (vColor.a <= 0.) discard;
@@ -6404,18 +6467,15 @@
                             // of which fragments survived the point-edge discard.
                             // Implicit derivatives there can change as a tiny
                             // sprite crosses pixel quads, even at constant zoom.
-                            vec2 dx = vec2(1. / (vSpriteExtent.x*uAtlasGrid),0.);
-                            vec2 dy = vec2(0.,1. / (vSpriteExtent.y*uAtlasGrid));
+                            vec2 dx = vec2(1. / (vSpriteExtent.x*(vAnimated>.5?uAnimGrid:uAtlasGrid)),0.);
+                            vec2 dy = vec2(0.,1. / (vSpriteExtent.y*(vAnimated>.5?uAnimGrid:uAtlasGrid)));
                             vec2 viewPoint=(coord-.5)*vec2(1.,-1.)*vFrameMeta.x+vFrameMeta.yz;
-                            viewPoint=vec2(vViewRotation.x*viewPoint.x-vViewRotation.y*viewPoint.y,vViewRotation.y*viewPoint.x+vViewRotation.x*viewPoint.y);
-                            vec2 viewCoord=(viewPoint-vViewMeta.yz)*vec2(1.,-1.)/max(vViewMeta.x,.001)+.5;
-                            float viewScale=vFrameMeta.x/max(vViewMeta.x,.001);
-                            vec4 texel = sampleView(vLayer,viewCoord,dx*viewScale,dy*viewScale);
-                            if(vPitchBlend > 0.) {
-                                vec2 nextCoord=(viewPoint-vNextViewMeta.yz)*vec2(1.,-1.)/vNextViewMeta.x+.5;
-                                float nextScale=vFrameMeta.x/vNextViewMeta.x;
-                                texel=mix(texel,sampleView(vLayerNext,nextCoord,dx*nextScale,dy*nextScale),vPitchBlend);
-                            }
+                            viewPoint=inverse(mat2(vViewBasis.xy,vViewBasis.zw))*viewPoint;
+                            vec4 a=sampleBakedView(vViewA,viewPoint,dx,dy);
+                            vec4 b=sampleBakedView(vViewB,viewPoint,dx,dy);
+                            vec4 c=sampleBakedView(vViewC,viewPoint,dx,dy);
+                            vec4 d=sampleBakedView(vViewD,viewPoint,dx,dy);
+                            vec4 texel=a*vViewWeights.x+b*vViewWeights.y+c*vViewWeights.z+d*vViewWeights.w;
                             texel.rgb /= max(texel.a,.001);
                             if (uStructure == 0 && uFlat > .5) {
                                 float ring = 1.-smoothstep(.025,.025+fwidth(edge),abs(length(p)-.83));
@@ -6434,10 +6494,17 @@
                         color = vec4(sprite.rgb*vLight,sprite.a*vColor.a);
                     }`);
                 this.columnUniforms = {};
-                for (const n of ['ViewProjection','InverseViewProjection','Alpha','Tile','Scale','PixelRatio','Flat','LightNorm','Structure','Full','Player','Colors','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','OwnerMask','AtlasGrid','StyleWidth','Yaw','Pitch','Time','HeightScale','PointMax','Viewport','Eye','CoverageFade']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
+                for (const n of ['AnimGrid','AnimSprites','AnimOwnerMask','AnimMeta','ViewProjection','InverseViewProjection','Alpha','Tile','Scale','PixelRatio','Flat','LightNorm','Structure','Full','Player','Colors','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','OwnerMask','AtlasGrid','StyleWidth','Yaw','Pitch','Time','HeightScale','PointMax','Viewport','Eye','CoverageFade']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
                 this.columnStores = [{},{}];
                 this.columnVisibilityTexture = createTexture(gl);
             }
+        }
+        drawFrameColumns(C, snapshot) {
+            const gl = this.gl;
+            const atlas = this.prepareColumnAtlas();
+            const models = this.drawColumnModels(C,snapshot,atlas);
+            if (models && this.scaleLayers) this.drawColumnModelGhosts();
+            this.ensureColumnProgram();
             const U = this.columnUniforms;
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, this.columnVisibilityTexture);
@@ -6467,6 +6534,10 @@
                     gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(gl.TEXTURE_2D,atlas[name]);gl.uniform1i(U[uniform],unit);
                 }
             }
+            if(atlas?.animation)for(const [unit,name,uniform] of [[5,'color','AnimSprites'],[6,'mask','AnimOwnerMask'],[7,'meta','AnimMeta']]) {
+                gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(gl.TEXTURE_2D,atlas.animation[name]);gl.uniform1i(U[uniform],unit);
+            }
+            gl.uniform1f(U.AnimGrid,atlas?.animation.grid||1);
             gl.uniform1f(U.AtlasGrid,atlas?.grid||1);gl.uniform1f(U.StyleWidth,atlas?.catalog.width||1);
             gl.uniform1f(U.Yaw,this.orbitYaw||0);
             gl.uniform1f(U.Pitch,this.orbitPitch||.65);gl.uniform1f(U.Time,this.animationTime||0);
@@ -6501,7 +6572,7 @@
             for (let kind=0;kind<2;kind++) {
                 const F = kind ? C.units : C.structures, S = this.columnStores[kind], structure = !kind;
                 if (!F) continue;
-                const fields = structure ? ['x','y','x','y',null,'energy','owner','flags','alive','kind',null,'angle','type','utype','vision','amount'] : ['x','y','px','py','r','energy','owner','flags','id','type',null,'facing',null,null,'vision',null];
+                const fields = structure ? ['x','y','x','y',null,'energy','owner','flags','alive','kind',null,'angle','type','utype','vision','amount'] : ['x','y','px','py','r','energy','owner','flags','id','type',null,'facing','phase','prate','vision','mode'];
                 if (!S.buffer) { S.buffer=gl.createBuffer();S.vao=gl.createVertexArray(); }
                 gl.bindVertexArray(S.vao);gl.bindBuffer(gl.ARRAY_BUFFER,S.buffer);
                 if (S.frame !== F) {
@@ -6970,6 +7041,22 @@
     Defence3Renderer3D.FX_PATTERN = FX_PATTERN;
     Defence3Renderer3D.workshopMiniature = workshopMiniature;
     Defence3Renderer3D.columnBakeData = style => {const kind=proceduralKind(style);return kind?createFigureData(kind,0):null;};
+    Defence3Renderer3D.columnFlying = style => proceduralKind(style)?.startsWith('bird');
+    Defence3Renderer3D.columnRig = style => figureRig(proceduralKind(style)||'');
+    Defence3Renderer3D.columnPose = (style,data,phase,mode,move,time) => {
+        const out=new Float32Array(data.positions.length),point=[0,0,0],rig=figureRig(proceduralKind(style)||'');
+        for(let i=0;i<data.positions.length/3;i++) {
+            poseFigureVertex(point,...data.positions.slice(i*3,i*3+3),data.details,i,phase,move,mode,rig);
+            const joint=data.details[i*4+1];
+            if(Math.abs(joint)===7) {
+                const x=data.positions[i*3],pivot=data.details[i*4+2],y=data.positions[i*3+1]-pivot;
+                const spin=time*(.6+data.details[i*4+3])*Math.sign(joint);
+                point[0]=Math.cos(spin)*x-Math.sin(spin)*y;point[1]=Math.sin(spin)*x+Math.cos(spin)*y+pivot;
+            }
+            out.set(point,i*3);
+        }
+        return out;
+    };
     Defence3Renderer3D.columnView = (stride,direction) => stride===81 ? [(direction%16)*Math.PI/8,[.08,.35,.65,1.05,Math.PI/2][Math.floor(direction/16)]] : [(direction%8)*Math.PI/4,stride===33?[.1,.4,.8,1.5][Math.floor(direction/8)]:.65];
     window.Defence3Renderer3D = Defence3Renderer3D;
 })();

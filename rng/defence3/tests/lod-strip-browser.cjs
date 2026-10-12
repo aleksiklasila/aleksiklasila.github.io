@@ -32,7 +32,7 @@ let browser;
         if(!backgroundBake||A.workerFailed||!A.gpuBaked)throw Error('Atlas baking did not complete in the background worker');
         window.stripAtlas=A;
         const getKey=R.getFigureMeshKey.bind(R);
-        R.getFigureMeshKey=o=>{const k=getKey(o);return o.forceFull&&k?k.replace(/:lod2?$/,''):k;};
+        R.getFigureMeshKey=o=>{const k=getKey(o),base=k?.replace(/:lod2?$/,'');return window.stripMeshStage&&window.stripMeshStage!=='image'&&base?base+({full:'',lod1:':lod',lod2:':lod2'}[window.stripMeshStage]):o.forceFull&&k?base:k;};
         const styles=A.catalog.styles.filter(s=>s.unit||s.neutral||s.modelKey.startsWith('spawner_')
             ||s.modelKey.startsWith('barrack_')&&BASE_CARD_TYPES['barrack_'+s.type]
             ||s.modelKey.startsWith('tower_')&&BASE_CARD_TYPES[s.type]?.target==='wall'
@@ -64,6 +64,7 @@ let browser;
         }
         const title=document.createElement('div');title.style.cssText='position:fixed;left:14px;top:12px;color:white;background:#080e16dd;padding:8px;font:14px monospace;z-index:99';document.body.appendChild(title);
         window.stripDraw=(view,reference=false)=>{
+            window.stripMeshStage=view.meshStage;
             const {pitch,yaw}=view,copies=checker?625:300,n=styles.length*copies,structures={n,cap:n},unitFrame={n,cap:n};
             const focus=view.focus,center=focus?styles.findIndex(s=>s.modelKey===focus):(styles.length-1)/2;
             if(center<0)throw Error('Missing focus '+focus);
@@ -100,14 +101,14 @@ let browser;
                 F.alive[i]=1;F.id[i]=i;F.energy[i]=100;F.owner[i]=0;F.vision[i]=vision;F.angle[i]=Math.PI/2;
                 // Hold: identical previous/current positions, no walk, attack,
                 // production or idle-settling animation to hide a transition.
-                if(reference||(closeSlots?closeSlots.has(i):band>=(checker?20:264))){
+                if(reference||(view.meshStage?view.meshStage!=='image':(closeSlots?closeSlots.has(i):band>=(checker?20:264)))){
                     (units?C.detailMask:C.detailMaskS)[i]=255;
                     let sy=size*s.scaleY;if(units&&!s.mounted)sy=Math.max(.48*s.scaleX,sy);
                     if(!s.preserveModelHeight&&!s.isFlying&&!s.mounted&&vision>0)sy*=Math.max(.18,vision*AREA_UNIT_TILE_EQUIVALENT/5);
                     objects.push({modelKey:s.modelKey,weaponType:s.weaponType,isFlying:s.isFlying,isWorker:s.isWorker,x,z,y:s.isFlying?.3:0,
                         scaleX:size*s.scaleX,scaleZ:size*s.scaleX,scaleY:sy,rotationY:0,baseTint:ownerColor,tint:ownerColor,baseSideTint:s.color,sideTint:s.color,
                         lightLevel:1,alpha:1,topTextureKey:s.modelKey,topTextureCanvas:exactPanels.get(s)||A.panels[A.catalog.styles.indexOf(s)],statusTextureCanvas:s.statusTextureCanvas,forceFull:reference});
-                } else if(closeSlots||band>=(checker?16:232)) {
+                } else if(!view.meshStage&&(closeSlots||band>=(checker?16:232))) {
                     if(units)C.unitCandidates.push({_s:i});else middle.push(i);
                 }
             }
@@ -145,7 +146,8 @@ let browser;
         {name:'checker-mines',pitch:.52,yaw:.52,focus:'gold_mine_active'},
         {name:'checker-15-wheel-steps',pitch:.52,yaw:.52,focus:'item_house',span:1440/(32*(15/1.2**15))},
         {name:'checker-forced-boundaries',pitch:.52,yaw:.52,focus:'item_house',forceBands:true});
-    for(const view of views)for(const reference of [false,true]){
+    if(process.env.LOD_STAGE_AUDIT)views.splice(0,views.length,...['item_house','barrack_norm','spawner_builder_spawner'].flatMap(focus=>['full','lod1','lod2','image'].map(meshStage=>({name:'audit-'+focus+'-'+meshStage,meshStage,focus,pitch:.35,yaw:.52,span:46}))));
+    for(const view of views)for(const reference of (view.meshStage?[false]:[false,true])){
         const result=await page.evaluate(({view,reference})=>stripDraw(view,reference),{view,reference});
         if(result.glError)errors.push('WebGL '+result.glError);
         if(result.coverage<.02)errors.push('Missing models in '+JSON.stringify({view,reference}));

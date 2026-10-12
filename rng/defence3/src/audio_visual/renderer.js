@@ -3742,7 +3742,7 @@ function getColumnLodCatalog() {
         const vision = Number(stats?.visionRange) || 0;
         style.bakeHeight = preserve || vision <= 0 ? 1 : Math.max(.18, vision * (typeof AREA_UNIT_TILE_EQUIVALENT === 'number' ? AREA_UNIT_TILE_EQUIVALENT : 5) / 5);
         if(code>=0) {
-            lookup[at] = styles.length * 81 + 1;lookup[at+1]=preserve;
+            lookup[at] = styles.length * 81 + 1;lookup[at+1]=style.snake?-1:preserve;
             lookup[at+2] = style.bakeHeight * (style.mounted ? -1 : 1);
             lookup[at+3] = style.isFlying ? (style.isWorker?.36:.30) : 0;
         }
@@ -3752,9 +3752,9 @@ function getColumnLodCatalog() {
         const unit = BASE_UNIT_STATS[type], card = BASE_CARD_TYPES[type];
         if (unit) {
             const scale = type === 'fast' ? 1.35 : type === 'scout' ? 1.2 : type === 'flying' ? 1.3 : unit.isFlying ? .8 : 1;
-            add(7, code, {modelKey:'unit_'+type, type, unit:true, isFlying:!!unit.isFlying, isWorker:!!unit.isWorker, mounted:MOUNTED_UNIT_TYPES.has(type),
+            add(7, code, {modelKey:'unit_'+type, type, unit:true, snake:type==='snake', isFlying:!!unit.isFlying, isWorker:!!unit.isWorker, mounted:MOUNTED_UNIT_TYPES.has(type),
                 weaponType:getUnit3DWeaponType({unitType:type,attackStyle:unit.attackStyle}),
-                color:UNIT_3D_BODY_COLORS[type] || unit.color, scaleX:scale, scaleY:scale*(MOUNTED_UNIT_TYPES.has(type)?MOUNT_HEIGHT_RATIO:1.45),
+                color:type==='snake'?'#3dff64':UNIT_3D_BODY_COLORS[type] || unit.color, scaleX:scale, scaleY:scale*(type==='snake'?.52:MOUNTED_UNIT_TYPES.has(type)?MOUNT_HEIGHT_RATIO:1.45),
                 draw(g) { drawUnitBodyGeometry(g,{...unit,unitType:type,x:32,y:32,r:22,isSnake:type==='snake',carryingValue:0},'#151923',2); }
             });
             add(1, code, {modelKey:'barrack_'+type, type, color:unit.color, scaleX:.98/.94, scaleY:.62/.94, preserveModelHeight:true,
