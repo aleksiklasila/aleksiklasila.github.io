@@ -1,6 +1,6 @@
 (function () {
     const COLUMN_BAKE_WORKER_URL = typeof document !== 'undefined' && document.currentScript?.src
-        ? new URL('renderer3d-lod-worker.js?v=20261013-lod16',document.currentScript.src).href : null;
+        ? new URL('renderer3d-lod-worker.js?v=20261013-lod25',document.currentScript.src).href : null;
     function createShader(gl, type, source) {
         let shader = gl.createShader(type);
         gl.shaderSource(shader, source);
@@ -2962,7 +2962,7 @@
                 flat in float vStatusLayer;
                 uniform float uIsUnit;
                 uniform float uIsFlying;
-                uniform float uSpriteLodBias;
+                uniform float uInkScale;
                 uniform float uCoverageFade;
                 ${CEL_LIGHTING_GLSL}
                 uniform sampler2D uTopTexture;
@@ -2998,14 +2998,14 @@
                         // Status icon (sprite atlas layer, or none) over the owner color.
                         base = vColor;
                         if (vStatusLayer >= 0.0) {
-                            vec4 icon = texture(uAtlas, vec3(vUv, vStatusLayer), uSpriteLodBias);
+                            vec4 icon = texture(uAtlas, vec3(vUv, vStatusLayer));
                             base = mix(base, icon.rgb, icon.a);
                         }
                     } else if (vSurface == 4) {
                         // Preserve thin sprite strokes without disabling distant mipmaps.
                         // Exact 2D panels come from the shared sprite atlas (one
                         // draw for every panel); uUseAtlas is uniform per draw.
-                        vec4 texel = uUseAtlas > .5 ? texture(uAtlas, vec3(vUv, vLayer), uSpriteLodBias) : texture(uTopTexture, vUv, uSpriteLodBias);
+                        vec4 texel = uUseAtlas > .5 ? texture(uAtlas, vec3(vUv, vLayer)) : texture(uTopTexture, vUv);
                         // Transparent sprite padding must not turn into a pale plaque.
                         if (texel.a < .1) discard;
                         base = mix(vec3(.055,.065,.08), texel.rgb, texel.a);
@@ -3015,7 +3015,7 @@
                     vec3 shaded = base * shade;
                     if (!glowing) {
                         shaded *= mix(.86, 1.0, uIsUnit);
-                        shaded = mix(shaded, vec3(.025,.035,.055), faceInkScaled(vUv, mix(.55, .75, uIsUnit), exp2(uSpriteLodBias)) * .65);
+                        shaded = mix(shaded, vec3(.025,.035,.055), faceInkScaled(vUv, mix(.55, .75, uIsUnit), uInkScale) * .65);
                     }
                     // Painted panels retain their colors without looking emissive.
                     if (vSurface == 4 || vSurface == 15) shaded *= .94;
@@ -3028,7 +3028,7 @@
                 }
             `);
             this.figureUniforms = {
-                spriteLodBias: gl.getUniformLocation(this.figureProgram, 'uSpriteLodBias'),
+                inkScale: gl.getUniformLocation(this.figureProgram, 'uInkScale'),
                 coverageFade: gl.getUniformLocation(this.figureProgram, 'uCoverageFade'),
                 animationMode: gl.getUniformLocation(this.figureProgram, 'uAnimationMode'),
                 rig: gl.getUniformLocation(this.figureProgram, 'uRig'),
@@ -5462,7 +5462,7 @@
                 gl.uniform1f(uniforms.rig, mesh.rig);
                 gl.uniform1f(uniforms.time, this.animationTime || 0);
                 gl.uniform1f(uniforms.animationMode, Number(objects[0].animationMode) || 0);
-                gl.uniform1f(uniforms.spriteLodBias, 0);
+                gl.uniform1f(uniforms.inkScale, 1);
                 let key = objects[0].modelKey || '';
                 gl.uniform1f(uniforms.isUnit, key.startsWith('unit_') ? 1 : 0);
                 gl.uniform1f(uniforms.followWalkSurface, this.walkSurfaceTexture && key.startsWith('unit_')
@@ -5793,7 +5793,8 @@
             gl.activeTexture(gl.TEXTURE0);
             for(const target of [A,A.animation])for(const name of ['color','mask']) {
                 target[name]=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,target[name]);
-                gl.texStorage2D(gl.TEXTURE_2D,target.levels,gl.RGBA8,target.pixels,target.pixels);
+                // sRGB: filtering and mip blending happen in linear light.
+                gl.texStorage2D(gl.TEXTURE_2D,target.levels,gl.SRGB8_ALPHA8,target.pixels,target.pixels);
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
@@ -6434,12 +6435,14 @@
                     uniform float uAnimGrid,uAtlasPixels,uAnimPixels;
                     uniform float uAtlasGrid, uFlat, uCoverageFade;
                     out vec4 color;
+                    vec3 srgbToLinear(vec3 c){return mix(c/12.92,pow((c+.055)/1.055,vec3(2.4)),step(.04045,c));}
+                    vec3 linearToSrgb(vec3 c){c=max(c,vec3(0.));return mix(c*12.92,1.055*pow(c,vec3(1./2.4))-.055,step(.0031308,c));}
                     vec4 sampleViewMip(vec2 origin,float cellSize,float pixels,vec2 coord,float mip) {
                         float inset=min(.5,.5*exp2(mip)/cellSize);
                         vec2 uv=(origin+clamp(coord,vec2(inset),vec2(1.-inset))*cellSize)/pixels;
                         vec4 texel=vAnimated>.5?textureLod(uAnimSprites,uv,mip):textureLod(uSprites,uv,mip);
                         vec3 owner=(vAnimated>.5?textureLod(uAnimOwnerMask,uv,mip):textureLod(uOwnerMask,uv,mip)).rgb;
-                        texel.rgb=max(vec3(0.),texel.rgb-owner*(vec3(1.)-vColor.rgb));
+                        texel.rgb=max(vec3(0.),texel.rgb-owner*(vec3(1.)-srgbToLinear(vColor.rgb)));
                         return texel;
                     }
                     vec4 sampleView(float layer, vec2 coord, vec2 dx, vec2 dy) {
@@ -6504,7 +6507,8 @@
                             vec4 c=sampleBakedView(vViewC,viewPoint,dx,dy);
                             vec4 d=sampleBakedView(vViewD,viewPoint,dx,dy);
                             vec4 texel=a*vViewWeights.x+b*vViewWeights.y+c*vViewWeights.z+d*vViewWeights.w;
-                            texel.rgb /= max(texel.a,.001);
+                            // Views and mips mix in linear light; display in sRGB.
+                            texel.rgb = linearToSrgb(texel.rgb / max(texel.a,.001));
                             if (uStructure == 0 && uFlat > .5) {
                                 float ring = 1.-smoothstep(.025,.025+fwidth(edge),abs(length(p)-.83));
                                 texel = vec4(mix(vColor.rgb,texel.rgb,texel.a),max(texel.a,ring*.85));

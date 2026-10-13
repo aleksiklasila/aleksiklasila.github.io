@@ -2,7 +2,7 @@
 // owns the final atlas; camera motion only samples its resident textures.
 self.window=self;
 self.document={createElement:()=>new OffscreenCanvas(64,64)};
-importScripts('renderer3d.js?v=20261013-lod16');
+importScripts('renderer3d.js?v=20261013-lod25');
 const renderer=Object.create(Defence3Renderer3D.prototype);
 const color=new OffscreenCanvas(64,64),mask=new OffscreenCanvas(64,64);
 const g=color.getContext('2d',{willReadFrequently:true}),m=mask.getContext('2d',{willReadFrequently:true});
@@ -101,10 +101,12 @@ class GpuSnapshots {
     bakeBatch(stride,animation,style,cell=32,levels=6,focalPixels=1238) {
         const gl=this.gl,count=stride-1;
         this.sizes=Array.from({length:levels},(_,level)=>cell>>level);
-        // Tiny fresh renders with just four samples turned entire distant
-        // rows into solid color. Integrate subpixel coverage at each target
-        // distance, while keeping panel filtering and ink at that target size.
-        this.sampleScales=this.sizes.map(size=>size>=16?1:size>=8?2:4);
+        // Each mip matches the live model at its target size: render that
+        // distance at 32px or more and box it down here. Panels sample at the
+        // render resolution; a target-size bias blurred them twice, spreading
+        // owner rims over whole roofs and muddying distant colors. Ink keeps
+        // its target-pixel width and fade, like the live model's.
+        this.sampleScales=this.sizes.map(size=>Math.max(1,Math.min(cell,32)/size));
         this.renderSizes=this.sizes.map((size,i)=>size*this.sampleScales[i]);
         this.sheetStride=this.renderSizes.reduce((sum,size)=>sum+size,0);
         // Every model uses the unit capture path, including a fresh model
@@ -136,7 +138,7 @@ class GpuSnapshots {
                 for(let level=0;level<this.sizes.length;level++) {
                     const size=this.renderSizes[level];
                     gl.uniformMatrix4fv(this.u.viewProjection,false,views[i][level].vp);
-                    gl.uniform1f(this.u.spriteLodBias,Math.log2(this.sampleScales[level]));
+                    gl.uniform1f(this.u.inkScale,this.sampleScales[level]);
                     gl.viewport(left,top,size,size);gl.drawElements(gl.TRIANGLES,this.count,gl.UNSIGNED_INT,0);left+=size;
                 }
             }
@@ -148,26 +150,48 @@ class GpuSnapshots {
         const error=gl.getError();if(error)throw Error('GPU snapshot error '+error);
         return views.map((view,i)=>this.unpack(view[0].meta,(i%16)*this.sheetStride,Math.floor(i/16)*this.sheetRow));
     }
+    // Average in linear light, as the eye mixes neighbouring pixels. Mixing
+    // gamma values made fine dark lines on light paint (black on brown, ink
+    // on owner rims) too dark and gray in distant mips. The atlas is an sRGB
+    // texture holding premultiplied linear color; the GPU filters it in
+    // linear light too.
     unpack(meta,offsetX,offsetY) {
-        const levels=[],[white,black]=this.pixels;
+        const levels=[],[white,black]=this.pixels,decode=GpuSnapshots.decodeTable,encode=GpuSnapshots.encodeTable;
         let left=0;
         for(let level=0;level<this.sizes.length;level++) {
-            const size=this.sizes[level],scale=this.sampleScales[level],renderSize=this.renderSizes[level];
+            const size=this.sizes[level],scale=this.sampleScales[level],renderSize=this.renderSizes[level],n=scale*scale;
             const color=new Uint8ClampedArray(size*size*4),mask=new Uint8ClampedArray(color.length);
             for(let y=0;y<size;y++)for(let x=0;x<size;x++) {
                 const dst=(y*size+x)*4,sums=[0,0,0,0],owners=[0,0,0];
                 for(let sy=0;sy<scale;sy++)for(let sx=0;sx<scale;sx++) {
                     const src=((offsetY+renderSize-1-y*scale-sy)*this.sheetWidth+offsetX+x*scale+sx+left)*4;
-                    for(let k=0;k<4;k++)sums[k]+=white[src+k];
-                    for(let k=0;k<3;k++)owners[k]+=Math.max(0,white[src+k]-black[src+k]);
+                    const a=white[src+3],b=black[src+3];
+                    if(!a)continue;
+                    sums[3]+=a;
+                    for(let k=0;k<3;k++) {
+                        // Resolved MSAA bytes are coverage-weighted: unweight,
+                        // decode, and weight again in linear light.
+                        const lit=decode[Math.min(255,Math.round(white[src+k]*255/a))]*a,dark=b?decode[Math.min(255,Math.round(black[src+k]*255/b))]*b:0;
+                        sums[k]+=lit;owners[k]+=Math.max(0,lit-dark);
+                    }
                 }
-                for(let k=0;k<4;k++)color[dst+k]=sums[k]/(scale*scale);
-                for(let k=0;k<3;k++)mask[dst+k]=owners[k]/(scale*scale);
-                mask[dst+3]=color[dst+3];
+                for(let k=0;k<3;k++){color[dst+k]=encode[Math.min(4095,Math.round(sums[k]/(255*n)*4095))];mask[dst+k]=encode[Math.min(4095,Math.round(owners[k]/(255*n)*4095))];}
+                color[dst+3]=sums[3]/n;mask[dst+3]=color[dst+3];
             }
             levels.push({color,mask,size});left+=renderSize;
         }
         return {levels,meta};
+    }
+    // Lookup tables: the bake decodes every rendered byte (pow is slow).
+    static decodeTable=Float32Array.from({length:256},(_,i)=>GpuSnapshots.linear(i/255));
+    static encodeTable=Uint8Array.from({length:4096},(_,i)=>GpuSnapshots.encode(i/4095));
+    static linear(value) {
+        const c=Math.min(1,value);
+        return c<=.04045?c/12.92:((c+.055)/1.055)**2.4;
+    }
+    static encode(value) {
+        const c=Math.max(0,Math.min(1,value));
+        return Math.round(255*(c<=.0031308?c*12.92:1.055*c**(1/2.4)-.055));
     }
 }
 let gpu;

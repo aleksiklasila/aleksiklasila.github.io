@@ -9,8 +9,11 @@ const Baker=vm.runInContext('GpuSnapshots',c),b=Object.create(Baker.prototype);
 Object.assign(b,{sizes:[1],sampleScales:[4],renderSizes:[4],sheetWidth:4,pixels:[new Uint8Array(64),new Uint8Array(64)]});
 for(let i=0;i<8;i++) {b.pixels[0].set([120,80,40,255],i*4);b.pixels[1].set([80,60,30,255],i*4);}
 const image=b.unpack([1,0,0,1],0,0).levels[0];
-assert.deepEqual([...image.color],[60,40,20,128]);
-assert.deepEqual([...image.mask],[20,10,5,128]);
+// Coverage and ownership average in linear light, stored sRGB-encoded.
+const half=(lit,dark=0)=>Baker.encode((Baker.linear(lit/255)-Baker.linear(dark/255))/2);
+assert.deepEqual([...image.color],[half(120),half(80),half(40),128]);
+assert.deepEqual([...image.mask],[half(120,80),half(80,60),half(40,30),128]);
+assert.ok(image.color[0]>60,'half coverage keeps its perceived brightness instead of the gamma average');
 // The frame is identical across LODs, but perspective convergence changes
 // with target size; each mip must represent its own camera distance.
 Object.assign(b,{sx:1,sy:1,data:{positions:[-1,0,-1,1,2,1],details:new Float32Array(8),normals:new Float32Array(6)}});
