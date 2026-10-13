@@ -62,7 +62,11 @@ for(const [type,height,preserve] of [['house',.82,true],['farm',.72,true],['lava
     assert.equal(s.bakeHeight,1);
 }
 assert.equal(buildings.styles.find(s=>s.type==='builder_spawner').statusTextureCanvas.type,'builder_spawner');
-assert.equal(buildings.stride,81);
+assert.equal(buildings.stride,81,'static models use the same direction/elevation layout as animated units');
 const fire=buildings.styles.find(s=>s.type==='fire');
 assert.equal(fire.scaleY,1.05/.94);
+c.BASE_UNIT_STATS.snake={color:'#0f0',visionRange:1};strings.push('snake');
+const snakes=c.getColumnLodCatalog(),snake=snakes.styles.find(s=>s.modelKey==='unit_snake');
+assert.equal(snake.snake,true);assert.equal(snake.scaleY,.52);
+assert.equal(snakes.lookup[(7*snakes.width+strings.indexOf('snake'))*4+1],-1,'snake uses its own minimum height, not a humanoid torso');
 console.log('PASS: atlas cache ignores labels, includes new types, and remaps codes after restart.');

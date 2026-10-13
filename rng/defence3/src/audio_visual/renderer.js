@@ -3736,11 +3736,12 @@ function getColumnLodCatalog() {
             g.strokeStyle=color;g.lineWidth=1;g.strokeRect(-15,-15,30,30);g.restore();
         };
         const at=(row*width+code)*4;
-        // One panel plus sixteen directions at five camera elevations.
+        // One panel plus the same sixteen directions/five elevations as units' animation frames.
         const preserve=style.preserveModelHeight || style.isFlying || style.mounted || style.modelKey.startsWith('tower_cloud') ? 1 : 0;
         const stats = style.unit ? BASE_UNIT_STATS[style.type] : BASE_CARD_TYPES[style.type];
         const vision = Number(stats?.visionRange) || 0;
         style.bakeHeight = preserve || vision <= 0 ? 1 : Math.max(.18, vision * (typeof AREA_UNIT_TILE_EQUIVALENT === 'number' ? AREA_UNIT_TILE_EQUIVALENT : 5) / 5);
+        style.maxHeightRatio=preserve||vision<=0?1:Math.max(1,(Number(stats?.maxVisionRange)||vision)/vision);
         if(code>=0) {
             lookup[at] = styles.length * 81 + 1;lookup[at+1]=style.snake?-1:preserve;
             lookup[at+2] = style.bakeHeight * (style.mounted ? -1 : 1);
@@ -3855,8 +3856,10 @@ function _detailViewKey(flat2d) {
     // camera matrices, positions and GPU animation still update every frame;
     // only model membership waits for a meaningful camera change.
     {
-        const key = [flat2d,Math.round(camera.x*camera.zoom/24),Math.round(camera.y*camera.zoom/24),
-            Math.round(Math.log(camera.zoom)/.035),Math.round(R.orbitPitch/.025),Math.round(R.orbitYaw/.025),R.cssWidth,R.cssHeight].join('|');
+        // Hold updates during motion, but retain the exact requested pose.
+        // Rounded buckets could keep the selection from either edge of a
+        // bucket indefinitely, even after returning to the same camera pose.
+        const key = [flat2d,camera.x,camera.y,camera.zoom,R.orbitPitch,R.orbitYaw,R.cssWidth,R.cssHeight].join('|');
         // While the camera moves the key changes every 24 px: at pan speed
         // every frame, and every change is a new selection of the models
         // (scores, picks, new close models, the middle-distance instances:
@@ -3880,7 +3883,7 @@ function _detailViewKey(flat2d) {
         return V.key;
     }
 }
-function _detailScore(x, z, size, flat2d, retained = false, minPixels = UNIT_DETAIL_MIN_PX) {
+function _detailScore(x, z, size, flat2d, retained = false, minPixels = UNIT_DETAIL_MIN_PX, height = 1) {
     const R = renderer3dInstance, M = R.tmpViewProjection;
     const w = M[3] * x + M[7] * .02 + M[11] * z + M[15];
     if (!(w > 0)) return 0;
@@ -3891,7 +3894,7 @@ function _detailScore(x, z, size, flat2d, retained = false, minPixels = UNIT_DET
     const pixels = size * scale;
     const sx = viewW / R.cssWidth, sy = viewH / R.cssHeight;
     const margin = scale * 2 / R.cssHeight; // Bodies overlapping a screen edge.
-    if (nz < -1 || nz > 1 || Math.abs(nx) > sx + margin || Math.abs(ny) > sy + margin) return 0;
+    if (nz < -1 || nz > 1 || Math.abs(nx) > sx + margin || Math.abs(ny) > sy + margin*Math.max(1,height)) return 0;
     if (pixels < minPixels * (retained ? .85 : 1)) return 0;
     // Once a body is clearly readable, huge units must not permanently
     // exclude smaller neighbours. Prefer the view centre for equal sizes.
