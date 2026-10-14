@@ -3654,7 +3654,9 @@
                     if (t >= 0 && t < bestT) { bestT = t; best = o.pickSource; }
                 }
             }
-            return best;
+            // Detail scenes also draw distant column sprites, which have no
+            // triangle entries. Keep precise mesh hits ahead of their fallback.
+            return best || (this.columnLayers ? this.pickScaleSource(screenX - pickPad, screenY - pickPad, candidates, true) : null);
         }
 
         // Box selection against what is drawn: the sources whose rendered
@@ -5701,14 +5703,18 @@
             gl.enable(gl.DEPTH_TEST);
         }
 
-        visitScaleCandidates(candidates, visit) {
+        visitScaleCandidates(candidates, visit, spritesOnly = false) {
+            // Clicks pass a source-to-candidate Map; boxes pass a Set or array.
+            // Get a fresh iterator for each layer so later layers see all sources.
+            const sources = () => candidates && typeof candidates.get === 'function' ? candidates.keys() : candidates;
             if (this.columnLayers) {
                 const C = this.columnLayers;
-                for (const source of candidates || (C.unitSources||[]).concat(C.structureSources||[])) {
+                for (const source of sources() || (C.unitSources||[]).concat(C.structureSources||[])) {
                     if (!source || source.dead || source.energy <= 0 || source._historyGhost) continue;
                     const structure = source._structView || C.structures?.sourceIndex?.has(source);
                     const F = structure ? C.structures : C.units, s = structure && F?.sourceIndex ? F.sourceIndex.get(source) : source._s;
-                    if (!(s >= 0)) continue;
+                    if (!F || !(s >= 0)) continue;
+                    if (spritesOnly && (structure ? C.detailMaskS : C.detailMask)?.[s] === 255) continue;
                     const moving = !structure;
                     if (moving && (F.flags[s] & 1024)) continue;
                     const x = F.x[s] / C.tile, z = F.y[s] / C.tile;
@@ -5722,7 +5728,7 @@
             for (const layer of this.scaleLayers || []) {
                 if (!layer.sourceIndex) layer.sourceIndex = new Map(layer.sources.map((source, i) => [source, i]));
                 const d = layer.data, a = layer.alpha;
-                for (const source of candidates || layer.sources) {
+                for (const source of sources() || layer.sources) {
                     const i = layer.sourceIndex.get(source);
                     if (i === undefined || source.dead || source.energy <= 0 || source._historyGhost) continue;
                     const o = i * 12;
@@ -5732,7 +5738,7 @@
             }
         }
 
-        pickScaleSource(x, y, candidates) {
+        pickScaleSource(x, y, candidates, spritesOnly = false) {
             let best = null, distance = Infinity;
             this.visitScaleCandidates(candidates, (source, wx, wz, size, height) => {
                 const p = this.projectWorldToScreen(wx, height, wz);
@@ -5740,7 +5746,7 @@
                 const radius = Math.max(2, this.pixelsPerWorldAt(wx, height, wz) * size * .7);
                 const d = (p.x - x) ** 2 + (p.y - y) ** 2;
                 if (d <= radius * radius && d < distance) { distance = d; best = source; }
-            });
+            }, spritesOnly);
             return best;
         }
 
@@ -5748,24 +5754,32 @@
         // records. Opaque cutouts let depth testing order the 3D sprite surfaces.
         // Pixels per world unit of size for the column glyphs (their size
         // rule, shared with the detail split: renderer.js _unitDetailSplit).
+        getColumnAtlas() {
+            const catalog = typeof getColumnLodCatalog === 'function' ? getColumnLodCatalog() : null;
+            // A later spawn can introduce a new string code, but all of its
+            // images already exist. Rendering may update only this lookup.
+            if(catalog && this.columnAtlas && this.columnAtlas.catalog!==catalog && this.columnAtlas.catalog.styles===catalog.styles) {
+                const gl=this.gl,A=this.columnAtlas;A.catalog=catalog;
+                gl.bindTexture(gl.TEXTURE_2D,A.lookup);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+                gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,catalog.width,8,0,gl.RGBA,gl.FLOAT,catalog.lookup);
+            }
+            return this.columnAtlas;
+        }
+
         prepareColumnAtlas() {
+            this.getColumnAtlas();
             const catalog = typeof getColumnLodCatalog === 'function' ? getColumnLodCatalog() : null;
             if (!catalog) return this.columnAtlas;
             const palette=Defence3Renderer3D.columnPalette(
                 typeof get3DRenderOwnerColor==='function'?get3DRenderOwnerColor:()=> '#c8ced8',
                 typeof activeTeamIds!=='undefined'?activeTeamIds:[0,1]);
-            if(this.columnAtlas && this.columnAtlas.catalog!==catalog && this.columnAtlas.catalog.styles===catalog.styles) {
-                const gl=this.gl,A=this.columnAtlas;A.catalog=catalog;
-                gl.bindTexture(gl.TEXTURE_2D,A.lookup);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
-                gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,catalog.width,8,0,gl.RGBA,gl.FLOAT,catalog.lookup);
-            }
             if (this.columnAtlas?.catalog === catalog && this.columnAtlas.palette.key===palette.key) return this.columnAtlas;
             const gl=this.gl,stride=catalog.stride,views=stride-1,animationViews=views;
             const grid=Math.ceil(Math.sqrt(catalog.styles.length*stride+1)),old=this.columnAtlas;
             const reuse=old?.complete && old.catalog.styles===catalog.styles;
             old?.worker?.terminate();
             if(old)old.prepare=null;
-            const A=this.columnAtlas={catalog,palette,grid,panels:reuse?old.panels:[],sources:[],
+            const A=this.columnAtlas={catalog,palette,grid,panels:reuse?old.panels:[],ownerPanels:reuse?new Map(old.ownerPanels):new Map(),sources:[],
                 metaData:new Float32Array(grid*grid*4),next:0,revision:(old?.revision||0)+1,reusedLayers:new Set()};
             if(COLUMN_BAKE_WORKER_URL && typeof Worker==='function' && typeof createImageBitmap==='function') {
                 try {
@@ -5911,6 +5925,7 @@
                 else if(!style.unit&&!style.neutral){pg.strokeStyle=ownerColor;pg.lineWidth=2;pg.strokeRect(4,4,56,56);}
                 style.draw(pg);A.sources[i]=panel;
                 if(layer===0)A.panels[i]=panel;
+                if(style.drawOwnerRim)A.ownerPanels.set(i+'|'+hexToRgb(ownerColor).join(','),panel);
             };
             for(const [target,name,width,height,data] of [[A,'meta',grid,grid,A.metaData],[A,'lookup',catalog.width,8,catalog.lookup],[A.animation,'meta',ag,ag,A.animation.metaData]]) {
                 gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
@@ -6072,12 +6087,7 @@
         columnModelPanel(A, index, ownerColor) {
             const style=A.catalog.styles[index];
             if(!style.drawOwnerRim)return A.panels[index];
-            const cache=A.ownerPanels || (A.ownerPanels=new Map()),key=index+'|'+ownerColor;
-            if(cache.has(key))return cache.get(key);
-            const panel=document.createElement('canvas');panel.width=panel.height=FLAT_ATLAS_SIZE;
-            const g=panel.getContext('2d');g.scale(FLAT_ATLAS_SIZE/64,FLAT_ATLAS_SIZE/64);
-            g.__drawImagesImmediately=true;g.imageSmoothingEnabled=false;
-            style.drawOwnerRim(g,ownerColor);style.draw(g);cache.set(key,panel);return panel;
+            return A.ownerPanels.get(index+'|'+hexToRgb(ownerColor).join(',')) || A.panels[index];
         }
         // Readable middle-distance bodies share models and type panels. Only
         // visible slots are packed; interpolation and every articulated pose
@@ -6604,7 +6614,8 @@
         }
         drawFrameColumns(C, snapshot) {
             const gl = this.gl;
-            const atlas = this.prepareColumnAtlas();
+            const atlas = this.getColumnAtlas();
+            if (!atlas?.complete) return;
             const models = this.drawColumnModels(C,snapshot,atlas);
             this.ensureColumnProgram();
             const U = this.columnUniforms;
@@ -6734,12 +6745,9 @@
                 if (S.vao) this.gl.deleteVertexArray(S.vao);
                 if (S.maskBuf) this.gl.deleteBuffer(S.maskBuf);
             }
-            if(this.columnAtlas) {
-                this.columnAtlas.worker?.terminate();this.columnAtlas.prepare=null;
-                for(const target of [this.columnAtlas,this.columnAtlas.animation])if(target)
-                    for(const name of ['color','meta','lookup'])if(target[name])this.gl.deleteTexture(target[name]);
-            }
-            this.columnAtlas=null;
+            // Match resets and display changes clear instance buffers, not
+            // the complete roster of shared model views prepared at startup.
+            // prepareColumnAtlas replaces textures when match assets change.
             this.columnStores=[{},{}];this.columnLayers=null;
         }
 

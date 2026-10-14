@@ -53,3 +53,59 @@ assert.deepEqual(box(45, 42, 55, 48), [building]);
 picker.pickObjects = [object(unit, { x: -.5 }), object(building, { x: .5 })];
 assert.deepEqual(box(60, 20, 90, 40), [building], 'only the object under the box');
 console.log('PASS: mesh picking covers heads, silhouette gaps, squashing, depth, adjacent targets, animation and clipping; box selection follows the drawn mesh.');
+
+// Click candidates are a Map from main.js; drag selection supplies a Set.
+const distantUnit = { _s: 0 }, distantBuilding = { _s: 0, _structView: true };
+const distantCandidates = new Map([[distantUnit, {}], [distantBuilding, {}]]);
+picker.tmpViewProjection = picker.pickViewProjection;
+picker.viewPad = picker.pickViewPad = 7;
+picker.pixelsPerWorldAt = () => 10;
+picker.scaleLayers = [];
+picker.columnLayers = {
+    units: { x: [-.2], y: [0], px: [-.6], py: [0], r: [.2], flags: [0] },
+    structures: { x: [.5], y: [0] },
+    unitSources: [distantUnit], structureSources: [distantBuilding],
+    tile: 1, alpha: .5, fullVisibility: true,
+    detailMask: new Uint8Array(1), detailMaskS: new Uint8Array(1),
+};
+const clickDistant = (x, y = 42) => picker.pickRenderedSource(x, y, distantCandidates);
+assert.equal(clickDistant(23), distantUnit, 'single click selects an interpolated distant sprite unit');
+assert.equal(clickDistant(68), distantBuilding, 'single click selects a distant sprite building');
+assert.equal(clickDistant(90), null, 'empty space remains unselectable');
+assert.deepEqual([...picker.boxRenderedSources(20, 40, 26, 44, new Set([distantUnit]))], [distantUnit]);
+
+// A detailed scene can still contain distant sprites outside its mesh list.
+picker.scaleLayers = null;
+picker.pickObjects = [object(unit)];
+assert.equal(clickDistant(23), distantUnit, 'mixed scene includes distant unit sprites');
+assert.equal(clickDistant(68), distantBuilding, 'mixed scene includes distant building sprites');
+picker.pickObjects = [object(unit, { x: -.4, y: -.2 })];
+distantCandidates.set(unit, {});
+assert.equal(clickDistant(23), unit, 'precise nearby mesh hits take priority over sprite fallback');
+distantCandidates.delete(unit);
+picker.pickObjects = [];
+picker.columnLayers.detailMask[0] = 255;
+assert.equal(clickDistant(23), null, 'fully detailed units keep precise mesh picking');
+picker.columnLayers.detailMask[0] = 128;
+assert.equal(clickDistant(23), distantUnit, 'partly blended sprites remain clickable');
+picker.columnLayers.detailMaskS[0] = 255;
+assert.equal(clickDistant(68), null, 'fully detailed buildings keep precise mesh picking');
+picker.columnLayers.units.flags[0] = 1024;
+assert.equal(clickDistant(23), null, 'hidden units are excluded');
+picker.columnLayers.units.flags[0] = 0;
+distantUnit.dead = true;
+assert.equal(clickDistant(23), null, 'dead units are excluded');
+delete distantUnit.dead;
+picker.columnLayers.fullVisibility = false;
+picker.columnLayers.visibility = [];
+assert.equal(clickDistant(23), null, 'units outside visibility are excluded');
+
+// Legacy packed layers also accept click Maps, including later layers.
+picker.columnLayers = null;
+picker.scaleLayers = [distantUnit, distantBuilding].map((source, i) => ({
+    sources: [source], alpha: 1,
+    data: [i ? .5 : -.4, 0, 0, 0, .4, .04, 0, 0, 0, 0, 0, 0],
+}));
+assert.equal(clickDistant(23), distantUnit);
+assert.equal(clickDistant(68), distantBuilding);
+console.log('PASS: distant units and buildings support single clicks in sprite-only and mixed detail scenes.');

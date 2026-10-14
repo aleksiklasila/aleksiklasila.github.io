@@ -103,3 +103,37 @@ while(newAtlas.prepare)R3.advanceColumnAtlas(newAtlas,100);
 assert.equal(newAtlas.reusedLayers.size,2);
 assert.equal(captures.length-count,80);
 assert.ok(captures.slice(count).every(([,color])=>color==='#00ff00'));
+
+// All owner panels are prepared even when no instance has used that type.
+const beforePanels=jobs.length,beforeRims=rims.length;
+for(const color of newAtlas.palette.colors) {
+    const panel=R3.columnModelPanel(newAtlas,0,color);
+    assert.ok(panel,'every match color has a prepared building panel');
+    assert.equal(panel,R3.columnModelPanel(newAtlas,0,color.toUpperCase()));
+}
+assert.equal(R3.columnModelPanel(newAtlas,0,'#f00'),R3.columnModelPanel(newAtlas,0,'#ff0000'));
+assert.equal(jobs.length,beforePanels,'first appearance does not redraw the type panel');
+assert.equal(rims.length,beforeRims,'first appearance does not redraw its ownership rim');
+
+// Transient resets (including visual settings) must retain every baked view.
+R3.disposeFrameColumns();
+assert.equal(R3.columnAtlas,newAtlas);
+assert.equal(newAtlas.complete,true);
+assert.equal(R3.getColumnAtlas(),newAtlas);
+assert.equal(captures.length,count+80);
+
+// Rendering can remap later type codes, but cannot start a bake, even if
+// configuration changes or the renderer has not been prepared yet.
+const later={...ownedCatalog,width:4,lookup:new Float32Array(128)};
+c.getColumnLodCatalog=()=>later;
+assert.equal(R3.getColumnAtlas(),newAtlas);
+assert.equal(newAtlas.catalog,later);
+c.getColumnLodCatalog=()=>({...later,styles:[...later.styles]});
+const renderUploads=uploads.length;
+assert.equal(R3.getColumnAtlas(),newAtlas);
+assert.equal(uploads.length,renderUploads);
+const cold=Object.create(D.prototype);cold.gl=gl;
+cold.prepareColumnAtlas=()=>{throw Error('rendering must never start a bake');};
+cold.drawFrameColumns({},{});
+assert.equal(cold.columnAtlas,undefined);
+console.log('PASS: all owner panels are preloaded; late codes and transient resets never bake during rendering.');
