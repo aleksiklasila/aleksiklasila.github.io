@@ -2,7 +2,7 @@
 // owns the final atlas; camera motion only samples its resident textures.
 self.window=self;
 self.document={createElement:()=>new OffscreenCanvas(64,64)};
-importScripts('renderer3d.js?v=20261014-lod30');
+importScripts('renderer3d.js?v=20261014-lod36');
 const renderer=Object.create(Defence3Renderer3D.prototype);
 const color=new OffscreenCanvas(64,64);
 const g=color.getContext('2d',{willReadFrequently:true});
@@ -95,13 +95,13 @@ class GpuSnapshots {
     bakeBatch(stride,animation,style,cell=32,levels=6,focalPixels=1238) {
         const gl=this.gl,count=stride-1;
         this.sizes=Array.from({length:levels},(_,level)=>cell>>level);
-        // Each mip matches the live model at its target size: render that
-        // distance at 32px or more and box it down here. Panels sample at the
-        // render resolution; a target-size bias blurred them twice, spreading
-        // owner rims over whole roofs and muddying distant colors. Ink keeps
-        // its target-pixel width and fade, like the live model's.
-        this.sampleScales=this.sizes.map(size=>Math.max(1,Math.min(cell,32)/size));
-        this.renderSizes=this.sizes.map((size,i)=>size*this.sampleScales[i]);
+        // Rasterize each mip at its actual pixel size, as the live model is.
+        // Rendering tiny mips at 32px and box-reducing them added a second
+        // coverage filter on top of MSAA, then atlas filtering averaged those
+        // already softened details again. Native-size captures also give panel
+        // mip selection and face borders the live shader's pixel derivatives.
+        this.sampleScales=this.sizes.map(()=>1);
+        this.renderSizes=this.sizes.slice();
         this.sheetStride=this.renderSizes.reduce((sum,size)=>sum+size,0);
         // Every model uses the unit capture path, including a fresh model
         // render for each mip. Static models simply omit additional poses.
@@ -123,7 +123,9 @@ class GpuSnapshots {
         if(animation)this.data={...original,positions:Defence3Renderer3D.columnPose(style,original,phase,mode,move,time)};
         const views=Array.from({length:count},(_,i)=>this.sizes.map(size=>this.projection(...Defence3Renderer3D.columnView(stride,i),size,focalPixels)));
         this.data=original;
-        gl.enable(gl.DEPTH_TEST);gl.disable(gl.BLEND);gl.disable(gl.CULL_FACE);
+        // Match the live context's equal-depth draw precedence for overlapping
+        // model surfaces; a fresh WebGL context otherwise defaults to LESS.
+        gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);gl.disable(gl.BLEND);gl.disable(gl.CULL_FACE);
         {
             gl.bindFramebuffer(gl.FRAMEBUFFER,this.ms);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
             gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,this.texture);

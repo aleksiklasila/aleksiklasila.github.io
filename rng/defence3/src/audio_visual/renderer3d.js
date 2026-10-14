@@ -1,6 +1,6 @@
 (function () {
     const COLUMN_BAKE_WORKER_URL = typeof document !== 'undefined' && document.currentScript?.src
-        ? new URL('renderer3d-lod-worker.js?v=20261014-lod30',document.currentScript.src).href : null;
+        ? new URL('renderer3d-lod-worker.js?v=20261014-lod36',document.currentScript.src).href : null;
     function createShader(gl, type, source) {
         let shader = gl.createShader(type);
         gl.shaderSource(shader, source);
@@ -6115,14 +6115,23 @@
                         // A tall tower's ground anchor can be off screen while
                         // its roof is close and visible. Keep that roof a mesh.
                         const edgeHeight=Math.max(1,(F.vision[s]||0)*AREA_UNIT_TILE_EQUIVALENT/5*2);
-                        // The mesh/image boundary must depend on this view,
-                        // not which rows happened to be meshes before a turn.
-                        scores[i]=_detailScore(x,z,size,false,false,12,edgeHeight);
+                        // Spread the mesh/image boundary over +/-20% of its
+                        // original view depth. Structure tiles and unit IDs
+                        // keep the pattern fixed through camera motion, unit
+                        // movement and changes to candidate ordering.
+                        // Avalanche the seed so neighbouring tiles/IDs do not
+                        // form stripes. No random state or per-frame sorting.
+                        let seed=kind ? F.id[s]^0x9e3779b9
+                            : Math.imul(F.gx[s],0x1f123bb5)^Math.imul(F.gy[s],0x5f356495)^Math.imul(F.kind[s]+1,0x6c8e9cf5);
+                        seed=Math.imul(seed^(seed>>>16),0x7feb352d);
+                        seed=Math.imul(seed^(seed>>>15),0x846ca68b);
+                        const fraction=((seed^(seed>>>16))>>>0)/4294967296;
+                        const minPixels=12/(.8+.4*fraction);
+                        scores[i]=_detailScore(x,z,size,false,false,minPixels,edgeHeight);
                     }
-                    // Only projected size determines the mesh-to-image switch.
-                    // A population budget drew equally readable neighbours with
-                    // different projection and materials, creating moving bands.
-                    // These are shared instanced meshes with no scene objects.
+                    // Each object's stable size threshold determines membership,
+                    // without a population budget. The same mask excludes its
+                    // sprite, so every object uses exactly one representation.
                     const picked=[];
                     for(let i=0;i<scores.length;i++)if(scores[i]>0)picked.push(i);
                     for(const i of picked) {
@@ -6433,8 +6442,18 @@
                     uniform highp sampler2DArray uSprites,uAnimSprites;
                     uniform float uAnimGrid,uAtlasPixels,uAnimPixels;
                     uniform float uAtlasGrid, uFlat, uCoverageFade;
+                    uniform bool uBlendBakedViews;
+                    uniform int uBakedSampling;
                     out vec4 color;
                     vec4 sampleViewMip(vec2 origin,float cellSize,float pixels,vec2 coord,float mip) {
+                        if (uFlat < .5 && uBakedSampling == 2) {
+                            // Inspect the original capture without either mip
+                            // reduction or bilinear reconstruction. Stay inside
+                            // this view's atlas cell at its transparent borders.
+                            ivec2 texel=ivec2(origin)+clamp(ivec2(floor(coord*cellSize)),ivec2(0),ivec2(int(cellSize)-1));
+                            return vAnimated>.5?texelFetch(uAnimSprites,ivec3(texel,int(vPaletteLayer)),0)
+                                :texelFetch(uSprites,ivec3(texel,int(vPaletteLayer)),0);
+                        }
                         float inset=min(.5,.5*exp2(mip)/cellSize);
                         vec2 uv=(origin+clamp(coord,vec2(inset),vec2(1.-inset))*cellSize)/pixels;
                         vec4 texel=vAnimated>.5?textureLod(uAnimSprites,vec3(uv,vPaletteLayer),mip):textureLod(uSprites,vec3(uv,vPaletteLayer),mip);
@@ -6445,6 +6464,10 @@
                         float pixels=vAnimated>.5?uAnimPixels:uAtlasPixels;
                         float cellSize=32.*exp2(mod(layer-1.,3.)),block=floor((layer-1.)/3.);
                         vec2 origin=32.*vec2(mod(block,pixels/32.),floor(block/(pixels/32.)));
+                        // Live diagnostic: compare the source capture with the
+                        // displayed mip at exactly the same camera position.
+                        if (uFlat < .5 && uBakedSampling != 0)
+                            return sampleViewMip(origin,cellSize,pixels,coord,0.);
                         dx*=cellSize/pixels;dy*=cellSize/pixels;
                         float maxMip=min(5.,log2(cellSize)-2.);
                         float a=dot(dx,dx),b=dot(dx,dy),c=dot(dy,dy);
@@ -6529,11 +6552,23 @@
                             vec2 dy = inverseBasis*vec2(0.,1. / vSpriteExtent.y);
                             vec2 viewPoint=(coord-.5)*vec2(1.,-1.)*vFrameMeta.x+vFrameMeta.yz;
                             viewPoint=inverseBasis*viewPoint;
-                            vec4 a=sampleBakedView(vViewA,viewPoint,dx,dy);
-                            vec4 b=sampleBakedView(vViewB,viewPoint,dx,dy);
-                            vec4 c=sampleBakedView(vViewC,viewPoint,dx,dy);
-                            vec4 d=sampleBakedView(vViewD,viewPoint,dx,dy);
-                            vec4 texel=a*vViewWeights.x+b*vViewWeights.y+c*vViewWeights.z+d*vViewWeights.w;
+                            vec4 texel;
+                            if (uFlat < .5 && !uBlendBakedViews) {
+                                // Diagnostic: keep projection, mip selection and
+                                // framing identical, but display one contributing
+                                // capture instead of averaging unaligned details.
+                                vec4 view=vViewA;float weight=vViewWeights.x;
+                                if(vViewWeights.y>weight){view=vViewB;weight=vViewWeights.y;}
+                                if(vViewWeights.z>weight){view=vViewC;weight=vViewWeights.z;}
+                                if(vViewWeights.w>weight)view=vViewD;
+                                texel=sampleBakedView(view,viewPoint,dx,dy);
+                            } else {
+                                vec4 a=sampleBakedView(vViewA,viewPoint,dx,dy);
+                                vec4 b=sampleBakedView(vViewB,viewPoint,dx,dy);
+                                vec4 c=sampleBakedView(vViewC,viewPoint,dx,dy);
+                                vec4 d=sampleBakedView(vViewD,viewPoint,dx,dy);
+                                texel=a*vViewWeights.x+b*vViewWeights.y+c*vViewWeights.z+d*vViewWeights.w;
+                            }
                             // The atlas already contains final framebuffer colors.
                             texel.rgb /= max(texel.a,.001);
                             // Premultiplied interpolation avoids dark fringes and
@@ -6562,7 +6597,7 @@
                         }
                     }`);
                 this.columnUniforms = {};
-                for (const n of ['AtlasPixels','AnimPixels','AnimGrid','AnimSprites','AnimMeta','ViewProjection','InverseViewProjection','Alpha','Tile','Scale','PixelRatio','Flat','LightNorm','Structure','Full','Player','Colors','OwnerLayers','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','AtlasGrid','StyleWidth','Yaw','Pitch','Time','HeightScale','PointMax','Viewport','Eye','CoverageFade']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
+                for (const n of ['AtlasPixels','AnimPixels','AnimGrid','AnimSprites','AnimMeta','ViewProjection','InverseViewProjection','Alpha','Tile','Scale','PixelRatio','Flat','LightNorm','Structure','Full','Player','Colors','OwnerLayers','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','AtlasGrid','StyleWidth','Yaw','Pitch','Time','HeightScale','PointMax','Viewport','Eye','CoverageFade','BlendBakedViews','BakedSampling']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
                 this.columnStores = [{},{}];
                 this.columnVisibilityTexture = createTexture(gl);
             }
@@ -6619,6 +6654,8 @@
             gl.uniform1f(U.Alpha,C.alpha);gl.uniform1f(U.Tile,C.tile);
             gl.uniform1f(U.LightNorm,Math.max(.001,C.lightNorm));
             gl.uniform1f(U.Flat,snapshot.flat2d?1:0);
+            gl.uniform1i(U.BlendBakedViews,Defence3Renderer3D.blendBakedViews!==false?1:0);
+            gl.uniform1i(U.BakedSampling,Defence3Renderer3D.bakedSampling==='base-nearest'?2:Defence3Renderer3D.bakedSampling==='base-linear'?1:0);
             gl.uniform1f(U.CoverageFade,this.sceneSamples ? 1 : 0);
             gl.uniform1f(U.Scale,this.columnPixelScale(snapshot.flat2d,snapshot.camera.visibleWidth,snapshot.viewportWidth));
             gl.uniform1f(U.PixelRatio,this.sceneTargetSize.height / this.cssHeight);
@@ -7118,13 +7155,20 @@
         }
     }
 
+    // Temporary live diagnostic. Changing this only affects 3D sprite sampling;
+    // it neither rebuilds atlases nor changes the actual 2D renderer.
+    Defence3Renderer3D.blendBakedViews = true;
+    Defence3Renderer3D.bakedSampling = 'filtered';
     Defence3Renderer3D.FlatSpriteBatch = FlatSpriteBatch;
     Defence3Renderer3D.PersistentInstances = PersistentInstances;
     Defence3Renderer3D.FxBatch = FxBatch;
     Defence3Renderer3D.FX_MESH = { BOX: FX_MESH_BOX, ORB: FX_MESH_ORB, SPIKE: FX_MESH_SPIKE, DECAL: FX_MESH_DECAL };
     Defence3Renderer3D.FX_PATTERN = FX_PATTERN;
     Defence3Renderer3D.workshopMiniature = workshopMiniature;
-    Defence3Renderer3D.columnBakeData = style => {const kind=proceduralKind(style);return kind?createFigureData(kind,0):null;};
+    // Match the live :lod2 mesh immediately before the sprite transition.
+    // Full-detail ornaments absent from that mesh otherwise get averaged into
+    // the baked body and change its apparent color at the representation switch.
+    Defence3Renderer3D.columnBakeData = style => {const kind=proceduralKind(style);return kind?createFigureData(kind,2):null;};
     // Size the cache at the mesh/image boundary, including the actual height
     // and equipment silhouette. Tall models must not upscale a 32px picture.
     Defence3Renderer3D.columnPalette = (colorFor,owners) => {
