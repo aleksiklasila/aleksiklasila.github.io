@@ -936,10 +936,9 @@ function buildInfoPanelUpKeepHtml(owner) {
 
 function _isInfoPanelUnitIdleLike(u) {
     if (!u || u.dead) return false;
-    let pathDone = (!u.path || u.pathIndex >= u.path.length);
-    if (u.workerType) return (u.workerState === 'IDLE') || !!u.holdPosition || (!u.workerTarget && pathDone);
-    if (u.commandState === CMD_IDLE || u.holdPosition) return true;
-    return !u.target && pathDone;
+    // Frame views omit paths and targets for unselected units. Their absence
+    // says nothing about activity; use the same state as the roster counts.
+    return !!u.holdPosition || (u.workerType ? u.workerState === 'IDLE' : u.commandState === CMD_IDLE);
 }
 
 function _getOwnedInfoPanelUnits(owner) {
@@ -1199,7 +1198,7 @@ function selectInfoPanelPlayerRoster(domain, filterKey, mode, owner = localPlaye
         nextEntities = pool;
     }
 
-    if (nextUnits.length <= 0 && nextEntities.length <= 0) return false;
+    if (nextUnits.length <= 0 && nextEntities.length <= 0 && selectMode !== 'idle') return false;
     selectedUnits = nextUnits;
     selectedEntities = nextEntities;
     activeSubGroups = {};
@@ -4849,17 +4848,23 @@ function openResearchThingLevelDropdown(anchorEl, opts) {
     document.addEventListener('mousedown', researchThingLevelDropdownOutsideHandler, true);
 }
 
-function getQueuedResearchTaskPreview(owner, orderedTasks, taskIndex) {
+function getQueuedResearchTaskPreview(owner, orderedTasks, taskIndex, priorDepths = null) {
     if (!Array.isArray(orderedTasks) || taskIndex < 0 || taskIndex >= orderedTasks.length) return null;
     let t = orderedTasks[taskIndex];
     if (!t) return null;
 
     let baseLevel = getPlayerResearchLevel(owner, t.kind, t.key, t.statKey);
     let priorSameStat = 0;
-    for (let i = 0; i < taskIndex; i++) {
-        let p = orderedTasks[i];
-        if (!p) continue;
-        if (p.kind === t.kind && p.key === t.key && p.statKey === t.statKey) priorSameStat++;
+    if (priorDepths) {
+        let id = `${t.kind}:${t.key}:${t.statKey}`;
+        priorSameStat = priorDepths.get(id) || 0;
+        priorDepths.set(id, priorSameStat + 1);
+    } else {
+        for (let i = 0; i < taskIndex; i++) {
+            let p = orderedTasks[i];
+            if (!p) continue;
+            if (p.kind === t.kind && p.key === t.key && p.statKey === t.statKey) priorSameStat++;
+        }
     }
 
     let fromLevel = Math.min(MAX_RESEARCH_LEVEL, baseLevel + priorSameStat);
@@ -4892,10 +4897,11 @@ function renderQueuedResearchTasksForSingleBuilding(e) {
         return html;
     }
 
-    html += `<div style="display:flex;flex-direction:column;gap:4px">`;
+    html += `<div class="info-research-queue-list" style="display:flex;flex-direction:column;gap:4px"><!--research-queue-start-->`;
+    let priorDepths = new Map();
     for (let i = 0; i < orderedTasks.length; i++) {
         let t = orderedTasks[i];
-        let preview = getQueuedResearchTaskPreview(e.owner, orderedTasks, i);
+        let preview = getQueuedResearchTaskPreview(e.owner, orderedTasks, i, priorDepths);
         if (!preview) continue;
         let thing = getResearchThing(t.kind, t.key);
         let stat = getResearchStatEntry(t.kind, t.key, t.statKey);
@@ -4914,6 +4920,7 @@ function renderQueuedResearchTasksForSingleBuilding(e) {
 
         let pendingIndex = t.isActiveTask ? -1 : (i - ((orderedTasks[0] && orderedTasks[0].isActiveTask) ? 1 : 0));
 
+        html += `<div class="info-research-queue-row" data-research-id="${t.kind}:${t.key}:${t.statKey}:${preview.fromLevel}">`;
         html += `<div class="info-research-queue-item" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;">`;
         html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
         html += `<span style="display:flex;align-items:center;gap:4px;color:#bbb"><button type="button" class="info-research-stat-matrix-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="cursor:pointer;background:#111;color:#9cf;border:1px solid #355;border-radius:3px;padding:0 5px;height:18px;line-height:16px;font-size:10px;">M</button>${thingVisual}<span title="${thing ? thing.label : `${t.kind}:${t.key}`}">${thingTextFallback}${statLabel}</span></span>`;
@@ -4929,8 +4936,9 @@ function renderQueuedResearchTasksForSingleBuilding(e) {
         if (t.isActiveTask && Number.isFinite(t.workRequired) && t.workRequired > 0) {
             html += renderResearchWorkProgressRow(t.workDone || 0, t.workRequired);
         }
-        html += `</div>`;
+        html += `</div></div><!--research-row-end-->`;
     }
+    html += `<!--research-queue-end-->`;
     html += `</div>`;
     return html;
 }
@@ -4953,11 +4961,12 @@ function renderQueuedResearchTasksForGroup(group) {
     html += `<div style="display:flex;flex-direction:column;gap:6px">`;
     html += `<div style="border:1px solid #2a2a2a;border-radius:4px;padding:4px;background:#111">`;
     html += `<div style="font-size:10px;color:#9cf;margin-bottom:4px">Shared Queue (${labCount} labs)</div>`;
-    html += `<div style="display:flex;flex-direction:column;gap:4px">`;
+    html += `<div class="info-research-queue-list" style="display:flex;flex-direction:column;gap:4px"><!--research-queue-start-->`;
 
+    let priorDepths = new Map();
     for (let i = 0; i < orderedTasks.length; i++) {
         let t = orderedTasks[i];
-        let preview = getQueuedResearchTaskPreview(owner, orderedTasks, i);
+        let preview = getQueuedResearchTaskPreview(owner, orderedTasks, i, priorDepths);
         if (!preview) continue;
         let thing = getResearchThing(t.kind, t.key);
         let stat = getResearchStatEntry(t.kind, t.key, t.statKey);
@@ -4973,6 +4982,7 @@ function renderQueuedResearchTasksForGroup(group) {
 
         let pendingIndex = t.isActiveTask ? -1 : (i - ((orderedTasks[0] && orderedTasks[0].isActiveTask) ? 1 : 0));
 
+        html += `<div class="info-research-queue-row" data-research-id="${t.kind}:${t.key}:${t.statKey}:${preview.fromLevel}">`;
         html += `<div class="info-research-queue-item" data-owner="${owner}" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;">`;
         html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
         html += `<span style="display:flex;align-items:center;gap:4px;color:#bbb"><button type="button" class="info-research-stat-matrix-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="cursor:pointer;background:#111;color:#9cf;border:1px solid #355;border-radius:3px;padding:0 5px;height:18px;line-height:16px;font-size:10px;">M</button>${thingVisual}<span title="${thing ? thing.label : `${t.kind}:${t.key}`}">${thingTextFallback}${statLabel}</span></span>`;
@@ -4988,9 +4998,10 @@ function renderQueuedResearchTasksForGroup(group) {
         if (t.isActiveTask && Number.isFinite(t.workRequired) && t.workRequired > 0) {
             html += renderResearchWorkProgressRow(t.workDone || 0, t.workRequired);
         }
-        html += `</div>`;
+        html += `</div></div><!--research-row-end-->`;
     }
 
+    html += `<!--research-queue-end-->`;
     html += `</div>`;
     html += `</div>`;
     html += `</div>`;
@@ -5971,6 +5982,69 @@ function patchInfoPanelText(render, html) {
     return true;
 }
 
+// Queue rows have their own DOM/indexes. Adding or removing a task must not
+// replace the scroll pane or the controls a user is currently pressing.
+function splitInfoPanelResearchQueue(html) {
+    const startMarker = '<!--research-queue-start-->', endMarker = '<!--research-queue-end-->';
+    const start = html.indexOf(startMarker), end = html.indexOf(endMarker);
+    if (start < 0 || end < start || html.indexOf(startMarker, start + startMarker.length) >= 0) return null;
+    const bodyStart = start + startMarker.length;
+    return { before: html.slice(0, bodyStart), body: html.slice(bodyStart, end), after: html.slice(end) };
+}
+
+function patchInfoPanelResearchQueue(render, html, bindControls) {
+    if (!render || !render.element || !render.element.isConnected) return false;
+    const before = splitInfoPanelResearchQueue(render.html), after = splitInfoPanelResearchQueue(html);
+    if (!before || !after) return false;
+    if (before.body === after.body) return patchInfoPanelText(render, html);
+    const list = render.element.querySelector('.info-research-queue-list');
+    if (!list) return false;
+    // Patch the surrounding stats separately; a structural change there
+    // still uses the normal section rebuild and its listener binding.
+    if (!patchInfoPanelText(render, after.before + before.body + after.after)) return false;
+    const oldRows = before.body.split('<!--research-row-end-->').filter(Boolean);
+    const newRows = after.body.split('<!--research-row-end-->').filter(Boolean);
+    const existing = new Map();
+    for (let i = 0; i < list.children.length; i++) {
+        const element = list.children[i];
+        existing.set(element.dataset.researchId, { element, html: oldRows[i] });
+    }
+    let cursor = list.firstElementChild;
+    for (const rowHtml of newRows) {
+        const tagEnd = rowHtml.indexOf('>') + 1;
+        const id = rowHtml.slice(0, tagEnd).match(/data-research-id="([^"]+)"/)[1];
+        const inner = rowHtml.slice(tagEnd, -6);
+        const old = existing.get(id);
+        let element = old && old.element;
+        if (old) {
+            existing.delete(id);
+            if (old.html !== rowHtml) {
+                const oldInner = old.html.slice(old.html.indexOf('>') + 1, -6);
+                const rowRender = { html: oldInner, ...indexInfoPanelText(element, oldInner) };
+                if (!patchInfoPanelText(rowRender, inner)) {
+                    element.innerHTML = inner;
+                    bindControls(element);
+                }
+            }
+        } else {
+            element = document.createElement('div');
+            element.className = 'info-research-queue-row';
+            element.dataset.researchId = id;
+            element.innerHTML = inner;
+            bindControls(element);
+        }
+        if (element === cursor) cursor = cursor.nextElementSibling;
+        else list.insertBefore(element, cursor);
+    }
+    for (const old of existing.values()) old.element.remove();
+    // The original row separator comments are unnecessary in the live DOM;
+    // markup carries them solely for splitting, and text/tag indexing ignores
+    // comments. Keep the queue boundary comments for diagnostic readability.
+    render.html = html;
+    Object.assign(render, indexInfoPanelText(render.element, html));
+    return true;
+}
+
 const INFO_PANEL_SECTION_OPEN = '<div class="info-panel-section">';
 
 // Large selections (many groups: one of every building and unit is ~70, each
@@ -6328,7 +6402,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     let previousRender = panel._selectionRenderCache;
     // (The same arrays at the same lengths, else the same members: a small
     // selection's are compared one by one, as its array may be made again.)
-    let sameSelection = !panelOverride && previousRender && previousRender.subgroups === subgroupState
+    let sameSelection = previousRender && previousRender.subgroups === subgroupState
         && previousRender.unitsLen === selectedUnits.length && previousRender.entities.length === selectedEntities.length
         && (previousRender.unitsRef === selectedUnits || (!!previousRender.units && previousRender.units.every((u, i) => u === selectedUnits[i])))
         && (previousRender.entitiesRef === selectedEntities || previousRender.entities.every((e, i) => e === selectedEntities[i]));
@@ -6359,7 +6433,8 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
             let section = previousRender.sections[i];
             if (section.html === sectionHtml[i]) continue;
             if (!section.element.isConnected || section.element.parentNode !== panel) { rebuildSections = null; break; }
-            if (!patchInfoPanelText(section, sectionHtml[i])) rebuildSections.push(i);
+            if (!patchInfoPanelResearchQueue(section, sectionHtml[i], bindInfoPanelSectionControls)
+                && !patchInfoPanelText(section, sectionHtml[i])) rebuildSections.push(i);
         }
         // Rebuilding most of the panel costs no more as one replacement.
         if (rebuildSections && rebuildSections.length > 1 && rebuildSections.length * 2 > sectionHtml.length) rebuildSections = null;
@@ -6383,10 +6458,10 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     } else {
         panel.innerHTML = html;
         let elements = panel.children, sections = null;
-        if (!panelOverride && elements.length === sectionHtml.length) {
+        if (elements.length === sectionHtml.length) {
             sections = sectionHtml.map((sectionMarkup, i) => ({ html: sectionMarkup, element: elements[i], ...indexInfoPanelText(elements[i], sectionMarkup) }));
         }
-        panel._selectionRenderCache = panelOverride ? null : {
+        panel._selectionRenderCache = {
             html, subgroups: subgroupState, unitsRef: selectedUnits, unitsLen: selectedUnits.length, entitiesRef: selectedEntities,
             units: selectedUnits.length <= INFO_PANEL_COLUMN_MIN ? selectedUnits.slice() : null, entities: selectedEntities.slice(), sections
         };
@@ -7188,8 +7263,8 @@ function renderResearchPopupContent() {
         ? (popupSnapshot.entities || []).filter(e => e && !(e.energy !== undefined && e.energy <= 0))
         : selectedEntities.filter(e => e && !(e.energy !== undefined && e.energy <= 0));
     let subgroupSnapshot = popupSnapshot
-        ? { ...(popupSnapshot.activeSubGroups || {}) }
-        : { ...activeSubGroups };
+        ? popupSnapshot.activeSubGroups
+        : activeSubGroups;
 
     let infoPanel = holder.querySelector('#research-popup-info-panel');
     if (!infoPanel) {
@@ -7235,8 +7310,7 @@ function renderResearchPopupContent() {
                 if (!researchQueueDragInProgress) renderResearchPopupContent();
             },
             onSubgroupStateChange: (nextState) => {
-                subgroupSnapshot = { ...(nextState || {}) };
-                if (popupSnapshot) popupSnapshot.activeSubGroups = { ...subgroupSnapshot };
+                if (popupSnapshot) popupSnapshot.activeSubGroups = nextState;
             }
         });
     } finally {

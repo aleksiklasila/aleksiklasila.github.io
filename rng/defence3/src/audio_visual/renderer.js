@@ -4275,12 +4275,19 @@ function prepareRendererLodAssets(showProgress=false) {
     const R=ensure3DRendererInitialized();
     if(!R)return;
     if(showProgress && typeof setMatchLoadOverlay==='function')setMatchLoadOverlay(true,'Loading Match','Preparing model views…');
-    _columnLodCatalog=null; // Recheck edited match rules before loading.
-    const A=R.prepareColumnAtlas();
-    if(!A)return;
-    return R.preloadColumnAtlas(A,showProgress?fraction=>{
-        if(typeof setMatchLoadOverlay==='function')setMatchLoadOverlay(true,'Loading Match','Preparing model views… '+Math.floor(fraction*100)+'%');
-    }:null);
+    return (async()=>{
+        // Paint the loading message before allocation and shader compilation.
+        if(showProgress)await new Promise(resolve=>setTimeout(resolve,0));
+        _columnLodCatalog=null; // Recheck edited match rules before loading.
+        const A=R.prepareColumnAtlas();
+        if(!A)return;
+        await R.preloadColumnAtlas(A,showProgress?fraction=>{
+            if(typeof setMatchLoadOverlay==='function')setMatchLoadOverlay(true,'Loading Match','Preparing model views… '+Math.floor(fraction*100)+'%');
+        }:null);
+    })().catch(error=>{
+        if(showProgress && typeof setMatchLoadOverlay==='function')setMatchLoadOverlay(true,'Model preparation failed',String(error.message||error));
+        throw error;
+    });
 }
 
 function setRenderDimensionMode(nextMode) {

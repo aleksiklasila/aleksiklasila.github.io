@@ -77,7 +77,7 @@ const SIM_STRUCT_SPEC = simTableSpec({
 const SIM_SF_UC = 1, SIM_SF_UPGRADING = 2, SIM_SF_SALVAGE = 4, SIM_SF_STACKING = 8, SIM_SF_WATCHED = 16, SIM_SF_BURNING = 32,
     SIM_SF_POISONED = 64, SIM_SF_FROZEN = 128, SIM_SF_WET = 256, SIM_SF_SANDY = 512, SIM_SF_AUTO_UPGRADE = 1024, SIM_SF_BUILD = 2048,
     SIM_SF_QUEUE = 4096, SIM_SF_AUTO_RESEARCH = 8192, SIM_SF_ATTACK_TARGET = 16384, SIM_SF_RALLY = 32768, SIM_SF_RESEARCH_TASK = 65536,
-    SIM_SF_AUTO_STACK = 131072;
+    SIM_SF_AUTO_STACK = 131072, SIM_SF_RESEARCHING = 262144;
 const _simStructSlots = new SimSlots('_sslot');
 // Level labels are worked out every few ticks per structure (or on a change
 // of its levels): they are visual only.
@@ -138,7 +138,7 @@ function _simWriteStructure(F, s, e, kind, tick) {
         | (e.autoUpgradeEnabled ? SIM_SF_AUTO_UPGRADE : 0) | (e.buildEnabled ? SIM_SF_BUILD : 0) | (e.queueEnabled ? SIM_SF_QUEUE : 0)
         | (e.autoResearchEnabled ? SIM_SF_AUTO_RESEARCH : 0) | (at && Number.isFinite(at.x) ? SIM_SF_ATTACK_TARGET : 0)
         | (Number.isFinite(e.rallyX) && Number.isFinite(e.rallyY) ? SIM_SF_RALLY : 0) | (task ? SIM_SF_RESEARCH_TASK : 0)
-        | (e.autoStackEnabled ? SIM_SF_AUTO_STACK : 0);
+        | (e.autoStackEnabled ? SIM_SF_AUTO_STACK : 0) | (e.isResearching ? SIM_SF_RESEARCHING : 0);
     // The level label, when its inputs change or on its staggered tick.
     if (kind <= 3 && units.length < 5000) {
         let key = F.level[s] * 7919 + F.elevel[s] * 131 + F.stacks[s] * 17 + F.mstacks[s] * 3 + F.estacks[s] + (e.underConstruction ? 0.5 : 0);
@@ -372,6 +372,7 @@ const _PAGE_STRUCT_ACCESSORS = {
         if (!_pageStructFlag(this, SIM_SF_RESEARCH_TASK)) return null;
         let t = this._rt || (this._rt = {}); t.workDone = _pageStructCol(this, 'resDone'); t.workRequired = _pageStructCol(this, 'resReq'); return t;
     } },
+    isResearching: { get() { return _pageStructFlag(this, SIM_SF_RESEARCHING); } },
     connectedLasers: { get() {
         let out = this._links || (this._links = []);
         out.length = 0;

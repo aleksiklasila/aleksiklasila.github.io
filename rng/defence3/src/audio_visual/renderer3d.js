@@ -1,6 +1,6 @@
 (function () {
     const COLUMN_BAKE_WORKER_URL = typeof document !== 'undefined' && document.currentScript?.src
-        ? new URL('renderer3d-lod-worker.js?v=20261014-lod36',document.currentScript.src).href : null;
+        ? new URL('renderer3d-lod-worker.js?v=20261015-lod37',document.currentScript.src).href : null;
     function createShader(gl, type, source) {
         let shader = gl.createShader(type);
         gl.shaderSource(shader, source);
@@ -5773,7 +5773,8 @@
             const palette=Defence3Renderer3D.columnPalette(
                 typeof get3DRenderOwnerColor==='function'?get3DRenderOwnerColor:()=> '#c8ced8',
                 typeof activeTeamIds!=='undefined'?activeTeamIds:[0,1]);
-            if (this.columnAtlas?.catalog === catalog && this.columnAtlas.palette.key===palette.key) return this.columnAtlas;
+            if (this.columnAtlas?.catalog === catalog && this.columnAtlas.palette.key===palette.key
+                && !this.columnAtlas.failed && (this.columnAtlas.complete || this.columnAtlas.prepare)) return this.columnAtlas;
             const gl=this.gl,stride=catalog.stride,views=stride-1,animationViews=views;
             const grid=Math.ceil(Math.sqrt(catalog.styles.length*stride+1)),old=this.columnAtlas;
             const reuse=old?.complete && old.catalog.styles===catalog.styles;
@@ -5942,18 +5943,33 @@
         async preloadColumnAtlas(A=this.prepareColumnAtlas(),onProgress=null) {
             this.ensureColumnProgram();
             if(!A?.prepare)return;
-            if(!A.loading)A.loading=(async()=>{
-                let progressTime=0;
-                while(A.prepare) {
-                    this.advanceColumnAtlas(A,8);
-                    if(onProgress && performance.now()-progressTime>100) {
-                        onProgress(A.next/A.jobs);progressTime=performance.now();
+            // The menu starts loading without a progress listener. A match
+            // start joining that same promise must receive updates as well.
+            const listeners=A.progressListeners || (A.progressListeners=new Set());
+            if(onProgress){listeners.add(onProgress);onProgress(A.next/A.jobs);}
+            try {
+                if(!A.loading)A.loading=(async()=>{
+                    let progressTime=0,lastAdvance=performance.now();
+                    while(A.prepare) {
+                        const before=A.next;
+                        this.advanceColumnAtlas(A,8);
+                        const now=performance.now();
+                        if(A.next!==before)lastAdvance=now;
+                        else if(now-lastAdvance>30000)throw Error('Model view preparation stopped responding. Reload the page to retry.');
+                        if(now-progressTime>100) {
+                            for(const listener of listeners)listener(A.next/A.jobs);
+                            progressTime=now;
+                        }
+                        if(A.prepare)await new Promise(resolve=>setTimeout(resolve,0));
                     }
-                    if(A.prepare)await new Promise(resolve=>setTimeout(resolve,0));
-                }
-            })();
-            await A.loading;
-            onProgress?.(1);
+                })().catch(error=>{
+                    A.failed=true;A.prepare=null;A.worker?.terminate();A.worker=null;
+                    throw error;
+                });
+                await A.loading;
+                if(!A.complete)throw Error('Model view preparation was interrupted. Please retry.');
+                onProgress?.(1);
+            } finally {if(onProgress)listeners.delete(onProgress);}
         }
 
         advanceColumnAtlas(A,budget=1) {

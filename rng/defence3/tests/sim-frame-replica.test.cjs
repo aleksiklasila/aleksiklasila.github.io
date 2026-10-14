@@ -19,7 +19,7 @@ const UNITS = `JSON.stringify(units.filter(u => !u.dead).map(${UNIT_FIELDS}).sor
 // projectiles and the grid.
 const OTHERS = `(() => { const out = {};
     const S = e => [e.gx, e.gy, e.type || null, e.unitType || null, e.owner, Math.fround(Number(e.energy) || 0), e.level ?? null, e.effectiveLevel ?? null,
-        !!e.underConstruction, !!e.isUpgrading, !!e.markedForSalvage, Array.isArray(e.spawnQueue) ? e.spawnQueue.length : 0, Math.fround(Number(e.spawnTimer) || 0),
+        !!e.underConstruction, !!e.isUpgrading, !!e.isResearching, !!e.markedForSalvage, Array.isArray(e.spawnQueue) ? e.spawnQueue.length : 0, Math.fround(Number(e.spawnTimer) || 0),
         e.gold ?? null, e.astar ?? null, e.value ?? null, Array.isArray(e.connectedLasers) ? e.connectedLasers.length : 0, e._structView ? e._labelText() : getLevelLabelText(e)];
     for (const [name, list] of [['t', towers], ['b', barracks], ['s', collectorSpawners], ['g', goldMines], ['a', astarMines], ['d', droppedItems]]) out[name] = JSON.stringify(list.map(S));
     out.f = JSON.stringify(getCellItemsRowMajor().filter(e => !(e instanceof Tower) && !(e instanceof Barrack) && !isSpawnerEntity(e)).map(S));
@@ -39,7 +39,8 @@ const OTHERS = `(() => { const out = {};
         'unit:norm': { 1: 60, 3: 20 }, 'unit:snake': { 2: 20 }, 'unit:water_resistant': { 1: 40 }, 'unit:ice_resistant': { 1: 40 },
         'unit:builder_unit': { 1: 20 }, 'unit:collector': { 1: 20 }, 'unit:healer_unit': { 1: 6 }, 'unit:flying': { 1: 10 },
         'building:pistol': { 1: 6 }, 'building:fire': { 2: 3 }, 'building:barrack_norm': { 1: 2 }, 'building:house': { 3: 2 },
-        'building:builder_spawner': { 1: 1 }, 'building:lava': { 1: 4 }
+        'building:builder_spawner': { 1: 1 }, 'building:lava': { 1: 4 },
+        'building:research': { 1: 2 }, 'unit:researcher_unit': { 1: 4 }
     };
     const P = world.spawn('page', { controls });
     // One tick in flight: each result leaves the worker at that tick.
@@ -73,6 +74,7 @@ const OTHERS = `(() => { const out = {};
     // Orders during the run: moves, attack-moves into the enemy, production,
     // placements; a selection (its details: paths and stats).
     const orders = [
+        `(() => { const b = collectorSpawners.find(b => b.owner === 0 && b.type === 'research'); queueAction({ action: 'queueResearch', gx: b.gx, gy: b.gy, kind: 'building', key: 'farm', statKey: 'multiplier', count: 10 }); })()`,
         `(() => { const mine = units.filter(u => !u.dead && u.owner === 0 && !u.workerType); queueAction({ action: 'attackMove', unitIds: mine.map(u => u.id), targetX: GRID_W * TILE * .8, targetY: GRID_H * TILE * .5 }); selectedUnits = mine.slice(0, 12); })()`,
         `(() => { const b = barracks.find(b => b.owner === 0); if (b) queueAction({ action: 'queueUnit', gx: b.gx, gy: b.gy, count: 10 }); })()`,
         `(() => { const mine = units.filter(u => !u.dead && u.owner === 0 && u.unitType === 'water_resistant'); [[.2,.2],[.5,.8],[.8,.3]].forEach(([fx, fy], i) => queueAction({ action: 'move', unitIds: mine.filter((u, k) => k % 3 === i).map(u => u.id), targetX: fx * GRID_W * TILE, targetY: fy * GRID_H * TILE })); })()`,
