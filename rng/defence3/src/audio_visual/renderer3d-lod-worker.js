@@ -2,10 +2,10 @@
 // owns the final atlas; camera motion only samples its resident textures.
 self.window=self;
 self.document={createElement:()=>new OffscreenCanvas(64,64)};
-importScripts('renderer3d.js?v=20261013-lod25');
+importScripts('renderer3d.js?v=20261014-lod30');
 const renderer=Object.create(Defence3Renderer3D.prototype);
-const color=new OffscreenCanvas(64,64),mask=new OffscreenCanvas(64,64);
-const g=color.getContext('2d',{willReadFrequently:true}),m=mask.getContext('2d',{willReadFrequently:true});
+const color=new OffscreenCanvas(64,64);
+const g=color.getContext('2d',{willReadFrequently:true});
 const canvasFrom=bitmap=>{
     if(!bitmap)return null;
     const canvas=new OffscreenCanvas(bitmap.width,bitmap.height);
@@ -34,8 +34,8 @@ class GpuSnapshots {
         gl.texStorage3D(gl.TEXTURE_2D_ARRAY,7,gl.RGBA8,96,96,1);
         gl.texParameteri(gl.TEXTURE_2D_ARRAY,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);
         gl.texParameteri(gl.TEXTURE_2D_ARRAY,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
-        this.textures=[gl.createTexture(),gl.createTexture()];
-        this.pixels=[new Uint8Array(1024*160*4),new Uint8Array(1024*160*4)];
+        this.texture=gl.createTexture();
+        this.pixels=new Uint8Array(1024*160*4);
     }
     prepare(data,style,panel) {
         const gl=this.gl;
@@ -58,20 +58,14 @@ class GpuSnapshots {
         gl.uniform1f(u.layerAlpha,1);gl.uniform1f(u.isUnit,style.unit?1:0);
         gl.uniform1f(u.isFlying,Defence3Renderer3D.columnFlying(style)?1:0);
         gl.uniform1f(u.useAtlas,0);gl.uniform1i(u.topTexture,0);gl.uniform1i(u.sideTexture,1);gl.uniform1i(u.atlas,2);gl.uniform1i(u.walkSurface,3);
-        // White/black ownership renders recover the exact per-channel tint
-        // contribution, including antialiased panel strokes and face outlines.
-        const width=panel.width,height=panel.height,ctx=panel.getContext('2d');
-        const white=ctx.getImageData(0,0,width,height),black=ctx.getImageData(0,0,width,height);
-        const owner=panel._ownerMask.getContext('2d').getImageData(0,0,width,height).data;
-        for(let i=0;i<black.data.length;i+=4)for(let k=0;k<3;k++)black.data[i+k]*=1-owner[i]/255;
+        // Capture the final owner color, including the native colored panel.
+        const owner=(style.ownerColor||'#c8ced8').slice(1);
+        gl.vertexAttrib3f(7,...[0,2,4].map(i=>parseInt(owner.slice(i,i+2),16)/255));
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
-        for(let pass=0;pass<2;pass++) {
-            const canvas=new OffscreenCanvas(width,height);canvas.getContext('2d').putImageData(pass?black:white,0,0);
-            gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,this.textures[pass]);
-            gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,canvas);
-            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.generateMipmap(gl.TEXTURE_2D);
-        }
+        gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,this.texture);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,panel);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.generateMipmap(gl.TEXTURE_2D);
         gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D_ARRAY,this.side);
         if(style.statusTextureCanvas) {
             gl.texSubImage3D(gl.TEXTURE_2D_ARRAY,0,0,0,0,96,96,1,gl.RGBA,gl.UNSIGNED_BYTE,style.statusTextureCanvas);
@@ -120,7 +114,7 @@ class GpuSnapshots {
             gl.deleteTexture(this.output);this.output=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,this.output);
             gl.texStorage2D(gl.TEXTURE_2D,1,gl.RGBA8,this.sheetWidth,this.sheetHeight);
             gl.bindFramebuffer(gl.FRAMEBUFFER,this.resolve);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,this.output,0);
-            this.pixels=[new Uint8Array(this.sheetWidth*this.sheetHeight*4),new Uint8Array(this.sheetWidth*this.sheetHeight*4)];
+            this.pixels=new Uint8Array(this.sheetWidth*this.sheetHeight*4);
         }
         const phase=animation?.phase||0,mode=animation?.mode||0,move=animation&&style.unit?1:0,time=animation?.time||0;
         gl.vertexAttrib1f(10,phase);gl.vertexAttrib1f(9,move);gl.vertexAttrib1f(12,-2);
@@ -130,9 +124,9 @@ class GpuSnapshots {
         const views=Array.from({length:count},(_,i)=>this.sizes.map(size=>this.projection(...Defence3Renderer3D.columnView(stride,i),size,focalPixels)));
         this.data=original;
         gl.enable(gl.DEPTH_TEST);gl.disable(gl.BLEND);gl.disable(gl.CULL_FACE);
-        for(let pass=0;pass<2;pass++) {
+        {
             gl.bindFramebuffer(gl.FRAMEBUFFER,this.ms);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
-            gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,this.textures[pass]);gl.vertexAttrib3f(7,pass?0:1,pass?0:1,pass?0:1);
+            gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,this.texture);
             for(let i=0;i<count;i++) {
                 let left=(i%16)*this.sheetStride,top=Math.floor(i/16)*this.sheetRow;
                 for(let level=0;level<this.sizes.length;level++) {
@@ -144,54 +138,31 @@ class GpuSnapshots {
             }
             gl.bindFramebuffer(gl.READ_FRAMEBUFFER,this.ms);gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER,this.resolve);
             gl.blitFramebuffer(0,0,this.sheetWidth,this.sheetHeight,0,0,this.sheetWidth,this.sheetHeight,gl.COLOR_BUFFER_BIT,gl.NEAREST);
-            gl.bindFramebuffer(gl.FRAMEBUFFER,this.resolve);gl.readPixels(0,0,this.sheetWidth,this.sheetHeight,gl.RGBA,gl.UNSIGNED_BYTE,this.pixels[pass]);
+            gl.bindFramebuffer(gl.FRAMEBUFFER,this.resolve);gl.readPixels(0,0,this.sheetWidth,this.sheetHeight,gl.RGBA,gl.UNSIGNED_BYTE,this.pixels);
         }
-        if(!this.pixels[0].some((v,i)=>i%4===3&&v>0))throw Error('Empty GPU snapshot sheet');
+        if(!this.pixels.some((v,i)=>i%4===3&&v>0))throw Error('Empty GPU snapshot sheet');
         const error=gl.getError();if(error)throw Error('GPU snapshot error '+error);
         return views.map((view,i)=>this.unpack(view[0].meta,(i%16)*this.sheetStride,Math.floor(i/16)*this.sheetRow));
     }
-    // Average in linear light, as the eye mixes neighbouring pixels. Mixing
-    // gamma values made fine dark lines on light paint (black on brown, ink
-    // on owner rims) too dark and gray in distant mips. The atlas is an sRGB
-    // texture holding premultiplied linear color; the GPU filters it in
-    // linear light too.
+    // Match the live RGBA8 framebuffer. MSAA has already weighted RGB by
+    // coverage; average those bytes directly, without another alpha or gamma pass.
     unpack(meta,offsetX,offsetY) {
-        const levels=[],[white,black]=this.pixels,decode=GpuSnapshots.decodeTable,encode=GpuSnapshots.encodeTable;
+        const levels=[],pixels=this.pixels;
         let left=0;
         for(let level=0;level<this.sizes.length;level++) {
             const size=this.sizes[level],scale=this.sampleScales[level],renderSize=this.renderSizes[level],n=scale*scale;
-            const color=new Uint8ClampedArray(size*size*4),mask=new Uint8ClampedArray(color.length);
+            const color=new Uint8ClampedArray(size*size*4);
             for(let y=0;y<size;y++)for(let x=0;x<size;x++) {
-                const dst=(y*size+x)*4,sums=[0,0,0,0],owners=[0,0,0];
+                const dst=(y*size+x)*4,sums=[0,0,0,0];
                 for(let sy=0;sy<scale;sy++)for(let sx=0;sx<scale;sx++) {
                     const src=((offsetY+renderSize-1-y*scale-sy)*this.sheetWidth+offsetX+x*scale+sx+left)*4;
-                    const a=white[src+3],b=black[src+3];
-                    if(!a)continue;
-                    sums[3]+=a;
-                    for(let k=0;k<3;k++) {
-                        // Resolved MSAA bytes are coverage-weighted: unweight,
-                        // decode, and weight again in linear light.
-                        const lit=decode[Math.min(255,Math.round(white[src+k]*255/a))]*a,dark=b?decode[Math.min(255,Math.round(black[src+k]*255/b))]*b:0;
-                        sums[k]+=lit;owners[k]+=Math.max(0,lit-dark);
-                    }
+                    for(let k=0;k<4;k++)sums[k]+=pixels[src+k];
                 }
-                for(let k=0;k<3;k++){color[dst+k]=encode[Math.min(4095,Math.round(sums[k]/(255*n)*4095))];mask[dst+k]=encode[Math.min(4095,Math.round(owners[k]/(255*n)*4095))];}
-                color[dst+3]=sums[3]/n;mask[dst+3]=color[dst+3];
+                for(let k=0;k<4;k++)color[dst+k]=Math.round(sums[k]/n);
             }
-            levels.push({color,mask,size});left+=renderSize;
+            levels.push({color,size});left+=renderSize;
         }
         return {levels,meta};
-    }
-    // Lookup tables: the bake decodes every rendered byte (pow is slow).
-    static decodeTable=Float32Array.from({length:256},(_,i)=>GpuSnapshots.linear(i/255));
-    static encodeTable=Uint8Array.from({length:4096},(_,i)=>GpuSnapshots.encode(i/4095));
-    static linear(value) {
-        const c=Math.min(1,value);
-        return c<=.04045?c/12.92:((c+.055)/1.055)**2.4;
-    }
-    static encode(value) {
-        const c=Math.max(0,Math.min(1,value));
-        return Math.round(255*(c<=.0031308?c*12.92:1.055*c**(1/2.4)-.055));
     }
 }
 let gpu;
@@ -199,7 +170,7 @@ try {gpu=new GpuSnapshots();}catch(error){console.warn('GPU snapshot fallback',e
 let cached;
 self.onmessage=({data:job})=>{
     if(job.style) {
-        const panel=canvasFrom(job.panel);panel._ownerMask=canvasFrom(job.ownerMask);
+        const panel=canvasFrom(job.panel);
         const style=job.style;style.statusTextureCanvas=canvasFrom(job.status);
         const data=Defence3Renderer3D.columnBakeData(style);
         cached={panel,style,data};
@@ -215,11 +186,11 @@ self.onmessage=({data:job})=>{
         if(gpu)baked=sheet[direction];
         else {
             const posed=job.animation?{...data,positions:Defence3Renderer3D.columnPose(style,data,job.animation.phase,job.animation.mode,style.unit?1:0,job.animation.time)}:data;
-            const meta=renderer.bakeColumnModel(g,m,posed,style,yaw,panel,pitch);
-            baked={color:g.getImageData(0,0,64,64).data,mask:m.getImageData(0,0,64,64).data,meta};
+            const meta=renderer.bakeColumnModel(g,posed,style,yaw,panel,pitch);
+            baked={color:g.getImageData(0,0,64,64).data,meta};
         }
         images.push(baked);
-        for(const level of baked.levels||[baked])transfer.push(level.color.buffer,level.mask.buffer);
+        for(const level of baked.levels||[baked])transfer.push(level.color.buffer);
     }
-    self.postMessage({index:job.index,images,gpuBaked:!!gpu},transfer);
+    self.postMessage({index:job.index,layer:job.layer,images,gpuBaked:!!gpu},transfer);
 };

@@ -83,16 +83,16 @@ let browser;
             let error=0;for(let i=0;i<a.length;i++)error+=Math.abs(a[i]-b[i]);
             panelErrors.push({type:s.modelKey,meanError:error/a.length});
             if(error/a.length>1)throw Error('Middle panel differs from production: '+JSON.stringify(panelErrors.at(-1)));
-            const native=A.panels[A.catalog.styles.indexOf(s)],white=R.columnModelPanel(A,A.catalog.styles.indexOf(s),'#fff');
+            const native=A.panels[A.catalog.styles.indexOf(s)],white=R.columnModelPanel(A,A.catalog.styles.indexOf(s),A.palette.colors[0]);
             const p=native.getContext('2d').getImageData(0,0,96,96).data,q=white.getContext('2d').getImageData(0,0,96,96).data;
             if(!baseline&&(native.width!==96||p.some((v,i)=>v!==q[i])))throw Error('Bake panel differs from the live material: '+s.modelKey);
         }
         const title=document.createElement('div');title.style.cssText='position:fixed;left:14px;top:12px;color:white;background:#080e16dd;padding:8px;font:14px monospace;z-index:99';document.body.appendChild(title);
         window.stripDraw=(view,reference=false)=>{
             window.stripMeshStage=view.meshStage;
-            for(const atlas of [A,A.animation])for(const name of ['color','mask']) {
-                R.gl.bindTexture(R.gl.TEXTURE_2D,atlas[name]);
-                R.gl.texParameteri(R.gl.TEXTURE_2D,R.gl.TEXTURE_MIN_FILTER,view.baseMip?R.gl.LINEAR:R.gl.LINEAR_MIPMAP_LINEAR);
+            for(const atlas of [A,A.animation])for(const name of ['color']) {
+                R.gl.bindTexture(R.gl.TEXTURE_2D_ARRAY,atlas[name]);
+                R.gl.texParameteri(R.gl.TEXTURE_2D_ARRAY,R.gl.TEXTURE_MIN_FILTER,view.baseMip?R.gl.LINEAR:R.gl.LINEAR_MIPMAP_LINEAR);
             }
             const {pitch,yaw}=view,copies=wide?13500:diagonal?1200:checker?625:300,n=styles.length*copies,structures={n,cap:n},unitFrame={n,cap:n};
             const focus=view.focus,center=focus?styles.findIndex(s=>s.modelKey===focus):(styles.length-1)/2;
@@ -182,7 +182,7 @@ let browser;
             const style=A.catalog.styles.findIndex(s=>s.modelKey==='item_water_puddle');
             for(let pitch=0;pitch<(A.catalog.stride-1)/16;pitch++)for(let level=0;level<4;level++) {
                 const index=style*A.catalog.stride+2+pitch*16+1,rect=A.rects[index],size=rect.size>>level,pixels=new Uint8ClampedArray(size*size*4);
-                gl.bindFramebuffer(gl.FRAMEBUFFER,fbo);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,A.color,level);
+                gl.bindFramebuffer(gl.FRAMEBUFFER,fbo);gl.framebufferTextureLayer(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,A.color,level,0);
                 gl.readPixels(rect.x>>level,rect.y>>level,size,size,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
                 const tile=document.createElement('canvas');tile.width=tile.height=size;tile.getContext('2d').putImageData(new ImageData(pixels,size,size),0,0);
                 g.drawImage(tile,level*256,pitch*64,64,64);g.fillStyle='white';g.fillText('pitch '+pitch+' mip '+level,level*256+70,pitch*64+30);

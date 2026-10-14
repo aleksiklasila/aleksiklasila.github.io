@@ -3070,6 +3070,8 @@ function startHostedGame() {
             applyEditableRuntimeConfigObject(serializeEditableRuntimeConfigForTransport(), { fromTransport: true });
             applyTimingConfig(menuTickRate, menuPipeline);
             lockstepStrictDebugMode = menuStrict;
+            activeTeamIds = preSetup.activeTeamIds;
+            teamColorById = preSetup.teamColorById;
             await prepareRendererLodAssets(true);
             gameSeed = Date.now();
             // matchStartSessionId and matchStartLobbyPlayers already set above.

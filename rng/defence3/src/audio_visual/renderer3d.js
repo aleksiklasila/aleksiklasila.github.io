@@ -1,6 +1,6 @@
 (function () {
     const COLUMN_BAKE_WORKER_URL = typeof document !== 'undefined' && document.currentScript?.src
-        ? new URL('renderer3d-lod-worker.js?v=20261013-lod25',document.currentScript.src).href : null;
+        ? new URL('renderer3d-lod-worker.js?v=20261014-lod30',document.currentScript.src).href : null;
     function createShader(gl, type, source) {
         let shader = gl.createShader(type);
         gl.shaderSource(shader, source);
@@ -3262,11 +3262,13 @@
                 this.overlayDepthFrame = null;
                 return;
             }
-            if (this.sceneSamples) {
+            if (this.sceneSamples || this.columnLayers) {
                 // Packed depth bytes cannot be averaged by MSAA: pack the resolved
-                // depth texture instead, keeping health-bar occlusion accurate.
+                // depth texture instead. Column sprites also need this in non-MSAA
+                // mode: alpha blending their color must not blend packed depth bytes.
                 gl.bindFramebuffer(gl.FRAMEBUFFER, this.depthPackFramebuffer);
                 gl.disable(gl.DEPTH_TEST);
+                gl.disable(gl.BLEND);
                 gl.useProgram(this.presentProgram);
                 gl.bindVertexArray(this.presentVao);
                 gl.activeTexture(gl.TEXTURE0);
@@ -3937,14 +3939,14 @@
                 // units). Its own upload only when the glyphs were not drawn.
                 const CS = this.columnStores ? this.columnStores[1] : null;
                 if (CS && CS.frame === F && CS.buffer && CS.offsets && CS.offsets.has('r')) {
-                    if (M.sharedFrame !== F || M.sharedBuf !== CS.buffer) {
+                    if (M.sharedFrame !== F || M.sharedBuf !== CS.buffer || M.sharedOffsets !== CS.offsets) {
                         const cols = ['x', 'y', 'px', 'py', 'r'];
                         gl.bindBuffer(gl.ARRAY_BUFFER, CS.buffer);
                         for (let i = 0; i < cols.length; i++) { gl.enableVertexAttribArray(i); gl.vertexAttribPointer(i, 1, gl.FLOAT, false, 0, CS.offsets.get(cols[i])); }
-                        M.sharedFrame = F; M.sharedBuf = CS.buffer; M.frame = null;
+                        M.sharedFrame = F; M.sharedBuf = CS.buffer; M.sharedOffsets = CS.offsets; M.frame = null;
                     }
                 } else if (M.frame !== F) {
-                    M.sharedFrame = null; M.sharedBuf = null;
+                    M.sharedFrame = null; M.sharedBuf = null; M.sharedOffsets = null;
                     // (The columns the mask needs, as the glyphs' draw uploads them.)
                     const cols = ['x', 'y', 'px', 'py', 'r'], n = F.cap;
                     gl.bindBuffer(gl.ARRAY_BUFFER, M.unitBuf);
@@ -5742,30 +5744,29 @@
             return best;
         }
 
-        // Consume the worker's existing SoA columns without visiting entities,
-        // building matrices, copying records or sorting. All models use the
-        // same GPU points, projection, view interpolation and texture sampling.
+        // Consume the worker's SoA columns directly, without copying or sorting
+        // records. Opaque cutouts let depth testing order the 3D sprite surfaces.
         // Pixels per world unit of size for the column glyphs (their size
         // rule, shared with the detail split: renderer.js _unitDetailSplit).
         prepareColumnAtlas() {
             const catalog = typeof getColumnLodCatalog === 'function' ? getColumnLodCatalog() : null;
             if (!catalog) return this.columnAtlas;
+            const palette=Defence3Renderer3D.columnPalette(
+                typeof get3DRenderOwnerColor==='function'?get3DRenderOwnerColor:()=> '#c8ced8',
+                typeof activeTeamIds!=='undefined'?activeTeamIds:[0,1]);
             if(this.columnAtlas && this.columnAtlas.catalog!==catalog && this.columnAtlas.catalog.styles===catalog.styles) {
                 const gl=this.gl,A=this.columnAtlas;A.catalog=catalog;
                 gl.bindTexture(gl.TEXTURE_2D,A.lookup);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
                 gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,catalog.width,8,0,gl.RGBA,gl.FLOAT,catalog.lookup);
             }
-            if (this.columnAtlas?.catalog === catalog) {
-                return this.columnAtlas;
-            }
-            // Static poses and animation frames share the same view layout.
-            const gl = this.gl, cell = 32, stride = catalog.stride, views = stride - 1, animationViews=views;
-            const grid = Math.ceil(Math.sqrt(catalog.styles.length * stride + 1));
-            const old = this.columnAtlas;
+            if (this.columnAtlas?.catalog === catalog && this.columnAtlas.palette.key===palette.key) return this.columnAtlas;
+            const gl=this.gl,stride=catalog.stride,views=stride-1,animationViews=views;
+            const grid=Math.ceil(Math.sqrt(catalog.styles.length*stride+1)),old=this.columnAtlas;
+            const reuse=old?.complete && old.catalog.styles===catalog.styles;
             old?.worker?.terminate();
             if(old)old.prepare=null;
-            if (old) for (const target of [old,old.animation])if(target)for(const name of ['color','mask','meta','lookup'])if(target[name])gl.deleteTexture(target[name]);
-            const A = this.columnAtlas = {catalog,grid,panels:[],sources:[],metaData:new Float32Array(grid*grid*4),next:0,revision:0};
+            const A=this.columnAtlas={catalog,palette,grid,panels:reuse?old.panels:[],sources:[],
+                metaData:new Float32Array(grid*grid*4),next:0,revision:(old?.revision||0)+1,reusedLayers:new Set()};
             if(COLUMN_BAKE_WORKER_URL && typeof Worker==='function' && typeof createImageBitmap==='function') {
                 try {
                     A.worker=new Worker(COLUMN_BAKE_WORKER_URL);
@@ -5783,7 +5784,8 @@
             }
             const ag=Math.max(1,Math.ceil(Math.sqrt(A.animationBatches.length*animationViews)));
             A.animation={grid:ag,cell:32,levels:6,metaData:new Float32Array(ag*ag*4)};
-            A.jobs=catalog.styles.length*stride+A.animationBatches.length*animationViews;
+            A.jobsPerLayer=catalog.styles.length*stride+A.animationBatches.length*animationViews;
+            A.jobs=A.jobsPerLayer*palette.colors.length;
             const cells=catalog.styles.map(style=>Defence3Renderer3D.columnSnapshotSize(style));
             const staticCells=new Array(catalog.styles.length*stride+1).fill(32);
             for(let i=0;i<cells.length;i++)for(let v=0;v<views;v++)staticCells[i*stride+2+v]=cells[i];
@@ -5791,133 +5793,132 @@
             Object.assign(A,Defence3Renderer3D.packColumnSnapshots(staticCells));
             Object.assign(A.animation,Defence3Renderer3D.packColumnSnapshots(animationCells));
             gl.activeTexture(gl.TEXTURE0);
-            for(const target of [A,A.animation])for(const name of ['color','mask']) {
-                target[name]=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,target[name]);
-                // sRGB: filtering and mip blending happen in linear light.
-                gl.texStorage2D(gl.TEXTURE_2D,target.levels,gl.SRGB8_ALPHA8,target.pixels,target.pixels);
-                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);
-                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
-                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
-                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
-                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAX_LEVEL,target.levels-1);
+            for(const target of [A,A.animation]) {
+                target.color=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D_ARRAY,target.color);
+                // Final framebuffer colors, premultiplied by coverage. Match live
+                // RGBA8 filtering rather than introducing an sRGB conversion.
+                gl.texStorage3D(gl.TEXTURE_2D_ARRAY,target.levels,gl.RGBA8,target.pixels,target.pixels,palette.colors.length);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY,gl.TEXTURE_MAX_LEVEL,target.levels-1);
             }
-            const makeCanvas = () => {const c=document.createElement('canvas');c.width=c.height=64;return c;};
-            const color=makeCanvas(), mask=makeCanvas(), g=color.getContext('2d'), m=mask.getContext('2d');
-            g.__drawImagesImmediately=true;
-            const mipCanvases=new Map();
-            const upload = (index, meta, bakedLevels=null, target=A) => {
-                const rect=target.rects[index];
-                meta=Array.from(meta);
-                if(target===A&&index%stride===1)meta[1]=rect.code;
-                else meta[3]=rect.code;
-                target.metaData.set(meta,index*4);
-                // Filter premultiplied colors so transparent padding cannot
-                // darken the miniature as its mip level changes.
-                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
-                // WebGL applies this flag to typed arrays too. Worker bytes
-                // already contain MSAA coverage: multiplying again darkens
-                // every partially covered roof, edge and thin floor surface.
-                gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,!bakedLevels);
-                for (const [name,canvas] of [['color',color],['mask',mask]]) {
-                    gl.bindTexture(gl.TEXTURE_2D,target[name]);
-                    let previous=canvas;
-                    for(let level=0;level<target.levels;level++) {
-                        const size=rect.size>>level;
-                        if(bakedLevels) {
-                            // Worker output is already premultiplied. Upload it
-                            // directly: no Canvas color conversion or copies.
-                            gl.texSubImage2D(gl.TEXTURE_2D,level,rect.x>>level,rect.y>>level,size,size,gl.RGBA,gl.UNSIGNED_BYTE,bakedLevels[level][name]);
-                            continue;
+            // Copy completed colors when a match changes its palette. Geometry
+            // metadata is shared by all layers; unchanged colors need no rebake.
+            if(reuse) {
+                A.metaData.set(old.metaData);A.animation.metaData.set(old.animation.metaData);
+                A.gpuBaked=old.gpuBaked;
+                const framebuffer=gl.createFramebuffer(),previous=gl.getParameter(gl.READ_FRAMEBUFFER_BINDING);
+                gl.bindFramebuffer(gl.READ_FRAMEBUFFER,framebuffer);
+                for(let layer=0;layer<palette.colors.length;layer++) {
+                    const sourceLayer=old.palette.colors.indexOf(palette.colors[layer]);
+                    if(sourceLayer<0)continue;
+                    for(const [target,source] of [[A,old],[A.animation,old.animation]]) {
+                        gl.bindTexture(gl.TEXTURE_2D_ARRAY,target.color);
+                        for(let level=0;level<target.levels;level++) {
+                            gl.framebufferTextureLayer(gl.READ_FRAMEBUFFER,gl.COLOR_ATTACHMENT0,source.color,level,sourceLayer);
+                            gl.copyTexSubImage3D(gl.TEXTURE_2D_ARRAY,level,0,0,layer,0,0,target.pixels>>level,target.pixels>>level);
                         }
-                        if(!mipCanvases.has(size)){const canvas=makeCanvas();canvas.width=canvas.height=size;mipCanvases.set(size,canvas);}
+                    }
+                    A.reusedLayers.add(layer);
+                }
+                gl.bindFramebuffer(gl.READ_FRAMEBUFFER,previous);gl.deleteFramebuffer(framebuffer);
+            }
+            if(old)for(const target of [old,old.animation])if(target)for(const name of ['color','meta','lookup'])if(target[name])gl.deleteTexture(target[name]);
+            const makeCanvas=()=>{const c=document.createElement('canvas');c.width=c.height=64;return c;};
+            const color=makeCanvas(),g=color.getContext('2d');g.__drawImagesImmediately=true;
+            const mipCanvases=new Map();
+            const upload=(index,meta,bakedLevels=null,target=A,layer=0)=>{
+                const rect=target.rects[index];meta=Array.from(meta);
+                if(target===A&&index%stride===1)meta[1]=rect.code;else meta[3]=rect.code;
+                target.metaData.set(meta,index*4);
+                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+                gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,!bakedLevels);
+                gl.bindTexture(gl.TEXTURE_2D_ARRAY,target.color);
+                for(let level=0;level<target.levels;level++) {
+                    const size=rect.size>>level;
+                    if(bakedLevels) {
+                        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY,level,rect.x>>level,rect.y>>level,layer,size,size,1,gl.RGBA,gl.UNSIGNED_BYTE,bakedLevels[level].color);
+                    } else {
+                        if(!mipCanvases.has(size)){const c=makeCanvas();c.width=c.height=size;mipCanvases.set(size,c);}
                         const scaled=mipCanvases.get(size),ctx=scaled.getContext('2d');
-                        ctx.clearRect(0,0,size,size);ctx.drawImage(previous,0,0,size,size);
-                        gl.texSubImage2D(gl.TEXTURE_2D,level,rect.x>>level,rect.y>>level,gl.RGBA,gl.UNSIGNED_BYTE,scaled);
-                        previous=scaled;
+                        // Every mip comes from the original capture, never a
+                        // previously filtered miniature.
+                        ctx.clearRect(0,0,size,size);ctx.drawImage(color,0,0,size,size);
+                        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY,level,rect.x>>level,rect.y>>level,layer,size,size,1,gl.RGBA,gl.UNSIGNED_BYTE,scaled);
                     }
                 }
             };
-            A.prepare = (job) => {
-                // Prepare every type's canonical panel before the directional
-                // models, so all types become recognizable together.
+            A.prepare=(job)=>{
+                const layer=Math.floor(job/A.jobsPerLayer);job%=A.jobsPerLayer;
+                if(A.reusedLayers.has(layer))return;
                 const n=catalog.styles.length,animationJob=job-n*stride;
                 const batch=animationJob>=0?A.animationBatches[Math.floor(animationJob/animationViews)]:null;
                 const i=batch?batch.style:job<n?job:Math.floor((job-n)/views);
-                const direction=batch?animationJob%animationViews:job<n?-1:(job-n)%views,style=catalog.styles[i];
+                const direction=batch?animationJob%animationViews:job<n?-1:(job-n)%views;
+                const original=catalog.styles[i];
+                if(original.neutral&&layer>0)return;
+                const ownerColor=palette.colors[layer],style={...original,ownerColor};
                 const target=batch?A.animation:A,index=batch?animationJob:i*stride+2+direction;
                 if(direction>=0) {
                     if(A.worker) {
                         if(!A.prepared) {
                             if(!A.workerBusy) {
                                 A.workerBusy=true;
-                                const request={index:i,stride,cell:target.rects[index].size,levels:target.levels,animation:batch,
+                                const request={index:i,layer,stride,cell:target.rects[index].size,levels:target.levels,animation:batch,
                                     focalPixels:(this.sceneTargetSize?.height||960)/(2*Math.tan(.37))};
-                                if(A.workerStyle===i){A.worker.postMessage(request);return false;}
-                                const source=A.sources[i];
-                                Promise.all([createImageBitmap(source),createImageBitmap(source._ownerMask),
-                                    style.statusTextureCanvas?createImageBitmap(style.statusTextureCanvas):null]).then(([panel,ownerMask,status])=>{
-                                    if(!A.worker){panel.close();ownerMask.close();status?.close();return;}
-                                    const fields=['modelKey','type','color','scaleX','scaleY','bakeHeight','unit','isFlying','isWorker','weaponType'];
-                                    A.workerStyle=i;
-                                    A.worker.postMessage({...request,style:Object.fromEntries(fields.map(key=>[key,style[key]])),panel,ownerMask,status},[panel,ownerMask,...(status?[status]:[])]);
+                                const workerKey=layer+':'+i;
+                                if(A.workerStyle===workerKey){A.worker.postMessage(request);return false;}
+                                const source=A.sources[i],worker=A.worker;
+                                Promise.all([createImageBitmap(source),style.statusTextureCanvas?createImageBitmap(style.statusTextureCanvas):null]).then(([panel,status])=>{
+                                    if(A.worker!==worker){panel.close();status?.close();return;}
+                                    const fields=['modelKey','type','color','ownerColor','scaleX','scaleY','bakeHeight','unit','isFlying','isWorker','weaponType'];
+                                    A.workerStyle=workerKey;
+                                    worker.postMessage({...request,style:Object.fromEntries(fields.map(key=>[key,style[key]])),panel,status},[panel,...(status?[status]:[])]);
                                 }).catch(()=>{A.worker?.terminate();A.worker=null;A.workerBusy=false;A.workerFailed=true;});
                             }
                             return false;
                         }
                         const baked=A.prepared.images[direction];
                         if(baked) {
-                            if(!baked.levels) {g.putImageData(new ImageData(baked.color,64,64),0,0);m.putImageData(new ImageData(baked.mask,64,64),0,0);}
-                            upload(index,baked.meta,baked.levels,target);
+                            if(!baked.levels)g.putImageData(new ImageData(baked.color,64,64),0,0);
+                            upload(index,baked.meta,baked.levels,target,layer);
                         }
-                        if(direction===(batch?animationViews:views)-1){A.prepared=null;A.workerBusy=false;}
+                        if(direction===views-1){A.prepared=null;A.workerBusy=false;}
                         return;
                     }
-                    if(direction===0) {const kind=proceduralKind(style);A.model=kind?createFigureData(kind,1):null;}
+                    if(A.modelStyle!==i){A.model=Defence3Renderer3D.columnBakeData(style);A.modelStyle=i;}
                     const data=A.model;
-                    if(data) {const [yaw,pitch]=Defence3Renderer3D.columnView(stride,direction);
-                        let posed=data;if(batch)posed={...data,positions:Defence3Renderer3D.columnPose(style,data,batch.phase,batch.mode,style.unit?1:0,batch.time)};
-                        upload(index,this.bakeColumnModel(g,m,posed,style,yaw,A.sources[i],pitch),null,target);}
+                    if(data){const [yaw,pitch]=Defence3Renderer3D.columnView(stride,direction);
+                        const posed=batch?{...data,positions:Defence3Renderer3D.columnPose(style,data,batch.phase,batch.mode,style.unit?1:0,batch.time)}:data;
+                        upload(index,this.bakeColumnModel(g,posed,style,yaw,A.sources[i],pitch),null,target,layer);}
                     return;
                 }
-                g.clearRect(0,0,64,64);m.clearRect(0,0,64,64);
-                // Type colors occupy the body; ownership stays on a thin rim.
-                if (style.drawOwnerRim) {
-                    style.drawOwnerRim(g,'#fff');style.drawOwnerRim(m,'#fff');
-                } else if (!style.unit && !style.neutral) {
-                    for (const ctx of [g,m]) {ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.strokeRect(4,4,56,56);}
+                g.clearRect(0,0,64,64);
+                if(style.drawOwnerRim)style.drawOwnerRim(g,ownerColor);
+                else if(!style.unit&&!style.neutral){g.strokeStyle=ownerColor;g.lineWidth=2;g.strokeRect(4,4,56,56);}
+                if(style.unit) {
+                    g.save();g.strokeStyle=ownerColor;g.globalAlpha=.85;g.lineWidth=1.6;
+                    g.beginPath();g.arc(32,32,32*.83,0,Math.PI*2);g.stroke();g.restore();
                 }
                 style.draw(g);
-                upload(i*stride+1,[style.neutral?1/.94:1.35,0,0,A.animationBases[i]===undefined?1:A.animationBases[i]+2]);
-                // Bake from the same native panel pixels and mip chain as the
-                // live figure atlas. Redrawing at 64px changed thin black lines
-                // and painted colors before the model snapshot was even made.
+                upload(i*stride+1,[style.neutral?1/.94:1.35,0,0,A.animationBases[i]===undefined?1:A.animationBases[i]+2],null,A,layer);
                 const panel=document.createElement('canvas');panel.width=panel.height=FLAT_ATLAS_SIZE;
-                panel._ownerMask=document.createElement('canvas');panel._ownerMask.width=panel._ownerMask.height=FLAT_ATLAS_SIZE;
-                const pg=panel.getContext('2d'),pm=panel._ownerMask.getContext('2d');
-                for(const ctx of [pg,pm]) {
-                    ctx.scale(FLAT_ATLAS_SIZE/64,FLAT_ATLAS_SIZE/64);
-                    ctx.__drawImagesImmediately=true;ctx.imageSmoothingEnabled=false;
-                    if(style.drawOwnerRim)style.drawOwnerRim(ctx,'#fff');
-                    else if(!style.unit&&!style.neutral) {ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.strokeRect(4,4,56,56);}
-                }
-                style.draw(pg);
-                A.sources[i]=panel;
-                A.panels[i]=panel;
+                const pg=panel.getContext('2d');pg.scale(FLAT_ATLAS_SIZE/64,FLAT_ATLAS_SIZE/64);
+                pg.__drawImagesImmediately=true;pg.imageSmoothingEnabled=false;
+                if(style.drawOwnerRim)style.drawOwnerRim(pg,ownerColor);
+                else if(!style.unit&&!style.neutral){pg.strokeStyle=ownerColor;pg.lineWidth=2;pg.strokeRect(4,4,56,56);}
+                style.draw(pg);A.sources[i]=panel;
+                if(layer===0)A.panels[i]=panel;
             };
-            for (const [name,width,height,data] of [['meta',grid,grid,A.metaData],['lookup',catalog.width,8,catalog.lookup]]) {
-                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
-                gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
-                A[name]=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,A[name]);
+            for(const [target,name,width,height,data] of [[A,'meta',grid,grid,A.metaData],[A,'lookup',catalog.width,8,catalog.lookup],[A.animation,'meta',ag,ag,A.animation.metaData]]) {
+                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+                target[name]=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,target[name]);
                 gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,width,height,0,gl.RGBA,gl.FLOAT,data);
-                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
-                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
-                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
-                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
             }
-            gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
-            A.animation.meta=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,A.animation.meta);
-            gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,ag,ag,0,gl.RGBA,gl.FLOAT,A.animation.metaData);
-            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
             this.advanceColumnAtlas(A);
             return A;
         }
@@ -5953,21 +5954,20 @@
             const before=A.next;
             do { if(A.prepare(A.next)===false)break;A.next++; } while(A.next<jobs && performance.now()-start<budget);
             if(A.next===before)return;
-            const changed=before<A.catalog.styles.length*(A.catalog.stride||9)?A:A.animation;
-            gl.bindTexture(gl.TEXTURE_2D,changed.meta);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
             gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
-            gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,changed.grid,changed.grid,gl.RGBA,gl.FLOAT,changed.metaData);
-            if(changed===A&&A.next>A.catalog.styles.length*(A.catalog.stride||9)) {
-                gl.bindTexture(gl.TEXTURE_2D,A.animation.meta);gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,A.animation.grid,A.animation.grid,gl.RGBA,gl.FLOAT,A.animation.metaData);
+            if(before<A.jobsPerLayer&&!A.reusedLayers.has(0))for(const target of [A,A.animation]) {
+                gl.bindTexture(gl.TEXTURE_2D,target.meta);
+                gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,target.grid,target.grid,gl.RGBA,gl.FLOAT,target.metaData);
             }
             gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
             if(Math.min(A.next,A.catalog.styles.length)!==panelsBefore) A.revision++;
-            if(A.next>=jobs) {A.prepare=null;A.model=null;A.sources=null;A.worker?.terminate();A.worker=null;}
+            if(A.next>=jobs) {A.complete=true;A.prepare=null;A.model=null;A.sources=null;A.worker?.terminate();A.worker=null;}
         }
 
         // Bake the actual model's colored surfaces, equipment and panels once
         // per type/view. Hundreds of thousands of entities share these images.
-        bakeColumnModel(g,m,data,style,yaw,panel,pitch=.65) {
+        bakeColumnModel(g,data,style,yaw,panel,pitch=.65) {
             const c=Math.cos(yaw),s=Math.sin(yaw),sp=Math.sin(pitch),cp=Math.cos(pitch);
             const P=data.positions,N=data.normals,D=data.details,I=data.indices,U=data.uvs;
             const sy=style.scaleY*(style.bakeHeight||1),sx=style.scaleX;
@@ -5981,9 +5981,10 @@
             }
             const size=Math.max(maxX-minX,maxY-minY)*1.12,cx=(minX+maxX)/2,cy=(minY+maxY)/2,scale=64/size;
             for(const v of vertices) {v[0]=32+(v[0]-cx)*scale;v[1]=32-(v[1]-cy)*scale;}
-            const color=g.createImageData(64,64),mask=m.createImageData(64,64),depths=new Float32Array(4096).fill(-Infinity);
+            const color=g.createImageData(64,64),depths=new Float32Array(4096).fill(-Infinity);
             let tint=hexToRgb(style.color||'#aaa');const peak=Math.max(...tint,.01);tint=tint.map(v=>v*Math.max(1,.62/peak));
-            const palette={2:[1,1,1],3:[.48,.94,1],4:[.055,.065,.08],5:[.42,.29,.18],6:[.88,.86,.80],7:tint.map(v=>Math.min(1,v*1.3+.1)),8:[.96,.74,.24],9:[.88,.18,.2],10:[.44,.45,.49],11:[.24,.54,.22],12:[.035,.02,.06],13:[.8,.67,.36],14:[.19,.2,.23],15:[1,1,1]};
+            const ownerColor=hexToRgb(style.ownerColor||'#c8ced8');
+            const palette={2:ownerColor,3:[.48,.94,1],4:[.055,.065,.08],5:[.42,.29,.18],6:[.88,.86,.80],7:tint.map(v=>Math.min(1,v*1.3+.1)),8:[.96,.74,.24],9:[.88,.18,.2],10:[.44,.45,.49],11:[.24,.54,.22],12:[.035,.02,.06],13:[.8,.67,.36],14:[.19,.2,.23],15:ownerColor};
             const flying=proceduralKind(style)?.startsWith('bird');
             palette[1]=(flying?[.76,.84,.92]:[.055,.065,.08]).map((v,i)=>v*(flying?.8:.88)+tint[i]*(flying?.2:.12));
             const step=(lo,hi,x)=>{x=Math.max(0,Math.min(1,(x-lo)/(hi-lo)));return x*x*(3-2*x);};
@@ -6008,7 +6009,7 @@
                 }
                 return canvas._lodPixels;
             };
-            const top=pixels(panel),ownerPixels=pixels(panel?._ownerMask),sign=pixels(style.statusTextureCanvas);
+            const top=pixels(panel),sign=pixels(style.statusTextureCanvas);
             const sample=(levels,u,v,lod,out)=>{
                 const lo=Math.max(0,Math.min(levels.length-1,Math.floor(lod))),hi=Math.min(levels.length-1,lo+1),blend=Math.max(0,Math.min(1,lod-lo));
                 out.fill(0);
@@ -6021,7 +6022,7 @@
                     }
                 }
             };
-            const texel=new Float32Array(4),ownerTexel=new Float32Array(4);
+            const texel=new Float32Array(4);
             // Depth-test each texel, just like the live model. Average-depth
             // triangle sorting painted bright roofs over intersecting details.
             for(let i=0;i<I.length;i+=3) {
@@ -6051,23 +6052,17 @@
                     if(texture)sample(texture,u,v,textureLod,texel);
                     const alpha=texture?texel[3]:0;
                     if(surface===4&&texture&&alpha<.1)continue;
-                    let owner=surface===2||surface===15?1:0;
-                    if(texture) {
-                        if(surface===4&&ownerPixels)sample(ownerPixels,u,v,textureLod,ownerTexel);
-                        owner=surface===4?(ownerPixels?ownerTexel[0]:0):1-alpha;
-                    }
                     const ink=glowing?0:(1-step((style.unit?.75:.55)-.5,(style.unit?.75:.55)+.5,Math.min(Math.min(u,1-u)/fu,Math.min(v,1-v)/fv)))*(1-step(.12,.40,Math.max(fu,fv)))*.65;
                     for(let k=0;k<3;k++) {
                         const value=texture?base[k]*(1-alpha)+texel[k]*alpha:base[k];
                         let shaded=value*light*(1-ink)+[.025,.035,.055][k]*ink;
                         if(surface===4||surface===15)shaded*=.94;
                         color.data[at*4+k]=Math.round(shaded*255);
-                        mask.data[at*4+k]=Math.round(owner*light*(1-ink)*(surface===4||surface===15?.94:1)*255);
                     }
-                    color.data[at*4+3]=mask.data[at*4+3]=255;depths[at]=z;
+                    color.data[at*4+3]=255;depths[at]=z;
                 }
             }
-            g.putImageData(color,0,0);m.putImageData(mask,0,0);
+            g.putImageData(color,0,0);
             return [size,cx,cy,1];
         }
 
@@ -6241,6 +6236,7 @@
                     uniform float uAlpha, uTile, uScale, uPixelRatio, uFlat, uLightNorm, uDetail, uDetailS, uDetailMask;
                     uniform int uStructure, uFull, uPlayer;
                     uniform vec3 uColors[9];
+                    uniform int uOwnerLayers[9];
                     uniform sampler2D uVisibility;
                     uniform sampler2D uStyles, uMeta, uAnimMeta;
                     uniform float uAnimGrid,uTime;
@@ -6256,6 +6252,7 @@
                     flat out vec3 vFrameMeta;
                     flat out float vYawBlend;
                     flat out float vAnimated;
+                    flat out float vPaletteLayer;
                     flat out vec4 vViewWeights;
                     flat out vec4 vViewBasis;
                     out float vLod, vDotScale, vLight;
@@ -6399,6 +6396,7 @@
                         float shade = 1.-pow(1.-clamp(light,0.,1.),1.3)*.42;
                         if(ghost) shade *= .55;
                         vLight = shade;
+                        vPaletteLayer = float(uStructure != 0 && (aKind == 4. || aKind == 5.) ? 0 : uOwnerLayers[clamp(int(aOwner)+1,0,8)]);
                         vColor = vec4(uColors[clamp(int(aOwner)+1,0,8)], uStructure != 0 && aKind < 4. && (flags & 1) != 0 ? .35 : 1.);
                         // Neutral resource tiles keep their material color even
                         // after the emblem becomes too small to resolve.
@@ -6417,6 +6415,7 @@
                     flat in vec3 vFrameMeta;
                     flat in float vYawBlend;
                     flat in float vAnimated;
+                    flat in float vPaletteLayer;
                     flat in vec4 vViewWeights;
                     flat in vec4 vViewBasis;
                     in float vLod, vDotScale, vLight;
@@ -6431,18 +6430,14 @@
                     uniform mat4 uInverseViewProjection;
                     uniform vec2 uViewport;
                     uniform float uYaw, uPitch, uTime;
-                    uniform sampler2D uSprites, uOwnerMask,uAnimSprites,uAnimOwnerMask;
+                    uniform highp sampler2DArray uSprites,uAnimSprites;
                     uniform float uAnimGrid,uAtlasPixels,uAnimPixels;
                     uniform float uAtlasGrid, uFlat, uCoverageFade;
                     out vec4 color;
-                    vec3 srgbToLinear(vec3 c){return mix(c/12.92,pow((c+.055)/1.055,vec3(2.4)),step(.04045,c));}
-                    vec3 linearToSrgb(vec3 c){c=max(c,vec3(0.));return mix(c*12.92,1.055*pow(c,vec3(1./2.4))-.055,step(.0031308,c));}
                     vec4 sampleViewMip(vec2 origin,float cellSize,float pixels,vec2 coord,float mip) {
                         float inset=min(.5,.5*exp2(mip)/cellSize);
                         vec2 uv=(origin+clamp(coord,vec2(inset),vec2(1.-inset))*cellSize)/pixels;
-                        vec4 texel=vAnimated>.5?textureLod(uAnimSprites,uv,mip):textureLod(uSprites,uv,mip);
-                        vec3 owner=(vAnimated>.5?textureLod(uAnimOwnerMask,uv,mip):textureLod(uOwnerMask,uv,mip)).rgb;
-                        texel.rgb=max(vec3(0.),texel.rgb-owner*(vec3(1.)-srgbToLinear(vColor.rgb)));
+                        vec4 texel=vAnimated>.5?textureLod(uAnimSprites,vec3(uv,vPaletteLayer),mip):textureLod(uSprites,vec3(uv,vPaletteLayer),mip);
                         return texel;
                     }
                     vec4 sampleView(float layer, vec2 coord, vec2 dx, vec2 dy) {
@@ -6475,17 +6470,49 @@
                         vec2 coord = (gl_FragCoord.xy-vSpriteCenter)*vec2(1.,-1.)/vSpriteExtent+.5;
                         if (any(lessThan(coord,vec2(0.))) || any(greaterThan(coord,vec2(1.)))) discard;
                         if (uFlat < .5) {
-                            // A view-facing surface with depth, constrained above
-                            // the ground. Far glyphs occlude each other and close
-                            // models normally instead of painting over the scene.
-                            vec2 screenOffset = vWorldSprite.xy + (coord-.5)*vec2(1.,-1.)*vWorldSprite.zw;
-                            vec3 right = vec3(cos(uYaw),0.,-sin(uYaw));
-                            vec3 up = vec3(-sin(uYaw)*sin(uPitch),cos(uPitch),-cos(uYaw)*sin(uPitch));
+                            // Every depth belongs to this exact screen ray. Moving
+                            // along the camera's forward vector changes the projected
+                            // pixel in perspective and can put sprites behind the ground.
+                            vec2 ndc = gl_FragCoord.xy / uViewport * 2. - 1.;
+                            vec4 nearH = uInverseViewProjection * vec4(ndc,-1.,1.);
+                            vec4 farH = uInverseViewProjection * vec4(ndc,1.,1.);
+                            if (!(abs(nearH.w) > .0000001) || !(abs(farH.w) > .0000001)) discard;
+                            vec3 origin = nearH.xyz / nearH.w;
+                            vec3 ray = farH.xyz / farH.w - origin;
+                            float rayLength = length(ray);
+                            if (!(rayLength > .000001)) discard;
+                            ray /= rayLength;
                             vec3 back = vec3(sin(uYaw)*cos(uPitch),sin(uPitch),cos(uYaw)*cos(uPitch));
-                            vec3 world = vGround + right*screenOffset.x + up*screenOffset.y;
-                            world += back * max(0.,(vGround.y-world.y)/max(.05,sin(uPitch)));
+                            float denominator = dot(ray,back);
+                            if (!(abs(denominator) > .000001)) discard;
+                            float distance = dot(vGround-origin,back) / denominator;
+                            if (!(distance >= 0.) || distance > rayLength) discard;
+                            vec3 world = origin + ray * distance;
+                            float floorY = vGround.y + .002;
+                            if (world.y < floorY) {
+                                if (!(abs(ray.y) > .000001)) discard;
+                                distance = (floorY-origin.y) / ray.y;
+                                if (!(distance >= 0.) || distance > rayLength) discard;
+                                world = origin + ray * distance;
+                            }
                             vec4 clip = uViewProjection*vec4(world,1.);
-                            gl_FragDepth = clamp(clip.z/clip.w*.5+.5,0.,1.);
+                            if (!(clip.w > .0000001)) discard;
+                            float spriteDepth = clip.z/clip.w*.5+.5;
+                            // Ground depth is affine in screen space. A single
+                            // gl_FragDepth is used by every covered MSAA sample,
+                            // so it must precede the nearest ground sample across
+                            // the whole pixel, not just the ground at its centre.
+                            vec4 groundPlane = transpose(uInverseViewProjection) * vec4(0.,1.,0.,-vGround.y);
+                            if (abs(groundPlane.z) > .0000001) {
+                                float groundDepth = .5 - .5 * (dot(groundPlane.xy,ndc)+groundPlane.w) / groundPlane.z;
+                                vec2 depthGradient = -groundPlane.xy / groundPlane.z / uViewport;
+                                float halfPixelSpan = .5 * (abs(depthGradient.x)+abs(depthGradient.y));
+                                // Eight representable steps in DEPTH_COMPONENT24
+                                // also separate nearly coincident non-MSAA depths.
+                                float nearestGroundDepth = groundDepth - halfPixelSpan - 8. / 16777215.;
+                                spriteDepth = min(spriteDepth,nearestGroundDepth);
+                            }
+                            gl_FragDepth = clamp(spriteDepth,0.,1.);
                         } else gl_FragDepth = gl_FragCoord.z;
                         vec2 p = coord * 2. - 1.;
                         float edge = (uStructure == 0 ? length(p) : max(abs(p.x),abs(p.y))) * vDotScale;
@@ -6507,26 +6534,35 @@
                             vec4 c=sampleBakedView(vViewC,viewPoint,dx,dy);
                             vec4 d=sampleBakedView(vViewD,viewPoint,dx,dy);
                             vec4 texel=a*vViewWeights.x+b*vViewWeights.y+c*vViewWeights.z+d*vViewWeights.w;
-                            // Views and mips mix in linear light; display in sRGB.
-                            texel.rgb = linearToSrgb(texel.rgb / max(texel.a,.001));
-                            if (uStructure == 0 && uFlat > .5) {
-                                float ring = 1.-smoothstep(.025,.025+fwidth(edge),abs(length(p)-.83));
-                                texel = vec4(mix(vColor.rgb,texel.rgb,texel.a),max(texel.a,ring*.85));
-                            }
+                            // The atlas already contains final framebuffer colors.
+                            texel.rgb /= max(texel.a,.001);
                             // Premultiplied interpolation avoids dark fringes and
                             // gives continuous transitions down to subpixel dots.
                             float alpha = mix(dotAlpha,texel.a,vLod);
                             vec3 rgb = mix(vColor.rgb*dotAlpha,texel.rgb*texel.a,vLod);
                             sprite = vec4(rgb/max(alpha,.001),alpha);
                         }
-                        // Preserve filtered coverage instead of thresholding
-                        // every mip into opaque holes. MSAA resolves edges;
-                        // non-MSAA uses ordinary alpha blending without noise.
-                        if (sprite.a < .015) discard;
-                        color = vec4(sprite.rgb*vLight,sprite.a*vColor.a);
+                        if (uFlat < .5) {
+                            // Baked bodies are opaque. Alpha marks the silhouette,
+                            // not a translucent surface that needs depth sorting.
+                            if (sprite.a < .5) discard;
+                            // Keep intentional construction opacity without blending
+                            // or sorting. A fixed 4x4 coverage pattern writes depth
+                            // only at the pixels where the construction is visible.
+                            if (vColor.a < 1.) {
+                                ivec2 p = ivec2(gl_FragCoord.xy) & ivec2(3);
+                                int rank = ((p.x & 1) ^ (p.y & 1)) * 8 + (p.y & 1) * 4
+                                    + (((p.x >> 1) & 1) ^ ((p.y >> 1) & 1)) * 2 + ((p.y >> 1) & 1);
+                                if (vColor.a <= (float(rank) + .5) / 16.) discard;
+                            }
+                            color = vec4(sprite.rgb*vLight,1.);
+                        } else {
+                            if (sprite.a < .015) discard;
+                            color = vec4(sprite.rgb*vLight,sprite.a*vColor.a);
+                        }
                     }`);
                 this.columnUniforms = {};
-                for (const n of ['AtlasPixels','AnimPixels','AnimGrid','AnimSprites','AnimOwnerMask','AnimMeta','ViewProjection','InverseViewProjection','Alpha','Tile','Scale','PixelRatio','Flat','LightNorm','Structure','Full','Player','Colors','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','OwnerMask','AtlasGrid','StyleWidth','Yaw','Pitch','Time','HeightScale','PointMax','Viewport','Eye','CoverageFade']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
+                for (const n of ['AtlasPixels','AnimPixels','AnimGrid','AnimSprites','AnimMeta','ViewProjection','InverseViewProjection','Alpha','Tile','Scale','PixelRatio','Flat','LightNorm','Structure','Full','Player','Colors','OwnerLayers','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','AtlasGrid','StyleWidth','Yaw','Pitch','Time','HeightScale','PointMax','Viewport','Eye','CoverageFade']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
                 this.columnStores = [{},{}];
                 this.columnVisibilityTexture = createTexture(gl);
             }
@@ -6535,7 +6571,6 @@
             const gl = this.gl;
             const atlas = this.prepareColumnAtlas();
             const models = this.drawColumnModels(C,snapshot,atlas);
-            if (models && this.scaleLayers) this.drawColumnModelGhosts();
             this.ensureColumnProgram();
             const U = this.columnUniforms;
             gl.activeTexture(gl.TEXTURE0);
@@ -6562,12 +6597,12 @@
             }
             gl.useProgram(this.columnProgram);
             if (atlas) {
-                for (const [unit,name,uniform] of [[1,'color','Sprites'],[2,'mask','OwnerMask'],[3,'meta','Meta'],[4,'lookup','Styles']]) {
-                    gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(gl.TEXTURE_2D,atlas[name]);gl.uniform1i(U[uniform],unit);
+                for (const [unit,name,uniform] of [[1,'color','Sprites'],[3,'meta','Meta'],[4,'lookup','Styles']]) {
+                    gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(name==='color'?gl.TEXTURE_2D_ARRAY:gl.TEXTURE_2D,atlas[name]);gl.uniform1i(U[uniform],unit);
                 }
             }
-            if(atlas?.animation)for(const [unit,name,uniform] of [[5,'color','AnimSprites'],[6,'mask','AnimOwnerMask'],[7,'meta','AnimMeta']]) {
-                gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(gl.TEXTURE_2D,atlas.animation[name]);gl.uniform1i(U[uniform],unit);
+            if(atlas?.animation)for(const [unit,name,uniform] of [[5,'color','AnimSprites'],[7,'meta','AnimMeta']]) {
+                gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(name==='color'?gl.TEXTURE_2D_ARRAY:gl.TEXTURE_2D,atlas.animation[name]);gl.uniform1i(U[uniform],unit);
             }
             gl.uniform1f(U.AnimGrid,atlas?.animation.grid||1);
             gl.uniform1f(U.AtlasPixels,atlas?.pixels||128);gl.uniform1f(U.AnimPixels,atlas?.animation.pixels||128);
@@ -6594,12 +6629,13 @@
             const colors = this.columnColors || (this.columnColors = new Float32Array(27));
             for (let i=0;i<9;i++) colors.set(hexToRgb(C.colors[i]),i*3);
             gl.uniform3fv(U.Colors,colors);
+            gl.uniform1iv(U.OwnerLayers,atlas.palette.layers);
             gl.drawBuffers([gl.COLOR_ATTACHMENT0,gl.NONE]);
             if(snapshot.flat2d) {gl.disable(gl.DEPTH_TEST);gl.depthMask(false);gl.enable(gl.BLEND);}
             else {
                 gl.enable(gl.DEPTH_TEST);gl.depthMask(true);
-                if(this.sceneSamples) {gl.disable(gl.BLEND);gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE);}
-                else gl.enable(gl.BLEND);
+                gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+                gl.disable(gl.BLEND);
             }
             gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
             for (let kind=0;kind<2;kind++) {
@@ -6650,6 +6686,7 @@
             }
             gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
             gl.depthMask(true);gl.disable(gl.BLEND);gl.enable(gl.DEPTH_TEST);gl.drawBuffers(this.sceneDrawBuffers);
+            if (models && this.scaleLayers) this.drawColumnModelGhosts();
         }
 
         disposeFrameColumns() {
@@ -6660,7 +6697,11 @@
                 if (S.vao) this.gl.deleteVertexArray(S.vao);
                 if (S.maskBuf) this.gl.deleteBuffer(S.maskBuf);
             }
-            if (this.columnAtlas) for (const name of ['color','mask','meta','lookup']) this.gl.deleteTexture(this.columnAtlas[name]);
+            if(this.columnAtlas) {
+                this.columnAtlas.worker?.terminate();this.columnAtlas.prepare=null;
+                for(const target of [this.columnAtlas,this.columnAtlas.animation])if(target)
+                    for(const name of ['color','meta','lookup'])if(target[name])this.gl.deleteTexture(target[name]);
+            }
             this.columnAtlas=null;
             this.columnStores=[{},{}];this.columnLayers=null;
         }
@@ -6783,17 +6824,6 @@
                 this.presentSceneToCanvas(true);
                 this.trimTopTextures();
                 return;
-            }
-            // A detailed view with more units than its detail budget: the rest
-            // as glyphs, under the models (drawn first, no depth: the models
-            // drawn after cover them).
-            // (In 2D units are always in front: their glyphs go after the
-            // sprites, below.)
-            if (this.columnLayers && !snapshot.flat2d) {
-                this.drawFrameColumns(this.columnLayers,snapshot);
-                gl.bindVertexArray(null);
-                gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.disable(gl.BLEND);
-                gl.drawBuffers(this.sceneDrawBuffers);
             }
             // (Far structures of a remembered view: instance glyphs.)
             if (snapshot.glyphLayers) {
@@ -6931,6 +6961,14 @@
             if (staticLayer) this.drawStaticLayer(atlas);
             for (let group of opaqueCubeGroups.values()) {
                 this.drawCubeInstances(group);
+            }
+            // Ground shadows stay below the baked surfaces. Sprite cutouts and
+            // live geometry share the scene depth test and depth writes.
+            if (this.columnLayers) {
+                this.drawFrameColumns(this.columnLayers,snapshot);
+                gl.bindVertexArray(null);
+                gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.disable(gl.BLEND);
+                gl.drawBuffers(this.sceneDrawBuffers);
             }
             if (shadowMode === 'detailed' || shadowMode === 'high') {
                 this.renderShadowMap(snapshot, shadowMode, opaqueMeshObjects, opaqueTexturedCubeGroups, opaqueCubeGroups, atlas);
@@ -7089,6 +7127,15 @@
     Defence3Renderer3D.columnBakeData = style => {const kind=proceduralKind(style);return kind?createFigureData(kind,0):null;};
     // Size the cache at the mesh/image boundary, including the actual height
     // and equipment silhouette. Tall models must not upscale a 32px picture.
+    Defence3Renderer3D.columnPalette = (colorFor,owners) => {
+        const normalize=color=>'#'+hexToRgb(color).map(v=>Math.round(v*255).toString(16).padStart(2,'0')).join('');
+        const colors=[normalize(colorFor(-1))];
+        for(const owner of owners||[]) {
+            const color=normalize(colorFor(owner));if(!colors.includes(color))colors.push(color);
+        }
+        const layers=Int32Array.from({length:9},(_,i)=>Math.max(0,colors.indexOf(normalize(colorFor(i-1)))));
+        return {colors,layers,key:colors.join('|')+':'+Array.from(layers).join(',')};
+    };
     Defence3Renderer3D.columnSnapshotSize = style => {
         const data=Defence3Renderer3D.columnBakeData(style);if(!data)return 32;
         const lo=[Infinity,Infinity,Infinity],hi=[-Infinity,-Infinity,-Infinity];
