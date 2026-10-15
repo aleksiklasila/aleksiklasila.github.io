@@ -1378,6 +1378,95 @@ solid things (`drawColumnModelGhosts`); the far glyph's opacity 0.6 → 0.35.
   positive while energy falls is the window: income averaged over 60 s against
   upkeep as it is now.
 
+### 2026-10-15 — chaos scenarios; the spikes they found
+
+User: keep reducing TPS spikes; build chaotic queueing scenarios (10k
+barracks and worker buildings, healer buildings every ~10th, 10k healers,
+labs with strong researchers queuing cheap and dear research, 30 rally
+points, collectors by the mines, builders on tower sites, max pop 200k) and
+mixed ones with big line battles; once TPS is good there, bigger and more
+mixed ones. Target: a stable 20 TPS (~40 ms main-thread ticks); large
+reworks are fine.
+
+**Scenarios** (`.claude/chaos.cjs`, tickbench `CHAOS=queue|mixed`; fixtures
+`tests/chaos-queue-600.json`, `tests/chaos-mixed-600.json` from
+`tests/make-chaos-fixtures.cjs`; 600x600 arena, two teams): per team 5000
+buildings on a lattice over its side (barracks of every type, every 10th a
+healer building, labs, builder and salvager buildings) at level 6 with full
+queues (the caps: 20 a barrack, 10 a worker building), 600 collector
+buildings by the mines with their collectors, 5000 healers spread over the
+buildings, 600 researchers at level 9 with the research stats raised and
+~900 research tasks queued, 30 rally points, ~1450 tower sites under
+construction for 2000 builders, salvage marks; `mixed` puts the buildings in
+each team's outer third and 30k units a team in thick lines across the
+middle (blocks of 4 rows, rows of towers and traps between), attack-moving.
+During the run, a burst a second per peer: queues topped up, rally points
+moved every third burst, 20 research orders, 20 towers placed, and (mixed) a
+quarter of the army ordered. ~82k units at the start (mixed), 26k growing to
+57k (queue). `ACTSPLIT=1` (new): per action kind, the longest call and tick.
+
+Also seen: a 300k-a-team battle run in node died at tick 239 when the wasm
+heap could not grow (the machine had ~1 GB free: Edge, Firefox, ChatGPT):
+an array fell back outside the heap and the movement kernel refuses it.
+Memory pressure, not a regression; the reservation below lowers the peak.
+
+Found and fixed (host, 7 helpers; ms):
+
+| spike | before | after | what |
+|---|---|---|---|
+| navigation install | 47 → 349 (grew with the fields) | 10 | A rebuild of one profile remade every live field of every profile (~16-20k) in its window; now its own profile's only, the rest kept in place. Installs copy in place when the rows' width is unchanged; rows get 25% headroom (a build with a few more parts copied every field into wider rows: ~60 ms). Window 10 → 30 ticks. |
+| field pool doubling | 30-40, inside worker takes, waiting for the fields job | at the flush (job just taken) | `navFieldsFlush` grows a pool under a quarter free. |
+| worker search takes | 30-53 a tick for ~3 ticks | ~30 at most, typically 2-6 | At most 400 takes a tick (was unlimited); a post is skipped while takes remain, the next selects the skipped one's workers (`_wsSkipped`, window widened). |
+| unit storage growth | 54-75 at a spawn (50k slots) | none below max pop | The match's population (max pop × teams, ≤ 512 MB of columns) reserved at the start, at whole restores and compactions. Past it: next size allocated ahead from 60% fill, one parallel copy of the used slots (Rust `k_copy`), batched bindings (one message per helper: `simParallelBindBatch/Flush`), object-field arrays grown a slot at a time. |
+| adjacency apply | 15-25 on ticks after a big group change | ~5 | 600 members a tick (was 2000); a batch's unapplied members go on after the next batch's (were dropped). A full refresh computes signatures at structures' tiles only. |
+| research orders | 0.37 a task (capacity: every worker building; depth: every task) | 0.1 an action | Capacity from the labs' index once an action; the stat's depth counted on. |
+
+Mixed scenario, 480 ticks: mean 48.3 → 40.7, p50 45 → 38.5, p95 71 → 57,
+max 344 → 118 outside the setup's own tick (one tick after the setup still
+waits ~240 ms on the adjacency/cover lane: 11k buildings placed at once).
+Queue scenario (600 ticks, before the last round): mean 36.6, p50 35.6, p95
+48.3.
+
+Tests: `nav-rows` now checks fields of three profiles through several
+profiles' rebuilds; `adjacency-lane-carry` (new: 11k buildings, a cut while
+members are queued, lane = synchronous recompute; signatures of a full
+refresh = every tile's); `heap-copy` (new). `SIM_RULES_REVISION` 13.
+
+Left, largest first (mixed):
+- **Move orders**: ~13 ms per 7.5k-unit order action and ~6.5 ms a tick per
+  player while slices apply: per-unit object-field writes (no hot spot).
+  Next: orders as column writes in a kernel (BRAIN_OFF stage 1-2 style).
+- **Worker takes** of healers (~75 us each: nearest healer building scan,
+  grid pick, exclusivity): the worker AI as a column state machine on a
+  lane (BRAIN_OFF stage 4).
+- Rebuild window stage (`_navNextStage` ~21 ms: next pools, binding every
+  build's arrays), the first tick after a mass placement (adjacency flood
+  waiting on the shared T5 lane), unit pass ~8-10 ms of worker JS.
+- The parallel heap copy is no faster than `set()` at 20 MB (memory bound,
+  or helpers not joining yet): check with KSHARE before relying on it.
+
+Second round (same day): research tables/queues hashed a slice a tick
+(`_snapHDeep` slice); move orders 2500 units a tick (2000 a player), their
+first slice at gameTick's start, not inside the action; worker takes by cost
+(healer 4); collector site groups written straight into the typed tables;
+field pools grown in the background (a copy stage of the fields job,
+swapped at the next flush: `_navGrowPlan/_navGrowSwap`, Rust `k_copy`);
+rebuild stage bindings batched; **tick action budget** (`processActions`:
+cost model, backlog snapshotted and hashed: test `action-budget`);
+**worker event budget** in the unit pass (240 a tick, shuffled order,
+moving workers never held back); spawns 256 a tick; worker grid sweep 90
+steps; unit columns reserved for max pop × teams (≤512 MB). A copy is
+memory-bandwidth bound (~7.5 GB/s, 200 MB in 27 ms either way).
+Mixed: mean 35.9, p95 48.3. **Mega** (`CHAOS=mega`, 1000 map, 170k units,
+18k buildings, 9.4k towers): mean 51.5 → 44.8, p50 50.4 → 42.6, p95 68.6 →
+62.2. Left there: `laserBeamsTick` 16-39 ms spikes (per-unit beam reports in
+JS once lines cross laser rows), ticks 109-123 with 22-36 ms unaccounted
+(GC? a profile with --trace-gc was started: mega-76-126.cpuprofile), a
+31 ms hash tick, `_navNextStage` ~24 ms, the setup tick's adjacency wait,
+order apply ~2.1 us a unit (column writes rework), unit constructor ~20 us.
+The full regression suite has not been rerun since these changes (run it
+alone: it fails under load).
+
 ## Next
 
 Order set by the user (2026-10-09): main thread stable below 50 ms (aim

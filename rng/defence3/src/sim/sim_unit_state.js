@@ -374,6 +374,8 @@ function simUnitStateReset() {
     if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
     // A whole-world replacement needs no slot recycling. Old objects retain
     // their own generation's columns, but no registry keeps its owners alive.
+    // (Columns allocated ahead: never bound, given back.)
+    _simUnitPrepFree(_simUnitState);
     _simUnitState = null;
     for (const k of SIM_UNIT_COLUMNS) simParallelBind('unit.' + k, null);
 }
@@ -433,7 +435,10 @@ function simUnitStateAllocate(u) {
     const s = reused ? S.free.pop() : S.owners.length;
     // (Grown by half, in whole 4096-slot steps: doubling left up to half of
     // ~850 bytes a slot unused, 1M slots for 600k units.)
-    if (s >= S.cap) _simUnitStateGrow(S, Math.max(1024, Math.ceil(S.cap * 1.5 / 4096) * 4096));
+    if (s >= S.cap) _simUnitStateGrow(S, _simUnitNextCap(S.cap));
+    // (A slot never used before: its element of each object field's array,
+    // see _simUnitStateGrow. Slots are taken in order: s is the length.)
+    if (!reused) for (let i = 0; i < _simUnitOcNames.length; i++) { const a = S.columns[_simUnitOcNames[i]]; while (a.length <= s) a.push(undefined); }
     // A slot that held a unit before: every column zeroed, as a fresh slot's
     // (its last unit's kernel state (committed steps, steady windows, flags,
     // speeds) must not reach the new one: which slot a unit gets depends on
@@ -451,42 +456,117 @@ function _simSlotZeroFn() {
     for (const [k, , per] of SIM_MOVE_COLUMNS) body.push(per === 1 ? 'C.' + k + '[s] = 0;' : 'C.' + k + '.fill(0, s * ' + per + ', s * ' + per + ' + ' + per + ');');
     return new Function('C', 's', body.join('\n'));
 }
+const _simUnitOcNames = SIM_UNIT_OBJ_FIELDS.map(k => 'oc_' + k);
+function _simUnitNextCap(cap) { return Math.max(1024, Math.ceil(cap * 1.5 / 4096) * 4096); }
+// The slots a match's population needs, reserved at its start, at a whole
+// restore and at a compaction: every player's configured maximum
+// population, and room for units that died this tick (their slots come back
+// the next). Growth is then a fallback. (Reserved columns cost address space,
+// not memory: the kernels touch the slots in use, and the heap's memory is
+// committed at its first write. Growing by half held old and new columns at
+// once, and each growth was a spike.) At most SIM_UNIT_RESERVE_BYTES of
+// columns (~800k slots): the lobby's default is 200k a player, and eight
+// players' 1.6M slots would hold a quarter of the wasm heap's 4 GB of
+// address space (and the system's commit charge) in any match; past it, the
+// growth, allocated ahead.
+const SIM_UNIT_RESERVE_BYTES = 512 << 20;
+let _simUnitBytesPerSlotCache = 0;
+function _simUnitBytesPerSlot() {
+    if (!_simUnitBytesPerSlotCache) {
+        let n = 5;
+        for (const k of SIM_UNIT_COLUMNS) n += _simUnitColumnType(k).BYTES_PER_ELEMENT;
+        for (const [, Type, per] of SIM_MOVE_COLUMNS) n += Type.BYTES_PER_ELEMENT * per;
+        _simUnitBytesPerSlotCache = n;
+    }
+    return _simUnitBytesPerSlotCache;
+}
+function simUnitPopulationSlots() {
+    // (The teams in the match: players holds every lobby slot, 8.)
+    const np = typeof activeTeamIds !== 'undefined' && Array.isArray(activeTeamIds) && activeTeamIds.length ? activeTeamIds.length
+        : typeof players !== 'undefined' && Array.isArray(players) ? players.length : 0;
+    const pop = typeof getConfiguredMaxPop === 'function' ? getConfiguredMaxPop() : 0;
+    if (!(np > 0) || !(pop > 0)) return 0;
+    const want = pop * np + Math.max(4096, Math.ceil(pop * np / 32));
+    return Math.min(want, Math.floor(SIM_UNIT_RESERVE_BYTES / _simUnitBytesPerSlot()));
+}
+// Past the reservation (the fallback): the next size's columns allocated
+// ahead (simUnitStatePrepareStep, from gameTick: once the slots pass
+// SIM_UNIT_PREP_FILL of the capacity, at most SIM_UNIT_PREP_BYTES of them a
+// tick), so that a growth only copies and binds (~10 ms at 50k slots; at a
+// spawn, mid-tick, it was 55-75 ms: fresh zeroed heap columns, new
+// object-field arrays, a message per binding and helper). Memory only: the
+// slots and what the units do are the same whenever it happens.
+const SIM_UNIT_PREP_FILL = 0.6, SIM_UNIT_PREP_BYTES = 6 << 20;
+let _simUnitPrepSpecs = null;
+function _simUnitPrepList() {
+    if (!_simUnitPrepSpecs) {
+        _simUnitPrepSpecs = [];
+        for (const k of SIM_UNIT_COLUMNS) _simUnitPrepSpecs.push([k, _simUnitColumnType(k), 1]);
+        for (const [k, Type, per] of SIM_MOVE_COLUMNS) _simUnitPrepSpecs.push([k, Type, per]);
+        _simUnitPrepSpecs.push(['sepKey', Uint32Array, 1], ['sepLayer', Uint8Array, 1]);
+    }
+    return _simUnitPrepSpecs;
+}
+function _simUnitPrepFree(S) {
+    if (!S || !S.pre) return;
+    for (const k in S.pre.arrays) simHeapFree(S.pre.arrays[k]);
+    S.pre = null;
+}
+function simUnitStatePrepareStep() {
+    const S = _simUnitState;
+    if (!S || !S.cap || S.owners.length < S.cap * SIM_UNIT_PREP_FILL) return;
+    const cap = _simUnitNextCap(S.cap), L = _simUnitPrepList();
+    if (S.pre && S.pre.cap !== cap) _simUnitPrepFree(S);
+    const P = S.pre || (S.pre = { cap, arrays: {}, next: 0 });
+    let bytes = 0;
+    for (; P.next < L.length && bytes < SIM_UNIT_PREP_BYTES;) {
+        const [k, Type, per] = L[P.next++], a = simHeapArray(Type, cap * per);
+        // (Written once now: memory the heap just grew into is committed by
+        // the system at its first write.)
+        a.fill(0);
+        P.arrays[k] = a; bytes += a.byteLength;
+    }
+}
 function _simUnitStateGrow(S, cap) {
-    // (The arrays replaced: given back to the heap, see above.)
-    {
-        const old = [];
-        for (const k of SIM_UNIT_COLUMNS) {
-            const a = simHeapArray(_simUnitColumnType(k), cap);
-            if (S.columns[k]) { a.set(S.columns[k]); old.push(S.columns[k]); }
-            S.columns[k] = a;
-            simParallelBind('unit.' + k, a);
-        }
-        for (const [k, Type, per] of SIM_MOVE_COLUMNS) {
-            const a = simHeapArray(Type, cap * per);
-            if (S.columns[k]) { a.set(S.columns[k]); old.push(S.columns[k]); }
-            S.columns[k] = a;
-            simParallelBind('unit.' + k, a);
-        }
-        // (The object fields' arrays: packed, as long as the columns; written
-        // by index, never past the end: no sparse, dictionary-mode arrays.)
-        for (const k of SIM_UNIT_OBJ_FIELDS) {
-            const was = S.columns['oc_' + k], a = new Array(cap).fill(undefined);
-            if (was) for (let i = 0, n = Math.min(was.length, cap); i < n; i++) a[i] = was[i];
-            S.columns['oc_' + k] = a;
-        }
+    // (The next size allocated ahead, when it is at least this one: taken,
+    // the rest made now. Smaller (a reserve for many at once): let go.)
+    let P = S.pre;
+    if (P && P.cap < cap) { _simUnitPrepFree(S); P = null; }
+    if (P) cap = P.cap;
+    S.pre = null;
+    const take = (k, Type, n) => { const a = P && P.arrays[k]; if (a) { P.arrays[k] = null; return a; } return simHeapArray(Type, n); };
+    // The new arrays, then every column's content copied in one parallel job
+    // (simParallelCopyHeap: before any binding, so the helpers take part),
+    // then the arrays bound (to the helpers in one message each) and the old
+    // ones given back to the heap, see above.
+    const fresh = [], copies = [], old = [];
+    for (const k of SIM_UNIT_COLUMNS) fresh.push(k, take(k, _simUnitColumnType(k), cap));
+    for (const [k, Type, per] of SIM_MOVE_COLUMNS) fresh.push(k, take(k, Type, cap * per));
+    const sepKey = take('sepKey', Uint32Array, cap), sepLayer = take('sepLayer', Uint8Array, cap);
+    sepKey.fill(SIM_SEP_ABSENT);
+    // (The slots in use only: past them every column is as a fresh slot's.)
+    const used = S.owners.length, part = (a, per) => a.subarray(0, Math.min(a.length, used * per));
+    for (let i = 0; i < fresh.length; i += 2) { const was = S.columns[fresh[i]]; if (was) { copies.push(fresh[i + 1], part(was, was.length / Math.max(1, S.cap))); old.push(was); } }
+    if (S.sepKey) { copies.push(sepKey, part(S.sepKey, 1), sepLayer, part(S.sepLayer, 1)); old.push(S.sepKey, S.sepLayer); }
+    if (typeof simParallelCopyHeap === 'function') simParallelCopyHeap(copies); else for (let i = 0; i < copies.length; i += 2) copies[i].set(copies[i + 1]);
+    if (typeof simParallelBindBatch === 'function') simParallelBindBatch();
+    try {
+        for (let i = 0; i < fresh.length; i += 2) { S.columns[fresh[i]] = fresh[i + 1]; simParallelBind('unit.' + fresh[i], fresh[i + 1]); }
+        // (The object fields' arrays: not sized with the columns. They are as
+        // long as the slots ever used, a new slot's element pushed when it is
+        // first taken (simUnitStateAllocate): packed, never sparse, and no
+        // memory for the reserved slots.)
+        for (const k of SIM_UNIT_OBJ_FIELDS) if (!S.columns['oc_' + k]) S.columns['oc_' + k] = [];
         const stamp = new Uint32Array(cap);
         if (S.stamp) stamp.set(S.stamp);
         S.stamp = stamp;
-        const sepKey = simHeapArray(Uint32Array, cap), sepLayer = simHeapArray(Uint8Array, cap);
-        sepKey.fill(SIM_SEP_ABSENT);
-        if (S.sepKey) { sepKey.set(S.sepKey); sepLayer.set(S.sepLayer); old.push(S.sepKey, S.sepLayer); }
         S.sepKey = sepKey; S.sepLayer = sepLayer; S.columns.sepKey = sepKey;
         simParallelBind('unit.sepKey', sepKey); simParallelBind('unit.sepLayer', sepLayer);
         S.cap = cap;
         if (!S.pathPool) { S.pathPool = { next: 0, free: [], cap: 0, held: { array: null } }; S.columns.mvNodes = simHeapArray(Int32Array, 1); S.pathPool.held.array = S.columns.mvNodes; if (_simPathPoolsGone) _simPathPoolsGone.register(S.pathPool, S.pathPool.held); simParallelBind('unit.mvNodes', S.columns.mvNodes); }
         _simUnitColumnsHeld(S);
         for (const a of old) simHeapFree(a);
-    }
+    } finally { if (typeof simParallelBindFlush === 'function') simParallelBindFlush(); }
 }
 // Slot s taken by unit u: its defaults, and u's accessors pointed at it.
 function _simUnitSlotStart(S, s, u) {
@@ -587,7 +667,8 @@ function simUnitStateCompact(force = false) {
     if (!force && S.owners.length - live < Math.max(4096, S.owners.length / 3)) return false;
     if (typeof simParallelBackgroundWait === 'function' && typeof SIM_PAR_BG_LANES === 'number') for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) simParallelBackgroundWait(lane);
     const old = S.columns, n0 = S.owners.length, map = new Int32Array(n0).fill(-1);
-    const cap = Math.max(1024, Math.ceil(live * 1.125 / 4096) * 4096);
+    // (No smaller than the population's reservation: see simUnitPopulationSlots.)
+    const cap = Math.max(1024, Math.ceil(Math.max(live * 1.125, simUnitPopulationSlots()) / 4096) * 4096);
     const N = { cap, owners: [], free: [], columns: _simUnitColumnsObject(), stamp: new Uint32Array(cap), epoch: 0, unitsRef: units, held: null };
     const C = N.columns;
     N.pathPool = S.pathPool; C.mvNodes = old.mvNodes;
@@ -616,9 +697,11 @@ function simUnitStateCompact(force = false) {
     for (const k of SIM_UNIT_COLUMNS) _simCopyRuns(old[k], C[k], runs, 1);
     for (const [k, , per] of SIM_MOVE_COLUMNS) _simCopyRuns(old[k], C[k], runs, per);
     _simCopyRuns(S.sepKey, N.sepKey, runs, 1); _simCopyRuns(S.sepLayer, N.sepLayer, runs, 1);
-    // (The object fields' arrays: packed at the new size, copied the same way.)
+    // (The object fields' arrays: packed, as long as the slots taken (the
+    // next ones pushed as they are taken, see simUnitStateAllocate), copied
+    // the same way.)
     for (const k of SIM_UNIT_OBJ_FIELDS) {
-        const a = old['oc_' + k], b = C['oc_' + k] = new Array(cap).fill(undefined);
+        const a = old['oc_' + k], b = C['oc_' + k] = new Array(ns).fill(undefined);
         for (let r = 0; r < runs.length; r += 3) for (let to = runs[r], from = runs[r + 1], e = from + runs[r + 2]; from < e; to++, from++) b[to] = a[from];
     }
     for (let s = 0; s < ns; s++) {
@@ -628,11 +711,14 @@ function simUnitStateCompact(force = false) {
     }
     // The rest (removed, not yet collected): detached from the old state.
     for (let s = 0; s < n0; s++) if (S.owners[s] && map[s] < 0) simUnitStateDetach(S, s);
+    _simUnitPrepFree(S);
     _simUnitState = N;
+    if (typeof simParallelBindBatch === 'function') simParallelBindBatch();
     for (const k of SIM_UNIT_COLUMNS) simParallelBind('unit.' + k, C[k]);
     for (const [k] of SIM_MOVE_COLUMNS) simParallelBind('unit.' + k, C[k]);
     simParallelBind('unit.mvNodes', C.mvNodes);
     simParallelBind('unit.sepKey', N.sepKey); simParallelBind('unit.sepLayer', N.sepLayer);
+    if (typeof simParallelBindFlush === 'function') simParallelBindFlush();
     if (typeof unitSlotMapInvalidate === 'function') unitSlotMapInvalidate();
     return true;
 }

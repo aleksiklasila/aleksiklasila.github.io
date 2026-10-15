@@ -951,8 +951,16 @@ const WS_WAITING = Object.freeze({ wsWaiting: true });
 // res, units }; a Map by slot set and emptied around each take was ~1.5 ms
 // a tick of lookups.)
 let _wsPosted = null, _wsCur = null, _wsCommitTick = -1, _wsStepTick = -1, _wsInCommit = false, _wsPending = null;
-// (The commit's takes are spread over this many ticks.)
-const WS_TAKE_TICKS = 3, WS_TAKE_MAX = 1e9;
+// (The commit's takes are spread over this many ticks, at most WS_TAKE_MAX a
+// tick, by cost (WS_TAKE_HEAL_COST a healer's, 1 the others'): each runs its
+// worker's JS (~15-20 us: its target taken, its way asked for; a healer's
+// ~75 us: its nearest healer building, its sites checked), and a round after
+// thousands of workers registered at once (a base's healers, builders after
+// a wave of placements) took 30-50 ms a tick for three ticks. Takes left at
+// the next post go on: that post is skipped (_wsSkipped), the one after it
+// selects the workers it would have, see _wsPost. ~11 ms a tick at most.)
+const WS_TAKE_TICKS = 3, WS_TAKE_MAX = 600, WS_TAKE_HEAL_COST = 4;
+let _wsSkipped = 0;
 const _wsGroups = new Map();
 function _wsAvailable() { return typeof SIM_KERNEL_WS_SCAN === 'number' && typeof simParallelBackground === 'function' && typeof _simUnitState !== 'undefined' && !!_simUnitState; }
 function _wsRegistered(u) { const c = u && u._us; return !!c && c.wsKind[u._si] !== 0 && _wsAvailable(); }
@@ -984,7 +992,7 @@ function _wsWait(u) {
 }
 function workerSearchTierReset() {
     if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(WS_LANE);
-    _wsPosted = null; _wsCur = null; _wsCommitTick = -1; _wsStepTick = -1; _wsInCommit = false; _wsPending = null;
+    _wsPosted = null; _wsCur = null; _wsCommitTick = -1; _wsStepTick = -1; _wsInCommit = false; _wsPending = null; _wsSkipped = 0;
     _wsGroups.clear();
     _wsw = null; _wswDirty = []; _wswResvDirty = [];
     if (typeof _simUnitState !== 'undefined' && _simUnitState) _simUnitState.columns.wsKind.fill(0);
@@ -1013,11 +1021,13 @@ function workerSearchTierStep() {
 // ticks): from the tile journal (structures placed, removed), tiles marked
 // (workSiteDirty: salvage marks, construction done, queues, effective
 // levels), reservations changed (workerReservedSet), and a sweep of every
-// owned structure in turn, each once in WSW_SWEEP steps (60 ticks: work that
+// owned structure in turn, each once in WSW_SWEEP steps (120 ticks: work that
 // comes and goes without an event: damage, upgrades due after research,
 // queue payments). Made anew after a resync on every peer.
 const WSW_BUILD = 1, WSW_SALVAGE = 2, WSW_QUEUE = 4, WSW_RESEARCH = 8, WSW_AUTORES = 16, WSW_NBITS = 5;
-const WSW_SWEEP = 45, WSW_MAXOWN = 16;
+// (90 steps: ~6 s. At 45, 18k structures were ~400 flag tests a step, ~1.2 ms
+// a tick; what the sweep finds (damage, an upgrade come due) may wait.)
+const WSW_SWEEP = 90, WSW_MAXOWN = 16;
 let _wsw = null, _wswDirty = [], _wswResvDirty = [];
 const _wswResMax = new Map();
 // Construction done (the collectors' groups are made again; the grid's tile).
@@ -1182,14 +1192,30 @@ function _wsHealUnit(u, list) {
 // something left and working farms (owner), and its working spawners; made
 // again when one of those lists changed (or construction finished).
 const WS_BUCKET = 8;
-function _wsGroupBuild(G, sites, spawners) {
-    const n = sites.length, np = spawners.length, pre = 'wsg' + G.id + '.';
+// The sites are written straight into the typed tables from the lists, in
+// their order: drops, then mines with something left, then working farms
+// (a site object per drop, mine and farm was ~20 ms a rebuild in a battle:
+// drops last 120 s, tens of thousands of them, and every change of them
+// makes the energy group again).
+function _wsGroupBuild(G, cfg, mines, farms, spawners) {
+    const drops = cfg.supportsDropTarget ? droppedItems : null, mk = cfg.mineStatKey;
+    const cap = (drops ? drops.length : 0) + mines.length + farms.length, np = spawners.length, pre = 'wsg' + G.id + '.';
     const arr = (name, Type, len) => { let a = G.arrays[name]; if (!a || a.length < len) { a = G.arrays[name] = simSharedArray(Type, Math.max(64, len * 2)); simParallelBind(pre + name, a); } return a; };
-    const SX = arr('sx', Float32Array, n), SY = arr('sy', Float32Array, n), ST = arr('st', Int32Array, n), SO = arr('so', Int32Array, n);
-    const objs = new Array(n), types = new Array(n);
-    for (let s = 0; s < n; s++) {
-        const e = sites[s];
-        objs[s] = e.o; types[s] = e.type; SX[s] = Number(e.o.x); SY[s] = Number(e.o.y); ST[s] = e.kind; SO[s] = Number.isFinite(e.owner) ? e.owner : -1;
+    const SX = arr('sx', Float32Array, cap), SY = arr('sy', Float32Array, cap), ST = arr('st', Int32Array, cap), SO = arr('so', Int32Array, cap);
+    const objs = [], types = [];
+    let n = 0;
+    if (drops) for (let i = 0; i < drops.length; i++) { const d = drops[i]; if (!d) continue; objs.push(d); types.push('drop'); SX[n] = Number(d.x); SY[n] = Number(d.y); ST[n] = 0; SO[n] = -1; n++; }
+    for (let i = 0; i < mines.length; i++) {
+        const m = mines[i];
+        if (!m) continue;
+        const v = m[mk];
+        if (!(Number.isFinite(v) && v > 0)) continue;
+        objs.push(m); types.push(cfg.mineTileType); SX[n] = Number(m.x); SY[n] = Number(m.y); ST[n] = 1; SO[n] = -1; n++;
+    }
+    for (let i = 0; i < farms.length; i++) {
+        const fm = farms[i];
+        if (!(fm && fm.type === cfg.farmKey && !fm.underConstruction && fm.energy > 0)) continue;
+        objs.push(fm); types.push(cfg.farmKey); SX[n] = Number(fm.x); SY[n] = Number(fm.y); ST[n] = 2; SO[n] = Number.isFinite(fm.owner) ? fm.owner : -1; n++;
     }
     const bcols = Math.ceil(GRID_W / WS_BUCKET), brows = Math.ceil(GRID_H / WS_BUCKET), nb = bcols * brows;
     const BS = arr('bs', Int32Array, nb), BC = arr('bc', Int32Array, nb), BI = arr('bi', Int32Array, n);
@@ -1214,12 +1240,9 @@ function _wsCollectorGroup(cfg) {
     const sig = [mines.length, cfg.supportsDropTarget ? droppedItemsVersion : -1, farms.length, typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion : -1, collectorSpawners.length, _wsBuiltVer];
     if (G.sig && G.mines === mines && G.farms === farms && G.spl === collectorSpawners && G.sig.every((v, i) => v === sig[i])) return G;
     G.sig = sig; G.mines = mines; G.farms = farms; G.spl = collectorSpawners;
-    const sites = [], spawners = [];
-    if (cfg.supportsDropTarget) for (const d of _droppedItemsForBuckets()) if (d) sites.push({ o: d, type: 'drop', kind: 0, owner: -1 });
-    for (const m of mines) if (m && Number.isFinite(m[cfg.mineStatKey]) && m[cfg.mineStatKey] > 0) sites.push({ o: m, type: cfg.mineTileType, kind: 1, owner: -1 });
-    for (const fm of farms) if (fm && fm.type === cfg.farmKey && !fm.underConstruction && fm.energy > 0) sites.push({ o: fm, type: cfg.farmKey, kind: 2, owner: fm.owner });
+    const spawners = [];
     for (const sp of _getWorkerSpawnersByType(cfg.collectorBuildingKey)) if (sp && sp.type === cfg.collectorBuildingKey && sp.energy > 0 && !sp.underConstruction) spawners.push(sp);
-    _wsGroupBuild(G, sites, spawners);
+    _wsGroupBuild(G, cfg, mines, farms, spawners);
     return G;
 }
 function _wsArr(name, Type, n) {
@@ -1228,10 +1251,11 @@ function _wsArr(name, Type, n) {
     return a;
 }
 function _wsPost() {
+    // (The last commit's takes not all made (WS_TAKE_MAX): they go on, no
+    // post over their arrays this time. The same on every peer.)
+    if (_wsPending && _wsPending.pos < _wsPending.found.length) { _wsSkipped++; return; }
     simParallelBackgroundWait(WS_LANE);
     _wsPosted = null;
-    // (Takes the last commit's cap left: dropped before its arrays are written
-    // again; those workers are searched again on their retry ticks.)
     _wsPending = null;
     const S = _simUnitState;
     if (!S) return;
@@ -1240,7 +1264,11 @@ function _wsPost() {
     const CH = WS_SEL_CHUNK, chunks = Math.ceil(n / CH);
     const CNT = _wsArr('ws.rcnt', Int32Array, chunks), PRE = _wsArr('ws.rpre', Int32Array, chunks + 1);
     const P = _simParams;
-    P[0] = n; P[1] = CH; P[2] = gameTime; P[3] = WS_TICKS; P[4] = WS_RETRY; P[5] = 1;
+    // (Workers registered since the last post made: a skipped post's too,
+    // P[3]; the retry slots as wide.)
+    const win = WS_TICKS * (1 + Math.min(_wsSkipped, 15));
+    _wsSkipped = 0;
+    P[0] = n; P[1] = CH; P[2] = gameTime; P[3] = win; P[4] = WS_RETRY; P[5] = 1;
     // Count before allocating payloads. Both phases observe the same state:
     // no simulation writes occur between these synchronous jobs.
     simParallelRun(SIM_KERNEL_WS_SELECT, chunks);
@@ -1334,12 +1362,13 @@ function _wsTakeSome() {
     // (Its share, at most WS_TAKE_MAX a tick: what the cap leaves by the next
     // post is dropped there, see _wsPost.)
     const found = Q.found, share = Math.ceil((found.length - Q.pos) / Math.max(1, Q.end - gameTime + 1));
-    const end = Math.min(found.length, Q.pos + Math.min(WS_TAKE_MAX, share));
+    const end = Math.min(found.length, Q.pos + share);
     _wsInCommit = true;
     try {
-        for (; Q.pos < end; Q.pos++) {
+        for (let cost = 0; Q.pos < end && cost < WS_TAKE_MAX; Q.pos++) {
             const i = found[Q.pos];
             const s = RS[i], u = owners[s], kind = RK[i], o0 = i * K, res = [];
+            cost += kind === WSR_HEAL ? WS_TAKE_HEAL_COST : 1;
             if (!u || u.dead || (u.id | 0) !== RID[i] || c.wsKind[s] !== kind || c.wsT[s] !== RWT[i]) continue;
             if (kind === WSR_COLLECT) {
                 const G = J.groups[RG[i]];

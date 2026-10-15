@@ -309,14 +309,18 @@ function _spawnReadyValid(s) {
     const front = getQueuedSpawnInfo(s.spawnQueue[0], getSpawnerFallbackUnitType(s), getThingBaseLevel(s), owner);
     return front.energyPaid >= front.energyRequired;
 }
+// (A unit made is ~20 us (its object, slot, stats, way to the rally point):
+// 2048 a tick were 40 ms when thousands of barracks came ready together.
+// 256 a tick: 5000 units a second; the rest the next ticks, in ready order.)
+const SPAWNS_PER_TICK = 256;
 function processGlobalSpawnerQueue() {
     // The ready spawners in ready order across owners (each owner's list is
     // sorted; owners at their population cap are passed over whole), up to
-    // 2048 spawns a tick; a spawner ready again after spawning goes to the
-    // end (a new order), as ever.
+    // SPAWNS_PER_TICK spawns a tick; a spawner ready again after spawning
+    // goes to the end (a new order), as ever.
     const R = _spawnReady || _spawnReadyBuild();
     let spawned = 0;
-    while (spawned < 2048) {
+    while (spawned < SPAWNS_PER_TICK) {
         let best = null, bestOrder = Infinity;
         for (const [o, L] of R.byOwner) {
             if (L.head >= L.e.length) continue;
@@ -338,7 +342,7 @@ function processGlobalSpawnerQueue() {
         if (best.head > 4096 && best.head * 2 > best.e.length) { best.e = best.e.slice(best.head); best.head = 0; }
         spawned++;
         // Its next front, if paid already: ready again (a new order).
-        if (spawned < 2048 && _spawnReadyValid(s) && !Number.isFinite(s._spawnReadyOrder)) { s._spawnReadyOrder = globalSpawnerReadyOrderCounter++; spawnerReadyNoted(s); }
+        if (spawned < SPAWNS_PER_TICK && _spawnReadyValid(s) && !Number.isFinite(s._spawnReadyOrder)) { s._spawnReadyOrder = globalSpawnerReadyOrderCounter++; spawnerReadyNoted(s); }
     }
 }
 

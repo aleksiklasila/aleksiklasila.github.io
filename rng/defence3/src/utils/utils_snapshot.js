@@ -76,7 +76,14 @@ const SNAP_FORMAT = 7;
 // rebuilds a player's stat tables refreshes that player's units at once.
 // 12: a stockpile in debt scales no stat; boosts (a thing's stats read a few
 // levels up its tables: data_dynamic.js BOOSTS).
-const SIM_RULES_REVISION = 12;
+// 13: a navigation rebuild remakes its own profile's fields only, in a
+// 30-tick window; adjacency applies 600 members a tick, a batch's leftovers
+// after the next's; the worker search hands out its results within a cost
+// budget a tick (a post skipped while some are left); move orders apply
+// 2500 units a tick (2000 a player); a tick's actions within a cost budget,
+// the rest waiting in order (the backlog, snapshotted and hashed); big
+// research tables hashed a slice a tick.
+const SIM_RULES_REVISION = 13;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
 // Each hash covers one slice (regions, grid rows) of the world. The resync
@@ -402,20 +409,43 @@ function _snapHashEntity(kind, e, seed) {
     return Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
 }
 
-// Full hash of a small object tree (players).
-function _snapHDeep(h, x, depth) {
+// Full hash of a small object tree (players). With `slice` >= 0, an array
+// or object of more than SNAP_HDEEP_SLICE_MIN entries is hashed by its size
+// and the entries at positions of this slice (each every SNAP_HASH_SLICES
+// hashes): a player's research tables and queue grow with the match (900
+// tasks queued, hundreds of stats researched: ~4 ms a tick per peer, hashed
+// whole every tick).
+const SNAP_HDEEP_SLICE_MIN = 32;
+function _snapHDeep(h, x, depth, slice = -1) {
     if (x === null || typeof x !== 'object') return typeof x === 'number' ? _snapHNum(h, x) : _snapHV(h, x);
     if (depth <= 0 || x instanceof Unit) return _snapHV(h, x);
     if (Array.isArray(x)) {
         h = Math.imul(h ^ x.length, 16777619);
-        for (let i = 0; i < x.length; i++) h = _snapHDeep(h, x[i], depth - 1);
+        if (slice >= 0 && x.length > SNAP_HDEEP_SLICE_MIN) { for (let i = slice; i < x.length; i += SNAP_HASH_SLICES) h = _snapHDeep(h, x[i], depth - 1); return h; }
+        for (let i = 0; i < x.length; i++) h = _snapHDeep(h, x[i], depth - 1, slice);
         return h;
+    }
+    if (slice >= 0) {
+        let n = 0;
+        for (const k in x) if (++n > SNAP_HDEEP_SLICE_MIN) break;
+        if (n > SNAP_HDEEP_SLICE_MIN) {
+            let i = 0, m = 0;
+            for (let k in x) {
+                const y = x[k];
+                if (y === undefined) continue;
+                m++;
+                if ((i++ % SNAP_HASH_SLICES) !== slice) continue;
+                h = Math.imul(h ^ _snapStrCode(k), 16777619);
+                h = _snapHDeep(h, y, depth - 1);
+            }
+            return Math.imul(h ^ m, 16777619);
+        }
     }
     for (let k in x) {
         let y = x[k];
         if (y === undefined) continue;
         h = Math.imul(h ^ _snapStrCode(k), 16777619);
-        h = _snapHDeep(h, y, depth - 1);
+        h = _snapHDeep(h, y, depth - 1, slice);
     }
     return h;
 }
@@ -456,6 +486,7 @@ function _snapHashGlobals(slice = -1, round = 0) {
     if (typeof _upKeepAccum !== 'undefined' && _upKeepAccum) for (let row of _upKeepAccum) h = _snapHNum(h, row ? row.total : 0);
     if (typeof workerWorkVersionsChecksum === 'function') h = Math.imul(h ^ workerWorkVersionsChecksum(), 16777619);
     if (typeof healerCandidatesChecksum === 'function') h = Math.imul(h ^ healerCandidatesChecksum(), 16777619);
+    if (typeof actionBacklogChecksum === 'function') h = Math.imul(h ^ actionBacklogChecksum(), 16777619);
     return h >>> 0;
 }
 
@@ -859,7 +890,8 @@ function snapTickHash(tick, allSlices = false) {
     };
     {
         let h = 2166136261 | 0;
-        for (let p of players) h = _snapHDeep(h, p, 4);
+        // (Big research tables and queues a slice a hash: _snapHDeep.)
+        for (let p of players) h = _snapHDeep(h, p, 4, allSlices ? -1 : slice);
         push(SNAP_PART_PLAYERS * SNAP_CODE_SHIFT, h >>> 0);
         let hp = Math.imul(2166136261 ^ projectiles.length, 16777619);
         for (let pr of projectiles) hp = Math.imul(hp ^ _snapHashEntity('p', pr, 0), 16777619);
@@ -1486,6 +1518,8 @@ function _snapEncodeGlobals() {
         orderQueue: typeof orderQueueSnapshot === 'function' ? orderQueueSnapshot() : [],
         orderBudget: typeof _orderBudgets !== 'undefined' ? Array.from(_orderBudgets, v => (v === undefined || v === null ? -1 : v)) : [],
         orderBudgetAll: typeof _orderAllLeft !== 'undefined' ? _orderAllLeft : 0,
+        // Actions past their tick's budget, waiting (main.js processActions).
+        actionBacklog: typeof actionBacklogSnapshot === 'function' ? actionBacklogSnapshot() : [],
         workVer: typeof workerWorkVersionsSnapshot === 'function' ? workerWorkVersionsSnapshot() : null,
         healers: typeof healerCandidatesSnapshot === 'function' ? healerCandidatesSnapshot() : null,
         // The ground navigation's walls (as differences from the live walls).
@@ -2073,7 +2107,7 @@ function snapDecodeState(S, options = null) {
             let fresh = 0, freshUnits = null;
             // (A whole restore makes every unit anew: room for them at once,
             // see simUnitStateReserve.)
-            if (list === 'u' && !partial && typeof simUnitStateReserve === 'function') simUnitStateReserve(rows.length);
+            if (list === 'u' && !partial && typeof simUnitStateReserve === 'function') simUnitStateReserve(Math.max(rows.length, typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0));
             for (let r = 0; r < rows.length; r++) {
                 let row = rows[r];
                 let key = row[0];
@@ -2242,6 +2276,7 @@ function snapDecodeState(S, options = null) {
             _orderBudgets = Array.isArray(g.orderBudget) ? g.orderBudget.map(v => (Number.isFinite(v) && v >= 0 ? v : undefined)) : [];
             _orderAllLeft = Number.isFinite(g.orderBudgetAll) ? g.orderBudgetAll : ORDER_UNITS_PER_TICK_ALL;
         }
+        if (typeof actionBacklogRestore === 'function') actionBacklogRestore(Array.isArray(g.actionBacklog) ? g.actionBacklog : []);
         globalSpawnerReadyOrderCounter = _snapD(g.spawnOrder);
         if (rng && typeof rng.setState === 'function' && g.rng !== null && g.rng !== undefined) rng.setState(g.rng);
         if (Array.isArray(g.pathBudget)) for (let i = 0; i < g.pathBudget.length; i++) pathfindBudgetByPlayer[i] = _snapD(g.pathBudget[i]);

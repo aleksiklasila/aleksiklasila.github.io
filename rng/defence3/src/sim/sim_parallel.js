@@ -603,6 +603,79 @@ function simParallelZeroHeap(buf, off, bytes) {
     P.set(saved);
 }
 
+// Copies typed arrays in the wasm heap ([dst, src, ...] pairs: src's bytes
+// to the start of dst) by the helpers and this thread together, as one job
+// over all of them (heap.copytab: their ranges); small totals, or arrays
+// outside the heap, by set(). A growth of the unit columns (~190 arrays,
+// 40+ MB at 50k slots) or of the navigation's field pools (~100 MB of
+// rows) was 6-40 ms on this thread alone. Call it before binding the new
+// arrays: helpers behind on bindings sit a job out.
+const SIM_KERNEL_COPY = 73, SIM_COPY_PAR_MIN = 1 << 22, SIM_COPY_PER = 1 << 20;
+const _simCopyW = _simWK(['heap.copytab']);
+SIM_KERNELS[SIM_KERNEL_COPY] = function (R, P, chunk) { _simRust(_simCopyW, P, chunk, 'k_copy', 'COPY'); };
+// The same over a table of its own (heap.copytab.bg), for a background
+// stage (simParallelCopyStage): a foreground copy meanwhile has the other.
+const SIM_KERNEL_COPY_BG = 74;
+const _simCopyBgW = _simWK(['heap.copytab.bg']);
+SIM_KERNELS[SIM_KERNEL_COPY_BG] = function (R, P, chunk) { _simRust(_simCopyBgW, P, chunk, 'k_copy', 'COPY_BG'); };
+let _simCopyBgTab = null;
+// A background chain's copy stage over [dst, src, ...] heap arrays (src's
+// bytes to the start of dst): its params written to `P` (a stage's), its
+// table bound; returns the stage [kernel, jobs] (null: not all in the
+// heap, the caller copies itself). The arrays must stay as they are until
+// the chain is waited for.
+function simParallelCopyStage(pairs, P) {
+    if (_simHeapPtrOf === null || _simWasmMem === null) return null;
+    let total = 0;
+    // (Arrays of the heap. Not by their buffer object: once the memory grew,
+    // older views keep an older one, over the same memory and addresses.)
+    for (let i = 0; i < pairs.length; i += 2) {
+        if (_simHeapPtrOf(pairs[i]) < 0 || _simHeapPtrOf(pairs[i + 1]) < 0) return null;
+        if (pairs[i].byteLength < pairs[i + 1].byteLength) throw new Error('simParallelCopyStage: destination shorter than source');
+        total += pairs[i + 1].byteLength;
+    }
+    const n = pairs.length / 2;
+    if (!_simCopyBgTab || _simCopyBgTab.length < 3 * n) {
+        const old = _simCopyBgTab;
+        _simCopyBgTab = simHeapArray(Uint32Array, Math.max(256, 3 * n * 2));
+        simParallelBind('heap.copytab.bg', _simCopyBgTab);
+        simHeapFree(old);
+    }
+    const T = _simCopyBgTab;
+    for (let i = 0; i < n; i++) { const d = pairs[2 * i], s = pairs[2 * i + 1]; T[3 * i] = d.byteOffset; T[3 * i + 1] = s.byteOffset; T[3 * i + 2] = s.byteLength; }
+    P.fill(0); P[0] = n; P[1] = SIM_COPY_PER; P[2] = total;
+    return [SIM_KERNEL_COPY_BG, Math.max(1, Math.ceil(total / SIM_COPY_PER))];
+}
+let _simCopyTab = null;
+function simParallelCopyHeap(pairs) {
+    let total = 0, heap = !!_simPool && !_simParRunning && _simHeapPtrOf !== null && _simWasmMem !== null && _simWasmX !== null;
+    // (Heap arrays: see simParallelCopyStage.)
+    for (let i = 0; i < pairs.length; i += 2) {
+        total += pairs[i + 1].byteLength;
+        if (heap && (_simHeapPtrOf(pairs[i]) < 0 || _simHeapPtrOf(pairs[i + 1]) < 0)) heap = false;
+    }
+    if (!heap || total < SIM_COPY_PAR_MIN) { for (let i = 0; i < pairs.length; i += 2) pairs[i].set(pairs[i + 1]); return; }
+    const n = pairs.length / 2;
+    if (!_simCopyTab || _simCopyTab.length < 3 * n) {
+        const old = _simCopyTab;
+        _simCopyTab = simHeapArray(Uint32Array, Math.max(1024, 3 * n * 2));
+        simParallelBind('heap.copytab', _simCopyTab);
+        simHeapFree(old);
+    }
+    const T = _simCopyTab;
+    // (Views of the wasm memory: a byte offset is a heap address. The
+    // destination holds at least the source's bytes.)
+    for (let i = 0; i < n; i++) {
+        const d = pairs[2 * i], s = pairs[2 * i + 1];
+        if (d.byteLength < s.byteLength) throw new Error('simParallelCopyHeap: destination shorter than source');
+        T[3 * i] = d.byteOffset; T[3 * i + 1] = s.byteOffset; T[3 * i + 2] = s.byteLength;
+    }
+    const P = _simParams, saved = P.slice();
+    P[0] = n; P[1] = SIM_COPY_PER; P[2] = total;
+    simParallelRun(SIM_KERNEL_COPY, Math.ceil(total / SIM_COPY_PER));
+    P.set(saved);
+}
+
 const _simRadixPrefixW = _simWK(['spatial.hist']);
 SIM_KERNELS[SIM_KERNEL_SPATIAL_PREFIX] = function (R, P, chunk) { _simRust(_simRadixPrefixW, P, chunk, 'k_radix_prefix', 'SPATIAL_PREFIX'); };
 
@@ -854,12 +927,25 @@ function simParallelInit(helperUrl, maxHelpers = null) {
 function simParallelHelpers() { return _simPool ? _simPool.helpers.length : 0; }
 
 // Names an array for the kernels (and gives it to the helpers when new).
+// Between simParallelBindBatch() and simParallelBindFlush() the helpers get
+// the bindings in one message each (a unit storage growth rebinds ~260
+// arrays: 1800 messages to 7 helpers were ~10 ms).
+let _simBindBatch = null;
 function simParallelBind(name, arr) {
     if (_simParReg[name] === arr) return;
     _simParReg[name] = arr;
     const wptr = _simParWPtr[name] = _simHeapPtrOf !== null ? _simHeapPtrOf(arr) : -1;
     _simParRegVer++; _simParBinds++;
-    if (_simPool) for (let w of _simPool.helpers) w.postMessage({ type: 'bind', name, arr, ver: _simParRegVer, wptr });
+    if (!_simPool) return;
+    if (_simBindBatch !== null) { _simBindBatch.push(name, arr, wptr); return; }
+    for (let w of _simPool.helpers) w.postMessage({ type: 'bind', name, arr, ver: _simParRegVer, wptr });
+}
+function simParallelBindBatch() { if (_simBindBatch === null) _simBindBatch = []; }
+function simParallelBindFlush() {
+    const B = _simBindBatch;
+    _simBindBatch = null;
+    if (!B || !B.length || !_simPool) return;
+    for (let w of _simPool.helpers) w.postMessage({ type: 'binds', list: B, ver: _simParRegVer });
 }
 
 // A wasm kernel's arrays by name ('?name': optional, address 0 when
@@ -1184,6 +1270,12 @@ function simParallelHelperMain() {
         } else if (m.type === 'bind') {
             _simParReg[m.name] = m.arr;
             _simParWPtr[m.name] = m.wptr >= 0 ? m.wptr : -1;
+            _simParBinds++;
+            if (m.ver > regVer) regVer = m.ver;
+        } else if (m.type === 'binds') {
+            // (A batch: [name, arr, wptr, ...], in order.)
+            const L = m.list;
+            for (let i = 0; i < L.length; i += 3) { _simParReg[L[i]] = L[i + 1]; _simParWPtr[L[i]] = L[i + 2] >= 0 ? L[i + 2] : -1; }
             _simParBinds++;
             if (m.ver > regVer) regVer = m.ver;
         }

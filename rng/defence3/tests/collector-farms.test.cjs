@@ -50,9 +50,12 @@ function world(resource, localPlayerId = 0) {
     c.getUnitById = id => c.units.find(u => u.id === id) || null;
     vm.runInContext(main.match(/const ACTION_MAX_COUNT = [\s\S]*?const ACTION_MAX_TOWER_COORDS = \d+;/)[0], c);
     for (const name of ['_isCollectorGatherTargetType', '_getGatherTargetAtForCollectorWorkerType', '_isValidGatherTargetForCollectorWorkerType',
-        '_actionInt', '_actionNum', '_actionStr', '_actionIdStampNext', '_actionIdStampGrow', '_actionCleanIds', 'sanitizeAction', 'processActions', 'processAction']) {
+        '_actionInt', '_actionNum', '_actionStr', '_actionIdStampNext', '_actionIdStampGrow', '_actionCleanIds', 'sanitizeAction', 'processActions', 'processAction',
+        '_actionCost', '_processRawAction', '_actionBacklogDrain']) {
         vm.runInContext(mainFunction(name), c);
     }
+    // (The tick's action budget (main.js processActions): none here.)
+    c._actionBacklog = []; c._actionBudgetLeft = Infinity; c.ACTION_BUDGET_PER_TICK = Infinity;
     // Isolate pathfinding and stat configuration; run real targeting, reservations,
     // command processing, manual-move completion and collection state transitions.
     c._getWorkerAutoSearchDistancePx = () => 128;

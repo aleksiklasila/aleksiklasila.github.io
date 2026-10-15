@@ -477,7 +477,10 @@ const ADJACENCY_BATCH_TICKS = 8;
 // and marks every tile (adjacencyLaneReset).
 let ADJACENCY_LANE = true;
 const ADJ_LANE = typeof SIM_LANE_T5 === 'number' ? SIM_LANE_T5 : 3;
-const ADJ_APPLY_PER_TICK = 2000;
+// (Each member's stats are made again: ~8 us each, 2000 were 15-20 ms on
+// the ticks after a big group changed. What a batch has not applied by the
+// next goes on after it.)
+const ADJ_APPLY_PER_TICK = 600;
 const _adjL = { sig: null, sigIds: new Map(), posted: false, passive: false, paths: false, outs: 0, queue: null, qHead: 0, qLen: 0, coff: null, ctile: null, cfor: null, mul: null };
 function _adjSigCode(gx, gy) {
     const sig = _getAdjacencySignatureAt(gx, gy);
@@ -519,11 +522,29 @@ function adjacencyLaneStep() {
         L.posted = false;
         const R = _simParReg, CNT = R['adj.ocnt'], no = CNT[0], na = CNT[2];
         const OT = R['adj.otile'], OG = R['adj.ogrp'], GS = R['adj.gsize'], GM = R['adj.gmul'], OA = R['adj.oarea'], OACT = R['adj.oact'];
-        if (!L.queue || L.queue.t.length < no) L.queue = { t: new Int32Array(simReserveCap(no, 1024)), s: new Int32Array(simReserveCap(no, 1024)), m: new Float64Array(simReserveCap(no, 1024)), g: new Int32Array(simReserveCap(no, 1024)), passive: false };
-        const Q = L.queue, SN = R['adj.sig'];
-        // (Leftovers of the last batch: superseded.)
+        // (Members the last batch has not applied yet: after this batch's,
+        // those of tiles it does not have (it supersedes the rest). A passive
+        // batch's are dropped by an active one and the other way round: one
+        // mode a queue.)
+        const P0 = L.queue, keep = P0 && P0.passive === L.passive ? L.qLen - L.qHead : 0, cap = no + keep;
+        const Q = L.queue = (!P0 || P0.t.length < cap || keep > 0)
+            ? { t: new Int32Array(simReserveCap(cap, 1024)), s: new Int32Array(simReserveCap(cap, 1024)), m: new Float64Array(simReserveCap(cap, 1024)), g: new Int32Array(simReserveCap(cap, 1024)), passive: false }
+            : P0;
+        const SN = R['adj.sig'];
         for (let i = 0; i < no; i++) { const g = OG[i], t = OT[i]; Q.t[i] = t; Q.s[i] = GS[g]; Q.m[i] = GM[g]; Q.g[i] = SN[t]; }
-        Q.passive = L.passive; L.qHead = 0; L.qLen = no;
+        let len = no;
+        if (keep > 0) {
+            const N = GRID_W * GRID_H;
+            if (!L.inNew || L.inNew.length !== N) { L.inNew = new Int32Array(N); L.inNewStamp = 0; }
+            const stamp = ++L.inNewStamp;
+            for (let i = 0; i < no; i++) L.inNew[OT[i]] = stamp;
+            for (let i = L.qHead; i < L.qLen; i++) {
+                const t = P0.t[i];
+                if (L.inNew[t] === stamp) continue;
+                Q.t[len] = t; Q.s[len] = P0.s[i]; Q.m[len] = P0.m[i]; Q.g[len] = P0.g[i]; len++;
+            }
+        }
+        Q.passive = L.passive; L.qHead = 0; L.qLen = len;
         let changed = false;
         for (let i = 0; i < na; i++) {
             const a = getAreaById(OA[i]);
@@ -544,7 +565,21 @@ function adjacencyLaneStep() {
     const all = _adjacencyDirtyAll;
     let seeds;
     if (all) {
-        for (let gy = 0; gy < GRID_H; gy++) for (let gx = 0; gx < GRID_W; gx++) L.sig[gy * GRID_W + gx] = _adjSigCode(gx, gy);
+        // (Only tiles holding a structure have a signature: those, in tile
+        // order, as a pass over every tile would meet them (the ids are
+        // interned in that order); the pass itself when a structure is not
+        // at its own tile. Every tile was ~150 ms at 600x600.)
+        const ts = [];
+        let own = true;
+        for (const ent of _activeTileEntities) {
+            if (!ent || !Number.isFinite(ent.gx) || !Number.isFinite(ent.gy) || ent.gx < 0 || ent.gy < 0 || ent.gx >= GRID_W || ent.gy >= GRID_H || getTileEntityRef(ent.gx, ent.gy) !== ent) { own = false; break; }
+            ts.push(ent.gy * GRID_W + ent.gx);
+        }
+        if (own) {
+            ts.sort((a, b) => a - b);
+            L.sig.fill(-1);
+            for (let i = 0; i < ts.length; i++) { const t = ts[i], gx = t % GRID_W; L.sig[t] = _adjSigCode(gx, (t - gx) / GRID_W); }
+        } else for (let gy = 0; gy < GRID_H; gy++) for (let gx = 0; gx < GRID_W; gx++) L.sig[gy * GRID_W + gx] = _adjSigCode(gx, gy);
         seeds = [];
         for (const ent of _activeTileEntities) if (ent && Number.isFinite(ent.gx) && Number.isFinite(ent.gy)) seeds.push(ent.gy * GRID_W + ent.gx);
         _adjacencyDirtyTiles.clear();

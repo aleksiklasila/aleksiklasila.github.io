@@ -5,13 +5,16 @@ const source = fs.readFileSync(path.join(__dirname,'../src/things/barrack.js'),'
 // The ready list and the scheduler (barrack.js: from the ready list's state
 // to the Barrack class).
 const optimized=source.slice(source.indexOf('let _spawnReady = null;'),source.indexOf('\nclass Barrack'));
+// (The scheduler's spawns a tick: barrack.js SPAWNS_PER_TICK.)
+const LIMIT=Number((/const SPAWNS_PER_TICK = (\d+)/.exec(source)||[])[1]);
+assert.ok(LIMIT>0,'SPAWNS_PER_TICK found');
 // Exhaustive scheduler retained as a behavioral oracle: a spawner is ready
 // once its payment gave it an order (no scan assigns orders); the smallest
 // order among owners below their cap spawns, a failed spawn ends the tick, a
-// paid next front is ready again with a new order, at most 2048 a tick.
+// paid next front is ready again with a new order, at most LIMIT a tick.
 const reference=`function processGlobalSpawnerQueue() {
  let guard=0;
- while(guard++<2048) {
+ while(guard++<${LIMIT}) {
   let chosen=null, order=Infinity;
   for(const s of [...barracks,...collectorSpawners]) {
    if(!s || s.energy<=0 || s.underConstruction || !isQueueEnabled(s) || !s.spawnQueue.length) continue;
@@ -23,7 +26,7 @@ const reference=`function processGlobalSpawnerQueue() {
   }
   if(!chosen || !spawnQueuedUnitFromSpawner(chosen)) break;
   const s=chosen;
-  if(guard<2048 && s.energy>0 && !s.underConstruction && isQueueEnabled(s) && s.spawnQueue.length) {
+  if(guard<${LIMIT} && s.energy>0 && !s.underConstruction && isQueueEnabled(s) && s.spawnQueue.length) {
    const f=getQueuedSpawnInfo(s.spawnQueue[0]);
    if(f.energyPaid>=f.energyRequired && !Number.isFinite(s._spawnReadyOrder)) s._spawnReadyOrder=globalSpawnerReadyOrderCounter++;
   }
@@ -68,8 +71,8 @@ for(let i=0;i<120;i++) {
 }
 const data=fixture(1000,true), a=make(optimized,data), b=make(reference,data);
 a.run(); b.run(); assert.deepEqual(a.result(),b.result());
-assert.ok(a.checks()<=3000,'readiness checks '+a.checks()); assert.ok(b.checks()>400000);
-console.log(`PASS: 120 scheduler replays; ready orders from payments, full queues, caps, failures and 2048 limit; 1000 ready buildings: ${b.checks()} -> ${a.checks()} readiness checks.`);
+assert.ok(a.checks()<=3000,'readiness checks '+a.checks()); assert.ok(b.checks()>LIMIT*500,'the exhaustive reference checks '+b.checks());
+console.log(`PASS: 120 scheduler replays; ready orders from payments, full queues, caps, failures and the ${LIMIT} limit; 1000 ready buildings: ${b.checks()} -> ${a.checks()} readiness checks.`);
 if(process.argv.includes('--bench')) {
  const times={baseline:[],optimized:[]};
  for(let i=0;i<7;i++) for(const [key,code] of [['baseline',reference],['optimized',optimized]]) {

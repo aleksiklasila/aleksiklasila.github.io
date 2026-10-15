@@ -3573,7 +3573,11 @@ function getPlayerResearchTask(playerId) {
 
 function getResearchQueueCapacityForPlayer(playerId) {
     let labs = 0;
-    for (let s of collectorSpawners) {
+    // (The labs alone, from the worker buildings' index by type: a pass over
+    // every worker building was ~0.4 ms with 4k of them, at every research
+    // order.)
+    const list = typeof _getWorkerSpawnersByType === 'function' ? _getWorkerSpawnersByType('research') : collectorSpawners;
+    for (let s of list) {
         if (!s || s.type !== 'research' || s.owner !== playerId || s.energy <= 0) continue;
         labs++;
     }

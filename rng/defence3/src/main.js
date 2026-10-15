@@ -181,8 +181,22 @@ function unitSlotMapPushed(u) {
 function unitSlotMapInvalidate() { _unitSlotMap.ref = null; _unitSlotMap.ver++; }
 
 let _updateOrderCand = new Int32Array(0), _updateOrderRun = new Int32Array(0);
+// Worker events a tick (a worker with its way done, or idle: an arrival, a
+// payment, a delivery, a new way: 15-30 us of AI each): at most this many,
+// in the pass's order (shuffled every tick: who waits changes); the others
+// stand a tick and come again. Workers on their way are never held back (no
+// stutter). The brains may lag; the tick may not: a chaos scenario's 13k
+// workers a team made 300-500 events a tick (7-12 ms).
+const WORKER_EVENTS_PER_TICK = 240;
+function _isWorkerEvent(u) {
+    const ws = u.workerState;
+    if (!ws) return false;
+    if (ws === 'IDLE') return true;
+    const p = u.path;
+    return !p || u.pathIndex >= p.length;
+}
 function _forEachUnitInTickOrder(fn) {
-    let list = units, n = list.length;
+    let list = units, n = list.length, events = WORKER_EVENTS_PER_TICK;
     if (n <= 1) { if (n === 1 && list[0]) fn(list[0]); return; }
     // Units the movement kernel moved this tick are skipped (fn is update).
     const S = _simUnitState, slots = S ? _unitSlotMapEnsure() : null;
@@ -257,6 +271,9 @@ function _forEachUnitInTickOrder(fn) {
                     else { if (simChaseStillValid(S.columns, s)) continue; simChaseUndo(S.columns, s); }
                 }
             }
+            // (Past the tick's worker events: next tick. Not dead ones: their
+            // update ends them.)
+            if (!u.dead && _isWorkerEvent(u)) { if (events <= 0) continue; events--; }
             fn(u);
         }
     }
@@ -618,9 +635,14 @@ function gameTick() {
     try { _gameTickBody(); } finally { _inGameTick = false; }
 }
 function _gameTickBody() {
+    // (Actions left from earlier ticks, on a tick that brought none; then the
+    // next tick's action budget.)
+    actionBacklogTick();
     gameTime++;
     // (The wasm heap's clock: freed arrays are reused some ticks later.)
     if (typeof simHeapTick === 'function') simHeapTick();
+    // (The unit columns' next size allocated ahead, a share a tick.)
+    if (typeof simUnitStatePrepareStep === 'function') simUnitStatePrepareStep();
     // The unit index for this tick's queries and collision pass, from the
     // state as the tick begins (the same on a peer that just restored it).
     spatialIndexRebuild();
@@ -3454,18 +3476,82 @@ function sanitizeAction(raw) {
     return a;
 }
 
+// A tick's actions within a budget (ACTION_BUDGET_PER_TICK, by a cost per
+// action: _actionCost, ~0.05 ms a unit of it); the rest wait in a backlog,
+// in order, and go first the next tick (before its own actions; on a tick
+// with none, at gameTick's start: actionBacklogTick). Every peer defers the
+// same actions: the backlog is state (snapshotted and hashed with the
+// globals). One player's burst, or several players' at once, never makes a
+// tick of more than ~10 ms of actions (both teams' bursts in a chaos
+// scenario were 10-22 ms on one tick). An action always runs whole.
+const ACTION_BUDGET_PER_TICK = 200;
+let _actionBacklog = [], _actionBudgetLeft = ACTION_BUDGET_PER_TICK;
+function _actionCost(raw) {
+    if (!raw || typeof raw !== 'object') return 1;
+    const ids = Array.isArray(raw.unitIds) ? raw.unitIds.length : (typeof raw.uidz === 'string' ? raw.uidz.length : 0);
+    const coords = Array.isArray(raw.coords) ? raw.coords.length / 2 : (Array.isArray(raw.towerCoords) ? raw.towerCoords.length : 0);
+    const count = Math.max(1, Math.min(ACTION_MAX_COUNT, Math.floor(Number(raw.count) || 1)));
+    switch (raw.action) {
+        case 'move': case 'attackMove': return 2 + ids / 400;
+        case 'queueResearch': return 1 + count;
+        case 'place': return count;
+        default: return 1 + ids / 1000 + coords / 1000;
+    }
+}
+function _processRawAction(raw, playerId) {
+    let a = sanitizeAction(raw);
+    if (!a) return;
+    // One bad action must not take the rest of the tick's actions with
+    // it (it throws the same way on every peer).
+    try { processAction(a, playerId); } catch (err) { reportRuntimeError('action ' + a.action, err); }
+}
+function _actionBacklogDrain() {
+    if (!_actionBacklog.length || _actionBudgetLeft <= 0) return;
+    let i = 0;
+    for (; i < _actionBacklog.length && _actionBudgetLeft > 0; i++) {
+        const e = _actionBacklog[i];
+        _actionBudgetLeft -= _actionCost(e[1]);
+        _processRawAction(e[1], e[0]);
+    }
+    _actionBacklog.splice(0, i);
+}
 function processActions(actions, playerId) {
     if (!Array.isArray(actions)) return;
     // (The unit index built after the last tick, and what of it reads live
     // state, done before an action changes anything.)
     if (typeof spatialIndexPrebuildSettle === 'function') spatialIndexPrebuildSettle();
+    _actionBacklogDrain();
     for (let raw of actions) {
-        let a = sanitizeAction(raw);
-        if (!a) continue;
-        // One bad action must not take the rest of the tick's actions with
-        // it (it throws the same way on every peer).
-        try { processAction(a, playerId); } catch (err) { reportRuntimeError('action ' + a.action, err); }
+        if (_actionBacklog.length || _actionBudgetLeft <= 0) { _actionBacklog.push([playerId, raw]); continue; }
+        _actionBudgetLeft -= _actionCost(raw);
+        _processRawAction(raw, playerId);
     }
+}
+// At gameTick's start: the backlog's share of a tick without actions, then
+// the budget again for the next tick's.
+function actionBacklogTick() {
+    if (_actionBacklog.length && _actionBudgetLeft > 0) {
+        if (typeof spatialIndexPrebuildSettle === 'function') spatialIndexPrebuildSettle();
+        _actionBacklogDrain();
+    }
+    _actionBudgetLeft = ACTION_BUDGET_PER_TICK;
+}
+function actionBacklogSnapshot() { return _actionBacklog.map(e => [e[0], e[1]]); }
+function actionBacklogRestore(rows) {
+    _actionBacklog = Array.isArray(rows) ? rows.filter(r => Array.isArray(r) && r.length === 2).map(r => [r[0] | 0, r[1]]) : [];
+    _actionBudgetLeft = ACTION_BUDGET_PER_TICK;
+}
+// (The state hash's share: each waiting action's player, kind and size.)
+function actionBacklogChecksum() {
+    let h = Math.imul(_actionBacklog.length + 1, 2654435761) | 0;
+    for (const [p, raw] of _actionBacklog) {
+        const s = raw && typeof raw.action === 'string' ? raw.action : '';
+        let c = p | 0;
+        for (let i = 0; i < s.length; i++) c = Math.imul(c ^ s.charCodeAt(i), 16777619);
+        c = Math.imul(c ^ (Math.round(_actionCost(raw) * 1000) | 0), 16777619);
+        h = (h + Math.imul(c ^ (c >>> 15), 2246822519)) | 0;
+    }
+    return h | 0;
 }
 
 // Move orders over many units are applied in slices: each player at most
@@ -3476,7 +3562,9 @@ function processActions(actions, playerId) {
 // other order) for a unit drops it from the queued ones, so the latest order
 // always wins. The queue and the budgets are simulation state (snapshotted
 // with the globals).
-let ORDER_UNITS_PER_PLAYER_TICK = 3000, ORDER_UNITS_PER_TICK_ALL = 4000, ORDER_UNITS_PER_ROUND = 500;
+// (2-2.5 us a unit: 2500 a tick are ~6 ms, 50k units a second. 4000 were
+// ~10 ms a tick on top of a ~38 ms tick in the mixed chaos scenario.)
+let ORDER_UNITS_PER_PLAYER_TICK = 2000, ORDER_UNITS_PER_TICK_ALL = 2500, ORDER_UNITS_PER_ROUND = 500;
 let _orderQueue = [], _orderBudgets = [], _orderAllLeft = ORDER_UNITS_PER_TICK_ALL;
 function _orderBudgetOf(p) { const b = _orderBudgets[p]; return b === undefined || b === null ? ORDER_UNITS_PER_PLAYER_TICK : b; }
 // Per player, each unit's latest order (its queue entry's seq, or a drop's):
@@ -3552,7 +3640,10 @@ function _queueGroupMoveOrder(a, playerId, cmd) {
     _orderStampIds(T, ids, seq);
     const e = { playerId, cmd, action: a.action, targetX: a.targetX, targetY: a.targetY, ids, next: 0, seq, live: ids.length };
     _orderQueue.push(e); _orderBySeq.set(seq, e);
-    runQueuedOrders();
+    // (Its first slice at gameTick's start, the same tick (runQueuedOrders,
+    // within the tick's order budget): applied here, a big order's 2500
+    // units (~6 ms) were the action's cost, on top of the order budget's own
+    // work at the start of the tick.)
 }
 // Applies queued orders within this tick's budgets, in queue order (a
 // player whose budget is spent waits, its later orders too). Units ordered
@@ -3590,7 +3681,7 @@ function runQueuedOrders() {
     }
 }
 function _refillOrderBudget() { _orderBudgets.length = 0; _orderAllLeft = ORDER_UNITS_PER_TICK_ALL; }
-function resetOrderQueue() { _orderQueue = []; _orderBudgets = []; _unitOrderSeq = []; _orderBySeq = new Map(); _orderSupSeq = 0; _orderSupEntry = null; _orderSeq = 0; _orderAllLeft = ORDER_UNITS_PER_TICK_ALL; }
+function resetOrderQueue() { _orderQueue = []; _orderBudgets = []; _unitOrderSeq = []; _orderBySeq = new Map(); _orderSupSeq = 0; _orderSupEntry = null; _orderSeq = 0; _orderAllLeft = ORDER_UNITS_PER_TICK_ALL; _actionBacklog = []; _actionBudgetLeft = ACTION_BUDGET_PER_TICK; }
 // The queue as state (snapshots): each entry's units still to apply that
 // it ordered last, entries with none left out.
 function orderQueueSnapshot() {
@@ -3658,7 +3749,8 @@ function processAction(a, playerId) {
                 }
             } else if (Number.isFinite(a.targetX) && Number.isFinite(a.targetY)) {
                 // Target vanished before processing: continue toward last known position.
-                processActions([{ action: 'attackMove', unitIds: a.unitIds, targetX: a.targetX, targetY: a.targetY }], playerId);
+                // (Now, within this action: not through the tick's budget.)
+                _processRawAction({ action: 'attackMove', unitIds: a.unitIds, targetX: a.targetX, targetY: a.targetY }, playerId);
             }
         } else if (a.action === 'attackBuilding') {
             let tb = getTileEntityRef(a.targetGx, a.targetGy);
@@ -3755,10 +3847,19 @@ function processAction(a, playerId) {
                 let count = Math.max(1, Math.floor(a.count || 1));
                 // Optional position in the ordered queue (0 = the active task).
                 let insertAt = Number.isFinite(Number(a.insertAt)) ? Math.max(0, Math.floor(Number(a.insertAt))) : -1;
+                // (The capacity (a pass over every worker building) and the
+                // stat's depth (a pass over the queue) once an action, each
+                // task added counted on: ~0.2 ms a task with 4k worker
+                // buildings and 900 tasks queued. The research level read
+                // again: a task completed by tryAdvance changes it, and
+                // the depth with it.)
+                const capacity = getResearchQueueCapacityForPlayer(playerId);
+                let total = getPlayerResearchQueueTotalLength(playerId);
+                let depthKnown = false, queuedDepth = 0, depthLevel = 0;
                 for (let i = 0; i < count; i++) {
-                    if (getPlayerResearchQueueTotalLength(playerId) >= getResearchQueueCapacityForPlayer(playerId)) break;
+                    if (total >= capacity) break;
                     let baseLevel = getPlayerResearchLevel(playerId, a.kind, a.key, a.statKey);
-                    let queuedDepth = getResearchQueuedDepthForPlayer(playerId, a.kind, a.key, a.statKey);
+                    if (!depthKnown || baseLevel !== depthLevel) { queuedDepth = getResearchQueuedDepthForPlayer(playerId, a.kind, a.key, a.statKey); depthLevel = baseLevel; depthKnown = true; }
                     let projected = baseLevel + queuedDepth;
                     let capLevel = MAX_RESEARCH_LEVEL;
                     if (projected >= capLevel) break;
@@ -3776,6 +3877,11 @@ function processAction(a, playerId) {
                         p.researchQueue.push(task);
                     }
                     tryAdvancePlayerResearchTask(playerId);
+                    // (Only this task more: the stat's depth one more; any
+                    // task taken off (completed, dropped): counted again.)
+                    const now = getPlayerResearchQueueTotalLength(playerId);
+                    if (now === total + 1) queuedDepth++; else depthKnown = false;
+                    total = now;
                 }
             }
         } else if (a.action === 'workerAssign') {
@@ -4658,7 +4764,10 @@ function startGame() {
             if (!parsed || parsed.kind === 'building' || !levelMap || typeof levelMap !== 'object') continue;
             for (let levelText in levelMap) perTeam += normalizeStartingSpawnCount(levelMap[levelText]);
         }
-        simUnitStateReserve(Math.min(perTeam, getConfiguredMaxPop()) * teams.length);
+        // (And the whole population's slots from the start: no growth later,
+        // see simUnitPopulationSlots.)
+        simUnitStateReserve(Math.max(Math.min(perTeam, getConfiguredMaxPop()) * teams.length,
+            typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0));
     }
     for (let pid of (startGameSkipStarters ? [] : teams)) {
         let pos = teamSpawnPos[pid];

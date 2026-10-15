@@ -2820,6 +2820,31 @@ pub unsafe extern "C" fn k_zero(a: *const i32, chunk: i32) {
     }
 }
 
+/// SIM_KERNEL_COPY (simParallelCopyHeap): the heap ranges of heap.copytab
+/// ([dst, src, bytes] u32 triplets, P[0] of them) copied, as one run of
+/// bytes in their order: a job bytes chunk * P[1] .. + P[1] of it.
+/// Arrays: heap.copytab.
+#[no_mangle]
+pub unsafe extern "C" fn k_copy(a: *const i32, chunk: i32) {
+    let k = K::new(a);
+    let tab = k.p::<u32>(0);
+    let (n, per) = (k.f(0) as usize, k.f(1) as usize);
+    let b0 = chunk as usize * per;
+    let b1 = b0 + per;
+    let mut base = 0usize;
+    for i in 0..n {
+        let (d, s, len) = (g(tab, 3 * i) as usize, g(tab, 3 * i + 1) as usize, g(tab, 3 * i + 2) as usize);
+        let (lo, hi) = (base.max(b0), (base + len).min(b1));
+        if lo < hi {
+            core::ptr::copy_nonoverlapping((s + lo - base) as *const u8, (d + lo - base) as *mut u8, hi - lo);
+        }
+        base += len;
+        if base >= b1 {
+            break;
+        }
+    }
+}
+
 // =====================================================================
 // LASER BEAMS, EFFECTIVE-STATS WINDOWS, ADJACENCY GROUPS
 // =====================================================================

@@ -1,0 +1,90 @@
+[
+  {
+    "mode": "0",
+    "file": "adjacency-dirty-set.test.cjs",
+    "status": 0,
+    "output": "PASS: adjacency dirty set (1977 takes)\n",
+    "timedOut": false,
+    "elapsedMs": 823
+  },
+  {
+    "mode": "0",
+    "file": "heap-copy.test.cjs",
+    "status": 0,
+    "output": "7 helpers: 20 MB in 190 arrays copied in 3.2 ms (set(): 3.5 ms)\n0 helpers: 20 MB in 190 arrays copied in 4.3 ms (set(): 4.2 ms)\nPASS: parallel heap copies equal their sources\n",
+    "timedOut": false,
+    "elapsedMs": 2097
+  },
+  {
+    "mode": "0",
+    "file": "adjacency-lane-carry.test.cjs",
+    "status": 0,
+    "output": "{\"buildings\":11490,\"queuedAtCut\":11006,\"ticks\":38,\"diff\":0,\"first\":\"\",\"sigDiff\":0,\"groups\":6}\nPASS: adjacency lane with carried-over members equals the synchronous recompute (11490 buildings, 6 group sizes)\n",
+    "timedOut": false,
+    "elapsedMs": 2500
+  },
+  {
+    "mode": "0",
+    "file": "local-visual-snapshot.test.cjs",
+    "status": 0,
+    "output": "PASS: gameplay projectiles and units survive snapshots; local history, particles and visual RNG stay client-side.\n",
+    "timedOut": false,
+    "elapsedMs": 3501
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-border-combat.test.cjs",
+    "status": 0,
+    "output": "PASS: kings fight visible soldiers across area borders in lockstep (153 tick hashes compared, [[0,\"king\",235],[1,\"laser_resistant\",55],[0,\"norm\",40],[0,\"norm\",40],[0,\"laser_resistant\",55],[1,\"king\",250],[1,\"norm\",28],[1,\"norm\",40],[1,\"norm\",40]]).\n",
+    "timedOut": false,
+    "elapsedMs": 3413
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-backlog-fairness.test.cjs",
+    "status": 0,
+    "output": "PASS: slow guest worker, 16-tick lead: host 1794 ms, guest 1846 ms; maximum host lead 4 completed ticks.\nPASS: slow host worker, 16-tick lead: host 2617 ms, guest 2613 ms; maximum host lead 0 completed ticks.\nPASS: temporary slow client recovers to 20 TPS without changing simulation state.\n",
+    "timedOut": false,
+    "elapsedMs": 41784
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-concurrency.test.cjs",
+    "status": 0,
+    "output": "PASS: concurrency (2928 bit-exact tick comparisons)\n  teammates ordering the same units on one tick\n  teammates and an opponent building on the same tiles on one tick\n  teammates adding, removing and reordering research on one tick\n  both teams contesting one mine and teammates reassigning the same builders on one tick\n  split, merge, move, kill and enemy attack on the same group on one tick\n  4 bursts of 40 simultaneous commands from each of 4 players\n",
+    "timedOut": false,
+    "elapsedMs": 13030
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-action-fuzz.test.cjs",
+    "status": 0,
+    "output": "PASS: action fuzz\n  targeted: 2 of the host's buildings and 3 units attacked with every command kind: untouched\n  30s of malformed commands from one guest: no errors, no divergence, 20.0 TPS\n",
+    "timedOut": false,
+    "elapsedMs": 73542
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-cross-engine.test.cjs",
+    "status": 0,
+    "output": "PASS: cross-engine math\n  solar_system: 1635 tick hashes bit-exact fingerprints equal across engines\n  islands: 1635 tick hashes bit-exact fingerprints equal across engines\n",
+    "timedOut": false,
+    "elapsedMs": 27850
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-chaos-determinism.test.cjs",
+    "status": 0,
+    "output": "PASS: chaos determinism\n  arena: 180 units + 201 buildings at start (max 193 units), 20 unit types, 27 command kinds, 2595 tick hashes compared, 2 patches for forced divergences\n  random: 159 units + 201 buildings at start (max 160 units), 20 unit types, 27 command kinds, 2595 tick hashes compared, 2 patches for forced divergences\n  islands: 171 units + 201 buildings at start (max 182 units), 20 unit types, 27 command kinds, 2595 tick hashes compared, 2 patches for forced divergences\n  crossroads: 177 units + 201 buildings at start (max 179 units), 20 unit types, 27 command kinds, 2595 tick hashes compared, 2 patches for forced divergences\n  solar_system: 177 units + 201 buildings at start (max 215 units), 20 unit types, 27 command kinds, 2595 tick hashes compared, 2 patches for forced divergences\n  island: 177 units + 201 buildings at start (max 181 units), 20 unit types, 27 command kinds, 2595 tick hashes compared, 2 patches for forced divergences\n",
+    "timedOut": false,
+    "elapsedMs": 97019
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-corruption-fuzz.test.cjs",
+    "status": 0,
+    "output": "PASS: corruption fuzz\n  unitMove (u1 moved) on guest1: 1 patch, the first after 2000 ms, whole state equal 2700 ms later\n  unitEnergy (u8 energy) on guest2: 1 patch, the first after 1600 ms, whole state equal 2700 ms later\n  unitOrders (u4 holds) on guest3: 1 patch, the first after 2000 ms, whole state equal 2700 ms later\n  unitPath: nothing to change, skipped\n  unitTarget (u1 attacks u227) on guest2: overwritten by the next ticks alike on every peer, no patch needed\n  workerCargo (u227 cargo) on guest3: 1 patch, the first after 2400 ms, whole state equal 2700 ms later\n  unitGone (u1 gone) on guest1: 1 patch, the first after 1600 ms, whole state equal 2700 ms later\n  unitExtra (extra u270) on guest2: 1 patch, the first after 1600 ms, whole state equal 2740 ms later\n  buildingEnergy (water energy) on guest3: 1 patch, the first after 2000 ms, whole state equal 2720 ms later\n  buildingLevel (barrack level) on guest1: 1 patch, the first after 12400 ms, whole state equal 2700 ms later\n  buildingTimer (barrack timer) on guest2: 1 patch, the first after 1600 ms, whole state equal 2700 ms later\n  towerGone (tower gone at 29,25) on guest3: 1 patch, the first after 1600 ms, whole state equal 2700 ms later\n  cellOwner (cell owner at 32,26) on guest1: 1 patch, the first after 3600 ms, whole state equal 2700 ms later\n  cellType (wall at 2,2) on guest2: 1 patch, the first after 4000 ms, whole state equal 2700 ms later\n  reservation (reservation 5 -> u255) on guest3: 1 patch, the first after 2400 ms, whole state equal 2680 ms later\n  reservationDrop (reservation 1601 dropped) on guest1: 1 patch, the first after 1600 ms, whole state equal 2720 ms later\n  towerOrder (tower order) on guest2: 1 patch, the first after 1600 ms, whole state equal 2700 ms later\n  playerEnergy (player energy) on guest3: 1 patch, the first after 1600 ms, whole state equal 2700 ms later\n  playerResearch (research energy) on guest1: 2 patches, the first after 1600 ms, whole state equal 2680 ms later\n  rng (random state) on guest2: 1 patch, the first after 1600 ms, whole state equal 2700 ms later\n  unitIds (unit ids) on guest3: 1 patch, the first after 1600 ms, whole state equal 2700 ms later\n  adjacency (adjacency pass) on guest1: 1 patch, the first after 1600 ms, whole state equal 2740 ms later\n  area (area level) on guest2: 1 patch, the first after 6000 ms, whole state equal 2740 ms later\n  mine (mine) on guest3: 1 patch, the first after 1600 ms, whole state equal 2700 ms later\n  drop: nothing to change, skipped\n  projectile (projectile) on guest2: 1 patch, the first after 1600 ms, whole state equal 2720 ms later\n  whole state equal on all 4 peers afterwards; 555 exact fingerprints since the last repair\n",
+    "timedOut": false,
+    "elapsedMs": 62911
+  }
+]
