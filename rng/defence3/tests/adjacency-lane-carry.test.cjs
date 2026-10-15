@@ -6,7 +6,8 @@
 // batch is being applied: once the lane is idle, every building's group
 // size, area multiplier and effective level equal a synchronous full
 // recompute (_runAdjacencyRecalculation). And a full refresh (the
-// signatures only at structures' tiles) equals the pass over every tile.
+// signatures only at structures' tiles) equals the pass over every tile,
+// and the kernel's cells by area (from the area grid) the areas' lists.
 //   node tests/adjacency-lane-carry.test.cjs
 'use strict';
 const assert = require('node:assert/strict');
@@ -73,12 +74,21 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     for (let gy = 0; gy < GRID_H; gy++) for (let gx = 0; gx < GRID_W; gx++) slow[gy * GRID_W + gx] = _adjSigCode(gx, gy);
     let sigDiff = 0;
     for (let i = 0; i < slow.length; i++) if (slow[i] !== fast[i]) sigDiff++;
-    return { buildings: live.length, queuedAtCut, ticks: t, diff, first, sigDiff, groups: new Set(sync.map(s => s.split(',')[0])).size };
+    // The kernel's cells by area (made from the area grid) hold each area's cells.
+    const CO = _simParReg['adj.coff'], CT = _simParReg['adj.ctile'];
+    let areaDiff = 0;
+    for (let a = 0; a < areas.length; a++) {
+        const want = (gridCellsByArea[a] || []).map(c => c.y * GRID_W + c.x).sort((x, y) => x - y).join();
+        if (Array.from(CT.subarray(CO[a], CO[a + 1])).join() !== want) areaDiff++;
+    }
+    return { buildings: live.length, queuedAtCut, ticks: t, diff, first, sigDiff, areaDiff, areas: areas.length, groups: new Set(sync.map(s => s.split(',')[0])).size };
 })())`));
 console.log(JSON.stringify(r));
 assert.ok(r.buildings > 8000, 'buildings placed: ' + r.buildings);
 assert.ok(r.queuedAtCut > 0, 'the cut came while members were still to apply');
 assert.equal(r.diff, 0, 'lane equals the synchronous recompute: ' + r.first);
 assert.equal(r.sigDiff, 0, 'full refresh signatures equal the pass over every tile');
+assert.ok(r.areas > 10, 'areas ' + r.areas);
+assert.equal(r.areaDiff, 0, "the kernel's cells by area equal the areas' cell lists");
 console.log('PASS: adjacency lane with carried-over members equals the synchronous recompute (' + r.buildings + ' buildings, ' + r.groups + ' group sizes)');
 process.exit(0);

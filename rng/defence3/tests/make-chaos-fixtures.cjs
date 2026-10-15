@@ -43,4 +43,13 @@ make('chaos-mixed-600.json', { ...workers, ...army });
 // The larger one (CHAOS=mega): a 1000x1000 map, the workers half again, the
 // army ~70k a team (lines across the middle, raiding blocks into the bases).
 const big = (m, k) => Object.fromEntries(Object.entries(m).map(([id, lv]) => [id, Object.fromEntries(Object.entries(lv).map(([l, n]) => [l, id === 'unit:king' ? n : Math.round(n * k)]))]));
-make('chaos-mega-1000.json', { ...big(workers, 1.5), 'building:house': { 10: 2500 }, ...big(army, 2.3) }, { 'cfg-gold-count': 5000, 'cfg-astar-mine-count': 5000, 'cfg-max-pop': 250000 }, '1000');
+// (Every combat unit type: the rarer ones too.)
+const armyRest = { 'unit:boss': { 4: 600 }, 'unit:mole': { 4: 2500 }, 'unit:snake': { 3: 400 }, 'unit:poison_resistant': { 4: 2500 } };
+make('chaos-mega-1000.json', { ...big(workers, 1.5), 'building:house': { 10: 2500 }, ...big(army, 2.3), ...armyRest }, { 'cfg-gold-count': 5000, 'cfg-astar-mine-count': 5000, 'cfg-max-pop': 250000 }, '1000');
+// MEGA_SCALE=k (env): the mega lobby with every count k times (k=2: ~340k
+// units at the start; k=0.5 for two peers in one process), as
+// tests/chaos-mega<k>x-1000.json.
+for (const k of (process.env.MEGA_SCALE || '').split(',').map(Number).filter(v => v > 0 && v !== 1)) {
+    make('chaos-mega' + k + 'x-1000.json', { ...big(workers, 1.5 * k), 'building:house': { 10: Math.round(2500 * k) }, ...big(army, 2.3 * k), ...big(armyRest, k) },
+        { 'cfg-gold-count': 5000, 'cfg-astar-mine-count': 5000, 'cfg-max-pop': Math.round(250000 * k) }, '1000');
+}

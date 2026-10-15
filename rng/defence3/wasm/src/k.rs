@@ -2820,6 +2820,51 @@ pub unsafe extern "C" fn k_zero(a: *const i32, chunk: i32) {
     }
 }
 
+/// SIM_KERNEL_DIFF_COUNT (simParallelDiffCount): how many bytes of diff.a and
+/// diff.b differ, P[0] bytes, P[1] a job: job c's count in diff.cnt[c].
+#[no_mangle]
+pub unsafe extern "C" fn k_diff_count(a: *const i32, chunk: i32) {
+    let k = K::new(a);
+    let (x, y, out) = (k.p::<u8>(0), k.p::<u8>(1), k.p::<i32>(2));
+    let (n, per) = (k.f(0) as usize, k.f(1) as usize);
+    let b0 = chunk as usize * per;
+    let b1 = (b0 + per).min(n);
+    let mut d = 0i32;
+    let mut i = b0;
+    // (Eight bytes at a time where they are all equal.)
+    while i + 8 <= b1 {
+        let u = core::ptr::read_unaligned(x.add(i) as *const u64);
+        let v = core::ptr::read_unaligned(y.add(i) as *const u64);
+        if u != v {
+            for j in 0..8 {
+                if g(x, i + j) != g(y, i + j) {
+                    d += 1;
+                }
+            }
+        }
+        i += 8;
+    }
+    while i < b1 {
+        if g(x, i) != g(y, i) {
+            d += 1;
+        }
+        i += 1;
+    }
+    s(out, chunk as usize, d);
+}
+
+/// SIM_KERNEL_HEAP_GROW (sim_wasm.js _simHeapGrowAhead): the memory grown to
+/// P[0] pages when it is smaller (another grow may have come first).
+#[no_mangle]
+pub unsafe extern "C" fn k_heap_grow(a: *const i32, _chunk: i32) {
+    let k = K::new(a);
+    let want = k.f(0) as usize;
+    let have = core::arch::wasm32::memory_size(0);
+    if want > have {
+        core::arch::wasm32::memory_grow(0, want - have);
+    }
+}
+
 /// SIM_KERNEL_COPY (simParallelCopyHeap): the heap ranges of heap.copytab
 /// ([dst, src, bytes] u32 triplets, P[0] of them) copied, as one run of
 /// bytes in their order: a job bytes chunk * P[1] .. + P[1] of it.
@@ -2973,7 +3018,10 @@ pub unsafe extern "C" fn k_eff_count(a: *const i32, chunk: i32) {
 /// to run). Arrays: adj.sig, adj.seed, adj.cloud, adj.ag, adj.coff,
 /// adj.ctile, adj.mul, adj.otile, adj.ogrp, adj.gsize, adj.gmul, adj.oarea,
 /// adj.oact, adj.ocnt, adj.wk. P: [0]/[1] grid, [2] seeds, [3] cloud
-/// triples, [4] areas.
+/// triples, [4] areas, [5] the area layout's version: when it is not the
+/// one adj.wk[2] was made for, adj.coff/adj.ctile (each area's tiles, in
+/// tile order) are made again from adj.ag (a counting sort; the page's
+/// pass over its areas' cell lists was a second cold on a 1000x1000 map).
 #[no_mangle]
 pub unsafe extern "C" fn k_adj_flood(a: *const i32, _chunk: i32) {
     let k = K::new(a);
@@ -2999,6 +3047,32 @@ pub unsafe extern "C" fn k_adj_flood(a: *const i32, _chunk: i32) {
         ep = 1;
     }
     *wk = ep;
+    if *wk.add(2) != k.i(5) {
+        // (asig as the areas' write cursors: area_sig fills it again under
+        // this epoch's stamps before it reads it.)
+        for ar in 0..=na {
+            s(coff, ar, 0);
+        }
+        for t in 0..n {
+            let ar = g(ag, t);
+            if ar >= 0 && (ar as usize) < na {
+                s(coff, ar as usize + 1, g(coff, ar as usize + 1) + 1);
+            }
+        }
+        for ar in 0..na {
+            s(coff, ar + 1, g(coff, ar + 1) + g(coff, ar));
+            s(asig, ar, g(coff, ar));
+        }
+        for t in 0..n {
+            let ar = g(ag, t);
+            if ar >= 0 && (ar as usize) < na {
+                let p = g(asig, ar as usize);
+                s(ct, p as usize, t as i32);
+                s(asig, ar as usize, p + 1);
+            }
+        }
+        *wk.add(2) = k.i(5);
+    }
     let mut gst = *wk.add(1);
     for i in 0..nc {
         let t = g(cl, 3 * i);

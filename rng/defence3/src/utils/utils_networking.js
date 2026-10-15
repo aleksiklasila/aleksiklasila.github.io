@@ -26,21 +26,73 @@ function defaultLobbyName(peerId) {
     return `Player-${String(peerId).slice(0, 4)}`;
 }
 
+// A player's profile id is public (every lobby state lists it); a slot of a
+// disconnected player was given to anyone joining with it. So the id is made
+// from a key only this browser keeps (localStorage), and a join shows the key
+// (to the host alone): profileUidFromKey(key) must be the id it claims. Any
+// host checks it from the id, a new one after a migration too: no secret
+// is stored or passed on.
+const LS_PLAYER_KEY_KEY = 'defence3_player_key';
+let localProfileKey = '';
+function profileUidFromKey(key) { return 'k' + _sha256Hex('defence3-profile:' + String(key || '')).slice(0, 32); }
 function loadOrCreateLocalIdentity() {
     let storedId = '';
     let storedName = '';
+    let storedKey = '';
     try {
         storedId = String(localStorage.getItem(LS_PLAYER_UID_KEY) || '').trim();
         storedName = String(localStorage.getItem(LS_PLAYER_NAME_KEY) || '').trim();
+        storedKey = String(localStorage.getItem(LS_PLAYER_KEY_KEY) || '').trim();
     } catch { }
-    if (!storedId) {
-        storedId = generateSocketId();
+    // (A profile from before keys: a key and its id now, once.)
+    if (!storedKey || storedId !== profileUidFromKey(storedKey)) {
+        if (!storedKey) {
+            let bytes = new Uint8Array(16);
+            try { crypto.getRandomValues(bytes); } catch { for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256); }
+            storedKey = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+            try { localStorage.setItem(LS_PLAYER_KEY_KEY, storedKey); } catch { }
+        }
+        storedId = profileUidFromKey(storedKey);
         try { localStorage.setItem(LS_PLAYER_UID_KEY, storedId); } catch { }
     }
+    localProfileKey = storedKey;
     localPersistentPeerId = storedId;
     let fallbackName = defaultLobbyName(storedId);
     localPreferredName = (storedName || fallbackName).slice(0, 24);
     try { localStorage.setItem(LS_PLAYER_NAME_KEY, localPreferredName); } catch { }
+}
+
+// SHA-256 of a string's UTF-8 bytes, as hex (synchronous: joins are handled
+// as their messages come).
+const _SHA256_K = new Uint32Array([0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+    0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+    0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2]);
+function _sha256Hex(text) {
+    const bytes = new TextEncoder().encode(String(text)), n = bytes.length, blocks = Math.ceil((n + 9) / 64);
+    const m = new Uint8Array(blocks * 64);
+    m.set(bytes); m[n] = 0x80;
+    const bits = n * 8, dv = new DataView(m.buffer);
+    dv.setUint32(m.length - 8, Math.floor(bits / 4294967296)); dv.setUint32(m.length - 4, bits >>> 0);
+    const H = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]), W = new Uint32Array(64);
+    const r = (x, k) => (x >>> k) | (x << (32 - k));
+    for (let b = 0; b < blocks; b++) {
+        for (let i = 0; i < 16; i++) W[i] = dv.getUint32(b * 64 + i * 4);
+        for (let i = 16; i < 64; i++) {
+            const a = W[i - 15], c = W[i - 2];
+            W[i] = (W[i - 16] + (r(a, 7) ^ r(a, 18) ^ (a >>> 3)) + W[i - 7] + (r(c, 17) ^ r(c, 19) ^ (c >>> 10))) >>> 0;
+        }
+        let [a, bb, c, d, e, f, g, h] = H;
+        for (let i = 0; i < 64; i++) {
+            const t1 = (h + (r(e, 6) ^ r(e, 11) ^ r(e, 25)) + ((e & f) ^ (~e & g)) + _SHA256_K[i] + W[i]) >>> 0;
+            const t2 = ((r(a, 2) ^ r(a, 13) ^ r(a, 22)) + ((a & bb) ^ (a & c) ^ (bb & c))) >>> 0;
+            h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = bb; bb = a; a = (t1 + t2) >>> 0;
+        }
+        H[0] += a; H[1] += bb; H[2] += c; H[3] += d; H[4] += e; H[5] += f; H[6] += g; H[7] += h;
+    }
+    return Array.from(H, v => v.toString(16).padStart(8, '0')).join('');
 }
 
 function setLocalPreferredName(name) {
@@ -1025,7 +1077,10 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
             packets: Object.values(lockstepHostPacketsByTick[t] || {}).map(_serializeTickPacketForSnapshot).filter(Boolean)
         })),
         lockstepWindowBundles: ticksFrom(lockstepBundleByTick).map(t => _serializeTickBundleForSnapshot(lockstepBundleByTick[t])).filter(Boolean),
-        lockstepWindowCommittedTicks: ticksFrom(lockstepCommittedByTick).filter(t => !!lockstepCommittedByTick[t])
+        lockstepWindowCommittedTicks: ticksFrom(lockstepCommittedByTick).filter(t => !!lockstepCommittedByTick[t]),
+        // Late commands the host took and will put in a guest's next packets
+        // (_hostCarryLatePacket): a restore on the host dropped them.
+        lockstepCarry: Object.fromEntries(Object.entries(lockstepHostCarryByPeer || {}).filter(([, a]) => Array.isArray(a) && a.length).map(([p, a]) => [p, a.map(x => cloneSnapshotValue(x))]))
     };
     if (includeConfig) snapshot.editableConfig = serializeEditableRuntimeConfigForTransport();
     if (includeStaticMapState) snapshot.areas = cloneSnapshotValue(areas);
@@ -1162,7 +1217,19 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     lockstepSnapshotLastSentAtByPeer = {};
     lockstepHostWaitRequestByPeer = {};
     lockstepHostLateByTick = {};
+    // (The late commands the host carries: kept on a host restoring a
+    // snapshot, with the snapshot's own (another host's), each id once.)
+    let carryKept = isHost ? lockstepHostCarryByPeer : null;
     lockstepHostCarryByPeer = {};
+    if (isHost) {
+        for (let [pid, list] of Object.entries(carryKept || {})) if (Array.isArray(list) && list.length) lockstepHostCarryByPeer[pid] = list.slice();
+        for (let [pid, list] of Object.entries((snapshot && snapshot.lockstepCarry) || {})) {
+            if (!Array.isArray(list) || !list.length) continue;
+            let mine = lockstepHostCarryByPeer[pid] || (lockstepHostCarryByPeer[pid] = []);
+            let ids = new Set(mine.map(a => a && a.netId).filter(Boolean));
+            for (let a of list) if (a && !(a.netId && ids.has(a.netId))) { mine.push(cloneSnapshotValue(a)); if (a.netId) ids.add(a.netId); }
+        }
+    }
     lockstepHostLastOnTimeAt = {};
     lockstepHostLastPacketAt = {};
     lockstepHostLastPacketTick = {};
@@ -1246,10 +1313,40 @@ function applyAuthoritativeStateSnapshot(snapshot) {
 // message. The world is generated from the shared seed and settings, then
 // overwritten by the host's snapshot. A mid-match join (`resyncSessionId`)
 // stays paused until the host resumes everyone.
+// (Each load's number: leaving the match, or a newer load, ends an older one
+// at its next step. A decode finishing after the player had gone back to
+// the menu started the old match again there.)
+let _matchLoadGen = 0;
+// This player's commands not sent yet (made: with their ids), and those held
+// while joining (not made yet), taken out of the input.
+function _takeUnsentLocalActions() {
+    const final = [], held = [];
+    const sent = Math.floor(Number(lockstepHighestSentLocalTick));
+    for (const k of Object.keys(localInputBuffer || {}).map(Number).sort((a, b) => a - b)) {
+        if (!(k > sent) || lockstepCommittedByTick[k]) continue;
+        for (const a of localInputBuffer[k] || []) final.push(a);
+    }
+    const g = resyncGuest;
+    if (g && Array.isArray(g.heldFinal)) final.push(...g.heldFinal);
+    if (g && Array.isArray(g.heldActions)) held.push(...g.heldActions);
+    return final.length || held.length ? { final, held } : null;
+}
+// ...back into the input, after a reload of the match (the next ticks they
+// may go in).
+function _giveBackUnsentLocalActions(c) {
+    if (!c) return;
+    for (const a of c.final) requeueLocalAction(a);
+    for (const a of c.held) queueAction(a);
+}
 async function applyIncomingMatchSyncPayload(data, role = 'playing') {
     let now = performance.now();
+    let loadGen = ++_matchLoadGen, loadEpoch = networkSessionEpoch;
+    const stale = () => loadGen !== _matchLoadGen || loadEpoch !== networkSessionEpoch;
     let liveJoin = !!(data && Number.isFinite(data.joinTick));
     let midMatchJoin = !!(data && data.resyncSessionId) || liveJoin;
+    // (The match this peer plays, before: its unsent commands go on in the
+    // same match's reload, see below.)
+    let prevSession = gameStarted && isMultiplayer ? String(matchStartSessionId || '') : '';
     gameSeed = data.seed;
     matchStartSessionId = String((data && data.startSessionId) || matchStartSessionId || '');
     if (!isHost) {
@@ -1351,6 +1448,7 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing') {
     } catch (err) {
         logLockstepWarning('Could not decode match snapshot', { error: String(err && err.message || err) });
     }
+    if (stale()) return;
 
     let _savedSessionId = matchStartSessionId;
     // Bundles that arrived while this was decoding are still needed.
@@ -1358,6 +1456,11 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing') {
     let earlyCommits = liveJoin ? { ...lockstepPendingCommitByTick } : null;
     initAudio();
     await prepareRendererLodAssets(true);
+    if (stale()) return;
+    // A reload of the match this peer plays: its commands not sent yet (with
+    // their ids), and those held while joining, go on after it; startGame()
+    // clears both (one queued while the snapshot decoded was lost).
+    let carried = midMatchJoin && prevSession && prevSession === String(_savedSessionId || '') ? _takeUnsentLocalActions() : null;
     // (The snapshot brings every entity: none made here.)
     startGameSkipStarters = !!snapshotText;
     try { startGame(); } finally { startGameSkipStarters = false; }
@@ -1390,8 +1493,10 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing') {
         for (let k in earlyBundles) if (+k >= currentTick && !lockstepBundleByTick[k]) lockstepPendingBundleByTick[k] = earlyBundles[k];
         for (let k in earlyCommits) if (+k >= currentTick && !lockstepCommittedByTick[k]) lockstepPendingCommitByTick[k] = earlyCommits[k];
         setMatchLoadOverlay(false);
-        if (!snapshotText) { requestHardLockstepResync(currentTick, 'join without snapshot'); return; }
+        if (!snapshotText) { requestHardLockstepResync(currentTick, 'join without snapshot'); _giveBackUnsentLocalActions(carried); return; }
         resyncGuestJoined(currentTick);
+        // (Held until the host counts us in, as commands issued now are.)
+        if (carried) { resyncGuest.heldFinal = carried.final; for (let a of carried.held) resyncGuestHoldAction(a); }
         return;
     }
     if (midMatchJoin) {
@@ -1408,6 +1513,7 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing') {
         }
         if (lockstepPendingResumeSessionId && lockstepPendingResumeSessionId === sid) _guestResumeAfterResync(sid);
         if (!snapshotText) requestHardLockstepResync(currentTick, 'join without snapshot');
+        _giveBackUnsentLocalActions(carried);
         return;
     }
 
@@ -2120,14 +2226,28 @@ function _hostPeerStopsPlaying(pid) {
     }
 }
 
+// What only the host says: a guest takes these from its host alone, the
+// host never (a guest's RETURN_TO_LOBBY sent the host back to the lobby; a
+// guest's PLAYER_REMOVED_FROM_MATCH removed a player on the host).
+const NET_HOST_ONLY_MESSAGES = new Set(['TICK_BUNDLE', 'TICK_HASHES', 'TICK_COMMIT', 'TICK_UNAVAILABLE', 'RESYNC_AT', 'RESYNC_PATCH', 'JOIN_LIVE_ACK',
+    'NET_STATS', 'START_GAME_PREPARE', 'START_GAME', 'START_SPECTATE', 'REJOIN_RESUME', 'HOST_CLOSED_LOBBY', 'HOST_MOVED', 'LOBBY_STATE',
+    'START_GAME_COUNTDOWN', 'START_GAME_ALL_READY', 'SPECTATE_UNAVAILABLE', 'MATCH_STATE_SNAPSHOT', 'LOCKSTEP_RESYNC_PAUSE',
+    'DUPLICATE_UID_ACTIVE', 'RETURN_TO_LOBBY', 'REMATCH_STATE', 'PLAYER_REMOVED_FROM_MATCH']);
+function _netFromHostOk(conn, type) {
+    if (!NET_HOST_ONLY_MESSAGES.has(type)) return true;
+    return !isHost && !!conn && String(conn.peer || '') === String(wsHostId || '');
+}
+
 function _handleConnectionMessage(conn, data) {
     let type = data.type;
+    if (!_netFromHostOk(conn, type)) { netCounters.notFromHostDropped = (netCounters.notFromHostDropped | 0) + 1; return; }
     if (type === 'TICK_PACKETS') {
         handleIncomingTickPackets(conn, data);
     } else if (type === 'TICK_BUNDLE') {
         handleIncomingTickBundle(conn, data);
     } else if (type === 'TICK_HASHES' && !isHost) {
-        resyncGuestReceiveHashes(data.h);
+        // (Another match's: dropped, main.js netMatchTagOk.)
+        if (netMatchTagOk(data.m)) resyncGuestReceiveHashes(data.h);
     } else if (type === 'RESYNC_REQUEST' && isHost) {
         resyncHostHandleRequest(conn, data);
     } else if (type === 'RESYNC_AT' && !isHost) {
@@ -2550,7 +2670,16 @@ function _hostHandleLobbyJoin(conn, data) {
     }
     if (conn && conn.peer) peerPresenceById[conn.peer] = true;
     if (conn && conn.peer) netNotePeerCapabilities(conn.peer, data && data.caps);
-    let joiningUid = String((data && data.uid) || peerUidByPeerId[conn.peer] || conn.peer || '').trim();
+    // (A profile id is taken with its key alone, profileUidFromKey: anyone can
+    // read the ids in a lobby state, and a disconnected player's slot went to
+    // whoever joined with one. Without it the joiner is its own peer.)
+    let claimedUid = String((data && data.uid) || '').trim();
+    if (claimedUid && claimedUid !== String(conn.peer || '') && profileUidFromKey(data && data.uidKey) !== claimedUid) {
+        logLockstepWarning('A join claimed a profile id without its key; joined as itself', { peerId: String(conn.peer || '') });
+        netCounters.profileClaimsRefused = (netCounters.profileClaimsRefused | 0) + 1;
+        claimedUid = '';
+    }
+    let joiningUid = String(claimedUid || peerUidByPeerId[conn.peer] || conn.peer || '').trim();
     if (joiningUid) {
         let migration = migratePeerIdByUid(joiningUid, conn.peer);
         if (migration.hasActiveDuplicate) {
@@ -2822,6 +2951,8 @@ function resetWorldState() {
 }
 
 function returnToOnlineLobby(asHost, statusText) {
+    // (A match still loading here does not start after this.)
+    _matchLoadGen++;
     rematchVotePeerIds = new Set();
     rematchVoteTotal = 0;
     gameStarted = false;
@@ -3274,6 +3405,8 @@ function joinGame(hostId, opts = null) {
             let desiredRole = (gameStarted && (localDefeated || spectateMode !== 'none')) ? 'spectating' : 'playing';
             conn.send({
                 type: 'LOBBY_JOIN', name: me.name, color: me.color || null, desiredRole, uid: localPersistentPeerId || myPeerId,
+                // (Its key: the id stands only with it, see profileUidFromKey.)
+                uidKey: localPersistentPeerId ? localProfileKey : '',
                 caps: netLocalCapabilities(),
                 rules: SIM_RULES_REVISION,
                 migrate,
@@ -3346,6 +3479,7 @@ function _clearInviteParamsFromUrl() {
 
 // Tear down the online session and show the main menu (play solo / online).
 function _returnToMainMenuWithStatus(statusText = '', color = '#fa4') {
+    _matchLoadGen++;
     _clearGuestJoinTimeout();
     _stopMatchCountdown();
     _matchStartPlayerStatuses = null;

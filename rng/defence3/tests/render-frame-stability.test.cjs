@@ -196,7 +196,14 @@ function flickers(frames, field) {
             const data = await (await fetch('tests/1500.json')).json();
             applyMainMenuSettingsSnapshot(data);
             { const dn = Date.now; Date.now = () => 1234567; try { [...document.querySelectorAll('button')].find(x => x.textContent.trim() === 'Play Solo').click(); } finally { Date.now = dn; } }
-            await new Promise(r => setTimeout(r, 3000));
+            return 1;
+        })()`);
+        // (The match starts once the model views are baked, ~30 s before the
+        // game on purpose: no baking hitches in it. Polled from here: one
+        // evaluation may take 30 s at most.)
+        for (let i = 0; i < 600 && !(await b.ev(`gameStarted && gameTime > 10 && units.length > 0`)); i++) await sleep(500);
+        assert.ok(await b.ev(`gameStarted && gameTime > 10`), 'the match started within 300 s');
+        await b.ev(`(async () => {
             setRenderDimensionMode('3d');
             const mine = units.filter(u => !u.dead && u.owner === localPlayerId && !u.workerType);
             for (let i = 0; i < 10; i++) queueAction({ action: 'move', unitIds: mine.filter((u, k) => k % 10 === i).map(u => u.id),

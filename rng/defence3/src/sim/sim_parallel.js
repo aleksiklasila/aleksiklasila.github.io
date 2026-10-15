@@ -31,7 +31,7 @@ const SIM_PAR_GEN = 0, SIM_PAR_KERNEL = 1, SIM_PAR_NEXT = 2, SIM_PAR_TOTAL = 3, 
 // the next one, so a pipeline runs to its end on the helpers. A lane is
 // rewritten only once closed and empty (no claim in flight), so a late
 // claim can never run a chunk of the next job.
-const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 11;
+const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 12;
 const SIM_PAR_BG_ID = 5, SIM_PAR_BG_READERS = 6, SIM_PAR_BG_STAGE = 7, SIM_PAR_BG_STAGES = 24;
 // (Control words: SIM_PAR_BG_BASE + lanes * 8, rounded up.)
 const SIM_PAR_CTL_WORDS = 128;
@@ -41,10 +41,10 @@ const SIM_PAR_CTL_WORDS = 128;
 // tick's foreground kernels always find helpers (all of them deep in a
 // remake left the movement kernel to this thread alone: 114 ms ticks at
 // 400k a team). Where chunks run never changes what they make.
-const SIM_PAR_BG_CAP = 99, SIM_PAR_BG_RUN = 100;
+const SIM_PAR_BG_CAP = 105, SIM_PAR_BG_RUN = 106;
 // A helper's kernel threw (the chunk still counts as done, so nobody waits
 // forever): the simulation thread throws at its next wait.
-const SIM_PAR_ERR = 98;
+const SIM_PAR_ERR = 104;
 function _simParCheckErr(ctl) {
     if (Atomics.load(ctl, SIM_PAR_ERR) !== 0) { Atomics.store(ctl, SIM_PAR_ERR, 0); throw new Error('a simulation helper kernel failed (see the helper log)'); }
 }
@@ -65,8 +65,10 @@ function _simParCheckErr(ctl) {
 // destination fields asked for in a tick, made by the next tick's flush
 // (flownav.js navFieldsFlush). SIM_LANE_NAVX: every live field over a new
 // navigation build, before it is installed (flownav.js _navNextStage).
-const SIM_LANE_TICK = 0, SIM_LANE_LONG = 1, SIM_LANE_T10 = 2, SIM_LANE_T5 = 3, SIM_LANE_T1 = 4, SIM_LANE_T05 = 5, SIM_LANE_IX = 6, SIM_LANE_BUILD = 7, SIM_LANE_NAV = 8, SIM_LANE_NAVX = 9, SIM_LANE_HASH = 10;
-const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_NAV, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_T1, SIM_LANE_T05, SIM_LANE_NAVX, SIM_LANE_BUILD, SIM_LANE_LONG];
+// SIM_LANE_GROW: the wasm memory grown ahead of need (sim_wasm.js
+// _simHeapGrowAhead), never waited for.
+const SIM_LANE_TICK = 0, SIM_LANE_LONG = 1, SIM_LANE_T10 = 2, SIM_LANE_T5 = 3, SIM_LANE_T1 = 4, SIM_LANE_T05 = 5, SIM_LANE_IX = 6, SIM_LANE_BUILD = 7, SIM_LANE_NAV = 8, SIM_LANE_NAVX = 9, SIM_LANE_HASH = 10, SIM_LANE_GROW = 11;
+const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_GROW, SIM_LANE_NAV, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_T1, SIM_LANE_T05, SIM_LANE_NAVX, SIM_LANE_BUILD, SIM_LANE_LONG];
 
 // A typed array in shared memory when helpers may use it: in the wasm heap
 // once it is up (freed when collected, as simHeapArrayAuto's), so the Rust
@@ -615,16 +617,48 @@ const _simCopyW = _simWK(['heap.copytab']);
 SIM_KERNELS[SIM_KERNEL_COPY] = function (R, P, chunk) { _simRust(_simCopyW, P, chunk, 'k_copy', 'COPY'); };
 // The same over a table of its own (heap.copytab.bg), for a background
 // stage (simParallelCopyStage): a foreground copy meanwhile has the other.
-const SIM_KERNEL_COPY_BG = 74;
-const _simCopyBgW = _simWK(['heap.copytab.bg']);
+// A second (heap.copytab.bg2, SIM_KERNEL_COPY_BG2) for a second background
+// copy that may run at once (the next navigation build's pools, on
+// SIM_LANE_NAVX, beside the fields' pools' growth on SIM_LANE_NAV).
+const SIM_KERNEL_COPY_BG = 74, SIM_KERNEL_COPY_BG2 = 76;
+// How many bytes of two heap arrays differ (the helpers and this thread; a
+// pass over 1M bytes in the page's code was ~2.6 ms, cold): null when
+// either is not in the heap or no kernels run.
+const SIM_KERNEL_DIFF_COUNT = 77, SIM_DIFF_PER = 1 << 18;
+const _simDiffW = _simWK(['diff.a', 'diff.b', 'diff.cnt']);
+SIM_KERNELS[SIM_KERNEL_DIFF_COUNT] = function (R, P, chunk) { _simRust(_simDiffW, P, chunk, 'k_diff_count', 'DIFF_COUNT'); };
+function simParallelDiffCount(a, b) {
+    if (!a || !b || a.length !== b.length || a.BYTES_PER_ELEMENT !== 1 || b.BYTES_PER_ELEMENT !== 1 || _simHeapPtrOf === null || _simWasmX === null || _simParRunning) return null;
+    if (_simHeapPtrOf(a) < 0 || _simHeapPtrOf(b) < 0) return null;
+    const n = a.length, jobs = Math.max(1, Math.ceil(n / SIM_DIFF_PER));
+    let cnt = _simParReg['diff.cnt'];
+    if (!cnt || cnt.length < jobs) { const old = cnt; cnt = simHeapArray(Int32Array, Math.max(64, jobs * 2)); simParallelBind('diff.cnt', cnt); simHeapFree(old); }
+    if (_simParReg['diff.a'] !== a) simParallelBind('diff.a', a);
+    if (_simParReg['diff.b'] !== b) simParallelBind('diff.b', b);
+    const P = _simParams, saved = P.slice();
+    P[0] = n; P[1] = SIM_DIFF_PER;
+    simParallelRun(SIM_KERNEL_DIFF_COUNT, jobs);
+    P.set(saved);
+    let d = 0;
+    for (let j = 0; j < jobs; j++) d += cnt[j];
+    return d;
+}
+// The wasm memory grown to P[0] pages (when it is smaller), on a helper:
+// see sim_wasm.js _simHeapGrowAhead.
+const SIM_KERNEL_HEAP_GROW = 75;
+const _simHeapGrowW = _simWK([]);
+SIM_KERNELS[SIM_KERNEL_HEAP_GROW] = function (R, P, chunk) { _simRust(_simHeapGrowW, P, chunk, 'k_heap_grow', 'HEAP_GROW'); };
+const _simCopyBgW = _simWK(['heap.copytab.bg']), _simCopyBg2W = _simWK(['heap.copytab.bg2']);
 SIM_KERNELS[SIM_KERNEL_COPY_BG] = function (R, P, chunk) { _simRust(_simCopyBgW, P, chunk, 'k_copy', 'COPY_BG'); };
-let _simCopyBgTab = null;
+SIM_KERNELS[SIM_KERNEL_COPY_BG2] = function (R, P, chunk) { _simRust(_simCopyBg2W, P, chunk, 'k_copy', 'COPY_BG2'); };
+const _simCopyBgTabs = [null, null];
 // A background chain's copy stage over [dst, src, ...] heap arrays (src's
 // bytes to the start of dst): its params written to `P` (a stage's), its
 // table bound; returns the stage [kernel, jobs] (null: not all in the
 // heap, the caller copies itself). The arrays must stay as they are until
-// the chain is waited for.
-function simParallelCopyStage(pairs, P) {
+// the chain is waited for. which: the table (0, or 1 for a second copy
+// that may run at once with the first).
+function simParallelCopyStage(pairs, P, which = 0) {
     if (_simHeapPtrOf === null || _simWasmMem === null) return null;
     let total = 0;
     // (Arrays of the heap. Not by their buffer object: once the memory grew,
@@ -634,17 +668,17 @@ function simParallelCopyStage(pairs, P) {
         if (pairs[i].byteLength < pairs[i + 1].byteLength) throw new Error('simParallelCopyStage: destination shorter than source');
         total += pairs[i + 1].byteLength;
     }
-    const n = pairs.length / 2;
-    if (!_simCopyBgTab || _simCopyBgTab.length < 3 * n) {
-        const old = _simCopyBgTab;
-        _simCopyBgTab = simHeapArray(Uint32Array, Math.max(256, 3 * n * 2));
-        simParallelBind('heap.copytab.bg', _simCopyBgTab);
+    const n = pairs.length / 2, w = which ? 1 : 0;
+    if (!_simCopyBgTabs[w] || _simCopyBgTabs[w].length < 3 * n) {
+        const old = _simCopyBgTabs[w];
+        _simCopyBgTabs[w] = simHeapArray(Uint32Array, Math.max(256, 3 * n * 2));
+        simParallelBind(w ? 'heap.copytab.bg2' : 'heap.copytab.bg', _simCopyBgTabs[w]);
         simHeapFree(old);
     }
-    const T = _simCopyBgTab;
+    const T = _simCopyBgTabs[w];
     for (let i = 0; i < n; i++) { const d = pairs[2 * i], s = pairs[2 * i + 1]; T[3 * i] = d.byteOffset; T[3 * i + 1] = s.byteOffset; T[3 * i + 2] = s.byteLength; }
     P.fill(0); P[0] = n; P[1] = SIM_COPY_PER; P[2] = total;
-    return [SIM_KERNEL_COPY_BG, Math.max(1, Math.ceil(total / SIM_COPY_PER))];
+    return [w ? SIM_KERNEL_COPY_BG2 : SIM_KERNEL_COPY_BG, Math.max(1, Math.ceil(total / SIM_COPY_PER))];
 }
 let _simCopyTab = null;
 function simParallelCopyHeap(pairs) {

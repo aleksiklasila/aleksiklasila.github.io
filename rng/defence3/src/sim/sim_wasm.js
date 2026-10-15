@@ -71,16 +71,20 @@ function _simWasmDecode(b64) {
 // The module and the heap in this (the simulation) thread: once, on first
 // use; false when not available (no shared memory, no SIMD, no module, or
 // a browser's main thread, where compiling it synchronously is refused).
+// (A page whose simulation worker failed (to load, or to start a match)
+// runs its matches itself: it needs the heap after all.)
+function _simWasmWorkerFailed() { return typeof _simClient !== 'undefined' && !!_simClient && !!_simClient.failed; }
 function simWasmInit() {
     const H = _simHeap;
-    if (H.tried) return H.ready;
-    H.tried = true;
+    if (H.tried && !(H.workerRefused && _simWasmWorkerFailed())) return H.ready;
+    H.tried = true; H.workerRefused = false;
     try {
         if (!SIM_WASM_ENABLED || typeof SIM_WASM_BIN !== 'string' || typeof WebAssembly !== 'object' || typeof SharedArrayBuffer !== 'function') return false;
         // (Only where the ticks run: a page whose simulation runs in its
         // worker (sim_client.js) keeps arrays for presentation only and never
-        // ticks, so arrays freed there would never be reused.)
-        if (typeof simClientEnabled !== 'undefined' && simClientEnabled) return false;
+        // ticks, so arrays freed there would never be reused. Its worker
+        // failed: the page ticks, see _simWasmWorkerFailed.)
+        if (typeof simClientEnabled !== 'undefined' && simClientEnabled && !_simWasmWorkerFailed()) { H.workerRefused = true; return false; }
         const memory = new WebAssembly.Memory({ initial: 256, maximum: SIM_HEAP_MAX_PAGES, shared: true });
         if (!(memory.buffer instanceof SharedArrayBuffer)) return false;
         const module = new WebAssembly.Module(_simWasmDecode(SIM_WASM_BIN));
@@ -157,8 +161,67 @@ function _simHeapTake(bytes) {
     H.top = end;
     H.fresh = Math.max(p, H.hw);
     if (end > H.hw) H.hw = end;
+    // (The big takes of late, fading: the room grown ahead covers two.)
+    H.takeMax = Math.max(bytes, (H.takeMax || 0) * 0.95);
+    _simHeapGrowAhead();
     return p;
 }
+// Less than an eighth left past the top: the memory grown a step on a helper
+// (SIM_KERNEL_HEAP_GROW on SIM_LANE_GROW), so the allocations to come find
+// it grown (a commit of 100+ MB was ~10 ms on this thread, at an
+// allocation in the tick). Only when nothing else runs: never in a kernel
+// run, never a second one before the first is done.
+function _simHeapGrowAhead() {
+    const H = _simHeap, have = H.memory.buffer.byteLength;
+    let expect = 0;
+    if (H.expects) for (const b of H.expects.values()) expect += b;
+    // (An eighth of the heap, the allocations announced, and two of the big
+    // takes of late: a small heap's eighth (a small map's match, whose units'
+    // reservation is small) was less than one of them, and the next grew
+    // the memory on this thread.)
+    const want = Math.max(have / 8, expect, 2 * (H.takeMax || 0));
+    if (have - H.top >= want || typeof SIM_KERNEL_HEAP_GROW !== 'number' || typeof _simPool === 'undefined' || !_simPool || _simParRunning) return;
+    // (Nothing waits for the growth lane: its job taken back here once done,
+    // else it would stay pending, and no growth be posted again.)
+    if (simParallelBackgroundPending(SIM_LANE_GROW)) { if (!simParallelBackgroundDone(SIM_LANE_GROW)) return; simParallelBackgroundWait(SIM_LANE_GROW); }
+    const cur = have / SIM_HEAP_PAGE, short = Math.ceil((want - (have - H.top)) / SIM_HEAP_PAGE);
+    const target = Math.min(SIM_HEAP_MAX_PAGES, cur + Math.max(256, Math.ceil(cur / 8), short));
+    if (target <= cur) return;
+    const B = _simBgParamsByLane[SIM_LANE_GROW];
+    B.fill(0); B[0] = target;
+    simParallelBackground(SIM_KERNEL_HEAP_GROW, 1, SIM_LANE_GROW);
+}
+// Allocations of about `bytes` to come under `key` (a navigation window's
+// pools): the memory grown ahead for them as well, on a helper, until
+// simHeapExpectDone(key) (made, or not needed any more). (Counted down by
+// any big allocation, the expectation was spent by others' before the
+// window opened.)
+function simHeapExpect(key, bytes) {
+    const H = _simHeap;
+    if (!H || !H.memory) return;
+    (H.expects || (H.expects = new Map())).set(key, Math.max(0, Number(bytes) || 0));
+    _simHeapGrowAhead();
+}
+function simHeapExpectDone(key) { const H = _simHeap; if (H && H.expects) H.expects.delete(key); }
+// Whether `bytes` more fit the heap (its free blocks, the room past its top,
+// the memory grown now as needed); true without a heap (plain arrays then).
+// For big optional allocations (a population's reservation): an array the
+// heap cannot hold is made outside it, where no Rust kernel can read it,
+// and every kernel over it failed each tick from then on.
+function simHeapRoom(bytes) {
+    if (!simWasmInit()) return true;
+    const H = _simHeap, F = H.free;
+    let free = 0;
+    for (let i = 1; i < F.length; i += 2) free += F[i];
+    const have = H.memory.buffer.byteLength, room = have - H.top + free;
+    if (room >= bytes) return true;
+    const cur = have / SIM_HEAP_PAGE, need = Math.ceil((bytes - room) / SIM_HEAP_PAGE);
+    if (cur + need > SIM_HEAP_MAX_PAGES) return false;
+    try { H.memory.grow(need); return true; } catch (err) { return false; }
+}
+// Whether arr is in the wasm heap (the Rust kernels can read it); true
+// without a heap.
+function simHeapHas(arr) { return !_simHeap.ready || !!(arr && _simHeap.ptr.has(arr)); }
 function _simHeapReleaseImpl(arr) {
     const H = _simHeap;
     if (!arr || _simHeapAuto.has(arr)) return;
@@ -174,7 +237,8 @@ function _simHeapQueue(arr, p, s) {
     const H = _simHeap;
     // (The chains in flight now: each lane's posted count.)
     const waits = [];
-    for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) if (simParallelBackgroundPending(lane)) waits.push(lane, _simBgPosted[lane]);
+    // (Not the growth lane: its kernel reads no array.)
+    for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) if (lane !== SIM_LANE_GROW && simParallelBackgroundPending(lane)) waits.push(lane, _simBgPosted[lane]);
     H.pending.push({ arr, p, s, t: H.clock, waits });
 }
 // Arrays the collector gives back (simHeapArrayAuto): when one is

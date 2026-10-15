@@ -286,6 +286,16 @@ function _findNearbyCombatEnemy(unit, range) {
 // add to `steps`.
 let _hostileNearCache = new Map(), _hostileNearCacheTick = -1, _hostileNearCacheFor = null;
 const _hostileNearSource = [0];
+// A worker's command from its state: the moving states move it (the
+// movement state machine runs for them this tick), the working and idle
+// ones stand.
+const _WORKER_MOVING_CMD_STATES = new Set(['MANUAL_MOVE', 'MOVING_TO', 'MOVING_TO_ASTAR', 'RETURNING', 'RETURNING_ASTAR', 'MOVING_TO_BUILD', 'RETURNING_FOR_GOLD', 'MOVING_TO_HEAL', 'MOVING_TO_RESEARCH']);
+const _WORKER_STANDING_CMD_STATES = new Set(['IDLE', 'BUILDING_IN_PLACE', 'HEALING', 'RESEARCHING']);
+function _workerSyncCommand(u) {
+    const ws = u.workerState;
+    if (_WORKER_MOVING_CMD_STATES.has(ws)) u.commandState = CMD_MOVING;
+    else if (_WORKER_STANDING_CMD_STATES.has(ws)) u.commandState = CMD_IDLE;
+}
 // The end of Unit.update (and of the kernel outputs' commits that stand for
 // one): pushed out of a blocked tile, quantized, indexed, the drive-by shot
 // of a unit that was on the move, armed again for the kernels.
@@ -309,6 +319,7 @@ function _unitArmAgain(u, cols) {
     else if (cmd === CMD_IDLE && u.workerState === 'IDLE') simMoveTryPark(u);
     else if (cmd === CMD_IDLE && !u.workerState) simMoveTryParkIdle(u);
     else if (cmd === CMD_ATTACKING) {
+        if (u.holdPosition) { simMoveTryParkHeldAttacker(u); return; }
         simMoveTryHold(u);
         const on = cols.mvOn[u._si];
         if (on !== 3 && on !== 5) { simMoveTryChase(u); if (cols.mvOn[u._si] !== 4) _simMoveTryApproachBuilding(u); }
@@ -670,6 +681,18 @@ class Unit {
     set _builderLastWatchY(v) { const c = this._us; if (c) c.wkWy[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det._builderLastWatchY = v; else Object.defineProperty(this, '_bwy', { value: v, writable: true, configurable: true }); }
     get _builderLastMoveTick() { const c = this._us; if (c) { const v = c.wkLmt[this._si]; return v === -2147483648 ? undefined : v; } return this._det ? this._det._builderLastMoveTick : this._bmt; }
     set _builderLastMoveTick(v) { const c = this._us; if (c) c.wkLmt[this._si] = typeof v === 'number' && v === Math.floor(v) && Math.abs(v) < 2147483647 ? v : -2147483648; else if (this._det) this._det._builderLastMoveTick = v; else Object.defineProperty(this, '_bmt', { value: v, writable: true, configurable: true }); }
+    // Damage dealt to it not reported yet: over time (stAcc, reported every
+    // STATUS_DOT_REPORT_TICKS: its shrine share, its flash), by a laser
+    // (lzAcc, every LASER_REPORT_TICKS, and the beam: lzBeam, its retaliation
+    // and shrine share). State: snapshots and patches carry them (a repair
+    // dropped them on every peer: the reports, shrine income and
+    // retaliations of an uninterrupted match never came).
+    get _dotPending() { const c = this._us; return c ? c.stAcc[this._si] : (this._det ? this._det._dotPending || 0 : this._dtp || 0); }
+    set _dotPending(v) { v = Number(v) || 0; const c = this._us; if (c) c.stAcc[this._si] = v; else if (this._det) this._det._dotPending = v; else Object.defineProperty(this, '_dtp', { value: v, writable: true, configurable: true }); }
+    get _laserPending() { const c = this._us; return c ? c.lzAcc[this._si] : (this._det ? this._det._laserPending || 0 : this._lzp || 0); }
+    set _laserPending(v) { v = Number(v) || 0; const c = this._us; if (c) c.lzAcc[this._si] = v; else if (this._det) this._det._laserPending = v; else Object.defineProperty(this, '_lzp', { value: v, writable: true, configurable: true }); }
+    get _laserBeam() { const c = this._us; return c ? c.lzBeam[this._si] : (this._det ? this._det._laserBeam || 0 : this._lzb || 0); }
+    set _laserBeam(v) { v = Math.floor(Number(v)) || 0; const c = this._us; if (c) c.lzBeam[this._si] = v; else if (this._det) this._det._laserBeam = v; else Object.defineProperty(this, '_lzb', { value: v, writable: true, configurable: true }); }
     get _forcedTargetLastSeenX() { const c = this._us; if (c) { const v = c.fLsX[this._si]; return v === v ? v : null; } return this._det ? this._det._forcedTargetLastSeenX : (this._flsx ?? null); }
     set _forcedTargetLastSeenX(v) { const c = this._us; if (c) c.fLsX[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det._forcedTargetLastSeenX = v; else Object.defineProperty(this, '_flsx', { value: v, writable: true, configurable: true }); }
     get _forcedTargetLastSeenY() { const c = this._us; if (c) { const v = c.fLsY[this._si]; return v === v ? v : null; } return this._det ? this._det._forcedTargetLastSeenY : (this._flsy ?? null); }
@@ -880,32 +903,13 @@ class Unit {
         // Worker AI (collector/salvager units)
         if (this.workerState) {
             updateWorkerAI(this);
-            // Keep worker motion state deterministic: movement-oriented worker states must
-            // always execute the movement state machine this tick.
-            {
-                if (
-                    this.workerState === 'MANUAL_MOVE' ||
-                    this.workerState === 'MOVING_TO' ||
-                    this.workerState === 'MOVING_TO_ASTAR' ||
-                    this.workerState === 'RETURNING' ||
-                    this.workerState === 'RETURNING_ASTAR' ||
-                    this.workerState === 'MOVING_TO_BUILD' ||
-                    this.workerState === 'RETURNING_FOR_GOLD' ||
-                    this.workerState === 'MOVING_TO_HEAL' ||
-                    this.workerState === 'MOVING_TO_RESEARCH'
-                ) {
-                    this.commandState = CMD_MOVING;
-                } else if (
-                    this.workerState === 'IDLE' ||
-                    this.workerState === 'BUILDING_IN_PLACE' ||
-                    this.workerState === 'HEALING' ||
-                    this.workerState === 'RESEARCHING'
-                ) {
-                    this.commandState = CMD_IDLE;
-                }
-            }
+            _workerSyncCommand(this);
             // Workers still follow paths via the normal system
         }
+        // (A worker whose path runs out in this step: its arrival is its AI's
+        // at once, below, not a whole update of the next tick; ~60 a tick of
+        // the mega scenario's healers.)
+        const wkLeft = this.workerState && this.path ? this.path.length - this.pathIndex : 0;
 
         // State machine
         // (A unit on the move shoots after its step, from where it stands
@@ -926,6 +930,11 @@ class Unit {
                 this.holdPosition = true;
                 this.commandState = CMD_IDLE;
                 break;
+        }
+        if (wkLeft > 0 && this.workerState && !this.dead && !(this.path && this.pathIndex < this.path.length) && _workerEventsLeft > 0) {
+            _workerEventsLeft--;
+            updateWorkerAI(this);
+            _workerSyncCommand(this);
         }
         _unitUpdateEnd(this, cols, driveBy);
     }
@@ -2393,7 +2402,9 @@ function shuffleInPlaceDeterministic(arr) {
 function resizeUnitSubgroup(playerId, unitIds, mode, subgroupFilter = null) {
     if (!Array.isArray(unitIds) || unitIds.length === 0) return;
     let idSet = new Set(unitIds);
-    let source = units.filter(u => idSet.has(u.id) && u.owner === playerId && !u.dead && !u.isKing);
+    // (By the id map, in id order as the units list holds them: not a pass
+    // over every unit per order.)
+    let source = _unitsInIdOrder([...idSet].map(id => getUnitById(id)).filter(u => u && u.owner === playerId && !u.dead && !u.isKing));
     if (subgroupFilter && subgroupFilter.unitType) {
         source = source.filter(u => u.unitType === subgroupFilter.unitType);
     }
@@ -3275,6 +3286,21 @@ function simEngageCommit(c, s) {
 // kernel hands a parked unit back for anything its update would act on;
 // every 100 ticks cost ~1500 updates a tick with 150k idle units.)
 const SIM_IDLE_PARK_TICKS = 1000;
+// A held unit with an order to attack (a unit or a structure out of its
+// range: a hold never chases) whose look found nothing to shoot, its timer
+// ready: Unit.update looked again every tick (doHolding: ~13 us; ~160 a
+// tick of the mega scenario's held raiders). Parked till its next
+// acquisition tick, the ticks idle units look on; its order kept (any new
+// one, a stop or a hold disarms it), the order's target checked then.
+function simMoveTryParkHeldAttacker(u) {
+    const c = u._us;
+    if (!c || u.dead || !u.holdPosition || u.workerState || u.commandState !== CMD_ATTACKING || u.attackTimer > 0) return;
+    const s = u._si;
+    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
+    const P = SIM_ACQUIRE_TICKS, ph = (((gameTime + (u.id | 0)) % P) + P) % P;
+    c.mvWake[s] = gameTime + P - ph; c.mvFlags[s] = 0; c.mvReach[s] = 0;
+    c.mvOn[s] = 2;
+}
 function simMoveTryParkIdle(u) {
     const c = u._us;
     if (!c || u.dead || u.holdPosition || u.workerState || u.unitType === 'scout' || u._attackMoveGx != null) return;

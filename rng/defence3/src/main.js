@@ -188,6 +188,9 @@ let _updateOrderCand = new Int32Array(0), _updateOrderRun = new Int32Array(0);
 // stutter). The brains may lag; the tick may not: a chaos scenario's 13k
 // workers a team made 300-500 events a tick (7-12 ms).
 const WORKER_EVENTS_PER_TICK = 240;
+// (The pass's events left: a worker arriving within its own update takes
+// one too, Unit.update; outside the pass, no limit.)
+let _workerEventsLeft = Infinity;
 function _isWorkerEvent(u) {
     const ws = u.workerState;
     if (!ws) return false;
@@ -196,8 +199,12 @@ function _isWorkerEvent(u) {
     return !p || u.pathIndex >= p.length;
 }
 function _forEachUnitInTickOrder(fn) {
-    let list = units, n = list.length, events = WORKER_EVENTS_PER_TICK;
+    let list = units, n = list.length;
     if (n <= 1) { if (n === 1 && list[0]) fn(list[0]); return; }
+    _workerEventsLeft = WORKER_EVENTS_PER_TICK;
+    try { _forEachUnitInTickOrderBody(fn, list, n); } finally { _workerEventsLeft = Infinity; }
+}
+function _forEachUnitInTickOrderBody(fn, list, n) {
     // Units the movement kernel moved this tick are skipped (fn is update).
     const S = _simUnitState, slots = S ? _unitSlotMapEnsure() : null;
     const OUT = S ? S.columns.mvOut : null, owners = S ? S.owners : null;
@@ -273,7 +280,7 @@ function _forEachUnitInTickOrder(fn) {
             }
             // (Past the tick's worker events: next tick. Not dead ones: their
             // update ends them.)
-            if (!u.dead && _isWorkerEvent(u)) { if (events <= 0) continue; events--; }
+            if (!u.dead && _isWorkerEvent(u)) { if (_workerEventsLeft <= 0) continue; _workerEventsLeft--; }
             fn(u);
         }
     }
@@ -1700,7 +1707,7 @@ function initInput() {
         if (multiTowerTargetPoints.length === 0) multiTowerTargetPoints = [{ ...targetSpec }];
 
         let buckets = Array.from({ length: multiTowerTargetPoints.length }, () => []);
-        let targetXY = spec => spec.type === 'unit' ? _entityWorldXY(units.find(u => u.id === spec.id))
+        let targetXY = spec => spec.type === 'unit' ? _entityWorldXY(getUnitById(spec.id))
             : (Number.isFinite(spec.gx) ? { x: spec.gx * TILE + 16, y: spec.gy * TILE + 16 } : null);
         let pick = _assignToNearestPoints(selTowers, multiTowerTargetPoints, _entityWorldXY, targetXY);
         for (let i = 0; i < selTowers.length; i++) buckets[pick[i]].push(selTowers[i]);
@@ -3396,6 +3403,34 @@ function actionIdsEncode(ids) {
     }
     return out;
 }
+// How many ids actionIdsDecode(s, max) gives, without the list (an order's
+// cost: a run of ids is a few characters).
+function actionIdsCount(s, max = ACTION_MAX_UNIT_IDS) {
+    if (typeof s !== 'string') return 0;
+    let pos = 0, prev = 0, n = 0;
+    const get = () => {
+        let v = 0, mul = 1;
+        for (let k = 0; k < 8 && pos < s.length; k++) {
+            const c = s.charCodeAt(pos++), x = c < 128 ? _UIDZ_VAL[c] : -1;
+            if (x < 0) return -1;
+            v += (x & 31) * mul;
+            if (!(x & 32)) return v;
+            mul *= 32;
+        }
+        return -1;
+    };
+    while (pos < s.length && n < max) {
+        const zf = get();
+        if (zf < 0) break;
+        const z = Math.floor(zf / 2), run = zf % 2 ? get() + 1 : 0;
+        if (run < 0) break;
+        const id = prev + (z % 2 === 0 ? z / 2 : -(z + 1) / 2);
+        if (!(id >= 0 && id <= 0x7fffffff)) break;
+        n = Math.min(max, n + 1 + run);
+        prev = id + run;
+    }
+    return n;
+}
 // Malformed or oversized input decodes to at most `max` ids (others' actions).
 function actionIdsDecode(s, max = ACTION_MAX_UNIT_IDS) {
     const out = [];
@@ -3483,19 +3518,51 @@ function sanitizeAction(raw) {
 // same actions: the backlog is state (snapshotted and hashed with the
 // globals). One player's burst, or several players' at once, never makes a
 // tick of more than ~10 ms of actions (both teams' bursts in a chaos
-// scenario were 10-22 ms on one tick). An action always runs whole.
+// scenario were 10-22 ms on one tick). An action runs whole, but for unit
+// orders whose units are each handled alone (ACTION_SPLIT_UNITS: an attack
+// order paths every unit, ~5 us each; 20k units were ~90 ms): over the
+// budget left, the units it pays for now (at least ACTION_SPLIT_MIN_UNITS),
+// the rest as the same order at the backlog's front.
 const ACTION_BUDGET_PER_TICK = 200;
+const ACTION_SPLIT_UNITS = new Set(['attack', 'attackBuilding', 'hold', 'stop', 'killUnit']);
+const ACTION_SPLIT_MIN_UNITS = 64;
+// [now, later] of a unit order over `budget`, or null (it runs whole).
+function _actionSplit(raw, budget) {
+    if (!raw || !ACTION_SPLIT_UNITS.has(raw.action)) return null;
+    const cost = _actionCost(raw);
+    if (cost <= budget) return null;
+    const ids = Array.isArray(raw.unitIds) ? raw.unitIds : (typeof raw.uidz === 'string' ? actionIdsDecode(raw.uidz) : null);
+    if (!ids || ids.length <= ACTION_SPLIT_MIN_UNITS) return null;
+    const base = _actionCost({ action: raw.action, unitIds: [] }), per = (cost - base) / ids.length;
+    const k = Math.max(ACTION_SPLIT_MIN_UNITS, Math.floor((budget - base) / Math.max(1e-9, per)));
+    if (k >= ids.length) return null;
+    const part = from => { const o = {}; for (const key in raw) if (key !== 'uidz' && key !== 'unitIds' && key !== 'unitIdSet') o[key] = raw[key]; o.unitIds = from; return o; };
+    return [part(ids.slice(0, k)), part(ids.slice(k))];
+}
 let _actionBacklog = [], _actionBudgetLeft = ACTION_BUDGET_PER_TICK;
 function _actionCost(raw) {
     if (!raw || typeof raw !== 'object') return 1;
-    const ids = Array.isArray(raw.unitIds) ? raw.unitIds.length : (typeof raw.uidz === 'string' ? raw.uidz.length : 0);
+    const ids = Array.isArray(raw.unitIds) ? raw.unitIds.length : (typeof raw.uidz === 'string' ? actionIdsCount(raw.uidz) : 0);
     const coords = Array.isArray(raw.coords) ? raw.coords.length / 2 : (Array.isArray(raw.towerCoords) ? raw.towerCoords.length : 0);
     const count = Math.max(1, Math.min(ACTION_MAX_COUNT, Math.floor(Number(raw.count) || 1)));
+    // (Measured in a chaos scenario: a unit of cost ~0.05 ms. Per kind, the
+    // mega scenario's averages (ACTSPLIT): an attack order ~5 us a unit,
+    // hold and stop ~1.5 us, a tower's target or a rally ~0.5 us.)
     switch (raw.action) {
         case 'move': case 'attackMove': return 2 + ids / 400;
-        case 'queueResearch': return 1 + count;
+        case 'attack': case 'attackBuilding': return 2 + ids / 12;
+        case 'hold': case 'stop': return 1 + ids / 40;
+        case 'killUnit': return 1 + ids / 300;
+        case 'towerTarget': return 1 + coords / 100;
+        case 'setRallyMany': return 1 + coords / 100;
+        // (A task put in the queue's middle: its stat's tasks made again, ~0.2 ms.)
+        case 'queueResearch': return 1 + (raw.insertAt !== undefined && raw.insertAt !== null ? 4 : 1) * count;
+        // (The moved or removed tasks' stats made again: ~0.2-0.4 ms with 900
+        // tasks queued.)
+        case 'dequeueResearch': case 'moveResearch': case 'reorderResearch': return 8;
+        case 'setBoost': return 15;
         case 'place': return count;
-        default: return 1 + ids / 1000 + coords / 1000;
+        default: return 1 + ids / 1000 + coords / 200;
     }
 }
 function _processRawAction(raw, playerId) {
@@ -3509,7 +3576,14 @@ function _actionBacklogDrain() {
     if (!_actionBacklog.length || _actionBudgetLeft <= 0) return;
     let i = 0;
     for (; i < _actionBacklog.length && _actionBudgetLeft > 0; i++) {
-        const e = _actionBacklog[i];
+        const e = _actionBacklog[i], split = _actionSplit(e[1], _actionBudgetLeft);
+        if (split) {
+            // (Its units paid for now; the rest stays first.)
+            _actionBudgetLeft = 0;
+            e[1] = split[1];
+            _processRawAction(split[0], e[0]);
+            break;
+        }
         _actionBudgetLeft -= _actionCost(e[1]);
         _processRawAction(e[1], e[0]);
     }
@@ -3523,6 +3597,8 @@ function processActions(actions, playerId) {
     _actionBacklogDrain();
     for (let raw of actions) {
         if (_actionBacklog.length || _actionBudgetLeft <= 0) { _actionBacklog.push([playerId, raw]); continue; }
+        const split = _actionSplit(raw, _actionBudgetLeft);
+        if (split) { _actionBudgetLeft = 0; _actionBacklog.push([playerId, split[1]]); _processRawAction(split[0], playerId); continue; }
         _actionBudgetLeft -= _actionCost(raw);
         _processRawAction(raw, playerId);
     }
@@ -3541,15 +3617,33 @@ function actionBacklogRestore(rows) {
     _actionBacklog = Array.isArray(rows) ? rows.filter(r => Array.isArray(r) && r.length === 2).map(r => [r[0] | 0, r[1]]) : [];
     _actionBudgetLeft = ACTION_BUDGET_PER_TICK;
 }
-// (The state hash's share: each waiting action's player, kind and size.)
+// (The state hash's share: each waiting action's player and content, in
+// order (its kind and size alone, summed, missed a changed destination and
+// a changed order: audit 2026-10-15). Each action's digest is made once.)
+const _actionDigests = new WeakMap();
+function _actionDigest(raw) {
+    if (!raw || typeof raw !== 'object') return 0;
+    let d = _actionDigests.get(raw);
+    if (d !== undefined) return d;
+    // (Its own fields as a snapshot carries them: not the ones processing
+    // adds (_..., unitIdSet), which a restored copy lacks.)
+    let h = 2166136261 | 0;
+    for (const k of Object.keys(raw).sort()) {
+        if (k.charCodeAt(0) === 95 || k === 'unitIdSet') continue;
+        const v = raw[k];
+        if (typeof v === 'function' || v === undefined) continue;
+        h = _lsHashStr(h, k);
+        h = _lsHashValue(Math.imul(h ^ 58, 16777619), v);
+    }
+    d = h | 0;
+    _actionDigests.set(raw, d);
+    return d;
+}
 function actionBacklogChecksum() {
     let h = Math.imul(_actionBacklog.length + 1, 2654435761) | 0;
     for (const [p, raw] of _actionBacklog) {
-        const s = raw && typeof raw.action === 'string' ? raw.action : '';
-        let c = p | 0;
-        for (let i = 0; i < s.length; i++) c = Math.imul(c ^ s.charCodeAt(i), 16777619);
-        c = Math.imul(c ^ (Math.round(_actionCost(raw) * 1000) | 0), 16777619);
-        h = (h + Math.imul(c ^ (c >>> 15), 2246822519)) | 0;
+        h = Math.imul(h ^ (p | 0), 16777619);
+        h = Math.imul(h ^ _actionDigest(raw), 2246822519);
     }
     return h | 0;
 }
@@ -3581,11 +3675,16 @@ let _orderSeq = 0, _unitOrderSeq = [], _orderBySeq = new Map();
 // The last entry looked up is kept: a new order's units mostly come from
 // one earlier order.)
 let _orderSupSeq = 0, _orderSupEntry = null;
-function _orderStampSuperseded(old) {
+function _orderStampSuperseded(old, id) {
     if (!(old > 0)) return;
     if (old !== _orderSupSeq) { _orderSupSeq = old; _orderSupEntry = _orderBySeq.get(old) || null; }
-    if (_orderSupEntry) _orderSupEntry.live--;
+    if (_orderSupEntry) { _orderSupEntry.live--; _orderSupEntry.sum = (_orderSupEntry.sum - _orderIdH(id)) | 0; }
 }
+// (A queued unit's share of its entry's sum: the entry's units still to
+// apply, order-free, kept as they are applied or ordered again; the state
+// hash reads it, orderQueueChecksum.)
+function _orderIdH(id) { const x = Math.imul((id | 0) ^ 0x5bd1e995, 2654435761); return (x ^ (x >>> 15)) | 0; }
+function _orderIdsSum(ids) { let s = 0; for (let i = 0; i < ids.length; i++) s = (s + _orderIdH(ids[i])) | 0; return s; }
 // (Per player: { a: Int32Array by unit id, m: Map for ids past it }.)
 function _unitOrderSeqOf(p) { return _unitOrderSeq[p] || (_unitOrderSeq[p] = { a: new Int32Array(1 << 12), m: null }); }
 function _orderStampSet(T, id, seq) {
@@ -3625,12 +3724,12 @@ function _actionDistinctIds(a) {
 function _dropQueuedOrderUnits(idSet, playerId) {
     if (!_orderQueue.length || !idSet || !idSet.size) return;
     const T = _unitOrderSeqOf(playerId), seq = _orderSeqNext();
-    for (const id of idSet) { _orderStampSuperseded(_orderStampGet(T, id)); _orderStampSet(T, id, seq); }
+    for (const id of idSet) { _orderStampSuperseded(_orderStampGet(T, id), id); _orderStampSet(T, id, seq); }
 }
 // An order's ids made their units' latest order (seq) in T (the entries
 // ordering them before lose them).
 function _orderStampIds(T, ids, seq) {
-    for (let i = 0; i < ids.length; i++) { const id = ids[i]; _orderStampSuperseded(_orderStampGet(T, id)); _orderStampSet(T, id, seq); }
+    for (let i = 0; i < ids.length; i++) { const id = ids[i]; _orderStampSuperseded(_orderStampGet(T, id), id); _orderStampSet(T, id, seq); }
 }
 function _queueGroupMoveOrder(a, playerId, cmd) {
     // (Each id once, in the order given (sanitizeAction); the units' latest
@@ -3638,7 +3737,7 @@ function _queueGroupMoveOrder(a, playerId, cmd) {
     // trace.)
     const ids = Float64Array.from(_actionDistinctIds(a)), seq = _orderSeqNext(), T = _unitOrderSeqOf(playerId);
     _orderStampIds(T, ids, seq);
-    const e = { playerId, cmd, action: a.action, targetX: a.targetX, targetY: a.targetY, ids, next: 0, seq, live: ids.length };
+    const e = { playerId, cmd, action: a.action, targetX: a.targetX, targetY: a.targetY, ids, next: 0, seq, live: ids.length, sum: _orderIdsSum(ids) };
     _orderQueue.push(e); _orderBySeq.set(seq, e);
     // (Its first slice at gameTick's start, the same tick (runQueuedOrders,
     // within the tick's order budget): applied here, a big order's 2500
@@ -3665,7 +3764,7 @@ function runQueuedOrders() {
             const T = _unitOrderSeqOf(p), ids = [];
             while (e.live > 0 && e.next < e.ids.length && ids.length < left) {
                 const id = e.ids[e.next++];
-                if (_orderStampGet(T, id) === e.seq) { ids.push(id); _orderStampSet(T, id, 0); e.live--; }
+                if (_orderStampGet(T, id) === e.seq) { ids.push(id); _orderStampSet(T, id, 0); e.live--; e.sum = (e.sum - _orderIdH(id)) | 0; }
             }
             _orderBudgets[p] = _orderBudgetOf(p) - ids.length; _orderAllLeft -= ids.length;
             // (Finished: the player's next order may run in this round.)
@@ -3698,9 +3797,30 @@ function orderQueueRestore(rows) {
     for (const r of rows || []) {
         const ids = Float64Array.from(Array.isArray(r[5]) ? r[5] : []), seq = _orderSeqNext(), T = _unitOrderSeqOf(r[0]);
         _orderStampIds(T, ids, seq);
-        const e = { playerId: r[0], cmd: r[1], action: r[2], targetX: r[3], targetY: r[4], ids, next: 0, seq, live: ids.length };
+        const e = { playerId: r[0], cmd: r[1], action: r[2], targetX: r[3], targetY: r[4], ids, next: 0, seq, live: ids.length, sum: _orderIdsSum(ids) };
         _orderQueue.push(e); _orderBySeq.set(seq, e);
     }
+}
+
+// (The state hash's share: each queued order in turn, its player, kind,
+// target, and its units still to apply (their count and order-free sum: the
+// same for a peer restored from a snapshot, which carries those alone); the
+// tick's budgets. It was not hashed: a pending move order showed nowhere.)
+function orderQueueChecksum() {
+    // (Entries with none left are passed over: a restored peer has none.)
+    let h = 2654435761 | 0;
+    for (const e of _orderQueue) {
+        if (!(e.live > 0)) continue;
+        h = Math.imul(h ^ (e.playerId | 0), 16777619);
+        h = Math.imul(h ^ (e.cmd | 0), 16777619);
+        h = _lsHashStr(h, String(e.action || ''));
+        h = _lsHashValue(h, e.targetX); h = _lsHashValue(h, e.targetY);
+        h = Math.imul(h ^ (e.live | 0), 16777619);
+        h = Math.imul(h ^ (e.sum | 0), 2246822519);
+    }
+    h = Math.imul(h ^ (_orderAllLeft | 0), 16777619);
+    for (let p = 0; p < _orderBudgets.length; p++) if (_orderBudgets[p] !== undefined && _orderBudgets[p] !== null) h = Math.imul(h ^ ((p + 1) * 65599 + (_orderBudgets[p] | 0)), 16777619);
+    return h | 0;
 }
 
 function processAction(a, playerId) {
@@ -3872,7 +3992,7 @@ function processAction(a, playerId) {
                         p.researchTask = ordered[0] || null;
                         p.researchQueue.length = 0;
                         for (let k = 1; k < ordered.length; k++) p.researchQueue.push(ordered[k]);
-                        rebasePlayerResearchQueueState(playerId);
+                        rebasePlayerResearchQueueState(playerId, [task]);
                     } else {
                         p.researchQueue.push(task);
                     }
@@ -4014,6 +4134,7 @@ function processAction(a, playerId) {
             if (r) {
                 let p = ensurePlayerResearchQueueState(playerId);
                 let count = Math.max(1, Math.floor(a.count || 1));
+                const touched = [];
                 for (let i = 0; i < count; i++) {
                     let idx = -1;
                     if (a.kind && a.key && a.statKey) {
@@ -4029,18 +4150,23 @@ function processAction(a, playerId) {
                     }
 
                     if (idx >= 0) {
-                        p.researchQueue.splice(idx, 1);
+                        const [gone] = p.researchQueue.splice(idx, 1);
+                        if (gone && !_researchTaskOfStats(gone, touched)) touched.push(gone);
                         continue;
                     }
 
                     if (p.researchTask) {
                         if (!a.kind || !a.key || !a.statKey || (p.researchTask.kind === a.kind && p.researchTask.key === a.key && p.researchTask.statKey === a.statKey)) {
+                            if (!_researchTaskOfStats(p.researchTask, touched)) touched.push(p.researchTask);
                             p.researchTask = null;
                             tryAdvancePlayerResearchTask(playerId);
+                            // (The next task, now active, may have finished
+                            // its stat: its stat made again too.)
+                            if (p.researchTask && !_researchTaskOfStats(p.researchTask, touched)) touched.push(p.researchTask);
                         }
                     }
                 }
-                rebasePlayerResearchQueueState(playerId);
+                rebasePlayerResearchQueueState(playerId, touched);
                 tryAdvancePlayerResearchTask(playerId);
             }
         } else if (a.action === 'reorderResearch') {
@@ -4081,7 +4207,7 @@ function processAction(a, playerId) {
                 p.researchTask = ordered[0] || null;
                 p.researchQueue.length = 0;
                 for (let i = 1; i < ordered.length; i++) p.researchQueue.push(ordered[i]);
-                rebasePlayerResearchQueueState(playerId);
+                rebasePlayerResearchQueueState(playerId, [task]);
                 tryAdvancePlayerResearchTask(playerId);
             }
         } else if (a.action === 'moveResearch') {
@@ -4101,7 +4227,7 @@ function processAction(a, playerId) {
                 p.researchTask = ordered[0] || null;
                 p.researchQueue.length = 0;
                 for (let i = 1; i < ordered.length; i++) p.researchQueue.push(ordered[i]);
-                rebasePlayerResearchQueueState(playerId);
+                rebasePlayerResearchQueueState(playerId, task ? [task] : null);
                 tryAdvancePlayerResearchTask(playerId);
             }
         } else if (a.action === 'markSalvage') {
@@ -4766,8 +4892,8 @@ function startGame() {
         }
         // (And the whole population's slots from the start: no growth later,
         // see simUnitPopulationSlots.)
-        simUnitStateReserve(Math.max(Math.min(perTeam, getConfiguredMaxPop()) * teams.length,
-            typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0));
+        simUnitStateReserve(Math.min(perTeam, getConfiguredMaxPop()) * teams.length,
+            typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0);
     }
     for (let pid of (startGameSkipStarters ? [] : teams)) {
         let pos = teamSpawnPos[pid];
@@ -4971,17 +5097,25 @@ function computeTickPacketChecksum(tick, peerId, teamId, actions) {
     });
 }
 
+// The packets of a bundle run in its order: peer ids by UTF-16 code units,
+// the same on every peer (localeCompare's order is the locale's: peers of
+// different languages sorted, and checked, differently).
+function tickPacketOrder(a, b) {
+    const x = String(a.peerId), y = String(b.peerId);
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+// (In the bundle's order, the order its commands run in: sorted here, two
+// packets swapped kept the checksum and changed what happened.)
 function computeTickBundleChecksum(tick, packets, flush = 0) {
-    let sorted = (Array.isArray(packets) ? packets : [])
+    let list = (Array.isArray(packets) ? packets : [])
         .map(p => ({
             tick: Math.floor(Number(p.tick) || 0),
             peerId: String(p.peerId || ''),
             teamId: Math.floor(Number(p.teamId) || 0),
             actions: Array.isArray(p.actions) ? p.actions : [],
             checksum: String(p.checksum || '')
-        }))
-        .sort((a, b) => a.peerId.localeCompare(b.peerId));
-    let body = { tick: Math.floor(tick), packets: sorted };
+        }));
+    let body = { tick: Math.floor(tick), packets: list };
     // A resync tick: every peer drops its history caches before running it.
     if (flush) body.flush = 1;
     return hashStableLockstep(body);
@@ -5169,7 +5303,14 @@ function packTickBundleForWire(b) {
     }
     let w = { t: b.tick, c: b.combinedChecksum, p };
     if (b.flush) w.f = 1;
+    if (matchStartSessionId) w.m = matchStartSessionId;
     return w;
+}
+// Tick messages carry their match (its session id, w.m / m): a rematch
+// counts its ticks from 0 again, and a late bundle of the previous match was
+// taken as this one's (divergence). Untagged ones (no session) pass.
+function netMatchTagOk(m) {
+    return m === undefined || m === null || String(m) === String(matchStartSessionId || '');
 }
 
 // A repeated earlier bundle: when no one sent a command in it and the same
@@ -5183,6 +5324,7 @@ function packRepeatedTickBundleForWire(b, current) {
     if (!same) return packTickBundleForWire(b);
     let w = { t: b.tick, c: b.combinedChecksum, s: 1 };
     if (b.flush) w.f = 1;
+    if (matchStartSessionId) w.m = matchStartSessionId;
     return w;
 }
 
@@ -5289,7 +5431,7 @@ function sendLocalTickPacketWindow(tick, force = false) {
         n++;
     }
     try {
-        hostConn.send({ type: 'TICK_PACKETS', packets: batch });
+        hostConn.send({ type: 'TICK_PACKETS', packets: batch, m: matchStartSessionId || undefined });
         netCounters.messagesOut++;
     } catch { }
 }
@@ -5315,7 +5457,7 @@ function resendLocalTickPackets(fromTick, count) {
     }
     if (batch.length === 0) return;
     netCounters.packetsResent += batch.length;
-    try { hostConn.send({ type: 'TICK_PACKETS', packets: batch }); } catch { }
+    try { hostConn.send({ type: 'TICK_PACKETS', packets: batch, m: matchStartSessionId || undefined }); } catch { }
 }
 
 function handleIncomingTickPacket(conn, data) {
@@ -5326,6 +5468,7 @@ function handleIncomingTickPacket(conn, data) {
 
 function handleIncomingTickPackets(conn, data) {
     if (!isHost) return;
+    if (!data || !netMatchTagOk(data.m)) { netCounters.otherMatchDropped = (netCounters.otherMatchDropped | 0) + 1; return; }
     let list = data && Array.isArray(data.packets) ? data.packets : [];
     for (let packet of list) _hostAcceptTickPacket(conn, packet);
     _hostAdvanceBundles(performance.now());
@@ -5347,6 +5490,7 @@ function _hostAcceptTickPacket(conn, rawPacket) {
     if (packet.tick < currentTick || lockstepCommittedByTick[packet.tick] || lockstepBundleByTick[packet.tick]) {
         let late = lockstepHostLateByTick[packet.tick];
         if (late && late.has(connPeerId)) _hostCarryLatePacket(connPeerId, packet, late);
+        else if (resyncHostIsJoining(connPeerId)) _hostCarryJoiningCommands(connPeerId, packet);
         return;
     }
     packet.teamId = Math.floor(Number(packet.teamId) || 0);
@@ -5408,6 +5552,28 @@ function _hostCarryLatePacket(peerId, rawPacket, late) {
     netCounters.lateCommandsCarried = (netCounters.lateCommandsCarried || 0) + packet.actions.length;
 }
 
+// Host: commands of a peer the match is being reloaded on (resyncHostIsJoining:
+// left out of the bundles until it says it is live). Sent before it knew,
+// they were dropped; carried (each id once: packets are resent), they run
+// in its first packets once it is live (_hostWithCarriedCommands).
+function _hostCarryJoiningCommands(peerId, rawPacket) {
+    let packet = rawPacket;
+    if (!packet || typeof packet !== 'object' || !Array.isArray(packet.actions) || packet.actions.length === 0) return;
+    if (String(packet.peerId || '') !== peerId) return;
+    packet.actions = packet.actions.map(a => normalizeLockstepPayload(a));
+    if (!validateTickPacket(packet)) return;
+    _hostSanitizeTickPacket(packet);
+    let carry = lockstepHostCarryByPeer[peerId] || (lockstepHostCarryByPeer[peerId] = []);
+    let seen = carry._ids || (carry._ids = new Set());
+    for (let a of packet.actions) {
+        let id = a && a.netId;
+        if (id && seen.has(id)) continue;
+        if (id) seen.add(id);
+        carry.push(a);
+        netCounters.lateCommandsCarried = (netCounters.lateCommandsCarried || 0) + 1;
+    }
+}
+
 // Host: an empty packet for a guest whose own did not come in time.
 function _hostLatePlaceholderPacket(tick, peerId) {
     let setup = computeTeamSetupFromLobby();
@@ -5467,6 +5633,9 @@ function maybeBuildHostBundle(tick, participants = null, sealLate = false) {
 
     let ids = participants || getActiveMatchPeerIds();
     let pmap = lockstepHostPacketsByTick[t];
+    // (A peer the match is being reloaded on is not in the bundles: its
+    // commands here are carried to its first ticks once it is live.)
+    for (let pid in pmap) if (pid !== myPeerId && !ids.includes(pid) && resyncHostIsJoining(pid)) { _hostCarryJoiningCommands(pid, pmap[pid]); delete pmap[pid]; }
     let missing = null;
     for (let pid of ids) {
         if (pmap[pid]) continue;
@@ -5484,7 +5653,7 @@ function maybeBuildHostBundle(tick, participants = null, sealLate = false) {
     }
     for (let pid in lockstepHostCarryByPeer) if (pmap[pid]) pmap[pid] = _hostWithCarriedCommands(t, pid, pmap[pid]);
 
-    let packets = ids.map(pid => pmap[pid]).sort((a, b) => String(a.peerId).localeCompare(String(b.peerId)));
+    let packets = ids.map(pid => pmap[pid]).sort(tickPacketOrder);
     let flush = resyncHostFlushTicks.has(t) ? 1 : 0;
     let combinedChecksum = computeTickBundleChecksum(t, packets, flush);
     let bundle = { tick: t, packets, combinedChecksum };
@@ -5510,7 +5679,7 @@ function buildEmptyTickBundle(tick, participants) {
         let p = { tick, peerId, teamId, actions: [] };
         p.checksum = computeTickPacketChecksum(tick, peerId, teamId, p.actions);
         return p;
-    }).sort((a, b) => String(a.peerId).localeCompare(String(b.peerId)));
+    }).sort(tickPacketOrder);
     return { tick, packets, combinedChecksum: computeTickBundleChecksum(tick, packets, 0) };
 }
 
@@ -5601,7 +5770,7 @@ function lockstepAdoptAutoTick(tick, dueAbs) {
         if (bundle) _guestResendIfSealedWithout(tick, bundle, hostConn);
         else if (hostConn) {
             let own = lockstepLocalPacketByTick[tick] || ((localInputBuffer[tick] || []).length > 0 ? buildLocalTickPacket(tick) : null);
-            if (own && Array.isArray(own.actions) && own.actions.length > 0) { try { hostConn.send({ type: 'TICK_PACKETS', packets: [own] }); netCounters.messagesOut++; } catch { } }
+            if (own && Array.isArray(own.actions) && own.actions.length > 0) { try { hostConn.send({ type: 'TICK_PACKETS', packets: [own], m: matchStartSessionId || undefined }); netCounters.messagesOut++; } catch { } }
         }
     }
     netCounters.autoTicks = (netCounters.autoTicks || 0) + 1;
@@ -5714,6 +5883,8 @@ function _hostRequestMissingPackets(t, now) {
 
 function handleIncomingTickBundle(conn, data) {
     if (isHost) return;
+    // (Another match's: dropped, its hashes too.)
+    if (!data || !netMatchTagOk(data.w ? data.w.m : data.m)) { netCounters.otherMatchDropped = (netCounters.otherMatchDropped | 0) + 1; return; }
     if (data && data.h) resyncGuestReceiveHashes(data.h);
     if (data && Number.isFinite(data.d)) netMatchInputDelay = Math.max(0, Math.min(NET_MAX_INPUT_DELAY_TICKS, Math.floor(data.d)));
     if (data && Number.isFinite(data.pace) && data.pace >= TICK_MS) netMatchTickMs = data.pace;
@@ -5728,7 +5899,7 @@ function handleIncomingTickBundle(conn, data) {
     if (Array.isArray(data.prev)) {
         for (let w of data.prev) {
             let t = Math.floor(Number(w && w.t));
-            if (!(t >= currentTick) || (lockstepCommittedByTick[t] && lockstepBundleByTick[t]) || lockstepPendingBundleByTick[t]) continue;
+            if (!w || !netMatchTagOk(w.m) || !(t >= currentTick) || (lockstepCommittedByTick[t] && lockstepBundleByTick[t]) || lockstepPendingBundleByTick[t]) continue;
             _guestAcceptBundle(unpackTickBundleFromWire(w, bundle), !!data.c);
         }
     }
@@ -6149,7 +6320,7 @@ function _guestResendIfSealedWithout(t, bundle, hostConn) {
     let sealed = (bundle.packets || []).find(p => p && String(p.peerId) === String(myPeerId));
     let ids = new Set(((sealed && sealed.actions) || []).map(a => a && a.netId));
     if (own.actions.every(a => a && ids.has(a.netId))) return;
-    try { hostConn.send({ type: 'TICK_PACKETS', packets: [own] }); netCounters.messagesOut++; } catch { }
+    try { hostConn.send({ type: 'TICK_PACKETS', packets: [own], m: matchStartSessionId || undefined }); netCounters.messagesOut++; } catch { }
 }
 
 // Guest: the next tick has not arrived. On a live channel it is only late,

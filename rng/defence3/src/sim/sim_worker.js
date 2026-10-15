@@ -665,7 +665,9 @@ function _simRequest(msg) {
         case 'applyPatch': {
             const presenting=!!_simPresentation;
             if(presenting) simPresentationStop();
-            snapDecodeState(JSON.parse(msg.args.text), { collectChanges: !msg.args.full });
+            // (The result: whether the decoder took it; null when it refused
+            // it (another format or rules): nothing changed then.)
+            result = !!snapDecodeState(JSON.parse(msg.args.text), { collectChanges: !msg.args.full });
             visibilityCacheTick = -1;
             updateVisibility(localPlayerId);
             if(presenting) simPresentationStart();

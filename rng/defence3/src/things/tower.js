@@ -6,7 +6,11 @@
 // on beam tiles (one look-up each); the structures on a beam's tiles are
 // listed with it. Units' records come every LASER_REPORT_TICKS ticks, summed.
 const LASER_REPORT_TICKS = 4;
-const _laserMap = { stale: true, head: null, cap: 0, next: null, beam: null, bown: null, bdmg: null, hit: null, count: null, list: null, beams: [], aTowers: [], set: [] };
+// Made again when stale: a link changed (recalculateLaserConnections), a
+// laser's damage did (laserCheck), or a structure came or went on a beam's
+// tile (the tile journal, laserBeamsTick): it lists the structures there.
+// From the lasers alone, in tile order (_laserTowerList).
+const _laserMap = { stale: true, head: null, cap: 0, next: null, beam: null, bown: null, bdmg: null, hit: null, count: null, list: null, beams: [], aTowers: [], set: [], cursor: { epoch: -1, pos: 0 } };
 function laserMapDirty() { _laserMap.stale = true; }
 function _laserMapBuild() {
     const M = _laserMap, W = GRID_W, H = GRID_H;
@@ -16,7 +20,7 @@ function _laserMapBuild() {
     M.set = [];
     for (const t of M.aTowers) t.laserState = 0;
     const beams = [], aTowers = [], ent = [];
-    for (const t of towers) {
+    for (const t of (typeof _laserTowerList === 'function' ? _laserTowerList() : towers)) {
         if (t.type !== 'laser' || !t.connectedLasers || !t.connectedLasers.length || t.underConstruction || !(t.energy > 0)) continue;
         t._laserDmgSeen = t.currentStats ? t.currentStats.damage : 0;
         let isA = false;
@@ -54,6 +58,12 @@ function _laserMapBuild() {
 function laserBeamsTick() {
     if (typeof ensureLaserConnections === 'function') ensureLaserConnections();
     const M = _laserMap;
+    // (Structures placed or removed since: on a beam's tile, the map again.)
+    if (typeof tileEntityChangesSince === 'function') {
+        const ch = tileEntityChangesSince(M.cursor);
+        if (ch === null) M.stale = true;
+        else if (!M.stale && M.set.length && M.head) for (let i = 0; i < ch.length; i++) if (M.head[ch[i]] !== -1) { M.stale = true; break; }
+    }
     if (M.stale) _laserMapBuild();
     const nb = M.beams.length;
     if (!nb) return;
@@ -101,12 +111,11 @@ function laserBeamsTick() {
     for (let b = 0; b < nb; b++) if (M.hit[b]) { M.beams[b].a.laserState = 1; lit = true; }
     if (lit && (gameTime % 40) === 0) { const bm = M.beams[0]; playSound('laser_tick', bm.a.x, bm.a.y); }
 }
-// At a resync, on every peer: the map made again (its structures by object)
-// and the units' unreported sums dropped.
+// At a resync, on every peer: the map made again (its structures by
+// object), the same way on every peer. (The units' unreported sums are
+// state, kept: unit.js _laserPending.)
 function laserBeamsReset() {
-    _laserMap.stale = true;
-    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
-    if (S) S.columns.lzAcc.fill(0);
+    _laserMap.stale = true; _laserMap.cursor = { epoch: -1, pos: 0 };
 }
 function _getTowerAttackRangeArea(tower) {
     return Math.max(0, Number(tower && tower.currentStats && tower.currentStats.attackRangeArea) || 0);
@@ -355,8 +364,10 @@ class Tower {
     // are made: updateStats).
     laserCheck() {
         if (this.type !== 'laser') return;
-        if (this._laserLinkLevel !== this.effectiveLevel) { if (typeof markLaserConnectionsDirty === 'function') markLaserConnectionsDirty(); if (typeof laserMapDirty === 'function') laserMapDirty(); }
-        else if (this.currentStats && this._laserDmgSeen !== this.currentStats.damage && this.connectedLasers && this.connectedLasers.length && typeof laserMapDirty === 'function') laserMapDirty();
+        // (Its row and column relinked; the beam map follows if a link
+        // changed, or its damage did.)
+        if (this._laserLinkLevel !== this.effectiveLevel && typeof markLaserConnectionsDirty === 'function') markLaserConnectionsDirty(this.gx, this.gy);
+        if (this.currentStats && this._laserDmgSeen !== this.currentStats.damage && this.connectedLasers && this.connectedLasers.length && typeof laserMapDirty === 'function') laserMapDirty();
     }
 
     shoot() {

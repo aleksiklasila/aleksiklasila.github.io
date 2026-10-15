@@ -1030,14 +1030,20 @@ const WSW_BUILD = 1, WSW_SALVAGE = 2, WSW_QUEUE = 4, WSW_RESEARCH = 8, WSW_AUTOR
 const WSW_SWEEP = 90, WSW_MAXOWN = 16;
 let _wsw = null, _wswDirty = [], _wswResvDirty = [];
 const _wswResMax = new Map();
-// Construction done (the collectors' groups are made again; the grid's tile).
+// Construction done (the collectors' groups of that building type are made
+// again; the grid's tile). (Any completion made every group again: towers
+// completed every few ticks of the mega scenario, ~2-11 ms each time.)
 let _wsBuiltVer = 0;
+const _wsBuiltByType = new Map();
+function _wsBuiltVerOf(type) { return _wsBuiltVer + '/' + (_wsBuiltByType.get(type) | 0); }
 function workSiteDirty(gx, gy) {
     if (_wsw && gx >= 0 && gy >= 0 && gx < _wsw.w && gy < _wsw.h) _wswDirty.push(gy * _wsw.w + gx);
 }
 function workSiteBuilt(item) {
-    _wsBuiltVer = (_wsBuiltVer + 1) | 0;
-    if (item) workSiteDirty(item.gx, item.gy);
+    // (A completion without its building: every group again.)
+    if (!item || typeof item.type !== 'string') { _wsBuiltVer = (_wsBuiltVer + 1) | 0; return; }
+    _wsBuiltByType.set(item.type, ((_wsBuiltByType.get(item.type) | 0) + 1) | 0);
+    workSiteDirty(item.gx, item.gy);
 }
 // (As _isBuilderWorkTarget without its side effect, and the others' tests;
 // the common cases first: no upgrade due while the effective level is not
@@ -1237,7 +1243,7 @@ function _wsCollectorGroup(cfg) {
     let G = _wsGroups.get(key);
     if (!G) { G = { id: _wsGroups.size, key, sig: null, arrays: {}, objs: [], types: [] }; _wsGroups.set(key, G); }
     const mines = _getResourceCollectorMineArray(cfg) || [], farms = _cellItemsOfType(cfg.farmKey);
-    const sig = [mines.length, cfg.supportsDropTarget ? droppedItemsVersion : -1, farms.length, typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion : -1, collectorSpawners.length, _wsBuiltVer];
+    const sig = [mines.length, cfg.supportsDropTarget ? droppedItemsVersion : -1, farms.length, typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion : -1, collectorSpawners.length, _wsBuiltVerOf(cfg.farmKey) + ':' + _wsBuiltVerOf(cfg.collectorBuildingKey)];
     if (G.sig && G.mines === mines && G.farms === farms && G.spl === collectorSpawners && G.sig.every((v, i) => v === sig[i])) return G;
     G.sig = sig; G.mines = mines; G.farms = farms; G.spl = collectorSpawners;
     const spawners = [];
@@ -3903,6 +3909,32 @@ function _spawnerScanTable(list) {
     _spawnerScanTables.set(list, t);
     return t;
 }
+// A tile's SPAWNER_NEAR_K nearest of a scan table by tile distance, then
+// row, column, then id (as _findClosestSpawner orders them; a tie of the
+// first three only on one tile), cached per tile.
+const SPAWNER_NEAR_K = 4, SPAWNER_NEAR_MAX_TILES = 1 << 16;
+function _spawnerNearOf(T, key, ux, uy, list) {
+    let M = T.near;
+    if (!M) M = T.near = new Map();
+    let near = M.get(key);
+    if (near) return near;
+    if (M.size >= SPAWNER_NEAR_MAX_TILES) M.clear();
+    const K = SPAWNER_NEAR_K, GX = T.gx, GY = T.gy, bi = new Int32Array(K), bd = new Float64Array(K).fill(Infinity);
+    let m = 0;
+    for (let i = 0, n = T.n; i < n; i++) {
+        const sx = GX[i], sy = GY[i];
+        // (One key for the order: distance, then row, then column.)
+        const d = ((Math.abs(sx - ux) + Math.abs(sy - uy)) * 65536 + (sy + 16384)) * 65536 + (sx + 16384);
+        if (m === K && d >= bd[K - 1]) continue;
+        if (m === K && d === bd[K - 1] && !((Number(list[i] && list[i].id) || 0) < (Number(list[bi[K - 1]] && list[bi[K - 1]].id) || 0))) continue;
+        let j = m < K ? m++ : K - 1;
+        while (j > 0 && (bd[j - 1] > d || (bd[j - 1] === d && (Number(list[i] && list[i].id) || 0) < (Number(list[bi[j - 1]] && list[bi[j - 1]].id) || 0)))) { bd[j] = bd[j - 1]; bi[j] = bi[j - 1]; j--; }
+        bd[j] = d; bi[j] = i;
+    }
+    near = m < K ? bi.subarray(0, m) : bi;
+    M.set(key, near);
+    return near;
+}
 function _findClosestSpawner(u, type) {
     // (The owner's own: the others never pass the test below.)
     let list = _ownedSpawnersOfType(type, u && u.owner);
@@ -3914,6 +3946,18 @@ function _findClosestSpawner(u, type) {
     // it replaced walked thousands of empty buckets from a far mine, ~100 us
     // a collector's return at 200k units.)
     const T = _spawnerScanTable(list), GX = T.gx, GY = T.gy, owner = u.owner;
+    // (The tile's nearest few by that order, from the tiles alone, kept
+    // with the table (it is made anew when the list changes): the first of
+    // them that works now is the answer; none of them: the whole scan.
+    // Collectors return from the same mines, healers' takes come in
+    // crowds: the scan was ~1/3 of the worker takes' time.)
+    if (ux >= 0 && uy >= 0 && ux < GRID_W && uy < GRID_H && T.n > SPAWNER_NEAR_K) {
+        const near = _spawnerNearOf(T, uy * GRID_W + ux, ux, uy, list);
+        for (let k = 0; k < near.length; k++) {
+            const s = list[near[k]];
+            if (s && s.type === type && s.owner === owner && s.energy > 0 && !s.underConstruction) return s;
+        }
+    }
     let closest = null, bestDist = Infinity, cx = 0, cy = 0;
     for (let i = 0, n = T.n; i < n; i++) {
         const sx = GX[i], sy = GY[i];
@@ -3954,6 +3998,34 @@ function _workerReturnPath(u) {
 // units than an action may carry (ACTION_MAX_UNIT_IDS, main.js; the rest
 // would be dropped) goes as several.
 const ACTION_SPLIT_BY_UNITS = new Set(['move', 'attackMove', 'attack', 'attackBuilding', 'stop', 'hold']);
+// The tick a command of this player goes in now.
+function _localActionTick() {
+    // Fair delay starts at the completed tick the player sees, including on
+    // the host. Ticks merely queued in a busy worker must not add another
+    // private delay on top of the shared command lead.
+    let actionLead = netCommandLeadTicks();
+    let commandTick = isMultiplayer && gameStarted && netFairInputDelay ? netCompletedSimulationTick() : currentTick;
+    let tick = Math.max(currentTick, commandTick + actionLead);
+    if (isMultiplayer && gameStarted && !isHost && resyncGuest.liveFromTick > tick) tick = resyncGuest.liveFromTick;
+    if (isMultiplayer && gameStarted) {
+        // A sent packet may already be sealed by the host, and a sealed tick
+        // never changes, so new commands always go to a later tick. This also
+        // keeps commands safe when the input delay shrinks.
+        if (!isHost) tick = Math.max(tick, lockstepHighestSentLocalTick + 1);
+        while (lockstepCommittedByTick[tick] || lockstepBundleByTick[tick]) tick++;
+    }
+    return tick;
+}
+// A command already made (its id kept) into the tick it may go in now: a
+// command not yet sent when the match was reloaded on this peer
+// (utils_networking.js applyIncomingMatchSyncPayload).
+function requeueLocalAction(finalAction) {
+    if (!finalAction || gameOver) return;
+    let tick = _localActionTick();
+    (localInputBuffer[tick] || (localInputBuffer[tick] = [])).push(finalAction);
+    delete lockstepLocalPacketByTick[tick];
+    if (isHost && lockstepHostPacketsByTick[tick] && myPeerId) delete lockstepHostPacketsByTick[tick][myPeerId];
+}
 function queueAction(action) {
     if (localDefeated && action && action.action !== 'resign') return;
     if (gameOver) return;
@@ -3972,20 +4044,7 @@ function queueAction(action) {
         // is back (they are scheduled after every tick already sent).
         scheduleGuestAutoReconnect('Lost host connection');
     }
-    // Fair delay starts at the completed tick the player sees, including on
-    // the host. Ticks merely queued in a busy worker must not add another
-    // private delay on top of the shared command lead.
-    let actionLead = netCommandLeadTicks();
-    let commandTick = isMultiplayer && gameStarted && netFairInputDelay ? netCompletedSimulationTick() : currentTick;
-    let tick = Math.max(currentTick, commandTick + actionLead);
-    if (isMultiplayer && gameStarted && !isHost && resyncGuest.liveFromTick > tick) tick = resyncGuest.liveFromTick;
-    if (isMultiplayer && gameStarted) {
-        // A sent packet may already be sealed by the host, and a sealed tick
-        // never changes, so new commands always go to a later tick. This also
-        // keeps commands safe when the input delay shrinks.
-        if (!isHost) tick = Math.max(tick, lockstepHighestSentLocalTick + 1);
-        while (lockstepCommittedByTick[tick] || lockstepBundleByTick[tick]) tick++;
-    }
+    let tick = _localActionTick();
     if (!localInputBuffer[tick]) localInputBuffer[tick] = [];
     let actorId = myPeerId || `p${localPlayerId}`;
     let finalAction = { ...action, teamId: localPlayerId, netId: `${actorId}:${nextLocalActionSeq++}` };

@@ -1,9 +1,10 @@
 'use strict';
 // Real DOM regression coverage for roster selection and a 100-task research
-// queue. Run with Playwright available: node tests/research-menu.test.cjs
+// queue, in Edge over its debugging protocol (tests/edge-cdp.cjs; skipped
+// without Edge): node tests/research-menu.test.cjs
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), http = require('node:http');
-const { chromium } = require('playwright');
+const { launch } = require('./edge-cdp.cjs');
 const root = path.resolve(__dirname, '..');
 const server = http.createServer((req, res) => {
     const file = path.resolve(root, '.' + new URL(req.url, 'http://localhost').pathname);
@@ -20,12 +21,11 @@ const server = http.createServer((req, res) => {
     let browser;
     try {
         await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-        browser = await chromium.launch({ channel: 'msedge', headless: true });
-        const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-        const errors = [];
-        page.on('pageerror', error => errors.push(error.message));
-        await page.goto(`http://127.0.0.1:${server.address().port}/index.html?simworker=0`);
-        const result = await page.evaluate(() => {
+        browser = await launch(`http://127.0.0.1:${server.address().port}/index.html?simworker=0`, { width: 1280, height: 800 });
+        if (!browser) { console.log('research-menu: skipped (no Edge)'); return; }
+        for (let i = 0; i < 100 && !(await browser.ev("typeof renderResearchPopupContent === 'function'")); i++) await new Promise(r => setTimeout(r, 100));
+        const errors = browser.errors;
+        const result = await browser.evFn(() => {
             const check = (condition, message) => { if (!condition) throw Error(message); };
             // Unselected frame views have state but no path/target details.
             const savedUnits = units;

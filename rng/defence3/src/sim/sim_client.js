@@ -184,6 +184,8 @@ function simClientStartMatch(startText = null, decodePage = null) {
     for (let el of document.querySelectorAll('input[id], select[id]')) controls[el.id] = el.type === 'checkbox' ? { checked: el.checked } : { value: el.value };
     c.epoch++;
     c.active = true;
+    // (Kept until the worker has the world: the page's own if it fails.)
+    c.startText = text;
     for (let [, r] of c.replies) r.reject(new Error('match restarted'));
     c.replies.clear();
     c.worker.postMessage({
@@ -227,12 +229,38 @@ function simClientStartMatch(startText = null, decodePage = null) {
     return true;
 }
 
+// The worker could not start the match (an error loading its state): the
+// match runs on the page, as with a worker that never loaded, from the start
+// state the page kept (its copy had no units: the worker's were to come).
+// (It waited for the worker's world for good: the match stood at tick 0.)
+function _simClientStartFailed(reason) {
+    const c = _simClient;
+    if (!c || !c.active) return;
+    c.failed = 'start: ' + reason;
+    c.active = false;
+    _simAutoSync(c);
+    console.warn('[sim worker] could not start the match (' + reason + '); this match runs on the page');
+    try { c.worker.terminate(); } catch { }
+    const text = c.startText;
+    c.startText = null;
+    if (!text) return;
+    const pageTick = currentTick;
+    snapFlushHistoryCaches();
+    snapDecodeState(JSON.parse(text).state);
+    currentTick = pageTick;
+    recomputePlayerPopCaps();
+    clearGameplayVisibilityCache();
+    updateVisibility(localPlayerId);
+}
+
 // Page globals the simulation reads.
 function _simClientGlobals() {
     return {
         isMultiplayer, isHost, localPlayerId, gameSeed, activeTeamIds, gameMode, fullVisibility, matchFullVisibility, lockstepStrictDebugMode,
         myPeerId: typeof myPeerId !== 'undefined' ? myPeerId : null,
-        lobbyPlayers: typeof lobbyPlayers !== 'undefined' ? lobbyPlayers : [], gameStarted: true
+        lobbyPlayers: typeof lobbyPlayers !== 'undefined' ? lobbyPlayers : [], gameStarted: true,
+        // (Its tick bundles carry the match: main.js packTickBundleForWire.)
+        matchStartSessionId: typeof matchStartSessionId !== 'undefined' ? matchStartSessionId : ''
     };
 }
 
@@ -468,7 +496,7 @@ function _simClientOnMessage(msg) {
     switch (msg.type) {
         case 'loaded': c.loaded = true; c.helpers = msg.helpers || 0; c.shared = !!msg.shared; break;
         case 'started':
-            if (msg.epoch === c.epoch) { c.startedEpoch = msg.epoch; c.startTimings = msg.timings || null; }
+            if (msg.epoch === c.epoch) { c.startedEpoch = msg.epoch; c.startTimings = msg.timings || null; c.startText = null; }
             if (msg.world) { if (msg.epoch === c.epoch) _simClientApplyWorld(msg.world, 1); else _simClientReturnBufs(_simClientWorldBufs(msg.world)); }
             break;
         case 'ticked': _simClientApplyTick(msg); break;
@@ -506,6 +534,8 @@ function _simClientOnMessage(msg) {
         case 'error': {
             if (c.errors.length < 50) c.errors.push(msg.where + ': ' + msg.message);
             if (msg.where === 'load') c.failed = msg.message || 'load error';
+            // (It could not start this match: the page runs it.)
+            if (msg.where === 'start' && c.active && c.startedEpoch !== c.epoch) { _simClientStartFailed(String(msg.message || 'start error')); break; }
             // A tick that threw in the worker counts (and logs) as it would
             // on the page.
             let err = new Error(msg.message);
@@ -1038,9 +1068,15 @@ function simClientFillSnapshotState(snapshot) {
 }
 
 // Guest: a resync patch, for the worker to apply before the next tick.
+// (Posted at once, in order with the ticks: the worker applies it before the
+// next one. The promise: whether its decoder took it.)
 function simClientAfterPatchApplied(text, full) {
-    if (!simClientActive()) return;
-    _simClient.worker.postMessage({ type: 'request', op: 'applyPatch', args: { text, full: !!full } });
+    if (!simClientActive()) return Promise.resolve(false);
+    let c = _simClient, id = c.nextRequestId++;
+    return new Promise((resolve, reject) => {
+        c.replies.set(id, { resolve, reject, epoch: c.epoch });
+        c.worker.postMessage({ type: 'request', id, op: 'applyPatch', args: { text, full: !!full } });
+    });
 }
 
 // A whole-state restore on the page (join, hard resync...): the worker

@@ -1467,7 +1467,162 @@ order apply ~2.1 us a unit (column writes rework), unit constructor ~20 us.
 The full regression suite has not been rerun since these changes (run it
 alone: it fails under load).
 
+Third round (same day; mega with `SOLO=1`: the host alone, two peers of
+the mega do not fit 16 GB; `GCSTAT`, `AUTOPHASES` new in tickbench; mega
+now also places area upgrades and orders more of them in bursts). The
+machine was ~47% busy with other programs: runs vary ~10%, so decisions
+came from profiles and probes (EVAL scripts), not single runs.
+
+| found | before | after | what |
+|---|---|---|---|
+| tower preferred targets | 120-340 ms ticks | gone | `units.find` per tower (resolveTowerPreferredTarget and its visuals) → `getUnitById`. |
+| building research sweep | ~10 ms a tick | ~2 | A finished research bumped one version per player: every building refreshed. Now per key (`bResKey`, `bResMaxKey`): only that key's buildings. Barracks and spawners are cell items too: the floor-item pass refreshed them a second time, as `barrack_norm` (wrong stats for every other barrack type, alternating each rotation): skipped there now. Test `building-research-keys`. |
+| research queue actions | 5-12 ms each (move, dequeue, reorder, insert) | ~0.2 | The whole queue (~900 tasks) re-based each time: now the touched stats' tasks only, plus a levels-only pass that heals any stat out of order (as the full rebase did). Test `research-rebase-partial` (partial = full after 600 random operations with completions). |
+| unit orders over the budget | an attack order paths each unit (~5 us): 20k units ~90 ms in one tick | split | Costs per kind measured (attack, hold, stop, tower targets, rallies), `uidz` counted exactly (a run of ids was a few characters: costed as almost nothing). Unit orders over the budget left run for the units they pay for, the rest first in the backlog (test `action-budget`). |
+| adjacency after mass changes | 1.43 s (setup tick) | ~0.1 | Not the flood: the page's fill of the area tables (1M cells) is cold code, 0.3-1.4 s at a layout's first post. The Rust flood makes them from the area grid itself (counting sort, when the layout's version changes). |
+| wasm memory growth | ~10 ms at an allocation in the tick | on a helper | `_simHeapGrowAhead`: under an eighth free, a helper grows it (`SIM_KERNEL_HEAP_GROW`, lane `SIM_LANE_GROW`); `simHeapExpect` for big allocations announced ahead (the navigation window's pools). Test `heap-grow-ahead`. |
+| navigation window | 20-25 ms at each window's opening, 15-20 at installs | reuse; smaller copy | The next build's pools (~230 MB) were allocated anew each window: kept as spares now. Grown while a window is open: copied on the helpers (`SIM_KERNEL_COPY_BG2`, its own table). The install copies the smaller side (the rebuilt profile's fields, or the others' into the next arrays, which are then installed). `nav-rows` covers both sides and growth inside a window. |
+| new units over 65536 at once | — | — | **A desync**: the new-unit stats list was dropped past its cap (meant for the page beside a worker): a match starting with 180k units lost ~120k, whose flag never cleared (the slow effective-stats path every turn, ~5 ms a tick) — and a peer restored from a snapshot made the list from the flags and cleared them: its state differed from the others'. Now made again from the flags at the next drain. Test `new-units-stats-overflow` (two peers and a restored third equal; the old behaviour fails it). |
+
+Mega (solo, 480 ticks, ~182k units at the start, ~105k at the end): mean
+67 → 52.4, p50 54 → 50.7, p95 132 → 69.4. GC ~0.4 ms a tick (scavenges;
+a dozen ticks over 5 ms).
+
+Then (user: fix every divergence found, pre-existing or not):
+- **Heap leak from the growth lane** (mine, this session): nothing waits
+  for `SIM_LANE_GROW`, so its job stayed pending: no growth was posted again,
+  and every freed array waited for that lane (memory 1.29 → 1.83 GB in a
+  run). The next allocation takes a finished growth job back; frees ignore
+  that lane. `heap-grow-ahead` now runs as the game does (no waits) and
+  checks the frees. Expected allocations are keyed (`simHeapExpect(key)` /
+  `simHeapExpectDone`): counted down by any big allocation, the navigation
+  window's was spent before the window opened.
+- **Held attackers** (hold keeps a far target): `doHolding` every tick
+  (~13 us, ~160 a tick in mega) → parked till their acquisition tick
+  (`simMoveTryParkHeldAttacker`; test `held-attacker-park`).
+- Effective stats' full refresh tells the movement columns once (the base
+  level's tables between disarmed every unit above its base level).
+- A worker's arrival handled within its own update (from the tick's worker
+  events); per-type construction versions for the collectors' groups (any
+  tower completed rebuilt them: ~2-11 ms every few ticks); the nearest
+  working spawner from a per-tile cache of the nearest four (exact; test
+  `closest-spawner-cache`).
+- Navigation install: one pass over the slots (three were ~7 ms, cold);
+  the wall difference counted in Rust (`k_diff_count`, test `diff-count`).
+- Every mine every hash from a compact typed list, not a Set (~0.8 ms a
+  tick with 20k mines). Hashing mines by slice instead was tried: a
+  corrupted mine then took 2.2 s to repair (`multiplayer-desync-recovery`
+  failed; 1.2 s with every hash): detection speed kept.
+- Restores checked at chaos scale: two peers, mixed (82k units) and half
+  mega (91k, `MEGA_SCALE=0.5`): 0 desyncs, 0 patches; `RESYNC_BURST=k` in
+  tickbench forces a full resync: peers stay in lockstep after, but at 91k
+  units the host's snapshot build + restore took **8.5 s** and the pause
+  ~19 s (a 716 ms tick after). A divergence beyond patches would freeze a
+  big match that long: the snapshot path is the next big target.
+- Visibility cover sweep: once per entity (barracks and spawners were
+  synced as cell items too; registered buildings still on their tile again
+  through the cleanup list): ~3.4 → ~2.8 ms a tick.
+
+Full suite (135 files, alone), first run: all pass but `render-frame-stability`
+("zoom-out never switches render pipelines": fails since 7a7dda2, the
+renderer/LOD commit, passed at 5f32c1e) and `research-menu` (needs
+playwright). Both fixed since (user: fix every failure): the browser tests
+drive Edge over raw CDP (`tests/edge-cdp.cjs`, no playwright), and wait for
+the ~30 s of model baking before a match starts from node (one CDP call
+waiting inside the page timed out). `multiplayer-scenarios` had failed since
+7a7dda2 as well: the hosted start now awaits the LOD assets before taking
+the seed, so the map changed and the test's salvage target (4 tiles from the
+king) fell outside the salvagers' search reach (distance, and two area steps
+from where they stand): placed beside a salvager now. (Open question for the
+design: idle salvagers search from where they stand, not from their
+building.)
+
+Final (same machine, ~33% busy with other programs): solo mega mean 51-57
+(run to run), p50 49-55, p95 67-76; two peers, half mega (91k units a
+peer): mean 37.5, p50 34.9, p95 54.4, 0 desyncs, 0 patches.
+
+Left (mega, per tick): unit pass ~9.6 (worker AI ~4: collectors' nearest
+drop-off scan and paths, healers), movement 5.7 (the main thread's share
+of the kernel ~3.8), effective stats ~4.5 (units behind their tables after
+research: ~700 a tick through the JS path, as `maxEnergy` is a plain field,
+not a column), hash ~3.9, worker search ~3.6, visibility ~3, orders ~2.2,
+towers ~2.2, research sweep ~2 (pointer chasing over ~3k objects a tick),
+spawner queues ~1.8. Spikes: the burst ticks' actions (~10-15 ms within
+the budget), worker search posts after big changes (~20), the first
+navigation window (no spare yet: its allocation, now announced ahead).
+Note: a peer restored from a snapshot only matches when the sender flushes
+its caches too (it does, `utils_networking.js`); tests that restore must
+do the same.
+
+Fourth round (same day; user: fix every failure, and the audit's findings):
+- **Second full suite**: `multiplayer-desync-recovery` and
+  `multiplayer-host-migration` failed with "the Rust kernel cannot run here"
+  at tick 0: each test instance reserved ~500 MB of unit columns (max pop x
+  teams), the process (14 matches, ~8.5 GB) could not commit more, and a
+  column the heap could not hold was made outside it, for good. Fixed (audit
+  finding 12): the reservation is at most 8 units a map tile; a reservation
+  that does not fit is made smaller, in the heap; columns found outside the
+  heap are made again at the next reservation. Test `heap-full-reserve`.
+- **Structure ghost flag**: live structure frames use bit 65536 for "has a
+  research task" (`SIM_SF_RESEARCH_TASK`); the renderer read it as "remembered
+  (history ghost)": a lab at work was drawn dimmed, and (Team visibility)
+  seen through the fog, as a glyph, a medium model and in detail. Remembered
+  structures have their own bit now (`STRUCT_FRAME_GHOST`, 1 << 22;
+  renderer3d `STRUCT_GHOST_FLAG`). Test `lod-visible-budget`.
+- **Multiplayer audit** (another session; `MULTIPLAYER_AUDIT_2026-10-15.md`):
+  14 of 15 fixed with a test each, one not reproduced (kept as a test).
+  New tests: `multiplayer-resync-messages`, `-tick-messages`, `-authority`,
+  `-reload-input`, `-late-carry-restore`, `-jitter-start`,
+  `hash-queued-commands`, `pending-damage-restore`, `sim-worker-failure`.
+  Rules revision 14 also orders a bundle's packets by code units (was the
+  locale's).
+- `render-tps-bench.cjs`: views `3d-fight` / `2d-fight` (the front: the
+  16-tile square where both armies have the most units, at `FIGHT_ZOOM`,
+  picked again after the warm-up).
+
+**FPS in a big close-up fight** (user: worst with close zoom, Team +
+history). `50000-200`, both armies attack-moving to the middle, camera at 3x
+on the front. Two pages on one machine (host + guest): 3D 31-33 FPS
+(frames p50 29 ms, p95 57), 2D 55-62 FPS; TPS held 20 in 3D, fell to 13
+during the 2D case as the fight peaked (both peers' simulations and pages on
+one CPU). One page (solo test bed, `fight_probe.cjs` in the session
+scratchpad): with 10-15k units in the culled view, 8-13k of them middle
+models, frames p50 9-25 ms, p95 28-39 ms (runs differ with the fight's size).
+Where the page's time goes (per frame): the middle models' packing
+(`drawColumnModels`: every unit's 28-float record made anew each tick, ~12
+ms a tick at 12k), the detail split (~2), the history structure frame (~1.3,
+rebuilt each tick), effects (~1.1), the cull (~0.8), the tick's apply (~1.2).
+Done:
+- Middle models kept per slot (`_cmUnits`): a record written whole when a
+  unit joins a group, its moving parts each tick, swap-removed when it
+  leaves; the cull's slots handed on as a typed array (each unit's `_s` read
+  was ~14% alone) and walked in slot order (random reads over ~20 columns
+  were most of the rest). Per candidate 0.77 -> 0.54 us (browser A/B against
+  HEAD's renderer3d.js); records equal to a full packing (test
+  `medium-models-incremental`).
+- The history structure frame refreshed in place within a generation of the
+  remembered lists (`F.ver` for the GPU columns and the middle models), live
+  structures read from the page's table columns (tests
+  `history-structure-columns`, `lod-visible-budget`).
+- A replaced model atlas no longer reports "Model view preparation was
+  interrupted" (the menu's preload, superseded by a settings change); a
+  match start prepares the newest atlas.
+Left: the middle models are memory-bound JS (~0.5 us a unit a tick); the way
+past it is building them where the frame is built (the presentation worker:
+cull, detail split and middle records with the frame, the page uploading
+only), or on the GPU from the frame's columns.
+
 ## Next
+
+Multiplayer audit of 2026-10-15 (another session): 15 findings, kept with
+their status in `MULTIPLAYER_AUDIT_2026-10-15.md` (join acknowledgement
+never retried, stale resync messages and decodes, commands lost in a full
+recovery, a load not cancelled by leaving, rejected patches acknowledged,
+hash gaps for queued commands, damage accounting dropped by recovery, no
+match id on tick packets, order-blind bundle checksums, a guest sending the
+host to the lobby, a worker load stuck at tick 0, one failed wasm
+allocation breaking the kernels for good, late commands missing from
+snapshots, slot claims by public profile id, a high-jitter start failure).
 
 Order set by the user (2026-10-09): main thread stable below 50 ms (aim
 ~40) at B800 first; the determinism fixes after that. 2026-10-11: no tick or

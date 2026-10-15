@@ -6,16 +6,20 @@
 // fields over the new build in its window (_navNext: a background batch,
 // and the fields asked for in the window over both builds), installed with
 // it: every field (asked for before, in the window, after) then holds the
-// new build's field and row. With real helper threads (3) and none.
+// new build's field and row; the same when the pools grow while a window
+// is open (the next build's pools grown too, copied on the helpers:
+// _navNextCopyFlush). With real helper threads (3) and none.
 //   node tests/nav-rows.test.cjs
 'use strict';
 globalThis.self = { crossOriginIsolated: true };
 const assert = require('node:assert/strict');
 const H = require('./net-harness.cjs');
-for (const helpers of [3, 0]) for (const [map, seed] of [['crossroads', 3], ['islands', 5], ['arena', 9]]) {
+// (The install's side: 0 the smaller copy, 1 the next arrays installed, -1
+// the rebuilt profile's fields copied: flownav.js NAV_INSTALL_SIDE.)
+for (const [helpers, side] of [[3, 0], [3, 1], [0, -1], [0, 1]]) for (const [map, seed] of [['crossroads', 3], ['islands', 5], ['arena', 9]]) {
     const world = new H.World({ controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '120', 'cfg-map-type': map } });
     const inst = world.spawn('rows' + map + helpers, { simWorker: false });
-    inst.eval('startSoloGame();');
+    inst.eval('startSoloGame(); NAV_INSTALL_SIDE = ' + side + ';');
     if (helpers) {
         inst.scratch.Worker = require('./real-sim-helper.cjs');
         assert.equal(inst.eval(`Worker = __scratch.Worker; navigator.hardwareConcurrency = 32; simParallelInit('', ${helpers})`), helpers);
@@ -87,6 +91,25 @@ for (const helpers of [3, 0]) for (const [map, seed] of [['crossroads', 3], ['is
         for (let k = 0; k < 4; k++) gameTick();
         r.grown = _navFields.pools.map((F, w) => F.cap > caps0[w]);
         r.afterGrowth = check([...before, ...during, ...after, ...more]);
+        // Pools grown while a rebuild's window is open: the next build's
+        // pools grow with them, their made fields copied on the helpers
+        // (_navNextCopyFlush); every field still its own search after the
+        // install.
+        for (let i = 0; i < 40; i++) { const x = 2 + Math.floor(rnd() * (GRID_W - 4)), y = 2 + Math.floor(rnd() * (GRID_H - 4)), c = grid[y][x];
+            if (c.item || getTileEntityRef(x, y)) continue; c.type = c.type === TYPE_WALL ? TYPE_FLOOR : TYPE_WALL; simMoveTileTypeChanged(x, y); }
+        let m = 0;
+        while (!_navNext.nav && m++ < 4 * NAV_BUILD_TICKS) gameTick();
+        const realFlush = _navNextCopyFlush;
+        let nextCopies = 0;
+        _navNextCopyFlush = function () { if (_navNext.copyPairs && _navNext.copyPairs.length) nextCopies++; return realFlush.apply(this, arguments); };
+        const caps1 = _navFields.pools.map(F => F.cap), more2 = [];
+        for (let k = 0; k < 40 && _navNext.nav && !nextCopies; k++) { more2.push(...ask()); gameTick(); }
+        while (_navNext.nav && m++ < 8 * NAV_BUILD_TICKS) gameTick();
+        gameTick();
+        _navNextCopyFlush = realFlush;
+        r.nextCopies = nextCopies;
+        r.grownInWindow = _navFields.pools.some((F, w) => F.cap > caps1[w]);
+        r.afterWindowGrowth = check([...before, ...during, ...after, ...more, ...more2]);
         return r;
     })())`));
     assert.equal(r.first.bad, '', map + ' before: ' + r.first.bad);
@@ -95,10 +118,12 @@ for (const helpers of [3, 0]) for (const [map, seed] of [['crossroads', 3], ['is
     assert.equal(r.final.bad, '', map + ' after the other profiles\' rebuilds: ' + r.final.bad);
     assert.ok(r.grown[0], map + ': the narrow pool grew');
     assert.equal(r.afterGrowth.bad, '', map + ' after the pools grew: ' + r.afterGrowth.bad);
+    assert.ok(r.grownInWindow && r.nextCopies > 0, map + ': the pools grew in a rebuild window, the next build\'s copied (' + r.nextCopies + ')');
+    assert.equal(r.afterWindowGrowth.bad, '', map + ' after the pools grew in a rebuild window: ' + r.afterWindowGrowth.bad);
     assert.ok(r.rebuilt.length >= 2, map + ': more profiles rebuilt (' + JSON.stringify(r.rebuilt) + ')');
     assert.ok(Object.keys(r.final.profiles).length >= 2, map + ': fields of several profiles checked ' + JSON.stringify(r.final.profiles));
     assert.ok(r.first.fields > 100 && r.before.fields > 100 && r.during.fields > 100 && r.after.fields > 100, map + ': fields checked');
-    console.log(map + ' (' + helpers + ' helpers): ' + r.parts + ' parts; fields and rows equal their own: ' + r.first.fields + ' before the rebuild, then ' + r.before.fields + ' / ' + r.during.fields + ' / ' + r.after.fields
+    console.log(map + ' (' + helpers + ' helpers, install side ' + side + '): ' + r.parts + ' parts; fields and rows equal their own: ' + r.first.fields + ' before the rebuild, then ' + r.before.fields + ' / ' + r.during.fields + ' / ' + r.after.fields
         + ' asked before / in its window / after (' + r.first.shared + ' / ' + r.after.shared + ' rows shared); profiles rebuilt ' + JSON.stringify(r.rebuilt) + ', then ' + r.final.fields + ' fields ' + JSON.stringify(r.final.profiles));
 }
 console.log('PASS: destination fields and shared rows equal their own searches, across a rebuild window');

@@ -281,8 +281,7 @@ function rebuildPlayerThingBoost(playerId, branch, key) {
     // its buildings take the tables at their turn of the research sweep,
     // the population cap follows the houses' at once, adjacency is made again.
     if (branch === 'building') {
-        const p = players[playerId];
-        if (p) p.bResVer = (p.bResVer | 0) + 1;
+        bumpBuildingResearchVersion(playerId, key, false);
         if (key === 'house' && typeof recomputePlayerPopCaps === 'function') recomputePlayerPopCaps();
     }
     if (typeof gameStarted !== 'undefined' && gameStarted && typeof recalculateAdjacency === 'function') recalculateAdjacency();
@@ -1488,7 +1487,10 @@ function resolveTowerPreferredTarget(tower) {
     let spec = normalizeTowerTargetSpec(tower.preferredTargetSpec);
     if (!spec) return null;
     if (spec.type === 'unit') {
-        return units.find(u => u.id === spec.id && !u.dead && u.owner !== tower.owner) || null;
+        // (By the id map: a scan of every unit, for each of 2000 towers given
+        // one target, was 300 ms a tick once that unit died.)
+        const u = getUnitById(spec.id);
+        return u && !u.dead && u.owner !== tower.owner ? u : null;
     }
     if (spec.type === 'tower') {
         let t = getTowerAtTile(spec.gx, spec.gy);
@@ -1549,7 +1551,9 @@ function resolveTowerPreferredTargetVisual(tower) {
     let spec = normalizeTowerTargetSpec(tower.preferredTargetSpec);
     if (!spec) return null;
     if (spec.type === 'unit') {
-        let u = units.find(x => x.id === spec.id && !x.dead);
+        // (By the id map: no scan of every unit.)
+        let u = getUnitById(spec.id);
+        if (u && u.dead) u = null;
         if (u) {
             let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
             if (!isGameplayTargetVisibleToPlayer(tower.owner, ugx, ugy)) return null;
@@ -1584,7 +1588,9 @@ function getTowerPreferredTargetDisplay(tower) {
     let spec = normalizeTowerTargetSpec(tower && tower.preferredTargetSpec);
     if (!spec) return 'None';
     if (spec.type === 'unit') {
-        let u = units.find(x => x.id === spec.id && !x.dead);
+        // (By the id map: no scan of every unit.)
+        let u = getUnitById(spec.id);
+        if (u && u.dead) u = null;
         if (u) {
             let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
             if (!isGameplayTargetVisibleToPlayer(tower.owner, ugx, ugy)) return 'None';
@@ -3714,7 +3720,34 @@ function makeResearchTask(owner, kind, key, statKey, projectedLevel) {
     };
 }
 
-function rebasePlayerResearchQueueState(playerId) {
+// The queue's levels, costs and progress made again from its order. With
+// `only` (tasks standing for their stats), those stats' tasks alone: a
+// move, a removal or an insertion keeps every other stat's tasks in their
+// order (a pass over every task's tables was ~5 ms with 600 queued). A
+// stat whose tasks' levels do not follow their order (a queue an older
+// build left so) is made again too: any move or removal heals the queue.
+function researchStatId(task) { return `${task.kind || ''}:${task.key || ''}:${task.statKey || ''}`; }
+function _researchTaskOfStats(task, only) {
+    for (let i = 0; i < only.length; i++) { const o = only[i]; if (task.statKey === o.statKey && task.key === o.key && task.kind === o.kind) return true; }
+    return false;
+}
+// (Levels only, from the research levels and the order: no tables read.)
+function _researchStatsOutOfOrder(playerId, ordered, only) {
+    const seen = new Map();
+    for (const task of ordered) {
+        let byKey = seen.get(task.kind);
+        if (!byKey) seen.set(task.kind, byKey = new Map());
+        let byStat = byKey.get(task.key);
+        if (!byStat) byKey.set(task.key, byStat = new Map());
+        let e = byStat.get(task.statKey);
+        if (!e) byStat.set(task.statKey, e = { next: Math.max(0, Math.floor(Number(getPlayerResearchLevel(playerId, task.kind, task.key, task.statKey)) || 0)), bad: false });
+        const from = e.next++, to = from >= MAX_RESEARCH_LEVEL ? from : Math.min(MAX_RESEARCH_LEVEL, from + 1);
+        if (e.bad || (task.fromLevel === from && task.toLevel === to)) continue;
+        e.bad = true;
+        if (!_researchTaskOfStats(task, only)) only.push(task);
+    }
+}
+function rebasePlayerResearchQueueState(playerId, only = null) {
     let p = ensurePlayerResearchQueueState(playerId);
     let ordered = [];
     if (p.researchTask) ordered.push(p.researchTask);
@@ -3724,12 +3757,14 @@ function rebasePlayerResearchQueueState(playerId) {
         }
     }
     if (ordered.length <= 0) return p;
+    if (only) _researchStatsOutOfOrder(playerId, ordered, only);
 
     // Progress belongs to the level, not the task object: same-stat tasks are interchangeable,
     // so the lowest queued level keeps the most-advanced progress after reordering.
     let workDoneByStat = Object.create(null);
     for (let task of ordered) {
-        let statKey = `${task.kind || ''}:${task.key || ''}:${task.statKey || ''}`;
+        if (only && !_researchTaskOfStats(task, only)) continue;
+        let statKey = researchStatId(task);
         (workDoneByStat[statKey] || (workDoneByStat[statKey] = [])).push(task);
     }
     for (let statKey in workDoneByStat) {
@@ -3741,7 +3776,8 @@ function rebasePlayerResearchQueueState(playerId) {
     let queuedLevelsByStat = Object.create(null);
     for (let task of ordered) {
         if (!task) continue;
-        let statKey = `${task.kind || ''}:${task.key || ''}:${task.statKey || ''}`;
+        if (only && !_researchTaskOfStats(task, only)) continue;
+        let statKey = researchStatId(task);
         let baseLevel = Math.max(0, Math.floor(Number(getPlayerResearchLevel(playerId, task.kind, task.key, task.statKey)) || 0));
         let priorSameStat = Math.max(0, Math.floor(Number(queuedLevelsByStat[statKey]) || 0));
         let fromLevel = baseLevel + priorSameStat;
@@ -3783,27 +3819,36 @@ function applyUnitResearchUpgradeToExistingUnits(owner, unitType, statKey) {
 // same values whenever it does: a refresh is idempotent).
 function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
     rebuildPrecomputedStatsMapPlayerThingStat(owner, 'building', buildingKey, statKey);
-    const p = players[owner];
-    if (p) {
-        p.bResVer = (p.bResVer | 0) + 1;
-        if (statKey === 'maxLevel') p.bResMaxLv = p.bResVer;
-        return;
-    }
+    if (bumpBuildingResearchVersion(owner, buildingKey, statKey === 'maxLevel')) return;
     _applyBuildingResearchNow(owner, buildingKey, statKey);
+}
+// The owner's version up, and its building key's (bResKey; bResMaxKey for a
+// max level research): only that key's buildings take the tables again.
+function bumpBuildingResearchVersion(owner, buildingKey, maxLevel) {
+    const p = players[owner];
+    if (!p) return false;
+    const v = p.bResVer = (p.bResVer | 0) + 1, k = _normalizePlayerPrecomputedBuildingKey(buildingKey);
+    (p.bResKey || (p.bResKey = {}))[k] = v;
+    if (maxLevel) (p.bResMaxKey || (p.bResMaxKey = {}))[k] = v;
+    return true;
 }
 // One building at its research turn: behind its owner's version, its stats
 // from the tables (and its progress state after a max level research).
-function buildingResearchCatchUp(e, kind, owner = e ? e.owner : -1) {
+// Only a research of its own key (rawKey: what its tables are read by)
+// since its last turn: the others' tables did not change.
+function buildingResearchCatchUp(e, kind, owner, rawKey) {
     if (!e) return;
     const p = players[owner];
     if (!p) return;
     const v = p.bResVer | 0, have = e._bResVer | 0;
     if (have >= v) return;
+    e._bResVer = v;
+    const k = _normalizePlayerPrecomputedBuildingKey(rawKey);
+    if ((p.bResKey ? p.bResKey[k] | 0 : v) <= have) return;
     _buildingResearchApply(e, '', kind);
     // (Energy over a lower maximum: down to it; never up, never revived.)
     if (e.energy > e.maxEnergy) e.energy = e.maxEnergy;
-    if ((p.bResMaxLv | 0) > have) refreshThingProgressState(e);
-    e._bResVer = v;
+    if ((p.bResMaxKey ? p.bResMaxKey[k] | 0 : 0) > have) refreshThingProgressState(e);
 }
 // The sweep (gameTick): a TICK_RATE-th of the towers, barracks, spawners and
 // floor items by their place in their lists (the same on every peer).
@@ -3812,13 +3857,14 @@ function buildingResearchSweep() {
     for (let i = 0; i < players.length && !any; i++) if (players[i] && (players[i].bResVer | 0) > 0) any = true;
     if (!any) return;
     const ph = gameTime % TICK_RATE;
-    for (let i = ph; i < towers.length; i += TICK_RATE) buildingResearchCatchUp(towers[i], 0);
-    for (let i = ph; i < barracks.length; i += TICK_RATE) buildingResearchCatchUp(barracks[i], 1);
-    for (let i = ph; i < collectorSpawners.length; i += TICK_RATE) buildingResearchCatchUp(collectorSpawners[i], 1);
+    for (let i = ph; i < towers.length; i += TICK_RATE) { const t = towers[i]; if (t) buildingResearchCatchUp(t, 0, t.owner, t.type); }
+    for (let i = ph; i < barracks.length; i += TICK_RATE) { const b = barracks[i]; if (b) buildingResearchCatchUp(b, 1, b.owner, 'barrack_' + b.unitType); }
+    for (let i = ph; i < collectorSpawners.length; i += TICK_RATE) { const c = collectorSpawners[i]; if (c) buildingResearchCatchUp(c, 1, c.owner, c.type); }
     const items = typeof getCellItemsRowMajor === 'function' ? getCellItemsRowMajor() : [];
     for (let i = ph; i < items.length; i += TICK_RATE) {
         const item = items[i], cell = item && grid[item.gy] && grid[item.gy][item.gx];
-        if (cell && cell.item === item) buildingResearchCatchUp(item, 2, cell.owner);
+        // (Barracks and spawners are cell items too: their own lists' turn.)
+        if (cell && cell.item === item && !_isProducerStructure(item)) buildingResearchCatchUp(item, 2, cell.owner, item.type);
     }
 }
 function _applyBuildingResearchNow(owner, buildingKey, statKey) {
@@ -3829,7 +3875,7 @@ function _applyBuildingResearchNow(owner, buildingKey, statKey) {
     const items = typeof getCellItemsRowMajor === 'function' ? getCellItemsRowMajor() : [];
     for (const item of items) {
         const cell = grid[item.gy] && grid[item.gy][item.gx];
-        if (!cell || cell.item !== item || cell.owner !== owner || item.type !== buildingKey) continue;
+        if (!cell || cell.item !== item || cell.owner !== owner || item.type !== buildingKey || _isProducerStructure(item)) continue;
         list.push(item, 2);
     }
     for (let i = 0; i < list.length; i += 2) _buildingResearchApply(list[i], statKey, list[i + 1]);

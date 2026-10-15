@@ -44,10 +44,12 @@ function assertLockstepClean(world, all, label, { snapshots = 1 } = {}) {
 }
 
 // Free buildable floor tiles around this player's king, nearest first.
-function freeTilesNear(inst, count, skip = 0) {
+// (Near the player's king, or near `origin`: an expression for a thing with
+// gx, gy.)
+function freeTilesNear(inst, count, skip = 0, origin = null) {
     return JSON.parse(inst.eval(`(() => {
-        const king = units.find(u => u.owner === localPlayerId && u.isKing);
-        const kx = Math.floor(king.x / TILE), ky = Math.floor(king.y / TILE);
+        const king = units.find(u => u.owner === localPlayerId && u.isKing), o = ${origin || 'null'};
+        const kx = o ? o.gx : Math.floor(king.x / TILE), ky = o ? o.gy : Math.floor(king.y / TILE);
         const out = [];
         for (let r = 2; r < 12 && out.length < ${count + skip}; r++) {
             for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
@@ -171,7 +173,12 @@ const ECONOMY = {
         });
         const goldBefore = host.eval('goldMines.reduce((s, m) => s + m.gold, 0)');
         const astarBefore = host.eval('astarMines.reduce((s, m) => s + m.astar, 0)');
-        const salvage = all.map(inst => { const [t] = freeTilesNear(inst, 1, 4); q(inst, { action: 'place', gx: t.gx, gy: t.gy, itemType: 'sand', count: 1, autoUpgradeEnabled: false, buildEnabled: true }); return { inst, t }; });
+        // (Beside one of the player's salvagers: in their search reach (a
+        // distance and, by default, two area steps from where they stand)
+        // whatever the map's layout. 4 tiles out from the king, or beside
+        // the salvager building, it fell outside it once the match's seed
+        // changed (7a7dda2: the hosted start awaits the LOD assets).)
+        const salvage = all.map(inst => { const [t] = freeTilesNear(inst, 1, 0, "(u => ({ gx: Math.floor(u.x / TILE), gy: Math.floor(u.y / TILE) }))(units.find(u => u.owner === localPlayerId && u.workerType === 'salvager' && !u.dead))"); q(inst, { action: 'place', gx: t.gx, gy: t.gy, itemType: 'sand', count: 1, autoUpgradeEnabled: false, buildEnabled: true }); return { inst, t }; });
         const states = new Set();
         const seenStates = async ms => { const end = world.now + ms; while (world.now < end) { for (const s of JSON.parse(host.eval('JSON.stringify([...new Set(units.map(u => u.workerState).filter(Boolean))])'))) states.add(s); await world.run(500); } };
         await until(world, () => salvage.every(s => { const t = thingAt(s.inst, s.t); return t && !t.underConstruction; }), 60000, 'salvage target built');

@@ -2248,6 +2248,10 @@ function getChunkRenderView(view, bounds, flat2d) {
         if (!U || U.key !== key || U.frame !== F || U.list !== view.units) {
             const list = view.units, ord = F.order, X = F.x, Y = F.y, PX = F.px, PY = F.py, n = Math.min(F.count, list.length);
             const minX = x0 * 16 * TILE, minY = y0 * 16 * TILE, maxX = (x1 + 1) * 16 * TILE, maxY = (y1 + 1) * 16 * TILE, out = [];
+            // (Two slot buffers in turn: the last tick's may still be read.)
+            const C2 = rendererChunkCache, which = C2.slotFlip = !C2.slotFlip;
+            let outS = which ? C2.slotsA : C2.slotsB;
+            if (!outS || outS.length < n) { outS = new Int32Array(Math.max(1024, Math.ceil(n * 1.25))); if (which) C2.slotsA = outS; else C2.slotsB = outS; }
             const R = renderer3dInstance, M = detailCull ? R.tmpViewProjection : null;
             const projectionScale = detailCull ? (flat2d ? camera.zoom * TILE : R.lodProjectionScale) : 0;
             const sx = detailCull ? viewW / R.cssWidth : 1, sy = detailCull ? viewH / R.cssHeight : 1;
@@ -2291,11 +2295,15 @@ function getChunkRenderView(view, bounds, flat2d) {
                     const margin = radius * (Math.abs(M[0]) + Math.abs(M[8]) + Math.abs(M[1]) + Math.abs(M[9]) + 1);
                     if (Math.abs(cx) > w * sx + margin || Math.abs(cy) > w * sy + margin) continue;
                 }
+                outS[out.length] = s;
                 out.push(list[k]);
             }
-            U = rendererChunkCache.liveUnits = { key, frame: F, list, query: out };
+            U = rendererChunkCache.liveUnits = { key, frame: F, list, query: out, slots: outS.subarray(0, out.length) };
         }
         result.units = U.query;
+        // (Their frame slots, in the same order: the detail split and the
+        // middle models read the columns by them, not each unit's _s.)
+        result.unitSlots = U.slots;
     }
     for (const name of ['units', 'towers', 'barracks', 'collectorSpawners', 'goldMines', 'astarMines', 'droppedItems']) {
         const list = view[name];
@@ -2803,10 +2811,10 @@ function build3DFrameData(flat2d = false) {
     const projection = get3DProjectionSnapshot(); projection.flat2d = flat2d;
     renderer3dInstance.buildViewProjection(projection);
     const queryBounds = flat2d ? getVisibleWorldBounds(2 + Math.ceil(getRenderViewPad() / Math.max(.01, camera.zoom) / TILE)) : get3DVisibleWorldBounds();
-    let { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = getChunkRenderView(sourceView, queryBounds, flat2d);
+    let { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid, unitSlots } = getChunkRenderView(sourceView, queryBounds, flat2d);
     // Detail per unit, by its drawn size, within a budget (see
     // _unitDetailSplit): the rest are the GPU's glyphs, drawn from the frame.
-    const unitDetail = _isLiveUnitList(sourceView.units) ? _unitDetailSplit(units, flat2d, queryBounds) : null;
+    const unitDetail = _isLiveUnitList(sourceView.units) ? _unitDetailSplit(units, flat2d, queryBounds, unitSlots) : null;
     if (unitDetail) units = unitDetail.units;
     // The same for structures: the near ones in detail, the rest glyphs.
     // (A remembered view's structures, Team + history, too: its far ones are
@@ -3824,6 +3832,18 @@ function _structureRenderFrame(view) {
     if (!h || h.view !== view || typeof _pageFrameStrings === 'undefined') return null;
     const cached=_historyStructureFrame;
     if(cached?.view===view && cached.tick===gameTime && cached.generation===h.generation) return cached.frame;
+    // (The same remembered lists (they change every HISTORY_STRUCTURE_TICKS):
+    // the columns that change while seen, in place, for the live ones; the
+    // remembered ones never change. F.ver tells the GPU columns and the
+    // middle models. A new frame each tick made every structure's columns,
+    // its maps and the spatial index of the candidates again.)
+    if(cached?.view===view && cached.generation===h.generation && cached.strings===_pageFrameStrings.length) {
+        const F=cached.frame, src=F.sources, codes=cached.codes;
+        for(let s=0;s<F.n;s++) { const e=src[s]; if(!e._historyGhost) _historyStructureFill(F,s,e,F.kind[s],view,codes); }
+        F.ver=(F.ver|0)+1;
+        cached.tick=gameTime;
+        return F;
+    }
     const sources=[], kinds=[], seen=new Set();
     const add=(e,kind)=>{if(!e||seen.has(e))return;seen.add(e);sources.push(e);kinds.push(kind);};
     for(const [name,kind] of [['towers',0],['barracks',1],['collectorSpawners',2],['goldMines',4],['astarMines',5]])
@@ -3835,20 +3855,46 @@ function _structureRenderFrame(view) {
     for(let s=0;s<n;s++) {
         const e=sources[s],kind=kinds[s];
         F.gx[s]=e.gx;F.gy[s]=e.gy;F.x[s]=(e.gx+.5)*TILE;F.y[s]=(e.gy+.5)*TILE;
-        F.kind[s]=kind;F.alive[s]=e.dead?0:1;F.energy[s]=Number(e.energy)||0;
-        F.owner[s]=Number.isFinite(e.owner)?e.owner:kind===3?view.grid[e.gy][e.gx].owner:-1;
-        F.flags[s]=(e.underConstruction?1:0)|(e._historyGhost?65536:0);
-        F.type[s]=codes.get(e.type)||0;F.utype[s]=codes.get(e.unitType)||0;
-        F.vision[s]=kind<4?Number(getEntityEffectiveVisibilityRangeArea(e))||0:0;
-        F.angle[s]=Number(e.angle)||0;F.amount[s]=Number(kind===4?e.gold:kind===5?e.astar:0)||0;
+        F.kind[s]=kind;
+        _historyStructureFill(F,s,e,kind,view,codes);
     }
-    _historyStructureFrame={view,tick:gameTime,generation:h.generation,frame:F};
+    F.ver=0;
+    _historyStructureFrame={view,tick:gameTime,generation:h.generation,frame:F,codes,strings:_pageFrameStrings.length};
     return F;
+}
+// A remembered view's structure s (source e) into its columns. (A live
+// structure's view (its slot in the page's table, no details of its own):
+// from the table's columns, as its accessors read them: those were most of
+// the time.)
+function _historyStructureFill(F,s,e,kind,view,codes) {
+    const T=e._structView&&e._s>=0&&!e._det&&typeof _pageTables!=='undefined'?_pageTables.s:null;
+    if(T) {
+        const q=e._s, o=T.owner[q];
+        F.alive[s]=e.dead?0:1;F.energy[s]=kind>=4?0:(Number(T.energy[q])||0);
+        F.owner[s]=o===-1&&kind>=4?(kind===3?view.grid[e.gy][e.gx].owner:-1):Number.isFinite(o)?o:kind===3?view.grid[e.gy][e.gx].owner:-1;
+        F.flags[s]=(T.flags[q]&SIM_SF_UC)?1:0;
+        F.type[s]=codes.get(_pageFrameStrings[T.type[q]]||undefined)||0;F.utype[s]=codes.get(_pageFrameStrings[T.utype[q]]||undefined)||0;
+        F.vision[s]=kind<4?(Number(T.vision[q])||0):0;
+        F.angle[s]=Number(T.angle[q])||0;F.amount[s]=kind===4||kind===5?(Number(T.amount[q])||0):0;
+        return;
+    }
+    F.alive[s]=e.dead?0:1;F.energy[s]=Number(e.energy)||0;
+    F.owner[s]=Number.isFinite(e.owner)?e.owner:kind===3?view.grid[e.gy][e.gx].owner:-1;
+    F.flags[s]=(e.underConstruction?1:0)|(e._historyGhost?STRUCT_FRAME_GHOST:0);
+    F.type[s]=codes.get(e.type)||0;F.utype[s]=codes.get(e.unitType)||0;
+    F.vision[s]=kind<4?Number(getEntityEffectiveVisibilityRangeArea(e))||0:0;
+    F.angle[s]=Number(e.angle)||0;F.amount[s]=Number(kind===4?e.gold:kind===5?e.astar:0)||0;
 }
 // Rank only visible models. Chunk bounds are deliberately conservative and
 // include units behind/beside the camera; they must not consume detail slots.
 // CSS pixels keep LOD independent of render resolution / device pixel ratio.
 const DETAIL_VIEW_HOLD_MS = 150;
+// (A remembered structure's flag in the structure columns (Team + history,
+// _structureRenderFrame): a bit no live table uses. 65536 there is a
+// structure's research task (SIM_SF_RESEARCH_TASK): read as remembered, a
+// lab at work was drawn dimmed, and seen through the fog. renderer3d.js
+// STRUCT_GHOST_FLAG is the same bit.)
+const STRUCT_FRAME_GHOST = 4194304;
 const _detailViewHeld = { key: '', at: -Infinity, tick: -1, x: NaN, y: NaN, zoom: NaN, pitch: NaN, yaw: NaN };
 function _detailViewKey(flat2d) {
     const R = renderer3dInstance;
@@ -3998,7 +4044,7 @@ function _structureDetailSplit(lists, flat2d, bounds, live = true, renderFrame =
                 projection.x[s] = gx; projection.y[s] = gy; projection.retained[s] = retained;
             }
             if (!F.alive[s] || F.kind[s] === 6 || (F.kind[s] < 4 && F.energy[s] <= 0)) continue;
-            if (!fullVisibility && !(F.flags?.[s]&65536) && !(visibilityGrid[gy]?.[gx] > 0)) continue;
+            if (!fullVisibility && !(F.flags?.[s]&STRUCT_FRAME_GHOST) && !(visibilityGrid[gy]?.[gx] > 0)) continue;
             P[s] = projection.scores[s];
         }
         projection.key = viewKey;
@@ -4071,9 +4117,12 @@ function _detailMaskClear() {
     if (_detailMask) for (const s of _detailSlots) _detailMask[s] = 0;
     if (_detailSlots.length) { _detailSlots = []; _detailMaskVersion++; }
 }
-function _unitDetailSplit(viewUnits, flat2d, bounds) {
+// (vSlots: the frame slots of viewUnits, in their order, when the cull had
+// them (getChunkRenderView): read instead of each unit's _s.)
+function _unitDetailSplit(viewUnits, flat2d, bounds, vSlots = null) {
     const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null, R = renderer3dInstance;
     if (!F || !R || typeof R.columnPixelScale !== 'function') { _detailMaskClear(); return null; }
+    if (vSlots && vSlots.length !== viewUnits.length) vSlots = null;
     const cacheKey = _detailViewKey(flat2d) + '|' + visibilityVersion + '|' + fullVisibility;
     if (_unitDetailCache?.key === cacheKey && _unitDetailCache.frame === F && _unitDetailCache.source === viewUnits) {
         _unitDetailCache.value.columns.alpha = tickAlpha;
@@ -4083,7 +4132,7 @@ function _unitDetailSplit(viewUnits, flat2d, bounds) {
     if (_unitDetailPx.length < viewUnits.length) _unitDetailPx = new Float32Array(Math.ceil(viewUnits.length * 1.5));
     const n = viewUnits.length, P = _unitDetailPx.subarray(0, n);
     for (let i = 0; i < n; i++) {
-        const u = viewUnits[i], s = u ? u._s : -1;
+        const s = vSlots ? vSlots[i] : viewUnits[i] ? viewUnits[i]._s : -1;
         // (Not in the frame: as before, in detail.)
         if (!(s >= 0)) { P[i] = Infinity; continue; }
         // (Frozen or hidden ones, Team + history: the glyphs' alone.)
@@ -4114,7 +4163,7 @@ function _unitDetailSplit(viewUnits, flat2d, bounds) {
     // Preserve the list identity when the selection is unchanged, so the
     // persistent model layer can be reused between simulation ticks.
     if (_detailUnits.length !== detailed.length || detailed.some((u, i) => u !== _detailUnits[i])) _detailUnits = detailed;
-    const value = { units: _detailUnits, columns: { units: F, structures: null, unitSources: _isLiveUnitList(null, true), unitCandidates: viewUnits, alpha: a, detailPx: 0,
+    const value = { units: _detailUnits, columns: { units: F, structures: null, unitSources: _isLiveUnitList(null, true), unitCandidates: viewUnits, unitCandidateSlots: vSlots, alpha: a, detailPx: 0,
         detailMask: M8, detailMaskVersion: _detailMaskVersion,
         visibility: visibilityGridForColumns(), visibilityVersion, fullVisibility, player: localPlayerId, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
         colors: Array.from({ length: 9 }, (_, i) => get3DRenderOwnerColor(i - 1)) } };
@@ -4279,11 +4328,18 @@ function prepareRendererLodAssets(showProgress=false) {
         // Paint the loading message before allocation and shader compilation.
         if(showProgress)await new Promise(resolve=>setTimeout(resolve,0));
         _columnLodCatalog=null; // Recheck edited match rules before loading.
-        const A=R.prepareColumnAtlas();
-        if(!A)return;
-        await R.preloadColumnAtlas(A,showProgress?fraction=>{
+        let A=R.prepareColumnAtlas();
+        const progress=showProgress?fraction=>{
             if(typeof setMatchLoadOverlay==='function')setMatchLoadOverlay(true,'Loading Match','Preparing model views… '+Math.floor(fraction*100)+'%');
-        }:null);
+        }:null;
+        // (One replaced meanwhile (settings or teams changed: renderer3d.js
+        // prepareColumnAtlas): the newest prepared, until one is complete.)
+        for(let tries=0;A&&tries<8;tries++) {
+            await R.preloadColumnAtlas(A,progress);
+            const N=R.prepareColumnAtlas();
+            if(!N||N===A||N.complete)break;
+            A=N;
+        }
     })().catch(error=>{
         if(showProgress && typeof setMatchLoadOverlay==='function')setMatchLoadOverlay(true,'Model preparation failed',String(error.message||error));
         throw error;
@@ -5378,14 +5434,17 @@ function syncVisibilityCoverage() {
     for (let list of [towers, barracks, collectorSpawners]) for (let i = k; i < list.length; i += step) {
         if (list[i]) _visCoverSync(list[i], false);
     }
+    // (Barracks and spawners are cell items too: their lists' turn above.)
     let items = _getVisibilityFloorItemCandidates();
-    for (let i = k; i < items.length; i += step) _visCoverSync(items[i], false);
+    for (let i = k; i < items.length; i += step) { const e = items[i]; if (!_isProducerStructure(e)) _visCoverSync(e, false); }
     // Registered buildings no longer in the world, on the same stagger; the
-    // list is compacted once per cycle.
+    // list is compacted once per cycle. (Those still on their tile have
+    // their lists' turn: synced twice a cycle, ~600 calls a tick of 40k
+    // buildings, otherwise.)
     let list = C.list;
     for (let i = k; i < list.length; i += step) {
         let e = list[i];
-        if (e._vsGen === C.gen) _visCoverSync(e, false);
+        if (e._vsGen === C.gen && getTileEntityRef(e.gx, e.gy) !== e) _visCoverSync(e, false);
     }
     if (full || k === 0) {
         let w = 0;

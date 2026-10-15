@@ -112,6 +112,18 @@
    },
    "unit:flying": {
     "4": 4600
+   },
+   "unit:boss": {
+    "4": 600
+   },
+   "unit:mole": {
+    "4": 2500
+   },
+   "unit:snake": {
+    "3": 400
+   },
+   "unit:poison_resistant": {
+    "4": 2500
    }
   }
  },

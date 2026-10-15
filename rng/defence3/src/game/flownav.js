@@ -394,7 +394,7 @@ const _navFields = { pools: [_navNewPool(false), _navNewPool(true)], seenCycle: 
 // did not fit 10 on the lane's capped helpers: the install waited ~60 ms
 // for the rest. A build is ~150 ticks; units follow the old one meanwhile.)
 const NAV_SWAP_TICKS = 30;
-const _navNext = { nav: null, rowW: 0, pools: [null, null], stages: null };
+const _navNext = { nav: null, rowW: 0, pools: [null, null], stages: null, spare: [null, null] };
 function _navFieldKey(profile, dest) { return profile * 16777216 + dest; }
 function _navPoolEnsure(F, C) {
     if (F.C === C && F.pool) return F;
@@ -428,7 +428,8 @@ function _navFieldsGrow(F, cap) {
     const w = F.wide ? 1 : 0;
     simParallelBind('nav.fpool.' + w, pool); simParallelBind('nav.fmeta.' + w, meta); simParallelBind('nav.frows.' + w, rows);
     _navFieldsHeader();
-    if (_navNext.nav) _navNextPoolEnsure(F);
+    if (_navNext.nav) { _navNextPoolEnsure(F); _navNextCopyFlush(); }
+    _navNextExpect();
 }
 // Rows wide enough for the installed builds' parts (a build installed: every
 // field is made again anyway, see navPublish).
@@ -605,6 +606,8 @@ function _navGrowSwap() {
     simParallelBindFlush();
     _navFieldsHeader();
     for (const F of _navFields.pools) if (_navNext.nav && F.pool) _navNextPoolEnsure(F);
+    _navNextCopyFlush();
+    _navNextExpect();
 }
 // A batch's two stages in a chain: its fields at stage st, its copies at
 // st + 2.
@@ -671,6 +674,10 @@ function _navFieldsBatch(F, slots, next, id, bg) {
     // (A slot's row is its destination's: one slot a destination in a pool,
     // so every slot makes its own; nav.fsrc all -1, no copies.)
     const w = F.wide ? 1 : 0, n = slots.length, N = next ? _navNextPoolEnsure(F) : null;
+    // (The next build's pools still being copied into: done before a batch
+    // over them goes out on another lane.)
+    if (N) _navNextCopyFlush();
+    if (N && _navNext.copying) { simParallelBackgroundWait(SIM_LANE_NAVX); _navNext.copying = false; }
     if (N) for (let i = 0; i < n; i++) N.made[slots[i]] = 1;
     const list = simHeapArrayAuto(Int32Array, n), src = simHeapArrayAuto(Int32Array, n, false);
     list.set(slots);
@@ -965,6 +972,8 @@ function _navNextStageBody(nav) {
         _navFieldsStage(lane, stages, F.wide ? 1 : 0, _navFieldsBatch(F, slots.subarray(0, n), true, 2, true));
     }
     _navFieldsHeader();
+    // (Both pools made: no headroom kept for them any more.)
+    if (typeof simHeapExpectDone === 'function') simHeapExpectDone('navNext');
     // (Posted by _navNextStage once the bindings are sent.)
     _navNext.stages = stages;
 }
@@ -977,17 +986,34 @@ function _navNextPoolEnsure(F) {
     if (N) { _navFieldsLaneWait(); simParallelBackgroundWait(SIM_LANE_NAVX); }
     // (Not cleared: a slot's field and row are written whole before it is
     // marked made, and nothing reads a slot not made; clearing ~300 MB at
-    // 400k a team took 60-150 ms of the rebuild's first tick.)
-    const rowW = _navNext.rowW, pool = simHeapArrayAuto(Uint16Array, F.cap * F.span * F.span, !!N), rows = simHeapArrayAuto(Uint8Array, Math.max(1, F.cap * rowW), !!N), rowKeyOf = new Float64Array(F.cap).fill(-1);
+    // 400k a team took 60-150 ms of the rebuild's first tick. Grown: the
+    // made slots' fields copied on the helpers, both pools' in one stage on
+    // SIM_LANE_NAVX (_navNextCopyFlush: whatever reads or writes the pools
+    // waits for that lane first; a batch over this build on the fields'
+    // lane too, see _navFieldsBatch): ~100 MB copied here were 15-25 ms ticks.)
+    // (A window's opening: the last window's arrays when they fit (kept by
+    // _navNextRelease), not ~230 MB allocated anew: 10-13 ms an array.)
+    const rowW = _navNext.rowW, sp = N ? null : _navNext.spare[w];
+    _navNext.spare[w] = null;
+    const reuse = !!sp && sp.cap === F.cap && sp.rowW === rowW && sp.span === F.span;
+    const pool = reuse ? sp.pool : simHeapArrayAuto(Uint16Array, F.cap * F.span * F.span, false), rows = reuse ? sp.rows : simHeapArrayAuto(Uint8Array, Math.max(1, F.cap * rowW), false), rowKeyOf = new Float64Array(F.cap).fill(-1);
     // (made: the slots a batch over this build was given, written before the
     // install waits for them; see _navNextInstall.)
     const made = new Uint8Array(F.cap);
-    if (N) { pool.set(N.pool); rows.set(N.rows); rowKeyOf.set(N.rowKeyOf); made.set(N.made); }
-    N = _navNext.pools[w] = { cap: F.cap, pool, rows, rowW, rowKeyOf, made, rowSrc: N ? N.rowSrc : new Map() };
+    if (N) {
+        rowKeyOf.set(N.rowKeyOf); made.set(N.made);
+        const pairs = _navNext.copyPairs || (_navNext.copyPairs = []);
+        pairs.push(pool, N.pool);
+        if (N.rows.length <= rows.length) pairs.push(rows, N.rows);
+    }
+    N = _navNext.pools[w] = { cap: F.cap, span: F.span, pool, rows, rowW, rowKeyOf, made, rowSrc: N ? N.rowSrc : new Map() };
     simParallelBind('nav.npool.' + w, pool); simParallelBind('nav.nrows.' + w, rows);
     _navFieldsHeader();
     return N;
 }
+// (Tests: the install's side forced, 1 the next arrays installed, -1 the
+// rebuilt profile's fields copied; 0 the smaller copy.)
+let NAV_INSTALL_SIDE = 0;
 // (Slots made only at an install, for want of a batch: diagnostics.)
 let _navNextMissed = 0, _navNextKept = 0;
 // Closes it: the next build and its fields installed together.
@@ -1008,28 +1034,46 @@ function _navNextInstall(nav) {
         // movement kernel takes a new generation of a made slot with its
         // destination as the field made again, and goes on reading it) keeps
         // what it held.
-        const missed = [], size = F.span * F.span;
-        for (let s = 0; s < F.cap; s++) if (!N.made[s] && F.meta[s * NAV_FIELD_META] === prof) missed.push(s);
+        // (One pass: the rebuilt profile's live slots (all made over the next
+        // build once the missed ones are), the missed ones, and how many
+        // other slots hold a field (live, or let go but made). Three passes
+        // over 65k slots were ~7 ms of an install.)
+        const size = F.span * F.span, meta = F.meta, made = N.made, M = NAV_FIELD_META;
+        const mineList = new Int32Array(F.cap), missed = [];
+        let mine = 0, others = 0;
+        for (let s = 0, m = 0; s < F.cap; s++, m += M) {
+            const v = meta[m];
+            if (v === prof) { mineList[mine++] = s; if (!made[s]) missed.push(s); }
+            else if (v >= 0 || meta[m + 7] === 1) others++;
+        }
         if (missed.length) { _navNextMissed += missed.length; _navFieldsRunNow(_navFieldsBatch(F, Int32Array.from(missed), true, 1, false)); }
-        if (N.rowW === F.rowW) {
+        // (Rows as wide: the smaller side copied, a field's ~8-32 KB each:
+        // the rebuilt profile's ~10k fields into the installed arrays were
+        // 10-19 ms. Fewer of the other profiles' fields: those go into the
+        // next arrays, as for wider rows below, and the installed arrays
+        // are kept for the next window.)
+        if (N.rowW === F.rowW && (NAV_INSTALL_SIDE < 0 || (NAV_INSTALL_SIDE === 0 && mine <= others))) {
             // (Rows as wide: the rebuilt profile's fields copied into the
             // installed arrays, in runs of slots. N.made holds every slot
             // written over the next build: the window's, the missed ones,
             // and fields asked for meanwhile, the other profiles' among them,
             // the same over the same builds.)
             const rw = F.rowW;
-            for (let s = 0; s < F.cap;) {
-                if (!(N.made[s] && F.meta[s * NAV_FIELD_META] === prof)) { s++; continue; }
-                let e = s + 1;
-                while (e < F.cap && N.made[e] && F.meta[e * NAV_FIELD_META] === prof) e++;
+            for (let i = 0; i < mine;) {
+                const s = mineList[i];
+                let j = i + 1;
+                while (j < mine && mineList[j] === s + (j - i)) j++;
+                const e = s + (j - i);
                 F.pool.set(N.pool.subarray(s * size, e * size), s * size);
                 F.rows.set(N.rows.subarray(s * rw, e * rw), s * rw);
-                s = e;
+                i = j;
             }
             continue;
         }
-        // (Rows wider: the next arrays installed, every other slot that holds
-        // a field (live, or let go but made) copied over, its row widened.)
+        // (Rows wider, or fewer other fields: the next arrays installed,
+        // every other slot that holds a field (live, or let go but made)
+        // copied over, its row widened when wider.)
+        const old = N.rowW === F.rowW ? { cap: F.cap, span: F.span, rowW: F.rowW, pool: F.pool, rows: F.rows } : null;
         for (let s = 0; s < F.cap; s++) {
             const m = s * NAV_FIELD_META;
             if (N.made[s] && F.meta[m] === prof) continue;
@@ -1042,15 +1086,56 @@ function _navNextInstall(nav) {
         }
         F.pool = N.pool; F.rows = N.rows; F.rowW = N.rowW; F.rowSrc = N.rowSrc; F.rowKeyOf = N.rowKeyOf;
         simParallelBind('nav.fpool.' + w, F.pool); simParallelBind('nav.frows.' + w, F.rows);
+        // (Its arrays are the installed ones now; the old ones, as wide,
+        // kept for the next window instead.)
+        _navNext.pools[w] = null;
+        if (old) _navNext.spare[w] = old;
     }
-    _navNext.nav = null; _navNext.pools = [null, null];
+    _navNextRelease();
+    _navNext.nav = null;
     navPublish(nav, true);
 }
+// The next window's pools, when no spares fit the fields' pools as they
+// are now: the heap told to grow ahead for them (sim_wasm.js
+// simHeapExpect), so the first window's opening does not grow the memory
+// on this thread (~230 MB: two 10-13 ms allocations).
+function _navNextExpect() {
+    if (typeof simHeapExpect !== 'function') return;
+    let bytes = 0;
+    for (const F of _navFields.pools) {
+        if (!F.pool) continue;
+        const sp = _navNext.spare[F.wide ? 1 : 0];
+        if (sp && sp.cap === F.cap && sp.span === F.span) continue;
+        bytes += F.cap * F.span * F.span * 2 + F.cap * Math.max(1, F.rowW);
+    }
+    if (bytes) simHeapExpect('navNext', bytes); else simHeapExpectDone('navNext');
+}
+// The window over: its pools' arrays kept for the next window (the lanes
+// that wrote them waited for), the slots' contents left as they are (a
+// slot is read only once made over the build it belongs to).
+function _navNextRelease() {
+    for (let w = 0; w < 2; w++) {
+        const N = _navNext.pools[w];
+        if (N && N.pool) _navNext.spare[w] = { cap: N.cap, span: N.span, rowW: N.rowW, pool: N.pool, rows: N.rows };
+    }
+    _navNext.pools = [null, null];
+}
 // (Dropped: its batches finished, its arrays let go.)
+// The grown next pools' copies (_navNextPoolEnsure) as one stage on
+// SIM_LANE_NAVX.
+function _navNextCopyFlush() {
+    const pairs = _navNext.copyPairs;
+    if (!pairs || !pairs.length) return;
+    _navNext.copyPairs = null;
+    const stage = typeof simParallelCopyStage === 'function' ? simParallelCopyStage(pairs, simParallelStageParams(SIM_LANE_NAVX, 0), 1) : null;
+    if (stage) { simParallelBackgroundChain(SIM_LANE_NAVX, [stage]); _navNext.copying = true; }
+    else for (let i = 0; i < pairs.length; i += 2) pairs[i].set(pairs[i + 1]);
+}
 function _navNextDrop() {
     _navFieldsLaneWait();
     if (typeof SIM_LANE_NAVX === 'number') simParallelBackgroundWait(SIM_LANE_NAVX);
-    _navNext.nav = null; _navNext.pools = [null, null];
+    _navNextRelease();
+    _navNext.nav = null; _navNext.copyPairs = null; _navNext.copying = false;
     _navFieldsHeader();
 }
 
@@ -1333,8 +1418,9 @@ function _navWallDiffReset(p = NAV_PROFILE_GROUND) {
     if (p === NAV_PROFILE_AIR) return;
     const w = _navNewestWalls(p), live = p === NAV_PROFILE_GROUND ? (typeof _simMoveWall !== 'undefined' ? _simMoveWall : null) : _navClassWalls(p);
     if (!w || !live || live.length !== w.length) return;
-    let d = 0;
-    for (let i = 0; i < w.length; i++) if (w[i] !== live[i]) d++;
+    // (In the kernels when both are heap arrays: ~2.6 ms here at 1M tiles.)
+    let d = typeof simParallelDiffCount === 'function' ? simParallelDiffCount(w, live) : null;
+    if (d === null) { d = 0; for (let i = 0; i < w.length; i++) if (w[i] !== live[i]) d++; }
     _navDiff[p] = d;
 }
 function _navDiffChanged(p, t, was, now) {

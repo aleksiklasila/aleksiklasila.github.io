@@ -70,7 +70,10 @@ function resyncResetState() {
         outstanding: false, requestedAt: 0, requestId: 0,
         T: -1, patchId: 0, patch: null, full: false, waitSince: 0, divergedAt: -1, lastHashedTick: -1,
         graceTick: -1, lastPatchTick: -1, patches: 0, fullPatches: 0, forceFull: false, lastChanged: [],
-        joining: false, joinTick: -1, awaitingLive: false, liveFromTick: -1, heldActions: []
+        joining: false, joinTick: -1, awaitingLive: false, liveFromTick: -1, heldActions: [], heldFinal: [], liveSentAt: 0,
+        // (The newest repair id seen, and the host it came from: see
+        // _resyncGuestFreshId.)
+        maxId: 0, idHost: ''
     };
     snapResetHashHistory();
 }
@@ -99,6 +102,11 @@ function resyncNoteRestored(tick) {
 // Called after every simulated tick in multiplayer. With the simulation
 // worker, `record` is the hash it computed for the tick.
 function resyncAfterTick(tick, record = null) {
+    // (A join's JOIN_LIVE again while unanswered: every tick runs here.)
+    if (!isHost && resyncGuest.awaitingLive) {
+        let now = performance.now();
+        if (now - resyncGuest.liveSentAt >= RESYNC_JOIN_LIVE_RETRY_MS) _resyncGuestSendLive(now);
+    }
     // (Hashed ticks only: snapHashDue.)
     if (!record && !snapHashDue(tick)) return;
     let r = record ? snapStoreTickHash(record) : snapRecordTickHash(tick);
@@ -136,7 +144,7 @@ function resyncHostFlushHashes(now = performance.now()) {
     let h = resyncTakeHostHashes();
     for (let c of connections) {
         if (!c) continue;
-        try { c.send({ type: 'TICK_HASHES', h }); } catch { }
+        try { c.send({ type: 'TICK_HASHES', h, m: matchStartSessionId || undefined }); } catch { }
     }
 }
 
@@ -210,14 +218,27 @@ function resyncGuestRequest(tick, now, from = tick) {
     let rotation = full ? [] : snapHashRotation(tick).filter(r => r.tick >= g.graceTick);
     logLockstepWarning('State hash mismatch; asking for a patch', { tick, from, full });
     try {
-        hostConn.send({ type: 'RESYNC_REQUEST', tick, from, at: currentTick, rotation, full, id: g.requestId });
+        hostConn.send({ type: 'RESYNC_REQUEST', tick, from, at: currentTick, rotation, full, id: g.requestId, m: matchStartSessionId || undefined });
     } catch { }
 }
 
+// A repair message's id is current: not older than one already seen from
+// this host (messages overtake each other: an older RESYNC_AT replaced a
+// newer one, the guest then stopped at the older tick and asked again).
+// Ids count per host: a new host (migration) starts them again.
+function _resyncGuestFreshId(id) {
+    let g = resyncGuest, host = String(wsHostId || '');
+    if (g.idHost !== host) { g.idHost = host; g.maxId = 0; }
+    if (id > 0 && id < g.maxId) return false;
+    if (id > g.maxId) g.maxId = id;
+    return true;
+}
+
 function resyncGuestHandleAt(data) {
-    if (isHost || !gameStarted) return;
+    if (isHost || !gameStarted || !netMatchTagOk(data && data.m)) return;
     let T = Math.floor(Number(data && data.tick));
     if (!Number.isFinite(T)) return;
+    if (!_resyncGuestFreshId(Math.floor(Number(data.id) || 0))) return;
     let g = resyncGuest;
     // (The simulation worker leaves that tick to the page from now on; it
     // may have run it by itself already, the page stalled.)
@@ -235,13 +256,19 @@ function resyncGuestHandleAt(data) {
 }
 
 function resyncGuestHandlePatch(data) {
-    if (isHost || !gameStarted) return;
+    if (isHost || !gameStarted || !netMatchTagOk(data && data.m)) return;
     let T = Math.floor(Number(data && data.tick));
     let id = Math.floor(Number(data && data.id) || 0);
     if (!Number.isFinite(T)) return;
+    if (!_resyncGuestFreshId(id)) return;
+    // (The state it was asked for: a reset (a new match, a restore of the
+    // whole match) or a newer repair while it decodes makes it obsolete;
+    // installed into the reset state it was applied to the wrong match.)
+    let g0 = resyncGuest, session = matchStartSessionId;
     netDecodeSnapshotPayload(data.payload).then(text => {
         if (!text) throw new Error('empty patch');
         let g = resyncGuest;
+        if (g !== g0 || matchStartSessionId !== session || !gameStarted || isHost || id < g.maxId) return;
         if (T < currentTick || (g.T >= 0 && g.T !== T)) {
             // Too late for this one (or superseded): ask again.
             if (g.T === T || g.T < currentTick) { g.T = -1; g.outstanding = false; }
@@ -253,7 +280,7 @@ function resyncGuestHandlePatch(data) {
         g.patch = { tick: T, text, bytes: netSnapshotPayloadBytes(data.payload) };
     }).catch(err => {
         logLockstepWarning('Could not decode a patch', { error: String(err && err.message || err) });
-        resyncGuest.outstanding = false;
+        if (resyncGuest === g0) resyncGuest.outstanding = false;
     });
 }
 
@@ -294,14 +321,22 @@ function applyResyncPatch(text, full) {
     // With the simulation worker, the worker applies it: the page sees the
     // result in the next frame and records.
     if (typeof simClientActive === 'function' && simClientActive()) {
-        simClientAfterPatchApplied(text, full);
-        netCounters.snapshotApplyMs = performance.now() - t0;
-        netCounters.snapshotBytes = g.patch ? g.patch.bytes : text.length;
-        netCounters.lastSnapshotAt = performance.now();
-        if (full) { netCounters.fullPatches++; g.fullPatches++; } else { netCounters.patches++; g.patches++; }
-        netCounters.lastDesyncParts = full ? 'full state' : '';
-        g.lastChanged = [];
-        _resyncGuestPatchDone(currentTick);
+        // (Counted and acknowledged once the worker says it took it: a patch
+        // its decoder refuses (another format or rules) was counted as
+        // applied, and the host told so.)
+        let bytes = g.patch ? g.patch.bytes : text.length, tick = currentTick, id = g.patchId;
+        _resyncGuestPatchSettle(tick);
+        simClientAfterPatchApplied(text, full).then(ok => {
+            if (resyncGuest !== g) return;
+            if (!ok) { _resyncGuestPatchRefused(tick, id); return; }
+            netCounters.snapshotApplyMs = performance.now() - t0;
+            netCounters.snapshotBytes = bytes;
+            netCounters.lastSnapshotAt = performance.now();
+            if (full) { netCounters.fullPatches++; g.fullPatches++; } else { netCounters.patches++; g.patches++; }
+            netCounters.lastDesyncParts = full ? 'full state' : '';
+            g.lastChanged = [];
+            _resyncGuestPatchAck(tick, id);
+        }, () => { });
         return;
     }
     let S = JSON.parse(text);
@@ -311,6 +346,9 @@ function applyResyncPatch(text, full) {
     for (let u of units) before.set(u, [u.x, u.y]);
     let res = snapDecodeState(S, { collectChanges: !full });
     let tick = currentTick;
+    // (Refused by the decoder: another format or rules. Nothing changed;
+    // neither counted nor acknowledged as applied.)
+    if (!res) { _resyncGuestPatchTaken(); _resyncGuestPatchRefused(tick, g.patchId); return; }
     netCounters.snapshotApplyMs = performance.now() - t0;
     netCounters.snapshotBytes = g.patch ? g.patch.bytes : text.length;
     netCounters.lastSnapshotAt = performance.now();
@@ -335,21 +373,43 @@ function applyResyncPatch(text, full) {
     _resyncGuestPatchDone(tick);
 }
 
-// The guest's bookkeeping once a patch is applied (at `tick`).
-function _resyncGuestPatchDone(tick) {
+// The patch for T taken (applied now, or by the worker): no longer waited
+// for at T.
+function _resyncGuestPatchTaken() {
     let g = resyncGuest;
     g.T = -1;
     g.patch = null;
     g.waitSince = 0;
+}
+// A patch its decoder refused: not applied, so not acknowledged; asked for
+// again when a mismatch shows next.
+function _resyncGuestPatchRefused(tick, id) {
+    let g = resyncGuest;
+    g.outstanding = false;
+    netCounters.patchesRefused = (netCounters.patchesRefused | 0) + 1;
+    logLockstepWarning('A patch was refused by the decoder (another format or rules); not applied', { tick, id });
+}
+// A patch applied at `tick` (or handed to the worker, which applies it
+// before that tick): what was compared before it no longer counts.
+function _resyncGuestPatchSettle(tick) {
+    let g = resyncGuest;
+    _resyncGuestPatchTaken();
     g.outstanding = false;
     g.divergedAt = -1;
     g.lastPatchTick = tick;
-    g.graceTick = tick;
+    g.graceTick = Math.max(g.graceTick, tick);
     // Comparisons for ticks before the patch no longer mean anything.
     for (let k in lockstepExpectedStateHashByTick) if (+k < tick) delete lockstepExpectedStateHashByTick[k];
     for (let k in lockstepLocalStateHashByTick) if (+k < tick) delete lockstepLocalStateHashByTick[k];
+}
+// The guest's bookkeeping once a patch is applied (at `tick`).
+function _resyncGuestPatchDone(tick, id = resyncGuest.patchId) {
+    _resyncGuestPatchSettle(tick);
+    _resyncGuestPatchAck(tick, id);
+}
+function _resyncGuestPatchAck(tick, id) {
     let hostConn = netGetHostConnection();
-    if (hostConn) { try { hostConn.send({ type: 'RESYNC_PATCH_APPLIED', tick, id: g.patchId, ms: Math.round(netCounters.snapshotApplyMs), changed: g.lastChanged.slice(0, 20) }); } catch { } }
+    if (hostConn) { try { hostConn.send({ type: 'RESYNC_PATCH_APPLIED', tick, id, ms: Math.round(netCounters.snapshotApplyMs), changed: resyncGuest.lastChanged.slice(0, 20) }); } catch { } }
 }
 
 // ---------------------------------------------------------------------------
@@ -380,7 +440,7 @@ function _resyncCodesHitCarried(codes, carried) {
 }
 
 function resyncHostHandleRequest(conn, data) {
-    if (!isHost || !gameStarted || gameOver || !conn || !conn.peer) return;
+    if (!isHost || !gameStarted || gameOver || !conn || !conn.peer || !netMatchTagOk(data && data.m)) return;
     let pid = String(conn.peer);
     if (lockstepStrictDebugMode) {
         let t = Math.floor(Number(data && data.tick) || 0);
@@ -460,7 +520,7 @@ function resyncHostHandleRequest(conn, data) {
         resyncHostFlushTicks.add(T);
     }
     netCounters.lastDesyncParts = full ? 'full' : (codes.size + ' buckets');
-    try { conn.send({ type: 'RESYNC_AT', tick: pending.T, id: pending.id, full: pending.full }); } catch { }
+    try { conn.send({ type: 'RESYNC_AT', tick: pending.T, id: pending.id, full: pending.full, m: matchStartSessionId || undefined }); } catch { }
 }
 
 // Host: the first tick no bundle is sealed for yet: past what this page
@@ -498,7 +558,7 @@ function resyncHostBeforeTick(tick) {
         peer.carried = buckets;
         if (pending.full) netCounters.fullPatches++; else netCounters.patches++;
         did = true;
-        let msg = { type: 'RESYNC_PATCH', tick: pending.T, id: pending.id, full: pending.full };
+        let msg = { type: 'RESYNC_PATCH', tick: pending.T, id: pending.id, full: pending.full, m: matchStartSessionId || undefined };
         let send = text => {
             netCounters.snapshotBuildMs = performance.now() - t0;
             netCounters.lastSnapshotAt = performance.now();
@@ -617,6 +677,14 @@ function resyncGuestMaybeLive() {
     if (newest - currentTick > 2) return;
     g.joining = false;
     g.awaitingLive = true;
+    _resyncGuestSendLive(performance.now());
+}
+// (Sent again every RESYNC_JOIN_LIVE_RETRY_MS until acknowledged
+// (resyncGuestBeforeTick): one lost, and commands were held for good.)
+const RESYNC_JOIN_LIVE_RETRY_MS = 1000;
+function _resyncGuestSendLive(now) {
+    let g = resyncGuest;
+    g.liveSentAt = now;
     let hostConn = netGetHostConnection();
     if (hostConn) { try { hostConn.send({ type: 'JOIN_LIVE', tick: currentTick }); } catch { } }
 }
@@ -626,11 +694,15 @@ function resyncGuestMaybeLive() {
 function resyncGuestHandleJoinLiveAck(data) {
     let g = resyncGuest;
     let tick = Math.floor(Number(data && data.tick));
-    if (!Number.isFinite(tick)) return;
+    // (Only the first answer counts: the retries may bring more.)
+    if (!Number.isFinite(tick) || !g.awaitingLive) return;
     g.awaitingLive = false;
     g.liveFromTick = tick;
-    let held = g.heldActions;
-    g.heldActions = [];
+    let held = g.heldActions, final = g.heldFinal || [];
+    g.heldActions = []; g.heldFinal = [];
+    // (Commands made before a reload of the match, their ids kept, first:
+    // utils_networking.js _takeUnsentLocalActions.)
+    for (let a of final) requeueLocalAction(a);
     for (let a of held) queueAction(a);
     if (gameStarted) sendLocalTickPacketWindow(currentTick, true);
 }
@@ -639,6 +711,10 @@ function resyncGuestHandleJoinLiveAck(data) {
 function resyncGuestHoldAction(action) {
     let g = resyncGuest;
     if (isHost || !g || !(g.joining || g.awaitingLive)) return false;
-    if (g.heldActions.length < 256) g.heldActions.push(action);
+    // (Past RESYNC_HELD_ACTIONS_MAX (a join that never completes), dropped
+    // with a warning, once: no longer silently, at 256.)
+    if (g.heldActions.length < RESYNC_HELD_ACTIONS_MAX) g.heldActions.push(action);
+    else if (!g.heldDropWarned) { g.heldDropWarned = true; logLockstepWarning('Commands dropped while joining (the join did not complete)', { held: g.heldActions.length }); }
     return true;
 }
+const RESYNC_HELD_ACTIONS_MAX = 4096;

@@ -660,21 +660,36 @@ function _requestAdjacencyRecalcForThing(thing, pad = 1) {
 // rx), so the hash skips empty regions.)
 // (tim: a tower's cooldown deadline, Tower._cdUntil; a barrack's or
 // spawner's spawn timer.)
-// (mines: the tiles holding mines (a Set: few; the hash takes every mine
-// every hash, see _snapTickHashStatic).)
-const _ST = { n: 0, code: null, own: null, uc: null, val: null, tim: null, rcnt: null, rw: 0, mines: new Set() };
+// (mines: the tiles holding mines, a compact list (mineN of them; mineAt:
+// a tile's place + 1, 0 none): the hash takes every mine every hash, see
+// _snapTickHashStatic; a Set's walk was most of its ~0.8 ms a tick with
+// 20k mines.)
+const _ST = { n: 0, code: null, own: null, uc: null, val: null, tim: null, rcnt: null, rw: 0, mineArr: new Int32Array(64), mineN: 0, mineAt: null };
+function _stMineAdd(t) {
+    const T = _ST;
+    if (!T.mineAt || T.mineAt.length !== T.n) T.mineAt = new Int32Array(T.n);
+    if (T.mineAt[t]) return;
+    if (T.mineN === T.mineArr.length) { const a = new Int32Array(T.mineArr.length * 2); a.set(T.mineArr); T.mineArr = a; }
+    T.mineArr[T.mineN] = t; T.mineAt[t] = ++T.mineN;
+}
+function _stMineDel(t) {
+    const T = _ST, i = T.mineAt ? T.mineAt[t] - 1 : -1;
+    if (i < 0) return;
+    const last = T.mineArr[--T.mineN];
+    T.mineArr[i] = last; T.mineAt[last] = i + 1; T.mineAt[t] = 0;
+}
 const ST_OWNER_NONE = 0x7ff9;
 function _stOwnerWord(v) { return (v | 0) === v ? v : ST_OWNER_NONE; }
 // (Made at the first entity joining: the page's lookup holds views only.)
 function structTableReset() {
     for (const e of _activeTileEntities) if (e && e._stT >= 0) e._stT = -1;
     const T = _ST;
-    T.mines.clear();
+    T.mineN = 0; if (T.mineAt) T.mineAt.fill(0);
     if (T.n !== GRID_W * GRID_H) { T.n = 0; T.code = T.own = T.uc = T.val = T.tim = T.rcnt = null; }
     else { T.code.fill(0); T.own.fill(0); T.uc.fill(0); T.val.fill(0); T.tim.fill(0); T.rcnt.fill(0); }
 }
 function _stRegion(t) { const gx = t % GRID_W, gy = (t - gx) / GRID_W, rt = SNAP_REGION_TILES; return Math.floor(gy / rt) * _ST.rw + Math.floor(gx / rt); }
-function _stClear(t) { const T = _ST; if (T.code[t] !== 0) { T.rcnt[_stRegion(t)]--; if (T.code[t] >= 0x66) T.mines.delete(t); } T.code[t] = 0; T.own[t] = 0; T.uc[t] = 0; T.val[t] = 0; T.tim[t] = 0; }
+function _stClear(t) { const T = _ST; if (T.code[t] !== 0) { T.rcnt[_stRegion(t)]--; if (T.code[t] >= 0x66) _stMineDel(t); } T.code[t] = 0; T.own[t] = 0; T.uc[t] = 0; T.val[t] = 0; T.tim[t] = 0; }
 // Tile (gx, gy) held `prev` and now holds `ref` (null: nothing).
 function structTableSet(gx, gy, prev, ref) {
     const t = gy * GRID_W + gx, T = _ST, n = GRID_W * GRID_H;
@@ -692,7 +707,7 @@ function structTableSet(gx, gy, prev, ref) {
     if (ref._stT >= 0 && ref._stT !== t) _stClear(ref._stT);
     ref._stT = t;
     T.code[t] = ref._stCode; T.rcnt[_stRegion(t)]++;
-    if (ref._stMine) T.mines.add(t);
+    if (ref._stMine) _stMineAdd(t);
     _stWrite(ref, t);
 }
 function _stWrite(ref, t) {

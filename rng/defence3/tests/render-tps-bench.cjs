@@ -11,7 +11,8 @@
 //   bed only. Fixtures 50000-200 and 100000-1000, or FIXTURES=a,b; SIMHELPERS
 //   per page in multiplayer, default 3)
 //   env: CASE_S (seconds per case, default 15), WARM_S (warm-up, 10),
-//        VIEWS (comma list), LOADS (comma list), VIS (map visibility modes:
+//        VIEWS (comma list; also 3d-fight / 2d-fight: the front, at FIGHT_ZOOM,
+//        default 3), LOADS (comma list), VIS (map visibility modes:
 //        full,team,history; default all three), HEADED=1, OUT (json path),
 //        QUERY (page URL query, e.g. simahead=0), PROFILE_VIEW (a view whose
 //        case is CPU-profiled on every page: <OUT>-<role>-<view>.cpuprofile;
@@ -165,7 +166,28 @@ const PAGE_VIEW = view => {
     xs.sort((a, b) => a - b); ys.sort((a, b) => a - b);
     const cx = xs.length ? xs[xs.length >> 1] : WORLD_W / 2, cy = ys.length ? ys[ys.length >> 1] : WORLD_H / 2;
     let zoom = fit, x = WORLD_W / 2, y = WORLD_H / 2;
-    if (view.endsWith('close')) { zoom = 1.5; x = cx; y = cy; }
+    if (view.endsWith('fight')) {
+        // The front: the 16-tile square where the fewer of two teams has the
+        // most live units (both armies in it; else the densest square).
+        const B = 16 * TILE, bw = Math.ceil(WORLD_W / B), bh = Math.ceil(WORLD_H / B);
+        const per = new Map(), teamOf = o => (typeof getPlayerTeam === 'function' ? getPlayerTeam(o) : o);
+        for (const u of units) {
+            if (!u || u.dead || u.workerType) continue;
+            const b = Math.min(bh - 1, Math.max(0, Math.floor(u.y / B))) * bw + Math.min(bw - 1, Math.max(0, Math.floor(u.x / B)));
+            let m = per.get(b); if (!m) per.set(b, m = new Map());
+            const t = teamOf(u.owner); m.set(t, (m.get(t) || 0) + 1);
+        }
+        let best = -1, bestScore = -1;
+        for (const [b, m] of per) {
+            const c = [...m.values()].sort((p, q) => q - p);
+            const score = (c.length > 1 ? c[1] * 1e6 : 0) + c[0];
+            if (score > bestScore) { bestScore = score; best = b; }
+        }
+        zoom = Number(window.__benchFightZoom) || 3;
+        if (best >= 0) { x = (best % bw + .5) * B; y = (Math.floor(best / bw) + .5) * B; }
+        const m = per.get(best);
+        window.__benchFight = { zoom, x: Math.round(x / TILE), y: Math.round(y / TILE), counts: m ? [...m.values()] : [] };
+    } else if (view.endsWith('close')) { zoom = 1.5; x = cx; y = cy; }
     else if (view === 'empty') { zoom = 2; x = 64; y = 64; }
     else if (view === 'tilted') { zoom = 0.6; x = WORLD_W / 2; y = WORLD_H / 2; }
     camera.zoom = zoom; camera.x = x - viewW / zoom / 2; camera.y = y - viewH / zoom / 2;
@@ -350,8 +372,17 @@ async function startMultiplayer(browser, port, fixture, vis, errors) {
         for (const [role, page] of m.pages) { await page.evaluate(PAGE_SETUP); ordered[role] = (await page.evaluate(PAGE_LOAD, load)).ordered; }
         for (const view of VIEWS) {
             const v = {};
-            for (const [role, page] of m.pages) v[role] = await page.evaluate(PAGE_VIEW, view);
+            for (const [role, page] of m.pages) {
+                await page.evaluate(z => { window.__benchFightZoom = z; }, Number(process.env.FIGHT_ZOOM) || 3);
+                v[role] = await page.evaluate(PAGE_VIEW, view);
+                if (view.endsWith('fight')) v[role].fight = await page.evaluate(() => window.__benchFight);
+            }
             await sleep(WARM_S * 1000);
+            // (The front as it is after the warm-up: picked again.)
+            if (view.endsWith('fight')) {
+                for (const [role, page] of m.pages) { v[role] = await page.evaluate(PAGE_VIEW, view); v[role].fight = await page.evaluate(() => window.__benchFight); }
+                await sleep(3000);
+            }
             const w0 = {};
             for (const [role, page] of m.pages) {
                 await page.evaluate(src => { const W = window.__bench; W.frames = []; W.ticks = []; W.longTasks = 0; W.longMs = 0; W.jit = { ids: null, rows: [], steps: null, lastTick: -1 }; W.jitSummaryFn = (0, eval)('(' + src + ')'); W.on = true; }, JITTER_SUMMARY.toString());
@@ -398,7 +429,7 @@ async function startMultiplayer(browser, port, fixture, vis, errors) {
                 if (row.sim) delete row.sim.errors;
                 if (phases[role]) { row.phases = phases[role]; console.log(role, 'phases ms/tick', JSON.stringify(Object.fromEntries(Object.entries(phases[role].msPerTick).slice(0, 16)))); }
                 console.log(JSON.stringify({ fixture, role, vis, load, view, workerTps: row.workerTps, appliedTps: row.appliedTps, simMs: row.workerSimMs,
-                    late: row.sim && row.sim.workerLateMs, ahead: row.sim && row.sim.dispatchAhead, fps: row.fps, frameMs: row.frameMs, longMs: row.longMs, heapMB: row.heapMB, jitter: row.jitter }));
+                    late: row.sim && row.sim.workerLateMs, ahead: row.sim && row.sim.dispatchAhead, fps: row.fps, frameMs: row.frameMs, longMs: row.longMs, heapMB: row.heapMB, fight: row.fight, jitter: row.jitter }));
                 out.rows.push(row);
             }
         }

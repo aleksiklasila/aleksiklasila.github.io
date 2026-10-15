@@ -83,7 +83,21 @@ const SNAP_FORMAT = 7;
 // 2500 units a tick (2000 a player); a tick's actions within a cost budget,
 // the rest waiting in order (the backlog, snapshotted and hashed); big
 // research tables hashed a slice a tick.
-const SIM_RULES_REVISION = 13;
+// 14: a building research refreshes only its own key's buildings (bResKey);
+// laser links remade along the changed rows and columns; a research
+// queue's move, removal or insertion remakes the touched stats' tasks
+// only (and costs the action budget less); action costs per kind as
+// measured, and a unit order over the budget left splits (attack, hold,
+// stop, kill: the units it pays for, the rest first in the backlog);
+// the adjacency flood's area tables from the area grid; new units over
+// the stats list's cap (a big starting army) no longer lose their first
+// stats pass; the effective stats' refresh tells the movement columns once
+// (not of the base level between); held units with an order out of range
+// look on their acquisition ticks (parked between); a worker's arrival
+// within its own update (from the tick's worker events); a bundle's packets
+// in peer id order by code units (was the locale's), its checksum over them
+// in that order.
+const SIM_RULES_REVISION = 14;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
 // Each hash covers one slice (regions, grid rows) of the world. The resync
@@ -487,6 +501,7 @@ function _snapHashGlobals(slice = -1, round = 0) {
     if (typeof workerWorkVersionsChecksum === 'function') h = Math.imul(h ^ workerWorkVersionsChecksum(), 16777619);
     if (typeof healerCandidatesChecksum === 'function') h = Math.imul(h ^ healerCandidatesChecksum(), 16777619);
     if (typeof actionBacklogChecksum === 'function') h = Math.imul(h ^ actionBacklogChecksum(), 16777619);
+    if (typeof orderQueueChecksum === 'function') h = Math.imul(h ^ orderQueueChecksum(), 16777619);
     return h >>> 0;
 }
 
@@ -788,11 +803,12 @@ function _snapTickHashStatic(t, slice, allSlices, regions, push) {
         const round = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS;
         hashStatic(listOf(slice + SNAP_HASH_SLICES * round));
         if (SNAP_HASH_STATIC_CORE_ALL) _snapStaticCoreSweep(slice, round, regions);
-        // (Every mine, every hash: few, read from the table, and a mine that
+        // (Every mine, every hash: read from the table, and a mine that
         // differs shows nowhere else for a long time.)
-        if (typeof _ST !== 'undefined' && _ST.n && _ST.mines.size) {
-            const T = _ST;
-            for (const tl of T.mines) {
+        if (typeof _ST !== 'undefined' && _ST.n && _ST.mineN) {
+            const T = _ST, MA = T.mineArr;
+            for (let i = 0, nm = T.mineN; i < nm; i++) {
+                const tl = MA[i];
                 const gx = tl % GRID_W, gy = (tl - gx) / GRID_W, v = T.val[tl];
                 let h = ((Math.imul(gx, 4099) + gy) ^ T.code[tl]) ^ 0x6d1;
                 h = (v | 0) === v ? Math.imul(h ^ v, 16777619) : _snapHNum(h, v);
@@ -2107,7 +2123,7 @@ function snapDecodeState(S, options = null) {
             let fresh = 0, freshUnits = null;
             // (A whole restore makes every unit anew: room for them at once,
             // see simUnitStateReserve.)
-            if (list === 'u' && !partial && typeof simUnitStateReserve === 'function') simUnitStateReserve(Math.max(rows.length, typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0));
+            if (list === 'u' && !partial && typeof simUnitStateReserve === 'function') simUnitStateReserve(rows.length, typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0);
             for (let r = 0; r < rows.length; r++) {
                 let row = rows[r];
                 let key = row[0];
@@ -2523,7 +2539,7 @@ function snapFlushHistoryCaches() {
     // Gameplay visibility is reused between ticks (see VISIBILITY_TICK_INTERVAL).
     if (typeof clearGameplayVisibilityCache === 'function') clearGameplayVisibilityCache();
     if (typeof thingStatusRebuild === 'function') thingStatusRebuild();
-    if (typeof statusDotAccReset === 'function') statusDotAccReset();
+    // (Damage not reported yet is state, kept: unit.js _dotPending.)
     // (Separation pushes carried to the next tick: none on any peer.)
     if (typeof separationReset === 'function') separationReset();
     // (The acquisition tier: a pending run dropped, no result until the next.)

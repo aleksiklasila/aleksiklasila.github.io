@@ -53,6 +53,8 @@ const SIM_UNIT_OBJ_FIELDS = ['holdPosition', 'forcedAttackTarget', 'targetUnit',
 const SIM_UNIT_OBJ_HOOKS = { workerType: 'c.isWk[s] = v ? 1 : 0;' };
 const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'targetBuilding', 'pathIsFallbackAstar', '_pendingPathTarget', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved', '_statsBehind', '_forcedTargetLastSeenX', '_forcedTargetLastSeenY',
     '_builderLastWatchX', '_builderLastWatchY', '_builderLastMoveTick', '_routeEnd', 'watchedByTeam', ...SIM_UNIT_OBJ_FIELDS,
+    // (Damage not reported yet: unit.js _dotPending.)
+    '_dotPending', '_laserPending', '_laserBeam',
     // (Its effective tables, as it has them: computed at its last stats
     // change, from the tables of then, so not derivable from the state; one
     // pool entry per distinct object, stat map entries by reference.)
@@ -421,13 +423,34 @@ function _simUnitStateNew() {
 // Room for n more units in one step (before many are made at once: the
 // match's starting units, a restore): growing by half each time kept every
 // size's columns until the heap could reuse them (2-3 times the last).
-function simUnitStateReserve(n) {
+// `room`: as many as that if the wasm heap holds them (a population's
+// reservation, simUnitPopulationSlots), else n.
+function simUnitStateReserve(n, room = n) {
     // (Nothing to make: no state made either; one is always made with its
     // columns, simUnitStateAllocate.)
-    if (!(n > 0)) return;
+    if (!(n > 0) && !(room > 0)) return;
     const S = _simUnitState || _simUnitStateNew();
-    const need = S.owners.length + Math.max(0, n - S.free.length);
-    if (need > S.cap) _simUnitStateGrow(S, Math.max(1024, Math.ceil(need / 4096) * 4096));
+    const slots = k => Math.max(1024, Math.ceil((S.owners.length + Math.max(0, k - S.free.length)) / 4096) * 4096);
+    const need = slots(Math.max(0, n | 0)), want = Math.max(need, slots(Math.max(0, room | 0)));
+    // (Columns outside the heap, an earlier allocation's failure: made
+    // again, in the heap, when it has room now.)
+    if (want > S.cap || _simUnitColumnsOutside(S)) _simUnitStateGrow(S, want, need);
+}
+// Whether any of the units' columns lies outside the wasm heap (the heap
+// was full when it was made).
+function _simUnitColumnsOutside(S) {
+    if (!S || !S.cap || typeof simHeapHas !== 'function') return false;
+    for (const k of SIM_UNIT_COLUMNS) if (!simHeapHas(S.columns[k])) return true;
+    for (const [k] of SIM_MOVE_COLUMNS) if (!simHeapHas(S.columns[k])) return true;
+    return !simHeapHas(S.sepKey) || !simHeapHas(S.sepLayer);
+}
+// The largest of cap and minCap (4096-slot steps) whose columns the heap
+// holds now (grown as needed); minCap when none does.
+function _simUnitCapThatFits(cap, minCap) {
+    if (cap <= minCap || typeof simHeapRoom !== 'function') return Math.max(cap, minCap);
+    const per = _simUnitBytesPerSlot() * 1.01;
+    for (let c = cap; c > minCap; c = Math.max(minCap, Math.floor(c / 2 / 4096) * 4096)) if (simHeapRoom(per * c)) return c;
+    return minCap;
 }
 function simUnitStateAllocate(u) {
     let S = _simUnitState || _simUnitStateNew();
@@ -435,7 +458,7 @@ function simUnitStateAllocate(u) {
     const s = reused ? S.free.pop() : S.owners.length;
     // (Grown by half, in whole 4096-slot steps: doubling left up to half of
     // ~850 bytes a slot unused, 1M slots for 600k units.)
-    if (s >= S.cap) _simUnitStateGrow(S, _simUnitNextCap(S.cap));
+    if (s >= S.cap) _simUnitStateGrow(S, _simUnitNextCap(S.cap), Math.ceil((s + 1) / 4096) * 4096);
     // (A slot never used before: its element of each object field's array,
     // see _simUnitStateGrow. Slots are taken in order: s is the length.)
     if (!reused) for (let i = 0; i < _simUnitOcNames.length; i++) { const a = S.columns[_simUnitOcNames[i]]; while (a.length <= s) a.push(undefined); }
@@ -487,8 +510,14 @@ function simUnitPopulationSlots() {
     const pop = typeof getConfiguredMaxPop === 'function' ? getConfiguredMaxPop() : 0;
     if (!(np > 0) || !(pop > 0)) return 0;
     const want = pop * np + Math.max(4096, Math.ceil(pop * np / 32));
-    return Math.min(want, Math.floor(SIM_UNIT_RESERVE_BYTES / _simUnitBytesPerSlot()));
+    // (No more than the map plausibly holds, SIM_UNIT_RESERVE_PER_TILE a
+    // tile: a 20x20 map's match reserved ~500 MB of columns for its 200k a
+    // player, a commit of the system's memory per match; past that, the
+    // growth allocated ahead, as past SIM_UNIT_RESERVE_BYTES.)
+    const tiles = typeof GRID_W === 'number' && typeof GRID_H === 'number' && GRID_W > 0 && GRID_H > 0 ? GRID_W * GRID_H : Infinity;
+    return Math.min(want, tiles * SIM_UNIT_RESERVE_PER_TILE, Math.floor(SIM_UNIT_RESERVE_BYTES / _simUnitBytesPerSlot()));
 }
+const SIM_UNIT_RESERVE_PER_TILE = 8;
 // Past the reservation (the fallback): the next size's columns allocated
 // ahead (simUnitStatePrepareStep, from gameTick: once the slots pass
 // SIM_UNIT_PREP_FILL of the capacity, at most SIM_UNIT_PREP_BYTES of them a
@@ -507,32 +536,44 @@ function _simUnitPrepList() {
     }
     return _simUnitPrepSpecs;
 }
+function _simUnitPrepFreeArrays(P) { for (const k in P.arrays) if (P.arrays[k]) simHeapFree(P.arrays[k]); P.arrays = {}; }
 function _simUnitPrepFree(S) {
     if (!S || !S.pre) return;
-    for (const k in S.pre.arrays) simHeapFree(S.pre.arrays[k]);
+    _simUnitPrepFreeArrays(S.pre);
     S.pre = null;
 }
 function simUnitStatePrepareStep() {
     const S = _simUnitState;
     if (!S || !S.cap || S.owners.length < S.cap * SIM_UNIT_PREP_FILL) return;
     const cap = _simUnitNextCap(S.cap), L = _simUnitPrepList();
+    // (The heap had no room for this size: tried again from the next
+    // growth's size on, or after SIM_UNIT_PREP_RETRY ticks.)
+    if (S.preFail === cap && gameTime < S.preFailAt + SIM_UNIT_PREP_RETRY) return;
     if (S.pre && S.pre.cap !== cap) _simUnitPrepFree(S);
     const P = S.pre || (S.pre = { cap, arrays: {}, next: 0 });
     let bytes = 0;
     for (; P.next < L.length && bytes < SIM_UNIT_PREP_BYTES;) {
         const [k, Type, per] = L[P.next++], a = simHeapArray(Type, cap * per);
+        // (Outside the heap (full): none of it kept, the growth makes its
+        // own then, which may fit what is free by then.)
+        if (typeof simHeapHas === 'function' && !simHeapHas(a)) { _simUnitPrepFree(S); S.preFail = cap; S.preFailAt = gameTime; return; }
         // (Written once now: memory the heap just grew into is committed by
         // the system at its first write.)
         a.fill(0);
         P.arrays[k] = a; bytes += a.byteLength;
     }
 }
-function _simUnitStateGrow(S, cap) {
+const SIM_UNIT_PREP_RETRY = 200;
+// minCap: the least the columns may hold (the slots needed now); cap, what
+// they should when the wasm heap has room (a reservation): every column in
+// the heap, or (the heap full even for minCap) as before.
+function _simUnitStateGrow(S, cap, minCap = cap) {
     // (The next size allocated ahead, when it is at least this one: taken,
     // the rest made now. Smaller (a reserve for many at once): let go.)
     let P = S.pre;
     if (P && P.cap < cap) { _simUnitPrepFree(S); P = null; }
     if (P) cap = P.cap;
+    else cap = _simUnitCapThatFits(cap, minCap);
     S.pre = null;
     const take = (k, Type, n) => { const a = P && P.arrays[k]; if (a) { P.arrays[k] = null; return a; } return simHeapArray(Type, n); };
     // The new arrays, then every column's content copied in one parallel job
@@ -543,6 +584,14 @@ function _simUnitStateGrow(S, cap) {
     for (const k of SIM_UNIT_COLUMNS) fresh.push(k, take(k, _simUnitColumnType(k), cap));
     for (const [k, Type, per] of SIM_MOVE_COLUMNS) fresh.push(k, take(k, Type, cap * per));
     const sepKey = take('sepKey', Uint32Array, cap), sepLayer = take('sepLayer', Uint8Array, cap);
+    // (Any of them outside the heap, which was full: given back, and the
+    // least instead, while that is less.)
+    if (cap > minCap && typeof simHeapHas === 'function' && (!simHeapHas(sepKey) || !simHeapHas(sepLayer) || fresh.some((a, i) => i % 2 === 1 && !simHeapHas(a)))) {
+        for (let i = 1; i < fresh.length; i += 2) simHeapFree(fresh[i]);
+        simHeapFree(sepKey); simHeapFree(sepLayer);
+        if (P) _simUnitPrepFreeArrays(P);
+        return _simUnitStateGrow(S, minCap, minCap);
+    }
     sepKey.fill(SIM_SEP_ABSENT);
     // (The slots in use only: past them every column is as a fresh slot's.)
     const used = S.owners.length, part = (a, per) => a.subarray(0, Math.min(a.length, used * per));
@@ -558,7 +607,9 @@ function _simUnitStateGrow(S, cap) {
         // memory for the reserved slots.)
         for (const k of SIM_UNIT_OBJ_FIELDS) if (!S.columns['oc_' + k]) S.columns['oc_' + k] = [];
         const stamp = new Uint32Array(cap);
-        if (S.stamp) stamp.set(S.stamp);
+        // (Smaller only when columns outside the heap are made again: see
+        // simUnitStateReserve.)
+        if (S.stamp) stamp.set(S.stamp.length > cap ? S.stamp.subarray(0, cap) : S.stamp);
         S.stamp = stamp;
         S.sepKey = sepKey; S.sepLayer = sepLayer; S.columns.sepKey = sepKey;
         simParallelBind('unit.sepKey', sepKey); simParallelBind('unit.sepLayer', sepLayer);
@@ -572,7 +623,7 @@ function _simUnitStateGrow(S, cap) {
 function _simUnitSlotStart(S, s, u) {
     S.sepKey[s] = SIM_SEP_ABSENT;
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNav[s * SIM_NAV_STRIDE] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
-    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = 0; S.columns.stEv[s] = 0; S.columns.stOn[s] = 1; S.columns.tmOn[s] = 1; S.columns.lzAcc[s] = 0; S.columns.sepCx[s] = 0; S.columns.sepCy[s] = 0; S.columns.esVer[s] = -1; S.columns.statRow[s] = -1;
+    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = typeof u._dtp === 'number' ? u._dtp : 0; S.columns.stEv[s] = 0; S.columns.stOn[s] = 1; S.columns.tmOn[s] = 1; S.columns.lzAcc[s] = typeof u._lzp === 'number' ? u._lzp : 0; S.columns.lzBeam[s] = typeof u._lzb === 'number' ? u._lzb : 0; S.columns.sepCx[s] = 0; S.columns.sepCy[s] = 0; S.columns.esVer[s] = -1; S.columns.statRow[s] = -1;
     S.columns.fLsX[s] = NaN; S.columns.fLsY[s] = NaN; S.columns.fLsT[s] = -1;
     S.columns.wkWx[s] = typeof u._bwx === 'number' ? u._bwx : NaN; S.columns.wkWy[s] = typeof u._bwy === 'number' ? u._bwy : NaN;
     S.columns.wkLmt[s] = typeof u._bmt === 'number' && u._bmt === Math.floor(u._bmt) ? u._bmt : -2147483648;
@@ -607,7 +658,8 @@ function _simDetValuesCtor() {
         + ' ' + SIM_UNIT_OBJ_FIELDS.map(k => 'this.' + k + ' = C.oc_' + k + '[s];').join(' ') + ' this._routeEnd = C.rtEnd[s]; this.watchedByTeam = C.wTeam[s];'
         + ' this.dead = C.dead[s] === 1; this._navLastD = C.mvNavLD[s]; this._floorTile = C.mvFloor[s]; this._sepMoved = C.sepMov[s];'
         + ' this._statsBehind = false; this._forcedTargetLastSeenX = null; this._forcedTargetLastSeenY = null;'
-        + ' { const a = C.wkWx[s], b = C.wkWy[s], m = C.wkLmt[s]; this._builderLastWatchX = a === a ? a : undefined; this._builderLastWatchY = b === b ? b : undefined; this._builderLastMoveTick = m === -2147483648 ? undefined : m; }';
+        + ' { const a = C.wkWx[s], b = C.wkWy[s], m = C.wkLmt[s]; this._builderLastWatchX = a === a ? a : undefined; this._builderLastWatchY = b === b ? b : undefined; this._builderLastMoveTick = m === -2147483648 ? undefined : m; }'
+        + ' this._dotPending = C.stAcc[s]; this._laserPending = C.lzAcc[s]; this._laserBeam = C.lzBeam[s];';
     return new Function('C', 's', body);
 }
 function simUnitStateDetach(S, s) {
@@ -668,7 +720,9 @@ function simUnitStateCompact(force = false) {
     if (typeof simParallelBackgroundWait === 'function' && typeof SIM_PAR_BG_LANES === 'number') for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) simParallelBackgroundWait(lane);
     const old = S.columns, n0 = S.owners.length, map = new Int32Array(n0).fill(-1);
     // (No smaller than the population's reservation: see simUnitPopulationSlots.)
-    const cap = Math.max(1024, Math.ceil(Math.max(live * 1.125, simUnitPopulationSlots()) / 4096) * 4096);
+    // (Less when the heap has no room for that: the live units' slots.)
+    const least = Math.max(1024, Math.ceil(live * 1.125 / 4096) * 4096);
+    const cap = _simUnitCapThatFits(Math.max(1024, Math.ceil(Math.max(live * 1.125, simUnitPopulationSlots()) / 4096) * 4096), least);
     const N = { cap, owners: [], free: [], columns: _simUnitColumnsObject(), stamp: new Uint32Array(cap), epoch: 0, unitsRef: units, held: null };
     const C = N.columns;
     N.pathPool = S.pathPool; C.mvNodes = old.mvNodes;

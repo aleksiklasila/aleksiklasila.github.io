@@ -1,4 +1,8 @@
 (function () {
+    // A remembered structure in the columns (Team + history; renderer.js
+    // STRUCT_FRAME_GHOST): not 65536, a live structure's research task
+    // (SIM_SF_RESEARCH_TASK). A unit's is 65536 (SIM_UF_GHOST).
+    const STRUCT_GHOST_FLAG = 4194304;
     const COLUMN_BAKE_WORKER_URL = typeof document !== 'undefined' && document.currentScript?.src
         ? new URL('renderer3d-lod-worker.js?v=20261015-lod37',document.currentScript.src).href : null;
     function createShader(gl, type, source) {
@@ -146,6 +150,23 @@
             this.buffer = null; this.gpuVersion = -1;
             this.uploaded = new Float32Array(0);
         }
+    }
+
+    // The units' middle-distance models (Defence3Renderer3D._cmUnits): every
+    // record dropped (another atlas, other colours, another frame size).
+    function _cmUnitsReset(S) {
+        for (const G of S.ulist || []) G.storage.count = 0;
+        S.uslots = null;
+    }
+    // Unit slot s out of its group: the group's last record into its place.
+    function _cmUnitRemove(S, U, s) {
+        const G = S.ulist[U.group[s]], L = G.storage, k = U.index[s], last = L.count - 1;
+        if (k !== last) {
+            L.data.copyWithin(k * INSTANCE_STRIDE, last * INSTANCE_STRIDE, (last + 1) * INSTANCE_STRIDE);
+            const moved = G.slots[last];
+            G.slots[k] = moved; U.index[moved] = k;
+        }
+        L.count = last; U.group[s] = -1;
     }
 
     class FlatSpriteBatch {
@@ -5779,7 +5800,10 @@
             const grid=Math.ceil(Math.sqrt(catalog.styles.length*stride+1)),old=this.columnAtlas;
             const reuse=old?.complete && old.catalog.styles===catalog.styles;
             old?.worker?.terminate();
-            if(old)old.prepare=null;
+            // (Replaced, not failed: a preload of it ends quietly, the new one
+            // is prepared by whoever needs it. The menu's own preload, its
+            // settings changed meanwhile, logged it as an error.)
+            if(old){old.prepare=null;if(!old.complete)old.superseded=true;}
             const A=this.columnAtlas={catalog,palette,grid,panels:reuse?old.panels:[],ownerPanels:reuse?new Map(old.ownerPanels):new Map(),sources:[],
                 metaData:new Float32Array(grid*grid*4),next:0,revision:(old?.revision||0)+1,reusedLayers:new Set()};
             if(COLUMN_BAKE_WORKER_URL && typeof Worker==='function' && typeof createImageBitmap==='function') {
@@ -5967,6 +5991,7 @@
                     throw error;
                 });
                 await A.loading;
+                if(!A.complete&&A.superseded)return;
                 if(!A.complete)throw Error('Model view preparation was interrupted. Please retry.');
                 onProgress?.(1);
             } finally {if(onProgress)listeners.delete(onProgress);}
@@ -6114,21 +6139,29 @@
             const gl=this.gl, atlas=this.getFlatAtlas(), key=_detailViewKey(false)+'|'+C.visibilityVersion+'|'+C.fullVisibility;
             let S=this.columnModels;
             if (!S) S=this.columnModels={groups:new Map(),masks:[null,null],spareMasks:[null,null],version:0};
-            if (S.units!==C.units || S.structures!==C.structures || S.key!==key
+            const structVer=C.structures?C.structures.ver:undefined;
+            if (S.units!==C.units || S.structures!==C.structures || S.structVer!==structVer || S.key!==key
                 || S.unitMask!==C.detailMaskVersion || S.structMask!==C.detailMaskVersionS || S.catalog!==A.catalog || S.atlasRevision!==A.revision) {
-                if(S.catalog!==A.catalog) {for(const G of S.groups.values())G.storage.dispose(gl);S.groups.clear();}
+                S.structVer=structVer;
+                if(S.catalog!==A.catalog) {for(const G of S.groups.values())G.storage.dispose(gl);S.groups.clear();S.ulist=[];S.uslots=null;}
+                // (Another atlas or other colours: every unit's record made
+                // whole again, see _cmUnits.)
+                const colorsKey=C.colors.join('|');
+                if(S.atlasRevision!==A.revision||S.colorsKey!==colorsKey) _cmUnitsReset(S);
+                S.colorsKey=colorsKey;
                 S.units=C.units;S.structures=C.structures;S.key=key;S.unitMask=C.detailMaskVersion;S.structMask=C.detailMaskVersionS;S.catalog=A.catalog;S.atlasRevision=A.revision;
                 S.version++;S.count=0;S.ghosts=0;S.atlas=A;S.alpha=C.alpha;
-                for(const G of S.groups.values()) G.storage.count=0;
+                for(const G of S.groups.values()) if(!G.units) G.storage.count=0;
                 const colors=C.colors.map(hexToRgb);
                 for(let kind=0;kind<2;kind++) {
                     const F=kind?C.units:C.structures, detail=kind?C.detailMask:C.detailMaskS;
-                    if(!F) {S.masks[kind]=null;continue;}
+                    if(!F) {S.masks[kind]=null;if(kind)_cmUnitsReset(S);continue;}
                     const previous=S.masks[kind];
                     const mask=S.spareMasks[kind]?.length===F.cap?S.spareMasks[kind]:new Uint8Array(F.cap);
                     mask.fill(0);if(detail)mask.set(detail);S.spareMasks[kind]=previous;
                     S.masks[kind]=mask;
-                    const candidates=kind?(C.unitCandidates||[]).map(u=>u._s):_structureDetailCandidates(F,false);
+                    if(kind){this._cmUnits(S,C,F,mask,A,atlas,colors);continue;}
+                    const candidates=_structureDetailCandidates(F,false);
                     const scores=new Float32Array(candidates.length);
                     for(let i=0;i<candidates.length;i++) {
                         const s=candidates[i];
@@ -6136,7 +6169,7 @@
                             : !F.alive[s] || F.kind[s]===6 || (F.kind[s]<4&&F.energy[s]<=0))) continue;
                         const x=F.x[s]/C.tile,z=F.y[s]/C.tile;
                         // (The viewing player's own units: always drawn, at full light, as the glyphs' shader has them.)
-                        if(!C.fullVisibility && !(F.flags[s]&65536) && !(kind&&F.owner[s]===C.player) && !(C.visibility[Math.floor(z)]?.[Math.floor(x)]>0))continue;
+                        if(!C.fullVisibility && !(F.flags[s]&(kind?65536:STRUCT_GHOST_FLAG)) && !(kind&&F.owner[s]===C.player) && !(C.visibility[Math.floor(z)]?.[Math.floor(x)]>0))continue;
                         const size=kind?Math.max(.28,Math.min(.9,F.r[s]*2.2/C.tile)):.94;
                         // A tall tower's ground anchor can be off screen while
                         // its roof is close and visible. Keep that roof a mesh.
@@ -6204,8 +6237,9 @@
                         if(ghost)S.ghosts++;
                         d[o+20]=kind?F.amount[s]:0;d[o+21]=kind?F.phase[s]:0;
                         d[o+22]=tint[0];d[o+23]=tint[1];d[o+24]=tint[2];
-                        const light=F.flags[s]&65536?.14:C.fullVisibility||(kind&&F.owner[s]===C.player)?1:Math.min(1,C.visibility[Math.floor(z)][Math.floor(x)]/C.lightNorm);
-                        d[o+25]=F.flags[s]&65536?-1-light:light;
+                        const remembered=(F.flags[s]&(kind?65536:STRUCT_GHOST_FLAG))!==0;
+                        const light=remembered?.14:C.fullVisibility||(kind&&F.owner[s]===C.player)?1:Math.min(1,C.visibility[Math.floor(z)][Math.floor(x)]/C.lightNorm);
+                        d[o+25]=remembered?-1-light:light;
                         const panel=this.columnModelPanel(A,styleIndex,C.colors[Math.max(0,Math.min(8,F.owner[s]+1))]);G.panels.add(panel);
                         d[o+26]=atlas.layerFor(panel);d[o+27]=style.statusTextureCanvas?atlas.layerFor(style.statusTextureCanvas):-1;
                         mask[s]=255;S.count++;
@@ -6226,6 +6260,120 @@
             }
             this.layerAlpha=alpha;this.layerFlyTime=fly;
             return S;
+        }
+        // The units' middle-distance models, kept from tick to tick: a unit's
+        // record is written whole when it joins a group (its style and
+        // animation mode: the mesh), then only what moves (position and
+        // motion, facing, phase, height, light, its panel's layer) each tick;
+        // a unit no longer picked is swap-removed. (All of them packed anew
+        // every tick were ~1 us a unit: ~12 ms a tick in a close view of a
+        // battle with 12k of them.) Membership and every value are as the
+        // full packing had them.
+        _cmUnits(S,C,F,mask,A,atlas,colors) {
+            let U=S.uslots;
+            if(!U||U.cap!==F.cap) {
+                _cmUnitsReset(S);
+                // (face/fc/fs: the facing a slot's cosine and sine were taken
+                // for: units standing to fight keep theirs.)
+                U=S.uslots={cap:F.cap,group:new Int32Array(F.cap).fill(-1),index:new Int32Array(F.cap),id:new Int32Array(F.cap).fill(-1),stamp:new Uint32Array(F.cap),gen:0,
+                    face:new Float32Array(F.cap).fill(NaN),fc:new Float64Array(F.cap),fs:new Float64Array(F.cap)};
+            }
+            const ulist=S.ulist||(S.ulist=[]), gen=++U.gen, cat=A.catalog, tile=C.tile, list=C.unitCandidates||[];
+            // (Their slots, when the cull gave them: not each unit's _s; in slot
+            // order, the columns read forward (in the list's order they were
+            // random reads over ~20 arrays: most of the time). The records
+            // do not depend on the order.)
+            let LS=C.unitCandidateSlots&&C.unitCandidateSlots.length===list.length?C.unitCandidateSlots:null;
+            if(LS) {
+                if(!S.sortBuf||S.sortBuf.length<LS.length)S.sortBuf=new Int32Array(Math.ceil(LS.length*1.25)+1024);
+                const sorted=S.sortBuf.subarray(0,LS.length);
+                sorted.set(LS);sorted.sort();LS=sorted;
+            }
+            const vis=C.visibility, full=C.fullVisibility, player=C.player, norm=C.lightNorm, TAU=Math.PI*2;
+            // (Per group, this time: its panel's layer per owner and its status
+            // layer, as the full packing looked them up per unit.)
+            for(const G of ulist){G.layers.fill(-2);G.statusLayer=-2;}
+            for(let i=0;i<list.length;i++) {
+                const s=LS?LS[i]:list[i]._s;
+                if(!(s>=0) || mask[s] || F.id[s]<0 || F.energy[s]<=0 || (F.flags[s]&66560)!==0) continue;
+                const x=F.x[s]/tile,z=F.y[s]/tile,id=F.id[s],ownerIdx=Math.max(0,Math.min(8,F.owner[s]+1)),own=F.owner[s]===player;
+                // (The viewing player's own units: always drawn, at full light, as the glyphs' shader has them.)
+                if(!full && !(F.flags[s]&65536) && !own && !(vis[Math.floor(z)]?.[Math.floor(x)]>0))continue;
+                const size=Math.max(.28,Math.min(.9,F.r[s]*2.2/tile));
+                const edgeHeight=Math.max(1,(F.vision[s]||0)*AREA_UNIT_TILE_EQUIVALENT/5*2);
+                let seed=id^0x9e3779b9;
+                seed=Math.imul(seed^(seed>>>16),0x7feb352d);
+                seed=Math.imul(seed^(seed>>>15),0x846ca68b);
+                const fraction=((seed^(seed>>>16))>>>0)/4294967296;
+                if(!(_detailScore(x,z,size,false,false,12/(.8+.4*fraction),edgeHeight)>0))continue;
+                const st=this._cmStyle(A,7,F.type[s]);
+                if(!st)continue;
+                const style=st.style,mode=F.mode[s],groupKey=-1-((st.index*64+(mode&31))*2);
+                let G=S.groups.get(groupKey);
+                if(!G) {
+                    const sample={modelKey:style.modelKey,isFlying:style.isFlying,animationMode:mode};
+                    G={units:true,id:ulist.length,styleIndex:st.index,sample,panels:new Set(),kind:st.figure+':lod2',mesh:this.getFigureMesh(st.figure+':lod2'),
+                        storage:new PersistentInstances(INSTANCE_STRIDE),ghost:false,slots:new Int32Array(64),layers:new Float32Array(9).fill(-2),statusLayer:-2};
+                    S.groups.set(groupKey,G);ulist.push(G);
+                }
+                const flying=style.isFlying;
+                let o;
+                if(U.group[s]===G.id&&U.id[s]===id) o=U.index[s]*INSTANCE_STRIDE;
+                else {
+                    if(U.group[s]>=0)_cmUnitRemove(S,U,s);
+                    const L=G.storage,k=L.count;
+                    L.reserve(k+1);L.count=k+1;
+                    if(G.slots.length<=k){const n=new Int32Array(G.slots.length*2);n.set(G.slots);G.slots=n;}
+                    G.slots[k]=s;U.group[s]=G.id;U.index[s]=k;U.id[s]=id;
+                    o=k*INSTANCE_STRIDE;
+                    // (What stays while it is in this group.)
+                    const d=L.data,owner=colors[ownerIdx],tint=style._mediumTint||(style._mediumTint=hexToRgb(style.color||'#aaa'));
+                    d[o+1]=0;d[o+4]=flying?(id*1.7)%TAU:0;d[o+6]=flying?1:0;d[o+9]=0;
+                    d[o+13]=.012+(((id*1103515245)>>>0)%7)*.003+(flying?(style.isWorker?.36:.30):0);d[o+15]=1;
+                    d[o+16]=owner[0];d[o+17]=owner[1];d[o+18]=owner[2];d[o+19]=1;
+                    d[o+22]=tint[0];d[o+23]=tint[1];d[o+24]=tint[2];
+                }
+                // (What moves.)
+                const d=G.storage.data,sx=size*style.scaleX;
+                let sy=size*style.scaleY;
+                if(!style.mounted)sy=style.snake?Math.max(.24,sy):Math.max(.48*style.scaleX,sy);
+                const preserve=style.preserveModelHeight||style.isFlying||style.mounted||st.figure==='portal';
+                if(!preserve&&F.vision[s]>0)sy*=Math.max(.18,F.vision[s]*AREA_UNIT_TILE_EQUIVALENT/5);
+                const facing=F.facing[s];
+                let c,sn;
+                if(U.face[s]===facing){c=U.fc[s];sn=U.fs[s];}
+                else{c=Math.cos(facing);sn=Math.sin(facing);U.face[s]=facing;U.fc[s]=c;U.fs[s]=sn;}
+                d[o]=c*sx;d[o+2]=-sn*sx;d[o+3]=(F.px[s]-F.x[s])/tile;d[o+5]=sy;d[o+7]=(F.py[s]-F.y[s])/tile;
+                d[o+8]=sn*sx;d[o+10]=c*sx;d[o+11]=F.prate[s];d[o+12]=x;d[o+14]=z;
+                d[o+20]=F.amount[s];d[o+21]=F.phase[s];
+                const remembered=(F.flags[s]&65536)!==0;
+                const light=remembered?.14:full||own?1:Math.min(1,vis[Math.floor(z)][Math.floor(x)]/norm);
+                d[o+25]=remembered?-1-light:light;
+                let layer=G.layers[ownerIdx];
+                if(layer===-2){const panel=this.columnModelPanel(A,st.index,C.colors[ownerIdx]);G.panels.add(panel);layer=G.layers[ownerIdx]=atlas.layerFor(panel);}
+                if(G.statusLayer===-2)G.statusLayer=style.statusTextureCanvas?atlas.layerFor(style.statusTextureCanvas):-1;
+                d[o+26]=layer;d[o+27]=G.statusLayer;
+                U.stamp[s]=gen;mask[s]=255;S.count++;
+            }
+            // Units not picked this time: out.
+            for(const G of ulist) {
+                for(let k=G.storage.count-1;k>=0;k--) if(U.stamp[G.slots[k]]!==gen) _cmUnitRemove(S,U,G.slots[k]);
+                G.storage.version++;
+            }
+        }
+        // A style of the catalog by row and code (kept per atlas), or null.
+        _cmStyle(A,row,code) {
+            const cat=A.catalog;
+            if(!(code>=0&&code<cat.width))return null;
+            const cache=A._cmStyles||(A._cmStyles=new Map()),key=row*cat.width+code;
+            let v=cache.get(key);
+            if(v!==undefined)return v;
+            const base=cat.lookup[key*4],index=(base-1)/(cat.stride||9),style=cat.styles[index];
+            if(!style||!A.panels[index])return null;
+            const figure=style._lodFigure!==undefined?style._lodFigure:(style._lodFigure=proceduralKind(style)||null);
+            v=figure?{index,style,figure}:null;
+            cache.set(key,v);
+            return v;
         }
         // The middle-distance models of buildings under construction, blended
         // over what is behind them (no depth written: a see-through thing
@@ -6307,7 +6455,8 @@
                         bool alive = uStructure != 0 ? aAlive > 0. : aAlive >= 0. && (flags & 1024) == 0;
                         // (A unit drawn where it was last seen, Team + history: in
                         // the dark by definition, dimmed.)
-                        bool ghost = (flags & 65536) != 0;
+                        // (A structure's: STRUCT_GHOST_FLAG; 65536 is its research task.)
+                        bool ghost = (flags & (uStructure != 0 ? 4194304 : 65536)) != 0;
                         float light = uFull != 0 || ghost ? 1. : texelFetch(uVisibility,ivec2(current),0).r / uLightNorm;
                         // (The viewing player's own unit lights its area to the full:
                         // drawn so at once. The fog's light of an area it has just
@@ -6708,7 +6857,10 @@
                 const fields = structure ? ['x','y','x','y',null,'energy','owner','flags','alive','kind',null,'angle','type','utype','vision','amount'] : ['x','y','px','py','r','energy','owner','flags','id','type',null,'facing','phase','prate','vision','mode'];
                 if (!S.buffer) { S.buffer=gl.createBuffer();S.vao=gl.createVertexArray(); }
                 gl.bindVertexArray(S.vao);gl.bindBuffer(gl.ARRAY_BUFFER,S.buffer);
-                if (S.frame !== F) {
+                // (A remembered view's structure frame changes in place: its
+                // version, F.ver: renderer.js _structureRenderFrame.)
+                if (S.frame !== F || S.fver !== F.ver) {
+                    S.fver = F.ver;
                     // Allocate only the columns the GPU consumes, rather than
                     // an entire UI/simulation frame (mostly unused holes).
                     const offsets=new Map();let bytes=0;

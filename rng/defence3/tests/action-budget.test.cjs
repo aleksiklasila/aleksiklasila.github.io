@@ -3,7 +3,8 @@
 // waiting; every one runs within the next ticks, in order (two move orders
 // for the same units: the later one wins); a snapshot taken while actions
 // wait carries them, and a peer restored from it goes on exactly as the
-// original (state hashes equal every tick).
+// original (state hashes equal every tick). A unit order over the budget
+// left (an attack: every unit paths) splits: the units it pays for at once.
 //   node tests/action-budget.test.cjs
 'use strict';
 const assert = require('node:assert/strict');
@@ -53,5 +54,29 @@ assert.equal(a.eval('_actionBacklog.length'), 0, 'restored: the waiting actions 
 assert.deepEqual(ha, hb, 'two peers restored from a snapshot with waiting actions stay equal');
 const exact = [a, b].map(p => p.eval('__exactStateHash()'));
 assert.equal(exact[0], exact[1], 'exact states equal');
-console.log('PASS: actions over a tick\'s budget wait in order, run within ' + r.ticks + ' ticks, and travel in snapshots');
+// A big attack order (its units path one by one, ~5 us each), its ids as
+// on the wire (uidz, counted exactly): over the budget, the units it pays
+// for at once and the rest first in the backlog; every unit gets it once, in order.
+const sp = JSON.parse(a.eval(`JSON.stringify((() => {
+    const mine = units.filter(u => !u.dead && u.owner === 0 && u.unitType === 'norm').map(u => u.id);
+    const foe = new Unit('tank', 1, 150 * TILE + 16, 20 * TILE + 16); units.push(foe); unitSlotMapPushed(foe);
+    gameTick();
+    const uidz = actionIdsEncode(mine);
+    // (The units of each part as it runs.)
+    const got = [], real = processAction;
+    processAction = function (act, pid) { if (act.action === 'attack') for (const id of act.unitIds) got.push(id); return real.apply(this, arguments); };
+    processActions([{ action: 'attack', uidz, targetId: foe.id, targetX: foe.x, targetY: foe.y }], 0);
+    const later = _actionBacklog.length ? _actionBacklog[0][1].unitIds.length : 0;
+    let ticks = 0;
+    while (_actionBacklog.length && ticks < 40) { gameTick(); ticks++; }
+    processAction = real;
+    return { n: mine.length, uidzChars: uidz.length, counted: actionIdsCount(uidz), later, ticks, ordered: got.length, once: new Set(got).size === got.length && got.every((id, i) => id === mine[i]) };
+})())`));
+console.log(JSON.stringify(sp));
+assert.equal(sp.counted, sp.n, 'a uidz counts its ids exactly');
+assert.ok(sp.later > 0 && sp.later < sp.n, 'the attack order split: ' + sp.later + ' of ' + sp.n + ' later');
+assert.ok(sp.ticks >= 1 && sp.ticks < 40, 'its rest ran within a few ticks');
+assert.equal(sp.ordered, sp.n, 'every unit of the order got it');
+assert.ok(sp.once, 'once each, in the order of its ids');
+console.log('PASS: actions over a tick\'s budget wait in order, run within ' + r.ticks + ' ticks, and travel in snapshots; a big attack order splits (' + sp.later + ' of ' + sp.n + ' units later)');
 process.exit(0);

@@ -93,6 +93,12 @@ c._pageTables.s=T;c._pageStructViews=structures;c.gameTime++;
 const packed=c._structureDetailSplit([[],[],[],[],[]],true,{},true);
 assert.equal(packed.selected.size,600);
 assert.equal(packed.mask.reduce((a,b)=>a+(b>0),0),600);
+// A live structure's research task (SIM_SF_RESEARCH_TASK, 65536) is not a
+// remembered one: in the dark it is not drawn (a lab at work was seen
+// through the fog in Team visibility).
+T.flags=new Float32Array(2000).fill(65536);c.fullVisibility=false;c.visibilityGrid=[];c.gameTime++;
+assert.equal(c._structureDetailSplit([[],[],[],[],[]],true,{},true).selected.size,0,'a structure at research in the dark stays hidden');
+c.fullVisibility=true;delete T.flags;
 T.alive.fill(0);c.gameTime++;
 assert.equal(c._structureDetailSplit([[],[],[],[],[]],true,{},true).selected.size,0,'retired structures cannot hold detail slots');
 // A zoomed camera in a huge world still needs columns for its far population
@@ -136,9 +142,20 @@ const historyView={grid:[],towers:[tower],barracks:[],collectorSpawners:[],goldM
 c.visibilityHistoryState={view:historyView,generation:1,memories:{floorItems:new Map([[1,{snapshot:floor}],[2,{source:tower}]])}};
 const H=c._structureRenderFrame(historyView);
 assert.equal(H.n,3,'floor index does not duplicate barracks/towers');
-assert.equal(H.amount[1],123);assert.equal(H.flags[1],65536);
+assert.equal(H.amount[1],123);assert.equal(H.flags[1],vm.runInContext('STRUCT_FRAME_GHOST',c));
+assert.equal(H.flags[1]&65536,0,'a remembered structure is not flagged as a live one at research');
 assert.equal(tower._s,99,'history adaptation never overwrites live slots');
 assert.equal(c._structureRenderFrame(historyView),H,'camera changes reuse the packed history frame');
+// A tick later, the same remembered lists: the same frame, its live
+// structures refreshed in place (the remembered ones as they were), its
+// version up (for the GPU columns and the middle models).
+tower.energy=4;c.gameTime++;
+assert.equal(c._structureRenderFrame(historyView),H,'the same frame a tick later');
+assert.equal(H.energy[0],4,'a live structure\'s columns refreshed');
+assert.equal(H.amount[1],123,'a remembered one\'s kept');
+assert.equal(H.ver,1,'its version up');
+c.visibilityHistoryState.generation++;
+assert.notEqual(c._structureRenderFrame(historyView),H,'new remembered lists: a new frame');
 project(true,.15);c.gameTime++;
 const D=c._structureDetailSplit([historyView.towers,[],[],[],historyView.astarMines],true,{},false,H);
 assert.equal(D.selected.size,0);

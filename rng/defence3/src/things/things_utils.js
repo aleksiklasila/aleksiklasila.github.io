@@ -9,12 +9,24 @@
 // line are only compared with the next ones along it within reach, so a
 // recompute is O(lasers log lasers + links), not O(towers^2).
 const _laserLines = new Map();
-function recalculateLaserConnections() {
-    _laserLinksDirty = false;
+// A change at a tile (a tower placed or removed, a laser's level) can only
+// change the links of the lines through it: its row and its column, every
+// owner's. Those alone are worked out again (_laserLinksIncremental), each
+// laser's row and column partners kept apart (_lzRow, _lzCol) and merged in
+// tile order; everything (a restore, the map's first) the full way. A
+// battle placed or lost a tower every tick, and every one recomputed every
+// laser's links (2-10 ms with 800 lasers). The beam map is made again only
+// when some link changed.
+const _laserDirtyRows = new Set(), _laserDirtyCols = new Set();
+let _laserDirtyAll = true;
+function recalculateLaserConnections(full = true) {
+    if (!full && !_laserDirtyAll && (_laserDirtyRows.size || _laserDirtyCols.size)) { _laserLinksIncremental(); return; }
+    _laserLinksDirty = false; _laserDirtyAll = false; _laserDirtyRows.clear(); _laserDirtyCols.clear();
     // (The beam map follows: tower.js laserBeamsTick.)
     if (typeof laserMapDirty === 'function') laserMapDirty();
     const lines = _laserLines, partners = [];
     lines.clear();
+    for (const t of _laserTowerList()) { t._lzRow = []; t._lzCol = []; }
     // (The laser towers, in towers order: listed again only when one joins
     // or leaves; another structure's change walks them alone, not every
     // tower.)
@@ -50,6 +62,8 @@ function recalculateLaserConnections() {
                 else { const row = grid[t1.gy]; for (let x = c1 + 1; x < c1 + dist && !blocked; x++) if (row[x].type === TYPE_WALL) blocked = true; }
                 if (blocked) continue;
                 partners.push(list[a], list[b]);
+                const sideA = col ? towers[list[a]]._lzCol : towers[list[a]]._lzRow, sideB = col ? towers[list[b]]._lzCol : towers[list[b]]._lzRow;
+                sideA.push(towers[list[b]]); sideB.push(towers[list[a]]);
             }
         }
     }
@@ -66,6 +80,66 @@ function recalculateLaserConnections() {
         const out = towers[i].connectedLasers;
         for (const j of list) out.push(towers[j]);
     }
+}
+// The links of one line (lasers of one owner in one row or column, in tile
+// order): each pair's partners, the same tests as the full recompute.
+function _laserLinePairs(list, col, onPair) {
+    let anyNaN = false;
+    for (let k = 0; k < list.length && !anyNaN; k++) anyNaN = !(list[k].effectiveLevel >= -Infinity);
+    for (let a = 0; a < list.length; a++) {
+        const t1 = list[a], c1 = col ? t1.gy : t1.gx, l1 = t1.effectiveLevel;
+        for (let b = a + 1; b < list.length; b++) {
+            const t2 = list[b], dist = (col ? t2.gy : t2.gx) - c1, gap = dist - 1;
+            if (gap > l1 && !anyNaN) break;
+            if (gap < 1) continue;
+            const limit = Math.min(l1, t2.effectiveLevel);
+            if (gap > limit) continue;
+            let blocked = false;
+            if (col) { for (let y = c1 + 1; y < c1 + dist && !blocked; y++) if (grid[y][t1.gx].type === TYPE_WALL) blocked = true; }
+            else { const row = grid[t1.gy]; for (let x = c1 + 1; x < c1 + dist && !blocked; x++) if (row[x].type === TYPE_WALL) blocked = true; }
+            if (blocked) continue;
+            onPair(t1, t2);
+        }
+    }
+}
+function _laserLinksIncremental() {
+    _laserLinksDirty = false;
+    const rows = _laserDirtyRows, cols = _laserDirtyCols, L = _laserTowerList();
+    // The lines through the dirty rows and columns, every owner's; their
+    // lasers in tile order (the laser list's).
+    const rowLines = new Map(), colLines = new Map(), touched = new Set();
+    for (const t of L) {
+        if (!t._lzRow) { t._lzRow = []; t._lzCol = []; }
+        if (rows.has(t.gy)) { const k = t.owner + ':' + t.gy; let a = rowLines.get(k); if (!a) rowLines.set(k, a = []); a.push(t); }
+        if (cols.has(t.gx)) { const k = t.owner + ':' + t.gx; let a = colLines.get(k); if (!a) colLines.set(k, a = []); a.push(t); }
+    }
+    rows.clear(); cols.clear();
+    let changed = false;
+    const redo = (lines, col) => {
+        for (const list of lines.values()) {
+            if (col) list.sort((x, y) => x.gy - y.gy);
+            const next = new Map();
+            for (const t of list) next.set(t, []);
+            _laserLinePairs(list, col, (a, b) => { next.get(a).push(b); next.get(b).push(a); });
+            for (const t of list) {
+                const was = col ? t._lzCol : t._lzRow, now = next.get(t);
+                t._laserLinkLevel = t.effectiveLevel;
+                if (was.length === now.length && was.every((x, i) => x === now[i])) continue;
+                if (col) t._lzCol = now; else t._lzRow = now;
+                touched.add(t); changed = true;
+            }
+        }
+    };
+    redo(rowLines, false); redo(colLines, true);
+    // A laser gone: its partners lose it (it was in one of their lines,
+    // which its tile dirtied: done above). Each touched laser's links: its
+    // row and column partners in tile order.
+    for (const t of touched) {
+        const m = t._lzRow.concat(t._lzCol);
+        m.sort((x, y) => _laserTileKey(x) - _laserTileKey(y));
+        t.connectedLasers = m;
+    }
+    if (changed && typeof laserMapDirty === 'function') laserMapDirty();
 }
 // The laser towers in tile order (gy * GRID_W + gx: the same on every peer
 // whatever the towers' order, which removals change, structListRemove): kept
@@ -99,8 +173,13 @@ function _laserTowerList() {
 // next used (a laser's update, the end of the tick: ensureLaserConnections),
 // once however many changed. Restores recompute at once.
 let _laserLinksDirty = false;
-function markLaserConnectionsDirty() { _laserLinksDirty = true; }
-function ensureLaserConnections() { if (_laserLinksDirty) recalculateLaserConnections(); }
+// (At a tile: its row and column; without one: everything.)
+function markLaserConnectionsDirty(gx, gy) {
+    _laserLinksDirty = true;
+    if (Number.isFinite(gx) && Number.isFinite(gy)) { _laserDirtyRows.add(gy); _laserDirtyCols.add(gx); }
+    else _laserDirtyAll = true;
+}
+function ensureLaserConnections() { if (_laserLinksDirty) recalculateLaserConnections(false); }
 
 function _isOperationalAdjacencyEntity(obj) {
     if (!obj) return false;
@@ -592,15 +671,14 @@ function adjacencyLaneStep() {
         if (!all) L.sig[key] = _adjSigCode(gx, gy);
         if (!paths) { const ref = getTileEntityRef(gx, gy); if (ref && _adjacencyObjAffectsPaths(ref)) paths = true; }
     }
-    // The area tables (when the layout changed: rare).
+    // The area tables (when the layout changed: rare): each area's tiles
+    // made by the kernel from the area grid (adj.ag) when the layout's
+    // version is new. (The page's pass over its areas' cell lists, cold
+    // code at a layout's first post, was 0.3-1.4 s on a 1000x1000 map.)
     const A = Array.isArray(areas) ? areas.length : 0;
     if (L.cfor !== gridCellsByArea || !L.coff || L.coff.length < A + 1) {
-        let total = 0;
-        for (let a = 0; a < A; a++) total += Array.isArray(gridCellsByArea[a]) ? gridCellsByArea[a].length : 0;
-        L.coff = _adjArr('adj.coff', Int32Array, A + 1); L.ctile = _adjArr('adj.ctile', Int32Array, total);
-        let k = 0;
-        for (let a = 0; a < A; a++) { L.coff[a] = k; const cs = gridCellsByArea[a]; if (Array.isArray(cs)) for (const c of cs) L.ctile[k++] = c.y * GRID_W + c.x; }
-        L.coff[A] = k; L.cfor = gridCellsByArea;
+        L.coff = _adjArr('adj.coff', Int32Array, A + 1); L.ctile = _adjArr('adj.ctile', Int32Array, N);
+        L.cfor = gridCellsByArea; L.layoutVer = (L.layoutVer | 0) + 1;
         L.mul = _adjArr('adj.mul', Int32Array, A);
         for (let a = 0; a < A; a++) L.mul[a] = (areas[a] && areas[a].multiplierLevel) | 0;
     }
@@ -615,7 +693,10 @@ function adjacencyLaneStep() {
     for (let i = 0; i < seeds.length; i++) SD[i] = seeds[i];
     const CLA = _adjArr('adj.cloud', Int32Array, cl.length);
     for (let i = 0; i < cl.length; i++) CLA[i] = cl[i];
-    simParallelBind('adj.ag', _spatialAreaGridFlat());
+    // (A new area grid: the kernel's cells by area made again.)
+    const AG = _spatialAreaGridFlat();
+    if (L.agFor !== AG) { L.agFor = AG; L.layoutVer = (L.layoutVer | 0) + 1; }
+    simParallelBind('adj.ag', AG);
     // (Outputs: up to every tile once.)
     _adjArr('adj.otile', Int32Array, N); _adjArr('adj.ogrp', Int32Array, N); _adjArr('adj.gsize', Int32Array, N); _adjArr('adj.gmul', Float64Array, N);
     _adjArr('adj.oarea', Int32Array, Math.max(1, A)); _adjArr('adj.oact', Uint8Array, Math.max(1, A)); _adjArr('adj.ocnt', Int32Array, 4);
@@ -624,7 +705,7 @@ function adjacencyLaneStep() {
     // params are written, else a pending stage of it runs with these.)
     simParallelBackgroundWait(ADJ_LANE);
     const B = _simBgParamsByLane[ADJ_LANE];
-    B.fill(0); B[0] = GRID_W; B[1] = GRID_H; B[2] = seeds.length; B[3] = cl.length / 3; B[4] = A;
+    B.fill(0); B[0] = GRID_W; B[1] = GRID_H; B[2] = seeds.length; B[3] = cl.length / 3; B[4] = A; B[5] = L.layoutVer;
     simParallelBackground(SIM_KERNEL_ADJ_FLOOD, 1, ADJ_LANE);
     L.posted = true; L.passive = !!_adjacencyPassiveRefreshMode; L.paths = paths;
     _adjacencyNeedsRecalc = _adjacencyDirtyTiles.size > 0;
@@ -776,14 +857,19 @@ function _isSelectionStatsRefreshDue(item, selectionSize) {
 // their first tick, before their turn in the strided passes below comes up.
 // The list follows the flag, which snapshots carry: a restore rebuilds it.
 // (Capped: where no tick drains it, e.g. the page beside a simulation
-// worker, it is dropped.)
-let _newUnitsForStats = [];
+// worker, it is dropped; where a tick does, the drain makes it again from
+// the flags (_newUnitsForStatsLost): a match starting with 180k units had
+// lost ~120k, their flag never cleared, every one of them on the slow
+// path of each effective-stats turn (~5 ms a tick), and a peer restored
+// from a snapshot (the list made from the flags) cleared what the others
+// kept.)
+let _newUnitsForStats = [], _newUnitsForStatsLost = false;
 function _noteNewUnitForStats(u) {
-    if (_newUnitsForStats.length >= 65536) _newUnitsForStats.length = 0;
+    if (_newUnitsForStats.length >= 65536) { _newUnitsForStats.length = 0; _newUnitsForStatsLost = true; }
     _newUnitsForStats.push(u);
 }
 function resetNewUnitsForStats() {
-    _newUnitsForStats = [];
+    _newUnitsForStats = []; _newUnitsForStatsLost = false;
     for (let u of units) if (u && u._needsStatsInit) _newUnitsForStats.push(u);
 }
 
@@ -836,6 +922,7 @@ function recalculateThingPrecomputedStats() {
         u._thingStatsRefreshStamp = unitStamp;
         _refreshThingPrecomputedStats(u);
     };
+    if (_newUnitsForStatsLost) resetNewUnitsForStats();
     for (let u of _newUnitsForStats) {
         if (!u._needsStatsInit) continue;
         u._needsStatsInit = false;
@@ -1226,7 +1313,13 @@ function _effStatsFullUnit(u, canUseSpatialCounts, chunkPx) {
     u.stackCount = baseStacks;
     u.unitLevel = baseLevel;
     if (needsRefresh) {
-        applyUnitLevelScaling(u, baseLevel);
+        // (The movement columns told once, by the effective scaling below,
+        // which always follows a refresh: the base level's tables between
+        // disarmed every unit above its base level at each refresh, as
+        // _refreshThingPrecomputedStats holds them too.)
+        const held = _unitStatsNotifyHeld;
+        _unitStatsNotifyHeld = true;
+        try { applyUnitLevelScaling(u, baseLevel); } finally { _unitStatsNotifyHeld = held; }
         u.stackCount = baseStacks;
     } else if (u._us && !u._us.esOk[u._si]) effStatsUnitBaseChanged(u);
     let similarCount = canUseSpatialCounts ? _effWindowCount(u, chunkPx) : 0;
@@ -1276,6 +1369,7 @@ function recalculateUnitEffectiveStats() {
     };
     // New units (their list is drained by recalculateThingPrecomputedStats,
     // which runs next).
+    if (_newUnitsForStatsLost) resetNewUnitsForStats();
     for (let u of _newUnitsForStats) if (u._needsStatsInit && !taken(u)) _effStatsFullUnit(u, canUseSpatialCounts, chunkPx);
     // The strided share. (Units behind their stat tables (a research done:
     // every unit of the type) take the slow full path: at most
@@ -1699,7 +1793,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
     // Newly placed structures start under construction, so they don't affect adjacency yet.
     // Avoid expensive full-map adjacency recalculation on every placement.
     if (placedNewStructure) _bumpPathTopologyVersion();
-    if (placedNewWallStructure) markLaserConnectionsDirty();
+    if (placedNewWallStructure) markLaserConnectionsDirty(gx, gy);
     if (playerId === localPlayerId && !silentPlace) playSound('place', gx * TILE + 16, gy * TILE + 16);
     return true;
 }
@@ -1717,7 +1811,7 @@ function destroyBuilding(building) {
         simMoveTileTypeChanged(building.gx, building.gy);
         _markCombinedBgTileDirty(building.gx, building.gy, 0, true);
         recalculateAdjacency();
-        markLaserConnectionsDirty();
+        markLaserConnectionsDirty(building.gx, building.gy);
     } else if (building instanceof Barrack || (building.type === 'barrack')) {
         if (structListRemove(barracks, building) !== -1) barracksChanged();
         clearTileEntity(building.gx, building.gy, building);
