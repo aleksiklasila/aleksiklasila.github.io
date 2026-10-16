@@ -4028,6 +4028,19 @@ function requeueLocalAction(finalAction) {
 }
 function queueAction(action) {
     if (localDefeated && action && action.action !== 'resign') return;
+    _queueLocalAction(action);
+}
+// The host's administrative commands (HOST_ADMIN_ACTIONS: a leaving
+// player's team resigned): the match's, not the host's player's, so they go
+// in while the host is defeated or spectates too (queueAction refused them:
+// in a three-team match whose host had resigned, a leaving player's team
+// stayed in and the last one never won: audit 2026-10-16, 26). Guests'
+// copies are dropped by the host (main.js _hostSanitizeTickPacket).
+function queueHostAdminAction(action) {
+    if (!isHost || !action || !HOST_ADMIN_ACTIONS.has(action.action)) return;
+    _queueLocalAction(action);
+}
+function _queueLocalAction(action) {
     if (gameOver) return;
     // (A research order: shown at once, see hud.js noteResearchOrder.)
     if (action && (action.action === 'queueResearch' || action.action === 'dequeueResearch') && typeof noteResearchOrder === 'function') {

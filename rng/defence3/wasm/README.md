@@ -1,25 +1,25 @@
 # Rust/WebAssembly simulation kernels
 
-The heaviest simulation kernels have Rust twins in `src/lib.rs`, compiled to
-WebAssembly with SIMD (`simd128`):
+Every simulation kernel is Rust (`src/lib.rs`, `src/k.rs`, `src/mv.rs`,
+`src/rebase.rs`), compiled to WebAssembly with SIMD (`simd128`): the
+separation passes, acquisition, the movement kernel family, flow navigation
+rows, effective stats, the state hash's unit part and the rest of the
+`SIM_KERNEL_*` jobs (sim_parallel.js calls them through `_simRust`).
 
-| Rust function | JS twin                                          | What it does |
-|---------------|--------------------------------------------------|--------------|
-| `sep_pack`    | `SIM_KERNEL_SEP_PACK` (sim_parallel.js)          | separation: the unit index's entries packed (SoA, Float32) |
-| `sep_mark`    | `SIM_KERNEL_SEP_MARK`                            | separation: units at rest next to movers take part (a byte table of "moved" chunks) |
-| `sep_pairs`   | `SIM_KERNEL_SEP_PAIRS`                           | separation: every touching pair, found by the unit taking part; neighbour runs from a table of chunk starts, candidates tested four at a time (f32x4 prefilter, exact f64 test) |
-| `sep_finish`  | `SIM_KERNEL_SEPARATION_FINISH`                   | separation: apply the summed pushes (idle slots four at a time) |
-| `acq_omt`, `acq_pack` | `SIM_KERNEL_ACQ_OMT`                     | acquisition tier's first stage: owners per chunk transposed, the index's entries packed in its order |
-| `acq_scan`    | `SIM_KERNEL_ACQ_SCAN`                            | acquisition tier: nearest enemy (rings scanned 16 chunks at a time) and structure (16 tiles at a time) |
-| `nav_row`     | `_navFieldRow` (game/flownav.js)                 | flow navigation: a destination's row (Dijkstra over the exit graph) |
+**There are no JavaScript versions and no fallback.** A page needs
+WebAssembly with a shared memory, so a cross-origin isolated page
+(`coi-serviceworker.min.js` in production, `python serve.py` locally): the
+HUD says so when the page is not isolated, and a match cannot run there. A
+kernel that cannot run (no module, an array outside the heap) is an error
+(`_simNoWasm`), not a silent JS path. (Earlier versions had JS twins that
+matched the Rust bit for bit and ran when wasm was missing; they were
+removed, and with them that fallback.)
 
-Each Rust kernel writes exactly what its JS twin writes, bit for bit, so
-either one may run any chunk on any thread. Peers with and without wasm stay
-in lockstep. The JS kernels are the fallback: they run when the page is not
-cross-origin isolated, when the module fails to load, or when an array is not
-in the wasm heap. Where the Rust kernel walks differently (other culls, other
-order), it is because the result does not depend on it: the same pairs, the
-same nearest target; a twin may not change *which* pairs or targets count.
+Lockstep needs the kernels to be deterministic, not to match any JS: the
+same inputs give the same outputs on every peer, thread count and engine.
+WebAssembly's float operations (including `sqrt`) are IEEE 754's, exactly
+specified; the kernels use standard SIMD only (no relaxed SIMD, whose
+results may differ by machine) and no fused multiply-add.
 
 ## How it is wired
 
@@ -38,8 +38,9 @@ same nearest target; a twin may not change *which* pairs or targets count.
   binds them. Wasm memory never shrinks: `simUnitStateReserve` sizes the
   unit columns once before bulk creation (match start, restore) instead of
   growing them step by step.
-* `simParallelBind` records each array's address; a JS kernel calls its Rust
-  twin when this thread has the module and all its arrays are in the heap.
+* `simParallelBind` records each array's address; a kernel job passes the
+  addresses of its arrays to the Rust function (`_simRust`), which every
+  thread of the simulation runs over the same heap.
 * The compiled module is embedded in `src/sim/sim_wasm_bin.js` as base64, so
   workers, helpers and the node test harness load it synchronously like any
   other script. **That file is generated: rebuild it after editing
@@ -89,30 +90,25 @@ with the bundled `rust-lld`.
   panic (use `idiv`/`irem`). The module must have no data segments, because
   every helper's instantiation would rewrite them in the shared memory
   (`build.cjs` refuses such a module).
-* Match JavaScript number semantics where they show: `js_round` (Math.round),
-  `js_max`, `to_i32` (ToInt32), `f32` stores, `||` on numbers. Do the
-  operations in the same order as the JS code (no fused multiply-add).
-* Change a kernel's JS twin and its Rust twin together, then check that they
-  still agree:
-
-```bash
-node tests/wasm-kernels.test.cjs 8
-node tests/separation-pairs.test.cjs
-```
+* Deterministic, not JS-like: native f32/f64/integer math, any data layout
+  or SIMD, as long as the result depends only on the inputs (never on the
+  thread count, the chunking, memory not written, or relaxed SIMD). No fused
+  multiply-add (`mul_add`), which some targets lower otherwise.
+* A change of what a kernel computes is a rules change: bump
+  `SIM_RULES_REVISION` (src/utils/utils_snapshot.js).
+* Checks: `node tests/storage-abi.test.cjs` (the Rust pointer types against
+  the JS column types), the kernel tests (`tests/*-kernel*.test.cjs`,
+  `parallel-kernels`, `shared-kernel-threads`), and the multiplayer
+  determinism suites (`tests/multiplayer-chaos-determinism.test.cjs` with
+  real helper threads, `multiplayer-cross-engine`).
 
 ## Switches and checks
 
-* `SIM_WASM_ENABLED = false` (before a match): no heap, JS kernels only.
-* `simWasmKernels(false)` / `simWasmKernels(true)`: switch the kernels on
-  every thread of a running simulation (the heap stays). `simHeapStats()`
-  shows the memory in use.
-* Tick benchmark: `WASM=0` runs every peer on the JS kernels, and
-  `WASM_GUEST=0` runs only the guest on JS, which checks lockstep between a
-  wasm host and a JS guest (`desyncs` must stay 0):
-
-```bash
-DATA=tests/100000-1000.json HELPERS=7 ACTIVE=1 BATTLE=mix WASM_GUEST=0 node --max-old-space-size=12000 .claude/tickbench.cjs 8
-```
+* `simHeapStats()` shows the heap in use.
+* Do not set `SIM_WASM_ENABLED = false` or call `simWasmKernels(false)` to
+  "fall back": there is nothing to fall back to, the kernels then fail.
+* Tick benchmark (`.claude/tickbench.cjs`, a host and a guest over the test
+  network): `desyncs` and `patches` must stay 0.
 
 * Local browser runs need cross-origin isolation for the shared memory:
   serve with `python serve.py` (not `python -m http.server`).

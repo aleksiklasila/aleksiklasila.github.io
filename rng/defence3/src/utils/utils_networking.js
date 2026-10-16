@@ -35,6 +35,12 @@ function defaultLobbyName(peerId) {
 const LS_PLAYER_KEY_KEY = 'defence3_player_key';
 let localProfileKey = '';
 function profileUidFromKey(key) { return 'k' + _sha256Hex('defence3-profile:' + String(key || '')).slice(0, 32); }
+// A peer joined without a proven profile stands under its connection's id,
+// apart from every profile id (a peer id is the joiner's choice, and one
+// equal to a profile id passed for that profile).
+const TRANSPORT_UID_PREFIX = 'peer:';
+function _transportUid(pid) { return pid ? TRANSPORT_UID_PREFIX + pid : ''; }
+function _isTransportUid(uid) { return String(uid || '').startsWith(TRANSPORT_UID_PREFIX); }
 function loadOrCreateLocalIdentity() {
     let storedId = '';
     let storedName = '';
@@ -331,7 +337,7 @@ function getPeerProfileUid(peerId) {
     let pid = canonicalPeerId(peerId);
     if (!pid) return '';
     if (pid === myPeerId) return localPersistentPeerId || pid;
-    return String(peerUidByPeerId[pid] || pid);
+    return String(peerUidByPeerId[pid] || _transportUid(pid));
 }
 
 function migratePeerIdByUid(uid, newPeerId) {
@@ -361,6 +367,8 @@ function migratePeerIdByUid(uid, newPeerId) {
     let fallbackColor = '';
     for (let oldPeerId of matchingPeerIds) {
         peerPresenceById[oldPeerId] = false;
+        // (A player of the match's start, back under another peer id.)
+        if (_matchStartPlayerIds.has(oldPeerId)) { _matchStartPlayerIds.delete(oldPeerId); _matchStartPlayerIds.add(targetPeerId); }
         clearPeerRemovedFromMatch(oldPeerId);
         if (matchRoleByPeerId[oldPeerId] && !matchRoleByPeerId[targetPeerId]) {
             matchRoleByPeerId[targetPeerId] = matchRoleByPeerId[oldPeerId];
@@ -418,13 +426,27 @@ function generateGameSessionId() {
     return `${generateSocketId()}-${generateSocketId()}`;
 }
 
-function _broadcastResyncPauseState(active, sessionId, reason = '') {
-    let payload = {
+// Host: its recoveries are numbered in order (g), so a guest tells an old
+// one's messages (late, resent) from the current one's: a replayed old
+// snapshot rolled a guest back (tick 425 to 386) and paused it, an old
+// resume ended a newer recovery's pause (audit 2026-10-16, 22). From the
+// clock: a host page reloaded under the same id goes on above its old
+// numbers. Every message of a recovery carries its number and its match.
+let _hostResyncGen = 0, _hostResyncCurrentGen = 0;
+function _hostNextResyncGen() { _hostResyncGen = Math.max(_hostResyncGen + 1, Date.now()); return _hostResyncGen; }
+function _resyncPauseMsg(active, sessionId, reason = '', gen = _hostResyncCurrentGen) {
+    return {
         type: 'LOCKSTEP_RESYNC_PAUSE',
         active: !!active,
         sessionId: String(sessionId || ''),
-        reason: String(reason || '')
+        reason: String(reason || ''),
+        g: gen,
+        m: matchStartSessionId || undefined
     };
+}
+
+function _broadcastResyncPauseState(active, sessionId, reason = '', gen = _hostResyncCurrentGen) {
+    let payload = _resyncPauseMsg(active, sessionId, reason, gen);
     for (let c of connections) {
         if (!c || !c.peer) continue;
         try { c.send(payload); } catch { }
@@ -479,7 +501,7 @@ function _finishHostResyncPause(reason = '') {
     let sessionId = String(lockstepResyncSessionId || '');
     lockstepResyncSessionId = '';
     waitingForRemoteSince = 0;
-    _broadcastResyncPauseState(false, sessionId, reason);
+    _broadcastResyncPauseState(false, sessionId, reason, _hostResyncCurrentGen);
     // Everyone restarts from the snapshot tick; seal it right away.
     _hostAdvanceBundles(performance.now());
 }
@@ -499,9 +521,9 @@ function _sendResyncSnapshotTo(conn) {
         if (fullSync) {
             // A client without a running match gets the settings and world
             // together with the snapshot, in one message.
-            conn.send({ ...fullSync, snapshotPayload: payload, resyncSessionId: cache.sessionId });
+            conn.send({ ...fullSync, snapshotPayload: payload, resyncSessionId: cache.sessionId, resyncGen: cache.gen });
         } else {
-            conn.send({ type: 'MATCH_STATE_SNAPSHOT', payload, sessionId: cache.sessionId, tick: cache.tick });
+            conn.send({ type: 'MATCH_STATE_SNAPSHOT', payload, sessionId: cache.sessionId, tick: cache.tick, g: cache.gen, m: matchStartSessionId || undefined });
         }
     } catch { }
     return true;
@@ -524,7 +546,7 @@ function _startHostResyncPause(reason = '', includeConfig = false, options = {})
         let cache = lockstepResyncSnapshotCache;
         let requester = String((options && options.requester) || '');
         for (let pid of Object.keys(fullSyncByPeer)) cache.fullSyncByPeer[pid] = fullSyncByPeer[pid];
-        let pauseMsg = { type: 'LOCKSTEP_RESYNC_PAUSE', active: true, sessionId: cache.sessionId, reason: String(reason || '') };
+        let pauseMsg = _resyncPauseMsg(true, cache.sessionId, reason, cache.gen);
         for (let c of connections) {
             if (!c || !c.peer || isPeerExplicitlyRemoved(c.peer)) continue;
             let pid = String(c.peer);
@@ -545,6 +567,7 @@ function _startHostResyncPause(reason = '', includeConfig = false, options = {})
 
     let now = performance.now();
     let sessionId = generateGameSessionId();
+    let gen = _hostNextResyncGen();
     let t0 = performance.now();
     // Peers joining from scratch generated their own map; send the host's.
     let snapshot = buildHostAuthoritativeStateSnapshot({
@@ -559,10 +582,11 @@ function _startHostResyncPause(reason = '', includeConfig = false, options = {})
     }
     // Paused from here: no tick runs until every peer restored the snapshot.
     // (Set again once the host restored it: a restore resets the lockstep.)
-    let cache = { sessionId, tick: currentTick, payload: null, text: null, sentTo: new Set(), fullSyncByPeer: { ...fullSyncByPeer } };
+    let cache = { sessionId, gen, tick: currentTick, payload: null, text: null, sentTo: new Set(), fullSyncByPeer: { ...fullSyncByPeer } };
     let pause = () => {
         lockstepResyncPauseActive = true;
         lockstepResyncSessionId = sessionId;
+        _hostResyncCurrentGen = gen;
         lockstepResyncPendingAckByPeer = ackMap;
         lockstepResyncRequestedAt = now;
         lockstepResyncDeadlineAt = now + 20000;
@@ -570,7 +594,7 @@ function _startHostResyncPause(reason = '', includeConfig = false, options = {})
         lockstepResyncSnapshotCache = cache;
     };
     pause();
-    _broadcastResyncPauseState(true, sessionId, reason);
+    _broadcastResyncPauseState(true, sessionId, reason, gen);
 
     let restore = text => {
         if (lockstepResyncSnapshotCache !== cache) return;
@@ -1441,19 +1465,35 @@ function applyAuthoritativeStateSnapshot(snapshot) {
 // at its next step. A decode finishing after the player had gone back to
 // the menu started the old match again there.)
 let _matchLoadGen = 0;
-// This player's commands not sent yet (made: with their ids), and those held
-// while joining (not made yet), taken out of the input.
+// This player's commands not known to have run (made: with their ids), and
+// those held while joining (not made yet), taken out of the input. (Sent
+// was not enough: one sent while the snapshot decoded and never delivered
+// was lost for good, audit 2026-10-16, 27. The host leaves out the copies
+// of those it had: main.js _hostCommandsOnce.)
 function _takeUnsentLocalActions() {
-    const final = [], held = [];
-    const sent = Math.floor(Number(lockstepHighestSentLocalTick));
+    // (Those whose tick ran here without them first: main.js
+    // lockstepNoteUnconfirmed.)
+    const final = typeof lockstepTakeUnconfirmed === 'function' ? lockstepTakeUnconfirmed() : [], held = [];
     for (const k of Object.keys(localInputBuffer || {}).map(Number).sort((a, b) => a - b)) {
-        if (!(k > sent) || lockstepCommittedByTick[k]) continue;
-        for (const a of localInputBuffer[k] || []) final.push(a);
+        for (const a of localInputBuffer[k] || []) if (!lockstepCommandRan(a) && !_localCommandSealed(a, k)) final.push(a);
     }
     const g = resyncGuest;
     if (g && Array.isArray(g.heldFinal)) final.push(...g.heldFinal);
     if (g && Array.isArray(g.heldActions)) held.push(...g.heldActions);
     return final.length || held.length ? { final, held } : null;
+}
+// Whether a sealed bundle of `tick` this peer has carries its command `a`
+// (the host has it then: it ran there, or its bundle is sent again).
+function _localCommandSealed(a, tick) {
+    let id = a && a.netId;
+    if (!id) return false;
+    let b = lockstepBundleByTick[tick] || (lockstepPendingCommitByTick[tick] ? lockstepPendingBundleByTick[tick] : null);
+    if (!b || !Array.isArray(b.packets)) return false;
+    for (let p of b.packets) {
+        if (!p || String(p.peerId) !== String(myPeerId) || !Array.isArray(p.actions)) continue;
+        for (let x of p.actions) if (x && x.netId === id) return true;
+    }
+    return false;
 }
 // ...back into the input, after a reload of the match (the next ticks they
 // may go in).
@@ -1600,9 +1640,10 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing') {
         const guestDecode = () => {
             let parsed = JSON.parse(snapshotText);
             if (guestWorker) simClientStripUnits(parsed.state);
-            applyAuthoritativeStateSnapshot(parsed);
+            return applyAuthoritativeStateSnapshot(parsed);
         };
-        if (!(guestWorker && simClientStartMatch(snapshotText, guestDecode))) { guestWorker = false; guestDecode(); }
+        // (A snapshot the decoder refuses is none: asked for again below.)
+        if (!(guestWorker && simClientStartMatch(snapshotText, guestDecode))) { guestWorker = false; if (!guestDecode()) snapshotText = null; }
         netCounters.snapshotApplyMs = performance.now() - applyStart;
         netCounters.snapshotBytes = netSnapshotPayloadBytes(data.snapshotPayload);
         netCounters.lastSnapshotAt = performance.now();
@@ -1626,18 +1667,26 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing') {
     if (midMatchJoin) {
         // Wait paused for the host to resume everyone after this resync.
         let sid = String(data.resyncSessionId || '');
+        // (Its recovery's number: older ones' messages change nothing now.)
+        _guestRecoveryFresh({ g: data.resyncGen });
         lockstepResyncPauseActive = true;
         lockstepResyncSessionId = sid;
         lockstepReceivedResyncSessionId = sid;
-        lockstepAppliedResyncSessionId = snapshotText ? sid : '';
+        lockstepAppliedResyncSessionId = '';
         lockstepResyncRequestedAt = performance.now();
         setMatchLoadOverlay(false);
-        if (hostConn && snapshotText) {
+        _giveBackUnsentLocalActions(carried);
+        if (!snapshotText) { requestHardLockstepResync(currentTick, 'join without snapshot'); return; }
+        // Acknowledged once restored where it is simulated (the worker).
+        let restored = typeof simClientRestoreDone === 'function' ? await simClientRestoreDone() : true;
+        if (stale() || lockstepReceivedResyncSessionId !== sid) return;
+        if (!restored) { lockstepResyncRequestedAt = 0; requestHardLockstepResync(currentTick, 'join not restored'); return; }
+        lockstepAppliedResyncSessionId = sid;
+        hostConn = netGetHostConnection();
+        if (hostConn) {
             try { hostConn.send({ type: 'MATCH_STATE_SNAPSHOT_APPLIED', sessionId: sid, tick: currentTick }); } catch { }
         }
         if (lockstepPendingResumeSessionId && lockstepPendingResumeSessionId === sid) _guestResumeAfterResync(sid);
-        if (!snapshotText) requestHardLockstepResync(currentTick, 'join without snapshot');
-        _giveBackUnsentLocalActions(carried);
         return;
     }
 
@@ -1676,6 +1725,35 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing') {
 // 17).
 const _guestResyncDone = [];
 function _guestResyncDoneHas(sessionId) { return !!sessionId && _guestResyncDone.includes(sessionId); }
+// Guest: the newest recovery number (g, _hostNextResyncGen) seen from this
+// host in this match. A message of an older recovery is late (reordered,
+// resent) and changes nothing; a new host, or a new match, counts anew.
+let _guestRecovery = { host: '', match: '', gen: 0 };
+function _guestRecoveryFresh(data) {
+    let host = String(wsHostId || ''), match = String(matchStartSessionId || '');
+    let gen = Math.max(0, Math.floor(Number(data && data.g) || 0));
+    if (_guestRecovery.host !== host || _guestRecovery.match !== match) _guestRecovery = { host, match, gen: 0 };
+    if (gen < _guestRecovery.gen) { netCounters.staleRecoveryDropped = (netCounters.staleRecoveryDropped | 0) + 1; return false; }
+    _guestRecovery.gen = gen;
+    return true;
+}
+// ...and whether that recovery is still the newest (after an await).
+function _guestRecoveryCurrent(host, match, gen) {
+    return String(wsHostId || '') === host && String(matchStartSessionId || '') === match
+        && _guestRecovery.host === host && _guestRecovery.match === match && _guestRecovery.gen <= gen;
+}
+// Guest: a recovery's resume. It ends that recovery alone, once its snapshot
+// is restored here (an old resume ended a newer recovery's pause; one
+// before the restore resumed from a state the host does not have): until
+// then it waits (lockstepPendingResumeSessionId).
+function _guestTakeResume(sessionId) {
+    if (sessionId && lockstepAppliedResyncSessionId !== sessionId) {
+        if (!_guestResyncDoneHas(sessionId)) lockstepPendingResumeSessionId = sessionId;
+        return;
+    }
+    if (sessionId && lockstepResyncPauseActive && lockstepResyncSessionId && lockstepResyncSessionId !== sessionId) return;
+    _guestResumeAfterResync(sessionId);
+}
 function _guestResumeAfterResync(sessionId) {
     if (sessionId && !_guestResyncDone.includes(sessionId)) { _guestResyncDone.push(sessionId); if (_guestResyncDone.length > 32) _guestResyncDone.shift(); }
     lockstepPendingResumeSessionId = '';
@@ -1714,11 +1792,30 @@ function requestSpectateCurrentMatch() {
     }, 15000);
 }
 
+// Teams by colour. Once a start is pressed, a match player's team is the
+// colour it had then (the start roster, matchStartLobbyPlayers), whatever
+// its lobby entry says later: a colour change that reached the host while
+// it prepared the start gave the player another team on the host than the
+// one it started as, and the host made its commands another team's (they
+// did nothing; audit 2026-10-16, 37). Others in the lobby (spectators,
+// visitors) keep their colours and make no team then.
 function computeTeamSetupFromLobby() {
+    const frozen = (gameStarted || _hostMatchStarting) && Array.isArray(matchStartLobbyPlayers) && matchStartLobbyPlayers.length > 0;
+    if (!frozen) return computeTeamSetupFromPlayers(lobbyPlayers);
+    const setup = computeTeamSetupFromPlayers(matchStartLobbyPlayers);
+    for (let lp of lobbyPlayers) {
+        if (!lp || !lp.peerId || setup.teamByPeer[lp.peerId] !== undefined) continue;
+        let teamId = TEAM_PRESET_COLORS.indexOf(normalizeLobbyColor(lp.color));
+        setup.teamByPeer[lp.peerId] = teamId < 0 ? 0 : teamId;
+    }
+    return setup;
+}
+function computeTeamSetupFromPlayers(players) {
     let teamByPeer = {};
     let activeSet = new Set();
     let colorByTeam = {};
-    for (let lp of lobbyPlayers) {
+    for (let lp of players || []) {
+        if (!lp) continue;
         let color = normalizeLobbyColor(lp.color);
         let teamId = TEAM_PRESET_COLORS.indexOf(color);
         if (teamId < 0) teamId = 0;
@@ -1730,6 +1827,13 @@ function computeTeamSetupFromLobby() {
     if (active.length === 0) active = [0, 1];
     return { teamByPeer, activeTeamIds: active, teamColorById: colorByTeam };
 }
+// Host: from Start pressed until the match runs (or the start fails, or the
+// lobby is back): teams are fixed (LOBBY_UPDATE_SELF takes no colour).
+let _hostMatchStarting = false;
+// Host: the peers that started the match as players (followed to a new peer
+// id when they rejoin): a rematch's players. (matchStartLobbyPlayers also
+// takes in those who join later: spectators, visitors.)
+let _matchStartPlayerIds = new Set();
 
 function resolveLocalPlayerTeamId(setup) {
     if (setup && setup.teamByPeer && myPeerId && setup.teamByPeer[myPeerId] !== undefined) {
@@ -2255,7 +2359,7 @@ function setupConnection(conn) {
                 // while it was still opening was lost.
                 let cache = lockstepResyncSnapshotCache;
                 if (lockstepResyncPauseActive && cache && Object.prototype.hasOwnProperty.call(lockstepResyncPendingAckByPeer, String(conn.peer))) {
-                    try { conn.send({ type: 'LOCKSTEP_RESYNC_PAUSE', active: true, sessionId: cache.sessionId, reason: 'resync' }); } catch { }
+                    try { conn.send(_resyncPauseMsg(true, cache.sessionId, 'resync', cache.gen)); } catch { }
                     _sendResyncSnapshotTo(conn);
                 }
                 broadcastLobbyState(true);
@@ -2344,18 +2448,26 @@ function _handleConnectionClosed(conn) {
     }
 }
 
-// Host: a player stops playing (spectates, or left the match): its team
-// resigns unless a teammate still plays it.
+// Host: a player stops playing (spectates, resigns, or left the match): its
+// team resigns unless a teammate still plays it. The one way a player's
+// resignation takes effect (its resign action, its role update and its
+// leaving all come here): the outcome no longer depends on which of its
+// messages arrives first (a resign action sealed before the role update
+// resigned the whole team, teammates still playing: audit 2026-10-16, 36).
+// Once a team (the forced resignation queued once).
+let _hostTeamsForcedOut = new Set();
 function _hostPeerStopsPlaying(pid) {
     matchRoleByPeerId[pid] = 'spectating';
     let uid = getPeerProfileUid(pid);
     if (uid) matchRoleByUid[uid] = 'spectating';
     let teamId = getTeamIdForPeer(pid);
     let teammatesLeft = getActiveMatchPeerIds().some(other => other !== pid && getTeamIdForPeer(other) === teamId);
-    if (Number.isFinite(teamId) && teamId >= 0 && !resignedTeams.has(teamId) && !teammatesLeft && typeof queueAction === 'function') {
-        queueAction({ action: 'forceResignTeam', targetTeam: teamId });
+    if (Number.isFinite(teamId) && teamId >= 0 && !resignedTeams.has(teamId) && !teammatesLeft && !_hostTeamsForcedOut.has(teamId) && typeof queueHostAdminAction === 'function') {
+        _hostTeamsForcedOut.add(teamId);
+        queueHostAdminAction({ action: 'forceResignTeam', targetTeam: teamId });
     }
 }
+function hostPeerStopsPlaying(pid) { if (isHost && gameStarted && !gameOver) _hostPeerStopsPlaying(String(pid || '')); }
 
 // What only the host says: a guest takes these from its host alone, the
 // host never (a guest's RETURN_TO_LOBBY sent the host back to the lobby; a
@@ -2525,8 +2637,9 @@ function _handleConnectionMessage(conn, data) {
         let lp = lobbyPlayers.find(p => p.peerId === conn.peer);
         if (lp) {
             lp.name = (data.name || lp.name || defaultLobbyName(conn.peer)).slice(0, 24);
-            // A color is a team: it cannot change once the match runs.
-            if (!gameStarted) lp.color = normalizeLobbyColor(data.color || lp.color);
+            // A color is a team: it cannot change once a start is pressed
+            // (_hostMatchStarting) or the match runs.
+            if (!gameStarted && !_hostMatchStarting) lp.color = normalizeLobbyColor(data.color || lp.color);
             broadcastLobbyState(true);
             renderOnlineLobby();
         }
@@ -2575,6 +2688,13 @@ function _handleConnectionMessage(conn, data) {
         }
         // Only that peer reloads the match (and catches up); the others play on.
         logLockstepWarning('Guest asked for the full match', { peerId: String(conn && conn.peer || ''), reason: String((data && data.reason) || '') });
+        // (A recovery waiting for it no longer does: it could not restore
+        // the snapshot, or never got it; it gets the whole match instead.)
+        let pid = String((conn && conn.peer) || '');
+        if (lockstepResyncPauseActive && pid && lockstepResyncPendingAckByPeer && lockstepResyncPendingAckByPeer[pid] === false) {
+            delete lockstepResyncPendingAckByPeer[pid];
+            if (_isHostResyncPauseComplete()) _finishHostResyncPause('peer reloads the match');
+        }
         hostSendFullMatchSync(conn, normalizeMatchRole(matchRoleByPeerId[conn.peer], 'playing'));
     } else if (type === 'START_SPECTATE' && !isHost) {
         _clearGuestJoinTimeout();
@@ -2640,19 +2760,19 @@ function _handleConnectionMessage(conn, data) {
     } else if (type === 'LOCKSTEP_RESYNC_PAUSE' && !isHost) {
         let active = !!(data && data.active);
         let sessionId = String((data && data.sessionId) || '');
+        // (No match here: the host need not wait for us.)
+        if (active && !gameStarted) { try { conn.send({ type: 'RESYNC_NO_MATCH', sessionId }); } catch { } return; }
+        // (Another match's, or an older recovery's: changes nothing.)
+        if (!netMatchTagOk(data && data.m)) { netCounters.otherMatchDropped = (netCounters.otherMatchDropped | 0) + 1; return; }
+        if (!_guestRecoveryFresh(data)) return;
         if (active) {
-            // (No match here: the host need not wait for us.)
-            if (!gameStarted) { try { conn.send({ type: 'RESYNC_NO_MATCH', sessionId }); } catch { } return; }
             if (_guestResyncDoneHas(sessionId)) { netCounters.lateResyncPausesDropped = (netCounters.lateResyncPausesDropped | 0) + 1; return; }
             lockstepResyncPauseActive = true;
             if (sessionId) lockstepResyncSessionId = sessionId;
             if (!lockstepResyncRequestedAt) lockstepResyncRequestedAt = performance.now();
             waitingForRemoteSince = performance.now();
-        } else if (sessionId && lockstepReceivedResyncSessionId === sessionId && lockstepAppliedResyncSessionId !== sessionId) {
-            // The resume overtook our (still decoding) snapshot.
-            lockstepPendingResumeSessionId = sessionId;
         } else {
-            _guestResumeAfterResync(sessionId);
+            _guestTakeResume(sessionId);
         }
     } else if (type === 'MATCH_ROLE_UPDATE' && isHost) {
         let role = normalizeMatchRole(data.role, '');
@@ -2683,6 +2803,9 @@ function _handleConnectionMessage(conn, data) {
             _returnToMainMenuWithStatus(reason, '#f66');
         }
     } else if (type === 'RETURN_TO_LOBBY') {
+        // (Of another match than the one this peer plays or loads: late, the
+        // next one already here; it took this guest out of its rematch.)
+        if (data.m && matchStartSessionId && String(data.m) !== String(matchStartSessionId)) { netCounters.lateLobbyReturnsDropped = (netCounters.lateLobbyReturnsDropped | 0) + 1; return; }
         if (Array.isArray(data.lobbyPlayers)) {
             lobbyPlayers = normalizeIncomingLobbyPlayers(data.lobbyPlayers);
         }
@@ -2721,6 +2844,10 @@ function _guestReceiveSnapshot(conn, data) {
         return;
     }
     pendingJoinAsSpectator = false;
+    // (Another match's, or an older recovery's: a replayed old snapshot
+    // rolled a guest back and paused it.)
+    if (!netMatchTagOk(data && data.m)) { netCounters.otherMatchDropped = (netCounters.otherMatchDropped | 0) + 1; return; }
+    if (!_guestRecoveryFresh(data)) return;
     let sid = String((data && data.sessionId) || '');
     if (sid && sid === lockstepAppliedResyncSessionId) {
         // Sent again (we asked, or the host could not tell we had it):
@@ -2728,32 +2855,53 @@ function _guestReceiveSnapshot(conn, data) {
         try { conn.send({ type: 'MATCH_STATE_SNAPSHOT_APPLIED', sessionId: sid, tick: currentTick }); } catch { }
         return;
     }
+    if (_guestResyncDoneHas(sid)) { netCounters.staleRecoveryDropped = (netCounters.staleRecoveryDropped | 0) + 1; return; }
     lockstepReceivedResyncSessionId = sid;
     lockstepResyncPauseActive = true;
     if (sid) lockstepResyncSessionId = sid;
     if (!lockstepResyncRequestedAt) lockstepResyncRequestedAt = performance.now();
     let payload = data.payload || (data.snapshot ? { json: JSON.stringify(data.snapshot) } : null);
+    // (What it is of: this host, this match, this recovery. A host change or
+    // a newer recovery while it decodes makes it obsolete.)
+    let host = String(wsHostId || ''), match = String(matchStartSessionId || ''), gen = _guestRecovery.gen;
+    const current = () => lockstepReceivedResyncSessionId === sid && gameStarted && !isHost && _guestRecoveryCurrent(host, match, gen);
+    // A restore the decoder refused, or the simulation worker could not
+    // make: neither counted nor acknowledged as applied (the host was told
+    // so, and counted a successful resync); still paused, the match asked
+    // for again (the host stops waiting for us then: REQUEST_MATCH_SYNC).
+    const refused = (why, asked = false) => {
+        netCounters.snapshotsRefused = (netCounters.snapshotsRefused | 0) + 1;
+        logLockstepWarning('A resync snapshot was not applied; asking for the match', { sessionId: sid, why });
+        // (The decoder's refusal asked already: applyAuthoritativeStateSnapshot.)
+        if (asked) { lockstepResyncPauseActive = true; lockstepResyncRequestedAt = performance.now(); return; }
+        lockstepResyncRequestedAt = 0;
+        requestHardLockstepResync(currentTick, 'snapshot not applied: ' + why);
+    };
     netDecodeSnapshotPayload(payload).then(text => {
         // A newer resync superseded this one while it decoded.
-        if (lockstepReceivedResyncSessionId !== sid) return;
+        if (!current()) return;
         if (!text) throw new Error('empty snapshot');
         let t0 = performance.now();
-        applyAuthoritativeStateSnapshot(JSON.parse(text));
+        if (!applyAuthoritativeStateSnapshot(JSON.parse(text))) { refused('format', true); return; }
         netCounters.snapshotApplyMs = performance.now() - t0;
-        netCounters.snapshotBytes = netSnapshotPayloadBytes(payload);
-        netCounters.lastSnapshotAt = performance.now();
-        netCounters.hardResyncs++;
-        lockstepAppliedResyncSessionId = sid;
-        lockstepResyncRequestedAt = performance.now();
-        let hostConn = netGetHostConnection();
-        if (hostConn && sid) {
-            try { hostConn.send({ type: 'MATCH_STATE_SNAPSHOT_APPLIED', sessionId: sid, tick: currentTick }); } catch { }
-        }
-        if (!sid || lockstepPendingResumeSessionId === sid) _guestResumeAfterResync(sid);
+        // (With the simulation worker: once it restored the same.)
+        return (typeof simClientRestoreDone === 'function' ? simClientRestoreDone() : Promise.resolve(true)).then(ok => {
+            if (!current()) return;
+            if (!ok) { refused('simulation'); return; }
+            netCounters.snapshotBytes = netSnapshotPayloadBytes(payload);
+            netCounters.lastSnapshotAt = performance.now();
+            netCounters.hardResyncs++;
+            lockstepAppliedResyncSessionId = sid;
+            lockstepResyncRequestedAt = performance.now();
+            let hostConn = netGetHostConnection();
+            if (hostConn && sid) {
+                try { hostConn.send({ type: 'MATCH_STATE_SNAPSHOT_APPLIED', sessionId: sid, tick: currentTick }); } catch { }
+            }
+            if (!sid || lockstepPendingResumeSessionId === sid) _guestResumeAfterResync(sid);
+        });
     }).catch(err => {
-        logLockstepWarning('Failed to apply resync snapshot; asking again', { error: String(err && err.message || err) });
-        lockstepResyncRequestedAt = 0;
-        requestHardLockstepResync(currentTick, 'snapshot apply failed');
+        if (!current()) return;
+        refused(String(err && err.message || err));
     });
 }
 
@@ -2819,19 +2967,38 @@ function _hostHandleLobbyJoin(conn, data) {
     if (conn && conn.peer) netNotePeerCapabilities(conn.peer, data && data.caps);
     // (A profile id is taken with its key alone, profileUidFromKey: anyone can
     // read the ids in a lobby state, and a disconnected player's slot went to
-    // whoever joined with one. Without it the joiner is its own peer.)
+    // whoever joined with one. Every claim, also one equal to the joiner's
+    // own peer id (a peer id is the joiner's choice: one equal to a
+    // disconnected player's public id took that player's slot and team
+    // without the key, audit 2026-10-16, 25). Without it the joiner is its
+    // own peer, under an id no profile id can equal (TRANSPORT_UID_PREFIX).)
+    let pid = String(conn.peer || '');
     let claimedUid = String((data && data.uid) || '').trim();
-    if (claimedUid && claimedUid !== String(conn.peer || '') && profileUidFromKey(data && data.uidKey) !== claimedUid) {
-        logLockstepWarning('A join claimed a profile id without its key; joined as itself', { peerId: String(conn.peer || '') });
+    let keyless = !(data && data.uidKey) && claimedUid === pid;
+    if (claimedUid && !keyless && profileUidFromKey(data && data.uidKey) !== claimedUid) {
+        logLockstepWarning('A join claimed a profile id without its key; joined as itself', { peerId: pid });
         netCounters.profileClaimsRefused = (netCounters.profileClaimsRefused | 0) + 1;
-        claimedUid = '';
     }
-    let joiningUid = String(claimedUid || peerUidByPeerId[conn.peer] || conn.peer || '').trim();
-    if (joiningUid) {
-        let migration = migratePeerIdByUid(joiningUid, conn.peer);
-        if (migration.hasActiveDuplicate) {
-            _hostResolveDuplicateJoin(conn, data, migration.activePeerIds);
-            return;
+    let provenUid = claimedUid && !keyless && profileUidFromKey(data && data.uidKey) === claimedUid ? claimedUid : '';
+    // (A peer id once joined under a profile is that profile's: a peer id
+    // is free again once its player is gone, and another joining under it
+    // took the slot with it.)
+    let boundUid = String(peerUidByPeerId[pid] || '');
+    if (boundUid && !_isTransportUid(boundUid) && boundUid !== provenUid) {
+        logLockstepWarning('A join came under the peer id of another profile; refused', { peerId: pid });
+        netCounters.profileClaimsRefused = (netCounters.profileClaimsRefused | 0) + 1;
+        try { conn.send({ type: 'HOST_CLOSED_LOBBY', reason: 'This connection id belongs to another player. Reload the page.' }); } catch { }
+        setTimeout(() => { try { conn.close(); } catch { } }, 200);
+        return;
+    }
+    let joiningUid = provenUid || _transportUid(pid);
+    if (pid) {
+        if (provenUid) {
+            let migration = migratePeerIdByUid(joiningUid, conn.peer);
+            if (migration.hasActiveDuplicate) {
+                _hostResolveDuplicateJoin(conn, data, migration.activePeerIds);
+                return;
+            }
         }
         peerUidByPeerId[conn.peer] = joiningUid;
     }
@@ -3027,6 +3194,7 @@ function resetWorldState() {
     _localActionEpoch = _newLocalActionEpoch();
     _hostPeersWithoutMatch.clear();
     _hostTeamsOut = new Set();
+    _hostTeamsForcedOut = new Set();
     _guestLocalResult = null;
     _guestResultShown = false;
     if (typeof simClientLostClear === 'function') simClientLostClear();
@@ -3106,6 +3274,7 @@ function resetWorldState() {
 function returnToOnlineLobby(asHost, statusText) {
     // (A match still loading here does not start after this.)
     _matchLoadGen++;
+    _hostMatchStarting = false;
     rematchVotePeerIds = new Set();
     rematchVoteTotal = 0;
     gameStarted = false;
@@ -3157,7 +3326,7 @@ function hostPlayAgain() {
     if (!isHost || !isMultiplayer) return;
     _hostRematchPending = null;
     let payloadPlayers = lobbyPlayers.map(p => ({ peerId: p.peerId, name: p.name, color: normalizeLobbyColor(p.color) }));
-    connections.forEach(c => c.send({ type: 'RETURN_TO_LOBBY', lobbyPlayers: payloadPlayers, status: 'Host returned everyone to lobby.' }));
+    connections.forEach(c => c.send({ type: 'RETURN_TO_LOBBY', lobbyPlayers: payloadPlayers, status: 'Host returned everyone to lobby.', m: matchStartSessionId || undefined }));
     returnToOnlineLobby(true, 'Returned to lobby. Configure settings and press Start Game.');
 }
 
@@ -3176,7 +3345,14 @@ function hostRematch() {
     let session = {};
     _hostRematchPending = session;
     let payloadPlayers = lobbyPlayers.map(p => ({ peerId: p.peerId, name: p.name, color: normalizeLobbyColor(p.color) }));
-    connections.forEach(c => { try { c.send({ type: 'RETURN_TO_LOBBY', lobbyPlayers: payloadPlayers, rematch: 1 }); } catch { } });
+    // (The match it ends: a guest already in the next one, this message late,
+    // stays there; it left that match for the lobby: audit 2026-10-16, 38.)
+    let ended = String(matchStartSessionId || '');
+    connections.forEach(c => { try { c.send({ type: 'RETURN_TO_LOBBY', lobbyPlayers: payloadPlayers, rematch: 1, m: ended || undefined }); } catch { } });
+    // The same match again: its players play, spectators and visitors stay
+    // spectators (they were made players: audit 2026-10-16, 39).
+    session.roster = new Set(_matchStartPlayerIds);
+    if (myPeerId) session.roster.add(String(myPeerId));
     returnToOnlineLobby(true, 'Starting rematch…');
     session.waiting = waiting;
     // Whoever is not back by then misses the start (and can join as usual).
@@ -3192,9 +3368,10 @@ function hostNoteLobbyReturned(peerId) {
 }
 
 function _hostStartRematch() {
+    let session = _hostRematchPending;
     _hostRematchPending = null;
     if (!isHost || gameStarted) return;
-    startHostedGame();
+    startHostedGame(session && session.roster && session.roster.size ? { roster: session.roster } : null);
 }
 
 function guestToggleRematchVote() {
@@ -3293,7 +3470,9 @@ function hostOnlineGame() {
     });
 }
 
-function startHostedGame() {
+// (opts.roster: who plays, by peer id (a rematch: the last match's players);
+// everyone else connected stays in the lobby and may spectate.)
+function startHostedGame(opts = null) {
     if (!isHost || connections.length === 0) return;
     let connectedPeerIds = connections
         .filter(c => c && c.peer)
@@ -3304,7 +3483,10 @@ function startHostedGame() {
         document.getElementById('lobby-status').textContent = 'Still syncing lobby players. Please wait a moment and press Start again.';
         return;
     }
-    let preSetup = computeTeamSetupFromLobby();
+    let roster = opts && opts.roster instanceof Set ? opts.roster : null;
+    let connectedSet = new Set(connectedPeerIds);
+    let startPlayers = lobbyPlayers.filter(p => p && (p.peerId === myPeerId || (connectedSet.has(String(p.peerId)) && (!roster || roster.has(String(p.peerId))))));
+    let preSetup = computeTeamSetupFromPlayers(startPlayers);
     if (preSetup.activeTeamIds.length < 2) {
         document.getElementById('lobby-status').textContent = 'Need at least 2 different team colors to start.';
         return;
@@ -3312,12 +3494,13 @@ function startHostedGame() {
     let startBtn = document.getElementById('btn-start-online');
     startBtn.disabled = true;
     document.getElementById('lobby-status').textContent = 'Starting game...';
+    _hostMatchStarting = true;
 
     // Initialize session/player metadata immediately so we can broadcast a prepare signal to clients
     // before the heavy world-generation work begins.
     matchStartSessionId = generateGameSessionId();
-    let connectedSet = new Set(connectedPeerIds);
-    matchStartLobbyPlayers = lobbyPlayers.filter(p => p && (p.peerId === myPeerId || connectedSet.has(String(p.peerId)))).map(p => ({
+    _matchStartPlayerIds = new Set(startPlayers.map(p => String(p.peerId)));
+    matchStartLobbyPlayers = startPlayers.map(p => ({
         peerId: p.peerId, name: p.name,
         color: normalizeLobbyColor(p.color),
         uid: String((p && p.uid) || getPeerProfileUid(p && p.peerId) || '')
@@ -3481,6 +3664,8 @@ function startHostedGame() {
                 broadcastLobbyState(true);
             });
             _armMatchStartReadyTimeout(startSessionId);
+            // (The match runs: gameStarted keeps the teams from here.)
+            _hostMatchStarting = false;
 
             if (matchStartWaitingForReady) {
                 // Show the player-list overlay; host clicks "Start Game" when all are ready.
@@ -3492,6 +3677,7 @@ function startHostedGame() {
                 if (hostWorker) _matchLoadOverlayUntilRunning(); else setMatchLoadOverlay(false);
             }
         } catch (err) {
+            _hostMatchStarting = false;
             console.error('[STARTUP] Failed to start hosted game', err);
             _matchStartPlayerStatuses = null;
             setMatchLoadOverlay(false);

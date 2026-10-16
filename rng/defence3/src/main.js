@@ -2820,12 +2820,7 @@ function initInput() {
             }
             if (!gameStarted || localDefeated) return;
             if (!confirm('Resign and become a spectator?')) return;
-            queueAction({ action: 'resign' });
-            // Immediate UX fallback during lockstep stalls: switch local client to spectating now.
-            enterSpectateMode('defeated');
-            if (isMultiplayer && !isHost && connections[0]) {
-                try { connections[0].send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating' }); } catch { }
-            }
+            resignLocalPlayer();
         });
     }
     if (goBtnSpectate) {
@@ -3307,6 +3302,10 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
 // halfway, loop for long, nor act for another team.
 const ACTION_MAX_COUNT = 100;
 const LOCKSTEP_MAX_ACTIONS_PER_PACKET = 256;
+// The match's commands only the host gives (worker.js queueHostAdminAction):
+// a guest's are dropped (_hostSanitizeTickPacket); the host's go in its
+// packet also while it does not play (maybeBuildHostBundle).
+const HOST_ADMIN_ACTIONS = new Set(['forceResignTeam']);
 const ACTION_MAX_UNIT_IDS = 20000;
 const ACTION_MAX_TOWER_COORDS = 5000;
 // Buildings per setRallyMany action (coords: gx, gy, ...).
@@ -5187,7 +5186,7 @@ function hostRemovePlayerFromMatch(peerId) {
     // A team with other players still in the match keeps playing.
     let teammatesLeft = getActiveMatchPeerIds().some(other => other !== pid && getTeamIdForPeer(other) === teamId);
     if (teamId >= 0 && !resignedTeams.has(teamId) && !teammatesLeft) {
-        queueAction({ action: 'forceResignTeam', targetTeam: teamId });
+        queueHostAdminAction({ action: 'forceResignTeam', targetTeam: teamId });
     }
     broadcastLobbyState(true);
     renderOnlineLobby();
@@ -5517,14 +5516,30 @@ function _hostAcceptTickPacket(conn, rawPacket) {
     if (req && req.tick <= packet.tick) delete lockstepHostWaitRequestByPeer[packet.peerId];
 }
 
+// This player resigns (the Resign button). Alone: its team resigns (the
+// resign action). In multiplayer the player stops playing, and its team
+// resigns only once no teammate plays it: the host decides that
+// (utils_networking.js hostPeerStopsPlaying), from the guest's resign
+// action or its role update, whichever comes first.
+function resignLocalPlayer() {
+    if (!gameStarted || localDefeated || gameOver) return;
+    if (!isMultiplayer) { queueAction({ action: 'resign' }); enterSpectateMode('defeated'); return; }
+    if (!isHost) queueAction({ action: 'resign' });
+    // (Host: hostPeerStopsPlaying(myPeerId); guest: MATCH_ROLE_UPDATE.)
+    enterSpectateMode('defeated');
+}
+
 // Host: a guest packet as the host seals it: the guest's own team, no
 // host-only actions, no more than a player could send in a tick (a flood
-// would stall every peer).
+// would stall every peer). A resign action is the player stopping
+// (hostPeerStopsPlaying), not sealed: it resigned the whole team, teammates
+// still playing, when it came before the role update (audit 2026-10-16, 36).
 function _hostSanitizeTickPacket(packet) {
     let setup = computeTeamSetupFromLobby();
     let enforcedTeamId = setup.teamByPeer[packet.peerId] ?? packet.teamId;
     let actions = packet.actions;
-    let filtered = actions.filter(a => !(a && a.action === 'forceResignTeam')).slice(0, LOCKSTEP_MAX_ACTIONS_PER_PACKET);
+    if (actions.some(a => a && a.action === 'resign') && typeof hostPeerStopsPlaying === 'function') hostPeerStopsPlaying(packet.peerId);
+    let filtered = actions.filter(a => !(a && (HOST_ADMIN_ACTIONS.has(a.action) || a.action === 'resign'))).slice(0, LOCKSTEP_MAX_ACTIONS_PER_PACKET);
     for (let i = 0; i < filtered.length; i++) {
         let a = filtered[i];
         if (a && Array.isArray(a.unitIds) && a.unitIds.length > ACTION_MAX_UNIT_IDS) filtered[i] = { ...a, unitIds: a.unitIds.slice(0, ACTION_MAX_UNIT_IDS) };
@@ -5588,11 +5603,30 @@ function _hostCarryJoiningCommands(peerId, rawPacket) {
 // to run again (audit 2026-10-15, 16). (Ids are unique over a guest's
 // reloads: worker.js queueAction, _localActionEpoch.)
 const LOCKSTEP_RAN_KEEP_TICKS = 2400;
-let _lockstepRan = { match: '', ids: new Map(), byTick: new Map() };
+let _lockstepRan = { match: '', ids: new Map(), byTick: new Map(), unconfirmed: [] };
 function _lockstepRanOfMatch() {
     let R = _lockstepRan, m = String(matchStartSessionId || '');
-    if (R.match !== m) R = _lockstepRan = { match: m, ids: new Map(), byTick: new Map() };
+    if (R.match !== m) R = _lockstepRan = { match: m, ids: new Map(), byTick: new Map(), unconfirmed: [] };
     return R;
+}
+// Guest: its commands whose tick ran without them (the host sealed it
+// without its packet: late, lost, or while its match reloads), kept until
+// they run (the host carries on the ones it gets) for a reload to send
+// again (utils_networking.js _takeUnsentLocalActions; the host leaves out
+// copies of what it had: _hostCommandsOnce). A command sent while a reload
+// decoded, never delivered, was lost (audit 2026-10-16, 27).
+const LOCKSTEP_UNCONFIRMED_MAX = 512;
+function lockstepNoteUnconfirmed(list, tick) {
+    if (!Array.isArray(list) || list.length === 0) return;
+    let R = _lockstepRanOfMatch();
+    for (let a of list) if (a && a.netId && !lockstepCommandRan(a)) R.unconfirmed.push({ a, tick });
+    if (R.unconfirmed.length > LOCKSTEP_UNCONFIRMED_MAX) R.unconfirmed.splice(0, R.unconfirmed.length - LOCKSTEP_UNCONFIRMED_MAX);
+}
+function lockstepTakeUnconfirmed() {
+    let R = _lockstepRanOfMatch(), out = [];
+    for (let e of R.unconfirmed) if (!lockstepCommandRan(e.a) && e.tick > currentTick - LOCKSTEP_RAN_KEEP_TICKS) out.push(e.a);
+    R.unconfirmed = [];
+    return out;
 }
 function lockstepNoteRanCommands(packets, tick) {
     if (!Array.isArray(packets)) return;
@@ -5642,6 +5676,44 @@ function _hostWithCarriedCommands(tick, peerId, packet) {
     let merged = { tick, peerId, teamId: packet.teamId, actions: moved.concat(packet.actions) };
     merged.checksum = computeTickPacketChecksum(tick, peerId, merged.teamId, merged.actions);
     return merged;
+}
+
+// Host: its own packet as it goes in while it does not play: its
+// administrative commands alone (null: none).
+function _hostAdminPacket(packet) {
+    let actions = Array.isArray(packet && packet.actions) ? packet.actions : [];
+    let admin = actions.filter(a => a && HOST_ADMIN_ACTIONS.has(a.action));
+    if (admin.length === 0) return null;
+    if (admin.length === actions.length) return packet;
+    let p = { tick: packet.tick, peerId: packet.peerId, teamId: packet.teamId, actions: admin };
+    p.checksum = computeTickPacketChecksum(p.tick, p.peerId, p.teamId, p.actions);
+    return p;
+}
+
+// Host, sealing: a packet without the commands that ran already (an id in
+// lockstepCommandRan), that are in this bundle already (`seen`), or that
+// still wait in the sender's carry (they run from there). A peer's commands
+// are kept over a reload of its match until known to have run, with their
+// ids (utils_networking.js _takeUnsentLocalActions): one sent but never
+// delivered was lost, and the copies of delivered ones are left out here
+// (audit 2026-10-16, 27).
+function _hostCommandsOnce(pid, packet, seen) {
+    let actions = packet && Array.isArray(packet.actions) ? packet.actions : null;
+    if (!actions || actions.length === 0) return packet;
+    let carry = lockstepHostCarryByPeer[pid], waiting = null;
+    if (carry && carry.length) { waiting = new Set(); for (let a of carry) if (a && a.netId) waiting.add(a.netId); }
+    let kept = null;
+    for (let i = 0; i < actions.length; i++) {
+        let a = actions[i], id = a && a.netId;
+        let dup = typeof id === 'string' && !!id && (seen.has(id) || lockstepCommandRan(a) || (waiting && waiting.has(id)));
+        if (typeof id === 'string' && id) seen.add(id);
+        if (dup) { if (!kept) kept = actions.slice(0, i); netCounters.ranCommandsDropped = (netCounters.ranCommandsDropped | 0) + 1; }
+        else if (kept) kept.push(a);
+    }
+    if (!kept) return packet;
+    let p = { tick: packet.tick, peerId: packet.peerId, teamId: packet.teamId, actions: kept };
+    p.checksum = computeTickPacketChecksum(p.tick, p.peerId, p.teamId, p.actions);
+    return p;
 }
 
 // Host: whether a guest delivered a packet in time since the given tick.
@@ -5699,8 +5771,18 @@ function maybeBuildHostBundle(tick, participants = null, sealLate = false) {
         netCounters.lateSeals = (netCounters.lateSeals || 0) + 1;
     }
     for (let pid in lockstepHostCarryByPeer) if (pmap[pid]) pmap[pid] = _hostWithCarriedCommands(t, pid, pmap[pid]);
-
-    let packets = ids.map(pid => pmap[pid]).sort(tickPacketOrder);
+    // (A host that does not play (it resigned, it spectates) still runs the
+    // match: its administrative commands go in, in a packet of its own with
+    // those alone.)
+    let sealIds = ids;
+    if (myPeerId && !ids.includes(myPeerId) && pmap[myPeerId]) {
+        let own = _hostAdminPacket(pmap[myPeerId]);
+        if (own) { pmap[myPeerId] = own; sealIds = [...ids, myPeerId]; }
+    }
+    // (Each command once: a copy of one that ran, or is in this bundle or
+    // waits in its sender's carry, is left out.)
+    let seen = new Set();
+    let packets = sealIds.map(pid => pmap[pid] = _hostCommandsOnce(pid, pmap[pid], seen)).sort(tickPacketOrder);
     let flush = resyncHostFlushTicks.has(t) ? 1 : 0;
     let combinedChecksum = computeTickBundleChecksum(t, packets, flush);
     let bundle = { tick: t, packets, combinedChecksum };
@@ -5784,6 +5866,15 @@ function lockstepAdoptAutoSeal(tick, msg) {
         let carry = lockstepHostCarryByPeer[pid] || (lockstepHostCarryByPeer[pid] = []);
         for (let a of have.actions) carry.push(a);
         netCounters.lateCommandsCarried = (netCounters.lateCommandsCarried || 0) + have.actions.length;
+    }
+    // (A host that does not play has no packet in it: its administrative
+    // commands queued for this tick go on to the next it seals.)
+    if (myPeerId && !bundle.packets.some(p => String(p.peerId) === myPeerId)) {
+        let own = _hostAdminPacket({ tick, peerId: myPeerId, teamId: localPlayerId, actions: localInputBuffer[tick] || [] });
+        if (own) {
+            let carry = lockstepHostCarryByPeer[myPeerId] || (lockstepHostCarryByPeer[myPeerId] = []);
+            for (let a of own.actions) carry.push(a);
+        }
     }
     delete localInputBuffer[tick];
     delete lockstepLocalPacketByTick[tick];
@@ -6491,7 +6582,10 @@ function driveStrictLockstep(now, tick) {
     if (lockstepResyncPauseActive) {
         if (!waitingForRemoteSince) waitingForRemoteSince = now;
         // Waiting for a snapshot that never came (lost request, host busy).
+        // (Not while the simulation worker restores one: acknowledged once
+        // it has, its own watch bounds it, sim_client.js simClientLostHold.)
         if (!lockstepResyncRequestedAt) lockstepResyncRequestedAt = now;
+        else if (typeof simClientLoading === 'function' && simClientLoading()) lockstepResyncRequestedAt = now;
         else if ((now - lockstepResyncRequestedAt) > 8000) {
             lockstepResyncRequestedAt = 0;
             requestHardLockstepResync(t, 'resync timeout', now);
@@ -6605,6 +6699,7 @@ function runOneTick() {
         }
     }
 
+    if (isMultiplayer && !isHost) lockstepNoteUnconfirmed(localInputBuffer[currentTick], currentTick);
     delete localInputBuffer[currentTick];
     delete lockstepLocalPacketByTick[currentTick];
     delete lockstepHostPacketsByTick[currentTick];

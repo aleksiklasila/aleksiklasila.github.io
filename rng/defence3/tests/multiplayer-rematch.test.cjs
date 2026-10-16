@@ -47,6 +47,10 @@ function startState(i) {
         assert.equal(b.patches + b.resyncs, 0, all[k].name + ' counters reset');
     }
     assert.equal(host.eval('rematchVotePeerIds.size'), 0, 'votes cleared');
+    // (Every player plays it: the worker's defeated teams of the last match
+    // made the host take its guests for spectators, their commands left out.)
+    await world.run(1500);
+    assert.equal(host.eval('getActiveMatchPeerIds().length'), 3, 'every player plays the rematch: ' + host.eval('JSON.stringify(matchRoleByPeerId)'));
     const from = host.eval('currentTick');
     await H.playFor(world, all, 6000, { seed: 2 });
     await world.run(2000);

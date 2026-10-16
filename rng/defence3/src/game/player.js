@@ -27,11 +27,19 @@ function enterSpectateMode(mode = 'defeated', opts = null) {
     selectedEntities = [];
     activeSubGroups = {};
     attackMoveMode = false;
-    if (isMultiplayer && gameStarted && (!auto || isHost) && typeof setMatchRoleForTeam === 'function') {
+    // (Roles: a defeat the host's own state found is the team's; one this
+    // player chose (a resign, its team resigned) is this player's: its team
+    // plays on while a teammate does (hostPeerStopsPlaying). It set the whole
+    // team spectating.)
+    if (isMultiplayer && gameStarted && auto && isHost && typeof setMatchRoleForTeam === 'function') {
         setMatchRoleForTeam(localPlayerId, 'spectating');
     }
-    if (isMultiplayer && !isHost && gameStarted && !auto && connections[0]) {
-        try { connections[0].send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating' }); } catch { }
+    if (isMultiplayer && gameStarted && !auto) {
+        if (isHost) { if (typeof hostPeerStopsPlaying === 'function') hostPeerStopsPlaying(myPeerId); }
+        else {
+            if (myPeerId) matchRoleByPeerId[myPeerId] = 'spectating';
+            if (connections[0]) { try { connections[0].send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating' }); } catch { } }
+        }
     }
     requestBuildMenuRefresh();
     updateInfoPanel();

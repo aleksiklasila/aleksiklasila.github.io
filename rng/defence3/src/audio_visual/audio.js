@@ -687,10 +687,27 @@ function _noteAmbientSoundTick(target, key, cooldownTicks = AUDIO_AMBIENT_WORK_M
     return true;
 }
 
+// A type and subtype's recipe (a pure function of them), kept: a big
+// fight replays thousands of sound events a tick, each made its recipe anew
+// (copies, patterns, hashes) before the caps below turned nearly all away.
+const _soundRecipes = new Map();
+function _soundRecipeKept(type, subtype) {
+    let key = type + '|' + subtype, r = _soundRecipes.get(key);
+    if (!r) {
+        if (_soundRecipes.size >= 1024) _soundRecipes.clear();
+        _soundRecipes.set(key, r = _getSoundRecipe(type, subtype));
+    }
+    return r;
+}
+
 function playSound(type, worldX, worldY, subtype = '') {
     if (!audioCtx || !audioEnabled) return;
     if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
-    let recipe = _getSoundRecipe(type, subtype);
+    // (Turned away anyway once this tick's sounds or the voices are full:
+    // _canPlaySoundTypeNow, below. Checked first, without its counting.)
+    if (_activeAudioVoices.size >= AUDIO_MAX_ACTIVE_VOICES) return;
+    if (_audioFrameSoundTick === (Number.isFinite(gameTime) ? gameTime : 0) && _audioFrameSoundCount >= AUDIO_MAX_SOUNDS_PER_FRAME) return;
+    let recipe = _soundRecipeKept(type, subtype);
     let spatial = _getAudioSpatialState(worldX, worldY, recipe[6]);
     // Cull only below -80 dB of full-scale output, after a smooth zero-slope fade.
     // Inaudible/offscreen events do not consume the audible event budget.

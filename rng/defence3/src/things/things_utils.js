@@ -1353,8 +1353,9 @@ function _effRowAttach(u) {
 // tables). The kernel's twin: SIM_KERNEL_EFF_UNITS.
 function _effSticky(el, effS, last) {
     if (!(last >= 1) || el === last) return el;
-    if (el === last - 1) return effS * 5 >= 4 * Math.pow(2, last - 1) ? last : el;
-    if (el === last + 1) return effS * 4 < 5 * Math.pow(2, last) ? last : el;
+    // (detPow: Math.pow need not be exact, even for 2^k.)
+    if (el === last - 1) return effS * 5 >= 4 * detPow(2, last - 1) ? last : el;
+    if (el === last + 1) return effS * 4 < 5 * detPow(2, last) ? last : el;
     return el;
 }
 function _effStatsFullUnit(u, canUseSpatialCounts, chunkPx) {

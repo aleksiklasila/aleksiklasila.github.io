@@ -142,7 +142,7 @@ function generateResourceMinesMixed() {
         // A ring along the edge, wider with more mines; around it the two
         // resources in wedges (eight pairs).
         order = (gx, gy) => { let e = Math.min(gx - margin, gy - margin, GRID_W - 1 - margin - gx, GRID_H - 1 - margin - gy); return e > L.ringMost ? Infinity : e + jitter(0.9); };
-        score = (gx, gy) => { let t = (Math.atan2(gy - centerY, gx - centerX) / (Math.PI * 2) + 1) * 8; return 1 - (t - Math.floor(t)) + jitter(0.01); };
+        score = (gx, gy) => { let t = (detAtan2(gy - centerY, gx - centerX) / (Math.PI * 2) + 1) * 8; return 1 - (t - Math.floor(t)) + jitter(0.01); };
     } else if (MAP_TYPE === 'island') {
         // One island in the middle, bigger with more mines; the resources
         // in rings.
@@ -165,10 +165,10 @@ function generateResourceMinesMixed() {
             let room = (reach + Math.max(rG, rA) + margin + 1) * Math.SQRT2, toCentre = detHypot(centerX - sp.gx, centerY - sp.gy);
             let along = Math.min(room, toCentre * 0.9) / Math.max(1, toCentre);
             let cx = sp.gx + (centerX - sp.gx) * along, cy = sp.gy + (centerY - sp.gy) * along;
-            let toward = Math.atan2(centerY - cy, centerX - cx) + Math.PI / 4;
+            let toward = detAtan2(centerY - cy, centerX - cx) + Math.PI / 4;
             for (let i = 0; i < 4; i++) {
                 let astar = totalAstar > 0 && (totalGold <= 0 || i % 2 === 1), ang = toward + i * Math.PI / 2;
-                bodies.push({ cx: cx + Math.cos(ang) * reach, cy: cy + Math.sin(ang) * reach, r: astar ? rA : rG, astar, most: L.mapMin * 0.13 });
+                bodies.push({ cx: cx + detCos(ang) * reach, cy: cy + detSin(ang) * reach, r: astar ? rA : rG, astar, most: L.mapMin * 0.13 });
             }
         }
         order = bodyOrder; score = bodyScore;
@@ -188,7 +188,7 @@ function generateResourceMinesMixed() {
             let phase = rng() * Math.PI * 2;
             for (let i = 0; i < n; i++) {
                 let astar = totalAstar > 0 && (totalGold <= 0 || i % 2 === 0), ang = phase + i * Math.PI * 2 / n;
-                bodies.push({ cx: centerX + Math.cos(ang) * half * at, cy: centerY + Math.sin(ang) * half * at, r: astar ? rA : rG, astar, most: L.mapMin * 0.07 });
+                bodies.push({ cx: centerX + detCos(ang) * half * at, cy: centerY + detSin(ang) * half * at, r: astar ? rA : rG, astar, most: L.mapMin * 0.07 });
             }
         }
         order = bodyOrder; score = bodyScore;
@@ -693,8 +693,8 @@ function pickIslandPlayerSpawns(teamCount = 2) {
     let picks = [];
     for (let i = 0; i < teamCount; i++) {
         let ang = (Math.PI * 2 * i) / teamCount;
-        let gx = Math.round(centerX + Math.cos(ang) * radius);
-        let gy = Math.round(centerY + Math.sin(ang) * radius);
+        let gx = Math.round(centerX + detCos(ang) * radius);
+        let gy = Math.round(centerY + detSin(ang) * radius);
         gx = Math.max(1, Math.min(GRID_W - 2, gx));
         gy = Math.max(1, Math.min(GRID_H - 2, gy));
         if (grid[gy][gx].type !== TYPE_FLOOR) {
@@ -812,7 +812,7 @@ function pickCrossroadsPlayerSpawns(teamCount = 2) {
         let ang = Math.PI / 4 + (Math.PI * 2 * i) / teamCount;
         // (On the square through the diagonals' points: the same distance
         // from the nearer road for two and for four players.)
-        let c = Math.cos(ang), sn = Math.sin(ang), k = off / Math.max(Math.abs(c), Math.abs(sn), 1e-6) * Math.SQRT1_2 * Math.SQRT2;
+        let c = detCos(ang), sn = detSin(ang), k = off / Math.max(Math.abs(c), Math.abs(sn), 1e-6) * Math.SQRT1_2 * Math.SQRT2;
         let gx = Math.max(2, Math.min(GRID_W - 3, Math.round(L.cx + c * k)));
         let gy = Math.max(2, Math.min(GRID_H - 3, Math.round(L.cy + sn * k)));
         if (grid[gy][gx].type !== TYPE_FLOOR) { let n = findNearestWalkable(gx, gy, L.cx, L.cy); gx = n.x; gy = n.y; }

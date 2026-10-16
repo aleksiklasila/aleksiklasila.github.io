@@ -272,6 +272,8 @@ function promoteSelfToHost(oldHostId, hostLeft, opts = null) {
     // Guests keep the start roster as it was; the host's broadcasts carry
     // current peer ids (players who reconnected under a new one).
     matchStartLobbyPlayers = (lobbyPlayers || []).filter(lp => lp && lp.peerId && !isPeerExplicitlyRemoved(lp.peerId)).map(lp => ({ ...lp }));
+    // (A rematch's players, as far as the roster tells: those still playing.)
+    _matchStartPlayerIds = new Set(Object.keys(matchRoleByPeerId).filter(pid => matchRoleByPeerId[pid] === 'playing'));
     if (!(opts && opts.keepOldLink)) {
         let stale = connections.filter(c => c && c.peer === oldHostId);
         connections = connections.filter(c => !stale.includes(c));

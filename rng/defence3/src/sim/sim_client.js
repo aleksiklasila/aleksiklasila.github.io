@@ -61,7 +61,7 @@ function _simClientScriptUrls() {
         .filter(src => /\/src\//.test(src) && !/bootstrap\.js|sim_shadow\.js|sim_worker\.js|sim_client\.js/.test(src));
 }
 
-const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261012-h8';
+const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261016-mp3';
 
 function _simClientCreate() {
     let c = {
@@ -189,6 +189,9 @@ function simClientStartMatch(startText = null, decodePage = null) {
     c.active = true;
     // (Kept until the worker has the world: the page's own if it fails.)
     c.startText = text;
+    // (Its silence while it loads is bounded by the size: simClientLostHold.)
+    c.loadBytes = text.length;
+    c.lastMsgAt = Math.max(c.lastMsgAt || 0, performance.now());
     for (let [, r] of c.replies) r.reject(new Error('match restarted'));
     c.replies.clear();
     c.worker.postMessage({
@@ -241,6 +244,7 @@ function _simClientStartFailed(reason) {
     if (!c || !c.active) return;
     c.failed = 'start: ' + reason;
     c.active = false;
+    _simClientRestoreSettle(c, false);
     _simAutoSync(c);
     console.warn('[sim worker] could not start the match (' + reason + '); this match runs on the page');
     try { c.worker.terminate(); } catch { }
@@ -272,13 +276,37 @@ const SIM_CLIENT_SILENT_MS = 10000;
 const SIM_CLIENT_RESPAWNS = 3;
 let _simClientLost = null, _simClientRespawns = 0;
 function simClientLostPending() { return !!_simClientLost; }
+// A worker loading a match (a start, a whole-state restore) says nothing
+// until it has: its silence then is bounded by what it loads, 5 s and 2 s
+// a MB (a 200k match: about two minutes). One lost while loading was never
+// noticed (the watch skipped a world not loaded yet): a guest stood at its
+// tick for good, not ready, nothing recovering (audit 2026-10-16, 23).
+const SIM_CLIENT_LOAD_SILENT_MS = 5000;
+function _simClientLoadLimitMs(c) { return SIM_CLIENT_LOAD_SILENT_MS + Math.min(115000, (c.loadBytes || 0) / 1e6 * 2000); }
 // From the page's tick pump: true while ticks must wait (the worker lost).
 function simClientLostHold(now) {
     if (_simClientLost) return true;
     const c = _simClient;
-    if (!c || !c.active || c.startedEpoch !== c.epoch) { if (c) c.pumpAt = now; return false; }
+    if (!c || !c.active) { if (c) c.pumpAt = now; return false; }
     if (!(c.pumpAt > 0) || now - c.pumpAt > 1000) c.lastMsgAt = Math.max(c.lastMsgAt || 0, now);
     c.pumpAt = now;
+    if (c.startedEpoch !== c.epoch) {
+        c.workSince = 0;
+        const silent = now - c.lastMsgAt;
+        if (silent <= _simClientLoadLimitMs(c)) return false;
+        const reason = 'no answer for ' + Math.round(silent) + ' ms while loading the match';
+        // (A match's first load, or one alone: the page has the start state
+        // and runs it, as when the start fails. A reload or restore of a
+        // running match: the match is got again, as for a worker lost
+        // mid-match.)
+        if (c.startText && (!isMultiplayer || (typeof matchStartWaitingForReady !== 'undefined' && matchStartWaitingForReady))) {
+            _simClientStartFailed(reason);
+            _simClientRespawn(c);
+            return false;
+        }
+        _simClientWorkerLost(reason);
+        return true;
+    }
     // (Silence counts while work is out only: an idle worker says nothing,
     // the match standing still for a while.)
     if (!(c.inFlight > 0 || c.replies.size > 0 || c.autoDeferred.length > 0)) { c.workSince = 0; return false; }
@@ -305,8 +333,38 @@ function _simClientWorkerLost(reason) {
     c.autoDeferred = [];
     c.inFlight = 0;
     _simClientLost = { reason, at: performance.now() };
-    if (++_simClientRespawns <= SIM_CLIENT_RESPAWNS) _simClient = _simClientCreate();
+    _simClientRestoreSettle(c, false);
+    _simClientRespawn(c);
     if (typeof netRecoverLostSimulation === 'function') netRecoverLostSimulation(reason);
+}
+// A new worker for later matches (a few at most: one that keeps failing
+// leaves matches to the page).
+function _simClientRespawn(c) {
+    if (_simClient === c && ++_simClientRespawns <= SIM_CLIENT_RESPAWNS) _simClient = _simClientCreate();
+}
+// ---- a whole-state restore in the worker ----
+// Whether the worker is loading a match now (a start, a restore): how long
+// it may take is its own watch's (simClientLostHold), not a recovery's
+// timeout.
+function simClientLoading() {
+    const c = _simClient;
+    return !!(c && c.active && c.startedEpoch !== c.epoch && !_simClientLost);
+}
+// Resolves true once the worker restored what the page restored last (its
+// 'started' for that epoch), false when it could not (it says so, or was
+// lost): the page acknowledges a recovery only then (a refused one was
+// acknowledged: audit 2026-10-16, 28). At once without a worker.
+function simClientRestoreDone() {
+    const c = _simClient;
+    if (!c || !c.active) return Promise.resolve(!_simClientLost);
+    if (c.startedEpoch === c.epoch) return Promise.resolve(true);
+    return new Promise(resolve => (c.restoreWaiters || (c.restoreWaiters = [])).push(resolve));
+}
+function _simClientRestoreSettle(c, ok) {
+    const list = c && c.restoreWaiters;
+    if (!list) return;
+    c.restoreWaiters = null;
+    for (const r of list) { try { r(ok); } catch { } }
 }
 // A match (re)starts (startGame): the page ticks again.
 function simClientLostClear() { _simClientLost = null; }
@@ -340,6 +398,7 @@ function simClientSyncGlobals() {
 }
 
 function simClientStop() {
+    if (_simClient) _simClientRestoreSettle(_simClient, false);
     if (_simClient) { _simClient.active = false; _simClient.epoch++; _simAutoSync(_simClient); _simClient.worker.postMessage({type:'presentationStop'}); }
 }
 
@@ -566,7 +625,7 @@ function _simClientOnMessage(msg) {
     switch (msg.type) {
         case 'loaded': c.loaded = true; c.helpers = msg.helpers || 0; c.shared = !!msg.shared; break;
         case 'started':
-            if (msg.epoch === c.epoch) { c.startedEpoch = msg.epoch; c.startTimings = msg.timings || null; c.startText = null; }
+            if (msg.epoch === c.epoch) { c.startedEpoch = msg.epoch; c.startTimings = msg.timings || null; c.startText = null; _simClientRestoreSettle(c, true); }
             if (msg.world) { if (msg.epoch === c.epoch) _simClientApplyWorld(msg.world, 1); else _simClientReturnBufs(_simClientWorldBufs(msg.world)); }
             break;
         case 'ticked': _simClientApplyTick(msg); break;
@@ -598,9 +657,16 @@ function _simClientOnMessage(msg) {
         case 'reply': {
             let r = c.replies.get(msg.id);
             c.replies.delete(msg.id);
-            if (r) r.resolve(msg.result);
+            // (A request that threw answers with its error: it waited for
+            // good, a malformed patch held the page's ticks.)
+            if (r) { if (msg.error !== undefined) r.reject(new Error(String(msg.error))); else r.resolve(msg.result); }
             break;
         }
+        // A whole-state restore it could not make: its state is gone; the
+        // match is got again, as for a worker lost (sim_worker.js _simRequest).
+        case 'restoreFailed':
+            if (msg.epoch === c.epoch && c.active) _simClientWorkerLost('could not restore the match (' + msg.message + ')');
+            break;
         case 'error': {
             if (c.errors.length < 50) c.errors.push(msg.where + ': ' + msg.message);
             if (msg.where === 'load') c.failed = msg.message || 'load error';
@@ -1154,6 +1220,11 @@ function simClientAfterPatchApplied(text, full) {
 function simClientAfterSnapshotApplied(snapshot) {
     if (!simClientActive() || _simClient.decodingStart) return;
     let c = _simClient;
+    // (What it loads, for the bound on its silence meanwhile; it says
+    // nothing until it has: simClientLostHold.)
+    c.loadBytes = (Array.isArray(units) ? units.length : 0) * 400;
+    c.lastMsgAt = Math.max(c.lastMsgAt || 0, performance.now());
+    c.startText = null;
     c.epoch++;
     _simAutoSync(c);
     c.inFlight = 0;

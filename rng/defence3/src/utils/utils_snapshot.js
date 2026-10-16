@@ -97,7 +97,12 @@ const SNAP_FORMAT = 7;
 // within its own update (from the tick's worker events); a bundle's packets
 // in peer id order by code units (was the locale's), its checksum over them
 // in that order.
-const SIM_RULES_REVISION = 14;
+// 15: recoveries numbered by their host (g) and tagged with their match
+// (m); a host seals a command id once (copies of one that ran, or waits in
+// its sender's carry, are left out); a host that does not play puts its
+// administrative commands (a team resigned for a leaving player) in a
+// packet of its own.
+const SIM_RULES_REVISION = 15;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
 // Each hash covers one slice (regions, grid rows) of the world. The resync

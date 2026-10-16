@@ -238,21 +238,29 @@ function resyncGuestHandleAt(data) {
     if (isHost || !gameStarted || !netMatchTagOk(data && data.m)) return;
     let T = Math.floor(Number(data && data.tick));
     if (!Number.isFinite(T)) return;
-    if (!_resyncGuestFreshId(Math.floor(Number(data.id) || 0))) return;
+    let id = Math.floor(Number(data.id) || 0);
+    if (!_resyncGuestFreshId(id)) return;
     let g = resyncGuest;
+    // (Older than the repair waited for, its patch come first: changes
+    // nothing.)
+    if (g.T >= 0 && id < g.patchId) return;
     // (The simulation worker leaves that tick to the page from now on; it
     // may have run it by itself already, the page stalled.)
     if (typeof simClientAutoBarrier === 'function') simClientAutoBarrier(T);
     if (T < currentTick || (typeof simClientTickFree === 'function' && !simClientTickFree(T))) {
-        // Already past it: ask again for a later tick.
+        // Already past it: ask again for a later tick (an older repair
+        // waited for is superseded by it).
+        g.T = -1; g.patch = null;
         g.outstanding = false;
         resyncGuestRequest(Math.max(0, currentTick - 1), performance.now());
         return;
     }
     g.T = T;
-    g.patchId = Math.floor(Number(data.id) || 0);
+    g.patchId = id;
     g.full = !!data.full;
-    if (g.patch && g.patch.tick !== T) g.patch = null;
+    // (Announcement and patch go by the repair's id: its patch may have
+    // come first, and waiting for it again stalled the guest.)
+    if (g.patch && g.patch.id !== id) g.patch = null;
 }
 
 function resyncGuestHandlePatch(data) {
@@ -262,22 +270,29 @@ function resyncGuestHandlePatch(data) {
     if (!Number.isFinite(T)) return;
     if (!_resyncGuestFreshId(id)) return;
     // (The state it was asked for: a reset (a new match, a restore of the
-    // whole match) or a newer repair while it decodes makes it obsolete;
-    // installed into the reset state it was applied to the wrong match.)
-    let g0 = resyncGuest, session = matchStartSessionId;
+    // whole match), a newer repair or another host (a migration) while it
+    // decodes makes it obsolete; installed into the reset state it was
+    // applied to the wrong match.)
+    let g0 = resyncGuest, session = matchStartSessionId, host = String(wsHostId || '');
     netDecodeSnapshotPayload(data.payload).then(text => {
         if (!text) throw new Error('empty patch');
         let g = resyncGuest;
-        if (g !== g0 || matchStartSessionId !== session || !gameStarted || isHost || id < g.maxId) return;
-        if (T < currentTick || (g.T >= 0 && g.T !== T)) {
-            // Too late for this one (or superseded): ask again.
-            if (g.T === T || g.T < currentTick) { g.T = -1; g.outstanding = false; }
+        if (g !== g0 || matchStartSessionId !== session || String(wsHostId || '') !== host || g.idHost !== host || !gameStarted || isHost || id < g.maxId) return;
+        // (Older than the repair waited for: superseded.)
+        if (g.T >= 0 && id < g.patchId) return;
+        // A newer valid repair supersedes the one waited for, whichever of
+        // its announcement and patch came first (one that came before its
+        // announcement was dropped, the guest then waited for it again).
+        if (typeof simClientAutoBarrier === 'function') simClientAutoBarrier(T);
+        if (T < currentTick || (typeof simClientTickFree === 'function' && !simClientTickFree(T))) {
+            // Too late for this one: ask again.
+            if (g.patchId === id || g.T < currentTick) { g.T = -1; g.patch = null; g.outstanding = false; }
             return;
         }
         g.T = T;
         g.patchId = id;
         g.full = !!data.full;
-        g.patch = { tick: T, text, bytes: netSnapshotPayloadBytes(data.payload) };
+        g.patch = { id, tick: T, text, bytes: netSnapshotPayloadBytes(data.payload) };
     }).catch(err => {
         logLockstepWarning('Could not decode a patch', { error: String(err && err.message || err) });
         if (resyncGuest === g0) resyncGuest.outstanding = false;
@@ -310,8 +325,27 @@ function resyncGuestBeforeTick(tick, now) {
     let stall = g.waitSince ? now - g.waitSince : 0;
     netCounters.patchStallMs = stall;
     netCounters.patchStallMaxMs = Math.max(netCounters.patchStallMaxMs, stall);
-    applyResyncPatch(g.patch.text, g.full);
+    // (One that throws (malformed: parsing, applying) is dropped: it was
+    // kept and tried again at every pump, the page's ticks held for good,
+    // and the wait for a missing patch never applied, one being there.)
+    let id = g.patchId;
+    try { applyResyncPatch(g.patch.text, g.full); }
+    catch (err) { _resyncGuestPatchFailed(tick, id, err); }
     return true;
+}
+
+// A patch that could not be applied (it threw: malformed, or the state it
+// met): dropped, and the whole match asked for (what it changed before it
+// threw is unknown). Audit 2026-10-16, 30.
+function _resyncGuestPatchFailed(tick, id, err) {
+    let g = resyncGuest;
+    _resyncGuestPatchTaken();
+    g.outstanding = false;
+    g.divergedAt = -1;
+    netCounters.patchesFailed = (netCounters.patchesFailed | 0) + 1;
+    logLockstepWarning('A patch could not be applied; asking for the match', { tick, id, error: String(err && err.message || err) });
+    lockstepResyncRequestedAt = 0;
+    if (typeof requestHardLockstepResync === 'function') requestHardLockstepResync(currentTick, 'patch failed');
 }
 
 // Guest: restore the carried state (the patch was taken just before `T`).
@@ -336,7 +370,12 @@ function applyResyncPatch(text, full) {
             netCounters.lastDesyncParts = full ? 'full state' : '';
             g.lastChanged = [];
             _resyncGuestPatchAck(tick, id);
-        }, () => { });
+        }, err => {
+            // (It threw in the worker; a worker lost or a match restarted
+            // settles it otherwise.)
+            if (resyncGuest !== g || !simClientActive()) return;
+            _resyncGuestPatchFailed(tick, id, err);
+        });
         return;
     }
     let S = JSON.parse(text);

@@ -377,7 +377,7 @@ function makePeerClass(world, inst) {
 // Game instance
 // ------------------------------------------------------------------
 // The exact fingerprint of the state, also run in the simulation worker.
-const EXACT_STATE_HASH_SRC = "const __exactView = new DataView(new ArrayBuffer(8));\nfunction __exactStateHash() {\n    let h = 2166136261 >>> 0;\n    const mix = v => {\n        if (typeof v === 'number') { __exactView.setFloat64(0, v); for (let i = 0; i < 8; i++) h = Math.imul(h ^ __exactView.getUint8(i), 16777619); return; }\n        const str = v === undefined ? '~u' : v === null ? '~n' : typeof v === 'object' ? JSON.stringify(v) : String(v);\n        for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);\n        h = Math.imul(h ^ 255, 16777619);\n    };\n    const ref = e => e ? (e.id !== undefined ? 'u' + e.id : (e.gx + ',' + e.gy)) : null;\n    for (const u of units.slice().sort((a, b) => a.id - b.id)) {\n        mix(u.id); mix(u.x); mix(u.y); mix(u.energy); mix(u.attackTimer); mix(u.commandState); mix(!!u.holdPosition); mix(u.workerState);\n        mix(u.stackCount); mix(u.path ? u.path.length : -1); mix(u.pathIndex); mix(u.targetPos ? u.targetPos.x : null); mix(u.targetPos ? u.targetPos.y : null);\n        mix(ref(u.targetUnit)); mix(ref(u.targetBuilding)); mix(ref(u.workerTarget)); mix(u._pendingPathTarget ? u._pendingPathTarget.gx + ',' + u._pendingPathTarget.gy : null);\n    }\n    const bld = b => {\n        mix(b.gx); mix(b.gy); mix(b.type); mix(b.energy); mix(b.maxEnergy); mix(b.spawnTimer); mix(b.stackingWorkDone); mix(b.stacks); mix(b.manualStacks); mix(b.level);\n        mix(b.rallyX); mix(b.rallyY); mix(b.rallyTargetUnitId); mix(b.autoUpgradeEnabled); mix(b.autoStackEnabled); mix(b.buildEnabled); mix(b.queueEnabled);\n        mix(b.markedForSalvage); mix(b.autoResearchEnabled); mix(Array.isArray(b.spawnQueue) ? b.spawnQueue.length : -1); mix(!!b.isUpgrading); mix(!!b.underConstruction); mix(b.preferredTargetSpec || null);\n    };\n    for (const list of [towers, barracks, collectorSpawners]) for (const b of list.slice().sort((a, b) => (a.gy - b.gy) || (a.gx - b.gx))) bld(b);\n    for (const it of getCellItemsRowMajor()) bld(it);\n    for (const pl of players) {\n        mix(pl.energy); mix(pl.astar); for (const k of Object.keys(pl._resourceFixedValues || {}).sort()) mix(pl._resourceFixedValues[k]);\n        mix(pl.researchLevels || null);\n        for (const t of [pl.researchTask || null, ...(pl.researchQueue || [])]) {\n            if (!t) { mix(null); continue; }\n            mix(t.kind + ':' + t.key + ':' + t.statKey); mix(t.fromLevel); mix(t.toLevel); mix(t.cost); mix(t.workRequired); mix(t.workDone);\n        }\n    }\n    for (const pr of projectiles) { mix(pr.x); mix(pr.y); }\n    for (const ar of (areas || [])) if (ar) { mix(ar.multiplierLevel || 0); mix(!!ar.active); }\n    for (const d of droppedItems) { mix(d.gx); mix(d.gy); mix(d.value); mix(d.timer); }\n    mix([...resignedTeams].sort().join(','));\n    return (h >>> 0).toString(16);\n}\n";
+const EXACT_STATE_HASH_SRC = "const __exactView = new DataView(new ArrayBuffer(8));\nfunction __exactStateHash() {\n    let h = 2166136261 >>> 0;\n    const mix = v => {\n        if (typeof v === 'number') { __exactView.setFloat64(0, v); for (let i = 0; i < 8; i++) h = Math.imul(h ^ __exactView.getUint8(i), 16777619); return; }\n        const str = v === undefined ? '~u' : v === null ? '~n' : typeof v === 'object' ? JSON.stringify(v) : String(v);\n        for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);\n        h = Math.imul(h ^ 255, 16777619);\n    };\n    const ref = e => e ? (e.id !== undefined ? 'u' + e.id : (e.gx + ',' + e.gy)) : null;\n    for (const u of units.slice().sort((a, b) => a.id - b.id)) {\n        mix(u.id); mix(u.x); mix(u.y); mix(u.energy); mix(u.attackTimer); mix(u.commandState); mix(!!u.holdPosition); mix(u.workerState);\n        mix(u.stackCount); mix(u.path ? u.path.length : -1); if (u.path) for (const p of u.path) { mix(p ? p.x : null); mix(p ? p.y : null); } mix(u.pathIndex); mix(u.targetPos ? u.targetPos.x : null); mix(u.targetPos ? u.targetPos.y : null);\n        mix(ref(u.targetUnit)); mix(ref(u.targetBuilding)); mix(ref(u.workerTarget)); mix(u._pendingPathTarget ? u._pendingPathTarget.gx + ',' + u._pendingPathTarget.gy : null);\n    }\n    const bld = b => {\n        mix(b.gx); mix(b.gy); mix(b.type); mix(b.energy); mix(b.maxEnergy); mix(b.spawnTimer); mix(b.stackingWorkDone); mix(b.stacks); mix(b.manualStacks); mix(b.level);\n        mix(b.rallyX); mix(b.rallyY); mix(b.rallyTargetUnitId); mix(b.autoUpgradeEnabled); mix(b.autoStackEnabled); mix(b.buildEnabled); mix(b.queueEnabled);\n        mix(b.markedForSalvage); mix(b.autoResearchEnabled); mix(Array.isArray(b.spawnQueue) ? b.spawnQueue.length : -1); mix(!!b.isUpgrading); mix(!!b.underConstruction); mix(b.preferredTargetSpec || null);\n    };\n    for (const list of [towers, barracks, collectorSpawners]) for (const b of list.slice().sort((a, b) => (a.gy - b.gy) || (a.gx - b.gx))) bld(b);\n    for (const it of getCellItemsRowMajor()) bld(it);\n    for (const pl of players) {\n        mix(pl.energy); mix(pl.astar); for (const k of Object.keys(pl._resourceFixedValues || {}).sort()) mix(pl._resourceFixedValues[k]);\n        mix(pl.researchLevels || null);\n        for (const t of [pl.researchTask || null, ...(pl.researchQueue || [])]) {\n            if (!t) { mix(null); continue; }\n            mix(t.kind + ':' + t.key + ':' + t.statKey); mix(t.fromLevel); mix(t.toLevel); mix(t.cost); mix(t.workRequired); mix(t.workDone);\n        }\n    }\n    for (const pr of projectiles) { mix(pr.x); mix(pr.y); }\n    for (const ar of (areas || [])) if (ar) { mix(ar.multiplierLevel || 0); mix(!!ar.active); }\n    for (const d of droppedItems) { mix(d.gx); mix(d.gy); mix(d.value); mix(d.timer); }\n    mix([...resignedTeams].sort().join(','));\n    return (h >>> 0).toString(16);\n}\n";
 const SETUP = `
 const __stubs = {
     playSound: () => {}, startLaserSound: () => {}, stopLaserSound: () => {}, updateAudioReactiveState: () => {},
@@ -401,7 +401,7 @@ function __exactStateHash() {
     const ref = e => e ? (e.id !== undefined ? 'u' + e.id : (e.gx + ',' + e.gy)) : null;
     for (const u of units.slice().sort((a, b) => a.id - b.id)) {
         mix(u.id); mix(u.x); mix(u.y); mix(u.energy); mix(u.attackTimer); mix(u.commandState); mix(!!u.holdPosition); mix(u.workerState);
-        mix(u.stackCount); mix(u.path ? u.path.length : -1); mix(u.pathIndex); mix(u.targetPos ? u.targetPos.x : null); mix(u.targetPos ? u.targetPos.y : null);
+        mix(u.stackCount); mix(u.path ? u.path.length : -1); if (u.path) for (const p of u.path) { mix(p ? p.x : null); mix(p ? p.y : null); } mix(u.pathIndex); mix(u.targetPos ? u.targetPos.x : null); mix(u.targetPos ? u.targetPos.y : null);
         mix(ref(u.targetUnit)); mix(ref(u.targetBuilding)); mix(ref(u.workerTarget)); mix(u._pendingPathTarget ? u._pendingPathTarget.gx + ',' + u._pendingPathTarget.gy : null);
     }
     const bld = b => {
@@ -433,9 +433,14 @@ return {
 };
 `;
 
-// A Math whose functions without exactly specified results (pow, exp, log,
-// trig, hypot...) answer slightly off (exaggerated, so any dependency shows up).
-// Exactly specified ones (sqrt, floor, min, ...) are untouched.
+// A Math whose approximated functions answer otherwise than V8's, as another
+// engine's may (ECMAScript fixes floor, min, abs, imul, fround... exactly,
+// not these): pow, exp, log, trigonometry, hypot... slightly off
+// (exaggerated, so any dependency shows up), and sqrt one unit in the last
+// place off for about half the inputs (as an engine without a correctly
+// rounded square root would be: the game checks it at load and puts a
+// correctly rounded one in its place, utils_common.js _detSqrtCheck). This
+// is perturbed math in Node, not another browser engine.
 function makeForeignMath() {
     const m = Object.create(Math);
     const nudge = v => (Number.isFinite(v) && v !== 0 && !Number.isInteger(v)) ? v * (1 + 1e-9) : v;
@@ -443,6 +448,16 @@ function makeForeignMath() {
         const f = Math[k];
         m[k] = (...a) => nudge(f(...a));
     }
+    const view = new DataView(new ArrayBuffer(8)), sqrt = Math.sqrt;
+    m.sqrt = x => {
+        const r = sqrt(x);
+        if (!(r > 0) || r === Infinity) return r;
+        view.setFloat64(0, x);
+        if ((Math.imul(view.getUint32(4), 2654435761) >>> 31) === 0) return r;
+        view.setFloat64(0, r);
+        view.setBigUint64(0, view.getBigUint64(0) + 1n);
+        return view.getFloat64(0);
+    };
     return m;
 }
 

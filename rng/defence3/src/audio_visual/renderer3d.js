@@ -4,7 +4,7 @@
     // (SIM_SF_RESEARCH_TASK). A unit's is 65536 (SIM_UF_GHOST).
     const STRUCT_GHOST_FLAG = 4194304;
     const COLUMN_BAKE_WORKER_URL = typeof document !== 'undefined' && document.currentScript?.src
-        ? new URL('renderer3d-lod-worker.js?v=20261015-lod37',document.currentScript.src).href : null;
+        ? new URL('renderer3d-lod-worker.js?v=20261016-mp3',document.currentScript.src).href : null;
     function createShader(gl, type, source) {
         let shader = gl.createShader(type);
         gl.shaderSource(shader, source);
@@ -2794,7 +2794,7 @@
         // Shared by live meshes and the offscreen GPU snapshot baker.
         createFigureProgram() {
             const gl=this.gl;
-            this.figureProgram = createProgram(gl, `#version 300 es
+            const figureVs = `#version 300 es
                 precision highp float;
                 layout(location=0) in vec3 aPosition;
                 layout(location=1) in vec3 aNormal;
@@ -2969,7 +2969,8 @@
                     vAlpha = alpha; vLight = light; vSurface = int(detail.x + .5); vLayer = atlasLayer; vStatusLayer = statusLayer;
                     vModelBlend = m3.w;
                 }
-            `, `#version 300 es
+            `;
+            const figureFs = `#version 300 es
                 precision highp float;
                 in vec3 vNormal;
                 in vec3 vColor;
@@ -3047,28 +3048,106 @@
                     vec4 depth = fract(gl_FragCoord.z * vec4(16777216.0,65536.0,256.0,1.0));
                     outPackedDepth = depth - depth.xxyz * vec4(0.0,1.0/256.0,1.0/256.0,1.0/256.0);
                 }
-            `);
-            this.figureUniforms = {
-                inkScale: gl.getUniformLocation(this.figureProgram, 'uInkScale'),
-                coverageFade: gl.getUniformLocation(this.figureProgram, 'uCoverageFade'),
-                animationMode: gl.getUniformLocation(this.figureProgram, 'uAnimationMode'),
-                rig: gl.getUniformLocation(this.figureProgram, 'uRig'),
-                time: gl.getUniformLocation(this.figureProgram, 'uTime'),
-                layerAlpha: gl.getUniformLocation(this.figureProgram, 'uLayerAlpha'),
-                flyTime: gl.getUniformLocation(this.figureProgram, 'uFlyTime'),
-                walkSurface: gl.getUniformLocation(this.figureProgram, 'uWalkSurface'),
-                walkSurfaceBounds: gl.getUniformLocation(this.figureProgram, 'uWalkSurfaceBounds'),
-                followWalkSurface: gl.getUniformLocation(this.figureProgram, 'uFollowWalkSurface'),
-                isFlying: gl.getUniformLocation(this.figureProgram, 'uIsFlying'),
-                isUnit: gl.getUniformLocation(this.figureProgram, 'uIsUnit'),
-                viewProjection: gl.getUniformLocation(this.figureProgram, 'uViewProjection'),
-                topTexture: gl.getUniformLocation(this.figureProgram, 'uTopTexture'),
-                atlas: gl.getUniformLocation(this.figureProgram, 'uAtlas'),
-                useAtlas: gl.getUniformLocation(this.figureProgram, 'uUseAtlas'),
-                sideTexture: gl.getUniformLocation(this.figureProgram, 'uSideTexture'),
-                hasSideTexture: gl.getUniformLocation(this.figureProgram, 'uHasSideTexture')
-            };
+            `;
+            this.figureSources = { vs: figureVs, fs: figureFs };
+            this.figureProgram = createProgram(gl, figureVs, figureFs);
+            this.figureUniforms = this.figureUniformLocations(this.figureProgram);
             gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        }
+        figureUniformLocations(program) {
+            const gl = this.gl, U = {};
+            for (const [k, n] of [['inkScale', 'InkScale'], ['coverageFade', 'CoverageFade'], ['animationMode', 'AnimationMode'], ['rig', 'Rig'], ['time', 'Time'],
+                ['layerAlpha', 'LayerAlpha'], ['flyTime', 'FlyTime'], ['walkSurface', 'WalkSurface'], ['walkSurfaceBounds', 'WalkSurfaceBounds'],
+                ['followWalkSurface', 'FollowWalkSurface'], ['isFlying', 'IsFlying'], ['isUnit', 'IsUnit'], ['viewProjection', 'ViewProjection'],
+                ['topTexture', 'TopTexture'], ['atlas', 'Atlas'], ['useAtlas', 'UseAtlas'], ['sideTexture', 'SideTexture'], ['hasSideTexture', 'HasSideTexture']]) U[k] = gl.getUniformLocation(program, 'u' + n);
+            return U;
+        }
+        // The figure program for the units' middle-distance models drawn from
+        // the frame's columns on the GPU (a group's instances are its unit
+        // slots; each instance's record (drawColumnModels' 28 floats: yaw and
+        // scale, motion to the previous tick, height, owner colour, panel
+        // layer, light...) is made in the vertex shader from the columns, as
+        // _cmUnits made it in JS: ~0.5 us a unit a tick on the page, ~4 ms a
+        // tick in a close view of a big fight). null where it cannot be made.
+        ensureFigureSlotProgram() {
+            if (this.figureSlotProgram !== undefined) return this.figureSlotProgram;
+            this.figureSlotProgram = null;
+            const gl = this.gl, src = this.figureSources;
+            if (!src) return null;
+            const attrs = `
+                layout(location=3) in vec4 m0;
+                layout(location=4) in vec4 m1;
+                layout(location=5) in vec4 m2;
+                layout(location=6) in vec4 m3;
+                layout(location=7) in vec3 color;
+                layout(location=8) in float alpha;
+                layout(location=9) in float moveAmount;
+                layout(location=10) in float phaseIn;
+                layout(location=11) in vec3 trim;
+                layout(location=12) in float light;
+                layout(location=13) in vec4 detail;
+                layout(location=14) in float atlasLayer;
+                layout(location=15) in float statusLayer;`;
+            const slot = `
+                layout(location=3) in float aSlot;
+                layout(location=13) in vec4 detail;
+                uniform highp sampler2D uSlotF;
+                uniform highp isampler2D uSlotI;
+                uniform highp isampler2D uSlotO;
+                uniform highp sampler2D uSlotVis;
+                uniform int uSlotW, uSlotRows, uSlotFull, uSlotPlayer, uSlotStyleFlags;
+                uniform float uSlotTile, uSlotLightNorm, uSlotHeightScale, uSlotStatus;
+                uniform vec2 uSlotScale;
+                uniform vec3 uSlotTint;
+                uniform vec3 uSlotColors[9];
+                uniform float uSlotLayers[9];
+                vec4 m0, m1, m2, m3;
+                vec3 color, trim;
+                float alpha, moveAmount, phaseIn, light, atlasLayer, statusLayer;
+                // Columns in bands of uSlotRows rows (_cmSlotTextures): floats
+                // x y px py r facing prate amount phase vision; ints id flags.
+                float slotF(int band, int s) { return texelFetch(uSlotF, ivec2(s % uSlotW, band * uSlotRows + s / uSlotW), 0).r; }
+                int slotI(int band, int s) { return texelFetch(uSlotI, ivec2(s % uSlotW, band * uSlotRows + s / uSlotW), 0).r; }
+                void fetchSlot() {
+                    int s = int(aSlot + .5);
+                    float wx = slotF(0, s), wy = slotF(1, s), x = wx / uSlotTile, z = wy / uSlotTile;
+                    float size = clamp(slotF(4, s) * 2.2 / uSlotTile, .28, .9);
+                    float sx = size * uSlotScale.x, sy = size * uSlotScale.y;
+                    bool flying = (uSlotStyleFlags & 1) != 0;
+                    if ((uSlotStyleFlags & 2) == 0) sy = (uSlotStyleFlags & 4) != 0 ? max(.24, sy) : max(.48 * uSlotScale.x, sy);
+                    float vision = slotF(9, s);
+                    if ((uSlotStyleFlags & 8) == 0 && vision > 0.0) sy *= max(.18, vision * uSlotHeightScale);
+                    float facing = slotF(5, s), c = cos(facing), sn = sin(facing);
+                    int id = slotI(0, s), flags = slotI(1, s);
+                    int owner = texelFetch(uSlotO, ivec2(s % uSlotW, s / uSlotW), 0).r;
+                    m0 = vec4(c * sx, 0.0, -sn * sx, (slotF(2, s) - wx) / uSlotTile);
+                    m1 = vec4(flying ? mod(float(id) * 1.7, 6.283185307179586) : 0.0, sy, flying ? 1.0 : 0.0, (slotF(3, s) - wy) / uSlotTile);
+                    m2 = vec4(sn * sx, 0.0, c * sx, slotF(6, s));
+                    float lift = .012 + float((uint(id) * 1103515245u) % 7u) * .003 + (flying ? ((uSlotStyleFlags & 16) != 0 ? .36 : .30) : 0.0);
+                    m3 = vec4(x, lift, z, 1.0);
+                    int ownerIdx = clamp(owner + 1, 0, 8);
+                    color = uSlotColors[ownerIdx];
+                    alpha = 1.0;
+                    moveAmount = slotF(7, s);
+                    phaseIn = slotF(8, s);
+                    trim = uSlotTint;
+                    bool remembered = (flags & 65536) != 0;
+                    float lit = remembered ? .14 : (uSlotFull != 0 || owner == uSlotPlayer) ? 1.0
+                        : min(1.0, texelFetch(uSlotVis, ivec2(int(floor(x)), int(floor(z))), 0).r / uSlotLightNorm);
+                    light = remembered ? -1.0 - lit : lit;
+                    atlasLayer = uSlotLayers[ownerIdx];
+                    statusLayer = uSlotStatus;
+                }`;
+            if (src.vs.indexOf(attrs) < 0 || src.vs.indexOf('void main() {') < 0) return null;
+            const vs = src.vs.replace(attrs, slot).replace('void main() {', 'void main() {\n                    fetchSlot();');
+            let program;
+            try { program = createProgram(gl, vs, src.fs); } catch (err) { console.warn('[renderer3d] middle models from columns unavailable:', err && err.message || err); return null; }
+            if (!program) return null;
+            const U = this.figureUniformLocations(program);
+            for (const n of ['SlotF', 'SlotI', 'SlotO', 'SlotVis', 'SlotW', 'SlotRows', 'SlotFull', 'SlotPlayer', 'SlotStyleFlags', 'SlotTile', 'SlotLightNorm', 'SlotHeightScale',
+                'SlotStatus', 'SlotScale', 'SlotTint', 'SlotColors', 'SlotLayers']) U[n] = gl.getUniformLocation(program, 'u' + n);
+            this.figureSlotUniforms = U;
+            return this.figureSlotProgram = program;
         }
 
         getFigureMesh(key) {
@@ -5475,12 +5554,16 @@
             let gl = this.gl;
             let { kind, mesh, statusAtlas } = draw;
             let objects = [draw.sample];
-            let uniforms = kind ? this.figureUniforms : this.texturedCubeUniforms;
+            // (A middle-model group of unit slots: its records made on the GPU
+            // from the frame's columns, ensureFigureSlotProgram.)
+            const slotGroup = kind && draw.slotGroup ? draw.slotGroup : null;
+            let uniforms = slotGroup ? this.figureSlotUniforms : kind ? this.figureUniforms : this.texturedCubeUniforms;
             // Resolve model fades through MSAA coverage instead of crawling
             // screen-space noise. The full sprite remains underneath the model.
             // The depth-only shadow target is single-sampled.
             const coverageFade = false;
-            gl.useProgram(kind ? this.figureProgram : this.texturedCubeProgram);
+            gl.useProgram(slotGroup ? this.figureSlotProgram : kind ? this.figureProgram : this.texturedCubeProgram);
+            if (slotGroup) this._cmSlotUniforms(slotGroup, uniforms);
             if (kind) {
                 gl.uniform1f(uniforms.coverageFade, coverageFade ? 1 : 0);
                 gl.uniform1f(uniforms.isFlying, kind.startsWith('bird') ? 1 : 0);
@@ -5498,7 +5581,13 @@
                 gl.uniform4fv(uniforms.walkSurfaceBounds, this.walkSurfaceBounds || [0, 0, 1, 1]);
             }
             gl.bindVertexArray(mesh.vao);
-            this.setInstanceBase(mesh, draw.first, draw.buffer || this.cubeInstanceBuffer);
+            if (slotGroup) {
+                // (Location 3 is the instance's slot here, m0 for records:
+                // their next draw points every attribute again.)
+                gl.bindBuffer(gl.ARRAY_BUFFER, draw.buffer);
+                gl.vertexAttribPointer(3, 1, gl.FLOAT, false, 4, draw.first * 4);
+                mesh.instanceBase = -1; mesh.instanceBuffer = null;
+            } else this.setInstanceBase(mesh, draw.first, draw.buffer || this.cubeInstanceBuffer);
             if (kind) {
                 gl.uniform1f(uniforms.layerAlpha, draw.buffer ? this.layerAlpha : 1);
                 gl.uniform1f(uniforms.flyTime, this.layerFlyTime || 0);
@@ -6139,11 +6228,36 @@
             const gl=this.gl, atlas=this.getFlatAtlas(), key=_detailViewKey(false)+'|'+C.visibilityVersion+'|'+C.fullVisibility;
             let S=this.columnModels;
             if (!S) S=this.columnModels={groups:new Map(),masks:[null,null],spareMasks:[null,null],version:0};
+            // Units' middle models by slot, made on the GPU from the frame's
+            // columns (Defence3Renderer3D.slotModels = false: the records made
+            // here, for comparisons); where the GPU cannot, the records.
+            let slotMode=Defence3Renderer3D.slotModels!==false&&!!C.units&&!!this.ensureFigureSlotProgram();
+            if(slotMode) {
+                this.ensureColumnProgram();
+                this._columnStoreUpload(1,C.units);
+                gl.bindVertexArray(null);
+                slotMode=!!this._cmSlotTextures(C.units);
+            }
+            if(S.slotMode!==slotMode) {
+                _cmUnitsReset(S);
+                if(S.sgroups)for(const G of S.sgroups)G.n=0;
+                S.slotMode=slotMode;S.units=null;
+            }
             const structVer=C.structures?C.structures.ver:undefined;
             if (S.units!==C.units || S.structures!==C.structures || S.structVer!==structVer || S.key!==key
                 || S.unitMask!==C.detailMaskVersion || S.structMask!==C.detailMaskVersionS || S.catalog!==A.catalog || S.atlasRevision!==A.revision) {
                 S.structVer=structVer;
-                if(S.catalog!==A.catalog) {for(const G of S.groups.values())G.storage.dispose(gl);S.groups.clear();S.ulist=[];S.uslots=null;}
+                if(S.catalog!==A.catalog) {
+                    for(const G of S.groups.values())G.storage.dispose(gl);S.groups.clear();S.ulist=[];S.uslots=null;
+                    for(const G of S.sgroups||[])if(G.buffer)gl.deleteBuffer(G.buffer);S.sgroups=[];S.sgroupByKey=new Map();
+                }
+                // (What the slot groups' shader reads besides the columns, as
+                // the records had it at this rebuild.)
+                if(slotMode) {
+                    const P=this.cmSlotFrame||(this.cmSlotFrame={colors:new Float32Array(27)});
+                    P.tile=C.tile;P.lightNorm=Math.max(.001,C.lightNorm);P.full=!!C.fullVisibility;P.player=Number.isFinite(C.player)?C.player:-99;
+                    for(let i=0;i<9;i++)P.colors.set(hexToRgb(C.colors[i]),i*3);
+                }
                 // (Another atlas or other colours: every unit's record made
                 // whole again, see _cmUnits.)
                 const colorsKey=C.colors.join('|');
@@ -6155,12 +6269,12 @@
                 const colors=C.colors.map(hexToRgb);
                 for(let kind=0;kind<2;kind++) {
                     const F=kind?C.units:C.structures, detail=kind?C.detailMask:C.detailMaskS;
-                    if(!F) {S.masks[kind]=null;if(kind)_cmUnitsReset(S);continue;}
+                    if(!F) {S.masks[kind]=null;if(kind){_cmUnitsReset(S);if(S.sgroups)for(const G of S.sgroups)G.n=0;}continue;}
                     const previous=S.masks[kind];
                     const mask=S.spareMasks[kind]?.length===F.cap?S.spareMasks[kind]:new Uint8Array(F.cap);
                     mask.fill(0);if(detail)mask.set(detail);S.spareMasks[kind]=previous;
                     S.masks[kind]=mask;
-                    if(kind){this._cmUnits(S,C,F,mask,A,atlas,colors);continue;}
+                    if(kind){if(slotMode)this._cmUnitSlots(S,C,F,mask,A,atlas,colors);else this._cmUnits(S,C,F,mask,A,atlas,colors);continue;}
                     const candidates=_structureDetailCandidates(F,false);
                     const scores=new Float32Array(candidates.length);
                     for(let i=0;i<candidates.length;i++) {
@@ -6258,6 +6372,7 @@
                 const buffer=G.storage.upload(gl);
                 this.drawTexturedInstanceRange({first:0,count:G.storage.count,sample:G.sample,kind:G.kind,mesh:G.mesh,statusAtlas:atlas,buffer},null,null,atlas);
             }
+            if(S.slotMode)this._cmDrawSlotGroups(S,atlas);
             this.layerAlpha=alpha;this.layerFlyTime=fly;
             return S;
         }
@@ -6359,6 +6474,142 @@
             for(const G of ulist) {
                 for(let k=G.storage.count-1;k>=0;k--) if(U.stamp[G.slots[k]]!==gen) _cmUnitRemove(S,U,G.slots[k]);
                 G.storage.version++;
+            }
+        }
+        // ---- middle models from the frame's columns (ensureFigureSlotProgram) ----
+        // The unit columns the shader reads, copied on the GPU from the
+        // column buffer drawFrameColumns uploads (no copy on the page): float
+        // columns as bands of an R32F texture, id and flags of an R32I one,
+        // owner an R16I one. Textures on units 8-11 (the others' units stay as
+        // they bound them).
+        _cmSlotTextures(F) {
+            const gl = this.gl, CS = this.columnStores && this.columnStores[1];
+            if (!CS || !CS.buffer || CS.frame !== F || !CS.offsets) return null;
+            let T = this.cmSlotTex;
+            if (!T) {
+                const maxSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096;
+                T = this.cmSlotTex = { f: gl.createTexture(), i: gl.createTexture(), o: gl.createTexture(), cap: -1, w: 0, rows: 0, maxSize, frame: null, fver: -1, n: -1 };
+            }
+            if (T.cap !== F.cap) {
+                // (Each band holds a column of F.cap slots: rows of w.)
+                let w = 1024;
+                while (w < T.maxSize && Math.ceil(F.cap / w) * 10 > T.maxSize) w *= 2;
+                const rows = Math.max(1, Math.ceil(F.cap / w));
+                if (w > T.maxSize || rows * 10 > T.maxSize) return null;
+                T.cap = F.cap; T.w = w; T.rows = rows; T.frame = null;
+                for (const [tex, format, h] of [[T.f, gl.R32F, rows * 10], [T.i, gl.R32I, rows * 2], [T.o, gl.R16I, rows]]) {
+                    gl.bindTexture(gl.TEXTURE_2D, tex);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, format, w, h, 0, format === gl.R32F ? gl.RED : gl.RED_INTEGER, format === gl.R32F ? gl.FLOAT : format === gl.R32I ? gl.INT : gl.SHORT, null);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                }
+            }
+            if (T.frame !== F || T.fver !== F.ver || T.n !== F.n) {
+                const rowsN = Math.max(1, Math.ceil(F.n / T.w));
+                gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, CS.buffer);
+                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+                gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+                gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+                const bands = [[T.f, ['x', 'y', 'px', 'py', 'r', 'facing', 'prate', 'amount', 'phase', 'vision'], gl.RED, gl.FLOAT], [T.i, ['id', 'flags'], gl.RED_INTEGER, gl.INT], [T.o, ['owner'], gl.RED_INTEGER, gl.SHORT]];
+                for (const [tex, names, format, type] of bands) {
+                    gl.bindTexture(gl.TEXTURE_2D, tex);
+                    for (let b = 0; b < names.length; b++) {
+                        const offset = CS.offsets.get(names[b]);
+                        if (offset === undefined) { gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null); return null; }
+                        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, b * T.rows, T.w, rowsN, format, type, offset);
+                    }
+                }
+                gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
+                T.frame = F; T.fver = F.ver; T.n = F.n;
+            }
+            return T;
+        }
+        // A slot group's uniforms and the column textures (its program in use).
+        _cmSlotUniforms(G, U) {
+            const gl = this.gl, T = this.cmSlotTex, P = this.cmSlotFrame;
+            gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, T.f); gl.uniform1i(U.SlotF, 8);
+            gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D, T.i); gl.uniform1i(U.SlotI, 9);
+            gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, T.o); gl.uniform1i(U.SlotO, 10);
+            gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D, this.columnVisibilityTexture || null); gl.uniform1i(U.SlotVis, 11);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.uniform1i(U.SlotW, T.w); gl.uniform1i(U.SlotRows, T.rows);
+            gl.uniform1i(U.SlotFull, P.full ? 1 : 0); gl.uniform1i(U.SlotPlayer, P.player);
+            gl.uniform1f(U.SlotTile, P.tile); gl.uniform1f(U.SlotLightNorm, P.lightNorm); gl.uniform1f(U.SlotHeightScale, AREA_UNIT_TILE_EQUIVALENT / 5);
+            gl.uniform3fv(U.SlotColors, P.colors);
+            const st = G.style;
+            gl.uniform1i(U.SlotStyleFlags, (st.isFlying ? 1 : 0) | (st.mounted ? 2 : 0) | (st.snake ? 4 : 0)
+                | (st.preserveModelHeight || st.isFlying || st.mounted || G.figure === 'portal' ? 8 : 0) | (st.isWorker ? 16 : 0));
+            gl.uniform2f(U.SlotScale, st.scaleX, st.scaleY);
+            const tint = st._mediumTint || (st._mediumTint = hexToRgb(st.color || '#aaa'));
+            gl.uniform3f(U.SlotTint, tint[0], tint[1], tint[2]);
+            gl.uniform1fv(U.SlotLayers, G.layers);
+            gl.uniform1f(U.SlotStatus, G.statusLayer);
+        }
+        // The units' middle-distance models by slot: per group the slots of
+        // its units (membership as _cmUnits has it), drawn with the slot
+        // program; nothing of a unit is written on the page but its slot.
+        _cmUnitSlots(S,C,F,mask,A,atlas,colors) {
+            const ulist=S.sgroups||(S.sgroups=[]), tile=C.tile, list=C.unitCandidates||[];
+            // (In the cull's order: sorted by slot it was no faster here, the
+            // sort itself ~0.1 ms; few columns are read.)
+            const LS=C.unitCandidateSlots&&C.unitCandidateSlots.length===list.length?C.unitCandidateSlots:null;
+            const vis=C.visibility, full=C.fullVisibility, player=C.player;
+            for(const G of ulist){G.n=0;G.layers.fill(-2);G.statusLayer=-2;}
+            // (Per atlas: a type's style, and a style and mode's group, by index.)
+            const styleOf=A._cmSlotStyles||(A._cmSlotStyles=new Array(A.catalog.width).fill(undefined));
+            const byKey=S.sgroupByKey||(S.sgroupByKey=new Map());
+            for(let i=0;i<list.length;i++) {
+                const s=LS?LS[i]:list[i]._s;
+                if(!(s>=0) || mask[s] || F.id[s]<0 || F.energy[s]<=0 || (F.flags[s]&66560)!==0) continue;
+                const x=F.x[s]/tile,z=F.y[s]/tile,id=F.id[s];
+                // (The viewing player's own units: always drawn, at full light, as the glyphs' shader has them.)
+                if(!full && !(F.flags[s]&65536) && F.owner[s]!==player && !(vis[Math.floor(z)]?.[Math.floor(x)]>0))continue;
+                const size=Math.max(.28,Math.min(.9,F.r[s]*2.2/tile));
+                const edgeHeight=Math.max(1,(F.vision[s]||0)*AREA_UNIT_TILE_EQUIVALENT/5*2);
+                let seed=id^0x9e3779b9;
+                seed=Math.imul(seed^(seed>>>16),0x7feb352d);
+                seed=Math.imul(seed^(seed>>>15),0x846ca68b);
+                const fraction=((seed^(seed>>>16))>>>0)/4294967296;
+                if(!(_detailScore(x,z,size,false,false,12/(.8+.4*fraction),edgeHeight)>0))continue;
+                const type=F.type[s];
+                let st=type>=0&&type<styleOf.length?styleOf[type]:null;
+                if(st===undefined)st=styleOf[type]=this._cmStyle(A,7,type);
+                if(!st)continue;
+                const key=st.index*32+(F.mode[s]&31);
+                let G=byKey.get(key);
+                if(!G) {
+                    const style=st.style,mode=F.mode[s]&31,sample={modelKey:style.modelKey,isFlying:style.isFlying,animationMode:mode};
+                    G={slotGroup:true,styleIndex:st.index,style,figure:st.figure,sample,panels:new Set(),kind:st.figure+':lod2',mesh:this.getFigureMesh(st.figure+':lod2'),
+                        slots:new Float32Array(256),n:0,buffer:null,bufferSize:0,layers:new Float32Array(9).fill(-2),statusLayer:-2};
+                    byKey.set(key,G);ulist.push(G);
+                }
+                if(G.n>=G.slots.length){const n=new Float32Array(G.slots.length*2);n.set(G.slots);G.slots=n;}
+                G.slots[G.n++]=s;
+                const ownerIdx=Math.max(0,Math.min(8,F.owner[s]+1));
+                if(G.layers[ownerIdx]===-2){const panel=this.columnModelPanel(A,st.index,C.colors[ownerIdx]);G.panels.add(panel);G.layers[ownerIdx]=atlas.layerFor(panel);}
+                if(G.statusLayer===-2)G.statusLayer=G.style.statusTextureCanvas?atlas.layerFor(G.style.statusTextureCanvas):-1;
+                mask[s]=255;S.count++;
+            }
+            for(const G of ulist)G.dirty=true;
+        }
+        // Draws (and uploads, when changed) the slot groups.
+        _cmDrawSlotGroups(S, atlas) {
+            const gl=this.gl;
+            if(!S.sgroups||!this.cmSlotTex||!this.cmSlotFrame)return;
+            for(const G of S.sgroups) {
+                if(!G.n)continue;
+                for(const panel of G.panels)atlas.layerFor(panel);
+                if(G.style.statusTextureCanvas)atlas.layerFor(G.style.statusTextureCanvas);
+                if(!G.buffer)G.buffer=gl.createBuffer();
+                if(G.dirty) {
+                    gl.bindBuffer(gl.ARRAY_BUFFER,G.buffer);
+                    if(G.bufferSize<G.slots.length){gl.bufferData(gl.ARRAY_BUFFER,G.slots.byteLength,gl.DYNAMIC_DRAW);G.bufferSize=G.slots.length;}
+                    gl.bufferSubData(gl.ARRAY_BUFFER,0,G.slots,0,G.n);
+                    G.dirty=false;
+                }
+                this.drawTexturedInstanceRange({first:0,count:G.n,sample:G.sample,kind:G.kind,mesh:G.mesh,statusAtlas:atlas,buffer:G.buffer,slotGroup:G},null,null,atlas);
             }
         }
         // A style of the catalog by row and code (kept per atlas), or null.
@@ -6777,11 +7028,50 @@
                 this.columnVisibilityTexture = createTexture(gl);
             }
         }
+        // A frame's columns into the glyphs' buffer (once a frame; its VAO
+        // bound after): the attributes of the column program, and for units
+        // also `amount`, which the middle models read (_cmSlotTextures, which
+        // reads whole rows: the buffer has a row's room past the last column).
+        _columnStoreUpload(kind, F) {
+            const gl = this.gl, S = this.columnStores[kind], structure = !kind;
+            const fields = structure ? ['x','y','x','y',null,'energy','owner','flags','alive','kind',null,'angle','type','utype','vision','amount'] : ['x','y','px','py','r','energy','owner','flags','id','type',null,'facing','phase','prate','vision','mode'];
+            const extra = structure ? [] : ['amount'];
+            if (!S.buffer) { S.buffer=gl.createBuffer();S.vao=gl.createVertexArray(); }
+            gl.bindVertexArray(S.vao);gl.bindBuffer(gl.ARRAY_BUFFER,S.buffer);
+            // (A remembered view's structure frame changes in place: its
+            // version, F.ver: renderer.js _structureRenderFrame.)
+            if (S.frame !== F || S.fver !== F.ver) {
+                S.fver = F.ver;
+                // Allocate only the columns the GPU consumes, rather than
+                // an entire UI/simulation frame (mostly unused holes).
+                const offsets=new Map();let bytes=0;
+                for(const name of fields.concat(extra)) if(name && !offsets.has(name) && F[name]) {
+                    offsets.set(name,bytes);bytes=Math.ceil((bytes+F.cap*F[name].BYTES_PER_ELEMENT)/4)*4;
+                }
+                bytes += 16384 * 4;
+                if (!S.bytes || S.bytes < bytes) { S.bytes=bytes;gl.bufferData(gl.ARRAY_BUFFER,bytes,gl.DYNAMIC_DRAW); }
+                const seen = new Set();
+                for (let i=0;i<fields.length;i++) {
+                    const name=fields[i];
+                    if (!name) {gl.disableVertexAttribArray(i);gl.vertexAttrib1f(i,1);continue;}
+                    const a=F[name], type=a instanceof Float32Array?gl.FLOAT:a instanceof Int32Array?gl.INT:a instanceof Int16Array?gl.SHORT:gl.UNSIGNED_BYTE;
+                    const offset=offsets.get(name);
+                    if (!seen.has(name)) {gl.bufferSubData(gl.ARRAY_BUFFER,offset,a.subarray(0,F.n));seen.add(name);}
+                    gl.enableVertexAttribArray(i);gl.vertexAttribPointer(i,1,type,false,0,offset);
+                }
+                for (const name of extra) if (!seen.has(name) && offsets.has(name)) { gl.bufferSubData(gl.ARRAY_BUFFER,offsets.get(name),F[name].subarray(0,F.n)); seen.add(name); }
+                S.frame=F;
+                S.maskVersion=-1;
+                // (Where each column lies: the selection mask draws from
+                // the same buffer, drawSelectionMask.)
+                S.offsets=offsets;
+            }
+            return S;
+        }
         drawFrameColumns(C, snapshot) {
             const gl = this.gl;
             const atlas = this.getColumnAtlas();
             if (!atlas?.complete) return;
-            const models = this.drawColumnModels(C,snapshot,atlas);
             this.ensureColumnProgram();
             const U = this.columnUniforms;
             gl.activeTexture(gl.TEXTURE0);
@@ -6806,6 +7096,10 @@
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
                 gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
             }
+            // (After the visibility: the middle models' shader reads it.)
+            const models = this.drawColumnModels(C,snapshot,atlas);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, this.columnVisibilityTexture);
             gl.useProgram(this.columnProgram);
             if (atlas) {
                 for (const [unit,name,uniform] of [[1,'color','Sprites'],[3,'meta','Meta'],[4,'lookup','Styles']]) {
@@ -6854,35 +7148,7 @@
             for (let kind=0;kind<2;kind++) {
                 const F = kind ? C.units : C.structures, S = this.columnStores[kind], structure = !kind;
                 if (!F) continue;
-                const fields = structure ? ['x','y','x','y',null,'energy','owner','flags','alive','kind',null,'angle','type','utype','vision','amount'] : ['x','y','px','py','r','energy','owner','flags','id','type',null,'facing','phase','prate','vision','mode'];
-                if (!S.buffer) { S.buffer=gl.createBuffer();S.vao=gl.createVertexArray(); }
-                gl.bindVertexArray(S.vao);gl.bindBuffer(gl.ARRAY_BUFFER,S.buffer);
-                // (A remembered view's structure frame changes in place: its
-                // version, F.ver: renderer.js _structureRenderFrame.)
-                if (S.frame !== F || S.fver !== F.ver) {
-                    S.fver = F.ver;
-                    // Allocate only the columns the GPU consumes, rather than
-                    // an entire UI/simulation frame (mostly unused holes).
-                    const offsets=new Map();let bytes=0;
-                    for(const name of fields) if(name && !offsets.has(name)) {
-                        offsets.set(name,bytes);bytes=Math.ceil((bytes+F.cap*F[name].BYTES_PER_ELEMENT)/4)*4;
-                    }
-                    if (!S.bytes || S.bytes < bytes) { S.bytes=bytes;gl.bufferData(gl.ARRAY_BUFFER,bytes,gl.DYNAMIC_DRAW); }
-                    const seen = new Set();
-                    for (let i=0;i<fields.length;i++) {
-                        const name=fields[i];
-                        if (!name) {gl.disableVertexAttribArray(i);gl.vertexAttrib1f(i,1);continue;}
-                        const a=F[name], type=a instanceof Float32Array?gl.FLOAT:a instanceof Int32Array?gl.INT:a instanceof Int16Array?gl.SHORT:gl.UNSIGNED_BYTE;
-                        const offset=offsets.get(name);
-                        if (!seen.has(name)) {gl.bufferSubData(gl.ARRAY_BUFFER,offset,a.subarray(0,F.n));seen.add(name);}
-                        gl.enableVertexAttribArray(i);gl.vertexAttribPointer(i,1,type,false,0,offset);
-                    }
-                    S.frame=F;
-                    S.maskVersion=-1;
-                    // (Where each column lies: the selection mask draws from
-                    // the same buffer, drawSelectionMask.)
-                    S.offsets=offsets;
-                }
+                this._columnStoreUpload(kind, F);
                 // Exact membership for both units and structures. Equal-sized
                 // models cannot be represented by a strict pixel threshold.
                 const mask = models ? models.masks[kind] : structure ? C.detailMaskS : C.detailMask;
@@ -6907,6 +7173,8 @@
 
         disposeFrameColumns() {
             if(this.columnModels)for(const G of this.columnModels.groups.values())G.storage.dispose(this.gl);
+            if(this.columnModels)for(const G of this.columnModels.sgroups||[])if(G.buffer)this.gl.deleteBuffer(G.buffer);
+            if(this.cmSlotTex){this.cmSlotTex.frame=null;}
             this.columnModels=null;
             for (const S of this.columnStores || []) {
                 if (S.buffer) this.gl.deleteBuffer(S.buffer);
@@ -7292,6 +7560,7 @@
                             const buffer=G.storage.upload(gl);
                             this.drawTexturedInstanceRange({first:0,count:G.storage.count,sample:G.sample,kind:G.kind,mesh:G.mesh,statusAtlas:atlas,buffer},null,null,atlas);
                         }
+                        if(this.columnModels.slotMode)this._cmDrawSlotGroups(this.columnModels,atlas);
                     } finally {this.layerAlpha=alpha;this.layerFlyTime=fly;}
                 }
                 for (let group of cubeGroups.values()) this.drawCubeInstances(group);

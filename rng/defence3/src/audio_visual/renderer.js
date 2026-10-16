@@ -3947,9 +3947,53 @@ function _detailScore(x, z, size, flat2d, retained = false, minPixels = UNIT_DET
     const score = Math.min(pixels, 48) + (retained ? 2 : 0) + .1 / (1 + nx * nx + ny * ny);
     return score * (Math.abs(nx) <= sx && Math.abs(ny) <= sy ? 1 : .05);
 }
+// The `budget` best positive scores' indices, in index order; of equal
+// scores at the cut the lower indices (as _detailPickHeap's order has it).
+// Linear: the cut found by selection on a copy of the positive scores (the
+// heap's comparisons were ~0.7 ms a tick in a close view of a battle).
+let _detailPickBuf = new Float64Array(0);
+function _detailPick(scores, budget) {
+    const n = scores.length;
+    let count = 0;
+    for (let i = 0; i < n; i++) if (scores[i] > 0) count++;
+    const out = [];
+    if (count <= budget) {
+        for (let i = 0; i < n; i++) if (scores[i] > 0) out.push(i);
+        return out;
+    }
+    if (budget <= 0) return out;
+    if (_detailPickBuf.length < count) _detailPickBuf = new Float64Array(Math.ceil(count * 1.5));
+    const A = _detailPickBuf;
+    let m = 0;
+    for (let i = 0; i < n; i++) { const v = scores[i]; if (v > 0) A[m++] = v; }
+    // The budget-th largest: the (m - budget)-th smallest (Hoare's select).
+    const k = m - budget;
+    let lo = 0, hi = m - 1;
+    while (lo < hi) {
+        const pivot = A[(lo + hi) >> 1];
+        let i = lo, j = hi;
+        while (i <= j) {
+            while (A[i] < pivot) i++;
+            while (A[j] > pivot) j--;
+            if (i <= j) { const t = A[i]; A[i] = A[j]; A[j] = t; i++; j--; }
+        }
+        if (k <= j) hi = j; else if (k >= i) lo = i; else break;
+    }
+    const cut = A[k];
+    let above = 0;
+    for (let i = 0; i < n; i++) if (scores[i] > cut) above++;
+    let ties = budget - above;
+    for (let i = 0; i < n; i++) {
+        const v = scores[i];
+        if (v > cut) out.push(i);
+        else if (v === cut && ties > 0) { out.push(i); ties--; }
+    }
+    return out;
+}
 // Bounded min heap: O(n log budget), no population-sized sort or percentile
 // cutoff (a strict percentile comparison rejects every equal-sized unit).
-function _detailPick(scores, budget) {
+// (The reference of _detailPick: tests/detail-pick.test.cjs.)
+function _detailPickHeap(scores, budget) {
     const heap = [];
     const less = (a, b) => scores[a] < scores[b] || (scores[a] === scores[b] && a > b);
     for (let i = 0; i < scores.length; i++) {

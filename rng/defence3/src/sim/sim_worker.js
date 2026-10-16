@@ -409,7 +409,10 @@ const SIM_NET_PART_CHARS = 60000;
 // host counts its own: a new host's (a migration) starts the count again
 // (its lower counts were refused, and the worker took no ticks past a
 // stalled page: audit 2026-10-15, 18).
-let _simNetGen = 0, _simNetGenHost = '';
+let _simNetGen = 0, _simNetGenHost = '', _simNetOtherMatch = 0;
+// The sealed ticks the host's worker sent (not the page's own word): their
+// host or its state changed.
+function _simSealedDropNet() { for (const [t, e] of _simSealed) if (e.gen) _simSealed.delete(t); }
 function _simNetAdd(peer, dc) {
     if (!peer || !dc) return;
     const old = _simNet.get(peer);
@@ -455,11 +458,19 @@ function _simNetMessage(peer, e, data) {
     const arm = _simAuto.arm;
     // (Bundles: from the match's host only, to a guest.)
     if (m.t !== 'B' || !arm || arm.role !== 'guest' || peer !== arm.host || !m.m || _simMode !== 'authority') return;
+    // (Of this match only, before anything is counted or kept: another
+    // match's (a rematch counts its ticks from 0 again) went into the sealed
+    // ticks and ran (audit 2026-10-16, 24). A tagged match only: the page's
+    // check passes untagged ones, a match without a session.)
+    const w = m.m.w;
+    if (!w || typeof w !== 'object' || String(w.m || '') !== String(matchStartSessionId || '')) { _simNetOtherMatch++; return; }
     const gen = (m.e | 0) + 1;
-    if (peer !== _simNetGenHost) { _simNetGenHost = peer; _simNetGen = 0; }
+    if (peer !== _simNetGenHost) { _simNetGenHost = peer; _simNetGen = 0; _simSealedDropNet(); }
     if (gen < _simNetGen) return;
-    _simNetGen = gen;
-    const b = unpackTickBundleFromWire(m.m.w);
+    // (A new state of the host's (a restore there): its bundles of the one
+    // before no longer hold.)
+    if (gen !== _simNetGen) { _simNetGen = gen; _simSealedDropNet(); }
+    const b = unpackTickBundleFromWire(w);
     if (!b || !validateTickBundle(b) || b.tick < currentTick) return;
     const have = _simSealed.get(b.tick);
     if (!have || (have.gen && have.gen !== gen)) _simSealed.set(b.tick, { actions: b.packets.flatMap(p => Array.isArray(p.actions) ? p.actions : []), flush: !!b.flush, gen });
@@ -505,6 +516,10 @@ function _simStart(msg) {
     _simStartTimings = T;
     _simEvents = [];
     _simLocalDefeat = '';
+    // (The last match's defeated teams went on in this one's frames: in a
+    // rematch the host took its guests for spectators and left their
+    // commands out of the bundles.)
+    _simDefeatedTeams = [];
     _simDeltaLast = { e: [], a: [] };
     if (_simMode !== 'authority') {
         _simPost({ type: 'started', epoch: _simEpoch, tick: currentTick, hash: computeLockstepStateHashFast(currentTick) });
@@ -661,6 +676,21 @@ function _simPostResult(tick, hash, lock, simMs, report = null) {
 // ---- requests the page's network code needs in tick order ----
 function _simRequest(msg) {
     let result = null;
+    try { result = _simRequestRun(msg); } catch (err) {
+        // (A request that throws still answers: its promise on the page
+        // waited for good (a malformed patch held the page's ticks), and the
+        // silence looked like a lost worker. A restore that failed left no
+        // state to go on from: the page gets the match again.)
+        const message = String(err && err.message || err);
+        if (msg.op === 'applySnapshot') _simPost({ type: 'restoreFailed', epoch: msg.args && msg.args.epoch, message });
+        if (msg.id) _simPost({ type: 'reply', id: msg.id, error: message });
+        _simError('request ' + msg.op, err);
+        return;
+    }
+    if (msg.id) _simPost({ type: 'reply', id: msg.id, result });
+}
+function _simRequestRun(msg) {
+    let result = null;
     switch (msg.op) {
         // Host: a resync patch of the state before the next tick.
         case 'encodePatch':
@@ -676,12 +706,14 @@ function _simRequest(msg) {
             const presenting=!!_simPresentation;
             if(presenting) simPresentationStop();
             // (The result: whether the decoder took it; null when it refused
-            // it (another format or rules): nothing changed then.)
-            result = !!snapDecodeState(JSON.parse(msg.args.text), { collectChanges: !msg.args.full });
-            if (result) reviewLocalDefeat();
-            visibilityCacheTick = -1;
-            updateVisibility(localPlayerId);
-            if(presenting) simPresentationStart();
+            // it (another format or rules): nothing changed then. One that
+            // throws answers with its error: _simRequest.)
+            try {
+                result = !!snapDecodeState(JSON.parse(msg.args.text), { collectChanges: !msg.args.full });
+                if (result) reviewLocalDefeat();
+                visibilityCacheTick = -1;
+                updateVisibility(localPlayerId);
+            } finally { if(presenting) simPresentationStart(); }
             break;
         }
         // A whole-state restore; results before it belong to the old epoch.
@@ -689,10 +721,11 @@ function _simRequest(msg) {
             simPresentationStop();
             let snap = msg.args.snapshot || JSON.parse(msg.args.text);
             if (msg.args.globals) for (let [name, value] of Object.entries(msg.args.globals)) self.eval(name + ' = ' + JSON.stringify(value));
-            applyAuthoritativeStateSnapshot(snap);
+            if (!applyAuthoritativeStateSnapshot(snap)) throw new Error('the snapshot was refused (another format or rules)');
             _simEpoch = msg.args.epoch;
             _simEvents = [];
             _simLocalDefeat = '';
+            _simDefeatedTeams = [];
             reviewLocalDefeat();
             // The page's world comes whole with the next frame.
             simFrameResetAll();
@@ -717,5 +750,5 @@ function _simRequest(msg) {
             result = computeLockstepStateHashFast(msg.args.tick);
             break;
     }
-    if (msg.id) _simPost({ type: 'reply', id: msg.id, result });
+    return result;
 }

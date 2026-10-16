@@ -1688,6 +1688,59 @@ sweep 0.7), worker search 2.7 (site sweep 1.2, takes 1.2), research sweep
 chaos run, ~59 ms): actions ~5.5 (at the budget), orders +2, worker search
 +3, unit pass +2.6, nav installs +1.2.
 
+### 2026-10-16 (later) — third multiplayer audit: recovery order, authority
+
+Findings 22-30 of `MULTIPLAYER_AUDIT_2026-10-15.md` (a read-only audit with
+fault probes beside the 35 passing suites), all fixed; tests
+`multiplayer-recovery-order` (22, 24, 28, 29, 30; page and worker) and
+`multiplayer-recovery-authority` (23, 25, 26, 27). `ONLY=<findings>` runs
+the parts alone: each failed on the code before (checked in a worktree of
+d93eb5d). In short: recoveries numbered by their host and tagged with the
+match, a resume ending only its own restored recovery; the worker's
+channel takes this match's bundles only and drops an older host state's; a
+worker silent while loading a match is lost (5 s and 2 s a MB); every
+profile claim proven by its key, keyless peers under `peer:<id>`, a peer id
+bound to its profile; a defeated host's administrative commands
+(`queueHostAdminAction`, its own packet in the bundle); commands kept over
+a reload until known to have run, the host sealing each id once; a
+snapshot acknowledged only once restored by the page and its worker,
+refusals asking for the match (the host stops waiting for that peer); a
+patch matched to its announcement by id; a patch that throws dropped and
+the match asked for, worker requests that throw answering with the error.
+`SIM_RULES_REVISION` 15.
+
+Also: findings 31-35 (portability: Math.sqrt checked at load with a
+correctly rounded fallback, `detSin/detCos/detAtan2` for seed maps,
+`_effSticky` exact; the harness fingerprint sees path waypoints; the wasm
+README; a worker-mode rematch that left its guests out). Full suite after
+all of it: 316/316 (158 files, both modes).
+
+**FPS: the units' middle models from the frame's columns on the GPU.** In a
+close view of a big fight the page made each middle model's 28-float record
+every tick (`_cmUnits`, ~0.5 us a unit: 4-4.7 ms a tick at 7-8k models) and
+uploaded them with a diff (`PersistentInstances`). Now a group (style and
+animation mode) holds its units' slots only (`_cmUnitSlots`: membership as
+before, ~2.1-2.3 ms a tick, no sort: the cull's order was as fast); the
+frame's columns go from the glyphs' buffer into three textures on the GPU
+(`_cmSlotTextures`: `PIXEL_UNPACK_BUFFER` copies, nothing on the page), and
+a variant of the figure program (`ensureFigureSlotProgram`, the same vertex
+source with the instance attributes replaced by `fetchSlot()`) makes the
+record in the vertex shader; the shadow pass too. Checked: pixel A/B in
+Edge against the records with a fixed clock (`.claude/models_ab_probe.cjs`:
+<= 10 pixels of 1.07M differ, the GPU's sines; Full, Team, Team + history),
+`tests/medium-models-slots` (membership, uniforms and the shader's record
+mirrored in JS against the old full packing). Measured in one page,
+alternating every 4 s (solo 50000-200 fight, 3D, Team + history, ~4.8k
+middle models): page work per frame 6.98 -> 5.91 ms mean (p95 15.9 ->
+13.4), the column models 1.81 -> 1.04 (p95 5.4 -> 3.7), frame p95 22.1 ->
+19.7 ms, 9% more frames in the same time. `Defence3Renderer3D.slotModels =
+false` draws the records (comparisons). Also: the detail split's pick in
+linear time (`_detailPick` by selection; the heap kept as reference,
+`tests/detail-pick`), and sound events turned away before their recipe is
+made once the tick's six sounds or the 32 voices are taken (recipes kept
+per type; a big fight replayed thousands a tick). Script versions bumped
+(`20261016-mp3`).
+
 ## Next
 
 Multiplayer audit of 2026-10-15 (another session): 15 findings, kept with
@@ -1702,7 +1755,8 @@ snapshots, slot claims by public profile id, a high-jitter start failure);
 a second batch (16-21, 2026-10-16) on recovery: a command run twice over a
 guest's reload, late pauses, the worker's generation per host, a worker
 lost mid-match, a divergent state's defeat or victory taken as real, a
-lobby visitor holding up a recovery. All fixed but 15 (not reproduced).
+lobby visitor holding up a recovery; a third (22-30, 2026-10-16) on
+recovery order and authority. All fixed but 15 (not reproduced).
 
 Order set by the user (2026-10-09): main thread stable below 50 ms (aim
 ~40) at B800 first; the determinism fixes after that. 2026-10-11: no tick or
