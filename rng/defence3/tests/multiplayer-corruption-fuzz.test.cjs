@@ -50,6 +50,18 @@ const KINDS = {
     unitPath: `(() => { const u = units.find(u => !u.dead && u.path && u.path.length > 2); if (!u) return ''; u.path = null; u.pathIndex = 0; return 'u' + u.id + ' path dropped'; })()`,
     unitTarget: `(() => { const u = units.find(u => !u.dead && !u.workerState && !u.targetUnit); const e = u && units.find(e => !e.dead && e.owner !== u.owner); if (!e) return ''; u.targetUnit = e; u.commandState = CMD_ATTACKING; return 'u' + u.id + ' attacks u' + e.id; })()`,
     workerCargo: `(() => { const u = units.find(u => !u.dead && u.workerState); if (!u) return ''; u.carryingValue = (u.carryingValue || 0) + 3; return 'u' + u.id + ' cargo'; })()`,
+    // A unit's effective stacks and level a step apart, as a neighbour seen
+    // elsewhere leaves them (4 -> 6 stacks, level 2 -> 3, the level held by
+    // its hysteresis): the same bit of both floats flips, which the state
+    // hash's sum of (key ^ value) * M terms did not see (their keys differ
+    // there), while the upkeep of the level differed every second.
+    unitStacksLevel: `(() => { const f = new Float32Array(1), b = new Uint32Array(f.buffer); const flip = v => { f[0] = v; b[0] ^= 1 << 22; return f[0]; };
+        const bit = v => { f[0] = v; return b[0] & (1 << 22); };
+        // (Both values with that bit alike: it flips the same way in both.)
+        const u = units.find(u => !u.dead && !u.isKing && !u.workerState && u._us && u.effectiveLevel >= 2 && u.effectiveLevel === Math.floor(u.effectiveLevel) && u.effectiveStacks >= 2 && bit(u.effectiveStacks) === bit(u.effectiveLevel));
+        if (!u) return ''; const c = u._us, s = u._si, was = [u.effectiveStacks, u.effectiveLevel];
+        c.effectiveStacks[s] = flip(c.effectiveStacks[s]); c._lastAppliedEffectiveLevel[s] = flip(c._lastAppliedEffectiveLevel[s]); u.effectiveLevel = flip(u.effectiveLevel);
+        return 'u' + u.id + ' stacks ' + was[0] + ' -> ' + u.effectiveStacks + ', level ' + was[1] + ' -> ' + u.effectiveLevel; })()`,
     unitGone: `(() => { const i = units.findIndex(u => !u.dead && !u.isKing && !u.workerState); if (i < 0) return ''; const u = units[i]; removeUnitSpatial(u); units.splice(i, 1); return 'u' + u.id + ' gone'; })()`,
     unitExtra: `(() => { const k = units.find(u => !u.dead && u.isKing); if (!k) return ''; const u = new Unit('norm', k.owner, k.x + 20, k.y); units.push(u); updateUnitSpatial(u); return 'extra u' + u.id; })()`,
     buildingEnergy: `(() => { const b = [...towers, ...barracks, ...collectorSpawners].find(b => b.energy > 10); if (!b) return ''; b.energy -= 5; return b.type + ' energy'; })()`,

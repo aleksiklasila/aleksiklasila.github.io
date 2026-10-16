@@ -3995,6 +3995,7 @@ unsafe fn eff_row_apply(k: &K, q: usize, o: i32, ty: i32, bl: i32, el: i32, ver:
 /// The hash's word mix: field c's term for word w, (c's key ^ w) * M (the
 /// unit setters' digest, sim_unit_state.js _simHTerm, mixes the same way).
 const SNAP_M: i32 = 16777619u32.wrapping_mul(2654435761u32) as i32;
+const SNAP_M2: i32 = 0x2c1b3c6d;
 #[inline(always)]
 fn snap_key(c: i32) -> i32 {
     (c + 1).wrapping_mul(0x9e3779b9u32 as i32) ^ 0x5bd1e995
@@ -4118,9 +4119,14 @@ pub unsafe extern "C" fn k_snap_units(a: *const i32, chunk: i32) {
             }};
         }
         let mut h = g32!(ho);
+        // (A field's term mixed before the sum: summed as (key ^ v) * M, a
+        // bit flipped in two fields at once cancelled out when the keys
+        // differ there; effective stacks 4 -> 6 with level 2 -> 3 did.)
+        let mm2 = i32x4_splat(SNAP_M2);
         macro_rules! mix {
             ($c:expr, $v:expr) => {
-                h = i32x4_add(h, i32x4_mul(v128_xor(i32x4_splat(snap_key($c)), $v), mm));
+                let t = i32x4_mul(v128_xor(i32x4_splat(snap_key($c)), $v), mm);
+                h = i32x4_add(h, i32x4_mul(v128_xor(t, u32x4_shr(t, 15)), mm2));
             };
         }
         mix!(0, gi8!(own));

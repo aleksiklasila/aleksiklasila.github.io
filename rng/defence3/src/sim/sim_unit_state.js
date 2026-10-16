@@ -107,8 +107,10 @@ function _simHEnc(v) {
     }
     return SIM_H_OBJ;
 }
-// A field's term for value v (key: _simHKey(field)).
-function _simHTerm(key, v) { return Math.imul(key ^ _simHEnc(v), SIM_H_M); }
+// A field's term for value v (key: _simHKey(field)). (Mixed after the
+// multiply: as (key ^ v) * M alone, terms summed, one bit flipped in two
+// fields cancelled out where their keys differ.)
+function _simHTerm(key, v) { const t = Math.imul(key ^ _simHEnc(v), SIM_H_M); return Math.imul(t ^ (t >>> 15), 0x2c1b3c6d); }
 // The digest at a slot's start: its fields unset (the structure target null,
 // see _simUnitSlotStart).
 let _simH0 = null;

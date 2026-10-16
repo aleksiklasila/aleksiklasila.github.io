@@ -2549,11 +2549,26 @@ function _handleConnectionMessage(conn, data) {
         // PREPARE is only meaningful before gameplay starts.
         // Late/retried PREPARE packets can interfere with startup flow and lockstep gating.
         if (gameStarted) return;
-        _clearGuestJoinTimeout();
         let prepSessionId = String((data && (data.sessionId || data.startSessionId)) || '');
+        // (Arriving after its START_GAME, which is still being applied, it
+        // set the rules and statuses back to before the world came.)
+        if (prepSessionId && prepSessionId === _guestStartTakenSessionId) return;
+        _clearGuestJoinTimeout();
         if (prepSessionId) matchStartSessionId = prepSessionId;
+        // (Loading from now: the host waits while it hears so.)
+        _guestStartLoadingBeat(prepSessionId, true);
         let prepPlayers = normalizeIncomingLobbyPlayers(data.lobbyPlayers);
         if (prepPlayers.length > 0) lobbyPlayers = prepPlayers;
+        // The model views for the match's teams, made now while the host
+        // makes the world (the start's own preparation then finds them
+        // made): they were made only once the world came, ~30 s more
+        // before this player was ready.
+        if (prepPlayers.length > 0 && typeof prepareRendererLodAssets === 'function') {
+            const setup = computeTeamSetupFromPlayers(prepPlayers);
+            activeTeamIds = setup.activeTeamIds; teamColorById = setup.teamColorById;
+            if (data.editableConfig && typeof data.editableConfig === 'object') { try { applyEditableRuntimeConfigObject(data.editableConfig, { fromTransport: true }); } catch { } }
+            try { const p = prepareRendererLodAssets(false); if (p && p.catch) p.catch(() => { }); } catch { }
+        }
         _matchStartPlayerStatuses = {};
         for (let p of lobbyPlayers) {
             if (p && p.peerId) _matchStartPlayerStatuses[p.peerId] = p.peerId === myPeerId ? 'loading' : 'preparing';
@@ -2563,6 +2578,7 @@ function _handleConnectionMessage(conn, data) {
         _clearGuestJoinTimeout();
         if (data.rules !== undefined && data.rules !== SIM_RULES_REVISION) { _returnToMainMenuWithStatus('Version mismatch: the host runs simulation rules ' + data.rules + ', this page ' + SIM_RULES_REVISION + '. Reload the page.', '#fa4'); return; }
         let midMatchJoin = !!data.resyncSessionId || Number.isFinite(data.joinTick);
+        if (!midMatchJoin && data.startSessionId) { _guestStartTakenSessionId = String(data.startSessionId); _guestStartLoadingBeat(_guestStartTakenSessionId, true); }
         if (!midMatchJoin && !_matchStartPlayerStatuses) {
             // Fallback: if START_GAME_PREPARE was missed, set up statuses from this packet.
             let prepPlayers = normalizeIncomingLobbyPlayers(data.lobbyPlayers);
@@ -2707,6 +2723,8 @@ function _handleConnectionMessage(conn, data) {
                 console.error('[NET] Failed to apply spectate state', err);
             });
         }, 0);
+    } else if (type === 'START_GAME_LOADING' && isHost) {
+        hostNoteStartLoading(conn && conn.peer, data && data.startSessionId);
     } else if (type === 'START_GAME_READY' && isHost) {
         let incomingSessionId = String((data && data.startSessionId) || '');
         if (incomingSessionId && matchStartSessionId && incomingSessionId !== matchStartSessionId) return;
@@ -3274,6 +3292,7 @@ function resetWorldState() {
 function returnToOnlineLobby(asHost, statusText) {
     // (A match still loading here does not start after this.)
     _matchLoadGen++;
+    _guestStartLoadingBeat(null, false);
     _hostMatchStarting = false;
     rematchVotePeerIds = new Set();
     rematchVoteTotal = 0;
@@ -3492,9 +3511,32 @@ function startHostedGame(opts = null) {
         return;
     }
     let startBtn = document.getElementById('btn-start-online');
+    const startFailed = err => {
+        _hostMatchStarting = false;
+        console.error('[STARTUP] Failed to start hosted game', err);
+        _matchStartPlayerStatuses = null;
+        setMatchLoadOverlay(false);
+        startBtn.disabled = false;
+        let st = document.getElementById('lobby-status');
+        if (st) {
+            st.textContent = 'Failed to start game. Check console and try again.';
+            st.style.color = '#f66';
+        }
+    };
     startBtn.disabled = true;
     document.getElementById('lobby-status').textContent = 'Starting game...';
     _hostMatchStarting = true;
+    // The match's rules, read from the menu now: the prepare below carries
+    // them (it carried this page's rules from before the menu was read).
+    try {
+        readConfigFromMenu();
+        // Run the host's config through the same transport path guests
+        // use, so both sides normalize it identically.
+        let menuTickRate = TICK_RATE, menuPipeline = LOCKSTEP_PIPELINE_MIN, menuStrict = lockstepStrictDebugMode;
+        applyEditableRuntimeConfigObject(serializeEditableRuntimeConfigForTransport(), { fromTransport: true });
+        applyTimingConfig(menuTickRate, menuPipeline);
+        lockstepStrictDebugMode = menuStrict;
+    } catch (err) { startFailed(err); return; }
 
     // Initialize session/player metadata immediately so we can broadcast a prepare signal to clients
     // before the heavy world-generation work begins.
@@ -3520,7 +3562,10 @@ function startHostedGame(opts = null) {
         type: 'START_GAME_PREPARE',
         sessionId: matchStartSessionId,
         startSessionId: matchStartSessionId,
-        lobbyPlayers: matchStartLobbyPlayers
+        lobbyPlayers: matchStartLobbyPlayers,
+        // (The match's rules: a guest makes its model views for them while
+        // this host makes the world.)
+        editableConfig: typeof serializeEditableRuntimeConfigForTransport === 'function' ? serializeEditableRuntimeConfigForTransport() : null
     };
     let sendPreparePayload = () => {
         connections.forEach(c => { if (c && c.peer) try { c.send(preparePayload); } catch { } });
@@ -3530,13 +3575,6 @@ function startHostedGame(opts = null) {
     // Yield once so the loading overlay can paint before heavy world generation begins.
     setTimeout(async () => {
         try {
-            readConfigFromMenu();
-            // Run the host's config through the same transport path guests
-            // use, so both sides normalize it identically.
-            let menuTickRate = TICK_RATE, menuPipeline = LOCKSTEP_PIPELINE_MIN, menuStrict = lockstepStrictDebugMode;
-            applyEditableRuntimeConfigObject(serializeEditableRuntimeConfigForTransport(), { fromTransport: true });
-            applyTimingConfig(menuTickRate, menuPipeline);
-            lockstepStrictDebugMode = menuStrict;
             activeTeamIds = preSetup.activeTeamIds;
             teamColorById = preSetup.teamColorById;
             await prepareRendererLodAssets(true);
@@ -3677,16 +3715,7 @@ function startHostedGame(opts = null) {
                 if (hostWorker) _matchLoadOverlayUntilRunning(); else setMatchLoadOverlay(false);
             }
         } catch (err) {
-            _hostMatchStarting = false;
-            console.error('[STARTUP] Failed to start hosted game', err);
-            _matchStartPlayerStatuses = null;
-            setMatchLoadOverlay(false);
-            startBtn.disabled = false;
-            let st = document.getElementById('lobby-status');
-            if (st) {
-                st.textContent = 'Failed to start game. Check console and try again.';
-                st.style.color = '#f66';
-            }
+            startFailed(err);
         }
     }, 0);
 }
@@ -3926,10 +3955,28 @@ function leaveMultiplayerToMainMenu(statusText = '') {
 }
 
 // Host: players who never report "loaded" are dropped so the rest can start.
+// Host: players still loading the start are waited for while they say so
+// (START_GAME_LOADING, every 2 s while they load: _guestStartLoadingBeat);
+// one silent for MATCH_START_SILENT_MS (or loading past
+// MATCH_START_MAX_MS) starts without the match. It dropped every player
+// not ready 45 s after the start, however busy it was loading: the host's
+// own model views take ~30-60 s, the guests' theirs after that, and on a
+// slower machine (or three tabs on one) they were taken out of their own
+// match, their teams resigned.
+const MATCH_START_SILENT_MS = 45000, MATCH_START_MAX_MS = 600000;
+let _matchStartHeardAt = {};
+function hostNoteStartLoading(pid, sessionId) {
+    if (!isHost || !pid || (sessionId && matchStartSessionId && String(sessionId) !== String(matchStartSessionId))) return;
+    _matchStartHeardAt[String(pid)] = performance.now();
+}
 function _armMatchStartReadyTimeout(sessionId) {
-    setTimeout(() => {
+    const startedAt = performance.now();
+    const check = () => {
         if (!isHost || !gameStarted || !matchStartWaitingForReady || matchStartSessionId !== sessionId) return;
-        let missing = (matchStartExpectedReadyPeerIds || []).filter(pid => !matchStartReadyByPeerId[pid]);
+        const now = performance.now();
+        let missing = (matchStartExpectedReadyPeerIds || []).filter(pid => !matchStartReadyByPeerId[pid]
+            && (now - Math.max(startedAt, _matchStartHeardAt[pid] || 0) > MATCH_START_SILENT_MS || now - startedAt > MATCH_START_MAX_MS));
+        if (!missing.length) { setTimeout(check, 2000); return; }
         logLockstepWarning('Players did not finish loading; starting without them', { missing });
         for (let pid of missing) {
             matchStartExpectedReadyPeerIds = matchStartExpectedReadyPeerIds.filter(x => x !== pid);
@@ -3948,8 +3995,28 @@ function _armMatchStartReadyTimeout(sessionId) {
                 connections.forEach(c => { if (c && c.peer) try { c.send(cdPayload); } catch { } });
                 _startMatchCountdown(3);
             }
-        }
-    }, 45000);
+        } else setTimeout(check, 2000);
+    };
+    setTimeout(check, 2000);
+}
+// Guest: while it loads a start (from START_GAME_PREPARE until it says it is
+// ready), it tells the host every 2 s.
+let _guestStartLoadingTimer = 0;
+// Guest: the start whose START_GAME came (its prepare arriving later is old).
+let _guestStartTakenSessionId = '';
+function _guestStartLoadingBeat(sessionId, on) {
+    if (_guestStartLoadingTimer) { clearInterval(_guestStartLoadingTimer); _guestStartLoadingTimer = 0; }
+    if (!on || isHost) return;
+    const until = performance.now() + MATCH_START_MAX_MS;
+    const beat = () => {
+        // (Until its match runs, another start comes, or ten minutes.)
+        const mine = String(matchStartSessionId || '') === String(sessionId || '');
+        if (isHost || performance.now() > until || (mine && gameStarted && !matchStartWaitingForReady)) { _guestStartLoadingBeat(null, false); return; }
+        const c = netGetHostConnection();
+        if (c) { try { c.send({ type: 'START_GAME_LOADING', startSessionId: sessionId }); } catch { } }
+    };
+    beat();
+    _guestStartLoadingTimer = setInterval(beat, 2000);
 }
 
 function readConfigFromMenu() {

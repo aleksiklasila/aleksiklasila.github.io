@@ -1715,6 +1715,25 @@ correctly rounded fallback, `detSin/detCos/detAtan2` for seed maps,
 README; a worker-mode rematch that left its guests out). Full suite after
 all of it: 316/316 (158 files, both modes).
 
+And findings 36-40 (match flow; tests `multiplayer-roles-rematch` with
+`ONLY=`, `multiplayer-start-wait`): a resignation is the sender's own
+(`hostPeerStopsPlaying`, not a command any later tick could reorder); the
+teams fixed from the press of Start (`_hostMatchStarting`, colors held); a
+lobby return tagged with its match (a late one no longer ejects a guest from
+the rematch); a rematch's players are the last match's (`_matchStartPlayerIds`,
+spectators and visitors stay in the lobby); a start waits for players still
+loading (`START_GAME_LOADING` every 2 s, dropped after 45 s of silence), the
+guests making their model views from the prepare on (three real Edge tabs on
+one machine never started before: now ~71-75 s with the 10000-160 fixture).
+The prepare now carries the match's rules (the host reads its menu at the
+press) and a guest ignores a prepare arriving after its START_GAME: delivered
+out of order it set an 80x80 map's rules over a 20x20 match (diverged at tick
+0 in three suites). Finding 41: the state hash summed each field's term as
+(key ^ value) * M, so one bit flipped in two fields cancelled out where their
+keys differ (a unit's effective stacks 4 -> 6 with its level 2 -> 3 do): each
+term is now mixed before the sum (the units' kernel, their object digest, the
+structures' field hasher); test `multiplayer-corruption-fuzz unitStacksLevel`.
+
 **FPS: the units' middle models from the frame's columns on the GPU.** In a
 close view of a big fight the page made each middle model's 28-float record
 every tick (`_cmUnits`, ~0.5 us a unit: 4-4.7 ms a tick at 7-8k models) and
@@ -1756,7 +1775,9 @@ a second batch (16-21, 2026-10-16) on recovery: a command run twice over a
 guest's reload, late pauses, the worker's generation per host, a worker
 lost mid-match, a divergent state's defeat or victory taken as real, a
 lobby visitor holding up a recovery; a third (22-30, 2026-10-16) on
-recovery order and authority. All fixed but 15 (not reproduced).
+recovery order and authority; portability (31-35) and match flow (36-40).
+All fixed but 15 (not reproduced). Not yet run: the cross-engine checks in
+real Firefox and WebKit (needs Playwright's browser downloads).
 
 Order set by the user (2026-10-09): main thread stable below 50 ms (aim
 ~40) at B800 first; the determinism fixes after that. 2026-10-11: no tick or

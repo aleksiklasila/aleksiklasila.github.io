@@ -2119,7 +2119,7 @@ for (const k of (typeof SIM_UNIT_OBJ_FIELDS !== 'undefined' ? SIM_UNIT_OBJ_FIELD
     const key = _simHKey(k);
     const get = new Function(`return function () { const c = this._us; return c ? c.oc_${k}[this._si] : (this._det ? this._det.${k} : undefined); };`)();
     const hook = (typeof SIM_UNIT_OBJ_HOOKS !== 'undefined' && SIM_UNIT_OBJ_HOOKS[k]) || '';
-    const set = new Function('k', 'E', `return function (v) { const c = this._us; if (c) { const s = this._si, a = c.oc_${k}, o = a[s]; a[s] = v; ${hook} if (o !== v) c.hObj[s] = (c.hObj[s] + Math.imul(${key} ^ E(v), ${SIM_H_M}) - Math.imul(${key} ^ E(o), ${SIM_H_M})) | 0; } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(k, _simHEnc);
+    const set = new Function('k', 'T', `return function (v) { const c = this._us; if (c) { const s = this._si, a = c.oc_${k}, o = a[s]; a[s] = v; ${hook} if (o !== v) c.hObj[s] = (c.hObj[s] + T(${key}, v) - T(${key}, o)) | 0; } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(k, _simHTerm);
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true });
 }
 // (The accessors' plain values in the digest: their keys.)

@@ -101,7 +101,9 @@ const SNAP_FORMAT = 7;
 // (m); a host seals a command id once (copies of one that ran, or waits in
 // its sender's carry, are left out); a host that does not play puts its
 // administrative commands (a team resigned for a leaving player) in a
-// packet of its own.
+// packet of its own. Also the state hash: a field's term mixed before
+// the sum (units in the kernel, their object digest, the structures'
+// fields), where a bit flipped in two fields cancelled out.
 const SIM_RULES_REVISION = 15;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
@@ -390,17 +392,19 @@ const SNAP_HASH_FIELDS = {
 };
 
 // Generated per field list. Integers (most fields) skip the float bits;
-// strings reuse the last hash seen in the same field.
+// strings reuse the last hash seen in the same field. A field's term is
+// mixed (v ^ v >>> 15) before the sum: summed as (key ^ x) * M, one bit
+// flipped in two fields cancelled out where their keys differ.
 function _snapMakeFieldHasher(fields) {
     let body = 'let x, v;\n' + fields.map((k, i) => {
         let kc = _snapStrCode(k);
         let acc = 'o[' + JSON.stringify(k) + ']';
-        if (k === 'path') return 'x = o.path; if (x !== undefined) { v = P(' + kc + ', o); h = (h + Math.imul(v, 2654435761)) | 0; }';
+        if (k === 'path') return 'x = o.path; if (x !== undefined) { v = P(' + kc + ', o); h = (h + Math.imul(v ^ (v >>> 15), 2654435761)) | 0; }';
         return 'x = ' + acc + '; if (x !== undefined) {'
             + ' if (typeof x === "number") { if ((x | 0) === x && (x !== 0 || 1 / x > 0)) v = Math.imul(' + kc + ' ^ x, 16777619); else if (x !== x) v = ' + kc + ' ^ 0x7ff8; else { F[0] = x; v = Math.imul(Math.imul(' + kc + ' ^ I[0], 16777619) ^ I[1], 0x5bd1e995); } }'
             + ' else if (typeof x === "string") { if (x !== S[' + i + ']) { S[' + i + '] = x; C[' + i + '] = Math.imul(' + kc + ' ^ _snapStrCode(x), 16777619); } v = C[' + i + ']; }'
             + ' else v = V(' + kc + ', x);'
-            + ' h = (h + Math.imul(v, 2654435761)) | 0; }';
+            + ' h = (h + Math.imul(v ^ (v >>> 15), 2654435761)) | 0; }';
     }).join('\n') + '\nreturn h;';
     let S = new Array(fields.length).fill(undefined), C = new Array(fields.length).fill(0);
     return new Function('S', 'C', '_snapStrCode', 'return function (o, h, F, I, V, P) {\n' + body + '\n};')(S, C, _snapStrCode);

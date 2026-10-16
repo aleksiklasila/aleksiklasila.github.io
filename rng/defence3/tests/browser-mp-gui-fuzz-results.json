@@ -1,18 +1,82 @@
 {
  "fixture": "10000-160.json",
- "players": 2,
- "controls": 258,
+ "players": 3,
+ "controls": 401,
  "desyncs": 0,
- "compared": 199,
+ "compared": 396,
  "mismatched": 0,
  "stopped": false,
  "ended": false,
  "errors": [],
- "slow": [],
+ "slow": [
+  {
+   "page": "host",
+   "label": "btn-view-3d 3D",
+   "maxLong": 650,
+   "tickGap": 696,
+   "per": "host:650/696 guest1:0/662 guest2:0/635"
+  },
+  {
+   "page": "host",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/norm",
+   "maxLong": 0,
+   "tickGap": 407,
+   "per": "host:0/193 guest1:0/225 guest2:0/407"
+  },
+  {
+   "page": "host",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/fast",
+   "maxLong": 295,
+   "tickGap": 419,
+   "per": "host:295/419 guest1:53/192 guest2:0/326"
+  },
+  {
+   "page": "host",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/tank",
+   "maxLong": 197,
+   "tickGap": 544,
+   "per": "host:197/544 guest1:51/531 guest2:0/294"
+  },
+  {
+   "page": "host",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/boss",
+   "maxLong": 302,
+   "tickGap": 648,
+   "per": "host:302/603 guest1:0/648 guest2:0/145"
+  },
+  {
+   "page": "host",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 4",
+   "maxLong": 111,
+   "tickGap": 1156,
+   "per": "host:111/829 guest1:0/1156 guest2:0/191"
+  },
+  {
+   "page": "host",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 1",
+   "maxLong": 0,
+   "tickGap": 508,
+   "per": "host:0/508 guest1:0/130 guest2:0/262"
+  },
+  {
+   "page": "host",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 5",
+   "maxLong": 0,
+   "tickGap": 761,
+   "per": "host:0/691 guest1:0/761 guest2:0/173"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-view-3d 3D",
+   "maxLong": 481,
+   "tickGap": 547,
+   "per": "host:0/78 guest1:0/131 guest2:481/547"
+  }
+ ],
  "health": [
   [
    {
-    "tick": 31,
+    "tick": 51,
     "desyncs": 0,
     "patches": 0,
     "full": 0,
@@ -24,7 +88,19 @@
     "paused": false
    },
    {
-    "tick": 33,
+    "tick": 50,
+    "desyncs": 0,
+    "patches": 0,
+    "full": 0,
+    "hard": 0,
+    "stop": false,
+    "started": true,
+    "over": false,
+    "mp": true,
+    "paused": false
+   },
+   {
+    "tick": 53,
     "desyncs": 0,
     "patches": 0,
     "full": 0,
@@ -38,7 +114,7 @@
   ],
   [
    {
-    "tick": 4149,
+    "tick": 6696,
     "desyncs": 0,
     "patches": 0,
     "full": 0,
@@ -50,7 +126,19 @@
     "paused": false
    },
    {
-    "tick": 4149,
+    "tick": 6697,
+    "desyncs": 0,
+    "patches": 0,
+    "full": 0,
+    "hard": 0,
+    "stop": false,
+    "started": true,
+    "over": false,
+    "mp": true,
+    "paused": false
+   },
+   {
+    "tick": 6697,
     "desyncs": 0,
     "patches": 0,
     "full": 0,
@@ -68,1807 +156,2808 @@
    "page": "host",
    "label": "jukebox-open ♫ Open music and sound settings Music and sound",
    "maxLong": 0,
-   "tickGap": 100,
-   "per": "host:0/77 guest1:0/100"
+   "tickGap": 147,
+   "per": "host:0/104 guest1:0/147 guest2:0/76"
   },
   {
    "page": "host",
    "label": "jukebox-music (range)",
    "maxLong": 0,
-   "tickGap": 100,
-   "per": "host:0/68 guest1:0/100"
+   "tickGap": 114,
+   "per": "host:0/71 guest1:0/114 guest2:0/77"
   },
   {
    "page": "host",
    "label": "jukebox-effects (range)",
    "maxLong": 0,
-   "tickGap": 69,
-   "per": "host:0/59 guest1:0/69"
+   "tickGap": 124,
+   "per": "host:0/80 guest1:0/124 guest2:0/74"
   },
   {
    "page": "host",
    "label": "Use shared link",
    "maxLong": 0,
-   "tickGap": 68,
-   "per": "host:0/68 guest1:0/56"
+   "tickGap": 81,
+   "per": "host:0/77 guest1:0/81 guest2:0/65"
   },
   {
    "page": "host",
    "label": "jukebox-close ✕ Close music settings",
    "maxLong": 0,
-   "tickGap": 74,
-   "per": "host:0/74 guest1:0/60"
+   "tickGap": 144,
+   "per": "host:0/86 guest1:0/144 guest2:0/72"
   },
   {
    "page": "host",
    "label": "btn-view-2d 2D",
    "maxLong": 0,
-   "tickGap": 103,
-   "per": "host:0/76 guest1:0/103"
+   "tickGap": 148,
+   "per": "host:0/65 guest1:0/148 guest2:0/102"
   },
   {
    "page": "host",
    "label": "btn-view-3d 3D",
-   "maxLong": 348,
-   "tickGap": 383,
-   "per": "host:348/383 guest1:0/285"
+   "maxLong": 650,
+   "tickGap": 696,
+   "per": "host:650/696 guest1:0/662 guest2:0/635"
   },
   {
    "page": "host",
    "label": "btn-default-build 🔨 New: ON",
    "maxLong": 0,
-   "tickGap": 70,
-   "per": "host:0/70 guest1:0/70"
+   "tickGap": 135,
+   "per": "host:0/90 guest1:0/135 guest2:0/86"
   },
   {
    "page": "host",
    "label": "btn-default-build 🔨 New: OFF",
    "maxLong": 0,
-   "tickGap": 91,
-   "per": "host:0/65 guest1:0/91"
+   "tickGap": 111,
+   "per": "host:0/72 guest1:0/111 guest2:0/74"
   },
   {
    "page": "host",
    "label": "btn-default-auto-upgrade L+New: ON",
    "maxLong": 0,
-   "tickGap": 98,
-   "per": "host:0/84 guest1:0/98"
+   "tickGap": 123,
+   "per": "host:0/93 guest1:0/123 guest2:0/95"
   },
   {
    "page": "host",
    "label": "btn-default-auto-upgrade L+New: OFF",
    "maxLong": 0,
-   "tickGap": 133,
-   "per": "host:0/70 guest1:0/133"
+   "tickGap": 161,
+   "per": "host:0/78 guest1:0/161 guest2:0/68"
   },
   {
    "page": "host",
    "label": "btn-help ⚙ Controls & settings",
    "maxLong": 0,
-   "tickGap": 103,
-   "per": "host:0/82 guest1:0/103"
+   "tickGap": 81,
+   "per": "host:0/81 guest1:0/73 guest2:0/75"
   },
   {
    "page": "host",
    "label": "Keybinds",
    "maxLong": 0,
-   "tickGap": 103,
-   "per": "host:0/64 guest1:0/103"
+   "tickGap": 130,
+   "per": "host:0/74 guest1:0/130 guest2:0/89"
   },
   {
    "page": "host",
    "label": "Settings",
    "maxLong": 0,
-   "tickGap": 109,
-   "per": "host:0/78 guest1:0/109"
+   "tickGap": 138,
+   "per": "host:0/89 guest1:0/138 guest2:0/100"
   },
   {
    "page": "host",
    "label": "btn-show-statsmap Open JSON",
-   "maxLong": 77,
-   "tickGap": 205,
-   "per": "host:77/131 guest1:0/205"
+   "maxLong": 64,
+   "tickGap": 128,
+   "per": "host:64/90 guest1:0/128 guest2:0/104"
   },
   {
    "page": "host",
    "label": "btn-refresh-statsmap Refresh",
    "maxLong": 0,
-   "tickGap": 105,
-   "per": "host:0/83 guest1:0/105"
+   "tickGap": 127,
+   "per": "host:0/77 guest1:0/127 guest2:0/94"
   },
   {
    "page": "host",
    "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/norm",
    "maxLong": 0,
-   "tickGap": 74,
-   "per": "host:0/74 guest1:0/63"
+   "tickGap": 407,
+   "per": "host:0/193 guest1:0/225 guest2:0/407"
   },
   {
    "page": "host",
    "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/fast",
-   "maxLong": 55,
-   "tickGap": 113,
-   "per": "host:55/113 guest1:0/76"
+   "maxLong": 295,
+   "tickGap": 419,
+   "per": "host:295/419 guest1:53/192 guest2:0/326"
   },
   {
    "page": "host",
    "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/tank",
-   "maxLong": 55,
-   "tickGap": 109,
-   "per": "host:55/97 guest1:0/109"
+   "maxLong": 197,
+   "tickGap": 544,
+   "per": "host:197/544 guest1:51/531 guest2:0/294"
   },
   {
    "page": "host",
    "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/boss",
-   "maxLong": 57,
-   "tickGap": 88,
-   "per": "host:57/86 guest1:0/88"
+   "maxLong": 302,
+   "tickGap": 648,
+   "per": "host:302/603 guest1:0/648 guest2:0/145"
   },
   {
    "page": "host",
    "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/flying",
-   "maxLong": 0,
-   "tickGap": 101,
-   "per": "host:0/101 guest1:0/72"
+   "maxLong": 171,
+   "tickGap": 247,
+   "per": "host:171/247 guest1:0/238 guest2:0/198"
   },
   {
    "page": "host",
    "label": "btn-statsmap-close Close",
    "maxLong": 0,
-   "tickGap": 90,
-   "per": "host:0/90 guest1:0/60"
+   "tickGap": 219,
+   "per": "host:0/167 guest1:0/219 guest2:0/166"
   },
   {
    "page": "host",
    "label": "btn-level-visibility EverythingBuildingsOff = 0",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/60"
+   "tickGap": 157,
+   "per": "host:0/84 guest1:0/150 guest2:0/157"
   },
   {
    "page": "host",
    "label": "btn-level-visibility EverythingBuildingsOff = 1",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/60"
+   "tickGap": 152,
+   "per": "host:0/123 guest1:0/152 guest2:0/79"
   },
   {
    "page": "host",
    "label": "btn-level-visibility EverythingBuildingsOff = 2",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/58"
+   "tickGap": 143,
+   "per": "host:0/83 guest1:0/143 guest2:0/74"
   },
   {
    "page": "host",
    "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 2",
    "maxLong": 0,
-   "tickGap": 105,
-   "per": "host:0/105 guest1:0/58"
+   "tickGap": 103,
+   "per": "host:0/85 guest1:0/103 guest2:0/77"
   },
   {
    "page": "host",
    "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 0",
    "maxLong": 0,
-   "tickGap": 105,
-   "per": "host:0/105 guest1:0/59"
+   "tickGap": 163,
+   "per": "host:0/81 guest1:0/163 guest2:0/151"
   },
   {
    "page": "host",
    "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 4",
-   "maxLong": 0,
-   "tickGap": 84,
-   "per": "host:0/84 guest1:0/55"
+   "maxLong": 111,
+   "tickGap": 1156,
+   "per": "host:111/829 guest1:0/1156 guest2:0/191"
   },
   {
    "page": "host",
    "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 1",
    "maxLong": 0,
-   "tickGap": 82,
-   "per": "host:0/82 guest1:0/67"
+   "tickGap": 508,
+   "per": "host:0/508 guest1:0/130 guest2:0/262"
   },
   {
    "page": "host",
    "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 5",
    "maxLong": 0,
-   "tickGap": 64,
-   "per": "host:0/64 guest1:0/62"
+   "tickGap": 761,
+   "per": "host:0/691 guest1:0/761 guest2:0/173"
   },
   {
    "page": "host",
    "label": "setting-range-team Selected thingsAll team things = selected",
-   "maxLong": 0,
-   "tickGap": 92,
-   "per": "host:0/92 guest1:0/74"
+   "maxLong": 60,
+   "tickGap": 237,
+   "per": "host:0/232 guest1:60/237 guest2:0/215"
   },
   {
    "page": "host",
    "label": "setting-range-team Selected thingsAll team things = team",
    "maxLong": 0,
-   "tickGap": 66,
-   "per": "host:0/63 guest1:0/66"
-  },
-  {
-   "page": "host",
-   "label": "setting-fps-target Auto (53 Hz)3050607275901001201441651802 = auto",
-   "maxLong": 0,
-   "tickGap": 73,
-   "per": "host:0/73 guest1:0/73"
-  },
-  {
-   "page": "host",
-   "label": "setting-fps-target Auto (53 Hz)3050607275901001201441651802 = 30",
-   "maxLong": 0,
-   "tickGap": 69,
-   "per": "host:0/69 guest1:0/61"
-  },
-  {
-   "page": "host",
-   "label": "setting-fps-target Auto (53 Hz)3050607275901001201441651802 = 50",
-   "maxLong": 0,
-   "tickGap": 74,
-   "per": "host:0/74 guest1:0/58"
-  },
-  {
-   "page": "host",
-   "label": "setting-fps-target Auto (53 Hz)3050607275901001201441651802 = 60",
-   "maxLong": 0,
-   "tickGap": 79,
-   "per": "host:0/79 guest1:0/58"
-  },
-  {
-   "page": "host",
-   "label": "setting-fps-target Auto (53 Hz)3050607275901001201441651802 = 72",
-   "maxLong": 0,
-   "tickGap": 98,
-   "per": "host:0/98 guest1:0/56"
+   "tickGap": 234,
+   "per": "host:0/231 guest1:0/234 guest2:0/226"
   },
   {
    "page": "host",
    "label": "setting-range-through Behind objectsThrough objects = false",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/59"
+   "tickGap": 243,
+   "per": "host:0/243 guest1:0/215 guest2:0/216"
   },
   {
    "page": "host",
    "label": "setting-range-through Behind objectsThrough objects = true",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/64"
+   "tickGap": 233,
+   "per": "host:0/233 guest1:0/230 guest2:0/229"
   },
   {
    "page": "host",
    "label": "setting-gold-mine-text (toggle)",
    "maxLong": 0,
-   "tickGap": 68,
-   "per": "host:0/68 guest1:0/55"
+   "tickGap": 223,
+   "per": "host:0/223 guest1:0/221 guest2:0/216"
   },
   {
    "page": "host",
    "label": "setting-gold-mine-text (toggle back)",
    "maxLong": 0,
-   "tickGap": 76,
-   "per": "host:0/76 guest1:0/54"
+   "tickGap": 228,
+   "per": "host:0/201 guest1:0/216 guest2:0/228"
   },
   {
    "page": "host",
    "label": "setting-rally-line-type Dotted Solid = dotted",
-   "maxLong": 0,
-   "tickGap": 66,
-   "per": "host:0/66 guest1:0/57"
+   "maxLong": 58,
+   "tickGap": 119,
+   "per": "host:0/103 guest1:58/119 guest2:0/72"
   },
   {
    "page": "host",
    "label": "setting-rally-line-type Dotted Solid = solid",
    "maxLong": 0,
-   "tickGap": 66,
-   "per": "host:0/63 guest1:0/66"
+   "tickGap": 106,
+   "per": "host:0/82 guest1:0/106 guest2:0/68"
   },
   {
    "page": "host",
    "label": "setting-show-rally-lines Buildings Bu = buildings",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/55"
+   "tickGap": 93,
+   "per": "host:0/68 guest1:0/93 guest2:0/65"
   },
   {
    "page": "host",
    "label": "setting-show-rally-lines Buildings Bu = buildings_units",
    "maxLong": 0,
-   "tickGap": 75,
-   "per": "host:0/75 guest1:0/58"
+   "tickGap": 79,
+   "per": "host:0/74 guest1:0/79 guest2:0/70"
   },
   {
    "page": "host",
    "label": "setting-show-rally-lines Buildings Bu = none",
    "maxLong": 0,
-   "tickGap": 78,
-   "per": "host:0/78 guest1:0/58"
+   "tickGap": 141,
+   "per": "host:0/72 guest1:0/141 guest2:0/60"
   },
   {
    "page": "host",
    "label": "setting-show-selection-outlines All Units = buildings_units",
    "maxLong": 0,
-   "tickGap": 71,
-   "per": "host:0/71 guest1:0/66"
+   "tickGap": 144,
+   "per": "host:0/133 guest1:0/67 guest2:0/144"
   },
   {
    "page": "host",
    "label": "setting-show-selection-outlines All Units = units",
    "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/67 guest1:0/62"
+   "tickGap": 158,
+   "per": "host:0/133 guest1:0/96 guest2:0/158"
   },
   {
    "page": "host",
    "label": "setting-show-selection-outlines All Units = none",
    "maxLong": 0,
-   "tickGap": 74,
-   "per": "host:0/74 guest1:0/56"
+   "tickGap": 88,
+   "per": "host:0/80 guest1:0/77 guest2:0/88"
   },
   {
    "page": "host",
    "label": "setting-selection-outline-type Dotted Solid = dotted",
    "maxLong": 0,
-   "tickGap": 80,
-   "per": "host:0/80 guest1:0/62"
+   "tickGap": 105,
+   "per": "host:0/76 guest1:0/105 guest2:0/64"
   },
   {
    "page": "host",
    "label": "setting-selection-outline-type Dotted Solid = solid",
    "maxLong": 0,
-   "tickGap": 83,
-   "per": "host:0/83 guest1:0/62"
+   "tickGap": 114,
+   "per": "host:0/70 guest1:0/104 guest2:0/114"
   },
   {
    "page": "host",
    "label": "setting-selection-outline-see-through (toggle)",
    "maxLong": 0,
-   "tickGap": 65,
-   "per": "host:0/65 guest1:0/55"
+   "tickGap": 98,
+   "per": "host:0/72 guest1:0/98 guest2:0/97"
   },
   {
    "page": "host",
    "label": "setting-selection-outline-see-through (toggle back)",
    "maxLong": 0,
-   "tickGap": 71,
-   "per": "host:0/71 guest1:0/59"
+   "tickGap": 129,
+   "per": "host:0/68 guest1:0/129 guest2:0/61"
   },
   {
    "page": "host",
    "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = off",
    "maxLong": 0,
-   "tickGap": 65,
-   "per": "host:0/65 guest1:0/63"
+   "tickGap": 86,
+   "per": "host:0/82 guest1:0/86 guest2:0/67"
   },
   {
    "page": "host",
    "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = fxaa",
-   "maxLong": 109,
-   "tickGap": 147,
-   "per": "host:109/147 guest1:0/106"
+   "maxLong": 0,
+   "tickGap": 126,
+   "per": "host:0/82 guest1:0/126 guest2:0/99"
   },
   {
    "page": "host",
    "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = msaa",
-   "maxLong": 0,
-   "tickGap": 106,
-   "per": "host:0/81 guest1:0/106"
+   "maxLong": 81,
+   "tickGap": 145,
+   "per": "host:81/123 guest1:55/129 guest2:0/145"
   },
   {
    "page": "host",
    "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = msaa_fxaa",
-   "maxLong": 0,
-   "tickGap": 99,
-   "per": "host:0/99 guest1:0/55"
+   "maxLong": 139,
+   "tickGap": 164,
+   "per": "host:139/164 guest1:0/100 guest2:0/138"
   },
   {
    "page": "host",
    "label": "setting-gfx-ao OffLow (half res)High (full res) = off",
-   "maxLong": 76,
-   "tickGap": 116,
-   "per": "host:76/116 guest1:0/65"
+   "maxLong": 117,
+   "tickGap": 158,
+   "per": "host:117/123 guest1:0/158 guest2:0/101"
   },
   {
    "page": "host",
    "label": "setting-gfx-ao OffLow (half res)High (full res) = low",
    "maxLong": 0,
-   "tickGap": 70,
-   "per": "host:0/70 guest1:0/59"
+   "tickGap": 103,
+   "per": "host:0/98 guest1:0/103 guest2:0/90"
   },
   {
    "page": "host",
    "label": "setting-gfx-ao OffLow (half res)High (full res) = high",
    "maxLong": 0,
-   "tickGap": 63,
-   "per": "host:0/63 guest1:0/58"
+   "tickGap": 112,
+   "per": "host:0/112 guest1:0/90 guest2:0/78"
   },
   {
    "page": "host",
    "label": "setting-gfx-outline (toggle)",
-   "maxLong": 52,
-   "tickGap": 117,
-   "per": "host:52/117 guest1:0/58"
+   "maxLong": 0,
+   "tickGap": 131,
+   "per": "host:0/129 guest1:0/127 guest2:0/131"
   },
   {
    "page": "host",
    "label": "setting-gfx-outline (toggle back)",
    "maxLong": 0,
-   "tickGap": 63,
-   "per": "host:0/63 guest1:0/58"
+   "tickGap": 198,
+   "per": "host:0/139 guest1:0/158 guest2:0/198"
   },
   {
    "page": "host",
    "label": "setting-gfx-bloom (toggle)",
    "maxLong": 0,
-   "tickGap": 147,
-   "per": "host:0/147 guest1:0/58"
+   "tickGap": 203,
+   "per": "host:0/203 guest1:0/151 guest2:0/95"
   },
   {
    "page": "host",
    "label": "setting-gfx-bloom (toggle back)",
    "maxLong": 0,
-   "tickGap": 149,
-   "per": "host:0/149 guest1:0/99"
+   "tickGap": 230,
+   "per": "host:0/69 guest1:0/141 guest2:0/230"
   },
   {
    "page": "host",
    "label": "setting-gfx-grade (toggle)",
-   "maxLong": 60,
-   "tickGap": 77,
-   "per": "host:60/77 guest1:0/54"
+   "maxLong": 0,
+   "tickGap": 169,
+   "per": "host:0/69 guest1:0/110 guest2:0/169"
   },
   {
    "page": "host",
    "label": "setting-gfx-grade (toggle back)",
-   "maxLong": 0,
-   "tickGap": 65,
-   "per": "host:0/65 guest1:0/57"
+   "maxLong": 159,
+   "tickGap": 183,
+   "per": "host:159/183 guest1:0/97 guest2:0/100"
   },
   {
    "page": "host",
    "label": "setting-gfx-sharpen OffLowMediumHigh = false",
-   "maxLong": 53,
-   "tickGap": 81,
-   "per": "host:53/81 guest1:0/70"
+   "maxLong": 90,
+   "tickGap": 192,
+   "per": "host:90/127 guest1:0/192 guest2:0/165"
   },
   {
    "page": "host",
    "label": "setting-gfx-sharpen OffLowMediumHigh = low",
    "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/67 guest1:0/58"
+   "tickGap": 83,
+   "per": "host:0/83 guest1:0/70 guest2:0/59"
   },
   {
    "page": "host",
    "label": "setting-gfx-sharpen OffLowMediumHigh = true",
    "maxLong": 0,
-   "tickGap": 61,
-   "per": "host:0/61 guest1:0/55"
+   "tickGap": 85,
+   "per": "host:0/76 guest1:0/78 guest2:0/85"
   },
   {
    "page": "host",
    "label": "setting-gfx-sharpen OffLowMediumHigh = high",
    "maxLong": 0,
-   "tickGap": 73,
-   "per": "host:0/73 guest1:0/61"
+   "tickGap": 173,
+   "per": "host:0/66 guest1:0/173 guest2:0/85"
+  },
+  {
+   "page": "host",
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 720",
+   "maxLong": 0,
+   "tickGap": 85,
+   "per": "host:0/82 guest1:0/85 guest2:0/78"
+  },
+  {
+   "page": "host",
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 900",
+   "maxLong": 0,
+   "tickGap": 125,
+   "per": "host:0/98 guest1:0/125 guest2:0/118"
+  },
+  {
+   "page": "host",
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 1080",
+   "maxLong": 0,
+   "tickGap": 118,
+   "per": "host:0/98 guest1:0/79 guest2:0/118"
+  },
+  {
+   "page": "host",
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 1440",
+   "maxLong": 0,
+   "tickGap": 119,
+   "per": "host:0/93 guest1:0/119 guest2:0/67"
+  },
+  {
+   "page": "host",
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 2160",
+   "maxLong": 0,
+   "tickGap": 97,
+   "per": "host:0/65 guest1:0/67 guest2:0/97"
   },
   {
    "page": "host",
    "label": "setting-gfx-resolution 100%85%75%67%50% = 1",
    "maxLong": 0,
-   "tickGap": 76,
-   "per": "host:0/76 guest1:0/63"
+   "tickGap": 118,
+   "per": "host:0/118 guest1:0/98 guest2:0/67"
   },
   {
    "page": "host",
    "label": "setting-gfx-resolution 100%85%75%67%50% = 0.85",
-   "maxLong": 0,
-   "tickGap": 70,
-   "per": "host:0/70 guest1:0/55"
+   "maxLong": 82,
+   "tickGap": 136,
+   "per": "host:82/136 guest1:0/101 guest2:0/106"
   },
   {
    "page": "host",
    "label": "setting-gfx-resolution 100%85%75%67%50% = 0.75",
    "maxLong": 0,
-   "tickGap": 70,
-   "per": "host:0/70 guest1:0/56"
+   "tickGap": 223,
+   "per": "host:0/110 guest1:0/223 guest2:0/102"
   },
   {
    "page": "host",
    "label": "setting-gfx-resolution 100%85%75%67%50% = 0.67",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/59"
+   "tickGap": 157,
+   "per": "host:0/70 guest1:0/157 guest2:0/83"
   },
   {
    "page": "host",
    "label": "setting-gfx-resolution 100%85%75%67%50% = 0.5",
-   "maxLong": 0,
-   "tickGap": 69,
-   "per": "host:0/69 guest1:0/64"
+   "maxLong": 83,
+   "tickGap": 158,
+   "per": "host:62/118 guest1:83/158 guest2:0/93"
   },
   {
    "page": "host",
-   "label": "setting-fps-target Auto (52 Hz)3050607275901001201441651802 = auto",
-   "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/67 guest1:0/55"
+   "label": "setting-fps-target Auto (60 Hz)3050607275901001201441651802 = auto",
+   "maxLong": 50,
+   "tickGap": 116,
+   "per": "host:50/116 guest1:0/97 guest2:0/83"
   },
   {
    "page": "host",
-   "label": "setting-fps-target Auto (52 Hz)3050607275901001201441651802 = 30",
+   "label": "setting-fps-target Auto (60 Hz)3050607275901001201441651802 = 30",
    "maxLong": 0,
-   "tickGap": 71,
-   "per": "host:0/71 guest1:0/55"
+   "tickGap": 85,
+   "per": "host:0/81 guest1:0/85 guest2:0/76"
   },
   {
    "page": "host",
-   "label": "setting-fps-target Auto (52 Hz)3050607275901001201441651802 = 50",
+   "label": "setting-fps-target Auto (60 Hz)3050607275901001201441651802 = 50",
    "maxLong": 0,
-   "tickGap": 81,
-   "per": "host:0/81 guest1:0/63"
+   "tickGap": 91,
+   "per": "host:0/78 guest1:0/91 guest2:0/88"
   },
   {
    "page": "host",
-   "label": "setting-fps-target Auto (52 Hz)3050607275901001201441651802 = 60",
+   "label": "setting-fps-target Auto (60 Hz)3050607275901001201441651802 = 60",
    "maxLong": 0,
-   "tickGap": 65,
-   "per": "host:0/65 guest1:0/57"
+   "tickGap": 116,
+   "per": "host:0/80 guest1:0/116 guest2:0/106"
   },
   {
    "page": "host",
-   "label": "setting-fps-target Auto (52 Hz)3050607275901001201441651802 = 72",
+   "label": "setting-fps-target Auto (60 Hz)3050607275901001201441651802 = 72",
    "maxLong": 0,
-   "tickGap": 79,
-   "per": "host:0/79 guest1:0/57"
+   "tickGap": 95,
+   "per": "host:0/77 guest1:0/68 guest2:0/95"
   },
   {
    "page": "host",
    "label": "setting-camera-slide (toggle)",
    "maxLong": 0,
-   "tickGap": 76,
-   "per": "host:0/76 guest1:0/59"
+   "tickGap": 109,
+   "per": "host:0/105 guest1:0/78 guest2:0/109"
   },
   {
    "page": "host",
    "label": "setting-camera-slide (toggle back)",
    "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/67 guest1:0/63"
+   "tickGap": 122,
+   "per": "host:0/100 guest1:0/74 guest2:0/122"
   },
   {
    "page": "host",
    "label": "setting-pixel-snap (toggle)",
    "maxLong": 0,
-   "tickGap": 68,
-   "per": "host:0/68 guest1:0/56"
+   "tickGap": 112,
+   "per": "host:0/84 guest1:0/112 guest2:0/86"
   },
   {
    "page": "host",
    "label": "setting-pixel-snap (toggle back)",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/58"
+   "tickGap": 83,
+   "per": "host:0/83 guest1:0/75 guest2:0/66"
   },
   {
    "page": "host",
    "label": "Gameplay",
    "maxLong": 0,
-   "tickGap": 66,
-   "per": "host:0/66 guest1:0/55"
+   "tickGap": 77,
+   "per": "host:0/72 guest1:0/77 guest2:0/75"
   },
   {
    "page": "host",
    "label": "Effects",
    "maxLong": 0,
-   "tickGap": 80,
-   "per": "host:0/66 guest1:0/80"
+   "tickGap": 136,
+   "per": "host:0/73 guest1:0/136 guest2:0/76"
   },
   {
    "page": "host",
    "label": "Objectives",
    "maxLong": 0,
-   "tickGap": 71,
-   "per": "host:0/71 guest1:0/68"
+   "tickGap": 92,
+   "per": "host:0/92 guest1:0/84 guest2:0/63"
   },
   {
    "page": "host",
    "label": "btn-help-close Close",
    "maxLong": 0,
-   "tickGap": 77,
-   "per": "host:0/77 guest1:0/55"
+   "tickGap": 190,
+   "per": "host:0/69 guest1:0/190 guest2:0/103"
   },
   {
    "page": "host",
-   "label": "x1",
+   "label": "1 1",
    "maxLong": 0,
-   "tickGap": 66,
-   "per": "host:0/66 guest1:0/66"
+   "tickGap": 158,
+   "per": "host:0/78 guest1:0/158 guest2:0/77"
   },
   {
    "page": "host",
    "label": "Barracks",
    "maxLong": 0,
-   "tickGap": 88,
-   "per": "host:0/72 guest1:0/88"
+   "tickGap": 128,
+   "per": "host:0/82 guest1:0/96 guest2:0/128"
   },
   {
    "page": "host",
    "label": "Towers",
    "maxLong": 0,
-   "tickGap": 77,
-   "per": "host:0/77 guest1:0/54"
+   "tickGap": 151,
+   "per": "host:0/76 guest1:0/151 guest2:0/109"
   },
   {
    "page": "host",
    "label": "Floor",
    "maxLong": 0,
-   "tickGap": 104,
-   "per": "host:0/89 guest1:0/104"
+   "tickGap": 125,
+   "per": "host:0/70 guest1:0/106 guest2:0/125"
   },
   {
    "page": "host",
    "label": "Special",
    "maxLong": 0,
-   "tickGap": 65,
-   "per": "host:0/65 guest1:0/58"
+   "tickGap": 132,
+   "per": "host:0/87 guest1:0/132 guest2:0/81"
   },
   {
    "page": "host",
    "label": "btn-minimap ▼",
    "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/67 guest1:0/63"
+   "tickGap": 132,
+   "per": "host:0/73 guest1:0/132 guest2:0/99"
   },
   {
    "page": "host",
    "label": "btn-minimap ▲",
    "maxLong": 0,
-   "tickGap": 63,
-   "per": "host:0/63 guest1:0/58"
+   "tickGap": 94,
+   "per": "host:0/94 guest1:0/87 guest2:0/93"
   },
   {
    "page": "host",
    "label": "1 Group 1: empty",
-   "maxLong": 0,
-   "tickGap": 73,
-   "per": "host:0/73 guest1:0/55"
+   "maxLong": 61,
+   "tickGap": 112,
+   "per": "host:61/106 guest1:0/112 guest2:0/111"
   },
   {
    "page": "host",
    "label": "2 Group 2: empty",
    "maxLong": 0,
-   "tickGap": 73,
-   "per": "host:0/73 guest1:0/57"
+   "tickGap": 150,
+   "per": "host:0/76 guest1:0/150 guest2:0/93"
   },
   {
    "page": "host",
    "label": "3 Group 3: empty",
-   "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/65 guest1:0/67"
+   "maxLong": 123,
+   "tickGap": 158,
+   "per": "host:0/81 guest1:123/158 guest2:0/72"
   },
   {
    "page": "host",
    "label": "4 Group 4: empty",
    "maxLong": 0,
-   "tickGap": 82,
-   "per": "host:0/70 guest1:0/82"
+   "tickGap": 83,
+   "per": "host:0/76 guest1:0/83 guest2:0/64"
   },
   {
    "page": "host",
    "label": "5 Group 5: empty",
    "maxLong": 0,
-   "tickGap": 70,
-   "per": "host:0/70 guest1:0/57"
+   "tickGap": 84,
+   "per": "host:0/84 guest1:0/74 guest2:0/73"
   },
   {
    "page": "host",
    "label": "6 Group 6: empty",
    "maxLong": 0,
-   "tickGap": 71,
-   "per": "host:0/71 guest1:0/59"
+   "tickGap": 130,
+   "per": "host:0/98 guest1:0/130 guest2:0/127"
   },
   {
    "page": "host",
    "label": "7 Group 7: empty",
    "maxLong": 0,
-   "tickGap": 65,
-   "per": "host:0/65 guest1:0/60"
+   "tickGap": 99,
+   "per": "host:0/87 guest1:0/99 guest2:0/85"
   },
   {
    "page": "host",
    "label": "8 Group 8: empty",
    "maxLong": 0,
-   "tickGap": 62,
-   "per": "host:0/60 guest1:0/62"
+   "tickGap": 108,
+   "per": "host:0/78 guest1:0/108 guest2:0/68"
   },
   {
    "page": "host",
    "label": "9 Group 9: empty",
    "maxLong": 0,
-   "tickGap": 64,
-   "per": "host:0/64 guest1:0/57"
+   "tickGap": 116,
+   "per": "host:0/67 guest1:0/116 guest2:0/76"
   },
   {
    "page": "host",
    "label": "R Popup group R: empty",
    "maxLong": 0,
-   "tickGap": 71,
-   "per": "host:0/71 guest1:0/55"
+   "tickGap": 78,
+   "per": "host:0/65 guest1:0/78 guest2:0/61"
   },
   {
    "page": "host",
    "label": "T Popup group T: empty",
    "maxLong": 0,
-   "tickGap": 66,
-   "per": "host:0/66 guest1:0/59"
+   "tickGap": 81,
+   "per": "host:0/81 guest1:0/67 guest2:0/61"
   },
   {
    "page": "host",
    "label": "Y Popup group Y: empty",
    "maxLong": 0,
-   "tickGap": 75,
-   "per": "host:0/67 guest1:0/75"
+   "tickGap": 117,
+   "per": "host:0/117 guest1:0/99 guest2:0/98"
   },
   {
    "page": "host",
    "label": "U Popup group U: empty",
    "maxLong": 0,
-   "tickGap": 99,
-   "per": "host:0/72 guest1:0/99"
+   "tickGap": 95,
+   "per": "host:0/89 guest1:0/81 guest2:0/95"
   },
   {
    "page": "host",
    "label": "I Popup group I: empty",
    "maxLong": 0,
-   "tickGap": 68,
-   "per": "host:0/68 guest1:0/56"
+   "tickGap": 96,
+   "per": "host:0/81 guest1:0/96 guest2:0/70"
   },
   {
    "page": "host",
    "label": "O Popup group O: empty",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/64"
+   "tickGap": 87,
+   "per": "host:0/87 guest1:0/78 guest2:0/62"
   },
   {
    "page": "host",
    "label": "P Popup group P: empty",
    "maxLong": 0,
-   "tickGap": 75,
-   "per": "host:0/75 guest1:0/58"
+   "tickGap": 127,
+   "per": "host:0/66 guest1:0/127 guest2:0/87"
   },
   {
    "page": "host",
    "label": "btn-ignore-level Collapse Same Type: ON",
    "maxLong": 0,
-   "tickGap": 75,
-   "per": "host:0/75 guest1:0/54"
+   "tickGap": 145,
+   "per": "host:0/79 guest1:0/145 guest2:0/84"
   },
   {
    "page": "host",
    "label": "btn-ignore-level Collapse Same Type: OFF",
    "maxLong": 0,
-   "tickGap": 73,
-   "per": "host:0/73 guest1:0/69"
+   "tickGap": 83,
+   "per": "host:0/82 guest1:0/83 guest2:0/62"
   },
   {
    "page": "host",
-   "label": "x2",
+   "label": "4 4",
    "maxLong": 0,
-   "tickGap": 111,
-   "per": "host:0/71 guest1:0/111"
+   "tickGap": 123,
+   "per": "host:0/81 guest1:0/123 guest2:0/68"
   },
   {
    "page": "host",
-   "label": "x4",
-   "maxLong": 0,
-   "tickGap": 69,
-   "per": "host:0/63 guest1:0/69"
-  },
-  {
-   "page": "host",
-   "label": "x8",
-   "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/67 guest1:0/58"
-  },
-  {
-   "page": "host",
-   "label": "x16",
+   "label": "16 16",
    "maxLong": 0,
    "tickGap": 82,
-   "per": "host:0/82 guest1:0/57"
+   "per": "host:0/82 guest1:0/69 guest2:0/71"
+  },
+  {
+   "page": "host",
+   "label": "64 64",
+   "maxLong": 0,
+   "tickGap": 95,
+   "per": "host:0/95 guest1:0/71 guest2:0/65"
   },
   {
    "page": "host",
    "label": "key h",
    "maxLong": 0,
-   "tickGap": 66,
-   "per": "host:0/66 guest1:0/55"
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/70 guest2:0/70"
   },
   {
    "page": "host",
    "label": "key Escape",
    "maxLong": 0,
-   "tickGap": 64,
-   "per": "host:0/64 guest1:0/61"
+   "tickGap": 74,
+   "per": "host:0/74 guest1:0/70 guest2:0/65"
   },
   {
    "page": "host",
    "label": "key Tab",
    "maxLong": 0,
-   "tickGap": 119,
-   "per": "host:0/119 guest1:0/74"
+   "tickGap": 85,
+   "per": "host:0/85 guest1:0/70 guest2:0/65"
   },
   {
    "page": "host",
    "label": "key m",
    "maxLong": 0,
-   "tickGap": 103,
-   "per": "host:0/103 guest1:0/75"
+   "tickGap": 93,
+   "per": "host:0/93 guest1:0/73 guest2:0/64"
   },
   {
    "page": "host",
    "label": "key g",
    "maxLong": 0,
-   "tickGap": 74,
-   "per": "host:0/74 guest1:0/59"
+   "tickGap": 90,
+   "per": "host:0/90 guest1:0/81 guest2:0/70"
   },
   {
    "page": "host",
    "label": "key 1",
    "maxLong": 0,
-   "tickGap": 75,
-   "per": "host:0/75 guest1:0/55"
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/76 guest2:0/69"
   },
   {
    "page": "host",
    "label": "key Control+1",
    "maxLong": 0,
-   "tickGap": 75,
-   "per": "host:0/75 guest1:0/55"
+   "tickGap": 77,
+   "per": "host:0/68 guest1:0/72 guest2:0/77"
   },
   {
    "page": "host",
    "label": "key 1",
    "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/67 guest1:0/53"
+   "tickGap": 85,
+   "per": "host:0/85 guest1:0/72 guest2:0/63"
   },
   {
    "page": "host",
    "label": "key Escape",
    "maxLong": 0,
-   "tickGap": 73,
-   "per": "host:0/73 guest1:0/57"
+   "tickGap": 151,
+   "per": "host:0/70 guest1:0/151 guest2:0/74"
   },
   {
    "page": "host",
    "label": "key s",
    "maxLong": 0,
-   "tickGap": 73,
-   "per": "host:0/73 guest1:0/70"
+   "tickGap": 151,
+   "per": "host:0/83 guest1:0/151 guest2:0/127"
   },
   {
    "page": "host",
    "label": "key a",
    "maxLong": 0,
-   "tickGap": 95,
-   "per": "host:0/84 guest1:0/95"
+   "tickGap": 83,
+   "per": "host:0/83 guest1:0/82 guest2:0/61"
   },
   {
    "page": "host",
    "label": "key Delete",
    "maxLong": 0,
-   "tickGap": 64,
-   "per": "host:0/64 guest1:0/58"
+   "tickGap": 122,
+   "per": "host:0/122 guest1:0/68 guest2:0/65"
   },
   {
    "page": "host",
    "label": "key Escape",
    "maxLong": 0,
-   "tickGap": 61,
-   "per": "host:0/61 guest1:0/61"
+   "tickGap": 118,
+   "per": "host:0/118 guest1:0/95 guest2:0/58"
   },
   {
    "page": "host",
    "label": "view 3d",
    "maxLong": 0,
-   "tickGap": 68,
-   "per": "host:0/68 guest1:0/59"
+   "tickGap": 74,
+   "per": "host:0/74 guest1:0/68 guest2:0/73"
   },
   {
    "page": "host",
    "label": "view 2d",
    "maxLong": 0,
-   "tickGap": 85,
-   "per": "host:0/62 guest1:0/85"
+   "tickGap": 82,
+   "per": "host:0/82 guest1:0/71 guest2:0/61"
   },
   {
    "page": "guest1",
    "label": "jukebox-open ♫ Open music and sound settings Music and sound",
    "maxLong": 0,
-   "tickGap": 89,
-   "per": "host:0/63 guest1:0/89"
+   "tickGap": 105,
+   "per": "host:0/87 guest1:0/105 guest2:0/68"
   },
   {
    "page": "guest1",
    "label": "jukebox-music (range)",
    "maxLong": 0,
-   "tickGap": 70,
-   "per": "host:0/70 guest1:0/67"
+   "tickGap": 81,
+   "per": "host:0/70 guest1:0/81 guest2:0/64"
   },
   {
    "page": "guest1",
    "label": "jukebox-effects (range)",
    "maxLong": 0,
-   "tickGap": 73,
-   "per": "host:0/73 guest1:0/56"
+   "tickGap": 148,
+   "per": "host:0/77 guest1:0/148 guest2:0/66"
   },
   {
    "page": "guest1",
    "label": "Use shared link",
    "maxLong": 0,
-   "tickGap": 73,
-   "per": "host:0/73 guest1:0/56"
+   "tickGap": 89,
+   "per": "host:0/71 guest1:0/89 guest2:0/70"
   },
   {
    "page": "guest1",
    "label": "jukebox-close ✕ Close music settings",
    "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/67 guest1:0/56"
+   "tickGap": 71,
+   "per": "host:0/71 guest1:0/66 guest2:0/64"
   },
   {
    "page": "guest1",
    "label": "btn-view-2d 2D",
    "maxLong": 0,
-   "tickGap": 66,
-   "per": "host:0/66 guest1:0/55"
+   "tickGap": 79,
+   "per": "host:0/79 guest1:0/67 guest2:0/59"
   },
   {
    "page": "guest1",
    "label": "btn-view-3d 3D",
-   "maxLong": 141,
-   "tickGap": 189,
-   "per": "host:0/72 guest1:141/189"
+   "maxLong": 218,
+   "tickGap": 260,
+   "per": "host:0/71 guest1:218/260 guest2:0/63"
   },
   {
    "page": "guest1",
    "label": "btn-default-build 🔨 New: ON",
    "maxLong": 0,
-   "tickGap": 68,
-   "per": "host:0/68 guest1:0/54"
+   "tickGap": 95,
+   "per": "host:0/65 guest1:0/95 guest2:0/64"
   },
   {
    "page": "guest1",
    "label": "btn-default-build 🔨 New: OFF",
    "maxLong": 0,
-   "tickGap": 65,
-   "per": "host:0/65 guest1:0/54"
+   "tickGap": 151,
+   "per": "host:0/88 guest1:0/151 guest2:0/84"
   },
   {
    "page": "guest1",
    "label": "btn-default-auto-upgrade L+New: ON",
-   "maxLong": 0,
-   "tickGap": 62,
-   "per": "host:0/62 guest1:0/53"
+   "maxLong": 69,
+   "tickGap": 157,
+   "per": "host:0/72 guest1:69/157 guest2:0/73"
   },
   {
    "page": "guest1",
    "label": "btn-default-auto-upgrade L+New: OFF",
    "maxLong": 0,
-   "tickGap": 66,
-   "per": "host:0/66 guest1:0/57"
+   "tickGap": 117,
+   "per": "host:0/81 guest1:0/117 guest2:0/106"
   },
   {
    "page": "guest1",
    "label": "btn-help ⚙ Controls & settings",
    "maxLong": 0,
-   "tickGap": 71,
-   "per": "host:0/71 guest1:0/56"
+   "tickGap": 105,
+   "per": "host:0/67 guest1:0/93 guest2:0/105"
   },
   {
    "page": "guest1",
    "label": "Keybinds",
    "maxLong": 0,
-   "tickGap": 66,
-   "per": "host:0/66 guest1:0/53"
+   "tickGap": 83,
+   "per": "host:0/83 guest1:0/67 guest2:0/63"
   },
   {
    "page": "guest1",
    "label": "Settings",
    "maxLong": 0,
-   "tickGap": 65,
-   "per": "host:0/65 guest1:0/53"
+   "tickGap": 85,
+   "per": "host:0/75 guest1:0/85 guest2:0/61"
   },
   {
    "page": "guest1",
    "label": "btn-show-statsmap Open JSON",
-   "maxLong": 63,
-   "tickGap": 94,
-   "per": "host:0/69 guest1:63/94"
+   "maxLong": 75,
+   "tickGap": 86,
+   "per": "host:0/66 guest1:75/86 guest2:0/60"
   },
   {
    "page": "guest1",
    "label": "btn-refresh-statsmap Refresh",
    "maxLong": 0,
-   "tickGap": 69,
-   "per": "host:0/69 guest1:0/56"
+   "tickGap": 95,
+   "per": "host:0/74 guest1:0/95 guest2:0/61"
   },
   {
    "page": "guest1",
    "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/norm",
    "maxLong": 0,
-   "tickGap": 70,
-   "per": "host:0/70 guest1:0/58"
+   "tickGap": 85,
+   "per": "host:0/66 guest1:0/85 guest2:0/65"
   },
   {
    "page": "guest1",
    "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/fast",
-   "maxLong": 0,
-   "tickGap": 90,
-   "per": "host:0/71 guest1:0/90"
+   "maxLong": 66,
+   "tickGap": 145,
+   "per": "host:0/67 guest1:66/145 guest2:0/74"
   },
   {
    "page": "guest1",
    "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/tank",
-   "maxLong": 0,
-   "tickGap": 78,
-   "per": "host:0/66 guest1:0/78"
+   "maxLong": 58,
+   "tickGap": 99,
+   "per": "host:0/69 guest1:58/99 guest2:0/85"
   },
   {
    "page": "guest1",
    "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/boss",
-   "maxLong": 0,
-   "tickGap": 88,
-   "per": "host:0/66 guest1:0/88"
+   "maxLong": 60,
+   "tickGap": 86,
+   "per": "host:0/86 guest1:60/84 guest2:0/85"
   },
   {
    "page": "guest1",
    "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/flying",
-   "maxLong": 0,
-   "tickGap": 71,
-   "per": "host:0/71 guest1:0/70"
+   "maxLong": 50,
+   "tickGap": 135,
+   "per": "host:0/86 guest1:50/135 guest2:0/83"
   },
   {
    "page": "guest1",
    "label": "btn-statsmap-close Close",
    "maxLong": 0,
-   "tickGap": 86,
-   "per": "host:0/65 guest1:0/86"
+   "tickGap": 104,
+   "per": "host:0/75 guest1:0/104 guest2:0/67"
   },
   {
    "page": "guest1",
    "label": "btn-level-visibility EverythingBuildingsOff = 0",
-   "maxLong": 57,
-   "tickGap": 95,
-   "per": "host:0/68 guest1:57/95"
+   "maxLong": 0,
+   "tickGap": 96,
+   "per": "host:0/77 guest1:0/96 guest2:0/61"
   },
   {
    "page": "guest1",
    "label": "btn-level-visibility EverythingBuildingsOff = 1",
    "maxLong": 0,
-   "tickGap": 70,
-   "per": "host:0/70 guest1:0/56"
+   "tickGap": 85,
+   "per": "host:0/81 guest1:0/85 guest2:0/61"
   },
   {
    "page": "guest1",
    "label": "btn-level-visibility EverythingBuildingsOff = 2",
    "maxLong": 0,
-   "tickGap": 64,
-   "per": "host:0/64 guest1:0/59"
+   "tickGap": 126,
+   "per": "host:0/83 guest1:0/126 guest2:0/58"
   },
   {
    "page": "guest1",
    "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 2",
    "maxLong": 0,
-   "tickGap": 68,
-   "per": "host:0/68 guest1:0/57"
+   "tickGap": 126,
+   "per": "host:0/76 guest1:0/126 guest2:0/68"
   },
   {
    "page": "guest1",
    "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 0",
-   "maxLong": 0,
-   "tickGap": 68,
-   "per": "host:0/68 guest1:0/62"
+   "maxLong": 61,
+   "tickGap": 81,
+   "per": "host:0/81 guest1:61/78 guest2:0/69"
   },
   {
    "page": "guest1",
    "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 4",
    "maxLong": 0,
-   "tickGap": 74,
-   "per": "host:0/74 guest1:0/70"
+   "tickGap": 111,
+   "per": "host:0/63 guest1:0/111 guest2:0/60"
   },
   {
    "page": "guest1",
    "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 1",
    "maxLong": 0,
-   "tickGap": 66,
-   "per": "host:0/66 guest1:0/56"
+   "tickGap": 81,
+   "per": "host:0/77 guest1:0/81 guest2:0/55"
   },
   {
    "page": "guest1",
    "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 5",
    "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/67 guest1:0/54"
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/77 guest2:0/58"
   },
   {
    "page": "guest1",
    "label": "setting-range-team Selected thingsAll team things = selected",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/55"
+   "tickGap": 81,
+   "per": "host:0/77 guest1:0/81 guest2:0/64"
   },
   {
    "page": "guest1",
    "label": "setting-range-team Selected thingsAll team things = team",
    "maxLong": 0,
-   "tickGap": 66,
-   "per": "host:0/66 guest1:0/55"
+   "tickGap": 107,
+   "per": "host:0/65 guest1:0/107 guest2:0/55"
   },
   {
    "page": "guest1",
    "label": "setting-range-through Behind objectsThrough objects = false",
    "maxLong": 0,
-   "tickGap": 74,
-   "per": "host:0/74 guest1:0/55"
+   "tickGap": 77,
+   "per": "host:0/76 guest1:0/77 guest2:0/61"
   },
   {
    "page": "guest1",
    "label": "setting-range-through Behind objectsThrough objects = true",
    "maxLong": 0,
-   "tickGap": 66,
-   "per": "host:0/66 guest1:0/57"
+   "tickGap": 78,
+   "per": "host:0/75 guest1:0/78 guest2:0/78"
   },
   {
    "page": "guest1",
    "label": "setting-gold-mine-text (toggle)",
    "maxLong": 0,
-   "tickGap": 62,
-   "per": "host:0/62 guest1:0/57"
+   "tickGap": 83,
+   "per": "host:0/82 guest1:0/83 guest2:0/70"
   },
   {
    "page": "guest1",
    "label": "setting-gold-mine-text (toggle back)",
    "maxLong": 0,
-   "tickGap": 71,
-   "per": "host:0/71 guest1:0/69"
+   "tickGap": 80,
+   "per": "host:0/80 guest1:0/67 guest2:0/57"
   },
   {
    "page": "guest1",
    "label": "setting-rally-line-type Dotted Solid = dotted",
    "maxLong": 0,
-   "tickGap": 70,
-   "per": "host:0/70 guest1:0/55"
+   "tickGap": 84,
+   "per": "host:0/80 guest1:0/84 guest2:0/70"
   },
   {
    "page": "guest1",
    "label": "setting-rally-line-type Dotted Solid = solid",
    "maxLong": 0,
-   "tickGap": 78,
-   "per": "host:0/78 guest1:0/53"
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/69 guest2:0/58"
   },
   {
    "page": "guest1",
    "label": "setting-show-rally-lines Buildings Bu = buildings",
    "maxLong": 0,
-   "tickGap": 64,
-   "per": "host:0/64 guest1:0/55"
+   "tickGap": 79,
+   "per": "host:0/79 guest1:0/79 guest2:0/60"
   },
   {
    "page": "guest1",
    "label": "setting-show-rally-lines Buildings Bu = buildings_units",
    "maxLong": 0,
-   "tickGap": 74,
-   "per": "host:0/74 guest1:0/53"
+   "tickGap": 85,
+   "per": "host:0/66 guest1:0/85 guest2:0/58"
   },
   {
    "page": "guest1",
    "label": "setting-show-rally-lines Buildings Bu = none",
    "maxLong": 0,
-   "tickGap": 64,
-   "per": "host:0/64 guest1:0/54"
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/66 guest2:0/60"
   },
   {
    "page": "guest1",
    "label": "setting-show-selection-outlines All Units = buildings_units",
    "maxLong": 0,
-   "tickGap": 70,
-   "per": "host:0/70 guest1:0/55"
+   "tickGap": 72,
+   "per": "host:0/69 guest1:0/72 guest2:0/65"
   },
   {
    "page": "guest1",
    "label": "setting-show-selection-outlines All Units = units",
    "maxLong": 0,
-   "tickGap": 81,
-   "per": "host:0/81 guest1:0/62"
+   "tickGap": 76,
+   "per": "host:0/71 guest1:0/64 guest2:0/76"
   },
   {
    "page": "guest1",
    "label": "setting-show-selection-outlines All Units = none",
    "maxLong": 0,
-   "tickGap": 64,
-   "per": "host:0/64 guest1:0/58"
+   "tickGap": 147,
+   "per": "host:0/72 guest1:0/147 guest2:0/125"
   },
   {
    "page": "guest1",
    "label": "setting-selection-outline-type Dotted Solid = dotted",
    "maxLong": 0,
-   "tickGap": 66,
-   "per": "host:0/66 guest1:0/58"
+   "tickGap": 119,
+   "per": "host:0/68 guest1:0/119 guest2:0/57"
   },
   {
    "page": "guest1",
    "label": "setting-selection-outline-type Dotted Solid = solid",
    "maxLong": 0,
-   "tickGap": 73,
-   "per": "host:0/73 guest1:0/52"
+   "tickGap": 82,
+   "per": "host:0/75 guest1:0/82 guest2:0/59"
   },
   {
    "page": "guest1",
    "label": "setting-selection-outline-see-through (toggle)",
    "maxLong": 0,
-   "tickGap": 70,
-   "per": "host:0/69 guest1:0/70"
+   "tickGap": 118,
+   "per": "host:0/84 guest1:0/118 guest2:0/63"
   },
   {
    "page": "guest1",
    "label": "setting-selection-outline-see-through (toggle back)",
    "maxLong": 0,
-   "tickGap": 74,
-   "per": "host:0/74 guest1:0/53"
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/72 guest2:0/61"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = off",
    "maxLong": 0,
-   "tickGap": 65,
-   "per": "host:0/65 guest1:0/53"
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/62 guest2:0/60"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = fxaa",
-   "maxLong": 0,
-   "tickGap": 70,
-   "per": "host:0/70 guest1:0/54"
+   "maxLong": 99,
+   "tickGap": 142,
+   "per": "host:0/69 guest1:99/142 guest2:0/94"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = msaa",
    "maxLong": 0,
-   "tickGap": 64,
-   "per": "host:0/64 guest1:0/58"
+   "tickGap": 94,
+   "per": "host:0/70 guest1:0/85 guest2:0/94"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = msaa_fxaa",
    "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/67 guest1:0/58"
+   "tickGap": 100,
+   "per": "host:0/73 guest1:0/81 guest2:0/100"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-ao OffLow (half res)High (full res) = off",
-   "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/67 guest1:0/51"
+   "maxLong": 67,
+   "tickGap": 122,
+   "per": "host:0/71 guest1:67/122 guest2:0/81"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-ao OffLow (half res)High (full res) = low",
    "maxLong": 0,
-   "tickGap": 73,
-   "per": "host:0/73 guest1:0/58"
+   "tickGap": 84,
+   "per": "host:0/61 guest1:0/84 guest2:0/64"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-ao OffLow (half res)High (full res) = high",
-   "maxLong": 0,
-   "tickGap": 83,
-   "per": "host:0/83 guest1:0/56"
+   "maxLong": 55,
+   "tickGap": 124,
+   "per": "host:0/66 guest1:55/124 guest2:0/60"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-outline (toggle)",
-   "maxLong": 0,
-   "tickGap": 83,
-   "per": "host:0/83 guest1:0/56"
+   "maxLong": 83,
+   "tickGap": 104,
+   "per": "host:0/72 guest1:83/104 guest2:0/65"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-outline (toggle back)",
    "maxLong": 0,
-   "tickGap": 63,
-   "per": "host:0/63 guest1:0/56"
+   "tickGap": 80,
+   "per": "host:0/70 guest1:0/80 guest2:0/62"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-bloom (toggle)",
-   "maxLong": 0,
-   "tickGap": 70,
-   "per": "host:0/70 guest1:0/54"
+   "maxLong": 138,
+   "tickGap": 194,
+   "per": "host:0/68 guest1:138/194 guest2:0/100"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-bloom (toggle back)",
    "maxLong": 0,
-   "tickGap": 68,
-   "per": "host:0/68 guest1:0/55"
+   "tickGap": 111,
+   "per": "host:0/90 guest1:0/111 guest2:0/71"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-grade (toggle)",
-   "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/54"
+   "maxLong": 68,
+   "tickGap": 127,
+   "per": "host:0/75 guest1:68/127 guest2:0/74"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-grade (toggle back)",
    "maxLong": 0,
-   "tickGap": 80,
-   "per": "host:0/80 guest1:0/52"
+   "tickGap": 81,
+   "per": "host:0/70 guest1:0/81 guest2:0/67"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-sharpen OffLowMediumHigh = false",
-   "maxLong": 80,
-   "tickGap": 163,
-   "per": "host:80/163 guest1:0/66"
+   "maxLong": 62,
+   "tickGap": 208,
+   "per": "host:0/73 guest1:62/208 guest2:0/64"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-sharpen OffLowMediumHigh = low",
    "maxLong": 0,
-   "tickGap": 69,
-   "per": "host:0/69 guest1:0/66"
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/67 guest2:0/59"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-sharpen OffLowMediumHigh = true",
    "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/67 guest1:0/55"
+   "tickGap": 87,
+   "per": "host:0/68 guest1:0/87 guest2:0/57"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-sharpen OffLowMediumHigh = high",
    "maxLong": 0,
-   "tickGap": 75,
-   "per": "host:0/75 guest1:0/56"
+   "tickGap": 89,
+   "per": "host:0/83 guest1:0/89 guest2:0/67"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 720",
+   "maxLong": 0,
+   "tickGap": 88,
+   "per": "host:0/84 guest1:0/88 guest2:0/73"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 900",
+   "maxLong": 0,
+   "tickGap": 88,
+   "per": "host:0/75 guest1:0/88 guest2:0/66"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 1080",
+   "maxLong": 0,
+   "tickGap": 79,
+   "per": "host:0/79 guest1:0/77 guest2:0/67"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 1440",
+   "maxLong": 0,
+   "tickGap": 85,
+   "per": "host:0/85 guest1:0/77 guest2:0/55"
+  },
+  {
+   "page": "guest1",
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 2160",
+   "maxLong": 0,
+   "tickGap": 108,
+   "per": "host:0/80 guest1:0/78 guest2:0/108"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-resolution 100%85%75%67%50% = 1",
    "maxLong": 0,
-   "tickGap": 73,
-   "per": "host:0/73 guest1:0/53"
+   "tickGap": 123,
+   "per": "host:0/82 guest1:0/123 guest2:0/61"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-resolution 100%85%75%67%50% = 0.85",
    "maxLong": 0,
-   "tickGap": 73,
-   "per": "host:0/73 guest1:0/73"
+   "tickGap": 127,
+   "per": "host:0/79 guest1:0/127 guest2:0/65"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-resolution 100%85%75%67%50% = 0.75",
-   "maxLong": 0,
-   "tickGap": 66,
-   "per": "host:0/66 guest1:0/54"
+   "maxLong": 55,
+   "tickGap": 133,
+   "per": "host:0/89 guest1:55/133 guest2:0/56"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-resolution 100%85%75%67%50% = 0.67",
-   "maxLong": 0,
-   "tickGap": 65,
-   "per": "host:0/65 guest1:0/60"
+   "maxLong": 56,
+   "tickGap": 266,
+   "per": "host:56/116 guest1:0/266 guest2:0/146"
   },
   {
    "page": "guest1",
    "label": "setting-gfx-resolution 100%85%75%67%50% = 0.5",
    "maxLong": 0,
-   "tickGap": 63,
-   "per": "host:0/63 guest1:0/57"
+   "tickGap": 145,
+   "per": "host:0/80 guest1:0/145 guest2:0/70"
   },
   {
    "page": "guest1",
-   "label": "setting-fps-target Auto (110 Hz)305060727590100120144165180 = auto",
+   "label": "setting-fps-target Auto (60 Hz)3050607275901001201441651802 = auto",
    "maxLong": 0,
-   "tickGap": 68,
-   "per": "host:0/68 guest1:0/57"
+   "tickGap": 134,
+   "per": "host:0/112 guest1:0/134 guest2:0/64"
   },
   {
    "page": "guest1",
-   "label": "setting-fps-target Auto (110 Hz)305060727590100120144165180 = 30",
+   "label": "setting-fps-target Auto (60 Hz)3050607275901001201441651802 = 30",
    "maxLong": 0,
-   "tickGap": 88,
-   "per": "host:0/88 guest1:0/55"
+   "tickGap": 148,
+   "per": "host:0/77 guest1:0/148 guest2:0/66"
   },
   {
    "page": "guest1",
-   "label": "setting-fps-target Auto (110 Hz)305060727590100120144165180 = 50",
+   "label": "setting-fps-target Auto (60 Hz)3050607275901001201441651802 = 50",
    "maxLong": 0,
-   "tickGap": 71,
-   "per": "host:0/71 guest1:0/55"
+   "tickGap": 134,
+   "per": "host:0/75 guest1:0/134 guest2:0/67"
   },
   {
    "page": "guest1",
-   "label": "setting-fps-target Auto (110 Hz)305060727590100120144165180 = 60",
+   "label": "setting-fps-target Auto (60 Hz)3050607275901001201441651802 = 60",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/56"
+   "tickGap": 83,
+   "per": "host:0/72 guest1:0/83 guest2:0/63"
   },
   {
    "page": "guest1",
-   "label": "setting-fps-target Auto (110 Hz)305060727590100120144165180 = 72",
+   "label": "setting-fps-target Auto (60 Hz)3050607275901001201441651802 = 72",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/57"
+   "tickGap": 79,
+   "per": "host:0/76 guest1:0/79 guest2:0/59"
   },
   {
    "page": "guest1",
    "label": "setting-camera-slide (toggle)",
    "maxLong": 0,
-   "tickGap": 68,
-   "per": "host:0/68 guest1:0/60"
+   "tickGap": 94,
+   "per": "host:0/94 guest1:0/87 guest2:0/73"
   },
   {
    "page": "guest1",
    "label": "setting-camera-slide (toggle back)",
-   "maxLong": 0,
-   "tickGap": 65,
-   "per": "host:0/65 guest1:0/56"
+   "maxLong": 53,
+   "tickGap": 151,
+   "per": "host:50/124 guest1:53/151 guest2:0/105"
   },
   {
    "page": "guest1",
    "label": "setting-pixel-snap (toggle)",
    "maxLong": 0,
-   "tickGap": 76,
-   "per": "host:0/76 guest1:0/57"
+   "tickGap": 133,
+   "per": "host:0/78 guest1:0/127 guest2:0/133"
   },
   {
    "page": "guest1",
    "label": "setting-pixel-snap (toggle back)",
    "maxLong": 0,
-   "tickGap": 65,
-   "per": "host:0/65 guest1:0/57"
+   "tickGap": 87,
+   "per": "host:0/70 guest1:0/87 guest2:0/66"
   },
   {
    "page": "guest1",
    "label": "Gameplay",
    "maxLong": 0,
-   "tickGap": 66,
-   "per": "host:0/66 guest1:0/64"
+   "tickGap": 108,
+   "per": "host:0/79 guest1:0/91 guest2:0/108"
   },
   {
    "page": "guest1",
    "label": "Effects",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/53"
+   "tickGap": 108,
+   "per": "host:0/82 guest1:0/106 guest2:0/108"
   },
   {
    "page": "guest1",
    "label": "Objectives",
    "maxLong": 0,
-   "tickGap": 65,
-   "per": "host:0/65 guest1:0/54"
+   "tickGap": 100,
+   "per": "host:0/67 guest1:0/100 guest2:0/57"
   },
   {
    "page": "guest1",
    "label": "btn-help-close Close",
    "maxLong": 0,
-   "tickGap": 69,
-   "per": "host:0/69 guest1:0/53"
+   "tickGap": 82,
+   "per": "host:0/82 guest1:0/66 guest2:0/62"
   },
   {
    "page": "guest1",
-   "label": "x1",
+   "label": "1 1",
    "maxLong": 0,
-   "tickGap": 62,
-   "per": "host:0/62 guest1:0/57"
+   "tickGap": 124,
+   "per": "host:0/85 guest1:0/89 guest2:0/124"
   },
   {
    "page": "guest1",
    "label": "Barracks",
    "maxLong": 0,
-   "tickGap": 75,
-   "per": "host:0/75 guest1:0/53"
+   "tickGap": 120,
+   "per": "host:0/120 guest1:0/91 guest2:0/74"
   },
   {
    "page": "guest1",
    "label": "Towers",
    "maxLong": 0,
-   "tickGap": 68,
-   "per": "host:0/64 guest1:0/68"
+   "tickGap": 134,
+   "per": "host:0/72 guest1:0/134 guest2:0/77"
   },
   {
    "page": "guest1",
    "label": "Floor",
    "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/67 guest1:0/65"
+   "tickGap": 188,
+   "per": "host:0/79 guest1:0/188 guest2:0/57"
   },
   {
    "page": "guest1",
    "label": "Special",
    "maxLong": 0,
-   "tickGap": 92,
-   "per": "host:0/65 guest1:0/92"
+   "tickGap": 93,
+   "per": "host:0/89 guest1:0/93 guest2:0/66"
   },
   {
    "page": "guest1",
    "label": "btn-minimap ▼",
    "maxLong": 0,
-   "tickGap": 70,
-   "per": "host:0/70 guest1:0/56"
+   "tickGap": 117,
+   "per": "host:0/84 guest1:0/117 guest2:0/60"
   },
   {
    "page": "guest1",
    "label": "btn-minimap ▲",
-   "maxLong": 0,
-   "tickGap": 65,
-   "per": "host:0/65 guest1:0/56"
+   "maxLong": 59,
+   "tickGap": 110,
+   "per": "host:59/86 guest1:0/107 guest2:0/110"
   },
   {
    "page": "guest1",
    "label": "1 Group 1: empty",
    "maxLong": 0,
-   "tickGap": 64,
-   "per": "host:0/64 guest1:0/58"
+   "tickGap": 78,
+   "per": "host:0/70 guest1:0/78 guest2:0/60"
   },
   {
    "page": "guest1",
    "label": "2 Group 2: empty",
    "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/66 guest1:0/67"
+   "tickGap": 113,
+   "per": "host:0/80 guest1:0/113 guest2:0/66"
   },
   {
    "page": "guest1",
    "label": "3 Group 3: empty",
    "maxLong": 0,
-   "tickGap": 63,
-   "per": "host:0/63 guest1:0/55"
+   "tickGap": 67,
+   "per": "host:0/67 guest1:0/66 guest2:0/56"
   },
   {
    "page": "guest1",
    "label": "4 Group 4: empty",
    "maxLong": 0,
-   "tickGap": 74,
-   "per": "host:0/74 guest1:0/54"
+   "tickGap": 89,
+   "per": "host:0/79 guest1:0/89 guest2:0/58"
   },
   {
    "page": "guest1",
    "label": "5 Group 5: empty",
    "maxLong": 0,
-   "tickGap": 74,
-   "per": "host:0/74 guest1:0/55"
+   "tickGap": 79,
+   "per": "host:0/79 guest1:0/70 guest2:0/60"
   },
   {
    "page": "guest1",
    "label": "6 Group 6: empty",
    "maxLong": 0,
-   "tickGap": 71,
-   "per": "host:0/71 guest1:0/57"
+   "tickGap": 85,
+   "per": "host:0/82 guest1:0/85 guest2:0/61"
   },
   {
    "page": "guest1",
    "label": "7 Group 7: empty",
-   "maxLong": 0,
-   "tickGap": 71,
-   "per": "host:0/71 guest1:0/54"
+   "maxLong": 63,
+   "tickGap": 242,
+   "per": "host:0/68 guest1:63/242 guest2:0/63"
   },
   {
    "page": "guest1",
    "label": "8 Group 8: empty",
    "maxLong": 0,
-   "tickGap": 73,
-   "per": "host:0/73 guest1:0/64"
+   "tickGap": 130,
+   "per": "host:0/79 guest1:0/130 guest2:0/113"
   },
   {
    "page": "guest1",
    "label": "9 Group 9: empty",
    "maxLong": 0,
-   "tickGap": 61,
-   "per": "host:0/61 guest1:0/52"
+   "tickGap": 146,
+   "per": "host:0/70 guest1:0/146 guest2:0/65"
   },
   {
    "page": "guest1",
    "label": "R Popup group R: empty",
    "maxLong": 0,
-   "tickGap": 64,
-   "per": "host:0/64 guest1:0/54"
+   "tickGap": 144,
+   "per": "host:0/109 guest1:0/144 guest2:0/73"
   },
   {
    "page": "guest1",
    "label": "T Popup group T: empty",
    "maxLong": 0,
-   "tickGap": 74,
-   "per": "host:0/74 guest1:0/56"
+   "tickGap": 265,
+   "per": "host:0/109 guest1:0/265 guest2:0/68"
   },
   {
    "page": "guest1",
    "label": "Y Popup group Y: empty",
    "maxLong": 0,
-   "tickGap": 71,
-   "per": "host:0/71 guest1:0/56"
+   "tickGap": 144,
+   "per": "host:0/107 guest1:0/144 guest2:0/70"
   },
   {
    "page": "guest1",
    "label": "U Popup group U: empty",
    "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/67 guest1:0/58"
+   "tickGap": 85,
+   "per": "host:0/68 guest1:0/85 guest2:0/55"
   },
   {
    "page": "guest1",
    "label": "I Popup group I: empty",
    "maxLong": 0,
-   "tickGap": 75,
-   "per": "host:0/75 guest1:0/58"
+   "tickGap": 96,
+   "per": "host:0/81 guest1:0/96 guest2:0/61"
   },
   {
    "page": "guest1",
    "label": "O Popup group O: empty",
    "maxLong": 0,
-   "tickGap": 75,
-   "per": "host:0/75 guest1:0/55"
+   "tickGap": 71,
+   "per": "host:0/71 guest1:0/65 guest2:0/60"
   },
   {
    "page": "guest1",
    "label": "P Popup group P: empty",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/54"
+   "tickGap": 81,
+   "per": "host:0/79 guest1:0/81 guest2:0/69"
   },
   {
    "page": "guest1",
    "label": "btn-ignore-level Collapse Same Type: ON",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/55"
+   "tickGap": 113,
+   "per": "host:0/69 guest1:0/113 guest2:0/56"
   },
   {
    "page": "guest1",
    "label": "btn-ignore-level Collapse Same Type: OFF",
    "maxLong": 0,
-   "tickGap": 74,
-   "per": "host:0/74 guest1:0/55"
+   "tickGap": 103,
+   "per": "host:0/84 guest1:0/103 guest2:0/64"
   },
   {
    "page": "guest1",
-   "label": "x2",
+   "label": "4 4",
    "maxLong": 0,
-   "tickGap": 63,
-   "per": "host:0/63 guest1:0/57"
+   "tickGap": 110,
+   "per": "host:0/78 guest1:0/110 guest2:0/58"
   },
   {
    "page": "guest1",
-   "label": "x4",
+   "label": "⚡ Draining 💀 into energy (click to toggle; both: half each)",
    "maxLong": 0,
-   "tickGap": 65,
-   "per": "host:0/65 guest1:0/56"
+   "tickGap": 100,
+   "per": "host:0/77 guest1:0/100 guest2:0/72"
   },
   {
    "page": "guest1",
-   "label": "x8",
+   "label": "⚡ Not draining 💀 into energy (click to toggle; both: half each)",
    "maxLong": 0,
-   "tickGap": 64,
-   "per": "host:0/64 guest1:0/53"
+   "tickGap": 90,
+   "per": "host:0/88 guest1:0/90 guest2:0/64"
+  },
+  {
+   "page": "guest1",
+   "label": "16 16",
+   "maxLong": 0,
+   "tickGap": 102,
+   "per": "host:0/96 guest1:0/102 guest2:0/78"
+  },
+  {
+   "page": "guest1",
+   "label": "★ Draining 💀 into ★ (click to toggle; both: half each)",
+   "maxLong": 0,
+   "tickGap": 79,
+   "per": "host:0/66 guest1:0/79 guest2:0/70"
+  },
+  {
+   "page": "guest1",
+   "label": "★ Not draining 💀 into ★ (click to toggle; both: half each)",
+   "maxLong": 0,
+   "tickGap": 137,
+   "per": "host:0/67 guest1:0/137 guest2:0/95"
+  },
+  {
+   "page": "guest1",
+   "label": "64 64",
+   "maxLong": 0,
+   "tickGap": 86,
+   "per": "host:0/80 guest1:0/86 guest2:0/60"
   },
   {
    "page": "guest1",
    "label": "key h",
    "maxLong": 0,
-   "tickGap": 68,
-   "per": "host:0/68 guest1:0/56"
+   "tickGap": 78,
+   "per": "host:0/73 guest1:0/78 guest2:0/58"
   },
   {
    "page": "guest1",
    "label": "key Escape",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/57"
+   "tickGap": 152,
+   "per": "host:0/77 guest1:0/152 guest2:0/60"
   },
   {
    "page": "guest1",
    "label": "key Tab",
    "maxLong": 0,
-   "tickGap": 64,
-   "per": "host:0/64 guest1:0/57"
+   "tickGap": 102,
+   "per": "host:0/82 guest1:0/102 guest2:0/59"
   },
   {
    "page": "guest1",
    "label": "key m",
    "maxLong": 0,
-   "tickGap": 64,
-   "per": "host:0/64 guest1:0/52"
+   "tickGap": 78,
+   "per": "host:0/78 guest1:0/74 guest2:0/55"
   },
   {
    "page": "guest1",
    "label": "key g",
    "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/67 guest1:0/57"
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/66 guest2:0/59"
   },
   {
    "page": "guest1",
    "label": "key 1",
    "maxLong": 0,
-   "tickGap": 67,
-   "per": "host:0/67 guest1:0/56"
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/67 guest2:0/71"
   },
   {
    "page": "guest1",
    "label": "key Control+1",
    "maxLong": 0,
-   "tickGap": 63,
-   "per": "host:0/63 guest1:0/56"
+   "tickGap": 70,
+   "per": "host:0/68 guest1:0/70 guest2:0/60"
   },
   {
    "page": "guest1",
    "label": "key 1",
    "maxLong": 0,
-   "tickGap": 73,
-   "per": "host:0/73 guest1:0/55"
+   "tickGap": 114,
+   "per": "host:0/83 guest1:0/114 guest2:0/72"
   },
   {
    "page": "guest1",
    "label": "key Escape",
    "maxLong": 0,
-   "tickGap": 68,
-   "per": "host:0/68 guest1:0/62"
+   "tickGap": 114,
+   "per": "host:0/70 guest1:0/114 guest2:0/72"
   },
   {
    "page": "guest1",
    "label": "key s",
    "maxLong": 0,
-   "tickGap": 76,
-   "per": "host:0/76 guest1:0/57"
+   "tickGap": 74,
+   "per": "host:0/74 guest1:0/69 guest2:0/59"
   },
   {
    "page": "guest1",
    "label": "key a",
    "maxLong": 0,
-   "tickGap": 70,
-   "per": "host:0/70 guest1:0/61"
+   "tickGap": 82,
+   "per": "host:0/82 guest1:0/70 guest2:0/66"
   },
   {
    "page": "guest1",
    "label": "key Delete",
    "maxLong": 0,
-   "tickGap": 70,
-   "per": "host:0/70 guest1:0/55"
+   "tickGap": 82,
+   "per": "host:0/82 guest1:0/67 guest2:0/65"
   },
   {
    "page": "guest1",
    "label": "key Escape",
    "maxLong": 0,
-   "tickGap": 72,
-   "per": "host:0/72 guest1:0/54"
+   "tickGap": 79,
+   "per": "host:0/79 guest1:0/71 guest2:0/66"
   },
   {
    "page": "guest1",
    "label": "view 3d",
    "maxLong": 0,
-   "tickGap": 64,
-   "per": "host:0/64 guest1:0/53"
+   "tickGap": 78,
+   "per": "host:0/78 guest1:0/68 guest2:0/65"
   },
   {
    "page": "guest1",
    "label": "view 2d",
    "maxLong": 0,
+   "tickGap": 84,
+   "per": "host:0/84 guest1:0/78 guest2:0/55"
+  },
+  {
+   "page": "guest2",
+   "label": "jukebox-open ♫ Open music and sound settings Music and sound",
+   "maxLong": 0,
+   "tickGap": 84,
+   "per": "host:0/82 guest1:0/84 guest2:0/70"
+  },
+  {
+   "page": "guest2",
+   "label": "jukebox-music (range)",
+   "maxLong": 0,
+   "tickGap": 104,
+   "per": "host:0/104 guest1:0/85 guest2:0/68"
+  },
+  {
+   "page": "guest2",
+   "label": "jukebox-effects (range)",
+   "maxLong": 0,
+   "tickGap": 84,
+   "per": "host:0/78 guest1:0/84 guest2:0/63"
+  },
+  {
+   "page": "guest2",
+   "label": "Use shared link",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/72 guest1:0/73 guest2:0/64"
+  },
+  {
+   "page": "guest2",
+   "label": "jukebox-close ✕ Close music settings",
+   "maxLong": 0,
+   "tickGap": 83,
+   "per": "host:0/72 guest1:0/83 guest2:0/63"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-view-2d 2D",
+   "maxLong": 0,
+   "tickGap": 71,
+   "per": "host:0/71 guest1:0/64 guest2:0/68"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-view-3d 3D",
+   "maxLong": 481,
+   "tickGap": 547,
+   "per": "host:0/78 guest1:0/131 guest2:481/547"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-default-build 🔨 New: ON",
+   "maxLong": 0,
    "tickGap": 70,
-   "per": "host:0/70 guest1:0/57"
+   "per": "host:0/70 guest1:0/68 guest2:0/56"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-default-build 🔨 New: OFF",
+   "maxLong": 0,
+   "tickGap": 80,
+   "per": "host:0/58 guest1:0/80 guest2:0/67"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-default-auto-upgrade L+New: ON",
+   "maxLong": 0,
+   "tickGap": 74,
+   "per": "host:0/73 guest1:0/74 guest2:0/67"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-default-auto-upgrade L+New: OFF",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/67 guest1:0/75 guest2:0/67"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-help ⚙ Controls & settings",
+   "maxLong": 0,
+   "tickGap": 82,
+   "per": "host:0/72 guest1:0/74 guest2:0/82"
+  },
+  {
+   "page": "guest2",
+   "label": "Keybinds",
+   "maxLong": 0,
+   "tickGap": 93,
+   "per": "host:0/86 guest1:0/77 guest2:0/93"
+  },
+  {
+   "page": "guest2",
+   "label": "Settings",
+   "maxLong": 0,
+   "tickGap": 104,
+   "per": "host:0/84 guest1:0/104 guest2:0/93"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-show-statsmap Open JSON",
+   "maxLong": 64,
+   "tickGap": 88,
+   "per": "host:0/72 guest1:0/75 guest2:64/88"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-refresh-statsmap Refresh",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/64 guest2:0/61"
+  },
+  {
+   "page": "guest2",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/norm",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/68 guest2:0/68"
+  },
+  {
+   "page": "guest2",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/fast",
+   "maxLong": 53,
+   "tickGap": 112,
+   "per": "host:0/66 guest1:0/75 guest2:53/112"
+  },
+  {
+   "page": "guest2",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/tank",
+   "maxLong": 56,
+   "tickGap": 90,
+   "per": "host:0/70 guest1:0/70 guest2:56/90"
+  },
+  {
+   "page": "guest2",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/boss",
+   "maxLong": 51,
+   "tickGap": 118,
+   "per": "host:0/72 guest1:0/66 guest2:51/118"
+  },
+  {
+   "page": "guest2",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/flying",
+   "maxLong": 50,
+   "tickGap": 117,
+   "per": "host:0/70 guest1:0/63 guest2:50/117"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-statsmap-close Close",
+   "maxLong": 0,
+   "tickGap": 97,
+   "per": "host:0/73 guest1:0/64 guest2:0/97"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-level-visibility EverythingBuildingsOff = 0",
+   "maxLong": 0,
+   "tickGap": 81,
+   "per": "host:0/75 guest1:0/81 guest2:0/76"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-level-visibility EverythingBuildingsOff = 1",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/65 guest2:0/60"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-level-visibility EverythingBuildingsOff = 2",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/65 guest2:0/66"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 2",
+   "maxLong": 0,
+   "tickGap": 81,
+   "per": "host:0/81 guest1:0/63 guest2:0/63"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 0",
+   "maxLong": 0,
+   "tickGap": 118,
+   "per": "host:0/79 guest1:0/105 guest2:0/118"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 4",
+   "maxLong": 0,
+   "tickGap": 110,
+   "per": "host:0/79 guest1:0/110 guest2:0/64"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 1",
+   "maxLong": 0,
+   "tickGap": 97,
+   "per": "host:0/97 guest1:0/89 guest2:0/91"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 5",
+   "maxLong": 0,
+   "tickGap": 90,
+   "per": "host:0/84 guest1:0/90 guest2:0/65"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-range-team Selected thingsAll team things = selected",
+   "maxLong": 0,
+   "tickGap": 103,
+   "per": "host:0/95 guest1:0/103 guest2:0/69"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-range-team Selected thingsAll team things = team",
+   "maxLong": 0,
+   "tickGap": 78,
+   "per": "host:0/66 guest1:0/78 guest2:0/66"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-range-through Behind objectsThrough objects = false",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/65 guest2:0/63"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-range-through Behind objectsThrough objects = true",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/66 guest2:0/64"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gold-mine-text (toggle)",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/73 guest2:0/70"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gold-mine-text (toggle back)",
+   "maxLong": 0,
+   "tickGap": 93,
+   "per": "host:0/82 guest1:0/73 guest2:0/93"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-rally-line-type Dotted Solid = dotted",
+   "maxLong": 0,
+   "tickGap": 96,
+   "per": "host:0/72 guest1:0/77 guest2:0/96"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-rally-line-type Dotted Solid = solid",
+   "maxLong": 0,
+   "tickGap": 107,
+   "per": "host:0/78 guest1:0/107 guest2:0/76"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-show-rally-lines Buildings Bu = buildings",
+   "maxLong": 0,
+   "tickGap": 107,
+   "per": "host:0/81 guest1:0/107 guest2:0/100"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-show-rally-lines Buildings Bu = buildings_units",
+   "maxLong": 0,
+   "tickGap": 93,
+   "per": "host:0/81 guest1:0/93 guest2:0/71"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-show-rally-lines Buildings Bu = none",
+   "maxLong": 0,
+   "tickGap": 144,
+   "per": "host:0/79 guest1:0/144 guest2:0/69"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-show-selection-outlines All Units = buildings_units",
+   "maxLong": 0,
+   "tickGap": 102,
+   "per": "host:0/76 guest1:0/102 guest2:0/62"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-show-selection-outlines All Units = units",
+   "maxLong": 0,
+   "tickGap": 87,
+   "per": "host:0/87 guest1:0/72 guest2:0/73"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-show-selection-outlines All Units = none",
+   "maxLong": 0,
+   "tickGap": 161,
+   "per": "host:0/87 guest1:0/161 guest2:0/131"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-selection-outline-type Dotted Solid = dotted",
+   "maxLong": 0,
+   "tickGap": 82,
+   "per": "host:0/76 guest1:0/82 guest2:0/80"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-selection-outline-type Dotted Solid = solid",
+   "maxLong": 0,
+   "tickGap": 155,
+   "per": "host:0/123 guest1:0/155 guest2:0/104"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-selection-outline-see-through (toggle)",
+   "maxLong": 0,
+   "tickGap": 104,
+   "per": "host:0/72 guest1:0/92 guest2:0/104"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-selection-outline-see-through (toggle back)",
+   "maxLong": 0,
+   "tickGap": 122,
+   "per": "host:0/80 guest1:0/122 guest2:0/66"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = off",
+   "maxLong": 0,
+   "tickGap": 96,
+   "per": "host:0/80 guest1:0/96 guest2:0/72"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = fxaa",
+   "maxLong": 0,
+   "tickGap": 130,
+   "per": "host:0/84 guest1:0/130 guest2:0/63"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = msaa",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/72 guest1:0/73 guest2:0/70"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = msaa_fxaa",
+   "maxLong": 0,
+   "tickGap": 84,
+   "per": "host:0/84 guest1:0/66 guest2:0/65"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-ao OffLow (half res)High (full res) = off",
+   "maxLong": 0,
+   "tickGap": 87,
+   "per": "host:0/80 guest1:0/87 guest2:0/75"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-ao OffLow (half res)High (full res) = low",
+   "maxLong": 0,
+   "tickGap": 106,
+   "per": "host:0/80 guest1:0/96 guest2:0/106"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-ao OffLow (half res)High (full res) = high",
+   "maxLong": 0,
+   "tickGap": 91,
+   "per": "host:0/76 guest1:0/91 guest2:0/76"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-outline (toggle)",
+   "maxLong": 0,
+   "tickGap": 78,
+   "per": "host:0/75 guest1:0/78 guest2:0/67"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-outline (toggle back)",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/63 guest2:0/67"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-bloom (toggle)",
+   "maxLong": 0,
+   "tickGap": 86,
+   "per": "host:0/81 guest1:0/86 guest2:0/83"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-bloom (toggle back)",
+   "maxLong": 0,
+   "tickGap": 81,
+   "per": "host:0/81 guest1:0/61 guest2:0/66"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-grade (toggle)",
+   "maxLong": 0,
+   "tickGap": 92,
+   "per": "host:0/92 guest1:0/61 guest2:0/67"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-grade (toggle back)",
+   "maxLong": 0,
+   "tickGap": 117,
+   "per": "host:0/85 guest1:0/117 guest2:0/99"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-sharpen OffLowMediumHigh = false",
+   "maxLong": 0,
+   "tickGap": 139,
+   "per": "host:0/73 guest1:0/101 guest2:0/139"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-sharpen OffLowMediumHigh = low",
+   "maxLong": 0,
+   "tickGap": 120,
+   "per": "host:0/88 guest1:0/120 guest2:0/104"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-sharpen OffLowMediumHigh = true",
+   "maxLong": 0,
+   "tickGap": 111,
+   "per": "host:0/70 guest1:0/111 guest2:0/99"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-sharpen OffLowMediumHigh = high",
+   "maxLong": 0,
+   "tickGap": 108,
+   "per": "host:0/65 guest1:0/108 guest2:0/100"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 720",
+   "maxLong": 0,
+   "tickGap": 99,
+   "per": "host:0/72 guest1:0/75 guest2:0/99"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 900",
+   "maxLong": 0,
+   "tickGap": 88,
+   "per": "host:0/88 guest1:0/82 guest2:0/65"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 1080",
+   "maxLong": 0,
+   "tickGap": 94,
+   "per": "host:0/74 guest1:0/94 guest2:0/82"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 1440",
+   "maxLong": 0,
+   "tickGap": 79,
+   "per": "host:0/79 guest1:0/73 guest2:0/62"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 2160",
+   "maxLong": 0,
+   "tickGap": 101,
+   "per": "host:0/64 guest1:0/95 guest2:0/101"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 1",
+   "maxLong": 0,
+   "tickGap": 81,
+   "per": "host:0/77 guest1:0/81 guest2:0/72"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.85",
+   "maxLong": 0,
+   "tickGap": 139,
+   "per": "host:0/90 guest1:0/139 guest2:0/102"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.75",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/68 guest2:0/60"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.67",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/65 guest1:0/61 guest2:0/70"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.5",
+   "maxLong": 0,
+   "tickGap": 84,
+   "per": "host:0/84 guest1:0/69 guest2:0/62"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-fps-target Auto (120 Hz)305060727590100120144165180 = auto",
+   "maxLong": 0,
+   "tickGap": 84,
+   "per": "host:0/78 guest1:0/84 guest2:0/66"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-fps-target Auto (120 Hz)305060727590100120144165180 = 30",
+   "maxLong": 0,
+   "tickGap": 84,
+   "per": "host:0/64 guest1:0/84 guest2:0/61"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-fps-target Auto (120 Hz)305060727590100120144165180 = 50",
+   "maxLong": 0,
+   "tickGap": 83,
+   "per": "host:0/83 guest1:0/74 guest2:0/59"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-fps-target Auto (120 Hz)305060727590100120144165180 = 60",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/66 guest1:0/72 guest2:0/61"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-fps-target Auto (120 Hz)305060727590100120144165180 = 72",
+   "maxLong": 58,
+   "tickGap": 129,
+   "per": "host:0/81 guest1:58/129 guest2:0/60"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-camera-slide (toggle)",
+   "maxLong": 0,
+   "tickGap": 115,
+   "per": "host:0/73 guest1:0/115 guest2:0/104"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-camera-slide (toggle back)",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/65 guest1:0/73 guest2:0/67"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-pixel-snap (toggle)",
+   "maxLong": 0,
+   "tickGap": 131,
+   "per": "host:0/65 guest1:0/131 guest2:0/65"
+  },
+  {
+   "page": "guest2",
+   "label": "setting-pixel-snap (toggle back)",
+   "maxLong": 0,
+   "tickGap": 112,
+   "per": "host:0/63 guest1:0/112 guest2:0/76"
+  },
+  {
+   "page": "guest2",
+   "label": "Gameplay",
+   "maxLong": 0,
+   "tickGap": 84,
+   "per": "host:0/79 guest1:0/84 guest2:0/66"
+  },
+  {
+   "page": "guest2",
+   "label": "Effects",
+   "maxLong": 0,
+   "tickGap": 69,
+   "per": "host:0/69 guest1:0/68 guest2:0/63"
+  },
+  {
+   "page": "guest2",
+   "label": "Objectives",
+   "maxLong": 0,
+   "tickGap": 91,
+   "per": "host:0/91 guest1:0/76 guest2:0/81"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-help-close Close",
+   "maxLong": 0,
+   "tickGap": 91,
+   "per": "host:0/91 guest1:0/85 guest2:0/60"
+  },
+  {
+   "page": "guest2",
+   "label": "1 1",
+   "maxLong": 0,
+   "tickGap": 150,
+   "per": "host:0/66 guest1:0/150 guest2:0/70"
+  },
+  {
+   "page": "guest2",
+   "label": "Barracks",
+   "maxLong": 0,
+   "tickGap": 124,
+   "per": "host:0/76 guest1:0/124 guest2:0/65"
+  },
+  {
+   "page": "guest2",
+   "label": "Towers",
+   "maxLong": 0,
+   "tickGap": 82,
+   "per": "host:0/70 guest1:0/76 guest2:0/82"
+  },
+  {
+   "page": "guest2",
+   "label": "Floor",
+   "maxLong": 0,
+   "tickGap": 80,
+   "per": "host:0/80 guest1:0/65 guest2:0/65"
+  },
+  {
+   "page": "guest2",
+   "label": "Special",
+   "maxLong": 0,
+   "tickGap": 80,
+   "per": "host:0/71 guest1:0/76 guest2:0/80"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-minimap ▼",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/71 guest1:0/73 guest2:0/62"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-minimap ▲",
+   "maxLong": 0,
+   "tickGap": 84,
+   "per": "host:0/84 guest1:0/75 guest2:0/59"
+  },
+  {
+   "page": "guest2",
+   "label": "1 Group 1: empty",
+   "maxLong": 0,
+   "tickGap": 84,
+   "per": "host:0/84 guest1:0/77 guest2:0/68"
+  },
+  {
+   "page": "guest2",
+   "label": "2 Group 2: empty",
+   "maxLong": 0,
+   "tickGap": 81,
+   "per": "host:0/81 guest1:0/78 guest2:0/67"
+  },
+  {
+   "page": "guest2",
+   "label": "3 Group 3: empty",
+   "maxLong": 0,
+   "tickGap": 92,
+   "per": "host:0/75 guest1:0/92 guest2:0/66"
+  },
+  {
+   "page": "guest2",
+   "label": "4 Group 4: empty",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/64 guest1:0/72 guest2:0/69"
+  },
+  {
+   "page": "guest2",
+   "label": "5 Group 5: empty",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/71 guest2:0/61"
+  },
+  {
+   "page": "guest2",
+   "label": "6 Group 6: empty",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/66 guest2:0/63"
+  },
+  {
+   "page": "guest2",
+   "label": "7 Group 7: empty",
+   "maxLong": 0,
+   "tickGap": 78,
+   "per": "host:0/74 guest1:0/78 guest2:0/69"
+  },
+  {
+   "page": "guest2",
+   "label": "8 Group 8: empty",
+   "maxLong": 0,
+   "tickGap": 70,
+   "per": "host:0/70 guest1:0/65 guest2:0/63"
+  },
+  {
+   "page": "guest2",
+   "label": "9 Group 9: empty",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/68 guest1:0/72 guest2:0/63"
+  },
+  {
+   "page": "guest2",
+   "label": "R Popup group R: empty",
+   "maxLong": 0,
+   "tickGap": 80,
+   "per": "host:0/62 guest1:0/80 guest2:0/56"
+  },
+  {
+   "page": "guest2",
+   "label": "T Popup group T: empty",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/77 guest2:0/64"
+  },
+  {
+   "page": "guest2",
+   "label": "Y Popup group Y: empty",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/74 guest1:0/77 guest2:0/61"
+  },
+  {
+   "page": "guest2",
+   "label": "U Popup group U: empty",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/74 guest2:0/63"
+  },
+  {
+   "page": "guest2",
+   "label": "I Popup group I: empty",
+   "maxLong": 0,
+   "tickGap": 67,
+   "per": "host:0/66 guest1:0/67 guest2:0/62"
+  },
+  {
+   "page": "guest2",
+   "label": "O Popup group O: empty",
+   "maxLong": 0,
+   "tickGap": 81,
+   "per": "host:0/71 guest1:0/81 guest2:0/62"
+  },
+  {
+   "page": "guest2",
+   "label": "P Popup group P: empty",
+   "maxLong": 0,
+   "tickGap": 82,
+   "per": "host:0/72 guest1:0/82 guest2:0/65"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-ignore-level Collapse Same Type: ON",
+   "maxLong": 0,
+   "tickGap": 72,
+   "per": "host:0/72 guest1:0/69 guest2:0/66"
+  },
+  {
+   "page": "guest2",
+   "label": "btn-ignore-level Collapse Same Type: OFF",
+   "maxLong": 0,
+   "tickGap": 82,
+   "per": "host:0/82 guest1:0/69 guest2:0/70"
+  },
+  {
+   "page": "guest2",
+   "label": "4 4",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/63 guest1:0/77 guest2:0/64"
+  },
+  {
+   "page": "guest2",
+   "label": "⚡ Draining 💀 into energy (click to toggle; both: half each)",
+   "maxLong": 0,
+   "tickGap": 71,
+   "per": "host:0/60 guest1:0/71 guest2:0/60"
+  },
+  {
+   "page": "guest2",
+   "label": "⚡ Not draining 💀 into energy (click to toggle; both: half each)",
+   "maxLong": 0,
+   "tickGap": 75,
+   "per": "host:0/75 guest1:0/71 guest2:0/60"
+  },
+  {
+   "page": "guest2",
+   "label": "16 16",
+   "maxLong": 0,
+   "tickGap": 79,
+   "per": "host:0/70 guest1:0/79 guest2:0/65"
+  },
+  {
+   "page": "guest2",
+   "label": "64 64",
+   "maxLong": 0,
+   "tickGap": 82,
+   "per": "host:0/68 guest1:0/82 guest2:0/68"
+  },
+  {
+   "page": "guest2",
+   "label": "★ Draining 💀 into ★ (click to toggle; both: half each)",
+   "maxLong": 0,
+   "tickGap": 146,
+   "per": "host:0/121 guest1:0/146 guest2:0/62"
+  },
+  {
+   "page": "guest2",
+   "label": "★ Not draining 💀 into ★ (click to toggle; both: half each)",
+   "maxLong": 0,
+   "tickGap": 121,
+   "per": "host:0/121 guest1:0/82 guest2:0/74"
+  },
+  {
+   "page": "guest2",
+   "label": "key h",
+   "maxLong": 0,
+   "tickGap": 98,
+   "per": "host:0/63 guest1:0/98 guest2:0/56"
+  },
+  {
+   "page": "guest2",
+   "label": "key Escape",
+   "maxLong": 0,
+   "tickGap": 94,
+   "per": "host:0/63 guest1:0/94 guest2:0/55"
+  },
+  {
+   "page": "guest2",
+   "label": "key Tab",
+   "maxLong": 0,
+   "tickGap": 80,
+   "per": "host:0/80 guest1:0/76 guest2:0/65"
+  },
+  {
+   "page": "guest2",
+   "label": "key m",
+   "maxLong": 0,
+   "tickGap": 96,
+   "per": "host:0/96 guest1:0/68 guest2:0/65"
+  },
+  {
+   "page": "guest2",
+   "label": "key g",
+   "maxLong": 0,
+   "tickGap": 76,
+   "per": "host:0/76 guest1:0/68 guest2:0/63"
+  },
+  {
+   "page": "guest2",
+   "label": "key 1",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/64 guest2:0/65"
+  },
+  {
+   "page": "guest2",
+   "label": "key Control+1",
+   "maxLong": 0,
+   "tickGap": 90,
+   "per": "host:0/90 guest1:0/74 guest2:0/65"
+  },
+  {
+   "page": "guest2",
+   "label": "key 1",
+   "maxLong": 0,
+   "tickGap": 77,
+   "per": "host:0/77 guest1:0/69 guest2:0/68"
+  },
+  {
+   "page": "guest2",
+   "label": "key Escape",
+   "maxLong": 0,
+   "tickGap": 85,
+   "per": "host:0/72 guest1:0/85 guest2:0/66"
+  },
+  {
+   "page": "guest2",
+   "label": "key s",
+   "maxLong": 0,
+   "tickGap": 124,
+   "per": "host:0/72 guest1:0/124 guest2:0/70"
+  },
+  {
+   "page": "guest2",
+   "label": "key a",
+   "maxLong": 0,
+   "tickGap": 83,
+   "per": "host:0/82 guest1:0/83 guest2:0/66"
+  },
+  {
+   "page": "guest2",
+   "label": "key Delete",
+   "maxLong": 0,
+   "tickGap": 84,
+   "per": "host:0/72 guest1:0/84 guest2:0/65"
+  },
+  {
+   "page": "guest2",
+   "label": "key Escape",
+   "maxLong": 0,
+   "tickGap": 65,
+   "per": "host:0/64 guest1:0/65 guest2:0/64"
+  },
+  {
+   "page": "guest2",
+   "label": "view 3d",
+   "maxLong": 0,
+   "tickGap": 88,
+   "per": "host:0/69 guest1:0/88 guest2:0/55"
+  },
+  {
+   "page": "guest2",
+   "label": "view 2d",
+   "maxLong": 0,
+   "tickGap": 73,
+   "per": "host:0/73 guest1:0/67 guest2:0/55"
   }
  ]
 }

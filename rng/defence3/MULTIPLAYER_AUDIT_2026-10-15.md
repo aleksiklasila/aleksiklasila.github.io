@@ -9,7 +9,8 @@ death, injected divergence), 2026-10-16. Findings 22-30 came from a third,
 read-only audit (35 suites passing, faults injected beside them), 2026-10-16.
 Findings 31-34 from a fourth, on portability and test coverage, 2026-10-16;
 35 found running the suites in worker mode; 36-39 from a fifth (roles,
-teams and rematches under delayed messages), 2026-10-16.
+teams and rematches under delayed messages), 2026-10-16; 40 found in a
+real-browser run (three Edge tabs).
 
 | # | Pri | Finding | Where | Status |
 |---|---|---|---|---|
@@ -52,6 +53,8 @@ teams and rematches under delayed messages), 2026-10-16.
 | 37 | P1 | A team change during the start leaves a guest's commands without effect: host renderer preparation delayed 500 ms, a guest's colour change delivered meanwhile; the guest starts as team 1 while the roster gives it team 0 or 3; its Hold does nothing (peers stay in sync, no hash sees it). | `utils_networking.js` team change | fixed |
 | 38 | P1 | A delayed `RETURN_TO_LOBBY` ejects a guest from the rematch: three players, rematch, one guest's message delayed 4.5 or 8 s; it stays in the lobby at tick 0 (60 s later still out) while the others play. | `utils_networking.js` lobby return, rematch | fixed |
 | 39 | P2 | A rematch promotes spectators (and lobby visitors who only wait) to playing teams without their choice. | `utils_networking.js` `hostRematch` | fixed |
+| 40 | P1 | A match start dropped players still loading: 45 s after the start every player not ready was removed (its team resigned), however busy loading; the host makes its model views (~30-60 s), the guests theirs only after the world came. Three real Edge tabs on one machine never started (also on d93eb5d). | `utils_networking.js` start | fixed |
+| 41 | P1 | The state hash summed each field's term as (key ^ value) * M: one bit flipped in two fields at once cancelled out where their keys differ. A unit's effective stacks 4 -> 6 with its level 2 -> 3 (always together) flip the same float bit: a guest with a neighbour seen elsewhere kept that unit a level apart unseen (its hysteresis holds it), repairs fixed the players' energy every second but never the unit (`multiplayer-chaos-determinism` crossroads, worker mode, every run). | `k.rs` k_snap_units, `utils_snapshot.js`, `sim_unit_state.js` | fixed |
 
 ## Fixes
 
@@ -292,6 +295,37 @@ teams and rematches under delayed messages), 2026-10-16.
     playing); spectators and lobby visitors stay in the lobby and may
     spectate (`startHostedGame({ roster })`, teams from those players
     alone). Test `multiplayer-roles-rematch`.
+40. A guest loading a start says so every 2 s (`START_GAME_LOADING`, from
+    `START_GAME_PREPARE` until its match runs); the host waits while it
+    hears that, and drops a player only after 45 s of silence (or 10
+    minutes). And the guest makes its model views from the prepare on, for
+    the match's teams and rules (the prepare carries the host's rules): the
+    start's own preparation then finds them made (it made them anew, ~30 s,
+    once the world had come). Three Edge tabs on one machine: never started
+    before; with the wait 131 s; with both 71 s. Test
+    `multiplayer-start-wait` (a guest loading 60 s is waited for, a silent
+    one dropped; the prepare carries the rules; failed on d93eb5d);
+    `tests/browser-mp-gui-fuzz.cjs --players=3` (401 controls clicked over
+    three real tabs: 396 hash comparisons, 0 desyncs, no errors).
+    Found by the suites after that change: a prepare is sent just before
+    the host makes the world, its START_GAME right after; delivered out of
+    order (while the guest applied the start) the prepare set the guest's
+    rules back to the host page's from before it read its menu (an 80x80
+    map for a 20x20 match: diverged at tick 0, `multiplayer-disconnect`,
+    `-extremes`, `-scenarios`). Now the host reads its menu at the press,
+    so the prepare carries the match's rules, and a guest ignores a prepare
+    whose START_GAME has come (`_guestStartTakenSessionId`); each half
+    alone keeps the start in sync. Test `multiplayer-start-wait` (a prepare
+    delivered during the start's apply: diverged at tick 0 before).
+
+41. Every term is mixed before the sum (t ^ t >>> 15, times an odd
+    constant): the units' kernel (`k_snap_units`), the units' object digest
+    (`_simHTerm`, the setters' inline terms too) and the structures',
+    mines', drops' and projectiles' field hasher. Found by the full suite
+    after 36-40 (it passed on d93eb5d by chance: another game). The
+    harness's exact fingerprint reads effective stacks and level too. Test
+    `multiplayer-corruption-fuzz unitStacksLevel` (both values a step
+    apart, the same bit flipped: never patched before, 1 patch now).
 
 Validation in the audit's session: snapshot, rematch, cross-engine math and
 real shared-memory worker tests passed; the full worker recovery suite was
