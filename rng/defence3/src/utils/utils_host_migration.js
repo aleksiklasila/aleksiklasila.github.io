@@ -242,8 +242,10 @@ function guestFollowHostMove(hostId) {
     joinGame(hid, { rejoin: true, migrate: true });
 }
 
-// Guest: take over as host with the match state we have.
-function promoteSelfToHost(oldHostId, hostLeft) {
+// Guest: take over as host with the match state we have. (keepOldLink: the
+// old host handed the match over and joins again by itself: its link is
+// left to it.)
+function promoteSelfToHost(oldHostId, hostLeft, opts = null) {
     if (isHost || !gameStarted) return;
     let now = performance.now();
     logLockstepWarning('Taking over as host', { oldHostId, tick: currentTick });
@@ -270,9 +272,11 @@ function promoteSelfToHost(oldHostId, hostLeft) {
     // Guests keep the start roster as it was; the host's broadcasts carry
     // current peer ids (players who reconnected under a new one).
     matchStartLobbyPlayers = (lobbyPlayers || []).filter(lp => lp && lp.peerId && !isPeerExplicitlyRemoved(lp.peerId)).map(lp => ({ ...lp }));
-    let stale = connections.filter(c => c && c.peer === oldHostId);
-    connections = connections.filter(c => !stale.includes(c));
-    for (let c of stale) { try { c.close(); } catch { } }
+    if (!(opts && opts.keepOldLink)) {
+        let stale = connections.filter(c => c && c.peer === oldHostId);
+        connections = connections.filter(c => !stale.includes(c));
+        for (let c of stale) { try { c.close(); } catch { } }
+    }
     isHost = true;
     wsHostId = myPeerId;
     wsRoomId = myPeerId;
@@ -320,9 +324,67 @@ function promoteSelfToHost(oldHostId, hostLeft) {
     updateInfoPanel();
 }
 
+// ---- a host whose simulation was lost ----
+// Its simulation worker was lost mid-match (sim_client.js), and the match's
+// state with it; every player has the same state. The host hands the match
+// to the first player in the successor order still linked (HOST_HANDOVER;
+// the next one after HOST_HANDOVER_MS without an answer), which takes over
+// as in a migration (its team plays on, the old host's too); then the old
+// host moves its guests there (demoteSelfToGuest) and joins it for the
+// whole match (fullSync: a reload's). (A guest gets the match again from
+// its host: netRecoverLostSimulation.)
+const HOST_HANDOVER_MS = 4000;
+let _hostHandover = null;
+function hostHandoverActive() { return !!_hostHandover; }
+function hostHandOverMatch(reason) {
+    if (!isHost || !gameStarted || gameOver) return false;
+    let linked = pid => connections.some(c => c && c.peer === pid && c.open !== false);
+    let cands = computeHostMigrationCandidates(myPeerId).filter(pid => pid !== myPeerId && linked(pid) && _migrationRoleOf(pid) === 'playing'
+        && !(typeof resyncHostIsJoining === 'function' && resyncHostIsJoining(pid)));
+    if (!cands.length) return false;
+    _hostHandover = { cands, i: 0, reason: String(reason || ''), to: '' };
+    _hostHandoverNext();
+    return true;
+}
+function _hostHandoverNext() {
+    let h = _hostHandover;
+    if (!h || !isHost || !gameStarted) return;
+    for (; h.i < h.cands.length; h.i++) {
+        let pid = h.cands[h.i], conn = connections.find(c => c && c.peer === pid && c.open !== false);
+        if (!conn) continue;
+        h.i++;
+        h.to = pid;
+        logLockstepWarning('Simulation lost: handing the match to a player', { to: pid, reason: h.reason });
+        try { conn.send({ type: 'HOST_HANDOVER', sessionId: matchStartSessionId, reason: h.reason }); } catch { }
+        let epoch = networkSessionEpoch;
+        setTimeout(() => { if (_hostHandover === h && h.to === pid && epoch === networkSessionEpoch && isHost) _hostHandoverNext(); }, HOST_HANDOVER_MS);
+        return;
+    }
+    _hostHandover = null;
+    logLockstepWarning('Simulation lost: no player took the match over', { reason: h.reason });
+    if (typeof setMatchLoadOverlay === 'function') setMatchLoadOverlay(true, 'Simulation stopped', 'No other player could take the match over.');
+}
+// Guest: our host hands us the match (its simulation lost).
+function guestTakeHandedOverMatch(conn, data) {
+    if (isHost || !gameStarted || gameOver || !conn || conn.peer !== wsHostId) return;
+    if (String((data && data.sessionId) || '') !== String(matchStartSessionId || '')) return;
+    if (typeof simClientLostPending === 'function' && simClientLostPending()) return;
+    promoteSelfToHost(conn.peer, false, { keepOldLink: true });
+    try { conn.send({ type: 'HOST_HANDOVER_DONE', sessionId: matchStartSessionId }); } catch { }
+}
+// Host: the player took the match: move there, for the whole match.
+function hostHandoverDone(conn, data) {
+    let h = _hostHandover;
+    if (!h || !isHost || !conn || conn.peer !== h.to) return;
+    if (String((data && data.sessionId) || '') !== String(matchStartSessionId || '')) return;
+    _hostHandover = null;
+    demoteSelfToGuest(h.to, { fullSync: true });
+}
+
 // Host: another host runs this match (we were cut off and the others moved
-// on): join it and bring our own guests along.
-function demoteSelfToGuest(newHostId) {
+// on): join it and bring our own guests along. (fullSync: this page has no
+// state to resume from: the whole match, as a reload gets it.)
+function demoteSelfToGuest(newHostId, opts = null) {
     if (!isHost || !gameStarted) return;
     let hid = String(newHostId || '');
     logLockstepWarning('Another host runs this match; joining it', { newHostId: hid });
@@ -349,7 +411,7 @@ function demoteSelfToGuest(newHostId) {
     let epoch = networkSessionEpoch;
     setTimeout(() => {
         if (epoch !== networkSessionEpoch || isHost || !gameStarted) return;
-        joinGame(hid, { rejoin: true, migrate: true });
+        joinGame(hid, opts && opts.fullSync ? { rejoin: true, fullSync: true } : { rejoin: true, migrate: true });
     }, 150);
 }
 

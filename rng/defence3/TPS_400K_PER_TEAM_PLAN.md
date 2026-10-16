@@ -1612,6 +1612,82 @@ past it is building them where the frame is built (the presentation worker:
 cull, detail split and middle records with the frame, the page uploading
 only), or on the GPU from the frame's columns.
 
+### 2026-10-16 — second multiplayer audit; mega main thread 52.5 -> 48 ms
+
+**Audit, second batch** (user, from another session: recovery under reloads,
+late messages, migration, worker death, injected divergence): findings
+16-21 in `MULTIPLAYER_AUDIT_2026-10-15.md`, all fixed, a test each
+(`multiplayer-ran-once`, `-recovery-late`, `-worker-lost`,
+`-result-authority`): commands run once over a guest's reload (a record of
+the ids sealed or run on every peer; ids `peer:epoch:seq`, the epoch new at
+each world reset), late pauses of finished recoveries dropped, the worker's
+bundle generation counted per host, a worker silent 10 s with work out
+replaced (a guest reloads the match from its host, a host hands the match to
+a player and rejoins it), automatic defeats local and undone by a repair, the
+match's end the host's (`MATCH_RESULT`; a guest whose end differs asks for
+the match), peers without the match not waited for (`RESYNC_NO_MATCH`). Full
+suite (151 tests) passed after these.
+
+**Mega solo** (`run_msolo.sh`, 105k-133k units, 7 helpers; no probes): mean
+52.5 ms (six runs 50-53) -> 48.2 with the first three items below, ~47.9
+with all (p50 ~50 -> ~45, p95 ~70 -> ~66, the 60-130 ms rebuild installs
+gone); the state hash at tick 300 unchanged (the same simulation).
+- Units behind their stat tables (a research done for their type: ~700 a
+  tick of the share took the full JS path, ~4 us each) are taken in
+  `SIM_KERNEL_EFF_UNITS` from a base entry (per owner, type and base level:
+  the base tables, window radius and maxEnergy of the current version, noted
+  by the full path) and the new level's row; the JS gives them the base
+  tables and maxEnergy (flags 5/6). Only on ticks where the share's behind
+  units fit the cap (`EFF_BEHIND_PER_TICK`), so which path takes a unit
+  decides nothing peer to peer. Effective stats 4.7 -> 1.7 ms a tick (~620
+  units a tick in the kernel). Test `eff-behind-kernel` (both ways the same
+  hash every tick, energies, maxEnergy, tables, movement columns).
+- The hash's mines (every mine every hash: 20k reads of scattered tiles)
+  from per-region sums the structure table keeps as amounts change
+  (`_stMineTerm`): the same values. Test `mine-region-sums`.
+- The vision cover's area flags (120k areas rewritten each tick) made again
+  only with the areas: ~0.6 ms.
+- Helpers spin 0.25 ms for the next job before they wait (`SIM_PAR_SPIN_MS`;
+  a wake through `Atomics.waitAsync` is a task of the worker's event loop):
+  the main thread lost ~1.5 ms a tick at ~20 foreground jobs' tails; the
+  movement kernel's 0.16 -> 0.11 ms, the hits' 0.09 -> 0.04. Smaller jobs
+  where a tick had ~10 (spatial counts 16384 -> 4096 slots, update
+  candidates, held-dead, effective stats 256 -> 64 entries). ~0.7 ms.
+  (0.5 ms of spin: no better.)
+- A navigation rebuild's install made the rest of its window's fields on
+  the simulation thread when the bulk lane (4 helpers at most, the last of
+  the lanes) was behind: 60-130 ms at tick 399 of every run (the window over
+  the chaos bursts). In the window's second half with the lane still
+  pending, it is taken right after the tick's own lanes (after the fields'
+  lane: ahead of it, a flush waited for that lane instead) by up to helpers
+  - 1 (`simParallelBulkRush`, flownav.js `_navRushCheck`): installs 8-13 ms.
+  Scheduling only (the same hash). Two peers at half scale: no desyncs.
+Left of the spikes: the chaos setup tick (~210 ms: 8000 buildings placed at
+once, not play), burst ticks at 80-95 ms, and `navFieldsFlush` at 12-20 ms
+on burst ticks (fields asked for by big new orders are taken at the next
+tick's flush: the job did not finish in one tick; a two-tick deadline would
+be a rules change).
+
+Measured and dropped: field hashers per class (megamorphic loads were not
+the structures' hash cost: same time), a `for...in` structure hasher (2.29
+-> 2.15 ms, and not equal for towers), skipping idle workers past the tick's
+worker events from columns (8k a tick skipped, the pass not faster: the
+objects were not the cost), the action budget halved (p95 66.4 -> 65.0, p50
+45.8 -> 46.7: the burst's work only moves to more ticks; rules unchanged).
+
+Where a steady tick goes now (~41 ms in gameTick + ~3.4 hash): unit pass
+8.4 (900 updates a tick, ~9 us each: arriving healers 40 x 22 us, gold
+returners whose path ended far from the spawner 56 x 14 us, ~330 walking
+workers the kernel handed back or never armed ~3 us each (WMOVESTAT
+'nav:pre1/pre0'), units holding with a structure target out of range 69 x
+12 us), movement 5.8 (kernel 4.2 wall, ~32 ms CPU over 8 threads), hash
+3.4 (structures' full fields ~1.4: ~13 us a structure, memory-bound; core
+sweep 0.7), worker search 2.7 (site sweep 1.2, takes 1.2), research sweep
+2.2 (1/20 of 50k structures a tick, cold reads), orders 2.0, spawner queue
+1.9 (new units: allocation), visibility 1.9. Burst ticks (~1 in 9 of the
+chaos run, ~59 ms): actions ~5.5 (at the budget), orders +2, worker search
++3, unit pass +2.6, nav installs +1.2.
+
 ## Next
 
 Multiplayer audit of 2026-10-15 (another session): 15 findings, kept with
@@ -1622,13 +1698,30 @@ hash gaps for queued commands, damage accounting dropped by recovery, no
 match id on tick packets, order-blind bundle checksums, a guest sending the
 host to the lobby, a worker load stuck at tick 0, one failed wasm
 allocation breaking the kernels for good, late commands missing from
-snapshots, slot claims by public profile id, a high-jitter start failure).
+snapshots, slot claims by public profile id, a high-jitter start failure);
+a second batch (16-21, 2026-10-16) on recovery: a command run twice over a
+guest's reload, late pauses, the worker's generation per host, a worker
+lost mid-match, a divergent state's defeat or victory taken as real, a
+lobby visitor holding up a recovery. All fixed but 15 (not reproduced).
 
 Order set by the user (2026-10-09): main thread stable below 50 ms (aim
 ~40) at B800 first; the determinism fixes after that. 2026-10-11: no tick or
 frame time spikes of any kind is the goal; the list of those left is at the
 end of that day's entry.
 
+Leads from 2026-10-16 (mega, steady ~44 ms with the hash, bursts 60-95):
+the first tick after a research burst still sends the share's behind units
+down the full path (no rows of the new version yet: a second kernel pass
+after the JS made the first of each key's row would take them); fields of
+big new orders taken a tick later (`navFieldsFlush` 12-20 ms on burst
+ticks; a rules change); walkers the movement kernel hands back or never
+arms (~330 a tick, WMOVESTAT 'nav:pre1/pre0'; a dbgc build of mv.rs counts
+why); the structures' full-field hash from digests their setters keep (as
+units' hObj: ~1.4 ms, and every structure every slice); the movement
+kernel's ~0.38 us a moving unit (84k movers a tick). FPS (solo close fight,
+Team + history, 3D): frames p50 12 ms, p95 25 (the tick frames: middle
+models' records, the apply); middle models drawn from the frame columns
+already on the GPU would drop the records.
 0. Main thread: the items above, biggest first: MOVE (layouts, steering
    shared per route/cell), separation commit, unit pass (worker events in
    the kernel), worker tier takes; battle-setup spikes (visibility cover

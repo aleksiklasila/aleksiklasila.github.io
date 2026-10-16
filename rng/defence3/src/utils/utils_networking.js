@@ -431,6 +431,33 @@ function _broadcastResyncPauseState(active, sessionId, reason = '') {
     }
 }
 
+// Host: whether a resync waits for a peer's acknowledgement. Not for one
+// without the match (in the lobby only: a visitor; one that left it): it
+// ignores the snapshot, and waiting for it froze a migration's recovery for
+// its 20 s timeout (audit 2026-10-15, 21). Such a peer says so when the
+// pause reaches it (RESYNC_NO_MATCH), and is passed over until it is sent the
+// match (resyncHostScheduleJoin, a resync's full sync for it).
+const _hostPeersWithoutMatch = new Set();
+function _resyncPeerTakesPart(pid, fullSyncByPeer = null) {
+    if (fullSyncByPeer && fullSyncByPeer[pid]) return true;
+    return !_hostPeersWithoutMatch.has(pid);
+}
+function hostNotePeerHasMatch(pid) { _hostPeersWithoutMatch.delete(String(pid || '')); }
+function _hostNoteResyncNoMatch(conn, data) {
+    let pid = String((conn && conn.peer) || '');
+    if (!pid || !gameStarted) return;
+    let cache = lockstepResyncSnapshotCache;
+    // (One being sent the match with this resync has none yet.)
+    if (cache && cache.fullSyncByPeer && cache.fullSyncByPeer[pid]) return;
+    _hostPeersWithoutMatch.add(pid);
+    if (!lockstepResyncPauseActive || !lockstepResyncPendingAckByPeer || !Object.prototype.hasOwnProperty.call(lockstepResyncPendingAckByPeer, pid)) return;
+    let sid = String((data && data.sessionId) || '');
+    if (sid && lockstepResyncSessionId && sid !== lockstepResyncSessionId) return;
+    delete lockstepResyncPendingAckByPeer[pid];
+    netCounters.resyncNoMatchPeers = (netCounters.resyncNoMatchPeers | 0) + 1;
+    if (_isHostResyncPauseComplete()) _finishHostResyncPause('peers without the match');
+}
+
 function _isHostResyncPauseComplete() {
     if (!lockstepResyncPauseActive) return true;
     let map = (lockstepResyncPendingAckByPeer && typeof lockstepResyncPendingAckByPeer === 'object')
@@ -502,6 +529,7 @@ function _startHostResyncPause(reason = '', includeConfig = false, options = {})
             if (!c || !c.peer || isPeerExplicitlyRemoved(c.peer)) continue;
             let pid = String(c.peer);
             let isNew = !Object.prototype.hasOwnProperty.call(lockstepResyncPendingAckByPeer, pid);
+            if (isNew && pid !== requester && !_resyncPeerTakesPart(pid, cache.fullSyncByPeer)) continue;
             if (pid === requester) {
                 cache.sentTo.delete(c);
                 lockstepResyncPendingAckByPeer[pid] = false;
@@ -527,7 +555,7 @@ function _startHostResyncPause(reason = '', includeConfig = false, options = {})
 
     let ackMap = {};
     for (let c of connections) {
-        if (c && c.peer && !isPeerExplicitlyRemoved(c.peer)) ackMap[String(c.peer)] = false;
+        if (c && c.peer && !isPeerExplicitlyRemoved(c.peer) && _resyncPeerTakesPart(String(c.peer), fullSyncByPeer)) ackMap[String(c.peer)] = false;
     }
     // Paused from here: no tick runs until every peer restored the snapshot.
     // (Set again once the host restored it: a restore resets the lockstep.)
@@ -588,6 +616,102 @@ function _markHostResyncAck(peerId, sessionId) {
     if (_isHostResyncPauseComplete()) {
         _finishHostResyncPause('all peers acknowledged snapshot');
     }
+}
+
+// ---- the match's result: the host's ----
+// The win check runs on every peer; a guest whose state diverged reached an
+// end the host's did not (a false victory left it standing at its tick, the
+// host playing on, no repair asked for), or missed the host's (audit
+// 2026-10-15, 20). The host tells its result (MATCH_RESULT); a guest shows
+// its own end once the host's has the same winner, and asks for the match
+// (REQUEST_MATCH_SYNC: after the end, the final state) when they differ:
+// the host's ended and its own not by then, or its own ended while the host
+// seals on past it (or says nothing for GUEST_RESULT_WAIT_MS).
+const GUEST_RESULT_WAIT_MS = 6000;
+let _hostMatchResult = null, _guestLocalResult = null, _guestResultShown = false, _guestResultRepairAt = 0;
+function hostBroadcastMatchResult() {
+    if (!isHost || !isMultiplayer) return;
+    let msg = { type: 'MATCH_RESULT', t: gameTime, winner, m: matchStartSessionId || undefined };
+    for (let c of connections) { if (c && c.peer) { try { c.send(msg); } catch { } } }
+}
+function _guestTakeMatchResult(data) {
+    if (!netMatchTagOk(data && data.m)) return;
+    _hostMatchResult = { t: Math.floor(Number(data.t) || 0), winner: Math.floor(Number(data.winner)), at: performance.now(), session: String(matchStartSessionId || '') };
+    guestReviewMatchResult(performance.now());
+}
+function guestReviewMatchResult(now) {
+    if (isHost || !isMultiplayer || !gameStarted) return;
+    let H = _hostMatchResult && _hostMatchResult.session === String(matchStartSessionId || '') ? _hostMatchResult : null;
+    let L = null;
+    if (gameOver) L = _guestLocalResult || (_guestLocalResult = { t: gameTime, winner: Math.floor(Number(winner)), at: now });
+    else { _guestLocalResult = null; _guestResultShown = false; }
+    if (L && H) {
+        if (L.winner === H.winner) { if (!_guestResultShown) { _guestResultShown = true; showGameOver(); } return; }
+        _guestRepairResult(now, 'the host has another winner');
+        return;
+    }
+    if (H) {
+        if (gameTime >= H.t - 2 && now - H.at > 1500) _guestRepairResult(now, 'the match ended on the host');
+        return;
+    }
+    if (L) {
+        let pastEnd = Object.keys(lockstepBundleByTick || {}).some(k => Number(k) > currentTick) || Object.keys(lockstepPendingBundleByTick || {}).some(k => Number(k) > currentTick);
+        if (pastEnd || now - L.at > GUEST_RESULT_WAIT_MS) _guestRepairResult(now, 'the match did not end on the host');
+    }
+}
+function _guestRepairResult(now, reason) {
+    if (now - _guestResultRepairAt < 5000) return;
+    let conn = netGetHostConnection();
+    if (!conn) return;
+    _guestResultRepairAt = now;
+    netCounters.resultRepairs = (netCounters.resultRepairs | 0) + 1;
+    logLockstepWarning('Match result differs from the host; asking for the match', { reason, tick: currentTick });
+    try { conn.send({ type: 'REQUEST_MATCH_SYNC', tick: currentTick, reason: 'match result: ' + reason }); } catch { }
+}
+// Host: the teams its own state has out of the match (its win check, the
+// worker's): their peers spectate. (A guest's own win check no longer says
+// so: that was its state only.)
+let _hostTeamsOut = new Set();
+function noteTeamsDefeated(list) {
+    if (!isMultiplayer || !isHost || !gameStarted || !Array.isArray(list)) return;
+    let changed = false;
+    for (let t of list) {
+        let tid = Math.floor(Number(t));
+        if (!(tid >= 0) || _hostTeamsOut.has(tid)) continue;
+        _hostTeamsOut.add(tid);
+        if (setMatchRoleForTeam(tid, 'spectating')) changed = true;
+    }
+    if (changed) { broadcastLobbyState(true); renderOnlineLobby(); }
+}
+
+// The simulation worker was lost mid-match (sim_client.js
+// _simClientWorkerLost), the match's state with it (audit 2026-10-15, 19).
+// Once a new worker loaded (at most a few seconds; else the page simulates
+// the match), a guest asks its host for the whole match, as a reload gets it
+// (REQUEST_MATCH_SYNC); a host hands the match to a player and joins it
+// (hostHandOverMatch). Asked again every 8 s until the match is back (its
+// reload: startGame ends the hold), unless a load of it is under way. Alone
+// (solo, a host without players) there is nobody to get it from.
+function netRecoverLostSimulation(reason) {
+    if (typeof setMatchLoadOverlay === 'function') setMatchLoadOverlay(true, 'Recovering Match', 'The simulation stopped; getting the match again...');
+    let epoch = networkSessionEpoch, session = String(matchStartSessionId || ''), loadGen = _matchLoadGen;
+    let still = () => gameStarted && !gameOver && epoch === networkSessionEpoch && String(matchStartSessionId || '') === session
+        && typeof simClientLostPending === 'function' && simClientLostPending();
+    let stopped = text => { if (typeof setMatchLoadOverlay === 'function') setMatchLoadOverlay(true, 'Simulation stopped', text); };
+    let ask = () => {
+        if (!still()) return;
+        if (!isMultiplayer) { stopped('The simulation failed (' + reason + ').'); return; }
+        if (_matchLoadGen !== loadGen) { loadGen = _matchLoadGen; setTimeout(ask, 8000); return; }
+        if (isHost) {
+            if (!hostHandoverActive() && !hostHandOverMatch(reason)) stopped('No other player can take the match over; waiting for one.');
+        } else {
+            let hostConn = netGetHostConnection();
+            netCounters.lostSimulationRequests = (netCounters.lostSimulationRequests | 0) + 1;
+            if (hostConn) { try { hostConn.send({ type: 'REQUEST_MATCH_SYNC', reason: 'simulation lost: ' + reason, tick: currentTick }); } catch { } }
+        }
+        setTimeout(ask, 8000);
+    };
+    (typeof simClientWhenLoaded === 'function' ? simClientWhenLoaded(5000) : Promise.resolve()).then(ask);
 }
 
 // Host: give a peer that has no running match (page reload, late spectator)
@@ -1546,7 +1670,14 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing') {
 }
 
 // Guest: leave the resync pause once the host says everyone is restored.
+// Guest: the recovery sessions it resumed from (the last few): a pause of one
+// of them that comes after its resume (reordered, or resent) is old, and
+// paused a recovered guest again until its 8 s timeout (audit 2026-10-15,
+// 17).
+const _guestResyncDone = [];
+function _guestResyncDoneHas(sessionId) { return !!sessionId && _guestResyncDone.includes(sessionId); }
 function _guestResumeAfterResync(sessionId) {
+    if (sessionId && !_guestResyncDone.includes(sessionId)) { _guestResyncDone.push(sessionId); if (_guestResyncDone.length > 32) _guestResyncDone.shift(); }
     lockstepPendingResumeSessionId = '';
     lockstepResyncPauseActive = false;
     lockstepResyncSessionId = '';
@@ -2230,7 +2361,7 @@ function _hostPeerStopsPlaying(pid) {
 // host never (a guest's RETURN_TO_LOBBY sent the host back to the lobby; a
 // guest's PLAYER_REMOVED_FROM_MATCH removed a player on the host).
 const NET_HOST_ONLY_MESSAGES = new Set(['TICK_BUNDLE', 'TICK_HASHES', 'TICK_COMMIT', 'TICK_UNAVAILABLE', 'RESYNC_AT', 'RESYNC_PATCH', 'JOIN_LIVE_ACK',
-    'NET_STATS', 'START_GAME_PREPARE', 'START_GAME', 'START_SPECTATE', 'REJOIN_RESUME', 'HOST_CLOSED_LOBBY', 'HOST_MOVED', 'LOBBY_STATE',
+    'NET_STATS', 'START_GAME_PREPARE', 'START_GAME', 'START_SPECTATE', 'REJOIN_RESUME', 'HOST_CLOSED_LOBBY', 'HOST_MOVED', 'HOST_HANDOVER', 'MATCH_RESULT', 'LOBBY_STATE',
     'START_GAME_COUNTDOWN', 'START_GAME_ALL_READY', 'SPECTATE_UNAVAILABLE', 'MATCH_STATE_SNAPSHOT', 'LOCKSTEP_RESYNC_PAUSE',
     'DUPLICATE_UID_ACTIVE', 'RETURN_TO_LOBBY', 'REMATCH_STATE', 'PLAYER_REMOVED_FROM_MATCH']);
 function _netFromHostOk(conn, type) {
@@ -2427,7 +2558,13 @@ function _handleConnectionMessage(conn, data) {
         broadcastLobbyState(true);
         renderOnlineLobby();
     } else if (type === 'REQUEST_MATCH_SYNC' && isHost) {
-        if (!gameStarted || gameOver) return;
+        if (!gameStarted) return;
+        // (After the end: a guest whose state did not end as ours, the
+        // final state for it now; no tick runs any more.)
+        if (gameOver) {
+            if (conn && conn.peer && typeof _resyncHostSendJoin === 'function') _resyncHostSendJoin(conn, { T: currentTick, join: normalizeMatchRole(matchRoleByPeerId[conn.peer], 'playing') });
+            return;
+        }
         if (lockstepStrictDebugMode) {
             stopLockstepDebugMatch('match sync requested in exact lockstep mode', {
                 tick: Math.floor(Number((data && data.tick) || currentTick) || 0),
@@ -2490,13 +2627,23 @@ function _handleConnectionMessage(conn, data) {
         _setLobbyStatus(data.reason || 'Spectate unavailable right now.', '#fa4');
     } else if (type === 'MATCH_STATE_SNAPSHOT' && !isHost) {
         _guestReceiveSnapshot(conn, data);
+    } else if (type === 'MATCH_RESULT' && !isHost) {
+        _guestTakeMatchResult(data);
+    } else if (type === 'HOST_HANDOVER' && !isHost) {
+        guestTakeHandedOverMatch(conn, data);
+    } else if (type === 'HOST_HANDOVER_DONE' && isHost) {
+        hostHandoverDone(conn, data);
+    } else if (type === 'RESYNC_NO_MATCH' && isHost) {
+        _hostNoteResyncNoMatch(conn, data);
     } else if (type === 'MATCH_STATE_SNAPSHOT_APPLIED' && isHost) {
         _markHostResyncAck(conn && conn.peer ? conn.peer : '', data && data.sessionId ? String(data.sessionId) : '');
     } else if (type === 'LOCKSTEP_RESYNC_PAUSE' && !isHost) {
         let active = !!(data && data.active);
         let sessionId = String((data && data.sessionId) || '');
         if (active) {
-            if (!gameStarted) return;
+            // (No match here: the host need not wait for us.)
+            if (!gameStarted) { try { conn.send({ type: 'RESYNC_NO_MATCH', sessionId }); } catch { } return; }
+            if (_guestResyncDoneHas(sessionId)) { netCounters.lateResyncPausesDropped = (netCounters.lateResyncPausesDropped | 0) + 1; return; }
             lockstepResyncPauseActive = true;
             if (sessionId) lockstepResyncSessionId = sessionId;
             if (!lockstepResyncRequestedAt) lockstepResyncRequestedAt = performance.now();
@@ -2568,7 +2715,7 @@ function _handleConnectionMessage(conn, data) {
 
 // Guest: a resync snapshot arrived; decode, apply, acknowledge.
 function _guestReceiveSnapshot(conn, data) {
-    if (!gameStarted) return;
+    if (!gameStarted) { try { conn.send({ type: 'RESYNC_NO_MATCH', sessionId: String((data && data.sessionId) || '') }); } catch { } return; }
     if (lockstepStrictDebugMode) {
         stopLockstepDebugMatch('match snapshot received in exact lockstep mode', { tick: currentTick, sessionId: String((data && data.sessionId) || '') });
         return;
@@ -2877,6 +3024,12 @@ function resetWorldState() {
     lockstepLastResendRequestAtByTick = {};
     lockstepHostHardResyncRequestedByTick = {};
     nextLocalActionSeq = 1;
+    _localActionEpoch = _newLocalActionEpoch();
+    _hostPeersWithoutMatch.clear();
+    _hostTeamsOut = new Set();
+    _guestLocalResult = null;
+    _guestResultShown = false;
+    if (typeof simClientLostClear === 'function') simClientLostClear();
     waitingForRemoteSince = 0;
     lockstepLastHardResyncRequestAt = 0;
     lockstepHardResyncInFlightUntil = 0;
@@ -3395,7 +3548,10 @@ function joinGame(hostId, opts = null) {
         if (!gameStarted) renderOnlineLobby();
         // A reloaded page may know the match moved (or that it hosted it).
         if (!rejoin && joinWithMatchRecord(hostId)) return;
-        let migrate = !!(opts && opts.migrate);
+        // (fullSync: this page has no state of the match to resume from, its
+        // simulation lost: the whole match, as a reload gets it.)
+        let fullSync = !!(opts && opts.fullSync);
+        let migrate = !!(opts && opts.migrate) && !fullSync;
         // Moving the match: say which successors we found unreachable.
         let failed = migrate && hostMigration ? hostMigration.candidates.slice(0, hostMigration.index) : [];
         let conn = peer.connect(hostId, { metadata: { migrate, sessionId: gameStarted ? matchStartSessionId : '', failed } });
@@ -3411,7 +3567,7 @@ function joinGame(hostId, opts = null) {
                 rules: SIM_RULES_REVISION,
                 migrate,
                 // A client that still runs the match can resume from its tick.
-                resumeTick: gameStarted ? currentTick : -1,
+                resumeTick: gameStarted && !fullSync ? currentTick : -1,
                 sessionId: gameStarted ? matchStartSessionId : ''
             });
         };

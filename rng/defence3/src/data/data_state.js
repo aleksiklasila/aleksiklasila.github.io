@@ -661,22 +661,60 @@ function _requestAdjacencyRecalcForThing(thing, pad = 1) {
 // (tim: a tower's cooldown deadline, Tower._cdUntil; a barrack's or
 // spawner's spawn timer.)
 // (mines: the tiles holding mines, a compact list (mineN of them; mineAt:
-// a tile's place + 1, 0 none): the hash takes every mine every hash, see
-// _snapTickHashStatic; a Set's walk was most of its ~0.8 ms a tick with
-// 20k mines.)
-const _ST = { n: 0, code: null, own: null, uc: null, val: null, tim: null, rcnt: null, rw: 0, mineArr: new Int32Array(64), mineN: 0, mineAt: null };
+// a tile's place + 1, 0 none). The hash takes every mine every hash (see
+// _snapTickHashStatic) as its region's sum of their terms (mineSum, by
+// dense region ry * rw + rx, kept as their values change: _stMineTerm; the
+// regions with mines in a compact list, mineReg*): the same sums as each
+// mine's term added there, without 20k mines read a tick (scattered tiles,
+// ~0.5 ms at 105k units).)
+const _ST = { n: 0, code: null, own: null, uc: null, val: null, tim: null, rcnt: null, rw: 0, mineArr: new Int32Array(64), mineN: 0, mineAt: null,
+    mineSum: null, mineRc: null, mineRegArr: new Int32Array(64), mineRegN: 0, mineRegAt: null };
+// A mine's term in its region's sum (the state hash's, as it was per mine).
+function _stMineTerm(t) {
+    const T = _ST, gx = t % GRID_W, gy = (t - gx) / GRID_W, v = T.val[t];
+    let h = ((Math.imul(gx, 4099) + gy) ^ T.code[t]) ^ 0x6d1;
+    h = (v | 0) === v ? Math.imul(h ^ v, 16777619) : _snapHNum(h, v);
+    return Math.imul(h ^ (h >>> 15), 2246822519) | 0;
+}
+function _stMineRegions() {
+    const T = _ST, nr = T.rcnt ? T.rcnt.length : 0;
+    if (!T.mineSum || T.mineSum.length !== nr) { T.mineSum = new Int32Array(nr); T.mineRc = new Int32Array(nr); T.mineRegAt = new Int32Array(nr); T.mineRegN = 0; }
+}
 function _stMineAdd(t) {
     const T = _ST;
     if (!T.mineAt || T.mineAt.length !== T.n) T.mineAt = new Int32Array(T.n);
     if (T.mineAt[t]) return;
     if (T.mineN === T.mineArr.length) { const a = new Int32Array(T.mineArr.length * 2); a.set(T.mineArr); T.mineArr = a; }
     T.mineArr[T.mineN] = t; T.mineAt[t] = ++T.mineN;
+    _stMineRegions();
+    const r = _stRegion(t);
+    if (T.mineRc[r]++ === 0) {
+        if (T.mineRegN === T.mineRegArr.length) { const a = new Int32Array(T.mineRegArr.length * 2); a.set(T.mineRegArr); T.mineRegArr = a; }
+        T.mineRegArr[T.mineRegN] = r; T.mineRegAt[r] = ++T.mineRegN;
+    }
+    T.mineSum[r] = (T.mineSum[r] + _stMineTerm(t)) | 0;
 }
 function _stMineDel(t) {
     const T = _ST, i = T.mineAt ? T.mineAt[t] - 1 : -1;
     if (i < 0) return;
+    const r = _stRegion(t);
+    T.mineSum[r] = (T.mineSum[r] - _stMineTerm(t)) | 0;
+    if (--T.mineRc[r] === 0) {
+        const k = T.mineRegAt[r] - 1, lastR = T.mineRegArr[--T.mineRegN];
+        T.mineRegArr[k] = lastR; T.mineRegAt[lastR] = k + 1; T.mineRegAt[r] = 0;
+        T.mineSum[r] = 0;
+    }
     const last = T.mineArr[--T.mineN];
     T.mineArr[i] = last; T.mineAt[last] = i + 1; T.mineAt[t] = 0;
+}
+// A mine's amount in the table, its region's sum kept.
+function _stMineVal(t, v) {
+    const T = _ST;
+    if (!T.mineAt || !T.mineAt[t]) { T.val[t] = v; return; }
+    const r = _stRegion(t);
+    T.mineSum[r] = (T.mineSum[r] - _stMineTerm(t)) | 0;
+    T.val[t] = v;
+    T.mineSum[r] = (T.mineSum[r] + _stMineTerm(t)) | 0;
 }
 const ST_OWNER_NONE = 0x7ff9;
 function _stOwnerWord(v) { return (v | 0) === v ? v : ST_OWNER_NONE; }
@@ -685,6 +723,7 @@ function structTableReset() {
     for (const e of _activeTileEntities) if (e && e._stT >= 0) e._stT = -1;
     const T = _ST;
     T.mineN = 0; if (T.mineAt) T.mineAt.fill(0);
+    T.mineRegN = 0; if (T.mineSum) { T.mineSum.fill(0); T.mineRc.fill(0); T.mineRegAt.fill(0); }
     if (T.n !== GRID_W * GRID_H) { T.n = 0; T.code = T.own = T.uc = T.val = T.tim = T.rcnt = null; }
     else { T.code.fill(0); T.own.fill(0); T.uc.fill(0); T.val.fill(0); T.tim.fill(0); T.rcnt.fill(0); }
 }
@@ -712,7 +751,7 @@ function structTableSet(gx, gy, prev, ref) {
 }
 function _stWrite(ref, t) {
     const T = _ST;
-    if (ref._stMine) { T.own[t] = ST_OWNER_NONE; T.val[t] = Number(ref._mv); T.tim[t] = 0; }
+    if (ref._stMine) { T.own[t] = ST_OWNER_NONE; _stMineVal(t, Number(ref._mv)); T.tim[t] = 0; }
     else { T.own[t] = _stOwnerWord(ref._ow); T.uc[t] = ref._uc ? 1 : 0; T.val[t] = Number(ref._en); T.tim[t] = ref._stCode === 0x22 ? Number(ref._cdUntil) || 0 : ref._stTimer ? Number(ref._spt) || 0 : 0; }
 }
 // A structure's entry written again from its fields (a restore sets some
@@ -756,7 +795,7 @@ function structTableAccessors(C, code, mineKey = null) {
         Object.defineProperty(P, '_stMine', { value: true, enumerable: false });
         Object.defineProperty(P, mineKey, { enumerable: true, configurable: true,
             get() { return this._mv; },
-            set(v) { this._mv = v; const t = this._stT; if (t >= 0) _ST.val[t] = Number(v); } });
+            set(v) { this._mv = v; const t = this._stT; if (t >= 0) _stMineVal(t, Number(v)); } });
         return;
     }
     Object.defineProperty(P, 'owner', { enumerable: true, configurable: true,
@@ -1694,6 +1733,13 @@ let lockstepLastFinalizeSentAtByTick = {}; // host only: {tick: timestamp} for p
 let lockstepLastResendRequestAtByTick = {}; // host/guest: {tick: timestamp}
 let lockstepHostHardResyncRequestedByTick = {}; // host only: {tick: true}
 let nextLocalActionSeq = 1;
+// A command's id is actor:epoch:seq; the epoch is new at every reset of the
+// world (a guest's reload of the match starts its count again under the same
+// peer id: without it a new command took the id of one that ran before, and
+// the host's record of the commands that ran dropped it: main.js
+// lockstepCommandRan).
+function _newLocalActionEpoch() { return Math.floor(Math.random() * 2176782336).toString(36); }
+let _localActionEpoch = _newLocalActionEpoch();
 let waitingForRemoteSince = 0;
 let lockstepLastHardResyncRequestAt = 0;
 let lockstepHardResyncInFlightUntil = 0;

@@ -5544,8 +5544,14 @@ function _visCoverUnitsPost() {
     simParallelBind('vt.agrid', _spatialAreaGridFlat());
     _simAreaCsr();
     simParallelBind('vt.aoff', _simParReg['area.off']); simParallelBind('vt.anb', _simParReg['area.nb']);
+    // (Which areas are: made again with the areas only (_areaById is made
+    // whole, never changed in place); every area each tick was ~0.7 ms on a
+    // big map.)
     const aok = C.uaok;
-    for (let a = 0; a < A; a++) aok[a] = _areaById[a] ? 1 : 0;
+    if (C.uaokFor !== _areaById || C.uaokArr !== aok || C.uaokA !== A) {
+        for (let a = 0; a < A; a++) aok[a] = _areaById[a] ? 1 : 0;
+        C.uaokFor = _areaById; C.uaokArr = aok; C.uaokA = A;
+    }
     if (++C.ustamp >= (1 << 24)) { C.useed.fill(0); C.ustamp = 1; }
     C.ucnt.fill(0);
     // The seeds, then the spread, as one chain (the spread no longer posted
@@ -5703,6 +5709,12 @@ function processVisibleSimulationFrame(simTime) {
         }
         _tickAccumulator = pumpSimulationTicks(now, _tickAccumulator, 5);
     }
+    // (A guest's end waits for the host's word; no tick runs:
+    // utils_networking.js guestReviewMatchResult.)
+    else if (gameStarted && gameOver && isMultiplayer && !isHost) {
+        netMaintain(now);
+        guestReviewMatchResult(now);
+    }
 }
 
 // Runs due ticks. In multiplayer a tick runs only once the host sealed it;
@@ -5718,7 +5730,11 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
         netHostUpdateSimulationPace(now);
         driveStrictLockstep(now, currentTick);
         resyncHostFlushHashes(now);
+        if (!isHost) guestReviewMatchResult(now);
     }
+    // (The simulation worker was lost: no tick until the match is back, see
+    // sim_client.js simClientLostHold.)
+    if (typeof simClientLostHold === 'function' && simClientLostHold(now)) return Math.min(accumulator, netSimulationTickMs());
     let catchUp = 0;
     if (isMultiplayer && !isHost) {
         let buffered = getLockstepBufferedTicks();

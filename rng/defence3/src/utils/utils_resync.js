@@ -370,6 +370,7 @@ function applyResyncPatch(text, full) {
     dirtyGrid = true;
     _minimapStaticDirty = true;
     if (typeof requestBuildMenuRefresh === 'function') requestBuildMenuRefresh();
+    if (typeof reviewLocalDefeat === 'function') reviewLocalDefeat();
     _resyncGuestPatchDone(tick);
 }
 
@@ -601,6 +602,7 @@ function resyncPacketHorizonTick(now = performance.now()) {
 function resyncHostScheduleJoin(conn, role) {
     if (!isHost || !conn || !conn.peer) return;
     let pid = String(conn.peer);
+    if (typeof hostNotePeerHasMatch === 'function') hostNotePeerHasMatch(pid);
     let normalizedRole = normalizeMatchRole(role, 'spectating');
     if (normalizedRole === 'playing') resyncHostJoining.set(pid, performance.now());
     else resyncHostJoining.delete(pid);

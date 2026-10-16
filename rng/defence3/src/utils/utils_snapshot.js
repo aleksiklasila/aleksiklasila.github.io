@@ -803,16 +803,14 @@ function _snapTickHashStatic(t, slice, allSlices, regions, push) {
         const round = Math.floor(t / SNAP_HASH_SLICES) % SNAP_HASH_GRID_ROUNDS;
         hashStatic(listOf(slice + SNAP_HASH_SLICES * round));
         if (SNAP_HASH_STATIC_CORE_ALL) _snapStaticCoreSweep(slice, round, regions);
-        // (Every mine, every hash: read from the table, and a mine that
-        // differs shows nowhere else for a long time.)
-        if (typeof _ST !== 'undefined' && _ST.n && _ST.mineN) {
-            const T = _ST, MA = T.mineArr;
-            for (let i = 0, nm = T.mineN; i < nm; i++) {
-                const tl = MA[i];
-                const gx = tl % GRID_W, gy = (tl - gx) / GRID_W, v = T.val[tl];
-                let h = ((Math.imul(gx, 4099) + gy) ^ T.code[tl]) ^ 0x6d1;
-                h = (v | 0) === v ? Math.imul(h ^ v, 16777619) : _snapHNum(h, v);
-                _snapRegionAdd(regions, Math.floor(gy / rt) * 1024 + Math.floor(gx / rt), (Math.imul(h ^ (h >>> 15), 2246822519)) >>> 0);
+        // (Every mine, every hash, and a mine that differs shows nowhere
+        // else for a long time: each region's sum of its mines' terms, kept
+        // by the table (data_state.js _stMineTerm).)
+        if (typeof _ST !== 'undefined' && _ST.n && _ST.mineN && _ST.mineSum) {
+            const T = _ST, RA = T.mineRegArr, SUM = T.mineSum, rw = T.rw;
+            for (let k = 0, nr = T.mineRegN; k < nr; k++) {
+                const ri = RA[k], ry = (ri / rw) | 0;
+                _snapRegionAdd(regions, ry * 1024 + (ri - ry * rw), SUM[ri]);
             }
         }
         // (The worker reservations' per-region digests, every slice: kept by

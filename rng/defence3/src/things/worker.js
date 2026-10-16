@@ -4047,7 +4047,7 @@ function queueAction(action) {
     let tick = _localActionTick();
     if (!localInputBuffer[tick]) localInputBuffer[tick] = [];
     let actorId = myPeerId || `p${localPlayerId}`;
-    let finalAction = { ...action, teamId: localPlayerId, netId: `${actorId}:${nextLocalActionSeq++}` };
+    let finalAction = { ...action, teamId: localPlayerId, netId: `${actorId}:${_localActionEpoch}:${nextLocalActionSeq++}` };
     if (typeof noteOrderMarker === 'function') noteOrderMarker(action, tick);
     // A long id list goes compactly (main.js actionIdsEncode; every peer,
     // this one too, decodes it when it processes the action).

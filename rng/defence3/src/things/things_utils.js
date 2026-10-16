@@ -871,6 +871,8 @@ function _noteNewUnitForStats(u) {
 function resetNewUnitsForStats() {
     _newUnitsForStats = []; _newUnitsForStatsLost = false;
     for (let u of units) if (u && u._needsStatsInit) _newUnitsForStats.push(u);
+    // (A new world, a restore: the stat maps' tables may be other objects.)
+    if (typeof _effBaseClear === 'function') _effBaseClear();
 }
 
 // A strided pass: the units at indices congruent to the tick modulo the
@@ -1255,6 +1257,58 @@ function _effRowsReset() {
     _effRowObj = []; _effRowN = 0;
     if (_effRowLk) _effRowLk.fill(-1);
 }
+// ---- Base entries ----
+// Per (owner, spatial type, base level): the base tables a unit of them has
+// after its full path at the (owner, type) stat tables' version eff.bVer (the
+// tables themselves, their window radius eff.bRad and maxEnergy: eff.bMaxE
+// for the kernel, Float32 as the unit's column holds it; the double here),
+// noted by the full path (_effBaseNote). A unit behind its tables whose base
+// entry and new level's row are of the current version is taken in the
+// kernel (SIM_KERNEL_EFF_UNITS: its full path's result; the caller gives it
+// the tables and maxEnergy, flags 5 and 6): after a research ~700 units a
+// tick at 105k took the full path (~4 us each, of a ~4.5 ms step).
+const EFF_BASE_NONE = -2147483648;
+let _effBase = { dims: '', ver: null, rad: null, maxE: null, maxE64: null, obj: [] };
+function _effBaseLookup() {
+    const [NP, NT, L1] = _effRowDims(), dims = NP + ':' + NT + ':' + L1, B = _effBase;
+    if (B.dims !== dims || !B.ver) {
+        const n = Math.max(1, NP * NT * L1);
+        B.ver = simSharedArray(Int32Array, n); B.ver.fill(EFF_BASE_NONE);
+        B.rad = simSharedArray(Int32Array, n); B.maxE = simSharedArray(Float32Array, n);
+        B.maxE64 = new Float64Array(n); B.obj = new Array(n).fill(null); B.dims = dims;
+        simParallelBind('eff.bVer', B.ver); simParallelBind('eff.bRad', B.rad); simParallelBind('eff.bMaxE', B.maxE);
+    }
+    return B;
+}
+function _effBaseClear() {
+    const B = _effBase;
+    if (!B.ver) return;
+    B.ver.fill(EFF_BASE_NONE);
+    B.obj.fill(null);
+}
+function _effBaseIndex(o, ty, bl) {
+    const [NP, NT, L1] = _effRowDims();
+    if (!(o >= 0 && o < NP && ty >= 0 && ty < NT && bl >= 1 && bl < L1) || bl !== Math.floor(bl)) return -1;
+    return (o * NT + ty) * L1 + bl;
+}
+// u just took its base tables at its stat tables' version (the full path).
+function _effBaseNote(u) {
+    const c = u && u._us;
+    if (!c || typeof simSharedArray !== 'function') return;
+    const s = u._si, b = u.preComputedBase;
+    if (!c.esOk[s] || !b || typeof b !== 'object') return;
+    const ver = c.esVer[s];
+    if (ver !== _unitStatsVerOf(u)) return;
+    const mx = Number(b.maxEnergy);
+    if (!Number.isFinite(mx) || Number(u.maxEnergy) !== mx) return;
+    const B = _effBaseLookup(), i = _effBaseIndex(c.owner[s], c.esType[s], c.baseLevel[s]);
+    if (i < 0) return;
+    B.obj[i] = b; B.maxE64[i] = mx; B.maxE[i] = mx; B.rad[i] = c.esRad[s]; B.ver[i] = ver;
+}
+// Off: units behind their tables take the full path, as before (tests:
+// both ways give the same state).
+let EFF_BEHIND_IN_KERNEL = true, _effBehindInKernel = 0;
+
 // u's tables (just applied: preComputed, the effective ones) as its row.
 function _effRowAttach(u) {
     const c = u && u._us;
@@ -1321,6 +1375,7 @@ function _effStatsFullUnit(u, canUseSpatialCounts, chunkPx) {
         _unitStatsNotifyHeld = true;
         try { applyUnitLevelScaling(u, baseLevel); } finally { _unitStatsNotifyHeld = held; }
         u.stackCount = baseStacks;
+        _effBaseNote(u);
     } else if (u._us && !u._us.esOk[u._si]) effStatsUnitBaseChanged(u);
     let similarCount = canUseSpatialCounts ? _effWindowCount(u, chunkPx) : 0;
     if (similarCount <= 0) {
@@ -1385,9 +1440,9 @@ function recalculateUnitEffectiveStats() {
         if (!_effFlags || _effFlags.length < m) { _effFlags = simSharedArray(Uint8Array, Math.max(1024, m * 2)); simParallelBind('eff.flag', _effFlags); }
         simParallelBind('ix.slots', slots); simParallelBind('spatial.types', spatialTypeCounts);
         const P = _simParams;
-        // (256 a job: a unit's window counts are costly, ~2.5 us; 1024 left
-        // a few long jobs and most helpers idle.)
-        P[0] = m; P[1] = 256; P[2] = step; P[3] = phase; P[4] = chunkPx; P[5] = CHUNKS_W; P[6] = CHUNKS_H;
+        // (64 a job: a unit's window counts are costly, ~2.5 us; 1024 left
+        // a few long jobs and most helpers idle, 256 a ~0.15 ms tail.)
+        P[0] = m; P[1] = 64; P[2] = step; P[3] = phase; P[4] = chunkPx; P[5] = CHUNKS_W; P[6] = CHUNKS_H;
         P[7] = spatialTypeStridePerBlock; P[8] = spatialUnitsComplexUnitTypeCount; P[9] = spatialUnitsComplexPlayerCount;
         P[15] = spatialTypeBlocksW; P[16] = SPATIAL_TYPE_BLOCK;
         P[10] = MAX_THING_LEVEL; P[11] = stamp;
@@ -1400,10 +1455,25 @@ function recalculateUnitEffectiveStats() {
         const VC = typeof _visCover !== 'undefined' ? _visCover : null, vcOn = !!VC && VC.syncedTick >= 0 && VC.adm === areaDistanceMatrix;
         P[20] = vcOn ? VC.gen : -1; P[21] = vcOn ? VC.players : 0; P[22] = SIM_SEP_ABSENT;
         simParallelBind('eff.tver', _unitStatsVerTable(spatialUnitsComplexPlayerCount)); P[14] = UNIT_STATS_VER_TYPES;
+        // (Units behind their tables in the kernel only when all of the
+        // share's fit the tick's cap: then which path takes one decides
+        // nothing, peer to peer (base entries and rows are this peer's own,
+        // made as it goes). Counted over: no entries yet, or another owner.)
+        P[23] = 0;
+        if (EFF_BEHIND_IN_KERNEL) {
+            _effBaseLookup();
+            const OK = c.esOk, EV = c.esVer, OW = c.owner, ET = c.esType, TV = _unitStatsVer, NV = UNIT_STATS_VER_TYPES;
+            let behindN = 0;
+            for (let j = 0; j < m && behindN <= behindLeft; j++) {
+                const s = slots[phase + j * step];
+                if (s >= 0 && (!OK[s] || EV[s] !== TV[OW[s] * NV + ET[s]])) behindN++;
+            }
+            if (behindN <= behindLeft) P[23] = 1;
+        }
         // (The upkeep bins, when kept: main.js _upkU.)
         const UK = typeof _upkU !== 'undefined' && _upkU && _upkU.cols === c && _upkU.cnt === _upkHist ? _upkU : null;
         P[12] = UK ? UK.np : 0; P[13] = UK ? UK.L1 : 0; P[17] = UK && _simParReg['upk.h'] ? _simParReg['upk.h'].length : 0;
-        simParallelRun(SIM_KERNEL_EFF_UNITS, Math.ceil(m / 256));
+        simParallelRun(SIM_KERNEL_EFF_UNITS, Math.ceil(m / 64));
         const F = _effFlags;
         for (let j = 0; j < m; j++) {
             const f = F[j];
@@ -1412,6 +1482,17 @@ function recalculateUnitEffectiveStats() {
             if (f === 4) {
                 // (Its row taken in the kernel, another vision range.)
                 if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(u);
+            } else if (f === 5 || f === 6) {
+                // (Behind its tables, taken in the kernel from its base entry
+                // and row: the base tables and maxEnergy, as its full path
+                // sets them; 6: another vision range.)
+                const s = slots[i], B = _effBase, bi = _effBaseIndex(c.owner[s], c.esType[s], c.baseLevel[s]);
+                const b = B.obj[bi];
+                u.preComputedBase = b;
+                u.basePreComputed = b;
+                u.maxEnergy = B.maxE64[bi];
+                _effBehindInKernel++;
+                if (f === 6 && typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(u);
             } else if (f === 1) {
                 // (The kernel set its stacks and levels.)
                 const s = slots[i], lvl = c.effectiveLevel[s];

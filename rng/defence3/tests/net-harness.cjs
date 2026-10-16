@@ -673,7 +673,7 @@ function createInstance(world, name, options = {}) {
             const T = ${Math.floor(tick)};
             if (!isHost && T <= lockstepHighestSentLocalTick) throw new Error('tick already sent: ' + T);
             if (lockstepCommittedByTick[T] || lockstepBundleByTick[T] || T < currentTick) throw new Error('tick sealed: ' + T);
-            const netId = (myPeerId || ('p' + localPlayerId)) + ':' + (nextLocalActionSeq++);
+            const netId = (myPeerId || ('p' + localPlayerId)) + ':' + _localActionEpoch + ':' + (nextLocalActionSeq++);
             (localInputBuffer[T] ||= []).push({ ...__scratch.qa, teamId: localPlayerId, netId });
             delete lockstepLocalPacketByTick[T];
             if (isHost && lockstepHostPacketsByTick[T] && myPeerId) delete lockstepHostPacketsByTick[T][myPeerId];
@@ -730,7 +730,7 @@ function createInstance(world, name, options = {}) {
         queueAction = function (action) {
             const before = nextLocalActionSeq;
             const r = __origQueue.apply(this, arguments);
-            if (nextLocalActionSeq !== before) __harnessHooks.issued((myPeerId || ('p' + localPlayerId)) + ':' + before, currentTick);
+            if (nextLocalActionSeq !== before) __harnessHooks.issued((myPeerId || ('p' + localPlayerId)) + ':' + _localActionEpoch + ':' + before, currentTick);
             return r;
         };
     })()`.replace(/__harnessHooks/g, '__hooks'));

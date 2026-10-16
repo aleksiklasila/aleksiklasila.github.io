@@ -1449,6 +1449,19 @@ function navTick() {
     }
     const J = _navJob, off = gameTime - J.start;
     while (J.step <= off && _navJob === J) _navJobStep(J, J.step++);
+    _navRushCheck();
+}
+// The window's second half with its fields not made: the helpers take them
+// first, more of them at once (simParallelBulkRush), so the install does not
+// make the rest on this thread. Scheduling only: the same fields.
+const NAV_RUSH_TICKS = Math.floor(NAV_SWAP_TICKS / 2);
+let _navRush = false;
+function _navRushCheck() {
+    const J = _navJob;
+    const rush = !!J && !!J.next && gameTime - J.start >= NAV_STEP_INSTALL - NAV_RUSH_TICKS && typeof simParallelBackgroundPending === 'function' && simParallelBackgroundPending(SIM_LANE_NAVX);
+    if (rush === _navRush) return;
+    _navRush = rush;
+    if (typeof simParallelBulkRush === 'function') simParallelBulkRush(rush ? SIM_LANE_NAVX : -1);
 }
 // Step 0 copies the walls; NAV_STEP_NODES starts the costs and the exit
 // nodes in the background (the helpers between the tick's other jobs);

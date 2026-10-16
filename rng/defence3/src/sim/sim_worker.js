@@ -112,8 +112,11 @@ function _simError(where, err) {
 
 // ---- side effects the page replays (sounds, flashes, alerts, particles, fx) ----
 let _simEvents = [];
-// Set when the simulation's win check found this player defeated.
+// Set when the simulation's win check found this player defeated (and
+// cleared by a restore or patch that shows its team alive: reviewLocalDefeat).
 let _simLocalDefeat = '';
+// The teams the win check found out (for the page's roles, a host's).
+let _simDefeatedTeams = [];
 // An entity as the page finds it: ['u', id] or ['b', gx, gy].
 function _simRef(e) {
     if (!e || typeof e !== 'object') return null;
@@ -134,6 +137,9 @@ function _simStubUi() {
     }
     // This player defeated (the win check's spectate mode): the page's to show.
     self.enterSpectateMode = mode => { _simLocalDefeat = String(mode || 'defeated'); };
+    self.reviewLocalDefeat = (alive = null) => { if (!gameStarted || gameOver) return; if (alive === null) alive = isTeamAliveNow(localPlayerId); _simLocalDefeat = alive ? '' : (_simLocalDefeat || 'defeated'); };
+    self.noteTeamsDefeated = list => { _simDefeatedTeams = Array.isArray(list) ? list.slice() : []; };
+    self.hostBroadcastMatchResult = () => { };
     self._simRecordSound = (type, x, y, sub) => { _simEvents.push(['s', type, x, y, sub === undefined ? '' : sub]); };
     self._simRecordDamage = (target, amount, owner) => { let r = _simRef(target); if (r) _simEvents.push(['d', r, amount, owner === undefined ? null : owner]); };
     self._simRecordAlert = (target, dmg, owner) => { let r = _simRef(target); if (r) _simEvents.push(['h', r, dmg, owner]); };
@@ -399,8 +405,11 @@ function _simAutoStep() {
 const _simNet = new Map();
 const SIM_NET_PART_CHARS = 60000;
 // A guest: the host's state its bundles are of (the host's epoch: a restore
-// there starts another; bundles of the one before no longer hold).
-let _simNetGen = 0;
+// there starts another; bundles of the one before no longer hold). Each
+// host counts its own: a new host's (a migration) starts the count again
+// (its lower counts were refused, and the worker took no ticks past a
+// stalled page: audit 2026-10-15, 18).
+let _simNetGen = 0, _simNetGenHost = '';
 function _simNetAdd(peer, dc) {
     if (!peer || !dc) return;
     const old = _simNet.get(peer);
@@ -447,6 +456,7 @@ function _simNetMessage(peer, e, data) {
     // (Bundles: from the match's host only, to a guest.)
     if (m.t !== 'B' || !arm || arm.role !== 'guest' || peer !== arm.host || !m.m || _simMode !== 'authority') return;
     const gen = (m.e | 0) + 1;
+    if (peer !== _simNetGenHost) { _simNetGenHost = peer; _simNetGen = 0; }
     if (gen < _simNetGen) return;
     _simNetGen = gen;
     const b = unpackTickBundleFromWire(m.m.w);
@@ -668,6 +678,7 @@ function _simRequest(msg) {
             // (The result: whether the decoder took it; null when it refused
             // it (another format or rules): nothing changed then.)
             result = !!snapDecodeState(JSON.parse(msg.args.text), { collectChanges: !msg.args.full });
+            if (result) reviewLocalDefeat();
             visibilityCacheTick = -1;
             updateVisibility(localPlayerId);
             if(presenting) simPresentationStart();
@@ -682,6 +693,7 @@ function _simRequest(msg) {
             _simEpoch = msg.args.epoch;
             _simEvents = [];
             _simLocalDefeat = '';
+            reviewLocalDefeat();
             // The page's world comes whole with the next frame.
             simFrameResetAll();
             simPresentationStart();

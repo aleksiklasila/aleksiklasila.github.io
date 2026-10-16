@@ -3,7 +3,9 @@
 The findings of a small multiplayer audit run in another session (user,
 2026-10-15), reproduced there against the code as it stood. Each is a bug to
 fix (user: fix every divergence and bug found, pre-existing or not). The
-status column is kept up to date; what was done for each is under "Fixes".
+status column is kept up to date; what was done for each is under "Fixes". Findings 16-21 came
+from a second audit (recovery: reloads, late messages, migration, worker
+death, injected divergence), 2026-10-16.
 
 | # | Pri | Finding | Where | Status |
 |---|---|---|---|---|
@@ -22,6 +24,12 @@ status column is kept up to date; what was done for each is under "Fixes".
 | 13 | P2 | Accepted late commands are not in snapshots. | snapshots | fixed |
 | 14 | P1 | Another client can claim a disconnected player's slot with that player's public profile id. | lobby / rejoin | fixed |
 | 15 | P2 | A start under high jitter failed (cause not found). | netcode | not reproduced |
+| 16 | P1 | Reloading a guest can run a command twice: while it joins, delayed packets are carried on without checking whether their commands already ran (one salvage click marked a building, the delayed duplicate unmarked it after the reload, on both peers). | `main.js` carry | fixed |
+| 17 | P2 | A late pause message freezes a recovered guest: a recovery's pause can arrive after its snapshot and resume, and the guest pauses again (stood at tick 94 while the host reached 121, until the 8 s timeout). | `utils_networking.js` | fixed |
+| 18 | P2 | A host migration can stop the worker's direct tick delivery: the worker compares the new host's generation counter with the old host's (each host's own count), so a successor with a lower count is refused. | `sim_worker.js` | fixed |
+| 19 | P1 | A worker failure mid-match never recovers: errors after load are only logged, the worker stays marked active and its ticks never complete (the host's: the match stalls; a guest's: that guest is stuck). Heartbeats stay healthy, so nothing else steps in. | `sim_client.js` | fixed |
+| 20 | P1 | A temporary desync can become a real defeat: a local automatic defeat sends the role change the host takes as a resignation (a king killed only in the guest's divergent state made the host resign that team and end the match). A false local victory left the guest stuck (tick 26, host 329) with no repair asked for. | `player.js`, `utils_networking.js` | fixed |
+| 21 | P2 | A lobby visitor can freeze a migration's recovery for 20 s: it waits for every connected peer, also ones that have not loaded the match (they ignore the snapshot). | `utils_networking.js` | fixed |
 
 ## Fixes
 
@@ -99,6 +107,50 @@ status column is kept up to date; what was done for each is under "Fixes".
     200-600 ms, 1-3 guests, with and without workers) all started and stayed
     in sync; most likely the same memory failure. Kept as test
     `multiplayer-jitter-start` (6 of them).
+
+16. Every peer keeps the ids of the commands in the ticks it sealed (host) or
+    ran, for 2400 ticks (`lockstepNoteRanCommands`; a successor host has them
+    too); a carried command found there is dropped (`lockstepCommandRan`, in
+    both carries and where carried commands join a packet). Command ids are
+    `peer:epoch:seq`, the epoch new at every reset of the world: a guest's
+    reload starts its count again under the same peer id, and its new
+    commands took the ids of old ones. Test `multiplayer-ran-once` (fails
+    with the check off: the copy was carried).
+17. A guest keeps the recovery sessions it resumed from (the last 32) and
+    drops a pause of one of them (`_guestResyncDoneHas`). Test
+    `multiplayer-recovery-late`.
+18. The worker's bundle generation is counted per host: a bundle from
+    another host than the last starts the count again (`_simNetGenHost`).
+    Test `multiplayer-recovery-late` (a lower count from the new host taken,
+    the old host's refused after).
+19. The page notices a worker silent for 10 s with work out (ticks,
+    requests; counted only while the page runs and work is out:
+    `simClientLostHold`), stops ticking, rejects what waited on it, starts a
+    new worker (up to 3 times) and, once that loaded, gets the match again: a
+    guest asks its host for the whole match (`REQUEST_MATCH_SYNC`, every 8 s
+    until it comes); a host hands the match to the first linked player in the
+    successor order (`HOST_HANDOVER`; it takes over as in a migration and
+    answers `HOST_HANDOVER_DONE`), moves its guests there and joins it for
+    the whole match (`demoteSelfToGuest(..., { fullSync })`, a join with no
+    tick to resume from). Every team plays on. Alone (solo, a host without
+    players) there is nobody to get it from: the overlay says so. Test
+    `multiplayer-worker-lost` (guest and host).
+20. A defeat the win check finds is automatic: it sends nothing (the host
+    took the guest's role change as a resignation) and a repair or restore
+    that shows the team alive undoes it (`reviewLocalDefeat`, the worker's
+    flag too). The host's roles follow the defeats its own state finds
+    (`noteTeamsDefeated`). The end of a match is the host's: it says its
+    result (`MATCH_RESULT`); a guest shows its own end once the host's has
+    the same winner, and asks for the match when they differ (its end while
+    the host seals past it, or 6 s without a word; the host's end and not
+    its own; the host answers after its end with the final state). The page
+    keeps reviewing while a guest's end waits. Test
+    `multiplayer-result-authority` (page and worker: a king killed in a
+    guest's state only, a false victory, a real end).
+21. A peer without the match that gets a recovery's pause or snapshot says
+    so (`RESYNC_NO_MATCH`); the host stops waiting for it and passes it over
+    in later recoveries until it is sent the match. Test
+    `multiplayer-recovery-late` (a lobby visitor: 100 ms, was 20 s).
 
 Validation in the audit's session: snapshot, rematch, cross-engine math and
 real shared-memory worker tests passed; the full worker recovery suite was

@@ -1334,22 +1334,6 @@ function getTeamDisplayColor(pid) {
     return teamColorById[pid] || PLAYER_COLORS[pid] || '#ccc';
 }
 
-function enterSpectateMode(mode = 'defeated') {
-    spectateMode = mode;
-    localDefeated = true;
-    fullVisibility = true;
-    selectedBuildItem = null;
-    selectedUnits = [];
-    selectedEntities = [];
-    activeSubGroups = {};
-    attackMoveMode = false;
-    if (isMultiplayer && !isHost && gameStarted && connections[0]) {
-        try { connections[0].send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating' }); } catch { }
-    }
-    requestBuildMenuRefresh();
-    updateInfoPanel();
-}
-
 function isTeamAliveByAssets(pid) {
     if (resignedTeams.has(pid)) return false;
     for (let t of towers) if (t.owner === pid) return true;

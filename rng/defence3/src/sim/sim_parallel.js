@@ -42,6 +42,15 @@ const SIM_PAR_CTL_WORDS = 128;
 // remake left the movement kernel to this thread alone: 114 ms ticks at
 // 400k a team). Where chunks run never changes what they make.
 const SIM_PAR_BG_CAP = 105, SIM_PAR_BG_RUN = 106;
+// A bulk lane behind its deadline (a navigation rebuild's window ending with
+// its fields not made: flownav.js navTick): its chunks taken right after the
+// tick's own lanes (the first SIM_PAR_BG_RUSH_AT of SIM_PAR_BG_ORDER: tick,
+// hash, index, heap growth, the tick's fields; ahead of the fields' lane it
+// starved it, and a flush waited for it instead), by up to helpers - 1 at
+// once (simParallelBulkRush); -1 none. (The install made what was left on
+// the simulation thread: 60-130 ms ticks in the chaos scenario's bursts,
+// the helpers busy with the tiers before it.)
+const SIM_PAR_BG_FIRST = 120, SIM_PAR_BG_RUSH_AT = 5;
 // A helper's kernel threw (the chunk still counts as done, so nobody waits
 // forever): the simulation thread throws at its next wait.
 const SIM_PAR_ERR = 104;
@@ -954,6 +963,7 @@ function simParallelInit(helperUrl, maxHelpers = null) {
     }
     if (!helpers.length) return 0;
     ctl[SIM_PAR_BG_CAP] = Math.max(1, helpers.length - 3);
+    ctl[SIM_PAR_BG_FIRST] = -1;
     _simPool = { ctl, helpers };
     return helpers.length;
 }
@@ -1246,6 +1256,15 @@ function simParallelBackgroundWait(lane = 1) {
     _simParCheckErr(ctl);
 }
 function simParallelBackgroundPending(lane = 1) { return !!_simBg[lane]; }
+// Rushes a bulk lane (lane), or none (-1): see SIM_PAR_BG_FIRST. Where chunks
+// run never changes what they make.
+function simParallelBulkRush(lane) {
+    const P = _simPool;
+    if (!P) return;
+    const on = lane >= 0;
+    Atomics.store(P.ctl, SIM_PAR_BG_CAP, Math.max(1, P.helpers.length - (on ? 1 : 3)));
+    Atomics.store(P.ctl, SIM_PAR_BG_FIRST, on ? lane : -1);
+}
 // Waits until the lane's chain has finished its stages up to `stage` (by
 // their place in the posted list, stages of no chunks counted as done),
 // taking chunks of those meanwhile; the job stays posted (the rest runs on).
@@ -1319,6 +1338,13 @@ function simParallelHelperMain() {
     const nextTask = () => new Promise(res => { channel.port1.onmessage = () => res(); channel.port2.postMessage(0); });
     async function loop() {
         for (;;) {
+            // (A short spin first: the simulation thread posts a tick's jobs
+            // one after another, and a wake through waitAsync is a task of
+            // this worker's event loop, late for a short job.)
+            if (SIM_PAR_SPIN_MS > 0 && Atomics.load(ctl, SIM_PAR_GEN) === seen) {
+                const until = performance.now() + SIM_PAR_SPIN_MS;
+                while (Atomics.load(ctl, SIM_PAR_GEN) === seen && performance.now() < until) { }
+            }
             let r = Atomics.waitAsync(ctl, SIM_PAR_GEN, seen);
             if (r.async) await r.value;
             let g = Atomics.load(ctl, SIM_PAR_GEN);
@@ -1348,8 +1374,12 @@ function simParallelHelperMain() {
             // is past its end.
             while (bgParams && Atomics.load(ctl, SIM_PAR_GEN) === seen) {
                 let ran = false;
-                for (let li = 0; li < SIM_PAR_BG_ORDER.length && !ran; li++) {
-                    const lane = SIM_PAR_BG_ORDER[li];
+                // (A rushed lane right after the tick's own ones.)
+                const first = Atomics.load(ctl, SIM_PAR_BG_FIRST), R = SIM_PAR_BG_RUSH_AT;
+                for (let li = 0; li <= SIM_PAR_BG_ORDER.length && !ran; li++) {
+                    const lane = first < 0 ? (li < SIM_PAR_BG_ORDER.length ? SIM_PAR_BG_ORDER[li] : -1)
+                        : li < R ? SIM_PAR_BG_ORDER[li] : li === R ? first : SIM_PAR_BG_ORDER[li - 1];
+                    if (lane < 0 || (li > R && lane === first)) continue;
                     const b = SIM_PAR_BG_BASE + lane * 8;
                     if (Atomics.load(ctl, b + SIM_PAR_BG_ID) < 0 || regVer < ctl[b + SIM_PAR_BG_REGVER]) continue;
                     // (A bulk lane: only while under its cap of helpers.)
@@ -1364,6 +1394,8 @@ function simParallelHelperMain() {
     }
 }
 let _simParHelperParams = null;
+// How long an idle helper looks for the next job before it waits (ms).
+const SIM_PAR_SPIN_MS = 0.25;
 
 
 // Same-owner same-type units around each due unit (things_utils.js
@@ -1388,7 +1420,9 @@ const _simEffUnitsW = _simWK(['ix.slots', 'unit.dead', 'unit.esOk', 'unit.esRad'
     '?upk.h', '?eff.tver', 'unit.esVer', 'unit.statRow', '?eff.rowOf', '?eff.rowVer', '?eff.rSpd', '?eff.rCost', '?eff.rRD', '?eff.rRA', '?eff.rRK', '?eff.rLzW',
     '?eff.rCb', '?eff.rCd', '?eff.rDmg', '?eff.rVis', '?eff.rChs', 'unit.mvOn', 'unit.mvFlags', 'unit.mvReach', 'unit.mvChs', 'unit.mvSpd', 'unit.mvCost',
     'unit.mvReachD', 'unit.mvReachA', 'unit.mvShoot', 'unit.mvRangeK', 'unit.lzFlags', 'unit.cbRange', 'unit.atkCd', 'unit.atkDmg', 'unit.spArea', 'unit.energy',
-    'unit.maxE', '?mv.areaBoxOk', '?eff.rVsA', 'unit.watched', 'unit.wTeam', 'unit.sepKey', 'unit.vsGen', 'unit.vsR', 'unit.vsA', 'unit.vsP1', 'unit.vsP2']);
+    'unit.maxE', '?mv.areaBoxOk', '?eff.rVsA', 'unit.watched', 'unit.wTeam', 'unit.sepKey', 'unit.vsGen', 'unit.vsR', 'unit.vsA', 'unit.vsP1', 'unit.vsP2',
+    // (Base entries: units behind their stat tables, P[23].)
+    '?eff.bVer', '?eff.bRad', '?eff.bMaxE']);
 SIM_KERNELS[SIM_KERNEL_EFF_UNITS] = function (R, P, chunk) { _simRust(_simEffUnitsW, P, chunk, 'k_eff_units', 'EFF_UNITS'); };
 
 // The units' visibility snapshot (renderer.js _visCoverUnits, a tier's

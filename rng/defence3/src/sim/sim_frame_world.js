@@ -239,6 +239,8 @@ function simFrameEncodeState(includeCells = true) {
     }
     let g = { gameTime, gameOver: !!gameOver, winner, resigned: [...resignedTeams], teams: activeTeamIds,
         defeat: typeof _simLocalDefeat === 'string' ? _simLocalDefeat : '',
+        // (The teams its win check found out: a host's roles follow them.)
+        defeated: typeof _simDefeatedTeams !== 'undefined' ? _simDefeatedTeams : [],
         // (The population caps: made each tick in the simulation, from its
         // houses and their stats; the page's HUD reads them.)
         caps: typeof playerPopCaps !== 'undefined' ? Array.from(playerPopCaps) : null,
@@ -560,7 +562,10 @@ function pageApplyState(st) {
         gameTime = g.gameTime;
         gameOver = g.gameOver;
         // The simulation's win check found this player defeated: spectate.
-        if (g.defeat && !localDefeated && !g.gameOver && typeof enterSpectateMode === 'function') enterSpectateMode(g.defeat);
+        // (Automatic: a repair there that shows the team alive undoes it.)
+        if (g.defeat && !localDefeated && !g.gameOver && typeof enterSpectateMode === 'function') enterSpectateMode(g.defeat, { auto: true });
+        else if (!g.defeat && localDefeated && typeof reviewLocalDefeat === 'function') reviewLocalDefeat(true);
+        if (Array.isArray(g.defeated) && g.defeated.length && typeof noteTeamsDefeated === 'function') noteTeamsDefeated(g.defeated);
         winner = g.winner;
         resignedTeams = new Set(g.resigned || []);
         if (Array.isArray(g.teams) && g.teams.length) activeTeamIds = g.teams;

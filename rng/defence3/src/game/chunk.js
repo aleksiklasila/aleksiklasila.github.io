@@ -166,11 +166,12 @@ function spatialCountsDeferEnd(keepKernel = false) {
         const S = _simUnitState;
         if (S && typeof SIM_KERNEL_SP_COUNTS === 'number') {
             const P = _simParams, n = S.owners.length;
-            P[0] = n; P[1] = 16384; P[2] = spatialUnitsComplexPlayerCount; P[3] = spatialUnitsComplexStridePerChunk; P[4] = spatialUnitsComplexStridePerPlayer;
+            // (4096 a job: 16384 left ~12 jobs, the last helper's tail ~0.2 ms.)
+            P[0] = n; P[1] = 4096; P[2] = spatialUnitsComplexPlayerCount; P[3] = spatialUnitsComplexStridePerChunk; P[4] = spatialUnitsComplexStridePerPlayer;
             P[5] = CHUNKS_W; P[6] = spatialBlockCols; P[7] = SPATIAL_BLOCK_SIZE;
             P[8] = spatialUnitsComplexUnitTypeCount; P[9] = spatialTypeBlocksW; P[10] = SPATIAL_TYPE_BLOCK;
             simParallelBind('spatial.types', spatialTypeCounts); P[11] = _simParReg['ix.bcount'] ? _simParReg['ix.bcount'].length : 0;
-            simParallelRun(SIM_KERNEL_SP_COUNTS, Math.ceil(n / 16384));
+            simParallelRun(SIM_KERNEL_SP_COUNTS, Math.ceil(n / 4096));
         }
     }
 }

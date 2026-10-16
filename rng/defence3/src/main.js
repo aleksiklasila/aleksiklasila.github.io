@@ -234,7 +234,7 @@ function _forEachUnitInTickOrderBody(fn, list, n) {
     const cand = _updateOrderCand, bcnt = _updateOrderRun;
     if (OUT) {
         simParallelBind('ix.slots', slots);
-        const P = _simParams, per = 256;
+        const P = _simParams, per = 64;
         P[0] = n; P[1] = B; P[2] = per;
         simParallelRun(SIM_KERNEL_UPD_CAND, Math.ceil(nb / per));
     } else {
@@ -288,8 +288,8 @@ function _forEachUnitInTickOrderBody(fn, list, n) {
     // recoil): dead now, as Unit.update would have marked them.
     if (OUT) {
         const P = _simParams, ns = S.owners.length;
-        P[0] = ns; P[1] = 8192;
-        simParallelRun(SIM_KERNEL_HELD_DEAD, Math.ceil(ns / 8192));
+        P[0] = ns; P[1] = 2048;
+        simParallelRun(SIM_KERNEL_HELD_DEAD, Math.ceil(ns / 2048));
         // (And those on a tile that became a wall during the pass.)
         simPassWallFixups(S);
     }
@@ -4582,6 +4582,7 @@ function startGame() {
     popupControlGroups = {};
     activePopupControlGroupKey = '';
     localDefeated = false;
+    localDefeatAuto = false;
     spectateMode = 'none';
     resignedTeams = new Set();
     graphMetric = 'units';
@@ -5548,8 +5549,11 @@ function _hostCarryLatePacket(peerId, rawPacket, late) {
     late.delete(peerId);
     if (packet.actions.length === 0) return;
     let carry = lockstepHostCarryByPeer[peerId] || (lockstepHostCarryByPeer[peerId] = []);
-    for (let a of packet.actions) carry.push(a);
-    netCounters.lateCommandsCarried = (netCounters.lateCommandsCarried || 0) + packet.actions.length;
+    for (let a of packet.actions) {
+        if (lockstepCommandRan(a)) { netCounters.ranCommandsDropped = (netCounters.ranCommandsDropped | 0) + 1; continue; }
+        carry.push(a);
+        netCounters.lateCommandsCarried = (netCounters.lateCommandsCarried || 0) + 1;
+    }
 }
 
 // Host: commands of a peer the match is being reloaded on (resyncHostIsJoining:
@@ -5568,10 +5572,52 @@ function _hostCarryJoiningCommands(peerId, rawPacket) {
     for (let a of packet.actions) {
         let id = a && a.netId;
         if (id && seen.has(id)) continue;
+        // (A copy of a packet that was in a sealed tick before the reload: a
+        // resend or a delay. Its commands ran.)
+        if (lockstepCommandRan(a)) { netCounters.ranCommandsDropped = (netCounters.ranCommandsDropped | 0) + 1; continue; }
         if (id) seen.add(id);
         carry.push(a);
         netCounters.lateCommandsCarried = (netCounters.lateCommandsCarried || 0) + 1;
     }
+}
+
+// Every peer: the ids of the commands in the ticks sealed (host) or run, for
+// LOCKSTEP_RAN_KEEP_TICKS (on every peer: a successor host has them too).
+// A command is run once: a copy of a sealed tick's packet that reaches the
+// host late (a resend, a delay) while its sender rejoins is not carried on
+// to run again (audit 2026-10-15, 16). (Ids are unique over a guest's
+// reloads: worker.js queueAction, _localActionEpoch.)
+const LOCKSTEP_RAN_KEEP_TICKS = 2400;
+let _lockstepRan = { match: '', ids: new Map(), byTick: new Map() };
+function _lockstepRanOfMatch() {
+    let R = _lockstepRan, m = String(matchStartSessionId || '');
+    if (R.match !== m) R = _lockstepRan = { match: m, ids: new Map(), byTick: new Map() };
+    return R;
+}
+function lockstepNoteRanCommands(packets, tick) {
+    if (!Array.isArray(packets)) return;
+    let R = _lockstepRanOfMatch(), list = R.byTick.get(tick);
+    for (let p of packets) {
+        if (!p || !Array.isArray(p.actions)) continue;
+        for (let a of p.actions) {
+            let id = a && a.netId;
+            if (typeof id !== 'string' || !id || R.ids.has(id)) continue;
+            R.ids.set(id, tick);
+            (list || (R.byTick.set(tick, list = []), list)).push(id);
+        }
+    }
+    // (The window: the oldest ticks' ids leave.)
+    if (R.byTick.size > LOCKSTEP_RAN_KEEP_TICKS) {
+        for (let [t, ids] of R.byTick) {
+            if (t > tick - LOCKSTEP_RAN_KEEP_TICKS) break;
+            for (let id of ids) if (R.ids.get(id) === t) R.ids.delete(id);
+            R.byTick.delete(t);
+        }
+    }
+}
+function lockstepCommandRan(a) {
+    let id = a && a.netId;
+    return typeof id === 'string' && !!id && _lockstepRanOfMatch().ids.has(id);
 }
 
 // Host: an empty packet for a guest whose own did not come in time.
@@ -5590,8 +5636,9 @@ function _hostWithCarriedCommands(tick, peerId, packet) {
     if (!carry || carry.length === 0) return packet;
     let room = LOCKSTEP_MAX_ACTIONS_PER_PACKET - packet.actions.length;
     if (room <= 0) return packet;
-    let moved = carry.splice(0, room);
+    let moved = carry.splice(0, room).filter(a => !lockstepCommandRan(a));
     if (carry.length === 0) delete lockstepHostCarryByPeer[peerId];
+    if (moved.length === 0) return packet;
     let merged = { tick, peerId, teamId: packet.teamId, actions: moved.concat(packet.actions) };
     merged.checksum = computeTickPacketChecksum(tick, peerId, merged.teamId, merged.actions);
     return merged;
@@ -5661,6 +5708,7 @@ function maybeBuildHostBundle(tick, participants = null, sealLate = false) {
     // Building a bundle seals and commits the tick in one step.
     lockstepBundleByTick[t] = bundle;
     lockstepCommittedByTick[t] = true;
+    lockstepNoteRanCommands(packets, t);
     // (The simulation worker holds it from now on, and sends it to the
     // guests' workers: its ticks run whatever the pages are doing.)
     if (typeof simClientNoteSealed === 'function') {
@@ -5744,6 +5792,7 @@ function lockstepAdoptAutoSeal(tick, msg) {
     if (late.size > 0) lockstepHostLateByTick[tick] = late;
     lockstepBundleByTick[tick] = bundle;
     lockstepCommittedByTick[tick] = true;
+    lockstepNoteRanCommands(bundle.packets, tick);
     _lockstepAutoSealedTicks.add(tick);
     for (let t of _lockstepAutoSealedTicks) if (t < tick - 600) _lockstepAutoSealedTicks.delete(t);
     netCounters.autoSeals = (netCounters.autoSeals || 0) + 1;
@@ -6543,6 +6592,7 @@ function runOneTick() {
             ? lockstepBundleByTick[currentTick].packets.flatMap(p => Array.isArray(p.actions) ? p.actions : [])
             : [])
         : (localInputBuffer[currentTick] || []);
+    if (isMultiplayer && lockstepBundleByTick[currentTick]) lockstepNoteRanCommands(lockstepBundleByTick[currentTick].packets, currentTick);
     let teams = (activeTeamIds && activeTeamIds.length > 0) ? [...activeTeamIds].sort((a, b) => a - b) : [0, 1];
     // Commands of the same tick that compete (the same tile, the same
     // target) go to each team in turn: the first team to act rotates.

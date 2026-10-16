@@ -1246,17 +1246,27 @@ fn stack_level(st: f32, maxl: i32) -> i32 {
 /// window of the type block counts, effective stacks and (sticky) level.
 /// eff.flag[j]: 0 done, 1 done with a new effective level (the caller
 /// applies its tables), 2 for the caller (no slot, base tables to make, no
-/// window or count, behind its stat tables), 3 nothing (dead, taken).
+/// window or count, behind its stat tables without its entries here), 3
+/// nothing (dead, taken), 5 done behind its stat tables (6: with another
+/// vision range): the caller gives it the base tables and maxEnergy.
+/// A unit behind its stat tables (unit.esVer not its (owner, type)'s
+/// version) is taken here when P[23] is 1 (the caller's: the share's behind
+/// units fit its cap, so which path takes one decides nothing) and both its
+/// base entry (eff.bVer: its (owner, type, base level)'s base tables of this
+/// version, their window radius eff.bRad and maxEnergy eff.bMaxE, which the
+/// JavaScript's full path notes) and its new level's row are of this
+/// version: the full path's result, from them.
 /// Upkeep bins (P[12] players, P[13] levels + 1) moved with atomic adds.
 /// Arrays: ix.slots, unit.dead, unit.esOk, unit.esRad, unit.esType,
 /// unit.esTaken, unit.stackCount, unit.unitLevel, unit.baseLevel,
 /// unit.effectiveStacks, unit.effectiveLevel, unit._lastAppliedEffectiveLevel,
 /// unit.x, unit.y, unit.owner, spatial.types, eff.flag, ?unit.upT,
-/// ?unit.upB, ?upk.h, ?eff.tver, unit.esVer.
+/// ?unit.upB, ?upk.h, ?eff.tver, unit.esVer (... the row arrays, 22-62),
+/// ?eff.bVer, ?eff.bRad, ?eff.bMaxE.
 /// P: [0] entries, [1] per job, [2] step, [3] phase, [4] chunk px, [5]/[6]
 /// chunks wide/high, [7] stride per block, [8] types, [9] players, [10] max
 /// level, [11] stamp, [12]/[13] upkeep, [14] types per version row, [15]/[16]
-/// type blocks wide / their size, [17] upk.h length.
+/// type blocks wide / their size, [17] upk.h length, [23] behind units here.
 #[no_mangle]
 pub unsafe extern "C" fn k_eff_units(a: *const i32, chunk: i32) {
     let k = K::new(a);
@@ -1299,13 +1309,28 @@ pub unsafe extern "C" fn k_eff_units(a: *const i32, chunk: i32) {
             continue;
         }
         let ty = g(typ, q);
-        if !tv.is_null() && ntv != 0 && g(ev, q) != g(tv, (o * ntv + ty) as usize) {
-            s(fl, j, 2);
-            continue;
+        // (Behind: its base entry's version, index and radius.)
+        let mut behind: Option<(i32, usize)> = None;
+        let mut r = g(rad, q);
+        if !tv.is_null() && ntv != 0 {
+            let cur = g(tv, (o * ntv + ty) as usize);
+            if g(ev, q) != cur {
+                let bv = k.p::<i32>(63);
+                if k.i(23) != 1 || bv.is_null() || !(ty >= 0 && ty < nt && bl <= maxl) {
+                    s(fl, j, 2);
+                    continue;
+                }
+                let bi = (((o * nt + ty) * (maxl + 1)) + bl) as usize;
+                if g(bv, bi) != cur {
+                    s(fl, j, 2);
+                    continue;
+                }
+                behind = Some((cur, bi));
+                r = g(k.p::<i32>(64), bi);
+            }
         }
         let cx = floorf(g(xs, q) as f32 * ichunk) as i32;
         let cy = floorf(g(ys, q) as f32 * ichunk) as i32;
-        let r = g(rad, q);
         let x1 = (cx - r).min(cw - 1).max(0);
         let y1 = (cy - r).min(ch - 1).max(0);
         let x2 = (cx + r).min(cw - 1).max(0);
@@ -1343,13 +1368,31 @@ pub unsafe extern "C" fn k_eff_units(a: *const i32, chunk: i32) {
                 el0
             }
         };
+        // (Behind: its new level's row of this version, the base entry's
+        // maxEnergy first (the row's energy clamp reads it); none: the
+        // JavaScript's, as it was.)
+        let mut fv = 0u8;
+        if let Some((cur, bi)) = behind {
+            let maxe = k.p::<f32>(52);
+            let mx0 = g(maxe, q);
+            s(maxe, q, g(k.p::<f32>(65), bi));
+            let mut vis = false;
+            if !(k.i(18) > 0 && eff_row_apply(&k, q, o, ty, bl, el, cur, &mut vis)) {
+                s(maxe, q, mx0);
+                s(fl, j, 2);
+                continue;
+            }
+            s(ev, q, cur);
+            s(rad, q, r);
+            s(last, q, el as f32);
+            fv = if vis { 6 } else { 5 };
+        }
         s(esk, q, effs);
         s(elv, q, el as f32);
         s(taken, q, stamp);
         // (A new level: its stat row's tables (4: another vision range), else
         // the JavaScript's, 1.)
-        let mut fv = 0u8;
-        if lst != el as f32 {
+        if behind.is_none() && lst != el as f32 {
             let mut vis = false;
             if k.i(18) > 0 && eff_row_apply(&k, q, o, ty, bl, el, g(ev, q), &mut vis) {
                 s(last, q, el as f32);

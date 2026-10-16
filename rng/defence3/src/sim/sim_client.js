@@ -104,7 +104,10 @@ function _simClientSpawn(c, viaBlob, maxHelpers) {
         setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
     }
     c.worker = worker;
-    worker.onmessage = ev => { try { _simClientOnMessage(ev.data || {}); } catch (err) { reportRuntimeError('sim worker', err); } };
+    c.lastMsgAt = performance.now();
+    // (A lost worker's client is replaced: what its worker still says is not
+    // the new one's.)
+    worker.onmessage = ev => { if (_simClient !== c) return; c.lastMsgAt = performance.now(); try { _simClientOnMessage(ev.data || {}); } catch (err) { reportRuntimeError('sim worker', err); } };
     worker.onerror = ev => {
         if (c.worker !== worker) return;
         if (!ev.message && !c.loaded && !viaBlob) {
@@ -251,6 +254,73 @@ function _simClientStartFailed(reason) {
     recomputePlayerPopCaps();
     clearGameplayVisibilityCache();
     updateVisibility(localPlayerId);
+}
+
+// ---- a worker lost mid-match ----
+// A worker that stops answering (it crashed, was killed, hangs) while ticks
+// or requests wait on it takes the match's state with it: its errors were
+// only logged, it stayed marked active, and the match stood still for good,
+// the heartbeats healthy (audit 2026-10-15, 19). After SIM_CLIENT_SILENT_MS
+// of silence with work out (counted while this page runs: a page that was
+// away, a long frame or a hidden tab, counts from its return) the page stops
+// ticking, starts a new worker (a few at most: one that keeps failing leaves
+// matches to the page) and gets the match again where there is one to get
+// (utils_networking.js netRecoverLostSimulation: a guest from its host, a
+// host by handing the match to a player and joining it); the match's reload
+// (startGame) ends the hold.
+const SIM_CLIENT_SILENT_MS = 10000;
+const SIM_CLIENT_RESPAWNS = 3;
+let _simClientLost = null, _simClientRespawns = 0;
+function simClientLostPending() { return !!_simClientLost; }
+// From the page's tick pump: true while ticks must wait (the worker lost).
+function simClientLostHold(now) {
+    if (_simClientLost) return true;
+    const c = _simClient;
+    if (!c || !c.active || c.startedEpoch !== c.epoch) { if (c) c.pumpAt = now; return false; }
+    if (!(c.pumpAt > 0) || now - c.pumpAt > 1000) c.lastMsgAt = Math.max(c.lastMsgAt || 0, now);
+    c.pumpAt = now;
+    // (Silence counts while work is out only: an idle worker says nothing,
+    // the match standing still for a while.)
+    if (!(c.inFlight > 0 || c.replies.size > 0 || c.autoDeferred.length > 0)) { c.workSince = 0; return false; }
+    if (!c.workSince) c.workSince = now;
+    const silent = now - Math.max(c.lastMsgAt, c.workSince);
+    if (silent > SIM_CLIENT_SILENT_MS) {
+        _simClientWorkerLost('no answer for ' + Math.round(silent) + ' ms');
+        return true;
+    }
+    return false;
+}
+function _simClientWorkerLost(reason) {
+    const c = _simClient;
+    if (!c || !c.active || _simClientLost) return;
+    console.error('[sim worker] lost during the match (' + reason + ')');
+    c.failed = 'lost: ' + reason;
+    c.active = false;
+    c.epoch++;
+    try { c.worker.terminate(); } catch { }
+    const lost = new Error('the simulation worker was lost');
+    for (const [, r] of c.replies) { try { r.reject(lost); } catch { } }
+    c.replies.clear();
+    for (const d of c.autoDeferred) { try { d.reject(lost); } catch { } }
+    c.autoDeferred = [];
+    c.inFlight = 0;
+    _simClientLost = { reason, at: performance.now() };
+    if (++_simClientRespawns <= SIM_CLIENT_RESPAWNS) _simClient = _simClientCreate();
+    if (typeof netRecoverLostSimulation === 'function') netRecoverLostSimulation(reason);
+}
+// A match (re)starts (startGame): the page ticks again.
+function simClientLostClear() { _simClientLost = null; }
+// Resolves once the worker loaded (or failed), or after ms.
+function simClientWhenLoaded(ms) {
+    return new Promise(resolve => {
+        const t0 = performance.now();
+        const check = () => {
+            const c = _simClient;
+            if (!c || c.loaded || c.failed || performance.now() - t0 >= ms) { resolve(!!(c && c.loaded && !c.failed)); return; }
+            setTimeout(check, 50);
+        };
+        check();
+    });
 }
 
 // Page globals the simulation reads.
@@ -510,7 +580,7 @@ function _simClientOnMessage(msg) {
         case 'presentationPort': {
             if (c.presentationPort) { try { c.presentationPort.close(); } catch { } }
             c.presentationPort = msg.port;
-            msg.port.onmessage = ev => { try { _simClientOnMessage(ev.data || {}); } catch (err) { reportRuntimeError('presentation', err); } };
+            msg.port.onmessage = ev => { if (_simClient !== c) return; try { _simClientOnMessage(ev.data || {}); } catch (err) { reportRuntimeError('presentation', err); } };
             break;
         }
         // The fog's grids, made by the presentation reader (shared; see
@@ -1022,15 +1092,15 @@ function _simClientPageTickWork(tick) {
     if ((tick + 1) % TICK_RATE === 0) sampleGameStats();
     requestResearchPopupRefresh();
     let c = _simClient;
-    if (!c.gameOverShown) {
-        if (gameOver) {
-            // The worker ended the match: the same check on the page marks
-            // this player defeated (spectating) and shows the result.
-            c.gameOverShown = true;
-            gameOver = false;
-            checkWinCondition();
-            if (!gameOver) { gameOver = true; showGameOver(); }
-        }
+    // (A repair can take an end back: the next one is shown again.)
+    if (!gameOver) c.gameOverShown = false;
+    else if (!c.gameOverShown) {
+        // The worker ended the match: the same check on the page marks
+        // this player defeated (spectating) and shows the result.
+        c.gameOverShown = true;
+        gameOver = false;
+        checkWinCondition();
+        if (!gameOver) { gameOver = true; matchOverShow(); }
     }
 }
 
