@@ -81,8 +81,8 @@ const server = http.createServer((req, res) => {
             const panel = document.getElementById('research-popup-info-panel');
             const pane = panel.querySelector('.research-popup-queue-scroll');
             const row = panel.querySelectorAll('.info-research-queue-row')[50];
-            const plus = row.querySelector('.info-research-buy-btn');
-            const minus = row.querySelector('.info-research-dequeue-btn');
+            const plus = row.querySelector('.count-slider');
+            const minus = row.querySelector('.count-slider');
             check(panel.querySelectorAll('.info-research-queue-item').length === 100, '100 visible rows');
             pane.scrollTop = 1000;
             const scrollTop = pane.scrollTop;
@@ -93,13 +93,13 @@ const server = http.createServer((req, res) => {
             const refreshMs = (performance.now() - start) / 10;
             check(observer.takeRecords().length === 0, 'progress refreshes must retain all nodes');
             check(panel.querySelector('.research-popup-queue-scroll') === pane && pane.scrollTop === scrollTop, 'progress preserves scroll pane and position');
-            const press = button => button.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+            const press = (button, value) => { if (button.classList.contains('count-slider')) { button.value = value; button.dispatchEvent(new Event('change', { bubbles: true })); } else button.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })); };
             const editStart = performance.now();
             for (let i = 0; i < 5; i++) {
-                press(plus); renderResearchPopupContent();
+                press(plus, 2); renderResearchPopupContent();
                 check(getPlayerResearchQueueTotalLength(0) === 101, 'plus adds once');
-                check(plus.isConnected && row.querySelector('.info-research-buy-btn') === plus, 'add preserves existing button');
-                press(minus); renderResearchPopupContent();
+                check(plus.isConnected && row.querySelector('.count-slider') === plus, 'add preserves existing button');
+                press(minus, 1); renderResearchPopupContent();
                 check(getPlayerResearchQueueTotalLength(0) === 100, 'minus removes once');
             }
             const editMs = (performance.now() - editStart) / 10;
@@ -109,7 +109,7 @@ const server = http.createServer((req, res) => {
             processAction({ action: 'queueResearch', gx: lab.gx, gy: lab.gy, count: 1, ...stats[100] }, 0);
             renderResearchPopupContent();
             const added = panel.querySelectorAll('.info-research-queue-row')[100];
-            press(added.querySelector('.info-research-dequeue-btn')); renderResearchPopupContent();
+            press(added.querySelector('.count-slider'), 0); renderResearchPopupContent();
             check(!added.isConnected && getPlayerResearchQueueTotalLength(0) === 100, 'new row controls are bound');
             // Reordering changes pending indices without discarding the rows.
             const moved = panel.querySelectorAll('.info-research-queue-row')[50];
@@ -126,8 +126,8 @@ const server = http.createServer((req, res) => {
             researchQueuePanelOpenState[getResearchPanelScopeKey(0, `group:${selectedEntities.map(r => `${r.gx},${r.gy}`).join(';')}`)] = true;
             updateInfoPanel();
             const sidebar = document.getElementById('info-panel');
-            const sidebarPlus = sidebar.querySelector('.info-research-queue-item .info-research-buy-btn');
-            press(sidebarPlus); updateInfoPanel();
+            const sidebarPlus = sidebar.querySelector('.info-research-queue-item .count-slider');
+            press(sidebarPlus, 2); updateInfoPanel();
             check(sidebarPlus.isConnected, 'sidebar queue edits retain controls');
             player.researchTask = null; player.researchQueue = [];
             renderResearchPopupContent();

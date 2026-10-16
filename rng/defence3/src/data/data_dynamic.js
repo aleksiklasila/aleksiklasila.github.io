@@ -2093,15 +2093,8 @@ function renderStartingResourcesThingRowsForPanel() {
         let projectedValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, nextLevel, selectedThingLevel);
         if (!Number.isFinite(projectedValue)) projectedValue = currentValue;
 
-        html += `<div style="margin:2px 0 6px 0;padding:3px 4px;border:1px solid #242424;border-radius:4px;background:#101010">`;
-        html += `<div style="display:flex;align-items:center;gap:8px;white-space:nowrap">`;
-        html += `<span style="color:#bbb;flex:1 1 0;min-width:0">${stat.label}</span><span class="info-research-level-preview-btn info-startres-level-preview-btn" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" data-from-level="${curLevel}" data-to-level="${nextLevel}" style="color:#8fc;background:#000;cursor:pointer;flex:0 0 180px;text-align:center;display:inline-block;">${formatResearchStatValue(stat.statKey, currentValue)}->${formatResearchStatValue(stat.statKey, projectedValue)}</span>`;
-        html += `<span style="color:#9cf;flex:1 1 0;text-align:right">R${curLevel}/${MAX_RESEARCH_LEVEL}</span>`;
-        html += `</div>`;
-        html += `<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px">`;
-        html += `<span class="info-startres-stat-dec" data-thing-id="${thingId}" data-stat-key="${stat.statKey}" style="cursor:${curLevel > 0 ? 'pointer' : 'default'};color:${curLevel > 0 ? '#f66' : '#444'};font-weight:bold;">[-]</span>`;
-        html += `<span class="info-startres-stat-inc" data-thing-id="${thingId}" data-stat-key="${stat.statKey}" style="cursor:${curLevel < MAX_RESEARCH_LEVEL ? 'pointer' : 'default'};color:${curLevel < MAX_RESEARCH_LEVEL ? '#4f4' : '#444'};font-weight:bold;">[+]</span>`;
-        html += `</div>`;
+        html += `<div class="compact-research-row"><span class="compact-research-name">${stat.label}</span>`;
+        html += countBarHtml(curLevel, 0, MAX_RESEARCH_LEVEL, { type: 'preset-research', thingId, statKey: stat.statKey }, stat.label + ' starting research', 'R', isMultiplayer && !isHost);
         html += `</div>`;
     }
 
@@ -2111,11 +2104,9 @@ function renderStartingResourcesThingRowsForPanel() {
         let cur = getStartingSpawnCount(thingId, lvl);
         let maxRow = getStartingSpawnMaxForRow(thingId, lvl);
         html += `<div class="info-row" style="align-items:center;gap:8px;margin:1px 0;">`;
-        html += `<span style="color:#bbb;flex:1 1 0">L${lvl}</span>`;
-        html += `<span style="color:#fff;flex:0 0 180px;text-align:center">${cur}${Number.isFinite(maxRow) ? `/${maxRow}` : ''}</span>`;
+        html += `<span style="color:#bbb;flex:0 0 48px">L${lvl}</span>`;
         html += `<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;flex:1 1 0">`;
-        html += `<span class="info-startres-spawn-dec" data-thing-id="${thingId}" data-level="${lvl}" style="cursor:${cur > 0 ? 'pointer' : 'default'};color:${cur > 0 ? '#f66' : '#444'};font-weight:bold;">[-]</span>`;
-        html += `<span class="info-startres-spawn-inc" data-thing-id="${thingId}" data-level="${lvl}" style="cursor:${cur < maxRow ? 'pointer' : 'default'};color:${cur < maxRow ? '#4f4' : '#444'};font-weight:bold;">[+]</span>`;
+        html += countBarHtml(cur, 0, maxRow, { type: 'preset-spawn', thingId, level: lvl }, selectedThing.label + ' L' + lvl + ' starting count', '', isMultiplayer && !isHost);
         html += `</div>`;
         html += `</div>`;
     }
@@ -2127,10 +2118,8 @@ function renderStartingResourcesThingRowsForPanel() {
 
 function renderStartingResourcesPopupContent() {
     let holder = document.getElementById('starting-resources-content');
-    if (!holder) return;
+    if (!holder || countBarBusy(holder)) return;
     holder.innerHTML = `
-        <div style="font-size:10px;color:#8cf;margin-bottom:2px">Adjust Step</div>
-        <div id="starting-resources-multiplier-bar" class="mult-toggle-bar" style="margin-bottom:6px;border:1px solid #2f2f2f;border-radius:4px;"></div>
         <div id="starting-resources-panel" style="display:block">${renderStartingResourcesThingRowsForPanel()}</div>
         <div class="info-row" style="justify-content:flex-end;gap:8px;margin-top:6px;border-top:1px solid #2b2b2b;padding-top:6px;">
             <button id="btn-startres-reset-selected" type="button" style="font-size:11px;padding:3px 8px;">Reset Selected Thing</button>
@@ -2138,10 +2127,6 @@ function renderStartingResourcesPopupContent() {
         </div>
     `;
 
-    renderMultiplierBar('starting-resources-multiplier-bar', startingResourcesAdjustMultiplier, (val) => {
-        startingResourcesAdjustMultiplier = val;
-        renderStartingResourcesPopupContent();
-    });
 
     let resetSelected = document.getElementById('btn-startres-reset-selected');
     if (resetSelected) {
@@ -2180,42 +2165,6 @@ function renderStartingResourcesPopupContent() {
             let fromLevel = Number.parseInt(btn.dataset.fromLevel, 10);
             let toLevel = Number.parseInt(btn.dataset.toLevel, 10);
             openResearchThingLevelDropdown(btn, { kind, key, statKey, fromLevel, toLevel });
-        });
-    });
-
-    holder.querySelectorAll('.info-startres-stat-dec').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let thingId = String(btn.dataset.thingId || '');
-            let statKey = String(btn.dataset.statKey || '');
-            adjustStartingResearchLevelDelta(thingId, statKey, -startingResourcesAdjustMultiplier);
-            renderStartingResourcesPopupContent();
-        });
-    });
-
-    holder.querySelectorAll('.info-startres-stat-inc').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let thingId = String(btn.dataset.thingId || '');
-            let statKey = String(btn.dataset.statKey || '');
-            adjustStartingResearchLevelDelta(thingId, statKey, startingResourcesAdjustMultiplier);
-            renderStartingResourcesPopupContent();
-        });
-    });
-
-    holder.querySelectorAll('.info-startres-spawn-dec').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let thingId = String(btn.dataset.thingId || '');
-            let lvl = Number(btn.dataset.level || 1);
-            adjustStartingSpawnCountDelta(thingId, lvl, -startingResourcesAdjustMultiplier);
-            renderStartingResourcesPopupContent();
-        });
-    });
-
-    holder.querySelectorAll('.info-startres-spawn-inc').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let thingId = String(btn.dataset.thingId || '');
-            let lvl = Number(btn.dataset.level || 1);
-            adjustStartingSpawnCountDelta(thingId, lvl, startingResourcesAdjustMultiplier);
-            renderStartingResourcesPopupContent();
         });
     });
 }

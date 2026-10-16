@@ -1757,3 +1757,50 @@
    the page animates on its own, each animation frame would refill the queue
    the guard keeps empty. */
 body.present-paced *, body.present-paced *::before, body.present-paced *::after { animation: none !important; transition: none !important; }
+
+/* Compact count controls: labels and track share one line. */
+.count-control { position:relative; display:block; flex:1 1 110px; min-width:70px; height:18px; margin:0; padding:0; border:0; background:linear-gradient(to right,#30333b var(--locked,0%),#0e171d var(--locked,0%)); font:11px/18px Consolas,monospace; }
+.count-control > .count-min, .count-control > .count-max, .count-control > output { position:absolute; top:0; pointer-events:none; white-space:nowrap; }
+.count-control > .count-min { left:3px; color:#46bd78; }
+.count-control > .count-max { right:3px; color:#ef7373; }
+.count-control > output { left:var(--position,50%); transform:translateX(calc(-100% - 7px)); color:#f0df78; }
+.count-control[data-label-side="after"] > output { transform:translateX(7px); }
+.count-control[data-edge="min"] > .count-min, .count-control[data-edge="max"] > .count-max { visibility:hidden; }
+input.count-slider { appearance:none; -webkit-appearance:none; position:absolute; inset:0; width:100%; min-width:0; height:18px; margin:0; padding:0; border:0; border-radius:0; background:transparent; cursor:pointer; touch-action:pan-y; }
+input.count-slider::-webkit-slider-runnable-track { height:18px; background:transparent; }
+input.count-slider::-moz-range-track { height:18px; background:transparent; }
+input.count-slider::-webkit-slider-thumb { appearance:none; -webkit-appearance:none; width:4px; height:18px; margin:0; background:#43bd78; border:0; border-radius:1px; }
+input.count-slider::-moz-range-thumb { width:4px; height:18px; background:#43bd78; border:0; border-radius:1px; }
+input.count-slider:focus-visible { outline:1px solid #8fcfff; outline-offset:0; }
+input.count-slider:disabled { opacity:.4; cursor:default; }
+.info-queue-row { display:flex; align-items:center; gap:4px; margin:0; padding:0; }
+.count-cost { color:#fd0; flex:0 0 auto; }
+#build-multiplier-bar { display:flex; margin:0; padding:0; border:0; }
+.compact-research-row { display:flex; align-items:center; gap:4px; min-width:0; margin:0; padding:0; height:18px; }
+.compact-research-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:0 1 110px; color:#bbb; }
+.bb-menu .bb-menu-queue { gap:0 4px; margin:0; padding:0; }
+.bb-menu-queue > .count-control { grid-column:3 / -1; }
+.bb-menu-task-row:has(.count-control), .info-research-queue-item > div:has(.count-control) { flex-wrap:nowrap; gap:4px; margin:0; padding:0; }
+.info-research-queue-item > div > div:has(.count-control) { flex:1 1 110px; min-width:70px; }
+.count-item-marker { position:absolute; top:0; bottom:0; width:2px; transform:translateX(-50%); background:#ffb34f; pointer-events:none; }
+#count-slider-tooltip { position:fixed; z-index:100000; pointer-events:auto; max-width:calc(100vw - 8px); max-height:calc(100vh - 8px); overflow:auto; padding:5px 7px; border:1px solid #344551; background:rgba(8,14,19,.97); color:#d6dade; font:11px/15px Consolas,'Courier New',monospace; box-shadow:0 2px 6px #0008; }
+#count-slider-tooltip[hidden] { display:none; }
+.count-tooltip-table { display:grid; grid-template-columns:max-content max-content max-content max-content; column-gap:1ch; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.count-tooltip-table.has-item { grid-template-columns:repeat(6,max-content); }
+.count-tooltip-heading { color:#9fc9e1; margin:0 0 2px; }
+.count-tooltip-heading:not(:first-child) { margin-top:5px; }
+.count-tooltip-simple { display:flex; gap:1ch; white-space:nowrap; }
+.count-tooltip-level { color:#9fc9e1; }
+.count-tooltip-current { color:#d6dade; text-align:right; }
+.count-tooltip-item { color:#ffb34f; text-align:right; }
+.count-tooltip-target { color:#43bd78; text-align:right; }
+.count-tooltip-arrow { color:#768792; }
+.count-tooltip-things { display:flex; align-items:flex-start; gap:16px; width:max-content; }
+.count-tooltip-thing { flex:none; }
+.research-energy-summary { display:flex; justify-content:space-between; gap:8px; font-size:10px; line-height:18px; color:#9fc9e1; }
+.research-energy-summary > :last-child { color:#f0df78; white-space:nowrap; }
+.research-stat-group-label { color:#bbb; line-height:18px; font-size:11px; }
+.research-stat-pane, .research-popup-stat-pane { min-width:0; }
+.info-research-queue-item > div:has(.count-control) > span { flex:0 0 40px; }
+.info-research-queue-item > div:has(.count-control) > div { flex:1 1 0; }
+.research-popup-stat-pane { min-height:0; overflow-y:auto; overflow-x:hidden; }

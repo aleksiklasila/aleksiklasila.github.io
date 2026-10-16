@@ -1765,7 +1765,7 @@ function optimisticQueueBump(fracEl, delta) {
     }, 1200);
 }
 // ---- research orders on their way ----
-// A research order ([+] or [-] of a stat) comes back from the simulation a
+// A research queue change comes back from the simulation a
 // few ticks later: until then the stat's row and the research row of the
 // bottom bar showed the old queue. What was ordered and has not arrived is
 // kept here, per stat, as a change of its queue depth from the depth the
@@ -2766,10 +2766,9 @@ function formatStatLabelWithResearchLevel(playerId, kind, key, statKey, label, s
     return `${badge}${label}`;
 }
 
-// The production queue row on the stat grid: cost under the labels, the
-// queue fill under the base column and the -/+ buttons under the effective one.
-function infoQueueRow(cost, fractionHtml, subBtn, addBtn) {
-    return `<div class="info-row info-stat info-queue-row"><span class="info-label"><span class="info-label-plain" style="color:#fd0">${formatInfoCurrency(cost)}</span></span><span class="info-base"><span style="color:#fff">${fractionHtml}</span></span><span class="info-eff"><span class="info-queue-btns">${subBtn}${addBtn}</span></span></div>`;
+// The production queue's estimated remaining energy and count control.
+function infoQueueRow(cost, barHtml) {
+    return `<div class="info-row info-queue-row"><span class="count-cost" title="Approximate energy remaining for the queue">≈${formatInfoCurrency(cost)}</span>${barHtml}</div>`;
 }
 
 // A rate stat: the number with a compact, dimmed "⚡/s" unit.
@@ -3766,12 +3765,8 @@ function renderBarrackInfo(e) {
         let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
         let totalCost = cost * purchaseCount;
         let canQueue = !e.underConstruction;
-        let subBtn = canQueue
-            ? `<span class="info-dequeue-btn" data-type="unit" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`
-            : `<span style="color:#444;font-weight:bold;">[-]</span>`;
-        let addBtn = canQueue
-            ? `<span class="info-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#4f4;font-weight:bold;margin-left:4px;">[+]</span>`
-            : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
+        let queueBar = spawnCountBar([e], false);
+        let queueEnergyEstimate = spawnQueueEnergyEstimate([e], false);
         let autoEnabled = isAutoUpgradeEnabled(e);
         let buildEnabled = isBuildEnabled(e);
         let salvBtn = `${salvageToggleBtn(e.gx, e.gy, e.markedForSalvage)}`;
@@ -3779,7 +3774,7 @@ function renderBarrackInfo(e) {
         let stackBtn = autoStackBtn(e.gx, e.gy, isAutoStackEnabled(e));
         let queueBtn = queueToggleBtn(e.gx, e.gy, isQueueEnabled(e));
         let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, buildEnabled) : disabledInfoPill('\uD83D\uDD28 --');
-        html += infoQueueRow(totalCost, formatInfoFraction((e.spawnQueue || []).length, 20), subBtn, addBtn);
+        html += infoQueueRow(queueEnergyEstimate, queueBar);
         html += renderSpawnerEnergyProgressRow(getSpawnerEnergyProgress(e));
         html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoBtn}</div></div>`;
     }
@@ -3847,19 +3842,15 @@ function renderBarrackGroupInfo(group) {
         let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
         let totalCost = cost * purchaseCount;
         let canQueue = queueReady.length > 0;
-        let subBtn = canQueue
-            ? `<span class="info-dequeue-group-btn" data-type="unit" data-coords="${queueCoordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`
-            : `<span style="color:#444;font-weight:bold;">[-]</span>`;
-        let addBtn = canQueue
-            ? `<span class="info-buy-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:#4f4;font-weight:bold;margin-left:4px;">[+]</span>`
-            : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
+        let queueBar = spawnCountBar(queueReady, false);
+        let queueEnergyEstimate = spawnQueueEnergyEstimate(queueReady, false);
         let coordStr = infoCoordAttr(group.map(b => `${b.gx},${b.gy}`).join(';'));
         let salvBtn = `${salvageToggleGroupBtn(coordStr, group.every(g => g.markedForSalvage), anyMarked)}`;
         let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
         let stackBtn = autoStackGroupBtn(coordStr, group.every(b => isAutoStackEnabled(b)), group.some(b => isAutoStackEnabled(b)));
         let queueBtn = queueToggleGroupBtn(coordStr, group.every(b => isQueueEnabled(b)), group.some(b => isQueueEnabled(b)));
         let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : disabledInfoPill('\uD83D\uDD28 --');
-        html += infoQueueRow(totalCost, formatInfoFraction(totalQueue, Math.max(1, readyGroup.length) * 20), subBtn, addBtn);
+        html += infoQueueRow(queueEnergyEstimate, queueBar);
         html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(readyGroup));
         html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoBtn}</div></div>`;
     }
@@ -4081,12 +4072,8 @@ function renderSpawnerInfo(e) {
         let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
         let totalCost = cost * purchaseCount;
         let canQueue = !e.underConstruction;
-        let subBtn = canQueue
-            ? `<span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`
-            : `<span style="color:#444;font-weight:bold;">[-]</span>`;
-        let addBtn = canQueue
-            ? `<span class="info-buy-worker-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#4f4;font-weight:bold;margin-left:4px;">[+]</span>`
-            : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
+        let queueBar = spawnCountBar([e], true);
+        let queueEnergyEstimate = spawnQueueEnergyEstimate([e], true);
         let autoEnabled = isAutoUpgradeEnabled(e);
         let buildEnabled = isBuildEnabled(e);
         let salvBtn = `${salvageToggleBtn(e.gx, e.gy, e.markedForSalvage)}`;
@@ -4094,7 +4081,7 @@ function renderSpawnerInfo(e) {
         let stackBtn = autoStackBtn(e.gx, e.gy, isAutoStackEnabled(e));
         let queueBtn = queueToggleBtn(e.gx, e.gy, isQueueEnabled(e));
         let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, buildEnabled) : disabledInfoPill('\uD83D\uDD28 --');
-        html += infoQueueRow(totalCost, formatInfoFraction((e.spawnQueue || []).length, 10), subBtn, addBtn);
+        html += infoQueueRow(queueEnergyEstimate, queueBar);
         html += renderSpawnerEnergyProgressRow(getSpawnerEnergyProgress(e));
         html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoBtn}</div></div>`;
     }
@@ -4651,19 +4638,15 @@ function renderSpawnerGroupInfo(group) {
         let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
         let totalCost = cost * purchaseCount;
         let canQueue = queueReady.length > 0;
-        let subBtn = canQueue
-            ? `<span class="info-dequeue-group-btn" data-type="worker" data-coords="${queueCoordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`
-            : `<span style="color:#444;font-weight:bold;">[-]</span>`;
-        let addBtn = canQueue
-            ? `<span class="info-buy-worker-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:#4f4;font-weight:bold;margin-left:4px;">[+]</span>`
-            : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
+        let queueBar = spawnCountBar(queueReady, true);
+        let queueEnergyEstimate = spawnQueueEnergyEstimate(queueReady, true);
         let coordStr = infoCoordAttr(group.map(s => `${s.gx},${s.gy}`).join(';'));
         let salvBtn = `${salvageToggleGroupBtn(coordStr, group.every(g => g.markedForSalvage), anyMarked)}`;
         let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
         let stackBtn = autoStackGroupBtn(coordStr, group.every(s => isAutoStackEnabled(s)), group.some(s => isAutoStackEnabled(s)));
         let queueBtn = queueToggleGroupBtn(coordStr, group.every(s => isQueueEnabled(s)), group.some(s => isQueueEnabled(s)));
         let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : disabledInfoPill('\uD83D\uDD28 --');
-        html += infoQueueRow(totalCost, formatInfoFraction(totalQueue, Math.max(1, readyGroup.length) * 10), subBtn, addBtn);
+        html += infoQueueRow(queueEnergyEstimate, queueBar);
         html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(readyGroup));
         html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoBtn}</div></div>`;
     }
@@ -4886,17 +4869,33 @@ function _renderResearchQueueThingIconHtml(thing, size = 20) {
     if (!thing || !thing.key) return '';
     let s = Math.max(12, Math.floor(Number(size) || 20));
     let radius = thing.kind === 'unit' ? '50%' : '4px';
-    return `<span style="display:inline-flex;align-items:center;justify-content:center;width:${s}px;height:${s}px;border:1px solid #2b2b2b;border-radius:${radius};background:#111;overflow:hidden;flex:0 0 auto"><img src="${getItemThumbnail(thing.key, s)}" width="${s}" height="${s}" style="display:block;${thing.kind === 'unit' ? 'border-radius:50%;' : ''}"></span>`;
+    return `<span title="${_escapeHtml(thing.label || thing.key)}" style="display:inline-flex;align-items:center;justify-content:center;width:${s}px;height:${s}px;border:1px solid #2b2b2b;border-radius:${radius};background:#111;overflow:hidden;flex:0 0 auto"><img src="${getItemThumbnail(thing.key, s)}" alt="${_escapeHtml(thing.label || thing.key)}" width="${s}" height="${s}" style="display:block;${thing.kind === 'unit' ? 'border-radius:50%;' : ''}"></span>`;
+}
+
+function researchTaskEnergyProgress(task, preview = null) {
+    const cost = Math.max(0, Number(preview ? preview.cost : task.cost) || 0);
+    const work = Math.max(0, Number(task.workRequired) || Number(preview && preview.work) || 0);
+    const fraction = work > 0 ? Math.max(0, Math.min(1, (Number(task.workDone) || 0) / work)) : 0;
+    return { cost, paid: cost * fraction };
+}
+
+function researchQueueEnergyEstimate(tasks) {
+    return tasks.reduce((total, task) => {
+        const progress = researchTaskEnergyProgress(task);
+        return total + progress.cost - progress.paid;
+    }, 0);
 }
 
 function renderQueuedResearchTasksForSingleBuilding(e) {
     let html = '';
     let orderedTasks = getResearchOrderedTasksForSingleBuilding(e);
     if (orderedTasks.length <= 0) {
+        html += researchEnergySummaryHtml(0, 'Queue remaining');
         html += `<div style="font-size:10px;color:#777;padding:4px 0">Queue is empty.</div>`;
         return html;
     }
 
+    html += researchEnergySummaryHtml(researchQueueEnergyEstimate(orderedTasks), 'Queue remaining');
     html += `<div class="info-research-queue-list" style="display:flex;flex-direction:column;gap:4px"><!--research-queue-start-->`;
     let priorDepths = new Map();
     for (let i = 0; i < orderedTasks.length; i++) {
@@ -4927,15 +4926,13 @@ function renderQueuedResearchTasksForSingleBuilding(e) {
         html += `<span style="color:#8fc;min-width:54px;text-align:right;display:inline-block;">${queueItemValueLabel}</span>`;
         html += `</div>`;
         html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
-        html += `<span style="display:flex;align-items:center;gap:4px;color:#fd0"><button type="button" class="info-research-move-top-btn" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" title="Move to first in queue" style="cursor:pointer;color:#9cf;background:#141414;border:1px solid #355;border-radius:3px;padding:0 4px;line-height:12px;font-size:10px;">↑</button><button type="button" class="info-research-move-bottom-btn" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" title="Move to last in queue" style="cursor:pointer;color:#9cf;background:#141414;border:1px solid #355;border-radius:3px;padding:0 4px;line-height:12px;font-size:10px;">↓</button><span>${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)} <span style="color:#9cf">R${preview.toLevel}</span></span></span>`;
+        html += `<span style="display:flex;align-items:center;gap:4px;color:#fd0"><button type="button" class="info-research-move-top-btn" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" title="Move to first in queue" style="cursor:pointer;color:#9cf;background:#141414;border:1px solid #355;border-radius:3px;padding:0 4px;line-height:12px;font-size:10px;">↑</button><button type="button" class="info-research-move-bottom-btn" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" title="Move to last in queue" style="cursor:pointer;color:#9cf;background:#141414;border:1px solid #355;border-radius:3px;padding:0 4px;line-height:12px;font-size:10px;">↓</button></span>`;
         html += `<div style="display:flex;align-items:center;gap:4px">`;
-        html += `<span class="info-research-dequeue-btn" data-gx="${e.gx}" data-gy="${e.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
-        html += `<span class="info-research-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:${preview.atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
+        html += researchCountBar(e.owner, e, [{ kind: t.kind, key: t.key, statKey: t.statKey }], preview.toLevel);
         html += `</div>`;
         html += `</div>`;
-        if (t.isActiveTask && Number.isFinite(t.workRequired) && t.workRequired > 0) {
-            html += renderResearchWorkProgressRow(t.workDone || 0, t.workRequired);
-        }
+        const progress = researchTaskEnergyProgress(t, preview);
+        html += renderResearchWorkProgressRow(progress.paid, progress.cost);
         html += `</div></div><!--research-row-end-->`;
     }
     html += `<!--research-queue-end-->`;
@@ -4946,12 +4943,14 @@ function renderQueuedResearchTasksForSingleBuilding(e) {
 function renderQueuedResearchTasksForGroup(group) {
     let html = '';
     if (!Array.isArray(group) || group.length <= 0) {
+        html += researchEnergySummaryHtml(0, 'Queue remaining');
         html += `<div style="font-size:10px;color:#777;padding:4px 0">Queue is empty.</div>`;
         return html;
     }
     let owner = group[0].owner;
     let orderedTasks = getResearchOrderedTasksForSingleBuilding(group[0]);
     if (orderedTasks.length <= 0) {
+        html += researchEnergySummaryHtml(0, 'Queue remaining');
         html += `<div style="font-size:10px;color:#777;padding:4px 0">Queue is empty.</div>`;
         return html;
     }
@@ -4961,6 +4960,7 @@ function renderQueuedResearchTasksForGroup(group) {
     html += `<div style="display:flex;flex-direction:column;gap:6px">`;
     html += `<div style="border:1px solid #2a2a2a;border-radius:4px;padding:4px;background:#111">`;
     html += `<div style="font-size:10px;color:#9cf;margin-bottom:4px">Shared Queue (${labCount} labs)</div>`;
+    html += researchEnergySummaryHtml(researchQueueEnergyEstimate(orderedTasks), 'Queue remaining');
     html += `<div class="info-research-queue-list" style="display:flex;flex-direction:column;gap:4px"><!--research-queue-start-->`;
 
     let priorDepths = new Map();
@@ -4989,15 +4989,13 @@ function renderQueuedResearchTasksForGroup(group) {
         html += `<span style="color:#8fc;min-width:54px;text-align:right;display:inline-block;">x${formatResearchMultiplierValue(projectedMultiplier)}</span>`;
         html += `</div>`;
         html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
-        html += `<span style="display:flex;align-items:center;gap:4px;color:#fd0"><button type="button" class="info-research-move-top-btn" data-owner="${owner}" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" title="Move to first in queue" style="cursor:pointer;color:#9cf;background:#141414;border:1px solid #355;border-radius:3px;padding:0 4px;line-height:12px;font-size:10px;">↑</button><button type="button" class="info-research-move-bottom-btn" data-owner="${owner}" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" title="Move to last in queue" style="cursor:pointer;color:#9cf;background:#141414;border:1px solid #355;border-radius:3px;padding:0 4px;line-height:12px;font-size:10px;">↓</button><span>${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)} <span style="color:#9cf">R${preview.toLevel}</span></span></span>`;
+        html += `<span style="display:flex;align-items:center;gap:4px;color:#fd0"><button type="button" class="info-research-move-top-btn" data-owner="${owner}" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" title="Move to first in queue" style="cursor:pointer;color:#9cf;background:#141414;border:1px solid #355;border-radius:3px;padding:0 4px;line-height:12px;font-size:10px;">↑</button><button type="button" class="info-research-move-bottom-btn" data-owner="${owner}" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" title="Move to last in queue" style="cursor:pointer;color:#9cf;background:#141414;border:1px solid #355;border-radius:3px;padding:0 4px;line-height:12px;font-size:10px;">↓</button></span>`;
         html += `<div style="display:flex;align-items:center;gap:4px">`;
-        html += `<span class="info-research-dequeue-btn" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
-        html += `<span class="info-research-buy-btn" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:${preview.atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
+        html += researchCountBar(anchor.owner, anchor, [{ kind: t.kind, key: t.key, statKey: t.statKey }], preview.toLevel);
         html += `</div>`;
         html += `</div>`;
-        if (t.isActiveTask && Number.isFinite(t.workRequired) && t.workRequired > 0) {
-            html += renderResearchWorkProgressRow(t.workDone || 0, t.workRequired);
-        }
+        const progress = researchTaskEnergyProgress(t, preview);
+        html += renderResearchWorkProgressRow(progress.paid, progress.cost);
         html += `</div></div><!--research-row-end-->`;
     }
 
@@ -5139,187 +5137,50 @@ function _buildResearchMultiStatEntries(selectedThings) {
     return entries;
 }
 
-function _renderResearchSingleThingStatsPanel(owner, scope, targetArg, selectedThing, popupLayout = false) {
-    let html = '';
-    if (!selectedThing) return html;
-    let groupCoordStr = Array.isArray(targetArg) ? infoCoordAttr(targetArg.map(r => `${r.gx},${r.gy}`).join(';')) : '';
-    let panelClasses = popupLayout ? 'research-popup-stat-pane' : '';
-    let panelStyle = popupLayout
-        ? 'height:100%;min-height:0;overflow-y:auto;overflow-x:hidden;'
-        : 'margin-top:4px;border:1px solid #2f2f2f;border-radius:4px;padding:4px;background:#121212';
-    html += `<div class="${panelClasses}" style="${panelStyle}">`;
-    if (!popupLayout) html += `<div style="font-size:10px;color:#ddd;margin-bottom:3px">${selectedThing.label}</div>`;
-    for (let stat of (selectedThing.stats || [])) {
-        let queuedDepth = scope.startsWith('single:')
-            ? getResearchQueueDepthForStat(targetArg, selectedThing.kind, selectedThing.key, stat.statKey)
-            : getResearchQueueDepthForStatInGroup(targetArg, selectedThing.kind, selectedThing.key, stat.statKey);
-        let currentLevel = getPlayerResearchLevel(owner, selectedThing.kind, selectedThing.key, stat.statKey);
-        let globalQueuedDepth = getResearchQueuedDepthForPlayer(owner, selectedThing.kind, selectedThing.key, stat.statKey);
-        // (With the orders on their way: the row as the click left it.)
-        if (owner === localPlayerId && _researchAhead.size > 0) {
-            let ahead = researchOrdersAhead(selectedThing.kind, selectedThing.key, stat.statKey, globalQueuedDepth);
-            queuedDepth = Math.max(0, queuedDepth + ahead); globalQueuedDepth = Math.max(0, globalQueuedDepth + ahead);
-        }
-        let projectedLevel = currentLevel + globalQueuedDepth;
-        let nextCost = getResearchCost(selectedThing.kind, selectedThing.key, stat.statKey, projectedLevel);
-        let atMax = projectedLevel >= MAX_RESEARCH_LEVEL;
-        let canAfford = !atMax;
-        let selectedThingLevel = getResearchPreviewThingLevel();
-        let displayFromLevel = currentLevel;
-        let displayToLevel = Math.min(MAX_RESEARCH_LEVEL, projectedLevel);
-        let currentValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, displayFromLevel, selectedThingLevel);
-        let projectedValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, displayToLevel, selectedThingLevel);
-        let baseValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, 0, selectedThingLevel);
-        if (!Number.isFinite(projectedValue)) projectedValue = currentValue;
-        let projectedMultiplier = (Number.isFinite(baseValue) && Math.abs(baseValue) > 1e-9 && Number.isFinite(projectedValue))
-            ? (projectedValue / baseValue)
-            : NaN;
-        let currentMultiplier = (Number.isFinite(baseValue) && Math.abs(baseValue) > 1e-9 && Number.isFinite(currentValue))
-            ? (currentValue / baseValue)
-            : NaN;
-        let nextPreviewLevel = atMax ? displayToLevel : Math.min(MAX_RESEARCH_LEVEL, displayToLevel + 1);
-        let nextPreviewValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, nextPreviewLevel, selectedThingLevel);
-        if (!Number.isFinite(nextPreviewValue)) nextPreviewValue = projectedValue;
-        let nextPreviewMultiplier = (Number.isFinite(baseValue) && Math.abs(baseValue) > 1e-9 && Number.isFinite(nextPreviewValue))
-            ? (nextPreviewValue / baseValue)
-            : NaN;
-        let queuedEnergy = getResearchQueuedEnergyForStat(selectedThing.kind, selectedThing.key, stat.statKey, currentLevel, globalQueuedDepth);
-        let currentMultiplierLabel = `x${formatResearchMultiplierValue(currentMultiplier)}`;
-        let projectedMultiplierLabel = `x${formatResearchMultiplierValue(projectedMultiplier)}`;
-        let nextPreviewMultiplierLabel = `x${formatResearchMultiplierValue(nextPreviewMultiplier)}`;
-        let queuedLevelLabel = _formatResearchQueuedLevelLabel(displayToLevel);
-        if (stat.statKey === 'maxLevel') {
-            currentMultiplierLabel = formatResearchStatValue('maxLevel', currentValue);
-            projectedMultiplierLabel = formatResearchStatValue('maxLevel', projectedValue);
-            nextPreviewMultiplierLabel = formatResearchStatValue('maxLevel', nextPreviewValue);
-        }
-        html += `<div style="margin:2px 0 6px 0;padding:3px 4px;border:1px solid #242424;border-radius:4px;background:#101010">`;
-        html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
-        html += `<span style="display:flex;align-items:center;gap:4px;color:#bbb"><button type="button" class="info-research-stat-matrix-btn" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" data-from-level="${displayFromLevel}" data-to-level="${displayToLevel}" style="cursor:pointer;background:#111;color:#9cf;border:1px solid #355;border-radius:3px;padding:0 5px;height:18px;line-height:16px;font-size:10px;">M</button><span>${stat.label}</span></span>`;
-        html += `<span style="color:#fd0">⚡${formatBigNumber(queuedEnergy, 0)}</span>`;
-        html += `<span class="info-research-level-preview-btn" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" data-from-level="${displayFromLevel}" data-to-level="${displayToLevel}" style="color:#8fc;cursor:pointer;flex:0 0 auto;text-align:right;display:inline-block;">${currentMultiplierLabel}->${projectedMultiplierLabel}</span>`;
-        html += `</div>`;
-        html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px;white-space:nowrap">`;
-        html += `<span style="display:flex;align-items:center;gap:0.75ch;color:#9cf;flex:1 1 auto;min-width:0">`;
-        html += _buildResearchStatSlotHtml(atMax ? 'MAX' : formatInfoCurrency(nextCost), 10, '#fd0');
-        html += _buildResearchStatSlotHtml(nextPreviewMultiplierLabel, 5, '#8fc');
-        html += _buildResearchStatSlotHtml(`Q:${queuedDepth}`, 4, '#9cf', 'margin-left:1ch;');
-        html += _buildResearchStatSlotHtml(queuedLevelLabel, 4, '#9cf');
-        html += `</span>`;
-        if (scope.startsWith('single:')) {
-            html += `<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;flex:0 0 46px;min-width:46px">`;
-            html += `<span class="info-research-dequeue-btn" data-gx="${targetArg.gx}" data-gy="${targetArg.gy}" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
-            html += `<span class="info-research-buy-btn" data-gx="${targetArg.gx}" data-gy="${targetArg.gy}" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" style="cursor:${atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
-            html += `</div>`;
-        } else {
-            html += `<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;flex:0 0 46px;min-width:46px">`;
-            html += `<span class="info-research-dequeue-group-btn" data-coords="${groupCoordStr}" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
-            html += `<span class="info-research-buy-group-btn" data-coords="${groupCoordStr}" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" style="cursor:${atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
-            html += `</div>`;
-        }
-        html += `</div>`;
-        html += `</div>`;
+function researchSelectionEnergyEstimate(owner, selectedThings) {
+    let total = 0;
+    const seen = new Set();
+    for (const thing of selectedThings) for (const stat of thing.stats || []) {
+        const id = thing.kind + ':' + thing.key + ':' + stat.statKey;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const levels = researchBarLevel(owner, { kind: thing.kind, key: thing.key, statKey: stat.statKey });
+        total += getResearchQueuedEnergyForStat(thing.kind, thing.key, stat.statKey, levels.level, levels.target - levels.level);
     }
-    html += `</div>`;
-    return html;
+    return total;
+}
+
+function researchEnergySummaryHtml(total, label = 'Selected research') {
+    return `<div class="research-energy-summary"><span>${label}</span><span title="Approximate energy cost">≈${formatInfoCurrency(total)}</span></div>`;
+}
+
+function researchStatControlHtml(owner, targetArg, thing, stat, tooltipStats = null, icon = false) {
+    const levels = researchBarLevel(owner, { kind: thing.kind, key: thing.key, statKey: stat.statKey });
+    let html = '<div class="compact-research-row">';
+    html += icon ? _renderResearchQueueThingIconHtml(thing, 16) : `<span class="compact-research-name">${stat.label}</span>`;
+    if (!icon) html += `<button type="button" class="info-research-stat-matrix-btn" data-kind="${thing.kind}" data-key="${thing.key}" data-stat-key="${stat.statKey}" data-from-level="${levels.level}" data-to-level="${levels.target}" style="padding:0 3px;height:16px;line-height:14px;font-size:10px">M</button>`;
+    html += researchCountBar(owner, targetArg, [{ kind: thing.kind, key: thing.key, statKey: stat.statKey }], null, tooltipStats);
+    return html + '</div>';
+}
+
+function _renderResearchSingleThingStatsPanel(owner, scope, targetArg, selectedThing, popupLayout = false) {
+    if (!selectedThing) return '';
+    let html = `<div class="${popupLayout ? 'research-popup-stat-pane' : 'research-stat-pane'}">`;
+    html += researchEnergySummaryHtml(researchSelectionEnergyEstimate(owner, [selectedThing]));
+    for (const stat of selectedThing.stats || []) html += researchStatControlHtml(owner, targetArg, selectedThing, stat);
+    return html + '</div>';
 }
 
 function _renderResearchMultiThingStatsPanel(owner, scope, targetArg, selectedThings, popupLayout = false) {
-    let html = '';
-    let groupCoordStr = Array.isArray(targetArg) ? infoCoordAttr(targetArg.map(r => `${r.gx},${r.gy}`).join(';')) : '';
-    let panelClasses = popupLayout ? 'research-popup-stat-pane' : '';
-    let panelStyle = popupLayout
-        ? 'height:100%;min-height:0;overflow-y:auto;overflow-x:hidden;'
-        : 'margin-top:4px;border:1px solid #2f2f2f;border-radius:4px;padding:4px;background:#121212';
-    let statEntries = _buildResearchMultiStatEntries(selectedThings);
-    html += `<div class="${panelClasses}" style="${panelStyle}">`;
-    if (!popupLayout) html += `<div style="font-size:10px;color:#ddd;margin-bottom:3px">${selectedThings.length} selected</div>`;
-    for (let entry of statEntries) {
-        let applicable = entry.items || [];
-        if (applicable.length <= 0) continue;
-        let selectedThingLevel = getResearchPreviewThingLevel();
-        let totalQueuedEnergy = 0;
-        let totalNextCost = 0;
-        let totalQueuedDepth = 0;
-        let projectedResearchLevels = [];
-        let currentLabels = [];
-        let projectedLabels = [];
-        let nextPreviewLabels = [];
-        let anyQueueable = false;
-        for (let item of applicable) {
-            let thing = item.thing;
-            let stat = item.stat;
-            let currentLevel = getPlayerResearchLevel(owner, thing.kind, thing.key, stat.statKey);
-            let globalQueuedDepth = getResearchQueuedDepthForPlayer(owner, thing.kind, thing.key, stat.statKey);
-            let projectedLevel = currentLevel + globalQueuedDepth;
-            let atMax = projectedLevel >= MAX_RESEARCH_LEVEL;
-            let displayFromLevel = currentLevel;
-            let displayToLevel = Math.min(MAX_RESEARCH_LEVEL, projectedLevel);
-            let currentValue = getResearchStatValueAtLevel(thing.kind, thing.key, stat.statKey, displayFromLevel, selectedThingLevel);
-            let projectedValue = getResearchStatValueAtLevel(thing.kind, thing.key, stat.statKey, displayToLevel, selectedThingLevel);
-            let baseValue = getResearchStatValueAtLevel(thing.kind, thing.key, stat.statKey, 0, selectedThingLevel);
-            if (!Number.isFinite(projectedValue)) projectedValue = currentValue;
-            let projectedMultiplier = (Number.isFinite(baseValue) && Math.abs(baseValue) > 1e-9 && Number.isFinite(projectedValue))
-                ? (projectedValue / baseValue)
-                : NaN;
-            let currentMultiplier = (Number.isFinite(baseValue) && Math.abs(baseValue) > 1e-9 && Number.isFinite(currentValue))
-                ? (currentValue / baseValue)
-                : NaN;
-            let nextPreviewLevel = atMax ? displayToLevel : Math.min(MAX_RESEARCH_LEVEL, displayToLevel + 1);
-            let nextPreviewValue = getResearchStatValueAtLevel(thing.kind, thing.key, stat.statKey, nextPreviewLevel, selectedThingLevel);
-            if (!Number.isFinite(nextPreviewValue)) nextPreviewValue = projectedValue;
-            let nextPreviewMultiplier = (Number.isFinite(baseValue) && Math.abs(baseValue) > 1e-9 && Number.isFinite(nextPreviewValue))
-                ? (nextPreviewValue / baseValue)
-                : NaN;
-            totalQueuedEnergy += getResearchQueuedEnergyForStat(thing.kind, thing.key, stat.statKey, currentLevel, globalQueuedDepth);
-            totalQueuedDepth += Math.max(0, Number(globalQueuedDepth) || 0);
-            projectedResearchLevels.push(displayToLevel);
-            if (!atMax) {
-                totalNextCost += Math.max(0, Number(getResearchCost(thing.kind, thing.key, stat.statKey, projectedLevel)) || 0);
-                anyQueueable = true;
-            }
-            if (stat.statKey === 'maxLevel') {
-                currentLabels.push(formatResearchStatValue('maxLevel', currentValue));
-                projectedLabels.push(formatResearchStatValue('maxLevel', projectedValue));
-                nextPreviewLabels.push(formatResearchStatValue('maxLevel', nextPreviewValue));
-            } else {
-                currentLabels.push(`x${formatResearchMultiplierValue(currentMultiplier)}`);
-                projectedLabels.push(`x${formatResearchMultiplierValue(projectedMultiplier)}`);
-                nextPreviewLabels.push(`x${formatResearchMultiplierValue(nextPreviewMultiplier)}`);
-            }
-        }
-        let currentLabel = currentLabels.every(v => v === currentLabels[0]) ? currentLabels[0] : 'MIX';
-        let projectedLabel = projectedLabels.every(v => v === projectedLabels[0]) ? projectedLabels[0] : 'MIX';
-        let nextPreviewLabel = nextPreviewLabels.every(v => v === nextPreviewLabels[0]) ? nextPreviewLabels[0] : 'MIX';
-        let queuedLevelLabel = _formatResearchQueuedLevelLabelForMany(projectedResearchLevels);
-        let costLabel = anyQueueable ? formatInfoCurrency(totalNextCost) : 'MAX';
-        let targetAttrs = scope.startsWith('single:')
-            ? `data-gx="${targetArg.gx}" data-gy="${targetArg.gy}"`
-            : `data-coords="${groupCoordStr}"`;
-        let subClass = scope.startsWith('single:') ? 'info-research-dequeue-multi-btn' : 'info-research-dequeue-multi-group-btn';
-        let addClass = scope.startsWith('single:') ? 'info-research-buy-multi-btn' : 'info-research-buy-multi-group-btn';
-        html += `<div style="margin:2px 0 6px 0;padding:3px 4px;border:1px solid #242424;border-radius:4px;background:#101010">`;
-        html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
-        html += `<span style="display:flex;align-items:center;gap:4px;color:#bbb"><span>${entry.label}</span></span>`;
-        html += `<span style="color:#fd0">⚡${formatBigNumber(totalQueuedEnergy, 0)}</span>`;
-        html += `<span style="color:#8fc;flex:0 0 auto;text-align:right;display:inline-block;">${currentLabel}->${projectedLabel}</span>`;
-        html += `</div>`;
-        html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px;white-space:nowrap">`;
-        html += `<span style="display:flex;align-items:center;gap:0.75ch;color:#9cf;flex:1 1 auto;min-width:0">`;
-        html += _buildResearchStatSlotHtml(costLabel, 10, '#fd0');
-        html += _buildResearchStatSlotHtml(nextPreviewLabel, 5, '#8fc');
-        html += _buildResearchStatSlotHtml(`Q:${totalQueuedDepth}`, 4, '#9cf', 'margin-left:1ch;');
-        html += _buildResearchStatSlotHtml(queuedLevelLabel, 4, '#9cf');
-        html += `</span>`;
-        html += `<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;flex:0 0 46px;min-width:46px">`;
-        html += `<span class="${subClass}" ${targetAttrs} data-owner="${owner}" data-scope="${scope}" data-stat-group-key="${entry.groupKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
-        html += `<span class="${addClass}" ${targetAttrs} data-owner="${owner}" data-scope="${scope}" data-stat-group-key="${entry.groupKey}" style="cursor:${anyQueueable ? 'pointer' : 'default'};color:${anyQueueable ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
-        html += `</div>`;
-        html += `</div>`;
-        html += `</div>`;
+    let html = `<div class="${popupLayout ? 'research-popup-stat-pane' : 'research-stat-pane'}">`;
+    html += researchEnergySummaryHtml(researchSelectionEnergyEstimate(owner, selectedThings));
+    for (const entry of _buildResearchMultiStatEntries(selectedThings)) {
+        const items = entry.items || [];
+        const comparisons = items.map(item => ({ kind: item.thing.kind, key: item.thing.key, statKey: item.stat.statKey }));
+        html += `<div class="research-stat-group-label">${entry.label}</div>`;
+        for (const item of items) html += researchStatControlHtml(owner, targetArg, item.thing, item.stat, comparisons, true);
     }
-    html += `</div>`;
-    return html;
+    return html + '</div>';
 }
 
 function renderResearchThingSelectorButtons(owner, scope, selectedThingId, opts = {}) {
@@ -5423,13 +5284,9 @@ function renderResearchInfo(e) {
         let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
         let totalCost = Math.max(1, Math.floor(Number.isFinite(researcherEnergy) ? researcherEnergy : 1)) * purchaseCount;
         let canQueue = !e.underConstruction;
-        let subBtn = canQueue
-            ? `<span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`
-            : `<span style="color:#444;font-weight:bold;">[-]</span>`;
-        let addBtn = canQueue
-            ? `<span class="info-buy-worker-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#4f4;font-weight:bold;">[+]</span>`
-            : `<span style="color:#444;font-weight:bold;">[+]</span>`;
-        html += infoQueueRow(totalCost, formatInfoFraction(queueCount, 10), subBtn, addBtn);
+        let queueBar = spawnCountBar([e], true);
+        let queueEnergyEstimate = spawnQueueEnergyEstimate([e], true);
+        html += infoQueueRow(queueEnergyEstimate, queueBar);
         html += renderSpawnerEnergyProgressRow(getSpawnerEnergyProgress(e));
     }
     if (e.owner === localPlayerId && !e.underConstruction) {
@@ -5531,13 +5388,9 @@ function renderResearchGroupInfo(group) {
         let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
         let totalCost = Math.max(1, Math.floor(cost || 1)) * purchaseCount;
         let canQueue = queueReady.length > 0;
-        let subBtn = canQueue
-            ? `<span class="info-dequeue-group-btn" data-type="worker" data-coords="${workerCoordStr}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`
-            : `<span style="color:#444;font-weight:bold;">[-]</span>`;
-        let addBtn = canQueue
-            ? `<span class="info-buy-worker-group-btn" data-coords="${workerCoordStr}" style="cursor:pointer;color:#4f4;font-weight:bold;">[+]</span>`
-            : `<span style="color:#444;font-weight:bold;">[+]</span>`;
-        html += infoQueueRow(totalCost, formatInfoFraction(workerQueueCount, Math.max(1, readyGroup.length) * 10), subBtn, addBtn);
+        let queueBar = spawnCountBar(queueReady, true);
+        let queueEnergyEstimate = spawnQueueEnergyEstimate(queueReady, true);
+        html += infoQueueRow(queueEnergyEstimate, queueBar);
         html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(readyGroup));
 
         html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
@@ -5602,55 +5455,6 @@ function bindResearchPopupControls(container) {
         if (!researchQueueDragInProgress) renderResearchPopupContent();
     };
 
-    let queueResearchForSelection = (btn, actionName) => {
-        let owner = Number.parseInt(btn.dataset.owner, 10);
-        let scope = String(btn.dataset.scope || '');
-        let statKey = String(btn.dataset.statKey || '');
-        let statGroupKey = String(btn.dataset.statGroupKey || '');
-        if (!Number.isFinite(owner) || !scope || (!statKey && !statGroupKey)) return;
-        let selection = getResearchThingPanelSelection(owner, scope);
-        let targetStats = [];
-        for (let thing of selection.selectedThings) {
-            if (!thing || !Array.isArray(thing.stats)) continue;
-            for (let stat of thing.stats) {
-                if (!stat || !stat.statKey) continue;
-                if ((statKey && stat.statKey === statKey) || (statGroupKey && getResearchMultiStatGroupKey(stat) === statGroupKey)) {
-                    targetStats.push({ thing, statKey: stat.statKey });
-                }
-            }
-        }
-        if (targetStats.length <= 0) return;
-
-        let anchor = null;
-        if (btn.dataset.gx !== undefined && btn.dataset.gy !== undefined) {
-            let gx = Number.parseInt(btn.dataset.gx, 10);
-            let gy = Number.parseInt(btn.dataset.gy, 10);
-            if (Number.isFinite(gx) && Number.isFinite(gy)) anchor = { gx, gy };
-        }
-        if (!anchor) {
-            let coords = parseCoords(infoCoordText(btn.dataset.coords));
-            anchor = coords.find(c => {
-                let v = getSpawnerAtTile(c.gx, c.gy);
-                return !!(v && v.owner === owner && v.energy > 0 && !v.underConstruction && v.type === 'research');
-            });
-        }
-        if (!anchor) return;
-
-        for (let target of targetStats) {
-            queueAction({
-                action: actionName,
-                gx: anchor.gx,
-                gy: anchor.gy,
-                kind: target.thing.kind,
-                key: target.thing.key,
-                statKey: target.statKey,
-                count: queuePurchaseMultiplier
-            });
-        }
-        updateInfoPanel();
-        if (!researchQueueDragInProgress) renderResearchPopupContent();
-    };
-
     container.addEventListener('click', (e) => {
         let target = e.target;
         if (!(target instanceof Element)) return;
@@ -5677,44 +5481,6 @@ function bindResearchPopupControls(container) {
             return;
         }
 
-        if (btn.classList.contains('info-research-buy-btn')) {
-            let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
-            let kind = btn.dataset.kind, key = btn.dataset.key, statKey = btn.dataset.statKey;
-            queueAndRefresh({ action: 'queueResearch', gx, gy, kind, key, statKey, count: queuePurchaseMultiplier });
-            return;
-        }
-
-        if (btn.classList.contains('info-research-buy-group-btn')) {
-            let kind = btn.dataset.kind, key = btn.dataset.key, statKey = btn.dataset.statKey;
-            let coords = parseCoords(infoCoordText(btn.dataset.coords));
-            let anchor = coords.find(c => {
-                let v = getSpawnerAtTile(c.gx, c.gy);
-                return !!(v && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction && v.type === 'research');
-            });
-            if (!anchor) return;
-            queueAndRefresh({ action: 'queueResearch', gx: anchor.gx, gy: anchor.gy, kind, key, statKey, count: queuePurchaseMultiplier });
-            return;
-        }
-
-        if (btn.classList.contains('info-research-dequeue-btn')) {
-            let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
-            let kind = btn.dataset.kind, key = btn.dataset.key, statKey = btn.dataset.statKey;
-            queueAndRefresh({ action: 'dequeueResearch', gx, gy, kind, key, statKey, count: queuePurchaseMultiplier });
-            return;
-        }
-
-        if (btn.classList.contains('info-research-dequeue-group-btn')) {
-            let kind = btn.dataset.kind, key = btn.dataset.key, statKey = btn.dataset.statKey;
-            let coords = parseCoords(infoCoordText(btn.dataset.coords));
-            let anchor = coords.find(c => {
-                let v = getSpawnerAtTile(c.gx, c.gy);
-                return !!(v && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction && v.type === 'research');
-            });
-            if (!anchor) return;
-            queueAndRefresh({ action: 'dequeueResearch', gx: anchor.gx, gy: anchor.gy, kind, key, statKey, count: queuePurchaseMultiplier });
-            return;
-        }
-
         if (btn.classList.contains('info-research-thing-btn')) {
             let owner = Number.parseInt(btn.dataset.owner);
             let scope = btn.dataset.scope;
@@ -5722,16 +5488,6 @@ function bindResearchPopupControls(container) {
             if (!Number.isFinite(owner) || !scope || !thingId) return;
             setResearchThingPanelSelection(owner, scope, thingId, e);
             renderResearchPopupContent();
-            return;
-        }
-
-        if (btn.classList.contains('info-research-buy-multi-btn') || btn.classList.contains('info-research-buy-multi-group-btn')) {
-            queueResearchForSelection(btn, 'queueResearch');
-            return;
-        }
-
-        if (btn.classList.contains('info-research-dequeue-multi-btn') || btn.classList.contains('info-research-dequeue-multi-group-btn')) {
-            queueResearchForSelection(btn, 'dequeueResearch');
             return;
         }
 
@@ -5979,6 +5735,7 @@ function patchInfoPanelText(render, html) {
     }
     render.parts = parts;
     render.html = html;
+    syncCountSliderValues(render.element);
     return true;
 }
 
@@ -6191,7 +5948,7 @@ function dequeueGroupSpawns(coords, isWorker, count) {
 
 function updateInfoPanel(panelOverride = null, opts = {}) {
     let panel = panelOverride || document.getElementById('info-panel');
-    if (!panel) return;
+    if (!panel || countBarBusy(panel)) return;
     let prevFormatBigNumberSuffixStart = activeFormatBigNumberSuffixStart;
     let formatBigNumberSuffixStart = Number.isFinite(opts.formatBigNumberSuffixStart)
         ? Number(opts.formatBigNumberSuffixStart)
@@ -6441,6 +6198,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     }
     if (rebuildSections && rebuildSections.length === 0) {
         previousRender.html = html;
+
         restoreInfoPanelMouseAnchor(panel, panelMouseAnchor);
         refreshResearchPopup();
         activeFormatBigNumberSuffixStart = prevFormatBigNumberSuffixStart;
@@ -6493,141 +6251,6 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
             box.insertBefore(img, box.firstChild);
         }
     });
-
-    // Wire up buy buttons for single barracks
-    panel.querySelectorAll('.info-buy-btn').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
-            queueAction({ action: 'queueUnit', gx, gy, count: queuePurchaseMultiplier });
-            optimisticQueueBump(_infoQueueFraction(btn), Math.max(1, Math.floor(queuePurchaseMultiplier || 1)));
-        });
-    });
-    // Wire up group buy buttons - dynamically find barrack with lowest queue
-    panel.querySelectorAll('.info-buy-group-btn').forEach(btn => {
-        bindInstantPress(btn, () => { queueGroupSpawns(parseInfoCoordList(infoCoordText(btn.dataset.coords)), false, queuePurchaseMultiplier); optimisticQueueBump(_infoQueueFraction(btn), Math.max(1, Math.floor(queuePurchaseMultiplier || 1))); });
-    });
-
-    // Wire up worker buy buttons (single spawner)
-    panel.querySelectorAll('.info-buy-worker-btn').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
-            queueAction({ action: 'queueWorker', gx, gy, count: queuePurchaseMultiplier });
-            optimisticQueueBump(_infoQueueFraction(btn), Math.max(1, Math.floor(queuePurchaseMultiplier || 1)));
-        });
-    });
-    // Wire up worker group buy buttons - distribute to lowest queue
-    panel.querySelectorAll('.info-buy-worker-group-btn').forEach(btn => {
-        bindInstantPress(btn, () => { queueGroupSpawns(parseInfoCoordList(infoCoordText(btn.dataset.coords)), true, queuePurchaseMultiplier); optimisticQueueBump(_infoQueueFraction(btn), Math.max(1, Math.floor(queuePurchaseMultiplier || 1))); });
-    });
-
-    // Wire up research buy buttons (single research building)
-    panel.querySelectorAll('.info-research-buy-btn').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
-            let kind = btn.dataset.kind, key = btn.dataset.key;
-            let statKey = btn.dataset.statKey;
-            queueAction({ action: 'queueResearch', gx, gy, kind, key, statKey, count: queuePurchaseMultiplier });
-        });
-    });
-
-    // Wire up research buy buttons (group scope, shared queue)
-    panel.querySelectorAll('.info-research-buy-group-btn').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let kind = btn.dataset.kind, key = btn.dataset.key;
-            let statKey = btn.dataset.statKey;
-            let coords = (infoCoordText(btn.dataset.coords) || '').split(';').map(c => {
-                let [x, y] = c.split(',');
-                return { gx: parseInt(x), gy: parseInt(y) };
-            }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
-            let anchor = coords.find(c => {
-                let v = getSpawnerAtTile(c.gx, c.gy);
-                return !!(v && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction && v.type === 'research');
-            });
-            if (!anchor) return;
-            let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
-            queueAction({ action: 'queueResearch', gx: anchor.gx, gy: anchor.gy, kind, key, statKey, count: purchaseCount });
-        });
-    });
-
-    // Wire up research dequeue buttons (single)
-    panel.querySelectorAll('.info-research-dequeue-btn').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
-            let kind = btn.dataset.kind, key = btn.dataset.key;
-            let statKey = btn.dataset.statKey;
-            queueAction({ action: 'dequeueResearch', gx, gy, kind, key, statKey, count: queuePurchaseMultiplier });
-        });
-    });
-
-    // Wire up research dequeue buttons (group scope, shared queue)
-    panel.querySelectorAll('.info-research-dequeue-group-btn').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let kind = btn.dataset.kind, key = btn.dataset.key;
-            let statKey = btn.dataset.statKey;
-            let coords = (infoCoordText(btn.dataset.coords) || '').split(';').map(c => {
-                let [x, y] = c.split(',');
-                return { gx: parseInt(x), gy: parseInt(y) };
-            }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
-            let anchor = coords.find(c => {
-                let v = getSpawnerAtTile(c.gx, c.gy);
-                return !!(v && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction && v.type === 'research');
-            });
-            if (!anchor) return;
-            let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
-            queueAction({ action: 'dequeueResearch', gx: anchor.gx, gy: anchor.gy, kind, key, statKey, count: purchaseCount });
-        });
-    });
-
-    let queueResearchForSelectionFromPanel = (btn, actionName) => {
-        let owner = Number.parseInt(btn.dataset.owner, 10);
-        let scope = String(btn.dataset.scope || '');
-        let statKey = String(btn.dataset.statKey || '');
-        let statGroupKey = String(btn.dataset.statGroupKey || '');
-        if (!Number.isFinite(owner) || !scope || (!statKey && !statGroupKey)) return;
-        let selection = getResearchThingPanelSelection(owner, scope);
-        let targetStats = [];
-        for (let thing of selection.selectedThings) {
-            if (!thing || !Array.isArray(thing.stats)) continue;
-            for (let stat of thing.stats) {
-                if (!stat || !stat.statKey) continue;
-                if ((statKey && stat.statKey === statKey) || (statGroupKey && getResearchMultiStatGroupKey(stat) === statGroupKey)) {
-                    targetStats.push({ thing, statKey: stat.statKey });
-                }
-            }
-        }
-        if (targetStats.length <= 0) return;
-
-        let anchor = null;
-        if (btn.dataset.gx !== undefined && btn.dataset.gy !== undefined) {
-            let gx = Number.parseInt(btn.dataset.gx, 10);
-            let gy = Number.parseInt(btn.dataset.gy, 10);
-            if (Number.isFinite(gx) && Number.isFinite(gy)) anchor = { gx, gy };
-        }
-        if (!anchor) {
-            let coords = (infoCoordText(btn.dataset.coords) || '').split(';').map(c => {
-                let [x, y] = c.split(',');
-                return { gx: Number.parseInt(x, 10), gy: Number.parseInt(y, 10) };
-            }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
-            anchor = coords.find(c => {
-                let v = getSpawnerAtTile(c.gx, c.gy);
-                return !!(v && v.owner === owner && v.energy > 0 && !v.underConstruction && v.type === 'research');
-            });
-        }
-        if (!anchor) return;
-
-        for (let target of targetStats) {
-            queueAction({
-                action: actionName,
-                gx: anchor.gx,
-                gy: anchor.gy,
-                kind: target.thing.kind,
-                key: target.thing.key,
-                statKey: target.statKey,
-                count: queuePurchaseMultiplier
-            });
-        }
-        refreshThisPanel();
-    };
 
     // Wire up clickable research value previews (x->y) for thing-level dropdown.
     panel.querySelectorAll('.info-research-level-preview-btn').forEach(btn => {
@@ -6747,18 +6370,6 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         });
     });
 
-    panel.querySelectorAll('.info-research-buy-multi-btn, .info-research-buy-multi-group-btn').forEach(btn => {
-        bindInstantPress(btn, () => {
-            queueResearchForSelectionFromPanel(btn, 'queueResearch');
-        });
-    });
-
-    panel.querySelectorAll('.info-research-dequeue-multi-btn, .info-research-dequeue-multi-group-btn').forEach(btn => {
-        bindInstantPress(btn, () => {
-            queueResearchForSelectionFromPanel(btn, 'dequeueResearch');
-        });
-    });
-
     panel.querySelectorAll('.info-research-queue-toggle').forEach(btn => {
         bindInstantPress(btn, () => {
             let owner = Number.parseInt(btn.dataset.owner);
@@ -6771,19 +6382,8 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     });
 
     // Wire up dequeue buttons
-    panel.querySelectorAll('.info-dequeue-btn').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
-            let type = btn.dataset.type === 'unit' ? 'dequeueUnit' : 'dequeueWorker';
-            queueAction({ action: type, gx, gy, count: queuePurchaseMultiplier });
-            optimisticQueueBump(_infoQueueFraction(btn), -Math.max(1, Math.floor(queuePurchaseMultiplier || 1)));
-        });
-    });
 
     // Wire up dequeue group buttons (removes from building with highest queue)
-    panel.querySelectorAll('.info-dequeue-group-btn').forEach(btn => {
-        bindInstantPress(btn, () => { dequeueGroupSpawns(parseInfoCoordList(infoCoordText(btn.dataset.coords)), btn.dataset.type === 'worker', queuePurchaseMultiplier); optimisticQueueBump(_infoQueueFraction(btn), -Math.max(1, Math.floor(queuePurchaseMultiplier || 1))); });
-    });
     // Wire up sub-group toggle buttons (simple toggle, doesn't affect others)
     panel.querySelectorAll('.subgroup-toggle').forEach(btn => {
         bindInstantPress(btn, () => {
@@ -7248,7 +6848,7 @@ let researchPopupInfoRenderActive = false;
 
 function renderResearchPopupContent() {
     let holder = document.getElementById('research-popup-content');
-    if (!holder) return;
+    if (!holder || countBarBusy(holder)) return;
     let popupSnapshot = null;
     if (activePopupControlGroupKey) {
         normalizePopupControlGroup(activePopupControlGroupKey);
@@ -7269,7 +6869,6 @@ function renderResearchPopupContent() {
     let infoPanel = holder.querySelector('#research-popup-info-panel');
     if (!infoPanel) {
         holder.innerHTML = `
-        <div id="queue-multiplier-bar-popup" class="mult-toggle-bar" style="padding:3px 4px;border-bottom:1px solid #2a2a2a;background:#101010;"></div>
         <div class="subgroup-options-popup" style="display:flex;gap:4px;padding:3px 4px;border-bottom:1px solid #2a2a2a;background:#101010;margin-bottom:4px;">
             <button id="btn-ignore-level-popup">Collapse Same Type: OFF</button>
         </div>
@@ -7358,15 +6957,8 @@ function renderStartingResourcesThingRowsForPanel() {
         let projectedValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, nextLevel, selectedThingLevel);
         if (!Number.isFinite(projectedValue)) projectedValue = currentValue;
 
-        html += `<div style="margin:2px 0 6px 0;padding:3px 4px;border:1px solid #242424;border-radius:4px;background:#101010">`;
-        html += `<div style="display:flex;align-items:center;gap:8px;white-space:nowrap">`;
-        html += `<span style="color:#bbb;flex:1 1 0;min-width:0">${stat.label}</span><span class="info-research-level-preview-btn info-startres-level-preview-btn" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" data-from-level="${curLevel}" data-to-level="${nextLevel}" style="color:#8fc;background:#000;cursor:pointer;flex:0 0 180px;text-align:center;display:inline-block;">${formatResearchStatValue(stat.statKey, currentValue)}->${formatResearchStatValue(stat.statKey, projectedValue)}</span>`;
-        html += `<span style="color:#9cf;flex:1 1 0;text-align:right">R${curLevel}/${MAX_RESEARCH_LEVEL}</span>`;
-        html += `</div>`;
-        html += `<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px">`;
-        html += `<span class="info-startres-stat-dec" data-thing-id="${thingId}" data-stat-key="${stat.statKey}" style="cursor:${curLevel > 0 ? 'pointer' : 'default'};color:${curLevel > 0 ? '#f66' : '#444'};font-weight:bold;">[-]</span>`;
-        html += `<span class="info-startres-stat-inc" data-thing-id="${thingId}" data-stat-key="${stat.statKey}" style="cursor:${curLevel < MAX_RESEARCH_LEVEL ? 'pointer' : 'default'};color:${curLevel < MAX_RESEARCH_LEVEL ? '#4f4' : '#444'};font-weight:bold;">[+]</span>`;
-        html += `</div>`;
+        html += `<div class="compact-research-row"><span class="compact-research-name">${stat.label}</span>`;
+        html += countBarHtml(curLevel, 0, MAX_RESEARCH_LEVEL, { type: 'preset-research', thingId, statKey: stat.statKey }, stat.label + ' starting research', 'R', isMultiplayer && !isHost);
         html += `</div>`;
     }
 
@@ -7378,11 +6970,9 @@ function renderStartingResourcesThingRowsForPanel() {
         let cur = getStartingSpawnCount(thingId, lvl);
         let maxRow = getStartingSpawnMaxForRow(thingId, lvl);
         html += `<div class="info-row" style="align-items:center;gap:8px;margin:1px 0;">`;
-        html += `<span style="color:#bbb;flex:1 1 0">L${lvl}</span>`;
-        html += `<span style="color:#fff;flex:0 0 180px;text-align:center">${cur}${Number.isFinite(maxRow) ? `/${maxRow}` : ''}</span>`;
+        html += `<span style="color:#bbb;flex:0 0 48px">L${lvl}</span>`;
         html += `<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;flex:1 1 0">`;
-        html += `<span class="info-startres-spawn-dec" data-thing-id="${thingId}" data-level="${lvl}" style="cursor:${cur > 0 ? 'pointer' : 'default'};color:${cur > 0 ? '#f66' : '#444'};font-weight:bold;">[-]</span>`;
-        html += `<span class="info-startres-spawn-inc" data-thing-id="${thingId}" data-level="${lvl}" style="cursor:${cur < maxRow ? 'pointer' : 'default'};color:${cur < maxRow ? '#4f4' : '#444'};font-weight:bold;">[+]</span>`;
+        html += countBarHtml(cur, 0, maxRow, { type: 'preset-spawn', thingId, level: lvl }, selectedThing.label + ' L' + lvl + ' starting count', '', isMultiplayer && !isHost);
         html += `</div>`;
         html += `</div>`;
     }
@@ -7394,10 +6984,8 @@ function renderStartingResourcesThingRowsForPanel() {
 
 function renderStartingResourcesPopupContent() {
     let holder = document.getElementById('starting-resources-content');
-    if (!holder) return;
+    if (!holder || countBarBusy(holder)) return;
     holder.innerHTML = `
-        <div style="font-size:10px;color:#8cf;margin-bottom:2px">Adjust Step</div>
-        <div id="starting-resources-multiplier-bar" class="mult-toggle-bar" style="margin-bottom:6px;border:1px solid #2f2f2f;border-radius:4px;"></div>
         <div id="starting-resources-panel" style="display:block">${renderStartingResourcesThingRowsForPanel()}</div>
         <div class="info-row" style="justify-content:flex-end;gap:8px;margin-top:6px;border-top:1px solid #2b2b2b;padding-top:6px;">
             <button id="btn-startres-reset-selected" type="button" style="font-size:11px;padding:3px 8px;">Reset Selected Thing</button>
@@ -7405,10 +6993,6 @@ function renderStartingResourcesPopupContent() {
         </div>
     `;
 
-    renderMultiplierBar('starting-resources-multiplier-bar', startingResourcesAdjustMultiplier, (val) => {
-        startingResourcesAdjustMultiplier = val;
-        renderStartingResourcesPopupContent();
-    });
 
     let resetSelected = document.getElementById('btn-startres-reset-selected');
     if (resetSelected) {
@@ -7447,42 +7031,6 @@ function renderStartingResourcesPopupContent() {
             let fromLevel = Number.parseInt(btn.dataset.fromLevel, 10);
             let toLevel = Number.parseInt(btn.dataset.toLevel, 10);
             openResearchThingLevelDropdown(btn, { kind, key, statKey, fromLevel, toLevel });
-        });
-    });
-
-    holder.querySelectorAll('.info-startres-stat-dec').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let thingId = String(btn.dataset.thingId || '');
-            let statKey = String(btn.dataset.statKey || '');
-            adjustStartingResearchLevelDelta(thingId, statKey, -startingResourcesAdjustMultiplier);
-            renderStartingResourcesPopupContent();
-        });
-    });
-
-    holder.querySelectorAll('.info-startres-stat-inc').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let thingId = String(btn.dataset.thingId || '');
-            let statKey = String(btn.dataset.statKey || '');
-            adjustStartingResearchLevelDelta(thingId, statKey, startingResourcesAdjustMultiplier);
-            renderStartingResourcesPopupContent();
-        });
-    });
-
-    holder.querySelectorAll('.info-startres-spawn-dec').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let thingId = String(btn.dataset.thingId || '');
-            let lvl = Number(btn.dataset.level || 1);
-            adjustStartingSpawnCountDelta(thingId, lvl, -startingResourcesAdjustMultiplier);
-            renderStartingResourcesPopupContent();
-        });
-    });
-
-    holder.querySelectorAll('.info-startres-spawn-inc').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let thingId = String(btn.dataset.thingId || '');
-            let lvl = Number(btn.dataset.level || 1);
-            adjustStartingSpawnCountDelta(thingId, lvl, startingResourcesAdjustMultiplier);
-            renderStartingResourcesPopupContent();
         });
     });
 }

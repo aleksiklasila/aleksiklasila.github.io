@@ -961,7 +961,6 @@ function _bbOpenMenu(spec) {
     };
     el.addEventListener('pointerdown', () => { if (bb.menu) bb.menu.pressed = true; });
     el.addEventListener('pointerup', () => { setTimeout(() => { if (bb.menu) bb.menu.pressed = false; }, 0); });
-    el.addEventListener('click', _bbOnMenuClickCapture, true);
     el.addEventListener('click', _bbOnMenuClick);
     bindResearchPopupControls(el);
     _bbForceRerender();
@@ -1020,14 +1019,11 @@ function _bbThingMenuHtml() {
         let coords = q.coords.map(c => `${c.gx},${c.gy}`).join(';');
         let can = q.ready.length > 0;
         let pct = Math.max(0, Math.min(1, Number(q.progress.pct) || 0));
+        html += researchEnergySummaryHtml(spawnQueueEnergyEstimate(q.coords, q.isWorker), 'Queue remaining');
         html += `<div class="bb-menu-queue" title="${_bbEscape(`${q.producerLabel}: ${q.ready.length} ready`)}">`
             + `<span class="bb-menu-queue-label">Queue</span>`
-            + `<span style="color:#fd0">${_bbFmtEnergy(q.cost)}</span>`
-            + `<span class="bb-menu-queue-frac">${_bbFmtInt(q.queued)}/${_bbFmtInt(q.cap)}</span>`
-            + `<span class="bb-menu-queue-btns">`
-            + `<span class="bb-btn-sub${can ? '' : ' bb-off'}" data-bb-act="queue-sub" data-worker="${q.isWorker ? 1 : 0}" data-coords="${coords}">[-]</span>`
-            + `<span class="bb-btn-add${can ? '' : ' bb-off'}" data-bb-act="queue-add" data-worker="${q.isWorker ? 1 : 0}" data-coords="${coords}">[+]</span>`
-            + `</span>`
+            + `<span></span>`
+            + spawnCountBar(q.coords, q.isWorker)
             + `<div class="bb-menu-queue-bar"><div style="width:${(pct * 100).toFixed(1)}%"></div>`
             + `<span>${q.progress.hasQueue ? `${_bbFmtEnergy(q.progress.paid)}/${_bbFmtEnergy(q.progress.required)}` : (can ? 'idle' : `no ready ${_bbEscape(q.producerLabel)}`)}</span></div>`
             + `</div>`;
@@ -1063,12 +1059,12 @@ function _bbDropMenuHtml() {
         html += `<div class="bb-menu-note">Build a research lab to upgrade.</div>`;
     } else {
         let cap = getResearchQueueCapacityForPlayer(owner);
-        html += `<div class="bb-menu-section">Upgrades <span class="bb-muted">queue ${getPlayerResearchQueueTotalLength(owner)}/${cap} · ${formatPurchaseMultiplier(Math.max(1, Math.floor(queuePurchaseMultiplier || 1)))} per click</span></div>`;
+        html += `<div class="bb-menu-section">Upgrades <span class="bb-muted">queue ${getPlayerResearchQueueTotalLength(owner)}/${cap}</span></div>`;
         html += _renderResearchSingleThingStatsPanel(owner, `single:${lab.gx},${lab.gy}`, lab, thing, false)
             .replace(/<div style="font-size:10px;color:#ddd;margin-bottom:3px">[^<]*<\/div>/, '');
     }
     html += `</div>`;
-    html += `<div class="bb-menu-hint">[+] inserts here · Esc or click outside when done</div>`;
+    html += `<div class="bb-menu-hint">Slide to set the research target; new levels insert here · Esc or click outside when done</div>`;
     return html;
 }
 
@@ -1092,6 +1088,7 @@ function _bbTaskMenuHtml() {
     let pos = i === 0 ? 'Researching' : `#${i + 1} in queue`;
 
     let html = `<div class="bb-menu-task-head"><span>${pos}</span><span class="bb-muted">${_bbEscape(_bbThingLabel(t.kind, t.key))}</span></div>`;
+    html += researchEnergySummaryHtml(researchQueueEnergyEstimate(tasks), 'Queue remaining');
     html += `<div class="bb-menu-task">`;
     html += `<div class="bb-menu-task-row">`;
     html += `<span class="bb-menu-task-name"><button type="button" class="info-research-stat-matrix-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="cursor:pointer;background:#111;color:#9cf;border:1px solid #355;border-radius:3px;padding:0 5px;height:18px;line-height:16px;font-size:10px;">M</button>`
@@ -1103,11 +1100,8 @@ function _bbTaskMenuHtml() {
     html += `<span class="bb-menu-task-name" style="color:#fd0">`
         + `<button type="button" data-bb-act="task-first" title="Move to first in queue" style="${btn}"${i === 0 ? ' disabled' : ''}>↑</button>`
         + `<button type="button" data-bb-act="task-last" title="Move to last in queue" style="${btn}"${i === tasks.length - 1 ? ' disabled' : ''}>↓</button>`
-        + `<span>${preview.atMax ? 'MAX' : _bbFmtEnergy(cost)} <span style="color:#9cf">R${t.toLevel}</span></span></span>`;
-    html += `<span class="bb-menu-queue-btns">`
-        + `<span class="bb-btn-sub" data-bb-act="task-sub" title="Remove this task">[-]</span>`
-        + `<span class="bb-btn-add${preview.atMax ? ' bb-off' : ''}" data-bb-act="task-add" title="Queue the next level right after this one">[+]</span>`
         + `</span>`;
+    html += researchCountBar(owner, _bbResearchLab(owner), [{ kind: t.kind, key: t.key, statKey: t.statKey }], preview.toLevel);
     html += `</div>`;
     html += `<div class="bb-menu-queue-bar"><div style="width:${(pct * 100).toFixed(1)}%"></div><span>${_bbFmtEnergy(cost * pct)}/${_bbFmtEnergy(cost)}</span></div>`;
     html += `</div>`;
@@ -1116,7 +1110,7 @@ function _bbTaskMenuHtml() {
 
 function _bbRenderMenu(force = false) {
     let menu = bb.menu;
-    if (!menu) return;
+    if (!menu || countBarBusy(menu.el)) return;
     if (!force && (menu.pressed || researchThingLevelDropdown)) return;
     // (A count just changed by a click stays until the simulation's can differ.)
     if (!force && bb.menuHoldUntil && performance.now() < bb.menuHoldUntil) return;
@@ -1160,29 +1154,6 @@ function _bbPositionMenu() {
     el.style.setProperty('--bb-arrow-x', Math.round(Math.max(12, Math.min(width - 12, a.x - left))) + 'px');
 }
 
-// Drop menu: [+] inserts at the dropped position, one after another.
-function _bbOnMenuClickCapture(ev) {
-    let menu = bb.menu;
-    if (!menu || menu.type !== 'drop' || !(ev.target instanceof Element)) return;
-    let btn = ev.target.closest('.info-research-buy-btn, .info-research-dequeue-btn');
-    if (!btn) return;
-    let count = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
-    if (btn.classList.contains('info-research-buy-btn')) {
-        ev.stopPropagation();
-        let owner = localPlayerId;
-        let room = getResearchQueueCapacityForPlayer(owner) - getPlayerResearchQueueTotalLength(owner);
-        queueAction({
-            action: 'queueResearch', gx: Number(btn.dataset.gx), gy: Number(btn.dataset.gy),
-            kind: btn.dataset.kind, key: btn.dataset.key, statKey: btn.dataset.statKey,
-            count, insertAt: menu.insertAt + menu.added
-        });
-        menu.added += Math.max(0, Math.min(count, room));
-    } else {
-        menu.added = Math.max(0, menu.added - count);
-    }
-    _bbRefreshSoon();
-}
-
 // The rows made again with the next frame (an order was just given).
 function bottomBarRefreshNow() {
     bb.lastRefresh = 0; bb.researchSig = '';
@@ -1207,18 +1178,6 @@ function _bbOnMenuClick(ev) {
         _bbSelectInShop(btn.dataset.key);
         closeBottomBarMenus();
         return;
-    } else if (act === 'queue-add' || act === 'queue-sub') {
-        let coords = parseInfoCoordList(btn.dataset.coords);
-        let isWorker = btn.dataset.worker === '1';
-        if (act === 'queue-add') queueGroupSpawns(coords, isWorker, queuePurchaseMultiplier);
-        else dequeueGroupSpawns(coords, isWorker, queuePurchaseMultiplier);
-        updateInfoPanel();
-        // (The count at once; the simulation's replaces it when it answers.)
-        if (typeof optimisticQueueBump === 'function') {
-            let frac = bb.menu && bb.menu.el ? bb.menu.el.querySelector('.bb-menu-queue-frac') : null;
-            optimisticQueueBump(frac, (act === 'queue-add' ? 1 : -1) * Math.max(1, Math.floor(queuePurchaseMultiplier || 1)));
-            bb.menuHoldUntil = performance.now() + 700;
-        }
     } else if (act.startsWith('task-')) {
         _bbTaskAction(act);
     }
@@ -1238,16 +1197,7 @@ function _bbTaskAction(act) {
         queueAction({ action: 'moveResearch', from: i, to: 0 });
     } else if (act === 'task-last') {
         queueAction({ action: 'moveResearch', from: i, to: last });
-    } else if (act === 'task-sub') {
-        // Same-stat tasks are interchangeable, so removing the last of this
-        // stat after moving this one to the end removes exactly this slot.
-        if (i !== last) queueAction({ action: 'moveResearch', from: i, to: last });
-        queueAction({ action: 'dequeueResearch', gx: lab.gx, gy: lab.gy, kind: t.kind, key: t.key, statKey: t.statKey, count: 1 });
-    } else if (act === 'task-add') {
-        queueAction({
-            action: 'queueResearch', gx: lab.gx, gy: lab.gy, kind: t.kind, key: t.key, statKey: t.statKey,
-            count: Math.max(1, Math.floor(queuePurchaseMultiplier || 1)), insertAt: i + 1
-        });
+
     }
 }
 

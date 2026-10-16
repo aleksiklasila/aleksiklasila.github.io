@@ -6710,41 +6710,14 @@ function formatPurchaseMultiplier(value) {
     return value >= 1024 ? `${Math.floor(value / 1024)}k` : String(value);
 }
 
-function renderMultiplierBar(containerId, currentValue, onChange, label) {
-    let bar = document.getElementById(containerId);
-    if (!bar) return;
-    let html = '';
-    for (let mult of PURCHASE_MULTIPLIERS) {
-        let activeCls = mult === currentValue ? ' active' : '';
-        html += `<button class="mult-toggle-btn${activeCls}" data-mult="${mult}" title="${mult}">${formatPurchaseMultiplier(mult)}</button>`;
-    }
-    bar.innerHTML = html;
-    bar.querySelectorAll('.mult-toggle-btn').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let val = parseInt(btn.dataset.mult);
-            if (!Number.isFinite(val) || val < 1) return;
-            onChange(val);
-        });
-    });
-}
-
 function updatePurchaseMultiplierBars() {
-    renderMultiplierBar('build-multiplier-bar', buildPurchaseMultiplier, (val) => {
-        buildPurchaseMultiplier = val;
-        updatePurchaseMultiplierBars();
-        updateBuildMenu();
-    }, 'Buy');
-    renderMultiplierBar('queue-multiplier-bar', queuePurchaseMultiplier, (val) => {
-        queuePurchaseMultiplier = val;
-        updatePurchaseMultiplierBars();
-        updateInfoPanel();
-    }, 'Queue');
-    renderMultiplierBar('queue-multiplier-bar-popup', queuePurchaseMultiplier, (val) => {
-        queuePurchaseMultiplier = val;
-        updatePurchaseMultiplierBars();
-        updateInfoPanel();
-        renderResearchPopupContent();
-    }, 'Queue');
+    const bar = document.getElementById('build-multiplier-bar');
+    if (!bar || countBarBusy(bar)) return;
+    // Keep the former 1..65536 stack range, with every intervening level.
+    const maxLevel = Math.min(MAX_THING_LEVEL, 17);
+    const level = Math.max(1, Math.min(maxLevel, Math.floor(Math.log2(buildPurchaseMultiplier)) + 1));
+    buildPurchaseMultiplier = 2 ** (level - 1);
+    bar.innerHTML = countBarHtml(level, 1, maxLevel, { type: 'build' }, 'Build level and stack count', 'L');
 }
 
 function queueResizeForEachActiveUnitSubgroup(mode) {

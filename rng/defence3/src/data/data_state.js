@@ -1344,7 +1344,6 @@ let mouseScreenX = 0, mouseScreenY = 0;
 // Build
 let selectedBuildItem = null; // key from BASE_CARD_TYPES
 let activeBuildTab = 'barracks';
-const PURCHASE_MULTIPLIERS = [0, 2, 4, 6, 8, 10, 12, 13, 14, 16].map(exponent => 2 ** exponent);
 let buildPurchaseMultiplier = 1;
 let queuePurchaseMultiplier = 1;
 let researchPanelOpenState = {};
@@ -1355,7 +1354,6 @@ let researchThingLevelDropdownOutsideHandler = null;
 let researchStatMatrixPopupPayload = null;
 let startingResourcesConfig = makeDefaultStartingResourcesConfig();
 let startingResourcesSelectedThingId = '';
-let startingResourcesAdjustMultiplier = 1;
 let shopStatMatrixDescriptorById = {};
 let nextShopStatMatrixDescriptorId = 1;
 let infoPanelStatMatrixDescriptorById = {};
