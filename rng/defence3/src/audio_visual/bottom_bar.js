@@ -530,7 +530,7 @@ function _bbRenderThings() {
         let p = parts[i], el = kids[i];
         if (!p) continue;
         if (el.className !== p.cls) el.className = p.cls;
-        if (el.getAttribute('title') !== p.title) el.setAttribute('title', p.title);
+        if (hoverTextOf(el) !== p.title) el.setAttribute('title', p.title);
         if (el._bbBoost !== p.boost) { el.firstElementChild.outerHTML = p.boost; el._bbBoost = p.boost; }
         if (el._bbBody !== p.body) { el.lastElementChild.innerHTML = p.body; el._bbBody = p.body; }
     }

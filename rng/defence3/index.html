@@ -9,7 +9,7 @@
          GitHub Pages cannot send itself): SharedArrayBuffer for the simulation
          workers. The first visit reloads once. Must be the first script. -->
     <script src="./coi-serviceworker.min.js"></script>
-    <link rel="stylesheet" href="./style/style.css?v=20261016-research-sliders">
+    <link rel="stylesheet" href="./style/style.css?v=20261017-hover-text">
     <link rel="stylesheet" href="./style/bottom_bar.css?v=20261012-h8">
     <link rel="stylesheet" href="./style/scrollbars.css?v=20261012-h8">
 </head>
@@ -535,6 +535,10 @@
                             <td>Simulate right-click for rally/commands when enabled</td>
                         </tr>
                         <tr>
+                            <td><span class="kbd">Ctrl</span> or <span class="kbd">Shift</span> + hover</td>
+                            <td>Show hover text (tooltips), including slider details such as per-level research stats</td>
+                        </tr>
+                        <tr>
                             <td>
                                 <button id="btn-build-place-mode" style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Build place mode</button>
                             </td>
@@ -883,9 +887,10 @@
     <script src="./src/audio_visual/renderer.js?v=20261016-compact-sliders"></script>
     <script src="./src/audio_visual/audio.js?v=20261016-mp3"></script>
     <script src="./src/audio_visual/jukebox.js?v=20261012-h8"></script>
-    <script src="./src/audio_visual/count_bars.js?v=20261016-research-sliders"></script>
-    <script src="./src/audio_visual/hud.js?v=20261016-research-sliders"></script>
-    <script src="./src/audio_visual/bottom_bar.js?v=20261016-research-sliders"></script>
+    <script src="./src/audio_visual/hover_text.js?v=20261017-hover-text-2"></script>
+    <script src="./src/audio_visual/count_bars.js?v=20261017-hover-text"></script>
+    <script src="./src/audio_visual/hud.js?v=20261017-merged-research-sliders"></script>
+    <script src="./src/audio_visual/bottom_bar.js?v=20261017-hover-text"></script>
 
     <script src="./src/game/chunk.js?v=20261012-h8"></script>
     <script src="./src/game/map.js?v=20261016-mp3"></script>

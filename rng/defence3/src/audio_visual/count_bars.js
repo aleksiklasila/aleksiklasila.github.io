@@ -6,6 +6,9 @@ const spawnBarAhead = new Map();
 let countTooltipInput = null;
 let countTooltipElement = null;
 let countTooltipPoint = null;
+// Slider tooltips show only while Ctrl or Shift is held over a slider.
+let countCtrlHeld = false;
+let countHoverInput = null;
 
 function countBarBusy(root) {
     return !!(activeCountBar && activeCountBar.isConnected && root && root.contains(activeCountBar));
@@ -15,24 +18,26 @@ function countBarLabel(value, prefix) {
     return prefix === 'L' ? `L${value} · ${formatBigNumber(2 ** (value - 1))}` : `${prefix || ''}${value}`;
 }
 
-function countBarHtml(value, min, max, spec, label, prefix = '', disabled = false) {
+function countBarHtml(value, min, max, spec, label, prefix = '', disabled = false, others = []) {
     bindCountBarEvents();
     // Uncapped building presets retain imported values above the UI range.
     if (!Number.isFinite(max)) max = Math.max(65536, value);
     value = Math.max(min, Math.min(max, Math.floor(value)));
-    const text = countBarLabel(value, prefix);
+    const top = Math.max(value, ...others);
+    const text = top > value ? `${prefix}${value}–${prefix}${top}` : countBarLabel(value, prefix);
     const position = (value - min) / Math.max(1, max - min) * 100;
-    const floor = spec.type === 'research' ? Math.max(0, ...spec.stats.map(stat => getPlayerResearchLevel(spec.owner, stat.kind, stat.key, stat.statKey))) : min;
+    const floor = spec.type === 'research' ? Math.min(...spec.stats.map(stat => getPlayerResearchLevel(spec.owner, stat.kind, stat.key, stat.statKey))) : min;
     const locked = Math.max(0, Math.min(100, (floor - min) / Math.max(1, max - min) * 100));
     const itemPosition = Number.isFinite(spec.itemLevel) ? Math.max(0, Math.min(100, (spec.itemLevel - min) / Math.max(1, max - min) * 100)) : null;
-    const marker = itemPosition === null ? '' : `<span class="count-item-marker" style="left:calc(2px + (100% - 4px) * ${itemPosition / 100})" role="img" aria-label="This queue item: R${spec.itemLevel}"></span>`;
+    let marker = others.filter(v => v > value).map(v => `<span class="count-other-thumb" style="left:calc((100% - 4px) * ${(v - min) / Math.max(1, max - min)})"></span>`).join('');
+    marker += itemPosition === null ? '' : `<span class="count-item-marker" style="left:calc(2px + (100% - 4px) * ${itemPosition / 100})" role="img" aria-label="This queue item: R${spec.itemLevel}"></span>`;
     return `<span class="count-control" style="--position:${position}%;--locked:${locked}%" data-label-side="${position < 40 ? 'after' : 'before'}" data-edge="${position <= 10 ? 'min' : position >= 90 ? 'max' : ''}"><input class="count-slider" type="range" min="${min}" max="${max}" step="1" value="${value}" data-floor="${floor}" data-count-spec="${_escapeHtml(JSON.stringify(spec))}" data-prefix="${prefix}" data-label="${_escapeHtml(label)}" title="" aria-label="${_escapeHtml(label)}" aria-valuetext="${_escapeHtml(text)}"${disabled || max <= min ? ' disabled' : ''}>${marker}<span class="count-min">${prefix}${min}</span><output>${text}</output><span class="count-max">${prefix}${max}</span></span>`;
 }
 
 function countControlTooltipHtml(spec, value, label, prefix, baseline) {
     const cell = (className, text) => `<span class="${className}">${_escapeHtml(text)}</span>`;
     if (spec.type === 'research' || spec.type === 'preset-research') {
-        const stats = spec.tooltipStats || spec.stats || [{ ...parseStartingThingId(spec.thingId), statKey: spec.statKey }];
+        const stats = spec.stats || [{ ...parseStartingThingId(spec.thingId), statKey: spec.statKey }];
         let html = '<div class="count-tooltip-things">';
         for (const stat of stats) {
             html += '<div class="count-tooltip-thing">';
@@ -42,8 +47,7 @@ function countControlTooltipHtml(spec, value, label, prefix, baseline) {
                 html += `<div class="count-tooltip-heading">${_escapeHtml((thing ? thing.label : stat.key) + ' · ' + (entry ? entry.label : stat.statKey))}</div>`;
             }
             const current = spec.type === 'research' ? getPlayerResearchLevel(spec.owner, stat.kind, stat.key, stat.statKey) : baseline;
-            const edited = !spec.stats || spec.stats.some(s => s.kind === stat.kind && s.key === stat.key && s.statKey === stat.statKey);
-            const target = edited ? Math.max(current, value) : researchBarLevel(spec.owner, stat).target;
+            const target = Math.max(current, value);
             // Presets may decrease research. In-game research cannot undo
             // completed levels; the middle column belongs to this exact task.
             const selected = spec.type === 'preset-research' ? value : target;
@@ -71,8 +75,9 @@ function hideCountTooltip() {
 }
 
 function showCountTooltip(input, event = null) {
-    if (!input || !input.isConnected) { hideCountTooltip(); return; }
     if (event && Number.isFinite(event.clientX)) countTooltipPoint = { x: event.clientX, y: event.clientY };
+    if (!input || !input.isConnected || !countCtrlHeld || !(input === countHoverInput || input === activeCountBar
+        || (countTooltipElement && !countTooltipElement.hidden && countTooltipElement.matches(':hover')))) { hideCountTooltip(); return; }
     if (!countTooltipElement) {
         countTooltipElement = document.createElement('div');
         countTooltipElement.id = 'count-slider-tooltip';
@@ -190,13 +195,13 @@ function researchBarLevel(owner, stat) {
         (owner === localPlayerId ? researchOrdersAhead(stat.kind, stat.key, stat.statKey, depth) : 0)) };
 }
 
-function researchCountBar(owner, targets, stats, itemLevel = null, tooltipStats = null) {
+function researchCountBar(owner, targets, stats, itemLevel = null) {
     const coords = (Array.isArray(targets) ? targets : [targets]).filter(Boolean).map(o => ({ gx: o.gx, gy: o.gy }));
     const levels = stats.map(s => researchBarLevel(owner, s));
     const value = Math.min(...levels.map(s => s.target));
-    const mixed = levels.some(s => s.target !== value);
-    return countBarHtml(value, 0, MAX_RESEARCH_LEVEL, { type: 'research', owner, coords, stats, itemLevel, tooltipStats },
-        `${mixed ? 'Mixed targets — set all selected stats to' : 'Research target'} level (completed research is kept)`, 'R', owner !== localPlayerId || !coords.length);
+    const others = [...new Set(levels.map(s => s.target))].filter(v => v !== value);
+    return countBarHtml(value, 0, MAX_RESEARCH_LEVEL, { type: 'research', owner, coords, stats, itemLevel },
+        `${others.length ? 'Mixed targets — set all selected stats to' : 'Research target'} level (completed research is kept)`, 'R', owner !== localPlayerId || !coords.length, others);
 }
 
 function commitCountBar(input) {
@@ -253,17 +258,18 @@ function bindCountBarEvents() {
     const isSlider = el => el && el.matches && el.matches('.count-slider');
     const release = () => { activeCountBar = null; };
     document.addEventListener('pointerover', ev => {
-        if (isSlider(ev.target)) showCountTooltip(ev.target, ev);
+        countCtrlHeld = ev.ctrlKey || ev.shiftKey;
+        if (isSlider(ev.target)) { countHoverInput = ev.target; showCountTooltip(ev.target, ev); }
     });
     document.addEventListener('pointerout', ev => {
+        if (ev.target === countHoverInput) countHoverInput = null;
         if (ev.target === countTooltipInput && !activeCountBar && !(countTooltipElement && ev.relatedTarget && countTooltipElement.contains(ev.relatedTarget))) hideCountTooltip();
     });
     document.addEventListener('pointermove', ev => {
+        countCtrlHeld = ev.ctrlKey || ev.shiftKey;
+        if (isSlider(ev.target)) countHoverInput = ev.target;
         if (activeCountBar) showCountTooltip(activeCountBar, ev);
         else if (isSlider(ev.target)) showCountTooltip(ev.target, ev);
-    });
-    document.addEventListener('focusin', ev => {
-        if (isSlider(ev.target)) { countTooltipPoint = null; showCountTooltip(ev.target); }
     });
     document.addEventListener('pointerdown', ev => {
         if (isSlider(ev.target)) {
@@ -277,15 +283,29 @@ function bindCountBarEvents() {
         } else if (!(countTooltipElement && countTooltipElement.contains(ev.target))) hideCountTooltip();
     }, true);
     document.addEventListener('pointerup', () => setTimeout(() => {
+        const input = activeCountBar;
         release();
+        // A mixed bar released on its lowest target fires no native change,
+        // but the gesture still sets every stat to that target.
+        if (input && input.isConnected && input.parentElement.querySelector('.count-other-thumb')) {
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        }
         if (countTooltipInput && (!countTooltipInput.isConnected || !countTooltipInput.matches(':hover'))) hideCountTooltip();
     }, 0), true);
     document.addEventListener('pointercancel', () => { release(); hideCountTooltip(); }, true);
-    window.addEventListener('blur', () => { release(); hideCountTooltip(); });
-    document.addEventListener('keydown', ev => {
-        if (ev.key === 'Escape') hideCountTooltip();
-        else if (isSlider(ev.target)) countTooltipPoint = null;
-    });
+    window.addEventListener('blur', () => { release(); countCtrlHeld = false; hideCountTooltip(); });
+    window.addEventListener('keydown', ev => {
+        if (ev.key === 'Control' || ev.key === 'Shift') {
+            countCtrlHeld = true;
+            if (countHoverInput && countHoverInput.isConnected) showCountTooltip(countHoverInput);
+        } else if (ev.key === 'Escape') hideCountTooltip();
+    }, true);
+    window.addEventListener('keyup', ev => {
+        if (ev.key === 'Control' || ev.key === 'Shift') {
+            countCtrlHeld = ev.ctrlKey || ev.shiftKey;
+            if (!countCtrlHeld) hideCountTooltip();
+        }
+    }, true);
     document.addEventListener('scroll', ev => {
         if (!activeCountBar && !(countTooltipElement && countTooltipElement.contains(ev.target))) hideCountTooltip();
     }, true);
@@ -293,6 +313,7 @@ function bindCountBarEvents() {
         const input = ev.target;
         if (!isSlider(input)) return;
         activeCountBar = input;
+        input.parentElement.classList.add('count-dragging');
         input.value = Math.max(Number(input.dataset.floor) || Number(input.min), Number(input.value));
         const output = input.parentElement.querySelector('output');
         if (input._originalOutput === undefined) input._originalOutput = output.textContent;
@@ -311,6 +332,7 @@ function bindCountBarEvents() {
             input.parentElement.querySelector('output').textContent = input._originalOutput;
             delete input._originalOutput;
         }
+        input.parentElement.classList.remove('count-dragging');
         release();
         commitCountBar(input);
         refreshCountControlPanels();

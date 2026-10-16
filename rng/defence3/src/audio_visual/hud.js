@@ -5154,12 +5154,12 @@ function researchEnergySummaryHtml(total, label = 'Selected research') {
     return `<div class="research-energy-summary"><span>${label}</span><span title="Approximate energy cost">≈${formatInfoCurrency(total)}</span></div>`;
 }
 
-function researchStatControlHtml(owner, targetArg, thing, stat, tooltipStats = null, icon = false) {
+function researchStatControlHtml(owner, targetArg, thing, stat) {
     const levels = researchBarLevel(owner, { kind: thing.kind, key: thing.key, statKey: stat.statKey });
     let html = '<div class="compact-research-row">';
-    html += icon ? _renderResearchQueueThingIconHtml(thing, 16) : `<span class="compact-research-name">${stat.label}</span>`;
-    if (!icon) html += `<button type="button" class="info-research-stat-matrix-btn" data-kind="${thing.kind}" data-key="${thing.key}" data-stat-key="${stat.statKey}" data-from-level="${levels.level}" data-to-level="${levels.target}" style="padding:0 3px;height:16px;line-height:14px;font-size:10px">M</button>`;
-    html += researchCountBar(owner, targetArg, [{ kind: thing.kind, key: thing.key, statKey: stat.statKey }], null, tooltipStats);
+    html += `<span class="compact-research-name">${stat.label}</span>`;
+    html += `<button type="button" class="info-research-stat-matrix-btn" data-kind="${thing.kind}" data-key="${thing.key}" data-stat-key="${stat.statKey}" data-from-level="${levels.level}" data-to-level="${levels.target}" style="padding:0 3px;height:16px;line-height:14px;font-size:10px">M</button>`;
+    html += researchCountBar(owner, targetArg, [{ kind: thing.kind, key: thing.key, statKey: stat.statKey }]);
     return html + '</div>';
 }
 
@@ -5176,9 +5176,11 @@ function _renderResearchMultiThingStatsPanel(owner, scope, targetArg, selectedTh
     html += researchEnergySummaryHtml(researchSelectionEnergyEstimate(owner, selectedThings));
     for (const entry of _buildResearchMultiStatEntries(selectedThings)) {
         const items = entry.items || [];
-        const comparisons = items.map(item => ({ kind: item.thing.kind, key: item.thing.key, statKey: item.stat.statKey }));
-        html += `<div class="research-stat-group-label">${entry.label}</div>`;
-        for (const item of items) html += researchStatControlHtml(owner, targetArg, item.thing, item.stat, comparisons, true);
+        const stats = items.map(item => ({ kind: item.thing.kind, key: item.thing.key, statKey: item.stat.statKey }));
+        // One bar per stat group; differing targets show as extra thumbs and
+        // any click or drag sets every selected thing to the same target.
+        html += `<div class="compact-research-row"><span class="compact-research-name">${entry.label}</span>`;
+        html += researchCountBar(owner, targetArg, stats) + '</div>';
     }
     return html + '</div>';
 }
