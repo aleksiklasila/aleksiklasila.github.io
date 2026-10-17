@@ -1005,7 +1005,7 @@ function _drawCombinedBackgroundRegion(c, minGx, minGy, maxGx, maxGy, redrawArea
 
     // (Drawn by the GPU's ground shader instead, crisp at any zoom:
     // renderer.js getAreaGridForGpu.)
-    if (redrawAreaOutlines && _areaOutlinePathCache && _areaColorCache && !(typeof AREA_OUTLINES_ON_GPU !== 'undefined' && AREA_OUTLINES_ON_GPU && renderer3dInstance)) {
+    if (redrawAreaOutlines && _areaOutlinePathCache && _areaColorCache && !_areaOutlinesOnGpu()) {
         c.save();
         c.beginPath();
         c.rect(startX, startY, width, height);
@@ -1234,10 +1234,20 @@ function rebuildCombinedTerrainCache() {
     _combinedTerrainDirtyBounds = null;
 }
 
+// The GPU's ground shader draws the area outlines (renderer.js
+// getAreaGridForGpu): no canvas paths for them then.
+function _areaOutlinesOnGpu() {
+    return typeof AREA_OUTLINES_ON_GPU !== 'undefined' && AREA_OUTLINES_ON_GPU && typeof renderer3dInstance !== 'undefined' && !!renderer3dInstance;
+}
+
 function rebuildCombinedBackgroundCache() {
     ensureCombinedBgCanvas();
     if (dirtyAreas || !_areaColorCache) rebuildAreaColorCache();
-    if (!_areaOutlinePathCache) rebuildAreaOutlinePathCache();
+    // (A Path2D per area, ~120k on a 1000-tile map, is a Blink object each:
+    // kept for nothing, they were ~35 ms of Blink's work in each full GC
+    // pause of the page, ~3 ms without them.)
+    if (_areaOutlinesOnGpu()) _areaOutlinePathCache = null;
+    else if (!_areaOutlinePathCache) rebuildAreaOutlinePathCache();
     let c = _combinedBgCtx;
 
     if (!_combinedBgDirtyFull && !_combinedBgDirtyBounds && dirtyAreas) {

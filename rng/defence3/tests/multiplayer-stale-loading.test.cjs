@@ -47,11 +47,11 @@ const rematch = async (world, host, all, label) => {
     assert.ok(await world.runUntil(() => all.every(i => i.eval('gameStarted && !gameOver && !matchStartWaitingForReady')) && host.eval('currentTick') > 30, 30000),
         label + ': the rematch runs: ' + JSON.stringify(all.map(i => [i.name, i.eval('gameStarted'), i.eval('gameOver'), i.eval('currentTick')])));
 };
-// The lowest tick an instance shows over `ms` (a roll back shows).
-const minTickOver = async (world, inst, ms) => {
-    let min = inst.eval('currentTick');
-    await world.runUntil(() => { min = Math.min(min, inst.eval('currentTick')); return false; }, ms);
-    return min;
+// The largest step back an instance's tick takes over `ms` (0: none).
+const rollBackOver = async (world, inst, ms) => {
+    let peak = inst.eval('currentTick'), back = 0;
+    await world.runUntil(() => { const t = inst.eval('currentTick'); peak = Math.max(peak, t); back = Math.max(back, peak - t); return false; }, ms);
+    return back;
 };
 const healthy = async (world, all, seed, label) => {
     const from = Math.max(...all.map(i => i.eval('currentTick'))) + 5;
@@ -92,10 +92,10 @@ async function lobby(world, n) {
             await H.playFor(world, all, 1500, { seed: 102 });
             const replay = `_handleConnectionMessage(connections[0], { ...__scratch.joins[0], __replay: 1 })`;
             // A copy in the same match.
-            let t0 = g.eval('currentTick'), d0 = g.eval('netCounters.staleJoinsDropped | 0');
+            let d0 = g.eval('netCounters.staleJoinsDropped | 0');
             g.eval(replay);
-            let min = await minTickOver(world, g, 2000);
-            assert.ok(min >= t0, `${mode} 42: no roll back from the copy: ${t0} -> ${min}`);
+            const back = await rollBackOver(world, g, 2000);
+            assert.equal(back, 0, mode + ' 42: no roll back from the copy');
             assert.ok(g.eval('netCounters.staleJoinsDropped | 0') > d0, mode + ' 42: the copy dropped');
             // After a rematch's start.
             await endMatch(world, host, all);
@@ -117,19 +117,18 @@ async function lobby(world, n) {
             const { host, guests } = await H.startHostedMatch(world, { guests: 1, teams: [0, 1] });
             const g = guests[0], all = [host, g];
             await H.playFor(world, all, 1500, { seed: 111 });
-            // Each snapshot comes twice at once; a second decode takes 3 s longer.
+            // Each snapshot comes twice at once; a second decode takes 6 s longer.
             g.eval(`(() => { const f = _handleConnectionMessage;
                 _handleConnectionMessage = function (conn, data) {
                     if (data && data.type === 'MATCH_STATE_SNAPSHOT' && !data.__copy) { f.apply(this, arguments); return f.call(this, conn, { ...data, __copy: 1 }); }
                     return f.apply(this, arguments);
                 };
                 const d = netDecodeSnapshotPayload; let n = 0;
-                netDecodeSnapshotPayload = function () { const r = d.apply(this, arguments); if (++n % 2 === 0) return new Promise(res => setTimeout(() => res(r), 3000)); return r; }; })()`);
+                netDecodeSnapshotPayload = function () { const r = d.apply(this, arguments); if (++n % 2 === 0) return new Promise(res => setTimeout(() => res(r), 6000)); return r; }; })()`);
             host.eval(`_startHostResyncPause('twice')`);
             assert.ok(await world.runUntil(() => !host.eval('lockstepResyncPauseActive') && !g.eval('lockstepResyncPauseActive') && g.eval('currentTick') > 0, 20000), mode + ' 43: the recovery finished');
-            const t1 = g.eval('currentTick');
-            const min = await minTickOver(world, g, 5000);
-            assert.ok(min >= t1, `${mode} 43: no roll back after the recovery: ${t1} -> ${min}`);
+            const back = await rollBackOver(world, g, 8000);
+            assert.equal(back, 0, mode + ' 43: no roll back after the recovery');
             assert.ok(g.eval('netCounters.duplicateSnapshotsDropped | 0') >= 1, mode + ' 43: the copy dropped');
             await healthy(world, all, 112, mode + ' 43');
             rows.push(`${mode}: two copies of a recovery's snapshot at once: restored once, no roll back`);
@@ -175,6 +174,11 @@ async function lobby(world, n) {
             assert.ok(tps > 18.5, `${mode} 45${silent ? ' silent' : ''}: the host kept its pace while the joiner loaded: ${tps.toFixed(1)} TPS`);
             assert.ok(await world.runUntil(() => live(fresh) && fresh.eval('currentTick') > t0, 40000), mode + ' 45: the joiner loaded and plays: ' + JSON.stringify([fresh.eval('gameStarted'), fresh.eval('resyncGuest.joining'), fresh.eval('resyncGuest.awaitingLive'), fresh.eval('currentTick'), host.eval('currentTick')]));
             if (silent) assert.equal(fresh.eval('__scratch.joins'), 2, mode + ' 45: silent, it was sent the match again');
+            // (Live once caught up: in worker mode it said so ~870 ticks
+            // behind, and the host waited for it at ~12 TPS meanwhile.)
+            assert.ok(host.eval('currentTick') - fresh.eval('currentTick') < 20, mode + ' 45: live once caught up: host ' + host.eval('currentTick') + ', joiner ' + fresh.eval('currentTick'));
+            const tpsAll = (host.eval('currentTick') - t0) / ((world.now - at0) / 1000);
+            assert.ok(tpsAll > 18.5, `${mode} 45: the host kept its pace through the catch-up: ${tpsAll.toFixed(1)} TPS`);
             await healthy(world, [host, fresh], 132, mode + ' 45');
             rows.push(silent ? `${mode}: a joiner silent while loading 50 s: not waited for, sent the match again, joined (${tps.toFixed(1)} TPS meanwhile)`
                 : `${mode}: a joiner decoding 45 s: not waited for (${tps.toFixed(1)} TPS), then joined`);
@@ -231,6 +235,8 @@ async function lobby(world, n) {
                 assert.ok(await world.runUntil(() => both.some(i => i.eval('isHost')) && both.every(i => i.eval('gameStarted && !gameOver && !lockstepResyncPauseActive')) && X.eval('currentTick') > 0, 60000),
                     `${mode} 48 (${which ? 'second' : 'first'} successor): the match moved on: ` + JSON.stringify(both.map(i => [i.name, i.eval('isHost'), i.eval('gameOver'), i.eval('currentTick'), i.eval('netCounters.reconnectAttempts | 0')])));
                 assert.equal(Y.eval('isHost'), true, mode + ' 48: the other guest took over');
+                // (The match waits for the lost host's player: its drop button.)
+                Y.eval(`hostRemovePlayerFromMatch(${JSON.stringify(host.eval('myPeerId'))})`);
                 const t = X.eval('currentTick');
                 await world.run(2000);
                 assert.ok(X.eval('currentTick') > t + 20, mode + ' 48: the guest of the false end plays on');

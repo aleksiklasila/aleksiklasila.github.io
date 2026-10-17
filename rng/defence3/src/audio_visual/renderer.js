@@ -3734,8 +3734,19 @@ function _structureGlyphLayer(D, floorItems, viewGrid) {
 // Canonical 2D geometry and the real procedural model feed the same atlas.
 let _columnLodCatalog = null;
 let _columnLodStyleCatalog = null;
+// (Asked for every frame; made again only when the frame's string table
+// changed: each pass made sets, arrays and keys of every type and string,
+// ~1.2 MB a second of garbage, a scavenge every few seconds by itself.)
+const _columnLodSeen = { catalog: null, version: -1, n: -1, last: undefined };
 function getColumnLodCatalog() {
     if (typeof _pageFrameStrings === 'undefined') return null;
+    const seen = _columnLodSeen, n = _pageFrameStrings.length, version = typeof _pageFrameStringsVersion === 'number' ? _pageFrameStringsVersion : -1;
+    if (seen.catalog && seen.catalog === _columnLodCatalog && seen.version === version && seen.n === n && seen.last === _pageFrameStrings[n - 1]) return seen.catalog;
+    const catalog = _makeColumnLodCatalog();
+    seen.catalog = catalog; seen.version = version; seen.n = n; seen.last = _pageFrameStrings[n - 1];
+    return catalog;
+}
+function _makeColumnLodCatalog() {
     // The frame string table also grows with labels/status text. Only type
     // codes affect these images; unrelated strings must never rebake the atlas.
     const codes = new Map();
@@ -6227,6 +6238,7 @@ let _frameClock = 0;
 let _rafLastTs = 0;
 let _rafIntervalMs = 1000 / 60;
 const _rafDeltas = [];
+const _rafSortScratch = new Float64Array(16);
 let _simTargetTime = 0;
 let _simTaskPosted = false;
 const _simChannel = new MessageChannel();
@@ -6262,9 +6274,12 @@ function _noteRafTimestamp(ts) {
         if (d > 2 && d < 60) {
             _rafDeltas.push(d);
             if (_rafDeltas.length > 15) _rafDeltas.shift();
-            let sorted = _rafDeltas.slice().sort((x, y) => x - y);
-            _rafIntervalMs = sorted[sorted.length >> 1];
-            _rafSteady = sorted.length >= 15 && !document.hidden && sorted[11] - sorted[3] < _rafIntervalMs * 0.12;
+            // (Sorted in place into a reused array: a copy and a comparator
+            // every frame were garbage for the page's scavenges.)
+            let m = _rafDeltas.length, sorted = _rafSortScratch;
+            for (let i = 0; i < m; i++) { let v = _rafDeltas[i], j = i; while (j > 0 && sorted[j - 1] > v) { sorted[j] = sorted[j - 1]; j--; } sorted[j] = v; }
+            _rafIntervalMs = sorted[m >> 1];
+            _rafSteady = m >= 15 && !document.hidden && sorted[11] - sorted[3] < _rafIntervalMs * 0.12;
             if (_rafSteady) _learnDisplayRefreshRate(1000 / _rafIntervalMs);
         }
     }

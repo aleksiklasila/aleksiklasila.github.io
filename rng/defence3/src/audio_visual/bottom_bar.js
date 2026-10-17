@@ -262,6 +262,8 @@ function _bbProducerQueueState(info, owner) {
     };
 }
 
+// (★ sums by unit type, reused: _bbComputeRates.)
+const _bbAstarSums = { index: new Map(), names: [], sums: new Float64Array(32), seen: new Uint8Array(32) };
 // Every thing's ⚡/s and ★/s plus the totals, in one pass over the logs.
 // Units: work income (workers) minus upkeep, and ★ used moving. Buildings: upkeep.
 function _bbComputeRates(owner) {
@@ -272,13 +274,24 @@ function _bbComputeRates(owner) {
     let astarByUnit = Object.create(null);
     let astarTotal = 0;
     let cutoff = gameTime - Math.max(1, Math.floor(TICK_RATE * sec));
-    for (let ev of (_ensureAstarLogPlayer(owner) || [])) {
+    // (Sums by unit type in a typed array: a double added to an object's
+    // property is a new heap number each time, thousands of log rows a
+    // refresh in a battle: ~250 KB of garbage a second.)
+    const A = _bbAstarSums, log = _ensureAstarLogPlayer(owner) || [];
+    A.sums.fill(0, 0, A.names.length); A.seen.fill(0, 0, A.names.length);
+    for (let i = 0; i < log.length; i++) {
+        const ev = log[i];
         if (!ev || !(ev.tick >= cutoff)) continue;
         let d = Number.isFinite(Number(ev.delta)) ? Number(ev.delta) : -(Math.max(0, Number(ev.used) || 0));
-        astarByUnit[ev.unitType] = (astarByUnit[ev.unitType] || 0) + d;
+        let k = A.index.get(ev.unitType);
+        if (k === undefined) {
+            k = A.names.length; A.index.set(ev.unitType, k); A.names.push(ev.unitType);
+            if (k >= A.sums.length) { const s = new Float64Array(A.sums.length * 2), f = new Uint8Array(s.length); s.set(A.sums); f.set(A.seen); A.sums = s; A.seen = f; }
+        }
+        A.sums[k] += d; A.seen[k] = 1;
         astarTotal += d;
     }
-    for (let k in astarByUnit) astarByUnit[k] /= sec;
+    for (let k = 0; k < A.names.length; k++) if (A.seen[k]) astarByUnit[A.names[k]] = A.sums[k] / sec;
     // The totals (the bottom-left corner): over the windows the right
     // panel's totals use (its 1s/10s/30s/60s buttons), so both say the same.
     let energySec = typeof getEnergyDeltaWindowSeconds === 'function' ? getEnergyDeltaWindowSeconds('total') : sec;
@@ -441,21 +454,36 @@ function _bbBoostSlotText(res, step, st) {
     return `${glyph} ${_bbBoostMult(step)} — ${_bbBoostWhat(res)} as ${_bbBoostLevels(step)} level${_bbBoostLevels(step) > 1 ? 's' : ''} higher`
         + (step === st.steps ? (st.on ? ' (now)' : ` (chosen; not applied while ${glyph} is below 0)`) : '');
 }
+// (The rows by what they show: made once, the same string after. Made
+// anew for every tile each quarter second in a battle, with each slot's
+// escaped hover text, they were the bar's largest garbage.)
+const _bbBoostHtmlCache = new Map();
 function _bbBoostHtml(info) {
     let max = typeof BOOST_MAX_STEPS === 'number' ? BOOST_MAX_STEPS : 4;
-    let row = res => {
+    let state = res => {
         let st = _bbBoostState(info, res);
-        let cls = 'bb-boost-row bb-boost-' + (res === 'astar' ? 'a' : 'e') + (st.on ? '' : ' bb-boost-off') + (st.steps > 0 ? ' bb-boost-set' : '');
         // (The same text for the whole time it is taken up: the row is
         // only made again when what it shows changes.)
         let fresh = st.steps > 0 && st.on && st.age < BB_BOOST_APPLY_MS ? ` data-since="${Math.round(st.at)}"` : '';
+        return { st, fresh, key: st.steps + (st.on ? '' : '!') + fresh };
+    };
+    let row = (res, S) => {
+        let st = S.st, fresh = S.fresh;
+        let cls = 'bb-boost-row bb-boost-' + (res === 'astar' ? 'a' : 'e') + (st.on ? '' : ' bb-boost-off') + (st.steps > 0 ? ' bb-boost-set' : '');
         let html = `<div class="${cls}${fresh ? ' bb-boost-applying' : ''}"${fresh}>`;
         // (The first slot is x1, no boost: always there, always filled.)
         for (let i = 0; i <= max; i++) html += `<i class="${i <= st.steps ? 'on' : ''}${i === 0 ? ' bb-boost-x1' : ''}" data-bb-boost="${res}" data-step="${i}" title="${_bbEscape(_bbBoostSlotText(res, i, st))}"></i>`;
         return html + '</div>';
     };
+    let a = info.isUnit ? state('astar') : null, e = state('energy');
+    let key = max + '|' + (a ? a.key : '-') + '|' + e.key;
+    let html = _bbBoostHtmlCache.get(key);
+    if (html !== undefined) return html;
     // (A thing without a ★ boost: its one row as tall as two.)
-    return `<div class="bb-boost">${info.isUnit ? row('astar') : ''}${row('energy')}</div>`;
+    html = `<div class="bb-boost">${a ? row('astar', a) : ''}${row('energy', e)}</div>`;
+    if (_bbBoostHtmlCache.size >= 256) _bbBoostHtmlCache.clear();
+    _bbBoostHtmlCache.set(key, html);
+    return html;
 }
 function _bbBoostSig(info) {
     let e = _bbBoostState(info, 'energy'), a = info.isUnit ? _bbBoostState(info, 'astar') : null;

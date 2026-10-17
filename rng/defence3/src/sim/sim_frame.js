@@ -346,6 +346,8 @@ let _pageFrame = null;
 // page's tick does: the two change at different moments.)
 let _pageFrameSerial = 0;
 const _pageFrameStrings = [''];
+// (Moves when a code of the table gets another string: renderer.js getColumnLodCatalog.)
+let _pageFrameStringsVersion = 0;
 
 // A unit as the page sees it: bound to its frame slot while it lives;
 // afterwards (dead) its last values. Page-only state (render caches,

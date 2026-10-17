@@ -636,6 +636,9 @@ function _simEncodeWorld(transfer) {
     return w;
 }
 
+// Shared sight grids sent to the page, by id.
+const _simSightIds = new WeakMap();
+let _simSightSeq = 0;
 // The tick's result: the world frame, the hash, side effects and the local
 // player's sight.
 function _simPostResult(tick, hash, lock, simMs, report = null) {
@@ -653,7 +656,7 @@ function _simPostResult(tick, hash, lock, simMs, report = null) {
     _simEvents = [];
     // The local player's raw visibility grid (computed here anyway): the
     // page uses it instead of computing its own. (A pooled buffer.)
-    let sight = null;
+    let sight = null, sightId = 0;
     try {
         // The grid this tick computed (asking for it now would compute the
         // next tick's: the clock has moved on).
@@ -662,6 +665,9 @@ function _simPostResult(tick, hash, lock, simMs, report = null) {
             // A read-only presentation binding: no million-cell allocation or
             // copy each tick. The renderer tolerates visibility advancing.
             sight=rows._flat;
+            // (Its id: the page keeps its rows of the same shared grid.)
+            sightId = _simSightIds.get(sight) || 0;
+            if (!sightId) _simSightIds.set(sight, sightId = ++_simSightSeq);
         } else {
             let buf = _simFrameAcquireExact(n * 4);
             sight = new Float32Array(buf, 0, n);
@@ -669,7 +675,7 @@ function _simPostResult(tick, hash, lock, simMs, report = null) {
             transfer.push(buf);
         }
     } catch (err) { sight = null; _simError('sight', err); }
-    _simPost({ type: 'ticked', epoch: _simEpoch, tick, world, presentation:!!_simPresentation, hash, lockHashes: lock, events, sight, sightPlayer: localPlayerId, simMs, encodeMs: performance.now() - t1, report,
+    _simPost({ type: 'ticked', epoch: _simEpoch, tick, world, presentation:!!_simPresentation, hash, lockHashes: lock, events, sight, sightId, sightPlayer: localPlayerId, simMs, encodeMs: performance.now() - t1, report,
         lateMs: _simTickLateMs, doneAt: _simNowAbs() }, transfer);
 }
 

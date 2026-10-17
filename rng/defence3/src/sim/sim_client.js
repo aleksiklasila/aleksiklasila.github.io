@@ -61,7 +61,7 @@ function _simClientScriptUrls() {
         .filter(src => /\/src\//.test(src) && !/bootstrap\.js|sim_shadow\.js|sim_worker\.js|sim_client\.js/.test(src));
 }
 
-const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261016-mp3';
+const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261017-gcpause';
 
 function _simClientCreate() {
     let c = {
@@ -821,7 +821,7 @@ function _simClientApplyTick(msg) {
         c.latencyMs += (Math.min(latency, TICK_MS * 3) - c.latencyMs) * (latency > c.latencyMs ? 0.3 : 0.05);
         c.stats.latencyMs.push(latency);
     }
-    c.lastSight = msg.sight ? { data: msg.sight, player: msg.sightPlayer } : null;
+    c.lastSight = msg.sight ? { data: msg.sight, player: msg.sightPlayer, id: msg.sightId || 0 } : null;
     _simClientReplayEvents(msg.events || []);
     _simClientPageTickWork(msg.tick);
     // The tick's record (the peers compare them).
@@ -882,6 +882,7 @@ function _simClientResetUnits() {
     if (typeof initSpatialHash === 'function') initSpatialHash();
     if (c) { c.frameUnits = null; c.mver = -1; c.watchKey = ''; }
     _pageFrameStrings.length = 1;
+    _pageFrameStringsVersion++;
 }
 
 // The buffers of a world frame (to hand back).
@@ -894,7 +895,9 @@ function _simClientWorldBufs(w) {
 function _simClientApplyWorld(w, shown) {
     let c = _simClient;
     if (!w) return;
-    if (w.strings) { let base = w.strings[0], list = w.strings[1]; for (let i = 0; i < list.length; i++) _pageFrameStrings[base + i] = list[i]; }
+    // (The presentation sends its whole table with each frame: the version
+    // moves only for a code that changed.)
+    if (w.strings) { let base = w.strings[0], list = w.strings[1]; for (let i = 0; i < list.length; i++) if (_pageFrameStrings[base + i] !== list[i]) { _pageFrameStrings[base + i] = list[i]; _pageFrameStringsVersion++; } }
     let back = [];
     if (w.units) _simClientApplyFrame(w.units, shown);
     if (w.structures) { let old = pageApplyStructures(w.structures, c); if (old) back.push(old.buf); }
@@ -1136,6 +1139,8 @@ function _simClientReplayEvents(events) {
 
 // This player's sight grid as the worker sent it (flat), with its tick.
 let visibilityRawFlat = null;
+// Rows of the worker's shared sight grid (by its id: sim_worker.js _simPostResult).
+const _simClientSightRows = { id: 0, epoch: -1, player: -1, rows: null, w: 0 };
 // What the page did as part of a tick: visuals, audio state and UI.
 function _simClientPageTickWork(tick) {
     for (let i = particles.length - 1; i >= 0; i--) if (!particles[i].update()) particles.splice(i, 1);
@@ -1151,8 +1156,17 @@ function _simClientPageTickWork(tick) {
     if (sight && sight.player === localPlayerId && sight.data.length === GRID_W * GRID_H) {
         // (Flat, for the GPU range outline: renderer.js getRangeVisibilityOverlay.)
         visibilityRawFlat = { data: sight.data, player: sight.player, version: tick };
-        let rows = new Array(GRID_H);
-        for (let y = 0; y < GRID_H; y++) rows[y] = sight.data.subarray(y * GRID_W, (y + 1) * GRID_W);
+        // (The worker's shared grid, the same each tick: its rows made once.
+        // A thousand new row views a tick were the page's largest garbage,
+        // ~1.7 MB/s, and every scavenge it brings can stall a frame.)
+        const S = _simClientSightRows;
+        const epoch = _simClient.epoch;
+        let rows = sight.id && S.id === sight.id && S.epoch === epoch && S.player === sight.player && S.rows && S.rows.length === GRID_H && S.w === GRID_W ? S.rows : null;
+        if (!rows) {
+            rows = new Array(GRID_H);
+            for (let y = 0; y < GRID_H; y++) rows[y] = sight.data.subarray(y * GRID_W, (y + 1) * GRID_W);
+            S.id = sight.id; S.epoch = epoch; S.player = sight.player; S.rows = sight.id ? rows : null; S.w = GRID_W;
+        }
         visibilityGridRawByPlayerCache.set(localPlayerId, rows);
         visibilityGridStampByPlayer.set(localPlayerId, gameTime);
         visibilityCacheTick = gameTime;
@@ -1178,9 +1192,27 @@ function _simClientPageTickWork(tick) {
 }
 
 // As gameTick does: the laser buzz follows the active laser nearest the view.
+// (The laser's string code, by the string table's version.)
+const _simLaserCode = { version: -1, n: -1, code: -1 };
 function _simClientLaserSound() {
     let any = false, lx = 0, ly = 0, best = Infinity;
     let cx = camera.x + viewW / camera.zoom / 2, cy = camera.y + viewH / camera.zoom / 2;
+    // From the structure table's columns: every tower through its view's
+    // getters each tick was a few ms and ~150 KB of garbage a second.
+    const F = _pageTables.s;
+    if (F && F.laser) {
+        const L = _simLaserCode;
+        if (L.version !== _pageFrameStringsVersion || L.n !== _pageFrameStrings.length) { L.version = _pageFrameStringsVersion; L.n = _pageFrameStrings.length; L.code = _pageFrameStrings.indexOf('laser'); }
+        const code = L.code, n = F.n, alive = F.alive, kind = F.kind, type = F.type, laser = F.laser, flags = F.flags, X = F.x, Y = F.y;
+        if (code > 0) for (let s = 0; s < n; s++) {
+            if (!alive[s] || kind[s] !== 0 || type[s] !== code || laser[s] !== 1 || (flags[s] & SIM_SF_UC)) continue;
+            any = true;
+            let dx = X[s] - cx, dy = Y[s] - cy, d2 = dx * dx + dy * dy;
+            if (d2 < best) { best = d2; lx = X[s]; ly = Y[s]; }
+        }
+        if (any) startLaserSound(lx, ly); else stopLaserSound();
+        return;
+    }
     for (let t of towers) {
         if (t.type !== 'laser' || t.laserState !== 1 || t.underConstruction) continue;
         any = true;

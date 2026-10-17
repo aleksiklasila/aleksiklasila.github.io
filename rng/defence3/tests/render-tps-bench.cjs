@@ -20,7 +20,11 @@
 //        helpers, the presentation worker: <OUT>-<view>-w<k>-<name>.cpuprofile),
 //        CLICKS=n (ctrl + right clicks during each case, CLICK_GAP ms apart),
 //        PHASES=1 (the simulation worker's time per tick in the top-level
-//        parts of a tick, as tickbench's TOPPHASES, and in the result post)
+//        parts of a tick, as tickbench's TOPPHASES, and in the result post),
+//        LONG_MS (frames longer than this listed with the page's work and
+//        the browser's long animation frames in them, default 50),
+//        TRACE_VIEW=<view>|all, TRACE_SAVE=1 (a Chrome trace: see below),
+//        ALLOC=1 (the page's typed array / ArrayBuffer allocations by call site)
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -49,26 +53,82 @@ const VISES = (process.env.VIS || 'full,team,history').split(',');
 
 // In the page: counters for a measured window.
 const PAGE_SETUP = () => {
-    const W = window.__bench = { frames: [], ticks: [], longTasks: 0, longMs: 0, on: false };
-    const raf = ts => { if (W.on) W.frames.push(ts); requestAnimationFrame(raf); };
+    const W = window.__bench = { frames: [], ticks: [], longTasks: 0, longMs: 0, on: false, loaf: [] };
+    // (A gap over LONG_MS between frames: a mark in a Chrome trace, TRACE_VIEW.)
+    const raf = ts => { if (W.on) { const n = W.frames.length; if (n && ts - W.frames[n - 1] > (W.markMs || 50)) { const m = 'LONGFRAME ' + (ts - W.frames[n - 1]).toFixed(1); console.timeStamp(m); performance.mark(m); } W.frames.push(ts); } requestAnimationFrame(raf); };
     requestAnimationFrame(raf);
     try { new PerformanceObserver(list => { if (!W.on) return; for (const e of list.getEntries()) { W.longTasks++; W.longMs += e.duration; } }).observe({ type: 'longtask', buffered: false }); } catch { }
+    // Long animation frames (over 50 ms from the task that started the frame
+    // to its paint): which scripts ran in them, and how long rendering took.
+    try {
+        new PerformanceObserver(list => {
+            if (!W.on) return;
+            for (const e of list.getEntries()) W.loaf.push({ start: e.startTime, dur: e.duration, renderStart: e.renderStart, styleLayoutStart: e.styleAndLayoutStart, blocking: e.blockingDuration,
+                scripts: (e.scripts || []).map(s => ({ start: s.startTime, dur: s.duration, invoker: s.invoker, fn: s.sourceFunctionName, src: (s.sourceURL || '').replace(/^.*\//, ''), layout: s.forcedStyleAndLayoutDuration })) });
+        }).observe({ type: 'long-animation-frame', buffered: false });
+    } catch { }
+    // Per drawn frame: the game's frame (processRenderFrame) and its tick task
+    // after it (processVisibleSimulationFrame), page ms each.
+    W.phase = [];
+    // (Parts of the game's frame, by letter, for frames over LONG_MS.)
+    const part = (name, tag) => {
+        const f = window[name];
+        if (typeof f !== 'function') return;
+        window[name] = function () { const a = performance.now(); try { return f.apply(this, arguments); } finally { const d = performance.now() - a; if (W.on && d > 1) W.phase.push([a, tag, d]); } };
+    };
+    for (const [name, tag] of [['build3DFrameData', 'B'], ['drawMinimap', 'M'], ['drawInteractionOverlay', 'O'], ['flushTickUiRequests', 'U'], ['frameUnitSummaryStep', 'S'],
+        ['updateHUD', 'H'], ['updateControlGroupBar', 'G'], ['_refreshInfoPanelPeriodic', 'I'], ['updateBottomBar', 'T'], ['commitStaticCaches', 'C'], ['updateBuildMenu', 'm'],
+        ['_simClientApplyWorld', 'w'], ['_simClientPageTickWork', 'k'], ['_simClientReplayEvents', 'e'], ['pageApplyStructures', 'P'], ['rebuildMinimapStaticLayer', 'L'],
+        // (Inside the bottom bar, the info panel and a tick's page work.)
+        ['_bbCollectThings', 'T.collect'], ['_bbSyncOrder', 'T.order'], ['_bbComputeRates', 'T.rates'], ['_bbRenderTotals', 'T.totals'], ['_bbRenderThings', 'T.things'],
+        ['_bbRenderResearch', 'T.research'], ['_bbRenderMenu', 'T.menu'], ['getFrameUnitSummary', 'unitSummary'], ['getFrameBuildingSummary', 'buildingSummary'],
+        ['updateInfoPanel', 'I.update'], ['updateVisualVisibility', 'k.visual'], ['gameStatsStep', 'k.stats'], ['sampleGameStats', 'k.sample'],
+        ['updateLocalVisibilityHistory', 'k.history'], ['historyStructureFrame', 'historyFrame'], ['requestResearchPopupRefresh', 'k.research'],
+        ['selectionCompactDead', 'k.selection'], ['_simClientLaserSound', 'k.laser'], ['getRawVisibilityGridForPlayer', 'k.raw']]) part(name, tag);
+    if (typeof renderer3dInstance !== 'undefined' && renderer3dInstance) {
+        const R = renderer3dInstance, f = R.render;
+        R.render = function () { const a = performance.now(); try { return f.apply(this, arguments); } finally { const d = performance.now() - a; if (W.on && d > 1) W.phase.push([a, 'R', d]); } };
+        // (Its steps over 2 ms, as R.<name>.)
+        for (const name of ['drawFrameColumns', 'drawBackground', 'drawFx', 'drawFlatSprites', 'drawFlatBatch', 'drawScaleInstances', 'presentSceneToCanvas', 'resolveScene',
+            'drawSelectionMask', 'drawRangeVisibility', 'drawGroundOverlays', 'resizeForSnapshot', 'prepareStaticLayer', 'drawStaticLayer', 'prepareUnitLayer', 'drawUnitLayer',
+            'renderShadowMap', 'drawColumnModelGhosts', 'captureOverlayDepthFrame', 'trimTopTextures', '_columnStoreUpload', 'uploadBackgroundTexture', 'uploadFogGrid',
+            'uploadFogTexture', 'getFlatAtlas', 'drawCubeInstances', 'drawTexturedCubeInstances']) {
+            const g = R[name];
+            if (typeof g !== 'function') continue;
+            R[name] = function () { const a = performance.now(); try { return g.apply(this, arguments); } finally { const d = performance.now() - a; if (W.on && d > 2) W.phase.push([a, 'R.' + name, d]); } };
+        }
+    }
+    const vsf = processVisibleSimulationFrame;
+    processVisibleSimulationFrame = function () { const a = performance.now(); try { return vsf.apply(this, arguments); } finally { if (W.on) W.phase.push([a, 's', performance.now() - a]); } };
     const apply = _simClientApplyTick;
-    _simClientApplyTick = function (msg) { if (W.on && msg && msg.epoch === _simClient.epoch) W.ticks.push([performance.now(), msg.tick, Number(msg.simMs) || 0]); return apply.apply(this, arguments); };
+    _simClientApplyTick = function (msg) {
+        const a = performance.now();
+        if (W.on && msg && msg.epoch === _simClient.epoch) W.ticks.push([a, msg.tick, Number(msg.simMs) || 0]);
+        try { return apply.apply(this, arguments); } finally { if (W.on) W.phase.push([a, 'a', performance.now() - a]); }
+    };
     // Motion smoothness: per drawn frame, where sampled moving units of the
     // local player are drawn (their frame position at the frame's alpha, as
     // the renderer interpolates), and which tick the units table shows.
     const render = processRenderFrame;
     W.jit = { ids: null, rows: [] };
+    // (Samples go into one growing store, as views of it: an array of its own
+    // per frame was ~100 backing stores a second, more than the game makes,
+    // and they swelled the page's full GCs this measures.)
+    const take = (J, n) => {
+        if (!J.store || J.used + n > J.store.length) { const b = new Float64Array(Math.max(n, (J.store ? J.store.length : 0) * 2, 1 << 16)); J.store = b; J.used = 0; }
+        const v = J.store.subarray(J.used, J.used + n); J.used += n; return v;
+    };
     W.render = function (ts) {
+        const t0 = performance.now();
         const r = render.apply(this, arguments);
+        if (W.on) W.phase.push([t0, 'r', performance.now() - t0]);
         if (W.on && typeof _pageFrame !== 'undefined' && _pageFrame && typeof _pageUnitsById !== 'undefined') {
             const J = W.jit, F = _pageFrame, a = tickAlpha;
             if (!J.ids) {
                 J.ids = [];
                 for (const u of units) { if (J.ids.length >= 256) break; const s = u && u._s; if (s >= 0 && F.owner[s] === localPlayerId && Math.hypot(F.x[s] - F.px[s], F.y[s] - F.py[s]) > .3) J.ids.push(u.id); }
             }
-            const pos = new Float64Array(J.ids.length * 2);
+            const pos = take(J, J.ids.length * 2);
             for (let i = 0; i < J.ids.length; i++) {
                 const u = _pageUnitsById.get(J.ids[i]), s = u && !u.dead ? u._s : -1;
                 if (s >= 0) { pos[i * 2] = F.px[s] + (F.x[s] - F.px[s]) * a; pos[i * 2 + 1] = F.py[s] + (F.y[s] - F.py[s]) * a; } else { pos[i * 2] = NaN; pos[i * 2 + 1] = NaN; }
@@ -77,7 +137,7 @@ const PAGE_SETUP = () => {
             // (Each new table: the sampled units' steps that tick, |x - px|.)
             if (tk !== J.lastTick) {
                 J.lastTick = tk;
-                const st = new Float64Array(J.ids.length);
+                const st = take(J, J.ids.length);
                 for (let i = 0; i < J.ids.length; i++) { const u = _pageUnitsById.get(J.ids[i]), s = u && !u.dead ? u._s : -1; st[i] = s >= 0 ? Math.hypot(F.x[s] - F.px[s], F.y[s] - F.py[s]) : NaN; }
                 (J.steps || (J.steps = [])).push(st);
             }
@@ -219,7 +279,7 @@ const PAGE_LOAD = load => {
     }
     return { load, ordered: mine.length };
 };
-const PAGE_COLLECT = () => {
+const PAGE_COLLECT = (longMs = 50) => {
     const W = window.__bench;
     W.on = false;
     W.jitSummary = W.jitSummaryFn ? W.jitSummaryFn() : null;
@@ -229,7 +289,27 @@ const PAGE_COLLECT = () => {
     const gaps = []; for (let i = 1; i < t.length; i++) gaps.push(t[i][0] - t[i - 1][0]);
     const sim = t.map(r => r[2]);
     const mem = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null;
+    // Each frame over LONG_MS (default 50): the page's own work in it (r: the game's frame,
+    // s: its tick task, a: a tick result applied; start ms into the gap and
+    // ms), and the browser's long animation frames over it (scripts by
+    // invoker, rendering after renderStart).
+    const r1 = v => Math.round(v * 10) / 10;
+    const long = [];
+    for (let i = 1; i < W.frames.length && long.length < 16; i++) {
+        const a = W.frames[i - 1], b = W.frames[i];
+        if (b - a <= longMs) continue;
+        const work = W.phase.filter(p => p[0] + p[2] > a - 20 && p[0] < b).map(p => `${p[1]}@${r1(p[0] - a)}:${r1(p[2])}`);
+        const lf = W.loaf.filter(e => e.start + e.dur > a - 20 && e.start < b).map(e => ({ at: r1(e.start - a), dur: r1(e.dur), render: e.renderStart ? r1(e.start + e.dur - e.renderStart) : 0, blocking: r1(e.blocking),
+            scripts: e.scripts.filter(s => s.dur > 2).map(s => `${s.invoker}${s.fn ? ' ' + s.fn : ''} ${s.src}@${r1(s.start - a)}:${r1(s.dur)}${s.layout > 1 ? ' layout ' + r1(s.layout) : ''}`) }));
+        long.push({ at: r1(a - W.frames[0]), gap: r1(b - a), work, loaf: lf });
+    }
+    const phaseMax = {};
+    for (const p of W.phase) { const m = phaseMax[p[1]] || (phaseMax[p[1]] = { n: 0, ms: 0, max: 0, over16: 0 }); m.n++; m.ms += p[2]; m.max = Math.max(m.max, r1(p[2])); if (p[2] > 16) m.over16++; }
+    for (const k in phaseMax) phaseMax[k].ms = r1(phaseMax[k].ms / Math.max(1, phaseMax[k].n));
     return {
+        longFrames: long, phaseMs: phaseMax, loafCount: W.loaf.length,
+        // (The GPU's time per frame, renderer3d gpuTimerBegin: smoothed and recent worst.)
+        gpuMs: typeof renderer3dInstance !== 'undefined' && renderer3dInstance ? { mean: r1(renderer3dInstance.gpuFrameMs), max: r1(renderer3dInstance.gpuFrameMsMax) } : null,
         appliedTps: secs > 0 ? Math.round((t.length - 1) / secs * 10) / 10 : 0,
         tickGapMs: { p50: q(gaps, .5), p95: q(gaps, .95), max: q(gaps, 1) },
         workerSimMs: { mean: sim.length ? Math.round(sim.reduce((a, b) => a + b, 0) / sim.length * 10) / 10 : 0, p95: q(sim, .95), max: q(sim, 1) },
@@ -293,6 +373,96 @@ async function workersProfileStop(P, base, view) {
     }
     await P.cdp.detach();
     return k;
+}
+
+// ALLOC=1: typed arrays and ArrayBuffers the page makes over 64 bytes (each
+// an off-heap backing store V8 frees in its full GCs' array buffer sweep),
+// by call site, over each case: count and MB.
+const PAGE_ALLOC_PROBE = () => {
+    if (window.__alloc) { window.__alloc.sites = new Map(); window.__alloc.on = true; return; }
+    const A = window.__alloc = { sites: new Map(), on: true };
+    const note = (kind, bytes) => {
+        if (!A.on || !(bytes > 64)) return;
+        const st = (new Error().stack || '').split('\n').slice(3, 6).map(l => l.trim().replace(/^at /, '').replace(/\(?https?:\/\/[^/]+\/(src\/)?/, '').replace(/\?v=[^:]*/, '').replace(/\)$/, '')).join(' < ');
+        const k = kind + ' ' + st, v = A.sites.get(k) || [0, 0];
+        v[0]++; v[1] += bytes; A.sites.set(k, v);
+    };
+    for (const name of ['ArrayBuffer', 'Float32Array', 'Float64Array', 'Int32Array', 'Uint32Array', 'Uint8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array', 'Int8Array']) {
+        const T = window[name];
+        window[name] = new Proxy(T, { construct(target, args, nt) {
+            const r = Reflect.construct(target, args, nt === window[name] ? target : nt);
+            // (Only arrays with a store of their own: not views of a buffer.)
+            if (name === 'ArrayBuffer') note(name, r.byteLength);
+            else if (!(args[0] instanceof ArrayBuffer || (typeof SharedArrayBuffer === 'function' && args[0] instanceof SharedArrayBuffer))) note(name, r.byteLength);
+            return r;
+        } });
+    }
+    const TA = Object.getPrototypeOf(Int8Array.prototype);
+    for (const m of ['slice', 'map', 'filter']) { const f = TA[m]; TA[m] = function () { const r = f.apply(this, arguments); note('TA.' + m, r.byteLength); return r; }; }
+    const absl = ArrayBuffer.prototype.slice; ArrayBuffer.prototype.slice = function () { const r = absl.apply(this, arguments); note('AB.slice', r.byteLength); return r; };
+    const C2 = CanvasRenderingContext2D.prototype;
+    for (const m of ['getImageData', 'createImageData']) { const f = C2[m]; C2[m] = function () { const r = f.apply(this, arguments); note('2d.' + m, r.data.byteLength); return r; }; }
+    // (Canvases made: each is a Blink object with native memory, finalized in a full GC.)
+    const ce = Document.prototype.createElement;
+    Document.prototype.createElement = function (tag) { const r = ce.apply(this, arguments); if (String(tag).toLowerCase() === 'canvas') note('canvas', 65); return r; };
+    if (typeof OffscreenCanvas === 'function') { const OC = OffscreenCanvas; window.OffscreenCanvas = new Proxy(OC, { construct(t, a, nt) { note('OffscreenCanvas', 65); return Reflect.construct(t, a, nt === window.OffscreenCanvas ? t : nt); } }); }
+    if (typeof Path2D === 'function') { const P2 = Path2D; window.Path2D = new Proxy(P2, { construct(t, a, nt) { note('Path2D', 65); return Reflect.construct(t, a, nt === window.Path2D ? t : nt); } }); }
+};
+const PAGE_ALLOC_COLLECT = () => {
+    const A = window.__alloc;
+    if (!A) return null;
+    A.on = false;
+    return [...A.sites].sort((a, b) => b[1][0] - a[1][0]).slice(0, 25).map(([k, v]) => `${v[0]} x, ${(v[1] / 1048576).toFixed(1)} MB: ${k}`);
+};
+
+// TRACE_VIEW=<view>|all: a Chrome trace of the first page over that case; per
+// frame over 50 ms (marked by the page's frame counter), every event of 3 ms
+// or more on any thread over it (GC of any length), start ms into the gap.
+// TRACE_SAVE=1 keeps the trace (<OUT>-<vis>-<load>-<view>.trace.json).
+// (TRACE_CATS: a comma list instead, e.g. v8,disabled-by-default-v8.gc,blink.user_timing
+// for long cases: the GCs and the long frames only.)
+const TRACE_CATEGORIES = process.env.TRACE_CATS ? process.env.TRACE_CATS.split(',') : ['devtools.timeline', 'disabled-by-default-devtools.timeline.frame', 'toplevel', 'v8', 'disabled-by-default-v8.gc', 'blink.gc', 'gpu', 'gpu.angle', 'disabled-by-default-gpu.service', 'viz', 'cc'];
+function traceLongFrames(events) {
+    const names = new Map(events.filter(e => e.name === 'thread_name').map(e => [e.pid + ':' + e.tid, e.args.name]));
+    const procs = new Map(events.filter(e => e.name === 'process_name').map(e => [e.pid, e.args.name]));
+    const thread = e => `${(procs.get(e.pid) || e.pid).toString().replace(/ Process$/, '')}/${names.get(e.pid + ':' + e.tid) || e.tid}`;
+    // (B/E pairs made into spans.)
+    const spans = [], open = new Map();
+    for (const e of events) {
+        if (e.ph === 'X') spans.push(e);
+        else if (e.ph === 'B') { const k = e.pid + ':' + e.tid; (open.get(k) || open.set(k, []).get(k)).push(e); }
+        else if (e.ph === 'E') { const st = open.get(e.pid + ':' + e.tid), b = st && st.pop(); if (b) spans.push({ ...b, ph: 'X', dur: e.ts - b.ts }); }
+    }
+    // (console.timeStamp in devtools.timeline, performance.mark in blink.user_timing.)
+    const seenMark = new Set(), marks = [];
+    for (const e of events) {
+        const msg = e.name === 'TimeStamp' && e.args && e.args.data ? e.args.data.message || '' : e.name;
+        if (!/^LONGFRAME /.test(msg) || e.ph === 'e') continue;
+        const k = Math.round(e.ts / 2000) + msg;
+        if (seenMark.has(k)) continue;
+        seenMark.add(k); marks.push({ ts: e.ts, args: { data: { message: msg } } });
+    }
+    const gc = /GC|Scavenge|MarkCompact|Sweep/i;
+    const out = [];
+    for (const m of marks.slice(0, 16)) {
+        const gap = Number(m.args.data.message.split(' ')[1]) * 1000, b = m.ts, a = b - gap;
+        const rows = spans.filter(e => e.ts < b && e.ts + (e.dur || 0) > a - 5000 && ((e.dur || 0) >= 3000 || (gc.test(e.name) && (e.dur || 0) >= 500)))
+            .sort((x, y) => x.ts - y.ts)
+            .map(e => `${thread(e)} ${e.name}${e.args && e.args.data && e.args.data.functionName ? ' ' + e.args.data.functionName : ''}@${Math.round((e.ts - a) / 100) / 10}:${Math.round(e.dur / 100) / 10}`);
+        out.push({ gap: Math.round(gap / 100) / 10, events: rows.slice(0, 60) });
+    }
+    // Every major GC (and scavenges over 10 ms) on the page's main thread:
+    // ms, why, and its parts over 2 ms.
+    const main = spans.filter(e => names.get(e.pid + ':' + e.tid) === 'CrRendererMain');
+    let t0 = Infinity; for (const e of events) if (e.ts > 0 && e.ts < t0) t0 = e.ts;
+    for (const g of main.filter(e => (e.name === 'MajorGC' || (e.name === 'MinorGC' && e.dur > 10000)) && e.dur > 0).sort((a, b) => a.ts - b.ts)) {
+        const parts = main.filter(e => e !== g && e.ts >= g.ts && e.ts + e.dur <= g.ts + g.dur && e.dur >= 2000 && /^V8.GC_(MC|HEAP|FULL|SCAVENGER)_[A-Z_]+$/.test(e.name))
+            .map(e => e.name.replace(/^V8.GC_/, '') + ':' + Math.round(e.dur / 100) / 10);
+        const start = main.filter(e => e.name === 'V8.GCIncrementalMarkingStart' && e.ts < g.ts && e.ts > g.ts - 60e6).pop();
+        out.push({ gc: g.name, at: Math.round((g.ts - t0) / 1000), ms: Math.round(g.dur / 100) / 10, type: g.args && g.args.type,
+            reason: start && start.args && start.args.value ? start.args.value.gc_reason : undefined, mb: g.args && g.args.usedHeapSizeBefore ? Math.round(g.args.usedHeapSizeBefore / 1048576) + '->' + Math.round(g.args.usedHeapSizeAfter / 1048576) : undefined, parts });
+    }
+    return out;
 }
 
 let browser;
@@ -385,8 +555,9 @@ async function startMultiplayer(browser, port, fixture, vis, errors) {
             }
             const w0 = {};
             for (const [role, page] of m.pages) {
-                await page.evaluate(src => { const W = window.__bench; W.frames = []; W.ticks = []; W.longTasks = 0; W.longMs = 0; W.jit = { ids: null, rows: [], steps: null, lastTick: -1 }; W.jitSummaryFn = (0, eval)('(' + src + ')'); W.on = true; }, JITTER_SUMMARY.toString());
+                await page.evaluate(([src, markMs]) => { const W = window.__bench; W.markMs = markMs; W.frames = []; W.ticks = []; W.phase = []; W.loaf = []; W.longTasks = 0; W.longMs = 0; W.jit = { ids: null, rows: [], steps: null, lastTick: -1 }; W.jitSummaryFn = (0, eval)('(' + src + ')'); W.on = true; }, [JITTER_SUMMARY.toString(), Number(process.env.LONG_MS) || 50]);
                 w0[role] = Number(await page.evaluate(() => simClientRequest('debugEval', { expr: 'currentTick' })));
+                if (process.env.ALLOC) await page.evaluate(PAGE_ALLOC_PROBE);
             }
             const profiling = process.env.PROFILE_VIEW === view ? [] : null;
             const base = (process.env.OUT || path.join(__dirname, 'render-tps-bench.json')).replace(/\.json$/, '');
@@ -396,7 +567,19 @@ async function startMultiplayer(browser, port, fixture, vis, errors) {
                 profiling.push([role, cdp]);
             }
             const wprof = profiling && process.env.PROFILE_WORKERS ? await workersProfileStart(browser) : null;
+            // HEAPPROF_VIEW=<view>: a sampling allocation profile of the first
+            // page over that case, objects GC'd since included (what the page
+            // allocates, by function): <OUT>-<vis>-<load>-<view>.heapprofile
+            // (.claude/heapsum.cjs sums it).
+            let heapProf = null;
+            if (process.env.HEAPPROF_VIEW === view) {
+                heapProf = await m.pages[0][1].context().newCDPSession(m.pages[0][1]);
+                await heapProf.send('HeapProfiler.enable');
+                await heapProf.send('HeapProfiler.startSampling', { samplingInterval: 16384, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true });
+            }
             if (process.env.PHASES) for (const [, page] of m.pages) await phasesStart(page);
+            const tracing = process.env.TRACE_VIEW === view || process.env.TRACE_VIEW === 'all';
+            if (tracing) await browser.startTracing(m.pages[0][1], { categories: TRACE_CATEGORIES });
             const a = Date.now();
             // CLICKS=n: n ctrl + right clicks spread over the view during the
             // case (multi-point orders / rallies of what is selected), CLICK_GAP
@@ -419,14 +602,31 @@ async function startMultiplayer(browser, port, fixture, vis, errors) {
                 fs.writeFileSync(`${base}-${role}-${view}.cpuprofile`, JSON.stringify(profile));
             }
             if (wprof) console.log('worker profiles', await workersProfileStop(wprof, base, view), 'of', wprof.workers.map(w => w.url.replace(/^.*\//, '')).join(' '));
+            if (heapProf) {
+                const { profile } = await heapProf.send('HeapProfiler.stopSampling');
+                fs.writeFileSync(`${base}-${vis}-${load}-${view}.heapprofile`, JSON.stringify(profile));
+                await heapProf.detach();
+            }
+            let traceLong = null;
+            if (tracing) {
+                const buf = await browser.stopTracing();
+                if (process.env.TRACE_SAVE) fs.writeFileSync(`${base}-${vis}-${load}-${view}.trace.json`, buf);
+                traceLong = traceLongFrames(JSON.parse(buf.toString()).traceEvents || []);
+                for (const t of traceLong) console.log('  trace', JSON.stringify(t));
+            }
             const phases = {};
             if (process.env.PHASES) for (const [role, page] of m.pages) phases[role] = await phasesCollect(page);
             for (const [role, page] of m.pages) {
                 const w1 = Number(await page.evaluate(() => simClientRequest('debugEval', { expr: 'currentTick' })));
                 const secs = (Date.now() - a) / 1000;
-                const r = await page.evaluate(PAGE_COLLECT);
+                const r = await page.evaluate(PAGE_COLLECT, Number(process.env.LONG_MS) || 50);
+                if (process.env.ALLOC) { r.alloc = await page.evaluate(PAGE_ALLOC_COLLECT); for (const l of r.alloc || []) console.log('  alloc', role, l); }
                 const row = { fixture, role, vis, load, view, ...v[role], setup: m.setup, ordered: ordered[role], workerTps: Math.round((w1 - w0[role]) / secs * 10) / 10, ...r };
                 if (row.sim) delete row.sim.errors;
+                if (traceLong && role === m.pages[0][0]) row.traceLong = traceLong;
+                for (const f of row.longFrames || []) console.log('  long', role, JSON.stringify(f));
+                console.log('  phases', role, JSON.stringify(row.phaseMs), 'loaf', row.loafCount);
+                if (row.gpuMs) console.log('  gpu ms per frame', role, JSON.stringify(row.gpuMs));
                 if (phases[role]) { row.phases = phases[role]; console.log(role, 'phases ms/tick', JSON.stringify(Object.fromEntries(Object.entries(phases[role].msPerTick).slice(0, 16)))); }
                 console.log(JSON.stringify({ fixture, role, vis, load, view, workerTps: row.workerTps, appliedTps: row.appliedTps, simMs: row.workerSimMs,
                     late: row.sim && row.sim.workerLateMs, ahead: row.sim && row.sim.dispatchAhead, fps: row.fps, frameMs: row.frameMs, longMs: row.longMs, heapMB: row.heapMB, fight: row.fight, jitter: row.jitter }));

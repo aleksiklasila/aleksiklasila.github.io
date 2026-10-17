@@ -2488,9 +2488,17 @@ function _handleConnectionClosed(conn) {
     let leftPeerId = conn && conn.peer ? conn.peer : null;
     if (leftPeerId) peerPresenceById[leftPeerId] = false;
     if (isHost && matchStartWaitingForReady && leftPeerId) {
+        // (Still loading the start: out of the match, as a loader gone silent
+        // is (_armMatchStartReadyTimeout); kept in, the match that started
+        // without it then waited for it as for a player gone mid-match.)
+        let loading = (matchStartExpectedReadyPeerIds || []).includes(leftPeerId) && !matchStartReadyByPeerId[leftPeerId];
         matchStartExpectedReadyPeerIds = (matchStartExpectedReadyPeerIds || []).filter(pid => pid !== leftPeerId);
         delete matchStartReadyByPeerId[leftPeerId];
         if (_matchStartPlayerStatuses) delete _matchStartPlayerStatuses[leftPeerId];
+        if (loading && gameStarted) {
+            logLockstepWarning('A player left while loading the start; starting without it', { peerId: leftPeerId });
+            hostRemovePlayerFromMatch(leftPeerId);
+        }
         updateHostMatchStartReadyUi();
         _hostStartWaitReevaluate();
     }

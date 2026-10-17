@@ -28,6 +28,8 @@ const source = read('src/audio_visual/renderer.js');
 Object.assign(c, { gameTime: 1, visibilityVersion: 1, fullVisibility: true, localPlayerId: 0, teamVisibilityHistory: false,
     TILE: 32, GRID_W: 1000, GRID_H: 1000, WORLD_W: 32000, WORLD_H: 32000, tickAlpha: .25,
     selectedUnits: [], selectedEntities: [], activeSubGroups: {}, areas: [], grid: [], renderRangeMode: 0, RENDER_RANGE_ALL: 3,
+    RENDER_RANGE_TURRETS: 0, RENDER_RANGE_TURRETS_AND_UNITS: 1, RENDER_RANGE_NONE: 2,
+    rangeShownState: {}, getRangeAreaOverlay: () => null,
     getActiveUnitsForRender: () => c.selectedUnits, getActiveEntities: () => c.selectedEntities,
     renderer3dInstance: { gl }, _parseHexColor: () => ({r:255,g:128,b:0}), get3DRenderOwnerColor: () => '#ff8000',
     _isLiveRenderGrid: () => true, getCellItemsRowMajor: () => [],

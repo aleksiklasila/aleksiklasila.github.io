@@ -790,8 +790,13 @@ function resyncGuestJoined(tick, gen) {
 function resyncGuestMaybeLive() {
     let g = resyncGuest;
     if (!g.joining) return;
+    // (The bundles committed ahead count too: they leave the pending ones
+    // within a frame, and with the simulation worker the ticks run behind
+    // them: a joiner 870 ticks behind said it had caught up, and the host
+    // waited for it at ~12 TPS until it had: audit 2026-10-17, 45.)
     let newest = currentTick;
     for (let k in lockstepPendingBundleByTick) { let t = +k; if (t > newest) newest = t; }
+    for (let k in lockstepBundleByTick) { let t = +k; if (t > newest) newest = t; }
     if (newest - currentTick > 2) return;
     g.joining = false;
     g.awaitingLive = true;

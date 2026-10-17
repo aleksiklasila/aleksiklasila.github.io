@@ -58,13 +58,13 @@ worker), 2026-10-17.
 | 39 | P2 | A rematch promotes spectators (and lobby visitors who only wait) to playing teams without their choice. | `utils_networking.js` `hostRematch` | fixed |
 | 40 | P1 | A match start dropped players still loading: 45 s after the start every player not ready was removed (its team resigned), however busy loading; the host makes its model views (~30-60 s), the guests theirs only after the world came. Three real Edge tabs on one machine never started (also on d93eb5d). | `utils_networking.js` start | fixed |
 | 41 | P1 | The state hash summed each field's term as (key ^ value) * M: one bit flipped in two fields at once cancelled out where their keys differ. A unit's effective stacks 4 -> 6 with its level 2 -> 3 (always together) flip the same float bit: a guest with a neighbour seen elsewhere kept that unit a level apart unseen (its hysteresis holds it), repairs fixed the players' energy every second but never the unit (`multiplayer-chaos-determinism` crossroads, worker mode, every run). | `k.rs` k_snap_units, `utils_snapshot.js`, `sim_unit_state.js` | fixed |
-| 42 | P1 | A stale live-join snapshot freezes a rematch: `START_GAME` took an older match's join payload and replaced the guest's match id. A captured join replayed after a rematch left the host at tick 36 and the guest at 11, still stuck 20 s later (page and worker). No match or recovery freshness check, at receipt or after the decode. | `utils_networking.js` START_GAME | open |
-| 43 | P2 | Overlapping snapshot decodes apply the same recovery twice: the duplicate check ran before the decode; two copies arriving before either finished, the slower one restored obsolete state after the first recovery had completed (rolled a guest back from tick 65 to 7). | `utils_networking.js` `_guestReceiveSnapshot` | open |
-| 44 | P2 | A join makes the host build the snapshot twice on its main thread in worker mode: the page encoded its own whole state, then replaced it with the worker's (cloned over as objects) and stringified that on the page. 200k units in Node: 2.7-5.6 s to build, 1.2-2.3 s to stringify, ~78 MB. | `utils_resync.js` `_resyncHostSendJoin` | open |
-| 45 | P2 | The 30 s join timeout starts waiting for a player still loading: its expiry removed the "joining" exemption without the joiner being ready. A 45 s snapshot decode on a healthy link: the host fell from 20 to ~10 TPS until the load finished. | `utils_resync.js` `resyncHostIsJoining` | open |
-| 46 | P1 | An old resignation ends the next match: `MATCH_ROLE_UPDATE` had no match id and the host took it as a current resignation. Delayed 15 s past a rematch's start, the guest's team was resigned and the opponent won (page and worker). | `utils_networking.js` MATCH_ROLE_UPDATE | open |
-| 47 | P1 | A disconnect while loading leaves the match at tick 0 for good: two guests, one ready, the other disconnects; the host dropped it but never started the countdown, and its start timeout waited on, nobody left unready (worker case still stuck after 610 s). | `utils_networking.js` `_handleConnectionClosed`, `_armMatchStartReadyTimeout` | open |
-| 48 | P1 | A false local game over blocks recovery after host loss: migration took the guest's unconfirmed `gameOver` as final. A divergence giving a false victory, then the host lost: the guest stood at tick 6 after 90 s and 25 reconnect attempts; also when another guest became the host (page and worker). | `utils_host_migration.js` | open |
+| 42 | P1 | A stale live-join snapshot freezes a rematch: `START_GAME` took an older match's join payload and replaced the guest's match id. A captured join replayed after a rematch left the host at tick 36 and the guest at 11, still stuck 20 s later (page and worker). No match or recovery freshness check, at receipt or after the decode. | `utils_networking.js` START_GAME | fixed |
+| 43 | P2 | Overlapping snapshot decodes apply the same recovery twice: the duplicate check ran before the decode; two copies arriving before either finished, the slower one restored obsolete state after the first recovery had completed (rolled a guest back from tick 65 to 7). | `utils_networking.js` `_guestReceiveSnapshot` | fixed |
+| 44 | P2 | A join makes the host build the snapshot twice on its main thread in worker mode: the page encoded its own whole state, then replaced it with the worker's (cloned over as objects) and stringified that on the page. 200k units in Node: 2.7-5.6 s to build, 1.2-2.3 s to stringify, ~78 MB. | `utils_resync.js` `_resyncHostSendJoin` | fixed |
+| 45 | P2 | The 30 s join timeout starts waiting for a player still loading: its expiry removed the "joining" exemption without the joiner being ready. A 45 s snapshot decode on a healthy link: the host fell from 20 to ~10 TPS until the load finished. | `utils_resync.js` `resyncHostIsJoining` | fixed |
+| 46 | P1 | An old resignation ends the next match: `MATCH_ROLE_UPDATE` had no match id and the host took it as a current resignation. Delayed 15 s past a rematch's start, the guest's team was resigned and the opponent won (page and worker). | `utils_networking.js` MATCH_ROLE_UPDATE | fixed |
+| 47 | P1 | A disconnect while loading leaves the match at tick 0 for good: two guests, one ready, the other disconnects; the host dropped it but never started the countdown, and its start timeout waited on, nobody left unready (worker case still stuck after 610 s). | `utils_networking.js` `_handleConnectionClosed`, `_armMatchStartReadyTimeout` | fixed |
+| 48 | P1 | A false local game over blocks recovery after host loss: migration took the guest's unconfirmed `gameOver` as final. A divergence giving a false victory, then the host lost: the guest stood at tick 6 after 90 s and 25 reconnect attempts; also when another guest became the host (page and worker). | `utils_host_migration.js` | fixed |
 | 49 | P3 | The harness's simulation worker had no event-target API: the newer UI scripts the worker loads with the game's (`hover_text.js`) threw at load, so worker-mode suites failed before testing anything (a real worker's scope has `addEventListener`). | `tests/net-harness.cjs` | fixed |
 
 ## Fixes
@@ -337,6 +337,72 @@ worker), 2026-10-17.
     harness's exact fingerprint reads effective stacks and level too. Test
     `multiplayer-corruption-fuzz unitStacksLevel` (both values a step
     apart, the same bit flipped: never patched before, 1 patch now).
+
+Tests for 42-48: `tests/multiplayer-stale-loading.test.cjs` (`ONLY=42,...`,
+`MODES=page|worker`). `SIM_RULES_REVISION` 16 for the join and role-update
+fields.
+
+42. A guest keeps the matches the host has moved past (their
+    `RETURN_TO_LOBBY`, or another match's prepare or start:
+    `_guestNoteMatchEnded`, `_guestNoteMatchStarting`); a `START_GAME`,
+    `START_SPECTATE` or prepare of one of them is dropped
+    (`netCounters.staleJoinsDropped`). A live join carries a number (`g`,
+    from the recoveries' count `_hostNextResyncGen`); the guest takes a join
+    once, none older than one taken or than a recovery seen in that match
+    (`_guestTakeStart`), and the join counts as a recovery from then. After
+    the yield and after every await of the load, the join must still be
+    current: the same host, its match not past, no newer join
+    (`_guestStartCurrent`, in `applyIncomingMatchSyncPayload`'s `stale()`).
+    Test part 42 (a copy in the same match: no roll back; the last match's
+    join after a rematch's start: dropped, the rematch plays on).
+43. A copy of the snapshot decoding now is dropped
+    (`_guestSnapshotDecoding`, `netCounters.duplicateSnapshotsDropped`),
+    and a decode that finishes after its recovery was restored (by another
+    copy) or done is dropped. Test part 43 (two copies at once, the second
+    decode 3 s slower: no roll back).
+44. With the simulation worker the host page builds the snapshot without a
+    state (`buildHostAuthoritativeStateSnapshot({ withoutState })`) and the
+    worker encodes and stringifies the state (`encodeStateText`); the page
+    puts its small part around that text (`simClientSnapshotText`). For a
+    join and for a match-wide recovery (`simClientFillSnapshotState`, the
+    object path, removed). A join superseded by a newer one for that peer
+    is not sent. Test part 44 (worker: the host page's `snapEncodeState`
+    is not called for a join or a recovery; in sync).
+45. A join is loading until the joiner says `JOIN_APPLIED` (tagged with
+    the join's number, as `JOIN_LIVE` is; one of another join is dropped):
+    not waited for meanwhile, while it says it is loading (`JOIN_LOADING`
+    every 2 s, `_guestJoinLoadingBeat`, up to 10 minutes). The 30 s catch-up
+    limit counts from `JOIN_APPLIED`. A joiner silent for 45 s while loading
+    is sent the match again, once; silent again, it is waited for as any
+    player (`resyncHostCheckJoins`). Found by the test in worker mode: a
+    joiner said it had caught up while ~870 ticks behind (the committed
+    bundles were not counted, only those still pending; with the worker the
+    ticks run behind them), and the host waited for it at ~12 TPS:
+    `resyncGuestMaybeLive` counts both. Test part 45 (a 45 s decode: 20 TPS
+    throughout, live once caught up; silent 50 s: sent again, joined).
+46. `MATCH_ROLE_UPDATE` names its match (`m`); the host drops one of
+    another match, untagged ones too (`netCounters.otherMatchDropped`).
+    Test part 46 (15 s late, past the rematch's start: nobody resigned).
+47. A player disconnecting while loading the start is out of the match (as
+    a loader gone silent is: `hostRemovePlayerFromMatch`; kept in, the
+    match started and then waited for it as for a player gone mid-match),
+    and the start goes on once everyone left is ready
+    (`_hostStartWaitReevaluate`: after a disconnect, and at every start
+    timeout check, with or without anyone to drop). Test part 47.
+48. A guest's end is final only once the host's result confirms it
+    (`netMatchEndFinal`); host migration and following a moved host go on
+    past an unconfirmed one (`_migrationMatchOver`). That guest takes over
+    only when nobody else can: it puts itself last among the successors,
+    and pointed at as the successor it names the next one
+    (`_successorFromMyView(..., passSelf)`); the new host's snapshot undoes
+    its end. Alone it takes over and its end is the match's (shown and told:
+    `matchOverShow`). A host asked for the match after its end sends its
+    result with the final state (`resyncHostSendFinalState`). Test part 48
+    (a false victory on the first and on the second successor, then the
+    host lost: the other guest hosts, both play on in sync; alone: it hosts,
+    the match ended).
+49. The harness's simulation worker scope has `addEventListener` /
+    `removeEventListener` (idle), as a worker's global scope has.
 
 Validation in the audit's session: snapshot, rematch, cross-engine math and
 real shared-memory worker tests passed; the full worker recovery suite was

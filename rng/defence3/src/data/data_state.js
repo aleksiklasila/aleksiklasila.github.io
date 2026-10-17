@@ -226,7 +226,6 @@ function rebuildAreaDistanceCachesFromAreas() {
         _addDroppedItemToAreaBucket(drop, getAreaIdAtTile(drop.gx, drop.gy));
     }
 
-    _areaNeighborSets = neighborSets;
     for (let source = 0; source < areaCount; source++) {
         let neighbors = _areaById[source] ? Array.from(neighborSets[source] || []).sort((a, b) => a - b) : [];
         areaNeighborIds[source] = neighbors;
@@ -239,7 +238,6 @@ function rebuildAreaDistanceCachesFromAreas() {
     // huge maps.
 }
 
-let _areaNeighborSets = [];
 let _areaBfsDone = []; // [areaId] -> true once the BFS from it is exhausted
 
 // BFS over the area graph from one source, expanded one level at a time on
