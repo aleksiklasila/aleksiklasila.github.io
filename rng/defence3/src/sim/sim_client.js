@@ -1204,10 +1204,20 @@ function simClientEncodePatch(buckets) {
     return simClientRequest('encodePatch', { buckets });
 }
 
-// Host: a whole-state snapshot built on the page (lockstep window, config),
-// with the simulation state taken from the worker at this point.
-function simClientFillSnapshotState(snapshot) {
-    return simClientRequest('encodeState').then(r => { snapshot.state = r.state; snapshot.gameTime = r.gameTime; return snapshot; });
+// Host: a whole-state snapshot's JSON text, with the simulation state taken
+// from the worker at this point: the page's part (lockstep window, config;
+// built withoutState) around the state's text, which the worker encodes and
+// stringifies itself. (A join encoded the page's own copy of the state
+// first, then cloned the worker's over as objects and stringified it on the
+// page: 200k units, seconds and ~78 MB on the host's main thread: audit
+// 2026-10-17, 44.)
+function simClientSnapshotText(snapshot) {
+    return simClientRequest('encodeStateText').then(r => {
+        snapshot.gameTime = r.gameTime;
+        delete snapshot.state;
+        let head = JSON.stringify(snapshot);
+        return head.slice(0, -1) + (head.length > 2 ? ',' : '') + '"state":' + r.text + '}';
+    });
 }
 
 // Guest: a resync patch, for the worker to apply before the next tick.

@@ -38,7 +38,7 @@ function enterSpectateMode(mode = 'defeated', opts = null) {
         if (isHost) { if (typeof hostPeerStopsPlaying === 'function') hostPeerStopsPlaying(myPeerId); }
         else {
             if (myPeerId) matchRoleByPeerId[myPeerId] = 'spectating';
-            if (connections[0]) { try { connections[0].send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating' }); } catch { } }
+            if (connections[0]) { try { connections[0].send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating', m: matchStartSessionId || undefined }); } catch { } }
         }
     }
     requestBuildMenuRefresh();

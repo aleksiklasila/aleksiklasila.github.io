@@ -234,7 +234,7 @@ const PAGE_COLLECT = () => {
         tickGapMs: { p50: q(gaps, .5), p95: q(gaps, .95), max: q(gaps, 1) },
         workerSimMs: { mean: sim.length ? Math.round(sim.reduce((a, b) => a + b, 0) / sim.length * 10) / 10 : 0, p95: q(sim, .95), max: q(sim, 1) },
         fps: d.length ? Math.round(d.length / (d.reduce((a, b) => a + b, 0) / 1000) * 10) / 10 : 0,
-        frameMs: { p50: q(d, .5), p95: q(d, .95), p99: q(d, .99), max: q(d, 1) },
+        frameMs: { p50: q(d, .5), p95: q(d, .95), p99: q(d, .99), max: q(d, 1), over33: d.filter(x => x > 33).length, over50: d.filter(x => x > 50).length },
         longTasks: W.longTasks, longMs: Math.round(W.longMs), heapMB: mem, sim: simClientStats(), jitter: W.jitSummary
     };
 };

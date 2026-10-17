@@ -75,17 +75,30 @@ function computeHostMigrationCandidates(excludeId) {
 }
 
 // Who should take over, as far as this guest knows: the first successor not
-// known to be unreachable ('' when that is us).
-function _successorFromMyView(failedByOthers) {
+// known to be unreachable ('' when that is us). (passSelf: the first other
+// one, as a guest whose own end is not confirmed sees it.)
+function _successorFromMyView(failedByOthers, passSelf = false) {
     let m = hostMigration;
     let failed = new Set(Array.isArray(failedByOthers) ? failedByOthers.map(String) : []);
     if (m) for (let pid of m.candidates.slice(0, m.index)) failed.add(pid);
     let order = m ? m.candidates : computeHostMigrationCandidates(String(wsHostId || ''));
     for (let pid of order) {
-        if (pid === myPeerId) return '';
+        if (pid === myPeerId) { if (passSelf) continue; return ''; }
         if (!failed.has(pid)) return pid;
     }
     return '';
+}
+
+// A guest whose end of the match the host never confirmed (netMatchEndFinal):
+// its state may be the divergent one. Losing the host, the match moves on
+// (it stopped there: the guest stood at its tick for good, audit
+// 2026-10-17, 48), and that guest takes over only when nobody else can: the
+// others' state goes on, its own end undone by their snapshot.
+function _migrationOwnEndUnconfirmed() {
+    return gameOver && typeof netMatchEndFinal === 'function' && !netMatchEndFinal();
+}
+function _migrationMatchOver() {
+    return gameOver && !_migrationOwnEndUnconfirmed();
 }
 
 function guestConsidersHostLost(now = performance.now()) {
@@ -100,7 +113,7 @@ function guestConsidersHostLost(now = performance.now()) {
 // Guest: called when the host connection is lost; true when it is time to
 // move the match rather than keep reconnecting.
 function guestShouldMigrate(now = performance.now()) {
-    if (isHost || !gameStarted || gameOver || hostMigration) return false;
+    if (isHost || !gameStarted || _migrationMatchOver() || hostMigration) return false;
     if (!guestHostLostAt) {
         let link = netGetLinkStats(wsHostId);
         guestHostLostAt = (link && link.lastHeardAt) || now;
@@ -113,7 +126,7 @@ function guestShouldMigrate(now = performance.now()) {
 }
 
 function guestStartHostMigration(reason, opts = {}) {
-    if (isHost || !isMultiplayer || !gameStarted || gameOver) return false;
+    if (isHost || !isMultiplayer || !gameStarted || _migrationMatchOver()) return false;
     if (isPeerExplicitlyRemoved(myPeerId)) return false;
     if (hostMigration) {
         if (opts.hostLeft) hostMigration.hostLeft = true;
@@ -123,6 +136,8 @@ function guestStartHostMigration(reason, opts = {}) {
     if (!oldHostId) return false;
     let candidates = computeHostMigrationCandidates(oldHostId);
     if (candidates.length === 0) return false;
+    // (Its own end unconfirmed: itself last.)
+    if (_migrationOwnEndUnconfirmed() && candidates.length > 1 && candidates.includes(myPeerId)) candidates = [...candidates.filter(pid => pid !== myPeerId), myPeerId];
     hostMigration = { oldHostId, candidates, index: 0, hostLeft: !!opts.hostLeft, attemptAt: 0, redirects: 0, target: '' };
     netCounters.hostMigrations++;
     logLockstepWarning('Host lost; moving the match', { oldHostId, candidates, reason: String(reason || '') });
@@ -137,7 +152,7 @@ function guestStartHostMigration(reason, opts = {}) {
 
 function _hostMigrationTryNext() {
     let m = hostMigration;
-    if (!m || !gameStarted || gameOver) return;
+    if (!m || !gameStarted || _migrationMatchOver()) return;
     if (m.index >= m.candidates.length) {
         // Nobody answered, not even as a successor: fall back to waiting
         // for the old host, and try moving again later.
@@ -236,7 +251,7 @@ function hostMigrationHandleReply(conn, data) {
 // Guest: the host told us the match moved (it joined another host).
 function guestFollowHostMove(hostId) {
     let hid = String(hostId || '');
-    if (isHost || !gameStarted || gameOver || !hid || hid === myPeerId) return;
+    if (isHost || !gameStarted || _migrationMatchOver() || !hid || hid === myPeerId) return;
     hostMigration = null;
     guestHostLostAt = 0;
     joinGame(hid, { rejoin: true, migrate: true });
@@ -324,6 +339,9 @@ function promoteSelfToHost(oldHostId, hostLeft, opts = null) {
     saveMatchRecord(true);
     broadcastLobbyState(true);
     updateInfoPanel();
+    // (Its own end, not confirmed as a guest (nobody else could take over):
+    // the match's end now, told and shown.)
+    if (gameOver && typeof matchOverShow === 'function') matchOverShow();
 }
 
 // ---- a host whose simulation was lost ----
@@ -444,8 +462,12 @@ function answerHostSeek(conn, successor = '') {
 function guestHandleMigrationConnection(conn) {
     let meta = (conn && conn.metadata) || {};
     let sameMatch = String(meta.sessionId || '') === String(matchStartSessionId || '');
-    if (sameMatch && !gameOver && !isPeerExplicitlyRemoved(myPeerId) && guestConsidersHostLost()) {
-        let successor = _successorFromMyView(meta.failed);
+    if (sameMatch && !_migrationMatchOver() && !isPeerExplicitlyRemoved(myPeerId) && guestConsidersHostLost()) {
+        // (Our own end unconfirmed: the next one in our view takes over, the
+        // asker itself if it is that one; we do only when nobody else can.)
+        let deferring = _migrationOwnEndUnconfirmed();
+        let successor = _successorFromMyView(meta.failed, deferring);
+        if (deferring && successor) { answerHostSeek(conn, successor); return; }
         if (!successor || successor === conn.peer) {
             let m = hostMigration;
             promoteSelfToHost(String((m && m.oldHostId) || wsHostId || ''), !!(m && m.hostLeft));

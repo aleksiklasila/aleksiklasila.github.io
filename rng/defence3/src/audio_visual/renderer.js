@@ -2832,6 +2832,9 @@ function build3DFrameData(flat2d = false) {
     const structFrame = _structureRenderFrame(sourceView);
     const structDetail = _isLiveUnitList(sourceView.units) ? _structureDetailSplit([towers, barracks, collectorSpawners, goldMines, astarMines], flat2d, queryBounds, structLive, structFrame) : null;
     if (structDetail) [towers, barracks, collectorSpawners, goldMines, astarMines] = structDetail.lists;
+    // (A remembered view in columns, Team + history, with no split: its
+    // lists and cells, as the canvas renderer has them.)
+    else if (sourceView.historyColumns) ({ grid, towers, barracks, collectorSpawners, goldMines, astarMines } = getLiveRenderView(true));
     const farFloorItems = structDetail && !structLive && !structDetail.frame ? [] : null;
 
     begin3DTextureFrame();
@@ -3036,7 +3039,8 @@ function build3DFrameData(flat2d = false) {
         objects.length = before;
         if (_structureHasActivity(entity)) staticLayer.activity.push(entity, first);
     };
-    let pushCellItemStep = (item, x, y) => pushCellItem(x, y, grid[y][x]);
+    // (A remembered view in columns has no cells: the item's own owner.)
+    let pushCellItemStep = (item, x, y) => pushCellItem(x, y, grid[y][x] || { item, owner: item.owner, type: undefined });
     let pushGoldMine = (m) => {
         if (m.gx < sBounds.minGx || m.gx > sBounds.maxGx || m.gy < sBounds.minGy || m.gy > sBounds.maxGy) return;
         if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) return;
@@ -3131,13 +3135,15 @@ function build3DFrameData(flat2d = false) {
             let item = items[i], x = item.gx, y = item.gy;
             if (y > sBounds.maxGy) break;
             if (x < sBounds.minGx || x > sBounds.maxGx) continue;
+            // (A remembered view in columns has no cells: its floor items
+            // are its frame's sources.)
             let cell = grid[y][x];
-            if (!cell || cell.item !== item) continue;
+            if (cell ? cell.item !== item : !sourceView.historyColumns) continue;
             if (!fullVisibility && (!visibilityGrid[y] || visibilityGrid[y][x] === 0)) continue;
             // (Floor items are flat buildings: past the split's threshold,
             // the GPU's glyphs, as buildings.)
             if (structDetail && !structDetail.selected.has(item)) continue;
-            structureStep(cell.item, pushCellItemStep, x, y);
+            structureStep(item, pushCellItemStep, x, y);
         }
     } else {
         for (let y = sBounds.minGy; y <= sBounds.maxGy; y++) {
@@ -3832,67 +3838,14 @@ function _detailColumns(unitDetail, structDetail) {
     base.detailMaskVersionS = structDetail ? structDetail.version : 0;
     return base;
 }
-// Adapt a fog-history view to the same rendering columns. Never substitute
-// the live table here: unseen structures must retain their last-seen state.
-let _historyStructureFrame = null;
+// A fog-history view's structures in the same rendering columns. Never
+// substitute the live table here: unseen structures must retain their
+// last-seen state. (Beside a simulation worker: the remembered columns,
+// visibility_history.js historyStructureFrame; else none, the lists.)
 function _structureRenderFrame(view) {
     if (_isLiveRenderGrid(view.grid)) return typeof _pageTables !== 'undefined' ? _pageTables.s : null;
     const h = typeof visibilityHistoryState !== 'undefined' ? visibilityHistoryState : null;
-    if (!h || h.view !== view || typeof _pageFrameStrings === 'undefined') return null;
-    const cached=_historyStructureFrame;
-    if(cached?.view===view && cached.tick===gameTime && cached.generation===h.generation) return cached.frame;
-    // (The same remembered lists (they change every HISTORY_STRUCTURE_TICKS):
-    // the columns that change while seen, in place, for the live ones; the
-    // remembered ones never change. F.ver tells the GPU columns and the
-    // middle models. A new frame each tick made every structure's columns,
-    // its maps and the spatial index of the candidates again.)
-    if(cached?.view===view && cached.generation===h.generation && cached.strings===_pageFrameStrings.length) {
-        const F=cached.frame, src=F.sources, codes=cached.codes;
-        for(let s=0;s<F.n;s++) { const e=src[s]; if(!e._historyGhost) _historyStructureFill(F,s,e,F.kind[s],view,codes); }
-        F.ver=(F.ver|0)+1;
-        cached.tick=gameTime;
-        return F;
-    }
-    const sources=[], kinds=[], seen=new Set();
-    const add=(e,kind)=>{if(!e||seen.has(e))return;seen.add(e);sources.push(e);kinds.push(kind);};
-    for(const [name,kind] of [['towers',0],['barracks',1],['collectorSpawners',2],['goldMines',4],['astarMines',5]])
-        for(const e of view[name]) add(e,kind);
-    for(const record of h.memories.floorItems.values()) add(record.snapshot||record.source,3);
-    const n=sources.length,F={n,cap:n,sources,sourceIndex:new Map(sources.map((e,s)=>[e,s])),history:true};
-    for(const field of ['x','y','gx','gy','kind','alive','energy','owner','flags','type','utype','vision','angle','amount']) F[field]=new Float32Array(n);
-    const codes=new Map(_pageFrameStrings.map((s,i)=>[s,i]));
-    for(let s=0;s<n;s++) {
-        const e=sources[s],kind=kinds[s];
-        F.gx[s]=e.gx;F.gy[s]=e.gy;F.x[s]=(e.gx+.5)*TILE;F.y[s]=(e.gy+.5)*TILE;
-        F.kind[s]=kind;
-        _historyStructureFill(F,s,e,kind,view,codes);
-    }
-    F.ver=0;
-    _historyStructureFrame={view,tick:gameTime,generation:h.generation,frame:F,codes,strings:_pageFrameStrings.length};
-    return F;
-}
-// A remembered view's structure s (source e) into its columns. (A live
-// structure's view (its slot in the page's table, no details of its own):
-// from the table's columns, as its accessors read them: those were most of
-// the time.)
-function _historyStructureFill(F,s,e,kind,view,codes) {
-    const T=e._structView&&e._s>=0&&!e._det&&typeof _pageTables!=='undefined'?_pageTables.s:null;
-    if(T) {
-        const q=e._s, o=T.owner[q];
-        F.alive[s]=e.dead?0:1;F.energy[s]=kind>=4?0:(Number(T.energy[q])||0);
-        F.owner[s]=o===-1&&kind>=4?(kind===3?view.grid[e.gy][e.gx].owner:-1):Number.isFinite(o)?o:kind===3?view.grid[e.gy][e.gx].owner:-1;
-        F.flags[s]=(T.flags[q]&SIM_SF_UC)?1:0;
-        F.type[s]=codes.get(_pageFrameStrings[T.type[q]]||undefined)||0;F.utype[s]=codes.get(_pageFrameStrings[T.utype[q]]||undefined)||0;
-        F.vision[s]=kind<4?(Number(T.vision[q])||0):0;
-        F.angle[s]=Number(T.angle[q])||0;F.amount[s]=kind===4||kind===5?(Number(T.amount[q])||0):0;
-        return;
-    }
-    F.alive[s]=e.dead?0:1;F.energy[s]=Number(e.energy)||0;
-    F.owner[s]=Number.isFinite(e.owner)?e.owner:kind===3?view.grid[e.gy][e.gx].owner:-1;
-    F.flags[s]=(e.underConstruction?1:0)|(e._historyGhost?STRUCT_FRAME_GHOST:0);
-    F.type[s]=codes.get(e.type)||0;F.utype[s]=codes.get(e.unitType)||0;
-    F.vision[s]=kind<4?Number(getEntityEffectiveVisibilityRangeArea(e))||0:0;
-    F.angle[s]=Number(e.angle)||0;F.amount[s]=Number(kind===4?e.gold:kind===5?e.astar:0)||0;
+    return h && h.view === view && view.historyColumns ? historyStructureFrame(h) : null;
 }
 // Rank only visible models. Chunk bounds are deliberately conservative and
 // include units behind/beside the camera; they must not consume detail slots.
@@ -4036,7 +3989,9 @@ let _structProjectionCache = null;
 let _structSpatialCache = null;
 function _structureDetailCandidates(F, flat2d) {
     const client = typeof _simClient === 'undefined' ? null : _simClient;
-    const revision = F.history ? F : client ? client.structMver : F;
+    // (A remembered frame (Team + history) is kept and changed in place: its
+    // rev changes when slots are taken over or ghosts come or go.)
+    const revision = F.history ? F.rev : client ? client.structMver : F;
     const columns = Math.ceil(GRID_W / 16), rows = Math.ceil(GRID_H / 16);
     let C = _structSpatialCache;
     if (!C || C.client !== client || C.revision !== revision || C.n !== F.n || C.cap !== F.cap || C.columns !== columns || C.rows !== rows) {
@@ -4071,8 +4026,9 @@ function _structureDetailCandidates(F, flat2d) {
 function _structureDetailSplit(lists, flat2d, bounds, live = true, renderFrame = null) {
     const R = renderer3dInstance;
     if (!R || typeof R.columnPixelScale !== 'function' || (live && (typeof _pageTables === 'undefined' || !_pageTables.s))) return null;
-    const cacheKey = _detailViewKey(flat2d) + '|' + gameTime + '|' + visibilityVersion + '|' + fullVisibility;
     const packed = renderFrame || (live ? _pageTables.s : null);
+    // (A remembered frame is changed in place: its ver.)
+    const cacheKey = _detailViewKey(flat2d) + '|' + gameTime + '|' + visibilityVersion + '|' + fullVisibility + '|' + (packed?.history ? packed.ver : '');
     if (packed && _structDetailCache?.key === cacheKey && _structDetailCache.frame === packed) return _structDetailCache.value;
     if (packed?.kind) {
         // Work directly from the packed table. At a low pitch even a small
@@ -4098,6 +4054,8 @@ function _structureDetailSplit(lists, flat2d, bounds, live = true, renderFrame =
             }
             if (!F.alive[s] || F.kind[s] === 6 || (F.kind[s] < 4 && F.energy[s] <= 0)) continue;
             if (!fullVisibility && !(F.flags?.[s]&STRUCT_FRAME_GHOST) && !(visibilityGrid[gy]?.[gx] > 0)) continue;
+            // (No source to draw in detail: its glyph stays.)
+            if (F.sources && !F.sources[s]) continue;
             P[s] = projection.scores[s];
         }
         projection.key = viewKey;
@@ -4524,6 +4482,64 @@ function paintMinimapUnitColumns(F, pixels, size, tile, scale, full, vis, colors
         pixels[y * size + x] = colors[O[s] + 1];
     }
 }
+// The minimap's fog as a picture of its own pixels: clear where seen, dimmed
+// where explored (Team + history), dark elsewhere. A pixel over several tiles
+// (a map larger than the minimap) takes the darkest of them, as the rows of
+// tiles drawn over each other had it. (Those were a pass over every tile and
+// a fillRect per run in each row of tiles: ~5-10 ms a picture on a
+// 1000x1000 map, four times a second.)
+const _minimapFog = { size: 0, canvas: null, image: null, pixels: null, state: null, cols: null, colsKey: '' };
+function _minimapFogPicture(scale, vis, explored) {
+    const M = _minimapFog, size = MINIMAP_SIZE;
+    if (M.size !== size) {
+        M.canvas = document.createElement('canvas');
+        M.canvas.width = M.canvas.height = size;
+        M.image = M.canvas.getContext('2d').createImageData(size, size);
+        M.pixels = new Uint32Array(M.image.data.buffer, M.image.data.byteOffset, size * size);
+        M.state = new Uint8Array(size * size); M.size = size; M.colsKey = '';
+    }
+    // (RGBA bytes: alpha in the high byte; .77 of black where explored.)
+    const P = M.pixels, look = [0, 0xC4000000 | 0, 0xFF000000 | 0], W = GRID_W, H = GRID_H;
+    if (scale >= 1) {
+        for (let py = 0; py < size; py++) {
+            const ty = Math.min(H - 1, Math.floor((py + .5) / scale)), row = vis[ty], e = ty * W, o = py * size;
+            for (let px = 0; px < size; px++) {
+                const tx = Math.min(W - 1, Math.floor((px + .5) / scale));
+                P[o + px] = look[row && row[tx] > 0 ? 0 : explored && explored[e + tx] ? 1 : 2];
+            }
+        }
+    } else {
+        // (Tile x is drawn on pixel column round(x * scale): xs[px] its
+        // first tile; a pixel already dark takes no more reads.)
+        const key = scale + '|' + W;
+        if (M.colsKey !== key) {
+            M.cols = new Int32Array(size + 1);
+            for (let x = W - 1; x >= 0; x--) M.cols[Math.min(size - 1, Math.round(x * scale))] = x;
+            for (let px = 1; px < size; px++) if (M.cols[px] < M.cols[px - 1]) M.cols[px] = M.cols[px - 1];
+            M.cols[size] = W;
+            M.colsKey = key;
+        }
+        const S = M.state, xs = M.cols;
+        S.fill(0);
+        for (let y = 0; y < H; y++) {
+            const row = vis[y], o = Math.min(size - 1, Math.round(y * scale)) * size, e = y * W;
+            if (!row) { S.fill(2, o, o + size); continue; }
+            for (let px = 0; px < size; px++) {
+                let s = S[o + px];
+                if (s === 2) continue;
+                for (let x = xs[px], x1 = xs[px + 1]; x < x1; x++) {
+                    if (row[x] > 0) continue;
+                    if (!explored || !explored[e + x]) { s = 2; break; }
+                    s = 1;
+                }
+                S[o + px] = s;
+            }
+        }
+        for (let p = 0; p < size * size; p++) P[p] = look[S[p]];
+    }
+    M.canvas.getContext('2d').putImageData(M.image, 0, 0);
+    return M.canvas;
+}
 // An army's units on the minimap: a slice of them a frame into pixels of
 // their own, shown when all are in (every unit in one go was ~13 ms at 600k
 // units, four times a second: a long frame each time). The picture is of
@@ -4606,45 +4622,13 @@ function drawMinimap() {
         }
     };
 
-    const getMinimapTilePixelBounds = (startX, endX, y) => {
-        let left = Math.round(startX * scale);
-        let right = Math.round(endX * scale);
-        let top = Math.round(y * scale);
-        let bottom = Math.round((y + 1) * scale);
-        if (right <= left) right = left + Math.max(1, Math.round(tilePx));
-        if (bottom <= top) bottom = top + Math.max(1, Math.round(tilePx));
-        return {
-            left,
-            top,
-            width: right - left,
-            height: bottom - top,
-        };
-    };
-
-    const drawMinimapRun = (startX, endX, y, color) => {
-        if (endX <= startX) return;
-        setMinimapFill(color);
-        let bounds = getMinimapTilePixelBounds(startX, endX, y);
-        minimapCtx.fillRect(bounds.left, bounds.top, bounds.width, bounds.height);
-    };
-
     // Draw base minimap immediately so dynamic overlays (fog/units/alerts) stay visible on top.
     minimapCtx.drawImage(_minimapStaticCanvas, 0, 0);
 
-    // Unknown areas
+    // Unknown areas (and with history the explored ones, dimmed).
     if (!fullVisibility && vis.length > 0) {
-        for (let y = 0; y < GRID_H; y++) {
-            let row = vis[y];
-            let runStart = 0, runState = -1;
-            for (let x = 0; x <= GRID_W; x++) {
-                let state = x === GRID_W ? -1 : row && row[x] > 0 ? 0
-                    : teamVisibilityHistory && visibilityHistoryState && visibilityHistoryState.explored[y * GRID_W + x] ? 1 : 2;
-                if (state !== runState) {
-                    if (runState > 0) drawMinimapRun(runStart, x, y, runState === 1 ? 'rgba(0,0,0,0.77)' : '#000');
-                    runStart = x; runState = state;
-                }
-            }
-        }
+        const explored = teamVisibilityHistory && visibilityHistoryState ? visibilityHistoryState.explored : null;
+        minimapCtx.drawImage(_minimapFogPicture(scale, vis, explored), 0, 0);
     }
 
     // At army scale, compose directly into minimap pixels. Overlapping units
@@ -7028,7 +7012,6 @@ function clearRendererTransientVisualCaches(options = null) {
         rendererScaleCache = null;
     }
     rendererChunkCache = null;
-    _historyStructureFrame = null;
     rendererScaleActive = false;
     let preserveTextSprites = !!(options && options.preserveTextSprites);
     if (!preserveTextSprites) {

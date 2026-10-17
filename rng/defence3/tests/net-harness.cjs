@@ -579,6 +579,9 @@ function createInstance(world, name, options = {}) {
                 Date: HarnessDate, Math: options.foreignMath ? makeForeignMath() : Math, structuredClone, URLSearchParams, URL, TextEncoder, TextDecoder,
                 location: { search: '', href: 'http://localhost/rng/defence3/src/sim/sim_worker.js' }, navigator: { userAgent: 'harness-worker' },
                 crypto: window.crypto,
+                // (A worker's global scope is an event target: UI scripts
+                // loaded with the game's bind their listeners on it, idle.)
+                addEventListener() { }, removeEventListener() { },
                 importScripts: () => { if (worker._imported) return; worker._imported = true; for (const sc of scripts.game) { try { sc.runInContext(ctx); } catch (err) { inst.errors.push(new Error("[sim worker] loading " + sc.__file + ": " + (err && err.stack || err))); } }
                     // (DIVTRACE in worker mode: the worker's ticks are the ones compared.)
                     if (process.env.DIVTRACE) vm.runInContext(DIVTRACE_SRC.replace(/__DIVFN__/g, 'gameTick').replace('__DIVTICK__', 'currentTick'), ctx); },

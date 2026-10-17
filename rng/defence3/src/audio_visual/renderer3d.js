@@ -7186,8 +7186,10 @@
                 // Units: only the blocks of slots changed since the frame the
                 // buffer holds, when the frame says which (presentation_worker.js
                 // markDirty: a full upload was ~11 MB a tick at 100k a team).
+                // Remembered structures (Team + history) the same way: the rows
+                // changed in place (visibility_history.js _historyDirty).
                 // (Defence3Renderer3D.partialColumnUploads = false: whole columns, for comparisons.)
-                const D = !structure && Defence3Renderer3D.partialColumnUploads !== false && F.dirty;
+                const D = (!structure || F.history) && Defence3Renderer3D.partialColumnUploads !== false && F.dirty;
                 let since = D && S.stream === D.stream && S.cap === F.cap && S.seq < D.seq ? S.seq : -1;
                 if (!S.bytes || S.bytes < bytes) { S.bytes=bytes;gl.bufferData(gl.ARRAY_BUFFER,bytes,gl.DYNAMIC_DRAW);since=-1; }
                 // (Units' uploads counted: columnUploadStats.)

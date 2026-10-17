@@ -231,7 +231,7 @@ const ECONOMY = {
         const unitsBefore = host.eval('units.length');
         await world.run(8000);
         // Guest 2 resigns (its client switches to a full-visibility view).
-        guests[1].eval(`queueAction({ action: 'resign' }); enterSpectateMode('defeated'); connections[0].send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating' });`);
+        guests[1].eval(`queueAction({ action: 'resign' }); enterSpectateMode('defeated'); connections[0].send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating', m: matchStartSessionId });`);
         await world.run(30000);
         assert.ok(host.eval('units.length') > unitsBefore, 'barracks produced units');
         assert.equal(guests[1].eval('fullVisibility'), true);

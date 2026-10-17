@@ -696,9 +696,11 @@ function _simRequestRun(msg) {
         case 'encodePatch':
             result = JSON.stringify(snapEncodeState(msg.args && msg.args.buckets ? { buckets: msg.args.buckets } : null));
             break;
-        // The whole state (joins, reloads, rematch...), for the page to wrap.
-        case 'encodeState':
-            result = { state: snapEncodeState(), gameTime };
+        // The whole state (joins, reloads, rematch...) as JSON text, for the
+        // page to wrap (it cloned the state over as objects and stringified
+        // it on its main thread).
+        case 'encodeStateText':
+            result = { text: JSON.stringify(snapEncodeState()), gameTime };
             break;
         // Guest: a resync patch before the next tick. (The page sees its
         // effects in the next frame and records.)

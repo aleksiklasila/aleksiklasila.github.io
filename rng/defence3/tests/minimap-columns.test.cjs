@@ -23,4 +23,30 @@ for(const full of [false,true]) for(const size of [16,160]) {
     c.paintMinimapUnitColumns(F,new Uint32Array(actual.buffer),size,32,scale,full,vis,new Uint32Array(palette.buffer));
     assert.deepEqual(actual,expected,'packed pixels preserve visibility, owner colours, overlap order, death and clipping');
 }
-console.log('PASS: packed minimap matches reference pixels in full/team visibility at both scales.');
+// The fog picture (_minimapFogPicture): where the minimap is at least as
+// large as the map, the same pixels as the runs of tiles drawn as rects
+// before (clear where seen, .77 black where explored, black elsewhere);
+// where smaller, each pixel the darkest of the tiles drawn on it.
+c.document={createElement:()=>({getContext:()=>({createImageData:(w,h)=>({width:w,height:h,data:new Uint8ClampedArray(w*h*4)}),putImageData(){}})})};
+for(const [grid,size] of [[100,160],[80,160],[100,100],[120,160],[1000,160],[333,160]]) {
+    c.GRID_W=c.GRID_H=grid;c.MINIMAP_SIZE=size;
+    const scale=size/grid, vis=Array.from({length:grid},()=>Float32Array.from({length:grid},()=>random()>.5?random()*3:0));
+    const explored=Uint8Array.from({length:grid*grid},()=>random()>.4?1:0);
+    for(const ex of [null,explored]) {
+        const canvas=c._minimapFogPicture(scale,vis,ex), px=new Uint32Array(vm.runInContext('_minimapFog.image',c).data.buffer);
+        const state=(x,y)=>vis[y][x]>0?0:ex&&ex[y*grid+x]?1:2, want=new Uint8Array(size*size);
+        if(scale>=1) {
+            for(let y=0;y<grid;y++) for(let x=0;x<grid;x++) {
+                const s=state(x,y);
+                for(let py=Math.round(y*scale);py<Math.round((y+1)*scale);py++) for(let p=Math.round(x*scale);p<Math.round((x+1)*scale);p++) want[py*size+p]=s;
+            }
+        } else for(let y=0;y<grid;y++) for(let x=0;x<grid;x++) {
+            const p=Math.min(size-1,Math.round(y*scale))*size+Math.min(size-1,Math.round(x*scale));
+            want[p]=Math.max(want[p],state(x,y));
+        }
+        const look=[0,0xC4000000,0xFF000000];
+        for(let p=0;p<size*size;p++) assert.equal(px[p],look[want[p]],`fog pixel ${p} of a ${grid}-tile map on ${size} px`);
+        assert.ok(canvas);
+    }
+}
+console.log('PASS: packed minimap matches reference pixels in full/team visibility at both scales; fog picture as the tile rects.');

@@ -208,7 +208,7 @@ const labOf = inst => own(inst, `(s => ({ gx: s.gx, gy: s.gy }))(collectorSpawne
     // 6. Destroy mode: the last team standing after resignations wins.
     {
         const { world, host, guests, all } = await match({ guests: 2, teams: [0, 1, 2] });
-        for (const g of guests) g.eval(`queueAction({ action: 'resign' }); enterSpectateMode('defeated'); connections[0].send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating' });`);
+        for (const g of guests) g.eval(`queueAction({ action: 'resign' }); enterSpectateMode('defeated'); connections[0].send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating', m: matchStartSessionId });`);
         await world.runUntil(() => all.every(i => i.eval('gameOver')), 10000);
         assert.ok(all.every(i => i.eval('winner') === host.eval('localPlayerId')), 'host wins after both resign');
         assertInSync(world, all, 'resign victory', 0, 10);

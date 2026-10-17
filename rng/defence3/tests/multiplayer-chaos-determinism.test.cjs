@@ -208,7 +208,7 @@ async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
         }
         if (resignAt && world.now >= resignAt) {
             resignAt = 0;
-            guests[1].eval("queueAction({ action: 'resign' }); enterSpectateMode('defeated'); connections[0].send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating' });");
+            guests[1].eval("queueAction({ action: 'resign' }); enterSpectateMode('defeated'); connections[0].send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating', m: matchStartSessionId });");
         }
         if (corruptAt.length && world.now >= corruptAt[0]) {
             corruptAt.shift();

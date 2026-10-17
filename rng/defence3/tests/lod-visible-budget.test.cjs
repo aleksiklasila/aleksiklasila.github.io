@@ -130,44 +130,91 @@ assert.equal(lod(2,42),2,'coarse mesh does not flicker near the medium boundary'
 assert.equal(lod(2,45),1);
 assert.equal(lod(1,71),0);
 
-// Fog history is a source adapter, not a different rendering policy.
-vm.runInContext(source.slice(source.indexOf('let _historyStructureFrame ='),source.indexOf('// Rank only visible models.')),c);
-vm.runInContext(source.slice(source.indexOf('function _detailColumns('),source.indexOf('// Adapt a fog-history view')),c);
-c._pageFrameStrings=['','fire','norm'];c.getEntityEffectiveVisibilityRangeArea=()=>2;
+// Fog history is a source adapter, not a different rendering policy: the
+// remembered structures are the live table's columns slot by slot
+// (visibility_history.js historyStructureFrame), a remembered one its row as
+// last seen marked a ghost, one whose slot was taken over kept past the slots.
+vm.runInContext(source.slice(source.indexOf('function _detailColumns('),source.indexOf('// Rank only visible models.')),c);
+vm.runInContext(read('src/audio_visual/visibility_history.js'),c);
 const liveGrid=[];c._isLiveRenderGrid=g=>g===liveGrid;
-const tower={_s:99,gx:500,gy:500,type:'fire',energy:10,owner:0};
-const mine={gx:501,gy:500,astar:123,_historyGhost:true};
-const floor={gx:502,gy:500,type:'fire',energy:10,owner:0,_historyGhost:true};
-const historyView={grid:[],towers:[tower],barracks:[],collectorSpawners:[],goldMines:[],astarMines:[mine]};
-c.visibilityHistoryState={view:historyView,generation:1,memories:{floorItems:new Map([[1,{snapshot:floor}],[2,{source:tower}]])}};
-const H=c._structureRenderFrame(historyView);
-assert.equal(H.n,3,'floor index does not duplicate barracks/towers');
-assert.equal(H.amount[1],123);assert.equal(H.flags[1],vm.runInContext('STRUCT_FRAME_GHOST',c));
-assert.equal(H.flags[1]&65536,0,'a remembered structure is not flagged as a live one at research');
-assert.equal(tower._s,99,'history adaptation never overwrites live slots');
-assert.equal(c._structureRenderFrame(historyView),H,'camera changes reuse the packed history frame');
-// A tick later, the same remembered lists: the same frame, its live
-// structures refreshed in place (the remembered ones as they were), its
-// version up (for the GPU columns and the middle models).
-tower.energy=4;c.gameTime++;
-assert.equal(c._structureRenderFrame(historyView),H,'the same frame a tick later');
-assert.equal(H.energy[0],4,'a live structure\'s columns refreshed');
-assert.equal(H.amount[1],123,'a remembered one\'s kept');
-assert.equal(H.ver,1,'its version up');
-c.visibilityHistoryState.generation++;
-assert.notEqual(c._structureRenderFrame(historyView),H,'new remembered lists: a new frame');
+const GHOST=vm.runInContext('STRUCT_FRAME_GHOST',c);
+assert.equal(GHOST,vm.runInContext('HISTORY_GHOST_FLAG',c),'one ghost bit for the page and the GPU');
+let HT={n:3,cap:8};
+for(const [type,names] of [[Float32Array,['x','y','energy','angle','vision','amount']],[Int32Array,['serial','flags']],[Int16Array,['kind','gx','gy','owner','type','utype']],[Uint8Array,['alive']]]) for(const k of names) HT[k]=new type(8);
+const view=(s,kind,extra)=>({_s:s,_serial:HT.serial[s],_structView:true,_kind:kind,dead:false,gx:HT.gx[s],gy:HT.gy[s],x:HT.x[s],y:HT.y[s],owner:0,type:'fire',...extra});
+const put=(s,kind,gx,gy,serial,extra={})=>{
+    HT.alive[s]=1;HT.serial[s]=serial;HT.kind[s]=kind;HT.gx[s]=gx;HT.gy[s]=gy;HT.x[s]=(gx+.5)*32;HT.y[s]=(gy+.5)*32;
+    HT.energy[s]=kind<4?10:0;HT.amount[s]=extra.astar||0;HT.type[s]=1;HT.flags[s]=65536;
+    return view(s,kind,{energy:kind<4?10:undefined,...extra});
+};
+const tower=put(0,0,500,500,1), mine=put(1,5,501,500,2,{astar:123}), floor=put(2,3,502,500,3);
+c._pageTables={s:HT};c._pageStructViews=[tower,mine,floor];c.simClientActive=()=>true;c._simClient={structMver:1};
+c.units=[];c.projectiles=[];c.particles=[];c.droppedItems=[];
+const rows=flat=>{const r=Array.from({length:1000},(_,y)=>flat.subarray(y*1000,(y+1)*1000));r._flat=flat;return r;};
+const light=new Float32Array(1e6),h={light:rows(light),fog:rows(new Float32Array(1e6)),width:1000,height:1000};
+const see=(gx,on)=>{light[500*1000+gx]=on?3:0;c.visibilityVersion++;};
+// (A new table from the worker: the same columns here.)
+const table=()=>{HT=Object.assign({},HT);c._pageTables.s=HT;};
+see(500,1);see(501,1);see(502,1);
+c.__h=h;vm.runInContext('visibilityHistoryState=__h; teamVisibilityHistory=true;',c);
+c.updateLocalVisibilityHistory(h);
+c.fullVisibility=false;c.visibilityGrid=h.light;
+const historyView=h.view;
+let H=c._structureRenderFrame(historyView);
+assert.equal(H.n,3);
+assert.deepEqual([...H.sources],[tower,mine,floor],'what is seen now: the live views');
+assert.equal(H.flags[0],65536,'a live row is the table\'s row');
+assert.equal(H.flags[0]&GHOST,0);
+const ver=H.ver;
+assert.equal(c._structureRenderFrame(historyView),H,'the same frame');
+c.visibilityVersion++;
+assert.equal(c._structureRenderFrame(historyView).ver,ver,'the light changed, no row: no new upload');
+// Out of sight: remembered as last seen (the table goes on: its amount).
+see(501,0);table();HT.amount[1]=0;mine.astar=0;
+H=c._structureRenderFrame(historyView);
+assert.ok(H.ver>ver);
+assert.ok(H.flags[1]&GHOST,'a remembered row is marked');
+assert.equal(H.amount[1],123,'frozen resource state');assert.equal(H.alive[1],1);
+assert.equal(H.sources[1]._historyGhost,true);assert.equal(H.sources[1].astar,123,'its source a frozen copy');
+assert.equal(tower._s,0,'history never overwrites live slots');
+// Its slot taken over out of sight: the ghost kept past the slots.
+const rev=H.rev;
+table();HT.serial[1]=9;HT.kind[1]=0;HT.gx[1]=600;HT.gy[1]=600;HT.x[1]=600.5*32;HT.y[1]=600.5*32;HT.energy[1]=10;HT.amount[1]=0;
+c._pageStructViews[1]=view(1,0,{energy:10});c._simClient.structMver++;
+H=c._structureRenderFrame(historyView);
+assert.equal(H.n,4,'the remembered mine past the slots');
+assert.equal(H.kind[3],5);assert.equal(H.gx[3],501);assert.ok(H.flags[3]&GHOST);assert.equal(H.amount[3],123);
+assert.equal(H.flags[1]&GHOST,0,'the slot is the new structure\'s, hidden where nothing sees');
+assert.equal(H.sources[1],c._pageStructViews[1]);
+assert.notEqual(H.rev,rev,'slots taken over: a new spatial index');
+// Its tile seen again, nothing there: forgotten.
+see(501,1);
+H=c._structureRenderFrame(historyView);
+assert.equal(H.n,3,'seen gone: forgotten');
+// Destroyed out of sight: still remembered where it stood.
+see(502,0);table();HT.alive[2]=0;HT.energy[2]=0;floor.dead=true;
+H=c._structureRenderFrame(historyView);
+assert.ok(H.flags[2]&GHOST);assert.equal(H.alive[2],1);assert.equal(H.energy[2],10,'its energy as last seen');
 project(true,.15);c.gameTime++;
-const D=c._structureDetailSplit([historyView.towers,[],[],[],historyView.astarMines],true,{},false,H);
+const D=c._structureDetailSplit([[],[],[],[],[]],true,{},false,H);
 assert.equal(D.selected.size,0);
 assert.equal(c._detailColumns(null,D).structures,H,'history buildings use the same GPU columns at far zoom');
 project(true,4);c.gameTime++;
-assert.equal(c._structureDetailSplit([historyView.towers,[],[],[],historyView.astarMines],true,{},false,H).selected.size,3);
-assert.equal(H.amount[1],123,'LOD changes preserve frozen resource state');
+const near=c._structureDetailSplit([[],[],[],[],[]],true,{},false,H);
+assert.deepEqual([...near.selected].map(e=>e._historyGhost?'ghost':e._kind),[0,'ghost'],'the seen tower and the remembered floor item, not the hidden one');
+assert.equal(near.lists[0][0],tower);assert.equal(near.floors[0],H.sources[2]);
 R.columnLayers=c._detailColumns(null,D);
 let pickedHistory=null;
 R.visitScaleCandidates([tower],(entity,x,z)=>{pickedHistory={entity,x,z};});
 assert.equal(pickedHistory.entity,tower);
-assert.equal(pickedHistory.x,500.5,'history picking uses the adapter slot, not the live structure slot');
+assert.equal(pickedHistory.x,500.5,'picking a live structure reads its own row');
+pickedHistory=null;R.visitScaleCandidates([H.sources[2]],(entity)=>{pickedHistory=entity;});
+assert.equal(pickedHistory,null,'remembered ones are not picked');
+// The canvas renderer's view: lists and cells.
+c.grid=Array.from({length:1000},()=>Array.from({length:1000},()=>({type:0,owner:-1})));
+const canvasView=c.getLiveRenderView(true);
+assert.equal(canvasView.towers.length,1);assert.equal(canvasView.towers[0],tower);assert.equal(canvasView.grid[500][502].item,H.sources[2]);
+c.fullVisibility=true;c.visibilityGrid=[];vm.runInContext('teamVisibilityHistory=false;',c);
 
 // Small 2D pans must reuse the same bounded selection between simulation
 // ticks, just like 3D. Projection still updates each frame; a jump or mode

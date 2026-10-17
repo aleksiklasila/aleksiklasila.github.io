@@ -282,6 +282,19 @@ function _hostMaybeStartCountdown() {
     connections.forEach(c => { if (c && c.peer) try { c.send(cdPayload); } catch { } });
     _startMatchCountdown(3);
 }
+// Host: the start goes on once every player still expected is ready: after
+// one is ready, or one left or was dropped. (A player disconnecting while
+// loading, the others ready, left the match at tick 0 for good: only a
+// start with nobody left expected went on, and the start timeout found
+// nobody unready to drop: audit 2026-10-17, 47.)
+function _hostStartWaitReevaluate() {
+    if (!isHost || !gameStarted || !matchStartWaitingForReady || _matchStartCountdownHandle || !areAllMatchStartPeersReady()) return;
+    if ((matchStartExpectedReadyPeerIds || []).length > 0) { _hostMaybeStartCountdown(); return; }
+    matchStartWaitingForReady = false;
+    _matchStartPlayerStatuses = null;
+    setMatchLoadOverlay(false);
+    broadcastStartGameAllReady();
+}
 function areAllMatchStartPeersReady() {
     if (!Array.isArray(matchStartExpectedReadyPeerIds) || matchStartExpectedReadyPeerIds.length <= 0) return true;
     for (let pid of matchStartExpectedReadyPeerIds) {
@@ -570,10 +583,14 @@ function _startHostResyncPause(reason = '', includeConfig = false, options = {})
     let gen = _hostNextResyncGen();
     let t0 = performance.now();
     // Peers joining from scratch generated their own map; send the host's.
+    // (With the simulation worker the state is the worker's, as text from
+    // there: simClientSnapshotText.)
+    let inWorker = typeof simClientActive === 'function' && simClientActive();
     let snapshot = buildHostAuthoritativeStateSnapshot({
         includeConfig,
         includeStaticMapState: Object.keys(fullSyncByPeer).length > 0,
-        includeGridTypes: true
+        includeGridTypes: true,
+        withoutState: inWorker
     });
 
     let ackMap = {};
@@ -624,7 +641,7 @@ function _startHostResyncPause(reason = '', includeConfig = false, options = {})
     };
     // With the simulation worker, the simulation state is the worker's (once
     // the ticks already dispatched ran).
-    if (typeof simClientActive === 'function' && simClientActive()) simClientFillSnapshotState(snapshot).then(s => restore(JSON.stringify(s)), () => { });
+    if (inWorker) simClientSnapshotText(snapshot).then(restore, () => { });
     else restore(JSON.stringify(snapshot));
 }
 
@@ -682,6 +699,18 @@ function guestReviewMatchResult(now) {
         let pastEnd = Object.keys(lockstepBundleByTick || {}).some(k => Number(k) > currentTick) || Object.keys(lockstepPendingBundleByTick || {}).some(k => Number(k) > currentTick);
         if (pastEnd || now - L.at > GUEST_RESULT_WAIT_MS) _guestRepairResult(now, 'the match did not end on the host');
     }
+}
+// Whether this peer's end of the match is final: the host's own, or a
+// guest's that the host's result confirmed (the same winner). A guest's own
+// end alone may be its divergence: losing the host, the match moves on past
+// it (host migration took it as final: a false victory, then the host lost,
+// and the guest stood at tick 6 for good, reconnecting to the gone host;
+// audit 2026-10-17, 48).
+function netMatchEndFinal() {
+    if (!gameOver) return false;
+    if (isHost || !isMultiplayer) return true;
+    let H = _hostMatchResult && _hostMatchResult.session === String(matchStartSessionId || '') ? _hostMatchResult : null;
+    return !!H && H.winner === Math.floor(Number(winner));
 }
 function _guestRepairResult(now, reason) {
     if (now - _guestResultRepairAt < 5000) return;
@@ -1219,7 +1248,8 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
         currentTick,
         gameTime,
         configHash: buildRuntimeConfigHashForSnapshot(),
-        state: snapEncodeState(),
+        // (withoutState: the simulation worker's goes in, simClientSnapshotText.)
+        state: opts.withoutState ? undefined : snapEncodeState(),
         lockstepWindowPackets: ticksFrom(lockstepHostPacketsByTick).map(t => ({
             tick: t,
             packets: Object.values(lockstepHostPacketsByTick[t] || {}).map(_serializeTickPacketForSnapshot).filter(Boolean)
@@ -1502,17 +1532,24 @@ function _giveBackUnsentLocalActions(c) {
     for (const a of c.final) requeueLocalAction(a);
     for (const a of c.held) queueAction(a);
 }
-async function applyIncomingMatchSyncPayload(data, role = 'playing') {
+async function applyIncomingMatchSyncPayload(data, role = 'playing', taken = null) {
     let now = performance.now();
     let loadGen = ++_matchLoadGen, loadEpoch = networkSessionEpoch;
-    const stale = () => loadGen !== _matchLoadGen || loadEpoch !== networkSessionEpoch;
+    // (Also a start or join that is no longer current: its host changed, its
+    // match ended or a newer join came while it decoded: _guestStartCurrent.)
+    const stale = () => loadGen !== _matchLoadGen || loadEpoch !== networkSessionEpoch || (!!taken && !_guestStartCurrent(taken));
     let liveJoin = !!(data && Number.isFinite(data.joinTick));
     let midMatchJoin = !!(data && data.resyncSessionId) || liveJoin;
+    // (Loading a join: the host hears so until it is applied, and does not
+    // wait for this player's input meanwhile: _guestJoinLoadingBeat.)
+    if (liveJoin && !isHost) _guestJoinLoadingBeat(loadGen, data.g, () => !stale());
     // (The match this peer plays, before: its unsent commands go on in the
     // same match's reload, see below.)
     let prevSession = gameStarted && isMultiplayer ? String(matchStartSessionId || '') : '';
     gameSeed = data.seed;
     matchStartSessionId = String((data && data.startSessionId) || matchStartSessionId || '');
+    // (A join restores the whole match: recoveries older than it are late.)
+    if (liveJoin && !isHost) _guestRecoveryFresh({ g: data.g });
     if (!isHost) {
         matchStartWaitingForReady = !midMatchJoin;
         setMatchLoadOverlay(true, midMatchJoin ? 'Joining Match' : 'Loading Match', 'Applying host state...');
@@ -1655,11 +1692,12 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing') {
 
     let hostConn = netGetHostConnection();
     if (liveJoin) {
+        _guestJoinLoadingBeat(-1);
         for (let k in earlyBundles) if (+k >= currentTick && !lockstepBundleByTick[k]) lockstepPendingBundleByTick[k] = earlyBundles[k];
         for (let k in earlyCommits) if (+k >= currentTick && !lockstepCommittedByTick[k]) lockstepPendingCommitByTick[k] = earlyCommits[k];
         setMatchLoadOverlay(false);
         if (!snapshotText) { requestHardLockstepResync(currentTick, 'join without snapshot'); _giveBackUnsentLocalActions(carried); return; }
-        resyncGuestJoined(currentTick);
+        resyncGuestJoined(currentTick, data.g);
         // (Held until the host counts us in, as commands issued now are.)
         if (carried) { resyncGuest.heldFinal = carried.final; for (let a of carried.held) resyncGuestHoldAction(a); }
         return;
@@ -1736,6 +1774,53 @@ function _guestRecoveryFresh(data) {
     if (gen < _guestRecovery.gen) { netCounters.staleRecoveryDropped = (netCounters.staleRecoveryDropped | 0) + 1; return false; }
     _guestRecovery.gen = gen;
     return true;
+}
+// Guest: matches the host has moved past, as far as this guest knows (their
+// lobby return came, or another match's start). A start or join of one of
+// them is late, however it came (reordered, resent): a join of the last
+// match replayed after a rematch's start loaded that old match and its id,
+// the rematch's ticks were then another match's (guest stuck at tick 11, the
+// host at 36: audit 2026-10-17, 42).
+const _guestEndedMatches = [];
+function _guestNoteMatchEnded(id) {
+    id = String(id || '');
+    if (!id || _guestEndedMatches.includes(id)) return;
+    _guestEndedMatches.push(id);
+    if (_guestEndedMatches.length > 32) _guestEndedMatches.shift();
+}
+function _guestMatchEnded(id) { return !!id && _guestEndedMatches.includes(String(id)); }
+// ...and from a start (prepare or START_GAME) of another match on, the
+// current one is past.
+function _guestNoteMatchStarting(id) {
+    id = String(id || '');
+    let cur = String(matchStartSessionId || '');
+    if (id && cur && cur !== id) _guestNoteMatchEnded(cur);
+}
+// Guest: the newest live join taken from this host in this match (its
+// number g, from the recoveries' count: _hostNextResyncGen). A join no newer
+// than it, or older than a recovery seen since, is a copy or late.
+let _guestJoinTaken = { host: '', match: '', gen: 0 };
+// Whether to take a START_GAME / START_SPECTATE (a start, or a live join);
+// a join taken is noted (its copies are late from now). Returns what it is
+// of, for _guestStartCurrent after the awaits, or null.
+function _guestTakeStart(data) {
+    let match = String((data && data.startSessionId) || ''), host = String(wsHostId || '');
+    let late = () => { netCounters.staleJoinsDropped = (netCounters.staleJoinsDropped | 0) + 1; return null; };
+    if (_guestMatchEnded(match)) return late();
+    if (!(data && Number.isFinite(data.joinTick))) return { host, match, gen: -1 };
+    let gen = Math.max(0, Math.floor(Number(data.g) || 0));
+    let t = _guestJoinTaken, r = _guestRecovery;
+    if (t.host === host && t.match === match && gen <= t.gen) return late();
+    if (r.host === host && r.match === match && gen < r.gen) return late();
+    _guestJoinTaken = { host, match, gen };
+    return { host, match, gen };
+}
+// ...and whether it still is, after an await: the same host, its match not
+// past, no newer join taken.
+function _guestStartCurrent(s) {
+    if (!s || String(wsHostId || '') !== s.host || _guestMatchEnded(s.match)) return false;
+    let t = _guestJoinTaken;
+    return s.gen < 0 || (t.host === s.host && t.match === s.match && t.gen === s.gen);
 }
 // ...and whether that recovery is still the newest (after an await).
 function _guestRecoveryCurrent(host, match, gen) {
@@ -2407,12 +2492,7 @@ function _handleConnectionClosed(conn) {
         delete matchStartReadyByPeerId[leftPeerId];
         if (_matchStartPlayerStatuses) delete _matchStartPlayerStatuses[leftPeerId];
         updateHostMatchStartReadyUi();
-        if (areAllMatchStartPeersReady() && matchStartExpectedReadyPeerIds.length === 0) {
-            matchStartWaitingForReady = false;
-            _matchStartPlayerStatuses = null;
-            setMatchLoadOverlay(false);
-            broadcastStartGameAllReady();
-        }
+        _hostStartWaitReevaluate();
     }
     if (leftPeerId) {
         delete pendingPingByPeerId[leftPeerId];
@@ -2500,7 +2580,9 @@ function _handleConnectionMessage(conn, data) {
     } else if (type === 'JOIN_APPLIED' && isHost) {
         resyncHostHandleJoinApplied(conn, data);
     } else if (type === 'JOIN_LIVE' && isHost) {
-        resyncHostHandleJoinLive(conn);
+        resyncHostHandleJoinLive(conn, data);
+    } else if (type === 'JOIN_LOADING' && isHost) {
+        resyncHostNoteJoinLoading(conn, data);
     } else if (type === 'JOIN_LIVE_ACK' && !isHost) {
         resyncGuestHandleJoinLiveAck(data);
     } else if (type === 'RESYNC_PATCH_APPLIED' && isHost) {
@@ -2553,7 +2635,9 @@ function _handleConnectionMessage(conn, data) {
         // (Arriving after its START_GAME, which is still being applied, it
         // set the rules and statuses back to before the world came.)
         if (prepSessionId && prepSessionId === _guestStartTakenSessionId) return;
+        if (_guestMatchEnded(prepSessionId)) { netCounters.staleJoinsDropped = (netCounters.staleJoinsDropped | 0) + 1; return; }
         _clearGuestJoinTimeout();
+        _guestNoteMatchStarting(prepSessionId);
         if (prepSessionId) matchStartSessionId = prepSessionId;
         // (Loading from now: the host waits while it hears so.)
         _guestStartLoadingBeat(prepSessionId, true);
@@ -2575,8 +2659,12 @@ function _handleConnectionMessage(conn, data) {
         }
         setMatchLoadOverlay(true, 'Match Starting', 'Waiting for host to generate world…');
     } else if (type === 'START_GAME' && !isHost) {
-        _clearGuestJoinTimeout();
         if (data.rules !== undefined && data.rules !== SIM_RULES_REVISION) { _returnToMainMenuWithStatus('Version mismatch: the host runs simulation rules ' + data.rules + ', this page ' + SIM_RULES_REVISION + '. Reload the page.', '#fa4'); return; }
+        // (Of a match the host moved past, or a join already taken: late.)
+        let taken = _guestTakeStart(data);
+        if (!taken) return;
+        _clearGuestJoinTimeout();
+        _guestNoteMatchStarting(data.startSessionId);
         let midMatchJoin = !!data.resyncSessionId || Number.isFinite(data.joinTick);
         if (!midMatchJoin && data.startSessionId) { _guestStartTakenSessionId = String(data.startSessionId); _guestStartLoadingBeat(_guestStartTakenSessionId, true); }
         if (!midMatchJoin && !_matchStartPlayerStatuses) {
@@ -2593,7 +2681,8 @@ function _handleConnectionMessage(conn, data) {
         setMatchLoadOverlay(true, midMatchJoin ? 'Joining Match' : 'Loading Match', 'Receiving host world state…');
         // Yield once so the loading overlay appears before heavy snapshot/startup work.
         setTimeout(() => {
-            applyIncomingMatchSyncPayload(data, 'playing').then(() => {
+            if (!_guestStartCurrent(taken)) return;
+            applyIncomingMatchSyncPayload(data, 'playing', taken).then(() => {
                 if (midMatchJoin) {
                     netCounters.reconnects++;
                     return;
@@ -2643,7 +2732,7 @@ function _handleConnectionMessage(conn, data) {
         try { conn.close(); } catch { }
     } else if (type === 'HOST_CLOSED_LOBBY' && !isHost) {
         // The host left a running match: another player takes over.
-        if (data.migrate && gameStarted && !gameOver && conn.peer === wsHostId && guestStartHostMigration('host left', { hostLeft: true })) return;
+        if (data.migrate && gameStarted && !netMatchEndFinal() && conn.peer === wsHostId && guestStartHostMigration('host left', { hostLeft: true })) return;
         _returnToMainMenuWithStatus(String(data.reason || 'The host closed the lobby.'), '#fa4');
     } else if (type === 'HOST_SEEK_REPLY' && !isHost) {
         hostMigrationHandleReply(conn, data);
@@ -2690,8 +2779,13 @@ function _handleConnectionMessage(conn, data) {
         if (!gameStarted) return;
         // (After the end: a guest whose state did not end as ours, the
         // final state for it now; no tick runs any more.)
+        // (Its result too: a guest that came after it was told, as after a
+        // host migration, waited for it for good.)
         if (gameOver) {
-            if (conn && conn.peer && typeof _resyncHostSendJoin === 'function') _resyncHostSendJoin(conn, { T: currentTick, join: normalizeMatchRole(matchRoleByPeerId[conn.peer], 'playing') });
+            if (conn && conn.peer) {
+                try { conn.send({ type: 'MATCH_RESULT', t: gameTime, winner, m: matchStartSessionId || undefined }); } catch { }
+                resyncHostSendFinalState(conn);
+            }
             return;
         }
         if (lockstepStrictDebugMode) {
@@ -2713,11 +2807,15 @@ function _handleConnectionMessage(conn, data) {
         }
         hostSendFullMatchSync(conn, normalizeMatchRole(matchRoleByPeerId[conn.peer], 'playing'));
     } else if (type === 'START_SPECTATE' && !isHost) {
+        let taken = _guestTakeStart(data);
+        if (!taken) return;
         _clearGuestJoinTimeout();
+        _guestNoteMatchStarting(data.startSessionId);
         pendingJoinAsSpectator = false;
         setMatchLoadOverlay(true, 'Joining Match', 'Receiving host world state…');
         setTimeout(() => {
-            applyIncomingMatchSyncPayload(data, 'spectating').then(() => {
+            if (!_guestStartCurrent(taken)) return;
+            applyIncomingMatchSyncPayload(data, 'spectating', taken).then(() => {
                 _setLobbyStatus('Spectating current match.', '#9f9');
             }).catch(err => {
                 console.error('[NET] Failed to apply spectate state', err);
@@ -2794,6 +2892,10 @@ function _handleConnectionMessage(conn, data) {
         }
     } else if (type === 'MATCH_ROLE_UPDATE' && isHost) {
         let role = normalizeMatchRole(data.role, '');
+        // (Of this match only, untagged ones neither: a resignation delayed
+        // past a rematch's start resigned the guest's team in the new match
+        // and its opponent won: audit 2026-10-17, 46.)
+        if (!matchStartSessionId || String((data && data.m) || '') !== String(matchStartSessionId)) { netCounters.otherMatchDropped = (netCounters.otherMatchDropped | 0) + 1; return; }
         if (gameStarted && role && conn && conn.peer) {
             // Treat explicit switch to spectating as an authoritative resignation signal.
             // This keeps resign working even if the client's lockstep resign action packet
@@ -2824,6 +2926,7 @@ function _handleConnectionMessage(conn, data) {
         // (Of another match than the one this peer plays or loads: late, the
         // next one already here; it took this guest out of its rematch.)
         if (data.m && matchStartSessionId && String(data.m) !== String(matchStartSessionId)) { netCounters.lateLobbyReturnsDropped = (netCounters.lateLobbyReturnsDropped | 0) + 1; return; }
+        if (!isHost) _guestNoteMatchEnded(data.m || matchStartSessionId);
         if (Array.isArray(data.lobbyPlayers)) {
             lobbyPlayers = normalizeIncomingLobbyPlayers(data.lobbyPlayers);
         }
@@ -2874,6 +2977,11 @@ function _guestReceiveSnapshot(conn, data) {
         return;
     }
     if (_guestResyncDoneHas(sid)) { netCounters.staleRecoveryDropped = (netCounters.staleRecoveryDropped | 0) + 1; return; }
+    // (A copy of the one decoding now: one restore. Two copies decoding at
+    // once, the slower restored the recovery's state again after it had
+    // finished and the guest played on: back from tick 65 to 7, audit
+    // 2026-10-17, 43.)
+    if (sid && _guestSnapshotDecoding === sid) { netCounters.duplicateSnapshotsDropped = (netCounters.duplicateSnapshotsDropped | 0) + 1; return; }
     lockstepReceivedResyncSessionId = sid;
     lockstepResyncPauseActive = true;
     if (sid) lockstepResyncSessionId = sid;
@@ -2882,7 +2990,9 @@ function _guestReceiveSnapshot(conn, data) {
     // (What it is of: this host, this match, this recovery. A host change or
     // a newer recovery while it decodes makes it obsolete.)
     let host = String(wsHostId || ''), match = String(matchStartSessionId || ''), gen = _guestRecovery.gen;
-    const current = () => lockstepReceivedResyncSessionId === sid && gameStarted && !isHost && _guestRecoveryCurrent(host, match, gen);
+    // (...and not restored meanwhile, from another copy.)
+    const current = () => lockstepReceivedResyncSessionId === sid && gameStarted && !isHost && _guestRecoveryCurrent(host, match, gen)
+        && !(sid && (lockstepAppliedResyncSessionId === sid || _guestResyncDoneHas(sid)));
     // A restore the decoder refused, or the simulation worker could not
     // make: neither counted nor acknowledged as applied (the host was told
     // so, and counted a successful resync); still paused, the match asked
@@ -2895,6 +3005,8 @@ function _guestReceiveSnapshot(conn, data) {
         lockstepResyncRequestedAt = 0;
         requestHardLockstepResync(currentTick, 'snapshot not applied: ' + why);
     };
+    _guestSnapshotDecoding = sid;
+    const settled = () => { if (_guestSnapshotDecoding === sid) _guestSnapshotDecoding = ''; };
     netDecodeSnapshotPayload(payload).then(text => {
         // A newer resync superseded this one while it decoded.
         if (!current()) return;
@@ -2920,8 +3032,10 @@ function _guestReceiveSnapshot(conn, data) {
     }).catch(err => {
         if (!current()) return;
         refused(String(err && err.message || err));
-    });
+    }).finally(settled);
 }
+// Guest: the recovery whose snapshot is decoding or restoring now.
+let _guestSnapshotDecoding = '';
 
 // Host: the same profile is joining under a new peer id while its old peer
 // still looks connected. That is either a second tab, or the same player back
@@ -3943,7 +4057,7 @@ function leaveMultiplayerToMainMenu(statusText = '') {
         let hostConn = netGetHostConnection();
         if (hostConn && gameStarted && !gameOver && !localDefeated) {
             // Leaving counts as resigning, so the match can continue.
-            try { hostConn.send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating' }); } catch { }
+            try { hostConn.send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating', m: matchStartSessionId || undefined }); } catch { }
         }
         if (hostConn) { try { hostConn.send({ type: 'LOBBY_LEAVE' }); } catch { } }
     }
@@ -3976,26 +4090,16 @@ function _armMatchStartReadyTimeout(sessionId) {
         const now = performance.now();
         let missing = (matchStartExpectedReadyPeerIds || []).filter(pid => !matchStartReadyByPeerId[pid]
             && (now - Math.max(startedAt, _matchStartHeardAt[pid] || 0) > MATCH_START_SILENT_MS || now - startedAt > MATCH_START_MAX_MS));
-        if (!missing.length) { setTimeout(check, 2000); return; }
-        logLockstepWarning('Players did not finish loading; starting without them', { missing });
+        if (missing.length) logLockstepWarning('Players did not finish loading; starting without them', { missing });
         for (let pid of missing) {
             matchStartExpectedReadyPeerIds = matchStartExpectedReadyPeerIds.filter(x => x !== pid);
             delete matchStartReadyByPeerId[pid];
             if (_matchStartPlayerStatuses) delete _matchStartPlayerStatuses[pid];
             hostRemovePlayerFromMatch(pid);
         }
-        if (areAllMatchStartPeersReady() && !_matchStartCountdownHandle) {
-            if (matchStartExpectedReadyPeerIds.length === 0) {
-                matchStartWaitingForReady = false;
-                _matchStartPlayerStatuses = null;
-                setMatchLoadOverlay(false);
-                broadcastStartGameAllReady();
-            } else {
-                let cdPayload = { type: 'START_GAME_COUNTDOWN', seconds: 3, statuses: {}, startSessionId: matchStartSessionId };
-                connections.forEach(c => { if (c && c.peer) try { c.send(cdPayload); } catch { } });
-                _startMatchCountdown(3);
-            }
-        } else setTimeout(check, 2000);
+        // (Also with nobody to drop: everyone left may be ready.)
+        _hostStartWaitReevaluate();
+        if (matchStartWaitingForReady && !_matchStartCountdownHandle) setTimeout(check, 2000);
     };
     setTimeout(check, 2000);
 }
@@ -4017,6 +4121,25 @@ function _guestStartLoadingBeat(sessionId, on) {
     };
     beat();
     _guestStartLoadingTimer = setInterval(beat, 2000);
+}
+
+// Guest: while it loads a live join (from its START_GAME until it says
+// JOIN_APPLIED), it tells the host every 2 s (JOIN_LOADING, with the join's
+// number): the host does not wait for its input meanwhile, however long the
+// load takes (it did after 30 s: audit 2026-10-17, 45). Until applied, this
+// load ends (another, leaving), or ten minutes.
+let _guestJoinLoadingTimer = 0;
+function _guestJoinLoadingBeat(loadGen, gen, still = null) {
+    if (_guestJoinLoadingTimer) { clearInterval(_guestJoinLoadingTimer); _guestJoinLoadingTimer = 0; }
+    if (!(loadGen >= 0) || isHost) return;
+    const until = performance.now() + MATCH_START_MAX_MS;
+    const beat = () => {
+        if (isHost || _matchLoadGen !== loadGen || performance.now() > until || (still && !still())) { _guestJoinLoadingBeat(-1); return; }
+        const c = netGetHostConnection();
+        if (c) { try { c.send({ type: 'JOIN_LOADING', j: Math.max(0, Math.floor(Number(gen) || 0)) }); } catch { } }
+    };
+    beat();
+    _guestJoinLoadingTimer = setInterval(beat, 2000);
 }
 
 function readConfigFromMenu() {

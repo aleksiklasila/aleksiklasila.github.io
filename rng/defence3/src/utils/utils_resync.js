@@ -46,9 +46,20 @@ let resyncHostPending = new Map();
 // Host: per guest peer id, the last patch and the escalation state.
 let resyncHostPeers = new Map();
 // Host: players joining a running match (page reload, lost state): not waited
-// for until they have caught up. peer id -> since.
+// for until they have caught up. peer id -> { since, g (the join's number),
+// heard (its last JOIN_LOADING), applied (when it said JOIN_APPLIED: 0 while
+// it loads), resent }.
 let resyncHostJoining = new Map();
+// Catching up (from JOIN_APPLIED): waited for after this long. Loading (not
+// applied yet): not waited for while it says so; silent for
+// RESYNC_JOIN_LOAD_SILENT_MS (or loading past RESYNC_JOIN_LOAD_MAX_MS) its
+// join is sent again, once, then it is waited for as any player
+// (resyncHostCheckJoins). The 30 s from the join's sending also ran while it
+// loaded: a 45 s decode, and the host waited for a player with no state yet
+// (20 -> ~10 TPS until it had loaded: audit 2026-10-17, 45).
 const RESYNC_JOIN_MAX_CATCH_UP_MS = 30000;
+const RESYNC_JOIN_LOAD_SILENT_MS = 45000, RESYNC_JOIN_LOAD_MAX_MS = 600000;
+let _resyncHostJoinsCheckedAt = 0;
 // Host: ticks whose bundles carry the cache flush.
 let resyncHostFlushTicks = new Set();
 // Host: tick hash sums not yet sent ([tick, sum, ...]).
@@ -70,7 +81,7 @@ function resyncResetState() {
         outstanding: false, requestedAt: 0, requestId: 0,
         T: -1, patchId: 0, patch: null, full: false, waitSince: 0, divergedAt: -1, lastHashedTick: -1,
         graceTick: -1, lastPatchTick: -1, patches: 0, fullPatches: 0, forceFull: false, lastChanged: [],
-        joining: false, joinTick: -1, awaitingLive: false, liveFromTick: -1, heldActions: [], heldFinal: [], liveSentAt: 0,
+        joining: false, joinTick: -1, joinGen: 0, awaitingLive: false, liveFromTick: -1, heldActions: [], heldFinal: [], liveSentAt: 0,
         // (The newest repair id seen, and the host it came from: see
         // _resyncGuestFreshId.)
         maxId: 0, idHost: ''
@@ -576,6 +587,7 @@ function _resyncHostFirstOpenTick() {
 // Returns true when it did work (the caller may leave the tick to the next
 // frame, so the patch and the tick do not share one frame).
 function resyncHostBeforeTick(tick) {
+    if (isHost && resyncHostJoining.size) resyncHostCheckJoins(performance.now());
     if (!isHost || resyncHostPending.size === 0) return false;
     let did = false;
     for (let [pid, pending] of resyncHostPending) {
@@ -638,15 +650,20 @@ function resyncPacketHorizonTick(now = performance.now()) {
 // resends the bundles since T, and the joiner catches up. Until it says it
 // has, the host does not wait for its input.
 // ---------------------------------------------------------------------------
-function resyncHostScheduleJoin(conn, role) {
+function resyncHostScheduleJoin(conn, role, opts = null) {
     if (!isHost || !conn || !conn.peer) return;
     let pid = String(conn.peer);
     if (typeof hostNotePeerHasMatch === 'function') hostNotePeerHasMatch(pid);
     let normalizedRole = normalizeMatchRole(role, 'spectating');
-    if (normalizedRole === 'playing') resyncHostJoining.set(pid, performance.now());
+    // (The join's number, from the recoveries' count: the joiner takes a
+    // join once, and none older than one it took, and tags its join
+    // messages with it: a replayed join of an earlier match froze a
+    // rematch, audit 2026-10-17, 42.)
+    let gen = typeof _hostNextResyncGen === 'function' ? _hostNextResyncGen() : 0;
+    if (normalizedRole === 'playing') resyncHostJoining.set(pid, { since: performance.now(), g: gen, heard: 0, applied: 0, resent: (opts && opts.resent) || 0 });
     else resyncHostJoining.delete(pid);
     let T = _resyncHostFirstOpenTick() + 1;
-    resyncHostPending.set(pid, { T, codes: new Set(), full: true, id: ++_resyncPatchSeq, requestedAt: performance.now(), join: normalizedRole });
+    resyncHostPending.set(pid, { T, codes: new Set(), full: true, id: ++_resyncPatchSeq, requestedAt: performance.now(), join: normalizedRole, g: gen });
     resyncHostFlushTicks.add(T);
 }
 
@@ -654,27 +671,81 @@ function resyncHostScheduleJoin(conn, role) {
 function _resyncHostSendJoin(conn, pending) {
     let pid = String(conn.peer);
     let t0 = performance.now();
-    let snapshot = buildHostAuthoritativeStateSnapshot({ includeConfig: true, includeStaticMapState: true, includeGridTypes: true });
-    let message = { type: pending.join === 'spectating' ? 'START_SPECTATE' : 'START_GAME', ...buildHostMatchSyncPayload(), joinTick: pending.T };
-    let send = snapshot => {
-        let text = JSON.stringify(snapshot);
+    // With the simulation worker, the state is the worker's, encoded and
+    // stringified there (simClientSnapshotText): the page encoded its own
+    // copy first, threw it away, and stringified the worker's state here
+    // (200k units: seconds on the host's main thread, ~78 MB: audit
+    // 2026-10-17, 44).
+    let inWorker = typeof simClientActive === 'function' && simClientActive();
+    let snapshot = buildHostAuthoritativeStateSnapshot({ includeConfig: true, includeStaticMapState: true, includeGridTypes: true, withoutState: inWorker });
+    let message = { type: pending.join === 'spectating' ? 'START_SPECTATE' : 'START_GAME', ...buildHostMatchSyncPayload(), joinTick: pending.T, g: pending.g };
+    // (A newer join for this peer since: this one is not sent.)
+    let superseded = () => { let j = resyncHostJoining.get(pid); return !!j && j.g !== pending.g; };
+    let send = text => {
         netCounters.snapshotBuildMs = performance.now() - t0;
         netCounters.lastSnapshotAt = performance.now();
+        if (superseded()) return;
         logLockstepWarning('Sending the match to a joining player', { peerId: pid, tick: pending.T, bytes: text.length });
         netEncodeSnapshotText(text).then(payload => {
             netCounters.snapshotBytes = netSnapshotPayloadBytes(payload);
-            if (conn.open === false) return;
+            if (conn.open === false || superseded()) return;
             try { conn.send({ ...message, snapshotPayload: netSnapshotPayloadForPeer(pid, payload, text) }); } catch { }
         });
     };
-    // With the simulation worker, its state (see resyncHostBeforeTick).
-    if (typeof simClientActive === 'function' && simClientActive()) simClientFillSnapshotState(snapshot).then(send, () => { });
-    else send(snapshot);
+    if (inWorker) simClientSnapshotText(snapshot).then(send, () => { });
+    else send(JSON.stringify(snapshot));
+}
+
+// Host, after the end: the final state, for a guest whose end differed from
+// ours (no tick runs any more: sent now, numbered as any join).
+function resyncHostSendFinalState(conn) {
+    let pid = String(conn.peer);
+    resyncHostJoining.delete(pid);
+    let gen = typeof _hostNextResyncGen === 'function' ? _hostNextResyncGen() : 0;
+    _resyncHostSendJoin(conn, { T: currentTick, join: normalizeMatchRole(matchRoleByPeerId[pid], 'playing'), g: gen });
+}
+
+// Host: a joiner's message is of the join it waits on (its number), or of none
+// (then: whatever it was of, it is over).
+function _resyncHostJoinOf(conn, data) {
+    let j = conn && conn.peer ? resyncHostJoining.get(String(conn.peer)) : null;
+    if (j && Math.floor(Number(data && data.j)) !== j.g) { netCounters.staleJoinsDropped = (netCounters.staleJoinsDropped | 0) + 1; return false; }
+    return j || true;
+}
+
+// Host: a joiner still loading its join says so (every 2 s).
+function resyncHostNoteJoinLoading(conn, data) {
+    if (!isHost || !conn) return;
+    let j = _resyncHostJoinOf(conn, data);
+    if (j && j !== true) j.heard = performance.now();
+}
+
+// Host: loading joins that went silent (resyncHostIsJoining): sent again
+// once, then waited for as any player (the match's own handling of a player
+// it waits for: drop button, disconnect). Once a second.
+function resyncHostCheckJoins(now) {
+    if (now - _resyncHostJoinsCheckedAt < 1000) return;
+    _resyncHostJoinsCheckedAt = now;
+    for (let [pid, j] of [...resyncHostJoining]) {
+        if (j.applied || (now - Math.max(j.since, j.heard) <= RESYNC_JOIN_LOAD_SILENT_MS && now - j.since <= RESYNC_JOIN_LOAD_MAX_MS)) continue;
+        let conn = connections.find(c => c && c.peer === pid && c.open !== false);
+        if (conn && j.resent < 1 && gameStarted && !gameOver) {
+            logLockstepWarning('A joining player went silent while loading; sending the match again', { peerId: pid });
+            resyncHostScheduleJoin(conn, 'playing', { resent: j.resent + 1 });
+        } else {
+            logLockstepWarning('A joining player went silent while loading; waiting for it', { peerId: pid });
+            resyncHostJoining.delete(pid);
+        }
+    }
 }
 
 // Host: the joiner restored the match at `tick`; send what was sealed since.
+// (It is catching up from now: resyncHostIsJoining.)
 function resyncHostHandleJoinApplied(conn, data) {
     if (!isHost || !conn) return;
+    let j = _resyncHostJoinOf(conn, data);
+    if (!j) return;
+    if (j !== true) j.applied = performance.now();
     let from = Math.max(0, Math.floor(Number(data && data.tick) || 0));
     for (let t = from; ; t++) {
         let resend = getHostResendBundleForTick(t);
@@ -683,8 +754,11 @@ function resyncHostHandleJoinApplied(conn, data) {
     }
 }
 
-function resyncHostHandleJoinLive(conn) {
+function resyncHostHandleJoinLive(conn, data) {
     if (!isHost || !conn) return;
+    // (One of an older join: the newer one goes on. None waited on: an
+    // answer again, the first one was lost.)
+    if (!_resyncHostJoinOf(conn, data)) return;
     if (resyncHostJoining.delete(String(conn.peer))) logLockstepWarning('Joining player caught up', { peerId: String(conn.peer), tick: currentTick });
     // The first tick sealed only with its input.
     let first = currentTick;
@@ -692,21 +766,24 @@ function resyncHostHandleJoinLive(conn) {
     try { conn.send({ type: 'JOIN_LIVE_ACK', tick: first }); } catch { }
 }
 
-// Host: whether to wait for this peer's input yet.
+// Host: whether to wait for this peer's input yet. Not while it loads its
+// join (resyncHostCheckJoins times that); catching up, up to
+// RESYNC_JOIN_MAX_CATCH_UP_MS from its JOIN_APPLIED.
 function resyncHostIsJoining(pid, now = performance.now()) {
-    let since = resyncHostJoining.get(pid);
-    if (since === undefined) return false;
-    if ((now - since) > RESYNC_JOIN_MAX_CATCH_UP_MS) { resyncHostJoining.delete(pid); return false; }
+    let j = resyncHostJoining.get(pid);
+    if (j === undefined) return false;
+    if (j.applied && (now - j.applied) > RESYNC_JOIN_MAX_CATCH_UP_MS) { resyncHostJoining.delete(pid); return false; }
     return true;
 }
 
-// Guest: after restoring the match for a live join.
-function resyncGuestJoined(tick) {
+// Guest: after restoring the match for a live join (its number: gen).
+function resyncGuestJoined(tick, gen) {
     let g = resyncGuest;
     g.joining = true;
     g.joinTick = tick;
+    g.joinGen = Math.max(0, Math.floor(Number(gen) || 0));
     let hostConn = netGetHostConnection();
-    if (hostConn) { try { hostConn.send({ type: 'JOIN_APPLIED', tick }); } catch { } }
+    if (hostConn) { try { hostConn.send({ type: 'JOIN_APPLIED', tick, j: g.joinGen }); } catch { } }
 }
 
 // Guest: caught up with the bundles the host has sealed.
@@ -727,7 +804,7 @@ function _resyncGuestSendLive(now) {
     let g = resyncGuest;
     g.liveSentAt = now;
     let hostConn = netGetHostConnection();
-    if (hostConn) { try { hostConn.send({ type: 'JOIN_LIVE', tick: currentTick }); } catch { } }
+    if (hostConn) { try { hostConn.send({ type: 'JOIN_LIVE', tick: currentTick, j: g.joinGen }); } catch { } }
 }
 
 // Guest: the host waits for our input from `tick` on; commands issued while

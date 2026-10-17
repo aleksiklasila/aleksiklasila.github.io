@@ -104,7 +104,10 @@ const SNAP_FORMAT = 7;
 // packet of its own. Also the state hash: a field's term mixed before
 // the sum (units in the kernel, their object digest, the structures'
 // fields), where a bit flipped in two fields cancelled out.
-const SIM_RULES_REVISION = 15;
+// 16: live joins numbered (g) and their messages tagged with that number,
+// the joiner's loading heard (JOIN_LOADING); role updates tagged with their
+// match (m), untagged ones refused.
+const SIM_RULES_REVISION = 16;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
 // Each hash covers one slice (regions, grid rows) of the world. The resync

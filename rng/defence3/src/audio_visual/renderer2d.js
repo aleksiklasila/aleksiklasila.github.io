@@ -1495,7 +1495,8 @@ function drawAreaOutlinesDirect(ctx, minGx, minGy, maxGx, maxGy) {
 }
 
 function draw() {
-    const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = getLiveRenderView();
+    // (Remembered structures in columns, Team + history: as lists and cells.)
+    const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = getLiveRenderView(true);
 
     _unitBodySpriteBuildsRemaining = 8;
     let vw = viewW / camera.zoom, vh = viewH / camera.zoom;
