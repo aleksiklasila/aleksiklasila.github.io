@@ -213,11 +213,12 @@ async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
         if (corruptAt.length && world.now >= corruptAt[0]) {
             corruptAt.shift();
             const victim = guests[Math.floor(rand() * guests.length)];
-            corruptTicks.push({ victim: victim.name, tick: victim.eval('currentTick') - 1 });
+            const corrupt = { victim: victim.name, tick: victim.eval('currentTick') - 1 };
+            corruptTicks.push(corrupt);
             // The healthiest unit (lowest id on ties): a unit about to die
             // anyway can take the divergence with it before any hash shows it.
-            victim.evalSim(`(() => { let u = null; for (const c of units) if (!c.dead && (!u || c.energy > u.energy)) u = c;
-                if (u) { u.x += 11; u.energy = Math.max(1, u.energy - 5); } })()`);
+            corrupt.unit = victim.evalSim(`(() => { let u = null; for (const c of units) if (!c.dead && (!u || c.energy > u.energy)) u = c;
+                if (u) { u.x += 11; u.energy = Math.max(1, u.energy - 5); } return u ? u.unitType + ' ' + u.id : null; })()`);
         }
         for (const t of JSON.parse(host.eval('JSON.stringify([...new Set(units.map(u => u.unitType))])'))) unitTypesSeen.add(t);
         maxUnits = Math.max(maxUnits, host.eval('units.length'));
@@ -259,8 +260,14 @@ async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
     assert.ok(cmp.compared > SECONDS * 20 * 3 * 0.8, mapType + ' compared ' + cmp.compared);
     const hostResyncs = all.reduce((n, i) => n + i.patchesApplied, 0);
     // Every forced divergence was repaired (by a patch and at most one
-    // follow-up), and no patch happened for anything else.
-    const windows = corruptTicks.map(repairWindow);
+    // follow-up), and no patch happened for anything else. (One that no
+    // hash ever showed before the next was taken away by its unit dying on
+    // every peer alike: it needs no repair; the next's counts for it.)
+    const seen = corruptTicks.map((c, i) => {
+        const end = i + 1 < corruptTicks.length ? corruptTicks[i + 1].tick : Infinity;
+        return cmp.mismatches.some(m => (m.a === c.victim || m.b === c.victim) && m.tick > c.tick && m.tick <= end);
+    });
+    const windows = corruptTicks.filter((c, i) => seen[i]).map(repairWindow);
     for (const w of windows) assert.ok(w.count >= 1 && w.count <= 2, mapType + ': repairs per forced divergence ' + JSON.stringify(windows));
     assert.equal(hostResyncs, windows.reduce((n, w) => n + w.count, 0), mapType + ': patches only for forced divergences'
         + ` (forced ${JSON.stringify(corruptTicks)}, repairs ${JSON.stringify(all.map(i => [i.name, repairTicks(i.name)]))}; host saw ${JSON.stringify(host.scratch.requests)})`);

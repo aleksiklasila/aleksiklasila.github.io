@@ -33,9 +33,11 @@ This is an implementation plan; the new scale limits and performance results mus
 
 ## 2. Stage A — reliable loading before simulation optimization
 
-### A1. Build a paused-world loading benchmark
+### A1. Build a live-world loading and performance benchmark
 
-Add a real-browser loading harness that uses the production match-start path and stops before the first gameplay tick. Extend existing startup and snapshot tests instead of relying on the current scale-world helper, which adds entities after a small match has already started.
+Add a real-browser loading harness that uses the production match-start path and lets gameplay run normally. Measure startup time, authoritative TPS and rendered FPS together, including the transient period before performance stabilizes. Record time to the first useful frame separately from time to stable performance; use these measurements to inform when the real match should become playable. Extend existing startup and snapshot tests instead of relying on the current scale-world helper, which adds entities after a small match has already started.
+
+Start performance testing at **2M total units and 200k total buildings/floor items on a 1000×1000 map**, with two teams. Distribute ordinary unit and placed-object types approximately equally, with one king and one of each portal endpoint per team. Exclude non-buildable passive entities and area actions from placed-object totals. Do not require smaller performance baselines before this case; small correctness tests remain useful.
 
 Use these primary dimensions:
 
@@ -48,7 +50,7 @@ Use these primary dimensions:
 | Unit composition | Homogeneous combat units; mixed combat/worker population |
 | Static composition | Building-heavy; floor-heavy; mixed |
 
-Run the 36 count/map combinations first with the mixed fixture. Use homogeneous and category-heavy variants to diagnose failures and qualify boundary cases. Retain 200k, 400k, and 800k cases for regression and scaling comparisons.
+Run the initial 2M/200k/1000 case first. Then extend to the 36 count/map combinations with the mixed fixture. Use homogeneous and category-heavy variants to diagnose failures and qualify boundary cases. Retain 200k, 400k, and 800k cases for later regression and scaling comparisons, not as prerequisites for the initial run.
 
 For each load, report:
 
@@ -62,12 +64,15 @@ For each load, report:
 - First useful frame and presentation completion.
 - Multiplayer transfer and readiness.
 - Peak and retained memory by process and subsystem.
+- Authoritative TPS and rendered FPS during startup, stabilization, and a separate steady measurement window; include frame-time tails and actual surviving populations.
+
+Memory measurements are supporting diagnostics, not admission criteria. Judge success by actual loading, responsiveness, stability, and in-game performance. Paging is allowed. Do not skip, cancel, or fail a case because of free RAM, an estimated footprint, or a reserved-memory threshold. If a real allocation failure, crash, or performance problem appears, capture evidence, measure the relevant memory costs, compact or redesign storage as needed, and rerun the same case.
 
 Measure responsiveness during loading: overlay updates, camera/preview interaction where available, cancel latency, and longest page task.
 
 Verify exact populations, unique IDs, owner counts, valid references, legal placement, initial hashes, and the ability to select representative entities. Impossible building placement is reported explicitly; silently creating fewer objects is a failed fixture.
 
-**Gate:** each feasible case loads three consecutive times, displays a useful paused world, and cancels/unloads cleanly. A physical capacity failure is recorded separately from a software failure and becomes the next memory-reduction target.
+**Gate:** each feasible case loads three consecutive times, displays a useful running world, reports startup/stabilization time and concurrent TPS/FPS, and cancels/unloads cleanly. Record failure to stabilize explicitly. An observed allocation failure is recorded separately from a software failure and becomes the next memory-reduction target; low free RAM alone is neither kind of failure.
 
 ### A2. Replace page-owned world creation
 
@@ -151,7 +156,7 @@ Add an allocation ledger that distinguishes:
 - Presentation/GPU allocations.
 - Loading, transfer, growth, and recovery temporaries.
 
-Estimate startup and first-action requirements before allocation. Include movement, targeting, pathfinding, separation, and rendering scratch—not just dormant unit columns.
+Measure startup and first-action memory costs after the fact, as diagnostics: include movement, targeting, pathfinding, separation, and rendering scratch—not just dormant unit columns. Never estimate requirements up front to refuse, shrink, or delay a load; paging is the operating system's job.
 
 Implement these remedies in order:
 
@@ -174,9 +179,9 @@ For multi-bank storage:
 
 Audit signed pointer coercions and arithmetic above 2 GiB, length overflow, sentinels, GPU indexing, and map-index products. Keep global entity and tile identifiers at least 32 bits.
 
-Target startup peak memory of **no more than 1.35× retained memory plus 256 MiB**, with bounded transport buffers. Treat this as an optimization gate, not an assumption.
+When observed loading or runtime problems justify memory optimization, use startup peak memory of **no more than 1.35× retained memory plus 256 MiB** as an engineering target, with bounded transport buffers. This is not a load-admission or performance-qualification gate; actual loading and in-game behavior determine the outcome.
 
-The benchmark runner reserves system headroom and stops escalating a case before sustained paging makes results meaningless. Capacity failures remain visible in the results.
+The benchmark runner does not reserve system headroom or stop a case based on free memory or paging. Attempt the requested workload and judge its actual load outcome and in-game performance. Keep observed allocation failures, crashes, stalls, and poor TPS/FPS visible in the results. Use memory measurements to diagnose those observed problems and guide compaction or architectural changes, then repeat the same workload.
 
 ### A6. Replace whole-world JSON transport
 

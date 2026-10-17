@@ -476,6 +476,9 @@ function _maxUnitCollisionRadius() {
     return _maxUnitCollisionRadiusCache;
 }
 
+// Scouts explore toward the centres of a grid of at most this many cells a
+// side (Unit.pickScoutDestination): a flow field a destination.
+const SCOUT_TARGET_CELLS = 32;
 class Unit {
     constructor(unitType, owner, x, y) {
         simUnitStateAllocate(this);
@@ -500,20 +503,10 @@ class Unit {
         this.basePreComputed = null;
         this.preComputed = null;
         this.attackTimer = 0;
-        this.vis = s.vis || 'circle';
-        this.color = s.color || '#fff';
+        // (vis, color, the resistances, attackStyle, isKing: its type's,
+        // prototype getters: UNIT_TYPE_FIELDS below.)
         this.r = s.r;
         this.collisionR = Number.isFinite(s.collisionR) ? s.collisionR : this.r;
-        this.turretImmune = s.turretImmune || false;
-        this.isSnake = s.isSnake || false;
-        this.poisonResistant = s.poisonResistant || false;
-        this.fireResistant = s.fireResistant || false;
-        this.waterResistant = s.waterResistant || false;
-        this.iceResistant = s.iceResistant || false;
-        this.laserResistant = s.laserResistant || false;
-        this.sandResistant = s.sandResistant || false;
-        this.attackStyle = s.attackStyle || 'melee';
-        this.isKing = (unitType === 'king');
         // Reference fields that later hold units, buildings or plain objects
         // are widened here first (then reset): V8 otherwise widens them the
         // first time such a value arrives mid-match, e.g. the first hit of a
@@ -558,37 +551,20 @@ class Unit {
         this._lastAppliedEffectiveLevel = undefined;
         this._floorTile = -1; this._removedNow = false; this._pendingDueStamp = -1; this._okTile = -1; this._okVer = 0; this._okNodeTile = -1; this._okNodeVer = 0; this._thingStatsRefreshStamp = 0; this._effectiveStatsStamp = 0; this._statsVer = -1; this._navLastD = -1; this._vsGen = 0; this._vsR = -1; this._vsA = -1; this._vsP1 = -1; this._vsP2 = -1;
         this.workerState = undefined; this.workerType = undefined; this.carryingValue = undefined; this.workerTarget = undefined;
-        this.workerTargetType = undefined; this._workerReservedTileIndex = undefined; this._resourceCollectorMemory = undefined;
-        this._collectorPinnedTarget = undefined; this._collectorPinnedTargetType = undefined; this._collectorLastGatherX = undefined;
-        this._collectorLastGatherY = undefined; this._collectorLastGatherGx = undefined; this._collectorLastGatherGy = undefined;
-        this._collectorLastGatherType = undefined; this._collectorNextSpawner = undefined; this._collectorLastDropoffSpawner = undefined;
-        this._lastMineTarget = undefined; this._astarLastGatherX = undefined; this._astarLastGatherY = undefined;
-        this._astarLastGatherGx = undefined; this._astarLastGatherGy = undefined; this._astarPinnedTarget = undefined;
-        this._astarPinnedTargetType = undefined; this._astarNextSpawner = undefined; this._astarLastMineTarget = undefined;
-        this._astarLastMineTargetType = undefined; this._lastIdleStateTime = undefined; this._workerNextIdleRetargetTick = undefined; this._idleFailVer = -1; this._idleFailUntil = 0;
+        this.workerTargetType = undefined; this._workerReservedTileIndex = undefined;
+        this._workerNextIdleRetargetTick = undefined; this._idleFailVer = -1; this._idleFailUntil = 0;
         this.builderHasMaterial = undefined; this._builderLastWatchX = undefined; this._builderLastWatchY = undefined;
-        this._builderLastMoveTick = undefined; this._builderNextRecheckTick = undefined; this.healerHasMaterial = undefined;
-        this._healerQueueCommitTarget = undefined; this._healerQueueCommitRequired = undefined; this._healerQueueCommitMaxPaid = undefined;
+        this._builderLastMoveTick = undefined; this.healerHasMaterial = undefined;
         this.researcherHasMaterial = undefined;
-        this._astarLastChargedTick = undefined; this._astarLastChargedFromKey = undefined; this._astarLastChargedToKey = undefined;
-        
-        this._astarBudgetBlockedUntil = undefined; this._astarBudgetRetryTick = undefined;
-        this._manualMoveIssuedTick = undefined; this._builderLastWorkX = undefined; this._builderLastWorkY = undefined;
-        this._builderLastWorkGx = undefined; this._builderLastWorkGy = undefined; this._builderSpawnerTarget = undefined;
-        this._healerPinnedQueueTarget = undefined; this._healerLastWorkX = undefined; this._healerLastWorkY = undefined;
-        this._healerLastWorkGx = undefined; this._healerLastWorkGy = undefined; this._healerSpawnerTarget = undefined;
-        this._healerQueueTripCost = undefined; this._researchSpawnerTarget = undefined; this._researcherTripWork = undefined;
-        this._researcherTripCost = undefined; this._researcherMaterialReadyTick = undefined; this._damageFlashStart = 0;
+        this._astarBudgetRetryTick = undefined;
+        // (The workers' and other roles' memory: UNIT_ROLE_FIELDS, below.)
+        this._damageFlashStart = 0;
         // Same meaning as unset (no flash); typed like the values set later
         // (see the widening note above): -0 is a fractional-kind zero.
         this._damageFlashUntil = 0; this._damageFlashStrength = -0; this._damageFlashColor = '';
-        this._energyBlockedUntil = undefined; this._nextScoutRetargetTick = undefined; this._scoutTarget = undefined;
-        this._levelTextLabel = undefined;
-        this._collectorLastMoveTick = undefined; this._collectorNextRecheckTick = undefined; this._healerLastMoveTick = undefined;
-        this._healerNextRecheckTick = undefined; this._researchLastMoveTick = undefined; this._researchNextRecheckTick = undefined;
-        this._ambientSoundTicks = undefined;
+        this._scoutTarget = undefined;
 
-        this._spatialKey = undefined; this._spatialAreaId = undefined; this._spatialTile = -1; this._spatialOwner = -1; this._spatialEpoch = 0; this._r3d = undefined; this._r3dSig = undefined; this._r3dTex = undefined; this._visStill = undefined; this._rslot = undefined;
+        this._spatialKey = undefined; this._spatialAreaId = undefined; this._spatialTile = -1; this._spatialOwner = -1; this._spatialEpoch = 0;
         if (!_unitFieldsMutable) _makeUnitFieldsMutable(this);
         // A snapshot restore writes every field itself (same order, so the
         // same layout) and indexes the unit afterwards.
@@ -675,12 +651,14 @@ class Unit {
     // chases (see simMoveTryHold).
     // A builder's watchdog (worker.js): columns the kernel samples (wkWx,
     // wkWy, wkLmt) for a parked builder.
-    get _builderLastWatchX() { const c = this._us; if (c) { const v = c.wkWx[this._si]; return v === v ? v : undefined; } return this._det ? this._det._builderLastWatchX : this._bwx; }
-    set _builderLastWatchX(v) { const c = this._us; if (c) c.wkWx[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det._builderLastWatchX = v; else Object.defineProperty(this, '_bwx', { value: v, writable: true, configurable: true }); }
-    get _builderLastWatchY() { const c = this._us; if (c) { const v = c.wkWy[this._si]; return v === v ? v : undefined; } return this._det ? this._det._builderLastWatchY : this._bwy; }
-    set _builderLastWatchY(v) { const c = this._us; if (c) c.wkWy[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det._builderLastWatchY = v; else Object.defineProperty(this, '_bwy', { value: v, writable: true, configurable: true }); }
-    get _builderLastMoveTick() { const c = this._us; if (c) { const v = c.wkLmt[this._si]; return v === -2147483648 ? undefined : v; } return this._det ? this._det._builderLastMoveTick : this._bmt; }
-    set _builderLastMoveTick(v) { const c = this._us; if (c) c.wkLmt[this._si] = typeof v === 'number' && v === Math.floor(v) && Math.abs(v) < 2147483647 ? v : -2147483648; else if (this._det) this._det._builderLastMoveTick = v; else Object.defineProperty(this, '_bmt', { value: v, writable: true, configurable: true }); }
+    // (In its worker record (simUnitWk): one taken by a set, unless it
+    // stores the default a unit without one reads.)
+    get _builderLastWatchX() { const c = this._us; if (c) { const v = c.wkWx[c.wkIx[this._si]]; return v === v ? v : undefined; } return this._det ? this._det._builderLastWatchX : this._bwx; }
+    set _builderLastWatchX(v) { const c = this._us; if (c) { const x = typeof v === 'number' ? v : NaN, w = c.wkIx[this._si]; if (w > 0 || x === x) c.wkWx[w > 0 ? w : simUnitWk(c, this._si)] = x; } else if (this._det) this._det._builderLastWatchX = v; else Object.defineProperty(this, '_bwx', { value: v, writable: true, configurable: true }); }
+    get _builderLastWatchY() { const c = this._us; if (c) { const v = c.wkWy[c.wkIx[this._si]]; return v === v ? v : undefined; } return this._det ? this._det._builderLastWatchY : this._bwy; }
+    set _builderLastWatchY(v) { const c = this._us; if (c) { const y = typeof v === 'number' ? v : NaN, w = c.wkIx[this._si]; if (w > 0 || y === y) c.wkWy[w > 0 ? w : simUnitWk(c, this._si)] = y; } else if (this._det) this._det._builderLastWatchY = v; else Object.defineProperty(this, '_bwy', { value: v, writable: true, configurable: true }); }
+    get _builderLastMoveTick() { const c = this._us; if (c) { const v = c.wkLmt[c.wkIx[this._si]]; return v === -2147483648 ? undefined : v; } return this._det ? this._det._builderLastMoveTick : this._bmt; }
+    set _builderLastMoveTick(v) { const c = this._us; if (c) { const t = typeof v === 'number' && v === Math.floor(v) && Math.abs(v) < 2147483647 ? v : -2147483648, w = c.wkIx[this._si]; if (w > 0 || t !== -2147483648) c.wkLmt[w > 0 ? w : simUnitWk(c, this._si)] = t; } else if (this._det) this._det._builderLastMoveTick = v; else Object.defineProperty(this, '_bmt', { value: v, writable: true, configurable: true }); }
     // Damage dealt to it not reported yet: over time (stAcc, reported every
     // STATUS_DOT_REPORT_TICKS: its shrine share, its flash), by a laser
     // (lzAcc, every LASER_REPORT_TICKS, and the beam: lzBeam, its retaliation
@@ -830,8 +808,12 @@ class Unit {
         if (Number.isFinite(this._nextScoutRetargetTick) && gameTime < this._nextScoutRetargetTick) return;
         let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
         // (Its own draws, by tick and id: no shared sequence.)
-        let rgx = Math.floor(simHashRand(gameTime, this.id, 1) * GRID_W);
-        let rgy = Math.floor(simHashRand(gameTime, this.id, 2) * GRID_H);
+        // (The centre of a cell of a grid of at most SCOUT_TARGET_CELLS a side:
+        // every destination is a flow field, and 100k scouts each heading
+        // for a tile of their own asked for 100k fields (~400 MB) at once.)
+        const step = Math.max(1, Math.ceil(Math.max(GRID_W, GRID_H) / SCOUT_TARGET_CELLS));
+        let rgx = Math.floor(simHashRand(gameTime, this.id, 1) * Math.ceil(GRID_W / step)) * step + (step >> 1);
+        let rgy = Math.floor(simHashRand(gameTime, this.id, 2) * Math.ceil(GRID_H / step)) * step + (step >> 1);
         rgx = Math.max(0, Math.min(GRID_W - 1, rgx));
         rgy = Math.max(0, Math.min(GRID_H - 1, rgy));
         this._scoutTarget = { gx: rgx, gy: rgy };
@@ -1915,6 +1897,63 @@ class Unit {
     }
 }
 
+// A unit's role memory: fields only some units ever set (workers of each
+// kind, scouts, a sound or draw cache...), declared on every unit they were
+// ~60 of its ~115 fields (~0.5 KB a unit with their slack: ~1 GB of the
+// worker's heap at 2M units). Now prototype accessors over one object of
+// them all (one shape), made at the first value set; undefined until then,
+// as before. In the snapshot by name (simUnitStateKeys).
+const UNIT_ROLE_FIELDS = ['_resourceCollectorMemory', '_collectorPinnedTarget', '_collectorPinnedTargetType', '_collectorLastGatherX',
+    '_collectorLastGatherY', '_collectorLastGatherGx', '_collectorLastGatherGy', '_collectorLastGatherType', '_collectorNextSpawner',
+    '_collectorLastDropoffSpawner', '_lastMineTarget', '_astarLastGatherX', '_astarLastGatherY', '_astarLastGatherGx', '_astarLastGatherGy',
+    '_astarPinnedTarget', '_astarPinnedTargetType', '_astarNextSpawner', '_astarLastMineTarget', '_astarLastMineTargetType', '_lastIdleStateTime',
+    '_builderNextRecheckTick', '_healerQueueCommitTarget', '_healerQueueCommitRequired', '_healerQueueCommitMaxPaid', '_astarLastChargedTick',
+    '_astarLastChargedFromKey', '_astarLastChargedToKey', '_astarBudgetBlockedUntil', '_manualMoveIssuedTick', '_builderLastWorkX',
+    '_builderLastWorkY', '_builderLastWorkGx', '_builderLastWorkGy', '_builderSpawnerTarget', '_healerPinnedQueueTarget', '_healerLastWorkX',
+    '_healerLastWorkY', '_healerLastWorkGx', '_healerLastWorkGy', '_healerSpawnerTarget', '_healerQueueTripCost', '_researchSpawnerTarget',
+    '_researcherTripWork', '_researcherTripCost', '_researcherMaterialReadyTick', '_energyBlockedUntil', '_nextScoutRetargetTick',
+    '_levelTextLabel', '_collectorLastMoveTick', '_collectorNextRecheckTick', '_healerLastMoveTick', '_healerNextRecheckTick',
+    '_researchLastMoveTick', '_researchNextRecheckTick', '_ambientSoundTicks', '_r3d', '_r3dSig', '_r3dTex', '_visStill', '_rslot'];
+// (Every field takes any kind of value from the start: see _makeUnitFieldsMutable.)
+const _UnitRoleMem = new Function(UNIT_ROLE_FIELDS.map(k => 'this.' + k + ' = 1; this.' + k + ' = _UNIT_FIELD_WIDEN; this.' + k + ' = 0.5; this.' + k + ' = undefined;').join(' '));
+for (const k of UNIT_ROLE_FIELDS) {
+    const get = new Function('return function () { const m = this._rm; return m ? m.' + k + ' : undefined; };')();
+    const set = new Function('M', 'return function (v) { let m = this._rm; if (!m) { if (v === undefined) return; m = new M();'
+        + " if (this._rm === null) this._rm = m; else Object.defineProperty(this, '_rm', { value: m, writable: true, configurable: true }); } m." + k + ' = v; };')(_UnitRoleMem);
+    Object.defineProperty(Unit.prototype, k, { get, set, configurable: true, enumerable: false });
+}
+// Its other fields: columns of the unit table (sim_unit_state.js
+// SIM_UNIT_JS_FIELDS; the radii the kernels' r and collisionR), a detached
+// unit's in its _det. (Made per field with its name in the code, as the
+// status accessors.)
+for (const [k, kind] of (typeof SIM_UNIT_JS_FIELDS !== 'undefined' ? SIM_UNIT_JS_FIELDS : [])) {
+    const nm = _simJsName(k, kind), at = 'c.' + nm + '[this._si]';
+    const read = kind === 'b' ? at + ' === 1' : kind === 'u' ? '(x = ' + at + ') === x ? x : undefined' : at;
+    const write = kind === 'b' ? at + ' = v ? 1 : 0' : kind === 'u' ? at + ' = v === undefined ? NaN : v' : at + ' = v';
+    const get = new Function('return function () { const c = this._us; let x; if (c) return ' + read + '; return this._det ? this._det.' + k + ' : undefined; };')();
+    const set = new Function('k', 'return function (v) { const c = this._us; if (c) ' + write + '; else if (this._det) this._det.' + k + ' = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };')(k);
+    Object.defineProperty(Unit.prototype, k, { get, set, configurable: true, enumerable: false });
+}
+for (const k of ['r', 'collisionR']) {
+    const get = new Function('return function () { const c = this._us; if (c) return c.' + k + '[this._si]; return this._det ? this._det.' + k + ' : undefined; };')();
+    const set = new Function('k', 'return function (v) { const c = this._us; if (c) c.' + k + '[this._si] = v; else if (this._det) this._det.' + k + ' = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };')(k);
+    Object.defineProperty(Unit.prototype, k, { get, set, configurable: true, enumerable: false });
+}
+// Its type's constants (BASE_UNIT_STATS), not a field each: a value set
+// that differs (an old snapshot's) stays the unit's own.
+const UNIT_TYPE_FIELDS = { vis: s => s.vis || 'circle', color: s => s.color || '#fff', turretImmune: s => s.turretImmune || false, isSnake: s => s.isSnake || false,
+    poisonResistant: s => s.poisonResistant || false, fireResistant: s => s.fireResistant || false, waterResistant: s => s.waterResistant || false,
+    iceResistant: s => s.iceResistant || false, laserResistant: s => s.laserResistant || false, sandResistant: s => s.sandResistant || false,
+    attackStyle: s => s.attackStyle || 'melee' };
+for (const [k, of] of Object.entries(UNIT_TYPE_FIELDS)) {
+    Object.defineProperty(Unit.prototype, k, { configurable: true, enumerable: false,
+        get() { return of(BASE_UNIT_STATS[this.unitType] || BASE_UNIT_STATS.norm); },
+        set(v) { if (v !== of(BASE_UNIT_STATS[this.unitType] || BASE_UNIT_STATS.norm)) Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); } });
+}
+Object.defineProperty(Unit.prototype, 'isKing', { configurable: true, enumerable: false,
+    get() { return this.unitType === 'king'; },
+    set(v) { if (v !== (this.unitType === 'king')) Object.defineProperty(this, 'isKing', { value: v, writable: true, enumerable: true, configurable: true }); } });
+
 // The tick's attacks (see Unit._performAttackOnUnit): attacker, target,
 // whether the target is a building, the damage and where the attacker
 // stood, in the order they were made.
@@ -2133,10 +2172,14 @@ function _unitHD(c, s, key, o, v) { c.hObj[s] = (c.hObj[s] + _simHTerm(key, v) -
 // (A timer set running flags its unit for the status pre-pass: stOn.)
 // (Made per column with its name in the code: one closure over the key did
 // c[k] for every column at one site, a megamorphic lookup on every read.)
+// (Uint16 timers, SIM_UNIT_U16_TIMERS: a store saturates at 0..SIM_TIMER_MAX,
+// as the Rust kernels' sat16; Infinity and NaN store 0, as into Int32.)
 for (const k of (typeof SIM_UNIT_STATUS_COLUMNS !== 'undefined' ? SIM_UNIT_STATUS_COLUMNS : [])) {
     const timer = SIM_STATUS_TIMER_COLUMNS.includes(k);
+    const sat = typeof SIM_UNIT_U16_TIMERS !== 'undefined' && SIM_UNIT_U16_TIMERS.includes(k);
+    const store = sat ? `v > 0 && v !== Infinity ? (v < ${SIM_TIMER_MAX} ? v : ${SIM_TIMER_MAX}) : 0` : 'v';
     const get = new Function(`return function () { const c = this._us; return c ? c.${k}[this._si] : (this._det ? this._det.${k} : undefined); };`)();
-    const set = new Function('k', `return function (v) { const c = this._us; if (c) { c.${k}[this._si] = v;${timer ? ' if (v > 0) c.stOn[this._si] = 1;' : k === 'workerTransferCooldown' ? ' if (v > 0) c.tmOn[this._si] = 1;' : ''} } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(k);
+    const set = new Function('k', `return function (v) { const c = this._us; if (c) { c.${k}[this._si] = ${store};${timer ? ' if (v > 0) c.stOn[this._si] = 1;' : k === 'workerTransferCooldown' ? ' if (v > 0) c.tmOn[this._si] = 1;' : ''} } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(k);
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true });
 }
 
@@ -3475,10 +3518,11 @@ function simMoveTryPark(u) {
     // it parked (shouldRunWorkerIdleRetarget would return at once).
     if (backoff) {
         const org = _workerWorkOrigin(u);
-        c.wkType[s] = _workerWorkType(u.workerType); c.wkD[s] = Math.ceil(_getWorkerAutoSearchDistancePx(u) / TILE) + 1;
-        c.wkOx[s] = Math.floor(org.x / TILE); c.wkOy[s] = Math.floor(org.y / TILE);
-        c.wkTwice[s] = org !== u ? 1 : 0;
-        c.wkFail[s] = failVer | 0; c.wkUntil[s] = _simTickBound(failUntil); c.wkSched[s] = _simTickBound(sched);
+        const w = simUnitWk(c, s);
+        c.wkType[w] = _workerWorkType(u.workerType); c.wkD[w] = Math.ceil(_getWorkerAutoSearchDistancePx(u) / TILE) + 1;
+        c.wkOx[w] = Math.floor(org.x / TILE); c.wkOy[w] = Math.floor(org.y / TILE);
+        c.wkTwice[w] = org !== u ? 1 : 0;
+        c.wkFail[w] = failVer | 0; c.wkUntil[w] = _simTickBound(failUntil); c.wkSched[w] = _simTickBound(sched);
         c.mvFlags[s] |= 2;
     }
     c.mvOn[s] = 2;

@@ -107,7 +107,9 @@ const SNAP_FORMAT = 7;
 // 16: live joins numbered (g) and their messages tagged with that number,
 // the joiner's loading heard (JOIN_LOADING); role updates tagged with their
 // match (m), untagged ones refused.
-const SIM_RULES_REVISION = 16;
+const SIM_RULES_REVISION = 17;
+// (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
+let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;
 const SNAP_REGION_TILES = 4;
 // Each hash covers one slice (regions, grid rows) of the world. The resync
@@ -1592,8 +1594,13 @@ function _snapDecodeOrder(list, enc) {
 // those regions, what they point at, players (with every research lab: they
 // share task objects), projectiles and the grid when marked, and the orders
 // of lists whose order differs. The globals always come along.
+// options.noUnits (a whole state): without the units and their worker
+// reservations, as the page restores a start (its units come from frames;
+// references to units stay references by id): the simulation worker's start
+// state for its page, without encoding millions of rows to drop them.
 function snapEncodeState(options = null) {
     let only = options && options.buckets ? options.buckets : null;
+    const noUnits = !only && !!(options && options.noUnits);
     _snapEnc = {
         gen: ++_snapEncGen, refs: new Map(), statIndex: _snapStatIndex(), pool: [], poolIds: new Map(), poolRefs: [],
         shapes: [], tpls: [], scratch: [], track: only ? new Set() : null, unitSet: null, unitsSorted: null, projIndex: null, defs: null
@@ -1606,11 +1613,12 @@ function snapEncodeState(options = null) {
         let listOf = list => list === 'f' ? (floor || (floor = _snapFloorItems())) : _snapListEntities(list);
         if (!only) {
             for (let list of SNAP_LISTS) {
+                if (noUnits && list === 'u') continue;
                 let arr = listOf(list);
                 for (let i = 0; i < arr.length; i++) if (arr[i]) _snapEncodeRow(list, arr[i], i, rows[list], mru[list]);
             }
             let res = [];
-            _snapForReservations(-1, (slot, u) => _snapEncodeReservation(res, slot, u));
+            if (!noUnits) _snapForReservations(-1, (slot, u) => _snapEncodeReservation(res, slot, u));
             out.res = res;
         } else {
             let done = new Set();
@@ -2133,7 +2141,10 @@ function snapDecodeState(S, options = null) {
             let fresh = 0, freshUnits = null;
             // (A whole restore makes every unit anew: room for them at once,
             // see simUnitStateReserve.)
-            if (list === 'u' && !partial && typeof simUnitStateReserve === 'function') simUnitStateReserve(rows.length, typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0);
+            // (With the room simUnitStateCompact gives them, 1/8 more: then a
+            // start into a fresh state is compact already and keeps these
+            // columns instead of making a second set, 1.3 GB at 2M units.)
+            if (list === 'u' && !partial && typeof simUnitStateReserve === 'function') simUnitStateReserve(rows.length, Math.max(typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0, Math.ceil(rows.length * 1.125)));
             for (let r = 0; r < rows.length; r++) {
                 let row = rows[r];
                 let key = row[0];
@@ -2146,7 +2157,7 @@ function snapDecodeState(S, options = null) {
                     if (list === 'u') { removeUnitSpatial(e); if (partial && old.prevX === old.prevX && old.prevX !== undefined) keptPrev.set(old, [old.prevX, old.prevY]); }
                     let keys = shapes[tpls[row[1]][0]].keys;
                     let own = simUnitStateKeys(old);
-                    if (!_snapKeysEqual(own, keys)) { let want = new Set(keys); for (let k of own) if (!want.has(k)) delete old[k]; }
+                    if (!_snapKeysEqual(own, keys)) { let want = new Set(keys); for (let k of own) if (!want.has(k)) { if (Object.prototype.hasOwnProperty.call(old, k)) delete old[k]; else if ((_SNAP_ROLE_FIELDS || (_SNAP_ROLE_FIELDS = new Set(typeof UNIT_ROLE_FIELDS !== "undefined" ? UNIT_ROLE_FIELDS : []))).has(k)) old[k] = undefined; } }
                 } else {
                     e = _snapNewShell(list, type);
                     fresh++;

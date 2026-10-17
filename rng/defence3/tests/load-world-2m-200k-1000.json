@@ -1,0 +1,657 @@
+{
+  "schema": 1,
+  "started": "2026-10-17T17:20:03.070Z",
+  "config": {
+    "cases": [
+      {
+        "units": 2000000,
+        "statics": 200000,
+        "map": 1000,
+        "seed": 1701,
+        "composition": "all",
+        "staticComposition": "all",
+        "owners": [
+          0,
+          1
+        ],
+        "spawnCounts": {
+          "unit:king": {
+            "1": 1
+          },
+          "unit:astar_collector": {
+            "1": 52632
+          },
+          "unit:boss": {
+            "1": 52632
+          },
+          "unit:builder_unit": {
+            "1": 52632
+          },
+          "unit:collector": {
+            "1": 52632
+          },
+          "unit:fast": {
+            "1": 52632
+          },
+          "unit:fire_resistant": {
+            "1": 52632
+          },
+          "unit:flying": {
+            "1": 52632
+          },
+          "unit:healer_unit": {
+            "1": 52632
+          },
+          "unit:ice_resistant": {
+            "1": 52632
+          },
+          "unit:laser_resistant": {
+            "1": 52632
+          },
+          "unit:mole": {
+            "1": 52631
+          },
+          "unit:norm": {
+            "1": 52631
+          },
+          "unit:poison_resistant": {
+            "1": 52631
+          },
+          "unit:researcher_unit": {
+            "1": 52631
+          },
+          "unit:salvager_unit": {
+            "1": 52631
+          },
+          "unit:scout": {
+            "1": 52631
+          },
+          "unit:snake": {
+            "1": 52631
+          },
+          "unit:tank": {
+            "1": 52631
+          },
+          "unit:water_resistant": {
+            "1": 52631
+          },
+          "building:cloud_0a": {
+            "1": 1
+          },
+          "building:cloud_0b": {
+            "1": 1
+          },
+          "building:cloud_1a": {
+            "1": 1
+          },
+          "building:cloud_1b": {
+            "1": 1
+          },
+          "building:cloud_2a": {
+            "1": 1
+          },
+          "building:cloud_2b": {
+            "1": 1
+          },
+          "building:cloud_3a": {
+            "1": 1
+          },
+          "building:cloud_3b": {
+            "1": 1
+          },
+          "building:astar_farm": {
+            "1": 2564
+          },
+          "building:astar_spawner": {
+            "1": 2564
+          },
+          "building:barrack_boss": {
+            "1": 2564
+          },
+          "building:barrack_fast": {
+            "1": 2564
+          },
+          "building:barrack_fire_resistant": {
+            "1": 2564
+          },
+          "building:barrack_flying": {
+            "1": 2564
+          },
+          "building:barrack_ice_resistant": {
+            "1": 2564
+          },
+          "building:barrack_laser_resistant": {
+            "1": 2564
+          },
+          "building:barrack_mole": {
+            "1": 2564
+          },
+          "building:barrack_norm": {
+            "1": 2564
+          },
+          "building:barrack_poison_resistant": {
+            "1": 2564
+          },
+          "building:barrack_scout": {
+            "1": 2564
+          },
+          "building:barrack_snake": {
+            "1": 2564
+          },
+          "building:barrack_tank": {
+            "1": 2564
+          },
+          "building:barrack_water_resistant": {
+            "1": 2564
+          },
+          "building:builder_spawner": {
+            "1": 2564
+          },
+          "building:elements": {
+            "1": 2564
+          },
+          "building:farm": {
+            "1": 2564
+          },
+          "building:fire": {
+            "1": 2564
+          },
+          "building:healer_spawner": {
+            "1": 2564
+          },
+          "building:house": {
+            "1": 2564
+          },
+          "building:ice": {
+            "1": 2564
+          },
+          "building:ice_patch": {
+            "1": 2564
+          },
+          "building:laser": {
+            "1": 2564
+          },
+          "building:lava": {
+            "1": 2564
+          },
+          "building:mine": {
+            "1": 2564
+          },
+          "building:pistol": {
+            "1": 2564
+          },
+          "building:poison": {
+            "1": 2564
+          },
+          "building:poison_puddle": {
+            "1": 2564
+          },
+          "building:research": {
+            "1": 2564
+          },
+          "building:salvager": {
+            "1": 2564
+          },
+          "building:sand": {
+            "1": 2564
+          },
+          "building:sand_gun": {
+            "1": 2564
+          },
+          "building:smg": {
+            "1": 2564
+          },
+          "building:sniper": {
+            "1": 2564
+          },
+          "building:spawner": {
+            "1": 2563
+          },
+          "building:watch_tower": {
+            "1": 2563
+          },
+          "building:water": {
+            "1": 2563
+          },
+          "building:water_puddle": {
+            "1": 2563
+          }
+        },
+        "name": "2000000u-200000s-1000-all-s1701",
+        "specialCountsPerOwner": {
+          "king": 1,
+          "portalEndpoints": {
+            "cloud_0a": 1,
+            "cloud_0b": 1,
+            "cloud_1a": 1,
+            "cloud_1b": 1,
+            "cloud_2a": 1,
+            "cloud_2b": 1,
+            "cloud_3a": 1,
+            "cloud_3b": 1
+          }
+        },
+        "excluded": [
+          "shrine (passive, not buildable)",
+          "area_upgrader (area action, not a placed entity)"
+        ]
+      }
+    ],
+    "list": false,
+    "repeats": 3,
+    "helpers": 7,
+    "timeoutMs": 900000,
+    "windowMs": 2000,
+    "warmupMs": 10000,
+    "settleMs": 60000,
+    "measureMs": 10000,
+    "output": "Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\load-world-2m-200k-1000.json"
+  },
+  "environment": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "cpu": "AMD Ryzen 7 4800H with Radeon Graphics         ",
+    "logicalCpus": 16,
+    "totalMemory": 17042837504,
+    "availableMemory": 3433418752,
+    "node": "v22.20.0",
+    "revision": "98dec82cb08f31147b7edd1310cd237dd7b8e16e",
+    "sourceSha256": "334389524fe0fb67cb09495ee7e9e10334f5c1933e137fa460f897b42b7c08f3"
+  },
+  "results": [
+    {
+      "fixture": {
+        "units": 2000000,
+        "statics": 200000,
+        "map": 1000,
+        "seed": 1701,
+        "composition": "all",
+        "staticComposition": "all",
+        "owners": [
+          0,
+          1
+        ],
+        "spawnCounts": {
+          "unit:king": {
+            "1": 1
+          },
+          "unit:astar_collector": {
+            "1": 52632
+          },
+          "unit:boss": {
+            "1": 52632
+          },
+          "unit:builder_unit": {
+            "1": 52632
+          },
+          "unit:collector": {
+            "1": 52632
+          },
+          "unit:fast": {
+            "1": 52632
+          },
+          "unit:fire_resistant": {
+            "1": 52632
+          },
+          "unit:flying": {
+            "1": 52632
+          },
+          "unit:healer_unit": {
+            "1": 52632
+          },
+          "unit:ice_resistant": {
+            "1": 52632
+          },
+          "unit:laser_resistant": {
+            "1": 52632
+          },
+          "unit:mole": {
+            "1": 52631
+          },
+          "unit:norm": {
+            "1": 52631
+          },
+          "unit:poison_resistant": {
+            "1": 52631
+          },
+          "unit:researcher_unit": {
+            "1": 52631
+          },
+          "unit:salvager_unit": {
+            "1": 52631
+          },
+          "unit:scout": {
+            "1": 52631
+          },
+          "unit:snake": {
+            "1": 52631
+          },
+          "unit:tank": {
+            "1": 52631
+          },
+          "unit:water_resistant": {
+            "1": 52631
+          },
+          "building:cloud_0a": {
+            "1": 1
+          },
+          "building:cloud_0b": {
+            "1": 1
+          },
+          "building:cloud_1a": {
+            "1": 1
+          },
+          "building:cloud_1b": {
+            "1": 1
+          },
+          "building:cloud_2a": {
+            "1": 1
+          },
+          "building:cloud_2b": {
+            "1": 1
+          },
+          "building:cloud_3a": {
+            "1": 1
+          },
+          "building:cloud_3b": {
+            "1": 1
+          },
+          "building:astar_farm": {
+            "1": 2564
+          },
+          "building:astar_spawner": {
+            "1": 2564
+          },
+          "building:barrack_boss": {
+            "1": 2564
+          },
+          "building:barrack_fast": {
+            "1": 2564
+          },
+          "building:barrack_fire_resistant": {
+            "1": 2564
+          },
+          "building:barrack_flying": {
+            "1": 2564
+          },
+          "building:barrack_ice_resistant": {
+            "1": 2564
+          },
+          "building:barrack_laser_resistant": {
+            "1": 2564
+          },
+          "building:barrack_mole": {
+            "1": 2564
+          },
+          "building:barrack_norm": {
+            "1": 2564
+          },
+          "building:barrack_poison_resistant": {
+            "1": 2564
+          },
+          "building:barrack_scout": {
+            "1": 2564
+          },
+          "building:barrack_snake": {
+            "1": 2564
+          },
+          "building:barrack_tank": {
+            "1": 2564
+          },
+          "building:barrack_water_resistant": {
+            "1": 2564
+          },
+          "building:builder_spawner": {
+            "1": 2564
+          },
+          "building:elements": {
+            "1": 2564
+          },
+          "building:farm": {
+            "1": 2564
+          },
+          "building:fire": {
+            "1": 2564
+          },
+          "building:healer_spawner": {
+            "1": 2564
+          },
+          "building:house": {
+            "1": 2564
+          },
+          "building:ice": {
+            "1": 2564
+          },
+          "building:ice_patch": {
+            "1": 2564
+          },
+          "building:laser": {
+            "1": 2564
+          },
+          "building:lava": {
+            "1": 2564
+          },
+          "building:mine": {
+            "1": 2564
+          },
+          "building:pistol": {
+            "1": 2564
+          },
+          "building:poison": {
+            "1": 2564
+          },
+          "building:poison_puddle": {
+            "1": 2564
+          },
+          "building:research": {
+            "1": 2564
+          },
+          "building:salvager": {
+            "1": 2564
+          },
+          "building:sand": {
+            "1": 2564
+          },
+          "building:sand_gun": {
+            "1": 2564
+          },
+          "building:smg": {
+            "1": 2564
+          },
+          "building:sniper": {
+            "1": 2564
+          },
+          "building:spawner": {
+            "1": 2563
+          },
+          "building:watch_tower": {
+            "1": 2563
+          },
+          "building:water": {
+            "1": 2563
+          },
+          "building:water_puddle": {
+            "1": 2563
+          }
+        },
+        "name": "2000000u-200000s-1000-all-s1701",
+        "specialCountsPerOwner": {
+          "king": 1,
+          "portalEndpoints": {
+            "cloud_0a": 1,
+            "cloud_0b": 1,
+            "cloud_1a": 1,
+            "cloud_1b": 1,
+            "cloud_2a": 1,
+            "cloud_2b": 1,
+            "cloud_3a": 1,
+            "cloud_3b": 1
+          }
+        },
+        "excluded": [
+          "shrine (passive, not buildable)",
+          "area_upgrader (area action, not a placed entity)"
+        ]
+      },
+      "repeat": 1,
+      "status": "software-or-timeout-failure",
+      "availableMemoryBefore": 3432628224,
+      "windows": [],
+      "progress": [
+        {
+          "stage": "startGame",
+          "phase": "begin",
+          "atMs": 28330.399999976158
+        },
+        {
+          "stage": "initGrid",
+          "phase": "begin",
+          "atMs": 28353.62999999523
+        },
+        {
+          "stage": "initGrid",
+          "phase": "end",
+          "atMs": 28437.87000000477
+        },
+        {
+          "stage": "generateAreas",
+          "phase": "begin",
+          "atMs": 28535.560000002384
+        },
+        {
+          "stage": "generateAreas",
+          "phase": "end",
+          "atMs": 29151.384999990463
+        },
+        {
+          "stage": "pickPlayerSpawns",
+          "phase": "begin",
+          "atMs": 29151.490000009537
+        },
+        {
+          "stage": "pickPlayerSpawns",
+          "phase": "end",
+          "atMs": 29166.459999978542
+        },
+        {
+          "stage": "generateResourceMinesMixed",
+          "phase": "begin",
+          "atMs": 29166.57999998331
+        },
+        {
+          "stage": "generateResourceMinesMixed",
+          "phase": "end",
+          "atMs": 29167.560000002384
+        },
+        {
+          "stage": "settleSpawnsNearResources",
+          "phase": "begin",
+          "atMs": 29167.664999961853
+        },
+        {
+          "stage": "settleSpawnsNearResources",
+          "phase": "end",
+          "atMs": 29168.05000001192
+        },
+        {
+          "stage": "simUnitStateReserve",
+          "phase": "begin",
+          "atMs": 29202.30000001192
+        },
+        {
+          "stage": "simUnitStateReserve",
+          "phase": "end",
+          "atMs": 29211.57999998331
+        },
+        {
+          "stage": "recalculateAdjacency",
+          "phase": "begin",
+          "atMs": 90036.68000000715
+        },
+        {
+          "stage": "recalculateAdjacency",
+          "phase": "end",
+          "atMs": 92139.93999999762
+        },
+        {
+          "stage": "startGame",
+          "phase": "end",
+          "atMs": 92148.55000001192
+        },
+        {
+          "stage": "initialValidation",
+          "phase": "begin",
+          "atMs": 92148.64499998093
+        },
+        {
+          "stage": "simClientStartMatch",
+          "phase": "begin",
+          "atMs": 97269.3899999857
+        },
+        {
+          "stage": "buildHostAuthoritativeStateSnapshot",
+          "phase": "begin",
+          "atMs": 97269.80500000715
+        },
+        {
+          "stage": "buildHostAuthoritativeStateSnapshot",
+          "phase": "end",
+          "atMs": 109548.14999997616
+        },
+        {
+          "stage": "snapDecodeState",
+          "phase": "begin",
+          "atMs": 113921.41499996185
+        },
+        {
+          "stage": "simUnitStateReserve",
+          "phase": "begin",
+          "atMs": 113925.06499999762
+        },
+        {
+          "stage": "simUnitStateReserve",
+          "phase": "end",
+          "atMs": 113932.40499997139
+        },
+        {
+          "stage": "snapDecodeState",
+          "phase": "end",
+          "atMs": 115427.06999999285
+        },
+        {
+          "stage": "simClientStartMatch",
+          "phase": "end",
+          "atMs": 116321.94999998808
+        }
+      ],
+      "minimumAvailableMemory": 18751488,
+      "browser": {
+        "protocolVersion": "1.3",
+        "product": "Edg/155.0.4283.45",
+        "revision": "@50f24ef2aa5369a074b8888b7db82d9c0652d642",
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "jsVersion": "15.5.9.4"
+      },
+      "runtimeStartupMs": 4934.0613,
+      "environment": {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "hardwareConcurrency": 16,
+        "crossOriginIsolated": true,
+        "helpers": 7,
+        "shared": true,
+        "gpu": "WebKit WebGL",
+        "presentationHelpers": null
+      },
+      "error": "Error: {\"at\":120635.86499994993,\"frames\":0,\"tick\":1,\"workerTick\":-1,\"units\":0,\"gameOver\":false,\"active\":true,\"ready\":false,\"errors\":[\"Error: SIM_KERNEL_SNAP_REGION: the Rust kernel cannot run here (wasm module missing or an array outside the wasm heap)\\n    at _simNoWasm (http://127.0.0.1:58626/src/sim/sim_parallel.js?v=20261012-h8:1018:11)\\n    at _simRust (http://127.0.0.1:58626/src/sim/sim_parallel.js?v=20261012-h8:1026:68)\\n    at SIM_KERNELS.<computed> (http://127.0.0.1:58626/src/sim/sim_parallel.js?v=20261012-h8:1663:64)\\n    at simParallelBackgroundWait (http://127.0.0.1:58626/src/sim/sim_parallel.js?v=20261012-h8:1238:165)\\n    at snapTickHash (http://127.0.0.1:58626/src/utils/utils_snapshot.js?v=20261017-mp5:961:9)\\n    at Object.inspectLoadWorld [as inspect] (<anonymous>:50:15)\\n    at startGame (http://127.0.0.1:58626/tests/load-bench-page.js:64:23)\\n    at begin (http://127.0.0.1:58626/src/utils/utils_networking.js?v=20261017-mp5:4282:9)\"],\"workerErrors\":[]}\n    at runCase (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\load-world.bench.cjs:114:92)\n    at async main (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\load-world.bench.cjs:209:25)",
+      "totalMs": 124112.6725
+    }
+  ],
+  "limitations": [
+    "Fresh browser per repeat: cold browser caches; OS cache warmth is uncontrolled.",
+    "TPS is authoritative worker ticks and adopted page ticks per wall second; FPS is completed page render calls, not display scanout.",
+    "Startup validation/hash is instrumented overhead and reported separately; gameplay runs normally thereafter.",
+    "Memory samples are not process peaks; shared bindings may alias the WASM heap. Do not sum them.",
+    "Placement/population/link costs remain inside worldCreationMs; stage wrappers overlap and are not additive.",
+    "Multiplayer transfer, cancellation during construction, three-owner asymmetry, process/GPU memory and leak plateau qualification remain pending."
+  ]
+}

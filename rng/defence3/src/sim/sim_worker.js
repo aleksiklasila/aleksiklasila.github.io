@@ -179,7 +179,7 @@ function _simHelperUrl() {
     let url = new URL('sim_helper.js?v=20261008-brain1', base).href;
     if (!self.SIM_WORKER_BASE && !_simImportViaBlob) return url;
     let nl = String.fromCharCode(10);
-    let parts = ['sim_parallel.js?v=20261008-brain1', 'sim_wasm_bin.js?v=20261008-brain1', 'sim_wasm.js?v=20261008-brain1', 'sim_frame.js?v=20261008-brain1', '../game/flownav.js?v=20261021-w'].map(f => {
+    let parts = ['sim_parallel.js?v=20261018-load1', 'sim_wasm_bin.js?v=20261008-brain1', 'sim_wasm.js?v=20261008-brain1', 'sim_frame.js?v=20261008-brain1', '../game/flownav.js?v=20261021-w'].map(f => {
         let xhr = new XMLHttpRequest();
         xhr.open('GET', new URL(f, base).href, false);
         xhr.send();
@@ -494,19 +494,43 @@ function _simStart(msg) {
     if (g.startingResources) startingResourcesConfig = normalizeStartingResourcesConfig(g.startingResources);
     // (Where a big match's start goes: sent back with 'started'.)
     const T = {}, t0 = performance.now();
-    // (Its entities come with the snapshot.)
-    startGameSkipStarters = true;
+    // A match made here (msg.create: solo, a host): startGame makes the whole
+    // world, starting units and buildings too; the page made the same map
+    // without them and gets the world from here ('startState', then frames).
+    // Otherwise its entities come with the snapshot.
+    const create = !!msg.create;
+    startGameSkipStarters = !create;
     try { startGame(); } finally { startGameSkipStarters = false; }
     T.startGame = performance.now() - t0;
     _simStubUi();
     // gameStarted, isMultiplayer... as on the page (startGame may reset them).
     for (let [name, value] of Object.entries(g.assign || {})) self.eval(name + ' = ' + JSON.stringify(value));
-    const t1 = performance.now();
-    const snap = JSON.parse(msg.snapshotText);
-    T.parse = performance.now() - t1;
-    const t2 = performance.now();
-    applyAuthoritativeStateSnapshot(snap);
-    T.apply = performance.now() - t2;
+    let startText = null;
+    if (create && msg.startText) {
+        // A host: the start text for its guests, and restored here as they
+        // restore it, so the match starts identical everywhere (fields a
+        // restore rebuilds would otherwise differ on the host).
+        const t5 = performance.now();
+        startText = JSON.stringify(buildHostAuthoritativeStateSnapshot({ includeConfig: false, includeStaticMapState: true, includeGridTypes: true }));
+        T.encodeStart = performance.now() - t5;
+    }
+    if (!create || startText) {
+        const t1 = performance.now();
+        const snap = JSON.parse(create ? startText : msg.snapshotText);
+        T.parse = performance.now() - t1;
+        const t2 = performance.now();
+        applyAuthoritativeStateSnapshot(snap);
+        T.apply = performance.now() - t2;
+    }
+    if (create) {
+        // The page's copy: the state without units (they come from frames),
+        // with the map's areas and grid types, as the page restored a start.
+        const t6 = performance.now();
+        const head = buildHostAuthoritativeStateSnapshot({ includeConfig: false, includeStaticMapState: true, includeGridTypes: true, withoutState: true });
+        const pageText = JSON.stringify(head).slice(0, -1) + ',"state":' + JSON.stringify(snapEncodeState({ noUnits: true })) + '}';
+        T.encodePage = performance.now() - t6;
+        _simPost({ type: 'startState', epoch: _simEpoch, pageText, startText, units: units.length });
+    }
     // The map's first navigation builds, which its first tick makes
     // (navTick) from this same state: made before the match is reported
     // started, not in a first tick of ~1 s right after the start.

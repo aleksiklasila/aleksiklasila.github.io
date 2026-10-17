@@ -776,9 +776,96 @@ function structListRemove(list, e) {
     e._li = -1;
     return i;
 }
+// ---- structure rows (ENTITY_TABLES_PLAN.md T1) ----
+// A structure's fields are columns of its class's table, the object only its
+// row (_sr): ~0.4 KB a structure instead of ~1.5 KB of object, properties
+// and boxed numbers (200k buildings: ~200 MB less on each of the page and the
+// worker). Kinds: 'n' a number (Float64; undefined stored as NaN, read back
+// as undefined, as a field never set), 'b' a boolean (Uint8: 0 unset, 1
+// false, 2 true), 'r' anything else (an array of values). Fields not listed
+// stay the object's own. Rows are not reused within a match (a destroyed
+// structure's object may still be read); the tables start over with it
+// (structTableReset). Lists from a census of chaos matches
+// (.claude/struct_field_census.cjs).
+const _STF_BUILDING = 'n:_stT n:_li n:_ow b:_uc n:_en n:gx n:gy n:x n:y r:type n:stacks n:manualStacks n:effectiveStacks n:level n:effectiveLevel '
+    + 'n:potentialEffectiveLevel b:isStacking n:stackingWorkDone n:maxEnergy b:markedForSalvage b:autoUpgradeEnabled b:buildEnabled b:isUpgrading '
+    + 'n:_adjSigK n:_adjSigE n:_adjSigG n:_adjSigM n:effectiveGroupSize n:effectiveAreaMult r:preComputedBase r:preComputedEffective r:preComputed '
+    + 'r:preComputedPotential n:burning n:burnTickDamage n:poisoned n:poisonTickDamage n:frozen n:iceTickDamage n:wet n:sandy n:watched n:watchedByTeam '
+    + 'r:_levelTextLabel n:_vsGen n:_vsR n:_vsA n:_vsP1 n:_vsP2 n:_vsListId b:autoStackEnabled r:_ambientSoundTicks n:_thingStatsRefreshStamp';
+const _STF_SPAWNER = 'n:_spt b:queueEnabled r:spawnQueue r:rallyX r:rallyY r:rallyTargetUnitId n:spawnCooldown r:_spawnReadyOrder r:_rallyLastSeenX r:_rallyLastSeenY b:_pendingRallyDetach';
+const _STF_MINE = 'n:_stT n:_li n:_mv n:gx n:gy n:x n:y';
+const STRUCT_TABLE_FIELDS = {
+    Tower: _STF_BUILDING + ' r:baseStats r:currentStats r:textCtx n:_cdUntil n:angle r:connectedLasers n:laserState n:laserTimer r:_laserLinkLevel r:preferredTarget r:preferredTargetSpec r:_lzRow r:_lzCol',
+    Barrack: _STF_BUILDING + ' ' + _STF_SPAWNER + ' r:unitType',
+    CollectorSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, AstarSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, SalvagerSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER,
+    BuilderSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, HealerSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER,
+    ResearchSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER + ' b:autoResearchEnabled r:researchTask b:isResearching',
+    FloorItem: _STF_BUILDING + ' n:damage',
+    GoldMine: _STF_MINE + ' n:maxGold', AstarMine: _STF_MINE + ' n:maxAstar'
+};
+const _sTables = new Map();
+// Class C's table (made, and its accessors defined, at its first row).
+function _sTableOf(C) {
+    let T = _sTables.get(C);
+    if (T) return T;
+    const spec = STRUCT_TABLE_FIELDS[C.name];
+    if (!spec) return null;
+    const fields = spec.split(' ').map(f => { const [kind, name] = f.split(':'); return { kind, name, col: 'c_' + name }; });
+    T = { C, fields, cap: 0, n: 0, keys: fields.filter(f => f.name !== '_stT' && f.name !== '_li').map(f => f.name) };
+    for (const f of fields) T[f.col] = null;
+    _sTables.set(C, T);
+    _sTableGrow(T, 1024);
+    for (const f of fields) {
+        const at = 'T.' + f.col + '[this._sr]';
+        const read = f.kind === 'n' ? 'let x = ' + at + '; return x === x ? x : undefined;' : f.kind === 'b' ? 'const x = ' + at + '; return x === 2 ? true : x === 1 ? false : undefined;' : 'return ' + at + ';';
+        const write = f.kind === 'n' ? at + ' = v === undefined ? NaN : v;' : f.kind === 'b' ? at + ' = v === undefined ? 0 : v ? 2 : 1;' : at + ' = v;';
+        Object.defineProperty(C.prototype, f.name, { configurable: true, enumerable: false,
+            get: new Function('T', 'return function () { ' + read + ' };')(T), set: new Function('T', 'return function (v) { ' + write + ' };')(T) });
+    }
+    return T;
+}
+function _sTableGrow(T, cap) {
+    for (const f of T.fields) {
+        const was = T[f.col];
+        let a;
+        if (f.kind === 'r') { a = new Array(cap).fill(undefined); if (was) for (let i = 0; i < T.n; i++) a[i] = was[i]; }
+        else { a = f.kind === 'n' ? new Float64Array(cap).fill(NaN) : new Uint8Array(cap); if (was) a.set(was.subarray(0, T.n)); }
+        T[f.col] = a;
+    }
+    T.cap = cap;
+}
+// A row for structure o (its class's table; none: its fields stay its own).
+function _sRowTake(o) {
+    const T = _sTableOf(o.constructor);
+    if (!T) return false;
+    if (T.n >= T.cap) _sTableGrow(T, Math.ceil(T.cap * 1.5 / 1024) * 1024);
+    Object.defineProperty(o, '_sr', { value: T.n++, writable: true, configurable: true });
+    return true;
+}
+// The tables start over (a new match: resetWorldState. Not at a restore,
+// whose new structures' rows are taken before it indexes the tiles; the rows
+// of the structures it replaced stay until the next match.)
+function _sTablesReset() {
+    for (const T of _sTables.values()) {
+        T.n = 0;
+        for (const f of T.fields) if (f.kind === 'r') T[f.col].fill(undefined); else if (f.kind === 'n') T[f.col].fill(NaN); else T[f.col].fill(0);
+    }
+}
+// The snapshot's keys of a tabled structure: its fields that hold a value
+// (as its own keys were before).
+function _sTableKeys(e) {
+    const T = _sTables.get(e.constructor);
+    if (!T || e._sr === undefined) return null;
+    const out = [];
+    for (const k of T.keys) if (e[k] !== undefined) out.push(k);
+    for (const k of Object.keys(e)) out.push(k);
+    return out;
+}
+
 // First thing in a structure's constructor (and a restore's shell): its
-// backing fields, in one order (one hidden class).
+// row, then its backing fields, in one order.
 function structTableInit(o) {
+    _sRowTake(o);
     o._stT = -1;
     o._li = -1;
     if (o._stMine) o._mv = 0;
@@ -828,9 +915,10 @@ structTableAccessors(AstarMine, 0x77, 'astar');
 // backing fields (the table tile and list place are not state).
 const _ST_KEY_OF = { _ow: 'owner', _uc: 'underConstruction', _en: 'energy', _spt: 'spawnTimer' };
 function structTableKeys(e, keys) {
+    keys = _sTableKeys(e) || keys;
     const out = [];
     for (const k of keys) {
-        if (k === '_stT' || k === '_li') continue;
+        if (k === '_stT' || k === '_li' || k === '_sr') continue;
         if (k === '_mv') { out.push(e instanceof AstarMine ? 'astar' : 'gold'); continue; }
         const a = _ST_KEY_OF[k];
         out.push(a === undefined ? k : a);

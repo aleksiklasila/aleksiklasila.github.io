@@ -967,15 +967,16 @@ function _wsRegistered(u) { const c = u && u._us; return !!c && c.wsKind[u._si] 
 // u's search into the registry (kind, req: owner's grid needs and the
 // rest); at a commit (a search that found nothing valid) not as a fresh one.
 function wsRegister(u, kind, req) {
-    const c = u._us, s = u._si;
-    c.wsKind[s] = kind; c.wsT[s] = _wsInCommit ? gameTime - WS_TICKS : gameTime;
+    // (The search's fields are in its worker record: sim_unit_state.js simUnitWk.)
+    const c = u._us, s = u._si, w = simUnitWk(c, s);
+    c.wsKind[s] = kind; c.wsT[w] = _wsInCommit ? gameTime - WS_TICKS : gameTime;
     if (!_wsInCommit) c.wsFail[s] = 0;
-    c.wsCfg[s] = Number.isFinite(req.cfg) ? req.cfg : -1; c.wsOU[s] = Number.isFinite(req.ou) ? req.ou : 0;
-    c.wsOx[s] = Number.isFinite(req.ox) ? req.ox : NaN; c.wsOy[s] = Number.isFinite(req.oy) ? req.oy : NaN;
-    c.wsR[s] = Number(req.r) || 0; c.wsAk[s] = Number.isFinite(req.areaSteps) ? Math.max(0, Math.min(127, Math.floor(req.areaSteps))) : -1;
-    c.wsAx[s] = Number.isFinite(req.ax) ? req.ax : NaN; c.wsAy[s] = Number.isFinite(req.ay) ? req.ay : NaN;
-    c.wsNeed[s] = req.need | 0; c.wsJid[s] = Number.isFinite(req.jid) ? req.jid : -1;
-    c.wsCur[s] = Number.isFinite(req.cur) ? req.cur : -1; c.wsMy[s] = Number.isFinite(req.my) ? req.my : -1;
+    c.wsCfg[w] = Number.isFinite(req.cfg) ? req.cfg : -1; c.wsOU[w] = Number.isFinite(req.ou) ? req.ou : 0;
+    c.wsOx[w] = Number.isFinite(req.ox) ? req.ox : NaN; c.wsOy[w] = Number.isFinite(req.oy) ? req.oy : NaN;
+    c.wsR[w] = Number(req.r) || 0; c.wsAk[w] = Number.isFinite(req.areaSteps) ? Math.max(0, Math.min(127, Math.floor(req.areaSteps))) : -1;
+    c.wsAx[w] = Number.isFinite(req.ax) ? req.ax : NaN; c.wsAy[w] = Number.isFinite(req.ay) ? req.ay : NaN;
+    c.wsNeed[w] = req.need | 0; c.wsJid[w] = Number.isFinite(req.jid) ? req.jid : -1;
+    c.wsCur[w] = Number.isFinite(req.cur) ? req.cur : -1; c.wsMy[w] = Number.isFinite(req.my) ? req.my : -1;
 }
 // u's committed result for this kind (its sites, best first), once; null
 // when there is none (then register).
@@ -1375,7 +1376,7 @@ function _wsTakeSome() {
             const i = found[Q.pos];
             const s = RS[i], u = owners[s], kind = RK[i], o0 = i * K, res = [];
             cost += kind === WSR_HEAL ? WS_TAKE_HEAL_COST : 1;
-            if (!u || u.dead || (u.id | 0) !== RID[i] || c.wsKind[s] !== kind || c.wsT[s] !== RWT[i]) continue;
+            if (!u || u.dead || (u.id | 0) !== RID[i] || c.wsKind[s] !== kind || c.wsT[c.wkIx[s]] !== RWT[i]) continue;
             if (kind === WSR_COLLECT) {
                 const G = J.groups[RG[i]];
                 if (!G) continue;

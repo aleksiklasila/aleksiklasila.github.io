@@ -1,11 +1,12 @@
 // A simulation worker lost mid-match (audit 2026-10-15,
-// MULTIPLAYER_AUDIT_2026-10-15.md 19): its errors were only logged, it stayed
-// marked active, and its ticks never came back: a guest's left that guest
-// stuck, the host's stalled the match, with healthy heartbeats. Now the page
-// notices the silence (sim_client.js simClientLostHold), starts a new worker
-// and gets the match again: a guest from its host (the whole match, as a
-// reload), a host by handing the match to a player and joining it. Every
-// team plays on, in sync.
+// MULTIPLAYER_AUDIT_2026-10-15.md 19): its match state gone, it stayed marked
+// active, and its ticks never came back: a guest's left that guest stuck, the
+// host's stalled the match, with healthy heartbeats. Now the page drops it
+// when it says so (sim_client.js _simClientWorkerLost; silence alone is not a
+// loss: a slow 2M-unit tick is waited for), starts a new worker and gets the
+// match again: a guest from its host (the whole match, as a reload), a host
+// by handing the match to a player and joining it. Every team plays on, in
+// sync.
 //   node tests/multiplayer-worker-lost.test.cjs
 'use strict';
 const assert = require('node:assert/strict');
@@ -24,8 +25,11 @@ const hostOf = inst => inst.eval('isHost ? myPeerId : wsHostId');
         assert.ok(all.every(i => i.eval('simClientActive()')), 'every page runs its match in a worker');
         const victim = who === 'host' ? host : guests[0];
         const teams = all.map(i => i.eval('localPlayerId'));
-        // The worker dies: no word from it again.
+        // The worker loses the match's state (as for a restore it could not
+        // make) and says no more. (Stopped first: the page's new worker
+        // replaces victim.simWorker.)
         victim.simWorker.terminate();
+        victim.eval("_simClientOnMessage({ type: 'restoreFailed', epoch: _simClient.epoch, message: 'state lost (test)' })");
         const t0 = world.now;
         assert.ok(await world.runUntil(() => victim.eval('simClientLostPending()'), 20000), 'the page noticed the lost worker');
         const noticed = world.now - t0;

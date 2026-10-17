@@ -740,21 +740,21 @@ pub unsafe extern "C" fn k_status(a: *const i32, chunk: i32) {
     let en = k.p::<f32>(2);
     let at = k.p::<f32>(3);
     let af = k.p::<u8>(4);
-    let th = k.p::<i32>(5);
-    let bu = k.p::<i32>(6);
+    let th = k.p::<u16>(5);
+    let bu = k.p::<u16>(6);
     let bd = k.p::<f32>(7);
-    let po = k.p::<i32>(8);
+    let po = k.p::<u16>(8);
     let pd = k.p::<f32>(9);
-    let fr = k.p::<i32>(10);
+    let fr = k.p::<u16>(10);
     let idm = k.p::<f32>(11);
-    let we = k.p::<i32>(12);
-    let sa = k.p::<i32>(13);
-    let wa = k.p::<i32>(14);
+    let we = k.p::<u16>(12);
+    let sa = k.p::<u16>(13);
+    let wa = k.p::<u16>(14);
     let ev_ = k.p::<u8>(15);
     let dotp = k.p::<f32>(16);
     let cnt = k.p::<i32>(17);
     let (xs, ys, x0, y0) = (k.p::<i32>(18), k.p::<i32>(19), k.p::<i32>(20), k.p::<i32>(21));
-    let wtc = k.p::<i32>(22);
+    let wtc = k.p::<u16>(22);
     let acc_ = k.p::<f32>(23);
     let uid = k.p::<i32>(24);
     let (sd0, sr0, sl0, cr, rad, lay) = (k.p::<u8>(25), k.p::<f32>(26), k.p::<u8>(27), k.p::<f32>(28), k.p::<f32>(29), k.p::<u8>(30));
@@ -1531,8 +1531,8 @@ pub unsafe extern "C" fn k_hits_apply(a: *const i32, chunk: i32) {
     let tl = k.p::<i32>(0);
     let (acc, touch, sty, bd, pd) = (k.p::<i32>(1), k.p::<u8>(2), k.p::<u8>(3), k.p::<i32>(4), k.p::<i32>(5));
     let (en, dead, own, ston) = (k.p::<f32>(6), k.p::<u8>(7), k.p::<i8>(8), k.p::<u8>(9));
-    let (burn, btd, wet, frz, poi, ptd, shr) = (k.p::<i32>(10), k.p::<f32>(11), k.p::<i32>(12), k.p::<i32>(13), k.p::<i32>(14), k.p::<f32>(15), k.p::<f64>(16));
-    let (wkk, wch, wtm) = (k.p::<i32>(17), k.p::<i32>(18), k.p::<i8>(19));
+    let (burn, btd, wet, frz, poi, ptd, shr) = (k.p::<u16>(10), k.p::<f32>(11), k.p::<u16>(12), k.p::<u16>(13), k.p::<u16>(14), k.p::<f32>(15), k.p::<f64>(16));
+    let (wkk, wch, wtm) = (k.p::<i32>(17), k.p::<u16>(18), k.p::<i8>(19));
     let (wl, cnt) = (k.p::<i32>(20), k.p::<i32>(21));
     let no = k.i(2).max(0) as usize;
     let scale = k.f(3);
@@ -1578,9 +1578,9 @@ pub unsafe extern "C" fn k_hits_apply(a: *const i32, chunk: i32) {
             let dur = wk >> 20;
             let team = ((wk & 15) - 1) as i8;
             if g(wch, q) > 0 && g(wtm, q) == team {
-                s(wch, q, g(wch, q).max(dur));
+                s(wch, q, g(wch, q).max(sat16(dur)));
             } else {
-                s(wch, q, dur);
+                s(wch, q, sat16(dur));
                 let t = (&*(cnt.add(2) as *const core::sync::atomic::AtomicI32)).fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                 s(wl, t as usize, q as i32);
             }
@@ -2056,6 +2056,8 @@ pub unsafe extern "C" fn k_ws_select(a: *const i32, chunk: i32) {
     let (rox, roy, rux, ruy, rr) = (k.p::<f32>(24), k.p::<f32>(25), k.p::<f32>(26), k.p::<f32>(27), k.p::<f32>(28));
     let (rak, rax, ray, rg, rn, rj, rc, rm) = (k.p::<i32>(29), k.p::<f32>(30), k.p::<f32>(31), k.p::<i32>(32), k.p::<i32>(33), k.p::<i32>(34), k.p::<i32>(35), k.p::<i32>(36));
     let (cnt, pre, fails) = (k.p::<i32>(37), k.p::<i32>(38), k.p::<u8>(39));
+    // (Its worker record: the ws* arrays are by record, unit.wkIx.)
+    let wix = k.p::<i32>(40);
     let (t, wt4, retry, mode) = (k.i(2), k.i(3), k.i(4).max(1), k.i(5));
     let (s0, s1) = job(chunk, k.i(1), k.i(0));
     let base = if mode == 2 { g(pre, chunk as usize) as usize } else { s0 };
@@ -2066,11 +2068,12 @@ pub unsafe extern "C" fn k_ws_select(a: *const i32, chunk: i32) {
             continue;
         }
         let uid = g(id, q);
+        let w = g(wix, q).max(0) as usize;
         // (Its takes that found nothing it could have double its period, up
         // to 8 times: workers in excess of their sites stop searching every
         // retry.)
         let rq = (retry as i64) << (g(fails, q).min(3) as i64);
-        if !(t - g(wt, q) < wt4 || ((t as i64 + uid as i64).rem_euclid(rq) as i32) < wt4) {
+        if !(t - g(wt, w) < wt4 || ((t as i64 + uid as i64).rem_euclid(rq) as i32) < wt4) {
             continue;
         }
         let rank = m;
@@ -2079,26 +2082,26 @@ pub unsafe extern "C" fn k_ws_select(a: *const i32, chunk: i32) {
             continue;
         }
         let i = base + rank;
-        let (x, y, ox) = (pxf(g(xs, q)), pxf(g(ys, q)), g(wox, q));
-        let own_pos = ox != ox || t < g(ou, q);
+        let (x, y, ox) = (pxf(g(xs, q)), pxf(g(ys, q)), g(wox, w));
+        let own_pos = ox != ox || t < g(ou, w);
         s(rs, i, q as i32);
         s(rid, i, uid);
-        s(rwt, i, g(wt, q));
+        s(rwt, i, g(wt, w));
         s(rk, i, kd as i32);
         s(ro, i, g(own, q) as i32);
         s(rox, i, if own_pos { x } else { ox });
-        s(roy, i, if own_pos { y } else { g(woy, q) });
+        s(roy, i, if own_pos { y } else { g(woy, w) });
         s(rux, i, x);
         s(ruy, i, y);
-        s(rr, i, g(wr, q));
-        s(rak, i, g(wak, q) as i32);
-        s(rax, i, g(wax, q));
-        s(ray, i, g(way, q));
-        s(rg, i, g(cfg, q) as i32);
-        s(rn, i, g(wn, q));
-        s(rj, i, g(wj, q));
-        s(rc, i, g(wc, q));
-        s(rm, i, g(wm, q));
+        s(rr, i, g(wr, w));
+        s(rak, i, g(wak, w) as i32);
+        s(rax, i, g(wax, w));
+        s(ray, i, g(way, w));
+        s(rg, i, g(cfg, w) as i32);
+        s(rn, i, g(wn, w));
+        s(rj, i, g(wj, w));
+        s(rc, i, g(wc, w));
+        s(rm, i, g(wm, w));
     }
     s(cnt, chunk as usize, m as i32);
 }
@@ -3909,7 +3912,7 @@ unsafe fn eff_row_apply(k: &K, q: usize, o: i32, ty: i32, bl: i32, el: i32, ver:
         *vis = false;
     } else if !rvsa.is_null() && g(rvsa, ru) >= -1 {
         let st = g(rvsa, ru) as i32;
-        let (watched, wteam, sepk) = (k.p::<i32>(55), k.p::<i8>(56), k.p::<u32>(57));
+        let (watched, wteam, sepk) = (k.p::<u16>(55), k.p::<i8>(56), k.p::<u32>(57));
         let (vgen, vr, va, vp1, vp2) = (k.p::<i32>(58), k.p::<i8>(59), k.p::<i32>(60), k.p::<i8>(61), k.p::<i8>(62));
         let cp = k.i(21);
         let active = g(k.p::<u8>(1), q) == 0 && g(sepk, q) != k.f(22) as u32;
@@ -4033,7 +4036,7 @@ pub unsafe extern "C" fn k_snap_units(a: *const i32, chunk: i32) {
     let k = K::new(a);
     let (live, dead, xs, ys, uid, sl) = (k.p::<u8>(0), k.p::<u8>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5));
     let (own, vx, vy, en, cmd, at, af) = (k.p::<i8>(6), k.p::<f32>(7), k.p::<f32>(8), k.p::<f32>(9), k.p::<u8>(10), k.p::<f32>(11), k.p::<u8>(12));
-    let (tp, po, bu, fr, we, sa, wa, wt) = (k.p::<i32>(13), k.p::<i32>(14), k.p::<i32>(15), k.p::<i32>(16), k.p::<i32>(17), k.p::<i32>(18), k.p::<i32>(19), k.p::<i32>(20));
+    let (tp, po, bu, fr, we, sa, wa, wt) = (k.p::<u16>(13), k.p::<u16>(14), k.p::<u16>(15), k.p::<u16>(16), k.p::<u16>(17), k.p::<u16>(18), k.p::<u16>(19), k.p::<u16>(20));
     let (sc, ul, es, el, pi, ho) = (k.p::<f32>(21), k.p::<f32>(22), k.p::<f32>(23), k.p::<f32>(24), k.p::<i32>(25), k.p::<i32>(26));
     let (pr, ph, nl, nlh, nu, cc, ords) = (k.p::<i32>(27), k.p::<i32>(28), k.p::<i32>(29), k.p::<i32>(30), k.p::<i32>(31), k.p::<i32>(32), k.p::<i32>(33));
     let wtm = k.p::<i8>(34);
@@ -4102,6 +4105,15 @@ pub unsafe extern "C" fn k_snap_units(a: *const i32, chunk: i32) {
                 }
             };
         }
+        macro_rules! gu16 {
+            ($p:expr) => {
+                if run {
+                    u32x4_load_extend_u16x4($p.add(q0) as *const u16)
+                } else {
+                    i32x4(g($p, q0) as i32, g($p, q1) as i32, g($p, q2) as i32, g($p, q3) as i32)
+                }
+            };
+        }
         macro_rules! gi8 {
             ($p:expr) => {
                 if run {
@@ -4138,14 +4150,14 @@ pub unsafe extern "C" fn k_snap_units(a: *const i32, chunk: i32) {
         mix!(6, gu8!(cmd));
         mix!(7, gf!(at));
         mix!(8, gu8!(af));
-        mix!(9, g32!(tp));
-        mix!(10, g32!(po));
-        mix!(11, g32!(bu));
-        mix!(12, g32!(fr));
-        mix!(13, g32!(we));
-        mix!(14, g32!(sa));
-        mix!(15, g32!(wa));
-        mix!(16, g32!(wt));
+        mix!(9, gu16!(tp));
+        mix!(10, gu16!(po));
+        mix!(11, gu16!(bu));
+        mix!(12, gu16!(fr));
+        mix!(13, gu16!(we));
+        mix!(14, gu16!(sa));
+        mix!(15, gu16!(wa));
+        mix!(16, gu16!(wt));
         mix!(17, gf!(sc));
         mix!(18, gf!(ul));
         mix!(19, gf!(es));

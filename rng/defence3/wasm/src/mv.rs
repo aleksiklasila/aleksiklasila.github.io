@@ -194,6 +194,8 @@ const W_TRK: usize = 287;
 const W_TRL: usize = 288;
 const W_TRT: usize = 289;
 const W_TRTG: usize = 291;
+// (Each slot's worker record: unit.wkIx; the wk* arrays are by record.)
+const W_WKIX: usize = 292;
 const W_TRES: usize = 290;
 /// Per navigation profile p: 8 words from W_NAV + 8p (fields, partL, partB,
 /// nb, nt, np, meta, walls).
@@ -272,7 +274,7 @@ struct Mv {
     dbs: *mut i32,
     dbtk: *mut i32,
     wk: *const u8,
-    wtc: *const i32,
+    wtc: *const U16I32,
     flow: *const i32,
     fgen: *mut i32,
     rdy: *const i32,
@@ -290,14 +292,15 @@ struct Mv {
     anb: *const i32,
     covf: *const u8,
     ag: *const i32,
-    frz: *const i32,
-    snd: *const i32,
+    frz: *const U16I32,
+    snd: *const U16I32,
     cbt: *const i32,
     cbtk: *const i32,
     chs: *const F32,
     rng: *const F32,
     wkv: *const i32,
     wkty: *const i32,
+    wkix: *const i32,
     wkd: *const i32,
     wkox: *const i32,
     wkoy: *const i32,
@@ -393,14 +396,14 @@ struct Mv {
     sexc: *mut i32,
     pf: *const u8,
     lookc: *mut u32,
-    burn: *mut i32,
+    burn: *mut U16I32,
     burnd: *mut F32,
-    poi: *mut i32,
+    poi: *mut U16I32,
     poid: *mut F32,
-    frzw: *mut i32,
+    frzw: *mut U16I32,
     iced: *mut F32,
-    wet: *mut i32,
-    sndw: *mut i32,
+    wet: *mut U16I32,
+    sndw: *mut U16I32,
     ston: *mut u8,
     upt: *const i16,
     trk: *const u8,
@@ -579,6 +582,7 @@ impl Mv {
             rng: p!(W_RNG),
             wkv: p!(W_WKV),
             wkty: p!(W_WKTY),
+            wkix: p!(W_WKIX),
             wkd: p!(W_WKD),
             wkox: p!(W_WKOX),
             wkoy: p!(W_WKOY),
@@ -764,7 +768,7 @@ unsafe fn floor_hit(m: &Mv, s: usize, tl: i32) -> bool {
     let ti = ((o * 6 + k as i32) * m.trlv + lv) as usize;
     let d = rd(m.trt, ti);
     let g = rd(m.trtg, ti);
-    let (tm, dm): (*mut i32, *mut F32) = match k {
+    let (tm, dm): (*mut U16I32, *mut F32) = match k {
         1 => (m.burn, m.burnd),
         2 => (m.poi, m.poid),
         3 => (m.frzw, m.iced),
@@ -1809,7 +1813,7 @@ unsafe fn step_slot(m: &Mv, p: &StepP, s: usize) {
     }
     let on = rd(m.on, s);
     // (A builder on its way back: its watchdog sample on its watch tick.)
-    if on == 1 && rd(m.wk, s) == 3 && rem64_f(tsum(t, rd(m.id, s)), wkwatch) == 0 && rd(m.wkwx, s) == rd(m.wkwx, s) {
+    if on == 1 && rd(m.wk, s) == 3 && rem64_f(tsum(t, rd(m.id, s)), wkwatch) == 0 && { let w = wki(m, s); rd(m.wkwx, w) == rd(m.wkwx, w) } {
         wk_watch(m, s, t);
     }
     if on == 2 {
@@ -2236,8 +2240,8 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
     let half = f32x4_splat(0.5);
     let one = f32x4_splat(1.0);
     let mut spd = v128_load(m.spd.add(s) as *const v128);
-    spd = f32x4_mul(spd, v128_bitselect(half, one, i32x4_gt(v128_load(m.frz.add(s) as *const v128), zero)));
-    spd = f32x4_mul(spd, v128_bitselect(half, one, i32x4_gt(v128_load(m.snd.add(s) as *const v128), zero)));
+    spd = f32x4_mul(spd, v128_bitselect(half, one, i32x4_gt(u32x4_load_extend_u16x4(m.frz.add(s) as *const u16), zero)));
+    spd = f32x4_mul(spd, v128_bitselect(half, one, i32x4_gt(u32x4_load_extend_u16x4(m.snd.add(s) as *const u16), zero)));
     let go = v128_and(v128_and(lane, chase), v128_and(f32x4_gt(d, spd), f32x4_gt(spd, fz)));
     let stand = v128_andnot(lane, go);
     let k = f32x4_div(spd, d);
@@ -2418,14 +2422,14 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
     }
     if parked && t >= rd(m.wake, s) {
         let mut stay = false;
-        if (rd(m.fl, s) & 2) != 0 && !m.wkv.is_null() && (t as f64) < rd(m.wksc, s) && (t as f64) < rd(m.wku, s) && rem64_f(tsum(t, id0), p.wkper as i64) == 0 {
+        if (rd(m.fl, s) & 2) != 0 && !m.wkv.is_null() && (t as f64) < rd(m.wksc, wki(m, s)) && (t as f64) < rd(m.wku, wki(m, s)) && rem64_f(tsum(t, id0), p.wkper as i64) == 0 {
             let gx = floor(rd(m.x, s) * itile);
             let gy = floor(rd(m.y, s) * itile);
             let o = rd(m.own, s);
             if o >= 0 && o < p.wknp {
                 stay = wk_stay(m, p, s, gx, gy, o);
                 if stay {
-                    wr(m.wake, s, to_i32(js_min((t + p.wkper) as f64, rd(m.wksc, s))));
+                    wr(m.wake, s, to_i32(js_min((t + p.wkper) as f64, rd(m.wksc, wki(m, s)))));
                 }
             }
         }
@@ -2778,18 +2782,29 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
 /// pixels or more since the last one: it moved now; the sample where it is.
 #[inline(always)]
 unsafe fn wk_watch(m: &Mv, s: usize, t: i32) {
+    // (Its worker record; none: record 0, the defaults, never written.)
+    let w = wki(m, s);
+    if w == 0 {
+        return;
+    }
     let (x, y) = (rd(m.x, s), rd(m.y, s));
-    let (wx, wy) = (rd(m.wkwx, s), rd(m.wkwy, s));
+    let (wx, wy) = (rd(m.wkwx, w), rd(m.wkwy, w));
     if wx - wx != 0.0 || wy - wy != 0.0 {
-        if !m.wklmt.is_null() { wr(m.wklmt, s, t); }
+        if !m.wklmt.is_null() { wr(m.wklmt, w, t); }
     } else {
         let (dx, dy) = (x - wx, y - wy);
         if sqrt(dx * dx + dy * dy) >= 2.0 && !m.wklmt.is_null() {
-            wr(m.wklmt, s, t);
+            wr(m.wklmt, w, t);
         }
     }
-    wr(m.wkwx, s, x);
-    wr(m.wkwy, s, y);
+    wr(m.wkwx, w, x);
+    wr(m.wkwy, w, y);
+}
+/// Slot s's worker record (unit.wkIx; 0: none, the defaults' record).
+#[inline(always)]
+unsafe fn wki(m: &Mv, s: usize) -> usize {
+    let w = rd(m.wkix, s);
+    if w > 0 { w as usize } else { 0 }
 }
 
 /// An idle worker's search would return at once (its work hash as at its
@@ -2808,9 +2823,10 @@ unsafe fn wk_stay(m: &Mv, p: &MoveP, s: usize, gx: f64, gy: f64, o: i32) -> bool
     };
     let span = 1 + p.wkrw as i64 * p.wkrh as i64;
     let all = (o as i64 * p.wktypes as i64) * span;
-    let mine = (o as i64 * p.wktypes as i64 + rd(m.wkty, s) as i64) * span;
-    let d = rd(m.wkd, s) as f64;
-    let tw = rd(m.wktw, s);
+    let w = wki(m, s);
+    let mine = (o as i64 * p.wktypes as i64 + rd(m.wkty, w) as i64) * span;
+    let d = rd(m.wkd, w) as f64;
+    let tw = rd(m.wktw, w);
     let mut hh = to_i32(imul(get(all).unwrap_or(0), 31) as f64 + nan(get(mine)));
     if tw & 2 != 0 {
         hh = imul(hh, 31).wrapping_add(p.wkhgen);
@@ -2818,7 +2834,7 @@ unsafe fn wk_stay(m: &Mv, p: &MoveP, s: usize, gx: f64, gy: f64, o: i32) -> bool
     let passes = if tw & 1 != 0 { 2 } else { 1 };
     let wkr = p.wkr as f64;
     for pass in 0..passes {
-        let (cx, cy) = if pass != 0 || (tw & 1) == 0 { (gx, gy) } else { (rd(m.wkox, s) as f64, rd(m.wkoy, s) as f64) };
+        let (cx, cy) = if pass != 0 || (tw & 1) == 0 { (gx, gy) } else { (rd(m.wkox, w) as f64, rd(m.wkoy, w) as f64) };
         let ry0 = js_max(0.0, floor((cy - d) / wkr));
         let ry1 = js_min((p.wkrh - 1) as f64, floor((cy + d) / wkr));
         let rx0 = js_max(0.0, floor((cx - d) / wkr));
@@ -2840,7 +2856,7 @@ unsafe fn wk_stay(m: &Mv, p: &MoveP, s: usize, gx: f64, gy: f64, o: i32) -> bool
             ry += 1.0;
         }
     }
-    hh == rd(m.wkf, s)
+    hh == rd(m.wkf, w)
 }
 
 /// _simMoveFlow for slot s.
@@ -3144,7 +3160,7 @@ unsafe fn steady_until(m: &Mv, s: usize, t: i32, end: i32, f: u8, tr: i32, acq_t
         u = u.min(next(wcheck));
     }
     // (A returning builder's watchdog sample: step_slot's.)
-    if rd(m.wk, s) == 3 && rd(m.wkwx, s) == rd(m.wkwx, s) {
+    if rd(m.wk, s) == 3 && { let w = wki(m, s); rd(m.wkwx, w) == rd(m.wkwx, w) } {
         u = u.min(next(BUILDER_WATCH_TICKS));
     }
     u

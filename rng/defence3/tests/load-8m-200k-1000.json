@@ -1,0 +1,261 @@
+{
+  "version": 4,
+  "description": "8,000,000 total units, 200,000 total buildings/items, two teams, 1000x1000. One king and one of each portal endpoint per team. Other types evenly distributed.",
+  "loadTest": {
+    "units": 8000000,
+    "statics": 200000,
+    "map": 1000,
+    "seed": 1701,
+    "composition": "all",
+    "staticComposition": "all",
+    "owners": [
+      0,
+      1
+    ],
+    "name": "8000000u-200000s-1000-all-s1701",
+    "specialCountsPerOwner": {
+      "king": 1,
+      "portalEndpoints": {
+        "cloud_0a": 1,
+        "cloud_0b": 1,
+        "cloud_1a": 1,
+        "cloud_1b": 1,
+        "cloud_2a": 1,
+        "cloud_2b": 1,
+        "cloud_3a": 1,
+        "cloud_3b": 1
+      }
+    },
+    "excluded": [
+      "shrine (passive, not buildable)",
+      "area_upgrader (area action, not a placed entity)"
+    ]
+  },
+  "lobby": {
+    "numbers": {
+      "cfg-max-pop": 4000000,
+      "cfg-starting-energy": 1000000000000,
+      "cfg-starting-astar": 1000000000000,
+      "cfg-gold-count": 0,
+      "cfg-astar-mine-count": 0,
+      "cfg-tick-rate": 20,
+      "cfg-pipeline-delay": 2
+    },
+    "selects": {
+      "cfg-mapsize": "1000",
+      "cfg-map-type": "arena",
+      "cfg-full-vis": "full",
+      "cfg-gamemode": "destroy"
+    },
+    "checks": {
+      "cfg-net-auto": true,
+      "cfg-exact-lockstep": false
+    }
+  },
+  "startingResources": {
+    "researchLevels": {},
+    "spawnCounts": {
+      "unit:king": {
+        "1": 1
+      },
+      "unit:astar_collector": {
+        "1": 210527
+      },
+      "unit:boss": {
+        "1": 210527
+      },
+      "unit:builder_unit": {
+        "1": 210527
+      },
+      "unit:collector": {
+        "1": 210527
+      },
+      "unit:fast": {
+        "1": 210527
+      },
+      "unit:fire_resistant": {
+        "1": 210526
+      },
+      "unit:flying": {
+        "1": 210526
+      },
+      "unit:healer_unit": {
+        "1": 210526
+      },
+      "unit:ice_resistant": {
+        "1": 210526
+      },
+      "unit:laser_resistant": {
+        "1": 210526
+      },
+      "unit:mole": {
+        "1": 210526
+      },
+      "unit:norm": {
+        "1": 210526
+      },
+      "unit:poison_resistant": {
+        "1": 210526
+      },
+      "unit:researcher_unit": {
+        "1": 210526
+      },
+      "unit:salvager_unit": {
+        "1": 210526
+      },
+      "unit:scout": {
+        "1": 210526
+      },
+      "unit:snake": {
+        "1": 210526
+      },
+      "unit:tank": {
+        "1": 210526
+      },
+      "unit:water_resistant": {
+        "1": 210526
+      },
+      "building:cloud_0a": {
+        "1": 1
+      },
+      "building:cloud_0b": {
+        "1": 1
+      },
+      "building:cloud_1a": {
+        "1": 1
+      },
+      "building:cloud_1b": {
+        "1": 1
+      },
+      "building:cloud_2a": {
+        "1": 1
+      },
+      "building:cloud_2b": {
+        "1": 1
+      },
+      "building:cloud_3a": {
+        "1": 1
+      },
+      "building:cloud_3b": {
+        "1": 1
+      },
+      "building:astar_farm": {
+        "1": 2564
+      },
+      "building:astar_spawner": {
+        "1": 2564
+      },
+      "building:barrack_boss": {
+        "1": 2564
+      },
+      "building:barrack_fast": {
+        "1": 2564
+      },
+      "building:barrack_fire_resistant": {
+        "1": 2564
+      },
+      "building:barrack_flying": {
+        "1": 2564
+      },
+      "building:barrack_ice_resistant": {
+        "1": 2564
+      },
+      "building:barrack_laser_resistant": {
+        "1": 2564
+      },
+      "building:barrack_mole": {
+        "1": 2564
+      },
+      "building:barrack_norm": {
+        "1": 2564
+      },
+      "building:barrack_poison_resistant": {
+        "1": 2564
+      },
+      "building:barrack_scout": {
+        "1": 2564
+      },
+      "building:barrack_snake": {
+        "1": 2564
+      },
+      "building:barrack_tank": {
+        "1": 2564
+      },
+      "building:barrack_water_resistant": {
+        "1": 2564
+      },
+      "building:builder_spawner": {
+        "1": 2564
+      },
+      "building:elements": {
+        "1": 2564
+      },
+      "building:farm": {
+        "1": 2564
+      },
+      "building:fire": {
+        "1": 2564
+      },
+      "building:healer_spawner": {
+        "1": 2564
+      },
+      "building:house": {
+        "1": 2564
+      },
+      "building:ice": {
+        "1": 2564
+      },
+      "building:ice_patch": {
+        "1": 2564
+      },
+      "building:laser": {
+        "1": 2564
+      },
+      "building:lava": {
+        "1": 2564
+      },
+      "building:mine": {
+        "1": 2564
+      },
+      "building:pistol": {
+        "1": 2564
+      },
+      "building:poison": {
+        "1": 2564
+      },
+      "building:poison_puddle": {
+        "1": 2564
+      },
+      "building:research": {
+        "1": 2564
+      },
+      "building:salvager": {
+        "1": 2564
+      },
+      "building:sand": {
+        "1": 2564
+      },
+      "building:sand_gun": {
+        "1": 2564
+      },
+      "building:smg": {
+        "1": 2564
+      },
+      "building:sniper": {
+        "1": 2564
+      },
+      "building:spawner": {
+        "1": 2563
+      },
+      "building:watch_tower": {
+        "1": 2563
+      },
+      "building:water": {
+        "1": 2563
+      },
+      "building:water_puddle": {
+        "1": 2563
+      }
+    }
+  }
+}

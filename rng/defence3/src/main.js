@@ -198,6 +198,16 @@ function _isWorkerEvent(u) {
     const p = u.path;
     return !p || u.pathIndex >= p.length;
 }
+// A worker event past the tick's budget (the q-th): parked (the movement
+// kernel stands it) until the tick its turn comes.
+function _simParkEventWait(u, q) {
+    const c = u._us;
+    if (!c || u.holdPosition || u.unitType === 'scout') return;
+    const s = u._si;
+    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
+    c.mvWake[s] = gameTime + 1 + Math.floor(q / WORKER_EVENTS_PER_TICK); c.mvFlags[s] = 0; c.mvReach[s] = 0;
+    c.mvOn[s] = 2;
+}
 function _forEachUnitInTickOrder(fn) {
     let list = units, n = list.length;
     if (n <= 1) { if (n === 1 && list[0]) fn(list[0]); return; }
@@ -232,6 +242,7 @@ function _forEachUnitInTickOrderBody(fn, list, n) {
     if (_updateOrderCand.length < nb * B) { _updateOrderCand = simSharedArray(Int32Array, Math.max(1024, nb * B * 2)); simParallelBind('upd.cand', _updateOrderCand); }
     if (_updateOrderRun.length < nb + 1) { _updateOrderRun = simSharedArray(Int32Array, Math.max(1024, (nb + 1) * 2)); simParallelBind('upd.cnt', _updateOrderRun); }
     const cand = _updateOrderCand, bcnt = _updateOrderRun;
+    let overBudget = 0;
     if (OUT) {
         simParallelBind('ix.slots', slots);
         const P = _simParams, per = 64;
@@ -280,7 +291,10 @@ function _forEachUnitInTickOrderBody(fn, list, n) {
             }
             // (Past the tick's worker events: next tick. Not dead ones: their
             // update ends them.)
-            if (!u.dead && _isWorkerEvent(u)) { if (_workerEventsLeft <= 0) continue; _workerEventsLeft--; }
+            // (Those past it parked till their turn: the q-th this tick at the
+            // q / WORKER_EVENTS_PER_TICK-th tick from now, so a start's 600k
+            // idle workers are not each visited every tick until theirs.)
+            if (!u.dead && _isWorkerEvent(u)) { if (_workerEventsLeft <= 0) { _simParkEventWait(u, overBudget++); continue; } _workerEventsLeft--; }
             fn(u);
         }
     }
@@ -4761,51 +4775,29 @@ function startGame() {
     // Only tiles clearly nearer this team's spawn than any other team's
     // (1.2x: a neutral band between the armies), so a starting army never
     // begins among its enemies.
-    let buildStarterUnitSpawnTilesBfs = (origin, maxRadius = 24, floorItems = false, others = []) => {
-        let out = [];
-        let q = [];
-        let seen = new Set();
-        let startGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(origin.gx)));
-        let startGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(origin.gy)));
-        q.push({ gx: startGx, gy: startGy });
-        seen.add(startGy * GRID_W + startGx);
-
-        for (let qHead = 0; qHead < q.length; qHead++) {
-            let cur = q[qHead];
-            let gx = cur.gx, gy = cur.gy;
-            let md = Math.abs(gx - startGx) + Math.abs(gy - startGy);
-            if (md > maxRadius) continue;
-            if (md > 0) {
+    // The first `limit` such tiles (typed arrays; it stops there).
+    let starterSpawnTilesFirst = (origin, limit, floorItems, others) => {
+        const W = GRID_W, H = GRID_H, n = W * H, out = [];
+        const seen = new Uint8Array(n), q = new Int32Array(n);
+        const startGx = Math.max(0, Math.min(W - 1, Math.floor(origin.gx))), startGy = Math.max(0, Math.min(H - 1, Math.floor(origin.gy)));
+        let qh = 0, qt = 0;
+        q[qt++] = startGy * W + startGx; seen[startGy * W + startGx] = 1;
+        while (qh < qt && out.length < limit) {
+            const t = q[qh++], gx = t % W, gy = (t - gx) / W;
+            if (gx !== startGx || gy !== startGy) {
                 let own = (gx - startGx) * (gx - startGx) + (gy - startGy) * (gy - startGy), foreign = false;
                 for (let o of others) if ((gx - o.gx) * (gx - o.gx) + (gy - o.gy) * (gy - o.gy) <= own * 1.44) { foreign = true; break; }
                 if (foreign) continue;
             }
-
-            let cell = (grid[gy] && grid[gy][gx]) ? grid[gy][gx] : null;
-            let isFloorTile = !!cell && cell.type !== TYPE_WALL;
-            let isFreeTile = isFloorTile && (!cell.item || floorItems) && !getGoldMineAt(gx, gy);
-            if (isFreeTile) out.push({ gx, gy });
-
+            const cell = grid[gy] ? grid[gy][gx] : null;
+            const isFloorTile = !!cell && cell.type !== TYPE_WALL;
+            if (isFloorTile && (!cell.item || floorItems) && !getGoldMineAt(gx, gy)) out.push({ gx, gy });
             if (!isFloorTile && !(cell && getTileEntityRef(gx, gy))) continue;
-            let n0 = gx + 1, n1 = gx - 1, n2 = gy + 1, n3 = gy - 1;
-            if (n0 < GRID_W) {
-                let k = gy * GRID_W + n0;
-                if (!seen.has(k)) { seen.add(k); q.push({ gx: n0, gy }); }
-            }
-            if (n1 >= 0) {
-                let k = gy * GRID_W + n1;
-                if (!seen.has(k)) { seen.add(k); q.push({ gx: n1, gy }); }
-            }
-            if (n2 < GRID_H) {
-                let k = n2 * GRID_W + gx;
-                if (!seen.has(k)) { seen.add(k); q.push({ gx, gy: n2 }); }
-            }
-            if (n3 >= 0) {
-                let k = n3 * GRID_W + gx;
-                if (!seen.has(k)) { seen.add(k); q.push({ gx, gy: n3 }); }
-            }
+            if (gx + 1 < W && !seen[t + 1]) { seen[t + 1] = 1; q[qt++] = t + 1; }
+            if (gx > 0 && !seen[t - 1]) { seen[t - 1] = 1; q[qt++] = t - 1; }
+            if (gy + 1 < H && !seen[t + W]) { seen[t + W] = 1; q[qt++] = t + W; }
+            if (gy > 0 && !seen[t - W]) { seen[t - W] = 1; q[qt++] = t - W; }
         }
-
         if (out.length <= 0) {
             let fallback = findNearestWalkable(startGx, startGy, startGx, startGy);
             out.push({ gx: fallback.x, gy: fallback.y });
@@ -4826,16 +4818,15 @@ function startGame() {
             let want = Math.ceil(Math.max(1, starterUnitCountByTeam[pid] || 0) / STARTER_UNITS_PER_TILE);
             let others = [];
             for (let other in teamSpawnPos) if (Number(other) !== Number(pid) && teamSpawnPos[other]) others.push(teamSpawnPos[other]);
-            let radius = 24, floorItems = false, tiles = buildStarterUnitSpawnTilesBfs(origin, radius, false, others);
-            while (tiles.length < want && (radius < GRID_W + GRID_H || !floorItems)) {
-                if (radius < GRID_W + GRID_H) radius += 8;
-                else floorItems = true;
-                tiles = buildStarterUnitSpawnTilesBfs(origin, radius, floorItems, others);
-            }
             // The nearest tiles (BFS order) that hold the army; a small army
-            // still takes a tile per unit.
+            // still takes a tile per unit. One traversal that stops once it
+            // has them (the search grown by 8 tiles and redone from the start
+            // until it did was ~9 s a team at 1M units); with floor items too
+            // when the free tiles are too few.
             let count = Math.max(1, starterUnitCountByTeam[pid] || 0);
             let keep = Math.max(want, Math.min(count, 64));
+            let tiles = starterSpawnTilesFirst(origin, keep, false, others);
+            if (tiles.length < want) tiles = starterSpawnTilesFirst(origin, keep, true, others);
             if (tiles.length > keep) tiles.length = keep;
             state = { tiles, cursor: 0 };
             teamStarterSpawnState[pid] = state;
@@ -4902,6 +4893,17 @@ function startGame() {
         // see simUnitPopulationSlots.)
         simUnitStateReserve(Math.min(perTeam, getConfiguredMaxPop()) * teams.length,
             typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0);
+        // (And the starting workers' records: sim_unit_state.js simUnitWk.)
+        if (typeof simUnitWkReserve === 'function') {
+            let workers = 0;
+            for (let thingId in spawnByThing) {
+                let parsed = parseStartingThingId(thingId), levelMap = spawnByThing[thingId];
+                if (!parsed || parsed.kind === 'building' || !levelMap || typeof levelMap !== 'object') continue;
+                if (!(getResourceTypeByCollectorUnit(parsed.key) || ['salvager_unit', 'builder_unit', 'healer_unit', 'researcher_unit'].includes(parsed.key))) continue;
+                for (let levelText in levelMap) workers += normalizeStartingSpawnCount(levelMap[levelText]);
+            }
+            simUnitWkReserve(Math.min(workers, getConfiguredMaxPop()) * teams.length);
+        }
     }
     for (let pid of (startGameSkipStarters ? [] : teams)) {
         let pos = teamSpawnPos[pid];
@@ -6591,7 +6593,7 @@ function driveStrictLockstep(now, tick) {
         if (!waitingForRemoteSince) waitingForRemoteSince = now;
         // Waiting for a snapshot that never came (lost request, host busy).
         // (Not while the simulation worker restores one: acknowledged once
-        // it has, its own watch bounds it, sim_client.js simClientLostHold.)
+        // it has, however long that takes.)
         if (!lockstepResyncRequestedAt) lockstepResyncRequestedAt = now;
         else if (typeof simClientLoading === 'function' && simClientLoading()) lockstepResyncRequestedAt = now;
         else if ((now - lockstepResyncRequestedAt) > 8000) {

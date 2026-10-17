@@ -3284,6 +3284,10 @@ function resetWorldState() {
     visibilityHistoryState = null;
     resyncResetState();
     // Clear all world/runtime objects so no match state carries over.
+    // (The match's outcome too: a simulation worker making a rematch kept
+    // the last match's end, and the rematch stood at tick 0, over.)
+    gameOver = false;
+    winner = -1;
     towers = [];
     units = [];
     projectiles = [];
@@ -3296,6 +3300,7 @@ function resetWorldState() {
     droppedItemGrid = [];
     goldMines = [];
     astarMines = [];
+    if (typeof _sTablesReset === 'function') _sTablesReset();
     initTileEntityLookup();
     areas = [];
     resetAreaDistanceCaches();
@@ -3768,14 +3773,22 @@ function startHostedGame(opts = null) {
             let _savedExpectedPeerIds = matchStartExpectedReadyPeerIds.slice();
             let _savedReadyByPeerId = { ...matchStartReadyByPeerId };
 
-            initAudio();
-            startGame();
-
+            // With the simulation worker the page makes the map only and the
+            // worker makes the match (sim_client.js simClientCreateMatch),
+            // the start text for the guests too.
+            let hostWorker = typeof simClientWillTakeMatch === 'function' && simClientWillTakeMatch();
             // Restore the startup tracking state that resetWorldState() wiped.
-            matchStartSessionId = _savedSessionId;
-            matchStartExpectedReadyPeerIds = _savedExpectedPeerIds;
-            matchStartReadyByPeerId = _savedReadyByPeerId;
-            matchStartWaitingForReady = _savedExpectedPeerIds.length > 0;
+            const restoreTracking = () => {
+                matchStartSessionId = _savedSessionId;
+                matchStartExpectedReadyPeerIds = _savedExpectedPeerIds.slice();
+                matchStartReadyByPeerId = { ..._savedReadyByPeerId };
+                matchStartWaitingForReady = _savedExpectedPeerIds.length > 0;
+            };
+
+            initAudio();
+            startGameSkipStarters = hostWorker;
+            try { startGame(); } finally { startGameSkipStarters = false; }
+            restoreTracking();
 
             // Host world is generated: ready once its simulation has it too
             // (the worker loads the start text below; _hostShowOwnLoadStatus).
@@ -3783,47 +3796,53 @@ function startHostedGame(opts = null) {
 
             // Terrain travels too: guests must not depend on generating the
             // exact same map (floating-point differences between browsers).
-            let startSnapshotText = JSON.stringify(buildHostAuthoritativeStateSnapshot({
-                includeConfig: false,
-                includeStaticMapState: true,
-                includeGridTypes: true
-            }));
             // Guests restore this snapshot over their generated world; the host
             // restores the same text so the match starts identical everywhere
             // (fields the snapshot rebuilds would otherwise differ on the host).
-            // With the simulation worker: the page without units, the worker
-            // loads the same text now (the countdown waits for it).
-            let hostWorker = typeof simClientWillTakeMatch === 'function' && simClientWillTakeMatch();
-            const hostDecode = () => {
-                let st = JSON.parse(startSnapshotText);
-                if (hostWorker) simClientStripUnits(st.state);
-                applyAuthoritativeStateSnapshot(st);
+            // (The page's own match: no worker, or one that could not make it.)
+            const pageStart = remake => {
+                if (remake) { startGame(); restoreTracking(); }
+                let text = JSON.stringify(buildHostAuthoritativeStateSnapshot({
+                    includeConfig: false,
+                    includeStaticMapState: true,
+                    includeGridTypes: true
+                }));
+                applyAuthoritativeStateSnapshot(JSON.parse(text));
+                return text;
             };
-            if (!(hostWorker && simClientStartMatch(startSnapshotText, hostDecode))) { hostWorker = false; hostDecode(); }
-            _hostShowOwnLoadStatus(matchStartSessionId);
             let startSessionId = matchStartSessionId;
             let matchPeerIds = new Set(matchStartLobbyPlayers.map(p => String(p.peerId || '')));
-            netEncodeSnapshotText(startSnapshotText).then(payload => {
-                if (!gameStarted || matchStartSessionId !== startSessionId) return;
-                netCounters.snapshotBytes = netSnapshotPayloadBytes(payload);
-                let msg = {
-                    type: 'START_GAME', seed: gameSeed, rules: SIM_RULES_REVISION,
-                    startSessionId,
-                    lobbyPlayers: matchStartLobbyPlayers,
-                    roleByPeer: buildHostRoleSnapshot(),
-                    presenceByPeer: buildHostPresenceSnapshot(),
-                    cfg: matchStartConfig,
-                    snapshotPayload: payload
-                };
-                for (let c of connections) {
-                    // Players who joined after the start was pressed stay in
-                    // the lobby and may spectate.
-                    if (!c || !c.peer || !matchPeerIds.has(String(c.peer))) continue;
-                    try { c.send({ ...msg, snapshotPayload: netSnapshotPayloadForPeer(c.peer, payload, startSnapshotText) }); } catch { }
-                }
-                broadcastLobbyState(true);
-            });
-            _armMatchStartReadyTimeout(startSessionId);
+            const sendStart = startSnapshotText => {
+                if (!startSnapshotText || !gameStarted || matchStartSessionId !== startSessionId) return;
+                _hostShowOwnLoadStatus(matchStartSessionId);
+                netEncodeSnapshotText(startSnapshotText).then(payload => {
+                    if (!gameStarted || matchStartSessionId !== startSessionId) return;
+                    netCounters.snapshotBytes = netSnapshotPayloadBytes(payload);
+                    let msg = {
+                        type: 'START_GAME', seed: gameSeed, rules: SIM_RULES_REVISION,
+                        startSessionId,
+                        lobbyPlayers: matchStartLobbyPlayers,
+                        roleByPeer: buildHostRoleSnapshot(),
+                        presenceByPeer: buildHostPresenceSnapshot(),
+                        cfg: matchStartConfig,
+                        snapshotPayload: payload
+                    };
+                    for (let c of connections) {
+                        // Players who joined after the start was pressed stay in
+                        // the lobby and may spectate.
+                        if (!c || !c.peer || !matchPeerIds.has(String(c.peer))) continue;
+                        try { c.send({ ...msg, snapshotPayload: netSnapshotPayloadForPeer(c.peer, payload, startSnapshotText) }); } catch { }
+                    }
+                    broadcastLobbyState(true);
+                });
+                // (From the guests' start on: the worker's making of the match is
+                // not theirs to wait out.)
+                _armMatchStartReadyTimeout(startSessionId);
+            };
+            const made = hostWorker && simClientCreateMatch({ startText: true, onFail: () => sendStart(pageStart(true)) });
+            if (made) made.then(sendStart, () => { });
+            else sendStart(pageStart(hostWorker));
+            if (!made) hostWorker = false;
             // (The match runs: gameStarted keeps the teams from here.)
             _hostMatchStarting = false;
 
@@ -4279,8 +4298,15 @@ function startSoloGame() {
         gameSeed=Date.now();
         localPlayerId=0;
         initAudio();
-        startGame();
-        if(typeof simClientWillTakeMatch==='function' && simClientWillTakeMatch() && simClientStartMatch())_matchLoadOverlayUntilRunning();
+        // With the simulation worker the page makes the map only; the worker
+        // makes the match (sim_client.js simClientCreateMatch). One it cannot
+        // make, the page makes, starters and all.
+        const worker=typeof simClientWillTakeMatch==='function' && simClientWillTakeMatch();
+        startGameSkipStarters=worker;
+        try{startGame();}finally{startGameSkipStarters=false;}
+        const onPage=()=>{startGame();setMatchLoadOverlay(false);};
+        if(worker && simClientCreateMatch({onFail:onPage}))_matchLoadOverlayUntilRunning();
+        else if(worker)onPage();
         else setMatchLoadOverlay(false);
     };
     const preparation=prepareRendererLodAssets(true);

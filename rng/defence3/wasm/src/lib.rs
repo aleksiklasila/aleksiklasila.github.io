@@ -150,6 +150,16 @@ impl Scalar for I8I32 { type Value=i32; #[inline(always)] fn load(self)->i32 { s
 #[derive(Clone, Copy)]
 pub struct U8I32(u8);
 impl Scalar for U8I32 { type Value=i32; #[inline(always)] fn load(self)->i32 { self.0 as i32 } #[inline(always)] fn store(v:i32)->Self { Self(v as u8) } }
+// Status timers (ticks left: burning, frozen, the watch, the worker transfer
+// cooldown...): Uint16Array, read as i32, stores saturating at 0..65535 as
+// the JS setters clamp (sim_unit_state.js SIM_UNIT_U16_TIMERS).
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct U16I32(u16);
+impl Scalar for U16I32 { type Value=i32; #[inline(always)] fn load(self)->i32 { self.0 as i32 } #[inline(always)] fn store(v:i32)->Self { Self(sat16(v)) } }
+/// A timer value stored in a u16 column: 0..65535.
+#[inline(always)]
+pub fn sat16(v: i32) -> u16 { if v <= 0 { 0 } else if v >= 65535 { 65535 } else { v as u16 } }
 
 // =====================================================================
 // SEPARATION

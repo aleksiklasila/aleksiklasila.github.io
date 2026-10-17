@@ -501,10 +501,17 @@ function _adjApplyMember(obj, groupSize, areaMult, passiveRefresh) {
     // the periodic refresh): members of a big group whose inputs did
     // not change keep theirs instead of rebuilding every table.
     // Snapshotted, so every peer skips the same members.
-    let statsSig = baseLevel + '|' + obj.effectiveLevel + '|' + nextPotentialLevel + '|' + (obj.isUpgrading ? 1 : 0)
-        + '|' + (obj.underConstruction ? 1 : 0) + '|' + obj.upgrademaxEnergy + '|' + groupSize + '|' + areaMult + '|' + obj.owner;
-    if (obj._adjStatsSig === statsSig && obj.effectiveGroupSize === groupSize && obj.effectiveAreaMult === areaMult) return;
-    obj._adjStatsSig = statsSig;
+    // (The inputs as numbers: the levels, flags and owner packed in one
+    // exactly (levels to 1023, owners -1..14; else NaN: rebuilt), the
+    // upgrade's energy, group size and area multiplier as they are. A
+    // signature string per building was ~0.4 KB of joined pieces.)
+    const lv = baseLevel, el = obj.effectiveLevel, pl = nextPotentialLevel, ow = obj.owner;
+    const key = (lv >= 0 && lv < 1024 && el >= 0 && el < 1024 && pl >= 0 && pl < 1024 && ow >= -1 && ow < 15 && lv === (lv | 0) && el === (el | 0) && pl === (pl | 0) && ow === (ow | 0))
+        ? ((((lv * 1024 + el) * 1024 + pl) * 4 + (obj.isUpgrading ? 2 : 0) + (obj.underConstruction ? 1 : 0)) * 16 + ow + 1) : NaN;
+    const same = (a, b) => a === b || (a !== a && b !== b && typeof a === 'number' && typeof b === 'number');
+    if (obj._adjSigK === key && same(obj._adjSigE, obj.upgrademaxEnergy) && same(obj._adjSigG, groupSize) && same(obj._adjSigM, areaMult)
+        && obj.effectiveGroupSize === groupSize && obj.effectiveAreaMult === areaMult) return;
+    obj._adjSigK = key; obj._adjSigE = obj.upgrademaxEnergy; obj._adjSigG = groupSize; obj._adjSigM = areaMult;
 
     if (obj.updateStats) {
         obj.effectiveGroupSize = groupSize;

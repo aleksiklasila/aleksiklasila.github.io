@@ -1065,7 +1065,9 @@ const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 
 // (?unit.burning... ?mv.tres: floor traps applied in the kernel, mv.rs floor_hit.)
 const _SIM_MOVE_WNAMES2 = ['?unit.sepCy', '?unit.sepMov', '?sep.nextX', '?sep.nextY', '?sep.fast', '?sep.ex', '?sep.exc', '?unit.mvPF', '?mv.lookc',
     '?unit.burning', '?unit.burnTickDamage', '?unit.poisoned', '?unit.poisonTickDamage', '?unit.frozen', '?unit.iceTickDamage', '?unit.wet', '?unit.sandy', '?unit.stOn', '?unit.upT',
-    '?mv.trapK', '?mv.trapL', '?mv.trapT', '?mv.tres', '?mv.trapTG'];
+    '?mv.trapK', '?mv.trapL', '?mv.trapT', '?mv.tres', '?mv.trapTG',
+    // (Word 292: each slot's worker record, the wk* arrays' index.)
+    'unit.wkIx'];
 const _SIM_MOVE_NAV = 11, _SIM_MOVE_WNAV = 160, _SIM_MOVE_W2 = 268;
 const _simMoveW = _simWK([..._SIM_MOVE_WNAMES, ...Array.from({ length: _SIM_MOVE_NAV * 8 }, (_, i) => {
     const p = i >> 3, j = i & 7;
@@ -1195,6 +1197,16 @@ function _simBgOpen(ctl, b, CT, cb, st, id) {
 // runs a chunk of the open stage if one is left. Returns 1 when it ran one,
 // 2 when the lane's chain is complete, 0 otherwise. The participant that
 // finishes a stage's last chunk opens the next stage.
+// A helper's kernel failure, logged: the first few of each kind in full,
+// then a count now and then (one failing every chunk of every tick sent
+// ~50k stacks to the page's console in two minutes at 2M units, freezing it).
+const _simHelperFails = new Map();
+function _simHelperLogFail(what, err) {
+    const key = what + ': ' + String(err && err.message || err), n = (_simHelperFails.get(key) || 0) + 1;
+    _simHelperFails.set(key, n);
+    if (n <= 3) console.error('[sim helper] ' + what + ' failed:', err && err.stack || err);
+    else if ((n & (n - 1)) === 0) console.error('[sim helper] ' + what + ' failed ' + n + ' times so far: ' + key);
+}
 function _simBgClaim(ctl, lane, CT, paramsByStage) {
     const b = SIM_PAR_BG_BASE + lane * 8;
     Atomics.add(ctl, b + SIM_PAR_BG_READERS, 1);
@@ -1210,7 +1222,7 @@ function _simBgClaim(ctl, lane, CT, paramsByStage) {
         const kw = Atomics.load(ctl, b + SIM_PAR_BG_KERNEL);
         _simParRunning++;
         try { SIM_KERNELS[kw & 0xFFFF](_simParReg, paramsByStage[kw >>> 16], c); }
-        catch (err) { if (typeof _simPool !== 'undefined' && _simPool) throw err; console.error('[sim helper] background kernel ' + (kw & 0xFFFF) + ' failed:', err && err.stack || err); Atomics.store(ctl, SIM_PAR_ERR, 1); }
+        catch (err) { if (typeof _simPool !== 'undefined' && _simPool) throw err; _simHelperLogFail('background kernel ' + (kw & 0xFFFF), err); Atomics.store(ctl, SIM_PAR_ERR, 1); }
         finally { _simParRunning--; }
         out = 1;
         if (Atomics.add(ctl, b + SIM_PAR_BG_DONE, 1) + 1 === total) {
@@ -1357,7 +1369,7 @@ function simParallelHelperMain() {
                     let c = Atomics.add(ctl, SIM_PAR_NEXT, 1);
                     if (c >= total) break;
                     try { fn(_simParReg, _simParHelperParams, c); }
-                    catch (err) { console.error('[sim helper] kernel ' + ctl[SIM_PAR_KERNEL] + ' failed:', err && err.stack || err); Atomics.store(ctl, SIM_PAR_ERR, 1); }
+                    catch (err) { _simHelperLogFail('kernel ' + ctl[SIM_PAR_KERNEL], err); Atomics.store(ctl, SIM_PAR_ERR, 1); }
                     Atomics.add(ctl, SIM_PAR_DONE, 1);
                     Atomics.notify(ctl, SIM_PAR_DONE);
                 }
@@ -1541,7 +1553,7 @@ SIM_KERNELS[SIM_KERNEL_DRIVEBY] = function (R, P, chunk) {
 const _simWsSelectW = _simWK(['unit.wsKind', 'unit.wsCfg', 'unit.wsT', 'unit.wsOU', 'unit.wsOx', 'unit.wsOy', 'unit.wsR', 'unit.wsAx', 'unit.wsAy', 'unit.wsAk',
     'unit.wsNeed', 'unit.wsJid', 'unit.wsCur', 'unit.wsMy', 'unit.x', 'unit.y', 'unit.owner', 'unit.id', 'unit.dead',
     '?ws.rslot', '?ws.rid', '?ws.rwt', '?ws.rkind', '?ws.rowner', '?ws.rox', '?ws.roy', '?ws.rux', '?ws.ruy', '?ws.rr', '?ws.rak', '?ws.rax', '?ws.ray', '?ws.rgrp',
-    '?ws.rneed', '?ws.rjid', '?ws.rcur', '?ws.rmy', 'ws.rcnt', '?ws.rpre', 'unit.wsFail']);
+    '?ws.rneed', '?ws.rjid', '?ws.rcur', '?ws.rmy', 'ws.rcnt', '?ws.rpre', 'unit.wsFail', 'unit.wkIx']);
 SIM_KERNELS[SIM_KERNEL_WS_SELECT] = function (R, P, chunk) { _simRust(_simWsSelectW, P, chunk, 'k_ws_select', 'WS_SELECT'); };
 // SIM_KERNEL_WS_SCAN (a tier job, P[1] requests a job over the selected ones:
 // request g the m-th of select chunk c, ws.rpre[c] <= g < ws.rpre[c + 1], at
