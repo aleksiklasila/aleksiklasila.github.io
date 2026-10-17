@@ -9,7 +9,7 @@
          GitHub Pages cannot send itself): SharedArrayBuffer for the simulation
          workers. The first visit reloads once. Must be the first script. -->
     <script src="./coi-serviceworker.min.js"></script>
-    <link rel="stylesheet" href="./style/style.css?v=20261017-hover-text">
+    <link rel="stylesheet" href="./style/style.css?v=20261017-statsmap">
     <link rel="stylesheet" href="./style/bottom_bar.css?v=20261012-h8">
     <link rel="stylesheet" href="./style/scrollbars.css?v=20261012-h8">
 </head>
@@ -370,7 +370,7 @@
                 </div>
             </div>
             <div class="help-mode">Pretty printed JSON snapshot</div>
-            <textarea id="statsmap-json" readonly spellcheck="false"></textarea>
+            <div id="statsmap-json" data-selectable tabindex="0" role="document" aria-label="Stats map entry as JSON"></div>
         </div>
     </div>
 
@@ -877,20 +877,21 @@
     <script src="./src/data/data_state.js?v=20261016-compact-sliders"></script>
 
     <script src="./src/audio_visual/visibility_history.js?v=20261012-h8"></script>
-    <script src="./src/audio_visual/range_overlay.js?v=20261012-h8"></script>
+    <script src="./src/audio_visual/range_overlay.js?v=20261017-range-gpu-2"></script>
     <script src="./src/audio_visual/selection_overlay.js?v=20261012-h8"></script>
-    <script src="./src/audio_visual/postprocess3d.js?v=20261012-h8"></script>
-    <script src="./src/audio_visual/renderer3d.js?v=20261016-mp3"></script>
+    <script src="./src/audio_visual/postprocess3d.js?v=20261017-async-post"></script>
+    <script src="./src/audio_visual/renderer3d.js?v=20261017-colmarks"></script>
     <script src="./src/audio_visual/renderer2d.js?v=20261012-h8"></script>
     <script src="./src/audio_visual/side_visualizations.js?v=20261012-h8"></script>
     <script src="./src/audio_visual/effects3d.js?v=20261012-h8"></script>
-    <script src="./src/audio_visual/renderer.js?v=20261016-compact-sliders"></script>
+    <script src="./src/audio_visual/renderer.js?v=20261017-range-gpu"></script>
     <script src="./src/audio_visual/audio.js?v=20261016-mp3"></script>
     <script src="./src/audio_visual/jukebox.js?v=20261012-h8"></script>
-    <script src="./src/audio_visual/hover_text.js?v=20261017-hover-text-2"></script>
+    <script src="./src/audio_visual/page_guards.js?v=20261017-statsmap"></script>
+    <script src="./src/audio_visual/hover_text.js?v=20261017-hover-text-5"></script>
     <script src="./src/audio_visual/count_bars.js?v=20261017-hover-text"></script>
-    <script src="./src/audio_visual/hud.js?v=20261017-merged-research-sliders"></script>
-    <script src="./src/audio_visual/bottom_bar.js?v=20261017-hover-text"></script>
+    <script src="./src/audio_visual/hud.js?v=20261017-statsmap"></script>
+    <script src="./src/audio_visual/bottom_bar.js?v=20261017-guards"></script>
 
     <script src="./src/game/chunk.js?v=20261012-h8"></script>
     <script src="./src/game/map.js?v=20261016-mp3"></script>
@@ -906,15 +907,15 @@
     <script src="./src/things/things_utils.js?v=20261016-mp3"></script>
     <script src="./src/things/tower.js?v=20261012-h8"></script>
 
-    <script src="./src/main.js?v=20261016-mp3"></script>
+    <script src="./src/main.js?v=20261017-guards"></script>
 
     <script src="./src/sim/sim_frame.js?v=20261012-h8"></script>
     <script src="./src/sim/sim_frame_world.js?v=20261012-h8"></script>
-    <script src="./src/sim/sim_presentation.js?v=20261012-h8"></script>
+    <script src="./src/sim/sim_presentation.js?v=20261017-colmarks"></script>
     <script src="./src/sim/sim_shadow.js?v=20261012-h8"></script>
     <script src="./src/sim/sim_rebase_bin.js?v=20261012-h8"></script>
     <script src="./src/sim/sim_rebase.js?v=20261012-h8"></script>
-    <script src="./src/sim/sim_client.js?v=20261016-mp3"></script>
+    <script src="./src/sim/sim_client.js?v=20261017-colmarks"></script>
 
     <script src="./src/bootstrap.js?v=20261014-lod26"></script>
 </body>

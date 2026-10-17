@@ -23,7 +23,8 @@ function releaseHoverTitle() {
 }
 
 function claimHoverTitle(target) {
-    let el = target;
+    // Hover text is for the UI: the game canvases never show their parents'.
+    let el = target && target.nodeName === 'CANVAS' ? null : target;
     for (; el && el.nodeType === 1; el = el.parentElement) {
         // Sliders have their own detail tooltip (count_bars.js).
         if (el.classList.contains('count-control')) { el = null; break; }
@@ -59,6 +60,20 @@ function updateHoverText() {
     hoverTextElement.style.top = (below + height <= window.innerHeight - 4 ? below : Math.max(4, hoverTextPoint.y - height - 8)) + 'px';
 }
 
+// Panels re-render under a still mouse (a new element, its title back) and
+// owners refresh titles: a few times a second, while the mouse is over the
+// UI, claim what is under it again before the browser's own tooltip delay.
+let hoverTextRecheckTimer = 0;
+function hoverTextRecheck() {
+    const el = hoverTextSourceEl;
+    // (A hit test forces layout: only when the hovered owner was replaced or
+    // set its title again.)
+    if (!hoverTextPoint || !el || (el.isConnected && !el.hasAttribute('title'))) return;
+    if (el.isConnected) { claimHoverTitle(el); if (hoverTextHeld) updateHoverText(); return; }
+    const under = document.elementFromPoint(hoverTextPoint.x, hoverTextPoint.y);
+    if (under) { claimHoverTitle(under); if (hoverTextHeld) updateHoverText(); }
+}
+
 function bindHoverTextEvents() {
     if (typeof document === 'undefined' || !document.addEventListener) return;
     const fromPointer = ev => {
@@ -66,11 +81,17 @@ function bindHoverTextEvents() {
         hoverTextPoint = { x: ev.clientX, y: ev.clientY };
         claimHoverTitle(ev.target);
         if (hoverTextHeld || (hoverTextElement && !hoverTextElement.hidden)) updateHoverText();
+        const overUi = ev.target && ev.target.nodeName !== 'CANVAS';
+        if (overUi && !hoverTextRecheckTimer) hoverTextRecheckTimer = setInterval(hoverTextRecheck, 250);
+        else if (!overUi && hoverTextRecheckTimer) { clearInterval(hoverTextRecheckTimer); hoverTextRecheckTimer = 0; }
     };
     document.addEventListener('pointerover', fromPointer, true);
     document.addEventListener('pointermove', fromPointer, true);
     document.addEventListener('pointerout', ev => {
-        if (!ev.relatedTarget) { releaseHoverTitle(); updateHoverText(); }
+        if (!ev.relatedTarget) {
+            releaseHoverTitle(); hoverTextPoint = null; updateHoverText();
+            if (hoverTextRecheckTimer) { clearInterval(hoverTextRecheckTimer); hoverTextRecheckTimer = 0; }
+        }
     }, true);
     const fromKey = ev => {
         if (ev.key !== 'Control' && ev.key !== 'Shift') return;

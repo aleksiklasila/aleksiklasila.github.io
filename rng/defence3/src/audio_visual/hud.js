@@ -6671,11 +6671,21 @@ function refreshStatsMapPopupText() {
     if (options.includes(current)) sel.value = current;
     else if (options.length) sel.value = options[0];
     let [branch, key] = String(sel.value || '').split('/');
+    let text;
     try {
-        ta.value = branch && key ? JSON.stringify({ [branch]: { [key]: map[branch][key] } }, null, 2) : '{}';
+        text = branch && key ? JSON.stringify({ [branch]: { [key]: map[branch][key] } }, null, 2) : '{}';
     } catch {
-        ta.value = '{"error":"Unable to serialize PRECOMPUTED_STATS_MAP"}';
+        text = '{"error":"Unable to serialize PRECOMPUTED_STATS_MAP"}';
     }
+    // Blocks of 80 lines, each laid out only when scrolled into view (CSS
+    // content-visibility): one entry in a textarea was ~50 ms of layout.
+    let lines = text.split('\n'), frag = document.createDocumentFragment();
+    for (let i = 0; i < lines.length; i += 80) {
+        let pre = document.createElement('pre');
+        pre.textContent = lines.slice(i, i + 80).join('\n') + (i + 80 < lines.length ? '\n' : '');
+        frag.appendChild(pre);
+    }
+    ta.replaceChildren(frag);
     ta.scrollTop = 0;
 }
 

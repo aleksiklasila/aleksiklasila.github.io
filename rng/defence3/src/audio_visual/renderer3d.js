@@ -3395,17 +3395,16 @@
         presentSceneToCanvas(flat = false) {
             let gl = this.gl;
             let post = this.postProcess, options = this.graphicsOptions;
-            if (post && options && post.isActive(options, flat)) {
-                post.render(options, {
+            // (false: its first variant still compiles in the background, so
+            // this frame is the plain blit below.)
+            if (post && options && post.isActive(options, flat) && post.render(options, {
                     colorTex: this.sceneColorTexture, depthTex: this.sceneDepthTexture,
                     width: this.sceneTargetSize.width, height: this.sceneTargetSize.height,
                     near: this.projectionNear || .1, far: this.projectionFar || 220, flat, quadVao: this.presentVao,
                     pixelsPerWorld: this.lodPixelsPerWorld, pixelRatio: this.pixelRatio,
                     projectionScale: (this.lodProjectionScale || 0) * this.pixelRatio,
                     shadow: flat ? null : this.shadowFrame
-                });
-                return;
-            }
+                }) !== false) return;
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
             gl.viewport(0, 0, this.sceneTargetSize.width, this.sceneTargetSize.height);
             gl.disable(gl.DEPTH_TEST);
@@ -4099,7 +4098,20 @@
         }
         drawRangeVisibility(overlays) {
             const R = overlays && overlays.rangeVisibility;
+            if (R && R.areaIds) { this.drawRangeAreas(R); return; }
             if (!R || !R.data || !(R.width > 0) || !(R.height > 0)) return;
+            this.ensureRangeVisProgram();
+            this._drawRangeVisibilityBody(R);
+        }
+        // Programs a first use would compile mid-match (a 50-120 ms stall each
+        // on the page): made while the match loads (renderer.js
+        // _maybePrewarm3DView), as those a hidden 3D frame does not reach.
+        prewarmPrograms() {
+            for (const make of [() => this.ensureRangeVisProgram(), () => this.ensureRangeAreaProgram(), () => this.ensureFxResources()]) {
+                try { make(); } catch (err) { console.warn('[renderer3d] prewarm:', err && err.message || err); }
+            }
+        }
+        ensureRangeVisProgram() {
             const gl = this.gl;
             if (!this.rangeVisProgram) {
                 this.rangeVisProgram = createProgram(gl, `#version 300 es
@@ -4142,18 +4154,26 @@
                 this.rangeVisTexture = createTexture(gl);
                 this.rangeVisVao = gl.createVertexArray();
             }
+        }
+        _drawRangeVisibilityBody(R) {
+            const gl = this.gl;
             const U = this.rangeVisUniforms;
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, this.rangeVisTexture);
-            if (this.rangeVisVersion !== R.version || this.rangeVisData !== R.data || this.rangeVisWidth !== R.width || this.rangeVisHeight !== R.height) {
+            const resized = this.rangeVisWidth !== R.width || this.rangeVisHeight !== R.height;
+            // The sight grid is 4 MB of floats on a big map and changes every
+            // tick; such uploads stalled the page 70-160 ms while the GPU
+            // process was busy. The outline follows it 5 times a second.
+            const now = performance.now();
+            if (resized || ((this.rangeVisVersion !== R.version || this.rangeVisData !== R.data) && !(now - (this.rangeVisAt || 0) < 200))) {
                 gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
                 gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
                 const view = R.data.length === R.width * R.height ? R.data : R.data.subarray(0, R.width * R.height);
-                if (this.rangeVisWidth !== R.width || this.rangeVisHeight !== R.height) gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, R.width, R.height, 0, gl.RED, gl.FLOAT, view);
+                if (resized) gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, R.width, R.height, 0, gl.RED, gl.FLOAT, view);
                 else gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, R.width, R.height, gl.RED, gl.FLOAT, view);
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-                this.rangeVisVersion = R.version; this.rangeVisData = R.data; this.rangeVisWidth = R.width; this.rangeVisHeight = R.height;
+                this.rangeVisVersion = R.version; this.rangeVisData = R.data; this.rangeVisWidth = R.width; this.rangeVisHeight = R.height; this.rangeVisAt = now;
             }
             gl.useProgram(this.rangeVisProgram);
             gl.bindVertexArray(this.rangeVisVao);
@@ -4167,6 +4187,120 @@
             if (R.seeThrough) gl.disable(gl.DEPTH_TEST); else { gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); }
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
             gl.bindVertexArray(null);
+            gl.depthMask(true); gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
+            gl.drawBuffers(this.sceneDrawBuffers);
+        }
+        // The outline of the areas a range mode's sources reach: each tile's
+        // area id (uploaded when the map's areas change) and a byte per area
+        // (uploaded when the coverage changes); the same edge shading as the
+        // sight grid's outline above.
+        drawRangeAreas(R) {
+            if (!(R.width > 0) || !(R.height > 0) || !(R.areaCount > 0)) return;
+            this.ensureRangeAreaProgram();
+            this._drawRangeAreasBody(R, this.rangeAreaUniforms);
+        }
+        // (Also made while a match loads: prewarmPrograms.)
+        ensureRangeAreaProgram() {
+            const gl = this.gl;
+            if (!this.rangeAreaProgram) {
+                this.rangeAreaProgram = createProgram(gl, `#version 300 es
+                    precision highp float;
+                    uniform mat4 uViewProjection;
+                    uniform vec2 uSize;
+                    out vec2 vTile;
+                    void main() {
+                        vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * uSize;
+                        vTile = c;
+                        gl_Position = uViewProjection * vec4(c.x, .05, c.y, 1.);
+                    }`, `#version 300 es
+                    precision highp float;
+                    precision highp int;
+                    precision highp isampler2D;
+                    precision highp sampler2D;
+                    uniform isampler2D uAreaIds;
+                    uniform sampler2D uShown;
+                    uniform int uShownWidth;
+                    uniform vec2 uSize;
+                    uniform vec4 uColor;
+                    in vec2 vTile;
+                    layout(location=0) out vec4 outColor;
+                    float seen(ivec2 t) {
+                        if (t.x < 0 || t.y < 0 || float(t.x) >= uSize.x || float(t.y) >= uSize.y) return 0.;
+                        int id = texelFetch(uAreaIds, t, 0).r;
+                        if (id < 0) return 0.;
+                        return texelFetch(uShown, ivec2(id % uShownWidth, id / uShownWidth), 0).r > .5 ? 1. : 0.;
+                    }
+                    void main() {
+                        ivec2 cell = ivec2(floor(vTile));
+                        if (seen(cell) == 0.) discard;
+                        vec2 f = vTile - vec2(cell), px = max(fwidth(vTile), vec2(1e-5));
+                        float d = 1e9;
+                        if (seen(cell + ivec2(-1, 0)) == 0.) d = min(d, f.x / px.x);
+                        if (seen(cell + ivec2(1, 0)) == 0.) d = min(d, (1. - f.x) / px.x);
+                        if (seen(cell + ivec2(0, -1)) == 0.) d = min(d, f.y / px.y);
+                        if (seen(cell + ivec2(0, 1)) == 0.) d = min(d, (1. - f.y) / px.y);
+                        float a = 1. - smoothstep(1.4, 2.4, d);
+                        if (a <= 0.) discard;
+                        outColor = vec4(uColor.rgb, uColor.a * a);
+                    }`);
+                this.rangeAreaUniforms = {};
+                for (const n of ['ViewProjection', 'Size', 'AreaIds', 'Shown', 'ShownWidth', 'Color']) this.rangeAreaUniforms[n] = gl.getUniformLocation(this.rangeAreaProgram, 'u' + n);
+                this.rangeAreaIdTexture = gl.createTexture();
+                this.rangeAreaShownTexture = gl.createTexture();
+                this.rangeAreaVao = gl.createVertexArray();
+                for (const t of [this.rangeAreaIdTexture, this.rangeAreaShownTexture]) {
+                    gl.bindTexture(gl.TEXTURE_2D, t);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                }
+                gl.bindTexture(gl.TEXTURE_2D, null);
+            }
+        }
+        // (Its body: drawRangeAreas, which uses it.)
+        _drawRangeAreasBody(R, U) {
+            const gl = this.gl;
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, this.rangeAreaIdTexture);
+            if (this.rangeAreaIdsVersion !== R.areaIdsVersion || this.rangeAreaIdsData !== R.areaIds || this.rangeAreaWidth !== R.width || this.rangeAreaHeight !== R.height) {
+                gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+                if (this.rangeAreaWidth !== R.width || this.rangeAreaHeight !== R.height) gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32I, R.width, R.height, 0, gl.RED_INTEGER, gl.INT, R.areaIds);
+                else gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, R.width, R.height, gl.RED_INTEGER, gl.INT, R.areaIds);
+                this.rangeAreaIdsVersion = R.areaIdsVersion; this.rangeAreaIdsData = R.areaIds; this.rangeAreaWidth = R.width; this.rangeAreaHeight = R.height;
+            }
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, this.rangeAreaShownTexture);
+            const shownWidth = Math.min(4096, R.areaCount), shownHeight = Math.ceil(R.areaCount / shownWidth);
+            if (this.rangeAreaShownVersion !== R.shownVersion || this.rangeAreaShownData !== R.shown || this.rangeAreaShownW !== shownWidth || this.rangeAreaShownH !== shownHeight) {
+                let bytes = R.shown;
+                if (bytes.length !== shownWidth * shownHeight) {
+                    if (!this.rangeAreaShownPad || this.rangeAreaShownPad.length !== shownWidth * shownHeight) this.rangeAreaShownPad = new Uint8Array(shownWidth * shownHeight);
+                    this.rangeAreaShownPad.set(bytes.subarray(0, Math.min(bytes.length, shownWidth * shownHeight)));
+                    bytes = this.rangeAreaShownPad;
+                }
+                gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+                if (this.rangeAreaShownW !== shownWidth || this.rangeAreaShownH !== shownHeight) gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, shownWidth, shownHeight, 0, gl.RED, gl.UNSIGNED_BYTE, bytes);
+                else gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, shownWidth, shownHeight, gl.RED, gl.UNSIGNED_BYTE, bytes);
+                gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+                this.rangeAreaShownVersion = R.shownVersion; this.rangeAreaShownData = R.shown; this.rangeAreaShownW = shownWidth; this.rangeAreaShownH = shownHeight;
+            }
+            gl.useProgram(this.rangeAreaProgram);
+            gl.bindVertexArray(this.rangeAreaVao);
+            gl.uniformMatrix4fv(U.ViewProjection, false, this.tmpViewProjection);
+            gl.uniform2f(U.Size, R.width, R.height);
+            gl.uniform1i(U.AreaIds, 0);
+            gl.uniform1i(U.Shown, 1);
+            gl.uniform1i(U.ShownWidth, shownWidth);
+            gl.uniform4f(U.Color, 120 / 255, 220 / 255, 1, .65);
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+            gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            gl.depthMask(false);
+            if (R.seeThrough) gl.disable(gl.DEPTH_TEST); else { gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); }
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            gl.bindVertexArray(null);
+            gl.activeTexture(gl.TEXTURE0);
             gl.depthMask(true); gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
             gl.drawBuffers(this.sceneDrawBuffers);
         }
@@ -7049,17 +7183,30 @@
                     offsets.set(name,bytes);bytes=Math.ceil((bytes+F.cap*F[name].BYTES_PER_ELEMENT)/4)*4;
                 }
                 bytes += 16384 * 4;
-                if (!S.bytes || S.bytes < bytes) { S.bytes=bytes;gl.bufferData(gl.ARRAY_BUFFER,bytes,gl.DYNAMIC_DRAW); }
+                // Units: only the blocks of slots changed since the frame the
+                // buffer holds, when the frame says which (presentation_worker.js
+                // markDirty: a full upload was ~11 MB a tick at 100k a team).
+                // (Defence3Renderer3D.partialColumnUploads = false: whole columns, for comparisons.)
+                const D = !structure && Defence3Renderer3D.partialColumnUploads !== false && F.dirty;
+                let since = D && S.stream === D.stream && S.cap === F.cap && S.seq < D.seq ? S.seq : -1;
+                if (!S.bytes || S.bytes < bytes) { S.bytes=bytes;gl.bufferData(gl.ARRAY_BUFFER,bytes,gl.DYNAMIC_DRAW);since=-1; }
+                // (Units' uploads counted: columnUploadStats.)
+                const stats = !structure ? this.columnUploadStats || (this.columnUploadStats = { frames: 0, full: 0, bytes: 0, calls: 0, ms: 0 }) : { frames: 0, full: 0, bytes: 0, calls: 0, ms: 0 }, t0 = performance.now();
+                stats.frames++;
+                if (since >= 0) this._columnStoreUploadChanged(F, D, since, offsets, stats);
+                else stats.full++;
                 const seen = new Set();
                 for (let i=0;i<fields.length;i++) {
                     const name=fields[i];
                     if (!name) {gl.disableVertexAttribArray(i);gl.vertexAttrib1f(i,1);continue;}
                     const a=F[name], type=a instanceof Float32Array?gl.FLOAT:a instanceof Int32Array?gl.INT:a instanceof Int16Array?gl.SHORT:gl.UNSIGNED_BYTE;
                     const offset=offsets.get(name);
-                    if (!seen.has(name)) {gl.bufferSubData(gl.ARRAY_BUFFER,offset,a.subarray(0,F.n));seen.add(name);}
+                    if (since < 0 && !seen.has(name)) {gl.bufferSubData(gl.ARRAY_BUFFER,offset,a.subarray(0,F.n));seen.add(name);stats.bytes+=F.n*a.BYTES_PER_ELEMENT;stats.calls++;}
                     gl.enableVertexAttribArray(i);gl.vertexAttribPointer(i,1,type,false,0,offset);
                 }
-                for (const name of extra) if (!seen.has(name) && offsets.has(name)) { gl.bufferSubData(gl.ARRAY_BUFFER,offsets.get(name),F[name].subarray(0,F.n)); seen.add(name); }
+                if (since < 0) for (const name of extra) if (!seen.has(name) && offsets.has(name)) { gl.bufferSubData(gl.ARRAY_BUFFER,offsets.get(name),F[name].subarray(0,F.n)); seen.add(name);stats.bytes+=F.n*F[name].BYTES_PER_ELEMENT;stats.calls++; }
+                S.stream = D ? D.stream : null; S.seq = D ? D.seq : -1; S.cap = F.cap;
+                stats.ms += performance.now() - t0;
                 S.frame=F;
                 S.maskVersion=-1;
                 // (Where each column lies: the selection mask draws from
@@ -7067,6 +7214,30 @@
                 S.offsets=offsets;
             }
             return S;
+        }
+        // The runs of blocks changed after frame `since` (its buffer bound to
+        // ARRAY_BUFFER, holding that frame); runs apart by up to
+        // columnUploadGap blocks as one (a call costs more than 2 KB). (px / py
+        // copied on the GPU from the last frame's x / y, in the same buffer,
+        // took Edge from ~100 to ~37 FPS: ANGLE's copies through its staging
+        // buffer wait for the GPU. They are uploaded as any column.)
+        _columnStoreUploadChanged(F, D, since, offsets, stats) {
+            const gl = this.gl, B = D.block, n = F.n, used = Math.min(D.nb, Math.ceil(n / B)), ST = D.stamps, cols = D.cols;
+            const gap = Math.max(0, Defence3Renderer3D.columnUploadGap | 0);
+            for (let c = 0; c < cols.length; c++) {
+                const off = offsets.get(cols[c]), a = F[cols[c]];
+                if (off === undefined || !a) continue;
+                const base = c * D.nb, bpe = a.BYTES_PER_ELEMENT;
+                for (let b = 0; b < used;) {
+                    if (ST[base + b] <= since) { b++; continue; }
+                    let e = b + 1, k = e;
+                    while (k < used && k - e <= gap) { if (ST[base + k] > since) e = k + 1; k++; }
+                    const s0 = b * B, s1 = Math.min(n, e * B);
+                    gl.bufferSubData(gl.ARRAY_BUFFER, off + s0 * bpe, a, s0, s1 - s0);
+                    stats.bytes += (s1 - s0) * bpe; stats.calls++;
+                    b = e;
+                }
+            }
         }
         drawFrameColumns(C, snapshot) {
             const gl = this.gl;
@@ -7603,6 +7774,8 @@
     // Temporary live diagnostic. Changing this only affects 3D sprite sampling;
     // it neither rebuilds atlases nor changes the actual 2D renderer.
     Defence3Renderer3D.blendBakedViews = true;
+    // (Unit column uploads: runs of changed blocks this far apart sent as one; _columnStoreUploadChanged.)
+    Defence3Renderer3D.columnUploadGap = 2;
     Defence3Renderer3D.bakedSampling = 'filtered';
     Defence3Renderer3D.FlatSpriteBatch = FlatSpriteBatch;
     Defence3Renderer3D.PersistentInstances = PersistentInstances;

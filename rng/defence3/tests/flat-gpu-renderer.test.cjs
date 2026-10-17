@@ -113,7 +113,7 @@ const pipeline=vm.createContext({performance,_overlayDrawStart:0,_overlayDrawMs:
     _fpsFrameCount:0,_fpsLastTime:0,_buildMenuRefreshCounter:0,_minimapRefreshCounter:0,_backgroundCacheRefreshCounter:0,
     updateVisibilityHistory(){},updateCamera(){},graphicsOptions:{},ensure3DRendererInitialized:()=>({setGraphicsOptions(){},render(s){received=s;}}),
     build3DFrameData:flat2d=>({flat2d}),draw(){worldDraws++;},drawMinimap(){},drawInteractionOverlay(){},
-    flushTickUiRequests(){},updateHUD(){},updateControlGroupBar(){},_refreshInfoPanelPeriodic(){},_applyRenderCameraSnap(){}});
+    flushTickUiRequests(){},updateHUD(){},updateControlGroupBar(){},_refreshInfoPanelPeriodic(){},_applyRenderCameraSnap(){},_maybePrewarm3DView(){}});
 vm.runInContext(source.slice(begin,end),pipeline);
 pipeline.processRenderFrame(0);
 assert.equal(received.flat2d,true);assert.equal(worldDraws,0,'2D bypasses Canvas world drawing');

@@ -610,6 +610,22 @@
 
         #statsmap-json {
             resize: vertical;
+            height: 420px;
+            overflow: auto;
+            white-space: pre;
+            user-select: text;
+            -webkit-user-select: text;
+        }
+
+        /* One entry is ~3000 lines: blocks off screen are not laid out (a
+           textarea took ~50 ms of layout per entry shown). */
+        #statsmap-json > pre {
+            margin: 0;
+            font: inherit;
+            user-select: text;
+            -webkit-user-select: text;
+            content-visibility: auto;
+            contain-intrinsic-size: auto 1200px;
         }
 
         #config-editor-text {

@@ -922,7 +922,9 @@ function _bbSelectInShop(key) {
     selectedBuildItem = isBuildItemAvailable(key) ? key : null;
     updateBuildMenu();
     let item = _buildMenuItems[key];
-    if (item && item.scrollIntoView) item.scrollIntoView({ block: 'nearest' });
+    // (Not scrollIntoView: it also scrolls the overflow:hidden page layout,
+    // which shifted the whole game screen.)
+    if (item) scrollIntoViewWithin(item, document.getElementById('build-items'));
     return true;
 }
 

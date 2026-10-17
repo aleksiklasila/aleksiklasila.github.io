@@ -2134,6 +2134,14 @@ function initInput() {
     });
 
     window.addEventListener('mousemove', (e) => {
+        // A drag whose button is no longer held lost its mouseup (a native
+        // drag and drop, an OS dialog, a release outside the window): end it
+        // here, or the selection box/orbit/placement follows the bare mouse.
+        if (!(e.buttons & 4)) renderer3dRotateDrag = null;
+        if (!(e.buttons & 1) && (isBoxSelecting || buildPlacementDragActive)) {
+            stopBuildPlacementDrag();
+            if (isBoxSelecting) gameArea.dispatchEvent(new MouseEvent('mouseup', { button: 0, clientX: e.clientX, clientY: e.clientY, shiftKey: e.shiftKey }));
+        }
         if (renderer3dRotateDrag && renderDimensionMode === '3d' && renderer3dInstance && typeof renderer3dInstance.adjustOrbit === 'function') {
             let dx = e.clientX - renderer3dRotateDrag.clientX;
             let dy = e.clientY - renderer3dRotateDrag.clientY;

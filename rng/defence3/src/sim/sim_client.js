@@ -1018,11 +1018,18 @@ function _simClientApplyFrame(frame, shown) {
             F.renderMovingCount = B.movingCount;
         }
     }
+    // (Which blocks of the renderer's columns changed: presentation_worker.js markDirty.)
+    if (frame.dirty) {
+        const D = frame.dirty;
+        F.dirty = { seq: D.seq, stream: D.stream, block: D.block, nb: D.nb, cols: D.cols, stamps: new Int32Array(F.buf, D.offset, D.cols.length * D.nb) };
+    }
     F.renderMotionPad = 0;
     let old = _pageFrame;
     if (old && shown < 1) {
         // Keep worker buckets conservative after rebasing to the last drawn position.
         _simClientRebaseFrame(F, old, shown);
+        // (Its px, py rewritten here: not what the worker marked.)
+        F.dirty = null;
     }
     if (frame.mver !== c.mver || c.frameUnits !== units) {
         let list = old && c.frameUnits === units ? _simClientUpdateStableSlots(F, old) : null;

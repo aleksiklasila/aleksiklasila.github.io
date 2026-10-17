@@ -305,6 +305,11 @@
             this.programs = new Map();
             this.targets = null;
             this.stats = { passes: 0 };
+            // A new settings variant compiled on the frame that first needed
+            // it: 55-140 ms on the page. With this extension it compiles in
+            // the background while the last ready variant keeps drawing.
+            this.parallel = typeof gl.getExtension === 'function' ? gl.getExtension('KHR_parallel_shader_compile') : null;
+            this.lastReady = null;
         }
 
         // Features the composite pass needs for these options and this frame.
@@ -332,20 +337,60 @@
             return !!(f.ao || f.outline || f.shadowmap);
         }
 
+        // The program for a variant, or null while it still compiles in the
+        // background (asking a pending program's status would wait for it).
         program(key, build) {
             let entry = this.programs.get(key);
-            if (entry) return entry;
             let gl = this.gl;
-            let program = compile(gl, FULLSCREEN_VS, build());
+            if (!entry) {
+                if (!this.parallel) {
+                    entry = { program: compile(gl, FULLSCREEN_VS, build()), pending: true };
+                    this.programs.set(key, entry);
+                    return this.finishProgram(entry);
+                }
+                let make = (type, src) => { let s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; };
+                let program = gl.createProgram();
+                let vs = make(gl.VERTEX_SHADER, FULLSCREEN_VS), fs = make(gl.FRAGMENT_SHADER, build());
+                gl.attachShader(program, vs); gl.attachShader(program, fs);
+                gl.linkProgram(program);
+                entry = { program, vs, fs, pending: true };
+                this.programs.set(key, entry);
+            }
+            if (!entry.pending) return entry;
+            if (entry.vs && !gl.getProgramParameter(entry.program, this.parallel.COMPLETION_STATUS_KHR)) return null;
+            return this.finishProgram(entry);
+        }
+
+        finishProgram(entry) {
+            let gl = this.gl, program = entry.program;
+            if (entry.vs) {
+                let ok = gl.getProgramParameter(program, gl.LINK_STATUS);
+                let msg = ok ? '' : (gl.getShaderInfoLog(entry.fs) || gl.getShaderInfoLog(entry.vs) || gl.getProgramInfoLog(program) || 'post program link error');
+                gl.deleteShader(entry.vs); gl.deleteShader(entry.fs); entry.vs = entry.fs = null;
+                if (!ok) { gl.deleteProgram(program); throw new Error(msg); }
+            }
             let uniforms = {};
             let count = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS) || 0;
             for (let i = 0; i < count; i++) {
                 let info = gl.getActiveUniform(program, i);
                 if (info) uniforms[info.name] = gl.getUniformLocation(program, info.name);
             }
-            entry = { program, uniforms };
-            this.programs.set(key, entry);
+            entry.uniforms = uniforms;
+            entry.pending = false;
             return entry;
+        }
+
+        // Every program a variant draws with, started together; null until
+        // all are ready.
+        variantPrograms(f, aoTaps) {
+            let list = {
+                ao: f.ao ? this.program('ao' + aoTaps, () => AO_FS(aoTaps)) : true,
+                bright: f.bloom ? this.program('bright', () => BRIGHT_FS) : true,
+                blur: f.bloom ? this.program('blur', () => BLUR_FS) : true,
+                composite: this.program(compositeKey(f), () => compositeSource(f))
+            };
+            for (let k in list) if (!list[k]) return null;
+            return list;
         }
 
         ensureTargets() {
@@ -368,11 +413,24 @@
 
         // frame: { colorTex, depthTex, width, height, near, far, flat,
         //          quadVao, pixelsPerWorld, pixelRatio }
+        // false: nothing drawn (the caller blits the scene as it is).
         render(options, frame) {
             let gl = this.gl;
             let f = this.features(options, frame.flat);
             // Shadow-mapped modes resolve only once the map exists this frame.
             if (f.shadowmap && !frame.shadow) f.shadowmap = 0;
+            let aoHigh = options.ao === 'high', aoTaps = aoHigh ? 16 : 8;
+            let programs = this.variantPrograms(f, aoTaps);
+            if (programs) this.lastReady = { f, aoHigh, aoTaps, programs, depth: this.needsDepth(options, frame.flat) };
+            else {
+                // Still compiling: the last ready variant, if this frame has
+                // what it reads (depth is resolved only for options needing
+                // it; the shadow map only when shadows are on).
+                let last = this.lastReady;
+                let depth = this.needsDepth(options, frame.flat);
+                if (!last || ((last.f.ao || last.f.outline || last.f.shadowmap) && !depth) || (last.f.shadowmap && !frame.shadow)) return false;
+                ({ f, aoHigh, aoTaps, programs } = last);
+            }
             this.stats.passes = 0;
             let { width, height } = frame;
             gl.disable(gl.DEPTH_TEST);
@@ -381,12 +439,10 @@
             let targets = (f.ao || f.bloom) ? this.ensureTargets() : null;
 
             if (f.ao) {
-                let high = options.ao === 'high';
-                let div = high ? 1 : 2;
+                let div = aoHigh ? 1 : 2;
                 let t = targets.ao;
                 sizeTarget(gl, t, Math.max(1, Math.ceil(width / div)), Math.max(1, Math.ceil(height / div)));
-                let taps = high ? 16 : 8;
-                let p = this.program('ao' + taps, () => AO_FS(taps));
+                let p = programs.ao;
                 gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
                 gl.viewport(0, 0, t.width, t.height);
                 gl.useProgram(p.program);
@@ -403,7 +459,7 @@
                 let bw = Math.max(1, Math.ceil(width / 4)), bh = Math.max(1, Math.ceil(height / 4));
                 sizeTarget(gl, targets.bloomA, bw, bh);
                 sizeTarget(gl, targets.bloomB, bw, bh);
-                let bright = this.program('bright', () => BRIGHT_FS);
+                let bright = programs.bright;
                 gl.bindFramebuffer(gl.FRAMEBUFFER, targets.bloomA.fb);
                 gl.viewport(0, 0, bw, bh);
                 gl.useProgram(bright.program);
@@ -411,7 +467,7 @@
                 gl.uniform1i(bright.uniforms.uColor, 0);
                 gl.uniform2f(bright.uniforms.uTexel, 1 / width, 1 / height);
                 this.drawQuad(frame.quadVao);
-                let blur = this.program('blur', () => BLUR_FS);
+                let blur = programs.blur;
                 gl.useProgram(blur.program);
                 gl.uniform1i(blur.uniforms.uColor, 0);
                 gl.bindFramebuffer(gl.FRAMEBUFFER, targets.bloomB.fb);
@@ -424,8 +480,7 @@
                 this.drawQuad(frame.quadVao);
             }
 
-            let key = 'c:' + Object.keys(f).filter(k => f[k]).map(k => k + '=' + f[k]).join(',');
-            let p = this.program(key, () => compositeSource(f));
+            let p = programs.composite;
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
             gl.viewport(0, 0, width, height);
             gl.useProgram(p.program);
@@ -470,7 +525,12 @@
             }
             gl.bindVertexArray(null);
             gl.enable(gl.DEPTH_TEST);
+            return true;
         }
+    }
+
+    function compositeKey(f) {
+        return 'c:' + Object.keys(f).filter(k => f[k]).map(k => k + '=' + f[k]).join(',');
     }
 
     Defence3PostProcess.compositeSource = compositeSource;

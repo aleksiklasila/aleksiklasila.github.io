@@ -1035,8 +1035,9 @@ function build3DOverlayData(bounds, alpha) {
     }
 
     // The team's whole range: what it sees, drawn on the GPU from the sight
-    // grid (renderer3d drawRangeVisibility); other modes trace their sources.
-    overlays.rangeVisibility = getRangeVisibilityOverlay();
+    // grid; other modes: the areas their sources reach, also outlined on the
+    // GPU (renderer3d drawRangeVisibility).
+    overlays.rangeVisibility = getRangeGpuOverlay(activeSelectedEntities, activeSelectedUnits);
     overlays.rangeLines = overlays.rangeVisibility ? [] : clipRangeBoundaryToBounds(getRenderRangeBoundary(activeSelectedEntities, activeSelectedUnits),
         bounds.minGx - 1, bounds.minGy - 1, bounds.maxGx + 2, bounds.maxGy + 2);
     overlays.rangeSeeThrough = renderRangeSeeThrough;
@@ -2752,21 +2753,29 @@ function getRangeVisibilityOverlay() {
     if (V.player !== localPlayerId || !V.data || V.data.length < GRID_W * GRID_H) return null;
     return { data: V.data, width: GRID_W, height: GRID_H, version: V.version, seeThrough: renderRangeSeeThrough };
 }
+// The range overlay the GPU draws: the sight grid for the team's whole
+// range, else the areas the chosen sources reach (range_overlay.js).
+function getRangeGpuOverlay(selectedEntities = null, selectedUnitsList = null) {
+    // (Off: the next mode starts its coverage afresh, range_overlay.js.)
+    if (renderRangeMode === RENDER_RANGE_NONE) { rangeShownState.context = null; return null; }
+    return getRangeVisibilityOverlay()
+        || getRangeAreaOverlay(selectedEntities || getActiveEntities(), selectedUnitsList || getActiveUnitsForRender());
+}
 function buildScaleOverlays(cache) {
     // A big selection: outlined on the GPU (drawSelectionMask), every frame.
     const selectionMask = getSelectionMaskOverlay();
     if (selectionMask) {
         return cache.overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: getOrderMarkers(), bars: [], texts: [], worldTileSize: TILE,
-            rangeVisibility: getRangeVisibilityOverlay(), selectionMask };
+            rangeVisibility: getRangeGpuOverlay(), selectionMask };
     }
     // (Boxes of 16-tile chunks: made again for a new selection at once, as
     // its units move at most 5 times a second: 100k selected units each
     // tick cost ~13 ms.)
     const key = selectedUnits.length + '|' + selectedEntities.length + '|' + JSON.stringify(activeSubGroups), nowMs = performance.now();
     if (cache.overlayKey === key && cache.selectedUnits === selectedUnits && cache.selectedEntities === selectedEntities
-        && (cache.overlayTick === gameTime || nowMs - (cache.overlayAt || 0) < 200)) { cache.overlays.rangeVisibility = getRangeVisibilityOverlay(); cache.overlays.markers = getOrderMarkers(); return cache.overlays; }
+        && (cache.overlayTick === gameTime || nowMs - (cache.overlayAt || 0) < 200)) { cache.overlays.rangeVisibility = getRangeGpuOverlay(); cache.overlays.markers = getOrderMarkers(); return cache.overlays; }
     cache.overlayTick = gameTime; cache.overlayAt = nowMs;
-    const overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: getOrderMarkers(), bars: [], texts: [], worldTileSize: TILE, rangeVisibility: getRangeVisibilityOverlay() };
+    const overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: getOrderMarkers(), bars: [], texts: [], worldTileSize: TILE, rangeVisibility: getRangeGpuOverlay() };
     const cw = Math.ceil(GRID_W / 16), nb = cw * Math.ceil(GRID_H / 16);
     let B = cache.overlayBoxes;
     if (!B || B.n !== nb) B = cache.overlayBoxes = { n: nb, box: new Float32Array(nb * 4), stamp: new Int32Array(nb), now: 0, used: new Int32Array(nb), count: 0 };
@@ -6115,6 +6124,36 @@ function _buildCameraSlide() {
     _cameraSlideLast = { frameTime: F.frameTime, durMs, base: F.base, baseInv: F.baseInv, shift };
 }
 
+// The first 3D frame compiles the 3D-only shaders and builds their first data
+// (~570 ms on the page: a tick gap for every player when one switched to 3D
+// mid-match). Draw one hidden 3D frame while the match load popup still
+// covers the screen and the world is loaded, before any tick is played.
+// Twice: the shaders as soon as the world is loaded, then the units' first
+// buffers, slot textures and panels once the frame has unit columns.
+let _view3DPrewarmed = null;
+function _maybePrewarm3DView(renderer3d) {
+    const done = _view3DPrewarmed && _view3DPrewarmed.renderer === renderer3d ? _view3DPrewarmed : null;
+    if ((done && done.units) || renderDimensionMode !== '2d' || !gameStarted) return;
+    const overlay = document.getElementById('match-load-overlay');
+    if (!overlay || overlay.style.display === 'none') return;
+    if (typeof simClientWorldReady === 'function' && !simClientWorldReady()) return;
+    renderDimensionMode = '3d';
+    try {
+        const snapshot = build3DFrameData(false);
+        const units = !!(snapshot.columnLayers && snapshot.columnLayers.units);
+        if (done && !units) return;
+        _view3DPrewarmed = { renderer: renderer3d, units };
+        if (!done && typeof renderer3d.prewarmPrograms === 'function') renderer3d.prewarmPrograms();
+        renderer3d.setGraphicsOptions(graphicsOptions);
+        renderer3d.render(snapshot);
+    } catch (err) {
+        _view3DPrewarmed = { renderer: renderer3d, units: true };
+        console.warn('[renderer] 3D view prewarm failed:', err && err.message || err);
+    } finally {
+        renderDimensionMode = '2d';
+    }
+}
+
 function processRenderFrame(timestamp) {
     if (!ctx || !canvas || !bgCtx || !minimapCtx) {
         ensureRenderContextsInitialized();
@@ -6133,6 +6172,7 @@ function processRenderFrame(timestamp) {
     let renderer3dSnapshot = null;
     let renderer3d = ensure3DRendererInitialized();
     if (renderer3d) {
+        _maybePrewarm3DView(renderer3d);
         renderer3dSnapshot = build3DFrameData(renderDimensionMode === '2d');
         renderer3d.setGraphicsOptions(graphicsOptions);
         if (typeof renderer3d.gpuTimerBegin === 'function') renderer3d.gpuTimerBegin();

@@ -68,7 +68,7 @@ async function launch(url, { width = 1280, height = 800, timeoutMs = 120000 } = 
         else { try { process.kill(-proc.pid); } catch {} try { proc.kill('SIGKILL'); } catch {} }
         try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
     };
-    return { ev, evFn: fn => ev(`(${fn.toString()})()`), errors, close };
+    return { ev, evFn: fn => ev(`(${fn.toString()})()`), send, errors, close };
 }
 
 module.exports = { launch, EDGE };
