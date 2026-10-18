@@ -917,14 +917,14 @@ SIM_KERNELS[SIM_KERNEL_VISIBILITY] = function (R, P, chunk) {
 // the next tick's start state) and the entries the unit index build listed.)
 const _simSepPackW = [false, true].map(live => _simWK(['sep.eslot', live ? 'unit.x' : 'unit.x0', live ? 'unit.y' : 'unit.y0', live ? 'unit.dead' : 'unit.sepD0', 'unit.sepR0',
     live ? 'unit.sepLayer' : 'unit.sepL0', 'unit.collisionR', 'unit.r', 'unit.owner', 'unit.id', 'unit.sepMov',
-    'sep.ord', 'sep.qx', 'sep.qy', 'sep.qr', 'sep.meta', 'sep.qid']));
+    'sep.ord', 'sep.qx', 'sep.qy', 'sep.qr', 'sep.meta', 'sep.qid', 'unit.sepIv', 'sep.qv']));
 SIM_KERNELS[SIM_KERNEL_SEP_PACK] = function (R, P, chunk) {
     const live = P[5] === 1, NL = live ? R['ix.listed'][0] | 0 : P[0] | 0, per = P[1] | 0;
     const mode = P[4] | 0, t0 = P[3] | 0, rest0 = P[2] | 0;
     if (_simWasmOk(R)) {
         const A = _simWPtrsE(_simSepPackW[live ? 1 : 0]);
         if (A !== null) {
-            _simWasmX.sep_pack(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10], A[11], A[12], A[13], A[14], A[15], A[16],
+            _simWasmX.sep_pack(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10], A[11], A[12], A[13], A[14], A[15], A[16], A[17], A[18],
                 NL, per, rest0, t0, mode, live ? 1 : 0, chunk);
             return;
         }
@@ -953,7 +953,8 @@ SIM_KERNELS[SIM_KERNEL_SEP_MARK] = function (R, P, chunk) {
 // looks at every chunk around it in reach. The units of a band of chunk
 // rows look; a band's pushes reach P[2] (at least 2 * the reach) rows past
 // it, so two bands of one stage never write the same slot.
-const _simSepPairsW = _simWK(['sep.ord', 'sep.qx', 'sep.qy', 'sep.qr', 'sep.meta', 'sep.qid', 'sep.ekey', 'sep.px', 'sep.py', 'sep.ov', 'sep.hit']);
+const _simSepPairsW = _simWK(['sep.ord', 'sep.qx', 'sep.qy', 'sep.qr', 'sep.meta', 'sep.qid', 'sep.ekey', 'sep.px', 'sep.py', 'sep.ov', 'sep.hit',
+    'sep.qv', 'sep.cx', 'sep.cy', 'sep.fx', 'sep.fy']);
 SIM_KERNELS[SIM_KERNEL_SEP_PAIRS] = function (R, P, chunk) {
     const CW = P[0] | 0, CH = P[1] | 0, H = P[2] | 0, pad = P[3], farAny = P[4], Q = P[5], BOTH = P[6], ONE = P[7];
     const listed = P[15] === 1 ? R['ix.listed'][0] | 0 : P[9] | 0, cws = P[10], ep = P[11] | 0, MOVER = P[12], YIELD = P[13];
@@ -962,7 +963,7 @@ SIM_KERNELS[SIM_KERNEL_SEP_PAIRS] = function (R, P, chunk) {
     if (_simWasmOk(R)) {
         const A = _simWPtrsE(_simSepPairsW);
         if (A !== null) {
-            _simWasmX.sep_pairs(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10],
+            _simWasmX.sep_pairs(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10], A[11], A[12], A[13], A[14], A[15],
                 CW, CH, H, pad, farAny, Q, BOTH, ONE, listed, cws, MOVER, YIELD, P[14] | 0, chunk);
             return;
         }
@@ -1127,9 +1128,14 @@ const _SIM_MOVE_NAV = 11, _SIM_MOVE_WNAV = 160, _SIM_MOVE_W2 = 268;
 const _simMoveW = _simWK([..._SIM_MOVE_WNAMES, ...Array.from({ length: _SIM_MOVE_NAV * 8 }, (_, i) => {
     const p = i >> 3, j = i & 7;
     return '?' + (j < 7 ? 'nav.' + p + '.' + ['fields', 'partL', 'partB', 'nb', 'nt', 'np', 'meta'][j] : p === 0 ? 'mv.wall' : p === 1 ? 'mv.airwall' : 'mv.cwall.' + p);
-}), ..._SIM_MOVE_WNAMES2, ...Array.from({ length: _SIM_MOVE_NAV }, (_, p) => '?nav.' + p + '.atl')]);
-// (Words 430..: each profile's atlas header, mv.rs W_ATLAS.)
-const _SIM_MOVE_WATL = 430;
+}), ..._SIM_MOVE_WNAMES2, ...Array.from({ length: _SIM_MOVE_NAV }, (_, p) => '?nav.' + p + '.atl'),
+    // (Words 448..: the flow-relative contact response, mv.rs push4: each
+    // unit's intended velocity and closing response carried, the pair
+    // kernel's closing and local flow sums.)
+    '?unit.sepIv', '?unit.sepCv', '?sep.cx', '?sep.cy', '?sep.fx', '?sep.fy']);
+// (Words 430..: each profile's atlas header, mv.rs W_ATLAS; 448..: the
+// contact response's, mv.rs W_SIV (300..427: mv_move's step scratch).)
+const _SIM_MOVE_WATL = 430, _SIM_MOVE_WSEP = 448, _SIM_MOVE_NSEP = 6;
 let _simMoveWFill = -1, _simMoveWArgs = 0;
 // Fills the argument block for a movement kernel's Rust twin; false: the
 // JavaScript kernel runs (no wasm, or an array not in the heap).
@@ -1139,11 +1145,12 @@ function _simMoveWasm(R, P) {
     if (A === null) return false;
     if (_simMoveWFill !== _simMoveW.binds || _simMoveWArgs !== _simWasmArgs) {
         const I = _simWasmArgI, nb = _SIM_MOVE_WNAMES.length;
-        I.fill(0, 0, 299);
+        I.fill(0, 0, 299); I.fill(0, _SIM_MOVE_WATL, _SIM_MOVE_WSEP + _SIM_MOVE_NSEP);
         for (let i = 0; i < nb; i++) I[i] = _simWEnc(A[i]);
         for (let i = 0; i < _SIM_MOVE_NAV * 8; i++) I[_SIM_MOVE_WNAV + i] = _simWEnc(A[nb + i]);
         for (let i = 0; i < _SIM_MOVE_WNAMES2.length; i++) I[_SIM_MOVE_W2 + i] = _simWEnc(A[nb + _SIM_MOVE_NAV * 8 + i]);
         for (let p = 0; p < _SIM_MOVE_NAV; p++) I[_SIM_MOVE_WATL + p] = _simWEnc(A[nb + _SIM_MOVE_NAV * 8 + _SIM_MOVE_WNAMES2.length + p]);
+        for (let i = 0; i < _SIM_MOVE_NSEP; i++) I[_SIM_MOVE_WSEP + i] = _simWEnc(A[nb + _SIM_MOVE_NAV * 9 + _SIM_MOVE_WNAMES2.length + i]);
         for (let p = 0; p < _SIM_MOVE_NAV; p++) { const a = R['nav.' + p + '.partL']; I[250 + p] = a ? a.length : 0; }
         const len = nm => R[nm] ? R[nm].length : 0, COV = R['vis.cover'];
         I[262] = len('area.off'); I[263] = len('wk.ver'); I[264] = len('nav.fmeta.0'); I[265] = len('nav.fmeta.1');
@@ -1765,7 +1772,7 @@ SIM_KERNELS[SIM_KERNEL_TILE_OWNERS] = function (R, P, chunk) { _simRust(_simTile
 // kernel's and _followNavNode's arrival in a crowd). The search for enemy
 // units is the acquisition tier's (SIM_KERNEL_ACQ_SCAN).
 const _simCombatScanW = _simWK(['unit.mvOut', 'unit.commandState', 'unit.dead', 'unit.x', 'unit.y', 'unit.owner', 'unit.sepKey', 'sep.rs', 'sep.rc', 'sep.rstamp', 'sep.eslot',
-    'unit.cwNear', 'unit.cwTick', 'unit.cwDense', 'unit.mvNavLD']);
+    'unit.cwNear', 'unit.cwTick', 'unit.cwDense', 'unit.mvNavLD', 'unit.rtEnd']);
 SIM_KERNELS[SIM_KERNEL_COMBAT_SCAN] = function (R, P, chunk) { _simRust(_simCombatScanW, P, chunk, 'k_combat_scan', 'COMBAT_SCAN'); };
 
 // The acquisition tier (unit.js _acqTierStep): the snapshot of what the

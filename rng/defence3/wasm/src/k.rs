@@ -1527,6 +1527,18 @@ pub unsafe extern "C" fn k_combat_commit(a: u32, chunk: i32) {
     }
 }
 
+/// Whether two route ends (tiles, -1 none) are of one crowd: within
+/// CROWD_END_TILES of each other (an end unknown: any crowd).
+const CROWD_END_TILES: i32 = 3;
+#[inline(always)]
+fn same_end(a: i32, b: i32, gw: i32) -> bool {
+    if a < 0 || b < 0 {
+        return a < 0;
+    }
+    let (ay, by) = (idiv(a, gw), idiv(b, gw));
+    (a - ay * gw - (b - by * gw)).abs() <= CROWD_END_TILES && (ay - by).abs() <= CROWD_END_TILES
+}
+
 /// SIM_KERNEL_COMBAT_SCAN (the crowd flags, unit.js combatScanRun): for
 /// moving or attack-moving units near a group's destination or waiting
 /// (mvNavLD not -1), whether an idle or waiting (mvNavLD <= -2) unit of its
@@ -1535,7 +1547,8 @@ pub unsafe extern "C" fn k_combat_commit(a: u32, chunk: i32) {
 /// with the tick (unit.cwTick). Arrays: unit.mvOut, unit.commandState,
 /// unit.dead, unit.x, unit.y, unit.owner, unit.sepKey, sep.rs, sep.rc,
 /// sep.rstamp, sep.eslot, unit.cwNear, unit.cwTick, unit.cwDense,
-/// unit.mvNavLD. P: [0] slots, [1] per job, [2] tick, [3] chunks wide,
+/// unit.mvNavLD, unit.rtEnd (an idle or waiting unit counts only with its
+/// route's end by this one's: its own destination's crowd). P: [0] slots, [1] per job, [2] tick, [3] chunks wide,
 /// [4] high, [5] tile, [6] epoch, [8] CMD_IDLE, [9] CMD_ATTACK_MOVING,
 /// [13] absent key, [14] chunk size, [17] CMD_MOVING.
 #[no_mangle]
@@ -1545,6 +1558,9 @@ pub unsafe extern "C" fn k_combat_scan(a: u32, chunk: i32) {
     let (out, cmd, dead, xs, ys, own, sep) = (k.p::<u8>(0), k.p::<u8>(1), k.p::<u8>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i8>(5), k.p::<u32>(6));
     let (rs, rc, rst, es) = (k.p::<i32>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<i32>(10));
     let (cwn, cwt, cwd, nld) = (k.p::<u8>(11), k.p::<i32>(12), k.p::<u16>(13), k.p::<f32>(14));
+    // (Route ends: a crowd of its own destination's, within CROWD_END_TILES
+    // of its end; P[15] the grid's width.)
+    let (rte, gw) = (k.p::<i32>(15), k.i(15).max(1));
     let (t, cw, ch, ep) = (k.i(2), k.i(3), k.i(4), k.i(6));
     let (cmd_idle, cmd_am, cmd_move) = (k.i(8) as u8, k.i(9) as u8, k.i(17) as u8);
     let absent = k.f(13) as u32;
@@ -1595,7 +1611,7 @@ pub unsafe extern "C" fn k_combat_scan(a: u32, chunk: i32) {
                 }
                 let n = g(rc, kk);
                 dense += n;
-                if near != 0 {
+                if near == 2 {
                     continue;
                 }
                 let e0 = g(rs, kk);
@@ -1603,9 +1619,16 @@ pub unsafe extern "C" fn k_combat_scan(a: u32, chunk: i32) {
                     let u = g(es, e as usize);
                     if u >= 0 && u as usize != q {
                         let uu = u as usize;
-                        if g(dead, uu) == 0 && g(own, uu) == o && (g(cmd, uu) == cmd_idle || g(nld, uu) <= -2.0) {
-                            near = 1;
-                            break;
+                        // (1 a waiting one, 2 an idle (arrived) one: looked
+                        // for on until one is.)
+                        if g(dead, uu) == 0 && g(own, uu) == o && same_end(g(rte, q), g(rte, uu), gw) {
+                            if g(cmd, uu) == cmd_idle {
+                                near = 2;
+                                break;
+                            }
+                            if g(nld, uu) <= -2.0 {
+                                near = 1;
+                            }
                         }
                     }
                 }

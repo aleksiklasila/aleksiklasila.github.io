@@ -3306,6 +3306,16 @@ function _ordClearFast(c, s, K, cmd, amGx, amGy, tAmx, tAmy, targetPos, tTp) {
     c.mvPF[s] = 0;
     c.hObj[s] = h | 0;
 }
+// A group member's distance to its destination tile's middle (mvNavLD, as
+// the movement kernel's flow look keeps it within 64 tiles; -1 further):
+// set with the order, so its first look already sees whether it stands at
+// its destination's crowd (the crowd scan stamps only units with one).
+function _ordNavLD(c, s, destKey) {
+    const dx = destKey % GRID_W, dy = (destKey - dx) / GRID_W, x = c.x[s] * 0.125, y = c.y[s] * 0.125;
+    if (Math.abs(dx - Math.floor(x / TILE)) > 64 || Math.abs(dy - Math.floor(y / TILE)) > 64) return -1;
+    const ex = dx * TILE + 16 - x, ey = dy * TILE + 16 - y;
+    return Math.sqrt(ex * ex + ey * ey);
+}
 // (The members' route fields (path, pathIndex, _routeEnd, _routeSegEnd) are
 // written here, once each: _issueGroupMoveOrder leaves them.)
 function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
@@ -3342,14 +3352,19 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
                 c.jr__path[s] = at ? null : navPath;
                 c.mvOn[s] = 0; c.mvCD[s] = -1;
                 c.j__routeSegEnd[s] = at ? -1 : destKey;
+                c.mvNavLD[s] = group && !at ? _ordNavLD(c, s, destKey) : -1;
                 if (!at && did >= 0) simFlowArm(c, s, did, navFieldGen(did), destKey, cmd, flying, ready, !group, 0, profile);
+                // (A group's unit on the destination tile has arrived: only lone
+                // units and workers go to its middle.)
+                if (at && group) simFlowArrive(u);
                 continue;
             }
             u._routeKey = NAV_ROUTE_KEY; u._routeEnd = destKey; u._navReady = ready; u.pathIndex = 0;
-            if (Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE) === destKey) { u.path = null; u._routeSegEnd = -1; continue; }
+            if (Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE) === destKey) { u.path = null; u._routeSegEnd = -1; if (u._us) u._us.mvNavLD[u._si] = -1; if (group && !u.workerState) simFlowArrive(u); continue; }
             // Its way: one nav node to the end (as continueUnitRoute gives),
             // walked by the kernel from its columns.
             u.path = navPath; u._routeSegEnd = destKey;
+            if (u._us) u._us.mvNavLD[u._si] = group && !u.workerState ? _ordNavLD(u._us, u._si, destKey) : -1;
             // (A worker goes all the way and is looked at on its check ticks,
             // as simMoveTryArm arms it.)
             if (did >= 0) simFlowArm(u._us, u._si, did, navFieldGen(did), destKey, u.workerState ? CMD_MOVING : cmd, profile === NAV_PROFILE_AIR, ready, !!u.workerState || !group, _simWorkerKind(u), profile);

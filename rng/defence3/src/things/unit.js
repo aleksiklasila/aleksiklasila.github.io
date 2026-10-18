@@ -368,7 +368,15 @@ const UNIT_CONTACT_ATTACK_MARGIN = TILE * 0.25;
 const NAV_CROWD_TILES = 64;
 function _unitCrowdIdleNear(u) {
     const c = u._us;
-    return !!c && c.cwTick[u._si] === gameTime && c.cwNear[u._si] === 1;
+    return !!c && c.cwTick[u._si] === gameTime && c.cwNear[u._si] !== 0;
+}
+// Beside its idle (arrived) units (cwNear 2; 1: only waiting ones) of its
+// destination and NAV_CROWD_FULL or more units listed in its 3x3
+// tiles (about packed: ~2.5 a tile): a full crowd (mv.rs SIM_CROWD_FULL).
+const NAV_CROWD_FULL = 18;
+function _unitCrowdFull(u) {
+    const c = u._us;
+    return !!c && c.cwTick[u._si] === gameTime && c.cwNear[u._si] === 2 && c.cwDense[u._si] >= NAV_CROWD_FULL;
 }
 // Fewer than 9 units listed in its 3x3 tiles at the tick's start: a waiting
 // unit goes on.
@@ -397,17 +405,40 @@ function _unitPassUpdate(u) {
     const c = u._us, s = u._si;
     const deferred = c && c.mvOut[s] === 0;
     const startX = u.x, startY = u.y;
-    const contactCarry = deferred ? c.sepMov[s] >>> 2 : 0;
     u.update();
     if (deferred) {
         const mx = u.x - startX, my = u.y - startY;
-        // The kernel integrated pressure before this fallback's navigation.
-        // Apply the same contact reaction to its contribution to the delta.
-        const depth = _sep.ov && _sep.ov[s] || 0;
-        if (depth > 0 || contactCarry) {
-            const reaction = Math.max(contactCarry / 63, Math.min(1, depth / (Math.max(1, u.r) * .4)));
-            u.x -= mx * reaction; u.y -= my * reaction;
-            updateUnitSpatial(u);
+        // Its step's part into the overlap pressure braked under compression,
+        // as the kernel brakes its own units' (mv.rs push4, SEP_BRAKE0/1;
+        // the sums are this update's, the kernel's epilogue read them).
+        // Not carried by its neighbourhood's flow: the whole step braked so.
+        // (Sampled this update: from its sums; else the brake it carries,
+        // sepMov bits 5-7, which the kernel's epilogue kept.)
+        const S = _sep, hits = S.hit ? S.hit[s] : 0;
+        if (mx || my) {
+            const ml = Math.sqrt(mx * mx + my * my);
+            let bb = ((c.sepMov[s] >> 5) & 7) / 7, b = 0, dx = 0, dy = 0;
+            if (hits > 0) {
+                const depth = S.ov[s], px = S.px[s], py = S.py[s];
+                b = depth > 0 ? Math.min(1, Math.max(0, (depth / Math.max(1, u.collisionR || u.r || 1) - 0.6) / 0.6)) : 0;
+                const ih = 1 / (UNIT_SEPARATION_Q * hits), fx = (S.fx ? S.fx[s] : 0) * ih, fy = (S.fy ? S.fy[s] : 0) * ih;
+                const fl = Math.sqrt(fx * fx + fy * fy) * simDk;
+                const a = Math.max(0, (mx * fx + my * fy) * simDk / Math.max(1e-6, ml * fl)) * Math.min(1, fl / Math.max(1e-6, ml * 0.3));
+                // (Near its destination travel converges: not carried there.)
+                const tp = u.targetPos, nld = c.mvNavLD[s];
+                const converging = (nld >= 0 && nld < SEP_GOAL_TILES * TILE) || (tp && Math.abs(tp.x - u.x) < SEP_GOAL_TILES * TILE && Math.abs(tp.y - u.y) < SEP_GOAL_TILES * TILE);
+                bb = b * (1 - (converging ? 0 : a));
+                c.sepMov[s] = (c.sepMov[s] & 31) | (Math.round(bb * 7) << 5);
+                const pl = Math.sqrt(px * px + py * py);
+                if (pl > 0 && b > 0) { const ux = px / pl, uy = py / pl, into = -(mx * ux + my * uy); if (into > 0) { dx += ux * into * b * (1 - bb); dy += uy * into * b * (1 - bb); } }
+            }
+            else c.sepMov[s] &= 31;
+            dx -= mx * bb; dy -= my * bb;
+            if (dx || dy) { u.x += dx; u.y += dy; updateUnitSpatial(u); }
+            // (Its movement as committed, for the next sample, as the
+            // kernel's: its step less the brakes.)
+            const k = 256 / Math.max(1, simDk), q = v => Math.max(-32767, Math.min(32767, Math.round(v * k) || 0));
+            c.sepIv[s] = (q(mx + dx) << 16) | (q(my + dy) & 0xFFFF);
         }
         c.sepMov[s] = (c.sepMov[s] & 254) | (mx !== 0 || my !== 0 ? 1 : 0);
         // Include the separation already applied by the kernel in this tick's
@@ -1557,10 +1588,16 @@ class Unit {
             const d = detHypot(nd.x * TILE + 16 - this.x, nd.y * TILE + 16 - this.y), last = this._navLastD;
             this._navLastD = d;
             const near = Math.abs(nd.x - gx) <= 8 && Math.abs(nd.y - gy) <= 8;
+            // At a full destination crowd's edge (beside its idle units, the
+            // 3x3 tiles about packed): arrived, before pressing into it
+            // (mv.rs move_flow alike).
+            if (near && _unitCrowdIdleNear(this) && this._us.cwDense[this._si] >= NAV_CROWD_FULL) { this.pathIndex = this.path.length; this._navLastD = -1; return true; }
             if (last >= 0 && last - d < spd * 0.3 * Math.max(steer, simDk)) {
                 // A detour or wall can also reduce progress. Only settle
                 // short of the destination when a friendly crowd is there.
-                if (near && _unitCrowdIdleNear(this)) { this.pathIndex = this.path.length; this._navLastD = -1; return true; }
+                // (Held at a full crowd's edge: arrived however far its middle
+                // is, a big crowd being wider than `near`; mv.rs alike.)
+                if ((near || _unitCrowdFull(this)) && _unitCrowdIdleNear(this)) { this.pathIndex = this.path.length; this._navLastD = -1; return true; }
                 if (_unitCrowdIdleNear(this)) { this._navLastD = -2 - dest; return false; }
             }
         } else this._navLastD = -1;
@@ -2683,9 +2720,21 @@ const UNIT_SEPARATION_Q = 1024;
 // Share of an overlap a unit corrects: both of a pair (about what two
 // successive 0.6 corrections gave), or the only one taking part.
 const UNIT_SEPARATION_SHARE_BOTH = 0.42, UNIT_SEPARATION_SHARE_ONE = 0.6;
-// Reserved kernel ABI parameters. Density pressure treats walking and
-// resting units alike; these legacy shares are no longer used.
-const UNIT_SEPARATION_SHARE_MOVER = 0.2, UNIT_SEPARATION_SHARE_YIELD = 0.65;
+// The flow-relative contact response (wasm/src/lib.rs pair_exact, mv.rs
+// push4): a resting friend's share of the closing motion against a mover
+// (YIELD; MOVER unused).
+let UNIT_SEPARATION_SHARE_MOVER = 0.2, UNIT_SEPARATION_SHARE_YIELD = 0.75;
+// Geometric separation relaxes overlap as 1 - exp(-ticks / RELAX_TICKS) of
+// it (the same at any step size); a resting unit sleeps while its deepest
+// contact is under REST_SLEEP of its radius and wakes past REST_WAKE (the
+// separation radius has a skin: about 0.35 is touching); inside a coherent
+// flow FLOW_SIDE of sideways separation is kept; all contact displacement
+// at most CONTACT_SPEEDS of its speed a base tick.
+// (Within SEP_GOAL_TILES of its destination its neighbours heading its
+// way do not count as carrying it: mv.rs alike.)
+const SEP_GOAL_TILES = 8;
+let UNIT_SEPARATION_RELAX_TICKS = 4, UNIT_SEPARATION_REST_SLEEP = 0.4, UNIT_SEPARATION_REST_WAKE = 0.6,
+    UNIT_SEPARATION_FLOW_SIDE = 0.5, UNIT_SEPARATION_CONTACT_SPEEDS = 1.5;
 // A colliding unit on a fallback path retries its path every this many ticks.
 const UNIT_SEPARATION_PATH_RETRY_TICKS = 4;
 // Contacts summed in full (see runUnitSeparationPass).
@@ -4182,7 +4231,11 @@ function simMoveRun() {
             // (P[51] 0: no path retry on a push; waiting units' looks are the
             // pending-path schedule's alone.)
             P[49] = UNIT_SEPARATION_CONTACTS; P[50] = UNIT_SEPARATION_Q; P[51] = 0;
-            P[52] = once ? 1 : UNIT_SEPARATION_TIER_GAIN; P[53] = once ? 1 : 0.5; P[54] = 1;
+            // (Half the relaxed correction now, half the next update, at one
+            // base tick a step; several: all of it now, none carried stale.)
+            P[52] = once ? 1 : UNIT_SEPARATION_TIER_GAIN; P[53] = once || simDk > 1 ? 1 : 0.5; P[54] = 1;
+            P[59] = 1 - detExp(-(once ? 1 : 2) * Math.max(1, simDk) / UNIT_SEPARATION_RELAX_TICKS);
+            P[60] = UNIT_SEPARATION_REST_SLEEP; P[61] = UNIT_SEPARATION_REST_WAKE; P[62] = UNIT_SEPARATION_FLOW_SIDE; P[63] = UNIT_SEPARATION_CONTACT_SPEEDS;
         } else _sepDirty = true;
     }
     // The fast step and remaining movement share each scheduled chunk.
@@ -4588,16 +4641,21 @@ function _sepArrays(n) {
     _sepGrow(n);
     const S = _sep, cap = S.cap;
     // (Nothing per chunk: mark and pairs find neighbours through the entries.)
-    for (const [name, Type, size] of [['ord', Int32Array, cap], ['qx', Float32Array, cap], ['qy', Float32Array, cap],
+    for (const [name, Type, size] of [['ord', Int32Array, cap], ['qx', Float32Array, cap], ['qy', Float32Array, cap], ['qv', Int32Array, cap],
         ['qr', Float32Array, cap], ['meta', Int32Array, cap], ['qid', Int32Array, cap], ['nextX', Float32Array, cap], ['nextY', Float32Array, cap], ['fast', Uint8Array, cap], ['ex', Int32Array, cap], ['exc', Int32Array, Math.ceil(cap / 512) + 1]]) _sepShared(S, name, Type, size);
     // The pair kernel's sums (px, py: Int32; ov: Float32; hit: Uint32) in
     // one block, zeroed by the chain's first stage (_sepZeroStage) before the
     // pairs add to them, off the movement kernel's way.
-    if (!S.sums || S.sums.length < 4 * cap || S.sums !== _simParReg['sep.sums']) {
-        const old = S.sums, B = S.sums = simHeapArray(Int32Array, 4 * cap);
+    // (Then the flow-relative response's: closing cx, cy and local flow fx,
+    // fy, Int32 in 1/Q, see wasm/src/lib.rs pair_exact.)
+    if (!S.sums || S.sums.length < 8 * cap || S.sums !== _simParReg['sep.sums']) {
+        const old = S.sums, B = S.sums = simHeapArray(Int32Array, 8 * cap);
         S.px = simHeapView(B, Int32Array, 0, cap); S.py = simHeapView(B, Int32Array, 4 * cap, cap);
         S.ov = simHeapView(B, Float32Array, 8 * cap, cap); S.hit = simHeapView(B, Uint32Array, 12 * cap, cap);
+        S.cx = simHeapView(B, Int32Array, 16 * cap, cap); S.cy = simHeapView(B, Int32Array, 20 * cap, cap);
+        S.fx = simHeapView(B, Int32Array, 24 * cap, cap); S.fy = simHeapView(B, Int32Array, 28 * cap, cap);
         simParallelBind('sep.sums', B); simParallelBind('sep.px', S.px); simParallelBind('sep.py', S.py); simParallelBind('sep.ov', S.ov); simParallelBind('sep.hit', S.hit);
+        simParallelBind('sep.cx', S.cx); simParallelBind('sep.cy', S.cy); simParallelBind('sep.fx', S.fx); simParallelBind('sep.fy', S.fy);
         if (old) simHeapFree(old);
     }
     if (_sepDirty || S.sumsCap !== cap) { S.sums.fill(0); _sepDirty = false; S.sumsCap = cap; }
@@ -4702,7 +4760,7 @@ function separationPrebuildTaken(ep) {
 function separationReset() {
     const U = _simUnitState;
     if (U) {
-        U.columns.sepCx.fill(0); U.columns.sepCy.fill(0);
+        U.columns.sepCx.fill(0); U.columns.sepCy.fill(0); U.columns.sepCv.fill(0); U.columns.sepIv.fill(0);
         // Settling is derived from the cached force, dropped on every peer.
         const M = U.columns.sepMov;
         for (let s = 0; s < U.owners.length; s++) M[s] &= 1;

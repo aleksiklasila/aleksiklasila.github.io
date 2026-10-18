@@ -202,6 +202,15 @@ const W_ATN: usize = 294;
 /// Per navigation profile p: its routing atlas's header (nav.<p>.atl,
 /// atlas.rs Atl) at word W_ATLAS + p; 0 none.
 const W_ATLAS: usize = 430;
+// (Words 448..: the flow-relative contact response's (push4; 300..427 are
+// mv_move's step scratch, 430.. the atlas headers): unit.sepIv, unit.sepCv,
+// sep.cx, sep.cy, sep.fx, sep.fy.)
+const W_SIV: usize = 448;
+const W_SCV: usize = 449;
+const W_SCCX: usize = 450;
+const W_SCCY: usize = 451;
+const W_SFX: usize = 452;
+const W_SFY: usize = 453;
 /// The field id of a route on the atlas (flownav.js NAV_ATLAS_FID): no
 /// destination field, every destination by lookups (atlas.rs).
 pub const NAV_ATLAS_FID: i32 = 1 << 30;
@@ -224,6 +233,8 @@ const W_COVS: usize = 267;
 const SIM_FLOW_REFRESH_TICKS: i32 = 4;
 const SIM_STEER_TICKS: u8 = 16;
 const SIM_STEER_NEAR_TICKS: u8 = 4;
+/// A full crowd's units in 3x3 tiles (unit.js NAV_CROWD_FULL).
+const SIM_CROWD_FULL: u16 = 18;
 /// sim_parallel.js SIM_REROUTE_TICKS.
 const SIM_REROUTE_TICKS: i32 = 32;
 
@@ -404,6 +415,12 @@ struct Mv {
     shit: *mut u32,
     scx: *mut F32,
     scy: *mut F32,
+    siv: *mut i32,
+    scv: *mut i32,
+    sccx: *mut i32,
+    sccy: *mut i32,
+    sfx: *mut i32,
+    sfy: *mut i32,
     smv: *mut u8,
     snx: *mut F32,
     sny: *mut F32,
@@ -697,6 +714,12 @@ impl Mv {
             shit: p!(W_SHIT),
             scx: p!(W_SCX),
             scy: p!(W_SCY),
+            siv: p!(W_SIV),
+            scv: p!(W_SCV),
+            sccx: p!(W_SCCX),
+            sccy: p!(W_SCCY),
+            sfx: p!(W_SFX),
+            sfy: p!(W_SFY),
             smv: p!(W_SMV),
             snx: p!(W_SNX),
             sny: p!(W_SNY),
@@ -3122,13 +3145,20 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
             es *= 0.5;
         }
         let near = (dx0 - gx).abs() <= 8 && (dy0 - gy).abs() <= 8;
+        // At a full destination crowd's edge: arrived before pressing into
+        // it (unit.js _unitCrowdFull).
+        if near && rd(m.cwt, s) == t && rd(m.cwn, s) != 0 && rd(m.cwd, s) >= SIM_CROWD_FULL {
+            back!();
+        }
         // (The progress expected since the last look: its base ticks, at
         // least a step's.)
         if last >= 0.0 && last - now < es * 0.3 * (SIM_STEER_NEAR_TICKS as i32).max(m.dk) as f64 {
-            if near && rd(m.cwt, s) == t && rd(m.cwn, s) == 1 {
+            // (Held at a full crowd's edge: arrived, however far its middle
+            // is: a big crowd is wider than `near`.)
+            if (near || (rd(m.cwd, s) >= SIM_CROWD_FULL && rd(m.cwn, s) == 2)) && rd(m.cwt, s) == t && rd(m.cwn, s) != 0 {
                 back!();
             }
-            if rd(m.cwt, s) == t && rd(m.cwn, s) == 1 {
+            if rd(m.cwt, s) == t && rd(m.cwn, s) != 0 {
                 wr(m.nld, s, (-2 - dk) as f64);
                 stand!();
             }
@@ -3615,12 +3645,29 @@ struct PushC {
     rmask: v128,
     rpow2: bool,
     tid: v128,
+    // (The contact response's, P[59]-[63]: the share of the overlap
+    // relaxed over a sample's two updates, 1 - exp(-2 dk / tau); a resting
+    // unit's depth to sleep under and to wake over (of its radius); the
+    // share of sideways separation kept inside a coherent flow; the contact
+    // displacement's bound in its speeds; 1 / Q.)
+    relax: v128,
+    sleep: v128,
+    wake: v128,
+    side: v128,
+    dmax: v128,
+    iqs: v128,
 }
 #[inline(always)]
 unsafe fn push_consts(m: &Mv, f: *const f64) -> PushC {
     let q = rd(f, 8) as f32;
     let retry = to_i32(rd(f, 51));
     PushC {
+        relax: f32x4_splat(rd(f, 59) as f32),
+        sleep: f32x4_splat(rd(f, 60) as f32),
+        wake: f32x4_splat(rd(f, 61) as f32),
+        side: f32x4_splat(rd(f, 62) as f32),
+        dmax: f32x4_splat(rd(f, 63) as f32),
+        iqs: f32x4_splat((1.0 / rd(f, 50)) as f32),
         contacts: f32x4_splat(rd(f, 49) as f32),
         k: f32x4_splat((rd(f, 52) / rd(f, 50)) as f32),
         now: f32x4_splat(rd(f, 53) as f32),
@@ -3632,6 +3679,33 @@ unsafe fn push_consts(m: &Mv, f: *const f64) -> PushC {
         rpow2: retry > 0 && (retry & (retry - 1)) == 0,
         tid: i32x4_splat(m.t),
     }
+}
+
+/// The compression brake's depths (of the radius; the separation radius has
+/// a skin, about 0.35 is touching), see push4.
+const SEP_BRAKE0: f32 = 0.6;
+const SEP_BRAKE1: f32 = 1.2;
+/// The share of its own step its neighbours' flow (lib.rs pair_exact, under-
+/// counted: contacts weigh in partly) must reach to count as carrying it.
+const SEP_FLOW_SHARE: f32 = 0.3;
+/// Within this many tiles of its group's destination a unit's neighbours
+/// heading its way do not count as carrying it (unit.js SEP_GOAL_TILES).
+const SEP_GOAL_TILES: f32 = 8.0;
+/// Four velocities packed as unit.sepIv (lib.rs sep_iv_x: x the high i16,
+/// y the low, 1/256 px a base tick; NaN 0).
+#[inline(always)]
+fn iv_pack(x: v128, y: v128) -> v128 {
+    let q = f32x4_splat(crate::SEP_IV_Q as f32);
+    let lo = i32x4_splat(-32767);
+    let hi = i32x4_splat(32767);
+    let ix = i32x4_min(i32x4_max(i32x4_trunc_sat_f32x4(f32x4_nearest(f32x4_mul(x, q))), lo), hi);
+    let iy = i32x4_min(i32x4_max(i32x4_trunc_sat_f32x4(f32x4_nearest(f32x4_mul(y, q))), lo), hi);
+    v128_or(i32x4_shl(ix, 16), v128_and(iy, i32x4_splat(0xFFFF)))
+}
+#[inline(always)]
+fn iv_unpack(v: v128) -> (v128, v128) {
+    let iq = f32x4_splat(1.0 / crate::SEP_IV_Q as f32);
+    (f32x4_mul(f32x4_convert_i32x4(i32x4_shr(v, 16)), iq), f32x4_mul(f32x4_convert_i32x4(i32x4_shr(i32x4_shl(v, 16), 16)), iq))
 }
 
 /// The separation's pushes of slots s..s + 4 (the lanes past `end` are
@@ -3652,13 +3726,19 @@ unsafe fn push4(m: &Mv, c: &PushC, s: usize, end: usize, known: i32, mvd: i32) -
     let zero = i32x4_splat(0);
     let fz = f32x4_splat(0.0);
     let lane_bits = i32x4(1, 2, 4, 8);
-    // Keep contact resistance for the unsampled half of the stagger.
-    // Six unused bits of sepMov store [0,1]; no extra per-unit column.
-    let old_contact = f32x4_mul(f32x4_convert_u32x4(u32x4_shr(ld_u8x4(m.smv.add(s)), 2)), f32x4_splat(1.0 / 63.0));
+    // Asleep or awake (sepMov bit 1) as the last update left it.
+    let smv0 = ld_u8x4(m.smv.add(s));
+    let was_awake = i32x4_ne(v128_and(smv0, i32x4_splat(2)), zero);
+    // (Bits 2-4: its contacts at its last sample, at most 7; bits 5-7 the
+    // brake on its whole step it carries through the stagger's other update,
+    // in sevenths.)
+    let cn_old = v128_and(u32x4_shr(smv0, 2), i32x4_splat(7));
+    let bb_old = f32x4_mul(f32x4_convert_i32x4(v128_and(u32x4_shr(smv0, 5), i32x4_splat(7))), f32x4_splat(1.0 / 7.0));
     // (sepMov: the vector paths' lanes as they moved (known: no position
-    // read); the rest from the positions, output 0 keeping its own.)
+    // read); the rest from the positions, output 0 keeping its own; its
+    // contact count kept, the rest set below.)
     if known & 15 == 15 {
-        let v = v128_and(i32x4_ne(v128_and(i32x4_splat(mvd), lane_bits), zero), i32x4_splat(1));
+        let v = v128_or(v128_and(i32x4_ne(v128_and(i32x4_splat(mvd), lane_bits), zero), i32x4_splat(1)), i32x4_shl(cn_old, 2));
         let b = i8x16_narrow_i16x8(i16x8_narrow_i32x4(v, v), i16x8_narrow_i32x4(v, v));
         (m.smv.add(s) as *mut u32).write_unaligned(i32x4_extract_lane::<0>(b) as u32);
     } else {
@@ -3669,65 +3749,156 @@ unsafe fn push4(m: &Mv, c: &PushC, s: usize, end: usize, known: i32, mvd: i32) -
         let kv = i32x4_ne(v128_and(i32x4_splat(known), lane_bits), zero);
         let mv = v128_bitselect(v128_and(i32x4_ne(v128_and(i32x4_splat(mvd), lane_bits), zero), i32x4_splat(1)), mv, kv);
         let old = v128_and(ld_u8x4(m.smv.add(s)), i32x4_splat(1));
-        let v = v128_bitselect(old, mv, v128_andnot(i32x4_eq(o4, zero), kv));
+        let v = v128_or(v128_bitselect(old, mv, v128_andnot(i32x4_eq(o4, zero), kv)), i32x4_shl(cn_old, 2));
         let b = i8x16_narrow_i16x8(i16x8_narrow_i32x4(v, v), i16x8_narrow_i32x4(v, v));
         (m.smv.add(s) as *mut u32).write_unaligned(i32x4_extract_lane::<0>(b) as u32);
+    }
+    let dead = i32x4_ne(ld_u8x4(m.dead.add(s)), zero);
+    // This update's navigation step (from where it stood as the update began,
+    // before any contact response) a base tick: its intent; with no contact
+    // also what the next sample's pairs see (unit.sepIv, set again below
+    // with its brakes; the JS fallback writes its own, _unitPassUpdate).
+    let idk = f32x4_splat(1.0 / m.dk as f32);
+    let ivx = f32x4_mul(px4(i32x4_sub(v128_load(m.x.add(s) as *const v128), v128_load(m.x0.add(s) as *const v128))), idk);
+    let ivy = f32x4_mul(px4(i32x4_sub(v128_load(m.y.add(s) as *const v128), v128_load(m.y0.add(s) as *const v128))), idk);
+    if !m.siv.is_null() {
+        v128_store(m.siv.add(s) as *mut v128, v128_andnot(iv_pack(ivx, ivy), dead));
     }
     let hits = v128_load(m.shit.add(s) as *const v128);
     let cx = v128_load(m.scx.add(s) as *const v128);
     let cy = v128_load(m.scy.add(s) as *const v128);
-    if !v128_any_true(v128_or(hits, v128_or(old_contact, v128_or(cx, cy)))) {
+    let cv = if m.scv.is_null() { zero } else { v128_load(m.scv.add(s) as *const v128) };
+    if !v128_any_true(v128_or(v128_or(hits, bb_old), v128_or(cv, v128_or(cx, cy)))) {
         return 0;
     }
-    let dead = i32x4_ne(ld_u8x4(m.dead.add(s)), zero);
     let hf = f32x4_convert_u32x4(hits);
     let one = f32x4_splat(1.0);
     let sc = f32x4_mul(v128_bitselect(one, f32x4_sqrt(f32x4_div(c.contacts, f32x4_max(hf, one))), f32x4_le(hf, c.contacts)), c.k);
-    let mut px = f32x4_mul(f32x4_convert_i32x4(v128_load(m.spx.add(s) as *const v128)), sc);
-    let mut py = f32x4_mul(f32x4_convert_i32x4(v128_load(m.spy.add(s) as *const v128)), sc);
-
-    // Density yields an outward velocity in pixels per base tick. The
-    // contact sum grows with compression; cap only the velocity, not its
-    // displacement per simulation update. Applies at every step size.
+    // Geometric separation: the summed overlap correction (px), relaxed by
+    // the share of it due over the sample's two updates (exponential in
+    // elapsed base ticks: never more than the overlap, at any step size).
+    let mut gx = f32x4_mul(f32x4_mul(f32x4_convert_i32x4(v128_load(m.spx.add(s) as *const v128)), sc), c.relax);
+    let mut gy = f32x4_mul(f32x4_mul(f32x4_convert_i32x4(v128_load(m.spy.add(s) as *const v128)), sc), c.relax);
     let radius = f32x4_max(one, v128_load(m.rrc.add(s) as *const v128));
     let speed = f32x4_max(f32x4_splat(0.25), v128_load(m.spd.add(s) as *const v128));
-    let lim = f32x4_mul(speed, f32x4_splat(4.0));
-    let gain = f32x4_div(f32x4_mul(speed, f32x4_splat(2.0)), radius);
-    px = f32x4_mul(px, gain);
-    py = f32x4_mul(py, gain);
-    let len = f32x4_sqrt(f32x4_add(f32x4_mul(px, px), f32x4_mul(py, py)));
-    let r = v128_bitselect(f32x4_div(lim, len), one, f32x4_gt(len, lim));
-    px = f32x4_mul(px, r);
-    py = f32x4_mul(py, r);
-    let hx = f32x4_mul(px, c.now);
-    let hy = f32x4_mul(py, c.now);
-    let force_x = f32x4_add(cx, hx);
-    let force_y = f32x4_add(cy, hy);
-    // Pressure also supplies the reaction to inward navigation. Summed
-    // normals can cancel inside a crowd even when every contact is deeply
-    // compressed; increasing a vector gain alone cannot resist that case.
-    // Use the deepest contact to reduce navigation under compression.
-    // Outward pressure keeps moving bodies into available space. This is part of
-    // the same displacement, before its spatial/visibility commit.
-    let nav_x = px4(i32x4_sub(v128_load(m.x.add(s) as *const v128), v128_load(m.x0.add(s) as *const v128)));
-    let nav_y = px4(i32x4_sub(v128_load(m.y.add(s) as *const v128), v128_load(m.y0.add(s) as *const v128)));
     let depth = v128_load(m.sov.add(s) as *const v128);
-    let contact = f32x4_min(one, f32x4_div(depth, f32x4_mul(radius, f32x4_splat(0.4))));
-    let resistance = f32x4_max(contact, old_contact);
-    let reaction = resistance;
-    // The JS movement fallback consumes the same effective contact after
-    // this kernel. Pair sums are slot-local and rebuilt before next use.
-    v128_store(m.sov.add(s) as *mut v128, f32x4_max(depth, f32x4_mul(old_contact, f32x4_mul(radius, f32x4_splat(0.4)))));
-    let dx = f32x4_sub(f32x4_mul(force_x, f32x4_splat(m.dk as f32)), f32x4_mul(nav_x, reaction));
-    let dy = f32x4_sub(f32x4_mul(force_y, f32x4_splat(m.dk as f32)), f32x4_mul(nav_y, reaction));
-    v128_store(m.scx.add(s) as *mut v128, v128_andnot(f32x4_sub(px, hx), dead));
-    v128_store(m.scy.add(s) as *mut v128, v128_andnot(f32x4_sub(py, hy), dead));
+    // Its friendly neighbours' mean intended velocity (the pair kernel's
+    // local flow, weighted by contact).
+    let (flx, fly) = if m.sfx.is_null() { (fz, fz) } else {
+        let ih = f32x4_div(c.iqs, f32x4_max(hf, one));
+        (f32x4_mul(f32x4_convert_i32x4(v128_load(m.sfx.add(s) as *const v128)), ih), f32x4_mul(f32x4_convert_i32x4(v128_load(m.sfy.add(s) as *const v128)), ih))
+    };
+    let fl2 = f32x4_add(f32x4_mul(flx, flx), f32x4_mul(fly, fly));
+    let iv2 = f32x4_add(f32x4_mul(ivx, ivx), f32x4_mul(ivy, ivy));
+    // A resting unit in a resting crowd sleeps while its deepest contact is
+    // shallow (hysteresis: it wakes past c.wake of its radius, sleeps again
+    // under c.sleep), so a settled crowd is still; deeper compression, a
+    // mover's closing response or flow around it wake it.
+    let resting = v128_and(f32x4_lt(iv2, f32x4_splat(0.0025)), f32x4_lt(fl2, f32x4_splat(0.01)));
+    let thr = f32x4_mul(v128_bitselect(c.sleep, c.wake, was_awake), radius);
+    let quiet = v128_and(resting, f32x4_lt(depth, thr));
+    gx = v128_andnot(gx, quiet);
+    gy = v128_andnot(gy, quiet);
+    // Moving with its neighbours' flow: sideways separation damped (lanes
+    // kept, no weaving), along the flow kept (spacing in the column).
+    let coh = v128_and(f32x4_gt(fl2, f32x4_splat(0.01)), f32x4_gt(f32x4_add(f32x4_mul(ivx, flx), f32x4_mul(ivy, fly)), fz));
+    if v128_any_true(coh) {
+        let inv = f32x4_div(one, f32x4_sqrt(f32x4_max(fl2, f32x4_splat(1e-6))));
+        let (ux, uy) = (f32x4_mul(flx, inv), f32x4_mul(fly, inv));
+        let al = f32x4_add(f32x4_mul(gx, ux), f32x4_mul(gy, uy));
+        let (ax, ay) = (f32x4_mul(ux, al), f32x4_mul(uy, al));
+        let keep = v128_bitselect(c.side, one, coh);
+        gx = f32x4_add(ax, f32x4_mul(f32x4_sub(gx, ax), keep));
+        gy = f32x4_add(ay, f32x4_mul(f32x4_sub(gy, ay), keep));
+    }
+    let dkv = f32x4_splat(m.dk as f32);
+    let hx = f32x4_mul(gx, c.now);
+    let hy = f32x4_mul(gy, c.now);
+    let sampled = i32x4_ne(hits, zero);
+    // Brakes on its navigation step (bx, by), from SEP_BRAKE0 of its radius
+    // deep to all of it at SEP_BRAKE1. Not moving with its neighbourhood
+    // (their flow, from the sample, does not carry its own step: a resting
+    // crowd, a crossing stream) the whole step is braked so: measured
+    // obstruction (intents alone would take a jam for flowing traffic, and a
+    // fresh order's first steps have none). Carried through the stagger's
+    // unsampled update. Of the rest, the part heading into the pressure
+    // (against its summed overlap push) is braked on a sample.
+    let b = f32x4_min(one, f32x4_max(fz, f32x4_mul(f32x4_sub(f32x4_div(depth, radius), f32x4_splat(SEP_BRAKE0)), f32x4_splat(1.0 / (SEP_BRAKE1 - SEP_BRAKE0)))));
+    let ivl = f32x4_sqrt(iv2);
+    let fll = f32x4_sqrt(fl2);
+    let cosv = f32x4_div(f32x4_add(f32x4_mul(ivx, flx), f32x4_mul(ivy, fly)), f32x4_max(f32x4_mul(ivl, fll), f32x4_splat(1e-6)));
+    let carried = f32x4_min(one, f32x4_div(fll, f32x4_max(f32x4_mul(ivl, f32x4_splat(SEP_FLOW_SHARE)), f32x4_splat(1e-6))));
+    // (Near its group's destination (mvNavLD: its distance there, the flow's
+    // look) travel converges: neighbours heading the same way do not carry
+    // it there.)
+    let nld = v128_load(m.nld.add(s) as *const v128);
+    let converging = v128_and(f32x4_ge(nld, fz), f32x4_lt(nld, f32x4_splat(SEP_GOAL_TILES * m.tile as f32)));
+    let a = v128_andnot(v128_and(f32x4_mul(f32x4_max(fz, cosv), carried), f32x4_gt(iv2, fz)), converging);
+    let bb = v128_bitselect(f32x4_mul(b, f32x4_sub(one, a)), bb_old, sampled);
+    let mut bx = f32x4_neg(f32x4_mul(ivx, f32x4_mul(bb, dkv)));
+    let mut by = f32x4_neg(f32x4_mul(ivy, f32x4_mul(bb, dkv)));
+    if v128_any_true(v128_and(f32x4_gt(b, fz), f32x4_gt(iv2, fz))) {
+        let rest = f32x4_mul(f32x4_sub(one, bb), dkv);
+        let px = f32x4_convert_i32x4(v128_load(m.spx.add(s) as *const v128));
+        let py = f32x4_convert_i32x4(v128_load(m.spy.add(s) as *const v128));
+        let pl = f32x4_sqrt(f32x4_add(f32x4_mul(px, px), f32x4_mul(py, py)));
+        let ipl = f32x4_div(one, f32x4_max(pl, one));
+        let (ux, uy) = (f32x4_mul(px, ipl), f32x4_mul(py, ipl));
+        let into = f32x4_max(fz, f32x4_neg(f32x4_add(f32x4_mul(ivx, ux), f32x4_mul(ivy, uy))));
+        let kd = v128_and(f32x4_mul(f32x4_mul(into, b), rest), f32x4_gt(pl, fz));
+        bx = f32x4_add(bx, f32x4_mul(ux, kd));
+        by = f32x4_add(by, f32x4_mul(uy, kd));
+    }
+    // The closing response (a velocity a base tick, at most its speed), used
+    // this update and carried into the next (a sample covers two).
+    let (mut vcx, mut vcy) = if m.sccx.is_null() { (fz, fz) } else {
+        (f32x4_mul(f32x4_convert_i32x4(v128_load(m.sccx.add(s) as *const v128)), c.iqs), f32x4_mul(f32x4_convert_i32x4(v128_load(m.sccy.add(s) as *const v128)), c.iqs))
+    };
     {
-        // Keep only a crowd with a representable force awake. Quiet units
-        // retain their cheap resting schedule; no extra full-population pass.
-        let settling = v128_andnot(v128_or(i32x4_ne(q8x4(dx), zero), i32x4_ne(q8x4(dy), zero)), dead);
-        let carry = i32x4_shl(i32x4_trunc_sat_f32x4(f32x4_add(f32x4_mul(contact, f32x4_splat(63.0)), f32x4_splat(0.5))), 2);
-        let motion = v128_or(v128_or(ld_u8x4(m.smv.add(s)), v128_and(settling, i32x4_splat(2))), v128_andnot(carry, dead));
+        let l = f32x4_sqrt(f32x4_add(f32x4_mul(vcx, vcx), f32x4_mul(vcy, vcy)));
+        let r = v128_bitselect(f32x4_div(speed, l), one, f32x4_gt(l, speed));
+        vcx = f32x4_mul(vcx, r);
+        vcy = f32x4_mul(vcy, r);
+    }
+    let (ocx, ocy) = iv_unpack(cv);
+    let mut dx = f32x4_add(hx, f32x4_mul(f32x4_add(cx, f32x4_add(vcx, ocx)), dkv));
+    let mut dy = f32x4_add(hy, f32x4_mul(f32x4_add(cy, f32x4_add(vcy, ocy)), dkv));
+    // The whole contact displacement bounded (no throw at long steps).
+    {
+        let lim = f32x4_add(f32x4_mul(f32x4_mul(speed, c.dmax), dkv), one);
+        let l = f32x4_sqrt(f32x4_add(f32x4_mul(dx, dx), f32x4_mul(dy, dy)));
+        let r = v128_bitselect(f32x4_div(lim, l), one, f32x4_gt(l, lim));
+        dx = f32x4_mul(dx, r);
+        dy = f32x4_mul(dy, r);
+    }
+    // (The brakes on its own step, not bounded: never more than the step.)
+    dx = f32x4_add(dx, bx);
+    dy = f32x4_add(dy, by);
+    // The velocity the next sample's pairs see: its movement as committed
+    // (its step less the brakes), not its intent alone: a front held by a
+    // crowd holds the ones walking behind it (a queue), while units moving
+    // together are untouched. Not the separation's corrections nor the
+    // closing response (fed back, they swayed crowds; a yield would carry
+    // resting units along).
+    if !m.siv.is_null() {
+        v128_store(m.siv.add(s) as *mut v128, v128_andnot(iv_pack(f32x4_add(ivx, f32x4_mul(bx, idk)), f32x4_add(ivy, f32x4_mul(by, idk))), dead));
+    }
+    v128_store(m.scx.add(s) as *mut v128, v128_andnot(f32x4_mul(f32x4_sub(gx, hx), idk), dead));
+    v128_store(m.scy.add(s) as *mut v128, v128_andnot(f32x4_mul(f32x4_sub(gy, hy), idk), dead));
+    if !m.scv.is_null() {
+        v128_store(m.scv.add(s) as *mut v128, v128_andnot(iv_pack(vcx, vcy), dead));
+    }
+    {
+        // Awake: in contact and not asleep (sep_pack lists it every sample).
+        let awake = v128_andnot(i32x4_ne(hits, zero), v128_or(quiet, dead));
+        // (Bits 2-4: its contacts, at most 7: how much room it has to give
+        // way, lib.rs pair_exact; bits 5-7 its whole-step brake.)
+        let cn = v128_bitselect(i32x4_min(hits, i32x4_splat(7)), cn_old, sampled);
+        // (The brake is carried one update only: a unit its contacts have
+        // left gets no sample to clear it.)
+        let bq = v128_and(i32x4_trunc_sat_f32x4(f32x4_nearest(f32x4_mul(bb, f32x4_splat(7.0)))), sampled);
+        let bits = v128_andnot(v128_or(i32x4_shl(cn, 2), i32x4_shl(bq, 5)), dead);
+        let motion = v128_or(v128_or(v128_and(ld_u8x4(m.smv.add(s)), i32x4_splat(1)), v128_and(awake, i32x4_splat(2))), bits);
         let bytes = u8x16_narrow_i16x8(i16x8_narrow_i32x4(motion, motion), i16x8_narrow_i32x4(motion, motion));
         (m.smv.add(s) as *mut u32).write_unaligned(i32x4_extract_lane::<0>(bytes) as u32);
     }

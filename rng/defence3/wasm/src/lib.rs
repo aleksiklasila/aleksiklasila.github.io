@@ -225,6 +225,8 @@ pub unsafe extern "C" fn sep_pack(
     qr: u32,
     meta: u32,
     qid: u32,
+    si: u32,
+    qv: u32,
     nl: i32,
     per: i32,
     rest0: i32,
@@ -250,6 +252,8 @@ pub unsafe extern "C" fn sep_pack(
     let qr = waddr(qr) as *mut f32;
     let meta = waddr(meta) as *mut i32;
     let qid = waddr(qid) as *mut i32;
+    let si = waddr(si) as *const i32;
+    let qv = waddr(qv) as *mut i32;
     let nl = if nl > 0 { nl as usize } else { 0 };
     let start = chunk as usize * per as usize;
     let end = core::cmp::min(nl, start + per as usize);
@@ -266,9 +270,14 @@ pub unsafe extern "C" fn sep_pack(
             wr(qy, j, 1e9);
             wr(qr, j, 0.1);
             wr(qid, j, 0);
+            wr(qv, j, 0);
             continue;
         }
         let su = s as usize;
+        // (Its committed movement a base tick at its last update, packed
+        // (sep_iv_x): written by the movement kernel's epilogue and the JS
+        // fallback, never while this runs.)
+        wr(qv, j, rd(si, su));
         let uid = rd(id, su);
         let motion = rd(smv, su);
         let moved = (motion & 1) != 0;
@@ -287,7 +296,8 @@ pub unsafe extern "C" fn sep_pack(
         let settling = (motion & 2) != 0;
         let part = own && (moved || settling || rest <= 1 || irem(run.wrapping_add(uid), rest) == 0);
         let sc = (if moved { 2 } else { 0 }) | (if settling { 4 } else { 0 }) | (if part { 1 } else { 0 });
-        wr(meta, j, sc << 16 | ((rd(layer, su) as i32) & 255) << 8 | (rd(owner, su) & 255));
+        // (Bits 19-21: its contacts at its last sample, sepMov bits 2-4.)
+        wr(meta, j, ((motion >> 2) as i32 & 7) << 19 | sc << 16 | ((rd(layer, su) as i32) & 255) << 8 | (rd(owner, su) & 255));
     }
 }
 
@@ -471,10 +481,30 @@ struct PairP {
     op: i32,
     pl: i32,
     p_part: i32,
+    pm: i32,
+    // (Its committed movement, px a base tick.)
+    vx: f64,
+    vy: f64,
     acc_px: f64,
     acc_py: f64,
     acc_ov: f64,
     acc_hit: u32,
+    acc_cx: f64,
+    acc_cy: f64,
+    acc_fx: f64,
+    acc_fy: f64,
+}
+
+/// A velocity packed in an i32 (unit.sepIv, sep.qv): x in the
+/// high 16 bits, y in the low, each in 1/256 px a base tick.
+pub const SEP_IV_Q: f64 = 256.0;
+#[inline(always)]
+pub fn sep_iv_x(v: i32) -> f64 {
+    (v >> 16) as f64 * (1.0 / SEP_IV_Q)
+}
+#[inline(always)]
+pub fn sep_iv_y(v: i32) -> f64 {
+    (v as i16) as f64 * (1.0 / SEP_IV_Q)
 }
 
 /// The pair kernel's constants and outputs.
@@ -493,6 +523,13 @@ struct PairOut {
     qscale: f64,
     both: f64,
     one: f64,
+    qv: *const i32,
+    cx_out: *mut i32,
+    cy_out: *mut i32,
+    fx_out: *mut i32,
+    fy_out: *mut i32,
+    // (A resting friend's share of the closing response against a mover.)
+    yield_: f64,
 }
 
 /// The exact test of entry q against p and both sides' pushes (the JS
@@ -518,28 +555,78 @@ unsafe fn pair_exact(o: &PairOut, p: &mut PairP, q: usize) {
     let overlap = min_dist - dm;
     let pressure = overlap;
     let iq = rd(o.qid, q);
+    // Flow-relative contact response, from both sides' committed movement
+    // (their navigation step less the obstruction brakes: shared travel
+    // is not braked, so it does not spread back; a held front holds those
+    // behind, a queue).
+    // Only the closing motion along the contact normal is resisted; shared
+    // travel, sliding past and moving apart are left alone. A resting friend
+    // gives way to a mover (yield_ of it, the mover the rest); otherwise
+    // even shares. Weighted in over the separation radius's skin (a tenth of
+    // the contact distance: in full before bodies touch; no step at its edge).
+    let qvp = rd(o.qv, q);
+    let (npx, npy) = push_dir(-dxe, -dye, d, p.ip, iq);
+    // (Apart: exactly opposite; on top of each other push_dir's sideways
+    // pair, opposite as well.)
+    let (nqx, nqy) = if d > 0.001 { (-npx, -npy) } else { push_dir(dxe, dye, d, iq, p.ip) };
+    // (Both still, the common case in big worlds: no closing, no flow.)
+    let still = qvp == 0 && p.vx == 0.0 && p.vy == 0.0;
+    let (qvx, qvy) = (sep_iv_x(qvp), sep_iv_y(qvp));
+    let wgt = js_min(1.0, overlap / (min_dist * 0.1));
+    let closing = if still { 0.0 } else { (qvx - p.vx) * npx + (qvy - p.vy) * npy };
+    let friend = !still && (qm & 255) == p.op;
+    let (mut sh_p, mut sh_q) = (0.0, 0.0);
+    if closing > 0.0 {
+        let rest_p = p.vx * p.vx + p.vy * p.vy < 0.0025;
+        let rest_q = qvx * qvx + qvy * qvy < 0.0025;
+        // (A resting friend gives way while the contact is shallow; pressed
+        // deeper it has no room to give: the mover takes all of it.)
+        let room = 1.0 - js_min(1.0, js_max(0.0, (overlap / min_dist - 0.25) * 5.0));
+        // (Nor much among many contacts of its own: a packed crowd has about
+        // six; a quarter of the yield left there, so it still parts slowly.)
+        let cn = (if rest_p { p.pm } else { qm } >> 19) & 7;
+        let crowd = js_max(0.4, js_min(1.0, (6.0 - cn as f64) / 4.0));
+        let y = o.yield_ * room * crowd;
+        sh_p = if friend && rest_p && !rest_q { y } else if friend && rest_q && !rest_p { 1.0 - y } else { 0.5 };
+        sh_q = 1.0 - sh_p;
+    }
+    let cf = closing * wgt * o.qscale;
     if p.p_part != 0 {
         let share = if q_part != 0 { o.both } else { o.one };
-        let (nx, ny) = push_dir(-dxe, -dye, d, p.ip, iq);
         let f = pressure * share * o.qscale;
-        p.acc_px += js_round(nx * f);
-        p.acc_py += js_round(ny * f);
+        p.acc_px += js_round(npx * f);
+        p.acc_py += js_round(npy * f);
         if overlap > p.acc_ov {
             p.acc_ov = overlap;
         }
         p.acc_hit += 1;
+        if sh_p > 0.0 {
+            p.acc_cx += js_round(npx * cf * sh_p);
+            p.acc_cy += js_round(npy * cf * sh_p);
+        }
+        if friend {
+            p.acc_fx += js_round(qvx * wgt * o.qscale);
+            p.acc_fy += js_round(qvy * wgt * o.qscale);
+        }
     }
     if q_part != 0 {
         let share = if p.p_part != 0 { o.both } else { o.one };
-        let (nx, ny) = push_dir(dxe, dye, d, iq, p.ip);
         let f = pressure * share * o.qscale;
         let b = bq as usize;
-        wr(o.px_out, b, rd(o.px_out, b).wrapping_add(js_round(nx * f) as i32));
-        wr(o.py_out, b, rd(o.py_out, b).wrapping_add(js_round(ny * f) as i32));
+        wr(o.px_out, b, rd(o.px_out, b).wrapping_add(js_round(nqx * f) as i32));
+        wr(o.py_out, b, rd(o.py_out, b).wrapping_add(js_round(nqy * f) as i32));
         if overlap > rd(o.ov_out, b) {
             wr(o.ov_out, b, overlap);
         }
         wr(o.hit_out, b, rd(o.hit_out, b) + 1);
+        if sh_q > 0.0 {
+            wr(o.cx_out, b, rd(o.cx_out, b).wrapping_add(js_round(nqx * cf * sh_q) as i32));
+            wr(o.cy_out, b, rd(o.cy_out, b).wrapping_add(js_round(nqy * cf * sh_q) as i32));
+        }
+        if friend {
+            wr(o.fx_out, b, rd(o.fx_out, b).wrapping_add(js_round(p.vx * wgt * o.qscale) as i32));
+            wr(o.fy_out, b, rd(o.fy_out, b).wrapping_add(js_round(p.vy * wgt * o.qscale) as i32));
+        }
     }
 }
 
@@ -613,6 +700,11 @@ pub unsafe extern "C" fn sep_pairs(
     py_out: u32,
     ov_out: u32,
     hit_out: u32,
+    qv: u32,
+    cx_out: u32,
+    cy_out: u32,
+    fx_out: u32,
+    fy_out: u32,
     cw: i32,
     ch: i32,
     h: i32,
@@ -624,10 +716,15 @@ pub unsafe extern "C" fn sep_pairs(
     listed: i32,
     cws: f64,
     _mover: f64,
-    _yield: f64,
+    yield_: f64,
     parity: i32,
     chunk: i32,
 ) {
+    let qv = waddr(qv) as *const i32;
+    let cx_out = waddr(cx_out) as *mut i32;
+    let cy_out = waddr(cy_out) as *mut i32;
+    let fx_out = waddr(fx_out) as *mut i32;
+    let fy_out = waddr(fy_out) as *mut i32;
     let ord = waddr(ord) as *const i32;
     let qx = waddr(qx) as *const f32;
     let qy = waddr(qy) as *const f32;
@@ -651,7 +748,7 @@ pub unsafe extern "C" fn sep_pairs(
     let max_r = (far_any - pad) / 2.0;
     let lo = lower_bound(keys, 0, listed, row0 * cw);
     let hi = lower_bound(keys, lo, listed, row1 * cw);
-    let o = PairOut { ord, qx, qy, qr, meta, qid, px_out, py_out, ov_out, hit_out, pad, qscale, both, one };
+    let o = PairOut { ord, qx, qy, qr, meta, qid, px_out, py_out, ov_out, hit_out, pad, qscale, both, one, qv, cx_out, cy_out, fx_out, fy_out, yield_ };
     // Where each chunk's entries start, per row the band's units may reach
     // (tab[r * stride + c], c = 0..=cw: c = cw the row's end), from the
     // counts per chunk. On the stack (64 KB); a bigger band (a wide map, a
@@ -719,10 +816,17 @@ pub unsafe extern "C" fn sep_pairs(
             op: pm & 255,
             pl: pm & 65280,
             p_part: 1,
+            pm,
+            vx: sep_iv_x(rd(qv, p)),
+            vy: sep_iv_y(rd(qv, p)),
             acc_px: 0.0,
             acc_py: 0.0,
             acc_ov: 0.0,
             acc_hit: 0,
+            acc_cx: 0.0,
+            acc_cy: 0.0,
+            acc_fx: 0.0,
+            acc_fy: 0.0,
         };
         let v = PairV {
             xp4: f32x4_splat(xpf),
@@ -779,6 +883,10 @@ pub unsafe extern "C" fn sep_pairs(
                 wr(ov_out, au, st.acc_ov);
             }
             wr(hit_out, au, rd(hit_out, au) + st.acc_hit);
+            wr(cx_out, au, rd(cx_out, au).wrapping_add(st.acc_cx as i32));
+            wr(cy_out, au, rd(cy_out, au).wrapping_add(st.acc_cy as i32));
+            wr(fx_out, au, rd(fx_out, au).wrapping_add(st.acc_fx as i32));
+            wr(fy_out, au, rd(fy_out, au).wrapping_add(st.acc_fy as i32));
         }
     }
 }

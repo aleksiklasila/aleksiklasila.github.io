@@ -326,6 +326,11 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // (sepCx/sepCy: separation velocity carried into the next update).
     ['sepD0', Uint8Array, 1], ['sepR0', Float32Array, 1], ['sepL0', Uint8Array, 1],
     ['sepCx', Float32Array, 1], ['sepCy', Float32Array, 1],
+    // Its intended velocity (its navigation's step of the last update per
+    // base tick, before contacts) and the closing response it carries into
+    // the next update: x and y as i16 halves, 1/256 px a base tick
+    // (wasm/src/lib.rs sep_iv_x; written by mv.rs push4).
+    ['sepIv', Int32Array, 1], ['sepCv', Int32Array, 1],
     // The version of its (owner, type) stat tables its stats were applied at
     // (things_utils.js _unitStatsVerOf).
     ['esVer', Int32Array, 1],
@@ -751,7 +756,7 @@ function _simUnitStateGrow(S, cap, minCap = cap) {
 function _simUnitSlotStart(S, s, u) {
     S.sepKey[s] = SIM_SEP_ABSENT;
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNav[s * SIM_NAV_STRIDE] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
-    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = typeof u._dtp === 'number' ? u._dtp : 0; S.columns.stEv[s] = 0; S.columns.stOn[s] = 1; S.columns.tmOn[s] = 1; S.columns.lzAcc[s] = typeof u._lzp === 'number' ? u._lzp : 0; S.columns.lzBeam[s] = typeof u._lzb === 'number' ? u._lzb : 0; S.columns.sepCx[s] = 0; S.columns.sepCy[s] = 0; S.columns.esVer[s] = -1; S.columns.statRow[s] = -1;
+    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = typeof u._dtp === 'number' ? u._dtp : 0; S.columns.stEv[s] = 0; S.columns.stOn[s] = 1; S.columns.tmOn[s] = 1; S.columns.lzAcc[s] = typeof u._lzp === 'number' ? u._lzp : 0; S.columns.lzBeam[s] = typeof u._lzb === 'number' ? u._lzb : 0; S.columns.sepCx[s] = 0; S.columns.sepCy[s] = 0; S.columns.sepIv[s] = 0; S.columns.sepCv[s] = 0; S.columns.esVer[s] = -1; S.columns.statRow[s] = -1;
     S.columns.fLsX[s] = NaN; S.columns.fLsY[s] = NaN; S.columns.fLsT[s] = -1;
     // (A worker record for a worker, or a unit carrying a builder's watch.)
     S.columns.wkIx[s] = 0;
