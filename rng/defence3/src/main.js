@@ -3270,6 +3270,42 @@ function _unitsInIdOrder(list) {
 // (members: the units, their tiles from their positions: no object per
 // unit, a click's 158k of them made garbage enough for several scavenges.)
 const NAV_GROUP_MIN = 8;
+// Move orders written straight to the unit columns (see _issueGroupMoveOrder;
+// off: every unit through its setters, for checks: tests/order-fast.test.cjs).
+let _ordFastOn = true;
+// (The digest keys of the fields an order sets.)
+let _ordK = null;
+function _ordKeys() {
+    if (_ordK) return _ordK;
+    const k = _simHKey;
+    _ordK = { tu: k('targetUnit'), tb: k('targetBuilding'), fat: k('forcedAttackTarget'), amx: k('_attackMoveGx'), amy: k('_attackMoveGy'), tp: k('targetPos'),
+        rk: k('_routeKey'), ppt: k('_pendingPathTarget'), pfa: k('pathIsFallbackAstar') };
+    _ordK.tuNull = _simHTerm(_ordK.tu, null); _ordK.tbNull = _simHTerm(_ordK.tb, null); _ordK.fatFalse = _simHTerm(_ordK.fat, false);
+    _ordK.pptNull = _simHTerm(_ordK.ppt, null); _ordK.pfaFalse = _simHTerm(_ordK.pfa, false);
+    return _ordK;
+}
+// (A digest field set to v, its term tv: the digest's change.)
+function _ordSet(a, s, key, v, tv) { const o = a[s]; if (o === v) return 0; a[s] = v; return (tv - _simHTerm(key, o)) | 0; }
+// A move order's first writes to a unit of the columns (no worker, so its
+// command is the order's), as targetUnit = null ... _pendingPathTarget =
+// null, pathIsFallbackAstar = false make them. Its route key is set with
+// its route (_issueFlowOrder).
+function _ordClearFast(c, s, K, cmd, amGx, amGy, tAmx, tAmy, targetPos, tTp) {
+    let h = c.hObj[s];
+    h += _ordSet(c.oc_targetUnit, s, K.tu, null, K.tuNull);
+    h += _ordSet(c.jr__tb, s, K.tb, null, K.tbNull); c.acqB[s] = 0;
+    h += _ordSet(c.oc_forcedAttackTarget, s, K.fat, false, K.fatFalse);
+    c.fLsX[s] = NaN; c.fLsY[s] = NaN;
+    if (c.commandState[s] !== cmd) { c.mvOn[s] = 0; c.commandState[s] = cmd; }
+    h += _ordSet(c.oc__attackMoveGx, s, K.amx, amGx, tAmx);
+    h += _ordSet(c.oc__attackMoveGy, s, K.amy, amGy, tAmy);
+    h += _ordSet(c.oc_targetPos, s, K.tp, targetPos, tTp);
+    c.j__awaitGroupPath[s] = 0;
+    h += _ordSet(c.jr__ppt, s, K.ppt, null, K.pptNull);
+    h += _ordSet(c.jr__pfa, s, K.pfa, false, K.pfaFalse);
+    c.mvPF[s] = 0;
+    c.hObj[s] = h | 0;
+}
 // (The members' route fields (path, pathIndex, _routeEnd, _routeSegEnd) are
 // written here, once each: _issueGroupMoveOrder leaves them.)
 function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
@@ -3289,7 +3325,26 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
         // (One path for the order's units: paths are replaced, never changed
         // in place.)
         const navPath = [group ? { x: dest.x, y: dest.y, nav: profile + 1, w: 1, ready } : { x: dest.x, y: dest.y, nav: profile + 1, ready }];
+        const K = _ordFastOn ? _ordKeys() : null, tRk = K ? _simHTerm(K.rk, NAV_ROUTE_KEY) : 0, pk = ((profile * 16777216 + destKey) * 2) + (group ? 1 : 0);
+        const flying = profile === NAV_PROFILE_AIR;
         for (let u of reachable) {
+            const c = u._us, s = u._si;
+            // (A unit of the columns, no worker: the setters' writes below, as
+            // they make them, straight to its columns.)
+            if (K && c && !c.jr__ws[s]) {
+                const o = c.oc__routeKey[s];
+                if (o !== NAV_ROUTE_KEY) { c.oc__routeKey[s] = NAV_ROUTE_KEY; c.hObj[s] = (c.hObj[s] + tRk - _simHTerm(K.rk, o)) | 0; }
+                c.rtEnd[s] = destKey; c.nvProf[s] = profile; c.j__navReady[s] = ready;
+                if (c.pathIndex[s] !== 0) { c.mvOn[s] = 0; c.pathIndex[s] = 0; }
+                const at = Math.floor(c.y[s] * 0.125 / TILE) * GRID_W + Math.floor(c.x[s] * 0.125 / TILE) === destKey;
+                c.nvPK[s] = at ? -1 : pk;
+                simUnitPathRelease(c, s);
+                c.jr__path[s] = at ? null : navPath;
+                c.mvOn[s] = 0; c.mvCD[s] = -1;
+                c.j__routeSegEnd[s] = at ? -1 : destKey;
+                if (!at && did >= 0) simFlowArm(c, s, did, navFieldGen(did), destKey, cmd, flying, ready, !group, 0, profile);
+                continue;
+            }
             u._routeKey = NAV_ROUTE_KEY; u._routeEnd = destKey; u._navReady = ready; u.pathIndex = 0;
             if (Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE) === destKey) { u.path = null; u._routeSegEnd = -1; continue; }
             // Its way: one nav node to the end (as continueUnitRoute gives),
@@ -3301,6 +3356,8 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
         }
     }
     if (outliers) for (let u of outliers) {
+        // (Off any earlier flow: the fast pass, _ordClearFast, leaves it.)
+        u._routeKey = null;
         const ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
         u._routeSegEnd = -1; u._routeEnd = destTile;
         applyPath(u, ugx, ugy, null);
@@ -3334,7 +3391,22 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
         }
     };
     let flowDest = [null, null], flowMembers = [null, null];
+    const K = _ordFastOn ? _ordKeys() : null, amGx = cmd === CMD_ATTACK_MOVING ? targetGx : null, amGy = cmd === CMD_ATTACK_MOVING ? targetGy : null;
+    const tAmx = K ? _simHTerm(K.amx, amGx) : 0, tAmy = K ? _simHTerm(K.amy, amGy) : 0, tTp = K ? _simHTerm(K.tp, targetPos) : 0;
     for (let u of list) {
+        const c = u._us, s = u._si;
+        // A unit of the columns, no worker, not held, indexed (the common
+        // case): what the setters below write, straight to its columns, its
+        // digest moved once (~25 accessor calls a unit were most of an
+        // order's cost).
+        if (K && c && c.owner[s] === playerId && c.dead[s] !== 1 && !c.jr__ws[s] && !c.oc_holdPosition[s] && c.spEpoch[s] === spatialEpoch) {
+            _ordClearFast(c, s, K, cmd, amGx, amGy, tAmx, tAmy, targetPos, tTp);
+            const ugx = Math.floor(c.x[s] * 0.125 / TILE), ugy = Math.floor(c.y[s] * 0.125 / TILE);
+            const profile = navProfileOf(u);
+            if (!flowDest[profile]) flowDest[profile] = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
+            (flowMembers[profile] ||= []).push(u);
+            continue;
+        }
         if (u.owner !== playerId || u.dead) continue;
         u.targetUnit = null; u.targetBuilding = null; u.forcedAttackTarget = false;
         u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
