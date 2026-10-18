@@ -113,7 +113,11 @@ const SNAP_FORMAT = 7;
 // 20: body-sized density pressure is a velocity integrated with simDk.
 // 21: density contact reaction limits navigation through compressed bodies.
 // 22: coincident pairs choose a shared axis and opposite force signs.
-const SIM_RULES_REVISION = 22;
+// 23: flow-relative contacts (closing response from committed movement,
+// local flow, obstruction brake, relaxation by elapsed ticks, resting
+// sleep); same-destination crowd arrival; group units on the destination
+// tile arrive (CROWD_SEPARATION_PROGRESS.md).
+const SIM_RULES_REVISION = 23;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;
