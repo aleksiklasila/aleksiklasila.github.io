@@ -268,10 +268,12 @@
                 </div>
             </div>
         </div>
-        <div id="lobby-buttons" style="margin-top:16px;display:flex;gap:8px">
+        <div id="lobby-buttons" style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
             <button onclick="startSoloGame()" style="font-size:16px;padding:10px 24px">Play Solo</button>
             <button onclick="hostOnlineGame()" id="btn-online" style="font-size:16px;padding:10px 24px">Play
                 Online</button>
+            <button id="btn-import-snapshot" type="button" style="font-size:16px;padding:10px 24px" title="Resume a solo game from a snapshot JSON file">Import Snapshot</button>
+            <input id="input-import-snapshot" type="file" accept="application/json,.json" hidden>
         </div>
         <div id="lobby-waiting" style="display:none;text-align:left;margin-top:12px;border:1px solid #333;background:#0d0d0d;padding:10px;border-radius:6px;min-width:420px">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
@@ -292,6 +294,7 @@
     <div id="hud">
         <div class="hud-left">
             <span class="hud-fps" id="hud-fps">0 FPS</span>
+            <button id="btn-export-snapshot" type="button" class="hud-btn" style="display:none" title="Download the current solo game as a snapshot JSON file">Export Snapshot</button>
         </div>
         <span class="hud-time" id="hud-time">0:00</span>
         <div class="hud-right">
@@ -908,7 +911,8 @@
     <script src="./src/things/things_utils.js?v=20261018-dk"></script>
     <script src="./src/things/tower.js?v=20261018-dk"></script>
 
-    <script src="./src/main.js?v=20261018-dk2"></script>
+    <script src="./src/main.js?v=20261019-snapshot"></script>
+    <script src="./src/utils/utils_solo_snapshot.js?v=20261019-snapshot"></script>
 
     <script src="./src/sim/sim_frame.js?v=20261018-meta"></script>
     <script src="./src/sim/sim_frame_world.js?v=20261012-h8"></script>
@@ -916,7 +920,7 @@
     <script src="./src/sim/sim_shadow.js?v=20261018-dk"></script>
     <script src="./src/sim/sim_rebase_bin.js?v=20261012-h8"></script>
     <script src="./src/sim/sim_rebase.js?v=20261012-h8"></script>
-    <script src="./src/sim/sim_client.js?v=20261018-separation5"></script>
+    <script src="./src/sim/sim_client.js?v=20261019-snapshot"></script>
 
     <script src="./src/bootstrap.js?v=20261014-lod26"></script>
     <script src="./src/debug/load_metrics.js?v=20261017-load1"></script>

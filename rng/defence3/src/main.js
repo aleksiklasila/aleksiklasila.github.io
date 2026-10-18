@@ -2786,6 +2786,7 @@ function initInput() {
     const btnConfigApply = document.getElementById('btn-config-apply');
     const btnConfigReset = document.getElementById('btn-config-reset');
     const btnExportSettings = document.getElementById('btn-export-settings');
+    initSoloSnapshotControls();
     const btnImportSettings = document.getElementById('btn-import-settings');
     const inputImportSettings = document.getElementById('input-import-settings');
     const btnShowStatsMap = document.getElementById('btn-show-statsmap');
@@ -5115,6 +5116,8 @@ function startGame() {
     recalculateAdjacency();
     dirtyGrid = true; dirtyAreas = true;
     gameStarted = true;
+    const snapshotButton = document.getElementById('btn-export-snapshot');
+    if (snapshotButton) snapshotButton.style.display = isMultiplayer ? 'none' : '';
     requestBuildMenuRefresh();
     updateControlGroupBar();
     startBackgroundMusic();

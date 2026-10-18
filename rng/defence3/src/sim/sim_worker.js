@@ -726,6 +726,11 @@ function _simRequest(msg) {
 function _simRequestRun(msg) {
     let result = null;
     switch (msg.op) {
+        // Runs in the tick stream, after all ticks dispatched before the click.
+        // Both the clock and the entities must come from this same world.
+        case 'soloSnapshot':
+            result = JSON.stringify(buildSoloGameSnapshot(msg.args));
+            break;
         // Host: a resync patch of the state before the next tick.
         case 'encodePatch':
             result = JSON.stringify(snapEncodeState(msg.args && msg.args.buckets ? { buckets: msg.args.buckets } : null));
