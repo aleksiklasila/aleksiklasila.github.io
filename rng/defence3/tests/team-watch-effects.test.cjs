@@ -17,7 +17,7 @@ assert.ok(statusStart >= 0 && statusEnd > statusStart, 'status-effect implementa
 
 const context = {
     BASE_UNIT_STATS: { scout: { watchDuration: 5 } },
-    localPlayerId: 0,
+    localPlayerId: 0, simDk: 1,
     clampThingLevel: value => Math.max(1, Math.floor(Number(value) || 1)),
     getUnitStatForOwner: (_owner, type, level, stat) => type === 'scout' && stat === 'watchDuration' ? 4 + level : NaN,
     getBuildingStatForOwner: (_owner, type, level, stat) => type === 'watch_tower' && stat === 'watchDuration' ? 4 + level : NaN,

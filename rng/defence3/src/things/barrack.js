@@ -320,7 +320,8 @@ function processGlobalSpawnerQueue() {
     // goes to the end (a new order), as ever.
     const R = _spawnReady || _spawnReadyBuild();
     let spawned = 0;
-    while (spawned < SPAWNS_PER_TICK) {
+    const most = SPAWNS_PER_TICK * simDk;
+    while (spawned < most) {
         let best = null, bestOrder = Infinity;
         for (const [o, L] of R.byOwner) {
             if (L.head >= L.e.length) continue;
@@ -342,7 +343,7 @@ function processGlobalSpawnerQueue() {
         if (best.head > 4096 && best.head * 2 > best.e.length) { best.e = best.e.slice(best.head); best.head = 0; }
         spawned++;
         // Its next front, if paid already: ready again (a new order).
-        if (spawned < SPAWNS_PER_TICK && _spawnReadyValid(s) && !Number.isFinite(s._spawnReadyOrder)) { s._spawnReadyOrder = globalSpawnerReadyOrderCounter++; spawnerReadyNoted(s); }
+        if (spawned < most && _spawnReadyValid(s) && !Number.isFinite(s._spawnReadyOrder)) { s._spawnReadyOrder = globalSpawnerReadyOrderCounter++; spawnerReadyNoted(s); }
     }
 }
 
@@ -450,7 +451,7 @@ const SPAWNER_UPDATE_TICKS = 4;
 // building's update; idempotent within a tick, so this only saves calls).
 const _researchAdvancedTick = [];
 function spawnerDue(b) {
-    return ((gameTime + b.gx + b.gy * 7) % SPAWNER_UPDATE_TICKS) === 0;
+    return simStepCrosses(b.gx + b.gy * 7, SPAWNER_UPDATE_TICKS);
 }
 
 class CollectorSpawner {

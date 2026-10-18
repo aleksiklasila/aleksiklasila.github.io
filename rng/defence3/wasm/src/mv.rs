@@ -196,6 +196,15 @@ const W_TRT: usize = 289;
 const W_TRTG: usize = 291;
 // (Each slot's worker record: unit.wkIx; the wk* arrays are by record.)
 const W_WKIX: usize = 292;
+// (The step's attack carry and shots: unit.atkL, unit.atkN; see fire.)
+const W_ATL: usize = 293;
+const W_ATN: usize = 294;
+/// Per navigation profile p: its routing atlas's header (nav.<p>.atl,
+/// atlas.rs Atl) at word W_ATLAS + p; 0 none.
+const W_ATLAS: usize = 430;
+/// The field id of a route on the atlas (flownav.js NAV_ATLAS_FID): no
+/// destination field, every destination by lookups (atlas.rs).
+pub const NAV_ATLAS_FID: i32 = 1 << 30;
 const W_TRES: usize = 290;
 /// Per navigation profile p: 8 words from W_NAV + 8p (fields, partL, partB,
 /// nb, nt, np, meta, walls).
@@ -232,6 +241,13 @@ struct NavP {
 }
 
 struct Mv {
+    /// The step's base ticks (simDk, P[58]; at least 1) and as a double.
+    dk: i32,
+    dkf: f64,
+    /// The profiles' atlas headers (null: none).
+    atlh: [*const i32; NAV_PROFILES],
+    atl: *mut u8,
+    atn: *mut u8,
     on: *mut u8,
     out: *mut u8,
     fl: *mut u8,
@@ -476,7 +492,7 @@ fn px4(v: v128) -> v128 {
 
 #[inline(always)]
 unsafe fn word(a: *const i32, i: usize) -> usize {
-    rd(a, i) as u32 as usize
+    waddr(rd(a, i) as u32)
 }
 
 impl Mv {
@@ -514,6 +530,17 @@ impl Mv {
         }
         let tile = rd(f, 7);
         Mv {
+            dk: { let k = to_i32(rd(f, 58)); if k > 1 { k.min(64) } else { 1 } },
+            dkf: { let k = to_i32(rd(f, 58)); if k > 1 { k.min(64) as f64 } else { 1.0 } },
+            atlh: {
+                let mut h = [0 as *const i32; NAV_PROFILES];
+                for (p, e) in h.iter_mut().enumerate() {
+                    *e = word(a, W_ATLAS + p) as *const i32;
+                }
+                h
+            },
+            atl: p!(W_ATL),
+            atn: p!(W_ATN),
             on: p!(W_ON),
             out: p!(W_OUT),
             fl: p!(W_FL),
@@ -1116,6 +1143,9 @@ unsafe fn flow_slide(wl: *const u8, w: i32, h: i32, gx: i32, gy: i32, ngx: f64, 
 }
 /// The navigation context of one look (simFlowLook's arguments).
 struct Nav {
+    /// The profile's atlas header when the route is on the atlas (no rows,
+    /// no destination field): null otherwise.
+    atl: *const i32,
     w: i32,
     h: i32,
     cs: i32,
@@ -1154,6 +1184,10 @@ unsafe fn wall_step_out(v: &Nav, tx: i32, ty: i32) -> i32 {
         if first < 0 {
             first = n;
         }
+        // (On the atlas: no rows, the first open side.)
+        if v.rows.is_null() {
+            return n;
+        }
         let cf = idiv(y, v.c) * v.cw + idiv(x, v.c);
         if rd(v.rows, (v.ro + rd(v.pb, cf as usize) + l as i32) as usize) != 255 {
             return n;
@@ -1165,6 +1199,15 @@ unsafe fn wall_step_out(v: &Nav, tx: i32, ty: i32) -> i32 {
 unsafe fn nav_step(v: &Nav, t: i32, tx: i32, ty: i32, dest: i32) -> i32 {
     if t == dest {
         return -1;
+    }
+    if !v.atl.is_null() {
+        if rd(v.pl, t as usize) == 0xFFFF {
+            return wall_step_out(v, tx, ty);
+        }
+        return match crate::atlas::Atl::from(v.atl) {
+            Some(a) => crate::atlas::atlas_step(&a, v.pl, v.pb, v.nt, v.np, v.fields, v.w, t, dest),
+            None => -1,
+        };
     }
     if !v.df.is_null() {
         let lx = tx - v.bx;
@@ -1418,6 +1461,56 @@ unsafe fn flow_look_calc(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, d
 
 // ---- the movement kernels ----
 
+/// Whether the segment (x0, y0)-(x1, y1) stays on open tiles of `wl` (in the
+/// map): its points a quarter tile apart. (A step of several base ticks
+/// (simDk) can pass more than one tile: the slide checks only the tile it
+/// ends in.)
+#[inline(never)]
+unsafe fn seg_open(wl: *const u8, w: i32, h: i32, x0: f64, y0: f64, x1: f64, y1: f64, itile: f64, tile: f64) -> bool {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let len = sqrt(dx * dx + dy * dy);
+    let n = (floor(len / (tile * 0.25)) as i32 + 1).min(256);
+    for i in 1..=n {
+        let k = i as f64 / n as f64;
+        let gx = floor((x0 + dx * k) * itile);
+        let gy = floor((y0 + dy * k) * itile);
+        if !inb(gx, w) || !inb(gy, h) || rd(wl, (gy as i32 * w + gx as i32) as usize) != 0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// An attack made now by slot s: its shots for the step's base ticks (the
+/// carry, unit.atkL: the base ticks it stood ready before the step's end,
+/// k_status; 1 + carry / cooldown shots, into unit.atkN for the hit
+/// kernel), its timer the cooldown past the carry; flash and timer flags.
+/// (One base tick a step: no carry, one shot, the timer the cooldown.)
+#[inline(always)]
+unsafe fn fire(m: &Mv, s: usize) {
+    let cd = rd(m.acd, s);
+    let mut at = cd;
+    let mut n = 1u8;
+    if !m.atl.is_null() {
+        let l = rd(m.atl, s);
+        if l != 0 {
+            let lf = l as f64;
+            if cd > 0.0 {
+                n = (1 + floor(lf / cd) as i32).min(255) as u8;
+            }
+            at = cd * n as f64 - lf;
+            wr(m.atl, s, 0);
+        }
+    }
+    if !m.atn.is_null() {
+        wr(m.atn, s, n);
+    }
+    wr(m.at as *mut F32, s, at);
+    wr(m.flash, s, 8);
+    wr(m.tmon, s, 1);
+}
+
 /// A move's step written: position quantized, the output by tile.
 #[cfg_attr(not(feature = "prof"), inline(always))]
 #[cfg_attr(feature = "prof", inline(never))]
@@ -1459,7 +1552,8 @@ struct StepP {
 /// steady step (step4: a flow unit walking its committed step inside its
 /// tile, nothing to look at this tick), the rest one by one (step_slot).
 #[no_mangle]
-pub unsafe extern "C" fn mv_step(a: *const i32, s0: i32, end: i32) {
+pub unsafe extern "C" fn mv_step(a: u32, s0: i32, end: i32) {
+    let a = waddr(a) as *const i32;
     let m = Mv::load(a);
     let f = (a as usize + 4096) as *const f64;
     let p = step_params(f);
@@ -1560,8 +1654,14 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
     let tl = i32x4_add(i32x4_mul(gy, i32x4_splat(m.w)), gx);
     ok = v128_and(ok, i32x4_eq(tl, v128_load(m.ctl.add(s) as *const v128)));
     ok = v128_and(ok, i32x4_eq(tl, v128_load(m.floor.add(s) as *const v128)));
-    let vx = v128_load(m.cvx.add(s) as *const v128);
-    let vy = v128_load(m.cvy.add(s) as *const v128);
+    // (The committed step is per base tick: dk of them this step.)
+    let mut vx = v128_load(m.cvx.add(s) as *const v128);
+    let mut vy = v128_load(m.cvy.add(s) as *const v128);
+    if m.dk > 1 {
+        let k = f32x4_splat(m.dk as f32);
+        vx = f32x4_mul(vx, k);
+        vy = f32x4_mul(vy, k);
+    }
     let nx = i32x4_add(x, q8x4(vx));
     let ny = i32x4_add(y, q8x4(vy));
     let stay = v128_and(i32x4_eq(tile4(m, nx), gx), i32x4_eq(tile4(m, ny), gy));
@@ -1585,7 +1685,8 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
     // (Ground lanes stepping into another tile: taken when that tile is open
     // to them (step_flow's commit without a slide, flow_slide 0), checked
     // one by one: few lanes cross on a tick.)
-    let cross = i32x4_bitmask(v128_andnot(ok, v128_or(stay, fly4))) as i32;
+    // (Several base ticks a step: no crossing here, move_flow steers it.)
+    let cross = if m.dk > 1 { 0 } else { i32x4_bitmask(v128_andnot(ok, v128_or(stay, fly4))) as i32 };
     ok = v128_and(ok, v128_or(stay, fly4));
     let mut bits = i32x4_bitmask(ok) as i32;
     if cross != 0 {
@@ -1616,6 +1717,9 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
     let dk4 = v128_load(m.dest.add(s) as *const v128);
     let same = |v: v128| i32x4_all_true(i32x4_eq(v, i32x4_shuffle::<0, 0, 0, 0>(v, v)));
     let field_ok = |fid: i32, fgen: i32, dk: i32| -> bool {
+        if fid == NAV_ATLAS_FID {
+            return true;
+        }
         let wide = fid >= 4194304;
         let did = if wide { fid - 4194304 } else { fid };
         let (fmeta, fmn) = if wide { (m.fmw, m.fmwn) } else { (m.fmn, m.fmnn) };
@@ -1645,7 +1749,7 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
     // steady window: a lane on its second's tick standing on a hostile
     // structure goes to step_slot.
     if bits != 0 && p.tr > 0 {
-        let due = i32x4_bitmask(i32x4_eq(urem4(i32x4_add(ti, v128_load(m.id.add(s) as *const v128)), p.tr), zero)) as i32 & bits;
+        let due = i32x4_bitmask(i32x4_lt(urem4(i32x4_add(ti, v128_load(m.id.add(s) as *const v128)), p.tr), i32x4_splat(m.dk))) as i32 & bits;
         if due != 0 {
             let tla: [i32; 4] = core::mem::transmute(tl);
             for l in 0..4usize {
@@ -1740,7 +1844,7 @@ unsafe fn park4(m: &Mv, p: &StepP, s: usize, done: i32) -> i32 {
     ok = v128_and(ok, i32x4_eq(v128_and(fl, i32x4_splat(13)), zero));
     let tw = i32x4_add(t, v128_load(m.id.add(s) as *const v128));
     // (Aggro parks: not on their look tick, (t + id) & 3 with four ticks.)
-    ok = v128_andnot(ok, v128_and(i32x4_ne(v128_and(fl, i32x4_splat(16)), zero), i32x4_eq(v128_and(tw, i32x4_splat(3)), zero)));
+    ok = v128_andnot(ok, v128_and(i32x4_ne(v128_and(fl, i32x4_splat(16)), zero), i32x4_lt(v128_and(tw, i32x4_splat(3)), i32x4_splat(m.dk))));
     ok = v128_and(ok, i32x4_eq(ld_u8x4(m.dead.add(s)), zero));
     if !v128_any_true(ok) {
         return 0;
@@ -1761,7 +1865,7 @@ unsafe fn park4(m: &Mv, p: &StepP, s: usize, done: i32) -> i32 {
         return 0;
     }
     if p.tr > 0 {
-        ok = v128_and(ok, i32x4_ne(urem4(v128_and(tw, i32x4_splat(0x7fffffff)), p.tr), zero));
+        ok = v128_and(ok, i32x4_ge(urem4(v128_and(tw, i32x4_splat(0x7fffffff)), p.tr), i32x4_splat(m.dk)));
     }
     let bits = i32x4_bitmask(ok) as i32;
     if bits == 0 {
@@ -1813,7 +1917,7 @@ unsafe fn step_slot(m: &Mv, p: &StepP, s: usize) {
     }
     let on = rd(m.on, s);
     // (A builder on its way back: its watchdog sample on its watch tick.)
-    if on == 1 && rd(m.wk, s) == 3 && rem64_f(tsum(t, rd(m.id, s)), wkwatch) == 0 && { let w = wki(m, s); rd(m.wkwx, w) == rd(m.wkwx, w) } {
+    if on == 1 && rd(m.wk, s) == 3 && rem64_f(tsum(t, rd(m.id, s)), wkwatch) < m.dk as i64 && { let w = wki(m, s); rd(m.wkwx, w) == rd(m.wkwx, w) } {
         wk_watch(m, s, t);
     }
     if on == 2 {
@@ -1822,10 +1926,10 @@ unsafe fn step_slot(m: &Mv, p: &StepP, s: usize) {
         let id = rd(m.id, s);
         let ts = tsum(t, id);
         let tw = t.wrapping_add(id);
-        if t >= rd(m.wake, s) || (fl & 9) != 0 || ((fl & 16) != 0 && (rem64_f(ts, acq_t) == 0 || (tw & 3) == 0)) {
+        if t >= rd(m.wake, s) || (fl & 9) != 0 || ((fl & 16) != 0 && (rem64_f(ts, acq_t) < m.dk as i64 || (tw & 3) < m.dk)) {
             return;
         }
-        if (fl & 4) != 0 && rem64_f(ts, wkwatch) == 0 {
+        if (fl & 4) != 0 && rem64_f(ts, wkwatch) < m.dk as i64 {
             wk_watch(m, s, t);
         }
         if !(rd(m.en, s) > 0.0) || rd(m.sep, s) as f64 == absent || dead != 0 {
@@ -1840,7 +1944,7 @@ unsafe fn step_slot(m: &Mv, p: &StepP, s: usize) {
             return;
         }
         let tl = gy as i32 * w + gx as i32;
-        if rd(m.floor, s) != tl || irem_f(tw, tr) == 0 {
+        if rd(m.floor, s) != tl || irem_f(tw, tr) < m.dk {
             let code = rd(m.sc, tl as usize) as i32;
             if code != -1 && code != owner && floor_hit(m, s, tl) {
                 return;
@@ -1889,7 +1993,7 @@ unsafe fn step_flow(
         return;
     }
     let tw = t.wrapping_add(id);
-    if rd(m.floor, s) != tl || irem_f(tw, tr) == 0 {
+    if rd(m.floor, s) != tl || irem_f(tw, tr) < m.dk {
         let code = rd(m.sc, tl as usize) as i32;
         if code != -1 && code != owner && floor_hit(m, s, tl) {
             return;
@@ -1900,16 +2004,16 @@ unsafe fn step_flow(
     // (With the combat brain the looks are its own: _simMovePre makes none.)
     if m.brain {
     } else if (f & 16) != 0 {
-        if rem64_f(ts, acq_t) == 0 || (tw & 3) == 0 {
+        if rem64_f(ts, acq_t) < m.dk as i64 || (tw & 3) < m.dk {
             return;
         }
-    } else if (f & 1) != 0 && (tw & 1) == 0 && !(rd(m.area, s) >= 0) {
+    } else if (f & 1) != 0 && (tw & 1) < m.dk && !(rd(m.area, s) >= 0) {
         return;
-    } else if (f & 1) != 0 && (tw & 1) == 0 && !(at > 0.0) && rd(m.dbtk, s) == t && rd(m.dbt, s) != -2 {
+    } else if (f & 1) != 0 && (tw & 1) < m.dk && !(at > 0.0) && rd(m.dbtk, s) == t && rd(m.dbt, s) != -2 {
         if rd(m.dbt, s) != -1 || rd(m.dbs, s) >= 0 {
             return;
         }
-    } else if (f & 1) != 0 && (tw & 1) == 0 && !(at > 0.0) {
+    } else if (f & 1) != 0 && (tw & 1) < m.dk && !(at > 0.0) {
         let area = rd(m.area, s);
         let k = area * boxsteps + rd(m.reach, s) as i32;
         if rd(m.abok, k as usize) == 0 {
@@ -1935,27 +2039,33 @@ unsafe fn step_flow(
             }
         }
     }
-    if rd(m.wk, s) == 1 && irem_f(tw, wcheck) == 0 && !(rd(m.wtc, s) > 0) {
+    if rd(m.wk, s) == 1 && irem_f(tw, wcheck) < m.dk && !(rd(m.wtc, s) > 0) {
         return;
     }
     let fid = rd(m.flow, s);
-    let wide = fid >= 4194304;
-    let did = if wide { fid - 4194304 } else { fid };
-    let (fmeta, fmn) = if wide { (m.fmw, m.fmwn) } else { (m.fmn, m.fmnn) };
-    if !(fid >= 0) || fmeta.is_null() {
-        return;
-    }
-    let dm = did as usize * 8;
-    if dm + 7 >= fmn || rd(fmeta, dm + 6) != rd(m.fgen, s) || rd(fmeta, dm + 1) != dk || rd(fmeta, dm + 7) != 1 {
-        return;
+    if fid != NAV_ATLAS_FID {
+        let wide = fid >= 4194304;
+        let did = if wide { fid - 4194304 } else { fid };
+        let (fmeta, fmn) = if wide { (m.fmw, m.fmwn) } else { (m.fmn, m.fmnn) };
+        if !(fid >= 0) || fmeta.is_null() {
+            return;
+        }
+        let dm = did as usize * 8;
+        if dm + 7 >= fmn || rd(fmeta, dm + 6) != rd(m.fgen, s) || rd(fmeta, dm + 1) != dk || rd(fmeta, dm + 7) != 1 {
+            return;
+        }
     }
     if t < rd(m.rdy, s) {
         return;
     }
-    let mut vx = rd(m.cvx, s);
-    let mut vy = rd(m.cvy, s);
+    let mut vx = rd(m.cvx, s) * m.dkf;
+    let mut vy = rd(m.cvy, s) * m.dkf;
     let sgx = floor((x + vx) * itile);
     let sgy = floor((y + vy) * itile);
+    // (Several base ticks a step leaving the tile: steered by move_flow.)
+    if m.dk > 1 && (sgx != gx as f64 || sgy != gy as f64) {
+        return;
+    }
     if (f & 32) == 0 && (sgx != gx as f64 || sgy != gy as f64) {
         let np = rd(m.npr, s) as usize;
         let wl = if np < NAV_PROFILES && !m.nav.get_unchecked(np).walls.is_null() { m.nav.get_unchecked(np).walls } else { m.wall };
@@ -2034,7 +2144,8 @@ struct MoveP {
 /// epilogue (epi_slot). (Units' passes read nothing another unit's write
 /// in the same tick: the order between units does not show.)
 #[no_mangle]
-pub unsafe extern "C" fn mv_move(a: *const i32, s0: i32, end: i32, chunk: i32) {
+pub unsafe extern "C" fn mv_move(a: u32, s0: i32, end: i32, chunk: i32) {
+    let a = waddr(a) as *const i32;
     wr(a as *mut i32, 299, s0);
     core::ptr::write_bytes(a.add(300) as *mut u8, 0, (end - s0).max(0) as usize);
     let m = Mv::load(a);
@@ -2244,7 +2355,10 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
     spd = f32x4_mul(spd, v128_bitselect(half, one, i32x4_gt(u32x4_load_extend_u16x4(m.snd.add(s) as *const u16), zero)));
     let go = v128_and(v128_and(lane, chase), v128_and(f32x4_gt(d, spd), f32x4_gt(spd, fz)));
     let stand = v128_andnot(lane, go);
-    let k = f32x4_div(spd, d);
+    // (Several base ticks: their way, stopping a base tick's step short of
+    // the target, where one a step stops.)
+    let stp = if m.dk > 1 { f32x4_min(f32x4_mul(spd, f32x4_splat(m.dk as f32)), f32x4_sub(d, spd)) } else { spd };
+    let k = f32x4_div(stp, d);
     let vx = v128_and(f32x4_mul(dx, k), go);
     let vy = v128_and(f32x4_mul(dy, k), go);
     let gx = tile4(m, x);
@@ -2317,9 +2431,7 @@ unsafe fn move_combat(m: &Mv, p: &MoveP, s: usize) -> bool {
     }
     let cm = rd(m.cmode, s);
     if (cm & 4) != 0 && !(rd(m.at, s) > 0.0) && !m.hita.is_null() {
-        wr(m.at as *mut F32, s, rd(m.acd, s));
-        wr(m.flash, s, 8);
-        wr(m.tmon, s, 1);
+        fire(m, s);
         let c = rd(m.hitc, p.chunk);
         wr(m.hita, p.s0 + c as usize, s as i32);
         wr(m.hitt, p.s0 + c as usize, q);
@@ -2361,6 +2473,16 @@ unsafe fn move_combat(m: &Mv, p: &MoveP, s: usize) -> bool {
     let mut vy = dy / d * spd;
     let gx = floor(x * itile) as i32;
     let gy = floor(y * itile) as i32;
+    if m.dk > 1 {
+        // (Several base ticks, short of the target by a base tick's step;
+        // one base tick's when the way has walls.)
+        let st = js_min(spd * m.dkf, d - spd);
+        let (ax, ay) = (dx / d * st, dy / d * st);
+        if rd(m.slayer, s) == 1 || seg_open(m.wall, w, h, x, y, x + ax, y + ay, itile, m.tile) {
+            vx = ax;
+            vy = ay;
+        }
+    }
     if rd(m.slayer, s) != 1 {
         let sl = flow_slide(m.wall, w, h, gx, gy, floor((x + vx) * itile), floor((y + vy) * itile));
         if (sl & 1) != 0 {
@@ -2417,12 +2539,12 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
     let hold = on == 3;
     let bhold = on == 5;
     let id0 = rd(m.id, s);
-    if parked && (rd(m.fl, s) & 4) != 0 && rem64_f(tsum(t, id0), p.wkwatch) == 0 {
+    if parked && (rd(m.fl, s) & 4) != 0 && rem64_f(tsum(t, id0), p.wkwatch) < m.dk as i64 {
         wk_watch(m, s, t);
     }
     if parked && t >= rd(m.wake, s) {
         let mut stay = false;
-        if (rd(m.fl, s) & 2) != 0 && !m.wkv.is_null() && (t as f64) < rd(m.wksc, wki(m, s)) && (t as f64) < rd(m.wku, wki(m, s)) && rem64_f(tsum(t, id0), p.wkper as i64) == 0 {
+        if (rd(m.fl, s) & 2) != 0 && !m.wkv.is_null() && (t as f64) < rd(m.wksc, wki(m, s)) && (t as f64) < rd(m.wku, wki(m, s)) && rem64_f(tsum(t, id0), p.wkper as i64) < m.dk as i64 {
             let gx = floor(rd(m.x, s) * itile);
             let gy = floor(rd(m.y, s) * itile);
             let o = rd(m.own, s);
@@ -2451,7 +2573,7 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
     let tl = gy * w + gx;
     let tw = t.wrapping_add(id);
     let ts = tsum(t, id);
-    if rd(m.floor, s) != tl || irem_f(tw, p.tr) == 0 {
+    if rd(m.floor, s) != tl || irem_f(tw, p.tr) < m.dk {
         let code = rd(m.sc, tl as usize) as i32;
         if code != -1 && code != owner && floor_hit(m, s, tl) {
             back!();
@@ -2521,9 +2643,7 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
                 wr(m.out, s, 6);
             } else if (f & 4) != 0 && !m.hita.is_null() {
                 // (A plain attacker's attack made here, its hit listed.)
-                wr(m.at as *mut F32, s, rd(m.acd, s));
-                wr(m.flash, s, 8);
-                wr(m.tmon, s, 1);
+                fire(m, s);
                 let c = rd(m.hitc, p.chunk);
                 wr(m.hita, p.s0 + c as usize, s as i32);
                 wr(m.hitt, p.s0 + c as usize, qq);
@@ -2544,7 +2664,7 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
         if code == -1 || code == owner {
             back!();
         }
-        if (rd(m.fl, s) & 1) == 0 && rem64_f(ts, 8) == 0 && acq_hit(m, s, p.acq_stamp) {
+        if (rd(m.fl, s) & 1) == 0 && rem64_f(ts, 8) < m.dk as i64 && acq_hit(m, s, p.acq_stamp) {
             back!();
         }
         let a = rd(m.ag, bt as usize);
@@ -2601,9 +2721,7 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
                 wr(m.py, s, y);
                 wr(m.out, s, 13);
                 if !(rd(m.at, s) > 0.0) && (f & 4) != 0 && !m.hita.is_null() {
-                    wr(m.at as *mut F32, s, rd(m.acd, s));
-                    wr(m.flash, s, 8);
-                wr(m.tmon, s, 1);
+                    fire(m, s);
                     let c = rd(m.hitc, p.chunk);
                     wr(m.hita, p.s0 + c as usize, s as i32);
                     wr(m.hitt, p.s0 + c as usize, qq);
@@ -2647,8 +2765,15 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
             if rd(m.snd, s) > 0 {
                 spd *= 0.5;
             }
-            let nx = (x + (dx / d) * spd) as f32 as f64;
-            let ny = (y + (dy / d) * spd) as f32 as f64;
+            let mut st = spd;
+            if m.dk > 1 {
+                let k = js_min(spd * m.dkf, js_max(spd, d - spd));
+                if fly || seg_open(m.wall, w, h, x, y, x + dx / d * k, y + dy / d * k, itile, tile) {
+                    st = k;
+                }
+            }
+            let nx = (x + (dx / d) * st) as f32 as f64;
+            let ny = (y + (dy / d) * st) as f32 as f64;
             let ngx = floor(nx * itile);
             let ngy = floor(ny * itile);
             // (JavaScript: WALL[NaN] is undefined, no wall.)
@@ -2675,7 +2800,7 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
         if code == -1 || code == owner {
             back!();
         }
-        if rd(m.htid, s) == 0 && rem64_f(ts, 8) == 0 && acq_hit(m, s, p.acq_stamp) {
+        if rd(m.htid, s) == 0 && rem64_f(ts, 8) < m.dk as i64 && acq_hit(m, s, p.acq_stamp) {
             back!();
         }
         let a = rd(m.ag, bt as usize);
@@ -2689,7 +2814,7 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
         }
     }
     let atk = (f & 16) != 0;
-    let mut db_look = !m.brain && !atk && (f & 1) != 0 && (tw & 1) == 0;
+    let mut db_look = !m.brain && !atk && (f & 1) != 0 && (tw & 1) < m.dk;
     let at = rd(m.at, s);
     if db_look {
         if !(rd(m.area, s) >= 0) {
@@ -2705,7 +2830,7 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
             db_look = false;
         }
     }
-    if if atk { !m.brain && (rem64_f(ts, p.acq_t) == 0 || (tw & 3) == 0) } else { db_look } {
+    if if atk { !m.brain && (rem64_f(ts, p.acq_t) < m.dk as i64 || (tw & 3) < m.dk) } else { db_look } {
         let (x0, y0, x1, y1);
         if atk {
             let r = rd(m.reach, s) as f64;
@@ -2738,14 +2863,14 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
                     if !(at > 0.0) && (rd(m.dbtk, s) != t || rd(m.dbt, s) != -1 || rd(m.dbs, s) >= 0) {
                         back!();
                     }
-                } else if rem64_f(ts, p.acq_t) == 0 && acq_hit(m, s, p.acq_stamp) {
+                } else if rem64_f(ts, p.acq_t) < m.dk as i64 && acq_hit(m, s, p.acq_stamp) {
                     wr(m.on, s, 0);
                     wr(m.px, s, x);
                     wr(m.py, s, y);
                     wr(m.out, s, 14);
                     return 0;
                 }
-                if atk && (tw & 3) == 0 && rd(m.cbtk, s) == p.acq_stamp && rd(m.crs, s) == rd(m.rng, s) {
+                if atk && (tw & 3) < m.dk && rd(m.cbtk, s) == p.acq_stamp && rd(m.crs, s) == rd(m.rng, s) {
                     let cb = rd(m.cbs, s);
                     if cb >= 0 {
                         let code = rd(m.sc, cb as usize) as i32;
@@ -2885,7 +3010,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
             return;
         }};
     }
-    if rd(m.wk, s) == 1 && irem_f(tw, p.wcheck) == 0 && !(rd(m.wtc, s) > 0) {
+    if rd(m.wk, s) == 1 && irem_f(tw, p.wcheck) < m.dk && !(rd(m.wtc, s) > 0) {
         back!();
     }
     let dk = rd(m.dest, s);
@@ -2901,14 +3026,20 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
         }
     };
     let fid = rd(m.flow, s);
-    let wide = fid >= 4194304;
-    let did = if wide { fid - 4194304 } else { fid };
-    let dm = (did as i64 * 8) as usize;
-    let (fmeta, fmn, fpool) = if wide { (m.fmw, m.fmwn, m.fpw) } else { (m.fmn, m.fmnn, m.fpn) };
-    if !(fid >= 0) || fmeta.is_null() || dm + 7 >= fmn || rd(fmeta, dm + 1) != dk {
+    // (On the atlas: no destination field to check, ready at once.)
+    let on_atl = fid == NAV_ATLAS_FID;
+    let atlh = if on_atl && np < NAV_PROFILES { *m.atlh.get_unchecked(np) } else { 0 as *const i32 };
+    if on_atl && atlh.is_null() {
         back!();
     }
-    if rd(fmeta, dm + 6) != rd(m.fgen, s) {
+    let wide = !on_atl && fid >= 4194304;
+    let did = if on_atl { 0 } else if wide { fid - 4194304 } else { fid };
+    let dm = (did as i64 * 8) as usize;
+    let (fmeta, fmn, fpool) = if wide { (m.fmw, m.fmwn, m.fpw) } else { (m.fmn, m.fmnn, m.fpn) };
+    if !on_atl && (!(fid >= 0) || fmeta.is_null() || dm + 7 >= fmn || rd(fmeta, dm + 1) != dk) {
+        back!();
+    }
+    if !on_atl && rd(fmeta, dm + 6) != rd(m.fgen, s) {
         // (Its destination's field made again (a navigation build installed):
         // the same slot and destination, its new generation taken here, as
         // _simMoveTryFlowArm would; its committed step dropped.)
@@ -2922,15 +3053,18 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     if t < rd(m.rdy, s) {
         stand!();
     }
-    if rd(fmeta, dm + 7) != 1 {
+    if !on_atl && rd(fmeta, dm + 7) != 1 {
         back!();
     }
-    if rd(m.cd, s) == dk && rd(m.ctl, s) == tl && t - rd(m.ct, s) < rd(m.cn, s) as i32 {
+    // (The committed step is per base tick; several a step leaving the tile
+    // are steered again below.)
+    if rd(m.cd, s) == dk && rd(m.ctl, s) == tl && t - rd(m.ct, s) < rd(m.cn, s) as i32
+        && (m.dk == 1 || (floor((x + rd(m.cvx, s) * m.dkf) * itile) == gx as f64 && floor((y + rd(m.cvy, s) * m.dkf) * itile) == gy as f64)) {
         if tl == dk {
             back!();
         }
-        let mut vx = rd(m.cvx, s);
-        let mut vy = rd(m.cvy, s);
+        let mut vx = rd(m.cvx, s) * m.dkf;
+        let mut vy = rd(m.cvy, s) * m.dkf;
         let sgx = floor((x + vx) * itile);
         let sgy = floor((y + vy) * itile);
         if (f & 32) == 0 && (sgx != gx as f64 || sgy != gy as f64) {
@@ -2955,9 +3089,9 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
         Some(n) => n,
         None => back!(),
     };
-    let rows = if wide { m.frw } else { m.frn };
-    let rw = if m.fhd.is_null() { 0 } else { rd(m.fhd, if wide { 1 } else { 0 }) };
-    if nv.fields.is_null() || nv.meta.is_null() || nv.partl.is_null() || nv.partb.is_null() || rows.is_null() || !(rw > 0) {
+    let rows = if on_atl { 0 as *const u8 } else if wide { m.frw } else { m.frn };
+    let rw = if on_atl { 1 } else if m.fhd.is_null() { 0 } else { rd(m.fhd, if wide { 1 } else { 0 }) };
+    if nv.fields.is_null() || nv.meta.is_null() || nv.partl.is_null() || nv.partb.is_null() || (!on_atl && rows.is_null()) || !(rw > 0) {
         back!();
     }
     let n_c = rd(nv.meta, 0);
@@ -2968,8 +3102,8 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     }
     let nld = rd(m.nld, s);
     if nld == (-2 - dk) as f64 {
-        let look = (tw & 15) == 0;
-        if !look || ((tw & 63) != 0 && !(rd(m.cwt, s) == t && rd(m.cwd, s) < 9)) {
+        let look = (tw & 15) < m.dk;
+        if !look || ((tw & 63) >= m.dk && !(rd(m.cwt, s) == t && rd(m.cwd, s) < 9)) {
             stand!();
         }
         wr(m.nld, s, -1.0);
@@ -2988,7 +3122,9 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
             es *= 0.5;
         }
         let near = (dx0 - gx).abs() <= 8 && (dy0 - gy).abs() <= 8;
-        if last >= 0.0 && last - now < es * 0.3 * SIM_STEER_NEAR_TICKS as f64 {
+        // (The progress expected since the last look: its base ticks, at
+        // least a step's.)
+        if last >= 0.0 && last - now < es * 0.3 * (SIM_STEER_NEAR_TICKS as i32).max(m.dk) as f64 {
             if near && rd(m.cwt, s) == t && rd(m.cwn, s) == 1 {
                 back!();
             }
@@ -3002,6 +3138,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     // The look-ahead (simFlowLook): clusters of 2^cs tiles.
     let cs = 31 - (n_c as u32).leading_zeros() as i32;
     let v = Nav {
+        atl: atlh,
         w,
         h,
         cs,
@@ -3016,20 +3153,20 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
         nb: nv.nb,
         nt: nv.nt,
         np: nv.np,
-        df: fpool,
+        df: if on_atl { 0 as *const u16 } else { fpool },
         doff: did * span * span,
-        bx: rd(fmeta, dm + 2),
-        by: rd(fmeta, dm + 3),
-        bw: rd(fmeta, dm + 4),
-        bh: rd(fmeta, dm + 5),
+        bx: if on_atl { 0 } else { rd(fmeta, dm + 2) },
+        by: if on_atl { 0 } else { rd(fmeta, dm + 3) },
+        bw: if on_atl { 0 } else { rd(fmeta, dm + 4) },
+        bh: if on_atl { 0 } else { rd(fmeta, dm + 5) },
     };
     let wv = if m.wblk9.is_null() { p.wver } else { rd(m.wblk9, ((gy >> 3) * p.wbw + (gx >> 3)) as usize) };
-    let refresh = (tw & (SIM_FLOW_REFRESH_TICKS - 1)) == 0;
-    let lk = flow_look(m, &v, s, refresh, tl, gx, gy, dk, wl, rd(nv.meta, 6), wv, if wide { 2 } else { 1 });
+    let refresh = (tw & (SIM_FLOW_REFRESH_TICKS - 1)) < m.dk;
+    let lk = flow_look(m, &v, s, refresh, tl, gx, gy, dk, wl, rd(nv.meta, 6), wv, if on_atl { 3 } else if wide { 2 } else { 1 });
     if lk == 0 {
         // (No way: re-routed by Unit.update on its own tick of
         // SIM_REROUTE_TICKS, standing until then; see the JS kernel.)
-        if ((rd(m.wk, s) == 1 || rd(m.wk, s) == 3) && ((dx0 - gx).abs() > 1 || (dy0 - gy).abs() > 1)) || (tw & (SIM_REROUTE_TICKS - 1)) != 0 {
+        if ((rd(m.wk, s) == 1 || rd(m.wk, s) == 3) && ((dx0 - gx).abs() > 1 || (dy0 - gy).abs() > 1)) || (tw & (SIM_REROUTE_TICKS - 1)) >= m.dk {
             stand!();
         }
         back!();
@@ -3110,20 +3247,34 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     }
     let mut vx = (dx / dist) * spd;
     let mut vy = (dy / dist) * spd;
+    // (The committed step per base tick; this step's for its base ticks:
+    // to the look's target at most, a base tick's step when walls are on
+    // the way.)
+    let (mut cvx, mut cvy) = (vx, vy);
+    if m.dk > 1 {
+        let st = js_min(spd * m.dkf, js_max(dist, spd));
+        let (ax, ay) = ((dx / dist) * st, (dy / dist) * st);
+        if (f & 32) != 0 || seg_open(wl, w, h, x, y, x + ax, y + ay, itile, tile) {
+            vx = ax;
+            vy = ay;
+        }
+    }
     if (f & 32) == 0 {
         let sl = flow_slide(wl, w, h, gx, gy, floor((x + vx) * itile), floor((y + vy) * itile));
         if sl & 1 != 0 {
             vx = 0.0;
+            cvx = 0.0;
         }
         if sl & 2 != 0 {
             vy = 0.0;
+            cvy = 0.0;
         }
     }
     if rd(m.ctl, s) == tl { dbgc!(m, 33); }
     wr(m.cd, s, dk);
     wr(m.ct, s, t);
-    wr(m.cvx, s, vx);
-    wr(m.cvy, s, vy);
+    wr(m.cvx, s, cvx);
+    wr(m.cvy, s, cvy);
     wr(m.ctl, s, tl);
     let cn = if (dx0 - gx).abs() <= 8 && (dy0 - gy).abs() <= 8 { SIM_STEER_NEAR_TICKS } else { SIM_STEER_TICKS };
     // (Counters: 31 steers near the destination, 32 far, 33 steers in the
@@ -3214,7 +3365,7 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
             return;
         }};
     }
-    if rd(m.wk, s) == 1 && irem_f(t.wrapping_add(id), p.wcheck) == 0 && !(rd(m.wtc, s) > 0) {
+    if rd(m.wk, s) == 1 && irem_f(t.wrapping_add(id), p.wcheck) < m.dk && !(rd(m.wtc, s) > 0) {
         back!();
     }
     let len = rd(m.plen, s);
@@ -3421,8 +3572,10 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
     if rd(m.snd, s) > 0 {
         spd *= 0.5;
     }
-    let vx = (dx / dist) * spd;
-    let vy = (dy / dist) * spd;
+    // (Several base ticks a step: to the node's point at most.)
+    let st = if m.dk > 1 { js_min(spd * m.dkf, js_max(dist, spd)) } else { spd };
+    let vx = (dx / dist) * st;
+    let vy = (dy / dist) * st;
     // (Rounded as the position column stores it: Unit.update's x += vx.)
     let nx = (x + vx) as f32 as f64;
     let ny = (y + vy) as f32 as f64;
@@ -3718,7 +3871,7 @@ unsafe fn push_slot(m: &Mv, f: *const f64, s: usize) -> (bool, bool) {
     }
     // (Pushed on its retry tick: its fallback path tried again.)
     let retry = to_i32(rd(f, 51));
-    if retry > 0 && irem_f(m.t.wrapping_add(rd(m.id, s)), retry) == 0 && !(rd(m.on, s) != 0 && (rd(m.fl, s) & 4) == 0) && (m.pf.is_null() || rd(m.pf, s) != 0) {
+    if retry > 0 && irem_f(m.t.wrapping_add(rd(m.id, s)), retry) < m.dk && !(rd(m.on, s) != 0 && (rd(m.fl, s) & 4) == 0) && (m.pf.is_null() || rd(m.pf, s) != 0) {
         wr(m.sfast, s, 2);
         return (moved, true);
     }
@@ -3921,7 +4074,8 @@ unsafe fn db_candidate(m: &Mv, q: i32, owner: i32, x: f64, y: f64, x0: i32, y0: 
 
 /// SIM_KERNEL_DRIVEBY over slots s0..end.
 #[no_mangle]
-pub unsafe extern "C" fn mv_driveby(a: *const i32, s0: i32, end: i32) {
+pub unsafe extern "C" fn mv_driveby(a: u32, s0: i32, end: i32) {
+    let a = waddr(a) as *const i32;
     let m = Mv::load(a);
     let f = (a as usize + 4096) as *const f64;
     let t = m.t;
@@ -3963,7 +4117,7 @@ pub unsafe extern "C" fn mv_driveby(a: *const i32, s0: i32, end: i32) {
             continue;
         }
         let id = rd(m.id, su);
-        if (t.wrapping_add(id) & 1) != 0 {
+        if (t.wrapping_add(id) & 1) >= m.dk {
             continue;
         }
         wr(m.dbtk, su, t);

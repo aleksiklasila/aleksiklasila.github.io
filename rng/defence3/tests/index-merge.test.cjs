@@ -1,7 +1,8 @@
 // The unit index built by merging the last index (SIM_KERNEL_INDEX_MERGE,
 // chunk.js spatialIndexPrebuild) lists the same entries in the same order
-// as a sort by (chunk, units index), tick after tick while units move, die
-// and are added (slots given to new units), on several maps.
+// as a sort by (chunk, unit id), tick after tick while units move, die
+// and are added (slots given to new units), on several maps. (The build
+// by changes off: tests/index-delta.test.cjs.)
 //   node tests/index-merge.test.cjs
 'use strict';
 const assert = require('node:assert/strict');
@@ -10,7 +11,7 @@ for (const [map, seed] of [['arena', 3], ['islands', 7], ['crossroads', 11]]) {
     const world = new H.World({ controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '80', 'cfg-map-type': map } });
     const inst = world.spawn('ixm' + map, { simWorker: false });
     inst.eval('startSoloGame();');
-    inst.eval('SPATIAL_PARALLEL_MIN_UNITS = 0; SEPARATION_SLOT_MIN_UNITS = 0;');
+    inst.eval('SPATIAL_PARALLEL_MIN_UNITS = 0; SEPARATION_SLOT_MIN_UNITS = 0; SPATIAL_INDEX_DELTA = false; SPATIAL_INDEX_MERGE = true;');
     const r = JSON.parse(inst.eval(`JSON.stringify((() => {
         let s = ${seed};
         const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
@@ -29,7 +30,7 @@ for (const [map, seed] of [['arena', 3], ['islands', 7], ['crossroads', 11]]) {
             const n = _sxPre.n, keys = X.keys, slots = _unitSlotMap.slots, nChunks = CHUNKS_W * CHUNKS_H;
             const want = [];
             for (let i = 0; i < n; i++) if (keys[i] < nChunks) want.push(i);
-            want.sort((a, b) => keys[a] - keys[b] || a - b);
+            const ids = _simUnitState.columns.id; want.sort((a, b) => keys[a] - keys[b] || ids[slots[a]] - ids[slots[b]]);
             const listed = X.listed[0];
             checks++;
             if (listed !== want.length) { bad = 'tick ' + t + ': listed ' + listed + ' want ' + want.length; break; }

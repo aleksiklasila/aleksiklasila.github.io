@@ -165,7 +165,9 @@ const hostOf = inst => inst.eval('isHost ? myPeerId : wsHostId');
         // (Killed right after the page hands it the restore.)
         victim.eval(`(() => { const f = simClientAfterSnapshotApplied; simClientAfterSnapshotApplied = function () {
             const r = f.apply(this, arguments);
-            if (__scratch.killOnRestore && simClientActive()) { __scratch.killOnRestore = false; _simClient.worker.terminate(); }
+            if (__scratch.killOnRestore && simClientActive()) { __scratch.killOnRestore = false; _simClient.worker.terminate();
+                /* (A worker that stops says so: the page has no silence watchdog.) */
+                _simClientOnMessage({ type: 'restoreFailed', epoch: _simClient.epoch, message: 'state lost (test)' }); }
             return r; }; __scratch.killOnRestore = true; })()`);
         const t0 = world.now;
         host.eval(`_startHostResyncPause('restore, worker killed')`);

@@ -77,6 +77,42 @@ function getLockstepHistoryKeepTicks() {
     return Math.max(600, Math.floor(TICK_RATE * 90));
 }
 let tickAlpha = 0; // 0..1 interpolation between ticks for smooth rendering
+// The step's deltatick: how many base ticks (TICK_MS of game time each) the
+// simulation step being run covers. gameTime counts base ticks and moves on
+// by it; currentTick counts steps (commands are keyed by step). Every peer
+// runs the same step sizes: the host seals each step's into its bundle
+// (maybeBuildHostBundle, bundle.dk), from the match's shared pace, so a
+// match whose slowest machine manages 2 steps a second plays at 10 base
+// ticks a step and keeps game time at wall time. Rates (speed, damage over
+// time, cooldowns, production) are applied for the step's base ticks at
+// once: approximately per base tick, fair over time.
+let simDk = 1;
+// (At most a second a step: per-second work (upkeep, the stats' second)
+// then comes at most once a step.)
+const SIM_DK_MAX = 20;
+// The step size for a step interval of `ms` (the shared pace): whole base
+// ticks, rounded up from just above (a pace of 70 ms is 2 base ticks: the
+// match stays at wall time instead of a step of 1 every 70 ms).
+function simStepTicksForMs(ms) {
+    const k = Math.ceil((Number(ms) || 0) / TICK_MS - 0.1);
+    return k > 1 ? Math.min(SIM_DK_MAX, k) : 1;
+}
+// Whether a periodic event of period `period` (base ticks) at phase
+// `phase` falls in the step just begun (gameTime - simDk, gameTime]: at one
+// base tick a step, (gameTime + phase) % period === 0.
+function simStepCrosses(phase, period) {
+    if (!(period > 1)) return true;
+    const r = (gameTime + phase) % period;
+    return (r < 0 ? r + period : r) < simDk;
+}
+// The phases (base tick % period) of the base ticks the step covers, in
+// their order, one period's at most (each once): a sweep of a slice a base
+// tick visits all of them (at one base tick a step: [gameTime % period]).
+function simStepPhases(period) {
+    const n = Math.max(1, Math.min(simDk, period)), out = new Array(n);
+    for (let i = 0; i < n; i++) { const b = gameTime - n + 1 + i; out[i] = ((b % period) + period) % period; }
+    return out;
+}
 
 function secondsToTicks(seconds) {
     let sec = Math.max(0, Number(seconds) || 0);

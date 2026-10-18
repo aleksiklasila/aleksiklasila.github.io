@@ -264,8 +264,9 @@ SIM_KERNELS[SIM_KERNEL_NAV_LOCAL] = function (R, P, chunk) {
     const W = P[3] | 0, H = P[4] | 0, C = P[5] | 0, cw = P[6] | 0, CC = C * C;
     for (let i = (P[0] | 0) + chunk * P[2], end = Math.min(P[1], i + P[2]); i < end; i++) {
         const t = nt[i], c = _navClusterOf(t, W, C, cw), cx = c % cw, cy = (c - cx) / cw;
-        _simWasmX.nav_field(fieldsP, i * CC, CC, cx * C, cy * C, C, C, W, H, t, wallP, costP,
-            /* no row */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* csz cw nc np */ 0, 0, 0, 0, /* buckets k edges */ 1, 0, 0, /* rows ro */ 0, 0, _simWasmScratch, _simWasmScratchWords);
+        // (Pointers as the kernels' 32-bit words: _simWEnc.)
+        _simWasmX.nav_field(_simWEnc(fieldsP), i * CC, CC, cx * C, cy * C, C, C, W, H, t, _simWEnc(wallP), _simWEnc(costP),
+            /* no row */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* csz cw nc np */ 0, 0, 0, 0, /* buckets k edges */ 1, 0, 0, /* rows ro */ 0, 0, _simWEnc(_simWasmScratch), _simWasmScratchWords);
     }
 };
 // navStepCosts by rows (P[2] a job): pass P[0] 0 the rows' horizontal
@@ -316,13 +317,196 @@ function navBuildGraphFinish(b) {
 // across its border (the step cost of that node's tile).
 const _navGraphW = _simWK(['navb.fields', 'navb.nt', 'navb.nb', 'navb.np', '?navb.cost', 'navb.adjN', '?navb.adjS', '?navb.adjA', '?navb.adjC', '?navb.adjMax']);
 SIM_KERNELS[SIM_KERNEL_NAV_GRAPH] = function (R, P, chunk) { _simRust(_navGraphW, P, chunk, 'k_nav_graph', 'NAV_GRAPH'); };
-function navBuildFinish(b) {
+function navBuildFinish(b, atlas = true) {
     return { profile: b.profile, C: b.C, cs: 31 - Math.clz32(b.C), cw: b.cw, ch: b.ch, nc: b.nc, W: b.W, H: b.H, k: b.k,
         nodeBase: b.nodeBase, nodeTile: b.nodeTile, nodePair: b.nodePair, fields: b.fields, wall: b.wall, cost: b.cost,
         adjStart: b.adjStart, adjA: b.adjA, adjC: b.adjC, B: b.B,
         partL: b.partL, partBase: b.partBase, np: b.np, nodePart: b.nodePart, partComp: b.partComp, partCluster: b.partCluster,
-        ncomp: b.ncomp, compStart: b.compStart, compParts: b.compParts };
+        ncomp: b.ncomp, compStart: b.compStart, compParts: b.compParts,
+        // (Its routing atlas: every destination by lookups.)
+        atlas: atlas ? navAtlasBuild(b) : null };
 }
+
+// ---- The routing atlas (NAVIGATION_OPTIMIZATION.md; wasm/src/atlas.rs) ----
+// Every destination by lookups: no destination field, row or search per
+// order. Made with each build (navBuildFinish), from its walls, parts and
+// exit nodes alone: per 8x8 block its wall mask and components, per cluster
+// the next block component toward any other of the same part, and over the
+// parts a hierarchy of domains (4 x 4 children a level) with each node's
+// all-pairs crossings. Routes on it carry NAV_ATLAS_FID as their field id
+// (navFieldRequest), are ready at once, and step by nav_step's atlas branch
+// (the movement kernel) or nav_atlas_step (navStep).
+let NAV_ATLAS = true;
+const NAV_ATLAS_FID = 1 << 30;
+const SIM_KERNEL_ATL_BLOCKS = 86, SIM_KERNEL_ATL_TABLES = 87, SIM_KERNEL_ATL_ROUTE = 88;
+const _atlBlocksW = _simWK(['navb.wall', 'navb.partL', 'atl.partB', 'atl.bm', 'atl.bc', 'atl.cb', 'atl.cn', 'atl.psx', 'atl.psy', 'atl.psn']);
+SIM_KERNELS[SIM_KERNEL_ATL_BLOCKS] = function (R, P, chunk) { _simRust(_atlBlocksW, P, chunk, 'k_atl_blocks', 'ATL_BLOCKS'); };
+const _atlTablesW = _simWK(['atl.bm', 'atl.bc', 'atl.cb', 'atl.cn', 'atl.co', 'atl.ct']);
+SIM_KERNELS[SIM_KERNEL_ATL_TABLES] = function (R, P, chunk) { _simRust(_atlTablesW, P, chunk, 'k_atl_tables', 'ATL_TABLES'); };
+const _atlRouteW = _simWK(['navb.adjS', 'navb.adjA', 'navb.adjC', 'atl.npart', 'atl.anc', 'atl.cip', 'atl.cin', 'atl.didx', 'atl.dnodes', 'atl.dno', 'atl.dn', 'atl.rco', 'atl.rc', 'atl.jobs']);
+SIM_KERNELS[SIM_KERNEL_ATL_ROUTE] = function (R, P, chunk) { _simRust(_atlRouteW, P, chunk, 'k_atl_route', 'ATL_ROUTE'); };
+const NAV_ATLAS_CLUSTERS_PER_JOB = 8;
+// The build's atlas (null: off, or no build arrays), its kernels run now
+// (the helpers help): a map's first builds. A rebuild's go on the build's
+// lane between its stages (navAtlasStart, navAtlasTables, navAtlasFinish:
+// _navJobStep), installed with it.
+function navAtlasBuild(b) {
+    if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(_navBuildLane());
+    const A = navAtlasStart(b, false);
+    if (!A) return null;
+    navAtlasTables(A, false);
+    return navAtlasFinish(A);
+}
+// Its arrays, the hierarchy over the parts (O(exit nodes x levels), here),
+// then its blocks and the costs on to each node's children: kernels now, or
+// (bg) a chain on the build's lane.
+function navAtlasStart(b, bg) {
+    if (!NAV_ATLAS || !(b.np > 0) || typeof simParallelRun !== 'function') return null;
+    const { W, H, C, cw, ch, nc, np, k, nodePair, nodePart, partCluster } = b;
+    const bw = Math.ceil(W / 8), bh = Math.ceil(H / 8), nb = bw * bh;
+    const bm = simHeapArrayAuto(Uint32Array, nb * 2), bc = simHeapArrayAuto(Uint8Array, W * H), cb = simHeapArrayAuto(Uint16Array, nb), cn = simHeapArrayAuto(Int32Array, nc);
+    const psx = simHeapArrayAuto(Float64Array, np), psy = simHeapArrayAuto(Float64Array, np), psn = simHeapArrayAuto(Int32Array, np);
+    // ---- The hierarchy over the parts ----
+    // Items of the level below (parts first) with their domain coordinates
+    // (clusters, then the domains of the level below); each part's item.
+    let n0 = np;
+    let ix = new Int32Array(np), iy = new Int32Array(np);
+    for (let p = 0; p < np; p++) { const c = partCluster[p]; ix[p] = c % cw; iy[p] = (c - ix[p]) / cw; }
+    const partItem = new Int32Array(np);
+    for (let p = 0; p < np; p++) partItem[p] = p;
+    const levels = [], cip = simHeapArrayAuto(Uint16Array, np);
+    let total = 0, span = 1;
+    for (let lv = 0; lv < 16; lv++) {
+        span *= 4;
+        const dwx = Math.ceil(cw / span), dhy = Math.ceil(ch / span);
+        // (Domain of an item: its coordinates at the level below, / 4.)
+        const dom = new Int32Array(n0);
+        for (let i = 0; i < n0; i++) dom[i] = (iy[i] >> 2) * dwx + (ix[i] >> 2);
+        // Components of the items within a domain (exit pairs joining
+        // them): union-find, a set's root its lowest item.
+        const uf = new Int32Array(n0);
+        for (let i = 0; i < n0; i++) uf[i] = i;
+        const find = x => { while (uf[x] !== x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; };
+        for (let e = 0; e < k; e++) {
+            const f = nodePair[e];
+            if (f < 0) continue;
+            const a = partItem[nodePart[e]], c = partItem[nodePart[f]];
+            if (a === c || dom[a] !== dom[c]) continue;
+            const ra = find(a), rc = find(c);
+            if (ra < rc) uf[rc] = ra; else if (rc < ra) uf[ra] = rc;
+        }
+        // Nodes in the order of their first item; children in item order.
+        const node = new Int32Array(n0), rootNode = new Int32Array(n0).fill(-1);
+        let n1 = 0;
+        for (let i = 0; i < n0; i++) { const r = find(i); if (rootNode[r] < 0) rootNode[r] = n1++; node[i] = rootNode[r]; }
+        const nch = new Int32Array(n1), cin = new Uint16Array(n0);
+        for (let i = 0; i < n0; i++) cin[i] = nch[node[i]]++;
+        if (lv === 0) cip.set(cin);
+        else levels[lv - 1].cinUp = cin;
+        // The nodes as the next level's items.
+        const nx = new Int32Array(n1), ny = new Int32Array(n1);
+        for (let i = 0; i < n0; i++) { const d = node[i]; nx[d] = ix[i] >> 2; ny[d] = iy[i] >> 2; }
+        const anc = new Int32Array(np);
+        for (let p = 0; p < np; p++) { partItem[p] = node[partItem[p]]; anc[p] = total + partItem[p]; }
+        levels.push({ n: n1, nch, anc, base: total, cinUp: null });
+        total += n1;
+        ix = nx; iy = ny; n0 = n1;
+        if (dwx <= 1 && dhy <= 1) break;
+    }
+    const L = levels.length;
+    const anc = simHeapArrayAuto(Int32Array, Math.max(1, np * L)), cinA = simHeapArrayAuto(Uint16Array, Math.max(1, total)), nchA = new Int32Array(Math.max(1, total));
+    for (let lv = 0; lv < L; lv++) { const Lv = levels[lv], A = Lv.anc; for (let p = 0; p < np; p++) anc[p * L + lv] = A[p]; for (let d = 0; d < Lv.n; d++) { nchA[Lv.base + d] = Lv.nch[d]; if (Lv.cinUp) cinA[Lv.base + d] = Lv.cinUp[d]; } }
+    // Each node's exit nodes (those of its parts), in node order, and each
+    // exit node's place in its node at every level.
+    const dn = simHeapArrayAuto(Int32Array, Math.max(1, total)), dno = simHeapArrayAuto(Int32Array, total + 1), didx = simHeapArrayAuto(Int32Array, Math.max(1, k * L));
+    for (let lv = 0; lv < L; lv++) for (let e = 0; e < k; e++) dn[anc[nodePart[e] * L + lv]]++;
+    for (let d = 0; d < total; d++) dno[d + 1] = dno[d] + dn[d];
+    const dnodes = simHeapArrayAuto(Int32Array, Math.max(1, dno[total])), fill = new Int32Array(total);
+    for (let lv = 0; lv < L; lv++) for (let e = 0; e < k; e++) { const d = anc[nodePart[e] * L + lv], x = fill[d]++; dnodes[dno[d] + x] = e; didx[e * L + lv] = x; }
+    // The costs on to each child of a node from each of its exit nodes
+    // (kernel ATL_ROUTE, a job a node and child: nodes of one child need
+    // none).
+    const rco = simHeapArrayAuto(Int32Array, Math.max(1, total));
+    let pool = 0, nj = 0;
+    for (let d = 0; d < total; d++) { rco[d] = pool; if (nchA[d] > 1) { pool += nchA[d] * dn[d]; nj += nchA[d]; } }
+    const rc = simHeapArrayAuto(Uint32Array, Math.max(1, pool), false), jobs = simHeapArrayAuto(Int32Array, Math.max(3, nj * 3));
+    let jx = 0;
+    for (let lv = 0; lv < L; lv++) { const Lv = levels[lv]; for (let d = Lv.base; d < Lv.base + Lv.n; d++) if (nchA[d] > 1) for (let t = 0; t < nchA[d]; t++) { jobs[jx++] = d; jobs[jx++] = t; jobs[jx++] = lv; } }
+    simParallelBind('navb.wall', b.wall); simParallelBind('navb.partL', b.partL); simParallelBind('atl.partB', b.partBase);
+    simParallelBind('atl.bm', bm); simParallelBind('atl.bc', bc); simParallelBind('atl.cb', cb); simParallelBind('atl.cn', cn);
+    simParallelBind('atl.psx', psx); simParallelBind('atl.psy', psy); simParallelBind('atl.psn', psn);
+    simParallelBind('navb.adjS', b.adjStart); simParallelBind('navb.adjA', b.adjA); simParallelBind('navb.adjC', b.adjC);
+    simParallelBind('atl.npart', nodePart); simParallelBind('atl.anc', anc); simParallelBind('atl.cip', cip); simParallelBind('atl.cin', cinA);
+    simParallelBind('atl.didx', didx); simParallelBind('atl.dnodes', dnodes); simParallelBind('atl.dno', dno); simParallelBind('atl.dn', dn);
+    simParallelBind('atl.rco', rco); simParallelBind('atl.rc', rc); simParallelBind('atl.jobs', jobs);
+    const blockJobs = Math.ceil(nc / NAV_ATLAS_CLUSTERS_PER_JOB);
+    const blockP = P => { P[0] = nc; P[1] = NAV_ATLAS_CLUSTERS_PER_JOB; P[2] = W; P[3] = H; P[4] = C; P[5] = cw; P[6] = bw; };
+    const routeP = P => { P[0] = nj; P[1] = L; };
+    if (bg) {
+        const lane = _navBuildLane();
+        const P0 = simParallelStageParams(lane, 0), P1 = simParallelStageParams(lane, 1);
+        P0.fill(0); P1.fill(0); blockP(P0); routeP(P1);
+        simParallelBackgroundChain(lane, [[SIM_KERNEL_ATL_BLOCKS, blockJobs], [SIM_KERNEL_ATL_ROUTE, nj]]);
+    } else {
+        const P = _simParams;
+        blockP(P);
+        simParallelRun(SIM_KERNEL_ATL_BLOCKS, blockJobs);
+        routeP(P);
+        if (nj > 0) simParallelRun(SIM_KERNEL_ATL_ROUTE, nj);
+    }
+    return { L, C, cw, bw, np, W, H, nc, bm, bc, cb, co: null, ct: null, cn, anc, cip, cin: cinA, rco, rc, dn, didx, nodes: total, poolEntries: pool, jobs: nj,
+        nodePart, nodeBase: b.nodeBase, header: null, blockP };
+}
+// The clusters' tables (n x n entries each, from the block counts: after
+// navAtlasStart's kernels), now or (bg) on the build's lane.
+function navAtlasTables(A, bg) {
+    if (!A) return;
+    const { nc, cn } = A;
+    const co = simHeapArrayAuto(Int32Array, nc + 1);
+    for (let c = 0; c < nc; c++) co[c + 1] = co[c] + cn[c] * cn[c];
+    const ct = simHeapArrayAuto(Uint32Array, Math.max(1, co[nc]), false);
+    A.co = co; A.ct = ct;
+    simParallelBind('atl.bm', A.bm); simParallelBind('atl.bc', A.bc); simParallelBind('atl.cb', A.cb); simParallelBind('atl.cn', cn);
+    simParallelBind('atl.co', co); simParallelBind('atl.ct', ct);
+    const jobs = Math.ceil(nc / NAV_ATLAS_CLUSTERS_PER_JOB);
+    if (bg) {
+        const lane = _navBuildLane(), P = simParallelStageParams(lane, 0);
+        P.fill(0); A.blockP(P);
+        simParallelBackgroundChain(lane, [[SIM_KERNEL_ATL_TABLES, jobs]]);
+    } else {
+        A.blockP(_simParams);
+        simParallelRun(SIM_KERNEL_ATL_TABLES, jobs);
+    }
+}
+// Made (its kernels done): the header the kernels read; the scratch names
+// let go.
+function navAtlasFinish(A) {
+    if (!A || !A.ct) return null;
+    simParallelBind('atl.jobs', null); simParallelBind('atl.dnodes', null); simParallelBind('atl.dno', null);
+    simParallelBind('atl.psx', null); simParallelBind('atl.psy', null); simParallelBind('atl.psn', null);
+    A.header = navAtlasHeader(A, A.nodePart, A.nodeBase);
+    A.blockP = null;
+    return A.header ? A : null;
+}
+// The header the kernels read (atlas.rs Atl): sizes, the arrays' addresses.
+function navAtlasHeader(A, nodePart, nodeBase) {
+    const h = simHeapArrayAuto(Int32Array, 24), ptr = a => _simWEnc(_simHeapPtrOf(a));
+    h[0] = A.L; h[1] = A.C; h[2] = A.cw; h[3] = A.bw; h[4] = A.np;
+    h[5] = ptr(A.bm); h[6] = ptr(A.bc); h[7] = ptr(A.cb); h[8] = ptr(A.co); h[9] = ptr(A.ct); h[10] = ptr(A.anc); h[11] = ptr(A.cip);
+    h[12] = ptr(A.cin); h[13] = ptr(A.rco); h[14] = ptr(A.rc); h[15] = ptr(A.dn); h[16] = ptr(nodePart); h[17] = ptr(A.cn);
+    h[18] = ptr(A.didx); h[19] = ptr(nodeBase);
+    for (let i = 5; i <= 19; i++) if (!(h[i] > 0)) return null;
+    return h;
+}
+// The next tile from t toward dest on profile p's atlas (-1 none): the
+// movement kernel's (atlas.rs nav_atlas_step).
+function navAtlasStep(nav, t, dest) {
+    const A = nav && nav.atlas;
+    if (!A || !A.header || _simWasmX === null || !_simWasmX.nav_atlas_step) return -1;
+    const ptr = a => _simWEnc(_simHeapPtrOf(a));
+    return _simWasmX.nav_atlas_step(ptr(A.header), ptr(nav.partL), ptr(nav.partBase), ptr(nav.nodeTile), ptr(nav.nodePair), ptr(nav.fields), nav.W, t, dest);
+}
+
 
 
 function _navClusterOf(t, W, C, cw) { const x = t % W, y = (t - x) / W; return ((y / C) | 0) * cw + ((x / C) | 0); }
@@ -475,6 +659,8 @@ function navFieldReadyTick() { return _navFields.flushedTick === gameTime ? game
 function navFieldRequest(profile, dest, wide = false) {
     const nav = _nav[profile];
     if (!nav || !(dest >= 0 && dest < nav.W * nav.H)) return -1;
+    // (On the atlas: no field, the same id for every destination.)
+    if (NAV_ATLAS && nav.atlas && nav.atlas.header) return NAV_ATLAS_FID;
     const F = _navPoolEnsure(_navFields.pools[wide ? 1 : 0], nav.C), key = _navFieldKey(profile, dest);
     let s = F.byKey.get(key);
     if (s === undefined) {
@@ -494,7 +680,9 @@ function navFieldRequest(profile, dest, wide = false) {
     }
     return wide ? NAV_WIDE_BASE + s : s;
 }
-function navFieldGen(id) { return id >= 0 ? _navFieldPool(id).meta[_navFieldIndex(id) * NAV_FIELD_META + 6] : 0; }
+function navFieldGen(id) { return id === NAV_ATLAS_FID ? 0 : id >= 0 ? _navFieldPool(id).meta[_navFieldIndex(id) * NAV_FIELD_META + 6] : 0; }
+// The tick a route on field id may start: on the atlas at once.
+function navFieldReadyFor(id) { return id === NAV_ATLAS_FID ? 0 : navFieldReadyTick(); }
 // Every tick, after the orders: the fields started at the last flush taken
 // (made: marked so, the same tick on every peer, whenever the helpers
 // finished), and those asked for since started in the background
@@ -696,11 +884,13 @@ function _navFieldRust(R, pre, p, poolP, off, size, meta, m, rowsP, ro, W, H) {
     const WP = _simParWPtr, wallP = WP[pre + 'fwall.' + p], costR = R[pre + 'fcost.' + p], costP = costR && costR.length ? WP[pre + 'fcost.' + p] : 0;
     const row = rowsP > 0, g = pre + p + '.', NM = R[g + 'meta'];
     if (_simWasmX === null || !(poolP >= 0) || !(wallP >= 0) || !(costP >= 0) || (row && !NM)) _simNoWasm('NAV_FIELDS');
-    if (!_simWasmX.nav_field(poolP, off, size, meta[m + 2], meta[m + 3], meta[m + 4], meta[m + 5], W, H, meta[m + 1], wallP, costP,
-        row ? 1 : 0, row ? WP[g + 'nb'] : 0, row ? WP[g + 'nt'] : 0, row ? WP[g + 'np'] : 0, row ? WP[g + 'npart'] : 0,
-        row ? WP[g + 'adjS'] : 0, row ? WP[g + 'adjA'] : 0, row ? WP[g + 'adjC'] : 0, row ? WP[g + 'partL'] : 0, row ? WP[g + 'partB'] : 0,
+    // (Pointers as the kernels' 32-bit words: _simWEnc.)
+    const E = _simWEnc;
+    if (!_simWasmX.nav_field(E(poolP), off, size, meta[m + 2], meta[m + 3], meta[m + 4], meta[m + 5], W, H, meta[m + 1], E(wallP), E(costP),
+        row ? 1 : 0, row ? E(WP[g + 'nb']) : 0, row ? E(WP[g + 'nt']) : 0, row ? E(WP[g + 'np']) : 0, row ? E(WP[g + 'npart']) : 0,
+        row ? E(WP[g + 'adjS']) : 0, row ? E(WP[g + 'adjA']) : 0, row ? E(WP[g + 'adjC']) : 0, row ? E(WP[g + 'partL']) : 0, row ? E(WP[g + 'partB']) : 0,
         row ? NM[0] | 0 : 0, row ? NM[1] | 0 : 0, row ? NM[3] | 0 : 0, row ? NM[7] | 0 : 0, row ? Math.max(1, NM[8] | 0) : 1, row ? NM[9] | 0 : 0, row ? NM[10] | 0 : 0,
-        rowsP, ro, _simWasmScratch, _simWasmScratchWords)) _simNoWasm('NAV_FIELDS');
+        E(rowsP), ro, E(_simWasmScratch), _simWasmScratchWords)) _simNoWasm('NAV_FIELDS');
 }
 SIM_KERNELS[SIM_KERNEL_NAV_FIELDS] = function (R, P, chunk) {
     // (Rust: wasm/src/lib.rs nav_field / nav_rows_copy, on the arrays' heap
@@ -713,7 +903,7 @@ SIM_KERNELS[SIM_KERNEL_NAV_FIELDS] = function (R, P, chunk) {
     const span = P[2] | 0, size = span * span, W = P[3] | 0, H = P[4] | 0, i0 = chunk * P[1], i1 = Math.min(P[0], i0 + P[1]);
     if (_simWasmX === null || !(WP[poolName] >= 0) || !(WP[fl] >= 0) || !(WP[fs] >= 0) || (R[rowsName] && rowW > 0 && !(rowsP >= 0))) _simNoWasm('NAV_FIELDS');
     // (Phase 1: the rows copied from their key's slot, P[6].)
-    if (P[6] === 1) { if (rowsP > 0) _simWasmX.nav_rows_copy(rowsP, WP[fl], WP[fs], rowW, i0, i1); return; }
+    if (P[6] === 1) { if (rowsP > 0) _simWasmX.nav_rows_copy(_simWEnc(rowsP), _simWEnc(WP[fl]), _simWEnc(WP[fs]), rowW, i0, i1); return; }
     for (let i = i0; i < i1; i++) {
         const s = list[i], m = s * NAV_FIELD_META, p = meta[m];
         if (!R[pre + 'fwall.' + p]) continue;
@@ -732,7 +922,16 @@ function _navFieldMark(profile, dest, wide, mark) {
     if (s !== undefined) F.seen[s] = mark;
 }
 function navFieldsSweepStep() {
-    const step = NAV_FIELD_SWEEP_TICKS, k = gameTime % step, mark = _navFields.seenCycle + 1;
+    const step = NAV_FIELD_SWEEP_TICKS;
+    // (The slices of the step's base ticks in turn; a cycle ends with its
+    // last, the next one's marks after it.)
+    for (const k of simStepPhases(step)) {
+        const mark = _navFields.seenCycle + 1;
+        _navFieldsSweepSlice(k, step, mark);
+        if (k === step - 1) _navFieldsSweepEnd(k, step, mark);
+    }
+}
+function _navFieldsSweepSlice(k, step, mark) {
     // (From the slots' columns: a unit's route field (rtEnd, nvProf, its
     // route key in oc__routeKey) and its path's last flow node's (nvPK, the
     // path setter's). No unit object is read.)
@@ -753,7 +952,8 @@ function navFieldsSweepStep() {
             if (pk >= 0) { const F = (pk & 1) ? Fw : Fn, sl = F.byKey.get(pk >> 1); if (sl !== undefined) F.seen[sl] = mark; }
         }
     }
-    if (k !== step - 1) return;
+}
+function _navFieldsSweepEnd(k, step, mark) {
     // (In a rebuild's window no slot is let go (the next build's batches
     // keep theirs): the drop waits a cycle, the marks of both kept.)
     if (_navNext.nav) return;
@@ -926,6 +1126,7 @@ function _navBindBuild(pre, nav) {
     simParallelBind(pre + p + '.partL', nav.partL); simParallelBind(pre + p + '.partB', nav.partBase); simParallelBind(pre + p + '.npart', nav.nodePart);
     simParallelBind(pre + p + '.adjS', nav.adjStart); simParallelBind(pre + p + '.adjA', nav.adjA); simParallelBind(pre + p + '.adjC', nav.adjC);
     simParallelBind(pre + p + '.pclu', nav.partCluster); simParallelBind(pre + p + '.cstart', nav.compStart); simParallelBind(pre + p + '.cparts', nav.compParts);
+    simParallelBind(pre + p + '.atl', nav.atlas && nav.atlas.header ? nav.atlas.header : null);
 }
 
 // ---- A rebuild's window (see _navNext) ----
@@ -1177,6 +1378,10 @@ function navReset() {
 function navStep(profile, t, dest, destId) {
     const nav = _nav[profile];
     if (!nav || t === dest || !(destId >= 0)) return -1;
+    if (destId === NAV_ATLAS_FID) {
+        if (nav.partL[t] === 0xFFFF) return _simWallStepOut(nav.partL, nav.partBase, null, 0, nav.W, nav.C, nav.cw, t, t % nav.W, (t - t % nav.W) / nav.W);
+        return navAtlasStep(nav, t, dest);
+    }
     const F = _navFieldPool(destId), i = _navFieldIndex(destId), m = i * NAV_FIELD_META;
     if (!(F && F.meta && F.rows && F.meta[m] === profile && F.meta[m + 1] === dest && F.meta[m + 7] === 1)) return -1;
     return simNavStep(nav.W, nav.C, nav.cw, nav.partL, nav.partBase, F.rows, i * F.rowW, nav.fields, nav.nodeBase, nav.nodeTile, nav.nodePair,
@@ -1327,7 +1532,7 @@ function navPath(profile, gx, gy, dest, maxLen) {
     const nav = _nav[profile];
     if (!nav || !(dest >= 0 && dest < nav.W * nav.H)) return null;
     const W = GRID_W, F = _navFields.pools[1], s = F && F.byKey ? F.byKey.get(_navFieldKey(profile, dest)) : undefined;
-    const did = s === undefined ? -1 : NAV_WIDE_BASE + s;
+    const did = NAV_ATLAS && nav.atlas && nav.atlas.header ? NAV_ATLAS_FID : s === undefined ? -1 : NAV_WIDE_BASE + s;
     let t = gy * W + gx;
     const path = [{ x: gx, y: gy }];
     while (t !== dest && path.length < maxLen) {
@@ -1345,8 +1550,8 @@ function navPath(profile, gx, gy, dest, maxLen) {
 // (its destination field is made by then; see navFieldReadyTick).
 function navNode(profile, tx, ty) {
     navEnsure(profile);
-    navFieldRequest(profile, ty * GRID_W + tx);
-    return { x: tx, y: ty, nav: profile + 1, ready: navFieldReadyTick() };
+    const id = navFieldRequest(profile, ty * GRID_W + tx);
+    return { x: tx, y: ty, nav: profile + 1, ready: navFieldReadyFor(id) };
 }
 // Where a unit goes to reach tile t (profile): t itself when open, else the
 // nearest open tile around it (rings outward, up to NAV_APPROACH_MAX tiles;
@@ -1406,6 +1611,9 @@ const NAV_BUILD_SLICES = 64;
 const NAV_STEP_NODES = 1, NAV_STEP_LOCAL = 4, NAV_STEP_GRAPH = NAV_STEP_LOCAL + NAV_BUILD_SLICES + 1;
 const NAV_STEP_STAGE = NAV_STEP_GRAPH + NAV_BUILD_SLICES + 1, NAV_STEP_INSTALL = NAV_STEP_STAGE + NAV_SWAP_TICKS;
 const NAV_BUILD_TICKS = NAV_STEP_INSTALL + 1;
+// (The atlas's cluster tables: this many ticks into the window, its blocks
+// done by then.)
+const NAV_ATLAS_TABLES_STEP = 10;
 let _navJob = null;
 // Per profile: tiles whose walls differ from those of its newest build (the
 // one being made, else the installed one). (The air's never change.)
@@ -1490,10 +1698,16 @@ function _navJobStep(J, step) {
         navBuildCollect();
         navBuildGraphFinish(J.b);
         navBuildPartsFinish(J.b);
-        J.next = navBuildFinish(J.b);
+        // (Its atlas on the build's lane meanwhile: installed with it.)
+        J.next = navBuildFinish(J.b, false);
+        J.atl = navAtlasStart(J.b, true);
         _navNextStage(J.next);
+    } else if (step === NAV_STEP_STAGE + NAV_ATLAS_TABLES_STEP && J.atl) {
+        navBuildCollect();
+        navAtlasTables(J.atl, true);
     } else if (step === NAV_STEP_INSTALL) {
         _navJob = null;
+        if (J.atl) { navBuildCollect(); J.next.atlas = navAtlasFinish(J.atl); J.atl = null; }
         _navNextInstall(J.next);
     }
 }

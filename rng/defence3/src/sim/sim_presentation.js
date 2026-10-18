@@ -22,24 +22,36 @@ function simPresentTickEnd() {
     const n = S.owners.length, cap = S.columns.x.length;
     let Q = _simPresentSnaps;
     if (!Q || Q.cap < cap || Q.worker !== p.worker) {
+        const old = Q;
         const ctl = Q && Q.cap >= cap ? Q.ctl : new Int32Array(new SharedArrayBuffer(8));
         Q = _simPresentSnaps = { cap, worker: p.worker, ctl, next: 0, snaps: [] };
         for (let i = 0; i < SIM_PRESENT_SNAPS; i++) {
-            const buf = new SharedArrayBuffer(8 + cap * 16);
             // (Positions as the columns hold them, Int32 eighths: a copy, scaled
-            // by the presentation worker.)
-            Q.snaps.push({ buf, head: new Int32Array(buf, 0, 2), x: new Int32Array(buf, 8, cap), y: new Int32Array(buf, 8 + cap * 4, cap),
-                px: new Int32Array(buf, 8 + cap * 8, cap), py: new Int32Array(buf, 8 + cap * 12, cap) });
+            // by the presentation worker. In the wasm heap: the helpers copy
+            // them, simParallelCopyHeap; one thread's memcpy of four columns
+            // was ~8 ms a tick at 2M units, ~30 at 8M.)
+            const all = typeof simHeapArray === 'function' ? simHeapArray(Int32Array, 4 + cap * 4) : new Int32Array(new SharedArrayBuffer(16 + cap * 16));
+            Q.snaps.push({ all, head: all.subarray(0, 2), x: all.subarray(4, 4 + cap), y: all.subarray(4 + cap, 4 + 2 * cap),
+                px: all.subarray(4 + 2 * cap, 4 + 3 * cap), py: all.subarray(4 + 3 * cap, 4 + 4 * cap) });
             Q.snaps[i].head[0] = -1;
         }
+        if (old) for (const q of old.snaps) if (typeof simHeapFree === 'function') simHeapFree(q.all);
         ctl[0] = -1; ctl[1] = 1;
-        p.worker.postMessage({ type: 'snaps', ctl, cap, bufs: Q.snaps.map(q => q.buf) });
+        p.worker.postMessage({ type: 'snaps', ctl, cap, snaps: Q.snaps.map(q => ({ head: q.head, x: q.x, y: q.y, px: q.px, py: q.py })) });
+    }
+    // (Each slot's last visual change, for the reader's frames by changes:
+    // every tick, before the reader may take this tick's snapshot.)
+    if (typeof SIM_KERNEL_PV_MARKS === 'number' && S.columns.pvAt) {
+        const P = _simParams, per = 65536;
+        P[0] = n; P[1] = per; P[2] = typeof currentTick === 'number' ? currentTick : 0;
+        simParallelRun(SIM_KERNEL_PV_MARKS, Math.ceil(Math.max(1, n) / per));
     }
     if (Atomics.exchange(Q.ctl, 1, 0) !== 1) return;
     const i = Q.next, q = Q.snaps[i], C = S.columns;
     Q.next = (i + 1) % SIM_PRESENT_SNAPS;
     Atomics.store(q.head, 0, -1);
-    q.x.set(C.x.subarray(0, n)); q.y.set(C.y.subarray(0, n)); q.px.set(C.prevX.subarray(0, n)); q.py.set(C.prevY.subarray(0, n));
+    if (typeof simParallelCopyHeap === 'function') simParallelCopyHeap([q.x.subarray(0, n), C.x.subarray(0, n), q.y.subarray(0, n), C.y.subarray(0, n), q.px.subarray(0, n), C.prevX.subarray(0, n), q.py.subarray(0, n), C.prevY.subarray(0, n)]);
+    else { q.x.set(C.x.subarray(0, n)); q.y.set(C.y.subarray(0, n)); q.px.set(C.prevX.subarray(0, n)); q.py.set(C.prevY.subarray(0, n)); }
     q.head[1] = n;
     Atomics.store(q.head, 0, typeof currentTick === 'number' ? currentTick : 0);
     Atomics.store(Q.ctl, 0, i); Q.publishedTick = typeof currentTick === 'number' ? currentTick : 0;
@@ -47,7 +59,7 @@ function simPresentTickEnd() {
 const SIM_PRESENT_MAGIC = 0x50524553;
 const SIM_PRESENT_COLUMNS = ['id','owner','x','y','prevX','prevY','vx','vy','energy','r','commandState',
     'attackFlash','burning','poisoned','frozen','wet','sandy','watched','teleportHideTicks',
-    'workerTransferCooldown','effectiveLevel','unitLevel','live','dead','maxE','stOn','cmMode','cmT'];
+    'workerTransferCooldown','effectiveLevel','unitLevel','live','dead','maxE','stOn','cmMode','cmT','pvAt'];
 
 function simPresentationStop() {
     const p = _simPresentation;
@@ -59,7 +71,7 @@ function simPresentationStart() {
     simPresentationStop();
     if (!SIM_PAR_SHARED || typeof Worker !== 'function') return false;
     const base = self.SIM_WORKER_BASE || location.href;
-    const worker = new Worker(new URL('presentation_worker.js?v=20261017-ranges', base).href);
+    const worker = new Worker(new URL('presentation_worker.js?v=20261018-pv3', base).href);
     const p = _simPresentation = { worker, epoch:_simEpoch, generation:++_simPresentationGeneration,
         timer:0, job:null, meta:null, projectileJob:null, projectileAt:0,
         structures:null, cells:null, columns:null, sourceBuffer:null, strings:0, revision:0 };
@@ -81,6 +93,9 @@ function simPresentationStart() {
         _simPost({ type: 'presentationPort', epoch: _simEpoch, generation: p.generation, port: ch.port2 }, [ch.port2]);
     }
     simPresentationBind();
+    // (The table filled from the start frame: drawn at once; the cycles
+    // below refresh it.)
+    worker.postMessage({type:'ready'});
     const baseline=_simStateLast;
     if(baseline.cellTypes && baseline.w===GRID_W && baseline.h===GRID_H) {
         const cells=new Int32Array(new SharedArrayBuffer(GRID_W*GRID_H*8));
@@ -102,9 +117,10 @@ function simPresentationBind() {
         for (const k of SIM_PRESENT_COLUMNS) columns[k] = S.columns[k];
         p.columns = columns; p.sourceBuffer = S.columns.x;
         const old = p.meta;
-        p.meta = simFrameViews(new SharedArrayBuffer(S.cap * SIM_FRAME_SLOT_BYTES), S.cap);
+        p.meta = simMetaViews(new SharedArrayBuffer(S.cap * SIM_META_SLOT_BYTES), S.cap);
         p.meta.id.fill(-1);
-        if (old) for (const k of [...SIM_FRAME_F32, ...SIM_FRAME_I32, ...SIM_FRAME_I16, ...SIM_FRAME_U8]) p.meta[k].set(old[k].subarray(0,p.meta.cap));
+        if (old) for (const k of [...SIM_META_I32, ...SIM_META_F32, ...SIM_META_I16]) p.meta[k].set(old[k].subarray(0,p.meta.cap));
+        else simPresentationSeedMetadata(p.meta);
         // (metaRev: bumped when the metadata table changed in a way a frame
         // must show at once (a slot's new unit) and at each cycle's end; the
         // reader copies the table into a frame only when its revision moved.)
@@ -137,6 +153,30 @@ function simPresentationPublish(tick) {
         historyFloor: typeof HISTORY_LIGHT_FLOOR === 'number' ? HISTORY_LIGHT_FLOOR : .14});
 }
 
+// The metadata table's first fill from the last frame this worker made
+// (sim_frame.js _simFrameLastViews, by render slot; this table is by unit
+// slot): a gather over typed columns. (Written unit by unit, between ticks,
+// its first pass took minutes at 2M units with ticks back to back, and the
+// reader showed nothing until it ended: the page kept the start frame.)
+const SIM_PRESENT_META_COLUMNS = ['type', 'wtype', 'wstate', 'style', 'watchedBy', 'vision', 'maxEnergy', 'cargo', 'tx', 'ty', 'orderDest', 'orderTick'];
+const SIM_PRESENT_META_FLAGS = SIM_UF_FLYING | SIM_UF_SNAKE | SIM_UF_WORKER | SIM_UF_HOLD | SIM_UF_KING | SIM_UF_ATTACK_TARGET | SIM_UF_RESEARCH_MATERIAL | SIM_UF_ENERGY_BLOCKED;
+function simPresentationSeedMetadata(M) {
+    const F = typeof _simFrameLastViews !== 'undefined' ? _simFrameLastViews : null, S = _simUnitState;
+    if (!F || !S) return 0;
+    const C = S.columns, RS = C.j__rslot, n = Math.min(S.owners.length, M.cap);
+    if (!RS) return 0;
+    const cols = SIM_PRESENT_META_COLUMNS.map(k => [M[k], F[k]]), FID = F.id, MF = M.flags, FF = F.flags, MID = M.id, CID = C.id, DEAD = C.dead;
+    let seeded = 0;
+    for (let s = 0; s < n; s++) {
+        const r = RS[s];
+        if (!(r >= 0 && r < F.cap) || DEAD[s] || FID[r] !== CID[s]) continue;
+        for (let k = 0; k < cols.length; k++) cols[k][0][s] = cols[k][1][r];
+        MF[s] = FF[r] & SIM_PRESENT_META_FLAGS;
+        MID[s] = CID[s];
+        seeded++;
+    }
+    return seeded;
+}
 function simPresentationReturn(buf) {
     if (!buf || buf.byteLength < 12 || typeof SharedArrayBuffer !== 'function' || !(buf instanceof SharedArrayBuffer)) return false;
     if (new DataView(buf, buf.byteLength - 4).getInt32(0, true) !== SIM_PRESENT_MAGIC) return false;
@@ -172,6 +212,10 @@ function* simPresentationProjectiles() {
     p.worker.postMessage({type:'projectiles',table:{buf:F.buf,cap:F.cap,n:S.owner.length,count:j,mver:S.version},revision:++p.revision});
 }
 
+// (A value changed: the slot's next mark, unit.pvAt, so frames by changes
+// fill it; orderTick, the same tick for all, is not a change.)
+let _simMetaChanged = false;
+function _simMetaSet(A, s, v) { if (A[s] !== v && !(v !== v && A[s] !== A[s])) { A[s] = v; _simMetaChanged = true; } }
 function simPresentationWriteMetadata(u, F) {
     const C = u._us, s = u._si;
     if (!C || s < 0 || s >= F.cap || C.dead[s]) return;
@@ -179,23 +223,26 @@ function simPresentationWriteMetadata(u, F) {
     // unit's type. Dynamic positions/statuses come straight from authority.
     const fresh = F.id[s] !== C.id[s];
     if (fresh) F.id[s] = -1;
-    F.type[s] = _simFrameCode(u.unitType); F.wtype[s] = _simFrameCode(u.workerType);
-    F.wstate[s] = _simFrameCode(u.workerState); F.style[s] = _simFrameCode(u.attackStyle);
-    F.watchedBy[s] = Number.isFinite(u.watchedByTeam) ? u.watchedByTeam : -1;
+    _simMetaChanged = fresh;
+    const set = _simMetaSet;
+    set(F.type, s, _simFrameCode(u.unitType)); set(F.wtype, s, _simFrameCode(u.workerType));
+    set(F.wstate, s, _simFrameCode(u.workerState)); set(F.style, s, _simFrameCode(u.attackStyle));
+    set(F.watchedBy, s, Number.isFinite(u.watchedByTeam) ? u.watchedByTeam : -1);
     const e = u.preComputedEffective, b = u.preComputed;
-    F.vision[s] = e && Number.isFinite(e.visionRangeArea) ? e.visionRangeArea : getEntityEffectiveVisibilityRangeArea(u);
-    F.maxEnergy[s] = b ? b.maxEnergy : C.energy[s];
-    F.cargo[s] = Number(u.carryingValue) || 0;
+    set(F.vision, s, Math.fround(e && Number.isFinite(e.visionRangeArea) ? e.visionRangeArea : getEntityEffectiveVisibilityRangeArea(u)));
+    set(F.maxEnergy, s, Math.fround(b ? b.maxEnergy : C.energy[s]));
+    set(F.cargo, s, Math.fround(Number(u.carryingValue) || 0));
     const at = u.attackTarget;
-    F.tx[s] = at ? at.x : 0; F.ty[s] = at ? at.y : 0;
-    F.orderDest[s] = getUnitOrderDestinationCode(u);
+    set(F.tx, s, Math.fround(at ? at.x : 0)); set(F.ty, s, Math.fround(at ? at.y : 0));
+    set(F.orderDest, s, getUnitOrderDestinationCode(u) | 0);
     F.orderTick[s] = currentTick - 1;
-    F.flags[s] = (u.isFlying ? SIM_UF_FLYING : 0) | (u.isSnake ? SIM_UF_SNAKE : 0) | (u.isWorker ? SIM_UF_WORKER : 0)
+    set(F.flags, s, (u.isFlying ? SIM_UF_FLYING : 0) | (u.isSnake ? SIM_UF_SNAKE : 0) | (u.isWorker ? SIM_UF_WORKER : 0)
         | (u.holdPosition ? SIM_UF_HOLD : 0) | (u.isKing ? SIM_UF_KING : 0)
         | (at && Number.isFinite(at.x) ? SIM_UF_ATTACK_TARGET : 0)
         | (u.researcherHasMaterial ? SIM_UF_RESEARCH_MATERIAL : 0)
-        | (Number.isFinite(u._energyBlockedUntil) && gameTime < u._energyBlockedUntil ? SIM_UF_ENERGY_BLOCKED : 0);
+        | (Number.isFinite(u._energyBlockedUntil) && gameTime < u._energyBlockedUntil ? SIM_UF_ENERGY_BLOCKED : 0));
     F.id[s] = C.id[s];
+    if (_simMetaChanged && C.pvAt) C.pvAt[s] = (typeof currentTick === 'number' ? currentTick : 0) + 1;
     const p = _simPresentation;
     if (fresh && p && p.metaRev) Atomics.add(p.metaRev, 0, 1);
 }
@@ -259,17 +306,20 @@ function* simPresentationMetadata() {
 
 // (The metadata cycle again SIM_PRESENT_PUMP_REST_MS after one ends: types,
 // worker states and levels change slowly; the positions go every tick on
-// their own path. A slice waits for a tick due within it.)
-const SIM_PRESENT_PUMP_REST_MS = 250;
+// their own path. A slice waits for a tick due within it, but for no more
+// than SIM_PRESENT_PUMP_STARVE_MS: with ticks back to back (millions of
+// units) the cycle never ran at all.)
+const SIM_PRESENT_PUMP_REST_MS = 250, SIM_PRESENT_PUMP_STARVE_MS = 50;
 function simPresentationPump() {
     const p = _simPresentation;
     if (!p) return;
     const next = typeof _simStream !== 'undefined' && _simStream.length ? _simStream[0] : null;
     if (next && next.type === 'tick' && Number.isFinite(next.due)) {
         const wait = next.due - _simNowAbs();
-        if (wait < 2) { p.timer = setTimeout(simPresentationPump, Math.max(1, wait + 1)); return; }
+        if (wait < 2 && performance.now() - (p.sliceAt || 0) < SIM_PRESENT_PUMP_STARVE_MS) { p.timer = setTimeout(simPresentationPump, Math.max(1, wait + 1)); return; }
     }
     const start=performance.now();
+    p.sliceAt = start;
     let done=false;
     try {
         if(!p.projectileJob && start-p.projectileAt>=33) {p.projectileJob=simPresentationProjectiles();p.projectileAt=start;}

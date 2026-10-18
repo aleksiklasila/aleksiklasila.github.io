@@ -298,9 +298,21 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // A drive-by shooter the movement kernel moved whose look found
     // something (SIM_KERNEL_DRIVEBY): its shot at its turn (simDriveByFire).
     ['mvFire', Uint8Array, 1],
+    // What the presentation last saw changed (SIM_KERNEL_PV_MARKS, the tick's
+    // end): the tick of its last visual change (moved, its energy, owner,
+    // command or level changed, a flash, a timer, a fire target, made or
+    // gone), and those values as of then (pvId -1: not alive).
+    // (pvV: it had a velocity then.)
+    ['pvAt', Int32Array, 1], ['pvId', Int32Array, 1], ['pvE', Float32Array, 1], ['pvO', Int8Array, 1], ['pvC', Uint8Array, 1], ['pvL', Int16Array, 1], ['pvV', Uint8Array, 1],
     // A unit's attack cooldown and damage (its stats: simMoveStatsChanged),
     // for the attacks the movement kernel makes for held units.
     ['atkCd', Float32Array, 1], ['atkDmg', Float32Array, 1], ['atkSty', Uint8Array, 1],
+    // Steps of several base ticks (simDk): the base ticks a unit stood ready
+    // before the step's end when its attack timer ran out (its next attack's
+    // shots, mv.rs fire), that attack's shots (k_hits), and the transfer
+    // cooldown's carry (k_status). (The carries are state: snapshots take
+    // them, SIM_UNIT_MOVE_SNAPSHOT_KEYS.)
+    ['atkL', Uint8Array, 1], ['atkN', Uint8Array, 1], ['wtcL', Uint8Array, 1],
     // The worker search registry (worker.js wsRegister): an idle worker's
     // search, done on the tier (wsKind 0 none, 1 collector, 3 builder or
     // salvager, 4 healer, 5 researcher); the rest in its worker record.
@@ -428,22 +440,25 @@ function _simWkRelease(S, s) {
 // The unit's other fields, read by JavaScript only (no kernel): columns
 // beside the wasm ones, outside the wasm heap, an entry a slot, behind its
 // accessors (unit.js; ENTITY_TABLES_PLAN.md T1: a unit object holds only its
-// slot). Kinds: 'b' a boolean (Uint8), 'i' Int32, 'd' Float64, 'u' Float64
-// with undefined as NaN, 'r' any value (a packed array grown with the slots,
-// as the object fields'). [name, kind, default, in the snapshot].
+// slot). Kinds: 'b' a boolean (Uint8), 'i' Int32 (ticks, stamps, versions:
+// whole numbers), 'f' Float32, 'd' Float64, 'u' Float32 with undefined as
+// NaN, 'r' any value (an array as long as the slots, as the object
+// fields'). [name, kind, default, in the snapshot].
 const SIM_UNIT_JS_FIELDS = [
     ['_needsStatsInit', 'b', false, true], ['_removedNow', 'b', false, true], ['isFlying', 'b', false, true],
     ['_fpTile', 'i', -1, true], ['_fpIdx', 'i', -1, true], ['_fpVer', 'i', -1, true], ['_routeSegEnd', 'i', -1, true], ['_navReady', 'i', 0, true],
     ['_awaitGroupPath', 'i', 0, true], ['_pendingDueStamp', 'i', -1, true], ['_okTile', 'i', -1, true], ['_okVer', 'i', 0, true], ['_okNodeTile', 'i', -1, true],
     ['_okNodeVer', 'i', 0, true], ['_statsVer', 'i', -1, true], ['_damageFlashStart', 'i', 0, true],
-    ['_thingStatsRefreshStamp', 'd', 0, true], ['_effectiveStatsStamp', 'd', 0, true], ['_idleFailVer', 'd', -1, true], ['_idleFailUntil', 'd', 0, true],
-    ['_damageFlashUntil', 'd', 0, true], ['_damageFlashStrength', 'd', -0, true], ['maxEnergy', 'u', undefined, true],
+    // (Its frame slot: sim_frame.js _simRenderSlotOf; every unit has one.)
+    ['_rslot', 'i', -1, false],
+    ['_thingStatsRefreshStamp', 'i', 0, true], ['_effectiveStatsStamp', 'i', 0, true], ['_idleFailVer', 'i', -1, true], ['_idleFailUntil', 'i', 0, true],
+    ['_damageFlashUntil', 'i', 0, true], ['_damageFlashStrength', 'f', -0, true], ['maxEnergy', 'u', undefined, true],
     ['unitType', 'r', undefined, true], ['preComputedBase', 'r', null, true], ['basePreComputed', 'r', null, true], ['_pce', 'r', null, false], ['_pc', 'r', null, false],
     ['_fpPath', 'r', null, true], ['attackTarget', 'r', null, true], ['_damageFlashColor', 'r', '', true],
     // (Backing fields of accessors with their own logic: unit.js.)
     ['_path', 'r', null, false], ['_ws', 'r', undefined, false], ['_wnr', 'r', undefined, false], ['_tb', 'r', null, false],
     ['_pfa', 'r', undefined, false], ['_ppt', 'r', undefined, false]];
-const _SIM_JS_TYPED = { b: Uint8Array, i: Int32Array, d: Float64Array, u: Float64Array };
+const _SIM_JS_TYPED = { b: Uint8Array, i: Int32Array, f: Float32Array, d: Float64Array, u: Float32Array };
 const _simJsName = (k, kind) => (kind === 'r' ? 'jr_' : 'j_') + k;
 // (Stored values: booleans 1/0, undefined NaN for 'u'.)
 const _simJsDefault = (kind, def) => kind === 'b' ? (def ? 1 : 0) : kind === 'u' ? (def === undefined ? NaN : def) : def;
@@ -453,6 +468,8 @@ const _simJsDefaults = new Function('C', 's', SIM_UNIT_JS_FIELDS.map(([k, kind, 
 // defaults anyway; the references would keep paths and targets alive).
 const _simJsRelease = new Function('C', 's', SIM_UNIT_JS_FIELDS.filter(e => e[1] === 'r').map(([k]) => 'C.jr_' + k + '[s] = undefined;').join(' '));
 const SIM_UNIT_JS_SNAPSHOT_KEYS = SIM_UNIT_JS_FIELDS.filter(e => e[3]).map(e => e[0]);
+// Movement columns that are state (a snapshot's, behind accessors: unit.js).
+const SIM_UNIT_MOVE_SNAPSHOT_KEYS = ['atkL', 'wtcL'];
 let _simUnitState = null;
 // Per-slot inputs of the collision pass, kept current by the spatial index
 // (not read from unit objects every tick): the unit's chunk, or
@@ -547,10 +564,6 @@ function simUnitStateAllocate(u) {
     // (Grown by half, in whole 4096-slot steps: doubling left up to half of
     // ~850 bytes a slot unused, 1M slots for 600k units.)
     if (s >= S.cap) _simUnitStateGrow(S, _simUnitNextCap(S.cap), Math.ceil((s + 1) / 4096) * 4096);
-    // (A slot never used before: its element of each object field's array,
-    // see _simUnitStateGrow. Slots are taken in order: s is the length.)
-    if (!reused) for (let i = 0; i < _simUnitOcNames.length; i++) { const a = S.columns[_simUnitOcNames[i]]; while (a.length <= s) a.push(undefined); }
-    if (!reused) for (let i = 0; i < _simUnitJsRefNames.length; i++) { const a = S.columns[_simUnitJsRefNames[i]]; while (a.length <= s) a.push(undefined); }
     // A slot that held a unit before: every column zeroed, as a fresh slot's
     // (its last unit's kernel state (committed steps, steady windows, flags,
     // speeds) must not reach the new one: which slot a unit gets depends on
@@ -568,8 +581,16 @@ function _simSlotZeroFn() {
     for (const [k, , per] of SIM_MOVE_COLUMNS) body.push(per === 1 ? 'C.' + k + '[s] = 0;' : 'C.' + k + '.fill(0, s * ' + per + ', s * ' + per + ' + ' + per + ');');
     return new Function('C', 's', body.join('\n'));
 }
-const _simUnitOcNames = SIM_UNIT_OBJ_FIELDS.map(k => 'oc_' + k);
-const _simUnitJsRefNames = SIM_UNIT_JS_FIELDS.filter(e => e[1] === 'r').map(e => 'jr_' + e[0]);
+// A reference column (object fields, 'r' JavaScript fields) as long as the
+// slots (cap): one array of its final size, not one grown a slot at a time by
+// push (its backing store up to half again unused, and each step's copy
+// garbage: ~220 bytes a unit at 2M units).
+function _simRefGrow(a, cap) {
+    if (a && a.length >= cap) return a;
+    const b = new Array(cap).fill(undefined);
+    if (a) for (let i = 0; i < a.length; i++) b[i] = a[i];
+    return b;
+}
 function _simUnitNextCap(cap) { return Math.max(1024, Math.ceil(cap * 1.5 / 4096) * 4096); }
 // The slots a match's population needs, reserved at its start, at a whole
 // restore and at a compaction: every player's configured maximum
@@ -699,16 +720,13 @@ function _simUnitStateGrow(S, cap, minCap = cap) {
     if (typeof simParallelBindBatch === 'function') simParallelBindBatch();
     try {
         for (let i = 0; i < fresh.length; i += 2) { S.columns[fresh[i]] = fresh[i + 1]; simParallelBind('unit.' + fresh[i], fresh[i + 1]); }
-        // (The object fields' arrays: not sized with the columns. They are as
-        // long as the slots ever used, a new slot's element pushed when it is
-        // first taken (simUnitStateAllocate): packed, never sparse, and no
-        // memory for the reserved slots.)
-        for (const k of SIM_UNIT_OBJ_FIELDS) if (!S.columns['oc_' + k]) S.columns['oc_' + k] = [];
+        // (The object fields' arrays: as long as the columns, see _simRefGrow.)
+        for (const k of SIM_UNIT_OBJ_FIELDS) S.columns['oc_' + k] = _simRefGrow(S.columns['oc_' + k], cap);
         // (The JavaScript fields: typed columns sized with the others, plain
-        // memory; references packed like the object fields'.)
+        // memory; references as the object fields'.)
         for (const [k, kind] of SIM_UNIT_JS_FIELDS) {
             const nm = _simJsName(k, kind);
-            if (kind === 'r') { if (!S.columns[nm]) S.columns[nm] = []; continue; }
+            if (kind === 'r') { S.columns[nm] = _simRefGrow(S.columns[nm], cap); continue; }
             const was = S.columns[nm], a = new _SIM_JS_TYPED[kind](cap);
             if (was) a.set(was.subarray(0, Math.min(was.length, used, cap)));
             S.columns[nm] = a;
@@ -885,16 +903,14 @@ function simUnitStateCompact(force = false) {
     for (const k of SIM_UNIT_COLUMNS) _simCopyRuns(old[k], C[k], runs, 1);
     for (const [k, kind] of SIM_UNIT_JS_FIELDS) {
         const nm = _simJsName(k, kind);
-        if (kind === 'r') { const a = old[nm], b = C[nm] = new Array(ns).fill(undefined); for (let r = 0; r < runs.length; r += 3) for (let to = runs[r], from = runs[r + 1], e = from + runs[r + 2]; from < e; to++, from++) b[to] = a[from]; }
+        if (kind === 'r') { const a = old[nm], b = C[nm] = new Array(cap).fill(undefined); for (let r = 0; r < runs.length; r += 3) for (let to = runs[r], from = runs[r + 1], e = from + runs[r + 2]; from < e; to++, from++) b[to] = a[from]; }
         else { C[nm] = new _SIM_JS_TYPED[kind](cap); _simCopyRuns(old[nm], C[nm], runs, 1); }
     }
     for (const [k, , per] of SIM_MOVE_COLUMNS) _simCopyRuns(old[k], C[k], runs, per);
     _simCopyRuns(S.sepKey, N.sepKey, runs, 1); _simCopyRuns(S.sepLayer, N.sepLayer, runs, 1);
-    // (The object fields' arrays: packed, as long as the slots taken (the
-    // next ones pushed as they are taken, see simUnitStateAllocate), copied
-    // the same way.)
+    // (The object fields' arrays: as long as the columns, copied the same way.)
     for (const k of SIM_UNIT_OBJ_FIELDS) {
-        const a = old['oc_' + k], b = C['oc_' + k] = new Array(ns).fill(undefined);
+        const a = old['oc_' + k], b = C['oc_' + k] = new Array(cap).fill(undefined);
         for (let r = 0; r < runs.length; r += 3) for (let to = runs[r], from = runs[r + 1], e = from + runs[r + 2]; from < e; to++, from++) b[to] = a[from];
     }
     for (let s = 0; s < ns; s++) {
@@ -964,7 +980,7 @@ function simUnitStateKeys(u) {
     if (u._stT !== undefined && typeof structTableKeys === 'function') return structTableKeys(u, keys);
     if (u._us || u._det) for (const k of SIM_UNIT_ACCESSOR_COLUMNS) keys.push(k);
     // (Its JavaScript fields and radii: accessors over columns, as before own fields.)
-    if ((u._us || u._det) && u instanceof Unit) { keys.push('r', 'collisionR'); for (const k of SIM_UNIT_JS_SNAPSHOT_KEYS) keys.push(k); }
+    if ((u._us || u._det) && u instanceof Unit) { keys.push('r', 'collisionR'); for (const k of SIM_UNIT_JS_SNAPSHOT_KEYS) keys.push(k); for (const k of SIM_UNIT_MOVE_SNAPSHOT_KEYS) keys.push(k); }
     if (u instanceof Unit) for (const k of SIM_UNIT_EXTRA_ACCESSORS) if (!Object.prototype.hasOwnProperty.call(u, k)) keys.push(k);
     // (Its role memory's fields that hold something: unit.js UNIT_ROLE_FIELDS.)
     if (u._rm && typeof UNIT_ROLE_FIELDS !== 'undefined') for (const k of UNIT_ROLE_FIELDS) if (u._rm[k] !== undefined) keys.push(k);

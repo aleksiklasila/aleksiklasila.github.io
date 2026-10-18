@@ -188,6 +188,8 @@ let _updateOrderCand = new Int32Array(0), _updateOrderRun = new Int32Array(0);
 // stutter). The brains may lag; the tick may not: a chaos scenario's 13k
 // workers a team made 300-500 events a tick (7-12 ms).
 const WORKER_EVENTS_PER_TICK = 240;
+// (A step of several base ticks: their budget, the events a second as at
+// one a step.)
 // (The pass's events left: a worker arriving within its own update takes
 // one too, Unit.update; outside the pass, no limit.)
 let _workerEventsLeft = Infinity;
@@ -211,7 +213,7 @@ function _simParkEventWait(u, q) {
 function _forEachUnitInTickOrder(fn) {
     let list = units, n = list.length;
     if (n <= 1) { if (n === 1 && list[0]) fn(list[0]); return; }
-    _workerEventsLeft = WORKER_EVENTS_PER_TICK;
+    _workerEventsLeft = WORKER_EVENTS_PER_TICK * simDk;
     try { _forEachUnitInTickOrderBody(fn, list, n); } finally { _workerEventsLeft = Infinity; }
 }
 function _forEachUnitInTickOrderBody(fn, list, n) {
@@ -659,7 +661,8 @@ function _gameTickBody() {
     // (Actions left from earlier ticks, on a tick that brought none; then the
     // next tick's action budget.)
     actionBacklogTick();
-    gameTime++;
+    // (The step's base ticks: simDk, set by whoever runs the step.)
+    gameTime += simDk;
     // (The wasm heap's clock: freed arrays are reused some ticks later.)
     if (typeof simHeapTick === 'function') simHeapTick();
     // (The unit columns' next size allocated ahead, a share a tick.)
@@ -685,8 +688,10 @@ function _gameTickBody() {
     // buildings (by their position in the tick's visiting order), so no
     // tick walks them all. Completed on the second's last tick; the info
     // panel shows the latest complete one.
-    let upKeepSlice = gameTime % TICK_RATE;
-    let upKeepThisTick = upKeepSlice === 0;
+    // (A step of several base ticks: their slices, the second's tick when
+    // it is one of them.)
+    let upKeepSlices = simStepPhases(TICK_RATE);
+    let upKeepThisTick = upKeepSlices.includes(0);
     _upKeepAccum = null;
 
     let floorChanged = false;
@@ -697,10 +702,11 @@ function _gameTickBody() {
     // row-major order.
     {
         const cellItems = getCellItemsRowMajor();
-        for (let i = upKeepSlice; i < cellItems.length; i += TICK_RATE) {
+        for (const upKeepSlice of upKeepSlices) for (let i = upKeepSlice; i < cellItems.length; i += TICK_RATE) {
             const item = cellItems[i];
             if (grid[item.gy][item.gx].item !== item) continue;
-            ensureStatusState(item);
+            // (No ensureStatusState: applyStatusEffect and tickStatusEffects
+            // make the fields; ten reads of 10k items a tick at 200k.)
             if (thingStatusPending(item)) thingStatusWake(item);
         }
         for (const item of thingStatusDue()) {
@@ -871,7 +877,7 @@ function _gameTickBody() {
 
     // Dropped items decay
     for (let i = droppedItems.length - 1; i >= 0; i--) {
-        droppedItems[i].timer--;
+        droppedItems[i].timer -= simDk;
         if (droppedItems[i].timer <= 0) {
             removeDroppedItem(droppedItems[i]);
         }
@@ -882,7 +888,7 @@ function _gameTickBody() {
 
     // Laser buzzer sound control (presentation): the active laser nearest
     // the camera, from the laser towers (listed again every TICK_RATE ticks).
-    if (!_laserSoundList || gameTime % TICK_RATE === 0) _laserSoundList = towers.filter(t => t.type === 'laser');
+    if (!_laserSoundList || simStepCrosses(0, TICK_RATE)) _laserSoundList = towers.filter(t => t.type === 'laser');
     {
         let anyLaserActive = false, laserSoundX = 0, laserSoundY = 0, bestLaserDist2 = Infinity;
         const cameraCx = camera.x + viewW / camera.zoom / 2, cameraCy = camera.y + viewH / camera.zoom / 2;
@@ -901,7 +907,7 @@ function _gameTickBody() {
     // dirtied again and again is flooded once per batch.)
     if (ADJACENCY_LANE) adjacencyLaneStep();
     if (_winCheckDue) { _winCheckDue = false; checkWinCondition(); }
-    else if (_adjacencyNeedsRecalc && gameTime % ADJACENCY_BATCH_TICKS === 3) _runAdjacencyRecalculation();
+    else if (_adjacencyNeedsRecalc && simStepCrosses(-3, ADJACENCY_BATCH_TICKS)) _runAdjacencyRecalculation();
 
     // Upkeep, once a second: worked out now (_upKeepSecond; the info panel
     // shows it), deducted.
@@ -1277,17 +1283,45 @@ function initInput() {
     // frame's columns: a click's candidates (every unit's view, twice a
     // click, cost tens of ms at 200k units). Without a frame: every unit.
     const CLICK_UNIT_REACH = TILE * 4;
+    // The frame's list positions (k: F.order[k] its slot, units[k] its view)
+    // in the render buckets' cells over a world box (presentation_worker.js
+    // buildRenderBuckets: cells of 16 tiles, chained by list position),
+    // ascending; null without buckets. (A click or a box looks at the cells
+    // under it, not at every unit: a pass over millions per input.)
+    let _frameCellPos = new Int32Array(1024);
+    function _frameListInBox(F, x0, y0, x1, y1) {
+        const B = F && F.renderBuckets;
+        if (!B || !B.head || !B.next || !(B.columns > 0)) return null;
+        const cell = 16 * (B.tile || TILE), cols = B.columns, rows = B.rows, head = B.head, next = B.next;
+        // (A cell more around: a frame's drawn positions may have moved off
+        // the cell its buckets put them in.)
+        const cx0 = Math.max(0, Math.floor(x0 / cell) - 1), cx1 = Math.min(cols - 1, Math.floor(x1 / cell) + 1);
+        const cy0 = Math.max(0, Math.floor(y0 / cell) - 1), cy1 = Math.min(rows - 1, Math.floor(y1 / cell) + 1);
+        let out = _frameCellPos, m = 0;
+        for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) {
+            for (let k = head[cy * cols + cx]; k >= 0; k = next[k]) {
+                if (m >= out.length) { const g = new Int32Array(out.length * 2); g.set(out); out = _frameCellPos = g; }
+                out[m++] = k;
+            }
+        }
+        const list = out.subarray(0, m);
+        list.sort();
+        return list;
+    }
     function _unitsNearPoint(x, y, reach, own) {
         const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
         if (!F) return units;
         const out = [], ord = F.order, X = F.x, Y = F.y, O = F.owner, n = Math.min(F.count, units.length), me = localPlayerId;
-        for (let k = 0; k < n; k++) {
+        const near = (k) => {
             const s = ord[k];
-            if ((O[s] === me) !== own) continue;
+            if ((O[s] === me) !== own) return;
             const dx = X[s] - x, dy = Y[s] - y;
-            if (dx > reach || dx < -reach || dy > reach || dy < -reach) continue;
+            if (dx > reach || dx < -reach || dy > reach || dy < -reach) return;
             out.push(units[k]);
-        }
+        };
+        const cells = _frameListInBox(F, x - reach, y - reach, x + reach, y + reach);
+        if (cells) { for (let i = 0; i < cells.length; i++) if (cells[i] < n) near(cells[i]); }
+        else for (let k = 0; k < n; k++) near(k);
         return out;
     }
     // This player's live units inside a world box, on tiles it sees: a box
@@ -1313,7 +1347,25 @@ function initInput() {
         let slots = _boxUnitSlots;
         if (slots.length < n) slots = _boxUnitSlots = new Int32Array(Math.max(1024, Math.ceil(n * 1.25)));
         let c = 0;
-        for (let s = 0; s < n; s++) {
+        // (The cells under the box when the frame has buckets: their slots,
+        // sorted, so the selection is in slot order as from the pass.)
+        const cells = _frameListInBox(F, sx, sy, ex, ey);
+        if (cells) {
+            const ord = F.order;
+            let m = 0;
+            for (let i = 0; i < cells.length; i++) { const sl = ord[cells[i]]; if (sl >= 0 && sl < n) cells[m++] = sl; }
+            const sl = cells.subarray(0, m);
+            sl.sort();
+            for (let i = 0; i < m; i++) {
+                const s = sl[i];
+                if (O[s] !== me || ID[s] < 0) continue;
+                const x = X[s], y = Y[s];
+                if (x < sx || x > ex || y < sy || y > ey) continue;
+                if (!full && !isTileVisible(Math.floor(x * it), Math.floor(y * it))) continue;
+                const u = views[s];
+                if (u) { out.push(u); slots[c++] = s; }
+            }
+        } else for (let s = 0; s < n; s++) {
             if (O[s] !== me || ID[s] < 0) continue;
             const x = X[s], y = Y[s];
             if (x < sx || x > ex || y < sy || y > ey) continue;
@@ -3233,7 +3285,7 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
         // may arrive short of the tile in their own crowd; a few go all the
         // way (no crowd settling beside idle units of their own).
         const group = reachable.length >= NAV_GROUP_MIN;
-        const destKey = to, did = navFieldRequest(profile, destKey, group), ready = navFieldReadyTick();
+        const destKey = to, did = navFieldRequest(profile, destKey, group), ready = navFieldReadyFor(did);
         // (One path for the order's units: paths are replaced, never changed
         // in place.)
         const navPath = [group ? { x: dest.x, y: dest.y, nav: profile + 1, w: 1, ready } : { x: dest.x, y: dest.y, nav: profile + 1, ready }];
@@ -3612,6 +3664,11 @@ function _actionBacklogDrain() {
 }
 function processActions(actions, playerId) {
     if (!Array.isArray(actions)) return;
+    const t0 = performance.now();
+    try { _processActions(actions, playerId); } finally { simOrderStats.actionsMs += performance.now() - t0; }
+}
+function _processActions(actions, playerId) {
+    _stepBudgets();
     // (The unit index built after the last tick, and what of it reads live
     // state, done before an action changes anything.)
     if (typeof spatialIndexPrebuildSettle === 'function') spatialIndexPrebuildSettle();
@@ -3627,6 +3684,7 @@ function processActions(actions, playerId) {
 // At gameTick's start: the backlog's share of a tick without actions, then
 // the budget again for the next tick's.
 function actionBacklogTick() {
+    _stepBudgets();
     if (_actionBacklog.length && _actionBudgetLeft > 0) {
         if (typeof spatialIndexPrebuildSettle === 'function') spatialIndexPrebuildSettle();
         _actionBacklogDrain();
@@ -3681,7 +3739,20 @@ function actionBacklogChecksum() {
 // ~10 ms a tick on top of a ~38 ms tick in the mixed chaos scenario.)
 let ORDER_UNITS_PER_PLAYER_TICK = 2000, ORDER_UNITS_PER_TICK_ALL = 2500, ORDER_UNITS_PER_ROUND = 500;
 let _orderQueue = [], _orderBudgets = [], _orderAllLeft = ORDER_UNITS_PER_TICK_ALL;
-function _orderBudgetOf(p) { const b = _orderBudgets[p]; return b === undefined || b === null ? ORDER_UNITS_PER_PLAYER_TICK : b; }
+function _orderBudgetOf(p) { const b = _orderBudgets[p]; return b === undefined || b === null ? ORDER_UNITS_PER_PLAYER_TICK + _orderPlayerBonus : b; }
+// A step of several base ticks (simDk): the budgets of its base ticks, the
+// action and order rates a second as at one a step (added at the step's
+// first use, simDk known then; every peer alike).
+let _budgetStep = -1, _orderPlayerBonus = 0;
+function _stepBudgets() {
+    if (_budgetStep === currentTick) return;
+    _budgetStep = currentTick;
+    const k = simDk > 1 ? simDk - 1 : 0;
+    _orderPlayerBonus = ORDER_UNITS_PER_PLAYER_TICK * k;
+    if (!k) return;
+    _actionBudgetLeft += ACTION_BUDGET_PER_TICK * k;
+    _orderAllLeft += ORDER_UNITS_PER_TICK_ALL * k;
+}
 // Per player, each unit's latest order (its queue entry's seq, or a drop's):
 // a queued unit is applied only by the entry that ordered it last, so a new
 // order supersedes the queued ones by stamping its own units (no pass over
@@ -3768,7 +3839,15 @@ function _queueGroupMoveOrder(a, playerId, cmd) {
 // Applies queued orders within this tick's budgets, in queue order (a
 // player whose budget is spent waits, its later orders too). Units ordered
 // again since are passed over (no budget).
+// (Diagnostics: the time and units of the queued orders applied, the
+// actions' time; reset by whoever reads them.)
+const simOrderStats = globalThis.simOrderStats = { ms: 0, units: 0, calls: 0, actionsMs: 0 };
 function runQueuedOrders() {
+    _stepBudgets();
+    const t0 = performance.now(), b0 = _orderAllLeft;
+    try { _runQueuedOrders(); } finally { simOrderStats.ms += performance.now() - t0; simOrderStats.units += Math.max(0, b0 - _orderAllLeft); simOrderStats.calls++; }
+}
+function _runQueuedOrders() {
     // In rounds of at most ORDER_UNITS_PER_ROUND units per player (its
     // first unfinished order only: its orders apply in turn), until the
     // players' budgets or the tick's (ORDER_UNITS_PER_TICK_ALL) run out:
@@ -5116,7 +5195,7 @@ function tickPacketOrder(a, b) {
 }
 // (In the bundle's order, the order its commands run in: sorted here, two
 // packets swapped kept the checksum and changed what happened.)
-function computeTickBundleChecksum(tick, packets, flush = 0) {
+function computeTickBundleChecksum(tick, packets, flush = 0, dk = 1) {
     let list = (Array.isArray(packets) ? packets : [])
         .map(p => ({
             tick: Math.floor(Number(p.tick) || 0),
@@ -5128,6 +5207,9 @@ function computeTickBundleChecksum(tick, packets, flush = 0) {
     let body = { tick: Math.floor(tick), packets: list };
     // A resync tick: every peer drops its history caches before running it.
     if (flush) body.flush = 1;
+    // (The step's base ticks, simDk: covered too. One, the common case, is
+    // left out: the checksums of bundles from before step sizes stand.)
+    if (dk > 1) body.dk = dk | 0;
     return hashStableLockstep(body);
 }
 
@@ -5313,6 +5395,7 @@ function packTickBundleForWire(b) {
     }
     let w = { t: b.tick, c: b.combinedChecksum, p };
     if (b.flush) w.f = 1;
+    if (b.dk > 1) w.k = b.dk;
     if (matchStartSessionId) w.m = matchStartSessionId;
     return w;
 }
@@ -5334,6 +5417,7 @@ function packRepeatedTickBundleForWire(b, current) {
     if (!same) return packTickBundleForWire(b);
     let w = { t: b.tick, c: b.combinedChecksum, s: 1 };
     if (b.flush) w.f = 1;
+    if (b.dk > 1) w.k = b.dk;
     if (matchStartSessionId) w.m = matchStartSessionId;
     return w;
 }
@@ -5356,6 +5440,7 @@ function unpackTickBundleFromWire(w, current = null) {
     }
     let b = { tick: t, packets, combinedChecksum: String(w.c || '') };
     if (w.f) b.flush = 1;
+    if (w.k > 1) b.dk = Math.min(SIM_DK_MAX, w.k | 0);
     _rebuiltTickBundles.add(b);
     return b;
 }
@@ -5370,7 +5455,7 @@ function validateTickBundle(bundle) {
             if (!validateTickPacket(p)) return false;
         }
     }
-    let expected = computeTickBundleChecksum(t, packets, bundle.flush ? 1 : 0);
+    let expected = computeTickBundleChecksum(t, packets, bundle.flush ? 1 : 0, bundle.dk | 0);
     return String(bundle.combinedChecksum || '') === expected;
 }
 
@@ -5794,9 +5879,12 @@ function maybeBuildHostBundle(tick, participants = null, sealLate = false) {
     let seen = new Set();
     let packets = sealIds.map(pid => pmap[pid] = _hostCommandsOnce(pid, pmap[pid], seen)).sort(tickPacketOrder);
     let flush = resyncHostFlushTicks.has(t) ? 1 : 0;
-    let combinedChecksum = computeTickBundleChecksum(t, packets, flush);
+    // (The step's base ticks: from the match's pace as it is now.)
+    let dk = netStepTicks();
+    let combinedChecksum = computeTickBundleChecksum(t, packets, flush, dk);
     let bundle = { tick: t, packets, combinedChecksum };
     if (flush) bundle.flush = 1;
+    if (dk > 1) bundle.dk = dk;
     // Building a bundle seals and commits the tick in one step.
     lockstepBundleByTick[t] = bundle;
     lockstepCommittedByTick[t] = true;
@@ -5814,13 +5902,15 @@ function maybeBuildHostBundle(tick, participants = null, sealLate = false) {
 // A bundle without anyone's commands, for a tick sealed without waiting for
 // them: a stalled host page's simulation worker seals these (sim_worker.js),
 // and the page builds the same from its note. participants: [peer, team].
-function buildEmptyTickBundle(tick, participants) {
+function buildEmptyTickBundle(tick, participants, dk = 1) {
     let packets = participants.map(([peerId, teamId]) => {
         let p = { tick, peerId, teamId, actions: [] };
         p.checksum = computeTickPacketChecksum(tick, peerId, teamId, p.actions);
         return p;
     }).sort(tickPacketOrder);
-    return { tick, packets, combinedChecksum: computeTickBundleChecksum(tick, packets, 0) };
+    const b = { tick, packets, combinedChecksum: computeTickBundleChecksum(tick, packets, 0, dk) };
+    if (dk > 1) b.dk = dk;
+    return b;
 }
 
 // How far the simulation worker may go by itself while this page is stalled
@@ -5847,11 +5937,12 @@ function lockstepAutoLimit() {
 // channel for it: everyone following the match).
 function lockstepAutoInfo() {
     let tickMs = netSimulationTickMs();
-    if (!isMultiplayer) return { role: 'solo', tickMs };
+    let dk = netStepTicks();
+    if (!isMultiplayer) return { role: 'solo', tickMs, dk };
     if (!isHost) return { role: 'guest', tickMs, host: String(wsHostId || '') };
     let ids = getActiveMatchPeerIds(), setup = computeTeamSetupFromLobby();
     return {
-        role: 'host', tickMs, d: netMatchInputDelay, pace: tickMs,
+        role: 'host', tickMs, d: netMatchInputDelay, pace: tickMs, dk,
         participants: ids.map(pid => [pid, pid === myPeerId ? localPlayerId : Math.floor(Number(setup.teamByPeer[pid]) || 0)]),
         peers: connections.filter(c => c && c.peer).map(c => String(c.peer)).sort()
     };
@@ -5982,11 +6073,11 @@ function _hostAdvanceBundles(now) {
     // run, waiting any longer for a packet costs every peer a late tick. The
     // lead up to there is the packet's grace (no tick waits for it).
     let ahead = typeof simClientDispatchAhead === 'function' && simClientDispatchAhead() && simClientWorldReady() && simClientTickFree(currentTick);
-    let needed = ahead && simClientWorkerAhead() <= HOST_LATE_SEAL_LEAD_TICKS;
+    let needed = ahead && simClientWorkerAhead() <= Math.min(HOST_LATE_SEAL_LEAD_TICKS, simClientLeadTicks() - 1);
     if (!lockstepBundleByTick[currentTick] && (waitingForRemoteSince > 0 || ahead)) {
         let pmap = lockstepHostPacketsByTick[currentTick] || {};
         let missing = participants.filter(pid => pid !== myPeerId && !pmap[pid]);
-        let behindLimit = Math.ceil(HOST_LATE_SEAL_MAX_SILENCE_MS / TICK_MS);
+        let behindLimit = Math.ceil(HOST_LATE_SEAL_MAX_SILENCE_MS / netSimulationTickMs());
         let alive = pid => (now - (lockstepHostLastPacketAt[pid] || 0)) < HOST_LATE_SEAL_MAX_SILENCE_MS
             && (currentTick - (Number.isFinite(lockstepHostLastPacketTick[pid]) ? lockstepHostLastPacketTick[pid] : -Infinity)) <= behindLimit;
         if (missing.length > 0 && missing.every(alive)) {
@@ -6453,7 +6544,7 @@ function processDeferredGuestLockstepWindow(now, tick) {
         lockstepCommittedByTick[t] = true;
         // (The simulation worker holds it from now on: it runs on time
         // whatever this page is doing.)
-        if (typeof simClientNoteSealed === 'function') simClientNoteSealed(t, { actions: (bundle.packets || []).flatMap(p => Array.isArray(p.actions) ? p.actions : []), flush: !!bundle.flush });
+        if (typeof simClientNoteSealed === 'function') simClientNoteSealed(t, { actions: (bundle.packets || []).flatMap(p => Array.isArray(p.actions) ? p.actions : []), flush: !!bundle.flush, dk: bundle.dk | 0 || 1 });
         _guestResendIfSealedWithout(t, bundle, hostConn);
     }
 }
@@ -6513,8 +6604,9 @@ function getHostResendBundleForTick(tick) {
         packets: historyBundle.packets,
         combinedChecksum: String(historyBundle.combinedChecksum || '')
     };
-    // A patch's flush tick: the checksum covers the mark.
+    // A patch's flush tick: the checksum covers the mark (and the step size).
     if (historyBundle.flush) bundle.flush = 1;
+    if (historyBundle.dk > 1) bundle.dk = historyBundle.dk;
     return { bundle, committed: true };
 }
 
@@ -6689,6 +6781,13 @@ function runOneTick() {
     // peer that is restored from a patch.
     let flushTick = !!(isMultiplayer && lockstepBundleByTick[currentTick] && lockstepBundleByTick[currentTick].flush);
     if (flushTick && !inWorker) snapFlushHistoryCaches();
+    // The step's base ticks: the sealed bundle's in a match, this machine's
+    // pace alone.
+    let stepDk = isMultiplayer
+        ? Math.max(1, (lockstepBundleByTick[currentTick] && lockstepBundleByTick[currentTick].dk) | 0)
+        : netStepTicks();
+    // (Its commands' budgets are the step's: simDk before them.)
+    if (!inWorker) simDk = stepDk;
 
     // Process deterministic combined actions for this tick.
     let allActs = isMultiplayer
@@ -6730,11 +6829,12 @@ function runOneTick() {
         // (sim_client.js), including the per-tick page work below. (One the
         // worker ran by itself, lockstepAdoptAutoTick: only noted.)
         if (_lockstepAdoptingTick) simClientNoteAutoTick(processedTick, _lockstepAdoptingTick.due);
-        else simClientRunTick(processedTick, allActs, teams, flushTick);
+        else simClientRunTick(processedTick, allActs, teams, flushTick, stepDk);
     } else {
+        simDk = stepDk;
         try { gameTick(); } catch (err) { reportRuntimeError('tick', err); }
         netNoteSimulationTick(performance.now(), performance.now() - tickWorkStart);
-        if (typeof simShadowEnabled !== 'undefined' && simShadowEnabled) simShadowAfterTick(processedTick, allActs, teams, flushTick);
+        if (typeof simShadowEnabled !== 'undefined' && simShadowEnabled) simShadowAfterTick(processedTick, allActs, teams, flushTick, stepDk);
 
         gameStatsStep(currentTick);
         if (currentTick % TICK_RATE === 0) sampleGameStats();

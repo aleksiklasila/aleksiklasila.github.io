@@ -115,10 +115,20 @@ let _simWasmX = null, _simWasmOn = new Int32Array(1);
 // This thread's view of the wasm memory and its scratch region (an
 // address, a size in 32-bit words) for kernels that need work space.
 let _simWasmMem = null, _simWasmScratch = 0, _simWasmScratchWords = 0;
+// An address as the kernels' 32-bit words hold it: as is under wasm32; under
+// the memory64 build (sim_wasm.js SIM_WASM64: the heap past 4 GiB) in 4-byte
+// units (lib.rs waddr). Every array a kernel is given is 4-byte aligned.
+let _simWShift = 0;
+function _simWEnc(p) {
+    if (_simWShift === 0 || p <= 0) return p;
+    if (p % 4 !== 0) throw new Error('a kernel array not 4-byte aligned at ' + p);
+    return p / 4;
+}
 // This thread's argument block for big kernels (sim_wasm.js): 1024 32-bit
 // words (array addresses) at _simWasmArgs, then 512 doubles (parameters);
 // views _simWasmArgI / _simWasmArgF.
-let _simWasmArgs = 0, _simWasmArgI = null, _simWasmArgF = null;
+// (_simWasmArgsW: its address as a kernel takes it, _simWEnc.)
+let _simWasmArgs = 0, _simWasmArgsW = 0, _simWasmArgI = null, _simWasmArgF = null;
 
 // Arrays by name and scalar parameters (the same objects in every thread).
 const _simParReg = {};
@@ -367,8 +377,14 @@ function _simWallStepOut(partL, partBase, rows, ro, W, C, cw, t, tx, ty) {
 }
 // simNavStep from tile t at column tx, row ty, 2^cs-tile clusters
 // (simFlowLook's steps).
+// (rows null: the route is on the atlas, _simFlowAtlas's build.)
+let _simFlowAtlas = null;
 function simNavStepXY(W, cs, C, cw, partL, partBase, rows, ro, fields, nodeBase, nodeTile, nodePair, dfield, doff, bx, by, bw, bh, t, tx, ty, dest) {
     if (t === dest) return -1;
+    if (rows === null) {
+        if (partL[t] === 0xFFFF) return _simWallStepOut(partL, partBase, null, 0, W, C, cw, t, tx, ty);
+        return _simFlowAtlas && typeof navAtlasStep === 'function' ? navAtlasStep(_simFlowAtlas, t, dest) : -1;
+    }
     if (dfield) {
         const lx = tx - bx, ly = ty - by;
         if (lx >= 0 && ly >= 0 && lx < bw && ly < bh) {
@@ -489,7 +505,7 @@ let _simMoveLists = new Int32Array(4096), _simMoveCounts = new Int32Array(4);
 // first deoptimization and recompile were the whole kernel's, ~25 ms).
 SIM_KERNELS[SIM_KERNEL_MOVE_STEP] = function (R, P, chunk) {
     const s0 = chunk * P[1], end = Math.min(P[0], s0 + P[1]), n = Math.max(0, end - s0);
-    if (_simMoveWasm(R, P)) { _simWasmX.mv_step(_simWasmArgs, s0, end); return; }
+    if (_simMoveWasm(R, P)) { _simWasmX.mv_step(_simWasmArgsW, s0, end); return; }
     _simNoWasm('MOVE_STEP');
 };
 // The arrays of every navigation profile's build under a name (flownav.js
@@ -515,7 +531,7 @@ let _simNavArraysR = null, _simNavArraysBinds = -1;
 // passes, ~2x the kernel.)
 SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
     const s0 = chunk * P[1], end = Math.min(P[0], s0 + P[1]), n = Math.max(0, end - s0);
-    if (_simMoveWasm(R, P)) { _simWasmX.mv_move(_simWasmArgs, s0, end, chunk); return; }
+    if (_simMoveWasm(R, P)) { _simWasmX.mv_move(_simWasmArgsW, s0, end, chunk); return; }
     _simNoWasm('MOVE');
 };
 
@@ -591,6 +607,32 @@ SIM_KERNELS[SIM_KERNEL_IXM_KEEP] = function (R, P, chunk) { _simRust(_simIxmW, P
 SIM_KERNELS[SIM_KERNEL_IXM_CHG] = function (R, P, chunk) { _simRust(_simIxmW, P, chunk, 'k_ixm_chg', 'IXM_CHG'); };
 SIM_KERNELS[SIM_KERNEL_IXM_PLAN] = function (R, P, chunk) { _simRust(_simIxmW, P, chunk, 'k_ixm_plan', 'IXM_PLAN'); };
 SIM_KERNELS[SIM_KERNEL_IXM_WRITE] = function (R, P, chunk) { _simRust(_simIxmW, P, chunk, 'k_ixm_write', 'IXM_WRITE'); };
+// The index by its changes (wasm/src/k.rs k_ixd_*: the same index as a full
+// build), the prebuild chain's stages: a scan of the slots for those listed
+// otherwise than they are, their entries struck and sorted in (one job),
+// the bands merged, copied into place, the touched chunks' owners; and,
+// after a full build, the slots' listing from its entries.
+// (Every build's chunks' units by id, after INDEX_FILL: k.rs k_ix_idsort.)
+const SIM_KERNEL_INDEX_IDSORT = 84;
+const _simIxIdSortW = _simWK(['sep.eslot', 'sep.ekey', 'ix.eid', 'ix.listed']);
+SIM_KERNELS[SIM_KERNEL_INDEX_IDSORT] = function (R, P, chunk) { _simRust(_simIxIdSortW, P, chunk, 'k_ix_idsort', 'INDEX_IDSORT'); };
+// Each slot's last visual change (k.rs k_pv_marks; sim_presentation.js
+// simPresentTickEnd): the presentation fills only the slots stamped since
+// its last frame.
+const SIM_KERNEL_PV_MARKS = 85;
+const _simPvMarksW = _simWK(['unit.live', 'unit.dead', 'unit.id', 'unit.x', 'unit.y', 'unit.x0', 'unit.y0', 'unit.energy', 'unit.owner', 'unit.commandState',
+    'unit.effectiveLevel', 'unit.attackFlash', 'unit.stOn', 'unit.tmOn', 'unit.cmMode', 'unit.pvAt', 'unit.pvE', 'unit.pvO', 'unit.pvC', 'unit.pvL', 'unit.pvId',
+    'unit.vx', 'unit.vy', 'unit.pvV']);
+SIM_KERNELS[SIM_KERNEL_PV_MARKS] = function (R, P, chunk) { _simRust(_simPvMarksW, P, chunk, 'k_pv_marks', 'PV_MARKS'); };
+const SIM_KERNEL_IXD_SCAN = 78, SIM_KERNEL_IXD_APPLY = 79, SIM_KERNEL_IXD_MERGE = 80, SIM_KERNEL_IXD_COPY = 81, SIM_KERNEL_IXD_OWNERS = 82, SIM_KERNEL_IXD_INIT = 83;
+const _simIxdW = _simWK(['unit.live', 'unit.dead', 'unit.x', 'unit.y', 'unit.id', 'unit.owner', 'ixd.k', 'ixd.id', 'ixd.own', 'sep.eslot', 'sep.ekey', 'ix.eid',
+    'ix.start', 'ix.cnt', 'ix.stamp', 'ixd.gone', 'ixd.dirty', 'ixd.plan', 'ixd.ik', 'ixd.is', 'ixd.es2', 'ixd.ek2', 'ixd.eid2', 'ix.listed', '?ix.omask', 'ixd.touch']);
+SIM_KERNELS[SIM_KERNEL_IXD_SCAN] = function (R, P, chunk) { _simRust(_simIxdW, P, chunk, 'k_ixd_scan', 'IXD_SCAN'); };
+SIM_KERNELS[SIM_KERNEL_IXD_APPLY] = function (R, P, chunk) { _simRust(_simIxdW, P, chunk, 'k_ixd_apply', 'IXD_APPLY'); };
+SIM_KERNELS[SIM_KERNEL_IXD_MERGE] = function (R, P, chunk) { _simRust(_simIxdW, P, chunk, 'k_ixd_merge', 'IXD_MERGE'); };
+SIM_KERNELS[SIM_KERNEL_IXD_COPY] = function (R, P, chunk) { _simRust(_simIxdW, P, chunk, 'k_ixd_copy', 'IXD_COPY'); };
+SIM_KERNELS[SIM_KERNEL_IXD_OWNERS] = function (R, P, chunk) { _simRust(_simIxdW, P, chunk, 'k_ixd_owners', 'IXD_OWNERS'); };
+SIM_KERNELS[SIM_KERNEL_IXD_INIT] = function (R, P, chunk) { _simRust(_simIxdW, P, chunk, 'k_ixd_init', 'IXD_INIT'); };
 
 // A range of the wasm heap zeroed in jobs (bytes P[0] to P[0] + P[1], P[2]
 // a job): simParallelZeroHeap. (Over the memory's current buffer, which
@@ -685,7 +727,7 @@ function simParallelCopyStage(pairs, P, which = 0) {
         simHeapFree(old);
     }
     const T = _simCopyBgTabs[w];
-    for (let i = 0; i < n; i++) { const d = pairs[2 * i], s = pairs[2 * i + 1]; T[3 * i] = d.byteOffset; T[3 * i + 1] = s.byteOffset; T[3 * i + 2] = s.byteLength; }
+    for (let i = 0; i < n; i++) { const d = pairs[2 * i], s = pairs[2 * i + 1]; T[3 * i] = _simWEnc(d.byteOffset); T[3 * i + 1] = _simWEnc(s.byteOffset); T[3 * i + 2] = s.byteLength; }
     P.fill(0); P[0] = n; P[1] = SIM_COPY_PER; P[2] = total;
     return [w ? SIM_KERNEL_COPY_BG2 : SIM_KERNEL_COPY_BG, Math.max(1, Math.ceil(total / SIM_COPY_PER))];
 }
@@ -711,7 +753,7 @@ function simParallelCopyHeap(pairs) {
     for (let i = 0; i < n; i++) {
         const d = pairs[2 * i], s = pairs[2 * i + 1];
         if (d.byteLength < s.byteLength) throw new Error('simParallelCopyHeap: destination shorter than source');
-        T[3 * i] = d.byteOffset; T[3 * i + 1] = s.byteOffset; T[3 * i + 2] = s.byteLength;
+        T[3 * i] = _simWEnc(d.byteOffset); T[3 * i + 1] = _simWEnc(s.byteOffset); T[3 * i + 2] = s.byteLength;
     }
     const P = _simParams, saved = P.slice();
     P[0] = n; P[1] = SIM_COPY_PER; P[2] = total;
@@ -880,7 +922,7 @@ SIM_KERNELS[SIM_KERNEL_SEP_PACK] = function (R, P, chunk) {
     const live = P[5] === 1, NL = live ? R['ix.listed'][0] | 0 : P[0] | 0, per = P[1] | 0;
     const mode = P[4] | 0, t0 = P[3] | 0, rest0 = P[2] | 0;
     if (_simWasmOk(R)) {
-        const A = _simWPtrs(_simSepPackW[live ? 1 : 0]);
+        const A = _simWPtrsE(_simSepPackW[live ? 1 : 0]);
         if (A !== null) {
             _simWasmX.sep_pack(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10], A[11], A[12], A[13], A[14], A[15], A[16],
                 NL, per, rest0, t0, mode, live ? 1 : 0, chunk);
@@ -897,7 +939,7 @@ const _simSepMarkW = _simWK(['sep.meta', 'sep.ekey', 'sep.ord', 'sep.qid']);
 SIM_KERNELS[SIM_KERNEL_SEP_MARK] = function (R, P, chunk) {
     const CW = P[3] | 0, CH = P[4] | 0, t0 = P[5] | 0, stag = (P[6] | 0) === 0, NL = P[7] === 1 ? R['ix.listed'][0] | 0 : P[0] | 0;
     if (_simWasmOk(R)) {
-        const A = _simWPtrs(_simSepMarkW);
+        const A = _simWPtrsE(_simSepMarkW);
         if (A !== null) { _simWasmX.sep_mark(A[0], A[1], A[2], A[3], NL, P[1] | 0, CW, CH, t0, stag ? 1 : 0, chunk); return; }
     }
     _simNoWasm('SEP_MARK');
@@ -918,7 +960,7 @@ SIM_KERNELS[SIM_KERNEL_SEP_PAIRS] = function (R, P, chunk) {
     const band = chunk * 2 + (P[14] | 0), row0 = band * H, row1 = Math.min(CH, row0 + H);
     if (row0 >= CH) return;
     if (_simWasmOk(R)) {
-        const A = _simWPtrs(_simSepPairsW);
+        const A = _simWPtrsE(_simSepPairsW);
         if (A !== null) {
             _simWasmX.sep_pairs(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10],
                 CW, CH, H, pad, farAny, Q, BOTH, ONE, listed, cws, MOVER, YIELD, P[14] | 0, chunk);
@@ -998,6 +1040,18 @@ function simParallelBindFlush() {
 function _simWK(names) {
     return { names: names.map(n => n.replace(/^\?/, '')), opt: names.map(n => n[0] === '?'), binds: -1, ok: false, ptrs: new Array(names.length).fill(0) };
 }
+// The same as the kernels take them in a direct call (_simWEnc: every
+// pointer parameter is a 32-bit word, so memory64 calls need no BigInt).
+function _simWPtrsE(K) {
+    const A = _simWPtrs(K);
+    if (A === null || _simWShift === 0) return A;
+    if (K.encFor !== K.binds || !K.enc) {
+        const E = K.enc || (K.enc = new Array(A.length));
+        for (let i = 0; i < A.length; i++) E[i] = _simWEnc(A[i]);
+        K.encFor = K.binds;
+    }
+    return K.enc;
+}
 function _simWPtrs(K) {
     if (K.binds !== _simParBinds) {
         K.binds = _simParBinds; K.ok = true;
@@ -1025,11 +1079,11 @@ function _simRust(K, P, chunk, fn, name) {
     const A = _simWPtrs(K);
     if (A === null || _simWasmArgI === null || _simWasmX === null) _simNoWasm(name);
     const I = _simWasmArgI;
-    for (let i = 0; i < A.length; i++) I[SIM_RUST_W0 + i] = A[i];
+    for (let i = 0; i < A.length; i++) I[SIM_RUST_W0 + i] = _simWEnc(A[i]);
     // (The thread's scratch: k.rs scratch().)
-    I[1000] = _simWasmScratch; I[1001] = _simWasmScratchWords;
+    I[1000] = _simWEnc(_simWasmScratch); I[1001] = _simWasmScratchWords;
     _simWasmArgF.set(P.length > 64 ? P.subarray(0, 64) : P);
-    _simWasmX[fn](_simWasmArgs, chunk);
+    _simWasmX[fn](_simWasmArgsW, chunk);
 }
 // Whether a kernel call may run its Rust kernel (on the registry's arrays).
 function _simWasmOk(R) { return _simWasmX !== null && _simWasmOn[0] === 1 && R === _simParReg; }
@@ -1066,13 +1120,16 @@ const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 
 const _SIM_MOVE_WNAMES2 = ['?unit.sepCy', '?unit.sepMov', '?sep.nextX', '?sep.nextY', '?sep.fast', '?sep.ex', '?sep.exc', '?unit.mvPF', '?mv.lookc',
     '?unit.burning', '?unit.burnTickDamage', '?unit.poisoned', '?unit.poisonTickDamage', '?unit.frozen', '?unit.iceTickDamage', '?unit.wet', '?unit.sandy', '?unit.stOn', '?unit.upT',
     '?mv.trapK', '?mv.trapL', '?mv.trapT', '?mv.tres', '?mv.trapTG',
-    // (Word 292: each slot's worker record, the wk* arrays' index.)
-    'unit.wkIx'];
+    // (Word 292: each slot's worker record, the wk* arrays' index; 293, 294
+    // the attack carry and shots, mv.rs fire.)
+    'unit.wkIx', '?unit.atkL', '?unit.atkN'];
 const _SIM_MOVE_NAV = 11, _SIM_MOVE_WNAV = 160, _SIM_MOVE_W2 = 268;
 const _simMoveW = _simWK([..._SIM_MOVE_WNAMES, ...Array.from({ length: _SIM_MOVE_NAV * 8 }, (_, i) => {
     const p = i >> 3, j = i & 7;
     return '?' + (j < 7 ? 'nav.' + p + '.' + ['fields', 'partL', 'partB', 'nb', 'nt', 'np', 'meta'][j] : p === 0 ? 'mv.wall' : p === 1 ? 'mv.airwall' : 'mv.cwall.' + p);
-}), ..._SIM_MOVE_WNAMES2]);
+}), ..._SIM_MOVE_WNAMES2, ...Array.from({ length: _SIM_MOVE_NAV }, (_, p) => '?nav.' + p + '.atl')]);
+// (Words 430..: each profile's atlas header, mv.rs W_ATLAS.)
+const _SIM_MOVE_WATL = 430;
 let _simMoveWFill = -1, _simMoveWArgs = 0;
 // Fills the argument block for a movement kernel's Rust twin; false: the
 // JavaScript kernel runs (no wasm, or an array not in the heap).
@@ -1083,9 +1140,10 @@ function _simMoveWasm(R, P) {
     if (_simMoveWFill !== _simMoveW.binds || _simMoveWArgs !== _simWasmArgs) {
         const I = _simWasmArgI, nb = _SIM_MOVE_WNAMES.length;
         I.fill(0, 0, 299);
-        for (let i = 0; i < nb; i++) I[i] = A[i];
-        for (let i = 0; i < _SIM_MOVE_NAV * 8; i++) I[_SIM_MOVE_WNAV + i] = A[nb + i];
-        for (let i = 0; i < _SIM_MOVE_WNAMES2.length; i++) I[_SIM_MOVE_W2 + i] = A[nb + _SIM_MOVE_NAV * 8 + i];
+        for (let i = 0; i < nb; i++) I[i] = _simWEnc(A[i]);
+        for (let i = 0; i < _SIM_MOVE_NAV * 8; i++) I[_SIM_MOVE_WNAV + i] = _simWEnc(A[nb + i]);
+        for (let i = 0; i < _SIM_MOVE_WNAMES2.length; i++) I[_SIM_MOVE_W2 + i] = _simWEnc(A[nb + _SIM_MOVE_NAV * 8 + i]);
+        for (let p = 0; p < _SIM_MOVE_NAV; p++) I[_SIM_MOVE_WATL + p] = _simWEnc(A[nb + _SIM_MOVE_NAV * 8 + _SIM_MOVE_WNAMES2.length + p]);
         for (let p = 0; p < _SIM_MOVE_NAV; p++) { const a = R['nav.' + p + '.partL']; I[250 + p] = a ? a.length : 0; }
         const len = nm => R[nm] ? R[nm].length : 0, COV = R['vis.cover'];
         I[262] = len('area.off'); I[263] = len('wk.ver'); I[264] = len('nav.fmeta.0'); I[265] = len('nav.fmeta.1');
@@ -1538,7 +1596,7 @@ SIM_KERNELS[SIM_KERNEL_DRIVEBY] = function (R, P, chunk) {
     const stride = bc + 1, plane = stride * (br + 1), half = tile / 2;
     if (!AG || !AOFF || !AB || !ABOK || !COV || !rs || !SC || !SCLS) return;
     // (Its Rust twin: wasm/src/mv.rs mv_driveby.)
-    if (_simMoveWasm(R, P)) { const s0 = chunk * P[1]; _simWasmX.mv_driveby(_simWasmArgs, s0, Math.min(P[0], s0 + P[1])); return; }
+    if (_simMoveWasm(R, P)) { const s0 = chunk * P[1]; _simWasmX.mv_driveby(_simWasmArgsW, s0, Math.min(P[0], s0 + P[1])); return; }
     _simNoWasm('DRIVEBY');
 };
 
@@ -1690,7 +1748,7 @@ SIM_KERNELS[SIM_KERNEL_SNAP_MERGE] = function (R, P, chunk) { _simRust(_simSnapM
 const _simStatusW = _simWK(['unit.live', 'unit.dead', 'unit.energy', 'unit.attackTimer', 'unit.attackFlash', 'unit.teleportHideTicks', 'unit.burning',
     'unit.burnTickDamage', 'unit.poisoned', 'unit.poisonTickDamage', 'unit.frozen', 'unit.iceTickDamage', 'unit.wet', 'unit.sandy', 'unit.watched', 'unit.stEv',
     'unit.stDot', 'st.count', 'unit.x', 'unit.y', 'unit.x0', 'unit.y0', 'unit.workerTransferCooldown', 'unit.stAcc', 'unit.id', 'unit.sepD0', 'unit.sepR0',
-    'unit.sepL0', 'unit.collisionR', 'unit.r', 'unit.sepLayer', 'unit.stOn', 'unit.tmOn', '?st.list', 'unit.owner', 'st.shr']);
+    'unit.sepL0', 'unit.collisionR', 'unit.r', 'unit.sepLayer', 'unit.stOn', 'unit.tmOn', '?st.list', 'unit.owner', 'st.shr', '?unit.atkL', '?unit.wtcL']);
 SIM_KERNELS[SIM_KERNEL_STATUS] = function (R, P, chunk) { _simRust(_simStatusW, P, chunk, 'k_status', 'STATUS'); };
 
 // Owners per tile of the unit index (ix.omask: bit p set when a unit of
@@ -1748,7 +1806,7 @@ SIM_KERNELS[SIM_KERNEL_ACQ_SCAN] = function (R, P, chunk) {
     // acq.omt and the packed entries made by the job's first stage,
     // SIM_KERNEL_ACQ_OMT.)
     if (_simWasmOk(R) && (P[8] | 0) === P[8] && (P[9] | 0) === P[9] && (P[18] | 0) === P[18]) {
-        const A = _simWPtrs(_simAcqScanW);
+        const A = _simWPtrsE(_simAcqScanW);
         if (A !== null) {
             _simWasmX.acq_scan(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10], A[11], A[12], A[13], A[14], A[15], A[16], A[17], A[18], A[19], A[20],
                 P[21] === 1 ? A[21] : 0, P[21] === 1 ? A[22] : 0, P[21] === 1 ? A[23] : 0, P[21] === 1 ? A[24] : 0, P[21] === 1 ? A[25] : 0, P[21] === 1 ? A[26] : 0,
@@ -1781,7 +1839,7 @@ SIM_KERNELS[SIM_KERNEL_ACQ_OMT] = function (R, P, chunk) {
     const CW = P[0] | 0, CH = P[1] | 0, per = P[2] | 0, y0 = chunk * per, y1 = Math.min(CH, y0 + per);
     const ne = P[3] | 0, eper = P[4] | 0, e0 = chunk * eper, e1 = Math.min(ne, e0 + eper), tile = P[5], GW = P[6] | 0, GH = P[7] | 0;
     if (_simWasmOk(R)) {
-        const A = _simWPtrs(_simAcqOmtW);
+        const A = _simWPtrsE(_simAcqOmtW);
         if (A !== null) {
             // (The copies first: the transposition reads the job's own rows,
             // the packing its own entries.)
@@ -1831,7 +1889,7 @@ function _simAcqStructure(SCLS, SOWN, HSS, AG, COVF, cbase, owner, x, y, r, tile
 // targets' sums (wasm/src/k.rs k_hits).
 const SIM_KERNEL_HITS = 60;
 const _simHitsW = _simWK(['hit.q', 'hit.dmg', 'hit.sty', 'hit.wk', '?mv.hita', '?mv.hitt', '?mv.hitc', 'unit.atkDmg', 'unit.atkSty', 'unit.atkWatch', 'unit.owner', 'unit.id',
-    'unit.hAcc', 'unit.hTouch', 'unit.hSty', 'unit.hBurnD', 'unit.hPoiD', 'unit.hWatchK', 'hit.tlist', 'hit.plist', 'hit.cnt']);
+    'unit.hAcc', 'unit.hTouch', 'unit.hSty', 'unit.hBurnD', 'unit.hPoiD', 'unit.hWatchK', 'hit.tlist', 'hit.plist', 'hit.cnt', '?unit.atkN']);
 SIM_KERNELS[SIM_KERNEL_HITS] = function (R, P, chunk) { _simRust(_simHitsW, P, chunk, 'k_hits', 'HITS'); };
 // The units hit this tick: their hits' sum off their energy, statuses, a
 // watch, fallen (wasm/src/k.rs k_hits_apply).

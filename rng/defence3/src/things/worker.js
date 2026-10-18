@@ -34,7 +34,7 @@ const RESEARCH_DRAIN_TICKS = 10;
 // Every RESEARCH_DRAIN_TICKS: each player's research pool into its queue
 // (tasks completed in turn; what is left waits for the next task).
 function researchDrainTick() {
-    if (gameTime % RESEARCH_DRAIN_TICKS !== 0) return;
+    if (!simStepCrosses(0, RESEARCH_DRAIN_TICKS)) return;
     for (let pid = 0; pid < players.length; pid++) {
         const p = players[pid];
         let pts = Number(p && p.researchPoints) || 0;
@@ -104,7 +104,7 @@ const WORKER_MOVE_CHECK_TICKS = 128;
 const BUILDER_WATCH_TICKS = 64;
 const _WORKER_MOVING_STATES = new Set(['MANUAL_MOVE', 'MOVING_TO', 'MOVING_TO_ASTAR', 'RETURNING', 'RETURNING_ASTAR', 'MOVING_TO_BUILD', 'RETURNING_FOR_GOLD', 'MOVING_TO_HEAL', 'MOVING_TO_RESEARCH']);
 function isWorkerBetweenMoveChecks(u) {
-    return ((gameTime + u.id) | 0) % WORKER_MOVE_CHECK_TICKS !== 0 && _WORKER_MOVING_STATES.has(u.workerState)
+    return !simStepCrosses(u.id | 0, WORKER_MOVE_CHECK_TICKS) && _WORKER_MOVING_STATES.has(u.workerState)
         && !!u.path && u.pathIndex < u.path.length && !u.holdPosition;
 }
 
@@ -118,7 +118,7 @@ function updateWorkerAI(u) {
     // is followed regardless.
     if (u.workerTransferCooldown > 0 && u.workerState !== 'MANUAL_MOVE') return;
     let workerAiTickDelay = Math.max(1, Math.floor(Number(WORKER_AI_TICK_DELAY) || 1));
-    let canRunHeavyAi = ((gameTime + u.id) % workerAiTickDelay) === 0;
+    let canRunHeavyAi = simStepCrosses(u.id, workerAiTickDelay);
 
     // A held worker keeps its task; it just cannot walk. Do not let the
     // wait count as being stuck once it is released.
@@ -237,7 +237,7 @@ function updateWorkerAI(u) {
             u._builderLastWatchX = u.x;
             u._builderLastWatchY = u.y;
             u._builderLastMoveTick = gameTime;
-        } else if (((gameTime + u.id) | 0) % BUILDER_WATCH_TICKS === 0) {
+        } else if (simStepCrosses(u.id | 0, BUILDER_WATCH_TICKS)) {
             movedSinceLast = detHypot(u.x - u._builderLastWatchX, u.y - u._builderLastWatchY) >= 2;
             u._builderLastWatchX = u.x;
             u._builderLastWatchY = u.y;
@@ -491,7 +491,7 @@ function updateWorkerAI(u) {
             let buildStep = 0;
             if (u.builderHasMaterial) {
                 buildStep = dps;
-            } else if (gameTime % 20 === 0) {
+            } else if (simStepCrosses(0, 20)) {
                 // Last-resort slow trickle when no full material transfer is possible.
                 addPlayerResource(owner, 'energy', -1);
                 recordEnergyDelta(owner, 'builder', -1);
@@ -939,6 +939,7 @@ function _getMineIndicesNear(mineArray, wx, wy, radiusPx) {
 // commits at the same ticks; a resync drops it all (and the registry) on
 // every peer.
 const WS_TICKS = 4, WS_POST_PHASE = 3, WS_K = 6, WS_RETRY = 20, WS_SEL_CHUNK = 4096;
+const WS_BACKOFF_MANY = 1000000;
 const WS_LANE = typeof SIM_LANE_T1 === 'number' ? SIM_LANE_T1 : 4;
 const WS_COLLECT = 1, WS_GRID = 3;
 // Registry kinds (unit.wsKind): a collector, a builder or salvager (the
@@ -1003,12 +1004,16 @@ function workerSearchTierReset() {
 function workerSearchTierStep() {
     if (_wsStepTick === gameTime || !_wsAvailable()) return;
     _wsStepTick = gameTime;
-    const ph = gameTime % WS_TICKS;
-    if (ph === (WS_POST_PHASE + 1) % WS_TICKS) _wsOrder();
-    if (ph === (WS_POST_PHASE + 2) % WS_TICKS) _wsCommit();
-    else if (_wsPending) _wsTakeSome();
-    if (ph !== (WS_POST_PHASE + 1) % WS_TICKS) _wswStep((Math.floor(gameTime / WS_TICKS) * 3 + (ph + WS_TICKS - (WS_POST_PHASE + 2) % WS_TICKS) % WS_TICKS) % WSW_SWEEP);
-    if (ph === WS_POST_PHASE) _wsPost();
+    // (Each base tick of the step in turn: one cycle's phases at most, the
+    // sweep's parts of all of them.)
+    for (let b = gameTime - simDk + 1; b <= gameTime; b++) {
+        const ph = ((b % WS_TICKS) + WS_TICKS) % WS_TICKS, cycle = gameTime - b < WS_TICKS;
+        if (cycle && ph === (WS_POST_PHASE + 1) % WS_TICKS) _wsOrder();
+        if (cycle && ph === (WS_POST_PHASE + 2) % WS_TICKS) _wsCommit();
+        else if (cycle && _wsPending) _wsTakeSome();
+        if (ph !== (WS_POST_PHASE + 1) % WS_TICKS) _wswStep((Math.floor(b / WS_TICKS) * 3 + (ph + WS_TICKS - (WS_POST_PHASE + 2) % WS_TICKS) % WS_TICKS) % WSW_SWEEP);
+        if (cycle && ph === WS_POST_PHASE) _wsPost();
+    }
 }
 
 // ---- The work site grid ----
@@ -1273,9 +1278,14 @@ function _wsPost() {
     const P = _simParams;
     // (Workers registered since the last post made: a skipped post's too,
     // P[3]; the retry slots as wide.)
-    const win = WS_TICKS * (1 + Math.min(_wsSkipped, 15));
+    // (Steps of more base ticks than a cycle (simDk) post once a step: its
+    // base ticks.)
+    const win = Math.max(WS_TICKS, simDk) * (1 + Math.min(_wsSkipped, 15));
     _wsSkipped = 0;
-    P[0] = n; P[1] = CH; P[2] = gameTime; P[3] = win; P[4] = WS_RETRY; P[5] = 1;
+    // (P[6]: how many times over a search that keeps finding nothing waits;
+    // 8x the retry (160 ticks), 32x from WS_BACKOFF_MANY units: ~630k idle
+    // workers at 2M searched ~4k a tick for nothing.)
+    P[0] = n; P[1] = CH; P[2] = gameTime; P[3] = win; P[4] = WS_RETRY; P[5] = 1; P[6] = n >= WS_BACKOFF_MANY ? 5 : 3;
     // Count before allocating payloads. Both phases observe the same state:
     // no simulation writes occur between these synchronous jobs.
     simParallelRun(SIM_KERNEL_WS_SELECT, chunks);
@@ -2394,7 +2404,7 @@ function shouldRunWorkerIdleRetarget(u, canRunHeavyAi) {
     // worker that finishes a task searches at once anyway, and commands
     // force a search through _workerNextIdleRetargetTick.
     let delay = Math.max(1, Math.floor(Number(WORKER_AI_TICK_DELAY) || 1));
-    if (canRunHeavyAi && (Math.floor((gameTime + u.id) / delay) % Math.ceil(getWorkerIdleSearchTicks() / delay)) === 0) {
+    if (canRunHeavyAi && simStepCrosses(u.id, delay * Math.ceil(getWorkerIdleSearchTicks() / delay))) {
         u._workerNextIdleRetargetTick = gameTime + interval;
         u._idleFailVer = ver; u._idleFailUntil = gameTime + WORKER_IDLE_BACKOFF_SECONDS * TICK_RATE;
         return true;
@@ -3500,14 +3510,17 @@ function _hcCollect(ownerCount, cap) {
     return out;
 }
 function healerCandidatesStep() {
-    const R = HEALER_CANDIDATE_CACHE_TICKS, k = gameTime % R;
+    const R = HEALER_CANDIDATE_CACHE_TICKS, ks = simStepPhases(R), k = ks[ks.length - 1];
     if (_hcAvailable()) {
         const ownerCount = Math.max(1, Math.floor(Number(players && players.length) || 0)), cap = Math.max(1, HEALER_DAMAGED_CANDIDATE_LIMIT | 0);
-        if (k === 0) _hcPost(ownerCount, cap);
-        if (k === R - 2) _hcReduce();
-        if (k !== R - 1) return;
-        const best = _hcCollect(ownerCount, cap);
-        if (best) _healerCandidatesInstall(best, ownerCount);
+        // (The step's base ticks' phases in turn.)
+        for (const k of ks) {
+            if (k === 0) _hcPost(ownerCount, cap);
+            if (k === R - 2) _hcReduce();
+            if (k !== R - 1) continue;
+            const best = _hcCollect(ownerCount, cap);
+            if (best) _healerCandidatesInstall(best, ownerCount);
+        }
         return;
     }
     let ownerCount = Math.max(1, Math.floor(Number(players && players.length) || 0));

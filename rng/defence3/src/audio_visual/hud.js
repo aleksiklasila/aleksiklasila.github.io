@@ -1448,8 +1448,12 @@ function _openAssignedInPopupForEntity(gx, gy, targetType = '') {
     let e = _resolveInfoPanelEntityAt(gx, gy, targetType);
     if (!e) return;
     let assigned = [];
-    for (let i = 0; i < units.length; i++) {
-        let u = units[i];
+    // (With the simulation in its worker a unit view knows its target only
+    // while watched, its details: those are the ones that can be listed;
+    // a pass over every view read millions for nothing, ~1 s a refresh.)
+    const list = typeof simClientCurrentUnitVis === 'function' && simClientCurrentUnitVis() && typeof _simClientDetailed !== 'undefined' ? _simClientDetailed : units;
+    for (let i = 0; i < list.length; i++) {
+        let u = list[i];
         if (!u || u.dead || !u.workerType) continue;
         if (u.workerTarget !== e) continue;
         assigned.push(u);
@@ -1516,8 +1520,11 @@ function _buildInfoPanelAssignedWorkersHtml(e) {
     let wrapEnd = '</span>';
     if (!e) return `${wrapStart}<span style="color:#9aa;line-height:1">None</span>${wrapEnd}`;
     let assigned = [];
-    for (let i = 0; i < units.length; i++) {
-        let u = units[i];
+    // (Watched units only with the simulation in its worker: see
+    // _openAssignedInPopupForEntity.)
+    const list = typeof simClientCurrentUnitVis === 'function' && simClientCurrentUnitVis() && typeof _simClientDetailed !== 'undefined' ? _simClientDetailed : units;
+    for (let i = 0; i < list.length; i++) {
+        let u = list[i];
         if (!u || u.dead || !u.workerType) continue;
         if (u.workerTarget !== e) continue;
         assigned.push(u);

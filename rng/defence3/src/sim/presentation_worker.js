@@ -1,5 +1,5 @@
 "use strict";
-importScripts('sim_frame.js?v=20261008-brain1','sim_frame_world.js?v=20261021-x');
+importScripts('sim_frame.js?v=20261018-meta','sim_frame_world.js?v=20261021-x');
 const PRESENT_MAGIC=0x50524553;
 let source=null, meta=null, epoch=0, generation=0, latest=null, scheduled=false, strings=[''], ready=false;
 let structure=null, structureRevision=-1, sentStructureRevision=-1, cells=null, oldCells=null;
@@ -19,28 +19,52 @@ const mot={x:null,y:null,px:null,py:null,vx:null,vy:null};
 // worker asks for the next one when it took the newest, or found it older
 // than the tick it draws: then it waits for the next tick, -3; a newer one
 // is drawn, as before).
-function copyMotion(C,n,want) {
+// (split: the copy left to the frame's ranges, each its own slots (a pass
+// of every slot on this thread was ~110 ms a frame at 8M units); motSrc
+// what they copy from, the snapshot's head checked after them.)
+let motSrc=null, motHead=null, motTick=0;
+function copyMotion(C,n,want,split) {
     const i=snapCtl ? Atomics.load(snapCtl,0) : -1, q=i>=0 && snaps ? snaps[i] : null;
     const src=q ? [['x',q.x],['y',q.y],['px',q.px],['py',q.py],['vx',C.vx],['vy',C.vy]] : [['x',C.x],['y',C.y],['px',C.prevX],['py',C.prevY],['vx',C.vx],['vy',C.vy]];
     const tick=q ? Atomics.load(q.head,0) : 0;
     if (q && tick<0) return -2;
     if (snapCtl) Atomics.store(snapCtl,1,1);
     if (q && tick<want) return -3;
-    for (const [k,a] of src) {
-        if (!mot[k] || mot[k].length<a.length) mot[k]=sharedArray(Float32Array,a.length);
-        // (Positions are Int32 eighths of a pixel: scaled here.)
-        if (a instanceof Int32Array) {const D=mot[k], e=Math.min(n,a.length); for (let s=0;s<e;s++) D[s]=a[s]*.125;}
-        else mot[k].set(n<a.length ? a.subarray(0,n) : a);
+    for (const [k,a] of src) if (!mot[k] || mot[k].length<a.length) mot[k]=sharedArray(Float32Array,a.length);
+    motSrc=split ? src : null; motHead=q ? q.head : null; motTick=tick;
+    if (!split) {
+        copyMotionRange(src,0,n);
+        // (Rewritten while copied: dropped.)
+        if (q && Atomics.load(q.head,0)!==tick) return -2;
     }
-    // (Rewritten while copied: dropped.)
-    if (q && Atomics.load(q.head,0)!==tick) return -2;
     return q ? Math.min(n,q.head[1]) : n;
+}
+// Slots s0..s1 of the motion copy from src ([name, array]...).
+function copyMotionRange(src,s0,s1) {
+    for (const [k,a] of src) {
+        const D=mot[k], e=Math.min(s1,a.length);
+        // (Positions are Int32 eighths of a pixel: scaled here.)
+        if (a instanceof Int32Array) {for (let s=s0;s<e;s++) D[s]=a[s]*.125;}
+        else if (s0<e) D.set(a.subarray(s0,e),s0);
+    }
+}
+// Where a fire target is (facing): its own copy, or with the copy split
+// over the ranges the snapshot itself (the target's range may not have
+// copied it yet).
+const motTarget={x:null,y:null,k:1};
+function motTargetFor(src) {
+    if (!src) {motTarget.x=mot.x;motTarget.y=mot.y;motTarget.k=1;return;}
+    const X=src[0][1], Y=src[1][1];
+    motTarget.x=X;motTarget.y=Y;motTarget.k=X instanceof Int32Array ? .125 : 1;
 }
 function release(buf) {const t=new DataView(buf,buf.byteLength-12);if(t.getInt32(0,true)!==generation)return;const e=buffers.get(t.getInt32(4,true));if(e)e.busy=false;}
 function acquire(bytes, kind='units') {
     for (const entry of buffers.values()) if (entry.kind===kind && !entry.busy && entry.buf.byteLength >= bytes+12) {entry.busy=true;filling=entry;return entry.buf;}
     // Three page-owned snapshots maximum. No growing queue when rendering stops.
-    if ([...buffers.values()].filter(e=>e.kind===kind && e.busy).length >= 3) return null;
+    // (Two of a frame past 512 MB, millions of units: the page holds one, the
+    // next is filled; a third was a gigabyte at 8M units.)
+    const most = bytes > (512 << 20) ? 2 : 3;
+    if ([...buffers.values()].filter(e=>e.kind===kind && e.busy).length >= most) return null;
     for (const [id,e] of buffers) if (e.kind===kind && !e.busy) buffers.delete(id);
     const buf=new SharedArrayBuffer(bytes+12), id=++sequence;
     const trailer=new DataView(buf,buf.byteLength-12);trailer.setInt32(0,generation,true);trailer.setInt32(4,id,true);trailer.setInt32(8,PRESENT_MAGIC,true);
@@ -104,16 +128,94 @@ function fastAtan2(y,x) {
 function ensureState(cap,history) {
     if (!vis.x || vis.x.length<cap) {vis.x=sharedArray(Float32Array,cap);vis.y=sharedArray(Float32Array,cap);vis.id=sharedArray(Int32Array,cap,-1);}
     if (!face.a || face.a.length<cap) {face.a=sharedArray(Float32Array,cap);face.id=sharedArray(Int32Array,cap,-1);}
+    if (!fullAt || fullAt.length<cap) fullAt=sharedArray(Int32Array,cap);
+    if (!easing || easing.length<cap) easing=sharedArray(Uint8Array,cap);
     if (history && (!ghost.x || ghost.x.length<cap)) {ghost.x=sharedArray(Float32Array,cap);ghost.y=sharedArray(Float32Array,cap);ghost.id=sharedArray(Int32Array,cap,-1);}
 }
-function fillRange(F,C,meta,s0,s1,n,player,areaUnit,metaCopy) {
+// Columns the fill writes (besides id and order): what a frame by changes
+// copies forward from the newest frame for slots it does not fill.
+const FILL_COLS=['x','y','px','py','vx','vy','owner','energy','r','cmd','level','blevel','flash','flags','light','mode','status','amount','facing','phase','prate'];
+// (A frame by the simulation's marks copies the id and the metadata too: it
+// lists slots and copies metadata only where it fills.)
+const STAMP_COPY=FILL_COLS.concat(['id','type','wtype','wstate','style','watchedBy','vision','maxEnergy','cargo','tx','ty','orderDest','orderTick']);
+// Per slot: still easing to its place (1) or turning (2) here: filled
+// again while so (frames by marks). With the other per-slot state.
+let easing=null;
+const FILL_STATUS=SIM_UF_BURNING|SIM_UF_POISONED|SIM_UF_FROZEN|SIM_UF_WET|SIM_UF_SANDY|SIM_UF_WATCHED|SIM_UF_HIDDEN|SIM_UF_TRANSFER;
+// (A drawn position within this of the simulation's: there, at rest, so a
+// still unit is not filled again.)
+const VIS_REST=.02;
+// A frame by changes (dl: the newest frame A, this buffer's last build bseq,
+// this frame's seq, every K-th block of slots refilled anyway at `phase`):
+// this buffer was whole as of bseq, so a slot is filled when it may have
+// changed since the newest frame (in or out of the frame, moving or still
+// easing, turning, its energy, owner or command changed, a flash, a status
+// timer, or its block's turn), copied from A when it was filled after bseq,
+// else left. (95% of millions of units stand still: a frame wrote ~25
+// columns of every slot, 0.5-2 s of threads a frame at 2M-8M units.)
+// fullAt: per slot the frame it was last filled in. A thread's own lists:
+// fillList (filled), copyList (copied), fillBlocks (blocks with a fill).
+let fullAt=null, fillList=null, copyList=null, fillBlocks=null, lastStamped=false, lastFilled=0;
+function fillRange(F,C,meta,s0,s1,n,player,areaUnit,metaCopy,dl,frameSeq) {
     let count=0, changed=false;
-    const L=last, FID=F.id, FORD=F.order, CID=C.id, CLIVE=C.live, CDEAD=C.dead, MID=meta.id;
-    for (let s=s0;s<s1;s++) {
-        const id=CID[s];
-        if (!CLIVE[s] || CDEAD[s] || MID[s] !== id) {FID[s]=-1;if(L[s]!==-1) {changed=true;L[s]=-1;}continue;}
-        FID[s]=id;FORD[s0+count++]=s;
-        if(L[s]!==id) {changed=true;L[s]=id;}
+    const stamped=!!dl && !!C.pvAt && dl.ta>=0 && !!easing;
+    lastStamped=false;lastFilled=0;
+    const L=last, FID=F.id, FORD=F.order, CID=C.id, CLIVE=C.live, CDEAD=C.dead, MID=meta.id, len=Math.max(0,s1-s0);
+    if (!fillList || fillList.length<len) {fillList=new Int32Array(len);copyList=new Int32Array(len);}
+    const nbk=Math.ceil(len/DIRTY_BLOCK)+1;
+    if (!fillBlocks || fillBlocks.length<nbk) fillBlocks=new Uint8Array(nbk);
+    const AL=fillList, CL=copyList, BK=fillBlocks;
+    let na=0, nc=0;
+    if (!dl) {
+        for (let s=s0;s<s1;s++) {
+            const id=CID[s];
+            AL[na++]=s;
+            if (!CLIVE[s] || CDEAD[s] || MID[s] !== id) {FID[s]=-1;if(L[s]!==-1) {changed=true;L[s]=-1;}continue;}
+            FID[s]=id;FORD[s0+count++]=s;
+            if(L[s]!==id) {changed=true;L[s]=id;}
+        }
+        BK.fill(1,0,nbk);
+        if (fullAt) {const FA=fullAt, seq=frameSeq|0;for (let s=s0;s<s1;s++) FA[s]=seq;}
+    } else if (stamped) {
+        // (By the simulation's marks: a slot changed after the newest frame's
+        // tick dl.ta, one still easing or turning here, one whose metadata
+        // came, or its block's turn; four reads a slot.)
+        const CA=C.pvAt, ES=easing, ta=dl.ta, FA=fullAt, bseq=dl.bseq, seq=dl.seq, K=dl.K, ph=dl.phase, B=DIRTY_BLOCK;
+        BK.fill(0,0,nbk);
+        for (let s=s0;s<s1;s++) {
+            const m=MID[s];
+            if (CA[s]>ta || ES[s]!==0 || (m!==L[s] && m===CID[s]) || ((s>>8)%K)===ph) {
+                AL[na++]=s;FA[s]=seq;BK[((s-s0)/B)|0]=1;
+                const id=CID[s];
+                if (!CLIVE[s] || CDEAD[s] || m !== id) {FID[s]=-1;if (L[s]!==-1) {changed=true;L[s]=-1;}}
+                else {FID[s]=id;if (L[s]!==id) {changed=true;L[s]=id;}}
+            } else if (FA[s]>bseq) CL[nc++]=s;
+        }
+        const A=dl.A;
+        for (let c=0;c<STAMP_COPY.length;c++) {const D=F[STAMP_COPY[c]], S=A[STAMP_COPY[c]];for (let i=0;i<nc;i++) {const s=CL[i];D[s]=S[s];}}
+    } else {
+        const VX=vis.x, VY=vis.y, VI=vis.id, SX=mot.x, SY=mot.y, CVX=C.vx, CVY=C.vy, AF=C.attackFlash, ON=C.stOn, TC=C.workerTransferCooldown, CM=C.cmMode;
+        const A=dl.A, PF=A.flash, PFL=A.flags, PVX=A.vx, PVY=A.vy, PEN=A.energy, POW=A.owner, PCM=A.cmd, CEN=C.energy, COW=C.owner, CCM=C.commandState;
+        const FA=fullAt, bseq=dl.bseq, seq=dl.seq, K=dl.K, ph=dl.phase, B=DIRTY_BLOCK;
+        BK.fill(0,0,nbk);
+        for (let s=s0;s<s1;s++) {
+            const id=CID[s];
+            if (!CLIVE[s] || CDEAD[s] || MID[s] !== id) {
+                FID[s]=-1;
+                if (L[s]!==-1) {changed=true;L[s]=-1;AL[na++]=s;BK[((s-s0)/B)|0]=1;FA[s]=seq;}
+                else if (FA[s]>bseq) CL[nc++]=s;
+                continue;
+            }
+            FID[s]=id;FORD[s0+count++]=s;
+            let act=L[s]!==id;
+            if (act) {changed=true;L[s]=id;}
+            else act=VI[s]!==id || VX[s]!==SX[s] || VY[s]!==SY[s] || CVX[s]!==0 || CVY[s]!==0 || PVX[s]!==0 || PVY[s]!==0 || AF[s]>0 || PF[s]>0 || (ON && ON[s]===1) || TC[s]>0
+                || (PFL[s]&FILL_STATUS)!==0 || CEN[s]!==PEN[s] || COW[s]!==POW[s] || CCM[s]!==PCM[s] || (CM && (CM[s]&4)!==0) || ((s>>8)%K)===ph;
+            if (act) {AL[na++]=s;FA[s]=seq;BK[((s-s0)/B)|0]=1;}
+            else if (FA[s]>bseq) CL[nc++]=s;
+        }
+        // (Copied forward: as the newest frame has them.)
+        for (let c=0;c<FILL_COLS.length;c++) {const D=F[FILL_COLS[c]], S=A[FILL_COLS[c]];for (let i=0;i<nc;i++) {const s=CL[i];D[s]=S[s];}}
     }
     // Motion, smoothed for the eye (this worker's own state, never the
     // simulation's): each unit is drawn moving from where it was drawn last
@@ -121,38 +223,41 @@ function fillRange(F,C,meta,s0,s1,n,player,areaUnit,metaCopy) {
     // tick's step varies with the pushes of a crowd (1.9, 3.9, 2.1 px...);
     // drawn as is, units sped up and stalled tick to tick. A unit new to its
     // slot, or one that jumped (over VIS_SNAP px: a teleport, a resync)
-    // starts where the simulation has it.
+    // starts where the simulation has it; one within VIS_REST is there.
     {
-        const DX=F.x, DY=F.y, DPX=F.px, DPY=F.py, SX=mot.x, SY=mot.y, SPX=mot.px, SPY=mot.py, VX=vis.x, VY=vis.y, VI=vis.id;
-        for (let s=s0;s<s1;s++) {
-            const id=FID[s];
-            if (id<0) {VI[s]=-1;continue;}
+        const DX=F.x, DY=F.y, DPX=F.px, DPY=F.py, SX=mot.x, SY=mot.y, SPX=mot.px, SPY=mot.py, VX=vis.x, VY=vis.y, VI=vis.id, ES=easing;
+        for (let i=0;i<na;i++) {
+            const s=AL[i], id=FID[s];
+            if (id<0) {VI[s]=-1;if (ES) ES[s]=0;continue;}
             const x=SX[s], y=SY[s];
-            const ox=VX[s], oy=VY[s];
-            if (VI[s]!==id || Math.abs(x-ox)+Math.abs(y-oy)>VIS_SNAP) {DPX[s]=SPX[s];DPY[s]=SPY[s];DX[s]=x;DY[s]=y;VX[s]=x;VY[s]=y;VI[s]=id;continue;}
+            const ox=VX[s], oy=VY[s], gap=Math.abs(x-ox)+Math.abs(y-oy);
+            if (VI[s]!==id || gap>VIS_SNAP) {DPX[s]=SPX[s];DPY[s]=SPY[s];DX[s]=x;DY[s]=y;VX[s]=x;VY[s]=y;VI[s]=id;if (ES) ES[s]&=~1;continue;}
+            if (gap<VIS_REST) {DPX[s]=x;DPY[s]=y;DX[s]=x;DY[s]=y;VX[s]=x;VY[s]=y;if (ES) ES[s]&=~1;continue;}
             const nx=ox+(x-ox)*visFollow, ny=oy+(y-oy)*visFollow;
             DPX[s]=ox;DPY[s]=oy;DX[s]=nx;DY[s]=ny;VX[s]=nx;VY[s]=ny;
+            if (ES) ES[s]|=1;
         }
     }
-    {const D=F.vx,S=mot.vx;for(let s=s0;s<s1;s++) D[s]=S[s];}
-    {const D=F.vy,S=mot.vy;for(let s=s0;s<s1;s++) D[s]=S[s];}
+    {const D=F.vx,S=mot.vx;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}
+    {const D=F.vy,S=mot.vy;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}
     // Metadata (the pump's table, the frame's own layout): copied whole, when
     // it changed since this buffer last had it (or covers more slots now).
-    if (metaCopy) for (const k of META_COPY) F[k].set(meta[k].subarray(s0,s1),s0);
-    {const D=F.owner,S=C.owner;for(let s=s0;s<s1;s++) D[s]=S[s];}
-    {const D=F.energy,S=C.energy;for(let s=s0;s<s1;s++) D[s]=S[s];}
-    {const D=F.r,S=C.r;for(let s=s0;s<s1;s++) D[s]=S[s];}
-    {const D=F.cmd,S=C.commandState;for(let s=s0;s<s1;s++) D[s]=S[s];}
+    if (stamped) {for (const k of META_COPY) {const D=F[k], S=meta[k];for (let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}}
+    else if (metaCopy) for (const k of META_COPY) F[k].set(meta[k].subarray(s0,s1),s0);
+    {const D=F.owner,S=C.owner;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}
+    {const D=F.energy,S=C.energy;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}
+    {const D=F.r,S=C.r;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}
+    {const D=F.cmd,S=C.commandState;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}
     // (Levels into int16: as integers, -1 when not a number.)
-    {const D=F.level,S=C.effectiveLevel;for(let s=s0;s<s1;s++) {const v=S[s];D[s]=v>=0 && v<32767 ? v|0 : -1;}}
-    {const D=F.blevel,S=C.unitLevel;for(let s=s0;s<s1;s++) {const v=S[s];D[s]=v>=0 && v<32767 ? v|0 : -1;}}
-    {const D=F.flash,S=C.attackFlash;for(let s=s0;s<s1;s++) {const v=S[s];D[s]=v>255?255:v>0?v:0;}}
+    {const D=F.level,S=C.effectiveLevel;for(let i=0;i<na;i++) {const s=AL[i], v=S[s];D[s]=v>=0 && v<32767 ? v|0 : -1;}}
+    {const D=F.blevel,S=C.unitLevel;for(let i=0;i<na;i++) {const s=AL[i], v=S[s];D[s]=v>=0 && v<32767 ? v|0 : -1;}}
+    {const D=F.flash,S=C.attackFlash;for(let i=0;i<na;i++) {const s=AL[i], v=S[s];D[s]=v>255?255:v>0?v:0;}}
     {
         // (The status timers only of units with one running, stOn: the
         // rest read one byte instead of seven columns.)
         const D=F.flags, M=meta.flags, B=C.burning, P=C.poisoned, Z=C.frozen, W=C.wet, Y=C.sandy, V=C.watched, H=C.teleportHideTicks, T=C.workerTransferCooldown, ON=C.stOn;
-        for (let s=s0;s<s1;s++) D[s]=M[s] | (T[s]>0?SIM_UF_TRANSFER:0) | (ON && !ON[s] ? 0 : (B[s]>0?SIM_UF_BURNING:0) | (P[s]>0?SIM_UF_POISONED:0) | (Z[s]>0?SIM_UF_FROZEN:0) | (W[s]>0?SIM_UF_WET:0)
-            | (Y[s]>0?SIM_UF_SANDY:0) | (V[s]>0?SIM_UF_WATCHED:0) | (H[s]>0?SIM_UF_HIDDEN:0));
+        for (let i=0;i<na;i++) {const s=AL[i];D[s]=M[s] | (T[s]>0?SIM_UF_TRANSFER:0) | (ON && !ON[s] ? 0 : (B[s]>0?SIM_UF_BURNING:0) | (P[s]>0?SIM_UF_POISONED:0) | (Z[s]>0?SIM_UF_FROZEN:0) | (W[s]>0?SIM_UF_WET:0)
+            | (Y[s]>0?SIM_UF_SANDY:0) | (V[s]>0?SIM_UF_WATCHED:0) | (H[s]>0?SIM_UF_HIDDEN:0));}
     }
     {
         // The light a unit is drawn with at least: a unit that is a light
@@ -163,36 +268,43 @@ function fillRange(F,C,meta,s0,s1,n,player,areaUnit,metaCopy) {
         // walked into rises over most of a second: it dimmed and brightened
         // at every border it crossed.)
         const D=F.light, O=F.owner, V=C.watched, WB=F.watchedBy, VIS=F.vision, ON=C.stOn, full=lightFull;
-        for (let s=s0;s<s1;s++) D[s]=O[s]===player || ((!ON || ON[s]) && V[s]>0 && WB[s]===player) ? Math.max(VIS[s]*areaUnit,full) : 0;
+        for (let i=0;i<na;i++) {const s=AL[i];D[s]=O[s]===player || ((!ON || ON[s]) && V[s]>0 && WB[s]===player) ? Math.max(VIS[s]*areaUnit,full) : 0;}
     }
     {
         const X=F.x, Y=F.y, PX=F.px, PY=F.py, FL=F.flash, MO=F.mode, ST=F.status, AM=F.amount;
-        for (let s=s0;s<s1;s++) {
-            const dx=X[s]-PX[s], dy=Y[s]-PY[s], moving=dx*dx+dy*dy>.0001, flash=FL[s]>0;
+        for (let i=0;i<na;i++) {
+            const s=AL[i], dx=X[s]-PX[s], dy=Y[s]-PY[s], moving=dx*dx+dy*dy>.0001, flash=FL[s]>0;
             MO[s]=flash?1:moving?0:7;ST[s]=flash?1:moving?0:3;AM[s]=moving || flash ? 1 : .7;
         }
     }
     {
-        const D=F.facing, VX=F.vx, VY=F.vy, CM=C.cmMode, CT=C.cmT, SX=mot.x, SY=mot.y, FA=face.a, FI=face.id;
-        for (let s=s0;s<s1;s++) {
-            const id=FID[s];
+        const D=F.facing, VX=F.vx, VY=F.vy, CM=C.cmMode, CT=C.cmT, SX=mot.x, SY=mot.y, FA=face.a, FI=face.id, TX=motTarget.x, TY=motTarget.y, TK=motTarget.k, ES=easing;
+        for (let i=0;i<na;i++) {
+            const s=AL[i], id=FID[s];
             if (id<0) {FI[s]=-1;continue;}
             let want=NaN;
-            if (CM && (CM[s]&4)) {const q=CT[s];if (q>=0 && q<n) {const dx=SX[q]-SX[s], dy=SY[q]-SY[s];if (dx || dy) want=fastAtan2(dx,dy);}}
+            if (CM && (CM[s]&4)) {const q=CT[s];if (q>=0 && q<n) {const dx=TX[q]*TK-SX[s], dy=TY[q]*TK-SY[s];if (dx || dy) want=fastAtan2(dx,dy);}}
             if (want!==want) {const vx=VX[s], vy=VY[s];if (vx*vx+vy*vy>1e-6) want=fastAtan2(vx,vy);}
-            let f=FI[s]===id ? FA[s] : (want===want ? want : 0);
-            if (want===want) {let d=want-f;d-=Math.round(d*INV_TAU)*TAU;f+=d*VIS_TURN;}
+            let f=FI[s]===id ? FA[s] : (want===want ? want : 0), turning=false;
+            if (want===want) {let d=want-f;d-=Math.round(d*INV_TAU)*TAU;f+=d*VIS_TURN;turning=Math.abs(d)>1e-4;}
             FA[s]=f;FI[s]=id;D[s]=f;
+            if (ES) ES[s]=turning ? ES[s]|2 : ES[s]&~2;
         }
     }
     {const D=F.phase,I=F.id,R=F.prate,FL=F.flash;
-        for(let s=s0;s<s1;s++) {
-            const p=I[s]*2.399;
+        for(let i=0;i<na;i++) {
+            const s=AL[i], p=I[s]*2.399;
             D[s]=FL[s]>0?Math.max(0,(8-FL[s])/8)*Math.PI:p-Math.floor(p*INV_TAU)*TAU;
             R[s]=FL[s]>0?Math.PI/8:0;
         }
     }
-    F.sig.fill(0,s0,s1);
+    if (!dl) F.sig.fill(0,s0,s1);
+    if (stamped) {
+        for (let i=0;i<na;i++) {const s=AL[i], id=FID[s];if (id>=0 && (CID[s]!==id || MID[s]!==id || CDEAD[s])) {FID[s]=-1;L[s]=-1;changed=true;}}
+        for (let s=s0;s<s1;s++) if (FID[s]>=0) FORD[s0+count++]=s;
+        rangeChanged=changed;lastStamped=true;lastFilled=na;
+        return count;
+    }
     // The simulation may recycle a slot during the scan: dropped rather than
     // shown with the old unit's metadata at the new one's place.
     for (let k=s0;k<s0+count;k++) {
@@ -329,7 +441,7 @@ function buildRenderBuckets(F, count, columns, rows, tile) {
 // the id and the attack flash, amount from the mode (fillRange).
 const DIRTY_COLS=['x','y','px','py','r','energy','owner','flags','id','type','facing','phase','prate','vision','mode','amount'], DIRTY_BLOCK=256;
 const DIRTY_FROM={phase:'flash',prate:'flash',amount:'mode'};
-const dirty={stream:(Math.random()*2147483647)|0,seq:0,cap:-1,stamps:null,prev:null,prevN:0};
+const dirty={stream:(Math.random()*2147483647)|0,seq:0,cap:-1,stamps:null,prev:null,prevN:0,prevTick:-1};
 // (A thread's own per-block scratch: blocks new to a unit, and per column
 // the blocks changed.)
 const dirtyWork={nb:-1,born:null,masks:null};
@@ -375,13 +487,49 @@ function dirtyIds(I,J,HIT,BORN,b0,b1,n,pn) {
 }
 // Blocks b0..b1 of frame F against the last one, P (n slots now, pn then):
 // the changed ones get seq in the stamps (ST, nb blocks a column).
-function markDirtyRange(F,P,n,pn,b0,b1,seq,ST,nb) {
+// (ACT: per block from b0 whether the fill wrote a slot there, a frame by
+// changes: the others equal the last frame but in the metadata columns,
+// compared where the metadata was copied, metaAll.)
+const DIRTY_META=new Set(['type','vision']);
+function markDirtyRange(F,P,n,pn,b0,b1,seq,ST,nb,ACT,metaAll) {
+    if (!ACT) {markDirtyRun(F,P,n,pn,b0,b1,seq,ST,nb,false);return;}
+    for (let b=b0;b<b1;) {
+        let e=b+1;
+        const on=ACT[b-b0]!==0;
+        while (e<b1 && (ACT[e-b0]!==0)===on) e++;
+        if (on) markDirtyRun(F,P,n,pn,b,e,seq,ST,nb,false);
+        else if (metaAll) markDirtyRun(F,P,n,pn,b,e,seq,ST,nb,true);
+        b=e;
+    }
+}
+// The marks of a frame by the simulation's marks: only its filled slots
+// (AL, na of them) may differ from the last frame P, so they are compared
+// slot by slot, with the same result as the blocks' compare (a live slot
+// that differs, bit for bit; a unit new to its slot, or a block past the
+// last frame's count when it grew, every column; the id column at every
+// difference). b0..b1 the range's blocks.
+const DIRTY_FROM_COLS=DIRTY_COLS.map(c => DIRTY_FROM[c] || c);
+function markDirtySlots(F,P,AL,na,n,pn,b0,b1,seq,ST,nb) {
+    const B=DIRTY_BLOCK, nc=DIRTY_COLS.length, I=F.id, J=P.id, A=DIRTY_FROM_COLS.map(c => dirtyInts(F[c])), Q=DIRTY_FROM_COLS.map(c => dirtyInts(P[c])), idc=DIRTY_COLS.indexOf('id');
+    const all=b => {for (let c=0;c<nc;c++) ST[c*nb+b]=seq;};
+    if (n>pn) for (let b=Math.max(b0,Math.floor(pn/B));b<b1;b++) if ((b+1)*B>pn && b*B<n) all(b);
+    for (let i=0;i<na;i++) {
+        const s=AL[i], b=(s/B)|0, id=I[s];
+        if (s>=n) continue;
+        if (id!==J[s]) {ST[idc*nb+b]=seq;if (id>=0) {all(b);continue;}}
+        if (id<0) continue;
+        for (let c=0;c<nc;c++) if (A[c][s]!==Q[c][s]) ST[c*nb+b]=seq;
+    }
+}
+function markDirtyRun(F,P,n,pn,b0,b1,seq,ST,nb,metaOnly) {
     const W=dirtyWork;
     if (W.nb!==nb) {W.nb=nb;W.born=new Uint8Array(nb);W.masks=new Map();}
     const mask=name => {let M=W.masks.get(name);if (!M) W.masks.set(name,M=new Uint8Array(nb));return M;};
     const I=F.id, scanned=new Set(['id']);
-    dirtyIds(I,P.id,mask('id'),W.born,b0,b1,n,pn);
+    if (metaOnly) W.born.fill(0,b0,b1);
+    else dirtyIds(I,P.id,mask('id'),W.born,b0,b1,n,pn);
     for (let c=0;c<DIRTY_COLS.length;c++) {
+        if (metaOnly && !DIRTY_META.has(DIRTY_COLS[c])) continue;
         const from=DIRTY_FROM[DIRTY_COLS[c]] || DIRTY_COLS[c], M=mask(from);
         if (!scanned.has(from)) {
             const A=dirtyInts(F[from]), Q=dirtyInts(P[from]), a=dirtyWords(A), q=a && dirtyWords(Q);
@@ -400,9 +548,10 @@ function dirtyBegin(F,n) {
     if (!P) for (let c=0;c<nc;c++) D.stamps.fill(seq,c*nb,c*nb+used);
     return {seq,prev:P,pn:Math.min(D.prevN,n),nb};
 }
-function dirtyEnd(F,n,offset,seq) {
+// (prevTick: the tick the last frame was made from, its marks' bound.)
+function dirtyEnd(F,n,offset,seq,tick) {
     const D=dirty, nb=Math.ceil(F.cap/DIRTY_BLOCK);
-    D.prev=F;D.prevN=n;
+    D.prev=F;D.prevN=n;D.prevTick=Number.isFinite(tick) ? tick : -1;
     new Int32Array(F.buf,offset,D.stamps.length).set(D.stamps);
     return {offset,seq,stream:D.stream,block:DIRTY_BLOCK,nb,cols:DIRTY_COLS};
 }
@@ -414,10 +563,18 @@ function frameRange(J,F,P) {
     const s1=Math.min(J.s1,J.nn);
     let count=0;
     rangeChanged=false;
-    if (J.s0<s1) count=fillRange(F,source,meta,J.s0,s1,J.nn,J.player,J.areaUnit,J.metaCopy);
+    // (By changes: J.delta, from the last frame P, this buffer whole as of J.bseq.)
+    const dl=J.delta && P ? {A:P,bseq:J.bseq,seq:J.seq,K:J.K,phase:J.phase,ta:J.ta} : null;
+    if (J.msrc) copyMotionRange(J.msrc,J.s0,J.s1);
+    motTargetFor(J.msrc);
+    if (J.s0<s1) count=fillRange(F,source,meta,J.s0,s1,J.nn,J.player,J.areaUnit,J.metaCopy,dl,J.seq);
+    else if (dl && fillBlocks) fillBlocks.fill(0);
     const changed=rangeChanged;
     if (J.ghosts && J.s0<s1) applyGhosts(F,J.s0,s1,J.ghosts);
-    if (J.marks && P) markDirtyRange(F,P,J.n,J.pn,(J.s0/DIRTY_BLOCK)|0,Math.ceil(J.s1/DIRTY_BLOCK),J.seq,dirty.stamps,J.nb);
+    if (J.marks && P) {
+        if (lastStamped && J.s0<s1) markDirtySlots(F,P,fillList,lastFilled,J.n,J.pn,(J.s0/DIRTY_BLOCK)|0,Math.ceil(J.s1/DIRTY_BLOCK),J.seq,dirty.stamps,J.nb);
+        else markDirtyRange(F,P,J.n,J.pn,(J.s0/DIRTY_BLOCK)|0,Math.ceil(J.s1/DIRTY_BLOCK),J.seq,dirty.stamps,J.nb,dl && J.s0<s1 ? fillBlocks : null,J.metaCopy);
+    }
     rangeChanged=changed;
     return count;
 }
@@ -431,6 +588,11 @@ function frameRange(J,F,P) {
 // ready (its script loaded); one that fails turns the helpers off.
 const HELPER=typeof self==='object' && self.name==='present-helper';
 const PRESENT_HELPER_MIN=60000;
+const PRESENT_ALL_HELPERS_MIN=1000000;
+// Frames by changes from this many slots; every slot refilled at least every
+// PRESENT_DELTA_ROUNDS frames (a change the rules miss shows that late).
+let PRESENT_DELTA_MIN=100000;
+const PRESENT_DELTA_ROUNDS=32;
 let helpers=null, helpersOff=false, helperBound='', helperDone=null, helperResults=null, bindVersion=0;
 function stopHelpers(why) {
     if (helpers) for (const h of helpers) {try {h.worker.terminate();} catch {}}
@@ -459,7 +621,7 @@ function presentHelpers(nn) {
     if (!helpers.every(h=>h.ready)) return null;
     const key=stateVersion+':'+bindVersion;
     if (helperBound!==key) {
-        for (const h of helpers) h.worker.postMessage({type:'helperBind',columns:source,meta:{buf:meta.buf,cap:meta.cap},last,vis,face,ghost,mot,stamps:dirty.stamps,done:helperDone,results:helperResults});
+        for (const h of helpers) h.worker.postMessage({type:'helperBind',columns:source,meta:{buf:meta.buf,cap:meta.cap},last,vis,face,ghost,mot,fullAt,easing,stamps:dirty.stamps,done:helperDone,results:helperResults});
         helperBound=key;
     }
     return helpers;
@@ -472,7 +634,9 @@ function runRanges(J,F,P) {
     // (Paced, a frame has some ticks' time: fewer threads at once beside a
     // simulation short of them. Four at a time cost it ~1.5 TPS more at 600k
     // than one, at the same frames a second.)
-    const all=presentHelpers(J.nn), H=all && pacing.pace>1 ? (pacing.pace===2 ? all.slice(0,1) : null) : all;
+    // (Millions of slots: every helper whatever the pace; one thread took
+    // ~260 ms a frame at 2M units, frames 1.5 s behind the simulation.)
+    const all=presentHelpers(J.nn), H=all && pacing.pace>1 && J.nn<PRESENT_ALL_HELPERS_MIN ? (pacing.pace===2 ? all.slice(0,1) : null) : all;
     const B=DIRTY_BLOCK, parts=H ? H.length+1 : 1;
     const per=Math.max(1,Math.ceil(Math.ceil(J.n/B)/parts))*B, R=[];
     for (let s=0;s<J.n;s+=per) R.push([s,Math.min(J.n,s+per)]);
@@ -508,8 +672,8 @@ function runRanges(J,F,P) {
 function onHelperMessage(event) {
     const m=event.data;
     if (m.type==='helperBind') {
-        source=m.columns;meta=simFrameViews(m.meta.buf,m.meta.cap);last=m.last;
-        Object.assign(vis,m.vis);Object.assign(face,m.face);Object.assign(ghost,m.ghost);Object.assign(mot,m.mot);
+        source=m.columns;meta=simMetaViews(m.meta.buf,m.meta.cap);last=m.last;
+        Object.assign(vis,m.vis);Object.assign(face,m.face);Object.assign(ghost,m.ghost);Object.assign(mot,m.mot);fullAt=m.fullAt;easing=m.easing;
         dirty.stamps=m.stamps;helperDone=m.done;helperResults=m.results;
         return;
     }
@@ -531,7 +695,7 @@ function onHelperMessage(event) {
 // 15.5 beside one a tick: frames cost the threads it needs.) The tick
 // before a frame's asks for its snapshot (copyMotion: else the frame waits
 // a tick more). self.presentPacing = false: a frame every tick (tests).
-const PACE_MAX=4;
+const PACE_MAX=4, PACE_FRAME_MS=250;
 const pacing={pace:1,ticks:[],times:[],at:0,good:0};
 function paceDue(m) {
     const P=pacing, now=performance.now();
@@ -544,6 +708,10 @@ function paceDue(m) {
         const tps=(P.ticks[P.ticks.length-1]-P.ticks[0])*1000/Math.max(1,now-P.times[0]), rate=m.rate>0 ? m.rate : 20;
         if (tps<rate*.95) {P.pace=Math.min(PACE_MAX,P.pace+1);P.good=0;}
         else if (tps>rate*.985 && ++P.good>=3) {P.pace=Math.max(1,P.pace-1);P.good=0;}
+        // (But a frame at least every PACE_FRAME_MS: a simulation that never
+        // reaches the rate (millions of units, ticks of 150 ms and more) kept
+        // the pace at its most, a frame a second, the picture behind by it.)
+        P.pace=Math.max(1,Math.min(P.pace,Math.floor(PACE_FRAME_MS*tps/1000)));
     }
     if (lastBuiltTick<0 || P.pace<=1 || m.tick-lastBuiltTick>=P.pace || m.tick<lastBuiltTick) return true;
     if (m.tick+1-lastBuiltTick>=P.pace && snapCtl) Atomics.store(snapCtl,1,1);
@@ -563,7 +731,8 @@ function draw() {
     latest=null;
     const C=source;
     const t0=performance.now();
-    const got=copyMotion(C,tick.n,tick.tick);
+    const split=tick.n>=PRESENT_DELTA_MIN;
+    const got=copyMotion(C,tick.n,tick.tick,split);
     const t1=performance.now();
     if (got===-3) {release(buf);return;}
     if (got<0) {torn++;release(buf);return;}
@@ -584,9 +753,18 @@ function draw() {
     // helpers do not share (then both here after them).
     const G=tick.history ? ghostSight(tick) : null, gShared=!G || G.light.buffer instanceof SharedArrayBuffer;
     const D=dirtyBegin(F,tick.n);
-    const J={n:tick.n,nn,player:tick.player,areaUnit:tick.areaUnit,metaCopy,ghosts:gShared ? G : null,marks:gShared && !!D.prev,pn:D.pn,seq:D.seq,nb:D.nb};
+    // By changes (fillRange): from PRESENT_DELTA_MIN slots, this buffer built
+    // before at this size, the last frame another buffer, no ghosts.
+    const e=filling, bseq=e && e.cap===cap && e.seq>0 ? e.seq : 0;
+    const delta=nn>=PRESENT_DELTA_MIN && !G && !!D.prev && bseq>0 && D.prev.cap===cap;
+    const J={n:tick.n,nn,player:tick.player,areaUnit:tick.areaUnit,metaCopy,ghosts:gShared ? G : null,marks:gShared && !!D.prev,pn:D.pn,seq:D.seq,nb:D.nb,
+        delta,bseq,K:PRESENT_DELTA_ROUNDS,phase:D.seq%PRESENT_DELTA_ROUNDS,msrc:motSrc,ta:dirty.prevTick};
     const count=runRanges(J,F,D.prev);
-    if (count<0) {release(buf);dirty.prev=null;if (filling) filling.metaRev=-1;return;}
+    if (count<0) {release(buf);dirty.prev=null;if (filling) {filling.metaRev=-1;filling.seq=0;}return;}
+    if (e) {e.seq=D.seq;e.cap=cap;}
+    // (The snapshot rewritten while the ranges copied it: positions of two
+    // ticks in this frame, a glitch of a frame; counted.)
+    if (motSrc && motHead && Atomics.load(motHead,0)!==motTick) torn++;
     if (fillChanged) changed=true;
     if (!gShared) {
         applyGhosts(F,0,nn,G);
@@ -608,7 +786,7 @@ function draw() {
     const t3=performance.now();
     const world={units:{buf,cap,n:tick.n,count,mver:membership},strings:[0,strings]};
     if (indexBytes) world.units.renderBuckets = buildRenderBuckets(F, count, columns, rows, tick.tile || 32);
-    world.units.dirty = dirtyEnd(F, tick.n, cap * SIM_FRAME_SLOT_BYTES + indexBytes, D.seq);
+    world.units.dirty = dirtyEnd(F, tick.n, cap * SIM_FRAME_SLOT_BYTES + indexBytes, D.seq, tick.tick);
     if(structure && structureRevision!==sentStructureRevision) {
         const b=acquire(structure.buf.byteLength,'structures');
         if(b) {new Uint8Array(b,0,structure.buf.byteLength).set(new Uint8Array(structure.buf));world.structures={...structure,buf:b};sentStructureRevision=structureRevision;}
@@ -629,7 +807,7 @@ function draw() {
     const t4=performance.now();
     // (phases: the motion copy, the ranges (fill, ghosts, marks), the order,
     // the rest; then how many threads made the ranges, and the pace.)
-    (out || self).postMessage({type:'presentation',epoch,tick:tick.tick,world,buildMs:t4-started,torn,phases:[t1-t0,t2-t1,t3-t2,t4-t3,rangeThreads,pacing.pace]});
+    (out || self).postMessage({type:'presentation',epoch,tick:tick.tick,world,buildMs:t4-started,torn,phases:[t1-t0,t2-t1,t3-t2,t4-t3,rangeThreads,pacing.pace,lastFilled,lastStamped?1:0]});
     schedule();
 }
 function onMessage(event) {
@@ -638,7 +816,8 @@ function onMessage(event) {
         if(m.type==='port') {out=m.port;out.onmessage=onMessage;return;}
         if(m.type==='snaps') {
             snapCtl=m.ctl;
-            snaps=m.bufs.map(buf=>({head:new Int32Array(buf,0,2),x:new Int32Array(buf,8,m.cap),y:new Int32Array(buf,8+m.cap*4,m.cap),px:new Int32Array(buf,8+m.cap*8,m.cap),py:new Int32Array(buf,8+m.cap*12,m.cap)}));
+            // (Views into the simulation's wasm heap, or buffers of their own.)
+            snaps=m.snaps ? m.snaps : m.bufs.map(buf=>({head:new Int32Array(buf,0,2),x:new Int32Array(buf,8,m.cap),y:new Int32Array(buf,8+m.cap*4,m.cap),px:new Int32Array(buf,8+m.cap*8,m.cap),py:new Int32Array(buf,8+m.cap*12,m.cap)}));
             return;
         }
         // A tick's end: its frame at once (no timer between: the copy must
@@ -649,7 +828,7 @@ function onMessage(event) {
             if (!paceDue(m)) return;
             latest=m;if(!scheduled && source && ready) {scheduled=true;draw();}return;
         }
-        if(m.type==='bind') {bindVersion++;epoch=m.epoch;generation=m.generation;source=m.columns;meta=simFrameViews(m.meta.buf,m.meta.cap);metaRev=m.metaRev||null;for(const e of buffers.values()) e.metaRev=-1;last=null;lastBuiltTick=-1;buildRenderBuckets.previous=null;schedule();}
+        if(m.type==='bind') {bindVersion++;epoch=m.epoch;generation=m.generation;source=m.columns;meta=simMetaViews(m.meta.buf,m.meta.cap);metaRev=m.metaRev||null;for(const e of buffers.values()) e.metaRev=-1;last=null;lastBuiltTick=-1;buildRenderBuckets.previous=null;schedule();}
         else if(m.type==='strings') strings=m.strings;
         else if(m.type==='ready') {ready=true;schedule();}
         else if(m.type==='structures') {structure=m.table;structureRevision=m.revision;}

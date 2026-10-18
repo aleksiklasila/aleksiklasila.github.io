@@ -32,7 +32,7 @@ const metaRev = new Int32Array(new SharedArrayBuffer(4));
 function bind(newCap) {
     const C2 = {};
     for (const k of COLS) C2[k] = k === 'id' ? new Int32Array(new SharedArrayBuffer(newCap * 4)) : new Float32Array(new SharedArrayBuffer(newCap * 4));
-    const M2 = W.simFrameViews(new SharedArrayBuffer(newCap * vm.runInContext("SIM_FRAME_SLOT_BYTES", W)), newCap);
+    const M2 = W.simMetaViews(new SharedArrayBuffer(newCap * vm.runInContext("SIM_META_SLOT_BYTES", W)), newCap);
     M2.id.fill(-1); C2.id.fill(-1);
     if (C) { for (const k of COLS) C2[k].set(C[k].subarray(0, n)); for (const k of ['id', 'type', 'vision', 'watchedBy']) M2[k].set(M[k].subarray(0, n)); }
     C = C2; M = M2; cap = newCap;

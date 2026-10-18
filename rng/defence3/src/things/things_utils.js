@@ -601,7 +601,7 @@ function adjacencyLaneStep() {
         }
         L.qHead = end;
     }
-    if (gameTime % ADJACENCY_BATCH_TICKS !== 3) return;
+    if (!simStepCrosses(-3, ADJACENCY_BATCH_TICKS)) return;
     // The last post's result.
     if (L.posted) {
         simParallelBackgroundWait(ADJ_LANE);
@@ -857,7 +857,7 @@ function _isSelectionStatsRefreshDue(item, selectionSize) {
     if (selectionSize <= SELECTION_STATS_REFRESH_PER_TICK) return true;
     let every = Math.min(10, Math.ceil(selectionSize / SELECTION_STATS_REFRESH_PER_TICK));
     let seed = Number.isFinite(item.id) ? Math.floor(item.id) : (Math.floor(Number(item.gx) || 0) * 7 + Math.floor(Number(item.gy) || 0));
-    return ((gameTime + seed) % every + every) % every === 0;
+    return simStepCrosses(seed, every);
 }
 
 // Units created since the last stats pass (u._needsStatsInit): refreshed on
@@ -1596,7 +1596,7 @@ function canStackAt(gx, gy, itemKey, playerId) {
     if (cardDef.target === 'wall') {
         let t = getTowerAtTile(gx, gy);
         let ok = !!(t && t.type === itemKey && Math.floor(Number(t.owner)) === pid);
-        if (!ok && t && t.type === itemKey && gameTime % 20 === 0) {
+        if (!ok && t && t.type === itemKey && simStepCrosses(0, 20)) {
              console.warn(`canStackAt: owner mismatch for tower. t.owner: ${t.owner}, pid: ${pid}`);
         }
         return ok;
@@ -1605,7 +1605,7 @@ function canStackAt(gx, gy, itemKey, playerId) {
         let unitType = cardDef.unitType || 'norm';
         let b = getBarrackAtTile(gx, gy);
         let ok = !!(b && b.unitType === unitType && Math.floor(Number(b.owner)) === pid);
-        if (!ok && b && b.unitType === unitType && gameTime % 20 === 0) {
+        if (!ok && b && b.unitType === unitType && simStepCrosses(0, 20)) {
              console.warn(`canStackAt: owner mismatch for barrack. b.owner: ${b.owner}, pid: ${pid}`);
         }
         return ok;
@@ -1613,7 +1613,7 @@ function canStackAt(gx, gy, itemKey, playerId) {
     if (itemKey === 'spawner' || itemKey === 'astar_spawner' || itemKey === 'salvager' || itemKey === 'builder_spawner' || itemKey === 'healer_spawner' || itemKey === 'research') {
         let s = getSpawnerAtTile(gx, gy);
         let ok = !!(s && s.type === itemKey && Math.floor(Number(s.owner)) === pid);
-        if (!ok && s && s.type === itemKey && gameTime % 20 === 0) {
+        if (!ok && s && s.type === itemKey && simStepCrosses(0, 20)) {
              console.warn(`canStackAt: owner mismatch for spawner. s.owner: ${s.owner}, pid: ${pid}`);
         }
         return ok;
@@ -1621,7 +1621,7 @@ function canStackAt(gx, gy, itemKey, playerId) {
     // Floor items
     let cell = grid[gy][gx];
     let ok = !!(cell.item && cell.item.type === itemKey && Math.floor(Number(cell.owner)) === pid);
-    if (!ok && cell.item && cell.item.type === itemKey && gameTime % 20 === 0) {
+    if (!ok && cell.item && cell.item.type === itemKey && simStepCrosses(0, 20)) {
          console.warn(`canStackAt: owner mismatch for floor item. cell.owner: ${cell.owner}, pid: ${pid}`);
     }
     return ok;

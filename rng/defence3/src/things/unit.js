@@ -1,4 +1,10 @@
 "use strict";
+// (Contexts without data_static.js, the unit tests': one base tick a step.)
+if (typeof simDk === 'undefined') {
+    globalThis.simDk = 1;
+    globalThis.simStepCrosses = (phase, period) => !(period > 1) || ((((globalThis.gameTime | 0) + phase) % period) + period) % period < globalThis.simDk;
+    globalThis.simStepPhases = period => [(((globalThis.gameTime | 0) % period) + period) % period];
+}
 
 // ============================================================
 // UNIT CLASS
@@ -397,7 +403,7 @@ function unitPassEnd() {
     _unitPassOn = false;
     // (The kernels' chunk moves: counted once, after the separation commit,
     // when one follows this tick.)
-    spatialCountsDeferEnd(!!(_sepPending && _sepPending.tick === gameTime));
+    spatialCountsDeferEnd(!!(_sepPending && _sepPending.tick === currentTick));
     astarPassEnd(); simMoveWallsDeferEnd();
 }
 function _unitTickX(t) { const c = t._us; return c && _unitPassOn ? c.x0[t._si] * 0.125 : t.x; }
@@ -848,7 +854,7 @@ class Unit {
         // second, staggered by unit (trap effects last seconds).
         let gx = Math.floor(this.x / TILE), gy = Math.floor(this.y / TILE);
         let floorTile = gy * GRID_W + gx;
-        if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && (floorTile !== this._floorTile || (gameTime + this.id) % TICK_RATE === 0)) {
+        if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && (floorTile !== this._floorTile || simStepCrosses(this.id, TICK_RATE))) {
             this._floorTile = floorTile;
             let cell = grid[gy][gx];
             if (cell.item && cell.owner !== this.owner && !cell.item.underConstruction) {
@@ -972,7 +978,7 @@ class Unit {
             return;
         }
         // Structures do not move; a staggered quarter of the ticks suffices.
-        if (((gameTime + this.id) & 3) !== 0) return;
+        if (!simStepCrosses(this.id, 4)) return;
         let structure = _acqStructureHit(this, aggroRange);
         if (structure) {
             this.targetBuilding = structure;
@@ -1006,8 +1012,9 @@ class Unit {
                 } else if (dist <= Math.max(4, spd)) {
                     this.commandState = CMD_IDLE;
                 } else {
-                    this.x += (dx / dist) * spd;
-                    this.y += (dy / dist) * spd;
+                    const st = simStepLen(spd, dist);
+                    this.x += (dx / dist) * st;
+                    this.y += (dy / dist) * st;
                 }
             } else {
                 this.commandState = CMD_IDLE;
@@ -1051,7 +1058,7 @@ class Unit {
         if (this.workerState || this.attackTimer > 0 || this.preComputed.attackDamage <= 0) return;
         // Scanning on the move is staggered to every other tick (by unit id):
         // a ready shot waits at most one tick.
-        if (((gameTime + this.id) & 1) !== 0) return;
+        if (!simStepCrosses(this.id, 2)) return;
         // Marching through quiet ground (the common case): nothing hostile
         // anywhere near the unit's area, answered once per tick per area.
         if (!_hostilesPossibleNearArea(this.owner, this._spatialAreaId, Math.ceil(_getUnitAttackRangeArea(this)) + 1)) return;
@@ -1125,7 +1132,7 @@ class Unit {
         // Structures do not move: scan for them on a staggered quarter of the
         // ticks (by unit id), which is plenty to react to buildings entering
         // aggro range. Enemy units above are still checked every tick.
-        if (((gameTime + this.id) & 3) === 0) {
+        if (simStepCrosses(this.id, 4)) {
             let structure = _acqStructureHit(this, aggroRange);
             if (structure) {
                 this.targetBuilding = structure;
@@ -1186,7 +1193,16 @@ class Unit {
     _attackerSide(target) {
         let attackCue = ['fire', 'water', 'ice', 'poison', 'laser'].includes(this.attackStyle) ? 'attack_cast' : 'attack_swing';
         playSound(attackCue, this.x, this.y, this.unitType);
-        this.attackTimer = this.preComputed.attackCooldown;
+        // (Its shots at a step of several base ticks: the base ticks it stood
+        // ready, its carry (k_status); as mv.rs fire.)
+        const cd = this.preComputed.attackCooldown, c = this._us;
+        let at = cd;
+        _attackShots = 1;
+        if (c) {
+            const l = c.atkL[this._si];
+            if (l) { if (cd > 0) _attackShots = 1 + Math.floor(l / cd); at = cd * _attackShots - l; c.atkL[this._si] = 0; }
+        }
+        this.attackTimer = at;
         this.attackTarget = target;
         this.attackFlash = 8;
         recordUnitAttackFx(this, target);
@@ -1202,7 +1218,7 @@ class Unit {
         // Automatic structure attacks yield to nearby units. Explicit player
         // targets remain locked, and the scan is staggered by simulation tick.
         // (The tick's combat scan covers it: see SIM_KERNEL_COMBAT_SCAN.)
-        if (this.targetBuilding && !this.forcedAttackTarget && (gameTime + this.id) % 8 === 0) {
+        if (this.targetBuilding && !this.forcedAttackTarget && simStepCrosses(this.id, 8)) {
             const range = Math.max(TILE, this.preComputed.visionRange * TILE);
             let enemy = _combatScanHit(this, range);
             if (enemy) {
@@ -1297,7 +1313,7 @@ class Unit {
                     // Close enough or flying - direct move
                     let dx = tpx - this.x, dy = tpy - this.y;
                     let dist = detHypot(dx, dy);
-                    this.x += (dx / dist) * spd; this.y += (dy / dist) * spd;
+                    simChaseStep(this, spd, dx, dy, dist);
                 } else {
                     // Need a new path toward target
                     let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
@@ -1337,7 +1353,7 @@ class Unit {
                 } else if (d < 2 * TILE || this.isFlying) {
                     let dx = tb.x - this.x, dy = tb.y - this.y;
                     let dist = detHypot(dx, dy);
-                    this.x += (dx / dist) * spd; this.y += (dy / dist) * spd;
+                    simChaseStep(this, spd, dx, dy, dist);
                 } else {
                     let tgx = Math.floor(tb.x / TILE), tgy = Math.floor(tb.y / TILE);
                     let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
@@ -1487,8 +1503,11 @@ class Unit {
         // SIM_STEER_TICKS in sim_parallel.js), as the movement kernel.
         const c = this._us, s = this._si, steer = c && typeof SIM_STEER_NEAR_TICKS === 'number' ? SIM_STEER_NEAR_TICKS : 1;
         if (c) {
-            if (c.mvCD[s] === dest && c.mvCTl[s] === t && gameTime - c.mvCT[s] < c.mvCN[s]) {
-                let vx = c.mvCVx[s], vy = c.mvCVy[s];
+            if (c.mvCD[s] === dest && c.mvCTl[s] === t && gameTime - c.mvCT[s] < c.mvCN[s]
+                && (simDk === 1 || (Math.floor((this.x + c.mvCVx[s] * simDk) / TILE) === gx && Math.floor((this.y + c.mvCVy[s] * simDk) / TILE) === gy))) {
+                // (Per base tick: the step's of them; several leaving the
+                // tile are steered again below, as in the kernel.)
+                let vx = c.mvCVx[s] * simDk, vy = c.mvCVy[s] * simDk;
                 const sgx = Math.floor((this.x + vx) / TILE), sgy = Math.floor((this.y + vy) / TILE);
                 if (nd.nav - 1 !== NAV_PROFILE_AIR && (sgx !== gx || sgy !== gy)) {
                     const sl = simFlowSlide(navWallTable(nd.nav - 1), W, GRID_H, gx, gy, sgx, sgy);
@@ -1511,7 +1530,7 @@ class Unit {
         // every 16 ticks (by id: on when the crowd around has thinned out)
         // and a try every 64 (so a jam in a corridor clears).
         if (this._navLastD === -2 - dest) {
-            if (((gameTime + this.id) & 15) !== 0 || (((gameTime + this.id) & 63) !== 0 && !_unitCrowdThin(this))) return false;
+            if (((gameTime + this.id) & 15) >= simDk || (((gameTime + this.id) & 63) >= simDk && !_unitCrowdThin(this))) return false;
             this._navLastD = -1;
         }
         // Further out (up to NAV_CROWD_TILES), held back beside an idle or
@@ -1521,7 +1540,7 @@ class Unit {
             const d = detHypot(nd.x * TILE + 16 - this.x, nd.y * TILE + 16 - this.y), last = this._navLastD;
             this._navLastD = d;
             const near = Math.abs(nd.x - gx) <= 8 && Math.abs(nd.y - gy) <= 8;
-            if (last >= 0 && last - d < spd * 0.3 * steer) {
+            if (last >= 0 && last - d < spd * 0.3 * Math.max(steer, simDk)) {
                 // A detour or wall can also reduce progress. Only settle
                 // short of the destination when a friendly crowd is there.
                 if (near && _unitCrowdIdleNear(this)) { this.pathIndex = this.path.length; this._navLastD = -1; return true; }
@@ -1584,16 +1603,23 @@ class Unit {
             if (dist < 4) return false;
         }
         let vx = (dx / dist) * spd, vy = (dy / dist) * spd;
+        // (Committed per base tick; this step's for its base ticks, to the
+        // target at most, a base tick's with walls on the way: mv.rs.)
+        let cvx = vx, cvy = vy;
+        if (simDk > 1) {
+            const st = simStepLen(spd, dist), ax = (dx / dist) * st, ay = (dy / dist) * st;
+            if (profile === NAV_PROFILE_AIR || simSegOpen(wall, this.x, this.y, this.x + ax, this.y + ay)) { vx = ax; vy = ay; }
+        }
         // Into a wall (on the ground): along it, one axis, else it stands.
         // (The walls of its walk class: a builder's own buildings are none.)
         if (profile !== NAV_PROFILE_AIR) {
             const sl = simFlowSlide(wall, W, GRID_H, gx, gy, Math.floor((this.x + vx) / TILE), Math.floor((this.y + vy) / TILE));
-            if (sl & 1) vx = 0;
-            if (sl & 2) vy = 0;
+            if (sl & 1) { vx = 0; cvx = 0; }
+            if (sl & 2) { vy = 0; cvy = 0; }
         }
         this.x += vx; this.y += vy; this.vx = vx; this.vy = vy;
         if (c) {
-            c.mvCD[s] = dest; c.mvCT[s] = gameTime; c.mvCVx[s] = vx; c.mvCVy[s] = vy; c.mvCTl[s] = t;
+            c.mvCD[s] = dest; c.mvCT[s] = gameTime; c.mvCVx[s] = cvx; c.mvCVy[s] = cvy; c.mvCTl[s] = t;
             c.mvCN[s] = Math.abs(nd.x - gx) <= 8 && Math.abs(nd.y - gy) <= 8 ? SIM_STEER_NEAR_TICKS : SIM_STEER_TICKS;
         }
         // Entering another tile is a step (charged like a path node; a step
@@ -1710,7 +1736,8 @@ class Unit {
             if (this.pathIndex >= this.path.length) return true;
             return false;
         }
-        let vx = (dx / dist) * spd, vy = (dy / dist) * spd;
+        const st = simStepLen(spd, dist);
+        let vx = (dx / dist) * st, vy = (dy / dist) * st;
         this.vx = vx; this.vy = vy;
         this.x += vx; this.y += vy;
         return false;
@@ -1913,7 +1940,7 @@ const UNIT_ROLE_FIELDS = ['_resourceCollectorMemory', '_collectorPinnedTarget', 
     '_healerLastWorkY', '_healerLastWorkGx', '_healerLastWorkGy', '_healerSpawnerTarget', '_healerQueueTripCost', '_researchSpawnerTarget',
     '_researcherTripWork', '_researcherTripCost', '_researcherMaterialReadyTick', '_energyBlockedUntil', '_nextScoutRetargetTick',
     '_levelTextLabel', '_collectorLastMoveTick', '_collectorNextRecheckTick', '_healerLastMoveTick', '_healerNextRecheckTick',
-    '_researchLastMoveTick', '_researchNextRecheckTick', '_ambientSoundTicks', '_r3d', '_r3dSig', '_r3dTex', '_visStill', '_rslot'];
+    '_researchLastMoveTick', '_researchNextRecheckTick', '_ambientSoundTicks', '_r3d', '_r3dSig', '_r3dTex', '_visStill'];
 // (Every field takes any kind of value from the start: see _makeUnitFieldsMutable.)
 const _UnitRoleMem = new Function(UNIT_ROLE_FIELDS.map(k => 'this.' + k + ' = 1; this.' + k + ' = _UNIT_FIELD_WIDEN; this.' + k + ' = 0.5; this.' + k + ' = undefined;').join(' '));
 for (const k of UNIT_ROLE_FIELDS) {
@@ -1932,6 +1959,13 @@ for (const [k, kind] of (typeof SIM_UNIT_JS_FIELDS !== 'undefined' ? SIM_UNIT_JS
     const write = kind === 'b' ? at + ' = v ? 1 : 0' : kind === 'u' ? at + ' = v === undefined ? NaN : v' : at + ' = v';
     const get = new Function('return function () { const c = this._us; let x; if (c) return ' + read + '; return this._det ? this._det.' + k + ' : undefined; };')();
     const set = new Function('k', 'return function (v) { const c = this._us; if (c) ' + write + '; else if (this._det) this._det.' + k + ' = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };')(k);
+    Object.defineProperty(Unit.prototype, k, { get, set, configurable: true, enumerable: false });
+}
+// The movement columns that are state (SIM_UNIT_MOVE_SNAPSHOT_KEYS: the step
+// carries), for snapshots.
+for (const k of (typeof SIM_UNIT_MOVE_SNAPSHOT_KEYS !== 'undefined' ? SIM_UNIT_MOVE_SNAPSHOT_KEYS : [])) {
+    const get = new Function('return function () { const c = this._us; if (c) return c.' + k + '[this._si]; return this._det ? (this._det.' + k + ' || 0) : 0; };')();
+    const set = new Function('k', 'return function (v) { const c = this._us; if (c) c.' + k + '[this._si] = v; else if (this._det) this._det.' + k + ' = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };')(k);
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true, enumerable: false });
 }
 for (const k of ['r', 'collisionR']) {
@@ -1965,8 +1999,11 @@ function _unitHitQueue(attacker, target, building) {
         Q.b = grow(Q.b, Uint8Array); Q.dmg = grow(Q.dmg, Float64Array); Q.x = grow(Q.x, Float64Array); Q.y = grow(Q.y, Float64Array);
     }
     Q.a[i] = attacker; Q.t[i] = target; Q.b[i] = building;
-    Q.dmg[i] = attacker.preComputed.attackDamage; Q.x[i] = attacker.x; Q.y[i] = attacker.y;
+    Q.dmg[i] = _attackShots > 1 ? attacker.preComputed.attackDamage * _attackShots : attacker.preComputed.attackDamage; Q.x[i] = attacker.x; Q.y[i] = attacker.y;
+    _attackShots = 1;
 }
+// The shots of the attack being made (Unit._attackerSide), for its hit.
+let _attackShots = 1;
 function _isHitBuildingStanding(tb) {
     if (!(tb.energy > 0)) return false;
     if (getTileEntityRef(tb.gx, tb.gy) === tb) return true;
@@ -2207,7 +2244,7 @@ function statusPrepassRun() {
     if (!_statusCounts || _statusCounts.length < chunks) { _statusCounts = simSharedArray(Int32Array, Math.max(64, chunks * 2)); simParallelBind('st.count', _statusCounts); }
     if (!_statusList || _statusList.length < chunks * STATUS_PREPASS_CHUNK) { _statusList = simSharedArray(Int32Array, simReserveCap(chunks * STATUS_PREPASS_CHUNK, 4096)); simParallelBind('st.list', _statusList); }
     const P = _simParams;
-    P[0] = n; P[1] = STATUS_PREPASS_CHUNK; P[2] = gameTime; P[3] = STATUS_DOT_REPORT_TICKS;
+    P[0] = n; P[1] = STATUS_PREPASS_CHUNK; P[2] = gameTime; P[3] = STATUS_DOT_REPORT_TICKS; P[8] = simDk;
     // (The separation's tick-start copy only when separationStart, next,
     // will not take the prebuilt one.)
     P[4] = _sepPrebuiltForTick() ? 0 : 1;
@@ -2241,6 +2278,32 @@ function statusPrepassRun() {
             if (ev & 2) { u.watchedByTeam = -1; if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(u); }
         }
     }
+}
+
+// A move's length this step (simDk base ticks; the movement kernel's,
+// mv.rs): a base tick's `spd`, or with several their sum, stopping at the
+// point aimed at (`dist` away) but going at least a base tick's.
+function simStepLen(spd, dist) { return simDk > 1 ? Math.min(spd * simDk, Math.max(dist, spd)) : spd; }
+// Whether the segment (x0, y0)-(x1, y1) stays on open tiles of the flat
+// wall grid `wall` (mv.rs seg_open: points a quarter tile apart).
+function simSegOpen(wall, x0, y0, x1, y1) {
+    if (!wall) return true;
+    const dx = x1 - x0, dy = y1 - y0, n = Math.min(256, Math.floor(Math.sqrt(dx * dx + dy * dy) / (TILE * 0.25)) + 1);
+    for (let i = 1; i <= n; i++) {
+        const k = i / n, gx = Math.floor((x0 + dx * k) / TILE), gy = Math.floor((y0 + dy * k) / TILE);
+        if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_H || wall[gy * GRID_W + gx]) return false;
+    }
+    return true;
+}
+// A direct chase step toward (tx, ty) `dist` away: several base ticks' when
+// the way is open (flyers: always), else a base tick's.
+function simChaseStep(u, spd, dx, dy, dist) {
+    let st = spd;
+    if (simDk > 1) {
+        const k = simStepLen(spd, dist);
+        if (u.isFlying || simSegOpen(typeof simMoveWallGrid === 'function' ? simMoveWallGrid() : null, u.x, u.y, u.x + dx / dist * k, u.y + dy / dist * k)) st = k;
+    }
+    u.x += (dx / dist) * st; u.y += (dy / dist) * st;
 }
 
 function canUnitAutoRetaliate(unit) {
@@ -2765,12 +2828,26 @@ const _navLookScratch = { mvNav: new Int32Array(typeof SIM_NAV_STRIDE === 'numbe
 function _navFlowLook(u, profile, slot, t, gx, gy, dest, wall) {
     const nav = _nav[profile];
     if (!nav) return 0;
+    let LC = u._us, s = u._si;
+    if (!LC) { LC = _navLookScratch; s = 0; LC.mvNav[0] = -1; }
+    // (On the atlas: no field; the look over its steps, simNavStepXY.)
+    if (slot === NAV_ATLAS_FID) {
+        if (!nav.atlas || !nav.atlas.header) return -1;
+        _simFlowAtlas = nav;
+        let lk;
+        try {
+            lk = simFlowLook(LC, s, simStepCrosses(u.id, SIM_FLOW_REFRESH_TICKS), t, gx, gy, dest, GRID_W, GRID_H, wall, nav.version | 0,
+                _simMoveWallBlk9 ? simWallKey9(_simMoveWallBlk9, _simMoveWallBlkW, gx, gy, _simMoveWallVer) : simWallKey(_simMoveWallBlk, _simMoveWallBlkW, (GRID_H + 7) >> 3, gx, gy, _simMoveWallVer), 3,
+                nav.C, nav.cw, nav.partL, nav.partBase, null, 0, nav.fields, nav.nodeBase, nav.nodeTile, nav.nodePair, null, 0, 0, 0, 0, 0);
+        } finally { _simFlowAtlas = null; }
+        if (lk === -2) { const n = navStep(profile, t, dest, slot); _navLookOut[0] = n; _navLookOut[1] = -1; _navLookOut[2] = n; _navLookOut[3] = 0; return 1; }
+        if (lk === 1) { const r = s * SIM_NAV_STRIDE, fo = LC.mvNav[r + 7]; _navLookOut[0] = LC.mvNav[r + 5]; _navLookOut[1] = LC.mvNav[r + 6]; _navLookOut[2] = fo >> 1; _navLookOut[3] = fo & 1; }
+        return lk;
+    }
     const Fp = slot >= 0 ? _navFieldPool(slot) : null, i = slot >= 0 ? _navFieldIndex(slot) : 0, m = i * NAV_FIELD_META;
     const has = !!(Fp && Fp.meta && Fp.rows && Fp.meta[m] === profile && Fp.meta[m + 1] === dest && Fp.meta[m + 7] === 1);
     if (!has) return -1;
-    let LC = u._us, s = u._si;
-    if (!LC) { LC = _navLookScratch; s = 0; LC.mvNav[0] = -1; }
-    const lk = simFlowLook(LC, s, ((gameTime + u.id) & (SIM_FLOW_REFRESH_TICKS - 1)) === 0, t, gx, gy, dest, GRID_W, GRID_H, wall, nav.version | 0,
+    const lk = simFlowLook(LC, s, simStepCrosses(u.id, SIM_FLOW_REFRESH_TICKS), t, gx, gy, dest, GRID_W, GRID_H, wall, nav.version | 0,
         _simMoveWallBlk9 ? simWallKey9(_simMoveWallBlk9, _simMoveWallBlkW, gx, gy, _simMoveWallVer) : simWallKey(_simMoveWallBlk, _simMoveWallBlkW, (GRID_H + 7) >> 3, gx, gy, _simMoveWallVer), slot >= NAV_WIDE_BASE ? 2 : 1,
         nav.C, nav.cw, nav.partL, nav.partBase, Fp.rows, i * Fp.rowW, nav.fields, nav.nodeBase, nav.nodeTile, nav.nodePair,
         Fp.pool, i * Fp.span * Fp.span, Fp.meta[m + 2], Fp.meta[m + 3], Fp.meta[m + 4], Fp.meta[m + 5]);
@@ -4072,12 +4149,14 @@ function simMoveRun() {
     // movement kernel does the rest.)
     const stepK = SIM_MOVE_STEP_KERNEL && typeof SIM_KERNEL_MOVE_STEP === 'number';
     P[46] = stepK ? 1 : 0; P[48] = SIM_COMBAT_BRAIN ? 1 : 0;
+    // (The step's base ticks: mv.rs Mv.dk.)
+    P[58] = simDk;
     // The separation's pushes (its pair kernel's, from where units stood as
     // the tick began: the unit index's prebuild after the last tick, else
     // separationStart) applied by the kernel's epilogue, where each unit
     // moved (the finish, fused: one visit of each unit).
     P[54] = 0;
-    if (_sepPending && _sepPending.tick === gameTime) {
+    if (_sepPending && _sepPending.tick === currentTick) {
         simParallelBackgroundWait(_sepPending.lane | 0);
         _sepPending = null;
         // (Slots past the chain's arrays (made since): none this tick.)
@@ -4135,7 +4214,7 @@ function _simMoveSepListed(chunks, per) {
     for (let k = 0; k < chunks; k++) for (let j = k * per, e = j + EXC[k]; j < e; j++) {
         const i = EX[j];
         if (fast[i]) {
-            if (((gameTime + c.id[i]) | 0) % UNIT_SEPARATION_PATH_RETRY_TICKS === 0) {
+            if (simStepCrosses(c.id[i] | 0, UNIT_SEPARATION_PATH_RETRY_TICKS)) {
                 const u = owners[i];
                 if (u && !u.dead && u.pathIsFallbackAstar && u._pendingPathTarget) (retries ||= []).push(u);
             }
@@ -4152,7 +4231,7 @@ function _simMoveSepListed(chunks, per) {
         for (let i of slow) {
             const u = owners[i];
             applyUnitSeparation(u, S.nextX[i], S.nextY[i], Infinity);
-            if (u.pathIsFallbackAstar && u._pendingPathTarget && ((gameTime + u.id) % UNIT_SEPARATION_PATH_RETRY_TICKS) === 0) (retries ||= []).push(u);
+            if (u.pathIsFallbackAstar && u._pendingPathTarget && simStepCrosses(u.id, UNIT_SEPARATION_PATH_RETRY_TICKS)) (retries ||= []).push(u);
             pushUnitOutOfBlockedTile(u);
             u.x = _quantizeUnitWorldCoord(u.x);
             u.y = _quantizeUnitWorldCoord(u.y);
@@ -4224,7 +4303,7 @@ function _spatialUnitTypeNames() {
 // tier below the tick (5 a second each, staggered); the structure look
 // (every 4 ticks) falls on the same ticks.
 const SIM_ACQUIRE_TICKS = 4;
-function _unitAcquireTick(u) { return ((gameTime + u.id) % SIM_ACQUIRE_TICKS) === 0; }
+function _unitAcquireTick(u) { return simStepCrosses(u.id, SIM_ACQUIRE_TICKS); }
 // The nearest visible enemy unit within `range` of an idle or attack-moving
 // unit: this tick's combat scan (the world at the start of the update pass),
 // else (another range, a unit the scan did not cover, or a target killed
@@ -4309,7 +4388,7 @@ function combatScanRun() {
         P[7] = Math.min(spatialUnitsComplexPlayerCount, _visCover.players); P[8] = CMD_MOVING; P[9] = GRID_W; P[10] = GRID_H;
         P[11] = CHUNK_SIZE; P[12] = SIM_SEP_ABSENT; P[13] = SIM_MOVE_BOX_STEPS;
         P[14] = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0) + UNIT_CONTACT_ATTACK_MARGIN;
-        P[15] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; P[16] = spatialBlockCols; P[17] = spatialBlockRows; P[18] = 1;
+        P[15] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; P[16] = spatialBlockCols; P[17] = spatialBlockRows; P[18] = 1; P[58] = simDk;
         simParallelRun(SIM_KERNEL_DRIVEBY, Math.ceil(n / 2048));
     }
     _acqTierStep();
@@ -4335,9 +4414,11 @@ const _acq = { cap: 0, chunks: 0, entries: 0, A: 0, cover: null, hs: null };
 function _acqTierStep() {
     if (_acqStepTick === gameTime) return;
     _acqStepTick = gameTime;
-    const ph = gameTime % SIM_ACQUIRE_TICKS;
-    if (ph === 0) _acqCommit();
-    else if (ph === 2) _acqPost();
+    // (The phases of the step's base ticks: with several, its commit before
+    // its next post.)
+    const ph = simStepPhases(SIM_ACQUIRE_TICKS);
+    if (ph.includes(0)) _acqCommit();
+    if (ph.includes(2)) _acqPost();
 }
 // Before the unit index (or the owners per chunk, the hostile tables) is
 // made again: a posted scan reads them in place, so it is waited for here
@@ -4523,7 +4604,7 @@ function _sepZeroStage() {
 // tick (its own test).
 function _sepPrebuiltForTick() {
     const U = _simUnitState;
-    return !!(U && units.length >= SEPARATION_SLOT_MIN_UNITS && CHUNKS_W * CHUNKS_H < SIM_SEP_ABSENT && _sepPre && _sepPre.taken && _sepPre.tick === gameTime && _sepPre.n <= U.owners.length);
+    return !!(U && units.length >= SEPARATION_SLOT_MIN_UNITS && CHUNKS_W * CHUNKS_H < SIM_SEP_ABSENT && _sepPre && _sepPre.taken && _sepPre.tick === currentTick && _sepPre.n <= U.owners.length);
 }
 function separationStart() {
     _sepPending = null;
@@ -4531,8 +4612,8 @@ function separationStart() {
     if (!U || units.length < SEPARATION_SLOT_MIN_UNITS || !(CHUNKS_W * CHUNKS_H < SIM_SEP_ABSENT)) return;
     // Made after the last tick with the unit index (spatialIndexPrebuild):
     // taken after this tick's unit pass.
-    if (_sepPre && _sepPre.taken && _sepPre.tick === gameTime && _sepPre.n <= U.owners.length) {
-        _sepPending = { tick: gameTime, n: _sepPre.n, lane: SIM_LANE_IX };
+    if (_sepPre && _sepPre.taken && _sepPre.tick === currentTick && _sepPre.n <= U.owners.length) {
+        _sepPending = { tick: currentTick, n: _sepPre.n, lane: SIM_LANE_IX };
         _sepPre = null;
         return;
     }
@@ -4541,9 +4622,12 @@ function separationStart() {
     _sepArrays(n);
     const S = _sep;
     const ne = spatialIndexEntries(), mode = UNIT_SEPARATION_MODE | 0;
-    _sepPending = { tick: gameTime, n, lane: 0 };
+    // (The separation's clock is the step's (currentTick), not game time: its
+    // every other step and its stagger are of work, not of a rate; with
+    // steps of two base ticks gameTime's parity never changed.)
+    _sepPending = { tick: currentTick, n, lane: 0 };
     // (Not a separation tick: the commit applies the pushes carried over.)
-    if (!ne || (mode === 2 && (gameTime & 1) !== 0)) return;
+    if (!ne || (mode === 2 && (currentTick & 1) !== 0)) return;
     simParallelBind('sep.eslot', _sxESlot); simParallelBind('sep.ekey', _sxEKey);
     simParallelBind('sep.rs', _sxStart); simParallelBind('sep.rc', _sxCount); simParallelBind('sep.rstamp', _sxStamp);
     const pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0), maxR = Math.max(0.1, _maxUnitCollisionRadius()), cws = CHUNK_SIZE * TILE;
@@ -4560,9 +4644,9 @@ function separationStart() {
     let P = simParallelStageParams(0, 0);
     for (let k = 0; k < 3; k++) P[k] = Z[2][k];
     P = simParallelStageParams(0, 1);
-    P[0] = ne; P[1] = SEP_PACK_PER; P[2] = getUnitCollisionRecalcTicks(); P[3] = gameTime; P[4] = mode;
+    P[0] = ne; P[1] = SEP_PACK_PER; P[2] = getUnitCollisionRecalcTicks(); P[3] = currentTick; P[4] = mode;
     P = simParallelStageParams(0, 2);
-    P[0] = ne; P[1] = SEP_MARK_PER; P[2] = _sxEpoch; P[3] = CHUNKS_W; P[4] = CHUNKS_H; P[5] = gameTime; P[6] = mode;
+    P[0] = ne; P[1] = SEP_MARK_PER; P[2] = _sxEpoch; P[3] = CHUNKS_W; P[4] = CHUNKS_H; P[5] = currentTick; P[6] = mode;
     for (let parity = 0; parity < 2; parity++) {
         P = simParallelStageParams(0, 3 + parity);
         P[0] = CHUNKS_W; P[1] = CHUNKS_H; P[2] = H; P[3] = pad; P[4] = farAny; P[5] = UNIT_SEPARATION_Q;
@@ -4575,7 +4659,7 @@ function separationStart() {
 // The next tick's separation as stages of the unit index's prebuild chain
 // (chunk.js spatialIndexPrebuild, after a tick's end, from the state the
 // next tick starts from: the live columns and the index being built, its
-// entry count read by the kernels), or null. tick: the next tick's gameTime.
+// entry count read by the kernels), or null. tick: the next step (currentTick).
 let _sepPre = null, SEPARATION_PREBUILD = true;
 function separationPrebuildStages(n, ep, tick) {
     _sepPre = null;
@@ -4616,7 +4700,7 @@ function runUnitSeparationPass() {
     // (The pushes are the movement kernel's epilogue's: simMoveRun. A tick
     // whose movement kernel did not run leaves its sums: dropped, cleared
     // before the next use.)
-    if (_sepPending && _sepPending.tick === gameTime) {
+    if (_sepPending && _sepPending.tick === currentTick) {
         simParallelBackgroundWait(_sepPending.lane | 0);
         _sepPending = null;
         _sepDirty = true;

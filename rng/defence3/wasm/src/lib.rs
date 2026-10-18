@@ -15,12 +15,18 @@
 //! rounding), `||` on numbers. Float operations are IEEE-754 in both
 //! (no fused multiply-add: simd128 has none), in the same order.
 #![no_std]
+// (wasm64: memory64, the heap past 4 GiB; its SIMD intrinsics are core::arch::wasm64.)
+#![cfg_attr(target_arch = "wasm64", feature(simd_wasm64))]
 #![allow(clippy::too_many_arguments, clippy::missing_safety_doc)]
 
+#[cfg(target_arch = "wasm32")]
 use core::arch::wasm32::*;
+#[cfg(target_arch = "wasm64")]
+use core::arch::wasm64::*;
 
 mod mv;
 mod k;
+mod atlas;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -113,6 +119,17 @@ fn truthy(v: f64) -> bool {
     v != 0.0 && v == v
 }
 
+/// An address held in a 32-bit word (the argument blocks, copy tables): as
+/// is under wasm32; under wasm64 (memory64: the heap past 4 GiB) in 4-byte
+/// units (every array a kernel is given is 4-byte aligned; sim_parallel.js
+/// _simWEnc writes them).
+#[inline(always)]
+pub fn waddr(v: u32) -> usize {
+    #[cfg(target_arch = "wasm64")]
+    { (v as usize) << 2 }
+    #[cfg(not(target_arch = "wasm64"))]
+    { v as usize }
+}
 #[inline(always)]
 unsafe fn rd<T: Scalar>(p: *const T, i: usize) -> T::Value { (*p.add(i)).load() }
 #[inline(always)]
@@ -191,23 +208,23 @@ fn sep_radius(cr: f64, r: f64) -> f64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn sep_pack(
-    eslot: *const i32,
-    xs: *const Q8,
-    ys: *const Q8,
-    dead: *const u8,
-    r0: *const F32,
-    layer: *const u8,
-    crl: *const F32,
-    rdl: *const F32,
-    owner: *const I8I32,
-    id: *const i32,
-    smv: *const u8,
-    ord: *mut i32,
-    qx: *mut f32,
-    qy: *mut f32,
-    qr: *mut f32,
-    meta: *mut i32,
-    qid: *mut i32,
+    eslot: u32,
+    xs: u32,
+    ys: u32,
+    dead: u32,
+    r0: u32,
+    layer: u32,
+    crl: u32,
+    rdl: u32,
+    owner: u32,
+    id: u32,
+    smv: u32,
+    ord: u32,
+    qx: u32,
+    qy: u32,
+    qr: u32,
+    meta: u32,
+    qid: u32,
     nl: i32,
     per: i32,
     rest0: i32,
@@ -216,6 +233,23 @@ pub unsafe extern "C" fn sep_pack(
     live: i32,
     chunk: i32,
 ) {
+    let eslot = waddr(eslot) as *const i32;
+    let xs = waddr(xs) as *const Q8;
+    let ys = waddr(ys) as *const Q8;
+    let dead = waddr(dead) as *const u8;
+    let r0 = waddr(r0) as *const F32;
+    let layer = waddr(layer) as *const u8;
+    let crl = waddr(crl) as *const F32;
+    let rdl = waddr(rdl) as *const F32;
+    let owner = waddr(owner) as *const I8I32;
+    let id = waddr(id) as *const i32;
+    let smv = waddr(smv) as *const u8;
+    let ord = waddr(ord) as *mut i32;
+    let qx = waddr(qx) as *mut f32;
+    let qy = waddr(qy) as *mut f32;
+    let qr = waddr(qr) as *mut f32;
+    let meta = waddr(meta) as *mut i32;
+    let qid = waddr(qid) as *mut i32;
     let nl = if nl > 0 { nl as usize } else { 0 };
     let start = chunk as usize * per as usize;
     let end = core::cmp::min(nl, start + per as usize);
@@ -268,10 +302,10 @@ unsafe fn lower_bound(keys: *const i32, mut lo: usize, mut hi: usize, k: i32) ->
 /// dead entries never do.)
 #[no_mangle]
 pub unsafe extern "C" fn sep_mark(
-    meta: *mut i32,
-    ekey: *const i32,
-    ord: *const i32,
-    qid: *const i32,
+    meta: u32,
+    ekey: u32,
+    ord: u32,
+    qid: u32,
     nl: i32,
     per: i32,
     cw: i32,
@@ -280,6 +314,10 @@ pub unsafe extern "C" fn sep_mark(
     stag: i32,
     chunk: i32,
 ) {
+    let meta = waddr(meta) as *mut i32;
+    let ekey = waddr(ekey) as *const i32;
+    let ord = waddr(ord) as *const i32;
+    let qid = waddr(qid) as *const i32;
     let nl = if nl > 0 { nl as usize } else { 0 };
     let start = chunk as usize * per as usize;
     let end = core::cmp::min(nl, start + per as usize);
@@ -564,17 +602,17 @@ unsafe fn pair_run(o: &PairOut, p: &mut PairP, v: &PairV, s0: usize, s1: usize) 
 /// of entries over the chunks in reach from a table of the chunks' starts.
 #[no_mangle]
 pub unsafe extern "C" fn sep_pairs(
-    ord: *const i32,
-    qx: *const f32,
-    qy: *const f32,
-    qr: *const f32,
-    meta: *const i32,
-    qid: *const i32,
-    keys: *const i32,
-    px_out: *mut i32,
-    py_out: *mut i32,
-    ov_out: *mut F32,
-    hit_out: *mut u32,
+    ord: u32,
+    qx: u32,
+    qy: u32,
+    qr: u32,
+    meta: u32,
+    qid: u32,
+    keys: u32,
+    px_out: u32,
+    py_out: u32,
+    ov_out: u32,
+    hit_out: u32,
     cw: i32,
     ch: i32,
     h: i32,
@@ -590,6 +628,17 @@ pub unsafe extern "C" fn sep_pairs(
     parity: i32,
     chunk: i32,
 ) {
+    let ord = waddr(ord) as *const i32;
+    let qx = waddr(qx) as *const f32;
+    let qy = waddr(qy) as *const f32;
+    let qr = waddr(qr) as *const f32;
+    let meta = waddr(meta) as *const i32;
+    let qid = waddr(qid) as *const i32;
+    let keys = waddr(keys) as *const i32;
+    let px_out = waddr(px_out) as *mut i32;
+    let py_out = waddr(py_out) as *mut i32;
+    let ov_out = waddr(ov_out) as *mut F32;
+    let hit_out = waddr(hit_out) as *mut u32;
     let band = chunk * 2 + parity;
     let row0 = band * h;
     if row0 >= ch {
@@ -749,13 +798,54 @@ const NAV_UNREACHED: u16 = 0xFFFF;
 /// `work`: this thread's scratch (words). Returns 0 when it does not fit.
 #[no_mangle]
 pub unsafe extern "C" fn nav_field(
-    pool: *mut u16, off: i32, slot_size: i32, bx: i32, by: i32, bw: i32, bh: i32, w: i32, h: i32, dest: i32,
-    wall: *const u8, cost: *const u8,
-    make_row: i32, nb: *const i32, nt: *const i32, npair: *const i32, npart: *const i32,
-    adj_s: *const i32, adj_a: *const i32, adj_c: *const i32, part_l: *const u16, part_b: *const i32,
-    csz: i32, cw: i32, nc: i32, np: i32, bcount: i32, k: i32, edges: i32,
-    rows: *mut u8, ro: i32, work: *mut i32, work_words: i32,
+    pool: u32,
+    off: i32,
+    slot_size: i32,
+    bx: i32,
+    by: i32,
+    bw: i32,
+    bh: i32,
+    w: i32,
+    h: i32,
+    dest: i32,
+    wall: u32,
+    cost: u32,
+    make_row: i32,
+    nb: u32,
+    nt: u32,
+    npair: u32,
+    npart: u32,
+    adj_s: u32,
+    adj_a: u32,
+    adj_c: u32,
+    part_l: u32,
+    part_b: u32,
+    csz: i32,
+    cw: i32,
+    nc: i32,
+    np: i32,
+    bcount: i32,
+    k: i32,
+    edges: i32,
+    rows: u32,
+    ro: i32,
+    work: u32,
+    work_words: i32,
 ) -> i32 {
+    let pool = waddr(pool) as *mut u16;
+    let wall = waddr(wall) as *const u8;
+    let cost = waddr(cost) as *const u8;
+    let nb = waddr(nb) as *const i32;
+    let nt = waddr(nt) as *const i32;
+    let npair = waddr(npair) as *const i32;
+    let npart = waddr(npart) as *const i32;
+    let adj_s = waddr(adj_s) as *const i32;
+    let adj_a = waddr(adj_a) as *const i32;
+    let adj_c = waddr(adj_c) as *const i32;
+    let part_l = waddr(part_l) as *const u16;
+    let part_b = waddr(part_b) as *const i32;
+    let rows = waddr(rows) as *mut u8;
+    let work = waddr(work) as *mut i32;
     // (The scratch's first four words: a kernel's tag and state, see k.rs
     // scratch(): cleared, as this overwrites what follows.)
     if work.is_null() || work_words < 4 {
@@ -887,7 +977,10 @@ pub unsafe extern "C" fn nav_field(
 /// Rows copied from their key's slot (the batch's other slots of a key):
 /// list[i]'s row from src[i]'s, for i in i0..i1 with src[i] >= 0.
 #[no_mangle]
-pub unsafe extern "C" fn nav_rows_copy(rows: *mut u8, list: *const i32, src: *const i32, row_w: i32, i0: i32, i1: i32) {
+pub unsafe extern "C" fn nav_rows_copy(rows: u32, list: u32, src: u32, row_w: i32, i0: i32, i1: i32) {
+    let rows = waddr(rows) as *mut u8;
+    let list = waddr(list) as *const i32;
+    let src = waddr(src) as *const i32;
     let rw = row_w.max(0) as usize;
     for i in i0.max(0) as usize..i1.max(0) as usize {
         let from = *src.add(i);
@@ -1171,7 +1264,15 @@ unsafe fn acq_structure_tile(
 /// rows y0..y1 of the chunks' entry ranges, stamps and owners, so the scan
 /// may run on while the next index is built in the live arrays.
 #[no_mangle]
-pub unsafe extern "C" fn acq_copy(rs: *const i32, rc: *const i32, rst: *const i32, om: *const u8, ors: *mut i32, orc: *mut i32, orst: *mut i32, oom: *mut u8, cw: i32, y0: i32, y1: i32) {
+pub unsafe extern "C" fn acq_copy(rs: u32, rc: u32, rst: u32, om: u32, ors: u32, orc: u32, orst: u32, oom: u32, cw: i32, y0: i32, y1: i32) {
+    let rs = waddr(rs) as *const i32;
+    let rc = waddr(rc) as *const i32;
+    let rst = waddr(rst) as *const i32;
+    let om = waddr(om) as *const u8;
+    let ors = waddr(ors) as *mut i32;
+    let orc = waddr(orc) as *mut i32;
+    let orst = waddr(orst) as *mut i32;
+    let oom = waddr(oom) as *mut u8;
     let a = (y0.max(0) as usize) * cw.max(0) as usize;
     let n = ((y1 - y0).max(0) as usize) * cw.max(0) as usize;
     core::ptr::copy_nonoverlapping(rs.add(a), ors.add(a), n);
@@ -1181,7 +1282,9 @@ pub unsafe extern "C" fn acq_copy(rs: *const i32, rc: *const i32, rst: *const i3
 }
 /// Entries e0..e1 of the index's slots copied (the scan's own).
 #[no_mangle]
-pub unsafe extern "C" fn acq_copy_es(es: *const i32, oes: *mut i32, e0: i32, e1: i32) {
+pub unsafe extern "C" fn acq_copy_es(es: u32, oes: u32, e0: i32, e1: i32) {
+    let es = waddr(es) as *const i32;
+    let oes = waddr(oes) as *mut i32;
     let a = e0.max(0) as usize;
     core::ptr::copy_nonoverlapping(es.add(a), oes.add(a), (e1 - e0).max(0) as usize);
 }
@@ -1190,7 +1293,9 @@ pub unsafe extern "C" fn acq_copy_es(es: *const i32, oes: *mut i32, e0: i32, e1:
 /// rows y0..y1 (SIM_KERNEL_ACQ_OMT): eight columns at a time, so each
 /// column's run of rows is written as one span per row block.
 #[no_mangle]
-pub unsafe extern "C" fn acq_omt(om: *const u8, omt: *mut u8, cw: i32, ch: i32, y0: i32, y1: i32) {
+pub unsafe extern "C" fn acq_omt(om: u32, omt: u32, cw: i32, ch: i32, y0: i32, y1: i32) {
+    let om = waddr(om) as *const u8;
+    let omt = waddr(omt) as *mut u8;
     let (cw, ch) = (cw as usize, ch as usize);
     let (y0, y1) = (y0 as usize, y1 as usize);
     let mut x = 0usize;
@@ -1212,24 +1317,36 @@ pub unsafe extern "C" fn acq_omt(om: *const u8, omt: *mut u8, cw: i32, ch: i32, 
 /// area: the scan's own tests, made once per entry).
 #[no_mangle]
 pub unsafe extern "C" fn acq_pack(
-    es: *const i32,
-    xs: *const F32,
-    ys: *const F32,
-    own: *const I8I32,
-    flg: *const u8,
-    id: *const i32,
-    ag: *const i32,
-    ex: *mut F32,
-    ey: *mut F32,
-    eo: *mut i32,
-    ea: *mut i32,
-    eid: *mut i32,
+    es: u32,
+    xs: u32,
+    ys: u32,
+    own: u32,
+    flg: u32,
+    id: u32,
+    ag: u32,
+    ex: u32,
+    ey: u32,
+    eo: u32,
+    ea: u32,
+    eid: u32,
     e0: i32,
     e1: i32,
     tile: f64,
     gw: i32,
     gh: i32,
 ) {
+    let es = waddr(es) as *const i32;
+    let xs = waddr(xs) as *const F32;
+    let ys = waddr(ys) as *const F32;
+    let own = waddr(own) as *const I8I32;
+    let flg = waddr(flg) as *const u8;
+    let id = waddr(id) as *const i32;
+    let ag = waddr(ag) as *const i32;
+    let ex = waddr(ex) as *mut F32;
+    let ey = waddr(ey) as *mut F32;
+    let eo = waddr(eo) as *mut i32;
+    let ea = waddr(ea) as *mut i32;
+    let eid = waddr(eid) as *mut i32;
     for e in (e0 as usize)..(e1 as usize) {
         let q = rd(es, e);
         if q < 0 || (rd(flg, q as usize) & 1) != 0 {
@@ -1453,33 +1570,33 @@ unsafe fn cover(covf: *const u8, len: usize, i: i32) -> bool {
 /// id), and for the first two the structure its look would take.
 #[no_mangle]
 pub unsafe extern "C" fn acq_scan(
-    scls: *const i8,
-    sown: *const i8,
-    hss: *const i32,
-    sout: *mut i32,
-    xs: *const F32,
-    ys: *const F32,
-    own: *const I8I32,
-    flg: *const u8,
-    cmds: *const U8I32,
-    rng: *const F32,
-    id: *const i32,
-    outa: *mut i32,
-    tid: *mut i32,
-    ag: *const i32,
-    covf: *const u8,
-    hs: *const i32,
-    rs: *const i32,
-    rc: *const i32,
-    rst: *const i32,
-    es: *const i32,
-    om: *const u8,
-    omt: *const u8,
-    ex: *const F32,
-    ey: *const F32,
-    eo: *const i32,
-    ea: *const i32,
-    eid: *const i32,
+    scls: u32,
+    sown: u32,
+    hss: u32,
+    sout: u32,
+    xs: u32,
+    ys: u32,
+    own: u32,
+    flg: u32,
+    cmds: u32,
+    rng: u32,
+    id: u32,
+    outa: u32,
+    tid: u32,
+    ag: u32,
+    covf: u32,
+    hs: u32,
+    rs: u32,
+    rc: u32,
+    rst: u32,
+    es: u32,
+    om: u32,
+    omt: u32,
+    ex: u32,
+    ey: u32,
+    eo: u32,
+    ea: u32,
+    eid: u32,
     n: i32,
     per: i32,
     cw: i32,
@@ -1502,6 +1619,33 @@ pub unsafe extern "C" fn acq_scan(
     entries: i32,
     chunk: i32,
 ) {
+    let scls = waddr(scls) as *const i8;
+    let sown = waddr(sown) as *const i8;
+    let hss = waddr(hss) as *const i32;
+    let sout = waddr(sout) as *mut i32;
+    let xs = waddr(xs) as *const F32;
+    let ys = waddr(ys) as *const F32;
+    let own = waddr(own) as *const I8I32;
+    let flg = waddr(flg) as *const u8;
+    let cmds = waddr(cmds) as *const U8I32;
+    let rng = waddr(rng) as *const F32;
+    let id = waddr(id) as *const i32;
+    let outa = waddr(outa) as *mut i32;
+    let tid = waddr(tid) as *mut i32;
+    let ag = waddr(ag) as *const i32;
+    let covf = waddr(covf) as *const u8;
+    let hs = waddr(hs) as *const i32;
+    let rs = waddr(rs) as *const i32;
+    let rc = waddr(rc) as *const i32;
+    let rst = waddr(rst) as *const i32;
+    let es = waddr(es) as *const i32;
+    let om = waddr(om) as *const u8;
+    let omt = waddr(omt) as *const u8;
+    let ex = waddr(ex) as *const F32;
+    let ey = waddr(ey) as *const F32;
+    let eo = waddr(eo) as *const i32;
+    let ea = waddr(ea) as *const i32;
+    let eid = waddr(eid) as *const i32;
     let cws = tile * cs as f64;
     let stride = bc + 1;
     let plane = stride * (br + 1);

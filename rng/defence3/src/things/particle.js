@@ -14,7 +14,7 @@ class Particle {
         // derived, so the visual RNG sequence is unchanged.
         this.hop = 0.12 + s * 0.1;
     }
-    update() { this.prevX = this.x; this.prevY = this.y; this.x += this.vx; this.y += this.vy; this.life--; return this.life > 0; }
+    update() { this.prevX = this.x; this.prevY = this.y; this.x += this.vx * simDk; this.y += this.vy * simDk; this.life -= simDk; return this.life > 0; }
     draw(ctx) { ctx.globalAlpha = this.life / 35; ctx.fillStyle = this.color; ctx.fillRect(this.x, this.y, 3, 3); ctx.globalAlpha = 1; }
 }
 function createExplosion(x, y, c, n) {

@@ -39,6 +39,11 @@ let netFairInputDelay = true;
 let netMatchInputDelay = 0;
 let netMatchDelayCalmSince = 0;
 let netMatchTickMs = 0;
+// Whether the step interval follows the machines' pace with steps of more
+// base ticks (simDk) (solo too: its own machine's): off, every step is one
+// base tick and a slow match plays slower than wall time. (Tests that need
+// fixed steps turn it off.)
+let SIM_ADAPTIVE_STEPS = true;
 let netMatchPaceChangedAt = 0;
 let netSimulationTickTimes = [];
 let netSimulationWorkTimes = [];
@@ -226,7 +231,8 @@ function netComputeRttInputDelayTicks(link = netGetHostLinkStats()) {
     let rtt = netRttBudgetMs(link);
     if (!Number.isFinite(rtt)) return Math.max(2, Math.floor(Number(LOCKSTEP_PIPELINE_MIN) || 2));
     let budgetMs = rtt + netFrameMs() + 10;
-    return Math.max(1, Math.ceil(budgetMs / TICK_MS));
+    // (In steps: a step of several base ticks lasts their time.)
+    return Math.max(1, Math.ceil(budgetMs / netSimulationTickMs()));
 }
 
 function netTargetInputDelayTicks(now = performance.now()) {
@@ -286,7 +292,7 @@ function netHostUpdateMatchInputDelay(now = performance.now()) {
             if (!Number.isFinite(need) || need <= 0) {
                 let link = netGetLinkStats(pid);
                 let rtt = netRttBudgetMs(link);
-                need = Number.isFinite(rtt) ? Math.ceil((rtt + 1000 / 60 + 10) / TICK_MS) : Math.floor(Number(LOCKSTEP_PIPELINE_MIN) || 2);
+                need = Number.isFinite(rtt) ? Math.ceil((rtt + 1000 / 60 + 10) / netSimulationTickMs()) : Math.floor(Number(LOCKSTEP_PIPELINE_MIN) || 2);
             }
             target = Math.max(target, need);
         }
@@ -362,9 +368,22 @@ function netCompletedSimulationTps() {
 
 // Wall-clock pace is shared; the deterministic simulation's TICK_RATE stays
 // fixed. This also includes the host's completed work, not just its guests'.
+// A step interval: whole base ticks (the step size, simStepTicksForMs), so
+// game time stays at wall time; past SIM_DK_MAX base ticks a step the match
+// plays slower.
 function netSimulationTickMs() {
-    return isMultiplayer && netFairInputDelay ? Math.max(TICK_MS, netMatchTickMs) : TICK_MS;
+    const ms = netPaceRawMs();
+    if (!(ms > TICK_MS) || !SIM_ADAPTIVE_STEPS) return ms;
+    const dk = simStepTicksForMs(ms);
+    return dk < SIM_DK_MAX ? dk * TICK_MS : Math.max(dk * TICK_MS, ms);
 }
+// The pace as measured (not whole base ticks).
+function netPaceRawMs() {
+    if (isMultiplayer ? !netFairInputDelay : !SIM_ADAPTIVE_STEPS) return TICK_MS;
+    return Math.max(TICK_MS, netMatchTickMs);
+}
+// The base ticks of a step sealed (or, solo, run) now.
+function netStepTicks() { return SIM_ADAPTIVE_STEPS ? simStepTicksForMs(netSimulationTickMs()) : 1; }
 
 function netSimulationBusy() {
     let meanWork = netSimulationWorkTimes.length
@@ -383,15 +402,19 @@ function netSimulationBusy() {
 }
 
 function netHostUpdateSimulationPace(now = performance.now()) {
-    if (!isHost || !isMultiplayer || !netFairInputDelay || !gameStarted || gameOver) return;
+    // (Solo too, with adaptive steps: its own machine's pace.)
+    if (isMultiplayer ? (!isHost || !netFairInputDelay) : !SIM_ADAPTIVE_STEPS) return;
+    if (!gameStarted || gameOver) return;
     let ownRate = netCompletedSimulationTps();
     if (!(ownRate > 0)) return;
     let busy = netSimulationBusy();
     let rates = [busy ? ownRate : TICK_RATE];
-    let interval = netSimulationTickMs();
+    // (The pace as measured: its whole base ticks would stop every gradual
+    // probe below at the same step size.)
+    let interval = netPaceRawMs();
     let catchUpRate = 1000 / interval;
     let completed = netCompletedSimulationTick();
-    for (let pid of getActiveMatchPeerIds()) {
+    for (let pid of isMultiplayer ? getActiveMatchPeerIds() : []) {
         if (pid === myPeerId) continue;
         let r = netRemoteReportByPeer[pid];
         if (!r || now - r.at > 3000 || !(r.simTps > 0)) return;
@@ -418,7 +441,11 @@ function netHostUpdateSimulationPace(now = performance.now()) {
         return;
     }
     if (!busy && interval > TICK_MS && now - netMatchPaceChangedAt >= 1000) {
-        netMatchTickMs = TICK_MS;
+        // (Down in steps: a step of fewer base ticks costs more than its
+        // share (its per-step work), and a pace rounded up to whole base
+        // ticks leaves slack that reads as idle: a jump to one base tick
+        // from many came straight back, the host running ahead.)
+        netMatchTickMs = interval > TICK_MS * 1.5 ? Math.max(TICK_MS, interval / 1.5) : TICK_MS;
         netMatchPaceChangedAt = now;
         return;
     }

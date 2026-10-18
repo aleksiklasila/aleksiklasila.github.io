@@ -306,7 +306,7 @@ function setPlayerThingBoost(playerId, kind, key, resourceKey, steps) {
 // Every BOOST_CHECK_TICKS: a stockpile that went into debt, or out of it,
 // switches the player's boosts of that resource off or on.
 function boostTick() {
-    if (!(gameTime % BOOST_CHECK_TICKS === 0)) return;
+    if (!simStepCrosses(0, BOOST_CHECK_TICKS)) return;
     for (let pid = 0; pid < players.length; pid++) {
         let p = players[pid];
         if (!p) continue;
@@ -395,7 +395,8 @@ function _shrineDrainFixed(pid, curFixed, mode, carry = null) {
     if (!(curFixed > 0) || !mode) return null;
     let rate = Number(getBuildingStatForOwner(pid, 'shrine', 1, 'drainRate'));
     if (!(rate > 0)) return null;
-    let take = Math.min(curFixed, Math.max(1, Math.floor(rate * RESOURCE_FIXED_POINT_SCALE / Math.max(1, TICK_RATE))));
+    // (A step of several base ticks (simDk): their drain.)
+    let take = Math.min(curFixed, Math.max(1, Math.floor(rate * RESOURCE_FIXED_POINT_SCALE * simDk / Math.max(1, TICK_RATE))));
     let mult = Number(getBuildingStatForOwner(pid, 'shrine', 1, 'multiplier'));
     let gain = take * (mult > 0 ? mult : 0);
     let shareE = mode === SHRINE_DRAIN_ENERGY ? 1 : (mode === SHRINE_DRAIN_ASTAR ? 0 : 0.5);
@@ -3789,7 +3790,8 @@ function buildingResearchSweep() {
     let any = false;
     for (let i = 0; i < players.length && !any; i++) if (players[i] && (players[i].bResVer | 0) > 0) any = true;
     if (!any) return;
-    const ph = gameTime % TICK_RATE;
+    // (The slices of the step's base ticks.)
+    for (const ph of simStepPhases(TICK_RATE)) {
     for (let i = ph; i < towers.length; i += TICK_RATE) { const t = towers[i]; if (t) buildingResearchCatchUp(t, 0, t.owner, t.type); }
     for (let i = ph; i < barracks.length; i += TICK_RATE) { const b = barracks[i]; if (b) buildingResearchCatchUp(b, 1, b.owner, 'barrack_' + b.unitType); }
     for (let i = ph; i < collectorSpawners.length; i += TICK_RATE) { const c = collectorSpawners[i]; if (c) buildingResearchCatchUp(c, 1, c.owner, c.type); }
@@ -3798,6 +3800,7 @@ function buildingResearchSweep() {
         const item = items[i], cell = item && grid[item.gy] && grid[item.gy][item.gx];
         // (Barracks and spawners are cell items too: their own lists' turn.)
         if (cell && cell.item === item && !_isProducerStructure(item)) buildingResearchCatchUp(item, 2, cell.owner, item.type);
+    }
     }
 }
 function _applyBuildingResearchNow(owner, buildingKey, statKey) {

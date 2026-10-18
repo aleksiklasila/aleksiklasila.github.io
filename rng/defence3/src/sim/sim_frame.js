@@ -39,6 +39,22 @@ const SIM_UF_FLYING = 1, SIM_UF_SNAKE = 2, SIM_UF_WORKER = 4, SIM_UF_HOLD = 8, S
 const SIM_UNIT_STATUS_NAMES = ['walk', 'angry', 'work', 'sleep'];
 const _simUnitStatusCode = { walk: 0, angry: 1, work: 2, sleep: 3 };
 
+// The presentation's metadata table (sim_presentation.js, by unit slot):
+// the slow columns a frame copies (presentation_worker.js META_COPY), the
+// metadata flags and the id they are for. (In a frame's layout it was 116
+// bytes a slot, 70 of them never written: ~0.5 GB at 8M units.)
+const SIM_META_I32 = ['id', 'flags', 'orderDest', 'orderTick'], SIM_META_F32 = ['vision', 'maxEnergy', 'cargo', 'tx', 'ty'],
+    SIM_META_I16 = ['type', 'wtype', 'wstate', 'style', 'watchedBy'];
+const SIM_META_SLOT_BYTES = 4 * (SIM_META_I32.length + SIM_META_F32.length) + 2 * SIM_META_I16.length;
+function simMetaViews(buf, cap) {
+    const v = { buf, cap };
+    let o = 0;
+    for (const k of SIM_META_I32) { v[k] = new Int32Array(buf, o, cap); o += 4 * cap; }
+    for (const k of SIM_META_F32) { v[k] = new Float32Array(buf, o, cap); o += 4 * cap; }
+    for (const k of SIM_META_I16) { v[k] = new Int16Array(buf, o, cap); o += 2 * cap; }
+    return v;
+}
+
 // Typed-array views of a frame buffer laid out for `cap` slots.
 function simFrameViews(buf, cap) {
     return { buf, cap,
@@ -109,7 +125,7 @@ function _simFrameBindBuffer(buf) {
 
 function simFrameReset() {
     let R = _simRenderSlots;
-    for (let u of R.owner) if (u) u._rslot = undefined;
+    for (let u of R.owner) if (u) u._rslot = -1;
     R.owner = []; R.free = []; R.version++;
     _simFrameOrderLast = null;
     _simFrameStrings.sent = 1;   // the page starts over: every code is new to it
@@ -122,8 +138,25 @@ function _simFrameCode(s) {
     return c;
 }
 
+// The worker's own unit frames given up: the presentation worker makes the
+// page's frames (sim_presentation.js), and this worker made one at the
+// start only (and makes one at a restore). Its buffers, their bindings and
+// the per-slot inputs (~1 GB at 8M units, held for good before), made again
+// by the next simFrameEncode.
+function simFrameReleaseBuffers() {
+    _simFramePool.length = 0;
+    _simFrameLastViews = null;
+    for (const id of _simSharedFrames.keys()) simParallelBind('frame.buffer.' + id, null);
+    _simSharedFrames.clear();
+    const S = _simFrameInput;
+    if (S.cap) {
+        for (const k of ['slot', 'targetX', 'targetY', 'still', 'flash']) { S[k] = null; simParallelBind('frame.' + k, null); }
+        S.cap = 0;
+    }
+}
 function simFrameReturn(buf) {
     if (!buf || !buf.byteLength) return;
+    if (typeof _simPresentation !== 'undefined' && _simPresentation) { simFrameReleaseBuffers(); return; }
     if (typeof SharedArrayBuffer === 'function' && buf instanceof SharedArrayBuffer) {
         const id = new DataView(buf, buf.byteLength - 4, 4).getUint32(0, true);
         buf = _simSharedFrames.get(id);
@@ -146,8 +179,10 @@ function _simFrameAcquire(bytes, shared = false) {
         if ((typeof SharedArrayBuffer === 'function' && b instanceof SharedArrayBuffer) === shared
             && b.byteLength >= bytes + (shared ? 4 : 0) && b.byteLength <= bytes * 4 + 65536) { P.splice(i, 1); return b; }
     }
+    // (A sixteenth to grow into: a frame is per unit slot; at 8M units a
+    // quarter more was ~0.3 GB a buffer.)
     const Type = shared ? SharedArrayBuffer : ArrayBuffer;
-    return new Type(Math.ceil(bytes * 1.25) + 4096);
+    return new Type(Math.ceil(bytes * 1.0625) + 4096);
 }
 
 // A pooled buffer of exactly this size (per-tick grids).
@@ -175,7 +210,7 @@ function _simSignatureHash(u) {
 
 function _simRenderSlotOf(u) {
     let R = _simRenderSlots, slot = u._rslot;
-    if (slot !== undefined && R.owner[slot] === u) return slot;
+    if (slot >= 0 && R.owner[slot] === u) return slot;
     slot = R.free.length ? R.free.pop() : R.owner.length;
     R.owner[slot] = u;
     u._rslot = slot;
@@ -282,7 +317,7 @@ function simFrameEncode() {
     for (let slot = 0; slot < n; slot++) {
         if (R.stamp[slot] !== stampTick) {
             F.id[slot] = -1; flagsA[slot] = 0;
-            if (R.owner[slot]) { R.owner[slot]._rslot = undefined; R.owner[slot] = null; R.free.push(slot); R.version++; }
+            if (R.owner[slot]) { R.owner[slot]._rslot = -1; R.owner[slot] = null; R.free.push(slot); R.version++; }
         }
     }
     if (orderChanged) { _simFrameOrderLast = order.slice(0, live); R.version++; }
@@ -292,8 +327,13 @@ function simFrameEncode() {
     P[7] = RENDERER3D_IDLE_DELAY_SECONDS; P[8] = RENDERER3D_IDLE_SETTLE_SECONDS;
     P[9] = bufferId;
     simParallelRun(SIM_KERNEL_UNIT_FRAME, Math.ceil(live / P[2]));
+    _simFrameLastViews = F;
     return { buf, cap, n, count: live, mver: R.version };
 }
+// The last frame this worker made (by render slot: unit._rslot), until its
+// buffer is given up: what the presentation's metadata table starts from
+// (sim_presentation.js simPresentationSeedMetadata).
+let _simFrameLastViews = null;
 
 // Details the page watches (its selection): what a frame does not carry,
 // for these units only. Entities as refs: ['u', id] or ['b', gx, gy].
@@ -362,7 +402,7 @@ class PageUnit {
         this._s = slot;
         this._last = null;   // last values, once dead
         this._det = null;    // detail record (watched units)
-        this._at = { x: 0, y: 0 };
+        this._at = null;     // attackTarget's point, made at its first read
         this._ox = undefined; this._oy = undefined;
     }
     _col(k) { let s = this._s; return s >= 0 ? _pageFrame[k][s] : (this._last ? this._last[k] : 0); }
@@ -425,7 +465,7 @@ class PageUnit {
     get _energyBlockedUntil() { return this._flag(SIM_UF_ENERGY_BLOCKED) ? gameTime + 1 : undefined; }
     get attackTarget() {
         if (!this._flag(SIM_UF_ATTACK_TARGET)) return null;
-        let t = this._at; t.x = this._col('tx'); t.y = this._col('ty'); return t;
+        let t = this._at || (this._at = { x: 0, y: 0 }); t.x = this._col('tx'); t.y = this._col('ty'); return t;
     }
     get vis() { let s = BASE_UNIT_STATS[this.unitType]; return s ? s.vis : undefined; }
     get color() { let s = BASE_UNIT_STATS[this.unitType]; return s ? s.color : undefined; }
@@ -506,8 +546,24 @@ PageUnit.prototype._frameView = true;
 // draw), with every field it reads coming from the frame.
 if (typeof Unit === 'function') Object.setPrototypeOf(PageUnit.prototype, Unit.prototype);
 
+// The page's unit views by id: a Map's interface over an array indexed by id
+// (ids are dense, from 1: a Map of 8M views was ~20 bytes an entry more, and
+// a hash table the size of the army for the collector to walk).
+class PageUnitIdMap {
+    constructor() { this.a = []; this.size = 0; }
+    get(id) { return id >= 0 ? this.a[id] : undefined; }
+    has(id) { return id >= 0 && this.a[id] !== undefined; }
+    set(id, v) { if (!(id >= 0)) return this; if (this.a[id] === undefined) this.size++; this.a[id] = v; return this; }
+    delete(id) { if (!(id >= 0) || this.a[id] === undefined) return false; this.a[id] = undefined; this.size--; return true; }
+    clear() { this.a = []; this.size = 0; }
+    *values() { const a = this.a; for (let i = 0; i < a.length; i++) if (a[i] !== undefined) yield a[i]; }
+    *keys() { const a = this.a; for (let i = 0; i < a.length; i++) if (a[i] !== undefined) yield i; }
+    *entries() { const a = this.a; for (let i = 0; i < a.length; i++) if (a[i] !== undefined) yield [i, a[i]]; }
+    [Symbol.iterator]() { return this.entries(); }
+    forEach(f) { const a = this.a; for (let i = 0; i < a.length; i++) if (a[i] !== undefined) f(a[i], i, this); }
+}
 // Detail refs resolve to what the page has: a unit view or a structure.
-let _pageUnitsById = new Map();
+let _pageUnitsById = new PageUnitIdMap();
 function _pageResolveDetailRef(u, k) {
     let d = u._det;
     let ref = d ? d[k] : null;

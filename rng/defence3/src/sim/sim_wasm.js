@@ -26,7 +26,44 @@ const SIM_HEAP_PAD = 64;
 // SIM_HEAP_FREE_TICKS ticks later (code of that tick may still hold it),
 // and only once no name binds it.
 const SIM_HEAP_FREE_TICKS = 2;
-const SIM_HEAP_PAGE = 65536, SIM_HEAP_MAX_PAGES = 65536;
+const SIM_HEAP_PAGE = 65536;
+// 4 GiB under wasm32; 16 GiB with the memory64 build (SIM_WASM64).
+let SIM_HEAP_MAX_PAGES = 65536;
+// The memory64 build (sim_wasm64_bin.js, wasm/build.cjs --wasm64): the heap
+// past 4 GiB (millions of units), where the browser has a shared memory64;
+// else wasm32 (node, the test harness). Off with ?wasm64=0.
+let SIM_WASM64 = false;
+let SIM_WASM64_ENABLED = !(typeof location !== 'undefined' && location && /[?&]wasm64=0\b/.test(String(location.search || '')));
+// A shared memory of these sizes in pages (memory64: BigInt sizes).
+function _simWasmMemory(initial, maximum) {
+    if (!SIM_WASM64) return new WebAssembly.Memory({ initial, maximum, shared: true });
+    return new WebAssembly.Memory({ initial: BigInt(initial), maximum: BigInt(maximum), address: 'i64', shared: true });
+}
+function _simWasmGrow(memory, pages) { return SIM_WASM64 ? Number(memory.grow(BigInt(pages))) : memory.grow(pages); }
+// The memory64 build's bytes where this engine compiles it and makes its
+// memory with the standard API (BigInt sizes), else null. (Node's older
+// memory64, the index option, would not grow past the first pages; an
+// engine without memory64 ignores the option and makes a 32-bit memory.)
+function _simWasm64Bytes() {
+    if (typeof SIM_WASM64_BIN !== 'string' || !SIM_WASM64_ENABLED) return null;
+    let bytes;
+    try { bytes = _simWasmDecode(SIM_WASM64_BIN); if (!WebAssembly.validate(bytes)) return null; } catch (err) { return null; }
+    try { new WebAssembly.Memory({ initial: 1n, maximum: 2n, address: 'i64', shared: true }); return bytes; } catch (err) { return null; }
+}
+// The exports, with the memory64 build's i64 parameters (pointers, usize)
+// taken as numbers (SIM_WASM64_I64, from the module's types).
+function _simWasmExports(exp, table = typeof SIM_WASM64_I64 === 'object' ? SIM_WASM64_I64 : null) {
+    if (!SIM_WASM64 || !table) return exp;
+    const out = {};
+    for (const k of Object.keys(exp)) out[k] = exp[k];
+    for (const name of Object.keys(table)) {
+        const fn = exp[name];
+        if (typeof fn !== 'function') continue;
+        const big = new Set(table[name]), args = Array.from({ length: fn.length }, (_, i) => 'a' + i);
+        out[name] = new Function('f', 'return function (' + args.join(', ') + ') { return f(' + args.map((a, i) => big.has(i) ? 'BigInt(' + a + ')' : a).join(', ') + '); };')(fn);
+    }
+    return out;
+}
 // Each helper's stack (the module's own, at the memory's start, is the
 // simulation thread's).
 const SIM_WASM_STACK = 256 * 1024;
@@ -36,7 +73,7 @@ const SIM_WASM_SCRATCH = 4 * 1024 * 1024;
 // addresses, 4 KB of doubles.
 const SIM_WASM_ARGS = 8192;
 function _simWasmArgsAt(p) {
-    _simWasmArgs = p;
+    _simWasmArgs = p; _simWasmArgsW = _simWEnc(p);
     _simWasmArgI = p > 0 ? new Int32Array(_simWasmMem.buffer, p, 1024) : null;
     _simWasmArgF = p > 0 ? new Float64Array(_simWasmMem.buffer, p + 4096, 512) : null;
 }
@@ -85,12 +122,16 @@ function simWasmInit() {
         // ticks, so arrays freed there would never be reused. Its worker
         // failed: the page ticks, see _simWasmWorkerFailed.)
         if (typeof simClientEnabled !== 'undefined' && simClientEnabled && !_simWasmWorkerFailed()) { H.workerRefused = true; return false; }
-        const memory = new WebAssembly.Memory({ initial: 256, maximum: SIM_HEAP_MAX_PAGES, shared: true });
+        const bytes64 = _simWasm64Bytes();
+        SIM_WASM64 = !!bytes64;
+        SIM_HEAP_MAX_PAGES = SIM_WASM64 ? 262144 : 65536;
+        _simWShift = SIM_WASM64 ? 2 : 0;
+        const memory = _simWasmMemory(256, SIM_HEAP_MAX_PAGES);
         if (!(memory.buffer instanceof SharedArrayBuffer)) return false;
-        const module = new WebAssembly.Module(_simWasmDecode(SIM_WASM_BIN));
-        const exp = new WebAssembly.Instance(module, { env: { memory } }).exports;
+        const module = new WebAssembly.Module(bytes64 || _simWasmDecode(SIM_WASM_BIN));
+        const exp = _simWasmExports(new WebAssembly.Instance(module, { env: { memory } }).exports);
         H.memory = memory; H.module = module;
-        H.top = _simHeapRound(exp.__heap_base.value);
+        H.top = _simHeapRound(Number(exp.__heap_base.value));
         H.hw = H.top;
         const on = new Int32Array(new SharedArrayBuffer(4));
         on[0] = 1;
@@ -124,6 +165,7 @@ function _simHeapAllocImpl(Type, n, clear = true) {
     // (The heap full: plain shared memory, which the Rust kernels cannot read.)
     if (ptr < 0) return new Type(new SharedArrayBuffer(Math.max(1, n) * Type.BYTES_PER_ELEMENT));
     const buf = H.memory.buffer;
+    _simHeapBufs.add(buf);
     // (Only below the high-water mark; big ones by the helpers too:
     // simParallelZeroHeap.)
     const used = clear ? Math.min(bytes, H.fresh - ptr) : 0;
@@ -156,7 +198,7 @@ function _simHeapTake(bytes) {
         if (cur + need > SIM_HEAP_MAX_PAGES) return -1;
         // (In steps of an eighth, at least 16 MB: growing is a commit.)
         const step = Math.min(SIM_HEAP_MAX_PAGES - cur, Math.max(need, Math.ceil(cur / 8), 256));
-        try { H.memory.grow(step); } catch (err) { try { H.memory.grow(need); } catch (err2) { return -1; } }
+        try { _simWasmGrow(H.memory, step); } catch (err) { try { _simWasmGrow(H.memory, need); } catch (err2) { return -1; } }
     }
     H.top = end;
     H.fresh = Math.max(p, H.hw);
@@ -217,7 +259,7 @@ function simHeapRoom(bytes) {
     if (room >= bytes) return true;
     const cur = have / SIM_HEAP_PAGE, need = Math.ceil((bytes - room) / SIM_HEAP_PAGE);
     if (cur + need > SIM_HEAP_MAX_PAGES) return false;
-    try { H.memory.grow(need); return true; } catch (err) { return false; }
+    try { _simWasmGrow(H.memory, need); return true; } catch (err) { return false; }
 }
 // Whether arr is in the wasm heap (the Rust kernels can read it); true
 // without a heap.
@@ -299,13 +341,17 @@ function _simHeapGive(p, s) {
 }
 function _simHeapPtrImpl(arr) {
     const p = arr ? _simHeap.ptr.get(arr) : undefined;
-    return p === undefined ? -1 : p;
+    if (p !== undefined) return p;
+    // (A view into the heap's memory: its offset. Each growth gives the
+    // memory a new buffer object; the ones handed out are remembered.)
+    return arr && arr.buffer && _simHeapBufs.has(arr.buffer) ? arr.byteOffset : -1;
 }
+const _simHeapBufs = new WeakSet();
 function simHeapStats() {
     const H = _simHeap;
     let freeBytes = 0;
     for (let i = 1; i < H.free.length; i += 2) freeBytes += H.free[i];
-    return { ready: H.ready, kernels: simWasmActive(), hash: typeof SIM_WASM_HASH === 'string' ? SIM_WASM_HASH : null, error: H.error,
+    return { ready: H.ready, kernels: simWasmActive(), wasm64: SIM_WASM64, hash: SIM_WASM64 ? SIM_WASM64_HASH : typeof SIM_WASM_HASH === 'string' ? SIM_WASM_HASH : null, error: H.error,
         memoryMB: H.memory ? Math.round(H.memory.buffer.byteLength / 1048576) : 0, liveMB: Math.round(H.live / 1048576), peakMB: Math.round(H.peak / 1048576),
         freeMB: Math.round(freeBytes / 1048576), arrays: H.arrays, pendingFrees: H.pending.length };
 }
@@ -317,14 +363,15 @@ function simWasmHelperPayload() {
     const p = _simHeapTake(SIM_WASM_STACK);
     if (p < 0) return null;
     const scratch = _simHeapTake(SIM_WASM_SCRATCH), args = _simHeapTake(SIM_WASM_ARGS);
-    return { module: _simHeap.module, memory: _simHeap.memory, stackTop: p + SIM_WASM_STACK, on: _simWasmOn,
+    return { module: _simHeap.module, memory: _simHeap.memory, stackTop: p + SIM_WASM_STACK, on: _simWasmOn, w64: SIM_WASM64, i64: SIM_WASM64 ? SIM_WASM64_I64 : null,
         scratch: scratch > 0 ? scratch : 0, scratchWords: scratch > 0 ? SIM_WASM_SCRATCH >> 2 : 0, args: args > 0 ? args : 0 };
 }
 // In a helper: its instance (none if it fails: its chunks run in JS).
 function simWasmHelperInit(w) {
     try {
-        const exp = new WebAssembly.Instance(w.module, { env: { memory: w.memory } }).exports;
-        exp.__stack_pointer.value = w.stackTop;
+        SIM_WASM64 = !!w.w64; _simWShift = SIM_WASM64 ? 2 : 0; SIM_HEAP_MAX_PAGES = SIM_WASM64 ? 262144 : 65536;
+        const exp = _simWasmExports(new WebAssembly.Instance(w.module, { env: { memory: w.memory } }).exports, w.i64);
+        exp.__stack_pointer.value = SIM_WASM64 ? BigInt(w.stackTop) : w.stackTop;
         _simWasmOn = w.on;
         _simWasmMem = w.memory;
         _simWasmScratch = w.scratch | 0; _simWasmScratchWords = w.scratchWords | 0;

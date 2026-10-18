@@ -184,12 +184,16 @@ function updateLocalVisibilityHistory(h) {
     // Units: the live ones (seen ones only are drawn).
     h.view.units = units;
     h.view.visibilityGrid = h.fog;
-    if (!first && h.view.units === units && (gameTime % HISTORY_STRUCTURE_TICKS) !== 0) {
+    // (Every HISTORY_STRUCTURE_TICKS of game time: a multiple of them passed
+    // since the last look, steps of several base ticks too.)
+    const due = Math.floor(gameTime / HISTORY_STRUCTURE_TICKS) !== Math.floor((Number.isFinite(h._structAt) ? h._structAt : -1) / HISTORY_STRUCTURE_TICKS);
+    if (!first && h.view.units === units && !due) {
         const visibleNow = (x, y) => !!(h.light[y] && h.light[y][x] > 0);
         h.view.projectiles = projectiles.filter(e => visibleNow(Math.floor(e.x / TILE), Math.floor(e.y / TILE)));
         h.view.particles = particles.filter(e => visibleNow(Math.floor(e.x / TILE), Math.floor(e.y / TILE)));
         return;
     }
+    h._structAt = gameTime;
     const generation = h.generation = (h.generation || 0) + 1;
     const visible = (x, y) => !!(h.light[y] && h.light[y][x] > 0);
     const live = { towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems };

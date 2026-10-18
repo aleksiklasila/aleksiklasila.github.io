@@ -26,7 +26,7 @@ function _simShadowScriptUrls() {
 
 function simShadowLoad() {
     if (!simShadowEnabled || _simShadow) return _simShadow;
-    let worker = new Worker('./src/sim/sim_worker.js?v=20261008-brain1');
+    let worker = new Worker('./src/sim/sim_worker.js?v=20261018-dk');
     _simShadow = {
         worker, loaded: false, started: false, loadMs: 0, pending: new Map(), compared: 0, mismatches: [], errors: [],
         workerMs: [], lastTick: -1, startTick: -1, queue: []
@@ -89,11 +89,11 @@ function simShadowStartMatch(snapshotText) {
 }
 
 // From runOneTick, after the page ran the tick: the same commands for the worker.
-function simShadowAfterTick(tick, actions, teams, flush) {
+function simShadowAfterTick(tick, actions, teams, flush, dk = 1) {
     let s = _simShadow;
     if (!s) return;
     s.pending.set(tick, computeLockstepStateHashFast(tick));
-    let msg = { type: 'tick', tick, actions, teams, flush: !!flush };
+    let msg = { type: 'tick', tick, actions, teams, flush: !!flush, dk };
     if (s.started) s.worker.postMessage(msg); else s.queue.push(msg);
 }
 

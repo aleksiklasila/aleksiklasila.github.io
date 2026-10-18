@@ -1,4 +1,10 @@
 "use strict";
+// (Contexts without data_static.js, the unit tests': one base tick a step.)
+if (typeof simDk === 'undefined') {
+    globalThis.simDk = 1;
+    globalThis.simStepCrosses = (phase, period) => !(period > 1) || ((((globalThis.gameTime | 0) + phase) % period) + period) % period < globalThis.simDk;
+    globalThis.simStepPhases = period => [(((globalThis.gameTime | 0) % period) + period) % period];
+}
 
 // ============================================================
 // PROJECTILE CLASS
@@ -75,7 +81,13 @@ class Projectile {
         return source;
     }
 
+    // A step: its base ticks (simDk) one at a time (a shot's hit is looked
+    // for where it is each base tick: one stride of several passed by).
     update() {
+        for (let k = simDk; k > 1; k--) if (!this._tick()) return false;
+        return this._tick();
+    }
+    _tick() {
         this.x += this.vx; this.y += this.vy;
         this.life--;
 
@@ -106,8 +118,10 @@ class Projectile {
         let sourceAttacker = this.getSourceAttacker();
         if (t.turretImmune) { createExplosion(t.x, t.y, "#888", 3); return; }
         let targetEnergyBefore = t.energy;
-        let baseDmg = this.dmg;
-        let splashDmg = Number.isFinite(this.blastDamage) ? this.blastDamage : baseDmg;
+        // (A tower's shots of a step together (tower.js _towerProjectile):
+        // their damage at once, a status's tick damage of one.)
+        let baseDmg = this.dmg / (this.shots > 1 ? this.shots : 1);
+        let splashDmg = Number.isFinite(this.blastDamage) ? this.blastDamage : this.dmg;
         let splashRadiusArea = Number.isFinite(this.blastRadius) ? this.blastRadius : ((64 / TILE) / AREA_UNIT_TILE_EQUIVALENT);
         let splashRadiusPx = Math.max(0, Number(splashRadiusArea) * AREA_UNIT_TILE_EQUIVALENT * TILE);
         let hasBlast = Number.isFinite(this.blastDamage) && this.blastDamage > 0 && Number.isFinite(this.blastRadius) && this.blastRadius > 0;
@@ -170,7 +184,7 @@ class Projectile {
     hitBuilding(b) {
         let buildingEnergyBefore = b.energy;
         // Apply damage to a building (tower, barrack, spawner)
-        let actualDmg = this.dmg;
+        let actualDmg = this.dmg, dotDmg = this.dmg / (this.shots > 1 ? this.shots : 1);
         if (this.type === 'fire' || this.type === 'ice' || this.type === 'poison' || this.type === 'water' || this.type === 'sand_gun' || this.type === 'elements') {
             actualDmg += (this.level * 2); // Elements apply burst damage to buildings
         }
@@ -178,26 +192,26 @@ class Projectile {
         if (this.type === 'watch_tower') {
             applyStatusEffect(b, 'watch', this.level || 1, 0, this.sourceOwner, this.type);
         } else if (this.type === 'fire') {
-            applyStatusEffect(b, 'fire', this.level || 1, this.dmg * 0.05, this.sourceOwner, this.type);
+            applyStatusEffect(b, 'fire', this.level || 1, dotDmg * 0.05, this.sourceOwner, this.type);
             if (!isEffectImmune(b, 'fire')) b.energy -= actualDmg;
         } else if (this.type === 'poison') {
-            applyStatusEffect(b, 'poison', this.level || 1, this.dmg * 0.1, this.sourceOwner, this.type);
+            applyStatusEffect(b, 'poison', this.level || 1, dotDmg * 0.1, this.sourceOwner, this.type);
             if (!isEffectImmune(b, 'poison')) b.energy -= actualDmg;
         } else if (this.type === 'water') {
             applyStatusEffect(b, 'water', this.level || 1, 0, this.sourceOwner, this.type);
             if (!isEffectImmune(b, 'water')) b.energy -= actualDmg;
         } else if (this.type === 'ice') {
-            applyStatusEffect(b, 'ice', this.level || 1, this.dmg * 0.2, this.sourceOwner, this.type);
+            applyStatusEffect(b, 'ice', this.level || 1, dotDmg * 0.2, this.sourceOwner, this.type);
             if (!isEffectImmune(b, 'ice')) b.energy -= actualDmg;
         } else if (this.type === 'sand_gun') {
             applyStatusEffect(b, 'sand', this.level || 1, 0, this.sourceOwner, this.type);
             if (!isEffectImmune(b, 'sand')) b.energy -= actualDmg;
         } else if (this.type === 'elements') {
             let appliedAny = false;
-            appliedAny = applyStatusEffect(b, 'fire', this.level || 1, this.dmg * 0.2, this.sourceOwner, this.type) || appliedAny;
-            appliedAny = applyStatusEffect(b, 'poison', this.level || 1, this.dmg * 0.2, this.sourceOwner, this.type) || appliedAny;
+            appliedAny = applyStatusEffect(b, 'fire', this.level || 1, dotDmg * 0.2, this.sourceOwner, this.type) || appliedAny;
+            appliedAny = applyStatusEffect(b, 'poison', this.level || 1, dotDmg * 0.2, this.sourceOwner, this.type) || appliedAny;
             appliedAny = applyStatusEffect(b, 'water', this.level || 1, 0, this.sourceOwner, this.type) || appliedAny;
-            appliedAny = applyStatusEffect(b, 'ice', this.level || 1, this.dmg * 0.2, this.sourceOwner, this.type) || appliedAny;
+            appliedAny = applyStatusEffect(b, 'ice', this.level || 1, dotDmg * 0.2, this.sourceOwner, this.type) || appliedAny;
             appliedAny = applyStatusEffect(b, 'sand', this.level || 1, 0, this.sourceOwner, this.type) || appliedAny;
             if (appliedAny) b.energy -= actualDmg;
         } else {

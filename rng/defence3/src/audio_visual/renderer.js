@@ -1,3 +1,9 @@
+// (Contexts without data_static.js, the unit tests': one base tick a step.)
+if (typeof simDk === 'undefined') {
+    globalThis.simDk = 1;
+    globalThis.simStepCrosses = (phase, period) => !(period > 1) || ((((globalThis.gameTime | 0) + phase) % period) + period) % period < globalThis.simDk;
+    globalThis.simStepPhases = period => [(((globalThis.gameTime | 0) % period) + period) % period];
+}
 let canvas, ctx, bgCanvas, bgCtx, overlayCanvas, overlayCtx, minimapCanvas, minimapCtx;
 let renderDimensionMode = '2d';
 let renderer3dInstance = null;
@@ -2482,9 +2488,15 @@ function buildScaleFrameData(flat2d, view) {
 // history. It supersedes their old destination until the displayed state
 // includes the command's tick. Authoritative orders then own the markers.
 const _pendingUnitOrderMarkers = new Map(), _pendingRallyMarkers = new Map();
+// A big order's one marker (its units share the target) until the frames
+// show the order: per unit, a move of a million selected units filled a Map
+// of a million entries, and each frame looked every selected unit up in it
+// (~380 ms frames at 4M units). [{ tick, target }]
+const _pendingCommandMarkers = [];
+const ORDER_PENDING_PER_UNIT_MAX = 64;
 let _orderMarkerRevision = 0, _orderMarkerCache = null, _rallyVisualLastSeen = new WeakMap();
 function resetOrderMarkers() {
-    _pendingUnitOrderMarkers.clear(); _pendingRallyMarkers.clear();
+    _pendingUnitOrderMarkers.clear(); _pendingRallyMarkers.clear(); _pendingCommandMarkers.length = 0;
     _orderMarkerCache = null; _orderMarkerRevision++;
     _rallyVisualLastSeen = new WeakMap();
 }
@@ -2500,7 +2512,8 @@ function noteOrderMarker(a, tick = currentTick) {
     if (rally) {
         const coords = a.action === 'setRally' ? [a.gx, a.gy] : a.coords || [];
         for (let i = 0; i + 1 < coords.length; i += 2) _pendingRallyMarkers.set(coords[i] + ',' + coords[i + 1], pending);
-    } else for (const id of a.unitIds || []) _pendingUnitOrderMarkers.set(id, pending);
+    } else if ((a.unitIds || []).length > ORDER_PENDING_PER_UNIT_MAX) { if (target) _pendingCommandMarkers.push(pending); }
+    else for (const id of a.unitIds || []) _pendingUnitOrderMarkers.set(id, pending);
     _orderMarkerRevision++;
 }
 function _pendingOrderTarget(map, key, entity) {
@@ -2562,7 +2575,7 @@ function getOrderMarkers() {
     // (A big selection's markers a few times a second: thousands of rally
     // points and an army's destinations do not move by the frame.)
     const big = selectedUnits.length + selectedEntities.length > SELECTED_UNIT_LINES_MAX, now = performance.now();
-    if (same && big && now - C.at < 150 && _pendingUnitOrderMarkers.size === 0 && _pendingRallyMarkers.size === 0) return C.markers;
+    if (same && big && now - C.at < 150 && _pendingUnitOrderMarkers.size === 0 && _pendingRallyMarkers.size === 0 && _pendingCommandMarkers.length === 0) return C.markers;
     const markers = [], seen = new Set();
     const add = t => {
         if (!t || !Number.isFinite(t.x) || !Number.isFinite(t.y) || markers.length >= ORDER_MARKERS_MAX) return;
@@ -2575,6 +2588,14 @@ function getOrderMarkers() {
         if (markers.length >= ORDER_MARKERS_MAX) break;
         if (!ent || ent.owner !== localPlayerId || (ent.energy !== undefined && ent.energy <= 0)) continue;
         if (_isRallySpawnerType(ent.type)) add(getBuildingOrderTarget(ent));
+    }
+    // (Big orders not yet shown by the frames: their markers.)
+    if (_pendingCommandMarkers.length) {
+        const shown = typeof _simClient !== 'undefined' && _simClient && Number.isFinite(_simClient.presentationTick) ? _simClient.presentationTick : currentTick - 1;
+        for (let i = _pendingCommandMarkers.length - 1; i >= 0; i--) {
+            const p = _pendingCommandMarkers[i];
+            if (shown >= p.tick) _pendingCommandMarkers.splice(i, 1); else add(p.target);
+        }
     }
     const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
     const destinations = new Set();
@@ -4963,7 +4984,7 @@ function getRawVisibilityGridForPlayer(playerId) {
     let cachedRaw = visibilityGridRawByPlayerCache.get(pid);
     let stamp = visibilityGridStampByPlayer.get(pid);
     if (cachedRaw && stamp !== undefined && (stamp === gameTime
-        || (gameTime > stamp && gameTime - stamp < VISIBILITY_TICK_INTERVAL && (gameTime + pid) % VISIBILITY_TICK_INTERVAL !== 0))) return cachedRaw;
+        || (gameTime > stamp && gameTime - stamp < VISIBILITY_TICK_INTERVAL && !simStepCrosses(pid, VISIBILITY_TICK_INTERVAL)))) return cachedRaw;
     visibilityGridStampByPlayer.set(pid, gameTime);
     let pool = visibilityGridPoolByPlayer.get(pid);
     if (!pool) visibilityGridPoolByPlayer.set(pid, pool = { grids: [null, null], next: 0, last: null, signature: null, signatureLength: -1,
@@ -5474,27 +5495,30 @@ function syncVisibilityCoverage() {
     _visCoverEnsure();
     let C = _visCover;
     let full = C.syncedTick < 0;
-    let k = full ? 0 : gameTime % VIS_COVER_SWEEP_TICKS, step = full ? 1 : VIS_COVER_SWEEP_TICKS;
-    for (let i = full ? 0 : gameTime % VIS_COVER_UNIT_SWEEP_TICKS, n = units.length, us = full ? 1 : VIS_COVER_UNIT_SWEEP_TICKS; i < n; i += us) {
+    // (The slices of the step's base ticks: simStepPhases.)
+    const ks = full ? [0] : simStepPhases(VIS_COVER_SWEEP_TICKS), step = full ? 1 : VIS_COVER_SWEEP_TICKS;
+    for (const i0 of full ? [0] : simStepPhases(VIS_COVER_UNIT_SWEEP_TICKS)) for (let i = i0, n = units.length, us = full ? 1 : VIS_COVER_UNIT_SWEEP_TICKS; i < n; i += us) {
         let u = units[i];
         if (u) _visCoverSync(u, true);
     }
+    let items = _getVisibilityFloorItemCandidates();
+    let list = C.list;
+    for (const k of ks) {
     for (let list of [towers, barracks, collectorSpawners]) for (let i = k; i < list.length; i += step) {
         if (list[i]) _visCoverSync(list[i], false);
     }
     // (Barracks and spawners are cell items too: their lists' turn above.)
-    let items = _getVisibilityFloorItemCandidates();
     for (let i = k; i < items.length; i += step) { const e = items[i]; if (!_isProducerStructure(e)) _visCoverSync(e, false); }
     // Registered buildings no longer in the world, on the same stagger; the
     // list is compacted once per cycle. (Those still on their tile have
     // their lists' turn: synced twice a cycle, ~600 calls a tick of 40k
     // buildings, otherwise.)
-    let list = C.list;
     for (let i = k; i < list.length; i += step) {
         let e = list[i];
         if (e._vsGen === C.gen && getTileEntityRef(e.gx, e.gy) !== e) _visCoverSync(e, false);
     }
-    if (full || k === 0) {
+    }
+    if (full || ks.includes(0)) {
         let w = 0;
         for (let i = 0; i < list.length; i++) {
             let e = list[i];
@@ -5532,9 +5556,13 @@ function _visCoverUnitsStep() {
     const C = _visCover;
     if (C.uTick === gameTime) return;
     C.uTick = gameTime;
-    const T = VIS_COVER_UNITS_TICKS, ph = (((gameTime - VIS_COVER_UNITS_PHASE) % T) + T) % T;
-    if (ph === 0) { _visCoverUnitsCommit(); _visCoverUnitsPost(); }
-    else if (ph === 2) _visCoverUnitsSpreadPost();
+    // (The phases of the step's base ticks in their order: the cycle's.)
+    const T = VIS_COVER_UNITS_TICKS;
+    for (const p of simStepPhases(T)) {
+        const ph = (((p - VIS_COVER_UNITS_PHASE) % T) + T) % T;
+        if (ph === 0) { _visCoverUnitsCommit(); _visCoverUnitsPost(); }
+        else if (ph === 2) _visCoverUnitsSpreadPost();
+    }
 }
 // After a reset: the whole run at once (the helpers help), counted now.
 // (Every peer resets at the same point of a tick; its first query, which
@@ -5773,6 +5801,8 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
     // (This page is alive; how far the simulation worker may go by itself
     // if it stalls: sim_client.js.)
     if (typeof simClientAutoArm === 'function') simClientAutoArm(now);
+    // (Solo: its own pace, for its step sizes.)
+    if (!isMultiplayer) netHostUpdateSimulationPace(now);
     if (isMultiplayer) {
         netMaintain(now);
         netHostUpdateSimulationPace(now);
@@ -5806,8 +5836,9 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
         // (Early: at most the lead's worth ahead of the real-time schedule
         // too (the accumulator below zero while ahead), so the pace never
         // depends on the worker's deadlines alone.)
-        let early = ahead && simClientWorkerAhead() < SIM_CLIENT_LEAD_TICKS + (catchUp > 0 ? 2 : 0)
-            && (catchUp > 0 || accumulator > -(SIM_CLIENT_LEAD_TICKS - 1) * tickMs);
+        const lead = simClientLeadTicks();
+        let early = ahead && simClientWorkerAhead() < lead + (catchUp > 0 ? 2 : 0)
+            && (catchUp > 0 || accumulator > -(lead - 1) * tickMs);
         if (!due && catchUp <= 0 && !early) break;
         // (The worker took this tick, or a host's sealed it, by itself
         // while the page was stalled: its note moves the page on.)
@@ -6958,29 +6989,37 @@ function tickStatusEffects(target) {
     if (!target) return false;
     ensureStatusState(target);
 
+    // (A step's base ticks (simDk): each timer's of them, damage for those
+    // its effect ran.)
+    const dk = simDk;
     if (target.burning > 0) {
-        target.burning--;
+        const n = Math.min(dk, target.burning);
+        target.burning -= n;
         if (target.burnTickDamage > 0) {
-            target.energy -= target.burnTickDamage;
-            recordDamageVisual(target, target.burnTickDamage); shrineDamageTaken(target, target.burnTickDamage);
+            const d = n > 1 ? target.burnTickDamage * n : target.burnTickDamage;
+            target.energy -= d;
+            recordDamageVisual(target, d); shrineDamageTaken(target, d);
         }
     }
     if (target.poisoned > 0) {
-        target.poisoned--;
+        const n = Math.min(dk, target.poisoned);
+        target.poisoned -= n;
         if (target.poisonTickDamage > 0) {
-            target.energy -= target.poisonTickDamage;
-            recordDamageVisual(target, target.poisonTickDamage); shrineDamageTaken(target, target.poisonTickDamage);
+            const d = n > 1 ? target.poisonTickDamage * n : target.poisonTickDamage;
+            target.energy -= d;
+            recordDamageVisual(target, d); shrineDamageTaken(target, d);
         }
     }
     if (target.frozen > 0 && target.wet > 0 && target.iceTickDamage > 0) {
-        target.energy -= target.iceTickDamage;
-        recordDamageVisual(target, target.iceTickDamage); shrineDamageTaken(target, target.iceTickDamage);
+        const n = Math.min(dk, target.frozen, target.wet), d = n > 1 ? target.iceTickDamage * n : target.iceTickDamage;
+        target.energy -= d;
+        recordDamageVisual(target, d); shrineDamageTaken(target, d);
     }
-    if (target.frozen > 0) target.frozen--;
-    if (target.wet > 0) target.wet--;
-    if (target.sandy > 0) target.sandy--;
+    if (target.frozen > 0) target.frozen -= Math.min(dk, target.frozen);
+    if (target.wet > 0) target.wet -= Math.min(dk, target.wet);
+    if (target.sandy > 0) target.sandy -= Math.min(dk, target.sandy);
     if (target.watched > 0) {
-        target.watched--;
+        target.watched -= Math.min(dk, target.watched);
         if (target.watched <= 0) { target.watchedByTeam = -1; if (typeof visCoverOnEntityChanged === 'function') visCoverOnEntityChanged(target); }
     }
 

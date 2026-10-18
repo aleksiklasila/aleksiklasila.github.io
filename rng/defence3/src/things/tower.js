@@ -75,7 +75,7 @@ function laserBeamsTick() {
         // (The kernel lists each job's reporting slots: no pass over the job's slots here.)
         if (!M.list || M.list.length < n) { M.list = simSharedArray(Int32Array, simReserveCap(n)); simParallelBind('lz.list', M.list); }
         const P = _simParams;
-        P[0] = n; P[1] = 8192; P[2] = TILE; P[3] = GRID_W; P[4] = GRID_H; P[5] = gameTime; P[6] = LASER_REPORT_TICKS; P[7] = SIM_SEP_ABSENT;
+        P[0] = n; P[1] = 8192; P[2] = TILE; P[3] = GRID_W; P[4] = GRID_H; P[5] = gameTime; P[6] = LASER_REPORT_TICKS; P[7] = SIM_SEP_ABSENT; P[8] = simDk;
         simParallelRun(SIM_KERNEL_LASER_HITS, chunks);
         // The records of the units reporting (in slot order).
         const C = S.columns, ACC = C.lzAcc, LB = C.lzBeam, owners = S.owners, LIST = M.list;
@@ -94,7 +94,8 @@ function laserBeamsTick() {
     }
     // Structures on the beams (in the map's order), then which lasers show lit.
     for (let b = 0; b < nb; b++) {
-        const beam = M.beams[b], dmg = beam.dmg;
+        // (A step of several base ticks: their damage.)
+        const beam = M.beams[b], dmg = simDk > 1 ? beam.dmg * simDk : beam.dmg;
         for (const e of beam.structs) {
             if (e.owner === beam.owner || !(e.energy > 0) || getTileEntityRef(e.gx, e.gy) !== e) continue;
             M.hit[b] = 1;
@@ -102,14 +103,14 @@ function laserBeamsTick() {
             e.energy -= dmg;
             pushHostileDamageAlert(e, prev - e.energy, beam.owner);
             recordDamageVisual(e, prev - e.energy, beam.owner); shrineDamageTaken(e, prev - e.energy);
-            if ((gameTime % 10) === 0) createExplosion(e.x, e.y, "#f84", 1);
+            if (simStepCrosses(0, 10)) createExplosion(e.x, e.y, "#f84", 1);
             if (e.energy <= 0) destroyBuilding(e);
         }
     }
     for (const t of M.aTowers) t.laserState = 0;
     let lit = false;
     for (let b = 0; b < nb; b++) if (M.hit[b]) { M.beams[b].a.laserState = 1; lit = true; }
-    if (lit && (gameTime % 40) === 0) { const bm = M.beams[0]; playSound('laser_tick', bm.a.x, bm.a.y); }
+    if (lit && simStepCrosses(0, 40)) { const bm = M.beams[0]; playSound('laser_tick', bm.a.x, bm.a.y); }
 }
 // At a resync, on every peer: the map made again (its structures by
 // object), the same way on every peer. (The units' unreported sums are
@@ -154,6 +155,16 @@ function _findTowerStructureTarget(tower, wholeRange, kind) {
         }
     }
     return best;
+}
+
+// Whether a structure or floor item hostile to the tower may stand in the
+// areas within either range of it (by their tile box; the movement kernel's
+// structure table: false is exact).
+function _towerHostileStructureNear(tower, wholeRange, rangeArea) {
+    const sources = getSourceAreaIdsAtWorld(tower.x, tower.y);
+    if (sources.length === 0) return false;
+    const box = getAreaRangeTileBox(sources, Math.max(wholeRange, Math.floor(Math.max(0, Number(rangeArea) || 0))));
+    return hasHostileStructureInTileRect(tower.owner, box[0], box[1], box[2], box[3]);
 }
 
 // Nearest hostile floor item (never a barrack or spawner) in the tower's
@@ -233,9 +244,15 @@ function towersTick() {
         for (const e of st) { if (e.energy > 0) thingStatusTickSelf(e); if (!(e.energy > 0)) dead = true; }
     }
     const W = _towerDue || _towerDueBuild(gameTime);
-    const due = W.get(gameTime);
+    // (Those due at any of the step's base ticks.)
+    let due = null;
+    for (let b = gameTime - simDk + 1; b <= gameTime; b++) {
+        const L = W.get(b);
+        if (!L) continue;
+        W.delete(b);
+        due = due ? due.concat(L) : L;
+    }
     if (due) {
-        W.delete(gameTime);
         due.sort((a, b) => (a.gy * GRID_W + a.gx) - (b.gy * GRID_W + b.gx));
         let prev = null;
         for (const t of due) {
@@ -247,7 +264,11 @@ function towersTick() {
             // what the wheel holds besides the deadlines is nothing a
             // restored peer, whose wheel is made from them, could miss.)
             if (gameTime <= Math.ceil(Number(t._cdUntil) || 0)) continue;
+            // (How many of the step's base ticks it stood ready: its shots,
+            // _towerShotCooldown.)
+            _towerLate = simDk > 1 ? Math.max(0, Math.min(simDk - 1, gameTime - (Math.ceil(Number(t._cdUntil) || 0) + 1))) : 0;
             if (getTileEntityRef(t.gx, t.gy) === t) t.act();
+            _towerLate = 0;
             if (!(t.energy > 0)) dead = true;
         }
     }
@@ -255,6 +276,26 @@ function towersTick() {
         for (let i = towers.length - 1; i >= 0; i--) if (towers[i].energy <= 0) destroyBuilding(towers[i]);
         for (const e of [..._thingStatusSelf]) if ((e instanceof Tower) && !(e.energy > 0) && getTileEntityRef(e.gx, e.gy) !== e) _thingStatusSelf.delete(e);
     }
+}
+
+// A tower's shot at a step of several base ticks (simDk): the base ticks it
+// stood ready before the step's end (_towerLate, towersTick) make its shots,
+// 1 + late / (cooldown + 1) (a cooldown of N acts every N + 1 base ticks),
+// their damage at once, its next turn where the last one's would be.
+// (One base tick a step: no lateness, one shot, its cooldown.)
+let _towerLate = 0;
+function _towerShots(t) {
+    const N = secondsToTicks(t.currentStats.cd || 1.5);
+    const shots = _towerLate > 0 ? 1 + Math.floor(_towerLate / (N + 1)) : 1;
+    return { shots, cd: shots * (N + 1) - 1 - _towerLate };
+}
+function _towerProjectile(t, target, maxRange) {
+    const k = _towerShots(t), st = t.currentStats;
+    const dmg = k.shots > 1 ? st.damage * k.shots : st.damage, blast = k.shots > 1 && st.blastDamage ? st.blastDamage * k.shots : st.blastDamage;
+    const p = new Projectile(t.x, t.y, target, t.type, dmg, getThingEffectiveLevel(t), t, maxRange, blast, st.blastRadius);
+    if (k.shots > 1) p.shots = k.shots;
+    projectiles.push(p);
+    t.cd = k.cd;
 }
 
 class Tower {
@@ -377,8 +418,7 @@ class Tower {
         let preferredTarget = getTowerPreferredTargetInRange(this, rangeArea);
         if (preferredTarget) {
             let target = preferredTarget;
-            projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, getThingEffectiveLevel(this), this, projectileMaxRange, this.currentStats.blastDamage, this.currentStats.blastRadius));
-            this.cd = secondsToTicks(this.currentStats.cd || 1.5);
+            _towerProjectile(this, target, projectileMaxRange);
             this.angle = Math.atan2(target.y - this.y, target.x - this.x);
             recordCombatFx(COMBAT_FX.MUZZLE, this.x, this.y, target.x, target.y, this.type);
             playSound('shoot_' + this.type, this.x, this.y);
@@ -420,11 +460,16 @@ class Tower {
         // If no unit target, the nearest enemy building in range: towers
         // first, then traps, then barracks and spawners, then other floor
         // buildings. Only the structures in the areas in range are visited.
-        if (!target) {
+        // (First whether any hostile structure or floor item stands in the
+        // box of the areas in either range: most idle towers have none near,
+        // and each search visited every structure of those areas.)
+        if (!target && _towerHostileStructureNear(this, wholeRange, rangeArea)) {
             target = _findTowerStructureTarget(this, wholeRange, 'tower');
             if (!target) target = _findTowerFloorTarget(this, rangeArea, true);
             if (!target) target = _findTowerStructureTarget(this, wholeRange, 'producer');
             if (!target) target = _findTowerFloorTarget(this, rangeArea, false);
+        }
+        if (!target) {
             // (Nothing to shoot: it looks again on a tick of its own. Set
             // once, when nothing was found: a cooldown set twice with
             // different ends leaves the tower in the wheel at both.)
@@ -432,8 +477,7 @@ class Tower {
         }
 
         if (target) {
-            projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, getThingEffectiveLevel(this), this, projectileMaxRange, this.currentStats.blastDamage, this.currentStats.blastRadius));
-            this.cd = secondsToTicks(this.currentStats.cd || 1.5);
+            _towerProjectile(this, target, projectileMaxRange);
             this.angle = Math.atan2(target.y - this.y, target.x - this.x);
             recordCombatFx(COMBAT_FX.MUZZLE, this.x, this.y, target.x, target.y, this.type);
             playSound('shoot_' + this.type, this.x, this.y);

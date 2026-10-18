@@ -1,6 +1,6 @@
 # Adaptive simulation implementation progress
 
-Updated: 2026-10-17. Plan: `ADAPTIVE_SIMULATION_AT_HIGH_SIMULATION_COST.md`.
+Updated: 2026-10-18. Plan: `ADAPTIVE_SIMULATION_AT_HIGH_SIMULATION_COST.md`.
 
 ## Current scope and user decisions
 
@@ -105,6 +105,105 @@ building/floor-item layouts now as well: narrow types, pack fields into shared
 bit words wherever cheap (not only rare fields), sidecars where a group
 applies to a subset. Column audit (types, Rust adapters and uses, kernels,
 JS files): scratchpad `colaudit.cjs`.
+
+## 2026-10-18 (later): worker-created start, slimmer units, memory64: 2M/4M/8M boot
+
+Done since the section above: A2 (the worker creates the world: no page
+world, no JSON round trip; `simClientCreateMatch`, `tests/worker-created-start.test.cjs`),
+unit objects down to their slot (56 B; JS fields as typed columns or
+reference columns, worker sidecar `wkIx`, u16 timers; ENTITY_TABLES_PLAN.md),
+coarse scout destinations (32 x 32 cells), and the memory64 build
+(`node wasm/build.cjs --wasm64`, `src/sim/sim_wasm64_bin.js`; used where the
+engine has the standard `address: 'i64'` memory, Edge here; Node's older
+`index` API would not grow past the first pages and now falls back to wasm32;
+`?wasm64=0` disables it).
+
+| world | worker ready | TPS | FPS | wasm heap live | worker JS | page JS | Edge private |
+|---|---|---|---|---|---|---|---|
+| 2M | ~70-77 s | ~5-5.5 | ~90 | 2.24 GB | 0.73-1.1 GB | 0.64 GB | ~11 GB |
+| 4M (wasm32) | ~100 s | ~2 | ~80 | 3.97 of 4 GB | | | |
+| 8M (wasm64) | ~108 s | ~0.7 (0.5-1) | ~48 | 7.26 GB (9.4 committed) | 2.05 GB | 1.24 GB | ~23 GB on 16 GB RAM (paging) |
+
+8M first died right after creation: the worker's JS heap was ~870 B a unit
+(1.74 GB at 2M), so ~7 GB at 8M, past V8's 4 GB pointer-compression cage.
+A sampling heap profile of the worker (`HEAPSAMPLE=1` in load_probe, then
+`.claude/heapstacks.cjs`) showed two causes, both fixed:
+- `_rslot` (the frame slot) was a role-memory field, so every unit got a
+  ~250 B role object (470 MB at 2M). It is now an Int32 JS column.
+- reference columns (`oc_*`, `jr_*`) grew a slot at a time by push (half
+  again of slack, and garbage at each step: 437 MB at 2M). They are now
+  allocated at the reserved capacity (`_simRefGrow`).
+
+Where 8M memory goes now (per unit, measured at 2M/400k and scaled):
+- wasm heap ~820 B per extra unit (`.claude/heap_slope.cjs`): unit columns
+  556 (about 130 four-byte columns), acquisition scratch 83, separation 78,
+  spatial index 75, hc 20, mv 19, vt 13, the rest ~25.
+- frames: 116 B a slot (`SIM_FRAME_SLOT_BYTES`), buffers 1.25x their need,
+  ~2 alive (worker + page): ~290 B a unit.
+- GPU process: 2.3 GB at 2M (column buffer + R32F/R32I/R16I slot textures and
+  ANGLE's copies).
+- worker JS ~260 B (Unit objects 56, ~35 reference columns at 4 B, Map by id,
+  role objects of workers/scouts), page JS ~150 B (a PageUnit per unit).
+
+Next, in order: compact frames (fewer, narrower columns; panel-only fields to
+details), scratch arrays shared between phases, unit columns narrowed, then
+CPU (spatial index rebuild, worker search due list, tower targeting, staggered
+cohorts).
+
+## 2026-10-18 (later still): 8M boots; index by changes; presentation fixed
+
+8M runs (memory64): it first died at creation (worker JS heap past V8's 4 GB
+cage), now boots in ~110 s and ticks. Changes, each measured in Edge:
+
+- Worker JS heap 870 -> ~260 B a unit: `_rslot` an Int32 column (it gave
+  every unit a 250 B role object), reference columns allocated at their
+  size, not pushed (`_simRefGrow`); Float64 JS columns that hold ticks,
+  stamps and versions now Int32, two Float32 (28 B a slot).
+- Unit index built from its changes (`k_ixd_*`, `tests/index-delta.test.cjs`):
+  a scan of the slots for those whose tile, owner or unit changed (~1% a
+  tick: 95% of units stand parked), their entries struck and sorted in, one
+  streaming merge per band of tiles. Every build now lists a tile's units by
+  id (`k_ix_idsort`), the order the build by changes keeps (the dead-unit
+  swap-removal does not keep list order). The old merge path is off (its
+  ~40 B a unit not allocated). 2M: 5-5.5 -> 7 TPS before presentation.
+- Idle towers: one box test against the movement kernel's hostile-structure
+  table before the four structure searches (tower `shoot` 1.9 s -> 0.3 s a
+  20 s profile at 2M).
+- Kernels take 32-bit encoded addresses (`waddr`) for every pointer: no i64
+  parameter, no BigInt wrapper under memory64.
+- **Presentation never showed anything at 2M+**: the presentation worker
+  waited for a first metadata pass written unit by unit only while no tick
+  was due; with ticks back to back it never finished, and the page kept the
+  start frame (units frozen; FPS numbers before this were of a still
+  picture). Now the metadata table is seeded from the start frame by render
+  slot (`simPresentationSeedMetadata`), `ready` is sent at once, the pump gets
+  a slice at least every 50 ms, frames over 1M slots use every presentation
+  helper, and the pace builds a frame at least every 250 ms of simulation.
+- Memory: the start frame (940 MB at 8M) and its per-slot inputs given up once
+  the presentation runs (`simFrameReleaseBuffers`), frame buffers with 1/16
+  slack (was 1/4), two presentation frames past 512 MB, page unit views by an
+  id-indexed array (`PageUnitIdMap`), the attack target point made lazily.
+
+| world | TPS | frames shown/s | FPS | notes |
+|---|---|---|---|---|
+| 2M | ~5.7 (7 without presentation) | 5.7 (a frame a tick) | ~94 | a frame 170-220 ms to build on 4 threads |
+| 4M | ~3 (before presentation fix) | | ~86 | GPU point draw ~1 ms of a frame (A/B) |
+| 8M | 0.5-1 | ~0.9 | ~42 | frame 650-850 ms: fill 480, buckets/dirty 250, motion 114; Edge ~24 GB on 16 GB RAM |
+
+Then (same day): frames by changes (`fillRange` with `dl`; `tests/presentation-delta.test.cjs`
+equal to whole frames), the motion copy split over the presentation ranges,
+a compact metadata table (`simMetaViews`, 46 B a slot, was 116), position
+snapshots in the wasm heap copied by the helpers (`simParallelCopyHeap`;
+any view into the heap now has an address), no per-tick status guard over
+floor items, idle worker searches backing off to 32x the retry from 1M units
+(`k_ws_scan` 2.2 s -> 0.5 s a 20 s profile at 2M). 2M: ~5.5 TPS with a frame a
+tick; 8M: ~1 TPS, ~1 frame a second (a frame ~700 ms: in JS the activity test
+alone is ~40 ns a slot over ~22 columns), Edge ~23.6 GB.
+
+Next: the presentation frame must stop being a full copy of every slot per
+frame (O(changed slots), derived visuals on the GPU, one persistent table),
+then the movement kernel's per-mover cost (flow look-ahead misses, separation
+pairs over all entries) and the unit column diet (sidecars for movers).
 
 ## Runs and findings (before 2026-10-18)
 

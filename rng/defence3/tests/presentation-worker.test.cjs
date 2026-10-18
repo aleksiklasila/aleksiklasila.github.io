@@ -13,7 +13,7 @@ vm.runInContext(fs.readFileSync(path.join(root,'presentation_worker.js'),'utf8')
 vm.runInContext(`
 var C={};
 for(const k of ['id','owner','x','y','prevX','prevY','vx','vy','energy','r','commandState','attackFlash','burning','poisoned','frozen','wet','sandy','watched','teleportHideTicks','workerTransferCooldown','effectiveLevel','unitLevel','live','dead','maxE']) C[k]=new Float64Array(new SharedArrayBuffer(64*8));
-var M=simFrameViews(new SharedArrayBuffer(64*SIM_FRAME_SLOT_BYTES),64);M.id.fill(-1);
+var M=simMetaViews(new SharedArrayBuffer(64*SIM_META_SLOT_BYTES),64);M.id.fill(-1);
 for(let s=0;s<4;s++) { C.id[s]=10+s;C.live[s]=1;C.x[s]=100+s;C.energy[s]=20;C.r[s]=8;M.id[s]=10+s;M.type[s]=1;M.vision[s]=2;M.orderDest[s]=s===3?-41:23;M.orderTick[s]=7; }
 `,c);
 const send=data=>{c.onmessage({data});while(jobs.length)jobs.shift()();assert.equal(messages.some(m=>m.type==='error'),false,JSON.stringify(messages.filter(m=>m.type==='error')));};

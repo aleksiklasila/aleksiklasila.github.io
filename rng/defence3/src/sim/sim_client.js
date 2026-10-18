@@ -40,6 +40,14 @@ const SIM_CLIENT_MAX_IN_FLIGHT = 2;
 // input delay; a page stalled up to the lead's worth of ticks no longer
 // stalls the simulation.
 const SIM_CLIENT_LEAD_TICKS = 3;
+// The lead in steps: SIM_CLIENT_LEAD_TICKS base ticks' worth of time, one at
+// least. (A step of several base ticks lasts their time: three steps of
+// lead at one step a second put three seconds between an order and the
+// step it runs in.)
+function simClientLeadTicks() {
+    const ms = typeof netSimulationTickMs === 'function' ? netSimulationTickMs() : TICK_MS;
+    return Math.max(1, Math.ceil(SIM_CLIENT_LEAD_TICKS * TICK_MS / Math.max(TICK_MS, ms) - 1e-9));
+}
 // (?simahead=0: as before, ticks dispatched when due; for comparisons.)
 const simClientAheadEnabled = (() => { try { return new URLSearchParams(location.search).get('simahead') !== '0'; } catch { return true; } })();
 // The current units' frame (sim_frame.js views) while `units` is its list.
@@ -61,7 +69,7 @@ function _simClientScriptUrls() {
         .filter(src => /\/src\//.test(src) && !/bootstrap\.js|sim_shadow\.js|sim_worker\.js|sim_client\.js/.test(src));
 }
 
-const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261017-gcpause';
+const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261018-dk';
 
 function _simClientCreate() {
     let c = {
@@ -582,7 +590,7 @@ function simClientNetAttach(conn) {
 // A catch-up tick (a guest behind its host): no deadline, the worker runs it
 // at once (set by the page's pump for the next dispatch).
 let simClientNextAsap = false;
-function simClientRunTick(tick, actions, teams, flush) {
+function simClientRunTick(tick, actions, teams, flush, dk = 1) {
     let c = _simClient;
     let asap = simClientNextAsap;
     simClientNextAsap = false;
@@ -598,7 +606,7 @@ function simClientRunTick(tick, actions, teams, flush) {
     // (Its deadline as absolute time: the worker's clock has another origin.
     // Only when dispatched ahead: otherwise at once, as before.)
     let due = simClientDispatchAhead() && !asap && typeof performance.timeOrigin === 'number' ? performance.timeOrigin + at : undefined;
-    c.worker.postMessage({ type: 'tick', tick, actions, teams, flush: !!flush, hash: true, due });
+    c.worker.postMessage({ type: 'tick', tick, actions, teams, flush: !!flush, hash: true, due, dk });
 }
 
 // Whether ticks go to the worker ahead of time (shared memory).
@@ -737,6 +745,7 @@ function _simClientOnMessage(msg) {
 // slower to hold its distance behind the newest. Without frames being drawn
 // (a hidden page, tests) every frame is shown as it comes.
 // (SIM_PLAY_MARGIN_TICKS: the least room for a late frame, 20 ms at 20 TPS.)
+const SIM_PLAY_PERIOD_MAX = 4000;
 const SIM_PLAY_QUEUE_MAX = 2, SIM_PLAY_SNAP_TICKS = 8, SIM_PLAY_RATE_MIN = 0.9, SIM_PLAY_RATE_MAX = 1.35, SIM_PLAY_MARGIN_TICKS = 0.4;
 function _simPlayNew() { return { started: false, p: 0, at: 0, k0: 0, k1: 0, period: 0, gap: 1, jit: 0, err: 0, rate: 1, want: 1.25, lastK: 0, lastAt: 0, queue: [], stalls: 0, snaps: 0 }; }
 function _simClientShowPresentation(c, msg, at) {
@@ -756,10 +765,15 @@ function _simPlayArrived(c, msg, now) {
     const P = c.play, K = msg.tick;
     if (!(P.period > 0)) P.period = Math.max(10, netSimulationTickMs());
     if (P.lastAt > 0 && K > P.lastK) {
+        // (Up to SIM_PLAY_PERIOD_MAX a tick: a simulation of millions of units
+        // runs at 1-2 TPS. Clamped at 250 ms, a 500 ms tick's motion played in
+        // half of it, then the units stood; a period far off is followed at
+        // once, not over twenty frames.)
         const dk = K - P.lastK, per = (now - P.lastAt) / dk;
-        if (per > 4 && per < 1000) {
-            P.jit += (Math.min(250, Math.abs(now - P.lastAt - P.period * dk)) - P.jit) * 0.1;
-            P.period += (Math.max(10, Math.min(250, per)) - P.period) * 0.05;
+        if (per > 4 && per < SIM_PLAY_PERIOD_MAX * 1.5) {
+            const want = Math.max(10, Math.min(SIM_PLAY_PERIOD_MAX, per)), far = want > P.period * 1.4 || want < P.period / 1.4;
+            P.jit += (Math.min(SIM_PLAY_PERIOD_MAX, Math.abs(now - P.lastAt - P.period * dk)) - P.jit) * 0.1;
+            P.period += (want - P.period) * (far ? 0.4 : 0.05);
             P.gap += (Math.min(8, dk) - P.gap) * 0.1;
         }
     }
@@ -906,7 +920,7 @@ function _simClientResetUnits() {
     _simClientDropHeld(c);
     for (let u of _pageUnitsById.values()) { u._freeze(); u.dead = true; }
     if (typeof selectionIndexRemapped === 'function') selectionIndexRemapped();
-    _pageUnitsById = new Map();
+    _pageUnitsById = new PageUnitIdMap();
     _pageSlotViews = [];
     let bufs = pageResetWorldTables(c);
     if (_pageFrame) { bufs.push(_pageFrame.buf); _pageFrame = null; }

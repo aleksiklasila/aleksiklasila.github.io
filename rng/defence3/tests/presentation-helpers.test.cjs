@@ -6,7 +6,7 @@
 // more slots, Team + history ghosts from the shared fog and from a grid the
 // helpers do not share): every frame buffer equal byte for byte (columns,
 // order, render index, change marks), the same counts and membership.
-//   node tests/presentation-helpers.test.cjs
+//   node tests/presentation-helpers.test.cjs   (PRESENT_DELTA=1: frames by changes)
 'use strict';
 const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const { performance } = require('node:perf_hooks');
@@ -34,6 +34,9 @@ function reader(withHelpers) {
         };
     }
     load(ctx);
+    // (PRESENT_DELTA=1: frames by changes and the motion copy split over the
+    // ranges from any size, presentation_worker.js fillRange / copyMotion.)
+    if (process.env.PRESENT_DELTA) vm.runInContext('PRESENT_DELTA_MIN = 0;', ctx);
     const send = data => { ctx.onmessage({ data }); while (jobs.length) jobs.shift()(); };
     return { ctx, messages, send, held: [] };
 }
@@ -46,7 +49,7 @@ const COLS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', '
 const cap = 90000, SLOT = vm.runInContext('SIM_FRAME_SLOT_BYTES', B.ctx);
 const C = {};
 for (const k of COLS) C[k] = k === 'id' || k === 'cmT' ? new Int32Array(new SharedArrayBuffer(cap * 4)) : new Float32Array(new SharedArrayBuffer(cap * 4));
-const M = B.ctx.simFrameViews(new SharedArrayBuffer(cap * SLOT), cap);
+const M = B.ctx.simMetaViews(new SharedArrayBuffer(cap * 48), cap);
 C.id.fill(-1); M.id.fill(-1); C.cmT.fill(-1);
 const metaRev = new Int32Array(new SharedArrayBuffer(4));
 let seed = 777, nextId = 1, n = 70000;

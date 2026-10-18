@@ -1233,6 +1233,7 @@ function _serializeTickBundleForSnapshot(bundle) {
         combinedChecksum: String(bundle.combinedChecksum || '')
     };
     if (bundle.flush) out.flush = 1;
+    if (bundle.dk > 1) out.dk = bundle.dk | 0;
     return out;
 }
 
@@ -1461,6 +1462,7 @@ function applyAuthoritativeStateSnapshot(snapshot) {
                 combinedChecksum: String((bundle && bundle.combinedChecksum) || '')
             };
             if (bundle && bundle.flush) restoredBundle.flush = 1;
+            if (bundle && bundle.dk > 1) restoredBundle.dk = Math.min(SIM_DK_MAX, bundle.dk | 0);
             if (!Number.isFinite(restoredBundle.tick) || restoredBundle.tick < snapTick) continue;
             if (typeof validateTickBundle === 'function' && !validateTickBundle(restoredBundle)) continue;
             lockstepBundleByTick[restoredBundle.tick] = restoredBundle;

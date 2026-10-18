@@ -176,10 +176,10 @@ function _simImport(url) {
 // sources in one blob too: a relative URL or a text/plain script would fail.
 function _simHelperUrl() {
     let base = self.SIM_WORKER_BASE || location.href;
-    let url = new URL('sim_helper.js?v=20261008-brain1', base).href;
+    let url = new URL('sim_helper.js?v=20261018-dk', base).href;
     if (!self.SIM_WORKER_BASE && !_simImportViaBlob) return url;
     let nl = String.fromCharCode(10);
-    let parts = ['sim_parallel.js?v=20261018-load1', 'sim_wasm_bin.js?v=20261008-brain1', 'sim_wasm.js?v=20261008-brain1', 'sim_frame.js?v=20261008-brain1', '../game/flownav.js?v=20261021-w'].map(f => {
+    let parts = ['sim_parallel.js?v=20261018-dk', 'sim_wasm_bin.js?v=20261018-dk2', 'sim_wasm.js?v=20261018-snap', 'sim_frame.js?v=20261018-meta', '../game/flownav.js?v=20261018-dk2'].map(f => {
         let xhr = new XMLHttpRequest();
         xhr.open('GET', new URL(f, base).href, false);
         xhr.send();
@@ -331,14 +331,15 @@ function _simAutoSealed(m) {
     // (The page's own word goes before a copy from the host's worker.)
     const have = _simSealed.get(t);
     if (have && !have.gen) return;
-    let actions = m.actions, flush = !!m.flush;
+    let actions = m.actions, flush = !!m.flush, dk = m.dk | 0 || 1;
     if (m.msg) {
         const b = unpackTickBundleFromWire(m.msg.w);
         if (!b || b.tick !== t) return;
         actions = b.packets.flatMap(p => Array.isArray(p.actions) ? p.actions : []);
         flush = !!b.flush;
+        dk = b.dk | 0 || 1;
     }
-    _simSealed.set(t, { actions: actions || [], flush });
+    _simSealed.set(t, { actions: actions || [], flush, dk });
 }
 // Claims the next tick of a word (SEALED, CLAIM) unless the page did, or
 // lowered its limit to it.
@@ -365,9 +366,10 @@ function _simAutoStep() {
         while (s + 1 < limit && s + 1 >= currentTick && A.due + (s + 1 - A.dueTick) * tickMs - now < SIM_AUTO_SEAL_AHEAD_MS && s + 1 - currentTick < SIM_AUTO_MAX_TICKS - A.run) {
             if (!_simAutoClaim(SIM_CTL_SEALED, s + 1)) break;
             s++;
-            const bundle = buildEmptyTickBundle(s, arm.participants);
+            const dk = Math.max(1, Math.min(SIM_DK_MAX, arm.dk | 0 || 1));
+            const bundle = buildEmptyTickBundle(s, arm.participants, dk);
             const msg = { type: 'TICK_BUNDLE', w: packTickBundleForWire(bundle), c: 1, d: arm.d, pace: arm.pace, l: arm.peers, auto: 1 };
-            _simSealed.set(s, { actions: [], flush: false });
+            _simSealed.set(s, { actions: [], flush: false, dk });
             _simNetBroadcast(msg);
             A.sealed++;
             _simPost({ type: 'autoSealed', epoch: _simEpoch, tick: s, msg });
@@ -386,12 +388,12 @@ function _simAutoStep() {
     // (One from the host's worker: of the host's state as it is now, not of
     // one a restore replaced.)
     if (e && e.gen && e.gen !== _simNetGen) e = null;
-    if (!e && arm.role === 'solo') e = { actions: [], flush: false };
+    if (!e && arm.role === 'solo') e = { actions: [], flush: false, dk: Math.max(1, Math.min(SIM_DK_MAX, arm.dk | 0 || 1)) };
     if (!e || !_simAutoClaim(SIM_CTL_CLAIM, t)) { _simAutoPoll(); return; }
     A.run++; A.ran++;
     const at = A.due + (t - A.dueTick) * tickMs;
     _simPost({ type: 'autoRan', epoch: _simEpoch, tick: t, due: at });
-    try { _simTick({ type: 'tick', tick: t, actions: e.actions, teams: A.teams || [0, 1], flush: e.flush, hash: true, due: at, auto: true }); } catch (err) { _simError('tick', err); }
+    try { _simTick({ type: 'tick', tick: t, actions: e.actions, teams: A.teams || [0, 1], flush: e.flush, hash: true, due: at, auto: true, dk: e.dk | 0 || 1 }); } catch (err) { _simError('tick', err); }
     _simAutoPoll(1);
 }
 
@@ -473,7 +475,7 @@ function _simNetMessage(peer, e, data) {
     const b = unpackTickBundleFromWire(w);
     if (!b || !validateTickBundle(b) || b.tick < currentTick) return;
     const have = _simSealed.get(b.tick);
-    if (!have || (have.gen && have.gen !== gen)) _simSealed.set(b.tick, { actions: b.packets.flatMap(p => Array.isArray(p.actions) ? p.actions : []), flush: !!b.flush, gen });
+    if (!have || (have.gen && have.gen !== gen)) _simSealed.set(b.tick, { actions: b.packets.flatMap(p => Array.isArray(p.actions) ? p.actions : []), flush: !!b.flush, gen, dk: b.dk | 0 || 1 });
     // (One the host's worker sealed: its page did not send it.)
     if (m.m.auto) _simPost({ type: 'netBundle', epoch: _simEpoch, msg: m.m });
 }
@@ -601,6 +603,8 @@ function _simTick(msg) {
     _simAuto.dueTick = msg.tick; _simAuto.due = Number.isFinite(msg.due) ? msg.due : _simNowAbs(); _simAuto.teams = msg.teams;
     _simSealed.delete(msg.tick);
     pathfindBudget = 0;
+    // (The step's base ticks, as sealed.)
+    simDk = Math.max(1, Math.min(SIM_DK_MAX, msg.dk | 0 || 1));
     // A resync tick: every peer starts it without history caches.
     if (msg.flush) snapFlushHistoryCaches();
     // (The presentation reader keeps off the state while it changes.)

@@ -12,3 +12,17 @@ rustflags = [
     "-C", "link-arg=--export=__stack_pointer",
     "-C", "link-arg=--export=__heap_base",
 ]
+
+# The memory64 build (node wasm/build.cjs --wasm64, nightly + rust-src): the
+# same flags, a 16 GiB maximum.
+[target.wasm64-unknown-unknown]
+rustflags = [
+    "-C", "target-feature=+simd128,+bulk-memory,+nontrapping-fptoint,+sign-ext,+mutable-globals,+atomics",
+    "-C", "link-arg=--shared-memory",
+    "-C", "link-arg=--import-memory",
+    "-C", "link-arg=--max-memory=17179869184",
+    "-C", "link-arg=-zstack-size=262144",
+    "-C", "link-arg=--stack-first",
+    "-C", "link-arg=--export=__stack_pointer",
+    "-C", "link-arg=--export=__heap_base",
+]
