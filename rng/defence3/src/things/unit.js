@@ -394,9 +394,26 @@ let _unitPassOn = false;
 // it) whether it moved by itself, for the next separation (unit.sepMov; the
 // kernel's epilogue sets the others').
 function _unitPassUpdate(u) {
+    const c = u._us, s = u._si;
+    const deferred = c && c.mvOut[s] === 0;
+    const startX = u.x, startY = u.y;
+    const contactCarry = deferred ? c.sepMov[s] >>> 2 : 0;
     u.update();
-    const c = u._us;
-    if (c) { const s = u._si; if (c.mvOut[s] === 0) c.sepMov[s] = c.x[s] !== c.prevX[s] || c.y[s] !== c.prevY[s] ? 1 : 0; }
+    if (deferred) {
+        const mx = u.x - startX, my = u.y - startY;
+        // The kernel integrated pressure before this fallback's navigation.
+        // Apply the same contact reaction to its contribution to the delta.
+        const depth = _sep.ov && _sep.ov[s] || 0;
+        if (depth > 0 || contactCarry) {
+            const reaction = Math.max(contactCarry / 63, Math.min(1, depth / (Math.max(1, u.r) * .4)));
+            u.x -= mx * reaction; u.y -= my * reaction;
+            updateUnitSpatial(u);
+        }
+        c.sepMov[s] = (c.sepMov[s] & 254) | (mx !== 0 || my !== 0 ? 1 : 0);
+        // Include the separation already applied by the kernel in this tick's
+        // interpolation, instead of overwriting its origin in Unit.update.
+        u.prevX = c.x0[s] * 0.125; u.prevY = c.y0[s] * 0.125;
+    }
 }
 function unitPassBegin() { _unitPassOn = true; spatialCountsDeferBegin(); astarPassStart(); }
 function unitPassEnd() {
@@ -648,7 +665,7 @@ class Unit {
     get _floorTile() { const c = this._us; return c ? c.mvFloor[this._si] : (this._det ? this._det._floorTile : this._flt); }
     set _floorTile(v) { const c = this._us; if (c) c.mvFloor[this._si] = v; else if (this._det) this._det._floorTile = v; else Object.defineProperty(this, '_flt', { value: v, writable: true, configurable: true }); }
     // Arriving in a crowd (see _followNavNode): a column (mvNavLD) the kernel shares.
-    get _sepMoved() { const c = this._us; return c ? c.sepMov[this._si] : (this._det ? this._det._sepMoved : (this._smv | 0)); }
+    get _sepMoved() { const c = this._us; return c ? c.sepMov[this._si] & 1 : (this._det ? this._det._sepMoved : (this._smv | 0)); }
     set _sepMoved(v) { const c = this._us; if (c) c.sepMov[this._si] = v ? 1 : 0; else if (this._det) this._det._sepMoved = v ? 1 : 0; else Object.defineProperty(this, '_smv', { value: v ? 1 : 0, writable: true, configurable: true }); }
     get _navLastD() { const c = this._us; return c ? c.mvNavLD[this._si] : (this._det ? this._det._navLastD : this._nld); }
     set _navLastD(v) { const c = this._us; if (c) c.mvNavLD[this._si] = v; else if (this._det) this._det._navLastD = v; else Object.defineProperty(this, '_nld', { value: v, writable: true, configurable: true }); }
@@ -2666,8 +2683,8 @@ const UNIT_SEPARATION_Q = 1024;
 // Share of an overlap a unit corrects: both of a pair (about what two
 // successive 0.6 corrections gave), or the only one taking part.
 const UNIT_SEPARATION_SHARE_BOTH = 0.42, UNIT_SEPARATION_SHARE_ONE = 0.6;
-// A moving unit against one at rest that gives way: the mover corrects
-// little of the overlap, the one at rest most (it steps aside).
+// Reserved kernel ABI parameters. Density pressure treats walking and
+// resting units alike; these legacy shares are no longer used.
 const UNIT_SEPARATION_SHARE_MOVER = 0.2, UNIT_SEPARATION_SHARE_YIELD = 0.65;
 // A colliding unit on a fallback path retries its path every this many ticks.
 const UNIT_SEPARATION_PATH_RETRY_TICKS = 4;
@@ -4556,21 +4573,11 @@ const UNIT_SEPARATION_INDEX_MARGIN = TILE * 0.5;
 // every other tick (staggered by id), its push spread over two ticks.
 // Small worlds separate after the pass from where units are then.
 let SEPARATION_SLOT_MIN_UNITS = 0;
-// UNIT_SEPARATION_MODE 0: staggered, half the units a tick ((t + id) even:
-// each unit every other tick); 1: every unit every tick (pushes at once);
-// 2: every unit on even ticks. With 0 and 2 each push is scaled by
-// UNIT_SEPARATION_TIER_GAIN (bounded by its deepest overlap) and applied
-// half on its tick, half on the next. Staggered keeps crowds and fights as
-// still and spaced as every tick (tests/separation-jitter.test.cjs); every
-// unit at once (2) makes crowds sway.
+// Stagger contact sampling across two updates. Each sample produces a velocity;
+// half is used now and half on the next update, both multiplied by that
+// update's simDk. Presentation interpolates the combined movement endpoint.
+// Modes 1 (every unit) and 2 (even updates) remain available for diagnostics.
 let UNIT_SEPARATION_MODE = 0;
-// (0.8, measured over crowds of 300, 400 and 600 walking to one point,
-// tests/unit-collision-smoothness.test.cjs with SMOOTH_N: back-and-forth
-// steps 1.45% of moving unit-ticks at 1.0, 1.10% at 0.8 and 0.7, 1.01% at
-// 0.6; 2.5% at 1.15 and 11.6% at 1.3 (pushes overshoot: crowds shake).
-// Overlap the other way: 5.4% of the collision distance at 1.0, 7.1% at
-// 0.8, 8.1% at 0.7, 9% at 0.6. The share applied on the first tick, 0.4 to
-// 0.55, changes nothing measurable.)
 let UNIT_SEPARATION_TIER_GAIN = 0.8;
 let _sepPending = null, _sepDirty = true;
 const SEP_PACK_PER = 1024, SEP_MARK_PER = 2048;
@@ -4630,7 +4637,7 @@ function separationStart() {
     if (!ne || (mode === 2 && (currentTick & 1) !== 0)) return;
     simParallelBind('sep.eslot', _sxESlot); simParallelBind('sep.ekey', _sxEKey);
     simParallelBind('sep.rs', _sxStart); simParallelBind('sep.rc', _sxCount); simParallelBind('sep.rstamp', _sxStamp);
-    const pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0), maxR = Math.max(0.1, _maxUnitCollisionRadius()), cws = CHUNK_SIZE * TILE;
+    const pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0), maxR = Math.max(0.1, _maxUnitCollisionRadius()) * 1.1 + 0.75, cws = CHUNK_SIZE * TILE;
     // (Bands 2 * reach rows high: a unit's pushes reach that far around it,
     // see SIM_KERNEL_SEP_PAIRS.)
     const farAny = 2 * maxR + pad, reach = Math.max(1, Math.ceil(farAny / cws)), H = Math.max(2, 2 * reach);
@@ -4673,7 +4680,7 @@ function separationPrebuildStages(n, ep, tick) {
     const S = _sep;
     simParallelBind('sep.eslot', _sxESlot); simParallelBind('sep.ekey', _sxEKey);
     simParallelBind('sep.rs', _sxStart); simParallelBind('sep.rc', _sxCount); simParallelBind('sep.rstamp', _sxStamp);
-    const pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0), maxR = Math.max(0.1, _maxUnitCollisionRadius()), cws = CHUNK_SIZE * TILE;
+    const pad = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0), maxR = Math.max(0.1, _maxUnitCollisionRadius()) * 1.1 + 0.75, cws = CHUNK_SIZE * TILE;
     const farAny = 2 * maxR + pad, reach = Math.max(1, Math.ceil(farAny / cws)), H = Math.max(2, 2 * reach), bands = Math.ceil(CHUNKS_H / H);
     // (Job counts for every unit: the kernels stop at the entries listed.)
     const pairs = parity => [CHUNKS_W, CHUNKS_H, H, pad, farAny, UNIT_SEPARATION_Q, UNIT_SEPARATION_SHARE_BOTH, UNIT_SEPARATION_SHARE_ONE, 0, n, cws, ep,
@@ -4694,7 +4701,12 @@ function separationPrebuildTaken(ep) {
 // A resync (every peer at the same tick): no push carried over.
 function separationReset() {
     const U = _simUnitState;
-    if (U) { U.columns.sepCx.fill(0); U.columns.sepCy.fill(0); }
+    if (U) {
+        U.columns.sepCx.fill(0); U.columns.sepCy.fill(0);
+        // Settling is derived from the cached force, dropped on every peer.
+        const M = U.columns.sepMov;
+        for (let s = 0; s < U.owners.length; s++) M[s] &= 1;
+    }
 }
 function runUnitSeparationPass() {
     // (The pushes are the movement kernel's epilogue's: simMoveRun. A tick

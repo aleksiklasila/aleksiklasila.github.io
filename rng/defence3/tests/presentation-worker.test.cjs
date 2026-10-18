@@ -34,7 +34,8 @@ assert.deepEqual(Buffer.from(new Uint8Array(first.world.units.buf)),saved,'reade
 send({type:'release',buf:first.world.units.buf});
 assert.equal(messages.length,4);assert.equal(messages.at(-1).tick,4,'resume at newest tick; do not queue stale visual work');
 let frame=c.simFrameViews(messages.at(-1).world.units.buf,64);
-assert.equal(frame.x[0],500);assert.ok(frame.flags[0]&16);assert.ok(frame.flags[2]&1024);
+assert.ok(frame.x[0]>=436 && frame.x[0]<=500, 'large movement catches up within the visual lag budget');
+assert.ok(frame.flags[0]&16);assert.ok(frame.flags[2]&1024);
 assert.equal(c.C.x[0],500,'presentation leaves authority columns untouched');
 // Slot reuse must not attach the previous unit's metadata to a new identity.
 c.C.id[1]=99;

@@ -100,9 +100,11 @@ let rangeChanged=false;
 // The drawn positions per slot (and whose they are), VIS_FOLLOW: the share
 // of the way to the simulation's position a drawn unit goes each tick (a
 // steady lag of about two steps behind it, a third of its step's
-// variation: smooth before prompt, the user's choice); VIS_SNAP:
-// a gap past which it is drawn at the simulation's position at once.
-const vis={x:null,y:null,id:null}, VIS_FOLLOW=.35, VIS_SNAP=64;
+// variation: smooth before prompt, the user's choice). VIS_LAG bounds the
+// remaining offset: long low-TPS steps catch up without resetting the start
+// of the segment. A distance threshold cannot distinguish walking from a
+// teleport when one simulation step covers a second of movement.
+const vis={x:null,y:null,id:null}, VIS_FOLLOW=.35, VIS_LAG=64;
 // (VIS_FOLLOW is the share per tick: a frame made some ticks after the last
 // one goes the share those ticks add up to, so the drawn pace is the same
 // whether a frame is made every tick or every third.)
@@ -222,18 +224,23 @@ function fillRange(F,C,meta,s0,s1,n,player,areaUnit,metaCopy,dl,frameSeq) {
     // tick toward VIS_FOLLOW of the way to where the simulation has it. A
     // tick's step varies with the pushes of a crowd (1.9, 3.9, 2.1 px...);
     // drawn as is, units sped up and stalled tick to tick. A unit new to its
-    // slot, or one that jumped (over VIS_SNAP px: a teleport, a resync)
-    // starts where the simulation has it; one within VIS_REST is there.
+    // slot starts with its simulation segment. Real portal teleports carry
+    // a hidden flag; a restore starts a new reader. Ordinary movement always
+    // continues from the preceding visual endpoint, including large steps.
     {
-        const DX=F.x, DY=F.y, DPX=F.px, DPY=F.py, SX=mot.x, SY=mot.y, SPX=mot.px, SPY=mot.py, VX=vis.x, VY=vis.y, VI=vis.id, ES=easing;
+        const DX=F.x, DY=F.y, DPX=F.px, DPY=F.py, SX=mot.x, SY=mot.y, SPX=mot.px, SPY=mot.py, VX=vis.x, VY=vis.y, VI=vis.id, ES=easing, H=C.teleportHideTicks;
         for (let i=0;i<na;i++) {
             const s=AL[i], id=FID[s];
             if (id<0) {VI[s]=-1;if (ES) ES[s]=0;continue;}
             const x=SX[s], y=SY[s];
             const ox=VX[s], oy=VY[s], gap=Math.abs(x-ox)+Math.abs(y-oy);
-            if (VI[s]!==id || gap>VIS_SNAP) {DPX[s]=SPX[s];DPY[s]=SPY[s];DX[s]=x;DY[s]=y;VX[s]=x;VY[s]=y;VI[s]=id;if (ES) ES[s]&=~1;continue;}
+            if (VI[s]!==id || H[s]>0) {DPX[s]=H[s]>0?x:SPX[s];DPY[s]=H[s]>0?y:SPY[s];DX[s]=x;DY[s]=y;VX[s]=x;VY[s]=y;VI[s]=id;if (ES) ES[s]&=~1;continue;}
             if (gap<VIS_REST) {DPX[s]=x;DPY[s]=y;DX[s]=x;DY[s]=y;VX[s]=x;VY[s]=y;if (ES) ES[s]&=~1;continue;}
-            const nx=ox+(x-ox)*visFollow, ny=oy+(y-oy)*visFollow;
+            // The usual crowd filter is unchanged. Beyond its lag budget,
+            // increase only the endpoint's catch-up, never jump the start.
+            // O(1) in this existing fill; no new columns or render-frame work.
+            const follow=gap>VIS_LAG ? Math.max(visFollow,1-VIS_LAG/gap) : visFollow;
+            const nx=ox+(x-ox)*follow, ny=oy+(y-oy)*follow;
             DPX[s]=ox;DPY[s]=oy;DX[s]=nx;DY[s]=ny;VX[s]=nx;VY[s]=ny;
             if (ES) ES[s]|=1;
         }

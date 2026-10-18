@@ -107,7 +107,13 @@ const SNAP_FORMAT = 7;
 // 16: live joins numbered (g) and their messages tagged with that number,
 // the joiner's loading heard (JOIN_LOADING); role updates tagged with their
 // match (m), untagged ones refused.
-const SIM_RULES_REVISION = 17;
+// 18: long-step movement integrates bounded separation pressure and inward
+// resistance; crowds still separating keep their staggered contact checks.
+// 19: separation clearance scales with body radius and includes a small skin.
+// 20: body-sized density pressure is a velocity integrated with simDk.
+// 21: density contact reaction limits navigation through compressed bodies.
+// 22: coincident pairs choose a shared axis and opposite force signs.
+const SIM_RULES_REVISION = 22;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;

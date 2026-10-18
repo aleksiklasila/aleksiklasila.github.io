@@ -1221,7 +1221,7 @@ pub unsafe extern "C" fn k_status(a: u32, chunk: i32) {
         if sep_copy {
             core::ptr::copy_nonoverlapping(lay.add(i0), sl0.add(i0), n);
             core::ptr::copy_nonoverlapping(dead.add(i0), sd0.add(i0), n);
-            // (The radius: Math.max(.1, collisionR || r || .1), four a lane.)
+            // Separation covers both the collision radius and visible body.
             let (z, tenth) = (f32x4_splat(0.0), f32x4_splat(0.1));
             let mut q = i0;
             while q + 4 <= i1 {
@@ -1229,14 +1229,14 @@ pub unsafe extern "C" fn k_status(a: u32, chunk: i32) {
                 let r0 = v128_load(rad.add(q) as *const v128);
                 let ct = v128_and(f32x4_ne(c, z), f32x4_eq(c, c));
                 let rt = v128_and(f32x4_ne(r0, z), f32x4_eq(r0, r0));
-                let r = v128_bitselect(c, v128_bitselect(r0, tenth, rt), ct);
+                let r = f32x4_max(v128_bitselect(c, tenth, ct), v128_bitselect(r0, tenth, rt));
                 v128_store(sr0.add(q) as *mut v128, v128_bitselect(r, tenth, f32x4_gt(r, tenth)));
                 q += 4;
             }
             while q < i1 {
                 let c = g(cr, q);
                 let r = if c != 0.0 && c == c { c } else { let r0 = g(rad, q); if r0 != 0.0 && r0 == r0 { r0 } else { 0.1 } };
-                s(sr0, q, if r > 0.1 { r } else { 0.1 });
+                s(sr0, q, r.max(g(rad, q)).max(0.1));
                 q += 1;
             }
         }

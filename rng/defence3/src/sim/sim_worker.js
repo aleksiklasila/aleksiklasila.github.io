@@ -176,10 +176,10 @@ function _simImport(url) {
 // sources in one blob too: a relative URL or a text/plain script would fail.
 function _simHelperUrl() {
     let base = self.SIM_WORKER_BASE || location.href;
-    let url = new URL('sim_helper.js?v=20261018-dk', base).href;
+    let url = new URL('sim_helper.js?v=20261018-separation5', base).href;
     if (!self.SIM_WORKER_BASE && !_simImportViaBlob) return url;
     let nl = String.fromCharCode(10);
-    let parts = ['sim_parallel.js?v=20261018-dk', 'sim_wasm_bin.js?v=20261018-dk2', 'sim_wasm.js?v=20261018-snap', 'sim_frame.js?v=20261018-meta', '../game/flownav.js?v=20261018-dk2'].map(f => {
+    let parts = ['sim_parallel.js?v=20261018-dk', 'sim_wasm_bin.js?v=20261018-separation5', 'sim_wasm.js?v=20261018-snap', 'sim_frame.js?v=20261018-meta', '../game/flownav.js?v=20261018-dk2'].map(f => {
         let xhr = new XMLHttpRequest();
         xhr.open('GET', new URL(f, base).href, false);
         xhr.send();

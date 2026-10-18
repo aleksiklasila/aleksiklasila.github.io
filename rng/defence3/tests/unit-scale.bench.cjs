@@ -82,7 +82,7 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
                 updateUnitSpatial(u);
             }
         }
-        gameTick(); const b = __scratch.now();
+        gameTick(); currentTick++; const b = __scratch.now();
         const f = simFrameEncode(); const c = __scratch.now(); simFrameReturn(f.buf);
         if (t >= 20) { times.push(b-a); frames.push(c-b); sep.push(sepMs); }
         if (t >= 20 && (t === 20 || t === ${ticks + 19} || (t % 20) === 0)) {

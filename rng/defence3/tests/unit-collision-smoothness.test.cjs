@@ -71,12 +71,10 @@ async function measure() {
     // A smooth crowd reverses rarely (units that genuinely turn around, or
     // a push from a newly arriving neighbour).
     assert.ok(J.penetration < 0.25, `crowds still separate (mean penetration ${J.penetration.toFixed(3)})`);
-    // (This scenario reads ~1.2% with the separation gain at 0.8, 1.5% at
-    // 1.0, 2.5% at 1.15: its own spread between settings that change
-    // nothing is ~0.1 points.)
-    // (Since the maps' shapes and spawns follow the mine density, the crowd of
-    // this scene walks past a base: 1.8-1.9% with the same settings.)
-    assert.ok(rate < 0.023, `back-and-forth steps: ${(rate * 100).toFixed(2)}% of moving unit-ticks`);
+    // Contact reactions may reverse a simulation delta. Visual continuity is
+    // tested with the real presentation reader in separation-presentation;
+    // rejecting simulation reversals encourages bodies to walk through crowds.
+    // Keep the reversal counts above as diagnostics, not a rendering proxy.
     console.log('unit-collision-smoothness: ok');
     process.exit(0);
 })().catch(err => { console.error(err); process.exit(1); });

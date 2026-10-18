@@ -3640,8 +3640,8 @@ unsafe fn push_consts(m: &Mv, f: *const f64) -> PushC {
 /// out 0: the simulation thread's update sets it); the push the pair kernel
 /// summed (sep.px/py/ov/hit, cleared by the separation chain's first stage:
 /// scaled by its contacts,
-/// bounded by its deepest overlap, `now` of it applied now, the rest carried
-/// to the next tick in unit.sepCx/Cy) applied where it moved, quantized half
+/// converted to a bounded velocity, `now` of it used now, the rest carried
+/// to the next tick in unit.sepCx/Cy) times simDk, quantized half
 /// up, when that stays in its tile (every lane's arithmetic its own: the
 /// same in whichever lane a unit is). Returns the lanes for push_slot: bits
 /// 0-3 leaving their tile (sep.fast 4, the push in sep.nextX/Y), 4-7 on
@@ -3652,6 +3652,9 @@ unsafe fn push4(m: &Mv, c: &PushC, s: usize, end: usize, known: i32, mvd: i32) -
     let zero = i32x4_splat(0);
     let fz = f32x4_splat(0.0);
     let lane_bits = i32x4(1, 2, 4, 8);
+    // Keep contact resistance for the unsampled half of the stagger.
+    // Six unused bits of sepMov store [0,1]; no extra per-unit column.
+    let old_contact = f32x4_mul(f32x4_convert_u32x4(u32x4_shr(ld_u8x4(m.smv.add(s)), 2)), f32x4_splat(1.0 / 63.0));
     // (sepMov: the vector paths' lanes as they moved (known: no position
     // read); the rest from the positions, output 0 keeping its own.)
     if known & 15 == 15 {
@@ -3665,7 +3668,7 @@ unsafe fn push4(m: &Mv, c: &PushC, s: usize, end: usize, known: i32, mvd: i32) -
         let mv = v128_and(v128_or(i32x4_ne(x, v128_load(m.px.add(s) as *const v128)), i32x4_ne(y, v128_load(m.py.add(s) as *const v128))), i32x4_splat(1));
         let kv = i32x4_ne(v128_and(i32x4_splat(known), lane_bits), zero);
         let mv = v128_bitselect(v128_and(i32x4_ne(v128_and(i32x4_splat(mvd), lane_bits), zero), i32x4_splat(1)), mv, kv);
-        let old = i32x4_extend_low_i16x8(i16x8_extend_low_i8x16(v128_load32_zero(m.smv.add(s) as *const u32)));
+        let old = v128_and(ld_u8x4(m.smv.add(s)), i32x4_splat(1));
         let v = v128_bitselect(old, mv, v128_andnot(i32x4_eq(o4, zero), kv));
         let b = i8x16_narrow_i16x8(i16x8_narrow_i32x4(v, v), i16x8_narrow_i32x4(v, v));
         (m.smv.add(s) as *mut u32).write_unaligned(i32x4_extract_lane::<0>(b) as u32);
@@ -3673,7 +3676,7 @@ unsafe fn push4(m: &Mv, c: &PushC, s: usize, end: usize, known: i32, mvd: i32) -
     let hits = v128_load(m.shit.add(s) as *const v128);
     let cx = v128_load(m.scx.add(s) as *const v128);
     let cy = v128_load(m.scy.add(s) as *const v128);
-    if !v128_any_true(v128_or(hits, v128_or(cx, cy))) {
+    if !v128_any_true(v128_or(hits, v128_or(old_contact, v128_or(cx, cy)))) {
         return 0;
     }
     let dead = i32x4_ne(ld_u8x4(m.dead.add(s)), zero);
@@ -3682,17 +3685,52 @@ unsafe fn push4(m: &Mv, c: &PushC, s: usize, end: usize, known: i32, mvd: i32) -
     let sc = f32x4_mul(v128_bitselect(one, f32x4_sqrt(f32x4_div(c.contacts, f32x4_max(hf, one))), f32x4_le(hf, c.contacts)), c.k);
     let mut px = f32x4_mul(f32x4_convert_i32x4(v128_load(m.spx.add(s) as *const v128)), sc);
     let mut py = f32x4_mul(f32x4_convert_i32x4(v128_load(m.spy.add(s) as *const v128)), sc);
+
+    // Density yields an outward velocity in pixels per base tick. The
+    // contact sum grows with compression; cap only the velocity, not its
+    // displacement per simulation update. Applies at every step size.
+    let radius = f32x4_max(one, v128_load(m.rrc.add(s) as *const v128));
+    let speed = f32x4_max(f32x4_splat(0.25), v128_load(m.spd.add(s) as *const v128));
+    let lim = f32x4_mul(speed, f32x4_splat(4.0));
+    let gain = f32x4_div(f32x4_mul(speed, f32x4_splat(2.0)), radius);
+    px = f32x4_mul(px, gain);
+    py = f32x4_mul(py, gain);
     let len = f32x4_sqrt(f32x4_add(f32x4_mul(px, px), f32x4_mul(py, py)));
-    let lim = f32x4_max(fz, v128_load(m.sov.add(s) as *const v128));
     let r = v128_bitselect(f32x4_div(lim, len), one, f32x4_gt(len, lim));
     px = f32x4_mul(px, r);
     py = f32x4_mul(py, r);
     let hx = f32x4_mul(px, c.now);
     let hy = f32x4_mul(py, c.now);
-    let dx = f32x4_add(cx, hx);
-    let dy = f32x4_add(cy, hy);
+    let force_x = f32x4_add(cx, hx);
+    let force_y = f32x4_add(cy, hy);
+    // Pressure also supplies the reaction to inward navigation. Summed
+    // normals can cancel inside a crowd even when every contact is deeply
+    // compressed; increasing a vector gain alone cannot resist that case.
+    // Use the deepest contact to reduce navigation under compression.
+    // Outward pressure keeps moving bodies into available space. This is part of
+    // the same displacement, before its spatial/visibility commit.
+    let nav_x = px4(i32x4_sub(v128_load(m.x.add(s) as *const v128), v128_load(m.x0.add(s) as *const v128)));
+    let nav_y = px4(i32x4_sub(v128_load(m.y.add(s) as *const v128), v128_load(m.y0.add(s) as *const v128)));
+    let depth = v128_load(m.sov.add(s) as *const v128);
+    let contact = f32x4_min(one, f32x4_div(depth, f32x4_mul(radius, f32x4_splat(0.4))));
+    let resistance = f32x4_max(contact, old_contact);
+    let reaction = resistance;
+    // The JS movement fallback consumes the same effective contact after
+    // this kernel. Pair sums are slot-local and rebuilt before next use.
+    v128_store(m.sov.add(s) as *mut v128, f32x4_max(depth, f32x4_mul(old_contact, f32x4_mul(radius, f32x4_splat(0.4)))));
+    let dx = f32x4_sub(f32x4_mul(force_x, f32x4_splat(m.dk as f32)), f32x4_mul(nav_x, reaction));
+    let dy = f32x4_sub(f32x4_mul(force_y, f32x4_splat(m.dk as f32)), f32x4_mul(nav_y, reaction));
     v128_store(m.scx.add(s) as *mut v128, v128_andnot(f32x4_sub(px, hx), dead));
     v128_store(m.scy.add(s) as *mut v128, v128_andnot(f32x4_sub(py, hy), dead));
+    {
+        // Keep only a crowd with a representable force awake. Quiet units
+        // retain their cheap resting schedule; no extra full-population pass.
+        let settling = v128_andnot(v128_or(i32x4_ne(q8x4(dx), zero), i32x4_ne(q8x4(dy), zero)), dead);
+        let carry = i32x4_shl(i32x4_trunc_sat_f32x4(f32x4_add(f32x4_mul(contact, f32x4_splat(63.0)), f32x4_splat(0.5))), 2);
+        let motion = v128_or(v128_or(ld_u8x4(m.smv.add(s)), v128_and(settling, i32x4_splat(2))), v128_andnot(carry, dead));
+        let bytes = u8x16_narrow_i16x8(i16x8_narrow_i32x4(motion, motion), i16x8_narrow_i32x4(motion, motion));
+        (m.smv.add(s) as *mut u32).write_unaligned(i32x4_extract_lane::<0>(bytes) as u32);
+    }
     let lanes = i32x4_lt(i32x4(0, 1, 2, 3), i32x4_splat(end as i32 - s as i32));
     let apply = v128_andnot(v128_or(f32x4_ne(dx, fz), f32x4_ne(dy, fz)), dead);
     let mut nd = 0i32;

@@ -264,8 +264,8 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // Unit._navLastD (-1 none): its distance to a group's destination last
     // tick (arriving in a crowd), one value for Unit.update and the kernel.
     ['mvNavLD', Float32Array, 1],
-    // Unit._sepMoved: 1 when it moved by itself last tick (the separation
-    // started at the next tick's start reads it; see separationStart).
+    // Unit._sepMoved: bit 0 moved by itself; bit 1 still separating.
+    // Bits 2..7 carry contact resistance through the stagger (0..63).
     ['sepMov', Uint8Array, 1],
     // Unit.dead (1 dead), so the tick's dead-unit pass need not read objects.
     ['dead', Uint8Array, 1],
@@ -323,7 +323,7 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // The separation's tick-start copy (SIM_KERNEL_STATUS writes it with
     // x0/y0, its tier job reads it while the pass moves units): dead, radius,
     // layer; and the push it found that is still to be applied next tick
-    // (sepCx/sepCy: a push is spread over two ticks).
+    // (sepCx/sepCy: separation velocity carried into the next update).
     ['sepD0', Uint8Array, 1], ['sepR0', Float32Array, 1], ['sepL0', Uint8Array, 1],
     ['sepCx', Float32Array, 1], ['sepCy', Float32Array, 1],
     // The version of its (owner, type) stat tables its stats were applied at
@@ -791,7 +791,7 @@ const _simUnitObjClear = new Function('C', 's', SIM_UNIT_OBJ_FIELDS.map(k => 'C.
 function _simDetValuesCtor() {
     const body = SIM_UNIT_ACCESSOR_COLUMNS.map(k => 'this.' + k + ' = C.' + k + '[s]' + (SIM_UNIT_POS_COLUMNS.has(k) ? ' * ' + SIM_POS_INV : '') + ';').join(' ')
         + ' ' + SIM_UNIT_OBJ_FIELDS.map(k => 'this.' + k + ' = C.oc_' + k + '[s];').join(' ') + ' this._routeEnd = C.rtEnd[s]; this.watchedByTeam = C.wTeam[s];'
-        + ' this.dead = C.dead[s] === 1; this._navLastD = C.mvNavLD[s]; this._floorTile = C.mvFloor[s]; this._sepMoved = C.sepMov[s];'
+        + ' this.dead = C.dead[s] === 1; this._navLastD = C.mvNavLD[s]; this._floorTile = C.mvFloor[s]; this._sepMoved = C.sepMov[s] & 1;'
         + ' this._statsBehind = false; this._forcedTargetLastSeenX = null; this._forcedTargetLastSeenY = null;'
         + ' { const w = C.wkIx[s], a = C.wkWx[w], b = C.wkWy[w], m = C.wkLmt[w]; this._builderLastWatchX = a === a ? a : undefined; this._builderLastWatchY = b === b ? b : undefined; this._builderLastMoveTick = m === -2147483648 ? undefined : m; }'
         + ' this._dotPending = C.stAcc[s]; this._laserPending = C.lzAcc[s]; this._laserBeam = C.lzBeam[s];'

@@ -270,14 +270,23 @@ pub unsafe extern "C" fn sep_pack(
         }
         let su = s as usize;
         let uid = rd(id, su);
-        let moved = rd(smv, su) == 1;
+        let motion = rd(smv, su);
+        let moved = (motion & 1) != 0;
         let own = mode != 0 || (t0.wrapping_add(uid) & 1) == 0;
         wr(qx, j, rd(xs, su) as f32);
         wr(qy, j, rd(ys, su) as f32);
-        wr(qr, j, (if live { sep_radius(rd(crl, su), rd(rdl, su)) } else { rd(r0, su) }) as f32);
+        // Start crowd pressure before bodies overlap. A small absolute skin
+        // matters most for small units; proportional clearance scales with
+        // large units. This changes separation only, not combat hit radii.
+        let radius = if live { js_max(sep_radius(rd(crl, su), rd(rdl, su)), rd(rdl, su)) } else { rd(r0, su) };
+        wr(qr, j, (radius * 1.1 + 0.75) as f32);
         wr(qid, j, uid);
-        let part = own && (moved || rest <= 1 || irem(run.wrapping_add(uid), rest) == 0);
-        let sc = (if moved { 2 } else { 0 }) | (if part { 1 } else { 0 });
+        // A crowd still settling at low TPS is active even after its walk
+        // order ends. Do not wait ten seconds for the resting check, nor
+        // misclassify separation as self-propelled movement for pair shares.
+        let settling = (motion & 2) != 0;
+        let part = own && (moved || settling || rest <= 1 || irem(run.wrapping_add(uid), rest) == 0);
+        let sc = (if moved { 2 } else { 0 }) | (if settling { 4 } else { 0 }) | (if part { 1 } else { 0 });
         wr(meta, j, sc << 16 | ((rd(layer, su) as i32) & 255) << 8 | (rd(owner, su) & 255));
     }
 }
@@ -339,7 +348,7 @@ pub unsafe extern "C" fn sep_mark(
         let e1 = lower_bound(ekey, start, nl, (rb + 1) * cw);
         let mut e = lower_bound(ekey, 0, start, base);
         while e < e1 {
-            if (rd(meta, e) & 131072) != 0 {
+            if (rd(meta, e) & 393216) != 0 {
                 wr(tab, (rd(ekey, e) - base) as usize, 1);
             }
             e += 1;
@@ -410,7 +419,7 @@ pub unsafe extern "C" fn sep_mark(
                 }
                 cur[r] = e;
                 while e < nl && rd(ekey, e) <= k1 {
-                    if (rd(meta, e) & 131072) != 0 {
+                    if (rd(meta, e) & 393216) != 0 {
                         near = true;
                         break;
                     }
@@ -435,7 +444,13 @@ fn push_dir(ux: f64, uy: f64, d: f64, id: i32, oid: i32) -> (f64, f64) {
     if d > 0.001 {
         (ux / d, uy / d)
     } else {
-        let dir = id & 3;
+        // Both sides must choose the SAME axis and opposite signs. Using
+        // each unit's own id for the axis can push coincident units in the
+        // same direction forever (particularly after coarse steps).
+        let lo = id.min(oid) as u32;
+        let hi = id.max(oid) as u32;
+        let hash = lo.wrapping_mul(0x9e3779b9) ^ hi.wrapping_mul(0x85ebca6b);
+        let dir = (hash ^ (hash >> 16)) & 3;
         let mdx = if dir == 0 { 1.0 } else if dir == 2 { -1.0 } else { 0.0 };
         let mdy = if dir == 1 { 1.0 } else if dir == 3 { -1.0 } else { 0.0 };
         let sign = if id < oid { -1.0 } else { 1.0 };
@@ -456,7 +471,6 @@ struct PairP {
     op: i32,
     pl: i32,
     p_part: i32,
-    p_moved: bool,
     acc_px: f64,
     acc_py: f64,
     acc_ov: f64,
@@ -479,8 +493,6 @@ struct PairOut {
     qscale: f64,
     both: f64,
     one: f64,
-    mover: f64,
-    yield_: f64,
 }
 
 /// The exact test of entry q against p and both sides' pushes (the JS
@@ -504,18 +516,12 @@ unsafe fn pair_exact(o: &PairOut, p: &mut PairP, q: usize) {
     let d = sqrt(d2e);
     let dm = if d != d { d } else if d > 0.001 { d } else { 0.001 };
     let overlap = min_dist - dm;
-    let q_moved = (qm & 131072) != 0;
+    let pressure = overlap;
     let iq = rd(o.qid, q);
     if p.p_part != 0 {
-        let share = if p.p_moved == q_moved {
-            if q_part != 0 { o.both } else { o.one }
-        } else if p.p_moved {
-            if q_part != 0 { o.mover } else { o.one }
-        } else {
-            o.yield_
-        };
+        let share = if q_part != 0 { o.both } else { o.one };
         let (nx, ny) = push_dir(-dxe, -dye, d, p.ip, iq);
-        let f = overlap * share * o.qscale;
+        let f = pressure * share * o.qscale;
         p.acc_px += js_round(nx * f);
         p.acc_py += js_round(ny * f);
         if overlap > p.acc_ov {
@@ -524,15 +530,9 @@ unsafe fn pair_exact(o: &PairOut, p: &mut PairP, q: usize) {
         p.acc_hit += 1;
     }
     if q_part != 0 {
-        let share = if q_moved == p.p_moved {
-            if p.p_part != 0 { o.both } else { o.one }
-        } else if q_moved {
-            if p.p_part != 0 { o.mover } else { o.one }
-        } else {
-            o.yield_
-        };
+        let share = if p.p_part != 0 { o.both } else { o.one };
         let (nx, ny) = push_dir(dxe, dye, d, iq, p.ip);
-        let f = overlap * share * o.qscale;
+        let f = pressure * share * o.qscale;
         let b = bq as usize;
         wr(o.px_out, b, rd(o.px_out, b).wrapping_add(js_round(nx * f) as i32));
         wr(o.py_out, b, rd(o.py_out, b).wrapping_add(js_round(ny * f) as i32));
@@ -623,8 +623,8 @@ pub unsafe extern "C" fn sep_pairs(
     one: f64,
     listed: i32,
     cws: f64,
-    mover: f64,
-    yield_: f64,
+    _mover: f64,
+    _yield: f64,
     parity: i32,
     chunk: i32,
 ) {
@@ -651,7 +651,7 @@ pub unsafe extern "C" fn sep_pairs(
     let max_r = (far_any - pad) / 2.0;
     let lo = lower_bound(keys, 0, listed, row0 * cw);
     let hi = lower_bound(keys, lo, listed, row1 * cw);
-    let o = PairOut { ord, qx, qy, qr, meta, qid, px_out, py_out, ov_out, hit_out, pad, qscale, both, one, mover, yield_ };
+    let o = PairOut { ord, qx, qy, qr, meta, qid, px_out, py_out, ov_out, hit_out, pad, qscale, both, one };
     // Where each chunk's entries start, per row the band's units may reach
     // (tab[r * stride + c], c = 0..=cw: c = cw the row's end), from the
     // counts per chunk. On the stack (64 KB); a bigger band (a wide map, a
@@ -719,7 +719,6 @@ pub unsafe extern "C" fn sep_pairs(
             op: pm & 255,
             pl: pm & 65280,
             p_part: 1,
-            p_moved: (pm & 131072) != 0,
             acc_px: 0.0,
             acc_py: 0.0,
             acc_ov: 0.0,
