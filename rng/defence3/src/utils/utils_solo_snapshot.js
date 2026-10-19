@@ -15,7 +15,8 @@ function buildSoloGameSnapshotParts(context) {
         settings: context.settings, seed: gameSeed, width: GRID_W, height: GRID_H,
         teams: activeTeamIds, teamColors: context.teamColors, player: context.player, camera: context.camera,
         sourceTick: currentTick, players: players.map(p => ({ energy: p.energy, astar: p.astar,
-            researchLevels: p.researchLevels })) });
+            researchLevels: p.researchLevels,
+            researchOrders: [p.researchTask,...(p.researchQueue || [])].filter(Boolean).map(t=>({kind:t.kind,key:t.key,statKey:t.statKey,workDone:t.workDone||0})) })) });
     const batch = (key, iterable) => {
         let rows = [];
         for (const row of iterable) {
@@ -49,11 +50,16 @@ function buildSoloGameSnapshotParts(context) {
             seen.add(e);
             const x = e.gx, y = e.gy;
             const target = e.rallyTargetUnitId != null ? _unitByIdMap().get(e.rallyTargetUnitId) : null;
-            yield [e.type === 'barrack' ? 'barrack_' + e.unitType : e.type, e.owner, x, y,
+            const row = [e.type === 'barrack' ? 'barrack_' + e.unitType : e.type, e.owner, x, y,
                 e.manualStacks || e.stacks || 1, e.energy, !!e.underConstruction,
                 target ? target.x / TILE : Number.isFinite(e.rallyX) ? e.rallyX / TILE : null,
                 target ? target.y / TILE : Number.isFinite(e.rallyY) ? e.rallyY / TILE : null,
                 e.autoUpgradeEnabled !== false, e.buildEnabled !== false];
+            if(e.markedForSalvage || e.spawnQueue?.length || e.autoResearchEnabled===false || e.queueEnabled===false) row.push({
+                markedForSalvage:!!e.markedForSalvage, queueEnabled:e.queueEnabled!==false,
+                autoResearchEnabled:e.autoResearchEnabled!==false,
+                spawnQueue:(e.spawnQueue||[]).map(q=>{const v=getQueuedSpawnInfo(q,getSpawnerFallbackUnitType(e),getThingBaseLevel(e),e.owner);return [v.unitType,v.level,v.energyPaid];}) });
+            yield row;
         }
     })());
     batch('units', (function* () {
@@ -103,7 +109,10 @@ function soloSceneReader() {
                     || !Array.isArray(r.players) || !r.players.length || r.players.length > 8
                     || !Array.isArray(r.teams) || !r.teams.length || !r.teams.every(p => Number.isInteger(p) && p >= 0 && p < r.players.length)
                     || !r.teams.includes(r.player) || !r.camera || !['x','y','zoom'].every(k => Number.isFinite(r.camera[k])) || r.camera.zoom <= 0) fail();
-                for (const p of r.players) if (!p || !Number.isFinite(p.energy) || !Number.isFinite(p.astar)) fail();
+                for (const p of r.players) {
+                    if (!p || !Number.isFinite(p.energy) || !Number.isFinite(p.astar)) fail();
+                    if(p.researchOrders!=null && (!Array.isArray(p.researchOrders)||p.researchOrders.length>100000||!p.researchOrders.every(t=>t&&['unit','building'].includes(t.kind)&&typeof t.key==='string'&&typeof t.statKey==='string'&&Number.isFinite(t.workDone||0)&&(t.workDone||0)>=0))) fail();
+                }
                 scene.header = r; return;
             }
             const keys = Object.keys(r), key = keys[0], h = scene.header;
@@ -135,6 +144,9 @@ function soloSceneReader() {
                         if (key === 'buildings') {
                             if (!tile(row[2],row[3]) || !Number.isFinite(row[4]) || row[4] < 1 || !Number.isFinite(row[5])) fail();
                             if (row[7] != null && (!Number.isFinite(row[7]) || !Number.isFinite(row[8]))) fail();
+                            const work=row[11];
+                            if(work!=null && (typeof work!=='object'||Array.isArray(work)||['markedForSalvage','queueEnabled','autoResearchEnabled'].some(k=>work[k]!=null&&typeof work[k]!=='boolean')||
+                                (work.spawnQueue!=null&&(!Array.isArray(work.spawnQueue)||work.spawnQueue.length>20||!work.spawnQueue.every(q=>Array.isArray(q)&&typeof q[0]==='string'&&Number.isInteger(q[1])&&q[1]>=1&&Number.isFinite(q[2])&&q[2]>=0))))) fail();
                         } else {
                             // Continuous positions can lie just beyond an edge during
                             // crowd movement. Preserve them; spatial indexing clamps
@@ -282,6 +294,35 @@ function applySoloScene(scene) {
         if (typeof e.updateStats === 'function') e.updateStats();
         e.energy = r[5];
         if (r[7] != null) { e.rallyX = r[7]*TILE; e.rallyY = r[8]*TILE; }
+        if(r[11]) {
+            const work=r[11];
+            e.markedForSalvage=!!work.markedForSalvage;
+            e.queueEnabled=work.queueEnabled!==false;
+            e.autoResearchEnabled=work.autoResearchEnabled!==false;
+            if(work.spawnQueue?.length) {
+                if(!Array.isArray(e.spawnQueue)) throw new Error('This scene building cannot queue units: '+r[0]);
+                e.spawnQueue=work.spawnQueue.map(q=>{
+                    if(!Object.hasOwn(BASE_UNIT_STATS,q[0]) || q[1]>MAX_THING_LEVEL) throw new Error('Invalid scene production queue.');
+                    return getQueuedSpawnInfo({unitType:q[0],level:q[1],energyPaid:q[2]},getSpawnerFallbackUnitType(e),getThingBaseLevel(e),e.owner);
+                });
+                spawnerProductionChanged(e);
+            }
+            if(typeof workSiteDirty==='function') workSiteDirty(e.gx,e.gy);
+        }
+    }
+    if(typeof salvageMarksChanged==='function') salvageMarksChanged();
+    for(let pid=0;pid<h.players.length;pid++) {
+        const orders=h.players[pid].researchOrders || [], p=ensurePlayerResearchQueueState(pid),depth={};
+        if(orders.length>getResearchQueueCapacityForPlayer(pid)) throw new Error('The scene research queue exceeds its lab capacity.');
+        for(const order of orders) {
+            if(!getResearchStatEntry(order.kind,order.key,order.statKey)) throw new Error('Unknown scene research stat.');
+            const id=makeResearchLevelId(order.kind,order.key,order.statKey),level=getPlayerResearchLevel(pid,order.kind,order.key,order.statKey)+(depth[id]||0);
+            if(level>=MAX_RESEARCH_LEVEL) throw new Error('Scene research is already at its maximum.');
+            const task=makeResearchTask(pid,order.kind,order.key,order.statKey,level);
+            task.workDone=Math.min(task.workRequired,Math.max(0,order.workDone||0));
+            p.researchQueue.push(task);depth[id]=(depth[id]||0)+1;
+        }
+        tryAdvancePlayerResearchTask(pid);
     }
     simMoveWallsDirty(); simMoveStructsReset(); navReset();
     const groups = new Map();

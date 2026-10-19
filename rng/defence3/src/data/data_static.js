@@ -784,7 +784,7 @@ const PRECOMPUTED_SOFT_CAP_MAP = {
         },
         attackRange: ({ baseAtLevel1 }) => {
             let baseRange = Number(baseAtLevel1 && baseAtLevel1.attackRange);
-            return (Number.isFinite(baseRange) && baseRange > 0) ? (baseRange * 4) : 14;
+            return (Number.isFinite(baseRange) && baseRange > 0) ? (baseRange * 4) : 20;
         },
         gatherPerTrip: Infinity,
         builderDps: Infinity,

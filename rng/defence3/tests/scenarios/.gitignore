@@ -1,0 +1,4 @@
+# Generated snapshots, manifests, metadata and subdirectories are reproducible.
+# Keep only this ignore file in Git; generators live in tests/balance/.
+*
+!.gitignore
