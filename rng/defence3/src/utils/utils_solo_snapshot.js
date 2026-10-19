@@ -337,9 +337,15 @@ function applySoloScene(scene) {
             else groups.set(key, { owner: u.owner, action: r[7][0], targetX: (r[7][1]+.5)*TILE, targetY: (r[7][2]+.5)*TILE, unitIds: [u.id], distinct: true });
         }
     }
-    for (const a of groups.values()) _issueGroupMoveOrder(a,a.owner,a.action === 'attackMove' ? CMD_ATTACK_MOVING : CMD_MOVING);
     recomputePlayerPopCaps(); recalculateAdjacency(true);
     clearGameplayVisibilityCache(); updateVisibility(localPlayerId);
+    // The world is complete before any saved destination becomes a new order.
+    // Use the live command queue (including its normal per-tick budget), not
+    // private route initialization against a partially restored spatial index.
+    spatialIndexInvalidate(); spatialIndexEnsure();
+    // Process them on live ticks, after startup/navigation preparation, exactly
+    // like newly issued player commands. The normal backlog budgets large maps.
+    for(const a of groups.values()) _actionBacklog.push([a.owner,{action:a.action,targetX:a.targetX,targetY:a.targetY,unitIds:a.unitIds}]);
     _markCombinedBgFullDirty();
 }
 

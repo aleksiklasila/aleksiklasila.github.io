@@ -10,6 +10,15 @@ Shared-map interference remains a limitation, and count-limited energy compariso
 are explicitly identified. No gameplay balance values are modified.
 Scouts and watch towers are excluded from both sides of balance matchups.
 Worker fixtures still cover all applicable build/heal/salvage targets.
+On import, all entities are placed and world indexes rebuilt before saved
+destinations are queued as fresh player commands on live ticks. Routes are
+regenerated, not saved. The normal command budget applies to large scenes.
+Existing snapshots work with this loader fix; they do not need regeneration.
+Attack-move now retains its destination when formation movement finishes short:
+the unit regenerates its remaining approach instead of losing the order and
+becoming idle outside engagement range. Combat stats are unchanged. The
+`tests/scene-orders.test.cjs` regression runs through combat in page and worker
+modes, checking completed unit and turret engagements rather than initial motion.
 
 Snapshots are organized under `tests/scenarios/equal_numbers/` and
 `tests/scenarios/equal_energy/`. Worker snapshots remain at `tests/scenarios/`.

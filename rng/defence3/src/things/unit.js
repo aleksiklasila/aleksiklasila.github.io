@@ -1214,6 +1214,7 @@ class Unit {
                 }
                 return;
             }
+            if (_continueShortAttackMove(this)) return;
             this._attackMoveGx = this._attackMoveGy = null;
             this.commandState = CMD_IDLE;
             this.path = null;
@@ -2972,9 +2973,25 @@ function simFlowArm(c, s, fid, gen, dest, cmd, flying, ready = 0, worker = false
     return true;
 }
 
-// A flow unit stopping short of its destination (a crowd there): its move
-// order is done, as at the end of a path.
+// A group's movement can settle short of its tile. That must not cancel an
+// attack-move: opposing groups can otherwise stop outside acquisition range.
+// Finish its remaining approach as an individual route, as a renewed order
+// does, while retaining the normal targeting and navigation rules.
+function _continueShortAttackMove(u) {
+    if (u.commandState !== CMD_ATTACK_MOVING || u._attackMoveGx == null || u.holdPosition || u.workerState || u.unitType === 'scout') return false;
+    const gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
+    if (gx === u._attackMoveGx && gy === u._attackMoveGy) return false;
+    if (u._routeEnd >= 0 && gy * GRID_W + gx === u._routeEnd) return false;
+    u._routeKey = null; u.path = null; u.pathIndex = 0; u._navLastD = -1;
+    if (u._us) u._us.mvOn[u._si] = 0;
+    u._resumeAttackMove();
+    return true;
+}
+
+// A normal move may finish with its formation; attack-move keeps its intent
+// until its remaining approach has completed.
 function simFlowArrive(u) {
+    if (_continueShortAttackMove(u)) return;
     u._routeKey = null; u.path = null; u.pathIndex = 0;
     u._pendingPathTarget = null; u.pathIsFallbackAstar = false; u.targetPos = null;
     if (u.commandState === CMD_ATTACK_MOVING) { u._attackMoveGx = u._attackMoveGy = null; }
