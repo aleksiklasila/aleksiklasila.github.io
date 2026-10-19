@@ -183,3 +183,26 @@ S = R.drawColumnModels(C, { worldWidth: 300 }, A);
 assert.equal(S.slotMode, true);
 assert.equal([...S.groups.values()].filter(G => G.units && G.storage.count).length, 0, 'no unit records after switching back');
 console.log('PASS medium-models-slots: ' + checks + ' records matched over 60 ticks');
+
+// A newly visible enemy type may arrive before its atlas panel. A temporary
+// miss must be retried after baking completes, without a camera move/reload.
+const delayedFrame=frame(2); delayedFrame.type.fill(3); delayedFrame.owner.set([0,1]);
+delayedFrame.x.fill(3200);delayedFrame.y.fill(3200);delayedFrame.r.fill(12);
+const delayedAtlas={catalog:A.catalog,panels:[],ownerPanels:new Map(),revision:1};
+const delayedColumns={...C,units:delayedFrame,unitCandidates:[{_s:0},{_s:1}],unitCandidateSlots:null,
+    detailMask:new Uint8Array(2),detailMaskVersion:1000,fullVisibility:true};
+c._detailScore=()=>10;
+let delayed=R.drawColumnModels(delayedColumns,{worldWidth:300},delayedAtlas);
+assert.equal(delayed.count,0);
+delayedAtlas.panels=panels;delayedAtlas.revision++;
+delayed=R.drawColumnModels(delayedColumns,{worldWidth:300},delayedAtlas);
+assert.equal(delayed.count,2,'both teams gain meshes after their panel is ready');
+assert.deepEqual(Array.from(delayed.masks[1]),[255,255]);
+// Frame-string remaps keep the baked images but invalidate cached type lookups.
+const remapped={...A.catalog,lookup:A.catalog.lookup.slice()};
+remapped.lookup[(7*width+3)*4]=1;
+R.columnAtlas=delayedAtlas;c.getColumnLodCatalog=()=>remapped;
+Object.assign(R.gl,{bindTexture(){},pixelStorei(){},texImage2D(){}});
+R.getColumnAtlas();
+assert.equal(R._cmStyle(delayedAtlas,7,3).style.modelKey,'unit_norm');
+console.log('PASS model promotion after delayed panels and type-code remapping');

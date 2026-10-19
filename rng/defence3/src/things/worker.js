@@ -155,6 +155,8 @@ function updateWorkerAI(u) {
             }
             if (u.pathIsFallbackAstar) {
                 _tryUpgradeAstarFallbackPath(u);
+                // A successful upgrade installs the path and clears the pending target.
+                if (!u._pendingPathTarget) return;
             }
             // (Not while the navigation has it on its way to the closest tile
             // it can reach, or waiting there: it has not arrived.)

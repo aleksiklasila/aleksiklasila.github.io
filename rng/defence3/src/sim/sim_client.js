@@ -69,7 +69,7 @@ function _simClientScriptUrls() {
         .filter(src => /\/src\//.test(src) && !/bootstrap\.js|sim_shadow\.js|sim_worker\.js|sim_client\.js/.test(src));
 }
 
-const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261019-snapshot';
+const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261019-files';
 
 function _simClientCreate() {
     let c = {
@@ -263,10 +263,10 @@ function simClientCreateMatch(opts = {}) {
     c.startText = null;
     for (let [, r] of c.replies) r.reject(new Error('match restarted'));
     c.replies.clear();
-    const promise = new Promise((resolve, reject) => { c.creating = { epoch: c.epoch, resolve, reject, onFail: opts.onFail || null }; });
+    const promise = new Promise((resolve, reject) => { c.creating = { epoch: c.epoch, resolve, reject, scene: !!opts.scene, onFail: opts.onFail || null }; });
     promise.catch(() => { });
     c.worker.postMessage({
-        type: 'start', mode: 'authority', epoch: c.epoch, create: true, startText: !!opts.startText, controls,
+        type: 'start', mode: 'authority', epoch: c.epoch, create: true, startText: !!opts.startText, scene: opts.scene || null, controls,
         globals: {
             assign: _simClientGlobals(),
             editableConfig: typeof serializeEditableRuntimeConfigForTransport === 'function' ? serializeEditableRuntimeConfigForTransport() : null,
@@ -294,7 +294,7 @@ function _simClientCreated(c, msg) {
     msg.pageText = null;
     c.decodingStart = true;
     try {
-        if (isMultiplayer) applyAuthoritativeStateSnapshot(parsed);
+        if (isMultiplayer || job.scene) applyAuthoritativeStateSnapshot(parsed);
         else { snapFlushHistoryCaches(); snapDecodeState(parsed.state); currentTick = pageTick; }
     } finally { c.decodingStart = false; }
     parsed = null;

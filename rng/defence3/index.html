@@ -9,7 +9,7 @@
          GitHub Pages cannot send itself): SharedArrayBuffer for the simulation
          workers. The first visit reloads once. Must be the first script. -->
     <script src="./coi-serviceworker.min.js"></script>
-    <link rel="stylesheet" href="./style/style.css?v=20261017-statsmap">
+    <link rel="stylesheet" href="./style/style.css?v=20261019-popover-white">
     <link rel="stylesheet" href="./style/bottom_bar.css?v=20261012-h8">
     <link rel="stylesheet" href="./style/scrollbars.css?v=20261012-h8">
 </head>
@@ -125,10 +125,10 @@
                         <button id="btn-open-optimization" type="button" style="font-size:11px;padding:4px 8px">Optimization</button>
                         <button id="btn-open-config" type="button" style="font-size:11px;padding:4px 8px">Config</button>
                     </div>
-                    <div class="lobby-setting-row compact" style="gap:6px;justify-content:flex-start;">
+                    <div class="lobby-setting-row compact" style="gap:6px;justify-content:flex-start;flex-wrap:wrap;">
                         <button id="btn-export-settings" type="button" style="font-size:11px;padding:4px 8px">Export Settings</button>
                         <button id="btn-import-settings" type="button" style="font-size:11px;padding:4px 8px">Import Settings</button>
-                        <input id="input-import-settings" type="file" accept="application/json,.json" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;opacity:0;pointer-events:none;">
+                        <input id="input-import-settings" type="file" accept="application/json,application/gzip,application/x-gzip,.json,.gz" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;opacity:0;pointer-events:none;">
                     </div>
                 </div>
 
@@ -269,11 +269,10 @@
             </div>
         </div>
         <div id="lobby-buttons" style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
-            <button onclick="startSoloGame()" style="font-size:16px;padding:10px 24px">Play Solo</button>
+            <button id="btn-play-offline" type="button" style="font-size:16px;padding:10px 24px">Play Offline</button>
             <button onclick="hostOnlineGame()" id="btn-online" style="font-size:16px;padding:10px 24px">Play
                 Online</button>
-            <button id="btn-import-snapshot" type="button" style="font-size:16px;padding:10px 24px" title="Resume a solo game from a snapshot JSON file">Import Snapshot</button>
-            <input id="input-import-snapshot" type="file" accept="application/json,.json" hidden>
+            <input id="input-import-snapshot" type="file" accept="application/json,application/gzip,application/x-gzip,application/x-ndjson,.json,.gz,.jsonl" hidden>
         </div>
         <div id="lobby-waiting" style="display:none;text-align:left;margin-top:12px;border:1px solid #333;background:#0d0d0d;padding:10px;border-radius:6px;min-width:420px">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
@@ -290,6 +289,7 @@
         </div>
     </div>
 
+    <div id="menu-action-popover" popover="auto" role="group"></div>
     <!-- HUD -->
     <div id="hud">
         <div class="hud-left">
@@ -869,22 +869,24 @@
     <script src="./src/sim/sim_wasm.js?v=20261018-snap"></script>
     <script src="./src/sim/sim_unit_state.js?v=20261018-separation5"></script>
     <script src="./src/utils/utils_common.js?v=20261016-mp3"></script>
+    <script src="./src/utils/utils_file_io.js?v=20261019-files"></script>
+    <script src="./src/audio_visual/menu_actions.js?v=20261019-popover"></script>
     <script src="./src/utils/utils_net_quality.js?v=20261018-dk2"></script>
     <script src="./src/utils/utils_networking.js?v=20261018-dk"></script>
-    <script src="./src/utils/utils_snapshot.js?v=20261018-separation5"></script>
+    <script src="./src/utils/utils_snapshot.js?v=20261019-files"></script>
     <script src="./src/utils/utils_resync.js?v=20261017-mp5"></script>
     <script src="./src/utils/utils_host_migration.js?v=20261017-mp5"></script>
     <script src="./src/utils/utils_storage.js?v=20261012-h8"></script>
 
     <script src="./src/data/data_static.js?v=20261018-dk"></script>
-    <script src="./src/data/data_dynamic.js?v=20261018-dk"></script>
+    <script src="./src/data/data_dynamic.js?v=20261019-files"></script>
     <script src="./src/data/data_state.js?v=20261017-gcpause"></script>
 
     <script src="./src/audio_visual/visibility_history.js?v=20261018-dk"></script>
     <script src="./src/audio_visual/range_overlay.js?v=20261017-range-gpu-2"></script>
     <script src="./src/audio_visual/selection_overlay.js?v=20261012-h8"></script>
     <script src="./src/audio_visual/postprocess3d.js?v=20261017-async-post"></script>
-    <script src="./src/audio_visual/renderer3d.js?v=20261017-histcols"></script>
+    <script src="./src/audio_visual/renderer3d.js?v=20261019-files"></script>
     <script src="./src/audio_visual/renderer2d.js?v=20261017-gcpause"></script>
     <script src="./src/audio_visual/side_visualizations.js?v=20261012-h8"></script>
     <script src="./src/audio_visual/effects3d.js?v=20261012-h8"></script>
@@ -905,14 +907,14 @@
 
     <script src="./src/things/barrack.js?v=20261018-dk"></script>
     <script src="./src/things/unit.js?v=20261018-separation5"></script>
-    <script src="./src/things/worker.js?v=20261018-dk"></script>
+    <script src="./src/things/worker.js?v=20261019-files"></script>
     <script src="./src/things/particle.js?v=20261018-dk"></script>
     <script src="./src/things/projectile.js?v=20261018-dk"></script>
     <script src="./src/things/things_utils.js?v=20261018-dk"></script>
     <script src="./src/things/tower.js?v=20261018-dk"></script>
 
-    <script src="./src/main.js?v=20261019-snapshot"></script>
-    <script src="./src/utils/utils_solo_snapshot.js?v=20261019-snapshot"></script>
+    <script src="./src/main.js?v=20261019-popover"></script>
+    <script src="./src/utils/utils_solo_snapshot.js?v=20261019-popover"></script>
 
     <script src="./src/sim/sim_frame.js?v=20261018-meta"></script>
     <script src="./src/sim/sim_frame_world.js?v=20261012-h8"></script>
@@ -920,7 +922,7 @@
     <script src="./src/sim/sim_shadow.js?v=20261018-dk"></script>
     <script src="./src/sim/sim_rebase_bin.js?v=20261012-h8"></script>
     <script src="./src/sim/sim_rebase.js?v=20261012-h8"></script>
-    <script src="./src/sim/sim_client.js?v=20261019-snapshot"></script>
+    <script src="./src/sim/sim_client.js?v=20261019-files"></script>
 
     <script src="./src/bootstrap.js?v=20261014-lod26"></script>
     <script src="./src/debug/load_metrics.js?v=20261017-load1"></script>

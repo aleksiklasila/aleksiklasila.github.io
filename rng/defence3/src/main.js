@@ -2859,7 +2859,7 @@ function initInput() {
     }
     if (btnExportSettings) {
         btnExportSettings.addEventListener('click', () => {
-            downloadMainMenuSettings();
+            showExportOptions(btnExportSettings, downloadMainMenuSettings);
         });
     }
     if (btnImportSettings && inputImportSettings) {

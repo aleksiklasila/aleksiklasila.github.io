@@ -23,6 +23,7 @@ for (const match of html.matchAll(/<input\b([^>]*)>|<select\b([^>]*)>([\s\S]*?)<
 const noop = () => {};
 const values = new Map();
 const context = vm.createContext({
+    location: { search: '' }, URLSearchParams,
     document: {
         getElementById: id => controls.get(id) || null,
         querySelectorAll: () => [...controls.values()], addEventListener: noop,

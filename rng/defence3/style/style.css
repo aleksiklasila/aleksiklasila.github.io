@@ -1824,3 +1824,26 @@ input.count-slider:disabled { opacity:.4; cursor:default; }
 .info-research-queue-item > div:has(.count-control) > span { flex:0 0 40px; }
 .info-research-queue-item > div:has(.count-control) > div { flex:1 1 0; }
 .research-popup-stat-pane { min-height:0; overflow-y:auto; overflow-x:hidden; }
+
+#menu-action-popover {
+    position: fixed;
+    inset: auto;
+    margin: 0;
+    padding: 0;
+    color: #111;
+    background: #fff;
+    border: 1px solid #aaa;
+    border-radius: 3px;
+}
+#menu-action-popover:popover-open { display: flex; flex-direction: column; }
+#menu-action-popover button {
+    color: inherit;
+    margin: 0;
+    padding: 5px 10px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    text-align: left;
+    font-size: 12px;
+}
+#menu-action-popover button:hover, #menu-action-popover button:focus-visible { background: #e8e8e8; }

@@ -6004,6 +6004,7 @@
             // images already exist. Rendering may update only this lookup.
             if(catalog && this.columnAtlas && this.columnAtlas.catalog!==catalog && this.columnAtlas.catalog.styles===catalog.styles) {
                 const gl=this.gl,A=this.columnAtlas;A.catalog=catalog;
+                A._cmStyles=null;A._cmSlotStyles=null;
                 gl.bindTexture(gl.TEXTURE_2D,A.lookup);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
                 gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,catalog.width,8,0,gl.RGBA,gl.FLOAT,catalog.lookup);
             }
@@ -6709,7 +6710,9 @@
                 if(!(_detailScore(x,z,size,false,false,12/(.8+.4*fraction),edgeHeight)>0))continue;
                 const type=F.type[s];
                 let st=type>=0&&type<styleOf.length?styleOf[type]:null;
-                if(st===undefined)st=styleOf[type]=this._cmStyle(A,7,type);
+                // Panels may still be baking when a type first enters view.
+                // A missing panel is temporary, not a permanent sprite-only type.
+                if(st===undefined){st=this._cmStyle(A,7,type);if(st)styleOf[type]=st;}
                 if(!st)continue;
                 const key=st.index*32+(F.mode[s]&31);
                 let G=byKey.get(key);

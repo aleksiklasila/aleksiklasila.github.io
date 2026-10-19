@@ -1297,36 +1297,32 @@ function applyMainMenuSettingsSnapshot(rawData) {
     if (popup && !popup.classList.contains('hidden')) renderStartingResourcesPopupContent();
 }
 
-function downloadMainMenuSettings() {
-    let data = createMainMenuSettingsSnapshot();
-    let blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    let url = URL.createObjectURL(blob);
-    let a = document.createElement('a');
-    let stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    a.href = url;
-    a.download = `defence3-settings-${stamp}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+async function downloadMainMenuSettings(compressed = true) {
+    const button = document.getElementById('btn-export-settings');
+    if (button?.disabled) return;
+    if (button) button.disabled = true;
+    try {
+        const data = createMainMenuSettingsSnapshot();
+        const blob = await makeJsonExportBlob([JSON.stringify(data, null, 2)], compressed);
+        downloadJsonExport(blob, 'defence3-settings', compressed);
+    } catch (error) {
+        showUiBanner('Settings export failed: ' + error.message, 'error', 6000);
+    } finally { if (button) button.disabled = false; }
 }
 
-function importMainMenuSettingsFromFile(file) {
+async function importMainMenuSettingsFromFile(file) {
     if (!file) return;
-    let reader = new FileReader();
-    reader.onload = () => {
-        try {
-            let parsed = JSON.parse(String(reader.result || '{}'));
-            applyMainMenuSettingsSnapshot(parsed);
-            saveUiSettingsToStorage();
-            showUiBanner('Settings imported.', 'success');
-        } catch {
-            showUiBanner('Invalid settings JSON.', 'error', 3600);
-        }
-    };
-    reader.readAsText(file);
+    try {
+        const parsed = await new Response(await openJsonFileStream(file)).json();
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+            || !(parsed.lobby || parsed.startingResources || parsed.editableConfig)) throw new Error('Choose a settings export.');
+        applyMainMenuSettingsSnapshot(parsed);
+        saveUiSettingsToStorage();
+        showUiBanner('Settings imported.', 'success');
+    } catch (error) {
+        showUiBanner('Settings import failed: ' + error.message, 'error', 6000);
+    }
 }
-
 function getGameModeLabel(mode = gameMode) {
     return mode === 'killking' ? 'Kill King' : 'Destroy Base';
 }

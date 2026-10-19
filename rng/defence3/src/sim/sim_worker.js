@@ -501,10 +501,11 @@ function _simStart(msg) {
     // without them and gets the world from here ('startState', then frames).
     // Otherwise its entities come with the snapshot.
     const create = !!msg.create;
-    startGameSkipStarters = !create;
+    startGameSkipStarters = !create || !!msg.scene;
     try { startGame(); } finally { startGameSkipStarters = false; }
     T.startGame = performance.now() - t0;
     _simStubUi();
+    if (msg.scene) applySoloScene(msg.scene);
     // gameStarted, isMultiplayer... as on the page (startGame may reset them).
     for (let [name, value] of Object.entries(g.assign || {})) self.eval(name + ' = ' + JSON.stringify(value));
     let startText = null;
@@ -729,7 +730,7 @@ function _simRequestRun(msg) {
         // Runs in the tick stream, after all ticks dispatched before the click.
         // Both the clock and the entities must come from this same world.
         case 'soloSnapshot':
-            result = JSON.stringify(buildSoloGameSnapshot(msg.args));
+            result = buildSoloGameSnapshotParts(msg.args);
             break;
         // Host: a resync patch of the state before the next tick.
         case 'encodePatch':
