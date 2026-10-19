@@ -134,9 +134,12 @@ function soloSceneReader() {
                         if (typeof row[0] !== 'string' || !h.teams.includes(row[1])) fail();
                         if (key === 'buildings') {
                             if (!tile(row[2],row[3]) || !Number.isFinite(row[4]) || row[4] < 1 || !Number.isFinite(row[5])) fail();
-                            if (row[7] != null && (!Number.isFinite(row[7]) || !Number.isFinite(row[8]) || !tile(Math.floor(row[7]),Math.floor(row[8])))) fail();
+                            if (row[7] != null && (!Number.isFinite(row[7]) || !Number.isFinite(row[8]))) fail();
                         } else {
-                            if (!Number.isFinite(row[2]) || !Number.isFinite(row[3]) || !tile(Math.floor(row[2]),Math.floor(row[3]))
+                            // Continuous positions can lie just beyond an edge during
+                            // crowd movement. Preserve them; spatial indexing clamps
+                            // its tile lookup separately, as it does in a live game.
+                            if (!Number.isFinite(row[2]) || !Number.isFinite(row[3])
                                 || !Number.isFinite(row[4]) || !Number.isFinite(row[5]) || row[5] < 1 || !Number.isFinite(row[6]) || row[6] < 1) fail();
                             if (row[7] && (!Array.isArray(row[7]) || !['move','attackMove'].includes(row[7][0]) || !tile(row[7][1],row[7][2]))) fail();
                         }

@@ -28,6 +28,14 @@ async function settle(world, promise) {
                 }
             }
             units.push(new Unit('builder_unit',0,12*TILE+16,12*TILE+16)); configureWorkerUnitFromType(units[units.length-1]);
+            // Real 4M-1K export: crowd movement put a researcher 2.5 pixels
+            // beyond the top edge. Such live positions must remain loadable.
+            for (const [x,y] of [[15*TILE,-2.5],[-2.5,15*TILE],[GRID_W*TILE+2.5,15*TILE],[15*TILE,GRID_H*TILE+2.5]]) {
+                const edge=new Unit('researcher_unit',0,x,y);
+                configureWorkerUnitFromType(edge);edge.holdPosition=true;
+                units.push(edge);unitSlotMapPushed(edge);
+            }
+            if (b) { b.rallyX=-2.5; b.rallyY=11*TILE+16; }
         })()`);
         const parts = await settle(world,source.eval('captureSoloGameSnapshotParts()'));
         source.scratch.parts = parts;
