@@ -1,0 +1,16 @@
+node:fs:2425
+    return binding.writeFileUtf8(
+                   ^
+
+Error: UNKNOWN: unknown error, open 'Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\tests\test-runs\full-20261019-090508\results.json'
+    at Object.writeFileSync (node:fs:2425:20)
+    at worker (Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\tests\run-regressions.cjs:35:28)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async Promise.all (index 0) {
+  errno: -4094,
+  code: 'UNKNOWN',
+  syscall: 'open',
+  path: 'Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\test-runs\\full-20261019-090508\\results.json'
+}
+
+Node.js v22.20.0

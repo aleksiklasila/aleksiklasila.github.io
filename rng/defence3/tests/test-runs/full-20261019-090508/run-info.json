@@ -1,0 +1,28 @@
+{
+  "startedAtUtc": "2026-10-19T09:48:15.3201529+00:00",
+  "pid": 18664,
+  "workspace": "Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3",
+  "runner": "tests/run-regressions.cjs",
+  "arguments": [
+    "tests/run-regressions.cjs",
+    "1",
+    "--output=test-runs/full-20261019-090508/results.json",
+    "--modes=0,1"
+  ],
+  "testFiles": 183,
+  "totalJobs": 366,
+  "concurrency": 1,
+  "modes": {
+    "1": "simulation worker",
+    "0": "main thread"
+  },
+  "results": "Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\test-runs\\full-20261019-090508\\results.json",
+  "progress": "Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\test-runs\\full-20261019-090508\\progress.log",
+  "runnerErrors": "Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\test-runs\\full-20261019-090508\\runner-errors.log",
+  "nodeVersion": "v22.20.0",
+  "timeoutSeconds": {
+    "1": 1800,
+    "0": 900
+  },
+  "launchMode": "Persistent Codex command session; PID identifies the supervising PowerShell process"
+}
