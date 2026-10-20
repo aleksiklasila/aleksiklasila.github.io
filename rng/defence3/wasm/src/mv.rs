@@ -13,6 +13,30 @@
 //! does not show).
 use super::*;
 
+// A common four-lane row broadcasts from one cache line; mixed levels gather.
+#[inline(always)]
+unsafe fn mv_stat(m: &Mv, s: usize, k: usize, fallback: *const F32) -> f64 {
+    if !m.shared_hot.is_null() { return *m.shared_hot.add(k) as f64; }
+    if !m.hot.is_null() && !m.statrow.is_null() {
+        let r = *m.statrow.add(s);
+        if r >= 0 { return *m.hot.add(r as usize * 16 + k) as f64; }
+    }
+    if fallback.is_null() { 0.0 } else { rd(fallback, s) }
+}
+#[inline(always)]
+unsafe fn mv_stat4(m: &Mv, s: usize, k: usize, fallback: *const F32) -> v128 {
+    if !m.shared_hot.is_null() { return f32x4_splat(*m.shared_hot.add(k)); }
+    if m.hot.is_null() || m.statrow.is_null() { return if fallback.is_null() {f32x4_splat(0.0)} else {v128_load(fallback.add(s) as *const v128)}; }
+    // Idle groups still need speed in contact response. Load their row IDs
+    // together too, rather than doing four scalar pointer chains.
+    let rows=i32x4_load_extend_i16x4(m.statrow.add(s));
+    let r=i32x4_extract_lane::<0>(rows);
+    if r>=0 && i32x4_bitmask(i32x4_eq(rows,i32x4_splat(r)))==15 {return f32x4_splat(*m.hot.add(r as usize*16+k));}
+    let at=|r:i32| if r>=0 {*m.hot.add(r as usize*16+k)} else {0.0};
+    f32x4(at(r),at(i32x4_extract_lane::<1>(rows)),at(i32x4_extract_lane::<2>(rows)),at(i32x4_extract_lane::<3>(rows)))
+}
+
+
 // ---- argument words (sim_parallel.js _SIM_MOVE_WNAMES) ----
 const W_ON: usize = 0;
 const W_OUT: usize = 1;
@@ -107,6 +131,8 @@ const W_FPN: usize = 89;
 const W_FPW: usize = 90;
 // (The flow look-ahead record, unit.mvNav: NV_STRIDE words a slot, see nv.)
 const W_NV: usize = 91;
+const W_STATROW: usize = 92;
+const W_HOT: usize = 93;
 const W_NLD: usize = 100;
 const W_CWN: usize = 101;
 const W_CWT: usize = 102;
@@ -354,6 +380,9 @@ struct Mv {
     fpn: *const u16,
     fpw: *const u16,
     nv: *mut i32,
+    statrow: *const i16,
+    hot: *const f32,
+    shared_hot: *const f32,
     nld: *mut F32,
     cwn: *const u8,
     cwt: *const i32,
@@ -653,6 +682,9 @@ impl Mv {
             fpn: p!(W_FPN),
             fpw: p!(W_FPW),
             nv: p!(W_NV),
+            statrow: p!(W_STATROW),
+            hot: p!(W_HOT),
+            shared_hot: core::ptr::null(),
             nld: p!(W_NLD),
             cwn: p!(W_CWN),
             cwt: p!(W_CWT),
@@ -1050,7 +1082,7 @@ unsafe fn cover_row(m: &Mv, owner: i32) -> bool {
 /// _simAcqHit.
 #[inline(always)]
 unsafe fn acq_hit(m: &Mv, s: usize, stamp: i32) -> bool {
-    if rd(m.cbtk, s) != stamp || rd(m.crs, s) != rd(m.rng, s) {
+    if rd(m.cbtk, s) != stamp || rd(m.crs, s) != mv_stat(m, s, 3, m.rng) {
         return false;
     }
     let q = rd(m.cbt, s);
@@ -1512,7 +1544,7 @@ unsafe fn seg_open(wl: *const u8, w: i32, h: i32, x0: f64, y0: f64, x1: f64, y1:
 /// (One base tick a step: no carry, one shot, the timer the cooldown.)
 #[inline(always)]
 unsafe fn fire(m: &Mv, s: usize) {
-    let cd = rd(m.acd, s);
+    let cd = mv_stat(m, s, 4, m.acd);
     let mut at = cd;
     let mut n = 1u8;
     if !m.atl.is_null() {
@@ -1639,6 +1671,7 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
     // (valid: the group's lanes holding slots, the last group's fewer.)
     let vm = i32x4_ne(v128_and(i32x4_splat(valid), i32x4(1, 2, 4, 8)), zero);
     let mut ok = v128_and(vm, v128_and(v128_and(i32x4_eq(on, one), i32x4_ne(v128_and(fl, i32x4_splat(64)), zero)), i32x4_eq(dead, zero)));
+    if !v128_any_true(ok) { return 0; }
     if m.brain {
         ok = v128_and(ok, i32x4_eq(ld_u8x4(m.cmode.add(s)), zero));
     }
@@ -2171,7 +2204,7 @@ pub unsafe extern "C" fn mv_move(a: u32, s0: i32, end: i32, chunk: i32) {
     let a = waddr(a) as *const i32;
     wr(a as *mut i32, 299, s0);
     core::ptr::write_bytes(a.add(300) as *mut u8, 0, (end - s0).max(0) as usize);
-    let m = Mv::load(a);
+    let mut m = Mv::load(a);
     let f = (a as usize + 4096) as *const f64;
     let q = rd(f, 8);
     let p = MoveP {
@@ -2217,6 +2250,8 @@ pub unsafe extern "C" fn mv_move(a: u32, s0: i32, end: i32, chunk: i32) {
     let mut s = b0;
     while s < e {
         let n = (e - s).min(4);
+        m.shared_hot = core::ptr::null();
+
         // (The last group's missing lanes count as done for the vector
         // passes, which then run on every group: which path a unit takes must
         // not depend on where its slot falls (that differs between peers:
@@ -2225,8 +2260,24 @@ pub unsafe extern "C" fn mv_move(a: u32, s0: i32, end: i32, chunk: i32) {
         let valid = (1i32 << n) - 1;
         let pad = 15 & !valid;
         let mut done = pad;
+        let known;
         // (Lanes whose sepMov the vector paths know: known, moved.)
         let mut mvd = 0i32;
+        // Idle groups need no flow, wake, energy or navigation cache reads.
+        // Their JS update already ran; copy only the dead/output bytes and
+        // leave separation to derive movement from the positions as before.
+        let idle = n == 4 && (m.on.add(s) as *const u32).read_unaligned() == 0
+            && (!m.brain || (m.cmode.add(s) as *const u32).read_unaligned() == 0);
+        if idle {
+            let dead = (m.dead.add(s) as *const u32).read_unaligned();
+            let d0 = m.d0.add(s) as *mut u32;
+            if d0.read_unaligned() != dead { d0.write_unaligned(dead); }
+            let out = m.out.add(s) as *mut u32;
+            if out.read_unaligned() != 0 { out.write_unaligned(0); }
+            let fire = m.fire.add(s) as *mut u32;
+            if fire.read_unaligned() != 0 { fire.write_unaligned(0); }
+            done = valid; known = 0;
+        } else {
         if fast {
             done |= step4(&m, &sp, s, &mut mvd, valid);
         }
@@ -2240,7 +2291,7 @@ pub unsafe extern "C" fn mv_move(a: u32, s0: i32, end: i32, chunk: i32) {
             dbgc!(m, 3, (c & 15).count_ones());
             done |= c;
         }
-        let known = done & valid;
+        known = done & valid;
         if done != 15 {
             let c = idle4(&m, s, done);
             dbgc!(m, 19, (c & 15).count_ones());
@@ -2285,6 +2336,7 @@ pub unsafe extern "C" fn mv_move(a: u32, s0: i32, end: i32, chunk: i32) {
                 2 => { dbgc!(m, 15); move_path(&m, &p, u) }
                 _ => {}
             }
+        }
         }
         }
         let nd = if ep.push { push4(&m, &pc, s, e, known, mvd) } else { 0 };
@@ -2373,7 +2425,7 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
     let d = f32x4_sqrt(f32x4_add(f32x4_mul(dx, dx), f32x4_mul(dy, dy)));
     let half = f32x4_splat(0.5);
     let one = f32x4_splat(1.0);
-    let mut spd = v128_load(m.spd.add(s) as *const v128);
+    let mut spd = mv_stat4(m, s, 0, m.spd);
     spd = f32x4_mul(spd, v128_bitselect(half, one, i32x4_gt(u32x4_load_extend_u16x4(m.frz.add(s) as *const u16), zero)));
     spd = f32x4_mul(spd, v128_bitselect(half, one, i32x4_gt(u32x4_load_extend_u16x4(m.snd.add(s) as *const u16), zero)));
     let go = v128_and(v128_and(lane, chase), v128_and(f32x4_gt(d, spd), f32x4_gt(spd, fz)));
@@ -2478,7 +2530,7 @@ unsafe fn move_combat(m: &Mv, p: &MoveP, s: usize) -> bool {
     let dx = rd(m.x0, qu) - x;
     let dy = rd(m.y0, qu) - y;
     let d = sqrt(dx * dx + dy * dy);
-    let mut spd = rd(m.spd, s);
+    let mut spd = mv_stat(m, s, 0, m.spd);
     if rd(m.frz, s) > 0 {
         spd *= 0.5;
     }
@@ -2770,7 +2822,7 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
         }
         let mut direct = d < 2.0 * tile || (fly && (f & 2) == 0);
         if !direct && d < 6.0 * tile {
-            let st = rd(m.chs, s);
+            let st = mv_stat(m, s, 2, m.chs);
             let ax = x + dx / d * st;
             let ay = y + dy / d * st;
             let agx = floor(ax * itile);
@@ -2781,7 +2833,7 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
             back!();
         }
         if direct {
-            let mut spd = rd(m.spd, s);
+            let mut spd = mv_stat(m, s, 0, m.spd);
             if rd(m.frz, s) > 0 {
                 spd *= 0.5;
             }
@@ -2893,7 +2945,7 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
                     wr(m.out, s, 14);
                     return 0;
                 }
-                if atk && (tw & 3) < m.dk && rd(m.cbtk, s) == p.acq_stamp && rd(m.crs, s) == rd(m.rng, s) {
+                if atk && (tw & 3) < m.dk && rd(m.cbtk, s) == p.acq_stamp && rd(m.crs, s) == mv_stat(m, s, 3, m.rng) {
                     let cb = rd(m.cbs, s);
                     if cb >= 0 {
                         let code = rd(m.sc, cb as usize) as i32;
@@ -3137,7 +3189,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
         let ey = dy0 as f64 * tile + 16.0 - y;
         let now = sqrt(ex * ex + ey * ey);
         let last = rd(m.nld, s);
-        let mut es = rd(m.spd, s);
+        let mut es = mv_stat(m, s, 0, m.spd);
         if rd(m.frz, s) > 0 {
             es *= 0.5;
         }
@@ -3268,7 +3320,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
             stand!();
         }
     }
-    let mut spd = rd(m.spd, s);
+    let mut spd = mv_stat(m, s, 0, m.spd);
     if rd(m.frz, s) > 0 {
         spd *= 0.5;
     }
@@ -3595,7 +3647,7 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
         wr(m.out, s, 1);
         return;
     }
-    let mut spd = rd(m.spd, s);
+    let mut spd = mv_stat(m, s, 0, m.spd);
     if rd(m.frz, s) > 0 {
         spd *= 0.5;
     }
@@ -3773,14 +3825,11 @@ unsafe fn push4(m: &Mv, c: &PushC, s: usize, end: usize, known: i32, mvd: i32) -
     }
     let hf = f32x4_convert_u32x4(hits);
     let one = f32x4_splat(1.0);
-    let sc = f32x4_mul(v128_bitselect(one, f32x4_sqrt(f32x4_div(c.contacts, f32x4_max(hf, one))), f32x4_le(hf, c.contacts)), c.k);
     // Geometric separation: the summed overlap correction (px), relaxed by
     // the share of it due over the sample's two updates (exponential in
     // elapsed base ticks: never more than the overlap, at any step size).
-    let mut gx = f32x4_mul(f32x4_mul(f32x4_convert_i32x4(v128_load(m.spx.add(s) as *const v128)), sc), c.relax);
-    let mut gy = f32x4_mul(f32x4_mul(f32x4_convert_i32x4(v128_load(m.spy.add(s) as *const v128)), sc), c.relax);
     let radius = f32x4_max(one, v128_load(m.rrc.add(s) as *const v128));
-    let speed = f32x4_max(f32x4_splat(0.25), v128_load(m.spd.add(s) as *const v128));
+    let speed = f32x4_max(f32x4_splat(0.25), mv_stat4(m, s, 0, m.spd));
     let depth = v128_load(m.sov.add(s) as *const v128);
     // Its friendly neighbours' mean intended velocity (the pair kernel's
     // local flow, weighted by contact).
@@ -3797,6 +3846,29 @@ unsafe fn push4(m: &Mv, c: &PushC, s: usize, end: usize, known: i32, mvd: i32) -
     let resting = v128_and(f32x4_lt(iv2, f32x4_splat(0.0025)), f32x4_lt(fl2, f32x4_splat(0.01)));
     let thr = f32x4_mul(v128_bitselect(c.sleep, c.wake, was_awake), radius);
     let quiet = v128_and(resting, f32x4_lt(depth, thr));
+    // A sleeping, stationary group with no carried or closing response has
+    // no displacement. Keep its contact/brake history, but do not load the
+    // geometric sums or evaluate the movement/flow normalizations. These
+    // are the same writes as the full response below, including clearing a
+    // brake on its unsampled update. Nonzero forces and retry work retain
+    // the general path.
+    if c.retry <= 0 && i32x4_bitmask(quiet) == 15
+        && !v128_any_true(v128_or(v128_or(ivx, ivy), v128_or(v128_or(flx, fly), v128_or(cv, v128_or(cx, cy)))))
+        && (m.sccx.is_null() || !v128_any_true(v128_or(v128_load(m.sccx.add(s) as *const v128), v128_load(m.sccy.add(s) as *const v128))))
+        && i32x4_bitmask(f32x4_ge(speed, f32x4_splat(0.25))) == 15 {
+        let sampled = i32x4_ne(hits, zero);
+        let b = f32x4_min(one, f32x4_max(fz, f32x4_mul(f32x4_sub(f32x4_div(depth, radius), f32x4_splat(SEP_BRAKE0)), f32x4_splat(1.0 / (SEP_BRAKE1 - SEP_BRAKE0)))));
+        let bq = v128_and(i32x4_trunc_sat_f32x4(f32x4_nearest(f32x4_mul(b, f32x4_splat(7.0)))), sampled);
+        let cn = v128_bitselect(i32x4_min(hits, i32x4_splat(7)), cn_old, sampled);
+        let bits = v128_andnot(v128_or(i32x4_shl(cn, 2), i32x4_shl(bq, 5)), dead);
+        let motion = v128_or(v128_and(ld_u8x4(m.smv.add(s)), i32x4_splat(1)), bits);
+        let bytes = u8x16_narrow_i16x8(i16x8_narrow_i32x4(motion, motion), i16x8_narrow_i32x4(motion, motion));
+        (m.smv.add(s) as *mut u32).write_unaligned(i32x4_extract_lane::<0>(bytes) as u32);
+        return 0;
+    }
+    let sc = f32x4_mul(v128_bitselect(one, f32x4_sqrt(f32x4_div(c.contacts, f32x4_max(hf, one))), f32x4_le(hf, c.contacts)), c.k);
+    let mut gx = f32x4_mul(f32x4_mul(f32x4_convert_i32x4(v128_load(m.spx.add(s) as *const v128)), sc), c.relax);
+    let mut gy = f32x4_mul(f32x4_mul(f32x4_convert_i32x4(v128_load(m.spy.add(s) as *const v128)), sc), c.relax);
     gx = v128_andnot(gx, quiet);
     gy = v128_andnot(gy, quiet);
     // Moving with its neighbours' flow: sideways separation damped (lanes
@@ -4168,7 +4240,7 @@ unsafe fn epi_slot(m: &Mv, f: *const f64, e: &mut Epi, s: usize, need: bool) {
     if k != 0 {
         wr(m.spent, s, 0);
         let pid = rd(m.own, s);
-        let cost = rd(m.cost, s);
+        let cost = mv_stat(m, s, 1, m.cost);
         if cost > 0.0 && pid >= 0 && pid < np {
             if rd(m.rem, pid as usize) < cost {
                 wr(m.blk, s, 1);

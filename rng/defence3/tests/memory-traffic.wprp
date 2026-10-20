@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Windows PMU counters on context switches. Cache misses are a traffic
+     proxy, not a direct DRAM byte counter. See Microsoft WPR PMU docs. -->
+<WindowsPerformanceRecorder Version="1.0"><Profiles>
+<SystemCollector Id="Collector" Name="Defence3Traffic"><BufferSize Value="1024"/><Buffers Value="64"/></SystemCollector>
+<SystemProvider Id="Provider"><Keywords><Keyword Value="Loader"/><Keyword Value="ProcessThread"/><Keyword Value="CSwitch"/></Keywords></SystemProvider>
+<HardwareCounter Id="Counters" Strict="true"><Counters><Counter Value="CacheMisses"/><Counter Value="DcacheAccesses"/><Counter Value="TotalCycles"/><Counter Value="InstructionRetired"/></Counters><Events><Event Value="CSwitch"/></Events></HardwareCounter>
+<Profile Id="Traffic.Verbose.File" LoggingMode="File" Name="Traffic" DetailLevel="Verbose" Description="Defence3 cache and memory access counters"><Collectors><SystemCollectorId Value="Collector"><SystemProviderId Value="Provider"/><HardwareCounterId Value="Counters"/></SystemCollectorId></Collectors></Profile>
+</Profiles></WindowsPerformanceRecorder>

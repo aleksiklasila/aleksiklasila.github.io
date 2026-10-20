@@ -1,0 +1,19 @@
+AssertionError [ERR_ASSERTION]: moving R4 above R3: panel rows
++ actual - expected
+
++ [
++   'rows 0 vs tasks 2',
++   'row 0 shows Rundefined for R3',
++   'row 1 shows Rundefined for R4'
++ ]
+- []
+
+    at expectRows (Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\tests\research-queue.test.cjs:142:20)
+    at Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\tests\research-queue.test.cjs:153:17 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: [Array],
+  expected: [],
+  operator: 'deepStrictEqual',
+  diff: 'simple'
+}

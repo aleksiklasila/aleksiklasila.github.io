@@ -4,6 +4,27 @@ Working log for `SIMULATION_OPTIMIZATION_REFINEMENT.md` (the plan). Update this
 file at the end of every work session: what changed, what was measured, what
 is next. Newest entries first within each section.
 
+## 2026-10-20: collision and shared stat rows
+
+- Vectorized stationary contact geometry; reused exact opposite-force
+  rounding; kept the default contact query budget at 8 (0 unlimited).
+- Paged optional unit references and interned common type/stat references
+  for units, buildings and floors; removed unused separation mirrors.
+- Removed six actual per-unit Float32 stat arrays (24 bytes/slot,
+  91.59 MiB at 4,001,792 slots). Movement, acquisition and hit resolution
+  now read stable 64-byte shared rows, with SIMD broadcast/gather paths.
+  Research updates those rows without enumerating units. Remaining
+  visibility/health/navigation housekeeping still uses its staggered pass.
+- Added complete entity storage census, preserved cached-layout sources for
+  repeatable A/B tests, process resource counters, Windows paging sampling,
+  and an optional strict WPR PMU profile. WPR hardware collection is blocked
+  by Windows access denied even outside the sandbox; no DRAM traffic
+  improvement is claimed from footprint alone.
+- Results, all raw runs and CPU profiles, validation and current limitations:
+  tests/test-runs/collision-tps-20261020/README.md and comparison.md.
+  The unchanged research queue panel failure also occurs in the archived
+  2026-10-19 full regression results.
+
 ## Ground rules (user)
 
 - Multiplayer is the game's main and only real mode. Solo play exists only
@@ -1776,3 +1797,23 @@ Reference runs averaged 808–822 ms/tick (1.22–1.24 TPS). Optimized repeats a
 Changes: full-width memory64 helper addresses; typed heap-binding descriptors to avoid cloned-view offset truncation above 4 GiB; atomic initial binding publication and protected registry checks; paged unit-ID lookup; smaller large-population spare buffers; contiguous dead-slot sweep blocks; early SIMD contact rejection and a stationary-contact fast path. Also fixed the collection cursor skipping most slices indefinitely under adaptive dk=4/20: it now advances once per simulation step.
 
 Both WASM variants rebuilt. General tests are the acceptance bar, as requested; full-scene hash differences are not a gate for this work. Detailed results, validation and repeat commands: [4M TPS report](tests/test-runs/checkerboard-tps-20261020/README.md). Remaining top costs are `sep_pairs`/`mv_move` and their waits, the unit update pass, spatial indexing, and detached-value construction.
+
+## 2026-10-20: movement response and shared navigation
+
+Fresh 4M checkerboard profiling: `simMoveRun` 249 ms including nested work; the movement dispatch itself 114 ms, all background waits 117 ms. Added a SIMD sleeping-contact shortcut that preserves contact/brake history while skipping response normalizations when there is no movement, flow or carried/closing force. Exact movement replay against the original kernel passes at dk 1/4/20, including force and wake-up fallbacks. A two-contact exact SIMD trial was slower and was removed.
+
+Equal wall/cost navigation profiles now share immutable geometry (fields, graph, components, atlas), retaining independent wrappers, versions, sequences and destination fields. Rebuilds and snapshot restores also reuse it. Live WASM allocation falls **4415 → 3785 MiB (630 MiB saved)**; cold first tick falls from 27.5 s to about 23.3–23.4 s. Shared-geometry repeats measure **625–686 ms / 1.46–1.60 TPS**, against a fresh **706 ms / 1.42 TPS** baseline. Variation remains large; no precise independent shortcut speedup is claimed. Final repeat movement dispatch is 115 ms, so collision pairs/waits and movement remain the leading targets.
+
+Broader main-thread regressions: 25/27 pass; four additional simulation-worker checks pass (29 passing total). `nav-rows` and `separation-rally` reproduce the exact pre-existing failures from the earlier full run. Neither test was weakened. Report, profiles, baseline bundles, and validation: [movement TPS report](tests/test-runs/movement-tps-20261020/README.md).
+
+## 2026-10-20: shared stat storage and structure refresh removal
+
+Unit hot stats now read shared owner/type/level rows; six per-unit Float32 caches and their writes are removed, with 16-bit row handles. Unit WASM columns total 517 bytes/slot. Paged optional references, interned shared references and movement fixes are documented in [unit/stat report](tests/test-runs/collision-tps-20261020/README.md). The matched reverse-order 32-tick comparison measured 620.12 vs 633.75 ms/tick and reduced live WASM allocation by 99 MiB (3785 -> 3686).
+
+Extended flat Float32 owner/type/level tables to buildings and floors. Benchmarked level-major and stat-major tables; retained stat-major. Deleted per-instance stat/cache columns, building research versions/catch-up/sweep jobs and their main tick call, periodic building/floor refresh buckets, selected-structure stat refresh, adjacency stat-object rebuilding and four adjacency signature columns. Towers save about 70 column bytes/slot, producer/floor rows 76, mines 16. Research updates shared rows directly; maximum-level research retains upgrade eligibility work. Linked values are calculated from unrounded temporaries before Float32 stores so in-place research/boost publication matches full rebuilds.
+
+Two serial comparison orders at 4M units / 125k towers / 1000-square map, seven helpers, three warm-up and 24 measured ticks: retained shared tables 572.63 vs cached 586.44 ms, then retained 527.98 vs cached 551.73 ms. TPS is 2.4–4.5% higher in those comparisons; tower processing 18–25% lower. Paging/GC stalls remain in tick times. Hardware memory traffic is unavailable with this Windows user's PMU permissions, so column savings are not claimed as measured DRAM traffic.
+
+A received-plus-outgoing contact-budget trial failed to repeat its initial benefit and was reverted with source-matched production WASM binaries. Its source, binaries, profiles and raw runs remain in the [structure/stat report](tests/test-runs/structure-stats-20261020/README.md). Collision pair processing and waits remain the leading target.
+
+Final shared-structure validation: 22/22 main-thread and 4/4 simulation-worker checks pass, plus contact replay and syntax checks. Detailed final records: tests/test-runs/structure-stats-20261020/validation-summary.json.

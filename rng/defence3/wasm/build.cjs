@@ -26,15 +26,17 @@ const here = __dirname;
 // them, read from the module's types below).
 const W64 = process.argv.includes('--wasm64');
 const out = path.join(here, '..', 'src', 'sim', W64 ? 'sim_wasm64_bin.js' : 'sim_wasm_bin.js');
-const wasmPath = W64 ? path.join(here, 'target64', 'wasm64-unknown-unknown', 'release', 'defence3_sim.wasm')
-    : path.join(here, 'target', 'wasm32-unknown-unknown', 'release', 'defence3_sim.wasm');
+// A separate target directory also avoids transient Windows mapped-file locks.
+const targetDir=process.argv.find(a=>a.startsWith('--target-dir='))?.slice(13)||(W64?'target64':'target');
+const wasmPath = W64 ? path.join(here, targetDir, 'wasm64-unknown-unknown', 'release', 'defence3_sim.wasm')
+    : path.join(here, targetDir, 'wasm32-unknown-unknown', 'release', 'defence3_sim.wasm');
 
 // cargo from PATH, else rustup's default location.
 const env = { ...process.env };
 const cargoBin = path.join(os.homedir(), '.cargo', 'bin');
 env.PATH = cargoBin + path.delimiter + (env.PATH || env.Path || '');
 if (!process.argv.includes('--no-build')) {
-    const args = W64 ? ['+nightly', 'build', '--release', '--target', 'wasm64-unknown-unknown', '-Zbuild-std=core,panic_abort', '--target-dir', 'target64'] : ['build', '--release'];
+    const args = W64 ? ['+nightly', 'build', '--release', '--target', 'wasm64-unknown-unknown', '-Zbuild-std=core,panic_abort', '--target-dir', targetDir] : ['build', '--release', '--target-dir', targetDir];
     // (--features=a,b: cargo features, e.g. prof (the movement passes as functions, with --keep-names for profiles by pass).)
     const feat = process.argv.find(x => x.startsWith('--features='));
     if (feat) args.push('--features', feat.slice(11));

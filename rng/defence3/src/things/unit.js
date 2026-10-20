@@ -561,12 +561,8 @@ class Unit {
         // prototype getters: UNIT_TYPE_FIELDS below.)
         this.r = s.r;
         this.collisionR = Number.isFinite(s.collisionR) ? s.collisionR : this.r;
-        // Reference fields that later hold units, buildings or plain objects
-        // are widened here first (then reset): V8 otherwise widens them the
-        // first time such a value arrives mid-match, e.g. the first hit of a
-        // battle, and recompiles every function reading units - a stall of
-        // tens of ms. Values and behaviour are unchanged.
-        this.attackTarget = this; this.attackTarget = _UNIT_FIELD_WIDEN;
+        // References live in paged columns. Keep defaults implicit instead
+        // of temporarily writing widening objects into every unit's page.
         this.attackTarget = null; // visual: current attack target for draw effects
         this.attackFlash = 0; // visual: flash timer for attack animation
 
@@ -801,12 +797,16 @@ class Unit {
     // as the snapshot leaves derived tables out). Setting them drops the row.
     get preComputed() { const c = this._us; if (c) { const r = c.statRow[this._si]; if (r >= 0) return _effRowObj[r]; } return this._pc; }
     set preComputed(v) {
+        const oldColumns = this._us;
+        if (oldColumns && oldColumns.statRow[this._si] >= 0) this._effRowKeep(_effRowObj[oldColumns.statRow[this._si]]);
         if (!('_pc' in this)) Object.defineProperty(this, '_pc', { value: v, writable: true, configurable: true }); else this._pc = v;
         const c = this._us;
         if (c) c.statRow[this._si] = -1;
     }
     get preComputedEffective() { const c = this._us; if (c) { const r = c.statRow[this._si]; if (r >= 0) return _effRowObj[r]; } return this._pce; }
     set preComputedEffective(v) {
+        const oldColumns = this._us;
+        if (oldColumns && oldColumns.statRow[this._si] >= 0) this._effRowKeep(_effRowObj[oldColumns.statRow[this._si]]);
         if (!('_pce' in this)) Object.defineProperty(this, '_pce', { value: v, writable: true, configurable: true }); else this._pce = v;
         const c = this._us;
         if (c) c.statRow[this._si] = -1;
@@ -2010,8 +2010,8 @@ for (const k of UNIT_ROLE_FIELDS) {
 // status accessors.)
 for (const [k, kind] of (typeof SIM_UNIT_JS_FIELDS !== 'undefined' ? SIM_UNIT_JS_FIELDS : [])) {
     const nm = _simJsName(k, kind), at = 'c.' + nm + '[this._si]';
-    const read = kind === 'b' ? at + ' === 1' : kind === 'u' ? '(x = ' + at + ') === x ? x : undefined' : at;
-    const write = kind === 'b' ? at + ' = v ? 1 : 0' : kind === 'u' ? at + ' = v === undefined ? NaN : v' : at + ' = v';
+    const read = kind === 'b' ? at + ' === 1' : kind === 'u' ? '(x = ' + at + ') === x ? x : undefined' : kind === 'r' ? 'c.' + nm + '.get(this._si)' : at;
+    const write = kind === 'b' ? at + ' = v ? 1 : 0' : kind === 'u' ? at + ' = v === undefined ? NaN : v' : kind === 'r' ? 'c.' + nm + '.set(this._si,v)' : at + ' = v';
     const get = new Function('return function () { const c = this._us; let x; if (c) return ' + read + '; return this._det ? this._det.' + k + ' : undefined; };')();
     const set = new Function('k', 'return function (v) { const c = this._us; if (c) ' + write + '; else if (this._det) this._det.' + k + ' = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };')(k);
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true, enumerable: false });
@@ -2172,7 +2172,7 @@ function unitHitsResolve() {
             const e = PL[p];
             let a, t, ax, ay, dmg, sty;
             if (e < n) { a = Q.a[e]; t = Q.t[e]; ax = Q.x[e]; ay = Q.y[e]; dmg = Q.dmg[e]; sty = HS[e]; }
-            else { const j = e - n, s = HA[j]; a = owners[s]; t = owners[HT[j]]; ax = C.x[s] * 0.125; ay = C.y[s] * 0.125; dmg = C.atkDmg[s]; sty = C.atkSty[s]; }
+            else { const j = e - n, s = HA[j]; a = owners[s]; t = owners[HT[j]]; ax = C.x[s] * 0.125; ay = C.y[s] * 0.125; dmg = simUnitStatValue(C,s,5); sty = C.atkSty[s]; }
             if (!a || !t) continue;
             // (A kernel attack's own look and sound, as _attackerSide's.)
             if (e >= n) { recordUnitAttackFx(a, t); playSound(sty >= 1 && sty <= 4 || a.attackStyle === 'laser' ? 'attack_cast' : 'attack_swing', ax, ay, a.unitType); }
@@ -2248,9 +2248,9 @@ function _unitHitBuilding(a, tb, dmg) {
 // moves the slot's digest (hObj) by the change of its term.
 for (const k of (typeof SIM_UNIT_OBJ_FIELDS !== 'undefined' ? SIM_UNIT_OBJ_FIELDS : [])) {
     const key = _simHKey(k);
-    const get = new Function(`return function () { const c = this._us; return c ? c.oc_${k}[this._si] : (this._det ? this._det.${k} : undefined); };`)();
+    const get = new Function(`return function () { const c = this._us; return c ? c.oc_${k}.get(this._si) : (this._det ? this._det.${k} : undefined); };`)();
     const hook = (typeof SIM_UNIT_OBJ_HOOKS !== 'undefined' && SIM_UNIT_OBJ_HOOKS[k]) || '';
-    const set = new Function('k', 'T', `return function (v) { const c = this._us; if (c) { const s = this._si, a = c.oc_${k}, o = a[s]; a[s] = v; ${hook} if (o !== v) c.hObj[s] = (c.hObj[s] + T(${key}, v) - T(${key}, o)) | 0; } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(k, _simHTerm);
+    const set = new Function('k', 'T', `return function (v) { const c = this._us; if (c) { const s = this._si, a = c.oc_${k}, o = a.set(s,v); ${hook} if (o !== v) c.hObj[s] = (c.hObj[s] + T(${key}, v) - T(${key}, o)) | 0; } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(k, _simHTerm);
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true });
 }
 // (The accessors' plain values in the digest: their keys.)
@@ -2740,13 +2740,14 @@ let UNIT_SEPARATION_RELAX_TICKS = 4, UNIT_SEPARATION_REST_SLEEP = 0.4, UNIT_SEPA
 const UNIT_SEPARATION_PATH_RETRY_TICKS = 4;
 // Contacts summed in full (see runUnitSeparationPass).
 const UNIT_SEPARATION_CONTACTS = 3;
-const _sep = { cap: 0, offs: null, offsReach: 0, offsCws: 0 };
+// Dense crowds use a bounded neighbourhood. Zero restores the full pair
+// scan. SIMD batches can finish up to three contacts beyond this budget.
+let UNIT_SEPARATION_PAIR_BUDGET = 8;
+const _sep = { cap: 0 };
 function _sepGrow(n) {
     if (n <= _sep.cap) return;
     // (Whole blocks: the movement kernel's push pass reads four slots at a time.)
     let cap = Math.ceil(Math.max(1024, n, _sep.cap * 2) / 1024) * 1024;
-    _sep.r = new Float64Array(cap);
-    _sep.layer = new Uint8Array(cap); _sep.check = new Uint8Array(cap);
     _sep.cap = cap;   // (the packed and output arrays follow it: runUnitSeparationPass)
 }
 
@@ -2806,7 +2807,7 @@ function simMoveRefreshAllStats() {
 // that was armed before and a restored one start alike: leftovers of an
 // earlier arming made the two peers' units move differently.)
 const SIM_MOVE_ARM_COLUMNS = ['mvFlags', 'mvReach', 'mvBase', 'mvWlen', 'mvPlen', 'mvScan', 'mvWake', 'mvFlow', 'mvFGen', 'mvDest', 'mvReady', 'mvNP',
-    'mvHWin', 'mvHTT', 'mvHVer', 'mvHT', 'mvHTId', 'mvChs', 'mvTgX', 'mvTgY', 'mvTgTol', 'mvSteady', 'mvCT', 'mvCN', 'mvCTl', 'mvCVx', 'mvCVy',
+    'mvHWin', 'mvHTT', 'mvHVer', 'mvHT', 'mvHTId', 'mvTgX', 'mvTgY', 'mvTgTol', 'mvSteady', 'mvCT', 'mvCN', 'mvCTl', 'mvCVx', 'mvCVy',
     'mvWk', 'mvSpent', 'mvOut', 'spMvOld', 'spMvNew', 'mvNav'];
 function simMoveDisarmAll() {
     const S = _simUnitState;
@@ -2826,30 +2827,33 @@ function simMoveResetLookCaches() {
     if (S) { const NV = S.columns.mvNav; for (let i = 0; i < NV.length; i += SIM_NAV_STRIDE) NV[i] = -1; S.columns.mvCD.fill(-1); }
 }
 
-// New stats (a level or stacking change): an armed unit takes them into its
-// columns (speed, reach, step cost), as simMoveTryArm would.
-function simMoveStatsChanged(u) {
+// A level/stat change rechecks the navigation reach and armed path.
+// Numeric stats themselves are read directly from the shared level row.
+function simMoveStatsChanged(u, previousRow) {
     const c = u && u._us;
     if (!c) return;
     const s = u._si, pc = u.preComputed, f = c.mvFlags[s];
+    if (pc && c.statRow[s] < 0) _effRowAttach(u);
+    if (!Number.isInteger(previousRow)) previousRow=c.statRow[s];
+    let same=!!pc && previousRow>=0 && previousRow<_effRowN;
     const spd = pc ? pc.speed * _getUnitAstarSpeedMultiplier(u) : NaN;
-    // Every unit's movement stats, for orders that arm it from the columns.
-    // (Unchanged: nothing to redo. A recalculation that finds the same stats
-    // (on a peer that restored the unit, say) must leave it as it was.)
-    let same = !!pc;
     if (pc) {
-        const o0 = c.mvSpd[s], o1 = c.mvLane[s], o2 = c.mvCost[s], o3 = c.mvReachD[s], o4 = c.mvReachA[s], o5 = c.mvShoot[s], o6 = c.mvRangeK[s], o7 = c.cbRange[s];
+        const o1=c.mvLane[s],o3=c.mvReachD[s],o4=c.mvReachA[s],o5=c.mvShoot[s],o6=c.mvRangeK[s];
         const rd = Math.ceil(_getUnitAttackRangeArea(u)) + 1, ra = Math.ceil(Math.max(TILE, pc.visionRange * TILE) / TILE) + 1;
-        c.atkCd[s] = pc.attackCooldown; c.atkDmg[s] = pc.attackDamage; c.atkSty[s] = _hitStyleCode(u); c.atkWatch[s] = _unitWatchTicks(u);
-        c.mvSpd[s] = spd; c.mvLane[s] = Math.max(1.5, Math.min(4, u.r * 0.6)); c.mvCost[s] = _resolveUnitAstarTileCost(u);
+        c.atkSty[s] = _hitStyleCode(u); c.atkWatch[s] = _unitWatchTicks(u);
+        c.mvLane[s] = Math.max(1.5, Math.min(4, u.r * 0.6)); 
         c.mvReachD[s] = rd >= 0 && rd < SIM_MOVE_BOX_STEPS ? rd : 255; c.mvReachA[s] = ra >= 0 && ra < 255 ? ra : 255;
         c.mvShoot[s] = pc.attackDamage > 0 ? 1 : 0;
         c.mvRangeK[s] = Math.min(255, Math.floor(_getUnitAttackRangeArea(u)));
         const rga = _getUnitAttackRangeArea(u);
         c.lzFlags[s] = (u.turretImmune ? 1 : 0) | (u.laserResistant ? 2 : 0) | (Math.floor(rga) === Math.ceil(rga) ? 4 : 0);
-        c.cbRange[s] = Math.max(TILE, pc.visionRange * TILE);
-        same = Object.is(o0, c.mvSpd[s]) && o1 === c.mvLane[s] && Object.is(o2, c.mvCost[s]) && o3 === c.mvReachD[s] && o4 === c.mvReachA[s]
-            && o5 === c.mvShoot[s] && o6 === c.mvRangeK[s] && o7 === c.cbRange[s];
+        
+        const r=previousRow*EFF_HOT_WIDTH;
+        same=same && Object.is(_effHot[r],Math.fround(spd))
+            && Object.is(_effHot[r+1],Math.fround(_resolveUnitAstarTileCost(u)))
+            && _effHot[r+3]===Math.fround(Math.max(TILE,pc.visionRange*TILE))
+            && o1===c.mvLane[s] && o3===c.mvReachD[s] && o4===c.mvReachA[s]
+            && o5===c.mvShoot[s] && o6===c.mvRangeK[s];
     }
     if (same) return;
     // Holding (3: an enemy unit, 5: a structure): the hold stands on its
@@ -2861,7 +2865,7 @@ function simMoveStatsChanged(u) {
     const on = c.mvOn[s];
     if (on === 3 || on === 5) {
         const k = Math.floor(Math.max(0, Number(_getUnitAttackRangeArea(u)) || 0));
-        if (pc && pc.attackDamage > 0 && k === c.mvReach[s]) { if (on === 3) c.mvChs[s] = Math.max(TILE * 0.6, Number(pc.speed) || 1); return; }
+        if (pc && pc.attackDamage > 0 && k === c.mvReach[s]) { return; }
         c.mvOn[s] = 0; return;
     }
     // Parked or chasing: its checks were made with the old stats (a parked
@@ -2882,7 +2886,7 @@ function simMoveStatsChanged(u) {
         if (!(area >= 0)) { c.mvOn[s] = 0; return; }
         _simMoveEnsureAreaBox(area, reach);
     }
-    c.mvSpd[s] = spd; c.mvReach[s] = reach; c.mvCost[s] = _resolveUnitAstarTileCost(u);
+    c.mvReach[s] = reach; 
 }
 
 // Unit._followNavNode's flow look-ahead (simFlowLook): with its destination
@@ -2949,7 +2953,7 @@ function _simWorkerKind(u) {
 }
 // (profile: its navigation's, flownav.js navProfileOf: its walls and fields.)
 function simFlowArm(c, s, fid, gen, dest, cmd, flying, ready = 0, worker = false, isWorker = false, profile = flying ? NAV_PROFILE_AIR : NAV_PROFILE_GROUND) {
-    if (!(c.mvSpd[s] >= 0) || c.sepKey[s] === SIM_SEP_ABSENT) return false;
+    if (!(simUnitStatValue(c,s,0) >= 0) || c.sepKey[s] === SIM_SEP_ABSENT) return false;
     // (Bit 128: no arriving in a crowd short of the tile: a worker's task
     // is at its tile, a lone unit's order too.)
     let flags = 64 | (flying ? 32 : 0) | (worker ? 128 : 0), reach = 0;
@@ -3105,9 +3109,9 @@ function simMoveTryArm(u) {
         _simMoveEnsureAreaBox(area, reach);
     }
     c.mvBase[s] = base; c.mvWlen[s] = wl; c.mvPlen[s] = path.length;
-    c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvSpd[s] = spd; c.mvSteady[s] = 0;
+    c.mvFlags[s] = flags; c.mvReach[s] = reach;  c.mvSteady[s] = 0;
     c.mvLane[s] = Math.max(1.5, Math.min(4, u.r * 0.6));
-    c.mvCost[s] = _resolveUnitAstarTileCost(u);
+    
     c.mvScan[s] = -1; c.mvSpent[s] = 0; c.mvWk[s] = worker ? (_simWorkerKind(u) === 3 ? 3 : 1) : 0;
     c.mvOn[s] = 1;
 }
@@ -3147,7 +3151,7 @@ function _simMoveTryApproachBuilding(u) {
         const did = navFieldRequest(profile, dest, !!nd.w);
         if (!(did >= 0)) return;
         const crowd = !!nd.w && idx === path.length - 1;
-        c.mvFlags[s] = 64 | (crowd ? 0 : 128) | (profile === NAV_PROFILE_AIR ? 32 : 0); c.mvReach[s] = k; c.mvSpd[s] = spd; c.mvNP[s] = profile;
+        c.mvFlags[s] = 64 | (crowd ? 0 : 128) | (profile === NAV_PROFILE_AIR ? 32 : 0); c.mvReach[s] = k;  c.mvNP[s] = profile;
         c.mvFlow[s] = did; c.mvFGen[s] = navFieldGen(did); c.mvDest[s] = dest; c.mvReady[s] = nd.ready | 0;
         c.mvWk[s] = 0; c.mvSpent[s] = 0;
         c.mvHT[s] = gy * GRID_W + gx; c.mvHTId[s] = u.forcedAttackTarget ? 1 : 0;
@@ -3167,9 +3171,9 @@ function _simMoveTryApproachBuilding(u) {
     if (wl < 2 && base + wl < path.length) return;
     c.mvBase[s] = base; c.mvWlen[s] = wl; c.mvPlen[s] = path.length;
     c.mvFlags[s] = (u.pathIsFallbackAstar ? 8 : 0) | (u.isFlying ? 32 : 0);
-    c.mvReach[s] = k; c.mvSpd[s] = spd;
+    c.mvReach[s] = k; 
     c.mvLane[s] = Math.max(1.5, Math.min(4, u.r * 0.6));
-    c.mvCost[s] = _resolveUnitAstarTileCost(u);
+    
     c.mvScan[s] = -1; c.mvSpent[s] = 0; c.mvWk[s] = 0;
     c.mvHT[s] = gy * GRID_W + gx; c.mvHTId[s] = u.forcedAttackTarget ? 1 : 0;
     c.mvOn[s] = 6;
@@ -3226,11 +3230,11 @@ function simMoveTryHold(u) {
     c.mvHT[s] = q; c.mvHTId[s] = tu.id; c.mvReach[s] = k;
     // (Its target stepping out of range: the kernel takes the chase's step,
     // see simMoveTryChase.)
-    c.mvChs[s] = Math.max(TILE * 0.6, Number(u.preComputed.speed) || 1);
+    
     // (Bit 4: its attacks made by the kernel, simHoldFire's work at the
     // pass's start; not a ram's, whose recoil is the object's.)
     const kf = SIM_KERNEL_FIRE && u.attackStyle !== 'ram';
-    if (kf) { c.atkCd[s] = u.preComputed.attackCooldown; c.atkDmg[s] = u.preComputed.attackDamage; c.atkSty[s] = _hitStyleCode(u); c.atkWatch[s] = _unitWatchTicks(u); }
+    if (kf) {   c.atkSty[s] = _hitStyleCode(u); c.atkWatch[s] = _unitWatchTicks(u); }
     c.mvFlags[s] = (u.isFlying ? 32 : 0) | (u.forcedAttackTarget ? 8 : 0) | (kf ? 4 : 0);
     c.mvOn[s] = 3;
 }
@@ -3288,7 +3292,7 @@ function simMoveTryChase(u) {
     if (!(k <= 1)) return;
     // (Bit 4: come in range, its attack made by the kernel, as a hold's.)
     const kf = SIM_KERNEL_FIRE && u.attackStyle !== 'ram';
-    if (kf) { c.atkCd[s] = pc.attackCooldown; c.atkDmg[s] = pc.attackDamage; c.atkSty[s] = _hitStyleCode(u); c.atkWatch[s] = _unitWatchTicks(u); }
+    if (kf) {   c.atkSty[s] = _hitStyleCode(u); c.atkWatch[s] = _unitWatchTicks(u); }
     let flags = (u.isFlying ? 32 : 0) | (hasPath ? 2 : 0) | (u.forcedAttackTarget ? 8 : 0) | (kf ? 4 : 0);
     // Its path's next node a nav node (navPathTo): the kernel follows its
     // flow field when the straight step is not open (followPath ->
@@ -3302,13 +3306,13 @@ function simMoveTryChase(u) {
             if (did >= 0) {
                 const crowd = !!nd.w && u.pathIndex === u.path.length - 1;
                 flags |= 64 | (crowd ? 0 : 128);
-                c.mvSpd[s] = spd; c.mvFlow[s] = did; c.mvFGen[s] = navFieldGen(did); c.mvDest[s] = dest; c.mvReady[s] = nd.ready | 0; c.mvNP[s] = profile;
+                 c.mvFlow[s] = did; c.mvFGen[s] = navFieldGen(did); c.mvDest[s] = dest; c.mvReady[s] = nd.ready | 0; c.mvNP[s] = profile;
                 c.mvWk[s] = 0; c.mvSpent[s] = 0;
             }
         }
     }
     c.mvHT[s] = q; c.mvHTId[s] = tu.id; c.mvReach[s] = k;
-    c.mvChs[s] = Math.max(TILE * 0.6, Number(pc.speed) || 1);
+    
     c.mvFlags[s] = flags;
     c.mvOn[s] = 4;
 }
@@ -4231,7 +4235,7 @@ function simMoveRun() {
     // (Flow units between steers first, a small kernel of their own; the
     // movement kernel does the rest.)
     const stepK = SIM_MOVE_STEP_KERNEL && typeof SIM_KERNEL_MOVE_STEP === 'number';
-    P[46] = stepK ? 1 : 0; P[48] = SIM_COMBAT_BRAIN ? 1 : 0;
+    P[46] = stepK ? 1 : 0; P[47] = 0; P[48] = SIM_COMBAT_BRAIN ? 1 : 0;
     // (The step's base ticks: mv.rs Mv.dk.)
     P[58] = simDk;
     // The separation's pushes (its pair kernel's, from where units stood as
@@ -4733,7 +4737,7 @@ function separationStart() {
         P = simParallelStageParams(0, 3 + parity);
         P[0] = CHUNKS_W; P[1] = CHUNKS_H; P[2] = H; P[3] = pad; P[4] = farAny; P[5] = UNIT_SEPARATION_Q;
         P[6] = UNIT_SEPARATION_SHARE_BOTH; P[7] = UNIT_SEPARATION_SHARE_ONE; P[9] = ne; P[10] = cws; P[11] = _sxEpoch;
-        P[12] = UNIT_SEPARATION_SHARE_MOVER; P[13] = UNIT_SEPARATION_SHARE_YIELD; P[14] = parity;
+        P[12] = UNIT_SEPARATION_SHARE_MOVER; P[13] = UNIT_SEPARATION_SHARE_YIELD; P[14] = parity; P[16] = UNIT_SEPARATION_PAIR_BUDGET;
     }
     simParallelBackgroundChain(0, [[SIM_KERNEL_ZERO, Z[1]], [SIM_KERNEL_SEP_PACK, Math.ceil(ne / SEP_PACK_PER)], [SIM_KERNEL_SEP_MARK, Math.ceil(ne / SEP_MARK_PER)],
         [SIM_KERNEL_SEP_PAIRS, Math.ceil(bands / 2)], [SIM_KERNEL_SEP_PAIRS, Math.floor(bands / 2)]]);
@@ -4759,7 +4763,7 @@ function separationPrebuildStages(n, ep, tick) {
     const farAny = 2 * maxR + pad, reach = Math.max(1, Math.ceil(farAny / cws)), H = Math.max(2, 2 * reach), bands = Math.ceil(CHUNKS_H / H);
     // (Job counts for every unit: the kernels stop at the entries listed.)
     const pairs = parity => [CHUNKS_W, CHUNKS_H, H, pad, farAny, UNIT_SEPARATION_Q, UNIT_SEPARATION_SHARE_BOTH, UNIT_SEPARATION_SHARE_ONE, 0, n, cws, ep,
-        UNIT_SEPARATION_SHARE_MOVER, UNIT_SEPARATION_SHARE_YIELD, parity, 1];
+        UNIT_SEPARATION_SHARE_MOVER, UNIT_SEPARATION_SHARE_YIELD, parity, 1, UNIT_SEPARATION_PAIR_BUDGET];
     _sepPre = { tick, n: ns, ep };
     return [_sepZeroStage(), [SIM_KERNEL_SEP_PACK, Math.ceil(n / SEP_PACK_PER), [n, SEP_PACK_PER, getUnitCollisionRecalcTicks(), tick, mode, 1]],
         [SIM_KERNEL_SEP_MARK, Math.ceil(n / SEP_MARK_PER), [n, SEP_MARK_PER, ep, CHUNKS_W, CHUNKS_H, tick, mode, 1]],

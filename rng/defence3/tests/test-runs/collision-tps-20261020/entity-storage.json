@@ -1,0 +1,4834 @@
+{
+  "unit": {
+    "wasmBytesPerSlot": 517,
+    "jsNumericBytesPerSlot": 87,
+    "columns": [
+      {
+        "name": "id",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "owner",
+        "type": "Int8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "x",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "y",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "prevX",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "prevY",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "vx",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "vy",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "energy",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "r",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "collisionR",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "pathIndex",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "commandState",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "attackTimer",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "attackFlash",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "teleportHideTicks",
+        "type": "Uint16Array",
+        "count": 1,
+        "bytes": 2,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "burning",
+        "type": "Uint16Array",
+        "count": 1,
+        "bytes": 2,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "burnTickDamage",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "poisoned",
+        "type": "Uint16Array",
+        "count": 1,
+        "bytes": 2,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "poisonTickDamage",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "frozen",
+        "type": "Uint16Array",
+        "count": 1,
+        "bytes": 2,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "iceTickDamage",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "wet",
+        "type": "Uint16Array",
+        "count": 1,
+        "bytes": 2,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "sandy",
+        "type": "Uint16Array",
+        "count": 1,
+        "bytes": 2,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "watched",
+        "type": "Uint16Array",
+        "count": 1,
+        "bytes": 2,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "workerTransferCooldown",
+        "type": "Uint16Array",
+        "count": 1,
+        "bytes": 2,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "stackCount",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "unitLevel",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "baseLevel",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "effectiveStacks",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "effectiveLevel",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "_lastAppliedEffectiveLevel",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": true
+      },
+      {
+        "name": "mvOn",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvOut",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvFlags",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvLane",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvSpent",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvReach",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvBase",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvWlen",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvPlen",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvScan",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvFloor",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvPath",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvWake",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvFlow",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvFGen",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvDest",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvReachD",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvReachA",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvShoot",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvRangeK",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvHWin",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvHTT",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvHVer",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvNav",
+        "type": "Int32Array",
+        "count": 8,
+        "bytes": 32,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "cbT",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "cbTick",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "cbTId",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "cbRangeS",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "cbS",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "dbT",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "dbTI",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "dbS",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "dbTick",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "cwNear",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "cwTick",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "cwDense",
+        "type": "Uint16Array",
+        "count": 1,
+        "bytes": 2,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvReady",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvHT",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvHTId",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvTgX",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvTgY",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvTgTol",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvSteady",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "esOk",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "esRad",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "esType",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "esTaken",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "wkIx",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "stEv",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "stDot",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "stAcc",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "stOn",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "tmOn",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "dead0",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "lzFlags",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "lzAcc",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "lzBeam",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "lzEv",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "x0",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "y0",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvWk",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvNavLD",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "sepMov",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "dead",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "spTile",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "spArea",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "spOwner",
+        "type": "Int8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "spEpoch",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "spType",
+        "type": "Int16Array",
+        "count": 1,
+        "bytes": 2,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "vsGen",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "vsR",
+        "type": "Int8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "vsA",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "vsP1",
+        "type": "Int8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "vsP2",
+        "type": "Int8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "maxE",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "live",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "spMvOld",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "spMvNew",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "spMvOwn",
+        "type": "Int8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvBlk",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvCD",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvCT",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvCVx",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvCVy",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvCTl",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvCN",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvNP",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvPF",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "mvFire",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "pvAt",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "pvId",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "pvE",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "pvO",
+        "type": "Int8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "pvC",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "pvL",
+        "type": "Int16Array",
+        "count": 1,
+        "bytes": 2,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "pvV",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "atkSty",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "atkL",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "atkN",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "wtcL",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "wsKind",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "upT",
+        "type": "Int16Array",
+        "count": 1,
+        "bytes": 2,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "upB",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "sepD0",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "sepR0",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "sepL0",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "sepCx",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "sepCy",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "sepIv",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "sepCv",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "esVer",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "statRow",
+        "type": "Int16Array",
+        "count": 1,
+        "bytes": 2,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "fLsX",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "fLsY",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "fLsPX",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "fLsPY",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "fLsT",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "acqB",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "cmMode",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "cmT",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "cmTId",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "isWk",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "hObj",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "rtEnd",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "nvProf",
+        "type": "Int8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "nvPK",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "wkIdle",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "wsFail",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "hAcc",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "hTouch",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "hSty",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "hBurnD",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "hPoiD",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "hWatchK",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "wTeam",
+        "type": "Int8Array",
+        "count": 1,
+        "bytes": 1,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "atkWatch",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 4,
+        "workerRecordBytes": 0,
+        "snapshot": false
+      },
+      {
+        "name": "wkType",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wkD",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wkOx",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wkOy",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wkTwice",
+        "type": "Uint8Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 1,
+        "snapshot": false
+      },
+      {
+        "name": "wkFail",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wkUntil",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wkSched",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wkWx",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wkWy",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wkLmt",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wsCfg",
+        "type": "Int8Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 1,
+        "snapshot": false
+      },
+      {
+        "name": "wsT",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wsOU",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wsOx",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wsOy",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wsR",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wsAx",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wsAy",
+        "type": "Float32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wsAk",
+        "type": "Int8Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 1,
+        "snapshot": false
+      },
+      {
+        "name": "wsNeed",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wsJid",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wsCur",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      },
+      {
+        "name": "wsMy",
+        "type": "Int32Array",
+        "count": 1,
+        "bytes": 0,
+        "workerRecordBytes": 4,
+        "snapshot": false
+      }
+    ],
+    "jsNumeric": [
+      {
+        "name": "_needsStatsInit",
+        "kind": "b",
+        "bytes": 1
+      },
+      {
+        "name": "_removedNow",
+        "kind": "b",
+        "bytes": 1
+      },
+      {
+        "name": "isFlying",
+        "kind": "b",
+        "bytes": 1
+      },
+      {
+        "name": "_fpTile",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_fpIdx",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_fpVer",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_routeSegEnd",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_navReady",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_awaitGroupPath",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_pendingDueStamp",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_okTile",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_okVer",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_okNodeTile",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_okNodeVer",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_statsVer",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_damageFlashStart",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_rslot",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_thingStatsRefreshStamp",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_effectiveStatsStamp",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_idleFailVer",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_idleFailUntil",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_damageFlashUntil",
+        "kind": "i",
+        "bytes": 4
+      },
+      {
+        "name": "_damageFlashStrength",
+        "kind": "f",
+        "bytes": 4
+      },
+      {
+        "name": "maxEnergy",
+        "kind": "u",
+        "bytes": 4
+      }
+    ],
+    "references": [
+      {
+        "name": "jr_unitType",
+        "storage": "interned handle",
+        "bytesPerHandle": 1
+      },
+      {
+        "name": "jr_preComputedBase",
+        "storage": "interned handle",
+        "bytesPerHandle": 1
+      },
+      {
+        "name": "jr_basePreComputed",
+        "storage": "interned handle",
+        "bytesPerHandle": 1
+      },
+      {
+        "name": "jr__pce",
+        "storage": "interned handle",
+        "bytesPerHandle": 1
+      },
+      {
+        "name": "jr__pc",
+        "storage": "interned handle",
+        "bytesPerHandle": 1
+      },
+      {
+        "name": "jr__fpPath",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "jr_attackTarget",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "jr__damageFlashColor",
+        "storage": "interned handle",
+        "bytesPerHandle": 1
+      },
+      {
+        "name": "jr__path",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "jr__ws",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "jr__wnr",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "jr__tb",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "jr__pfa",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "jr__ppt",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "oc_holdPosition",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "oc_forcedAttackTarget",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "oc_targetUnit",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "oc_targetPos",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "oc__attackMoveGx",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "oc__attackMoveGy",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "oc_workerTarget",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "oc_workerTargetType",
+        "storage": "interned handle",
+        "bytesPerHandle": 1
+      },
+      {
+        "name": "oc_carryingValue",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "oc__workerReservedTileIndex",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "oc_builderHasMaterial",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "oc_healerHasMaterial",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "oc_researcherHasMaterial",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "oc__astarBudgetRetryTick",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "oc__scoutTarget",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "oc__routeKey",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      },
+      {
+        "name": "oc_workerType",
+        "storage": "paged reference",
+        "bytesPerHandle": null
+      }
+    ]
+  },
+  "structures": [
+    {
+      "name": "Tower",
+      "fields": [
+        {
+          "name": "_stT",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_li",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_ow",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_uc",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_en",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gx",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "x",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "y",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "type",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "stacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "manualStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "level",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "potentialEffectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "isStacking",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "stackingWorkDone",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "maxEnergy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "markedForSalvage",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "autoUpgradeEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "buildEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "isUpgrading",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_adjSigK",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigE",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigG",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigM",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveGroupSize",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveAreaMult",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "preComputedBase",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedEffective",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputed",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedPotential",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "burning",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "burnTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisoned",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisonTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "frozen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "iceTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "wet",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "sandy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watched",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watchedByTeam",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_levelTextLabel",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_vsGen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsR",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsA",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP1",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP2",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsListId",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "autoStackEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_ambientSoundTicks",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_thingStatsRefreshStamp",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "baseStats",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "currentStats",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "textCtx",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_cdUntil",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "angle",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "connectedLasers",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "laserState",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "laserTimer",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_laserLinkLevel",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "preferredTarget",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "preferredTargetSpec",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_lzRow",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_lzCol",
+          "storage": "reference",
+          "bytes": null
+        }
+      ]
+    },
+    {
+      "name": "Barrack",
+      "fields": [
+        {
+          "name": "_stT",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_li",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_ow",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_uc",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_en",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gx",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "x",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "y",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "type",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "stacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "manualStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "level",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "potentialEffectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "isStacking",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "stackingWorkDone",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "maxEnergy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "markedForSalvage",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "autoUpgradeEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "buildEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "isUpgrading",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_adjSigK",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigE",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigG",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigM",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveGroupSize",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveAreaMult",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "preComputedBase",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedEffective",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputed",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedPotential",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "burning",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "burnTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisoned",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisonTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "frozen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "iceTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "wet",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "sandy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watched",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watchedByTeam",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_levelTextLabel",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_vsGen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsR",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsA",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP1",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP2",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsListId",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "autoStackEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_ambientSoundTicks",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_thingStatsRefreshStamp",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_spt",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "queueEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "spawnQueue",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyX",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyY",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyTargetUnitId",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "spawnCooldown",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_spawnReadyOrder",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_rallyLastSeenX",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_rallyLastSeenY",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_pendingRallyDetach",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "unitType",
+          "storage": "interned handle",
+          "bytes": 1
+        }
+      ]
+    },
+    {
+      "name": "CollectorSpawner",
+      "fields": [
+        {
+          "name": "_stT",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_li",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_ow",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_uc",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_en",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gx",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "x",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "y",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "type",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "stacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "manualStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "level",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "potentialEffectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "isStacking",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "stackingWorkDone",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "maxEnergy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "markedForSalvage",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "autoUpgradeEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "buildEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "isUpgrading",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_adjSigK",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigE",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigG",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigM",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveGroupSize",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveAreaMult",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "preComputedBase",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedEffective",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputed",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedPotential",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "burning",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "burnTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisoned",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisonTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "frozen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "iceTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "wet",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "sandy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watched",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watchedByTeam",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_levelTextLabel",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_vsGen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsR",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsA",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP1",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP2",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsListId",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "autoStackEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_ambientSoundTicks",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_thingStatsRefreshStamp",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_spt",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "queueEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "spawnQueue",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyX",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyY",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyTargetUnitId",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "spawnCooldown",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_spawnReadyOrder",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_rallyLastSeenX",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_rallyLastSeenY",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_pendingRallyDetach",
+          "storage": "Uint8Array",
+          "bytes": 1
+        }
+      ]
+    },
+    {
+      "name": "AstarSpawner",
+      "fields": [
+        {
+          "name": "_stT",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_li",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_ow",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_uc",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_en",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gx",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "x",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "y",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "type",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "stacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "manualStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "level",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "potentialEffectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "isStacking",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "stackingWorkDone",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "maxEnergy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "markedForSalvage",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "autoUpgradeEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "buildEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "isUpgrading",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_adjSigK",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigE",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigG",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigM",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveGroupSize",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveAreaMult",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "preComputedBase",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedEffective",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputed",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedPotential",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "burning",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "burnTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisoned",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisonTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "frozen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "iceTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "wet",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "sandy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watched",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watchedByTeam",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_levelTextLabel",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_vsGen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsR",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsA",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP1",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP2",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsListId",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "autoStackEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_ambientSoundTicks",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_thingStatsRefreshStamp",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_spt",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "queueEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "spawnQueue",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyX",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyY",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyTargetUnitId",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "spawnCooldown",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_spawnReadyOrder",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_rallyLastSeenX",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_rallyLastSeenY",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_pendingRallyDetach",
+          "storage": "Uint8Array",
+          "bytes": 1
+        }
+      ]
+    },
+    {
+      "name": "SalvagerSpawner",
+      "fields": [
+        {
+          "name": "_stT",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_li",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_ow",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_uc",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_en",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gx",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "x",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "y",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "type",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "stacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "manualStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "level",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "potentialEffectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "isStacking",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "stackingWorkDone",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "maxEnergy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "markedForSalvage",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "autoUpgradeEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "buildEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "isUpgrading",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_adjSigK",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigE",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigG",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigM",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveGroupSize",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveAreaMult",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "preComputedBase",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedEffective",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputed",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedPotential",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "burning",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "burnTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisoned",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisonTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "frozen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "iceTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "wet",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "sandy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watched",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watchedByTeam",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_levelTextLabel",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_vsGen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsR",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsA",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP1",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP2",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsListId",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "autoStackEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_ambientSoundTicks",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_thingStatsRefreshStamp",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_spt",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "queueEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "spawnQueue",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyX",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyY",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyTargetUnitId",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "spawnCooldown",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_spawnReadyOrder",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_rallyLastSeenX",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_rallyLastSeenY",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_pendingRallyDetach",
+          "storage": "Uint8Array",
+          "bytes": 1
+        }
+      ]
+    },
+    {
+      "name": "BuilderSpawner",
+      "fields": [
+        {
+          "name": "_stT",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_li",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_ow",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_uc",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_en",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gx",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "x",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "y",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "type",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "stacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "manualStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "level",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "potentialEffectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "isStacking",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "stackingWorkDone",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "maxEnergy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "markedForSalvage",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "autoUpgradeEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "buildEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "isUpgrading",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_adjSigK",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigE",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigG",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigM",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveGroupSize",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveAreaMult",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "preComputedBase",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedEffective",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputed",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedPotential",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "burning",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "burnTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisoned",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisonTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "frozen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "iceTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "wet",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "sandy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watched",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watchedByTeam",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_levelTextLabel",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_vsGen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsR",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsA",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP1",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP2",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsListId",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "autoStackEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_ambientSoundTicks",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_thingStatsRefreshStamp",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_spt",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "queueEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "spawnQueue",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyX",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyY",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyTargetUnitId",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "spawnCooldown",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_spawnReadyOrder",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_rallyLastSeenX",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_rallyLastSeenY",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_pendingRallyDetach",
+          "storage": "Uint8Array",
+          "bytes": 1
+        }
+      ]
+    },
+    {
+      "name": "HealerSpawner",
+      "fields": [
+        {
+          "name": "_stT",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_li",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_ow",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_uc",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_en",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gx",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "x",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "y",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "type",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "stacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "manualStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "level",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "potentialEffectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "isStacking",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "stackingWorkDone",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "maxEnergy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "markedForSalvage",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "autoUpgradeEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "buildEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "isUpgrading",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_adjSigK",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigE",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigG",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigM",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveGroupSize",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveAreaMult",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "preComputedBase",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedEffective",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputed",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedPotential",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "burning",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "burnTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisoned",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisonTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "frozen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "iceTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "wet",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "sandy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watched",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watchedByTeam",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_levelTextLabel",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_vsGen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsR",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsA",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP1",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP2",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsListId",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "autoStackEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_ambientSoundTicks",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_thingStatsRefreshStamp",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_spt",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "queueEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "spawnQueue",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyX",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyY",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyTargetUnitId",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "spawnCooldown",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_spawnReadyOrder",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_rallyLastSeenX",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_rallyLastSeenY",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_pendingRallyDetach",
+          "storage": "Uint8Array",
+          "bytes": 1
+        }
+      ]
+    },
+    {
+      "name": "ResearchSpawner",
+      "fields": [
+        {
+          "name": "_stT",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_li",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_ow",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_uc",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_en",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gx",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "x",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "y",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "type",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "stacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "manualStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "level",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "potentialEffectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "isStacking",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "stackingWorkDone",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "maxEnergy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "markedForSalvage",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "autoUpgradeEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "buildEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "isUpgrading",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_adjSigK",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigE",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigG",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigM",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveGroupSize",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveAreaMult",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "preComputedBase",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedEffective",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputed",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedPotential",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "burning",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "burnTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisoned",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisonTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "frozen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "iceTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "wet",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "sandy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watched",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watchedByTeam",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_levelTextLabel",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_vsGen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsR",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsA",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP1",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP2",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsListId",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "autoStackEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_ambientSoundTicks",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_thingStatsRefreshStamp",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_spt",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "queueEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "spawnQueue",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyX",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyY",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "rallyTargetUnitId",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "spawnCooldown",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_spawnReadyOrder",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_rallyLastSeenX",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_rallyLastSeenY",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_pendingRallyDetach",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "autoResearchEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "researchTask",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "isResearching",
+          "storage": "Uint8Array",
+          "bytes": 1
+        }
+      ]
+    },
+    {
+      "name": "FloorItem",
+      "fields": [
+        {
+          "name": "_stT",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_li",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_ow",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_uc",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_en",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gx",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "x",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "y",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "type",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "stacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "manualStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveStacks",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "level",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "potentialEffectiveLevel",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "isStacking",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "stackingWorkDone",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "maxEnergy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "markedForSalvage",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "autoUpgradeEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "buildEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "isUpgrading",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_adjSigK",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigE",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigG",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_adjSigM",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveGroupSize",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "effectiveAreaMult",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "preComputedBase",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedEffective",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputed",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "preComputedPotential",
+          "storage": "interned handle",
+          "bytes": 1
+        },
+        {
+          "name": "burning",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "burnTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisoned",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "poisonTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "frozen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "iceTickDamage",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "wet",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "sandy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watched",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "watchedByTeam",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_levelTextLabel",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_vsGen",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsR",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsA",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP1",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsP2",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_vsListId",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "autoStackEnabled",
+          "storage": "Uint8Array",
+          "bytes": 1
+        },
+        {
+          "name": "_ambientSoundTicks",
+          "storage": "reference",
+          "bytes": null
+        },
+        {
+          "name": "_thingStatsRefreshStamp",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "damage",
+          "storage": "Float64Array",
+          "bytes": 8
+        }
+      ]
+    },
+    {
+      "name": "GoldMine",
+      "fields": [
+        {
+          "name": "_stT",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_li",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_mv",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gx",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "x",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "y",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "maxGold",
+          "storage": "Float64Array",
+          "bytes": 8
+        }
+      ]
+    },
+    {
+      "name": "AstarMine",
+      "fields": [
+        {
+          "name": "_stT",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_li",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "_mv",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gx",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "gy",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "x",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "y",
+          "storage": "Float64Array",
+          "bytes": 8
+        },
+        {
+          "name": "maxAstar",
+          "storage": "Float64Array",
+          "bytes": 8
+        }
+      ]
+    }
+  ],
+  "sharedStats": {
+    "width": 16,
+    "rows": 6,
+    "capacity": 256,
+    "bytes": 16384,
+    "removedColumns": [
+      "mvSpd",
+      "mvCost",
+      "mvChs",
+      "cbRange",
+      "atkCd",
+      "atkDmg"
+    ]
+  }
+}

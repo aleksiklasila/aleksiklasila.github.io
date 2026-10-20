@@ -277,14 +277,7 @@ function rebuildPlayerThingBoost(playerId, branch, key) {
         if (branch === 'building' && !_buildingStatHasValues(key, statKey)) continue;
         _rebuildPlayerThingStatLevels(playerId, branch, key, statKey, 1);
     }
-    // What a finished research of the thing sets off (applyResearchCompletion):
-    // its buildings take the tables at their turn of the research sweep,
-    // the population cap follows the houses' at once, adjacency is made again.
-    if (branch === 'building') {
-        bumpBuildingResearchVersion(playerId, key, false);
-        if (key === 'house' && typeof recomputePlayerPopCaps === 'function') recomputePlayerPopCaps();
-    }
-    if (typeof gameStarted !== 'undefined' && gameStarted && typeof recalculateAdjacency === 'function') recalculateAdjacency();
+    if (branch === 'building' && key === 'house' && typeof recomputePlayerPopCaps === 'function') recomputePlayerPopCaps();
 }
 // The setBoost action: steps of energy or ★ boost for one thing.
 function setPlayerThingBoost(playerId, kind, key, resourceKey, steps) {
@@ -2844,12 +2837,45 @@ function _normalizePlayerPrecomputedBuildingKey(buildingKey) {
     return PRECOMPUTED_STATS_MAP.building[buildingKey] ? buildingKey : 'farm';
 }
 
+// Numeric stat storage belongs to owner/type tables, never instances.
+// Layout is selected before creating a match for controlled A/B benchmarks.
+let SIM_THING_STATS_LAYOUT='soa';
+const _thingStatTables=new Map(),_thingStatViews=new WeakSet(),_thingStatSchemas=new Map();
+function _flatThingStatEntry(owner,kind,type,level,values) {
+    const keys=Object.keys(values), signature=keys.join('|'), id=owner+'|'+kind+'|'+type;
+    let schema=_thingStatSchemas.get(signature);
+    if(!schema){
+        const descriptors={};
+        keys.forEach((name,k)=>descriptors[name]={enumerable:true,configurable:false,
+            get:function(){const t=this._flatStats;return t.data[this._flatLevel*t.rowStride+k*t.statStride];},
+            set:function(v){const t=this._flatStats;t.data[this._flatLevel*t.rowStride+k*t.statStride]=v;}});
+        schema={keys,descriptors};_thingStatSchemas.set(signature,schema);
+    }
+    let t=_thingStatTables.get(id);
+    const levels=MAX_THING_LEVEL+1,width=(keys.length+3)&~3;
+    if(!t || t.layout!==SIM_THING_STATS_LAYOUT || t.schema!==schema){
+        const soa=SIM_THING_STATS_LAYOUT==='soa';
+        t={schema,layout:SIM_THING_STATS_LAYOUT,width,levels,rowStride:soa?1:width,statStride:soa?levels:1,data:new Float32Array(levels*width),entries:[]};
+        t.data.fill(NaN);_thingStatTables.set(id,t);
+    }
+    let entry=t.entries[level];
+    if(!entry){entry={};Object.defineProperties(entry,{_flatStats:{value:t},_flatLevel:{value:level}});Object.defineProperties(entry,schema.descriptors);t.entries[level]=entry;_thingStatViews.add(entry);}
+    for(const name of keys)entry[name]=values[name];
+    return entry;
+}
+function _getUnitPlayerPrecomputedEntry(owner,type,level) {
+    return _flatThingStatEntry(owner,'unit',_normalizePlayerPrecomputedUnitKey(type),Math.max(1,clampThingLevel(level)),_getUnitPlayerPrecomputedEntryObject(owner,type,level));
+}
+function _getBuildingPlayerPrecomputedEntry(owner,type,level) {
+    return _flatThingStatEntry(owner,'building',_normalizePlayerPrecomputedBuildingKey(type),Math.max(1,clampThingLevel(level)),_getBuildingPlayerPrecomputedEntryObject(owner,type,level));
+}
 function _simF32Stats(entry) {
+    if(_thingStatViews.has(entry)) return entry;
     for (const k of Object.keys(entry)) if (typeof entry[k] === 'number') entry[k] = Math.fround(entry[k]);
     return entry;
 }
 
-function _getUnitPlayerPrecomputedEntry(playerId, unitType, level) {
+function _getUnitPlayerPrecomputedEntryObject(playerId, unitType, level) {
     let key = _normalizePlayerPrecomputedUnitKey(unitType);
     let lvl = Math.max(1, clampThingLevel(level || 1));
     let levelEntries = PRECOMPUTED_STATS_MAP.unit[key] || [];
@@ -2893,7 +2919,7 @@ function _getUnitPlayerPrecomputedEntry(playerId, unitType, level) {
     });
 }
 
-function _getBuildingPlayerPrecomputedEntry(playerId, buildingKey, level) {
+function _getBuildingPlayerPrecomputedEntryObject(playerId, buildingKey, level) {
     let key = _normalizePlayerPrecomputedBuildingKey(buildingKey);
     let lvl = Math.max(1, clampThingLevel(level || 1));
     let levelEntries = PRECOMPUTED_STATS_MAP.building[key] || [];
@@ -2976,7 +3002,7 @@ function rebuildPrecomputedStatsMapPlayer(targetPlayerId = null) {
         if (template) {
             let copy = { unit: {}, building: {} };
             for (let kind of ['unit', 'building']) {
-                for (let key in template[kind]) copy[kind][key] = template[kind][key].map(entry => entry ? { ...entry } : entry);
+                for (let key in template[kind]) copy[kind][key] = template[kind][key].map((entry,level) => entry ? _flatThingStatEntry(playerId,kind,key,level,{...entry}) : entry);
             }
             PRECOMPUTED_STATS_MAP_PLAYER[playerId] = copy;
             if (typeof simTrapResearchDone === 'function') simTrapResearchDone(playerId);
@@ -3009,22 +3035,26 @@ function _ensurePrecomputedStatsMapPlayerEntry(playerId) {
     return PRECOMPUTED_STATS_MAP_PLAYER[pid];
 }
 
+// Compute linked values before Float32 stores, matching a full table rebuild.
 function _applyUnitPlayerPrecomputedStat(entry, statKey, value) {
     if (!entry) return entry;
     if (statKey === 'energy') entry.maxEnergy = Math.max(1, Math.floor(Number(value) || 1));
     else if (statKey === 'atk') entry.attackDamage = Math.max(0, Number(value) || 0);
     else if (statKey === 'atkCd') {
-        entry.attackCooldownSec = Math.max(0.01, Number(value) || 0.01);
-        entry.attackCooldown = secondsToTicks(entry.attackCooldownSec);
+        const v = Math.max(0.01, Number(value) || 0.01);
+        entry.attackCooldownSec = v;
+        entry.attackCooldown = secondsToTicks(v);
     }
     else if (statKey === 'speed') entry.speed = Math.max(0.1, Number(value) || 0.1);
     else if (statKey === 'visionRange') {
-        entry.visionRangeArea = Math.max(0.05, Number(value) || 0.05);
-        entry.visionRange = entry.visionRangeArea * AREA_UNIT_TILE_EQUIVALENT;
+        const v = Math.max(0.05, Number(value) || 0.05);
+        entry.visionRangeArea = v;
+        entry.visionRange = v * AREA_UNIT_TILE_EQUIVALENT;
     }
     else if (statKey === 'attackRange') {
-        entry.attackRangeArea = Math.max(0, Number(value) || 0);
-        entry.attackRange = entry.attackRangeArea * AREA_UNIT_TILE_EQUIVALENT * TILE;
+        const v = Math.max(0, Number(value) || 0);
+        entry.attackRangeArea = v;
+        entry.attackRange = v * AREA_UNIT_TILE_EQUIVALENT * TILE;
     }
     else if (statKey === 'watchDuration') entry.watchDuration = Math.max(0, Number(value) || 0);
     else if (statKey === 'workerSearchDistance') entry.workerSearchDistance = Math.max(0, Number(value) || 0);
@@ -3033,8 +3063,9 @@ function _applyUnitPlayerPrecomputedStat(entry, statKey, value) {
     else if (statKey === 'healerDps') entry.healerDps = Math.max(0, Number(value) || 0);
     else if (statKey === 'researcherDps') entry.researcherDps = Math.max(0, Number(value) || 0);
     else if (statKey === 'transferCooldown') {
-        entry.transferCooldownSec = Math.max(0.01, Number(value) || 0.01);
-        entry.transferCooldownTicks = secondsToTicks(entry.transferCooldownSec);
+        const v = Math.max(0.01, Number(value) || 0.01);
+        entry.transferCooldownSec = v;
+        entry.transferCooldownTicks = secondsToTicks(v);
     }
     else if (statKey === 'astarCost') entry.astarCost = Math.max(0.01, Number(value) || 0.01);
     else if (statKey === 'upKeep') entry.upKeep = Math.max(0.01, Number(value) || 0.01);
@@ -3045,20 +3076,23 @@ function _applyBuildingPlayerPrecomputedStat(entry, statKey, value) {
     if (!entry) return entry;
     if (statKey === 'maxEnergy') entry.maxEnergy = Number.isFinite(value) ? Math.max(1, Math.floor(Number(value))) : NaN;
     else if (statKey === 'cd') {
-        entry.cd = Number(value);
-        entry.cdTicks = Number.isFinite(entry.cd) ? secondsToTicks(Math.max(0.001, entry.cd)) : 0;
+        const v = Number(value);
+        entry.cd = v;
+        entry.cdTicks = Number.isFinite(v) ? secondsToTicks(Math.max(0.001, v)) : 0;
     }
     else if (statKey === 'spawnCd') {
-        entry.spawnCd = Number(value);
-        entry.spawnCdTicks = Number.isFinite(entry.spawnCd) ? secondsToTicks(Math.max(0.001, entry.spawnCd)) : 0;
+        const v = Number(value);
+        entry.spawnCd = v;
+        entry.spawnCdTicks = Number.isFinite(v) ? secondsToTicks(Math.max(0.001, v)) : 0;
     }
     else if (statKey === 'visionRange') {
         entry.visionRange = Number.isFinite(value) ? Math.max(0, Number(value)) : NaN;
         entry.visionRangeArea = entry.visionRange;
     }
     else if (statKey === 'attackRange') {
-        entry.attackRangeArea = Number.isFinite(value) ? Math.max(0, Number(value)) : NaN;
-        entry.attackRange = Number.isFinite(entry.attackRangeArea) ? (entry.attackRangeArea * AREA_UNIT_TILE_EQUIVALENT * TILE) : NaN;
+        const v = Number.isFinite(value) ? Math.max(0, Number(value)) : NaN;
+        entry.attackRangeArea = v;
+        entry.attackRange = Number.isFinite(v) ? (v * AREA_UNIT_TILE_EQUIVALENT * TILE) : NaN;
     }
     else if (statKey === 'blastRadius') entry.blastRadius = Number.isFinite(value) ? Math.max(0, Number(value)) : NaN;
     else entry[statKey] = Number(value);
@@ -3144,6 +3178,7 @@ function _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey, mult
         if (isUnit) _applyUnitPlayerPrecomputedStat(entry, statKey, value);
         else _applyBuildingPlayerPrecomputedStat(entry, statKey, value);
     }
+    if (isUnit && typeof effSharedTablesChanged === 'function') effSharedTablesChanged(pid, normalizedKey);
     return levels;
 }
 
@@ -3740,107 +3775,11 @@ function applyUnitResearchUpgradeToExistingUnits(owner, unitType, statKey) {
     rebuildPrecomputedStatsMapPlayerThingStat(owner, 'unit', unitType, statKey);
 }
 
-// A building research: the tables now; the owner's buildings take them at
-// their turn of the research sweep (buildingResearchSweep: each a
-// TICK_RATE-th of the lists a tick, so no tick refreshes every building of a
-// kind: thousands of towers were a spike). The owner's research version
-// (players[o].bResVer) and each building's (_bResVer) are state (snapshots
-// carry both); a building behind takes its stats from the tables again (the
-// same values whenever it does: a refresh is idempotent).
-function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
-    rebuildPrecomputedStatsMapPlayerThingStat(owner, 'building', buildingKey, statKey);
-    if (bumpBuildingResearchVersion(owner, buildingKey, statKey === 'maxLevel')) return;
-    _applyBuildingResearchNow(owner, buildingKey, statKey);
+// Building/floor stats are shared views. Publishing research requires no
+// instance versions, catch-up jobs or staggered building sweep.
+function applyBuildingResearchUpgradeToExisting(owner,buildingKey,statKey) {
+    rebuildPrecomputedStatsMapPlayerThingStat(owner,'building',buildingKey,statKey);
 }
-// The owner's version up, and its building key's (bResKey; bResMaxKey for a
-// max level research): only that key's buildings take the tables again.
-function bumpBuildingResearchVersion(owner, buildingKey, maxLevel) {
-    const p = players[owner];
-    if (!p) return false;
-    const v = p.bResVer = (p.bResVer | 0) + 1, k = _normalizePlayerPrecomputedBuildingKey(buildingKey);
-    (p.bResKey || (p.bResKey = {}))[k] = v;
-    if (maxLevel) (p.bResMaxKey || (p.bResMaxKey = {}))[k] = v;
-    return true;
-}
-// One building at its research turn: behind its owner's version, its stats
-// from the tables (and its progress state after a max level research).
-// Only a research of its own key (rawKey: what its tables are read by)
-// since its last turn: the others' tables did not change.
-function buildingResearchCatchUp(e, kind, owner, rawKey) {
-    if (!e) return;
-    const p = players[owner];
-    if (!p) return;
-    const v = p.bResVer | 0, have = e._bResVer | 0;
-    if (have >= v) return;
-    e._bResVer = v;
-    const k = _normalizePlayerPrecomputedBuildingKey(rawKey);
-    if ((p.bResKey ? p.bResKey[k] | 0 : v) <= have) return;
-    _buildingResearchApply(e, '', kind);
-    // (Energy over a lower maximum: down to it; never up, never revived.)
-    if (e.energy > e.maxEnergy) e.energy = e.maxEnergy;
-    if ((p.bResMaxKey ? p.bResMaxKey[k] | 0 : 0) > have) refreshThingProgressState(e);
-}
-// The sweep (gameTick): a TICK_RATE-th of the towers, barracks, spawners and
-// floor items by their place in their lists (the same on every peer).
-function buildingResearchSweep() {
-    let any = false;
-    for (let i = 0; i < players.length && !any; i++) if (players[i] && (players[i].bResVer | 0) > 0) any = true;
-    if (!any) return;
-    // (The slices of the step's base ticks.)
-    for (const ph of simStepPhases(TICK_RATE)) {
-    for (let i = ph; i < towers.length; i += TICK_RATE) { const t = towers[i]; if (t) buildingResearchCatchUp(t, 0, t.owner, t.type); }
-    for (let i = ph; i < barracks.length; i += TICK_RATE) { const b = barracks[i]; if (b) buildingResearchCatchUp(b, 1, b.owner, 'barrack_' + b.unitType); }
-    for (let i = ph; i < collectorSpawners.length; i += TICK_RATE) { const c = collectorSpawners[i]; if (c) buildingResearchCatchUp(c, 1, c.owner, c.type); }
-    const items = typeof getCellItemsRowMajor === 'function' ? getCellItemsRowMajor() : [];
-    for (let i = ph; i < items.length; i += TICK_RATE) {
-        const item = items[i], cell = item && grid[item.gy] && grid[item.gy][item.gx];
-        // (Barracks and spawners are cell items too: their own lists' turn.)
-        if (cell && cell.item === item && !_isProducerStructure(item)) buildingResearchCatchUp(item, 2, cell.owner, item.type);
-    }
-    }
-}
-function _applyBuildingResearchNow(owner, buildingKey, statKey) {
-    const list = [];
-    for (let t of towers) if (t && t.owner === owner && t.type === buildingKey) list.push(t, 0);
-    for (let b of barracks) if (b && b.owner === owner && `barrack_${b.unitType}` === buildingKey) list.push(b, 1);
-    for (let s of collectorSpawners) if (s && s.owner === owner && s.type === buildingKey) list.push(s, 1);
-    const items = typeof getCellItemsRowMajor === 'function' ? getCellItemsRowMajor() : [];
-    for (const item of items) {
-        const cell = grid[item.gy] && grid[item.gy][item.gx];
-        if (!cell || cell.item !== item || cell.owner !== owner || item.type !== buildingKey || _isProducerStructure(item)) continue;
-        list.push(item, 2);
-    }
-    for (let i = 0; i < list.length; i += 2) _buildingResearchApply(list[i], statKey, list[i + 1]);
-    if (statKey === 'maxLevel') for (let i = 0; i < list.length; i += 2) refreshThingProgressState(list[i]);
-}
-function _buildingResearchApply(e, statKey, kind) {
-    if (!e) return;
-    if (kind === 0) {
-        let prevEnergy = e.energy;
-        e.updateStats();
-        if (statKey === 'maxEnergy') e.energy = Math.max(1, Math.min(prevEnergy, e.maxEnergy));
-    } else if (kind === 1) {
-        let prevEnergy = e.energy;
-        let lvl = getThingEffectiveLevel(e);
-        const type = e.type === 'barrack' ? `barrack_${e.unitType}` : e.type;
-        e.preComputedBase = calculateItemStats(type, Math.max(1, e.level || lvl), e.owner);
-        e.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(e.preComputedBase, calculateItemStats(type, lvl, e.owner), false);
-        e.preComputed = e.preComputedBase;
-        e.maxEnergy = Math.max(1, Math.floor((e.preComputedBase && e.preComputedBase.maxEnergy) || 1));
-        if (statKey === 'maxEnergy') e.energy = Math.max(1, Math.min(prevEnergy, e.maxEnergy));
-    } else {
-        const cell = grid[e.gy] && grid[e.gy][e.gx];
-        if (!cell || cell.item !== e) return;
-        let prevEnergy = e.energy;
-        let stats = calculateItemStats(e.type, getThingBaseLevel(e), cell.owner);
-        if (Number.isFinite(stats.maxEnergy) && stats.maxEnergy > 0) {
-            e.maxEnergy = Math.max(1, Math.floor(stats.maxEnergy));
-            if (statKey === 'maxEnergy') e.energy = Math.max(1, Math.min(prevEnergy, e.maxEnergy));
-        }
-        if (Number.isFinite(stats.damage)) e.damage = stats.damage;
-    }
-}
-
 function applyResearchCompletion(owner, task) {
     if (!task) return;
     let levels = ensurePlayerResearchLevels(owner);
@@ -3856,7 +3795,8 @@ function applyResearchCompletion(owner, task) {
     if (task.kind === 'building' && task.key === 'house' && task.statKey === 'popCap') {
         recomputePlayerPopCaps();
     }
-    recalculateAdjacency();
+    // maxLevel changes upgrade eligibility; numeric stat publication needs no instance work.
+    if (task.kind === 'building' && task.statKey === 'maxLevel') recalculateAdjacency();
 }
 
 function completeActiveResearchTaskForPlayer(owner, completedTask) {
@@ -3931,6 +3871,7 @@ function clonePrecomputedWithBaseMaxEnergy(baseStats, effectiveStats) {
 // count: simMoveStatsChanged disarms a unit whose stats changed).
 let _unitStatsNotifyHeld = false;
 function applyUnitLevelScaling(unit, level) {
+    const previousRow=unit && unit._us ? unit._us.statRow[unit._si] : -1;
     if (!unit) return;
     let lvl = Math.max(1, Math.floor(level || 1));
     unit.unitLevel = lvl;
@@ -3950,7 +3891,7 @@ function applyUnitLevelScaling(unit, level) {
     unit.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(unit.preComputedBase, scaled);
     unit.basePreComputed = unit.preComputedBase;
     unit.preComputed = unit.preComputedEffective;
-    if (!_unitStatsNotifyHeld && typeof simMoveStatsChanged === 'function') simMoveStatsChanged(unit);
+
     let unitDef = BASE_UNIT_STATS[unit.unitType] || BASE_UNIT_STATS.norm || {};
     unit.isFlying = !!unitDef.isFlying;
     unit.maxEnergy = unit.preComputedBase.maxEnergy;
@@ -3961,6 +3902,8 @@ function applyUnitLevelScaling(unit, level) {
     unit.effectiveStacks = Math.max(1, Number.isFinite(unit.stackCount) ? Math.floor(unit.stackCount) : 1);
     unit.effectiveLevel = lvl;
     if (typeof effStatsUnitBaseChanged === 'function') effStatsUnitBaseChanged(unit);
+    if (typeof _effRowAttach === 'function') _effRowAttach(unit);
+    if (!_unitStatsNotifyHeld && typeof simMoveStatsChanged === 'function') simMoveStatsChanged(unit, previousRow);
     if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(unit);
 }
 
@@ -3979,7 +3922,8 @@ function unitDerivedStatsRestore(unit) {
     unit.preComputed = unit.preComputedEffective;
 }
 
-function applyUnitEffectiveScaling(unit, effectiveLevel) {
+function applyUnitEffectiveScaling(unit, effectiveLevel, previousRow) {
+    if (!Number.isInteger(previousRow)) previousRow=unit && unit._us ? unit._us.statRow[unit._si] : -1;
     if (!unit) return;
     let lvl = Math.max(1, Math.floor(effectiveLevel || 1));
     let scaled = computeUnitLevelScaledStats(unit, lvl);
@@ -3987,7 +3931,7 @@ function applyUnitEffectiveScaling(unit, effectiveLevel) {
 
     unit.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(unit.preComputedBase, scaled);
     unit.preComputed = unit.preComputedEffective;
-    if (!_unitStatsNotifyHeld && typeof simMoveStatsChanged === 'function') simMoveStatsChanged(unit);
+
     let unitDef = BASE_UNIT_STATS[unit.unitType] || BASE_UNIT_STATS.norm || {};
     unit.isFlying = !!unitDef.isFlying;
     unit.maxEnergy = Number(unit.preComputedBase && unit.preComputedBase.maxEnergy) || unit.preComputedEffective.maxEnergy;
@@ -3999,4 +3943,5 @@ function applyUnitEffectiveScaling(unit, effectiveLevel) {
     if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(unit);
     // (Its tables as a stat row: units of the same tables take it in the kernel.)
     if (typeof _effRowAttach === 'function') _effRowAttach(unit);
+    if (!_unitStatsNotifyHeld && typeof simMoveStatsChanged === 'function') simMoveStatsChanged(unit, previousRow);
 }

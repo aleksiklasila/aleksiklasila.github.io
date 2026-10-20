@@ -1,0 +1,62 @@
+BOOST DIFF [
+  [
+    'unit',
+    'norm',
+    4,
+    'visionRange',
+    3.589737892150879,
+    3.589738130569458
+  ],
+  [
+    'unit',
+    'norm',
+    4,
+    'attackRange',
+    114.87161254882812,
+    114.87162017822266
+  ],
+  [
+    'unit',
+    'norm',
+    10,
+    'visionRange',
+    4.452383995056152,
+    4.452383518218994
+  ],
+  [
+    'unit',
+    'norm',
+    10,
+    'attackRange',
+    142.47628784179688,
+    142.4762725830078
+  ],
+  [
+    'unit',
+    'norm',
+    12,
+    'visionRange',
+    4.783758163452148,
+    4.78375768661499
+  ],
+  [
+    'unit',
+    'norm',
+    12,
+    'attackRange',
+    153.08026123046875,
+    153.0802459716797
+  ]
+]
+AssertionError [ERR_ASSERTION]: tables rebuilt in place equal a full rebuild
+
+false !== true
+
+    at Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\tests\test-runs\structure-stats-20261020\boost-diagnose.cjs:44:85 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: 'strictEqual',
+  diff: 'simple'
+}

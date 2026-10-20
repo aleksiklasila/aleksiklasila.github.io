@@ -1,0 +1,188 @@
+{
+  "passed": 26,
+  "total": 26,
+  "checks": [
+    {
+      "file": "building-research-keys.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 4002,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "floor-trap-kernel.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 2242,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "boost.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 8462,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "deltatick-multiplayer.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 8456,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "movement-sleep.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 4736,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "reference-columns.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 417,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "research-rebase-partial.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 2594,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "shared-stat-rows.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 2073,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "shared-unit-state.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 3089,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "shrine.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 8973,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "multiplayer-snapshot.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 41393,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "source-loading.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 348,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "spawner-queue-performance.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 579,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "structure-table.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 4106,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "structure-targeting.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 211,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "team-watch-effects.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 164,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "unit-retirement.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 2610,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "solo-snapshot.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 35337,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "worker-fallback-upgrade.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 162,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "work-snapshot.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 14033,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "worker-walk.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 20979,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "multiplayer-action-fuzz.test.cjs",
+      "mode": "0",
+      "status": 0,
+      "elapsedMs": 91970,
+      "source": "validation-final.json"
+    },
+    {
+      "file": "deltatick-multiplayer.test.cjs",
+      "mode": "1",
+      "status": 0,
+      "elapsedMs": 31313,
+      "source": "validation-worker.json"
+    },
+    {
+      "file": "multiplayer-snapshot.test.cjs",
+      "mode": "1",
+      "status": 0,
+      "elapsedMs": 39481,
+      "source": "validation-worker.json"
+    },
+    {
+      "file": "boost.test.cjs",
+      "mode": "1",
+      "status": 0,
+      "elapsedMs": 23675,
+      "source": "validation-boost-worker.json"
+    },
+    {
+      "file": "building-research-keys.test.cjs",
+      "mode": "1",
+      "status": 0,
+      "elapsedMs": 4097,
+      "source": "validation-boost-worker.json"
+    }
+  ]
+}

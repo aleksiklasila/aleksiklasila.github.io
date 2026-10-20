@@ -1,0 +1,2 @@
+PASS: bounded f32 contact geometry error; contact counts, closing and flow outputs stay exact
+PASS: total contact budget preserves deterministic responses; counted contacts 13083 -> 10240

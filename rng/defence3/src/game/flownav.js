@@ -947,7 +947,7 @@ function _navFieldsSweepSlice(k, step, mark) {
             const s = slots[i];
             if (!(s >= 0) || !LIVE[s] || DEAD[s]) continue;
             const e = RE[s];
-            if (e >= 0 && RK[s] === NAV_ROUTE_KEY) { const sl = Fw.byKey.get(PR[s] * 16777216 + e); if (sl !== undefined) Fw.seen[sl] = mark; }
+            if (e >= 0 && RK.get(s) === NAV_ROUTE_KEY) { const sl = Fw.byKey.get(PR[s] * 16777216 + e); if (sl !== undefined) Fw.seen[sl] = mark; }
             const pk = PK[s];
             if (pk >= 0) { const F = (pk & 1) ? Fw : Fn, sl = F.byKey.get(pk >> 1); if (sl !== undefined) F.seen[sl] = mark; }
         }
@@ -1346,9 +1346,28 @@ function navEnsure(profile) {
     let nav = _nav[profile];
     if (nav && nav.W === GRID_W && nav.H === GRID_H) return nav;
     const wall = navWallTable(profile);
-    nav = navBuild(profile, wall, profile !== NAV_PROFILE_AIR, GRID_W, GRID_H);
+    nav = _navShareBuild(profile, wall) || navBuild(profile, wall, profile !== NAV_PROFILE_AIR, GRID_W, GRID_H);
     navPublish(nav);
     return nav;
+}
+// Installed geometry is immutable. Collectors without mines and builders
+// of players without structures often have exactly the ground's walls;
+// keep one set of local fields, graph, components and atlas for them.
+// Each profile still owns its wrapper, sequence, version and destination
+// fields, and rebuilds independently when its live walls change.
+function _navShareBuild(profile, wall) {
+    const costs = profile !== NAV_PROFILE_AIR, seen = new Set();
+    for (const b of _nav) {
+        if (!b || b.W !== GRID_W || b.H !== GRID_H || !!b.cost !== costs || seen.has(b.wall)) continue;
+        seen.add(b.wall);
+        let different = typeof simParallelDiffCount === 'function' ? simParallelDiffCount(b.wall, wall) : null;
+        if (different === null) {
+            different = b.wall.length !== wall.length ? 1 : 0;
+            for (let i = 0; !different && i < wall.length; i++) if (b.wall[i] !== wall[i]) different = 1;
+        }
+        if (!different) return { ...b, profile };
+    }
+    return null;
 }
 function navReset() {
     // (A build's background stage, the fields' jobs: finished, dropped.)
@@ -1682,25 +1701,21 @@ function _navRushCheck() {
 // what any peer does (a collect waits, or runs what is left itself).
 function _navJobStep(J, step) {
     if (step === 0) {
-        J.b = navBuildStart(J.profile, navWallTable(J.profile), J.profile !== NAV_PROFILE_AIR, GRID_W, GRID_H);
+        const wall = navWallTable(J.profile);
+        J.shared = _navShareBuild(J.profile, wall);
+        J.b = J.shared || navBuildStart(J.profile, wall, J.profile !== NAV_PROFILE_AIR, GRID_W, GRID_H);
         _navWallDiffReset(J.profile);
     } else if (step === NAV_STEP_NODES) {
-        navBuildNodesBackground(J.b);
+        if (!J.shared) navBuildNodesBackground(J.b);
     } else if (step === NAV_STEP_LOCAL) {
-        navBuildCollect();
-        navBuildNodesFinish(J.b);
-        navBuildLocalBackground(J.b);
+        if (!J.shared) { navBuildCollect(); navBuildNodesFinish(J.b); navBuildLocalBackground(J.b); }
     } else if (step === NAV_STEP_GRAPH) {
-        navBuildCollect();
-        navBuildGraphAlloc(J.b);
-        navBuildGraphBackground(J.b);
+        if (!J.shared) { navBuildCollect(); navBuildGraphAlloc(J.b); navBuildGraphBackground(J.b); }
     } else if (step === NAV_STEP_STAGE) {
-        navBuildCollect();
-        navBuildGraphFinish(J.b);
-        navBuildPartsFinish(J.b);
+        if (!J.shared) { navBuildCollect(); navBuildGraphFinish(J.b); navBuildPartsFinish(J.b); }
         // (Its atlas on the build's lane meanwhile: installed with it.)
-        J.next = navBuildFinish(J.b, false);
-        J.atl = navAtlasStart(J.b, true);
+        J.next = J.shared || navBuildFinish(J.b, false);
+        J.atl = J.shared ? null : navAtlasStart(J.b, true);
         _navNextStage(J.next);
     } else if (step === NAV_STEP_STAGE + NAV_ATLAS_TABLES_STEP && J.atl) {
         navBuildCollect();
@@ -1740,7 +1755,8 @@ function navRestoreState(st) {
     for (const e of list) {
         const p = e.p | 0;
         if (p === NAV_PROFILE_AIR || p < 0 || p >= NAV_PROFILES) continue;
-        navPublish(navBuild(p, walls(navWallTable(p), e.built), true, GRID_W, GRID_H));
+        const wall = walls(navWallTable(p), e.built);
+        navPublish(_navShareBuild(p, wall) || navBuild(p, wall, true, GRID_W, GRID_H));
         if (e.seq > 0) _nav[p].seq = _navSeq[p] = e.seq | 0;
     }
     // (The air one too, as the match's first tick made it: flyers' fields
@@ -1754,7 +1770,9 @@ function navRestoreState(st) {
         if (st.job.walls) {
             // (Steps below `step` ran on the snapshot's peer.)
             const upTo = Math.min(Number(st.job.step) || 1, NAV_STEP_INSTALL);
-            J.b = navBuildStart(p, walls(navWallTable(p), st.job.walls), p !== NAV_PROFILE_AIR, GRID_W, GRID_H);
+            const wall = walls(navWallTable(p), st.job.walls);
+            J.shared = _navShareBuild(p, wall);
+            J.b = J.shared || navBuildStart(p, wall, p !== NAV_PROFILE_AIR, GRID_W, GRID_H);
             J.step = 1;
             for (; J.step < upTo; J.step++) _navJobStep(J, J.step);
         }

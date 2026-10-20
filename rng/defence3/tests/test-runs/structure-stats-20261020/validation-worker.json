@@ -1,0 +1,18 @@
+[
+  {
+    "mode": "1",
+    "file": "deltatick-multiplayer.test.cjs",
+    "status": 0,
+    "output": "  405 steps compared; host at 2975 base ticks / 406 steps, guest at 2970 / 405\n  after the repair: 94 steps compared\nPASS: the step size goes with the bundles; peers agree at every size, and after a repair.\n",
+    "timedOut": false,
+    "elapsedMs": 31313
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-snapshot.test.cjs",
+    "status": 0,
+    "output": "PASS: snapshots\n  6 restores from differing pre-states evolve bit-identically for 12 ticks; 102 KB (462 B/entity); unit shapes 1/1/1/1 -> 1/1/1/1\n  gzip transport: delta then full patch (15 KB -> 3 KB), no pause\n  guest without DecompressionStream gets JSON (start and patches); others gzip\n",
+    "timedOut": false,
+    "elapsedMs": 39481
+  }
+]

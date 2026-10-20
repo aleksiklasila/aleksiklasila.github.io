@@ -1,0 +1,84 @@
+src\data\data_static.js:275:            atkCd: 49.95,
+src\data\data_static.js:653:    norm: { energy: 40, price: 400, speed: 2.6, atk: 5, attackRange: 0.6, visionRange: 0.6, atkCd: 1.5, astarCost: 10, upKeep: 0.4, color: '#fff', r: 8, vis: 'circle', attackStyle: 'melee' },
+src\data\data_static.js:654:    fast: { energy: 20, price: 200, speed: 4.8, atk: 3, attackRange: 0.4, visionRange: 0.6, atkCd: 1.0, astarCost: 6, upKeep: 0.3, color: '#eee', r: 6, vis: 'circle', attackStyle: 'melee' },
+src\data\data_static.js:655:    tank: { energy: 200, price: 800, speed: 1.4, atk: 8, attackRange: 0.2, visionRange: 0.6, atkCd: 2.25, astarCost: 16, upKeep: 0.7, color: '#555', r: 10, vis: 'circle', attackStyle: 'melee' },
+src\data\data_static.js:656:    boss: { energy: 400, price: 4000, speed: 1.2, atk: 20, attackRange: 0.2, visionRange: 0.8, atkCd: 3.0, astarCost: 23, upKeep: 2.0, color: '#222', r: 12, vis: 'circle', attackStyle: 'melee' },
+src\data\data_static.js:657:    flying: { energy: 45, price: 450, speed: 3.0, atk: 4, attackRange: 0.6, visionRange: 1.0, atkCd: 1.75, astarCost: 12, upKeep: 0.45, color: '#dd0', r: 7, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
+src\data\data_static.js:658:    mole: { energy: 10, price: 100, speed: 2.0, atk: 2, attackRange: 0.2, visionRange: 0.8, atkCd: 1.25, astarCost: 0.05, upKeep: 0.05, color: '#543', r: 7.5, vis: 'mole', turretImmune: true },
+src\data\data_static.js:659:    poison_resistant: { energy: 60, price: 600, speed: 2.4, atk: 6, attackRange: 0.90, visionRange: 0.8, atkCd: 1.75, astarCost: 11, upKeep: 0.5, color: '#2d2', r: 9, vis: 'circle', poisonResistant: true, attackStyle: 'poison' },
+src\data\data_static.js:660:    fire_resistant: { energy: 70, price: 700, speed: 2.0, atk: 7, attackRange: 0.92, visionRange: 0.8, atkCd: 2.0, astarCost: 13, upKeep: 0.55, color: '#f50', r: 10, vis: 'circle', fireResistant: true, attackStyle: 'fire' },
+src\data\data_static.js:661:    water_resistant: { energy: 50, price: 500, speed: 3.2, atk: 5, attackRange: 0.87, visionRange: 1.0, atkCd: 1.5, astarCost: 8, upKeep: 0.4, color: '#4af', r: 8, vis: 'circle', waterResistant: true, attackStyle: 'water' },
+src\data\data_static.js:662:    ice_resistant: { energy: 65, price: 650, speed: 2.2, atk: 6, attackRange: 0.90, visionRange: 0.8, atkCd: 1.75, astarCost: 12, upKeep: 0.5, color: '#afe', r: 9, vis: 'circle', iceResistant: true, attackStyle: 'ice' },
+src\data\data_static.js:663:    laser_resistant: { energy: 55, price: 550, speed: 2.3, atk: 5, attackRange: 0.88, visionRange: 0.8, atkCd: 1.75, astarCost: 11, upKeep: 0.6, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
+src\data\data_static.js:664:    snake: { energy: 800, price: 8000, speed: 1.8, atk: 15, attackRange: 0.1, visionRange: 0.8, atkCd: 1.5, astarCost: 28, upKeep: 2.5, color: '#0f0', r: 7, collisionR: 9, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
+src\data\data_static.js:665:    scout: { energy: 14, price: 140, speed: 5.4, atk: 1, attackRange: 1.0, visionRange: 1.35, atkCd: 1.6, watchDuration: 5, astarCost: 3, upKeep: 0.15, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
+src\data\data_static.js:667:    salvager_unit: { energy: 20, price: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, upKeep: 0.4, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
+src\data\data_static.js:668:    builder_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, upKeep: 0.4, builderDps: 25, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
+src\data\data_static.js:669:    healer_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, upKeep: 0.4, healerDps: 5, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#fff', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
+src\data\data_static.js:670:    researcher_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, upKeep: 0.4, researcherDps: 15, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#6af', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
+src\data\data_static.js:671:    king: { energy: 250, price: 1000, speed: 1.8, atk: 12, attackRange: 0.2, visionRange: 1.0, atkCd: 2.0, astarCost: 15, upKeep: 0.8, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
+src\data\data_static.js:699:const RESEARCH_DECREASE_STATS = { cd: true, atkCd: true, transferCooldown: true, astarCost: true, baseTime: true, spawnCd: true, upKeep: true };
+src\data\data_static.js:726:    atkCd: 'Atk Cooldown',
+src\data\data_static.js:739:    _default: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'astarCost', 'upKeep'],
+src\data\data_static.js:740:    scout: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'watchDuration', 'astarCost', 'upKeep'],
+src\data\data_static.js:746:    king: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'astarCost', 'upKeep']
+src\data\data_static.js:749:const PRECOMPUTED_UNIT_STAT_KEYS = ['energy', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'watchDuration', 'workerSearchDistance', 'gatherPerTrip', 'builderDps', 'healerDps', 'researcherDps', 'transferCooldown', 'astarCost', 'upKeep'];
+src\data\data_static.js:775:        atkCd: 0.025,
+src\audio_visual\bottom_bar.js:25:    speed: 'spd', atk: 'atk', attackRange: 'rng', atkCd: 'acd', transferCooldown: 'tcd',
+src\data\data_dynamic.js:2459:    if (statKey === 'atkCd') return Math.max(0.01, Number(s.atkCd) || Math.max(0.05, Number(unitCfg.baseAttackCooldownFallback) || 1.5));
+src\data\data_dynamic.js:2480:    if (statKey === 'atkCd') return Math.max(0.01, Number(v) || 0.01);
+src\data\data_dynamic.js:2524:    let baseCd = Number(s.atkCd) || Math.max(0.05, Number(unitCfg.baseAttackCooldownFallback) || 1.5);
+src\data\data_dynamic.js:2525:    let atkCd = baseCd;
+src\data\data_dynamic.js:2526:    atkCd = Math.max(cfg.minCd || 0.4, baseCd * cdMult);
+src\data\data_dynamic.js:2568:    return { energy, atk, atkCd, speed, visionRange, attackRange, watchDuration, workerSearchDistance, gatherPerTrip, builderDps, healerDps, researcherDps, transferCooldown, astarCost, upKeep };
+src\data\data_dynamic.js:2868:    let attackCooldownSec = Math.max(0.01, Number(values.atkCd) || 0.01);
+src\data\data_dynamic.js:3016:    else if (statKey === 'atkCd') {
+src\data\data_dynamic.js:3183:        if (statKey === 'atkCd') return entry.attackCooldownSec;
+src\data\data_dynamic.js:3390:    if (statKey === 'cd' || statKey === 'atkCd' || statKey === 'transferCooldown') return `${compact(value, 2)}s`;
+src\audio_visual\hud.js:2011:        let cd = getUnitStatFromMap(unitType, tl, 'atkCd', rl);
+src\audio_visual\hud.js:2030:        let cd = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'atkCd');
+src\audio_visual\hud.js:2909:        statKey = kind === 'unit' ? 'atkCd' : 'cd';
+src\audio_visual\hud.js:2916:                let cd = getUnitStatFromMap(key, tl, 'atkCd', rl);
+src\audio_visual\hud.js:4304:                let cd = getUnitStatFromMap(u.unitType, thingLevel, 'atkCd', researchLevel);
+src\audio_visual\hud.js:4497:                let cd = getUnitStatFromMap(u0.unitType, thingLevel, 'atkCd', researchLevel);
+src\things\unit.js:2175:            else { const j = e - n, s = HA[j]; a = owners[s]; t = owners[HT[j]]; ax = C.x[s] * 0.125; ay = C.y[s] * 0.125; dmg = C.atkDmg[s]; sty = C.atkSty[s]; }
+src\things\unit.js:2811:    'mvHWin', 'mvHTT', 'mvHVer', 'mvHT', 'mvHTId', 'mvChs', 'mvTgX', 'mvTgY', 'mvTgTol', 'mvSteady', 'mvCT', 'mvCN', 'mvCTl', 'mvCVx', 'mvCVy',
+src\things\unit.js:2843:        const o0 = c.mvSpd[s], o1 = c.mvLane[s], o2 = c.mvCost[s], o3 = c.mvReachD[s], o4 = c.mvReachA[s], o5 = c.mvShoot[s], o6 = c.mvRangeK[s], o7 = c.cbRange[s];
+src\things\unit.js:2845:        c.atkCd[s] = pc.attackCooldown; c.atkDmg[s] = pc.attackDamage; c.atkSty[s] = _hitStyleCode(u); c.atkWatch[s] = _unitWatchTicks(u);
+src\things\unit.js:2846:        c.mvSpd[s] = spd; c.mvLane[s] = Math.max(1.5, Math.min(4, u.r * 0.6)); c.mvCost[s] = _resolveUnitAstarTileCost(u);
+src\things\unit.js:2852:        c.cbRange[s] = Math.max(TILE, pc.visionRange * TILE);
+src\things\unit.js:2853:        same = Object.is(o0, c.mvSpd[s]) && o1 === c.mvLane[s] && Object.is(o2, c.mvCost[s]) && o3 === c.mvReachD[s] && o4 === c.mvReachA[s]
+src\things\unit.js:2854:            && o5 === c.mvShoot[s] && o6 === c.mvRangeK[s] && o7 === c.cbRange[s];
+src\things\unit.js:2866:        if (pc && pc.attackDamage > 0 && k === c.mvReach[s]) { if (on === 3) c.mvChs[s] = Math.max(TILE * 0.6, Number(pc.speed) || 1); return; }
+src\things\unit.js:2887:    c.mvSpd[s] = spd; c.mvReach[s] = reach; c.mvCost[s] = _resolveUnitAstarTileCost(u);
+src\things\unit.js:2954:    if (!(c.mvSpd[s] >= 0) || c.sepKey[s] === SIM_SEP_ABSENT) return false;
+src\things\unit.js:3110:    c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvSpd[s] = spd; c.mvSteady[s] = 0;
+src\things\unit.js:3112:    c.mvCost[s] = _resolveUnitAstarTileCost(u);
+src\things\unit.js:3152:        c.mvFlags[s] = 64 | (crowd ? 0 : 128) | (profile === NAV_PROFILE_AIR ? 32 : 0); c.mvReach[s] = k; c.mvSpd[s] = spd; c.mvNP[s] = profile;
+src\things\unit.js:3172:    c.mvReach[s] = k; c.mvSpd[s] = spd;
+src\things\unit.js:3174:    c.mvCost[s] = _resolveUnitAstarTileCost(u);
+src\things\unit.js:3231:    c.mvChs[s] = Math.max(TILE * 0.6, Number(u.preComputed.speed) || 1);
+src\things\unit.js:3235:    if (kf) { c.atkCd[s] = u.preComputed.attackCooldown; c.atkDmg[s] = u.preComputed.attackDamage; c.atkSty[s] = _hitStyleCode(u); c.atkWatch[s] = _unitWatchTicks(u); }
+src\things\unit.js:3293:    if (kf) { c.atkCd[s] = pc.attackCooldown; c.atkDmg[s] = pc.attackDamage; c.atkSty[s] = _hitStyleCode(u); c.atkWatch[s] = _unitWatchTicks(u); }
+src\things\unit.js:3307:                c.mvSpd[s] = spd; c.mvFlow[s] = did; c.mvFGen[s] = navFieldGen(did); c.mvDest[s] = dest; c.mvReady[s] = nd.ready | 0; c.mvNP[s] = profile;
+src\things\unit.js:3313:    c.mvChs[s] = Math.max(TILE * 0.6, Number(pc.speed) || 1);
+src\things\unit.js:4407:    if (c.cbTick[s] !== _acqCommitTick || c.cbRangeS[s] !== range) return null;
+src\things\unit.js:4429:    if (c.cbTick[s] !== _acqCommitTick || c.cbRangeS[s] !== range) return null;
+src\sim\sim_unit_state.js:170:    ['mvSpd', Float32Array, 1], ['mvLane', Float32Array, 1], ['mvCost', Float32Array, 1],
+src\sim\sim_unit_state.js:196:    ['cbRange', Float32Array, 1], ['cbT', Int32Array, 1], ['cbTick', Int32Array, 1],
+src\sim\sim_unit_state.js:199:    ['cbTId', Int32Array, 1], ['cbRangeS', Float32Array, 1],
+src\sim\sim_unit_state.js:221:    ['mvChs', Float32Array, 1],
+src\sim\sim_unit_state.js:310:    ['atkCd', Float32Array, 1], ['atkDmg', Float32Array, 1], ['atkSty', Uint8Array, 1],
+src\sim\sim_unit_state.js:373:    // and, for a scout, the watch its swoop gives (ticks; atkDmg's twin).
+src\sim\sim_parallel.js:1126:    'unit.workerTransferCooldown', 'unit.mvFlow', 'unit.mvFGen', 'unit.mvReady', '?nav.fmeta.0', '?nav.fmeta.1', 'unit.mvNP', 'unit.mvSpd', 'unit.mvHT',
+src\sim\sim_parallel.js:1128:    'unit.cbT', 'unit.cbTick', 'unit.mvChs', 'unit.cbRange', '?wk.ver', 'unit.wkType', 'unit.wkD', 'unit.wkOx', 'unit.wkOy', 'unit.wkTwice',
+src\sim\sim_parallel.js:1129:    'unit.wkFail', 'unit.wkUntil', 'unit.wkSched', 'unit.mvHWin', 'unit.mvHTT', 'unit.mvHVer', 'unit.cbTId', 'unit.cbRangeS', 'unit.cbS',
+src\sim\sim_parallel.js:1134:    'unit.spType', 'unit.vsGen', 'unit.spMvOld', 'unit.spMvNew', 'unit.spMvOwn', 'unit.mvBlk', '?mv.astarRem', '?mv.chFix', '?mv.chUse', 'unit.mvCost',
+src\sim\sim_parallel.js:1137:    'unit.atkCd', 'unit.attackFlash', '?mv.hita', '?mv.hitt', '?mv.hitc', 'unit.tmOn', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.sepLayer',
+src\sim\sim_parallel.js:1525:    '?eff.rCb', '?eff.rCd', '?eff.rDmg', '?eff.rVis', '?eff.rChs', 'unit.mvOn', 'unit.mvFlags', 'unit.mvReach', 'unit.mvChs', 'unit.mvSpd', 'unit.mvCost',
+src\sim\sim_parallel.js:1526:    'unit.mvReachD', 'unit.mvReachA', 'unit.mvShoot', 'unit.mvRangeK', 'unit.lzFlags', 'unit.cbRange', 'unit.atkCd', 'unit.atkDmg', 'unit.spArea', 'unit.energy',
+src\sim\sim_parallel.js:1811:const _simAcqSnapW = _simWK(['unit.x0', 'unit.y0', 'unit.owner', 'unit.dead', 'unit.sepKey', 'unit.commandState', 'unit.cbRange', 'unit.id', 'unit.acqB', 'acq.tid', 'acq.sout',
+src\sim\sim_parallel.js:1812:    'acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.rng', 'acq.id', 'acq.out', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.isWk', 'unit.atkDmg', 'unit.mvRangeK',
+src\sim\sim_parallel.js:1919:// cbRangeS (the range looked with), cbTick = P[2] (the commit tick, see
+src\sim\sim_parallel.js:1925:const _simHitsW = _simWK(['hit.q', 'hit.dmg', 'hit.sty', 'hit.wk', '?mv.hita', '?mv.hitt', '?mv.hitc', 'unit.atkDmg', 'unit.atkSty', 'unit.atkWatch', 'unit.owner', 'unit.id',
+src\sim\sim_parallel.js:1935:const _simAcqCommitW = _simWK(['acq.out', 'acq.tid', 'acq.id', 'acq.rng', 'unit.id', 'acq.sout', 'unit.cbS', 'unit.cbT', 'unit.cbTick', 'unit.cbTId', 'unit.cbRangeS']);

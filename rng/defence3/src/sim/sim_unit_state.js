@@ -55,6 +55,7 @@ const SIM_UNIT_OBJ_FIELDS = ['holdPosition', 'forcedAttackTarget', 'targetUnit',
     '_astarBudgetRetryTick', '_scoutTarget', '_routeKey', 'workerType'];
 // (Statements a field's setter runs too, with c the columns, s the slot, v
 // the value: columns kept from it.)
+const SIM_UNIT_OBJ_DEFAULTS = { forcedAttackTarget: false, targetUnit: null, targetPos: null, _routeKey: null };
 const SIM_UNIT_OBJ_HOOKS = { workerType: 'c.isWk[s] = v ? 1 : 0; if (v) simUnitWk(c, s);' };
 const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'targetBuilding', 'pathIsFallbackAstar', '_pendingPathTarget', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved', '_statsBehind', '_forcedTargetLastSeenX', '_forcedTargetLastSeenY',
     '_builderLastWatchX', '_builderLastWatchY', '_builderLastMoveTick', '_routeEnd', 'watchedByTeam', ...SIM_UNIT_OBJ_FIELDS,
@@ -120,7 +121,7 @@ function _simHTerm(key, v) { const t = Math.imul(key ^ _simHEnc(v), SIM_H_M); re
 // see _simUnitSlotStart).
 let _simH0 = null;
 function _simHDigest0() {
-    if (_simH0 === null) { let h = 0; for (const k of SIM_HASH_DIGEST_FIELDS) h = (h + _simHTerm(_simHKey(k), k === 'targetBuilding' ? null : undefined)) | 0; _simH0 = h; }
+    if (_simH0 === null) { let h = 0; for (const k of SIM_HASH_DIGEST_FIELDS) h = (h + _simHTerm(_simHKey(k), k in SIM_UNIT_OBJ_DEFAULTS ? SIM_UNIT_OBJ_DEFAULTS[k] : k === 'targetBuilding' ? null : undefined)) | 0; _simH0 = h; }
     return _simH0;
 }
 // The digest from a unit's values (checks and tests: it equals the column).
@@ -166,8 +167,7 @@ const SIM_MOVE_WINDOW = 16;
 // Words of a slot's flow look-ahead record (unit.mvNav).
 const SIM_NAV_STRIDE = 8;
 const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['mvFlags', Uint8Array, 1],
-    ['mvSpd', Float32Array, 1], ['mvLane', Float32Array, 1], ['mvCost', Float32Array, 1],
-    ['mvSpent', Uint8Array, 1], ['mvReach', Uint8Array, 1], ['mvBase', Int32Array, 1], ['mvWlen', Uint8Array, 1],
+    ['mvLane', Float32Array, 1], ['mvSpent', Uint8Array, 1], ['mvReach', Uint8Array, 1], ['mvBase', Int32Array, 1], ['mvWlen', Uint8Array, 1],
     ['mvPlen', Int32Array, 1], ['mvScan', Int32Array, 1], ['mvFloor', Int32Array, 1], ['mvPath', Int32Array, 1],
     // Parked idle workers (mvOn 2): the tick their Unit.update next does anything.
     ['mvWake', Int32Array, 1],
@@ -192,7 +192,7 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['mvNav', Int32Array, SIM_NAV_STRIDE],
     // The combat scan (SIM_KERNEL_COMBAT_SCAN): its aggro range (pixels),
     // and at tick cbTick the nearest visible enemy's slot (-1 none).
-    ['cbRange', Float32Array, 1], ['cbT', Int32Array, 1], ['cbTick', Int32Array, 1],
+    ['cbT', Int32Array, 1], ['cbTick', Int32Array, 1],
     // (The acquisition tier's result as committed: its target's id and the
     // range it was looked for with; see unit.js _acqTierStep.)
     ['cbTId', Int32Array, 1], ['cbRangeS', Float32Array, 1],
@@ -217,7 +217,6 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['mvHT', Int32Array, 1], ['mvHTId', Int32Array, 1],
     // Chase (mvOn 4; see simMoveTryChase): the target in mvHT/mvHTId, the
     // range in mvReach, and the look-ahead of its direct step (_isChaseStepOpen).
-    ['mvChs', Float32Array, 1],
     // A parked unit waiting for its way (mvFlags 8: simMoveTryParkRoute): the
     // target it was sent to and how near counts as there.
     ['mvTgX', Float32Array, 1], ['mvTgY', Float32Array, 1], ['mvTgTol', Float32Array, 1],
@@ -306,7 +305,7 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['pvAt', Int32Array, 1], ['pvId', Int32Array, 1], ['pvE', Float32Array, 1], ['pvO', Int8Array, 1], ['pvC', Uint8Array, 1], ['pvL', Int16Array, 1], ['pvV', Uint8Array, 1],
     // A unit's attack cooldown and damage (its stats: simMoveStatsChanged),
     // for the attacks the movement kernel makes for held units.
-    ['atkCd', Float32Array, 1], ['atkDmg', Float32Array, 1], ['atkSty', Uint8Array, 1],
+    ['atkSty', Uint8Array, 1],
     // Steps of several base ticks (simDk): the base ticks a unit stood ready
     // before the step's end when its attack timer ran out (its next attack's
     // shots, mv.rs fire), that attack's shots (k_hits), and the transfer
@@ -335,7 +334,7 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // (things_utils.js _unitStatsVerOf).
     ['esVer', Int32Array, 1],
     // Its effective stat tables' row (things_utils.js _effRowAttach; -1: its own).
-    ['statRow', Int32Array, 1],
+    ['statRow', Int16Array, 1],
     // Unit._forcedTargetLastSeenX/Y (NaN: null): a forced target's last seen
     // position, which the movement kernel writes for forced holds and chases
     // (mvFlags 8); the values before its write (fLsPX/fLsPY) and the tick of
@@ -468,10 +467,10 @@ const _simJsName = (k, kind) => (kind === 'r' ? 'jr_' : 'j_') + k;
 // (Stored values: booleans 1/0, undefined NaN for 'u'.)
 const _simJsDefault = (kind, def) => kind === 'b' ? (def ? 1 : 0) : kind === 'u' ? (def === undefined ? NaN : def) : def;
 // Slot s's fields at their defaults (straight-line, as _simSlotZeroFn).
-const _simJsDefaults = new Function('C', 's', SIM_UNIT_JS_FIELDS.map(([k, kind, def]) => 'C.' + _simJsName(k, kind) + '[s] = ' + (kind === 'r' ? (def === null ? 'null' : def === undefined ? 'undefined' : JSON.stringify(def)) : (Object.is(_simJsDefault(kind, def), -0) ? '-0' : String(_simJsDefault(kind, def)))) + ';').join(' '));
+const _simJsDefaults = new Function('C', 's', SIM_UNIT_JS_FIELDS.map(([k, kind, def]) => kind === 'r' ? 'C.' + _simJsName(k, kind) + '.clear(s);' : 'C.' + _simJsName(k, kind) + '[s] = ' + (Object.is(_simJsDefault(kind, def), -0) ? '-0' : String(_simJsDefault(kind, def))) + ';').join(' '));
 // Reference fields let go (a detach: the slot's next unit starts at the
 // defaults anyway; the references would keep paths and targets alive).
-const _simJsRelease = new Function('C', 's', SIM_UNIT_JS_FIELDS.filter(e => e[1] === 'r').map(([k]) => 'C.jr_' + k + '[s] = undefined;').join(' '));
+const _simJsRelease = new Function('C', 's', SIM_UNIT_JS_FIELDS.filter(e => e[1] === 'r').map(([k]) => 'C.jr_' + k + '.clear(s);').join(' '));
 const SIM_UNIT_JS_SNAPSHOT_KEYS = SIM_UNIT_JS_FIELDS.filter(e => e[3]).map(e => e[0]);
 // Movement columns that are state (a snapshot's, behind accessors: unit.js).
 const SIM_UNIT_MOVE_SNAPSHOT_KEYS = ['atkL', 'wtcL'];
@@ -586,14 +585,77 @@ function _simSlotZeroFn() {
     for (const [k, , per] of SIM_MOVE_COLUMNS) body.push(per === 1 ? 'C.' + k + '[s] = 0;' : 'C.' + k + '.fill(0, s * ' + per + ', s * ' + per + ' + ' + per + ');');
     return new Function('C', 's', body.join('\n'));
 }
-// A reference column (object fields, 'r' JavaScript fields) as long as the
-// slots (cap): one array of its final size, not one grown a slot at a time by
-// push (its backing store up to half again unused, and each step's copy
-// garbage: ~220 bytes a unit at 2M units).
-function _simRefGrow(a, cap) {
-    if (a && a.length >= cap) return a;
-    const b = new Array(cap).fill(undefined);
-    if (a) for (let i = 0; i < a.length; i++) b[i] = a[i];
+// References use pages only where values differ from their column default.
+// Most role/path/target fields are unset in a large army. Empty pages cost
+// one directory slot, and clearing their last value releases the page.
+class SimRefColumn {
+    constructor(length, def = undefined) { this.length = length; this.def = def; this.pages = new Array(Math.ceil(length / 1024)); }
+    get(s) { const p = this.pages[s >>> 10]; return p ? p[s & 1023] : this.def; }
+    set(s, v) {
+        const k = s >>> 10, i = s & 1023;
+        let p = this.pages[k];
+        if (!p) {
+            if (Object.is(v, this.def)) return this.def;
+            p = new Array(1024).fill(this.def); p.used = 0; this.pages[k] = p;
+        }
+        const old = p[i];
+        if (Object.is(old, v)) return old;
+        if (Object.is(old, this.def)) p.used++;
+        if (Object.is(v, this.def)) p.used--;
+        p[i] = v;
+        if (p.used === 0) this.pages[k] = undefined;
+        return old;
+    }
+    clear(s) { this.set(s, this.def); }
+    reserve(cap) { if (cap > this.length) { this.length = cap; this.pages.length = Math.ceil(cap / 1024); } }
+}
+// Small handles for type names and shared precomputed tables. Research and
+// level combinations create a few shared objects, not one object per unit.
+// The common case needs one byte per slot; widen only when the table grows.
+class SimSharedColumn extends SimRefColumn {
+    constructor(length, def = undefined, pool = null) {
+        super(length, def);
+        const negativeZero = {};
+        this.pool = pool || { values: [def], ids: new Map([[Object.is(def,-0) ? negativeZero : def, 0]]), negativeZero };
+        const n = this.pool.values.length;
+        this.data = new (n > 65536 ? Uint32Array : n > 256 ? Uint16Array : Uint8Array)(length);
+    }
+    get(s) { return this.pool.values[this.data[s]]; }
+    set(s, v) {
+        const P = this.pool, old = P.values[this.data[s]];
+        if (Object.is(old, v)) return old;
+        const key = Object.is(v, -0) ? P.negativeZero : v;
+        let id = P.ids.get(key);
+        if (id === undefined) { id = P.values.length; P.values.push(v); P.ids.set(key, id); }
+        if (id > (this.data.BYTES_PER_ELEMENT === 1 ? 255 : this.data.BYTES_PER_ELEMENT === 2 ? 65535 : 4294967295)) {
+            const a = new (id > 65535 ? Uint32Array : Uint16Array)(this.length); a.set(this.data); this.data = a;
+        }
+        this.data[s] = id;
+        return old;
+    }
+    clear(s) { if (this.data[s] !== 0) this.data[s] = 0; }
+    reserve(cap) {
+        if (cap <= this.length) return;
+        const a = new this.data.constructor(cap); a.set(this.data); this.data = a;
+        this.length = cap;
+    }
+}
+const SIM_SHARED_REF_FIELDS = new Set(['unitType','preComputedBase','basePreComputed','_pce','_pc','_damageFlashColor','workerTargetType']);
+function _simRefGrow(a, cap, def = undefined, shared = false) {
+    if (a instanceof SimRefColumn) { a.reserve(cap); return a; }
+    const b = shared ? new SimSharedColumn(cap, def) : new SimRefColumn(cap, def);
+    if (a) for (let i = 0; i < a.length; i++) b.set(i, a[i]);
+    return b;
+}
+function _simRefCopy(a, cap, runs) {
+    if (a instanceof SimSharedColumn) {
+        const b = new SimSharedColumn(cap, a.def, a.pool);
+        for (let r = 0; r < runs.length; r += 3) b.data.set(a.data.subarray(runs[r + 1], runs[r + 1] + runs[r + 2]), runs[r]);
+        return b;
+    }
+    const b = new SimRefColumn(cap, a.def);
+    if (!a.pages.some(Boolean)) return b;
+    for (let r = 0; r < runs.length; r += 3) for (let to = runs[r], from = runs[r + 1], e = from + runs[r + 2]; from < e; to++, from++) b.set(to, a.get(from));
     return b;
 }
 function _simUnitNextCap(cap) { return Math.max(1024, Math.ceil(cap * 1.5 / 4096) * 4096); }
@@ -726,12 +788,12 @@ function _simUnitStateGrow(S, cap, minCap = cap) {
     try {
         for (let i = 0; i < fresh.length; i += 2) { S.columns[fresh[i]] = fresh[i + 1]; simParallelBind('unit.' + fresh[i], fresh[i + 1]); }
         // (The object fields' arrays: as long as the columns, see _simRefGrow.)
-        for (const k of SIM_UNIT_OBJ_FIELDS) S.columns['oc_' + k] = _simRefGrow(S.columns['oc_' + k], cap);
+        for (const k of SIM_UNIT_OBJ_FIELDS) S.columns['oc_' + k] = _simRefGrow(S.columns['oc_' + k], cap, SIM_UNIT_OBJ_DEFAULTS[k], SIM_SHARED_REF_FIELDS.has(k));
         // (The JavaScript fields: typed columns sized with the others, plain
         // memory; references as the object fields'.)
-        for (const [k, kind] of SIM_UNIT_JS_FIELDS) {
+        for (const [k, kind, def] of SIM_UNIT_JS_FIELDS) {
             const nm = _simJsName(k, kind);
-            if (kind === 'r') { S.columns[nm] = _simRefGrow(S.columns[nm], cap); continue; }
+            if (kind === 'r') { S.columns[nm] = _simRefGrow(S.columns[nm], cap, def, SIM_SHARED_REF_FIELDS.has(k)); continue; }
             const was = S.columns[nm], a = new _SIM_JS_TYPED[kind](cap);
             if (was) a.set(was.subarray(0, Math.min(was.length, used, cap)));
             S.columns[nm] = a;
@@ -792,16 +854,16 @@ function _simUnitSlotStart(S, s, u) {
 // must never read or overwrite a newly spawned unit.
 let _simDetValues = null;
 // (A slot's object fields unset; on detach the references let go.)
-const _simUnitObjClear = new Function('C', 's', SIM_UNIT_OBJ_FIELDS.map(k => 'C.oc_' + k + '[s] = undefined;').join(' '));
+const _simUnitObjClear = new Function('C', 's', SIM_UNIT_OBJ_FIELDS.map(k => 'C.oc_' + k + '.clear(s);').join(' '));
 function _simDetValuesCtor() {
     const body = SIM_UNIT_ACCESSOR_COLUMNS.map(k => 'this.' + k + ' = C.' + k + '[s]' + (SIM_UNIT_POS_COLUMNS.has(k) ? ' * ' + SIM_POS_INV : '') + ';').join(' ')
-        + ' ' + SIM_UNIT_OBJ_FIELDS.map(k => 'this.' + k + ' = C.oc_' + k + '[s];').join(' ') + ' this._routeEnd = C.rtEnd[s]; this.watchedByTeam = C.wTeam[s];'
+        + ' ' + SIM_UNIT_OBJ_FIELDS.map(k => 'this.' + k + ' = C.oc_' + k + '.get(s);').join(' ') + ' this._routeEnd = C.rtEnd[s]; this.watchedByTeam = C.wTeam[s];'
         + ' this.dead = C.dead[s] === 1; this._navLastD = C.mvNavLD[s]; this._floorTile = C.mvFloor[s]; this._sepMoved = C.sepMov[s] & 1;'
         + ' this._statsBehind = false; this._forcedTargetLastSeenX = null; this._forcedTargetLastSeenY = null;'
         + ' { const w = C.wkIx[s], a = C.wkWx[w], b = C.wkWy[w], m = C.wkLmt[w]; this._builderLastWatchX = a === a ? a : undefined; this._builderLastWatchY = b === b ? b : undefined; this._builderLastMoveTick = m === -2147483648 ? undefined : m; }'
         + ' this._dotPending = C.stAcc[s]; this._laserPending = C.lzAcc[s]; this._laserBeam = C.lzBeam[s];'
         + ' this.r = C.r[s]; this.collisionR = C.collisionR[s];'
-        + SIM_UNIT_JS_FIELDS.map(([k, kind]) => ' this.' + k + ' = ' + (kind === 'b' ? 'C.j_' + k + '[s] === 1' : kind === 'u' ? '(C.j_' + k + '[s] === C.j_' + k + '[s] ? C.j_' + k + '[s] : undefined)' : 'C.' + _simJsName(k, kind) + '[s]') + ';').join('');
+        + SIM_UNIT_JS_FIELDS.map(([k, kind]) => ' this.' + k + ' = ' + (kind === 'b' ? 'C.j_' + k + '[s] === 1' : kind === 'u' ? '(C.j_' + k + '[s] === C.j_' + k + '[s] ? C.j_' + k + '[s] : undefined)' : kind === 'r' ? 'C.' + _simJsName(k, kind) + '.get(s)' : 'C.' + _simJsName(k, kind) + '[s]') + ';').join('');
     return new Function('C', 's', body);
 }
 function simUnitStateDetach(S, s) {
@@ -811,9 +873,10 @@ function simUnitStateDetach(S, s) {
     // property definition per column made releasing many units slow; one
     // constructor: one shape, no dictionary transitions per key).
     // (Its row's tables as its own.)
-    if (S.columns.statRow[s] >= 0 && typeof _effRowObj !== 'undefined') u._effRowKeep(_effRowObj[S.columns.statRow[s]]);
+    const statTable = S.columns.statRow[s] >= 0 && typeof _effRowObj !== 'undefined' ? _effRowObj[S.columns.statRow[s]] : null;
     S.columns.statRow[s] = -1;
     const values = new (_simDetValues || (_simDetValues = _simDetValuesCtor()))(S.columns, s);
+    if (statTable) { values._pc = statTable; values._pce = statTable; }
     values._statsBehind = typeof _unitStatsBehind === 'function' ? _unitStatsBehind(u, S.columns.esVer[s]) : false;
     { const lx = S.columns.fLsX[s], ly = S.columns.fLsY[s]; values._forcedTargetLastSeenX = lx === lx ? lx : null; values._forcedTargetLastSeenY = ly === ly ? ly : null; }
     u._det = values;
@@ -908,15 +971,14 @@ function simUnitStateCompact(force = false) {
     for (const k of SIM_UNIT_COLUMNS) _simCopyRuns(old[k], C[k], runs, 1);
     for (const [k, kind] of SIM_UNIT_JS_FIELDS) {
         const nm = _simJsName(k, kind);
-        if (kind === 'r') { const a = old[nm], b = C[nm] = new Array(cap).fill(undefined); for (let r = 0; r < runs.length; r += 3) for (let to = runs[r], from = runs[r + 1], e = from + runs[r + 2]; from < e; to++, from++) b[to] = a[from]; }
+        if (kind === 'r') C[nm] = _simRefCopy(old[nm], cap, runs);
         else { C[nm] = new _SIM_JS_TYPED[kind](cap); _simCopyRuns(old[nm], C[nm], runs, 1); }
     }
     for (const [k, , per] of SIM_MOVE_COLUMNS) _simCopyRuns(old[k], C[k], runs, per);
     _simCopyRuns(S.sepKey, N.sepKey, runs, 1); _simCopyRuns(S.sepLayer, N.sepLayer, runs, 1);
     // (The object fields' arrays: as long as the columns, copied the same way.)
     for (const k of SIM_UNIT_OBJ_FIELDS) {
-        const a = old['oc_' + k], b = C['oc_' + k] = new Array(cap).fill(undefined);
-        for (let r = 0; r < runs.length; r += 3) for (let to = runs[r], from = runs[r + 1], e = from + runs[r + 2]; from < e; to++, from++) b[to] = a[from];
+        C['oc_' + k] = _simRefCopy(old['oc_' + k], cap, runs);
     }
     for (let s = 0; s < ns; s++) {
         const a = C.cbT[s], b = C.dbT[s];
@@ -1058,4 +1120,22 @@ function simMemoryStats() {
         bytesPerSlot: Object.values(SIM_UNIT_SCHEMA).reduce((n, e) => n + e.bytes, 5),
         pathWindows: S && S.pathPool ? S.pathPool.next - S.pathPool.free.length : 0,
         boundBytes: groups, heap: typeof simHeapStats === 'function' ? simHeapStats() : null };
+}
+
+// Static stats have no per-instance backing arrays. JavaScript's slow
+// paths read the same shared row as Rust; detached/custom stats read their
+// existing shared object until their row is attached.
+function simUnitStatValue(c, s, k) {
+    const r=c.statRow[s];
+    if(r>=0 && _effHot) return _effHot[r*EFF_HOT_WIDTH+k];
+    const u=_simUnitState && _simUnitState.owners[s], pc=u && u.preComputed;
+    if(!pc) return NaN;
+    switch(k) {
+        case 0:return Math.fround(pc.speed);
+        case 1:return Math.fround(Math.max(.01,pc.astarCost));
+        case 2:return Math.fround(Math.max(TILE*.6,Number(pc.speed)||1));
+        case 3:return Math.fround(Math.max(TILE,pc.visionRange*TILE));
+        case 4:return Math.fround(pc.attackCooldown);
+        case 5:return Math.fround(pc.attackDamage);
+    }
 }

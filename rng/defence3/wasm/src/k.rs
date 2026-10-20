@@ -1661,6 +1661,7 @@ pub unsafe extern "C" fn k_acq_snap(a: u32, chunk: i32) {
         k.p::<u8>(15), k.p::<f32>(16), k.p::<i32>(17), k.p::<i32>(18));
     let (ucm, uct, uctid, uwk, admg, rangek) = (k.p::<u8>(19), k.p::<i32>(20), k.p::<i32>(21), k.p::<u8>(22), k.p::<f32>(23), k.p::<u8>(24));
     let (scm, sct, sctid, srk) = (k.p::<u8>(25), k.p::<i32>(26), k.p::<i32>(27), k.p::<u8>(28));
+    let rows=k.p::<i16>(29);let hot=k.p::<f32>(30);
     let absent = k.f(2) as u32;
     let cmd_atk = k.i(3) as u8;
     let brain = k.i(4) == 1;
@@ -1674,7 +1675,7 @@ pub unsafe extern "C" fn k_acq_snap(a: u32, chunk: i32) {
     let n = s1 - s0;
     core::ptr::copy_nonoverlapping(own.add(s0), so.add(s0), n);
     core::ptr::copy_nonoverlapping(cmd.add(s0), sc.add(s0), n);
-    core::ptr::copy_nonoverlapping(rng.add(s0), sr.add(s0), n);
+
     core::ptr::copy_nonoverlapping(id.add(s0), si.add(s0), n);
     core::ptr::copy_nonoverlapping(ucm.add(s0), scm.add(s0), n);
     core::ptr::copy_nonoverlapping(uct.add(s0), sct.add(s0), n);
@@ -1685,6 +1686,8 @@ pub unsafe extern "C" fn k_acq_snap(a: u32, chunk: i32) {
     let (ca, cb) = (i32x4_splat(cmd_atk as i32), i32x4_splat(brain_cmd as i32));
     let mut q = s0;
     while q + 4 <= s1 {
+        let (rangev,damagev)=flat_stats4(rows,hot,q);
+        v128_store(sr.add(q) as *mut v128, rangev);
         v128_store(sx.add(q) as *mut v128, px4k(v128_load(x0.add(q) as *const v128)));
         v128_store(sy.add(q) as *mut v128, px4k(v128_load(y0.add(q) as *const v128)));
         let c = u32x4_extend_low_u16x8(u16x8_extend_low_u8x16(v128_load32_zero(cmd.add(q) as *const u32)));
@@ -1692,7 +1695,7 @@ pub unsafe extern "C" fn k_acq_snap(a: u32, chunk: i32) {
         let ab = i32x4_eq(v128_load(sep.add(q) as *const v128), fa);
         let ac = i32x4_eq(u32x4_extend_low_u16x8(u16x8_extend_low_u8x16(v128_load32_zero(acqb.add(q) as *const u32))), zero);
         let wk = i32x4_ne(u32x4_extend_low_u16x8(u16x8_extend_low_u8x16(v128_load32_zero(uwk.add(q) as *const u32))), zero);
-        let dmg = f32x4_gt(v128_load(admg.add(q) as *const v128), fz);
+        let dmg = f32x4_gt(damagev, fz);
         let mut f = v128_and(d, i32x4_splat(1));
         f = v128_or(f, v128_and(ab, i32x4_splat(2)));
         f = v128_or(f, v128_and(v128_and(i32x4_eq(c, ca), ac), i32x4_splat(4)));
@@ -1711,13 +1714,14 @@ pub unsafe extern "C" fn k_acq_snap(a: u32, chunk: i32) {
         q += 4;
     }
     while q < s1 {
+        s(sr,q,flat_stat(rows,hot,q,3));
         let c = g(cmd, q);
         let d = g(dead, q);
         s(sx, q, pxf(g(x0, q)));
         s(sy, q, pxf(g(y0, q)));
         s(outa, q, -2);
         let wk = g(uwk, q) != 0;
-        let dmg = g(admg, q) > 0.0;
+        let dmg = flat_stat(rows,hot,q,5) > 0.0;
         let f = (if d != 0 { 1 } else { 0 }) | (if g(sep, q) == absent { 2 } else { 0 }) | (if c == cmd_atk && g(acqb, q) == 0 { 4 } else { 0 })
             | (if wk || !dmg { 8 } else { 0 }) | (if brain && c == brain_cmd && !wk && dmg { 16 } else { 0 });
         s(sf, q, f);
@@ -1985,6 +1989,7 @@ pub unsafe extern "C" fn k_hits(a: u32, chunk: i32) {
     let (acc, touch, sty, bd, pd, wkk) = (k.p::<i32>(12), k.p::<u8>(13), k.p::<u8>(14), k.p::<i32>(15), k.p::<i32>(16), k.p::<i32>(17));
     let (tl, pl, cnt) = (k.p::<i32>(18), k.p::<i32>(19), k.p::<i32>(20));
     let atn = k.p::<u8>(21);
+    let rows=k.p::<i16>(22);let hot=k.p::<f32>(23);
     let n = k.i(0);
     let looks = k.i(2);
     let js_jobs = k.i(3);
@@ -2016,7 +2021,7 @@ pub unsafe extern "C" fn k_hits(a: u32, chunk: i32) {
             let st = g(ast, at) as i32;
             let wk = if st == 5 { let w = g(awt, at); if w > 0 { (w.min(2047) << 20) | ((g(uid, at) & 0xFFFF) << 4) | ((g(own, at) as i32 + 1) & 15) } else { 0 } } else { 0 };
             let shots = if atn.is_null() { 1 } else { g(atn, at).max(1) };
-            let dmg = if shots > 1 { g(adm, at) * shots as f32 } else { g(adm, at) };
+            let dmg = if shots > 1 { flat_stat(rows,hot,at,5) * shots as f32 } else { flat_stat(rows,hot,at,5) };
             hit_one(q as usize, dmg, st, wk, n + j as i32, looks, acc, touch, sty, bd, pd, wkk, tl, pl, cnt);
         }
     }
@@ -4433,7 +4438,7 @@ unsafe fn eff_row_apply(k: &K, q: usize, o: i32, ty: i32, bl: i32, el: i32, ver:
     let ru = r as usize;
     let (r_spd, r_cost, r_rd, r_ra, r_rk, r_lzw) = (k.p::<f32>(25), k.p::<f32>(26), k.p::<i32>(27), k.p::<i32>(28), k.p::<u8>(29), k.p::<u8>(30));
     let (r_cb, r_cd, r_dmg, _r_vis, r_chs) = (k.p::<f32>(31), k.p::<f32>(32), k.p::<f32>(33), k.p::<f32>(34), k.p::<f32>(35));
-    let (srow, on, fl, reach, chs, spd) = (k.p::<i32>(22), k.p::<u8>(36), k.p::<u8>(37), k.p::<u8>(38), k.p::<f32>(39), k.p::<f32>(40));
+    let (srow, on, fl, reach, chs, spd) = (k.p::<i16>(22), k.p::<u8>(36), k.p::<u8>(37), k.p::<u8>(38), k.p::<f32>(39), k.p::<f32>(40));
     let (cost, rdc, rac, shoot, rkc, lz) = (k.p::<f32>(41), k.p::<u8>(42), k.p::<u8>(43), k.p::<u8>(44), k.p::<u8>(45), k.p::<u8>(46));
     let (cb, acd, admg, area, en, maxe, abok) = (k.p::<f32>(47), k.p::<f32>(48), k.p::<f32>(49), k.p::<i32>(50), k.p::<f32>(51), k.p::<f32>(52), k.p::<u8>(53));
     let boxsteps = k.i(19);
@@ -4484,7 +4489,7 @@ unsafe fn eff_row_apply(k: &K, q: usize, o: i32, ty: i32, bl: i32, el: i32, ver:
         *vis = true;
     }
     let _ = old;
-    s(srow, q, r);
+    s(srow, q, r as i16);
     // (simMoveStatsChanged)
     let rsp = g(r_spd, ru);
     let rdv = g(r_rd, ru);
@@ -4493,26 +4498,21 @@ unsafe fn eff_row_apply(k: &K, q: usize, o: i32, ty: i32, bl: i32, el: i32, ver:
     let nrd = if rdv >= 0 && rdv < boxsteps { rdv as u8 } else { 255 };
     let nra = if rav >= 0 && rav < 255 { rav as u8 } else { 255 };
     let nsh = if dmg > 0.0 { 1u8 } else { 0 };
-    let same = g(spd, q).to_bits() == rsp.to_bits() && g(cost, q).to_bits() == g(r_cost, ru).to_bits() && g(rdc, q) == nrd && g(rac, q) == nra
-        && g(shoot, q) == nsh && g(rkc, q) == g(r_rk, ru) && g(cb, q) == g(r_cb, ru);
-    s(acd, q, g(r_cd, ru));
-    s(admg, q, dmg);
-    s(spd, q, rsp);
-    s(cost, q, g(r_cost, ru));
+    let same = old>=0 && g(r_spd,old as usize).to_bits()==rsp.to_bits()
+        && g(r_cost,old as usize).to_bits()==g(r_cost,ru).to_bits()
+        && g(rdc,q)==nrd && g(rac,q)==nra && g(shoot,q)==nsh
+        && g(rkc,q)==g(r_rk,ru) && g(r_cb,old as usize)==g(r_cb,ru);
     s(rdc, q, nrd);
     s(rac, q, nra);
     s(shoot, q, nsh);
     s(rkc, q, g(r_rk, ru));
     s(lz, q, (g(lz, q) & 3) | (g(r_lzw, ru) << 2));
-    s(cb, q, g(r_cb, ru));
     if !same {
         let o_on = g(on, q);
         let f = g(fl, q);
         if o_on == 3 || o_on == 5 {
             if dmg > 0.0 && g(r_rk, ru) == g(reach, q) {
-                if o_on == 3 {
-                    s(chs, q, g(r_chs, ru));
-                }
+
             } else {
                 s(on, q, 0);
             }
@@ -4806,4 +4806,23 @@ pub unsafe extern "C" fn k_snap_merge(a: u32, _chunk: i32) {
     }
     s(res, 0, n as i32);
     s(res, 1, sum);
+}
+
+
+// Static values live only in shared level rows, never unit columns.
+#[inline(always)]
+unsafe fn flat_stat(rows: *const i16, hot: *const f32, q: usize, stat: usize) -> f32 {
+    let r=g(rows,q); if r>=0 {g(hot,r as usize*16+stat)} else {0.0}
+}
+#[inline(always)]
+unsafe fn flat_stats4(rows: *const i16, hot: *const f32, q: usize) -> (v128,v128) {
+    // Share the one 16-byte row-id load between range and damage. The old
+    // snapshot streamed two 16-byte per-unit stat vectors here.
+    let rv=i32x4_load_extend_i16x4(rows.add(q));let r=i32x4_extract_lane::<0>(rv);
+    if r>=0 && i32x4_bitmask(i32x4_eq(rv,i32x4_splat(r)))==15 {
+        return (f32x4_splat(g(hot,r as usize*16+3)),f32x4_splat(g(hot,r as usize*16+5)));
+    }
+    let at=|r:i32,k:usize| if r>=0 {g(hot,r as usize*16+k)} else {0.0};
+    let r1=i32x4_extract_lane::<1>(rv);let r2=i32x4_extract_lane::<2>(rv);let r3=i32x4_extract_lane::<3>(rv);
+    (f32x4(at(r,3),at(r1,3),at(r2,3),at(r3,3)),f32x4(at(r,5),at(r1,5),at(r2,5),at(r3,5)))
 }

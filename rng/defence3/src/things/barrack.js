@@ -97,7 +97,7 @@ function spawnerCooldownTicks(s) {
 // their own: spawnerStructuresTick).
 function spawnerProductionChanged(s) {
     if (!s || !Array.isArray(s.spawnQueue) || !(s.energy > 0) || s.underConstruction) return;
-    s.spawnCooldown = spawnerCooldownTicks(s);
+
     const had = Number.isFinite(s._spawnReadyOrder);
     if (s.spawnQueue.length > 0) updateSpawnerProductionProgress(s);
     else { s.spawnTimer = 0; s._spawnReadyOrder = undefined; }
@@ -176,7 +176,7 @@ function updateSpawnerProductionProgress(spawner) {
     spawner.spawnQueue[0] = front;
 
     let cooldown = Math.max(1, Math.round(spawner.spawnCooldown || 1));
-    spawner.spawnCooldown = cooldown;
+
     let paidPct = front.energyRequired > 0 ? (front.energyPaid / front.energyRequired) : 0;
     spawner.spawnTimer = Math.max(0, Math.min(cooldown, Math.round(cooldown * paidPct)));
     if (front.energyPaid >= front.energyRequired && !Number.isFinite(spawner._spawnReadyOrder)) {
@@ -360,15 +360,13 @@ class Barrack {
         this.isStacking = false;
         this.stackingWorkDone = 0;
         this.spawnTimer = 0;
-        this.spawnCooldown = Math.round(getBarrackSpawnCooldown(unitType, this.level, this.owner, `barrack_${this.unitType}`) * TICK_RATE);
+
         this.spawnQueue = []; // queue of unit types to spawn
         this.rallyX = null; this.rallyY = null; // rally point in world coords
         this.rallyTargetUnitId = null;
         let stats = calculateItemStats('barrack_' + this.unitType, this.level, this.owner);
-        this.preComputedBase = stats;
-        this.preComputedEffective = stats;
-        this.preComputed = this.preComputedBase;
-        this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
+
+        this.energy = stats.maxEnergy;
         this.markedForSalvage = false;
         this.autoUpgradeEnabled = true;
         this.buildEnabled = true;
@@ -386,8 +384,7 @@ class Barrack {
         thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
-        let effLvl = getThingBaseLevel(this);
-        this.spawnCooldown = Math.round(getBarrackSpawnCooldown(this.unitType, effLvl, this.owner, `barrack_${this.unitType}`) * TICK_RATE);
+
         if (this.spawnQueue.length > 0) {
             updateSpawnerProductionProgress(this);
         } else {
@@ -467,17 +464,15 @@ class CollectorSpawner {
         this.isStacking = false;
         this.stackingWorkDone = 0;
         let stats = calculateItemStats('spawner', this.level, this.owner);
-        this.preComputedBase = stats;
-        this.preComputedEffective = stats;
-        this.preComputed = this.preComputedBase;
-        this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
+
+        this.energy = stats.maxEnergy;
         this.markedForSalvage = false;
         this.autoUpgradeEnabled = true;
         this.buildEnabled = true;
         this.queueEnabled = true;
         this.spawnQueue = []; this.spawnTimer = 0;
         this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
-        this.spawnCooldown = Math.round(getBarrackSpawnCooldown('collector', this.level, this.owner, 'spawner') * TICK_RATE);
+
         updateItemTextCache(this);
     }
     getUnitCost() {
@@ -489,8 +484,7 @@ class CollectorSpawner {
         thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
-        let effLvl = getThingBaseLevel(this);
-        this.spawnCooldown = Math.round(getBarrackSpawnCooldown('collector', effLvl, this.owner, 'spawner') * TICK_RATE);
+
         if (this.spawnQueue.length > 0) {
             updateSpawnerProductionProgress(this);
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
@@ -530,17 +524,15 @@ class AstarSpawner {
         this.isStacking = false;
         this.stackingWorkDone = 0;
         let stats = calculateItemStats('astar_spawner', this.level, this.owner);
-        this.preComputedBase = stats;
-        this.preComputedEffective = stats;
-        this.preComputed = this.preComputedBase;
-        this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
+
+        this.energy = stats.maxEnergy;
         this.markedForSalvage = false;
         this.autoUpgradeEnabled = true;
         this.buildEnabled = true;
         this.queueEnabled = true;
         this.spawnQueue = []; this.spawnTimer = 0;
         this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
-        this.spawnCooldown = Math.round(getBarrackSpawnCooldown('astar_collector', this.level, this.owner, 'astar_spawner') * TICK_RATE);
+
         updateItemTextCache(this);
     }
     getUnitCost() {
@@ -552,8 +544,7 @@ class AstarSpawner {
         thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
-        let effLvl = getThingBaseLevel(this);
-        this.spawnCooldown = Math.round(getBarrackSpawnCooldown('astar_collector', effLvl, this.owner, 'astar_spawner') * TICK_RATE);
+
         if (this.spawnQueue.length > 0) {
             updateSpawnerProductionProgress(this);
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
@@ -593,17 +584,15 @@ class SalvagerSpawner {
         this.isStacking = false;
         this.stackingWorkDone = 0;
         let stats = calculateItemStats('salvager', this.level, this.owner);
-        this.preComputedBase = stats;
-        this.preComputedEffective = stats;
-        this.preComputed = this.preComputedBase;
-        this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
+
+        this.energy = stats.maxEnergy;
         this.markedForSalvage = false;
         this.autoUpgradeEnabled = true;
         this.buildEnabled = true;
         this.queueEnabled = true;
         this.spawnQueue = []; this.spawnTimer = 0;
         this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
-        this.spawnCooldown = Math.round(getBarrackSpawnCooldown('salvager_unit', this.level, this.owner, 'salvager') * TICK_RATE);
+
         updateItemTextCache(this);
     }
     getUnitCost() {
@@ -615,8 +604,7 @@ class SalvagerSpawner {
         thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
-        let effLvl = getThingBaseLevel(this);
-        this.spawnCooldown = Math.round(getBarrackSpawnCooldown('salvager_unit', effLvl, this.owner, 'salvager') * TICK_RATE);
+
         if (this.spawnQueue.length > 0) {
             updateSpawnerProductionProgress(this);
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
@@ -656,10 +644,8 @@ class BuilderSpawner {
         this.isStacking = false;
         this.stackingWorkDone = 0;
         let stats = calculateItemStats('builder_spawner', this.level, this.owner);
-        this.preComputedBase = stats;
-        this.preComputedEffective = stats;
-        this.preComputed = this.preComputedBase;
-        this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
+
+        this.energy = stats.maxEnergy;
         this.underConstruction = true;
         this.markedForSalvage = false;
         this.autoUpgradeEnabled = true;
@@ -667,7 +653,7 @@ class BuilderSpawner {
         this.queueEnabled = true;
         this.spawnQueue = []; this.spawnTimer = 0;
         this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
-        this.spawnCooldown = Math.round(getBarrackSpawnCooldown('builder_unit', this.level, this.owner, 'builder_spawner') * TICK_RATE);
+
         updateItemTextCache(this);
     }
     getUnitCost() {
@@ -686,8 +672,7 @@ class BuilderSpawner {
         thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
-        let effLvl = getThingBaseLevel(this);
-        this.spawnCooldown = Math.round(getBarrackSpawnCooldown('builder_unit', effLvl, this.owner, 'builder_spawner') * TICK_RATE);
+
         if (this.spawnQueue.length > 0) {
             updateSpawnerProductionProgress(this);
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
@@ -727,10 +712,8 @@ class HealerSpawner {
         this.isStacking = false;
         this.stackingWorkDone = 0;
         let stats = calculateItemStats('healer_spawner', this.level, this.owner);
-        this.preComputedBase = stats;
-        this.preComputedEffective = stats;
-        this.preComputed = this.preComputedBase;
-        this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
+
+        this.energy = stats.maxEnergy;
         this.underConstruction = true;
         this.markedForSalvage = false;
         this.autoUpgradeEnabled = true;
@@ -738,7 +721,7 @@ class HealerSpawner {
         this.queueEnabled = true;
         this.spawnQueue = []; this.spawnTimer = 0;
         this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
-        this.spawnCooldown = Math.round(getBarrackSpawnCooldown('healer_unit', this.level, this.owner, 'healer_spawner') * TICK_RATE);
+
         updateItemTextCache(this);
     }
     getUnitCost() {
@@ -756,8 +739,7 @@ class HealerSpawner {
         thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
-        let effLvl = getThingBaseLevel(this);
-        this.spawnCooldown = Math.round(getBarrackSpawnCooldown('healer_unit', effLvl, this.owner, 'healer_spawner') * TICK_RATE);
+
         if (this.spawnQueue.length > 0) {
             updateSpawnerProductionProgress(this);
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
@@ -797,15 +779,13 @@ class ResearchSpawner {
         this.isStacking = false;
         this.stackingWorkDone = 0;
         this.spawnTimer = 0;
-        this.spawnCooldown = Math.round(getBarrackSpawnCooldown('researcher_unit', this.level, this.owner, 'research') * TICK_RATE);
+
         this.spawnQueue = [];
         this.rallyX = null; this.rallyY = null;
         this.rallyTargetUnitId = null;
         let stats = calculateItemStats('research', this.level, this.owner);
-        this.preComputedBase = stats;
-        this.preComputedEffective = stats;
-        this.preComputed = this.preComputedBase;
-        this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
+
+        this.energy = stats.maxEnergy;
         this.underConstruction = true;
         this.markedForSalvage = false;
         this.autoUpgradeEnabled = true;
@@ -835,8 +815,7 @@ class ResearchSpawner {
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
 
-        let effLvl = getThingBaseLevel(this);
-        this.spawnCooldown = Math.round(getBarrackSpawnCooldown('researcher_unit', effLvl, this.owner, 'research') * TICK_RATE);
+
         if (this.spawnQueue.length > 0) {
             updateSpawnerProductionProgress(this);
         } else {
@@ -885,7 +864,6 @@ class ResearchSpawner {
     }
 }
 if (typeof structTableAccessors === 'function') structTableAccessors(ResearchSpawner, 0x44);
-
 
 function _makeSpawnerRallyTemplateKey(spawner, startGx, startGy, endGx, endGy, unit) {
     let movementProfile = _resolveMovementProfile(!!(unit && unit.isFlying), getPathCanWalkForUnit(unit), null) || 'dynamic';

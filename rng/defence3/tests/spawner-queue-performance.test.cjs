@@ -37,7 +37,7 @@ function make(code, data) {
  const {buildings,caps,fail}=data, players=caps.map(()=>({popCount:0}));
  const barracks=buildings.slice(0,Math.floor(buildings.length/2)), collectorSpawners=buildings.slice(barracks.length);
  let globalSpawnerReadyOrderCounter=100000, checks=0, events=[];
- const localPlayerId=0, isQueueEnabled=s=>s.enabled, getThingBaseLevel=()=>1, getSpawnerFallbackUnitType=()=> 'norm';
+ const simDk=1, localPlayerId=0, isQueueEnabled=s=>s.enabled, getThingBaseLevel=()=>1, getSpawnerFallbackUnitType=()=> 'norm';
  const getQueuedSpawnInfo=f=>{checks++;return f;}, getPlayerPopCap=owner=>caps[owner];
  const spawnQueuedUnitFromSpawner=s=>{
    if(s.id===fail) return false;

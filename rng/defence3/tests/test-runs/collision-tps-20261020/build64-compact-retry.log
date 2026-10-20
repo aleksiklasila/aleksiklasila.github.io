@@ -1,0 +1,2 @@
+wasm-opt -O3: 203594 -> 197287 bytes
+wrote src\sim\sim_wasm64_bin.js: 197287 bytes, 78 kernels, hash 5b46459a6c06d50d

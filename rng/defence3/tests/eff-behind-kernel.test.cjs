@@ -37,7 +37,7 @@ function run(inKernel) {
             hashes.push(computeLockstepStateHashFast(gameTime));
             if (t % 30 === 29) snaps.push(units.map(u => { if (u.dead) return null; const c = u._us, q = u._si, pc = u.preComputed || {};
                 return [u.id, u.energy, u.maxEnergy, u.effectiveLevel, u.x, u.y, pc.speed, pc.attackDamage, pc.visionRange, pc.maxEnergy, u.preComputedBase && u.preComputedBase.maxEnergy,
-                    c ? [c.mvSpd[q], c.atkDmg[q], c.atkCd[q], c.maxE[q], c.esRad[q], c.vsR[q]] : null]; }));
+                    c ? [simUnitStatValue(c,q,0), simUnitStatValue(c,q,5), simUnitStatValue(c,q,4), c.maxE[q], c.esRad[q], c.vsR[q]] : null]; }));
         }
         return { hashes, snaps, units: units.filter(u => !u.dead).length, taken: _effBehindInKernel };
     })())`));

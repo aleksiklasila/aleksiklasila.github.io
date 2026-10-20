@@ -442,6 +442,7 @@ function _runAdjacencyRecalculation() {
 // One member of an adjacency group: its stacks, levels, upgrade/stacking
 // state and stats from the group's size and area multiplier.
 function _adjApplyMember(obj, groupSize, areaMult, passiveRefresh) {
+    const priorLevel=obj.effectiveLevel, priorPotential=obj.potentialEffectiveLevel, priorUpgrade=obj.isUpgrading, priorGroup=obj.effectiveGroupSize, priorArea=obj.effectiveAreaMult;
     let nextStacks = getThingStackedStacks(obj);
     let nextManualStacks = getThingManualStacks(obj);
     let actualStacks = nextStacks || 1;
@@ -497,55 +498,16 @@ function _adjApplyMember(obj, groupSize, areaMult, passiveRefresh) {
         }
     }
 
-    // Stats follow from these (research changes reach them through
-    // the periodic refresh): members of a big group whose inputs did
-    // not change keep theirs instead of rebuilding every table.
-    // Snapshotted, so every peer skips the same members.
-    // (The inputs as numbers: the levels, flags and owner packed in one
-    // exactly (levels to 1023, owners -1..14; else NaN: rebuilt), the
-    // upgrade's energy, group size and area multiplier as they are. A
-    // signature string per building was ~0.4 KB of joined pieces.)
-    const lv = baseLevel, el = obj.effectiveLevel, pl = nextPotentialLevel, ow = obj.owner;
-    const key = (lv >= 0 && lv < 1024 && el >= 0 && el < 1024 && pl >= 0 && pl < 1024 && ow >= -1 && ow < 15 && lv === (lv | 0) && el === (el | 0) && pl === (pl | 0) && ow === (ow | 0))
-        ? ((((lv * 1024 + el) * 1024 + pl) * 4 + (obj.isUpgrading ? 2 : 0) + (obj.underConstruction ? 1 : 0)) * 16 + ow + 1) : NaN;
-    const same = (a, b) => a === b || (a !== a && b !== b && typeof a === 'number' && typeof b === 'number');
-    if (obj._adjSigK === key && same(obj._adjSigE, obj.upgrademaxEnergy) && same(obj._adjSigG, groupSize) && same(obj._adjSigM, areaMult)
-        && obj.effectiveGroupSize === groupSize && obj.effectiveAreaMult === areaMult) return;
-    obj._adjSigK = key; obj._adjSigE = obj.upgrademaxEnergy; obj._adjSigG = groupSize; obj._adjSigM = areaMult;
-
-    if (obj.updateStats) {
-        obj.effectiveGroupSize = groupSize;
-        obj.effectiveAreaMult = areaMult;
-        obj.updateStats();
-        let statsType = (obj.type === 'barrack' && obj.unitType) ? ('barrack_' + obj.unitType) : obj.type;
-        if (statsType) {
-            let baseStats = calculateItemStats(statsType, getThingBaseLevel(obj), obj.owner);
-            let potentialStats = clonePrecomputedWithBaseMaxEnergy(baseStats, calculateItemStats(statsType, nextPotentialLevel, obj.owner), false);
-            obj.preComputedPotential = potentialStats;
-        }
-    } else {
-        obj.effectiveGroupSize = groupSize;
-        obj.effectiveAreaMult = areaMult;
-        let statsType = (obj.type === 'barrack' && obj.unitType) ? ('barrack_' + obj.unitType) : obj.type;
-        let baseStats = calculateItemStats(statsType, getThingBaseLevel(obj), obj.owner);
-        let stats = clonePrecomputedWithBaseMaxEnergy(baseStats, calculateItemStats(statsType, obj.effectiveLevel, obj.owner), false);
-        let potentialStats = clonePrecomputedWithBaseMaxEnergy(baseStats, calculateItemStats(statsType, nextPotentialLevel, obj.owner), false);
-        obj.preComputedBase = baseStats;
-        obj.preComputedEffective = stats;
-        obj.preComputedPotential = potentialStats;
-        obj.preComputed = obj.preComputedBase;
-        if (obj.isUpgrading && obj.upgrademaxEnergy > 0) {
-            obj.maxEnergy = Math.max(1, Math.floor(obj.upgrademaxEnergy));
-            if (!Number.isFinite(obj.energy) || obj.energy < 1) obj.energy = 1;
-            obj.energy = Math.min(obj.energy, obj.maxEnergy);
-            if (stats.damage) obj.damage = stats.damage;
-        } else {
-            let prevEnergy = Number(obj.energy);
-            if (!Number.isFinite(prevEnergy)) prevEnergy = Number(baseStats.maxEnergy) || 1;
-            obj.maxEnergy = baseStats.maxEnergy;
-            if (stats.damage) obj.damage = stats.damage;
-            obj.energy = Math.max(1, Math.min(obj.maxEnergy, Math.floor(prevEnergy)));
-        }
+    obj.effectiveGroupSize = groupSize;
+    obj.effectiveAreaMult = areaMult;
+    // Shared rows already reflect these inputs. Only state/visual effects
+    // need an event when the group's actual levels or upgrade state change.
+    if (priorLevel === obj.effectiveLevel && priorPotential === nextPotentialLevel
+        && priorUpgrade === obj.isUpgrading && priorGroup === groupSize && priorArea === areaMult) return;
+    if (obj.updateStats) obj.updateStats();
+    else {
+        const energy=Number(obj.energy);
+        obj.energy=Math.max(1,Math.min(obj.maxEnergy,Number.isFinite(energy)?energy:obj.maxEnergy));
         updateItemTextCache(obj);
         if (typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(obj);
     }
@@ -742,33 +704,8 @@ function getUnitEffectiveStatsRecalcTicks() {
     return Math.max(1, Math.min(1200, Math.floor(Number(UNIT_EFFECTIVE_STATS_RECALC_TICKS) || 1) * UNIT_EFFECTIVE_STATS_SLOWDOWN));
 }
 
-function getThingStatsRecalcIntervalTicks() {
-    let seconds = Number(THING_STATS_RECALC_INTERVAL_SECONDS);
-    if (!Number.isFinite(seconds)) seconds = 3;
-    return Math.max(1, Math.min(36000, Math.floor(seconds * TICK_RATE) || 1));
-}
-
 function getUnitCollisionRecalcTicks() {
     return Math.max(1, Math.min(240, Math.floor(Number(UNIT_COLLISION_RECALC_TICKS) || 1)));
-}
-
-// Rebuild a building's derived stat tables from its level and owner, without
-// the energy adjustments of a periodic refresh. Snapshots leave the tables
-// out (they are most of a snapshot's size) and restore them with this.
-function restoreDerivedThingStats(item) {
-    if (!item || item.unitType && !(item instanceof Barrack)) return;
-    let statsType = (item.type === 'barrack' && item.unitType) ? ('barrack_' + item.unitType) : item.type;
-    if (!statsType || !BASE_CARD_TYPES[statsType]) return;
-    let baseLevel = getThingBaseLevel(item);
-    let effectiveLevel = getThingEffectiveLevel(item, baseLevel);
-    let potentialLevel = getThingPotentialLevel(item, effectiveLevel);
-    let base = calculateItemStats(statsType, baseLevel, item.owner);
-    if (!(item instanceof Tower)) {
-        item.preComputedBase = base;
-        item.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(base, calculateItemStats(statsType, effectiveLevel, item.owner), false);
-        item.preComputed = item.preComputedBase;
-    }
-    item.preComputedPotential = clonePrecomputedWithBaseMaxEnergy(base, calculateItemStats(statsType, potentialLevel, item.owner), false);
 }
 
 function _refreshThingPrecomputedStats(item) {
@@ -797,56 +734,16 @@ function _refreshThingPrecomputedStats(item) {
             item.effectiveLevel = eff;
             return;
         }
-        // (The movement columns told once, of the final stats.)
+        const previousRow=item._us ? item._us.statRow[item._si] : -1;
+        // (The movement checks told once, of the final stats.)
         _unitStatsNotifyHeld = true;
         try { applyUnitLevelScaling(item, baseLevel); applyUnitEffectiveScaling(item, effectiveLevel); }
         finally { _unitStatsNotifyHeld = false; }
-        if (typeof simMoveStatsChanged === 'function') simMoveStatsChanged(item);
+        if (typeof simMoveStatsChanged === 'function') simMoveStatsChanged(item, previousRow);
         item._statsVer = _precomputedStatsVersion;
         return;
     }
 
-    let statsType = (item.type === 'barrack' && item.unitType) ? ('barrack_' + item.unitType) : item.type;
-    if (!statsType) return;
-
-    if (item.updateStats) {
-        item.updateStats();
-        let baseLevelForPotential = getThingBaseLevel(item);
-        let potentialLevelForPotential = getThingPotentialLevel(item, getThingEffectiveLevel(item, baseLevelForPotential));
-        let baseStatsForPotential = calculateItemStats(statsType, baseLevelForPotential, item.owner);
-        item.preComputedPotential = clonePrecomputedWithBaseMaxEnergy(baseStatsForPotential, calculateItemStats(statsType, potentialLevelForPotential, item.owner), false);
-        return;
-    }
-
-    let baseLevel = getThingBaseLevel(item);
-    let effectiveLevel = getThingEffectiveLevel(item, baseLevel);
-    let potentialLevel = getThingPotentialLevel(item, effectiveLevel);
-    item.preComputedBase = calculateItemStats(statsType, baseLevel, item.owner);
-    item.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(item.preComputedBase, calculateItemStats(statsType, effectiveLevel, item.owner), false);
-    item.preComputedPotential = clonePrecomputedWithBaseMaxEnergy(item.preComputedBase, calculateItemStats(statsType, potentialLevel, item.owner), false);
-    item.preComputed = item.preComputedBase;
-
-    if (item.isUpgrading && item.upgrademaxEnergy > 0) {
-        item.maxEnergy = Math.max(1, Math.floor(item.upgrademaxEnergy));
-        if (!Number.isFinite(item.energy) || item.energy < 1) item.energy = 1;
-        item.energy = Math.min(item.energy, item.maxEnergy);
-        if (item.preComputed && Number.isFinite(item.preComputed.damage)) item.damage = item.preComputed.damage;
-    } else if (item.underConstruction) {
-        let prevEnergy = Number(item.energy);
-        if (!Number.isFinite(prevEnergy)) prevEnergy = 1;
-        item.maxEnergy = Number(item.preComputedBase && item.preComputedBase.maxEnergy) || item.maxEnergy;
-        if (item.preComputed && Number.isFinite(item.preComputed.damage)) item.damage = item.preComputed.damage;
-        item.energy = Math.max(1, Math.min(item.maxEnergy, prevEnergy));
-    } else {
-        let prevEnergy = Number(item.energy);
-        if (!Number.isFinite(prevEnergy)) prevEnergy = Number(item.preComputedBase && item.preComputedBase.maxEnergy) || 1;
-        item.maxEnergy = Number(item.preComputedBase && item.preComputedBase.maxEnergy) || item.maxEnergy;
-        if (item.preComputed && Number.isFinite(item.preComputed.damage)) item.damage = item.preComputed.damage;
-        item.energy = Math.max(1, Math.min(item.maxEnergy, Math.floor(prevEnergy)));
-    }
-
-    updateItemTextCache(item);
-    if (typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(item);
 }
 
 // Selected things refresh stats sooner so the info panel stays live (single
@@ -882,37 +779,9 @@ function resetNewUnitsForStats() {
     if (typeof _effBaseClear === 'function') _effBaseClear();
 }
 
-// A strided pass: the units at indices congruent to the tick modulo the
-// interval, so each tick touches only the due share. Removals shift
-// indices, which can move a unit's turn by a tick or so.
-// The buildings' periodic refresh runs this many times slower than the
-// configured interval.
-const THING_STATS_NET_SLOWDOWN = 8;
-function _forEachStridedUnit(intervalTicks, tick, fn) {
-    let step = Math.max(1, intervalTicks | 0);
-    for (let i = tick % step, n = units.length; i < n; i += step) {
-        let u = units[i];
-        if (u && !u.dead) fn(u);
-    }
-}
-
-// Periodic refreshes run on a fixed phase per thing instead of a countdown
-// stored on it: a thing is due on the ticks where (gameTime + phase) is a
-// multiple of the interval. Deciding that is a little integer math per
-// thing, with no per-tick writes to every unit and building.
-function _thingStatsPhase(item, intervalTicks) {
-    if (intervalTicks <= 1) return 0;
-    let seed;
-    if (Number.isFinite(item.id)) seed = (Math.floor(item.id) * 1103515245 + 12345) >>> 0;
-    else seed = (((Math.floor(Number(item.gx) || 0) + 1) * 73856093) ^ ((Math.floor(Number(item.gy) || 0) + 1) * 19349663)) >>> 0;
-    return seed % intervalTicks;
-}
-
 let _thingStatsRefreshStamp = 0;
 
 function recalculateThingPrecomputedStats() {
-    let intervalTicks = getThingStatsRecalcIntervalTicks();
-    let tick = Math.max(0, Math.floor(Number(gameTime) || 0));
     let selectedUnitSet = null;
     let selectedEntitySet = null;
     if (!isMultiplayer || !gameStarted) {
@@ -940,55 +809,10 @@ function recalculateThingPrecomputedStats() {
     _newUnitsForStats.length = 0;
     if (selectedUnitSet) for (let u of selectedUnitSet) if (_isSelectionStatsRefreshDue(u, selectionSize)) refreshUnit(u);
 
-    // Buildings and floor items: those due this tick (their phase bucket),
-    // new ones (no stats yet) and, single player, the selection; in tile
-    // order, a stamp refreshing each at most once per call.
-    let stamp = ++_thingStatsRefreshStamp;
-    let processThing = (item) => {
-        if (!item || item.dead || item._thingStatsRefreshStamp === stamp) return;
-        item._thingStatsRefreshStamp = stamp;
-        _refreshThingPrecomputedStats(item);
-    };
-    // (A safety net: their stats are applied where they change too.)
-    for (const item of _thingStatsDue(intervalTicks * THING_STATS_NET_SLOWDOWN, tick)) processThing(item);
-    if (selectedEntitySet) for (let item of selectedEntitySet) {
-        if (item && !(item instanceof Unit) && _isSelectionStatsRefreshDue(item, selectionSize)) processThing(item);
-    }
+    // Structures and floors derive their stats; only unique level/progress
+    // events update their mutable state. No periodic stat refresh buckets.
 }
 
-// The cells' items (buildings, floor items) by refresh phase: per phase
-// tile -> item, kept from the tile entity journal (made anew when the tile
-// index was rebuilt); items placed since the last call that have no stats
-// yet are due at once.
-let _thingPhaseBuckets = null;
-function _thingStatsDue(intervalTicks, tick) {
-    let B = _thingPhaseBuckets;
-    const changes = B && B.interval === intervalTicks && B.w === GRID_W && B.h === GRID_H ? tileEntityChangesSince(B.cursor) : null;
-    const due = [];
-    const add = (t, e) => {
-        const p = _thingStatsPhase(e, intervalTicks);
-        B.buckets[p].set(t, e); B.phaseOf.set(t, p);
-        if (!(e.preComputed && Number.isFinite(e.preComputed.maxEnergy))) due.push(e);
-    };
-    if (changes === null) {
-        B = _thingPhaseBuckets = { interval: intervalTicks, w: GRID_W, h: GRID_H, cursor: { epoch: -1, pos: 0 },
-            buckets: Array.from({ length: intervalTicks }, () => new Map()), phaseOf: new Map() };
-        tileEntityChangesSince(B.cursor);
-        for (const e of _activeTileEntities) {
-            if (!e || getTileEntityRef(e.gx, e.gy) !== e) continue;
-            const cell = grid[e.gy] && grid[e.gy][e.gx];
-            if (cell && cell.item === e) add(e.gy * GRID_W + e.gx, e);
-        }
-    } else for (const t of changes) {
-        const p = B.phaseOf.get(t);
-        if (p !== undefined) { B.buckets[p].delete(t); B.phaseOf.delete(t); }
-        const gx = t % GRID_W, gy = (t - gx) / GRID_W, e = getTileEntityRef(gx, gy), cell = grid[gy] && grid[gy][gx];
-        if (e && cell && cell.item === e) add(t, e);
-    }
-    for (const e of B.buckets[(intervalTicks - tick % intervalTicks) % intervalTicks].values()) due.push(e);
-    due.sort((a, b) => (a.gy * GRID_W + a.gx) - (b.gy * GRID_W + b.gx));
-    return due;
-}
 
 function _effectiveStatsRadiusPx(u) {
     return Math.max(0.5, Number((u.basePreComputed && u.basePreComputed.visionRange) || (u.preComputed && u.preComputed.visionRange) || 0.5)) * TILE;
@@ -1216,7 +1040,8 @@ function _unitStatsVerOf(u) {
 // SIM_KERNEL_EFF_UNITS gives a unit the row of its new effective level and
 // the movement columns from it (simMoveStatsChanged's); the JavaScript only
 // makes rows (_effRowAttach, when it applies a unit's tables itself).
-const EFF_ROW_MAX = 1 << 16;
+const EFF_ROW_MAX = 1 << 15;
+let _effRowMeta = [];
 let _effRowObj = [], _effRowN = 0, _effRowCap = 0, _effRowLk = null, _effRowLkDims = '';
 const _EFF_ROW_COLS = [['rowVer', Int32Array], ['rSpd', Float32Array], ['rCost', Float32Array], ['rRD', Int32Array], ['rRA', Int32Array], ['rRK', Uint8Array],
     ['rLzW', Uint8Array], ['rCb', Float32Array], ['rCd', Float32Array], ['rDmg', Float32Array], ['rVis', Float32Array], ['rChs', Float32Array],
@@ -1224,6 +1049,8 @@ const _EFF_ROW_COLS = [['rowVer', Int32Array], ['rSpd', Float32Array], ['rCost',
     // works them out: -1 none, -2 for the JavaScript.)
     ['rVsA', Int8Array]];
 const _effRowCols = {};
+const EFF_HOT_WIDTH = 16;
+let _effHot = null;
 function _effRowDims() { return [spatialUnitsComplexPlayerCount | 0, spatialUnitsComplexUnitTypeCount | 0, (MAX_THING_LEVEL | 0) + 1]; }
 function _effRowLookup() {
     const [NP, NT, L1] = _effRowDims(), dims = NP + ':' + NT + ':' + L1;
@@ -1239,6 +1066,9 @@ function _effRowLookup() {
 function _effRowGrow(n) {
     if (n <= _effRowCap) return;
     const cap = Math.max(256, _effRowCap * 2, n);
+    const hot = simSharedArray(Float32Array, cap * EFF_HOT_WIDTH);
+    if (_effHot) hot.set(_effHot.subarray(0, _effRowN * EFF_HOT_WIDTH));
+    _effHot = hot; simParallelBind('eff.hot', hot);
     for (const [k, T] of _EFF_ROW_COLS) {
         const a = simSharedArray(T, cap);
         if (_effRowCols[k]) a.set(_effRowCols[k].subarray(0, _effRowN));
@@ -1261,7 +1091,7 @@ function _effRowsReset() {
             c.statRow[s] = -1;
         }
     }
-    _effRowObj = []; _effRowN = 0;
+    _effRowObj = []; _effRowMeta = []; _effRowN = 0;
     if (_effRowLk) _effRowLk.fill(-1);
 }
 // ---- Base entries ----
@@ -1321,36 +1151,61 @@ function _effRowAttach(u) {
     const c = u && u._us;
     if (!c || typeof simSharedArray !== 'function') return;
     const s = u._si, pc = u._pc;
-    if (!pc || typeof pc !== 'object' || pc !== u._pce || !c.esOk[s]) return;
+    if (!pc || typeof pc !== 'object' || pc !== u._pce) return;
     const [NP, NT, L1] = _effRowDims();
-    const o = c.owner[s], ty = c.esType[s], bl = c.baseLevel[s], el = c.effectiveLevel[s];
+    const o = c.owner[s], ty = spatialUnitTypeToIndex[u.unitType], bl = Math.max(1,c.baseLevel[s]), el = Math.max(1,c.effectiveLevel[s]);
     if (!(o >= 0 && o < NP && ty >= 0 && ty < NT && bl >= 1 && bl < L1 && el >= 1 && el < L1) || bl !== Math.floor(bl) || el !== Math.floor(el)) return;
     const lk = _effRowLookup(), key = ((o * NT + ty) * L1 + bl) * L1 + el, ver = c.esVer[s];
     let r = lk[key];
     if (!(r >= 0 && _effRowObj[r] === pc && _effRowCols.rowVer[r] === ver)) {
-        if (_effRowN >= EFF_ROW_MAX) _effRowsReset();
-        r = _effRowN;
-        _effRowGrow(r + 1);
-        _effRowN = r + 1;
+        if (_effRowN >= EFF_ROW_MAX) { _effRowsReset(); r = -1; }
+        if (!(r >= 0)) { r = _effRowN; _effRowGrow(r + 1); _effRowN = r + 1; }
         _effRowObj[r] = pc;
-        const R = _effRowCols, range = _getUnitAttackRangeArea(u), vis = Number(pc.visionRange);
-        R.rowVer[r] = ver;
-        R.rSpd[r] = pc.speed * _getUnitAstarSpeedMultiplier(u);
-        R.rCost[r] = _resolveUnitAstarTileCost(u);
-        R.rRD[r] = Math.ceil(range) + 1;
-        R.rRA[r] = Math.ceil(Math.max(TILE, vis * TILE) / TILE) + 1;
-        R.rRK[r] = Math.min(255, Math.floor(range));
-        R.rLzW[r] = Math.floor(range) === Math.ceil(range) ? 1 : 0;
-        R.rCb[r] = Math.max(TILE, vis * TILE);
-        R.rCd[r] = pc.attackCooldown; R.rDmg[r] = pc.attackDamage; R.rVis[r] = vis;
-        R.rChs[r] = Math.max(TILE * 0.6, Number(pc.speed) || 1);
-        // (getEntityEffectiveVisibilityRangeArea of a unit whose effective
-        // tables are pc.)
-        const va = Number.isFinite(pc.visionRangeArea) ? pc.visionRangeArea : Number.isFinite(pc.visionRange) ? pc.visionRange / AREA_UNIT_TILE_EQUIVALENT : NaN;
-        R.rVsA[r] = !Number.isFinite(va) || typeof VIS_COVER_MAX_STEPS !== 'number' ? -2 : va > 0 ? Math.min(VIS_COVER_MAX_STEPS, Math.floor(va)) : -1;
+        _effRowMeta[r] = { owner:o, type:u.unitType, bl, el };
+        _effRowWrite(r, u, pc, ver);
         lk[key] = r;
     }
     c.statRow[s] = r;
+    // The row already owns both effective tables. Keep private handles
+    // empty unless a caller overrides one of the tables independently.
+    c.jr__pc.clear(s); c.jr__pce.clear(s);
+}
+
+// Research/boost changes rewrite rows, never the unit list. Row handles
+// remain valid for every existing instance, including sleeping SIMD lanes.
+function _effRowWrite(r, u, pc, ver) {
+    const R = _effRowCols, range = _getUnitAttackRangeArea(u), vis = Number(pc.visionRange);
+    R.rowVer[r] = ver;
+    R.rSpd[r] = pc.speed * _getUnitAstarSpeedMultiplier(u);
+    R.rCost[r] = _resolveUnitAstarTileCost(u);
+    R.rRD[r] = Math.ceil(range) + 1;
+    R.rRA[r] = Math.ceil(Math.max(TILE, vis * TILE) / TILE) + 1;
+    R.rRK[r] = Math.min(255, Math.floor(range));
+    R.rLzW[r] = Math.floor(range) === Math.ceil(range) ? 1 : 0;
+    R.rCb[r] = Math.max(TILE, vis * TILE);
+    R.rCd[r] = pc.attackCooldown; R.rDmg[r] = pc.attackDamage; R.rVis[r] = vis;
+    R.rChs[r] = Math.max(TILE * 0.6, Number(pc.speed) || 1);
+    // (getEntityEffectiveVisibilityRangeArea of a unit whose effective
+    // tables are pc.)
+    const va = Number.isFinite(pc.visionRangeArea) ? pc.visionRangeArea : Number.isFinite(pc.visionRange) ? pc.visionRange / AREA_UNIT_TILE_EQUIVALENT : NaN;
+    R.rVsA[r] = !Number.isFinite(va) || typeof VIS_COVER_MAX_STEPS !== 'number' ? -2 : va > 0 ? Math.min(VIS_COVER_MAX_STEPS, Math.floor(va)) : -1;
+    // One cache line per shared level/stat row. Rust can broadcast a
+    // row for equal SIMD lanes instead of streaming per-unit copies.
+    _effHot.set([R.rSpd[r], R.rCost[r], R.rChs[r], R.rCb[r], R.rCd[r], R.rDmg[r], R.rVis[r], R.rRD[r], R.rRA[r], R.rRK[r], R.rVsA[r]], r * EFF_HOT_WIDTH);
+}
+function effSharedTablesChanged(owner, unitType) {
+    const levels = PRECOMPUTED_STATS_MAP_PLAYER[owner]?.unit?.[unitType];
+    if (!levels) return;
+    for (let r=0;r<_effRowN;r++) {
+        const m=_effRowMeta[r];
+        if (!m || m.owner!==owner || m.type!==unitType) continue;
+        const base=levels[m.bl], effective=levels[m.el];
+        if (!base || !effective) continue;
+        const next=clonePrecomputedWithBaseMaxEnergy(base,effective), pc=_effRowObj[r];
+        if (pc!==next) Object.assign(pc,next);
+        const u={owner,unitType,preComputed:pc,effectiveLevel:m.el,unitLevel:m.bl};
+        _effRowWrite(r,u,pc,_unitStatsVerOf(u));
+    }
 }
 
 // A unit's effective level from its effective stacks, sticky around the
@@ -1368,6 +1223,7 @@ function _effSticky(el, effS, last) {
 function _effStatsFullUnit(u, canUseSpatialCounts, chunkPx) {
     let baseStacks = getUnitStackCount(u);
     let baseLevel = stackCountToLevel(baseStacks);
+    const previousRow=u._us ? u._us.statRow[u._si] : -1;
     const c = u._us, ver = _unitStatsVerOf(u), behind = !!c && c.esVer[u._si] !== ver;
     if (c) c.esVer[u._si] = ver;
     let needsRefresh = behind || !Number.isFinite(u.baseLevel) || u.baseLevel !== baseLevel ||
@@ -1396,7 +1252,7 @@ function _effStatsFullUnit(u, canUseSpatialCounts, chunkPx) {
     u.effectiveLevel = _effSticky(stackCountToLevel(effStacks), effStacks, u._lastAppliedEffectiveLevel);
     let nextEffLevel = getUnitEffectiveLevel(u);
     if (needsRefresh || u._lastAppliedEffectiveLevel !== nextEffLevel) {
-        applyUnitEffectiveScaling(u, nextEffLevel);
+        applyUnitEffectiveScaling(u, nextEffLevel, previousRow);
         u._lastAppliedEffectiveLevel = nextEffLevel;
     }
 }

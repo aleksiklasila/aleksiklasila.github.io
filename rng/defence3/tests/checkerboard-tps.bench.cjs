@@ -10,31 +10,56 @@ const number = (key, fallback) => Number(process.argv.find(a => a.startsWith('--
 const count = number('units', 4000000), map = number('map', 1000);
 const ticks = number('ticks', 20), warmup = number('warmup', 5), group = number('group', 32);
 const helpers = number('helpers', 7), dk = number('dk', 1);
+const contactBudget=number('contact-budget',8);
+const sharedStats=number('shared-stats',1)!==0;
+const statLayout=process.argv.find(a=>a.startsWith('--stat-layout='))?.slice(14)||'soa';
 const referenceStorage=process.argv.includes('--reference-storage');
 const referenceKernel=process.argv.includes('--reference-kernel');
 const referenceCollect=process.argv.includes('--reference-collect');
+const kernelFile=process.argv.find(a=>a.startsWith('--wasm64='))?.slice(9);
+const shareNavigation=!process.argv.includes('--no-nav-sharing');
 const out=process.argv.find(a=>a.startsWith('--out='))?.slice(6) || path.join(__dirname,'test-runs/checkerboard-tps/latest.json');
 for (const v of [count, map, ticks, group, dk]) assert.ok(Number.isInteger(v) && v > 0);
 assert.ok(Number.isInteger(warmup) && warmup >= 0);
 if (helpers) globalThis.self = { crossOriginIsolated: true };
+const cachedLayout=process.argv.includes('--cached-layout');
+if(cachedLayout){
+ const base='tests/test-runs/collision-tps-20261020/';
+ process.env.DEFENCE_TEST_SOURCE_OVERRIDES=JSON.stringify(Object.fromEntries([
+ ['src/sim/sim_unit_state.js','cached-unit-state.js'],['src/things/unit.js','cached-unit.js'],
+ ['src/sim/sim_parallel.js','cached-parallel.js'],['src/things/things_utils.js','cached-things-utils.js'],
+ ['src/data/data_dynamic.js','cached-data-dynamic.js'],['src/data/data_state.js','cached-data-state.js'],
+ ['src/sim/sim_wasm_bin.js','cached-wasm32.js'],['src/sim/sim_wasm64_bin.js','cached-wasm64.js']
+ ].map(([a,b])=>[a,base+b])));
+}
+if(process.argv.includes('--cached-structures')) {
+ const base='tests/test-runs/structure-stats-20261020/';
+ process.env.DEFENCE_TEST_SOURCE_OVERRIDES=JSON.stringify(Object.fromEntries([
+ ['src/data/data_state.js','baseline-data-state.js'],['src/data/data_dynamic.js','baseline-data-dynamic.js'],
+ ['src/things/things_utils.js','baseline-things-utils.js'],['src/things/tower.js','baseline-tower.js'],['src/things/barrack.js','baseline-barrack.js']
+ ].map(([a,b])=>[a,base+b])));
+}
 const H = require('./net-harness.cjs');
 const controls = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': String(map), 'cfg-map-type': 'arena',
     'cfg-gold-count': '0', 'cfg-astar-mine-count': '0', 'cfg-full-vis': 'full',
     'cfg-max-pop': String(Math.ceil(count/2)), 'cfg-starting-energy': '1000000000000000', 'cfg-starting-astar': '1000000000000000' };
 const world = new H.World({ controls });
 const inst = world.spawn('checkerboard', { controls, simWorker: false });
+inst.eval('UNIT_SEPARATION_PAIR_BUDGET='+contactBudget+';if(typeof SIM_SHARED_HOT_STATS!=="undefined")SIM_SHARED_HOT_STATS='+sharedStats);
+inst.eval('if(typeof SIM_THING_STATS_LAYOUT!=="undefined")SIM_THING_STATS_LAYOUT='+JSON.stringify(statLayout));
 inst.scratch.now = () => performance.now();
 const setupStart = performance.now();
 let referenceKernelHash=null;
 const heapStats=()=>{const stats=inst.eval('simHeapStats()');if(referenceKernelHash)stats.hash=referenceKernelHash;return stats;};
 fs.mkdirSync(path.dirname(path.resolve(out)),{recursive:true});
 fs.writeFileSync(out+'.jsonl','');
-if(referenceKernel) {
-    const ctx={};require('node:vm').runInNewContext(fs.readFileSync(path.join(__dirname,'fixtures/checkerboard-kernels/wasm64.js'),'utf8')+';this.bin=SIM_WASM64_BIN;this.hash=SIM_WASM64_HASH;',ctx);
+if(referenceKernel||kernelFile) {
+    const ctx={};require('node:vm').runInNewContext(fs.readFileSync(kernelFile||path.join(__dirname,'fixtures/checkerboard-kernels/wasm64.js'),'utf8')+';this.bin=SIM_WASM64_BIN;this.hash=SIM_WASM64_HASH;',ctx);
     referenceKernelHash=ctx.hash;
     inst.scratch.referenceKernel=Buffer.from(ctx.bin,'base64');
     inst.eval('_simWasm64Bytes=()=>__scratch.referenceKernel');
 }
+if(!shareNavigation)inst.eval('_navShareBuild=()=>null');
 // Match production startup: helpers exist before bulk entity creation.
 if (helpers) {
     inst.scratch.Worker = require('./real-sim-helper.cjs');
@@ -89,6 +114,7 @@ inst.eval(`__scratch.phases={}; __scratch.phaseSelf={}; __scratch.phaseStack=[];
         'recalculateThingPrecomputedStats','updateAllPlayerVisibility','towersTick','projectilesBegin',
         'statusPrepassRun','separationStart','unitPassBegin','simMoveRun','combatScanRun',
         '_forEachUnitInTickOrder','unitHitsResolve','visCoverHoldEnd','unitRetirePrepare',
+        'simParallelRun','simParallelBackgroundWait','_simMoveSepListed','_simMoveChargeSteps',
         'simUnitStateCollect','runUnitSeparationPass','spawnerStructuresTick','processGlobalSpawnerQueue']) {
         const original=eval(name);
         const wrapped=function(){
@@ -97,13 +123,15 @@ inst.eval(`__scratch.phases={}; __scratch.phaseSelf={}; __scratch.phaseStack=[];
             try{return original.apply(this,arguments);}
             finally{
                 const dt=__scratch.now()-frame.start;stack.pop();
-                __scratch.phases[name]=(__scratch.phases[name]||0)+dt;
-                __scratch.phaseSelf[name]=(__scratch.phaseSelf[name]||0)+dt-frame.child;
+                const label=name==='simParallelRun'?name+':'+arguments[0]:name;
+                __scratch.phases[label]=(__scratch.phases[label]||0)+dt;
+                __scratch.phaseSelf[label]=(__scratch.phaseSelf[label]||0)+dt-frame.child;
                 if(stack.length)stack[stack.length-1].child+=dt;
             }
         };
         eval(name+'=wrapped');
     }`);
+const bindings=()=>inst.eval('Object.entries(_simParReg).filter(([k,v])=>ArrayBuffer.isView(v)).map(([name,v])=>({name,type:v.constructor.name,bytes:v.byteLength})).sort((a,b)=>b.bytes-a.bytes)');
 const setup={ ...inst.scratch.initial, ms: performance.now()-setupStart, heap:heapStats(), memory:process.memoryUsage() };
 console.error('setup', JSON.stringify(setup));
 async function main() {
@@ -112,14 +140,22 @@ async function main() {
     const session = new (require('node:inspector').Session)();
     const post=(method,params={})=>new Promise((resolve,reject)=>session.post(method,params,(e,r)=>e?reject(e):resolve(r)));
     if(process.argv.includes('--profile')) {session.connect();await post('Profiler.enable');await post('Profiler.start');}
+    let pmc=null;
+    if(process.argv.includes('--wpr')){
+        const result=cp.spawnSync('wpr',['-start','tests/memory-traffic.wprp!Traffic','-filemode','-recordtempto',path.dirname(path.resolve(out))],{encoding:'utf8',windowsHide:true});
+        pmc={status:result.status,output:(result.stdout||'')+(result.stderr||'')};
+        if(result.status!==0)throw Error('Hardware counters unavailable: '+pmc.output);
+    }
     inst.scratch.measuring=true;
-    const samples=[], timeline=[];
+    const samples=[], timeline=[], resourcesBefore=process.resourceUsage(), measuredStart=Date.now();
     for(let t=0;t<ticks;t++) {
         const a=performance.now();inst.eval('gameTick();currentTick++');const ms=performance.now()-a;samples.push(ms);
-        const row={tick:t+1,ms,units:inst.eval('units.length'),memory:process.memoryUsage(),freeBytes:require('node:os').freemem(),heap:heapStats()};
+        const row={at:Date.now(),tick:t+1,ms,units:inst.eval('units.length'),memory:process.memoryUsage(),resourceUsage:process.resourceUsage(),freeBytes:require('node:os').freemem(),heap:heapStats()};
         timeline.push(row);console.error('tick',t+1,ms.toFixed(1));
         fs.appendFileSync(out+'.jsonl',JSON.stringify(row)+'\n');
     }
+    const measuredEnd=Date.now();
+    if(pmc){const result=cp.spawnSync('wpr',['-stop',out+'.etl'],{encoding:'utf8',windowsHide:true});pmc.stopStatus=result.status;if(result.status!==0)throw Error(result.stdout+result.stderr);}
     let top;
     if(process.argv.includes('--profile')) {
         const {profile}=await post('Profiler.stop');session.disconnect();fs.writeFileSync(out+'.cpuprofile',JSON.stringify(profile));
@@ -133,9 +169,10 @@ async function main() {
     const mean=samples.reduce((a,b)=>a+b,0)/ticks;
     const result={node:process.version,cpu:require('node:os').cpus()[0].model,initial:inst.scratch.initial,
         final:inst.eval('(()=>{const parts={};const hash=computeLockstepStateHashFast(gameTime,parts);return {units:units.length,towers:towers.length,tick:gameTime,hash,parts};})()'),
-        ticks,warmup,warmupMs,group,helpers,dk,referenceStorage,referenceKernel,referenceCollect,tickMs:{mean,p50:samples[ticks>>1],p95:samples[Math.min(ticks-1,Math.floor(ticks*.95))]},
+        ticks,warmup,warmupMs,measuredStart,measuredEnd,pmc,group,helpers,dk,contactBudget,sharedStats,cachedLayout,statLayout,referenceStorage,referenceKernel,referenceCollect,kernelFile,shareNavigation,tickMs:{mean,p50:samples[ticks>>1],p95:samples[Math.min(ticks-1,Math.floor(ticks*.95))]},
         tps:1000/mean,setup,timeline,phases:Object.fromEntries(Object.entries(inst.scratch.phases).map(([k,v])=>[k,v/ticks]).sort((a,b)=>b[1]-a[1])),
-        phaseSelf:Object.fromEntries(Object.entries(inst.scratch.phaseSelf).map(([k,v])=>[k,v/ticks]).sort((a,b)=>b[1]-a[1])),top,memory:process.memoryUsage()};
+        phaseSelf:Object.fromEntries(Object.entries(inst.scratch.phaseSelf).map(([k,v])=>[k,v/ticks]).sort((a,b)=>b[1]-a[1])),top,bindings:bindings(),
+        resourceUsage:{before:resourcesBefore,after:process.resourceUsage()},statStorage:inst.eval('SIM_UNIT_SCHEMA.mvSpd ? "instance-cache" : "shared-row-only"'),referenceColumns:inst.eval('Object.entries(_simUnitState.columns).filter(([k,v])=>v instanceof SimRefColumn).map(([name,v])=>({name,slots:v.length,bytes:v.data?v.data.byteLength:undefined,unique:v.pool?v.pool.values.length:undefined,pages:v.pages.filter(Boolean).length,values:v.pages.reduce((n,p)=>n+(p?p.used:0),0)}))'),memory:process.memoryUsage()};
     fs.writeFileSync(out,JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
 }
 main().then(()=>process.exit(0),e=>{

@@ -313,13 +313,8 @@ class Tower {
         this.effectiveLevel = this.level;
         this.isStacking = false;
         this.stackingWorkDone = 0;
-        this.baseStats = BASE_CARD_TYPES[type];
-        this.preComputedBase = null;
-        this.preComputedEffective = null;
-        this.preComputed = null;
-        this.currentStats = this.baseStats;
 
-        // ENERGY
+// ENERGY
         let baseEnergy = calculateItemStats(type, this.level, owner).maxEnergy;
         this.maxEnergy = baseEnergy;
         this.energy = baseEnergy;
@@ -349,13 +344,7 @@ class Tower {
     }
 
     updateStats() {
-        let effLevel = getThingEffectiveLevel(this);
-        this.preComputedBase = calculateItemStats(this.type, Math.max(1, this.level), this.owner);
-        this.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(this.preComputedBase, calculateItemStats(this.type, effLevel, this.owner), false);
-        this.preComputed = this.preComputedBase;
-        this.currentStats = this.preComputedBase || this.baseStats;
-
-        let newmaxEnergy = Number(this.preComputedBase && this.preComputedBase.maxEnergy);
+let newmaxEnergy = Number(this.preComputedBase && this.preComputedBase.maxEnergy);
         if (!Number.isFinite(newmaxEnergy)) newmaxEnergy = this.maxEnergy || 1;
         newmaxEnergy = Math.max(1, Math.floor(newmaxEnergy));
         if (this.isUpgrading && this.upgrademaxEnergy > 0) {

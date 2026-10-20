@@ -1,0 +1,178 @@
+[
+  {
+    "mode": "0",
+    "file": "building-research-keys.test.cjs",
+    "status": 0,
+    "output": "PASS: building/floor research updates shared AoS/SoA tables without touching instances; cached columns and sweep are removed; unique overrides survive\n",
+    "timedOut": false,
+    "elapsedMs": 4002
+  },
+  {
+    "mode": "0",
+    "file": "floor-trap-kernel.test.cjs",
+    "status": 0,
+    "output": "trap statuses [[\"water_puddle\",[\"sand\"],[\"sand\"]],[\"ice_patch\",[\"poison_puddle\"],[\"poison_puddle\"]]] Unit.update calls on trap tiles 0 columns walked [10,9,10,10,10]\nPASS: floor traps applied by the movement kernel\n",
+    "timedOut": false,
+    "elapsedMs": 2242
+  },
+  {
+    "mode": "0",
+    "file": "boost.test.cjs",
+    "status": 0,
+    "output": "PASS: boosts shift a thing's stats up its tables (energy and star apart), debt switches them off and scales nothing, in-place equals full; 2 peers healthy.\n",
+    "timedOut": false,
+    "elapsedMs": 8462
+  },
+  {
+    "mode": "0",
+    "file": "deltatick-multiplayer.test.cjs",
+    "status": 0,
+    "output": "  405 steps compared; host at 2975 base ticks / 406 steps, guest at 2970 / 405\n  after the repair: 94 steps compared\nPASS: the step size goes with the bundles; peers agree at every size, and after a repair.\n",
+    "timedOut": false,
+    "elapsedMs": 8456
+  },
+  {
+    "mode": "0",
+    "file": "movement-sleep.test.cjs",
+    "status": 0,
+    "output": "PASS: movement sleep and force fallbacks match the original kernel at dk 1/4/20 (18 chunks)\n",
+    "timedOut": false,
+    "elapsedMs": 4736
+  },
+  {
+    "mode": "0",
+    "file": "reference-columns.test.cjs",
+    "status": 0,
+    "output": "PASS: paged reference defaults, values, page release, growth and compaction match dense arrays\nPASS: shared reference handles widen, preserve identity, grow and compact\n",
+    "timedOut": false,
+    "elapsedMs": 417
+  },
+  {
+    "mode": "0",
+    "file": "research-rebase-partial.test.cjs",
+    "status": 0,
+    "output": "PASS: 600 queue operations ({\"queueResearch:insertAt\":117,\"queueResearch\":102,\"moveResearch\":183,\"dequeueResearch\":129,\"reorderResearch\":69}), 135 levels researched: the partial rebase equals a full one after each\n",
+    "timedOut": false,
+    "elapsedMs": 2594
+  },
+  {
+    "mode": "0",
+    "file": "shared-stat-rows.test.cjs",
+    "status": 0,
+    "output": "PASS: shared stat publication updates existing handles without accessing units or owners {\n  before: 2.6454646587371826,\n  after: 2.9284512996673584,\n  pc: 2.9284512996673584,\n  sameHandle: true,\n  cacheRemoved: true,\n  unchangedMovePreserved: true,\n  stableAfterRefresh: true,\n  rowsBefore: 10,\n  rowsAfter: 10\n}\n",
+    "timedOut": false,
+    "elapsedMs": 2073
+  },
+  {
+    "mode": "0",
+    "file": "shared-unit-state.test.cjs",
+    "status": 0,
+    "output": "PASS: shared unit growth, Float32 precision, stale references, slot reuse, snapshot restore; scalar frame oracle: { compared: 1334970, units: 1872, capacity: 4096 }\n",
+    "timedOut": false,
+    "elapsedMs": 3089
+  },
+  {
+    "mode": "0",
+    "file": "shrine.test.cjs",
+    "status": 0,
+    "output": "PASS: shrines {\"host\":[{\"shrine\":641.822265625,\"drain\":3,\"fixed\":657226},{\"shrine\":1099.00390625,\"drain\":2,\"fixed\":1125380}],\"lastSample\":{\"0\":621.240234375,\"1\":1039.263671875},\"rate\":1,\"mult\":0.009999999776482582}\n",
+    "timedOut": false,
+    "elapsedMs": 8973
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-snapshot.test.cjs",
+    "status": 0,
+    "output": "PASS: snapshots\n  6 restores from differing pre-states evolve bit-identically for 12 ticks; 102 KB (462 B/entity); unit shapes 1/1/1/1 -> 1/1/1/1\n  gzip transport: delta then full patch (15 KB -> 3 KB), no pause\n  guest without DecompressionStream gets JSON (start and patches); others gzip\n",
+    "timedOut": false,
+    "elapsedMs": 41393
+  },
+  {
+    "mode": "0",
+    "file": "source-loading.test.cjs",
+    "status": 0,
+    "output": "PASS: 56 local scripts parse; 2D renderer exports its startup and drawing functions.\n",
+    "timedOut": false,
+    "elapsedMs": 348
+  },
+  {
+    "mode": "0",
+    "file": "spawner-queue-performance.test.cjs",
+    "status": 0,
+    "output": "PASS: 120 scheduler replays; ready orders from payments, full queues, caps, failures and the 256 limit; 1000 ready buildings: 223360 -> 512 readiness checks.\n",
+    "timedOut": false,
+    "elapsedMs": 579
+  },
+  {
+    "mode": "0",
+    "file": "structure-table.test.cjs",
+    "status": 0,
+    "output": "placed {\"found\":{\"gx\":8,\"gy\":4},\"out\":[[\"pistol\",true,8,4],[\"barrack_norm\",true,9,4],[\"lava\",true,10,4],[\"sand\",true,11,4]],\"mines\":14,\"floorClass\":\"FloorItem\"}\nstructures 23\nPASS: structure table\n",
+    "timedOut": false,
+    "elapsedMs": 4106
+  },
+  {
+    "mode": "0",
+    "file": "structure-targeting.test.cjs",
+    "status": 0,
+    "output": "PASS: +-0.3 tile source windows, structure threat order (turret > trap > building), floor-target projectiles (9 ticks).\n",
+    "timedOut": false,
+    "elapsedMs": 211
+  },
+  {
+    "mode": "0",
+    "file": "team-watch-effects.test.cjs",
+    "status": 0,
+    "output": "PASS: watch effects are team-exclusive, replaceable, deterministic, and granted by scouts.\n",
+    "timedOut": false,
+    "elapsedMs": 164
+  },
+  {
+    "mode": "0",
+    "file": "unit-retirement.test.cjs",
+    "status": 0,
+    "output": "PASS: sparse retirement across block boundaries keeps the survivors, selections, and slot mapping.\n",
+    "timedOut": false,
+    "elapsedMs": 2610
+  },
+  {
+    "mode": "0",
+    "file": "solo-snapshot.test.cjs",
+    "status": 0,
+    "output": "PASS portable scene page: locations, orders, resources, repeated imports and continuation\nPASS portable scene worker: locations, orders, resources, repeated imports and continuation\n",
+    "timedOut": false,
+    "elapsedMs": 35337
+  },
+  {
+    "mode": "0",
+    "file": "worker-fallback-upgrade.test.cjs",
+    "status": 0,
+    "output": "PASS worker fallback: upgraded paths, unreachable waits, stale timeout\n",
+    "timedOut": false,
+    "elapsedMs": 162
+  },
+  {
+    "mode": "0",
+    "file": "work-snapshot.test.cjs",
+    "status": 0,
+    "output": "PASS portable work orders: production, salvage and research (page)\nPASS portable work orders: production, salvage and research (worker)\n",
+    "timedOut": false,
+    "elapsedMs": 14033
+  },
+  {
+    "mode": "0",
+    "file": "worker-walk.test.cjs",
+    "status": 0,
+    "output": "workers 6 builder,healer,collector,astar_collector,salvager,researcher\nworker states seen astar_collector:IDLE astar_collector:MOVING_TO astar_collector:RETURNING astar_collector:delivered builder:IDLE builder:MOVING_TO_BUILD builder:RETURNING_FOR_GOLD builder:spent collector:IDLE collector:MOVING_TO collector:RETURNING collector:delivered healer:IDLE healer:MOVING_TO_HEAL healer:RETURNING_FOR_GOLD healer:spent researcher:IDLE researcher:MOVING_TO_RESEARCH salvager:IDLE salvager:MOVING_TO salvager:RETURNING salvager:delivered\nwork {\"before\":{\"build\":3618,\"sites\":0,\"research\":0},\"after\":{\"build\":4148,\"sites\":1,\"research\":1000121},\"end\":{\"site\":{\"uc\":true,\"energy\":1},\"salvaged\":true}}\nmine cluster at [42,36] collector on it true middle gold 4962\nPASS: worker walk and work builder, healer, collector, astar_collector, salvager, researcher\n",
+    "timedOut": false,
+    "elapsedMs": 20979
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-action-fuzz.test.cjs",
+    "status": 0,
+    "output": "PASS: action fuzz\n  targeted: 2 of the host's buildings and 3 units attacked with every command kind: untouched\n  30s of malformed commands from one guest: no errors, no divergence, 20.0 TPS\n",
+    "timedOut": false,
+    "elapsedMs": 91970
+  }
+]

@@ -789,9 +789,9 @@ function structListRemove(list, e) {
 // (.claude/struct_field_census.cjs).
 const _STF_BUILDING = 'n:_stT n:_li n:_ow b:_uc n:_en n:gx n:gy n:x n:y r:type n:stacks n:manualStacks n:effectiveStacks n:level n:effectiveLevel '
     + 'n:potentialEffectiveLevel b:isStacking n:stackingWorkDone n:maxEnergy b:markedForSalvage b:autoUpgradeEnabled b:buildEnabled b:isUpgrading '
-    + 'n:_adjSigK n:_adjSigE n:_adjSigG n:_adjSigM n:effectiveGroupSize n:effectiveAreaMult r:preComputedBase r:preComputedEffective r:preComputed '
+    + 'n:effectiveGroupSize n:effectiveAreaMult r:preComputedBase r:preComputedEffective r:preComputed '
     + 'r:preComputedPotential n:burning n:burnTickDamage n:poisoned n:poisonTickDamage n:frozen n:iceTickDamage n:wet n:sandy n:watched n:watchedByTeam '
-    + 'r:_levelTextLabel n:_vsGen n:_vsR n:_vsA n:_vsP1 n:_vsP2 n:_vsListId b:autoStackEnabled r:_ambientSoundTicks n:_thingStatsRefreshStamp';
+    + 'r:_levelTextLabel n:_vsGen n:_vsR n:_vsA n:_vsP1 n:_vsP2 n:_vsListId b:autoStackEnabled r:_ambientSoundTicks';
 const _STF_SPAWNER = 'n:_spt b:queueEnabled r:spawnQueue r:rallyX r:rallyY r:rallyTargetUnitId n:spawnCooldown r:_spawnReadyOrder r:_rallyLastSeenX r:_rallyLastSeenY b:_pendingRallyDetach';
 const _STF_MINE = 'n:_stT n:_li n:_mv n:gx n:gy n:x n:y';
 const STRUCT_TABLE_FIELDS = {
@@ -804,23 +804,73 @@ const STRUCT_TABLE_FIELDS = {
     GoldMine: _STF_MINE + ' n:maxGold', AstarMine: _STF_MINE + ' n:maxAstar'
 };
 const _sTables = new Map();
+const STRUCT_SHARED_REFS = new Set(['type','unitType']);
+// Only genuinely unique overrides have instance storage. Ordinary stats
+// resolve owner/type/level directly into shared flat-table views.
+const STRUCT_DERIVED_STATS=new Set(['preComputedBase','preComputedEffective','preComputed','preComputedPotential','baseStats','currentStats','maxEnergy','damage','spawnCooldown','x','y']);
+const _sBuildingStatKeys=new Map();
+function _sThingStatEntry(e,which='base') {
+    const type=e.type;if(!type)return undefined;
+    const raw=type==='barrack'?'barrack_'+e.unitType:type;
+    let key=_sBuildingStatKeys.get(raw);
+    if(key===undefined){key=normalizeBuildingResearchKey(raw);_sBuildingStatKeys.set(raw,key);}
+    const base=getThingBaseLevel(e);
+    let level=which==='effective'?getThingEffectiveLevel(e,base):which==='potential'?getThingPotentialLevel(e,getThingEffectiveLevel(e,base)):base;
+    level=Math.max(1,clampThingLevel(level));
+    const owner=Number.isFinite(e.owner)?e.owner:localPlayerId;
+    if(owner>=0){const direct=PRECOMPUTED_STATS_MAP_PLAYER[owner]?.building?.[key]?.[level];return direct || calculateItemStats(key,level,owner);}
+    const normalized=normalizeBuildingResearchKey(key),table=_thingStatTables.get('-1|building|'+normalized);
+    return table?.entries[level] || _getBuildingPlayerPrecomputedEntry(-1,normalized,level);
+}
+function _sDerivedValue(e,name) {
+    if(name==='x'||name==='y'){const q=name==='x'?e.gx:e.gy;return Number.isFinite(q)?q*TILE+TILE*.5:undefined;}
+    if(name==='baseStats')return BASE_CARD_TYPES[e.type];
+    if(name==='preComputedEffective')return _sThingStatEntry(e,'effective');
+    if(name==='preComputedPotential')return _sThingStatEntry(e,'potential');
+    if(name==='preComputedBase'||name==='preComputed'||name==='currentStats')return _sThingStatEntry(e);
+    if(name==='spawnCooldown'){
+        if(!e.type)return undefined;
+        if(e.type==='barrack'||_SPAWN_COOLDOWN_ARGS[e.type])return spawnerCooldownTicks(e);
+        return undefined;
+    }
+    const st=_sThingStatEntry(e);if(!st)return undefined;
+    if(name==='maxEnergy'){
+        if(e.isUpgrading && e.upgrademaxEnergy>0)return Math.max(1,Math.floor(e.upgrademaxEnergy));
+        return Math.max(1,Math.floor(Number(st.maxEnergy)||1));
+    }
+    if(name==='damage')return Number(_sThingStatEntry(e,'effective').damage)||0;
+}
+function _sDerivedSet(T,e,name,v) {
+    const map=T.unique[name];
+    if(v==null || Number.isNaN(v) || (_thingStatViews.has(v)) || (name==='currentStats'&&v===BASE_CARD_TYPES[e.type])){map.delete(e._sr);return;}
+    const normal=_sDerivedValue(e,name);
+    if(Object.is(v,normal))map.delete(e._sr);else map.set(e._sr,v);
+}
+function _sDerivedReconcile(T,e) {
+    for(const name of T.derived){const map=T.unique[name];if(!map.size)continue;const v=map.get(e._sr);if(v!==undefined&&Object.is(v,_sDerivedValue(e,name)))map.delete(e._sr);}
+}
 // Class C's table (made, and its accessors defined, at its first row).
 function _sTableOf(C) {
     let T = _sTables.get(C);
     if (T) return T;
     const spec = STRUCT_TABLE_FIELDS[C.name];
     if (!spec) return null;
-    const fields = spec.split(' ').map(f => { const [kind, name] = f.split(':'); return { kind, name, col: 'c_' + name }; });
-    T = { C, fields, cap: 0, n: 0, keys: fields.filter(f => f.name !== '_stT' && f.name !== '_li').map(f => f.name) };
+    const allFields = spec.split(' ').map(f => { const [kind, name] = f.split(':'); return { kind, name, shared:kind==='r' && STRUCT_SHARED_REFS.has(name), col: 'c_' + name }; });
+    const derived=allFields.filter(f=>STRUCT_DERIVED_STATS.has(f.name)).map(f=>f.name);
+    const fields=allFields.filter(f=>!STRUCT_DERIVED_STATS.has(f.name));
+    T = { C, fields, derived, unique:Object.fromEntries(derived.map(k=>[k,new Map()])), cap: 0, n: 0, keys: fields.filter(f => f.name !== '_stT' && f.name !== '_li').map(f => f.name) };
     for (const f of fields) T[f.col] = null;
     _sTables.set(C, T);
     _sTableGrow(T, 1024);
+    for(const name of derived)Object.defineProperty(C.prototype,name,{configurable:true,get(){const map=T.unique[name],v=map.size?map.get(this._sr):undefined;return v!==undefined?v:_sDerivedValue(this,name);},set(v){_sDerivedSet(T,this,name,v);}});
     for (const f of fields) {
-        const at = 'T.' + f.col + '[this._sr]';
-        const read = f.kind === 'n' ? 'let x = ' + at + '; return x === x ? x : undefined;' : f.kind === 'b' ? 'const x = ' + at + '; return x === 2 ? true : x === 1 ? false : undefined;' : 'return ' + at + ';';
-        const write = f.kind === 'n' ? at + ' = v === undefined ? NaN : v;' : f.kind === 'b' ? at + ' = v === undefined ? 0 : v ? 2 : 1;' : at + ' = v;';
+        const col='T.' + f.col;
+        const at = col + '[this._sr]';
+        const read = f.kind === 'n' ? 'let x = ' + at + '; return x === x ? x : undefined;' : f.kind === 'b' ? 'const x = ' + at + '; return x === 2 ? true : x === 1 ? false : undefined;' : 'return ' + (f.shared ? col+'.get(this._sr)' : at) + ';';
+        let write = f.kind === 'n' ? at + ' = v === undefined ? NaN : v;' : f.kind === 'b' ? at + ' = v === undefined ? 0 : v ? 2 : 1;' : f.shared ? col+'.set(this._sr,v);' : at + ' = v;';
+        if(['_ow','level','effectiveLevel','potentialEffectiveLevel','type','unitType'].includes(f.name))write+=' _sDerivedReconcile(T,this);';
         Object.defineProperty(C.prototype, f.name, { configurable: true, enumerable: false,
-            get: new Function('T', 'return function () { ' + read + ' };')(T), set: new Function('T', 'return function (v) { ' + write + ' };')(T) });
+            get: new Function('T', 'return function () { ' + read + ' };')(T), set: new Function('T','_sDerivedReconcile', 'return function (v) { ' + write + ' };')(T,_sDerivedReconcile) });
     }
     return T;
 }
@@ -828,7 +878,8 @@ function _sTableGrow(T, cap) {
     for (const f of T.fields) {
         const was = T[f.col];
         let a;
-        if (f.kind === 'r') { a = new Array(cap).fill(undefined); if (was) for (let i = 0; i < T.n; i++) a[i] = was[i]; }
+        if (f.shared) { a=_simRefGrow(was,cap,undefined,true); }
+        else if (f.kind === 'r') { a = new Array(cap).fill(undefined); if (was) for (let i = 0; i < T.n; i++) a[i] = was[i]; }
         else { a = f.kind === 'n' ? new Float64Array(cap).fill(NaN) : new Uint8Array(cap); if (was) a.set(was.subarray(0, T.n)); }
         T[f.col] = a;
     }
@@ -848,7 +899,8 @@ function _sRowTake(o) {
 function _sTablesReset() {
     for (const T of _sTables.values()) {
         T.n = 0;
-        for (const f of T.fields) if (f.kind === 'r') T[f.col].fill(undefined); else if (f.kind === 'n') T[f.col].fill(NaN); else T[f.col].fill(0);
+        for(const map of Object.values(T.unique))map.clear();
+        for (const f of T.fields) if (f.shared) T[f.col]=new SimSharedColumn(T.cap); else if (f.kind === 'r') T[f.col].fill(undefined); else if (f.kind === 'n') T[f.col].fill(NaN); else T[f.col].fill(0);
     }
 }
 // The snapshot's keys of a tabled structure: its fields that hold a value
@@ -858,6 +910,7 @@ function _sTableKeys(e) {
     if (!T || e._sr === undefined) return null;
     const out = [];
     for (const k of T.keys) if (e[k] !== undefined) out.push(k);
+    for(const name of T.derived)if(T.unique[name].has(e._sr))out.push(name);
     for (const k of Object.keys(e)) out.push(k);
     return out;
 }

@@ -871,7 +871,6 @@ function _gameTickBody() {
     // statuses, removals and the players' research (spawnerStructuresTick).
     spawnerStructuresTick();
     // (Buildings behind their owner's research: a TICK_RATE-th a tick.)
-    if (typeof buildingResearchSweep === 'function') buildingResearchSweep();
 
     processGlobalSpawnerQueue();
 
@@ -3316,7 +3315,7 @@ function _ordKeys() {
     return _ordK;
 }
 // (A digest field set to v, its term tv: the digest's change.)
-function _ordSet(a, s, key, v, tv) { const o = a[s]; if (o === v) return 0; a[s] = v; return (tv - _simHTerm(key, o)) | 0; }
+function _ordSet(a, s, key, v, tv) { const o = a.set(s, v); if (o === v) return 0; return (tv - _simHTerm(key, o)) | 0; }
 // A move order's first writes to a unit of the columns (no worker, so its
 // command is the order's), as targetUnit = null ... _pendingPathTarget =
 // null, pathIsFallbackAstar = false make them. Its route key is set with
@@ -3372,15 +3371,15 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
             const c = u._us, s = u._si;
             // (A unit of the columns, no worker: the setters' writes below, as
             // they make them, straight to its columns.)
-            if (K && c && !c.jr__ws[s]) {
-                const o = c.oc__routeKey[s];
-                if (o !== NAV_ROUTE_KEY) { c.oc__routeKey[s] = NAV_ROUTE_KEY; c.hObj[s] = (c.hObj[s] + tRk - _simHTerm(K.rk, o)) | 0; }
+            if (K && c && !c.jr__ws.get(s)) {
+                const o = c.oc__routeKey.get(s);
+                if (o !== NAV_ROUTE_KEY) { c.oc__routeKey.set(s, NAV_ROUTE_KEY); c.hObj[s] = (c.hObj[s] + tRk - _simHTerm(K.rk, o)) | 0; }
                 c.rtEnd[s] = destKey; c.nvProf[s] = profile; c.j__navReady[s] = ready;
                 if (c.pathIndex[s] !== 0) { c.mvOn[s] = 0; c.pathIndex[s] = 0; }
                 const at = Math.floor(c.y[s] * 0.125 / TILE) * GRID_W + Math.floor(c.x[s] * 0.125 / TILE) === destKey;
                 c.nvPK[s] = at ? -1 : pk;
                 simUnitPathRelease(c, s);
-                c.jr__path[s] = at ? null : navPath;
+                c.jr__path.set(s, at ? null : navPath);
                 c.mvOn[s] = 0; c.mvCD[s] = -1;
                 c.j__routeSegEnd[s] = at ? -1 : destKey;
                 c.mvNavLD[s] = group && !at ? _ordNavLD(c, s, destKey) : -1;
@@ -3445,7 +3444,7 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
         // case): what the setters below write, straight to its columns, its
         // digest moved once (~25 accessor calls a unit were most of an
         // order's cost).
-        if (K && c && c.owner[s] === playerId && c.dead[s] !== 1 && !c.jr__ws[s] && !c.oc_holdPosition[s] && c.spEpoch[s] === spatialEpoch) {
+        if (K && c && c.owner[s] === playerId && c.dead[s] !== 1 && !c.jr__ws.get(s) && !c.oc_holdPosition.get(s) && c.spEpoch[s] === spatialEpoch) {
             _ordClearFast(c, s, K, cmd, amGx, amGy, tAmx, tAmy, targetPos, tTp);
             const ugx = Math.floor(c.x[s] * 0.125 / TILE), ugy = Math.floor(c.y[s] * 0.125 / TILE);
             const profile = navProfileOf(u);

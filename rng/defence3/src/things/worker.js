@@ -2713,7 +2713,7 @@ function _setWorkerTarget(unit, target, targetType = null) {
 }
 
 function _clearWorkerTarget(unit, reason = null) {
-    if (!unit) return;
+    if (!unit || (!unit.workerType && unit.workerTarget == null)) return;
     if (unit.workerTarget && unit.workerType) { const w = unit.workerTarget; workerWorkChanged(unit.owner, unit.workerType, Number.isFinite(w.gx) ? w.gx : Math.floor((w.x || 0) / TILE), Number.isFinite(w.gy) ? w.gy : Math.floor((w.y || 0) / TILE)); }
     if (unit.workerState === 'RETURNING' || unit.workerState === 'RETURNING_ASTAR' || unit.workerState === 'RETURNING_FOR_GOLD') {
         let allowed = reason === 'manual_rally_change'

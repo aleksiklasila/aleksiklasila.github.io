@@ -530,6 +530,7 @@ struct PairOut {
     fy_out: *mut i32,
     // (A resting friend's share of the closing response against a mover.)
     yield_: f64,
+    budget: u32,
 }
 
 /// The exact test of entry q against p and both sides' pushes (the JS
@@ -575,20 +576,32 @@ unsafe fn pair_exact(o: &PairOut, p: &mut PairP, q: usize) {
         // A held crowd needs only its geometric correction. Avoid the
         // velocity/skin/closing response calculations and their divisions;
         // neither side can contribute closing resistance or shared flow.
+        let share = if q_part != 0 { o.both } else { o.one };
+        let f = pressure * share * o.qscale;
+        let push = f64x2_mul(f64x2(npx, npy), f64x2_splat(f));
+        let base = f64x2_floor(push);
+        let frac = f64x2_sub(push, base);
+        let rounded = f64x2_add(base, v128_and(f64x2_ge(frac, f64x2_splat(0.5)), f64x2_splat(1.0)));
         if p.p_part != 0 {
-            let share = if q_part != 0 { o.both } else { o.one };
-            let f = pressure * share * o.qscale;
-            p.acc_px += js_round(npx * f);
-            p.acc_py += js_round(npy * f);
+            p.acc_px += f64x2_extract_lane::<0>(rounded);
+            p.acc_py += f64x2_extract_lane::<1>(rounded);
             if overlap > p.acc_ov { p.acc_ov = overlap; }
             p.acc_hit += 1;
         }
         if q_part != 0 {
-            let share = if p.p_part != 0 { o.both } else { o.one };
-            let f = pressure * share * o.qscale;
+            // round(-x) is -floor(x) minus one only above a half, while
+            // round(x) adds one at the half too. Reuse the paired floor
+            // for an ordinary two-sided contact, preserving ties exactly.
+            let qr = if p.p_part != 0 && d > 0.001 {
+                f64x2_sub(f64x2_neg(base), v128_and(f64x2_gt(push, f64x2_add(base, f64x2_splat(0.5))), f64x2_splat(1.0)))
+            } else {
+                let share = if p.p_part != 0 { o.both } else { o.one };
+                let f = pressure * share * o.qscale;
+                f64x2(js_round(nqx * f), js_round(nqy * f))
+            };
             let b = bq as usize;
-            wr(o.px_out, b, rd(o.px_out, b).wrapping_add(js_round(nqx * f) as i32));
-            wr(o.py_out, b, rd(o.py_out, b).wrapping_add(js_round(nqy * f) as i32));
+            wr(o.px_out, b, rd(o.px_out, b).wrapping_add(f64x2_extract_lane::<0>(qr) as i32));
+            wr(o.py_out, b, rd(o.py_out, b).wrapping_add(f64x2_extract_lane::<1>(qr) as i32));
             if overlap > rd(o.ov_out, b) { wr(o.ov_out, b, overlap); }
             wr(o.hit_out, b, rd(o.hit_out, b) + 1);
         }
@@ -653,6 +666,66 @@ unsafe fn pair_exact(o: &PairOut, p: &mut PairP, q: usize) {
     }
 }
 
+#[inline(always)]
+unsafe fn pair_sum4(v: v128) -> i32 {
+    let v = i32x4_add(v, i32x4_shuffle::<2, 3, 0, 1>(v, v));
+    i32x4_extract_lane::<0>(i32x4_add(v, i32x4_shuffle::<1, 0, 3, 2>(v, v)))
+}
+
+/// Resting contacts in all four f32 lanes, directly from the broad phase's
+/// geometry. Integer forces are still accumulated in the same output
+/// columns. This deliberately rounds contact geometry to f32; moving and
+/// exceptional contacts retain the general response.
+#[inline(always)]
+unsafe fn pair_still4(o: &PairOut, p: &mut PairP, q: usize, bits: u32,
+    dx: v128, dy: v128, d2: v128, md: v128, meta: v128) -> u32 {
+    let zero = i32x4_splat(0);
+    let one = f32x4_splat(1.0);
+    let half = f32x4_splat(0.5);
+    let d = f32x4_sqrt(d2);
+    let ord = v128_load(o.ord.add(q) as *const v128);
+    let normal = v128_and(v128_and(f32x4_gt(d, f32x4_splat(0.001)), f32x4_lt(d2, f32x4_mul(md, md))), i32x4_ge(ord, zero));
+    let valid = bits & i32x4_bitmask(normal) as u32;
+    if valid == 0 { return 0; }
+    let mask = i32x4_ne(v128_and(i32x4_splat(valid as i32), i32x4(1, 2, 4, 8)), zero);
+    let part = i32x4_ne(v128_and(meta, i32x4_splat(65536)), zero);
+    let overlap = f32x4_sub(md, d);
+    let f = f32x4_mul(f32x4_mul(overlap, v128_bitselect(f32x4_splat(o.both as f32), f32x4_splat(o.one as f32), part)), f32x4_splat(o.qscale as f32));
+    let x = f32x4_mul(f32x4_div(f32x4_neg(dx), d), f);
+    let y = f32x4_mul(f32x4_div(f32x4_neg(dy), d), f);
+    let bx = f32x4_floor(x);
+    let by = f32x4_floor(y);
+    let px = v128_and(i32x4_trunc_sat_f32x4(f32x4_add(bx, v128_and(f32x4_ge(f32x4_sub(x, bx), half), one))), mask);
+    let py = v128_and(i32x4_trunc_sat_f32x4(f32x4_add(by, v128_and(f32x4_ge(f32x4_sub(y, by), half), one))), mask);
+    p.acc_px += pair_sum4(px) as f64;
+    p.acc_py += pair_sum4(py) as f64;
+    p.acc_hit += valid.count_ones();
+    let ov = v128_and(overlap, mask);
+    let ov = f32x4_max(ov, i32x4_shuffle::<2, 3, 0, 1>(ov, ov));
+    let ov = f32x4_extract_lane::<0>(f32x4_max(ov, i32x4_shuffle::<1, 0, 3, 2>(ov, ov))) as f64;
+    if ov > p.acc_ov { p.acc_ov = ov; }
+    let mut qb = valid & i32x4_bitmask(part) as u32;
+    if qb != 0 {
+        // q participates, so p's share was BOTH too. Reuse its floor for
+        // the opposite force, retaining half-up's different tie direction.
+        let qx = i32x4_trunc_sat_f32x4(f32x4_sub(f32x4_neg(bx), v128_and(f32x4_gt(x, f32x4_add(bx, half)), one)));
+        let qy = i32x4_trunc_sat_f32x4(f32x4_sub(f32x4_neg(by), v128_and(f32x4_gt(y, f32x4_add(by, half)), one)));
+        let xs: [i32; 4] = core::mem::transmute(qx);
+        let ys: [i32; 4] = core::mem::transmute(qy);
+        let ovs: [f32; 4] = core::mem::transmute(overlap);
+        let slots: [i32; 4] = core::mem::transmute(ord);
+        while qb != 0 {
+            let l = qb.trailing_zeros() as usize; qb &= qb - 1;
+            let b = slots[l] as usize;
+            wr(o.px_out, b, rd(o.px_out, b).wrapping_add(xs[l]));
+            wr(o.py_out, b, rd(o.py_out, b).wrapping_add(ys[l]));
+            if ovs[l] as f64 > rd(o.ov_out, b) { wr(o.ov_out, b, ovs[l] as f64); }
+            wr(o.hit_out, b, rd(o.hit_out, b) + 1);
+        }
+    }
+    valid
+}
+
 /// p's lanes for the four-at-a-time test.
 struct PairV {
     xp4: v128,
@@ -680,7 +753,7 @@ unsafe fn pair_run(o: &PairOut, p: &mut PairP, v: &PairV, s0: usize, s1: usize) 
     let zero = i32x4_splat(0);
     let iota = i32x4(0, 1, 2, 3);
     let mut q = s0;
-    while q < s1 {
+    while q < s1 && p.acc_hit < o.budget {
         // Reject duplicate pairs and other layers before loading positions
         // and radii. In a participating crowd, whole vectors preceding p
         // have already counted their pairs with p.
@@ -703,6 +776,10 @@ unsafe fn pair_run(o: &PairOut, p: &mut PairP, v: &PairV, s0: usize, s1: usize) 
         let md = f32x4_add(f32x4_add(v.rp4, r4), v128_andnot(padf, same));
         let lim2 = f32x4_mul(f32x4_mul(md, md), kmul);
         let mut bits = (i32x4_bitmask(v128_not(f32x4_ge(d2, lim2))) as u32) & lanes;
+        if bits != 0 && p.vx == 0.0 && p.vy == 0.0 {
+            let still = bits & i32x4_bitmask(i32x4_eq(v128_load(o.qv.add(q) as *const v128), zero)) as u32;
+            if still != 0 { bits &= !pair_still4(o, p, q, still, dx, dy, d2, md, m4); }
+        }
         while bits != 0 {
             let qi = q + bits.trailing_zeros() as usize;
             bits &= bits - 1;
@@ -750,6 +827,7 @@ pub unsafe extern "C" fn sep_pairs(
     yield_: f64,
     parity: i32,
     chunk: i32,
+    budget: i32,
 ) {
     let qv = waddr(qv) as *const i32;
     let cx_out = waddr(cx_out) as *mut i32;
@@ -779,7 +857,7 @@ pub unsafe extern "C" fn sep_pairs(
     let max_r = (far_any - pad) / 2.0;
     let lo = lower_bound(keys, 0, listed, row0 * cw);
     let hi = lower_bound(keys, lo, listed, row1 * cw);
-    let o = PairOut { ord, qx, qy, qr, meta, qid, px_out, py_out, ov_out, hit_out, pad, qscale, both, one, qv, cx_out, cy_out, fx_out, fy_out, yield_ };
+    let o = PairOut { ord, qx, qy, qr, meta, qid, px_out, py_out, ov_out, hit_out, pad, qscale, both, one, qv, cx_out, cy_out, fx_out, fy_out, yield_, budget: if budget > 0 { budget as u32 } else { u32::MAX } };
     // Where each chunk's entries start, per row the band's units may reach
     // (tab[r * stride + c], c = 0..=cw: c = cw the row's end), from the
     // counts per chunk. On the stack (64 KB); a bigger band (a wide map, a
@@ -895,7 +973,7 @@ pub unsafe extern "C" fn sep_pairs(
             r1 = ch - 1;
         }
         let mut ny = r0;
-        while ny <= r1 {
+        while ny <= r1 && st.acc_hit < o.budget {
             let (s, e) = if use_tab {
                 let t = tab.add((ny - trow0) as usize * stride);
                 (*t.add(c0 as usize) as usize, *t.add(c1 as usize + 1) as usize)

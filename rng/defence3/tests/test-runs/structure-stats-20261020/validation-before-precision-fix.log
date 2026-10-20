@@ -1,0 +1,23 @@
+0 building-research-keys.test.cjs PASS
+0 floor-trap-kernel.test.cjs PASS
+0 boost.test.cjs FAIL
+0 deltatick-multiplayer.test.cjs PASS
+0 movement-sleep.test.cjs PASS
+0 reference-columns.test.cjs PASS
+0 research-rebase-partial.test.cjs PASS
+0 shared-stat-rows.test.cjs PASS
+0 shared-unit-state.test.cjs PASS
+0 shrine.test.cjs PASS
+0 multiplayer-snapshot.test.cjs PASS
+0 source-loading.test.cjs PASS
+0 spawner-queue-performance.test.cjs PASS
+0 structure-table.test.cjs PASS
+0 structure-targeting.test.cjs PASS
+0 team-watch-effects.test.cjs PASS
+0 unit-retirement.test.cjs PASS
+0 solo-snapshot.test.cjs PASS
+0 worker-fallback-upgrade.test.cjs PASS
+0 work-snapshot.test.cjs PASS
+0 worker-walk.test.cjs PASS
+0 multiplayer-action-fuzz.test.cjs PASS
+21/22 passed

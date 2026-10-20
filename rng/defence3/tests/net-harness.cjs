@@ -10,11 +10,13 @@ const root = path.join(__dirname, '..');
 // Paired scale replays can load a historical implementation without checking
 // out files or touching the user's working tree.
 const baselineRef = process.env.DEFENCE_TEST_BASELINE;
-const readSource = baselineRef ? (() => {
+const baseReadSource = baselineRef ? (() => {
     const { execFileSync } = require('node:child_process');
     const prefix = execFileSync('git', ['rev-parse', '--show-prefix'], { cwd: root, encoding: 'utf8' }).trim();
     return file => execFileSync('git', ['show', baselineRef + ':' + prefix + file], { cwd: root, encoding: 'utf8', maxBuffer: 16e6 });
 })() : file => fs.readFileSync(path.join(root, file), 'utf8');
+const sourceOverrides=JSON.parse(process.env.DEFENCE_TEST_SOURCE_OVERRIDES||'{}');
+const readSource=file=>sourceOverrides[file]?fs.readFileSync(path.resolve(root,sourceOverrides[file]),'utf8'):baseReadSource(file);
 const html = readSource('index.html');
 const files = Array.from(html.matchAll(/<script src="\.\/(src\/[^"?]+)(?:\?[^" ]*)?"/g), m => m[1])
     .filter(f => !f.endsWith('bootstrap.js'));

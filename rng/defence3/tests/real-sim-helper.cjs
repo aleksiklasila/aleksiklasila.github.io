@@ -8,7 +8,8 @@ if (!isMainThread) {
     globalThis.self = { crossOriginIsolated: true };
     globalThis.MessageChannel = MessageChannel;
     globalThis.importScripts = (...files) => {
-        for (const file of files) vm.runInThisContext(fs.readFileSync(path.join(__dirname, '../src/sim', file.split('?')[0]), 'utf8'), { filename: file });
+        const overrides=JSON.parse(process.env.DEFENCE_TEST_SOURCE_OVERRIDES||'{}');
+        for (const file of files) {const target=path.join(__dirname,'../src/sim',file.split('?')[0]),key=path.relative(path.join(__dirname,'..'),target).split(path.sep).join('/');vm.runInThisContext(fs.readFileSync(overrides[key]?path.resolve(__dirname,'..',overrides[key]):target,'utf8'), { filename:file });}
     };
     importScripts('sim_helper.js');
     parentPort.on('message', data => self.onmessage({ data }));

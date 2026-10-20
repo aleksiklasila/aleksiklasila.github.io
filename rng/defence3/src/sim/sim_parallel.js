@@ -964,7 +964,7 @@ SIM_KERNELS[SIM_KERNEL_SEP_PAIRS] = function (R, P, chunk) {
         const A = _simWPtrsE(_simSepPairsW);
         if (A !== null) {
             _simWasmX.sep_pairs(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10], A[11], A[12], A[13], A[14], A[15],
-                CW, CH, H, pad, farAny, Q, BOTH, ONE, listed, cws, MOVER, YIELD, P[14] | 0, chunk);
+                CW, CH, H, pad, farAny, Q, BOTH, ONE, listed, cws, MOVER, YIELD, P[14] | 0, chunk, P[16] | 0);
             return;
         }
     }
@@ -1123,18 +1123,18 @@ const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 
     'unit.owner', 'unit.x', 'unit.y', 'unit.prevX', 'unit.prevY', 'unit.mvFloor', 'mv.struct', 'unit.dead0', 'unit.mvWake', 'unit.wkWx', 'unit.wkWy',
     'unit.mvDest', 'unit.mvCD', 'unit.mvCT', 'unit.mvCVx', 'unit.mvCVy', 'unit.mvCTl', 'unit.mvCN', 'unit.vx', 'unit.vy', 'unit.mvSpent', 'mv.wall',
     'unit.spArea', 'unit.mvReach', 'mv.areaBox', 'mv.areaBoxOk', '?mv.hostile', 'unit.attackTimer', 'unit.dbT', 'unit.dbS', 'unit.dbTick', 'unit.mvWk',
-    'unit.workerTransferCooldown', 'unit.mvFlow', 'unit.mvFGen', 'unit.mvReady', '?nav.fmeta.0', '?nav.fmeta.1', 'unit.mvNP', 'unit.mvSpd', 'unit.mvHT',
+    'unit.workerTransferCooldown', 'unit.mvFlow', 'unit.mvFGen', 'unit.mvReady', '?nav.fmeta.0', '?nav.fmeta.1', 'unit.mvNP', '?-' , 'unit.mvHT',
     'unit.mvHTId', 'unit.x0', 'unit.y0', 'unit.collisionR', 'unit.r', '?area.off', '?area.nb', '?vis.coverf', '?ix.agrid', 'unit.frozen', 'unit.sandy',
-    'unit.cbT', 'unit.cbTick', 'unit.mvChs', 'unit.cbRange', '?wk.ver', 'unit.wkType', 'unit.wkD', 'unit.wkOx', 'unit.wkOy', 'unit.wkTwice',
+    'unit.cbT', 'unit.cbTick', '?-' , '?-' , '?wk.ver', 'unit.wkType', 'unit.wkD', 'unit.wkOx', 'unit.wkOy', 'unit.wkTwice',
     'unit.wkFail', 'unit.wkUntil', 'unit.wkSched', 'unit.mvHWin', 'unit.mvHTT', 'unit.mvHVer', 'unit.cbTId', 'unit.cbRangeS', 'unit.cbS',
     'unit.fLsX', 'unit.fLsY', 'unit.fLsPX', 'unit.fLsPY', 'unit.fLsT', 'unit.mvLane', '?mv.airwall', '?nav.frows.0', '?nav.frows.1', '?nav.fhdr',
-    '?nav.fpool.0', '?nav.fpool.1', 'unit.mvNav', '?-', '?-', '?-', '?-', '?-', '?-',
+    '?nav.fpool.0', '?nav.fpool.1', 'unit.mvNav', '?unit.statRow', '?eff.hot', '?-', '?-', '?-', '?-',
     '?-', '?-', 'unit.mvNavLD', 'unit.cwNear', 'unit.cwTick', 'unit.cwDense', '?mv.wallBlk9', 'unit.mvBase', 'unit.mvWlen',
     'unit.mvPlen', 'unit.mvScan', 'unit.mvNodes', 'unit.pathIndex', '?mv.post', '?mv.postc', 'unit.spEpoch', 'unit.spOwner', 'unit.spTile',
-    'unit.spType', 'unit.vsGen', 'unit.spMvOld', 'unit.spMvNew', 'unit.spMvOwn', 'unit.mvBlk', '?mv.astarRem', '?mv.chFix', '?mv.chUse', 'unit.mvCost',
+    'unit.spType', 'unit.vsGen', 'unit.spMvOld', 'unit.spMvNew', 'unit.spMvOwn', 'unit.mvBlk', '?mv.astarRem', '?mv.chFix', '?mv.chUse', '?-' ,
     'unit.commandState', 'unit.mvShoot', 'unit.mvReachD', 'unit.mvRangeK', 'unit.lzFlags', '?sep.rs', '?sep.rc', '?sep.rstamp', '?sep.eslot',
     '?ix.omask', '?mv.scls', '?mv.hstruct', 'unit.dbTI', 'unit.mvFire',
-    'unit.atkCd', 'unit.attackFlash', '?mv.hita', '?mv.hitt', '?mv.hitc', 'unit.tmOn', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.sepLayer',
+    '?-' , 'unit.attackFlash', '?mv.hita', '?mv.hitt', '?mv.hitc', 'unit.tmOn', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.sepLayer',
     '?unit.mvTgX', '?unit.mvTgY', '?unit.mvTgTol', '?unit.mvSteady', '?unit.wkLmt',
     // (The separation's finish, fused into the epilogue: mv.rs W_SPX...)
     '?sep.px', '?sep.py', '?sep.ov', '?sep.hit', '?unit.sepCx'];
@@ -1522,8 +1522,8 @@ const SIM_PAR_SPIN_MS = 0.25;
 const _simEffUnitsW = _simWK(['ix.slots', 'unit.dead', 'unit.esOk', 'unit.esRad', 'unit.esType', 'unit.esTaken', 'unit.stackCount', 'unit.unitLevel', 'unit.baseLevel',
     'unit.effectiveStacks', 'unit.effectiveLevel', 'unit._lastAppliedEffectiveLevel', 'unit.x', 'unit.y', 'unit.owner', 'spatial.types', 'eff.flag', '?unit.upT', '?unit.upB',
     '?upk.h', '?eff.tver', 'unit.esVer', 'unit.statRow', '?eff.rowOf', '?eff.rowVer', '?eff.rSpd', '?eff.rCost', '?eff.rRD', '?eff.rRA', '?eff.rRK', '?eff.rLzW',
-    '?eff.rCb', '?eff.rCd', '?eff.rDmg', '?eff.rVis', '?eff.rChs', 'unit.mvOn', 'unit.mvFlags', 'unit.mvReach', 'unit.mvChs', 'unit.mvSpd', 'unit.mvCost',
-    'unit.mvReachD', 'unit.mvReachA', 'unit.mvShoot', 'unit.mvRangeK', 'unit.lzFlags', 'unit.cbRange', 'unit.atkCd', 'unit.atkDmg', 'unit.spArea', 'unit.energy',
+    '?eff.rCb', '?eff.rCd', '?eff.rDmg', '?eff.rVis', '?eff.rChs', 'unit.mvOn', 'unit.mvFlags', 'unit.mvReach', '?-' , '?-' , '?-' ,
+    'unit.mvReachD', 'unit.mvReachA', 'unit.mvShoot', 'unit.mvRangeK', 'unit.lzFlags', '?-' , '?-' , '?-' , 'unit.spArea', 'unit.energy',
     'unit.maxE', '?mv.areaBoxOk', '?eff.rVsA', 'unit.watched', 'unit.wTeam', 'unit.sepKey', 'unit.vsGen', 'unit.vsR', 'unit.vsA', 'unit.vsP1', 'unit.vsP2',
     // (Base entries: units behind their stat tables, P[23].)
     '?eff.bVer', '?eff.bRad', '?eff.bMaxE']);
@@ -1808,9 +1808,9 @@ SIM_KERNELS[SIM_KERNEL_COMBAT_SCAN] = function (R, P, chunk) { _simRust(_simComb
 // result cleared (acq.out -2: not looked for); nothing of the movement
 // kernel's arming (a peer may run without it). P: [0] slots, [1] per job,
 // [2] SIM_SEP_ABSENT.
-const _simAcqSnapW = _simWK(['unit.x0', 'unit.y0', 'unit.owner', 'unit.dead', 'unit.sepKey', 'unit.commandState', 'unit.cbRange', 'unit.id', 'unit.acqB', 'acq.tid', 'acq.sout',
-    'acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.rng', 'acq.id', 'acq.out', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.isWk', 'unit.atkDmg', 'unit.mvRangeK',
-    'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk']);
+const _simAcqSnapW = _simWK(['unit.x0', 'unit.y0', 'unit.owner', 'unit.dead', 'unit.sepKey', 'unit.commandState', '?-' , 'unit.id', 'unit.acqB', 'acq.tid', 'acq.sout',
+    'acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.rng', 'acq.id', 'acq.out', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.isWk', '?-' , 'unit.mvRangeK',
+    'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk', 'unit.statRow', 'eff.hot']);
 SIM_KERNELS[SIM_KERNEL_ACQ_SNAP] = function (R, P, chunk) { _simRust(_simAcqSnapW, P, chunk, 'k_acq_snap', 'ACQ_SNAP'); };
 // The scan (a tier job on the helpers, over the snapshot alone): for each
 // idle, attack-moving or attacking unit (the last for doAttacking's look of
@@ -1922,8 +1922,8 @@ function _simAcqStructure(SCLS, SOWN, HSS, AG, COVF, cbase, owner, x, y, r, tile
 // queued attacks' entries and the movement kernel's attack lists into the
 // targets' sums (wasm/src/k.rs k_hits).
 const SIM_KERNEL_HITS = 60;
-const _simHitsW = _simWK(['hit.q', 'hit.dmg', 'hit.sty', 'hit.wk', '?mv.hita', '?mv.hitt', '?mv.hitc', 'unit.atkDmg', 'unit.atkSty', 'unit.atkWatch', 'unit.owner', 'unit.id',
-    'unit.hAcc', 'unit.hTouch', 'unit.hSty', 'unit.hBurnD', 'unit.hPoiD', 'unit.hWatchK', 'hit.tlist', 'hit.plist', 'hit.cnt', '?unit.atkN']);
+const _simHitsW = _simWK(['hit.q', 'hit.dmg', 'hit.sty', 'hit.wk', '?mv.hita', '?mv.hitt', '?mv.hitc', '?-' , 'unit.atkSty', 'unit.atkWatch', 'unit.owner', 'unit.id',
+    'unit.hAcc', 'unit.hTouch', 'unit.hSty', 'unit.hBurnD', 'unit.hPoiD', 'unit.hWatchK', 'hit.tlist', 'hit.plist', 'hit.cnt', '?unit.atkN', 'unit.statRow', 'eff.hot']);
 SIM_KERNELS[SIM_KERNEL_HITS] = function (R, P, chunk) { _simRust(_simHitsW, P, chunk, 'k_hits', 'HITS'); };
 // The units hit this tick: their hits' sum off their energy, statuses, a
 // watch, fallen (wasm/src/k.rs k_hits_apply).

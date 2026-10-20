@@ -1,0 +1,210 @@
+{
+  "scenario": {
+    "units": 4000000,
+    "towers": 125000,
+    "map": [
+      1000,
+      1000
+    ],
+    "helpers": 7,
+    "warmup": 3,
+    "ticks": 12
+  },
+  "runs": [
+    {
+      "name": "baseline",
+      "meanMs": 705.5038999999997,
+      "tps": 1.417426608130728,
+      "p95Ms": 1156.3227999999945,
+      "movementMs": 113.56768333333214,
+      "allBackgroundWaitMs": 116.94777499999327,
+      "coldFirstTickMs": 27528.212100000004,
+      "liveWasmMiB": 4415,
+      "memoryBufferMiB": 5182,
+      "freeRamMiB": [
+        299.88671875,
+        496.06640625
+      ]
+    },
+    {
+      "name": "sleep-fast",
+      "meanMs": 596.5060749999999,
+      "tps": 1.6764288611813387,
+      "p95Ms": 1072.0002999999997,
+      "movementMs": 95.34236666666523,
+      "allBackgroundWaitMs": 106.1308333333315,
+      "coldFirstTickMs": 26454.217699999994,
+      "liveWasmMiB": 4415,
+      "memoryBufferMiB": 5182,
+      "freeRamMiB": [
+        489.953125,
+        797.71875
+      ]
+    },
+    {
+      "name": "shared-nav",
+      "meanMs": 624.9253083333364,
+      "tps": 1.6001912335203394,
+      "p95Ms": 1092.223100000003,
+      "movementMs": 101.78702500000145,
+      "allBackgroundWaitMs": 114.10161666666197,
+      "coldFirstTickMs": 23415.311700000006,
+      "liveWasmMiB": 3785,
+      "memoryBufferMiB": 4606,
+      "freeRamMiB": [
+        261.4453125,
+        503.71875
+      ]
+    },
+    {
+      "name": "final",
+      "meanMs": 686.2925083333357,
+      "tps": 1.4571046424920246,
+      "p95Ms": 1140.650099999999,
+      "movementMs": 114.85235833333233,
+      "allBackgroundWaitMs": 130.85109999999986,
+      "coldFirstTickMs": 23298.677700000007,
+      "liveWasmMiB": 3785,
+      "memoryBufferMiB": 4606,
+      "freeRamMiB": [
+        337.73046875,
+        680.265625
+      ]
+    }
+  ],
+  "liveWasmSavedMiB": 630,
+  "finalTpsGain": 0.027993007986228724,
+  "validation": [
+    {
+      "file": "deltatick-multiplayer.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "floor-trap-kernel.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "kernel-abi.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "mixed-rally-move.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "movement-sleep.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "multiplayer-chaos-determinism.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "multiplayer-cross-engine.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "nav-atlas.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "nav-background.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "nav-build-kernels.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "nav-crowd-arrival.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "nav-reach.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "nav-rows.test.cjs",
+      "status": 1
+    },
+    {
+      "file": "nav-shared-build.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "order-fast.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "parallel-kernels.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "separation-entry.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "separation-integration.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "separation-jitter.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "separation-kernel-replay.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "separation-presentation.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "separation-rally.test.cjs",
+      "status": 1
+    },
+    {
+      "file": "shared-kernel-threads.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "shared-spatial-determinism.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "shared-unit-state.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "storage-abi.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "unit-retirement.test.cjs",
+      "status": 0
+    }
+  ],
+  "workerValidation": [
+    {
+      "file": "deltatick-multiplayer.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "parallel-kernels.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "separation-integration.test.cjs",
+      "status": 0
+    },
+    {
+      "file": "shared-spatial-determinism.test.cjs",
+      "status": 0
+    }
+  ],
+  "passedChecks": 29,
+  "preExistingFailures": [
+    "nav-rows.test.cjs",
+    "separation-rally.test.cjs"
+  ]
+}
