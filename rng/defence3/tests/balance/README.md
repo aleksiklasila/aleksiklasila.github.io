@@ -47,10 +47,30 @@ diamonds mark them, and a filter hides them. Counts and energy appear on hover
 and in details/CSV. Unit/turret arenas grow to 58×58 tiles (32 clear tiles on
 the full 480-group maps); crossing courses use 90×90 (27 clear tiles).
 
-The report plot fills the window with the bundled, offline Plotly library:
-wheel/box zoom, pan, reset, hover, click details and image export. **Set** filters
-equal numbers vs equal energy. **Data**, **Counters**, and **?** open the
-tables, counter coverage and explanatory text without shrinking the plot.
+The report plots fill the window with the bundled, offline Plotly library:
+wheel/box zoom, middle-button drag panning, reset, hover, click details and image
+export. Click or Tab to focus either plot, then use arrow keys to pan; Shift
+moves farther. These controls also work on the heatmap's reversed Y axis.
+The **Equal
+energy**, **Equal numbers** and **Equal things** checkboxes control the scenario
+sets and same-type controls. Defaults show equal-energy results only, with
+same-type matchups hidden. Checkbox changes synchronize between both graphs.
+**Data**, **Counters**, and **?** open the tables, counter coverage and help.
+
+The second full-window graph, **Matchup danger**, places the thing at risk on Y
+and its opponent on X. Color uses the relative loss imbalance:
+`(mean Y loss − mean X loss) / (mean Y loss + mean X loss)`, on a fixed −100%
+to +100% scale. Red is dangerous to Y, blue favors Y, equal losses are neutral,
+and missing measurements stay blank. Two zero losses are also neutral. Thus
+58% vs 4% gives 87.1% relative danger, while 99% vs 45% gives 37.5% even though
+both have the same percentage-point gap. Real fights
+provide both directions; mirrored scenarios remain separate observations. Self
+controls retain original side order instead of being averaged with a fabricated
+reverse. All axis labels are explicit; the heatmap grows vertically when needed
+to keep every row readable. Hover shows only the named energy-loss percentages
+and fight count; click a cell for the contributing fights and count-limit details.
+Each graph has independent level,
+research and thing filters. Shared exclusions still apply to both graphs.
 
 ## Background measurements and reports
 

@@ -1,0 +1,34 @@
+'use strict';
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),A=require('./report-analysis.js');
+const side=(loss)=>({healthEnergyLossFraction:loss,alive:10,hpInitial:100,healthEnergyLost:100*loss,upkeepEnergy:0});
+const row=(focal,opponent,mode,a,b)=>({focal,opponent,balanceMode:mode,scenario:'fixture',level:1,research:0,mode:'combat',engaged:true,contaminated:false,classification:'combat',counts:[100,100],healthDepletionAdvantage:b-a,oneSidedness:Math.abs(b-a),sides:[side(a),side(b)]});
+const report={scenarios:3,generatedAt:'2026-10-20',performance:[],rows:[row('normal','tank','equal-energy',.8,.2),row('normal','normal','equal-energy',.5,.1),row('normal','tank','equal-numbers',0,1)]};
+const template=fs.readFileSync(__dirname+'/html-report.cjs','utf8'),elements=new Map(),plots=new Map();
+for(const match of template.matchAll(/\bid="([^"]+)"([^>]*)/g))elements.set(match[1],{value:'',checked:match[2].includes('checked'),innerHTML:'',textContent:'',dataset:{},style:{},listeners:{},querySelectorAll:()=>[],on(event,handler){this.listeners[event]=handler;},showModal(){this.open=true;},close(){this.open=false;}});
+elements.get('report-data').textContent=JSON.stringify(report);
+function el(id){assert(elements.has(id),'Known report element '+id);return elements.get(id);}
+// This tbody is created by the heatmap's drilldown dialog.
+elements.set('heat-observations',{querySelectorAll:()=>[]});
+const navigationNodes=[];
+const context={document:{getElementById:el,querySelectorAll:()=>[]},window:{addEventListener:()=>{}},FightReportAnalysis:A,FightReportNavigation:{attach:node=>navigationNodes.push(node)},Plotly:{react:(node,traces,layout,config)=>{plots.set(node,{traces,layout,config});return Promise.resolve();}},console};
+vm.runInNewContext(fs.readFileSync(__dirname+'/report-viewer.js','utf8'),context);
+const scatter=()=>plots.get(el('scatter')).traces[0],heat=()=>plots.get(el('danger-map')).traces[0];
+assert.equal(scatter().x.length,1,'Default graph shows only non-self equal-energy observations');
+assert.equal(heat().z[0][0],null);assert(Math.abs(heat().z[0][1]-60)<1e-10);
+assert.equal(plots.get(el('danger-map')).layout.yaxis.tickmode,'array');
+assert.deepEqual([...plots.get(el('danger-map')).layout.yaxis.tickvals],['normal','tank']);
+assert.equal(heat().customdata[0][1][2],-.8);assert.equal(heat().customdata[0][1][3],-.2);
+assert(!heat().hovertemplate.includes('Danger'));assert(!heat().hovertemplate.includes('Count-limited'));
+el('danger-map').listeners.plotly_click({points:[{x:'tank',y:'normal'}]});
+assert.equal(el('heat-detail').open,true);assert.equal(el('heat-detail-title').textContent,'tank → normal');
+el('equal-numbers').checked=true;el('equal-numbers').onchange();
+assert.equal(el('heat-equal-numbers').checked,true);assert.equal(scatter().x.length,2);
+el('heat-self-matchups').checked=true;el('heat-self-matchups').onchange();
+assert.equal(el('self-matchups').checked,true);assert.equal(scatter().x.length,3);assert(Math.abs(heat().z[0][0]-100*2/3)<1e-10);
+el('heat-level').value='5';el('heat-level').onchange();
+assert.equal(scatter().x.length,3,'Heatmap level filter is independent');assert(heat().z.every(r=>r.every(v=>v===null)));
+el('heat-equal-energy').checked=false;el('heat-equal-energy').onchange();assert.equal(el('equal-energy').checked,false);assert.equal(scatter().x.length,1);
+el('heat-help-button').onclick();assert.equal(el('heat-help').open,true);
+assert.equal(plots.get(el('danger-map')).config.scrollZoom,true);
+assert.deepEqual(navigationNodes,[el('scatter'),el('danger-map')],'Navigation attached once to each plot');
+console.log('PASS report checkbox defaults/synchronization, plot filters, heatmap drilldown and controls');

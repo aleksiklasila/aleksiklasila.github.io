@@ -1,23 +1,27 @@
 'use strict';
 (()=>{
 const data=JSON.parse(document.getElementById('report-data').textContent),all=data.rows;
+const analysis=FightReportAnalysis;
 const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const n=x=>x==null?'—':Math.abs(x)>=1e7?Number(x).toExponential(2):Number(x).toLocaleString(undefined,{maximumFractionDigits:2});
 const pct=x=>(100*x).toFixed(2)+'%';
-let visible=[],sortKey='oneSidedness',descending=true,page=0,plotReady=false;
+let visible=[],sortKey='oneSidedness',descending=true,page=0,plotReady=false,heatReady=false,heatMatrix;
 for(const r of all)r.balanceMode??=r.scenario.includes('-equal-energy-')?'equal-energy':'equal-numbers';
 function select(id,values){$(id).innerHTML='<option value="">All</option>'+[...new Set(values)].sort((a,b)=>typeof a==='number'?a-b:String(a).localeCompare(String(b))).map(x=>`<option>${esc(x)}</option>`).join('');}
 select('focal',all.map(r=>r.focal));select('opponent',all.map(r=>r.opponent));select('level',all.map(r=>r.level));select('research',all.map(r=>r.research));
-select('balance-mode',all.map(r=>r.balanceMode));
+const things=[...new Set(all.flatMap(r=>[r.focal,r.opponent]))].sort();
+select('heat-level',all.map(r=>r.level));select('heat-research',all.map(r=>r.research));select('heat-victim',things);select('heat-threat',things);
 $('scenario-count').textContent=data.scenarios;$('row-count').textContent=n(all.length);$('mixed-count').textContent=n(all.filter(r=>r.contaminated).length);
 $('updated').textContent='Generated '+new Date(data.generatedAt).toLocaleString();
 $('runs').innerHTML=data.performance.map(p=>`<tr><td>${esc(p.name)}</td><td>${n(p.wallSeconds)}</td><td>${n(p.simulationSeconds)}</td><td>${n(p.completedTPS)}</td><td>${esc(p.dkHistogram?Object.entries(p.dkHistogram).map(([k,v])=>k+'×'+v).join(', '):'fixed 1')}</td><td>${esc(p.upkeepAccounting||'estimated live exposure')}</td></tr>`).join('');
 function value(r,key){if(key==='health0')return r.sides[0].healthEnergyLossFraction;if(key==='health1')return r.sides[1].healthEnergyLossFraction;if(key==='upkeep0')return r.sides[0].upkeepEnergy;if(key==='upkeep1')return r.sides[1].upkeepEnergy;return r[key];}
+function commonOptions(){return {energy:$('equal-energy').checked,numbers:$('equal-numbers').checked,self:$('self-matchups').checked,mixed:$('mixed').checked,idle:$('idle').checked,hazards:$('hazards').checked,bounded:$('bounded').checked};}
 function filter(){
  const term=$('search').value.toLowerCase();
- visible=all.filter(r=>(!$('balance-mode').value||r.balanceMode===$('balance-mode').value)&&(!$('focal').value||r.focal===$('focal').value)&&(!$('opponent').value||r.opponent===$('opponent').value)&&(!$('level').value||r.level===Number($('level').value))&&(!$('research').value||r.research===Number($('research').value))&&($('mixed').checked||!r.contaminated)&&($('idle').checked||r.engaged)&&($('hazards').checked||r.mode!=='crossing')&&($('bounded').checked||!r.countBounded)&&(!term||[r.focal,r.opponent,r.scenario].some(x=>x.toLowerCase().includes(term))));
+ const options=commonOptions();
+ visible=all.filter(r=>analysis.matches(r,options)&&(!$('focal').value||r.focal===$('focal').value)&&(!$('opponent').value||r.opponent===$('opponent').value)&&(!$('level').value||r.level===Number($('level').value))&&(!$('research').value||r.research===Number($('research').value))&&(!term||[r.focal,r.opponent,r.scenario].some(x=>x.toLowerCase().includes(term))));
  visible.sort((a,b)=>{const av=value(a,sortKey),bv=value(b,sortKey);const d=typeof av==='string'?av.localeCompare(bv):av-bv;return (descending?-d:d)||b.oneSidedness-a.oneSidedness;});
- page=0;render();draw();
+ page=0;render();draw();drawHeat();
 }
 function loss(s,enemy){return `<td class="loss ${enemy?'enemy':''}">${pct(s.healthEnergyLossFraction)}<div class="bar"><i style="width:${Math.min(100,s.healthEnergyLossFraction*100)}%"></i></div></td>`;}
 function render(){
@@ -37,7 +41,34 @@ function draw(){
  }],{paper_bgcolor:'#10141b',plot_bgcolor:'#10141b',font:{color:'#b8c7d9',family:'system-ui'},margin:{l:78,r:30,t:35,b:65},xaxis:axis('Focal health-energy lost'),yaxis:axis('Opponent health-energy lost'),dragmode:'zoom',hovermode:'closest',uirevision:'health-comparison',showlegend:false,
  shapes:[{type:'line',xref:'x',yref:'y',x0:0,y0:0,x1:1,y1:1,line:{color:'#63758d',width:1,dash:'dot'},layer:'below'}],annotations:visible.length?[]:[{xref:'paper',yref:'paper',x:.5,y:.5,text:'No observations match these filters',showarrow:false}]},
  {responsive:true,scrollZoom:true,displaylogo:false,displayModeBar:true,toImageButtonOptions:{filename:'fight-health-comparison',format:'png',scale:2}});
- if(!plotReady){$('scatter').on('plotly_click',e=>{const i=e.points[0]?.customdata?.[0];if(i!=null&&visible[i])detail(visible[i]);});plotReady=true;}
+ if(!plotReady){$('scatter').on('plotly_click',e=>{const i=e.points[0]?.customdata?.[0];if(i!=null&&visible[i])detail(visible[i]);});FightReportNavigation.attach($('scatter'),Plotly);plotReady=true;}
+}
+function drawHeat(){
+ const options=commonOptions(),rows=all.filter(r=>analysis.matches(r,options));
+ heatMatrix=analysis.dangerMatrix(rows,things,{level:$('heat-level').value,research:$('heat-research').value,victim:$('heat-victim').value,threat:$('heat-threat').value});
+ const {xs,ys,grid,cells}=heatMatrix;
+ $('danger-map').style.minHeight=Math.max(420,ys.length*18+210)+'px';
+ $('heatmap-count').textContent=cells.size+' measured cells';
+ Plotly.react($('danger-map'),[{
+  type:'heatmap',x:xs,y:ys,z:grid.map(row=>row.map(c=>c?c.danger:null)),zmin:-100,zmax:100,zmid:0,
+  colorscale:[[0,'#286fae'],[.5,'#e1e7ef'],[1,'#d74350']],hoverongaps:false,xgap:1,ygap:1,
+  colorbar:{title:{text:'Relative danger<br>to Y'},ticksuffix:'%',tickvals:[-100,-50,0,50,100],thickness:15},
+  customdata:grid.map(row=>row.map(c=>c?[esc(c.victim.replace(/^(unit|building)_/,'').replaceAll('_',' ')),esc(c.threat.replace(/^(unit|building)_/,'').replaceAll('_',' ')),-c.lossY||0,-c.lossX||0,c.count]:null)),
+  hovertemplate:'%{customdata[0]} energy lost: %{customdata[2]:.0%}<br>%{customdata[1]} energy lost: %{customdata[3]:.0%}<br>Fights: %{customdata[4]}<extra></extra>'
+ }],{paper_bgcolor:'#10141b',plot_bgcolor:'#243041',font:{color:'#b8c7d9',family:'system-ui'},margin:{l:205,r:80,t:20,b:175},
+ xaxis:{title:{text:'Threat (X)',standoff:15},type:'category',categoryorder:'array',categoryarray:xs,tickmode:'array',tickvals:xs,ticktext:xs,tickangle:-45,tickfont:{size:10},automargin:true},
+ yaxis:{title:{text:'Thing at risk (Y)',standoff:15},type:'category',categoryorder:'array',categoryarray:ys,tickmode:'array',tickvals:ys,ticktext:ys,autorange:'reversed',tickfont:{size:10},automargin:true},
+ uirevision:'danger-map',dragmode:'zoom',annotations:cells.size?[]:[{xref:'paper',yref:'paper',x:.5,y:.5,text:'No measurements match these filters',showarrow:false}]},
+ {responsive:true,scrollZoom:true,displaylogo:false,displayModeBar:true,toImageButtonOptions:{filename:'fight-danger-map',format:'png',scale:2}});
+ if(!heatReady){$('danger-map').on('plotly_click',e=>{const p=e.points[0],c=p&&heatMatrix.cells.get(JSON.stringify([p.y,p.x]));if(c)heatDetail(c);});FightReportNavigation.attach($('danger-map'),Plotly);heatReady=true;}
+}
+function heatDetail(cell){
+ $('heat-detail-title').textContent=cell.threat+' → '+cell.victim;
+ const danger=o=>analysis.relativeDanger(o.row.sides[o.victimSide].healthEnergyLossFraction,o.row.sides[1-o.victimSide].healthEnergyLossFraction);
+ const observations=[...cell.observations].sort((a,b)=>danger(b)-danger(a));
+ $('heat-detail-body').innerHTML=`<p>Mean loss: ${pct(cell.lossY)} for Y, ${pct(cell.lossX)} for X · relative danger to Y: ${cell.danger.toFixed(2)}% · ${cell.count} measured fights. Click a row for its original side-by-side details.</p><div class="table-wrap"><table><thead><tr><th>L / R</th><th>Set</th><th>Counts Y : X</th><th>Y lost</th><th>X lost</th><th>Status</th></tr></thead><tbody id="heat-observations">`+observations.map(({row:r,victimSide:i},index)=>`<tr data-observation="${index}"><td>${r.level} / ${r.research}</td><td>${esc(r.balanceMode)}</td><td>${r.counts[i]} : ${r.counts[1-i]}</td><td>${pct(r.sides[i].healthEnergyLossFraction)}</td><td>${pct(r.sides[1-i].healthEnergyLossFraction)}</td><td>${esc(r.countBounded?'count-limited':r.classification)}</td></tr>`).join('')+'</tbody></table></div>';
+ for(const tr of $('heat-observations').querySelectorAll('tr'))tr.onclick=()=>detail(observations[+tr.dataset.observation].row);
+ $('heat-detail').showModal();
 }
 function detail(r){
  $('detail-title').textContent=r.focal+' vs '+r.opponent+' · L'+r.level+' R'+r.research+' · '+r.balanceMode;
@@ -62,13 +93,19 @@ function showCounters(){
  $('counter-rows').innerHTML=[...coverage.values()].sort((a,b)=>a.defeats-b.defeats||a.id.localeCompare(b.id)).map(c=>`<tr><td>${esc(c.id)}<small class="small"> · ${esc(c.mode)}</small></td><td>${c.n}</td><td>${c.defeats} / ${c.wins}</td><td>${c.counters.size?[...c.counters.keys()].map(esc).join('<br>'):'<span class="red">No counter observed</span>'}</td><td>${c.pressure>0?esc(c.best)+'<br>'+pct(c.pressure)+' net depletion':'No unfavorable health trade observed'}</td></tr>`).join('')||'<tr><td colspan="5">No unflagged combat observations match the filters.</td></tr>';
  $('counters').showModal();
 }
-for(const id of ['balance-mode','focal','opponent','level','research','mixed','idle','hazards','bounded'])$(id).onchange=filter;
+for(const id of ['focal','opponent','level','research','mixed','idle','hazards','bounded'])$(id).onchange=filter;
+for(const id of ['equal-energy','equal-numbers','self-matchups']){
+ $(id).onchange=()=>{$('heat-'+id).checked=$(id).checked;filter();};
+ $('heat-'+id).onchange=()=>{$(id).checked=$('heat-'+id).checked;filter();};
+}
+for(const id of ['heat-level','heat-research','heat-victim','heat-threat'])$(id).onchange=drawHeat;
 $('search').oninput=filter;$('previous').onclick=()=>{page--;render();};$('next').onclick=()=>{page++;render();};
 for(const b of document.querySelectorAll('[data-sort]'))b.onclick=()=>{const key=b.dataset.sort;descending=key===sortKey?!descending:true;sortKey=key;filter();};
 $('close-detail').onclick=()=>$('detail').close();
 for(const b of document.querySelectorAll('[data-close]'))b.onclick=()=>$(b.dataset.close).close();
 $('help-button').onclick=()=>$('help').showModal();$('show-data').onclick=()=>$('data-table').showModal();
 $('show-counters').onclick=showCounters;
+$('heat-help-button').onclick=()=>$('heat-help').showModal();
 $('export').onclick=()=>{const quote=x=>'"'+String(x??'').replaceAll('"','""')+'"';const rows=[['focal','opponent','level','research','set','count_0','count_1','count_limited','planned_energy_mismatch','start_energy_0','start_energy_1','health_loss_fraction_0','health_loss_fraction_1','damage_energy_0','damage_energy_1','upkeep_0','upkeep_1','status'],...visible.map(r=>[r.focal,r.opponent,r.level,r.research,r.balanceMode,...r.counts,!!r.countBounded,r.energyMismatchFraction,...r.sides.map(s=>s.hpInitial),...r.sides.map(s=>s.healthEnergyLossFraction),...r.sides.map(s=>s.healthEnergyLost),...r.sides.map(s=>s.upkeepEnergy),r.classification])];const url=URL.createObjectURL(new Blob([rows.map(r=>r.map(quote).join(',')).join('\n')],{type:'text/csv'})),a=document.createElement('a');a.href=url;a.download='filtered-fight-results.csv';a.click();URL.revokeObjectURL(url);};
-window.addEventListener('resize',draw);filter();
+window.addEventListener('resize',()=>{draw();drawHeat();});filter();
 })();
