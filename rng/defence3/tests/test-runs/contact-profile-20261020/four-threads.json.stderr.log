@@ -1,0 +1,41 @@
+setup {"units":4000000,"towers":125000,"groups":62500,"map":[1000,1000],"ms":49714.0522,"heap":{"ready":true,"kernels":true,"wasm64":true,"hash":"5b46459a6c06d50d","error":null,"memoryMB":2795,"liveMB":2556,"peakMB":2556,"freeMB":0,"arrays":386,"pendingFrees":170},"memory":{"rss":3083264000,"heapTotal":1009238016,"heapUsed":920466320,"external":498132484,"arrayBuffers":526694347}}
+warmup 1 34512.4
+warmup 2 1170.3
+warmup 3 1486.8
+tick 1 1636.0
+tick 2 845.8
+tick 3 1186.6
+tick 4 1558.3
+tick 5 804.4
+tick 6 679.0
+tick 7 647.3
+tick 8 799.6
+tick 9 1256.0
+tick 10 943.1
+tick 11 752.8
+tick 12 801.7
+tick 13 1336.9
+tick 14 781.1
+tick 15 732.9
+tick 16 833.3
+tick 17 1307.3
+tick 18 776.5
+tick 19 775.9
+tick 20 750.6
+tick 21 1362.4
+tick 22 895.3
+tick 23 742.5
+tick 24 1623.7
+AssertionError [ERR_ASSERTION]: contact trace capacity exceeded
+    at writeContactTrace (Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\tests\checkerboard-tps.bench.cjs:170:51)
+    at main (Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\tests\checkerboard-tps.bench.cjs:184:5)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+[]
+{"heap":{"ready":true,"kernels":true,"wasm64":true,"hash":"5b46459a6c06d50d","error":null,"memoryMB":4477,"liveMB":3686,"peakMB":3686,"freeMB":49,"arrays":611,"pendingFrees":0},"bad":[{"name":"flow.g","length":32},{"name":"flow.f","length":32},{"name":"vis.cover","length":8}]}

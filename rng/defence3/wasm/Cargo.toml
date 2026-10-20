@@ -12,8 +12,11 @@ path = "src/lib.rs"
 # Debug counters of the movement kernel (mv.rs dbg!): words 1536.. of the
 # thread's argument block. cargo build --release --features dbgc
 dbgc = []
-# The movement kernel's passes kept as functions (profiles by pass).
+# Movement passes and contact sections kept as functions for profiling.
 prof = []
+# Contact replay counters through the otherwise unused mover argument.
+# Only the standalone diagnostic replay supplies a counter address.
+sepdiag = []
 
 [profile.release]
 opt-level = 3

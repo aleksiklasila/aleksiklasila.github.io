@@ -18,6 +18,11 @@ const referenceKernel=process.argv.includes('--reference-kernel');
 const referenceCollect=process.argv.includes('--reference-collect');
 const kernelFile=process.argv.find(a=>a.startsWith('--wasm64='))?.slice(9);
 const shareNavigation=!process.argv.includes('--no-nav-sharing');
+const traceCapacity=Math.ceil(1280000/(helpers+1));
+const contactTrace=process.argv.includes('--contact-trace') ? {
+    capacity: traceCapacity, thread: 0, control: new SharedArrayBuffer(128 * 4),
+    events: new SharedArrayBuffer((helpers + 1) * traceCapacity * 6 * 8)
+} : null;
 const out=process.argv.find(a=>a.startsWith('--out='))?.slice(6) || path.join(__dirname,'test-runs/checkerboard-tps/latest.json');
 for (const v of [count, map, ticks, group, dk]) assert.ok(Number.isInteger(v) && v > 0);
 assert.ok(Number.isInteger(warmup) && warmup >= 0);
@@ -63,6 +68,7 @@ if(!shareNavigation)inst.eval('_navShareBuild=()=>null');
 // Match production startup: helpers exist before bulk entity creation.
 if (helpers) {
     inst.scratch.Worker = require('./real-sim-helper.cjs');
+    if (contactTrace) { inst.scratch.Worker.contactTrace = contactTrace; inst.scratch.Worker.traceThread = 0; }
     inst.eval(`Worker=__scratch.Worker; navigator.hardwareConcurrency=32; simParallelInit('',${helpers});`);
 }
 // Reproduce the original storage policies without a checkout or changing
@@ -133,6 +139,11 @@ inst.eval(`__scratch.phases={}; __scratch.phaseSelf={}; __scratch.phaseStack=[];
     }`);
 const bindings=()=>inst.eval('Object.entries(_simParReg).filter(([k,v])=>ArrayBuffer.isView(v)).map(([name,v])=>({name,type:v.constructor.name,bytes:v.byteLength})).sort((a,b)=>b.bytes-a.bytes)');
 const setup={ ...inst.scratch.initial, ms: performance.now()-setupStart, heap:heapStats(), memory:process.memoryUsage() };
+if (contactTrace) {
+    inst.scratch.contactTrace=contactTrace;
+    if(process.argv.includes('--capture-contacts')) inst.scratch.captureContact=sample=>fs.writeFileSync(out+'.chunk-'+sample.tick+'.json',JSON.stringify(sample));
+    inst.eval(fs.readFileSync(path.join(__dirname,'contact-trace.js'),'utf8'));
+}
 console.error('setup', JSON.stringify(setup));
 async function main() {
     const warmupMs=[];
@@ -147,14 +158,26 @@ async function main() {
         if(result.status!==0)throw Error('Hardware counters unavailable: '+pmc.output);
     }
     inst.scratch.measuring=true;
+    if(contactTrace) Atomics.store(new Int32Array(contactTrace.control),0,1);
     const samples=[], timeline=[], resourcesBefore=process.resourceUsage(), measuredStart=Date.now();
     for(let t=0;t<ticks;t++) {
+        if(contactTrace) Atomics.store(new Int32Array(contactTrace.control),1,t+1);
         const a=performance.now();inst.eval('gameTick();currentTick++');const ms=performance.now()-a;samples.push(ms);
         const row={at:Date.now(),tick:t+1,ms,units:inst.eval('units.length'),memory:process.memoryUsage(),resourceUsage:process.resourceUsage(),freeBytes:require('node:os').freemem(),heap:heapStats()};
         timeline.push(row);console.error('tick',t+1,ms.toFixed(1));
         fs.appendFileSync(out+'.jsonl',JSON.stringify(row)+'\n');
     }
-    const measuredEnd=Date.now();
+    const measuredEnd=Date.now(), resourcesAfter=process.resourceUsage();
+    if(contactTrace) Atomics.store(new Int32Array(contactTrace.control),0,0);
+    const writeContactTrace=()=>{ if(contactTrace) {
+        const ctl=new Int32Array(contactTrace.control), logs=new Float64Array(contactTrace.events), threads=[],truncatedThreads=[];
+        for(let i=0;i<=helpers;i++) {
+            let n=Atomics.load(ctl,16+i);if(n<0){truncatedThreads.push(i);n=contactTrace.capacity;}
+            threads.push(Array.from(logs.subarray(i*contactTrace.capacity*6,i*contactTrace.capacity*6+n*6)));
+        }
+        const names=['../src/sim/sim_parallel.js','../src/game/flownav.js'].flatMap(f=>[...fs.readFileSync(path.join(__dirname,f),'utf8').matchAll(/\b(SIM_KERNEL_[A-Z0-9_]+)\s*=\s*\d+/g)].map(m=>m[1]));
+        fs.writeFileSync(out+'.trace.json',JSON.stringify({columns:['kind','start','end','kernelOrLane','chunkOrStage','tickAtStart'],kinds:['kernel','backgroundWait','stageWait','foregroundRun','atomicWait'],truncatedThreads,threads,kernels:inst.eval('Object.fromEntries(['+names.map(n=>'['+JSON.stringify(n)+','+n+']').join(',')+'])')}));
+    }};
     if(pmc){const result=cp.spawnSync('wpr',['-stop',out+'.etl'],{encoding:'utf8',windowsHide:true});pmc.stopStatus=result.status;if(result.status!==0)throw Error(result.stdout+result.stderr);}
     let top;
     if(process.argv.includes('--profile')) {
@@ -163,6 +186,7 @@ async function main() {
         top=profile.nodes.filter(n=>!['post','dispatch','(root)','(idle)','(program)'].includes(n.callFrame.functionName))
             .map(n=>({name:n.callFrame.functionName,line:n.callFrame.lineNumber,selfMs:(totals.get(n.id)||0)/1000})).sort((a,b)=>b.selfMs-a.selfMs).slice(0,25);
     }
+    writeContactTrace();
     assert.deepEqual(inst.errors.map(String),[]);
     assert.equal(inst.eval('gameOver'),false);
     samples.sort((a,b)=>a-b);
@@ -172,7 +196,7 @@ async function main() {
         ticks,warmup,warmupMs,measuredStart,measuredEnd,pmc,group,helpers,dk,contactBudget,sharedStats,cachedLayout,statLayout,referenceStorage,referenceKernel,referenceCollect,kernelFile,shareNavigation,tickMs:{mean,p50:samples[ticks>>1],p95:samples[Math.min(ticks-1,Math.floor(ticks*.95))]},
         tps:1000/mean,setup,timeline,phases:Object.fromEntries(Object.entries(inst.scratch.phases).map(([k,v])=>[k,v/ticks]).sort((a,b)=>b[1]-a[1])),
         phaseSelf:Object.fromEntries(Object.entries(inst.scratch.phaseSelf).map(([k,v])=>[k,v/ticks]).sort((a,b)=>b[1]-a[1])),top,bindings:bindings(),
-        resourceUsage:{before:resourcesBefore,after:process.resourceUsage()},statStorage:inst.eval('SIM_UNIT_SCHEMA.mvSpd ? "instance-cache" : "shared-row-only"'),referenceColumns:inst.eval('Object.entries(_simUnitState.columns).filter(([k,v])=>v instanceof SimRefColumn).map(([name,v])=>({name,slots:v.length,bytes:v.data?v.data.byteLength:undefined,unique:v.pool?v.pool.values.length:undefined,pages:v.pages.filter(Boolean).length,values:v.pages.reduce((n,p)=>n+(p?p.used:0),0)}))'),memory:process.memoryUsage()};
+        resourceUsage:{before:resourcesBefore,after:resourcesAfter},statStorage:inst.eval('SIM_UNIT_SCHEMA.mvSpd ? "instance-cache" : "shared-row-only"'),referenceColumns:inst.eval('Object.entries(_simUnitState.columns).filter(([k,v])=>v instanceof SimRefColumn).map(([name,v])=>({name,slots:v.length,bytes:v.data?v.data.byteLength:undefined,unique:v.pool?v.pool.values.length:undefined,pages:v.pages.filter(Boolean).length,values:v.pages.reduce((n,p)=>n+(p?p.used:0),0)}))'),memory:process.memoryUsage()};
     fs.writeFileSync(out,JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
 }
 main().then(()=>process.exit(0),e=>{

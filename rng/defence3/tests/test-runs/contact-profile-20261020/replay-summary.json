@@ -1,0 +1,122 @@
+[
+  {
+    "tick": 6,
+    "hotMs": 2.902027500000002,
+    "hotP50": 2.6148000000000025,
+    "rotateMs": 3.012605000000006,
+    "rotateP50": 2.681799999999953,
+    "rotationMiB": 59.962860107421875,
+    "counters": {
+      "entries": 13651,
+      "participants": 6905,
+      "neighborRows": 19550,
+      "simdVectors": 67173,
+      "ineligibleVectors": 1312,
+      "eligibleCandidates": 169346,
+      "broadHits": 55608,
+      "stillCalls": 31630,
+      "stillContacts": 54677,
+      "exactCalls": 931,
+      "exactContacts": 918,
+      "exactOtherWrites": 54,
+      "stillOtherWrites": 15825,
+      "budgetReached": 5190,
+      "tableEntries": 27311,
+      "selfWrites": 6905,
+      "unused": 0,
+      "contacts": 55595
+    },
+    "sections": [
+      {
+        "name": "pair_run",
+        "msPerReplay": 1.2459716666666658,
+        "percent": 37.07932656539221
+      },
+      {
+        "name": "pair_still4",
+        "msPerReplay": 1.1676975000000014,
+        "percent": 34.74993700934249
+      },
+      {
+        "name": "sep_pairs",
+        "msPerReplay": 0.6046408333333328,
+        "percent": 17.99372771767486
+      },
+      {
+        "name": "pair_scatter4",
+        "msPerReplay": 0.1857991666666667,
+        "percent": 5.529265360296642
+      },
+      {
+        "name": "pair_build_table",
+        "msPerReplay": 0.07938750000000001,
+        "percent": 2.362521649938597
+      },
+      {
+        "name": "pair_exact",
+        "msPerReplay": 0.07679,
+        "percent": 2.2852216973551855
+      }
+    ]
+  },
+  {
+    "tick": 12,
+    "hotMs": 0.12182541666666656,
+    "hotP50": 0.09660000000000935,
+    "rotateMs": 0.14579916666666481,
+    "rotateP50": 0.1209999999999809,
+    "rotationMiB": 30.759735107421875,
+    "counters": {
+      "entries": 1114,
+      "participants": 181,
+      "neighborRows": 565,
+      "simdVectors": 1469,
+      "ineligibleVectors": 1,
+      "eligibleCandidates": 5235,
+      "broadHits": 1003,
+      "stillCalls": 511,
+      "stillContacts": 753,
+      "exactCalls": 250,
+      "exactContacts": 250,
+      "exactOtherWrites": 69,
+      "stillOtherWrites": 306,
+      "budgetReached": 61,
+      "tableEntries": 13406,
+      "selfWrites": 181,
+      "unused": 0,
+      "contacts": 1003
+    },
+    "sections": [
+      {
+        "name": "pair_run",
+        "msPerReplay": 0.027045,
+        "percent": 23.586441466321702
+      },
+      {
+        "name": "pair_still4",
+        "msPerReplay": 0.019378333333333327,
+        "percent": 16.900200587226372
+      },
+      {
+        "name": "sep_pairs",
+        "msPerReplay": 0.01710333333333333,
+        "percent": 14.91613128288613
+      },
+      {
+        "name": "pair_scatter4",
+        "msPerReplay": 0.004572500000000001,
+        "percent": 3.9877612721300046
+      },
+      {
+        "name": "pair_build_table",
+        "msPerReplay": 0.024795833333333326,
+        "percent": 21.62490188668275
+      },
+      {
+        "name": "pair_exact",
+        "msPerReplay": 0.021768333333333327,
+        "percent": 18.984563504753044
+      }
+    ]
+  }
+]

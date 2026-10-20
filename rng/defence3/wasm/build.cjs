@@ -25,7 +25,7 @@ const here = __dirname;
 // and usize parameters are i64 (BigInt from JavaScript: SIM_WASM64_I64 lists
 // them, read from the module's types below).
 const W64 = process.argv.includes('--wasm64');
-const out = path.join(here, '..', 'src', 'sim', W64 ? 'sim_wasm64_bin.js' : 'sim_wasm_bin.js');
+const out = process.argv.find(a=>a.startsWith('--out='))?.slice(6) || path.join(here, '..', 'src', 'sim', W64 ? 'sim_wasm64_bin.js' : 'sim_wasm_bin.js');
 // A separate target directory also avoids transient Windows mapped-file locks.
 const targetDir=process.argv.find(a=>a.startsWith('--target-dir='))?.slice(13)||(W64?'target64':'target');
 const wasmPath = W64 ? path.join(here, targetDir, 'wasm64-unknown-unknown', 'release', 'defence3_sim.wasm')
@@ -153,16 +153,19 @@ const i64Params = W64 ? readTypes() : null;
 // ---- checks: it compiles, links to a shared memory, exports what the loader needs ----
 let fns;
 if (W64) {
-    // (Node's V8 compiles memory64 behind a flag, with the older API.)
+    // Node 24 uses the standard memory64 API; older V8 needs the flag.
+    const modernMemory64 = Number(process.versions.node.split('.')[0]) >= 24;
     const tmp = path.join(os.tmpdir(), 'defence3_sim64.' + process.pid + '.wasm');
     fs.writeFileSync(tmp, bytes);
     const check = 'const m = new WebAssembly.Module(require("fs").readFileSync(' + JSON.stringify(tmp) + '));'
-        + 'const memory = new WebAssembly.Memory({ initial: 256, maximum: 262144, index: "i64", shared: true });'
+        + (modernMemory64
+            ? 'const memory = new WebAssembly.Memory({ initial: 256n, maximum: 262144n, address: "i64", shared: true });'
+            : 'const memory = new WebAssembly.Memory({ initial: 256, maximum: 262144, index: "i64", shared: true });')
         + 'const inst = new WebAssembly.Instance(m, { env: { memory } });'
         + 'const exp = WebAssembly.Module.exports(m).map(e => e.name);'
         + 'for (const need of ["__stack_pointer", "__heap_base"]) if (!exp.includes(need)) throw new Error("missing export " + need);'
         + 'console.log(JSON.stringify(exp.filter(n => typeof inst.exports[n] === "function").sort()));';
-    const r = cp.spawnSync(process.execPath, ['--experimental-wasm-memory64', '-e', check], { encoding: 'utf8' });
+    const r = cp.spawnSync(process.execPath, [...(modernMemory64 ? [] : ['--experimental-wasm-memory64']), '-e', check], { encoding: 'utf8' });
     fs.unlinkSync(tmp);
     if (r.status !== 0) { console.error(r.stderr); process.exit(1); }
     fns = JSON.parse(r.stdout.trim().split('\n').pop());
