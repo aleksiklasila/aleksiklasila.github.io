@@ -1,0 +1,450 @@
+{
+  "node": "v24.19.0",
+  "cpu": "AMD Ryzen 7 4800H with Radeon Graphics         ",
+  "initial": {
+    "units": 4000000,
+    "towers": 125000,
+    "groups": 62500,
+    "map": [
+      1000,
+      1000
+    ]
+  },
+  "final": {
+    "units": 3336036,
+    "towers": 123724,
+    "tick": 8,
+    "hash": "58a71961"
+  },
+  "ticks": 8,
+  "warmup": 0,
+  "group": 32,
+  "helpers": 7,
+  "dk": 1,
+  "tickMs": {
+    "mean": 4282.9479,
+    "p50": 1284.599900000001,
+    "p95": 26894.218400000005
+  },
+  "tps": 0.23348404494950778,
+  "setup": {
+    "units": 4000000,
+    "towers": 125000,
+    "groups": 62500,
+    "map": [
+      1000,
+      1000
+    ],
+    "ms": 44605.5729,
+    "heap": {
+      "ready": true,
+      "kernels": true,
+      "wasm64": true,
+      "hash": "c8a90569d80ae675",
+      "error": null,
+      "memoryMB": 2875,
+      "liveMB": 2655,
+      "peakMB": 2655,
+      "freeMB": 0,
+      "arrays": 383,
+      "pendingFrees": 176
+    },
+    "memory": {
+      "rss": 3985219584,
+      "heapTotal": 1786703872,
+      "heapUsed": 1713606560,
+      "external": 474301967,
+      "arrayBuffers": 472056395
+    }
+  },
+  "timeline": [
+    {
+      "tick": 1,
+      "ms": 26894.218400000005,
+      "units": 4000000,
+      "memory": {
+        "rss": 4938776576,
+        "heapTotal": 1911992320,
+        "heapUsed": 1820763288,
+        "external": 528555918,
+        "arrayBuffers": 526301899
+      },
+      "freeBytes": 701833216,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "c8a90569d80ae675",
+        "error": null,
+        "memoryMB": 5182,
+        "liveMB": 4427,
+        "peakMB": 4427,
+        "freeMB": 0,
+        "arrays": 1003,
+        "pendingFrees": 176
+      }
+    },
+    {
+      "tick": 2,
+      "ms": 977.5561000000016,
+      "units": 3999500,
+      "memory": {
+        "rss": 4437909504,
+        "heapTotal": 1952169984,
+        "heapUsed": 1832282304,
+        "external": 528573231,
+        "arrayBuffers": 526310603
+      },
+      "freeBytes": 408256512,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "c8a90569d80ae675",
+        "error": null,
+        "memoryMB": 5182,
+        "liveMB": 4226,
+        "peakMB": 4427,
+        "freeMB": 202,
+        "arrays": 862,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 3,
+      "ms": 1321.9742999999871,
+      "units": 3975071,
+      "memory": {
+        "rss": 4286599168,
+        "heapTotal": 1970872320,
+        "heapUsed": 1875384056,
+        "external": 534764332,
+        "arrayBuffers": 532501704
+      },
+      "freeBytes": 603648000,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "c8a90569d80ae675",
+        "error": null,
+        "memoryMB": 5182,
+        "liveMB": 4276,
+        "peakMB": 4427,
+        "freeMB": 152,
+        "arrays": 878,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 4,
+      "ms": 1427.0099000000046,
+      "units": 3377295,
+      "memory": {
+        "rss": 4592865280,
+        "heapTotal": 1992093696,
+        "heapUsed": 1860361128,
+        "external": 534793297,
+        "arrayBuffers": 532399051
+      },
+      "freeBytes": 643481600,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "c8a90569d80ae675",
+        "error": null,
+        "memoryMB": 5182,
+        "liveMB": 4296,
+        "peakMB": 4427,
+        "freeMB": 132,
+        "arrays": 887,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 5,
+      "ms": 593.7201000000059,
+      "units": 3377038,
+      "memory": {
+        "rss": 4680929280,
+        "heapTotal": 1992093696,
+        "heapUsed": 1875152000,
+        "external": 534688691,
+        "arrayBuffers": 532426063
+      },
+      "freeBytes": 687341568,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "c8a90569d80ae675",
+        "error": null,
+        "memoryMB": 5182,
+        "liveMB": 4296,
+        "peakMB": 4427,
+        "freeMB": 132,
+        "arrays": 887,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 6,
+      "ms": 835.1052999999956,
+      "units": 3376613,
+      "memory": {
+        "rss": 4783267840,
+        "heapTotal": 1993093120,
+        "heapUsed": 1894749736,
+        "external": 534715338,
+        "arrayBuffers": 532452710
+      },
+      "freeBytes": 716447744,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "c8a90569d80ae675",
+        "error": null,
+        "memoryMB": 5182,
+        "liveMB": 4296,
+        "peakMB": 4427,
+        "freeMB": 132,
+        "arrays": 887,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 7,
+      "ms": 1284.599900000001,
+      "units": 3376330,
+      "memory": {
+        "rss": 5083250688,
+        "heapTotal": 1972670464,
+        "heapUsed": 1892582720,
+        "external": 534726400,
+        "arrayBuffers": 532399051
+      },
+      "freeBytes": 423538688,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "c8a90569d80ae675",
+        "error": null,
+        "memoryMB": 5182,
+        "liveMB": 4301,
+        "peakMB": 4427,
+        "freeMB": 126,
+        "arrays": 894,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 8,
+      "ms": 929.3991999999998,
+      "units": 3336036,
+      "memory": {
+        "rss": 5153460224,
+        "heapTotal": 2032095232,
+        "heapUsed": 1938519344,
+        "external": 534661679,
+        "arrayBuffers": 532399051
+      },
+      "freeBytes": 543588352,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "c8a90569d80ae675",
+        "error": null,
+        "memoryMB": 5182,
+        "liveMB": 4301,
+        "peakMB": 4427,
+        "freeMB": 126,
+        "arrays": 894,
+        "pendingFrees": 0
+      }
+    }
+  ],
+  "phases": {
+    "recalculateUnitEffectiveStats": 1136.0217625000005,
+    "recalculateThingPrecomputedStats": 757.1411000000016,
+    "_forEachUnitInTickOrder": 495.4906000000028,
+    "navTick": 393.07307500000024,
+    "towersTick": 343.0067375000026,
+    "simMoveRun": 203.76737499999945,
+    "simUnitStateCollect": 125.07171250000283,
+    "updateAllPlayerVisibility": 96.57545000000118,
+    "spatialIndexRebuild": 88.85401250000177,
+    "combatScanRun": 43.823950000007244,
+    "statusPrepassRun": 21.86514999999963,
+    "unitHitsResolve": 17.589500000000044,
+    "separationStart": 17.213574999997945,
+    "navFieldsFlush": 3.5844000000015512,
+    "unitRetirePrepare": 2.0271500000035303,
+    "spawnerStructuresTick": 1.1082875000010972,
+    "unitPassBegin": 0.1555625000019063,
+    "processGlobalSpawnerQueue": 0.03585000000020955,
+    "visCoverHoldEnd": 0.02546250000341388,
+    "runUnitSeparationPass": 0.024150000001100125,
+    "projectilesBegin": 0.019700000000739237
+  },
+  "phaseSelf": {
+    "recalculateUnitEffectiveStats": 1136.0217625000005,
+    "recalculateThingPrecomputedStats": 757.1411000000016,
+    "_forEachUnitInTickOrder": 495.4906000000028,
+    "navTick": 393.07307500000024,
+    "towersTick": 343.0067375000026,
+    "simMoveRun": 159.94988749999538,
+    "simUnitStateCollect": 125.07171250000283,
+    "updateAllPlayerVisibility": 96.57545000000118,
+    "spatialIndexRebuild": 88.85401250000177,
+    "combatScanRun": 43.823950000007244,
+    "statusPrepassRun": 21.86514999999963,
+    "unitHitsResolve": 17.589500000000044,
+    "separationStart": 17.213574999997945,
+    "navFieldsFlush": 3.5844000000015512,
+    "unitRetirePrepare": 2.0271500000035303,
+    "spawnerStructuresTick": 1.1082875000010972,
+    "unitPassBegin": 0.1555625000019063,
+    "processGlobalSpawnerQueue": 0.03585000000020955,
+    "visCoverHoldEnd": 0.02546250000341388,
+    "runUnitSeparationPass": 0.024150000001100125,
+    "projectilesBegin": 0.019700000000739237
+  },
+  "top": [
+    {
+      "name": "wasm-function[86]",
+      "line": 0,
+      "selfMs": 1146.611
+    },
+    {
+      "name": "simMoveStatsChanged",
+      "line": 65019,
+      "selfMs": 986.329
+    },
+    {
+      "name": "simMoveStatsChanged",
+      "line": 65019,
+      "selfMs": 971.017
+    },
+    {
+      "name": "_effStatsFullUnit",
+      "line": 73195,
+      "selfMs": 949.02
+    },
+    {
+      "name": "update",
+      "line": 63074,
+      "selfMs": 936.36
+    },
+    {
+      "name": "forEachUnitInAreaRange",
+      "line": 55654,
+      "selfMs": 910.654
+    },
+    {
+      "name": "applyUnitLevelScaling",
+      "line": 22830,
+      "selfMs": 857.753
+    },
+    {
+      "name": "applyUnitLevelScaling",
+      "line": 22830,
+      "selfMs": 837.306
+    },
+    {
+      "name": "applyUnitEffectiveScaling",
+      "line": 22879,
+      "selfMs": 789.804
+    },
+    {
+      "name": "wasm-function[23]",
+      "line": 0,
+      "selfMs": 783.751
+    },
+    {
+      "name": "applyUnitEffectiveScaling",
+      "line": 22879,
+      "selfMs": 686.994
+    },
+    {
+      "name": "wasm-function[83]",
+      "line": 0,
+      "selfMs": 684.437
+    },
+    {
+      "name": "",
+      "line": 0,
+      "selfMs": 580.926
+    },
+    {
+      "name": "_refreshThingPrecomputedStats",
+      "line": 72601,
+      "selfMs": 578.707
+    },
+    {
+      "name": "wasm-function[86]",
+      "line": 0,
+      "selfMs": 573.984
+    },
+    {
+      "name": "_gameTickBody",
+      "line": 75558,
+      "selfMs": 555.872
+    },
+    {
+      "name": "(garbage collector)",
+      "line": -1,
+      "selfMs": 534.714
+    },
+    {
+      "name": "_effBaseNote",
+      "line": 73129,
+      "selfMs": 496.197
+    },
+    {
+      "name": "_effWindowCount",
+      "line": 72985,
+      "selfMs": 458.364
+    },
+    {
+      "name": "_effBaseLookup",
+      "line": 73106,
+      "selfMs": 384.508
+    },
+    {
+      "name": "recalculateUnitEffectiveStats",
+      "line": 73238,
+      "selfMs": 369.077
+    },
+    {
+      "name": "wasm-function[90]",
+      "line": 0,
+      "selfMs": 337.19
+    },
+    {
+      "name": "_effRowLookup",
+      "line": 73055,
+      "selfMs": 330.837
+    },
+    {
+      "name": "_effRowAttach",
+      "line": 73147,
+      "selfMs": 329.6
+    },
+    {
+      "name": "_effRowAttach",
+      "line": 73147,
+      "selfMs": 327.231
+    }
+  ],
+  "memory": {
+    "rss": 5088903168,
+    "heapTotal": 2117763072,
+    "heapUsed": 2006672600,
+    "external": 534692950,
+    "arrayBuffers": 532399051
+  }
+}

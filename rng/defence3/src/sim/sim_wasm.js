@@ -374,8 +374,11 @@ function simWasmHelperInit(w) {
         exp.__stack_pointer.value = SIM_WASM64 ? BigInt(w.stackTop) : w.stackTop;
         _simWasmOn = w.on;
         _simWasmMem = w.memory;
-        _simWasmScratch = w.scratch | 0; _simWasmScratchWords = w.scratchWords | 0;
-        _simWasmArgsAt(w.args | 0);
+        // Byte addresses can exceed both the signed and unsigned 32-bit
+        // ranges in memory64. Keep them as numbers until _simWEnc encodes
+        // word addresses for the kernels.
+        _simWasmScratch = w.scratch; _simWasmScratchWords = w.scratchWords | 0;
+        _simWasmArgsAt(w.args);
         _simWasmX = exp;
     } catch (err) { _simWasmX = null; console.error('[sim helper] wasm kernels unavailable, JS kernels run here:', err && err.message || err); }
 }

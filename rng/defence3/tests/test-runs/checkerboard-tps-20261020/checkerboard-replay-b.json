@@ -1,0 +1,438 @@
+{
+  "node": "v24.19.0",
+  "cpu": "AMD Ryzen 7 4800H with Radeon Graphics         ",
+  "initial": {
+    "units": 40000,
+    "towers": 1250,
+    "groups": 625,
+    "map": [
+      1000,
+      1000
+    ]
+  },
+  "final": {
+    "units": 36168,
+    "towers": 1250,
+    "tick": 15,
+    "hash": "ffa7262b",
+    "parts": {
+      "time": "9c4bc8a5",
+      "players": "eb4c4529",
+      "units": "4ad38e75",
+      "towers": "70de87b7",
+      "barracks": "4b95f515",
+      "spawners": "4b95f515",
+      "floor": "811c9dc5",
+      "mines": "9be17165"
+    }
+  },
+  "ticks": 12,
+  "warmup": 3,
+  "group": 32,
+  "helpers": 7,
+  "dk": 1,
+  "referenceStorage": false,
+  "tickMs": {
+    "mean": 15.72534166666666,
+    "p50": 13.753999999999905,
+    "p95": 32.830699999999524
+  },
+  "tps": 63.59162307549229,
+  "setup": {
+    "units": 40000,
+    "towers": 1250,
+    "groups": 625,
+    "map": [
+      1000,
+      1000
+    ],
+    "ms": 2179.1996,
+    "heap": {
+      "ready": true,
+      "kernels": true,
+      "wasm64": true,
+      "hash": "3aeb27b1bf6837a3",
+      "error": null,
+      "memoryMB": 172,
+      "liveMB": 93,
+      "peakMB": 93,
+      "freeMB": 0,
+      "arrays": 207,
+      "pendingFrees": 0
+    },
+    "memory": {
+      "rss": 787226624,
+      "heapTotal": 574730240,
+      "heapUsed": 448227960,
+      "external": 43285263,
+      "arrayBuffers": 40680267
+    }
+  },
+  "timeline": [
+    {
+      "tick": 1,
+      "ms": 32.830699999999524,
+      "units": 36682,
+      "memory": {
+        "rss": 1247830016,
+        "heapTotal": 499163136,
+        "heapUsed": 360166072,
+        "external": 90935773,
+        "arrayBuffers": 88681754
+      },
+      "freeBytes": 4853321728,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "3aeb27b1bf6837a3",
+        "error": null,
+        "memoryMB": 798,
+        "liveMB": 635,
+        "peakMB": 635,
+        "freeMB": 0,
+        "arrays": 887,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 2,
+      "ms": 13.753999999999905,
+      "units": 36678,
+      "memory": {
+        "rss": 1248489472,
+        "heapTotal": 499425280,
+        "heapUsed": 361244384,
+        "external": 90944683,
+        "arrayBuffers": 88682055
+      },
+      "freeBytes": 4852764672,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "3aeb27b1bf6837a3",
+        "error": null,
+        "memoryMB": 798,
+        "liveMB": 635,
+        "peakMB": 635,
+        "freeMB": 0,
+        "arrays": 887,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 3,
+      "ms": 18.239700000000084,
+      "units": 36630,
+      "memory": {
+        "rss": 1249329152,
+        "heapTotal": 499425280,
+        "heapUsed": 362572424,
+        "external": 90944982,
+        "arrayBuffers": 88682354
+      },
+      "freeBytes": 4852379648,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "3aeb27b1bf6837a3",
+        "error": null,
+        "memoryMB": 798,
+        "liveMB": 635,
+        "peakMB": 635,
+        "freeMB": 0,
+        "arrays": 887,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 4,
+      "ms": 14.302899999999681,
+      "units": 36556,
+      "memory": {
+        "rss": 1249927168,
+        "heapTotal": 499425280,
+        "heapUsed": 363173328,
+        "external": 90945128,
+        "arrayBuffers": 88682500
+      },
+      "freeBytes": 4852256768,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "3aeb27b1bf6837a3",
+        "error": null,
+        "memoryMB": 798,
+        "liveMB": 635,
+        "peakMB": 635,
+        "freeMB": 0,
+        "arrays": 887,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 5,
+      "ms": 11.561999999999898,
+      "units": 36287,
+      "memory": {
+        "rss": 1250246656,
+        "heapTotal": 499425280,
+        "heapUsed": 363588632,
+        "external": 90945128,
+        "arrayBuffers": 88682500
+      },
+      "freeBytes": 4851912704,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "3aeb27b1bf6837a3",
+        "error": null,
+        "memoryMB": 798,
+        "liveMB": 635,
+        "peakMB": 635,
+        "freeMB": 0,
+        "arrays": 887,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 6,
+      "ms": 7.521500000000742,
+      "units": 36287,
+      "memory": {
+        "rss": 1251151872,
+        "heapTotal": 499425280,
+        "heapUsed": 364283112,
+        "external": 90945128,
+        "arrayBuffers": 88682500
+      },
+      "freeBytes": 4850290688,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "3aeb27b1bf6837a3",
+        "error": null,
+        "memoryMB": 798,
+        "liveMB": 635,
+        "peakMB": 635,
+        "freeMB": 0,
+        "arrays": 887,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 7,
+      "ms": 23.342599999999948,
+      "units": 36287,
+      "memory": {
+        "rss": 1260388352,
+        "heapTotal": 499425280,
+        "heapUsed": 364274920,
+        "external": 90945128,
+        "arrayBuffers": 88682500
+      },
+      "freeBytes": 4837867520,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "3aeb27b1bf6837a3",
+        "error": null,
+        "memoryMB": 798,
+        "liveMB": 636,
+        "peakMB": 636,
+        "freeMB": 0,
+        "arrays": 895,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 8,
+      "ms": 11.710799999999836,
+      "units": 36287,
+      "memory": {
+        "rss": 1254309888,
+        "heapTotal": 499425280,
+        "heapUsed": 364499120,
+        "external": 91027048,
+        "arrayBuffers": 88764420
+      },
+      "freeBytes": 4845191168,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "3aeb27b1bf6837a3",
+        "error": null,
+        "memoryMB": 798,
+        "liveMB": 636,
+        "peakMB": 636,
+        "freeMB": 0,
+        "arrays": 895,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 9,
+      "ms": 29.35230000000047,
+      "units": 36168,
+      "memory": {
+        "rss": 1260949504,
+        "heapTotal": 499949568,
+        "heapUsed": 366453312,
+        "external": 91027048,
+        "arrayBuffers": 88764420
+      },
+      "freeBytes": 4834684928,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "3aeb27b1bf6837a3",
+        "error": null,
+        "memoryMB": 798,
+        "liveMB": 636,
+        "peakMB": 636,
+        "freeMB": 0,
+        "arrays": 895,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 10,
+      "ms": 11.221199999999953,
+      "units": 36168,
+      "memory": {
+        "rss": 1249861632,
+        "heapTotal": 499949568,
+        "heapUsed": 366468504,
+        "external": 91027048,
+        "arrayBuffers": 88764420
+      },
+      "freeBytes": 4846120960,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "3aeb27b1bf6837a3",
+        "error": null,
+        "memoryMB": 798,
+        "liveMB": 636,
+        "peakMB": 636,
+        "freeMB": 0,
+        "arrays": 895,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 11,
+      "ms": 9.152500000000146,
+      "units": 36168,
+      "memory": {
+        "rss": 1250287616,
+        "heapTotal": 499949568,
+        "heapUsed": 366725440,
+        "external": 91027048,
+        "arrayBuffers": 88764420
+      },
+      "freeBytes": 4845989888,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "3aeb27b1bf6837a3",
+        "error": null,
+        "memoryMB": 798,
+        "liveMB": 636,
+        "peakMB": 636,
+        "freeMB": 0,
+        "arrays": 895,
+        "pendingFrees": 0
+      }
+    },
+    {
+      "tick": 12,
+      "ms": 5.7138999999997395,
+      "units": 36168,
+      "memory": {
+        "rss": 1250549760,
+        "heapTotal": 499949568,
+        "heapUsed": 366904768,
+        "external": 91027048,
+        "arrayBuffers": 88764420
+      },
+      "freeBytes": 4845883392,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "3aeb27b1bf6837a3",
+        "error": null,
+        "memoryMB": 798,
+        "liveMB": 636,
+        "peakMB": 636,
+        "freeMB": 0,
+        "arrays": 895,
+        "pendingFrees": 0
+      }
+    }
+  ],
+  "phases": {
+    "simMoveRun": 3.657183333333554,
+    "_forEachUnitInTickOrder": 1.8379000000001422,
+    "combatScanRun": 1.099658333333385,
+    "unitHitsResolve": 1.0807166666667551,
+    "spatialIndexRebuild": 0.82334166666692,
+    "simUnitStateCollect": 0.7148833333334702,
+    "statusPrepassRun": 0.499050000000049,
+    "updateAllPlayerVisibility": 0.42352500000023,
+    "recalculateUnitEffectiveStats": 0.35324166666653883,
+    "unitRetirePrepare": 0.23565000000007785,
+    "towersTick": 0.1218416666667963,
+    "navFieldsFlush": 0.10904166666659876,
+    "spawnerStructuresTick": 0.030016666666748886,
+    "separationStart": 0.025191666666614765,
+    "recalculateThingPrecomputedStats": 0.024875000000141274,
+    "unitPassBegin": 0.015141666666674306,
+    "runUnitSeparationPass": 0.012908333333522629,
+    "navTick": 0.01074166666671772,
+    "processGlobalSpawnerQueue": 0.007249999999961195,
+    "visCoverHoldEnd": 0.005191666666557164,
+    "projectilesBegin": 0.0015583333334537504
+  },
+  "phaseSelf": {
+    "simMoveRun": 2.565675000000207,
+    "_forEachUnitInTickOrder": 1.8379000000001422,
+    "combatScanRun": 1.099658333333385,
+    "unitHitsResolve": 1.0807166666667551,
+    "spatialIndexRebuild": 0.82334166666692,
+    "simUnitStateCollect": 0.7148833333334702,
+    "statusPrepassRun": 0.499050000000049,
+    "updateAllPlayerVisibility": 0.42352500000023,
+    "recalculateUnitEffectiveStats": 0.35324166666653883,
+    "unitRetirePrepare": 0.23565000000007785,
+    "towersTick": 0.1218416666667963,
+    "navFieldsFlush": 0.10904166666659876,
+    "spawnerStructuresTick": 0.030016666666748886,
+    "separationStart": 0.025191666666614765,
+    "recalculateThingPrecomputedStats": 0.024875000000141274,
+    "unitPassBegin": 0.015141666666674306,
+    "runUnitSeparationPass": 0.012908333333522629,
+    "navTick": 0.01074166666671772,
+    "processGlobalSpawnerQueue": 0.007249999999961195,
+    "visCoverHoldEnd": 0.005191666666557164,
+    "projectilesBegin": 0.0015583333334537504
+  },
+  "memory": {
+    "rss": 1253851136,
+    "heapTotal": 501370880,
+    "heapUsed": 371374048,
+    "external": 91058319,
+    "arrayBuffers": 88764420
+  }
+}

@@ -241,7 +241,7 @@ function _forEachUnitInTickOrderBody(fn, list, n) {
     // nothing during the pass can end a hold (targets and walls are judged as
     // at its start: _unitTickDead, simMoveWallGrid) but the unit's own end,
     // marked after the pass (SIM_KERNEL_HELD_DEAD).
-    if (_updateOrderCand.length < nb * B) { _updateOrderCand = simSharedArray(Int32Array, Math.max(1024, nb * B * 2)); simParallelBind('upd.cand', _updateOrderCand); }
+    if (_updateOrderCand.length < nb * B) { _updateOrderCand = simSharedArray(Int32Array, simReserveCap(nb * B)); simParallelBind('upd.cand', _updateOrderCand); }
     if (_updateOrderRun.length < nb + 1) { _updateOrderRun = simSharedArray(Int32Array, Math.max(1024, (nb + 1) * 2)); simParallelBind('upd.cnt', _updateOrderRun); }
     const cand = _updateOrderCand, bcnt = _updateOrderRun;
     let overBudget = 0;
@@ -635,7 +635,7 @@ let _unitRetireList = new Int32Array(0), _unitRetireCounts = new Int32Array(0);
 function unitRetirePrepare() {
     const S = _simUnitState, n = units.length, ns = S ? S.owners.length : n;
     const blocks = Math.ceil(Math.max(n, ns) / UNIT_RETIRE_BLOCK);
-    if (_unitRetireList.length < n) { _unitRetireList = simSharedArray(Int32Array, Math.max(1024, n * 2)); simParallelBind('retire.list', _unitRetireList); }
+    if (_unitRetireList.length < n) { _unitRetireList = simSharedArray(Int32Array, simReserveCap(n)); simParallelBind('retire.list', _unitRetireList); }
     if (_unitRetireCounts.length < blocks) { _unitRetireCounts = simSharedArray(Int32Array, Math.max(16, blocks * 2)); simParallelBind('retire.count', _unitRetireCounts); }
     if (S) {
         simParallelBind('ix.slots', _unitSlotMapEnsure());
@@ -3226,7 +3226,37 @@ function _pathStartInRegion(labels, region, gx, gy) {
 // removed: the dead-unit pass, eliminateTeamAssets) and made anew when the
 // list is replaced (a new match, a restore). It may still hold a unit that
 // died (callers skip dead ones), never one of another list.
-let _unitById = new Map(), _unitByIdFor = null;
+// IDs are mostly consecutive. A hash-table entry for every unit costs far
+// more than a reference in a small page (and growing a multi-million-entry
+// Map temporarily keeps both tables). Empty pages are released on death;
+// widely separated IDs allocate only their own pages.
+class UnitIdIndex {
+    constructor() { this.pages = new Map(); this.size = 0; this.lastKey = NaN; this.lastPage = undefined; }
+    get(id) {
+        if (!Number.isSafeInteger(id)) return undefined;
+        const key = Math.floor(id / 1024);
+        const page = key === this.lastKey ? this.lastPage : (this.lastPage = this.pages.get(this.lastKey = key));
+        return page ? page.values[id - key * 1024] : undefined;
+    }
+    set(id, unit) {
+        const key = Math.floor(id / 1024), offset = id - key * 1024;
+        let page = key === this.lastKey ? this.lastPage : this.pages.get(key);
+        if (!page) { page = { values: new Array(1024).fill(undefined), count: 0 }; this.pages.set(key, page); }
+        this.lastKey = key; this.lastPage = page;
+        if (page.values[offset] === undefined) { page.count++; this.size++; }
+        page.values[offset] = unit;
+        return this;
+    }
+    delete(id) {
+        if (!Number.isSafeInteger(id)) return false;
+        const key = Math.floor(id / 1024), page = this.pages.get(key), offset = id - key * 1024;
+        if (!page || page.values[offset] === undefined) return false;
+        page.values[offset] = undefined; this.size--;
+        if (--page.count === 0) { this.pages.delete(key); if (this.lastKey === key) this.lastPage = undefined; }
+        return true;
+    }
+}
+let _unitById = new UnitIdIndex(), _unitByIdFor = null;
 function _unitByIdMap() {
     // (The page beside a simulation worker: its units are the frame's views,
     // kept by id as frames come. A map made here was made again after every
@@ -3235,7 +3265,7 @@ function _unitByIdMap() {
     // (Kept as units are added and retired; a unit put into the list another
     // way (tools, tests) shows as a size that does not match: made again.)
     if (_unitByIdFor !== units || _unitById.size !== units.length) {
-        _unitById = new Map();
+        _unitById = new UnitIdIndex();
         for (let i = 0; i < units.length; i++) { const u = units[i]; if (u) _unitById.set(u.id, u); }
         _unitByIdFor = units;
     }

@@ -1000,7 +1000,12 @@ function simParallelInit(helperUrl, maxHelpers = null) {
             w.onerror = e => { e.preventDefault(); console.error('[sim helper]', e.message || 'failed to load', e.filename ? `${e.filename}:${e.lineno}` : helperUrl); };
             const wasm = typeof simWasmHelperPayload === 'function' ? simWasmHelperPayload() : null;
             w.postMessage({ type: 'init', ctl, params: _simParams, bgParams: _simBgStageParams, bgChain: _simBgChain, index: i, wasm });
-            for (let name in _simParReg) w.postMessage({ type: 'bind', name, arr: _simParReg[name], ver: _simParRegVer, wptr: _simParWPtr[name] ?? -1 });
+            // Publish the initial registry atomically: each old per-array
+            // message advertised the final version, allowing a helper to
+            // claim work while most of that version's arrays were missing.
+            const bindings = [];
+            for (let name in _simParReg) { const ptr = _simParWPtr[name] ?? -1; bindings.push(name, _simBindValue(_simParReg[name], ptr), ptr); }
+            w.postMessage({ type: 'binds', list: bindings, ver: _simParRegVer });
             helpers.push(w);
         } catch (err) { break; }
     }
@@ -1018,14 +1023,29 @@ function simParallelHelpers() { return _simPool ? _simPool.helpers.length : 0; }
 // the bindings in one message each (a unit storage growth rebinds ~260
 // arrays: 1800 messages to 7 helpers were ~10 ms).
 let _simBindBatch = null;
+const _SIM_BIND_TYPES = { Int8Array, Uint8Array, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array };
+// Reconstruct heap views over the memory already shared at init. Some
+// engines serialize a typed view's byte offset as 32 bits, corrupting
+// views above 4 GiB (or dropping them entirely). Descriptors also avoid
+// repeatedly serializing a view of the entire shared heap per binding.
+function _simBindValue(arr, ptr) {
+    return ptr >= 0 && arr ? { heapType: arr.constructor.name, length: arr.length } : arr;
+}
+function _simBindArray(value, ptr) {
+    if (!value || !value.heapType) return value;
+    const Type = _SIM_BIND_TYPES[value.heapType];
+    if (!Type || !_simWasmMem) throw new Error('invalid simulation heap binding: ' + value.heapType);
+    return new Type(_simWasmMem.buffer, ptr, value.length);
+}
 function simParallelBind(name, arr) {
     if (_simParReg[name] === arr) return;
     _simParReg[name] = arr;
     const wptr = _simParWPtr[name] = _simHeapPtrOf !== null ? _simHeapPtrOf(arr) : -1;
     _simParRegVer++; _simParBinds++;
     if (!_simPool) return;
-    if (_simBindBatch !== null) { _simBindBatch.push(name, arr, wptr); return; }
-    for (let w of _simPool.helpers) w.postMessage({ type: 'bind', name, arr, ver: _simParRegVer, wptr });
+    const value = _simBindValue(arr, wptr);
+    if (_simBindBatch !== null) { _simBindBatch.push(name, value, wptr); return; }
+    for (let w of _simPool.helpers) w.postMessage({ type: 'bind', name, arr: value, ver: _simParRegVer, wptr });
 }
 function simParallelBindBatch() { if (_simBindBatch === null) _simBindBatch = []; }
 function simParallelBindFlush() {
@@ -1078,7 +1098,10 @@ function _simNoWasm(name) {
 const SIM_RUST_W0 = 512;
 function _simRust(K, P, chunk, fn, name) {
     const A = _simWPtrs(K);
-    if (A === null || _simWasmArgI === null || _simWasmX === null) _simNoWasm(name);
+    if (A === null || _simWasmArgI === null || _simWasmX === null) {
+        const missing = K.names.filter((nm, i) => !K.opt[i] && (!_simParReg[nm] || !(_simParWPtr[nm] >= 0)));
+        throw new Error('SIM_KERNEL_' + name + ': module=' + (_simWasmX !== null) + ', args=' + (_simWasmArgI !== null) + ', missing heap arrays=' + missing.map(nm => nm + ':' + (_simParReg[nm] ? _simParWPtr[nm] : 'unbound')).join(','));
+    }
     const I = _simWasmArgI;
     for (let i = 0; i < A.length; i++) I[SIM_RUST_W0 + i] = _simWEnc(A[i]);
     // (The thread's scratch: k.rs scratch().)
@@ -1272,13 +1295,17 @@ function _simHelperLogFail(what, err) {
     if (n <= 3) console.error('[sim helper] ' + what + ' failed:', err && err.stack || err);
     else if ((n & (n - 1)) === 0) console.error('[sim helper] ' + what + ' failed ' + n + ' times so far: ' + key);
 }
-function _simBgClaim(ctl, lane, CT, paramsByStage) {
+function _simBgClaim(ctl, lane, CT, paramsByStage, registryVersion = _simParRegVer) {
     const b = SIM_PAR_BG_BASE + lane * 8;
     Atomics.add(ctl, b + SIM_PAR_BG_READERS, 1);
     let out = 0;
     try {
         const id = Atomics.load(ctl, b + SIM_PAR_BG_ID);
         if (id < 0) return 0;
+        // The lane may have been replaced since the helper's outer version
+        // check. Validate inside the claim section, where closing the lane
+        // waits for us before publishing another job and its bindings.
+        if (registryVersion < Atomics.load(ctl, b + SIM_PAR_BG_REGVER)) return 0;
         const total = Atomics.load(ctl, b + SIM_PAR_BG_TOTAL), st = Atomics.load(ctl, b + SIM_PAR_BG_STAGE);
         const cb = lane * (1 + 2 * SIM_PAR_BG_STAGES), n = CT[cb];
         if (Atomics.load(ctl, b + SIM_PAR_BG_DONE) >= total) return st >= n - 1 ? 2 : 0;
@@ -1287,7 +1314,7 @@ function _simBgClaim(ctl, lane, CT, paramsByStage) {
         const kw = Atomics.load(ctl, b + SIM_PAR_BG_KERNEL);
         _simParRunning++;
         try { SIM_KERNELS[kw & 0xFFFF](_simParReg, paramsByStage[kw >>> 16], c); }
-        catch (err) { if (typeof _simPool !== 'undefined' && _simPool) throw err; _simHelperLogFail('background kernel ' + (kw & 0xFFFF), err); Atomics.store(ctl, SIM_PAR_ERR, 1); }
+        catch (err) { if (typeof _simPool !== 'undefined' && _simPool) throw err; _simHelperLogFail('background kernel ' + (kw & 0xFFFF) + ' (registry ' + registryVersion + ', required ' + Atomics.load(ctl, b + SIM_PAR_BG_REGVER) + ')', err); Atomics.store(ctl, SIM_PAR_ERR, 1); }
         finally { _simParRunning--; }
         out = 1;
         if (Atomics.add(ctl, b + SIM_PAR_BG_DONE, 1) + 1 === total) {
@@ -1398,14 +1425,14 @@ function simParallelHelperMain() {
             if (m.wasm && typeof simWasmHelperInit === 'function') simWasmHelperInit(m.wasm);
             loop();
         } else if (m.type === 'bind') {
-            _simParReg[m.name] = m.arr;
+            _simParReg[m.name] = _simBindArray(m.arr, m.wptr);
             _simParWPtr[m.name] = m.wptr >= 0 ? m.wptr : -1;
             _simParBinds++;
             if (m.ver > regVer) regVer = m.ver;
         } else if (m.type === 'binds') {
             // (A batch: [name, arr, wptr, ...], in order.)
             const L = m.list;
-            for (let i = 0; i < L.length; i += 3) { _simParReg[L[i]] = L[i + 1]; _simParWPtr[L[i]] = L[i + 2] >= 0 ? L[i + 2] : -1; }
+            for (let i = 0; i < L.length; i += 3) { _simParReg[L[i]] = _simBindArray(L[i + 1], L[i + 2]); _simParWPtr[L[i]] = L[i + 2] >= 0 ? L[i + 2] : -1; }
             _simParBinds++;
             if (m.ver > regVer) regVer = m.ver;
         }
@@ -1462,7 +1489,7 @@ function simParallelHelperMain() {
                     // (A bulk lane: only while under its cap of helpers.)
                     const capped = lane === SIM_LANE_NAVX;
                     if (capped && Atomics.add(ctl, SIM_PAR_BG_RUN + lane, 1) >= Atomics.load(ctl, SIM_PAR_BG_CAP)) { Atomics.sub(ctl, SIM_PAR_BG_RUN + lane, 1); continue; }
-                    try { ran = _simBgClaim(ctl, lane, bgChain, bgParams[lane]) === 1; }
+                    try { ran = _simBgClaim(ctl, lane, bgChain, bgParams[lane], regVer) === 1; }
                     finally { if (capped) Atomics.sub(ctl, SIM_PAR_BG_RUN + lane, 1); }
                 }
                 if (!ran) break;

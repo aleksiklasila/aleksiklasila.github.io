@@ -571,6 +571,29 @@ unsafe fn pair_exact(o: &PairOut, p: &mut PairP, q: usize) {
     let (nqx, nqy) = if d > 0.001 { (-npx, -npy) } else { push_dir(dxe, dye, d, iq, p.ip) };
     // (Both still, the common case in big worlds: no closing, no flow.)
     let still = qvp == 0 && p.vx == 0.0 && p.vy == 0.0;
+    if still {
+        // A held crowd needs only its geometric correction. Avoid the
+        // velocity/skin/closing response calculations and their divisions;
+        // neither side can contribute closing resistance or shared flow.
+        if p.p_part != 0 {
+            let share = if q_part != 0 { o.both } else { o.one };
+            let f = pressure * share * o.qscale;
+            p.acc_px += js_round(npx * f);
+            p.acc_py += js_round(npy * f);
+            if overlap > p.acc_ov { p.acc_ov = overlap; }
+            p.acc_hit += 1;
+        }
+        if q_part != 0 {
+            let share = if p.p_part != 0 { o.both } else { o.one };
+            let f = pressure * share * o.qscale;
+            let b = bq as usize;
+            wr(o.px_out, b, rd(o.px_out, b).wrapping_add(js_round(nqx * f) as i32));
+            wr(o.py_out, b, rd(o.py_out, b).wrapping_add(js_round(nqy * f) as i32));
+            if overlap > rd(o.ov_out, b) { wr(o.ov_out, b, overlap); }
+            wr(o.hit_out, b, rd(o.hit_out, b) + 1);
+        }
+        return;
+    }
     let (qvx, qvy) = (sep_iv_x(qvp), sep_iv_y(qvp));
     let wgt = js_min(1.0, overlap / (min_dist * 0.1));
     let closing = if still { 0.0 } else { (qvx - p.vx) * npx + (qvy - p.vy) * npy };
@@ -658,20 +681,28 @@ unsafe fn pair_run(o: &PairOut, p: &mut PairP, v: &PairV, s0: usize, s1: usize) 
     let iota = i32x4(0, 1, 2, 3);
     let mut q = s0;
     while q < s1 {
+        // Reject duplicate pairs and other layers before loading positions
+        // and radii. In a participating crowd, whole vectors preceding p
+        // have already counted their pairs with p.
+        let m4 = v128_load(o.meta.add(q) as *const v128);
+        let idx4 = i32x4_add(i32x4_splat(q as i32), iota);
+        let skip = v128_or(i32x4_eq(idx4, v.pi4), v128_and(i32x4_ne(v128_and(m4, mpart), zero), i32x4_lt(idx4, v.pi4)));
+        let eligible = v128_andnot(i32x4_eq(v128_and(m4, mlay), v.pl4), skip);
+        let lanes = (i32x4_bitmask(eligible) as u32) & (i32x4_bitmask(i32x4_lt(iota, i32x4_splat((s1 - q) as i32))) as u32);
+        if lanes == 0 {
+            q += 4;
+            continue;
+        }
         let x4 = v128_load(o.qx.add(q) as *const v128);
         let y4 = v128_load(o.qy.add(q) as *const v128);
         let r4 = v128_load(o.qr.add(q) as *const v128);
-        let m4 = v128_load(o.meta.add(q) as *const v128);
         let dx = f32x4_sub(x4, v.xp4);
         let dy = f32x4_sub(y4, v.yp4);
         let d2 = f32x4_add(f32x4_mul(dx, dx), f32x4_mul(dy, dy));
         let same = i32x4_eq(v128_and(m4, m255), v.op4);
         let md = f32x4_add(f32x4_add(v.rp4, r4), v128_andnot(padf, same));
         let lim2 = f32x4_mul(f32x4_mul(md, md), kmul);
-        let idx4 = i32x4_add(i32x4_splat(q as i32), iota);
-        let skip = v128_or(i32x4_eq(idx4, v.pi4), v128_and(i32x4_ne(v128_and(m4, mpart), zero), i32x4_lt(idx4, v.pi4)));
-        let ok = v128_andnot(v128_and(v128_not(f32x4_ge(d2, lim2)), i32x4_eq(v128_and(m4, mlay), v.pl4)), skip);
-        let mut bits = (i32x4_bitmask(ok) as u32) & (i32x4_bitmask(i32x4_lt(iota, i32x4_splat((s1 - q) as i32))) as u32);
+        let mut bits = (i32x4_bitmask(v128_not(f32x4_ge(d2, lim2))) as u32) & lanes;
         while bits != 0 {
             let qi = q + bits.trailing_zeros() as usize;
             bits &= bits - 1;

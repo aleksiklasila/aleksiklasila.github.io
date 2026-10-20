@@ -951,6 +951,7 @@ function _simCopyRuns(a, b, runs, per) {
 // of the slots (a dead unit keeps its values, detached, for any reference
 // still holding it).
 const SIM_UNIT_COLLECT_SLICES = 64;
+const SIM_UNIT_COLLECT_BLOCK = 1024;
 function simUnitStateCollect(all = false) {
     const S = _simUnitState;
     if (!S) return;
@@ -969,8 +970,19 @@ function simUnitStateCollect(all = false) {
     }
     // (A slot's unit reads dead from the slot's column: the typed column, not
     // the unit's getter, ~10x faster over a slice.)
-    const step = all ? 1 : SIM_UNIT_COLLECT_SLICES, DEAD = S.columns.dead;
-    for (let s = all ? 0 : (typeof gameTime === 'number' ? gameTime : 0) % step; s < owners.length; s += step) {
+    // Sweep contiguous blocks rather than every 64th slot: the old stride
+    // fetched a whole cache line per dead-byte test and scattered each
+    // detached unit's column reads across the whole multi-GB allocation.
+    // Each slot is visited once in 64 steps, independent of growth.
+    const DEAD = S.columns.dead, block = SIM_UNIT_COLLECT_BLOCK;
+    // A cursor per simulation step, not gameTime modulo 64: adaptive dk
+    // (e.g. 4 or 20) would otherwise visit only a subset of the slices and
+    // retain the other dead units and their worker/path records forever.
+    const phase = all ? 0 : (S.collectPhase || 0);
+    if (!all) S.collectPhase = (phase + 1) % SIM_UNIT_COLLECT_SLICES;
+    const first = phase * block;
+    const stride = all ? Math.max(1, owners.length) : block * SIM_UNIT_COLLECT_SLICES;
+    for (let b = first; b < owners.length; b += stride) for (let s = b, end = all ? owners.length : Math.min(b + block, owners.length); s < end; s++) {
         if (DEAD[s] !== 1) continue;
         const u = owners[s];
         if (u && u._us === S.columns && u._si === s) simUnitStateDetach(S, s);
@@ -992,10 +1004,10 @@ function simUnitStateKeys(u) {
     return keys;
 }
 
-// Scratch sized by population: the expected count plus 12.5% headroom, in
-// whole 4096-element blocks (doubling left up to half of each large pool
-// unused, and its copies with it).
-function simReserveCap(n, min = 1024) { return Math.max(min, Math.ceil(n * 1.125 / 4096) * 4096); }
+// Scratch sized by population, in whole 4096-element blocks. At a million
+// entries, 3.125% headroom already covers 32k births; 12.5% across the
+// separation/acquisition/index pools wastes hundreds of MB at 4M units.
+function simReserveCap(n, min = 1024) { return Math.max(min, Math.ceil(n * (n >= 1048576 ? 1.03125 : 1.125) / 4096) * 4096); }
 
 // Explicit paths alone own a window. Flow movers keep only a -1 handle.
 function simUnitPathWindow(c, s) {

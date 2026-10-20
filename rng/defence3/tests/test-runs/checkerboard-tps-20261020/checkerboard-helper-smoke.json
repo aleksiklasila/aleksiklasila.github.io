@@ -1,0 +1,60 @@
+{
+  "node": "v24.19.0",
+  "cpu": "AMD Ryzen 7 4800H with Radeon Graphics         ",
+  "initial": {
+    "units": 40000,
+    "towers": 1250,
+    "groups": 625,
+    "map": [
+      1000,
+      1000
+    ]
+  },
+  "final": {
+    "units": 39877,
+    "towers": 1250,
+    "tick": 3,
+    "hash": "9b419f2d"
+  },
+  "ticks": 2,
+  "warmup": 1,
+  "group": 32,
+  "helpers": 7,
+  "dk": 1,
+  "tickMs": {
+    "mean": 37.57474999999977,
+    "p50": 52.111399999999776,
+    "p95": 52.111399999999776
+  },
+  "tps": 26.613616857065082,
+  "phases": {
+    "simMoveRun": 6.622849999999744,
+    "combatScanRun": 3.284650000000056,
+    "spatialIndexRebuild": 1.7943500000001222,
+    "_forEachUnitInTickOrder": 0.8364999999998872,
+    "recalculateUnitEffectiveStats": 0.4614499999997861,
+    "updateAllPlayerVisibility": 0.3946499999997286,
+    "statusPrepassRun": 0.25695000000041546,
+    "unitRetirePrepare": 0.1871499999997468,
+    "navFieldsFlush": 0.13750000000027285,
+    "simUnitStateCollect": 0.0830999999998312,
+    "unitPassBegin": 0.03679999999985739,
+    "recalculateThingPrecomputedStats": 0.03530000000000655,
+    "spawnerStructuresTick": 0.019400000000132422,
+    "separationStart": 0.016750000000229193,
+    "unitHitsResolve": 0.00874999999996362,
+    "towersTick": 0.007750000000214641,
+    "navTick": 0.007000000000061846,
+    "processGlobalSpawnerQueue": 0.0057500000002619345,
+    "visCoverHoldEnd": 0.00430000000005748,
+    "runUnitSeparationPass": 0.002050000000053842,
+    "projectilesBegin": 0.0018499999996492988
+  },
+  "memory": {
+    "rss": 1247780864,
+    "heapTotal": 506163200,
+    "heapUsed": 366082648,
+    "external": 90975341,
+    "arrayBuffers": 88681698
+  }
+}

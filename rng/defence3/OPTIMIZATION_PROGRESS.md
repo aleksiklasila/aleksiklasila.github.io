@@ -1766,3 +1766,13 @@ Before (previous session's last records):
 | BATTLE=mix | 985 | 1094 | unit pass 521 (attacking units 435 ms over 94813 updates, idle workers 291 ms / 17954) |
 
 Target: complete tick ≤ 50 ms.
+
+## 2026-10-20: 4M checkerboard TPS pass
+
+Added `tests/checkerboard-tps.bench.cjs`: initially 4M units, 125k mixed opposing towers, 1000×1000 map, small opposing groups, real main-thread simulation and seven helpers. Paging/allocation/GC stalls stay in whole-tick wall times; no machine cleanup or memory prefaulting. Use Node 24+ memory64.
+
+Reference runs averaged 808–822 ms/tick (1.22–1.24 TPS). Optimized repeats averaged 628–694 ms; the final equivalent 12-tick window was 693 ms / 1.44 TPS, about 18% higher TPS. Normal deaths leave 3.29–3.38M units during these windows. Saved 83 MiB of live WASM scratch allocation and approximately 81 MiB of ID-index storage. Cleanup phase fell from 105–166 to about 45–57 ms/tick.
+
+Changes: full-width memory64 helper addresses; typed heap-binding descriptors to avoid cloned-view offset truncation above 4 GiB; atomic initial binding publication and protected registry checks; paged unit-ID lookup; smaller large-population spare buffers; contiguous dead-slot sweep blocks; early SIMD contact rejection and a stationary-contact fast path. Also fixed the collection cursor skipping most slices indefinitely under adaptive dk=4/20: it now advances once per simulation step.
+
+Both WASM variants rebuilt. General tests are the acceptance bar, as requested; full-scene hash differences are not a gate for this work. Detailed results, validation and repeat commands: [4M TPS report](tests/test-runs/checkerboard-tps-20261020/README.md). Remaining top costs are `sep_pairs`/`mv_move` and their waits, the unit update pass, spatial indexing, and detached-value construction.

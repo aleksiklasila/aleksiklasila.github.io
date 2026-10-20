@@ -1,0 +1,122 @@
+[
+  {
+    "mode": "0",
+    "file": "helper-heap-binding.test.cjs",
+    "status": 0,
+    "output": "PASS: heap descriptors; memory64 addresses require Node 24+\n",
+    "timedOut": false,
+    "elapsedMs": 165
+  },
+  {
+    "mode": "0",
+    "file": "helper-registry-startup.test.cjs",
+    "status": 0,
+    "output": "PASS: all seven helpers receive the complete initial registry before publishing its version\nPASS: a replaced background lane cannot run on stale helper bindings\n",
+    "timedOut": false,
+    "elapsedMs": 170
+  },
+  {
+    "mode": "0",
+    "file": "deltatick-multiplayer.test.cjs",
+    "status": 0,
+    "output": "  405 steps compared; host at 2975 base ticks / 406 steps, guest at 2970 / 405\n  after the repair: 95 steps compared\nPASS: the step size goes with the bundles; peers agree at every size, and after a repair.\n",
+    "timedOut": false,
+    "elapsedMs": 5664
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-cross-engine.test.cjs",
+    "status": 0,
+    "output": "PASS: cross-engine math\n  solar_system: 1638 tick hashes bit-exact fingerprints equal across engines\n  islands: 1638 tick hashes bit-exact fingerprints equal across engines\n",
+    "timedOut": false,
+    "elapsedMs": 32638
+  },
+  {
+    "mode": "0",
+    "file": "order-fast.test.cjs",
+    "status": 0,
+    "output": "order-fast: ok, 257 columns equal\n",
+    "timedOut": false,
+    "elapsedMs": 2263
+  },
+  {
+    "mode": "0",
+    "file": "parallel-kernels.test.cjs",
+    "status": 0,
+    "output": "PASS: parallel kernels match the serial code (visibility: 18 checks, 1326 lit tiles at most).\n",
+    "timedOut": false,
+    "elapsedMs": 3413
+  },
+  {
+    "mode": "0",
+    "file": "separation-integration.test.cjs",
+    "status": 0,
+    "output": "20 TPS simulation: {\n  overlap: 0.04859502912981939,\n  jitter: 0,\n  meanStep: 0,\n  maxStep: 0,\n  pairs: 54240\n}\n2 TPS simulation: {\n  overlap: 0.0549318861596796,\n  jitter: 0,\n  meanStep: 0.002715756689606112,\n  maxStep: 1.6298006013006623,\n  pairs: 6625\n}\n1 TPS simulation: {\n  overlap: 0.05817034171458295,\n  jitter: 0,\n  meanStep: 0.012643216993800941,\n  maxStep: 3.25,\n  pairs: 3754\n}\n20 TPS mixed stack: { severeFraction: 0, maxDuration: 0 }\n1 TPS mixed stack: { severeFraction: 0, maxDuration: 0 }\n",
+    "timedOut": false,
+    "elapsedMs": 7664
+  },
+  {
+    "mode": "0",
+    "file": "separation-kernel-replay.test.cjs",
+    "status": 0,
+    "output": "PASS: baseline and optimized separation kernels produce identical contact outputs for every replay\n",
+    "timedOut": false,
+    "elapsedMs": 235
+  },
+  {
+    "mode": "0",
+    "file": "shared-spatial-determinism.test.cjs",
+    "status": 0,
+    "output": "PASS: 4,200 active units: 0 vs 7 real helpers agree every tick, including a mid-run snapshot restore.\n",
+    "timedOut": false,
+    "elapsedMs": 4930
+  },
+  {
+    "mode": "0",
+    "file": "shared-unit-state.test.cjs",
+    "status": 0,
+    "output": "PASS: shared unit growth, Float32 precision, stale references, slot reuse, snapshot restore; scalar frame oracle: { compared: 1333780, units: 1870, capacity: 4096 }\n",
+    "timedOut": false,
+    "elapsedMs": 3215
+  },
+  {
+    "mode": "0",
+    "file": "storage-abi.test.cjs",
+    "status": 0,
+    "output": "PASS: storage ABI (114 movement kernel columns match their Rust types; 198 columns, 543 bytes per slot)\n",
+    "timedOut": false,
+    "elapsedMs": 175
+  },
+  {
+    "mode": "0",
+    "file": "unit-collection-blocks.test.cjs",
+    "status": 0,
+    "output": "PASS: block collection covers every dead slot in 64 ticks, preserves live units and stale references through reuse\n",
+    "timedOut": false,
+    "elapsedMs": 1402
+  },
+  {
+    "mode": "0",
+    "file": "unit-id-index.test.cjs",
+    "status": 0,
+    "output": "PASS: paged unit IDs match Map through inserts, replacements, deaths, sparse/large IDs and full page release\n",
+    "timedOut": false,
+    "elapsedMs": 312
+  },
+  {
+    "mode": "0",
+    "file": "wasm-helper-address.test.cjs",
+    "status": 0,
+    "output": "PASS: wasm32/64 helper pointers retain addresses above 2 and 4 GiB\n",
+    "timedOut": false,
+    "elapsedMs": 165
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-chaos-determinism.test.cjs",
+    "status": 0,
+    "output": "PASS: chaos determinism\n  arena: 180 units + 201 buildings at start (max 193 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n  random: 159 units + 201 buildings at start (max 160 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n  islands: 171 units + 201 buildings at start (max 182 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n  crossroads: 177 units + 201 buildings at start (max 179 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n  solar_system: 177 units + 201 buildings at start (max 214 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n  island: 177 units + 201 buildings at start (max 182 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n",
+    "timedOut": false,
+    "elapsedMs": 103154
+  }
+]
