@@ -282,6 +282,12 @@ struct Mv {
     occ: *const super::occ::MoveGrid,
     traffic: *const i32,
     traffic_mode: i32,
+    /// unit.rtEnd (word 458): a route's end tile, kept after arrival.
+    rte: *const i32,
+    /// This occupancy job's swapped idle units (traffic_swap), to list in
+    /// its second pass; null outside one.
+    swl: *mut i32,
+    swn: *mut i32,
     // Occupancy jobs may end inside a four-lane group. Stores must touch
     // only these owned slots; masked full-width RMW would race a helper.
     span_n: usize,
@@ -593,6 +599,9 @@ impl Mv {
             occ: core::ptr::null(),
             traffic: p!(456),
             traffic_mode: {let c:*const i32=p!(456);if c.is_null(){0}else{*c}},
+            rte: p!(458),
+            swl: core::ptr::null_mut(),
+            swn: core::ptr::null_mut(),
             span_n: 4,
             #[cfg(feature="prof")]
             skip_hold_stores: true,
@@ -1573,6 +1582,24 @@ unsafe fn flow_look_calc(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, d
 unsafe fn seg_open(wl: *const u8, w: i32, h: i32, x0: f64, y0: f64, x1: f64, y1: f64, itile: f64, tile: f64) -> bool {
     let dx = x1 - x0;
     let dy = y1 - y0;
+    // (Ending in its own tile or one beside it, the most: the tiles the
+    // segment passes, exactly: the end one, and on a diagonal the one whose
+    // edge it crosses first.)
+    let (ax, ay, bx, by) = (floor(x0 * itile), floor(y0 * itile), floor(x1 * itile), floor(y1 * itile));
+    if (bx - ax).abs() <= 1.0 && (by - ay).abs() <= 1.0 {
+        let open = |gx: f64, gy: f64| inb(gx, w) && inb(gy, h) && rd(wl, (gy as i32 * w + gx as i32) as usize) == 0;
+        if !open(bx, by) { return false; }
+        if bx != ax && by != ay {
+            let ex = (if bx > ax { bx } else { ax }) * tile;
+            let ey = (if by > ay { by } else { ay }) * tile;
+            let tx = (ex - x0) / dx;
+            let ty = (ey - y0) / dy;
+            if tx < ty { return open(bx, ay); }
+            if ty < tx { return open(ax, by); }
+            return open(bx, ay) && open(ax, by);
+        }
+        return true;
+    }
     let len = sqrt(dx * dx + dy * dy);
     let n = (floor(len / (tile * 0.25)) as i32 + 1).min(256);
     for i in 1..=n {
@@ -1624,8 +1651,16 @@ unsafe fn checked_position(m:&Mv,s:usize,x:f64,y:f64)->(f64,f64) {
 }
 #[inline(never)]
 unsafe fn checked_traffic_position(m:&Mv,s:usize,x:f64,y:f64,intent:bool)->(f64,f64) {
-    let mut nx=js_round(x*8.0) as i32;let mut ny=js_round(y*8.0) as i32;
-    let ox=*(m.x.add(s) as *const i32);let oy=*(m.y.add(s) as *const i32);
+    let nx=floor(x*8.0+0.5) as i32;let ny=floor(y*8.0+0.5) as i32;
+    // (Where it stands: the grid's (unit.x holds the wanted position in the
+    // occupancy's second stage).)
+    let (ox,oy)=if (*m.occ).active(s){(*m.occ).pos(s)}else{(*(m.x.add(s) as *const i32),*(m.y.add(s) as *const i32))};
+    checked_traffic_q(m,s,ox,oy,nx,ny,intent)
+}
+/// The same in eighths: from (ox, oy) where it stands, to (nx, ny).
+#[inline(never)]
+unsafe fn checked_traffic_q(m:&Mv,s:usize,ox:i32,oy:i32,nx:i32,ny:i32,intent:bool)->(f64,f64) {
+    let (mut nx,mut ny)=(nx,ny);
     if nx==ox&&ny==oy{return (ox as f64*0.125,oy as f64*0.125);}
     let original_nx=nx;let original_ny=ny;
     let np=rd(m.npr,s) as usize;
@@ -1640,10 +1675,17 @@ unsafe fn checked_traffic_position(m:&Mv,s:usize,x:f64,y:f64,intent:bool)->(f64,
     if intent && m.traffic_mode>=2 && original_len>0.0{
         let (fx,fy)=super::traffic::sample(m.traffic,ox,oy,layer);
         let response=if *m.traffic.add(11)!=0{(original_len/(24.0*m.dkf)).max(1.0)}else{1.0};
-        let dx=original_dx+fx*8.0*m.dkf*response;let dy=original_dy+fy*8.0*m.dkf*response;
+        // The pressure only steers: its part across the step, never back
+        // against it (a crowd ordered inward must not walk outward), and at
+        // most ~50 degrees off the step's own heading.
+        let ux=original_dx/original_len;let uy=original_dy/original_len;
+        let along=fx*ux+fy*uy;let sx=(fx-along*ux)*8.0*m.dkf*response;let sy=(fy-along*uy)*8.0*m.dkf*response;
+        let side=sqrt(sx*sx+sy*sy);let cap=original_len*1.2;
+        let k=if side>cap{cap/side}else{1.0};
+        let dx=original_dx+sx*k;let dy=original_dy+sy*k;
         let length=sqrt(dx*dx+dy*dy);
-        if length>0.0{
-            let ax=ox+js_round(dx/length*original_len) as i32;let ay=oy+js_round(dy/length*original_len) as i32;
+        if length>0.0&&side>0.0{
+            let ax=ox+floor(dx/length*original_len+0.5) as i32;let ay=oy+floor(dy/length*original_len+0.5) as i32;
             nx=ax;ny=ay;
         }
     }
@@ -1668,9 +1710,8 @@ unsafe fn checked_traffic_position(m:&Mv,s:usize,x:f64,y:f64,intent:bool)->(f64,
                 1=>((dx+dy)*0.7071067811865476,(dy-dx)*0.7071067811865476),
                 2=>(-dy,dx),_ =>(dy,-dx),
             };
-            let ax=ox+js_round(vx) as i32;let ay=oy+js_round(vy) as i32;
-            if seg_open(wl,m.w,m.h,ox as f64*0.125,oy as f64*0.125,
-                ax as f64*0.125,ay as f64*0.125,m.itile,m.tile) {
+            let ax=ox+floor(vx+0.5) as i32;let ay=oy+floor(vy+0.5) as i32;
+            if clear(ax,ay) {
                 let (px,py)=(*m.occ).preview(s,ax,ay);
                 let vx=(px-ox) as f64;let vy=(py-oy) as f64;
                 let distance=sqrt(vx*vx+vy*vy);
@@ -1681,14 +1722,22 @@ unsafe fn checked_traffic_position(m:&Mv,s:usize,x:f64,y:f64,intent:bool)->(f64,
             }
         }
     }
-    let (tx,ty)=(*m.occ).commit_preview(s,tx,ty,nx,ny);
+    let (mut tx,mut ty)=(*m.occ).commit_preview(s,tx,ty,nx,ny);
     if intent && m.traffic_mode>=2 && original_len>0.0{
-        let progress=((tx-ox) as f64*original_dx+(ty-oy) as f64*original_dy)/original_len;
+        let mut progress=((tx-ox) as f64*original_dx+(ty-oy) as f64*original_dy)/original_len;
+        if progress<original_len*0.25&&traffic_deferred(m){
+            if let Some((sx,sy))=traffic_swap(m,s,tx,ty,original_dx/original_len,original_dy/original_len,wl,false){
+                tx=sx;ty=sy;progress=original_len;
+            }
+        }
         let x0=*(m.x0.add(s) as *const i32);let y0=*(m.y0.add(s) as *const i32);
         super::traffic::deposit(m.traffic,x0,y0,layer,mass,original_dx,original_dy,(original_len-progress).max(0.0),m.dkf);
+        // Blocked: a push for whoever stands in the way (read next step).
+        let blocked=1.0-progress.max(0.0)/original_len;
+        if blocked>0.3{super::traffic::push_deposit(m.traffic,tx,ty,original_dx,original_dy,original_len,blocked,(*m.occ).radius_q(s),rd(m.own,s),0);}
     }
     if tx!=nx || ty!=ny {wr(m.steady,s,0);wr(m.ct,s,-1);wr(m.cd,s,-1);}
-    if tx!=js_round(x*8.0) as i32 || ty!=js_round(y*8.0) as i32 {
+    if tx!=original_nx || ty!=original_ny {
         wr(m.vx,s,(tx-ox) as f64/(8.0*m.dkf));wr(m.vy,s,(ty-oy) as f64/(8.0*m.dkf));
     }
     (tx as f64*0.125,ty as f64*0.125)
@@ -1696,7 +1745,7 @@ unsafe fn checked_traffic_position(m:&Mv,s:usize,x:f64,y:f64,intent:bool)->(f64,
 #[inline(never)]
 unsafe fn checked_position_legacy(m:&Mv,s:usize,x:f64,y:f64)->(f64,f64) {
     let nx=js_round(x*8.0) as i32;let ny=js_round(y*8.0) as i32;
-    let ox=*(m.x.add(s) as *const i32);let oy=*(m.y.add(s) as *const i32);
+    let (ox,oy)=if (*m.occ).active(s){(*m.occ).pos(s)}else{(*(m.x.add(s) as *const i32),*(m.y.add(s) as *const i32))};
     let (mut tx,mut ty)=(*m.occ).position(s,nx,ny);
     if tx==ox&&ty==oy&&(nx!=ox||ny!=oy)&&rd(m.on,s)==6{
         let dx=(nx-ox) as f64;let dy=(ny-oy) as f64;let np=rd(m.npr,s) as usize;
@@ -2432,8 +2481,12 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
         let job=by*bw+bx;let base=*ptr(32).add(job as usize) as usize;
         p.chunk=job as usize;p.s0=base;
         let grid=super::occ::MoveGrid::load(a,bx,by,job);grid.reset();m.occ=&grid;
+        let mut swbuf=[0i32;SWAP_CAP];let mut swn=0i32;m.swl=swbuf.as_mut_ptr();m.swn=&mut swn;
+        // The units the second pass looks at (in the order the first met
+        // them), at the job's range of occ.work: out bit 7 marks one listed.
+        let wk=if *a.add(512+35)==0{core::ptr::null_mut()}else{(ptr(35) as *mut i32).add(base)};let mut wn=0usize;
         let mut ep=epi_begin(&m,f,job,0,1);ep.pb=base;
-        if !m.hita.is_null(){wr(m.hitc,p.chunk,0);}
+        // (The attacks are listed by the first stage's slot chunks.)
         let cw=*cfg.add(9);let ch=*cfg.add(10);let epoch=*cfg.add(11);
         let x0=bx*block;let x1=((bx+1)*block).min(cw);
         let y0=by*block;let y1=((by+1)*block).min(ch);
@@ -2459,35 +2512,97 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
         for xi in 0..x1-x0 {let cx=if dx>0.0{x1-1-xi}else{x0+xi};
             let key=(cy*cw+cx) as usize;if *ptr(27).add(key)!=epoch {continue;}
             let mut i=*ptr(25).add(key);let end=i+*ptr(26).add(key);
+            // (Standing units here may give way: last step's pushes at the tile.)
+            let pushed=traffic_deferred(&m)&&super::traffic::push_at(m.traffic,cx,cy);
             while i<end {
-                let slot=*ptr(24).add(i as usize);if slot<0 {i+=1;continue;}
-                let mut n=1;while n<4 && i+n<end && *ptr(24).add((i+n) as usize)==slot+n {n+=1;}
-                m.stepbase=slot as usize;core::ptr::write_bytes(m.stept,0,4);
-                move_span(&mut m,f,&p,&sp,&mut ep,slot as usize,(slot+n) as usize);
-                i+=n;
+                let slot=*ptr(24).add(i as usize);
+                if slot>=0 {
+                    let s=slot as usize;
+                    resolve_slot(&m,s);
+                    if !wk.is_null()&&(*m.out.add(s)>1||*m.spent.add(s)!=0||(traffic_deferred(&m)&&(pushed||walker_short(&m,s)))){
+                        *wk.add(wn)=slot;wn+=1;*m.out.add(s)|=128;
+                    }
+                }
+                i+=1;
             }
         }}
-        if traffic_deferred(&m){
+        {
+            // (Idle units a mover swapped with: their new tile for the index,
+            // listed by their epilogue below. Their own visit above, if it
+            // came after the swap, cleared their output.)
+            for k in 0..swn as usize{let b=*swbuf.as_ptr().add(k) as usize;
+                let listed=*m.out.add(b)&128;
+                let gx=floor(rd(m.x,b)*m.itile) as i32;let gy=floor(rd(m.y,b)*m.itile) as i32;
+                if gy*m.w+gx!=rd(m.spt,b){wr(m.out,b,3|listed);}else if *m.out.add(b)&127==0{wr(m.out,b,1|listed);}
+                if listed==0&&!wk.is_null(){*wk.add(wn)=b as i32;wn+=1;*m.out.add(b)|=128;}
+            }
             // All intentions/ordinary moves in this ownership block finish
             // first. Resolve residual pressure only after leaders have had
             // their turn, then publish each unit's epilogue exactly once.
             m.shared_hot=core::ptr::null();m.span_n=1;
+            let yield_on=traffic_deferred(&m);
+            if !wk.is_null(){
+                for k in 0..wn{let s=*wk.add(k) as usize;
+                    *m.out.add(s)&=127;
+                    if yield_on{traffic_yield(&m,s);}
+                    if *m.out.add(s)>1||*m.spent.add(s)!=0{epi_slot(&m,f,&mut ep,s,false);}
+                }
+            }else{
             for yi in 0..y1-y0{let cy=if dy>0.0{y1-1-yi}else{y0+yi};
             for xi in 0..x1-x0{let cx=if dx>0.0{x1-1-xi}else{x0+xi};
                 let key=(cy*cw+cx) as usize;if *ptr(27).add(key)!=epoch{continue;}
                 let start=*ptr(25).add(key);let end=start+*ptr(26).add(key);
                 for i in start..end{let slot=*ptr(24).add(i as usize);if slot<0{continue;}let s=slot as usize;
-                    traffic_yield(&m,s);
+                    if yield_on{traffic_yield(&m,s);}
                     if *m.out.add(s)>1||*m.spent.add(s)!=0{epi_slot(&m,f,&mut ep,s,false);}
                 }
             }}
+            }
         }
         epi_end(&m,&ep,job);
+        let _=(&p,&sp);
     }else{
+        // (P[4] -1: the occupancy's first stage: every unit's step, as it
+        // wants it, from its slot chunk (the vector paths), its position the
+        // one it wants; the occupancy jobs then resolve the positions against
+        // the footprints and run the epilogue: mv_move_occupancy.)
+        let intent=rd(f,4)<0.0;
         if !m.hita.is_null(){wr(m.hitc,p.chunk,0);}
         let b0=s0.max(0) as usize;let e=end.max(0) as usize;
-        let mut ep=epi_begin(&m,f,chunk,b0,e);
-        move_span(&mut m,f,&p,&sp,&mut ep,b0,e);epi_end(&m,&ep,chunk);
+        let mut ep=if intent{epi_none()}else{epi_begin(&m,f,chunk,b0,e)};
+        move_span(&mut m,f,&p,&sp,&mut ep,b0,e);
+        if !intent{epi_end(&m,&ep,chunk);}
+    }
+}
+/// A flow unit left short of its step (its second-pass retry may move it:
+/// traffic_yield's walker branch, the same test).
+#[inline(always)]
+unsafe fn walker_short(m:&Mv,s:usize)->bool{
+    if *m.on.add(s)!=1||rd(m.fl,s)&64==0||(m.brain&&rd(m.cmode,s)!=0){return false;}
+    let (hx,hy)=(rd(m.cvx,s),rd(m.cvy,s));let hl2=hx*hx+hy*hy;
+    if !(hl2>0.0){return false;}
+    let dx=rd(m.x,s)-rd(m.x0,s);let dy=rd(m.y,s)-rd(m.y0,s);
+    dx*dx+dy*dy<=hl2*m.dkf*m.dkf*0.5625
+}
+/// The occupancy's second stage for slot s: the position its step wanted
+/// (unit.x / y, the first stage's) against the exclusive footprints, as the
+/// step resolved it itself before: the pressure's steering, shoulders, swaps,
+/// pushes. Its tile flags (out 1 / 3, spent) for where it ended up.
+#[inline(always)]
+unsafe fn resolve_slot(m:&Mv,s:usize){
+    let g=&*m.occ;
+    if !g.active(s){return;}
+    let (ox,oy)=g.pos(s);
+    let nx=*(m.x.add(s) as *const i32);let ny=*(m.y.add(s) as *const i32);
+    if nx==ox&&ny==oy{return;}
+    let (tx,ty)=if m.traffic_mode==0{checked_position_legacy(m,s,nx as f64*0.125,ny as f64*0.125)}else{checked_traffic_q(m,s,ox,oy,nx,ny,true)};
+    wr(m.x,s,tx);wr(m.y,s,ty);
+    let o=rd(m.out,s);
+    if o==1||o==3{
+        let x0=rd(m.x0,s);let y0=rd(m.y0,s);
+        let crossed=floor(tx*m.itile)!=floor(x0*m.itile)||floor(ty*m.itile)!=floor(y0*m.itile);
+        wr(m.out,s,if crossed{3}else{1});
+        if !crossed&&rd(m.spent,s)!=0{wr(m.spent,s,0);}
     }
 }
 #[no_mangle]
@@ -2544,7 +2659,17 @@ unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usi
         // Idle groups need no flow, wake, energy or navigation cache reads.
         // Their JS update already ran; copy only the dead/output bytes and
         // leave separation to derive movement from the positions as before.
-        let idle = n == 4 && (m.on.add(s) as *const u32).read_unaligned() == 0
+        // A unit the combat brain sent at a hostile structure (cmMode 8):
+        // back to Unit.update, which takes it (unit.js _brainStructureEngage).
+        let mut handed = 0i32;
+        if m.brain {
+            for l in 0..n {
+                let u = s + l;
+                if *m.cmode.add(u) & 8 != 0 { wr(m.on, u, 0); wr(m.out, u, 0); handed |= 1 << l; }
+            }
+            done |= handed;
+        }
+        let idle = handed == 0 && n == 4 && (m.on.add(s) as *const u32).read_unaligned() == 0
             && (!m.brain || (m.cmode.add(s) as *const u32).read_unaligned() == 0);
         if idle {
             let dead = (m.dead.add(s) as *const u32).read_unaligned();
@@ -2575,7 +2700,7 @@ unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usi
             dbgc!(m, 3, (c & 15).count_ones());
             done |= c;
         }
-        known = done & valid;
+        known = done & valid & !handed;
         if done != 15 {
             let c = idle4(m, s, done);
             dbgc!(m, 19, (c & 15).count_ones());
@@ -2649,27 +2774,151 @@ unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usi
     }
 }
 
+const SWAP_CAP:usize=1024;
+// A blocked mover and the idle friendly unit in its way trade places when
+// that unit is not of the mover's own destination crowd (its route's end
+// more than 3 tiles from the mover's; never ordered: none): units leave a
+// group or pass through another at about their speed (a swap of one spacing
+// every few steps), while arrivals still stop at their own crowd's edge.
+// One chunk's index entries looked at, this job's own.
+#[inline(never)]
+// walkers: partners walking the other way (two flows pass each other), in
+// the job's second pass only, when every unit of the job has had its step
+// (each exchange then within both units' steps), this job's own; else
+// standing partners (idle or parked), in the step itself.
+unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,walkers:bool)->Option<(i32,i32)>{
+    let g=&*m.occ;
+    if m.rte.is_null()||m.swn.is_null()||*m.swn>=SWAP_CAP as i32||!g.active(s){return None;}
+    let own=rd(m.own,s);if own<0{return None;}
+    let mine=rd(m.rte,s);let rq=g.radius_q(s);
+    // (At its speed: within its step from where it stood at the step's
+    // start when that reaches a neighbour (long steps); else a hop of a
+    // contact spacing once every k steps, its speed on average; the looks
+    // only on those steps.)
+    let mut spd=mv_stat(m,s,0,m.spd);if rd(m.frz,s)>0{spd*=0.5;}if rd(m.snd,s)>0{spd*=0.5;}
+    let step=spd*m.dkf*8.0;if !(step>0.0){return None;}
+    let spacing=(2*rq+16) as f64;
+    let k=((floor(spacing/step) as i64)+1).max(1).min(64);
+    let hop=step<spacing&&rem64_f(tsum(m.t,rd(m.id,s)),k*m.dk as i64)<m.dk as i64;
+    if step<spacing&&!hop{return None;}
+    let (sx0,sy0)=(*(m.x0.add(s) as *const i32),*(m.y0.add(s) as *const i32));
+    // Candidates in the 3x3 chunks around a point half a contact ahead:
+    // the three best by distance ahead and off its line, its own size first.
+    let reach=(rq+16) as f64;
+    let (qx,qy)=(ox+js_round(ux*reach) as i32,oy+js_round(uy*reach) as i32);
+    let cq=g.chunk_q();
+    let mut cand=[(f64::MAX,0usize);3];
+    for pass in 0..9{
+        let (a,e)=g.chunk_entries_near(qx+(pass%3-1)*cq,qy+(pass/3-1)*cq);
+        let mut i=a;
+        while i<e{
+            let b=g.slot(i);i+=1;
+            if b<0||b as usize==s||!g.active(b as usize){continue;}
+            let b=b as usize;
+            let (bx,by)=g.pos(b);
+            let vx=(bx-ox) as f64;let vy=(by-oy) as f64;let rb=g.radius_q(b);
+            let along=vx*ux+vy*uy;let lat=(vx*uy-vy*ux).abs();let rr=(rq+rb) as f64;
+            if along<=lat*0.3||along*along+lat*lat>(rr+96.0)*(rr+96.0){continue;}
+            let ob=rd(m.on,b);
+            if rd(m.dead,b)!=0||rd(m.own,b)!=own||rd(m.wk,b)!=0||(m.brain&&rd(m.cmode,b)!=0){continue;}
+            if walkers{
+                if !(ob==1&&rd(m.fl,b)&64!=0&&{let (hx,hy)=(rd(m.cvx,b),rd(m.cvy,b));hx*ux+hy*uy< -0.3*sqrt(hx*hx+hy*hy)}){continue;}
+            }else if ob!=0&&ob!=2{continue;}
+            let re=rd(m.rte,b);
+            if mine>=0&&re>=0&&(irem(mine,m.w)-irem(re,m.w)).abs()<=3&&(idiv(mine,m.w)-idiv(re,m.w)).abs()<=3{continue;}
+            let score=along+lat*0.6+if rb!=rq{4096.0}else{0.0};
+            let mut j=3;while j>0&&cand[j-1].0>score{j-=1;}
+            if j<3{let mut q=2;while q>j{cand[q]=cand[q-1];q-=1;}cand[j]=(score,b);}
+        }
+    }
+    let walls=|b:usize|{let p=rd(m.npr,b) as usize;
+        if p<NAV_PROFILES&&!m.nav.get_unchecked(p).walls.is_null(){m.nav.get_unchecked(p).walls}else if rd(m.fl,b)&32!=0{m.airw}else{m.wall}};
+    for k in 0..3{
+        let (score,b)=*cand.as_ptr().add(k);
+        if score==f64::MAX{break;}
+        let (bx,by)=g.pos(b);
+        let walker=walkers;
+        if !hop{
+            let ex=(bx-sx0) as f64;let ey=(by-sy0) as f64;if ex*ex+ey*ey>step*step{continue;}
+            // (A walker's exchange within its own step too.)
+            if walker{let mut sb=mv_stat(m,b,0,m.spd);if rd(m.frz,b)>0{sb*=0.5;}if rd(m.snd,b)>0{sb*=0.5;}let sb=sb*m.dkf*8.0;
+                let ex=(ox-*(m.x0.add(b) as *const i32)) as f64;let ey=(oy-*(m.y0.add(b) as *const i32)) as f64;if ex*ex+ey*ey>sb*sb{continue;}}
+        }
+        let (x0,y0,x1,y1)=(ox as f64*0.125,oy as f64*0.125,bx as f64*0.125,by as f64*0.125);
+        if !seg_open(wl,m.w,m.h,x0,y0,x1,y1,m.itile,m.tile)||!seg_open(walls(b),m.w,m.h,x1,y1,x0,y0,m.itile,m.tile){continue;}
+        // (A neighbouring block's unit: listed for the index after the phases.)
+        let (ix,iy)=(irem(rd(m.spt,b),m.w),idiv(rd(m.spt,b),m.w));
+        let tq=(m.tile*8.0) as i32;let home=g.owns(ix*tq+1,iy*tq+1);
+        if !home&&(walker||!g.xswap_room()){continue;}
+        let (nx,ny)=match g.swap(s,b,-ux,-uy){Some(p)=>p,None=>continue};
+        let (x0,y0)=(nx as f64*0.125,ny as f64*0.125);
+        // The other: where the mover stood (its tile's change is listed in
+        // the job's second pass; its orders stay as they are).
+        wr(m.px,b,rd(m.x0,b));wr(m.py,b,rd(m.y0,b));wr(m.x,b,x0);wr(m.y,b,y0);
+        if rd(m.fl,b)&64==0{wr(m.cd,b,-1);wr(m.ct,b,-1);}
+        wr(m.steady,b,0);
+        if walker{wr(m.vx,b,(x0-rd(m.x0,b))/m.dkf);wr(m.vy,b,(y0-rd(m.y0,b))/m.dkf);}
+        if home{*m.swl.add(*m.swn as usize)=b as i32;*m.swn+=1;}else{g.xswap_push(b);}
+        return Some((bx,by));
+    }
+    None
+}
 #[inline(always)]
 unsafe fn traffic_deferred(m:&Mv)->bool{m.traffic_mode>=2&&!m.occ.is_null()&&*m.traffic.add(12)==2}
 
-// Residual movement budget lets otherwise stationary bodies yield to the
-// shared pressure. No extra per-unit neighbor search or overlapping phase.
+// Standing units (idle, parked, attacking in place) give way to the pushes
+// blocked movers left at their tile last step: off a friend's line, back
+// before a hostile push their side does not answer. Walkers and chasers
+// steer in their own step. One record read; no neighbour search.
 #[inline(never)]
 unsafe fn traffic_yield(m:&Mv,s:usize){
     if rd(m.dead,s)!=0||!(rd(m.en,s)>0.0){return;}
+    // (Handed back to Unit.update this step: left where it is.)
+    if m.brain&&rd(m.cmode,s)&8!=0{return;}
+    let on=rd(m.on,s);
+    let walker=on==1||on==4||on==6||(m.brain&&rd(m.cmode,s)&3==2);
+    // (A walker other than a flow unit has no cached heading: nothing more.)
+    if walker&&(on!=1||rd(m.fl,s)&64==0||(m.brain&&rd(m.cmode,s)!=0)){return;}
     let xq=*(m.x.add(s) as *const i32);let yq=*(m.y.add(s) as *const i32);
-    let (layer,_)=(*m.occ).layer_mass(s);
-    let (fx,fy)=super::traffic::sample(m.traffic,xq,yq,layer);
-    let force=sqrt(fx*fx+fy*fy);if force<0.25{return;}
     let x0=rd(m.x0,s);let y0=rd(m.y0,s);let x=xq as f64*0.125;let y=yq as f64*0.125;
     let dx=x-x0;let dy=y-y0;let spent=sqrt(dx*dx+dy*dy);
     let mut spd=mv_stat(m,s,0,m.spd);if rd(m.frz,s)>0{spd*=0.5;}if rd(m.snd,s)>0{spd*=0.5;}
     let remaining=(spd*m.dkf-spent).max(0.0);if remaining<0.25{return;}
-    let step=if *m.traffic.add(11)!=0{remaining*(force*0.5).min(1.0)}else{remaining.min(force*m.dkf)};
-    let nx=x+fx/force*step;let ny=y+fy/force*step;
+    let own=rd(m.own,s);
+    let (fx,fy,hop,step);
+    if walker{
+        // A flow unit left short of its step once the block's leaders had
+        // theirs: the rest along its own heading, bent only sideways by the
+        // pressure (never back, at most ~50 degrees), as its step was.
+        let (hx,hy)=(rd(m.cvx,s),rd(m.cvy,s));let hl=sqrt(hx*hx+hy*hy);
+        if !(hl>0.0)||spent>hl*m.dkf*0.75{return;}
+        let ux=hx/hl;let uy=hy/hl;
+        let (layer,_)=(*m.occ).layer_mass(s);
+        let (px,py)=super::traffic::sample(m.traffic,xq,yq,layer);
+        let along=px*ux+py*uy;let mut sx=(px-along*ux)/spd.max(0.25);let mut sy=(py-along*uy)/spd.max(0.25);
+        let side=sqrt(sx*sx+sy*sy);if side>1.2{sx*=1.2/side;sy*=1.2/side;}
+        let vx=ux+sx;let vy=uy+sy;let l=sqrt(vx*vx+vy*vy);
+        fx=vx/l;fy=vy/l;hop=-1;step=remaining;
+    }else{
+        let (vx,vy,h)=super::traffic::push_response(m.traffic,xq,yq,own);
+        let force=sqrt(vx*vx+vy*vy);if force<0.15{return;}
+        fx=vx/force;fy=vy/force;hop=h;step=remaining*(force*0.6).min(0.75);
+    }
+    let nx=x+fx*step;let ny=y+fy*step;
     let np=rd(m.npr,s) as usize;let wl=if np<NAV_PROFILES&&!m.nav.get_unchecked(np).walls.is_null(){m.nav.get_unchecked(np).walls}else{m.wall};
     if !seg_open(wl,m.w,m.h,x,y,nx,ny,m.itile,m.tile){return;}
-    let (tx,ty)=checked_traffic_position(m,s,nx,ny,false);
+    let (mut tx,mut ty)=checked_traffic_position(m,s,nx,ny,false);
+    // (Still blocked: one walking the other way may pass it.)
+    if walker&&{let gx=tx-x;let gy=ty-y;gx*gx+gy*gy<step*step*0.0625}{
+        if let Some((sx,sy))=traffic_swap(m,s,(tx*8.0) as i32,(ty*8.0) as i32,fx,fy,wl,true){tx=sx as f64*0.125;ty=sy as f64*0.125;}
+    }
+    // Pressed by friends but boxed in itself: pass a weaker push on (a
+    // corridor opens through a packed crowd; it fades within a few units).
+    if hop>=0&&hop<super::traffic::PUSH_HOPS{
+        let gx=tx-x;let gy=ty-y;let moved=sqrt(gx*gx+gy*gy)/step;
+        let force=step/(remaining*0.6);
+        if moved<0.5{super::traffic::push_deposit(m.traffic,(tx*8.0) as i32,(ty*8.0) as i32,fx,fy,1.0,(1.0-moved)*force.min(1.0)*0.5,(*m.occ).radius_q(s),own,hop+1);}
+    }
     if tx==x&&ty==y{return;}
     wr(m.px,s,x0);wr(m.py,s,y0);wr(m.x,s,tx);wr(m.y,s,ty);
     wr(m.vx,s,(tx-x0)/m.dkf);wr(m.vy,s,(ty-y0)/m.dkf);
@@ -4643,6 +4892,11 @@ struct Epi {
     ne: usize,
     on: bool,
     push: bool,
+}
+/// No epilogue (the occupancy's first stage: the second runs it).
+#[inline(always)]
+fn epi_none() -> Epi {
+    Epi { absent: 0.0, boxsteps: 0, epoch: 0, vis_gen: 0, vis_all: 0, cwn: 0, csz: 0, np: 0, nt: 0, scale: 0.0, f0: 0, u0: 0, pb: 0, cnt: 0, ne: 0, on: false, push: false }
 }
 /// The chunk's charge sums cleared; the separation's pushes when P[54] 1.
 #[inline(always)]

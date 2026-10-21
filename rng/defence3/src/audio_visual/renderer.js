@@ -6,6 +6,9 @@ if (typeof simDk === 'undefined') {
 }
 let canvas, ctx, bgCanvas, bgCtx, overlayCanvas, overlayCtx, minimapCanvas, minimapCtx;
 let renderDimensionMode = '2d';
+// 2.5D / 3.5D: the 2D / 3D views drawing units and structures in their
+// owners' colours only, at every distance (readable fights).
+let renderTeamColorsOnly = false;
 let renderer3dInstance = null;
 let renderer3dHost = null;
 let renderer3dBackgroundVersion = 0;
@@ -112,6 +115,20 @@ let _fpsFrameCount = 0, _fpsLastTime = performance.now(), _fpsDisplay = 0;
 let _tpsTickCount = 0, _tpsLastTime = performance.now(), _tpsDisplay = 0;
 const _litTintCache = new Map();
 
+// An owner's colour as [r, g, b] in 0..1 (2.5D sprite tints), cached by colour.
+const _ownerRgbCache = new Map();
+function _ownerRgb01(owner) {
+    const hex = get3DRenderOwnerColor(owner);
+    let v = _ownerRgbCache.get(hex);
+    if (!v) {
+        const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex).trim());
+        let h = m ? m[1] : 'c8ced8';
+        if (h.length === 3) h = h.replace(/./g, c => c + c);
+        v = [parseInt(h.slice(0, 2), 16) / 255, parseInt(h.slice(2, 4), 16) / 255, parseInt(h.slice(4, 6), 16) / 255];
+        _ownerRgbCache.set(hex, v);
+    }
+    return v;
+}
 function get3DRenderOwnerColor(owner) {
     if (owner === undefined || owner === null || owner < 0) return '#c8ced8';
     let pid = Math.floor(Number(owner));
@@ -1157,6 +1174,25 @@ function _shadowDirAt(ox, oz, out) {
     return out;
 }
 
+// Model heights follow each type's base sight (level 1, no research), in
+// tiles: a unit or building keeps its size as it levels or is researched
+// (its sight still grows; only the model does not).
+function _renderBaseVisionTiles(object) {
+    const src = object.visibilitySource;
+    let v = NaN;
+    if (src) {
+        const st = typeof src.type === 'string' ? src.type : '';
+        if (st === 'barrack') v = Number(BASE_CARD_TYPES['barrack_' + (src.unitType || 'norm')]?.visionRange);
+        else if (st && BASE_CARD_TYPES[st]) v = Number(BASE_CARD_TYPES[st].visionRange);
+        else if (src.unitType && BASE_UNIT_STATS[src.unitType]) v = Number(BASE_UNIT_STATS[src.unitType].visionRange);
+    }
+    if (!Number.isFinite(v) && typeof object.modelKey === 'string' && object.modelKey.startsWith('tower_')) v = Number(BASE_CARD_TYPES[object.modelKey.slice(6)]?.visionRange);
+    if (Number.isFinite(v)) return v * AREA_UNIT_TILE_EQUIVALENT;
+    v = Number(object.visibilityRangeTiles);
+    if (!Number.isFinite(v)) v = Number(object.visionRange);
+    return Number.isFinite(v) ? v : resolveRenderVisionRange(src);
+}
+
 function resolveRenderVisionRange(source) {
     if (!source) return NaN;
     if (typeof getEntityEffectiveVisibilityRangeTiles === 'function') {
@@ -1245,9 +1281,7 @@ function push3DRenderObject(target, object) {
         shadowDirX = dir.x; shadowDirZ = dir.z;
     }
     let finalLightLevel = Math.max(0, Math.min(1, Number(object.lightLevel) || lightLevel));
-    let visionRange = Number(object.visibilityRangeTiles);
-    if (!Number.isFinite(visionRange)) visionRange = Number(object.visionRange);
-    if (!target.flat2d && !Number.isFinite(visionRange)) visionRange = resolveRenderVisionRange(object.visibilitySource);
+    let visionRange = target.flat2d || object.preserveModelHeight ? NaN : _renderBaseVisionTiles(object);
     let resolvedScaleY = Math.max(0.05, Number(object.scaleY) || 0.05);
     if (!object.preserveModelHeight && Number.isFinite(visionRange) && visionRange > 0) {
         let visibilityHeight = Math.max(0.18, visionRange / 5);
@@ -2213,7 +2247,10 @@ function _pushFlatUnit(batch, u, x, z, view) {
     let remembered = !!u._historyGhost;
     let light = _flatLightAt(x, z, state.sourceLight, remembered);
     if (remembered) light *= 0.65;
-    batch.push(x, z + (panel._flatOffsetZ || 0), size, size, light, light, light, u._r3dDetailBlend ?? 1, 0, panel);
+    if (renderTeamColorsOnly) {
+        const c = state.teamColor === u.owner ? state.teamRgb : (state.teamColor = u.owner, state.teamRgb = _ownerRgb01(u.owner));
+        batch.push(x, z + (panel._flatOffsetZ || 0), size, size, c[0] * light, c[1] * light, c[2] * light, u._r3dDetailBlend ?? 1, 0, panel);
+    } else batch.push(x, z + (panel._flatOffsetZ || 0), size, size, light, light, light, u._r3dDetailBlend ?? 1, 0, panel);
     return true;
 }
 
@@ -2508,13 +2545,28 @@ function noteOrderMarker(a, tick = currentTick) {
     const x = Number(a.targetX), y = Number(a.targetY);
     const target = (rally || move) && Number.isFinite(x) && Number.isFinite(y)
         ? { x, y, kind: rally ? 'arrow' : 'plus', color: rally ? '#9aa' : a.action === 'attackMove' ? '#f66' : '#4f4', targetUnitId: a.targetUnitId } : null;
-    const pending = { tick, target };
+    // (Whether it orders every selected unit of the player: their earlier
+    // destinations are hidden until the frames show this one.)
+    const n = (a.unitIds || []).length, X = typeof selectionIndex === 'function' ? selectionIndex() : null;
+    const cover = move && n > 0 && n >= _selectedOwnUnitCount();
+    const pending = { tick, target, cover, version: X ? X.version : -1 };
     if (rally) {
         const coords = a.action === 'setRally' ? [a.gx, a.gy] : a.coords || [];
         for (let i = 0; i + 1 < coords.length; i += 2) _pendingRallyMarkers.set(coords[i] + ',' + coords[i + 1], pending);
     } else if ((a.unitIds || []).length > ORDER_PENDING_PER_UNIT_MAX) { if (target) _pendingCommandMarkers.push(pending); }
     else for (const id of a.unitIds || []) _pendingUnitOrderMarkers.set(id, pending);
     _orderMarkerRevision++;
+}
+// The player's own live units in the selection (a big one: its index's live
+// count, no pass over its unit views at the order).
+function _selectedOwnUnitCount() {
+    if (selectedUnits.length > 4096 && typeof selectionIndex === 'function') {
+        const X = selectionIndex();
+        if (X.framed) return Math.max(0, X.n - X.dead);
+    }
+    let n = 0;
+    for (const u of selectedUnits) if (u && !u.dead && u.owner === localPlayerId) n++;
+    return n;
 }
 function _pendingOrderTarget(map, key, entity) {
     const pending = map.get(key);
@@ -2589,12 +2641,17 @@ function getOrderMarkers() {
         if (!ent || ent.owner !== localPlayerId || (ent.energy !== undefined && ent.energy <= 0)) continue;
         if (_isRallySpawnerType(ent.type)) add(getBuildingOrderTarget(ent));
     }
-    // (Big orders not yet shown by the frames: their markers.)
+    // (Big orders not yet shown by the frames: their markers. One that
+    // orders the whole selection hides the destinations the frames still
+    // show for it: they are superseded.)
+    let superseded = false;
     if (_pendingCommandMarkers.length) {
         const shown = typeof _simClient !== 'undefined' && _simClient && Number.isFinite(_simClient.presentationTick) ? _simClient.presentationTick : currentTick - 1;
         for (let i = _pendingCommandMarkers.length - 1; i >= 0; i--) {
             const p = _pendingCommandMarkers[i];
-            if (shown >= p.tick) _pendingCommandMarkers.splice(i, 1); else add(p.target);
+            if (shown >= p.tick) { _pendingCommandMarkers.splice(i, 1); continue; }
+            add(p.target);
+            if (p.cover && p.version === version) superseded = true;
         }
     }
     const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
@@ -2605,7 +2662,9 @@ function getOrderMarkers() {
     // target are the few whose views are read.
     const X = selectionIndex();
     const bySlots = F && X.framed && selectedUnits.length > SELECTED_UNIT_LINES_MAX && !Object.values(activeSubGroups).some(v => v === false);
-    if (bySlots) {
+    if (superseded) {
+        // (Destinations as the frames still have them: superseded.)
+    } else if (bySlots) {
         const slots = X.slots, mask = X.mask, n = X.n, O = F.owner, EN = F.energy, CM = F.cmd, FL = F.flags, OD = F.orderDest, ID = F.id;
         const pendingAny = _pendingUnitOrderMarkers.size > 0, me = localPlayerId;
         const dense = n * 4 >= F.n, end = dense ? Math.min(F.n, mask.length) : n;
@@ -3923,6 +3982,13 @@ function _detailViewKey(flat2d) {
         return V.key;
     }
 }
+// A catalog entry's model height (its type's base sight, as baked; 1 for
+// a code not in it): the detail split's edge height, unchanged by levels.
+function _cmBaseHeight(A, row, code) {
+    const cat = A && A.catalog;
+    if (!cat || !(code >= 0 && code < cat.width)) return 1;
+    return Math.abs(cat.lookup[(row * cat.width + code) * 4 + 2]) || 1;
+}
 function _detailScore(x, z, size, flat2d, retained = false, minPixels = UNIT_DETAIL_MIN_PX, height = 1) {
     const R = renderer3dInstance, M = R.tmpViewProjection;
     const w = M[3] * x + M[7] * .02 + M[11] * z + M[15];
@@ -4332,9 +4398,13 @@ function syncRenderModeUi() {
     if (renderer3dHost) renderer3dHost.style.opacity = gpuEnabled ? '1' : '0';
     let btn2d = document.getElementById('btn-view-2d');
     let btn3d = document.getElementById('btn-view-3d');
-    if (btn2d) btn2d.classList.toggle('active', renderDimensionMode === '2d');
-    if (btn3d) btn3d.classList.toggle('active', renderDimensionMode === '3d');
-    if (renderer3dInstance) renderer3dInstance.setEnabled(gpuEnabled);
+    let btn2d5 = document.getElementById('btn-view-2d5');
+    let btn3d5 = document.getElementById('btn-view-3d5');
+    if (btn2d) btn2d.classList.toggle('active', renderDimensionMode === '2d' && !renderTeamColorsOnly);
+    if (btn2d5) btn2d5.classList.toggle('active', renderDimensionMode === '2d' && renderTeamColorsOnly);
+    if (btn3d) btn3d.classList.toggle('active', renderDimensionMode === '3d' && !renderTeamColorsOnly);
+    if (btn3d5) btn3d5.classList.toggle('active', renderDimensionMode === '3d' && renderTeamColorsOnly);
+    if (renderer3dInstance) { renderer3dInstance.setEnabled(gpuEnabled); renderer3dInstance.teamColorsOnly = renderTeamColorsOnly; }
 }
 
 function ensure3DRendererInitialized() {
@@ -4389,14 +4459,27 @@ function prepareRendererLodAssets(showProgress=false) {
     });
 }
 
+// '2d', '2.5d', '3d' or '3.5d' (x.5: team colours only).
 function setRenderDimensionMode(nextMode) {
-    let normalized = nextMode === '3d' ? '3d' : '2d';
-    if (renderDimensionMode === normalized) return;
+    let mode = String(nextMode);
+    let normalized = mode.startsWith('3') ? '3d' : '2d', team = mode.endsWith('.5d');
+    if (renderDimensionMode === normalized && renderTeamColorsOnly === team) return;
+    const dimension = renderDimensionMode !== normalized;
+    renderTeamColorsOnly = team;
+    if (!dimension) { syncRenderModeUi(); return; }
     renderer3dRotateDrag = null;
     renderDimensionMode = normalized;
     if (normalized === '3d') ensure3DRendererInitialized();
     syncRenderModeUi();
     window.dispatchEvent(new Event('resize'));
+}
+// Space: a short press toggles team colours (2D <-> 2.5D, 3D <-> 3.5D), a
+// long one 2D <-> 3D (team colours kept).
+function toggleRenderTeamColors() {
+    setRenderDimensionMode((renderDimensionMode === '3d' ? '3' : '2') + (renderTeamColorsOnly ? 'd' : '.5d'));
+}
+function toggleRenderDimension() {
+    setRenderDimensionMode((renderDimensionMode === '3d' ? '2' : '3') + (renderTeamColorsOnly ? '.5d' : 'd'));
 }
 
 function rebuildMinimapStaticLayer(scale, tilePx) {

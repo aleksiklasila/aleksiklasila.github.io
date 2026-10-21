@@ -3,6 +3,9 @@
 // Identity queries keep the existing index; contacts use only this grid.
 let SIM_OCCUPANCY_ENABLED = !(typeof location!=='undefined'&&location&&/[?&]occupancy=0(?:&|$)/.test(String(location.search||'')));
 let SIM_OCCUPANCY_PLANES = 1, SIM_OCCUPANCY_SUBCELLS = 8, SIM_OCCUPANCY_BLOCK_TILES = 16;
+// Per movement job: idle units it swapped with across its block's edge
+// (mv.rs traffic_swap; their index entries are moved after the phases).
+const SIM_OCCUPANCY_XSWAP = 32;
 let _occ = null;
 const _occNames = ['occ.bits','occ.mask','occ.x','occ.y','occ.radius','occ.layer','occ.active'];
 function occupancyEnsure() {
@@ -18,7 +21,8 @@ function occupancyEnsure() {
         _occ.config.set([w,h,stride,_occ.cell,planes,bw,bh,block,0,CHUNKS_W,CHUNKS_H,_sxEpoch,GRID_W,GRID_H,TILE*8,CHUNK_SIZE]);
         _occ.stats=simHeapArray(Int32Array,(bw*bh+1)*8);
         _occ.offsets=simHeapArray(Int32Array,bw*bh+1);
-        for(const name of ['config','stats','offsets'])simParallelBind('occ.'+name,_occ[name]);
+        _occ.xswap=simHeapArray(Int32Array,bw*bh*(SIM_OCCUPANCY_XSWAP+1));_occ.xswap.fill(0);
+        for(const name of ['config','stats','offsets','xswap'])simParallelBind('occ.'+name,_occ[name]);
         _occ.mask=simHeapArray(Int8Array,33*65);_occ.mask.fill(-1);
         _occ.sizes=new Array(33).fill(0);
         for(let r=1;r<=32;r++)for(let dy=-r;dy<=r;dy++){
@@ -71,8 +75,21 @@ function occupancyPrepareMovement() {
     O.stats.fill(0,bw*bh*8);
     // Prefix sizes only reserve each spatial job's hit/post list. No units
     // are visited here; occupancy work happens at position writes in WASM.
-    _simRust(_simOccW,_simParams,0,'occ_prepare','OCCUPANCY_LAYOUT');
-    return bw*bh;
+    // (The blocks' counts on the helpers, summed up here: 4096 entries.)
+    // (64 blocks a chunk: occ.rs OCC_COUNT_BLOCKS; the movement's params,
+    // already set, are not touched.)
+    const jobs=bw*bh,per=64,F=O.offsets;
+    simParallelRun(SIM_KERNEL_OCC_COUNTS,Math.ceil(jobs/per));
+    let total=0;
+    for(let j=0;j<jobs;j++){const c=F[j];F[j]=total;total+=c;}
+    F[jobs]=total;
+    return jobs;
+}
+// Idle units a movement job swapped with in a neighbouring block: their
+// tiles in the index (its own epilogue may have run before the swap).
+function occupancyAfterMovement(c) {
+    const O=_occ,X=O.xswap,jobs=O.config[5]*O.config[6],k=SIM_OCCUPANCY_XSWAP+1;
+    for(let j=0;j<jobs;j++){const n=X[j*k];for(let i=1;i<=n;i++)spatialSlotUpdate(c,X[j*k+i]);}
 }
 function occupancyMovePosition(u,x,y) {
     const O=_occ,s=u._si,c=u._us;

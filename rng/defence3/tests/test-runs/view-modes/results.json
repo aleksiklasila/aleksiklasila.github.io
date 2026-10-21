@@ -1,0 +1,136 @@
+{
+ "results": {
+  "four view buttons": {
+   "ok": true,
+   "info": [
+    true,
+    true,
+    true,
+    true
+   ]
+  },
+  "button btn-view-2d5": {
+   "ok": true,
+   "info": {
+    "dim": "2d",
+    "team": true,
+    "r3d": true,
+    "active": [
+     "btn-view-2d5"
+    ]
+   }
+  },
+  "button btn-view-3d": {
+   "ok": true,
+   "info": {
+    "dim": "3d",
+    "team": false,
+    "r3d": false,
+    "active": [
+     "btn-view-3d"
+    ]
+   }
+  },
+  "button btn-view-3d5": {
+   "ok": true,
+   "info": {
+    "dim": "3d",
+    "team": true,
+    "r3d": true,
+    "active": [
+     "btn-view-3d5"
+    ]
+   }
+  },
+  "button btn-view-2d": {
+   "ok": true,
+   "info": {
+    "dim": "2d",
+    "team": false,
+    "r3d": false,
+    "active": [
+     "btn-view-2d"
+    ]
+   }
+  },
+  "space short toggles team colours": {
+   "ok": true,
+   "info": [
+    "2d",
+    "2d.5"
+   ]
+  },
+  "space held switches 2D/3D at once, keeps team colours": {
+   "ok": true,
+   "info": [
+    "2d.5",
+    "3d.5",
+    "3d.5"
+   ]
+  },
+  "camera reaches half a view past each edge": {
+   "ok": true,
+   "info": {
+    "a": {
+     "x": -224,
+     "y": -177.75
+    },
+    "b": {
+     "x": 1696,
+     "y": 1742.25
+    },
+    "vw": 448,
+    "vh": 355.5,
+    "W": 1920,
+    "H": 1920
+   }
+  },
+  "model height by base sight, not level": {
+   "ok": true,
+   "info": {
+    "builder_unit": {
+     "low": 3
+    },
+    "healer_unit": {
+     "low": 3
+    },
+    "king": {
+     "low": 5
+    },
+    "norm": {
+     "low": 3
+    },
+    "tank": {
+     "low": 3
+    },
+    "fast": {
+     "low": 3
+    },
+    "water_resistant": {
+     "low": 5
+    },
+    "laser_resistant": {
+     "low": 4
+    }
+   }
+  },
+  "enemy units get detail models like own ones": {
+   "ok": false,
+   "info": {
+    "own": [
+     0,
+     0
+    ],
+    "enemy": [
+     11,
+     0
+    ]
+   }
+  },
+  "no page errors": {
+   "ok": true,
+   "info": []
+  }
+ },
+ "errors": []
+}

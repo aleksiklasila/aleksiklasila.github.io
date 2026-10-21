@@ -113,9 +113,15 @@ let visFollow=VIS_FOLLOW, lastBuiltTick=-1;
 let lightFull=6;
 // Facing (presentation only: the simulation keeps none): toward the unit's
 // fire target (the combat brain's, cmMode bit 4) when it has one, else its
-// movement, else as it was; turning VIS_TURN of the way a frame, so a few
-// ticks' change of mind is not a snap.
-const face={a:null,id:null}, VIS_TURN=.3, TAU=Math.PI*2, INV_TAU=1/TAU;
+// movement, else as it was. The movement is its velocity smoothed over a few
+// ticks (FACE_VEL a tick): in a crowd one tick's sideways shove or shoulder
+// step, then back, must not turn it there and back. Below FACE_MIN_SPEED
+// (smoothed, px a base tick) it keeps its facing; within FACE_DEAD of it,
+// too. It turns VIS_TURN of the way a tick (visTurn: per frame, by the ticks
+// it covers), so a few ticks' change of mind is not a snap.
+const face={a:null,id:null,vx:null,vy:null}, VIS_TURN=.3, TAU=Math.PI*2, INV_TAU=1/TAU;
+const FACE_VEL=.3, FACE_MIN_SPEED=.2, FACE_DEAD=.04;
+let visTurn=VIS_TURN, faceVel=FACE_VEL;
 // atan2(y, x) within ~1e-5 rad, a few times faster than Math.atan2 (a third
 // of the fill at 400k slots; facing is drawn only).
 function fastAtan2(y,x) {
@@ -129,7 +135,7 @@ function fastAtan2(y,x) {
 }
 function ensureState(cap,history) {
     if (!vis.x || vis.x.length<cap) {vis.x=sharedArray(Float32Array,cap);vis.y=sharedArray(Float32Array,cap);vis.id=sharedArray(Int32Array,cap,-1);}
-    if (!face.a || face.a.length<cap) {face.a=sharedArray(Float32Array,cap);face.id=sharedArray(Int32Array,cap,-1);}
+    if (!face.a || face.a.length<cap) {face.a=sharedArray(Float32Array,cap);face.id=sharedArray(Int32Array,cap,-1);face.vx=sharedArray(Float32Array,cap);face.vy=sharedArray(Float32Array,cap);}
     if (!fullAt || fullAt.length<cap) fullAt=sharedArray(Int32Array,cap);
     if (!easing || easing.length<cap) easing=sharedArray(Uint8Array,cap);
     if (history && (!ghost.x || ghost.x.length<cap)) {ghost.x=sharedArray(Float32Array,cap);ghost.y=sharedArray(Float32Array,cap);ghost.id=sharedArray(Int32Array,cap,-1);}
@@ -285,17 +291,24 @@ function fillRange(F,C,meta,s0,s1,n,player,areaUnit,metaCopy,dl,frameSeq) {
         }
     }
     {
-        const D=F.facing, VX=F.vx, VY=F.vy, CM=C.cmMode, CT=C.cmT, SX=mot.x, SY=mot.y, FA=face.a, FI=face.id, TX=motTarget.x, TY=motTarget.y, TK=motTarget.k, ES=easing;
+        const D=F.facing, VX=F.vx, VY=F.vy, CM=C.cmMode, CT=C.cmT, SX=mot.x, SY=mot.y, FA=face.a, FI=face.id, FVX=face.vx, FVY=face.vy, TX=motTarget.x, TY=motTarget.y, TK=motTarget.k, ES=easing;
+        const kv=faceVel, kt=visTurn, min2=FACE_MIN_SPEED*FACE_MIN_SPEED;
         for (let i=0;i<na;i++) {
             const s=AL[i], id=FID[s];
             if (id<0) {FI[s]=-1;continue;}
+            const fresh=FI[s]!==id;
+            let vx=fresh ? VX[s] : FVX[s]+(VX[s]-FVX[s])*kv, vy=fresh ? VY[s] : FVY[s]+(VY[s]-FVY[s])*kv, settle=false;
+            // (Within a hair of its velocity: settled; else filled again next
+            // frame, as turning is, so frames made by changes stay the same.)
+            if (!fresh) {const ex=VX[s]-vx, ey=VY[s]-vy;if (ex*ex+ey*ey<1e-6) {vx=VX[s];vy=VY[s];} else settle=true;}
+            FVX[s]=vx;FVY[s]=vy;
             let want=NaN;
             if (CM && (CM[s]&4)) {const q=CT[s];if (q>=0 && q<n) {const dx=TX[q]*TK-SX[s], dy=TY[q]*TK-SY[s];if (dx || dy) want=fastAtan2(dx,dy);}}
-            if (want!==want) {const vx=VX[s], vy=VY[s];if (vx*vx+vy*vy>1e-6) want=fastAtan2(vx,vy);}
-            let f=FI[s]===id ? FA[s] : (want===want ? want : 0), turning=false;
-            if (want===want) {let d=want-f;d-=Math.round(d*INV_TAU)*TAU;f+=d*VIS_TURN;turning=Math.abs(d)>1e-4;}
+            if (want!==want && vx*vx+vy*vy>min2) want=fastAtan2(vx,vy);
+            let f=fresh ? (want===want ? want : 0) : FA[s], turning=false;
+            if (want===want) {let d=want-f;d-=Math.round(d*INV_TAU)*TAU;if (Math.abs(d)>FACE_DEAD) {f+=d*kt;turning=true;}}
             FA[s]=f;FI[s]=id;D[s]=f;
-            if (ES) ES[s]=turning ? ES[s]|2 : ES[s]&~2;
+            if (ES) ES[s]=turning || settle ? ES[s]|2 : ES[s]&~2;
         }
     }
     {const D=F.phase,I=F.id,R=F.prate,FL=F.flash;
@@ -651,7 +664,7 @@ function runRanges(J,F,P) {
     const sent=R.length-1;
     if (sent) {
         Atomics.store(helperDone,0,0);
-        for (let r=0;r<sent;r++) H[r].worker.postMessage({...J,type:'fill',s0:R[r][0],s1:R[r][1],slot:r,buf:F.buf,prevBuf:P ? P.buf : null,cap:F.cap,visFollow,lightFull});
+        for (let r=0;r<sent;r++) H[r].worker.postMessage({...J,type:'fill',s0:R[r][0],s1:R[r][1],slot:r,buf:F.buf,prevBuf:P ? P.buf : null,cap:F.cap,visFollow,visTurn,faceVel,lightFull});
     }
     const own=frameRange({...J,s0:R[sent][0],s1:R[sent][1]},F,P);
     let changed=rangeChanged;
@@ -689,7 +702,7 @@ function onHelperMessage(event) {
     try {
         // (After the job's post, which follows the motion copy: read it after this.)
         Atomics.load(helperDone,0);
-        visFollow=m.visFollow;lightFull=m.lightFull;
+        visFollow=m.visFollow;visTurn=m.visTurn;faceVel=m.faceVel;lightFull=m.lightFull;
         count=frameRange(m,simFrameViews(m.buf,m.cap),m.prevBuf ? simFrameViews(m.prevBuf,m.cap) : null);
         changed=rangeChanged ? 1 : 0;
     } catch (err) {postMessage({type:'error',message:'presentation helper: '+String(err.stack || err)});}
@@ -747,7 +760,7 @@ function draw() {
     let changed=!last || last.length !== cap;
     if (!last || last.length !== cap) last=sharedArray(Int32Array,cap,-1);
     ensureState(cap,!!tick.history);
-    {const dk=lastBuiltTick>=0 ? Math.max(1,Math.min(16,tick.tick-lastBuiltTick)) : 1;visFollow=1-Math.pow(1-VIS_FOLLOW,dk);lastBuiltTick=tick.tick;}
+    {const dk=lastBuiltTick>=0 ? Math.max(1,Math.min(16,tick.tick-lastBuiltTick)) : 1;visFollow=1-Math.pow(1-VIS_FOLLOW,dk);visTurn=1-Math.pow(1-VIS_TURN,dk);faceVel=1-Math.pow(1-FACE_VEL,dk);lastBuiltTick=tick.tick;}
     if (tick.lightRange>0) lightFull=tick.lightRange;
     // (The metadata: copied when this buffer's is older, fillRange.)
     let metaCopy=true;

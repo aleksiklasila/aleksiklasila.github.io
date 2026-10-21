@@ -185,7 +185,17 @@ for(const [id,name]of [[SIM_KERNEL_TRAFFIC_CAPTURE,'traffic_capture'],[SIM_KERNE
 const _simOccW = _simWK(['occ.bits','occ.mask','occ.x','occ.y','occ.radius','occ.layer','occ.active',
     'unit.x','unit.y','unit.prevX','unit.prevY','unit.vx','unit.vy','unit.dead','unit.live',
     'unit.spTile','unit.sepKey','unit.spArea','unit.spMvOld','unit.spMvNew','unit.spMvOwn','unit.owner','unit.spOwner',
-    'occ.areaGrid','occ.eslot','occ.start','occ.count','occ.stamp','occ.stats','unit.mvSteady','unit.mvCT','unit.mvCD','occ.offsets','occ.config']);
+    'occ.areaGrid','occ.eslot','occ.start','occ.count','occ.stamp','occ.stats','unit.mvSteady','unit.mvCT','unit.mvCD','occ.offsets','occ.config',
+    // (34: per job, the idle units it swapped across its block's edge: mv.rs traffic_swap;
+    // 35: per job's range (as mv.post's), the units its second pass looks at.)
+    'occ.xswap', '?occ.work']);
+// Per spatial block its index entries (occ.offsets, summed up after; occ.rs occ_block_counts), 64 blocks a chunk.
+const SIM_KERNEL_OCC_COUNTS = 97;
+SIM_KERNELS[SIM_KERNEL_OCC_COUNTS] = function(R,P,c){
+    const A=_simWPtrs(_simOccW);if(!A)_simNoWasm('OCC_COUNTS');
+    for(let i=0;i<A.length;i++)_simWasmArgI[512+i]=_simWEnc(A[i]);
+    _simWasmX.occ_block_counts(_simWasmArgsW,c);
+};
 SIM_KERNELS[SIM_KERNEL_MOVE_OCCUPANCY] = function(R,P,c){
     if(!_simMoveWasm(R,P))_simNoWasm('MOVE_OCCUPANCY');
     const A=_simWPtrs(_simOccW);if(!A)_simNoWasm('MOVE_OCCUPANCY');
@@ -1216,6 +1226,9 @@ function _simMoveWasm(R, P) {
     _simWasmArgF.set(P);
     const traffic=R['traffic.config'];
     _simWasmArgI[456]=traffic?_simWEnc(traffic.byteOffset):0;
+    // (Word 458: unit.rtEnd, the occupancy swap's crowd test, mv.rs traffic_swap.)
+    const rte=R['unit.rtEnd'];
+    _simWasmArgI[458]=rte&&simHeapHas(rte)?_simWEnc(rte.byteOffset):0;
     return true;
 }
 
@@ -1621,12 +1634,14 @@ SIM_KERNELS[SIM_KERNEL_LASER_HITS] = function (R, P, chunk) { _simRust(_simLaser
 // instruction: keep its target while alive and in sight, else take the
 // scan's (acq.out); in its attack range by areas (any number of steps: a
 // search over the area graph, here on the helpers) -> 1 hold, else 2 chase;
-// none -> 0. acq.bm 255: no instruction (not the brain's unit).
+// no unit but a hostile structure the scan found (acq.sout) -> 8 engage it
+// (Unit.update, _brainStructureEngage); none -> 0. acq.bm 255: no
+// instruction (not the brain's unit).
 // P: [0] slots, [1] per job, [2] CMD_IDLE, [3] CMD_ATTACK_MOVING, [4] TILE,
 // [5]/[6] grid, [7] players, [8] areas.
 const SIM_KERNEL_COMBAT_BRAIN = 62, SIM_KERNEL_COMBAT_COMMIT = 63;
 const _simCombatBrainW = _simWK(['acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.id', 'acq.out', 'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk', 'acq.agrid', 'acq.cover',
-    '?acq.aoff', '?acq.anb', 'acq.bm', 'acq.bt', 'acq.btid']);
+    '?acq.aoff', '?acq.anb', 'acq.bm', 'acq.bt', 'acq.btid', '?acq.sout']);
 SIM_KERNELS[SIM_KERNEL_COMBAT_BRAIN] = function (R, P, chunk) { _simRust(_simCombatBrainW, P, chunk, 'k_combat_brain', 'COMBAT_BRAIN'); };
 // The brain's instructions into the units' columns at the commit tick (the
 // same unit still in the slot, alive): O(1) a slot.

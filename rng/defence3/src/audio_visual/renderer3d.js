@@ -209,10 +209,13 @@
                 && !key.startsWith('particle') && !key.startsWith('dropped_');
             const size = exact || (tile ? 1 : 0);
             const light = o.historyGhost ? o.lightLevel * .65 : o.lightLevel;
-            const color = source ? null : hexToRgb(o.tint);
+            // (2.5D: a textured sprite tinted with its owner's colour; the
+            // shader keeps only the sprite's shape and shading. Mines keep theirs.)
+            const team = source && typeof renderTeamColorsOnly !== 'undefined' && renderTeamColorsOnly && o.tint && !key.includes('mine');
+            const color = source && !team ? null : hexToRgb(o.tint);
             this.push(o.x, o.z + (exact ? source._flatOffsetZ || 0 : 0), size || o.scaleX, size || o.scaleZ,
-                source ? light : color[0], source ? light : color[1], source ? light : color[2], o.alpha * (o.pickSource?._r3dDetailBlend ?? 1),
-                exact || tile ? 0 : -(o.rotationY || 0), source);
+                source && !team ? light : color[0] * (team ? light : 1), source && !team ? light : color[1] * (team ? light : 1), source && !team ? light : color[2] * (team ? light : 1),
+                o.alpha * (o.pickSource?._r3dDetailBlend ?? 1), exact || tile ? 0 : -(o.rotationY || 0), source);
         }
     }
 
@@ -2441,6 +2444,7 @@
                 uniform sampler2D uTopTexture;
                 uniform sampler2D uSideTexture;
                 uniform float uHasSideTexture;
+                uniform float uTeamOnly;
                 layout(location = 0) out vec4 outColor;
                 layout(location = 1) out vec4 outPackedDepth;
                 const float TWO_PI = 6.28318530718;
@@ -2482,6 +2486,7 @@
                         vec3 seamTintedOverlay = mix(sideSample.rgb * shade, playerHuedOverlay, seamFactor);
                         finalColor = mix(functionalSideColor, seamTintedOverlay, overlayAlpha);
                     }
+                    if (uTeamOnly > 0.5) finalColor = playerSideColor;
                     float light = vLightLevel < 0.0 ? -vLightLevel - 1.0 : vLightLevel;
                     float memoryShade = vLightLevel < 0.0 ? mix(.55, 1.0, smoothstep(.14, .74, light)) : 1.0;
                     float fogAlpha = 1.0 - (1.0 - pow(1.0 - clamp(light, 0.0, 1.0), 1.3) * 0.42) * memoryShade;
@@ -2618,7 +2623,8 @@
                 viewProjection: gl.getUniformLocation(this.texturedCubeProgram, 'uViewProjection'),
                 topTexture: gl.getUniformLocation(this.texturedCubeProgram, 'uTopTexture'),
                 sideTexture: gl.getUniformLocation(this.texturedCubeProgram, 'uSideTexture'),
-                hasSideTexture: gl.getUniformLocation(this.texturedCubeProgram, 'uHasSideTexture')
+                hasSideTexture: gl.getUniformLocation(this.texturedCubeProgram, 'uHasSideTexture'),
+                teamOnly: gl.getUniformLocation(this.texturedCubeProgram, 'uTeamOnly')
             };
             this.planeUniforms = {
                 viewProjection: gl.getUniformLocation(this.planeProgram, 'uViewProjection'),
@@ -2985,6 +2991,7 @@
                 uniform float uIsUnit;
                 uniform float uIsFlying;
                 uniform float uInkScale;
+                uniform float uTeamOnly;
                 uniform float uCoverageFade;
                 ${CEL_LIGHTING_GLSL}
                 uniform sampler2D uTopTexture;
@@ -3032,6 +3039,8 @@
                         if (texel.a < .1) discard;
                         base = mix(vec3(.055,.065,.08), texel.rgb, texel.a);
                     }
+                    // 2.5D / 3.5D: its owner's colour over the whole model.
+                    if (uTeamOnly > .5) { base = vColor; glowing = false; }
                     float diffuse = max(dot(normalize(vNormal), normalize(vec3(-.42,.86,.31))),0.0);
                     float shade = glowing ? 1.0 : mix(.72, 1.0, celShade(diffuse));
                     vec3 shaded = base * shade;
@@ -3059,7 +3068,7 @@
             for (const [k, n] of [['inkScale', 'InkScale'], ['coverageFade', 'CoverageFade'], ['animationMode', 'AnimationMode'], ['rig', 'Rig'], ['time', 'Time'],
                 ['layerAlpha', 'LayerAlpha'], ['flyTime', 'FlyTime'], ['walkSurface', 'WalkSurface'], ['walkSurfaceBounds', 'WalkSurfaceBounds'],
                 ['followWalkSurface', 'FollowWalkSurface'], ['isFlying', 'IsFlying'], ['isUnit', 'IsUnit'], ['viewProjection', 'ViewProjection'],
-                ['topTexture', 'TopTexture'], ['atlas', 'Atlas'], ['useAtlas', 'UseAtlas'], ['sideTexture', 'SideTexture'], ['hasSideTexture', 'HasSideTexture']]) U[k] = gl.getUniformLocation(program, 'u' + n);
+                ['topTexture', 'TopTexture'], ['atlas', 'Atlas'], ['useAtlas', 'UseAtlas'], ['sideTexture', 'SideTexture'], ['hasSideTexture', 'HasSideTexture'], ['teamOnly', 'TeamOnly']]) U[k] = gl.getUniformLocation(program, 'u' + n);
             return U;
         }
         // The figure program for the units' middle-distance models drawn from
@@ -3116,7 +3125,9 @@
                     bool flying = (uSlotStyleFlags & 1) != 0;
                     if ((uSlotStyleFlags & 2) == 0) sy = (uSlotStyleFlags & 4) != 0 ? max(.24, sy) : max(.48 * uSlotScale.x, sy);
                     float vision = slotF(9, s);
-                    if ((uSlotStyleFlags & 8) == 0 && vision > 0.0) sy *= max(.18, vision * uSlotHeightScale);
+                    // (uSlotHeightScale: the type's base-sight height, its catalog
+                    // bakeHeight; a level or research never makes it taller.)
+                    if ((uSlotStyleFlags & 8) == 0) sy *= uSlotHeightScale;
                     float facing = slotF(5, s), c = cos(facing), sn = sin(facing);
                     int id = slotI(0, s), flags = slotI(1, s);
                     int owner = texelFetch(uSlotO, ivec2(s % uSlotW, s / uSlotW), 0).r;
@@ -5734,6 +5745,8 @@
             gl.bindTexture(gl.TEXTURE_2D, sideTexture);
             gl.uniform1i(uniforms.sideTexture, 1);
             gl.uniform1f(uniforms.hasSideTexture, sideTexture ? 1 : 0);
+            // (2.5D / 3.5D: owner colours, but never on neutral mines.)
+            gl.uniform1f(uniforms.teamOnly, this.teamColorsOnly && !String(objects[0] && objects[0].modelKey || '').includes('mine') ? 1 : 0);
             if (kind) {
                 // The array sampler keeps its own unit even when unused.
                 gl.activeTexture(gl.TEXTURE2);
@@ -5861,6 +5874,7 @@
                     precision highp sampler2DArray;
                     uniform sampler2D sprite;
                     uniform sampler2DArray atlas;
+                    uniform float teamOnly;
                     in vec2 uv;
                     in vec4 color;
                     flat in float spriteLayer;
@@ -5871,7 +5885,9 @@
                         vec4 layered = texture(atlas, vec3(uv, max(spriteLayer, 0.)));
                         vec4 single = texture(sprite, uv);
                         vec4 texel = spriteLayer >= 0. ? layered : spriteLayer > -1.5 ? single : vec4(1.);
-                        outColor = texel * color;
+                        // 2.5D: the tint is its owner's colour (FlatSpriteBatch),
+                        // over the sprite's shape and shading.
+                        outColor = teamOnly > .5 ? vec4(color.rgb * (.62 + .38 * dot(texel.rgb, vec3(.3,.59,.11))), texel.a * color.a) : texel * color;
                     }`);
                 this.flatVao = gl.createVertexArray();
                 this.flatBuffer = gl.createBuffer();
@@ -5879,7 +5895,8 @@
                 this.flatUniforms = {
                     matrix: gl.getUniformLocation(this.flatProgram, 'viewProjection'),
                     sprite: gl.getUniformLocation(this.flatProgram, 'sprite'),
-                    atlas: gl.getUniformLocation(this.flatProgram, 'atlas')
+                    atlas: gl.getUniformLocation(this.flatProgram, 'atlas'),
+                    teamOnly: gl.getUniformLocation(this.flatProgram, 'teamOnly')
                 };
                 gl.bindVertexArray(this.flatVao);
                 gl.bindBuffer(gl.ARRAY_BUFFER, this.flatBuffer);
@@ -5910,6 +5927,7 @@
             gl.uniformMatrix4fv(this.flatUniforms.matrix, false, this.tmpViewProjection);
             gl.uniform1i(this.flatUniforms.sprite, 0);
             gl.uniform1i(this.flatUniforms.atlas, 1);
+            gl.uniform1f(this.flatUniforms.teamOnly, this.teamColorsOnly ? 1 : 0);
             gl.activeTexture(gl.TEXTURE1);
             gl.bindTexture(gl.TEXTURE_2D_ARRAY, atlas.texture);
             gl.activeTexture(gl.TEXTURE0);
@@ -6422,7 +6440,8 @@
                         const size=kind?Math.max(.28,Math.min(.9,F.r[s]*2.2/C.tile)):.94;
                         // A tall tower's ground anchor can be off screen while
                         // its roof is close and visible. Keep that roof a mesh.
-                        const edgeHeight=Math.max(1,(F.vision[s]||0)*AREA_UNIT_TILE_EQUIVALENT/5*2);
+                        const erow=kind?7:F.kind[s],ecode=kind?F.type[s]:erow===4||erow===5?(F.amount[s]>0?0:1):erow===1?F.utype[s]:F.type[s];
+                        const edgeHeight=Math.max(1,2*_cmBaseHeight(A,erow,ecode));
                         // Spread the mesh/image boundary over +/-20% of its
                         // original view depth. Structure tiles and unit IDs
                         // keep the pattern fixed through camera motion, unit
@@ -6454,7 +6473,7 @@
                         let sy=size*style.scaleY;
                         if(kind&&!style.mounted)sy=style.snake?Math.max(.24,sy):Math.max(.48*style.scaleX,sy);
                         const preserve=style.preserveModelHeight||style.isFlying||style.mounted||figure==='portal';
-                        if(!preserve&&F.vision[s]>0)sy*=Math.max(.18,F.vision[s]*AREA_UNIT_TILE_EQUIVALENT/5);
+                        if(!preserve)sy*=style.bakeHeight||1;
                         // Match the low deck used when a unit occupies a tower.
                         if(!kind&&(row===0&&figure!=='portal'||row===3&&!figure.startsWith('farm'))
                             && typeof renderer3dStaticFrame!=='undefined' && renderer3dStaticFrame.occupied?.has(F.gy[s]*snapshot.worldWidth+F.gx[s]))
@@ -6550,7 +6569,7 @@
                 // (The viewing player's own units: always drawn, at full light, as the glyphs' shader has them.)
                 if(!full && !(F.flags[s]&65536) && !own && !(vis[Math.floor(z)]?.[Math.floor(x)]>0))continue;
                 const size=Math.max(.28,Math.min(.9,F.r[s]*2.2/tile));
-                const edgeHeight=Math.max(1,(F.vision[s]||0)*AREA_UNIT_TILE_EQUIVALENT/5*2);
+                const edgeHeight=Math.max(1,2*_cmBaseHeight(A,7,F.type[s]));
                 let seed=id^0x9e3779b9;
                 seed=Math.imul(seed^(seed>>>16),0x7feb352d);
                 seed=Math.imul(seed^(seed>>>15),0x846ca68b);
@@ -6588,7 +6607,7 @@
                 let sy=size*style.scaleY;
                 if(!style.mounted)sy=style.snake?Math.max(.24,sy):Math.max(.48*style.scaleX,sy);
                 const preserve=style.preserveModelHeight||style.isFlying||style.mounted||st.figure==='portal';
-                if(!preserve&&F.vision[s]>0)sy*=Math.max(.18,F.vision[s]*AREA_UNIT_TILE_EQUIVALENT/5);
+                if(!preserve)sy*=style.bakeHeight||1;
                 const facing=F.facing[s];
                 let c,sn;
                 if(U.face[s]===facing){c=U.fc[s];sn=U.fs[s];}
@@ -6671,9 +6690,9 @@
             gl.activeTexture(gl.TEXTURE0);
             gl.uniform1i(U.SlotW, T.w); gl.uniform1i(U.SlotRows, T.rows);
             gl.uniform1i(U.SlotFull, P.full ? 1 : 0); gl.uniform1i(U.SlotPlayer, P.player);
-            gl.uniform1f(U.SlotTile, P.tile); gl.uniform1f(U.SlotLightNorm, P.lightNorm); gl.uniform1f(U.SlotHeightScale, AREA_UNIT_TILE_EQUIVALENT / 5);
-            gl.uniform3fv(U.SlotColors, P.colors);
+            gl.uniform1f(U.SlotTile, P.tile); gl.uniform1f(U.SlotLightNorm, P.lightNorm); gl.uniform3fv(U.SlotColors, P.colors);
             const st = G.style;
+            gl.uniform1f(U.SlotHeightScale, st.bakeHeight || 1);
             gl.uniform1i(U.SlotStyleFlags, (st.isFlying ? 1 : 0) | (st.mounted ? 2 : 0) | (st.snake ? 4 : 0)
                 | (st.preserveModelHeight || st.isFlying || st.mounted || G.figure === 'portal' ? 8 : 0) | (st.isWorker ? 16 : 0));
             gl.uniform2f(U.SlotScale, st.scaleX, st.scaleY);
@@ -6702,7 +6721,7 @@
                 // (The viewing player's own units: always drawn, at full light, as the glyphs' shader has them.)
                 if(!full && !(F.flags[s]&65536) && F.owner[s]!==player && !(vis[Math.floor(z)]?.[Math.floor(x)]>0))continue;
                 const size=Math.max(.28,Math.min(.9,F.r[s]*2.2/tile));
-                const edgeHeight=Math.max(1,(F.vision[s]||0)*AREA_UNIT_TILE_EQUIVALENT/5*2);
+                const edgeHeight=Math.max(1,2*_cmBaseHeight(A,7,F.type[s]));
                 let seed=id^0x9e3779b9;
                 seed=Math.imul(seed^(seed>>>16),0x7feb352d);
                 seed=Math.imul(seed^(seed>>>15),0x846ca68b);
@@ -6811,10 +6830,11 @@
                     uniform sampler2D uVisibility;
                     uniform sampler2D uStyles, uMeta, uAnimMeta;
                     uniform float uAnimGrid,uTime;
-                    uniform float uAtlasGrid, uStyleWidth, uYaw, uPitch, uPointMax, uHeightScale;
+                    uniform float uAtlasGrid, uStyleWidth, uYaw, uPitch, uPointMax, uHeightScale, uTeamOnly;
                     uniform vec2 uViewport;
                     uniform vec3 uEye;
                     out vec4 vColor;
+                    flat out float vTeam;
                     out float vCoverage;
                     flat out float vLayer;
                     flat out float vLayerNext;
@@ -6871,7 +6891,8 @@
                         int code = int(uStructure == 0 ? aKind : aKind == 4. || aKind == 5. ? (aResource > 0. ? 0. : 1.) : aKind == 1. ? aUnitType : aType);
                         vec4 style = texelFetch(uStyles,ivec2(clamp(code,0,int(uStyleWidth)-1),row),0);
                         float base = style.r;
-                        float modelHeight=style.g>.5||aVision<=0.?1.:max(.18,aVision*uHeightScale);
+                        // (Its type's base-sight height, as baked: never taller with a level.)
+                        float modelHeight=style.g>.5?1.:abs(style.b);
                         if(uStructure==0&&style.b>=0.)modelHeight*=style.g<-.5?max(1.,.24/(size*.52)):max(1.,.48/(size*1.45));
                         modelHeight/=max(abs(style.b),.001);
                         float facing = uStructure == 0 ? aFacing : aKind == 0. ? 1.5707963-aFacing : 0.;
@@ -6951,7 +6972,11 @@
                         // All types at the same depth keep their type image.
                         // A small body must not turn into an owner-colour dot
                         // before a larger neighbour further from the camera.
-                        vLod = base > 0. && meta.w > .5 ? (uFlat>.5?smoothstep(1.25,6.,tilePixels/uPixelRatio):1.) : 0.;
+                        // (Far in 2D too: its image, as 3D keeps it, never an
+                        // owner-colour dot standing in for it.)
+                        vLod = base > 0. && meta.w > .5 ? 1. : 0.;
+                        // 2.5D / 3.5D: owner colours over its shape (mines keep theirs).
+                        vTeam = uTeamOnly > .5 && !(uStructure != 0 && (aKind == 4. || aKind == 5.)) ? 1. : 0.;
                         // 3D views retain their physical footprint and material colors.
                         // Enlarged owner-colored dots made distant blocks brighter.
                         float markerPixels = (uFlat>.5?3.:.75) * uPixelRatio;
@@ -6990,6 +7015,7 @@
                     flat in float vPaletteLayer;
                     flat in vec4 vViewWeights;
                     flat in vec4 vViewBasis;
+                    flat in float vTeam;
                     in float vLod, vDotScale, vLight;
                     in float vModelBlend;
                     flat in vec2 vSpriteCenter;
@@ -7134,6 +7160,8 @@
                             }
                             // The atlas already contains final framebuffer colors.
                             texel.rgb /= max(texel.a,.001);
+                            // (Team colours only: its owner's, shaded by the image.)
+                            if (vTeam > .5) texel.rgb = vColor.rgb * (.62 + .38 * dot(texel.rgb, vec3(.3,.59,.11)));
                             // Premultiplied interpolation avoids dark fringes and
                             // gives continuous transitions down to subpixel dots.
                             float alpha = mix(dotAlpha,texel.a,vLod);
@@ -7160,7 +7188,7 @@
                         }
                     }`);
                 this.columnUniforms = {};
-                for (const n of ['AtlasPixels','AnimPixels','AnimGrid','AnimSprites','AnimMeta','ViewProjection','InverseViewProjection','Alpha','Tile','Scale','PixelRatio','Flat','LightNorm','Structure','Full','Player','Colors','OwnerLayers','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','AtlasGrid','StyleWidth','Yaw','Pitch','Time','HeightScale','PointMax','Viewport','Eye','CoverageFade','BlendBakedViews','BakedSampling']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
+                for (const n of ['AtlasPixels','AnimPixels','AnimGrid','AnimSprites','AnimMeta','ViewProjection','InverseViewProjection','Alpha','Tile','Scale','PixelRatio','Flat','LightNorm','Structure','Full','Player','Colors','OwnerLayers','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','AtlasGrid','StyleWidth','Yaw','Pitch','Time','HeightScale','PointMax','Viewport','Eye','CoverageFade','BlendBakedViews','BakedSampling','TeamOnly']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
                 this.columnStores = [{},{}];
                 this.columnVisibilityTexture = createTexture(gl);
             }
@@ -7300,6 +7328,7 @@
             gl.uniform1f(U.Alpha,C.alpha);gl.uniform1f(U.Tile,C.tile);
             gl.uniform1f(U.LightNorm,Math.max(.001,C.lightNorm));
             gl.uniform1f(U.Flat,snapshot.flat2d?1:0);
+            gl.uniform1f(U.TeamOnly,this.teamColorsOnly?1:0);
             gl.uniform1i(U.BlendBakedViews,Defence3Renderer3D.blendBakedViews!==false?1:0);
             gl.uniform1i(U.BakedSampling,Defence3Renderer3D.bakedSampling==='base-nearest'?2:Defence3Renderer3D.bakedSampling==='base-linear'?1:0);
             gl.uniform1f(U.CoverageFade,this.sceneSamples ? 1 : 0);

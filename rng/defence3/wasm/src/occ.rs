@@ -30,6 +30,35 @@ pub unsafe extern "C" fn occ_prepare(a:u32,_chunk:i32) {
     }}
     *offsets.add((bw*bh) as usize)=total;
 }
+// The same, by block (OCC_COUNT_BLOCKS a chunk): each block's own count into
+// occ.offsets (the simulation thread then sums them up), on the helpers.
+pub(super) const OCC_COUNT_BLOCKS:i32=64;
+#[no_mangle]
+pub unsafe extern "C" fn occ_block_counts(a:u32,chunk:i32) {
+    let a=waddr(a) as *const i32;
+    let ptr=|i:usize|waddr(*a.add(512+i) as u32) as *mut i32;
+    let per=OCC_COUNT_BLOCKS;
+    let cfg=ptr(33);let bw=*cfg.add(5);let bh=*cfg.add(6);let block=*cfg.add(7);
+    let cw=*cfg.add(9);let ch=*cfg.add(10);let ep=*cfg.add(11);let epoch=i32x4_splat(ep);
+    let counts=ptr(26);let stamps=ptr(27);let offsets=ptr(32);
+    let j0=chunk.max(0)*per;let j1=(j0+per).min(bw*bh);
+    for job in j0..j1 {
+        let bx=irem(job,bw);let by=idiv(job,bw);
+        let mut total=0;let mut sum=i32x4_splat(0);
+        for y in by*block..((by+1)*block).min(ch) {
+            let mut x=bx*block;let end=((bx+1)*block).min(cw);
+            while x+4<=end {
+                let k=(y*cw+x) as usize;
+                let valid=i32x4_eq(v128_load(stamps.add(k) as *const v128),epoch);
+                sum=i32x4_add(sum,v128_and(valid,v128_load(counts.add(k) as *const v128)));x+=4;
+            }
+            while x<end {let k=(y*cw+x) as usize;if *stamps.add(k)==ep{total+=*counts.add(k);}x+=1;}
+        }
+        sum=i32x4_add(sum,i32x4_shuffle::<2,3,0,1>(sum,sum));
+        sum=i32x4_add(sum,i32x4_shuffle::<1,0,3,2>(sum,sum));
+        *offsets.add(job as usize)=total+i32x4_extract_lane::<0>(sum);
+    }
+}
 #[inline(always)]
 fn cell_coord(g:&Grid,x:i32)->i32 {x>>g.cell.trailing_zeros()}
 // A padding word at each row end permits a single unaligned 64-bit access
@@ -60,6 +89,7 @@ fn old_width(lo:v128,hi:v128,index:i32)->i32 {
 }
 macro_rules! finish_hits {($first:expr $(,$rest:expr)*)=>{($first $(|$rest)*)==0};}
 include!("occ_shapes.rs");
+pub(super) const XSWAP_CAP:usize=32;
 
 // Radius 2 is a 3x3 raster. A one-cell move only needs the newly entered
 // fringe: one row for vertical movement, one column for horizontal, or
@@ -234,6 +264,11 @@ unsafe fn horizontal_motion(g:&Grid,ox:i32,oy:i32,nx:i32,ny:i32,r:i32,layer:i32,
 pub(super) struct MoveGrid {
     g:Grid, xx:*mut i32, yy:*mut i32, rr:*const u8, layer:*const u8,
     active:*const u8, stats:*mut i32, blockq:i32, bx:i32, by:i32,
+    // The tick-start unit index (per chunk: slots, start, count, stamp).
+    ix_slot:*const i32, ix_start:*const i32, ix_count:*const i32, ix_stamp:*const i32,
+    cw:i32, ch:i32, epoch:i32, chq:i32,
+    // This job's cross-block swap list ([count, slots...]; null: none).
+    xsw:*mut i32,
 }
 impl MoveGrid {
     pub(super) unsafe fn load(a:*const i32,bx:i32,by:i32,job:i32)->Self {
@@ -245,14 +280,72 @@ impl MoveGrid {
         let stats=(ptr(28) as *mut i32).add(job as usize*8);
         Self{g,xx:ptr(2) as *mut i32,yy:ptr(3) as *mut i32,rr:ptr(4) as *const u8,
             layer:ptr(5) as *const u8,active:ptr(6) as *const u8,stats,
-            blockq:get(7)*get(15)*get(14),bx,by}
+            blockq:get(7)*get(15)*get(14),bx,by,
+            ix_slot:ptr(24) as *const i32,ix_start:ptr(25) as *const i32,ix_count:ptr(26) as *const i32,ix_stamp:ptr(27) as *const i32,
+            cw:get(9),ch:get(10),epoch:get(11),chq:get(15)*get(14),
+            xsw:if *a.add(512+34)==0{core::ptr::null_mut()}else{(ptr(34) as *mut i32).add(job as usize*(XSWAP_CAP+1))}}
     }
     pub(super) unsafe fn visit(&self,n:usize){
         *self.stats+=n as i32;
         *self.stats.add(4)+=1;
     }
     pub(super) unsafe fn scalar_lane(&self){*self.stats.add(7)+=1;}
-    pub(super) unsafe fn reset(&self){core::ptr::write_bytes(self.stats,0,8);}
+    pub(super) unsafe fn reset(&self){core::ptr::write_bytes(self.stats,0,8);if !self.xsw.is_null(){*self.xsw=0;}}
+    /// Room for one more cross-block swap.
+    pub(super) unsafe fn xswap_room(&self)->bool{!self.xsw.is_null()&&*self.xsw<XSWAP_CAP as i32}
+    pub(super) unsafe fn xswap_push(&self,b:usize){let n=*self.xsw+1;*self.xsw.add(n as usize)=b as i32;*self.xsw=n;}
+    /// Its footprint radius in Q8 position units.
+    pub(super) unsafe fn radius_q(&self,s:usize)->i32{*self.rr.add(s) as i32*self.g.cell}
+    pub(super) unsafe fn active(&self,s:usize)->bool{*self.active.add(s)!=0}
+    /// The index entries of the chunk at (x, y) (Q8) if it is this job's
+    /// and indexed this tick: (first, end) into slot().
+    pub(super) unsafe fn chunk_entries(&self,x:i32,y:i32)->(i32,i32){
+        if !self.owns(x,y){return (0,0);}
+        self.chunk_entries_near(x,y)
+    }
+    /// The same for a chunk of this block or one chunk past its edge (a
+    /// neighbouring block's: its job runs in another phase).
+    pub(super) unsafe fn chunk_entries_near(&self,x:i32,y:i32)->(i32,i32){
+        let e=self.chq;
+        if self.ix_slot.is_null()||x<0||y<0||x<self.bx*self.blockq-e||x>=(self.bx+1)*self.blockq+e||y<self.by*self.blockq-e||y>=(self.by+1)*self.blockq+e{return (0,0);}
+        let cx=idiv(x,self.chq);let cy=idiv(y,self.chq);if cx>=self.cw||cy>=self.ch{return (0,0);}
+        let k=(cy*self.cw+cx) as usize;if *self.ix_stamp.add(k)!=self.epoch{return (0,0);}
+        let a=*self.ix_start.add(k);(a,a+*self.ix_count.add(k))
+    }
+    pub(super) unsafe fn slot(&self,i:i32)->i32{*self.ix_slot.add(i as usize)}
+    pub(super) fn chunk_q(&self)->i32{self.chq}
+    pub(super) unsafe fn pos(&self,s:usize)->(i32,i32){(*self.xx.add(s),*self.yy.add(s))}
+    /// Whether (x, y) lies in this job's block (its units' tick-start tiles).
+    pub(super) fn owns(&self,x:i32,y:i32)->bool{
+        x>=self.bx*self.blockq&&x<(self.bx+1)*self.blockq&&y>=self.by*self.blockq&&y<(self.by+1)*self.blockq
+    }
+    /// a and b trade places, if both footprints fit there (same plane);
+    /// else the grid is left as it was. A larger b may settle a cell or two
+    /// further along (dx, dy) (b's way, unit length), or beside that.
+    /// Returns b's new position.
+    pub(super) unsafe fn swap(&self,a:usize,b:usize,dx:f64,dy:f64)->Option<(i32,i32)>{
+        if *self.active.add(a)==0||*self.active.add(b)==0||*self.layer.add(a)!=*self.layer.add(b){return None;}
+        let l=*self.layer.add(a) as i32;let ra=*self.rr.add(a) as i32;let rb=*self.rr.add(b) as i32;
+        let (ax,ay)=(*self.xx.add(a),*self.yy.add(a));let (bx,by)=(*self.xx.add(b),*self.yy.add(b));
+        clear_or_mark(&self.g,ax,ay,ra,l,false);clear_or_mark(&self.g,bx,by,rb,l,false);
+        if free(&self.g,bx,by,ra,l,0,0,0,-1){
+            clear_or_mark(&self.g,bx,by,ra,l,true);
+            let c=self.g.cell as f64;let (px,py)=(-dy,dx);
+            let tries:[(f64,f64);6]=[(0.0,0.0),(1.0,0.0),(1.0,1.0),(1.0,-1.0),(2.0,0.0),(0.0,1.0)];
+            for k in 0..(if rb>ra{6}else{1}){
+                let (f,g)=*tries.as_ptr().add(k);
+                let tx=ax+js_round((dx*f+px*g)*c) as i32;let ty=ay+js_round((dy*f+py*g)*c) as i32;
+                if free(&self.g,tx,ty,rb,l,0,0,0,-1){
+                    clear_or_mark(&self.g,tx,ty,rb,l,true);
+                    *self.xx.add(a)=bx;*self.yy.add(a)=by;*self.xx.add(b)=tx;*self.yy.add(b)=ty;
+                    *self.stats.add(6)+=2;return Some((tx,ty));
+                }
+            }
+            clear_or_mark(&self.g,bx,by,ra,l,false);
+        }
+        clear_or_mark(&self.g,ax,ay,ra,l,true);clear_or_mark(&self.g,bx,by,rb,l,true);
+        None
+    }
     pub(super) unsafe fn layer_mass(&self,s:usize)->(i32,i32){
         let r=*self.rr.add(s) as i32;(*self.layer.add(s) as i32,(3*r*r-3).max(1))
     }

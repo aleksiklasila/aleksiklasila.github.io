@@ -2440,7 +2440,20 @@ function initInput() {
     });
 
     // Keyboard
+    // Space: short press team colours, held 2D <-> 3D (at once when held
+    // long enough, not at the release).
+    let spaceTimer = 0, spaceLong = false, spaceDown = false;
+    const typingTarget = t => t instanceof Element && !!t.closest('input, textarea, select, [contenteditable="true"]');
     document.addEventListener('keydown', (e) => {
+        if (e.code === 'Space' && gameStarted && !typingTarget(e.target) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            // (Not a focused button's click either.)
+            e.preventDefault();
+            if (e.repeat || spaceDown) return;
+            spaceDown = true; spaceLong = false;
+            clearTimeout(spaceTimer);
+            spaceTimer = setTimeout(() => { if (spaceDown) { spaceLong = true; toggleRenderDimension(); } }, 400);
+            return;
+        }
         let wasDown = !!keysDown[e.key.toLowerCase()];
         keysDown[e.key.toLowerCase()] = true;
         if (!wasDown) noteCameraPanInput(e.timeStamp);
@@ -2502,8 +2515,16 @@ function initInput() {
             handleControlGroupKey(num, !!e.shiftKey);
         }
     });
-    document.addEventListener('keyup', (e) => { keysDown[e.key.toLowerCase()] = false; noteCameraPanInput(e.timeStamp); });
-    window.addEventListener('blur', () => { keysDown = {}; noteCameraPanInput(); renderer3dRotateDrag = null; stopBuildPlacementDrag(); });
+    document.addEventListener('keyup', (e) => {
+        if (e.code === 'Space' && spaceDown) {
+            e.preventDefault();
+            spaceDown = false; clearTimeout(spaceTimer);
+            if (!spaceLong && gameStarted) toggleRenderTeamColors();
+            return;
+        }
+        keysDown[e.key.toLowerCase()] = false; noteCameraPanInput(e.timeStamp);
+    });
+    window.addEventListener('blur', () => { keysDown = {}; spaceDown = false; clearTimeout(spaceTimer); noteCameraPanInput(); renderer3dRotateDrag = null; stopBuildPlacementDrag(); });
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
             keysDown = {};
@@ -2706,6 +2727,10 @@ function initInput() {
     const btnView3d = document.getElementById('btn-view-3d');
     if (btnView2d) btnView2d.addEventListener('click', () => setRenderDimensionMode('2d'));
     if (btnView3d) btnView3d.addEventListener('click', () => setRenderDimensionMode('3d'));
+    for (const id of ['btn-view-2d5', 'btn-view-3d5']) {
+        const b = document.getElementById(id);
+        if (b) b.addEventListener('click', () => setRenderDimensionMode(b.dataset.viewMode));
+    }
     syncRenderModeUi();
 
     const btnLevelVisibility = document.getElementById('btn-level-visibility');
@@ -4567,11 +4592,12 @@ function processAction(a, playerId) {
 // ============================================================
 // CAMERA CONTROLS
 // ============================================================
+// The view's centre stays on the map: up to half a view past each edge, so
+// edges and corners can be centred, zoomed into and worked at.
 function clampCamera() {
-    let maxX = WORLD_W - viewW / camera.zoom;
-    let maxY = WORLD_H - viewH / camera.zoom;
-    camera.x = maxX < 0 ? maxX / 2 : Math.max(0, Math.min(maxX, camera.x));
-    camera.y = maxY < 0 ? maxY / 2 : Math.max(0, Math.min(maxY, camera.y));
+    let vw = viewW / camera.zoom, vh = viewH / camera.zoom;
+    camera.x = Math.max(-vw / 2, Math.min(WORLD_W - vw / 2, camera.x));
+    camera.y = Math.max(-vh / 2, Math.min(WORLD_H - vh / 2, camera.y));
 }
 
 // Settings > Target FPS: the Auto option shows the rate it currently uses.

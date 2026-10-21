@@ -46,6 +46,90 @@ pub(super) unsafe fn sample(c:*const i32,x:i32,y:i32,layer:i32)->(f64,f64){
         (a+(b-a)*fx)*(1.0-fy)+(d+(e-d)*fx)*fy};
     (sample(16),sample(17))
 }
+// Push records, one a tile, double-buffered by step (config 34 write, 35
+// read, 36 the write epoch, 37/38 tiles w/h, 39 the Q8 tile shift). A
+// blocked mover leaves its push in the tile just ahead of it; standing
+// units there read the previous step's record. Two owner slots a tile:
+// friendly pushes part a crowd (step aside off the pusher's line), a
+// hostile one shoves back by what it has over the owner's own push.
+// Words: stamp, dirA (i16 x|y), [latA i16|teamA u8|nA 6 bits|3 - hop 2 bits],
+// dirB, [latB...]. A pushed unit boxed in passes a weaker push on (hop + 1),
+// at most PUSH_HOPS times: the give runs a few units deep, then fades.
+const PUSH_WORDS:usize=5;
+pub(super) const PUSH_HOPS:i32=2;
+#[inline(always)]
+fn sat16(v:i32)->i32{v.max(-32768).min(32767)}
+#[inline(always)]
+fn pack16(x:i32,y:i32)->i32{(x&0xffff)|(y<<16)}
+#[inline(always)]
+fn lo16(v:i32)->i32{(v<<16)>>16}
+#[inline(always)]
+fn hi16(v:i32)->i32{v>>16}
+/// A mover's push: from (ox, oy) (Q8) along (dx, dy) / len, blocked by
+/// `blocked` (0..1) of its step; its footprint radius `rq` (Q8).
+pub(super) unsafe fn push_deposit(c:*const i32,ox:i32,oy:i32,dx:f64,dy:f64,len:f64,blocked:f64,rq:i32,own:i32,hop:i32){
+    if c.is_null()||*c.add(34)==0||own<0||len<=0.0{return;}
+    let ux=dx/len;let uy=dy/len;let reach=(rq+32) as f64;
+    let px=ox+js_round(ux*reach) as i32;let py=oy+js_round(uy*reach) as i32;
+    let sh=*c.add(39);let w=*c.add(37);let h=*c.add(38);
+    if px<0||py<0{return;}
+    let tx=px>>sh;let ty=py>>sh;if tx>=w||ty>=h{return;}
+    let half=1<<(sh-1);let cx=(tx<<sh)+half;let cy=(ty<<sh)+half;
+    // (Signed offset of the pusher's line from the tile centre, px.)
+    let lat=js_round((ux*(py-cy) as f64-uy*(px-cx) as f64)*0.125) as i32;
+    let r=ptr::<i32>(c,34).add((ty*w+tx) as usize*PUSH_WORDS);
+    let epoch=*c.add(36);
+    if *r!=epoch{*r=epoch;for k in 1..PUSH_WORDS{*r.add(k)=0;}}
+    let team=(own&0x7f)+1;
+    let slot=if (*r.add(2)>>16)&255==team||(*r.add(2)>>16)&255==0{1}else if (*r.add(4)>>16)&255==team||(*r.add(4)>>16)&255==0{3}else{return;};
+    let d=*r.add(slot);let m=*r.add(slot+1);
+    let wq=(blocked.max(0.0).min(1.0)*32.0) as f64;
+    *r.add(slot)=pack16(sat16(lo16(d)+js_round(ux*wq) as i32),sat16(hi16(d)+js_round(uy*wq) as i32));
+    let n=(((m>>24)&63)+1).min(63);let fresh=((m>>30)&3).max(3-hop.max(0).min(3));
+    *r.add(slot+1)=(sat16(lo16(m)+lat)&0xffff)|(team<<16)|(n<<24)|(fresh<<30);
+}
+/// Whether tile (tx, ty) has last step's push record (any side).
+pub(super) unsafe fn push_at(c:*const i32,tx:i32,ty:i32)->bool{
+    if c.is_null()||*c.add(35)==0||tx<0||ty<0||tx>=*c.add(37)||ty>=*c.add(38){return false;}
+    *ptr::<i32>(c,35).add((ty* *c.add(37)+tx) as usize*PUSH_WORDS)==*c.add(36)-1
+}
+/// A standing unit's response to last step's pushes at its tile, as a
+/// velocity share (0..~1.3 of its speed): parting from friendly pushes,
+/// giving way to a hostile push its own side does not answer.
+/// Also the friendly push's hop (-1: none, or a hostile push in it too).
+pub(super) unsafe fn push_response(c:*const i32,x:i32,y:i32,own:i32)->(f64,f64,i32){
+    if c.is_null()||*c.add(35)==0||own<0||x<0||y<0{return (0.0,0.0,-1);}
+    let sh=*c.add(39);let w=*c.add(37);let h=*c.add(38);
+    let tx=x>>sh;let ty=y>>sh;if tx>=w||ty>=h{return (0.0,0.0,-1);}
+    let r=ptr::<i32>(c,35).add((ty*w+tx) as usize*PUSH_WORDS);
+    if *r!=*c.add(36)-1{return (0.0,0.0,-1);}
+    let team=(own&0x7f)+1;
+    let (mut fx,mut fy,mut fl,mut fnn,mut ex,mut ey,mut hop)=(0.0,0.0,0.0,0,0.0,0.0,-1);
+    for slot in [1usize,3]{
+        let d=*r.add(slot);let m=*r.add(slot+1);let t=(m>>16)&255;if t==0{continue;}
+        if t==team{fx=lo16(d) as f64;fy=hi16(d) as f64;fl=lo16(m) as f64;fnn=(m>>24)&63;hop=3-((m>>30)&3);}
+        else{ex+=lo16(d) as f64;ey+=hi16(d) as f64;}
+    }
+    let mut vx=0.0;let mut vy=0.0;
+    let fm=sqrt(fx*fx+fy*fy);
+    if fm>0.0&&fnn>0{
+        let ux=fx/fm;let uy=fy/fm;let s=(fm/32.0).min(1.0);
+        let half=1<<(sh-1);
+        let mine=(ux*(y-((ty<<sh)+half)) as f64-uy*(x-((tx<<sh)+half)) as f64)*0.125;
+        let side=if mine>=fl/fnn as f64{1.0}else{-1.0};
+        // (Mostly sideways, off the pusher's line; a little ahead.)
+        vx+=(-uy*side*0.85+ux*0.4)*s;vy+=(ux*side*0.85+uy*0.4)*s;
+    }
+    let em=sqrt(ex*ex+ey*ey);
+    if em>0.0{
+        let ux=ex/em;let uy=ey/em;
+        // (Its own side's push against the hostile one holds the line.)
+        let hold=(-(fx*ux+fy*uy)).max(0.0);
+        let net=((em-hold)/32.0).min(1.0);
+        if net>0.0{vx+=ux*net*0.6;vy+=uy*net*0.6;}
+    }
+    (vx,vy,if fm>0.0&&em==0.0{hop}else{-1})
+}
 #[no_mangle]
 pub unsafe extern "C" fn traffic_capture(a:u32,chunk:i32){
     let (a,f,c)=args(a);let (start,end)=range(f,chunk);
@@ -116,8 +200,15 @@ pub unsafe extern "C" fn traffic_output(a:u32,chunk:i32){
             let gain=((*rho.add(k)-0.2)*3.0).max(0.0).min(1.0);
             fx+=mx*0.25*gain;fy+=my*0.25*gain;
         }
-        *ptr::<f32>(c,27).add(k)=fx.max(-8.0).min(8.0);
-        *ptr::<f32>(c,28).add(k)=fy.max(-8.0).min(8.0);
+        fx=fx.max(-8.0).min(8.0);fy=fy.max(-8.0).min(8.0);
+        // Half the published field carried: a field that answers its own
+        // effect a step late at full gain makes crowds sway.
+        if *c.add(5)>0{
+            fx=fx*0.5+*ptr::<f32>(c,16).add(k)*0.5;fy=fy*0.5+*ptr::<f32>(c,17).add(k)*0.5;
+            if fx.abs()<0.002{fx=0.0;}if fy.abs()<0.002{fy=0.0;}
+        }
+        *ptr::<f32>(c,27).add(k)=fx;
+        *ptr::<f32>(c,28).add(k)=fy;
     }
 }
 #[no_mangle]

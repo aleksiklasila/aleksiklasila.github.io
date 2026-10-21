@@ -2433,6 +2433,9 @@ function getUnitOrderDestinationCode(u) {
         const dest = pending ? { x: pending.gx, y: pending.gy } : unitDisplayDest(u);
         if (!dest) return 0;
         x = dest.x; y = dest.y;
+        // (A scout exploring by itself has no order: no marker for it.)
+        const st = u.unitType === 'scout' ? u._scoutTarget : null;
+        if (!pending && st && Math.floor(x) === st.gx && Math.floor(y) === st.gy) return 0;
     }
     if (!Number.isFinite(x) || !Number.isFinite(y)) return 0;
     const code = Math.floor(y) * GRID_W + Math.floor(x) + 1;

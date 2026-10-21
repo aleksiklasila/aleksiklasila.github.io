@@ -908,6 +908,7 @@ class Unit {
         // (Status effects and attack timers: counted down for every unit at
         // once before the pass, statusPrepassRun.)
         if (this.energy <= 0) { this.dead = true; return; }
+        if (cols && (cols.cmMode[this._si] & 8)) _brainStructureEngage(this);
 
         // Floor item interaction: on entering a tile, then refreshed once a
         // second, staggered by unit (trap effects last seconds).
@@ -2149,7 +2150,7 @@ function unitHitsResolve() {
         const P = _simParams;
         const per = Math.max(SIM_HITS_PER_JOB, Math.ceil(n / 16)), jj = n ? Math.ceil(n / per) : 0;
         const cj = Math.max(SIM_HITS_CHUNKS_JOB, Math.ceil(KC / 48)), kj = nk ? Math.ceil(KC / cj) : 0;
-        P[0] = n; P[1] = per; P[2] = SIM_HITS_PRESENT; P[3] = jj; P[4] = cj; P[5] = nk ? KC : 0; P[6] = CH; P[7] = SIM_OCCUPANCY_ENABLED ? 1 : 0;
+        P[0] = n; P[1] = per; P[2] = SIM_HITS_PRESENT; P[3] = jj; P[4] = cj; P[5] = nk ? KC : 0; P[6] = CH; P[7] = 0;
         simParallelRun(SIM_KERNEL_HITS, jj + kj);
         const nt = CNT[0];
         if (nt > 0) {
@@ -4166,6 +4167,8 @@ let _simMoveSpendTypes = null, _simMovePost = null, _simMovePostC = null;
 // The kernel's attacks (unit holds, mvFlags 4): attacker and target slots per
 // chunk of SIM_MOVE_CHUNK, how many per chunk; chunks this tick (0: none).
 let _simMoveHitA = null, _simMoveHitT = null, _simMoveHitC = null, _simMoveHitChunks = 0;
+// (The occupancy jobs' second-pass lists: mv.rs move_job.)
+let _simMoveWork = null;
 let SIM_KERNEL_FIRE = true;
 function simMoveRun() {
     const S = _simUnitState;
@@ -4221,17 +4224,20 @@ function simMoveRun() {
     const chunks = occupancy ? occupancyPrepareMovement() : Math.ceil(n / CH);
     if(occupancy&&typeof trafficBeforeMovement==='function')trafficBeforeMovement();
     const outputSlots = occupancy ? n : chunks * CH;
+    // (The attacks are listed by slot chunk: with the occupancy, by its first stage's.)
+    const stepChunks = Math.ceil(n / CH), hitChunks = occupancy ? stepChunks : chunks;
     // (The flow looks shared by the kernel's threads: see mv.rs look_cache.)
     if (!_simMoveLookC) { _simMoveLookC = simHeapArray(Int32Array, SIM_MOVE_LOOKC_ENTRIES * 16); _simMoveLookC.fill(0); simParallelBind('mv.lookc', _simMoveLookC); }
     if (!_simMovePost || _simMovePost.length < outputSlots) { _simMovePost = simHeapArrayAuto(Int32Array, simReserveCap(outputSlots, 8192)); simParallelBind('mv.post', _simMovePost); }
+    if (occupancy && (!_simMoveWork || _simMoveWork.length < outputSlots)) { _simMoveWork = simHeapArrayAuto(Int32Array, simReserveCap(outputSlots, 8192)); simParallelBind('occ.work', _simMoveWork); }
     if (!_simMovePostC || _simMovePostC.length < chunks) { _simMovePostC = simHeapArrayAuto(Int32Array, Math.max(64, chunks * 2)); simParallelBind('mv.postc', _simMovePostC); }
     // (The attacks the kernel made, per chunk: see unitHitsResolve.)
     if (!_simMoveHitA || _simMoveHitA.length < outputSlots) {
         _simMoveHitA = simHeapArrayAuto(Int32Array, simReserveCap(outputSlots, 8192)); _simMoveHitT = simHeapArrayAuto(Int32Array, _simMoveHitA.length);
         simParallelBind('mv.hita', _simMoveHitA); simParallelBind('mv.hitt', _simMoveHitT);
     }
-    if (!_simMoveHitC || _simMoveHitC.length < chunks) { _simMoveHitC = simHeapArrayAuto(Int32Array, Math.max(64, chunks * 2)); simParallelBind('mv.hitc', _simMoveHitC); }
-    _simMoveHitChunks = chunks;
+    if (!_simMoveHitC || _simMoveHitC.length < hitChunks) { _simMoveHitC = simHeapArrayAuto(Int32Array, Math.max(64, hitChunks * 2)); simParallelBind('mv.hitc', _simMoveHitC); }
+    _simMoveHitChunks = hitChunks;
     // (The kernel's epilogue: the index columns of units in other tiles, the
     // node steps' charges per chunk, owner and type.)
     const NPa = _simMoveGamePlayers(), names = _spatialUnitTypeNames(), NT = names.length + 1;
@@ -4274,6 +4280,11 @@ function simMoveRun() {
     }
     // The fast step and remaining movement share each scheduled chunk.
     if(occupancy){
+        // Two stages: every unit's step as it wants it, by slot chunk (the
+        // vector paths, the attacks; P[4] -1), then by spatial block in four
+        // phases the wanted positions against the exclusive footprints (the
+        // pressure's steering, shoulders, swaps, pushes) and the epilogue.
+        P[4]=-1;simParallelRun(SIM_KERNEL_MOVE,stepChunks);
         for(let phase=0;phase<4;phase++){P[4]=phase;simParallelRun(SIM_KERNEL_MOVE_OCCUPANCY,Math.ceil(_occ.config[5]/2)*Math.ceil(_occ.config[6]/2));}
     }else simParallelRun(SIM_KERNEL_MOVE, chunks);
     _simMoveRunWallVer = _simMoveWallVer; _simDead0Tick = gameTime;
@@ -4308,6 +4319,7 @@ function simMoveRun() {
             updateUnitSpatial(u);
         }
     }
+    if (occupancy) occupancyAfterMovement(c);
     if (P[54] === 1) _simMoveSepListed(chunks, CH);
     if(occupancy&&typeof trafficAfterMovement==='function')trafficAfterMovement();
 }
@@ -4432,6 +4444,25 @@ function _acqStructureHit(u, range) {
     if (owner === u.owner || (isItem && e.underConstruction)) return null;
     if (!isGameplayTargetVisibleToPlayer(u.owner, gx, gy)) return null;
     return e;
+}
+// The combat brain's structure for an idle or attack-moving unit (cmMode
+// 8: the acquisition tier's hostile structure at tile cmT; the movement
+// kernel hands such a unit back): taken as a turret is (its target
+// building, attacking), in O(1). Traps and other floor items included.
+function _brainStructureEngage(u) {
+    const c = u._us, s = u._si, t = c.cmT[s];
+    c.cmMode[s] = 0; c.cmT[s] = -1; c.cmTId[s] = 0;
+    const cmd = u.commandState;
+    if (!(t >= 0) || (cmd !== CMD_IDLE && cmd !== CMD_ATTACK_MOVING) || u.holdPosition || u.workerState) return;
+    const gx = t % GRID_W, gy = (t - gx) / GRID_W, e = getTileEntityRef(gx, gy);
+    if (!e || !(e.energy > 0)) return;
+    const cell = grid[gy] && grid[gy][gx], isItem = !!cell && cell.item === e;
+    const owner = isItem ? cell.owner : e.owner;
+    if (owner === u.owner || !(owner >= 0) || (isItem && e.underConstruction)) return;
+    if (!isGameplayTargetVisibleToPlayer(u.owner, gx, gy)) return;
+    u.targetBuilding = e;
+    u.forcedAttackTarget = false;
+    u.commandState = CMD_ATTACKING;
 }
 // (The acquisition tier's result, no search here: _combatScanHit.)
 function _combatScanTarget(u, range) { return _combatScanHit(u, range); }

@@ -1,0 +1,62 @@
+Read scene 2465768 units
+{
+  "initialUnits": 2465768,
+  "liveUnits": 2311081,
+  "samples": [
+    {
+      "tick": 10,
+      "baseTicks": 200,
+      "ordered": 203373,
+      "moving": 178310,
+      "distance": 4061584.213857482,
+      "netGoalProgress": 11489290.149486506,
+      "goalSamples": 529747,
+      "meanTickMs": 6653.943110000002
+    },
+    {
+      "tick": 20,
+      "baseTicks": 400,
+      "ordered": 203921,
+      "moving": 182749,
+      "distance": 4542912.366506212,
+      "netGoalProgress": 35820019.630712174,
+      "goalSamples": 529314,
+      "meanTickMs": 5628.550759999998
+    },
+    {
+      "tick": 30,
+      "baseTicks": 600,
+      "ordered": 204380,
+      "moving": 185679,
+      "distance": 4851010.920944339,
+      "netGoalProgress": 62945954.3765483,
+      "goalSamples": 528796,
+      "meanTickMs": 5372.991429999998
+    }
+  ],
+  "audit": {
+    "actualBits": 32006105,
+    "expectedBits": 32006105,
+    "registered": 2311081,
+    "activeUnits": 2311081,
+    "positionMismatches": 0,
+    "ok": true
+  },
+  "stats": {
+    "planes": 1,
+    "cellPixels": 4,
+    "gridMiB": 7.659912109375,
+    "spawns": 2312547,
+    "rejectedSpawns": 153221,
+    "relocatedSpawns": 450895,
+    "registered": 2311081,
+    "visited": 2312478,
+    "attempted": 1017099,
+    "moved": 919264,
+    "blockedOrClipped": 956154,
+    "simdGroups": 2271424,
+    "overHalo": 0,
+    "footprintMoves": 754782,
+    "scalarLanes": 2195685
+  }
+}

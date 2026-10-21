@@ -2430,8 +2430,11 @@ unsafe fn area_within(off: *const i32, nb: *const i32, na: usize, src: &[i32; 4]
 /// its instruction: keep its target while alive and in sight, else take the
 /// scan's (acq.out); in its attack range by areas (acq.rk steps from its
 /// +-0.3 tile window's areas) -> 5 hold and fire, else 2 chase; a moving
-/// shooter (flag 16): 4 fire in range, else 0; none -> 0; 255 not the
-/// brain's. Arrays: acq.x, acq.y, acq.own, acq.flags, acq.cmd, acq.id,
+/// shooter (flag 16): 4 fire in range, else 0; no unit but the scan's
+/// hostile structure (acq.sout: turrets, then traps and other floor items,
+/// then buildings) -> 8 engage it (its tile in acq.bt; the unit goes to
+/// Unit.update, which takes it as a turret is taken); none -> 0; 255 not
+/// the brain's. Arrays: acq.x, acq.y, acq.own, acq.flags, acq.cmd, acq.id,
 /// acq.out, acq.cm, acq.ct, acq.ctid, acq.rk, acq.agrid, acq.cover,
 /// ?acq.aoff, ?acq.anb, acq.bm, acq.bt, acq.btid. P: [0] slots, [1] per
 /// job, [2] CMD_IDLE, [3] CMD_ATTACK_MOVING, [4] tile, [5]/[6] grid, [7]
@@ -2443,6 +2446,7 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
     let (xs, ys, own, flg, cmd, id) = (k.p::<f32>(0), k.p::<f32>(1), k.p::<i8>(2), k.p::<u8>(3), k.p::<u8>(4), k.p::<i32>(5));
     let (outa, cm, ct, ctid, rk, ag, covf) = (k.p::<i32>(6), k.p::<u8>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<u8>(10), k.p::<i32>(11), k.p::<u8>(12));
     let (off, nb, bm, bt, btid) = (k.p::<i32>(13), k.p::<i32>(14), k.p::<u8>(15), k.p::<i32>(16), k.p::<i32>(17));
+    let sout = k.p::<i32>(18);
     let (cmd_idle, cmd_am) = (k.i(2) as u8, k.i(3) as u8);
     let itile = (1.0 / k.f(4)) as f32;
     let (gw, gh, players, na) = (k.i(5), k.i(6), k.i(7), k.i(8));
@@ -2496,7 +2500,14 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
             tq = g(outa, q);
         }
         if tq < 0 {
-            s(bm, q, 0);
+            let st = if !mover && !sout.is_null() { g(sout, q) } else { -1 };
+            if st >= 0 {
+                s(bm, q, 8);
+                s(bt, q, st);
+                s(btid, q, 0);
+            } else {
+                s(bm, q, 0);
+            }
             continue;
         }
         let tu = tq as usize;

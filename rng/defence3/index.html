@@ -300,8 +300,10 @@
         <div class="hud-right">
             <button id="jukebox-open" type="button" aria-label="Open music and sound settings" title="Music and sound">&#9835;</button>
             <span id="view-mode-toggle" class="hud-render-toggle" aria-label="Render mode toggle">
-                <button id="btn-view-2d" type="button" data-view-mode="2d" class="active">2D</button>
-                <button id="btn-view-3d" type="button" data-view-mode="3d">3D</button>
+                <button id="btn-view-2d" type="button" data-view-mode="2d" class="active" title="2D view (Space: team colours, hold Space: 3D)">2D</button>
+                <button id="btn-view-2d5" type="button" data-view-mode="2.5d" title="2D view in team colours only (Space)">2.5D</button>
+                <button id="btn-view-3d" type="button" data-view-mode="3d" title="3D view (Space: team colours, hold Space: 2D)">3D</button>
+                <button id="btn-view-3d5" type="button" data-view-mode="3.5d" title="3D view in team colours only (Space)">3.5D</button>
             </span>
             <span class="hud-sep" aria-hidden="true"></span>
             <button id="btn-fullscreen" class="hud-btn">&#x26F6; FS</button>
@@ -496,6 +498,14 @@
                         <tr>
                             <td><span class="kbd">F</span></td>
                             <td>Cycle level visibility (Everything -> Buildings -> Off)</td>
+                        </tr>
+                        <tr>
+                            <td><span class="kbd">Space</span> (short press)</td>
+                            <td>Team colours on/off: 2D &lt;-&gt; 2.5D, 3D &lt;-&gt; 3.5D</td>
+                        </tr>
+                        <tr>
+                            <td><span class="kbd">Space</span> (hold)</td>
+                            <td>Switch 2D &lt;-&gt; 3D (team colours kept)</td>
                         </tr>
                         <tr>
                             <td><span class="kbd">Mouse Wheel</span></td>
