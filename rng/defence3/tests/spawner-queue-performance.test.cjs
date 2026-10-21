@@ -13,24 +13,27 @@ assert.ok(LIMIT>0,'SPAWNS_PER_TICK found');
 // order among owners below their cap spawns, a failed spawn ends the tick, a
 // paid next front is ready again with a new order, at most LIMIT a tick.
 const reference=`function processGlobalSpawnerQueue() {
- let guard=0;
- while(guard++<${LIMIT}) {
+ let guard=0; const blocked=[];
+ while(guard<${LIMIT} && blocked.length<64) {
   let chosen=null, order=Infinity;
   for(const s of [...barracks,...collectorSpawners]) {
-   if(!s || s.energy<=0 || s.underConstruction || !isQueueEnabled(s) || !s.spawnQueue.length) continue;
+   if(!s || blocked.includes(s) || s.energy<=0 || s.underConstruction || !isQueueEnabled(s) || !s.spawnQueue.length) continue;
    if(!Number.isFinite(s._spawnReadyOrder)) continue;
    const f=getQueuedSpawnInfo(s.spawnQueue[0]);
    if(f.energyPaid<f.energyRequired) continue;
    if(!(players[s.owner].popCount<getPlayerPopCap(s.owner))) continue;
    if(s._spawnReadyOrder<order) {order=s._spawnReadyOrder;chosen=s;}
   }
-  if(!chosen || !spawnQueuedUnitFromSpawner(chosen)) break;
+  if(!chosen) break;
+  if(!spawnQueuedUnitFromSpawner(chosen)) {blocked.push(chosen);continue;}
+  guard++;
   const s=chosen;
   if(guard<${LIMIT} && s.energy>0 && !s.underConstruction && isQueueEnabled(s) && s.spawnQueue.length) {
    const f=getQueuedSpawnInfo(s.spawnQueue[0]);
    if(f.energyPaid>=f.energyRequired && !Number.isFinite(s._spawnReadyOrder)) s._spawnReadyOrder=globalSpawnerReadyOrderCounter++;
   }
  }
+ for(const s of blocked)s._spawnReadyOrder=globalSpawnerReadyOrderCounter++;
 }`;
 function make(code, data) {
  return new Function('data',`
@@ -73,6 +76,10 @@ const data=fixture(1000,true), a=make(optimized,data), b=make(reference,data);
 a.run(); b.run(); assert.deepEqual(a.result(),b.result());
 assert.ok(a.checks()<=3000,'readiness checks '+a.checks()); assert.ok(b.checks()>LIMIT*500,'the exhaustive reference checks '+b.checks());
 console.log(`PASS: 120 scheduler replays; ready orders from payments, full queues, caps, failures and the ${LIMIT} limit; 1000 ready buildings: ${b.checks()} -> ${a.checks()} readiness checks.`);
+const jammed=make(optimized,{caps:[100,100],fail:0,buildings:[0,1].map(id=>({id,owner:id,energy:1,enabled:true,underConstruction:false,_spawnReadyOrder:id+1,spawnQueue:[{energyRequired:2,energyPaid:2}]}))});
+jammed.run();assert.deepEqual(jammed.result().events,[1],'blocked first exit must not starve another owner');
+assert.equal(jammed.result().buildings[0].spawnQueue.length,1,'blocked production retains payment and queue');
+jammed.run();assert.deepEqual(jammed.result().events,[1],'a blocked exit retries without duplicating successful production');
 if(process.argv.includes('--bench')) {
  const times={baseline:[],optimized:[]};
  for(let i=0;i<7;i++) for(const [key,code] of [['baseline',reference],['optimized',optimized]]) {

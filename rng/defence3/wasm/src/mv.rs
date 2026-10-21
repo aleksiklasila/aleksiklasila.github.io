@@ -1659,9 +1659,11 @@ unsafe fn checked_traffic_position(m:&Mv,s:usize,x:f64,y:f64,intent:bool)->(f64,
         // move, at the requested speed; every candidate keeps the same
         // swept exclusive footprint, block halo and wall checks.
         let len=sqrt(want);
+        let handed=!m.traffic.is_null()&&*m.traffic.add(13)!=0;
         let mut best=(ax*dx+ay*dy)/len*0.7+sqrt(ax*ax+ay*ay)*0.3;
         for k in 0..4 {
-            let (vx,vy)=match k {
+            let direction=if handed{match k{0=>0,1=>2,2=>1,_=>3}}else{k};
+            let (vx,vy)=match direction {
                 0=>((dx-dy)*0.7071067811865476,(dy+dx)*0.7071067811865476),
                 1=>((dx+dy)*0.7071067811865476,(dy-dx)*0.7071067811865476),
                 2=>(-dy,dx),_ =>(dy,-dx),
@@ -1671,8 +1673,10 @@ unsafe fn checked_traffic_position(m:&Mv,s:usize,x:f64,y:f64,intent:bool)->(f64,
                 ax as f64*0.125,ay as f64*0.125,m.itile,m.tile) {
                 let (px,py)=(*m.occ).preview(s,ax,ay);
                 let vx=(px-ox) as f64;let vy=(py-oy) as f64;
-                let score=(vx*dx+vy*dy)/len*0.7+sqrt(vx*vx+vy*vy)*0.3;
+                let distance=sqrt(vx*vx+vy*vy);
+                let score=(vx*dx+vy*dy)/len*0.7+distance*0.3+if handed&&k<2{distance*0.4}else{0.0};
                 if score>best+0.0625 {best=score;tx=px;ty=py;}
+                if handed&&k<2&&distance>=len*0.65{break;}
                 if best>len*0.78 {break;}
             }
         }
@@ -2443,7 +2447,11 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
             let key=(cy*cw+cx) as usize;
             if *ptr(27).add(key)!=epoch || *ptr(26).add(key)==0 {continue;}
             let slot=*ptr(24).add(*ptr(25).add(key) as usize);
-            if slot>=0 && (if m.traffic_mode==0{rd(m.on,slot as usize)==6}else{rd(m.fl,slot as usize)&64!=0}) {
+            if slot>=0 && (if m.traffic_mode==0{rd(m.on,slot as usize)==6}else{
+                let s=slot as usize;
+                rd(m.on,s)==1 && rd(m.fl,s)&64!=0 && (!m.brain||rd(m.cmode,s)&3==0)
+                    && rd(m.cd,s)==rd(m.dest,s) && rd(m.ctl,s)==key as i32
+            }) {
                 dx+=rd(m.cvx,slot as usize);dy+=rd(m.cvy,slot as usize);
             }
         }}
@@ -2489,7 +2497,11 @@ pub unsafe extern "C" fn mv_move_occupancy(a:u32,chunk:i32){move_job(a,0,4,chunk
 #[inline(always)]
 unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usize,e:usize) {
     let pc=if ep.push {Some(push_consts(m,f))}else{None};
-    let fast = p.step_ran && sp.acq_t == 4 && sp.tr > 0 && !m.steady.is_null();
+    // Exclusive contacts and steering must resolve in the same identity
+    // order regardless of whether restored slots happen to form SIMD runs.
+    // Bulk status/index/pressure passes remain vectorized.
+    let fast = p.step_ran && sp.acq_t == 4 && sp.tr > 0 && !m.steady.is_null()
+        && (m.occ.is_null() || m.traffic_mode==0);
     let zero = i32x4_splat(0);
     if !m.occ.is_null() {(*m.occ).visit(e-b0);}
     let mut s = b0;

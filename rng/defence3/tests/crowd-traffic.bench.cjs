@@ -7,7 +7,7 @@ const world=new H.World({controls:{...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':'200'
 const i=world.spawn('traffic',{simWorker:false,url:'http://localhost/?wasm64=0'});i.scratch.now=()=>performance.now();
 const r=i.eval(`(()=>{
  SIM_TRAFFIC_MODE=${mode};performance.now=__scratch.now;
- SIM_TRAFFIC_PASSES=${Number(arg('passes',2))};SIM_TRAFFIC_RESPONSE=${Number(arg('response',1))};
+ SIM_TRAFFIC_PASSES=${Number(arg('passes',2))};SIM_TRAFFIC_RESPONSE=${Number(arg('response',1))};SIM_TRAFFIC_LOCAL=${Number(arg('local',1))};
  startingResourcesConfig=normalizeStartingResourcesConfig({spawnCounts:{},researchLevels:{}});
  applyMainMenuControlsToRuntimeState();startSoloGame();
  const us=[],plug=[];

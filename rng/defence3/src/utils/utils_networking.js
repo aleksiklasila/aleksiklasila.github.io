@@ -1625,9 +1625,6 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing', taken = nul
         RESEARCH_COST_EXP = Math.max(1, Number(data.cfg.researchCostExp) || 1.85);
         RESEARCH_WORK_EXP = Math.max(1, Number(data.cfg.researchWorkExp) || 1.7);
         RESEARCH_WORK_BASE = Math.max(1, Math.floor(Number(data.cfg.researchWorkBase) || 110));
-        RESEARCH_BONUS_EXP_UNITS = Math.max(1, Number(data.cfg.researchBonusExpUnits) || 2.0);
-        RESEARCH_BONUS_EXP_OTHER = Math.max(1, Number(data.cfg.researchBonusExpOther) || 1.25);
-        RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP = Math.max(1, Number(data.cfg.researchBonusExpOtherHousePopCap) || 2.0);
         MAX_THING_LEVEL = Math.max(1, Math.floor(Number(data.cfg.maxThingLevel) || 20));
         MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(Number(data.cfg.maxResearchLevel) || 10));
         startingResourcesConfig = normalizeStartingResourcesConfig(data.cfg.startingResources || makeDefaultStartingResourcesConfig());
@@ -3754,9 +3751,6 @@ function startHostedGame(opts = null) {
                 researchCostExp: RESEARCH_COST_EXP,
                 researchWorkExp: RESEARCH_WORK_EXP,
                 researchWorkBase: RESEARCH_WORK_BASE,
-                researchBonusExpUnits: RESEARCH_BONUS_EXP_UNITS,
-                researchBonusExpOther: RESEARCH_BONUS_EXP_OTHER,
-                researchBonusExpOtherHousePopCap: RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP,
                 maxThingLevel: MAX_THING_LEVEL,
                 maxResearchLevel: MAX_RESEARCH_LEVEL,
                 startingResources: cloneStartingResourcesConfig(),

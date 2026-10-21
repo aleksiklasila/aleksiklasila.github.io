@@ -6,14 +6,16 @@ const H = require('./net-harness.cjs');
 const RealWorker = require('./real-sim-helper.cjs');
 const workers=[];
 const acquisitionSamples=Number(process.argv.find(a=>a.startsWith('--acq-samples='))?.slice(14)||0);
+const dk=Number(process.argv.find(a=>a.startsWith('--dk='))?.slice(5)??1);
 class Worker extends RealWorker { constructor(...args) { super(...args); workers.push(this); } }
 (async () => {
     const controls={...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':'60','cfg-max-pop':'10000','cfg-starting-energy':'900000000','cfg-starting-astar':'900000000'};
     const world=new H.World({controls});
     const host=world.spawn('serial',{simWorker:false}), peer=world.spawn('parallel',{simWorker:false});
-    for(const inst of [host,peer])inst.eval('SIM_ACQ_SAMPLE_BUDGET='+acquisitionSamples+';SIM_ACQ_AREA_TARGETS='+process.argv.includes('--area-targets'));
+    for(const inst of [host,peer])inst.eval('SIM_ACQ_SAMPLE_BUDGET='+acquisitionSamples+';SIM_ACQ_AREA_TARGETS='+!process.argv.includes('--exact-acq'));
+    for(const inst of [host,peer])inst.eval('SIM_TRAFFIC_MODE='+Number(process.argv.find(a=>a.startsWith('--traffic='))?.slice(10)??3)+';SIM_TRAFFIC_LOCAL='+Number(process.argv.find(a=>a.startsWith('--local='))?.slice(8)??1));
     peer.eval('startSoloGame()');
-    host.eval(`startSoloGame(); isMultiplayer=true; gameStarted=true;
+    host.eval(`startSoloGame(); simDk=${dk}; isMultiplayer=true; gameStarted=true;
         for(let i=0;i<4200;i++) {
             const u=new Unit(i%7===0?'flying':'norm',i&1,(10+(i%70)*.5)*TILE,(10+Math.floor(i/70)*.5)*TILE);
             units.push(u); players[u.owner].popCount++;
@@ -37,7 +39,7 @@ class Worker extends RealWorker { constructor(...args) { super(...args); workers
     try {
         for(let tick=0;tick<30;tick++) {
             if(tick===15) restore();
-            for(const inst of [host,peer]) inst.eval('gameTick()');
+            for(const inst of [host,peer]) inst.eval('simDk='+Number(process.argv.find(a=>a.startsWith('--dk='))?.slice(5)??1)+';gameTick()');
             const ph=peer.eval('computeLockstepStateHashFast(gameTime)'),hh=host.eval('computeLockstepStateHashFast(gameTime)');
             if(ph!==hh) {
                 const expr='JSON.stringify(units.map(u=>Object.fromEntries(simUnitStateKeys(u).filter(k=>!SNAP_SKIP_KEYS.has(k)&&(u[k]===null||["number","string","boolean"].includes(typeof u[k]))).map(k=>[k,u[k]]))))';

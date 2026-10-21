@@ -10,12 +10,11 @@ function getBaseSpawnCooldownSeconds(unitType, buildingKey = null) {
 }
 
 function getBarrackSpawnCooldown(unitType, level, owner = null, buildingKey = null) {
-    let cfg = BARRACK_SPAWN_CONFIG[unitType] || BARRACK_SPAWN_CONFIG.norm;
-    let reduction = Number.isFinite(cfg.reduction) ? cfg.reduction : 0.10;
-    let baseCd = Math.max(0.05, getBaseSpawnCooldownSeconds(unitType, buildingKey) * detPow(1 - reduction, level - 1));
+    let baseCd = getUnitStatFromMap(unitType, level, 'trainingTime', 0);
+    if (!(baseCd > 0)) baseCd = getUnitStatFromMap('norm', level, 'trainingTime', 0);
     if (buildingKey && Number.isFinite(owner)) {
         let researched = getBuildingStatForOwner(owner, buildingKey, level, 'spawnCd');
-        if (Number.isFinite(researched)) return Math.max(0.05, researched);
+        if (Number.isFinite(researched) && researched > 0) return researched;
     }
     return baseCd;
 }
@@ -321,8 +320,9 @@ function processGlobalSpawnerQueue() {
     // goes to the end (a new order), as ever.
     const R = _spawnReady || _spawnReadyBuild();
     let spawned = 0;
+    const blocked = [];
     const most = SPAWNS_PER_TICK * simDk;
-    while (spawned < most) {
+    while (spawned < most && blocked.length < 64) {
         let best = null, bestOrder = Infinity;
         for (const [o, L] of R.byOwner) {
             if (L.head >= L.e.length) continue;
@@ -339,13 +339,20 @@ function processGlobalSpawnerQueue() {
         }
         if (!best) break;
         const s = best.e[best.head];
-        if (!spawnQueuedUnitFromSpawner(s)) break;
+        if (!spawnQueuedUnitFromSpawner(s)) {
+            // A full occupancy footprint at one exit must not stop production
+            // at every other spawner. Retry it once on a later tick, in order.
+            best.head += 2;
+            blocked.push(s);
+            continue;
+        }
         best.head += 2;
         if (best.head > 4096 && best.head * 2 > best.e.length) { best.e = best.e.slice(best.head); best.head = 0; }
         spawned++;
         // Its next front, if paid already: ready again (a new order).
         if (spawned < most && _spawnReadyValid(s) && !Number.isFinite(s._spawnReadyOrder)) { s._spawnReadyOrder = globalSpawnerReadyOrderCounter++; spawnerReadyNoted(s); }
     }
+    for (const s of blocked) { s._spawnReadyOrder = globalSpawnerReadyOrderCounter++; spawnerReadyNoted(s); }
 }
 
 class Barrack {
@@ -666,7 +673,7 @@ class BuilderSpawner {
     getBuilderDps() {
         let lvl = getThingBaseLevel(this);
         let dps = getUnitStatForOwner(this.owner, 'builder_unit', lvl, 'builderDps');
-        let fallback = Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
+        let fallback = 1;
         return Math.max(1, Math.round(Number.isFinite(dps) ? dps : fallback));
     }
     update() {
@@ -733,7 +740,7 @@ class HealerSpawner {
     gethealerDps() {
         let lvl = getThingBaseLevel(this);
         let dps = getUnitStatForOwner(this.owner, 'healer_unit', lvl, 'healerDps');
-        let fallback = Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
+        let fallback = 1;
         return Math.max(1, Math.round(Number.isFinite(dps) ? dps : fallback));
     }
     update() {
@@ -807,7 +814,7 @@ class ResearchSpawner {
     getResearcherDps() {
         let lvl = getThingBaseLevel(this);
         let dps = getUnitStatForOwner(this.owner, 'researcher_unit', lvl, 'researcherDps');
-        let fallback = Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
+        let fallback = 1;
         return Math.max(1, Math.round(Number.isFinite(dps) ? dps : fallback));
     }
 

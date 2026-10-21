@@ -11,7 +11,7 @@ function _researcherDeposit(u, target, owner) {
     const task = getPlayerResearchTask(owner);
     if (!task || !_researchNeedsPoints(owner, task)) return false;
     const required = Math.max(0, Number(task.workRequired) || 0), cost = Math.max(0, Number(task.cost) || 0);
-    const fallback = Math.max(1, Math.round(Number((BASE_UNIT_STATS.researcher_unit || {}).researcherDps) || Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1));
+    const fallback = Math.max(1, Math.round(Number((BASE_UNIT_STATS.researcher_unit || {}).researcherDps) || 1));
     const dps = Number((u.preComputed && u.preComputed.researcherDps) || 0) || target.getResearcherDps() || fallback;
     const work = Math.max(0.1, dps * getResearchBuildingEfficiency(target));
     const tripCost = required > 0 ? work * cost / required : 0;
@@ -108,6 +108,22 @@ function isWorkerBetweenMoveChecks(u) {
         && !!u.path && u.pathIndex < u.path.length && !u.holdPosition;
 }
 
+// Work already accepts an adjacent tile. Exclusive occupancy may prevent
+// reaching the final node inside the target; finish that approach on the
+// existing worker check cadence instead of waiting forever for path completion.
+function _workerFinishApproachInRange(u) {
+    if (u.holdPosition || u.workerState === 'MANUAL_MOVE' || !_WORKER_MOVING_STATES.has(u.workerState)
+        || !u.path || u.pathIndex >= u.path.length) return false;
+    const returning = u.workerState === 'RETURNING' || u.workerState === 'RETURNING_ASTAR' || u.workerState === 'RETURNING_FOR_GOLD';
+    const target = returning ? (u._builderSpawnerTarget || u._healerSpawnerTarget || u.path[u.path.length - 1]) : u.workerTarget;
+    if (!target) return false;
+    const gx = Number.isFinite(target.gx) ? target.gx : returning ? target.x : Math.floor(_thingTickX(target) / TILE);
+    const gy = Number.isFinite(target.gy) ? target.gy : returning ? target.y : Math.floor(_thingTickY(target) / TILE);
+    if (Math.abs(Math.floor(u.x / TILE) - gx) > 1 || Math.abs(Math.floor(u.y / TILE) - gy) > 1) return false;
+    _clearWorkerAutoRoute(u);
+    return true;
+}
+
 function updateWorkerAI(u) {
     if (!u.workerState) return;
     if (isWorkerBetweenMoveChecks(u)) return;
@@ -117,6 +133,7 @@ function updateWorkerAI(u) {
     // parked until it runs out, simMoveTryParkWork). A player's move order
     // is followed regardless.
     if (u.workerTransferCooldown > 0 && u.workerState !== 'MANUAL_MOVE') return;
+    _workerFinishApproachInRange(u);
     let workerAiTickDelay = Math.max(1, Math.floor(Number(WORKER_AI_TICK_DELAY) || 1));
     let canRunHeavyAi = simStepCrosses(u.id, workerAiTickDelay);
 
@@ -314,7 +331,7 @@ function updateWorkerAI(u) {
                     }
                     if (u.workerTransferCooldown > 0) return;
                     // Add Energy to building
-                    let baseBuild = Number((BASE_UNIT_STATS[u.unitType] || {}).builderDps) || Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
+                    let baseBuild = Number((BASE_UNIT_STATS[u.unitType] || {}).builderDps) || 1;
                     let dps = Number((u.preComputed && u.preComputed.builderDps) || 0) || baseBuild;
                     let t = u.workerTarget;
                     let didWork = false;
@@ -488,7 +505,7 @@ function updateWorkerAI(u) {
                 u.workerTransferCooldown = getBuilderTransferCooldownTicks(u);
             }
 
-            let baseBuild = Number((BASE_UNIT_STATS[u.unitType] || {}).builderDps) || Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
+            let baseBuild = Number((BASE_UNIT_STATS[u.unitType] || {}).builderDps) || 1;
             let dps = Number((u.preComputed && u.preComputed.builderDps) || 0) || baseBuild;
             let buildStep = 0;
             if (u.builderHasMaterial) {
@@ -687,7 +704,7 @@ function updateWorkerAI(u) {
                 }
 
                 u.workerState = 'HEALING';
-                let baseHeal = Number((BASE_UNIT_STATS[u.unitType] || {}).healerDps) || Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
+                let baseHeal = Number((BASE_UNIT_STATS[u.unitType] || {}).healerDps) || 1;
                 let dps = Number((u.preComputed && u.preComputed.healerDps) || 0) || baseHeal;
                 u.workerTarget.energy = Math.min(u.workerTarget.maxEnergy, u.workerTarget.energy + dps);
                 u.healerHasMaterial = false;

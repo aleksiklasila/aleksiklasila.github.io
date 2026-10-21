@@ -804,42 +804,13 @@ function createEditableRuntimeConfigSnapshot() {
             RESEARCH_COST_EXP,
             RESEARCH_WORK_EXP,
             RESEARCH_WORK_BASE,
-            RESEARCH_BONUS_EXP_UNITS,
-            RESEARCH_BONUS_EXP_OTHER,
-            RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP,
             MAX_THING_LEVEL,
             MAX_RESEARCH_LEVEL,
-            BUILDING_ENERGY_LEVEL_EXP: BUILDING_ENERGY_LEVEL_EXP,
-            BUILDING_LEVEL_MULT_EXP,
-            BUILDING_DAMAGE_LEVEL_EXP,
-            BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL,
-            BUILDING_LINEAR_VISION_BONUS_PER_LEVEL,
-            SAND_GUN_CD_LEVEL_EXP,
-            RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP,
-            RESEARCH_BUILDING_EFFICIENCY_CAP,
-            UNIT_COLLECTOR_GATHER_LEVEL_EXP,
-            UNIT_WORKER_SPECIALIST_BASE_RATE,
-            UNIT_WORKER_SPECIALIST_LEVEL_EXP,
-            BUILDING_UPKEEP_EXP,
-            UNIT_UPKEEP_EXP,
         },
         tables: {
-            BASE_CARD_TYPES: makeEditorCardTypesTable(),
-            BASE_CARD_DEFAULT_ENERGY: cloneJsValue(BASE_CARD_DEFAULT_ENERGY),
-            DESCRIPTIONS: cloneJsValue(DESCRIPTIONS),
+            THING_STATS: cloneJsValue(THING_STATS),
             BUILD_CATEGORIES: cloneJsValue(BUILD_CATEGORIES),
-            BARRACK_SPAWN_CONFIG: cloneJsValue(BARRACK_SPAWN_CONFIG),
-            BASE_UNIT_STATS: makeEditorUnitStatsTable(),
-            UNIT_LEVEL_SCALING: cloneJsValue(UNIT_LEVEL_SCALING),
-            BUILDING_FORMULA_CONFIG: cloneJsValue(BUILDING_FORMULA_CONFIG),
-            UNIT_FORMULA_CONFIG: cloneJsValue(UNIT_FORMULA_CONFIG),
-            RESEARCH_FORMULA_CONFIG: cloneJsValue(RESEARCH_FORMULA_CONFIG),
-            PRECOMPUTED_SOFT_CAP_MAP: cloneJsValue(PRECOMPUTED_SOFT_CAP_MAP),
             RESEARCH_STAT_LABELS: cloneJsValue(RESEARCH_STAT_LABELS),
-            RESEARCHABLE_UNIT_STATS: cloneJsValue(RESEARCHABLE_UNIT_STATS),
-            PRECOMPUTED_UNIT_STAT_KEYS: cloneJsValue(PRECOMPUTED_UNIT_STAT_KEYS),
-            PRECOMPUTED_BUILDING_STAT_KEYS: cloneJsValue(PRECOMPUTED_BUILDING_STAT_KEYS),
-            RESEARCH_DECREASE_STATS: cloneJsValue(RESEARCH_DECREASE_STATS),
         }
     };
 }
@@ -969,71 +940,19 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     if (Number.isFinite(Number(prog.RESEARCH_COST_EXP))) RESEARCH_COST_EXP = Math.max(1, Number(prog.RESEARCH_COST_EXP));
     if (Number.isFinite(Number(prog.RESEARCH_WORK_EXP))) RESEARCH_WORK_EXP = Math.max(1, Number(prog.RESEARCH_WORK_EXP));
     if (Number.isFinite(Number(prog.RESEARCH_WORK_BASE))) RESEARCH_WORK_BASE = Math.max(1, Math.floor(Number(prog.RESEARCH_WORK_BASE)));
-    if (Number.isFinite(Number(prog.RESEARCH_BONUS_EXP_UNITS))) RESEARCH_BONUS_EXP_UNITS = Math.max(1, Number(prog.RESEARCH_BONUS_EXP_UNITS));
-    if (Number.isFinite(Number(prog.RESEARCH_BONUS_EXP_OTHER))) RESEARCH_BONUS_EXP_OTHER = Math.max(1, Number(prog.RESEARCH_BONUS_EXP_OTHER));
-    if (Number.isFinite(Number(prog.RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP))) RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP = Math.max(1, Number(prog.RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP));
     if (Number.isFinite(Number(prog.MAX_THING_LEVEL))) MAX_THING_LEVEL = Math.max(1, Math.floor(Number(prog.MAX_THING_LEVEL)));
     if (Number.isFinite(Number(prog.MAX_RESEARCH_LEVEL))) MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(Number(prog.MAX_RESEARCH_LEVEL)));
-    if (Number.isFinite(Number(prog.BUILDING_ENERGY_LEVEL_EXP))) BUILDING_ENERGY_LEVEL_EXP = Math.max(1, Number(prog.BUILDING_ENERGY_LEVEL_EXP));
-    if (Number.isFinite(Number(prog.BUILDING_ENERGY_LEVEL_EXP))) BUILDING_ENERGY_LEVEL_EXP = Math.max(1, Number(prog.BUILDING_ENERGY_LEVEL_EXP));
-    if (Number.isFinite(Number(prog.BUILDING_LEVEL_MULT_EXP))) BUILDING_LEVEL_MULT_EXP = Math.max(1, Number(prog.BUILDING_LEVEL_MULT_EXP));
-    if (Number.isFinite(Number(prog.BUILDING_DAMAGE_LEVEL_EXP))) BUILDING_DAMAGE_LEVEL_EXP = Math.max(1, Number(prog.BUILDING_DAMAGE_LEVEL_EXP));
-    if (Number.isFinite(Number(prog.BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL))) BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL = Math.max(0, Math.min(0.95, Number(prog.BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL)));
-    if (Number.isFinite(Number(prog.BUILDING_LINEAR_VISION_BONUS_PER_LEVEL))) BUILDING_LINEAR_VISION_BONUS_PER_LEVEL = Math.max(0, Number(prog.BUILDING_LINEAR_VISION_BONUS_PER_LEVEL));
-    if (Number.isFinite(Number(prog.SAND_GUN_CD_LEVEL_EXP))) SAND_GUN_CD_LEVEL_EXP = Math.max(0.01, Number(prog.SAND_GUN_CD_LEVEL_EXP));
-    if (Number.isFinite(Number(prog.RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP))) RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP = Math.max(1, Number(prog.RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP));
-    if (Number.isFinite(Number(prog.RESEARCH_BUILDING_EFFICIENCY_CAP))) RESEARCH_BUILDING_EFFICIENCY_CAP = Math.max(0, Number(prog.RESEARCH_BUILDING_EFFICIENCY_CAP));
-    if (Number.isFinite(Number(prog.UNIT_COLLECTOR_GATHER_LEVEL_EXP))) UNIT_COLLECTOR_GATHER_LEVEL_EXP = Math.max(0, Number(prog.UNIT_COLLECTOR_GATHER_LEVEL_EXP));
-    if (Number.isFinite(Number(prog.UNIT_WORKER_SPECIALIST_BASE_RATE))) UNIT_WORKER_SPECIALIST_BASE_RATE = Math.max(0, Number(prog.UNIT_WORKER_SPECIALIST_BASE_RATE));
-    if (Number.isFinite(Number(prog.UNIT_WORKER_SPECIALIST_LEVEL_EXP))) UNIT_WORKER_SPECIALIST_LEVEL_EXP = Math.max(1, Number(prog.UNIT_WORKER_SPECIALIST_LEVEL_EXP));
-    if (Number.isFinite(Number(prog.BUILDING_UPKEEP_EXP))) BUILDING_UPKEEP_EXP = Math.max(1, Number(prog.BUILDING_UPKEEP_EXP));
-    if (Number.isFinite(Number(prog.UNIT_UPKEEP_EXP))) UNIT_UPKEEP_EXP = Math.max(1, Number(prog.UNIT_UPKEEP_EXP));
     // Backward compatibility for older config payloads.
-    if (Number.isFinite(Number(prog.UNIT_UPKEEP_EXP_DEFAULT))) UNIT_UPKEEP_EXP = Math.max(1, Number(prog.UNIT_UPKEEP_EXP_DEFAULT));
 
-    BUILDING_FORMULA_CONFIG.energyLevelExp = BUILDING_ENERGY_LEVEL_EXP;
-    BUILDING_FORMULA_CONFIG.levelMultExp = BUILDING_LEVEL_MULT_EXP;
-    BUILDING_FORMULA_CONFIG.damageLevelExp = BUILDING_DAMAGE_LEVEL_EXP;
-    BUILDING_FORMULA_CONFIG.linearCdReductionPerLevel = BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL;
-    BUILDING_FORMULA_CONFIG.linearVisionBonusPerLevel = BUILDING_LINEAR_VISION_BONUS_PER_LEVEL;
-    BUILDING_FORMULA_CONFIG.sandGunCdLevelExp = SAND_GUN_CD_LEVEL_EXP;
-    BUILDING_FORMULA_CONFIG.researchEfficiencyLevelExp = RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP;
-    BUILDING_FORMULA_CONFIG.researchEfficiencyCap = RESEARCH_BUILDING_EFFICIENCY_CAP;
-    BUILDING_FORMULA_CONFIG.upKeepExp = BUILDING_UPKEEP_EXP;
-    UNIT_FORMULA_CONFIG.collectorGatherLevelExp = UNIT_COLLECTOR_GATHER_LEVEL_EXP;
-    UNIT_FORMULA_CONFIG.workerSpecialistBaseRate = UNIT_WORKER_SPECIALIST_BASE_RATE;
-    UNIT_FORMULA_CONFIG.workerSpecialistLevelExp = UNIT_WORKER_SPECIALIST_LEVEL_EXP;
 
-    if (tables.BASE_CARD_TYPES) replaceObjectContents(BASE_CARD_TYPES, makeRuntimeCardTypesTableFromEditor(tables.BASE_CARD_TYPES));
-    if (tables.BASE_CARD_DEFAULT_ENERGY) replaceObjectContents(BASE_CARD_DEFAULT_ENERGY, tables.BASE_CARD_DEFAULT_ENERGY);
-    if (tables.DESCRIPTIONS) replaceObjectContents(DESCRIPTIONS, tables.DESCRIPTIONS);
+    if (tables.THING_STATS) {
+        validateThingStats(tables.THING_STATS);
+        replaceObjectContents(THING_STATS, tables.THING_STATS);
+    }
+    else importLegacyThingTables(tables,prog);
     if (tables.BUILD_CATEGORIES) replaceObjectContents(BUILD_CATEGORIES, tables.BUILD_CATEGORIES);
-    if (tables.BARRACK_SPAWN_CONFIG) replaceObjectContents(BARRACK_SPAWN_CONFIG, tables.BARRACK_SPAWN_CONFIG);
-    if (tables.BASE_UNIT_STATS) replaceObjectContents(BASE_UNIT_STATS, makeRuntimeUnitStatsTableFromEditor(tables.BASE_UNIT_STATS));
-    if (tables.UNIT_LEVEL_SCALING) replaceObjectContents(UNIT_LEVEL_SCALING, tables.UNIT_LEVEL_SCALING);
-    if (tables.BUILDING_FORMULA_CONFIG) replaceObjectContents(BUILDING_FORMULA_CONFIG, tables.BUILDING_FORMULA_CONFIG);
-    if (tables.UNIT_FORMULA_CONFIG) replaceObjectContents(UNIT_FORMULA_CONFIG, tables.UNIT_FORMULA_CONFIG);
-    if (tables.RESEARCH_FORMULA_CONFIG) replaceObjectContents(RESEARCH_FORMULA_CONFIG, tables.RESEARCH_FORMULA_CONFIG);
-    if (tables.PRECOMPUTED_SOFT_CAP_MAP) replaceObjectContents(PRECOMPUTED_SOFT_CAP_MAP, tables.PRECOMPUTED_SOFT_CAP_MAP);
     if (tables.RESEARCH_STAT_LABELS) replaceObjectContents(RESEARCH_STAT_LABELS, tables.RESEARCH_STAT_LABELS);
-    if (tables.RESEARCHABLE_UNIT_STATS) replaceObjectContents(RESEARCHABLE_UNIT_STATS, tables.RESEARCHABLE_UNIT_STATS);
-    if (tables.RESEARCH_DECREASE_STATS) replaceObjectContents(RESEARCH_DECREASE_STATS, tables.RESEARCH_DECREASE_STATS);
-    if (tables.PRECOMPUTED_UNIT_STAT_KEYS) replaceArrayContents(PRECOMPUTED_UNIT_STAT_KEYS, tables.PRECOMPUTED_UNIT_STAT_KEYS);
-    if (tables.PRECOMPUTED_BUILDING_STAT_KEYS) replaceArrayContents(PRECOMPUTED_BUILDING_STAT_KEYS, tables.PRECOMPUTED_BUILDING_STAT_KEYS);
-
-    BUILDING_ENERGY_LEVEL_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.energyLevelExp ?? BUILDING_FORMULA_CONFIG.energyLevelExp) || 1);
-    BUILDING_LEVEL_MULT_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.levelMultExp) || 1);
-    BUILDING_DAMAGE_LEVEL_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.damageLevelExp) || 1);
-    BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL = Math.max(0, Math.min(0.95, Number(BUILDING_FORMULA_CONFIG.linearCdReductionPerLevel) || 0));
-    BUILDING_LINEAR_VISION_BONUS_PER_LEVEL = Math.max(0, Number(BUILDING_FORMULA_CONFIG.linearVisionBonusPerLevel) || 0);
-    SAND_GUN_CD_LEVEL_EXP = Math.max(0.01, Number(BUILDING_FORMULA_CONFIG.sandGunCdLevelExp) || 0.01);
-    RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.researchEfficiencyLevelExp) || 1);
-    RESEARCH_BUILDING_EFFICIENCY_CAP = Math.max(0, Number(BUILDING_FORMULA_CONFIG.researchEfficiencyCap) || 0);
-    BUILDING_UPKEEP_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.upKeepExp) || BUILDING_UPKEEP_EXP);
-    UNIT_COLLECTOR_GATHER_LEVEL_EXP = Math.max(0, Number(UNIT_FORMULA_CONFIG.collectorGatherLevelExp) || 0);
-    UNIT_WORKER_SPECIALIST_BASE_RATE = Math.max(0, Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 0);
-    UNIT_WORKER_SPECIALIST_LEVEL_EXP = Math.max(1, Number(UNIT_FORMULA_CONFIG.workerSpecialistLevelExp) || 1);
-
+    rebuildThingDefinitionViews();
     normalizeBaseCardDefinitions();
     PRECOMPUTED_STATS_READY = false;
     if (!opts.deferPrecompute) rebuildPrecomputedStatsMap();
@@ -1042,22 +961,117 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     syncMainMenuFromRuntimeConfig();
 }
 
-function normalizeBaseCardDefinitions() {
-    for (let cardKey in BASE_CARD_TYPES) {
-        let def = BASE_CARD_TYPES[cardKey];
-        if (!def || typeof def !== 'object') continue;
-
-        if (!Number.isFinite(def.energy)) {
-            if (Number.isFinite(def.towerEnergy)) def.energy = def.towerEnergy;
-            else if (Number.isFinite(BASE_CARD_DEFAULT_ENERGY[cardKey])) def.energy = BASE_CARD_DEFAULT_ENERGY[cardKey];
-            else def.energy = 100;
+// Old snapshots used separate base-stat tables. Import their base values into the
+// unified definitions; subsequent exports contain only THING_STATS.
+function importLegacyThingTables(tables, progression = {}) {
+    for (const [kind, table] of [['unit',tables.BASE_UNIT_STATS],['building',tables.BASE_CARD_TYPES]]) {
+        for (const [key, old] of Object.entries(table || {})) {
+            const thing = THING_STATS[key];
+            if (!thing || thing.kind !== kind) continue;
+            if (typeof old.unitType === 'string') thing.spawns = old.unitType;
+            for (const [field,value] of Object.entries(old)) {
+                if (['unitType','energyCost','towerEnergy','maxAttackRange','minAttackCooldown','maxVisionRange','rangeGrowthPerLevel'].includes(field)) continue;
+                const stat = kind === 'building' && field === 'energy' ? 'maxEnergy' : field;
+                if (thing.stats[stat] && Number.isFinite(value)) {
+                    if (!thing.stats[stat].from) thing.stats[stat].base = value;
+                } else if (typeof value !== 'number' && field !== 'stats') thing[field] = value;
+            }
+            if (Number.isFinite(old.maxAttackRange) && thing.stats.attackRange) thing.stats.attackRange.softCap = old.maxAttackRange;
+            if (Number.isFinite(old.minAttackCooldown) && thing.stats.atkCd) thing.stats.atkCd.softCap = old.minAttackCooldown;
+            if (Number.isFinite(old.rangeGrowthPerLevel) && thing.stats.attackRange) thing.stats.attackRange.level.linear = old.rangeGrowthPerLevel;
+            if (Number.isFinite(old.maxVisionRange) && thing.stats.visionRange) thing.stats.visionRange.level.max = old.maxVisionRange;
         }
-
-        if (def.target === 'wall' && !Number.isFinite(def.towerEnergy)) {
-            def.towerEnergy = def.energy;
+    }
+    for (const [key, old] of Object.entries(tables.BARRACK_SPAWN_CONFIG || {})) {
+        const stat = THING_STATS[key]?.stats.trainingTime;
+        if (!stat) continue;
+        if (Number.isFinite(old.baseTime)) stat.base = old.baseTime;
+        if (Number.isFinite(old.reduction)) stat.level.factor = 1-old.reduction;
+    }
+    for (const [key,thing] of Object.entries(THING_STATS)) {
+        if (thing.kind !== 'unit') continue;
+        const c = tables.UNIT_LEVEL_SCALING?.[key] || tables.UNIT_LEVEL_SCALING?._default;
+        if (c) {
+            for (const [stat,field] of [['energy','energyExp'],['atk','dmgExp'],['speed','speedExp'],['atkCd','cdExp'],['visionRange','visionExp']]) {
+                if (Number.isFinite(c[field])) thing.stats[stat].level.factor = c[field];
+            }
+            if (Number.isFinite(c.minCd)) thing.stats.atkCd.level.min = c.minCd;
+            if (Number.isFinite(c.speedCapAbs)) thing.stats.speed.level.max = c.speedCapAbs;
+            else if (Number.isFinite(c.speedCapMul)) thing.stats.speed.level.max = thing.stats.speed.base*c.speedCapMul;
+            if (Number.isFinite(c.visionCapBonus)) thing.stats.visionRange.level.max = thing.stats.visionRange.base+c.visionCapBonus;
+            thing.stats.attackRange.level.factor = c.rangeExp ?? c.visionExp ?? thing.stats.attackRange.level.factor;
+            thing.stats.attackRange.level.max = thing.stats.attackRange.base+(c.rangeCapBonus ?? c.visionCapBonus ?? 1.2);
+        }
+        const eligible = tables.RESEARCHABLE_UNIT_STATS?.[key] || tables.RESEARCHABLE_UNIT_STATS?._default;
+        if (eligible) for (const [stat,rule] of Object.entries(thing.stats)) rule.researchable = eligible.includes(stat);
+    }
+    for (const [key,description] of Object.entries(tables.DESCRIPTIONS || {})) if (THING_STATS[key]) THING_STATS[key].description = description;
+    const building = tables.BUILDING_FORMULA_CONFIG || {}, unit = tables.UNIT_FORMULA_CONFIG || {}, research = tables.RESEARCH_FORMULA_CONFIG || {};
+    for (const [key,thing] of Object.entries(THING_STATS)) {
+        const stats = thing.stats, isUnit = thing.kind === 'unit';
+        const setLevel = (stat,field,value) => { if (stats[stat] && Number.isFinite(value)) stats[stat].level[field] = value; };
+        if (isUnit) {
+            setLevel('upKeep','factor',progression.UNIT_UPKEEP_EXP);
+            setLevel('astarCost','factor',unit.astarCostLevelExp);
+            if (stats.gatherPerTrip?.base > 0) setLevel('gatherPerTrip','power',unit.collectorGatherLevelExp);
+            if (thing.isWorker) setLevel('transferCooldown','factor',unit.workerTransferCooldownLevelExp);
+            for (const stat of ['builderDps','healerDps','researcherDps']) if (stats[stat]?.base > 0) setLevel(stat,'factor',unit.workerSpecialistLevelExp);
+        } else {
+            setLevel('upKeep','factor',building.upKeepExp ?? progression.BUILDING_UPKEEP_EXP);
+            setLevel('maxEnergy','factor',building.energyLevelExp);
+            for (const stat of ['damage','blastDamage','burnDps','poisonDps','freezeDps']) if (stats[stat]?.level.factor !== undefined) setLevel(stat,'factor',stats[stat].level.factor === 1.6 ? building.levelMultExp : building.damageLevelExp);
+            if (thing.target === 'wall') setLevel('visionRange','linear',building.linearVisionBonusPerLevel);
+            if (key === 'house') setLevel('popCap','factor',building.levelMultExp);
+            if (key === 'research') { setLevel('efficiency','factor',building.researchEfficiencyLevelExp); setLevel('efficiency','max',building.researchEfficiencyCap); }
+            if (['pistol','smg','water'].includes(key)) {
+                if (Number.isFinite(building.linearCdReductionPerLevel)) setLevel('cd','linear',-building.linearCdReductionPerLevel);
+                setLevel('cd','min',building.directTowerCdFloor);
+            }
+            if (key === 'sand_gun') setLevel('cd','factor',building.sandGunCdLevelExp);
+            if (['farm','astar_farm'].includes(key)) { setLevel('multiplier','coefficient',building.farmLevelPolyCoeff); setLevel('multiplier','power',building.farmLevelPowerExp); }
+            const durationFields = {fire:['burnDuration','fireBurnDurationLevelAdd'],poison:['poisonDuration','poisonDurationLevelAdd'],ice:['freezeDuration','iceFreezeDurationLevelAdd'],water:['wetDuration','waterWetDurationLevelAdd'],watch_tower:['watchDuration','watchDurationLevelAdd']};
+            if (durationFields[key]) { const [stat,field] = durationFields[key]; setLevel(stat,'add',building[field]); }
+            if (key === 'elements') for (const stat of ['burnDuration','poisonDuration','freezeDuration']) setLevel(stat,'add',building.elementsDurationLevelAdd);
+        }
+        if (key === 'scout') setLevel('watchDuration','add',building.watchDurationLevelAdd);
+        for (const [stat,rule] of Object.entries(stats)) {
+            let factor = isUnit ? progression.RESEARCH_BONUS_EXP_UNITS : progression.RESEARCH_BONUS_EXP_OTHER;
+            if (stat === 'visionRange') factor = isUnit ? research.unitVisionRangeBonusExp : research.buildingVisionRangeBonusExp;
+            if (isUnit && stat === 'attackRange') factor = research.unitAttackRangeBonusExp;
+            if (stat === 'unitPrice') factor = research.unitPriceBonusExp;
+            if (stat === 'popCap') factor = progression.RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP;
+            if (key === 'shrine') factor = stat === 'multiplier' ? research.shrineMultiplierBonusExp : stat === 'drainRate' ? research.shrineDrainRateBonusExp : factor;
+            if (Number.isFinite(factor)) rule.research.factor = factor;
         }
     }
 }
+
+function validateThingStats(table) {
+    const checkReference = (id, seen = new Set()) => {
+        if (seen.has(id)) throw Error('Cyclic stat reference: '+id);
+        seen.add(id);
+        const [key,stat] = id.split('.'), rule = table[key]?.stats?.[stat];
+        if (!rule) throw Error('Unknown stat reference: '+id);
+        if (rule.from) checkReference(rule.from,seen);
+    };
+    for (const [key,thing] of Object.entries(table)) {
+        if (!['unit','building'].includes(thing.kind) || !thing.stats) throw Error('Invalid thing: '+key);
+        for (const [stat,rule] of Object.entries(thing.stats)) {
+            const id = key+'.'+stat;
+            if (!rule || typeof rule.researchable !== 'boolean') throw Error('Missing researchable flag: '+id);
+            if (rule.from) checkReference(id);
+            else if (rule.base !== null && !Number.isFinite(rule.base)) throw Error('Invalid stat base: '+id);
+            if (rule.researchable && (!(rule.research?.factor >= 1) || !Number.isFinite(rule.research.factor) || !['increase','decrease'].includes(rule.research.direction))) throw Error('Invalid research rule: '+id);
+            const level = rule.level || {};
+            if (level.model && !['population','farm'].includes(level.model)) throw Error('Unknown level model: '+id);
+            for (const field of ['factor','linear','power','add','offset','coefficient','min','max']) if (level[field] !== undefined && !Number.isFinite(level[field])) throw Error('Invalid level '+field+': '+id);
+            for (const limits of [rule,level]) if (Number.isFinite(limits.min) && Number.isFinite(limits.max) && limits.min > limits.max) throw Error('Inverted stat limits: '+id);
+            if (rule.softCap !== null && rule.softCap !== undefined && !(Number.isFinite(rule.softCap) && rule.softCap >= 0) && rule.softCap?.model !== 'populationLimit') throw Error('Invalid soft cap: '+id);
+        }
+    }
+}
+
+function normalizeBaseCardDefinitions() { rebuildThingDefinitionViews(); }
 
 function makeConfigEditorTextFromCurrentConfig() {
     return stringifyJsLike(gameStarted ? createEditableRuntimeConfigSnapshot() : createEditableRuntimeConfigSnapshotFromMainMenu());
@@ -2262,87 +2276,6 @@ function decodeFunctionsFromTransport(value) {
     return value;
 }
 
-function makeEditorCardTypesTable() {
-    let out = cloneJsValue(BASE_CARD_TYPES);
-    for (let key in out) {
-        let def = out[key];
-        if (!def || typeof def !== 'object') continue;
-        // Keep runtime fields intact; mirror price into energyCost for editor compatibility.
-        if (Number.isFinite(def.price) && !Number.isFinite(def.energyCost)) {
-            def.energyCost = def.price;
-        }
-    }
-    return out;
-}
-
-function makeRuntimeCardTypesTableFromEditor(rawTable) {
-    let out = cloneJsValue(rawTable || {});
-    for (let key in out) {
-        let def = out[key];
-        if (!def || typeof def !== 'object') continue;
-        // Accept editor alias while preserving runtime fields.
-        if (Number.isFinite(def.energyCost)) def.price = def.energyCost;
-    }
-    return out;
-}
-
-function makeEditorUnitStatsTable() {
-    let out = cloneJsValue(BASE_UNIT_STATS);
-    for (let key in out) {
-        let def = out[key];
-        if (!def || typeof def !== 'object') continue;
-        // Keep runtime fields intact; mirror price into energyCost for editor compatibility.
-        if (Number.isFinite(def.price) && !Number.isFinite(def.energyCost)) {
-            def.energyCost = def.price;
-        }
-    }
-    return out;
-}
-
-function makeRuntimeUnitStatsTableFromEditor(rawTable) {
-    let out = cloneJsValue(rawTable || {});
-    for (let key in out) {
-        let def = out[key];
-        if (!def || typeof def !== 'object') continue;
-        // Accept editor alias while preserving runtime fields.
-        if (Number.isFinite(def.energyCost)) def.price = def.energyCost;
-    }
-    return out;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-function openResearchStatMatrixPopup(kind, key, statKey, fromLevel, toLevel) {
-    researchStatMatrixPopupPayload = { kind, key, statKey, fromLevel, toLevel };
-    setResearchStatMatrixPopupOpen(true);
-}
-
-function bindShopStatsMatrixButtons(container) {
-    if (!container) return;
-    container.querySelectorAll('.build-stat-matrix-btn').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let matrixId = Number.parseInt(btn.dataset.matrixId || '', 10);
-            if (!Number.isFinite(matrixId)) return;
-            researchStatMatrixPopupPayload = { shopMatrixId: matrixId };
-            setResearchStatMatrixPopupOpen(true);
-        });
-    });
-}
-
 function mulberry32(seed) {
     let s = seed | 0;
     let fn = function () {
@@ -2365,12 +2298,10 @@ function clampResearchLevel(level) {
 }
 
 function getUnitResearchStatKeys(unitType) {
-    return RESEARCHABLE_UNIT_STATS[unitType] || RESEARCHABLE_UNIT_STATS._default;
+    return Object.entries(THING_STATS[unitType]?.stats || {}).filter(([,s])=>s.researchable).map(([key])=>key);
 }
 
-function getResearchBonusExp(kind) {
-    return kind === 'unit' ? RESEARCH_BONUS_EXP_UNITS : RESEARCH_BONUS_EXP_OTHER;
-}
+
 
 // Rows of a stat matrix: the thing's levels; one for a thing without levels
 // (the shrine: research alone scales it).
@@ -2378,40 +2309,21 @@ function researchMatrixThingLevels(kind, key) {
     return kind === 'building' && (BASE_CARD_TYPES[key] || {}).notBuildable ? 1 : MAX_THING_LEVEL;
 }
 
-// (key: the thing, for things with their own exponents: the shrine.)
-function getResearchBonusExpForStat(kind, statKey, key = null) {
-    if (kind === 'building' && key === 'shrine') {
-        if (statKey === 'multiplier') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.shrineMultiplierBonusExp) || 2);
-        if (statKey === 'drainRate') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.shrineDrainRateBonusExp) || 10);
-    }
-    if (statKey === 'unitPrice') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.unitPriceBonusExp) || 1);
-    if (kind === 'unit' && statKey === 'visionRange') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.unitVisionRangeBonusExp) || 1);
-    if (kind === 'unit' && statKey === 'attackRange') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.unitAttackRangeBonusExp) || 1);
-    if (kind === 'building' && statKey === 'visionRange') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.buildingVisionRangeBonusExp) || 1);
-    if (kind === 'building' && statKey === 'popCap') return Math.max(1, Number(RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP) || 2);
-    return getResearchBonusExp(kind);
+function getResearchBonusExpForStat(kind, statKey, key) {
+    const rule = THING_STATS[key]?.stats[statKey];
+    return rule?.researchable ? Number(rule.research?.factor) || 1 : 1;
 }
-
-function applyResearchLevelToBaseValue(kind, baseValue, statKey, researchLevel, key = null) {
+function applyResearchLevelToBaseValue(kind, baseValue, statKey, researchLevel, key) {
     if (!Number.isFinite(baseValue)) return NaN;
-    let rLevel = clampResearchLevel(researchLevel);
-    let mult = detPow(getResearchBonusExpForStat(kind, statKey, key), rLevel);
-    if (RESEARCH_DECREASE_STATS[statKey]) return baseValue / Math.max(1e-6, mult);
-    return baseValue * mult;
+    const rule = THING_STATS[key]?.stats[statKey];
+    if (!rule?.researchable) return baseValue;
+    const mult = detPow(getResearchBonusExpForStat(kind,statKey,key), clampResearchLevel(researchLevel));
+    return rule.research.direction === 'decrease' ? baseValue / Math.max(1e-6,mult) : baseValue * mult;
 }
-
-function getPrecomputedSoftCap(kind, key, statKey, context = null) {
-    let kindMap = (PRECOMPUTED_SOFT_CAP_MAP && PRECOMPUTED_SOFT_CAP_MAP[kind]) || null;
-    if (!kindMap) return Infinity;
-    let cap = kindMap[statKey];
-    if (typeof cap === 'function') {
-        try {
-            cap = cap({ kind, key, statKey, ...(context || {}) });
-        } catch {
-            return Infinity;
-        }
-    }
-    return Number.isFinite(cap) ? Math.max(0, cap) : Infinity;
+function getPrecomputedSoftCap(kind, key, statKey) {
+    const cap = THING_STATS[key]?.stats[statKey]?.softCap;
+    if (cap?.model === 'populationLimit') return getConfiguredMaxPop();
+    return Number.isFinite(cap) ? Math.max(0,cap) : Infinity;
 }
 
 function applyPrecomputedSoftCap(value, cap, statKey, baseValue, maxValueBeforeCap) {
@@ -2445,336 +2357,64 @@ function applyPrecomputedSoftCap(value, cap, statKey, baseValue, maxValueBeforeC
 }
 
 function getUnitStatFallbackValue(unitType, statKey) {
-    let s = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm || {};
-    let unitCfg = UNIT_FORMULA_CONFIG || {};
-    if (statKey === 'energy') return Math.max(1, Math.floor(Number(s.energy) || 1));
-    if (statKey === 'atk') return Math.max(0, Number(s.atk) || 0);
-    if (statKey === 'atkCd') return Math.max(0.01, Number(s.atkCd) || Math.max(0.05, Number(unitCfg.baseAttackCooldownFallback) || 1.5));
-    if (statKey === 'speed') return Math.max(0.1, Number(s.speed) || Math.max(0.1, Number(unitCfg.baseSpeedFallback) || 1));
-    if (statKey === 'visionRange') return Math.max(0.05, Number(s.visionRange) || Math.max(0.05, Number(unitCfg.baseVisionFallback) || 0.8));
-    if (statKey === 'attackRange') return Math.max(0, Number(s.attackRange) || 0);
-    if (statKey === 'watchDuration') return unitType === 'scout' ? Math.max(0, Number(s.watchDuration) || 0) : 0;
-    if (statKey === 'workerSearchDistance') return s.isWorker ? Math.max(0.2, Number(s.workerSearchDistance) || 2.0) : 0;
-    if (statKey === 'gatherPerTrip') return Math.max(0, Number(s.gatherPerTrip) || 0);
-    if (statKey === 'builderDps') return Math.max(0, Number(s.builderDps) || 0);
-    if (statKey === 'healerDps') return Math.max(0, Number(s.healerDps) || 0);
-    if (statKey === 'researcherDps') return Math.max(0, Number(s.researcherDps) || 0);
-    if (statKey === 'transferCooldown') return s.isWorker ? Math.max(0.01, Number(s.transferCooldown) || 0.01) : 0;
-    if (statKey === 'astarCost') return Math.max(0.01, Number(s.astarCost) || 1);
-    if (statKey === 'upKeep') return Math.max(0.01, Number(s.upKeep) || 1);
-    return NaN;
+    const value = getThingStatBase(unitType,statKey);
+    return Number.isFinite(value) ? value : 0;
 }
-
 function normalizePrecomputedUnitStatValue(unitType, statKey, value) {
-    let s = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm || {};
-    let v = Number.isFinite(value) ? value : getUnitStatFallbackValue(unitType, statKey);
-    if (statKey === 'energy') return Math.max(1, Math.floor(v));
-    if (statKey === 'atk') return Math.max(0, Number(v) || 0);
-    if (statKey === 'atkCd') return Math.max(0.01, Number(v) || 0.01);
-    if (statKey === 'speed') return Math.max(0.1, Number(v) || 0.1);
-    if (statKey === 'visionRange') return Math.max(0.05, Number(v) || 0.05);
-    if (statKey === 'attackRange') return Math.max(0, Number(v) || 0);
-    if (statKey === 'watchDuration') return unitType === 'scout' ? Math.max(0, Number(v) || 0) : 0;
-    if (statKey === 'workerSearchDistance') return s.isWorker ? Math.max(0.2, Number(v) || 0.2) : 0;
-    if (statKey === 'gatherPerTrip') {
-        if (unitType === 'collector' || unitType === 'astar_collector') return Math.max(1, Number(v) || 1);
-        return 0;
-    }
-    if (statKey === 'builderDps') {
-        if (unitType === 'builder_unit') return Math.max(1, Math.round(Number(v) || 1));
-        return 0;
-    }
-    if (statKey === 'healerDps') {
-        if (unitType === 'healer_unit') return Math.max(1, Math.round(Number(v) || 1));
-        return 0;
-    }
-    if (statKey === 'researcherDps') {
-        if (unitType === 'researcher_unit') return Math.max(1, Math.round(Number(v) || 1));
-        return 0;
-    }
-    if (statKey === 'transferCooldown') return s.isWorker ? Math.max(0.01, Number(v) || 0.01) : 0;
-    if (statKey === 'astarCost') return Math.max(0.01, Number(v) || 1);
-    if (statKey === 'upKeep') return Math.max(0.01, Number(v) || 0.01);
-    return v;
+    const rule = THING_STATS[unitType]?.stats[statKey];
+    if (!Number.isFinite(value)) value = getUnitStatFallbackValue(unitType,statKey);
+    if (rule?.round === 'floor') value = Math.floor(value);
+    if (rule?.round === 'round') value = Math.round(value);
+    return clampThingStatValue(unitType,statKey,value);
 }
 
+// This evaluator runs when shared stat rows are rebuilt, never per moving unit.
+function evaluateThingStatAtLevel(key, stat, level, seen = new Set()) {
+    const rule = THING_STATS[key]?.stats[stat], id = key+'.'+stat;
+    if (!rule || seen.has(id)) return NaN;
+    seen.add(id);
+    let base = getThingStatBase(key,stat), l = rule.level || {};
+    if (rule.from && !Object.keys(l).length) {
+        const [other, field] = rule.from.split('.');
+        return evaluateThingStatAtLevel(other,field,level,seen);
+    }
+    if (!Number.isFinite(base)) return NaN;
+    const n = Math.max(1,clampThingLevel(level));
+    let value = base;
+    if (l.model === 'population') {
+        const m = detPow(l.factor,n); value = base * m * m * Math.max(1,Math.floor(m));
+    } else if (l.model === 'farm') value = base + Math.floor(l.coefficient * n * detLog(n+1) * detPow(n,l.power));
+    else {
+        if (l.factor !== undefined) value *= detPow(l.factor,n-(l.offset ?? 1));
+        if (l.linear !== undefined) value *= 1+(n-1)*l.linear;
+        if (l.power !== undefined) value *= detPow(n,l.power);
+        if (l.add !== undefined) value += (n-1)*l.add;
+        if (l.round === 'floor') value = Math.floor(value);
+        if (l.round === 'round') value = Math.round(value);
+    }
+    if (Number.isFinite(l.min)) value = Math.max(l.min,value);
+    if (Number.isFinite(l.max)) value = Math.min(l.max,value);
+    return value;
+}
+function computeThingBaseStatsAtLevel(key, level, keys) {
+    return Object.fromEntries(keys.map(stat=>[stat,evaluateThingStatAtLevel(key,stat,level)]));
+}
 function computeBaseUnitStatsAtLevel(unitType, level) {
-    let s = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm;
-    let lvl = Math.max(1, clampThingLevel(level));
-    let cfg = UNIT_LEVEL_SCALING[unitType] || UNIT_LEVEL_SCALING._default;
-    let unitCfg = UNIT_FORMULA_CONFIG || {};
-
-    let energyMult = detPow(cfg.energyExp || 1, lvl - 1);
-    let dmgMult = detPow(cfg.dmgExp || 1, lvl - 1);
-    let speedMult = detPow(cfg.speedExp || 1, lvl - 1);
-    let cdMult = detPow(cfg.cdExp || 1, lvl - 1);
-    let visionMult = detPow(cfg.visionExp || 1, lvl - 1);
-    let rangeMult = detPow((cfg.rangeExp !== undefined ? cfg.rangeExp : (cfg.visionExp || 1)), lvl - 1);
-
-    let energy = Math.max(1, Math.floor((Number(s.energy) || 1) * energyMult));
-    let atk = (Number(s.atk) || 0) > 0 ? Math.max(1, Math.round((Number(s.atk) || 0) * dmgMult)) : 0;
-
-    let baseCd = Number(s.atkCd) || Math.max(0.05, Number(unitCfg.baseAttackCooldownFallback) || 1.5);
-    let atkCd = baseCd;
-    atkCd = Math.max(cfg.minCd || 0.4, baseCd * cdMult);
-
-    let baseSpeed = Number(s.speed) || Math.max(0.1, Number(unitCfg.baseSpeedFallback) || 1);
-    let speedCap = cfg.speedCapAbs !== undefined ? cfg.speedCapAbs : (baseSpeed * (cfg.speedCapMul || 1.8));
-    let speed = Math.min(speedCap, baseSpeed * speedMult);
-
-    let baseVisionMin = Math.max(0.05, Number(unitCfg.baseVisionMin) || 0.05);
-    let baseVision = Math.max(baseVisionMin, Number(s.visionRange) || Math.max(baseVisionMin, Number(unitCfg.baseVisionFallback) || 0.8));
-    let visionCap = baseVision + (cfg.visionCapBonus || 1.2);
-    let visionRange = Math.min(visionCap, baseVision * visionMult);
-
-    let baseAttackRange = Math.max(0, Number(s.attackRange) || 0);
-    let attackRangeCap = baseAttackRange + (cfg.rangeCapBonus !== undefined ? cfg.rangeCapBonus : (cfg.visionCapBonus || 1.2));
-    let attackRange = baseAttackRange > 0 ? Math.min(attackRangeCap, baseAttackRange * rangeMult) : 0;
-    let watchDuration = unitType === 'scout'
-        ? Math.max(0, (Number(s.watchDuration) || 0) + (lvl - 1) * (Number(BUILDING_FORMULA_CONFIG.watchDurationLevelAdd) || 0))
-        : 0;
-    let workerSearchDistance = s.isWorker ? Math.max(0.2, Number(s.workerSearchDistance) || 2.0) : 0;
-    let gatherBase = Math.max(0, Number(s.gatherPerTrip) || 0);
-    let gatherLvlExp = Math.max(0, Number(unitCfg.collectorGatherLevelExp));
-    let gatherPerTrip = (unitType === 'collector' || unitType === 'astar_collector') ? Math.max(1, gatherBase * detPow(lvl, gatherLvlExp)) : 0;
-    let workerBaseRate = Math.max(0, Number(unitCfg.workerSpecialistBaseRate) || 0);
-    let workerGrowthExp = Math.max(1, Number(unitCfg.workerSpecialistLevelExp) || 1);
-    let workerTransferCdExp = Math.max(0.01, Number(unitCfg.workerTransferCooldownLevelExp) || 1);
-    // Keep ★ / tile increasing with level even if config is set to 1 by mistake.
-    let astarCostLevelExp = Math.max(1.01, Number(unitCfg.astarCostLevelExp) || 1.08);
-    let builderBase = Math.max(0, Number(s.builderDps) || workerBaseRate);
-    let healerBase = Math.max(0, Number(s.healerDps) || workerBaseRate);
-    let researcherBase = Math.max(0, Number(s.researcherDps) || workerBaseRate);
-    let upKeepLevelExp = Math.max(1, Number(UNIT_UPKEEP_EXP) || 1);
-    let baseUpKeep = Math.max(0.01, Number(s.upKeep) || 1);
-    let upKeep = Math.max(0.01, baseUpKeep * detPow(upKeepLevelExp, lvl - 1));
-    let astarCost = Math.max(0.01, (Number(s.astarCost) || 1) * detPow(astarCostLevelExp, lvl - 1));
-    let builderDps = unitType === 'builder_unit' ? Math.max(1, Math.round(builderBase * detPow(workerGrowthExp, lvl - 1))) : 0;
-    let healerDps = unitType === 'healer_unit' ? Math.max(1, Math.round(healerBase * detPow(workerGrowthExp, lvl - 1))) : 0;
-    let researcherDps = unitType === 'researcher_unit' ? Math.max(1, Math.round(researcherBase * detPow(workerGrowthExp, lvl - 1))) : 0;
-    let transferCooldown = NaN;
-    if (s.isWorker) {
-        let baseTransferCooldown = Math.max(0.01, Number(s.transferCooldown) || 0.01);
-        transferCooldown = Math.max(0.01, baseTransferCooldown * detPow(workerTransferCdExp, lvl - 1));
-    }
-
-    return { energy, atk, atkCd, speed, visionRange, attackRange, watchDuration, workerSearchDistance, gatherPerTrip, builderDps, healerDps, researcherDps, transferCooldown, astarCost, upKeep };
+    return computeThingBaseStatsAtLevel(THING_STATS[unitType]?.kind === 'unit' ? unitType : 'norm',level,PRECOMPUTED_UNIT_STAT_KEYS);
 }
-
 function computeBaseBuildingStatsAtLevel(type, level) {
-    let key = type || 'farm';
-    let lvl = Math.max(1, clampThingLevel(level));
-    let bCfg = BUILDING_FORMULA_CONFIG || {};
-    let multExp = Math.max(1, Number(bCfg.levelMultExp) || 1);
-    let energyExp = Math.max(1, Number(bCfg.energyLevelExp ?? bCfg.energyLevelExp) || 1);
-    let damageExp = Math.max(1, Number(bCfg.damageLevelExp) || 1);
-    let linearCdReduction = Math.max(0, Math.min(0.95, Number(bCfg.linearCdReductionPerLevel) || 0));
-    let linearVisionBonus = Math.max(0, Number(bCfg.linearVisionBonusPerLevel) || 0);
-    let sandGunCdExp = Math.max(0.01, Number(bCfg.sandGunCdLevelExp) || 0.01);
-    let researchEfficiencyExp = Math.max(1, Number(bCfg.researchEfficiencyLevelExp) || 1);
-    let researchEfficiencyCap = Math.max(0, Number(bCfg.researchEfficiencyCap) || 0);
-    let upKeepLevelExp = Math.max(1, Number(BUILDING_UPKEEP_EXP) || 1.16);
-    let mult = detPow(multExp, lvl - 1);
-    let energyMult = detPow(energyExp, lvl - 1);
-    let out = {
-        maxEnergy: NaN,
-        popCap: NaN,
-        damage: NaN,
-        blastDamage: NaN,
-        blastRadius: NaN,
-        cd: NaN,
-        spawnCd: NaN,
-        unitPrice: NaN,
-        visionRange: NaN,
-        attackRange: NaN,
-        multiplier: NaN,
-        burnDps: NaN,
-        burnDuration: NaN,
-        poisonDps: NaN,
-        poisonDuration: NaN,
-        freezeDps: NaN,
-        freezeDuration: NaN,
-        wetDuration: NaN,
-        sandDuration: NaN,
-        watchDuration: NaN,
-        efficiency: NaN,
-        upKeep: NaN,
-        drainRate: NaN,
-    };
-
-    let def = BASE_CARD_TYPES[key] || {};
-    let baseUpKeep = Math.max(0.01, Number(def.upKeep));
-    if (!Number.isFinite(baseUpKeep)) baseUpKeep = def.target === 'wall' ? 3 : 1;
-    out.upKeep = Math.max(0.01, baseUpKeep * detPow(upKeepLevelExp, lvl - 1));
-    if (Number.isFinite(def.energy) && def.energy > 0) {
-        out.maxEnergy = Math.floor(def.energy * energyMult);
-    }
-
-    let spawnUnitType = getSpawnedUnitTypeForBuildingKey(key);
-    if (spawnUnitType) {
-        let cfg = BARRACK_SPAWN_CONFIG[spawnUnitType] || BARRACK_SPAWN_CONFIG.norm;
-        let baseSpawnCd = Number(cfg.baseTime);
-        let reduction = Number.isFinite(cfg.reduction) ? cfg.reduction : 0.10;
-        if (Number.isFinite(baseSpawnCd) && baseSpawnCd > 0) {
-            let spawnCdFloor = Math.max(0.001, Number(bCfg.spawnCdFloor) || 0.001);
-            out.spawnCd = Math.max(spawnCdFloor, baseSpawnCd * detPow(1 - reduction, lvl - 1));
-        }
-        let baseUnitPrice = Number((BASE_UNIT_STATS[spawnUnitType] || {}).price);
-        if (Number.isFinite(baseUnitPrice) && baseUnitPrice > 0) {
-            let priceExp = Math.max(1, Number(bCfg.spawnedUnitPriceLevelExp) || 1);
-            out.unitPrice = Math.max(1, baseUnitPrice * detPow(priceExp, lvl - 1));
-        }
-        if (!Number.isFinite(out.visionRange)) {
-            let spawnedVision = Number((BASE_UNIT_STATS[spawnUnitType] || {}).visionRange);
-            if (Number.isFinite(spawnedVision) && spawnedVision > 0) {
-                out.visionRange = spawnedVision * (1 + (lvl - 1) * linearVisionBonus);
-            }
-        }
-    }
-
-    if (key === 'farm' || key === 'astar_farm') {
-        let baseMultiplier = Number.isFinite(def.multiplier) ? def.multiplier : (Number(bCfg.farmBaseMultiplierFallback) || 1);
-        let farmPolyCoeff = Number(bCfg.farmLevelPolyCoeff) || 1;
-        let farmPowExp = Math.max(0, Number(bCfg.farmLevelPowerExp) || 0);
-        out.multiplier = baseMultiplier + Math.floor(farmPolyCoeff * lvl * detLog(lvl + 1) * detPow(lvl, farmPowExp));
-    }
-    else if (key === 'shrine') {
-        // No levels: research alone scales it.
-        out.multiplier = Number(def.multiplier);
-        out.drainRate = Number(def.drainRate);
-    }
-    else if (key === 'house') {
-        let housePopExp = Math.max(1, Number(bCfg.levelMultExp * 1) || 1);
-        out.popCap = detPow(housePopExp, lvl) * detPow(housePopExp, lvl) * Math.max(1, Math.floor(detPow(housePopExp, lvl)));
-    }
-    else if (key === 'sand') { out.damage = (Number(bCfg.sandFloorDamageBase) || 0) * mult; }
-    else if (key === 'lava') { out.damage = (Number(bCfg.lavaFloorDamageBase) || 0) * mult; }
-    else if (key === 'mine') { out.damage = Math.floor((Number(bCfg.mineFloorDamageBase) || 0) * mult); }
-    else if (key === 'poison_puddle') { out.damage = (Number(bCfg.poisonPuddleFloorDamageBase) || 0) * mult; }
-    else if (key === 'ice_patch') { out.damage = (Number(bCfg.icePatchFloorDamageBase) || 0) * mult; }
-
-    if (Number.isFinite(def.damage)) out.damage = def.damage * detPow(damageExp, lvl - 1);
-    if (Number.isFinite(def.blastDamage)) out.blastDamage = def.blastDamage * detPow(damageExp, lvl - 1);
-    if (Number.isFinite(def.blastRadius)) out.blastRadius = Math.max(0, def.blastRadius);
-    if (Number.isFinite(def.cd)) out.cd = def.cd;
-    if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange;
-    if (Number.isFinite(def.attackRange)) out.attackRange = def.attackRange;
-    if (def.target === 'wall' && Number.isFinite(def.visionRange)) {
-        out.visionRange = def.visionRange * (1 + (lvl - 1) * linearVisionBonus);
-    }
-    if (def.target === 'wall' && !Number.isFinite(out.attackRange) && Number.isFinite(def.visionRange)) {
-        out.attackRange = Math.max(0, Number(def.visionRange) || 0);
-    }
-    if (key === 'research') {
-        let baseEfficiency = Number.isFinite(def.efficiency) ? def.efficiency : 1;
-        out.efficiency = Math.min(researchEfficiencyCap, baseEfficiency * detPow(researchEfficiencyExp, lvl - 1));
-    }
-
-    if (key === 'water' || key === 'smg' || key === 'pistol') {
-        let towerCdFloor = Math.max(0.001, Number(bCfg.directTowerCdFloor) || 0.001);
-        if (Number.isFinite(def.cd)) out.cd = Math.max(towerCdFloor, def.cd * (1 - (lvl - 1) * linearCdReduction));
-    } else if (key === 'sand_gun') {
-        if (Number.isFinite(def.cd)) out.cd = def.cd * detPow(sandGunCdExp, lvl);
-    }
-    if (Number.isFinite(def.maxVisionRange) && Number.isFinite(out.visionRange)) {
-        out.visionRange = Math.min(out.visionRange, def.maxVisionRange);
-    }
-
-    // Status effect stats are first-class precomputed values so research/matrix can use them.
-    if (Number.isFinite(out.damage)) {
-        let damageRatio = 1;
-        if (Number.isFinite(def.damage) && def.damage > 0) {
-            damageRatio = out.damage / def.damage;
-        }
-        let burnDpsParam = Number.isFinite(def.burnDps) ? def.burnDps : def.fireDps;
-        let burnDurationParam = Number.isFinite(def.burnDuration) ? def.burnDuration : def.fireDuration;
-        if (key === 'fire') {
-            let fireBurnDpsMin = Math.max(0, Number(bCfg.fireBurnDpsMin) || 0);
-            let fireBurnDmgMul = Math.max(0, Number(bCfg.fireBurnDpsFromDamageMul) || 0);
-            let fireBurnDurLevelAdd = Number(bCfg.fireBurnDurationLevelAdd) || 0;
-            let fireBurnDurFallbackBase = Number(bCfg.fireBurnDurationFallbackBase) || 0;
-            let fireBurnDurFallbackLevelAdd = Number(bCfg.fireBurnDurationFallbackLevelAdd) || 0;
-            out.burnDps = Number.isFinite(burnDpsParam)
-                ? Math.max(fireBurnDpsMin, burnDpsParam * damageRatio)
-                : Math.max(fireBurnDpsMin, out.damage * fireBurnDmgMul);
-            out.burnDuration = Number.isFinite(burnDurationParam)
-                ? (burnDurationParam + (lvl - 1) * fireBurnDurLevelAdd)
-                : (fireBurnDurFallbackBase + lvl * fireBurnDurFallbackLevelAdd);
-        } else if (key === 'poison') {
-            let poisonDpsMin = Math.max(0, Number(bCfg.poisonDpsMin) || 0);
-            let poisonDmgMul = Math.max(0, Number(bCfg.poisonDpsFromDamageMul) || 0);
-            let poisonDurLevelAdd = Number(bCfg.poisonDurationLevelAdd) || 0;
-            let poisonDurFallbackBase = Number(bCfg.poisonDurationFallbackBase) || 0;
-            let poisonDurFallbackLevelAdd = Number(bCfg.poisonDurationFallbackLevelAdd) || 0;
-            out.poisonDps = Number.isFinite(def.poisonDps)
-                ? Math.max(poisonDpsMin, def.poisonDps * damageRatio)
-                : Math.max(poisonDpsMin, out.damage * poisonDmgMul);
-            out.poisonDuration = Number.isFinite(def.poisonDuration)
-                ? (def.poisonDuration + (lvl - 1) * poisonDurLevelAdd)
-                : (poisonDurFallbackBase + lvl * poisonDurFallbackLevelAdd);
-        } else if (key === 'ice') {
-            let freezeDpsMin = Math.max(0, Number(bCfg.iceFreezeDpsMin) || 0);
-            let freezeDmgMul = Math.max(0, Number(bCfg.iceFreezeDpsFromDamageMul) || 0);
-            let freezeDurLevelAdd = Number(bCfg.iceFreezeDurationLevelAdd) || 0;
-            let freezeDurFallbackBase = Number(bCfg.iceFreezeDurationFallbackBase) || 0;
-            let freezeDurFallbackLevelAdd = Number(bCfg.iceFreezeDurationFallbackLevelAdd) || 0;
-            out.freezeDps = Number.isFinite(def.freezeDps)
-                ? Math.max(freezeDpsMin, def.freezeDps * damageRatio)
-                : Math.max(freezeDpsMin, out.damage * freezeDmgMul);
-            out.freezeDuration = Number.isFinite(def.freezeDuration)
-                ? (def.freezeDuration + (lvl - 1) * freezeDurLevelAdd)
-                : (freezeDurFallbackBase + lvl * freezeDurFallbackLevelAdd);
-        } else if (key === 'elements') {
-            let elementsDotMin = Math.max(0, Number(bCfg.elementsDotMin) || 0);
-            let elementsDotMul = Math.max(0, Number(bCfg.elementsDotFromDamageMul) || 0);
-            let elementsDurLevelAdd = Number(bCfg.elementsDurationLevelAdd) || 0;
-            let elementsDurFallbackBase = Number(bCfg.elementsDurationFallbackBase) || 0;
-            let dot = Math.max(elementsDotMin, out.damage * elementsDotMul);
-            out.burnDps = Number.isFinite(burnDpsParam) ? Math.max(elementsDotMin, burnDpsParam * damageRatio) : dot;
-            out.poisonDps = Number.isFinite(def.poisonDps) ? Math.max(elementsDotMin, def.poisonDps * damageRatio) : dot;
-            out.freezeDps = Number.isFinite(def.freezeDps) ? Math.max(elementsDotMin, def.freezeDps * damageRatio) : dot;
-            out.burnDuration = Number.isFinite(burnDurationParam) ? (burnDurationParam + (lvl - 1) * elementsDurLevelAdd) : (elementsDurFallbackBase + lvl * elementsDurLevelAdd);
-            out.poisonDuration = Number.isFinite(def.poisonDuration) ? (def.poisonDuration + (lvl - 1) * elementsDurLevelAdd) : (elementsDurFallbackBase + lvl * elementsDurLevelAdd);
-            out.freezeDuration = Number.isFinite(def.freezeDuration) ? (def.freezeDuration + (lvl - 1) * elementsDurLevelAdd) : (elementsDurFallbackBase + lvl * elementsDurLevelAdd);
-        } else if (key === 'lava') {
-            let lavaBurnDpsMin = Math.max(0, Number(bCfg.lavaBurnDpsMin) || 0);
-            out.burnDps = Number.isFinite(burnDpsParam) ? Math.max(lavaBurnDpsMin, burnDpsParam * mult) : Math.max(lavaBurnDpsMin, out.damage);
-            out.burnDuration = Number.isFinite(burnDurationParam) ? burnDurationParam : (Number(bCfg.lavaBurnDurationFallback) || 0);
-        } else if (key === 'poison_puddle') {
-            let puddlePoisonDpsMin = Math.max(0, Number(bCfg.poisonPuddleDpsMin) || 0);
-            out.poisonDps = Number.isFinite(def.poisonDps) ? Math.max(puddlePoisonDpsMin, def.poisonDps * mult) : Math.max(puddlePoisonDpsMin, out.damage);
-            out.poisonDuration = Number.isFinite(def.poisonDuration) ? def.poisonDuration : (Number(bCfg.poisonPuddleDurationFallback) || 0);
-        } else if (key === 'ice_patch') {
-            let patchFreezeDpsMin = Math.max(0, Number(bCfg.icePatchDpsMin) || 0);
-            out.freezeDps = Number.isFinite(def.freezeDps) ? Math.max(patchFreezeDpsMin, def.freezeDps * mult) : Math.max(patchFreezeDpsMin, out.damage);
-            out.freezeDuration = Number.isFinite(def.freezeDuration) ? def.freezeDuration : (Number(bCfg.icePatchDurationFallback) || 0);
-        }
-    }
-
-    if (key === 'water' || key === 'water_puddle' || key === 'elements') {
-        let waterBase = Number(bCfg.waterWetDurationFallbackBase) || 0;
-        let waterLvlAdd = Number(bCfg.waterWetDurationFallbackLevelAdd) || 0;
-        let puddleDefaultWet = Number(bCfg.waterPuddleWetDurationFallback) || 0;
-        let wetDurationLevelAdd = Number(bCfg.waterWetDurationLevelAdd) || 0;
-        let defaultWet = key === 'water' ? (waterBase + lvl * waterLvlAdd) : puddleDefaultWet;
-        out.wetDuration = Number.isFinite(def.wetDuration)
-            ? (key === 'water' ? (def.wetDuration + (lvl - 1) * wetDurationLevelAdd) : def.wetDuration)
-            : defaultWet;
-    }
-    if (key === 'sand_gun' || key === 'sand' || key === 'elements') {
-        let defaultSand = key === 'sand_gun' ? (Number(bCfg.sandGunDurationFallback) || 0) : (Number(bCfg.sandDurationFallback) || 0);
-        out.sandDuration = Number.isFinite(def.sandDuration) ? def.sandDuration : defaultSand;
-    }
-    if (key === 'watch_tower') {
-        let watchDurLevelAdd = Number(bCfg.watchDurationLevelAdd) || 0;
-        let watchDurFallbackBase = Number(bCfg.watchDurationFallbackBase) || 0;
-        out.watchDuration = Number.isFinite(def.watchDuration) ? (def.watchDuration + (lvl - 1) * watchDurLevelAdd) : (watchDurFallbackBase + lvl * watchDurLevelAdd);
-    }
-
-    return out;
+    return computeThingBaseStatsAtLevel(type || 'farm',level,PRECOMPUTED_BUILDING_STAT_KEYS);
+}
+function clampThingStatValue(key, stat, value) {
+    const rule = THING_STATS[key]?.stats[stat];
+    if (!rule || !Number.isFinite(value)) return value;
+    if (Number.isFinite(rule.min)) value = Math.max(rule.min,value);
+    if (Number.isFinite(rule.max)) value = Math.min(rule.max,value);
+    return value;
 }
 
 function rebuildPrecomputedStatsMap() {
+    rebuildThingDefinitionViews();
     PRECOMPUTED_STATS_MAP = { unit: {}, building: {} };
 
     for (let unitType in BASE_UNIT_STATS) {
@@ -2787,12 +2427,12 @@ function rebuildPrecomputedStatsMap() {
             for (let statKey of PRECOMPUTED_UNIT_STAT_KEYS) {
                 let arr = new Array(MAX_RESEARCH_LEVEL + 1);
                 let cap = getPrecomputedSoftCap('unit', unitType, statKey, { baseAtLevel1, baseAtMaxLevel });
-                let baselineValue = applyResearchLevelToBaseValue('unit', baseAtLevel1[statKey], statKey, 0);
-                let maxValueBeforeCap = applyResearchLevelToBaseValue('unit', baseAtMaxLevel[statKey], statKey, MAX_RESEARCH_LEVEL);
+                let baselineValue = applyResearchLevelToBaseValue('unit', baseAtLevel1[statKey], statKey, 0, unitType);
+                let maxValueBeforeCap = applyResearchLevelToBaseValue('unit', baseAtMaxLevel[statKey], statKey, MAX_RESEARCH_LEVEL, unitType);
                 for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
-                    let researched = applyResearchLevelToBaseValue('unit', base[statKey], statKey, r);
+                    let researched = applyResearchLevelToBaseValue('unit', base[statKey], statKey, r, unitType);
                     let capped = applyPrecomputedSoftCap(researched, cap, statKey, baselineValue, maxValueBeforeCap);
-                    arr[r] = normalizePrecomputedUnitStatValue(unitType, statKey, capped);
+                    arr[r] = clampThingStatValue(unitType, statKey, normalizePrecomputedUnitStatValue(unitType, statKey, capped));
                 }
                 levelEntry[statKey] = arr;
             }
@@ -2814,7 +2454,7 @@ function rebuildPrecomputedStatsMap() {
                 let maxValueBeforeCap = applyResearchLevelToBaseValue('building', baseAtMaxLevel[statKey], statKey, MAX_RESEARCH_LEVEL, buildingKey);
                 for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
                     let researched = applyResearchLevelToBaseValue('building', base[statKey], statKey, r, buildingKey);
-                    arr[r] = applyPrecomputedSoftCap(researched, cap, statKey, baselineValue, maxValueBeforeCap);
+                    arr[r] = clampThingStatValue(buildingKey, statKey, applyPrecomputedSoftCap(researched, cap, statKey, baselineValue, maxValueBeforeCap));
                 }
                 levelEntry[statKey] = arr;
             }
@@ -2893,7 +2533,7 @@ function _getUnitPlayerPrecomputedEntryObject(playerId, unitType, level) {
     let maxEnergy = Math.max(1, Math.floor(Number(values.energy) || 1));
     let attackCooldownSec = Math.max(0.01, Number(values.atkCd) || 0.01);
     let attackRangeArea = Math.max(0, Number(values.attackRange) || 0);
-    let visionRangeArea = Math.max(0.05, Number(values.visionRange) || 0.05);
+    let visionRangeArea = Math.max(0.05, Number(values.visionRange) || 0.05, attackRangeArea);
     let transferCooldownSec = Math.max(0.01, Number(values.transferCooldown) || 0.01);
 
     return _simF32Stats({
@@ -2938,6 +2578,8 @@ function _getBuildingPlayerPrecomputedEntryObject(playerId, buildingKey, level) 
     let spawnCd = Number(values.spawnCd);
     let visionRange = Number(values.visionRange);
     let attackRangeArea = Math.max(0, Number(values.attackRange) || 0);
+
+    if (attackRangeArea > 0) visionRange = Math.max(visionRange || 0, attackRangeArea);
 
     return _simF32Stats({
         maxEnergy: Number.isFinite(maxEnergy) ? Math.max(1, Math.floor(maxEnergy)) : NaN,
@@ -3162,7 +2804,9 @@ function _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey, mult
     let fallback;
     for (let lvl = 0; lvl <= MAX_THING_LEVEL; lvl++) {
         let entry = levels[lvl];
-        if (!entry) {
+        // Reach and sight are linked: recompute their small stat row together,
+        // including when research is lowered or an old scene is imported.
+        if (!entry || statKey === 'attackRange' || statKey === 'visionRange') {
             levels[lvl] = isUnit
                 ? _getUnitPlayerPrecomputedEntry(pid, normalizedKey, lvl)
                 : _getBuildingPlayerPrecomputedEntry(pid, normalizedKey, lvl);
@@ -3262,58 +2906,12 @@ function getBaseBuildingmaxEnergyForResearch(buildingKey) {
 }
 
 function getResearchStatEntriesForThing(kind, key) {
-    let out = [];
-    const MIN_VISIBLE_RESEARCH_STAT = 1e-4;
-    if (kind === 'unit') {
-        let s = BASE_UNIT_STATS[key];
-        if (!s) return out;
-        let statOrder = getUnitResearchStatKeys(key);
-        for (let statKey of statOrder) {
-            let baseValue = s[statKey];
-            if (!Number.isFinite(baseValue)) baseValue = getUnitStatFromMap(key, 1, statKey, 0);
-            if (!Number.isFinite(baseValue) || Math.abs(baseValue) < MIN_VISIBLE_RESEARCH_STAT) continue;
-            out.push({ statKey, label: RESEARCH_STAT_LABELS[statKey] || statKey, baseValue });
-        }
-        return out;
-    }
-
-    let seen = new Set();
-    let addStat = (statKey, baseValue) => {
-        if (!Number.isFinite(baseValue) || Math.abs(baseValue) < MIN_VISIBLE_RESEARCH_STAT || seen.has(statKey)) return;
-        seen.add(statKey);
-        out.push({ statKey, label: RESEARCH_STAT_LABELS[statKey] || statKey, baseValue });
-    };
-
-    // The shrine has no levels, health or upkeep: its two stats only.
-    if (key === 'shrine') {
-        addStat('multiplier', getBuildingStatFromMap(key, 1, 'multiplier', 0));
-        addStat('drainRate', getBuildingStatFromMap(key, 1, 'drainRate', 0));
-        return out;
-    }
-    addStat('maxLevel', 1);
-    addStat('maxEnergy', getBaseBuildingmaxEnergyForResearch(key));
-    let d = BASE_CARD_TYPES[key] || {};
-    addStat('popCap', getBuildingStatFromMap(key, 1, 'popCap', 0));
-    addStat('damage', d.damage);
-    addStat('blastDamage', getBuildingStatFromMap(key, 1, 'blastDamage', 0));
-    addStat('blastRadius', getBuildingStatFromMap(key, 1, 'blastRadius', 0));
-    addStat('cd', d.cd);
-    addStat('spawnCd', getBuildingStatFromMap(key, 1, 'spawnCd', 0));
-    addStat('unitPrice', getBuildingStatFromMap(key, 1, 'unitPrice', 0));
-    addStat('visionRange', d.visionRange);
-    addStat('multiplier', getBuildingStatFromMap(key, 1, 'multiplier', 0));
-    addStat('burnDps', getBuildingStatFromMap(key, 1, 'burnDps', 0));
-    addStat('burnDuration', getBuildingStatFromMap(key, 1, 'burnDuration', 0));
-    addStat('poisonDps', getBuildingStatFromMap(key, 1, 'poisonDps', 0));
-    addStat('poisonDuration', getBuildingStatFromMap(key, 1, 'poisonDuration', 0));
-    addStat('freezeDps', getBuildingStatFromMap(key, 1, 'freezeDps', 0));
-    addStat('freezeDuration', getBuildingStatFromMap(key, 1, 'freezeDuration', 0));
-    addStat('wetDuration', getBuildingStatFromMap(key, 1, 'wetDuration', 0));
-    addStat('sandDuration', getBuildingStatFromMap(key, 1, 'sandDuration', 0));
-    addStat('watchDuration', getBuildingStatFromMap(key, 1, 'watchDuration', 0));
-    addStat('efficiency', getBuildingStatFromMap(key, 1, 'efficiency', 0));
-    addStat('upKeep', getBuildingStatFromMap(key, 1, 'upKeep', 0));
-    return out;
+    const thing = THING_STATS[key];
+    if (!thing || thing.kind !== kind) return [];
+    return Object.entries(thing.stats).filter(([,s])=>s.researchable).map(([statKey])=>({
+        statKey, label:RESEARCH_STAT_LABELS[statKey] || statKey,
+        baseValue:statKey === 'maxLevel' ? 1 : evaluateThingStatAtLevel(key,statKey,1)
+    })).filter(s=>Number.isFinite(s.baseValue) && Math.abs(s.baseValue)>=1e-4);
 }
 
 let RESEARCH_THINGS = [];
@@ -3489,10 +3087,10 @@ function getResearchStatCostWeight(kind, key, statKey, currentLevel) {
     let value = getResearchStatValueAtLevel(kind, key, statKey, lvl, 1);
     if (!Number.isFinite(value)) value = baseValue;
 
-    let orientedBase = RESEARCH_DECREASE_STATS[statKey]
+    let orientedBase = THING_STATS[key]?.stats[statKey]?.research?.direction === 'decrease'
         ? (1 / Math.max(1e-6, Math.abs(baseValue || 0)))
         : Math.abs(baseValue || 0);
-    let orientedValue = RESEARCH_DECREASE_STATS[statKey]
+    let orientedValue = THING_STATS[key]?.stats[statKey]?.research?.direction === 'decrease'
         ? (1 / Math.max(1e-6, Math.abs(value || 0)))
         : Math.abs(value || 0);
 

@@ -137,21 +137,8 @@ const RESOURCE_TYPES = {
         mineStatKey: 'gold',
         mineTileType: 'mine',
         farmKey: 'farm',
-        farmName: '⚡ Farm',
-        farmIcon: '🌾',
-        farmColor: '#da0',
-        farmDescription: 'A tree growing energy. ⚡ Collectors harvest it; farm level multiplies energy work speed.',
         collectorBuildingKey: 'spawner',
-        collectorBuildingName: '⚡ Collector',
-        collectorBuildingIcon: '🏭',
-        collectorBuildingColor: '#432',
-        collectorBuildingDescription: 'Spawns ⚡ collectors that gather energy from energy mines and farms.',
         collectorUnitKey: 'collector',
-        collectorUnitName: '⚡ Collector',
-        collectorUnitColor: '#aaa',
-        collectorUnitVis: 'star',
-        collectorUnitDescription: 'Resource worker. Gathers energy from energy mines and farms and refills the shared energy stockpile.',
-        gatherPerTrip: 38,
         dropoffSound: 'gold_collected',
         carryGlyph: '⚡',
         emptyCarryGlyph: '⚡',
@@ -167,21 +154,8 @@ const RESOURCE_TYPES = {
         mineStatKey: 'astar',
         mineTileType: 'astar_mine',
         farmKey: 'astar_farm',
-        farmName: '★ Farm',
-        farmIcon: '★',
-        farmColor: '#9aa',
-        farmDescription: 'A mine entrance producing ★. ★ Collectors harvest it; farm level multiplies ★ work speed.',
         collectorBuildingKey: 'astar_spawner',
-        collectorBuildingName: '★ Collector',
-        collectorBuildingIcon: '★',
-        collectorBuildingColor: '#432',
-        collectorBuildingDescription: 'Spawns ★ collectors that gather ★ from gray ★ mines and farms and refill the shared ★ stockpile.',
         collectorUnitKey: 'astar_collector',
-        collectorUnitName: '★ Collector',
-        collectorUnitColor: '#bbb',
-        collectorUnitVis: 'star',
-        collectorUnitDescription: 'Resource worker. Gathers ★ from gray ★ mines and farms and refills the shared ★ stockpile used by pathfinding.',
-        gatherPerTrip: 40,
         dropoffSound: 'astar_collected',
         carryGlyph: '★',
         emptyCarryGlyph: '☆',
@@ -234,368 +208,1059 @@ function getCollectorFarmKeyForResource(resourceKey) {
     return cfg ? cfg.farmKey : null;
 }
 
-function buildResourceCollectorCardTypes() {
-    let out = {};
-    for (let cfg of RESOURCE_TYPE_LIST) {
-        out[cfg.farmKey] = { name: cfg.farmName, price: cfg.key === 'astar' ? 50 : 40, icon: cfg.farmIcon, color: cfg.farmColor, visionRange: 0, multiplier: 0.02, upKeep: 2.8, target: 'floor', resourceKey: cfg.key };
-        // shopName: the build menu's narrow tiles drop the resource icon.
-        out[cfg.collectorBuildingKey] = { name: cfg.collectorBuildingName, shopName: 'Collector', price: cfg.key === 'astar' ? 170 : 150, icon: cfg.collectorBuildingIcon, color: cfg.collectorBuildingColor, visionRange: 0.6, energy: 60, upKeep: 2.8, target: 'floor', resourceKey: cfg.key };
-    }
-    return out;
-}
+// One authored definition per thing. Units first, then buildings.
+// Stat: base; level {factor^(level-1), linear, add, power, round, min/max};
+// researchable controls both the research menu and bonuses. research.factor is per research level.
+// softCap: null = unbounded; number = endpoint at maximum level/research (log interpolation);
+// {model:'populationLimit'} follows the map population setting. min/max are optional hard limits.
+// from references another thing's stat; its level rule is used unless an explicit rule replaces it.
+const THING_STATS = {
+    norm: { kind: "unit", color: "#fff", vis: "circle", attackStyle: "melee", name: "Norm", description: "Basic infantry. Balanced stats, cheap to produce.", strength: "Affordable frontline damage", weakness: "Melee reach and ordinary mobility",
+        stats: {
+            energy: {base: 40, level: {factor: 1.22, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 5, level: {factor: 1.16, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 1.5, level: {factor: 0.985, min: 0.4}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.025, min: 0.01},
+            speed: {base: 2.6, level: {factor: 1.03, max: 4.680000000000001}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 7.800000000000001, min: 0.1},
+            visionRange: {base: 0.6, level: {factor: 1.04, max: 3}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 2.4, min: 0.05},
+            attackRange: {base: 1, level: {factor: 1.04, max: 3.4}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 1, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: null, level: {}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0},
+            astarCost: {base: 10, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 0.4, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 400, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 8, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 40, level: {factor: 0.9, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    fast: { kind: "unit", color: "#eee", vis: "circle", attackStyle: "melee", name: "Fast", description: "Fast mounted raider. Low Energy but high speed.", strength: "Fast worker raider with high close-range damage", weakness: "Low health and melee reach",
+        stats: {
+            energy: {base: 20, level: {factor: 1.22, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 4, level: {factor: 1.16, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 1, level: {factor: 0.985, min: 0.4}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.025, min: 0.01},
+            speed: {base: 4.8, level: {factor: 1.03, max: 8.64}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 8.48, min: 0.1},
+            visionRange: {base: 0.6, level: {factor: 1.04, max: 3}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 2.4, min: 0.05},
+            attackRange: {base: 1, level: {factor: 1.04, max: 3.4}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 1, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: null, level: {}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0},
+            astarCost: {base: 6, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 0.3, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 200, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 6, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 20, level: {factor: 0.9, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    tank: { kind: "unit", color: "#555", vis: "circle", attackStyle: "melee", name: "Tank", description: "Heavy infantry. High Energy and damage, slow.", strength: "Durable frontline anchor", weakness: "Slow, short reach and low damage for its cost",
+        stats: {
+            energy: {base: 200, level: {factor: 1.25, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 8, level: {factor: 1.15, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 2.25, level: {factor: 0.985, min: 0.6}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.025, min: 0.01},
+            speed: {base: 1.4, level: {factor: 1.02, max: 3.2}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 4.199999999999999, min: 0.1},
+            visionRange: {base: 0.6, level: {factor: 1.04, max: 2.6}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 2.4, min: 0.05},
+            attackRange: {base: 1, level: {factor: 1.04, max: 3}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 1, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: null, level: {}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0},
+            astarCost: {base: 16, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 0.7, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 800, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 10, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 80, level: {factor: 0.92, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    boss: { kind: "unit", color: "#222", vis: "circle", attackStyle: "melee", name: "Boss", description: "Super-heavy unit. Extremely tough and powerful.", strength: "Heavy frontline health and damage", weakness: "Very slow, costly and slow to train",
+        stats: {
+            energy: {base: 400, level: {factor: 1.28, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 20, level: {factor: 1.14, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 3, level: {factor: 0.99, min: 0.9}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.05, min: 0.01},
+            speed: {base: 1.2, level: {factor: 1.015, max: 2.6}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 3.5999999999999996, min: 0.1},
+            visionRange: {base: 0.8, level: {factor: 1.03, max: 2.8}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 3.2, min: 0.05},
+            attackRange: {base: 1, level: {factor: 1.03, max: 3}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 1, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: null, level: {}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0},
+            astarCost: {base: 23, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 2, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 4000, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 12, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 400, level: {factor: 0.94, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    flying: { kind: "unit", color: "#dd0", vis: "triangle", isFlying: true, attackStyle: "swoop", name: "Flying", description: "Winged lancer. Flies over walls and swoops onto targets.", strength: "Flies over buildings to raid workers", weakness: "Low health and slower attacks than melee",
+        stats: {
+            energy: {base: 36, level: {factor: 1.12, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 4, level: {factor: 1.12, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 2.25, level: {factor: 0.98, min: 0.5}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.06, min: 0.01},
+            speed: {base: 3, level: {factor: 1.06, max: 6.2}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 8.3, min: 0.1},
+            visionRange: {base: 1, level: {factor: 1.06, max: 4.6}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 4, min: 0.05},
+            attackRange: {base: 1, level: {factor: 1.06, max: 4.6}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 4, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: null, level: {}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0},
+            astarCost: {base: 12, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 0.45, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 450, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 7, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 45, level: {factor: 0.91, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    mole: { kind: "unit", color: "#543", vis: "mole", turretImmune: true, name: "Mole", description: "Stealth unit. Immune to tower fire, very fragile.", strength: "Turret immunity enables attacks on defenses", weakness: "Very low health; ground hazards and melee defenders counter it",
+        stats: {
+            energy: {base: 10, level: {factor: 1.22, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 2, level: {factor: 1.16, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 1.25, level: {factor: 0.985, min: 0.4}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.025, min: 0.01},
+            speed: {base: 2, level: {factor: 1.03, max: 3.6}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 6, min: 0.1},
+            visionRange: {base: 0.8, level: {factor: 1.04, max: 3.2}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 3.2, min: 0.05},
+            attackRange: {base: 1, level: {factor: 1.04, max: 3.4}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 1, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: null, level: {}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0},
+            astarCost: {base: 0.05, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 0.05, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 100, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 7.5, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 10, level: {factor: 0.88, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    poison_resistant: { kind: "unit", color: "#2d2", vis: "circle", poisonResistant: true, attackStyle: "poison", name: "Poison Resistant", description: "Poison-immune. Attacks with toxic clouds.", strength: "Poison immunity and ranged pressure", weakness: "Moderate health, speed and slow attacks",
+        stats: {
+            energy: {base: 50, level: {factor: 1.22, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 6, level: {factor: 1.16, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 2.25, level: {factor: 0.985, min: 0.4}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.06, min: 0.01},
+            speed: {base: 2.4, level: {factor: 1.03, max: 4.32}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 7.199999999999999, min: 0.1},
+            visionRange: {base: 0.8, level: {factor: 1.04, max: 3.2}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 3.2, min: 0.05},
+            attackRange: {base: 1, level: {factor: 1.04, max: 3.4}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 4.5, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: null, level: {}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0},
+            astarCost: {base: 11, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 0.5, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 600, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 9, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 60, level: {factor: 0.92, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    fire_resistant: { kind: "unit", color: "#f50", vis: "circle", fireResistant: true, attackStyle: "fire", name: "Fire Resistant", description: "Fire-immune. Attacks with flame bursts.", strength: "Fire immunity and sturdy mid-range pressure", weakness: "Slow movement and shorter reach than ranged specialists",
+        stats: {
+            energy: {base: 70, level: {factor: 1.22, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 7, level: {factor: 1.16, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 2, level: {factor: 0.985, min: 0.4}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.045, min: 0.01},
+            speed: {base: 2, level: {factor: 1.03, max: 3.6}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 6, min: 0.1},
+            visionRange: {base: 0.8, level: {factor: 1.04, max: 3.2}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 3.2, min: 0.05},
+            attackRange: {base: 1, level: {factor: 1.04, max: 3.4}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 3, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: null, level: {}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0},
+            astarCost: {base: 13, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 0.55, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 700, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 10, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 70, level: {factor: 0.92, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    water_resistant: { kind: "unit", color: "#4af", vis: "circle", waterResistant: true, attackStyle: "water", name: "Water Resistant", description: "Water-immune. Attacks with water jets.", strength: "Water immunity, speed and long reach", weakness: "Low health and slow attacks",
+        stats: {
+            energy: {base: 40, level: {factor: 1.22, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 5, level: {factor: 1.16, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 2.25, level: {factor: 0.985, min: 0.4}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.075, min: 0.01},
+            speed: {base: 3.2, level: {factor: 1.03, max: 5.760000000000001}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 8.32, min: 0.1},
+            visionRange: {base: 1, level: {factor: 1.04, max: 3.4}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 4, min: 0.05},
+            attackRange: {base: 1, level: {factor: 1.04, max: 3.4}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 5, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: null, level: {}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0},
+            astarCost: {base: 8, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 0.4, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 500, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 8, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 50, level: {factor: 0.91, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    ice_resistant: { kind: "unit", color: "#afe", vis: "circle", iceResistant: true, attackStyle: "ice", name: "Ice Resistant", description: "Ice-immune. Attacks with frost shards.", strength: "Ice immunity and reliable mid-range damage", weakness: "Slow movement and limited reach",
+        stats: {
+            energy: {base: 65, level: {factor: 1.22, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 6, level: {factor: 1.16, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 1.75, level: {factor: 0.985, min: 0.4}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.045, min: 0.01},
+            speed: {base: 2.2, level: {factor: 1.03, max: 3.9600000000000004}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 6.6000000000000005, min: 0.1},
+            visionRange: {base: 0.8, level: {factor: 1.04, max: 3.2}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 3.2, min: 0.05},
+            attackRange: {base: 1, level: {factor: 1.04, max: 3.4}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 3.5, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: null, level: {}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0},
+            astarCost: {base: 12, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 0.5, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 650, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 9, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 65, level: {factor: 0.92, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    laser_resistant: { kind: "unit", color: "#d0f", vis: "circle", laserResistant: true, attackStyle: "laser", name: "Laser Resistant", description: "Laser-immune. Shoots laser beams from range.", strength: "Laser immunity and long reach", weakness: "Low health, slow attacks and modest speed",
+        stats: {
+            energy: {base: 32, level: {factor: 1.22, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 5, level: {factor: 1.16, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 2.75, level: {factor: 0.985, min: 0.4}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.075, min: 0.01},
+            speed: {base: 2.3, level: {factor: 1.03, max: 4.14}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 6.8999999999999995, min: 0.1},
+            visionRange: {base: 0.8, level: {factor: 1.04, max: 3.2}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 3.2, min: 0.05},
+            attackRange: {base: 1, level: {factor: 1.04, max: 3.4}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 5, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: null, level: {}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0},
+            astarCost: {base: 11, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 0.6, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 550, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 9, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 55, level: {factor: 0.92, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    snake: { kind: "unit", color: "#0f0", vis: "snake", isSnake: true, attackStyle: "ram", name: "Snake", description: "Massive serpent. Rams targets, takes self-damage.", strength: "Durable charging melee attacker", weakness: "Very expensive, slow to train and cannot retaliate at range",
+        stats: {
+            energy: {base: 800, level: {factor: 1.24, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 15, level: {factor: 1.14, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 1.5, level: {factor: 0.985, min: 0.7}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.025, min: 0.01},
+            speed: {base: 1.8, level: {factor: 1.03, max: 4.8}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 5.4, min: 0.1},
+            visionRange: {base: 0.8, level: {factor: 1.04, max: 3.4000000000000004}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 3.2, min: 0.05},
+            attackRange: {base: 1, level: {factor: 1.04, max: 3.6}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 1, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: null, level: {}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0},
+            astarCost: {base: 28, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 2.5, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 8000, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 7, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            collisionR: {base: 9, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            snakeMaxHistory: {base: 20, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 800, level: {factor: 0.95, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    scout: { kind: "unit", color: "#9cf", vis: "triangle", isFlying: true, attackStyle: "swoop", name: "Scout", description: "Fast flying recon. Very high vision, low Energy, low attack. Attacks reveal targets to its team and it patrols random points continuously.", strength: "Fast flying scout with the longest unit reach and Watch", weakness: "Very low health and damage",
+        stats: {
+            energy: {base: 14, level: {factor: 1.1, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 1, level: {factor: 1.05, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 1.6, level: {factor: 0.99, min: 0.6}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.1, min: 0.01},
+            speed: {base: 5.4, level: {factor: 1.04, max: 7.4}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 8.54, min: 0.1},
+            visionRange: {base: 1.35, level: {factor: 1.08, max: 7.75}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 5.4, min: 0.05},
+            attackRange: {base: 1, level: {factor: 1.08, max: 7.4}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 6, min: 0},
+            watchDuration: {base: 5, level: {add: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: null, level: {}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0},
+            astarCost: {base: 3, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 0.15, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 140, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 5.5, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 14, level: {factor: 0.89, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    collector: { kind: "unit", color: "#aaa", vis: "star", isWorker: true, resourceKey: "energy", name: "⚡ Collector", description: "Resource worker. Gathers energy from energy mines and farms and refills the shared energy stockpile.", strength: "Harvests energy", weakness: "Unarmed and vulnerable to raiders",
+        stats: {
+            energy: {base: 15, level: {factor: 1.13, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 0, level: {factor: 1, round: "round", min: 0}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 49.95, level: {factor: 1, min: 49.95}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.025, min: 0.01},
+            speed: {base: 2, level: {factor: 1.05, max: 4.8}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 6, min: 0.1},
+            visionRange: {base: 0.6, level: {factor: 1.03, max: 2.2}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 2.4, min: 0.05},
+            attackRange: {base: 0, level: {factor: 1.03, max: 1.6}, researchable: false, research: {factor: 1.08, direction: "increase"}, softCap: 0, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 2, level: {}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0.2},
+            gatherPerTrip: {base: 38, level: {power: 1, min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: 2, level: {factor: 0.9, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0.01},
+            astarCost: {base: 3, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 1.4, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 15, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 6, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 15, level: {factor: 0.9, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    astar_collector: { kind: "unit", color: "#bbb", vis: "star", isWorker: true, resourceKey: "astar", name: "★ Collector", description: "Resource worker. Gathers ★ from gray ★ mines and farms and refills the shared ★ stockpile used by pathfinding.", strength: "Harvests astar", weakness: "Unarmed and vulnerable to raiders",
+        stats: {
+            energy: {base: 15, level: {factor: 1.13, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 0, level: {factor: 1, round: "round", min: 0}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 49.95, level: {factor: 1, min: 49.95}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.025, min: 0.01},
+            speed: {base: 2, level: {factor: 1.05, max: 4.8}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 6, min: 0.1},
+            visionRange: {base: 0.6, level: {factor: 1.03, max: 2.2}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 2.4, min: 0.05},
+            attackRange: {base: 0, level: {factor: 1.03, max: 1.6}, researchable: false, research: {factor: 1.08, direction: "increase"}, softCap: 0, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 2, level: {}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0.2},
+            gatherPerTrip: {base: 40, level: {power: 1, min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: 2, level: {factor: 0.9, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0.01},
+            astarCost: {base: 3, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 1.4, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 15, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 6, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 15, level: {factor: 0.9, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    salvager_unit: { kind: "unit", color: "#765", vis: "triangle_down", isWorker: true, name: "Salvager", description: "Recycling worker. Dismantles buildings marked for salvage and returns their resources.", strength: "Recovers value from structures", weakness: "Unarmed and slow",
+        stats: {
+            energy: {base: 20, level: {factor: 1.14, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 0, level: {factor: 1, round: "round", min: 0}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 49.95, level: {factor: 1, min: 49.95}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.025, min: 0.01},
+            speed: {base: 1.8, level: {factor: 1.045, max: 4.6}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 5.4, min: 0.1},
+            visionRange: {base: 0.6, level: {factor: 1.03, max: 2.2}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 2.4, min: 0.05},
+            attackRange: {base: 0, level: {factor: 1.03, max: 1.6}, researchable: false, research: {factor: 1.08, direction: "increase"}, softCap: 0, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 2, level: {}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0.2},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: 2, level: {factor: 0.9, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0.01},
+            astarCost: {base: 10, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 0.4, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 20, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 6, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 20, level: {factor: 0.9, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    builder_unit: { kind: "unit", color: "#8b5", vis: "rect", isWorker: true, name: "Builder", description: "Construction worker. Fetches materials from builder spawners and constructs and upgrades buildings.", strength: "Builds and repairs structures", weakness: "Unarmed; requires access to worksites",
+        stats: {
+            energy: {base: 25, level: {factor: 1.16, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 0, level: {factor: 1, round: "round", min: 0}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 49.95, level: {factor: 1, min: 49.95}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.025, min: 0.01},
+            speed: {base: 1.9, level: {factor: 1.05, max: 4.7}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 5.699999999999999, min: 0.1},
+            visionRange: {base: 0.6, level: {factor: 1.03, max: 2.2}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 2.4, min: 0.05},
+            attackRange: {base: 0, level: {factor: 1.03, max: 1.6}, researchable: false, research: {factor: 1.08, direction: "increase"}, softCap: 0, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 2, level: {}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0.2},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 25, level: {factor: 1.46, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "round"},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: 2, level: {factor: 0.9, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0.01},
+            astarCost: {base: 10, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 0.4, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 18, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 6, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 25, level: {factor: 0.9, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    healer_unit: { kind: "unit", color: "#fff", vis: "triangle", isWorker: true, isFlying: true, name: "Healer", description: "Support worker. Fetches healing supplies from healer spawners and restores nearby damaged friendly units.", strength: "Flying healing and queue support", weakness: "Unarmed and fragile",
+        stats: {
+            energy: {base: 25, level: {factor: 1.16, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 0, level: {factor: 1, round: "round", min: 0}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 49.95, level: {factor: 1, min: 49.95}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.025, min: 0.01},
+            speed: {base: 1.9, level: {factor: 1.05, max: 4.7}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 5.699999999999999, min: 0.1},
+            visionRange: {base: 0.6, level: {factor: 1.03, max: 2.2}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 2.4, min: 0.05},
+            attackRange: {base: 0, level: {factor: 1.03, max: 1.6}, researchable: false, research: {factor: 1.08, direction: "increase"}, softCap: 0, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 2, level: {}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0.2},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 5, level: {factor: 1.46, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "round"},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: 2, level: {factor: 0.9, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0.01},
+            astarCost: {base: 10, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 0.4, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 18, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 6, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            collisionR: {base: 3, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 25, level: {factor: 0.9, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    researcher_unit: { kind: "unit", color: "#6af", vis: "triangle", isWorker: true, isFlying: true, name: "Researcher", description: "Research worker. Fetches supplies from research labs and converts them into research progress.", strength: "Flying research worker", weakness: "Unarmed and fragile",
+        stats: {
+            energy: {base: 25, level: {factor: 1.16, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 0, level: {factor: 1, round: "round", min: 0}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 49.95, level: {factor: 1, min: 49.95}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.025, min: 0.01},
+            speed: {base: 1.9, level: {factor: 1.05, max: 4.7}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 5.699999999999999, min: 0.1},
+            visionRange: {base: 0.6, level: {factor: 1.03, max: 2.2}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 2.4, min: 0.05},
+            attackRange: {base: 0, level: {factor: 1.03, max: 1.6}, researchable: false, research: {factor: 1.08, direction: "increase"}, softCap: 0, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 2, level: {}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0.2},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 15, level: {factor: 1.46, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "round"},
+            transferCooldown: {base: 2, level: {factor: 0.9, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0.01},
+            astarCost: {base: 10, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 0.4, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 18, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 6, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            collisionR: {base: 3, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            trainingTime: {base: 25, level: {factor: 0.9, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    king: { kind: "unit", color: "#ffd700", vis: "king", attackStyle: "melee", name: "King", description: "Commander. In Kill King mode, a team whose king dies loses.", strength: "Durable command unit with solid melee damage", weakness: "Limited melee reach",
+        stats: {
+            energy: {base: 250, level: {factor: 1.2, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
+            atk: {base: 12, level: {factor: 1.12, round: "round", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            atkCd: {base: 2, level: {factor: 0.99, min: 0.6}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: 0.025, min: 0.01},
+            speed: {base: 1.8, level: {factor: 1.025, max: 3.2}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: 5.4, min: 0.1},
+            visionRange: {base: 1, level: {factor: 1.04, max: 3.4}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 4, min: 0.05},
+            attackRange: {base: 1, level: {factor: 1.04, max: 3.4}, researchable: true, research: {factor: 1.08, direction: "increase"}, softCap: 1, min: 0},
+            watchDuration: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
+            workerSearchDistance: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: 5, min: 0},
+            gatherPerTrip: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            builderDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            healerDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            researcherDps: {base: 0, level: {}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null},
+            transferCooldown: {base: null, level: {}, researchable: false, research: {factor: 2, direction: "decrease"}, softCap: 0.3, min: 0},
+            astarCost: {base: 15, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            upKeep: {base: 0.8, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
+            price: {base: 1000, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 12, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    pistol: { kind: "building", name: "Pistol", icon: "⚡", color: "#964B00", target: "wall", description: "Basic single-shot tower. Reliable damage, decent range.", strength: "Cheap dependable direct fire", weakness: "Short reach and low health",
+        stats: {
+            maxEnergy: {base: 30, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            damage: {base: 8, level: {factor: 1.4}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            cd: {base: 2, level: {linear: -0.1, min: 0.25}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 0.6309297535714574},
+            visionRange: {base: 0.6, level: {linear: 0.2}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 1.7999999999999998},
+            attackRange: {base: 1, level: {linear: 0.06}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: 3},
+            upKeep: {base: 1, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 35, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    smg: { kind: "building", name: "SMG", icon: "⚡", color: "#aaf", target: "wall", description: "Rapid-fire tower. Low damage per hit but high fire rate.", strength: "Higher direct-fire throughput at close range", weakness: "Shorter reach and less health than Pistol",
+        stats: {
+            maxEnergy: {base: 25, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            damage: {base: 6, level: {factor: 1.4}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            cd: {base: 1.25, level: {linear: -0.1, min: 0.25}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 0.20311401357501227},
+            visionRange: {base: 0.6, level: {linear: 0.2}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 1.7999999999999998},
+            attackRange: {base: 1, level: {linear: 0.06}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: 2.5},
+            upKeep: {base: 0.8, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 45, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    water: { kind: "building", name: "Water", icon: "💧", color: "#4af", target: "wall", description: "Soaks enemies, making them vulnerable to freeze DPS.", strength: "Wet enables freeze combinations", weakness: "Modest direct damage and short reach",
+        stats: {
+            maxEnergy: {base: 95, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            damage: {base: 10, level: {factor: 1.4}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            cd: {base: 1.75, level: {linear: -0.1, min: 0.25}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 0.5093842420185073},
+            visionRange: {base: 0.6, level: {linear: 0.2}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 1.7999999999999998},
+            attackRange: {base: 1, level: {linear: 0.06}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: 3.5},
+            wetDuration: {base: 7, level: {add: 1}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            upKeep: {base: 1.1, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 74, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    poison: { kind: "building", name: "Poison", icon: "🧪", color: "#2d2", target: "wall", description: "Applies stacking poison DoT. Low base damage.", strength: "Strong sustained poison damage", weakness: "Low direct damage; poison-resistant units counter it",
+        stats: {
+            maxEnergy: {base: 200, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            damage: {base: 3, level: {factor: 1.4}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            cd: {base: 2.5, level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 0.8340437671464697},
+            visionRange: {base: 0.6, level: {linear: 0.2}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 1.7999999999999998},
+            attackRange: {base: 1, level: {linear: 0.06}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: 4},
+            poisonDps: {base: 12, level: {factor: 1.4, min: 0.1}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            poisonDuration: {base: 5, level: {add: 2.5}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            upKeep: {base: 1.6, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 173, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    fire: { kind: "building", name: "Fire", icon: "🔥", color: "#f50", target: "wall", description: "Splash damage and burn DoT. Strong vs groups.", strength: "Splash and burn punish packed groups", weakness: "Long cooldown, short reach and fire-resistant counters",
+        stats: {
+            maxEnergy: {base: 350, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            damage: {base: 45, level: {factor: 1.4}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            blastDamage: {base: 10, level: {factor: 1.4}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            blastRadius: {base: 0.06, level: {}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            cd: {base: 5.5, level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1.5517285850726805},
+            visionRange: {base: 0.6, level: {linear: 0.2}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 1.7999999999999998},
+            attackRange: {base: 1, level: {linear: 0.06}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: 3},
+            burnDps: {base: 2.25, level: {factor: 1.4, min: 0.1}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            burnDuration: {base: 3.5, level: {add: 0.5}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            upKeep: {base: 1.9, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 375, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    sand_gun: { kind: "building", name: "Sand Gun", icon: "⌛", color: "#c96", target: "wall", description: "Slows enemies drastically. Low damage.", strength: "Long-range slowing helps hold a front", weakness: "Very low damage and long cooldown",
+        stats: {
+            maxEnergy: {base: 180, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            damage: {base: 5, level: {factor: 1.4}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            cd: {base: 7.5, level: {factor: 0.9, offset: 0}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1.7381404928570852},
+            visionRange: {base: 0.8, level: {linear: 0.2}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 2.4000000000000004},
+            attackRange: {base: 1, level: {linear: 0.06}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: 4},
+            sandDuration: {base: 9, level: {}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            upKeep: {base: 1.2, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 60, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    ice: { kind: "building", name: "Ice", icon: "❄️", color: "#afe", target: "wall", description: "Freezes enemies. Combo with water for freeze DPS.", strength: "High damage and freeze control", weakness: "Expensive; ice-resistant units counter it",
+        stats: {
+            maxEnergy: {base: 400, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            damage: {base: 65, level: {factor: 1.4}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            cd: {base: 2, level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 0.6309297535714574},
+            visionRange: {base: 0.6, level: {linear: 0.2}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 1.7999999999999998},
+            attackRange: {base: 1, level: {linear: 0.06}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: 4.5},
+            freezeDps: {base: 6.6, level: {factor: 1.4, min: 0.1}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            freezeDuration: {base: 3.5, level: {add: 0.5}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            upKeep: {base: 2.4, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 700, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    sniper: { kind: "building", name: "Sniper", icon: "🎯", color: "#888", target: "wall", description: "Long-range precision tower with very high single-shot damage.", strength: "Very long reach and heavy single-target hits", weakness: "Very long cooldown, high price and fragile for its cost",
+        stats: {
+            maxEnergy: {base: 600, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            damage: {base: 170, level: {factor: 1.4}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            cd: {base: 12, level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 2.2618595071429146},
+            visionRange: {base: 1.6, level: {linear: 0.2}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 4.800000000000001},
+            attackRange: {base: 1.6, level: {linear: 0.06}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: 8},
+            upKeep: {base: 2.8, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 1500, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    elements: { kind: "building", name: "Elements", icon: "🌈", color: "#fff", target: "wall", description: "Applies all status effects. Jack of all trades.", strength: "Flexible mixed status support", weakness: "Very low direct damage and modest health",
+        stats: {
+            maxEnergy: {base: 150, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            damage: {base: 1, level: {factor: 1.4}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            cd: {base: 1.75, level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 0.5093842420185073},
+            visionRange: {base: 0.6, level: {linear: 0.2}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 1.7999999999999998},
+            attackRange: {base: 1, level: {linear: 0.06}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: 5},
+            burnDps: {base: 0.2, level: {factor: 1.4, min: 0.1}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            burnDuration: {base: 6, level: {add: 1}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            poisonDps: {base: 0.2, level: {factor: 1.4, min: 0.1}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            poisonDuration: {base: 6, level: {add: 1}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            freezeDps: {base: 0.2, level: {factor: 1.4, min: 0.1}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            freezeDuration: {base: 6, level: {add: 1}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            wetDuration: {base: 7, level: {}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            sandDuration: {base: 9, level: {}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            upKeep: {base: 1.5, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 50, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    laser: { kind: "building", name: "Laser", icon: "⚡", color: "#f00", target: "wall", description: "Beam between aligned laser towers. Constant very high DPS. Difficult to use effectively.", strength: "Very high damage along linked beams", weakness: "Requires alignment; laser-resistant units counter it",
+        stats: {
+            maxEnergy: {base: 300, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            damage: {base: 750, level: {factor: 1.4}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {linear: 0.2}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            attackRange: {base: 0, level: {}, researchable: false, research: {factor: 1.25, direction: "increase"}, softCap: 0},
+            upKeep: {base: 2, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 125, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    watch_tower: { kind: "building", name: "Watch Tower", icon: "👁️", color: "#fd0", target: "wall", isWatchTower: true, description: "Marks enemies with Watch and grants shared sight around marked targets. Low Energy, large vision.", strength: "Extreme reach and Watch support", weakness: "Very low damage and health",
+        stats: {
+            maxEnergy: {base: 15, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            damage: {base: 1, level: {factor: 1.4}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            cd: {base: 1.4, level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 0.306270228443495},
+            visionRange: {base: 2, level: {linear: 0.2, max: 4.8}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 6},
+            attackRange: {base: 2, level: {linear: 0.06}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: 10},
+            watchDuration: {base: 5, level: {add: 1}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            upKeep: {base: 0.2, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 25, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    sand: { kind: "building", name: "Sand", icon: "⌛", color: "#c96", target: "floor", description: "Slows enemies walking over it. Fast to build. Strong agains moles. Low health.", strength: "Ground area denial", weakness: "Immobile; flying units bypass it",
+        stats: {
+            maxEnergy: {base: 30, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            damage: {base: 0.05, level: {factor: 1.6}, researchable: false, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            sandDuration: {base: 0.5, level: {}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            upKeep: {base: 1, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 30, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    lava: { kind: "building", name: "Lava", icon: "🌋", color: "#d22", target: "floor", description: "Burns enemies walking over it. Fast to build. Strong agains moles. Low health.", strength: "Ground area denial", weakness: "Immobile; flying units bypass it",
+        stats: {
+            maxEnergy: {base: 30, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            damage: {base: 1, level: {factor: 1.6}, researchable: false, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            burnDps: {base: 1, level: {factor: 1.6, min: 0.1}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            burnDuration: {base: 1.5, level: {}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            upKeep: {base: 1.2, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 50, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    poison_puddle: { kind: "building", name: "Poison Puddle", icon: "☠️", color: "#2d2", target: "floor", description: "Poisons enemies walking over it. Fast to build. Strong agains moles. Low health.", strength: "Ground area denial", weakness: "Immobile; flying units bypass it",
+        stats: {
+            maxEnergy: {base: 30, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            damage: {base: 1, level: {factor: 1.6}, researchable: false, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            poisonDps: {base: 1, level: {factor: 1.6, min: 0.1}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            poisonDuration: {base: 1.5, level: {}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            upKeep: {base: 1, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 90, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    ice_patch: { kind: "building", name: "Ice Patch", icon: "❄️", color: "#afe", target: "floor", description: "Freezes enemies walking over it. Fast to build. Strong agains moles. Low health.", strength: "Ground area denial", weakness: "Immobile; flying units bypass it",
+        stats: {
+            maxEnergy: {base: 30, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            damage: {base: 1, level: {factor: 1.6}, researchable: false, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            freezeDps: {base: 1, level: {factor: 1.6, min: 0.2}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            freezeDuration: {base: 1.5, level: {}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            upKeep: {base: 1.4, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 60, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    water_puddle: { kind: "building", name: "Water Puddle", icon: "💧", color: "#4af", target: "floor", description: "Soaks enemies walking over it. Fast to build. Strong agains moles. Low health.", strength: "Ground area denial", weakness: "Immobile; flying units bypass it",
+        stats: {
+            maxEnergy: {base: 30, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            wetDuration: {base: 3, level: {}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            upKeep: {base: 0.2, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 50, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    mine: { kind: "building", name: "Mine", icon: "💣", color: "#666", target: "floor", description: "Explodes once when an enemy walks over it. Fast to build. Strong agains moles. Low health.", strength: "Ground area denial", weakness: "Immobile; flying units bypass it",
+        stats: {
+            maxEnergy: {base: 30, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            damage: {base: 135, level: {factor: 1.6, round: "floor"}, researchable: false, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            blastDamage: {base: 135, level: {factor: 1.4}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            blastRadius: {base: 0.084, level: {}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            upKeep: {base: 0.2, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 20, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    farm: { kind: "building", name: "⚡ Farm", icon: "🌾", color: "#da0", target: "floor", resourceKey: "energy", description: "A tree growing energy. ⚡ Collectors harvest it; farm level multiplies energy work speed.", strength: "Renewable resources close to base", weakness: "Needs collectors and protection",
+        stats: {
+            maxEnergy: {base: 1000, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            multiplier: {base: 0.02, level: {model: "farm", coefficient: 1, power: 3}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: 10},
+            upKeep: {base: 2.8, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 40, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    spawner: { kind: "building", name: "⚡ Collector", shopName: "Collector", icon: "🏭", color: "#432", target: "floor", resourceKey: "energy", description: "Spawns ⚡ collectors that gather energy from energy mines and farms.", spawns: "collector", strength: "Produces collector", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1, from: "collector.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "collector.price"},
+            visionRange: {base: 0.6, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 1.7999999999999998},
+            upKeep: {base: 2.8, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 150, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    astar_farm: { kind: "building", name: "★ Farm", icon: "★", color: "#9aa", target: "floor", resourceKey: "astar", description: "A mine entrance producing ★. ★ Collectors harvest it; farm level multiplies ★ work speed.", strength: "Renewable resources close to base", weakness: "Needs collectors and protection",
+        stats: {
+            maxEnergy: {base: 1000, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            multiplier: {base: 0.02, level: {model: "farm", coefficient: 1, power: 3}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: 10},
+            upKeep: {base: 2.8, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 50, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    astar_spawner: { kind: "building", name: "★ Collector", shopName: "Collector", icon: "★", color: "#432", target: "floor", resourceKey: "astar", description: "Spawns ★ collectors that gather ★ from gray ★ mines and farms and refill the shared ★ stockpile.", spawns: "astar_collector", strength: "Produces astar_collector", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1, from: "astar_collector.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "astar_collector.price"},
+            visionRange: {base: 0.6, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 1.7999999999999998},
+            upKeep: {base: 2.8, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 170, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    salvager: { kind: "building", name: "Salvager", icon: "♻️", color: "#543", target: "floor", description: "Spawns salvagers that recycle marked buildings.", spawns: "salvager_unit", strength: "Produces salvager_unit", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1.106232178537418, from: "salvager_unit.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "salvager_unit.price"},
+            visionRange: {base: 0.6, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 1.7999999999999998},
+            upKeep: {base: 0.5, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 150, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    builder_spawner: { kind: "building", name: "Builder", icon: "🚧", color: "#354", target: "floor", description: "Spawns builders that construct buildings. All placed buildings start at 1 energy and need builders to become functional.", spawns: "builder_unit", strength: "Produces builder_unit", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1.1886322578355741, from: "builder_unit.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "builder_unit.price"},
+            visionRange: {base: 0.6, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 1.7999999999999998},
+            upKeep: {base: 0.5, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 180, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    healer_spawner: { kind: "building", name: "Healer", icon: "△⚕️", color: "#355", target: "floor", description: "Spawns healers that restore damaged friendly units. Healers fetch supplies from healer spawners before each heal.", spawns: "healer_unit", strength: "Produces healer_unit", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1.1886322578355741, from: "healer_unit.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "healer_unit.price"},
+            visionRange: {base: 0.6, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 1.7999999999999998},
+            upKeep: {base: 0.5, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 180, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    research: { kind: "building", name: "Research", icon: "△🧪", color: "#446", target: "floor", description: "Runs queued research projects and spawns researchers that complete research tasks.", spawns: "researcher_unit", strength: "Produces researcher_unit", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 70, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1.1886322578355741, from: "researcher_unit.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "researcher_unit.price"},
+            visionRange: {base: 0.6, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 1.7999999999999998},
+            efficiency: {base: 1, level: {factor: 1.05, max: 3}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: 3},
+            upKeep: {base: 0.5, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 260, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    house: { kind: "building", name: "House", icon: "🏠", color: "#c95", target: "floor", description: "Raises max population by 1.6^{level} while operational.", strength: "Raises population capacity", weakness: "No direct combat power; vulnerable infrastructure",
+        stats: {
+            maxEnergy: {base: 30, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            popCap: {base: 1, level: {model: "population", factor: 1.6}, researchable: true, research: {factor: 1.5, direction: "increase"}, softCap: {model: "populationLimit"}},
+            visionRange: {base: 0.4, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 1.2000000000000002},
+            upKeep: {base: 0.5, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 110, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    area_upgrader: { kind: "building", name: "Area Up", icon: "⬆️", color: "#fd0", target: "area_upgrade", description: "Upgrade a fully-filled area's multiplier level. Exponential cost.", strength: "Improves territory", weakness: "No direct combat damage",
+        stats: {
+            maxEnergy: {base: 1, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0.2, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 0.6000000000000001},
+            upKeep: {base: 0.5, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 100, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    shrine: { kind: "building", name: "Shrine", icon: "💀", color: "#c9b", target: "none", notBuildable: true, description: "💀 is damage taken: every bit of energy your units and buildings lose to damage goes to your shrine. It drains passively into ⚡ and/or ★ (the buttons beside 💀 at the bottom left; both: half each, neither: it keeps filling), up to Drain / s, times Multiplier. Research raises both; leave draining off to bank 💀 for a higher multiplier.", strength: "Recovers resources from losses", weakness: "Recovery depends on taking losses",
+        stats: {
+            maxEnergy: {base: 1, level: {factor: 2, round: "floor"}, researchable: false, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            multiplier: {base: 0.01, level: {}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null},
+            upKeep: {base: 0.01, level: {factor: 1.85, min: 0.01}, researchable: false, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            drainRate: {base: 1, level: {}, researchable: true, research: {factor: 10, direction: "increase"}, softCap: null},
+            price: {base: 200, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    cloud_0a: { kind: "building", name: "Cloud R1", icon: "☁️", color: "#f66", target: "wall", isCloud: true, description: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.", strength: "Paired transport across obstacles", weakness: "Requires both endpoints and sustained upkeep",
+        stats: {
+            maxEnergy: {base: 200, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {linear: 0.2}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            attackRange: {base: 0, level: {}, researchable: false, research: {factor: 1.25, direction: "increase"}, softCap: 0},
+            upKeep: {base: 10, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 100, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            pairId: {base: 0, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    cloud_0b: { kind: "building", name: "Cloud R2", icon: "☁️", color: "#f66", target: "wall", isCloud: true, description: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.", strength: "Paired transport across obstacles", weakness: "Requires both endpoints and sustained upkeep",
+        stats: {
+            maxEnergy: {base: 200, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {linear: 0.2}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            attackRange: {base: 0, level: {}, researchable: false, research: {factor: 1.25, direction: "increase"}, softCap: 0},
+            upKeep: {base: 10, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 100, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            pairId: {base: 0, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    cloud_1a: { kind: "building", name: "Cloud B1", icon: "☁️", color: "#66f", target: "wall", isCloud: true, description: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.", strength: "Paired transport across obstacles", weakness: "Requires both endpoints and sustained upkeep",
+        stats: {
+            maxEnergy: {base: 200, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {linear: 0.2}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            attackRange: {base: 0, level: {}, researchable: false, research: {factor: 1.25, direction: "increase"}, softCap: 0},
+            upKeep: {base: 10, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 100, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            pairId: {base: 1, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    cloud_1b: { kind: "building", name: "Cloud B2", icon: "☁️", color: "#66f", target: "wall", isCloud: true, description: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.", strength: "Paired transport across obstacles", weakness: "Requires both endpoints and sustained upkeep",
+        stats: {
+            maxEnergy: {base: 200, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {linear: 0.2}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            attackRange: {base: 0, level: {}, researchable: false, research: {factor: 1.25, direction: "increase"}, softCap: 0},
+            upKeep: {base: 10, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 100, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            pairId: {base: 1, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    cloud_2a: { kind: "building", name: "Cloud G1", icon: "☁️", color: "#6f6", target: "wall", isCloud: true, description: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.", strength: "Paired transport across obstacles", weakness: "Requires both endpoints and sustained upkeep",
+        stats: {
+            maxEnergy: {base: 200, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {linear: 0.2}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            attackRange: {base: 0, level: {}, researchable: false, research: {factor: 1.25, direction: "increase"}, softCap: 0},
+            upKeep: {base: 10, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 100, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            pairId: {base: 2, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    cloud_2b: { kind: "building", name: "Cloud G2", icon: "☁️", color: "#6f6", target: "wall", isCloud: true, description: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.", strength: "Paired transport across obstacles", weakness: "Requires both endpoints and sustained upkeep",
+        stats: {
+            maxEnergy: {base: 200, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {linear: 0.2}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            attackRange: {base: 0, level: {}, researchable: false, research: {factor: 1.25, direction: "increase"}, softCap: 0},
+            upKeep: {base: 10, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 100, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            pairId: {base: 2, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    cloud_3a: { kind: "building", name: "Cloud Y1", icon: "☁️", color: "#ff6", target: "wall", isCloud: true, description: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.", strength: "Paired transport across obstacles", weakness: "Requires both endpoints and sustained upkeep",
+        stats: {
+            maxEnergy: {base: 200, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {linear: 0.2}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            attackRange: {base: 0, level: {}, researchable: false, research: {factor: 1.25, direction: "increase"}, softCap: 0},
+            upKeep: {base: 10, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 100, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            pairId: {base: 3, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    cloud_3b: { kind: "building", name: "Cloud Y2", icon: "☁️", color: "#ff6", target: "wall", isCloud: true, description: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.", strength: "Paired transport across obstacles", weakness: "Requires both endpoints and sustained upkeep",
+        stats: {
+            maxEnergy: {base: 200, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            visionRange: {base: 0, level: {linear: 0.2}, researchable: false, research: {factor: 1.06, direction: "increase"}, softCap: 32},
+            attackRange: {base: 0, level: {}, researchable: false, research: {factor: 1.25, direction: "increase"}, softCap: 0},
+            upKeep: {base: 10, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 100, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            pairId: {base: 3, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    barrack_norm: { kind: "building", name: "Barrack", icon: "⛺", color: "#686", target: "floor", description: "Trains basic infantry. Balanced stats.", spawns: "norm", strength: "Produces norm", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1.3621902033472335, from: "norm.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "norm.price"},
+            visionRange: {base: 0.8, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 2.4000000000000004},
+            upKeep: {base: 0.2, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 100, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    barrack_fast: { kind: "building", name: "Fast Brk", icon: "⛺", color: "#eee", target: "floor", description: "Trains fast riders. Fragile but quick.", spawns: "fast", strength: "Produces fast", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1.106232178537418, from: "fast.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "fast.price"},
+            visionRange: {base: 1, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 3},
+            upKeep: {base: 0.2, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 80, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    barrack_tank: { kind: "building", name: "Tank Brk", icon: "⛺", color: "#555", target: "floor", description: "Trains heavy units. Slow but tough.", spawns: "tank", strength: "Produces tank", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1.618148228157049, from: "tank.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "tank.price"},
+            visionRange: {base: 0.6, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 1.7999999999999998},
+            upKeep: {base: 0.3, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 200, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    barrack_boss: { kind: "building", name: "Boss Brk", icon: "⛺", color: "#222", target: "floor", description: "Trains super-heavy units. Expensive powerhouse.", spawns: "boss", strength: "Produces boss", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 2.212464357074836, from: "boss.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "boss.price"},
+            visionRange: {base: 0.8, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 2.4000000000000004},
+            upKeep: {base: 0.4, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 500, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    barrack_flying: { kind: "building", name: "Flying Brk", icon: "⛺", color: "#dd0", target: "floor", description: "Trains winged lancers. They fly over walls and swoop onto targets.", spawns: "flying", strength: "Produces flying", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1.4056838710822128, from: "flying.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "flying.price"},
+            visionRange: {base: 1, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 3},
+            upKeep: {base: 0.2, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 150, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    barrack_mole: { kind: "building", name: "Mole Brk", icon: "⛺", color: "#543", target: "floor", description: "Trains moles. Immune to towers, very fragile.", spawns: "mole", strength: "Produces mole", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 0.8502741537276026, from: "mole.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "mole.price"},
+            visionRange: {base: 0.8, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 2.4000000000000004},
+            upKeep: {base: 0.2, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 120, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    barrack_poison_resistant: { kind: "building", name: "Psn Res Brk", icon: "⛺", color: "#2d2", target: "floor", description: "Trains poison-immune units.", spawns: "poison_resistant", strength: "Produces poison_resistant", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1.5119160496196309, from: "poison_resistant.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "poison_resistant.price"},
+            visionRange: {base: 0.8, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 2.4000000000000004},
+            upKeep: {base: 0.56, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 160, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    barrack_fire_resistant: { kind: "building", name: "Fire Res Brk", icon: "⛺", color: "#f50", target: "floor", description: "Trains fire-immune units.", spawns: "fire_resistant", strength: "Produces fire_resistant", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1.5688391745175807, from: "fire_resistant.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "fire_resistant.price"},
+            visionRange: {base: 0.8, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 2.4000000000000004},
+            upKeep: {base: 0.56, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 160, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    barrack_water_resistant: { kind: "building", name: "Wtr Res Brk", icon: "⛺", color: "#4af", target: "floor", description: "Trains water-immune units.", spawns: "water_resistant", strength: "Produces water_resistant", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1.4445902826453896, from: "water_resistant.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "water_resistant.price"},
+            visionRange: {base: 1, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 3},
+            upKeep: {base: 0.56, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 160, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    barrack_ice_resistant: { kind: "building", name: "Ice Res Brk", icon: "⛺", color: "#afe", target: "floor", description: "Trains ice-immune units.", spawns: "ice_resistant", strength: "Produces ice_resistant", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1.5414733701009713, from: "ice_resistant.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "ice_resistant.price"},
+            visionRange: {base: 0.8, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 2.4000000000000004},
+            upKeep: {base: 0.56, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 160, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    barrack_laser_resistant: { kind: "building", name: "Lsr Res Brk", icon: "⛺", color: "#d0f", target: "floor", description: "Trains laser-immune units.", spawns: "laser_resistant", strength: "Produces laser_resistant", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 1.4797854129888126, from: "laser_resistant.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "laser_resistant.price"},
+            visionRange: {base: 0.8, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 2.4000000000000004},
+            upKeep: {base: 0.56, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 160, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    barrack_snake: { kind: "building", name: "Snake Brk", icon: "⛺", color: "#0f0", target: "floor", description: "Trains snakes. Massive Energy, leaves a trail.", spawns: "snake", strength: "Produces snake", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 2.468422381884652, from: "snake.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "snake.price"},
+            visionRange: {base: 0.8, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 2.4000000000000004},
+            upKeep: {base: 0.64, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 400, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+    barrack_scout: { kind: "building", name: "Scout Brk", icon: "⛺", color: "#9cf", target: "floor", description: "Trains scouts. Fast flying recon units that roam the map.", spawns: "scout", strength: "Produces scout", weakness: "Needs time, resources and protection from raiders",
+        stats: {
+            maxEnergy: {base: 60, level: {factor: 2, round: "floor"}, researchable: true, research: {factor: 1.25, direction: "increase"}, softCap: null},
+            spawnCd: {level: {}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: 0.9745230455997934, from: "scout.trainingTime"},
+            unitPrice: {level: {factor: 2, min: 1}, researchable: true, research: {factor: 1.8, direction: "increase"}, softCap: null, from: "scout.price"},
+            visionRange: {base: 1.8, level: {}, researchable: true, research: {factor: 1.06, direction: "increase"}, softCap: 5.4},
+            upKeep: {base: 0.2, level: {factor: 1.85, min: 0.01}, researchable: true, research: {factor: 1.25, direction: "decrease"}, softCap: null},
+            maxLevel: {base: 1, level: {}, researchable: true, research: {factor: 1, direction: "increase"}, softCap: null},
+            price: {base: 90, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+        }
+    },
+};
 
-function buildResourceCollectorDescriptions() {
-    let out = {};
-    for (let cfg of RESOURCE_TYPE_LIST) {
-        out[cfg.farmKey] = cfg.farmDescription;
-        out[cfg.collectorBuildingKey] = cfg.collectorBuildingDescription;
-        out[cfg.collectorUnitKey] = cfg.collectorUnitDescription;
-    }
-    return out;
-}
-
-function buildResourceCollectorSpawnConfig() {
-    let out = {};
-    for (let cfg of RESOURCE_TYPE_LIST) {
-        out[cfg.collectorUnitKey] = { baseTime: 15, reduction: 0.10 };
-    }
-    return out;
-}
-
-function buildResourceCollectorUnitStats() {
-    let out = {};
-    for (let cfg of RESOURCE_TYPE_LIST) {
-        out[cfg.collectorUnitKey] = {
-            energy: 15,
-            price: 15,
-            speed: 2.0,
-            atk: 0,
-            attackRange: 0,
-            visionRange: 0.6,
-            atkCd: 49.95,
-            astarCost: 3,
-            gatherPerTrip: cfg.gatherPerTrip,
-            transferCooldown: 2.0,
-            workerSearchDistance: 2.0,
-            upKeep: 1.4,
-            color: cfg.collectorUnitColor,
-            r: 6,
-            vis: cfg.collectorUnitVis,
-            isWorker: true,
-            resourceKey: cfg.key,
-        };
-    }
-    return out;
-}
-
-function buildResourceCollectorUnitScaling() {
-    let out = {};
-    for (let cfg of RESOURCE_TYPE_LIST) {
-        out[cfg.collectorUnitKey] = { energyExp: 1.13, upKeepExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 };
-    }
-    return out;
-}
-
-function buildResourceCollectorResearchableStats() {
-    let out = {};
-    for (let cfg of RESOURCE_TYPE_LIST) {
-        out[cfg.collectorUnitKey] = ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'gatherPerTrip', 'transferCooldown', 'astarCost', 'upKeep'];
-    }
-    return out;
-}
-
-const RESOURCE_COLLECTOR_CARD_TYPES = Object.freeze(buildResourceCollectorCardTypes());
-const RESOURCE_COLLECTOR_DESCRIPTIONS = Object.freeze(buildResourceCollectorDescriptions());
-const RESOURCE_COLLECTOR_SPAWN_CONFIG = Object.freeze(buildResourceCollectorSpawnConfig());
-const RESOURCE_COLLECTOR_UNIT_STATS = Object.freeze(buildResourceCollectorUnitStats());
-const RESOURCE_COLLECTOR_UNIT_SCALING = Object.freeze(buildResourceCollectorUnitScaling());
-const RESOURCE_COLLECTOR_RESEARCHABLE_STATS = Object.freeze(buildResourceCollectorResearchableStats());
 const RESOURCE_FARM_KEYS = Object.freeze(RESOURCE_TYPE_LIST.map(cfg => cfg.farmKey));
 const RESOURCE_COLLECTOR_BUILDING_KEYS = Object.freeze(RESOURCE_TYPE_LIST.map(cfg => cfg.collectorBuildingKey));
 const RESOURCE_COLLECTOR_UNIT_KEYS = Object.freeze(RESOURCE_TYPE_LIST.map(cfg => cfg.collectorUnitKey));
 
 
 
-// ============================================================
-// CARD/BUILDING TYPES
-// ============================================================
-const BASE_CARD_TYPES = {
-    // Towers (target: wall)
-    pistol: { name: "Pistol", price: 35, icon: "\u26A1", color: "#964B00", attackRange: 0.6, visionRange: 0.6, cd: 2.0, damage: 8, upKeep: 1.0, target: 'wall', towerEnergy: 30 },
-    smg: { name: "SMG", price: 45, icon: "\u26A1", color: "#aaf", attackRange: 0.6, visionRange: 0.6, cd: 1.25, damage: 5, upKeep: 0.8, target: 'wall', towerEnergy: 25 },
-    water: { name: "Water", price: 74, icon: "\uD83D\uDCA7", color: "#4af", attackRange: 0.6, visionRange: 0.6, cd: 1.75, damage: 10, wetDuration: 7, upKeep: 1.1, target: 'wall', towerEnergy: 95 },
-    poison: { name: "Poison", price: 173, icon: "\uD83E\uDDEA", color: "#2d2", attackRange: 0.6, visionRange: 0.6, cd: 2.5, damage: 3, poisonDps: 28, poisonDuration: 5, upKeep: 1.6, target: 'wall', towerEnergy: 200 },
-    fire: { name: "Fire", price: 375, icon: "\uD83D\uDD25", color: "#f50", attackRange: 0.6, visionRange: 0.6, cd: 5.5, damage: 45, burnDps: 2.25, burnDuration: 3.5, blastDamage: 10, blastRadius: 0.06, upKeep: 1.9, target: 'wall', towerEnergy: 350 },
-    sand_gun: { name: "Sand Gun", price: 60, icon: "\u231B", color: "#c96", attackRange: 0.8, visionRange: 0.8, cd: 7.5, damage: 5, sandDuration: 9, upKeep: 1.2, target: 'wall', towerEnergy: 180 },
-    ice: { name: "Ice", price: 700, icon: "\u2744\uFE0F", color: "#afe", attackRange: 0.6, visionRange: 0.6, cd: 2.0, damage: 65, freezeDps: 6.6, freezeDuration: 3.5, upKeep: 2.4, target: 'wall', towerEnergy: 400 },
-    sniper: { name: "Sniper", price: 1500, icon: "\uD83C\uDFAF", color: "#888", attackRange: 1.6, visionRange: 1.6, cd: 12.0, damage: 170, upKeep: 2.8, target: 'wall', towerEnergy: 1500 },
-    elements: { name: "Elements", price: 50, icon: "\uD83C\uDF08", color: "#fff", attackRange: 0.6, visionRange: 0.6, cd: 1.75, damage: 1, burnDps: 0.2, poisonDps: 0.2, freezeDps: 0.2, burnDuration: 6, poisonDuration: 6, freezeDuration: 6, wetDuration: 7, sandDuration: 9, upKeep: 1.5, target: 'wall', towerEnergy: 150 },
-    laser: { name: "Laser", price: 125, icon: "\u26A1", color: "#f00", attackRange: 0, visionRange: 0, damage: 750, upKeep: 2, target: 'wall', towerEnergy: 300 },
-    watch_tower: { name: "Watch Tower", price: 25, icon: "\uD83D\uDC41\uFE0F", color: "#fd0", attackRange: 2.0, visionRange: 2.0, cd: 1.4, damage: 1, watchDuration: 5, upKeep: 0.2, target: 'wall', towerEnergy: 15, isWatchTower: true, maxVisionRange: 4.8 },
-
-    // Floor items
-    sand: { name: "Sand", price: 30, icon: "\u231B", color: "#c96", visionRange: 0, sandDuration: 0.5, upKeep: 1.0, target: 'floor' },
-    lava: { name: "Lava", price: 50, icon: "\uD83C\uDF0B", color: "#d22", visionRange: 0, burnDps: 1, burnDuration: 1.5, upKeep: 1.2, target: 'floor' },
-    poison_puddle: { name: "Poison Puddle", price: 90, icon: "\u2620\uFE0F", color: "#2d2", visionRange: 0, poisonDps: 1, poisonDuration: 1.5, upKeep: 1.0, target: 'floor' },
-    ice_patch: { name: "Ice Patch", price: 60, icon: "\u2744\uFE0F", color: "#afe", visionRange: 0, freezeDps: 1, freezeDuration: 1.5, upKeep: 1.4, target: 'floor' },
-    water_puddle: { name: "Water Puddle", price: 50, icon: "\uD83D\uDCA7", color: "#4af", visionRange: 0, wetDuration: 3, upKeep: 0.2, target: 'floor' },
-    mine: { name: "Mine", price: 20, icon: "\uD83D\uDCA3", color: "#666", visionRange: 0, blastDamage: 135, blastRadius: 0.084, upKeep: 0.2, target: 'floor' },
-    ...RESOURCE_COLLECTOR_CARD_TYPES,
-
-    // Special
-    salvager: { name: "Salvager", price: 150, icon: "\u267B\uFE0F", color: "#543", visionRange: 0.6, energy: 60, upKeep: 0.5, target: 'floor' },
-    builder_spawner: { name: "Builder", price: 180, icon: "\uD83D\uDEA7", color: "#354", visionRange: 0.6, energy: 60, upKeep: 0.5, target: 'floor' },
-    healer_spawner: { name: "Healer", price: 180, icon: "\u25B3\u2695\uFE0F", color: "#355", visionRange: 0.6, energy: 60, upKeep: 0.5, target: 'floor' },
-    research: { name: "Research", price: 260, icon: "\u25B3\uD83E\uDDEA", color: "#446", visionRange: 0.6, energy: 70, efficiency: 1, upKeep: 0.5, target: 'floor' },
-    house: { name: "House", price: 110, icon: "\uD83C\uDFE0", color: "#c95", visionRange: 0.4, energy: 30, upKeep: 0.5, target: 'floor' },
-    area_upgrader: { name: "Area Up", price: 100, icon: "\u2B06\uFE0F", color: "#fd0", visionRange: 0.2, upKeep: 0.5, target: 'area_upgrade' },
-    // The shrine (SHRINES_ENABLED): never built, one per player, passive;
-    // only its stats (research) are a building's.
-    shrine: { name: "Shrine", price: 200, icon: "\uD83D\uDC80", color: "#c9b", visionRange: 0, energy: 1, multiplier: 0.01, drainRate: 1, upKeep: 0, target: 'none', notBuildable: true },
-
-    // Clouds
-    cloud_0a: { name: "Cloud R1", price: 100, icon: "\u2601\uFE0F", color: "#f66", visionRange: 0, upKeep: 10, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 0 },
-    cloud_0b: { name: "Cloud R2", price: 100, icon: "\u2601\uFE0F", color: "#f66", visionRange: 0, upKeep: 10, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 0 },
-    cloud_1a: { name: "Cloud B1", price: 100, icon: "\u2601\uFE0F", color: "#66f", visionRange: 0, upKeep: 10, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 1 },
-    cloud_1b: { name: "Cloud B2", price: 100, icon: "\u2601\uFE0F", color: "#66f", visionRange: 0, upKeep: 10, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 1 },
-    cloud_2a: { name: "Cloud G1", price: 100, icon: "\u2601\uFE0F", color: "#6f6", visionRange: 0, upKeep: 10, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 2 },
-    cloud_2b: { name: "Cloud G2", price: 100, icon: "\u2601\uFE0F", color: "#6f6", visionRange: 0, upKeep: 10, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 2 },
-    cloud_3a: { name: "Cloud Y1", price: 100, icon: "\u2601\uFE0F", color: "#ff6", visionRange: 0, upKeep: 10, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 3 },
-    cloud_3b: { name: "Cloud Y2", price: 100, icon: "\u2601\uFE0F", color: "#ff6", visionRange: 0, upKeep: 10, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 3 },
-
-    // Barracks (one per unit type)
-    barrack_norm: { name: "Barrack", price: 100, icon: "\u26FA", color: "#686", visionRange: 0.8, upKeep: 0.2, target: 'floor', unitType: 'norm' },
-    barrack_fast: { name: "Fast Brk", price: 80, icon: "\u26FA", color: "#eee", visionRange: 1.0, upKeep: 0.2, target: 'floor', unitType: 'fast' },
-    barrack_tank: { name: "Tank Brk", price: 200, icon: "\u26FA", color: "#555", visionRange: 0.6, upKeep: 0.3, target: 'floor', unitType: 'tank' },
-    barrack_boss: { name: "Boss Brk", price: 500, icon: "\u26FA", color: "#222", visionRange: 0.8, upKeep: 0.4, target: 'floor', unitType: 'boss' },
-    barrack_flying: { name: "Flying Brk", price: 150, icon: "\u26FA", color: "#dd0", visionRange: 1.0, upKeep: 0.2, target: 'floor', unitType: 'flying' },
-    barrack_mole: { name: "Mole Brk", price: 120, icon: "\u26FA", color: "#543", visionRange: 0.8, upKeep: 0.2, target: 'floor', unitType: 'mole' },
-    barrack_poison_resistant: { name: "Psn Res Brk", price: 160, icon: "\u26FA", color: "#2d2", visionRange: 0.8, upKeep: 0.56, target: 'floor', unitType: 'poison_resistant' },
-    barrack_fire_resistant: { name: "Fire Res Brk", price: 160, icon: "\u26FA", color: "#f50", visionRange: 0.8, upKeep: 0.56, target: 'floor', unitType: 'fire_resistant' },
-    barrack_water_resistant: { name: "Wtr Res Brk", price: 160, icon: "\u26FA", color: "#4af", visionRange: 1.0, upKeep: 0.56, target: 'floor', unitType: 'water_resistant' },
-    barrack_ice_resistant: { name: "Ice Res Brk", price: 160, icon: "\u26FA", color: "#afe", visionRange: 0.8, upKeep: 0.56, target: 'floor', unitType: 'ice_resistant' },
-    barrack_laser_resistant: { name: "Lsr Res Brk", price: 160, icon: "\u26FA", color: "#d0f", visionRange: 0.8, upKeep: 0.56, target: 'floor', unitType: 'laser_resistant' },
-    barrack_snake: { name: "Snake Brk", price: 400, icon: "\u26FA", color: "#0f0", visionRange: 0.8, upKeep: 0.64, target: 'floor', unitType: 'snake' },
-    barrack_scout: { name: "Scout Brk", price: 90, icon: "\u26FA", color: "#9cf", visionRange: 1.8, upKeep: 0.2, target: 'floor', unitType: 'scout' },
-};
-
-// Single place for building Energy scaling across all building/card types.
-let BUILDING_ENERGY_LEVEL_EXP = 2;
-let BUILDING_LEVEL_MULT_EXP = 1.6;
-let BUILDING_DAMAGE_LEVEL_EXP = 1.4;
-let BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL = 0.10;
-let BUILDING_LINEAR_VISION_BONUS_PER_LEVEL = 0.20;
-let SAND_GUN_CD_LEVEL_EXP = 0.9;
-let RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP = 1.05;
-let RESEARCH_BUILDING_EFFICIENCY_CAP = 3;
-let UNIT_COLLECTOR_GATHER_LEVEL_EXP = 1;
-let UNIT_WORKER_SPECIALIST_BASE_RATE = 5;
-// Same value as UNIT_FORMULA_CONFIG.workerSpecialistLevelExp, which the
-// stat formulas read; applying a config copies one into the other.
-let UNIT_WORKER_SPECIALIST_LEVEL_EXP = 1.46;
-let BUILDING_UPKEEP_EXP = 1.85;
-let UNIT_UPKEEP_EXP = 1.45;
-
-const BUILDING_FORMULA_CONFIG = {
-    levelMultExp: 1.6,
-    energyLevelExp: 2,
-    damageLevelExp: 1.4,
-    linearCdReductionPerLevel: 0.10,
-    linearVisionBonusPerLevel: 0.20,
-    sandGunCdLevelExp: 0.9,
-    researchEfficiencyLevelExp: 1.05,
-    researchEfficiencyCap: 3,
-    spawnCdFloor: 0.05,
-    spawnedUnitPriceLevelExp: 2,
-    farmBaseMultiplierFallback: 1,
-    farmLevelPolyCoeff: 1,
-    farmLevelPowerExp: 3,
-    sandFloorDamageBase: 0.05,
-    lavaFloorDamageBase: 1,
-    mineFloorDamageBase: 135,
-    poisonPuddleFloorDamageBase: 1,
-    icePatchFloorDamageBase: 1,
-    directTowerCdFloor: 0.25,
-    fireBurnDpsMin: 0.1,
-    fireBurnDpsFromDamageMul: 0.05,
-    fireBurnDurationLevelAdd: 0.5,
-    fireBurnDurationFallbackBase: 3,
-    fireBurnDurationFallbackLevelAdd: 0.5,
-    poisonDpsMin: 0.1,
-    poisonDpsFromDamageMul: 0.10,
-    poisonDurationLevelAdd: 2.5,
-    poisonDurationFallbackBase: 7.5,
-    poisonDurationFallbackLevelAdd: 2.5,
-    iceFreezeDpsMin: 0.2,
-    iceFreezeDpsFromDamageMul: 0.20,
-    iceFreezeDurationLevelAdd: 0.5,
-    iceFreezeDurationFallbackBase: 3,
-    iceFreezeDurationFallbackLevelAdd: 0.5,
-    elementsDotMin: 0.1,
-    elementsDotFromDamageMul: 0.20,
-    elementsDurationLevelAdd: 1,
-    elementsDurationFallbackBase: 5,
-    lavaBurnDpsMin: 0.1,
-    lavaBurnDurationFallback: 1.5,
-    poisonPuddleDpsMin: 0.1,
-    poisonPuddleDurationFallback: 1.5,
-    icePatchDpsMin: 0.2,
-    icePatchDurationFallback: 1.5,
-    waterWetDurationFallbackBase: 6,
-    waterWetDurationFallbackLevelAdd: 1,
-    waterPuddleWetDurationFallback: 3,
-    waterWetDurationLevelAdd: 1,
-    sandGunDurationFallback: 9,
-    sandDurationFallback: 0.5,
-    watchDurationLevelAdd: 1,
-    watchDurationFallbackBase: 4,
-    upKeepExp: BUILDING_UPKEEP_EXP,
-};
-
-const UNIT_FORMULA_CONFIG = {
-    collectorGatherLevelExp: 1,
-    workerSpecialistBaseRate: 5,
-    workerSpecialistLevelExp: 1.46,
-    workerTransferCooldownLevelExp: 0.9,
-    astarCostLevelExp: 1.75,
-    baseAttackCooldownFallback: 1.5,
-    baseSpeedFallback: 1,
-    baseVisionMin: 0.05,
-    baseVisionFallback: 0.8,
-};
-
-const RESEARCH_FORMULA_CONFIG = {
-    unitPriceBonusExp: 1.8,
-    unitVisionRangeBonusExp: 1.08,
-    unitAttackRangeBonusExp: 1.08,
-    buildingVisionRangeBonusExp: 1.06,
-    // The shrine: multiplier 0.01 x 2^level (about 10 at level 10), drain
-    // 1 x 10^level per second (1, 10, 100, ...).
-    shrineMultiplierBonusExp: 2,
-    shrineDrainRateBonusExp: 10,
-};
-
-// Ensure every card/building type has a canonical base Energy in BASE_CARD_TYPES.
-// Keep towerEnergy mirrored for compatibility with existing checks/UI code paths.
-const BASE_CARD_DEFAULT_ENERGY = {
-    sand: 30,
-    lava: 30,
-    poison_puddle: 30,
-    ice_patch: 30,
-    water_puddle: 30,
-    mine: 30,
-    salvager: 60,
-    builder_spawner: 60,
-    healer_spawner: 60,
-    research: 70,
-    house: 120,
-    area_upgrader: 1,
-    ...RESOURCE_TYPE_LIST.reduce((out, cfg) => {
-        out[cfg.farmKey] = 1000;
-        out[cfg.collectorBuildingKey] = 60;
-        return out;
-    }, {}),
-};
-
-const DEFAULT_BARRACK_BUILDING_ENERGY = 60;
-
-for (let [key, def] of Object.entries(BASE_CARD_TYPES)) {
-    if (!def || typeof def !== 'object') continue;
-    let fallbackEnergy = Number.isFinite(def.energy) && def.energy > 0
-        ? def.energy
-        : (Number.isFinite(def.towerEnergy) && def.towerEnergy > 0
-            ? def.towerEnergy
-            : (key.startsWith('barrack_')
-                ? DEFAULT_BARRACK_BUILDING_ENERGY
-                : BASE_CARD_DEFAULT_ENERGY[key]));
-    if (!(Number.isFinite(fallbackEnergy) && fallbackEnergy > 0)) continue;
-    def.energy = fallbackEnergy;
-    if (def.target === 'wall' || Number.isFinite(def.towerEnergy)) def.towerEnergy = fallbackEnergy;
+// Compatibility views are generated from THING_STATS; never edit them for balance.
+const BASE_UNIT_STATS = {}, BASE_CARD_TYPES = {}, DESCRIPTIONS = {}, UNIT_DISPLAY_NAMES = {}, BARRACK_SPAWN_CONFIG = {};
+function rebuildThingDefinitionViews() {
+    for (const view of [BASE_UNIT_STATS, BASE_CARD_TYPES, DESCRIPTIONS, UNIT_DISPLAY_NAMES, BARRACK_SPAWN_CONFIG]) {
+        for (const key of Object.keys(view)) delete view[key];
+    }
+    for (const [key, thing] of Object.entries(THING_STATS)) {
+        const view = {};
+        for (const field of Object.keys(thing)) if (field !== 'stats' && field !== 'unitType') view[field] = thing[field];
+        for (const stat of Object.keys(thing.stats)) view[stat] = getThingStatBase(key, stat);
+        if (thing.kind === 'unit') {
+            BASE_UNIT_STATS[key] = view; UNIT_DISPLAY_NAMES[key] = thing.name;
+            if (thing.stats.trainingTime) BARRACK_SPAWN_CONFIG[key] = {baseTime:getThingStatBase(key,'trainingTime'),reduction:1-(thing.stats.trainingTime.level.factor ?? 1)};
+        } else {
+            if (thing.spawns && key.startsWith('barrack_')) view.unitType = thing.spawns;
+            view.energy = getThingStatBase(key,'maxEnergy');
+            if (thing.target === 'wall') view.towerEnergy = view.energy;
+            BASE_CARD_TYPES[key] = view;
+        }
+        DESCRIPTIONS[key] = thing.description || '';
+    }
 }
-
-// Descriptions
-const DESCRIPTIONS = {
-    // Towers
-    pistol: "Basic single-shot tower. Reliable damage, decent range.",
-    smg: "Rapid-fire tower. Low damage per hit but high fire rate.",
-    water: "Soaks enemies, making them vulnerable to freeze DPS.",
-    poison: "Applies stacking poison DoT. Low base damage.",
-    fire: "Splash damage and burn DoT. Strong vs groups.",
-    sand_gun: "Slows enemies drastically. Low damage.",
-    ice: "Freezes enemies. Combo with water for freeze DPS.",
-    sniper: "Long-range precision tower with very high single-shot damage.",
-    elements: "Applies all status effects. Jack of all trades.",
-    laser: "Beam between aligned laser towers. Constant very high DPS. Difficult to use effectively.",
-    watch_tower: "Marks enemies with Watch and grants shared sight around marked targets. Low Energy, large vision.",
-    // Floor
-    sand: "Slows enemies walking over it. Fast to build. Strong agains moles. Low health.",
-    lava: "Burns enemies walking over it. Fast to build. Strong agains moles. Low health.",
-    poison_puddle: "Poisons enemies walking over it. Fast to build. Strong agains moles. Low health.",
-    ice_patch: "Freezes enemies walking over it. Fast to build. Strong agains moles. Low health.",
-    water_puddle: "Soaks enemies walking over it. Fast to build. Strong agains moles. Low health.",
-    mine: "Explodes once when an enemy walks over it. Fast to build. Strong agains moles. Low health.",
-    // Special
-    salvager: "Spawns salvagers that recycle marked buildings.",
-    builder_spawner: "Spawns builders that construct buildings. All placed buildings start at 1 energy and need builders to become functional.",
-    healer_spawner: "Spawns healers that restore damaged friendly units. Healers fetch supplies from healer spawners before each heal.",
-    research: "Runs queued research projects and spawns researchers that complete research tasks.",
-    house: "Raises max population by 1.6^{level} while operational.",
-    cloud_0a: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
-    cloud_0b: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
-    cloud_1a: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
-    cloud_1b: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
-    cloud_2a: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
-    cloud_2b: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
-    cloud_3a: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
-    cloud_3b: "Cloud portal endpoint. Links its area with the paired portal's area for adjacency.",
-    area_upgrader: "Upgrade a fully-filled area's multiplier level. Exponential cost.",
-    shrine: "\uD83D\uDC80 is damage taken: every bit of energy your units and buildings lose to damage goes to your shrine. It drains passively into \u26A1 and/or \u2605 (the buttons beside \uD83D\uDC80 at the bottom left; both: half each, neither: it keeps filling), up to Drain / s, times Multiplier. Research raises both; leave draining off to bank \uD83D\uDC80 for a higher multiplier.",
-    // Barracks
-    barrack_norm: "Trains basic infantry. Balanced stats.",
-    barrack_fast: "Trains fast riders. Fragile but quick.",
-    barrack_tank: "Trains heavy units. Slow but tough.",
-    barrack_boss: "Trains super-heavy units. Expensive powerhouse.",
-    barrack_flying: "Trains winged lancers. They fly over walls and swoop onto targets.",
-    barrack_mole: "Trains moles. Immune to towers, very fragile.",
-    barrack_poison_resistant: "Trains poison-immune units.",
-    barrack_fire_resistant: "Trains fire-immune units.",
-    barrack_water_resistant: "Trains water-immune units.",
-    barrack_ice_resistant: "Trains ice-immune units.",
-    barrack_laser_resistant: "Trains laser-immune units.",
-    barrack_snake: "Trains snakes. Massive Energy, leaves a trail.",
-    barrack_scout: "Trains scouts. Fast flying recon units that roam the map.",
-    // Units
-    norm: "Basic infantry. Balanced stats, cheap to produce.",
-    fast: "Fast mounted raider. Low Energy but high speed.",
-    tank: "Heavy infantry. High Energy and damage, slow.",
-    boss: "Super-heavy unit. Extremely tough and powerful.",
-    flying: "Winged lancer. Flies over walls and swoops onto targets.",
-    mole: "Stealth unit. Immune to tower fire, very fragile.",
-    poison_resistant: "Poison-immune. Attacks with toxic clouds.",
-    fire_resistant: "Fire-immune. Attacks with flame bursts.",
-    water_resistant: "Water-immune. Attacks with water jets.",
-    ice_resistant: "Ice-immune. Attacks with frost shards.",
-    laser_resistant: "Laser-immune. Shoots laser beams from range.",
-    snake: "Massive serpent. Rams targets, takes self-damage.",
-    scout: "Fast flying recon. Very high vision, low Energy, low attack. Attacks reveal targets to its team and it patrols random points continuously.",
-    healer_unit: "Support worker. Fetches healing supplies from healer spawners and restores nearby damaged friendly units.",
-    researcher_unit: "Research worker. Fetches supplies from research labs and converts them into research progress.",
-    builder_unit: "Construction worker. Fetches materials from builder spawners and constructs and upgrades buildings.",
-    salvager_unit: "Recycling worker. Dismantles buildings marked for salvage and returns their resources.",
-    king: "Commander. In Kill King mode, a team whose king dies loses.",
-    ...RESOURCE_COLLECTOR_DESCRIPTIONS,
-};
-
-// User-facing names of unit types. Resource workers (and their buildings,
-// see RESOURCE_TYPES) carry their resource's icon, so the energy and A*
-// collectors never share a name.
-const UNIT_DISPLAY_NAMES = {
-    norm: 'Norm', fast: 'Fast', tank: 'Tank', boss: 'Boss', king: 'King', flying: 'Flying', scout: 'Scout', mole: 'Mole',
-    snake: 'Snake', poison_resistant: 'Poison Resistant', fire_resistant: 'Fire Resistant', water_resistant: 'Water Resistant',
-    ice_resistant: 'Ice Resistant', laser_resistant: 'Laser Resistant', builder_unit: 'Builder', salvager_unit: 'Salvager',
-    healer_unit: 'Healer', researcher_unit: 'Researcher',
-    ...Object.fromEntries(RESOURCE_TYPE_LIST.map(cfg => [cfg.collectorUnitKey, cfg.collectorUnitName]))
-};
+function getThingStatBase(key, stat, seen = new Set()) {
+    const id = key+'.'+stat, rule = THING_STATS[key]?.stats[stat];
+    if (!rule || seen.has(id)) return NaN;
+    if (rule.from) { seen.add(id); const [other, field] = rule.from.split('.'); return getThingStatBase(other, field, seen); }
+    return rule.base === null ? NaN : Number(rule.base);
+}
+rebuildThingDefinitionViews();
 
 function _prettyKeyLabel(key) {
     return String(key || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -626,77 +1291,15 @@ const BUILD_CATEGORIES = {
     special: [...RESOURCE_COLLECTOR_BUILDING_KEYS, 'salvager', 'builder_spawner', 'healer_spawner', 'research', 'house', 'area_upgrader', 'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b', 'cloud_2a', 'cloud_2b', 'cloud_3a', 'cloud_3b'],
 };
 
-// Spawn timing config for non-barrack producers and barrack level-reduction rules.
-const BARRACK_SPAWN_CONFIG = {
-    norm: { baseTime: 40, reduction: 0.10 },
-    fast: { baseTime: 20, reduction: 0.10 },
-    tank: { baseTime: 80, reduction: 0.08 },
-    boss: { baseTime: 400, reduction: 0.06 },
-    mole: { baseTime: 10, reduction: 0.12 },
-    snake: { baseTime: 800, reduction: 0.05 },
-    flying: { baseTime: 45, reduction: 0.09 },
-    poison_resistant: { baseTime: 60, reduction: 0.08 },
-    fire_resistant: { baseTime: 70, reduction: 0.08 },
-    water_resistant: { baseTime: 50, reduction: 0.09 },
-    ice_resistant: { baseTime: 65, reduction: 0.08 },
-    laser_resistant: { baseTime: 55, reduction: 0.08 },
-    scout: { baseTime: 14, reduction: 0.11 },
-    ...RESOURCE_COLLECTOR_SPAWN_CONFIG,
-    salvager_unit: { baseTime: 20, reduction: 0.10 },
-    builder_unit: { baseTime: 25, reduction: 0.10 },
-    healer_unit: { baseTime: 25, reduction: 0.10 },
-    researcher_unit: { baseTime: 25, reduction: 0.10 },
-};
-
-// Unit combat stats
-const BASE_UNIT_STATS = {
-    norm: { energy: 40, price: 400, speed: 2.6, atk: 5, attackRange: 0.6, visionRange: 0.6, atkCd: 1.5, astarCost: 10, upKeep: 0.4, color: '#fff', r: 8, vis: 'circle', attackStyle: 'melee' },
-    fast: { energy: 20, price: 200, speed: 4.8, atk: 3, attackRange: 0.4, visionRange: 0.6, atkCd: 1.0, astarCost: 6, upKeep: 0.3, color: '#eee', r: 6, vis: 'circle', attackStyle: 'melee' },
-    tank: { energy: 200, price: 800, speed: 1.4, atk: 8, attackRange: 0.2, visionRange: 0.6, atkCd: 2.25, astarCost: 16, upKeep: 0.7, color: '#555', r: 10, vis: 'circle', attackStyle: 'melee' },
-    boss: { energy: 400, price: 4000, speed: 1.2, atk: 20, attackRange: 0.2, visionRange: 0.8, atkCd: 3.0, astarCost: 23, upKeep: 2.0, color: '#222', r: 12, vis: 'circle', attackStyle: 'melee' },
-    flying: { energy: 45, price: 450, speed: 3.0, atk: 4, attackRange: 0.6, visionRange: 1.0, atkCd: 1.75, astarCost: 12, upKeep: 0.45, color: '#dd0', r: 7, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
-    mole: { energy: 10, price: 100, speed: 2.0, atk: 2, attackRange: 0.2, visionRange: 0.8, atkCd: 1.25, astarCost: 0.05, upKeep: 0.05, color: '#543', r: 7.5, vis: 'mole', turretImmune: true },
-    poison_resistant: { energy: 60, price: 600, speed: 2.4, atk: 6, attackRange: 0.90, visionRange: 0.8, atkCd: 1.75, astarCost: 11, upKeep: 0.5, color: '#2d2', r: 9, vis: 'circle', poisonResistant: true, attackStyle: 'poison' },
-    fire_resistant: { energy: 70, price: 700, speed: 2.0, atk: 7, attackRange: 0.92, visionRange: 0.8, atkCd: 2.0, astarCost: 13, upKeep: 0.55, color: '#f50', r: 10, vis: 'circle', fireResistant: true, attackStyle: 'fire' },
-    water_resistant: { energy: 50, price: 500, speed: 3.2, atk: 5, attackRange: 0.87, visionRange: 1.0, atkCd: 1.5, astarCost: 8, upKeep: 0.4, color: '#4af', r: 8, vis: 'circle', waterResistant: true, attackStyle: 'water' },
-    ice_resistant: { energy: 65, price: 650, speed: 2.2, atk: 6, attackRange: 0.90, visionRange: 0.8, atkCd: 1.75, astarCost: 12, upKeep: 0.5, color: '#afe', r: 9, vis: 'circle', iceResistant: true, attackStyle: 'ice' },
-    laser_resistant: { energy: 55, price: 550, speed: 2.3, atk: 5, attackRange: 0.88, visionRange: 0.8, atkCd: 1.75, astarCost: 11, upKeep: 0.6, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
-    snake: { energy: 800, price: 8000, speed: 1.8, atk: 15, attackRange: 0.1, visionRange: 0.8, atkCd: 1.5, astarCost: 28, upKeep: 2.5, color: '#0f0', r: 7, collisionR: 9, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
-    scout: { energy: 14, price: 140, speed: 5.4, atk: 1, attackRange: 1.0, visionRange: 1.35, atkCd: 1.6, watchDuration: 5, astarCost: 3, upKeep: 0.15, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
-    ...RESOURCE_COLLECTOR_UNIT_STATS,
-    salvager_unit: { energy: 20, price: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, upKeep: 0.4, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
-    builder_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, upKeep: 0.4, builderDps: 25, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
-    healer_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, upKeep: 0.4, healerDps: 5, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#fff', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
-    researcher_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, upKeep: 0.4, researcherDps: 15, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#6af', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
-    king: { energy: 250, price: 1000, speed: 1.8, atk: 12, attackRange: 0.2, visionRange: 1.0, atkCd: 2.0, astarCost: 15, upKeep: 0.8, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
-};
-
-const UNIT_LEVEL_SCALING = {
-    _default: { energyExp: 1.22, upKeepExp: 1.22, dmgExp: 1.16, speedExp: 1.03, speedCapMul: 1.8, cdExp: 0.985, minCd: 0.4, visionExp: 1.04, visionCapBonus: 2.4 },
-    boss: { energyExp: 1.36, upKeepExp: 1.36, dmgExp: 1.14, speedExp: 1.015, speedCapAbs: 2.6, cdExp: 0.99, minCd: 0.9, visionExp: 1.03, visionCapBonus: 2.0 },
-    flying: { energyExp: 1.12, upKeepExp: 1.12, dmgExp: 1.12, speedExp: 1.06, speedCapAbs: 6.2, cdExp: 0.98, minCd: 0.5, visionExp: 1.06, visionCapBonus: 3.6 },
-    snake: { energyExp: 1.24, upKeepExp: 1.24, dmgExp: 1.14, speedExp: 1.03, speedCapAbs: 4.8, cdExp: 0.985, minCd: 0.7, visionExp: 1.04, visionCapBonus: 2.6 },
-    tank: { energyExp: 1.25, upKeepExp: 1.25, dmgExp: 1.15, speedExp: 1.02, speedCapAbs: 3.2, cdExp: 0.985, minCd: 0.6, visionExp: 1.04, visionCapBonus: 2.0 },
-    scout: { energyExp: 1.1, upKeepExp: 1.1, dmgExp: 1.05, speedExp: 1.04, speedCapAbs: 7.4, cdExp: 0.99, minCd: 0.6, visionExp: 1.08, visionCapBonus: 6.4 },
-    ...RESOURCE_COLLECTOR_UNIT_SCALING,
-    salvager_unit: { energyExp: 1.14, upKeepExp: 1.14, dmgExp: 1.0, speedExp: 1.045, speedCapAbs: 4.6, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
-    builder_unit: { energyExp: 1.16, upKeepExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
-    healer_unit: { energyExp: 1.16, upKeepExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
-    researcher_unit: { energyExp: 1.16, upKeepExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
-    king: { energyExp: 1.2, upKeepExp: 1.2, dmgExp: 1.12, speedExp: 1.025, speedCapAbs: 3.2, cdExp: 0.99, minCd: 0.6, visionExp: 1.04, visionCapBonus: 2.4 },
-};
-
 let RESEARCH_COST_EXP = 3;
 let RESEARCH_WORK_EXP = 3;
 let RESEARCH_WORK_BASE = 110;
-let RESEARCH_BONUS_EXP_UNITS = 2.0;
-let RESEARCH_BONUS_EXP_OTHER = 1.25;
-let RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP = 1.5;
 
 let MAX_THING_LEVEL = 20;
 let MAX_RESEARCH_LEVEL = 10;
 
-const RESEARCH_DECREASE_STATS = { cd: true, atkCd: true, transferCooldown: true, astarCost: true, baseTime: true, spawnCd: true, upKeep: true };
+// Semantic direction index for generic resource penalties; derived from the definitions.
+const RESEARCH_DECREASE_STATS = Object.fromEntries(Object.values(THING_STATS).flatMap(t=>Object.entries(t.stats).filter(([,s])=>s.research?.direction === 'decrease').map(([key])=>[key,true])));
 const RESEARCH_STAT_LABELS = {
     maxLevel: 'Max Level',
     maxEnergy: 'Max Energy',
@@ -735,18 +1338,7 @@ const RESEARCH_STAT_LABELS = {
     unitPrice: 'Unit Energy'
 };
 
-const RESEARCHABLE_UNIT_STATS = {
-    _default: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'astarCost', 'upKeep'],
-    scout: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'watchDuration', 'astarCost', 'upKeep'],
-    ...RESOURCE_COLLECTOR_RESEARCHABLE_STATS,
-    salvager_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'transferCooldown', 'astarCost', 'upKeep'],
-    builder_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'builderDps', 'transferCooldown', 'astarCost', 'upKeep'],
-    healer_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'healerDps', 'transferCooldown', 'astarCost', 'upKeep'],
-    researcher_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'researcherDps', 'transferCooldown', 'astarCost', 'upKeep'],
-    king: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'astarCost', 'upKeep']
-};
-
-const PRECOMPUTED_UNIT_STAT_KEYS = ['energy', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'watchDuration', 'workerSearchDistance', 'gatherPerTrip', 'builderDps', 'healerDps', 'researcherDps', 'transferCooldown', 'astarCost', 'upKeep'];
+const PRECOMPUTED_UNIT_STAT_KEYS = ['trainingTime', 'energy', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'watchDuration', 'workerSearchDistance', 'gatherPerTrip', 'builderDps', 'healerDps', 'researcherDps', 'transferCooldown', 'astarCost', 'upKeep'];
 const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxEnergy', 'popCap', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'attackRange', 'multiplier', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency', 'upKeep', 'drainRate'];
 const RESOURCE_PRECOMPUTED_STAT_MAP = {
     astar: {
@@ -755,73 +1347,7 @@ const RESOURCE_PRECOMPUTED_STAT_MAP = {
     }
 };
 
-function getSpawnedUnitTypeForBuildingKey(key) {
-    if (!key) return null;
-    if (key.startsWith('barrack_')) return (BASE_CARD_TYPES[key] || {}).unitType || 'norm';
-    let resourceCollectorBuilding = getResourceTypeByCollectorBuilding(key);
-    if (resourceCollectorBuilding) return resourceCollectorBuilding.collectorUnitKey;
-    if (key === 'salvager') return 'salvager_unit';
-    if (key === 'builder_spawner') return 'builder_unit';
-    if (key === 'healer_spawner') return 'healer_unit';
-    if (key === 'research') return 'researcher_unit';
-    return null;
-}
-
-// Soft caps for precomputed stats. Infinity means "no soft cap".
-const PRECOMPUTED_SOFT_CAP_MAP = {
-    unit: {
-        energy: Infinity,
-        atk: Infinity,
-        atkCd: 0.025,
-        speed: ({ baseAtLevel1 }) => {
-            let baseSpeed = Number(baseAtLevel1 && baseAtLevel1.speed);
-            if (!Number.isFinite(baseSpeed) || baseSpeed <= 0) return 8.5;
-            return Math.min(baseSpeed * 3, 8 + baseSpeed / 10);
-        },
-        visionRange: ({ baseAtLevel1 }) => {
-            let baseVision = Number(baseAtLevel1 && baseAtLevel1.visionRange);
-            return (Number.isFinite(baseVision) && baseVision > 0) ? (baseVision * 4) : 20;
-        },
-        attackRange: ({ baseAtLevel1 }) => {
-            let baseRange = Number(baseAtLevel1 && baseAtLevel1.attackRange);
-            return (Number.isFinite(baseRange) && baseRange > 0) ? (baseRange * 4) : 20;
-        },
-        gatherPerTrip: Infinity,
-        builderDps: Infinity,
-        healerDps: Infinity,
-        researcherDps: Infinity,
-        transferCooldown: 0.3,
-        workerSearchDistance: 5,
-        // Keep unit ★ / tile fully driven by level/research precompute output.
-        // A hard soft-cap here can flatten level growth when decreasing research is also applied.
-        astarCost: Infinity,
-    },
-    building: {
-        maxEnergy: Infinity,
-        popCap: ({ key }) => key === 'house' ? getConfiguredMaxPop() : Infinity,
-        damage: Infinity,
-        cd: ({ baseAtLevel1 }) => {
-            let baseCd = Number(baseAtLevel1 && baseAtLevel1.cd);
-            if (!Number.isFinite(baseCd) || baseCd <= 0) return 0.5;
-            return detLog(baseCd) / detLog(3);
-        },
-        spawnCd: ({ baseAtLevel1 }) => {
-            let baseSpawnCd = Number(baseAtLevel1 && baseAtLevel1.spawnCd);
-            if (!Number.isFinite(baseSpawnCd) || baseSpawnCd <= 0) return 0.5;
-            return detLog(baseSpawnCd) / detLog(15);
-        },
-        visionRange: ({ baseAtLevel1 }) => {
-            let baseVision = Number(baseAtLevel1 && baseAtLevel1.visionRange);
-            return (Number.isFinite(baseVision) && baseVision > 0) ? (baseVision * 3) : 32;
-        },
-        attackRange: ({ baseAtLevel1 }) => {
-            let baseRange = Number(baseAtLevel1 && baseAtLevel1.attackRange);
-            return (Number.isFinite(baseRange) && baseRange > 0) ? (baseRange * 3) : 32;
-        },
-        multiplier: ({ key }) => (key === 'farm' || key === 'astar_farm') ? 10 : Infinity,
-        efficiency: 3,
-    }
-};
+function getSpawnedUnitTypeForBuildingKey(key) { return THING_STATS[key]?.spawns || null; }
 
 let PRECOMPUTED_STATS_MAP = { unit: {}, building: {} };
 let PRECOMPUTED_STATS_MAP_PLAYER = [];

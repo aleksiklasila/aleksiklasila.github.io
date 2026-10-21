@@ -10,7 +10,7 @@ const result=i.eval(`(()=>{
  // Production keeps its smaller checkerboard jobs and halo limit.
  O.config[7]=64;
  const disk=(x,y,r)=>{const a=[];for(let dy=1-r;dy<r;dy++)for(let dx=1-r;dx<r;dx++)if(dx*dx+dy*dy<r*r)a.push([x+dx,y+dy]);return a;};
- const spawn=(s,x,y,r)=>_simWasmX.occ_spawn(...A,O.w,O.h,O.stride,C,O.planes,s,x*C,y*C,r,0,0);
+ const spawn=(s,x,y,r,px=0,py=0)=>_simWasmX.occ_spawn(...A,O.w,O.h,O.stride,C,O.planes,s,x*C+px,y*C+py,r,0,0);
  const verify=(expected,label)=>{
   let n=0;for(let y=0;y<O.h;y++)for(let w=0;w<O.stride;w++){
    let bits=O.bits[y*O.stride+w]>>>0;while(bits){const bit=31-Math.clz32(bits&-bits),x=w*32+bit;
@@ -19,14 +19,14 @@ const result=i.eval(`(()=>{
   if(n!==expected.size)throw Error(label+': missing bits '+n+' / '+expected.size);
  };
  let cases=0;
- for(let r=1;r<=10;r++)for(const cx of [r-1,30,31,32,33,63,64,O.w-r])for(const [dx,dy]of [[1,0],[-1,0],[1,1],[-2,3],[8,-5],[80,0],[-80,0],[0,300]]){
+ for(let r=1;r<=10;r++)for(const cx of [r-1,30,31,32,33,63,64,O.w-r])for(const [dx,dy]of [[1,0],[-1,0],[1,1],[-2,3],[8,-5],[80,0],[-80,0],[0,300]])for(const phase of [[0,0,0,0],[C-1,0,-3,0],[C>>1,C-1,7,-2],[C-1,C>>1,-5,3]]){
   O.bits.fill(0);O.active.fill(0);const cy=32;
-  if(!spawn(0,cx,cy,r))throw Error('legal spawn rejected r='+r);
+  if(!spawn(0,cx,cy,r,phase[0],phase[1]))throw Error('legal spawn rejected r='+r);
   const own=new Set(disk(cx,cy,r).map(([x,y])=>fold(x,y))),obstacle=new Set();
   const bx=dy>100?cx:cx+(dx>32?64:dx< -32?-64:r+3),by=dy>100?cy+256:cy+1;
   if(bx>=2 && bx+3<O.w && spawn(1,bx,by,3))for(const [x,y]of disk(bx,by,3))obstacle.add(fold(x,y));
   const free=(x,y)=>disk(Math.trunc(x/C),Math.trunc(y/C),r).every(([a,b])=>a>=0&&b>=0&&a<O.w&&b<O.h&&(!obstacle.has(fold(a,b)))) && x>=0&&y>=0;
-  const ox=cx*C,oy=cy*C,nx=ox+dx*C,ny=oy+dy*C;
+  const ox=cx*C+phase[0],oy=cy*C+phase[1],nx=ox+dx*C+phase[2],ny=oy+dy*C+phase[3];
   const sweep=(nx,ny)=>{let x=ox,y=oy;const n=Math.max(1,Math.ceil(Math.max(Math.abs(nx-ox),Math.abs(ny-oy))/C));
    for(let k=1;k<=n;k++){const tx=ox+Math.trunc((nx-ox)*k/n),ty=oy+Math.trunc((ny-oy)*k/n);if(!free(tx,ty))break;x=tx;y=ty;}return [x,y];};
   let [x,y]=sweep(nx,ny);if(x===ox&&y===oy){[x,y]=sweep(nx,oy);if(x===ox&&y===oy)[x,y]=sweep(ox,ny);}
@@ -38,5 +38,5 @@ const result=i.eval(`(()=>{
  }
  return cases;
 })()`);
-assert.equal(result,640);assert.deepEqual(i.errors.map(String),[]);
+assert.equal(result,2560);assert.deepEqual(i.errors.map(String),[]);
 console.log('PASS: '+result+' specialized-radius, word-seam, map-edge, swept move, own-mask and release cases.');

@@ -33,6 +33,7 @@ const data = require(path.join(__dirname, 'oneofall.json'));
         applyEditableRuntimeConfigObject(${JSON.stringify(data.editableConfig)}, { fromTransport: true });`;
     const { host, guests } = await H.startHostedMatch(world, { guests: 1, controls, hostSetup, maxMs: 60000 });
     const all = [host, ...guests];
+    if(process.argv.includes('--handed'))for(const peer of all)peer.evalSim('SIM_TRAFFIC_LOCAL=1');
     const q = code => JSON.parse(host.evalSim(`JSON.stringify(${code})`));
     // A worker of every kind: one queued at each worker spawner of the host.
     host.eval(`(() => { for (const s of collectorSpawners) if (s.owner === localPlayerId && !s.underConstruction) queueAction({ action: 'queueWorker', gx: s.gx, gy: s.gy, count: 1 }); })()`);
@@ -63,7 +64,9 @@ const data = require(path.join(__dirname, 'oneofall.json'));
                     if (p < 0 || (ap >= 0 && navReachable(p, from, ap))) return [t.x, t.y];
                 }
                 return first; })()`);
+            const issued=q(`Number(units.find(u=>u.id===${w.id})._manualMoveIssuedTick)||0`);
             host.eval(`queueAction({ action: 'move', unitIds: [${w.id}], targetX: ${target[0] * 32 + 16}, targetY: ${target[1] * 32 + 16} })`);
+            assert(await world.runUntil(()=>q(`Number(units.find(u=>u.id===${w.id})._manualMoveIssuedTick)||0`)>issued,10000,25),'manual order applied before timing its movement');
             let best = Infinity, last = null;
             for (let k = 0; k < 70 && best > 1; k++) {
                 await world.run(350);

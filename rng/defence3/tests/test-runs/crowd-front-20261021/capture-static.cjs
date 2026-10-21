@@ -1,0 +1,5 @@
+const fs=require('fs'),H=require('../../net-harness.cjs');
+const w=new H.World({controls:H.SMALL_MATCH_CONTROLS}),i=w.spawn('capture',{simWorker:false});
+const data=i.eval(`(()=>{startSoloGame();return {units:BASE_UNIT_STATS,buildings:BASE_CARD_TYPES,scaling:UNIT_LEVEL_SCALING,spawn:BARRACK_SPAWN_CONFIG,names:UNIT_DISPLAY_NAMES,descriptions:DESCRIPTIONS,decrease:RESEARCH_DECREASE_STATS,unitKeys:PRECOMPUTED_UNIT_STAT_KEYS,buildingKeys:PRECOMPUTED_BUILDING_STAT_KEYS,rows:Object.fromEntries([...Object.keys(BASE_UNIT_STATS),...Object.keys(BASE_CARD_TYPES)].map(key=>{const kind=BASE_UNIT_STATS[key]?'unit':'building',compute=kind==='unit'?computeBaseUnitStatsAtLevel:computeBaseBuildingStatsAtLevel,one=compute(key,1);return [key,{kind,base:Array.from({length:21},(_,l)=>compute(key,l)),research:getResearchStatEntriesForThing(kind,key).map(s=>s.statKey),factors:Object.fromEntries(Object.keys(one).map(s=>[s,getResearchBonusExpForStat(kind,s,key)])),caps:Object.fromEntries(Object.keys(one).map(s=>[s,getPrecomputedSoftCap(kind,key,s,{baseAtLevel1:one})]))}]}))};})()`);
+fs.writeFileSync(__dirname+'/static-before.json',JSON.stringify(data,null,2));
+

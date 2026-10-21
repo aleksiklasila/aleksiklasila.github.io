@@ -69,7 +69,7 @@ function _simClientScriptUrls() {
         .filter(src => /\/src\//.test(src) && !/bootstrap\.js|sim_shadow\.js|sim_worker\.js|sim_client\.js/.test(src));
 }
 
-const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261020-tpsflat5';
+const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261021-thing-stats1';
 
 function _simClientCreate() {
     let c = {
@@ -429,6 +429,7 @@ function _simClientGlobals() {
         SIM_TRAFFIC_MODE: typeof SIM_TRAFFIC_MODE!=='undefined'?SIM_TRAFFIC_MODE:0,
         SIM_TRAFFIC_RESPONSE: typeof SIM_TRAFFIC_RESPONSE!=='undefined'?SIM_TRAFFIC_RESPONSE:1,
         SIM_TRAFFIC_PASSES: typeof SIM_TRAFFIC_PASSES!=='undefined'?SIM_TRAFFIC_PASSES:1,
+        SIM_TRAFFIC_LOCAL: typeof SIM_TRAFFIC_LOCAL!=='undefined'?SIM_TRAFFIC_LOCAL:1,
         myPeerId: typeof myPeerId !== 'undefined' ? myPeerId : null,
         lobbyPlayers: typeof lobbyPlayers !== 'undefined' ? lobbyPlayers : [], gameStarted: true,
         // (Its tick bundles carry the match: main.js packTickBundleForWire.)

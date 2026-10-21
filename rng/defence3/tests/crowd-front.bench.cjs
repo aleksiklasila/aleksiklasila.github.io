@@ -17,11 +17,22 @@ const log=value=>{fs.appendFileSync(out+'.jsonl',JSON.stringify(value)+'\n');con
 const session=new(require('node:inspector').Session)(),post=(method)=>new Promise((resolve,reject)=>session.post(method,(e,r)=>e?reject(e):resolve(r)));
 (async()=>{
  const began=performance.now(),world=new H.World(),i=world.spawn('front',{simWorker:false});
+ if(process.argv.includes('--short-reach'))i.eval('for(const [key,def]of Object.entries(THING_STATS))if(def.stats.attackRange?.base>0)def.stats.attackRange.softCap=key==="sniper"?1.6:key==="watch_tower"?2:1;');
  i.eval(`if(typeof SIM_TRAFFIC_MODE!=='undefined')SIM_TRAFFIC_MODE=${Number(arg('mode',3))};`);
  i.eval(`if(typeof SIM_TRAFFIC_RESPONSE!=='undefined')SIM_TRAFFIC_RESPONSE=${Number(arg('response',1))};`);
  i.eval(`if(typeof SIM_TRAFFIC_PASSES!=='undefined')SIM_TRAFFIC_PASSES=${Number(arg('passes',2))};`);
+ i.eval(`if(typeof SIM_TRAFFIC_LOCAL!=='undefined')SIM_TRAFFIC_LOCAL=${Number(arg('local',1))};`);
  if(helpers){i.scratch.Worker=RealWorker;i.eval(`Worker=__scratch.Worker;navigator.hardwareConcurrency=16;simParallelInit('',${helpers});`);}
  let records=JSON.parse(require('node:zlib').gunzipSync(fs.readFileSync(arg('scene','tests/4M-1K-stuck2.gz'))));
+ if(process.argv.includes('--current-balance'))records[0].settings.editableConfig.tables=i.eval('serializeEditableRuntimeConfigForTransport().tables');
+ if(process.argv.includes('--max-stats')){
+  const levels=i.eval(`(()=>{const out={};for(const [kind,keys,stats]of [['unit',BASE_UNIT_STATS,PRECOMPUTED_UNIT_STAT_KEYS],['building',BASE_CARD_TYPES,PRECOMPUTED_BUILDING_STAT_KEYS]])for(const key of Object.keys(keys))for(const stat of stats)out[makeResearchLevelId(kind,key,stat)]=MAX_RESEARCH_LEVEL;return out;})()`);
+  for(const record of records){
+   for(const p of record.players||[]){p.researchLevels={...levels};p.researchOrders=[];p.energy=p.astar=1e20;}
+   for(const u of record.units||[]){u[5]=20;u[6]=524288;u[4]=1e20;}
+   for(const b of record.buildings||[]){b[4]=524288;b[5]=1e20;b[11]=null;}
+  }
+ }
  const width=records[0].width;let goals=[];
  for(const r of records)for(const u of r.units||[])goals.push(u[7]?u[7][2]*width+u[7][1]+1:0);
  i.scratch.records=records;
@@ -34,7 +45,8 @@ const session=new(require('node:inspector').Session)(),post=(method)=>new Promis
  i.scratch.now=()=>performance.now();
  i.eval(`performance.now=__scratch.now;simDk=${dk};__scratch.tracked=units.slice();__scratch.initial=new Float32Array(units.length);
   for(let k=0;k<units.length;k++)if(__scratch.goals[k]){const g=__scratch.goals[k]-1,u=units[k];__scratch.initial[k]=Math.hypot(u.x-(g%GRID_W+.5)*TILE,u.y-(Math.floor(g/GRID_W)+.5)*TILE);}`);
- log({stage:'restored',units:i.eval('units.length'),helpers,loadMs:performance.now()-began});
+ if(process.argv.includes('--max-stats'))i.eval('for(const u of units)u.energy=u.maxEnergy;for(const b of getCellItemsRowMajor())if(Number.isFinite(b.maxEnergy))b.energy=b.maxEnergy;');
+ log({stage:'restored',units:i.eval('units.length'),helpers,maxStats:process.argv.includes('--max-stats'),currentBalance:process.argv.includes('--current-balance'),loadMs:performance.now()-began,stats:i.eval('({research:getPlayerResearchLevel(0,"unit","norm","atkCd"),range:getUnitStatForOwner(0,"scout",20,"attackRange"),cooldown:getUnitStatForOwner(0,"norm",20,"atkCd")})')});
  for(let t=0;t<warmup;t++){const a=performance.now();i.eval('gameTick();currentTick++');log({warmup:t+1,ms:performance.now()-a});}
  i.eval(`__scratch.phases={};__scratch.phaseSelf={};__scratch.phaseStack=[];
   for(const name of ['spatialIndexRebuild','navTick','navFieldsFlush','recalculateUnitEffectiveStats','recalculateThingPrecomputedStats','updateAllPlayerVisibility','towersTick','statusPrepassRun','unitPassBegin','simMoveRun','combatScanRun','_forEachUnitInTickOrder','unitHitsResolve','unitRetirePrepare','simParallelRun','simParallelBackgroundWait','simUnitStateCollect','occupancyPrepareMovement','spawnerStructuresTick','processGlobalSpawnerQueue']){

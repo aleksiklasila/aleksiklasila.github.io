@@ -5,6 +5,7 @@ let SIM_TRAFFIC_MODE=typeof location!=='undefined'&&/[?&]traffic=[0-3](?:&|$)/.t
     Number((location.search.match(/[?&]traffic=([0-3])/)||[])[1]):3;
 let SIM_TRAFFIC_RESPONSE=typeof location!=='undefined'&&/[?&]trafficResponse=0(?:&|$)/.test(location.search||'')?0:1;
 let SIM_TRAFFIC_PASSES=typeof location!=='undefined'&&/[?&]trafficPasses=1(?:&|$)/.test(location.search||'')?1:2;
+let SIM_TRAFFIC_LOCAL=typeof location!=='undefined'&&/[?&]trafficLocal=0(?:&|$)/.test(location.search||'')?0:1;
 let _traffic=null;
 function trafficReset(){
     const T=_traffic;if(!T)return;
@@ -29,6 +30,7 @@ function trafficEnsure(O){
     _traffic.config[0]=SIM_TRAFFIC_MODE;
     _traffic.config[11]=SIM_TRAFFIC_RESPONSE;
     _traffic.config[12]=SIM_TRAFFIC_PASSES;
+    _traffic.config[13]=SIM_TRAFFIC_LOCAL;
     return _traffic;
 }
 function trafficBeforeMovement(){

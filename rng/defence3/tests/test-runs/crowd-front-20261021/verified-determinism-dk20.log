@@ -1,0 +1,41 @@
+[
+  [ 2008, 'x', 976, 983.625 ],
+  [ 2008, 'y', 768, 775.625 ],
+  [ 2008, 'vx', 0, 0.3812499940395355 ],
+  [ 2008, 'vy', 0, 0.3812499940395355 ],
+  [ 2008, 'commandState', 0, 2 ],
+  [ 2008, 'path', null, undefined ],
+  [ 2008, '_navLastD', -1, 283.06890869140625 ],
+  [ 2008, '_routeEnd', -1, 1836 ],
+  [ 2008, 'targetPos', null, undefined ],
+  [ 2008, '_routeKey', null, 'nav' ],
+  [ 2010, 'y', 768, 775.625 ],
+  [ 2010, 'vy', 0, 0.3812499940395355 ]
+]
+[
+  '{"time":"7d22be85","players":"d0d042bb","units":"887a5a97","towers":"4b95f515","barracks":"4b95f515","spawners":"c919da4f","floor":"bc1a906f","mines":"b9a1b925"}',
+  '{"time":"7d22be85","players":"0b2e03e7","units":"3c05ba65","towers":"4b95f515","barracks":"4b95f515","spawners":"c919da4f","floor":"bc1a906f","mines":"b9a1b925"}'
+]
+AssertionError [ERR_ASSERTION]: lockstep tick 0
++ actual - expected
+
++ 'aa4bb563'
+- '311a68dd'
+
+    at Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\tests\shared-spatial-determinism.test.cjs:49:20
+    at Object.<anonymous> (Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\tests\shared-spatial-determinism.test.cjs:56:3)
+    at Module._compile (node:internal/modules/cjs/loader:1706:14)
+    at Object..js (node:internal/modules/cjs/loader:1839:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:322:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+    at node:internal/main/run_main_module:36:49 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 'aa4bb563',
+  expected: '311a68dd',
+  operator: 'strictEqual',
+  diff: 'simple'
+}

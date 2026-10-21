@@ -1,0 +1,24 @@
+[
+  [ 3878, 'x', 677.375, 675.5 ],
+  [ 3878, 'y', 1206.5, 1204.875 ],
+  [ 3878, 'vx', 2.8258721828460693, 1 ],
+  [ 3878, 'vy', -1.3187403678894043, -3 ]
+]
+[
+  '{"time":"86ff9145","players":"f5149d80","units":"29bfead6","towers":"4b95f515","barracks":"4b95f515","spawners":"c919da4f","floor":"bc1a906f","mines":"b9a1b925"}',
+  '{"time":"86ff9145","players":"f5149d80","units":"a6499d30","towers":"4b95f515","barracks":"4b95f515","spawners":"c919da4f","floor":"bc1a906f","mines":"b9a1b925"}'
+]
+AssertionError [ERR_ASSERTION]: lockstep tick 17
++ actual - expected
+
++ 'ac2d8715'
+- 'b575ad0b'
+
+    at Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\tests\shared-spatial-determinism.test.cjs:49:20 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 'ac2d8715',
+  expected: 'b575ad0b',
+  operator: 'strictEqual',
+  diff: 'simple'
+}

@@ -1,0 +1,501 @@
+{
+  "scene": "tests/4M-1K-stuck2.gz",
+  "helpers": 7,
+  "ticks": 60,
+  "warmup": 3,
+  "dk": 20,
+  "tickMs": {
+    "mean": 1838.4399183333323,
+    "p50": 1817.6612000000023
+  },
+  "phases": {
+    "simParallelBackgroundWait": 214.3579250000034,
+    "simParallelRun:53": 1.7654450000006667,
+    "spatialIndexRebuild": 146.42659333333626,
+    "navTick": 0.006511666666240975,
+    "simParallelRun:17": 0.00890833333323826,
+    "navFieldsFlush": 14.365448333332703,
+    "simParallelRun:27": 4.714871666666538,
+    "recalculateUnitEffectiveStats": 6.659318333331854,
+    "recalculateThingPrecomputedStats": 0.012455000000287934,
+    "simParallelRun:30": 4.4505666666649635,
+    "updateAllPlayerVisibility": 279.88982166666733,
+    "towersTick": 77.66172166666898,
+    "simParallelRun:24": 5.240046666665633,
+    "statusPrepassRun": 5.555556666665992,
+    "simParallelRun:45": 2.3097283333353213,
+    "unitPassBegin": 0.013941666663837775,
+    "simParallelRun:43": 0.3446133333314113,
+    "simParallelRun:44": 0.20045833333497284,
+    "simParallelRun:20": 1.8524066666684424,
+    "simParallelRun:34": 5.83641166666445,
+    "simParallelRun:63": 2.231634999999369,
+    "simParallelRun:32": 11.345523333335587,
+    "combatScanRun": 22.99969499999934,
+    "occupancyPrepareMovement": 4.126235000001421,
+    "simParallelRun:89": 533.1938366666625,
+    "simMoveRun": 670.1383350000011,
+    "simParallelRun:36": 1.382116666665873,
+    "simParallelRun:37": 2.0532033333341437,
+    "_forEachUnitInTickOrder": 95.51026999999861,
+    "simParallelRun:41": 10.39882833333492,
+    "simParallelRun:60": 0.40798333333271636,
+    "simParallelRun:66": 0.336106666666213,
+    "unitHitsResolve": 1.694068333331476,
+    "simParallelRun:49": 0.8970499999995809,
+    "unitRetirePrepare": 0.9250449999989845,
+    "simUnitStateCollect": 1.0580733333333532,
+    "spawnerStructuresTick": 0.024041666670139725,
+    "processGlobalSpawnerQueue": 0.005186666663939831,
+    "simParallelRun:93": 1.0179683333340412
+  },
+  "phaseSelf": {
+    "simParallelBackgroundWait": 214.3579250000034,
+    "simParallelRun:53": 1.7654450000006667,
+    "spatialIndexRebuild": 0.05801000000113466,
+    "navTick": 0.006511666666240975,
+    "simParallelRun:17": 0.00890833333323826,
+    "navFieldsFlush": 14.356539999999464,
+    "simParallelRun:27": 4.714871666666538,
+    "recalculateUnitEffectiveStats": 1.944446666665317,
+    "recalculateThingPrecomputedStats": 0.012455000000287934,
+    "simParallelRun:30": 4.4505666666649635,
+    "updateAllPlayerVisibility": 275.4224216666696,
+    "towersTick": 77.66172166666898,
+    "simParallelRun:24": 5.240046666665633,
+    "statusPrepassRun": 0.31551000000035856,
+    "simParallelRun:45": 2.3097283333353213,
+    "unitPassBegin": 0.013941666663837775,
+    "simParallelRun:43": 0.3446133333314113,
+    "simParallelRun:44": 0.20045833333497284,
+    "simParallelRun:20": 1.8524066666684424,
+    "simParallelRun:34": 5.83641166666445,
+    "simParallelRun:63": 2.231634999999369,
+    "simParallelRun:32": 11.345523333335587,
+    "combatScanRun": 1.7193716666602996,
+    "occupancyPrepareMovement": 4.126235000001421,
+    "simParallelRun:89": 533.1938366666625,
+    "simMoveRun": 108.25122500000506,
+    "simParallelRun:36": 1.382116666665873,
+    "simParallelRun:37": 2.0532033333341437,
+    "_forEachUnitInTickOrder": 92.0749499999986,
+    "simParallelRun:41": 10.39882833333492,
+    "simParallelRun:60": 0.40798333333271636,
+    "simParallelRun:66": 0.336106666666213,
+    "unitHitsResolve": 0.9499783333325468,
+    "simParallelRun:49": 0.8970499999995809,
+    "unitRetirePrepare": 0.027994999999403566,
+    "simUnitStateCollect": 1.0580733333333532,
+    "spawnerStructuresTick": 0.024041666670139725,
+    "processGlobalSpawnerQueue": 0.005186666663939831,
+    "simParallelRun:93": 1.0179683333340412
+  },
+  "samples": [
+    {
+      "tick": 10,
+      "ordered": 295606,
+      "moving": 273848,
+      "distance": 7177520.516477195,
+      "netGoalProgress": 27878392.160899714,
+      "modes": {
+        "other": 1985778,
+        "flow": 293089,
+        "hold": 6191,
+        "chase": 1777
+      },
+      "onCounts": {
+        "0": 66001,
+        "1": 293089,
+        "2": 1927745
+      },
+      "speedBins": [
+        18691,
+        48342,
+        116492,
+        51254,
+        60827
+      ],
+      "perMode": {
+        "flow": [
+          18574,
+          47887,
+          115124,
+          50864,
+          60640
+        ],
+        "other": [
+          6,
+          178,
+          508,
+          38,
+          10
+        ],
+        "chase": [
+          111,
+          277,
+          860,
+          352,
+          177
+        ]
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 7.659912109375,
+        "spawns": 2290119,
+        "rejectedSpawns": 147723,
+        "relocatedSpawns": 447051,
+        "registered": 2286835,
+        "visited": 2288206,
+        "attempted": 1224092,
+        "moved": 1130983,
+        "blockedOrClipped": 1116173,
+        "simdGroups": 2253182,
+        "overHalo": 0,
+        "footprintMoves": 975034,
+        "scalarLanes": 2221160
+      }
+    },
+    {
+      "tick": 20,
+      "ordered": 294328,
+      "moving": 276193,
+      "distance": 7721330.163228464,
+      "netGoalProgress": 71463769.00664899,
+      "modes": {
+        "other": 1981922,
+        "flow": 291361,
+        "hold": 8220,
+        "chase": 1884
+      },
+      "onCounts": {
+        "0": 114098,
+        "1": 291361,
+        "2": 1877928
+      },
+      "speedBins": [
+        15732,
+        40755,
+        114779,
+        58316,
+        64746
+      ],
+      "perMode": {
+        "flow": [
+          15639,
+          40230,
+          113130,
+          57828,
+          64534
+        ],
+        "other": [
+          6,
+          258,
+          718,
+          87,
+          14
+        ],
+        "chase": [
+          87,
+          267,
+          931,
+          401,
+          198
+        ]
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 7.659912109375,
+        "spawns": 2290119,
+        "rejectedSpawns": 147723,
+        "relocatedSpawns": 447051,
+        "registered": 2283387,
+        "visited": 2284990,
+        "attempted": 1224006,
+        "moved": 1135475,
+        "blockedOrClipped": 1105362,
+        "simdGroups": 2250146,
+        "overHalo": 0,
+        "footprintMoves": 956980,
+        "scalarLanes": 2166797
+      }
+    },
+    {
+      "tick": 30,
+      "ordered": 292433,
+      "moving": 276165,
+      "distance": 7998361.39021925,
+      "netGoalProgress": 120432751.25492384,
+      "modes": {
+        "other": 1979807,
+        "flow": 289322,
+        "hold": 8662,
+        "chase": 1781
+      },
+      "onCounts": {
+        "0": 149114,
+        "1": 289322,
+        "2": 1841136
+      },
+      "speedBins": [
+        13947,
+        37648,
+        111980,
+        61686,
+        67172
+      ],
+      "perMode": {
+        "flow": [
+          13804,
+          36953,
+          110229,
+          61353,
+          66983
+        ],
+        "other": [
+          8,
+          338,
+          901,
+          75,
+          8
+        ],
+        "chase": [
+          135,
+          357,
+          850,
+          258,
+          181
+        ]
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 7.659912109375,
+        "spawns": 2290119,
+        "rejectedSpawns": 147723,
+        "relocatedSpawns": 447051,
+        "registered": 2279572,
+        "visited": 2281264,
+        "attempted": 1228775,
+        "moved": 1136703,
+        "blockedOrClipped": 1107766,
+        "simdGroups": 2248334,
+        "overHalo": 0,
+        "footprintMoves": 940487,
+        "scalarLanes": 2127132
+      }
+    },
+    {
+      "tick": 40,
+      "ordered": 290711,
+      "moving": 275483,
+      "distance": 8164344.886219677,
+      "netGoalProgress": 171149861.54174253,
+      "modes": {
+        "other": 1976671,
+        "flow": 287029,
+        "chase": 2129,
+        "hold": 9846
+      },
+      "onCounts": {
+        "0": 175151,
+        "1": 287029,
+        "2": 1813495
+      },
+      "speedBins": [
+        12923,
+        36350,
+        109339,
+        62568,
+        69531
+      ],
+      "perMode": {
+        "flow": [
+          12684,
+          35466,
+          107395,
+          62169,
+          69315
+        ],
+        "other": [
+          13,
+          400,
+          1014,
+          114,
+          12
+        ],
+        "chase": [
+          226,
+          484,
+          930,
+          285,
+          204
+        ]
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 7.659912109375,
+        "spawns": 2290119,
+        "rejectedSpawns": 147723,
+        "relocatedSpawns": 447051,
+        "registered": 2275675,
+        "visited": 2277611,
+        "attempted": 1235293,
+        "moved": 1139572,
+        "blockedOrClipped": 1108838,
+        "simdGroups": 2245876,
+        "overHalo": 0,
+        "footprintMoves": 925527,
+        "scalarLanes": 2096265
+      }
+    },
+    {
+      "tick": 50,
+      "ordered": 289010,
+      "moving": 274293,
+      "distance": 8275878.5202091765,
+      "netGoalProgress": 222355750.7648211,
+      "modes": {
+        "other": 1974394,
+        "flow": 284742,
+        "chase": 2725,
+        "hold": 9722
+      },
+      "onCounts": {
+        "0": 192548,
+        "1": 284742,
+        "2": 1794293
+      },
+      "speedBins": [
+        12519,
+        35480,
+        106495,
+        63566,
+        70950
+      ],
+      "perMode": {
+        "flow": [
+          12220,
+          34552,
+          104234,
+          63066,
+          70670
+        ],
+        "other": [
+          6,
+          396,
+          1003,
+          123,
+          15
+        ],
+        "chase": [
+          293,
+          532,
+          1258,
+          377,
+          265
+        ]
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 7.659912109375,
+        "spawns": 2290119,
+        "rejectedSpawns": 147723,
+        "relocatedSpawns": 447051,
+        "registered": 2271583,
+        "visited": 2273585,
+        "attempted": 1225925,
+        "moved": 1126229,
+        "blockedOrClipped": 1097537,
+        "simdGroups": 2242896,
+        "overHalo": 0,
+        "footprintMoves": 904793,
+        "scalarLanes": 2073159
+      }
+    },
+    {
+      "tick": 60,
+      "ordered": 286241,
+      "moving": 271582,
+      "distance": 8327886.150737055,
+      "netGoalProgress": 272970061.52415454,
+      "modes": {
+        "other": 1971779,
+        "flow": 282057,
+        "hold": 10522,
+        "chase": 2729
+      },
+      "onCounts": {
+        "0": 198415,
+        "1": 282057,
+        "2": 1786615
+      },
+      "speedBins": [
+        12516,
+        35011,
+        103062,
+        63374,
+        72278
+      ],
+      "perMode": {
+        "flow": [
+          12195,
+          33993,
+          100924,
+          62907,
+          72038
+        ],
+        "other": [
+          13,
+          381,
+          918,
+          126,
+          17
+        ],
+        "chase": [
+          308,
+          637,
+          1220,
+          341,
+          223
+        ]
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 7.659912109375,
+        "spawns": 2290119,
+        "rejectedSpawns": 147723,
+        "relocatedSpawns": 447051,
+        "registered": 2267087,
+        "visited": 2269262,
+        "attempted": 1227107,
+        "moved": 1120940,
+        "blockedOrClipped": 1094654,
+        "simdGroups": 2239180,
+        "overHalo": 0,
+        "footprintMoves": 891178,
+        "scalarLanes": 2062217
+      }
+    }
+  ],
+  "audit": {
+    "actualBits": 31438775,
+    "expectedBits": 31438775,
+    "registered": 2267087,
+    "activeUnits": 2267087,
+    "positionMismatches": 0,
+    "ok": true
+  },
+  "errors": [],
+  "memory": {
+    "rss": 7640170496,
+    "heapTotal": 1786335232,
+    "heapUsed": 1653503856,
+    "external": 589724011,
+    "arrayBuffers": 587448991
+  }
+}
