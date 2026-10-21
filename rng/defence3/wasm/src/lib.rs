@@ -27,6 +27,8 @@ use core::arch::wasm64::*;
 mod mv;
 mod k;
 mod atlas;
+mod occ;
+mod acq_sample;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -1449,9 +1451,12 @@ unsafe fn acq_structure(
     let mut best_d = f64::INFINITY;
     let mut best = -1i32;
     let zero = i8x16_splat(0);
+    let own16=i8x16_splat(owner as i8);
     let mut gy = y0;
     while gy <= y1 {
         let dy = gy as f64 * tile + half - y;
+        // Structure centres on this row cannot pass the strict range test.
+        if dy*dy>=r2 {gy+=1;continue;}
         let row = (gy * gw) as usize;
         // Sixteen tiles at a time: only those with a structure class (> 0),
         // in order (lanes past the row's end masked off; the array has room).
@@ -1459,7 +1464,11 @@ unsafe fn acq_structure(
         while gx <= x1 {
             let t = row + gx as usize;
             let c16 = v128_load(scls.add(t) as *const v128);
-            let mut bits = i8x16_bitmask(i8x16_gt(c16, zero)) as u32;
+            let cls=v128_bitselect(i8x16_splat(1),c16,i8x16_eq(c16,i8x16_splat(5)));
+            let owners=v128_load(sown.add(t) as *const v128);
+            let eligible=v128_and(i8x16_gt(cls,zero),i8x16_le(cls,i8x16_splat(best_c as i8)));
+            let hostile=v128_not(v128_or(i8x16_eq(owners,own16),i8x16_eq(owners,i8x16_splat(-1))));
+            let mut bits = i8x16_bitmask(v128_and(eligible,hostile)) as u32;
             let rem = x1 - gx + 1;
             if rem < 16 {
                 bits &= (1u32 << rem) - 1;
@@ -1986,6 +1995,17 @@ pub unsafe extern "C" fn acq_scan(
             let cwsf = cws as f32;
             let (xf, yf) = (x as f32, y as f32);
             if cyi >= 0 && cyi < ch {
+                // Establish a nearby bound before scanning the whole row.
+                // Dense battles usually have an enemy in this tile; without
+                // this seed, the first row traverses the entire aggro radius
+                // even after its first few entries find a much closer target.
+                if cxi>=0 && cxi<cw {
+                    let k=(cyi*cw+cxi) as usize;
+                    if *rst.add(k)==ep && *om.add(k)&foe!=0 {
+                        let e0=*rs.add(k) as usize;
+                        acq_run(&c,e0,e0+*rc.add(k) as usize,&mut best,&mut b2,&mut best_id);
+                    }
+                }
                 acq_row(&c, om, foe, cw, cwsf, cyi, 0.0, xf, &mut best, &mut b2, &mut best_id);
             }
             let (mut up, mut dn, mut k) = (true, true, 1i32);

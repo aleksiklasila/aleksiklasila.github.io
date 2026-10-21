@@ -1330,6 +1330,7 @@ function _wsPost() {
     Bp[0] = total; Bp[1] = 16; Bp[2] = WS_K; Bp[3] = TILE; Bp[4] = WS_BUCKET; Bp[7] = TILE * 0.5; Bp[8] = GRID_W; Bp[9] = GRID_H;
     Bp[10] = _wsw ? _wsw.bw : 0; Bp[11] = 1; Bp[12] = total; Bp[13] = HM; Bp[14] = 1;
     Bp[5] = np; Bp[15] = _simParReg['ws.aoff'] ? _simParReg['ws.aoff'].length - 1 : 0;
+    Bp[56]=areaSearchEnabled()?1:0;
     simParallelBackground(SIM_KERNEL_WS_SCAN, Math.ceil(total / 16), WS_LANE);
     _wsPosted = { chunks: 1, CH: total, groups, heal, ordered: false };
 }
@@ -1428,7 +1429,8 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
             if (!u._lastIdleStateTime) u._lastIdleStateTime = gameTime;
             wsRegister(u, WSR_COLLECT, { cfg: RESOURCE_TYPE_LIST.findIndex(c => c.collectorUnitKey === resourceCfg.collectorUnitKey), ou: u._lastIdleStateTime + secondsToTicks(5),
                 ox: gs ? gs.x : NaN, oy: gs ? gs.y : NaN, need: _wsResvBit(u) << 16, my: _wsMyTile(u),
-                r: _getWorkerAutoSearchDistancePx(u), ax: anchor ? anchor.x : NaN, ay: anchor ? anchor.y : NaN });
+                r: _getWorkerAutoSearchDistancePx(u), areaSteps:areaSearchEnabled()?_getWorkerAutoSearchDistanceArea(u):undefined,
+                ax: anchor ? anchor.x : NaN, ay: anchor ? anchor.y : NaN });
             _wsWait(u);
             return;
         }
@@ -1448,6 +1450,7 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
     let origin = _getResourceCollectorSearchOrigin(u, resourceCfg);
     let maxSearchPx = _getWorkerAutoSearchDistancePx(u);
     let maxSearchPxSq = maxSearchPx * maxSearchPx;
+    const areaOnly=areaSearchEnabled(),maxSearchArea=_getWorkerAutoSearchDistanceArea(u);
     let mem = _getResourceCollectorMemory(u);
     let anchorSpawner = null;
     if (_isResourceCollectorSpawnerValidForUnit(u, mem.nextSpawner, resourceCfg)) {
@@ -1467,7 +1470,9 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
         let dx = Number(candidate.x) - origin.x;
         let dy = Number(candidate.y) - origin.y;
         let originDistSq = dx * dx + dy * dy;
-        if (!Number.isFinite(originDistSq) || originDistSq > maxSearchPxSq) return;
+        if (!Number.isFinite(originDistSq)) return;
+        if(areaOnly){if(!_isTargetWithinWorkerSearchLimits(u,origin.x,origin.y,candidate,maxSearchArea))return;}
+        else if(originDistSq > maxSearchPxSq)return;
         if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType, conflictCache)) return;
 
         let originDist = Math.sqrt(originDistSq);
@@ -1483,10 +1488,8 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
     };
 
     // Drops and farms: only those in buckets overlapping the search box.
-    let minGx = Math.max(0, Math.floor((origin.x - maxSearchPx) / TILE));
-    let maxGx = Math.min(GRID_W - 1, Math.floor((origin.x + maxSearchPx) / TILE));
-    let minGy = Math.max(0, Math.floor((origin.y - maxSearchPx) / TILE));
-    let maxGy = Math.min(GRID_H - 1, Math.floor((origin.y + maxSearchPx) / TILE));
+    const searchBox=_workerSearchTileBox(u,origin.x,origin.y,maxSearchPx,0);
+    let minGx=Math.max(0,searchBox[0]),minGy=Math.max(0,searchBox[1]),maxGx=Math.min(GRID_W-1,searchBox[2]),maxGy=Math.min(GRID_H-1,searchBox[3]);
     if (resourceCfg.supportsDropTarget) {
         _forEachStructureInTileBox(_droppedItemsForBuckets(), minGx, minGy, maxGx, maxGy, (drop) => considerCandidate(drop, 'drop', TILE * 0.5));
     }
@@ -1494,7 +1497,8 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
     let mineArray = _getResourceCollectorMineArray(resourceCfg) || [];
     // Only mines inside the search box can pass considerCandidate; visit
     // those via a static bucket index, still in mine array order.
-    for (let index of _getMineIndicesNear(mineArray, origin.x, origin.y, maxSearchPx)) {
+    const mineReach=areaOnly?Math.max(origin.x-minGx*TILE,(maxGx+1)*TILE-origin.x,origin.y-minGy*TILE,(maxGy+1)*TILE-origin.y):maxSearchPx;
+    for (let index of _getMineIndicesNear(mineArray, origin.x, origin.y, mineReach)) {
         let mine = mineArray[index];
         if (!mine) continue;
         if (!(Number.isFinite(mine[resourceCfg.mineStatKey]) && mine[resourceCfg.mineStatKey] > 0)) continue;
@@ -2445,6 +2449,12 @@ function _getWorkerAutoSearchDistanceArea(u) {
     return Math.max(0, distArea);
 }
 
+function _workerSearchTileBox(u,x,y,r,pad=1) {
+    if(areaSearchEnabled())return Array.from(getAreaRangeTileBox(getSourceAreaIdsAtWorld(x,y),Math.floor(_getWorkerAutoSearchDistanceArea(u))));
+    const reach=Math.ceil(r/TILE)+pad,gx=Math.floor(x/TILE),gy=Math.floor(y/TILE);
+    return [gx-reach,gy-reach,gx+reach,gy+reach];
+}
+
 function _isTargetWithinWorkerSearchArea(originX, originY, target, maxSearchArea) {
     if (!target) return false;
     let targetAreaId = Number.isFinite(target.areaId)
@@ -2929,22 +2939,22 @@ function _salvagerFindTarget(u, myGx, myGy) {
     // arrays' order (as a scan of the arrays would meet them).
     // (Those in the search box only, by their buckets.)
     let marked = _salvageMarksCurrent().lists.get(owner) || _NO_SALVAGE_LISTS;
-    let reach = Math.ceil(maxSearch / TILE) + 1;
-    for (let k = 0; k < 3; k++) _forEachStructureInTileBox(marked[k], myGx - reach, myGy - reach, myGx + reach, myGy + reach, (e) => {
+    const box=_workerSearchTileBox(u,u.x,u.y,maxSearch);
+    for (let k = 0; k < 3; k++) _forEachStructureInTileBox(marked[k], box[0],box[1],box[2],box[3], (e) => {
         if (e.owner !== owner || !e.markedForSalvage || getTileEntityRef(e.gx, e.gy) !== e) return;
         // (Cheap tests first: only a nearer one needs the exclusivity check.)
         let d = detHypot(e.x - u.x, e.y - u.y);
-        if (d > maxSearch || !(d < bestDist)) return;
+        if ((!areaSearchEnabled()&&d > maxSearch) || !(d < bestDist)) return;
         if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, e, maxSearchArea)) return;
         if (!_canAssignWorkerTargetExclusive(u, e, null, conflictCache)) return;
         bestDist = d; bestItem = e;
     });
     // Marked cell items in the search box (in the owner's cells).
-    _forEachStructureInTileBox(marked[3], myGx - reach, myGy - reach, myGx + reach, myGy + reach, (item) => {
+    _forEachStructureInTileBox(marked[3], box[0],box[1],box[2],box[3], (item) => {
         const cell = grid[item.gy] && grid[item.gy][item.gx];
         if (!cell || cell.item !== item || cell.owner !== owner || !item.markedForSalvage) return;
         let d = detHypot(item.x - u.x, item.y - u.y);
-        if (d > maxSearch || !(d < bestDist)) return;
+        if ((!areaSearchEnabled()&&d > maxSearch) || !(d < bestDist)) return;
         if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, item, maxSearchArea)) return;
         if (!_canAssignWorkerTargetExclusive(u, item, null, conflictCache)) return;
         bestDist = d; bestItem = item;
@@ -3308,11 +3318,11 @@ function _findNearestQueuedSpawnerNeedingWork(u, originX = u.x, originY = u.y) {
     // effects).
     // Only the owner's barracks and spawners in buckets around the search
     // box (the pick breaks ties by target: the order does not matter).
-    let reach = Math.ceil(maxSearch / TILE) + 1, ogx = Math.floor(originX / TILE), ogy = Math.floor(originY / TILE);
+    const box=_workerSearchTileBox(u,originX,originY,maxSearch);
     let owner = u.owner;
-    _forEachWorkInTileBox(_ownedQueueSpawners(owner), ogx - reach, ogy - reach, ogx + reach, ogy + reach, 'queue', (s) => _isHealerQueueTarget(s, owner), (s) => {
+    _forEachWorkInTileBox(_ownedQueueSpawners(owner), box[0],box[1],box[2],box[3], 'queue', (s) => _isHealerQueueTarget(s, owner), (s) => {
         let d = detHypot(s.x - originX, s.y - originY);
-        if (d > maxSearch) return;
+        if (!areaSearchEnabled()&&d > maxSearch) return;
         if (!_isHealerQueueTarget(s, owner)) return;
         if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, s, maxSearchArea)) return;
         candidates.push({
@@ -3398,11 +3408,11 @@ function _findNearestResearchBuildingNeedingWork(u) {
     let maxSearch = _getResearcherAutoSearchDistancePx(u);
     let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     // Only buildings in the search box can be within the search distance.
-    let reach = Math.ceil(maxSearch / TILE) + 1, ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+    const box=_workerSearchTileBox(u,u.x,u.y,maxSearch);
     let owner = u.owner;
-    _forEachWorkInTileBox(_getWorkerSpawnersByType('research'), ugx - reach, ugy - reach, ugx + reach, ugy + reach, 'research:' + owner, (s) => _isResearcherTargetBuilding(s, owner), (s) => {
+    _forEachWorkInTileBox(_getWorkerSpawnersByType('research'), box[0],box[1],box[2],box[3], 'research:' + owner, (s) => _isResearcherTargetBuilding(s, owner), (s) => {
         let d = detHypot(s.x - u.x, s.y - u.y);
-        if (d > maxSearch) return;
+        if (!areaSearchEnabled()&&d > maxSearch) return;
         if (!_isResearcherTargetBuilding(s, owner)) return;
         if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, s, maxSearchArea)) return;
         candidates.push({
@@ -3628,7 +3638,7 @@ function _findNearestDamagedFriendlyUnit(u, originX = u.x, originY = u.y) {
         let dx = tx0 - originX;
         let dy = ty0 - originY;
         let distSq = dx * dx + dy * dy;
-        if (distSq > maxSearchSq) continue;
+        if (!areaSearchEnabled()&&distSq > maxSearchSq) continue;
         if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, target, maxSearchArea)) continue;
 
         let worldDistSq = distSq;
@@ -3671,7 +3681,9 @@ function _healerFindTarget(u, myGx, myGy) {
     }
     if (queueTarget) {
         let qd = detHypot(queueTarget.x - origin.x, queueTarget.y - origin.y);
-        if (!hasPinnedQueueTarget && qd > maxSearch) {
+        if (!hasPinnedQueueTarget && (areaSearchEnabled()
+            ? !_isTargetWithinWorkerSearchLimits(u,origin.x,origin.y,queueTarget,_getWorkerAutoSearchDistanceArea(u))
+            : qd > maxSearch)) {
             queueTarget = null;
             _clearHealerQueueCommit(u);
         }
@@ -3800,21 +3812,21 @@ function _findNearestUnderConstruction(u, originX = u.x, originY = u.y) {
     let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     // The owner's structures in buckets around the search box, checked live
     // (the pick breaks ties by target, so the visiting order does not matter).
-    let reach = Math.ceil(maxSearch / TILE) + 2, ogx = Math.floor(originX / TILE), ogy = Math.floor(originY / TILE);
+    const box=_workerSearchTileBox(u,originX,originY,maxSearch,2);
     let B = STRUCTURE_BUCKET_TILES, X = _ownedStructIndex;
-    let bx0 = Math.max(0, Math.floor((ogx - reach) / B)), bx1 = Math.min(X.cols - 1, Math.floor((ogx + reach) / B));
-    let by0 = Math.max(0, Math.floor((ogy - reach) / B)), by1 = Math.min(X.rows - 1, Math.floor((ogy + reach) / B));
+    let bx0 = Math.max(0, Math.floor(box[0] / B)), bx1 = Math.min(X.cols - 1, Math.floor(box[2] / B));
+    let by0 = Math.max(0, Math.floor(box[1] / B)), by1 = Math.min(X.rows - 1, Math.floor(box[3] / B));
     for (let by = by0; by <= by1; by++) for (let bx = bx0; bx <= bx1; bx++) {
         let list = buckets[by * X.cols + bx];
         if (!list) continue;
         let work = _bucketWorkList(list, by * X.cols + bx, 'build', (b) => _isBuilderWorkTarget(b, owner));
         for (let i = 0; i < work.length; i++) {
             let b = work[i];
-            if (Math.abs(b.x - originX) > maxSearch || Math.abs(b.y - originY) > maxSearch) continue;
+            if (!areaSearchEnabled()&&(Math.abs(b.x - originX) > maxSearch || Math.abs(b.y - originY) > maxSearch)) continue;
             if (!_isBuilderWorkTarget(b, owner)) continue;
             if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, b, maxSearchArea)) continue;
             let d = detHypot(b.x - originX, b.y - originY);
-            if (d > maxSearch) continue;
+            if (!areaSearchEnabled()&&d > maxSearch) continue;
             candidates.push({ target: b, dist: d });
         }
     }

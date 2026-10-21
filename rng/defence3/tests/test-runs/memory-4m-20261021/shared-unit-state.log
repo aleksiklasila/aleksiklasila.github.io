@@ -1,0 +1,1 @@
+PASS: shared unit growth, Float32 precision, stale references, slot reuse, snapshot restore; scalar frame oracle: { compared: 1334970, units: 1872, capacity: 4096 }

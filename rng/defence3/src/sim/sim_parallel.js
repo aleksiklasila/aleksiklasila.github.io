@@ -175,6 +175,17 @@ const SIM_KERNEL_UNIT_RETIRE = 49;
 const SIM_REROUTE_TICKS = 32;
 const SIM_KERNEL_SEP_PACK = 50, SIM_KERNEL_SEP_MARK = 51, SIM_KERNEL_SEP_PAIRS = 52, SIM_KERNEL_ZERO = 53, SIM_KERNEL_SPATIAL_PREFIX = 54;
 const SIM_KERNEL_AREA_BOX = 55, SIM_KERNEL_INDEX_MERGE = 56;
+const SIM_KERNEL_MOVE_OCCUPANCY = 89;
+const _simOccW = _simWK(['occ.bits','occ.mask','occ.x','occ.y','occ.radius','occ.layer','occ.active',
+    'unit.x','unit.y','unit.prevX','unit.prevY','unit.vx','unit.vy','unit.dead','unit.live',
+    'unit.spTile','unit.sepKey','unit.spArea','unit.spMvOld','unit.spMvNew','unit.spMvOwn','unit.owner','unit.spOwner',
+    'occ.areaGrid','occ.eslot','occ.start','occ.count','occ.stamp','occ.stats','unit.mvSteady','unit.mvCT','unit.mvCD','occ.offsets','occ.config']);
+SIM_KERNELS[SIM_KERNEL_MOVE_OCCUPANCY] = function(R,P,c){
+    if(!_simMoveWasm(R,P))_simNoWasm('MOVE_OCCUPANCY');
+    const A=_simWPtrs(_simOccW);if(!A)_simNoWasm('MOVE_OCCUPANCY');
+    for(let i=0;i<A.length;i++)_simWasmArgI[512+i]=_simWEnc(A[i]);
+    _simWasmX.mv_move_occupancy(_simWasmArgsW,c);
+};
 
 // One tick of an armed mover (see simMoveTryArm in unit.js): Unit.update
 // for a unit marching along its path with nothing to react to, straight on
@@ -1676,7 +1687,7 @@ SIM_KERNELS[SIM_KERNEL_WS_SELECT] = function (R, P, chunk) { _simRust(_simWsSele
 // owner, [14] 1: requests by position, [15] areas. Rust: k.rs k_ws_scan.
 const _simWsScanW = _simWK(['ws.rkind', 'ws.rowner', 'ws.rox', 'ws.roy', 'ws.rux', 'ws.ruy', 'ws.rr', 'ws.rak', 'ws.rax', 'ws.ray', 'ws.rgrp', 'ws.rneed', 'ws.rjid', 'ws.rcur', 'ws.rmy',
     'ws.rpre', 'ws.res', 'ws.score', '?ws.ures', '?ws.agrid', '?ws.aoff', '?ws.anb', '?wsh.x', '?wsh.y', '?wsh.a', '?wsh.n', '?wsw.flags', '?wsw.own', '?wsw.area', '?wsw.resv',
-    '?wsg0.meta', '?wsg0.sx', '?wsg0.sy', '?wsg0.st', '?wsg0.so', '?wsg0.pgx', '?wsg0.pgy', '?wsg0.po', '?wsg0.pid', '?wsg0.px', '?wsg0.py', '?wsg0.bs', '?wsg0.bc', '?wsg0.bi', '?wsg1.meta', '?wsg1.sx', '?wsg1.sy', '?wsg1.st', '?wsg1.so', '?wsg1.pgx', '?wsg1.pgy', '?wsg1.po', '?wsg1.pid', '?wsg1.px', '?wsg1.py', '?wsg1.bs', '?wsg1.bc', '?wsg1.bi', '?wsg2.meta', '?wsg2.sx', '?wsg2.sy', '?wsg2.st', '?wsg2.so', '?wsg2.pgx', '?wsg2.pgy', '?wsg2.po', '?wsg2.pid', '?wsg2.px', '?wsg2.py', '?wsg2.bs', '?wsg2.bc', '?wsg2.bi', '?wsg3.meta', '?wsg3.sx', '?wsg3.sy', '?wsg3.st', '?wsg3.so', '?wsg3.pgx', '?wsg3.pgy', '?wsg3.po', '?wsg3.pid', '?wsg3.px', '?wsg3.py', '?wsg3.bs', '?wsg3.bc', '?wsg3.bi', '?wsg4.meta', '?wsg4.sx', '?wsg4.sy', '?wsg4.st', '?wsg4.so', '?wsg4.pgx', '?wsg4.pgy', '?wsg4.po', '?wsg4.pid', '?wsg4.px', '?wsg4.py', '?wsg4.bs', '?wsg4.bc', '?wsg4.bi', '?wsg5.meta', '?wsg5.sx', '?wsg5.sy', '?wsg5.st', '?wsg5.so', '?wsg5.pgx', '?wsg5.pgy', '?wsg5.po', '?wsg5.pid', '?wsg5.px', '?wsg5.py', '?wsg5.bs', '?wsg5.bc', '?wsg5.bi', '?wsg6.meta', '?wsg6.sx', '?wsg6.sy', '?wsg6.st', '?wsg6.so', '?wsg6.pgx', '?wsg6.pgy', '?wsg6.po', '?wsg6.pid', '?wsg6.px', '?wsg6.py', '?wsg6.bs', '?wsg6.bc', '?wsg6.bi', '?wsg7.meta', '?wsg7.sx', '?wsg7.sy', '?wsg7.st', '?wsg7.so', '?wsg7.pgx', '?wsg7.pgy', '?wsg7.po', '?wsg7.pid', '?wsg7.px', '?wsg7.py', '?wsg7.bs', '?wsg7.bc', '?wsg7.bi', '?wsw.cnt']);
+    '?wsg0.meta', '?wsg0.sx', '?wsg0.sy', '?wsg0.st', '?wsg0.so', '?wsg0.pgx', '?wsg0.pgy', '?wsg0.po', '?wsg0.pid', '?wsg0.px', '?wsg0.py', '?wsg0.bs', '?wsg0.bc', '?wsg0.bi', '?wsg1.meta', '?wsg1.sx', '?wsg1.sy', '?wsg1.st', '?wsg1.so', '?wsg1.pgx', '?wsg1.pgy', '?wsg1.po', '?wsg1.pid', '?wsg1.px', '?wsg1.py', '?wsg1.bs', '?wsg1.bc', '?wsg1.bi', '?wsg2.meta', '?wsg2.sx', '?wsg2.sy', '?wsg2.st', '?wsg2.so', '?wsg2.pgx', '?wsg2.pgy', '?wsg2.po', '?wsg2.pid', '?wsg2.px', '?wsg2.py', '?wsg2.bs', '?wsg2.bc', '?wsg2.bi', '?wsg3.meta', '?wsg3.sx', '?wsg3.sy', '?wsg3.st', '?wsg3.so', '?wsg3.pgx', '?wsg3.pgy', '?wsg3.po', '?wsg3.pid', '?wsg3.px', '?wsg3.py', '?wsg3.bs', '?wsg3.bc', '?wsg3.bi', '?wsg4.meta', '?wsg4.sx', '?wsg4.sy', '?wsg4.st', '?wsg4.so', '?wsg4.pgx', '?wsg4.pgy', '?wsg4.po', '?wsg4.pid', '?wsg4.px', '?wsg4.py', '?wsg4.bs', '?wsg4.bc', '?wsg4.bi', '?wsg5.meta', '?wsg5.sx', '?wsg5.sy', '?wsg5.st', '?wsg5.so', '?wsg5.pgx', '?wsg5.pgy', '?wsg5.po', '?wsg5.pid', '?wsg5.px', '?wsg5.py', '?wsg5.bs', '?wsg5.bc', '?wsg5.bi', '?wsg6.meta', '?wsg6.sx', '?wsg6.sy', '?wsg6.st', '?wsg6.so', '?wsg6.pgx', '?wsg6.pgy', '?wsg6.po', '?wsg6.pid', '?wsg6.px', '?wsg6.py', '?wsg6.bs', '?wsg6.bc', '?wsg6.bi', '?wsg7.meta', '?wsg7.sx', '?wsg7.sy', '?wsg7.st', '?wsg7.so', '?wsg7.pgx', '?wsg7.pgy', '?wsg7.po', '?wsg7.pid', '?wsg7.px', '?wsg7.py', '?wsg7.bs', '?wsg7.bc', '?wsg7.bi', '?wsw.cnt', '?area.bounds']);
 SIM_KERNELS[SIM_KERNEL_WS_SCAN] = function (R, P, chunk) { _simRust(_simWsScanW, P, chunk, 'k_ws_scan', 'WS_SCAN'); };
 
 // The units' upkeep bins made anew (main.js _upkUnitsBuild, after a
@@ -1835,7 +1846,16 @@ SIM_KERNELS[SIM_KERNEL_ACQ_SNAP] = function (R, P, chunk) { _simRust(_simAcqSnap
 const _simAcqScanW = _simWK(['acq.scls', 'acq.sown', '?acq.hss', 'acq.sout', 'acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.rng', 'acq.id',
     'acq.out', 'acq.tid', 'acq.agrid', 'acq.cover', 'acq.hs', 'acq.rs', 'acq.rc', 'acq.rst', 'acq.es', 'acq.om', '?acq.omt',
     '?acq.ex', '?acq.ey', '?acq.eo', '?acq.ea', '?acq.eid']);
+// Experimental area-packed acquisition. Zero sample budget keeps the exact scan.
+const SIM_KERNEL_ACQ_AREA_BUILD=90;
+const _simAcqSampleW=_simWK(['acq.scls','acq.sown','?acq.hss','acq.sout','acq.x','acq.y','acq.own','acq.flags','acq.cmd','acq.rng','acq.id',
+    'acq.out','acq.tid','acq.agrid','acq.cover','acq.hs','acq.rs','acq.rc','acq.rst','acq.es','acq.om','?acq.omt',
+    '?acq.ex','?acq.ey','?acq.eo','?acq.ea','?acq.eid','acq.saOff','acq.saX','acq.saY','acq.saOwner','acq.saId','acq.saSlot',
+    'acq.saNear','acq.saNearN','acq.saCount','acq.saCursor','acq.saSeen','acq.aoff','acq.anb',
+    '?acq.saNearest','?acq.saDistance','?acq.saQueue','?acq.saStructure','?acq.saStructureDistance']);
+SIM_KERNELS[SIM_KERNEL_ACQ_AREA_BUILD]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_build','ACQ_AREA_BUILD');};
 SIM_KERNELS[SIM_KERNEL_ACQ_SCAN] = function (R, P, chunk) {
+    if(P[24]>0||P[28]===1){_simRust(_simAcqSampleW,P,chunk,'k_acq_sample','ACQ_SAMPLE');return;}
     // (The commands as integers: the snapshot's column is Int32. P[21] 1:
     // acq.omt and the packed entries made by the job's first stage,
     // SIM_KERNEL_ACQ_OMT.)
@@ -1867,7 +1887,7 @@ const SIM_KERNEL_ACQ_OMT = 59;
 // rest of the job reads only those, so the next index may be built (the
 // tick's end, spatialIndexPrebuild) while the scan runs on; only this stage
 // is waited for there (acqTierIndexWait).
-const _simAcqOmtW = _simWK(['acq.om', 'acq.omt', 'acq.es', 'acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.id', 'acq.agrid', 'acq.ex', 'acq.ey', 'acq.eo', 'acq.ea', 'acq.eid',
+const _simAcqOmtW = _simWK(['acq.om', 'acq.omt', 'acq.es', 'acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.id', 'acq.agrid', '?acq.ex', '?acq.ey', '?acq.eo', '?acq.ea', '?acq.eid',
     'acq.rsL', 'acq.rcL', 'acq.rstL', 'acq.omL', 'acq.esL', 'acq.rs', 'acq.rc', 'acq.rst']);
 SIM_KERNELS[SIM_KERNEL_ACQ_OMT] = function (R, P, chunk) {
     const CW = P[0] | 0, CH = P[1] | 0, per = P[2] | 0, y0 = chunk * per, y1 = Math.min(CH, y0 + per);
@@ -1880,7 +1900,7 @@ SIM_KERNELS[SIM_KERNEL_ACQ_OMT] = function (R, P, chunk) {
             if (y0 < y1) _simWasmX.acq_copy(A[14], A[15], A[16], A[17], A[19], A[20], A[21], A[0], CW, y0, y1);
             if (e0 < e1) _simWasmX.acq_copy_es(A[18], A[2], e0, e1);
             if (y0 < y1) _simWasmX.acq_omt(A[0], A[1], CW, CH, y0, y1);
-            if (e0 < e1) _simWasmX.acq_pack(A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10], A[11], A[12], A[13], e0, e1, tile, GW, GH);
+            if (e0 < e1 && !P[8]) _simWasmX.acq_pack(A[2], A[3], A[4], A[5], A[6], A[7], A[8], A[9], A[10], A[11], A[12], A[13], e0, e1, tile, GW, GH);
             return;
         }
     }
@@ -1923,7 +1943,7 @@ function _simAcqStructure(SCLS, SOWN, HSS, AG, COVF, cbase, owner, x, y, r, tile
 // targets' sums (wasm/src/k.rs k_hits).
 const SIM_KERNEL_HITS = 60;
 const _simHitsW = _simWK(['hit.q', 'hit.dmg', 'hit.sty', 'hit.wk', '?mv.hita', '?mv.hitt', '?mv.hitc', '?-' , 'unit.atkSty', 'unit.atkWatch', 'unit.owner', 'unit.id',
-    'unit.hAcc', 'unit.hTouch', 'unit.hSty', 'unit.hBurnD', 'unit.hPoiD', 'unit.hWatchK', 'hit.tlist', 'hit.plist', 'hit.cnt', '?unit.atkN', 'unit.statRow', 'eff.hot']);
+    'unit.hAcc', 'unit.hTouch', 'unit.hSty', 'unit.hBurnD', 'unit.hPoiD', 'unit.hWatchK', 'hit.tlist', 'hit.plist', 'hit.cnt', '?unit.atkN', 'unit.statRow', 'eff.hot', '?occ.offsets']);
 SIM_KERNELS[SIM_KERNEL_HITS] = function (R, P, chunk) { _simRust(_simHitsW, P, chunk, 'k_hits', 'HITS'); };
 // The units hit this tick: their hits' sum off their energy, statuses, a
 // watch, fallen (wasm/src/k.rs k_hits_apply).
@@ -1954,5 +1974,5 @@ const _simIxRunsW = [_simWK(['ix.slots', 'ix.ordC', 'ix.keys', 'ix.start', 'ix.c
     _simWK(['ix.slots', 'ix.ordA', 'ix.areas', 'ix.astart', 'ix.acnt', 'ix.listed', 'ix.aown', 'unit.owner'])];
 SIM_KERNELS[SIM_KERNEL_INDEX_RUNS] = function (R, P, chunk) { _simRust(_simIxRunsW[P[14] === 1 ? 1 : 0], P, chunk, 'k_ix_runs', 'INDEX_RUNS'); };
 
-const _simIxKeysW = _simWK(['ix.slots', 'unit.x', 'unit.y', 'unit.dead', 'ix.agrid', 'ix.keys', 'ix.areas', 'ix.bad']);
+const _simIxKeysW = _simWK(['ix.slots', 'unit.x', 'unit.y', 'unit.dead', 'ix.agrid', 'ix.keys', '?ix.areas', 'ix.bad']);
 SIM_KERNELS[SIM_KERNEL_INDEX_KEYS] = function (R, P, chunk) { _simRust(_simIxKeysW, P, chunk, 'k_ix_keys', 'INDEX_KEYS'); };

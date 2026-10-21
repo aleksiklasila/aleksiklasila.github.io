@@ -1,0 +1,2 @@
+wasm-opt -O3: 246328 -> 239416 bytes
+wrote tests\test-runs\movement-profile-20261021\profile-baseline64.js: 239416 bytes, 83 kernels, hash c3136a571d822a17

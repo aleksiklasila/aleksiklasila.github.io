@@ -2498,6 +2498,7 @@ function snapDecodeState(S, options = null) {
         // copy of the world is for drawing; it has no kernels, and the worker
         // restores its own): a join or host change there threw.
         const pageOnly = typeof simClientEnabled !== 'undefined' && simClientEnabled;
+        if (!pageOnly && typeof occupancyRebuild === 'function') occupancyRebuild();
         if (!pageOnly && typeof navRestoreState === 'function') navRestoreState(S.g ? S.g.nav : null);
         if (!pageOnly && typeof navFieldsRestore === 'function') navFieldsRestore();
         // Rebuilt from the restored world on its first query.

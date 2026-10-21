@@ -205,6 +205,7 @@ function _moveUnitSpatial(u, gx, gy, tile) {
 }
 
 function removeUnitSpatial(u) {
+    if (typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED) occupancyRelease(u);
     if (_sxPre && typeof _inGameTick !== 'undefined' && !_inGameTick) spatialIndexInvalidate();
     let indexed = u._spatialEpoch === spatialEpoch && u._spatialKey !== undefined;
     if (indexed) _spatialCountUnit(u, u._spatialKey, u._spatialOwner, -1);
@@ -472,7 +473,9 @@ function _spatialIndexRebuildParallel() {
     }
     if (X.cap < n) {
         X.cap = simReserveCap(n, 4096);
-        for (const k of ['keys', 'areas']) { X[k] = simSharedArray(Int32Array, X.cap); simParallelBind('ix.' + k, X[k]); }
+        // Queries use the tile index; the old per-unit area-key output was
+        // still allocated and written although its area sort is disabled.
+        X.keys=simSharedArray(Int32Array,X.cap);simParallelBind('ix.keys',X.keys);
     }
     _spatialEntryArrays(n);
     simParallelBind('sep.eslot', _sxESlot); simParallelBind('sep.ekey', _sxEKey);
@@ -657,6 +660,7 @@ function _spatialAreaGridFlat() {
     return f;
 }
 
+function areaSearchEnabled() { return typeof SIM_ACQ_AREA_TARGETS!=='undefined'&&SIM_ACQ_AREA_TARGETS; }
 function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
     if (typeof visitor !== 'function') return false;
     let sources = getSourceAreaIdsAtWorld(wx, wy);
@@ -675,7 +679,7 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
         if (box[2] < 0 || !_regionMayHaveEnemyUnits(enemyFilter, Math.floor(box[0] / cs), Math.floor(box[1] / cs), Math.floor(box[2] / cs), Math.floor(box[3] / cs))) return false;
     }
     let unitTypeFilter = (opts && typeof opts.unitType === 'string' && opts.unitType.length > 0) ? opts.unitType : '';
-    let areaOnly = !!(opts && opts.areaOnly);
+    let areaOnly = areaSearchEnabled() || !!(opts && opts.areaOnly);
     // (As forEachUnitInRange's.)
     let tickStart = !!(opts && opts.tickStart);
     let areaIds = getAreaIdsWithinDistanceOfSources(sources, maxDistance);
@@ -699,11 +703,12 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
             if (playerFilter >= 0 && u.owner !== playerFilter) continue;
             if (enemyFilter >= 0 && u.owner === enemyFilter) continue;
             if (unitTypeFilter && u.unitType !== unitTypeFilter) continue;
-            let dx = (Number(tickStart ? _unitTickX(u) : u.x) || 0) - wx;
-            let dy = (Number(tickStart ? _unitTickY(u) : u.y) || 0) - wy;
-            let hitRadius = Math.max(0, Number(u.r) || 0);
-            let maxHitRangePx = maxRangePx + hitRadius;
-            if (!areaOnly && (dx * dx + dy * dy) > (maxHitRangePx * maxHitRangePx)) continue;
+            if (!areaOnly) {
+                let dx = (Number(tickStart ? _unitTickX(u) : u.x) || 0) - wx;
+                let dy = (Number(tickStart ? _unitTickY(u) : u.y) || 0) - wy;
+                let maxHitRangePx = maxRangePx + Math.max(0, Number(u.r) || 0);
+                if (dx * dx + dy * dy > maxHitRangePx * maxHitRangePx) continue;
+            }
             if (predicate && !predicate(u)) continue;
             if (visitor(u, areaId) === true) return true;
         }

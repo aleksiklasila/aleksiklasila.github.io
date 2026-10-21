@@ -1,0 +1,1 @@
+PASS: healer top-K matches full-sort oracle across slot layouts; worker replies ordered without padding/empty results.

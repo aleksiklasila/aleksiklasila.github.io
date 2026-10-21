@@ -1,0 +1,149 @@
+   Compiling defence3_sim v0.1.0 (Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\wasm)
+warning: value assigned to `done` is never read
+    --> src\mv.rs:2380:13
+     |
+2380 |             done = valid; known = 0;
+     |             ^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+     = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `moved`
+    --> src\mv.rs:2635:9
+     |
+2635 |     let moved = v128_and(go, cross);
+     |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_moved`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+    --> src\mv.rs:4276:5
+     |
+4276 |     unsafe { f32x4_extract_lane::<0>(f32x4_floor(f32x4_splat(v))) }
+     |     ^^^^^^ unnecessary `unsafe` block
+     |
+     = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `rng`
+    --> src\k.rs:1658:39
+     |
+1658 |     let (x0, y0, own, dead, sep, cmd, rng, id, acqb) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i8>(2), k.p::<u8>(3), k.p::<u32>(4), k...
+     |                                       ^^^ help: if this is intentional, prefix it with an underscore: `_rng`
+
+warning: unused variable: `admg`
+    --> src\k.rs:1662:32
+     |
+1662 |     let (ucm, uct, uctid, uwk, admg, rangek) = (k.p::<u8>(19), k.p::<i32>(20), k.p::<i32>(21), k.p::<u8>(22), k.p::<f32>(23), k.p:...
+     |                                ^^^^ help: if this is intentional, prefix it with an underscore: `_admg`
+
+warning: unused variable: `adm`
+    --> src\k.rs:1988:10
+     |
+1988 |     let (adm, ast, awt, own, uid) = (k.p::<f32>(7), k.p::<u8>(8), k.p::<i32>(9), k.p::<i8>(10), k.p::<i32>(11));
+     |          ^^^ help: if this is intentional, prefix it with an underscore: `_adm`
+
+warning: unused variable: `r_cd`
+    --> src\k.rs:4440:16
+     |
+4440 |     let (r_cb, r_cd, r_dmg, _r_vis, r_chs) = (k.p::<f32>(31), k.p::<f32>(32), k.p::<f32>(33), k.p::<f32>(34), k.p::<f32>(35));
+     |                ^^^^ help: if this is intentional, prefix it with an underscore: `_r_cd`
+
+warning: unused variable: `r_chs`
+    --> src\k.rs:4440:37
+     |
+4440 |     let (r_cb, r_cd, r_dmg, _r_vis, r_chs) = (k.p::<f32>(31), k.p::<f32>(32), k.p::<f32>(33), k.p::<f32>(34), k.p::<f32>(35));
+     |                                     ^^^^^ help: if this is intentional, prefix it with an underscore: `_r_chs`
+
+warning: unused variable: `chs`
+    --> src\k.rs:4441:31
+     |
+4441 |     let (srow, on, fl, reach, chs, spd) = (k.p::<i16>(22), k.p::<u8>(36), k.p::<u8>(37), k.p::<u8>(38), k.p::<f32>(39), k.p::<f32>...
+     |                               ^^^ help: if this is intentional, prefix it with an underscore: `_chs`
+
+warning: unused variable: `spd`
+    --> src\k.rs:4441:36
+     |
+4441 |     let (srow, on, fl, reach, chs, spd) = (k.p::<i16>(22), k.p::<u8>(36), k.p::<u8>(37), k.p::<u8>(38), k.p::<f32>(39), k.p::<f32>...
+     |                                    ^^^ help: if this is intentional, prefix it with an underscore: `_spd`
+
+warning: unused variable: `cost`
+    --> src\k.rs:4442:10
+     |
+4442 |     let (cost, rdc, rac, shoot, rkc, lz) = (k.p::<f32>(41), k.p::<u8>(42), k.p::<u8>(43), k.p::<u8>(44), k.p::<u8>(45), k.p::<u8>(...
+     |          ^^^^ help: if this is intentional, prefix it with an underscore: `_cost`
+
+warning: unused variable: `cb`
+    --> src\k.rs:4443:10
+     |
+4443 |     let (cb, acd, admg, area, en, maxe, abok) = (k.p::<f32>(47), k.p::<f32>(48), k.p::<f32>(49), k.p::<i32>(50), k.p::<f32>(51), k...
+     |          ^^ help: if this is intentional, prefix it with an underscore: `_cb`
+
+warning: unused variable: `acd`
+    --> src\k.rs:4443:14
+     |
+4443 |     let (cb, acd, admg, area, en, maxe, abok) = (k.p::<f32>(47), k.p::<f32>(48), k.p::<f32>(49), k.p::<i32>(50), k.p::<f32>(51), k...
+     |              ^^^ help: if this is intentional, prefix it with an underscore: `_acd`
+
+warning: unused variable: `admg`
+    --> src\k.rs:4443:19
+     |
+4443 |     let (cb, acd, admg, area, en, maxe, abok) = (k.p::<f32>(47), k.p::<f32>(48), k.p::<f32>(49), k.p::<i32>(50), k.p::<f32>(51), k...
+     |                   ^^^^ help: if this is intentional, prefix it with an underscore: `_admg`
+
+warning: value assigned to `qt` is never read
+   --> src\atlas.rs:369:26
+    |
+369 |             let (mut qh, mut qt) = (0usize, 0usize);
+    |                          ^^^^^^ this value is reassigned later and never used
+370 |             *queue = b as i32;
+371 |             qt = 1;
+    |             ------ `qt` is overwritten here before the previous value is read
+
+warning: function `q8_of` is never used
+   --> src\lib.rs:156:4
+    |
+156 | fn q8_of(v: f64) -> i32 { to_i32(floor(v * Q8_SCALE + 0.5)) }
+    |    ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `ld_i8x4` is never used
+    --> src\mv.rs:1691:11
+     |
+1691 | unsafe fn ld_i8x4(p: *const i8) -> v128 {
+     |           ^^^^^^^
+
+warning: fields `q`, `iq`, and `itile` are never read
+    --> src\mv.rs:3945:5
+     |
+3941 | struct PushC {
+     |        ----- fields in this struct
+...
+3945 |     q: v128,
+     |     ^
+3946 |     iq: v128,
+     |     ^^
+3947 |     itile: v128,
+     |     ^^^^^
+
+warning: method `of4` is never used
+  --> src\k.rs:63:19
+   |
+51 | impl TileQ {
+   | ---------- method in this implementation
+...
+63 |     pub unsafe fn of4(&self, v: v128) -> v128 {
+   |                   ^^^
+
+warning: fields `planes` and `diag` are never read
+ --> src\occ.rs:5:93
+  |
+5 | struct Grid { bits:*mut u32, mask:*const i8, w:i32, h:i32, stride:i32, plane:i32, cell:i32, planes:i32, diag:*mut u32 }
+  |        ---- fields in this struct                                                           ^^^^^^      ^^^^
+
+warning: `defence3_sim` (lib) generated 20 warnings (run `cargo fix --lib -p defence3_sim` to apply 12 suggestions)
+    Finished `release` profile [optimized] target(s) in 9.93s
+wasm-opt -O3: 254301 -> 246612 bytes
+wrote tests\test-runs\tps-next-20261021\seed-prof64.js: 246612 bytes, 86 kernels, hash 83476671e1a1c0a6
+(node:16156) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)

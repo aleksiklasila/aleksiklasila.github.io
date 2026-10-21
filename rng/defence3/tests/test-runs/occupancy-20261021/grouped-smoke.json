@@ -1,0 +1,3870 @@
+{
+  "node": "v24.19.0",
+  "cpu": "AMD Ryzen 7 4800H with Radeon Graphics         ",
+  "initial": {
+    "units": 40000,
+    "towers": 1250,
+    "groups": 753,
+    "map": [
+      128,
+      128
+    ]
+  },
+  "final": {
+    "units": 38058,
+    "towers": 1250,
+    "tick": 7,
+    "hash": "ee4a8fd1",
+    "parts": {
+      "time": "e47aafa5",
+      "players": "dba14087",
+      "units": "c6a406df",
+      "towers": "f0af3cc1",
+      "barracks": "4b95f515",
+      "spawners": "4b95f515",
+      "floor": "811c9dc5",
+      "mines": "9be17165"
+    }
+  },
+  "ticks": 5,
+  "warmup": 2,
+  "warmupMs": [
+    659.7583,
+    34.65520000000015
+  ],
+  "measuredStart": 1792534637885,
+  "measuredEnd": 1792534637989,
+  "pmc": null,
+  "group": 32,
+  "helpers": 7,
+  "dk": 1,
+  "chunkSize": 1,
+  "occupancy": true,
+  "occupancyPlanes": 1,
+  "occupancyAuditResult": {
+    "actualBits": 342522,
+    "expectedBits": 342522,
+    "registered": 38058,
+    "activeUnits": 38058,
+    "positionMismatches": 0,
+    "ok": true
+  },
+  "packed": true,
+  "contactBudget": 8,
+  "sharedStats": true,
+  "cachedLayout": false,
+  "statLayout": "soa",
+  "referenceStorage": false,
+  "referenceKernel": false,
+  "referenceCollect": false,
+  "shareNavigation": true,
+  "tickMs": {
+    "mean": 19.04290000000001,
+    "p50": 13.367699999999786,
+    "p95": 35.08089999999993
+  },
+  "tps": 52.51301009825181,
+  "setup": {
+    "units": 40000,
+    "towers": 1250,
+    "groups": 753,
+    "map": [
+      128,
+      128
+    ],
+    "ms": 1957.5262,
+    "heap": {
+      "ready": true,
+      "kernels": true,
+      "wasm64": true,
+      "hash": "ef0d47109ac43132",
+      "error": null,
+      "memoryMB": 74,
+      "liveMB": 25,
+      "peakMB": 25,
+      "freeMB": 0,
+      "arrays": 226,
+      "pendingFrees": 0
+    },
+    "memory": {
+      "rss": 400859136,
+      "heapTotal": 210112512,
+      "heapUsed": 91438720,
+      "external": 10094495,
+      "arrayBuffers": 7554011
+    }
+  },
+  "timeline": [
+    {
+      "at": 1792534637921,
+      "tick": 1,
+      "ms": 35.08089999999993,
+      "units": 39605,
+      "memory": {
+        "rss": 506576896,
+        "heapTotal": 215617536,
+        "heapUsed": 98899920,
+        "external": 18461015,
+        "arrayBuffers": 16206996
+      },
+      "resourceUsage": {
+        "userCPUTime": 6093000,
+        "systemCPUTime": 718000,
+        "maxRSS": 498380,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 186338,
+        "swappedOut": 0,
+        "fsRead": 1404,
+        "fsWrite": 3,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 3135266816,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "ef0d47109ac43132",
+        "error": null,
+        "memoryMB": 116,
+        "liveMB": 56,
+        "peakMB": 56,
+        "freeMB": 0,
+        "arrays": 576,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 0.12890625,
+        "spawns": 40000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 39605,
+        "visited": 39680,
+        "attempted": 16,
+        "moved": 4,
+        "blockedOrClipped": 14,
+        "simdGroups": 8929,
+        "overHalo": 0,
+        "footprintMoves": 4,
+        "scalarLanes": 3964
+      }
+    },
+    {
+      "at": 1792534637948,
+      "tick": 2,
+      "ms": 25.708800000000338,
+      "units": 38149,
+      "memory": {
+        "rss": 508411904,
+        "heapTotal": 215617536,
+        "heapUsed": 100773008,
+        "external": 18469624,
+        "arrayBuffers": 16206996
+      },
+      "resourceUsage": {
+        "userCPUTime": 6203000,
+        "systemCPUTime": 750000,
+        "maxRSS": 498380,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 186786,
+        "swappedOut": 0,
+        "fsRead": 1404,
+        "fsWrite": 5,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 3133112320,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "ef0d47109ac43132",
+        "error": null,
+        "memoryMB": 116,
+        "liveMB": 56,
+        "peakMB": 56,
+        "freeMB": 0,
+        "arrays": 585,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 0.12890625,
+        "spawns": 40000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 38149,
+        "visited": 39605,
+        "attempted": 7607,
+        "moved": 7464,
+        "blockedOrClipped": 359,
+        "simdGroups": 8876,
+        "overHalo": 0,
+        "footprintMoves": 4013,
+        "scalarLanes": 4101
+      }
+    },
+    {
+      "at": 1792534637961,
+      "tick": 3,
+      "ms": 11.309499999999844,
+      "units": 38149,
+      "memory": {
+        "rss": 508723200,
+        "heapTotal": 215879680,
+        "heapUsed": 100724968,
+        "external": 18469624,
+        "arrayBuffers": 16206996
+      },
+      "resourceUsage": {
+        "userCPUTime": 6281000,
+        "systemCPUTime": 765000,
+        "maxRSS": 498380,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 186902,
+        "swappedOut": 0,
+        "fsRead": 1404,
+        "fsWrite": 7,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 3131756544,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "ef0d47109ac43132",
+        "error": null,
+        "memoryMB": 116,
+        "liveMB": 56,
+        "peakMB": 56,
+        "freeMB": 0,
+        "arrays": 585,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 0.12890625,
+        "spawns": 40000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 38149,
+        "visited": 38149,
+        "attempted": 7147,
+        "moved": 4800,
+        "blockedOrClipped": 2755,
+        "simdGroups": 8124,
+        "overHalo": 0,
+        "footprintMoves": 4352,
+        "scalarLanes": 5653
+      }
+    },
+    {
+      "at": 1792534637976,
+      "tick": 4,
+      "ms": 13.367699999999786,
+      "units": 38076,
+      "memory": {
+        "rss": 510173184,
+        "heapTotal": 216141824,
+        "heapUsed": 101294920,
+        "external": 18469894,
+        "arrayBuffers": 16207266
+      },
+      "resourceUsage": {
+        "userCPUTime": 6359000,
+        "systemCPUTime": 765000,
+        "maxRSS": 498380,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 187257,
+        "swappedOut": 0,
+        "fsRead": 1404,
+        "fsWrite": 9,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 3126251520,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "ef0d47109ac43132",
+        "error": null,
+        "memoryMB": 116,
+        "liveMB": 56,
+        "peakMB": 56,
+        "freeMB": 0,
+        "arrays": 585,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 0.12890625,
+        "spawns": 40000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 38076,
+        "visited": 38153,
+        "attempted": 7123,
+        "moved": 4334,
+        "blockedOrClipped": 3165,
+        "simdGroups": 8124,
+        "overHalo": 0,
+        "footprintMoves": 214,
+        "scalarLanes": 5657
+      }
+    },
+    {
+      "at": 1792534637988,
+      "tick": 5,
+      "ms": 9.747600000000148,
+      "units": 38058,
+      "memory": {
+        "rss": 510554112,
+        "heapTotal": 216666112,
+        "heapUsed": 101633216,
+        "external": 18469989,
+        "arrayBuffers": 16207361
+      },
+      "resourceUsage": {
+        "userCPUTime": 6359000,
+        "systemCPUTime": 765000,
+        "maxRSS": 498588,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 187352,
+        "swappedOut": 0,
+        "fsRead": 1404,
+        "fsWrite": 11,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 3120422912,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "ef0d47109ac43132",
+        "error": null,
+        "memoryMB": 116,
+        "liveMB": 56,
+        "peakMB": 56,
+        "freeMB": 0,
+        "arrays": 585,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 0.12890625,
+        "spawns": 40000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 38058,
+        "visited": 38080,
+        "attempted": 7116,
+        "moved": 2084,
+        "blockedOrClipped": 5666,
+        "simdGroups": 8060,
+        "overHalo": 0,
+        "footprintMoves": 1212,
+        "scalarLanes": 5840
+      }
+    }
+  ],
+  "phases": {
+    "simMoveRun": 3.4441799999999603,
+    "simParallelRun:89": 2.2112599999999474,
+    "_forEachUnitInTickOrder": 1.8677599999999983,
+    "unitHitsResolve": 1.5949199999999109,
+    "spatialIndexRebuild": 0.7204599999999118,
+    "simParallelBackgroundWait": 0.6788000000000466,
+    "combatScanRun": 0.6470800000001873,
+    "simParallelRun:60": 0.6171000000000276,
+    "updateAllPlayerVisibility": 0.45918000000001485,
+    "statusPrepassRun": 0.4416399999998248,
+    "recalculateUnitEffectiveStats": 0.4262399999999616,
+    "simParallelRun:24": 0.2930000000000291,
+    "simUnitStateCollect": 0.28286000000007333,
+    "simParallelRun:45": 0.28190000000004145,
+    "simParallelRun:66": 0.2518000000000029,
+    "simParallelRun:27": 0.238799999999992,
+    "simParallelRun:34": 0.21173999999991794,
+    "simParallelRun:63": 0.20257999999994353,
+    "navFieldsFlush": 0.18268000000007306,
+    "occupancyPrepareMovement": 0.1820600000000013,
+    "simParallelRun:43": 0.18129999999991925,
+    "simParallelRun:37": 0.15835999999990236,
+    "towersTick": 0.15789999999997234,
+    "unitRetirePrepare": 0.13911999999991168,
+    "simParallelRun:36": 0.1295999999999367,
+    "simParallelRun:49": 0.11889999999993961,
+    "simParallelRun:30": 0.07903999999998632,
+    "simParallelRun:20": 0.0565799999999399,
+    "simParallelRun:41": 0.047559999999975844,
+    "simParallelRun:32": 0.04596000000001368,
+    "spawnerStructuresTick": 0.032259999999951106,
+    "simParallelRun:44": 0.032019999999920404,
+    "unitPassBegin": 0.024020000000018627,
+    "recalculateThingPrecomputedStats": 0.008959999999933643,
+    "navTick": 0.00889999999999418,
+    "processGlobalSpawnerQueue": 0.006699999999818828,
+    "_simMoveChargeSteps": 0.006420000000071013,
+    "separationStart": 0.0038399999998546264,
+    "visCoverHoldEnd": 0.003319999999985157,
+    "runUnitSeparationPass": 0.0020799999999326245,
+    "projectilesBegin": 0.0015599999999722058
+  },
+  "phaseSelf": {
+    "simParallelRun:89": 2.2112599999999474,
+    "_forEachUnitInTickOrder": 1.5798000000001593,
+    "unitHitsResolve": 0.7260199999998804,
+    "simParallelBackgroundWait": 0.6788000000000466,
+    "simParallelRun:60": 0.6171000000000276,
+    "updateAllPlayerVisibility": 0.3770400000000336,
+    "simParallelRun:24": 0.2930000000000291,
+    "simUnitStateCollect": 0.28286000000007333,
+    "simParallelRun:45": 0.28190000000004145,
+    "simParallelRun:66": 0.2518000000000029,
+    "simParallelRun:27": 0.238799999999992,
+    "simParallelRun:34": 0.21173999999991794,
+    "simParallelRun:63": 0.20257999999994353,
+    "simMoveRun": 0.18802000000005137,
+    "recalculateUnitEffectiveStats": 0.18743999999996958,
+    "navFieldsFlush": 0.18268000000007306,
+    "occupancyPrepareMovement": 0.1820600000000013,
+    "simParallelRun:43": 0.18129999999991925,
+    "simParallelRun:37": 0.15835999999990236,
+    "towersTick": 0.15789999999997234,
+    "statusPrepassRun": 0.14863999999979569,
+    "simParallelRun:36": 0.1295999999999367,
+    "combatScanRun": 0.12782000000042898,
+    "simParallelRun:49": 0.11889999999993961,
+    "simParallelRun:30": 0.07903999999998632,
+    "simParallelRun:20": 0.0565799999999399,
+    "spatialIndexRebuild": 0.05355999999983396,
+    "simParallelRun:41": 0.047559999999975844,
+    "simParallelRun:32": 0.04596000000001368,
+    "spawnerStructuresTick": 0.032259999999951106,
+    "simParallelRun:44": 0.032019999999920404,
+    "unitPassBegin": 0.024020000000018627,
+    "unitRetirePrepare": 0.02021999999997206,
+    "recalculateThingPrecomputedStats": 0.008959999999933643,
+    "navTick": 0.00889999999999418,
+    "processGlobalSpawnerQueue": 0.006699999999818828,
+    "_simMoveChargeSteps": 0.006420000000071013,
+    "separationStart": 0.0038399999998546264,
+    "visCoverHoldEnd": 0.003319999999985157,
+    "runUnitSeparationPass": 0.0020799999999326245,
+    "projectilesBegin": 0.0015599999999722058
+  },
+  "bindings": [
+    {
+      "name": "mv.lookc",
+      "type": "Int32Array",
+      "bytes": 16777216
+    },
+    {
+      "name": "unit.mvNav",
+      "type": "Int32Array",
+      "bytes": 1441792
+    },
+    {
+      "name": "spatial.types",
+      "type": "Int32Array",
+      "bytes": 655360
+    },
+    {
+      "name": "vis.zoneIds",
+      "type": "Int32Array",
+      "bytes": 589824
+    },
+    {
+      "name": "spatial.cplx",
+      "type": "Int32Array",
+      "bytes": 524288
+    },
+    {
+      "name": "ix.complex",
+      "type": "Int32Array",
+      "bytes": 524288
+    },
+    {
+      "name": "nav.fpool.0",
+      "type": "Uint16Array",
+      "bytes": 524288
+    },
+    {
+      "name": "nav.0.fields",
+      "type": "Uint16Array",
+      "bytes": 439296
+    },
+    {
+      "name": "nav.2.fields",
+      "type": "Uint16Array",
+      "bytes": 439296
+    },
+    {
+      "name": "nav.5.fields",
+      "type": "Uint16Array",
+      "bytes": 439296
+    },
+    {
+      "name": "nav.6.fields",
+      "type": "Uint16Array",
+      "bytes": 439296
+    },
+    {
+      "name": "nav.7.fields",
+      "type": "Uint16Array",
+      "bytes": 439296
+    },
+    {
+      "name": "nav.8.fields",
+      "type": "Uint16Array",
+      "bytes": 439296
+    },
+    {
+      "name": "nav.9.fields",
+      "type": "Uint16Array",
+      "bytes": 439296
+    },
+    {
+      "name": "nav.10.fields",
+      "type": "Uint16Array",
+      "bytes": 439296
+    },
+    {
+      "name": "adj.wk",
+      "type": "Int32Array",
+      "bytes": 344064
+    },
+    {
+      "name": "navb.fields",
+      "type": "Uint16Array",
+      "bytes": 325632
+    },
+    {
+      "name": "nav.4.fields",
+      "type": "Uint16Array",
+      "bytes": 325632
+    },
+    {
+      "name": "nav.3.fields",
+      "type": "Uint16Array",
+      "bytes": 321536
+    },
+    {
+      "name": "nav.fpool.1",
+      "type": "Uint16Array",
+      "bytes": 294912
+    },
+    {
+      "name": "mv.areaBox",
+      "type": "Int32Array",
+      "bytes": 286128
+    },
+    {
+      "name": "abox.out",
+      "type": "Int32Array",
+      "bytes": 286128
+    },
+    {
+      "name": "eff.rowOf",
+      "type": "Int32Array",
+      "bytes": 282240
+    },
+    {
+      "name": "nav.1.fields",
+      "type": "Uint16Array",
+      "bytes": 229376
+    },
+    {
+      "name": "ixd.k",
+      "type": "Int32Array",
+      "bytes": 196608
+    },
+    {
+      "name": "ixd.id",
+      "type": "Int32Array",
+      "bytes": 196608
+    },
+    {
+      "name": "ixd.dirty",
+      "type": "Int32Array",
+      "bytes": 196608
+    },
+    {
+      "name": "st.list",
+      "type": "Int32Array",
+      "bytes": 196608
+    },
+    {
+      "name": "unit.id",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.x",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.y",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.prevX",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.prevY",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.vx",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.vy",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.energy",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.r",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.collisionR",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.pathIndex",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.attackTimer",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.burnTickDamage",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.poisonTickDamage",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.iceTickDamage",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.stackCount",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.unitLevel",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.baseLevel",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.effectiveStacks",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.effectiveLevel",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit._lastAppliedEffectiveLevel",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvLane",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvBase",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvPlen",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvScan",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvFloor",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvPath",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvWake",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvFlow",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvFGen",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvDest",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvHWin",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvHTT",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvHVer",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.cbT",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.cbTick",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.cbTId",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.cbRangeS",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.cbS",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.dbT",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.dbTI",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.dbS",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.dbTick",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.cwTick",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvReady",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvHT",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvHTId",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvTgX",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvTgY",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvTgTol",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvSteady",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.esRad",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.esType",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.esTaken",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.wkIx",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.stDot",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.stAcc",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.lzAcc",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.lzBeam",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.x0",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.y0",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvNavLD",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.spTile",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.spArea",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.spEpoch",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.vsGen",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.vsA",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.maxE",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.spMvOld",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.spMvNew",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvCD",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvCT",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvCVx",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvCVy",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.mvCTl",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.pvAt",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.pvId",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.pvE",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.upB",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.sepR0",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.sepCx",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.sepCy",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.sepIv",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.sepCv",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.esVer",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.fLsX",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.fLsY",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.fLsPX",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.fLsPY",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.fLsT",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.cmT",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.cmTId",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.hObj",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.rtEnd",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.nvPK",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.hAcc",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.hBurnD",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.hPoiD",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.hWatchK",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.atkWatch",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "unit.sepKey",
+      "type": "Uint32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "occ.x",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "occ.y",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "ix.keys",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "ix.areas",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "sep.eslot",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "sep.ekey",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "ix.eid",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "ix.slots",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "spatial.keys.1",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "ixd.gone",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "ixd.es2",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "ixd.ek2",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "ixd.eid2",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "vt.x",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "vt.y",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "vt.key",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "occ.eslot",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "mv.post",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "mv.hita",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "mv.hitt",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "upd.cand",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "retire.list",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.x",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.y",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.rng",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.id",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.out",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.tid",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.sout",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.ct",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.ctid",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.bt",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.btid",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.esL",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.es",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.ex",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.ey",
+      "type": "Float32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.eo",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.ea",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "acq.eid",
+      "type": "Int32Array",
+      "bytes": 180224
+    },
+    {
+      "name": "mv.chUse",
+      "type": "Float64Array",
+      "bytes": 172032
+    },
+    {
+      "name": "adj.gmul",
+      "type": "Float64Array",
+      "bytes": 163840
+    },
+    {
+      "name": "spatial.orderA",
+      "type": "Int32Array",
+      "bytes": 160000
+    },
+    {
+      "name": "spatial.orderB",
+      "type": "Int32Array",
+      "bytes": 160000
+    },
+    {
+      "name": "ix.ordC",
+      "type": "Int32Array",
+      "bytes": 160000
+    },
+    {
+      "name": "hit.tlist",
+      "type": "Int32Array",
+      "bytes": 147456
+    },
+    {
+      "name": "hit.wlist",
+      "type": "Int32Array",
+      "bytes": 147456
+    },
+    {
+      "name": "occ.bits",
+      "type": "Uint32Array",
+      "bytes": 135168
+    },
+    {
+      "name": "nav.frows.0",
+      "type": "Uint8Array",
+      "bytes": 131072
+    },
+    {
+      "name": "ixd.ik",
+      "type": "Float64Array",
+      "bytes": 98304
+    },
+    {
+      "name": "ixd.touch",
+      "type": "Int32Array",
+      "bytes": 98304
+    },
+    {
+      "name": "unit.teleportHideTicks",
+      "type": "Uint16Array",
+      "bytes": 90112
+    },
+    {
+      "name": "unit.burning",
+      "type": "Uint16Array",
+      "bytes": 90112
+    },
+    {
+      "name": "unit.poisoned",
+      "type": "Uint16Array",
+      "bytes": 90112
+    },
+    {
+      "name": "unit.frozen",
+      "type": "Uint16Array",
+      "bytes": 90112
+    },
+    {
+      "name": "unit.wet",
+      "type": "Uint16Array",
+      "bytes": 90112
+    },
+    {
+      "name": "unit.sandy",
+      "type": "Uint16Array",
+      "bytes": 90112
+    },
+    {
+      "name": "unit.watched",
+      "type": "Uint16Array",
+      "bytes": 90112
+    },
+    {
+      "name": "unit.workerTransferCooldown",
+      "type": "Uint16Array",
+      "bytes": 90112
+    },
+    {
+      "name": "unit.cwDense",
+      "type": "Uint16Array",
+      "bytes": 90112
+    },
+    {
+      "name": "unit.spType",
+      "type": "Int16Array",
+      "bytes": 90112
+    },
+    {
+      "name": "unit.pvL",
+      "type": "Int16Array",
+      "bytes": 90112
+    },
+    {
+      "name": "unit.upT",
+      "type": "Int16Array",
+      "bytes": 90112
+    },
+    {
+      "name": "unit.statRow",
+      "type": "Int16Array",
+      "bytes": 90112
+    },
+    {
+      "name": "adj.ctile",
+      "type": "Int32Array",
+      "bytes": 81920
+    },
+    {
+      "name": "adj.sig",
+      "type": "Int32Array",
+      "bytes": 81920
+    },
+    {
+      "name": "adj.otile",
+      "type": "Int32Array",
+      "bytes": 81920
+    },
+    {
+      "name": "adj.ogrp",
+      "type": "Int32Array",
+      "bytes": 81920
+    },
+    {
+      "name": "adj.gsize",
+      "type": "Int32Array",
+      "bytes": 81920
+    },
+    {
+      "name": "ix.stamp",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "ix.start",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "ix.cnt",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "ix.fill",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "ix.agrid",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "vt.agrid",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "lz.head",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "wsw.area",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "sep.rs",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "sep.rc",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "sep.rstamp",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "occ.start",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "occ.count",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "occ.stamp",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "occ.areaGrid",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "acq.rsL",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "acq.rcL",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "acq.rstL",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "acq.rs",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "acq.rc",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "acq.rst",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "acq.agrid",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "adj.ag",
+      "type": "Int32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "ix.aown",
+      "type": "Int32Array",
+      "bytes": 63584
+    },
+    {
+      "name": "vis.useed",
+      "type": "Int32Array",
+      "bytes": 63584
+    },
+    {
+      "name": "vis.ulist",
+      "type": "Int32Array",
+      "bytes": 63584
+    },
+    {
+      "name": "vis.ubufA",
+      "type": "Int32Array",
+      "bytes": 63584
+    },
+    {
+      "name": "vis.ubufB",
+      "type": "Int32Array",
+      "bytes": 63584
+    },
+    {
+      "name": "vis.ubufC",
+      "type": "Int32Array",
+      "bytes": 63584
+    },
+    {
+      "name": "vis.ucur",
+      "type": "Int32Array",
+      "bytes": 63584
+    },
+    {
+      "name": "vis.uprev",
+      "type": "Int32Array",
+      "bytes": 63584
+    },
+    {
+      "name": "vis.uplus",
+      "type": "Int32Array",
+      "bytes": 63584
+    },
+    {
+      "name": "vis.uminus",
+      "type": "Int32Array",
+      "bytes": 63584
+    },
+    {
+      "name": "nav.0.adjA",
+      "type": "Int32Array",
+      "bytes": 52680
+    },
+    {
+      "name": "nav.0.adjC",
+      "type": "Int32Array",
+      "bytes": 52680
+    },
+    {
+      "name": "nav.2.adjA",
+      "type": "Int32Array",
+      "bytes": 52680
+    },
+    {
+      "name": "nav.2.adjC",
+      "type": "Int32Array",
+      "bytes": 52680
+    },
+    {
+      "name": "nav.5.adjA",
+      "type": "Int32Array",
+      "bytes": 52680
+    },
+    {
+      "name": "nav.5.adjC",
+      "type": "Int32Array",
+      "bytes": 52680
+    },
+    {
+      "name": "nav.6.adjA",
+      "type": "Int32Array",
+      "bytes": 52680
+    },
+    {
+      "name": "nav.6.adjC",
+      "type": "Int32Array",
+      "bytes": 52680
+    },
+    {
+      "name": "nav.7.adjA",
+      "type": "Int32Array",
+      "bytes": 52680
+    },
+    {
+      "name": "nav.7.adjC",
+      "type": "Int32Array",
+      "bytes": 52680
+    },
+    {
+      "name": "nav.8.adjA",
+      "type": "Int32Array",
+      "bytes": 52680
+    },
+    {
+      "name": "nav.8.adjC",
+      "type": "Int32Array",
+      "bytes": 52680
+    },
+    {
+      "name": "nav.9.adjA",
+      "type": "Int32Array",
+      "bytes": 52680
+    },
+    {
+      "name": "nav.9.adjC",
+      "type": "Int32Array",
+      "bytes": 52680
+    },
+    {
+      "name": "nav.10.adjA",
+      "type": "Int32Array",
+      "bytes": 52680
+    },
+    {
+      "name": "nav.10.adjC",
+      "type": "Int32Array",
+      "bytes": 52680
+    },
+    {
+      "name": "atl.rc",
+      "type": "Uint32Array",
+      "bytes": 50880
+    },
+    {
+      "name": "ixd.own",
+      "type": "Int8Array",
+      "bytes": 49152
+    },
+    {
+      "name": "ixd.is",
+      "type": "Int32Array",
+      "bytes": 49152
+    },
+    {
+      "name": "unit.owner",
+      "type": "Int8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.commandState",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.attackFlash",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.mvOn",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.mvOut",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.mvFlags",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.mvSpent",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.mvReach",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.mvWlen",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.mvReachD",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.mvReachA",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.mvShoot",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.mvRangeK",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.cwNear",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.esOk",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.stEv",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.stOn",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.tmOn",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.dead0",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.lzFlags",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.lzEv",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.mvWk",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.sepMov",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.dead",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.spOwner",
+      "type": "Int8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.vsR",
+      "type": "Int8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.vsP1",
+      "type": "Int8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.vsP2",
+      "type": "Int8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.live",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.spMvOwn",
+      "type": "Int8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.mvBlk",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.mvCN",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.mvNP",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.mvPF",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.mvFire",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.pvO",
+      "type": "Int8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.pvC",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.pvV",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.atkSty",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.atkL",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.atkN",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.wtcL",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.wsKind",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.sepD0",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.sepL0",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.acqB",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.cmMode",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.isWk",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.nvProf",
+      "type": "Int8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.wkIdle",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.wsFail",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.hTouch",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.hSty",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.wTeam",
+      "type": "Int8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "unit.sepLayer",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "occ.radius",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "occ.layer",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "occ.active",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "acq.own",
+      "type": "Int8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "acq.flags",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "acq.cmd",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "acq.cm",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "acq.rk",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "acq.bm",
+      "type": "Uint8Array",
+      "bytes": 45056
+    },
+    {
+      "name": "area.nb",
+      "type": "Int32Array",
+      "bytes": 44384
+    },
+    {
+      "name": "vt.anb",
+      "type": "Int32Array",
+      "bytes": 44384
+    },
+    {
+      "name": "abox.nb",
+      "type": "Int32Array",
+      "bytes": 44384
+    },
+    {
+      "name": "acq.anb",
+      "type": "Int32Array",
+      "bytes": 44384
+    },
+    {
+      "name": "navb.partL",
+      "type": "Uint16Array",
+      "bytes": 32768
+    },
+    {
+      "name": "nav.0.partL",
+      "type": "Uint16Array",
+      "bytes": 32768
+    },
+    {
+      "name": "nav.fmeta.0",
+      "type": "Int32Array",
+      "bytes": 32768
+    },
+    {
+      "name": "nav.1.partL",
+      "type": "Uint16Array",
+      "bytes": 32768
+    },
+    {
+      "name": "nav.2.partL",
+      "type": "Uint16Array",
+      "bytes": 32768
+    },
+    {
+      "name": "nav.3.partL",
+      "type": "Uint16Array",
+      "bytes": 32768
+    },
+    {
+      "name": "nav.4.partL",
+      "type": "Uint16Array",
+      "bytes": 32768
+    },
+    {
+      "name": "nav.5.partL",
+      "type": "Uint16Array",
+      "bytes": 32768
+    },
+    {
+      "name": "nav.6.partL",
+      "type": "Uint16Array",
+      "bytes": 32768
+    },
+    {
+      "name": "nav.7.partL",
+      "type": "Uint16Array",
+      "bytes": 32768
+    },
+    {
+      "name": "nav.8.partL",
+      "type": "Uint16Array",
+      "bytes": 32768
+    },
+    {
+      "name": "nav.9.partL",
+      "type": "Uint16Array",
+      "bytes": 32768
+    },
+    {
+      "name": "nav.10.partL",
+      "type": "Uint16Array",
+      "bytes": 32768
+    },
+    {
+      "name": "abox.own",
+      "type": "Int32Array",
+      "bytes": 31792
+    },
+    {
+      "name": "navb.adjA",
+      "type": "Int32Array",
+      "bytes": 27304
+    },
+    {
+      "name": "navb.adjC",
+      "type": "Int32Array",
+      "bytes": 27304
+    },
+    {
+      "name": "nav.4.adjA",
+      "type": "Int32Array",
+      "bytes": 27304
+    },
+    {
+      "name": "nav.4.adjC",
+      "type": "Int32Array",
+      "bytes": 27304
+    },
+    {
+      "name": "nav.3.adjA",
+      "type": "Int32Array",
+      "bytes": 26720
+    },
+    {
+      "name": "nav.3.adjC",
+      "type": "Int32Array",
+      "bytes": 26720
+    },
+    {
+      "name": "mv.areaBoxOk",
+      "type": "Uint8Array",
+      "bytes": 17883
+    },
+    {
+      "name": "unit.wkType",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkD",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkOx",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkOy",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkFail",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkUntil",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkSched",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkWx",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkWy",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkLmt",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsT",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsOU",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsOx",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsOy",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsR",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsAx",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsAy",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsNeed",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsJid",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsCur",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsMy",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "eff.hot",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.wall",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "navb.wall",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "navb.cost",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "navb.h",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "atl.bc",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "diff.a",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "diff.b",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.airwall",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.cwall.2",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.cwall.3",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.cwall.4",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.cwall.5",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.cwall.6",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.cwall.7",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.cwall.8",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.cwall.9",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.cwall.10",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.struct",
+      "type": "Int8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.scls",
+      "type": "Int8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.trapK",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.trapL",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "wsw.flags",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "wsw.own",
+      "type": "Int8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "wsw.resv",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "ix.omask",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "acq.omL",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "acq.om",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "acq.sown",
+      "type": "Int8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "acq.scls",
+      "type": "Int8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "acq.omt",
+      "type": "Uint8Array",
+      "bytes": 16384
+    },
+    {
+      "name": "adj.coff",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "adj.mul",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "adj.seed",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "adj.cloud",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "adj.oarea",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "adj.ocnt",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "hit.q",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "hit.dmg",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "hit.wk",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "hit.shr",
+      "type": "Float64Array",
+      "bytes": 16384
+    },
+    {
+      "name": "vis.urem",
+      "type": "Int8Array",
+      "bytes": 15896
+    },
+    {
+      "name": "vis.ust",
+      "type": "Uint8Array",
+      "bytes": 15896
+    },
+    {
+      "name": "vis.coverf",
+      "type": "Uint8Array",
+      "bytes": 15896
+    },
+    {
+      "name": "acq.cover",
+      "type": "Uint8Array",
+      "bytes": 15896
+    },
+    {
+      "name": "eff.bVer",
+      "type": "Int32Array",
+      "bytes": 13440
+    },
+    {
+      "name": "eff.bRad",
+      "type": "Int32Array",
+      "bytes": 13440
+    },
+    {
+      "name": "eff.bMaxE",
+      "type": "Float32Array",
+      "bytes": 13440
+    },
+    {
+      "name": "nav.1.adjA",
+      "type": "Int32Array",
+      "bytes": 12928
+    },
+    {
+      "name": "nav.1.adjC",
+      "type": "Int32Array",
+      "bytes": 12928
+    },
+    {
+      "name": "spatial.hist",
+      "type": "Int32Array",
+      "bytes": 10240
+    },
+    {
+      "name": "mv.hostile",
+      "type": "Int32Array",
+      "bytes": 9248
+    },
+    {
+      "name": "mv.hstruct",
+      "type": "Int32Array",
+      "bytes": 9248
+    },
+    {
+      "name": "acq.hs",
+      "type": "Int32Array",
+      "bytes": 9248
+    },
+    {
+      "name": "acq.hss",
+      "type": "Int32Array",
+      "bytes": 9248
+    },
+    {
+      "name": "mv.chFix",
+      "type": "Float64Array",
+      "bytes": 9216
+    },
+    {
+      "name": "ix.bcount",
+      "type": "Int32Array",
+      "bytes": 8192
+    },
+    {
+      "name": "navb.ns",
+      "type": "Int32Array",
+      "bytes": 8192
+    },
+    {
+      "name": "nav.frows.1",
+      "type": "Uint8Array",
+      "bytes": 8192
+    },
+    {
+      "name": "st.shr",
+      "type": "Float64Array",
+      "bytes": 8192
+    },
+    {
+      "name": "wsw.cnt",
+      "type": "Int32Array",
+      "bytes": 8192
+    },
+    {
+      "name": "mv.stblk",
+      "type": "Int32Array",
+      "bytes": 8192
+    },
+    {
+      "name": "area.off",
+      "type": "Int32Array",
+      "bytes": 7952
+    },
+    {
+      "name": "vt.aoff",
+      "type": "Int32Array",
+      "bytes": 7952
+    },
+    {
+      "name": "abox.off",
+      "type": "Int32Array",
+      "bytes": 7952
+    },
+    {
+      "name": "acq.aoff",
+      "type": "Int32Array",
+      "bytes": 7952
+    },
+    {
+      "name": "ix.astamp",
+      "type": "Int32Array",
+      "bytes": 7948
+    },
+    {
+      "name": "ix.astart",
+      "type": "Int32Array",
+      "bytes": 7948
+    },
+    {
+      "name": "ix.acnt",
+      "type": "Int32Array",
+      "bytes": 7948
+    },
+    {
+      "name": "ix.afill",
+      "type": "Int32Array",
+      "bytes": 7948
+    },
+    {
+      "name": "atl.didx",
+      "type": "Int32Array",
+      "bytes": 5088
+    },
+    {
+      "name": "upd.cnt",
+      "type": "Int32Array",
+      "bytes": 5008
+    },
+    {
+      "name": "unit.wkTwice",
+      "type": "Uint8Array",
+      "bytes": 4096
+    },
+    {
+      "name": "unit.wsCfg",
+      "type": "Int8Array",
+      "bytes": 4096
+    },
+    {
+      "name": "unit.wsAk",
+      "type": "Int8Array",
+      "bytes": 4096
+    },
+    {
+      "name": "ixd.plan",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "atl.ct",
+      "type": "Uint32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "eff.tver",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "adj.oact",
+      "type": "Uint8Array",
+      "bytes": 4096
+    },
+    {
+      "name": "hit.sty",
+      "type": "Uint8Array",
+      "bytes": 4096
+    },
+    {
+      "name": "mv.trapT",
+      "type": "Int32Array",
+      "bytes": 4032
+    },
+    {
+      "name": "mv.trapTG",
+      "type": "Float32Array",
+      "bytes": 4032
+    },
+    {
+      "name": "nav.0.adjS",
+      "type": "Int32Array",
+      "bytes": 3436
+    },
+    {
+      "name": "nav.2.adjS",
+      "type": "Int32Array",
+      "bytes": 3436
+    },
+    {
+      "name": "nav.5.adjS",
+      "type": "Int32Array",
+      "bytes": 3436
+    },
+    {
+      "name": "nav.6.adjS",
+      "type": "Int32Array",
+      "bytes": 3436
+    },
+    {
+      "name": "nav.7.adjS",
+      "type": "Int32Array",
+      "bytes": 3436
+    },
+    {
+      "name": "nav.8.adjS",
+      "type": "Int32Array",
+      "bytes": 3436
+    },
+    {
+      "name": "nav.9.adjS",
+      "type": "Int32Array",
+      "bytes": 3436
+    },
+    {
+      "name": "nav.10.adjS",
+      "type": "Int32Array",
+      "bytes": 3436
+    },
+    {
+      "name": "nav.0.nt",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.0.np",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.0.npart",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.2.nt",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.2.np",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.2.npart",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.5.nt",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.5.np",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.5.npart",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.6.nt",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.6.np",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.6.npart",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.7.nt",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.7.np",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.7.npart",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.8.nt",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.8.np",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.8.npart",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.9.nt",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.9.np",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.9.npart",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.10.nt",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.10.np",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "nav.10.npart",
+      "type": "Int32Array",
+      "bytes": 3432
+    },
+    {
+      "name": "navb.adjS",
+      "type": "Int32Array",
+      "bytes": 2548
+    },
+    {
+      "name": "nav.4.adjS",
+      "type": "Int32Array",
+      "bytes": 2548
+    },
+    {
+      "name": "navb.nt",
+      "type": "Int32Array",
+      "bytes": 2544
+    },
+    {
+      "name": "navb.np",
+      "type": "Int32Array",
+      "bytes": 2544
+    },
+    {
+      "name": "navb.adjN",
+      "type": "Int32Array",
+      "bytes": 2544
+    },
+    {
+      "name": "atl.npart",
+      "type": "Int32Array",
+      "bytes": 2544
+    },
+    {
+      "name": "nav.4.nt",
+      "type": "Int32Array",
+      "bytes": 2544
+    },
+    {
+      "name": "nav.4.np",
+      "type": "Int32Array",
+      "bytes": 2544
+    },
+    {
+      "name": "nav.4.npart",
+      "type": "Int32Array",
+      "bytes": 2544
+    },
+    {
+      "name": "nav.3.adjS",
+      "type": "Int32Array",
+      "bytes": 2516
+    },
+    {
+      "name": "nav.3.nt",
+      "type": "Int32Array",
+      "bytes": 2512
+    },
+    {
+      "name": "nav.3.np",
+      "type": "Int32Array",
+      "bytes": 2512
+    },
+    {
+      "name": "nav.3.npart",
+      "type": "Int32Array",
+      "bytes": 2512
+    },
+    {
+      "name": "occ.mask",
+      "type": "Int8Array",
+      "bytes": 2145
+    },
+    {
+      "name": "occ.stats",
+      "type": "Int32Array",
+      "bytes": 2080
+    },
+    {
+      "name": "atl.bm",
+      "type": "Uint32Array",
+      "bytes": 2048
+    },
+    {
+      "name": "nav.fmeta.1",
+      "type": "Int32Array",
+      "bytes": 2048
+    },
+    {
+      "name": "hit.plist",
+      "type": "Int32Array",
+      "bytes": 2048
+    },
+    {
+      "name": "vt.aok",
+      "type": "Uint8Array",
+      "bytes": 1987
+    },
+    {
+      "name": "nav.1.adjS",
+      "type": "Int32Array",
+      "bytes": 1796
+    },
+    {
+      "name": "nav.1.nt",
+      "type": "Int32Array",
+      "bytes": 1792
+    },
+    {
+      "name": "nav.1.np",
+      "type": "Int32Array",
+      "bytes": 1792
+    },
+    {
+      "name": "nav.1.npart",
+      "type": "Int32Array",
+      "bytes": 1792
+    },
+    {
+      "name": "wk.ver",
+      "type": "Int32Array",
+      "bytes": 1280
+    },
+    {
+      "name": "eff.rowVer",
+      "type": "Int32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rSpd",
+      "type": "Float32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rCost",
+      "type": "Float32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rRD",
+      "type": "Int32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rRA",
+      "type": "Int32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rCb",
+      "type": "Float32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rCd",
+      "type": "Float32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rDmg",
+      "type": "Float32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rVis",
+      "type": "Float32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rChs",
+      "type": "Float32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "mv.wallBlk",
+      "type": "Int32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "mv.wallBlk9",
+      "type": "Int32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "navb.nsc",
+      "type": "Int32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.flag",
+      "type": "Uint8Array",
+      "bytes": 1024
+    },
+    {
+      "name": "ws.rcnt",
+      "type": "Int32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "ws.rpre",
+      "type": "Int32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "atl.cb",
+      "type": "Uint16Array",
+      "bytes": 512
+    },
+    {
+      "name": "atl.anc",
+      "type": "Int32Array",
+      "bytes": 512
+    },
+    {
+      "name": "mv.postc",
+      "type": "Int32Array",
+      "bytes": 512
+    },
+    {
+      "name": "mv.hitc",
+      "type": "Int32Array",
+      "bytes": 512
+    },
+    {
+      "name": "occ.offsets",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "navb.nb",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "atl.partB",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "atl.co",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.0.nb",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.0.partB",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.1.nb",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.1.partB",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.2.nb",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.2.partB",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.3.nb",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.3.partB",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.4.nb",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.4.partB",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.5.nb",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.5.partB",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.6.nb",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.6.partB",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.7.nb",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.7.partB",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.8.nb",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.8.partB",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.9.nb",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.9.partB",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.10.nb",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "nav.10.partB",
+      "type": "Int32Array",
+      "bytes": 260
+    },
+    {
+      "name": "eff.rRK",
+      "type": "Uint8Array",
+      "bytes": 256
+    },
+    {
+      "name": "eff.rLzW",
+      "type": "Uint8Array",
+      "bytes": 256
+    },
+    {
+      "name": "eff.rVsA",
+      "type": "Int8Array",
+      "bytes": 256
+    },
+    {
+      "name": "navb.partN",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "atl.cn",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.0.pclu",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.0.cparts",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "diff.cnt",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.1.pclu",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.1.cparts",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.2.pclu",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.2.cparts",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.3.pclu",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.3.cparts",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.4.pclu",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.4.cparts",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.5.pclu",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.5.cparts",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.6.pclu",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.6.cparts",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.7.pclu",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.7.cparts",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.8.pclu",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.8.cparts",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.9.pclu",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.9.cparts",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.10.pclu",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "nav.10.cparts",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "st.count",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "flow.gen",
+      "type": "Int32Array",
+      "bytes": 128
+    },
+    {
+      "name": "flow.used",
+      "type": "Int32Array",
+      "bytes": 128
+    },
+    {
+      "name": "atl.cip",
+      "type": "Uint16Array",
+      "bytes": 128
+    },
+    {
+      "name": "mv.astarRem",
+      "type": "Float64Array",
+      "bytes": 128
+    },
+    {
+      "name": "nav.0.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.1.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.2.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.3.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.4.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.5.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.6.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.7.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.8.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.9.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.10.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "occ.config",
+      "type": "Int32Array",
+      "bytes": 64
+    },
+    {
+      "name": "vis.udiff",
+      "type": "Int32Array",
+      "bytes": 64
+    },
+    {
+      "name": "mv.tres",
+      "type": "Uint8Array",
+      "bytes": 64
+    },
+    {
+      "name": "retire.count",
+      "type": "Int32Array",
+      "bytes": 64
+    },
+    {
+      "name": "nav.0.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.1.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.2.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.3.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.4.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.5.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.6.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.7.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.8.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.9.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.10.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "vis.ucnt",
+      "type": "Int32Array",
+      "bytes": 32
+    },
+    {
+      "name": "vis.uprevn",
+      "type": "Int32Array",
+      "bytes": 32
+    },
+    {
+      "name": "atl.dn",
+      "type": "Int32Array",
+      "bytes": 20
+    },
+    {
+      "name": "atl.rco",
+      "type": "Int32Array",
+      "bytes": 20
+    },
+    {
+      "name": "nav.fhdr",
+      "type": "Int32Array",
+      "bytes": 16
+    },
+    {
+      "name": "hit.cnt",
+      "type": "Int32Array",
+      "bytes": 16
+    },
+    {
+      "name": "navb.adjMax",
+      "type": "Int32Array",
+      "bytes": 12
+    },
+    {
+      "name": "atl.cin",
+      "type": "Uint16Array",
+      "bytes": 10
+    },
+    {
+      "name": "ix.listed",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.0.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.1.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.2.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.3.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.4.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.5.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.6.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.7.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.8.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.9.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.10.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "unit.mvNodes",
+      "type": "Int32Array",
+      "bytes": 4
+    },
+    {
+      "name": "ix.bad",
+      "type": "Int32Array",
+      "bytes": 4
+    }
+  ],
+  "resourceUsage": {
+    "before": {
+      "userCPUTime": 5921000,
+      "systemCPUTime": 718000,
+      "maxRSS": 498380,
+      "sharedMemorySize": 0,
+      "unsharedDataSize": 0,
+      "unsharedStackSize": 0,
+      "minorPageFault": 0,
+      "majorPageFault": 182439,
+      "swappedOut": 0,
+      "fsRead": 1404,
+      "fsWrite": 3,
+      "ipcSent": 0,
+      "ipcReceived": 0,
+      "signalsCount": 0,
+      "voluntaryContextSwitches": 0,
+      "involuntaryContextSwitches": 0
+    },
+    "after": {
+      "userCPUTime": 6359000,
+      "systemCPUTime": 765000,
+      "maxRSS": 498588,
+      "sharedMemorySize": 0,
+      "unsharedDataSize": 0,
+      "unsharedStackSize": 0,
+      "minorPageFault": 0,
+      "majorPageFault": 187352,
+      "swappedOut": 0,
+      "fsRead": 1404,
+      "fsWrite": 13,
+      "ipcSent": 0,
+      "ipcReceived": 0,
+      "signalsCount": 0,
+      "voluntaryContextSwitches": 0,
+      "involuntaryContextSwitches": 0
+    }
+  },
+  "statStorage": "shared-row-only",
+  "referenceColumns": [
+    {
+      "name": "jr_unitType",
+      "slots": 45056,
+      "bytes": 45056,
+      "unique": 2,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr_preComputedBase",
+      "slots": 45056,
+      "bytes": 45056,
+      "unique": 3,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr_basePreComputed",
+      "slots": 45056,
+      "bytes": 45056,
+      "unique": 3,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr__pce",
+      "slots": 45056,
+      "bytes": 45056,
+      "unique": 11,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr__pc",
+      "slots": 45056,
+      "bytes": 45056,
+      "unique": 11,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr__fpPath",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr_attackTarget",
+      "slots": 45056,
+      "pages": 2,
+      "values": 3
+    },
+    {
+      "name": "jr__damageFlashColor",
+      "slots": 45056,
+      "bytes": 45056,
+      "unique": 5,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr__path",
+      "slots": 45056,
+      "pages": 2,
+      "values": 3
+    },
+    {
+      "name": "jr__ws",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr__wnr",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr__tb",
+      "slots": 45056,
+      "pages": 6,
+      "values": 13
+    },
+    {
+      "name": "jr__pfa",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr__ppt",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_holdPosition",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_forcedAttackTarget",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_targetUnit",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_targetPos",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc__attackMoveGx",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc__attackMoveGy",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_workerTarget",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_workerTargetType",
+      "slots": 45056,
+      "bytes": 45056,
+      "unique": 1,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_carryingValue",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc__workerReservedTileIndex",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_builderHasMaterial",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_healerHasMaterial",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_researcherHasMaterial",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc__astarBudgetRetryTick",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc__scoutTarget",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc__routeKey",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_workerType",
+      "slots": 45056,
+      "pages": 0,
+      "values": 0
+    }
+  ],
+  "memory": {
+    "rss": 512229376,
+    "heapTotal": 217841664,
+    "heapUsed": 106635992,
+    "external": 18501260,
+    "arrayBuffers": 16207361
+  }
+}

@@ -1,0 +1,6665 @@
+{
+  "node": "v24.19.0",
+  "cpu": "AMD Ryzen 7 4800H with Radeon Graphics         ",
+  "initial": {
+    "units": 1000000,
+    "towers": 31250,
+    "groups": 15753,
+    "map": [
+      512,
+      512
+    ]
+  },
+  "final": {
+    "units": 712128,
+    "towers": 31230,
+    "tick": 54,
+    "hash": "545e70b4",
+    "parts": {
+      "time": "62b33105",
+      "players": "850401e3",
+      "units": "a38add3e",
+      "towers": "7c415859",
+      "barracks": "4b95f515",
+      "spawners": "4b95f515",
+      "floor": "811c9dc5",
+      "mines": "9be17165"
+    }
+  },
+  "ticks": 48,
+  "warmup": 6,
+  "warmupMs": [
+    7807.731499999998,
+    239.856200000002,
+    183.0002999999997,
+    335.67059999999765,
+    104.88260000000082,
+    89.5580000000009
+  ],
+  "measuredStart": 1792566070263,
+  "measuredEnd": 1792566075941,
+  "pmc": null,
+  "group": 32,
+  "helpers": 7,
+  "dk": 1,
+  "chunkSize": 1,
+  "occupancy": true,
+  "occupancyPlanes": 1,
+  "occupancyAuditResult": {
+    "actualBits": 6409152,
+    "expectedBits": 6409152,
+    "registered": 712128,
+    "activeUnits": 712128,
+    "positionMismatches": 0,
+    "ok": true
+  },
+  "occupancyProbes": null,
+  "packed": true,
+  "movementCounters": null,
+  "contactBudget": 8,
+  "acquisitionSamples": 64,
+  "sharedStats": true,
+  "cachedLayout": false,
+  "statLayout": "soa",
+  "referenceStorage": false,
+  "referenceKernel": false,
+  "referenceCollect": false,
+  "shareNavigation": true,
+  "tickMs": {
+    "mean": 116.92334166666713,
+    "p50": 93.59120000000257,
+    "p95": 254.13460000000123
+  },
+  "tps": 8.552612213657618,
+  "setup": {
+    "units": 1000000,
+    "towers": 31250,
+    "groups": 15753,
+    "map": [
+      512,
+      512
+    ],
+    "ms": 14978.415200000001,
+    "heap": {
+      "ready": true,
+      "kernels": true,
+      "wasm64": true,
+      "hash": "477c971b279f83f1",
+      "error": null,
+      "memoryMB": 637,
+      "liveMB": 541,
+      "peakMB": 541,
+      "freeMB": 0,
+      "arrays": 226,
+      "pendingFrees": 0
+    },
+    "memory": {
+      "rss": 1118306304,
+      "heapTotal": 411934720,
+      "heapUsed": 277336152,
+      "external": 147141279,
+      "arrayBuffers": 144895707
+    }
+  },
+  "timeline": [
+    {
+      "at": 1792566070350,
+      "tick": 1,
+      "ms": 87.09920000000056,
+      "units": 899887,
+      "memory": {
+        "rss": 1594527744,
+        "heapTotal": 491184128,
+        "heapUsed": 390975880,
+        "external": 160876780,
+        "arrayBuffers": 158622761
+      },
+      "resourceUsage": {
+        "userCPUTime": 34671000,
+        "systemCPUTime": 1593000,
+        "maxRSS": 1557156,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 485645,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 7,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4290412544,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 906,
+        "peakMB": 906,
+        "freeMB": 0,
+        "arrays": 596,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 899887,
+        "visited": 900649,
+        "attempted": 157083,
+        "moved": 92918,
+        "blockedOrClipped": 134420,
+        "simdGroups": 480518,
+        "overHalo": 0,
+        "footprintMoves": 29580,
+        "scalarLanes": 84501
+      }
+    },
+    {
+      "at": 1792566070487,
+      "tick": 2,
+      "ms": 133.88010000000213,
+      "units": 897214,
+      "memory": {
+        "rss": 1594978304,
+        "heapTotal": 491184128,
+        "heapUsed": 396278152,
+        "external": 160885970,
+        "arrayBuffers": 158623342
+      },
+      "resourceUsage": {
+        "userCPUTime": 35718000,
+        "systemCPUTime": 1593000,
+        "maxRSS": 1557596,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 485755,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 9,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4296691712,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 906,
+        "peakMB": 906,
+        "freeMB": 0,
+        "arrays": 596,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 897214,
+        "visited": 900101,
+        "attempted": 220825,
+        "moved": 137652,
+        "blockedOrClipped": 147415,
+        "simdGroups": 484593,
+        "overHalo": 0,
+        "footprintMoves": 67562,
+        "scalarLanes": 733
+      }
+    },
+    {
+      "at": 1792566070541,
+      "tick": 3,
+      "ms": 51.815300000002026,
+      "units": 897086,
+      "memory": {
+        "rss": 1595428864,
+        "heapTotal": 491446272,
+        "heapUsed": 399101928,
+        "external": 160885970,
+        "arrayBuffers": 158623342
+      },
+      "resourceUsage": {
+        "userCPUTime": 36125000,
+        "systemCPUTime": 1609000,
+        "maxRSS": 1558036,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 485865,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 11,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4293144576,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 906,
+        "peakMB": 906,
+        "freeMB": 0,
+        "arrays": 596,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 897086,
+        "visited": 897455,
+        "attempted": 219867,
+        "moved": 122032,
+        "blockedOrClipped": 165996,
+        "simdGroups": 484843,
+        "overHalo": 0,
+        "footprintMoves": 45304,
+        "scalarLanes": 11059
+      }
+    },
+    {
+      "at": 1792566070629,
+      "tick": 4,
+      "ms": 87.45270000000164,
+      "units": 897078,
+      "memory": {
+        "rss": 1606119424,
+        "heapTotal": 491708416,
+        "heapUsed": 401931584,
+        "external": 160887314,
+        "arrayBuffers": 158624686
+      },
+      "resourceUsage": {
+        "userCPUTime": 37015000,
+        "systemCPUTime": 1625000,
+        "maxRSS": 1577224,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 491631,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 13,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4289576960,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 925,
+        "peakMB": 925,
+        "freeMB": 0,
+        "arrays": 604,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 897078,
+        "visited": 897325,
+        "attempted": 219785,
+        "moved": 109468,
+        "blockedOrClipped": 180325,
+        "simdGroups": 485620,
+        "overHalo": 0,
+        "footprintMoves": 30496,
+        "scalarLanes": 3023
+      }
+    },
+    {
+      "at": 1792566070724,
+      "tick": 5,
+      "ms": 93.59120000000257,
+      "units": 897078,
+      "memory": {
+        "rss": 1613692928,
+        "heapTotal": 491708416,
+        "heapUsed": 406257128,
+        "external": 161627986,
+        "arrayBuffers": 159365358
+      },
+      "resourceUsage": {
+        "userCPUTime": 37796000,
+        "systemCPUTime": 1625000,
+        "maxRSS": 1577224,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 493480,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 15,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4277342208,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 927,
+        "peakMB": 927,
+        "freeMB": 0,
+        "arrays": 611,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 897078,
+        "visited": 897325,
+        "attempted": 219268,
+        "moved": 88177,
+        "blockedOrClipped": 200891,
+        "simdGroups": 487185,
+        "overHalo": 0,
+        "footprintMoves": 23084,
+        "scalarLanes": 3219
+      }
+    },
+    {
+      "at": 1792566070847,
+      "tick": 6,
+      "ms": 121.83550000000105,
+      "units": 896507,
+      "memory": {
+        "rss": 1610276864,
+        "heapTotal": 493203456,
+        "heapUsed": 410467064,
+        "external": 161629330,
+        "arrayBuffers": 159366702
+      },
+      "resourceUsage": {
+        "userCPUTime": 38703000,
+        "systemCPUTime": 1625000,
+        "maxRSS": 1577224,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 494173,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 17,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4270776320,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 927,
+        "peakMB": 927,
+        "freeMB": 0,
+        "arrays": 611,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 896507,
+        "visited": 897303,
+        "attempted": 216336,
+        "moved": 74576,
+        "blockedOrClipped": 203908,
+        "simdGroups": 491370,
+        "overHalo": 0,
+        "footprintMoves": 18284,
+        "scalarLanes": 267
+      }
+    },
+    {
+      "at": 1792566070906,
+      "tick": 7,
+      "ms": 58.39480000000185,
+      "units": 896507,
+      "memory": {
+        "rss": 1610797056,
+        "heapTotal": 493203456,
+        "heapUsed": 412732440,
+        "external": 161629330,
+        "arrayBuffers": 159366702
+      },
+      "resourceUsage": {
+        "userCPUTime": 38968000,
+        "systemCPUTime": 1656000,
+        "maxRSS": 1577224,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 494299,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 19,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4271058944,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 927,
+        "peakMB": 927,
+        "freeMB": 0,
+        "arrays": 611,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 896507,
+        "visited": 896745,
+        "attempted": 215957,
+        "moved": 66719,
+        "blockedOrClipped": 205971,
+        "simdGroups": 492037,
+        "overHalo": 0,
+        "footprintMoves": 11028,
+        "scalarLanes": 2503
+      }
+    },
+    {
+      "at": 1792566070964,
+      "tick": 8,
+      "ms": 57.06489999999758,
+      "units": 896507,
+      "memory": {
+        "rss": 1610895360,
+        "heapTotal": 493203456,
+        "heapUsed": 415317808,
+        "external": 161630674,
+        "arrayBuffers": 159368046
+      },
+      "resourceUsage": {
+        "userCPUTime": 39375000,
+        "systemCPUTime": 1656000,
+        "maxRSS": 1577224,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 494323,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 21,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4272578560,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 927,
+        "peakMB": 927,
+        "freeMB": 0,
+        "arrays": 611,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 896507,
+        "visited": 896737,
+        "attempted": 215951,
+        "moved": 59327,
+        "blockedOrClipped": 208031,
+        "simdGroups": 492507,
+        "overHalo": 0,
+        "footprintMoves": 11849,
+        "scalarLanes": 859
+      }
+    },
+    {
+      "at": 1792566071024,
+      "tick": 9,
+      "ms": 58.9416999999994,
+      "units": 896507,
+      "memory": {
+        "rss": 1611550720,
+        "heapTotal": 493203456,
+        "heapUsed": 417873088,
+        "external": 161632018,
+        "arrayBuffers": 159369390
+      },
+      "resourceUsage": {
+        "userCPUTime": 39750000,
+        "systemCPUTime": 1671000,
+        "maxRSS": 1577224,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 494483,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 23,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4272812032,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 616,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 896507,
+        "visited": 896737,
+        "attempted": 215931,
+        "moved": 50940,
+        "blockedOrClipped": 210068,
+        "simdGroups": 493409,
+        "overHalo": 0,
+        "footprintMoves": 8590,
+        "scalarLanes": 898
+      }
+    },
+    {
+      "at": 1792566071174,
+      "tick": 10,
+      "ms": 148.07430000000022,
+      "units": 895910,
+      "memory": {
+        "rss": 1624641536,
+        "heapTotal": 495042560,
+        "heapUsed": 422949272,
+        "external": 161633362,
+        "arrayBuffers": 159370734
+      },
+      "resourceUsage": {
+        "userCPUTime": 40953000,
+        "systemCPUTime": 1687000,
+        "maxRSS": 1586580,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 497686,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 25,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4259581952,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 616,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 895910,
+        "visited": 896737,
+        "attempted": 211490,
+        "moved": 45762,
+        "blockedOrClipped": 205923,
+        "simdGroups": 494368,
+        "overHalo": 0,
+        "footprintMoves": 7337,
+        "scalarLanes": 274
+      }
+    },
+    {
+      "at": 1792566071233,
+      "tick": 11,
+      "ms": 58.254000000000815,
+      "units": 895910,
+      "memory": {
+        "rss": 1626038272,
+        "heapTotal": 495316992,
+        "heapUsed": 425804416,
+        "external": 161634706,
+        "arrayBuffers": 159372078
+      },
+      "resourceUsage": {
+        "userCPUTime": 41343000,
+        "systemCPUTime": 1687000,
+        "maxRSS": 1587928,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 498025,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 27,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4253970432,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 616,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 895910,
+        "visited": 896161,
+        "attempted": 211046,
+        "moved": 42182,
+        "blockedOrClipped": 206489,
+        "simdGroups": 494571,
+        "overHalo": 0,
+        "footprintMoves": 6211,
+        "scalarLanes": 2576
+      }
+    },
+    {
+      "at": 1792566071292,
+      "tick": 12,
+      "ms": 45.247300000002724,
+      "units": 895910,
+      "memory": {
+        "rss": 1626087424,
+        "heapTotal": 495132672,
+        "heapUsed": 399514896,
+        "external": 161618173,
+        "arrayBuffers": 159355545
+      },
+      "resourceUsage": {
+        "userCPUTime": 41687000,
+        "systemCPUTime": 1687000,
+        "maxRSS": 1587992,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 498085,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 29,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4253290496,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 618,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 895910,
+        "visited": 896150,
+        "attempted": 211015,
+        "moved": 38506,
+        "blockedOrClipped": 207260,
+        "simdGroups": 494805,
+        "overHalo": 0,
+        "footprintMoves": 4989,
+        "scalarLanes": 941
+      }
+    },
+    {
+      "at": 1792566071360,
+      "tick": 13,
+      "ms": 66.32079999999769,
+      "units": 895910,
+      "memory": {
+        "rss": 1627201536,
+        "heapTotal": 495132672,
+        "heapUsed": 402466512,
+        "external": 163323453,
+        "arrayBuffers": 161060825
+      },
+      "resourceUsage": {
+        "userCPUTime": 42187000,
+        "systemCPUTime": 1687000,
+        "maxRSS": 1589064,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 498357,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 31,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4251197440,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 618,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 895910,
+        "visited": 896148,
+        "attempted": 211007,
+        "moved": 34890,
+        "blockedOrClipped": 207949,
+        "simdGroups": 495460,
+        "overHalo": 0,
+        "footprintMoves": 4643,
+        "scalarLanes": 792
+      }
+    },
+    {
+      "at": 1792566071543,
+      "tick": 14,
+      "ms": 182.02739999999903,
+      "units": 895689,
+      "memory": {
+        "rss": 1627357184,
+        "heapTotal": 495132672,
+        "heapUsed": 405337872,
+        "external": 163324797,
+        "arrayBuffers": 161062169
+      },
+      "resourceUsage": {
+        "userCPUTime": 43531000,
+        "systemCPUTime": 1703000,
+        "maxRSS": 1589216,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 498395,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 33,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4259438592,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 895689,
+        "visited": 896147,
+        "attempted": 208652,
+        "moved": 30339,
+        "blockedOrClipped": 205662,
+        "simdGroups": 495927,
+        "overHalo": 0,
+        "footprintMoves": 4003,
+        "scalarLanes": 281
+      }
+    },
+    {
+      "at": 1792566071604,
+      "tick": 15,
+      "ms": 60.78220000000147,
+      "units": 895689,
+      "memory": {
+        "rss": 1627357184,
+        "heapTotal": 495132672,
+        "heapUsed": 407866952,
+        "external": 163324797,
+        "arrayBuffers": 161062169
+      },
+      "resourceUsage": {
+        "userCPUTime": 43890000,
+        "systemCPUTime": 1718000,
+        "maxRSS": 1589216,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 498395,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 35,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4249526272,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 895689,
+        "visited": 895934,
+        "attempted": 208522,
+        "moved": 27925,
+        "blockedOrClipped": 206004,
+        "simdGroups": 496043,
+        "overHalo": 0,
+        "footprintMoves": 3139,
+        "scalarLanes": 1148
+      }
+    },
+    {
+      "at": 1792566071670,
+      "tick": 16,
+      "ms": 64.32860000000073,
+      "units": 895689,
+      "memory": {
+        "rss": 1627385856,
+        "heapTotal": 495132672,
+        "heapUsed": 410404048,
+        "external": 163326141,
+        "arrayBuffers": 161063513
+      },
+      "resourceUsage": {
+        "userCPUTime": 44281000,
+        "systemCPUTime": 1718000,
+        "maxRSS": 1589244,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 498402,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 37,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4257218560,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 895689,
+        "visited": 895932,
+        "attempted": 208515,
+        "moved": 26248,
+        "blockedOrClipped": 206360,
+        "simdGroups": 496158,
+        "overHalo": 0,
+        "footprintMoves": 2357,
+        "scalarLanes": 513
+      }
+    },
+    {
+      "at": 1792566071733,
+      "tick": 17,
+      "ms": 62.12669999999707,
+      "units": 895689,
+      "memory": {
+        "rss": 1627402240,
+        "heapTotal": 495132672,
+        "heapUsed": 412793648,
+        "external": 163327485,
+        "arrayBuffers": 161064857
+      },
+      "resourceUsage": {
+        "userCPUTime": 44781000,
+        "systemCPUTime": 1718000,
+        "maxRSS": 1589260,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 498406,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 39,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4252880896,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 895689,
+        "visited": 895934,
+        "attempted": 208509,
+        "moved": 24201,
+        "blockedOrClipped": 206573,
+        "simdGroups": 496296,
+        "overHalo": 0,
+        "footprintMoves": 2469,
+        "scalarLanes": 478
+      }
+    },
+    {
+      "at": 1792566071877,
+      "tick": 18,
+      "ms": 143.10819999999876,
+      "units": 895601,
+      "memory": {
+        "rss": 1627955200,
+        "heapTotal": 495542272,
+        "heapUsed": 415844256,
+        "external": 163328829,
+        "arrayBuffers": 161066201
+      },
+      "resourceUsage": {
+        "userCPUTime": 45859000,
+        "systemCPUTime": 1718000,
+        "maxRSS": 1589800,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 498543,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 41,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4251897856,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 895601,
+        "visited": 895932,
+        "attempted": 207419,
+        "moved": 20866,
+        "blockedOrClipped": 205537,
+        "simdGroups": 496535,
+        "overHalo": 0,
+        "footprintMoves": 2328,
+        "scalarLanes": 283
+      }
+    },
+    {
+      "at": 1792566071932,
+      "tick": 19,
+      "ms": 53.40099999999802,
+      "units": 895601,
+      "memory": {
+        "rss": 1627996160,
+        "heapTotal": 495542272,
+        "heapUsed": 418329160,
+        "external": 163330173,
+        "arrayBuffers": 161067545
+      },
+      "resourceUsage": {
+        "userCPUTime": 46125000,
+        "systemCPUTime": 1734000,
+        "maxRSS": 1589840,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 498553,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 43,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4247900160,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 895601,
+        "visited": 895848,
+        "attempted": 207373,
+        "moved": 18954,
+        "blockedOrClipped": 205749,
+        "simdGroups": 496645,
+        "overHalo": 0,
+        "footprintMoves": 1677,
+        "scalarLanes": 628
+      }
+    },
+    {
+      "at": 1792566071991,
+      "tick": 20,
+      "ms": 58.70820000000094,
+      "units": 895601,
+      "memory": {
+        "rss": 1628143616,
+        "heapTotal": 495542272,
+        "heapUsed": 420679528,
+        "external": 163331517,
+        "arrayBuffers": 161068889
+      },
+      "resourceUsage": {
+        "userCPUTime": 46625000,
+        "systemCPUTime": 1734000,
+        "maxRSS": 1589984,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 498589,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 45,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4246884352,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 895601,
+        "visited": 895844,
+        "attempted": 207358,
+        "moved": 17480,
+        "blockedOrClipped": 205885,
+        "simdGroups": 496710,
+        "overHalo": 0,
+        "footprintMoves": 1467,
+        "scalarLanes": 374
+      }
+    },
+    {
+      "at": 1792566072252,
+      "tick": 21,
+      "ms": 259.3706999999995,
+      "units": 895423,
+      "memory": {
+        "rss": 1665024000,
+        "heapTotal": 532766720,
+        "heapUsed": 425698960,
+        "external": 162591050,
+        "arrayBuffers": 160328422
+      },
+      "resourceUsage": {
+        "userCPUTime": 48203000,
+        "systemCPUTime": 1750000,
+        "maxRSS": 1626000,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 507808,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 47,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4204756992,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 895423,
+        "visited": 895844,
+        "attempted": 207288,
+        "moved": 16082,
+        "blockedOrClipped": 205959,
+        "simdGroups": 496790,
+        "overHalo": 0,
+        "footprintMoves": 1322,
+        "scalarLanes": 1048
+      }
+    },
+    {
+      "at": 1792566072320,
+      "tick": 22,
+      "ms": 66.92309999999998,
+      "units": 895382,
+      "memory": {
+        "rss": 1666015232,
+        "heapTotal": 532766720,
+        "heapUsed": 429440600,
+        "external": 162595073,
+        "arrayBuffers": 160332445
+      },
+      "resourceUsage": {
+        "userCPUTime": 48625000,
+        "systemCPUTime": 1765000,
+        "maxRSS": 1626968,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 508050,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 49,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4209557504,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 895382,
+        "visited": 895666,
+        "attempted": 206756,
+        "moved": 14642,
+        "blockedOrClipped": 205478,
+        "simdGroups": 496834,
+        "overHalo": 0,
+        "footprintMoves": 1345,
+        "scalarLanes": 770
+      }
+    },
+    {
+      "at": 1792566072387,
+      "tick": 23,
+      "ms": 65.74330000000191,
+      "units": 895382,
+      "memory": {
+        "rss": 1666195456,
+        "heapTotal": 532766720,
+        "heapUsed": 432488760,
+        "external": 162597309,
+        "arrayBuffers": 160334681
+      },
+      "resourceUsage": {
+        "userCPUTime": 49187000,
+        "systemCPUTime": 1765000,
+        "maxRSS": 1627144,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 508094,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 51,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4210102272,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 895382,
+        "visited": 895631,
+        "attempted": 206720,
+        "moved": 13792,
+        "blockedOrClipped": 205605,
+        "simdGroups": 496869,
+        "overHalo": 0,
+        "footprintMoves": 1102,
+        "scalarLanes": 554
+      }
+    },
+    {
+      "at": 1792566072455,
+      "tick": 24,
+      "ms": 66.47109999999884,
+      "units": 895382,
+      "memory": {
+        "rss": 1666379776,
+        "heapTotal": 532766720,
+        "heapUsed": 435266056,
+        "external": 162599413,
+        "arrayBuffers": 160336785
+      },
+      "resourceUsage": {
+        "userCPUTime": 49562000,
+        "systemCPUTime": 1781000,
+        "maxRSS": 1627324,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 508139,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 53,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4208144384,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 895382,
+        "visited": 895623,
+        "attempted": 206709,
+        "moved": 13106,
+        "blockedOrClipped": 205678,
+        "simdGroups": 496921,
+        "overHalo": 0,
+        "footprintMoves": 842,
+        "scalarLanes": 404
+      }
+    },
+    {
+      "at": 1792566072510,
+      "tick": 25,
+      "ms": 54.66200000000026,
+      "units": 895382,
+      "memory": {
+        "rss": 1666396160,
+        "heapTotal": 532766720,
+        "heapUsed": 437907672,
+        "external": 162601346,
+        "arrayBuffers": 160338718
+      },
+      "resourceUsage": {
+        "userCPUTime": 49953000,
+        "systemCPUTime": 1781000,
+        "maxRSS": 1627340,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 508143,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 55,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4206239744,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 895382,
+        "visited": 895625,
+        "attempted": 206705,
+        "moved": 12471,
+        "blockedOrClipped": 205709,
+        "simdGroups": 496991,
+        "overHalo": 0,
+        "footprintMoves": 774,
+        "scalarLanes": 512
+      }
+    },
+    {
+      "at": 1792566073028,
+      "tick": 26,
+      "ms": 517.1013000000021,
+      "units": 734849,
+      "memory": {
+        "rss": 1699627008,
+        "heapTotal": 566476800,
+        "heapUsed": 435669184,
+        "external": 162583485,
+        "arrayBuffers": 160320857
+      },
+      "resourceUsage": {
+        "userCPUTime": 51843000,
+        "systemCPUTime": 1796000,
+        "maxRSS": 1659792,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 517087,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 57,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4084658176,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 734849,
+        "visited": 895625,
+        "attempted": 206478,
+        "moved": 11747,
+        "blockedOrClipped": 205406,
+        "simdGroups": 497038,
+        "overHalo": 0,
+        "footprintMoves": 781,
+        "scalarLanes": 296
+      }
+    },
+    {
+      "at": 1792566073156,
+      "tick": 27,
+      "ms": 126.61650000000009,
+      "units": 734847,
+      "memory": {
+        "rss": 1700036608,
+        "heapTotal": 567091200,
+        "heapUsed": 447244920,
+        "external": 162584918,
+        "arrayBuffers": 160322290
+      },
+      "resourceUsage": {
+        "userCPUTime": 52500000,
+        "systemCPUTime": 1812000,
+        "maxRSS": 1662420,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 518788,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 59,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4075032576,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 734847,
+        "visited": 737318,
+        "attempted": 149486,
+        "moved": 40082,
+        "blockedOrClipped": 136845,
+        "simdGroups": 443449,
+        "overHalo": 0,
+        "footprintMoves": 33537,
+        "scalarLanes": 363467
+      }
+    },
+    {
+      "at": 1792566073281,
+      "tick": 28,
+      "ms": 123.8788999999997,
+      "units": 734847,
+      "memory": {
+        "rss": 1707655168,
+        "heapTotal": 567091200,
+        "heapUsed": 460195520,
+        "external": 162586332,
+        "arrayBuffers": 160323704
+      },
+      "resourceUsage": {
+        "userCPUTime": 53328000,
+        "systemCPUTime": 1812000,
+        "maxRSS": 1667632,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 520648,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 61,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4069076992,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 734847,
+        "visited": 736480,
+        "attempted": 148600,
+        "moved": 40721,
+        "blockedOrClipped": 134979,
+        "simdGroups": 445928,
+        "overHalo": 0,
+        "footprintMoves": 10237,
+        "scalarLanes": 90989
+      }
+    },
+    {
+      "at": 1792566073391,
+      "tick": 29,
+      "ms": 109.08690000000206,
+      "units": 734845,
+      "memory": {
+        "rss": 1711734784,
+        "heapTotal": 567615488,
+        "heapUsed": 469167864,
+        "external": 162587676,
+        "arrayBuffers": 160325048
+      },
+      "resourceUsage": {
+        "userCPUTime": 54140000,
+        "systemCPUTime": 1812000,
+        "maxRSS": 1671616,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 521645,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 63,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4040851456,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 734845,
+        "visited": 736609,
+        "attempted": 148846,
+        "moved": 39664,
+        "blockedOrClipped": 133787,
+        "simdGroups": 446421,
+        "overHalo": 0,
+        "footprintMoves": 16497,
+        "scalarLanes": 90520
+      }
+    },
+    {
+      "at": 1792566073502,
+      "tick": 30,
+      "ms": 110.6882000000005,
+      "units": 728572,
+      "memory": {
+        "rss": 1711951872,
+        "heapTotal": 567615488,
+        "heapUsed": 480935424,
+        "external": 162589020,
+        "arrayBuffers": 160326392
+      },
+      "resourceUsage": {
+        "userCPUTime": 54687000,
+        "systemCPUTime": 1828000,
+        "maxRSS": 1671828,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 521698,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 65,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4025098240,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 728572,
+        "visited": 736300,
+        "attempted": 239256,
+        "moved": 127188,
+        "blockedOrClipped": 154728,
+        "simdGroups": 447582,
+        "overHalo": 0,
+        "footprintMoves": 75524,
+        "scalarLanes": 2656
+      }
+    },
+    {
+      "at": 1792566073757,
+      "tick": 31,
+      "ms": 254.13460000000123,
+      "units": 727995,
+      "memory": {
+        "rss": 1709424640,
+        "heapTotal": 569188352,
+        "heapUsed": 476822008,
+        "external": 162596517,
+        "arrayBuffers": 160320857
+      },
+      "resourceUsage": {
+        "userCPUTime": 55531000,
+        "systemCPUTime": 1828000,
+        "maxRSS": 1672644,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 522563,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 67,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4159438848,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 727995,
+        "visited": 730163,
+        "attempted": 235628,
+        "moved": 121741,
+        "blockedOrClipped": 167503,
+        "simdGroups": 445508,
+        "overHalo": 0,
+        "footprintMoves": 61502,
+        "scalarLanes": 23918
+      }
+    },
+    {
+      "at": 1792566073852,
+      "tick": 32,
+      "ms": 93.95910000000003,
+      "units": 727735,
+      "memory": {
+        "rss": 1710510080,
+        "heapTotal": 569188352,
+        "heapUsed": 484203256,
+        "external": 162587632,
+        "arrayBuffers": 160325004
+      },
+      "resourceUsage": {
+        "userCPUTime": 56062000,
+        "systemCPUTime": 1843000,
+        "maxRSS": 1672644,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 522828,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 69,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4143202304,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 727735,
+        "visited": 729485,
+        "attempted": 235340,
+        "moved": 115635,
+        "blockedOrClipped": 177302,
+        "simdGroups": 446290,
+        "overHalo": 0,
+        "footprintMoves": 39698,
+        "scalarLanes": 8780
+      }
+    },
+    {
+      "at": 1792566073925,
+      "tick": 33,
+      "ms": 72.22010000000228,
+      "units": 727721,
+      "memory": {
+        "rss": 1711603712,
+        "heapTotal": 570105856,
+        "heapUsed": 491761392,
+        "external": 162590451,
+        "arrayBuffers": 160327823
+      },
+      "resourceUsage": {
+        "userCPUTime": 56625000,
+        "systemCPUTime": 1843000,
+        "maxRSS": 1672644,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 523098,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 71,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4143583232,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 727721,
+        "visited": 729246,
+        "attempted": 234607,
+        "moved": 101859,
+        "blockedOrClipped": 198786,
+        "simdGroups": 447967,
+        "overHalo": 0,
+        "footprintMoves": 39609,
+        "scalarLanes": 8099
+      }
+    },
+    {
+      "at": 1792566074078,
+      "tick": 34,
+      "ms": 151.30129999999917,
+      "units": 722787,
+      "memory": {
+        "rss": 1748824064,
+        "heapTotal": 609165312,
+        "heapUsed": 490479632,
+        "external": 162592926,
+        "arrayBuffers": 160320857
+      },
+      "resourceUsage": {
+        "userCPUTime": 57390000,
+        "systemCPUTime": 1875000,
+        "maxRSS": 1707836,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 532412,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 73,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4091670528,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 722787,
+        "visited": 729381,
+        "attempted": 227791,
+        "moved": 92202,
+        "blockedOrClipped": 197821,
+        "simdGroups": 454029,
+        "overHalo": 0,
+        "footprintMoves": 34623,
+        "scalarLanes": 2641
+      }
+    },
+    {
+      "at": 1792566074174,
+      "tick": 35,
+      "ms": 95.04349999999977,
+      "units": 722780,
+      "memory": {
+        "rss": 1748914176,
+        "heapTotal": 609165312,
+        "heapUsed": 497469768,
+        "external": 162585479,
+        "arrayBuffers": 160322851
+      },
+      "resourceUsage": {
+        "userCPUTime": 57750000,
+        "systemCPUTime": 1890000,
+        "maxRSS": 1707924,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 532434,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 75,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4083892224,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 722780,
+        "visited": 724680,
+        "attempted": 223494,
+        "moved": 86007,
+        "blockedOrClipped": 196935,
+        "simdGroups": 454188,
+        "overHalo": 0,
+        "footprintMoves": 25608,
+        "scalarLanes": 16249
+      }
+    },
+    {
+      "at": 1792566074416,
+      "tick": 36,
+      "ms": 241.52270000000135,
+      "units": 722296,
+      "memory": {
+        "rss": 1749155840,
+        "heapTotal": 609165312,
+        "heapUsed": 516271328,
+        "external": 162593566,
+        "arrayBuffers": 160330938
+      },
+      "resourceUsage": {
+        "userCPUTime": 58406000,
+        "systemCPUTime": 1890000,
+        "maxRSS": 1708160,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 532493,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 77,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4040007680,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 722296,
+        "visited": 724451,
+        "attempted": 223007,
+        "moved": 80550,
+        "blockedOrClipped": 200242,
+        "simdGroups": 455030,
+        "overHalo": 0,
+        "footprintMoves": 26962,
+        "scalarLanes": 7588
+      }
+    },
+    {
+      "at": 1792566074523,
+      "tick": 37,
+      "ms": 105.47850000000108,
+      "units": 722020,
+      "memory": {
+        "rss": 1749340160,
+        "heapTotal": 609165312,
+        "heapUsed": 523725616,
+        "external": 162925562,
+        "arrayBuffers": 160662934
+      },
+      "resourceUsage": {
+        "userCPUTime": 59203000,
+        "systemCPUTime": 1890000,
+        "maxRSS": 1708340,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 532538,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 79,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4039307264,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 722020,
+        "visited": 723988,
+        "attempted": 222913,
+        "moved": 74772,
+        "blockedOrClipped": 203623,
+        "simdGroups": 455905,
+        "overHalo": 0,
+        "footprintMoves": 21697,
+        "scalarLanes": 7203
+      }
+    },
+    {
+      "at": 1792566074689,
+      "tick": 38,
+      "ms": 164.86789999999746,
+      "units": 719130,
+      "memory": {
+        "rss": 1749348352,
+        "heapTotal": 609165312,
+        "heapUsed": 533274896,
+        "external": 162928428,
+        "arrayBuffers": 160665800
+      },
+      "resourceUsage": {
+        "userCPUTime": 60062000,
+        "systemCPUTime": 1906000,
+        "maxRSS": 1708348,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 532540,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 81,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4024127488,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 719130,
+        "visited": 723670,
+        "attempted": 217029,
+        "moved": 69187,
+        "blockedOrClipped": 198581,
+        "simdGroups": 457260,
+        "overHalo": 0,
+        "footprintMoves": 20028,
+        "scalarLanes": 3275
+      }
+    },
+    {
+      "at": 1792566074779,
+      "tick": 39,
+      "ms": 89.29490000000078,
+      "units": 719126,
+      "memory": {
+        "rss": 1749360640,
+        "heapTotal": 609165312,
+        "heapUsed": 540205248,
+        "external": 162930946,
+        "arrayBuffers": 160668318
+      },
+      "resourceUsage": {
+        "userCPUTime": 60562000,
+        "systemCPUTime": 1921000,
+        "maxRSS": 1708360,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 532543,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 83,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4002553856,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 719126,
+        "visited": 720804,
+        "attempted": 214652,
+        "moved": 65199,
+        "blockedOrClipped": 198729,
+        "simdGroups": 456561,
+        "overHalo": 0,
+        "footprintMoves": 17526,
+        "scalarLanes": 11377
+      }
+    },
+    {
+      "at": 1792566074883,
+      "tick": 40,
+      "ms": 102.47390000000087,
+      "units": 719115,
+      "memory": {
+        "rss": 1764618240,
+        "heapTotal": 625156096,
+        "heapUsed": 524721080,
+        "external": 162913205,
+        "arrayBuffers": 160650577
+      },
+      "resourceUsage": {
+        "userCPUTime": 61031000,
+        "systemCPUTime": 1968000,
+        "maxRSS": 1723260,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 536354,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 85,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 3996487680,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 719115,
+        "visited": 720749,
+        "attempted": 214574,
+        "moved": 61489,
+        "blockedOrClipped": 200865,
+        "simdGroups": 457308,
+        "overHalo": 0,
+        "footprintMoves": 15643,
+        "scalarLanes": 5093
+      }
+    },
+    {
+      "at": 1792566074964,
+      "tick": 41,
+      "ms": 80.22690000000148,
+      "units": 719052,
+      "memory": {
+        "rss": 1764749312,
+        "heapTotal": 625156096,
+        "heapUsed": 531128400,
+        "external": 162915138,
+        "arrayBuffers": 160652510
+      },
+      "resourceUsage": {
+        "userCPUTime": 61703000,
+        "systemCPUTime": 1968000,
+        "maxRSS": 1723388,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 536386,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 87,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 3976839168,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 719052,
+        "visited": 720732,
+        "attempted": 214524,
+        "moved": 57754,
+        "blockedOrClipped": 202768,
+        "simdGroups": 458543,
+        "overHalo": 0,
+        "footprintMoves": 13110,
+        "scalarLanes": 5252
+      }
+    },
+    {
+      "at": 1792566075089,
+      "tick": 42,
+      "ms": 123.64630000000034,
+      "units": 717807,
+      "memory": {
+        "rss": 1764818944,
+        "heapTotal": 625156096,
+        "heapUsed": 538735448,
+        "external": 162916712,
+        "arrayBuffers": 160654084
+      },
+      "resourceUsage": {
+        "userCPUTime": 62500000,
+        "systemCPUTime": 1968000,
+        "maxRSS": 1723456,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 536403,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 89,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4091023360,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 717807,
+        "visited": 720603,
+        "attempted": 208350,
+        "moved": 51782,
+        "blockedOrClipped": 197460,
+        "simdGroups": 459232,
+        "overHalo": 0,
+        "footprintMoves": 12302,
+        "scalarLanes": 2937
+      }
+    },
+    {
+      "at": 1792566075165,
+      "tick": 43,
+      "ms": 74.91000000000349,
+      "units": 717789,
+      "memory": {
+        "rss": 1766866944,
+        "heapTotal": 626794496,
+        "heapUsed": 546904040,
+        "external": 162918196,
+        "arrayBuffers": 160655568
+      },
+      "resourceUsage": {
+        "userCPUTime": 62906000,
+        "systemCPUTime": 1968000,
+        "maxRSS": 1725456,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 536910,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 91,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4087496704,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 717789,
+        "visited": 719501,
+        "attempted": 207392,
+        "moved": 48978,
+        "blockedOrClipped": 197813,
+        "simdGroups": 459189,
+        "overHalo": 0,
+        "footprintMoves": 10331,
+        "scalarLanes": 6580
+      }
+    },
+    {
+      "at": 1792566075238,
+      "tick": 44,
+      "ms": 72.26169999999911,
+      "units": 717789,
+      "memory": {
+        "rss": 1767235584,
+        "heapTotal": 627056640,
+        "heapUsed": 553098272,
+        "external": 162919540,
+        "arrayBuffers": 160656912
+      },
+      "resourceUsage": {
+        "userCPUTime": 63500000,
+        "systemCPUTime": 1984000,
+        "maxRSS": 1725816,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 537000,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 93,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4087517184,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 717789,
+        "visited": 719334,
+        "attempted": 207270,
+        "moved": 46543,
+        "blockedOrClipped": 198798,
+        "simdGroups": 459323,
+        "overHalo": 0,
+        "footprintMoves": 8517,
+        "scalarLanes": 3803
+      }
+    },
+    {
+      "at": 1792566075324,
+      "tick": 45,
+      "ms": 84.869200000001,
+      "units": 717789,
+      "memory": {
+        "rss": 1795702784,
+        "heapTotal": 656154624,
+        "heapUsed": 551415072,
+        "external": 162920884,
+        "arrayBuffers": 160648537
+      },
+      "resourceUsage": {
+        "userCPUTime": 64250000,
+        "systemCPUTime": 2000000,
+        "maxRSS": 1753616,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 544120,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 95,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4056875008,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 717789,
+        "visited": 719323,
+        "attempted": 207225,
+        "moved": 43683,
+        "blockedOrClipped": 199828,
+        "simdGroups": 459641,
+        "overHalo": 0,
+        "footprintMoves": 8433,
+        "scalarLanes": 3816
+      }
+    },
+    {
+      "at": 1792566075550,
+      "tick": 46,
+      "ms": 225.16779999999926,
+      "units": 715600,
+      "memory": {
+        "rss": 1796427776,
+        "heapTotal": 656154624,
+        "heapUsed": 571557736,
+        "external": 162918590,
+        "arrayBuffers": 160655962
+      },
+      "resourceUsage": {
+        "userCPUTime": 65328000,
+        "systemCPUTime": 2015000,
+        "maxRSS": 1754324,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 544303,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 97,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4029997056,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 715600,
+        "visited": 719308,
+        "attempted": 202906,
+        "moved": 39252,
+        "blockedOrClipped": 196006,
+        "simdGroups": 460195,
+        "overHalo": 0,
+        "footprintMoves": 6762,
+        "scalarLanes": 7267
+      }
+    },
+    {
+      "at": 1792566075800,
+      "tick": 47,
+      "ms": 249.25,
+      "units": 712958,
+      "memory": {
+        "rss": 1825972224,
+        "heapTotal": 686563328,
+        "heapUsed": 565063096,
+        "external": 162911165,
+        "arrayBuffers": 160648537
+      },
+      "resourceUsage": {
+        "userCPUTime": 66156000,
+        "systemCPUTime": 2109000,
+        "maxRSS": 1783176,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 551694,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 99,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 3968659456,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 712958,
+        "visited": 717154,
+        "attempted": 201179,
+        "moved": 37559,
+        "blockedOrClipped": 194802,
+        "simdGroups": 459339,
+        "overHalo": 0,
+        "footprintMoves": 6622,
+        "scalarLanes": 11255
+      }
+    },
+    {
+      "at": 1792566075940,
+      "tick": 48,
+      "ms": 138.69590000000244,
+      "units": 712128,
+      "memory": {
+        "rss": 1714495488,
+        "heapTotal": 524038144,
+        "heapUsed": 283740808,
+        "external": 162917100,
+        "arrayBuffers": 138164974
+      },
+      "resourceUsage": {
+        "userCPUTime": 67171000,
+        "systemCPUTime": 2140000,
+        "maxRSS": 1783296,
+        "sharedMemorySize": 0,
+        "unsharedDataSize": 0,
+        "unsharedStackSize": 0,
+        "minorPageFault": 0,
+        "majorPageFault": 551776,
+        "swappedOut": 0,
+        "fsRead": 1442,
+        "fsWrite": 101,
+        "ipcSent": 0,
+        "ipcReceived": 0,
+        "signalsCount": 0,
+        "voluntaryContextSwitches": 0,
+        "involuntaryContextSwitches": 0
+      },
+      "freeBytes": 4057853952,
+      "heap": {
+        "ready": true,
+        "kernels": true,
+        "wasm64": true,
+        "hash": "477c971b279f83f1",
+        "error": null,
+        "memoryMB": 1148,
+        "liveMB": 938,
+        "peakMB": 938,
+        "freeMB": 0,
+        "arrays": 619,
+        "pendingFrees": 0
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 2.015625,
+        "spawns": 1000000,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 712128,
+        "visited": 714536,
+        "attempted": 200937,
+        "moved": 36563,
+        "blockedOrClipped": 194778,
+        "simdGroups": 458375,
+        "overHalo": 0,
+        "footprintMoves": 6420,
+        "scalarLanes": 6981
+      }
+    }
+  ],
+  "phases": {
+    "simMoveRun": 42.219166666666375,
+    "simParallelRun:89": 25.185216666666747,
+    "simParallelBackgroundWait": 19.778522916666663,
+    "combatScanRun": 15.713702083333223,
+    "towersTick": 14.330768750000138,
+    "_forEachUnitInTickOrder": 12.963720833332976,
+    "spatialIndexRebuild": 7.387131249999963,
+    "simUnitStateCollect": 7.298595833333441,
+    "statusPrepassRun": 4.049562500000017,
+    "simParallelRun:24": 3.826991666666572,
+    "updateAllPlayerVisibility": 2.725562499999872,
+    "recalculateUnitEffectiveStats": 1.8986791666667007,
+    "unitHitsResolve": 1.746922916666487,
+    "simParallelRun:27": 1.2435124999999516,
+    "simParallelRun:37": 1.1979958333334555,
+    "simParallelRun:32": 1.1197250000000167,
+    "simParallelRun:60": 0.8927499999999023,
+    "simParallelRun:34": 0.7999645833334247,
+    "simParallelRun:20": 0.6743145833330951,
+    "occupancyPrepareMovement": 0.6594104166664086,
+    "simParallelRun:36": 0.5991625000001477,
+    "simParallelRun:46": 0.5266395833333112,
+    "simParallelRun:30": 0.4691583333333256,
+    "navFieldsFlush": 0.4072729166667462,
+    "unitRetirePrepare": 0.3939229166670278,
+    "simParallelRun:63": 0.3935187499998089,
+    "simParallelRun:49": 0.377866666666326,
+    "_simMoveBuildHostile": 0.2528583333334306,
+    "simParallelRun:41": 0.23986666666678502,
+    "simParallelRun:66": 0.22501666666691258,
+    "simParallelRun:43": 0.15504583333336086,
+    "simParallelRun:45": 0.13323124999995647,
+    "_simAreaCsr": 0.12024583333557833,
+    "navTick": 0.10428125000021282,
+    "_simMoveChargeSteps": 0.09308333333365226,
+    "simParallelRun:44": 0.05882291666701652,
+    "spawnerStructuresTick": 0.04803125000004608,
+    "simParallelRun:77": 0.03960833333333843,
+    "_simMoveWalls": 0.020710416668104397,
+    "unitPassBegin": 0.017422916666191668,
+    "recalculateThingPrecomputedStats": 0.013291666666721843,
+    "visCoverHoldEnd": 0.007987500000278184,
+    "processGlobalSpawnerQueue": 0.004735416666790115,
+    "separationStart": 0.00461458333347764,
+    "runUnitSeparationPass": 0.002995833333443443,
+    "_simMoveAreaBoxes": 0.002814583333019982,
+    "projectilesBegin": 0.0013562499998442945
+  },
+  "phaseSelf": {
+    "simParallelRun:89": 25.185216666666747,
+    "simParallelBackgroundWait": 19.778522916666663,
+    "towersTick": 14.330768750000138,
+    "_forEachUnitInTickOrder": 11.030543749995863,
+    "simUnitStateCollect": 7.298595833333441,
+    "simParallelRun:24": 3.826991666666572,
+    "updateAllPlayerVisibility": 2.253535416666409,
+    "simParallelRun:27": 1.2435124999999516,
+    "simParallelRun:37": 1.1979958333334555,
+    "simParallelRun:32": 1.1197250000000167,
+    "simParallelRun:60": 0.8927499999999023,
+    "simParallelRun:34": 0.7999645833334247,
+    "simParallelRun:20": 0.6743145833330951,
+    "occupancyPrepareMovement": 0.6594104166664086,
+    "recalculateUnitEffectiveStats": 0.6551666666667492,
+    "unitHitsResolve": 0.629156249999672,
+    "simParallelRun:36": 0.5991625000001477,
+    "simParallelRun:46": 0.5266395833333112,
+    "simParallelRun:30": 0.4691583333333256,
+    "navFieldsFlush": 0.4072729166667462,
+    "simParallelRun:63": 0.3935187499998089,
+    "simParallelRun:49": 0.377866666666326,
+    "simMoveRun": 0.3093833333332441,
+    "simParallelRun:41": 0.23986666666678502,
+    "combatScanRun": 0.23755625000004935,
+    "simParallelRun:66": 0.22501666666691258,
+    "statusPrepassRun": 0.22257083333344477,
+    "simParallelRun:43": 0.15504583333336086,
+    "simParallelRun:45": 0.13323124999995647,
+    "_simAreaCsr": 0.12024583333557833,
+    "spatialIndexRebuild": 0.10474791666661076,
+    "_simMoveChargeSteps": 0.09308333333365226,
+    "navTick": 0.06340833333350322,
+    "simParallelRun:44": 0.05882291666701652,
+    "spawnerStructuresTick": 0.04803125000004608,
+    "simParallelRun:77": 0.03960833333333843,
+    "_simMoveBuildHostile": 0.03898958333305321,
+    "_simMoveWalls": 0.020710416668104397,
+    "unitPassBegin": 0.017422916666191668,
+    "unitRetirePrepare": 0.016056250000701766,
+    "recalculateThingPrecomputedStats": 0.013291666666721843,
+    "visCoverHoldEnd": 0.007987500000278184,
+    "processGlobalSpawnerQueue": 0.004735416666790115,
+    "separationStart": 0.00461458333347764,
+    "runUnitSeparationPass": 0.002995833333443443,
+    "_simMoveAreaBoxes": 0.002814583333019982,
+    "projectilesBegin": 0.0013562499998442945
+  },
+  "bindings": [
+    {
+      "name": "unit.mvNav",
+      "type": "Int32Array",
+      "bytes": 33030144
+    },
+    {
+      "name": "mv.lookc",
+      "type": "Int32Array",
+      "bytes": 16777216
+    },
+    {
+      "name": "navb.fields",
+      "type": "Uint16Array",
+      "bytes": 12030976
+    },
+    {
+      "name": "nav.0.fields",
+      "type": "Uint16Array",
+      "bytes": 12030976
+    },
+    {
+      "name": "nav.2.fields",
+      "type": "Uint16Array",
+      "bytes": 12030976
+    },
+    {
+      "name": "nav.5.fields",
+      "type": "Uint16Array",
+      "bytes": 12030976
+    },
+    {
+      "name": "nav.6.fields",
+      "type": "Uint16Array",
+      "bytes": 12030976
+    },
+    {
+      "name": "nav.7.fields",
+      "type": "Uint16Array",
+      "bytes": 12030976
+    },
+    {
+      "name": "nav.8.fields",
+      "type": "Uint16Array",
+      "bytes": 12030976
+    },
+    {
+      "name": "nav.9.fields",
+      "type": "Uint16Array",
+      "bytes": 12030976
+    },
+    {
+      "name": "nav.10.fields",
+      "type": "Uint16Array",
+      "bytes": 12030976
+    },
+    {
+      "name": "spatial.types",
+      "type": "Int32Array",
+      "bytes": 10485760
+    },
+    {
+      "name": "vis.zoneIds",
+      "type": "Int32Array",
+      "bytes": 9437184
+    },
+    {
+      "name": "spatial.cplx",
+      "type": "Int32Array",
+      "bytes": 8388608
+    },
+    {
+      "name": "ix.complex",
+      "type": "Int32Array",
+      "bytes": 8388608
+    },
+    {
+      "name": "acq.saNear",
+      "type": "Int32Array",
+      "bytes": 8116224
+    },
+    {
+      "name": "nav.4.fields",
+      "type": "Uint16Array",
+      "bytes": 8031232
+    },
+    {
+      "name": "nav.3.fields",
+      "type": "Uint16Array",
+      "bytes": 7047168
+    },
+    {
+      "name": "hc.e",
+      "type": "Float32Array",
+      "bytes": 5000000
+    },
+    {
+      "name": "hc.m",
+      "type": "Float32Array",
+      "bytes": 5000000
+    },
+    {
+      "name": "hc.id",
+      "type": "Int32Array",
+      "bytes": 5000000
+    },
+    {
+      "name": "adj.wk",
+      "type": "Int32Array",
+      "bytes": 4849664
+    },
+    {
+      "name": "mv.areaBox",
+      "type": "Int32Array",
+      "bytes": 4565376
+    },
+    {
+      "name": "abox.out",
+      "type": "Int32Array",
+      "bytes": 4565376
+    },
+    {
+      "name": "st.list",
+      "type": "Int32Array",
+      "bytes": 4521984
+    },
+    {
+      "name": "ix.keys",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "ix.areas",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "sep.eslot",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "sep.ekey",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "ix.eid",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "ix.slots",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "spatial.keys.1",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "ixd.gone",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "ixd.es2",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "ixd.ek2",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "ixd.eid2",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "vt.x",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "vt.y",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "vt.key",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "occ.eslot",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "mv.post",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "mv.hita",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "mv.hitt",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "upd.cand",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "retire.list",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "acq.x",
+      "type": "Float32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "acq.y",
+      "type": "Float32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "acq.rng",
+      "type": "Float32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "acq.id",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "acq.out",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "acq.tid",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "acq.sout",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "acq.ct",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "acq.ctid",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "acq.bt",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "acq.btid",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "acq.esL",
+      "type": "Int32Array",
+      "bytes": 4505600
+    },
+    {
+      "name": "acq.es",
+      "type": "Int32Array",
+      "bytes": 4489216
+    },
+    {
+      "name": "acq.ex",
+      "type": "Float32Array",
+      "bytes": 4489216
+    },
+    {
+      "name": "acq.ey",
+      "type": "Float32Array",
+      "bytes": 4489216
+    },
+    {
+      "name": "acq.eo",
+      "type": "Int32Array",
+      "bytes": 4489216
+    },
+    {
+      "name": "acq.ea",
+      "type": "Int32Array",
+      "bytes": 4489216
+    },
+    {
+      "name": "acq.eid",
+      "type": "Int32Array",
+      "bytes": 4489216
+    },
+    {
+      "name": "acq.saX",
+      "type": "Float32Array",
+      "bytes": 4489216
+    },
+    {
+      "name": "acq.saY",
+      "type": "Float32Array",
+      "bytes": 4489216
+    },
+    {
+      "name": "acq.saOwner",
+      "type": "Int32Array",
+      "bytes": 4489216
+    },
+    {
+      "name": "acq.saId",
+      "type": "Int32Array",
+      "bytes": 4489216
+    },
+    {
+      "name": "acq.saSlot",
+      "type": "Int32Array",
+      "bytes": 4489216
+    },
+    {
+      "name": "unit.id",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.x",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.y",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.prevX",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.prevY",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.vx",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.vy",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.energy",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.r",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.collisionR",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.pathIndex",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.attackTimer",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.burnTickDamage",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.poisonTickDamage",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.iceTickDamage",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.stackCount",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.unitLevel",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.baseLevel",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.effectiveStacks",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.effectiveLevel",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit._lastAppliedEffectiveLevel",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvLane",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvBase",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvPlen",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvScan",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvFloor",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvPath",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvWake",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvFlow",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvFGen",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvDest",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvHWin",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvHTT",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvHVer",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.cbT",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.cbTick",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.cbTId",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.cbRangeS",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.cbS",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.dbT",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.dbTI",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.dbS",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.dbTick",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.cwTick",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvReady",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvHT",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvHTId",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvTgX",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvTgY",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvTgTol",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvSteady",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.esRad",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.esType",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.esTaken",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.wkIx",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.stDot",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.stAcc",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.lzAcc",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.lzBeam",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.x0",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.y0",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvNavLD",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.spTile",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.spArea",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.spEpoch",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.vsGen",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.vsA",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.maxE",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.spMvOld",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.spMvNew",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvCD",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvCT",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvCVx",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvCVy",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.mvCTl",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.pvAt",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.pvId",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.pvE",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.upB",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.sepR0",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.sepCx",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.sepCy",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.sepIv",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.sepCv",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.esVer",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.fLsX",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.fLsY",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.fLsPX",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.fLsPY",
+      "type": "Float32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.fLsT",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.cmT",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.cmTId",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.hObj",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.rtEnd",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.nvPK",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.hAcc",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.hBurnD",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.hPoiD",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.hWatchK",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.atkWatch",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "unit.sepKey",
+      "type": "Uint32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "occ.x",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "occ.y",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "ixd.k",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "ixd.id",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "ixd.dirty",
+      "type": "Int32Array",
+      "bytes": 4128768
+    },
+    {
+      "name": "nav.1.fields",
+      "type": "Uint16Array",
+      "bytes": 4063232
+    },
+    {
+      "name": "spatial.orderA",
+      "type": "Int32Array",
+      "bytes": 4000000
+    },
+    {
+      "name": "spatial.orderB",
+      "type": "Int32Array",
+      "bytes": 4000000
+    },
+    {
+      "name": "ix.ordC",
+      "type": "Int32Array",
+      "bytes": 4000000
+    },
+    {
+      "name": "hit.tlist",
+      "type": "Int32Array",
+      "bytes": 3637248
+    },
+    {
+      "name": "hit.wlist",
+      "type": "Int32Array",
+      "bytes": 3637248
+    },
+    {
+      "name": "mv.chUse",
+      "type": "Float64Array",
+      "bytes": 2752512
+    },
+    {
+      "name": "hc.o",
+      "type": "Int16Array",
+      "bytes": 2500000
+    },
+    {
+      "name": "adj.gmul",
+      "type": "Float64Array",
+      "bytes": 2359296
+    },
+    {
+      "name": "atl.rc",
+      "type": "Uint32Array",
+      "bytes": 2258784
+    },
+    {
+      "name": "nav.0.adjA",
+      "type": "Int32Array",
+      "bytes": 2192664
+    },
+    {
+      "name": "nav.0.adjC",
+      "type": "Int32Array",
+      "bytes": 2192664
+    },
+    {
+      "name": "nav.2.adjA",
+      "type": "Int32Array",
+      "bytes": 2192664
+    },
+    {
+      "name": "nav.2.adjC",
+      "type": "Int32Array",
+      "bytes": 2192664
+    },
+    {
+      "name": "nav.5.adjA",
+      "type": "Int32Array",
+      "bytes": 2192664
+    },
+    {
+      "name": "nav.5.adjC",
+      "type": "Int32Array",
+      "bytes": 2192664
+    },
+    {
+      "name": "nav.6.adjA",
+      "type": "Int32Array",
+      "bytes": 2192664
+    },
+    {
+      "name": "nav.6.adjC",
+      "type": "Int32Array",
+      "bytes": 2192664
+    },
+    {
+      "name": "nav.7.adjA",
+      "type": "Int32Array",
+      "bytes": 2192664
+    },
+    {
+      "name": "nav.7.adjC",
+      "type": "Int32Array",
+      "bytes": 2192664
+    },
+    {
+      "name": "nav.8.adjA",
+      "type": "Int32Array",
+      "bytes": 2192664
+    },
+    {
+      "name": "nav.8.adjC",
+      "type": "Int32Array",
+      "bytes": 2192664
+    },
+    {
+      "name": "nav.9.adjA",
+      "type": "Int32Array",
+      "bytes": 2192664
+    },
+    {
+      "name": "nav.9.adjC",
+      "type": "Int32Array",
+      "bytes": 2192664
+    },
+    {
+      "name": "nav.10.adjA",
+      "type": "Int32Array",
+      "bytes": 2192664
+    },
+    {
+      "name": "nav.10.adjC",
+      "type": "Int32Array",
+      "bytes": 2192664
+    },
+    {
+      "name": "occ.bits",
+      "type": "Uint32Array",
+      "bytes": 2113536
+    },
+    {
+      "name": "unit.teleportHideTicks",
+      "type": "Uint16Array",
+      "bytes": 2064384
+    },
+    {
+      "name": "unit.burning",
+      "type": "Uint16Array",
+      "bytes": 2064384
+    },
+    {
+      "name": "unit.poisoned",
+      "type": "Uint16Array",
+      "bytes": 2064384
+    },
+    {
+      "name": "unit.frozen",
+      "type": "Uint16Array",
+      "bytes": 2064384
+    },
+    {
+      "name": "unit.wet",
+      "type": "Uint16Array",
+      "bytes": 2064384
+    },
+    {
+      "name": "unit.sandy",
+      "type": "Uint16Array",
+      "bytes": 2064384
+    },
+    {
+      "name": "unit.watched",
+      "type": "Uint16Array",
+      "bytes": 2064384
+    },
+    {
+      "name": "unit.workerTransferCooldown",
+      "type": "Uint16Array",
+      "bytes": 2064384
+    },
+    {
+      "name": "unit.cwDense",
+      "type": "Uint16Array",
+      "bytes": 2064384
+    },
+    {
+      "name": "unit.spType",
+      "type": "Int16Array",
+      "bytes": 2064384
+    },
+    {
+      "name": "unit.pvL",
+      "type": "Int16Array",
+      "bytes": 2064384
+    },
+    {
+      "name": "unit.upT",
+      "type": "Int16Array",
+      "bytes": 2064384
+    },
+    {
+      "name": "unit.statRow",
+      "type": "Int16Array",
+      "bytes": 2064384
+    },
+    {
+      "name": "ixd.ik",
+      "type": "Float64Array",
+      "bytes": 2064384
+    },
+    {
+      "name": "ixd.touch",
+      "type": "Int32Array",
+      "bytes": 2064384
+    },
+    {
+      "name": "nav.frows.0",
+      "type": "Uint8Array",
+      "bytes": 1310720
+    },
+    {
+      "name": "hc.l",
+      "type": "Uint8Array",
+      "bytes": 1250000
+    },
+    {
+      "name": "hc.d",
+      "type": "Uint8Array",
+      "bytes": 1250000
+    },
+    {
+      "name": "adj.ctile",
+      "type": "Int32Array",
+      "bytes": 1179648
+    },
+    {
+      "name": "adj.sig",
+      "type": "Int32Array",
+      "bytes": 1179648
+    },
+    {
+      "name": "adj.otile",
+      "type": "Int32Array",
+      "bytes": 1179648
+    },
+    {
+      "name": "adj.ogrp",
+      "type": "Int32Array",
+      "bytes": 1179648
+    },
+    {
+      "name": "adj.gsize",
+      "type": "Int32Array",
+      "bytes": 1179648
+    },
+    {
+      "name": "acq.own",
+      "type": "Int8Array",
+      "bytes": 1126400
+    },
+    {
+      "name": "acq.flags",
+      "type": "Uint8Array",
+      "bytes": 1126400
+    },
+    {
+      "name": "acq.cmd",
+      "type": "Uint8Array",
+      "bytes": 1126400
+    },
+    {
+      "name": "acq.cm",
+      "type": "Uint8Array",
+      "bytes": 1126400
+    },
+    {
+      "name": "acq.rk",
+      "type": "Uint8Array",
+      "bytes": 1126400
+    },
+    {
+      "name": "acq.bm",
+      "type": "Uint8Array",
+      "bytes": 1126400
+    },
+    {
+      "name": "ix.stamp",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "ix.start",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "ix.cnt",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "ix.fill",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "ix.agrid",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "vt.agrid",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "lz.head",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "wsw.area",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "sep.rs",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "sep.rc",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "sep.rstamp",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "occ.start",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "occ.count",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "occ.stamp",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "occ.areaGrid",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "acq.rsL",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "acq.rcL",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "acq.rstL",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "acq.rs",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "acq.rc",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "acq.rst",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "acq.agrid",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "adj.ag",
+      "type": "Int32Array",
+      "bytes": 1048576
+    },
+    {
+      "name": "unit.owner",
+      "type": "Int8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.commandState",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.attackFlash",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.mvOn",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.mvOut",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.mvFlags",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.mvSpent",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.mvReach",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.mvWlen",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.mvReachD",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.mvReachA",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.mvShoot",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.mvRangeK",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.cwNear",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.esOk",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.stEv",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.stOn",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.tmOn",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.dead0",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.lzFlags",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.lzEv",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.mvWk",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.sepMov",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.dead",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.spOwner",
+      "type": "Int8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.vsR",
+      "type": "Int8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.vsP1",
+      "type": "Int8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.vsP2",
+      "type": "Int8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.live",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.spMvOwn",
+      "type": "Int8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.mvBlk",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.mvCN",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.mvNP",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.mvPF",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.mvFire",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.pvO",
+      "type": "Int8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.pvC",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.pvV",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.atkSty",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.atkL",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.atkN",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.wtcL",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.wsKind",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.sepD0",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.sepL0",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.acqB",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.cmMode",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.isWk",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.nvProf",
+      "type": "Int8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.wkIdle",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.wsFail",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.hTouch",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.hSty",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.wTeam",
+      "type": "Int8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "unit.sepLayer",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "occ.radius",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "occ.layer",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "occ.active",
+      "type": "Uint8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "ixd.own",
+      "type": "Int8Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "ixd.is",
+      "type": "Int32Array",
+      "bytes": 1032192
+    },
+    {
+      "name": "acq.saOff",
+      "type": "Int32Array",
+      "bytes": 1014532
+    },
+    {
+      "name": "ix.aown",
+      "type": "Int32Array",
+      "bytes": 1014528
+    },
+    {
+      "name": "vis.useed",
+      "type": "Int32Array",
+      "bytes": 1014528
+    },
+    {
+      "name": "vis.ulist",
+      "type": "Int32Array",
+      "bytes": 1014528
+    },
+    {
+      "name": "vis.ubufA",
+      "type": "Int32Array",
+      "bytes": 1014528
+    },
+    {
+      "name": "vis.ubufB",
+      "type": "Int32Array",
+      "bytes": 1014528
+    },
+    {
+      "name": "vis.ubufC",
+      "type": "Int32Array",
+      "bytes": 1014528
+    },
+    {
+      "name": "vis.ucur",
+      "type": "Int32Array",
+      "bytes": 1014528
+    },
+    {
+      "name": "vis.uprev",
+      "type": "Int32Array",
+      "bytes": 1014528
+    },
+    {
+      "name": "vis.uplus",
+      "type": "Int32Array",
+      "bytes": 1014528
+    },
+    {
+      "name": "vis.uminus",
+      "type": "Int32Array",
+      "bytes": 1014528
+    },
+    {
+      "name": "acq.saCount",
+      "type": "Int32Array",
+      "bytes": 1014528
+    },
+    {
+      "name": "acq.saCursor",
+      "type": "Int32Array",
+      "bytes": 1014528
+    },
+    {
+      "name": "navb.adjA",
+      "type": "Int32Array",
+      "bytes": 976536
+    },
+    {
+      "name": "navb.adjC",
+      "type": "Int32Array",
+      "bytes": 976536
+    },
+    {
+      "name": "nav.4.adjA",
+      "type": "Int32Array",
+      "bytes": 976536
+    },
+    {
+      "name": "nav.4.adjC",
+      "type": "Int32Array",
+      "bytes": 976536
+    },
+    {
+      "name": "nav.3.adjA",
+      "type": "Int32Array",
+      "bytes": 749616
+    },
+    {
+      "name": "nav.3.adjC",
+      "type": "Int32Array",
+      "bytes": 749616
+    },
+    {
+      "name": "area.nb",
+      "type": "Int32Array",
+      "bytes": 720568
+    },
+    {
+      "name": "vt.anb",
+      "type": "Int32Array",
+      "bytes": 720568
+    },
+    {
+      "name": "abox.nb",
+      "type": "Int32Array",
+      "bytes": 720568
+    },
+    {
+      "name": "acq.anb",
+      "type": "Int32Array",
+      "bytes": 720568
+    },
+    {
+      "name": "navb.partL",
+      "type": "Uint16Array",
+      "bytes": 524288
+    },
+    {
+      "name": "nav.0.partL",
+      "type": "Uint16Array",
+      "bytes": 524288
+    },
+    {
+      "name": "nav.fpool.0",
+      "type": "Uint16Array",
+      "bytes": 524288
+    },
+    {
+      "name": "nav.1.partL",
+      "type": "Uint16Array",
+      "bytes": 524288
+    },
+    {
+      "name": "nav.2.partL",
+      "type": "Uint16Array",
+      "bytes": 524288
+    },
+    {
+      "name": "nav.3.partL",
+      "type": "Uint16Array",
+      "bytes": 524288
+    },
+    {
+      "name": "nav.4.partL",
+      "type": "Uint16Array",
+      "bytes": 524288
+    },
+    {
+      "name": "nav.5.partL",
+      "type": "Uint16Array",
+      "bytes": 524288
+    },
+    {
+      "name": "nav.6.partL",
+      "type": "Uint16Array",
+      "bytes": 524288
+    },
+    {
+      "name": "nav.7.partL",
+      "type": "Uint16Array",
+      "bytes": 524288
+    },
+    {
+      "name": "nav.8.partL",
+      "type": "Uint16Array",
+      "bytes": 524288
+    },
+    {
+      "name": "nav.9.partL",
+      "type": "Uint16Array",
+      "bytes": 524288
+    },
+    {
+      "name": "nav.10.partL",
+      "type": "Uint16Array",
+      "bytes": 524288
+    },
+    {
+      "name": "abox.own",
+      "type": "Int32Array",
+      "bytes": 507264
+    },
+    {
+      "name": "nav.fpool.1",
+      "type": "Uint16Array",
+      "bytes": 294912
+    },
+    {
+      "name": "mv.areaBoxOk",
+      "type": "Uint8Array",
+      "bytes": 285336
+    },
+    {
+      "name": "eff.rowOf",
+      "type": "Int32Array",
+      "bytes": 282240
+    },
+    {
+      "name": "mv.wall",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "navb.wall",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "navb.cost",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "navb.h",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "atl.bc",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "diff.a",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "diff.b",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "mv.airwall",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "mv.cwall.2",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "mv.cwall.3",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "mv.cwall.4",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "mv.cwall.5",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "mv.cwall.6",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "mv.cwall.7",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "mv.cwall.8",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "mv.cwall.9",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "mv.cwall.10",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "mv.struct",
+      "type": "Int8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "mv.scls",
+      "type": "Int8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "mv.trapK",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "mv.trapL",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "wsw.flags",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "wsw.own",
+      "type": "Int8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "wsw.resv",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "ix.omask",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "acq.omL",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "acq.om",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "acq.sown",
+      "type": "Int8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "acq.scls",
+      "type": "Int8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "acq.omt",
+      "type": "Uint8Array",
+      "bytes": 262144
+    },
+    {
+      "name": "vis.urem",
+      "type": "Int8Array",
+      "bytes": 253632
+    },
+    {
+      "name": "vis.ust",
+      "type": "Uint8Array",
+      "bytes": 253632
+    },
+    {
+      "name": "vis.coverf",
+      "type": "Uint8Array",
+      "bytes": 253632
+    },
+    {
+      "name": "acq.cover",
+      "type": "Uint8Array",
+      "bytes": 253632
+    },
+    {
+      "name": "spatial.hist",
+      "type": "Int32Array",
+      "bytes": 250880
+    },
+    {
+      "name": "nav.1.adjA",
+      "type": "Int32Array",
+      "bytes": 247936
+    },
+    {
+      "name": "nav.1.adjC",
+      "type": "Int32Array",
+      "bytes": 247936
+    },
+    {
+      "name": "atl.didx",
+      "type": "Int32Array",
+      "bytes": 188232
+    },
+    {
+      "name": "mv.chFix",
+      "type": "Float64Array",
+      "bytes": 147456
+    },
+    {
+      "name": "adj.coff",
+      "type": "Int32Array",
+      "bytes": 147456
+    },
+    {
+      "name": "adj.mul",
+      "type": "Int32Array",
+      "bytes": 147456
+    },
+    {
+      "name": "adj.seed",
+      "type": "Int32Array",
+      "bytes": 147456
+    },
+    {
+      "name": "adj.oarea",
+      "type": "Int32Array",
+      "bytes": 147456
+    },
+    {
+      "name": "mv.hostile",
+      "type": "Int32Array",
+      "bytes": 135200
+    },
+    {
+      "name": "mv.hstruct",
+      "type": "Int32Array",
+      "bytes": 135200
+    },
+    {
+      "name": "acq.hs",
+      "type": "Int32Array",
+      "bytes": 135200
+    },
+    {
+      "name": "acq.hss",
+      "type": "Int32Array",
+      "bytes": 135200
+    },
+    {
+      "name": "ix.bcount",
+      "type": "Int32Array",
+      "bytes": 131072
+    },
+    {
+      "name": "navb.ns",
+      "type": "Int32Array",
+      "bytes": 131072
+    },
+    {
+      "name": "wsw.cnt",
+      "type": "Int32Array",
+      "bytes": 131072
+    },
+    {
+      "name": "mv.stblk",
+      "type": "Int32Array",
+      "bytes": 131072
+    },
+    {
+      "name": "area.off",
+      "type": "Int32Array",
+      "bytes": 126820
+    },
+    {
+      "name": "vt.aoff",
+      "type": "Int32Array",
+      "bytes": 126820
+    },
+    {
+      "name": "abox.off",
+      "type": "Int32Array",
+      "bytes": 126820
+    },
+    {
+      "name": "acq.aoff",
+      "type": "Int32Array",
+      "bytes": 126820
+    },
+    {
+      "name": "ix.astamp",
+      "type": "Int32Array",
+      "bytes": 126816
+    },
+    {
+      "name": "ix.astart",
+      "type": "Int32Array",
+      "bytes": 126816
+    },
+    {
+      "name": "ix.acnt",
+      "type": "Int32Array",
+      "bytes": 126816
+    },
+    {
+      "name": "ix.afill",
+      "type": "Int32Array",
+      "bytes": 126816
+    },
+    {
+      "name": "acq.saSeen",
+      "type": "Int32Array",
+      "bytes": 126816
+    },
+    {
+      "name": "acq.saNearN",
+      "type": "Int32Array",
+      "bytes": 126816
+    },
+    {
+      "name": "st.shr",
+      "type": "Float64Array",
+      "bytes": 125184
+    },
+    {
+      "name": "upd.cnt",
+      "type": "Int32Array",
+      "bytes": 125008
+    },
+    {
+      "name": "nav.0.adjS",
+      "type": "Int32Array",
+      "bytes": 93996
+    },
+    {
+      "name": "nav.2.adjS",
+      "type": "Int32Array",
+      "bytes": 93996
+    },
+    {
+      "name": "nav.5.adjS",
+      "type": "Int32Array",
+      "bytes": 93996
+    },
+    {
+      "name": "nav.6.adjS",
+      "type": "Int32Array",
+      "bytes": 93996
+    },
+    {
+      "name": "nav.7.adjS",
+      "type": "Int32Array",
+      "bytes": 93996
+    },
+    {
+      "name": "nav.8.adjS",
+      "type": "Int32Array",
+      "bytes": 93996
+    },
+    {
+      "name": "nav.9.adjS",
+      "type": "Int32Array",
+      "bytes": 93996
+    },
+    {
+      "name": "nav.10.adjS",
+      "type": "Int32Array",
+      "bytes": 93996
+    },
+    {
+      "name": "navb.nt",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "navb.np",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "navb.adjN",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.0.nt",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.0.np",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.0.npart",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.2.nt",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.2.np",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.2.npart",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.5.nt",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.5.np",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.5.npart",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.6.nt",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.6.np",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.6.npart",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.7.nt",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.7.np",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.7.npart",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.8.nt",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.8.np",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.8.npart",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.9.nt",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.9.np",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.9.npart",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.10.nt",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.10.np",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.10.npart",
+      "type": "Int32Array",
+      "bytes": 93992
+    },
+    {
+      "name": "nav.frows.1",
+      "type": "Uint8Array",
+      "bytes": 81920
+    },
+    {
+      "name": "atl.ct",
+      "type": "Uint32Array",
+      "bytes": 65536
+    },
+    {
+      "name": "navb.adjS",
+      "type": "Int32Array",
+      "bytes": 62748
+    },
+    {
+      "name": "nav.4.adjS",
+      "type": "Int32Array",
+      "bytes": 62748
+    },
+    {
+      "name": "atl.npart",
+      "type": "Int32Array",
+      "bytes": 62744
+    },
+    {
+      "name": "nav.4.nt",
+      "type": "Int32Array",
+      "bytes": 62744
+    },
+    {
+      "name": "nav.4.np",
+      "type": "Int32Array",
+      "bytes": 62744
+    },
+    {
+      "name": "nav.4.npart",
+      "type": "Int32Array",
+      "bytes": 62744
+    },
+    {
+      "name": "nav.3.adjS",
+      "type": "Int32Array",
+      "bytes": 55060
+    },
+    {
+      "name": "nav.3.nt",
+      "type": "Int32Array",
+      "bytes": 55056
+    },
+    {
+      "name": "nav.3.np",
+      "type": "Int32Array",
+      "bytes": 55056
+    },
+    {
+      "name": "nav.3.npart",
+      "type": "Int32Array",
+      "bytes": 55056
+    },
+    {
+      "name": "adj.oact",
+      "type": "Uint8Array",
+      "bytes": 36864
+    },
+    {
+      "name": "occ.stats",
+      "type": "Int32Array",
+      "bytes": 32800
+    },
+    {
+      "name": "atl.bm",
+      "type": "Uint32Array",
+      "bytes": 32768
+    },
+    {
+      "name": "nav.fmeta.0",
+      "type": "Int32Array",
+      "bytes": 32768
+    },
+    {
+      "name": "nav.1.adjS",
+      "type": "Int32Array",
+      "bytes": 31748
+    },
+    {
+      "name": "nav.1.nt",
+      "type": "Int32Array",
+      "bytes": 31744
+    },
+    {
+      "name": "nav.1.np",
+      "type": "Int32Array",
+      "bytes": 31744
+    },
+    {
+      "name": "nav.1.npart",
+      "type": "Int32Array",
+      "bytes": 31744
+    },
+    {
+      "name": "vt.aok",
+      "type": "Uint8Array",
+      "bytes": 31704
+    },
+    {
+      "name": "hc.res",
+      "type": "Int32Array",
+      "bytes": 29760
+    },
+    {
+      "name": "hc.rat",
+      "type": "Float32Array",
+      "bytes": 29760
+    },
+    {
+      "name": "eff.flag",
+      "type": "Uint8Array",
+      "bytes": 20000
+    },
+    {
+      "name": "wk.ver",
+      "type": "Int32Array",
+      "bytes": 16640
+    },
+    {
+      "name": "unit.wkType",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkD",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkOx",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkOy",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkFail",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkUntil",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkSched",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkWx",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkWy",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wkLmt",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsT",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsOU",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsOx",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsOy",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsR",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsAx",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsAy",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsNeed",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsJid",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsCur",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "unit.wsMy",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "eff.hot",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.wallBlk",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "mv.wallBlk9",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "navb.nsc",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "adj.cloud",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "adj.ocnt",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "hit.q",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "hit.dmg",
+      "type": "Float32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "hit.wk",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "hit.shr",
+      "type": "Float64Array",
+      "bytes": 16384
+    },
+    {
+      "name": "upk.h",
+      "type": "Int32Array",
+      "bytes": 16384
+    },
+    {
+      "name": "eff.bVer",
+      "type": "Int32Array",
+      "bytes": 13440
+    },
+    {
+      "name": "eff.bRad",
+      "type": "Int32Array",
+      "bytes": 13440
+    },
+    {
+      "name": "eff.bMaxE",
+      "type": "Float32Array",
+      "bytes": 13440
+    },
+    {
+      "name": "atl.anc",
+      "type": "Int32Array",
+      "bytes": 12288
+    },
+    {
+      "name": "atl.cb",
+      "type": "Uint16Array",
+      "bytes": 8192
+    },
+    {
+      "name": "mv.postc",
+      "type": "Int32Array",
+      "bytes": 8192
+    },
+    {
+      "name": "mv.hitc",
+      "type": "Int32Array",
+      "bytes": 8192
+    },
+    {
+      "name": "occ.offsets",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "navb.nb",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "atl.partB",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "atl.co",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.0.nb",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.0.partB",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.1.nb",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.1.partB",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.2.nb",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.2.partB",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.3.nb",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.3.partB",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.4.nb",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.4.partB",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.5.nb",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.5.partB",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.6.nb",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.6.partB",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.7.nb",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.7.partB",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.8.nb",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.8.partB",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.9.nb",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.9.partB",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.10.nb",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "nav.10.partB",
+      "type": "Int32Array",
+      "bytes": 4100
+    },
+    {
+      "name": "unit.wkTwice",
+      "type": "Uint8Array",
+      "bytes": 4096
+    },
+    {
+      "name": "unit.wsCfg",
+      "type": "Int8Array",
+      "bytes": 4096
+    },
+    {
+      "name": "unit.wsAk",
+      "type": "Int8Array",
+      "bytes": 4096
+    },
+    {
+      "name": "ixd.plan",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "navb.partN",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "atl.cn",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.0.pclu",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.0.cparts",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.1.pclu",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.1.cparts",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.2.pclu",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.2.cparts",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.3.pclu",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.3.cparts",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.4.pclu",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.4.cparts",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.5.pclu",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.5.cparts",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.6.pclu",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.6.cparts",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.7.pclu",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.7.cparts",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.8.pclu",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.8.cparts",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.9.pclu",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.9.cparts",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.10.pclu",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "nav.10.cparts",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "eff.tver",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "hit.sty",
+      "type": "Uint8Array",
+      "bytes": 4096
+    },
+    {
+      "name": "hc.best",
+      "type": "Int32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "hc.bestRat",
+      "type": "Float32Array",
+      "bytes": 4096
+    },
+    {
+      "name": "mv.trapT",
+      "type": "Int32Array",
+      "bytes": 4032
+    },
+    {
+      "name": "mv.trapTG",
+      "type": "Float32Array",
+      "bytes": 4032
+    },
+    {
+      "name": "st.count",
+      "type": "Int32Array",
+      "bytes": 3912
+    },
+    {
+      "name": "occ.mask",
+      "type": "Int8Array",
+      "bytes": 2145
+    },
+    {
+      "name": "atl.cip",
+      "type": "Uint16Array",
+      "bytes": 2048
+    },
+    {
+      "name": "nav.fmeta.1",
+      "type": "Int32Array",
+      "bytes": 2048
+    },
+    {
+      "name": "ws.rcnt",
+      "type": "Int32Array",
+      "bytes": 2048
+    },
+    {
+      "name": "ws.rpre",
+      "type": "Int32Array",
+      "bytes": 2048
+    },
+    {
+      "name": "hit.plist",
+      "type": "Int32Array",
+      "bytes": 2048
+    },
+    {
+      "name": "eff.rowVer",
+      "type": "Int32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rSpd",
+      "type": "Float32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rCost",
+      "type": "Float32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rRD",
+      "type": "Int32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rRA",
+      "type": "Int32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rCb",
+      "type": "Float32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rCd",
+      "type": "Float32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rDmg",
+      "type": "Float32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rVis",
+      "type": "Float32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "eff.rChs",
+      "type": "Float32Array",
+      "bytes": 1024
+    },
+    {
+      "name": "retire.count",
+      "type": "Int32Array",
+      "bytes": 984
+    },
+    {
+      "name": "atl.dn",
+      "type": "Int32Array",
+      "bytes": 276
+    },
+    {
+      "name": "atl.rco",
+      "type": "Int32Array",
+      "bytes": 276
+    },
+    {
+      "name": "eff.rRK",
+      "type": "Uint8Array",
+      "bytes": 256
+    },
+    {
+      "name": "eff.rLzW",
+      "type": "Uint8Array",
+      "bytes": 256
+    },
+    {
+      "name": "eff.rVsA",
+      "type": "Int8Array",
+      "bytes": 256
+    },
+    {
+      "name": "diff.cnt",
+      "type": "Int32Array",
+      "bytes": 256
+    },
+    {
+      "name": "navb.adjMax",
+      "type": "Int32Array",
+      "bytes": 248
+    },
+    {
+      "name": "atl.cin",
+      "type": "Uint16Array",
+      "bytes": 138
+    },
+    {
+      "name": "flow.gen",
+      "type": "Int32Array",
+      "bytes": 128
+    },
+    {
+      "name": "flow.used",
+      "type": "Int32Array",
+      "bytes": 128
+    },
+    {
+      "name": "mv.astarRem",
+      "type": "Float64Array",
+      "bytes": 128
+    },
+    {
+      "name": "nav.0.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.1.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.2.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.3.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.4.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.5.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.6.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.7.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.8.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.9.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "nav.10.atl",
+      "type": "Int32Array",
+      "bytes": 96
+    },
+    {
+      "name": "occ.config",
+      "type": "Int32Array",
+      "bytes": 64
+    },
+    {
+      "name": "vis.udiff",
+      "type": "Int32Array",
+      "bytes": 64
+    },
+    {
+      "name": "mv.tres",
+      "type": "Uint8Array",
+      "bytes": 64
+    },
+    {
+      "name": "nav.0.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.1.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.2.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.3.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.4.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.5.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.6.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.7.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.8.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.9.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "nav.10.meta",
+      "type": "Int32Array",
+      "bytes": 48
+    },
+    {
+      "name": "vis.ucnt",
+      "type": "Int32Array",
+      "bytes": 32
+    },
+    {
+      "name": "vis.uprevn",
+      "type": "Int32Array",
+      "bytes": 32
+    },
+    {
+      "name": "nav.fhdr",
+      "type": "Int32Array",
+      "bytes": 16
+    },
+    {
+      "name": "hit.cnt",
+      "type": "Int32Array",
+      "bytes": 16
+    },
+    {
+      "name": "ix.listed",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.0.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.1.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.2.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.3.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.4.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.5.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.6.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.7.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.8.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.9.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "nav.10.cstart",
+      "type": "Int32Array",
+      "bytes": 8
+    },
+    {
+      "name": "unit.mvNodes",
+      "type": "Int32Array",
+      "bytes": 4
+    },
+    {
+      "name": "ix.bad",
+      "type": "Int32Array",
+      "bytes": 4
+    }
+  ],
+  "resourceUsage": {
+    "before": {
+      "userCPUTime": 34000000,
+      "systemCPUTime": 1593000,
+      "maxRSS": 1553764,
+      "sharedMemorySize": 0,
+      "unsharedDataSize": 0,
+      "unsharedStackSize": 0,
+      "minorPageFault": 0,
+      "majorPageFault": 484758,
+      "swappedOut": 0,
+      "fsRead": 1442,
+      "fsWrite": 7,
+      "ipcSent": 0,
+      "ipcReceived": 0,
+      "signalsCount": 0,
+      "voluntaryContextSwitches": 0,
+      "involuntaryContextSwitches": 0
+    },
+    "after": {
+      "userCPUTime": 67171000,
+      "systemCPUTime": 2140000,
+      "maxRSS": 1783296,
+      "sharedMemorySize": 0,
+      "unsharedDataSize": 0,
+      "unsharedStackSize": 0,
+      "minorPageFault": 0,
+      "majorPageFault": 551776,
+      "swappedOut": 0,
+      "fsRead": 1442,
+      "fsWrite": 103,
+      "ipcSent": 0,
+      "ipcReceived": 0,
+      "signalsCount": 0,
+      "voluntaryContextSwitches": 0,
+      "involuntaryContextSwitches": 0
+    }
+  },
+  "statStorage": "shared-row-only",
+  "referenceColumns": [
+    {
+      "name": "jr_unitType",
+      "slots": 1032192,
+      "bytes": 1032192,
+      "unique": 2,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr_preComputedBase",
+      "slots": 1032192,
+      "bytes": 1032192,
+      "unique": 3,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr_basePreComputed",
+      "slots": 1032192,
+      "bytes": 1032192,
+      "unique": 3,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr__pce",
+      "slots": 1032192,
+      "bytes": 1032192,
+      "unique": 10,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr__pc",
+      "slots": 1032192,
+      "bytes": 1032192,
+      "unique": 10,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr__fpPath",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr_attackTarget",
+      "slots": 1032192,
+      "pages": 939,
+      "values": 3244
+    },
+    {
+      "name": "jr__damageFlashColor",
+      "slots": 1032192,
+      "bytes": 1032192,
+      "unique": 5,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr__path",
+      "slots": 1032192,
+      "pages": 265,
+      "values": 342
+    },
+    {
+      "name": "jr__ws",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr__wnr",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr__tb",
+      "slots": 1032192,
+      "pages": 970,
+      "values": 4867
+    },
+    {
+      "name": "jr__pfa",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "jr__ppt",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_holdPosition",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_forcedAttackTarget",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_targetUnit",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_targetPos",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc__attackMoveGx",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc__attackMoveGy",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_workerTarget",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_workerTargetType",
+      "slots": 1032192,
+      "bytes": 1032192,
+      "unique": 1,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_carryingValue",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc__workerReservedTileIndex",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_builderHasMaterial",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_healerHasMaterial",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_researcherHasMaterial",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc__astarBudgetRetryTick",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc__scoutTarget",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc__routeKey",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    },
+    {
+      "name": "oc_workerType",
+      "slots": 1032192,
+      "pages": 0,
+      "values": 0
+    }
+  ],
+  "memory": {
+    "rss": 1746579456,
+    "heapTotal": 552648704,
+    "heapUsed": 351075512,
+    "external": 162948371,
+    "arrayBuffers": 138164974
+  }
+}

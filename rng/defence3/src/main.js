@@ -5043,6 +5043,7 @@ function startGame() {
     let spawnStartingUnit = (pid, origin, unitType, level) => {
         let spawnTile = getNextStarterUnitSpawnTile(pid, origin);
         let u = new Unit(unitType, pid, spawnTile.gx * TILE + 16 + spawnTile.ox, spawnTile.gy * TILE + 16 + spawnTile.oy);
+        if (u.dead) return null;
         applyWorkerDefaults(u);
         applyUnitLevelScaling(u, Math.max(1, clampThingLevel(level || 1)));
         u.energy = u.preComputed.maxEnergy;

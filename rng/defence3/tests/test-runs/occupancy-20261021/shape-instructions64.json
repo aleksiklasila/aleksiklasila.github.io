@@ -1,0 +1,23 @@
+[
+  {
+    "name": " (func $_RINvNtCsjCsl4dIflJl_12defence3_sim3occ12mark_specialKb0_EB4_ (type $1) (param $0 i64) (param $1 i32) (param $2 i32) (param $3 i32) (param $4 i32)\r",
+    "ifCount": 0,
+    "brIf": 0,
+    "loops": 0,
+    "dispatches": 1
+  },
+  {
+    "name": " (func $_RINvNtCsjCsl4dIflJl_12defence3_sim3occ12mark_specialKb1_EB4_ (type $1) (param $0 i64) (param $1 i32) (param $2 i32) (param $3 i32) (param $4 i32)\r",
+    "ifCount": 0,
+    "brIf": 0,
+    "loops": 0,
+    "dispatches": 1
+  },
+  {
+    "name": " (func $_RNvNtCsjCsl4dIflJl_12defence3_sim3occ12free_special (type $10) (param $0 i64) (param $1 i32) (param $2 i32) (param $3 i32) (param $4 i32) (param $5 i32) (param $6 i32) (param $7 i64) (result i32)\r",
+    "ifCount": 0,
+    "brIf": 0,
+    "loops": 0,
+    "dispatches": 1
+  }
+]

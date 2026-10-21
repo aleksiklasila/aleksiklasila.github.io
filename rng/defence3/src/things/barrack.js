@@ -205,6 +205,7 @@ function spawnQueuedUnitFromSpawner(spawner) {
     let spawnInfo = getQueuedSpawnInfo(queued, fallbackType, effLvl, owner);
     let spawnPos = findNearestWalkable(spawner.gx, spawner.gy);
     let u = new Unit(spawnInfo.unitType, owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
+    if (u.dead) { spawner.spawnQueue.unshift(queued); return false; }
     configureWorkerUnitFromType(u);
 
     applyUnitLevelScaling(u, spawnInfo.level);

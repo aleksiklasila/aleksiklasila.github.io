@@ -1,0 +1,29 @@
+[
+  {
+    "subcellsPerTileAxis": 4,
+    "cellPixels": 8,
+    "cells": 16000000,
+    "bitsetMiB": 1.9073486328125,
+    "uint8CountMiB": 15.2587890625,
+    "uint16CountMiB": 30.517578125,
+    "uint32OwnerMiB": 61.03515625
+  },
+  {
+    "subcellsPerTileAxis": 8,
+    "cellPixels": 4,
+    "cells": 64000000,
+    "bitsetMiB": 7.62939453125,
+    "uint8CountMiB": 61.03515625,
+    "uint16CountMiB": 122.0703125,
+    "uint32OwnerMiB": 244.140625
+  },
+  {
+    "subcellsPerTileAxis": 16,
+    "cellPixels": 2,
+    "cells": 256000000,
+    "bitsetMiB": 30.517578125,
+    "uint8CountMiB": 244.140625,
+    "uint16CountMiB": 488.28125,
+    "uint32OwnerMiB": 976.5625
+  }
+]

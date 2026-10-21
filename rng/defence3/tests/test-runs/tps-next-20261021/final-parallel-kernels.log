@@ -1,0 +1,1 @@
+PASS: parallel kernels match the serial code (visibility: 18 checks, 1353 lit tiles at most).

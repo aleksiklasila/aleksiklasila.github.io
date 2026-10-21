@@ -1,0 +1,48 @@
+{
+  "w64": false,
+  "shapeFunctions": 36,
+  "fringe": [
+    {
+      "name": " (func $_RNvNtCs1ZkqxGIwUMd_12defence3_sim3occ14free_step_r2_y (type $4) (param $0 i32) (param $1 i32) (param $2 i32) (param $3 i32) (param $4 i32) (result i32)\r",
+      "ifs": 0,
+      "conditionalBranches": 0,
+      "loops": 0,
+      "dispatches": 0,
+      "loads32": 3,
+      "loads64": 1,
+      "stores64": 0
+    },
+    {
+      "name": " (func $_RNvNtCs1ZkqxGIwUMd_12defence3_sim3occ15free_step_r2_xy (type $6) (param $0 i32) (param $1 i32) (param $2 i32) (param $3 i32) (param $4 i32) (param $5 i32) (result i32)\r",
+      "ifs": 0,
+      "conditionalBranches": 0,
+      "loops": 0,
+      "dispatches": 0,
+      "loads32": 5,
+      "loads64": 1,
+      "stores64": 0
+    },
+    {
+      "name": " (func $_RNvNtCs1ZkqxGIwUMd_12defence3_sim3occ14free_step_r2_x (type $4) (param $0 i32) (param $1 i32) (param $2 i32) (param $3 i32) (param $4 i32) (result i32)\r",
+      "ifs": 0,
+      "conditionalBranches": 0,
+      "loops": 0,
+      "dispatches": 0,
+      "loads32": 6,
+      "loads64": 0,
+      "stores64": 0
+    }
+  ],
+  "vectorOps": [
+    {
+      "name": " (func $_RNvNtCs1ZkqxGIwUMd_12defence3_sim2mv8move_job (type $3) (param $0 i32) (param $1 i32) (param $2 i32) (param $3 i32) (param $4 i32)\r",
+      "f32x4Ops": 732,
+      "i32x4Ops": 776
+    },
+    {
+      "name": " (func $occ_prepare (type $0) (param $0 i32) (param $1 i32)\r",
+      "f32x4Ops": 0,
+      "i32x4Ops": 6
+    }
+  ]
+}

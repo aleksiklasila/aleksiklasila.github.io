@@ -1,0 +1,20 @@
+setup {"units":4000000,"towers":125000,"groups":62500,"map":[1000,1000],"ms":49609.981900000006,"heap":{"ready":true,"kernels":true,"wasm64":true,"hash":"5b46459a6c06d50d","error":null,"memoryMB":2874,"liveMB":2556,"peakMB":2556,"freeMB":0,"arrays":386,"pendingFrees":170},"memory":{"rss":2928820224,"heapTotal":1009500160,"heapUsed":920764200,"external":498195972,"arrayBuffers":557477835}}
+warmup 1 33292.9
+warmup 2 994.4
+warmup 3 1618.2
+tick 1 975.0
+tick 2 635.0
+tick 3 893.6
+tick 4 1066.3
+tick 5 697.2
+tick 6 575.2
+tick 7 523.8
+tick 8 709.8
+tick 9 693.1
+tick 10 627.0
+tick 11 597.4
+tick 12 589.9
+tick 13 720.9
+tick 14 520.5
+tick 15 487.7
+tick 16 522.4

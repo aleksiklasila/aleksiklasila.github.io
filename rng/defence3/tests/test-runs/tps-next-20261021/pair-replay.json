@@ -1,0 +1,62 @@
+{
+  "n": 4000000,
+  "bytes": 194106244,
+  "results": [
+    {
+      "skipUnchangedStores": true,
+      "bulkTargets": true,
+      "pairHolds": false,
+      "ms": 274.44849999999997,
+      "checksum": 16000000
+    },
+    {
+      "skipUnchangedStores": true,
+      "bulkTargets": true,
+      "pairHolds": true,
+      "ms": 204.87549999999987,
+      "checksum": 16000000
+    },
+    {
+      "skipUnchangedStores": true,
+      "bulkTargets": true,
+      "pairHolds": true,
+      "ms": 211.3485999999998,
+      "checksum": 16000000
+    },
+    {
+      "skipUnchangedStores": true,
+      "bulkTargets": true,
+      "pairHolds": false,
+      "ms": 276.0712000000003,
+      "checksum": 16000000
+    },
+    {
+      "skipUnchangedStores": true,
+      "bulkTargets": true,
+      "pairHolds": false,
+      "ms": 273.64300000000003,
+      "checksum": 16000000
+    },
+    {
+      "skipUnchangedStores": true,
+      "bulkTargets": true,
+      "pairHolds": true,
+      "ms": 212.88820000000032,
+      "checksum": 16000000
+    },
+    {
+      "skipUnchangedStores": true,
+      "bulkTargets": true,
+      "pairHolds": true,
+      "ms": 203.00779999999986,
+      "checksum": 16000000
+    },
+    {
+      "skipUnchangedStores": true,
+      "bulkTargets": true,
+      "pairHolds": false,
+      "ms": 283.8296,
+      "checksum": 16000000
+    }
+  ]
+}

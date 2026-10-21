@@ -17,16 +17,28 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     // Growth must update every live accessor, including objects that existed
     // before reallocation. Positions are Int32 eighths of a pixel (rules 6).
     const first = units[0]; first.x = 123.1234567890123; const x = Math.round(123.1234567890123 * 8) / 8;
+    const cacheValues=new Map([...SIM_UNIT_SPARSE_JS_FIELDS].map((name,i)=>[name,37+i]));
+    for(const [name,value]of cacheValues)first[name]=value;
     for (let i = 0; i < 2100; i++) { const u = new Unit('norm', i & 1, 50+i%20, 50+(i%19)); units.push(u); }
     // (Positions are unit fields, copied into the columns after each move.)
     simUnitMirror(first);
     if (first.x !== x || first._us.x[first._si] !== x * 8) fail('growth/precision');
+    for(const [name,value]of cacheValues)if(first[name]!==value)fail('sparse cache growth '+name);
     const retired = units.pop(), oldX = retired.x, slot = retired._si;
+    for(const [name,value]of cacheValues)retired[name]=value;
     removeUnitSpatial(retired); retired.dead = true; simUnitStateCollect(true);
     // (Freed slots are reused from the next unit index rebuild on.)
     simUnitStateReleaseFreed();
     const replacement = new Unit('norm', 0, 300, 300); units.push(replacement);
     if (replacement._si !== slot || retired.x !== oldX) fail('slot retirement');
+    for(const [name,value]of cacheValues){
+        if(retired[name]!==value)fail('sparse cache detach '+name);
+        const def=SIM_UNIT_JS_FIELDS.find(e=>e[0]===name)[2];
+        if(replacement[name]!==def)fail('sparse cache reused default '+name);
+        retired[name]=value+100;
+        if(replacement[name]!==def)fail('sparse cache stale write '+name);
+        first[name]=def;
+    }
     retired.x = -100;
     if (replacement.x !== 300) fail('stale reference wrote reused slot');
     let compared = 0;

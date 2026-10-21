@@ -261,6 +261,7 @@ function _findClosestHostileCellItem(unit, range, kind = null) {
 // turrets, traps (those on its route first), barracks and spawners, then any
 // other building. Within a class the nearest visible one in range.
 function _findAutoStructureTarget(unit, range) {
+    if(areaSearchEnabled())return _findHostileStructureInAttackRange(unit);
     // Every scan below stays within this tile window of the unit.
     let reach = Math.ceil(range / TILE) + 1;
     let ugx = Math.floor(unit.x / TILE), ugy = Math.floor(unit.y / TILE);
@@ -272,16 +273,21 @@ function _findAutoStructureTarget(unit, range) {
 }
 
 function _findNearbyCombatEnemy(unit, range) {
-    let closest = null, best = range * range;
+    let closest = null, best = areaSearchEnabled()?Infinity:range * range;
     // This refresh is already staggered by the caller. Do not use the older
     // once-per-second chunk query, whose stagger can miss this cadence forever.
     // (Enemies where they were at the pass's start: _unitTickX.)
-    forEachUnitInRange(unit.x, unit.y, range, (enemy, d2) => {
+    const visit=(enemy,d2)=>{
         if (enemy.dead || enemy.owner === unit.owner || !_isUnitVisibleAtTickStart(unit.owner, enemy)) return;
         if (d2 < best || (d2 === best && (!closest || enemy.id < closest.id))) {
             closest = enemy; best = d2;
         }
-    }, { enemyOfPlayer: unit.owner, tickStart: true });
+    };
+    const opts={enemyOfPlayer:unit.owner,tickStart:true};
+    if(areaSearchEnabled())forEachUnitInAreaRange(unit.x,unit.y,range/(TILE*AREA_UNIT_TILE_EQUIVALENT),enemy=>{
+        const dx=_unitTickX(enemy)-unit.x,dy=_unitTickY(enemy)-unit.y;return visit(enemy,dx*dx+dy*dy);
+    },opts);
+    else forEachUnitInRange(unit.x,unit.y,range,visit,opts);
     return closest;
 }
 
@@ -355,7 +361,8 @@ function _quantizeUnitWorldCoord(value) {
 }
 
 function _getUnitAttackRangeArea(unit) {
-    return Math.max(0, Number(unit && unit.preComputed && unit.preComputed.attackRangeArea) || 0);
+    const r=Math.max(0, Number(unit && unit.preComputed && unit.preComputed.attackRangeArea) || 0);
+    return areaSearchEnabled()?Math.ceil(r):r;
 }
 
 // Extra reach, beyond the collision distance, at which bodies count as touching.
@@ -388,6 +395,7 @@ function _unitCrowdThin(u) {
 function _isTargetWithinUnitAttackAreaRange(unit, target, tx = target && target.x, ty = target && target.y) {
     if (!unit || !target) return false;
     let rangeArea = Math.max(0, Number(_getUnitAttackRangeArea(unit)) || 0);
+    if(areaSearchEnabled())return isWorldTargetWithinAreaRange(unit.x,unit.y,tx,ty,rangeArea);
     if (isWorldTargetWithinAreaRange(unit.x, unit.y, tx, ty, Math.floor(rangeArea))) return true;
     return _isUnitTargetInContactAt(unit, target, tx, ty, Math.floor(rangeArea) + 1);
 }
@@ -406,6 +414,7 @@ function _unitPassUpdate(u) {
     const deferred = c && c.mvOut[s] === 0;
     const startX = u.x, startY = u.y;
     u.update();
+    if (typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED) return;
     if (deferred) {
         const mx = u.x - startX, my = u.y - startY;
         // Its step's part into the overlap pressure braked under compression,
@@ -474,6 +483,7 @@ function _isUnitVisibleAtTickStart(player, t) {
 
 function _isUnitTargetInContactAt(unit, target, tx, ty, maxAreaDistance) {
     if (!(target instanceof Unit) || _unitTickDead(target) || !(unit.preComputed.attackDamage > 0)) return false;
+    if(areaSearchEnabled())return isWorldTargetWithinAreaRange(unit.x,unit.y,tx,ty,maxAreaDistance);
     let dx = tx - unit.x, dy = ty - unit.y;
     let reach = unit.getCollisionRadius() + target.getCollisionRadius()
         + Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0) + UNIT_CONTACT_ATTACK_MARGIN;
@@ -621,6 +631,7 @@ class Unit {
         if (_snapUnitShellMode) return;
         applyUnitLevelScaling(this, 1);
         this.energy = this.preComputedEffective ? this.preComputedEffective.maxEnergy : this.energy;
+        if (typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED && !occupancySpawn(this)) { this.dead = true; simUnitStateDetach(_simUnitState,this._si); return; }
         updateUnitSpatial(this);
     }
 
@@ -629,9 +640,9 @@ class Unit {
     get owner() { return this._us ? this._us.owner[this._si] : (this._det ? this._det.owner : undefined); }
     set owner(v) { if (this._us) { if (this._us.owner[this._si] !== v) this._us.mvOn[this._si] = 0; this._us.owner[this._si] = v; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.owner = v; else Object.defineProperty(this, 'owner', { value: v, writable: true, enumerable: true, configurable: true }); }
     get x() { return this._us ? this._us.x[this._si] * 0.125 : (this._det ? this._det.x : undefined); }
-    set x(v) { if (this._us) this._us.x[this._si] = Math.round(v * 8); else if (this._det) this._det.x = v; else Object.defineProperty(this, 'x', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set x(v) { if (this._us) { if(typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED && _occ && _occ.active[this._si]) occupancyMovePosition(this,Math.round(v*8),this._us.y[this._si]); else this._us.x[this._si] = Math.round(v * 8); } else if (this._det) this._det.x = v; else Object.defineProperty(this, 'x', { value: v, writable: true, enumerable: true, configurable: true }); }
     get y() { return this._us ? this._us.y[this._si] * 0.125 : (this._det ? this._det.y : undefined); }
-    set y(v) { if (this._us) this._us.y[this._si] = Math.round(v * 8); else if (this._det) this._det.y = v; else Object.defineProperty(this, 'y', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set y(v) { if (this._us) { if(typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED && _occ && _occ.active[this._si]) occupancyMovePosition(this,this._us.x[this._si],Math.round(v*8)); else this._us.y[this._si] = Math.round(v * 8); } else if (this._det) this._det.y = v; else Object.defineProperty(this, 'y', { value: v, writable: true, enumerable: true, configurable: true }); }
     get prevX() { return this._us ? this._us.prevX[this._si] * 0.125 : (this._det ? this._det.prevX : undefined); }
     set prevX(v) { if (this._us) this._us.prevX[this._si] = Math.round(v * 8); else if (this._det) this._det.prevX = v; else Object.defineProperty(this, 'prevX', { value: v, writable: true, enumerable: true, configurable: true }); }
     get prevY() { return this._us ? this._us.prevY[this._si] * 0.125 : (this._det ? this._det.prevY : undefined); }
@@ -2010,8 +2021,8 @@ for (const k of UNIT_ROLE_FIELDS) {
 // status accessors.)
 for (const [k, kind] of (typeof SIM_UNIT_JS_FIELDS !== 'undefined' ? SIM_UNIT_JS_FIELDS : [])) {
     const nm = _simJsName(k, kind), at = 'c.' + nm + '[this._si]';
-    const read = kind === 'b' ? at + ' === 1' : kind === 'u' ? '(x = ' + at + ') === x ? x : undefined' : kind === 'r' ? 'c.' + nm + '.get(this._si)' : at;
-    const write = kind === 'b' ? at + ' = v ? 1 : 0' : kind === 'u' ? at + ' = v === undefined ? NaN : v' : kind === 'r' ? 'c.' + nm + '.set(this._si,v)' : at + ' = v';
+    const read = kind === 'b' ? at + ' === 1' : kind === 'u' ? '(x = ' + at + ') === x ? x : undefined' : kind === 'r'||SIM_UNIT_SPARSE_JS_FIELDS.has(k) ? 'c.' + nm + '.get(this._si)' : at;
+    const write = kind === 'b' ? at + ' = v ? 1 : 0' : kind === 'u' ? at + ' = v === undefined ? NaN : v' : kind === 'r'||SIM_UNIT_SPARSE_JS_FIELDS.has(k) ? 'c.' + nm + '.set(this._si,v)' : at + ' = v';
     const get = new Function('return function () { const c = this._us; let x; if (c) return ' + read + '; return this._det ? this._det.' + k + ' : undefined; };')();
     const set = new Function('k', 'return function (v) { const c = this._us; if (c) ' + write + '; else if (this._det) this._det.' + k + ' = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };')(k);
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true, enumerable: false });
@@ -2147,7 +2158,7 @@ function unitHitsResolve() {
         const P = _simParams;
         const per = Math.max(SIM_HITS_PER_JOB, Math.ceil(n / 16)), jj = n ? Math.ceil(n / per) : 0;
         const cj = Math.max(SIM_HITS_CHUNKS_JOB, Math.ceil(KC / 48)), kj = nk ? Math.ceil(KC / cj) : 0;
-        P[0] = n; P[1] = per; P[2] = SIM_HITS_PRESENT; P[3] = jj; P[4] = cj; P[5] = nk ? KC : 0; P[6] = CH;
+        P[0] = n; P[1] = per; P[2] = SIM_HITS_PRESENT; P[3] = jj; P[4] = cj; P[5] = nk ? KC : 0; P[6] = CH; P[7] = SIM_OCCUPANCY_ENABLED ? 1 : 0;
         simParallelRun(SIM_KERNEL_HITS, jj + kj);
         const nt = CNT[0];
         if (nt > 0) {
@@ -3329,6 +3340,7 @@ function simChaseStillValid(c, s, on = 4) {
 }
 function simChaseUndo(c, s) {
     c.mvOn[s] = 0; c.mvOut[s] = 0;
+    if(typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED) return;
     c.x[s] = c.prevX[s]; c.y[s] = c.prevY[s];
 }
 // The last seen position of a forced target as before the kernel's write
@@ -4142,10 +4154,17 @@ function _simAreaCsr() {
     let total = 0;
     for (let a = 0; a < A; a++) total += L[a] ? L[a].length : 0;
     const off = simHeapArrayAuto(Int32Array, A + 1), nb = simHeapArrayAuto(Int32Array, Math.max(1, total));
+    const bounds=simHeapArrayAuto(Int32Array,Math.max(1,A*4));
+    for(let a=0;a<A;a++){
+        let x0=GRID_W,y0=GRID_H,x1=-1,y1=-1;
+        for(const c of gridCellsByArea[a]||[]){x0=Math.min(x0,c.x);y0=Math.min(y0,c.y);x1=Math.max(x1,c.x);y1=Math.max(y1,c.y);}
+        bounds.set([x0,y0,x1,y1],a*4);
+    }
     let k = 0;
     for (let a = 0; a < A; a++) { off[a] = k; const l = L[a]; if (l) for (let i = 0; i < l.length; i++) nb[k++] = l[i]; }
     off[A] = k;
     simParallelBind('area.off', off); simParallelBind('area.nb', nb);
+    simParallelBind('area.bounds',bounds);
     _simAreaCsrFor = areaNeighborIds;
 }
 
@@ -4207,14 +4226,16 @@ function simMoveRun() {
     if (typeof _visCoverReady === 'function' && _visCoverReady()) { simParallelBind('vis.cover', _visCover.visible); simParallelBind('vis.coverf', _visCover.visibleFlat); }
     simParallelBind('ix.agrid', _spatialAreaGridFlat());
     if (typeof _flowTables === 'function') _flowTables();
-    const chunks = Math.ceil(n / CH);
+    const occupancy = typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED;
+    const chunks = occupancy ? occupancyPrepareMovement() : Math.ceil(n / CH);
+    const outputSlots = occupancy ? n : chunks * CH;
     // (The flow looks shared by the kernel's threads: see mv.rs look_cache.)
     if (!_simMoveLookC) { _simMoveLookC = simHeapArray(Int32Array, SIM_MOVE_LOOKC_ENTRIES * 16); _simMoveLookC.fill(0); simParallelBind('mv.lookc', _simMoveLookC); }
-    if (!_simMovePost || _simMovePost.length < chunks * CH) { _simMovePost = simHeapArrayAuto(Int32Array, simReserveCap(chunks * CH, 8192)); simParallelBind('mv.post', _simMovePost); }
+    if (!_simMovePost || _simMovePost.length < outputSlots) { _simMovePost = simHeapArrayAuto(Int32Array, simReserveCap(outputSlots, 8192)); simParallelBind('mv.post', _simMovePost); }
     if (!_simMovePostC || _simMovePostC.length < chunks) { _simMovePostC = simHeapArrayAuto(Int32Array, Math.max(64, chunks * 2)); simParallelBind('mv.postc', _simMovePostC); }
     // (The attacks the kernel made, per chunk: see unitHitsResolve.)
-    if (!_simMoveHitA || _simMoveHitA.length < chunks * CH) {
-        _simMoveHitA = simHeapArrayAuto(Int32Array, simReserveCap(chunks * CH, 8192)); _simMoveHitT = simHeapArrayAuto(Int32Array, _simMoveHitA.length);
+    if (!_simMoveHitA || _simMoveHitA.length < outputSlots) {
+        _simMoveHitA = simHeapArrayAuto(Int32Array, simReserveCap(outputSlots, 8192)); _simMoveHitT = simHeapArrayAuto(Int32Array, _simMoveHitA.length);
         simParallelBind('mv.hita', _simMoveHitA); simParallelBind('mv.hitt', _simMoveHitT);
     }
     if (!_simMoveHitC || _simMoveHitC.length < chunks) { _simMoveHitC = simHeapArrayAuto(Int32Array, Math.max(64, chunks * 2)); simParallelBind('mv.hitc', _simMoveHitC); }
@@ -4235,7 +4256,7 @@ function simMoveRun() {
     // (Flow units between steers first, a small kernel of their own; the
     // movement kernel does the rest.)
     const stepK = SIM_MOVE_STEP_KERNEL && typeof SIM_KERNEL_MOVE_STEP === 'number';
-    P[46] = stepK ? 1 : 0; P[47] = 0; P[48] = SIM_COMBAT_BRAIN ? 1 : 0;
+    P[46] = stepK ? 1 : 0; P[47] = areaSearchEnabled()?1:0; P[48] = SIM_COMBAT_BRAIN ? 1 : 0;
     // (The step's base ticks: mv.rs Mv.dk.)
     P[58] = simDk;
     // The separation's pushes (its pair kernel's, from where units stood as
@@ -4260,7 +4281,9 @@ function simMoveRun() {
         } else _sepDirty = true;
     }
     // The fast step and remaining movement share each scheduled chunk.
-    simParallelRun(SIM_KERNEL_MOVE, chunks);
+    if(occupancy){
+        for(let phase=0;phase<4;phase++){P[4]=phase;simParallelRun(SIM_KERNEL_MOVE_OCCUPANCY,Math.ceil(_occ.config[5]/2)*Math.ceil(_occ.config[6]/2));}
+    }else simParallelRun(SIM_KERNEL_MOVE, chunks);
     _simMoveRunWallVer = _simMoveWallVer; _simDead0Tick = gameTime;
     _spatialKernelMoves = true;
     _simMoveChargeSteps(chunks, NPa, NT, names);
@@ -4269,7 +4292,7 @@ function simMoveRun() {
     // chunk by chunk in slot order: not every slot.
     const OUT = c.mvOut, owners = S.owners, PL = _simMovePost, PC = _simMovePostC;
     let slow = null;
-    for (let k = 0; k < chunks; k++) for (let i = k * CH, e = i + PC[k]; i < e; i++) {
+    for (let k = 0; k < chunks; k++) for (let i = occupancy ? _occ.offsets[k] : k * CH, e = i + PC[k]; i < e; i++) {
         const s = PL[i], o = OUT[s];
         if (o === 0) continue;
         if (c.mvBlk[s]) { c.mvBlk[s] = 0; if (owners[s]) _setUnitAstarBudgetBlockedIndicator(owners[s], 1); }
@@ -4480,6 +4503,7 @@ function combatScanRun() {
         P[11] = CHUNK_SIZE; P[12] = SIM_SEP_ABSENT; P[13] = SIM_MOVE_BOX_STEPS;
         P[14] = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0) + UNIT_CONTACT_ATTACK_MARGIN;
         P[15] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; P[16] = spatialBlockCols; P[17] = spatialBlockRows; P[18] = 1; P[58] = simDk;
+        P[47]=areaSearchEnabled()?1:0;
         simParallelRun(SIM_KERNEL_DRIVEBY, Math.ceil(n / 2048));
     }
     _acqTierStep();
@@ -4500,6 +4524,12 @@ const ACQ_LANE = typeof SIM_LANE_T10 === 'number' ? SIM_LANE_T10 : 2;
 // Combat decisions on the helpers (BRAIN_OFF_MAIN_THREAD_PLAN.md, stage 1):
 // the brain's instructions drive engaged units in the movement kernel.
 let SIM_COMBAT_BRAIN = true, _acqBrain = false;
+// Opt-in approximation experiment: total candidate budget, 0 = exact.
+// Must match on all peers; the acquisition tick and IDs seed the samples.
+let SIM_ACQ_SAMPLE_BUDGET=0;
+// Local play-test toggle; the page forwards it to its simulation worker.
+let SIM_ACQ_AREA_TARGETS=!(typeof location!=='undefined'&&location&&/[?&]acq=exact(?:&|$)/.test(String(location.search||'')));
+let _acqSampleNearVer=-1,_acqSampleNearOf=null;
 let _acqCommitTick = -1, _acqStage = 0, _acqStepTick = -1, _acqN = 0;
 const _acq = { cap: 0, chunks: 0, entries: 0, A: 0, cover: null, hs: null };
 function _acqTierStep() {
@@ -4588,29 +4618,56 @@ function _acqPost() {
     _acqArray('acq.omt', Uint8Array, CHUNKS_W * CHUNKS_H);
     // (And the index's entries packed in its order: acq.ex... .)
     const ecap = simReserveCap(ne);
-    _acqArray('acq.ex', Float32Array, ecap); _acqArray('acq.ey', Float32Array, ecap);
-    _acqArray('acq.eo', Int32Array, ecap); _acqArray('acq.ea', Int32Array, ecap); _acqArray('acq.eid', Int32Array, ecap);
-    const T = simParallelStageParams(ACQ_LANE, 0), B = simParallelStageParams(ACQ_LANE, 1);
+    const sampleBudget=Math.max(0,Math.min(256,Math.floor(SIM_ACQ_SAMPLE_BUDGET/4)*4));
+    const areaTargets=SIM_ACQ_AREA_TARGETS,sampled=sampleBudget>0||areaTargets;
+    if(!sampled){
+        _acqArray('acq.ex', Float32Array, ecap); _acqArray('acq.ey', Float32Array, ecap);
+        _acqArray('acq.eo', Int32Array, ecap); _acqArray('acq.ea', Int32Array, ecap); _acqArray('acq.eid', Int32Array, ecap);
+    }
+    const T = simParallelStageParams(ACQ_LANE, 0), B = simParallelStageParams(ACQ_LANE, sampled?2:1);
     T.fill(0); B.fill(0);
     const EPER = 4096, prepJobs = Math.max(Math.ceil(CHUNKS_H / 64), Math.ceil(ne / EPER));
     T[0] = CHUNKS_W; T[1] = CHUNKS_H; T[2] = 64; T[3] = ne; T[4] = EPER; T[5] = TILE; T[6] = GRID_W; T[7] = GRID_H;
+    T[8]=sampled?1:0;
     // (Small chunks: a helper takes the tick's own jobs between them.)
     B[0] = n; B[1] = 256; B[3] = CHUNKS_W; B[4] = CHUNKS_H; B[5] = TILE; B[6] = _sxEpoch;
     B[7] = Math.min(spatialUnitsComplexPlayerCount, np); B[8] = CMD_IDLE; B[9] = CMD_ATTACK_MOVING;
     B[10] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; B[11] = spatialBlockCols; B[12] = spatialBlockRows; B[14] = CHUNK_SIZE;
     // (The units in the index's order: B[22], its entries B[23].)
     B[15] = GRID_W; B[16] = GRID_H; B[18] = CMD_ATTACKING; B[20] = A; B[21] = 1; B[22] = 1; B[23] = ne;
+    B[24]=sampleBudget;B[25]=gameTime;
+    B[28]=areaTargets?1:0;B[29]=AREA_UNIT_TILE_EQUIVALENT;
     // Then the combat brain on the scan's results (its own copy of the area
     // graph: the layout may change before the commit).
-    const C3 = simParallelStageParams(ACQ_LANE, 2);
+    const C3 = simParallelStageParams(ACQ_LANE, sampled?3:2);
     C3.fill(0);
-    if (SIM_COMBAT_BRAIN) {
+    if (SIM_COMBAT_BRAIN || sampled) {
         _simAreaCsr();
         _acqArray('acq.aoff', Int32Array, _simParReg['area.off'].length).set(_simParReg['area.off']);
         _acqArray('acq.anb', Int32Array, _simParReg['area.nb'].length).set(_simParReg['area.nb']);
         C3[0] = n; C3[1] = 2048; C3[2] = CMD_IDLE; C3[3] = CMD_ATTACK_MOVING; C3[4] = TILE; C3[5] = GRID_W; C3[6] = GRID_H; C3[7] = Math.min(spatialUnitsComplexPlayerCount, np); C3[8] = A;
     }
-    simParallelBackgroundChain(ACQ_LANE, [[SIM_KERNEL_ACQ_OMT, prepJobs], [SIM_KERNEL_ACQ_SCAN, Math.ceil(ne / 256)], [SIM_KERNEL_COMBAT_BRAIN, SIM_COMBAT_BRAIN ? Math.ceil(n / 2048) : 0]]);
+    const stages=[[SIM_KERNEL_ACQ_OMT,prepJobs]];
+    if(sampled){
+        _acqArray('acq.saOff',Int32Array,A*np+1);
+        for(const name of ['saCount','saCursor'])_acqArray('acq.'+name,Int32Array,A*np);
+        for(const name of ['saSeen','saNearN'])_acqArray('acq.'+name,Int32Array,A);
+        for(const name of ['saX','saY'])_acqArray('acq.'+name,Float32Array,ecap);
+        for(const name of ['saOwner','saId','saSlot'])_acqArray('acq.'+name,Int32Array,ecap);
+        const near=_acqArray('acq.saNear',Int32Array,areaTargets?1:A*64);
+        const I=simParallelStageParams(ACQ_LANE,1);I.fill(0);I[0]=ne;I[20]=A;I[7]=B[7];
+        I[15]=GRID_W;I[16]=GRID_H;I[28]=areaTargets?1:0;I[30]=1;I[5]=TILE;
+        I[26]=_acqSampleNearVer!==_simAreaLayoutVer||_acqSampleNearOf!==near?1:0;
+        if(!areaTargets){_acqSampleNearVer=_simAreaLayoutVer;_acqSampleNearOf=near;}
+        if(areaTargets){
+            for(const name of ['saNearest','saDistance'])_acqArray('acq.'+name,Int32Array,A*np);
+            for(const name of ['saStructure','saStructureDistance'])_acqArray('acq.'+name,Int32Array,A*np*4);
+            _acqArray('acq.saQueue',Int32Array,A);
+        }
+        stages.push([SIM_KERNEL_ACQ_AREA_BUILD,1]);
+    }
+    stages.push([SIM_KERNEL_ACQ_SCAN,Math.ceil((sampled?n:ne)/256)],[SIM_KERNEL_COMBAT_BRAIN,SIM_COMBAT_BRAIN?Math.ceil(n/2048):0]);
+    simParallelBackgroundChain(ACQ_LANE,stages);
     _acqBrain = SIM_COMBAT_BRAIN;
     _acqStage = 1; _acqN = n;
 }
@@ -4694,6 +4751,7 @@ function _sepPrebuiltForTick() {
 }
 function separationStart() {
     _sepPending = null;
+    if (typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED) return;
     const U = _simUnitState;
     if (!U || units.length < SEPARATION_SLOT_MIN_UNITS || !(CHUNKS_W * CHUNKS_H < SIM_SEP_ABSENT)) return;
     // Made after the last tick with the unit index (spatialIndexPrebuild):
@@ -4749,6 +4807,7 @@ function separationStart() {
 let _sepPre = null, SEPARATION_PREBUILD = true;
 function separationPrebuildStages(n, ep, tick) {
     _sepPre = null;
+    if (typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED) return null;
     const U = _simUnitState;
     if (!SEPARATION_PREBUILD) return null;
     if (!U || n < SEPARATION_SLOT_MIN_UNITS || !(CHUNKS_W * CHUNKS_H < SIM_SEP_ABSENT)) return null;

@@ -1,0 +1,1 @@
+PASS: sparse retirement across block boundaries keeps the survivors, selections, and slot mapping.

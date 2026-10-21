@@ -105,22 +105,24 @@ pub unsafe extern "C" fn k_ix_keys(a: u32, chunk: i32) {
         let si = g(sl, i);
         if si < 0 {
             s(keys, i, nch);
-            s(areas, i, na);
+            if !areas.is_null(){s(areas, i, na);}
             s(bad, 0, 1);
             continue;
         }
         let su = si as usize;
         if g(dead, su) != 0 {
             s(keys, i, nch);
-            s(areas, i, na);
+            if !areas.is_null(){s(areas, i, na);}
             continue;
         }
         let gx = tq.of(g(xs, su)).max(0).min(gw - 1);
         let gy = tq.of(g(ys, su)).max(0).min(gh - 1);
         let key = if cs == 1 { gy * gw + gx } else { idiv(gy, cs) * cw + idiv(gx, cs) };
         s(keys, i, if key >= 0 && key < nch { key } else { nch });
-        let ar = g(ag, (gy * gw + gx) as usize);
-        s(areas, i, if ar >= 0 && ar < na { ar } else { na });
+        if !areas.is_null(){
+            let ar = g(ag, (gy * gw + gx) as usize);
+            s(areas, i, if ar >= 0 && ar < na { ar } else { na });
+        }
     }
 }
 
@@ -2011,7 +2013,7 @@ pub unsafe extern "C" fn k_hits(a: u32, chunk: i32) {
     let (c0, c1) = job(chunk - js_jobs, per, k.i(5));
     let ch = k.i(6).max(0) as usize;
     for c in c0..c1 {
-        let b = c * ch;
+        let b = if k.i(7)!=0 {g(k.p::<i32>(24),c).max(0) as usize}else{c * ch};
         for j in b..b + g(hc, c).max(0) as usize {
             let at = g(ha, j) as usize;
             let q = g(ht, j);
@@ -2708,6 +2710,7 @@ unsafe fn ws_areas_within(ag: *const i32, off: *const i32, nb: *const i32, na: u
         }
         d += 1;
     }
+    *sc.add(3)=qt as i32;
     ep
 }
 
@@ -2747,6 +2750,7 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
     let (hx, hy, ha, hn) = (k.p::<f32>(22), k.p::<f32>(23), k.p::<i32>(24), k.p::<i32>(25));
     let (wf, wo, wsa, rv) = (k.p::<u8>(26), k.p::<i8>(27), k.p::<i32>(28), k.p::<u8>(29));
     let wcnt = k.p::<i32>(142);
+    let area_bounds=k.p::<i32>(143);
     let kk = k.i(2).max(1) as usize;
     let tile = k.f(3) as f32;
     let itile = 1.0 / tile;
@@ -2778,6 +2782,7 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
         }
         c = lo;
     }
+    let mut last_sources=[-2i32;4];let mut last_ak=-1;let mut last_st=0;
     for gq in g0..g1 {
         while c + 1 < nreg && g(pre, (c + 1) as usize) <= gq as i32 {
             c += 1;
@@ -2798,7 +2803,33 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
             s(uout, i * 3 + 1, -1);
             s(uout, i * 3 + 2, -1);
         }
-        let st = if ak >= 0 && have_areas { ws_areas_within(ag, aoff, anb, na, w, h, itile, ox, oy, ak, sc, ast, aq) } else { 0 };
+        let st = if ak >= 0 && have_areas {
+            let fx=ox*itile;let fy=oy*itile;let gx=floorf(fx) as i32;let gy=floorf(fy) as i32;
+            let rx=fx-gx as f32;let ry=fy-gy as f32;let mut sources=[-1i32;4];let mut j=0;
+            for yy in gy-if ry<0.3{1}else{0}..=gy+if ry>=0.7{1}else{0}{
+                for xx in gx-if rx<0.3{1}else{0}..=gx+if rx>=0.7{1}else{0}{
+                    if xx>=0&&yy>=0&&xx<w&&yy<h {*sources.as_mut_ptr().add(j)=g(ag,(yy*w+xx) as usize);}j+=1;
+                }
+            }
+            if sources!=last_sources||ak!=last_ak {
+                last_st=ws_areas_within(ag,aoff,anb,na,w,h,itile,ox,oy,ak,sc,ast,aq);
+                last_sources=sources;last_ak=ak;
+            }
+            last_st
+        } else {0};
+        let area_only=k.i(56)==1;
+        let (mut x0,mut y0,mut x1,mut y1)=((floorf((ox-r)*itile) as i32).max(0),(floorf((oy-r)*itile) as i32).max(0),
+            (floorf((ox+r)*itile) as i32).min(w-1),(floorf((oy+r)*itile) as i32).min(h-1));
+        if area_only {
+            if st==0 {continue;}
+            (x0,y0,x1,y1)=(w,h,-1,-1);
+            if area_bounds.is_null(){(x0,y0,x1,y1)=(0,0,w-1,h-1);}else{
+                for j in 0..*sc.add(3) as usize {let ar=g(aq,j) as usize*4;
+                    x0=x0.min(g(area_bounds,ar));y0=y0.min(g(area_bounds,ar+1));
+                    x1=x1.max(g(area_bounds,ar+2));y1=y1.max(g(area_bounds,ar+3));
+                }
+            }
+        }
         if kind >= 3 {
             if wf.is_null() {
                 continue;
@@ -2813,10 +2844,7 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
                 ci = 3;
             }
             if need != 0 {
-                let gx0 = (floorf((ox - r) * itile) as i32).max(0);
-                let gx1 = (floorf((ox + r) * itile) as i32).min(w - 1);
-                let gy0 = (floorf((oy - r) * itile) as i32).max(0);
-                let gy1 = (floorf((oy + r) * itile) as i32).min(h - 1);
+                let (gx0,gy0,gx1,gy1)=(x0,y0,x1,y1);
                 if gx0 <= gx1 && gy0 <= gy1 {
                     for by in (gy0 >> 3)..=(gy1 >> 3) {
                         for bx in (gx0 >> 3)..=(gx1 >> 3) {
@@ -2832,7 +2860,7 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
                                     let dx = tx as f32 * tile + half - ox;
                                     let dy = ty as f32 * tile + half - oy;
                                     let d2 = dx * dx + dy * dy;
-                                    if !(d2 <= r2) {
+                                    if !area_only && !(d2 <= r2) {
                                         continue;
                                     }
                                     if st != 0 {
@@ -2870,7 +2898,7 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
                     let dx = g(hx, hh) - ox;
                     let dy = g(hy, hh) - oy;
                     let d2 = dx * dx + dy * dy;
-                    if d2 > r2 {
+                    if !area_only && d2 > r2 {
                         continue;
                     }
                     if st != 0 {
@@ -2943,10 +2971,10 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
         let rb = if rv.is_null() { 0u8 } else { ((g(rn, i) >> 16) & 255) as u8 };
         let my = g(rm, i);
         let ibt = itile / bt as f32;
-        let bx0 = (floorf((ox - r) * ibt) as i32).max(0);
-        let bx1 = (floorf((ox + r) * ibt) as i32).min(bcols - 1);
-        let by0 = (floorf((oy - r) * ibt) as i32).max(0);
-        let by1 = (floorf((oy + r) * ibt) as i32).min(brows - 1);
+        let bx0 = if area_only{x0/bt}else{floorf((ox-r)*ibt) as i32}.max(0);
+        let bx1 = if area_only{x1/bt}else{floorf((ox+r)*ibt) as i32}.min(bcols-1);
+        let by0 = if area_only{y0/bt}else{floorf((oy-r)*ibt) as i32}.max(0);
+        let by1 = if area_only{y1/bt}else{floorf((oy+r)*ibt) as i32}.min(brows-1);
         if bx0 > bx1 || by0 > by1 {
             continue;
         }
@@ -2967,8 +2995,14 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
                     let dx = g(sx, su) - ox;
                     let dy = g(sy, su) - oy;
                     let d2 = dx * dx + dy * dy;
-                    if !(d2 <= r2) {
+                    if !area_only && !(d2 <= r2) {
                         continue;
+                    }
+                    if area_only {
+                        let gx=floorf(g(sx,su)*itile) as i32;let gy=floorf(g(sy,su)*itile) as i32;
+                        if gx<0||gy<0||gx>=w||gy>=h {continue;}
+                        let ar=g(ag,(gy*w+gx) as usize);
+                        if ar<0||ar as usize>=na||g(ast,ar as usize)!=st {continue;}
                     }
                     if rb != 0 {
                         let t = floorf(g(sy, su) * itile) as i32 * w + floorf(g(sx, su) * itile) as i32;

@@ -1,0 +1,112 @@
+{
+  "wasm32": false,
+  "areaTargets": true,
+  "areaBoundaryCheck": true,
+  "bytes": 3033472,
+  "results": [
+    {
+      "scenario": "dense",
+      "n": 8192,
+      "budget": 4,
+      "targetChecksum": "31ac645b",
+      "eligible": 8015,
+      "found": 8015,
+      "coveragePercent": 100,
+      "coverageOverFourSamplesPercent": 100,
+      "sameTargetPercent": 2.582657517155334,
+      "meanExactDistancePx": 4.088469915736176,
+      "meanSampleDistancePx": 42.865203209625946,
+      "p95ExtraDistancePx": 89.69654068084522,
+      "sameAreaPercent": 81.80910792264504,
+      "resampledTargetChangePercent": 97.45477230193387,
+      "coldBuildMs": 0.9438999999999993,
+      "indexMs": 0.7742000000000004,
+      "exactMs": 4.946950000000001,
+      "sampleMs": 1.674103125000002,
+      "scanTimesMs": [
+        1.5761000000000038,
+        1.7661500000000032,
+        1.5884250000000009,
+        1.7657375000000002
+      ]
+    },
+    {
+      "scenario": "frontline",
+      "n": 8192,
+      "budget": 4,
+      "targetChecksum": "cdb71898",
+      "eligible": 1157,
+      "found": 1157,
+      "coveragePercent": 100,
+      "coverageOverFourSamplesPercent": 100,
+      "sameTargetPercent": 6.1365600691443385,
+      "meanExactDistancePx": 42.17087413685684,
+      "meanSampleDistancePx": 73.51058716207694,
+      "p95ExtraDistancePx": 74.57255253900549,
+      "sameAreaPercent": 0,
+      "resampledTargetChangePercent": 96.54278305963699,
+      "coldBuildMs": 0.5160000000000764,
+      "indexMs": 0.5560250000000053,
+      "exactMs": 3.871724999999998,
+      "sampleMs": 1.0930593750000028,
+      "scanTimesMs": [
+        1.080475000000007,
+        1.0730125000000044,
+        1.047274999999999,
+        1.171475000000001
+      ]
+    },
+    {
+      "scenario": "sparse",
+      "n": 8192,
+      "budget": 4,
+      "targetChecksum": "5f061fbd",
+      "eligible": 8015,
+      "found": 8015,
+      "coveragePercent": 100,
+      "coverageOverFourSamplesPercent": 100,
+      "sameTargetPercent": 39.026824703680596,
+      "meanExactDistancePx": 16.266370343267866,
+      "meanSampleDistancePx": 31.45212123182745,
+      "p95ExtraDistancePx": 55.896041786178074,
+      "sameAreaPercent": 78.73986275733,
+      "resampledTargetChangePercent": 46.76232064878353,
+      "coldBuildMs": 1.1598999999999933,
+      "indexMs": 0.6064750000000032,
+      "exactMs": 4.192025000000001,
+      "sampleMs": 1.822568750000002,
+      "scanTimesMs": [
+        1.717899999999986,
+        1.798962500000016,
+        1.9957124999999962,
+        1.77770000000001
+      ]
+    },
+    {
+      "scenario": "visibility",
+      "n": 8192,
+      "budget": 4,
+      "targetChecksum": "986c81f",
+      "eligible": 8031,
+      "found": 8031,
+      "coveragePercent": 100,
+      "coverageOverFourSamplesPercent": 100,
+      "sameTargetPercent": 37.579379902876354,
+      "meanExactDistancePx": 22.69211749400567,
+      "meanSampleDistancePx": 44.561558253069045,
+      "p95ExtraDistancePx": 83.79250745390496,
+      "sameAreaPercent": 61.499190636284396,
+      "resampledTargetChangePercent": 48.78595442659694,
+      "coldBuildMs": 0.5649000000000797,
+      "indexMs": 0.5217375000000004,
+      "exactMs": 5.038262500000002,
+      "sampleMs": 1.7938781250000062,
+      "scanTimesMs": [
+        1.8420375000000035,
+        2.112287500000008,
+        1.6773500000000183,
+        1.543837499999995
+      ]
+    }
+  ]
+}

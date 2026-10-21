@@ -422,6 +422,10 @@ function simClientWhenLoaded(ms) {
 function _simClientGlobals() {
     return {
         isMultiplayer, isHost, localPlayerId, gameSeed, activeTeamIds, gameMode, fullVisibility, matchFullVisibility, lockstepStrictDebugMode,
+        SIM_ACQ_AREA_TARGETS: typeof SIM_ACQ_AREA_TARGETS!=='undefined'&&SIM_ACQ_AREA_TARGETS,
+        SIM_ACQ_SAMPLE_BUDGET: typeof SIM_ACQ_SAMPLE_BUDGET!=='undefined'?SIM_ACQ_SAMPLE_BUDGET:0,
+        SIM_OCCUPANCY_ENABLED: typeof SIM_OCCUPANCY_ENABLED!=='undefined'&&SIM_OCCUPANCY_ENABLED,
+        SIM_OCCUPANCY_PLANES: typeof SIM_OCCUPANCY_PLANES!=='undefined'?SIM_OCCUPANCY_PLANES:1,
         myPeerId: typeof myPeerId !== 'undefined' ? myPeerId : null,
         lobbyPlayers: typeof lobbyPlayers !== 'undefined' ? lobbyPlayers : [], gameStarted: true,
         // (Its tick bundles carry the match: main.js packTickBundleForWire.)

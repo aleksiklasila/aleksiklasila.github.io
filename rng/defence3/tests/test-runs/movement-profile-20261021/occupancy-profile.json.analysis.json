@@ -1,0 +1,487 @@
+{
+  "input": "tests/test-runs/movement-profile-20261021/occupancy-profile.json",
+  "ticks": 16,
+  "profiledThreads": 8,
+  "tickMs": {
+    "mean": 454.11234375000004,
+    "p50": 337.95960000000196,
+    "p95": 860.0008999999991
+  },
+  "phases": {
+    "simMoveRun": 225.24830624999868,
+    "simParallelRun:89": 184.5769625000048,
+    "simParallelBackgroundWait": 46.50145625000005,
+    "spatialIndexRebuild": 30.701306249999107,
+    "combatScanRun": 30.69686874999661,
+    "statusPrepassRun": 28.403575000000274,
+    "simParallelRun:24": 27.58866874999785,
+    "_forEachUnitInTickOrder": 24.186481249999815,
+    "simParallelRun:53": 24.072231250000186,
+    "updateAllPlayerVisibility": 15.936649999997826,
+    "unitHitsResolve": 13.82178125000064,
+    "simUnitStateCollect": 13.24968125000214,
+    "simParallelRun:60": 10.738537499999438,
+    "recalculateUnitEffectiveStats": 9.650506249998216,
+    "occupancyPrepareMovement": 8.179125000000568,
+    "simParallelRun:27": 6.511062499999753,
+    "simParallelRun:32": 5.197462499999347,
+    "simParallelRun:37": 4.356468750001113,
+    "simParallelRun:36": 3.8886187499974767,
+    "simParallelRun:34": 3.447875000001659,
+    "simParallelRun:20": 3.1533874999986438,
+    "towersTick": 2.689131249998354,
+    "navFieldsFlush": 2.634449999998651,
+    "unitRetirePrepare": 2.176468749999003,
+    "simParallelRun:49": 2.132706249999501,
+    "simParallelRun:63": 2.090537500001119,
+    "simParallelRun:30": 2.0021437499990498,
+    "simParallelRun:66": 1.9292562500013446,
+    "simParallelRun:45": 1.2493625000006432,
+    "navTick": 1.1254374999971333,
+    "_simMoveBuildHostile": 1.0921687499985637,
+    "simParallelRun:43": 0.7493875000009211,
+    "simParallelRun:41": 0.5909062500022628,
+    "simParallelRun:77": 0.5499812499992913,
+    "simParallelRun:44": 0.23968125000010332,
+    "_simAreaCsr": 0.19896250000601867,
+    "spawnerStructuresTick": 0.11971249999805877,
+    "_simMoveChargeSteps": 0.04821875000016007,
+    "unitPassBegin": 0.028075000001990702,
+    "_simMoveWalls": 0.024656249999679858,
+    "recalculateThingPrecomputedStats": 0.014506249998703424,
+    "processGlobalSpawnerQueue": 0.010418749999189458,
+    "_simMoveAreaBoxes": 0.009893750000628643,
+    "separationStart": 0.005956250000053842,
+    "visCoverHoldEnd": 0.005131249997248233,
+    "runUnitSeparationPass": 0.003781249999519787,
+    "projectilesBegin": 0.0024562500020692823
+  },
+  "phaseSelf": {
+    "simParallelRun:89": 184.5769625000048,
+    "simParallelBackgroundWait": 46.50145625000005,
+    "simParallelRun:24": 27.58866874999785,
+    "simParallelRun:53": 24.072231250000186,
+    "_forEachUnitInTickOrder": 15.729118749997724,
+    "updateAllPlayerVisibility": 13.929587499997979,
+    "simUnitStateCollect": 13.24968125000214,
+    "simParallelRun:60": 10.738537499999438,
+    "occupancyPrepareMovement": 8.179125000000568,
+    "simParallelRun:27": 6.511062499999753,
+    "simParallelRun:32": 5.197462499999347,
+    "simParallelRun:37": 4.356468750001113,
+    "simParallelRun:36": 3.8886187499974767,
+    "simParallelRun:34": 3.447875000001659,
+    "simParallelRun:20": 3.1533874999986438,
+    "recalculateUnitEffectiveStats": 3.1394437499984633,
+    "towersTick": 2.689131249998354,
+    "navFieldsFlush": 2.634449999998651,
+    "simParallelRun:49": 2.132706249999501,
+    "simParallelRun:63": 2.090537500001119,
+    "simParallelRun:30": 2.0021437499990498,
+    "simParallelRun:66": 1.9292562500013446,
+    "simParallelRun:45": 1.2493625000006432,
+    "combatScanRun": 0.8240062499953638,
+    "statusPrepassRun": 0.8149062500024229,
+    "simParallelRun:43": 0.7493875000009211,
+    "unitHitsResolve": 0.7187874999999622,
+    "simMoveRun": 0.6412749999944936,
+    "simParallelRun:41": 0.5909062500022628,
+    "navTick": 0.5747687499970198,
+    "simParallelRun:77": 0.5499812499992913,
+    "simParallelRun:44": 0.23968125000010332,
+    "_simAreaCsr": 0.19896250000601867,
+    "spatialIndexRebuild": 0.19533125000180007,
+    "spawnerStructuresTick": 0.11971249999805877,
+    "_simMoveBuildHostile": 0.10309999999753927,
+    "_simMoveChargeSteps": 0.04821875000016007,
+    "unitRetirePrepare": 0.043762499999502324,
+    "unitPassBegin": 0.028075000001990702,
+    "_simMoveWalls": 0.024656249999679858,
+    "recalculateThingPrecomputedStats": 0.014506249998703424,
+    "processGlobalSpawnerQueue": 0.010418749999189458,
+    "_simMoveAreaBoxes": 0.009893750000628643,
+    "separationStart": 0.005956250000053842,
+    "visCoverHoldEnd": 0.005131249997248233,
+    "runUnitSeparationPass": 0.003781249999519787,
+    "projectilesBegin": 0.0024562500020692823
+  },
+  "movementCpuMsPerTick": 1018.0980625,
+  "topMovement": [
+    {
+      "name": "combat4",
+      "cpuMsPerTick": 512.4465,
+      "percent": 50.3337074173049
+    },
+    {
+      "name": "move_job",
+      "cpuMsPerTick": 268.8631875,
+      "percent": 26.40837826955397
+    },
+    {
+      "name": "MoveGrid",
+      "cpuMsPerTick": 86.84,
+      "percent": 8.529630219191189
+    },
+    {
+      "name": "3occ4free",
+      "cpuMsPerTick": 49.592125,
+      "percent": 4.871055827198375
+    },
+    {
+      "name": "step4",
+      "cpuMsPerTick": 47.7058125,
+      "percent": 4.685777751394159
+    },
+    {
+      "name": "motion",
+      "cpuMsPerTick": 25.577125,
+      "percent": 2.5122457199450765
+    },
+    {
+      "name": "park4",
+      "cpuMsPerTick": 7.504125,
+      "percent": 0.7370729084360673
+    },
+    {
+      "name": "move_pre",
+      "cpuMsPerTick": 6.5325,
+      "percent": 0.6416376025664031
+    },
+    {
+      "name": "clear_or_mark",
+      "cpuMsPerTick": 4.4460625,
+      "percent": 0.43670277586841
+    },
+    {
+      "name": "Mv4load",
+      "cpuMsPerTick": 3.9158125,
+      "percent": 0.3846203665670958
+    },
+    {
+      "name": "epi_slot",
+      "cpuMsPerTick": 2.117,
+      "percent": 0.2079367477432951
+    },
+    {
+      "name": "mv_move_occupancy",
+      "cpuMsPerTick": 1.1715625,
+      "percent": 0.11507364006991222
+    },
+    {
+      "name": "step_slot",
+      "cpuMsPerTick": 0.7180625,
+      "percent": 0.07052979731999048
+    },
+    {
+      "name": "idle4",
+      "cpuMsPerTick": 0.555125,
+      "percent": 0.05452569064288933
+    },
+    {
+      "name": "move_flow",
+      "cpuMsPerTick": 0.1130625,
+      "percent": 0.01110526619826467
+    }
+  ],
+  "topAll": [
+    {
+      "name": "acq_scan",
+      "cpuMsPerTick": 704.9658125,
+      "percent": 18.44430354726013
+    },
+    {
+      "name": "(idle)",
+      "cpuMsPerTick": 674.6024375,
+      "percent": 17.649894378348424
+    },
+    {
+      "name": "combat4",
+      "cpuMsPerTick": 513.201125,
+      "percent": 13.427087047991266
+    },
+    {
+      "name": "move_job",
+      "cpuMsPerTick": 268.8631875,
+      "percent": 7.034375504463084
+    },
+    {
+      "name": "k_status",
+      "cpuMsPerTick": 130.31275,
+      "percent": 3.4094247897705285
+    },
+    {
+      "name": "k_ixd_scan",
+      "cpuMsPerTick": 119.5946875,
+      "percent": 3.1290038180251707
+    },
+    {
+      "name": "k_combat_brain",
+      "cpuMsPerTick": 111.3783125,
+      "percent": 2.914035500596133
+    },
+    {
+      "name": "post",
+      "cpuMsPerTick": 93.5955625,
+      "percent": 2.4487782738067985
+    },
+    {
+      "name": "k_vis_seed",
+      "cpuMsPerTick": 89.154875,
+      "percent": 2.3325947841166177
+    },
+    {
+      "name": "MoveGrid",
+      "cpuMsPerTick": 86.84,
+      "percent": 2.2720297802300444
+    },
+    {
+      "name": "k_hits",
+      "cpuMsPerTick": 81.9385,
+      "percent": 2.143789868118142
+    },
+    {
+      "name": "nav_field",
+      "cpuMsPerTick": 72.1575625,
+      "percent": 1.8878872739384003
+    },
+    {
+      "name": "simParallelRun",
+      "cpuMsPerTick": 62.1425625,
+      "percent": 1.6258608086113173
+    },
+    {
+      "name": "k_ixd_merge",
+      "cpuMsPerTick": 58.36125,
+      "percent": 1.5269288117394135
+    },
+    {
+      "name": "3occ4free",
+      "cpuMsPerTick": 49.67975,
+      "percent": 1.2997912422199855
+    },
+    {
+      "name": "step4",
+      "cpuMsPerTick": 47.7058125,
+      "percent": 1.2481463230086447
+    },
+    {
+      "name": "k_ixd_copy",
+      "cpuMsPerTick": 36.8199375,
+      "percent": 0.9633348054607205
+    },
+    {
+      "name": "loop",
+      "cpuMsPerTick": 36.6115625,
+      "percent": 0.957883006687627
+    },
+    {
+      "name": "k_acq_snap",
+      "cpuMsPerTick": 34.0743125,
+      "percent": 0.8914999164079325
+    },
+    {
+      "name": "k_zero",
+      "cpuMsPerTick": 30.4541875,
+      "percent": 0.7967851328041174
+    },
+    {
+      "name": "k_eff_units",
+      "cpuMsPerTick": 27.206125,
+      "percent": 0.7118047697450612
+    },
+    {
+      "name": "k_held_dead",
+      "cpuMsPerTick": 27.078875,
+      "percent": 0.7084754769130222
+    },
+    {
+      "name": "js-to-wasm:iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiidiiiiiiiiiiiiiiii:",
+      "cpuMsPerTick": 27.02725,
+      "percent": 0.7071247913141694
+    },
+    {
+      "name": "acq_pack",
+      "cpuMsPerTick": 26.4053125,
+      "percent": 0.690852790836949
+    },
+    {
+      "name": "motion",
+      "cpuMsPerTick": 25.577125,
+      "percent": 0.6691845888146749
+    },
+    {
+      "name": "k_acq_commit",
+      "cpuMsPerTick": 24.3729375,
+      "percent": 0.6376789478545095
+    },
+    {
+      "name": "k_upd_cand",
+      "cpuMsPerTick": 18.270625,
+      "percent": 0.4780216962622703
+    },
+    {
+      "name": "",
+      "cpuMsPerTick": 18.21875,
+      "percent": 0.4766644698130599
+    },
+    {
+      "name": "k_vis_snap",
+      "cpuMsPerTick": 14.8504375,
+      "percent": 0.38853795773197847
+    },
+    {
+      "name": "_simBgClaim",
+      "cpuMsPerTick": 14.7270625,
+      "percent": 0.3853100480804828
+    },
+    {
+      "name": "gameTick",
+      "cpuMsPerTick": 13.530875,
+      "percent": 0.3540137143317619
+    },
+    {
+      "name": "k_vis_spread",
+      "cpuMsPerTick": 13.1674375,
+      "percent": 0.3445049531243418
+    },
+    {
+      "name": "SIM_KERNELS.<computed>",
+      "cpuMsPerTick": 13.06,
+      "percent": 0.34169402268314575
+    },
+    {
+      "name": "k_hits_apply",
+      "cpuMsPerTick": 13.0400625,
+      "percent": 0.34117238986712395
+    },
+    {
+      "name": "k_combat_commit",
+      "cpuMsPerTick": 12.29125,
+      "percent": 0.3215809078334009
+    },
+    {
+      "name": "k_combat_scan",
+      "cpuMsPerTick": 12.263875,
+      "percent": 0.32086468471923923
+    },
+    {
+      "name": "k_unit_retire",
+      "cpuMsPerTick": 12.1561875,
+      "percent": 0.31804721342768555
+    },
+    {
+      "name": "_simRust",
+      "cpuMsPerTick": 10.8718125,
+      "percent": 0.2844435947153069
+    },
+    {
+      "name": "(program)",
+      "cpuMsPerTick": 9.9459375,
+      "percent": 0.26021955541578484
+    },
+    {
+      "name": "(garbage collector)",
+      "cpuMsPerTick": 9.8788125,
+      "percent": 0.2584633370947583
+    }
+  ],
+  "jobs": null,
+  "countersPerTick": [
+    3890340.875,
+    3858895.375,
+    3835047.375,
+    23809.3125,
+    0.375,
+    0,
+    31361.25,
+    0,
+    0,
+    60.8125,
+    23.0625,
+    18280.1875,
+    300.1875,
+    0.1875,
+    2.75,
+    0,
+    1924.0625,
+    0,
+    0.375,
+    38.6875,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1.75,
+    31445.5,
+    1.375,
+    207441.9375,
+    2944757.4375,
+    10697.875,
+    0,
+    0,
+    0,
+    1163990.375,
+    1764330.8125,
+    600368.625,
+    580696.875,
+    505191.125,
+    57057,
+    57057,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "counterNames": {
+    "0": "lanes seen by non-idle groups",
+    "1": "lanes completed by vector paths",
+    "2": "combat4 lanes",
+    "3": "park4 lanes",
+    "4": "scalar mvOn0",
+    "5": "scalar flow",
+    "6": "scalar park",
+    "7": "scalar hold",
+    "8": "scalar chase",
+    "9": "scalar structure hold",
+    "10": "scalar approach",
+    "11": "scalar brain",
+    "12": "scalar dead",
+    "13": "scalar step already ran",
+    "14": "scalar move_flow calls",
+    "15": "scalar move_path calls",
+    "18": "navigation look-cache probes",
+    "19": "idle4 lanes",
+    "20": "steady candidates",
+    "21": "steady expired",
+    "22": "steady state rejected",
+    "23": "steady tile cross",
+    "24": "steady field rejected",
+    "25": "flow without flag64",
+    "26": "steady no energy/index",
+    "27": "steady wrong committed tile",
+    "28": "steady wrong floor",
+    "29": "steady hostile floor",
+    "30": "steady open tile cross",
+    "32": "scalar fallback lanes"
+  }
+}

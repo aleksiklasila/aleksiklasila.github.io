@@ -1,0 +1,1 @@
+PASS: area worker kernel finds distant eligible builders, healers and resources; excludes disconnected areas; caches by source and range

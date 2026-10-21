@@ -1,0 +1,1 @@
+PASS: 3000-worker occupancy agrees with exhaustive scans; assignment, release, death, mobile targets, tick/reset and live spawner eligibility.

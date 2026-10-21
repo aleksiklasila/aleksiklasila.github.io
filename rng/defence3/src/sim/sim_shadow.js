@@ -80,7 +80,11 @@ function simShadowStartMatch(snapshotText) {
         globals: {
             assign: {
                 isMultiplayer, isHost, localPlayerId, gameSeed, activeTeamIds, lobbyPlayers: typeof lobbyPlayers !== 'undefined' ? lobbyPlayers : [],
-                gameMode, fullVisibility, matchFullVisibility
+                gameMode, fullVisibility, matchFullVisibility,
+                SIM_ACQ_AREA_TARGETS:typeof SIM_ACQ_AREA_TARGETS!=='undefined'&&SIM_ACQ_AREA_TARGETS,
+                SIM_ACQ_SAMPLE_BUDGET:typeof SIM_ACQ_SAMPLE_BUDGET!=='undefined'?SIM_ACQ_SAMPLE_BUDGET:0,
+                SIM_OCCUPANCY_ENABLED:typeof SIM_OCCUPANCY_ENABLED!=='undefined'&&SIM_OCCUPANCY_ENABLED,
+                SIM_OCCUPANCY_PLANES:typeof SIM_OCCUPANCY_PLANES!=='undefined'?SIM_OCCUPANCY_PLANES:1
             },
             editableConfig: typeof serializeEditableRuntimeConfigForTransport === 'function' ? serializeEditableRuntimeConfigForTransport() : null,
             startingResources: typeof startingResourcesConfig !== 'undefined' ? startingResourcesConfig : null

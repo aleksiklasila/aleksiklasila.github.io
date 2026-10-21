@@ -5,11 +5,13 @@ globalThis.self = {crossOriginIsolated:true};
 const H = require('./net-harness.cjs');
 const RealWorker = require('./real-sim-helper.cjs');
 const workers=[];
+const acquisitionSamples=Number(process.argv.find(a=>a.startsWith('--acq-samples='))?.slice(14)||0);
 class Worker extends RealWorker { constructor(...args) { super(...args); workers.push(this); } }
 (async () => {
     const controls={...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':'60','cfg-max-pop':'10000','cfg-starting-energy':'900000000','cfg-starting-astar':'900000000'};
     const world=new H.World({controls});
     const host=world.spawn('serial',{simWorker:false}), peer=world.spawn('parallel',{simWorker:false});
+    for(const inst of [host,peer])inst.eval('SIM_ACQ_SAMPLE_BUDGET='+acquisitionSamples+';SIM_ACQ_AREA_TARGETS='+process.argv.includes('--area-targets'));
     peer.eval('startSoloGame()');
     host.eval(`startSoloGame(); isMultiplayer=true; gameStarted=true;
         for(let i=0;i<4200;i++) {
@@ -23,8 +25,13 @@ class Worker extends RealWorker { constructor(...args) { super(...args); workers
         host.eval('snapFlushHistoryCaches()');
         peer.scratch.state=host.eval('JSON.stringify(buildHostAuthoritativeStateSnapshot({includeConfig:true,includeStaticMapState:true,includeGridTypes:true}))');
         peer.eval('applyAuthoritativeStateSnapshot(JSON.parse(__scratch.state)); isMultiplayer=true; gameStarted=true;');
+        for(const inst of [host,peer])if(inst.eval('SIM_OCCUPANCY_ENABLED'))assert.equal(inst.eval('occupancyAudit().ok'),true,'occupancy after restore: '+JSON.stringify(inst.eval('occupancyAudit()')));
     };
     restore();
+    if(host.eval('SIM_OCCUPANCY_ENABLED')){
+        const shape='JSON.stringify(units.map(u=>[u.id,_occ.radius[u._si],_occ.layer[u._si]]).sort((a,b)=>a[0]-b[0]))';
+        assert.equal(peer.eval(shape),host.eval(shape),'restored occupancy shapes match');
+    }
     peer.scratch.Worker=Worker;
     peer.eval('Worker=__scratch.Worker; navigator.hardwareConcurrency=16; simParallelInit("",7);');
     try {

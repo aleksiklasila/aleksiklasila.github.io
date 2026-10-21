@@ -1,0 +1,118 @@
+{
+  "out": "tests/test-runs/movement-profile-20261021/partial-profile-40k.json.analysis.json",
+  "movementCpuMsPerTick": 11.55375,
+  "topMovement": [
+    {
+      "name": "combat4",
+      "cpuMsPerTick": 6.3390625,
+      "percent": 54.86584442280645
+    },
+    {
+      "name": "move_job",
+      "cpuMsPerTick": 2.601125,
+      "percent": 22.513253272746944
+    },
+    {
+      "name": "move_pre",
+      "cpuMsPerTick": 0.7458125,
+      "percent": 6.455155252623607
+    },
+    {
+      "name": "step4",
+      "cpuMsPerTick": 0.559375,
+      "percent": 4.841501676944715
+    },
+    {
+      "name": "MoveGrid",
+      "cpuMsPerTick": 0.539,
+      "percent": 4.665152006924159
+    },
+    {
+      "name": "free_special",
+      "cpuMsPerTick": 0.2856875,
+      "percent": 2.472682029644055
+    },
+    {
+      "name": "mark_special",
+      "cpuMsPerTick": 0.209,
+      "percent": 1.8089364924807962
+    },
+    {
+      "name": "park4",
+      "cpuMsPerTick": 0.1774375,
+      "percent": 1.535756788921346
+    },
+    {
+      "name": "move_flow",
+      "cpuMsPerTick": 0.09725,
+      "percent": 0.8417180569079303
+    }
+  ],
+  "countersPerTick": [
+    37997.8125,
+    34709.5,
+    34039.1875,
+    667.1875,
+    1.1875,
+    0,
+    3281.75,
+    0,
+    0,
+    2.1875,
+    3.1875,
+    3050.8125,
+    7.0625,
+    0,
+    2.375,
+    0,
+    99,
+    0,
+    0.25,
+    3.125,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1.4375,
+    3288.3125,
+    1.1875,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "jobs": null
+}

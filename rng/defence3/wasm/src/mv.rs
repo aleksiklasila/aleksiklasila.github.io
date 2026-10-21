@@ -278,6 +278,17 @@ struct NavP {
 }
 
 struct Mv {
+    area_only: bool,
+    occ: *const super::occ::MoveGrid,
+    // Occupancy jobs may end inside a four-lane group. Stores must touch
+    // only these owned slots; masked full-width RMW would race a helper.
+    span_n: usize,
+    #[cfg(feature="prof")]
+    skip_hold_stores: bool,
+    #[cfg(feature="prof")]
+    bulk_hold_targets: bool,
+    #[cfg(feature="prof")]
+    pair_holds: bool,
     /// The step's base ticks (simDk, P[58]; at least 1) and as a double.
     dk: i32,
     dkf: f64,
@@ -576,6 +587,15 @@ impl Mv {
         }
         let tile = rd(f, 7);
         Mv {
+            area_only: rd(f,47)==1.0,
+            occ: core::ptr::null(),
+            span_n: 4,
+            #[cfg(feature="prof")]
+            skip_hold_stores: true,
+            #[cfg(feature="prof")]
+            bulk_hold_targets: true,
+            #[cfg(feature="prof")]
+            pair_holds: true,
             dk: { let k = to_i32(rd(f, 58)); if k > 1 { k.min(64) } else { 1 } },
             dkf: { let k = to_i32(rd(f, 58)); if k > 1 { k.min(64) as f64 } else { 1.0 } },
             atlh: {
@@ -1031,6 +1051,7 @@ unsafe fn in_area_range(m: &Mv, x: f64, y: f64, tx: f64, ty: f64, k: i32) -> i32
 }
 /// _simUnitInContactRange.
 unsafe fn in_contact_range(m: &Mv, pad: f64, s: usize, q: usize, x: f64, y: f64, tx: f64, ty: f64, k: i32) -> i32 {
+    if m.area_only {return in_area_range(m,x,y,tx,ty,k+1);}
     let (w, h, tile) = (m.w, m.h, m.tile);
     let rs = sep_radius(rd(m.crc, s), rd(m.rrc, s));
     let rq = sep_radius(rd(m.crc, q), rd(m.rrc, q));
@@ -1064,7 +1085,7 @@ unsafe fn in_contact_range(m: &Mv, pad: f64, s: usize, q: usize, x: f64, y: f64,
 #[inline(always)]
 unsafe fn in_attack_range(m: &Mv, pad: f64, s: usize, q: usize, x: f64, y: f64, tx: f64, ty: f64, k: i32) -> i32 {
     let r = in_area_range(m, x, y, tx, ty, k);
-    if r != 0 {
+    if r != 0 || m.area_only {
         return r;
     }
     in_contact_range(m, pad, s, q, x, y, tx, ty, k)
@@ -1566,6 +1587,30 @@ unsafe fn fire(m: &Mv, s: usize) {
     wr(m.tmon, s, 1);
 }
 
+
+#[inline(always)]
+unsafe fn checked_position(m:&Mv,s:usize,x:f64,y:f64)->(f64,f64) {
+    if m.occ.is_null(){return (x,y);}
+    let nx=js_round(x*8.0) as i32;let ny=js_round(y*8.0) as i32;
+    let ox=*(m.x.add(s) as *const i32);let oy=*(m.y.add(s) as *const i32);
+    let (tx,ty)=(*m.occ).position(s,nx,ny);
+    if tx!=nx || ty!=ny {
+        wr(m.steady,s,0);wr(m.ct,s,-1);wr(m.cd,s,-1);
+        wr(m.vx,s,(tx-ox) as f64/(8.0*m.dkf));wr(m.vy,s,(ty-oy) as f64/(8.0*m.dkf));
+    }
+    (tx as f64*0.125,ty as f64*0.125)
+}
+#[inline(always)]
+unsafe fn checked_positions4(m:&Mv,s:usize,nx:v128,ny:v128,bits:i32)->(v128,v128) {
+    if m.occ.is_null(){return (nx,ny);}
+    let mut xx:[i32;4]=core::mem::transmute(nx);let mut yy:[i32;4]=core::mem::transmute(ny);
+    for l in 0..4 {if bits&(1<<l)!=0 {
+        let (x,y)=checked_position(m,s+l,xx[l] as f64*0.125,yy[l] as f64*0.125);
+        xx[l]=(x*8.0) as i32;yy[l]=(y*8.0) as i32;
+    }}
+    (core::mem::transmute(xx),core::mem::transmute(yy))
+}
+
 /// A move's step written: position quantized, the output by tile.
 #[cfg_attr(not(feature = "prof"), inline(always))]
 #[cfg_attr(feature = "prof", inline(never))]
@@ -1582,8 +1627,9 @@ unsafe fn commit_step(m: &Mv, s: usize, x: f64, y: f64, vx: f64, vy: f64, gx: i3
     wr(m.floor, s, tl);
     let qx = quant_mul(nx, q, iq);
     let qy = quant_mul(ny, q, iq);
-    wr(m.x, s, qx);
-    wr(m.y, s, qy);
+    let (qx,qy)=checked_position(m,s,qx,qy);
+    wr(m.x,s,qx);
+    wr(m.y,s,qy);
     wr(m.out, s, if floor(qx * itile) != gx as f64 || floor(qy * itile) != gy as f64 { 3 } else { 1 });
 }
 
@@ -1825,7 +1871,7 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
     // The step (lanes of `bits`).
     let mk = i32x4_ne(v128_and(i32x4_splat(bits), i32x4(1, 2, 4, 8)), zero);
     let st = |pp: *mut v128, v: v128| {
-        v128_store(pp, v128_bitselect(v, v128_load(pp), mk));
+        mv_store32(m,pp,v,mk);
     };
     st(m.px.add(s) as *mut v128, x);
     st(m.py.add(s) as *mut v128, y);
@@ -1836,9 +1882,11 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
     let ovx = v128_load(pvx);
     let ovy = v128_load(pvy);
     if v128_any_true(v128_and(mk, v128_or(v128_xor(ovx, vx), v128_xor(ovy, vy)))) {
-        v128_store(pvx, v128_bitselect(vx, ovx, mk));
-        v128_store(pvy, v128_bitselect(vy, ovy, mk));
+        mv_store32(m,pvx,vx,mk);
+        mv_store32(m,pvy,vy,mk);
     }
+    let (nx,ny)=checked_positions4(m,s,nx,ny,bits);
+    let stay=v128_and(i32x4_eq(tile4(m,nx),gx),i32x4_eq(tile4(m,ny),gy));
     st(m.x.add(s) as *mut v128, nx);
     st(m.y.add(s) as *mut v128, ny);
     // (Bytes of the four lanes at once: d0 0, spent 1 when it left its
@@ -1846,11 +1894,11 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
     let gone = v128_not(stay);
     *mvd |= (i32x4_bitmask(v128_or(i32x4_ne(nx, x), i32x4_ne(ny, y))) as i32) & bits;
     if (m.d0.add(s) as *const u32).read_unaligned() != 0 {
-        st_u8x4(m.d0.add(s), zero, mk);
+        mv_store8(m,m.d0.add(s), zero, mk);
     }
-    st_u8x4(m.spent.add(s), v128_and(gone, one), mk);
-    st_u8x4(m.out.add(s), v128_bitselect(i32x4_splat(3), one, gone), mk);
-    st_u8x4(m.stept.add(s - m.stepbase), one, mk);
+    mv_store8(m,m.spent.add(s), v128_and(gone, one), mk);
+    mv_store8(m,m.out.add(s), v128_bitselect(i32x4_splat(3), one, gone), mk);
+    mv_store8(m,m.stept.add(s - m.stepbase), one, mk);
     bits
 }
 
@@ -1862,6 +1910,30 @@ unsafe fn st_u8x4(p: *mut u8, v: v128, mk: v128) {
     let old = v128_load32_zero(p as *const u32);
     let r = v128_bitselect(b, old, k);
     (p as *mut u32).write_unaligned(i32x4_extract_lane::<0>(r) as u32);
+}
+
+#[inline(always)]
+unsafe fn mv_store32(m:&Mv,p:*mut v128,v:v128,mask:v128) {
+    if m.span_n==4 {
+        v128_store(p,v128_bitselect(v,v128_load(p),mask));
+    }else{
+        let bits=i32x4_bitmask(mask);
+        if m.span_n==2 && bits&3==3 {
+            (p as *mut u64).write_unaligned(i64x2_extract_lane::<0>(v) as u64);return;
+        }
+        let values:[u32;4]=core::mem::transmute(v);
+        for l in 0..m.span_n {if bits&(1<<l)!=0 {(p as *mut u32).add(l).write_unaligned(*values.get_unchecked(l));}}
+    }
+}
+#[inline(always)]
+unsafe fn mv_store8(m:&Mv,p:*mut u8,v:v128,mask:v128) {
+    if m.span_n==4 {st_u8x4(p,v,mask);}else{
+        let values:[i32;4]=core::mem::transmute(v);let bits=i32x4_bitmask(mask);
+        if m.span_n==2 && bits&3==3 {
+            (p as *mut u16).write_unaligned((i32x4_extract_lane::<0>(v) as u8 as u16)|((i32x4_extract_lane::<1>(v) as u8 as u16)<<8));return;
+        }
+        for l in 0..m.span_n {if bits&(1<<l)!=0 {*p.add(l)=*values.get_unchecked(l) as u8;}}
+    }
 }
 
 /// v % d for four non-negative i32 lanes (d > 0), exact (f64 quotients).
@@ -1928,13 +2000,13 @@ unsafe fn park4(m: &Mv, p: &StepP, s: usize, done: i32) -> i32 {
         return 0;
     }
     let st = |pp: *mut v128, v: v128| {
-        v128_store(pp, v128_bitselect(v, v128_load(pp), ok));
+        mv_store32(m,pp,v,ok);
     };
     st(m.px.add(s) as *mut v128, x);
     st(m.py.add(s) as *mut v128, y);
-    st_u8x4(m.d0.add(s), zero, ok);
-    st_u8x4(m.out.add(s), one, ok);
-    st_u8x4(m.stept.add(s - m.stepbase), one, ok);
+    mv_store8(m,m.d0.add(s), zero, ok);
+    mv_store8(m,m.out.add(s), one, ok);
+    mv_store8(m,m.stept.add(s - m.stepbase), one, ok);
     bits
 }
 
@@ -1954,8 +2026,8 @@ unsafe fn idle4(m: &Mv, s: usize, done: i32) -> i32 {
     if bits == 0 {
         return 0;
     }
-    st_u8x4(m.d0.add(s), ld_u8x4(m.dead.add(s)), ok);
-    st_u8x4(m.out.add(s), zero, ok);
+    mv_store8(m,m.d0.add(s), ld_u8x4(m.dead.add(s)), ok);
+    mv_store8(m,m.out.add(s), zero, ok);
     bits
 }
 
@@ -2199,15 +2271,14 @@ struct MoveP {
 /// tile, a node step's charge, a push leaving its tile, a listing), the
 /// epilogue (epi_slot). (Units' passes read nothing another unit's write
 /// in the same tick: the order between units does not show.)
-#[no_mangle]
-pub unsafe extern "C" fn mv_move(a: u32, s0: i32, end: i32, chunk: i32) {
+unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
     let a = waddr(a) as *const i32;
     wr(a as *mut i32, 299, s0);
-    core::ptr::write_bytes(a.add(300) as *mut u8, 0, (end - s0).max(0) as usize);
+    core::ptr::write_bytes(a.add(300) as *mut u8, 0, if spatial {4}else{(end-s0).max(0) as usize});
     let mut m = Mv::load(a);
     let f = (a as usize + 4096) as *const f64;
     let q = rd(f, 8);
-    let p = MoveP {
+    let mut p = MoveP {
         tr: to_i32(rd(f, 3)),
         q,
         iq: 1.0 / q,
@@ -2238,18 +2309,51 @@ pub unsafe extern "C" fn mv_move(a: u32, s0: i32, end: i32, chunk: i32) {
         chunk: chunk.max(0) as usize,
     };
     let sp = step_params(f);
-    if !m.hita.is_null() {
-        wr(m.hitc, p.chunk, 0);
+    if spatial {
+        let ptr=|i:usize|waddr(*a.add(512+i) as u32) as *const i32;
+        let cfg=ptr(33);let bw=*cfg.add(5);let bh=*cfg.add(6);let block=*cfg.add(7);
+        let phase=rd(f,4) as i32;let halfw=(bw+1)>>1;
+        let bx=irem(chunk,halfw)*2+(phase&1);let by=idiv(chunk,halfw)*2+(phase>>1);
+        if bx>=bw || by>=bh {return;}
+        let job=by*bw+bx;let base=*ptr(32).add(job as usize) as usize;
+        p.chunk=job as usize;p.s0=base;
+        let grid=super::occ::MoveGrid::load(a,bx,by,job);grid.reset();m.occ=&grid;
+        let mut ep=epi_begin(&m,f,job,0,1);ep.pb=base;
+        if !m.hita.is_null(){wr(m.hitc,p.chunk,0);}
+        let cw=*cfg.add(9);let ch=*cfg.add(10);let epoch=*cfg.add(11);
+        for cy in by*block..((by+1)*block).min(ch) {for cx in bx*block..((bx+1)*block).min(cw) {
+            let key=(cy*cw+cx) as usize;if *ptr(27).add(key)!=epoch {continue;}
+            let mut i=*ptr(25).add(key);let end=i+*ptr(26).add(key);
+            while i<end {
+                let slot=*ptr(24).add(i as usize);if slot<0 {i+=1;continue;}
+                let mut n=1;while n<4 && i+n<end && *ptr(24).add((i+n) as usize)==slot+n {n+=1;}
+                m.stepbase=slot as usize;core::ptr::write_bytes(m.stept,0,4);
+                move_span(&mut m,f,&p,&sp,&mut ep,slot as usize,(slot+n) as usize);
+                i+=n;
+            }
+        }}
+        epi_end(&m,&ep,job);
+    }else{
+        if !m.hita.is_null(){wr(m.hitc,p.chunk,0);}
+        let b0=s0.max(0) as usize;let e=end.max(0) as usize;
+        let mut ep=epi_begin(&m,f,chunk,b0,e);
+        move_span(&mut m,f,&p,&sp,&mut ep,b0,e);epi_end(&m,&ep,chunk);
     }
-    let b0 = s0.max(0) as usize;
-    let e = if end > 0 { end as usize } else { 0 };
-    let mut ep = epi_begin(&m, f, chunk, b0, e);
-    let pc = push_consts(&m, f);
+}
+#[no_mangle]
+pub unsafe extern "C" fn mv_move(a:u32,s0:i32,end:i32,chunk:i32){move_job(a,s0,end,chunk,false);}
+#[no_mangle]
+pub unsafe extern "C" fn mv_move_occupancy(a:u32,chunk:i32){move_job(a,0,4,chunk,true);}
+#[inline(always)]
+unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usize,e:usize) {
+    let pc=if ep.push {Some(push_consts(m,f))}else{None};
     let fast = p.step_ran && sp.acq_t == 4 && sp.tr > 0 && !m.steady.is_null();
     let zero = i32x4_splat(0);
+    if !m.occ.is_null() {(*m.occ).visit(e-b0);}
     let mut s = b0;
     while s < e {
         let n = (e - s).min(4);
+        m.span_n=if m.occ.is_null(){4}else{n};
         m.shared_hot = core::ptr::null();
 
         // (The last group's missing lanes count as done for the vector
@@ -2278,22 +2382,28 @@ pub unsafe extern "C" fn mv_move(a: u32, s0: i32, end: i32, chunk: i32) {
             if fire.read_unaligned() != 0 { fire.write_unaligned(0); }
             done = valid; known = 0;
         } else {
-        if fast {
-            done |= step4(&m, &sp, s, &mut mvd, valid);
+        // Occupancy jobs usually contain combat holds/chases. Finish those
+        // before touching flow caches, rather than testing every flow lane
+        // first and then discovering it has a combat instruction.
+        if !m.occ.is_null() && m.brain {
+            let c=combat4(m,p,s,done,&mut mvd);done|=c;dbgc!(m,2,(c&15).count_ones());
         }
-        if m.brain && done != 15 {
-            let c = combat4(&m, &p, s, done, &mut mvd);
+        if fast && done!=15 {
+            done |= step4(m, sp, s, &mut mvd, valid);
+        }
+        if m.brain && done != 15 && m.occ.is_null() {
+            let c = combat4(m, p, s, done, &mut mvd);
             dbgc!(m, 2, (c & 15).count_ones());
             done |= c;
         }
         if fast && done != 15 {
-            let c = park4(&m, &sp, s, done);
+            let c = park4(m, sp, s, done);
             dbgc!(m, 3, (c & 15).count_ones());
             done |= c;
         }
         known = done & valid;
         if done != 15 {
-            let c = idle4(&m, s, done);
+            let c = idle4(m, s, done);
             dbgc!(m, 19, (c & 15).count_ones());
             done |= c;
         }
@@ -2302,11 +2412,15 @@ pub unsafe extern "C" fn mv_move(a: u32, s0: i32, end: i32, chunk: i32) {
         dbgc!(m, 1, (done & 15).count_ones());
         // (The lanes done: their fire bytes cleared, four at once.)
         if done != 0 {
+            if m.span_n<4 {
+                for l in 0..n {if done&(1<<l)!=0 {*m.fire.add(s+l)=0;}}
+            }else{
             let fp = m.fire.add(s) as *mut u32;
             let fv = fp.read_unaligned();
             if fv != 0 {
                 let km = (if done & 1 != 0 { 0xFFu32 } else { 0 }) | (if done & 2 != 0 { 0xFF00 } else { 0 }) | (if done & 4 != 0 { 0xFF0000 } else { 0 }) | (if done & 8 != 0 { 0xFF000000 } else { 0 });
                 fp.write_unaligned(fv & !km);
+            }
             }
         }
         if done == valid {
@@ -2317,6 +2431,8 @@ pub unsafe extern "C" fn mv_move(a: u32, s0: i32, end: i32, chunk: i32) {
             if done & (1 << l) != 0 {
                 continue;
             }
+            dbgc!(m,32);
+            if !m.occ.is_null(){(*m.occ).scalar_lane();}
             #[cfg(feature = "dbgc")]
             {
                 let on = rd(m.on, u) as usize;
@@ -2325,21 +2441,21 @@ pub unsafe extern "C" fn mv_move(a: u32, s0: i32, end: i32, chunk: i32) {
                 if rd(m.dead, u) != 0 { dbgc!(m, 12); }
             }
             if p.step_ran {
-                step_slot(&m, &sp, u);
+                step_slot(m, sp, u);
             }
             #[cfg(feature = "dbgc")]
             {
                 if rd(m.stept, u - m.stepbase) == 1 { dbgc!(m, 13); }
             }
-            match move_pre(&m, &p, u) {
-                1 => { dbgc!(m, 14); move_flow(&m, &p, u) }
-                2 => { dbgc!(m, 15); move_path(&m, &p, u) }
+            match move_pre(m, p, u) {
+                1 => { dbgc!(m, 14); move_flow(m, p, u) }
+                2 => { dbgc!(m, 15); move_path(m, p, u) }
                 _ => {}
             }
         }
         }
         }
-        let nd = if ep.push { push4(&m, &pc, s, e, known, mvd) } else { 0 };
+        let nd = if let Some(ref pc)=pc {push4(m,pc,s,e,known,mvd)}else{0};
         // (The lanes with anything for the epilogue.)
         let o4 = ld_u8x4(m.out.add(s));
         let k4 = ld_u8x4(m.spent.add(s));
@@ -2349,13 +2465,12 @@ pub unsafe extern "C" fn mv_move(a: u32, s0: i32, end: i32, chunk: i32) {
             dbgc!(m, 17, ((nd | (nd >> 4)) & 15).count_ones());
             for l in 0..n {
                 if eb & (1 << l) != 0 {
-                    epi_slot(&m, f, &mut ep, s + l, (nd >> l) & 0x11 != 0);
+                    epi_slot(m, f, ep, s + l, (nd >> l) & 0x11 != 0);
                 }
             }
         }
         s += 4;
     }
-    epi_end(&m, &ep, chunk);
 }
 
 /// Four slots' combat brain instructions, move_combat's common cases four a
@@ -2369,6 +2484,14 @@ pub unsafe extern "C" fn mv_move(a: u32, s0: i32, end: i32, chunk: i32) {
 #[cfg_attr(not(feature = "prof"), inline(always))]
 #[cfg_attr(feature = "prof", inline(never))]
 unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 {
+    #[cfg(not(feature="prof"))]
+    let pair_holds=true;
+    #[cfg(feature="prof")]
+    let pair_holds=m.pair_holds;
+    if pair_holds && m.span_n==2 && !m.occ.is_null() && done&3==0 {
+        let cm=(m.cmode.add(s) as *const u16).read_unaligned();
+        if cm&0x0303==0x0101 && combat_hold2(m,p,s,cm) {return 3;}
+    }
     let zero = i32x4_splat(0);
     let fz = f32x4_splat(0.0);
     let cm = ld_u8x4(m.cmode.add(s));
@@ -2380,7 +2503,7 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
     if !v128_any_true(ok) {
         return 0;
     }
-    if !m.hita.is_null() {
+    if !m.hita.is_null() && m.occ.is_null() {
         let firing = v128_andnot(i32x4_ne(v128_and(cm, i32x4_splat(4)), zero), f32x4_gt(v128_load(m.at.add(s) as *const v128), fz));
         ok = v128_andnot(ok, firing);
     }
@@ -2396,7 +2519,24 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
     let mut tx = zero;
     let mut ty = zero;
     let (x0, y0) = (m.x0 as *const i32, m.y0 as *const i32);
-    for l in 0..4usize {
+    #[cfg(not(feature="prof"))]
+    let bulk=true;
+    #[cfg(feature="prof")]
+    let bulk=m.bulk_hold_targets;
+    let mut held_targets_valid=false;
+    if bulk && !m.occ.is_null() && (i32x4_bitmask(chase) as i32&bits)==0 && m.span_n==2 && bits==3 {
+        let q0=rd(m.cmt,s) as usize;let q1=rd(m.cmt,s+1) as usize;
+        let expected=(m.ctid.add(s) as *const u64).read_unaligned();
+        if q1==q0+1 {
+            held_targets_valid=(m.id.add(q0) as *const u64).read_unaligned()==expected
+                && (m.dead.add(q0) as *const u16).read_unaligned()==0;
+        }else if q1==q0 {
+            let id=rd(m.id,q0) as u32 as u64;
+            held_targets_valid=(id|(id<<32))==expected && rd(m.dead,q0)==0;
+        }
+        if held_targets_valid {dbgc!(m,39);}
+    }
+    if !held_targets_valid {for l in 0..4usize {
         if bits & (1 << l) == 0 {
             continue;
         }
@@ -2405,6 +2545,9 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
             bits &= !(1 << l);
             continue;
         }
+        // Holds only validate identity; they do not need target positions,
+        // speed/stat rows, frozen/sand columns or a square root.
+        if !m.occ.is_null() && (rd(m.cmode,s+l)&3)==1 {continue;}
         let (a, b) = (rd(x0, q), rd(y0, q));
         match l {
             0 => { tx = i32x4_replace_lane::<0>(tx, a); ty = i32x4_replace_lane::<0>(ty, b); }
@@ -2412,13 +2555,42 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
             2 => { tx = i32x4_replace_lane::<2>(tx, a); ty = i32x4_replace_lane::<2>(ty, b); }
             _ => { tx = i32x4_replace_lane::<3>(tx, a); ty = i32x4_replace_lane::<3>(ty, b); }
         }
-    }
+    }}
     if bits == 0 {
         return 0;
     }
     let lane = i32x4_ne(v128_and(i32x4_splat(bits), i32x4(1, 2, 4, 8)), zero);
     let x = v128_load(m.x.add(s) as *const v128);
     let y = v128_load(m.y.add(s) as *const v128);
+    if !m.occ.is_null() {
+        if !m.hita.is_null() {
+            let firing=v128_and(lane,v128_and(i32x4_ne(v128_and(cm,i32x4_splat(4)),zero),v128_not(f32x4_gt(v128_load(m.at.add(s) as *const v128),fz))));
+            let fire_bits=i32x4_bitmask(firing);
+            for l in 0..m.span_n {if fire_bits&(1<<l)!=0 {
+                let u=s+l;fire(m,u);let c=rd(m.hitc,p.chunk);
+                wr(m.hita,p.s0+c as usize,u as i32);wr(m.hitt,p.s0+c as usize,rd(m.cmt,u));wr(m.hitc,p.chunk,c+1);
+                dbgc!(m,34);
+            }}
+        }
+        if i32x4_bitmask(v128_and(lane,chase))==0 {
+            // Most held units already have prev==position and zero velocity.
+            // Do not dirty four large columns merely to rewrite those values.
+            #[cfg(not(feature="prof"))]
+            let skip=true;
+            #[cfg(feature="prof")]
+            let skip=m.skip_hold_stores;
+            let changed=if skip {v128_or(v128_or(v128_xor(v128_load(m.px.add(s) as *const v128),x),v128_xor(v128_load(m.py.add(s) as *const v128),y)),
+                v128_or(v128_load(m.vx.add(s) as *const v128),v128_load(m.vy.add(s) as *const v128)))
+                }else{i32x4_splat(-1)};
+            if v128_any_true(v128_and(changed,lane)) {
+                mv_store32(m,m.px.add(s) as *mut v128,x,lane);mv_store32(m,m.py.add(s) as *mut v128,y,lane);
+                mv_store32(m,m.vx.add(s) as *mut v128,fz,lane);mv_store32(m,m.vy.add(s) as *mut v128,fz,lane);dbgc!(m,37);
+            }else{dbgc!(m,38);}
+            if (m.d0.add(s) as *const u32).read_unaligned()!=0 {mv_store8(m,m.d0.add(s),zero,lane);}
+            mv_store8(m,m.out.add(s),i32x4_splat(1),lane);
+            dbgc!(m,35,bits.count_ones());return bits;
+        }
+    }
     // (The way in pixels, f32.)
     let dx = px4(i32x4_sub(tx, x));
     let dy = px4(i32x4_sub(ty, y));
@@ -2434,17 +2606,30 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
     // the target, where one a step stops.)
     let stp = if m.dk > 1 { f32x4_min(f32x4_mul(spd, f32x4_splat(m.dk as f32)), f32x4_sub(d, spd)) } else { spd };
     let k = f32x4_div(stp, d);
-    let vx = v128_and(f32x4_mul(dx, k), go);
-    let vy = v128_and(f32x4_mul(dy, k), go);
+    let mut vx = v128_and(f32x4_mul(dx, k), go);
+    let mut vy = v128_and(f32x4_mul(dy, k), go);
     let gx = tile4(m, x);
     let gy = tile4(m, y);
     // (The step as whole eighths, halves up: lanes not going 0.)
-    let nx = i32x4_add(x, q8x4(vx));
-    let ny = i32x4_add(y, q8x4(vy));
+    let mut nx = i32x4_add(x, q8x4(vx));
+    let mut ny = i32x4_add(y, q8x4(vy));
     let cross = v128_or(i32x4_ne(tile4(m, nx), gx), i32x4_ne(tile4(m, ny), gy));
     let fly = i32x4_eq(ld_u8x4(m.slayer.add(s)), i32x4_splat(1));
     // (A ground step into another tile: move_combat's wall slide.)
-    let slide = v128_andnot(v128_and(go, cross), fly);
+    let mut slide = v128_andnot(v128_and(go, cross), fly);
+    if !m.occ.is_null() && m.dk==1 && v128_any_true(slide) {
+        let sb=i32x4_bitmask(slide);
+        let gxv:[i32;4]=core::mem::transmute(gx);let gyv:[i32;4]=core::mem::transmute(gy);
+        let ngx:[i32;4]=core::mem::transmute(tile4(m,nx));let ngy:[i32;4]=core::mem::transmute(tile4(m,ny));
+        let mut sx=[0i32;4];let mut sy=[0i32;4];
+        for l in 0..m.span_n {if sb&(1<<l)!=0 {
+            let sl=flow_slide(m.wall,m.w,m.h,*gxv.get_unchecked(l),*gyv.get_unchecked(l),*ngx.get_unchecked(l) as f64,*ngy.get_unchecked(l) as f64);
+            *sx.get_unchecked_mut(l)=if sl&1!=0 {-1}else{0};*sy.get_unchecked_mut(l)=if sl&2!=0 {-1}else{0};
+            dbgc!(m,36);
+        }}
+        vx=v128_andnot(vx,core::mem::transmute(sx));vy=v128_andnot(vy,core::mem::transmute(sy));
+        nx=i32x4_add(x,q8x4(vx));ny=i32x4_add(y,q8x4(vy));slide=zero;
+    }
     let take = v128_andnot(v128_or(stand, go), slide);
     let tb = i32x4_bitmask(take) as i32;
     if tb == 0 {
@@ -2453,18 +2638,87 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
     let moved = v128_and(go, cross);
     *mvd |= (i32x4_bitmask(v128_or(i32x4_ne(nx, x), i32x4_ne(ny, y))) as i32) & tb;
     let st = |pp: *mut v128, v: v128| {
-        v128_store(pp, v128_bitselect(v, v128_load(pp), take));
+        mv_store32(m,pp,v,take);
     };
     st(m.px.add(s) as *mut v128, x);
     st(m.py.add(s) as *mut v128, y);
     st(m.vx.add(s) as *mut v128, vx);
     st(m.vy.add(s) as *mut v128, vy);
+    let (nx,ny)=checked_positions4(m,s,nx,ny,tb);
+    let moved=v128_and(go,v128_or(i32x4_ne(tile4(m,nx),gx),i32x4_ne(tile4(m,ny),gy)));
     st(m.x.add(s) as *mut v128, nx);
     st(m.y.add(s) as *mut v128, ny);
     let i1 = i32x4_splat(1);
-    st_u8x4(m.d0.add(s), zero, take);
-    st_u8x4(m.out.add(s), v128_bitselect(i32x4_splat(3), i1, moved), take);
+    mv_store8(m,m.d0.add(s), zero, take);
+    mv_store8(m,m.out.add(s), v128_bitselect(i32x4_splat(3), i1, moved), take);
     tb
+}
+
+// Spatial cells commonly contain two consecutive held units. Keep their
+// validation and stores pair-sized: four-lane loads read unrelated slots,
+// and masked SIMD stores need extra lane extraction for this ownership span.
+#[inline(always)]
+unsafe fn combat_hold2(m:&Mv,p:&MoveP,s:usize,cm:u16)->bool {
+    if (m.dead.add(s) as *const u16).read_unaligned()!=0
+        || !(rd(m.en,s)>0.0 && rd(m.en,s+1)>0.0)
+        || *m.sep.add(s)==p.absent as u32 || *m.sep.add(s+1)==p.absent as u32 {return false;}
+    let q0=*m.cmt.add(s);let q1=*m.cmt.add(s+1);
+    if q0<0 || q1<0 {return false;}
+    let q0=q0 as usize;let q1=q1 as usize;
+    let expected=(m.ctid.add(s) as *const u64).read_unaligned();
+    let valid=if q1==q0+1 {
+        (m.id.add(q0) as *const u64).read_unaligned()==expected
+            && (m.dead.add(q0) as *const u16).read_unaligned()==0
+    }else if q1==q0 {
+        let id=*m.id.add(q0) as u32 as u64;
+        (id|(id<<32))==expected && *m.dead.add(q0)==0
+    }else{
+        *m.dead.add(q0)==0 && *m.dead.add(q1)==0
+            && *m.id.add(q0)==*m.ctid.add(s) && *m.id.add(q1)==*m.ctid.add(s+1)
+    };
+    if !valid {return false;}
+    if cm&0x0404!=0 && !m.hita.is_null() {
+        for l in 0..2 {let u=s+l;if cm&(4<<(l*8))!=0 && !(rd(m.at,u)>0.0) {
+            fire(m,u);let c=rd(m.hitc,p.chunk);
+            wr(m.hita,p.s0+c as usize,u as i32);wr(m.hitt,p.s0+c as usize,*m.cmt.add(u));wr(m.hitc,p.chunk,c+1);
+            dbgc!(m,34);
+        }}
+    }
+    let x=(m.x.add(s) as *const u64).read_unaligned();let y=(m.y.add(s) as *const u64).read_unaligned();
+    let px=m.px.add(s) as *mut u64;let py=m.py.add(s) as *mut u64;
+    let vx=m.vx.add(s) as *mut u64;let vy=m.vy.add(s) as *mut u64;
+    if px.read_unaligned()!=x || py.read_unaligned()!=y || vx.read_unaligned()!=0 || vy.read_unaligned()!=0 {
+        px.write_unaligned(x);py.write_unaligned(y);vx.write_unaligned(0);vy.write_unaligned(0);dbgc!(m,37);
+    }else{dbgc!(m,38);}
+    let d0=m.d0.add(s) as *mut u16;if d0.read_unaligned()!=0 {d0.write_unaligned(0);}
+    (m.out.add(s) as *mut u16).write_unaligned(0x0101);
+    dbgc!(m,35,2);dbgc!(m,39);true
+}
+
+/// The step kernel's params (from F).
+// Standalone stationary-hold replay. Only the columns used by combat4's
+// hold path are allocated, so the cache/write experiment needs ~200 MiB
+// rather than another full multi-gigabyte world. Profiling builds only.
+#[cfg(feature="prof")]
+#[no_mangle]
+pub unsafe extern "C" fn mv_hold_bench(a:u32,n:i32,rounds:i32,skip:i32,bulk:i32)->i32 {
+    let a=waddr(a) as *const i32;
+    let ptr=|i:usize|waddr(*a.add(512+i) as u32);
+    let mut m:Mv=core::mem::zeroed();
+    m.occ=core::ptr::NonNull::<super::occ::MoveGrid>::dangling().as_ptr();
+    m.span_n=2;m.skip_hold_stores=skip!=0;m.bulk_hold_targets=bulk!=0;m.pair_holds=bulk==2;m.dk=1;m.dkf=1.0;m.brain=true;m.argp=a as usize;
+    m.cmode=ptr(0) as *mut u8;m.cmt=ptr(1) as *mut i32;m.ctid=ptr(2) as *mut i32;m.id=ptr(3) as *const i32;
+    m.dead=ptr(4) as *const u8;m.en=ptr(5) as *const F32;m.sep=ptr(6) as *mut u32;
+    m.x=ptr(7) as *mut Q8;m.y=ptr(8) as *mut Q8;m.px=ptr(9) as *mut Q8;m.py=ptr(10) as *mut Q8;
+    m.vx=ptr(11) as *mut F32;m.vy=ptr(12) as *mut F32;m.d0=ptr(13) as *mut u8;m.out=ptr(14) as *mut u8;
+    m.at=ptr(15) as *const F32;m.acd=ptr(16) as *const F32;m.flash=ptr(17) as *mut U8I32;m.tmon=ptr(18) as *mut u8;
+    m.hita=ptr(19) as *mut i32;m.hitt=ptr(20) as *mut i32;m.hitc=ptr(21) as *mut i32;
+    m.atl=ptr(22) as *mut u8;m.atn=ptr(23) as *mut u8;
+    let mut p:MoveP=core::mem::zeroed();p.absent=u32::MAX as f64;
+    let mut sum=0;
+    for _ in 0..rounds {let mut s=0;while s+2<=n as usize {
+        let mut moved=0;sum+=combat4(&m,&p,s,12,&mut moved).count_ones() as i32;s+=2;
+    }}sum
 }
 
 /// The step kernel's params (from F).
@@ -2571,8 +2825,9 @@ unsafe fn move_combat(m: &Mv, p: &MoveP, s: usize) -> bool {
     let ny = (y + vy) as f32 as f64;
     let qx = if nx.is_finite() { js_round(nx * p.q) * p.iq } else { x };
     let qy = if ny.is_finite() { js_round(ny * p.q) * p.iq } else { y };
-    wr(m.x, s, qx);
-    wr(m.y, s, qy);
+    let (qx,qy)=checked_position(m,s,qx,qy);
+    wr(m.x,s,qx);
+    wr(m.y,s,qy);
     wr(m.vx, s, vx);
     wr(m.vy, s, vy);
     wr(m.out, s, if floor(qx * itile) as i32 != gx || floor(qy * itile) as i32 != gy { 3 } else { 1 });
@@ -2859,8 +3114,9 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
             let qy = quant_div(ny, p.q);
             wr(m.px, s, x);
             wr(m.py, s, y);
-            wr(m.x, s, qx);
-            wr(m.y, s, qy);
+            let (qx,qy)=checked_position(m,s,qx,qy);
+            wr(m.x,s,qx);
+            wr(m.y,s,qy);
             let moved = floor(qx * itile) != gx as f64 || floor(qy * itile) != gy as f64;
             wr(m.out, s, if moved { if hchase { 12 } else { 9 } } else if hchase { 11 } else { 7 });
             return 0;
@@ -3672,16 +3928,18 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
     let ngx = floor(nx * itile);
     let ngy = floor(ny * itile);
     if (f & 32) == 0 && (ngx < 0.0 || ngy < 0.0 || ngx >= w as f64 || ngy >= h as f64 || (inb(ngx, w) && inb(ngy, h) && rd(m.wall, (ngy as i32 * w + ngx as i32) as usize) != 0)) {
-        wr(m.x, s, nx);
-        wr(m.y, s, ny);
+        let (nx,ny)=checked_position(m,s,nx,ny);
+        wr(m.x,s,nx);
+        wr(m.y,s,ny);
         wr(m.on, s, 0);
         wr(m.out, s, 4);
         return;
     }
     let qx = quant_mul(nx, p.q, p.iq);
     let qy = quant_mul(ny, p.q, p.iq);
-    wr(m.x, s, qx);
-    wr(m.y, s, qy);
+    let (qx,qy)=checked_position(m,s,qx,qy);
+    wr(m.x,s,qx);
+    wr(m.y,s,qy);
     wr(m.out, s, if floor(qx * itile) != gx as f64 || floor(qy * itile) != gy as f64 { 3 } else { 1 });
 }
 

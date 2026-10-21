@@ -463,14 +463,46 @@ const SIM_UNIT_JS_FIELDS = [
     ['_path', 'r', null, false], ['_ws', 'r', undefined, false], ['_wnr', 'r', undefined, false], ['_tb', 'r', null, false],
     ['_pfa', 'r', undefined, false], ['_ppt', 'r', undefined, false]];
 const _SIM_JS_TYPED = { b: Uint8Array, i: Int32Array, f: Float32Array, d: Float64Array, u: Float32Array };
+// Path/failure caches are JS-only and usually unset in large armies. Keep
+// their default implicit; allocating fourteen dense Int32 columns costs
+// 224 MB at four million slots before a single path has used them.
+const SIM_UNIT_SPARSE_JS_FIELDS=new Set(['_fpTile','_fpIdx','_fpVer','_routeSegEnd','_navReady','_awaitGroupPath',
+    '_pendingDueStamp','_okTile','_okVer','_okNodeTile','_okNodeVer','_idleFailVer','_idleFailUntil','_effectiveStatsStamp']);
+class SimSparseIntColumn {
+    constructor(length,def){this.length=length;this.def=def|0;this.pages=new Array(Math.ceil(length/1024));this.counts=new Uint16Array(this.pages.length);this.activePages=0;}
+    get(s){if(!Number.isInteger(s)||s<0||s>=this.length)return undefined;const p=this.pages[s>>>10];return p?p[s&1023]:this.def;}
+    set(s,value){
+        if(!Number.isInteger(s)||s<0||s>=this.length)return;
+        const v=value|0,i=s>>>10,j=s&1023;let p=this.pages[i];
+        if(!p){if(v===this.def)return;p=new Int32Array(1024);if(this.def)p.fill(this.def);this.pages[i]=p;this.activePages++;}
+        const old=p[j];if(old===v)return;
+        if(old===this.def)this.counts[i]++;else if(v===this.def)this.counts[i]--;
+        p[j]=v;
+        if(!this.counts[i]){this.pages[i]=undefined;this.activePages--;}
+    }
+    clear(s){this.set(s,this.def);}
+    get byteLength(){return this.activePages*4096+this.counts.byteLength;}
+    get populated(){let n=0;for(const count of this.counts)n+=count;return n;}
+    copyFrom(source,start,count,dest){
+        const stop=Math.min(source.length,start+count);
+        while(start<stop){
+            const end=Math.min(stop,(Math.floor(start/1024)+1)*1024);
+            const page=source instanceof SimSparseIntColumn?source.pages[start>>>10]:source;
+            if(page)for(let s=start;s<end;s++){const v=page[source instanceof SimSparseIntColumn?s&1023:s];if(v!==this.def)this.set(dest+s-start,v);}
+            dest+=end-start;start=end;
+        }
+    }
+}
+function _simSparseIntGrow(old,cap,def,used){const a=new SimSparseIntColumn(cap,def);if(old)a.copyFrom(old,0,Math.min(used,cap),0);return a;}
+function _simSparseIntCopy(old,cap,def,runs){const a=new SimSparseIntColumn(cap,def);for(let j=0;j<runs.length;j+=3)a.copyFrom(old,runs[j+1],runs[j+2],runs[j]);return a;}
 const _simJsName = (k, kind) => (kind === 'r' ? 'jr_' : 'j_') + k;
 // (Stored values: booleans 1/0, undefined NaN for 'u'.)
 const _simJsDefault = (kind, def) => kind === 'b' ? (def ? 1 : 0) : kind === 'u' ? (def === undefined ? NaN : def) : def;
 // Slot s's fields at their defaults (straight-line, as _simSlotZeroFn).
-const _simJsDefaults = new Function('C', 's', SIM_UNIT_JS_FIELDS.map(([k, kind, def]) => kind === 'r' ? 'C.' + _simJsName(k, kind) + '.clear(s);' : 'C.' + _simJsName(k, kind) + '[s] = ' + (Object.is(_simJsDefault(kind, def), -0) ? '-0' : String(_simJsDefault(kind, def))) + ';').join(' '));
+const _simJsDefaults = new Function('C', 's', SIM_UNIT_JS_FIELDS.map(([k, kind, def]) => kind === 'r'||SIM_UNIT_SPARSE_JS_FIELDS.has(k) ? 'C.' + _simJsName(k, kind) + '.clear(s);' : 'C.' + _simJsName(k, kind) + '[s] = ' + (Object.is(_simJsDefault(kind, def), -0) ? '-0' : String(_simJsDefault(kind, def))) + ';').join(' '));
 // Reference fields let go (a detach: the slot's next unit starts at the
 // defaults anyway; the references would keep paths and targets alive).
-const _simJsRelease = new Function('C', 's', SIM_UNIT_JS_FIELDS.filter(e => e[1] === 'r').map(([k]) => 'C.jr_' + k + '.clear(s);').join(' '));
+const _simJsRelease = new Function('C', 's', SIM_UNIT_JS_FIELDS.filter(e => e[1] === 'r'||SIM_UNIT_SPARSE_JS_FIELDS.has(e[0])).map(([k,kind]) => 'C.'+_simJsName(k,kind)+'.clear(s);').join(' '));
 const SIM_UNIT_JS_SNAPSHOT_KEYS = SIM_UNIT_JS_FIELDS.filter(e => e[3]).map(e => e[0]);
 // Movement columns that are state (a snapshot's, behind accessors: unit.js).
 const SIM_UNIT_MOVE_SNAPSHOT_KEYS = ['atkL', 'wtcL'];
@@ -794,6 +826,7 @@ function _simUnitStateGrow(S, cap, minCap = cap) {
         for (const [k, kind, def] of SIM_UNIT_JS_FIELDS) {
             const nm = _simJsName(k, kind);
             if (kind === 'r') { S.columns[nm] = _simRefGrow(S.columns[nm], cap, def, SIM_SHARED_REF_FIELDS.has(k)); continue; }
+            if (SIM_UNIT_SPARSE_JS_FIELDS.has(k)) {S.columns[nm]=_simSparseIntGrow(S.columns[nm],cap,def,used);continue;}
             const was = S.columns[nm], a = new _SIM_JS_TYPED[kind](cap);
             if (was) a.set(was.subarray(0, Math.min(was.length, used, cap)));
             S.columns[nm] = a;
@@ -863,7 +896,7 @@ function _simDetValuesCtor() {
         + ' { const w = C.wkIx[s], a = C.wkWx[w], b = C.wkWy[w], m = C.wkLmt[w]; this._builderLastWatchX = a === a ? a : undefined; this._builderLastWatchY = b === b ? b : undefined; this._builderLastMoveTick = m === -2147483648 ? undefined : m; }'
         + ' this._dotPending = C.stAcc[s]; this._laserPending = C.lzAcc[s]; this._laserBeam = C.lzBeam[s];'
         + ' this.r = C.r[s]; this.collisionR = C.collisionR[s];'
-        + SIM_UNIT_JS_FIELDS.map(([k, kind]) => ' this.' + k + ' = ' + (kind === 'b' ? 'C.j_' + k + '[s] === 1' : kind === 'u' ? '(C.j_' + k + '[s] === C.j_' + k + '[s] ? C.j_' + k + '[s] : undefined)' : kind === 'r' ? 'C.' + _simJsName(k, kind) + '.get(s)' : 'C.' + _simJsName(k, kind) + '[s]') + ';').join('');
+        + SIM_UNIT_JS_FIELDS.map(([k, kind]) => ' this.' + k + ' = ' + (kind === 'b' ? 'C.j_' + k + '[s] === 1' : kind === 'u' ? '(C.j_' + k + '[s] === C.j_' + k + '[s] ? C.j_' + k + '[s] : undefined)' : kind === 'r'||SIM_UNIT_SPARSE_JS_FIELDS.has(k) ? 'C.' + _simJsName(k, kind) + '.get(s)' : 'C.' + _simJsName(k, kind) + '[s]') + ';').join('');
     return new Function('C', 's', body);
 }
 function simUnitStateDetach(S, s) {
@@ -969,9 +1002,10 @@ function simUnitStateCompact(force = false) {
         ns++;
     }
     for (const k of SIM_UNIT_COLUMNS) _simCopyRuns(old[k], C[k], runs, 1);
-    for (const [k, kind] of SIM_UNIT_JS_FIELDS) {
+    for (const [k, kind, def] of SIM_UNIT_JS_FIELDS) {
         const nm = _simJsName(k, kind);
         if (kind === 'r') C[nm] = _simRefCopy(old[nm], cap, runs);
+        else if (SIM_UNIT_SPARSE_JS_FIELDS.has(k)) C[nm]=_simSparseIntCopy(old[nm],cap,def,runs);
         else { C[nm] = new _SIM_JS_TYPED[kind](cap); _simCopyRuns(old[nm], C[nm], runs, 1); }
     }
     for (const [k, , per] of SIM_MOVE_COLUMNS) _simCopyRuns(old[k], C[k], runs, per);

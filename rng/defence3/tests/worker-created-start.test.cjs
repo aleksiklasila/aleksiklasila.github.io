@@ -28,7 +28,9 @@ const SUMMARY = `JSON.stringify({ tick: currentTick, units: units.length, items:
 (async () => {
     // The same virtual start time in both worlds: the same seed.
     const page = new H.World({ controls: CONTROLS });
-    const solo = page.spawn('page');
+    const legacy=process.argv.includes('--legacy');
+    const options=legacy?{url:'http://localhost/rng/defence3/?acq=exact&occupancy=0'}:undefined;
+    const solo = page.spawn('page',options);
     await page.run(200);
     solo.eval(SETUP);
     solo.eval('startSoloGame();');
@@ -38,7 +40,7 @@ const SUMMARY = `JSON.stringify({ tick: currentTick, units: units.length, items:
 
     const wk = new H.World({ controls: CONTROLS });
     wk.simWorker = true;
-    const inst = wk.spawn('worker');
+    const inst = wk.spawn('worker',options);
     await wk.run(200);
     inst.eval(SETUP);
     // (The worker's 'started' hash: its world before its first tick.)
@@ -59,6 +61,11 @@ const SUMMARY = `JSON.stringify({ tick: currentTick, units: units.length, items:
     assert.equal(started.timings.parse, undefined, 'no start snapshot parsed in the worker');
     const after = JSON.parse(inst.eval(SUMMARY));
     assert.ok(inst.eval('simClientActive()'), 'the worker runs the match');
+    for(const setting of ['SIM_ACQ_AREA_TARGETS','SIM_OCCUPANCY_ENABLED']){
+        assert.equal(inst.eval(setting),!legacy,'page setting '+setting);
+        assert.equal(inst.simWorker.eval(setting),!legacy,'setting reaches the simulation worker '+setting);
+    }
+    if(!legacy)assert.equal(inst.simWorker.eval('occupancyAudit().ok'),true,'default worker occupancy is consistent');
     assert.equal(after.items, ref.items, 'the page has every building and floor item');
     assert.equal(after.floor, ref.floor);
     assert.equal(after.units, inst.simWorker.eval('units.length'), 'the page shows the worker\'s units (frames)');

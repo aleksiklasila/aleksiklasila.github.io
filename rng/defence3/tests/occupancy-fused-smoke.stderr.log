@@ -1,0 +1,17 @@
+<anonymous_script>:1
+occupancyCommit
+^
+
+ReferenceError: occupancyCommit is not defined
+    at eval (eval at <anonymous> (eval at eval (eval at createInstance (Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\tests\net-harness.cjs:660:21))), <anonymous>:1:1)
+    at eval (eval at eval (eval at createInstance (Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\tests\net-harness.cjs:660:21)), <anonymous>:8:24)
+    at Object.eval (eval at createInstance (Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\tests\net-harness.cjs:660:21), <anonymous>:87364:21)
+    at inst.eval (Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\tests\net-harness.cjs:677:35)
+    at Object.<anonymous> (Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\tests\checkerboard-tps.bench.cjs:138:6)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+
+Node.js v24.19.0
