@@ -3025,13 +3025,8 @@ function initInput() {
             let isCollapsed = btnMap.innerText === '\u25B2';
             btnMap.innerText = isCollapsed ? '\u25BC' : '\u25B2';
             let showPanel = btnMap.innerText === '\u25BC';
-            if (selectedBuildItem) {
-                mapCont.style.display = 'none';
-                if (statsCont) statsCont.style.display = showPanel ? 'block' : 'none';
-            } else {
-                mapCont.style.display = showPanel ? 'block' : 'none';
-                if (statsCont) statsCont.style.display = 'none';
-            }
+            mapCont.style.display = showPanel ? 'block' : 'none';
+            if (statsCont) statsCont.style.display = 'none';
         });
     }
 

@@ -362,7 +362,7 @@ function _quantizeUnitWorldCoord(value) {
 
 function _getUnitAttackRangeArea(unit) {
     const r=Math.max(0, Number(unit && unit.preComputed && unit.preComputed.attackRangeArea) || 0);
-    return areaSearchEnabled()?Math.ceil(r):r;
+    return Math.floor(r);
 }
 
 // Extra reach, beyond the collision distance, at which bodies count as touching.
@@ -1146,23 +1146,14 @@ class Unit {
         }
         let closest = null;
         let bestD2 = Infinity;
-        // The query visits the areas within ceil(range) steps. A whole range:
-        // every visited unit is in range. Otherwise the last ring only counts
-        // through contact. A unit's bucket area is its tile's area, so the
-        // coverage answers visibility per area.
-        let rangeArea = _getUnitAttackRangeArea(this), whole = Math.floor(rangeArea);
-        let exact = whole === Math.ceil(rangeArea);
-        let sources = exact ? null : getSourceAreaIdsAtWorld(this.x, this.y);
+        // Attack ranges are whole area steps. A unit's bucket area is its
+        // tile's area, so the coverage answers visibility per area.
+        let rangeArea = _getUnitAttackRangeArea(this);
         let cover = _visCoverReady() && this.owner >= 0 && this.owner < _visCover.players ? _visCover.cover[this.owner] : null;
         // Use only simulation state. Pick by distance, then unit id, independent of
         // spatial bucket insertion order on different lockstep peers.
         forEachUnitInAreaRange(this.x, this.y, rangeArea, (enemy, areaId) => {
             if (cover ? !(cover[areaId] > 0) : !_isHostileThingVisibleToUnit(this, enemy)) return;
-            if (!exact) {
-                let inRange = false;
-                for (let k = 0; k < sources.length && !inRange; k++) inRange = isAreaWithinDistance(sources[k], areaId, whole);
-                if (!inRange && !_isUnitTargetInContactAt(this, enemy, _unitTickX(enemy), _unitTickY(enemy), whole + 1)) return;
-            }
             let dx = _unitTickX(enemy) - this.x, dy = _unitTickY(enemy) - this.y;
             let d2 = dx * dx + dy * dy;
             if (d2 < bestD2 || (d2 === bestD2 && (!closest || enemy.id < closest.id))) {

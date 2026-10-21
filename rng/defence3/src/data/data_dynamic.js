@@ -3003,7 +3003,7 @@ function applyResearchMultiplierToValue(baseValue, mult, statKey) {
 function formatResearchStatValue(statKey, value) {
     if (!Number.isFinite(value)) return '-';
     let compact = (v, d = 2) => formatBigNumber(v, d);
-    let areaCompact = (v) => `${Math.max(0, Math.floor(Number(v) || 0))} areas`;
+    let areaCompact = (v) => `${Math.floor(Math.max(0, Number(v) || 0))}a`;
     if (statKey === 'maxLevel') return `L${Math.max(1, Math.floor(Number(value) || 1))}`;
     if (statKey === 'burnDuration' || statKey === 'poisonDuration' || statKey === 'freezeDuration' || statKey === 'wetDuration' || statKey === 'sandDuration' || statKey === 'watchDuration') {
         return `${compact(value, 2)}s`;

@@ -64,6 +64,11 @@ The evaluator only runs while rebuilding shared stat rows; movement, acquisition
 and combat continue reading the same precomputed WASM-facing arrays. No per-unit
 descriptor evaluation or additional environment scans were added.
 
+Attack range displays use the canonical `attackRangeArea` value, including in
+unit groups, barracks and tower panels. Tower range matrices open `attackRange`,
+not `visionRange`. Area values retain two decimal places where needed; only
+tile-valued visibility fields pass through the tile-to-area conversion.
+
 Validation: `node tests/thing-stats.test.cjs`, `node tests/combat-reach.test.cjs`,
 `node tests/shared-stat-rows.test.cjs`. Multiplayer worker startup, combat orders,
 worker walk/work, and helper determinism tests cover the derived runtime views.

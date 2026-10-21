@@ -1285,10 +1285,6 @@ function _getInfoPanelWorkerSearchDistanceText(u) {
     return `${Math.max(0, Math.floor(areas))}a`;
 }
 
-function formatAreaDistanceStat(v) {
-    return Number.isFinite(v) ? `${Math.max(0, Math.floor(Number(v)))}a` : '-';
-}
-
 function _getInfoPanelUnitStateHelpText(u) {
     if (!u) return 'Current unit order and why it is happening.';
 
@@ -1919,16 +1915,30 @@ function bindInstantPress(el, handler, opts = null) {
 function updateSelectedBuildDescription() {
     let descEl = document.getElementById('build-selected-desc');
     if (!descEl) return;
-    descEl.style.display = 'none';
     if (!selectedBuildItem) {
         descEl.classList.add('empty');
-        descEl.textContent = '';
+        descEl.innerHTML = 'Select a shop item to see details.';
         updateShopStatsInMinimap();
         return;
     }
+    let def = BASE_CARD_TYPES[selectedBuildItem] || {};
+    let desc = DESCRIPTIONS[selectedBuildItem] || (def.name || selectedBuildItem);
     descEl.classList.remove('empty');
-    descEl.textContent = '';
+    descEl.innerHTML = `<div class="shop-stats-title">${def.name || selectedBuildItem} Stats</div>${renderBuildItemDetailedStats(selectedBuildItem)}<div class="shop-stats-desc">${desc}</div>`;
+    bindShopStatsMatrixButtons(descEl);
     updateShopStatsInMinimap();
+}
+
+function bindShopStatsMatrixButtons(container) {
+    if (!container) return;
+    container.querySelectorAll('.build-stat-matrix-btn').forEach(btn => {
+        bindInstantPress(btn, () => {
+            let matrixId = Number.parseInt(btn.dataset.matrixId || '', 10);
+            if (!Number.isFinite(matrixId)) return;
+            researchStatMatrixPopupPayload = { shopMatrixId: matrixId };
+            setResearchStatMatrixPopupOpen(true);
+        });
+    });
 }
 
 function _computeCloudUnavailableSet(playerId = localPlayerId) {
@@ -1949,21 +1959,10 @@ function updateShopStatsInMinimap() {
     if (!mapCont || !statsCont || !btnMap) return;
 
     let isCollapsed = btnMap.innerText === '\u25B2';
-    if (!selectedBuildItem) {
-        statsCont.style.display = 'none';
-        statsCont.innerHTML = '';
-        mapCont.style.display = isCollapsed ? 'none' : 'block';
-        if (titleEl) titleEl.textContent = 'Map';
-        return;
-    }
-
-    let def = BASE_CARD_TYPES[selectedBuildItem] || {};
-    let desc = DESCRIPTIONS[selectedBuildItem] || (def.name || selectedBuildItem);
-    statsCont.innerHTML = `<div class="shop-stats-title">${def.name || selectedBuildItem} Stats</div>${renderBuildItemDetailedStats(selectedBuildItem)}<div class="shop-stats-desc">${desc}</div>`;
-    bindShopStatsMatrixButtons(statsCont);
-    mapCont.style.display = 'none';
-    statsCont.style.display = isCollapsed ? 'none' : 'block';
-    if (titleEl) titleEl.textContent = 'Shop Stats';
+    statsCont.style.display = 'none';
+    statsCont.innerHTML = '';
+    mapCont.style.display = isCollapsed ? 'none' : 'block';
+    if (titleEl) titleEl.textContent = 'Map';
 }
 
 function renderBuildItemDetailedStats(key) {
@@ -2158,7 +2157,7 @@ function renderBuildItemDetailedStats(key) {
             });
             if (vision !== undefined) addRow('Visibility', formatAreaDistanceStat(Number(vision)), { kind: 'building', key, statKey: 'visionRange' });
         } else if (vision !== undefined) {
-            addRow('Range', formatAreaDistanceStat(Number(vision)), { kind: 'building', key, statKey: 'visionRange' });
+            addRow('Range', formatAreaDistanceStat(getBuildingStatForOwner(localPlayerId, key, level, 'attackRange')), { kind: 'building', key, statKey: 'attackRange' });
             addRow('Visibility', formatAreaDistanceStat(Number(vision)), { kind: 'building', key, statKey: 'visionRange' });
         }
         if (dmg !== null) {
@@ -2900,7 +2899,7 @@ function deriveInfoPanelMatrixOptsFromLabel(label) {
     } else if (plain === 'energy') {
         statKey = kind === 'unit' ? 'energy' : 'maxEnergy';
     } else if (plain === 'range') {
-        statKey = kind === 'unit' ? 'attackRange' : 'visionRange';
+        statKey = 'attackRange';
     } else if (plain === 'visibility') {
         statKey = 'visionRange';
     } else if (plain === 'damage') {
@@ -3762,7 +3761,7 @@ function renderBarrackInfo(e) {
         html += infoRow(withInfoPanelStatMatrixButton('Unit UpKeep', { title: `${e.unitType} / UpKeep`, kind: 'unit', key: e.unitType, statKey: 'upKeep' }), formatInfoRate(baseUnitUpKeep));
     }
     html += infoRow('Unit Atk', Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
-    html += infoRow('Unit Range', formatRangeStatTiles(Number(uRange) || 0));
+    html += infoRow('Unit Range', formatAreaDistanceStat(Number(uRange) || 0));
     html += infoRow('Unit Spd', Number.isFinite(uSpeed) ? uSpeed.toFixed(2) : '?');
     if (e.owner === localPlayerId) {
         html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
@@ -3830,7 +3829,7 @@ function renderBarrackGroupInfo(group) {
     html += infoRow('Unit Energy', Number.isFinite(uEnergy) ? Math.floor(uEnergy) : '?');
     html += infoRow(withInfoPanelStatMatrixButton('Unit UpKeep', { title: `${e.unitType} / UpKeep`, kind: 'unit', key: e.unitType, statKey: 'upKeep' }), formatInfoRate(totalBaseUnitUpKeep));
     html += infoRow('Unit Atk', Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
-    html += infoRow('Unit Range', formatRangeStatTiles(Number(uRange) || 0));
+    html += infoRow('Unit Range', formatAreaDistanceStat(Number(uRange) || 0));
     html += infoRow('Unit Spd', Number.isFinite(uSpeed) ? uSpeed.toFixed(2) : '?');
     if (e.owner === localPlayerId) {
         html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
@@ -3892,7 +3891,7 @@ function renderTowerInfo(e) {
     }
     html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), formatBigNumber(s.damage, 1));
     if (e.type !== 'laser') {
-        html += infoRow('Range', formatRangeStatTiles(baseVis), formatRangeStatTiles(effVis));
+        html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${e.type} / Range`, kind: 'building', key: e.type, statKey: 'attackRange' }), formatAreaDistanceStat(getBuildingStatForOwner(e.owner, e.type, baseLevel, 'attackRange')), formatAreaDistanceStat(getBuildingStatForOwner(e.owner, e.type, effLevel, 'attackRange')));
         html += infoRow('Visibility', formatRangeStatTiles(baseVis), formatRangeStatTiles(effVis));
         html += infoRow('Cooldown', bs ? `${(bs.cd || 0).toFixed(2)}s` : `${(s.cd || 0).toFixed(2)}s`, `${(s.cd || 0).toFixed(2)}s`);
         html += infoRow('DPS', baseDps, dps);
@@ -3975,7 +3974,7 @@ function renderTowerGroupInfo(group) {
     html += infoRow(withInfoPanelStatMatrixButton('UpKeep', { title: `${e.type} / UpKeep`, kind: 'building', key: e.type, statKey: 'upKeep' }), formatInfoRate(totalBaseUpKeep), formatInfoRate(totalEffUpKeep));
     html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), formatBigNumber(s.damage, 1));
     if (e.type !== 'laser') {
-        html += infoRow('Range', formatRangeStatTiles(baseVis), formatRangeStatTiles(effVis));
+        html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${e.type} / Range`, kind: 'building', key: e.type, statKey: 'attackRange' }), formatAreaDistanceStat(getBuildingStatForOwner(e.owner, e.type, baseLevel, 'attackRange')), formatAreaDistanceStat(getBuildingStatForOwner(e.owner, e.type, effLevel, 'attackRange')));
         html += infoRow('Visibility', formatRangeStatTiles(baseVis), formatRangeStatTiles(effVis));
         html += infoRow('Cooldown', bs ? `${(bs.cd || 0).toFixed(2)}s` : `${(s.cd || 0).toFixed(2)}s`, `${(s.cd || 0).toFixed(2)}s`);
         html += infoRow('DPS', baseDps, dps);
@@ -4227,8 +4226,8 @@ function renderUnitInfo(u) {
     if (u.sandy > 0) slowMul *= 0.5;
     let baseSpd = (Number(baseStats.speed) || 0) * slowMul;
     let effSpd = (Number(effStats.speed) || 0) * slowMul;
-    let baseAttackRange = Math.max(0, (Number(baseStats.attackRange) || 0) / TILE);
-    let effAttackRange = Math.max(0, (Number(effStats.attackRange) || 0) / TILE);
+    let baseAttackRange = getStatAttackRangeArea(baseStats);
+    let effAttackRange = getStatAttackRangeArea(effStats);
     let baseVisionRange = Math.max(0, Number(baseStats.visionRangeArea) || ((Number(baseStats.visionRange) || 0) / AREA_UNIT_TILE_EQUIVALENT));
     let effVisionRange = Math.max(0, Number(effStats.visionRangeArea) || ((Number(effStats.visionRange) || 0) / AREA_UNIT_TILE_EQUIVALENT));
     let baseUpKeep = getUnitStatForOwner(u.owner, u.unitType, lvl, 'upKeep');
@@ -4240,7 +4239,7 @@ function renderUnitInfo(u) {
     if (Number.isFinite(baseUpKeep)) {
         html += infoRow(withInfoPanelStatMatrixButton('UpKeep', { title: `${u.unitType} / UpKeep`, kind: 'unit', key: u.unitType, statKey: 'upKeep' }), formatInfoRate(baseUpKeep));
     }
-    html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u.unitType} / Range`, kind: 'unit', key: u.unitType, statKey: 'attackRange' }), formatRangeStatTiles(baseAttackRange), formatRangeStatTiles(effAttackRange));
+    html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u.unitType} / Range`, kind: 'unit', key: u.unitType, statKey: 'attackRange' }), formatAreaDistanceStat(baseAttackRange), formatAreaDistanceStat(effAttackRange));
     html += infoRow(withInfoPanelStatMatrixButton('Visibility', { title: `${u.unitType} / Visibility`, kind: 'unit', key: u.unitType, statKey: 'visionRange' }), formatAreaDistanceStat(baseVisionRange), formatAreaDistanceStat(effVisionRange));
     if (u.unitType === 'scout') {
         let baseWatchDuration = getUnitStatForOwner(u.owner, u.unitType, lvl, 'watchDuration');
@@ -4407,8 +4406,8 @@ function renderUnitGroupInfo(group, big = null) {
         totalEffDps += (effCd > 0 ? (effAtk / effCd * TICK_RATE) : 0) * n;
         totalBaseSpeed += ((Number(baseStats.speed) || 0) * slowMul) * n;
         totalEffSpeed += ((Number(effStats.speed) || 0) * slowMul) * n;
-        totalBaseRange += (Math.max(0, (Number(baseStats.attackRange) || 0) / TILE)) * n;
-        totalEffRange += (Math.max(0, (Number(effStats.attackRange) || 0) / TILE)) * n;
+        totalBaseRange += (getStatAttackRangeArea(baseStats)) * n;
+        totalEffRange += (getStatAttackRangeArea(effStats)) * n;
         totalBaseVision += (Math.max(0, Number(baseStats.visionRange) || 0)) * n;
         totalEffVision += (Math.max(0, Number(effStats.visionRange) || 0)) * n;
         if (u.unitType === 'scout') {
@@ -4467,7 +4466,7 @@ function renderUnitGroupInfo(group, big = null) {
     let avgEffRange = totalEffRange / Math.max(1, groupCount);
     let avgBaseVision = totalBaseVision / Math.max(1, groupCount);
     let avgEffVision = totalEffVision / Math.max(1, groupCount);
-    html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u0.unitType} / Range`, kind: 'unit', key: u0.unitType, statKey: 'attackRange' }), `${formatRangeStatTiles(avgBaseRange)} avg`, `${formatRangeStatTiles(avgEffRange)} avg`);
+    html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u0.unitType} / Range`, kind: 'unit', key: u0.unitType, statKey: 'attackRange' }), `${formatAreaDistanceStat(avgBaseRange)} avg`, `${formatAreaDistanceStat(avgEffRange)} avg`);
     html += infoRow(withInfoPanelStatMatrixButton('Visibility', { title: `${u0.unitType} / Visibility`, kind: 'unit', key: u0.unitType, statKey: 'visionRange' }), `${formatRangeStatTiles(avgBaseVision)} avg`, `${formatRangeStatTiles(avgEffVision)} avg`);
     if (u0.unitType === 'scout') {
         let count = Math.max(1, groupCount);

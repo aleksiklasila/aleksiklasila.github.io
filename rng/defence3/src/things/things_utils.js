@@ -2368,6 +2368,17 @@ function shouldKeepBuildSelectionAfterLeftClick(shiftHeld) {
     return buildPlacementMode === BUILD_PLACE_MODE_SHIFT_KEEP || buildPlacementMode === BUILD_PLACE_MODE_SHIFT_DRAG;
 }
 
+function formatAreaDistanceStat(v) {
+    return Number.isFinite(v) ? `${Math.floor(Math.max(0, v))}a` : '-';
+}
+
 function formatRangeStatTiles(v) {
-    return Number.isFinite(v) ? `${Math.max(0, Math.floor(Number(v) / AREA_UNIT_TILE_EQUIVALENT))}a` : '-';
+    return Number.isFinite(v) ? formatAreaDistanceStat(v / AREA_UNIT_TILE_EQUIVALENT) : '-';
+}
+
+// Shared stat rows store the canonical range in areas, plus a derived pixel
+// distance for consumers that need world coordinates.
+function getStatAttackRangeArea(stats) {
+    if (Number.isFinite(stats && stats.attackRangeArea)) return Math.max(0, stats.attackRangeArea);
+    return 0;
 }

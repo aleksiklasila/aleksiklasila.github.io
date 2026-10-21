@@ -118,7 +118,7 @@ const SNAP_FORMAT = 7;
 // sleep); same-destination crowd arrival; group units on the destination
 // tile arrive (CROWD_SEPARATION_PROGRESS.md).
 // 24: a manual worker move keeps the path installed by a fallback upgrade.
-const SIM_RULES_REVISION = 28;
+const SIM_RULES_REVISION = 29;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;
