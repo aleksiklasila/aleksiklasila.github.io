@@ -1479,6 +1479,21 @@ unsafe fn flow_look(m: &Mv, v: &Nav, s: usize, refresh: bool, tl: i32, gx: i32, 
 #[inline(never)]
 unsafe fn flow_look_calc(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, dk: i32, wl: *const u8, nav_ver: i32, wv: i32, fgen: i32) -> i32 {
     let (w, h) = (v.w, v.h);
+    if !v.atl.is_null() && dk>=0 && dk<w*h && tl!=dk {
+        let dx=irem_f(dk,w);let dy=idiv(dk-dx,w);
+        if let Some(a)=crate::atlas::Atl::from(v.atl) {
+            if a.clear_rect(gx,gy,dx,dy) {
+                let n=if (dx-gx).abs()>=(dy-gy).abs(){tl+if dx>gx{1}else{-1}}
+                    else{tl+if dy>gy{w}else{-w}};
+                // Live walls can be newer than this immutable atlas.
+                let nx=step_x(n,tl,gx,w);let ny=step_y(n,tl,gx,gy,w);
+                if open_block(wl,gx,gy,w,h) && open_block(wl,nx,ny,w,h) {
+                    nv_put(m,s,tl,dk,nav_ver,wv,fgen,n,-1,dk,true);
+                    return 1;
+                }
+            }
+        }
+    }
     let mut n1 = nav_step(v, tl, gx, gy, dk);
     if n1 < 0 {
         return 0;
@@ -1506,7 +1521,8 @@ unsafe fn flow_look_calc(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, d
         let mut cur = n1;
         let mut cx = n1x;
         let mut cy = n1y;
-        let lim = if open { 6 } else { 2 };
+        let mut short = n1;
+        let lim = if open { 32 } else { 2 };
         let mut k = 1;
         while k < lim {
             let nx = nav_step(v, cur, cx, cy, dk);
@@ -1526,9 +1542,17 @@ unsafe fn flow_look_calc(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, d
             }
             cur = nx;
             far = nx;
+            if k < 6 {short=nx;}
             cx = nxx;
             cy = nxy;
             k += 1;
+        }
+        // Pull the shared route taut across artificial cluster exits.
+        // One segment check per cached tile/destination, never per unit.
+        if open && far != short {
+            let fx=irem_f(far,w);let fy=idiv(far-fx,w);
+            if !seg_open(wl,w,h,gx as f64*m.tile+16.0,gy as f64*m.tile+16.0,
+                fx as f64*m.tile+16.0,fy as f64*m.tile+16.0,m.itile,m.tile) {far=short;}
         }
     }
     nv_put(m, s, tl, dk, nav_ver, wv, fgen, n1, n2, far, open);
@@ -1593,7 +1617,29 @@ unsafe fn checked_position(m:&Mv,s:usize,x:f64,y:f64)->(f64,f64) {
     if m.occ.is_null(){return (x,y);}
     let nx=js_round(x*8.0) as i32;let ny=js_round(y*8.0) as i32;
     let ox=*(m.x.add(s) as *const i32);let oy=*(m.y.add(s) as *const i32);
-    let (tx,ty)=(*m.occ).position(s,nx,ny);
+    let (mut tx,mut ty)=(*m.occ).position(s,nx,ny);
+    if tx==ox && ty==oy && (nx!=ox || ny!=oy) && rd(m.on,s)==6 {
+        // A blocked flow may use the free shoulder. At most one accepted
+        // move, at the requested speed; every candidate keeps the same
+        // swept exclusive footprint, block halo and wall checks.
+        let dx=(nx-ox) as f64;let dy=(ny-oy) as f64;
+        let np=rd(m.npr,s) as usize;
+        let wl=if np<NAV_PROFILES && !m.nav.get_unchecked(np).walls.is_null(){m.nav.get_unchecked(np).walls}
+            else if rd(m.fl,s)&32!=0{m.airw}else{m.wall};
+        for k in 0..4 {
+            let (vx,vy)=match k {
+                0=>((dx-dy)*0.7071067811865476,(dy+dx)*0.7071067811865476),
+                1=>((dx+dy)*0.7071067811865476,(dy-dx)*0.7071067811865476),
+                2=>(-dy,dx),_ =>(dy,-dx),
+            };
+            let ax=ox+js_round(vx) as i32;let ay=oy+js_round(vy) as i32;
+            if seg_open(wl,m.w,m.h,ox as f64*0.125,oy as f64*0.125,
+                ax as f64*0.125,ay as f64*0.125,m.itile,m.tile) {
+                (tx,ty)=(*m.occ).position(s,ax,ay);
+                if tx!=ox || ty!=oy {break;}
+            }
+        }
+    }
     if tx!=nx || ty!=ny {
         wr(m.steady,s,0);wr(m.ct,s,-1);wr(m.cd,s,-1);
         wr(m.vx,s,(tx-ox) as f64/(8.0*m.dkf));wr(m.vy,s,(ty-oy) as f64/(8.0*m.dkf));
@@ -2321,7 +2367,22 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
         let mut ep=epi_begin(&m,f,job,0,1);ep.pb=base;
         if !m.hita.is_null(){wr(m.hitc,p.chunk,0);}
         let cw=*cfg.add(9);let ch=*cfg.add(10);let epoch=*cfg.add(11);
-        for cy in by*block..((by+1)*block).min(ch) {for cx in bx*block..((bx+1)*block).min(cw) {
+        let x0=bx*block;let x1=((bx+1)*block).min(cw);
+        let y0=by*block;let y1=((by+1)*block).min(ch);
+        // Leaders vacate space before followers claim it. Sample cached
+        // desired velocities (actual velocity is zero in a jam), bounded
+        // to one unit per tile; no sorting or per-unit allocation.
+        let mut dx=0.0;let mut dy=0.0;
+        for cy in y0..y1 {for cx in x0..x1 {
+            let key=(cy*cw+cx) as usize;
+            if *ptr(27).add(key)!=epoch || *ptr(26).add(key)==0 {continue;}
+            let slot=*ptr(24).add(*ptr(25).add(key) as usize);
+            if slot>=0 && rd(m.on,slot as usize)==6 {
+                dx+=rd(m.cvx,slot as usize);dy+=rd(m.cvy,slot as usize);
+            }
+        }}
+        for yi in 0..y1-y0 {let cy=if dy>0.0{y1-1-yi}else{y0+yi};
+        for xi in 0..x1-x0 {let cx=if dx>0.0{x1-1-xi}else{x0+xi};
             let key=(cy*cw+cx) as usize;if *ptr(27).add(key)!=epoch {continue;}
             let mut i=*ptr(25).add(key);let end=i+*ptr(26).add(key);
             while i<end {
@@ -3533,7 +3594,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
         let route_len = sqrt(route_dx * route_dx + route_dy * route_dy);
         let sx = -route_dy / route_len;
         let sy = route_dx / route_len;
-        let mut side = ((x - (gx as f64 * tile + 16.0)) * sx + (y - (gy as f64 * tile + 16.0)) * sy) * 0.875;
+        let mut side = (x - (gx as f64 * tile + 16.0)) * sx + (y - (gy as f64 * tile + 16.0)) * sy;
         side = if side > max_side { max_side } else if side < -max_side { -max_side } else { side };
         tx = base_tx + sx * side;
         ty = base_ty + sy * side;

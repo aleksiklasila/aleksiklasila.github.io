@@ -239,6 +239,20 @@ function simFlowLook(LC, s, refresh, tl, gx, gy, dk, Wd, Hd, WL, navVer, wv, fge
     if (NV[r] === tl && NV[r + 1] === dk && NV[r + 4] === fgen && (!refresh || (NV[r + 2] === navVer && NV[r + 3] === wv))) return 1;
     // (Clusters are 16 or 32 tiles: a shift.)
     const cs = 31 - Math.clz32(nC);
+    if(ROWS===null && _simFlowAtlas && tl!==dk && dk>=0 && dk<Wd*Hd){
+        const A=_simFlowAtlas.atlas,P=A&&A.clearPrefix,dx=dk%Wd,dy=(dk-dx)/Wd;
+        if(P){
+            const stride=A.bw+1,x0=Math.min(gx,dx)>>3,x1=(Math.max(gx,dx)>>3)+1,
+                y0=Math.min(gy,dy)>>3,y1=(Math.max(gy,dy)>>3)+1;
+            if(P[y1*stride+x1]-P[y0*stride+x1]-P[y1*stride+x0]+P[y0*stride+x0]===0){
+                const n=tl+(Math.abs(dx-gx)>=Math.abs(dy-gy)?(dx>gx?1:-1):(dy>gy?Wd:-Wd));
+                if(_simOpenBlockXY(WL,gx,gy,Wd,Hd)&&_simOpenBlockXY(WL,_simStepX(n,tl,gx,Wd),_simStepY(n,tl,gx,gy,Wd),Wd,Hd)){
+                    NV[r]=tl;NV[r+1]=dk;NV[r+2]=navVer;NV[r+3]=wv;NV[r+4]=fgen;
+                    NV[r+5]=n;NV[r+6]=-1;NV[r+7]=(dk<<1)|1;return 1;
+                }
+            }
+        }
+    }
     let n1 = simNavStepXY(Wd, cs, nC, ncw, PL, PB, ROWS, ro, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, tl, gx, gy, dk);
     if (n1 < 0) return 0;
     let n2 = -1, far = n1, open = false;
@@ -252,8 +266,8 @@ function simFlowLook(LC, s, refresh, tl, gx, gy, dk, Wd, Hd, WL, navVer, wv, fge
     } else {
         if (Math.abs(n1x - gx) + Math.abs(n1y - gy) !== 1) return -2;
         open = _simOpenBlockXY(WL, gx, gy, Wd, Hd) && _simOpenBlockXY(WL, n1x, n1y, Wd, Hd);
-        let cur = n1, cx = n1x, cy = n1y;
-        for (let k = 1; k < (open ? 6 : 2); k++) {
+        let cur = n1, cx = n1x, cy = n1y, short=n1;
+        for (let k = 1; k < (open ? 32 : 2); k++) {
             const nx = simNavStepXY(Wd, cs, nC, ncw, PL, PB, ROWS, ro, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, cur, cx, cy, dk);
             if (nx < 0 || WL[nx]) break;
             if (k === 1) n2 = nx;
@@ -261,7 +275,9 @@ function simFlowLook(LC, s, refresh, tl, gx, gy, dk, Wd, Hd, WL, navVer, wv, fge
             const nxx = _simStepX(nx, cur, cx, Wd), nxy = _simStepY(nx, cur, cx, cy, Wd);
             if (!_simOpenBlockXY(WL, nxx, nxy, Wd, Hd)) break;
             far = cur = nx; cx = nxx; cy = nxy;
+            if(k<6)short=nx;
         }
+        if(open && far!==short && !simSegOpen(WL,gx*TILE+16,gy*TILE+16,(far%Wd)*TILE+16,Math.floor(far/Wd)*TILE+16))far=short;
     }
     NV[r] = tl; NV[r + 1] = dk; NV[r + 2] = navVer; NV[r + 3] = wv; NV[r + 4] = fgen;
     NV[r + 5] = n1; NV[r + 6] = n2; NV[r + 7] = (far << 1) | (open ? 1 : 0);

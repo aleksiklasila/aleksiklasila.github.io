@@ -548,6 +548,7 @@ pub struct Atl {
     pub c: i32,
     pub cw: i32,
     pub bw: i32,
+    clear_prefix: *const i32,
     bm: *const u32,
     bc: *const u8,
     cb: *const u16,
@@ -565,6 +566,16 @@ pub struct Atl {
     nb: *const i32,
 }
 impl Atl {
+    // An empty bounding rectangle permits straight travel without routing
+    // through a representative portal. Constant time, regardless of distance.
+    pub unsafe fn clear_rect(&self,x:i32,y:i32,dx:i32,dy:i32)->bool {
+        if self.clear_prefix.is_null(){return false;}
+        let x0=x.min(dx)>>3;let x1=(x.max(dx)>>3)+1;
+        let y0=y.min(dy)>>3;let y1=(y.max(dy)>>3)+1;
+        let stride=self.bw+1;let p=self.clear_prefix;
+        *p.add((y1*stride+x1) as usize)-*p.add((y0*stride+x1) as usize)
+            -*p.add((y1*stride+x0) as usize)+*p.add((y0*stride+x0) as usize)==0
+    }
     #[inline(always)]
     pub unsafe fn from(h: *const i32) -> Option<Atl> {
         if h.is_null() || *h <= 0 {
@@ -576,6 +587,7 @@ impl Atl {
             c: *h.add(1),
             cw: *h.add(2),
             bw: *h.add(3),
+            clear_prefix: p(20) as *const i32,
             bm: p(5) as *const u32,
             bc: p(6) as *const u8,
             cb: p(7) as *const u16,

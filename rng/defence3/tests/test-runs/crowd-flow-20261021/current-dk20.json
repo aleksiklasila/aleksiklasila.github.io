@@ -1,0 +1,37 @@
+{
+  "units": 80000,
+  "msPerTick": 124.28525166666675,
+  "samples": [
+    {
+      "tick": 100,
+      "advance": 2117.1302578125,
+      "moving": 79620,
+      "crossed": 3644
+    }
+  ],
+  "audit": {
+    "actualBits": 720000,
+    "expectedBits": 720000,
+    "registered": 80000,
+    "activeUnits": 80000,
+    "positionMismatches": 0,
+    "ok": true
+  },
+  "stats": {
+    "planes": 1,
+    "cellPixels": 4,
+    "gridMiB": 7.659912109375,
+    "spawns": 80000,
+    "rejectedSpawns": 0,
+    "relocatedSpawns": 0,
+    "registered": 80000,
+    "visited": 80000,
+    "attempted": 80000,
+    "moved": 79740,
+    "blockedOrClipped": 54390,
+    "simdGroups": 73518,
+    "overHalo": 0,
+    "footprintMoves": 77336,
+    "scalarLanes": 80000
+  }
+}

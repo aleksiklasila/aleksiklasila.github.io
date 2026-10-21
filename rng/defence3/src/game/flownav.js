@@ -482,6 +482,18 @@ function navAtlasTables(A, bg) {
 // let go.
 function navAtlasFinish(A) {
     if (!A || !A.ct) return null;
+    // Four reads certify an empty rectangle of 8x8 blocks. This belongs to
+    // the shared immutable geometry (~63 KiB for a 1000x1000 map).
+    const stride=A.bw+1,bh=(A.H+7)>>3;
+    A.clearPrefix=simHeapArrayAuto(Int32Array,stride*(bh+1));
+    for(let y=0;y<bh;y++){
+        let row=0;
+        for(let x=0;x<A.bw;x++){
+            const k=(y*A.bw+x)*2;
+            row+=(A.bm[k]|A.bm[k+1])!==0?1:0;
+            A.clearPrefix[(y+1)*stride+x+1]=A.clearPrefix[y*stride+x+1]+row;
+        }
+    }
     simParallelBind('atl.jobs', null); simParallelBind('atl.dnodes', null); simParallelBind('atl.dno', null);
     simParallelBind('atl.psx', null); simParallelBind('atl.psy', null); simParallelBind('atl.psn', null);
     A.header = navAtlasHeader(A, A.nodePart, A.nodeBase);
@@ -495,6 +507,7 @@ function navAtlasHeader(A, nodePart, nodeBase) {
     h[5] = ptr(A.bm); h[6] = ptr(A.bc); h[7] = ptr(A.cb); h[8] = ptr(A.co); h[9] = ptr(A.ct); h[10] = ptr(A.anc); h[11] = ptr(A.cip);
     h[12] = ptr(A.cin); h[13] = ptr(A.rco); h[14] = ptr(A.rc); h[15] = ptr(A.dn); h[16] = ptr(nodePart); h[17] = ptr(A.cn);
     h[18] = ptr(A.didx); h[19] = ptr(nodeBase);
+    h[20] = A.clearPrefix ? ptr(A.clearPrefix) : 0;
     for (let i = 5; i <= 19; i++) if (!(h[i] > 0)) return null;
     return h;
 }

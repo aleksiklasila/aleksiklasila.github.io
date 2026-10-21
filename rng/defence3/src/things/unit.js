@@ -1645,7 +1645,7 @@ class Unit {
         const kx = far % W, ky = (far - kx) / W;
         if (open) {
             const rdx = kx - gx, rdy = ky - gy, rl = Math.sqrt(rdx * rdx + rdy * rdy), sx = -rdy / rl, sy = rdx / rl, maxSide = TILE * 0.8;
-            let side = ((this.x - (gx * TILE + 16)) * sx + (this.y - (gy * TILE + 16)) * sy) * 0.875;
+            let side = (this.x - (gx * TILE + 16)) * sx + (this.y - (gy * TILE + 16)) * sy;
             side = side > maxSide ? maxSide : (side < -maxSide ? -maxSide : side);
             tx = kx * TILE + 16 + sx * side; ty = ky * TILE + 16 + sy * side;
         } else {
