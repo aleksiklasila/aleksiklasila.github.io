@@ -5423,6 +5423,23 @@ function _visCoverSync(e, isUnit) {
 // recompute, so a move needs nothing here.
 function _visCoverSyncUnit(e) {
     const C = _visCover;
+    // Applied shared stat rows already hold the exact integer sight steps.
+    // Avoid walking the entity/stat accessors on the staggered unit sweep.
+    const c=e._us,s=e._si,row=c?c.statRow[s]:-1;
+    if(row>=0&&typeof _effRowCols!=='undefined'&&_effRowCols.rVsA){
+        const range=_effRowCols.rVsA[row];
+        if(range>=-1){
+            const active=c.dead[s]===0&&c.sepKey[s]!==SIM_SEP_ABSENT;
+            let steps=-1,p1=-1,p2=-1;
+            if(active&&range>=0){
+                steps=range;const owner=c.owner[s];p1=owner>=0&&owner<C.players?owner:-1;
+                const watch=c.wTeam[s];if(c.watched[s]>0&&watch>=0&&watch<C.players&&watch!==p1)p2=watch;
+                if(p1<0&&p2<0)steps=-1;
+            }
+            c.vsGen[s]=C.gen;c.vsR[s]=steps;c.vsP1[s]=p1;c.vsP2[s]=p2;c.vsA[s]=active?1:0;
+            return;
+        }
+    }
     let steps = -1, p1 = -1, p2 = -1;
     const active = !e.dead && e._spatialKey !== undefined;
     if (active) {

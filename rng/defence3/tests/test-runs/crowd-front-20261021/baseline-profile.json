@@ -1,0 +1,228 @@
+{
+  "scene": "tests/4M-1K-stuck2.gz",
+  "helpers": 7,
+  "ticks": 12,
+  "warmup": 3,
+  "dk": 20,
+  "tickMs": {
+    "mean": 1797.9652249999974,
+    "p50": 1665.9545999999973
+  },
+  "phases": {
+    "simParallelBackgroundWait": 31.81285833332974,
+    "simParallelRun:53": 3.082958333333712,
+    "spatialIndexRebuild": 13.494491666666969,
+    "navTick": 0.007624999999582845,
+    "simParallelRun:17": 0.009983333333366318,
+    "navFieldsFlush": 19.561358333333676,
+    "simParallelRun:27": 5.584916666665474,
+    "recalculateUnitEffectiveStats": 8.525000000000242,
+    "recalculateThingPrecomputedStats": 0.014591666664879691,
+    "simParallelRun:30": 4.532233333335171,
+    "updateAllPlayerVisibility": 418.25914166666433,
+    "towersTick": 98.26230833333587,
+    "simParallelRun:24": 5.544700000000982,
+    "statusPrepassRun": 5.963733333332736,
+    "simParallelRun:45": 1.8981166666671925,
+    "unitPassBegin": 0.022516666665372515,
+    "simParallelRun:43": 0.3332083333346721,
+    "simParallelRun:44": 0.16905000000163758,
+    "simParallelRun:20": 2.084224999999909,
+    "simParallelRun:34": 6.747183333334154,
+    "simParallelRun:63": 2.5571416666656055,
+    "simParallelRun:32": 12.22741666666237,
+    "combatScanRun": 25.645091666670243,
+    "occupancyPrepareMovement": 5.55085000000084,
+    "simParallelRun:89": 232.59310833332952,
+    "simMoveRun": 355.59285833333706,
+    "simParallelRun:36": 1.7454250000009779,
+    "simParallelRun:37": 2.2100666666641096,
+    "_forEachUnitInTickOrder": 112.61135000000043,
+    "simParallelRun:41": 1.2164583333360497,
+    "simParallelRun:60": 0.33566666666592937,
+    "simParallelRun:66": 0.2791583333297846,
+    "unitHitsResolve": 2.224600000000161,
+    "simParallelRun:49": 1.1790666666638572,
+    "unitRetirePrepare": 1.2247833333337137,
+    "simUnitStateCollect": 0.9815666666654579,
+    "spawnerStructuresTick": 0.04630833333309662,
+    "processGlobalSpawnerQueue": 0.007116666667570826
+  },
+  "phaseSelf": {
+    "simParallelBackgroundWait": 31.81285833332974,
+    "simParallelRun:53": 3.082958333333712,
+    "spatialIndexRebuild": 0.06664166666814708,
+    "navTick": 0.007624999999582845,
+    "simParallelRun:17": 0.009983333333366318,
+    "navFieldsFlush": 19.55137500000031,
+    "simParallelRun:27": 5.584916666665474,
+    "recalculateUnitEffectiveStats": 2.940083333334769,
+    "recalculateThingPrecomputedStats": 0.014591666664879691,
+    "simParallelRun:30": 4.532233333335171,
+    "updateAllPlayerVisibility": 413.7099333333329,
+    "towersTick": 98.26230833333587,
+    "simParallelRun:24": 5.544700000000982,
+    "statusPrepassRun": 0.41903333333175397,
+    "simParallelRun:45": 1.8981166666671925,
+    "unitPassBegin": 0.022516666665372515,
+    "simParallelRun:43": 0.3332083333346721,
+    "simParallelRun:44": 0.16905000000163758,
+    "simParallelRun:20": 2.084224999999909,
+    "simParallelRun:34": 6.747183333334154,
+    "simParallelRun:63": 2.5571416666656055,
+    "simParallelRun:32": 12.22741666666237,
+    "combatScanRun": 2.013616666676777,
+    "occupancyPrepareMovement": 5.55085000000084,
+    "simParallelRun:89": 232.59310833332952,
+    "simMoveRun": 91.30593333333552,
+    "simParallelRun:36": 1.7454250000009779,
+    "simParallelRun:37": 2.2100666666641096,
+    "_forEachUnitInTickOrder": 108.65585833333535,
+    "simParallelRun:41": 1.2164583333360497,
+    "simParallelRun:60": 0.33566666666592937,
+    "simParallelRun:66": 0.2791583333297846,
+    "unitHitsResolve": 1.609775000004447,
+    "simParallelRun:49": 1.1790666666638572,
+    "unitRetirePrepare": 0.045716666669856444,
+    "simUnitStateCollect": 0.9815666666654579,
+    "spawnerStructuresTick": 0.04630833333309662,
+    "processGlobalSpawnerQueue": 0.007116666667570826
+  },
+  "samples": [
+    {
+      "tick": 10,
+      "ordered": 299734,
+      "moving": 49573,
+      "distance": 820089.4185914504,
+      "netGoalProgress": 7729962.21707955,
+      "modes": {
+        "other": 2132856,
+        "task": 296133,
+        "chase": 3597,
+        "hold": 3128
+      },
+      "speedBins": [
+        247244,
+        23640,
+        16908,
+        3927,
+        8015
+      ],
+      "perMode": {
+        "task": [
+          244412,
+          23301,
+          16555,
+          3872,
+          7993
+        ],
+        "chase": [
+          2832,
+          339,
+          353,
+          53,
+          20
+        ],
+        "other": [
+          null,
+          null,
+          null,
+          2,
+          2
+        ]
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 7.659912109375,
+        "spawns": 2437842,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 2435714,
+        "visited": 2437056,
+        "attempted": 300776,
+        "moved": 54324,
+        "blockedOrClipped": 294115,
+        "simdGroups": 2412549,
+        "overHalo": 0,
+        "footprintMoves": 46231,
+        "scalarLanes": 2431541
+      }
+    },
+    {
+      "tick": 12,
+      "ordered": 299737,
+      "moving": 47133,
+      "distance": 777399.8873917356,
+      "netGoalProgress": 9022803.399227072,
+      "modes": {
+        "other": 2132535,
+        "task": 296139,
+        "hold": 3099,
+        "chase": 3595
+      },
+      "speedBins": [
+        249803,
+        22726,
+        15804,
+        3625,
+        7779
+      ],
+      "perMode": {
+        "task": [
+          246867,
+          22437,
+          15514,
+          3574,
+          7747
+        ],
+        "chase": [
+          2936,
+          289,
+          290,
+          48,
+          32
+        ],
+        "other": [
+          null,
+          null,
+          null,
+          3
+        ]
+      },
+      "occupancy": {
+        "planes": 1,
+        "cellPixels": 4,
+        "gridMiB": 7.659912109375,
+        "spawns": 2437842,
+        "rejectedSpawns": 0,
+        "relocatedSpawns": 0,
+        "registered": 2435368,
+        "visited": 2436740,
+        "attempted": 300802,
+        "moved": 51699,
+        "blockedOrClipped": 294293,
+        "simdGroups": 2412209,
+        "overHalo": 0,
+        "footprintMoves": 43850,
+        "scalarLanes": 2431040
+      }
+    }
+  ],
+  "audit": {
+    "actualBits": 32074216,
+    "expectedBits": 32074216,
+    "registered": 2435368,
+    "activeUnits": 2435368,
+    "positionMismatches": 0,
+    "ok": true
+  },
+  "errors": [],
+  "memory": {
+    "rss": 7367553024,
+    "heapTotal": 2192318464,
+    "heapUsed": 2046796368,
+    "external": 523612527,
+    "arrayBuffers": 521324895
+  }
+}

@@ -118,7 +118,7 @@ const SNAP_FORMAT = 7;
 // sleep); same-destination crowd arrival; group units on the destination
 // tile arrive (CROWD_SEPARATION_PROGRESS.md).
 // 24: a manual worker move keeps the path installed by a fallback upgrade.
-const SIM_RULES_REVISION = 25;
+const SIM_RULES_REVISION = 26;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;
@@ -2558,6 +2558,7 @@ function _snapSameValue(a, b, depth) {
 // cached enemy target holds until invalid). A peer that restores a snapshot
 // starts without them, so at a resync every peer drops them on the same tick.
 function snapFlushHistoryCaches() {
+    if(typeof trafficReset==='function')trafficReset();
     _bumpPathTopologyVersion();
     // The movement kernel's world tables are rebuilt on every peer alike.
     if (typeof simMoveWallsDirty === 'function') simMoveWallsDirty();

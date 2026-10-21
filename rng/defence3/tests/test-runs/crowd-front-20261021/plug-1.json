@@ -1,0 +1,90 @@
+{
+  "mode": 1,
+  "msPerTick": 8.224208750000013,
+  "samples": [
+    {
+      "tick": 10,
+      "demand": 3200,
+      "flowing": 1141,
+      "moving": 2072,
+      "meanSpeed": 0.41122476133792085,
+      "progress": 344023.5013385941,
+      "yielded": 0
+    },
+    {
+      "tick": 20,
+      "demand": 3200,
+      "flowing": 1709,
+      "moving": 2746,
+      "meanSpeed": 0.5813576529969338,
+      "progress": 1070028.3385502095,
+      "yielded": 0
+    },
+    {
+      "tick": 30,
+      "demand": 3200,
+      "flowing": 1929,
+      "moving": 2875,
+      "meanSpeed": 0.6300676238347122,
+      "progress": 1941202.231251125,
+      "yielded": 0
+    },
+    {
+      "tick": 40,
+      "demand": 3200,
+      "flowing": 1907,
+      "moving": 2796,
+      "meanSpeed": 0.626473679011574,
+      "progress": 2858596.4877298004,
+      "yielded": 0
+    },
+    {
+      "tick": 50,
+      "demand": 3200,
+      "flowing": 1803,
+      "moving": 2669,
+      "meanSpeed": 0.5969654447984972,
+      "progress": 3733283.489750033,
+      "yielded": 0
+    },
+    {
+      "tick": 60,
+      "demand": 3200,
+      "flowing": 1739,
+      "moving": 2605,
+      "meanSpeed": 0.5839784296610413,
+      "progress": 4591433.0526354,
+      "yielded": 0
+    },
+    {
+      "tick": 70,
+      "demand": 3200,
+      "flowing": 1770,
+      "moving": 2548,
+      "meanSpeed": 0.5878665156364985,
+      "progress": 5460308.35583662,
+      "yielded": 0
+    },
+    {
+      "tick": 80,
+      "demand": 3200,
+      "flowing": 1833,
+      "moving": 2498,
+      "meanSpeed": 0.6034768629842279,
+      "progress": 6329418.271838313,
+      "yielded": 0
+    }
+  ],
+  "audit": {
+    "actualBits": 35712,
+    "expectedBits": 35712,
+    "registered": 3968,
+    "activeUnits": 3968,
+    "positionMismatches": 0,
+    "ok": true
+  },
+  "traffic": {
+    "publications": 0,
+    "bytes": 150160
+  }
+}

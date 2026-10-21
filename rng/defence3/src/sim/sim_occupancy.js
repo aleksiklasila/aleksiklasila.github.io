@@ -34,6 +34,7 @@ function occupancyEnsure() {
         }O.cap=n;
     }
     for(const name of ['bits','mask','x','y','radius','layer','active'])simParallelBind('occ.'+name,O[name]);
+    if(typeof trafficEnsure==='function')trafficEnsure(O);
     return O;
 }
 function _occupancyAddresses(){return _occNames.map(n=>_simWEnc(_simParReg[n].byteOffset));}

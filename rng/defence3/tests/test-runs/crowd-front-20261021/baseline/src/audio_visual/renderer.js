@@ -1,0 +1,7548 @@
+// (Contexts without data_static.js, the unit tests': one base tick a step.)
+if (typeof simDk === 'undefined') {
+    globalThis.simDk = 1;
+    globalThis.simStepCrosses = (phase, period) => !(period > 1) || ((((globalThis.gameTime | 0) + phase) % period) + period) % period < globalThis.simDk;
+    globalThis.simStepPhases = period => [(((globalThis.gameTime | 0) % period) + period) % period];
+}
+let canvas, ctx, bgCanvas, bgCtx, overlayCanvas, overlayCtx, minimapCanvas, minimapCtx;
+let renderDimensionMode = '2d';
+let renderer3dInstance = null;
+let renderer3dHost = null;
+let renderer3dBackgroundVersion = 0;
+let renderer3dRotateDrag = null;
+const renderer3dTopTextureCache = new Map();
+const renderer3dOverlapFadeState = new Map();
+const RENDERER3D_OVERLAP_FADE_DURATION_MS = 500;
+// A structure under a unit keeps this share of its height (so its roof and 2D
+// panel still read the same), within world-unit bounds that keep the unit on
+// top visible.
+const RENDERER3D_OVERLAP_HEIGHT_FRACTION = 0.25;
+const RENDERER3D_OVERLAP_MIN_HEIGHT = 0.05;
+const RENDERER3D_OVERLAP_MAX_HEIGHT = 0.14;
+const DRAW_Z_BACKGROUND = 500;
+const DRAW_Z_STRUCTURES = 400;
+const DRAW_Z_UNITS = 300;
+const DRAW_Z_PARTICLES = 200;
+const DRAW_Z_OVERLAY = 100;
+const renderer3dLayerConfigs = [
+    { z: DRAW_Z_BACKGROUND, key: 'background', slices: 1, thickness: 0.02, opacity: 1 },
+    { z: DRAW_Z_STRUCTURES, key: 'structures', slices: 14, thickness: 0.05, opacity: 1 },
+    { z: DRAW_Z_UNITS, key: 'units', slices: 10, thickness: 0.032, opacity: 1 },
+    { z: DRAW_Z_PARTICLES, key: 'particles', slices: 6, thickness: 0.016, opacity: 0.95 },
+    { z: DRAW_Z_OVERLAY, key: 'overlay', slices: 4, thickness: 0.012, opacity: 0.9 }
+];
+let renderer3dLayerCanvases = new Map();
+let renderer3dLayerContexts = new Map();
+let renderer3dLayerStats = new Map();
+let visibilityGridRawByPlayerCache = new Map();
+let visibilityCacheTick = -1;
+// Gameplay visibility is recomputed every VISIBILITY_TICK_INTERVAL ticks per
+// player, players on alternating ticks, and reused in between (targeting sees
+// the world at most a tick late). All peers reuse identically; caches are
+// dropped together at resyncs (snapFlushHistoryCaches).
+const VISIBILITY_TICK_INTERVAL = 2;
+let visibilityGridStampByPlayer = new Map();
+
+function clearGameplayVisibilityCache() {
+    visibilityGridRawByPlayerCache.clear();
+    visibilityGridStampByPlayer.clear();
+    visibilityCacheTick = -1;
+    resetVisibilityCoverage();
+}
+const visibilityGridPoolByPlayer = new Map();
+const VISIBILITY_LIGHT_CELL_SIZE = 4;
+const VISIBILITY_LIGHT_NORMALIZATION_RANGE = 6;
+const VISIBILITY_LIGHT_MAX_CHANGE_PER_SECOND = VISIBILITY_LIGHT_NORMALIZATION_RANGE;
+const VISIBILITY_FADE_MAX_CHANGE_PER_SECOND = VISIBILITY_LIGHT_NORMALIZATION_RANGE * 0.5;
+const DEFAULT_SHADOW_DIR_X = -0.42;
+const DEFAULT_SHADOW_DIR_Y = 0.31;
+let _backgroundTickInterval = null;
+let _hiddenLastTickTime = 0;
+let _hiddenTickAccumulator = 0;
+let _buildMenuRefreshCounter = 0;
+
+// The info panel refreshes every INFO_PANEL_REFRESH_MS, stretched for large
+// selections so that refreshing takes at most ~5% of the time (the markup of
+// hundreds of selected things costs tens of milliseconds to rebuild).
+const INFO_PANEL_REFRESH_MS = 250;
+const INFO_PANEL_REFRESH_MAX_MS = 1500;
+let _infoPanelNextRefreshAt = 0;
+let _infoPanelRefreshCostMs = 0;
+
+// Commands take effect on a later tick, so refreshing the panel as they are
+// issued shows nothing new yet costs a full refresh on the input frame. Pull
+// the periodic refresh forward to just after that tick instead.
+function requestInfoPanelRefresh(delayMs = TICK_MS * 1.5) {
+    // (A panel that takes long to make, a big selection's: on its own
+    // schedule, not forced by every command: a click's frame stays short.)
+    if (_infoPanelRefreshCostMs > 8) delayMs = Math.max(delayMs, 1000);
+    _infoPanelNextRefreshAt = Math.min(_infoPanelNextRefreshAt, performance.now() + delayMs);
+}
+
+// Refresh after the next rendered frame, which itself stays free of it (see
+// the box-selection mouseup: that frame shows the new selection at once).
+// A panel that takes long to make (a big selection's: tens of ms) waits
+// INFO_PANEL_SETTLE_MS after the last selection instead: boxes drawn in
+// quick succession make it once, when they stop, not a long frame each.
+const INFO_PANEL_SETTLE_MS = 160, INFO_PANEL_SETTLE_COST_MS = 10;
+let _infoPanelRefreshAfterFrames = 0, _infoPanelSettleUntil = 0;
+function requestInfoPanelRefreshAfterFrame() {
+    _infoPanelRefreshAfterFrames = 2;
+    _infoPanelSettleUntil = _infoPanelRefreshCostMs > INFO_PANEL_SETTLE_COST_MS ? performance.now() + INFO_PANEL_SETTLE_MS : 0;
+}
+
+function _refreshInfoPanelPeriodic(now) {
+    if (_infoPanelRefreshAfterFrames > 0) {
+        if (_infoPanelRefreshAfterFrames > 1) { _infoPanelRefreshAfterFrames--; return; }
+        if (performance.now() < _infoPanelSettleUntil) return;
+        _infoPanelRefreshAfterFrames = 0;
+        _infoPanelNextRefreshAt = 0;
+    }
+    if (now < _infoPanelNextRefreshAt || researchQueueDragInProgress) return;
+    let started = performance.now();
+    updateInfoPanel();
+    let cost = performance.now() - started;
+    // Smoothed, so one slow refresh (a garbage collection) does not stall it.
+    _infoPanelRefreshCostMs += (cost - _infoPanelRefreshCostMs) * 0.3;
+    _infoPanelNextRefreshAt = now + Math.min(INFO_PANEL_REFRESH_MAX_MS, Math.max(INFO_PANEL_REFRESH_MS, _infoPanelRefreshCostMs * 20));
+}
+let _minimapRefreshCounter = 10;
+let _backgroundCacheRefreshCounter = 20;
+let _fpsFrameCount = 0, _fpsLastTime = performance.now(), _fpsDisplay = 0;
+let _tpsTickCount = 0, _tpsLastTime = performance.now(), _tpsDisplay = 0;
+const _litTintCache = new Map();
+
+function get3DRenderOwnerColor(owner) {
+    if (owner === undefined || owner === null || owner < 0) return '#c8ced8';
+    let pid = Math.floor(Number(owner));
+    if (typeof getTeamDisplayColor === 'function') return getTeamDisplayColor(pid);
+    if (typeof teamColorById !== 'undefined' && teamColorById[pid]) return teamColorById[pid];
+    return (typeof PLAYER_COLORS !== 'undefined' && PLAYER_COLORS[pid]) || '#c8ced8';
+}
+
+const DAMAGE_FLASH_TICKS = 10;
+
+const _parsedHexColors = new Map();
+function _parseHexColor(color) {
+    if (_parsedHexColors.has(color)) return _parsedHexColors.get(color);
+    let normalized = String(color || '').trim();
+    let match = normalized.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+    if (!match) return null;
+    let hex = match[1];
+    if (hex.length === 3) hex = hex.split('').map(ch => ch + ch).join('');
+    let rgb = {
+        r: parseInt(hex.slice(0, 2), 16),
+        g: parseInt(hex.slice(2, 4), 16),
+        b: parseInt(hex.slice(4, 6), 16)
+    };
+    if (_parsedHexColors.size >= 2048) _parsedHexColors.clear();
+    _parsedHexColors.set(color, rgb);
+    return rgb;
+}
+
+function _rgbToHex(rgb) {
+    if (!rgb) return '#ffffff';
+    let toHex = (value) => Math.max(0, Math.min(255, Math.round(value || 0))).toString(16).padStart(2, '0');
+    return `#${toHex(rgb.r)}${toHex(rgb.g)}${toHex(rgb.b)}`;
+}
+
+function _mixHexColors(colorA, colorB, mix) {
+    let a = _parseHexColor(colorA) || { r: 200, g: 206, b: 216 };
+    let b = _parseHexColor(colorB) || { r: 255, g: 255, b: 255 };
+    let t = Math.max(0, Math.min(1, Number(mix) || 0));
+    return _rgbToHex({
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t
+    });
+}
+
+function _hexToRgba(color, alpha = 1) {
+    let rgb = _parseHexColor(color) || { r: 255, g: 255, b: 255 };
+    return `rgba(${rgb.r},${rgb.g},${rgb.b},${Math.max(0, Math.min(1, Number(alpha) || 0))})`;
+}
+
+function _getCachedLitTint(baseTint, lightLevel) {
+    let tint = String(baseTint || '#c8ced8');
+    let bucket = Math.max(0, Math.min(24, Math.round(Math.max(0, Math.min(1, Number(lightLevel) || 0)) * 24)));
+    if (bucket >= 24) return tint;
+    // Per tint, one slot per light bucket: no string key per lookup.
+    let buckets = _litTintCache.get(tint);
+    if (!buckets) {
+        if (_litTintCache.size > 512) _litTintCache.clear();
+        _litTintCache.set(tint, buckets = new Array(24).fill(null));
+    }
+    let cached = buckets[bucket];
+    if (cached) return cached;
+    let rgb = _parseHexColor(tint);
+    if (!rgb) return tint;
+    let lightMul = 0.28 + (bucket / 24) * 0.72;
+    let lit = _rgbToHex({ r: rgb.r * lightMul, g: rgb.g * lightMul, b: rgb.b * lightMul });
+    buckets[bucket] = lit;
+    return lit;
+}
+
+function getDamageFlashColor(target, sourceOwner = null) {
+    if (Number.isFinite(sourceOwner) && sourceOwner >= 0 && typeof getTeamDisplayColor === 'function') {
+        return getTeamDisplayColor(Math.floor(sourceOwner));
+    }
+    let base = get3DRenderOwnerColor(target && target.owner);
+    let rgb = _parseHexColor(base);
+    if (!rgb) return '#ffffff';
+    return _rgbToHex({ r: 255 - rgb.r, g: 255 - rgb.g, b: 255 - rgb.b });
+}
+
+function recordDamageVisual(target, amount, sourceOwner = null) {
+    if (!target) return;
+    // (A building's or floor item's energy may have run out: see gameTick.)
+    if (typeof Unit === 'undefined' || !(target instanceof Unit)) thingStatusWake(target);
+    let dmg = Math.max(0, Number(amount) || 0);
+    if (dmg <= 0.01) return;
+    let maxEnergy = Math.max(1, Number(target.maxEnergy) || Number(target.preComputed && target.preComputed.maxEnergy) || 0);
+    let scaledStrength = Math.min(1, 0.28 + (dmg / maxEnergy) * 3.5);
+    target._damageFlashStart = gameTime;
+    target._damageFlashUntil = Math.max(Number(target._damageFlashUntil) || 0, gameTime + DAMAGE_FLASH_TICKS);
+    target._damageFlashStrength = Math.max(Number(target._damageFlashStrength) || 0, scaledStrength);
+    target._damageFlashColor = getDamageFlashColor(target, sourceOwner);
+    // Units flashing now take the per-object path (see UNIT RENDER SLOTS).
+    if (target.unitType && target.id !== undefined) renderer3dFlashUntil.set(target.id, target._damageFlashUntil);
+}
+const renderer3dFlashUntil = new Map();
+
+function getDamageFlashState(target) {
+    if (!target) return null;
+    let until = Number(target._damageFlashUntil) || 0;
+    let strength = Number(target._damageFlashStrength) || 0;
+    if (until <= 0 || strength <= 0) return null;
+    let now = gameTime + tickAlpha;
+    if (now >= until) return null;
+    let remaining = Math.max(0, until - now);
+    let fade = Math.max(0, Math.min(1, remaining / DAMAGE_FLASH_TICKS));
+    let eased = Math.pow(fade, 0.65);
+    return {
+        color: target._damageFlashColor || getDamageFlashColor(target),
+        alpha: Math.max(0, Math.min(0.85, strength * eased * 0.7)),
+        tintMix: Math.max(0, Math.min(0.8, strength * eased))
+    };
+}
+
+function get3DDamageFlashTint(target, baseColor) {
+    let flash = getDamageFlashState(target);
+    if (!flash) return baseColor;
+    return _mixHexColors(baseColor, flash.color, flash.tintMix);
+}
+
+const RENDERER3D_TOP_TEXTURE_SIZE = 96;
+
+function quantize3DStatusRatio(value, steps = 10) {
+    if (!Number.isFinite(value)) return 0;
+    return Math.max(0, Math.min(steps, Math.round(value * steps)));
+}
+
+function draw3DTopTextureBar(g, x, y, width, height, pct, bgColor, fillColor) {
+    if (!g || width <= 0 || height <= 0) return;
+    let clamped = Math.max(0, Math.min(1, Number(pct) || 0));
+    g.fillStyle = bgColor || '#333';
+    g.fillRect(x, y, width, height);
+    g.fillStyle = fillColor || '#0f0';
+    g.fillRect(x, y, Math.max(1, Math.round(width * clamped)), height);
+}
+
+function draw3DTopTextureStatus(g, status) {
+    if (!g || !status) return;
+    let size = g.canvas && g.canvas.width ? g.canvas.width : RENDERER3D_TOP_TEXTURE_SIZE;
+    let bars = Array.isArray(status.bars) ? status.bars.slice(0, 3) : [];
+    let inset = Math.max(6, Math.round(size * 0.08));
+    let barWidth = size - inset * 2;
+    let barHeight = Math.max(4, Math.round(size * 0.06));
+    let barGap = Math.max(2, Math.round(size * 0.025));
+    let currentY = size - inset - barHeight;
+    for (let i = bars.length - 1; i >= 0; i--) {
+        let bar = bars[i];
+        draw3DTopTextureBar(g, inset, currentY, barWidth, barHeight, bar.pct, bar.bgColor, bar.fillColor);
+        currentY -= barHeight + barGap;
+    }
+    if (status.label) {
+        g.textAlign = 'center';
+        g.textBaseline = 'top';
+        g.lineJoin = 'round';
+        g.lineWidth = Math.max(2, Math.round(size * 0.035));
+        g.strokeStyle = status.strokeColor || 'rgba(0,0,0,0.95)';
+        g.fillStyle = status.color || '#ddd';
+        g.font = `700 ${Math.max(10, Math.round(size * 0.18))}px Segoe UI, Arial, sans-serif`;
+        g.strokeText(String(status.label), size * 0.5, inset - 1);
+        g.fillText(String(status.label), size * 0.5, inset - 1);
+    }
+}
+
+function build3DStatusTextureOptions(label, bars) {
+    let normalizedBars = [];
+    let keyParts = [];
+    for (let bar of bars || []) {
+        if (!bar || !Number.isFinite(bar.pct) || bar.pct <= 0) continue;
+        let pct = Math.max(0, Math.min(1, Number(bar.pct) || 0));
+        let bucket = quantize3DStatusRatio(pct, 12);
+        let entry = {
+            pct,
+            bgColor: bar.bgColor || '#333',
+            fillColor: bar.fillColor || '#0f0'
+        };
+        normalizedBars.push(entry);
+        keyParts.push(`${entry.bgColor}:${entry.fillColor}:${bucket}`);
+    }
+    let normalizedLabel = label ? String(label) : '';
+    if (normalizedLabel) keyParts.unshift(`label:${normalizedLabel}`);
+    return {
+        label: normalizedLabel,
+        bars: normalizedBars,
+        keySuffix: keyParts.join('|')
+    };
+}
+
+function get3DBuildingTextureStatus(entity, extraBars = []) {
+    let bars = [];
+    let maxEnergy = Number(entity && entity.maxEnergy) || 0;
+    let energy = Math.max(0, Math.min(Number(entity && entity.energy) || 0, maxEnergy));
+    let isProgress = !!(entity && (entity.underConstruction || entity.isUpgrading));
+
+    // Don't show upgrading progress if at max level
+    if (isProgress && entity) {
+        let baseLevel = getThingBaseLevel(entity);
+        let maxLevel = getThingResearchedMaxLevel(entity);
+        if (baseLevel >= maxLevel) {
+            isProgress = false;
+        }
+    }
+
+    let manualStacks = Number(entity && entity.manualStacks);
+    let stackedStacks = Number(entity && entity.stacks);
+    let hasStackQueue = (Number.isFinite(manualStacks) && Number.isFinite(stackedStacks))
+        ? (manualStacks > stackedStacks)
+        : (!!entity && getThingManualStacks(entity) > getThingStackedStacks(entity));
+
+    // Don't show stacking progress if next stack would exceed max level
+    if (hasStackQueue && entity) {
+        let nextStackLevel = stackCountToLevel(getThingStackedStacks(entity) + 1);
+        let maxLevel = getThingResearchedMaxLevel(entity);
+        if (nextStackLevel > maxLevel) {
+            hasStackQueue = false;
+        }
+    }
+
+    if (hasStackQueue) {
+        bars.push({ pct: getThingStackingProgressRatio(entity), bgColor: '#11291c', fillColor: '#2fd27f' });
+    }
+    if (maxEnergy > 0 && (isProgress || hasStackQueue || energy < maxEnergy)) {
+        bars.push({ pct: maxEnergy > 0 ? energy / maxEnergy : 0, bgColor: isProgress ? '#333' : '#600', fillColor: isProgress ? '#fa0' : '#0f0' });
+    }
+    for (let bar of extraBars) bars.push(bar);
+    return build3DStatusTextureOptions(entity && entity.textCanvas && shouldShowBuildingLevels(entity) ? getLevelLabelText(entity) : '', bars);
+}
+
+function get3DConstructionAlpha(entity) {
+    if (!entity) return 1;
+    if (entity.underConstruction) return 0.25;
+    return 1;
+}
+
+function get3DConstructionLift(entity) {
+    if (!entity) return 0;
+    if (entity.underConstruction) return 0.03;
+    return 0;
+}
+
+function get3DUnitStatusGlyph(unit) {
+    if (!unit) return null;
+    let energyBlocked = Number.isFinite(unit._energyBlockedUntil) && gameTime < unit._energyBlockedUntil;
+    if (unit.workerType === 'astar_collector') {
+        return { symbol: unit.carryingValue > 0 ? '★' : '☆', color: unit.carryingValue > 0 ? '#ddd' : '#888' };
+    }
+    if (unit.carryingValue > 0) {
+        return { symbol: '⚡', color: '#fd0' };
+    }
+    if (unit.workerType === 'builder' && unit.workerState) {
+        if (unit.workerState === 'RETURNING_FOR_GOLD') return { symbol: '⚡', color: energyBlocked ? '#f55' : '#fd0' };
+        if (unit.workerState === 'MOVING_TO_BUILD' || unit.workerState === 'BUILDING_IN_PLACE') return { symbol: '🔨', color: '#fa0' };
+    }
+    if (unit.workerType === 'healer' && unit.workerState) {
+        if (unit.workerState === 'RETURNING_FOR_GOLD') return { symbol: '⚡', color: energyBlocked ? '#f55' : '#fd0' };
+        if (unit.workerState === 'MOVING_TO_HEAL' || unit.workerState === 'HEALING') return { symbol: '+', color: '#fff' };
+    }
+    if (unit.workerType === 'researcher' && unit.workerState) {
+        if (unit.workerState === 'RETURNING_FOR_GOLD' || !unit.researcherHasMaterial) return { symbol: '⚡', color: energyBlocked ? '#f55' : '#fd0' };
+        if (unit.workerState === 'MOVING_TO_RESEARCH' || unit.workerState === 'RESEARCHING') return { symbol: 'R', color: '#7bf' };
+    }
+    return null;
+}
+
+function get3DUnitTextureStatus(unit) {
+    let bars = [];
+    let maxEnergy = Number(unit && unit.preComputed && unit.preComputed.maxEnergy);
+    if (unit && unit.energy < maxEnergy) {
+        bars.push({ pct: Math.max(0, unit.energy / Math.max(1, maxEnergy)), bgColor: '#600', fillColor: '#0f0' });
+    }
+    let status = build3DStatusTextureOptions(shouldShowUnitLevels(unit) ? getUnitLevelLabelText(unit) : '', bars);
+    let glyph = get3DUnitStatusGlyph(unit);
+    if (glyph) {
+        status.glyphSymbol = glyph.symbol;
+        status.glyphColor = glyph.color;
+        status.keySuffix = status.keySuffix ? `${status.keySuffix}|glyph:${glyph.symbol}:${glyph.color}` : `glyph:${glyph.symbol}:${glyph.color}`;
+    }
+    return status;
+}
+
+function get3DTopTextureCanvas(key, drawFn) {
+    let cached = renderer3dTopTextureCache.get(key);
+    if (cached) return cached;
+    let canvas = document.createElement('canvas');
+    canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
+    canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
+    let g = canvas.getContext('2d');
+    if (!g) return null;
+    g.clearRect(0, 0, canvas.width, canvas.height);
+    g.imageSmoothingEnabled = false;
+    drawFn(g, canvas);
+    renderer3dTopTextureCache.set(key, canvas);
+    return canvas;
+}
+
+const renderer3dExact2DTextureCache = new Map();
+const RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX = 1024;
+let renderer3dExactTextureFrame = 0;
+let renderer3dExactTextureBuildsRemaining = 12;
+let renderer3dExactTextureTimeRemaining = 2;
+let renderer3dExactUnitTextureBuildsRemaining = 12;
+let renderer3dExactUnitTextureTimeRemaining = 2;
+
+// Evicted panel canvases are redrawn for new signatures: creating a canvas
+// and its context cost several times the drawing. Every drawing gets a new
+// _textureVersion, so holders of a recycled canvas (GPU caches, cached
+// scene objects) see that it changed. Holders that keep a panel across
+// frames without looking it up mark it used (_touch3DPanel).
+const renderer3dPanelPool = [];
+const RENDERER3D_PANEL_POOL_MAX = 256;
+let renderer3dPanelSerial = 0;
+
+function _touch3DPanel(panel) {
+    if (panel && panel._panelCtx) panel._usedFrame = renderer3dExactTextureFrame;
+}
+
+// Structure layer state (see build3DFrameData, STRUCTURE LAYER).
+let renderer3dStaticLayer = null;
+let renderer3dStaticLayerVersion = 0;
+// Set when _reuseStatic3DObject serves a structure from its cache.
+let _staticReuseHit = false;
+
+// Structures whose activity effects play every frame (_pushStructureActivity).
+function _structureHasActivity(entity) {
+    if (!entity || entity.underConstruction) return false;
+    return entity.type === 'house' || entity.type === 'research' || !!(entity.spawnQueue && entity.spawnQueue.length);
+}
+
+function _pin3DPanelToStatic(panel, version) {
+    if (panel && panel._panelCtx) { panel._usedFrame = renderer3dExactTextureFrame; panel._staticPin = version; }
+}
+
+// Panels drawn by the unit layer stay in use for its whole life (until the
+// next build) without a touch per frame.
+function _pin3DPanelToLayer(panel, version) {
+    if (panel && panel._panelCtx) { panel._usedFrame = renderer3dExactTextureFrame; panel._layerPin = version; }
+}
+
+function cache3DExact2DTexture(signature, panel) {
+    panel._usedFrame = renderer3dExactTextureFrame;
+    renderer3dExact2DTextureCache.set(signature, panel);
+}
+
+function getCached3DExact2DTexture(signature) {
+    let panel = renderer3dExact2DTextureCache.get(signature);
+    if (panel) panel._usedFrame = renderer3dExactTextureFrame;
+    return panel;
+}
+
+function begin3DTextureFrame() {
+    renderer3dExactTextureFrame++;
+    // Match the GPU cache: the visible working set may exceed the idle budget.
+    // Evict only unused entries, once per frame, rather than evicting panels
+    // that an earlier entity just used and rebuilding them on the next frame.
+    if (renderer3dExact2DTextureCache.size <= RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX) return;
+    for (let [key, panel] of renderer3dExact2DTextureCache) {
+        if (panel._usedFrame >= renderer3dExactTextureFrame - 2) continue;
+        // (Guarded: some tests load parts of this file.)
+        if (typeof renderer3dUnitLayer !== 'undefined' && renderer3dUnitLayer && panel._layerPin === renderer3dUnitLayer.version) continue;
+        if (typeof renderer3dStaticLayer !== 'undefined' && renderer3dStaticLayer && panel._staticPin === renderer3dStaticLayer.version) continue;
+        renderer3dExact2DTextureCache.delete(key);
+        if (panel._panelCtx && renderer3dPanelPool.length < RENDERER3D_PANEL_POOL_MAX) renderer3dPanelPool.push(panel);
+        if (renderer3dExact2DTextureCache.size <= RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX) break;
+    }
+}
+
+function quantize3DExactRatio(value, maximum) {
+    if (!(maximum > 0)) return 0;
+    return Math.round(Math.max(0, Math.min(1, (Number(value) || 0) / maximum)) * RENDERER3D_TOP_TEXTURE_SIZE);
+}
+
+// Each entity's last visual signature lives on it (entity._r3dSig): a
+// property read instead of a WeakMap lookup per visible entity.
+const renderer3dSignatureScratch = [];
+
+function get3DExact2DVisualSignature(entity, isUnit = false) {
+    if (!entity) return '';
+    let researchTask = entity.researchTask || null;
+    let maxEnergy = Number(entity.maxEnergy)
+        || Number(entity.preComputed && entity.preComputed.maxEnergy)
+        || Number(entity.preComputedEffective && entity.preComputedEffective.maxEnergy)
+        || 0;
+    // Unit panels omit attacks (drawn as effects), so a fight does not
+    // re-rasterize every attacking unit's panel each tick.
+    let activeAttack = !isUnit;
+    let attackTarget = activeAttack ? entity.attackTarget || null : null;
+    // Filled in place: allocating this per visible entity per frame only fed
+    // the garbage collector, as unchanged inputs reuse the stored key.
+    let values = renderer3dSignatureScratch, n = 0;
+    values[n++] = entity.type || '';
+    values[n++] = entity.unitType || '';
+    values[n++] = Number(entity.owner) || 0;
+    values[n++] = entity.vis || '';
+    values[n++] = entity.color || '';
+    values[n++] = Math.round((Number(entity.r) || 0) * 10);
+    values[n++] = entity.textCanvas && shouldShowBuildingLevels(entity) ? getLevelLabelText(entity) : '';
+    values[n++] = entity.unitType && shouldShowUnitLevels(entity) ? getUnitLevelLabelText(entity) : '';
+    values[n++] = quantize3DExactRatio(entity.energy, maxEnergy);
+    values[n++] = entity.underConstruction ? 1 : 0;
+    values[n++] = entity.isUpgrading ? 1 : 0;
+    values[n++] = quantize3DExactRatio(entity.stackingWorkDone, Number(entity.stackingWorkRequired) || 0);
+    // (Something queued, whatever its progress: the queue and research bars
+    // are drawn empty then, which says "queued, not being made". Keyed by
+    // progress alone, nothing queued and queued at 0% were one picture: the
+    // one without the bar, until progress first moved.)
+    let queued = !isUnit && entity.spawnQueue && entity.spawnQueue.length > 0 && entity.spawnCooldown > 0;
+    values[n++] = queued ? 1 + quantize3DExactRatio(entity.spawnTimer, Number(entity.spawnCooldown) || 0) : 0;
+    values[n++] = researchTask && researchTask.workRequired > 0 ? 1 + quantize3DExactRatio(researchTask.workDone, Number(researchTask.workRequired) || 0) : 0;
+    values[n++] = Math.round((Number(entity.angle) || 0) * 128);
+    values[n++] = Number(entity.laserState) || 0;
+    values[n++] = Array.isArray(entity.connectedLasers) ? entity.connectedLasers.length : 0;
+    values[n++] = entity.carryingValue > 0 ? 1 : 0;
+    values[n++] = entity.workerState || '';
+    values[n++] = entity.burning > 0 ? 1 : 0;
+    values[n++] = entity.poisoned > 0 ? 1 : 0;
+    values[n++] = entity.frozen > 0 ? 1 : 0;
+    values[n++] = entity.wet > 0 ? 1 : 0;
+    values[n++] = isUnit ? 0 : Number(entity.attackFlash) || 0;
+    values[n++] = activeAttack ? entity.attackStyle || '' : '';
+    values[n++] = attackTarget ? Math.round((Number(attackTarget.x) - Number(entity.x)) / 4) : 0;
+    values[n++] = attackTarget ? Math.round((Number(attackTarget.y) - Number(entity.y)) / 4) : 0;
+    values[n++] = Number.isFinite(entity._energyBlockedUntil) && gameTime < entity._energyBlockedUntil ? 1 : 0;
+    values[n++] = entity.researcherHasMaterial ? 1 : 0;
+    // Keep the interned key when visual inputs are unchanged. Joining and
+    // hashing a long key for every visible unit dominated zoomed-out frames.
+    let previous = entity._r3dSig;
+    if (previous && previous.isUnit === isUnit) {
+        let same = true, stored = previous.values;
+        for (let i = 0; i < n; i++) if (values[i] !== stored[i]) { same = false; break; }
+        if (same) return previous.signature;
+    }
+    let stored = values.slice(0, n);
+    let signature = stored.join('|');
+    entity._r3dSig = { isUnit, values: stored, signature };
+    return signature;
+}
+
+function get3DExact2DCapture(entity, x, y, isUnit) {
+    if (!isUnit) return { centerX: x, centerY: y, extent: TILE };
+
+    let radius = Math.max(1, Number(entity && entity.r) || 8);
+    let halfWidth = radius + 3; // body outline and the energy bar overhang
+    let top = y - radius - 7;  // health bar
+    let bottom = y + radius + 3;
+
+    if (shouldShowUnitLevels(entity)) {
+        let labelSprite = _getUnitLevelTextSprite(getUnitLevelLabelText(entity));
+        halfWidth = Math.max(halfWidth, labelSprite.width * 0.5);
+        top -= labelSprite.height;
+    }
+
+    // Worker/carrying glyphs share the health-bar area, but can extend six
+    // logical pixels above and to either side of their center.
+    if (get3DUnitStatusGlyph(entity)) {
+        halfWidth = Math.max(halfWidth, 7);
+        top = Math.min(top, y - radius - 15);
+    }
+
+    let left = x - halfWidth;
+    let right = x + halfWidth;
+    let centerY = (top + bottom) * 0.5;
+    return {
+        centerX: (left + right) * 0.5,
+        centerY,
+        extent: Math.max(right - left, bottom - top)
+    };
+}
+
+// Render through the same draw method as the 2D renderer. This deliberately
+// includes its cached level sprite, progress bars, status colors and outlines.
+// Whether the last get3DExact2DTexture call returned a stand-in because this
+// frame's raster budget was spent (cached scene objects must not keep it).
+let renderer3dExactTextureFallback = false;
+// True while a unit panel is rasterized: Unit.draw leaves out attacks.
+let renderer3dPanelRaster = false;
+
+function _rasterize3DPanel(signature, scale, offsetX, offsetY, drawFn) {
+    let canvas = renderer3dPanelPool.pop();
+    if (!canvas) {
+        canvas = document.createElement('canvas');
+        canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
+        canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
+        canvas._panelCtx = canvas.getContext('2d');
+        if (!canvas._panelCtx) return null;
+    }
+    let g = canvas._panelCtx, size = RENDERER3D_TOP_TEXTURE_SIZE;
+    g.imageSmoothingEnabled = false;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalAlpha = 1;
+    g.clearRect(0, 0, size, size);
+    g.save();
+    g.__drawImagesImmediately = true;
+    g.setTransform(scale, 0, 0, scale, offsetX, offsetY);
+    drawFn(g);
+    g.restore();
+    g.__drawImagesImmediately = false;
+    canvas._renderer3DExactKey = `2d:${signature}`;
+    canvas._textureVersion = ++renderer3dPanelSerial;
+    canvas._flatWorldSize = undefined;
+    canvas._flatOffsetZ = undefined;
+    return canvas;
+}
+
+function get3DExact2DTexture(entity, useUnitBudget = false) {
+    renderer3dExactTextureFallback = false;
+    if (!entity || typeof entity.draw !== 'function') return null;
+    let signature = get3DExact2DVisualSignature(entity, useUnitBudget);
+    let cached = getCached3DExact2DTexture(signature);
+    if (cached) {
+        _rememberExact2DTexture(entity, cached);
+        return cached;
+    }
+    // A camera jump must not rasterize hundreds of status panels at once.
+    // Callers already have a shared type/owner sprite as a fallback.
+    // Units are collected after buildings. Give them a separate raster
+    // budget so a dense base cannot permanently starve every unit panel.
+    if (useUnitBudget) {
+        if (renderer3dExactUnitTextureBuildsRemaining <= 0 || renderer3dExactUnitTextureTimeRemaining <= 0) {
+            renderer3dExactTextureFallback = true;
+            return get3DExact2DFallbackTexture(entity, true);
+        }
+        renderer3dExactUnitTextureBuildsRemaining--;
+    } else {
+        if (renderer3dExactTextureBuildsRemaining <= 0 || renderer3dExactTextureTimeRemaining <= 0) {
+            renderer3dExactTextureFallback = true;
+            return get3DExact2DFallbackTexture(entity, false);
+        }
+        renderer3dExactTextureBuildsRemaining--;
+    }
+    let buildStarted = performance.now();
+    let x = Number(entity.x);
+    let y = Number(entity.y);
+    if (!Number.isFinite(x)) x = (Number(entity.gx) || 0) * TILE + TILE * 0.5;
+    if (!Number.isFinite(y)) y = (Number(entity.gy) || 0) * TILE + TILE * 0.5;
+    // Unit labels and status marks live above the body in 2D. Center the
+    // capture on that complete footprint instead of on the body alone; the
+    // old tile-centered crop cut level labels off the mounted panel.
+    let capture = get3DExact2DCapture(entity, x, y, useUnitBudget);
+    let size = RENDERER3D_TOP_TEXTURE_SIZE;
+    let scale = (size - 8) / Math.max(1, capture.extent);
+    renderer3dPanelRaster = useUnitBudget;
+    let panel;
+    try {
+        panel = _rasterize3DPanel(signature, scale, size * 0.5 - capture.centerX * scale, size * 0.5 - capture.centerY * scale,
+            g => entity.draw(g));
+    } finally {
+        renderer3dPanelRaster = false;
+    }
+    if (!panel) return null;
+    // Flat sprites include the capture padding and the label's offset above
+    // the entity. Model footprints are deliberately unrelated to these sizes.
+    panel._flatWorldSize = size / scale / TILE;
+    panel._flatOffsetZ = (capture.centerY - y) / TILE;
+    cache3DExact2DTexture(signature, panel);
+    _rememberExact2DTexture(entity, panel);
+    let buildTime = performance.now() - buildStarted;
+    if (useUnitBudget) renderer3dExactUnitTextureTimeRemaining -= buildTime;
+    else renderer3dExactTextureTimeRemaining -= buildTime;
+    return panel;
+}
+
+// While the raster budget is spent, keep showing the 2D look rather than a
+// generic boxed placeholder: first the entity's own previous panel (at most
+// a few frames stale), else for units the plain 2D body at the same framing,
+// shared by every unit of that type, owner and footprint. The version tells
+// whether the previous panel's canvas was since recycled for another.
+// Kept on the entity (entity._r3dTex), as the signature above.
+
+function _rememberExact2DTexture(entity, panel) {
+    let last = entity._r3dTex;
+    if (!last) entity._r3dTex = last = { panel: null, version: 0 };
+    last.panel = panel;
+    last.version = panel._textureVersion;
+}
+
+function get3DExact2DFallbackTexture(entity, isUnit) {
+    let previous = entity._r3dTex;
+    if (previous && previous.panel._textureVersion === previous.version) {
+        _touch3DPanel(previous.panel);
+        return previous.panel;
+    }
+    if (!isUnit) return null;
+    let x = Number(entity.x) || 0, y = Number(entity.y) || 0;
+    let capture = get3DExact2DCapture(entity, x, y, true);
+    let signature = `body|${entity.unitType || ''}|${Number(entity.owner) || 0}|${entity.vis || ''}|${entity.color || ''}|`
+        + `${Math.round((Number(entity.r) || 0) * 10)}|${entity.carryingValue > 0 ? 1 : 0}|`
+        + `${Math.round(capture.extent * 4)}|${Math.round((capture.centerX - x) * 4)}|${Math.round((capture.centerY - y) * 4)}`;
+    let cached = getCached3DExact2DTexture(signature);
+    if (cached) return cached;
+    let size = RENDERER3D_TOP_TEXTURE_SIZE;
+    let scale = (size - 8) / Math.max(1, capture.extent);
+    let ownerId = Number(entity.owner);
+    let panel = _rasterize3DPanel(signature, scale, size * 0.5 - capture.centerX * scale, size * 0.5 - capture.centerY * scale,
+        g => drawUnitBodyGeometry(g, entity, ownerId >= 0 ? get2DRenderOwnerColor(ownerId) : '#000', 1));
+    if (!panel) return null;
+    panel._flatWorldSize = size / scale / TILE;
+    panel._flatOffsetZ = (capture.centerY - y) / TILE;
+    cache3DExact2DTexture(signature, panel);
+    return panel;
+}
+
+// A tile-sized panel (floor items, mines), cached by signature.
+function _get3DExact2DTilePanel(signature, drawFn) {
+    let cached = getCached3DExact2DTexture(signature);
+    if (cached) return cached;
+    let size = RENDERER3D_TOP_TEXTURE_SIZE;
+    let scale = (size - 8) / TILE;
+    let panel = _rasterize3DPanel(signature, scale, size * 0.5 - TILE * 0.5 * scale, size * 0.5 - TILE * 0.5 * scale, drawFn);
+    if (panel) cache3DExact2DTexture(signature, panel);
+    return panel;
+}
+
+function get3DExact2DFloorTexture(item, owner) {
+    if (!item) return null;
+    let signature = `floor|${Number(owner) || 0}|${get3DExact2DVisualSignature(item)}|${_getFloorItemEnergyBucket(item)}`;
+    return _get3DExact2DTilePanel(signature, g => drawFloorItem(g, { item, owner }, 0, 0));
+}
+
+function get3DExact2DMineTexture(kind, amount) {
+    let active = Number(amount) > 0;
+    let label = showGoldMineAmountText ? formatBigNumber(Math.max(0, Number(amount) || 0), 0) : '';
+    let signature = `mine|${kind}|${active ? 1 : 0}|${label}`;
+    return _get3DExact2DTilePanel(signature, g => {
+        queueDrawImage(g, kind === 'astar' ? _getAstarMineTileSprite(active) : _getGoldMineTileSprite(active), 0, 0, TILE, TILE);
+        if (label) {
+            g.font = 'bold 8px Arial';
+            g.textAlign = 'center';
+            g.textBaseline = 'middle';
+            g.shadowColor = 'rgba(0,0,0,0.9)';
+            g.shadowBlur = 2;
+            g.fillStyle = kind === 'astar' ? (active ? '#f0f0f0' : '#999') : (active ? '#fffbe8' : '#bbb');
+            g.fillText(label, TILE * 0.5, TILE * 0.5);
+        }
+    });
+}
+
+function get3DUnitSideVisualizationVariant(unit) {
+    let unitType = String((unit && unit.unitType) || 'norm');
+    switch (unitType) {
+        case 'collector': return 'collector';
+        case 'astar_collector': return 'astar_collector';
+        case 'builder_unit': return 'builder_unit';
+        case 'healer_unit': return 'healer_unit';
+        case 'researcher_unit': return 'researcher_unit';
+        case 'salvager_unit': return 'salvager_unit';
+        case 'king': return 'king';
+        case 'snake': return 'snake';
+        case 'flying':
+        case 'scout': return 'tower_watch';
+        case 'tank':
+        case 'boss': return 'barrack';
+        case 'fire_resistant': return 'tower_fire';
+        case 'water_resistant': return 'tower_water';
+        case 'ice_resistant': return 'tower_ice';
+        case 'poison_resistant': return 'tower_poison';
+        case 'laser_resistant': return 'tower_laser';
+        default: return 'unit_default';
+    }
+}
+
+function get3DTowerSideVisualizationVariant(tower) {
+    switch (String((tower && tower.type) || '')) {
+        case 'watch_tower': return 'tower_watch';
+        case 'laser': return 'tower_laser';
+        case 'sniper': return 'tower_sniper';
+        case 'fire': return 'tower_fire';
+        case 'water': return 'tower_water';
+        case 'poison': return 'tower_poison';
+        case 'ice': return 'tower_ice';
+        case 'sand_gun': return 'tower_sand';
+        case 'elements': return 'tower_elements';
+        default: return 'tower_default';
+    }
+}
+
+function get3DSpawnerSideVisualizationVariant(spawner) {
+    switch (String((spawner && spawner.type) || '')) {
+        case 'astar_spawner': return 'spawner_astar';
+        case 'salvager': return 'spawner_salvager';
+        case 'builder_spawner': return 'builder_unit';
+        case 'healer_spawner': return 'spawner_healer';
+        case 'research': return 'spawner_research';
+        default: return 'spawner_energy';
+    }
+}
+
+// Rear landmarks reach about .86 world units, matching the portal lintel.
+// Workshop meshes use a 1.39-high landmark at this scale; decks stay low.
+function get3DStructureModelHeight(type) {
+    // Barracks and worker buildings are flat workshop yards (deck plus
+    // features along the back edge); one height keeps the skyline even.
+    return 0.62;
+}
+
+function get3DFloorItemSideVisualizationVariant(item) {
+    switch (String((item && item.type) || '')) {
+        case 'farm': return 'farm';
+        case 'astar_farm': return 'astar_farm';
+        case 'mine': return 'floor_mine';
+        case 'lava': return 'lava';
+        case 'water_puddle': return 'water_puddle';
+        case 'poison_puddle': return 'poison_puddle';
+        case 'ice_patch': return 'ice_patch';
+        case 'sand': return 'tower_sand';
+        case 'house': return 'house';
+        default: return 'unit_default';
+    }
+}
+
+function draw3DSpriteIntoTopTexture(g, sprite, inset = 8) {
+    if (!g || !sprite) return;
+    let canvasSize = g.canvas && g.canvas.width ? g.canvas.width : RENDERER3D_TOP_TEXTURE_SIZE;
+    let size = Math.max(8, canvasSize - inset * 2);
+    g.drawImage(sprite, inset, inset, size, size);
+}
+
+function get3DUnitTopTexture(unitOrType, owner, statusOptions = null) {
+    let unitType = typeof unitOrType === 'string' ? unitOrType : (unitOrType && unitOrType.unitType);
+    let stats = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm;
+    let color = stats.color || '#fff';
+    let vis = stats.vis || 'circle';
+    let ownerColor = get3DRenderOwnerColor(owner);
+    let key = `unit:${unitType}:${owner}:${statusOptions && statusOptions.keySuffix ? statusOptions.keySuffix : ''}`;
+    return get3DTopTextureCanvas(key, (g) => {
+        let size = g.canvas.width;
+        let inset = Math.round(size * 0.12);
+        let innerSize = size - inset * 2;
+        g.fillStyle = 'rgba(0,0,0,0.45)';
+        g.fillRect(inset, inset, innerSize, innerSize);
+        g.strokeStyle = ownerColor;
+        g.lineWidth = 3;
+        g.strokeRect(inset + 0.5, inset + 0.5, innerSize - 1, innerSize - 1);
+        g.strokeStyle = '#111';
+        g.lineWidth = 2;
+        g.fillStyle = color;
+        if (vis === 'triangle') {
+            g.beginPath();
+            g.moveTo(size * 0.5, size * 0.28);
+            g.lineTo(size * 0.28, size * 0.7);
+            g.lineTo(size * 0.72, size * 0.7);
+            g.closePath();
+            g.fill();
+            g.stroke();
+            let marked = typeof unitTypeMark === 'function' ? unitTypeMark(stats.unitType || unitType) : '';
+            if (marked) drawUnitTypeMark(g, marked, size * 0.5, size * 0.57, size * 0.2);
+        } else if (vis === 'snake') {
+            g.fillStyle = color;
+            g.beginPath();
+            g.ellipse(size * 0.5, size * 0.48, size * 0.16, size * 0.22, 0, 0, Math.PI * 2);
+            g.fill();
+            g.strokeStyle = '#111';
+            g.lineWidth = 2;
+            g.beginPath();
+            g.ellipse(size * 0.5, size * 0.48, size * 0.16, size * 0.22, 0, 0, Math.PI * 2);
+            g.stroke();
+            g.fillStyle = '#111';
+            g.beginPath();
+            g.arc(size * 0.46, size * 0.42, Math.max(1.5, size * 0.018), 0, Math.PI * 2);
+            g.fill();
+            g.beginPath();
+            g.arc(size * 0.54, size * 0.42, Math.max(1.5, size * 0.018), 0, Math.PI * 2);
+            g.fill();
+            g.strokeStyle = '#f66';
+            g.lineWidth = Math.max(1, Math.round(size * 0.015));
+            g.beginPath();
+            g.moveTo(size * 0.5, size * 0.62);
+            g.lineTo(size * 0.47, size * 0.69);
+            g.moveTo(size * 0.5, size * 0.62);
+            g.lineTo(size * 0.53, size * 0.69);
+            g.stroke();
+        } else if (vis === 'star') {
+            if (unitType === 'collector' || unitType === 'astar_collector') {
+                g.font = `700 ${Math.round(size * 0.34)}px Arial`;
+                g.textAlign = 'center';
+                g.textBaseline = 'middle';
+                g.fillStyle = unitType === 'collector' ? '#ffd34d' : '#f4f4f4';
+                g.fillText(unitType === 'collector' ? '⚡' : '★', size * 0.5, size * 0.52);
+            } else {
+                drawCachedUnitStar(g, size * 0.5, size * 0.5, Math.round(size * 0.18), color, '#111', 2);
+            }
+        } else if (vis === 'triangle_down') {
+            g.beginPath();
+            g.moveTo(size * 0.5, size * 0.72);
+            g.lineTo(size * 0.28, size * 0.34);
+            g.lineTo(size * 0.72, size * 0.34);
+            g.closePath();
+            g.fill();
+            g.stroke();
+        } else if (vis === 'mole') {
+            g.beginPath();
+            g.ellipse(size * 0.5, size * 0.5, size * 0.18, size * 0.24, 0, 0, Math.PI * 2);
+            g.fill();
+            g.stroke();
+        } else if (vis === 'rect') {
+            g.fillRect(size * 0.28, size * 0.34, size * 0.44, size * 0.3);
+            g.strokeRect(size * 0.28, size * 0.34, size * 0.44, size * 0.3);
+        } else if (vis === 'king') {
+            g.beginPath();
+            g.moveTo(size * 0.28, size * 0.66);
+            g.lineTo(size * 0.28, size * 0.4);
+            g.lineTo(size * 0.39, size * 0.48);
+            g.lineTo(size * 0.5, size * 0.28);
+            g.lineTo(size * 0.61, size * 0.48);
+            g.lineTo(size * 0.72, size * 0.4);
+            g.lineTo(size * 0.72, size * 0.66);
+            g.closePath();
+            g.fill();
+            g.stroke();
+        } else {
+            g.beginPath();
+            g.arc(size * 0.5, size * 0.5, size * 0.18, 0, Math.PI * 2);
+            g.fill();
+            g.stroke();
+        }
+        // Owner dot removed in favor of border
+        if (statusOptions && statusOptions.glyphSymbol) {
+            g.textAlign = 'center';
+            g.textBaseline = 'middle';
+            g.font = `700 ${Math.max(11, Math.round(size * 0.2))}px Segoe UI Emoji, Segoe UI Symbol, Segoe UI, Arial, sans-serif`;
+            g.fillStyle = statusOptions.glyphColor || '#fff';
+            g.fillText(String(statusOptions.glyphSymbol), size * 0.5, size * 0.26);
+        }
+        draw3DTopTextureStatus(g, statusOptions);
+    });
+}
+
+function get3DWorkshopSignTexture(type) {
+    return get3DTopTextureCanvas('workshop-sign:' + type, g => {
+        let size = g.canvas.width;
+        g.fillStyle = '#543'; g.fillRect(0, 0, size, size);
+        // Compensate for the broad billboard so its emblem stays proportional.
+        g.save(); g.translate(size * .5, size * .5); g.scale(.64, 1);
+        drawWorkerBuildingEmblem(g, 0, 0, size / 24, type);
+        g.restore();
+    });
+}
+
+function get3DBuildingTopTexture(kind, owner, options = {}) {
+    let key = `${kind}:${owner}:${options.subtype || ''}:${options.active ? 1 : 0}:${options.angleKey || ''}:${options.statusKey || ''}`;
+    return get3DTopTextureCanvas(key, (g) => {
+        let ownerColor = get3DRenderOwnerColor(owner);
+        let size = g.canvas.width;
+        let inset = Math.round(size * 0.12);
+        let innerSize = size - inset * 2;
+        g.fillStyle = 'rgba(0,0,0,0.45)';
+        g.fillRect(inset, inset, innerSize, innerSize);
+        g.strokeStyle = ownerColor;
+        g.lineWidth = 3;
+        g.strokeRect(inset + 0.5, inset + 0.5, innerSize - 1, innerSize - 1);
+        if (kind === 'tower') {
+            let sprite = _getTowerIconSprite(options.color || '#999', options.angle || 0, options.subtype || '', !!options.active);
+            draw3DSpriteIntoTopTexture(g, sprite, inset);
+            draw3DTopTextureStatus(g, options.status);
+            return;
+        }
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        if (kind === 'barrack') {
+            g.fillStyle = '#664';
+            g.beginPath();
+            g.moveTo(size * 0.22, size * 0.38); g.lineTo(size * 0.78, size * 0.38); g.lineTo(size * 0.5, size * 0.16); g.closePath(); g.fill();
+            g.fillStyle = options.color || '#fff';
+            g.beginPath(); g.arc(size * 0.5, size * 0.62, size * 0.12, 0, Math.PI * 2); g.fill();
+        } else if (kind.startsWith('spawner_')) {
+            let type = { spawner_energy: 'spawner', spawner_astar: 'astar_spawner', spawner_salvager: 'salvager',
+                spawner_builder: 'builder_spawner', spawner_healer: 'healer_spawner', spawner_research: 'research' }[kind];
+            drawWorkerBuildingEmblem(g, size * .5, size * .5, size * .56 / 24, type);
+        }
+        draw3DTopTextureStatus(g, options.status);
+    });
+}
+
+function get3DTopTextureForFloorItem(item, statusOptions = null) {
+    if (!item) return null;
+    let sprite = _getFloorItemSprite(item);
+    let key = `item:${item.type}:${_getFloorItemEnergyBucket(item)}:${statusOptions && statusOptions.keySuffix ? statusOptions.keySuffix : ''}`;
+    return get3DTopTextureCanvas(key, (g) => {
+        draw3DSpriteIntoTopTexture(g, sprite, Math.round(g.canvas.width * 0.12));
+        draw3DTopTextureStatus(g, statusOptions);
+    });
+}
+
+function build3DOverlayData(bounds, alpha) {
+    let overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: [], bars: [], texts: [] };
+    let activeSelectedEntities = getActiveEntities();
+    let activeSelectedUnits = getActiveUnitsForRender();
+    overlays.selectionMask = getSelectionMaskOverlay();
+    overlays.selectionContours = overlays.selectionMask ? [] : getSelectionContours(activeSelectedEntities, activeSelectedUnits, alpha, get3DRenderOwnerColor);
+    overlays.selectionDashed = selectionOutlineType === OVERLAY_LINE_DOTTED;
+    overlays.selectionSeeThrough = selectionOutlineSeeThrough;
+    overlays.worldTileSize = TILE;
+    let pushLine = (x1, y1, x2, y2, color, dashed = false) => overlays.lines.push({ x1: x1 / TILE, z1: y1 / TILE, x2: x2 / TILE, z2: y2 / TILE, color, dashed });
+    let markerKeys = new Set();
+    let pushMarker = (x, y, kind, color) => {
+        let key = `${x}|${y}|${kind}|${color}`;
+        if (markerKeys.has(key)) return;
+        markerKeys.add(key);
+        overlays.markers.push({ x: x / TILE, z: y / TILE, kind, color });
+    };
+    let pushSalvageCross = (worldX, worldY) => {
+        let span = TILE * 0.34;
+        pushLine(worldX - span, worldY - span, worldX + span, worldY + span, '#f44');
+        pushLine(worldX + span, worldY - span, worldX - span, worldY + span, '#f44');
+    };
+    // (Big selections: their rally points as markers only, getOrderMarkers.)
+    const fewEntities = activeSelectedEntities.length <= SELECTED_UNIT_LINES_MAX;
+    for (let m of getOrderMarkers()) pushMarker(m.x * TILE, m.z * TILE, m.kind, m.color);
+    for (let ent of fewEntities ? activeSelectedEntities : []) {
+        if (!ent || (ent.energy !== undefined && ent.energy <= 0)) continue;
+        let ex = ent.x || (ent.gx * TILE + TILE * 0.5);
+        let ey = ent.y || (ent.gy * TILE + TILE * 0.5);
+
+        if (_isRallySpawnerType(ent.type) && ent.owner === localPlayerId) {
+            let rallyTarget = getBuildingOrderTarget(ent);
+            if (rallyTarget) {
+                if (showRallyLinesForBuildings()) pushLine(ex, ey, rallyTarget.x, rallyTarget.y, '#9aa', rallyLineType === OVERLAY_LINE_DOTTED);
+            }
+        }
+
+        if (ent instanceof Tower && ent.owner === localPlayerId) {
+            let marker = resolveTowerPreferredTargetVisual(ent);
+            if (marker && Number.isFinite(marker.x) && Number.isFinite(marker.y)) {
+                if (showRallyLinesForBuildings()) pushLine(ex, ey, marker.x, marker.y, marker.locked ? '#9cf' : 'rgba(153,204,255,0.55)', false);
+                pushMarker(marker.x, marker.y, showRallyLinesForBuildings() ? 'dot' : 'plus', '#9cf');
+            }
+        }
+
+    }
+
+    // The team's whole range: what it sees, drawn on the GPU from the sight
+    // grid; other modes: the areas their sources reach, also outlined on the
+    // GPU (renderer3d drawRangeVisibility).
+    overlays.rangeVisibility = getRangeGpuOverlay(activeSelectedEntities, activeSelectedUnits);
+    overlays.rangeLines = overlays.rangeVisibility ? [] : clipRangeBoundaryToBounds(getRenderRangeBoundary(activeSelectedEntities, activeSelectedUnits),
+        bounds.minGx - 1, bounds.minGy - 1, bounds.maxGx + 2, bounds.maxGy + 2);
+    overlays.rangeSeeThrough = renderRangeSeeThrough;
+
+    for (let u of activeSelectedUnits.length <= SELECTED_UNIT_LINES_MAX ? activeSelectedUnits : []) {
+        if (!u || u.dead || u.owner !== localPlayerId || !showRallyLinesForUnits()) continue;
+        let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
+        let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
+        const target = getUnitOrderTarget(u);
+        if (target) pushLine(ux, uy, target.x, target.y, target.color, rallyLineType === OVERLAY_LINE_DOTTED);
+    }
+
+    // (Marked structures gathered once a tick, not every structure a frame.)
+    for (let t of _salvageMarkedStructures()) {
+        if (t.gx < bounds.minGx - 1 || t.gx > bounds.maxGx + 1 || t.gy < bounds.minGy - 1 || t.gy > bounds.maxGy + 1) continue;
+        if (!fullVisibility && (!visibilityGrid[t.gy] || visibilityGrid[t.gy][t.gx] === 0)) continue;
+        pushSalvageCross(t.x, t.y);
+    }
+
+    // Marked floor items: gathered once a tick with the structures.
+    if (typeof _activeTileEntities !== 'undefined') {
+        for (const item of _salvageMarkedFloorItems()) {
+            const x = item.gx, y = item.gy;
+            if (x < bounds.minGx || x > bounds.maxGx || y < bounds.minGy || y > bounds.maxGy) continue;
+            if (grid[y] && grid[y][x] && grid[y][x].item === item && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0)))
+                pushSalvageCross(x * TILE + TILE * .5, y * TILE + TILE * .5);
+        }
+    } else {
+        for (let y = bounds.minGy; y <= bounds.maxGy; y++) {
+            let gridRow = grid[y];
+            let visRow = visibilityGrid[y];
+            if (!gridRow) continue;
+            for (let x = bounds.minGx; x <= bounds.maxGx; x++) {
+                let cell = gridRow[x];
+                if (!cell || !cell.item) continue;
+                if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
+                if (cell.item.markedForSalvage) pushSalvageCross(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5);
+            }
+        }
+    }
+
+    return overlays;
+}
+
+function getVisualUnitSourceLight(unit) {
+    if (!unit || !unit.unitType || unit.dead || unit._historyGhost) return 0;
+    // A unit view (sim_frame.js): the worker's value for this player. (A
+    // barrack's view comes here too, as a light source with a unitType: the
+    // structure path below.)
+    if (unit._frameView && typeof unit._col === 'function') return unit._col('light');
+    if (unit.owner !== localPlayerId && !(unit.watched > 0 && unit.watchedByTeam === localPlayerId)) return 0;
+    // (A source lights its own area to the full, whatever its range: see
+    // the frame's light column, presentation_worker.js.)
+    let range = getEntityEffectiveVisibilityRangeTiles(unit);
+    return Number.isFinite(range) && range > 0 ? Math.max(range, VISIBILITY_LIGHT_NORMALIZATION_RANGE) : 0;
+}
+
+function getRenderLightGradient(gx, gy) {
+    const o = _lightGradientIndex(gx, gy);
+    return Array.from(_lightGradients.values.subarray(o, o + 8));
+}
+
+// Light gradients at a tile's four corners (8 values per tile), cached for
+// one visibility grid version in typed arrays: every visible object reads
+// them each frame. Keys as (gy + 2) * (GRID_W + 4) + gx + 2.
+const _lightGradients = { grid: null, version: -1, width: 0, stamp: 0, stamps: null, values: null };
+
+// Index of the tile's 8 gradient values in _lightGradients.values.
+function _lightGradientIndex(gx, gy) {
+    const version = typeof visibilityVersion === 'number' ? visibilityVersion : 0;
+    const cache = _lightGradients, _vis = visibilityGrid;
+    const width = GRID_W + 4, size = width * ((_vis ? _vis.length : 0) + 4);
+    if (!cache.stamps || cache.stamps.length !== size) {
+        cache.stamps = new Int32Array(size);
+        cache.values = new Float32Array(size * 8 + 8); // + one uncached slot
+        cache.stamp = 0;
+        cache.grid = null;
+    }
+    if (cache.grid !== _vis || cache.version !== version || cache.width !== width) {
+        cache.grid = _vis; cache.version = version; cache.width = width;
+        if (++cache.stamp >= 0x7fffffff) { cache.stamps.fill(0); cache.stamp = 1; }
+    }
+    const key = (gy + 2) * width + gx + 2;
+    const cached = key >= 0 && key < size;
+    if (cached && cache.stamps[key] === cache.stamp) return key * 8;
+    const o = cached ? key * 8 : size * 8, g = cache.values;
+    g[o] = ((_vis[gy] && _vis[gy][gx + 1]) || 0) - ((_vis[gy] && _vis[gy][gx - 1]) || 0);
+    g[o + 1] = ((_vis[gy + 1] && _vis[gy + 1][gx]) || 0) - ((_vis[gy - 1] && _vis[gy - 1][gx]) || 0);
+    g[o + 2] = ((_vis[gy] && _vis[gy][gx + 2]) || 0) - ((_vis[gy] && _vis[gy][gx]) || 0);
+    g[o + 3] = ((_vis[gy + 1] && _vis[gy + 1][gx + 1]) || 0) - ((_vis[gy - 1] && _vis[gy - 1][gx + 1]) || 0);
+    g[o + 4] = ((_vis[gy + 1] && _vis[gy + 1][gx + 1]) || 0) - ((_vis[gy + 1] && _vis[gy + 1][gx - 1]) || 0);
+    g[o + 5] = ((_vis[gy + 2] && _vis[gy + 2][gx]) || 0) - ((_vis[gy] && _vis[gy][gx]) || 0);
+    g[o + 6] = ((_vis[gy + 1] && _vis[gy + 1][gx + 2]) || 0) - ((_vis[gy + 1] && _vis[gy + 1][gx]) || 0);
+    g[o + 7] = ((_vis[gy + 2] && _vis[gy + 2][gx + 1]) || 0) - ((_vis[gy] && _vis[gy][gx + 1]) || 0);
+    if (cached) cache.stamps[key] = cache.stamp;
+    return o;
+}
+
+// Shadow direction at (ox, oz) in tiles from the bilinear light gradient,
+// or the default direction where the light is flat. Written to `out`.
+const _shadowDirScratch = { x: 0, z: 0 };
+function _shadowDirAt(ox, oz, out) {
+    let gx = Math.floor(ox), gy = Math.floor(oz);
+    let fx = ox - gx, fz = oz - gy, ifx = 1 - fx, ifz = 1 - fz;
+    const o = _lightGradientIndex(gx, gy), g = _lightGradients.values;
+    let gradX = g[o] * ifx * ifz + g[o + 2] * fx * ifz + g[o + 4] * ifx * fz + g[o + 6] * fx * fz;
+    let gradZ = g[o + 1] * ifx * ifz + g[o + 3] * fx * ifz + g[o + 5] * ifx * fz + g[o + 7] * fx * fz;
+    let gradLen = Math.hypot(gradX, gradZ);
+    if (gradLen > 0.001) { out.x = gradX / gradLen; out.z = gradZ / gradLen; }
+    else { out.x = DEFAULT_SHADOW_DIR_X; out.z = DEFAULT_SHADOW_DIR_Y; }
+    return out;
+}
+
+function resolveRenderVisionRange(source) {
+    if (!source) return NaN;
+    if (typeof getEntityEffectiveVisibilityRangeTiles === 'function') {
+        let sharedTiles = Number(getEntityEffectiveVisibilityRangeTiles(source));
+        if (Number.isFinite(sharedTiles)) return sharedTiles;
+    }
+    if (source.preComputed && Number.isFinite(source.preComputed.visionRangeArea)) return Number(source.preComputed.visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
+    if (source.currentStats && Number.isFinite(source.currentStats.visionRangeArea)) return Number(source.currentStats.visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
+    if (source.basePreComputed && Number.isFinite(source.basePreComputed.visionRangeArea)) return Number(source.basePreComputed.visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
+    if (source.currentStats && Number.isFinite(source.currentStats.visionRange)) return Number(source.currentStats.visionRange);
+    if (source.preComputed && Number.isFinite(source.preComputed.visionRange)) return Number(source.preComputed.visionRange);
+    if (source.basePreComputed && Number.isFinite(source.basePreComputed.visionRange)) return Number(source.basePreComputed.visionRange);
+
+    let ownerId = Number(source.owner);
+    if (!Number.isFinite(ownerId)) ownerId = 0;
+
+    if (source.unitType) {
+        let unitType = String(source.unitType || 'norm');
+        let unitLevel = 1;
+        if (typeof getDisplayLevel === 'function') {
+            unitLevel = Math.max(1, Math.floor(Number(getDisplayLevel(source)) || 1));
+        }
+        if (typeof getUnitStatForOwner === 'function') {
+            let unitVision = Number(getUnitStatForOwner(ownerId, unitType, unitLevel, 'visionRange'));
+            if (Number.isFinite(unitVision)) return unitVision;
+        }
+        return Number((BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm || {}).visionRange);
+    }
+
+    if (source.type) {
+        let buildingType = String(source.type || '');
+        if (buildingType === 'barrack') {
+            buildingType = `barrack_${String(source.unitType || 'norm')}`;
+        }
+        let buildingLevel = 1;
+        if (typeof getDisplayLevel === 'function') {
+            buildingLevel = Math.max(1, Math.floor(Number(getDisplayLevel(source)) || 1));
+        }
+        if (typeof getBuildingStatForOwner === 'function') {
+            let buildingVision = Number(getBuildingStatForOwner(ownerId, buildingType, buildingLevel, 'visionRange'));
+            if (Number.isFinite(buildingVision)) return buildingVision;
+        }
+        return Number((BASE_CARD_TYPES[buildingType] || {}).visionRange);
+    }
+
+    return NaN;
+}
+
+const RENDER_NO_MODEL_CANDIDATES = Object.freeze([]);
+
+// Whether a render view's grid is the live one (not a remembered history
+// grid), so the live tile indexes describe it.
+// What is made from the units' positions is made again when this changes:
+// the units' frame when they come from one (the simulation worker's: its
+// frames become current on the playout clock, sim_client.js, not when the
+// page's tick moves; a layer made at the page's tick from one frame and
+// drawn with the next frame's interpolation stepped its units back to the
+// old stretch's start, then forward again, every tick), else the tick.
+function unitsRenderStamp() {
+    return typeof simClientCurrentUnitVis === 'function' && simClientCurrentUnitVis() ? -1 - _pageFrameSerial : gameTime;
+}
+
+function _isLiveRenderGrid(viewGrid) {
+    return viewGrid === grid && typeof getCellItemsRowMajor === 'function' && typeof findCellItemRowStart === 'function';
+}
+
+function push3DRenderObject(target, object) {
+    if (!target || !object) return;
+    let ox = Number(object.x) || 0;
+    let oz = Number(object.z) || 0;
+    let gx = Math.floor(ox);
+    let gy = Math.floor(oz);
+    const rememberedSource = object.visibilitySource || object.pickSource;
+    const remembered = !!(rememberedSource && rememberedSource._historyGhost);
+    let lightGrid = remembered ? getRenderVisibilityGrid() : visibilityGrid;
+    let lightRawCenter = fullVisibility ? VISIBILITY_LIGHT_NORMALIZATION_RANGE : ((lightGrid[gy] && lightGrid[gy][gx]) || 0);
+    if (!fullVisibility && object.visibilitySource && object.visibilitySource.unitType) {
+        lightRawCenter = Math.max(lightRawCenter, getVisualUnitSourceLight(object.visibilitySource));
+    }
+    let lightLevel = fullVisibility ? 1 : Math.max(0, Math.min(1, lightRawCenter / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
+    // Bilinear interpolation of gradient across 4 surrounding tile corners to avoid boundary jumps
+    let shadowDirX = DEFAULT_SHADOW_DIR_X;
+    let shadowDirZ = DEFAULT_SHADOW_DIR_Y;
+    if (!fullVisibility && !target.flat2d) {
+        const dir = _shadowDirAt(ox, oz, _shadowDirScratch);
+        shadowDirX = dir.x; shadowDirZ = dir.z;
+    }
+    let finalLightLevel = Math.max(0, Math.min(1, Number(object.lightLevel) || lightLevel));
+    let visionRange = Number(object.visibilityRangeTiles);
+    if (!Number.isFinite(visionRange)) visionRange = Number(object.visionRange);
+    if (!target.flat2d && !Number.isFinite(visionRange)) visionRange = resolveRenderVisionRange(object.visibilitySource);
+    let resolvedScaleY = Math.max(0.05, Number(object.scaleY) || 0.05);
+    if (!object.preserveModelHeight && Number.isFinite(visionRange) && visionRange > 0) {
+        let visibilityHeight = Math.max(0.18, visionRange / 5);
+        resolvedScaleY = Math.max(0.05, resolvedScaleY * visibilityHeight);
+    }
+    let overlapFadeKey;
+    if (object.overlapFade) {
+        let fade = object.overlapFade;
+        // Numeric key (model id, tile): hundreds of mines use this every frame.
+        let modelIds = push3DRenderObject.fadeModelIds || (push3DRenderObject.fadeModelIds = new Map());
+        let modelId = modelIds.get(object.modelKey);
+        if (modelId === undefined) modelIds.set(object.modelKey, modelId = modelIds.size);
+        let key = modelId * 4294967296 + (fade.gy & 0xffff) * 65536 + (fade.gx & 0xffff);
+        let lowHeight = Math.min(resolvedScaleY, Math.max(RENDERER3D_OVERLAP_MIN_HEIGHT,
+            Math.min(RENDERER3D_OVERLAP_MAX_HEIGHT, resolvedScaleY * RENDERER3D_OVERLAP_HEIGHT_FRACTION)));
+        let targetHeight = fade.occupied ? lowHeight : resolvedScaleY;
+        let state = renderer3dOverlapFadeState.get(key);
+        if (!state) {
+            state = { value: resolvedScaleY, lastUpdateMs: fade.nowMs, lastSeenMs: fade.nowMs };
+            renderer3dOverlapFadeState.set(key, state);
+        } else {
+            let deltaMs = Math.max(0, fade.nowMs - state.lastUpdateMs);
+            // Same speed both ways: rising mirrors the descent.
+            let maxStep = deltaMs / RENDERER3D_OVERLAP_FADE_DURATION_MS * Math.max(0.01, resolvedScaleY - lowHeight);
+            if (targetHeight > state.value) state.value = Math.min(targetHeight, state.value + maxStep);
+            else if (targetHeight < state.value) state.value = Math.max(targetHeight, state.value - maxStep);
+            state.lastUpdateMs = fade.nowMs;
+            state.lastSeenMs = fade.nowMs;
+        }
+        fade.activeKeys.add(key);
+        resolvedScaleY = state.value;
+        overlapFadeKey = key;
+    }
+    let tint = _getCachedLitTint(object.tint || '#c8ced8', finalLightLevel);
+    let sideTint = _getCachedLitTint(object.sideTint || object.tint || '#c8ced8', finalLightLevel);
+    target.push({
+        baseTint: object.tint || '#c8ced8',
+        baseSideTint: object.sideTint || object.tint || '#c8ced8',
+        pickSource: (object.pickSource || object.visibilitySource || {})._historyGhost ? null : object.pickSource || object.visibilitySource || null,
+        modelKey: object.modelKey || 'cube',
+        modelCandidates: Array.isArray(object.modelCandidates) && object.modelCandidates.length ? object.modelCandidates.slice() : RENDER_NO_MODEL_CANDIDATES,
+        x: Number(object.x) || 0,
+        z: Number(object.z) || 0,
+        y: Number(object.y) || 0,
+        scaleX: Math.max(0.05, Number(object.scaleX) || 0.05),
+        scaleY: resolvedScaleY,
+        overlapFadeKey,
+        scaleZ: Math.max(0.05, Number(object.scaleZ) || 0.05),
+        rotationY: Number(object.rotationY) || 0,
+        moveAmount: Math.max(0, Math.min(1, Number(object.moveAmount) || 0)),
+        walkPhase: Number(object.walkPhase) || 0,
+        animationMode: Math.max(0, Math.min(7, Math.floor(Number(object.animationMode) || 0))),
+        weaponType: String(object.weaponType || ''),
+        preserveModelHeight: !!object.preserveModelHeight,
+        isFlying: !!object.isFlying,
+        isWorker: !!object.isWorker,
+        tint,
+        sideTint,
+        alpha: Math.max(0.05, Math.min(1, Number(object.alpha) || 1)),
+        renderShape: object.renderShape === 'cylinder' ? 'cylinder' : 'box',
+        topTextureKey: object.topTextureKey || '',
+        topTextureCanvas: object.topTextureCanvas || null,
+        topTextureUv: object.topTextureUv || null,
+        sideTextureKey: object.sideTextureKey || '',
+        sideTextureCanvas: object.sideTextureCanvas || null,
+        sideTextureAngle: Number.isFinite(object.sideTextureAngle) ? Number(object.sideTextureAngle) : 0,
+        statusTextureCanvas: object.statusTextureCanvas || null,
+        lightLevel: finalLightLevel,
+        historyGhost: remembered,
+        shadowDirX: Number.isFinite(object.shadowDirX) ? Number(object.shadowDirX) : shadowDirX,
+        shadowDirZ: Number.isFinite(object.shadowDirZ) ? Number(object.shadowDirZ) : shadowDirZ,
+        shadowLength: Math.max(0.6, Math.min(2.4, Number(object.shadowLength) || (1 + (1 - lightLevel) * 0.9))),
+        // The 3D renderer's own per-object caches, declared here so every
+        // render object has one shape (fast property reads in its loops).
+        _r3dGroupKey: undefined, _r3dGroupFigure: undefined, _r3dKind: undefined, _r3dKindModel: undefined, _r3dKindWeapon: undefined,
+        _r3dLod: 0, _r3dPick: null,
+        _iRot: NaN, _iCos: 1, _iSin: 0, _iTint: undefined, _iRgb: null, _iSide: undefined, _iSideRgb: null,
+        // Unit layer: position at the tick, offset back to the previous
+        // tick, walk phase rate and flyer bob (see UNIT LAYER).
+        _cx: 0, _cz: 0, _pdx: 0, _pdz: 0, _phaseRate: 0, _flyOn: 0, _flySeed: 0, _layerTop: -1,
+        _iAtlasKey: undefined, _iAtlasOk: false, _litFor: undefined
+    });
+}
+
+function drawWithTrackedContextTransform(ctx, centerX, centerY, offsetX, offsetY, scale, drawFn) {
+    if (!ctx || typeof drawFn !== 'function') return;
+    let drawScale = Number.isFinite(scale) ? scale : 1;
+    let dx = Number.isFinite(offsetX) ? offsetX : 0;
+    let dy = Number.isFinite(offsetY) ? offsetY : 0;
+    if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001 && Math.abs(drawScale - 1) < 0.0001) {
+        drawFn();
+        return;
+    }
+
+    let st = _captureDrawImageCtxState(ctx);
+    ctx.save();
+    ctx.translate(centerX + dx, centerY + dy);
+    ctx.scale(drawScale, drawScale);
+    ctx.translate(-centerX, -centerY);
+    let nextTransform = ctx.getTransform();
+    _setDrawImageTrackedTransform(ctx, nextTransform.a, nextTransform.b, nextTransform.c, nextTransform.d, nextTransform.e, nextTransform.f);
+    drawFn();
+    ctx.restore();
+    _setDrawImageTrackedTransform(ctx, st.ta, st.tb, st.tc, st.td, st.te, st.tf);
+}
+
+function get3DProjectionSnapshot() {
+    let vw = viewW / camera.zoom;
+    let vh = viewH / camera.zoom;
+    return {
+        viewportWidth: viewW,
+        viewportHeight: viewH,
+        viewPad: getRenderViewPad(),
+        worldWidth: GRID_W,
+        worldHeight: GRID_H,
+        camera: {
+            centerX: (camera.x + vw * 0.5) / TILE,
+            centerZ: (camera.y + vh * 0.5) / TILE,
+            visibleWidth: vw / TILE,
+            visibleHeight: vh / TILE,
+            zoom: camera.zoom
+        }
+    };
+}
+
+function get3DVisibleWorldBounds() {
+    let fallbackExtraTiles = Math.max(6, Math.ceil((viewH / Math.max(0.001, camera.zoom)) / TILE * 0.75));
+    let fallback = getVisibleWorldBounds(fallbackExtraTiles);
+    if (!renderer3dInstance || typeof renderer3dInstance.getGroundViewportBounds !== 'function') return fallback;
+    let projected = renderer3dInstance.getGroundViewportBounds(get3DProjectionSnapshot(), Math.max(4, Math.ceil(Math.max(fallback.vw, fallback.vh) / TILE * 0.16)));
+    if (!projected) return fallback;
+    return {
+        vw: fallback.vw,
+        vh: fallback.vh,
+        minGx: Math.max(0, Math.min(GRID_W - 1, projected.minGx)),
+        minGy: Math.max(0, Math.min(GRID_H - 1, projected.minGy)),
+        maxGx: Math.max(0, Math.min(GRID_W - 1, projected.maxGx)),
+        maxGy: Math.max(0, Math.min(GRID_H - 1, projected.maxGy))
+    };
+}
+
+// The slots of this player's units whose ground point is drawn inside a
+// screen box (3D, a far view): one pass over the frame's columns.
+let _box3dSlots = new Int32Array(0), _box3dSlotCount = 0, _box3dSlotsFor = null;
+function _box3dUnitSlots(UF, VP, alpha, W, H, pad, minSx, minSy, maxSx, maxSy, lift, me) {
+    const n = UF.n, O = UF.owner, ID = UF.id, X = UF.x, Y = UF.y, PX = UF.px, PY = UF.py, it = 1 / TILE;
+    if (_box3dSlots.length < n) _box3dSlots = new Int32Array(Math.max(1024, Math.ceil(n * 1.25)));
+    const out = _box3dSlots;
+    const m0 = VP[0], m1 = VP[1], m3 = VP[3], m8 = VP[8], m9 = VP[9], m11 = VP[11];
+    const c0 = VP[4] * lift + VP[12], c1 = VP[5] * lift + VP[13], c3 = VP[7] * lift + VP[15];
+    let c = 0;
+    for (let s = 0; s < n; s++) {
+        if (O[s] !== me || ID[s] < 0) continue;
+        const wx = (PX[s] + (X[s] - PX[s]) * alpha) * it, wz = (PY[s] + (Y[s] - PY[s]) * alpha) * it, cw = m3 * wx + m11 * wz + c3;
+        if (!(cw > 0)) continue;
+        const px = ((m0 * wx + m8 * wz + c0) / cw * 0.5 + 0.5) * W - pad, py = (1 - ((m1 * wx + m9 * wz + c1) / cw * 0.5 + 0.5)) * H - pad;
+        if (px >= minSx && px <= maxSx && py >= minSy && py <= maxSy) out[c++] = s;
+    }
+    return c;
+}
+function get3DBoxSelection(screenRect) {
+    if (!screenRect || !renderer3dInstance || typeof renderer3dInstance.projectWorldToScreen !== 'function') {
+        return { units: [], entities: [] };
+    }
+
+    if (typeof renderer3dInstance.buildViewProjection === 'function') {
+        renderer3dInstance.buildViewProjection(get3DProjectionSnapshot());
+    }
+
+    let minSx = Math.min(screenRect.sx, screenRect.ex);
+    let maxSx = Math.max(screenRect.sx, screenRect.ex);
+    let minSy = Math.min(screenRect.sy, screenRect.ey);
+    let maxSy = Math.max(screenRect.sy, screenRect.ey);
+    let alpha = tickAlpha;
+    // (Projected here when the renderer's matrix is at hand: its own
+    // projection makes two objects a point, and a box over a base asks for
+    // tens of thousands of points.)
+    const BVP = renderer3dInstance.tmpViewProjection, bvw = renderer3dInstance.cssWidth, bvh = renderer3dInstance.cssHeight, bpad = renderer3dInstance.viewPad || 0;
+    let pointInBox = BVP && bvw > 0 && bvh > 0 ? (worldX, worldY, lift) => {
+        const wx = worldX / TILE, wz = worldY / TILE, cw = BVP[3] * wx + BVP[7] * lift + BVP[11] * wz + BVP[15];
+        if (!(cw > 0)) return false;
+        const px = ((BVP[0] * wx + BVP[4] * lift + BVP[8] * wz + BVP[12]) / cw * 0.5 + 0.5) * bvw - bpad;
+        const py = (1 - ((BVP[1] * wx + BVP[5] * lift + BVP[9] * wz + BVP[13]) / cw * 0.5 + 0.5)) * bvh - bpad;
+        return px >= minSx && px <= maxSx && py >= minSy && py <= maxSy;
+    } : (worldX, worldY, lift) => {
+        let projected = renderer3dInstance.projectWorldToScreen(worldX / TILE, lift, worldY / TILE);
+        return !!projected && projected.x >= minSx && projected.x <= maxSx && projected.y >= minSy && projected.y <= maxSy;
+    };
+
+    // What the player sees: anything whose drawn model reaches into the box.
+    // The ground point is checked first (cheap, and the only test for things
+    // not drawn last frame); only the rest have their drawn mesh tested.
+    let unitCandidates = [], entityCandidates = [];
+    let pending = new Set();
+    let consider = (list, ref, worldX, worldY, lift, mark = null) => {
+        let hit = pointInBox(worldX, worldY, lift);
+        if (!hit) pending.add(ref);
+        list.push({ ref, hit, mark });
+    };
+    // Units: from the frame's columns, projected here (every unit's view and
+    // a projection object each took ~0.5 us a unit: a box over an army of
+    // 300k froze the page). Past BOX_MESH_TEST_MAX units in the frame the
+    // ground point alone decides (a far view: a unit is a few pixels).
+    const BOX_MESH_TEST_MAX = 20000;
+    const UF = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    const VP = renderer3dInstance.tmpViewProjection;
+    let pointUnits = null;
+    if (UF && VP && renderer3dInstance.cssWidth > 0) {
+        // (Slot by slot: the columns in memory order; see _ownUnitsInBox.)
+        const n = UF.n, O = UF.owner, ID = UF.id, X = UF.x, Y = UF.y, PX = UF.px, PY = UF.py, views = _pageSlotViews;
+        const me = localPlayerId, full = fullVisibility, it = 1 / TILE, lift = 0.28, exact = UF.count <= BOX_MESH_TEST_MAX;
+        const W = renderer3dInstance.cssWidth, H = renderer3dInstance.cssHeight, pad = renderer3dInstance.viewPad || 0;
+        const m0 = VP[0], m1 = VP[1], m3 = VP[3], m8 = VP[8], m9 = VP[9], m11 = VP[11];
+        const c0 = VP[4] * lift + VP[12], c1 = VP[5] * lift + VP[13], c3 = VP[7] * lift + VP[15];
+        if (!exact) {
+            // (The far view's pass in a function of its own, typed reads and
+            // arithmetic only; the units' views are taken for the hits
+            // alone, into a list of its final length; their slots go to the
+            // selection's index: selectionIndexAdopt.)
+            const c = _box3dUnitSlots(UF, VP, alpha, W, H, pad, minSx, minSy, maxSx, maxSy, lift, me);
+            const hits = _box3dSlots;
+            pointUnits = [];
+            let k = 0;
+            for (let i = 0; i < c; i++) {
+                const s = hits[i];
+                if (!full && !isTileVisible(Math.floor((PX[s] + (X[s] - PX[s]) * alpha) * it), Math.floor((PY[s] + (Y[s] - PY[s]) * alpha) * it))) continue;
+                const u = views[s];
+                if (u) { pointUnits.push(u); hits[k++] = s; }
+            }
+            _box3dSlotCount = k; _box3dSlotsFor = pointUnits;
+        } else for (let s = 0; s < n; s++) {
+            if (O[s] !== me || ID[s] < 0) continue;
+            const ux = PX[s] + (X[s] - PX[s]) * alpha, uy = PY[s] + (Y[s] - PY[s]) * alpha;
+            if (!full && !isTileVisible(Math.floor(ux * it), Math.floor(uy * it))) continue;
+            const wx = ux * it, wz = uy * it, cw = m3 * wx + m11 * wz + c3;
+            let hit = false;
+            if (cw > 0) {
+                const px = ((m0 * wx + m8 * wz + c0) / cw * 0.5 + 0.5) * W - pad, py = (1 - ((m1 * wx + m9 * wz + c1) / cw * 0.5 + 0.5)) * H - pad;
+                hit = px >= minSx && px <= maxSx && py >= minSy && py <= maxSy;
+            }
+            if (!exact && !hit) continue;
+            // (A slot with an id holds a live unit's view: the view itself
+            // is not read, 300k of them are 300k cache misses.)
+            const u = views[s];
+            if (!u) continue;
+            if (!exact) { pointUnits.push(u); continue; }
+            if (!hit) pending.add(u);
+            unitCandidates.push({ ref: u, hit, mark: null });
+        }
+    } else for (let u of units) {
+        if (u.owner !== localPlayerId || u.dead) continue;
+        let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
+        let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
+        let ugx = Math.floor(ux / TILE), ugy = Math.floor(uy / TILE);
+        if (!isTileVisible(ugx, ugy)) continue;
+        consider(unitCandidates, u, ux, uy, 0.28);
+    }
+    for (let b of barracks) {
+        if (b.energy > 0 && b.owner === localPlayerId && isTileVisible(b.gx, b.gy)) consider(entityCandidates, b, b.x, b.y, 0.12);
+    }
+    for (let t of towers) {
+        if (t.energy > 0 && t.owner === localPlayerId && isTileVisible(t.gx, t.gy)) consider(entityCandidates, t, t.x, t.y, 0.18);
+    }
+    for (let s of collectorSpawners) {
+        if (s.energy > 0 && s.owner === localPlayerId && isTileVisible(s.gx, s.gy)) consider(entityCandidates, s, s.x, s.y, 0.14);
+    }
+    let seenItems = new Set(entityCandidates.map(c => c.ref));
+    let bounds = get3DVisibleWorldBounds();
+    let items = getCellItemsRowMajor();
+    for (let i = findCellItemRowStart(items, bounds.minGy); i < items.length; i++) {
+        let item = items[i], gx = item.gx, gy = item.gy;
+        if (gy > bounds.maxGy) break;
+        if (gx < bounds.minGx || gx > bounds.maxGx || seenItems.has(item)) continue;
+        let cell = grid[gy] && grid[gy][gx];
+        if (!cell || cell.item !== item || cell.owner !== localPlayerId || !isTileVisible(gx, gy)) continue;
+        seenItems.add(item);
+        consider(entityCandidates, item, gx * TILE + TILE * 0.5, gy * TILE + TILE * 0.5, 0.08, item => { item._gx = gx; item._gy = gy; item._cell = cell; });
+    }
+    for (let m of goldMines) {
+        if (isTileVisible(m.gx, m.gy)) consider(entityCandidates, m, m.x, m.y, 0.06, mine => { mine._isGoldMine = true; });
+    }
+    for (let m of astarMines) {
+        if (isTileVisible(m.gx, m.gy)) consider(entityCandidates, m, m.x, m.y, 0.06, mine => { mine._isAstarMine = true; });
+    }
+
+    // (The drawn meshes of what the ground point missed: for a handful of
+    // things up close. A box over thousands is a far view: the point decides.)
+    let drawnHits = pending.size && pending.size <= 4000 && typeof renderer3dInstance.boxRenderedSources === 'function'
+        ? renderer3dInstance.boxRenderedSources(minSx, minSy, maxSx, maxSy, pending)
+        : null;
+    let newUnits = pointUnits || [];
+    let newEntities = [];
+    for (let c of unitCandidates) if (c.hit || (drawnHits && drawnHits.has(c.ref))) newUnits.push(c.ref);
+    for (let c of entityCandidates) {
+        if (!c.hit && !(drawnHits && drawnHits.has(c.ref))) continue;
+        if (c.mark) c.mark(c.ref);
+        newEntities.push(c.ref);
+    }
+    const known = _box3dSlotsFor === newUnits && _box3dSlotCount === newUnits.length;
+    _box3dSlotsFor = null;
+    return { units: newUnits, entities: newEntities, unitSlots: known ? _box3dSlots : null, unitSlotCount: known ? _box3dSlotCount : 0 };
+}
+
+function getBackgroundWorldBoundsForRenderMode() {
+    return renderDimensionMode === '3d' ? get3DVisibleWorldBounds() : getVisibleWorldBounds(1);
+}
+
+function getUnit3DActivity(u) {
+    // A unit view (sim_frame.js): the worker's reading of it.
+    if (u._frameView) return u._activity();
+    let moving = Math.hypot(u.x - u.prevX, u.y - u.prevY) > 0.01;
+    if (u.attackFlash > 0) return { mode: 1, amount: 1, target: u.attackTarget || null };
+    let state = String(u.workerState || '');
+    if ((u.workerType === 'collector' || u.workerType === 'astar_collector') && u.workerTransferCooldown > 0 && u.carryingValue > 0) return { mode: 3, amount: 1, target: u.workerTarget || null };
+    if (u.workerType === 'salvager' && u.workerTransferCooldown > 0) return { mode: 4, amount: 1, target: u.workerTarget || null };
+    if (!u.workerType || moving) return { mode: 0, amount: moving ? 1 : 0, target: null };
+    let hasArrived = !u.path || u.pathIndex >= u.path.length;
+    if (u.workerType === 'builder' && (state === 'BUILDING_IN_PLACE' || (state === 'MOVING_TO_BUILD' && hasArrived))) return { mode: 2, amount: 1, target: u.workerTarget || null };
+    if (u.workerType === 'healer' && (state === 'HEALING' || (state === 'MOVING_TO_HEAL' && hasArrived))) return { mode: 5, amount: 1, target: u.workerTarget || null };
+    if (u.workerType === 'researcher' && (state === 'RESEARCHING' || (state === 'MOVING_TO_RESEARCH' && hasArrived))) return { mode: 6, amount: 1, target: u.workerTarget || null };
+    return { mode: 0, amount: 0, target: null };
+}
+
+// 3D body colors that differ from the 2D sprite color: healers are red and
+// researchers blue, so flying workers read apart from fighters at a glance.
+const UNIT_3D_BODY_COLORS = { collector: '#f0a52b', healer_unit: '#d8403a', researcher_unit: '#3f74d8' };
+// Riders on (winged) horses: height = width * MOUNT_HEIGHT_RATIO.
+const MOUNTED_UNIT_TYPES = new Set(['fast', 'scout', 'flying']);
+const MOUNT_HEIGHT_RATIO = 0.87;
+
+function getUnit3DWeaponType(u) {
+    let unitType = String(u && u.unitType || '');
+    let workerType = String(u && u.workerType || '');
+    if (workerType === 'builder' || unitType === 'builder_unit') return 'hammer';
+    // Energy grows on farm trees (an axe); A* is dug from mines (a pickaxe).
+    if (workerType === 'collector' || unitType === 'collector') return 'axe';
+    if (workerType === 'astar_collector' || unitType === 'astar_collector') return 'pickaxe';
+    if (workerType === 'salvager' || unitType === 'salvager_unit') return 'cutter';
+    if (workerType === 'healer' || unitType === 'healer_unit') return 'healer_staff';
+    if (workerType === 'researcher' || unitType === 'researcher_unit') return 'research_orb';
+    if (unitType === 'king') return 'king_sword';
+    if (unitType === 'boss') return 'great_axe';
+    if (unitType === 'tank') return 'warhammer';
+    if (unitType === 'fast') return 'dual_blades';
+    if (unitType === 'flying') return 'lance';
+    if (unitType === 'scout') return 'bow';
+    if (unitType === 'mole') return 'claws';
+    let styleWeapons = {
+        fire: 'fire_staff', water: 'water_staff', ice: 'ice_staff',
+        poison: 'poison_staff', laser: 'laser_staff', melee: 'sword'
+    };
+    return styleWeapons[String(u && u.attackStyle || 'melee')] || 'sword';
+}
+
+// Idle pose (mode 7): after a unit has stood still for a moment it settles
+// into its role's rest pose (workers sit, mounts graze, flyers hover).
+const RENDERER3D_IDLE_DELAY_SECONDS = 1.5;
+const RENDERER3D_IDLE_SETTLE_SECONDS = .8;
+function _unit3DIdleActivity(u, activity, stillSince) {
+    if (activity.mode !== 0 || activity.amount > 0 || u.isSnake) return activity;
+    let still = (gameTime + (u._historyGhost ? 0 : tickAlpha) - stillSince) / Math.max(1, TICK_RATE) - RENDERER3D_IDLE_DELAY_SECONDS;
+    if (still <= 0) return activity;
+    return { mode: 7, amount: Math.min(1, still / RENDERER3D_IDLE_SETTLE_SECONDS), target: null };
+}
+
+// Flyers keep an altitude with a slow bob; an attack is a dive.
+function _unit3DFlightHeight(u, activity) {
+    if (!u.isFlying) return 0;
+    let t = (u._historyGhost ? u._historyTick : gameTime + tickAlpha) / Math.max(1, TICK_RATE);
+    let height = (u.isWorker ? .36 : .30) + Math.sin(t * 2.2 + (Number(u.id) || 0) * 1.7) * .035;
+    if (activity.mode === 1) height -= Math.sin(_unit3DWalkPhase(u, activity)) * .22;
+    return height;
+}
+
+// A building at work (production, research, a lived-in house), placed on
+// the structure object just pushed so it follows its rendered height.
+function _pushStructureActivity(objects, entity, flat2d) {
+    if (flat2d || entity.underConstruction) return;
+    let type = entity.type;
+    if (type !== 'house' && type !== 'research' && !(entity.spawnQueue && entity.spawnQueue.length)) return;
+    let o = objects[objects.length - 1];
+    // Workshops are open yards: activity rises from among their back features.
+    let roof = type === 'house' ? .63 : .5;
+    pushStructureActivityFx(entity, o.x, o.z, o.y + o.scaleY * roof, get3DRenderOwnerColor(entity.owner));
+}
+
+// The build placement preview in 3D: a translucent copy of the structure's
+// own model on the hovered tile (red where it cannot be built), with the
+// item's 2D icon on its panel. Sizes match the structure passes below.
+// Returns false while the icon is still loading (the overlay draws it then).
+const RENDERER3D_WORKSHOP_KEYS = new Set(['spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research']);
+function _pushBuildPreview3DObject(objects, preview) {
+    let key = preview && preview.key;
+    let def = key && BASE_CARD_TYPES[key];
+    if (!def || preview.areaCells || key === 'area_upgrader') return false;
+    let icon = getItemThumbnailImage(key, RENDERER3D_TOP_TEXTURE_SIZE);
+    if (!icon || !icon.complete || !(icon.naturalWidth > 0)) return false;
+    let panel = get3DTopTextureCanvas(`buildpreview:${key}`, g => g.drawImage(icon, 0, 0, g.canvas.width, g.canvas.height));
+    let ownerColor = get3DRenderOwnerColor(localPlayerId);
+    let blocked = !preview.canBuild;
+    let object = {
+        x: preview.gx + 0.5, y: 0, z: preview.gy + 0.5,
+        tint: blocked ? '#ff4a3a' : ownerColor,
+        sideTint: blocked ? '#ff4a3a' : (def.color || ownerColor),
+        alpha: blocked ? 0.45 : 0.6,
+        preserveModelHeight: true,
+        topTextureKey: `buildpreview:${key}`,
+        topTextureCanvas: panel,
+        lightLevel: 1
+    };
+    if (key.startsWith('barrack_')) {
+        Object.assign(object, { modelKey: key, scaleX: 0.98, scaleZ: 0.98, scaleY: get3DStructureModelHeight('barrack') });
+    } else if (RENDERER3D_WORKSHOP_KEYS.has(key)) {
+        object.statusTextureCanvas = get3DWorkshopSignTexture(key);
+        Object.assign(object, { modelKey: `spawner_${key}`, scaleX: 0.95, scaleZ: 0.95, scaleY: get3DStructureModelHeight(key) });
+    } else if (def.target === 'wall') {
+        let portal = !!def.isCloud || key.startsWith('cloud');
+        let visionTiles = getTowerPreviewVisionRange(key, preview.previewLevel) * AREA_UNIT_TILE_EQUIVALENT;
+        Object.assign(object, {
+            modelKey: `tower_${key}`, scaleX: portal ? 0.96 : 0.82, scaleZ: portal ? 0.96 : 0.82,
+            scaleY: 1.05, rotationY: portal ? 0 : Math.PI * 0.5,
+            preserveModelHeight: portal, visibilityRangeTiles: Number.isFinite(visionTiles) && visionTiles > 0 ? visionTiles : 5
+        });
+    } else {
+        let farm = key === 'farm' || key === 'astar_farm';
+        Object.assign(object, {
+            modelKey: `item_${key}`, scaleX: 0.84, scaleZ: 0.84,
+            scaleY: key === 'house' ? 0.82 : farm ? 0.72 : 0.14, preserveModelHeight: key === 'house' || farm
+        });
+    }
+    push3DRenderObject(objects, object);
+    return true;
+}
+
+// Front status display of 3D units (surface 15 of the unit models): a 96px
+// pixel-art icon drawn over the owner color, so one texture per state is
+// shared by every player. States: 'walk', 'angry', 'work', 'sleep', or a
+// queue count (number). Colored features with a dark outline read on any
+// owner color.
+const RENDERER3D_STATUS_CELL = 8; // 12x12 grid of chunky pixels
+// Pixel letters: W white, R red, G green, B pale blue, Y yellow.
+const RENDERER3D_STATUS_COLORS = { W: '#ffffff', R: '#ff3b30', G: '#4ee04a', B: '#9cc8ff', Y: '#ffd93a' };
+const RENDERER3D_STATUS_FACES = {
+    walk: [
+        '............',
+        '............',
+        '............',
+        '...WW..WW...',
+        '...WW..WW...',
+        '............',
+        '............',
+        '....WWWW....'],
+    angry: [
+        '............',
+        '..R......R..',
+        '...RR..RR...',
+        '............',
+        '...RR..RR...',
+        '............',
+        '............',
+        '....RRRR....',
+        '...R....R...'],
+    work: [
+        '............',
+        '............',
+        '............',
+        '..GGG..GGG..',
+        '..G.G..G.G..',
+        '............',
+        '...G....G...',
+        '....GGGG....'],
+    sleep: [
+        '.......YYYY.',
+        '.........Y..',
+        '........Y...',
+        '.......YYYY.',
+        '............',
+        '............',
+        '..BBB..BBB..',
+        '............',
+        '............',
+        '.....BB.....']
+};
+// Queue counts: empty white, short green, busy orange, long red.
+function get3DQueueCountColor(count) {
+    return count <= 0 ? '#ffffff' : count <= 3 ? '#4ee04a' : count <= 8 ? '#ff9a1f' : '#ff3b30';
+}
+function get3DStatusTexture(state) {
+    return get3DTopTextureCanvas(`status:${state}`, g => {
+        let size = g.canvas.width, c = RENDERER3D_STATUS_CELL, pad = 3;
+        if (typeof state === 'number') {
+            let text = state > 99 ? '99+' : String(state);
+            g.font = `900 ${Math.round(size * (text.length > 2 ? 0.46 : text.length > 1 ? 0.62 : 0.74))}px Arial, sans-serif`;
+            g.textAlign = 'center';
+            g.textBaseline = 'middle';
+            g.lineJoin = 'round';
+            g.lineWidth = Math.max(4, Math.round(size * 0.12));
+            g.strokeStyle = '#10131a';
+            g.strokeText(text, size * 0.5, size * 0.55);
+            g.fillStyle = get3DQueueCountColor(state);
+            g.fillText(text, size * 0.5, size * 0.55);
+            return;
+        }
+        let rows = RENDERER3D_STATUS_FACES[state] || RENDERER3D_STATUS_FACES.walk;
+        let cells = [];
+        rows.forEach((row, y) => { for (let x = 0; x < row.length; x++) if (RENDERER3D_STATUS_COLORS[row[x]]) cells.push([x, y, RENDERER3D_STATUS_COLORS[row[x]]]); });
+        g.fillStyle = '#10131a';
+        for (let [x, y] of cells) g.fillRect(x * c - pad, y * c + c - pad, c + pad * 2, c + pad * 2);
+        for (let [x, y, color] of cells) {
+            g.fillStyle = color;
+            g.fillRect(x * c, y * c + c, c, c);
+        }
+    });
+}
+// Fighting (or closing in) is angry, work is content, a settled idle pose
+// sleeps; anything else (walking, a short stop) looks ahead. Target fields
+// can outlive a fight (a dead target under a new order, a structure's
+// attackTarget), so anger needs a live attack order or a recent blow.
+const RENDERER3D_ANGRY_LINGER_SECONDS = 1.5;
+const renderer3dLastAttackTick = new WeakMap();
+function getUnit3DStatusState(u, activity) {
+    if (u._frameView) return SIM_UNIT_STATUS_NAMES[u._col('status')] || 'walk';
+    if (u.attackFlash > 0) renderer3dLastAttackTick.set(u, gameTime);
+    let lastAttack = renderer3dLastAttackTick.get(u);
+    let recentlyAttacked = lastAttack !== undefined && gameTime - lastAttack < RENDERER3D_ANGRY_LINGER_SECONDS * TICK_RATE;
+    let target = u.targetUnit || u.targetBuilding;
+    let engaged = u.commandState === CMD_ATTACKING && target && !target.dead && !(target.energy <= 0);
+    if (recentlyAttacked || engaged) return 'angry';
+    if (activity.mode >= 2 && activity.mode <= 6) return 'work';
+    if (activity.mode === 7) return 'sleep';
+    return 'walk';
+}
+
+// The unit a barrack or worker building produces, a small still miniature
+// among the yard's back features (3D only): the unit at the front of the
+// queue, else the building's own unit type. Its front display shows the
+// queued count (also 0). Cached per building; call right after the
+// building's object was pushed.
+const renderer3dProductionGhosts = new WeakMap();
+// Placement per yard style: Defence3Renderer3D.workshopMiniature.
+const RENDERER3D_WORKSHOP_MINIATURE_FALLBACK = { x: 0, y: .112, z: -.30, yaw: 0 };
+function _get3DWorkshopMiniature(modelKey) {
+    let R = typeof window !== 'undefined' ? window.Defence3Renderer3D : null;
+    return (R && R.workshopMiniature && R.workshopMiniature(modelKey)) || RENDERER3D_WORKSHOP_MINIATURE_FALLBACK;
+}
+function _pushProductionGhost(objects, entity, flat2d) {
+    if (flat2d || !entity || entity.underConstruction || !(entity.energy > 0) || entity._historyGhost) return;
+    let building = objects[objects.length - 1];
+    if (!building) return;
+    let queue = Array.isArray(entity.spawnQueue) ? entity.spawnQueue : null;
+    let entry = queue && queue.length ? queue[0] : null;
+    let type = (entry && typeof entry === 'object' && entry.unitType) || getSpawnerFallbackUnitType(entity);
+    let stats = BASE_UNIT_STATS[type];
+    if (!stats) return;
+    let cache = renderer3dProductionGhosts.get(entity);
+    if (!cache || cache.type !== type || cache.owner !== entity.owner) {
+        let footprint = Math.max(0.28, Math.min(0.9, ((stats.r || 8) * 2.2) / TILE));
+        let mount = type === 'fast' ? 1.35 : type === 'scout' ? 1.2 : type === 'flying' ? 1.3 : 1;
+        // A miniature: about a sixth of a tile wide (mounts a little wider).
+        let width = mount > 1 ? 0.2 : 0.16;
+        let temp = [];
+        push3DRenderObject(temp, {
+            modelKey: `unit_${type}`,
+            x: building.x, y: building.y, z: building.z,
+            scaleX: width, scaleZ: width,
+            scaleY: MOUNTED_UNIT_TYPES.has(type) ? width * MOUNT_HEIGHT_RATIO : width * Math.max(0.48, footprint * 1.45) / footprint,
+            weaponType: getUnit3DWeaponType({ unitType: type }),
+            preserveModelHeight: true,
+            isFlying: !!stats.isFlying,
+            isWorker: !!stats.isWorker,
+            renderShape: 'cylinder',
+            tint: get3DRenderOwnerColor(entity.owner),
+            sideTint: UNIT_3D_BODY_COLORS[type] || stats.color || get3DRenderOwnerColor(entity.owner),
+            topTextureKey: `unit:${type}:${entity.owner}:`,
+            topTextureCanvas: get3DUnitTopTexture(type, entity.owner)
+        });
+        cache = { type, owner: entity.owner, object: temp[0], stand: _get3DWorkshopMiniature(building.modelKey), litVersion: -1, litGrid: null };
+        renderer3dProductionGhosts.set(entity, cache);
+    }
+    let o = cache.object, stand = cache.stand;
+    o.x = building.x + stand.x * building.scaleX;
+    o.z = building.z + stand.z * building.scaleZ;
+    o.y = building.y + building.scaleY * stand.y;
+    o.rotationY = stand.yaw;
+    o.statusTextureCanvas = get3DStatusTexture(queue ? queue.length : 0);
+    if (cache.litVersion !== visibilityVersion || cache.litGrid !== visibilityGrid) {
+        _relight3DObject(o, null, o.baseTint, o.baseSideTint, false);
+        cache.litVersion = visibilityVersion;
+        cache.litGrid = visibilityGrid;
+    }
+    _touch3DPanel(o.topTextureCanvas);
+    objects.push(o);
+}
+
+// Structures barely change, but the scene is rebuilt every frame. Reuse a
+// structure's render object (relit every frame) while nothing it depends on
+// changed: view mode, facing, whether a unit stands on its
+// tile, and it is not flashing, waiting for its exact panel or easing its
+// height (the last two builds differed). Panels refresh every 1-4 ticks.
+// The entry lives on the entity (entity._r3dStatic): a property read per
+// structure per frame instead of a WeakMap lookup.
+const renderer3dStaticFrame = { occupied: null, flat2d: false, overlapNowMs: 0, overlapFadeKeys: null };
+
+// Tiles holding a visible unit this frame (tile index keys), stamped per
+// frame instead of filling a new Set with every visible unit.
+const renderer3dOccupiedTiles = {
+    stamps: new Uint32Array(0),
+    stamp: 0,
+    begin(size) {
+        if (this.stamps.length !== size) { this.stamps = new Uint32Array(size); this.stamp = 0; }
+        if (++this.stamp >= 0xffffffff) { this.stamps.fill(0); this.stamp = 1; }
+    },
+    add(key) { if (key >= 0 && key < this.stamps.length) this.stamps[key] = this.stamp; },
+    has(key) { return this.stamps[key] === this.stamp; }
+};
+
+// A unit's cached 3D object lives on the unit itself (u._r3d: a property
+// read instead of a WeakMap lookup per unit per frame; not simulation state).
+
+// Full unit object rebuilds per unit, in ticks (see build3DFrameData): at
+// least every 3 ticks, and with big armies so that about 1000 units rebuild
+// per tick (panel contents such as health bars then lag a little more;
+// facing, activity and status icons still update every tick).
+const UNIT_3D_REBUILD_TICKS_MIN = 3;
+let UNIT_3D_REBUILD_TICKS = UNIT_3D_REBUILD_TICKS_MIN;
+
+// UNIT LAYER (3D)
+// Between ticks a unit's 3D object changes only by interpolation: its
+// position (a straight line from the previous tick's), its walk cycle
+// (linear in time) and a flyer's bob (a sine of time). On a tick (or when
+// the view needs it) the frame builder puts every unit whose object is
+// stable into the layer: the renderer uploads it once, and on the frames
+// until the next tick draws it again with the interpolation done on the GPU
+// (see renderer3d.js, drawUnitLayer), so those frames skip the per-unit work.
+// Units whose look changes within a tick (damage flash, a panel not ready
+// yet, transparency) stay on the per-frame path. ?unitlayer=0 disables it.
+const RENDERER3D_UNIT_LAYER_ENABLED = (() => {
+    try { return new URLSearchParams(location.search).get('unitlayer') !== '0'; } catch { return true; }
+})();
+let renderer3dUnitLayer = null;
+let renderer3dUnitLayerVersion = 0;
+// Frames that reused the layer / built it, and why a build was needed.
+const renderer3dUnitLayerStats = { reuse: 0, build: 0, why: {} };
+// Period of the flyer bob's time argument (2.2 rad per second of game time).
+const UNIT_LAYER_FLY_PERIOD = Math.PI * 2 / 2.2 * 1000;
+
+// _unit3DWalkPhase as base + rate * tickAlpha (exact where it is linear).
+function _unit3DWalkPhaseLinear(u, activity, out) {
+    if (activity.mode === 1) {
+        let b = (8 - Number(u.attackFlash || 0)) / 8;
+        if (b >= 1) { out[0] = Math.PI; out[1] = 0; }
+        else if (b <= -1 / 8) { out[0] = 0; out[1] = 0; }
+        else { out[0] = Math.max(0, b) * Math.PI; out[1] = Math.PI / 8; }
+        return out;
+    }
+    out[0] = ((Number(u.id) || 0) * 2.399) % (Math.PI * 2);
+    out[1] = 0; // Continuous cyclic motion is evaluated on the GPU.
+    return out;
+}
+const _unitLayerPhase = [0, 0];
+
+// A cached unit object set up for the layer from the worker's record: the
+// tick's position and the offset back, facing, activity, walk phase, status
+// icon and light (as layerCollect and _refreshUnit3DObject would).
+function _layerWriteFromVis(u, cached, F, sl, statusCanvases, offX, offZ) {
+    let o = cached.object;
+    _pin3DPanelToLayer(o.topTextureCanvas, renderer3dUnitLayerVersion);
+    let cx = u.x / TILE + offX, cz = u.y / TILE + offZ;
+    o.x = o._cx = cx; o.z = o._cz = cz;
+    o._pdx = (u.prevX - u.x) / TILE; o._pdz = (u.prevY - u.y) / TILE;
+    o.rotationY = F.facing[sl];
+    o.statusTextureCanvas = statusCanvases[F.status[sl] | 0] || null;
+    if (u.isSnake) {
+        o._phaseRate = 0; o._flyOn = 0; o._flySeed = 0;
+    } else {
+        let mode = F.mode[sl];
+        o.animationMode = mode;
+        o.moveAmount = F.amount[sl];
+        o.walkPhase = F.phase[sl]; o._phaseRate = F.prate[sl];
+        o.y = cached.baseY + (u.isFlying ? (u.isWorker ? .36 : .30) : 0);
+        o._flyOn = u.isFlying ? 1 : 0;
+        o._flySeed = ((Number(u.id) || 0) * 1.7) % (Math.PI * 2);
+    }
+    // Light where it is at the tick (as _relight3DObject; no shadow
+    // direction: the layer is not used with drop shadows).
+    let level = 1;
+    if (!fullVisibility) {
+        let gx = Math.floor(cx), gy = Math.floor(cz);
+        let row = visibilityGrid[gy];
+        let raw = Math.max((row && row[gx]) || 0, F.light[sl]);
+        level = Math.max(0, Math.min(1, raw / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
+    }
+    if (o.lightLevel !== level || o._litFor !== cached.tint) {
+        o.tint = _getCachedLitTint(cached.tint || '#c8ced8', level);
+        o.sideTint = _getCachedLitTint(cached.sideTint || cached.tint || '#c8ced8', level);
+        o.lightLevel = level;
+        o._litFor = cached.tint;
+    }
+    o.historyGhost = false;
+    // Drop shadows (Simple shadows) lean away from the light at its tile.
+    if (_simpleShadows && !fullVisibility) {
+        let dir = _shadowDirAt(cx, cz, _shadowDirScratch);
+        o.shadowDirX = dir.x; o.shadowDirZ = dir.z;
+        o.shadowLength = Math.max(0.6, Math.min(2.4, 1 + (1 - level) * 0.9));
+    }
+}
+let _simpleShadows = false;
+
+// UNIT RENDER SLOTS (3D, with the simulation worker)
+// Each living unit has a render slot (the worker's record says which). A
+// slot keeps what the unit layer needs that changes only with the unit's
+// panel or the view: model, scales, height, base colours, panel. A layer
+// build then reads the worker's records and these typed arrays in one
+// loop, without touching the unit objects; a unit goes through the
+// per-object path (which refills its slot) only when its slot is not valid.
+const _uSlot = { cap: 0 };
+function _uSlotGrow(slot) {
+    if (slot < _uSlot.cap) return;
+    let cap = Math.max(1024, _uSlot.cap * 2, slot + 1);
+    let grow = (Type, old, per = 1) => { let a = new Type(cap * per); if (old) a.set(old); return a; };
+    _uSlot.valid = grow(Uint8Array, _uSlot.valid);
+    _uSlot.id = grow(Float64Array, _uSlot.id);
+    _uSlot.sig = grow(Float32Array, _uSlot.sig);
+    _uSlot.view = grow(Int32Array, _uSlot.view);
+    _uSlot.label = grow(Uint8Array, _uSlot.label);
+    _uSlot.labelShown = grow(Uint8Array, _uSlot.labelShown);
+    _uSlot.texVer = grow(Float64Array, _uSlot.texVer);
+    _uSlot.lod = grow(Uint8Array, _uSlot.lod);
+    _uSlot.flags = grow(Uint8Array, _uSlot.flags);
+    _uSlot.dim = grow(Float32Array, _uSlot.dim, 4);    // sx, sy, sz, y
+    // The last record written for the slot and the inputs it came from
+    // (U_SLOT_KEY_N values): an unchanged unit (idle) reuses it.
+    _uSlot.rec = grow(Float32Array, _uSlot.rec, 28);
+    _uSlot.inKey = grow(Float64Array, _uSlot.inKey, U_SLOT_KEY_N);
+    _uSlot.rgb = grow(Uint8Array, _uSlot.rgb, 6);      // tint r g b, side r g b (0-255)
+    _uSlot.kind = _uSlot.kind || []; _uSlot.kindLod = _uSlot.kindLod || []; _uSlot.kindLod2 = _uSlot.kindLod2 || []; _uSlot.panel = _uSlot.panel || [];
+    _uSlot.cap = cap;
+}
+const U_SLOT_FLYING = 1, U_SLOT_WORKER = 2, U_SLOT_SNAKE = 4, U_SLOT_MOTION = 8;
+const U_SLOT_KEY_N = 12;
+// Camera state for levels of detail: bumped when the LOD camera changes.
+let _uLodCamStamp = 0, _uLodCamKey = '';
+
+// After the per-object path put a unit's object in the layer: its slot.
+function _uSlotFill(slot, u, o, cached, sig, view) {
+    if (!(slot >= 0)) return;
+    _uSlotGrow(slot);
+    let kind = renderer3dInstance && renderer3dInstance.getFigureMeshKey(o) ? o._r3dKind : null;
+    let tint = _parseHexColor(cached.tint || '#c8ced8'), side = _parseHexColor(cached.sideTint || cached.tint || '#c8ced8');
+    if (!kind || !tint || !side || !o.topTextureCanvas) { _uSlot.valid[slot] = 0; return; }
+    let S = _uSlot;
+    S.valid[slot] = 1; S.id[slot] = u.id; S.sig[slot] = sig; S.view[slot] = view;
+    S.label[slot] = u.isSnake ? 2 : (cached.label ? 1 : 0);
+    S.labelShown[slot] = cached.label ? 1 : 0;
+    S.texVer[slot] = o.topTextureCanvas._textureVersion || 0;
+    S.lod[slot] = o._r3dLod | 0;
+    S.flags[slot] = (u.isFlying ? U_SLOT_FLYING : 0) | (u.isWorker ? U_SLOT_WORKER : 0) | (u.isSnake ? U_SLOT_SNAKE : 0)
+        | ((u.isSnake || u.unitType === 'tank' || u.unitType === 'boss' || u.unitType === 'king') ? U_SLOT_MOTION : 0);
+    let d = slot * 4;
+    S.dim[d] = o.scaleX; S.dim[d + 1] = o.scaleY; S.dim[d + 2] = o.scaleZ;
+    S.dim[d + 3] = u.isSnake ? o.y : cached.baseY + (u.isFlying ? (u.isWorker ? .36 : .30) : 0);
+    let c = slot * 6;
+    S.rgb[c] = tint.r; S.rgb[c + 1] = tint.g; S.rgb[c + 2] = tint.b; S.rgb[c + 3] = side.r; S.rgb[c + 4] = side.g; S.rgb[c + 5] = side.b;
+    S.inKey[slot * U_SLOT_KEY_N] = NaN;   // the cached record is stale
+    S.kind[slot] = kind;
+    S.kindLod[slot] = kind + ':lod';
+    S.kindLod2[slot] = kind + ':lod2';
+    S.panel[slot] = o.topTextureCanvas;
+}
+
+// A lit colour channel as _getCachedLitTint and the renderer produce it.
+function _litChannel(c255, bucket) {
+    if (bucket >= 24) return c255 / 255;
+    let mul = 0.28 + (bucket / 24) * 0.72;
+    return Math.max(0, Math.min(255, Math.round(c255 * mul))) / 255;
+}
+// _litChannel for each light bucket (0-24) and channel value (0-255).
+const _LIT_LUT = (() => {
+    let t = new Float32Array(25 * 256);
+    for (let b = 0; b < 25; b++) for (let c = 0; c < 256; c++) t[b * 256 + c] = _litChannel(c, b);
+    return t;
+})();
+const _uRec = new Float32Array(28);
+// Debug: why units leave the unit layer's fast path (window.__unitSlowWhy).
+let _dbgStats = null;
+let _uSlotVisIndex = -1;
+
+// Whether a unit's object can be drawn from the layer until the next tick.
+function _unitLayerEligible(u, cached, o) {
+    return !!(cached && cached.object === o && !cached.dynamic && !getDamageFlashState(u) && o.alpha >= 0.999
+        && o.topTextureCanvas && !u._historyGhost);
+}
+
+// Per-tick part of a unit's 3D object, between full rebuilds: activity,
+// facing and movement, and the status icon (as the rebuild computes them).
+function _refreshUnit3DObject(u, o, cached) {
+    cached.refreshTick = gameTime;
+    let activity = getUnit3DActivity(u);
+    if (activity.mode !== 0 || activity.amount > 0) cached.stillSince = gameTime;
+    activity = _unit3DIdleActivity(u, activity, cached.stillSince);
+    cached.activity = activity;
+    let facingX = Number(u.vx) || 0, facingY = Number(u.vy) || 0;
+    if (activity.target && Number.isFinite(activity.target.x) && Number.isFinite(activity.target.y)) {
+        facingX = activity.target.x - u.x; facingY = activity.target.y - u.y;
+    }
+    o.rotationY = Math.atan2(facingX, facingY || 0.0001) || 0;
+    o.moveAmount = Math.max(0, Math.min(1, activity.amount || Math.min(1, Math.hypot(u.x - u.prevX, u.y - u.prevY) / Math.max(.01, TILE * .025)) || 0));
+    o.animationMode = Math.max(0, Math.min(7, Math.floor(Number(activity.mode) || 0)));
+    o.statusTextureCanvas = u._historyGhost ? null : (get3DStatusTexture(getUnit3DStatusState(u, activity)) || null);
+}
+
+function _unit3DWalkPhase(u, activity) {
+    return activity.mode === 1
+        ? Math.max(0, Math.min(1, (8 - Number(u.attackFlash || 0) + (u._historyGhost ? 0 : tickAlpha)) / 8)) * Math.PI
+        : ((Number(u.id) || 0) * 2.399) % (Math.PI * 2);
+}
+
+// Lighting of an object at its current position, exactly as
+// push3DRenderObject derives it (for objects without light overrides).
+// `sourceLight`, when given, is the unit's own light this tick.
+function _relight3DObject(o, source, baseTint, baseSideTint, flat2d, sourceLight) {
+    let ox = o.x, oz = o.z, gx = Math.floor(ox), gy = Math.floor(oz);
+    let remembered = !!(source && source._historyGhost);
+    let lightGrid = remembered ? getRenderVisibilityGrid() : visibilityGrid;
+    let lightRawCenter = fullVisibility ? VISIBILITY_LIGHT_NORMALIZATION_RANGE : ((lightGrid[gy] && lightGrid[gy][gx]) || 0);
+    if (!fullVisibility && source && source.unitType) {
+        lightRawCenter = Math.max(lightRawCenter, sourceLight === undefined ? getVisualUnitSourceLight(source) : sourceLight);
+    }
+    let lightLevel = fullVisibility ? 1 : Math.max(0, Math.min(1, lightRawCenter / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
+    let shadowDirX = DEFAULT_SHADOW_DIR_X, shadowDirZ = DEFAULT_SHADOW_DIR_Y;
+    if (!fullVisibility && !flat2d) {
+        const dir = _shadowDirAt(ox, oz, _shadowDirScratch);
+        shadowDirX = dir.x; shadowDirZ = dir.z;
+    }
+    let finalLightLevel = Math.max(0, Math.min(1, lightLevel));
+    o.tint = _getCachedLitTint(baseTint || '#c8ced8', finalLightLevel);
+    o.sideTint = _getCachedLitTint(baseSideTint || baseTint || '#c8ced8', finalLightLevel);
+    o.lightLevel = finalLightLevel;
+    o.historyGhost = remembered;
+    o.shadowDirX = shadowDirX;
+    o.shadowDirZ = shadowDirZ;
+    o.shadowLength = Math.max(0.6, Math.min(2.4, 1 + (1 - lightLevel) * 0.9));
+}
+
+// Whether a structure's panel shows its level (per thing in 3D: distance).
+function _static3DLabelShown(entity) {
+    return renderer3dStaticFrame.flat2d ? false : !!(entity && entity.textCanvas && shouldShowBuildingLevels(entity));
+}
+
+// Frames drawn since the simulation's tick changed (build3DFrameData).
+const STATIC_SIG_SLICES = 3;
+let _staticSigPhase = 0, _staticSigTick = -1;
+function _reuseStatic3DObject(target, entity, gx, gy) {
+    let entry = entity._r3dStatic;
+    let age = entry ? gameTime - entry.tick : -1;
+    if (!entry || entry.dynamic || age < 0 || age >= entry.maxAge
+        || entry.view !== renderer3dStaticFrame.view
+        || entry.label !== _static3DLabelShown(entity)
+        || entry.angle !== entity.angle
+        || (entry.object.overlapFadeKey !== undefined && entry.occupied !== renderer3dStaticFrame.occupied.has(gy * GRID_W + gx))
+        || getDamageFlashState(entity)) return false;
+    // Its panel's inputs (health, progress, aim...), checked once per tick:
+    // unchanged, the structure is kept however long. Not all structures in
+    // the tick's first frame (hundreds of signatures and the redrawn panels
+    // of those that changed: that frame took twice as long as the others,
+    // twenty times a second): by tile, a third of them in each of the
+    // tick's first three frames (STATIC_SIG_SLICES; at fewer frames a tick
+    // the rest with the next tick, never more than a tick late).
+    if (entry.sigTick !== gameTime && ((gx * 7 + gy * 13) % STATIC_SIG_SLICES <= _staticSigPhase || entry.sigTick < gameTime - 1)) {
+        if (get3DExact2DVisualSignature(entity, false) !== entry.sig) return false;
+        entry.sigTick = gameTime;
+    }
+    // Structures do not move: their light changes only with the grid.
+    let object = entry.object;
+    let panel = object.topTextureCanvas;
+    if (panel && panel._textureVersion !== entry.textureVersion) return false; // recycled
+    _touch3DPanel(panel);
+    // A reused (lowered) structure keeps its height state alive; otherwise the
+    // state is pruned and the structure pops back to full height at once.
+    if (object.overlapFadeKey !== undefined) {
+        let fadeState = renderer3dOverlapFadeState.get(object.overlapFadeKey);
+        if (!fadeState) return false;
+        fadeState.lastSeenMs = fadeState.lastUpdateMs = renderer3dStaticFrame.overlapNowMs;
+        renderer3dStaticFrame.overlapFadeKeys.add(object.overlapFadeKey);
+    }
+    if (entry.litVersion !== visibilityVersion || entry.litGrid !== visibilityGrid) {
+        _relight3DObject(object, entity, object.baseTint, object.baseSideTint, renderer3dStaticFrame.flat2d);
+        entry.litVersion = visibilityVersion;
+        entry.litGrid = visibilityGrid;
+    }
+    target.push(object);
+    _staticReuseHit = true;
+    return true;
+}
+
+function _rememberStatic3DObject(target, entity, gx, gy, fallbackTexture) {
+    let object = target[target.length - 1];
+    let entry = entity._r3dStatic;
+    let easing = !!(entry && entry.object.scaleY !== object.scaleY);
+    entity._r3dStatic = ({ object, tick: gameTime, angle: entity.angle,
+        textureVersion: object.topTextureCanvas ? object.topTextureCanvas._textureVersion : undefined,
+        litVersion: visibilityVersion, litGrid: visibilityGrid,
+        // Kept while its panel signature holds (see _reuseStatic3DObject);
+        // rebuilt now and then anyway (spread by tile).
+        maxAge: 200 + ((gx * 7 + gy * 13) & 31),
+        sig: get3DExact2DVisualSignature(entity, false), sigTick: gameTime,
+        view: renderer3dStaticFrame.view,
+        label: _static3DLabelShown(entity),
+        occupied: renderer3dStaticFrame.occupied.has(gy * GRID_W + gx),
+        dynamic: fallbackTexture || easing || !!getDamageFlashState(entity) });
+}
+
+// ---- Flat (2D view) sprites -------------------------------------------
+// The 2D view needs only a position, footprint, light and panel per sprite.
+// Units, projectiles and particles write those straight into the renderer's
+// typed instance batch instead of building scene objects; structures reuse
+// their cached scene objects (pushObject).
+let renderer3dFlatBatch = null;
+let renderer3dFxBatch = null;
+let renderer3dFlatGeneration = 0;
+// Per unit: the panel and own light source of the current tick.
+const renderer3dFlatUnits = new WeakMap();
+
+function _getRenderer3DFlatBatch() {
+    if (!renderer3dFlatBatch) renderer3dFlatBatch = new window.Defence3Renderer3D.FlatSpriteBatch();
+    renderer3dFlatBatch.reset();
+    return renderer3dFlatBatch;
+}
+
+// push3DRenderObject's light level for a sprite at (x, z) in tiles.
+function _flatLightAt(x, z, sourceLight, remembered) {
+    if (fullVisibility) return 1;
+    let gx = Math.floor(x), gy = Math.floor(z);
+    let lightGrid = remembered ? getRenderVisibilityGrid() : visibilityGrid;
+    let row = lightGrid[gy];
+    let raw = (row && row[gx]) || 0;
+    if (sourceLight > raw) raw = sourceLight;
+    return Math.max(0, Math.min(1, raw / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
+}
+
+// Returns false when the unit has no exact panel (the caller then builds a
+// scene object). Like the 3D cache, tick data may be one tick old for half
+// of the units, which halves panel lookups on tick frames.
+function _pushFlatUnit(batch, u, x, z, view) {
+    let state = renderer3dFlatUnits.get(u);
+    let age = state ? gameTime - state.tick : -1;
+    if (!state || state.view !== view || state.generation !== renderer3dFlatGeneration || state.fallback
+        || state.panel._textureVersion !== state.version
+        || !(age === 0 || (age === 1 && ((u.id + gameTime) & 1) === 1))) {
+        let panel = get3DExact2DTexture(u, true);
+        if (!panel || !panel._flatWorldSize) return false;
+        if (!state) renderer3dFlatUnits.set(u, state = {});
+        state.tick = gameTime;
+        state.view = view;
+        state.generation = renderer3dFlatGeneration;
+        state.panel = panel;
+        state.version = panel._textureVersion;
+        state.fallback = renderer3dExactTextureFallback;
+        state.sourceLight = fullVisibility ? 0 : getVisualUnitSourceLight(u);
+    }
+    let panel = state.panel, size = panel._flatWorldSize;
+    _touch3DPanel(panel);
+    let remembered = !!u._historyGhost;
+    let light = _flatLightAt(x, z, state.sourceLight, remembered);
+    if (remembered) light *= 0.65;
+    batch.push(x, z + (panel._flatOffsetZ || 0), size, size, light, light, light, u._r3dDetailBlend ?? 1, 0, panel);
+    return true;
+}
+
+// Debug: when window.__r3dPhases is an object, build3DFrameData adds the
+// time of each of its phases to it (ms), per kind of frame.
+function _r3dPhase(name, t0) {
+    let P = typeof window !== 'undefined' ? window.__r3dPhases : null;
+    if (!P) return 0;
+    let now = performance.now();
+    if (t0) P[name] = (P[name] || 0) + (now - t0);
+    return now;
+}
+
+// Army-scale presentation owns only packed visual records, never simulation
+// state. Two buffers retain structures and units across frames; only changed
+// pages upload on a tick. Shader interpolation also handles stopping/teleports.
+let rendererScaleCache = null;
+let rendererScaleActive = false;
+let rendererChunkCache = null;
+function getChunkRenderView(view, bounds, flat2d) {
+    if (!rendererChunkCache || rendererChunkCache.grid !== view.grid) rendererChunkCache = { grid: view.grid, lists: new Map() };
+    const result = { ...view }, columns = Math.ceil(GRID_W / 16);
+    // Match the detailed layers' overscan, plus one whole chunk for bodies
+    // and interpolation. Query results preserve the original painter order.
+    const padX = Math.max(4, Math.ceil((bounds.maxGx - bounds.minGx) * .3)) + 16;
+    const padY = Math.max(4, Math.ceil((bounds.maxGy - bounds.minGy) * .3)) + 16;
+    const x0 = Math.max(0, Math.floor((bounds.minGx - padX) / 16));
+    const y0 = Math.max(0, Math.floor((bounds.minGy - padY) / 16));
+    const x1 = Math.min(columns - 1, Math.floor((bounds.maxGx + padX) / 16));
+    const y1 = Math.min(Math.ceil(GRID_H / 16) - 1, Math.floor((bounds.maxGy + padY) / 16));
+    // The live units: from the frame's columns (a tight pass, ~1 ms for 200k
+    // units, once per tick and view) in their list's order; an index of
+    // buckets rebuilt each tick through the units' views took ~100 ms.
+    const F = view.units === units && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    if (F && view.units.length >= 5000) {
+        const detailCull = typeof flat2d === 'boolean';
+        const key = gameTime + '|' + view.units.length + '|' + (detailCull ? _detailViewKey(flat2d) : [x0,y0,x1,y1].join('|'));
+        let U = rendererChunkCache.liveUnits;
+        if (!U || U.key !== key || U.frame !== F || U.list !== view.units) {
+            const list = view.units, ord = F.order, X = F.x, Y = F.y, PX = F.px, PY = F.py, n = Math.min(F.count, list.length);
+            const minX = x0 * 16 * TILE, minY = y0 * 16 * TILE, maxX = (x1 + 1) * 16 * TILE, maxY = (y1 + 1) * 16 * TILE, out = [];
+            // (Two slot buffers in turn: the last tick's may still be read.)
+            const C2 = rendererChunkCache, which = C2.slotFlip = !C2.slotFlip;
+            let outS = which ? C2.slotsA : C2.slotsB;
+            if (!outS || outS.length < n) { outS = new Int32Array(Math.max(1024, Math.ceil(n * 1.25))); if (which) C2.slotsA = outS; else C2.slotsB = outS; }
+            const R = renderer3dInstance, M = detailCull ? R.tmpViewProjection : null;
+            const projectionScale = detailCull ? (flat2d ? camera.zoom * TILE : R.lodProjectionScale) : 0;
+            const sx = detailCull ? viewW / R.cssWidth : 1, sy = detailCull ? viewH / R.cssHeight : 1;
+            // The presentation worker builds immutable buckets with the frame.
+            // Camera frames only inspect nearby buckets, never rebuild an index
+            // over the whole army. Old/non-worker frames use the linear fallback.
+            const B = detailCull && F.renderBuckets;
+            let candidates = null;
+            if (B && B.columns === columns && B.rows === Math.ceil(GRID_H / 16) && B.tile === TILE) {
+                candidates = [];
+                const motionPad = (F.renderMotionPad || 0) / TILE;
+                for (let b = 0; b < B.head.length; b++) {
+                    if (B.head[b] < 0) continue;
+                    const x = (b % B.columns + .5) * 16, z = (Math.floor(b / B.columns) + .5) * 16;
+                    const radius = 10 + Math.max(B.motion[b], motionPad);
+                    const w = M[3] * x + M[11] * z + M[15], dw = radius * (Math.abs(M[3]) + Math.abs(M[11]));
+                    if (w + dw <= 0 || .9 * projectionScale / (flat2d ? 1 : Math.max(.01, w - dw)) < (flat2d ? UNIT_DETAIL_MIN_PX : 8) * .85) continue;
+                    const cx = M[0] * x + M[8] * z + M[12], cy = M[1] * x + M[9] * z + M[13];
+                    if (Math.abs(cx) > sx * w + radius * (Math.abs(M[0]) + Math.abs(M[8])) + sx * dw
+                        || Math.abs(cy) > sy * w + radius * (Math.abs(M[1]) + Math.abs(M[9])) + sy * dw) continue;
+                    for (let k = B.head[b]; k >= 0; k = B.next[k]) candidates.push(k);
+                }
+                if (flat2d) candidates.sort((a, b) => a - b); // 3D uses depth, not painter order.
+            }
+            const count = candidates ? candidates.length : n;
+            for (let i = 0; i < count; i++) {
+                const k = candidates ? candidates[i] : i;
+                const s = ord[k], x = X[s], y = Y[s], px = PX[s], py = PY[s];
+                if ((x < minX && px < minX) || (x >= maxX && px >= maxX) || (y < minY && py < minY) || (y >= maxY && py >= maxY)) continue;
+                if (detailCull) {
+                    // Conservative swept sphere: keep both tick endpoints and
+                    // any interpolated model crossing the viewport. Far glyphs
+                    // stay in the GPU column draw, without JS entity visits.
+                    const wx = (x + px) / (2 * TILE), wz = (y + py) / (2 * TILE);
+                    const radius = 1 + (Math.abs(x - px) + Math.abs(y - py)) / TILE;
+                    const w = M[3] * wx + M[11] * wz + M[15];
+                    if (w + radius <= 0) continue;
+                    const size = Math.max(.28, Math.min(.9, F.r[s] * 2.2 / TILE));
+                    if (size * projectionScale / (flat2d ? 1 : Math.max(.01, w - radius)) < (flat2d ? UNIT_DETAIL_MIN_PX : 8) * .85) continue;
+                    const cx = M[0] * wx + M[8] * wz + M[12], cy = M[1] * wx + M[9] * wz + M[13];
+                    const margin = radius * (Math.abs(M[0]) + Math.abs(M[8]) + Math.abs(M[1]) + Math.abs(M[9]) + 1);
+                    if (Math.abs(cx) > w * sx + margin || Math.abs(cy) > w * sy + margin) continue;
+                }
+                outS[out.length] = s;
+                out.push(list[k]);
+            }
+            U = rendererChunkCache.liveUnits = { key, frame: F, list, query: out, slots: outS.subarray(0, out.length) };
+        }
+        result.units = U.query;
+        // (Their frame slots, in the same order: the detail split and the
+        // middle models read the columns by them, not each unit's _s.)
+        result.unitSlots = U.slots;
+    }
+    for (const name of ['units', 'towers', 'barracks', 'collectorSpawners', 'goldMines', 'astarMines', 'droppedItems']) {
+        const list = view[name];
+        // The live structure split reads the packed table itself. Building
+        // and sorting object buckets here would immediately be discarded.
+        if (name !== 'units' && name !== 'droppedItems' && typeof flat2d === 'boolean' && F
+            && typeof _pageTables !== 'undefined' && _pageTables.s?.n > STRUCT_DETAIL_BUDGET && _isLiveRenderGrid(view.grid)) continue;
+        if (list.length < 5000 || (name === 'units' && F)) continue;
+        let index = rendererChunkCache.lists.get(name);
+        // (Structures do not move: their index stands until their list is
+        // replaced or changes size; units' every tick.)
+        if (!index || index.list !== list || index.length !== list.length || (name === 'units' && index.tick !== unitsRenderStamp())) {
+            index = { list, tick: name === 'units' ? unitsRenderStamp() : gameTime, length: list.length, buckets: new Map(), overflow: [] };
+            rendererChunkCache.lists.set(name, index);
+            for (let i = 0; i < list.length; i++) {
+                const e = list[i], moving = name === 'units';
+                const x = moving ? e.x / TILE : e.gx, y = moving ? e.y / TILE : e.gy;
+                const px = moving && Number.isFinite(e.prevX) ? e.prevX / TILE : x;
+                const py = moving && Number.isFinite(e.prevY) ? e.prevY / TILE : y;
+                const left = Math.max(0, Math.floor(Math.min(x, px) / 16)), right = Math.min(columns - 1, Math.floor(Math.max(x, px) / 16));
+                const top = Math.max(0, Math.floor(Math.min(y, py) / 16)), bottom = Math.min(Math.ceil(GRID_H / 16) - 1, Math.floor(Math.max(y, py) / 16));
+                if ((right - left + 1) * (bottom - top + 1) > 16) { index.overflow.push(i); continue; }
+                for (let by = top; by <= bottom; by++) for (let bx = left; bx <= right; bx++) {
+                    const key = by * columns + bx;
+                    let bucket = index.buckets.get(key);
+                    if (!bucket) index.buckets.set(key, bucket = []);
+                    bucket.push(i);
+                }
+            }
+        }
+        const key = x0 + '|' + y0 + '|' + x1 + '|' + y1;
+        if (index.queryKey !== key) {
+            const ids = index.overflow.slice();
+            for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+                const bucket = index.buckets.get(y * columns + x);
+                if (bucket) for (const i of bucket) ids.push(i);
+            }
+            ids.sort((a, b) => a - b);
+            index.query = []; let previous = -1;
+            for (const i of ids) if (i !== previous) { index.query.push(list[i]); previous = i; }
+            index.queryKey = key;
+        }
+        result[name] = index.query;
+    }
+    return result;
+}
+function useScaleRendering(flat2d, view) {
+    if (!renderer3dInstance || typeof renderer3dInstance.buildViewProjection !== 'function' || window.__disableScaleRendering) return false;
+    const snapshot = get3DProjectionSnapshot(); snapshot.flat2d = flat2d;
+    renderer3dInstance.buildViewProjection(snapshot);
+    let pixels = flat2d ? camera.zoom * TILE : renderer3dInstance.lodPixelsPerWorld;
+    if (!flat2d) {
+        // Low camera pitches magnify the foreground relative to the target.
+        const footprint = renderer3dInstance.getGroundFrustumPolygon(snapshot, true);
+        if (footprint) for (const p of footprint) pixels = Math.max(pixels, renderer3dInstance.pixelsPerWorldAt(p.x, 0, p.y));
+    }
+    // Detail follows projected size, not the population of the entire map.
+    // Close views use the chunk query below, so distant armies stay culled.
+    rendererScaleActive = pixels < (rendererScaleActive ? 24 : 22);
+    return rendererScaleActive;
+}
+
+function buildScaleFrameData(flat2d, view) {
+    let cache = rendererScaleCache;
+    if (!cache || cache.grid !== view.grid || cache.renderer !== renderer3dInstance) {
+        if (cache) for (const layer of cache.layers) layer.dispose(cache.renderer.gl);
+        const P = window.Defence3Renderer3D.PersistentInstances;
+        cache = rendererScaleCache = { grid: view.grid, renderer: renderer3dInstance,
+            layers: [new P(12), new P(12)], tick: NaN, colors: new Map() };
+    }
+    const refs = [view.towers, view.barracks, view.collectorSpawners, view.goldMines, view.astarMines, view.droppedItems, view.units];
+    const frame = view.units === units && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    const structuresFrame = frame && typeof _pageTables !== 'undefined' && _isLiveRenderGrid(view.grid) ? _pageTables.s : null;
+    // Units from the frame's columns whenever the view's units are the live
+    // ones (also with a remembered view's structures: Team + history), hidden
+    // where nothing sees now (the light grid, not the fog's memory).
+    const columns = frame ? { units: frame, structures: structuresFrame,
+        unitSources: units, structureSources: structuresFrame ? _pageStructViews : null, alpha: tickAlpha,
+        visibility: structuresFrame ? view.visibilityGrid : visibilityGrid, visibilityVersion, fullVisibility, player: localPlayerId, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
+        colors: Array.from({length:9}, (_, i) => get3DRenderOwnerColor(i - 1)) } : null;
+    // (Structures pushed as instances: a remembered view's, without a table.)
+    const pushStructures = !columns || !structuresFrame;
+    const changed = cache.tick !== gameTime || cache.vis !== visibilityVersion || cache.full !== fullVisibility
+        || cache.player !== localPlayerId || cache.history !== teamVisibilityHistory
+        || !cache.refs || refs.some((list, i) => list !== cache.refs[i] || list.length !== cache.lengths[i]);
+    if (changed && pushStructures) {
+        cache.colors.clear();
+        const colorFor = owner => {
+            let c = cache.colors.get(owner);
+            if (!c) { c = _parseHexColor(get3DRenderOwnerColor(owner)) || { r: 200, g: 206, b: 216 }; cache.colors.set(owner, c); }
+            return c;
+        };
+        const push = (layer, e, kind, gx, gy, owner = e.owner) => {
+            if (!e || e.dead || e.energy <= 0 || e.teleportHideTicks > 0) return;
+            const x = kind === 0 ? e.x / TILE : gx + .5, z = kind === 0 ? e.y / TILE : gy + .5;
+            gx = Math.floor(x); gy = Math.floor(z);
+            const light = view.visibilityGrid[gy] && view.visibilityGrid[gy][gx];
+            if (!fullVisibility && !e._historyGhost && !(light > 0)) return;
+            layer.reserve(layer.count + 1);
+            const d = layer.data, o = layer.count++ * 12, c = colorFor(owner);
+            d[o] = x; d[o + 1] = z;
+            d[o + 2] = kind === 0 && !e._historyGhost && Number.isFinite(e.prevX) ? e.prevX / TILE : x;
+            d[o + 3] = kind === 0 && !e._historyGhost && Number.isFinite(e.prevY) ? e.prevY / TILE : z;
+            d[o + 4] = kind === 0 ? Math.max(.28, Math.min(.9, (e.r || 8) * 2.2 / TILE)) : .94;
+            d[o + 5] = kind === 0 ? (e.isFlying ? .9 : .5) : kind === 1 ? .85 : .2;
+            d[o + 6] = kind === 0 ? Math.atan2(e.vx || 0, e.vy || 1) : 0;
+            d[o + 7] = kind;
+            const brightness = fullVisibility ? 1 : .35 + .65 * Math.min(1, (light || 0) / VISIBILITY_LIGHT_NORMALIZATION_RANGE);
+            d[o + 8] = c.r / 255 * brightness; d[o + 9] = c.g / 255 * brightness; d[o + 10] = c.b / 255 * brightness;
+            d[o + 11] = e._historyGhost ? .3 : e.underConstruction ? .6 : 1;
+            layer.sources.push(e);
+        };
+        for (const layer of cache.layers) { layer.count = 0; layer.sources = layer.sources || []; layer.sources.length = 0; layer.sourceIndex = null; }
+        const structures = cache.layers[0], moving = cache.layers[1];
+        for (const list of refs.slice(0, 6)) for (const e of list) push(structures, e, 1, e.gx, e.gy);
+        if (_isLiveRenderGrid(view.grid)) {
+            for (const e of getCellItemsRowMajor()) {
+                const cell = view.grid[e.gy] && view.grid[e.gy][e.gx];
+                if (cell && cell.item === e) push(structures, e, 2, e.gx, e.gy, cell.owner);
+            }
+        } else if (visibilityHistoryState && visibilityHistoryState.memories) {
+            for (const record of visibilityHistoryState.memories.floorItems.values()) {
+                const e = record.snapshot || record.source;
+                if (e) push(structures, e, 2, record.gx, record.gy, view.grid[record.gy][record.gx].owner);
+            }
+        }
+        // Read worker columns directly: avoid millions of PageUnit getter
+        // calls when the authoritative frame is already packed for rendering.
+        const F = view.units === units && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+        // (Units drawn from the columns: not here too.)
+        if (F && !columns) {
+            moving.reserve(view.units.length);
+            const d = moving.data;
+            for (let i = 0; i < view.units.length; i++) {
+                const s = F.order[i];
+                if (F.energy[s] <= 0 || (F.flags[s] & 1024)) continue;
+                const x = F.x[s] / TILE, z = F.y[s] / TILE;
+                const row = view.visibilityGrid[Math.floor(z)], light = row && row[Math.floor(x)];
+                if (!fullVisibility && !(light > 0)) continue;
+                const o = moving.count++ * 12, c = colorFor(F.owner[s]);
+                d[o] = x; d[o + 1] = z; d[o + 2] = F.px[s] / TILE; d[o + 3] = F.py[s] / TILE;
+                d[o + 4] = Math.max(.28, Math.min(.9, F.r[s] * 2.2 / TILE));
+                d[o + 5] = F.flags[s] & 1 ? .9 : .5; d[o + 6] = F.facing[s]; d[o + 7] = 0;
+                const brightness = fullVisibility ? 1 : .35 + .65 * Math.min(1, (light || 0) / VISIBILITY_LIGHT_NORMALIZATION_RANGE);
+                d[o + 8] = c.r / 255 * brightness; d[o + 9] = c.g / 255 * brightness; d[o + 10] = c.b / 255 * brightness; d[o + 11] = 1;
+                moving.sources.push(view.units[i]);
+            }
+        } else if (!columns) for (const e of view.units) push(moving, e, 0);
+        for (const layer of cache.layers) layer.version++;
+        cache.tick = gameTime; cache.vis = visibilityVersion; cache.full = fullVisibility; cache.player = localPlayerId;
+        cache.history = teamVisibilityHistory; cache.refs = refs; cache.lengths = refs.map(list => list.length);
+    }
+    for (const layer of cache.layers) layer.alpha = tickAlpha;
+    if (_staticCacheCommitVersion < 0 || !_combinedBgCanvas) commitStaticCaches(true, 'background');
+    const fogGrid = getFogGridForGpu();
+    if (!fullVisibility && !fogGrid) rebuildVisibilityMaskCacheIfNeeded();
+    const snapshot = get3DProjectionSnapshot();
+    const bounds = flat2d ? getVisibleWorldBounds(2) : get3DVisibleWorldBounds();
+    const fx = renderer3dFxBatch || (renderer3dFxBatch = new window.Defence3Renderer3D.FxBatch());
+    beginFrameEffects(fx, flat2d, bounds, getTeamLightingGrid(), camera.zoom * TILE, renderer3dInstance);
+    buildFrameEffects(view.projectiles, view.particles, view.towers);
+    endFrameEffects();
+    return Object.assign(snapshot, { flat2d, scaleLayers: columns && !pushStructures ? [] : cache.layers, columnLayers: columns, objects: [], fx,
+        backgroundCanvas: getBackgroundMip(Math.min(1, 2048 / Math.max(WORLD_W, WORLD_H))), backgroundVersion: _backgroundContentVersion, areaGrid: getAreaGridForGpu(),
+        backgroundBounds: { centerX: GRID_W / 2, centerZ: GRID_H / 2, width: GRID_W, height: GRID_H },
+        fogCanvas: fullVisibility || fogGrid ? null : _visibilityMaskCanvas, fogGrid,
+        fogVersion: _visibilityMaskCanvas ? _visibilityMaskCanvas._visibilityContentVersion || 0 : 0,
+        overlays: buildScaleOverlays(cache), buildPreview: getCurrentBuildPreviewData() });
+}
+
+// Aggregate selection outlines by fixed world chunks. This bounds geometry
+// at full zoom-out while exact selection/commands remain untouched.
+// ---- order and rally markers ----
+// Pending feedback belongs to the commanded entities, never to a click
+// history. It supersedes their old destination until the displayed state
+// includes the command's tick. Authoritative orders then own the markers.
+const _pendingUnitOrderMarkers = new Map(), _pendingRallyMarkers = new Map();
+// A big order's one marker (its units share the target) until the frames
+// show the order: per unit, a move of a million selected units filled a Map
+// of a million entries, and each frame looked every selected unit up in it
+// (~380 ms frames at 4M units). [{ tick, target }]
+const _pendingCommandMarkers = [];
+const ORDER_PENDING_PER_UNIT_MAX = 64;
+let _orderMarkerRevision = 0, _orderMarkerCache = null, _rallyVisualLastSeen = new WeakMap();
+function resetOrderMarkers() {
+    _pendingUnitOrderMarkers.clear(); _pendingRallyMarkers.clear(); _pendingCommandMarkers.length = 0;
+    _orderMarkerCache = null; _orderMarkerRevision++;
+    _rallyVisualLastSeen = new WeakMap();
+}
+function noteOrderMarker(a, tick = currentTick) {
+    if (!a) return;
+    const rally = a.action === 'setRally' || a.action === 'setRallyMany';
+    const move = a.action === 'move' || a.action === 'attackMove';
+    if (!rally && !move && !['stop', 'attack', 'attackBuilding', 'workerAssign'].includes(a.action)) return;
+    const x = Number(a.targetX), y = Number(a.targetY);
+    const target = (rally || move) && Number.isFinite(x) && Number.isFinite(y)
+        ? { x, y, kind: rally ? 'arrow' : 'plus', color: rally ? '#9aa' : a.action === 'attackMove' ? '#f66' : '#4f4', targetUnitId: a.targetUnitId } : null;
+    const pending = { tick, target };
+    if (rally) {
+        const coords = a.action === 'setRally' ? [a.gx, a.gy] : a.coords || [];
+        for (let i = 0; i + 1 < coords.length; i += 2) _pendingRallyMarkers.set(coords[i] + ',' + coords[i + 1], pending);
+    } else if ((a.unitIds || []).length > ORDER_PENDING_PER_UNIT_MAX) { if (target) _pendingCommandMarkers.push(pending); }
+    else for (const id of a.unitIds || []) _pendingUnitOrderMarkers.set(id, pending);
+    _orderMarkerRevision++;
+}
+function _pendingOrderTarget(map, key, entity) {
+    const pending = map.get(key);
+    if (!pending) return undefined;
+    const shownTick = entity._orderVisualTick ?? (currentTick - 1);
+    if (shownTick >= pending.tick) { map.delete(key); return undefined; }
+    return pending.target;
+}
+function getBuildingOrderTarget(ent) {
+    const pending = _pendingOrderTarget(_pendingRallyMarkers, ent.gx + ',' + ent.gy, ent);
+    if (pending === null) return null;
+    const x = pending ? pending.x : ent.rallyX, y = pending ? pending.y : ent.rallyY;
+    const id = pending ? pending.targetUnitId : ent.rallyTargetUnitId;
+    // Follow visible targets without mutating simulation state or read-only
+    // worker views. A hidden target stays at its last displayed position.
+    if (id != null) {
+        const target = getUnitById(id);
+        if (target && !target.dead && target.owner !== ent.owner
+            && isTileVisibleToPlayer(ent.owner, Math.floor(target.x / TILE), Math.floor(target.y / TILE))) {
+            const marker = { x: target.x, y: target.y, kind: 'arrow', color: '#9aa' };
+            _rallyVisualLastSeen.set(ent, { id, marker });
+            return marker;
+        }
+        const last = _rallyVisualLastSeen.get(ent);
+        if (last && last.id === id) return last.marker;
+    } else _rallyVisualLastSeen.delete(ent);
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+        return { x, y, kind: 'arrow', color: '#9aa' };
+    }
+    return null;
+}
+function getUnitOrderTarget(u) {
+    const pending = _pendingOrderTarget(_pendingUnitOrderMarkers, u.id, u);
+    if (pending !== undefined) return pending;
+    if (u.commandState === CMD_ATTACKING) {
+        const target = u.targetUnit || u.targetBuilding || u.attackTarget;
+        if (target && !target.dead && (target.energy === undefined || target.energy > 0)
+            && isTileVisible(Math.floor(target.x / TILE), Math.floor(target.y / TILE))) {
+            return { x: target.x, y: target.y, kind: 'plus', color: '#f66' };
+        }
+    }
+    const code = u._orderDestination ?? getUnitOrderDestinationCode(u);
+    if (!code) return null;
+    const tile = Math.abs(code) - 1;
+    return { x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' };
+}
+// (The most markers a selection shows: an army sent to thousands of points
+// is not drawn as thousands of crosses.)
+const ORDER_MARKERS_MAX = 2000;
+function getOrderMarkers() {
+    const frame = typeof _pageFrameSerial === 'number' ? _pageFrameSerial : -1;
+    const sub = JSON.stringify(activeSubGroups), version = selectionIndex().version;
+    const C = _orderMarkerCache;
+    const same = C && C.version === version && C.revision === _orderMarkerRevision
+        && C.units === selectedUnits && C.ulen === selectedUnits.length && C.entities === selectedEntities
+        && C.elen === selectedEntities.length && C.sub === sub && C.ignore === ignoreLevelSubgroups;
+    if (same && C.tick === gameTime && C.frame === frame) return C.markers;
+    // (A big selection's markers a few times a second: thousands of rally
+    // points and an army's destinations do not move by the frame.)
+    const big = selectedUnits.length + selectedEntities.length > SELECTED_UNIT_LINES_MAX, now = performance.now();
+    if (same && big && now - C.at < 150 && _pendingUnitOrderMarkers.size === 0 && _pendingRallyMarkers.size === 0 && _pendingCommandMarkers.length === 0) return C.markers;
+    const markers = [], seen = new Set();
+    const add = t => {
+        if (!t || !Number.isFinite(t.x) || !Number.isFinite(t.y) || markers.length >= ORDER_MARKERS_MAX) return;
+        // (One marker a point and kind: a whole number key, by the eighth of a pixel.)
+        const key = (Math.round(t.x * 8) * 2097152 + Math.round(t.y * 8)) * 4 + (t.kind === 'arrow' ? 1 : 0) + (t.color === '#f66' ? 2 : 0);
+        if (seen.has(key)) return;
+        seen.add(key); markers.push({ x: t.x / TILE, z: t.y / TILE, kind: t.kind, color: t.color });
+    };
+    for (const ent of getActiveEntities()) {
+        if (markers.length >= ORDER_MARKERS_MAX) break;
+        if (!ent || ent.owner !== localPlayerId || (ent.energy !== undefined && ent.energy <= 0)) continue;
+        if (_isRallySpawnerType(ent.type)) add(getBuildingOrderTarget(ent));
+    }
+    // (Big orders not yet shown by the frames: their markers.)
+    if (_pendingCommandMarkers.length) {
+        const shown = typeof _simClient !== 'undefined' && _simClient && Number.isFinite(_simClient.presentationTick) ? _simClient.presentationTick : currentTick - 1;
+        for (let i = _pendingCommandMarkers.length - 1; i >= 0; i--) {
+            const p = _pendingCommandMarkers[i];
+            if (shown >= p.tick) _pendingCommandMarkers.splice(i, 1); else add(p.target);
+        }
+    }
+    const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    const destinations = new Set();
+    // A big selection: by its slots in the frame's columns (the selection's
+    // index), never through its units' views (300k views read every frame
+    // took 60-80 ms). Units with an order still on its way or an attack
+    // target are the few whose views are read.
+    const X = selectionIndex();
+    const bySlots = F && X.framed && selectedUnits.length > SELECTED_UNIT_LINES_MAX && !Object.values(activeSubGroups).some(v => v === false);
+    if (bySlots) {
+        const slots = X.slots, mask = X.mask, n = X.n, O = F.owner, EN = F.energy, CM = F.cmd, FL = F.flags, OD = F.orderDest, ID = F.id;
+        const pendingAny = _pendingUnitOrderMarkers.size > 0, me = localPlayerId;
+        const dense = n * 4 >= F.n, end = dense ? Math.min(F.n, mask.length) : n;
+        let last = 0;
+        for (let i = 0; i < end; i++) {
+            const s = dense ? i : slots[i];
+            if (mask[s] === 0 || O[s] !== me || !(EN[s] > 0)) continue;
+            if ((pendingAny && _pendingUnitOrderMarkers.has(ID[s])) || (CM[s] === CMD_ATTACKING && (FL[s] & SIM_UF_ATTACK_TARGET) !== 0)) {
+                if (markers.length < ORDER_MARKERS_MAX) { const u = _pageSlotViews[s]; if (u && !u.dead) add(getUnitOrderTarget(u)); }
+                continue;
+            }
+            const code = OD[s];
+            if (code === 0 || code === last) continue;
+            last = code;
+            if (destinations.has(code)) continue;
+            destinations.add(code);
+            if (markers.length >= ORDER_MARKERS_MAX) continue;
+            const tile = Math.abs(code) - 1;
+            add({ x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' });
+        }
+    } else for (const u of getActiveUnitsForRender()) {
+        if (!u || u.dead) continue;
+        const s = u._s;
+        // Large selections usually share a few destinations. Read columns
+        // and deduplicate codes before allocating marker objects or strings.
+        if (F && s >= 0 && F.id[s] === u.id) {
+            if (F.owner[s] !== localPlayerId || F.energy[s] <= 0) continue;
+            if (_pendingUnitOrderMarkers.has(F.id[s]) || (F.cmd[s] === CMD_ATTACKING && (F.flags[s] & SIM_UF_ATTACK_TARGET))) {
+                add(getUnitOrderTarget(u));
+            } else {
+                const code = F.orderDest[s];
+                if (!code || destinations.has(code)) continue;
+                destinations.add(code);
+                const tile = Math.abs(code) - 1;
+                add({ x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' });
+            }
+        } else if (u.owner === localPlayerId) add(getUnitOrderTarget(u));
+    }
+    _orderMarkerCache = { tick: gameTime, frame, at: now, version, revision: _orderMarkerRevision,
+        units: selectedUnits, ulen: selectedUnits.length, entities: selectedEntities, elen: selectedEntities.length,
+        sub, ignore: ignoreLevelSubgroups, markers };
+    return markers;
+}
+const _RALLY_SPAWNER_TYPES = new Set(['barrack', 'spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research']);
+function _isRallySpawnerType(t) { return _RALLY_SPAWNER_TYPES.has(t); }
+// Floor items marked for salvage, gathered once per tick (twice a second).
+let _salvageFloorCache = { tick: -1, at: -Infinity, list: [] };
+function _salvageMarkedFloorItems() {
+    const C = _salvageFloorCache, now = performance.now();
+    if (C.tick === gameTime || now - C.at < 500) return C.list;
+    C.tick = gameTime; C.at = now; C.list = [];
+    for (const item of _activeTileEntities) if (item && item.markedForSalvage) C.list.push(item);
+    return C.list;
+}
+// Structures marked for salvage (crosses), gathered once per tick.
+let _salvageMarkCache = { tick: -1, list: [] };
+function _salvageMarkedStructures() {
+    const C = _salvageMarkCache;
+    if (C.tick === gameTime) return C.list;
+    C.tick = gameTime; C.list = [];
+    for (const L of [towers, barracks, collectorSpawners]) for (const e of L) if (e && e.markedForSalvage) C.list.push(e);
+    return C.list;
+}
+// Per-unit move lines and target lines only for a selection this small
+// (each costs a few views' reads a frame); bigger ones show their orders'
+// points (getOrderMarkers).
+const SELECTED_UNIT_LINES_MAX = 300;
+
+// A selection this big (units and buildings) is outlined on the GPU
+// (renderer3d drawSelectionMask: a mask of its footprints, outlined), not
+// by tracing contours here (100k units: ~0.5 s each time).
+const SELECTION_GPU_MIN = 120;
+let _selMaskState = { sel: null, len: -1, sub: '', mver: -1, frame: null, mask: null, version: 0, ents: null, elen: -1, buildings: null, count: 0, bversion: 0 };
+function getSelectionMaskOverlay() {
+    const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    if (!F || selectedUnits.length + selectedEntities.length < SELECTION_GPU_MIN) return null;
+    if (!showSelectionOutlinesForUnits() && !showSelectionOutlinesForBuildings()) return null;
+    const S = _selMaskState;
+    let sub = ''; for (const k in activeSubGroups) if (activeSubGroups[k] === false) sub += k + ';';
+    // The mask per slot: the selection's own (selectionIndex: kept as units
+    // die, made again only for another selection; a pass over 300k selected
+    // units on every new frame cost 10-30 ms). With a subgroup turned off or
+    // unit outlines hidden: one of its own, made when those or the selection
+    // change.
+    const X = selectionIndex(), showUnits = showSelectionOutlinesForUnits();
+    if (!sub && showUnits) {
+        if (S.xver !== X.version || S.mask !== X.mask) { S.mask = X.mask; S.xver = X.version; S.version++; S.own = null; }
+    } else {
+        const active = sub && showUnits ? getActiveUnits() : null;
+        if (S.sub !== sub || S.show !== showUnits || S.xver !== X.version || S.active !== active || !S.own || S.own.length < F.cap) {
+            if (!S.own || S.own.length < F.cap) S.own = new Uint8Array(F.cap); else S.own.fill(0);
+            if (active) for (let i = 0; i < active.length; i++) { const u = active[i], s = u && !u.dead ? u._s : -1; if (s >= 0 && s < S.own.length) S.own[s] = 1; }
+            S.mask = S.own; S.xver = X.version; S.active = active; S.version++;
+        }
+    }
+    S.sub = sub; S.show = showUnits;
+    if (S.ents !== selectedEntities || S.elen !== selectedEntities.length) {
+        const ents = showSelectionOutlinesForBuildings() ? getActiveEntities() : [];
+        const B = new Float32Array(Math.max(6, ents.length * 6));
+        let n = 0;
+        for (const e of ents) {
+            if (!e || (e.energy !== undefined && e.energy <= 0)) continue;
+            const x = Number.isFinite(e.x) ? e.x : e.gx * TILE + TILE / 2, y = Number.isFinite(e.y) ? e.y : e.gy * TILE + TILE / 2, o = n++ * 6;
+            B[o] = x; B[o + 1] = y; B[o + 2] = x; B[o + 3] = y; B[o + 4] = 17; B[o + 5] = 1;
+        }
+        S.ents = selectedEntities; S.elen = selectedEntities.length; S.buildings = B; S.count = n; S.bversion++;
+    }
+    return { units: F, mask: S.mask, maskVersion: S.version, buildings: S.buildings, buildingCount: S.count, buildingsVersion: S.bversion,
+        alpha: tickAlpha, tile: TILE, color: get3DRenderOwnerColor(localPlayerId) };
+}
+
+// The fog on the GPU (renderer3d: the ground's shader turns the grid's light
+// into fog, a bilinear sample): the grid of the fog's light as it is (one
+// flat buffer), no canvas made on this thread each tick (a pass over every
+// tile, a blur, an upload: ~25 ms a tick on a 1000x1000 map). null: full
+// visibility, or no flat grid (the canvas path).
+function getFogGridForGpu() {
+    if (fullVisibility || typeof getRenderVisibilityGrid !== 'function') return null;
+    const rows = getRenderVisibilityGrid(), flat = rows && rows._flat;
+    if (!flat || flat.length !== GRID_W * GRID_H) return null;
+    return { data: flat, width: GRID_W, height: GRID_H, version: visibilityVersion, invNorm: 1 / Math.max(.0001, VISIBILITY_LIGHT_NORMALIZATION_RANGE),
+        gamma: typeof _visibilityFogGamma === 'number' ? _visibilityFogGamma : 1.8, minAlpha: typeof _visibilityFogMinAlpha === 'number' ? _visibilityFogMinAlpha : .01 };
+}
+
+// ---- area outlines on the GPU ----
+// The ground's area outlines drawn by its shader (renderer3d drawBackground)
+// from the area of every tile (made once per map) and every area's color
+// (again when areas change): crisp at every zoom. (Baked into the ground's
+// texture, at ~2 px a tile on a 1000x1000 map, they were a blur.)
+const AREA_OUTLINES_ON_GPU = true;
+let _areaColorVersion = 0;
+let _areaGridGpu = { grid: null, w: 0, h: 0, tiles: null, colors: null, colorVersion: -1, count: 0 };
+const _AREA_LEVEL_RGBA = [[0, 255, 0, 153], [0, 255, 0, 204], [70, 170, 255, 204], [200, 0, 255, 204], [255, 150, 0, 204], [255, 220, 0, 230]];
+function getAreaGridForGpu() {
+    if (!AREA_OUTLINES_ON_GPU || !Array.isArray(areas) || !grid || !grid.length) return null;
+    const A = _areaGridGpu;
+    if (A.grid !== grid || A.w !== GRID_W || A.h !== GRID_H) {
+        const tiles = new Uint8Array(GRID_W * GRID_H * 4);
+        for (let y = 0; y < GRID_H; y++) {
+            const row = grid[y];
+            for (let x = 0; x < GRID_W; x++) {
+                const id = row[x].areaId, o = (y * GRID_W + x) * 4, v = id >= 0 ? id + 1 : 0;
+                tiles[o] = v & 255; tiles[o + 1] = (v >> 8) & 255; tiles[o + 2] = (v >> 16) & 255; tiles[o + 3] = 255;
+            }
+        }
+        A.grid = grid; A.w = GRID_W; A.h = GRID_H; A.tiles = tiles; A.tilesVersion = (A.tilesVersion || 0) + 1; A.colorVersion = -1;
+    }
+    if (A.colorVersion !== _areaColorVersion || !A.colors || A.count !== areas.length) {
+        const n = Math.max(1, areas.length), rows = Math.ceil(n / 1024), colors = new Uint8Array(1024 * rows * 4);
+        for (const a of areas) {
+            if (!a) continue;
+            const c = a.active ? (_AREA_LEVEL_RGBA[a.multiplierLevel || 0] || _AREA_LEVEL_RGBA[_AREA_LEVEL_RGBA.length - 1]) : [128, 128, 128, 26], o = a.id * 4;
+            if (o + 3 < colors.length) { colors[o] = c[0]; colors[o + 1] = c[1]; colors[o + 2] = c[2]; colors[o + 3] = c[3]; }
+        }
+        A.colors = colors; A.colorRows = rows; A.count = areas.length; A.colorVersion = _areaColorVersion; A.colorsVersion = (A.colorsVersion || 0) + 1;
+    }
+    return { tiles: A.tiles, tilesVersion: A.tilesVersion, colors: A.colors, colorRows: A.colorRows, colorsVersion: A.colorsVersion, width: A.w, height: A.h };
+}
+
+// The sight grid the page has for this player (the worker's, shared), as
+// the GPU range outline's source; null when the mode is not the team's
+// whole range or there is no such grid (the page computes its own).
+function getRangeVisibilityOverlay() {
+    if (renderRangeMode !== RENDER_RANGE_ALL || !renderRangeAllTeam || typeof visibilityRawFlat === 'undefined' || !visibilityRawFlat) return null;
+    const V = visibilityRawFlat;
+    if (V.player !== localPlayerId || !V.data || V.data.length < GRID_W * GRID_H) return null;
+    return { data: V.data, width: GRID_W, height: GRID_H, version: V.version, seeThrough: renderRangeSeeThrough };
+}
+// The range overlay the GPU draws: the sight grid for the team's whole
+// range, else the areas the chosen sources reach (range_overlay.js).
+function getRangeGpuOverlay(selectedEntities = null, selectedUnitsList = null) {
+    // (Off: the next mode starts its coverage afresh, range_overlay.js.)
+    if (renderRangeMode === RENDER_RANGE_NONE) { rangeShownState.context = null; return null; }
+    return getRangeVisibilityOverlay()
+        || getRangeAreaOverlay(selectedEntities || getActiveEntities(), selectedUnitsList || getActiveUnitsForRender());
+}
+function buildScaleOverlays(cache) {
+    // A big selection: outlined on the GPU (drawSelectionMask), every frame.
+    const selectionMask = getSelectionMaskOverlay();
+    if (selectionMask) {
+        return cache.overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: getOrderMarkers(), bars: [], texts: [], worldTileSize: TILE,
+            rangeVisibility: getRangeGpuOverlay(), selectionMask };
+    }
+    // (Boxes of 16-tile chunks: made again for a new selection at once, as
+    // its units move at most 5 times a second: 100k selected units each
+    // tick cost ~13 ms.)
+    const key = selectedUnits.length + '|' + selectedEntities.length + '|' + JSON.stringify(activeSubGroups), nowMs = performance.now();
+    if (cache.overlayKey === key && cache.selectedUnits === selectedUnits && cache.selectedEntities === selectedEntities
+        && (cache.overlayTick === gameTime || nowMs - (cache.overlayAt || 0) < 200)) { cache.overlays.rangeVisibility = getRangeGpuOverlay(); cache.overlays.markers = getOrderMarkers(); return cache.overlays; }
+    cache.overlayTick = gameTime; cache.overlayAt = nowMs;
+    const overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: getOrderMarkers(), bars: [], texts: [], worldTileSize: TILE, rangeVisibility: getRangeGpuOverlay() };
+    const cw = Math.ceil(GRID_W / 16), nb = cw * Math.ceil(GRID_H / 16);
+    let B = cache.overlayBoxes;
+    if (!B || B.n !== nb) B = cache.overlayBoxes = { n: nb, box: new Float32Array(nb * 4), stamp: new Int32Array(nb), now: 0, used: new Int32Array(nb), count: 0 };
+    const stamp = ++B.now, box = B.box, used = B.used;
+    B.count = 0;
+    const add = (x, z) => {
+        const k = Math.floor(z / 16) * cw + Math.floor(x / 16);
+        if (!(k >= 0 && k < nb)) return;
+        const o = k * 4;
+        if (B.stamp[k] !== stamp) { B.stamp[k] = stamp; used[B.count++] = k; box[o] = x; box[o + 1] = z; box[o + 2] = x; box[o + 3] = z; return; }
+        if (x < box[o]) box[o] = x; if (z < box[o + 1]) box[o + 1] = z; if (x > box[o + 2]) box[o + 2] = x; if (z > box[o + 3]) box[o + 3] = z;
+    };
+    const groups = { values() { const out = []; for (let i = 0; i < B.count; i++) { const o = used[i] * 4; out.push([box[o], box[o + 1], box[o + 2], box[o + 3]]); } return out; } };
+    // Units: from the frame's columns (no getters: 100k selected units read
+    // through views took ~10 ms a tick).
+    const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    for (const e of getActiveUnitsForRender()) {
+        if (!e || e.dead) continue;
+        const s = e._s;
+        if (F && s >= 0) { if (F.energy[s] <= 0) continue; add(F.x[s] / TILE, F.y[s] / TILE); continue; }
+        if (e.energy <= 0) continue;
+        add(Number.isFinite(e.x) ? e.x / TILE : e.gx + .5, Number.isFinite(e.y) ? e.y / TILE : e.gy + .5);
+    }
+    for (const e of getActiveEntities()) {
+        if (!e || e.dead || e.energy <= 0) continue;
+        add(Number.isFinite(e.x) ? e.x / TILE : e.gx + .5, Number.isFinite(e.y) ? e.y / TILE : e.gy + .5);
+    }
+    for (const b of groups.values()) {
+        const x = b[0] - .5, z = b[1] - .5, r = b[2] + .5, t = b[3] + .5;
+        for (const p of [[x,z,r,z],[r,z,r,t],[r,t,x,t],[x,t,x,z]]) overlays.lines.push({ x1: p[0], z1: p[1], x2: p[2], z2: p[3], color: '#6f8', dashed: false });
+    }
+    cache.overlayKey = key; cache.selectedUnits = selectedUnits; cache.selectedEntities = selectedEntities;
+    return cache.overlays = overlays;
+}
+
+function build3DFrameData(flat2d = false) {
+    let _ph = _r3dPhase('', 0);
+    if (_staticSigTick !== gameTime) { _staticSigTick = gameTime; _staticSigPhase = 0; } else _staticSigPhase++;
+    const sourceView = getLiveRenderView();
+    // Every live scene uses the same per-entity LOD selection. Build the
+    // projection before culling; zoom never switches to a different renderer.
+    const projection = get3DProjectionSnapshot(); projection.flat2d = flat2d;
+    renderer3dInstance.buildViewProjection(projection);
+    const queryBounds = flat2d ? getVisibleWorldBounds(2 + Math.ceil(getRenderViewPad() / Math.max(.01, camera.zoom) / TILE)) : get3DVisibleWorldBounds();
+    let { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid, unitSlots } = getChunkRenderView(sourceView, queryBounds, flat2d);
+    // Detail per unit, by its drawn size, within a budget (see
+    // _unitDetailSplit): the rest are the GPU's glyphs, drawn from the frame.
+    const unitDetail = _isLiveUnitList(sourceView.units) ? _unitDetailSplit(units, flat2d, queryBounds, unitSlots) : null;
+    if (unitDetail) units = unitDetail.units;
+    // The same for structures: the near ones in detail, the rest glyphs.
+    // (A remembered view's structures, Team + history, too: its far ones are
+    // glyphs of an instance layer, there being no table of them.)
+    const structLive = _isLiveRenderGrid(grid);
+    const structFrame = _structureRenderFrame(sourceView);
+    const structDetail = _isLiveUnitList(sourceView.units) ? _structureDetailSplit([towers, barracks, collectorSpawners, goldMines, astarMines], flat2d, queryBounds, structLive, structFrame) : null;
+    if (structDetail) [towers, barracks, collectorSpawners, goldMines, astarMines] = structDetail.lists;
+    // (A remembered view in columns, Team + history, with no split: its
+    // lists and cells, as the canvas renderer has them.)
+    else if (sourceView.historyColumns) ({ grid, towers, barracks, collectorSpawners, goldMines, astarMines } = getLiveRenderView(true));
+    const farFloorItems = structDetail && !structLive && !structDetail.frame ? [] : null;
+
+    begin3DTextureFrame();
+    renderer3dExactTextureBuildsRemaining = 12;
+    renderer3dExactTextureTimeRemaining = 2;
+    renderer3dExactUnitTextureBuildsRemaining = 12;
+    renderer3dExactUnitTextureTimeRemaining = 2;
+    // The overscan margin is drawn too (see getRenderViewPad).
+    let bounds = flat2d ? getVisibleWorldBounds(2 + Math.ceil(getRenderViewPad() / Math.max(0.01, camera.zoom) / TILE)) : get3DVisibleWorldBounds();
+    let alpha = tickAlpha;
+    // All entity models below are procedural: their shader uses the top/status
+    // panel and side tint, never the legacy animated side texture.
+    let objects = [];
+    objects.flat2d = flat2d;
+    // 2D: scene objects (structures, units without a panel) move into the
+    // sprite batch in order, between directly written sprites.
+    let flatBatch = flat2d ? _getRenderer3DFlatBatch() : null;
+    let flatDrained = 0;
+    let drainFlatObjects = () => {
+        while (flatDrained < objects.length) flatBatch.pushObject(objects[flatDrained++]);
+    };
+    let buildPreview = getCurrentBuildPreviewData();
+    let centerX = camera.x + bounds.vw * 0.5;
+    let centerY = camera.y + bounds.vh * 0.5;
+    // Stable world-space textures: camera motion changes matrices, not pixels.
+    if (_staticCacheCommitVersion < 0 || !_combinedBgCanvas) commitStaticCaches(true, 'background');
+    let backgroundMinX = 0, backgroundMinY = 0;
+    let backgroundMaxX = WORLD_W, backgroundMaxY = WORLD_H;
+    let backgroundCanvasFor3D = getBackgroundMip(Math.min(1, 4096 / Math.max(WORLD_W, WORLD_H)));
+    let backgroundVersionFor3D = _backgroundContentVersion;
+    _ph = _r3dPhase('startPre', _ph);
+    const fogGrid = getFogGridForGpu();
+    if (!fullVisibility && !fogGrid) rebuildVisibilityMaskCacheIfNeeded();
+    _ph = _r3dPhase('visMask', _ph);
+    let overlays = build3DOverlayData(bounds, alpha);
+    _ph = _r3dPhase('overlays', _ph);
+    let fxBatch = renderer3dFxBatch || (renderer3dFxBatch = new window.Defence3Renderer3D.FxBatch());
+    let fxPixelsPerTile = flat2d ? camera.zoom * TILE : ((renderer3dInstance && renderer3dInstance.lodPixelsPerWorld) || 32);
+    // Live effects are culled by live visibility, never by remembered fog.
+    beginFrameEffects(fxBatch, flat2d, bounds, getTeamLightingGrid(), fxPixelsPerTile, renderer3dInstance);
+    let unitOccupiedTileKeys = renderer3dOccupiedTiles;
+    unitOccupiedTileKeys.begin(GRID_W * GRID_H);
+    renderer3dStaticFrame.occupied = unitOccupiedTileKeys;
+    renderer3dStaticFrame.flat2d = !!flat2d;
+    // Settings that change cached objects (view mode, fog, level labels).
+    // Flat 2D shows labels by zoom for everything at once; in 3D each thing
+    // decides by its own distance, checked by the caches per thing.
+    let view3DKey = (flat2d ? 1 : 0) | (fullVisibility ? 2 : 0) | (levelVisibilityMode << 4)
+        | (flat2d ? (shouldShowUnitLevels() ? 4 : 0) | (shouldShowBuildingLevels() ? 8 : 0) : 0);
+    renderer3dStaticFrame.view = view3DKey;
+    let overlapNowMs = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+    let activeOverlapFadeKeys = new Set();
+    renderer3dStaticFrame.overlapNowMs = overlapNowMs;
+    renderer3dStaticFrame.overlapFadeKeys = activeOverlapFadeKeys;
+    // Tall structures still ease down when occupied; low platforms stay solid.
+    // Occupied structures keep part of their height (RENDERER3D_OVERLAP_*).
+    // Flat sprites have no height.
+    let getOverlapFadeForTile = (gx, gy) => flat2d ? null : ({
+        gx, gy, occupied: unitOccupiedTileKeys.has(gy * GRID_W + gx),
+        nowMs: overlapNowMs, activeKeys: activeOverlapFadeKeys
+    });
+    let getUnitHeightOffset = (unit) => {
+        let id = Number(unit && unit.id) || 0;
+        let bucket = ((id * 1103515245) >>> 0) % 7;
+        return 0.012 + bucket * 0.003;
+    };
+    let getTileLightLevel = (gx, gy) => {
+        if (fullVisibility) return 1;
+        let lighting = visibilityGrid;
+        let raw = (lighting[gy] && lighting[gy][gx]) || 0;
+        return Math.max(0, Math.min(1, raw / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
+    };
+    // Snakes render as their head only. The mounted panel is part of the
+    // model: uniform footprint scale keeps it square, and it turns with it.
+    let pushSnakeRenderObjects = (target, unit, headX, headY, footprint) => {
+        let ownerTint = get3DDamageFlashTint(unit, get3DRenderOwnerColor(unit.owner));
+        const sideTint = get3DDamageFlashTint(unit, '#3dff64');
+        const heightOffset = getUnitHeightOffset(unit);
+        let snake2DTexture = get3DExact2DTexture(unit, true);
+        let unitStatus = snake2DTexture ? null : get3DUnitTextureStatus(unit);
+        let snakeTextureKey = snake2DTexture ? snake2DTexture._renderer3DExactKey : `unit:${unit.unitType || 'snake'}:${unit.owner}:${unitStatus.keySuffix || ''}`;
+        push3DRenderObject(target, {
+            modelKey: `unit_${unit.unitType || 'snake'}`,
+            x: headX / TILE,
+            y: heightOffset,
+            z: headY / TILE,
+            scaleX: footprint,
+            scaleY: Math.max(0.24, footprint * 0.52),
+            scaleZ: footprint,
+            visibilitySource: unit,
+            rotationY: Math.atan2(Number(unit.vx) || 0, Number(unit.vy) || 1),
+            tint: ownerTint,
+            renderShape: 'cylinder',
+            topTextureKey: snake2DTexture ? snake2DTexture._renderer3DExactKey : snakeTextureKey,
+            topTextureCanvas: snake2DTexture || get3DUnitTopTexture(unit, unit.owner, unitStatus),
+            statusTextureCanvas: unit._historyGhost ? null : get3DStatusTexture(getUnit3DStatusState(unit, getUnit3DActivity(unit))),
+            sideTint,
+        });
+    };
+
+    UNIT_3D_REBUILD_TICKS = Math.max(UNIT_3D_REBUILD_TICKS_MIN, Math.min(8, Math.ceil(units.length / 1000)));
+    // The unit layer: reused from its tick, or built this frame.
+    let unitLayer = null, layerReuse = false, previousOccupied = null;
+    _simpleShadows = !!(graphicsOptions && graphicsOptions.shadows === 'simple');
+    if (!flat2d && RENDERER3D_UNIT_LAYER_ENABLED && renderer3dInstance) {
+        let L = renderer3dUnitLayer;
+        // (A big zoom change rebuilds too: model detail follows on-screen size.)
+        layerReuse = !!(L && L.tick === unitsRenderStamp() && L.view === view3DKey && L.fullVis === fullVisibility && L.player === localPlayerId
+            && L.units === units && L.unitCount === units.length && L.detailVersion === (unitDetail?.columns.detailMaskVersion || 0) && Math.abs(camera.zoom / L.zoom - 1) < 0.25
+            && bounds.minGx >= L.bounds.minGx && bounds.maxGx <= L.bounds.maxGx && bounds.minGy >= L.bounds.minGy && bounds.maxGy <= L.bounds.maxGy);
+        if (layerReuse) { unitLayer = L; renderer3dUnitLayerStats.reuse++; }
+        else {
+            if (L && L.occupied && L.view === view3DKey) previousOccupied = L.occupied;
+            renderer3dUnitLayerStats.build++;
+            let why = !L ? 'none' : L.tick !== unitsRenderStamp() ? 'tick' : L.view !== view3DKey ? 'view' : L.units !== units || L.unitCount !== units.length ? 'units'
+                : L.fullVis !== fullVisibility || L.player !== localPlayerId ? 'player' : 'bounds';
+            renderer3dUnitLayerStats.why[why] = (renderer3dUnitLayerStats.why[why] || 0) + 1;
+            // A margin around the view, so panning between ticks keeps it.
+            let mx = Math.max(4, Math.ceil((bounds.maxGx - bounds.minGx) * 0.3)), my = Math.max(4, Math.ceil((bounds.maxGy - bounds.minGy) * 0.3));
+            unitLayer = renderer3dUnitLayer = {
+                tick: unitsRenderStamp(), view: view3DKey, fullVis: fullVisibility, player: localPlayerId, units, unitCount: units.length, zoom: camera.zoom, detailVersion: unitDetail?.columns.detailMaskVersion || 0,
+                bounds: { minGx: bounds.minGx - mx, maxGx: bounds.maxGx + mx, minGy: bounds.minGy - my, maxGy: bounds.maxGy + my },
+                objects: [], occupied: [], perFrame: [], motion: [], fallback: [], version: ++renderer3dUnitLayerVersion
+            };
+            renderer3dInstance.beginUnitLayerWrite(unitLayer.version);
+        }
+    } else renderer3dUnitLayer = null;
+    let layerBuilding = !!(unitLayer && !layerReuse);
+    let unitBounds = layerBuilding ? unitLayer.bounds : bounds;
+    // With the layer, occupied tiles are collected in the unit pass below;
+    // structures (drawn first) use the layer's, a tick old on build frames.
+    if (layerReuse) {
+        for (let k of unitLayer.occupied) unitOccupiedTileKeys.add(k);
+    } else if (layerBuilding && previousOccupied) {
+        for (let k of previousOccupied) unitOccupiedTileKeys.add(k);
+    }
+    // Occupied tiles lower tall structures in 3D; low decks are walkable.
+    if (!flat2d && !unitLayer) for (let u of units) {
+        if (u.dead) continue;
+        let ux = u.prevX + (u.x - u.prevX) * alpha;
+        let uy = u.prevY + (u.y - u.prevY) * alpha;
+        let ugx = Math.floor(ux / TILE), ugy = Math.floor(uy / TILE);
+        if (ugx < bounds.minGx - 1 || ugx > bounds.maxGx + 1 || ugy < bounds.minGy - 1 || ugy > bounds.maxGy + 1) continue;
+        if (!fullVisibility && (!visibilityGrid[ugy] || visibilityGrid[ugy][ugx] === 0)) continue;
+        unitOccupiedTileKeys.add(ugy * GRID_W + ugx);
+    }
+
+    _ph = _r3dPhase('start', _ph);
+    // STRUCTURE LAYER (3D): structures whose cached object is reused
+    // unchanged (no flash or rebuild) are drawn from a buffer the
+    // renderer keeps (see renderer3d.js, the static arena) until the next
+    // tick or view change; on the frames between only the others are
+    // processed. Activity effects and overlap-fade states are kept up.
+    let staticLayer = null, staticReuse = false;
+    if (!flat2d && RENDERER3D_UNIT_LAYER_ENABLED && renderer3dInstance) {
+        let S = renderer3dStaticLayer;
+        let sameView = !!(S && S.view === view3DKey && S.fullVis === fullVisibility && S.player === localPlayerId && S.grid === grid
+            && S.detail === structDetail && Math.abs(camera.zoom / S.zoom - 1) < 0.25
+            && bounds.minGx >= S.bounds.minGx && bounds.maxGx <= S.bounds.maxGx && bounds.minGy >= S.bounds.minGy && bounds.maxGy <= S.bounds.maxGy);
+        staticReuse = sameView && S.tick === gameTime && S.visVersion === visibilityVersion && S.visGrid === visibilityGrid;
+        // A tick frame also builds the unit layer: the structures keep the
+        // previous tick's layer for this one frame and rebuild on the next,
+        // so the two builds do not share a frame.
+        // (Ticks may come in groups: any older layer.)
+        if (!staticReuse && sameView && layerBuilding && S.tick < gameTime) staticReuse = true;
+        if (staticReuse) staticLayer = S;
+        else {
+            let mx = Math.max(4, Math.ceil((bounds.maxGx - bounds.minGx) * 0.3)), my = Math.max(4, Math.ceil((bounds.maxGy - bounds.minGy) * 0.3));
+            staticLayer = renderer3dStaticLayer = {
+                tick: gameTime, view: view3DKey, fullVis: fullVisibility, player: localPlayerId, visVersion: visibilityVersion, visGrid: visibilityGrid, grid, zoom: camera.zoom, detail: structDetail,
+                bounds: { minGx: bounds.minGx - mx, maxGx: bounds.maxGx + mx, minGy: bounds.minGy - my, maxGy: bounds.maxGy + my },
+                objects: [], perFrame: [], activity: [], fadeKeys: [], version: ++renderer3dStaticLayerVersion
+            };
+        }
+    } else renderer3dStaticLayer = null;
+    let staticBuilding = !!(staticLayer && !staticReuse);
+    let sBounds = staticBuilding ? staticLayer.bounds : bounds;
+    // One structure: stable ones go to the layer being built, the rest are
+    // remembered for the frames that reuse it.
+    let structureStep = (entity, fn, x, y) => {
+        if (!staticBuilding) { fn(entity, x, y); return; }
+        let before = objects.length;
+        _staticReuseHit = false;
+        fn(entity, x, y);
+        let n = objects.length - before;
+        if (n === 0) return;
+        // Served from its cache, or just rebuilt into a cache entry that is
+        // not easing, flashing or waiting for its panel.
+        let entry = entity._r3dStatic;
+        let stable = _staticReuseHit || !!(entry && entry.object === objects[before] && !entry.dynamic);
+        for (let k = before; stable && k < objects.length; k++) if (!(objects[k].alpha >= 0.999)) stable = false;
+        // By name: the frames reusing the layer call their own step
+        // functions (a stored closure would push into this frame's list).
+        if (!stable) { staticLayer.perFrame.push({ step: fn.name, entity, x, y }); return; }
+        let first = objects[before];
+        for (let k = before; k < objects.length; k++) {
+            let o = objects[k];
+            staticLayer.objects.push(o);
+            _pin3DPanelToStatic(o.topTextureCanvas, staticLayer.version);
+            if (o.overlapFadeKey !== undefined) staticLayer.fadeKeys.push(o.overlapFadeKey);
+        }
+        objects.length = before;
+        if (_structureHasActivity(entity)) staticLayer.activity.push(entity, first);
+    };
+    // (A remembered view in columns has no cells: the item's own owner.)
+    let pushCellItemStep = (item, x, y) => pushCellItem(x, y, grid[y][x] || { item, owner: item.owner, type: undefined });
+    let pushGoldMine = (m) => {
+        if (m.gx < sBounds.minGx || m.gx > sBounds.maxGx || m.gy < sBounds.minGy || m.gy > sBounds.maxGy) return;
+        if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) return;
+
+        if (_reuseStatic3DObject(objects, m, m.gx, m.gy)) return;
+        let mine2DTexture = get3DExact2DMineTexture('gold', m.gold);
+        push3DRenderObject(objects, {
+            modelKey: m.gold > 0 ? 'gold_mine_active' : 'gold_mine_empty',
+            pickSource: m,
+            x: m.gx + 0.5,
+            z: m.gy + 0.5,
+            y: 0,
+            scaleX: 0.9,
+            scaleY: 0.35,
+            scaleZ: 0.9,
+            heightMode: 'mine',
+            tint: '#f0c83a',
+            alpha: 1,
+            topTextureKey: mine2DTexture ? mine2DTexture._renderer3DExactKey : 'mine:gold',
+            topTextureCanvas: mine2DTexture,
+            sideTint: '#f0c83a'
+        });
+        _rememberStatic3DObject(objects, m, m.gx, m.gy, !mine2DTexture);
+    };
+    if (!staticReuse) for (let m of goldMines) structureStep(m, pushGoldMine);
+
+    let pushAstarMine = (m) => {
+        if (m.gx < sBounds.minGx || m.gx > sBounds.maxGx || m.gy < sBounds.minGy || m.gy > sBounds.maxGy) return;
+        if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) return;
+
+        if (_reuseStatic3DObject(objects, m, m.gx, m.gy)) return;
+        let mine2DTexture = get3DExact2DMineTexture('astar', m.astar);
+        push3DRenderObject(objects, {
+            modelKey: m.astar > 0 ? 'astar_mine_active' : 'astar_mine_empty',
+            pickSource: m,
+            x: m.gx + 0.5,
+            z: m.gy + 0.5,
+            y: 0,
+            scaleX: 0.9,
+            scaleY: 0.35,
+            scaleZ: 0.9,
+            heightMode: 'mine',
+            tint: '#d8d8e8',
+            alpha: 1,
+            topTextureKey: mine2DTexture ? mine2DTexture._renderer3DExactKey : 'mine:astar',
+            topTextureCanvas: mine2DTexture,
+            sideTint: '#d8d8e8'
+        });
+        _rememberStatic3DObject(objects, m, m.gx, m.gy, !mine2DTexture);
+    };
+    if (!staticReuse) for (let m of astarMines) structureStep(m, pushAstarMine);
+
+    let pushCellItem = (x, y, cell) => {
+        // Barracks and spawners are cell items too, but draw themselves in
+        // their own passes below (drawFloorItem leaves their panel blank).
+        // Both passes share the per-entity static object cache, so pushing
+        // them here would let the blank floor object replace the real one.
+        if (typeof cell.item.draw === 'function') return;
+
+        if (_reuseStatic3DObject(objects, cell.item, x, y)) { _pushStructureActivity(objects, cell.item, flat2d); return; }
+        let item2DTexture = get3DExact2DFloorTexture(cell.item, cell.owner);
+        let itemStatus = item2DTexture ? null : get3DBuildingTextureStatus(cell.item);
+        let isFarmItem = cell.item.type === 'farm' || cell.item.type === 'astar_farm';
+        push3DRenderObject(objects, {
+            modelKey: `item_${cell.item.type || 'floor'}`,
+            x: x + 0.5,
+            y: get3DConstructionLift(cell.item),
+            z: y + 0.5,
+            scaleX: 0.84,
+            scaleY: (cell.item.type === 'house' ? 0.82 : isFarmItem ? 0.72 : 0.14),
+            overlapFade: isFarmItem ? null : getOverlapFadeForTile(x, y),
+            scaleZ: 0.84,
+            preserveModelHeight: cell.item.type === 'house' || isFarmItem,
+            visibilitySource: cell.item,
+            rotationY: -(Number(cell.item.angle) || 0),
+            tint: get3DDamageFlashTint(cell.item, get3DRenderOwnerColor(cell.owner)),
+            alpha: get3DConstructionAlpha(cell.item),
+            topTextureKey: item2DTexture ? item2DTexture._renderer3DExactKey : `item:${cell.item.type}:${cell.owner}:${itemStatus.keySuffix}`,
+            topTextureCanvas: item2DTexture || get3DTopTextureForFloorItem(cell.item, itemStatus),
+            sideTint: get3DDamageFlashTint(cell.item, (BASE_CARD_TYPES[cell.item.type] || {}).color || get3DRenderOwnerColor(cell.owner))
+        });
+        _rememberStatic3DObject(objects, cell.item, x, y, !item2DTexture);
+        _pushStructureActivity(objects, cell.item, flat2d);
+    };
+    // Floor items in row-major order. The live tile index lists them, so
+    // only a remembered (history) grid needs a scan of every visible tile.
+    if (staticReuse) {
+        // Nothing to walk: only what could not be kept.
+    } else if (structDetail?.frame || _isLiveRenderGrid(grid)) {
+        let items = structDetail?.floors || getCellItemsRowMajor();
+        for (let i = findCellItemRowStart(items, sBounds.minGy); i < items.length; i++) {
+            let item = items[i], x = item.gx, y = item.gy;
+            if (y > sBounds.maxGy) break;
+            if (x < sBounds.minGx || x > sBounds.maxGx) continue;
+            // (A remembered view in columns has no cells: its floor items
+            // are its frame's sources.)
+            let cell = grid[y][x];
+            if (cell ? cell.item !== item : !sourceView.historyColumns) continue;
+            if (!fullVisibility && (!visibilityGrid[y] || visibilityGrid[y][x] === 0)) continue;
+            // (Floor items are flat buildings: past the split's threshold,
+            // the GPU's glyphs, as buildings.)
+            if (structDetail && !structDetail.selected.has(item)) continue;
+            structureStep(item, pushCellItemStep, x, y);
+        }
+    } else {
+        for (let y = sBounds.minGy; y <= sBounds.maxGy; y++) {
+            let gridRow = grid[y];
+            let visRow = visibilityGrid[y];
+            if (!gridRow) continue;
+            for (let x = sBounds.minGx; x <= sBounds.maxGx; x++) {
+                let cell = gridRow[x];
+                if (!cell || !cell.item) continue;
+                if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
+                // (Past the split's threshold: the glyph layer's.)
+                if (farFloorItems && structDetail.pxAt(x, y) <= structDetail.T) { farFloorItems.push([cell.item, x, y, cell.owner]); continue; }
+                structureStep(cell.item, pushCellItemStep, x, y);
+            }
+        }
+    }
+
+    let pushTower = (t) => {
+        if (t.gx < sBounds.minGx - 1 || t.gx > sBounds.maxGx + 1 || t.gy < sBounds.minGy - 1 || t.gy > sBounds.maxGy + 1) return;
+        if (!fullVisibility && (!visibilityGrid[t.gy] || visibilityGrid[t.gy][t.gx] === 0)) return;
+
+        if (_reuseStatic3DObject(objects, t, t.gx, t.gy)) return;
+        let tower2DTexture = get3DExact2DTexture(t);
+        let tower2DTextureFallback = renderer3dExactTextureFallback;
+        let towerStatus = tower2DTexture ? null : get3DBuildingTextureStatus(t);
+        // Clouds are portals: they never aim, and their gate faces the camera.
+        let isPortal = String(t.type || '').startsWith('cloud');
+        push3DRenderObject(objects, {
+            modelKey: `tower_${t.type || 'base'}`,
+            x: t.x / TILE,
+            y: get3DConstructionLift(t),
+            z: t.y / TILE,
+            scaleX: isPortal ? 0.96 : 0.82,
+            scaleY: 1.05,
+            overlapFade: isPortal ? null : getOverlapFadeForTile(t.gx, t.gy),
+            scaleZ: isPortal ? 0.96 : 0.82,
+            visibilitySource: t,
+            preserveModelHeight: isPortal,
+            rotationY: isPortal ? 0 : Math.PI * 0.5 - (Number(t.angle) || 0),
+            tint: get3DDamageFlashTint(t, get3DRenderOwnerColor(t.owner)),
+            alpha: get3DConstructionAlpha(t),
+            topTextureKey: tower2DTexture ? tower2DTexture._renderer3DExactKey : `tower:${t.type}:${t.owner}:${_quantizeTowerAngleIndex(t.angle || 0)}:${towerStatus.keySuffix}`,
+            topTextureCanvas: tower2DTexture || get3DBuildingTopTexture('tower', t.owner, { subtype: t.type, color: t.baseStats && t.baseStats.color, angle: t.angle || 0, angleKey: _quantizeTowerAngleIndex(t.angle || 0), active: t.type === 'laser' ? t.connectedLasers && t.connectedLasers.length > 0 : true, status: towerStatus, statusKey: towerStatus.keySuffix }),
+            sideTint: get3DDamageFlashTint(t, (t.baseStats && t.baseStats.color) || get3DRenderOwnerColor(t.owner))
+        });
+        _rememberStatic3DObject(objects, t, t.gx, t.gy, !tower2DTexture || tower2DTextureFallback);
+    };
+    if (!staticReuse) for (let t of towers) structureStep(t, pushTower);
+
+    let pushSpawner = (s) => {
+        if (s.gx < sBounds.minGx || s.gx > sBounds.maxGx || s.gy < sBounds.minGy || s.gy > sBounds.maxGy) return;
+        if (!fullVisibility && (!visibilityGrid[s.gy] || visibilityGrid[s.gy][s.gx] === 0)) return;
+
+        if (_reuseStatic3DObject(objects, s, s.gx, s.gy)) { _pushStructureActivity(objects, s, flat2d); _pushProductionGhost(objects, s, flat2d); return; }
+        let spawner2DTexture = get3DExact2DTexture(s);
+        let spawner2DTextureFallback = renderer3dExactTextureFallback;
+        let spawnerExtraBars = spawner2DTexture ? null : [];
+        if (!spawner2DTexture && !s.underConstruction && s.spawnQueue && s.spawnQueue.length > 0 && s.spawnCooldown > 0) {
+            spawnerExtraBars.push({ pct: s.spawnTimer / s.spawnCooldown, bgColor: typeof QUEUE_BAR_TRACK === 'string' ? QUEUE_BAR_TRACK : '#6a6a6a', fillColor: (s.spawnTimer / s.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
+        }
+        if (!spawner2DTexture && !s.underConstruction && s.type === 'research' && s.researchTask && s.researchTask.workRequired > 0) {
+            let pct = Math.max(0, Math.min(1, (s.researchTask.workDone || 0) / s.researchTask.workRequired));
+            spawnerExtraBars.push({ pct, bgColor: typeof QUEUE_BAR_TRACK === 'string' ? QUEUE_BAR_TRACK : '#6a6a6a', fillColor: pct > 0.8 ? '#4f4' : '#4af' });
+        }
+        let spawnerStatus = spawner2DTexture ? null : get3DBuildingTextureStatus(s, spawnerExtraBars);
+        push3DRenderObject(objects, {
+            modelKey: `spawner_${s.type || 'base'}`,
+            statusTextureCanvas: get3DWorkshopSignTexture(s.type),
+            x: s.x / TILE,
+            y: get3DConstructionLift(s),
+            z: s.y / TILE,
+            scaleX: 0.95,
+            scaleY: get3DStructureModelHeight(s.type),
+            preserveModelHeight: true,
+            scaleZ: 0.95,
+            visibilitySource: s,
+            tint: get3DDamageFlashTint(s, get3DRenderOwnerColor(s.owner)),
+            alpha: get3DConstructionAlpha(s),
+            topTextureKey: spawner2DTexture ? spawner2DTexture._renderer3DExactKey : `spawner:${s.type}:${s.owner}:${spawnerStatus.keySuffix}`,
+            topTextureCanvas: spawner2DTexture || get3DBuildingTopTexture(
+                s.type === 'astar_spawner' ? 'spawner_astar' :
+                    s.type === 'salvager' ? 'spawner_salvager' :
+                        s.type === 'builder_spawner' ? 'spawner_builder' :
+                            s.type === 'healer_spawner' ? 'spawner_healer' :
+                                s.type === 'research' ? 'spawner_research' :
+                                    'spawner_energy',
+                s.owner,
+                { subtype: s.type, status: spawnerStatus, statusKey: spawnerStatus.keySuffix }
+            ),
+            sideTint: get3DDamageFlashTint(s, (BASE_CARD_TYPES[s.type] || {}).color || get3DRenderOwnerColor(s.owner))
+        });
+        _rememberStatic3DObject(objects, s, s.gx, s.gy, !spawner2DTexture || spawner2DTextureFallback);
+        _pushStructureActivity(objects, s, flat2d);
+        _pushProductionGhost(objects, s, flat2d);
+    };
+    if (!staticReuse) for (let s of collectorSpawners) structureStep(s, pushSpawner);
+
+    let pushBarrack = (b) => {
+        if (b.gx < sBounds.minGx || b.gx > sBounds.maxGx || b.gy < sBounds.minGy || b.gy > sBounds.maxGy) return;
+        if (!fullVisibility && (!visibilityGrid[b.gy] || visibilityGrid[b.gy][b.gx] === 0)) return;
+
+        if (_reuseStatic3DObject(objects, b, b.gx, b.gy)) { _pushStructureActivity(objects, b, flat2d); _pushProductionGhost(objects, b, flat2d); return; }
+        let barrack2DTexture = get3DExact2DTexture(b);
+        let barrack2DTextureFallback = renderer3dExactTextureFallback;
+        let barrackExtraBars = barrack2DTexture ? null : [];
+        if (!barrack2DTexture && !b.underConstruction && b.spawnQueue && b.spawnQueue.length > 0 && b.spawnCooldown > 0) {
+            barrackExtraBars.push({ pct: b.spawnTimer / b.spawnCooldown, bgColor: typeof QUEUE_BAR_TRACK === 'string' ? QUEUE_BAR_TRACK : '#6a6a6a', fillColor: (b.spawnTimer / b.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
+        }
+        let barrackStatus = barrack2DTexture ? null : get3DBuildingTextureStatus(b, barrackExtraBars);
+        push3DRenderObject(objects, {
+            modelKey: `barrack_${b.unitType || 'norm'}`,
+            x: b.x / TILE,
+            y: get3DConstructionLift(b),
+            z: b.y / TILE,
+            scaleX: 0.98,
+            scaleY: get3DStructureModelHeight('barrack'),
+            preserveModelHeight: true,
+            scaleZ: 0.98,
+            visibilitySource: b,
+            tint: get3DDamageFlashTint(b, get3DRenderOwnerColor(b.owner)),
+            alpha: get3DConstructionAlpha(b),
+            topTextureKey: barrack2DTexture ? barrack2DTexture._renderer3DExactKey : `barrack:${b.unitType}:${b.owner}:${barrackStatus.keySuffix}`,
+            topTextureCanvas: barrack2DTexture || get3DBuildingTopTexture('barrack', b.owner, { subtype: b.unitType, color: (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color, status: barrackStatus, statusKey: barrackStatus.keySuffix }),
+            sideTint: get3DDamageFlashTint(b, (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color)
+        });
+        _rememberStatic3DObject(objects, b, b.gx, b.gy, !barrack2DTexture || barrack2DTextureFallback);
+        _pushStructureActivity(objects, b, flat2d);
+        _pushProductionGhost(objects, b, flat2d);
+    };
+    if (!staticReuse) for (let b of barracks) structureStep(b, pushBarrack);
+
+    _ph = _r3dPhase(staticBuilding ? 'structuresBuild' : 'structuresReuse', _ph);
+    // Reusing the structure layer: the structures it could not keep, and the
+    // per-frame upkeep of those it holds.
+    if (staticReuse) {
+        let steps = { pushGoldMine, pushAstarMine, pushTower, pushSpawner, pushBarrack, pushCellItemStep };
+        for (let p of staticLayer.perFrame) steps[p.step](p.entity, p.x, p.y);
+        for (let i = 0; i < staticLayer.activity.length; i += 2) _pushStructureActivity([staticLayer.activity[i + 1]], staticLayer.activity[i], false);
+        // (Its structures' fade states are kept: pruning runs only on frames
+        // that walk the structures; the layer is rebuilt every tick.)
+    }
+    for (let d of droppedItems) {
+        if (d.gx < bounds.minGx || d.gx > bounds.maxGx || d.gy < bounds.minGy || d.gy > bounds.maxGy) continue;
+        if (!fullVisibility && (!visibilityGrid[d.gy] || visibilityGrid[d.gy][d.gx] === 0)) continue;
+
+        push3DRenderObject(objects, {
+            modelKey: 'dropped_energy',
+            x: d.x / TILE,
+            y: 0,
+            z: d.y / TILE,
+            scaleX: 0.22,
+            scaleY: 0.22,
+            scaleZ: 0.22,
+            tint: '#ffd84d',
+            topTextureKey: 'dropped_energy',
+            topTextureCanvas: get3DTopTextureCanvas('dropped_energy', (g) => {
+                g.fillStyle = '#ffd84d'; g.beginPath(); g.arc(32, 32, 16, 0, Math.PI * 2); g.fill();
+                g.fillStyle = '#222'; g.font = 'bold 24px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('⚡', 32, 33);
+            })
+        });
+    }
+
+    if (flat2d) drainFlatObjects();
+    // Units already in the reused layer need only their panels kept alive
+    // and their motion effects (a few unit types) at this frame's position.
+    if (layerReuse) {
+        for (let m of unitLayer.motion) {
+            let u = m.u;
+            if (u.dead) continue;
+            let x = (u.prevX + (u.x - u.prevX) * alpha) / TILE;
+            let z = (u.prevY + (u.y - u.prevY) * alpha) / TILE;
+            pushUnitMotionFx(u, x, z, m.footprint, m.scaleY);
+        }
+    }
+    // A unit's object moves into the layer being built when it is stable
+    // until the next tick; the rest stay on the per-frame path.
+    let layerCollect = (u, footprint) => {
+        let o = objects[objects.length - 1];
+        let cached = u._r3d;
+        if (!_unitLayerEligible(u, cached, o)) {
+            unitLayer.perFrame.push(u);
+            return;
+        }
+        objects.pop();
+        let cx = u.x / TILE, cz = u.y / TILE;
+        o.x = o._cx = cx; o.z = o._cz = cz;
+        o._pdx = (u.prevX - u.x) / TILE; o._pdz = (u.prevY - u.y) / TILE;
+        if (cached.snake) { o._phaseRate = 0; o._flyOn = 0; o._flySeed = 0; }
+        else {
+            _unit3DWalkPhaseLinear(u, cached.activity, _unitLayerPhase);
+            o.walkPhase = _unitLayerPhase[0]; o._phaseRate = _unitLayerPhase[1];
+            o.y = cached.baseY + (u.isFlying ? (u.isWorker ? .36 : .30) : 0);
+            o._flyOn = u.isFlying ? 1 : 0;
+            o._flySeed = ((Number(u.id) || 0) * 1.7) % (Math.PI * 2);
+        }
+        // Lit where it is at the tick (the light grid changes on ticks).
+        _relight3DObject(o, u, cached.tint, cached.sideTint, false, cached.sourceLight);
+        _pin3DPanelToLayer(o.topTextureCanvas, unitLayer.version);
+        unitLayer.objects.push(o);
+        if (!renderer3dInstance.writeUnitLayerObject(o)) unitLayer.fallback.push(o);
+        else if (unitVis && _uSlotVisIndex >= 0) {
+            let sl = _uSlotVisIndex;
+            _uSlotFill(sl, u, o, cached, unitVis.sig[sl], view3DKey);
+        }
+        if (u.isSnake || u.unitType === 'tank' || u.unitType === 'boss' || u.unitType === 'king') {
+            unitLayer.motion.push({ u, footprint, scaleY: o.scaleY });
+        }
+    };
+    // Building the layer from the worker's unit frame (sim_frame.js): a unit
+    // whose cached object is still valid is written from its frame columns,
+    // without the per-object logic below.
+    let unitVis = layerBuilding && _isLiveUnitList(sourceView.units) && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    let statusCanvases = unitVis ? SIM_UNIT_STATUS_NAMES.map(name => get3DStatusTexture(name)) : null;
+    let unitList = layerReuse ? unitLayer.perFrame : units;
+    // With the records: units whose slot is valid are written from it; the
+    // rest (slowIdx) take the per-object loop below.
+    let slowIdx = null;
+    _dbgStats = typeof window !== 'undefined' && window.__unitSlowWhy ? (window.__unitSlowWhy.builds++, window.__unitSlowWhy) : null;
+    if (unitVis) {
+        slowIdx = [];
+        let FV = unitVis, FO = FV.order, S = _uSlot, r3 = renderer3dInstance;
+        let statusSlots = r3.statusSlotsFor(statusCanvases);
+        let labelsOn = levelVisibilityMode === LEVEL_VISIBILITY_ALL;
+        let flashChecks = renderer3dFlashUntil.size > 0, nowT = gameTime + tickAlpha;
+        let layerVersion = unitLayer.version;
+        let rec = _uRec;
+        let camKey = r3.lodEye ? r3.lodEye[0] + ',' + r3.lodEye[1] + ',' + r3.lodEye[2] + ',' + r3.lodForward[0] + ',' + r3.lodForward[1] + ',' + r3.lodForward[2] + ',' + r3.lodProjectionScale : String(r3.lodPixelsPerWorld);
+        if (camKey !== _uLodCamKey) { _uLodCamKey = camKey; _uLodCamStamp++; }
+        let camStamp = _uLodCamStamp, KN = U_SLOT_KEY_N, keyArr = S.inKey, recArr = S.rec;
+        for (let i = 0; i < units.length; i++) {
+            let slot = units === sourceView.units ? FO[i] : units[i]._s;
+            if (!(slot >= 0)) { slowIdx.push(i); continue; }
+            let x = FV.x[slot], y = FV.y[slot], px = FV.px[slot], py = FV.py[slot];
+            let ux = px + (x - px) * alpha, uy = py + (y - py) * alpha;
+            let ugx = Math.floor(ux / TILE), ugy = Math.floor(uy / TILE);
+            if (ugx < unitBounds.minGx - 1 || ugx > unitBounds.maxGx + 1 || ugy < unitBounds.minGy - 1 || ugy > unitBounds.maxGy + 1) continue;
+            if (!fullVisibility && (!visibilityGrid[ugy] || visibilityGrid[ugy][ugx] === 0)) continue;
+            unitLayer.occupied.push(ugy * GRID_W + ugx);
+            let id = FV.id[slot];
+            if (!(slot < S.cap) || !S.valid[slot] || S.id[slot] !== id || S.sig[slot] !== FV.sig[slot] || S.view[slot] !== view3DKey
+                || (S.panel[slot]._textureVersion || 0) !== S.texVer[slot]) {
+                let st = _dbgStats; if (st) { let why = !(slot < S.cap) || !S.valid[slot] ? 'invalid' : S.id[slot] !== id ? 'id' : S.sig[slot] !== FV.sig[slot] ? 'sig' : S.view[slot] !== view3DKey ? 'view' : 'tex'; st[why]++; if (why === 'invalid') { let t = 'type_' + units[i].unitType; st[t] = (st[t] || 0) + 1; } }
+                slowIdx.push(i); continue;
+            }
+            if (flashChecks) {
+                let until = renderer3dFlashUntil.get(id);
+                if (until !== undefined) { if (until > nowT) { if (_dbgStats) _dbgStats.flash++; slowIdx.push(i); continue; } renderer3dFlashUntil.delete(id); }
+            }
+            let flags = S.flags[slot];
+            if (S.label[slot] !== 2) {
+                // Level labels by on-screen size, with the same hysteresis.
+                let shown = S.labelShown[slot] === 1;
+                if (labelsOn) {
+                    let zoom = getViewZoomAt(ux, uy);
+                    shown = shown ? zoom >= 0.7 * 0.95 : zoom >= 0.7 * 1.05;
+                } else shown = false;
+                S.labelShown[slot] = shown ? 1 : 0;
+                if ((shown ? 1 : 0) !== S.label[slot]) { if (_dbgStats) _dbgStats.label++; slowIdx.push(i); continue; }
+            }
+            let gx = Math.floor(x / TILE), gy = Math.floor(y / TILE);
+
+            let cx = x / TILE, cz = y / TILE;
+            // Light at the tick's tile (and the unit's own).
+            let level = 1;
+            if (!fullVisibility) {
+                let row = visibilityGrid[Math.floor(cz)];
+                let raw = Math.max((row && row[Math.floor(cx)]) || 0, FV.light[slot]);
+                level = Math.max(0, Math.min(1, raw / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
+            }
+            let bucket = Math.max(0, Math.min(24, Math.round(level * 24)));
+            // Unchanged since the slot's last record (an idle unit): that
+            // record, with this tick's animation phase.
+            let ko = slot * KN, ro = slot * 28, st = statusSlots[FV.status[slot] | 0];
+            if (keyArr[ko] === x && keyArr[ko + 1] === y && keyArr[ko + 2] === px && keyArr[ko + 3] === py && keyArr[ko + 4] === FV.facing[slot]
+                && keyArr[ko + 5] === FV.mode[slot] && keyArr[ko + 6] === FV.amount[slot] && keyArr[ko + 7] === st && keyArr[ko + 8] === cx
+                && keyArr[ko + 9] === cz && keyArr[ko + 10] === level && keyArr[ko + 11] === camStamp) {
+                for (let q = 0; q < 28; q++) rec[q] = recArr[ro + q];
+                let snakeC = flags & U_SLOT_SNAKE;
+                rec[11] = snakeC ? 0 : FV.prate[slot]; rec[21] = snakeC ? 0 : FV.phase[slot];
+                let lodC = S.lod[slot], panelC = S.panel[slot];
+                panelC._layerPin = layerVersion; panelC._usedFrame = renderer3dExactTextureFrame;
+                if (!r3.writeUnitLayerRecord(lodC === 0 ? S.kind[slot] : lodC === 1 ? S.kindLod[slot] : S.kindLod2[slot], snakeC ? 0 : FV.mode[slot], rec, panelC, units[i])) { slowIdx.push(i); continue; }
+                if (flags & U_SLOT_MOTION) {
+                    let u = units[i];
+                    let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
+                    unitLayer.motion.push({ u, footprint, scaleY: S.dim[slot * 4 + 1] });
+                    pushUnitMotionFx(u, ux / TILE, uy / TILE, footprint, S.dim[slot * 4 + 1]);
+                }
+                continue;
+            }
+            let d = slot * 4, c = slot * 6;
+            let sx = S.dim[d], sy = S.dim[d + 1], sz = S.dim[d + 2];
+            let facing = FV.facing[slot], cs = Math.cos(facing), sn = Math.sin(facing);
+            let snake = flags & U_SLOT_SNAKE, flying = !snake && (flags & U_SLOT_FLYING);
+            rec[0] = cs * sx; rec[1] = 0; rec[2] = -sn * sx; rec[3] = (px - x) / TILE;
+            rec[4] = flying ? (id * 1.7) % (Math.PI * 2) : 0; rec[5] = sy; rec[6] = flying ? 1 : 0; rec[7] = (py - y) / TILE;
+            rec[8] = sn * sz; rec[9] = 0; rec[10] = cs * sz; rec[11] = snake ? 0 : FV.prate[slot];
+            rec[12] = cx; rec[13] = S.dim[d + 3]; rec[14] = cz; rec[15] = 1;
+            let lut = bucket * 256, rgb = S.rgb;
+            rec[16] = _LIT_LUT[lut + rgb[c]]; rec[17] = _LIT_LUT[lut + rgb[c + 1]]; rec[18] = _LIT_LUT[lut + rgb[c + 2]];
+            rec[19] = 1;
+            rec[20] = snake ? 0 : FV.amount[slot];
+            rec[21] = snake ? 0 : FV.phase[slot];
+            rec[22] = _LIT_LUT[lut + rgb[c + 3]]; rec[23] = _LIT_LUT[lut + rgb[c + 4]]; rec[24] = _LIT_LUT[lut + rgb[c + 5]];
+            rec[25] = level;
+            rec[27] = statusSlots[FV.status[slot] | 0];
+            // Level of detail by on-screen size (hysteresis as getFigureMeshKey).
+            let pixels = r3.pixelsPerWorldAt(cx, 0, cz) * Math.max(sx, sz);
+            let lod = figureLodLevel(S.lod[slot], pixels);
+            S.lod[slot] = lod;
+            for (let q = 0; q < 28; q++) recArr[ro + q] = rec[q];
+            keyArr[ko] = x; keyArr[ko + 1] = y; keyArr[ko + 2] = px; keyArr[ko + 3] = py; keyArr[ko + 4] = FV.facing[slot];
+            keyArr[ko + 5] = FV.mode[slot]; keyArr[ko + 6] = FV.amount[slot]; keyArr[ko + 7] = st; keyArr[ko + 8] = cx;
+            keyArr[ko + 9] = cz; keyArr[ko + 10] = level; keyArr[ko + 11] = camStamp;
+            let panel = S.panel[slot];
+            panel._layerPin = layerVersion; panel._usedFrame = renderer3dExactTextureFrame;
+            if (!r3.writeUnitLayerRecord(lod === 0 ? S.kind[slot] : lod === 1 ? S.kindLod[slot] : S.kindLod2[slot], snake ? 0 : FV.mode[slot], rec, panel, units[i])) { slowIdx.push(i); continue; }
+            if (flags & U_SLOT_MOTION) {
+                let u = units[i];
+                let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
+                unitLayer.motion.push({ u, footprint, scaleY: sy });
+                pushUnitMotionFx(u, ux / TILE, uy / TILE, footprint, sy);
+            }
+        }
+    }
+    _ph = _r3dPhase(layerBuilding ? 'unitsFast' : 'unitsPre', _ph);
+    let loopCount = slowIdx ? slowIdx.length : unitList.length;
+    if (typeof window !== 'undefined' && window.__unitLayerStats) { let st = window.__unitLayerStats; st.builds++; st.slow += slowIdx ? slowIdx.length : -1; st.total += units.length; }
+    for (let li = 0; li < loopCount; li++) {
+        let ui = slowIdx ? slowIdx[li] : li;
+        let u = slowIdx ? units[ui] : unitList[ui];
+        _uSlotVisIndex = unitVis ? (u._s ?? unitVis.order[ui]) : -1;
+        if (flat2d) drainFlatObjects();
+        if (u.dead) continue;
+        let ux = u.prevX + (u.x - u.prevX) * alpha;
+        let uy = u.prevY + (u.y - u.prevY) * alpha;
+        let ugx = Math.floor(ux / TILE), ugy = Math.floor(uy / TILE);
+        if (ugx < unitBounds.minGx - 1 || ugx > unitBounds.maxGx + 1 || ugy < unitBounds.minGy - 1 || ugy > unitBounds.maxGy + 1) continue;
+        if (!fullVisibility && (!visibilityGrid[ugy] || visibilityGrid[ugy][ugx] === 0)) continue;
+        if (layerBuilding) unitLayer.occupied.push(ugy * GRID_W + ugx);
+
+        if (flat2d && _pushFlatUnit(flatBatch, u, ux / TILE, uy / TILE, view3DKey)) continue;
+        let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
+        if (unitVis) {
+            let cached = u._r3d, sl = _uSlotVisIndex;
+            let sig = unitVis.sig[sl];
+            if (cached && cached.sigW !== sig) cached.tick = -1e9;   // panel changed: rebuild below
+            else if (cached && (cached.snake ? !!u.isSnake : !u.isSnake) && cached.view === view3DKey
+                && (u.isSnake || cached.label === shouldShowUnitLevels(u))
+                && _unitLayerEligible(u, cached, cached.object)
+                && (cached.object.topTextureCanvas || {})._textureVersion === cached.textureVersion) {
+                _layerWriteFromVis(u, cached, unitVis, sl, statusCanvases, 0, 0);
+                unitLayer.objects.push(cached.object);
+                if (!renderer3dInstance.writeUnitLayerObject(cached.object)) unitLayer.fallback.push(cached.object);
+                else _uSlotFill(sl, u, cached.object, cached, sig, view3DKey);
+                if (u.isSnake || u.unitType === 'tank' || u.unitType === 'boss' || u.unitType === 'king') {
+                    unitLayer.motion.push({ u, footprint, scaleY: cached.object.scaleY });
+                    pushUnitMotionFx(u, ux / TILE, uy / TILE, footprint, cached.object.scaleY);
+                }
+                continue;
+            }
+        }
+        if (u.isSnake) {
+            // As units below: between ticks only the position and lighting
+            // of the cached head object change.
+            let cached = u._r3d;
+            let cachedAge = cached ? gameTime - cached.tick : -1;
+            if (cached && cached.snake && (cachedAge === 0 || (cachedAge < UNIT_3D_REBUILD_TICKS && ((u.id + gameTime) % UNIT_3D_REBUILD_TICKS) !== 0))
+                && cached.view === view3DKey && !cached.dynamic && !getDamageFlashState(u)
+                && (cached.object.topTextureCanvas || {})._textureVersion === cached.textureVersion) {
+                let o = cached.object;
+                _touch3DPanel(o.topTextureCanvas);
+                if (cached.refreshTick !== gameTime) {
+                    cached.refreshTick = gameTime;
+                    o.rotationY = Math.atan2(Number(u.vx) || 0, Number(u.vy) || 1);
+                    o.statusTextureCanvas = u._historyGhost ? null : get3DStatusTexture(getUnit3DStatusState(u, getUnit3DActivity(u)));
+                }
+                o.x = (ux) / TILE;
+                o.z = (uy) / TILE;
+                if (cached.sourceLightTick !== gameTime || cached.sourceLightPlayer !== localPlayerId) {
+                    cached.sourceLight = getVisualUnitSourceLight(u);
+                    cached.sourceLightTick = gameTime;
+                    cached.sourceLightPlayer = localPlayerId;
+                }
+                _relight3DObject(o, u, cached.tint, cached.sideTint, !!objects.flat2d, cached.sourceLight);
+                objects.push(o);
+                if (!flat2d) pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
+                if (layerBuilding) layerCollect(u, footprint);
+                if (unitVis) cached.sigW = unitVis.sig[unitVis.order[ui]];
+                continue;
+            }
+            pushSnakeRenderObjects(objects, u, ux, uy, footprint);
+            let head = objects[objects.length - 1];
+            u._r3d = { snake: true, object: head, tick: gameTime, refreshTick: gameTime, view: view3DKey, tint: head.baseTint, sideTint: head.baseSideTint,
+                textureVersion: head.topTextureCanvas && head.topTextureCanvas._textureVersion,
+                dynamic: !head.topTextureCanvas || renderer3dExactTextureFallback || !!getDamageFlashState(u) };
+            if (!flat2d) pushUnitMotionFx(u, head.x, head.z, footprint, head.scaleY);
+            if (layerBuilding) layerCollect(u, footprint);
+        } else {
+            // Everything but the interpolated position, walk cycle and
+            // lighting changes only on ticks: refresh just those.
+            let cached = u._r3d;
+            // A full rebuild (panel texture signature, colours, model) runs
+            // for each unit every UNIT_3D_REBUILD_TICKS ticks, a third of the
+            // units per tick (by id); in between, a cheap per-tick refresh
+            // keeps facing, activity and the status icon current.
+            let cachedAge = cached ? gameTime - cached.tick : -1;
+            if (cached && (cachedAge === 0 || (cachedAge < UNIT_3D_REBUILD_TICKS && ((u.id + gameTime) % UNIT_3D_REBUILD_TICKS) !== 0))
+                && cached.view === view3DKey && !cached.dynamic && !getDamageFlashState(u)
+                && cached.label === (!flat2d && shouldShowUnitLevels(u))
+                && (cached.object.topTextureCanvas || {})._textureVersion === cached.textureVersion) {
+                let o = cached.object;
+                _touch3DPanel(o.topTextureCanvas);
+                if (cached.refreshTick !== gameTime) _refreshUnit3DObject(u, o, cached);
+                if (layerBuilding && _unitLayerEligible(u, cached, o)) {
+                    if (cached.sourceLightTick !== gameTime || cached.sourceLightPlayer !== localPlayerId) {
+                        cached.sourceLight = getVisualUnitSourceLight(u);
+                        cached.sourceLightTick = gameTime;
+                        cached.sourceLightPlayer = localPlayerId;
+                    }
+                    objects.push(o);
+                    layerCollect(u, footprint);
+                    if (unitVis) cached.sigW = unitVis.sig[unitVis.order[ui]];
+                    // This frame's motion effects (the layer's own start next frame).
+                    if (u.unitType === 'tank' || u.unitType === 'boss' || u.unitType === 'king') {
+                        pushUnitMotionFx(u, ux / TILE, uy / TILE, footprint, o.scaleY);
+                    }
+                    continue;
+                }
+                o.x = ux / TILE;
+                o.z = uy / TILE;
+                o.y = cached.baseY + _unit3DFlightHeight(u, cached.activity);
+                o.walkPhase = _unit3DWalkPhase(u, cached.activity);
+                // A unit's own light changes only with ticks (or the viewer).
+                if (cached.sourceLightTick !== gameTime || cached.sourceLightPlayer !== localPlayerId) {
+                    cached.sourceLight = getVisualUnitSourceLight(u);
+                    cached.sourceLightTick = gameTime;
+                    cached.sourceLightPlayer = localPlayerId;
+                }
+                _relight3DObject(o, u, cached.tint, cached.sideTint, !!objects.flat2d, cached.sourceLight);
+                objects.push(o);
+                if (!flat2d) pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
+                if (layerBuilding) layerCollect(u, footprint);
+                if (unitVis) cached.sigW = unitVis.sig[unitVis.order[ui]];
+                continue;
+            }
+            // Mounts (pony, winged horses) carry a rider: larger than a lone figure.
+            let modelScale = u.unitType === 'fast' ? 1.35 : u.unitType === 'scout' ? 1.2 : u.unitType === 'flying' ? 1.3
+                : u.isFlying ? 0.8 : 1;
+            let mounted = MOUNTED_UNIT_TYPES.has(u.unitType);
+            // The mounted panel is the unit's canonical 2D rendering at every LOD.
+            // The shared status texture remains only a short-lived fallback while a
+            // newly visible exact texture is rasterized within the frame budget.
+            let unitSideColor = UNIT_3D_BODY_COLORS[u.unitType]
+                || ((BASE_UNIT_STATS[u.unitType] || BASE_UNIT_STATS.norm).color || null);
+            let activity = getUnit3DActivity(u);
+            let moved = activity.mode !== 0 || activity.amount > 0;
+            let stillSince = moved || !cached ? gameTime : cached.stillSince;
+            activity = _unit3DIdleActivity(u, activity, stillSince);
+            let unit2DTexture = get3DExact2DTexture(u, true);
+            let unitTextureFallback = renderer3dExactTextureFallback;
+            let unitStatus = unit2DTexture ? null : get3DUnitTextureStatus(u);
+            let facingX = Number(u.vx) || 0, facingY = Number(u.vy) || 0;
+            if (activity.target && Number.isFinite(activity.target.x) && Number.isFinite(activity.target.y)) {
+                facingX = activity.target.x - u.x; facingY = activity.target.y - u.y;
+            }
+            let unitTint = get3DDamageFlashTint(u, get3DRenderOwnerColor(u.owner));
+            let unitSideTint = get3DDamageFlashTint(u, unitSideColor || get3DRenderOwnerColor(u.owner));
+            let baseY = getUnitHeightOffset(u);
+            push3DRenderObject(objects, {
+                modelKey: `unit_${u.unitType || 'norm'}`,
+                x: ux / TILE,
+                y: baseY + _unit3DFlightHeight(u, activity),
+                z: uy / TILE,
+                scaleX: footprint * modelScale,
+                scaleY: (mounted ? footprint * MOUNT_HEIGHT_RATIO : Math.max(0.48, footprint * 1.45)) * modelScale,
+                scaleZ: footprint * modelScale,
+                visibilitySource: u,
+                rotationY: Math.atan2(facingX, facingY || 0.0001),
+                moveAmount: activity.amount || Math.min(1, Math.hypot(u.x - u.prevX, u.y - u.prevY) / Math.max(.01, TILE * .025)),
+                walkPhase: _unit3DWalkPhase(u, activity),
+                animationMode: activity.mode,
+                weaponType: getUnit3DWeaponType(u),
+                // Flyers show altitude instead; mounts keep their proportions.
+                preserveModelHeight: !!u.isFlying || mounted,
+                isFlying: !!u.isFlying,
+                isWorker: !!u.isWorker,
+                tint: unitTint,
+                renderShape: 'cylinder',
+                topTextureKey: unit2DTexture ? unit2DTexture._renderer3DExactKey : `unit:${u.unitType}:${u.owner}:${unitStatus.keySuffix}`,
+                topTextureCanvas: unit2DTexture || get3DUnitTopTexture(u, u.owner, unitStatus),
+                statusTextureCanvas: u._historyGhost ? null : get3DStatusTexture(getUnit3DStatusState(u, activity)),
+                sideTint: unitSideTint,
+            });
+            u._r3d = ({ object: objects[objects.length - 1], tick: gameTime, refreshTick: gameTime, view: view3DKey, label: !flat2d && shouldShowUnitLevels(u), activity, stillSince, baseY,
+                textureVersion: objects[objects.length - 1].topTextureCanvas && objects[objects.length - 1].topTextureCanvas._textureVersion,
+                tint: unitTint, sideTint: unitSideTint, dynamic: !unit2DTexture || unitTextureFallback || !!getDamageFlashState(u) });
+            if (!flat2d) {
+                let o = objects[objects.length - 1];
+                pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
+            }
+            if (layerBuilding) layerCollect(u, footprint);
+        }
+        if (unitVis && u._r3d) u._r3d.sigW = unitVis.sig[unitVis.order[ui]];
+    }
+
+    _ph = _r3dPhase(layerBuilding ? 'unitsBuild' : 'unitsReuse', _ph);
+    if (buildPreview && !flat2d) buildPreview.modelShown = _pushBuildPreview3DObject(objects, buildPreview);
+    if (flat2d) drainFlatObjects();
+    // Shots, debris, attacks and laser fences: GPU effect instances.
+    buildFrameEffects(projectiles, particles, towers);
+    endFrameEffects();
+
+    _ph = _r3dPhase('effects', _ph);
+    if (!staticReuse) for (let [key, state] of renderer3dOverlapFadeState) {
+        if (activeOverlapFadeKeys.has(key)) continue;
+        let idleMs = overlapNowMs - (Number(state && state.lastSeenMs) || overlapNowMs);
+        if (idleMs > RENDERER3D_OVERLAP_FADE_DURATION_MS) {
+            renderer3dOverlapFadeState.delete(key);
+        }
+    }
+
+    return {
+        flat2d,
+        staticLayer: staticLayer ? { version: staticLayer.version, objects: staticLayer.objects } : null,
+        unitLayer: unitLayer ? { version: unitLayer.version, objects: unitLayer.objects, alpha,
+            flyTime: ((gameTime + alpha) / Math.max(1, TICK_RATE)) % UNIT_LAYER_FLY_PERIOD } : null,
+        viewportWidth: viewW,
+        viewportHeight: viewH,
+        viewPad: getRenderViewPad(),
+        worldWidth: GRID_W,
+        worldHeight: GRID_H,
+        backgroundCanvas: backgroundCanvasFor3D, areaGrid: getAreaGridForGpu(),
+        backgroundVersion: backgroundVersionFor3D,
+        fogCanvas: fullVisibility || fogGrid ? null : _visibilityMaskCanvas, fogGrid,
+        fogVersion: _visibilityMaskCanvas ? _visibilityMaskCanvas._visibilityContentVersion || 0 : 0,
+        backgroundBounds: {
+            centerX: (backgroundMinX + backgroundMaxX) * 0.5 / TILE,
+            centerZ: (backgroundMinY + backgroundMaxY) * 0.5 / TILE,
+            width: (backgroundMaxX - backgroundMinX) / TILE,
+            height: (backgroundMaxY - backgroundMinY) / TILE,
+        },
+        overlays,
+        camera: {
+            centerX: centerX / TILE,
+            centerZ: centerY / TILE,
+            visibleWidth: bounds.vw / TILE,
+            visibleHeight: bounds.vh / TILE,
+            zoom: camera.zoom
+        },
+        buildPreview,
+        objects,
+        flatBatch,
+        fx: fxBatch,
+        columnLayers: _detailColumns(unitDetail, structDetail),
+        glyphLayers: structDetail && !structDetail.live && !structDetail.frame ? [_structureGlyphLayer(structDetail, farFloorItems, grid)] : null
+    };
+}
+// The far structures and floor items of a remembered view as an instance
+// layer (renderer3d drawScaleInstances), made again once per tick or
+// threshold change (they are frozen while remembered).
+let _structGlyph = { key: '', layer: null, renderer: null };
+function _structureGlyphLayer(D, floorItems, viewGrid) {
+    const P = window.Defence3Renderer3D && window.Defence3Renderer3D.PersistentInstances;
+    if (!P) return null;
+    const G = _structGlyph;
+    if (!G.layer || G.renderer !== renderer3dInstance) { G.layer = new P(12); G.renderer = renderer3dInstance; G.key = ''; }
+    const key = gameTime + '|' + D.version + '|' + visibilityVersion + '|' + D.far.map(L => L.length).join(',') + '|' + (floorItems ? floorItems.length : 0);
+    if (G.key === key) return G.layer;
+    G.key = key;
+    const L = G.layer, colors = new Map();
+    const colorFor = owner => { let c = colors.get(owner); if (!c) { c = _parseHexColor(get3DRenderOwnerColor(owner)) || { r: 200, g: 206, b: 216 }; colors.set(owner, c); } return c; };
+    L.count = 0;
+    const push = (e, gx, gy, owner, kind) => {
+        if (!e || (e.energy !== undefined && e.energy <= 0 && kind !== 2)) return;
+        L.reserve(L.count + 1);
+        const d = L.data, o = L.count++ * 12, c = colorFor(owner), x = gx + .5, z = gy + .5;
+        d[o] = x; d[o + 1] = z; d[o + 2] = x; d[o + 3] = z; d[o + 4] = .94; d[o + 5] = kind === 1 ? .85 : .2; d[o + 6] = 0; d[o + 7] = kind;
+        d[o + 8] = c.r / 255; d[o + 9] = c.g / 255; d[o + 10] = c.b / 255; d[o + 11] = e._historyGhost ? .45 : e.underConstruction ? .6 : 1;
+    };
+    for (const list of D.far) for (const e of list) push(e, e.gx | 0, e.gy | 0, e.owner, 1);
+    if (floorItems) for (const [e, x, y, owner] of floorItems) push(e, x, y, owner, 2);
+    L.alpha = 1;
+    L.version++;
+    return L;
+}
+// Shared appearances, indexed by the frame's type codes rather than entities.
+// Canonical 2D geometry and the real procedural model feed the same atlas.
+let _columnLodCatalog = null;
+let _columnLodStyleCatalog = null;
+// (Asked for every frame; made again only when the frame's string table
+// changed: each pass made sets, arrays and keys of every type and string,
+// ~1.2 MB a second of garbage, a scavenge every few seconds by itself.)
+const _columnLodSeen = { catalog: null, version: -1, n: -1, last: undefined };
+function getColumnLodCatalog() {
+    if (typeof _pageFrameStrings === 'undefined') return null;
+    const seen = _columnLodSeen, n = _pageFrameStrings.length, version = typeof _pageFrameStringsVersion === 'number' ? _pageFrameStringsVersion : -1;
+    if (seen.catalog && seen.catalog === _columnLodCatalog && seen.version === version && seen.n === n && seen.last === _pageFrameStrings[n - 1]) return seen.catalog;
+    const catalog = _makeColumnLodCatalog();
+    seen.catalog = catalog; seen.version = version; seen.n = n; seen.last = _pageFrameStrings[n - 1];
+    return catalog;
+}
+function _makeColumnLodCatalog() {
+    // The frame string table also grows with labels/status text. Only type
+    // codes affect these images; unrelated strings must never rebake the atlas.
+    const codes = new Map();
+    for (let code = 0; code < _pageFrameStrings.length; code++) {
+        const type = _pageFrameStrings[code];
+        if (Object.hasOwn(BASE_UNIT_STATS, type) || Object.hasOwn(BASE_CARD_TYPES, type)) codes.set(type,code);
+    }
+    // Prepare the complete roster once. A newly spawned type only changes
+    // its string-code lookup; it must not restart thousands of image bakes.
+    const types=[...new Set([...Object.keys(BASE_UNIT_STATS),...Object.keys(BASE_CARD_TYPES)])].map(type=>[codes.get(type)??-1,type]);
+    const key = types.map(([code,type]) => code + ':' + type).join('|');
+    if (_columnLodCatalog?.key === key) return _columnLodCatalog;
+    const styleKey=JSON.stringify(types.map(([,type])=>[type,BASE_UNIT_STATS[type],BASE_CARD_TYPES[type]]));
+    const width = 2 ** Math.ceil(Math.log2(Math.max(2,...types.map(([code])=>code+1)))), styles = [];
+    const lookup = new Float32Array(width * 8 * 4);
+    function add(row, code, style) {
+        if (!style.unit) style.drawOwnerRim = (g, color) => {
+            // Same tile capture and padding as get3DExact2DTexture (96px).
+            const scale = 64 / 96 * (96 - 8) / TILE;
+            g.save();g.translate(32,32);g.scale(scale,scale);
+            g.strokeStyle=color;g.lineWidth=1;g.strokeRect(-15,-15,30,30);g.restore();
+        };
+        const at=(row*width+code)*4;
+        // One panel plus the same sixteen directions/five elevations as units' animation frames.
+        const preserve=style.preserveModelHeight || style.isFlying || style.mounted || style.modelKey.startsWith('tower_cloud') ? 1 : 0;
+        const stats = style.unit ? BASE_UNIT_STATS[style.type] : BASE_CARD_TYPES[style.type];
+        const vision = Number(stats?.visionRange) || 0;
+        style.bakeHeight = preserve || vision <= 0 ? 1 : Math.max(.18, vision * (typeof AREA_UNIT_TILE_EQUIVALENT === 'number' ? AREA_UNIT_TILE_EQUIVALENT : 5) / 5);
+        style.maxHeightRatio=preserve||vision<=0?1:Math.max(1,(Number(stats?.maxVisionRange)||vision)/vision);
+        if(code>=0) {
+            lookup[at] = styles.length * 81 + 1;lookup[at+1]=style.snake?-1:preserve;
+            lookup[at+2] = style.bakeHeight * (style.mounted ? -1 : 1);
+            lookup[at+3] = style.isFlying ? (style.isWorker?.36:.30) : 0;
+        }
+        styles.push(style);
+    }
+    for (const [code, type] of types) {
+        const unit = BASE_UNIT_STATS[type], card = BASE_CARD_TYPES[type];
+        if (unit) {
+            const scale = type === 'fast' ? 1.35 : type === 'scout' ? 1.2 : type === 'flying' ? 1.3 : unit.isFlying ? .8 : 1;
+            add(7, code, {modelKey:'unit_'+type, type, unit:true, snake:type==='snake', isFlying:!!unit.isFlying, isWorker:!!unit.isWorker, mounted:MOUNTED_UNIT_TYPES.has(type),
+                weaponType:getUnit3DWeaponType({unitType:type,attackStyle:unit.attackStyle}),
+                color:type==='snake'?'#3dff64':UNIT_3D_BODY_COLORS[type] || unit.color, scaleX:scale, scaleY:scale*(type==='snake'?.52:MOUNTED_UNIT_TYPES.has(type)?MOUNT_HEIGHT_RATIO:1.45),
+                draw(g) { drawUnitBodyGeometry(g,{...unit,unitType:type,x:32,y:32,r:22,isSnake:type==='snake',carryingValue:0},'#151923',2); }
+            });
+            add(1, code, {modelKey:'barrack_'+type, type, color:unit.color, scaleX:.98/.94, scaleY:.62/.94, preserveModelHeight:true,
+                draw(g) {
+                    const scale=64/96*(96-8)/TILE;
+                    g.save();g.translate(32,32);g.scale(scale,scale);
+                    Barrack.prototype.draw.call({x:0,y:0,owner:-1,unitType:type,spawnQueue:[],maxEnergy:0},g);
+                    g.restore();
+                }
+            });
+        }
+        if (card) {
+            const spawner = ['spawner','astar_spawner','salvager','builder_spawner','healer_spawner','research'].includes(type);
+            const floor = card.target === 'floor';
+            const farm = type === 'farm' || type === 'astar_farm';
+            const row = spawner ? 2 : floor ? 3 : 0;
+            add(row,code,{modelKey:(spawner?'spawner_':floor?'item_':'tower_')+type,type,color:card.color||'#aaa',
+                scaleX:(spawner?.95:floor?.84:type.startsWith('cloud')?.96:.82)/.94,
+                scaleY:(spawner?.62:floor?(type==='house'?.82:farm?.72:.14):1.05)/.94,
+                preserveModelHeight:spawner || type==='house' || farm || type.startsWith('cloud'),
+                statusTextureCanvas:spawner?get3DWorkshopSignTexture(type):null,
+                draw(g) {
+                    const scale=64/96*(96-8)/TILE;
+                    g.save();g.translate(32,32);g.scale(scale,scale);
+                    if(spawner) drawWorkerBuildingEmblem(g,0,0,1,type);
+                    else if(floor) {const sprite=_getFloorItemSprite({type,energy:100,maxEnergy:100});if(sprite)g.drawImage(sprite,-TILE/2,-TILE/2,TILE,TILE);}
+                    else drawTowerIcon(g,0,0,card.color||'#aaa',0,1,type,type==='laser'?false:undefined);
+                    g.restore();
+                }
+            });
+        }
+    }
+    for (const [row,type,color] of [[4,'gold','#f0c83a'],[5,'astar','#d8d8e8']]) {
+        for(const active of [true,false]) {
+            const code=active?0:1;
+            lookup[(row*width+code)*4]=styles.length*81+1;
+            lookup[(row*width+code)*4+2]=1;
+            styles.push({modelKey:type+'_mine_'+(active?'active':'empty'),type,color,neutral:true,scaleX:.9/.94,scaleY:.35/.94,
+                draw(g){g.drawImage(type==='astar'?_getAstarMineTileSprite(active):_getGoldMineTileSprite(active),0,0,64,64);}});
+        }
+    }
+    if(_columnLodStyleCatalog?.key!==styleKey)_columnLodStyleCatalog={key:styleKey,styles};
+    return _columnLodCatalog = {key,width,styles:_columnLodStyleCatalog.styles,lookup,stride:81};
+}
+// Shared sprites for every unit/structure outside the selected detail masks.
+function _detailColumns(unitDetail, structDetail) {
+    // (A remembered view's structures have no table: their glyphs are the
+    // instance layer's, _structureGlyphLayer.)
+    if (structDetail && !structDetail.live && !structDetail.frame) structDetail = null;
+    if (!unitDetail && !structDetail) return null;
+    const base = unitDetail ? unitDetail.columns : { units: null, unitSources: null, alpha: tickAlpha, detailPx: 0,
+        visibility: visibilityGridForColumns(), visibilityVersion, fullVisibility, player: localPlayerId, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
+        colors: Array.from({ length: 9 }, (_, i) => get3DRenderOwnerColor(i - 1)) };
+    base.structures = structDetail ? structDetail.frame || _pageTables.s : null;
+    base.structureSources = structDetail ? structDetail.frame?.sources || _pageStructViews : null;
+    base.detailMaskS = structDetail ? structDetail.mask : null;
+    base.detailMaskVersionS = structDetail ? structDetail.version : 0;
+    return base;
+}
+// A fog-history view's structures in the same rendering columns. Never
+// substitute the live table here: unseen structures must retain their
+// last-seen state. (Beside a simulation worker: the remembered columns,
+// visibility_history.js historyStructureFrame; else none, the lists.)
+function _structureRenderFrame(view) {
+    if (_isLiveRenderGrid(view.grid)) return typeof _pageTables !== 'undefined' ? _pageTables.s : null;
+    const h = typeof visibilityHistoryState !== 'undefined' ? visibilityHistoryState : null;
+    return h && h.view === view && view.historyColumns ? historyStructureFrame(h) : null;
+}
+// Rank only visible models. Chunk bounds are deliberately conservative and
+// include units behind/beside the camera; they must not consume detail slots.
+// CSS pixels keep LOD independent of render resolution / device pixel ratio.
+const DETAIL_VIEW_HOLD_MS = 150;
+// (A remembered structure's flag in the structure columns (Team + history,
+// _structureRenderFrame): a bit no live table uses. 65536 there is a
+// structure's research task (SIM_SF_RESEARCH_TASK): read as remembered, a
+// lab at work was drawn dimmed, and seen through the fog. renderer3d.js
+// STRUCT_GHOST_FLAG is the same bit.)
+const STRUCT_FRAME_GHOST = 4194304;
+const _detailViewHeld = { key: '', at: -Infinity, tick: -1, x: NaN, y: NaN, zoom: NaN, pitch: NaN, yaw: NaN };
+function _detailViewKey(flat2d) {
+    const R = renderer3dInstance;
+    // Cache selection within the conservative viewport/chunk margins. The
+    // camera matrices, positions and GPU animation still update every frame;
+    // only model membership waits for a meaningful camera change.
+    {
+        // Hold updates during motion, but retain the exact requested pose.
+        // Rounded buckets could keep the selection from either edge of a
+        // bucket indefinitely, even after returning to the same camera pose.
+        const key = [flat2d,camera.x,camera.y,camera.zoom,R.orbitPitch,R.orbitYaw,R.cssWidth,R.cssHeight].join('|');
+        // While the camera moves the key changes every 24 px: at pan speed
+        // every frame, and every change is a new selection of the models
+        // (scores, picks, new close models, the middle-distance instances:
+        // 8-10 ms). The simulation's tick, twenty times a second, already
+        // makes one frame do most of that work again (the units moved). So
+        // the key is held until the next tick's first frame: one heavier
+        // frame in six at 120 FPS, at an even beat, instead of that one and
+        // another whenever the camera had gone 24 px. (No ticks, a paused
+        // or stalled match: DETAIL_VIEW_HOLD_MS.) What comes into view
+        // meanwhile is drawn as its glyph: the margins above cover far more
+        // than the distance covered in a tick.
+        const V = _detailViewHeld, now = typeof performance !== 'undefined' ? performance.now() : 0;
+        // (A jump is taken at once: a zoom step, a turn, the camera put
+        // somewhere else. Holding is for the steady travel of a pan.)
+        const jump = V.flat !== flat2d || Math.abs(Math.log(camera.zoom / V.zoom)) > 0.2 || Math.abs(R.orbitPitch - V.pitch) > 0.1 || Math.abs(R.orbitYaw - V.yaw) > 0.1
+            || Math.hypot(camera.x - V.x, camera.y - V.y) * camera.zoom > 0.4 * Math.min(R.cssWidth, R.cssHeight);
+        if (key !== V.key && (jump || gameTime !== V.tick || now - V.at >= DETAIL_VIEW_HOLD_MS || now < V.at)) {
+            V.key = key; V.at = now; V.tick = gameTime;
+            V.flat = flat2d; V.x = camera.x; V.y = camera.y; V.zoom = camera.zoom; V.pitch = R.orbitPitch; V.yaw = R.orbitYaw;
+        }
+        return V.key;
+    }
+}
+function _detailScore(x, z, size, flat2d, retained = false, minPixels = UNIT_DETAIL_MIN_PX, height = 1) {
+    const R = renderer3dInstance, M = R.tmpViewProjection;
+    const w = M[3] * x + M[7] * .02 + M[11] * z + M[15];
+    if (!(w > 0)) return 0;
+    const nx = (M[0] * x + M[4] * .02 + M[8] * z + M[12]) / w;
+    const ny = (M[1] * x + M[5] * .02 + M[9] * z + M[13]) / w;
+    const nz = (M[2] * x + M[6] * .02 + M[10] * z + M[14]) / w;
+    const scale = flat2d ? camera.zoom * TILE : R.lodProjectionScale / w;
+    const pixels = size * scale;
+    const sx = viewW / R.cssWidth, sy = viewH / R.cssHeight;
+    const margin = scale * 2 / R.cssHeight; // Bodies overlapping a screen edge.
+    if (nz < -1 || nz > 1 || Math.abs(nx) > sx + margin || Math.abs(ny) > sy + margin*Math.max(1,height)) return 0;
+    if (pixels < minPixels * (retained ? .85 : 1)) return 0;
+    // Once a body is clearly readable, huge units must not permanently
+    // exclude smaller neighbours. Prefer the view centre for equal sizes.
+    const score = Math.min(pixels, 48) + (retained ? 2 : 0) + .1 / (1 + nx * nx + ny * ny);
+    return score * (Math.abs(nx) <= sx && Math.abs(ny) <= sy ? 1 : .05);
+}
+// The `budget` best positive scores' indices, in index order; of equal
+// scores at the cut the lower indices (as _detailPickHeap's order has it).
+// Linear: the cut found by selection on a copy of the positive scores (the
+// heap's comparisons were ~0.7 ms a tick in a close view of a battle).
+let _detailPickBuf = new Float64Array(0);
+function _detailPick(scores, budget) {
+    const n = scores.length;
+    let count = 0;
+    for (let i = 0; i < n; i++) if (scores[i] > 0) count++;
+    const out = [];
+    if (count <= budget) {
+        for (let i = 0; i < n; i++) if (scores[i] > 0) out.push(i);
+        return out;
+    }
+    if (budget <= 0) return out;
+    if (_detailPickBuf.length < count) _detailPickBuf = new Float64Array(Math.ceil(count * 1.5));
+    const A = _detailPickBuf;
+    let m = 0;
+    for (let i = 0; i < n; i++) { const v = scores[i]; if (v > 0) A[m++] = v; }
+    // The budget-th largest: the (m - budget)-th smallest (Hoare's select).
+    const k = m - budget;
+    let lo = 0, hi = m - 1;
+    while (lo < hi) {
+        const pivot = A[(lo + hi) >> 1];
+        let i = lo, j = hi;
+        while (i <= j) {
+            while (A[i] < pivot) i++;
+            while (A[j] > pivot) j--;
+            if (i <= j) { const t = A[i]; A[i] = A[j]; A[j] = t; i++; j--; }
+        }
+        if (k <= j) hi = j; else if (k >= i) lo = i; else break;
+    }
+    const cut = A[k];
+    let above = 0;
+    for (let i = 0; i < n; i++) if (scores[i] > cut) above++;
+    let ties = budget - above;
+    for (let i = 0; i < n; i++) {
+        const v = scores[i];
+        if (v > cut) out.push(i);
+        else if (v === cut && ties > 0) { out.push(i); ties--; }
+    }
+    return out;
+}
+// Bounded min heap: O(n log budget), no population-sized sort or percentile
+// cutoff (a strict percentile comparison rejects every equal-sized unit).
+// (The reference of _detailPick: tests/detail-pick.test.cjs.)
+function _detailPickHeap(scores, budget) {
+    const heap = [];
+    const less = (a, b) => scores[a] < scores[b] || (scores[a] === scores[b] && a > b);
+    for (let i = 0; i < scores.length; i++) {
+        if (!(scores[i] > 0)) continue;
+        if (heap.length < budget) {
+            let p = heap.length; heap.push(i);
+            while (p > 0) { const parent = (p - 1) >> 1; if (!less(heap[p], heap[parent])) break; [heap[p], heap[parent]] = [heap[parent], heap[p]]; p = parent; }
+        } else if (less(heap[0], i)) {
+            heap[0] = i;
+            let p = 0;
+            while (p * 2 + 1 < heap.length) {
+                let child = p * 2 + 1;
+                if (child + 1 < heap.length && less(heap[child + 1], heap[child])) child++;
+                if (!less(heap[child], heap[p])) break;
+                [heap[p], heap[child]] = [heap[child], heap[p]]; p = child;
+            }
+        }
+    }
+    return heap.sort((a, b) => a - b); // Preserve painter order.
+}
+const STRUCT_DETAIL_BUDGET = 600;
+// Solid geometry owns its pixels; translucent LODs expose units behind it.
+function _detailWeights(scores, picked, budget) {
+    return new Map(picked.map(i => [i,255]));
+}
+let _structDetailMode = false;
+let _structDetailPx = new Float32Array(0);
+let _structDetailPrevious = null, _structDetailVersion = 0;
+let _structDetailCache = null;
+let _structProjectionCache = null;
+let _structSpatialCache = null;
+function _structureDetailCandidates(F, flat2d) {
+    const client = typeof _simClient === 'undefined' ? null : _simClient;
+    // (A remembered frame (Team + history) is kept and changed in place: its
+    // rev changes when slots are taken over or ghosts come or go.)
+    const revision = F.history ? F.rev : client ? client.structMver : F;
+    const columns = Math.ceil(GRID_W / 16), rows = Math.ceil(GRID_H / 16);
+    let C = _structSpatialCache;
+    if (!C || C.client !== client || C.revision !== revision || C.n !== F.n || C.cap !== F.cap || C.columns !== columns || C.rows !== rows) {
+        const head = new Int32Array(columns * rows).fill(-1), next = new Int32Array(F.cap);
+        for (let s = 0; s < F.n; s++) {
+            if (F.kind[s] === 6) continue; // Dropped items can move; never model-detail candidates.
+            const bx = Math.max(0,Math.min(columns-1,F.gx[s]>>4)), by = Math.max(0,Math.min(rows-1,F.gy[s]>>4));
+            const b = by * columns + bx; next[s] = head[b]; head[b] = s;
+        }
+        C = _structSpatialCache = {client,revision,n:F.n,cap:F.cap,columns,rows,head,next,key:null,slots:[]};
+    }
+    const key = _detailViewKey(flat2d);
+    if (C.key === key) return C.slots;
+    const R = renderer3dInstance, M = R.tmpViewProjection;
+    const projectionScale = flat2d ? camera.zoom * TILE : R.lodProjectionScale;
+    const sx = viewW / R.cssWidth, sy = viewH / R.cssHeight;
+    const dw = 10 * (Math.abs(M[3]) + Math.abs(M[11]));
+    const dx = 10 * (Math.abs(M[0]) + Math.abs(M[8])), dy = 10 * (Math.abs(M[1]) + Math.abs(M[9]));
+    const slots = C.slots; slots.length = 0;
+    for (let b = 0; b < C.head.length; b++) {
+        if (C.head[b] < 0) continue;
+        const x = (b % columns + .5) * 16, z = (Math.floor(b / columns) + .5) * 16;
+        const w = M[3]*x + M[7]*.02 + M[11]*z + M[15];
+        if (w + dw <= 0 || .94 * projectionScale / (flat2d ? 1 : Math.max(.01,w-dw)) < (flat2d ? UNIT_DETAIL_MIN_PX : 8) * .85) continue;
+        const cx = M[0]*x + M[4]*.02 + M[8]*z + M[12], cy = M[1]*x + M[5]*.02 + M[9]*z + M[13];
+        if (Math.abs(cx) > sx*(w+dw)+dx || Math.abs(cy) > sy*(w+dw)+dy) continue;
+        for (let s = C.head[b]; s >= 0; s = C.next[s]) slots.push(s);
+    }
+    C.key = key;
+    return slots;
+}
+function _structureDetailSplit(lists, flat2d, bounds, live = true, renderFrame = null) {
+    const R = renderer3dInstance;
+    if (!R || typeof R.columnPixelScale !== 'function' || (live && (typeof _pageTables === 'undefined' || !_pageTables.s))) return null;
+    const packed = renderFrame || (live ? _pageTables.s : null);
+    // (A remembered frame is changed in place: its ver.)
+    const cacheKey = _detailViewKey(flat2d) + '|' + gameTime + '|' + visibilityVersion + '|' + fullVisibility + '|' + (packed?.history ? packed.ver : '');
+    if (packed && _structDetailCache?.key === cacheKey && _structDetailCache.frame === packed) return _structDetailCache.value;
+    if (packed?.kind) {
+        // Work directly from the packed table. At a low pitch even a small
+        // view's ground AABB can contain the entire map's buildings.
+        const F = packed, n = F.n, previous = _structDetailPrevious;
+        if (_structDetailPx.length < n) _structDetailPx = new Float32Array(Math.ceil(n * 1.5));
+        const P = _structDetailPx.subarray(0, n);
+        // Buildings do not move every simulation tick. Cache their projected
+        // scores, while still checking life/visibility and changed slots live.
+        const viewKey = _detailViewKey(flat2d);
+        let projection = _structProjectionCache;
+        if (!projection || projection.x.length < n) {
+            projection = _structProjectionCache = { x: new Float32Array(F.cap).fill(NaN),
+                y: new Float32Array(F.cap), retained: new Uint8Array(F.cap), scores: new Float32Array(F.cap), key: null };
+        }
+        const moved = projection.key !== viewKey;
+        P.fill(0);
+        for (const s of _structureDetailCandidates(F, flat2d)) {
+            const gx = F.gx[s], gy = F.gy[s], retained = previous?.mask?.[s] ? 1 : 0;
+            if (moved || projection.x[s] !== gx || projection.y[s] !== gy || projection.retained[s] !== retained) {
+                projection.scores[s] = _detailScore(gx + .5, gy + .5, .94, flat2d, !!retained);
+                projection.x[s] = gx; projection.y[s] = gy; projection.retained[s] = retained;
+            }
+            if (!F.alive[s] || F.kind[s] === 6 || (F.kind[s] < 4 && F.energy[s] <= 0)) continue;
+            if (!fullVisibility && !(F.flags?.[s]&STRUCT_FRAME_GHOST) && !(visibilityGrid[gy]?.[gx] > 0)) continue;
+            // (No source to draw in detail: its glyph stays.)
+            if (F.sources && !F.sources[s]) continue;
+            P[s] = projection.scores[s];
+        }
+        projection.key = viewKey;
+        const slots = _detailPick(P, STRUCT_DETAIL_BUDGET), weights = _detailWeights(P,slots,STRUCT_DETAIL_BUDGET), selected = new Set();
+        const out = lists.map(() => []), floors = [], byKind = [0, 1, 2, -1, 3, 4];
+        for (const s of slots) {
+            const e = F.sources ? F.sources[s] : _pageStructViews[s];
+            if (!e) continue;
+            selected.add(e);
+            e._r3dDetailBlend = weights.get(s)/255;
+            const k = byKind[F.kind[s]];
+            if (k >= 0) out[k].push(e);
+            else if (F.kind[s] === 3) floors.push(e);
+        }
+        let value = previous;
+        if (!previous || previous.live!==live || previous.mask?.length !== F.cap || previous.selected.size !== selected.size || [...selected].some(e => !previous.selected.has(e)) || slots.some(s=>previous.mask[s]!==weights.get(s))) {
+            const mask = new Uint8Array(F.cap);
+            for (const s of slots) mask[s] = weights.get(s);
+            floors.sort((a, b) => a.gy - b.gy || a.gx - b.gx);
+            value = _structDetailPrevious = { lists: out, floors, selected, mask, version: ++_structDetailVersion, live };
+        }
+        value.frame = F;
+        _structDetailCache = { key: cacheKey, frame: F, value };
+        return value;
+    }
+    const all = lists.concat(live ? [getCellItemsRowMajor()] : []);
+    let n = 0;
+    for (const L of all) n += L.length;
+    if (_structDetailPx.length < n) _structDetailPx = new Float32Array(Math.ceil(n * 1.5));
+    const P = _structDetailPx.subarray(0, n), previous = _structDetailPrevious;
+    let i = 0;
+    for (const L of all) for (const e of L) {
+        const x = (e.gx | 0) + .5, z = (e.gy | 0) + .5;
+        const light = fullVisibility || e._historyGhost || visibilityGrid[e.gy]?.[e.gx] > 0;
+        P[i++] = light ? _detailScore(x, z, .94, flat2d, previous?.selected.has(e)) : 0;
+    }
+    const picked = new Set(_detailPick(P, STRUCT_DETAIL_BUDGET)), selected = new Set();
+    i = 0;
+    const far = all.map(() => []);
+    const out = all.map((L, k) => { const o = []; for (const e of L) { if (picked.has(i++)) { o.push(e); selected.add(e); } else if (!live) far[k].push(e); } return o; });
+    if (live && previous && previous.live && previous.mask?.length === _pageTables.s.cap && previous.selected.size === selected.size && [...selected].every(e => previous.selected.has(e))) {
+        _structDetailCache = { key: cacheKey, frame: _pageTables.s, value: previous };
+        return previous;
+    }
+    const mask = live ? new Uint8Array(_pageTables.s.cap) : null;
+    if (mask) for (const e of selected) if (e._s >= 0) {mask[e._s] = 255;e._r3dDetailBlend=1;}
+    const pxAt = (gx, gy) => _detailScore(gx + .5, gy + .5, .94, flat2d);
+    _structDetailPrevious = { lists: out.slice(0, lists.length), selected, mask, version: ++_structDetailVersion, T: 0, pxAt, live, far: far.slice(0, lists.length) };
+    if (live) _structDetailCache = { key: cacheKey, frame: _pageTables.s, value: _structDetailPrevious };
+    return _structDetailPrevious;
+}
+
+// Detailed models cost ~0.1 ms of CPU a unit; a close view of an army holds
+// thousands. Visible readable units share a hard budget; all others use GPU
+// glyphs. The same slot mask selects exactly one representation on the GPU.
+// null only when no packed frame / renderer is available.
+// GPU silhouettes cover the middle distances; reserve model/texture work for
+// bodies large enough to show it. Thresholds are CSS pixels, not render pixels.
+const UNIT_DETAIL_BUDGET = 600, UNIT_DETAIL_MIN_PX = 24;
+let _unitDetailPx = new Float32Array(0);
+// A unit in detail stays so down to 85% of the minimum readable size,
+// with a small retention bonus. Population never changes the LOD policy.
+// The GPU draws as glyphs exactly the units
+// the split did not pick (a mask per slot, uploaded when it changes).
+let _detailMode = false, _detailMask = null, _detailSlots = [], _detailMaskVersion = 0, _detailUnits = [];
+let _unitDetailCache = null;
+function _detailMaskClear() {
+    _unitDetailCache = null;
+    for(const u of _detailUnits) u._r3dDetailBlend=1;
+    if (_detailMask) for (const s of _detailSlots) _detailMask[s] = 0;
+    if (_detailSlots.length) { _detailSlots = []; _detailMaskVersion++; }
+}
+// (vSlots: the frame slots of viewUnits, in their order, when the cull had
+// them (getChunkRenderView): read instead of each unit's _s.)
+function _unitDetailSplit(viewUnits, flat2d, bounds, vSlots = null) {
+    const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null, R = renderer3dInstance;
+    if (!F || !R || typeof R.columnPixelScale !== 'function') { _detailMaskClear(); return null; }
+    if (vSlots && vSlots.length !== viewUnits.length) vSlots = null;
+    const cacheKey = _detailViewKey(flat2d) + '|' + visibilityVersion + '|' + fullVisibility;
+    if (_unitDetailCache?.key === cacheKey && _unitDetailCache.frame === F && _unitDetailCache.source === viewUnits) {
+        _unitDetailCache.value.columns.alpha = tickAlpha;
+        return _unitDetailCache.value;
+    }
+    const a = tickAlpha;
+    if (_unitDetailPx.length < viewUnits.length) _unitDetailPx = new Float32Array(Math.ceil(viewUnits.length * 1.5));
+    const n = viewUnits.length, P = _unitDetailPx.subarray(0, n);
+    for (let i = 0; i < n; i++) {
+        const s = vSlots ? vSlots[i] : viewUnits[i] ? viewUnits[i]._s : -1;
+        // (Not in the frame: as before, in detail.)
+        if (!(s >= 0)) { P[i] = Infinity; continue; }
+        // (Frozen or hidden ones, Team + history: the glyphs' alone.)
+        if (F.flags[s] & (SIM_UF_GHOST | SIM_UF_HIDDEN) || F.energy[s] <= 0) { P[i] = 0; continue; }
+        const x = (F.px[s] + (F.x[s] - F.px[s]) * a) / TILE, z = (F.py[s] + (F.y[s] - F.py[s]) * a) / TILE;
+        const size = Math.max(.28, Math.min(.9, F.r[s] * 2.2 / TILE));
+        if (!fullVisibility && !(visibilityGrid[Math.floor(z)]?.[Math.floor(x)] > 0)) { P[i] = 0; continue; }
+        P[i] = _detailScore(x, z, size, flat2d, !!(_detailMask && _detailMask[s]));
+    }
+    if (!_detailMask || _detailMask.length < F.cap) { _detailMask = new Uint8Array(F.cap); _detailSlots = []; }
+    const M8 = _detailMask, detailed = [], slots = [], picked = _detailPick(P, UNIT_DETAIL_BUDGET), weights = _detailWeights(P,picked,UNIT_DETAIL_BUDGET);
+    let weightChanged=false;
+    for (const i of picked) {
+        const u = viewUnits[i], s = u ? u._s : -1;
+        const weight=weights.get(i);
+        u._r3dDetailBlend=weight/255;
+        if(s>=0 && M8[s]!==weight) weightChanged=true;
+        detailed.push(u);
+        if (s >= 0) slots.push(s);
+    }
+    let same = slots.length === _detailSlots.length;
+    if (same) for (let k = 0; k < slots.length; k++) if (slots[k] !== _detailSlots[k]) { same = false; break; }
+    if (!same || weightChanged) {
+        for (const s of _detailSlots) M8[s] = 0;
+        for (const u of detailed) if(u._s>=0) M8[u._s]=Math.round(u._r3dDetailBlend*255);
+        _detailSlots = slots; _detailMaskVersion++;
+    }
+    // Preserve the list identity when the selection is unchanged, so the
+    // persistent model layer can be reused between simulation ticks.
+    if (_detailUnits.length !== detailed.length || detailed.some((u, i) => u !== _detailUnits[i])) _detailUnits = detailed;
+    const value = { units: _detailUnits, columns: { units: F, structures: null, unitSources: _isLiveUnitList(null, true), unitCandidates: viewUnits, unitCandidateSlots: vSlots, alpha: a, detailPx: 0,
+        detailMask: M8, detailMaskVersion: _detailMaskVersion,
+        visibility: visibilityGridForColumns(), visibilityVersion, fullVisibility, player: localPlayerId, tile: TILE, lightNorm: VISIBILITY_LIGHT_NORMALIZATION_RANGE,
+        colors: Array.from({ length: 9 }, (_, i) => get3DRenderOwnerColor(i - 1)) } };
+    _unitDetailCache = { key: cacheKey, frame: F, source: viewUnits, value };
+    return value;
+}
+// (The light grid: what is seen now; a remembered view's fog grid would show
+// units where only the memory is.)
+function visibilityGridForColumns() { return visibilityGrid; }
+// (The live units list: a view's are the live ones, not a remembered
+// view's; with get, the list itself.)
+function _isLiveUnitList(list, get = false) { return get ? units : list === units; }
+
+// The build preview follows the mouse at the mouse's rate, not the scene's
+// frame rate: the overlay (its own canvas over the scene) is drawn again as
+// the mouse moves, with the last frame's view. (Not when the overlay itself
+// is slow to draw, thousands of lines: then with the frames, as before.)
+let _lastOverlaySnapshot = null, _overlayDrawStart = 0, _overlayDrawMs = 0, _previewRedrawAt = 0;
+// (now: a click, drawn whatever was drawn just before it.)
+function redrawBuildPreviewNow(now = false) {
+    const S = _lastOverlaySnapshot, at = performance.now();
+    // (Not while the presentation queue guard paces the frames: a redraw
+    // per mouse event is a frame per browser frame, which fills its queue.)
+    if (!S || !selectedBuildItem || !gameStarted || _overlayDrawMs > 4 || (!now && at - _previewRedrawAt < 6) || _presentGuard.rate > 0) return;
+    _previewRedrawAt = at;
+    try {
+        S.buildPreview = getCurrentBuildPreviewData();
+        if (S.buildPreview && renderDimensionMode !== '2d' && typeof _pushBuildPreview3DObject === 'function') S.buildPreview.modelShown = false;
+        drawInteractionOverlay(S);
+    } catch (err) { _lastOverlaySnapshot = null; }
+}
+
+// ---- builds ordered, not there yet ----
+// A build order reaches the simulation a few ticks later (the command lead,
+// the worker's queue, the next frame): 200-400 ms in which a click showed
+// nothing. Each ordered tile shows the thing's picture at once, see-through,
+// until the building (or its site) is there, or a few seconds at most (an
+// order the simulation refused: gone again). Local, drawn only: nothing of
+// the match depends on it.
+// (Once the building is there the ghost fades over PENDING_BUILD_FADE_MS:
+// the site's own picture is drawn a frame or a few later, and the hover
+// preview is not drawn on a tile with a ghost: preview, ghost and site
+// follow each other without a blink.)
+const PENDING_BUILD_GHOST_MS = 2500, PENDING_BUILD_STACK_MS = 450, PENDING_BUILD_FADE_MS = 350;
+const _pendingBuildGhosts = new Map();
+function _tileHoldsStructure(gx, gy) {
+    const c = grid[gy] && grid[gy][gx];
+    return !!(c && (c.item || (typeof getTileEntityRef === 'function' && getTileEntityRef(gx, gy))));
+}
+function notePendingBuildGhost(gx, gy, key) {
+    _pendingBuildGhosts.set(gx + ',' + gy, { gx, gy, key, at: performance.now(), onTop: _tileHoldsStructure(gx, gy) });
+}
+function drawPendingBuildGhosts(ctx) {
+    if (_pendingBuildGhosts.size === 0 || !renderer3dInstance || typeof renderer3dInstance.projectWorldToCanvas !== 'function') return;
+    const now = performance.now();
+    for (const [k, g] of _pendingBuildGhosts) {
+        const age = now - g.at;
+        // (A stack onto a building: a short flash. A new building: until it shows.)
+        if (!g.onTop && !g.seenAt && age > 60 && _tileHoldsStructure(g.gx, g.gy)) g.seenAt = now;
+        const fade = g.seenAt ? 1 - (now - g.seenAt) / PENDING_BUILD_FADE_MS : g.onTop ? 1 - Math.max(0, age - PENDING_BUILD_STACK_MS + 150) / 150 : 1;
+        if (age > PENDING_BUILD_GHOST_MS || fade <= 0) { _pendingBuildGhosts.delete(k); continue; }
+        const p = [[0, 0], [1, 0], [1, 1], [0, 1]].map(([dx, dz]) => renderer3dInstance.projectWorldToCanvas(g.gx + dx, 0.06, g.gy + dz));
+        if (p.some(q => !q)) continue;
+        const minX = Math.min(p[0].x, p[1].x, p[2].x, p[3].x), maxX = Math.max(p[0].x, p[1].x, p[2].x, p[3].x);
+        const minY = Math.min(p[0].y, p[1].y, p[2].y, p[3].y), maxY = Math.max(p[0].y, p[1].y, p[2].y, p[3].y);
+        ctx.save();
+        ctx.beginPath(); ctx.moveTo(p[0].x, p[0].y); for (let i = 1; i < 4; i++) ctx.lineTo(p[i].x, p[i].y); ctx.closePath();
+        ctx.globalAlpha = Math.max(0, Math.min(1, fade));
+        ctx.fillStyle = 'rgba(0,255,0,0.22)'; ctx.strokeStyle = 'rgba(120,255,120,0.95)'; ctx.lineWidth = 1.5;
+        ctx.fill(); ctx.stroke();
+        const img = typeof getItemThumbnailImage === 'function' ? getItemThumbnailImage(g.key, 30) : null;
+        if (img && (img.complete === undefined || img.complete) && (img.width || img.naturalWidth)) {
+            const size = Math.max(6, Math.min(maxX - minX, maxY - minY) * 0.86);
+            ctx.globalAlpha = 0.8 * Math.max(0, Math.min(1, fade));
+            try { ctx.drawImage(img, (minX + maxX) / 2 - size / 2, (minY + maxY) / 2 - size / 2, size, size); } catch { }
+        }
+        ctx.restore();
+    }
+}
+
+function drawInteractionOverlay(renderer3dSnapshot = null) {
+    if (!overlayCtx || !overlayCanvas) return;
+    const o = renderer3dSnapshot && renderer3dSnapshot.overlays;
+    const hasContent = !!((isBoxSelecting && selectionBoxScreen) || _pendingBuildGhosts.size > 0
+        || (renderer3dSnapshot && renderer3dSnapshot.buildPreview)
+        || (o && !o.groundLinesRendered && o.lines && o.lines.length)
+        || (o && ['rects', 'areaTiles', 'rings', 'markers', 'bars', 'texts'].some(key => o[key] && o[key].length)));
+    if (!hasContent && overlayCanvas._interactionEmpty) return;
+    let dpr = window.devicePixelRatio || 1;
+    let pad = overlayCanvas._viewPad || 0;
+    overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    overlayCtx.clearRect(0, 0, viewW + 2 * pad, viewH + 2 * pad);
+    overlayCanvas._interactionEmpty = !hasContent;
+    if (!hasContent) return;
+
+    if (renderer3dInstance && renderer3dSnapshot && renderer3dSnapshot.overlays && typeof renderer3dInstance.drawOverlay === 'function') {
+        renderer3dInstance.drawOverlay(renderer3dSnapshot.overlays, overlayCtx);
+        const bp = renderer3dSnapshot.buildPreview;
+        if (bp && typeof renderer3dInstance.drawBuildPreview === 'function' && !(bp.areaCells == null && _pendingBuildGhosts.has(bp.gx + ',' + bp.gy))) {
+            renderer3dInstance.drawBuildPreview(bp, overlayCtx);
+        }
+    }
+    if (_pendingBuildGhosts.size > 0) drawPendingBuildGhosts(overlayCtx);
+
+    if (isBoxSelecting && selectionBoxScreen) {
+        let sx = Math.min(selectionBoxScreen.sx, selectionBoxScreen.ex) + pad;
+        let sy = Math.min(selectionBoxScreen.sy, selectionBoxScreen.ey) + pad;
+        let w = Math.abs(selectionBoxScreen.ex - selectionBoxScreen.sx);
+        let h = Math.abs(selectionBoxScreen.ey - selectionBoxScreen.sy);
+        overlayCtx.fillStyle = 'rgba(0,255,0,0.12)';
+        overlayCtx.strokeStyle = 'rgba(0,255,0,0.9)';
+        overlayCtx.lineWidth = 1;
+        overlayCtx.fillRect(sx, sy, w, h);
+        overlayCtx.strokeRect(sx + 0.5, sy + 0.5, Math.max(0, w - 1), Math.max(0, h - 1));
+    }
+}
+
+function syncRenderModeUi() {
+    let gameArea = document.getElementById('game-area');
+    let gpuEnabled = !!(renderer3dInstance && renderer3dInstance.supported);
+    if (gameArea) gameArea.classList.toggle('render-mode-3d', gpuEnabled);
+    renderer3dHost = renderer3dHost || document.getElementById('renderer3d-host');
+    if (renderer3dHost) renderer3dHost.style.opacity = gpuEnabled ? '1' : '0';
+    let btn2d = document.getElementById('btn-view-2d');
+    let btn3d = document.getElementById('btn-view-3d');
+    if (btn2d) btn2d.classList.toggle('active', renderDimensionMode === '2d');
+    if (btn3d) btn3d.classList.toggle('active', renderDimensionMode === '3d');
+    if (renderer3dInstance) renderer3dInstance.setEnabled(gpuEnabled);
+}
+
+function ensure3DRendererInitialized() {
+    if (renderer3dInstance) return renderer3dInstance.supported ? renderer3dInstance : null;
+    renderer3dHost = renderer3dHost || document.getElementById('renderer3d-host');
+    if (!renderer3dHost || !window.Defence3Renderer3D) return null;
+    renderer3dInstance = new window.Defence3Renderer3D({
+        mount: renderer3dHost
+    });
+    const renderer = renderer3dInstance;
+    renderer.canvas.addEventListener('webglcontextlost', event => {
+        event.preventDefault(); renderer.supported = false;
+    });
+    renderer.canvas.addEventListener('webglcontextrestored', () => {
+        if (renderer3dInstance !== renderer) return;
+        clearRendererTransientVisualCaches();
+        renderer.canvas.remove();
+        renderer3dInstance = null;
+        ensure3DRendererInitialized();
+    });
+    renderer3dInstance.setEnabled(true);
+    syncRenderModeUi();
+    _applyRenderViewPad();
+    return renderer3dInstance.supported ? renderer3dInstance : null;
+}
+
+// Start in the menu and await again after applying match configuration.
+// Reusing the same styles returns immediately; frame string remaps never bake.
+function prepareRendererLodAssets(showProgress=false) {
+    const R=ensure3DRendererInitialized();
+    if(!R)return;
+    if(showProgress && typeof setMatchLoadOverlay==='function')setMatchLoadOverlay(true,'Loading Match','Preparing model views…');
+    return (async()=>{
+        // Paint the loading message before allocation and shader compilation.
+        if(showProgress)await new Promise(resolve=>setTimeout(resolve,0));
+        _columnLodCatalog=null; // Recheck edited match rules before loading.
+        let A=R.prepareColumnAtlas();
+        const progress=showProgress?fraction=>{
+            if(typeof setMatchLoadOverlay==='function')setMatchLoadOverlay(true,'Loading Match','Preparing model views… '+Math.floor(fraction*100)+'%');
+        }:null;
+        // (One replaced meanwhile (settings or teams changed: renderer3d.js
+        // prepareColumnAtlas): the newest prepared, until one is complete.)
+        for(let tries=0;A&&tries<8;tries++) {
+            await R.preloadColumnAtlas(A,progress);
+            const N=R.prepareColumnAtlas();
+            if(!N||N===A||N.complete)break;
+            A=N;
+        }
+    })().catch(error=>{
+        if(showProgress && typeof setMatchLoadOverlay==='function')setMatchLoadOverlay(true,'Model preparation failed',String(error.message||error));
+        throw error;
+    });
+}
+
+function setRenderDimensionMode(nextMode) {
+    let normalized = nextMode === '3d' ? '3d' : '2d';
+    if (renderDimensionMode === normalized) return;
+    renderer3dRotateDrag = null;
+    renderDimensionMode = normalized;
+    if (normalized === '3d') ensure3DRendererInitialized();
+    syncRenderModeUi();
+    window.dispatchEvent(new Event('resize'));
+}
+
+function rebuildMinimapStaticLayer(scale, tilePx) {
+    if (!_minimapStaticCanvas || _minimapStaticScale !== scale || _minimapStaticTilePx !== tilePx) {
+        _minimapStaticCanvas = document.createElement('canvas');
+        _minimapStaticCanvas.width = MINIMAP_SIZE;
+        _minimapStaticCanvas.height = MINIMAP_SIZE;
+        _minimapStaticCtx = _minimapStaticCanvas.getContext('2d');
+        _minimapStaticCtx.imageSmoothingEnabled = false;
+        _minimapStaticScale = scale;
+        _minimapStaticTilePx = tilePx;
+    }
+
+    let c = _minimapStaticCtx;
+    c.clearRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
+    c.fillStyle = '#111';
+    c.fillRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
+
+    let lastFill = null;
+    const setFill = (color) => {
+        if (lastFill !== color) {
+            c.fillStyle = color;
+            lastFill = color;
+        }
+    };
+    const getMinimapTilePixelBounds = (startX, endX, y) => {
+        let left = Math.round(startX * scale);
+        let right = Math.round(endX * scale);
+        let top = Math.round(y * scale);
+        let bottom = Math.round((y + 1) * scale);
+        if (right <= left) right = left + Math.max(1, Math.round(tilePx));
+        if (bottom <= top) bottom = top + Math.max(1, Math.round(tilePx));
+        return {
+            left,
+            top,
+            width: right - left,
+            height: bottom - top,
+        };
+    };
+    const drawCell = (gx, gy, color) => {
+        setFill(color);
+        let bounds = getMinimapTilePixelBounds(gx, gx + 1, gy);
+        c.fillRect(bounds.left, bounds.top, bounds.width, bounds.height);
+    };
+    const drawRun = (startX, endX, y, color) => {
+        if (endX <= startX) return;
+        setFill(color);
+        let bounds = getMinimapTilePixelBounds(startX, endX, y);
+        c.fillRect(bounds.left, bounds.top, bounds.width, bounds.height);
+    };
+
+    for (let t of towers) drawCell(t.gx, t.gy, get3DRenderOwnerColor(t.owner));
+    for (let b of barracks) drawCell(b.gx, b.gy, get3DRenderOwnerColor(b.owner));
+    for (let s of collectorSpawners) drawCell(s.gx, s.gy, get3DRenderOwnerColor(s.owner));
+
+    for (let y = 0; y < GRID_H; y++) {
+        let runStart = -1;
+        let runOwner = -1;
+        for (let x = 0; x <= GRID_W; x++) {
+            let owner = -1;
+            if (x < GRID_W) {
+                let cell = grid[y][x];
+                if (cell.item && cell.owner >= 0) owner = cell.owner;
+            }
+
+            if (owner >= 0) {
+                if (runStart < 0) {
+                    runStart = x;
+                    runOwner = owner;
+                } else if (owner !== runOwner) {
+                    drawRun(runStart, x, y, (typeof get3DRenderOwnerColor === 'function' ? get3DRenderOwnerColor(runOwner) : '#c8ced8') + '4d');
+                    runStart = x;
+                    runOwner = owner;
+                }
+            } else if (runStart >= 0) {
+                drawRun(runStart, x, y, (typeof get3DRenderOwnerColor === 'function' ? get3DRenderOwnerColor(runOwner) : '#c8ced8') + '4d');
+                runStart = -1;
+                runOwner = -1;
+            }
+        }
+    }
+
+    for (let m of goldMines) {
+        if (m.gold > 0) drawCell(m.gx, m.gy, '#fd0');
+    }
+    for (let m of astarMines) {
+        if (m.astar > 0) drawCell(m.gx, m.gy, '#888');
+    }
+
+    _minimapStaticDirty = false;
+}
+
+// The minimap only needs a few updates a second. Redraw it immediately when
+// the camera moves (so the viewport box tracks panning), otherwise at ~10 Hz.
+let _minimapLastDrawMs = -Infinity;
+let _minimapLastCameraKey = '';
+let _minimapContentCanvas = null;
+let _minimapContentGrid = null;
+let _minimapContentMode = '';
+let _minimapContentTick = -1;
+let _minimapUnitCanvas = null;
+let _minimapUnitPixels = null;
+// Keep the population loop out of the large Canvas/UI function so the JIT
+// can optimize it. One packed write per pixel, no per-unit Map/color lookup.
+function paintMinimapUnitColumns(F, pixels, size, tile, scale, full, vis, colors, from = 0, to = F.count) {
+    const order = F.order, X = F.x, Y = F.y, E = F.energy, O = F.owner;
+    const unitScale = scale / tile;
+    for (let i = from; i < to; i++) {
+        const s = order[i];
+        if (E[s] <= 0) continue;
+        const ux = X[s], uy = Y[s];
+        if (!full && !(vis[Math.floor(uy / tile)]?.[Math.floor(ux / tile)] > 0)) continue;
+        const x = Math.floor(ux * unitScale), y = Math.floor(uy * unitScale);
+        if (x < 0 || y < 0 || x >= size || y >= size) continue;
+        pixels[y * size + x] = colors[O[s] + 1];
+    }
+}
+// The minimap's fog as a picture of its own pixels: clear where seen, dimmed
+// where explored (Team + history), dark elsewhere. A pixel over several tiles
+// (a map larger than the minimap) takes the darkest of them, as the rows of
+// tiles drawn over each other had it. (Those were a pass over every tile and
+// a fillRect per run in each row of tiles: ~5-10 ms a picture on a
+// 1000x1000 map, four times a second.)
+const _minimapFog = { size: 0, canvas: null, image: null, pixels: null, state: null, cols: null, colsKey: '' };
+function _minimapFogPicture(scale, vis, explored) {
+    const M = _minimapFog, size = MINIMAP_SIZE;
+    if (M.size !== size) {
+        M.canvas = document.createElement('canvas');
+        M.canvas.width = M.canvas.height = size;
+        M.image = M.canvas.getContext('2d').createImageData(size, size);
+        M.pixels = new Uint32Array(M.image.data.buffer, M.image.data.byteOffset, size * size);
+        M.state = new Uint8Array(size * size); M.size = size; M.colsKey = '';
+    }
+    // (RGBA bytes: alpha in the high byte; .77 of black where explored.)
+    const P = M.pixels, look = [0, 0xC4000000 | 0, 0xFF000000 | 0], W = GRID_W, H = GRID_H;
+    if (scale >= 1) {
+        for (let py = 0; py < size; py++) {
+            const ty = Math.min(H - 1, Math.floor((py + .5) / scale)), row = vis[ty], e = ty * W, o = py * size;
+            for (let px = 0; px < size; px++) {
+                const tx = Math.min(W - 1, Math.floor((px + .5) / scale));
+                P[o + px] = look[row && row[tx] > 0 ? 0 : explored && explored[e + tx] ? 1 : 2];
+            }
+        }
+    } else {
+        // (Tile x is drawn on pixel column round(x * scale): xs[px] its
+        // first tile; a pixel already dark takes no more reads.)
+        const key = scale + '|' + W;
+        if (M.colsKey !== key) {
+            M.cols = new Int32Array(size + 1);
+            for (let x = W - 1; x >= 0; x--) M.cols[Math.min(size - 1, Math.round(x * scale))] = x;
+            for (let px = 1; px < size; px++) if (M.cols[px] < M.cols[px - 1]) M.cols[px] = M.cols[px - 1];
+            M.cols[size] = W;
+            M.colsKey = key;
+        }
+        const S = M.state, xs = M.cols;
+        S.fill(0);
+        for (let y = 0; y < H; y++) {
+            const row = vis[y], o = Math.min(size - 1, Math.round(y * scale)) * size, e = y * W;
+            if (!row) { S.fill(2, o, o + size); continue; }
+            for (let px = 0; px < size; px++) {
+                let s = S[o + px];
+                if (s === 2) continue;
+                for (let x = xs[px], x1 = xs[px + 1]; x < x1; x++) {
+                    if (row[x] > 0) continue;
+                    if (!explored || !explored[e + x]) { s = 2; break; }
+                    s = 1;
+                }
+                S[o + px] = s;
+            }
+        }
+        for (let p = 0; p < size * size; p++) P[p] = look[S[p]];
+    }
+    M.canvas.getContext('2d').putImageData(M.image, 0, 0);
+    return M.canvas;
+}
+// An army's units on the minimap: a slice of them a frame into pixels of
+// their own, shown when all are in (every unit in one go was ~13 ms at 600k
+// units, four times a second: a long frame each time). The picture is of
+// the frames it was painted over, a few apart.
+const MINIMAP_UNIT_SLICE = 100000;
+const _minimapUnitPaint = { running: false, painted: false, next: 0, image: null, pixels: null, colors: null };
+function _minimapUnitPaintStart(P) {
+    if (!_minimapUnitCanvas) {
+        _minimapUnitCanvas = document.createElement('canvas');
+        _minimapUnitCanvas.width = _minimapUnitCanvas.height = MINIMAP_SIZE;
+    }
+    if (!P.image || P.image.width !== MINIMAP_SIZE) {
+        P.image = _minimapUnitCanvas.getContext('2d').createImageData(MINIMAP_SIZE, MINIMAP_SIZE);
+        P.pixels = new Uint32Array(P.image.data.buffer, P.image.data.byteOffset, P.image.data.byteLength / 4);
+    } else P.pixels.fill(0);
+    const palette = new Uint8Array(9 * 4);
+    for (let owner = -1; owner < 8; owner++) {
+        const c = _parseHexColor(get3DRenderOwnerColor(owner)), o = (owner + 1) * 4;
+        palette[o] = c.r; palette[o + 1] = c.g; palette[o + 2] = c.b; palette[o + 3] = 255;
+    }
+    P.colors = new Uint32Array(palette.buffer);
+    P.next = 0; P.running = true;
+}
+// (true: the picture is whole and on the units' canvas.)
+function _minimapUnitPaintStep(P, F, scale) {
+    const end = Math.min(F.count, P.next + MINIMAP_UNIT_SLICE);
+    paintMinimapUnitColumns(F, P.pixels, MINIMAP_SIZE, TILE, scale, fullVisibility, visibilityGrid, P.colors, P.next, end);
+    P.next = end;
+    if (end < F.count) return false;
+    _minimapUnitCanvas.getContext('2d').putImageData(P.image, 0, 0);
+    P.running = false; P.painted = true;
+    return true;
+}
+function drawMinimap() {
+    let nowMs = performance.now();
+    let scale = MINIMAP_SIZE / GRID_W; // 2 px per tile
+    const mode = localPlayerId + '|' + fullVisibility + '|' + teamVisibilityHistory;
+    if (!_minimapContentCanvas) {
+        _minimapContentCanvas = document.createElement('canvas');
+        _minimapContentCanvas.width = _minimapContentCanvas.height = MINIMAP_SIZE;
+    }
+    // (An army-scale map walks every unit: 4 times a second; smaller ones 10.)
+    const minimapEveryMs = units.length > 20000 ? 250 : 100;
+    const minimapTimed = gameTime !== _minimapContentTick && nowMs - _minimapLastDrawMs >= minimapEveryMs;
+    const minimapForced = nowMs < _minimapLastDrawMs || _minimapContentGrid !== grid || _minimapContentMode !== mode;
+    let minimapCompose = minimapTimed || minimapForced;
+    // (Army scale, the frame's columns: the units a slice a frame; the
+    // content is put together when their picture is whole.)
+    const slicedF = units.length > MINIMAP_UNIT_SLICE && _isLiveUnitList(getLiveRenderView().units) && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    if (slicedF) {
+        const P = _minimapUnitPaint;
+        if (minimapTimed && !P.running) { _minimapUnitPaintStart(P); _minimapLastDrawMs = nowMs; _minimapContentTick = gameTime; }
+        if (minimapTimed && P.painted && !minimapForced) minimapCompose = false;
+        if (P.running && _minimapUnitPaintStep(P, slicedF, scale)) minimapCompose = true;
+    } else _minimapUnitPaint.running = _minimapUnitPaint.painted = false;
+    if (minimapCompose) {
+    _minimapLastDrawMs = nowMs; _minimapContentGrid = grid; _minimapContentMode = mode;
+    _minimapContentTick = gameTime;
+    const minimapCtx = _minimapContentCanvas.getContext('2d');
+    const units = getLiveRenderView().units;
+    let tilePx = Math.max(1, scale);
+    let vis = visibilityGrid;
+    let lastFill = null;
+
+    minimapCtx.imageSmoothingEnabled = false;
+
+    if (_minimapStaticScale !== scale || _minimapStaticTilePx !== tilePx) {
+        _minimapStaticDirty = true;
+        _requestStaticCacheCommit();
+        commitStaticCaches(true);
+    }
+    if (_staticCacheCommitVersion < 0 || !_minimapStaticCanvas) {
+        commitStaticCaches(true);
+    }
+
+    const setMinimapFill = (color) => {
+        if (lastFill !== color) {
+            minimapCtx.fillStyle = color;
+            lastFill = color;
+        }
+    };
+
+    // Draw base minimap immediately so dynamic overlays (fog/units/alerts) stay visible on top.
+    minimapCtx.drawImage(_minimapStaticCanvas, 0, 0);
+
+    // Unknown areas (and with history the explored ones, dimmed).
+    if (!fullVisibility && vis.length > 0) {
+        const explored = teamVisibilityHistory && visibilityHistoryState ? visibilityHistoryState.explored : null;
+        minimapCtx.drawImage(_minimapFogPicture(scale, vis, explored), 0, 0);
+    }
+
+    // At army scale, compose directly into minimap pixels. Overlapping units
+    // no longer issue hundreds of thousands of Canvas draw commands.
+    if (slicedF) {
+        // (Painted a slice a frame, above: its last whole picture.)
+        if (_minimapUnitPaint.painted) minimapCtx.drawImage(_minimapUnitCanvas, 0, 0);
+    } else if (units.length > 5000) {
+        if (!_minimapUnitCanvas) {
+            _minimapUnitCanvas = document.createElement('canvas');
+            _minimapUnitCanvas.width = _minimapUnitCanvas.height = MINIMAP_SIZE;
+        }
+        if (!_minimapUnitPixels) _minimapUnitPixels = _minimapUnitCanvas.getContext('2d').createImageData(MINIMAP_SIZE, MINIMAP_SIZE);
+        const pixels = _minimapUnitPixels.data, colors = new Map();
+        pixels.fill(0);
+        // (The live units, Team + history too: units are not remembered.)
+        const F = _isLiveUnitList(units) && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+        if (F) {
+            const palette = new Uint8Array(9 * 4);
+            for (let owner = -1; owner < 8; owner++) {
+                const c = _parseHexColor(get3DRenderOwnerColor(owner)), o = (owner + 1) * 4;
+                palette[o] = c.r; palette[o + 1] = c.g; palette[o + 2] = c.b; palette[o + 3] = 255;
+            }
+            paintMinimapUnitColumns(F, new Uint32Array(pixels.buffer, pixels.byteOffset, pixels.byteLength / 4),
+                MINIMAP_SIZE, TILE, scale, fullVisibility, vis, new Uint32Array(palette.buffer));
+        } else for (let i = 0; i < units.length; i++) {
+            const u = units[i];
+            if (u.dead) continue;
+            const ux = u.x, uy = u.y, owner = u.owner;
+            const ghost = u._historyGhost;
+            const gx = Math.floor(ux / TILE), gy = Math.floor(uy / TILE);
+            if (!fullVisibility && (!vis[gy] || vis[gy][gx] === 0) && !ghost) continue;
+            const x = Math.floor(ux / TILE * scale), y = Math.floor(uy / TILE * scale);
+            if (x < 0 || y < 0 || x >= MINIMAP_SIZE || y >= MINIMAP_SIZE) continue;
+            let color = colors.get(owner);
+            if (!color) { color = _parseHexColor(get3DRenderOwnerColor(owner)); colors.set(owner, color); }
+            const o = (y * MINIMAP_SIZE + x) * 4;
+            pixels[o] = color.r; pixels[o + 1] = color.g; pixels[o + 2] = color.b; pixels[o + 3] = ghost ? 59 : 255;
+        }
+        _minimapUnitCanvas.getContext('2d').putImageData(_minimapUnitPixels, 0, 0);
+        minimapCtx.drawImage(_minimapUnitCanvas, 0, 0);
+    } else for (let u of units) {
+        if (u.dead) continue;
+        let cgy = Math.floor(u.y / TILE), cgx = Math.floor(u.x / TILE);
+        if (!fullVisibility && (!vis[cgy] || vis[cgy][cgx] === 0) && !u._historyGhost) continue;
+        minimapCtx.globalAlpha = u._historyGhost ? .23 : 1;
+        setMinimapFill(get3DRenderOwnerColor(u.owner));
+        let ux = (u.x / TILE) * scale, uy = (u.y / TILE) * scale;
+        minimapCtx.fillRect(ux, uy, 2, 2);
+    }
+
+    minimapCtx.globalAlpha = 1;
+    }
+    // Camera/alerts update every frame without rescanning units or fog.
+    minimapCtx.clearRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
+    minimapCtx.drawImage(_minimapContentCanvas, 0, 0);
+    // Damage alerts (minimap only)
+    drawMinimapAlerts(minimapCtx, scale);
+
+    // Camera viewport: exact ground-frustum footprint in 3D, rectangle in 2D.
+    minimapCtx.strokeStyle = '#fff'; minimapCtx.lineWidth = 1;
+    let drew3DFrustum = false;
+    if (
+        renderDimensionMode === '3d' &&
+        renderer3dInstance &&
+        typeof renderer3dInstance.getGroundFrustumPolygon === 'function'
+    ) {
+        let footprint = renderer3dInstance.getGroundFrustumPolygon(get3DProjectionSnapshot(), true);
+        if (footprint && footprint.length >= 3) {
+            minimapCtx.beginPath();
+            minimapCtx.moveTo(footprint[0].x * scale, footprint[0].y * scale);
+            for (let i = 1; i < footprint.length; i++) {
+                minimapCtx.lineTo(footprint[i].x * scale, footprint[i].y * scale);
+            }
+            minimapCtx.closePath();
+            minimapCtx.stroke();
+            drew3DFrustum = true;
+        }
+    }
+    if (!drew3DFrustum) {
+        let vw = viewW / camera.zoom, vh = viewH / camera.zoom;
+        minimapCtx.strokeRect(camera.x / TILE * scale, camera.y / TILE * scale, vw / TILE * scale, vh / TILE * scale);
+    }
+}
+
+function isTileVisible(gx, gy) {
+    return fullVisibility || (visibilityGrid[gy] && visibilityGrid[gy][gx] > 0);
+}
+
+function createEmptyVisibilityGrid() {
+    let vis = new Array(GRID_H);
+    for (let y = 0; y < GRID_H; y++) vis[y] = new Float32Array(GRID_W);
+    return vis;
+}
+
+let visibilityIncludedTilesScratch = [];
+let visibilityStampScratch = [];
+let visibilityRowSpanMinScratch = new Int32Array(0), visibilityRowSpanMaxScratch = new Int32Array(0);
+function _getVisibilityFloorItemCandidates() {
+    return getCellItemsRowMajor();
+}
+
+// sources/sourceLength: the player's sources as (world x, world y, range)
+// triples, in enumeration order (see _buildVisibilitySourceLists); without
+// them the world is scanned for the player's sources.
+function computeVisibilityGridForPlayer(playerId, vis, sources = null, sourceLength = 0) {
+    for (let y = 0; y < GRID_H; y++) vis[y].fill(0);
+
+    let areaRangeBySourceArea = new Map();
+    // let shouldLog = isMultiplayer && !isHost && (gameTime % 60 === 0);
+    // let shouldLog = isMultiplayer && (gameTime % 60 === 0);
+    // Scratch only: never retained by a player grid or used outside this call.
+    let includedTiles = visibilityIncludedTilesScratch;
+    if (includedTiles.length !== GRID_H || (GRID_H > 0 && includedTiles[0].length !== GRID_W)) {
+        includedTiles = Array.from({ length: GRID_H }, () => new Uint8Array(GRID_W));
+        visibilityIncludedTilesScratch = includedTiles;
+    } else {
+        for (let y = 0; y < GRID_H; y++) includedTiles[y].fill(0);
+    }
+    let stampSource = (gx, gy, rangeTiles) => {
+        let x = Math.floor(Number(gx));
+        let y = Math.floor(Number(gy));
+        let range = Math.max(0, Number(rangeTiles) || 0);
+        if (x < 0 || x >= GRID_W || y < 0 || y >= GRID_H || !(range > 0)) return;
+        if (range > vis[y][x]) vis[y][x] = range;
+    };
+    let includeFallbackCircleAroundSource = (gx, gy, rangeTiles) => {
+        let cx = Math.floor(Number(gx));
+        let cy = Math.floor(Number(gy));
+        let r = Math.max(0, Math.ceil(Number(rangeTiles) || 0));
+        if (cx < 0 || cx >= GRID_W || cy < 0 || cy >= GRID_H || !(r > 0)) return;
+        let minY = Math.max(0, cy - r);
+        let maxY = Math.min(GRID_H - 1, cy + r);
+        let minX = Math.max(0, cx - r);
+        let maxX = Math.min(GRID_W - 1, cx + r);
+        let r2 = r * r;
+        for (let y = minY; y <= maxY; y++) {
+            let dy = y - cy;
+            let row = includedTiles[y];
+            for (let x = minX; x <= maxX; x++) {
+                let dx = x - cx;
+                if ((dx * dx + dy * dy) <= r2) row[x] = 1;
+            }
+        }
+    };
+    let hasSource = false;
+    // Stamped tiles (source tile and range): only tiles within a stamp's
+    // range of it can end up lit, which bounds the sweeps below.
+    let stamps = visibilityStampScratch, stampCount = 0;
+    let addWorldVisibilitySource = (wx, wy, rangeArea) => {
+        hasSource = true;
+        let x = Number(wx);
+        let y = Number(wy);
+        let range = Math.max(0, Number(rangeArea) || 0);
+        let areaId = getAreaIdAtWorld(x, y);
+        let rangeTiles = range * AREA_UNIT_TILE_EQUIVALENT;
+        addVisibilitySourceAreas(areaRangeBySourceArea, x, y, range, vis);
+        if (!(range > 0) || !Number.isFinite(x) || !Number.isFinite(y)) return;
+        stamps[stampCount++] = Math.floor(x / TILE);
+        stamps[stampCount++] = Math.floor(y / TILE);
+        stamps[stampCount++] = rangeTiles;
+        stampSource(x / TILE, y / TILE, rangeTiles);
+        if (areaId < 0) {
+            includeFallbackCircleAroundSource(x / TILE, y / TILE, rangeTiles);
+        }
+    };
+
+    let shouldRevealForPlayer = (owner, watched, watchedByTeam) => {
+        let ownerId = Math.floor(Number(owner));
+        let targetId = Math.floor(Number(playerId));
+        return ownerId === targetId || ((Number(watched) || 0) > 0 && Math.floor(Number(watchedByTeam)) === targetId);
+    };
+
+    if (sources) for (let i = 0; i < sourceLength; i += 3) addWorldVisibilitySource(sources[i], sources[i + 1], sources[i + 2]);
+    else for (let u of units) {
+        if (!u || u.dead) continue;
+        if (!shouldRevealForPlayer(u.owner, u.watched || 0, u.watchedByTeam)) continue;
+        let visionArea = getEntityEffectiveVisibilityRangeArea(u);
+        addWorldVisibilitySource(u.x, u.y, visionArea);
+    }
+    if (!sources) {
+    for (let t of towers) {
+        if (!t || !(t.energy > 0) || t.underConstruction) continue;
+        if (!shouldRevealForPlayer(t.owner, t.watched || 0, t.watchedByTeam)) continue;
+        addWorldVisibilitySource(t.x, t.y, getEntityEffectiveVisibilityRangeArea(t));
+    }
+    for (let b of barracks) {
+        if (!b || !(b.energy > 0) || b.underConstruction) continue;
+        if (!shouldRevealForPlayer(b.owner, b.watched || 0, b.watchedByTeam)) continue;
+        addWorldVisibilitySource(b.x, b.y, getEntityEffectiveVisibilityRangeArea(b));
+    }
+    for (let s of collectorSpawners) {
+        if (!s || !(s.energy > 0) || s.underConstruction) continue;
+        if (!shouldRevealForPlayer(s.owner, s.watched || 0, s.watchedByTeam)) continue;
+        addWorldVisibilitySource(s.x, s.y, getEntityEffectiveVisibilityRangeArea(s));
+    }
+    const revealFloorItem = (cell, x, y) => {
+        if (!cell || !cell.item || !(cell.item.energy > 0) || cell.item.underConstruction) return;
+        if (!shouldRevealForPlayer(cell.owner, cell.item.watched || 0, cell.item.watchedByTeam)) return;
+        addWorldVisibilitySource(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5, getEntityEffectiveVisibilityRangeArea(cell.item));
+    };
+    if (typeof _activeTileEntities !== 'undefined') {
+        // The live tile index includes floor items; avoid a world scan for
+        // every player's visibility. Source stamping is an order-independent max.
+        // Most indexed entities are resource mines, which are never cell items;
+        // keep the floor-item subset per index version rather than per player.
+        for (let item of _getVisibilityFloorItemCandidates()) {
+            let cell = grid[item.gy] && grid[item.gy][item.gx];
+            if (cell && cell.item === item) revealFloorItem(cell, item.gx, item.gy);
+        }
+    } else {
+        for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) revealFloorItem(grid[y][x], x, y);
+    }
+    }
+
+    // Players without sources (empty slots, eliminated teams) see nothing;
+    // the grid is already cleared, so skip the union and both sweeps.
+    if (!hasSource) return;
+
+    // The range caches contain whole areas. Union area ids first so hundreds
+    // of overlapping sources do not repeatedly walk the same tile arrays.
+    let includedAreas = new Set();
+    for (let [areaId, rangeArea] of areaRangeBySourceArea) {
+        let areaIds = getAreaIdsWithinDistance(areaId, Math.floor(Math.max(0, Number(rangeArea) || 0)));
+        for (let targetAreaId of areaIds) {
+            if (includedAreas.has(targetAreaId)) continue;
+            includedAreas.add(targetAreaId);
+            let cells = gridCellsByArea[targetAreaId] || [];
+            for (let cell of cells) {
+                if (cell) includedTiles[cell.y][cell.x] = 1;
+            }
+        }
+    }
+
+    // Values fall by one per tile away from a stamp (the source tile, or a
+    // border tile of its +-0.3 window, with the same range), so a tile more
+    // than ceil(range) + 1 tiles from every source stays 0. Sweep only each
+    // row's [min, max] span of such tiles; every other tile is already 0,
+    // like non-included tiles, which the sweeps also clear inside the spans.
+    // Tiles outside the spans read as 0 in both passes, as after full sweeps.
+    let spanMin = visibilityRowSpanMinScratch, spanMax = visibilityRowSpanMaxScratch;
+    if (spanMin.length !== GRID_H) {
+        spanMin = visibilityRowSpanMinScratch = new Int32Array(GRID_H).fill(GRID_W);
+        spanMax = visibilityRowSpanMaxScratch = new Int32Array(GRID_H).fill(-1);
+    }
+    let spanY0 = GRID_H, spanY1 = -1;
+    for (let i = 0; i < stampCount; i += 3) {
+        let reach = Math.ceil(stamps[i + 2]) + 1;
+        let x0 = Math.max(0, stamps[i] - reach), x1 = Math.min(GRID_W - 1, stamps[i] + reach);
+        let y0 = Math.max(0, stamps[i + 1] - reach), y1 = Math.min(GRID_H - 1, stamps[i + 1] + reach);
+        if (x0 > x1 || y0 > y1) continue;
+        if (y0 < spanY0) spanY0 = y0;
+        if (y1 > spanY1) spanY1 = y1;
+        for (let y = y0; y <= y1; y++) {
+            if (x0 < spanMin[y]) spanMin[y] = x0;
+            if (x1 > spanMax[y]) spanMax[y] = x1;
+        }
+    }
+    let lastX = GRID_W - 1;
+    // Forward pass: left, up-left, up and up-right neighbours (-1 per tile).
+    for (let y = spanY0; y <= spanY1; y++) {
+        if (spanMax[y] < 0) continue;
+        let row = vis[y], includedRow = includedTiles[y];
+        let hasPrev = y > 0;
+        let prevRow = hasPrev ? vis[y - 1] : null, prevIncluded = hasPrev ? includedTiles[y - 1] : null;
+        for (let x = spanMin[y], end = spanMax[y]; x <= end; x++) {
+            if (!includedRow[x]) {
+                row[x] = 0;
+                continue;
+            }
+            let v = row[x];
+            if (x > 0 && includedRow[x - 1]) { let n = row[x - 1] - 1; if (n > v) v = n; }
+            if (hasPrev) {
+                if (prevIncluded[x]) { let n = prevRow[x] - 1; if (n > v) v = n; }
+                if (x > 0 && prevIncluded[x - 1]) { let n = prevRow[x - 1] - 1; if (n > v) v = n; }
+                if (x < lastX && prevIncluded[x + 1]) { let n = prevRow[x + 1] - 1; if (n > v) v = n; }
+            }
+            row[x] = v;
+        }
+    }
+    // Backward pass: right, down, down-right and down-left neighbours.
+    for (let y = spanY1; y >= spanY0; y--) {
+        if (spanMax[y] < 0) continue;
+        let row = vis[y], includedRow = includedTiles[y];
+        let hasNext = y < GRID_H - 1;
+        let nextRow = hasNext ? vis[y + 1] : null, nextIncluded = hasNext ? includedTiles[y + 1] : null;
+        for (let x = spanMax[y], start = spanMin[y]; x >= start; x--) {
+            if (!includedRow[x]) {
+                row[x] = 0;
+                continue;
+            }
+            let v = row[x];
+            if (x < lastX && includedRow[x + 1]) { let n = row[x + 1] - 1; if (n > v) v = n; }
+            if (hasNext) {
+                if (nextIncluded[x]) { let n = nextRow[x] - 1; if (n > v) v = n; }
+                if (x < lastX && nextIncluded[x + 1]) { let n = nextRow[x + 1] - 1; if (n > v) v = n; }
+                if (x > 0 && nextIncluded[x - 1]) { let n = nextRow[x - 1] - 1; if (n > v) v = n; }
+            }
+            row[x] = v;
+        }
+        spanMin[y] = GRID_W;
+        spanMax[y] = -1;
+    }
+}
+
+function getVisibilityGridForPlayer(playerId) {
+    return getRawVisibilityGridForPlayer(playerId);
+}
+
+function getRawVisibilityGridForPlayer(playerId) {
+    let pid = Math.floor(Number(playerId));
+    if (!Number.isFinite(pid) || pid < 0) pid = localPlayerId;
+    // Where the simulation runs, the grid follows the coverage (no rebuild).
+    if (_visCoverReady() && pid < _visCover.players) {
+        let rows = _visCoverRows(pid);
+        visibilityGridRawByPlayerCache.set(pid, rows);
+        return rows;
+    }
+
+    visibilityCacheTick = gameTime;
+    let cachedRaw = visibilityGridRawByPlayerCache.get(pid);
+    let stamp = visibilityGridStampByPlayer.get(pid);
+    if (cachedRaw && stamp !== undefined && (stamp === gameTime
+        || (gameTime > stamp && gameTime - stamp < VISIBILITY_TICK_INTERVAL && !simStepCrosses(pid, VISIBILITY_TICK_INTERVAL)))) return cachedRaw;
+    visibilityGridStampByPlayer.set(pid, gameTime);
+    let pool = visibilityGridPoolByPlayer.get(pid);
+    if (!pool) visibilityGridPoolByPlayer.set(pid, pool = { grids: [null, null], next: 0, last: null, signature: null, signatureLength: -1,
+        areaGrid: null, areaCells: null, misses: 0, skipUntil: -1 });
+    // The grid is a pure function of the sources' tile windows and ranges
+    // (and the area layout). Idle teams keep identical sources for many
+    // ticks: reuse their last grid instead of recomputing it. A team whose
+    // sources keep changing skips the comparison for a while.
+    let now = typeof gameTime === 'number' ? gameTime : 0;
+    // Every player's sources, collected in one pass (updateAllPlayerVisibility).
+    let src = null, srcLength = 0;
+    if (_visibilitySourceLists === true) _visibilitySourceLists = _buildVisibilitySourceLists();
+    if (_visibilitySourceLists) { src = _visibilitySourceLists.lists[pid] || _EMPTY_VISIBILITY_SOURCES; srcLength = _visibilitySourceLists.lengths[pid] || 0; }
+    let compare = !(pool.skipUntil > now && pool.skipUntil - now <= VISIBILITY_SIGNATURE_BACKOFF_TICKS);
+    let signature = _visibilitySourceSignatureScratch, signatureLength = -1;
+    if (compare) {
+        if (pool.skipUntil >= 0) { pool.skipUntil = -1; pool.misses = 0; }
+        signatureLength = _collectVisibilitySourceSignature(pid, signature, src, srcLength);
+        signature = _visibilitySourceSignatureScratch; // may have grown
+        let last = pool.last;
+        if (last && last.length === GRID_H && (GRID_H === 0 || last[0].length === GRID_W)
+            && pool.areaGrid === areaIdGrid && pool.areaCells === gridCellsByArea
+            && pool.signatureLength === signatureLength && _visibilitySignaturesEqual(pool.signature, signature, signatureLength)) {
+            pool.misses = 0;
+            visibilityGridRawByPlayerCache.set(pid, last);
+            return last;
+        }
+        if (++pool.misses >= 2) pool.skipUntil = now + VISIBILITY_SIGNATURE_BACKOFF_TICKS;
+    }
+    // Alternate two grids per player instead of allocating rows each time;
+    // the computation clears the grid, and a grid handed out last tick (e.g.
+    // the render grid) stays intact.
+    let k = pool.next;
+    let rawVis = _visibilityPoolGrid(pool, k, pid);
+    pool.next ^= 1;
+    // In updateAllPlayerVisibility: computed there, with the other players'
+    // grids due this tick, in parallel (sim_parallel.js).
+    if (_visibilityJobs && src) _visibilityJobs.push(pid, k);
+    else computeVisibilityGridForPlayer(pid, rawVis, src, srcLength);
+    if (compare) {
+        if (!pool.signature || pool.signature.length < signatureLength) pool.signature = new Float64Array(Math.max(64, signature.length));
+        pool.signature.set(signature.subarray(0, signatureLength));
+    }
+    // Without a comparison the stored signature no longer describes the grid.
+    pool.signatureLength = compare ? signatureLength : -1;
+    pool.areaGrid = areaIdGrid;
+    pool.areaCells = gridCellsByArea;
+    pool.last = rawVis;
+    visibilityGridRawByPlayerCache.set(pid, rawVis);
+    return rawVis;
+}
+
+// A player's grid k (of two): rows over one flat Float32Array (in shared
+// memory for the parallel jobs, named vis.g.<player>.<k>).
+function _visibilityPoolGrid(pool, k, pid) {
+    let rows = pool.grids[k];
+    if (rows && rows.length === GRID_H && (GRID_H === 0 || rows[0].length === GRID_W)) return rows;
+    let flat = typeof simSharedArray === 'function' ? simSharedArray(Float32Array, GRID_W * GRID_H) : new Float32Array(GRID_W * GRID_H);
+    rows = new Array(GRID_H);
+    for (let y = 0; y < GRID_H; y++) rows[y] = flat.subarray(y * GRID_W, (y + 1) * GRID_W);
+    rows._flat = flat;
+    pool.grids[k] = rows;
+    if (typeof simParallelBind === 'function') simParallelBind('vis.g.' + pid + '.' + k, flat);
+    return rows;
+}
+
+// Grids due in this updateAllPlayerVisibility call: (player, grid) pairs.
+let _visibilityJobs = null;
+// The area layout as the visibility kernel reads it (rebuilt when it changes).
+let _visibilityKernelAreaKey = null;
+function _visibilityKernelAreas() {
+    let key = _visibilityKernelAreaKey;
+    if (key && key.grid === areaIdGrid && key.cells === gridCellsByArea && key.nb === areaNeighborIds && key.byId === _areaById
+        && key.w === GRID_W && key.h === GRID_H) return key.count;
+    let W = GRID_W, H = GRID_H;
+    let count = Math.max(_areaById.length, gridCellsByArea.length, areaNeighborIds.length);
+    let areaGrid = simSharedArray(Int32Array, W * H);
+    for (let y = 0; y < H; y++) {
+        let row = areaIdGrid[y];
+        for (let x = 0; x < W; x++) { let a = row ? Math.floor(Number(row[x])) : -1; areaGrid[y * W + x] = a >= 0 ? a : -1; }
+    }
+    let nbOff = simSharedArray(Int32Array, count + 1), cellOff = simSharedArray(Int32Array, count + 1), exists = simSharedArray(Uint8Array, count);
+    let nbTotal = 0, cellTotal = 0;
+    for (let a = 0; a < count; a++) {
+        nbTotal += (areaNeighborIds[a] || []).length;
+        for (let c of (gridCellsByArea[a] || [])) if (c) cellTotal++;
+    }
+    let nb = simSharedArray(Int32Array, nbTotal), cells = simSharedArray(Int32Array, cellTotal);
+    let j = 0, q = 0;
+    for (let a = 0; a < count; a++) {
+        nbOff[a] = j; cellOff[a] = q;
+        for (let n of (areaNeighborIds[a] || [])) nb[j++] = n;
+        for (let c of (gridCellsByArea[a] || [])) if (c) cells[q++] = c.y * W + c.x;
+        exists[a] = _areaById[a] ? 1 : 0;
+    }
+    nbOff[count] = j; cellOff[count] = q;
+    for (let [name, arr] of [['vis.areaGrid', areaGrid], ['vis.nbOff', nbOff], ['vis.nb', nb], ['vis.cellOff', cellOff], ['vis.cells', cells], ['vis.areaExists', exists]]) simParallelBind(name, arr);
+    _visibilityKernelAreaKey = { grid: areaIdGrid, cells: gridCellsByArea, nb: areaNeighborIds, byId: _areaById, w: W, h: H, count };
+    return count;
+}
+let _visibilityKernelSrc = null, _visibilityKernelSrcOff = null, _visibilityKernelJobs = null, _visibilityKernelWork = null;
+// Runs the queued grids (the visibility kernel, sim_parallel.js).
+function _runVisibilityJobs(jobs) {
+    let lists = _visibilitySourceLists;
+    let count = _visibilityKernelAreas();
+    // Every player's sources, one array; (offset, count) per player.
+    let maxPid = 0, total = 0;
+    for (let pid = 0; pid < lists.lengths.length; pid++) { if (lists.lengths[pid]) { maxPid = pid; total += lists.lengths[pid]; } }
+    for (let j = 0; j < jobs.length; j += 2) maxPid = Math.max(maxPid, jobs[j]);
+    if (!_visibilityKernelSrc || _visibilityKernelSrc.length < total) { _visibilityKernelSrc = simSharedArray(Float32Array, simReserveCap(total, 3072)); simParallelBind('vis.src', _visibilityKernelSrc); }
+    if (!_visibilityKernelSrcOff || _visibilityKernelSrcOff.length < (maxPid + 1) * 2) { _visibilityKernelSrcOff = simSharedArray(Int32Array, Math.max(64, (maxPid + 1) * 4)); simParallelBind('vis.srcOff', _visibilityKernelSrcOff); }
+    if (!_visibilityKernelJobs || _visibilityKernelJobs.length < jobs.length) { _visibilityKernelJobs = simSharedArray(Int32Array, Math.max(64, jobs.length * 2)); simParallelBind('vis.jobs', _visibilityKernelJobs); }
+    let src = _visibilityKernelSrc, off = _visibilityKernelSrcOff, at = 0;
+    off.fill(0);
+    for (let pid = 0; pid <= maxPid; pid++) {
+        let n = lists.lengths[pid] || 0;
+        off[pid * 2] = at / 3; off[pid * 2 + 1] = n / 3;
+        if (n) { src.set(lists.lists[pid].subarray(0, n), at); at += n; }
+    }
+    _visibilityKernelJobs.set(jobs);
+    _simParams[0] = GRID_W; _simParams[1] = GRID_H; _simParams[2] = TILE; _simParams[3] = AREA_UNIT_TILE_EQUIVALENT; _simParams[4] = count;
+    // (The kernel's work: the thread's scratch, or for a big map, its own.)
+    const need = Math.ceil(GRID_W * GRID_H / 4) + 2 * GRID_H + 5 * count + 8, nj = jobs.length / 2;
+    _simParams[5] = 0;
+    if (typeof _simWasmScratchWords === 'number' && need + 4 > _simWasmScratchWords) {
+        if (!_visibilityKernelWork || _visibilityKernelWork.length < need * nj) { _visibilityKernelWork = simHeapArrayAuto(Int32Array, need * nj, false); simParallelBind('vis.wk', _visibilityKernelWork); }
+        _simParams[5] = need;
+    }
+    simParallelRun(SIM_KERNEL_VISIBILITY, jobs.length / 2);
+}
+
+const VISIBILITY_SIGNATURE_BACKOFF_TICKS = 8;
+let _visibilitySourceSignatureScratch = new Float32Array(1024);
+
+function _visibilitySignaturesEqual(a, b, length) {
+    if (!a) return false;
+    for (let i = 0; i < length; i++) if (a[i] !== b[i]) return false;
+    return true;
+}
+
+// Everything computeVisibilityGridForPlayer reads from one source, in its
+// enumeration order: the tiles under the source and its +-0.3 tile window
+// (area stamping), and its range. Three numbers per source.
+function _collectVisibilitySourceSignature(playerId, out, sources = null, sourceLength = 0) {
+    let length = 0;
+    if (sources) {
+        if (sourceLength > out.length) out = _visibilitySourceSignatureScratch = new Float32Array(Math.max(sourceLength, out.length * 2));
+        for (let i = 0; i < sourceLength; i += 3) {
+            let fx = sources[i] / TILE, fy = sources[i + 1] / TILE;
+            let bx = Math.floor(fx), by = Math.floor(fy);
+            out[i] = bx * 4 + (bx - Math.floor(fx - .3)) * 2 + (Math.floor(fx + .3) - bx);
+            out[i + 1] = by * 4 + (by - Math.floor(fy - .3)) * 2 + (Math.floor(fy + .3) - by);
+            out[i + 2] = Math.max(0, Number(sources[i + 2]) || 0);
+        }
+        return sourceLength;
+    }
+    let target = Math.floor(Number(playerId));
+    // Same test as computeVisibilityGridForPlayer's shouldRevealForPlayer;
+    // the common integer-owner case is decided without coercion.
+    let reveals = (e, owner) => owner === target
+        ? true
+        : (((Number(e.watched) || 0) > 0 && Math.floor(Number(e.watchedByTeam)) === target)
+            || (owner !== (owner | 0) && Math.floor(Number(owner)) === target));
+    let push = (wx, wy, rangeArea) => {
+        if (length + 3 > out.length) {
+            let grown = new Float32Array(out.length * 2);
+            grown.set(out);
+            out = _visibilitySourceSignatureScratch = grown;
+        }
+        let fx = Number(wx) / TILE, fy = Number(wy) / TILE;
+        let bx = Math.floor(fx), by = Math.floor(fy);
+        out[length] = bx * 4 + (bx - Math.floor(fx - .3)) * 2 + (Math.floor(fx + .3) - bx);
+        out[length + 1] = by * 4 + (by - Math.floor(fy - .3)) * 2 + (Math.floor(fy + .3) - by);
+        out[length + 2] = Math.max(0, Number(rangeArea) || 0);
+        length += 3;
+    };
+    for (let u of units) {
+        if (!u || u.dead) continue;
+        if (u.owner !== target && !(u.watched > 0) && u.owner === (u.owner | 0)) continue;
+        if (reveals(u, u.owner)) push(u.x, u.y, getEntityEffectiveVisibilityRangeArea(u));
+    }
+    for (let list of [towers, barracks, collectorSpawners]) for (let b of list) {
+        if (!b || !(b.energy > 0) || b.underConstruction || !reveals(b, b.owner)) continue;
+        push(b.x, b.y, getEntityEffectiveVisibilityRangeArea(b));
+    }
+    for (let item of _getVisibilityFloorItemCandidates()) {
+        let cell = grid[item.gy] && grid[item.gy][item.gx];
+        if (!cell || cell.item !== item || !(item.energy > 0) || item.underConstruction || !reveals(item, cell.owner)) continue;
+        push(item.gx * TILE + TILE * 0.5, item.gy * TILE + TILE * 0.5, getEntityEffectiveVisibilityRangeArea(item));
+    }
+    return length;
+}
+
+// Every player's visibility sources in one pass over the world (instead of
+// a pass per player): per player id, (world x, world y, range) triples in
+// the enumeration order of computeVisibilityGridForPlayer. An entity reveals
+// to its owner and, while watched, to the watching team.
+const _EMPTY_VISIBILITY_SOURCES = new Float64Array(0);
+// null, true (to be built on first use) or the built lists.
+let _visibilitySourceLists = null;
+const _visibilitySourceStore = { lists: [], lengths: [] };
+function _buildVisibilitySourceLists() {
+    let S = _visibilitySourceStore, lists = S.lists, lengths = S.lengths;
+    for (let i = 0; i < lengths.length; i++) lengths[i] = 0;
+    const pushTo = (pid, wx, wy, range) => {
+        let list = lists[pid], n = lengths[pid] || 0;
+        if (!list || n + 3 > list.length) {
+            let grown = new Float32Array(Math.max(96, list ? list.length * 2 : 0));
+            if (list) grown.set(list.subarray(0, n));
+            lists[pid] = list = grown;
+        }
+        list[n] = wx; list[n + 1] = wy; list[n + 2] = range;
+        lengths[pid] = n + 3;
+    };
+    const add = (owner, e, wx, wy) => {
+        let p1 = Math.floor(Number(owner));
+        let p2 = (Number(e.watched) || 0) > 0 ? Math.floor(Number(e.watchedByTeam)) : -1;
+        let ok1 = p1 >= 0 && p1 < 4096, ok2 = p2 >= 0 && p2 < 4096 && p2 !== p1;
+        if (!ok1 && !ok2) return;
+        let range = getEntityEffectiveVisibilityRangeArea(e);
+        if (ok1) pushTo(p1, wx, wy, range);
+        if (ok2) pushTo(p2, wx, wy, range);
+    };
+    for (let u of units) if (u && !u.dead) add(u.owner, u, u.x, u.y);
+    for (let list of [towers, barracks, collectorSpawners]) for (let b of list) {
+        if (b && b.energy > 0 && !b.underConstruction) add(b.owner, b, b.x, b.y);
+    }
+    if (typeof _activeTileEntities !== 'undefined') {
+        for (let item of _getVisibilityFloorItemCandidates()) {
+            let cell = grid[item.gy] && grid[item.gy][item.gx];
+            if (!cell || cell.item !== item || !(item.energy > 0) || item.underConstruction) continue;
+            add(cell.owner, item, item.gx * TILE + TILE * 0.5, item.gy * TILE + TILE * 0.5);
+        }
+    } else {
+        for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) {
+            let cell = grid[y][x], item = cell && cell.item;
+            if (!item || !(item.energy > 0) || item.underConstruction) continue;
+            add(cell.owner, item, x * TILE + TILE * 0.5, y * TILE + TILE * 0.5);
+        }
+    }
+    return S;
+}
+
+// ============================================================
+// GAMEPLAY VISIBILITY: AREA COVERAGE, KEPT INCREMENTALLY
+// ============================================================
+// A tile is visible to a player when its area is within range (area steps)
+// of an area under the +-0.3 tile window of one of the player's sources.
+// Per player and area: how many entries cover it. Buildings keep theirs
+// incrementally ((source area, steps) entries, registered when they finish
+// or go; a range change is picked up by a staggered sweep). Units' cover is
+// recomputed once a tick from where they stand (_visCoverUnits: the
+// helpers mark each unit's window areas, then the steps spread over the
+// area graph) and counts once per covered area; a unit's own parameters
+// (range, player, watching team) are kept by hooks and the sweep, so moving
+// costs nothing here. A query is one array read. Every peer runs the same
+// hooks, sweeps and recomputes and resets together, so all keep the same
+// coverage.
+const VIS_COVER_MAX_STEPS = 63;
+// Source counts per (player, area, steps) below this live in a typed array;
+// longer ranges (a few buildings) in a map.
+const VIS_COVER_DENSE_STEPS = 8;
+const _visCover = {
+    gen: 1, adm: null, areaCount: 0, players: 0,
+    cover: [],         // [player] Int32Array(areaCount): covering entries
+    coverFlat: null, coverStride: 0, // (cover's one array, areaCount a player)
+    steps: [],         // [player] Int8Array(areaCount): the area's range as a source (steps), -1 none
+    dense: null,       // Int32Array((player * areaCount + area) * DENSE + steps): sources
+    sparse: new Map(), // same key * 64 + steps, for steps >= DENSE
+    list: [],          // registered buildings
+    syncedTick: -1,
+    visual: [],        // [player] rows kept in step with the cover, made on request
+    // Units' part (_visCoverUnitsStep), for generation uGen, all shared
+    // (SIM_KERNEL_VIS_SEED, SIM_KERNEL_VIS_SPREAD): seeds ([player * areas
+    // + area] = stamp << 6 | steps), the areas seeded this stamp (ulist,
+    // ucnt), the areas covered at the last run (uprev, uprevn; ust 1: counted
+    // in the cover), the last run's change (uplus, uminus, udiff), scratch;
+    // the snapshot (vtx, vty, vtkey); uStage: 0 idle, 1 seeds posted, 2 the
+    // spread posted; uTick: the tick of the last step.
+    uGen: 0, useed: null, ulist: null, ucnt: null, ustamp: 0, urem: null, ust: null, uprev: null, uprevn: null,
+    uplus: null, uminus: null, udiff: null, ubufA: null, ubufB: null, ubufC: null, ucur: null, uaok: null,
+    vtx: null, vty: null, vtkey: null, uStage: 0, uTick: -1,
+};
+
+function resetVisibilityCoverage() {
+    _visCover.adm = null;
+    _visCover.syncedTick = -1;
+}
+
+function _visCoverEnsure() {
+    let C = _visCover, n = Math.max(1, players.length), A = areaDistanceMatrix.length;
+    if (C.adm === areaDistanceMatrix && C.areaCount === A && C.players === n) return;
+    // Entities registered under an older generation count as unregistered.
+    C.gen++;
+    C.adm = areaDistanceMatrix; C.areaCount = A; C.players = n;
+    // (Shared: the combat scan reads it on the helpers. One array, player by
+    // player (coverFlat, A per player, in the wasm heap: the Rust kernels
+    // read it), cover[p] its parts; bound as vis.coverf with vis.cover.)
+    if (typeof simHeapFree === 'function') simHeapFree(C.coverFlat);
+    const flatA = Math.max(1, A);
+    C.coverFlat = typeof simHeapArray === 'function' ? simHeapArray(Int32Array, n * flatA) : new Int32Array(n * flatA);
+    C.cover = Array.from({ length: n }, (_, p) => C.coverFlat.subarray(p * flatA, p * flatA + flatA));
+    if (typeof simHeapFree === 'function') simHeapFree(C.visibleFlat);
+    C.visibleFlat = simHeapArray(Uint8Array, n * flatA);
+    C.visible = Array.from({ length: n }, (_, p) => C.visibleFlat.subarray(p * flatA, p * flatA + flatA));
+    C.coverStride = flatA;
+    C.steps = Array.from({ length: n }, () => new Int8Array(A).fill(-1));
+    C.dense = new Int32Array(n * A * VIS_COVER_DENSE_STEPS);
+    C.sparse = new Map();
+    C.list = [];
+    C.visual = [];
+    C.syncedTick = -1;
+}
+
+// Areas `fromSteps`..`toSteps` steps from `area` enter (delta 1) or leave
+// (-1) the player's cover.
+function _visCoverApplyRing(p, area, fromSteps, toSteps, delta) {
+    let C = _visCover, cover = C.cover[p], rows = C.visual[p];
+    for (let d = fromSteps; d <= toSteps; d++) {
+        let ring = getAreaIdsAtDistance(area, d);
+        for (let i = 0; i < ring.length; i++) {
+            let a = ring[i], before = cover[a], after = before + delta;
+            cover[a] = after; C.visible[p][a] = after > 0 ? 1 : 0;
+            if (rows && (before > 0) !== (after > 0)) _visCoverPaintArea(rows, a, after > 0);
+        }
+    }
+}
+
+// Visual rows: a covered area is fully lit (light saturates at the
+// normalization range; visibility_history fades it in and out).
+function _visCoverPaintArea(rows, area, lit) {
+    let cells = gridCellsByArea[area];
+    if (!cells) return;
+    let v = lit ? VISIBILITY_LIGHT_NORMALIZATION_RANGE : 0;
+    for (let c of cells) if (c) rows[c.y][c.x] = v;
+}
+
+function _visCoverCount(p, area, steps) {
+    let C = _visCover, pa = p * C.areaCount + area;
+    return steps < VIS_COVER_DENSE_STEPS ? C.dense[pa * VIS_COVER_DENSE_STEPS + steps] : (C.sparse.get(pa * 64 + steps) || 0);
+}
+
+function _visCoverAdd(p, area, steps, delta) {
+    let C = _visCover;
+    if (!(area >= 0 && area < C.areaCount) || !_areaById[area]) return;
+    let pa = p * C.areaCount + area, c;
+    if (steps < VIS_COVER_DENSE_STEPS) {
+        c = C.dense[pa * VIS_COVER_DENSE_STEPS + steps] += delta;
+    } else {
+        let key = pa * 64 + steps;
+        c = (C.sparse.get(key) || 0) + delta;
+        if (c > 0) C.sparse.set(key, c); else C.sparse.delete(key);
+    }
+    let stepsArr = C.steps[p], old = stepsArr[area], next = old;
+    if (delta > 0 && steps > old) next = steps;
+    else if (delta < 0 && c <= 0 && steps === old) {
+        next = -1;
+        for (let h = steps - 1; h >= 0; h--) if (_visCoverCount(p, area, h) > 0) { next = h; break; }
+    }
+    if (next === old) return;
+    stepsArr[area] = next;
+    if (next > old) _visCoverApplyRing(p, area, old + 1, next, 1);
+    else _visCoverApplyRing(p, area, next + 1, old, -1);
+}
+
+function _visCoverApply(e, delta) {
+    let steps = e._vsR, id = e._vsListId, areas = id >= 0 ? _sourceAreaListById[id] : null;
+    if (steps < 0 || !areas) return;
+    for (let i = 0; i < areas.length; i++) {
+        if (e._vsP1 >= 0) _visCoverAdd(e._vsP1, areas[i], steps, delta);
+        if (e._vsP2 >= 0) _visCoverAdd(e._vsP2, areas[i], steps, delta);
+    }
+}
+
+// Which of the 3x3 zones of its tile a coordinate pair is in: the zone and
+// the tile decide which tiles the +-0.3 tile window covers.
+function visWindowZone(wx, wy) {
+    let fx = wx / TILE, fy = wy / TILE, rx = fx - Math.floor(fx), ry = fy - Math.floor(fy);
+    return (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
+}
+
+// The sweeps are a safety net behind the hooks (every change is applied
+// where it happens): buildings over 128 ticks, units over 512 (a share of
+// each a tick, by list position: the same on every peer; at 64/256 they
+// cost ~1.5 ms a tick with 200k units and 35k buildings).
+const VIS_COVER_SWEEP_TICKS = 128;
+// Units' parameters (their range mostly: level and research changes).
+const VIS_COVER_UNIT_SWEEP_TICKS = 512;
+
+// Brings one source's registration up to date with the world (a unit: its
+// parameters, _visCoverSyncUnit). Buildings are live while on their tile,
+// alive and built. A building ranges from the areas under its +-0.3 tile
+// window (as ranges are drawn), identified by its tile and zone (`area`).
+function _visCoverSync(e, isUnit) {
+    if (isUnit) { _visCoverSyncUnit(e); return; }
+    let C = _visCover;
+    let known = e._vsGen === C.gen;
+    let steps = -1, p1 = -1, p2 = -1, area = -1, owner = e.owner, wx = e.x, wy = e.y;
+    let gx = e.gx, gy = e.gy;
+    let cell = grid[gy] && grid[gy][gx];
+    let onTile = !!cell && getTileEntityRef(gx, gy) === e;
+    if (onTile && cell.item === e) { owner = cell.owner; wx = gx * TILE + TILE * 0.5; wy = gy * TILE + TILE * 0.5; }
+    let active = onTile && e.energy > 0 && !e.underConstruction && Number.isFinite(wx) && Number.isFinite(wy);
+    if (active) area = (gy * GRID_W + gx) * 9 + visWindowZone(wx, wy);
+    if (active && area >= 0) {
+        let range = getEntityEffectiveVisibilityRangeArea(e);
+        if (range > 0) {
+            steps = Math.min(VIS_COVER_MAX_STEPS, Math.floor(range));
+            let o = Math.floor(Number(owner));
+            p1 = o >= 0 && o < C.players ? o : -1;
+            if (e.watched > 0) {
+                let w = Math.floor(Number(e.watchedByTeam));
+                if (w >= 0 && w < C.players && w !== p1) p2 = w;
+            }
+            if (p1 < 0 && p2 < 0) steps = -1;
+        }
+    }
+    if (steps < 0) area = -1;
+    if (known && e._vsR === steps && e._vsA === area && e._vsP1 === p1 && e._vsP2 === p2) return;
+    if (!known && steps < 0) return;
+    // Areas as the id of their shared list (see getSourceAreaListIdAtWorld).
+    let listId = steps >= 0 ? getSourceAreaListIdAtWorld(wx, wy) : -1;
+    // A new window zone often covers the same areas: only the key changes.
+    if (known && listId === e._vsListId && e._vsR === steps && e._vsP1 === p1 && e._vsP2 === p2) { e._vsA = area; return; }
+    if (known) _visCoverApply(e, -1);
+    else C.list.push(e);
+    e._vsGen = C.gen;
+    e._vsR = steps; e._vsA = area; e._vsP1 = p1; e._vsP2 = p2;
+    e._vsListId = listId;
+    _visCoverApply(e, 1);
+}
+
+// A unit's parameters as a source (unit state columns: vsGen this
+// generation, vsR steps or -1 none, vsP1 its player, vsP2 a watching team,
+// vsA 1 while alive and indexed): where it stands is read by the
+// recompute, so a move needs nothing here.
+function _visCoverSyncUnit(e) {
+    const C = _visCover;
+    let steps = -1, p1 = -1, p2 = -1;
+    const active = !e.dead && e._spatialKey !== undefined;
+    if (active) {
+        const range = getEntityEffectiveVisibilityRangeArea(e);
+        if (range > 0) {
+            steps = Math.min(VIS_COVER_MAX_STEPS, Math.floor(range));
+            const o = Math.floor(Number(e.owner));
+            p1 = o >= 0 && o < C.players ? o : -1;
+            if (e.watched > 0) {
+                const w = Math.floor(Number(e.watchedByTeam));
+                if (w >= 0 && w < C.players && w !== p1) p2 = w;
+            }
+            if (p1 < 0 && p2 < 0) steps = -1;
+        }
+    }
+    e._vsGen = C.gen; e._vsR = steps; e._vsP1 = p1; e._vsP2 = p2; e._vsA = active ? 1 : 0;
+}
+
+// A unit's window moved (slot `s` of the unit state columns `c`): nothing
+// to do once its parameters are registered this generation. False when it
+// must go through visCoverOnUnitSpatialChanged.
+function visCoverSlotWindow(c, s) {
+    const C = _visCover;
+    return C.syncedTick < 0 || C.adm !== areaDistanceMatrix || c.vsGen[s] === C.gen;
+}
+
+// Hooks (simulation code only).
+// During the unit phase of a tick (the status pre-pass to the hits) the
+// coverage stands still: every unit decides by what was seen at its start,
+// whoever moved first (and the kernels, which run before the pass, decide
+// as Unit.update would). Buildings' changes wait in _visCoverHeld until it
+// ends (units' cover changes only at the recompute).
+let _visCoverHold = false;
+const _visCoverHeld = new Map();
+function visCoverHoldBegin() { _visCoverHold = true; }
+function visCoverHoldEnd() {
+    _visCoverHold = false;
+    if (_visCoverHeld.size === 0) return;
+    for (const [e, isUnit] of _visCoverHeld) {
+        if (_visCover.syncedTick < 0 || _visCover.adm !== areaDistanceMatrix) break;
+        _visCoverSync(e, isUnit);
+    }
+    _visCoverHeld.clear();
+}
+function visCoverHoldReset() { _visCoverHold = false; _visCoverHeld.clear(); }
+// A unit joined or left the index, changed owner, or its watchers changed.
+function visCoverOnUnitSpatialChanged(u) {
+    if (_visCover.syncedTick < 0 || _visCover.adm !== areaDistanceMatrix) return;
+    _visCoverSyncUnit(u);
+}
+function visCoverOnBuildingChanged(e) {
+    if (!e || _visCover.syncedTick < 0 || _visCover.adm !== areaDistanceMatrix) return;
+    if (_visCoverHold) { _visCoverHeld.set(e, false); return; }
+    _visCoverSync(e, false);
+}
+// Any source whose range, watcher or state changed (unit or building).
+function visCoverOnEntityChanged(e) {
+    if (!e || _visCover.syncedTick < 0 || _visCover.adm !== areaDistanceMatrix) return;
+    if (e instanceof Unit) { _visCoverSyncUnit(e); return; }
+    if (_visCoverHold) { _visCoverHeld.set(e, false); return; }
+    _visCoverSync(e, false);
+}
+
+// Per tick: a staggered sweep (1/VIS_COVER_SWEEP_TICKS of the sources:
+// ranges, and a guard for the hooks: removal, tile entities set or
+// cleared, watch start and end, construction), then the units' cover
+// recomputed. After a reset every source is registered at once; every peer
+// resets on the same tick (clearGameplayVisibilityCache).
+function syncVisibilityCoverage() {
+    _visCoverEnsure();
+    let C = _visCover;
+    let full = C.syncedTick < 0;
+    // (The slices of the step's base ticks: simStepPhases.)
+    const ks = full ? [0] : simStepPhases(VIS_COVER_SWEEP_TICKS), step = full ? 1 : VIS_COVER_SWEEP_TICKS;
+    for (const i0 of full ? [0] : simStepPhases(VIS_COVER_UNIT_SWEEP_TICKS)) for (let i = i0, n = units.length, us = full ? 1 : VIS_COVER_UNIT_SWEEP_TICKS; i < n; i += us) {
+        let u = units[i];
+        if (u) _visCoverSync(u, true);
+    }
+    let items = _getVisibilityFloorItemCandidates();
+    let list = C.list;
+    for (const k of ks) {
+    for (let list of [towers, barracks, collectorSpawners]) for (let i = k; i < list.length; i += step) {
+        if (list[i]) _visCoverSync(list[i], false);
+    }
+    // (Barracks and spawners are cell items too: their lists' turn above.)
+    for (let i = k; i < items.length; i += step) { const e = items[i]; if (!_isProducerStructure(e)) _visCoverSync(e, false); }
+    // Registered buildings no longer in the world, on the same stagger; the
+    // list is compacted once per cycle. (Those still on their tile have
+    // their lists' turn: synced twice a cycle, ~600 calls a tick of 40k
+    // buildings, otherwise.)
+    for (let i = k; i < list.length; i += step) {
+        let e = list[i];
+        if (e._vsGen === C.gen && getTileEntityRef(e.gx, e.gy) !== e) _visCoverSync(e, false);
+    }
+    }
+    if (full || ks.includes(0)) {
+        let w = 0;
+        for (let i = 0; i < list.length; i++) {
+            let e = list[i];
+            if (e._vsGen === C.gen && e._vsR >= 0) list[w++] = e;
+            else e._vsGen = 0;
+        }
+        list.length = w;
+    }
+    C.syncedTick = gameTime;
+    // Units' cover: a tier below the tick (SIM_LANE_T5, see
+    // _visCoverUnitsStep); at once after a reset, then the tick's step as
+    // usual (whenever the reset's first query came: the steps go by tick).
+    if (full) _visCoverUnitsNow();
+    _visCoverUnitsStep();
+}
+
+// The units' cover, from where every unit stood at a tick: the areas under
+// each live, indexed unit's +-0.3 tile window (as getSourceAreaListIdAtWorld)
+// get its steps, the most per player and area; then per player the steps
+// spread over the area graph, one less per neighbour (an area within
+// `steps` of a seed: the rings of _visCoverApplyRing). Each area covered
+// counts once in the cover, so a change from last time is one count.
+// A tier at 5 per second on the helpers (lane SIM_LANE_T5), every
+// VIS_COVER_UNITS_TICKS ticks from phase VIS_COVER_UNITS_PHASE: at phase 0
+// the last run's change is counted in the cover (the commit), the units are
+// taken (SIM_KERNEL_VIS_SNAP, in parallel) and their seeds posted
+// (SIM_KERNEL_VIS_SEED); at phase 2 the spread (SIM_KERNEL_VIS_SPREAD, a job
+// per player). So sight follows where units stood up to two periods ago.
+// Its inputs are the snapshot and the area layout of its start (the grid
+// and graph arrays of a layout are never changed, a new layout gets new
+// ones), its outputs counted at fixed ticks: every peer the same.
+const VIS_COVER_UNITS_TICKS = 4, VIS_COVER_UNITS_PHASE = 1;
+const VIS_COVER_UNITS_LANE = typeof SIM_LANE_T5 === 'number' ? SIM_LANE_T5 : 3;
+function _visCoverUnitsStep() {
+    const C = _visCover;
+    if (C.uTick === gameTime) return;
+    C.uTick = gameTime;
+    // (The phases of the step's base ticks in their order: the cycle's.)
+    const T = VIS_COVER_UNITS_TICKS;
+    for (const p of simStepPhases(T)) {
+        const ph = (((p - VIS_COVER_UNITS_PHASE) % T) + T) % T;
+        if (ph === 0) { _visCoverUnitsCommit(); _visCoverUnitsPost(); }
+        else if (ph === 2) _visCoverUnitsSpreadPost();
+    }
+}
+// After a reset: the whole run at once (the helpers help), counted now.
+// (Every peer resets at the same point of a tick; its first query, which
+// makes this, may come earlier or later on one than another, but no tick
+// runs in between: the same units, the same result. The step of the tick
+// is its own: _visCoverUnitsStep, once per tick.)
+function _visCoverUnitsNow() {
+    _visCoverUnitsDrop();
+    _visCoverUnitsPost();
+    _visCoverUnitsSpreadPost();
+    _visCoverUnitsCommit();
+}
+// A run in progress is dropped (a reset: every peer at the same tick).
+function _visCoverUnitsDrop() {
+    simParallelBackgroundWait(VIS_COVER_UNITS_LANE);
+    _visCover.uStage = 0;
+}
+// The tier's arrays for this generation (players and areas); a new
+// generation starts with nothing counted.
+function _visCoverUnitsAlloc() {
+    const C = _visCover, A = C.areaCount, np = C.players, NA = Math.max(1, np * A);
+    if (C.uGen === C.gen && C.useed && C.useed.length === NA) return;
+    _visCoverUnitsDrop();
+    const I32 = n => simSharedArray(Int32Array, Math.max(1, n));
+    C.useed = I32(NA); C.ulist = I32(NA); C.ucnt = I32(np);
+    C.urem = simSharedArray(Int8Array, NA).fill(-1);
+    C.ubufA = I32(NA); C.ubufB = I32(NA); C.ubufC = I32(NA); C.ucur = I32(NA);
+    C.ust = simSharedArray(Uint8Array, NA); C.uprev = I32(NA); C.uprevn = I32(np);
+    C.uplus = I32(NA); C.uminus = I32(NA); C.udiff = I32(2 * np);
+    C.uaok = simSharedArray(Uint8Array, Math.max(1, A));
+    for (const [name, arr] of [['vis.useed', C.useed], ['vis.ulist', C.ulist], ['vis.ucnt', C.ucnt], ['vis.urem', C.urem],
+        ['vis.ubufA', C.ubufA], ['vis.ubufB', C.ubufB], ['vis.ubufC', C.ubufC], ['vis.ucur', C.ucur], ['vis.ust', C.ust],
+        ['vis.uprev', C.uprev], ['vis.uprevn', C.uprevn], ['vis.uplus', C.uplus], ['vis.uminus', C.uminus], ['vis.udiff', C.udiff], ['vt.aok', C.uaok]]) simParallelBind(name, arr);
+    C.ustamp = 0; C.uGen = C.gen; C.uStage = 0;
+}
+// Phase 0: the snapshot and the seeds.
+function _visCoverUnitsPost() {
+    const C = _visCover, S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    _visCoverUnitsAlloc();
+    simParallelBackgroundWait(VIS_COVER_UNITS_LANE);
+    const n = S ? S.owners.length : 0, A = C.areaCount, np = C.players;
+    // (The tick's positions and sight keys, snapshotted for the background
+    // seed: Int32 eighths like the columns, 12 bytes a unit.)
+    if (!C.vtx || C.vtx.length < n) {
+        const cap = simReserveCap(n);
+        C.vtx = simSharedArray(Int32Array, cap); C.vty = simSharedArray(Int32Array, cap); C.vtkey = simSharedArray(Int32Array, cap);
+        simParallelBind('vt.x', C.vtx); simParallelBind('vt.y', C.vty); simParallelBind('vt.key', C.vtkey);
+    }
+    if (n > 0) {
+        const P = _simParams;
+        P[0] = n; P[1] = 8192; P[2] = C.gen; P[3] = SIM_SEP_ABSENT;
+        simParallelRun(SIM_KERNEL_VIS_SNAP, Math.ceil(n / 8192));
+    }
+    // The layout as of now (its arrays are its own: see above).
+    simParallelBind('vt.agrid', _spatialAreaGridFlat());
+    _simAreaCsr();
+    simParallelBind('vt.aoff', _simParReg['area.off']); simParallelBind('vt.anb', _simParReg['area.nb']);
+    // (Which areas are: made again with the areas only (_areaById is made
+    // whole, never changed in place); every area each tick was ~0.7 ms on a
+    // big map.)
+    const aok = C.uaok;
+    if (C.uaokFor !== _areaById || C.uaokArr !== aok || C.uaokA !== A) {
+        for (let a = 0; a < A; a++) aok[a] = _areaById[a] ? 1 : 0;
+        C.uaokFor = _areaById; C.uaokArr = aok; C.uaokA = A;
+    }
+    if (++C.ustamp >= (1 << 24)) { C.useed.fill(0); C.ustamp = 1; }
+    C.ucnt.fill(0);
+    // The seeds, then the spread, as one chain (the spread no longer posted
+    // at phase 2: that waited there for the seeds on the simulation thread).
+    // (Each stage's params written whole.)
+    if (!VIS_COVER_CHAIN) {
+        const B = _simBgParamsByLane[VIS_COVER_UNITS_LANE];
+        B[0] = n; B[1] = 1024; B[2] = TILE; B[3] = GRID_W; B[4] = GRID_H; B[6] = A; B[7] = np; B[8] = C.ustamp;
+        B[9] = 0;
+        simParallelBackground(SIM_KERNEL_VIS_SEED, Math.ceil(n / 1024), VIS_COVER_UNITS_LANE);
+        C.uStage = 1;
+        return;
+    }
+    const B = simParallelStageParams(VIS_COVER_UNITS_LANE, 0), B2 = simParallelStageParams(VIS_COVER_UNITS_LANE, 1);
+    B.fill(0); B2.fill(0);
+    B[0] = n; B[1] = 1024; B[2] = TILE; B[3] = GRID_W; B[4] = GRID_H; B[6] = A; B[7] = np; B[8] = C.ustamp;
+    B[9] = 0;
+    B2[0] = A; B2[1] = np; B2[2] = C.ustamp;
+    simParallelBackgroundChain(VIS_COVER_UNITS_LANE, [[SIM_KERNEL_VIS_SEED, Math.ceil(n / 1024)], [SIM_KERNEL_VIS_SPREAD, np]]);
+    C.uStage = 2;
+}
+let VIS_COVER_CHAIN = true;
+// Phase 2: the spread, once the seeds are in.
+function _visCoverUnitsSpreadPost() {
+    const C = _visCover;
+    if (C.uStage !== 1 || C.uGen !== C.gen) return;
+    simParallelBackgroundWait(VIS_COVER_UNITS_LANE);
+    const B = _simBgParamsByLane[VIS_COVER_UNITS_LANE];
+    B[0] = C.areaCount; B[1] = C.players; B[2] = C.ustamp;
+    simParallelBackground(SIM_KERNEL_VIS_SPREAD, C.players, VIS_COVER_UNITS_LANE);
+    C.uStage = 2;
+}
+// The commit: the run's change counted in the cover (no longer covered
+// first, then newly covered).
+function _visCoverUnitsCommit() {
+    const C = _visCover;
+    if (C.uStage === 1) _visCoverUnitsSpreadPost();
+    if (C.uStage !== 2 || C.uGen !== C.gen) { C.uStage = 0; return; }
+    simParallelBackgroundWait(VIS_COVER_UNITS_LANE);
+    C.uStage = 0;
+    const A = C.areaCount, D = C.udiff, PL = C.uplus, MI = C.uminus;
+    for (let p = 0; p < C.players; p++) {
+        const cover = C.cover[p], rows = C.visual[p], base = p * A;
+        for (let i = 0, e = D[2 * p + 1]; i < e; i++) { const a = MI[base + i]; if (--cover[a] === 0) { C.visible[p][a] = 0; if (rows) _visCoverPaintArea(rows, a, false); } }
+        for (let i = 0, e = D[2 * p]; i < e; i++) { const a = PL[base + i]; if (++cover[a] === 1) { C.visible[p][a] = 1; if (rows) _visCoverPaintArea(rows, a, true); } }
+    }
+}
+
+function _visCoverActive() {
+    return _visCover.syncedTick >= 0 && _visCover.adm === areaDistanceMatrix;
+}
+
+let _visCoverSimContext = false;
+// Whether queries here use the coverage. After a reset (resync, new match)
+// the simulating context rebuilds it on the first query: the same point on
+// every peer.
+function _visCoverReady() {
+    if (_visCoverActive()) return true;
+    if (!_visCoverSimContext) return false;
+    syncVisibilityCoverage();
+    return true;
+}
+
+// Gameplay visibility of a tile from the coverage; null where the coverage
+// is not kept (the page, while the simulation runs in a worker).
+function _visCoverTileVisible(pid, gx, gy) {
+    if (!_visCoverReady()) return null;
+    if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
+    if (!(pid >= 0 && pid < _visCover.players)) return false;
+    let row = areaIdGrid[gy], a = row ? row[gx] : -1;
+    return a >= 0 && _visCover.cover[pid][a] > 0;
+}
+
+// A player's visibility rows from the coverage: made on first request, then
+// repainted per area as areas enter and leave cover.
+function _visCoverRows(pid) {
+    let C = _visCover;
+    let rows = C.visual[pid];
+    if (rows && rows.length === GRID_H) return rows;
+    let flat = simSharedArray(Float32Array, GRID_W * GRID_H);
+    rows = new Array(GRID_H);
+    for (let y = 0; y < GRID_H; y++) rows[y] = flat.subarray(y * GRID_W, (y + 1) * GRID_W);
+    rows._flat = flat;
+    let cover = C.cover[pid];
+    for (let a = 0; a < cover.length; a++) if (cover[a] > 0) _visCoverPaintArea(rows, a, true);
+    C.visual[pid] = rows;
+    return rows;
+}
+
+function isTileActuallyVisibleToPlayer(playerId, gx, gy) {
+    if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
+    let pid = Math.floor(Number(playerId));
+    if (!Number.isFinite(pid) || pid < 0) pid = localPlayerId;
+    let covered = _visCoverTileVisible(pid, gx, gy);
+    if (covered !== null) return covered;
+
+    let vis = getRawVisibilityGridForPlayer(pid);
+    if (!vis || vis.length !== GRID_H) return false;
+    return !!(vis[gy] && vis[gy][gx] > 0);
+}
+
+// Gameplay visibility (same on every peer): the match setting, never the
+// local spectator view.
+function isTileVisibleToPlayer(playerId, gx, gy) {
+    if (matchFullVisibility) return true;
+    if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
+
+    let pid = Math.floor(Number(playerId));
+    let covered = _visCoverTileVisible(pid, gx, gy);
+    if (covered !== null) return covered;
+    let vis = getRawVisibilityGridForPlayer(pid);
+    if (!vis || vis.length !== GRID_H) return false;
+    return !!(vis[gy] && vis[gy][gx] > 0);
+}
+
+function isGameplayTargetVisibleToPlayer(playerId, gx, gy) {
+    return isTileActuallyVisibleToPlayer(playerId, gx, gy);
+}
+
+function updateVisibility(playerId) {
+    let targetPlayerId = Math.floor(Number(playerId));
+    if (!Number.isFinite(targetPlayerId) || targetPlayerId < 0) targetPlayerId = localPlayerId;
+    visibilityGrid = updateVisualVisibility(targetPlayerId, getRawVisibilityGridForPlayer(targetPlayerId));
+}
+
+// Every player's gameplay visibility for this tick (see syncVisibilityCoverage).
+// Called by gameTick only: the context that runs the simulation keeps the
+// coverage; elsewhere (the page beside a simulation worker) queries read
+// the grids as before.
+function updateAllPlayerVisibility() {
+    _visCoverSimContext = true;
+    syncVisibilityCoverage();
+}
+
+// Advances the simulation clock to `simTime` (frame-clock time) and runs the
+// ticks due by then. Network work uses the wall clock.
+function processVisibleSimulationFrame(simTime) {
+    let now = performance.now();
+    sendNetworkPings(now);
+    if (document.hidden) {
+        _lastTickTime = simTime;
+        return;
+    }
+
+    if (gameStarted && !gameOver) {
+        let dt = simTime - _lastTickTime;
+        if (dt > 0) {
+            _lastTickTime = simTime;
+            // Keep a bounded catch-up budget in ticks even when the shared
+            // pace is slow; a fixed 200 ms cap would discard more wall time
+            // as the pace drops and falsely report an ever-slower machine.
+            let maxGap = Math.max(200, netSimulationTickMs() * 5);
+            if (dt > maxGap) dt = maxGap;
+            _tickAccumulator += dt;
+        }
+        _tickAccumulator = pumpSimulationTicks(now, _tickAccumulator, 5);
+    }
+    // (A guest's end waits for the host's word; no tick runs:
+    // utils_networking.js guestReviewMatchResult.)
+    else if (gameStarted && gameOver && isMultiplayer && !isHost) {
+        netMaintain(now);
+        guestReviewMatchResult(now);
+    }
+}
+
+// Runs due ticks. In multiplayer a tick runs only once the host sealed it;
+// while it is missing the accumulator holds one tick so it runs on arrival.
+// A guest that fell behind the host (hidden tab, slow frame, reconnect) runs
+// a few extra ticks per call until it is back to its normal buffer.
+function pumpSimulationTicks(now, accumulator, maxTicks) {
+    // (This page is alive; how far the simulation worker may go by itself
+    // if it stalls: sim_client.js.)
+    if (typeof simClientAutoArm === 'function') simClientAutoArm(now);
+    // (Solo: its own pace, for its step sizes.)
+    if (!isMultiplayer) netHostUpdateSimulationPace(now);
+    if (isMultiplayer) {
+        netMaintain(now);
+        netHostUpdateSimulationPace(now);
+        driveStrictLockstep(now, currentTick);
+        resyncHostFlushHashes(now);
+        if (!isHost) guestReviewMatchResult(now);
+    }
+    // (The simulation worker was lost: no tick until the match is back, see
+    // sim_client.js simClientLostHold.)
+    if (typeof simClientLostHold === 'function' && simClientLostHold(now)) return Math.min(accumulator, netSimulationTickMs());
+    let catchUp = 0;
+    if (isMultiplayer && !isHost) {
+        let buffered = getLockstepBufferedTicks();
+        // The input pipeline is a future command horizon, not a target amount
+        // of already sealed simulation to leave unplayed on this guest. A
+        // large pipeline (e.g. 16 ticks) used to permit another ~800 ms of
+        // visible lag here, despite the same displayed command delay.
+        let normal = 2;
+        if (buffered > normal) catchUp = Math.min(buffered - normal, buffered > normal * 4 ? 12 : 3);
+    }
+    let processed = 0;
+    let limit = maxTicks + catchUp;
+    let tickMs = netSimulationTickMs();
+    // Simulation worker with shared memory: a few ready (in multiplayer:
+    // sealed) ticks are kept queued in the worker, due or not, each with its
+    // deadline (it runs them on time whatever this page is doing; see
+    // sim_client.js). Catching up (a guest behind): two more, run at once.
+    let ahead = typeof simClientDispatchAhead === 'function' && simClientDispatchAhead();
+    while (processed < limit) {
+        let due = accumulator >= tickMs;
+        // (Early: at most the lead's worth ahead of the real-time schedule
+        // too (the accumulator below zero while ahead), so the pace never
+        // depends on the worker's deadlines alone.)
+        const lead = simClientLeadTicks();
+        let early = ahead && simClientWorkerAhead() < lead + (catchUp > 0 ? 2 : 0)
+            && (catchUp > 0 || accumulator > -(lead - 1) * tickMs);
+        if (!due && catchUp <= 0 && !early) break;
+        // (The worker took this tick, or a host's sealed it, by itself
+        // while the page was stalled: its note moves the page on.)
+        if (typeof simClientAutoPending === 'function' && simClientAutoPending(currentTick)) {
+            if (due) accumulator = Math.min(accumulator, tickMs);
+            break;
+        }
+        if (isMultiplayer && processed > 0) driveStrictLockstep(now, currentTick);
+        if (isMultiplayer && !isStrictTickReady(currentTick)) {
+            if (due) {
+                // Deliberate pauses (start countdown, resync) are not stalls.
+                let paused = lockstepResyncPauseActive || matchStartWaitingForReady || lockstepFatalStopActive || (!isHost && lockstepDesyncDetected);
+                if (paused) netStallStartedAt = 0;
+                else netNoteSimWaiting(true, now);
+                if (!waitingForRemoteSince) waitingForRemoteSince = now;
+                accumulator = Math.min(accumulator, tickMs);
+            }
+            break;
+        }
+        // Simulation worker: a few ticks may be in flight; beyond that the
+        // page waits for results rather than queueing more.
+        let inWorker = typeof simClientActive === 'function' && simClientActive();
+        // (The worker is still loading the match's world: its clock waits.)
+        if (inWorker && !simClientWorldReady()) {
+            accumulator = Math.min(accumulator, tickMs);
+            break;
+        }
+        // (Ahead: as many queued as the lead, and a bound on results the page
+        // has not applied yet; otherwise results not back yet.)
+        if (inWorker && (ahead ? (!early || simClientInFlight() >= SIM_CLIENT_MAX_IN_FLIGHT + 6)
+            : simClientInFlight() >= SIM_CLIENT_MAX_IN_FLIGHT + (catchUp > 0 ? 2 : 0))) {
+            // (A tick due while the worker still has the whole lead queued:
+            // it is not keeping up, the shared pace hears of it.)
+            if (due) { accumulator = Math.min(accumulator, tickMs); if (ahead) simClientNoteBehind(now); }
+            break;
+        }
+        if (isMultiplayer) {
+            // A guest applies a resync patch to the page's copy of the state
+            // too: with the worker, once every tick before it has come back.
+            // (The host's patches are encoded by the worker, in order.)
+            if (inWorker && !isHost && resyncGuest.T === currentTick && !simClientQuiescent()) {
+                if (due) accumulator = Math.min(accumulator, tickMs);
+                break;
+            }
+            // Resync patches: the host encodes one, or the guest applies one,
+            // in its own frame; the tick runs in the next.
+            if (isHost) {
+                if (resyncHostBeforeTick(currentTick)) break;
+            } else if (resyncGuest.T === currentTick) {
+                let hadPatch = !!resyncGuest.patch;
+                if (!resyncGuestBeforeTick(currentTick, now)) {
+                    if (due) accumulator = Math.min(accumulator, tickMs);
+                    break;
+                }
+                if (hadPatch) break;
+            }
+        }
+        // (The tick is the page's to dispatch unless the worker just took it.)
+        if (inWorker && !simClientClaimTick(currentTick)) {
+            if (due) accumulator = Math.min(accumulator, tickMs);
+            break;
+        }
+        // (An early tick takes its slot of the clock too: the accumulator
+        // goes below zero while ahead, so "due" stays real time and a tick
+        // not sealed yet only counts as waiting when it is due.)
+        if (due || (early && catchUp <= 0)) accumulator -= tickMs;
+        else if (catchUp > 0) { catchUp--; if (ahead) simClientNextAsap = true; }
+        if (isMultiplayer) netNoteSimWaiting(false, now);
+        waitingForRemoteSince = 0;
+        runOneTick();
+        processed++;
+        if (gameOver) break;
+    }
+    return accumulator;
+}
+
+// CAMERA SLIDE (Settings > Camera slide)
+// A frame shows the camera at its frame time, and the browser shows it until
+// the next frame is drawn, which a game tick can hold up for 20+ ms. So the
+// GPU canvas and the overlay are drawn with a margin around the view, and the
+// browser's compositor (its own thread, running at the display rate even
+// while the page is busy) slides them at the camera's pan velocity from the
+// frame time on. On screen the camera is then where it should be at every
+// display refresh; the next frame replaces the slide seamlessly. The margin
+// bounds the slide, so a very long stall stops at its edge. Panning only:
+// rotation and zoom are not extrapolated.
+const CAMERA_SLIDE_PAD_PX = 64;
+const CAMERA_SLIDE_MAX_MS = 200;
+let cameraSlideEnabled = true;
+// Settings > Max render height: the 3D/2D scene is drawn with at most this
+// many pixels on the view's short side and stretched to the window by the
+// browser (the panels and the overlay stay at the display's own pixels). A
+// 4K display is four times the pixels of 1080p for every pass of the frame
+// (MSAA, post-processing, the resolve): on a TV that is the difference
+// between a GPU with time to spare and one that falls behind the display,
+// and a GPU that falls behind shows as lag on every input. 0: no cap.
+const RENDER_MAX_HEIGHT_CHOICES = [720, 900, 1080, 1440, 2160, 0];
+let renderMaxHeight = 0;
+function normalizeRenderMaxHeight(v) {
+    v = Math.round(Number(v));
+    return RENDER_MAX_HEIGHT_CHOICES.includes(v) ? v : 0;
+}
+function setRenderMaxHeight(v) {
+    renderMaxHeight = normalizeRenderMaxHeight(v);
+    _applyRenderViewPad();
+}
+// Settings > Pixel-snapped camera (2D): each frame is drawn with the camera
+// on a whole device pixel, so sprites are not resampled at a different
+// sub-pixel phase every frame while panning (shimmer and smear). The camera
+// itself keeps its exact position; only drawing rounds it.
+let pixelSnapCamera = true;
+let _cameraSnapSaved = null;
+
+function _applyRenderCameraSnap() {
+    _cameraSnapSaved = null;
+    if (!pixelSnapCamera || renderDimensionMode !== '2d') return;
+    // (The scene's own pixels: fewer than the display's under a resolution cap.)
+    let px = camera.zoom * ((renderer3dInstance && renderer3dInstance.supported && renderer3dInstance.pixelRatio) || window.devicePixelRatio || 1);
+    if (!(px > 0)) return;
+    _cameraSnapSaved = { x: camera.x, y: camera.y };
+    camera.x = Math.round(camera.x * px) / px;
+    camera.y = Math.round(camera.y * px) / px;
+}
+
+function _restoreRenderCameraSnap() {
+    if (!_cameraSnapSaved) return;
+    camera.x = _cameraSnapSaved.x;
+    camera.y = _cameraSnapSaved.y;
+    _cameraSnapSaved = null;
+}
+let _cameraSlideAnims = [];
+let _cameraSlideActive = false;
+// The latest slide (for diagnostics): frame time, duration, warp inputs.
+let _cameraSlideLast = null;
+// What the current slide starts from: the last drawn frame's view and camera.
+let _cameraSlideFrame = null;
+
+// Overscan margin (css px on each side) of the GPU canvas and overlay.
+function getRenderViewPad() {
+    return cameraSlideEnabled && renderer3dInstance && renderer3dInstance.supported ? CAMERA_SLIDE_PAD_PX : 0;
+}
+
+// Sizes and places the padded layers; called on resize and setting changes.
+function _applyRenderViewPad() {
+    let pad = getRenderViewPad();
+    let dpr = window.devicePixelRatio || 1;
+    if (overlayCanvas) {
+        overlayCanvas.width = Math.round((viewW + 2 * pad) * dpr);
+        overlayCanvas.height = Math.round((viewH + 2 * pad) * dpr);
+        overlayCanvas.style.width = (viewW + 2 * pad) + 'px';
+        overlayCanvas.style.height = (viewH + 2 * pad) + 'px';
+        overlayCanvas.style.left = overlayCanvas.style.top = (-pad) + 'px';
+        overlayCanvas.style.right = overlayCanvas.style.bottom = 'auto';
+        overlayCanvas._viewPad = pad;
+        overlayCanvas._interactionEmpty = false;
+    }
+    renderer3dHost = renderer3dHost || document.getElementById('renderer3d-host');
+    if (renderer3dHost) {
+        renderer3dHost.style.inset = 'auto';
+        renderer3dHost.style.left = renderer3dHost.style.top = (-pad) + 'px';
+        renderer3dHost.style.width = (viewW + 2 * pad) + 'px';
+        renderer3dHost.style.height = (viewH + 2 * pad) + 'px';
+    }
+    if (renderer3dInstance) renderer3dInstance.resize(viewW + 2 * pad, viewH + 2 * pad);
+    _stopCameraSlide();
+}
+
+function setCameraSlideEnabled(on) {
+    cameraSlideEnabled = !!on;
+    _applyRenderViewPad();
+}
+
+function _stopCameraSlide() {
+    for (let a of _cameraSlideAnims) a.cancel();
+    _cameraSlideAnims = [];
+    _cameraSlideActive = false;
+    _cameraSlideLast = null;
+}
+
+// 3x3 matrix helpers (row-major arrays of 9) for the slide's ground warp.
+function _m3mul(a, b) {
+    let r = new Array(9);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) r[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
+    return r;
+}
+
+function _m3inv(m) {
+    let [a, b, c, d, e, f, g, h, i] = m;
+    let A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g;
+    let det = a * A + b * B + c * C;
+    if (!det) return null;
+    return [A / det, -(b * i - c * h) / det, (b * f - c * e) / det,
+        B / det, (a * i - c * g) / det, -(a * f - c * d) / det,
+        C / det, -(a * h - b * g) / det, (a * e - b * d) / det];
+}
+
+function _m3apply(m, x, y) {
+    let w = m[6] * x + m[7] * y + m[8];
+    return [(m[0] * x + m[1] * y + m[2]) / w, (m[3] * x + m[4] * y + m[5]) / w];
+}
+
+// Panning moves every ground point by the same world offset, so the drawn
+// ground moves by a projective map of the image (a homography: exact for the
+// ground plane in perspective, near-exact for what stands on it). A plain
+// shift would move near and far ground equally, which in a tilted view makes
+// the picture bob between frames.
+// Returns the map, in the layers' css px, from the last frame's image to the
+// image after the camera moved by (dx, dz) tiles.
+function _cameraSlideWarp(base, baseInv, dx, dz) {
+    return _m3mul(_m3mul(base, [1, 0, -dx, 0, 1, -dz, 0, 0, 1]), baseInv);
+}
+
+function _cssMatrixFromHomography(m) {
+    let k = 1 / m[8];
+    let f = v => (v * k).toPrecision(9);
+    return `matrix3d(${f(m[0])},${f(m[3])},0,${f(m[6])},${f(m[1])},${f(m[4])},0,${f(m[7])},0,0,1,0,${f(m[2])},${f(m[5])},0,1)`;
+}
+
+// Called after each drawn frame: records what the slide starts from, then
+// builds it (see _buildCameraSlide).
+function updateCameraSlide(frameTime) {
+    let pad = getRenderViewPad();
+    let r3 = renderer3dInstance;
+    let flat = renderDimensionMode !== '3d';
+    let m = r3 && r3.pickViewProjection;
+    // (Not while the presentation queue guard paces the frames: the slide
+    // is a frame per browser frame, which is what fills that queue.)
+    if (!(pad > 0) || !gameStarted || document.hidden || !r3 || (!flat && !m) || _presentGuard.rate > 0) {
+        _cameraSlideFrame = null;
+        if (_cameraSlideActive) _stopCameraSlide();
+        return;
+    }
+    // Ground (tile x, tile z) -> layer css px, from the frame just drawn:
+    // 2D is a scaled top-down view; 3D uses the drawn frame's projection.
+    let W = r3.cssWidth, H = r3.cssHeight, z = camera.zoom;
+    let base = flat
+        ? [TILE * z, 0, pad - camera.x * z, 0, TILE * z, pad - camera.y * z, 0, 0, 1]
+        : _m3mul([W / 2, 0, W / 2, 0, -H / 2, H / 2, 0, 0, 1], [m[0], m[8], m[12], m[1], m[9], m[13], m[3], m[11], m[15]]);
+    let baseInv = _m3inv(base);
+    if (!baseInv) { _cameraSlideFrame = null; return; }
+    let vel = _cameraPanVel, tgt = _cameraPanTarget;
+    _cameraSlideFrame = {
+        frameTime, base, baseInv, pad, W, H, cx: camera.x, cy: camera.y, v0x: vel.x, v0y: vel.y, tx: tgt.x, ty: tgt.y,
+        maxX: WORLD_W - viewW / camera.zoom, maxY: WORLD_H - viewH / camera.zoom
+    };
+    _buildCameraSlide();
+}
+
+// A pan key changed: turn the picture now instead of at the next frame.
+function refreshCameraSlideForInput() {
+    if (_cameraSlideFrame && getRenderViewPad() > 0) _buildCameraSlide();
+}
+
+function _buildCameraSlide() {
+    let F = _cameraSlideFrame;
+    let inputs = typeof _cameraPanInputs !== 'undefined' ? _cameraPanInputs.slice() : [];
+    let moving = F.v0x !== 0 || F.v0y !== 0 || F.tx !== 0 || F.ty !== 0 || inputs.some(i => i.x !== 0 || i.y !== 0);
+    let layers = [renderer3dHost, overlayCanvas].filter(Boolean);
+    if (!moving || !layers.length || typeof layers[0].animate !== 'function') {
+        if (_cameraSlideActive) _stopCameraSlide();
+        return;
+    }
+    // Where the camera will be `sec` after the frame, in tiles from there:
+    // updateCamera's own motion model through the key changes so far, each
+    // axis stopping where the camera is clamped at the map edge.
+    let shift = sec => {
+        let r = cameraPanTravel(F.v0x, F.v0y, F.tx, F.ty, F.frameTime, sec, inputs);
+        return [Math.max(-F.cx, Math.min(F.maxX - F.cx, r.x)) / TILE, Math.max(-F.cy, Math.min(F.maxY - F.cy, r.y)) / TILE];
+    };
+    // How long until the view's corners would show past the margin.
+    let pad = F.pad, W = F.W, H = F.H;
+    let corners = [[pad, pad], [W - pad, pad], [pad, H - pad], [W - pad, H - pad]];
+    let reach = sec => {
+        let [dx, dz] = shift(sec);
+        let inv = _m3inv(_cameraSlideWarp(F.base, F.baseInv, dx, dz));
+        if (!inv) return Infinity;
+        let worst = 0;
+        for (let [x, y] of corners) {
+            let [sx, sy] = _m3apply(inv, x, y);
+            worst = Math.max(worst, Math.abs(sx - x), Math.abs(sy - y));
+        }
+        return worst;
+    };
+    let durMs = CAMERA_SLIDE_MAX_MS;
+    for (let i = 0; i < 3; i++) {
+        let r = reach(durMs / 1000);
+        if (!(r > pad)) break;
+        durMs *= pad / r * 0.98;
+    }
+    if (!(durMs > 1)) { if (_cameraSlideActive) _stopCameraSlide(); return; }
+    // Keyframes every ~8 ms: the browser interpolates between them, and the
+    // warp is not linear in time.
+    let steps = Math.max(2, Math.ceil(durMs / 8));
+    let keyframes = [];
+    for (let k = 0; k <= steps; k++) {
+        let [dx, dz] = shift(durMs / 1000 * k / steps);
+        keyframes.push({ offset: k / steps, transform: _cssMatrixFromHomography(_cameraSlideWarp(F.base, F.baseInv, dx, dz)) });
+    }
+    let next = layers.map(el => {
+        let anim = el.animate(keyframes, { duration: durMs, fill: 'forwards', easing: 'linear' });
+        // From the frame's own time: the slide covers exactly the time the
+        // frame has been, and will be, on screen.
+        anim.startTime = F.frameTime;
+        return anim;
+    });
+    for (let a of _cameraSlideAnims) a.cancel();
+    _cameraSlideAnims = next;
+    _cameraSlideActive = true;
+    _cameraSlideLast = { frameTime: F.frameTime, durMs, base: F.base, baseInv: F.baseInv, shift };
+}
+
+// The first 3D frame compiles the 3D-only shaders and builds their first data
+// (~570 ms on the page: a tick gap for every player when one switched to 3D
+// mid-match). Draw one hidden 3D frame while the match load popup still
+// covers the screen and the world is loaded, before any tick is played.
+// Twice: the shaders as soon as the world is loaded, then the units' first
+// buffers, slot textures and panels once the frame has unit columns.
+let _view3DPrewarmed = null;
+function _maybePrewarm3DView(renderer3d) {
+    const done = _view3DPrewarmed && _view3DPrewarmed.renderer === renderer3d ? _view3DPrewarmed : null;
+    if ((done && done.units) || renderDimensionMode !== '2d' || !gameStarted) return;
+    const overlay = document.getElementById('match-load-overlay');
+    if (!overlay || overlay.style.display === 'none') return;
+    if (typeof simClientWorldReady === 'function' && !simClientWorldReady()) return;
+    renderDimensionMode = '3d';
+    try {
+        const snapshot = build3DFrameData(false);
+        const units = !!(snapshot.columnLayers && snapshot.columnLayers.units);
+        if (done && !units) return;
+        _view3DPrewarmed = { renderer: renderer3d, units };
+        if (!done && typeof renderer3d.prewarmPrograms === 'function') renderer3d.prewarmPrograms();
+        renderer3d.setGraphicsOptions(graphicsOptions);
+        renderer3d.render(snapshot);
+    } catch (err) {
+        _view3DPrewarmed = { renderer: renderer3d, units: true };
+        console.warn('[renderer] 3D view prewarm failed:', err && err.message || err);
+    } finally {
+        renderDimensionMode = '2d';
+    }
+}
+
+function processRenderFrame(timestamp) {
+    if (!ctx || !canvas || !bgCtx || !minimapCtx) {
+        ensureRenderContextsInitialized();
+        return;
+    }
+
+    // _frameSimLeadMs: how far this frame's time is past the simulation
+    // clock (the loop runs ticks after drawing, see _runLoopFrame).
+    tickAlpha = (typeof simClientActive === 'function' && simClientActive())
+        ? simClientTickAlpha(timestamp)
+        : Math.max(0, Math.min((_tickAccumulator + _frameSimLeadMs) / netSimulationTickMs(), 1));
+    updateCamera(timestamp);
+    _applyRenderCameraSnap();
+    let dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    let renderer3dSnapshot = null;
+    let renderer3d = ensure3DRendererInitialized();
+    if (renderer3d) {
+        _maybePrewarm3DView(renderer3d);
+        renderer3dSnapshot = build3DFrameData(renderDimensionMode === '2d');
+        renderer3d.setGraphicsOptions(graphicsOptions);
+        if (typeof renderer3d.gpuTimerBegin === 'function') renderer3d.gpuTimerBegin();
+        try { renderer3d.render(renderer3dSnapshot); }
+        finally { if (typeof renderer3d.gpuTimerEnd === 'function') renderer3d.gpuTimerEnd(); }
+        drawMinimap();
+    } else {
+        draw();
+    }
+    _overlayDrawStart = performance.now();
+    drawInteractionOverlay(renderer3dSnapshot);
+    _overlayDrawMs = performance.now() - _overlayDrawStart;
+    _lastOverlaySnapshot = renderer3dSnapshot;
+    flushTickUiRequests();
+    // (An army's unit counts for the bars and the panel: a slice a frame.)
+    if (typeof frameUnitSummaryStep === 'function') frameUnitSummaryStep();
+    updateHUD();
+    updateControlGroupBar();
+
+    // FPS counter
+    _fpsFrameCount++;
+    if (timestamp - _fpsLastTime >= 1000) {
+        _fpsDisplay = Math.round(_fpsFrameCount * 1000 / (timestamp - _fpsLastTime));
+        _fpsFrameCount = 0; _fpsLastTime = timestamp;
+    }
+    // Refresh the build menu every ~30 frames (the info panel on its own clock).
+    if (++_buildMenuRefreshCounter >= 30) {
+        _buildMenuRefreshCounter = 0;
+        if (_buildMenuNeedsRefresh) updateBuildMenu();
+    }
+    _refreshInfoPanelPeriodic(Number.isFinite(timestamp) ? timestamp : performance.now());
+    if (typeof updateBottomBar === 'function') updateBottomBar(Number.isFinite(timestamp) ? timestamp : performance.now());
+    // Refresh minimap static layer every ~30 frames on a different phase.
+    if (++_minimapRefreshCounter >= 30) {
+        _minimapRefreshCounter = 0;
+        commitStaticCaches(false, 'minimap');
+    }
+    // Refresh combined background/static terrain every ~30 frames on a third phase.
+    if (++_backgroundCacheRefreshCounter >= 30) {
+        _backgroundCacheRefreshCounter = 0;
+        commitStaticCaches(false, 'background');
+    }
+}
+
+// FRAME LOOP
+// One steady frame clock drives drawing, camera and unit interpolation:
+// the browser frame's rAF timestamp (vsync aligned). Camera and units
+// therefore move by the same amount every frame, even when a frame
+// starts a little late, which is what makes panning look locked.
+//
+// Game ticks run right after a frame is drawn, in their own task, for the
+// ticks due by the NEXT frame. A long tick then falls in the gap between
+// frames instead of delaying the frame that was about to be shown, and the
+// interpolation is exactly what running the tick before the next frame gives.
+//
+// Frames are always queued again, even after an error, so one bad frame
+// cannot freeze the game.
+function _scheduleSimulationUpTo(time) {
+    if (!(time > _simTargetTime)) return;
+    _simTargetTime = time;
+    if (_simTaskPosted) return;
+    _simTaskPosted = true;
+    _simChannel.port2.postMessage(0);
+}
+
+let _frameSimLeadMs = 0;
+let _frameClock = 0;
+let _rafLastTs = 0;
+let _rafIntervalMs = 1000 / 60;
+const _rafDeltas = [];
+const _rafSortScratch = new Float64Array(16);
+let _simTargetTime = 0;
+let _simTaskPosted = false;
+const _simChannel = new MessageChannel();
+_simChannel.port1.onmessage = () => {
+    _simTaskPosted = false;
+    let t0 = performance.now();
+    try { processVisibleSimulationFrame(_simTargetTime); } catch (err) { reportRuntimeError('frame', err); }
+    let simMs = performance.now() - t0;
+    _simMsEma += (simMs - _simMsEma) * 0.1;
+};
+// Headless runs (Node): a port with a handler would keep the process alive
+// (assigning onmessage references it, so this comes after).
+if (_simChannel.port1.unref) { _simChannel.port1.unref(); _simChannel.port2.unref(); }
+
+// Browser frame interval: median of the last 15 gaps, ignoring stalls.
+// Steady gaps also teach the display's refresh rate (see getDisplayRefreshRate).
+let _rafDisplayKey = '';
+// The last 15 browser frames came evenly spaced.
+let _rafSteady = false;
+// The gap before the latest browser frame (ms).
+let _rafLastGapMs = 0;
+
+function _noteRafTimestamp(ts) {
+    let key = _displayKey();
+    if (key !== _rafDisplayKey) {
+        // Another display: learn its frame interval afresh.
+        _rafDisplayKey = key;
+        _rafDeltas.length = 0;
+        _rafLastTs = 0;
+    }
+    if (_rafLastTs) {
+        let d = ts - _rafLastTs;
+        if (d > 2 && d < 60) {
+            _rafDeltas.push(d);
+            if (_rafDeltas.length > 15) _rafDeltas.shift();
+            // (Sorted in place into a reused array: a copy and a comparator
+            // every frame were garbage for the page's scavenges.)
+            let m = _rafDeltas.length, sorted = _rafSortScratch;
+            for (let i = 0; i < m; i++) { let v = _rafDeltas[i], j = i; while (j > 0 && sorted[j - 1] > v) { sorted[j] = sorted[j - 1]; j--; } sorted[j] = v; }
+            _rafIntervalMs = sorted[m >> 1];
+            _rafSteady = m >= 15 && !document.hidden && sorted[11] - sorted[3] < _rafIntervalMs * 0.12;
+            if (_rafSteady) _learnDisplayRefreshRate(1000 / _rafIntervalMs);
+        }
+    }
+    _rafLastTs = ts;
+}
+
+function _runLoopFrame(time, nextTime) {
+    time = Math.max(time, _frameClock);
+    _frameClock = time;
+    _lastRenderFrameAt = performance.now();
+    if (typeof simClientAutoBeat === 'function') simClientAutoBeat(_lastRenderFrameAt);
+    _frameSimLeadMs = gameStarted && !gameOver && !document.hidden ? Math.max(0, time - _lastTickTime) : 0;
+    try { processRenderFrame(time); } catch (err) { reportRuntimeError('render', err); }
+    _frameSimLeadMs = 0;
+    try { updateCameraSlide(time); } catch (err) { reportRuntimeError('render', err); }
+    // The slide starts from the drawn (snapped) camera; the camera itself
+    // goes back to its exact position.
+    _restoreRenderCameraSnap();
+    let renderMs = performance.now() - _lastRenderFrameAt;
+    _renderMsEma += (renderMs - _renderMsEma) * 0.1;
+    _scheduleSimulationUpTo(Math.max(time, nextTime));
+}
+
+let _frameCapCredit = 0;
+let _frameCapLastTs = 0;
+
+// PRESENTATION QUEUE GUARD
+// A window that covers its screen is, a few seconds in (when the browser's
+// own fullscreen notice has gone), shown by the display directly, at the
+// display's own refresh rate. When that rate is below the rate the browser
+// makes frames at (a 60 Hz TV beside a 120 Hz monitor: the browser paces
+// every window by one clock), more frames are made than can be shown, the
+// queue between the browser and the display fills, and the browser then
+// makes exactly as many as are shown: the queue stays full, and every
+// frame waits its whole length before it is seen. The game turns sluggish
+// at that moment and stays so. Measured on such a pair
+// (.claude/real_fullscreen_probe.cjs, a real Edge window on the TV; the
+// browser's Event Timing, an input to the frame with its effect
+// presented): 24 ms before, 64-72 ms after, for good.
+//
+// The queue empties when fewer frames are made than shown, by everything
+// on the page: the game's frames, the camera slide (a compositor animation:
+// a frame per browser frame whatever the game draws), CSS animations, the
+// build preview redrawn on mouse moves. A lower pace (97%) keeps it empty
+// but shows two frames a second twice: a hitch the eye catches. So the
+// pace is the display's own, exactly, and the queue is watched instead:
+// while it is empty the browser's frames come at their fast rate (two per
+// display frame here, every second one drawn); the moment a frame waits in
+// it they come at the display's rate. Then ONE frame is left out, which
+// takes one frame out of the queue, and so on, PRESENT_GUARD_SKIP_GAP_MS
+// apart, until they come fast again. Two clocks that differ by a thousandth
+// cost a frame every quarter minute; nothing is paced down.
+//
+// What is seen from here, to begin with: the browser's frames, which came
+// fast and even, come at a lower common display rate, even again, with the
+// page far from busy. That rate is the display's, kept while the window
+// covers this screen; the camera slide and CSS animations stop
+// (body.present-paced), the build preview is drawn with the frames. A
+// browser that simply runs at the lower rate (leaving frames out does not
+// bring the fast ones back) is left alone after PRESENT_GUARD_GIVE_UP
+// tries: there is nothing to empty.
+const PRESENT_GUARD_DETECT_FRAMES = 20, PRESENT_GUARD_SKIP_GAP_MS = 150, PRESENT_GUARD_GIVE_UP = 14;
+// (That many of the browser's frames in a row a display frame apart: a page
+// hiccup makes one or two such gaps, a frame waiting in the queue makes all.)
+let presentGuardSlowRun = 5;
+// OFF unless the page is opened with ?presentguard=1. Tried on the pair of
+// displays above and judged by eye: every frame left out shows as a hitch,
+// and frames drawn on the browser's 120 Hz grid (59.8 a second) never line
+// up with a display at 60.01, so some are always left out or shown twice:
+// about one every 2.5 s as measured. Half the delay (32 ms for 64-72), but
+// the browser's own steady 60 looks better. Kept for another look.
+let presentGuardEnabled = (() => { try { return new URLSearchParams(location.search).get('presentguard') === '1'; } catch { return false; } })();
+// Frames are paced to this share of the display's rate (1: every display frame).
+let presentGuardPace = 1;
+const _presentGuard = { key: '', rate: 0, fast: 0, fastRate: 0, slow: 0, slowRun: 0, skips: 0, lastSkipAt: 0, noGain: 0, gaveUp: false };
+function _windowCoversScreen() {
+    return !!document.fullscreenElement || (window.innerHeight >= screen.height - 4 && window.innerWidth >= screen.width - 4);
+}
+// True: this browser frame is not drawn (a frame is taken out of the queue).
+function _presentGuardStep(ts) {
+    const G = _presentGuard, covers = _windowCoversScreen(), key = _displayKey() + (covers ? '|covers' : '');
+    if (G.key !== key) { G.key = key; G.rate = G.fast = G.fastRate = G.slow = G.slowRun = G.noGain = 0; G.gaveUp = false; }
+    if (!presentGuardEnabled || !covers || !gameStarted || document.hidden || G.gaveUp) { G.rate = G.slow = 0; _presentGuardApply(); return false; }
+    if (G.rate > 0) {
+        // Paced. A frame waits in the queue: the browser's frames come a
+        // display frame apart, not at their fast rate.
+        const fastMs = 1000 / G.fastRate, gap = _rafLastGapMs;
+        if (gap > 0 && gap < fastMs * 1.3) { G.slowRun = 0; G.noGain = 0; return false; }
+        if (!(gap > fastMs * 1.5 && gap < 60)) return false;
+        G.slowRun++;
+        // (Not for a page busy with its own frame: that is not the queue.)
+        if (G.slowRun < presentGuardSlowRun || ts - G.lastSkipAt < PRESENT_GUARD_SKIP_GAP_MS || _renderMsEma + _simMsEma > 1000 / G.rate * 0.4) return false;
+        if (++G.noGain > PRESENT_GUARD_GIVE_UP) { G.gaveUp = true; G.rate = 0; _presentGuardApply(); return false; }
+        G.lastSkipAt = ts; G.skips++; G.slowRun = 0;
+        return true;
+    }
+    const rate = _snapRefreshRate(1000 / _rafIntervalMs);
+    if (_rafSteady && rate > G.fast) G.fast = rate;
+    // (Even, at a display rate well under the fast one, the page idle most of each frame.)
+    if (_rafSteady && G.fast > 0 && rate >= 24 && rate <= G.fast * 0.8 && _renderMsEma + _simMsEma < _rafIntervalMs * 0.4) G.slow++;
+    else G.slow = 0;
+    if (G.slow < PRESENT_GUARD_DETECT_FRAMES) return false;
+    G.rate = rate; G.fastRate = G.fast; G.slow = G.slowRun = G.noGain = 0;
+    G.lastSkipAt = ts; G.skips++;
+    _presentGuardApply();
+    return true;
+}
+// The page while the guard paces it: no camera slide (updateCameraSlide), no
+// CSS animations or transitions (style.css body.present-paced).
+let _presentGuardApplied = false;
+function _presentGuardApply() {
+    const on = _presentGuard.rate > 0;
+    if (on === _presentGuardApplied) return;
+    _presentGuardApplied = on;
+    if (document.body) document.body.classList.toggle('present-paced', on);
+    if (on && _cameraSlideActive) _stopCameraSlide();
+}
+// The display's own rate, when the guard found it (0: not known).
+function presentGuardRate() {
+    return _presentGuard.rate;
+}
+
+function _rafLoopFrame(ts) {
+    _renderFrameHandle = 0;
+    _rafLastGapMs = _rafLastTs ? ts - _rafLastTs : 0;
+    _noteRafTimestamp(ts);
+    queueRenderFrame();
+    if (_presentGuardStep(ts)) {
+        // (Not drawn; the simulation and its heartbeat go on. The frame left
+        // out is one frame fewer: its time is spent, the pacer below does not
+        // draw it on the next browser frame instead.)
+        let paceMs = 1000 / getTargetFrameRate();
+        _frameCapCredit = Math.max(-paceMs, Math.min(_frameCapCredit + (_frameCapLastTs ? ts - _frameCapLastTs : 0), paceMs * 2) - paceMs);
+        _frameCapLastTs = ts;
+        if (typeof simClientAutoBeat === 'function') simClientAutoBeat(performance.now());
+        _scheduleSimulationUpTo(ts + _rafIntervalMs);
+        return;
+    }
+    // Browser faster than the target (say 120 Hz, target 60): draw on the
+    // browser frames that keep the target pace, so every drawn frame is shown for
+    // the same number of refreshes. Credit follows the real frame times, so
+    // a browser frame delayed by a long tick does not shift the pace.
+    let targetMs = 1000 / getTargetFrameRate();
+    let gap = _frameCapLastTs ? ts - _frameCapLastTs : _rafIntervalMs;
+    _frameCapLastTs = ts;
+    // (Paced by the presentation queue guard: by time alone, at whatever rate
+    // the browser's frames come just now: fast while its queue is empty, at
+    // the display's rate while a frame waits in it.)
+    let guarded = _presentGuard.rate > 0;
+    if (guarded || _rafIntervalMs < targetMs * 0.9) {
+        _frameCapCredit = Math.min(_frameCapCredit + gap, targetMs * 2);
+        if (_frameCapCredit < targetMs - (guarded ? 1000 / _presentGuard.fastRate : _rafIntervalMs) * 0.5) return;
+        // (The part of a target frame drawn early is owed: clamped at zero, a
+        // target that is not a whole share of the browser's rate, 50 of 120 or
+        // 54 of 60, was never held: every second frame, or every frame, was drawn.)
+        _frameCapCredit = Math.max(-targetMs, _frameCapCredit - targetMs);
+        _runLoopFrame(ts, ts + targetMs);
+        return;
+    }
+    _frameCapCredit = 0;
+    _runLoopFrame(ts, ts + _rafIntervalMs);
+}
+
+// Draws one frame now (benchmarks and tools); the loop uses _rafLoopFrame.
+function renderFrame(timestamp) {
+    let t = Number.isFinite(timestamp) ? timestamp : performance.now();
+    _lastRenderFrameAt = performance.now();
+    try { processRenderFrame(t); } catch (err) { reportRuntimeError('render', err); }
+}
+
+// Frames are drawn in the browser's own frames (requestAnimationFrame) and
+// nowhere else. The browser shows a canvas as it is when its frame is
+// committed, right after the frame's rAF callbacks: a frame drawn between
+// two browser frames (from a timer) is drawn over by the next callback
+// before anything is shown. Measured in Edge (.claude/fillin_shown_probe.cjs:
+// 150 of 150 presented frames were the callback's). The game used to draw
+// such frames when the browser ran slower than the target (Edge a few
+// seconds into fullscreen on a display slower than the rate learned for
+// it, a 60 Hz TV beside a 120 Hz monitor): half of all frames drawn for
+// nothing, the shown one queued behind them on the GPU, and the game
+// turned sluggish at that moment. A browser slower than the target is
+// simply followed; a faster one is capped (_rafLoopFrame).
+//
+// Target (Settings > Target FPS): 'auto' follows the refresh rate of the
+// display the window is on, or a fixed common rate. The choice is kept per
+// display: browsers may run a 60 Hz display at another display's 120 Hz
+// (Chromium vsyncs to one display on some multi-monitor setups), which no web
+// API reveals, so picking 60 once on that display fixes it for good, while
+// other displays keep their own choice.
+const FPS_TARGET_CHOICES = [30, 50, 60, 72, 75, 90, 100, 120, 144, 165, 180, 240, 360];
+let fpsTargetByDisplay = {};
+function normalizeFpsTargetSetting(v) {
+    if (v === 'auto') return 'auto';
+    let n = Math.round(Number(v));
+    return FPS_TARGET_CHOICES.includes(n) ? n : 'auto';
+}
+
+function getFpsTargetSetting() {
+    let v = fpsTargetByDisplay[_displayKey()];
+    return v === undefined ? 'auto' : v;
+}
+
+function setFpsTargetSetting(v) {
+    v = normalizeFpsTargetSetting(v);
+    if (v === 'auto') delete fpsTargetByDisplay[_displayKey()];
+    else fpsTargetByDisplay[_displayKey()] = v;
+}
+
+function getTargetFrameRate() {
+    let v = getFpsTargetSetting();
+    let target = v === 'auto' ? getDisplayRefreshRate() : v;
+    // (The rate the display itself shows this window at: see the presentation queue guard.)
+    return _presentGuard.rate > 0 ? Math.min(target, _presentGuard.rate * presentGuardPace) : target;
+}
+
+// Display refresh rate, per display. Browsers slow rAF down (fullscreen,
+// battery saver, load) but never run it faster than the display, so the
+// fastest steady rate seen on a display is its refresh rate. Displays are told
+// apart by their screen geometry, which changes when the window moves to
+// another display, and the rates are remembered across page loads so
+// fullscreen right after loading still knows a 120 Hz display is 120 Hz.
+const LS_DISPLAY_RATES_KEY = 'defence3_display_rates_v1';
+const COMMON_REFRESH_RATES = [24, 30, 48, 50, 60, 72, 75, 85, 90, 100, 110, 120, 144, 160, 165, 170, 180, 200, 240, 280, 300, 360, 480];
+// Only real display rates (48 Hz and up) count: a steady low frame rate
+// under load says nothing about the display.
+const MIN_DISPLAY_RATE = 48;
+let _displayRates = (() => {
+    try {
+        let v = JSON.parse(localStorage.getItem(LS_DISPLAY_RATES_KEY) || '{}');
+        let out = {};
+        if (v && typeof v === 'object') for (let k in v) if (Number(v[k]) >= MIN_DISPLAY_RATE) out[k] = Number(v[k]);
+        return out;
+    } catch { return {}; }
+})();
+
+function _displayKey() {
+    let sc = window.screen || {};
+    return [sc.availLeft || 0, sc.availTop || 0, sc.width || 0, sc.height || 0, Math.round((window.devicePixelRatio || 1) * 100)].join(',');
+}
+
+function _snapRefreshRate(hz) {
+    let best = 0;
+    for (let r of COMMON_REFRESH_RATES) if (Math.abs(r - hz) <= r * 0.04 && (!best || Math.abs(r - hz) < Math.abs(best - hz))) best = r;
+    return best || Math.round(hz);
+}
+
+function _learnDisplayRefreshRate(hz) {
+    let key = _displayKey();
+    let rate = _snapRefreshRate(hz);
+    if (rate < MIN_DISPLAY_RATE || !(rate > (Number(_displayRates[key]) || 0))) return;
+    _displayRates[key] = rate;
+    try { localStorage.setItem(LS_DISPLAY_RATES_KEY, JSON.stringify(_displayRates)); } catch { }
+    if (typeof refreshFpsTargetAutoLabel === 'function') refreshFpsTargetAutoLabel();
+}
+
+// The learned rate of this display; 60 until one is learned. Never the
+// current frame rate itself: under load that drops, and a target following it
+// down would cap the frame rate lower and lower.
+function getDisplayRefreshRate() {
+    return Number(_displayRates[_displayKey()]) || 60;
+}
+
+// What the display, the browser and the GPU are doing, for the FPS readout's
+// hover text (hud.js): the numbers that tell a busy page from a busy GPU
+// from a browser running slower than it did.
+function renderDiagnosticsText() {
+    const R = renderer3dInstance, r1 = v => Math.round(v * 10) / 10;
+    const lines = [`Browser frames: ${r1(1000 / _rafIntervalMs)} per second (display learned as ${getDisplayRefreshRate()} Hz, target ${getTargetFrameRate()})`];
+    if (R && R.supported && R.canvas) {
+        lines.push(`Drawn at ${R.canvas.width} x ${R.canvas.height}${R.sceneSamples ? ', MSAA x' + R.sceneSamples : ''} for a ${Math.round(viewW)} x ${Math.round(viewH)} view (display scale ${r1(window.devicePixelRatio || 1)}, max render height ${renderMaxHeight || 'none'})`);
+        lines.push(R.gpuFrameMs >= 0 ? `GPU per frame: ${r1(R.gpuFrameMs)} ms (recent worst ${r1(R.gpuFrameMsMax)} ms)` : 'GPU per frame: not measurable in this browser');
+    }
+    if (R && R.gl && R.gl.getContextAttributes && R.gl.getContextAttributes().desynchronized) lines.push('Low-latency canvas: on');
+    lines.push(`Page per frame: ${r1(_renderMsEma)} ms drawing, ${r1(_simMsEma)} ms after it`);
+    lines.push(`Screen ${screen.width} x ${screen.height}${_windowCoversScreen() ? ', fullscreen' : ''}`);
+    if (_presentGuard.rate > 0) lines.push(`Display shows this window at ${_presentGuard.rate} Hz: frames paced to it, camera slide off (${_presentGuard.skips} frame${_presentGuard.skips === 1 ? '' : 's'} left out to keep its queue empty)`);
+    else if (_presentGuard.gaveUp) lines.push('Browser runs below its earlier frame rate here; leaving frames out did not bring it back');
+    return lines.join('\n');
+}
+
+let _lastRenderFrameAt = 0;
+// Recent cost of one frame and of the simulation work after it (ms).
+let _renderMsEma = 0;
+let _simMsEma = 0;
+
+// The simulation's own browser-frame loop: it keeps ticks going even when
+// no frame is drawn (and headless). It only schedules the tick task, which
+// runs after the frame is painted, like the one each drawn frame schedules.
+function simulationFrame(ts) {
+    _simulationFrameHandle = 0;
+    _scheduleSimulationUpTo(Number.isFinite(ts) ? ts : performance.now());
+    queueSimulationFrame();
+}
+
+function queueSimulationFrame() {
+    if (_simulationFrameHandle) return;
+    _simulationFrameHandle = requestAnimationFrame(simulationFrame);
+}
+
+function queueRenderFrame() {
+    if (_renderFrameHandle) return;
+    _renderFrameHandle = requestAnimationFrame(_rafLoopFrame);
+}
+
+function startMainThreadLoops() {
+    queueSimulationFrame();
+    queueRenderFrame();
+}
+
+function runHiddenTickPump() {
+    if (!gameStarted || gameOver || !document.hidden) return;
+
+    let now = performance.now();
+    sendNetworkPings(now);
+    if (!_hiddenLastTickTime) _hiddenLastTickTime = now;
+    let dt = now - _hiddenLastTickTime;
+    _hiddenLastTickTime = now;
+    if (dt > 2000) dt = 2000;
+    if (dt < 0) dt = 0;
+    _hiddenTickAccumulator += dt;
+
+    _hiddenTickAccumulator = pumpSimulationTicks(now, _hiddenTickAccumulator, 30);
+}
+
+function refreshBackgroundTickMode() {
+    if (document.hidden) {
+        _hiddenLastTickTime = performance.now();
+        _hiddenTickAccumulator = 0;
+        if (!_backgroundTickInterval) {
+            // A worker-driven ticker keeps a hidden tab at full tick rate, so a
+            // player who switches tabs does not stall everyone else.
+            _backgroundTickInterval = netStartBackgroundTicker(TICK_MS, runHiddenTickPump) || true;
+        }
+    } else if (_backgroundTickInterval) {
+        netStopBackgroundTicker();
+        _backgroundTickInterval = null;
+        _hiddenLastTickTime = 0;
+        _hiddenTickAccumulator = 0;
+    }
+}
+
+let _renderInitEventsBound = false;
+
+function ensureRenderContextsInitialized() {
+    canvas = canvas || document.getElementById('gameCanvas');
+    let gameArea = document.getElementById('game-area');
+    if (!canvas || !gameArea) return false;
+    renderer3dHost = renderer3dHost || document.getElementById('renderer3d-host');
+
+    if (!ctx) {
+        ctx = canvas.getContext('2d');
+
+        if (!ctx) return false;
+        ctx.imageSmoothingEnabled = false;
+    }
+
+    if (!bgCanvas) {
+        bgCanvas = document.createElement('canvas');
+        bgCanvas.id = 'gameBackgroundCanvas';
+        bgCanvas.style.position = 'absolute';
+        bgCanvas.style.top = '0';
+        bgCanvas.style.left = '0';
+        bgCanvas.style.pointerEvents = 'none';
+    }
+    if (!bgCanvas.parentElement) gameArea.insertBefore(bgCanvas, canvas);
+    if (!bgCtx) {
+        bgCtx = bgCanvas.getContext('2d');
+        if (!bgCtx) return false;
+        bgCtx.imageSmoothingEnabled = false;
+    }
+
+    if (!overlayCanvas) {
+        overlayCanvas = document.createElement('canvas');
+        overlayCanvas.id = 'gameOverlayCanvas';
+        overlayCanvas.style.pointerEvents = 'none';
+    }
+    if (!overlayCanvas.parentElement) gameArea.appendChild(overlayCanvas);
+    if (!overlayCtx) {
+        overlayCtx = overlayCanvas.getContext('2d');
+        if (!overlayCtx) return false;
+        overlayCtx.imageSmoothingEnabled = false;
+    }
+
+    minimapCanvas = minimapCanvas || document.getElementById('minimapCanvas');
+    if (!minimapCanvas) return false;
+    if (!minimapCtx) minimapCtx = minimapCanvas.getContext('2d');
+    if (!minimapCtx) return false;
+    minimapCtx.imageSmoothingEnabled = false;
+
+    let minimapSizePx = MINIMAP_SIZE + 'px';
+    if (minimapCanvas.width !== MINIMAP_SIZE || minimapCanvas.height !== MINIMAP_SIZE || minimapCanvas.style.width !== minimapSizePx || minimapCanvas.style.height !== minimapSizePx) {
+        minimapCanvas.width = MINIMAP_SIZE;
+        minimapCanvas.height = MINIMAP_SIZE;
+        minimapCanvas.style.width = MINIMAP_SIZE + 'px';
+        minimapCanvas.style.height = MINIMAP_SIZE + 'px';
+        _minimapStaticCanvas = null;
+        _minimapStaticCtx = null;
+        _minimapStaticDirty = true;
+        _requestStaticCacheCommit();
+    }
+    minimapCtx.setTransform(1, 0, 0, 1, 0, 0);
+    minimapCtx.imageSmoothingEnabled = false;
+
+    viewW = gameArea.clientWidth;
+    viewH = gameArea.clientHeight;
+    let dpr = window.devicePixelRatio || 1;
+    bgCanvas.width = viewW * dpr;
+    bgCanvas.height = viewH * dpr;
+    bgCanvas.style.width = viewW + 'px';
+    bgCanvas.style.height = viewH + 'px';
+    _applyRenderViewPad();
+    canvas.width = viewW * dpr;
+    canvas.height = viewH * dpr;
+    canvas.style.width = viewW + 'px';
+    canvas.style.height = viewH + 'px';
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    bgCtx.imageSmoothingEnabled = false;
+    overlayCtx.imageSmoothingEnabled = false;
+    if (!_renderInitEventsBound) {
+        window.addEventListener('resize', () => {
+            if (!ensureRenderContextsInitialized()) return;
+            invalidateStaticLayerCache();
+        });
+        document.addEventListener('visibilitychange', refreshBackgroundTickMode);
+        _renderInitEventsBound = true;
+    }
+
+    return true;
+}
+
+function updateDefaultToggleButtons() {
+    let btnBuild = document.getElementById('btn-default-build');
+    if (btnBuild) {
+        btnBuild.textContent = `\uD83D\uDD28 New: ${defaultAutoBuildEnabled ? 'ON' : 'OFF'}`;
+        btnBuild.style.borderColor = defaultAutoBuildEnabled ? '#6f6' : '#555';
+        btnBuild.style.color = defaultAutoBuildEnabled ? '#9f9' : '#888';
+        btnBuild.style.background = defaultAutoBuildEnabled ? 'rgba(40,90,40,0.25)' : 'transparent';
+    }
+    let btnAuto = document.getElementById('btn-default-auto-upgrade');
+    if (btnAuto) {
+        btnAuto.textContent = `L+New: ${defaultAutoUpgradeEnabled ? 'ON' : 'OFF'}`;
+        btnAuto.style.borderColor = defaultAutoUpgradeEnabled ? '#4af' : '#555';
+        btnAuto.style.color = defaultAutoUpgradeEnabled ? '#8cf' : '#888';
+        btnAuto.style.background = defaultAutoUpgradeEnabled ? 'rgba(40,70,110,0.25)' : 'transparent';
+    }
+}
+
+function updateIgnoreLevelButton() {
+    let buttons = [
+        document.getElementById('btn-ignore-level'),
+        document.getElementById('btn-ignore-level-popup')
+    ].filter(Boolean);
+    if (buttons.length <= 0) return;
+    for (let btn of buttons) {
+        btn.textContent = `Collapse Same Type: ${ignoreLevelSubgroups ? 'ON' : 'OFF'}`;
+        btn.style.borderColor = ignoreLevelSubgroups ? '#fd0' : '#555';
+        btn.style.color = ignoreLevelSubgroups ? '#fd0' : '#999';
+        btn.style.background = ignoreLevelSubgroups ? 'rgba(110,90,20,0.25)' : '#181818';
+    }
+}
+
+function formatPurchaseMultiplier(value) {
+    return value >= 1024 ? `${Math.floor(value / 1024)}k` : String(value);
+}
+
+function updatePurchaseMultiplierBars() {
+    const bar = document.getElementById('build-multiplier-bar');
+    if (!bar || countBarBusy(bar)) return;
+    // Keep the former 1..65536 stack range, with every intervening level.
+    const maxLevel = Math.min(MAX_THING_LEVEL, 17);
+    const level = Math.max(1, Math.min(maxLevel, Math.floor(Math.log2(buildPurchaseMultiplier)) + 1));
+    buildPurchaseMultiplier = 2 ** (level - 1);
+    bar.innerHTML = countBarHtml(level, 1, maxLevel, { type: 'build' }, 'Build level and stack count', 'L');
+}
+
+function queueResizeForEachActiveUnitSubgroup(mode) {
+    let activeUnits = getActiveUnits();
+    if (!activeUnits || activeUnits.length === 0) return;
+    let groups = new Map();
+    for (let u of activeUnits) {
+        let key = getUnitGroupKey(u);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(u);
+    }
+    for (let group of groups.values()) {
+        if (!group || group.length === 0) continue;
+        if (mode === 'd2' && group.length < 2) continue;
+        let u0 = group[0];
+        let unitType = u0.unitType;
+        let unitLevel = ignoreLevelSubgroups ? null : getUnitBaseLevel(u0);
+        let ids = group.map(u => u.id);
+        queueAction({ action: 'resizeUnitGroup', unitIds: ids, mode, unitType, unitLevel });
+    }
+    setTimeout(updateInfoPanel, 50);
+}
+
+function getNextLevelUpgradeInfo(item) {
+    let stacks = Math.max(1, item.stacks || 1);
+    let level = stackCountToLevel(stacks);
+    let nextLevel = Math.max(1, level + 1);
+    let nextStacksNeeded = getRequiredStacksForLevel(nextLevel);
+    let missingStacks = Math.max(0, nextStacksNeeded - stacks);
+    let key = item instanceof Tower ? item.type : (item.type === 'barrack' ? 'barrack_' + item.unitType : item.type);
+    let def = BASE_CARD_TYPES[key] || { price: 0 };
+    let goldCost = missingStacks * (def.price || 0);
+    let energyNow = item.maxEnergy || 0;
+    let energyNext = item instanceof Tower ? getUpgrademaxEnergy(item, nextLevel) : (calculateItemStats(item.type || 'farm', nextLevel, item.owner).maxEnergy || energyNow);
+    return { nextLevel, missingStacks, goldCost, energyNow, energyNext };
+}
+
+function normalizeBuildingResearchKey(type) {
+    if (!type) return 'farm';
+    if (type === 'barrack') return 'barrack_norm';
+    if (type.startsWith('barrack_')) return type;
+    return type;
+}
+
+function calculateItemStats(type, level, owner = null) {
+    let ownerId = Number.isFinite(owner) ? owner : localPlayerId;
+    let bKey = normalizeBuildingResearchKey(type);
+    let lvl = Math.max(1, clampThingLevel(level));
+    if (!PRECOMPUTED_STATS_MAP_PLAYER[ownerId]) rebuildPrecomputedStatsMapPlayer(ownerId);
+    let playerMap = PRECOMPUTED_STATS_MAP_PLAYER[ownerId];
+    let direct = playerMap && playerMap.building && playerMap.building[bKey] ? playerMap.building[bKey][lvl] : null;
+    if (direct) return direct;
+    return _getBuildingPlayerPrecomputedEntry(ownerId, bKey, lvl);
+}
+
+function ensureStatusState(target) {
+    if (!target) return;
+    if (target.burning === undefined) target.burning = 0;
+    if (target.burnTickDamage === undefined) target.burnTickDamage = 0;
+    if (target.poisoned === undefined) target.poisoned = 0;
+    if (target.poisonTickDamage === undefined) target.poisonTickDamage = 0;
+    if (target.frozen === undefined) target.frozen = 0;
+    if (target.iceTickDamage === undefined) target.iceTickDamage = 0;
+    if (target.wet === undefined) target.wet = 0;
+    if (target.sandy === undefined) target.sandy = 0;
+    if (target.watched === undefined) target.watched = 0;
+    if (target.watchedByTeam === undefined) target.watchedByTeam = -1;
+}
+
+function isEffectImmune(target, effect) {
+    if (!target) return false;
+    if (effect === 'fire' && target.fireResistant) return true;
+    if (effect === 'poison' && target.poisonResistant) return true;
+    if (effect === 'water' && target.waterResistant) return true;
+    if (effect === 'ice' && target.iceResistant) return true;
+    if (effect === 'sand' && target.sandResistant) return true;
+
+    let tType = target.type || '';
+    if (tType === 'fire' && effect === 'fire') return true;
+    if (tType === 'poison' && effect === 'poison') return true;
+    if (tType === 'water' && effect === 'water') return true;
+    if (tType === 'ice' && effect === 'ice') return true;
+    if (tType === 'sand_gun' && effect === 'sand') return true;
+    if (tType === 'watch_tower' && effect === 'watch') return true;
+    if (tType === 'elements' && ['fire', 'poison', 'water', 'ice', 'sand'].includes(effect)) return true;
+    return false;
+}
+
+function _getEffectStatKey(effect, statKind) {
+    if (effect === 'fire') return statKind === 'dps' ? 'burnDps' : 'burnDuration';
+    if (effect === 'poison') return statKind === 'dps' ? 'poisonDps' : 'poisonDuration';
+    if (effect === 'ice') return statKind === 'dps' ? 'freezeDps' : 'freezeDuration';
+    if (effect === 'water') return statKind === 'duration' ? 'wetDuration' : '';
+    if (effect === 'sand') return statKind === 'duration' ? 'sandDuration' : '';
+    if (effect === 'watch') return statKind === 'duration' ? 'watchDuration' : '';
+    return '';
+}
+
+function _getEffectStat(owner, sourceType, level, effect, statKind) {
+    let statKey = _getEffectStatKey(effect, statKind);
+    if (!statKey || !sourceType) return NaN;
+    let ownerId = Number.isFinite(owner) ? owner : localPlayerId;
+    let lvl = Math.max(1, clampThingLevel(level || 1));
+    if (effect === 'watch' && BASE_UNIT_STATS[sourceType]) {
+        return getUnitStatForOwner(ownerId, sourceType, lvl, statKey);
+    }
+    return getBuildingStatForOwner(ownerId, sourceType, lvl, statKey);
+}
+
+function applyStatusEffect(target, effect, level, baseDamage = 0, sourceOwner = null, sourceType = '') {
+    if (!target) return false;
+    ensureStatusState(target);
+    if (isEffectImmune(target, effect)) return false;
+    // (An armed unit stays armed: the movement kernel reads the slowing
+    // statuses (frozen, sandy) from the columns each tick, as Unit.update
+    // does; disarming every unit a tower or floor item touched sent each
+    // through Unit.update again.)
+
+    let lvl = Math.max(1, level || 1);
+    let mappedDuration = _getEffectStat(sourceOwner, sourceType, lvl, effect, 'duration');
+    let mappedDps = _getEffectStat(sourceOwner, sourceType, lvl, effect, 'dps');
+    if (effect === 'fire') {
+        let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (3 + lvl * 0.5);
+        let dur = secondsToTicks(durSec);
+        target.burning = Math.max(target.burning, dur);
+        let d = Number.isFinite(mappedDps) ? mappedDps : Math.max(0.1, baseDamage > 0 ? baseDamage : 0.5);
+        target.burnTickDamage = Math.max(target.burnTickDamage, d);
+    } else if (effect === 'poison') {
+        let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (5 + lvl);
+        let dur = secondsToTicks(durSec);
+        target.poisoned = Math.max(target.poisoned, dur);
+        let d = Number.isFinite(mappedDps) ? mappedDps : Math.max(0.1, baseDamage > 0 ? baseDamage : 0.5);
+        target.poisonTickDamage = Math.max(target.poisonTickDamage, d);
+    } else if (effect === 'ice') {
+        let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (3 + lvl * 0.5);
+        let dur = secondsToTicks(durSec);
+        target.frozen = Math.max(target.frozen, dur);
+        let d = Number.isFinite(mappedDps) ? mappedDps : Math.max(0.2, baseDamage > 0 ? baseDamage : 0.5);
+        target.iceTickDamage = Math.max(target.iceTickDamage, d);
+    } else if (effect === 'water') {
+        let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (6 + lvl);
+        let dur = secondsToTicks(durSec);
+        target.wet = Math.max(target.wet, dur);
+    } else if (effect === 'sand') {
+        let durSec = Number.isFinite(mappedDuration) ? mappedDuration : 9;
+        let dur = secondsToTicks(durSec);
+        target.sandy = Math.max(target.sandy, dur);
+    } else if (effect === 'watch') {
+        let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (4 + lvl);
+        let dur = secondsToTicks(durSec);
+        let teamId = Number.isFinite(sourceOwner) ? Math.floor(sourceOwner) : -1;
+        if (target.watched > 0 && target.watchedByTeam === teamId) target.watched = Math.max(target.watched, dur);
+        else target.watched = dur;
+        target.watchedByTeam = teamId;
+        if (typeof visCoverOnEntityChanged === 'function') visCoverOnEntityChanged(target);
+    }
+    if (typeof Unit === 'undefined' || !(target instanceof Unit)) thingStatusWake(target);
+    return true;
+}
+
+// Buildings and floor items whose statuses are running or whose energy may
+// have run out (the tick's status loop looks at these only, in row-major
+// order): added by status effects and damage, and by gameTick's sweep of a
+// TICK_RATE-th of the items a tick; made anew from every item on every peer
+// at a resync (thingStatusRebuild). An extra member changes nothing.
+let _thingStatusActive = new Set();
+// Buildings that tick their own statuses in their update (towers, barracks,
+// spawners: thingStatusTickSelf), while something may run: the same hooks
+// add them, a tick with nothing left removes them, a resync makes it anew
+// (an extra member changes nothing either).
+let _thingStatusSelf = new Set();
+function thingStatusWake(e) { _thingStatusActive.add(e); _thingStatusSelf.add(e); }
+function thingStatusTickSelf(e) {
+    if (!_thingStatusSelf.has(e)) return false;
+    const gone = tickStatusEffects(e);
+    if (!thingStatusPending(e)) _thingStatusSelf.delete(e);
+    return gone;
+}
+function thingStatusDone(e) { _thingStatusActive.delete(e); }
+function thingStatusPending(e) {
+    return e.burning > 0 || e.poisoned > 0 || e.frozen > 0 || e.wet > 0 || e.sandy > 0 || e.watched > 0 || (e.energy !== undefined && e.energy <= 0);
+}
+// The members in row-major order (a copy: the loop removes some).
+function thingStatusDue() {
+    if (_thingStatusActive.size === 0) return _NO_THINGS;
+    const out = Array.from(_thingStatusActive);
+    out.sort((a, b) => (a.gy * GRID_W + a.gx) - (b.gy * GRID_W + b.gx));
+    return out;
+}
+const _NO_THINGS = Object.freeze([]);
+function thingStatusRebuild() {
+    _thingStatusActive = new Set();
+    for (const item of getCellItemsRowMajor()) if (thingStatusPending(item)) _thingStatusActive.add(item);
+    _thingStatusSelf = new Set();
+    for (const list of [towers, barracks, collectorSpawners]) for (const e of list) if (e) { ensureStatusState(e); if (thingStatusPending(e)) _thingStatusSelf.add(e); }
+}
+
+function tickStatusEffects(target) {
+    if (!target) return false;
+    ensureStatusState(target);
+
+    // (A step's base ticks (simDk): each timer's of them, damage for those
+    // its effect ran.)
+    const dk = simDk;
+    if (target.burning > 0) {
+        const n = Math.min(dk, target.burning);
+        target.burning -= n;
+        if (target.burnTickDamage > 0) {
+            const d = n > 1 ? target.burnTickDamage * n : target.burnTickDamage;
+            target.energy -= d;
+            recordDamageVisual(target, d); shrineDamageTaken(target, d);
+        }
+    }
+    if (target.poisoned > 0) {
+        const n = Math.min(dk, target.poisoned);
+        target.poisoned -= n;
+        if (target.poisonTickDamage > 0) {
+            const d = n > 1 ? target.poisonTickDamage * n : target.poisonTickDamage;
+            target.energy -= d;
+            recordDamageVisual(target, d); shrineDamageTaken(target, d);
+        }
+    }
+    if (target.frozen > 0 && target.wet > 0 && target.iceTickDamage > 0) {
+        const n = Math.min(dk, target.frozen, target.wet), d = n > 1 ? target.iceTickDamage * n : target.iceTickDamage;
+        target.energy -= d;
+        recordDamageVisual(target, d); shrineDamageTaken(target, d);
+    }
+    if (target.frozen > 0) target.frozen -= Math.min(dk, target.frozen);
+    if (target.wet > 0) target.wet -= Math.min(dk, target.wet);
+    if (target.sandy > 0) target.sandy -= Math.min(dk, target.sandy);
+    if (target.watched > 0) {
+        target.watched -= Math.min(dk, target.watched);
+        if (target.watched <= 0) { target.watchedByTeam = -1; if (typeof visCoverOnEntityChanged === 'function') visCoverOnEntityChanged(target); }
+    }
+
+    if (target.energy !== undefined && target.energy <= 0) {
+        target.energy = 0;
+        return true;
+    }
+    return false;
+}
+
+function ensureLevelTextCanvas(target) {
+    let scale = 2;
+    if (!target.textCanvas || !target.textCtx || target._textCanvasScale !== scale) {
+        target.textCanvas = document.createElement('canvas');
+        target.textCanvas.width = 32 * scale;
+        target.textCanvas.height = 48 * scale;
+        target.textCtx = target.textCanvas.getContext('2d');
+        target._textCanvasScale = scale;
+    }
+    return target.textCtx;
+}
+
+const LEVEL_TEXT_SPRITE_CACHE = new Map();
+const LEVEL_TEXT_SPRITE_CACHE_MAX = 512;
+const UNIT_LEVEL_TEXT_SPRITE_CACHE = new Map();
+const UNIT_LEVEL_TEXT_SPRITE_CACHE_MAX = 256;
+
+// A display setting changed (mine amounts, lines, outlines, ranges): what
+// is drawn from caches made under the old setting is made again now, not at
+// the next view switch or resize.
+function applyVisualSettingChange() {
+    if (!gameStarted) return;
+    try { invalidateStaticLayerCache(); } catch { }
+    clearRendererTransientVisualCaches({ preserveTextSprites: true });
+    if (typeof _orderMarkerRevision === 'number') _orderMarkerRevision++;
+    dirtyGrid = true;
+    if (typeof _minimapStaticDirty !== 'undefined') _minimapStaticDirty = true;
+    if (typeof requestInfoPanelRefresh === 'function') requestInfoPanelRefresh(0);
+}
+function clearRendererTransientVisualCaches(options = null) {
+    if (rendererScaleCache) {
+        for (const layer of rendererScaleCache.layers) layer.dispose(rendererScaleCache.renderer.gl);
+        if (typeof rendererScaleCache.renderer.disposeFrameColumns === 'function') rendererScaleCache.renderer.disposeFrameColumns();
+        rendererScaleCache = null;
+    }
+    rendererChunkCache = null;
+    rendererScaleActive = false;
+    let preserveTextSprites = !!(options && options.preserveTextSprites);
+    if (!preserveTextSprites) {
+        LEVEL_TEXT_SPRITE_CACHE.clear();
+        UNIT_LEVEL_TEXT_SPRITE_CACHE.clear();
+        renderer3dTopTextureCache.clear();
+        renderer3dExact2DTextureCache.clear();
+        renderer3dFlatGeneration++;
+        if (renderer3dInstance && renderer3dInstance.topTextureCache && typeof renderer3dInstance.topTextureCache.clear === 'function') {
+            for (let entry of renderer3dInstance.topTextureCache.values()) renderer3dInstance.gl.deleteTexture(entry.texture);
+            renderer3dInstance.topTextureCache.clear();
+        }
+    }
+    renderer3dOverlapFadeState.clear();
+    _litTintCache.clear();
+}
+
+function _getUiSpriteScale() {
+    // Render tiny text/glyph sprites at higher internal resolution to reduce color interpolation.
+    let dpr = Number(window.devicePixelRatio) || 1;
+    return Math.max(1, Math.min(3, Math.round(dpr * 2)));
+}
+
+function _trimSpriteCache(cache, maxEntries) {
+    if (cache.size <= maxEntries) return;
+    let removeCount = cache.size - maxEntries;
+    for (let key of cache.keys()) {
+        cache.delete(key);
+        removeCount--;
+        if (removeCount <= 0) break;
+    }
+}
+
+function _getBuildingLevelTextSprite(label) {
+    let txt = String(label || '');
+    let isBlocked = txt.includes('|BLOCKED');
+    let displayText = txt.replace('|BLOCKED', '').trim();
+    let scale = _getUiSpriteScale();
+    let key = displayText + '|' + scale + '|' + (isBlocked ? 'BLOCKED' : '');
+    let cached = LEVEL_TEXT_SPRITE_CACHE.get(key);
+    if (cached) return cached;
+
+    let width = 40;
+    let height = 48;
+    let canvas = document.createElement('canvas');
+    let c = canvas.getContext('2d');
+
+    // Use smaller font if three-part (with ->) or blocked
+    let isThreePart = (displayText.match(/->/g) || []).length === 2;
+    let fontSize = isThreePart || isBlocked ? 6 : 8;
+
+    c.font = `700 ${fontSize}px Segoe UI, Arial, sans-serif`;
+    width = Math.max(width, Math.ceil(c.measureText(displayText).width + 10));
+    canvas.width = width * scale;
+    canvas.height = height * scale;
+    c = canvas.getContext('2d');
+    c.imageSmoothingEnabled = false;
+    c.setTransform(scale, 0, 0, scale, 0, 0);
+    c.clearRect(0, 0, width, height);
+    c.textAlign = 'left';
+    c.textBaseline = 'middle';
+    c.font = `700 ${fontSize}px Segoe UI, Arial, sans-serif`;
+    c.lineJoin = 'round';
+    c.strokeStyle = 'rgba(0,0,0,0.95)';
+    c.lineWidth = 2;
+
+    if (isBlocked && displayText.includes('->')) {
+        // Parse either L1->L3->L5 or L1->L5 format
+        let parts = displayText.split('->');
+        if (parts.length === 3) {
+            // Three-part: L0->L1->L3
+            let part1 = parts[0]; // L0
+            let part2 = parts[1]; // L1
+            let part3 = parts[2]; // L3
+            let arrow = '->';
+
+            let fullText = displayText;
+            let startX = (width - c.measureText(fullText).width) * 0.5;
+
+            let x1 = startX;
+            let x2 = x1 + c.measureText(part1 + arrow).width;
+            let x3 = x2 + c.measureText(part2 + arrow).width;
+
+            // Stroke all
+            c.strokeText(part1, x1, 11);
+            c.strokeText(arrow, x1 + c.measureText(part1).width, 11);
+            c.strokeText(part2, x2, 11);
+            c.strokeText(arrow, x2 + c.measureText(part2).width, 11);
+            c.strokeText(part3, x3, 11);
+
+            // Fill - normal for L0->L1, red for L3
+            c.fillStyle = '#eee';
+            c.fillText(part1, x1, 11);
+            c.fillText(arrow, x1 + c.measureText(part1).width, 11);
+            c.fillText(part2, x2, 11);
+            c.fillText(arrow, x2 + c.measureText(part2).width, 11);
+            c.fillStyle = '#ff6666';  // Bright red
+            c.fillText(part3, x3, 11);
+        } else if (parts.length === 2) {
+            // Two-part with blocked (L1->L5|BLOCKED)
+            let currentText = parts[0];
+            let arrow = '->';
+            let potentialText = parts[1];
+
+            let startX = (width - c.measureText(displayText).width) * 0.5;
+            let x1 = startX;
+            let x2 = x1 + c.measureText(currentText + arrow).width;
+
+            // Stroke all
+            c.strokeText(currentText, x1, 11);
+            c.strokeText(arrow, x1 + c.measureText(currentText).width, 11);
+            c.strokeText(potentialText, x2, 11);
+
+            // Fill - normal for current and arrow, bright red for potential
+            c.fillStyle = '#eee';
+            c.fillText(currentText, x1, 11);
+            c.fillText(arrow, x1 + c.measureText(currentText).width, 11);
+            c.fillStyle = '#ff6666';  // Bright red
+            c.fillText(potentialText, x2, 11);
+        }
+    } else if (displayText.includes('->')) {
+        // Normal two-part (L1->L3)
+        let arrowIdx = displayText.indexOf('->');
+        let currentText = displayText.substring(0, arrowIdx);
+        let arrow = '->';
+        let nextText = displayText.substring(arrowIdx + 2);
+
+        let fullWidth = c.measureText(displayText).width;
+        let startX = (width - fullWidth) * 0.5;
+        let x1 = startX;
+        let x2 = x1 + c.measureText(currentText + arrow).width;
+
+        // Stroke all
+        c.strokeText(currentText, x1, 11);
+        c.strokeText(arrow, x1 + c.measureText(currentText).width, 11);
+        c.strokeText(nextText, x2, 11);
+
+        // Fill - all normal
+        c.fillStyle = '#eee';
+        c.fillText(currentText, x1, 11);
+        c.fillText(arrow, x1 + c.measureText(currentText).width, 11);
+        c.fillText(nextText, x2, 11);
+    } else {
+        // Single level (L1) - use center alignment
+        c.textAlign = 'center';
+        c.strokeText(displayText, width * 0.5, 11);
+        c.fillStyle = '#eee';
+        c.fillText(displayText, width * 0.5, 11);
+    }
+
+    cached = { canvas, scale, width, height };
+    LEVEL_TEXT_SPRITE_CACHE.set(key, cached);
+    _trimSpriteCache(LEVEL_TEXT_SPRITE_CACHE, LEVEL_TEXT_SPRITE_CACHE_MAX);
+    return cached;
+}
+
+function _bindBuildingLevelTextSprite(target, label) {
+    if (!target) return;
+    let sprite = _getBuildingLevelTextSprite(label);
+    target.textCanvas = sprite.canvas;
+    target.textCtx = null;
+    target._textCanvasScale = sprite.scale;
+    target._textCanvasWidth = sprite.width;
+    target._textCanvasHeight = sprite.height;
+    target._levelTextLabel = String(label || '');
+}
+
+function _getUnitLevelTextSprite(label) {
+    let txt = String(label || '');
+    let scale = _getUiSpriteScale();
+    let key = txt + '|' + scale;
+    let cached = UNIT_LEVEL_TEXT_SPRITE_CACHE.get(key);
+    if (cached) return cached;
+
+    let width = 28;
+    let height = 14;
+    let canvas = document.createElement('canvas');
+    canvas.width = width * scale;
+    canvas.height = height * scale;
+    let c = canvas.getContext('2d');
+    c.imageSmoothingEnabled = false;
+    c.setTransform(scale, 0, 0, scale, 0, 0);
+    c.clearRect(0, 0, width, height);
+    c.font = '700 7px Segoe UI, Arial, sans-serif';
+    c.textAlign = 'center';
+    c.textBaseline = 'bottom';
+    c.fillStyle = '#ddd';
+    c.strokeStyle = 'rgba(0,0,0,0.95)';
+    c.lineJoin = 'round';
+    c.lineWidth = 1.5;
+    c.strokeText(txt, width * 0.5, height - 1);
+    c.fillText(txt, width * 0.5, height - 1);
+
+    cached = { canvas, width, height };
+    UNIT_LEVEL_TEXT_SPRITE_CACHE.set(key, cached);
+    _trimSpriteCache(UNIT_LEVEL_TEXT_SPRITE_CACHE, UNIT_LEVEL_TEXT_SPRITE_CACHE_MAX);
+    return cached;
+}
+
+// Frame-local drawImage queue: batches by source image to improve sprite cache locality.
+let _frameDrawImageQueueActive = false;
+// Insertion-ordered buckets preserve the existing depth/image replay order.
+const _frameDrawImageBuckets = new Map();
+let _frameDrawImageContexts = new Set();
+let _frameDrawImageCurrentZ = 0;
+let _frameDrawImageFrameId = 0;
+let _frameDrawImageIdCounter = 1;
+const _frameDrawImageIdBySource = new WeakMap();
+const _frameDrawImageCtxStateCache = new WeakMap();
+
+function _setDrawImageTrackedTransform(ctx, a, b, c, d, e, f) {
+    ctx.setTransform(a, b, c, d, e, f);
+    let st = _frameDrawImageCtxStateCache.get(ctx);
+    if (!st) st = {};
+    st.frameId = _frameDrawImageFrameId;
+    st.ta = a; st.tb = b; st.tc = c; st.td = d; st.te = e; st.tf = f;
+    _frameDrawImageCtxStateCache.set(ctx, st);
+}
+
+function _captureDrawImageCtxState(ctx) {
+    let st = _frameDrawImageCtxStateCache.get(ctx);
+    if (!st) st = {};
+    if (st.frameId !== _frameDrawImageFrameId ||
+        !Number.isFinite(st.ta) || !Number.isFinite(st.tb) || !Number.isFinite(st.tc) ||
+        !Number.isFinite(st.td) || !Number.isFinite(st.te) || !Number.isFinite(st.tf)) {
+        let t = ctx.getTransform();
+        st.frameId = _frameDrawImageFrameId;
+        st.ta = t.a;
+        st.tb = t.b;
+        st.tc = t.c;
+        st.td = t.d;
+        st.te = t.e;
+        st.tf = t.f;
+    }
+    st.alpha = ctx.globalAlpha;
+    st.comp = ctx.globalCompositeOperation;
+    st.smooth = ctx.imageSmoothingEnabled;
+    st.filter = ctx.filter || 'none';
+    _frameDrawImageCtxStateCache.set(ctx, st);
+    return st;
+}
+
+function beginFrameDrawImageQueue() {
+    _frameDrawImageQueueActive = true;
+    _frameDrawImageFrameId++;
+    _frameDrawImageBuckets.clear();
+    _frameDrawImageContexts.clear();
+    _frameDrawImageCurrentZ = 0;
+}
+
+function setFrameDrawImageDepth(z) {
+    _frameDrawImageCurrentZ = Number.isFinite(z) ? z : 0;
+}
+
+function queueDrawImage(ctx, image, a0, a1, a2, a3, a4, a5, a6, a7) {
+    if (!ctx || !image) return;
+    let argc = arguments.length - 2;
+
+    if (!_frameDrawImageQueueActive || ctx.__drawImagesImmediately) {
+        if (argc === 2) ctx.drawImage(image, a0, a1);
+        else if (argc === 4) ctx.drawImage(image, a0, a1, a2, a3);
+        else if (argc === 8) ctx.drawImage(image, a0, a1, a2, a3, a4, a5, a6, a7);
+        else ctx.drawImage(image, a0, a1);
+        return;
+    }
+
+    _frameDrawImageContexts.add(ctx);
+
+    let imageId = _frameDrawImageIdBySource.get(image);
+    if (!imageId) {
+        imageId = _frameDrawImageIdCounter++;
+        _frameDrawImageIdBySource.set(image, imageId);
+    }
+
+    let st = _captureDrawImageCtxState(ctx);
+    let depthBucket = _frameDrawImageBuckets.get(_frameDrawImageCurrentZ);
+    if (!depthBucket) {
+        depthBucket = new Map();
+        _frameDrawImageBuckets.set(_frameDrawImageCurrentZ, depthBucket);
+    }
+    let imageBucket = depthBucket.get(imageId);
+    if (!imageBucket) {
+        imageBucket = [];
+        depthBucket.set(imageId, imageBucket);
+    }
+    imageBucket.push({
+        ctx,
+        image,
+        argc,
+        a0,
+        a1,
+        a2,
+        a3,
+        a4,
+        a5,
+        a6,
+        a7,
+        ta: st.ta,
+        tb: st.tb,
+        tc: st.tc,
+        td: st.td,
+        te: st.te,
+        tf: st.tf,
+        alpha: st.alpha,
+        comp: st.comp,
+        smooth: st.smooth,
+        filter: st.filter
+    });
+}
+
+function replayDrawImageCommand(cmd, targetCtx, stateMap) {
+    if (!targetCtx) return;
+    let s = stateMap.get(targetCtx);
+    if (!s || s.ta !== cmd.ta || s.tb !== cmd.tb || s.tc !== cmd.tc || s.td !== cmd.td || s.te !== cmd.te || s.tf !== cmd.tf) {
+        targetCtx.setTransform(cmd.ta, cmd.tb, cmd.tc, cmd.td, cmd.te, cmd.tf);
+        if (!s) s = {};
+        s.ta = cmd.ta; s.tb = cmd.tb; s.tc = cmd.tc; s.td = cmd.td; s.te = cmd.te; s.tf = cmd.tf;
+    }
+    if (!s || s.alpha !== cmd.alpha) {
+        targetCtx.globalAlpha = cmd.alpha;
+        if (!s) s = {};
+        s.alpha = cmd.alpha;
+    }
+    if (!s || s.comp !== cmd.comp) {
+        targetCtx.globalCompositeOperation = cmd.comp;
+        if (!s) s = {};
+        s.comp = cmd.comp;
+    }
+    if (!s || s.smooth !== cmd.smooth) {
+        targetCtx.imageSmoothingEnabled = cmd.smooth;
+        if (!s) s = {};
+        s.smooth = cmd.smooth;
+    }
+    if (!s || s.filter !== cmd.filter) {
+        targetCtx.filter = cmd.filter;
+        if (!s) s = {};
+        s.filter = cmd.filter;
+    }
+    stateMap.set(targetCtx, s);
+
+    if (cmd.argc === 2) targetCtx.drawImage(cmd.image, cmd.a0, cmd.a1);
+    else if (cmd.argc === 4) targetCtx.drawImage(cmd.image, cmd.a0, cmd.a1, cmd.a2, cmd.a3);
+    else if (cmd.argc === 8) targetCtx.drawImage(cmd.image, cmd.a0, cmd.a1, cmd.a2, cmd.a3, cmd.a4, cmd.a5, cmd.a6, cmd.a7);
+    else targetCtx.drawImage(cmd.image, cmd.a0, cmd.a1);
+}
+
+function flushFrameDrawImageQueue() {
+    if (!_frameDrawImageQueueActive) return;
+    if (_frameDrawImageBuckets.size === 0) {
+        _frameDrawImageQueueActive = false;
+        return;
+    }
+
+    let zOrder = Array.from(_frameDrawImageBuckets.keys());
+    zOrder.sort((a, b) => b - a); // Furthest/highest z first, closest last.
+
+    let liveStateByCtx = new Map();
+    let layerStateByCtx = new Map();
+    for (let c of _frameDrawImageContexts) c.save();
+    let layerContextsToRestore = [];
+    for (let z of zOrder) {
+        let layerCtx = renderer3dLayerContexts.get(z);
+        if (layerCtx) {
+            layerCtx.save();
+            layerContextsToRestore.push(layerCtx);
+        }
+        for (let cmds of _frameDrawImageBuckets.get(z).values()) {
+            for (let cmd of cmds) {
+                replayDrawImageCommand(cmd, cmd.ctx, liveStateByCtx);
+                if (layerCtx) {
+                    replayDrawImageCommand(cmd, layerCtx, layerStateByCtx);
+                    let stats = renderer3dLayerStats.get(z);
+                    if (stats) stats.commandCount++;
+                }
+            }
+        }
+    }
+
+    for (let c of _frameDrawImageContexts) c.restore();
+    for (let c of layerContextsToRestore) c.restore();
+
+    _frameDrawImageBuckets.clear();
+    _frameDrawImageContexts.clear();
+    _frameDrawImageQueueActive = false;
+}
+
+function ensureRenderer3DLayerCanvas(z) {
+    let dpr = window.devicePixelRatio || 1;
+    let width = Math.max(1, Math.floor(viewW * dpr));
+    let height = Math.max(1, Math.floor(viewH * dpr));
+    let layerCanvas = renderer3dLayerCanvases.get(z);
+    let layerCtx = renderer3dLayerContexts.get(z);
+    if (!layerCanvas || layerCanvas.width !== width || layerCanvas.height !== height) {
+        layerCanvas = document.createElement('canvas');
+        layerCanvas.width = width;
+        layerCanvas.height = height;
+        layerCtx = layerCanvas.getContext('2d');
+        layerCtx.imageSmoothingEnabled = false;
+        renderer3dLayerCanvases.set(z, layerCanvas);
+        renderer3dLayerContexts.set(z, layerCtx);
+    }
+    return { canvas: layerCanvas, ctx: layerCtx };
+}
+
+function beginRenderer3DLayerCapture() {
+    for (let config of renderer3dLayerConfigs) {
+        let layer = ensureRenderer3DLayerCanvas(config.z);
+        layer.ctx.setTransform(1, 0, 0, 1, 0, 0);
+        layer.ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
+        layer.ctx.globalAlpha = 1;
+        layer.ctx.globalCompositeOperation = 'source-over';
+        layer.ctx.filter = 'none';
+        layer.ctx.imageSmoothingEnabled = false;
+        renderer3dLayerStats.set(config.z, { commandCount: 0 });
+    }
+}
+
+function build3DLayerFrameData() {
+    let layers = [];
+    if (bgCanvas) {
+        layers.push({
+            key: 'background',
+            canvas: bgCanvas,
+            slices: 1,
+            thickness: 0.02,
+            opacity: 1
+        });
+    } else {
+        let fallbackBackground = renderer3dLayerCanvases.get(DRAW_Z_BACKGROUND);
+        if (fallbackBackground) {
+            layers.push({
+                key: 'background',
+                canvas: fallbackBackground,
+                slices: 1,
+                thickness: 0.02,
+                opacity: 1
+            });
+        }
+    }
+
+    for (let config of renderer3dLayerConfigs) {
+        if (config.z === DRAW_Z_BACKGROUND && bgCanvas) continue;
+        let stats = renderer3dLayerStats.get(config.z);
+        let canvasForLayer = renderer3dLayerCanvases.get(config.z);
+        if (!canvasForLayer || !stats || stats.commandCount <= 0) continue;
+        layers.push({
+            key: config.key,
+            canvas: canvasForLayer,
+            slices: config.slices,
+            thickness: config.thickness,
+            opacity: config.opacity
+        });
+    }
+
+    if (layers.length <= 0) return null;
+    return {
+        layers,
+        viewportWidth: viewW,
+        viewportHeight: viewH,
+        camera: {
+            zoom: camera.zoom
+        }
+    };
+}
+
+function drawLevelTextCache(ctx, target, x, y) {
+    if (!target || !target.textCanvas || !target._textCanvasScale) return;
+    let label = String(getLevelLabelText(target) || '');
+    if (target._levelTextLabel !== label) updateItemTextCache(target);
+    let width = Math.max(32, Math.floor(Number(target._textCanvasWidth) || 32));
+    let height = Math.max(48, Math.floor(Number(target._textCanvasHeight) || 48));
+    let dx = Math.round(x - width * 0.5);
+    let dy = Math.round(y - 24);
+    queueDrawImage(ctx, target.textCanvas, dx, dy, width, height);
+}
+
+function updateItemTextCache(item) {
+    let label = getLevelLabelText(item);
+    _bindBuildingLevelTextSprite(item, label);
+}

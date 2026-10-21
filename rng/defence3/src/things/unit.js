@@ -4228,6 +4228,7 @@ function simMoveRun() {
     if (typeof _flowTables === 'function') _flowTables();
     const occupancy = typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED;
     const chunks = occupancy ? occupancyPrepareMovement() : Math.ceil(n / CH);
+    if(occupancy&&typeof trafficBeforeMovement==='function')trafficBeforeMovement();
     const outputSlots = occupancy ? n : chunks * CH;
     // (The flow looks shared by the kernel's threads: see mv.rs look_cache.)
     if (!_simMoveLookC) { _simMoveLookC = simHeapArray(Int32Array, SIM_MOVE_LOOKC_ENTRIES * 16); _simMoveLookC.fill(0); simParallelBind('mv.lookc', _simMoveLookC); }
@@ -4317,6 +4318,7 @@ function simMoveRun() {
         }
     }
     if (P[54] === 1) _simMoveSepListed(chunks, CH);
+    if(occupancy&&typeof trafficAfterMovement==='function')trafficAfterMovement();
 }
 
 // The pushed units the epilogue listed (sep.ex per chunk): blocked on the way

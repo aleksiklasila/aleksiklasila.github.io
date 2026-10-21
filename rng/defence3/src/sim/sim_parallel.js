@@ -31,17 +31,17 @@ const SIM_PAR_GEN = 0, SIM_PAR_KERNEL = 1, SIM_PAR_NEXT = 2, SIM_PAR_TOTAL = 3, 
 // the next one, so a pipeline runs to its end on the helpers. A lane is
 // rewritten only once closed and empty (no claim in flight), so a late
 // claim can never run a chunk of the next job.
-const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 12;
+const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 13;
 const SIM_PAR_BG_ID = 5, SIM_PAR_BG_READERS = 6, SIM_PAR_BG_STAGE = 7, SIM_PAR_BG_STAGES = 24;
 // (Control words: SIM_PAR_BG_BASE + lanes * 8, rounded up.)
-const SIM_PAR_CTL_WORDS = 128;
+const SIM_PAR_CTL_WORDS = 160;
 // Bulk lanes (every live field remade over a new navigation build,
 // SIM_LANE_NAVX): at most SIM_PAR_BG_CAP helpers inside their chunks at once
 // (helpers - 3, at least 1; per lane at SIM_PAR_BG_RUN + lane), so the
 // tick's foreground kernels always find helpers (all of them deep in a
 // remake left the movement kernel to this thread alone: 114 ms ticks at
 // 400k a team). Where chunks run never changes what they make.
-const SIM_PAR_BG_CAP = 105, SIM_PAR_BG_RUN = 106;
+const SIM_PAR_BG_CAP = 113, SIM_PAR_BG_RUN = 114;
 // A bulk lane behind its deadline (a navigation rebuild's window ending with
 // its fields not made: flownav.js navTick): its chunks taken right after the
 // tick's own lanes (the first SIM_PAR_BG_RUSH_AT of SIM_PAR_BG_ORDER: tick,
@@ -50,10 +50,10 @@ const SIM_PAR_BG_CAP = 105, SIM_PAR_BG_RUN = 106;
 // once (simParallelBulkRush); -1 none. (The install made what was left on
 // the simulation thread: 60-130 ms ticks in the chaos scenario's bursts,
 // the helpers busy with the tiers before it.)
-const SIM_PAR_BG_FIRST = 120, SIM_PAR_BG_RUSH_AT = 5;
+const SIM_PAR_BG_FIRST = 128, SIM_PAR_BG_RUSH_AT = 5;
 // A helper's kernel threw (the chunk still counts as done, so nobody waits
 // forever): the simulation thread throws at its next wait.
-const SIM_PAR_ERR = 104;
+const SIM_PAR_ERR = 112;
 function _simParCheckErr(ctl) {
     if (Atomics.load(ctl, SIM_PAR_ERR) !== 0) { Atomics.store(ctl, SIM_PAR_ERR, 0); throw new Error('a simulation helper kernel failed (see the helper log)'); }
 }
@@ -77,7 +77,8 @@ function _simParCheckErr(ctl) {
 // SIM_LANE_GROW: the wasm memory grown ahead of need (sim_wasm.js
 // _simHeapGrowAhead), never waited for.
 const SIM_LANE_TICK = 0, SIM_LANE_LONG = 1, SIM_LANE_T10 = 2, SIM_LANE_T5 = 3, SIM_LANE_T1 = 4, SIM_LANE_T05 = 5, SIM_LANE_IX = 6, SIM_LANE_BUILD = 7, SIM_LANE_NAV = 8, SIM_LANE_NAVX = 9, SIM_LANE_HASH = 10, SIM_LANE_GROW = 11;
-const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_GROW, SIM_LANE_NAV, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_T1, SIM_LANE_T05, SIM_LANE_NAVX, SIM_LANE_BUILD, SIM_LANE_LONG];
+const SIM_LANE_TRAFFIC = 12;
+const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_GROW, SIM_LANE_NAV, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_T1, SIM_LANE_T05, SIM_LANE_NAVX, SIM_LANE_BUILD, SIM_LANE_LONG];
 
 // A typed array in shared memory when helpers may use it: in the wasm heap
 // once it is up (freed when collected, as simHeapArrayAuto's), so the Rust
@@ -176,6 +177,11 @@ const SIM_REROUTE_TICKS = 32;
 const SIM_KERNEL_SEP_PACK = 50, SIM_KERNEL_SEP_MARK = 51, SIM_KERNEL_SEP_PAIRS = 52, SIM_KERNEL_ZERO = 53, SIM_KERNEL_SPATIAL_PREFIX = 54;
 const SIM_KERNEL_AREA_BOX = 55, SIM_KERNEL_INDEX_MERGE = 56;
 const SIM_KERNEL_MOVE_OCCUPANCY = 89;
+const SIM_KERNEL_TRAFFIC_CAPTURE=93,SIM_KERNEL_TRAFFIC_SOLVE=94,SIM_KERNEL_TRAFFIC_OUTPUT=95,SIM_KERNEL_TRAFFIC_MASK=96;
+const _simTrafficW=_simWK(['traffic.config','occ.bits','mv.wall']);
+for(const [id,name]of [[SIM_KERNEL_TRAFFIC_CAPTURE,'traffic_capture'],[SIM_KERNEL_TRAFFIC_SOLVE,'traffic_solve'],[SIM_KERNEL_TRAFFIC_OUTPUT,'traffic_output'],[SIM_KERNEL_TRAFFIC_MASK,'traffic_mask']]){
+    SIM_KERNELS[id]=(R,P,c)=>_simRust(_simTrafficW,P,c,name,'TRAFFIC');
+}
 const _simOccW = _simWK(['occ.bits','occ.mask','occ.x','occ.y','occ.radius','occ.layer','occ.active',
     'unit.x','unit.y','unit.prevX','unit.prevY','unit.vx','unit.vy','unit.dead','unit.live',
     'unit.spTile','unit.sepKey','unit.spArea','unit.spMvOld','unit.spMvNew','unit.spMvOwn','unit.owner','unit.spOwner',
@@ -1208,6 +1214,8 @@ function _simMoveWasm(R, P) {
         _simMoveWFill = _simMoveW.binds; _simMoveWArgs = _simWasmArgs;
     }
     _simWasmArgF.set(P);
+    const traffic=R['traffic.config'];
+    _simWasmArgI[456]=traffic?_simWEnc(traffic.byteOffset):0;
     return true;
 }
 
@@ -1514,7 +1522,7 @@ function simParallelHelperMain() {
                     const b = SIM_PAR_BG_BASE + lane * 8;
                     if (Atomics.load(ctl, b + SIM_PAR_BG_ID) < 0 || regVer < ctl[b + SIM_PAR_BG_REGVER]) continue;
                     // (A bulk lane: only while under its cap of helpers.)
-                    const capped = lane === SIM_LANE_NAVX;
+                    const capped = lane === SIM_LANE_NAVX || lane === SIM_LANE_TRAFFIC;
                     if (capped && Atomics.add(ctl, SIM_PAR_BG_RUN + lane, 1) >= Atomics.load(ctl, SIM_PAR_BG_CAP)) { Atomics.sub(ctl, SIM_PAR_BG_RUN + lane, 1); continue; }
                     try { ran = _simBgClaim(ctl, lane, bgChain, bgParams[lane], regVer) === 1; }
                     finally { if (capped) Atomics.sub(ctl, SIM_PAR_BG_RUN + lane, 1); }

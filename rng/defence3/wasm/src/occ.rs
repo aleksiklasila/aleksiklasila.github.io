@@ -184,6 +184,10 @@ unsafe fn motion(g:&Grid,ox:i32,oy:i32,nx:i32,ny:i32,r:i32,layer:i32)->(i32,i32)
     if (nx-ox).abs().max((ny-oy).abs())<=g.cell {
         return if free(g,nx,ny,r,layer,ox,oy,r,layer) {(nx,ny)}else{(ox,oy)};
     }
+    let cx=cell_coord(g,ox);let cy=cell_coord(g,oy);
+    if cell_coord(g,ny)==cy && cx>=r-1 && cx+r<=g.w && cy>=r-1 && cy+r<=g.h {
+        return horizontal_motion(g,ox,oy,nx,ny,r,layer,cx,cy);
+    }
     let dx=nx-ox;let dy=ny-oy;let steps=idiv(dx.abs().max(dy.abs())+g.cell-1,g.cell).max(1);
     let mut x=ox;let mut y=oy;
     for i in 1..=steps {
@@ -191,6 +195,38 @@ unsafe fn motion(g:&Grid,ox:i32,oy:i32,nx:i32,ny:i32,r:i32,layer:i32)->(i32,i32)
         if !free(g,tx,ty,r,layer,ox,oy,r,layer){break;}x=tx;y=ty;
     }
     (x,y)
+}
+
+// A same-row sweep tests newly entered row spans a word at a time instead
+// of re-testing a complete disk at every intermediate cell. Convert the
+// first hit back to the original discrete sweep step, preserving positions.
+#[inline(never)]
+unsafe fn horizontal_motion(g:&Grid,ox:i32,oy:i32,nx:i32,ny:i32,r:i32,layer:i32,cx:i32,cy:i32)->(i32,i32){
+    let dx=nx-ox;let dy=ny-oy;let target=cell_coord(g,nx);
+    let mut allowed=target.max(r-1).min(g.w-r);
+    for row in 1-r..r{
+        let hw=half(g,r,row);if hw<0{continue;}
+        let base=g.bits.add((layer*g.plane+(cy+row)*g.stride) as usize);
+        if dx>0{
+            let left=cx+hw+1;let right=allowed+hw;
+            if right>=left{for word in (left>>5)..=(right>>5){
+                let hit=*base.add(word as usize)&word_mask(left,right,word);
+                if hit!=0{allowed=allowed.min(word*32+hit.trailing_zeros() as i32-hw-1);break;}
+            }}
+        }else{
+            let left=allowed-hw;let right=cx-hw-1;
+            if right>=left{let mut word=right>>5;while word>=left>>5{
+                let hit=*base.add(word as usize)&word_mask(left,right,word);
+                if hit!=0{allowed=allowed.max(word*32+31-hit.leading_zeros() as i32+hw+1);break;}word-=1;
+            }}
+        }
+        if allowed==cx{break;}
+    }
+    if allowed==target{return (nx,ny);}
+    let steps=idiv(dx.abs().max(dy.abs())+g.cell-1,g.cell).max(1);
+    let threshold=if dx>0{(allowed+1)*g.cell-ox}else{ox-allowed*g.cell+1};
+    let first=idiv(threshold*steps+dx.abs()-1,dx.abs());let done=(first-1).max(0).min(steps);
+    (ox+idiv(dx*done,steps),oy+idiv(dy*done,steps))
 }
 
 
@@ -217,12 +253,14 @@ impl MoveGrid {
     }
     pub(super) unsafe fn scalar_lane(&self){*self.stats.add(7)+=1;}
     pub(super) unsafe fn reset(&self){core::ptr::write_bytes(self.stats,0,8);}
+    pub(super) unsafe fn layer_mass(&self,s:usize)->(i32,i32){
+        let r=*self.rr.add(s) as i32;(*self.layer.add(s) as i32,(3*r*r-3).max(1))
+    }
     #[inline(never)]
-    pub(super) unsafe fn position(&self,s:usize,nx:i32,ny:i32)->(i32,i32) {
+    pub(super) unsafe fn preview(&self,s:usize,nx:i32,ny:i32)->(i32,i32) {
         if *self.active.add(s)==0 {return (nx,ny);}
         let ox=*self.xx.add(s);let oy=*self.yy.add(s);
         if nx==ox && ny==oy {return (nx,ny);}
-        *self.stats.add(1)+=1;
         let r=*self.rr.add(s) as i32;let layer=*self.layer.add(s) as i32;
         let limit=(self.blockq/2-(r+32)*self.g.cell).max(0);
         let mut tx=ox;let mut ty=oy;
@@ -234,7 +272,28 @@ impl MoveGrid {
                 (tx,ty)=motion(&self.g,ox,oy,nx,oy,r,layer);
                 if tx==ox && ty==oy {occdiag!(&self.g,44);(tx,ty)=motion(&self.g,ox,oy,ox,ny,r,layer);}
             }else if tx==ox && ty==oy {occdiag!(&self.g,48);}
-        }else{*self.stats.add(5)+=1;}
+        }
+        (tx,ty)
+    }
+    #[inline(never)]
+    pub(super) unsafe fn position(&self,s:usize,nx:i32,ny:i32)->(i32,i32) {
+        if *self.active.add(s)==0 {return (nx,ny);}
+        let ox=*self.xx.add(s);let oy=*self.yy.add(s);
+        if nx==ox && ny==oy{return (nx,ny);}
+        let (tx,ty)=self.preview(s,nx,ny);
+        self.commit_preview(s,tx,ty,nx,ny)
+    }
+    // Only after preview, with no intervening bitmap writer in this job.
+    #[inline(never)]
+    pub(super) unsafe fn commit_preview(&self,s:usize,tx:i32,ty:i32,nx:i32,ny:i32)->(i32,i32) {
+        if *self.active.add(s)==0{return (tx,ty);}
+        let ox=*self.xx.add(s);let oy=*self.yy.add(s);
+        if nx==ox && ny==oy{return (tx,ty);}
+        *self.stats.add(1)+=1;
+        let r=*self.rr.add(s) as i32;let layer=*self.layer.add(s) as i32;
+        let limit=(self.blockq/2-(r+32)*self.g.cell).max(0);
+        if nx<self.bx*self.blockq-limit || nx>=(self.bx+1)*self.blockq+limit
+            || ny<self.by*self.blockq-limit || ny>=(self.by+1)*self.blockq+limit {*self.stats.add(5)+=1;}
         if tx!=ox || ty!=oy {
             if cell_coord(&self.g,tx)!=cell_coord(&self.g,ox) || cell_coord(&self.g,ty)!=cell_coord(&self.g,oy) {
                 clear_or_mark(&self.g,ox,oy,r,layer,false);

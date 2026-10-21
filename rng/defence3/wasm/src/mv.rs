@@ -280,6 +280,8 @@ struct NavP {
 struct Mv {
     area_only: bool,
     occ: *const super::occ::MoveGrid,
+    traffic: *const i32,
+    traffic_mode: i32,
     // Occupancy jobs may end inside a four-lane group. Stores must touch
     // only these owned slots; masked full-width RMW would race a helper.
     span_n: usize,
@@ -589,6 +591,8 @@ impl Mv {
         Mv {
             area_only: rd(f,47)==1.0,
             occ: core::ptr::null(),
+            traffic: p!(456),
+            traffic_mode: {let c:*const i32=p!(456);if c.is_null(){0}else{*c}},
             span_n: 4,
             #[cfg(feature="prof")]
             skip_hold_stores: true,
@@ -1615,17 +1619,47 @@ unsafe fn fire(m: &Mv, s: usize) {
 #[inline(always)]
 unsafe fn checked_position(m:&Mv,s:usize,x:f64,y:f64)->(f64,f64) {
     if m.occ.is_null(){return (x,y);}
-    let nx=js_round(x*8.0) as i32;let ny=js_round(y*8.0) as i32;
+    if m.traffic_mode==0{return checked_position_legacy(m,s,x,y);}
+    checked_traffic_position(m,s,x,y,true)
+}
+#[inline(never)]
+unsafe fn checked_traffic_position(m:&Mv,s:usize,x:f64,y:f64,intent:bool)->(f64,f64) {
+    let mut nx=js_round(x*8.0) as i32;let mut ny=js_round(y*8.0) as i32;
     let ox=*(m.x.add(s) as *const i32);let oy=*(m.y.add(s) as *const i32);
-    let (mut tx,mut ty)=(*m.occ).position(s,nx,ny);
-    if tx==ox && ty==oy && (nx!=ox || ny!=oy) && rd(m.on,s)==6 {
+    if nx==ox&&ny==oy{return (ox as f64*0.125,oy as f64*0.125);}
+    let original_nx=nx;let original_ny=ny;
+    let np=rd(m.npr,s) as usize;
+    let wl=if np<NAV_PROFILES&&!m.nav.get_unchecked(np).walls.is_null(){m.nav.get_unchecked(np).walls}else if rd(m.fl,s)&32!=0{m.airw}else{m.wall};
+    let clear=|ax:i32,ay:i32|{
+        (m.tsh>=0&&(ax>>m.tsh)==(ox>>m.tsh)&&(ay>>m.tsh)==(oy>>m.tsh))
+            ||seg_open(wl,m.w,m.h,ox as f64*0.125,oy as f64*0.125,ax as f64*0.125,ay as f64*0.125,m.itile,m.tile)
+    };
+    let original_dx=(nx-ox) as f64;let original_dy=(ny-oy) as f64;
+    let original_len=sqrt(original_dx*original_dx+original_dy*original_dy);
+    let (layer,mass)=(*m.occ).layer_mass(s);
+    if intent && m.traffic_mode>=2 && original_len>0.0{
+        let (fx,fy)=super::traffic::sample(m.traffic,ox,oy,layer);
+        let response=if *m.traffic.add(11)!=0{(original_len/(24.0*m.dkf)).max(1.0)}else{1.0};
+        let dx=original_dx+fx*8.0*m.dkf*response;let dy=original_dy+fy*8.0*m.dkf*response;
+        let length=sqrt(dx*dx+dy*dy);
+        if length>0.0{
+            let ax=ox+js_round(dx/length*original_len) as i32;let ay=oy+js_round(dy/length*original_len) as i32;
+            nx=ax;ny=ay;
+        }
+    }
+    // Validate the quantized segment too: rounding a point just short of a
+    // wall can otherwise put its center exactly onto the blocked tile.
+    let mut open=clear(nx,ny);
+    if !open&&(nx!=original_nx||ny!=original_ny)&&clear(original_nx,original_ny){nx=original_nx;ny=original_ny;open=true;}
+    let (mut tx,mut ty)=if open{(*m.occ).preview(s,nx,ny)}else{(ox,oy)};
+    let dx=(nx-ox) as f64;let dy=(ny-oy) as f64;let want=dx*dx+dy*dy;
+    let ax=(tx-ox) as f64;let ay=(ty-oy) as f64;
+    if m.traffic_mode&1!=0 && want>0.0 && ax*ax+ay*ay<want*0.64 {
         // A blocked flow may use the free shoulder. At most one accepted
         // move, at the requested speed; every candidate keeps the same
         // swept exclusive footprint, block halo and wall checks.
-        let dx=(nx-ox) as f64;let dy=(ny-oy) as f64;
-        let np=rd(m.npr,s) as usize;
-        let wl=if np<NAV_PROFILES && !m.nav.get_unchecked(np).walls.is_null(){m.nav.get_unchecked(np).walls}
-            else if rd(m.fl,s)&32!=0{m.airw}else{m.wall};
+        let len=sqrt(want);
+        let mut best=(ax*dx+ay*dy)/len*0.7+sqrt(ax*ax+ay*ay)*0.3;
         for k in 0..4 {
             let (vx,vy)=match k {
                 0=>((dx-dy)*0.7071067811865476,(dy+dx)*0.7071067811865476),
@@ -1635,15 +1669,40 @@ unsafe fn checked_position(m:&Mv,s:usize,x:f64,y:f64)->(f64,f64) {
             let ax=ox+js_round(vx) as i32;let ay=oy+js_round(vy) as i32;
             if seg_open(wl,m.w,m.h,ox as f64*0.125,oy as f64*0.125,
                 ax as f64*0.125,ay as f64*0.125,m.itile,m.tile) {
-                (tx,ty)=(*m.occ).position(s,ax,ay);
-                if tx!=ox || ty!=oy {break;}
+                let (px,py)=(*m.occ).preview(s,ax,ay);
+                let vx=(px-ox) as f64;let vy=(py-oy) as f64;
+                let score=(vx*dx+vy*dy)/len*0.7+sqrt(vx*vx+vy*vy)*0.3;
+                if score>best+0.0625 {best=score;tx=px;ty=py;}
+                if best>len*0.78 {break;}
             }
         }
     }
-    if tx!=nx || ty!=ny {
-        wr(m.steady,s,0);wr(m.ct,s,-1);wr(m.cd,s,-1);
+    let (tx,ty)=(*m.occ).commit_preview(s,tx,ty,nx,ny);
+    if intent && m.traffic_mode>=2 && original_len>0.0{
+        let progress=((tx-ox) as f64*original_dx+(ty-oy) as f64*original_dy)/original_len;
+        let x0=*(m.x0.add(s) as *const i32);let y0=*(m.y0.add(s) as *const i32);
+        super::traffic::deposit(m.traffic,x0,y0,layer,mass,original_dx,original_dy,(original_len-progress).max(0.0),m.dkf);
+    }
+    if tx!=nx || ty!=ny {wr(m.steady,s,0);wr(m.ct,s,-1);wr(m.cd,s,-1);}
+    if tx!=js_round(x*8.0) as i32 || ty!=js_round(y*8.0) as i32 {
         wr(m.vx,s,(tx-ox) as f64/(8.0*m.dkf));wr(m.vy,s,(ty-oy) as f64/(8.0*m.dkf));
     }
+    (tx as f64*0.125,ty as f64*0.125)
+}
+#[inline(never)]
+unsafe fn checked_position_legacy(m:&Mv,s:usize,x:f64,y:f64)->(f64,f64) {
+    let nx=js_round(x*8.0) as i32;let ny=js_round(y*8.0) as i32;
+    let ox=*(m.x.add(s) as *const i32);let oy=*(m.y.add(s) as *const i32);
+    let (mut tx,mut ty)=(*m.occ).position(s,nx,ny);
+    if tx==ox&&ty==oy&&(nx!=ox||ny!=oy)&&rd(m.on,s)==6{
+        let dx=(nx-ox) as f64;let dy=(ny-oy) as f64;let np=rd(m.npr,s) as usize;
+        let wl=if np<NAV_PROFILES&&!m.nav.get_unchecked(np).walls.is_null(){m.nav.get_unchecked(np).walls}else if rd(m.fl,s)&32!=0{m.airw}else{m.wall};
+        for k in 0..4{let (vx,vy)=match k{0=>((dx-dy)*0.7071067811865476,(dy+dx)*0.7071067811865476),1=>((dx+dy)*0.7071067811865476,(dy-dx)*0.7071067811865476),2=>(-dy,dx),_=>(dy,-dx)};
+            let ax=ox+js_round(vx) as i32;let ay=oy+js_round(vy) as i32;
+            if seg_open(wl,m.w,m.h,ox as f64*0.125,oy as f64*0.125,ax as f64*0.125,ay as f64*0.125,m.itile,m.tile){(tx,ty)=(*m.occ).position(s,ax,ay);if tx!=ox||ty!=oy{break;}}
+        }
+    }
+    if tx!=nx||ty!=ny{wr(m.steady,s,0);wr(m.ct,s,-1);wr(m.cd,s,-1);wr(m.vx,s,(tx-ox) as f64/(8.0*m.dkf));wr(m.vy,s,(ty-oy) as f64/(8.0*m.dkf));}
     (tx as f64*0.125,ty as f64*0.125)
 }
 #[inline(always)]
@@ -1753,6 +1812,7 @@ unsafe fn ld_i8x4(p: *const i8) -> v128 {
 #[cfg_attr(not(feature = "prof"), inline(always))]
 #[cfg_attr(feature = "prof", inline(never))]
 unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
+    if m.span_n==1&&*m.on.add(s)!=1{return 0;}
     let t = m.t;
     let ti = i32x4_splat(t);
     let zero = i32x4_splat(0);
@@ -2002,6 +2062,9 @@ fn urem4(v: v128, d: i32) -> v128 {
 #[cfg_attr(not(feature = "prof"), inline(always))]
 #[cfg_attr(feature = "prof", inline(never))]
 unsafe fn park4(m: &Mv, p: &StepP, s: usize, done: i32) -> i32 {
+    // Every lane needs a floor look at this coarse step. The vector park
+    // predicate below is then always false, independent of unit state.
+    if p.tr>0&&m.dk>=p.tr{return 0;}
     let zero = i32x4_splat(0);
     let one = i32x4_splat(1);
     let on = ld_u8x4(m.on.add(s));
@@ -2063,6 +2126,7 @@ unsafe fn park4(m: &Mv, p: &StepP, s: usize, done: i32) -> i32 {
 #[cfg_attr(not(feature = "prof"), inline(always))]
 #[cfg_attr(feature = "prof", inline(never))]
 unsafe fn idle4(m: &Mv, s: usize, done: i32) -> i32 {
+    if m.span_n==1&&*m.on.add(s)!=0{return 0;}
     let zero = i32x4_splat(0);
     let mut ok = v128_and(i32x4_eq(ld_u8x4(m.on.add(s)), zero), i32x4_eq(v128_and(i32x4_splat(done), i32x4(1, 2, 4, 8)), zero));
     if m.brain {
@@ -2369,6 +2433,8 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
         let cw=*cfg.add(9);let ch=*cfg.add(10);let epoch=*cfg.add(11);
         let x0=bx*block;let x1=((bx+1)*block).min(cw);
         let y0=by*block;let y1=((by+1)*block).min(ch);
+        super::traffic::clear_job(m.traffic,bx*block* *cfg.add(15)* *cfg.add(14),by*block* *cfg.add(15)* *cfg.add(14),
+            (bx+1)*block* *cfg.add(15)* *cfg.add(14),(by+1)*block* *cfg.add(15)* *cfg.add(14));
         // Leaders vacate space before followers claim it. Sample cached
         // desired velocities (actual velocity is zero in a jam), bounded
         // to one unit per tile; no sorting or per-unit allocation.
@@ -2377,7 +2443,7 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
             let key=(cy*cw+cx) as usize;
             if *ptr(27).add(key)!=epoch || *ptr(26).add(key)==0 {continue;}
             let slot=*ptr(24).add(*ptr(25).add(key) as usize);
-            if slot>=0 && rd(m.on,slot as usize)==6 {
+            if slot>=0 && (if m.traffic_mode==0{rd(m.on,slot as usize)==6}else{rd(m.fl,slot as usize)&64!=0}) {
                 dx+=rd(m.cvx,slot as usize);dy+=rd(m.cvy,slot as usize);
             }
         }}
@@ -2393,6 +2459,21 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
                 i+=n;
             }
         }}
+        if traffic_deferred(&m){
+            // All intentions/ordinary moves in this ownership block finish
+            // first. Resolve residual pressure only after leaders have had
+            // their turn, then publish each unit's epilogue exactly once.
+            m.shared_hot=core::ptr::null();m.span_n=1;
+            for yi in 0..y1-y0{let cy=if dy>0.0{y1-1-yi}else{y0+yi};
+            for xi in 0..x1-x0{let cx=if dx>0.0{x1-1-xi}else{x0+xi};
+                let key=(cy*cw+cx) as usize;if *ptr(27).add(key)!=epoch{continue;}
+                let start=*ptr(25).add(key);let end=start+*ptr(26).add(key);
+                for i in start..end{let slot=*ptr(24).add(i as usize);if slot<0{continue;}let s=slot as usize;
+                    traffic_yield(&m,s);
+                    if *m.out.add(s)>1||*m.spent.add(s)!=0{epi_slot(&m,f,&mut ep,s,false);}
+                }
+            }}
+        }
         epi_end(&m,&ep,job);
     }else{
         if !m.hita.is_null(){wr(m.hitc,p.chunk,0);}
@@ -2416,6 +2497,26 @@ unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usi
         let n = (e - s).min(4);
         m.span_n=if m.occ.is_null(){4}else{n};
         m.shared_hot = core::ptr::null();
+        // Spatially mixed crowds commonly give a job only one owned slot.
+        // An idle short span must not run four-lane flow/park/combat probes
+        // over unrelated units. Keep its exact idle stores, then yield only
+        // where the coarse pressure field actually reaches it.
+        if m.traffic_mode>0 && n<4 {
+            let mut quiet=true;
+            for l in 0..n{quiet&=*m.on.add(s+l)==0&&(!m.brain||*m.cmode.add(s+l)==0);}
+            if quiet{
+                for l in 0..n{let u=s+l;let dead=*m.dead.add(u);
+                    if *m.d0.add(u)!=dead{*m.d0.add(u)=dead;}
+                    if *m.out.add(u)!=0{*m.out.add(u)=0;}if *m.fire.add(u)!=0{*m.fire.add(u)=0;}
+                    if !traffic_deferred(m){
+                        if m.traffic_mode>=2&&!m.occ.is_null(){traffic_yield(m,u);}
+                        if *m.out.add(u)>1||*m.spent.add(u)!=0{epi_slot(m,f,ep,u,false);}
+                    }
+                }
+                s+=4;continue;
+            }
+            if n==1&&!m.hot.is_null()&&!m.statrow.is_null(){let row=*m.statrow.add(s);if row>=0{m.shared_hot=m.hot.add(row as usize*16);}}
+        }
 
         // (The last group's missing lanes count as done for the vector
         // passes, which then run on every group: which path a unit takes must
@@ -2516,6 +2617,8 @@ unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usi
         }
         }
         }
+        if traffic_deferred(m){s+=4;continue;}
+        if m.traffic_mode>=2 && !m.occ.is_null(){for l in 0..n{traffic_yield(m,s+l);}}
         let nd = if let Some(ref pc)=pc {push4(m,pc,s,e,known,mvd)}else{0};
         // (The lanes with anything for the epilogue.)
         let o4 = ld_u8x4(m.out.add(s));
@@ -2534,6 +2637,35 @@ unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usi
     }
 }
 
+#[inline(always)]
+unsafe fn traffic_deferred(m:&Mv)->bool{m.traffic_mode>=2&&!m.occ.is_null()&&*m.traffic.add(12)==2}
+
+// Residual movement budget lets otherwise stationary bodies yield to the
+// shared pressure. No extra per-unit neighbor search or overlapping phase.
+#[inline(never)]
+unsafe fn traffic_yield(m:&Mv,s:usize){
+    if rd(m.dead,s)!=0||!(rd(m.en,s)>0.0){return;}
+    let xq=*(m.x.add(s) as *const i32);let yq=*(m.y.add(s) as *const i32);
+    let (layer,_)=(*m.occ).layer_mass(s);
+    let (fx,fy)=super::traffic::sample(m.traffic,xq,yq,layer);
+    let force=sqrt(fx*fx+fy*fy);if force<0.25{return;}
+    let x0=rd(m.x0,s);let y0=rd(m.y0,s);let x=xq as f64*0.125;let y=yq as f64*0.125;
+    let dx=x-x0;let dy=y-y0;let spent=sqrt(dx*dx+dy*dy);
+    let mut spd=mv_stat(m,s,0,m.spd);if rd(m.frz,s)>0{spd*=0.5;}if rd(m.snd,s)>0{spd*=0.5;}
+    let remaining=(spd*m.dkf-spent).max(0.0);if remaining<0.25{return;}
+    let step=if *m.traffic.add(11)!=0{remaining*(force*0.5).min(1.0)}else{remaining.min(force*m.dkf)};
+    let nx=x+fx/force*step;let ny=y+fy/force*step;
+    let np=rd(m.npr,s) as usize;let wl=if np<NAV_PROFILES&&!m.nav.get_unchecked(np).walls.is_null(){m.nav.get_unchecked(np).walls}else{m.wall};
+    if !seg_open(wl,m.w,m.h,x,y,nx,ny,m.itile,m.tile){return;}
+    let (tx,ty)=checked_traffic_position(m,s,nx,ny,false);
+    if tx==x&&ty==y{return;}
+    wr(m.px,s,x0);wr(m.py,s,y0);wr(m.x,s,tx);wr(m.y,s,ty);
+    wr(m.vx,s,(tx-x0)/m.dkf);wr(m.vy,s,(ty-y0)/m.dkf);
+    if rd(m.fl,s)&64==0{wr(m.cd,s,-1);wr(m.ct,s,-1);wr(m.steady,s,0);}
+    let cross=floor(tx*m.itile)!=floor(x0*m.itile)||floor(ty*m.itile)!=floor(y0*m.itile);
+    if cross{wr(m.out,s,3);}else if rd(m.out,s)==0{wr(m.out,s,1);}
+}
+
 /// Four slots' combat brain instructions, move_combat's common cases four a
 /// lane: a unit holding (cmMode move 1) stands; one chasing (2) steps toward
 /// its target (where it was at the pass's start, unit.x0/y0) at its speed
@@ -2545,6 +2677,7 @@ unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usi
 #[cfg_attr(not(feature = "prof"), inline(always))]
 #[cfg_attr(feature = "prof", inline(never))]
 unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 {
+    if m.span_n==1&&(*m.cmode.add(s)&3)==0{return 0;}
     #[cfg(not(feature="prof"))]
     let pair_holds=true;
     #[cfg(feature="prof")]

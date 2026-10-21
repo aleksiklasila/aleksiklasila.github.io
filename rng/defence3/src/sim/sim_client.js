@@ -426,6 +426,9 @@ function _simClientGlobals() {
         SIM_ACQ_SAMPLE_BUDGET: typeof SIM_ACQ_SAMPLE_BUDGET!=='undefined'?SIM_ACQ_SAMPLE_BUDGET:0,
         SIM_OCCUPANCY_ENABLED: typeof SIM_OCCUPANCY_ENABLED!=='undefined'&&SIM_OCCUPANCY_ENABLED,
         SIM_OCCUPANCY_PLANES: typeof SIM_OCCUPANCY_PLANES!=='undefined'?SIM_OCCUPANCY_PLANES:1,
+        SIM_TRAFFIC_MODE: typeof SIM_TRAFFIC_MODE!=='undefined'?SIM_TRAFFIC_MODE:0,
+        SIM_TRAFFIC_RESPONSE: typeof SIM_TRAFFIC_RESPONSE!=='undefined'?SIM_TRAFFIC_RESPONSE:1,
+        SIM_TRAFFIC_PASSES: typeof SIM_TRAFFIC_PASSES!=='undefined'?SIM_TRAFFIC_PASSES:1,
         myPeerId: typeof myPeerId !== 'undefined' ? myPeerId : null,
         lobbyPlayers: typeof lobbyPlayers !== 'undefined' ? lobbyPlayers : [], gameStarted: true,
         // (Its tick bundles carry the match: main.js packTickBundleForWire.)

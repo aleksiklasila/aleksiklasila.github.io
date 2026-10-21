@@ -1,0 +1,93 @@
+{
+  "mode": 3,
+  "msPerTick": 10.865993750000001,
+  "maxSpeedRatio": 1.00364664484352,
+  "wallViolations": 0,
+  "maxX": 5597.625,
+  "samples": [
+    {
+      "tick": 10,
+      "demand": 3200,
+      "flowing": 2964,
+      "moving": 3194,
+      "meanSpeed": 0.8672931319329961,
+      "progress": 430458.871331012,
+      "yielded": 0
+    },
+    {
+      "tick": 20,
+      "demand": 3200,
+      "flowing": 2912,
+      "moving": 3179,
+      "meanSpeed": 0.8883021469104154,
+      "progress": 1721765.6817941447,
+      "yielded": 0
+    },
+    {
+      "tick": 30,
+      "demand": 3200,
+      "flowing": 2874,
+      "moving": 3173,
+      "meanSpeed": 0.8678702992157001,
+      "progress": 3063564.755271706,
+      "yielded": 676
+    },
+    {
+      "tick": 40,
+      "demand": 3200,
+      "flowing": 2796,
+      "moving": 3166,
+      "meanSpeed": 0.8447491421912966,
+      "progress": 4354480.433439002,
+      "yielded": 768
+    },
+    {
+      "tick": 50,
+      "demand": 3200,
+      "flowing": 2856,
+      "moving": 3177,
+      "meanSpeed": 0.8590646550229392,
+      "progress": 5649535.832838623,
+      "yielded": 768
+    },
+    {
+      "tick": 60,
+      "demand": 3200,
+      "flowing": 2810,
+      "moving": 3170,
+      "meanSpeed": 0.8437820916980259,
+      "progress": 6922148.400941174,
+      "yielded": 768
+    },
+    {
+      "tick": 70,
+      "demand": 3200,
+      "flowing": 2983,
+      "moving": 3187,
+      "meanSpeed": 0.8804312547222447,
+      "progress": 8237104.425183298,
+      "yielded": 768
+    },
+    {
+      "tick": 80,
+      "demand": 3200,
+      "flowing": 2913,
+      "moving": 3176,
+      "meanSpeed": 0.8751786466037084,
+      "progress": 9573517.336550236,
+      "yielded": 768
+    }
+  ],
+  "audit": {
+    "actualBits": 35712,
+    "expectedBits": 35712,
+    "registered": 3968,
+    "activeUnits": 3968,
+    "positionMismatches": 0,
+    "ok": true
+  },
+  "traffic": {
+    "publications": 124,
+    "bytes": 155160
+  }
+}

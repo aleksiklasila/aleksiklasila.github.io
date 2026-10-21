@@ -28,6 +28,7 @@ mod mv;
 mod k;
 mod atlas;
 mod occ;
+mod traffic;
 mod acq_sample;
 
 #[panic_handler]
