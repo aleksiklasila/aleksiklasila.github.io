@@ -542,7 +542,7 @@ function _adjSigCode(gx, gy) {
 }
 function _adjArr(name, Type, n) {
     let a = _simParReg[name];
-    if (!a || a.constructor !== Type || a.length < n) { a = simSharedArray(Type, simReserveCap(Math.max(1, n), 64)); simParallelBind(name, a); }
+    if (!a || a.constructor !== Type || a.length < n) { const old = a; a = simHeapArray(Type, simReserveCap(Math.max(1, n), 64)); simParallelBind(name, a); simHeapFree(old); }
     return a;
 }
 function adjacencyLaneReset() {

@@ -1338,7 +1338,8 @@ function _wsCollectorGroup(cfg) {
 }
 function _wsArr(name, Type, n) {
     let a = _simParReg[name];
-    if (!a || a.constructor !== Type || a.length < n) { a = simSharedArray(Type, Math.max(256, Math.ceil(n * 1.125 / 256) * 256)); simParallelBind(name, a); }
+    // (Replaced by a larger one: the old one given back to the heap at once, not left to the collector: its payload arrays of a big round were ~390 MB held.)
+    if (!a || a.constructor !== Type || a.length < n) { const old = a; a = simHeapArray(Type, Math.max(256, Math.ceil(n * 1.25 / 256) * 256)); simParallelBind(name, a); simHeapFree(old); }
     return a;
 }
 function _wsPost() {
@@ -3552,7 +3553,7 @@ function healerCandidatesTierReset() {
 }
 function _hcArr(name, Type, n) {
     let a = _simParReg[name];
-    if (!a || a.constructor !== Type || a.length < n) { a = simSharedArray(Type, Math.max(1024, n + (n >> 2))); simParallelBind(name, a); }
+    if (!a || a.constructor !== Type || a.length < n) { const old = a; a = simHeapArray(Type, Math.max(1024, n + (n >> 2))); simParallelBind(name, a); simHeapFree(old); }
     return a;
 }
 function _hcPost(ownerCount, cap) {
