@@ -212,11 +212,24 @@ function assertCommandsRanEverywhere(world, instances, before, label) {
         const all = [host, ...guests];
         const startTick = host.eval('currentTick');
         const t0 = world.now;
+        // (When each divergence was made and each patch applied. A divergence
+        // shows at its slice of the hash rotation and the repair waits one
+        // rotation after that: 1.2 - 2.2 s, so one that lands while the
+        // previous patch is on its way is repaired by the patch after it.
+        // How many patches that takes depends on where each lands in the
+        // rotation; that each is repaired soon does not.)
+        const made = [], patchedAt = [];
+        { let n = guests[0].patchesApplied; Object.defineProperty(guests[0], 'patchesApplied', { get: () => n, set: v => { n = v; patchedAt.push(world.now); } }); }
         for (let i = 0; i < 15; i++) {
             await H.playFor(world, all, 2000, { seed: 40 + i });
+            made.push(world.now);
             corrupt(guests[0], i % 2 ? 'unit' : 'player');
         }
         await world.run(5000);
+        for (let i = 0; i < made.length; i++) {
+            const at = patchedAt.find(t => t > made[i]);
+            assert.ok(at !== undefined && at - made[i] < 5000, 'divergence ' + i + ' repaired within 5 s: ' + (at === undefined ? 'never' : Math.round(at - made[i]) + ' ms'));
+        }
         const fromTick = host.eval('currentTick');
         await H.playFor(world, all, 5000, { seed: 60 });
         await world.run(2000);
@@ -225,9 +238,9 @@ function assertCommandsRanEverywhere(world, instances, before, label) {
         const tps = (host.eval('currentTick') - startTick) / secs;
         const rate = host.eval('TICK_RATE');
         assert.ok(tps > rate * 0.95, 'match kept its pace: ' + tps.toFixed(1) + ' TPS');
-        assert.ok(guests[0].patchesApplied >= 14, 'each divergence patched: ' + guests[0].patchesApplied);
+        assert.ok(guests[0].patchesApplied >= 10, 'repairs kept up with the divergences: ' + guests[0].patchesApplied + ' patches');
         assert.equal(host.snapshotsApplied, 1, 'no match-wide resync');
-        rows.push(`15 divergences in 30s: all patched, ${tps.toFixed(1)} of ${rate} TPS`);
+        rows.push(`15 divergences in 30s: all repaired within 5 s (${guests[0].patchesApplied} patches), ${tps.toFixed(1)} of ${rate} TPS`);
     }
 
     // 9. A patch lost in transit: the guest gives up waiting, keeps

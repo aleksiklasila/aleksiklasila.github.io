@@ -51,9 +51,9 @@ assert.match(renderer, /watchedByTeam\)\) === targetId/);
 assert.match(unit, /(this|a)\.unitType === 'scout'\) applyStatusEffect\(target, 'watch'/);
 assert.match(unit, /(this|a)\.unitType === 'scout'\) applyStatusEffect\(tb, 'watch'/);
 assert.match(tower, /u\.watchedByTeam === this\.owner/);
-assert.match(dataStatic, /scout: \{[^\n]*watchDuration: 5/);
-assert.match(dataStatic, /scout: \['energy'[^\n]*'watchDuration'/);
-assert.match(dataDynamic, /let watchDuration = unitType === 'scout'/);
+assert.match(dataStatic, /scout: \{[\s\S]*?watchDuration: \{base: 5/);
+assert.match(dataStatic, /PRECOMPUTED_UNIT_STAT_KEYS = \[[^\]]*'watchDuration'/);
+assert.match(dataDynamic, /watchDuration: Math\.max\(0, Number\(values\.watchDuration\) \|\| 0\)/);
 assert.match(main, /watchedByTeam:/, 'team watch ownership should be covered by the lockstep digest');
 
 console.log('PASS: watch effects are team-exclusive, replaceable, deterministic, and granted by scouts.');

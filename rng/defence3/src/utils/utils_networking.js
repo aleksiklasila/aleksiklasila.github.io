@@ -877,6 +877,9 @@ function buildHostMatchSyncPayload() {
         seed: gameSeed,
         startSessionId: matchStartSessionId,
         lobbyPlayers: matchStartLobbyPlayers.length ? matchStartLobbyPlayers : lobbyPlayers,
+        // (The match's teams: the roster also holds those who joined after the
+        // start, and a spectator's colour is no team.)
+        teams: Array.isArray(activeTeamIds) ? activeTeamIds.slice() : undefined,
         cfg: matchStartConfig,
         currentTick,
         roleByPeer: buildHostRoleSnapshot(),
@@ -1594,9 +1597,17 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing', taken = nul
         remotePresenceByPeerId[myPeerId] = true;
     }
     let setup = computeTeamSetupFromLobby();
+    // The match's teams as the host runs them. A late spectator's own colour
+    // made a team of it here, a slot more than the snapshot's world has; its
+    // world was made for that count and restored into the other.
+    const hostTeams = Array.isArray(data.teams) ? data.teams.map(Number).filter(t => Number.isInteger(t) && t >= 0).sort((a, b) => a - b) : [];
+    if (hostTeams.length) setup.activeTeamIds = hostTeams;
     activeTeamIds = setup.activeTeamIds;
     teamColorById = setup.teamColorById;
     localPlayerId = resolveLocalPlayerTeamId(setup);
+    // (A spectator is none of the teams: it looks through the first's slot, as
+    // a player slot beyond the teams does not exist.)
+    if (hostTeams.length && !activeTeamIds.includes(localPlayerId)) localPlayerId = activeTeamIds[0];
     isMultiplayer = true;
     if (data.cfg) {
         let cfgGridW = Math.max(8, Math.floor(Number(data.cfg.gridW) || 80));
@@ -3274,6 +3285,7 @@ function setLobbyMode(mode) {
 }
 
 function resetWorldState() {
+    fitPlayersToTeams();
     simUnitStateReset();
     visibilityHistoryState = null;
     resyncResetState();

@@ -671,7 +671,9 @@ const _simPvMarksW = _simWK(['unit.live', 'unit.dead', 'unit.id', 'unit.x', 'uni
 SIM_KERNELS[SIM_KERNEL_PV_MARKS] = function (R, P, chunk) { _simRust(_simPvMarksW, P, chunk, 'k_pv_marks', 'PV_MARKS'); };
 const SIM_KERNEL_IXD_SCAN = 78, SIM_KERNEL_IXD_APPLY = 79, SIM_KERNEL_IXD_MERGE = 80, SIM_KERNEL_IXD_COPY = 81, SIM_KERNEL_IXD_OWNERS = 82, SIM_KERNEL_IXD_INIT = 83;
 const _simIxdW = _simWK(['unit.live', 'unit.dead', 'unit.x', 'unit.y', 'unit.id', 'unit.owner', 'ixd.k', 'ixd.id', 'ixd.own', 'sep.eslot', 'sep.ekey', 'ix.eid',
-    'ix.start', 'ix.cnt', 'ix.stamp', 'ixd.gone', 'ixd.dirty', 'ixd.plan', 'ixd.ik', 'ixd.is', 'ixd.es2', 'ixd.ek2', 'ixd.eid2', 'ix.listed', '?ix.omask', 'ixd.touch']);
+    'ix.start', 'ix.cnt', 'ix.stamp', 'ixd.gone', 'ixd.dirty', 'ixd.plan', 'ixd.ik', 'ixd.is', 'ixd.es2', 'ixd.ek2', 'ixd.eid2', 'ix.listed', '?ix.omask', 'ixd.touch',
+    // (The sort's scratch ik2 / is2, the owners' per chunk mark tdone.)
+    '?ixd.ik2', '?ixd.is2', '?ixd.tdone']);
 SIM_KERNELS[SIM_KERNEL_IXD_SCAN] = function (R, P, chunk) { _simRust(_simIxdW, P, chunk, 'k_ixd_scan', 'IXD_SCAN'); };
 SIM_KERNELS[SIM_KERNEL_IXD_APPLY] = function (R, P, chunk) { _simRust(_simIxdW, P, chunk, 'k_ixd_apply', 'IXD_APPLY'); };
 SIM_KERNELS[SIM_KERNEL_IXD_MERGE] = function (R, P, chunk) { _simRust(_simIxdW, P, chunk, 'k_ixd_merge', 'IXD_MERGE'); };
@@ -1564,7 +1566,7 @@ const SIM_PAR_SPIN_MS = 0.25;
 // counts (spatial.types). eff.win per due unit: x1, y1, x2, y2 (blocks),
 // lane (-1: none). P: [0] due units, [1] per job, [2] blocks per row, [3]
 // ints per block.
-// Units' effective stats (things_utils.js recalculateUnitEffectiveStats):
+// Units' effective stats (things_utils.js recalculateUnitEffectiveLevel):
 // for the strided share (entry j: units[P[3] + j * P[2]]), from the columns,
 // as _effStatsFullUnit does it: base stacks and level, the same-owner
 // same-type count over its window of the spatial chunk counts, effective
@@ -1735,8 +1737,13 @@ SIM_KERNELS[SIM_KERNEL_WS_SELECT] = function (R, P, chunk) { _simRust(_simWsSele
 // owner, [14] 1: requests by position, [15] areas. Rust: k.rs k_ws_scan.
 const _simWsScanW = _simWK(['ws.rkind', 'ws.rowner', 'ws.rox', 'ws.roy', 'ws.rux', 'ws.ruy', 'ws.rr', 'ws.rak', 'ws.rax', 'ws.ray', 'ws.rgrp', 'ws.rneed', 'ws.rjid', 'ws.rcur', 'ws.rmy',
     'ws.rpre', 'ws.res', 'ws.score', '?ws.ures', '?ws.agrid', '?ws.aoff', '?ws.anb', '?wsh.x', '?wsh.y', '?wsh.a', '?wsh.n', '?wsw.flags', '?wsw.own', '?wsw.area', '?wsw.resv',
-    '?wsg0.meta', '?wsg0.sx', '?wsg0.sy', '?wsg0.st', '?wsg0.so', '?wsg0.pgx', '?wsg0.pgy', '?wsg0.po', '?wsg0.pid', '?wsg0.px', '?wsg0.py', '?wsg0.bs', '?wsg0.bc', '?wsg0.bi', '?wsg1.meta', '?wsg1.sx', '?wsg1.sy', '?wsg1.st', '?wsg1.so', '?wsg1.pgx', '?wsg1.pgy', '?wsg1.po', '?wsg1.pid', '?wsg1.px', '?wsg1.py', '?wsg1.bs', '?wsg1.bc', '?wsg1.bi', '?wsg2.meta', '?wsg2.sx', '?wsg2.sy', '?wsg2.st', '?wsg2.so', '?wsg2.pgx', '?wsg2.pgy', '?wsg2.po', '?wsg2.pid', '?wsg2.px', '?wsg2.py', '?wsg2.bs', '?wsg2.bc', '?wsg2.bi', '?wsg3.meta', '?wsg3.sx', '?wsg3.sy', '?wsg3.st', '?wsg3.so', '?wsg3.pgx', '?wsg3.pgy', '?wsg3.po', '?wsg3.pid', '?wsg3.px', '?wsg3.py', '?wsg3.bs', '?wsg3.bc', '?wsg3.bi', '?wsg4.meta', '?wsg4.sx', '?wsg4.sy', '?wsg4.st', '?wsg4.so', '?wsg4.pgx', '?wsg4.pgy', '?wsg4.po', '?wsg4.pid', '?wsg4.px', '?wsg4.py', '?wsg4.bs', '?wsg4.bc', '?wsg4.bi', '?wsg5.meta', '?wsg5.sx', '?wsg5.sy', '?wsg5.st', '?wsg5.so', '?wsg5.pgx', '?wsg5.pgy', '?wsg5.po', '?wsg5.pid', '?wsg5.px', '?wsg5.py', '?wsg5.bs', '?wsg5.bc', '?wsg5.bi', '?wsg6.meta', '?wsg6.sx', '?wsg6.sy', '?wsg6.st', '?wsg6.so', '?wsg6.pgx', '?wsg6.pgy', '?wsg6.po', '?wsg6.pid', '?wsg6.px', '?wsg6.py', '?wsg6.bs', '?wsg6.bc', '?wsg6.bi', '?wsg7.meta', '?wsg7.sx', '?wsg7.sy', '?wsg7.st', '?wsg7.so', '?wsg7.pgx', '?wsg7.pgy', '?wsg7.po', '?wsg7.pid', '?wsg7.px', '?wsg7.py', '?wsg7.bs', '?wsg7.bc', '?wsg7.bi', '?wsw.cnt', '?area.bounds']);
+    '?wsg0.meta', '?wsg0.sx', '?wsg0.sy', '?wsg0.st', '?wsg0.so', '?wsg0.pgx', '?wsg0.pgy', '?wsg0.po', '?wsg0.pid', '?wsg0.px', '?wsg0.py', '?wsg0.bs', '?wsg0.bc', '?wsg0.bi', '?wsg1.meta', '?wsg1.sx', '?wsg1.sy', '?wsg1.st', '?wsg1.so', '?wsg1.pgx', '?wsg1.pgy', '?wsg1.po', '?wsg1.pid', '?wsg1.px', '?wsg1.py', '?wsg1.bs', '?wsg1.bc', '?wsg1.bi', '?wsg2.meta', '?wsg2.sx', '?wsg2.sy', '?wsg2.st', '?wsg2.so', '?wsg2.pgx', '?wsg2.pgy', '?wsg2.po', '?wsg2.pid', '?wsg2.px', '?wsg2.py', '?wsg2.bs', '?wsg2.bc', '?wsg2.bi', '?wsg3.meta', '?wsg3.sx', '?wsg3.sy', '?wsg3.st', '?wsg3.so', '?wsg3.pgx', '?wsg3.pgy', '?wsg3.po', '?wsg3.pid', '?wsg3.px', '?wsg3.py', '?wsg3.bs', '?wsg3.bc', '?wsg3.bi', '?wsg4.meta', '?wsg4.sx', '?wsg4.sy', '?wsg4.st', '?wsg4.so', '?wsg4.pgx', '?wsg4.pgy', '?wsg4.po', '?wsg4.pid', '?wsg4.px', '?wsg4.py', '?wsg4.bs', '?wsg4.bc', '?wsg4.bi', '?wsg5.meta', '?wsg5.sx', '?wsg5.sy', '?wsg5.st', '?wsg5.so', '?wsg5.pgx', '?wsg5.pgy', '?wsg5.po', '?wsg5.pid', '?wsg5.px', '?wsg5.py', '?wsg5.bs', '?wsg5.bc', '?wsg5.bi', '?wsg6.meta', '?wsg6.sx', '?wsg6.sy', '?wsg6.st', '?wsg6.so', '?wsg6.pgx', '?wsg6.pgy', '?wsg6.po', '?wsg6.pid', '?wsg6.px', '?wsg6.py', '?wsg6.bs', '?wsg6.bc', '?wsg6.bi', '?wsg7.meta', '?wsg7.sx', '?wsg7.sy', '?wsg7.st', '?wsg7.so', '?wsg7.pgx', '?wsg7.pgy', '?wsg7.po', '?wsg7.pid', '?wsg7.px', '?wsg7.py', '?wsg7.bs', '?wsg7.bc', '?wsg7.bi', '?wsw.cnt', '?area.bounds',
+    // (The collectors' groups' nearest-spawner fields, k_ws_nearfield: wsg<g>.nf at 144 + g, the order of the spawners wsg<g>.rk by rank at 152 + g, wsg<g>.ro by spawner at 160 + g.)
+    '?wsg0.nf', '?wsg1.nf', '?wsg2.nf', '?wsg3.nf', '?wsg4.nf', '?wsg5.nf', '?wsg6.nf', '?wsg7.nf', '?wsg0.rk', '?wsg1.rk', '?wsg2.rk', '?wsg3.rk', '?wsg4.rk', '?wsg5.rk', '?wsg6.rk', '?wsg7.rk', '?wsg0.ro', '?wsg1.ro', '?wsg2.ro', '?wsg3.ro', '?wsg4.ro', '?wsg5.ro', '?wsg6.ro', '?wsg7.ro']);
 SIM_KERNELS[SIM_KERNEL_WS_SCAN] = function (R, P, chunk) { _simRust(_simWsScanW, P, chunk, 'k_ws_scan', 'WS_SCAN'); };
+// SIM_KERNEL_WS_NEARFIELD (k.rs k_ws_nearfield): a job a (group, owner) pair, the field of each tile's nearest working spawner.
+const SIM_KERNEL_WS_NEARFIELD = 99;
+SIM_KERNELS[SIM_KERNEL_WS_NEARFIELD] = function (R, P, chunk) { _simRust(_simWsScanW, P, chunk, 'k_ws_nearfield', 'WS_NEARFIELD'); };
 
 // The units' upkeep bins made anew (main.js _upkUnitsBuild, after a
 // resync), per block of P[1] units-array indices: a unit of an owner below
@@ -1900,8 +1907,16 @@ const _simAcqSampleW=_simWK(['acq.scls','acq.sown','?acq.hss','acq.sout','acq.x'
     'acq.out','acq.tid','acq.agrid','acq.cover','acq.hs','acq.rs','acq.rc','acq.rst','acq.es','acq.om','?acq.omt',
     '?acq.ex','?acq.ey','?acq.eo','?acq.ea','?acq.eid','acq.saOff','acq.saX','acq.saY','acq.saOwner','acq.saId','acq.saSlot',
     'acq.saNear','acq.saNearN','acq.saCount','acq.saCursor','acq.saSeen','acq.aoff','acq.anb',
-    '?acq.saNearest','?acq.saDistance','?acq.saQueue','?acq.saStructure','?acq.saStructureDistance']);
+    '?acq.saNearest','?acq.saDistance','?acq.saQueue','?acq.saStructure','?acq.saStructureDistance',
+    // (The build's per-entry key.)
+    '?acq.saKey']);
 SIM_KERNELS[SIM_KERNEL_ACQ_AREA_BUILD]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_build','ACQ_AREA_BUILD');};
+// The area answers after the build: a job per team and part (the nearest area
+// with a visible enemy unit; one for each of the 4 enemy structure classes),
+// chunk = team * 5 + part: independent of one another, so they spread over
+// the helpers (one serial pass over every team's was ~290 ms with 8 teams).
+const SIM_KERNEL_ACQ_AREA_ANSWERS=98;
+SIM_KERNELS[SIM_KERNEL_ACQ_AREA_ANSWERS]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_answers','ACQ_AREA_ANSWERS');};
 SIM_KERNELS[SIM_KERNEL_ACQ_SCAN] = function (R, P, chunk) {
     if(P[24]>0||P[28]===1){_simRust(_simAcqSampleW,P,chunk,'k_acq_sample','ACQ_SAMPLE');return;}
     // (The commands as integers: the snapshot's column is Int32. P[21] 1:

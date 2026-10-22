@@ -16,7 +16,7 @@ function world(resource, localPlayerId = 0) {
         ? { key: 'energy', stockpileKey: 'energy', collectorUnitKey: 'collector', collectorBuildingKey: 'collector', farmKey: 'farm', mineTileType: 'mine', mineStatKey: 'gold', mineArrayKey: 'goldMines' }
         : { key: 'astar', stockpileKey: 'astar', collectorUnitKey: 'astar_collector', collectorBuildingKey: 'astar_collector', farmKey: 'astar_farm', mineTileType: 'astar_mine', mineStatKey: 'astar', mineArrayKey: 'astarMines' };
     const c = vm.createContext({
-        TILE: 32, GRID_W: 32, GRID_H: 16, TICK_RATE: 30, WORKER_AI_TICK_DELAY: 1,
+        performance, simOrderStats: { actionsMs: 0 }, TILE: 32, GRID_W: 32, GRID_H: 16, TICK_RATE: 30, WORKER_AI_TICK_DELAY: 1,
         CMD_IDLE: 0, CMD_MOVING: 1, CMD_HOLDING: 2, gameTime: 100, localPlayerId,
         RESOURCE_COLLECTOR_UNIT_KEYS: ['collector', 'astar_collector'], RESOURCE_TYPE_LIST: [cfg],
         grid: Array.from({ length: 16 }, () => Array.from({ length: 32 }, () => ({ item: null }))),
@@ -41,6 +41,8 @@ function world(resource, localPlayerId = 0) {
     Object.defineProperty(c, '_tileEntityVersion', { get: () => ++version });
     Object.defineProperty(c, 'droppedItemsVersion', { get: () => ++version });
     vm.runInContext(read('src/utils/utils_common.js'), c);
+    // (The step's base ticks and the periodic checks by phase: data_static.js.)
+    vm.runInContext('let simDk = 1;' + read('src/data/data_static.js').match(/function simStepCrosses\([\s\S]*?\n}\n/)[0], c);
     vm.runInContext(read('src/things/worker.js'), c);
     c.BASE_CARD_TYPES = {};
     c.reportRuntimeError = (kind, err) => { throw err; };
@@ -50,16 +52,20 @@ function world(resource, localPlayerId = 0) {
     c.getUnitById = id => c.units.find(u => u.id === id) || null;
     vm.runInContext(main.match(/const ACTION_MAX_COUNT = [\s\S]*?const ACTION_MAX_TOWER_COORDS = \d+;/)[0], c);
     for (const name of ['_isCollectorGatherTargetType', '_getGatherTargetAtForCollectorWorkerType', '_isValidGatherTargetForCollectorWorkerType',
-        '_actionInt', '_actionNum', '_actionStr', '_actionIdStampNext', '_actionIdStampGrow', '_actionCleanIds', 'sanitizeAction', 'processActions', 'processAction',
+        '_actionInt', '_actionNum', '_actionStr', '_actionIdStampNext', '_actionIdStampGrow', '_actionCleanIds', 'sanitizeAction', 'processActions', '_processActions', 'processAction',
         '_actionCost', '_processRawAction', '_actionBacklogDrain', '_actionSplit', 'actionIdsCount']) {
         vm.runInContext(mainFunction(name), c);
     }
     // (The tick's action budget (main.js processActions): none here.)
+    c._stepBudgets = () => {};
     c._actionBacklog = []; c._actionBudgetLeft = Infinity; c.ACTION_BUDGET_PER_TICK = Infinity;
     c.ACTION_SPLIT_UNITS = new Set(['attack', 'attackBuilding', 'hold', 'stop', 'killUnit']); c.ACTION_SPLIT_MIN_UNITS = 64;
     // Isolate pathfinding and stat configuration; run real targeting, reservations,
     // command processing, manual-move completion and collection state transitions.
     c._getWorkerAutoSearchDistancePx = () => 128;
+    // (The pixel search limit; the area-targets mode is chunk.js's, off here.)
+    c._getWorkerAutoSearchDistanceArea = () => 4;
+    c.areaSearchEnabled = () => false;
     c._findClosestSpawner = () => null;
     c._workerReturnPath = u => { u.workerState = 'RETURNING'; };
     c._isWorkerWithinTileInteractionRange = (u, t) => Math.hypot(u.x - t.x, u.y - t.y) <= 32;

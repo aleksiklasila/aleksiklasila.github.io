@@ -27,15 +27,9 @@ if (process.argv.includes('--compare') || process.argv.includes('--compare-extra
     },null,2)+'\n');
     process.exit(0);
 }
-const html = process.argv.includes('--baseline') ? execFileSync('git', ['show', referenceRef + ':' + execFileSync('git', ['rev-parse', '--show-prefix'], {cwd:root, encoding:'utf8'}).trim() + 'index.html'], {cwd:root, encoding:'utf8', maxBuffer:8e6}) : fs.readFileSync(path.join(root, 'index.html'), 'utf8');
-const files = Array.from(html.matchAll(/<script src="\.\/(src\/[^"?]+)(?:\?[^" ]*)?"/g), m => m[1]).filter(f => !f.endsWith('bootstrap.js'));
 const baseline = process.argv.includes('--baseline');
-const prefix = baseline ? execFileSync('git', ['rev-parse', '--show-prefix'], {cwd:root, encoding:'utf8'}).trim() : '';
-const source = files.map(f => baseline ? execFileSync('git', ['show', referenceRef+':'+prefix+f], {cwd:root, encoding:'utf8', maxBuffer:8e6}) : fs.readFileSync(path.join(root, f), 'utf8')).join('\n');
-const noop = () => {};
-const element = { style: {}, classList: { add: noop, remove: noop, contains: () => false }, addEventListener: noop, getContext: () => null };
-const document = { getElementById: () => null, createElement: () => element, addEventListener: noop, querySelectorAll: () => [] };
-const window = { innerWidth: 1280, innerHeight: 720, addEventListener: noop, matchMedia: () => ({matches:false}), location: {search:''} };
+// (The game runs in the multiplayer harness's scope: the page's scripts as one, the way the browser has them; --baseline: the reference revision's.)
+if (baseline) process.env.DEFENCE_TEST_BASELINE = referenceRef;
 const setup = `
 playSound = startLaserSound = stopLaserSound = updateItemTextCache = () => {};
 if (typeof updateAudioReactiveState === "function") updateAudioReactiveState = () => {};
@@ -108,7 +102,12 @@ return { tick: () => {if(gameTime%40===0) command(); gameTick();}, summary: () =
 `;
 const scenario = process.argv[2] || 'idle';
 const multiplayer=process.argv.includes('--multiplayer');
-const game = new Function('window','document','localStorage','scenario','multiplayer', source + '\n' + setup)(window,document,{getItem:()=>null,setItem:noop},scenario,multiplayer);
+const H = require('./net-harness.cjs');
+const world = new H.World({ controls: H.SMALL_MATCH_CONTROLS });
+const inst = world.spawn('bench', { simWorker: false });
+inst.eval('__scratch.game = (function (scenario, multiplayer) {' + setup + '})(' + JSON.stringify(scenario) + ', ' + multiplayer + ');');
+const game = { tick: () => inst.eval('__scratch.game.tick()'), summary: () => JSON.parse(inst.eval('JSON.stringify(__scratch.game.summary())')),
+    profile: () => JSON.parse(inst.eval('JSON.stringify(__scratch.game.profile())')), unitShapes: () => inst.eval('__scratch.game.unitShapes()') };
 const samples = [], commandSamples=[];
 const totalTicks = Number(process.env.BENCH_TICKS) || 160;
 for (let i=0;i<totalTicks;i++) { const start=performance.now(); game.tick(); const ms=performance.now()-start; if(i>=40) {samples.push(ms); if(i%40===0) commandSamples.push(ms);} }

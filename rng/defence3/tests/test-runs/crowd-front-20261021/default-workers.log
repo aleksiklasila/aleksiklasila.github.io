@@ -1,5 +1,0 @@
-workers 6 builder,healer,collector,astar_collector,salvager,researcher
-worker states seen astar_collector:IDLE astar_collector:MOVING_TO astar_collector:RETURNING astar_collector:delivered builder:IDLE builder:MOVING_TO_BUILD builder:RETURNING_FOR_GOLD builder:spent collector:IDLE collector:MOVING_TO collector:RETURNING collector:delivered healer:IDLE healer:MOVING_TO_HEAL healer:RETURNING_FOR_GOLD healer:spent researcher:IDLE researcher:MOVING_TO_RESEARCH salvager:IDLE salvager:MOVING_TO salvager:RETURNING salvager:delivered
-work {"before":{"build":3494,"sites":0,"research":0},"after":{"build":3999,"sites":1,"research":1000106},"end":{"site":{"uc":true,"energy":1},"salvaged":true}}
-mine cluster at [42,37] collector on it true middle gold 4962
-PASS: worker walk and work builder, healer, collector, astar_collector, salvager, researcher

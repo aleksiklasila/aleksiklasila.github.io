@@ -75,6 +75,10 @@ const data = require(path.join(__dirname, 'oneofall.json'));
                 best = Math.min(best, Math.max(Math.abs(last[0] - target[0]), Math.abs(last[1] - target[1])));
             }
             if (process.env.WALK_VERBOSE) console.log(kind, [dx, dy], 'from', at.slice(0, 2), 'to', target, 'closest', best, 'last', last);
+            // (Units stand on their own spots, not on each other's: with others
+            // parked on the target by the earlier kinds' walks, one arrives at
+            // the edge of their crowd, a tile or two short.)
+            if (best > 1 && best <= 2 && q(`units.filter(x => !x.dead && x.id !== ${w.id} && Math.hypot(x.x - (${target[0]} * TILE + 16), x.y - (${target[1]} * TILE + 16)) < 1.6 * TILE).length`) > 0) best = 1;
             if (best > 1) {
                 // (The target tile and where the flow approaches it from the unit's tile.)
                 const why = q(`(() => { const u = units.find(x => x.id === ${w.id}), t = ${JSON.stringify(target)}, p = u ? navProfileOf(u) : -1;

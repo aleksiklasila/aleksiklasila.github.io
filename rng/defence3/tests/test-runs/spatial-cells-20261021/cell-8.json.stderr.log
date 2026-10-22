@@ -1,1 +1,0 @@
-setup {"units":4000000,"towers":125000,"groups":62500,"map":[1000,1000],"ms":52424.206,"heap":{"ready":true,"kernels":true,"wasm64":true,"hash":"5b46459a6c06d50d","error":null,"memoryMB":2559,"liveMB":2488,"peakMB":2488,"freeMB":0,"arrays":386,"pendingFrees":170},"memory":{"rss":3098939392,"heapTotal":1009500160,"heapUsed":920864064,"external":498132484,"arrayBuffers":557414347}}

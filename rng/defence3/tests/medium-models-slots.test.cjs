@@ -32,6 +32,8 @@ R._cmDrawSlotGroups = () => { };
 c._detailViewKey = () => String(c.view || 0);
 c._detailScore = (x, z, size, flat, retained, minPixels) => ((Math.floor(x * 3) + Math.floor(z * 5)) % 5 !== 0 && size * 40 > minPixels) ? 10 : 0;
 c._structureDetailCandidates = () => [];
+// (The catalog entry's model height: renderer.js, loaded with it in the page.)
+vm.runInContext(read('src/audio_visual/renderer.js').match(/function _cmBaseHeight[\s\S]*?\r?\n}\r?\n/)[0], c);
 let seed = 4242;
 const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
 const TAU = Math.PI * 2;

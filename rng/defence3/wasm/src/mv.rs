@@ -1737,7 +1737,8 @@ unsafe fn checked_traffic_q(m:&Mv,s:usize,ox:i32,oy:i32,nx:i32,ny:i32,intent:boo
     let (mut tx,mut ty)=(*m.occ).commit_preview(s,tx,ty,nx,ny);
     if intent && m.traffic_mode>=2 && original_len>0.0{
         let mut progress=((tx-ox) as f64*original_dx+(ty-oy) as f64*original_dy)/original_len;
-        if progress<original_len*0.25&&traffic_deferred(m){
+        dbgc!(m,64);
+        if progress<original_len*0.25&&traffic_deferred(m){dbgc!(m,65);
             if let Some((sx,sy))=traffic_swap(m,s,tx,ty,original_dx/original_len,original_dy/original_len,wl,false){
                 tx=sx;ty=sy;progress=original_len;
             }
@@ -2541,6 +2542,14 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
                 if slot>=0 && (need.is_null()||pushed||*need.add(slot as usize)!=0) {
                     let s=slot as usize;
                     resolve_slot(&m,s);
+                    dbgc!(m,86);
+                    #[cfg(feature="dbgc")]
+                    {
+                        if *m.out.add(s)>1{dbgc!(m,82);}
+                        if *m.spent.add(s)!=0{dbgc!(m,83);}
+                        if traffic_deferred(&m)&&pushed{dbgc!(m,84);}
+                        if traffic_deferred(&m)&&walker_short(&m,s){dbgc!(m,85);}
+                    }
                     if !wk.is_null()&&(*m.out.add(s)>1||*m.spent.add(s)!=0||(traffic_deferred(&m)&&(pushed||walker_short(&m,s)))){
                         *wk.add(wn)=slot;wn+=1;*m.out.add(s)|=128;
                     }
@@ -2835,10 +2844,12 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
     // only on those steps.)
     let mut spd=mv_stat(m,s,0,m.spd);if rd(m.frz,s)>0{spd*=0.5;}if rd(m.snd,s)>0{spd*=0.5;}
     let step=spd*m.dkf*8.0;if !(step>0.0){return None;}
+    dbgc!(m,66);
     let spacing=(2*rq+16) as f64;
     let k=((floor(spacing/step) as i64)+1).max(1).min(64);
     let hop=step<spacing&&rem64_f(tsum(m.t,rd(m.id,s)),k*m.dk as i64)<m.dk as i64;
     if step<spacing&&!hop{return None;}
+    dbgc!(m,67);
     let (sx0,sy0)=(*(m.x0.add(s) as *const i32),*(m.y0.add(s) as *const i32));
     // Candidates in the 3x3 chunks around a point half a contact ahead:
     // the three best by distance ahead and off its line, its own size first.
@@ -2850,13 +2861,14 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
         let (a,e)=g.chunk_entries_near(qx+(pass%3-1)*cq,qy+(pass/3-1)*cq);
         let mut i=a;
         while i<e{
-            let b=g.slot(i);i+=1;
+            let b=g.slot(i);i+=1;dbgc!(m,68);
             if b<0||b as usize==s||!g.active(b as usize){continue;}
             let b=b as usize;
             let (bx,by)=g.pos(b);
             let vx=(bx-ox) as f64;let vy=(by-oy) as f64;let rb=g.radius_q(b);
             let along=vx*ux+vy*uy;let lat=(vx*uy-vy*ux).abs();let rr=(rq+rb) as f64;
             if along<=lat*0.3||along*along+lat*lat>(rr+96.0)*(rr+96.0){continue;}
+            dbgc!(m,69);
             let ob=rd(m.on,b);
             if rd(m.dead,b)!=0||rd(m.own,b)!=own||rd(m.wk,b)!=0||(m.brain&&rd(m.cmode,b)!=0){continue;}
             if walkers{
@@ -2865,6 +2877,7 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
             let re=rd(m.rte,b);
             if mine>=0&&re>=0&&(irem(mine,m.w)-irem(re,m.w)).abs()<=3&&(idiv(mine,m.w)-idiv(re,m.w)).abs()<=3{continue;}
             let score=along+lat*0.6+if rb!=rq{4096.0}else{0.0};
+            dbgc!(m,70);
             let mut j=3;while j>0&&cand[j-1].0>score{j-=1;}
             if j<3{let mut q=2;while q>j{cand[q]=cand[q-1];q-=1;}cand[j]=(score,b);}
         }
@@ -2888,7 +2901,9 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
         let (ix,iy)=(irem(rd(m.spt,b),m.w),idiv(rd(m.spt,b),m.w));
         let tq=(m.tile*8.0) as i32;let home=g.owns(ix*tq+1,iy*tq+1);
         if !home&&(walker||!g.xswap_room()){continue;}
+        dbgc!(m,71);
         let (nx,ny)=match g.swap(s,b,-ux,-uy){Some(p)=>p,None=>continue};
+        dbgc!(m,72);
         let (x0,y0)=(nx as f64*0.125,ny as f64*0.125);
         // The other: where the mover stood (its tile's change is listed in
         // the job's second pass; its orders stay as they are).
@@ -2910,18 +2925,22 @@ unsafe fn traffic_deferred(m:&Mv)->bool{m.traffic_mode>=2&&!m.occ.is_null()&&*m.
 // steer in their own step. One record read; no neighbour search.
 #[inline(never)]
 unsafe fn traffic_yield(m:&Mv,s:usize){
+    dbgc!(m,73);
     if rd(m.dead,s)!=0||!(rd(m.en,s)>0.0){return;}
     // (Handed back to Unit.update this step: left where it is.)
     if m.brain&&rd(m.cmode,s)&8!=0{return;}
+    dbgc!(m,75);
     let on=rd(m.on,s);
     let walker=on==1||on==4||on==6||(m.brain&&rd(m.cmode,s)&3==2);
     // (A walker other than a flow unit has no cached heading: nothing more.)
     if walker&&(on!=1||rd(m.fl,s)&64==0||(m.brain&&rd(m.cmode,s)!=0)){return;}
+    dbgc!(m,76);
     let xq=*(m.x.add(s) as *const i32);let yq=*(m.y.add(s) as *const i32);
     let x0=rd(m.x0,s);let y0=rd(m.y0,s);let x=xq as f64*0.125;let y=yq as f64*0.125;
     let dx=x-x0;let dy=y-y0;let spent=sqrt(dx*dx+dy*dy);
     let mut spd=mv_stat(m,s,0,m.spd);if rd(m.frz,s)>0{spd*=0.5;}if rd(m.snd,s)>0{spd*=0.5;}
     let remaining=(spd*m.dkf-spent).max(0.0);if remaining<0.25{return;}
+    dbgc!(m,77);
     let own=rd(m.own,s);
     let (fx,fy,hop,step);
     if walker{
@@ -2930,6 +2949,7 @@ unsafe fn traffic_yield(m:&Mv,s:usize){
         // pressure (never back, at most ~50 degrees), as its step was.
         let (hx,hy)=(rd(m.cvx,s),rd(m.cvy,s));let hl=sqrt(hx*hx+hy*hy);
         if !(hl>0.0)||spent>hl*m.dkf*0.75{return;}
+        dbgc!(m,78);
         let ux=hx/hl;let uy=hy/hl;
         let (layer,_)=(*m.occ).layer_mass(s);
         let (px,py)=super::traffic::sample(m.traffic,xq,yq,layer);
@@ -2940,14 +2960,17 @@ unsafe fn traffic_yield(m:&Mv,s:usize){
     }else{
         let (vx,vy,h)=super::traffic::push_response(m.traffic,xq,yq,own);
         let force=sqrt(vx*vx+vy*vy);if force<0.15{return;}
+        dbgc!(m,79);
         fx=vx/force;fy=vy/force;hop=h;step=remaining*(force*0.6).min(0.75);
     }
     let nx=x+fx*step;let ny=y+fy*step;
     let np=rd(m.npr,s) as usize;let wl=if np<NAV_PROFILES&&!m.nav.get_unchecked(np).walls.is_null(){m.nav.get_unchecked(np).walls}else{m.wall};
     if !seg_open(wl,m.w,m.h,x,y,nx,ny,m.itile,m.tile){return;}
+    dbgc!(m,80);
     let (mut tx,mut ty)=checked_traffic_position(m,s,nx,ny,false);
     // (Still blocked: one walking the other way may pass it.)
     if walker&&{let gx=tx-x;let gy=ty-y;gx*gx+gy*gy<step*step*0.0625}{
+        dbgc!(m,74);
         if let Some((sx,sy))=traffic_swap(m,s,(tx*8.0) as i32,(ty*8.0) as i32,fx,fy,wl,true){tx=sx as f64*0.125;ty=sy as f64*0.125;}
     }
     // Pressed by friends but boxed in itself: pass a weaker push on (a
@@ -2958,6 +2981,7 @@ unsafe fn traffic_yield(m:&Mv,s:usize){
         if moved<0.5{super::traffic::push_deposit(m.traffic,(tx*8.0) as i32,(ty*8.0) as i32,fx,fy,1.0,(1.0-moved)*force.min(1.0)*0.5,(*m.occ).radius_q(s),own,hop+1);}
     }
     if tx==x&&ty==y{return;}
+    dbgc!(m,81);
     wr(m.px,s,x0);wr(m.py,s,y0);wr(m.x,s,tx);wr(m.y,s,ty);
     wr(m.vx,s,(tx-x0)/m.dkf);wr(m.vy,s,(ty-y0)/m.dkf);
     if rd(m.fl,s)&64==0{wr(m.cd,s,-1);wr(m.ct,s,-1);wr(m.steady,s,0);}

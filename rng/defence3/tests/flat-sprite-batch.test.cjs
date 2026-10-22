@@ -13,7 +13,7 @@ vm.runInContext(read('src/audio_visual/renderer3d.js'), c);
 let panelLookups = 0;
 const panelA = { _panelCtx: {}, _textureVersion: 1, _flatWorldSize: 1.5, _flatOffsetZ: -0.25 };
 Object.assign(c, {
-    gameTime: 10, fullVisibility: false, VISIBILITY_LIGHT_NORMALIZATION_RANGE: 8, renderer3dExactTextureFrame: 1,
+    gameTime: 10, fullVisibility: false, renderTeamColorsOnly: false, VISIBILITY_LIGHT_NORMALIZATION_RANGE: 8, renderer3dExactTextureFrame: 1,
     visibilityGrid: [[0, 0, 0], [0, 4, 8], [0, 0, 0]], ghostGrid: [[0, 0, 0], [0, 8, 0], [0, 0, 0]],
     getRenderVisibilityGrid: () => c.ghostGrid,
     getVisualUnitSourceLight: u => u.ownLight || 0,

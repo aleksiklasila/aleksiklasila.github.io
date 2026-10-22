@@ -5,7 +5,7 @@ const H = require('./net-harness.cjs');
 for (const dk of [1, 10, 20]) {
     const world = new H.World({ controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '60', 'cfg-map-type': 'arena' } });
     const inst = world.spawn('forces' + dk, { simWorker: false });
-    inst.eval('startSoloGame();');
+    inst.eval('SIM_OCCUPANCY_ENABLED = false; startSoloGame();');
     const result = JSON.parse(inst.eval(`JSON.stringify((() => {
         for (const u of units) u.dead = true;
         gameTick(); currentTick++;
@@ -50,7 +50,7 @@ for (const dk of [1, 10, 20]) {
 for (const dk of [1, 20]) {
     const world = new H.World({ controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '60', 'cfg-map-type': 'arena' } });
     const inst = world.spawn('stack' + dk, { simWorker: false });
-    inst.eval('startSoloGame();');
+    inst.eval('SIM_OCCUPANCY_ENABLED = false; startSoloGame();');
     const result = JSON.parse(inst.eval(`JSON.stringify((() => {
         for (const u of units) u.dead = true;
         gameTick(); currentTick++;

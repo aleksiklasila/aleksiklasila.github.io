@@ -449,7 +449,7 @@ function _simWkRelease(S, s) {
 // NaN, 'r' any value (an array as long as the slots, as the object
 // fields'). [name, kind, default, in the snapshot].
 const SIM_UNIT_JS_FIELDS = [
-    ['_needsStatsInit', 'b', false, true], ['_removedNow', 'b', false, true], ['isFlying', 'b', false, true],
+    ['_removedNow', 'b', false, true], ['isFlying', 'b', false, true],
     ['_fpTile', 'i', -1, true], ['_fpIdx', 'i', -1, true], ['_fpVer', 'i', -1, true], ['_routeSegEnd', 'i', -1, true], ['_navReady', 'i', 0, true],
     ['_awaitGroupPath', 'i', 0, true], ['_pendingDueStamp', 'i', -1, true], ['_okTile', 'i', -1, true], ['_okVer', 'i', 0, true], ['_okNodeTile', 'i', -1, true],
     ['_okNodeVer', 'i', 0, true], ['_statsVer', 'i', -1, true], ['_damageFlashStart', 'i', 0, true],
@@ -690,7 +690,9 @@ function _simRefCopy(a, cap, runs) {
     for (let r = 0; r < runs.length; r += 3) for (let to = runs[r], from = runs[r + 1], e = from + runs[r + 2]; from < e; to++, from++) b.set(to, a.get(from));
     return b;
 }
-function _simUnitNextCap(cap) { return Math.max(1024, Math.ceil(cap * 1.5 / 4096) * 4096); }
+// (By half; past a million slots by an eighth: a growth makes a whole new set of columns beside the old, and by half that was
+// 1.9 GB beside 1.2 GB at 2.4M slots.)
+function _simUnitNextCap(cap) { return Math.max(1024, Math.ceil(cap * (cap >= 1048576 ? 1.125 : 1.5) / 4096) * 4096); }
 // The slots a match's population needs, reserved at its start, at a whole
 // restore and at a compaction: every player's configured maximum
 // population, and room for units that died this tick (their slots come back
@@ -736,6 +738,7 @@ const SIM_UNIT_RESERVE_PER_TILE = 8;
 // object-field arrays, a message per binding and helper). Memory only: the
 // slots and what the units do are the same whenever it happens.
 const SIM_UNIT_PREP_FILL = 0.6, SIM_UNIT_PREP_BYTES = 6 << 20;
+const SIM_UNIT_PREP_MAX_BYTES = 512 << 20;
 let _simUnitPrepSpecs = null;
 function _simUnitPrepList() {
     if (!_simUnitPrepSpecs) {
@@ -763,6 +766,9 @@ function simUnitStatePrepareStep() {
     const pop = typeof getConfiguredMaxPop === 'function' ? getConfiguredMaxPop() : 0;
     const most = pop > 0 ? Math.ceil(pop * np / 4096) * 4096 : Infinity;
     if (S.cap >= most) return;
+    // (Not past SIM_UNIT_PREP_MAX_BYTES of columns: made ahead they are written zero once and held for a growth that may never come,
+    // 0.8 GB and growing at 2.3M units; a growth there makes them when it comes.)
+    if (_simUnitNextCap(S.cap) * _simUnitBytesPerSlot() > SIM_UNIT_PREP_MAX_BYTES) return;
     const cap = Math.min(_simUnitNextCap(S.cap), most), L = _simUnitPrepList();
     // (The heap had no room for this size: tried again from the next
     // growth's size on, or after SIM_UNIT_PREP_RETRY ticks.)
@@ -848,6 +854,7 @@ function _simUnitStateGrow(S, cap, minCap = cap) {
     if (!(_simWkPool(S).cap > 0)) _simWkGrow(S, 4096);
 }
 // Slot s taken by unit u: its defaults, and u's accessors pointed at it.
+const _simSlotDesc = { value: null, writable: true };
 function _simUnitSlotStart(S, s, u) {
     S.sepKey[s] = SIM_SEP_ABSENT;
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNav[s * SIM_NAV_STRIDE] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
@@ -878,7 +885,8 @@ function _simUnitSlotStart(S, s, u) {
     // (Its JavaScript fields at their defaults; the object holds only its
     // slot: its columns, slot, detached values and role memory.)
     _simJsDefaults(S.columns, s);
-    Object.defineProperties(u, { _us: { value: S.columns, writable: true }, _si: { value: s, writable: true }, _det: { value: null, writable: true }, _rm: { value: null, writable: true } });
+    // (One descriptor reused: five objects a unit were made for these four.)
+    const d = _simSlotDesc; d.value = S.columns; Object.defineProperty(u, '_us', d); d.value = s; Object.defineProperty(u, '_si', d); d.value = null; Object.defineProperty(u, '_det', d); Object.defineProperty(u, '_rm', d); d.value = null;
     S.columns.mvPF[s] = 0;
 }
 

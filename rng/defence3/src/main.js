@@ -657,6 +657,8 @@ function gameTick() {
     _inGameTick = true;
     try { _gameTickBody(); } finally { _inGameTick = false; }
 }
+// How many ticks one pass over the buildings' and floor items' status guard takes.
+const THING_STATUS_GUARD_TICKS = 512;
 function _gameTickBody() {
     // (Actions left from earlier ticks, on a tick that brought none; then the
     // next tick's action budget.)
@@ -690,8 +692,7 @@ function _gameTickBody() {
     // panel shows the latest complete one.
     // (A step of several base ticks: their slices, the second's tick when
     // it is one of them.)
-    let upKeepSlices = simStepPhases(TICK_RATE);
-    let upKeepThisTick = upKeepSlices.includes(0);
+    let upKeepThisTick = simStepPhases(TICK_RATE).includes(0);
     _upKeepAccum = null;
 
     let floorChanged = false;
@@ -702,7 +703,10 @@ function _gameTickBody() {
     // row-major order.
     {
         const cellItems = getCellItemsRowMajor();
-        for (const upKeepSlice of upKeepSlices) for (let i = upKeepSlice; i < cellItems.length; i += TICK_RATE) {
+        // (A guard for the hooks, which wake an item at once: a 512th of the
+        // items a tick. A TICK_RATE-th read seven columns of each of ~200k
+        // items a tick at 4M units: ~100 ms.)
+        for (const guardSlice of simStepPhases(THING_STATUS_GUARD_TICKS)) for (let i = guardSlice; i < cellItems.length; i += THING_STATUS_GUARD_TICKS) {
             const item = cellItems[i];
             if (grid[item.gy][item.gx].item !== item) continue;
             // (No ensureStatusState: applyStatusEffect and tickStatusEffects
@@ -758,8 +762,7 @@ function _gameTickBody() {
 
     flushPendingMovementAstarSpend();
     flushPendingResourceStatRebuilds();
-    recalculateUnitEffectiveStats();
-    recalculateThingPrecomputedStats();
+    recalculateUnitEffectiveLevel();
 
     // Every player's gameplay visibility for this tick, from positions at
     // this point. Computing it here, rather than at whichever query happens
@@ -3427,7 +3430,7 @@ function _ordClearFast(c, s, K, cmd, amGx, amGy, tAmx, tAmy, targetPos, tTp) {
     h += _ordSet(c.oc__attackMoveGx, s, K.amx, amGx, tAmx);
     h += _ordSet(c.oc__attackMoveGy, s, K.amy, amGy, tAmy);
     h += _ordSet(c.oc_targetPos, s, K.tp, targetPos, tTp);
-    c.j__awaitGroupPath[s] = 0;
+    c.j__awaitGroupPath.clear(s);
     h += _ordSet(c.jr__ppt, s, K.ppt, null, K.pptNull);
     h += _ordSet(c.jr__pfa, s, K.pfa, false, K.pfaFalse);
     c.mvPF[s] = 0;
@@ -3471,14 +3474,14 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
             if (K && c && !c.jr__ws.get(s)) {
                 const o = c.oc__routeKey.get(s);
                 if (o !== NAV_ROUTE_KEY) { c.oc__routeKey.set(s, NAV_ROUTE_KEY); c.hObj[s] = (c.hObj[s] + tRk - _simHTerm(K.rk, o)) | 0; }
-                c.rtEnd[s] = destKey; c.nvProf[s] = profile; c.j__navReady[s] = ready;
+                c.rtEnd[s] = destKey; c.nvProf[s] = profile; c.j__navReady.set(s, ready);
                 if (c.pathIndex[s] !== 0) { c.mvOn[s] = 0; c.pathIndex[s] = 0; }
                 const at = Math.floor(c.y[s] * 0.125 / TILE) * GRID_W + Math.floor(c.x[s] * 0.125 / TILE) === destKey;
                 c.nvPK[s] = at ? -1 : pk;
                 simUnitPathRelease(c, s);
                 c.jr__path.set(s, at ? null : navPath);
                 c.mvOn[s] = 0; c.mvCD[s] = -1;
-                c.j__routeSegEnd[s] = at ? -1 : destKey;
+                c.j__routeSegEnd.set(s, at ? -1 : destKey);
                 c.mvNavLD[s] = group && !at ? _ordNavLD(c, s, destKey) : -1;
                 if (!at && did >= 0) simFlowArm(c, s, did, navFieldGen(did), destKey, cmd, flying, ready, !group, 0, profile);
                 // (A group's unit on the destination tile has arrived: only lone

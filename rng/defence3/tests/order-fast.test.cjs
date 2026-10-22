@@ -45,7 +45,7 @@ function run(fast) {
         for (const k of Object.keys(c)) {
             const a = c[k];
             if (!a || typeof a.length !== 'number') continue;
-            out[k] = units.map(u => { const v = a[u._si]; return v && typeof v === 'object' ? (Array.isArray(v) ? JSON.stringify(v) : _simHEnc(v)) : (typeof v === 'number' && v !== v ? 'NaN' : v); });
+            out[k] = units.map(u => { const v = typeof a.get === 'function' ? a.get(u._si) : a[u._si]; return v && typeof v === 'object' ? (Array.isArray(v) ? JSON.stringify(v) : _simHEnc(v)) : (typeof v === 'number' && v !== v ? 'NaN' : v); });
         }
         out.digestOk = units.every(u => simUnitHashDigest(u) === c.hObj[u._si]);
         out.hash = typeof computeStateHash === 'function' ? computeStateHash() : null;

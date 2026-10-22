@@ -1,1 +1,31 @@
 .claude/
+
+# Benchmark / profiling / regression run outputs (logs, traces, profiles, heap snapshots, dumps, built variants)
+tests/test-runs/
+tests/scenes/
+*.heapsnapshot
+*.heapprofile
+*.cpuprofile
+*.trace.json
+*.trace
+
+# Scratch files and one-off validation output
+.reg-*.json
+tests/reg-*.json
+tests/tmp-*.json
+tests/tmp-*
+tests/_dbg_*
+tmp-*.json
+*.orig
+*.rej
+*.log
+
+# Build outputs and tools (wasm/.gitignore: target*/ and tools/)
+wasm/target*/
+
+# Dependencies, OS and editor files
+node_modules/
+.DS_Store
+Thumbs.db
+*.swp
+*~

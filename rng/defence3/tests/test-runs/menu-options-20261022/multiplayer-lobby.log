@@ -1,7 +1,0 @@
-PASS: lobby flows
-  missing game: back to the menu with a message, URL cleaned, solo playable
-  unreachable host: join times out to the menu
-  leave lobby, close lobby (guests informed), then single player
-  timing always automatic (manual fields disabled, no Auto / Equal Command Delay options)
-  joining during the start is kept out of the match, then spectates in sync without pausing the players
-  host gone for good: guest takes over (drop button shown), and can leave to the menu

@@ -40,16 +40,34 @@ pub unsafe extern "C" fn k_acq_area_build(a:u32,_chunk:i32){
     let players=k.i(7).max(1) as usize;let keys=na*players;
     let off=k.p::<i32>(27);let counts=k.p::<i32>(35);let cursor=k.p::<i32>(36);
     core::ptr::write_bytes(counts,0,keys);
-    for e in 0..n {if let Some((ar,owner,_,_,_,_))=candidate(&k,e){if ar<na&&owner<players {*counts.add(ar*players+owner)+=1;}}}
+    // (Each entry's area and owner worked out once, into acq.saKey (-1: none): the count and the
+    // scatter then read it, and only the scatter reads the rest of the entry.)
+    let keyv=k.p::<i32>(45);
+    if !keyv.is_null()&&k.i(30)!=0 {
+        for e in 0..n {match candidate(&k,e){Some((ar,owner,_,_,_,_)) if ar<na&&owner<players=>{let key=ar*players+owner;*keyv.add(e)=key as i32;*counts.add(key)+=1;}_=>{*keyv.add(e)=-1;}}}
+    }else{
+        for e in 0..n {if let Some((ar,owner,_,_,_,_))=candidate(&k,e){if ar<na&&owner<players {*counts.add(ar*players+owner)+=1;}}}
+    }
     let mut total=0;for key in 0..keys {*off.add(key)=total;*cursor.add(key)=total;total+=*counts.add(key);}*off.add(keys)=total;
     let ax=k.p::<f32>(28);let ay=k.p::<f32>(29);let ao=k.p::<i32>(30);let aid=k.p::<i32>(31);let slots=k.p::<i32>(32);
+    if !keyv.is_null()&&k.i(30)!=0 {
+        // (As candidate's slot-snapshot case: the entry's slot, its owner from the key, its position and id from the slot's columns.)
+        let (es,xs,ys,ids)=(k.p::<i32>(19),k.p::<f32>(4),k.p::<f32>(5),k.p::<i32>(10));
+        let pl=players as i32;
+        for e in 0..n {let key=*keyv.add(e);if key<0 {continue;}
+            let slot=*es.add(e);let s=slot as usize;
+            let cur=cursor.add(key as usize);let j=*cur as usize;*cur+=1;
+            *ax.add(j)=*xs.add(s);*ay.add(j)=*ys.add(s);*ao.add(j)=key%pl;*aid.add(j)=*ids.add(s);*slots.add(j)=slot;
+        }
+    }else{
     for e in 0..n {if let Some((ar,owner,x,y,id,slot))=candidate(&k,e){if ar>=na||owner>=players {continue;}
         let cur=cursor.add(ar*players+owner);let j=*cur as usize;*cur+=1;
         *ax.add(j)=x;*ay.add(j)=y;*ao.add(j)=owner as i32;*aid.add(j)=id;*slots.add(j)=slot;
     }
     }
+    }
     if k.i(28)==1 {
-        build_area_answers(&k,na,players,off);
+        prepare_area_answers(&k,na,players,off);
         return;
     }
     if k.i(26)==0 {return;}
@@ -72,15 +90,37 @@ pub unsafe extern "C" fn k_acq_area_build(a:u32,_chunk:i32){
     }
 }
 
+// What the answers' jobs share, from the packed table: per area the set of
+// teams holding units there (a bit each; acq.saSeen), and how many area steps
+// the farthest-looking unit reaches (acq.saNearN[0]): an answer farther than
+// that is never asked for (area_answer takes d<=reach), so the searches stop
+// there. P[31] the slots, P[29] the tiles an area step stands for.
+unsafe fn prepare_area_answers(k:&K,na:usize,players:usize,off:*const i32){
+    let mask=k.p::<i32>(37);
+    for ar in 0..na {
+        let mut m=0;
+        for foe in 0..players {let key=ar*players+foe;if *off.add(key+1)>*off.add(key){m|=1<<foe;}}
+        *mask.add(ar)=m;
+    }
+    let ranges=k.p::<f32>(9);let n=k.i(31).max(0) as usize;
+    let mut far=0.0f32;
+    for s in 0..n {let r=*ranges.add(s);if r>far {far=r;}}
+    let reach=ceil(far as f64/(k.f(5)*k.f(29).max(1.0))) as i32;
+    *k.p::<i32>(34)=reach.max(0);
+}
+
 // Multi-source BFS: for each viewer, the nearest graph distance to a
 // nonempty visible enemy area. Population affects the CSR build, not queries.
 // Structure answers use the same area rule, separately for each priority.
+// Stops when every area has its answer, or past `maxd` steps (no query asks
+// farther: area_answer's d<=reach).
 #[inline(always)]
-unsafe fn spread_answers(na:usize,answers:*mut i32,dist:*mut i32,queue:*mut i32,go:*const i32,gn:*const i32){
+unsafe fn spread_answers(na:usize,answers:*mut i32,dist:*mut i32,queue:*mut i32,go:*const i32,gn:*const i32,maxd:i32){
     let mut head=0;let mut tail=0;
     for ar in 0..na {if *answers.add(ar)>=0 {*dist.add(ar)=0;*queue.add(tail)=ar as i32;tail+=1;}else{*dist.add(ar)=-1;}}
-    while head<tail {
+    while head<tail&&tail<na {
         let u=*queue.add(head) as usize;head+=1;let d=*dist.add(u)+1;
+        if d>maxd {break;}
         for j in *go.add(u)..*go.add(u+1) {
             let v=*gn.add(j as usize) as usize;if v>=na||*dist.add(v)>=0 {continue;}
             *dist.add(v)=d;*answers.add(v)=*answers.add(u);*queue.add(tail)=v as i32;tail+=1;
@@ -88,31 +128,44 @@ unsafe fn spread_answers(na:usize,answers:*mut i32,dist:*mut i32,queue:*mut i32,
     }
 }
 
-unsafe fn build_area_answers(k:&K,na:usize,players:usize,off:*const i32){
-    let answers=k.p::<i32>(40);let dist=k.p::<i32>(41);let queue=k.p::<i32>(42);
-    let structures=k.p::<i32>(43);let struct_dist=k.p::<i32>(44);
+/// The area answers, a job each: chunk = viewer * 5 + part. Part 0: the
+/// nearest area holding a visible enemy unit; parts 1-4: the nearest area
+/// holding a visible enemy structure of that class (the first such tile of
+/// each area). Every job writes its own slices (and its own queue), so they
+/// run on any threads, in any order, with one result.
+#[no_mangle]
+pub unsafe extern "C" fn k_acq_area_answers(a:u32,chunk:i32){
+    let k=K::new(waddr(a) as *const i32);
+    let na=k.i(20).max(0) as usize;let players=k.i(7).max(1) as usize;
+    let c=chunk.max(0) as usize;let viewer=c/5;let part=c%5;
+    if viewer>=players||na==0 {return;}
+    let maxd=*k.p::<i32>(34);
     let go=k.p::<i32>(38);let gn=k.p::<i32>(39);let cov=k.p::<u8>(14);
-    for viewer in 0..players {let base=viewer*na;
+    let queue=k.p::<i32>(42).add(c*na);
+    if part==0 {
+        let answers=k.p::<i32>(40).add(viewer*na);let dist=k.p::<i32>(41).add(viewer*na);let mask=k.p::<i32>(37);
+        let others=!(1i32<<viewer);
         for ar in 0..na {
-            let mut enemy=false;
-            if *cov.add(base+ar)!=0 {for foe in 0..players {let key=ar*players+foe;if foe!=viewer&&*off.add(key+1)>*off.add(key){enemy=true;break;}}}
-            *answers.add(base+ar)=if enemy {ar as i32}else{-1};
+            *answers.add(ar)=if *cov.add(viewer*na+ar)!=0&&(*mask.add(ar)&others)!=0 {ar as i32}else{-1};
         }
-        spread_answers(na,answers.add(base),dist.add(base),queue,go,gn);
+        spread_answers(na,answers,dist,queue,go,gn,maxd);
+        return;
     }
-    for i in 0..na*players*4 {*structures.add(i)=-1;}
+    let group=viewer*4+part-1;
+    let structures=k.p::<i32>(43).add(group*na);let struct_dist=k.p::<i32>(44).add(group*na);
+    for i in 0..na {*structures.add(i)=-1;}
     let ag=k.p::<i32>(13);let cls=k.p::<i8>(0);let owners=k.p::<i8>(1);
+    let class=part as i8;
     for tile in 0..(k.i(15).max(0) as usize*k.i(16).max(0) as usize) {
-        let class=*cls.add(tile);let class=if class==5 {1}else{class};
-        if class<1||class>4 {continue;}let owner=*owners.add(tile);if owner==-1 {continue;}
-        let ar=*ag.add(tile);if ar<0||ar as usize>=na {continue;}let ar=ar as usize;
-        for viewer in 0..players {
-            if owner as i32==viewer as i32||*cov.add(viewer*na+ar)==0 {continue;}
-            let i=(viewer*4+class as usize-1)*na+ar;
-            if *structures.add(i)<0 {*structures.add(i)=tile as i32;}
-        }
+        let cl=*cls.add(tile);let cl=if cl==5 {1}else{cl};
+        if cl!=class {continue;}
+        let owner=*owners.add(tile);if owner==-1||owner as i32==viewer as i32 {continue;}
+        let ar=*ag.add(tile);if ar<0||ar as usize>=na {continue;}
+        let ar=ar as usize;
+        if *cov.add(viewer*na+ar)==0 {continue;}
+        if *structures.add(ar)<0 {*structures.add(ar)=tile as i32;}
     }
-    for group in 0..players*4 {spread_answers(na,structures.add(group*na),struct_dist.add(group*na),queue,go,gn);}
+    spread_answers(na,structures,struct_dist,queue,go,gn,maxd);
 }
 
 unsafe fn area_answer(k:&K,s:usize,x:f32,y:f32,owner:usize,r:f32){

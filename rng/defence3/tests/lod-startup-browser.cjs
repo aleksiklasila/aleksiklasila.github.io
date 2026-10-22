@@ -28,7 +28,8 @@ let browser;
         };
         window.addEventListener('unhandledrejection',event=>bakeTest.error=event.reason?.stack||String(event.reason));
     });
-    await page.getByRole('button',{name:'Play Solo',exact:true}).click();
+    await page.locator('#btn-play-offline').click();
+    await page.locator('#menu-action-popover button',{hasText:'New'}).click();
     const deadline=Date.now()+240000;
     let status,sawProgress=false;
     do {
@@ -39,7 +40,7 @@ let browser;
         if(status.error)throw Error(status.error);
     }while(!status.done&&Date.now()<deadline);
     assert.ok(status.done,'full roster preparation finishes');
-    assert.ok(sawProgress,'Play Solo displays progress when it joins the background menu bake');
+    assert.ok(sawProgress,'Play Offline displays progress when it joins the background menu bake');
     const result=await page.evaluate(()=>{
         const R=renderer3dInstance,A=R.columnAtlas;
         const expected=[...Object.keys(BASE_UNIT_STATS).flatMap(type=>['unit_'+type,'barrack_'+type]),...Object.keys(BASE_CARD_TYPES)];

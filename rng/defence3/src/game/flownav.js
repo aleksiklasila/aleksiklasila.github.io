@@ -516,8 +516,15 @@ function navAtlasHeader(A, nodePart, nodeBase) {
 function navAtlasStep(nav, t, dest) {
     const A = nav && nav.atlas;
     if (!A || !A.header || _simWasmX === null || !_simWasmX.nav_atlas_step) return -1;
-    const ptr = a => _simWEnc(_simHeapPtrOf(a));
-    return _simWasmX.nav_atlas_step(ptr(A.header), ptr(nav.partL), ptr(nav.partBase), ptr(nav.nodeTile), ptr(nav.nodePair), ptr(nav.fields), nav.W, t, dest);
+    // (The arrays' addresses worked out once while they stay the same arrays: past 2^30 a number is a heap
+    // allocation, six of them a call.)
+    let c = nav._asc;
+    if (!c || c.h !== A.header || c.pl !== nav.partL || c.pb !== nav.partBase || c.nt !== nav.nodeTile || c.np !== nav.nodePair || c.f !== nav.fields) {
+        const ptr = a => _simWEnc(_simHeapPtrOf(a));
+        c = nav._asc = { h: A.header, pl: nav.partL, pb: nav.partBase, nt: nav.nodeTile, np: nav.nodePair, f: nav.fields,
+            eh: ptr(A.header), epl: ptr(nav.partL), epb: ptr(nav.partBase), ent: ptr(nav.nodeTile), enp: ptr(nav.nodePair), ef: ptr(nav.fields) };
+    }
+    return _simWasmX.nav_atlas_step(c.eh, c.epl, c.epb, c.ent, c.enp, c.ef, nav.W, t, dest);
 }
 
 

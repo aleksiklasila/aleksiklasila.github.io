@@ -150,8 +150,8 @@ inst.eval(`startingResourcesConfig = normalizeStartingResourcesConfig({spawnCoun
     }`);
 // Coarse phases only: avoid wrapping individual units or candidate queries.
 inst.eval(`__scratch.phases={}; __scratch.phaseSelf={}; __scratch.phaseStack=[]; __scratch.measuring=false;
-    for (const name of ['spatialIndexRebuild','navTick','navFieldsFlush','recalculateUnitEffectiveStats',
-        'recalculateThingPrecomputedStats','updateAllPlayerVisibility','towersTick','projectilesBegin',
+    for (const name of ['spatialIndexRebuild','navTick','navFieldsFlush','recalculateUnitEffectiveLevel',
+        'updateAllPlayerVisibility','towersTick','projectilesBegin',
         'statusPrepassRun','separationStart','unitPassBegin','simMoveRun','combatScanRun',
         '_forEachUnitInTickOrder','unitHitsResolve','visCoverHoldEnd','unitRetirePrepare',
         'simParallelRun','simParallelBackgroundWait','_simMoveSepListed','_simMoveChargeSteps',

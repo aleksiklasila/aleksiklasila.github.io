@@ -118,7 +118,13 @@ const SNAP_FORMAT = 7;
 // sleep); same-destination crowd arrival; group units on the destination
 // tile arrive (CROWD_SEPARATION_PROGRESS.md).
 // 24: a manual worker move keeps the path installed by a fallback upgrade.
-const SIM_RULES_REVISION = 29;
+// 30: the players list has the slots of the teams playing (the highest team
+// id + 1, at least 2), not eight: every per-player table of the simulation
+// is as long as it.
+// 31: a unit has its stats from creation (stat row, current version); no
+// first-tick refresh, and its effective level comes at its turn of the
+// strided share like every unit's (recalculateUnitEffectiveLevel).
+const SIM_RULES_REVISION = 31;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;
@@ -1990,6 +1996,8 @@ function _snapRebuildStatsInPlace(pid) {
 function _snapEnsureStatMaps() {
     let ctx = _snapDec;
     ctx.statMapReady = true;
+    // (The restored players' count: a peer that started its world for another team list holds more tables.)
+    if (PRECOMPUTED_STATS_MAP_PLAYER.length > players.length) PRECOMPUTED_STATS_MAP_PLAYER.length = players.length;
     let target = Array.isArray(ctx.statMult) && typeof _statAppliedGet === 'function' ? ctx.statMult : null;
     let stale = [];
     for (let pid = 0; pid < players.length; pid++) {
@@ -2327,8 +2335,10 @@ function snapDecodeState(S, options = null) {
         if (typeof actionBacklogRestore === 'function') actionBacklogRestore(Array.isArray(g.actionBacklog) ? g.actionBacklog : []);
         globalSpawnerReadyOrderCounter = _snapD(g.spawnOrder);
         if (rng && typeof rng.setState === 'function' && g.rng !== null && g.rng !== undefined) rng.setState(g.rng);
-        if (Array.isArray(g.pathBudget)) for (let i = 0; i < g.pathBudget.length; i++) pathfindBudgetByPlayer[i] = _snapD(g.pathBudget[i]);
-        if (Array.isArray(g.astarBudget)) for (let i = 0; i < g.astarBudget.length; i++) astarNodeBudgetRemainingByPlayer[i] = _snapD(g.astarBudget[i]);
+        // (The per-player budget arrays at the restored players' length, as the source peer's: the hash covers all their entries.)
+        _ensurePathBudgetArrays();
+        if (Array.isArray(g.pathBudget)) for (let i = 0; i < g.pathBudget.length && i < pathfindBudgetByPlayer.length; i++) pathfindBudgetByPlayer[i] = _snapD(g.pathBudget[i]);
+        if (Array.isArray(g.astarBudget)) for (let i = 0; i < g.astarBudget.length && i < astarNodeBudgetRemainingByPlayer.length; i++) astarNodeBudgetRemainingByPlayer[i] = _snapD(g.astarBudget[i]);
         resignedTeams = new Set((g.resigned || []).map(_snapD));
         if (Array.isArray(g.teams) && g.teams.length > 0) activeTeamIds = g.teams.map(_snapD);
         if (Array.isArray(g.pendingStatRebuilds)) {

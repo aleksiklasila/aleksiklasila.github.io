@@ -708,44 +708,6 @@ function getUnitCollisionRecalcTicks() {
     return Math.max(1, Math.min(240, Math.floor(Number(UNIT_COLLISION_RECALC_TICKS) || 1)));
 }
 
-function _refreshThingPrecomputedStats(item) {
-    if (!item || item.dead) return;
-
-    // Units only (barracks carry a unitType too: theirs are building stats).
-    if (item instanceof Unit && item.unitType && Number.isFinite(item.owner)) {
-        let baseLevel = getUnitBaseLevel(item);
-        let effectiveLevel = getUnitEffectiveLevel(item, baseLevel);
-        // Its tables unchanged (same levels, no stat table rebuilt since its
-        // last refresh): the refresh would only redo the field writes below,
-        // so those alone (the same outcome, without the table work).
-        const lvl = Math.max(1, Math.floor(baseLevel || 1)), eff = Math.max(1, Math.floor(effectiveLevel || 1));
-        if (item._statsVer === _precomputedStatsVersion && item.baseLevel === lvl && item.effectiveLevel === eff
-            && Number.isFinite(item.stackCount) && item.stackCount >= 1 && item.preComputedBase && item.preComputed === item.preComputedEffective
-            && item.basePreComputed === item.preComputedBase && !!item.isFlying === !!(BASE_UNIT_STATS[item.unitType] || BASE_UNIT_STATS.norm || {}).isFlying
-            && item.preComputedBase === computeUnitLevelScaledStats(item, lvl)
-            && item.preComputedEffective === clonePrecomputedWithBaseMaxEnergy(item.preComputedBase, computeUnitLevelScaledStats(item, eff))) {
-            item.unitLevel = lvl;
-            item.effectiveStacks = Math.max(1, Math.floor(item.stackCount));
-            item.maxEnergy = item.preComputedBase.maxEnergy;
-            if (typeof simUnitMaxE === 'function') simUnitMaxE(item);
-            let e = Number(item.energy);
-            if (!Number.isFinite(e)) e = Number(item.preComputedBase.maxEnergy) || 1;
-            item.energy = Math.max(1, Math.min(item.maxEnergy, Math.floor(e)));
-            item.effectiveLevel = eff;
-            return;
-        }
-        const previousRow=item._us ? item._us.statRow[item._si] : -1;
-        // (The movement checks told once, of the final stats.)
-        _unitStatsNotifyHeld = true;
-        try { applyUnitLevelScaling(item, baseLevel); applyUnitEffectiveScaling(item, effectiveLevel); }
-        finally { _unitStatsNotifyHeld = false; }
-        if (typeof simMoveStatsChanged === 'function') simMoveStatsChanged(item, previousRow);
-        item._statsVer = _precomputedStatsVersion;
-        return;
-    }
-
-}
-
 // Selected things refresh stats sooner so the info panel stays live (single
 // player only). A large selection is spread over a few ticks, about 32
 // refreshes per tick, instead of refreshing a whole army every tick.
@@ -757,62 +719,17 @@ function _isSelectionStatsRefreshDue(item, selectionSize) {
     return simStepCrosses(seed, every);
 }
 
-// Units created since the last stats pass (u._needsStatsInit): refreshed on
-// their first tick, before their turn in the strided passes below comes up.
-// The list follows the flag, which snapshots carry: a restore rebuilds it.
-// (Capped: where no tick drains it, e.g. the page beside a simulation
-// worker, it is dropped; where a tick does, the drain makes it again from
-// the flags (_newUnitsForStatsLost): a match starting with 180k units had
-// lost ~120k, their flag never cleared, every one of them on the slow
-// path of each effective-stats turn (~5 ms a tick), and a peer restored
-// from a snapshot (the list made from the flags) cleared what the others
-// kept.)
-let _newUnitsForStats = [], _newUnitsForStatsLost = false;
-function _noteNewUnitForStats(u) {
-    if (_newUnitsForStats.length >= 65536) { _newUnitsForStats.length = 0; _newUnitsForStatsLost = true; }
-    _newUnitsForStats.push(u);
-}
+// (A new unit has its stats from creation: applyUnitLevelScaling gives it
+// its level's tables, a stat row of its owner, type and level, and notes it
+// current (esVer). Nothing refreshes a unit afterwards: its row is rewritten
+// in place when research changes the tables, and its effective level, which
+// follows the units around it a few seconds behind, is the strided share of
+// recalculateUnitEffectiveLevel's, from the columns, in the kernels.)
+// A restore or a new world: the base entries (tables of the stat maps) may
+// be other objects.
 function resetNewUnitsForStats() {
-    _newUnitsForStats = []; _newUnitsForStatsLost = false;
-    for (let u of units) if (u && u._needsStatsInit) _newUnitsForStats.push(u);
-    // (A new world, a restore: the stat maps' tables may be other objects.)
     if (typeof _effBaseClear === 'function') _effBaseClear();
 }
-
-let _thingStatsRefreshStamp = 0;
-
-function recalculateThingPrecomputedStats() {
-    let selectedUnitSet = null;
-    let selectedEntitySet = null;
-    if (!isMultiplayer || !gameStarted) {
-        if (selectedUnits && selectedUnits.length > 0) selectedUnitSet = new Set(selectedUnits);
-        if (selectedEntities && selectedEntities.length > 0) selectedEntitySet = new Set(selectedEntities);
-    }
-    let selectionSize = (selectedUnitSet ? selectedUnitSet.size : 0) + (selectedEntitySet ? selectedEntitySet.size : 0);
-
-    // New units and (single player) the selection; a stamp keeps a unit to
-    // one refresh per call. (No periodic pass over units: their stats change
-    // only where they are applied at once: new units, level and effective
-    // level changes, research: applyUnitResearchUpgradeToExistingUnits.)
-    let unitStamp = ++_thingStatsRefreshStamp;
-    let refreshUnit = (u) => {
-        if (!u || u.dead || u._thingStatsRefreshStamp === unitStamp) return;
-        u._thingStatsRefreshStamp = unitStamp;
-        _refreshThingPrecomputedStats(u);
-    };
-    if (_newUnitsForStatsLost) resetNewUnitsForStats();
-    for (let u of _newUnitsForStats) {
-        if (!u._needsStatsInit) continue;
-        u._needsStatsInit = false;
-        refreshUnit(u);
-    }
-    _newUnitsForStats.length = 0;
-    if (selectedUnitSet) for (let u of selectedUnitSet) if (_isSelectionStatsRefreshDue(u, selectionSize)) refreshUnit(u);
-
-    // Structures and floors derive their stats; only unique level/progress
-    // events update their mutable state. No periodic stat refresh buckets.
-}
-
 
 function _effectiveStatsRadiusPx(u) {
     return Math.max(0.5, Number((u.basePreComputed && u.basePreComputed.visionRange) || (u.preComputed && u.preComputed.visionRange) || 0.5)) * TILE;
@@ -1052,9 +969,17 @@ const _effRowCols = {};
 const EFF_HOT_WIDTH = 16;
 let _effHot = null;
 function _effRowDims() { return [spatialUnitsComplexPlayerCount | 0, spatialUnitsComplexUnitTypeCount | 0, (MAX_THING_LEVEL | 0) + 1]; }
+// The same as numbers, and their key made when they change (every lookup of every unit made an array and a string of them).
+let _effDimNP = -1, _effDimNT = -1, _effDimL1 = -1, _effDimKey = '';
+function _effDimsRefresh() {
+    const NP = spatialUnitsComplexPlayerCount | 0, NT = spatialUnitsComplexUnitTypeCount | 0, L1 = (MAX_THING_LEVEL | 0) + 1;
+    if (NP !== _effDimNP || NT !== _effDimNT || L1 !== _effDimL1) { _effDimNP = NP; _effDimNT = NT; _effDimL1 = L1; _effDimKey = NP + ':' + NT + ':' + L1; }
+    return _effDimKey;
+}
 function _effRowLookup() {
-    const [NP, NT, L1] = _effRowDims(), dims = NP + ':' + NT + ':' + L1;
+    const dims = _effDimsRefresh();
     if (_effRowLk === null || _effRowLkDims !== dims) {
+        const NP = _effDimNP, NT = _effDimNT, L1 = _effDimL1;
         if (_effRowLk !== null) _effRowsReset();
         _effRowLk = simSharedArray(Int32Array, Math.max(1, NP * NT * L1 * L1));
         _effRowLk.fill(-1);
@@ -1107,8 +1032,9 @@ function _effRowsReset() {
 const EFF_BASE_NONE = -2147483648;
 let _effBase = { dims: '', ver: null, rad: null, maxE: null, maxE64: null, obj: [] };
 function _effBaseLookup() {
-    const [NP, NT, L1] = _effRowDims(), dims = NP + ':' + NT + ':' + L1, B = _effBase;
+    const dims = _effDimsRefresh(), B = _effBase;
     if (B.dims !== dims || !B.ver) {
+        const NP = _effDimNP, NT = _effDimNT, L1 = _effDimL1;
         const n = Math.max(1, NP * NT * L1);
         B.ver = simSharedArray(Int32Array, n); B.ver.fill(EFF_BASE_NONE);
         B.rad = simSharedArray(Int32Array, n); B.maxE = simSharedArray(Float32Array, n);
@@ -1152,7 +1078,8 @@ function _effRowAttach(u) {
     if (!c || typeof simSharedArray !== 'function') return;
     const s = u._si, pc = u._pc;
     if (!pc || typeof pc !== 'object' || pc !== u._pce) return;
-    const [NP, NT, L1] = _effRowDims();
+    _effDimsRefresh();
+    const NP = _effDimNP, NT = _effDimNT, L1 = _effDimL1;
     const o = c.owner[s], ty = spatialUnitTypeToIndex[u.unitType], bl = Math.max(1,c.baseLevel[s]), el = Math.max(1,c.effectiveLevel[s]);
     if (!(o >= 0 && o < NP && ty >= 0 && ty < NT && bl >= 1 && bl < L1 && el >= 1 && el < L1) || bl !== Math.floor(bl) || el !== Math.floor(el)) return;
     const lk = _effRowLookup(), key = ((o * NT + ty) * L1 + bl) * L1 + el, ver = c.esVer[s];
@@ -1261,14 +1188,14 @@ function _effStatsFullUnit(u, canUseSpatialCounts, chunkPx) {
     }
 }
 
-// Units' effective stats: new units, the strided share of the units
-// (1/intervalTicks of them a tick, by index) and, in single player, the
-// selection. The strided share runs in the kernels from the columns
+// Units' effective level: the strided share of the units (1/intervalTicks
+// of them a tick, by index; a new unit has its turn like the others) and, in
+// single player, the selection. The strided share runs in the kernels from the columns
 // (SIM_KERNEL_EFF_UNITS: stacks, levels, nearby counts); only units whose
 // effective level changed (their effective tables), and units the columns
 // cannot answer for, are touched as objects, in the share's order.
 let _effFlags = null;
-function recalculateUnitEffectiveStats() {
+function recalculateUnitEffectiveLevel() {
     let intervalTicks = getUnitEffectiveStatsRecalcTicks();
     let selectedSet = null;
     if ((!isMultiplayer || !gameStarted) && selectedUnits && selectedUnits.length > 0) selectedSet = new Set(selectedUnits);
@@ -1290,10 +1217,6 @@ function recalculateUnitEffectiveStats() {
         u._effectiveStatsStamp = stamp;
         return false;
     };
-    // New units (their list is drained by recalculateThingPrecomputedStats,
-    // which runs next).
-    if (_newUnitsForStatsLost) resetNewUnitsForStats();
-    for (let u of _newUnitsForStats) if (u._needsStatsInit && !taken(u)) _effStatsFullUnit(u, canUseSpatialCounts, chunkPx);
     // The strided share. (Units behind their stat tables (a research done:
     // every unit of the type) take the slow full path: at most
     // EFF_BEHIND_PER_TICK a tick, in index order; the rest at their next
@@ -2372,8 +2295,9 @@ function shouldKeepBuildSelectionAfterLeftClick(shiftHeld) {
     return buildPlacementMode === BUILD_PLACE_MODE_SHIFT_KEEP || buildPlacementMode === BUILD_PLACE_MODE_SHIFT_DRAG;
 }
 
+// Areas, to a hundredth (ranges are fractional: 1.5a).
 function formatAreaDistanceStat(v) {
-    return Number.isFinite(v) ? `${Math.floor(Math.max(0, v))}a` : '-';
+    return Number.isFinite(v) ? `${Math.round(Math.max(0, v) * 100) / 100}a` : '-';
 }
 
 function formatRangeStatTiles(v) {

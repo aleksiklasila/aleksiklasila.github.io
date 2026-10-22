@@ -17,6 +17,9 @@
 // ============================================================
 
 // false before a match: every array in plain shared memory, JS kernels only.
+// (Diagnostics, off: the heap's allocations by call site, _simHeapSiteTotals.)
+const SIM_HEAP_SITES = false;
+const _simHeapSiteOf = new Map(), _simHeapSiteTotals = new Map();
 let SIM_WASM_ENABLED = true;
 const SIM_HEAP_ALIGN = 64;
 // Bytes past each array's end: the SIMD loops read whole vectors.
@@ -178,8 +181,19 @@ function _simHeapAllocImpl(Type, n, clear = true) {
     H.ptr.set(arr, ptr); H.size.set(arr, bytes);
     H.live += bytes; H.arrays++;
     if (H.live > H.peak) H.peak = H.live;
+    if (SIM_HEAP_SITES) _simHeapSiteAlloc(ptr, bytes);
     return arr;
 }
+// Diagnostics (off): the wasm heap's allocations by call site: bytes allocated, freed, and held now.
+function _simHeapSiteAlloc(p, bytes) {
+    const st = String(new Error().stack).split('\n').slice(3, 8).map(l => l.trim().replace(/^at /, '').replace(/\(?https?:\/\/[^ )]*\/([^\/ )?:]+)[^ )]*?:(\d+):\d+\)?/, '$1:$2')).join(' < ');
+    const t =_simHeapSiteTotals.get(st) || { n: 0, bytes: 0, freedN: 0, freedBytes: 0 }; t.n++; t.bytes += bytes; _simHeapSiteTotals.set(st, t); _simHeapSiteOf.set(p, [st, bytes]);
+}
+function _simHeapSiteFree(p) {
+    const e = _simHeapSiteOf.get(p); if (!e) return;
+    _simHeapSiteOf.delete(p); const t = _simHeapSiteTotals.get(e[0]); if (t) { t.freedN++; t.freedBytes += e[1]; }
+}
+
 // Best fit among the free blocks, else from the top (growing the memory).
 function _simHeapTake(bytes) {
     const H = _simHeap, F = H.free;
@@ -281,6 +295,7 @@ function _simHeapQueue(arr, p, s) {
     const waits = [];
     // (Not the growth lane: its kernel reads no array.)
     for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) if (lane !== SIM_LANE_GROW && simParallelBackgroundPending(lane)) waits.push(lane, _simBgPosted[lane]);
+    if (SIM_HEAP_SITES) _simHeapSiteFree(p);
     H.pending.push({ arr, p, s, t: H.clock, waits });
 }
 // Arrays the collector gives back (simHeapArrayAuto): when one is

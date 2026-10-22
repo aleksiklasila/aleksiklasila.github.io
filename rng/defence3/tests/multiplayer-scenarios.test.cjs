@@ -38,7 +38,7 @@ function assertLockstepClean(world, all, label, { snapshots = 1 } = {}) {
     }
     assert.ok(cmp.compared > 100, label + ': compared ' + cmp.compared);
     for (const inst of all) {
-        assert.equal(inst.eval('netCounters.desyncsDetected'), 0, label + ': ' + inst.name + ' detected a desync');
+        assert.equal(inst.eval('netCounters.desyncsDetected'), 0, label + ': ' + inst.name + ' detected a desync (tick ' + inst.eval('netCounters.lastDesyncTick') + ', ' + inst.eval('netCounters.lastDesyncParts') + ')');
         assert.equal(inst.snapshotsApplied, snapshots, label + ': ' + inst.name + ' snapshots');
     }
 }

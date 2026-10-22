@@ -379,10 +379,13 @@ const SPATIAL_IXD_BANDS = 64, SPATIAL_IXD_UJ = 8192, SPATIAL_IXD_CPER = 65536;
 function _spatialDeltaArrays(X, slots, entries) {
     let D = X.ixd;
     if (!D) D = X.ixd = { ok: false, masks: false, slots: 0, entries: 0, room: 0, plan: null };
+    // (Arrays the heap had no room for are outside it, where the kernels cannot read them: the index is built whole until
+    // they are made again, tried again after IXD_RETRY ticks.)
+    if (D.retryAt > gameTime) return null;
     if (D.slots < slots) {
         const cap = Math.ceil(slots / SPATIAL_IXD_UJ) * SPATIAL_IXD_UJ, room = Math.max(4096, Math.ceil(cap / 4));
         for (const [k, T, len] of [['k', Int32Array, cap], ['id', Int32Array, cap], ['own', Int8Array, cap], ['dirty', Int32Array, cap],
-            ['ik', Float64Array, room], ['is', Int32Array, room], ['touch', Int32Array, 2 * room]]) {
+            ['ik', Float64Array, room], ['is', Int32Array, room], ['touch', Int32Array, 2 * room], ['ik2', Float64Array, room], ['is2', Int32Array, room]]) {
             simHeapFree(D[k]); D[k] = simHeapArray(T, len); simParallelBind('ixd.' + k, D[k]);
         }
         D.slots = cap; D.room = room; D.ok = false;
@@ -391,8 +394,12 @@ function _spatialDeltaArrays(X, slots, entries) {
         for (const k of ['gone', 'es2', 'ek2', 'eid2']) { simHeapFree(D[k]); D[k] = simHeapArray(Int32Array, entries); simParallelBind('ixd.' + k, D[k]); }
         D.entries = entries;
     }
+    if (!D.tdone || D.tdone.length < X.nChunks) { simHeapFree(D.tdone); D.tdone = simHeapArray(Int32Array, X.nChunks); simParallelBind('ixd.tdone', D.tdone); }
     const pl = Math.ceil(D.slots / SPATIAL_IXD_UJ) + 7 + 4 * SPATIAL_IXD_BANDS;
     if (!D.plan || D.plan.length < pl) { simHeapFree(D.plan); D.plan = simHeapArray(Int32Array, Math.max(1024, pl * 2)); simParallelBind('ixd.plan', D.plan); }
+    if (typeof simHeapHas === 'function') for (const k of ['k', 'id', 'own', 'dirty', 'ik', 'is', 'touch', 'ik2', 'is2', 'gone', 'es2', 'ek2', 'eid2', 'plan', 'tdone']) {
+        if (D[k] && !simHeapHas(D[k])) { D.ok = false; D.slots = 0; D.entries = 0; D.retryAt = gameTime + 200; return null; }
+    }
     return D;
 }
 // The prebuilt index, waited for: taken when still valid, else dropped (the
@@ -522,6 +529,7 @@ function _spatialIndexRebuildParallel() {
     // (The slots' listing, for the next build by changes.)
     if (SPATIAL_INDEX_DELTA && typeof SIM_KERNEL_IXD_INIT === 'number') {
         const D = _spatialDeltaArrays(X, _simUnitState.cap, _sxESlot.length), slotsN = _simUnitState.owners.length;
+        if (D) {
         P.fill(0);
         P[0] = slotsN; P[1] = SPATIAL_IXD_UJ; P[2] = nChunks; P[4] = ep; P[5] = ep; P[12] = 0;
         simParallelRun(SIM_KERNEL_IXD_INIT, Math.ceil(slotsN / SPATIAL_IXD_UJ));
@@ -532,6 +540,7 @@ function _spatialIndexRebuildParallel() {
         // (No owners per tile from this build: the next one builds whole
         // when they are wanted.)
         if (OM && OM.length === nChunks && _sxOwnerMaskEpoch === ep) D.masks = true;
+        }
     }
     return true;
 }

@@ -1,4 +1,0 @@
-multiplayer-lobby exit 1
-multiplayer-backlog-fairness exit 1
-multiplayer-network-profiles exit 0
-multiplayer-matrix exit 0

@@ -1,11 +1,12 @@
 'use strict';
 const assert = require('node:assert/strict');
 const H = require('./net-harness.cjs');
-const world = new H.World({ controls: H.SMALL_MATCH_CONTROLS });
+// (A map with room: units cannot overlap on the occupancy raster, and one refused a place is dead.)
+const world = new H.World({ controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '200', 'cfg-map-type': 'arena' } });
 const inst = world.spawn('retirement', { simWorker: false });
 inst.eval('startSoloGame();');
 const result = JSON.parse(inst.eval(`JSON.stringify((() => {
-    for (let i = 0; i < 17000; i++) { const u = new Unit('norm', 0, 100, 100); units.push(u); }
+    for (let i = 0; i < 17000; i++) { const u = new Unit('norm', 0, 400 + (i % 130) * 14, 400 + Math.floor(i / 130) * 14); units.push(u); }
     const original = units.slice(), dead = [3, 4, 8191, 8192, units.length - 1];
     for (const i of dead) { units[i].dead = true; units[i]._removedNow = true; }
     selectedUnits = [units[3], units[6], units[8192]];

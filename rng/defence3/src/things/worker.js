@@ -1030,7 +1030,10 @@ function workerSearchTierStep() {
         if (cycle && ph === (WS_POST_PHASE + 1) % WS_TICKS) _wsOrder();
         if (cycle && ph === (WS_POST_PHASE + 2) % WS_TICKS) _wsCommit();
         else if (cycle && _wsPending) _wsTakeSome();
-        if (ph !== (WS_POST_PHASE + 1) % WS_TICKS) _wswStep((Math.floor(b / WS_TICKS) * 3 + (ph + WS_TICKS - (WS_POST_PHASE + 2) % WS_TICKS) % WS_TICKS) % WSW_SWEEP);
+        // (Past WSW_SLOW_UNITS units the sweep takes only every WSW_SLOW-th cycle's slices, each
+        // visiting the next ones: the same coverage WSW_SLOW times slower. Stateless: by the tick.)
+        const wswSlow = units.length >= WSW_SLOW_UNITS ? WSW_SLOW : 1, wswCycle = Math.floor(b / WS_TICKS);
+        if (ph !== (WS_POST_PHASE + 1) % WS_TICKS) _wswStep((Math.floor(wswCycle / wswSlow) * 3 + (ph + WS_TICKS - (WS_POST_PHASE + 2) % WS_TICKS) % WS_TICKS) % WSW_SWEEP, wswCycle % wswSlow === 0);
         if (cycle && ph === WS_POST_PHASE) _wsPost();
     }
 }
@@ -1053,6 +1056,7 @@ const WSW_BUILD = 1, WSW_SALVAGE = 2, WSW_QUEUE = 4, WSW_RESEARCH = 8, WSW_AUTOR
 // (90 steps: ~6 s. At 45, 18k structures were ~400 flag tests a step, ~1.2 ms
 // a tick; what the sweep finds (damage, an upgrade come due) may wait.)
 const WSW_SWEEP = 90, WSW_MAXOWN = 16;
+const WSW_SLOW_UNITS = 250000, WSW_SLOW = 4;
 let _wsw = null, _wswDirty = [], _wswResvDirty = [];
 const _wswResMax = new Map();
 // Construction done (the collectors' groups of that building type are made
@@ -1147,7 +1151,7 @@ function _wswBuild() {
 }
 // One step: the grid made (first, or after its sources were replaced), the
 // journal's and marked tiles, reservations, and the sweep's share.
-function _wswStep(step) {
+function _wswStep(step, sweepOn = true) {
     if (typeof _activeTileEntities === 'undefined' || typeof tileEntityChangesSince !== 'function') return;
     _wswResMax.clear();
     let W = _wsw;
@@ -1161,6 +1165,7 @@ function _wswStep(step) {
         _wswResvDirty = [];
         for (let i = 0; i < d.length; i++) { const t = Math.floor(d[i] / NT); if (t < W.n) W.resv[t] = _wswResvOf(W, t); }
     }
+    if (!sweepOn) return;
     // The sweep: every owner's structure buckets k = step (mod WSW_SWEEP).
     const np = Math.max(1, Math.floor(Number(players && players.length) || 0));
     for (let o = 0; o < np; o++) {
@@ -1258,10 +1263,65 @@ function _wsGroupBuild(G, cfg, mines, farms, spawners) {
     for (let s = 0; s < n; s++) if (SX[s] === SX[s] && SY[s] === SY[s]) { const b = bk(s); BI[BS[b] + BC[b]++] = s; }
     const PGX = arr('pgx', Int32Array, np), PGY = arr('pgy', Int32Array, np), PO = arr('po', Int32Array, np), PID = arr('pid', Int32Array, np);
     const PX = arr('px', Float32Array, np), PY = arr('py', Float32Array, np);
-    for (let p = 0; p < np; p++) { const sp = spawners[p]; PGX[p] = Math.floor(Number(sp.gx) || 0); PGY[p] = Math.floor(Number(sp.gy) || 0); PO[p] = Number.isFinite(sp.owner) ? sp.owner : -9; PID[p] = Number(sp.id) || 0; PX[p] = Number(sp.x); PY[p] = Number(sp.y); }
-    const meta = arr('meta', Int32Array, 5);
+    // The spawners sorted by the bucket of their tile (the kernel finds an owner's
+    // nearest in rings of buckets): meta[5 + 2 b] a bucket's first, meta[6 + 2 b]
+    // its count, then (16) the count of each owner's.
+    const meta = arr('meta', Int32Array, 5 + 2 * nb + 32);
+    meta.fill(0, 0, 5 + 2 * nb + 32);
+    // (meta[5 + 2 nb + 16 + owner]: the owner's slot in the nearest-spawner field, -1 none.)
+    for (let o = 0; o < 16; o++) meta[5 + 2 * nb + 16 + o] = -1;
+    const sb = new Int32Array(np);
+    for (let p = 0; p < np; p++) {
+        const sp = spawners[p];
+        sb[p] = Math.max(0, Math.min(brows - 1, Math.floor((Number(sp.gy) || 0) / WS_BUCKET))) * bcols + Math.max(0, Math.min(bcols - 1, Math.floor((Number(sp.gx) || 0) / WS_BUCKET)));
+        meta[6 + 2 * sb[p]]++;
+        if (Number.isFinite(sp.owner) && sp.owner >= 0 && sp.owner < 16) meta[5 + 2 * nb + sp.owner]++;
+    }
+    for (let b = 0, at = 0; b < nb; b++) { meta[5 + 2 * b] = at; at += meta[6 + 2 * b]; meta[6 + 2 * b] = 0; }
+    for (let p = 0; p < np; p++) {
+        const sp = spawners[p], b = sb[p], q = meta[5 + 2 * b] + meta[6 + 2 * b]++;
+        PGX[q] = Math.floor(Number(sp.gx) || 0); PGY[q] = Math.floor(Number(sp.gy) || 0); PO[q] = Number.isFinite(sp.owner) ? sp.owner : -9; PID[q] = Number(sp.id) || 0; PX[q] = Number(sp.x); PY[q] = Number(sp.y);
+    }
     meta[0] = n; meta[1] = np; meta[2] = 1; meta[3] = bcols; meta[4] = brows;
+    _wsNearField(G, spawners, np, nb, arr, pre, PGX, PGY, PID, meta);
     G.objs = objs; G.types = types; G.n = n;
+}
+// Each owner's nearest working spawner of the group per tile (k_ws_nearfield; the collectors' search finds it
+// at once instead of in rings of buckets, ~900 buckets and 700 spawners a search at 2M workers far from
+// their bases): the field slots in meta, the spawners' ranks by (row, column, id), and whether the fields
+// are to be made again (the spawners as a set, or the owners among them, changed). The same answer as the
+// ring search: both give the least (steps, row, column, id).
+// (Off: the ring search as before; the same results either way, which the tests compare.)
+let WS_NEARFIELD = true;
+function _wsNearField(G, spawners, np, nb, arr, pre, PGX, PGY, PID, meta) {
+    G.nfBuild = false; G.nfList = [];
+    if (!WS_NEARFIELD || !(np > 0 && np <= 65535)) { G.nfSetKey = null; return; }
+    let h1 = 0, h2 = 0x9e3779b9 | 0;
+    for (let p = 0; p < np; p++) {
+        const sp = spawners[p], o = Number.isFinite(sp.owner) ? sp.owner : -9;
+        const hh = Math.imul(((Math.floor(Number(sp.gx) || 0) * 73856093) ^ (Math.floor(Number(sp.gy) || 0) * 19349663) ^ ((Number(sp.id) || 0) * 83492791) ^ ((o + 16) * 2654435761)) | 0, 0x85ebca6b);
+        h1 = (h1 + hh) | 0; h2 = Math.imul(h2 ^ hh, 0x01000193);
+    }
+    const owners = [];
+    for (let o = 0; o < 16; o++) if (meta[5 + 2 * nb + o] > 0) owners.push(o);
+    const ownersKey = owners.join(','), setKey = np + ':' + h1 + ':' + GRID_W + 'x' + GRID_H, ordKey = setKey + ':' + h2;
+    // (At most 16M entries a group, 64 MB: past that the owners beyond keep the ring search.)
+    const tiles = GRID_W * GRID_H, fieldOwners = owners.slice(0, Math.max(0, Math.floor(16777216 / tiles)));
+    if (!fieldOwners.length) { G.nfSetKey = null; return; }
+    fieldOwners.forEach((o, i) => { meta[5 + 2 * nb + 16 + o] = i; });
+    const need = fieldOwners.length * tiles;
+    let NF = G.arrays.nf, fresh = false;
+    if (!NF || NF.length < need) { NF = G.arrays.nf = simSharedArray(Uint32Array, need); simParallelBind(pre + 'nf', NF); fresh = true; }
+    const rk0 = G.arrays.rk, ro0 = G.arrays.ro, RK = arr('rk', Int32Array, np), RO = arr('ro', Int32Array, np);
+    if (G.nfOrdKey !== ordKey || RK !== rk0 || RO !== ro0) {
+        const idx = new Int32Array(np);
+        for (let q = 0; q < np; q++) idx[q] = q;
+        idx.sort((x, y) => (PGY[x] - PGY[y]) || (PGX[x] - PGX[y]) || (PID[x] - PID[y]));
+        for (let r = 0; r < np; r++) { RK[r] = idx[r]; RO[idx[r]] = r; }
+    }
+    const fkey = fieldOwners.join(',');
+    G.nfBuild = fresh || G.nfSetKey !== setKey || G.nfOwnersKey !== fkey;
+    G.nfSetKey = setKey; G.nfOrdKey = ordKey; G.nfOwnersKey = fkey; G.nfList = fieldOwners;
 }
 function _wsCollectorGroup(cfg) {
     const key = 'c:' + cfg.collectorUnitKey;
@@ -1320,10 +1380,15 @@ function _wsPost() {
     P[5] = 2;
     simParallelRun(SIM_KERNEL_WS_SELECT, chunks);
     CNT[0] = total; // Compact requests are one logical region for ordering.
-    const Bp = _simBgParamsByLane[WS_LANE];
+    // (Stage 1's params: the scan after the fields' job.)
+    const Bp = _simBgStageParams[WS_LANE][1];
     // The collectors' groups, per resource type.
-    const groups = [];
-    for (let k = 0; k < RESOURCE_TYPE_LIST.length && k < 8; k++) { const G = _wsCollectorGroup(RESOURCE_TYPE_LIST[k]); groups[k] = { objs: G.objs, types: G.types }; Bp[16 + k] = G.id; }
+    const groups = [], nfSeen = new Set(), nfPairs = [];
+    for (let k = 0; k < RESOURCE_TYPE_LIST.length && k < 8; k++) {
+        const G = _wsCollectorGroup(RESOURCE_TYPE_LIST[k]); groups[k] = { objs: G.objs, types: G.types }; Bp[16 + k] = G.id;
+        // (Fields to make again: a job a (group, owner), before the scan in this chain.)
+        if (G.nfBuild && !nfSeen.has(G.id)) { nfSeen.add(G.id); G.nfBuild = false; for (const o of G.nfList) if (nfPairs.length < 60) nfPairs.push(G.id * 16 + o); else { const nb = Math.ceil(GRID_W / WS_BUCKET) * Math.ceil(GRID_H / WS_BUCKET); _simParReg['wsg' + G.id + '.meta'][5 + 2 * nb + 16 + o] = -1; } }
+    }
     // Per owner: its healers' damaged units (where they are now) and the
     // research its researchers serve.
     const np = Math.max(1, Math.floor(Number(players && players.length) || 0)), HM = HEALER_DAMAGED_CANDIDATE_LIMIT;
@@ -1348,7 +1413,11 @@ function _wsPost() {
     Bp[10] = _wsw ? _wsw.bw : 0; Bp[11] = 1; Bp[12] = total; Bp[13] = HM; Bp[14] = 1;
     Bp[5] = np; Bp[15] = _simParReg['ws.aoff'] ? _simParReg['ws.aoff'].length - 1 : 0;
     Bp[56]=areaSearchEnabled()?1:0;
-    simParallelBackground(SIM_KERNEL_WS_SCAN, Math.ceil(total / 16), WS_LANE);
+    // (The fields' job: its own params slot 0, the scan's slot 1 (Bp, above).)
+    const Np = _simBgStageParams[WS_LANE][0];
+    Np.fill(0); Np[0] = nfPairs.length; Np[1] = GRID_W; Np[2] = GRID_H;
+    for (let i = 0; i < nfPairs.length; i++) Np[3 + i] = nfPairs[i];
+    simParallelBackgroundChain(WS_LANE, [[SIM_KERNEL_WS_NEARFIELD, nfPairs.length], [SIM_KERNEL_WS_SCAN, Math.ceil(total / 16)]]);
     _wsPosted = { chunks: 1, CH: total, groups, heal, ordered: false };
 }
 // (Waited for here, the next phase: the scan reads the collectors' groups

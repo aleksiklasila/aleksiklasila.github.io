@@ -10,6 +10,9 @@ let _occ = null;
 const _occNames = ['occ.bits','occ.mask','occ.x','occ.y','occ.radius','occ.layer','occ.active'];
 function occupancyEnsure() {
     if (!SIM_OCCUPANCY_ENABLED || typeof _simUnitState === 'undefined' || !_simUnitState) return null;
+    // (Nothing changed since the last full pass: its arrays bound, as many as the columns have slots. Every spawn made it again:
+    // eight bind names and an array of them a unit, 1.4 GB of garbage at 2.3M units.)
+    { const F = _occ; if (F !== null && F.fast === _simParRegVer && F.fastCap === _simUnitState.cap && F.epoch === spatialEpoch && F.w === GRID_W * SIM_OCCUPANCY_SUBCELLS && F.h === GRID_H * SIM_OCCUPANCY_SUBCELLS && F.planes === SIM_OCCUPANCY_PLANES) return F; }
     const w=GRID_W*SIM_OCCUPANCY_SUBCELLS,h=GRID_H*SIM_OCCUPANCY_SUBCELLS,stride=Math.ceil(w/32)+1,planes=SIM_OCCUPANCY_PLANES;
     if(!_occ || _occ.w!==w || _occ.h!==h || _occ.planes!==planes || _occ.epoch!==spatialEpoch) {
         if(_occ)for(const a of Object.values(_occ))if(ArrayBuffer.isView(a))simHeapFree(a);
@@ -39,9 +42,15 @@ function occupancyEnsure() {
     }
     for(const name of ['bits','mask','x','y','radius','layer','active','need'])simParallelBind('occ.'+name,O[name]);
     if(typeof trafficEnsure==='function')trafficEnsure(O);
+    O.fast=_simParRegVer;O.fastCap=n;
     return O;
 }
-function _occupancyAddresses(){return _occNames.map(n=>_simWEnc(_simParReg[n].byteOffset));}
+// (The arrays' addresses, worked out again only when a binding changed.)
+let _occAddr=null,_occAddrVer=-1;
+function _occupancyAddresses(){
+    if(_occAddr===null||_occAddrVer!==_simParRegVer){_occAddr=_occNames.map(n=>_simWEnc(_simParReg[n].byteOffset));_occAddrVer=_simParRegVer;}
+    return _occAddr;
+}
 function occupancySpawn(u) {
     // (No kernels here, as the world a page keeps beside its simulation
     // worker: no grid; the worker's world has one.)
@@ -50,7 +59,8 @@ function occupancySpawn(u) {
     const s=u._si;if(O.active[s])return true;
     const x=u._us.x[s],y=u._us.y[s],r=Math.max(1,Math.min(32,Math.ceil((u.collisionR||u.r||1)/(TILE/SIM_OCCUPANCY_SUBCELLS))));
     const layer=O.planes===1?0:Math.min(O.planes-1,u.isFlying?1:u.unitType==='mole'?2:0);
-    const ok=_simWasmX.occ_spawn(..._occupancyAddresses(),O.w,O.h,O.stride,O.cell,O.planes,s,x,y,r,layer,32);
+    const A=_occupancyAddresses();
+    const ok=_simWasmX.occ_spawn(A[0],A[1],A[2],A[3],A[4],A[5],A[6],O.w,O.h,O.stride,O.cell,O.planes,s,x,y,r,layer,32);
     if(!ok){O.rejected++;return false;}
     if(O.x[s]!==x||O.y[s]!==y){O.relocated++;u._us.x[s]=O.x[s];u._us.y[s]=O.y[s];u._us.prevX[s]=O.x[s];u._us.prevY[s]=O.y[s];u._us.x0[s]=O.x[s];u._us.y0[s]=O.y[s];}
     O.spawns++;O.registered++;O.expectedBits+=O.sizes[r];return true;

@@ -69,6 +69,8 @@ if (!process.argv.includes('--no-wasm-opt')) {
         const args = [wasmPath, '-o', tmp, WASM_OPT_LEVEL, '--enable-simd', '--enable-threads', '--enable-bulk-memory', '--enable-nontrapping-float-to-int',
             '--enable-sign-ext', '--enable-mutable-globals', '--strip-debug', '--strip-producers'];
         if (W64) args.push('--enable-memory64');
+        // (WASM_OPT_EXTRA="--converge ...": more passes, for experiments.)
+        if (process.env.WASM_OPT_EXTRA) args.push(...process.env.WASM_OPT_EXTRA.split(' ').filter(Boolean));
         if (process.argv.includes('--keep-names')) args.push('--debuginfo');
         const r = cp.spawnSync(wo, args, { stdio: 'inherit' });
         if (r.status !== 0) { console.error('wasm-opt failed'); process.exit(r.status || 1); }

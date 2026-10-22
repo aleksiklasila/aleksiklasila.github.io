@@ -1,4 +1,0 @@
-PASS: serial and parallel unit index builds
-  crossroads: 400 queries over 166 units, identical (119065 results)
-  islands: 400 queries over 168 units, identical (111041 results)
-  solar_system: 400 queries over 190 units, identical (104394 results)

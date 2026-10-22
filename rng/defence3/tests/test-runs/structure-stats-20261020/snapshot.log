@@ -1,4 +1,0 @@
-PASS: snapshots
-  6 restores from differing pre-states evolve bit-identically for 12 ticks; 104 KB (473 B/entity); unit shapes 1/1/1/1 -> 1/1/1/1
-  gzip transport: delta then full patch (15 KB -> 3 KB), no pause
-  guest without DecompressionStream gets JSON (start and patches); others gzip

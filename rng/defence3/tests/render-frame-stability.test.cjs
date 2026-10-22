@@ -152,7 +152,7 @@ const RECORD = `(async (ms) => {
 
 // Interpolation and drawn unit motion.
 function motion(frames) {
-    let between = 0, alphaBack = 0, steps = 0, back = 0;
+    let between = 0, alphaBack = 0, steps = 0, big = 0, back = 0;
     for (let f = 0; f < frames.length; f++) {
         const a = frames[f].alpha;
         if (a > 0.05 && a < 0.95) between++;
@@ -166,13 +166,18 @@ function motion(frames) {
             const m = Math.hypot(dx, dy), m0 = Math.hypot(ex, ey);
             if (m < 0.05 || m0 < 0.05) continue;
             steps++;
+            // (Reversals of steps a quarter pixel or more: a crowd settling
+            // on the occupancy raster moves by hundredths of a pixel, in any
+            // direction, and nothing shows it.)
+            if (m < 0.25 || m0 < 0.25) continue;
+            big++;
             if ((dx * ex + dy * ey) / (m * m0) < -0.5) back++;
         }
     }
     // (How many of the positions came from the unit layer's own records.)
     let fromRecords = 0, positions = 0;
     for (const f of frames) for (const p of f.pos) { positions++; if (p[3]) fromRecords++; }
-    return { between: between / frames.length, alphaBack, steps, backRate: back / Math.max(1, steps), fromRecords: fromRecords / Math.max(1, positions) };
+    return { between: between / frames.length, alphaBack, steps, backRate: back / Math.max(1, big), big, fromRecords: fromRecords / Math.max(1, positions) };
 }
 
 function flickers(frames, field) {
@@ -195,7 +200,7 @@ function flickers(frames, field) {
         await b.ev(`(async () => {
             const data = await (await fetch('tests/1500.json')).json();
             applyMainMenuSettingsSnapshot(data);
-            { const dn = Date.now; Date.now = () => 1234567; try { [...document.querySelectorAll('button')].find(x => x.textContent.trim() === 'Play Solo').click(); } finally { Date.now = dn; } }
+            { const dn = Date.now; Date.now = () => 1234567; try { startSoloGame(); } finally { Date.now = dn; } }
             return 1;
         })()`);
         // (The match starts once the model views are baked, ~30 s before the
@@ -250,7 +255,10 @@ function flickers(frames, field) {
         for (const mode of ['2d', '3d']) {
             const r = JSON.parse(await b.ev(`(async () => {
                 setRenderDimensionMode('${mode}');
-                const k = units.find(u => !u.dead && u.owner === localPlayerId && u.isKing) || units.find(u => !u.dead && u.owner === localPlayerId && !u.workerType);
+                // (A fighter with open ground ahead: the king may stand in a walled
+                // pocket of its base, with nowhere to go.)
+                const open = u => { const gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE); for (let d = 0; d <= 3; d++) { if (gy - d < 1 || grid[gy - d][gx].type === TYPE_WALL || getTileEntityRef(gx, gy - d)) return false; } return true; };
+                const k = units.find(u => !u.dead && u.owner === localPlayerId && !u.workerType && !u.isKing && open(u)) || units.find(u => !u.dead && u.owner === localPlayerId && !u.workerType);
                 // (3D close up: the unit is in the unit layer, drawn from the
                 // layer's record of it and the layer's alpha: that position
                 // is the one checked, see RECORD.)
@@ -262,12 +270,14 @@ function flickers(frames, field) {
                 if (wr) r3.writeUnitLayerRecord = function (kind, m, d, panel, unit) { if (unit === k) rec = [d[14], d[7]]; return wr.apply(this, arguments); };
                 if (wo) r3.writeUnitLayerObject = function (o) { if (o && o.pickSource === k) rec = [o.z, o._pdz]; return wo.apply(this, arguments); };
                 if (rr) r3.render = function (snap) { layerAlpha = snap && snap.unitLayer ? snap.unitLayer.alpha : NaN; return rr.apply(this, arguments); };
+                // (The page keeps views of the worker's units: the unit's current one.)
+                const kv = () => (typeof _pageUnitsById !== 'undefined' && _pageUnitsById.get(k.id)) || k;
                 const orig = processRenderFrame;
                 window.processRenderFrame = function () {
                     rec = rec && '${mode}' === '3d' ? rec : null;
                     const res = orig.apply(this, arguments);
                     const fromLayer = '${mode}' === '3d' && rec && layerAlpha === layerAlpha && Number.isFinite(rec[1]);
-                    ys.push([fromLayer ? (rec[0] + rec[1] * (1 - layerAlpha)) * TILE : k.prevY + (k.y - k.prevY) * tickAlpha, tickAlpha, performance.now(), fromLayer ? 1 : 0]);
+                    ys.push([fromLayer ? (rec[0] + rec[1] * (1 - layerAlpha)) * TILE : kv().prevY + (kv().y - kv().prevY) * tickAlpha, tickAlpha, performance.now(), fromLayer ? 1 : 0]);
                     return res;
                 };
                 for (let n = 0; n < 8; n++) {

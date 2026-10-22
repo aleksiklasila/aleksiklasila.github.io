@@ -63,7 +63,8 @@ function acquire(bytes, kind='units') {
     // Three page-owned snapshots maximum. No growing queue when rendering stops.
     // (Two of a frame past 512 MB, millions of units: the page holds one, the
     // next is filled; a third was a gigabyte at 8M units.)
-    const most = bytes > (512 << 20) ? 2 : 3;
+    // (A frame of 192 MB or more, ~1.3M units: two, 345 MB a frame at 2.3M units were a gigabyte with a third.)
+    const most = bytes > (192 << 20) ? 2 : 3;
     if ([...buffers.values()].filter(e=>e.kind===kind && e.busy).length >= most) return null;
     for (const [id,e] of buffers) if (e.kind===kind && !e.busy) buffers.delete(id);
     const buf=new SharedArrayBuffer(bytes+12), id=++sequence;

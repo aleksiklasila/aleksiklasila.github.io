@@ -203,6 +203,7 @@ self.onmessage = (ev) => {
             for (let url of msg.scripts) _simImport(url);
             _simStubUi();
             _simLoaded = true;
+            if (msg.trace) _simTraceInstall();
             // Helpers for the parallel jobs (with shared memory; sim_parallel.js).
             let helpers = 0;
             try { helpers = simParallelInit(_simHelperUrl(), msg.maxHelpers); } catch (err) { _simError('helpers', err); }
@@ -591,6 +592,43 @@ function _simDeltaEvents(events) {
         }
     }
 }
+// ---- ?simtrace=1: where the slow ticks go ----
+// Each tick's time by phase (the functions below, nested ones counted in
+// both), the gap since the previous tick's end and how late it started; the
+// page keeps them in window.__simTrace (sim_client.js). A phase that is long
+// only in the slow ticks is the spike; time in the tick but in none of the
+// phases is the rest (collections, the pump).
+const SIM_TRACE_FNS = ['processActions', 'spatialIndexRebuild', 'navTick', 'navFieldsFlush', 'recalculateUnitEffectiveLevel',
+    'updateAllPlayerVisibility', 'towersTick', 'projectilesBegin', 'projectilesEnd', 'statusPrepassRun', 'simMoveRun', 'combatScanRun', '_acqCommit', '_acqPost',
+    '_forEachUnitInTickOrder', 'unitHitsResolve', 'unitRetirePrepare', 'simUnitStateCollect', 'workerSearchTierStep', 'adjacencyLaneStep', 'gameStatsStep',
+    'tickStatusEffects', 'occupancyPrepareMovement', 'trafficAfterMovement', 'simParallelBackgroundWait', 'simPresentTickEnd', 'snapRecordTickHash', '_simPostResult',
+    'processGlobalSpawnerQueue', 'healerCandidatesStep', 'spawnerStructuresTick', 'laserBeamsTick', 'projectilesAdvance', 'visCoverHoldEnd',
+    // (The worker search tier's parts.)
+    '_wsPost', '_wsOrder', '_wsCommit', '_wsTakeSome', '_wswStep', '_wswBuild', '_wsCollectorGroup', '_wsNearField', '_ensureHealerDamagedCandidatesCacheCurrent'];
+let _simTraceCur = null, _simTraceRows = [], _simTraceEndAt = 0;
+function _simTraceInstall() {
+    for (const name of SIM_TRACE_FNS) {
+        const f = self[name];
+        if (typeof f !== 'function') continue;
+        self[name] = function () {
+            const cur = _simTraceCur;
+            if (!cur) return f.apply(this, arguments);
+            const a = performance.now();
+            try { return f.apply(this, arguments); } finally { const ph = cur.ph; ph[name] = (ph[name] || 0) + performance.now() - a; }
+        };
+    }
+    const inner = _simTick;
+    _simTick = function (msg) {
+        const a = performance.now(), cur = _simTraceCur = { tick: msg.tick, gap: _simTraceEndAt ? a - _simTraceEndAt : 0, late: Number.isFinite(msg.due) ? Math.max(0, _simNowAbs() - msg.due) : 0, total: 0, ph: {} };
+        try { return inner.apply(this, arguments); } finally {
+            const b = performance.now();
+            cur.total = b - a; _simTraceCur = null; _simTraceEndAt = b;
+            _simTraceRows.push(cur);
+            if (_simTraceRows.length >= 40) { _simPost({ type: 'trace', rows: _simTraceRows }); _simTraceRows = []; }
+        }
+    };
+}
+
 // ---- one tick: the same work runOneTick does, with the page's commands ----
 function _simTick(msg) {
     let t0 = performance.now();

@@ -3,7 +3,7 @@ const H = require('./net-harness.cjs');
 
 const world = new H.World();
 const game = world.spawn('starting-spawn-limits', { controls: {
-    ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '80', 'cfg-map-type': 'arena',
+    ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '160', 'cfg-map-type': 'arena',
     'cfg-max-pop': '12000', 'cfg-gold-count': '0', 'cfg-astar-mine-count': '0'
 } });
 game.eval(`

@@ -803,6 +803,57 @@ unsafe fn heapsort_u64_with(v: *mut u64, w: *mut i32, n: usize) {
         sift(v, w, 0, end);
     }
 }
+/// The same sort by an LSD radix (11 bits a pass, only the key bits in use:
+/// the unit id below, the chunk above), through scratch arrays of the same
+/// size; the keys are distinct, so the order is the one the heapsort gives.
+unsafe fn radix_sort_u64_with(v: *mut u64, w: *mut i32, tv: *mut u64, tw: *mut i32, n: usize) {
+    if n < 2 {
+        return;
+    }
+    let (mut lo_or, mut hi_or) = (0u32, 0u32);
+    for i in 0..n {
+        let x = *v.add(i);
+        lo_or |= x as u32;
+        hi_or |= (x >> 32) as u32;
+    }
+    let (lo_bits, hi_bits) = (32 - lo_or.leading_zeros(), 32 - hi_or.leading_zeros());
+    let (mut src_v, mut src_w, mut dst_v, mut dst_w) = (v, w, tv, tw);
+    let mut counts = [0u32; 2048];
+    let mut shift = 0u32;
+    while shift < lo_bits + hi_bits {
+        // (The id's bits first, then the chunk's, at bit 32 and up.)
+        let sh = if shift < lo_bits { shift } else { 32 + (shift - lo_bits) };
+        let width = if shift < lo_bits { (lo_bits - shift).min(11) } else { (lo_bits + hi_bits - shift).min(11) };
+        let mask = (1u64 << width) - 1;
+        for c in counts.iter_mut().take(1usize << width) {
+            *c = 0;
+        }
+        for i in 0..n {
+            *counts.get_unchecked_mut(((*src_v.add(i) >> sh) & mask) as usize) += 1;
+        }
+        let mut acc = 0u32;
+        for c in counts.iter_mut().take(1usize << width) {
+            let t = *c;
+            *c = acc;
+            acc += t;
+        }
+        for i in 0..n {
+            let x = *src_v.add(i);
+            let d = ((x >> sh) & mask) as usize;
+            let p = *counts.get_unchecked(d) as usize;
+            *counts.get_unchecked_mut(d) += 1;
+            *dst_v.add(p) = x;
+            *dst_w.add(p) = *src_w.add(i);
+        }
+        core::mem::swap(&mut src_v, &mut dst_v);
+        core::mem::swap(&mut src_w, &mut dst_w);
+        shift += width;
+    }
+    if src_v != v {
+        core::ptr::copy_nonoverlapping(src_v, v, n);
+        core::ptr::copy_nonoverlapping(src_w, w, n);
+    }
+}
 /// SIM_KERNEL_IXD_APPLY (one job): the changed slots' old entries struck
 /// (ixd.gone stamped), their new ones sorted (ixd.ik / ixd.is), the slots'
 /// listing updated, the chunks touched listed; each band's place.
@@ -881,7 +932,12 @@ pub unsafe extern "C" fn k_ixd_apply(a: u32, _chunk: i32) {
             s(iown, sv, g(own, sv));
         }
     }
-    heapsort_u64_with(ins_k, ins_s, mi);
+    let (tmp_k, tmp_s) = (k.p::<u64>(26), k.p::<i32>(27));
+    if !tmp_k.is_null() && !tmp_s.is_null() {
+        radix_sort_u64_with(ins_k, ins_s, tmp_k, tmp_s, mi);
+    } else {
+        heapsort_u64_with(ins_k, ins_s, mi);
+    }
     // (Each band: its last entries, inserts, place.)
     let mut acc = 0i32;
     for b in 0..=bn {
@@ -984,10 +1040,21 @@ pub unsafe extern "C" fn k_ixd_owners(a: u32, _chunk: i32) {
     if msk.is_null() {
         return;
     }
+    // (A chunk is listed once a change: redone once, its mask the same.)
+    let done = k.p::<i32>(28);
+    if !done.is_null() {
+        core::ptr::write_bytes(done, 0, m.nch.max(0) as usize);
+    }
     for t in 0..g(plan, m.j + 2).max(0) as usize {
         let kk = g(touch, t);
         if kk < 0 || kk >= m.nch || g(stamp, kk as usize) != m.ep {
             continue;
+        }
+        if !done.is_null() {
+            if g(done, kk as usize) != 0 {
+                continue;
+            }
+            s(done, kk as usize, 1);
         }
         let p0 = g(start, kk as usize).max(0) as usize;
         let p1 = p0 + g(cnt, kk as usize).max(0) as usize;
@@ -2725,6 +2792,15 @@ unsafe fn ws_areas_within(ag: *const i32, off: *const i32, nb: *const i32, na: u
     ep
 }
 
+macro_rules! kc {
+    ($a:expr, $i:expr, $n:expr) => {
+        #[cfg(feature = "dbgc")]
+        {
+            let p = ($a as *mut u32).add(1536 + $i);
+            *p = (*p).wrapping_add($n as u32);
+        }
+    };
+}
 /// SIM_KERNEL_WS_SCAN (a tier job, P[1] requests a job): each request's K
 /// best sites, best first (then lower site): ws.res the site (-1 none),
 /// ws.score its score. Within the radius of the origin and, with area
@@ -2800,6 +2876,7 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
         }
         let i = if by_pos { gq } else { (c * chs) as usize + (gq as i32 - g(pre, c as usize)) as usize };
         let o0 = i * kk;
+        kc!(a, 94, 1);
         for j in 0..kk {
             s(out, o0 + j, -1);
             s(osc, o0 + j, f32::INFINITY);
@@ -2857,42 +2934,75 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
             if need != 0 {
                 let (gx0,gy0,gx1,gy1)=(x0,y0,x1,y1);
                 if gx0 <= gx1 && gy0 <= gy1 {
-                    for by in (gy0 >> 3)..=(gy1 >> 3) {
-                        for bx in (gx0 >> 3)..=(gx1 >> 3) {
-                            if !wcnt.is_null() && g(wcnt, ((by * gbw + bx) * 8 + ci) as usize) == 0 {
-                                continue;
-                            }
-                            for ty in gy0.max(by << 3)..=gy1.min((by << 3) + 7) {
-                                for tx in gx0.max(bx << 3)..=gx1.min((bx << 3) + 7) {
-                                    let t = (ty * w + tx) as usize;
-                                    if g(wf, t) & need != need || g(wo, t) as i32 != owner {
-                                        continue;
-                                    }
-                                    let dx = tx as f32 * tile + half - ox;
-                                    let dy = ty as f32 * tile + half - oy;
-                                    let d2 = dx * dx + dy * dy;
-                                    if !area_only && !(d2 <= r2) {
-                                        continue;
-                                    }
-                                    if st != 0 {
-                                        let sa = g(wsa, t);
-                                        if !(sa >= 0 && g(ast, sa as usize) == st) {
-                                            continue;
-                                        }
-                                    }
-                                    if !rv.is_null() && (g(rv, t) & rb) != 0 && t as i32 != my {
-                                        continue;
-                                    }
-                                    let mut score = sqrtf(d2);
-                                    if jid >= 0 {
-                                        if t as i32 == cur {
-                                            score -= tile * 0.75;
-                                        }
-                                        let hsh = (jid as u32).wrapping_mul(1103515245).wrapping_add((tx as u32).wrapping_mul(12345)).wrapping_add((ty as u32).wrapping_mul(54321));
-                                        score += ((hsh % 1024) as f32 / 1024.0) * tile * 0.35;
-                                    }
-                                    ws_insert(out, osc, o0, kk, t as i32, score);
+                    // One 8x8 block of the work grid: its tiles offering the need.
+                    let block = |bx: i32, by: i32| {
+                        if !wcnt.is_null() && g(wcnt, ((by * gbw + bx) * 8 + ci) as usize) == 0 {
+                            return;
+                        }
+                        for ty in gy0.max(by << 3)..=gy1.min((by << 3) + 7) {
+                            for tx in gx0.max(bx << 3)..=gx1.min((bx << 3) + 7) {
+                                let t = (ty * w + tx) as usize;
+                                if g(wf, t) & need != need || g(wo, t) as i32 != owner {
+                                    continue;
                                 }
+                                let dx = tx as f32 * tile + half - ox;
+                                let dy = ty as f32 * tile + half - oy;
+                                let d2 = dx * dx + dy * dy;
+                                if !area_only && !(d2 <= r2) {
+                                    continue;
+                                }
+                                if st != 0 {
+                                    let sa = g(wsa, t);
+                                    if !(sa >= 0 && g(ast, sa as usize) == st) {
+                                        continue;
+                                    }
+                                }
+                                if !rv.is_null() && (g(rv, t) & rb) != 0 && t as i32 != my {
+                                    continue;
+                                }
+                                let mut score = sqrtf(d2);
+                                if jid >= 0 {
+                                    if t as i32 == cur {
+                                        score -= tile * 0.75;
+                                    }
+                                    let hsh = (jid as u32).wrapping_mul(1103515245).wrapping_add((tx as u32).wrapping_mul(12345)).wrapping_add((ty as u32).wrapping_mul(54321));
+                                    score += ((hsh % 1024) as f32 / 1024.0) * tile * 0.35;
+                                }
+                                ws_insert(out, osc, o0, kk, t as i32, score);
+                            }
+                        }
+                    };
+                    let (bx0, by0, bx1, by1) = (gx0 >> 3, gy0 >> 3, gx1 >> 3, gy1 >> 3);
+                    if ox == ox && oy == oy {
+                        // The blocks in rings around the origin's, nearest
+                        // first: a tile of ring d is at least d - 1 blocks from
+                        // the origin, its score (its distance, less 0.75 tile
+                        // for the current target) at least that less a tile: a
+                        // full K whose last is below that has them all, in the
+                        // same order (score, then site) as the whole box gives.
+                        let bpx = tile * 8.0;
+                        let tbx = (floorf(ox * itile) as i32) >> 3;
+                        let tby = (floorf(oy * itile) as i32) >> 3;
+                        let maxd = (bx0 - tbx).abs().max((bx1 - tbx).abs()).max((by0 - tby).abs()).max((by1 - tby).abs());
+                        for d in 0..=maxd {
+                            if d >= 2 && g(out, o0 + kk - 1) >= 0 && ((d - 1) as f32 * bpx - tile) > g(osc, o0 + kk - 1) {
+                                break;
+                            }
+                            for by in (tby - d).max(by0)..=(tby + d).min(by1) {
+                                if by == tby - d || by == tby + d {
+                                    for bx in (tbx - d).max(bx0)..=(tbx + d).min(bx1) {
+                                        block(bx, by);
+                                    }
+                                } else {
+                                    if tbx - d >= bx0 && tbx - d <= bx1 { block(tbx - d, by); }
+                                    if tbx + d >= bx0 && tbx + d <= bx1 { block(tbx + d, by); }
+                                }
+                            }
+                        }
+                    } else {
+                        for by in by0..=by1 {
+                            for bx in bx0..=bx1 {
+                                block(bx, by);
                             }
                         }
                     }
@@ -2952,22 +3062,73 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
             let uty = floorf(uy * itile) as i32;
             let mut best = -1i32;
             let mut bd = i32::MAX;
-            for p in 0..np.max(0) as usize {
-                if g(po, p) != owner {
-                    continue;
+            // The owner's working spawner nearest by tile steps (then lower row,
+            // column, id): the spawners sit sorted by bucket (meta[5 + 2 b]: the
+            // bucket's first, its count; then per owner their count), found in
+            // rings of buckets round the unit's, the nearest first; a ring d is
+            // at least (d - 1) buckets away, so one farther than the best stops.
+            let nbk = (bcols * brows).max(0) as usize;
+            let ocnt = if owner >= 0 && owner < 16 { g(meta, 5 + 2 * nbk + owner as usize) } else { 0 };
+            // (The nearest one per tile of each owner's field when there is one: k_ws_nearfield, exactly the
+            // ring search's answer: the least (steps, row, column, id), by rank in the field's low half.)
+            let mut fast = false;
+            if ocnt > 0 && np > 0 && owner >= 0 && owner < 16 && utx >= 0 && uty >= 0 && utx < w && uty < h {
+                let nfs = g(meta, 5 + 2 * nbk + 16 + owner as usize);
+                let (nf, rk) = (k.p::<u32>(144 + gid as usize), k.p::<i32>(152 + gid as usize));
+                if nfs >= 0 && !nf.is_null() && !rk.is_null() {
+                    fast = true;
+                    kc!(a, 95, 1);
+                    let v = g(nf, nfs as usize * (w * h) as usize + (uty * w + utx) as usize);
+                    if v != u32::MAX {
+                        best = g(rk, (v & 0xffff) as usize);
+                    }
                 }
-                let d = (g(pgx, p) - utx).abs() + (g(pgy, p) - uty).abs();
-                let better = if best < 0 || d < bd {
-                    true
-                } else if d == bd {
-                    let bu = best as usize;
-                    g(pgy, p) < g(pgy, bu) || (g(pgy, p) == g(pgy, bu) && (g(pgx, p) < g(pgx, bu) || (g(pgx, p) == g(pgx, bu) && g(pid, p) < g(pid, bu))))
-                } else {
-                    false
+            }
+            if !fast && ocnt > 0 && np > 0 {
+                kc!(a, 90, 1);
+                let ubx = (utx / bt).max(0).min(bcols - 1);
+                let uby = (uty / bt).max(0).min(brows - 1);
+                let maxd = ubx.max(bcols - 1 - ubx).max(uby).max(brows - 1 - uby);
+                let mut scan = |bx: i32, by: i32, best: &mut i32, bd: &mut i32| {
+                    let b = (by * bcols + bx) as usize;
+                    kc!(a, 92, 1);
+                    let p0 = g(meta, 5 + 2 * b);
+                    for p in p0..p0 + g(meta, 6 + 2 * b) {
+                        let p = p as usize;
+                        kc!(a, 93, 1);
+                        if g(po, p) != owner {
+                            continue;
+                        }
+                        let d = (g(pgx, p) - utx).abs() + (g(pgy, p) - uty).abs();
+                        let better = if *best < 0 || d < *bd {
+                            true
+                        } else if d == *bd {
+                            let bu = *best as usize;
+                            g(pgy, p) < g(pgy, bu) || (g(pgy, p) == g(pgy, bu) && (g(pgx, p) < g(pgx, bu) || (g(pgx, p) == g(pgx, bu) && g(pid, p) < g(pid, bu))))
+                        } else {
+                            false
+                        };
+                        if better {
+                            *bd = d;
+                            *best = p as i32;
+                        }
+                    }
                 };
-                if better {
-                    bd = d;
-                    best = p as i32;
+                for d in 0..=maxd {
+                    if best >= 0 && (d - 1) * bt > bd {
+                        break;
+                    }
+                    kc!(a, 91, 1);
+                    for by in (uby - d).max(0)..=(uby + d).min(brows - 1) {
+                        if by == uby - d || by == uby + d {
+                            for bx in (ubx - d).max(0)..=(ubx + d).min(bcols - 1) {
+                                scan(bx, by, &mut best, &mut bd);
+                            }
+                        } else {
+                            if ubx - d >= 0 { scan(ubx - d, by, &mut best, &mut bd); }
+                            if ubx + d < bcols { scan(ubx + d, by, &mut best, &mut bd); }
+                        }
+                    }
                 }
             }
             if best >= 0 {
@@ -2989,42 +3150,90 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
         if bx0 > bx1 || by0 > by1 {
             continue;
         }
-        for by in by0..=by1 {
-            for bx in bx0..=bx1 {
-                let b = (by * bcols + bx) as usize;
-                let e0 = g(bs, b);
-                for e in e0..e0 + g(bc, b) {
-                    let site = g(bi, e as usize);
-                    if site >= n {
+        // One bucket's sites. A full K whose last score is below the bucket's
+        // lowest possible (its nearest point's distance to the anchor plus 0.22
+        // of its distance to the origin) takes none of them.
+        let bpx = bt as f32 * tile;
+        let (axf, ayf) = (ax, ay);
+        let site_bucket = |bx: i32, by: i32| {
+            let b = (by * bcols + bx) as usize;
+            let cnt = g(bc, b);
+            if cnt <= 0 {
+                return;
+            }
+            if g(out, o0 + kk - 1) >= 0 {
+                let rx0 = bx as f32 * bpx;
+                let ry0 = by as f32 * bpx;
+                let (rx1, ry1) = (rx0 + bpx, ry0 + bpx);
+                let adx = (rx0 - axf).max(0.0).max(axf - rx1);
+                let ady = (ry0 - ayf).max(0.0).max(ayf - ry1);
+                let odx = (rx0 - ox).max(0.0).max(ox - rx1);
+                let ody = (ry0 - oy).max(0.0).max(oy - ry1);
+                let lb = sqrtf(adx * adx + ady * ady) + sqrtf(odx * odx + ody * ody) * 0.22;
+                if lb * 0.999 - 1.0 > g(osc, o0 + kk - 1) {
+                    return;
+                }
+            }
+            let e0 = g(bs, b);
+            for e in e0..e0 + cnt {
+                let site = g(bi, e as usize);
+                if site >= n {
+                    continue;
+                }
+                let su = site as usize;
+                let sown = g(so, su);
+                if sown >= 0 && sown != owner {
+                    continue;
+                }
+                let dx = g(sx, su) - ox;
+                let dy = g(sy, su) - oy;
+                let d2 = dx * dx + dy * dy;
+                if !area_only && !(d2 <= r2) {
+                    continue;
+                }
+                if area_only {
+                    let gx=floorf(g(sx,su)*itile) as i32;let gy=floorf(g(sy,su)*itile) as i32;
+                    if gx<0||gy<0||gx>=w||gy>=h {continue;}
+                    let ar=g(ag,(gy*w+gx) as usize);
+                    if ar<0||ar as usize>=na||g(ast,ar as usize)!=st {continue;}
+                }
+                if rb != 0 {
+                    let t = floorf(g(sy, su) * itile) as i32 * w + floorf(g(sx, su) * itile) as i32;
+                    if t >= 0 && (g(rv, t as usize) & rb) != 0 && t != my {
                         continue;
                     }
-                    let su = site as usize;
-                    let sown = g(so, su);
-                    if sown >= 0 && sown != owner {
-                        continue;
-                    }
-                    let dx = g(sx, su) - ox;
-                    let dy = g(sy, su) - oy;
-                    let d2 = dx * dx + dy * dy;
-                    if !area_only && !(d2 <= r2) {
-                        continue;
-                    }
-                    if area_only {
-                        let gx=floorf(g(sx,su)*itile) as i32;let gy=floorf(g(sy,su)*itile) as i32;
-                        if gx<0||gy<0||gx>=w||gy>=h {continue;}
-                        let ar=g(ag,(gy*w+gx) as usize);
-                        if ar<0||ar as usize>=na||g(ast,ar as usize)!=st {continue;}
-                    }
-                    if rb != 0 {
-                        let t = floorf(g(sy, su) * itile) as i32 * w + floorf(g(sx, su) * itile) as i32;
-                        if t >= 0 && (g(rv, t as usize) & rb) != 0 && t != my {
-                            continue;
+                }
+                let ex = g(sx, su) - ax;
+                let ey = g(sy, su) - ay;
+                let score = sqrtf(ex * ex + ey * ey) + sqrtf(d2) * 0.22 + if g(stp, su) == 0 { drop_pen } else { 0.0 };
+                ws_insert(out, osc, o0, kk, site, score);
+            }
+        };
+        if ox == ox && oy == oy {
+            // The buckets in rings round the origin's, nearest first: a ring d is
+            // at least d - 1 buckets from it.
+            let tbx = floorf(ox * ibt) as i32;
+            let tby = floorf(oy * ibt) as i32;
+            let maxd = (bx0 - tbx).abs().max((bx1 - tbx).abs()).max((by0 - tby).abs()).max((by1 - tby).abs());
+            for d in 0..=maxd {
+                if d >= 2 && g(out, o0 + kk - 1) >= 0 && ((d - 1) as f32 * bpx) * 0.22 * 0.999 - 1.0 > g(osc, o0 + kk - 1) {
+                    break;
+                }
+                for by in (tby - d).max(by0)..=(tby + d).min(by1) {
+                    if by == tby - d || by == tby + d {
+                        for bx in (tbx - d).max(bx0)..=(tbx + d).min(bx1) {
+                            site_bucket(bx, by);
                         }
+                    } else {
+                        if tbx - d >= bx0 && tbx - d <= bx1 { site_bucket(tbx - d, by); }
+                        if tbx + d >= bx0 && tbx + d <= bx1 { site_bucket(tbx + d, by); }
                     }
-                    let ex = g(sx, su) - ax;
-                    let ey = g(sy, su) - ay;
-                    let score = sqrtf(ex * ex + ey * ey) + sqrtf(d2) * 0.22 + if g(stp, su) == 0 { drop_pen } else { 0.0 };
-                    ws_insert(out, osc, o0, kk, site, score);
+                }
+            }
+        } else {
+            for by in by0..=by1 {
+                for bx in bx0..=bx1 {
+                    site_bucket(bx, by);
                 }
             }
         }
@@ -3034,6 +3243,87 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
 #[inline(always)]
 fn sqrtf(v: f32) -> f32 {
     f32x4_extract_lane::<0>(f32x4_sqrt(f32x4_splat(v)))
+}
+
+/// SIM_KERNEL_WS_NEARFIELD (a job a pair): for a collectors' group and an owner, every tile's nearest working
+/// spawner of that owner by tile steps (|dx| + |dy|), then the lower row, column, id: wsg<g>.nf at the owner's slot
+/// (meta[5 + 2 nb + 16 + owner]), a tile's value (steps << 16 | rank), rank the place of the spawner in the order by
+/// (row, column, id) (wsg<g>.ro: by spawner, wsg<g>.rk: by rank), all ones for none. Two sweeps (a distance
+/// transform in the L1 metric, the keys carried: each source's shortest paths turn once, down then left, or
+/// right then up, so the two passes meet every one). P: [0] pairs, [1] width, [2] height, [3 + i] group * 16 + owner.
+/// The group's arrays as the scan's (30 + 14 g ...), nf 144 + g, rk 152 + g, ro 160 + g.
+#[no_mangle]
+pub unsafe extern "C" fn k_ws_nearfield(a: u32, chunk: i32) {
+    let a = waddr(a) as *const i32;
+    let k = K::new(a);
+    let c = chunk.max(0) as usize;
+    if c >= k.i(0).max(0) as usize {
+        return;
+    }
+    let (w, h) = (k.i(1).max(0) as usize, k.i(2).max(0) as usize);
+    let pair = k.i(3 + c);
+    let (gid, owner) = ((pair >> 4) as usize, pair & 15);
+    if gid >= 8 || w == 0 || h == 0 {
+        return;
+    }
+    let gb = 30 + 14 * gid;
+    let meta = k.p::<i32>(gb);
+    let (nf, ro) = (k.p::<u32>(144 + gid), k.p::<i32>(160 + gid));
+    if meta.is_null() || nf.is_null() || ro.is_null() {
+        return;
+    }
+    let (np, nb) = (g(meta, 1).max(0) as usize, (g(meta, 3) * g(meta, 4)).max(0) as usize);
+    let slot = g(meta, 5 + 2 * nb + 16 + owner as usize);
+    if slot < 0 {
+        return;
+    }
+    let (pgx, pgy, po) = (k.p::<i32>(gb + 5), k.p::<i32>(gb + 6), k.p::<i32>(gb + 7));
+    let f = nf.add(slot as usize * w * h);
+    let inf = u32::MAX;
+    for i in 0..w * h {
+        s(f, i, inf);
+    }
+    for q in 0..np {
+        if g(po, q) != owner {
+            continue;
+        }
+        let (x, y) = (g(pgx, q), g(pgy, q));
+        if x < 0 || y < 0 || x as usize >= w || y as usize >= h {
+            continue;
+        }
+        let t = y as usize * w + x as usize;
+        let v = g(ro, q) as u32 & 0xffff;
+        if v < g(f, t) {
+            s(f, t, v);
+        }
+    }
+    // (Forward: from the tile above and the one to the left; backward: from below and to the right.)
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            let mut v = g(f, i);
+            if x > 0 {
+                v = v.min(g(f, i - 1).saturating_add(0x10000));
+            }
+            if y > 0 {
+                v = v.min(g(f, i - w).saturating_add(0x10000));
+            }
+            s(f, i, v);
+        }
+    }
+    for y in (0..h).rev() {
+        for x in (0..w).rev() {
+            let i = y * w + x;
+            let mut v = g(f, i);
+            if x + 1 < w {
+                v = v.min(g(f, i + 1).saturating_add(0x10000));
+            }
+            if y + 1 < h {
+                v = v.min(g(f, i + w).saturating_add(0x10000));
+            }
+            s(f, i, v);
+        }
+    }
 }
 
 /// SIM_KERNEL_WS_ORDER (one job): the requests with a result, in id order

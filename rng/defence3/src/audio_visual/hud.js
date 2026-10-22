@@ -3963,7 +3963,7 @@ function renderTowerInfo(e) {
     }
     html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), formatBigNumber(s.damage, 1));
     if (e.type !== 'laser') {
-        html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${e.type} / Range`, kind: 'building', key: e.type, statKey: 'attackRange' }), formatAreaDistanceStat(getBuildingStatForOwner(e.owner, e.type, baseLevel, 'attackRange')), formatAreaDistanceStat(getBuildingStatForOwner(e.owner, e.type, effLevel, 'attackRange')));
+        html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${e.type} / Range`, kind: 'building', key: e.type, statKey: 'attackRange' }), formatAreaDistanceStat(getStatAttackRangeArea(bs || s)), formatAreaDistanceStat(getStatAttackRangeArea(s)));
         html += infoRow('Visibility', formatRangeStatTiles(baseVis), formatRangeStatTiles(effVis));
         html += infoRow('Cooldown', bs ? `${(bs.cd || 0).toFixed(2)}s` : `${(s.cd || 0).toFixed(2)}s`, `${(s.cd || 0).toFixed(2)}s`);
         html += infoRow('DPS', baseDps, dps);
@@ -4046,7 +4046,7 @@ function renderTowerGroupInfo(group) {
     html += infoRow(withInfoPanelStatMatrixButton('UpKeep', { title: `${e.type} / UpKeep`, kind: 'building', key: e.type, statKey: 'upKeep' }), formatInfoRate(totalBaseUpKeep), formatInfoRate(totalEffUpKeep));
     html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), formatBigNumber(s.damage, 1));
     if (e.type !== 'laser') {
-        html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${e.type} / Range`, kind: 'building', key: e.type, statKey: 'attackRange' }), formatAreaDistanceStat(getBuildingStatForOwner(e.owner, e.type, baseLevel, 'attackRange')), formatAreaDistanceStat(getBuildingStatForOwner(e.owner, e.type, effLevel, 'attackRange')));
+        html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${e.type} / Range`, kind: 'building', key: e.type, statKey: 'attackRange' }), formatAreaDistanceStat(getStatAttackRangeArea(bs || s)), formatAreaDistanceStat(getStatAttackRangeArea(s)));
         html += infoRow('Visibility', formatRangeStatTiles(baseVis), formatRangeStatTiles(effVis));
         html += infoRow('Cooldown', bs ? `${(bs.cd || 0).toFixed(2)}s` : `${(s.cd || 0).toFixed(2)}s`, `${(s.cd || 0).toFixed(2)}s`);
         html += infoRow('DPS', baseDps, dps);

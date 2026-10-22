@@ -5539,12 +5539,15 @@ function visWindowZone(wx, wy) {
 }
 
 // The sweeps are a safety net behind the hooks (every change is applied
-// where it happens): buildings over 128 ticks, units over 512 (a share of
+// where it happens): buildings over 1024 ticks, units over 512 (a share of
 // each a tick, by list position: the same on every peer; at 64/256 they
-// cost ~1.5 ms a tick with 200k units and 35k buildings).
-const VIS_COVER_SWEEP_TICKS = 128;
+// cost ~1.5 ms a tick with 200k units and 35k buildings; at 128 the
+// buildings of a 4M scene ~100 ms a tick: each one's range is a stat table
+// lookup).
+const VIS_COVER_SWEEP_TICKS = 1024;
 // Units' parameters (their range mostly: level and research changes).
 const VIS_COVER_UNIT_SWEEP_TICKS = 512;
+const VIS_COVER_SLOW_UNITS = 250000, VIS_COVER_SLOW = 4;
 
 // Brings one source's registration up to date with the world (a unit: its
 // parameters, _visCoverSyncUnit). Buildings are live while on their tile,
@@ -5685,8 +5688,13 @@ function syncVisibilityCoverage() {
     let C = _visCover;
     let full = C.syncedTick < 0;
     // (The slices of the step's base ticks: simStepPhases.)
-    const ks = full ? [0] : simStepPhases(VIS_COVER_SWEEP_TICKS), step = full ? 1 : VIS_COVER_SWEEP_TICKS;
-    for (const i0 of full ? [0] : simStepPhases(VIS_COVER_UNIT_SWEEP_TICKS)) for (let i = i0, n = units.length, us = full ? 1 : VIS_COVER_UNIT_SWEEP_TICKS; i < n; i += us) {
+    // (Past VIS_COVER_SLOW_UNITS units the safety-net sweeps go VIS_COVER_SLOW
+    // times slower: they are O(sources) a period, ~55 ms a step of 20 base
+    // ticks at 2.3M units; the hooks apply every change where it happens.
+    // units.length is the same on every peer.)
+    const slow = units.length >= VIS_COVER_SLOW_UNITS ? VIS_COVER_SLOW : 1, sweepT = VIS_COVER_SWEEP_TICKS * slow, unitT = VIS_COVER_UNIT_SWEEP_TICKS * slow;
+    const ks = full ? [0] : simStepPhases(sweepT), step = full ? 1 : sweepT;
+    for (const i0 of full ? [0] : simStepPhases(unitT)) for (let i = i0, n = units.length, us = full ? 1 : unitT; i < n; i += us) {
         let u = units[i];
         if (u) _visCoverSync(u, true);
     }

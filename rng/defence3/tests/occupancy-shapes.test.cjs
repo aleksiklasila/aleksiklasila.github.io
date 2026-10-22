@@ -18,6 +18,10 @@ const result=i.eval(`(()=>{
   }
   if(n!==expected.size)throw Error(label+': missing bits '+n+' / '+expected.size);
  };
+ // (The kernel's swept move itself: occupancyMovePosition sends a move beyond a step's reach (24 tiles) as a jump, which ignores obstacles.)
+ const moveOne=(s,x,y)=>{for(let i=0;i<_occNames.length;i++)_simWasmArgI[512+i]=_simWEnc(_simParReg[_occNames[i]].byteOffset);
+  _simWasmArgI[512+28]=_simWEnc(O.stats.byteOffset);_simWasmArgI[512+33]=_simWEnc(O.config.byteOffset);
+  const pos=_simWasmX.occ_move_one(_simWasmArgsW,s,x,y),c=_simUnitState.columns;c.x[s]=Number(BigInt.asIntN(32,pos));c.y[s]=Number(BigInt.asIntN(32,pos>>32n));};
  let cases=0;
  for(let r=1;r<=10;r++)for(const cx of [r-1,30,31,32,33,63,64,O.w-r])for(const [dx,dy]of [[1,0],[-1,0],[1,1],[-2,3],[8,-5],[80,0],[-80,0],[0,300]])for(const phase of [[0,0,0,0],[C-1,0,-3,0],[C>>1,C-1,7,-2],[C-1,C>>1,-5,3]]){
   O.bits.fill(0);O.active.fill(0);const cy=32;
@@ -30,7 +34,7 @@ const result=i.eval(`(()=>{
   const sweep=(nx,ny)=>{let x=ox,y=oy;const n=Math.max(1,Math.ceil(Math.max(Math.abs(nx-ox),Math.abs(ny-oy))/C));
    for(let k=1;k<=n;k++){const tx=ox+Math.trunc((nx-ox)*k/n),ty=oy+Math.trunc((ny-oy)*k/n);if(!free(tx,ty))break;x=tx;y=ty;}return [x,y];};
   let [x,y]=sweep(nx,ny);if(x===ox&&y===oy){[x,y]=sweep(nx,oy);if(x===ox&&y===oy)[x,y]=sweep(ox,ny);}
-  occupancyMovePosition({_si:0,_us:_simUnitState.columns},nx,ny);
+  moveOne(0,nx,ny);
   if(O.x[0]!==x||O.y[0]!==y)throw Error('movement mismatch r='+r+' cx='+cx+' delta='+dx+','+dy+' actual='+O.x[0]+','+O.y[0]+' expected='+x+','+y);
   const expected=new Set(obstacle);for(const [a,b]of disk(Math.trunc(x/C),Math.trunc(y/C),r))expected.add(fold(a,b));
   verify(expected,'r='+r+' cx='+cx);

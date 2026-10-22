@@ -19,7 +19,8 @@ const H = require('./net-harness.cjs');
 for (const [helpers, side] of [[3, 0], [3, 1], [0, -1], [0, 1]]) for (const [map, seed] of [['crossroads', 3], ['islands', 5], ['arena', 9]]) {
     const world = new H.World({ controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '120', 'cfg-map-type': map } });
     const inst = world.spawn('rows' + map + helpers, { simWorker: false });
-    inst.eval('startSoloGame(); NAV_INSTALL_SIDE = ' + side + ';');
+    // (The destination fields themselves: the routing atlas, which replaces them, is off.)
+    inst.eval('NAV_ATLAS = false; startSoloGame(); NAV_INSTALL_SIDE = ' + side + ';');
     if (helpers) {
         inst.scratch.Worker = require('./real-sim-helper.cjs');
         assert.equal(inst.eval(`Worker = __scratch.Worker; navigator.hardwareConcurrency = 32; simParallelInit('', ${helpers})`), helpers);

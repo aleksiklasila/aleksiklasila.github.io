@@ -1,2 +1,0 @@
-multiplayer-lobby exit 0
-multiplayer-backlog-fairness exit 0

@@ -1,5 +1,0 @@
-   Compiling defence3_sim v0.1.0 (Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\wasm)
-error: error writing dependencies to `Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\wasm\target64\wasm64-unknown-unknown\release\build\defence3_sim/ff79c63ab93d9df7\out\defence3_sim.d`: The requested operation cannot be performed on a file with a user-mapped section open. (os error 1224)
-
-error: could not compile `defence3_sim` (lib) due to 1 previous error
-cargo build failed (is rustup installed, with `rustup target add wasm32-unknown-unknown`?)

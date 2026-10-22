@@ -547,10 +547,6 @@ class Unit {
     constructor(unitType, owner, x, y) {
         simUnitStateAllocate(this);
         this.id = nextUnitId++;
-        // Stats refreshed on its first tick (a snapshotted flag: the list of
-        // such units is rebuilt from it after a restore).
-        this._needsStatsInit = true;
-        _noteNewUnitForStats(this);
         this.unitType = unitType;
         this.owner = owner;
         this.x = x; this.y = y;
@@ -3909,7 +3905,8 @@ function _simMoveWalls() {
 // cell), -2 otherwise (hostile to everyone). Mines count as none. Tiles
 // whose tile entity changed are redone at the next kernel run; per block
 // and player, the count of structures hostile to that player.
-let _simMoveStruct = null, _simMoveStructBlocks = null, _simMoveStructSet = null, _simMoveStructDims = '';
+// (The tables' dimensions as four numbers: a string made for the comparison was an allocation a call, a tower's every shot.)
+let _simMoveStruct = null, _simMoveStructBlocks = null, _simMoveStructSet = null, _simMoveStructW = -1, _simMoveStructH = -1, _simMoveStructP = -1, _simMoveStructC = -1;
 // (And by class, for the acquisition tier's structure look: _simStructClass.)
 let _simStructCls = null;
 // 0 none (or a mine), 1 turret, 2 trap, 3 barrack or spawner, 4 any other
@@ -3929,7 +3926,7 @@ function _simStructClass(gx, gy) {
 }
 let _simMoveStructDirty = [];
 // Cell owners replaced (a restore): every tile's code again.
-function simMoveStructsReset() { _simMoveStructDims = ''; }
+function simMoveStructsReset() { _simMoveStructW = -1; }
 function simMoveTileEntityChanged(gx, gy) {
     if (_simMoveStruct) _simMoveStructDirty.push(gy * GRID_W + gx);
     // (The walk classes' walls: a builder's own buildings, active mines; at
@@ -3951,8 +3948,8 @@ function _simMoveStructCount(tile, code, delta) {
     for (let p = 0; p < players; p++) if (code !== p) _simMoveStructBlocks[b + p] += delta;
 }
 function _simMoveStructs() {
-    const players = spatialUnitsComplexPlayerCount, dims = GRID_W + 'x' + GRID_H + ':' + players + ':' + spatialBlockCols;
-    if (!_simMoveStruct || _simMoveStructSet !== _activeTileEntities || _simMoveStructDims !== dims) {
+    const players = spatialUnitsComplexPlayerCount;
+    if (!_simMoveStruct || _simMoveStructSet !== _activeTileEntities || _simMoveStructW !== GRID_W || _simMoveStructH !== GRID_H || _simMoveStructP !== players || _simMoveStructC !== spatialBlockCols) {
         if (!_simMoveStruct || _simMoveStruct.length !== GRID_W * GRID_H) { _simMoveStruct = simHeapArrayAuto(Int8Array, GRID_W * GRID_H); simParallelBind('mv.struct', _simMoveStruct); }
         if (!_simStructCls || _simStructCls.length !== GRID_W * GRID_H) { _simStructCls = simHeapArrayAuto(Int8Array, GRID_W * GRID_H); simParallelBind('mv.scls', _simStructCls); }
         _simMoveStruct.fill(-1); _simStructCls.fill(0);
@@ -3968,7 +3965,7 @@ function _simMoveStructs() {
             if (code !== -1) _simMoveStructCount(t, code, 1);
             if (_simStructCls[t] === 2) _simTrapRefresh(t);
         }
-        _simMoveStructSet = _activeTileEntities; _simMoveStructDims = dims; _simMoveStructDirty.length = 0;
+        _simMoveStructSet = _activeTileEntities; _simMoveStructW = GRID_W; _simMoveStructH = GRID_H; _simMoveStructP = players; _simMoveStructC = spatialBlockCols; _simMoveStructDirty.length = 0;
         return;
     }
     const dirty = _simMoveStructDirty;
@@ -4655,7 +4652,12 @@ function _acqPost() {
         _acqArray('acq.ex', Float32Array, ecap); _acqArray('acq.ey', Float32Array, ecap);
         _acqArray('acq.eo', Int32Array, ecap); _acqArray('acq.ea', Int32Array, ecap); _acqArray('acq.eid', Int32Array, ecap);
     }
-    const T = simParallelStageParams(ACQ_LANE, 0), B = simParallelStageParams(ACQ_LANE, sampled?2:1);
+    // The job's stages, in order: the packing of the index (OMT), with the area
+    // tables (the build, then its answers: one job a team and part) when
+    // sampled, the scan, the combat brain. Each has its own params slot.
+    const answers = areaTargets, playersK = Math.min(spatialUnitsComplexPlayerCount, np);
+    const scanSlot = 1 + (sampled ? 1 : 0) + (answers ? 1 : 0);
+    const T = simParallelStageParams(ACQ_LANE, 0), B = simParallelStageParams(ACQ_LANE, scanSlot);
     T.fill(0); B.fill(0);
     const EPER = 4096, prepJobs = Math.max(Math.ceil(CHUNKS_H / 64), Math.ceil(ne / EPER));
     T[0] = CHUNKS_W; T[1] = CHUNKS_H; T[2] = 64; T[3] = ne; T[4] = EPER; T[5] = TILE; T[6] = GRID_W; T[7] = GRID_H;
@@ -4670,7 +4672,7 @@ function _acqPost() {
     B[28]=areaTargets?1:0;B[29]=AREA_UNIT_TILE_EQUIVALENT;
     // Then the combat brain on the scan's results (its own copy of the area
     // graph: the layout may change before the commit).
-    const C3 = simParallelStageParams(ACQ_LANE, sampled?3:2);
+    const C3 = simParallelStageParams(ACQ_LANE, scanSlot + 1);
     C3.fill(0);
     if (SIM_COMBAT_BRAIN || sampled) {
         _simAreaCsr();
@@ -4685,17 +4687,26 @@ function _acqPost() {
         for(const name of ['saSeen','saNearN'])_acqArray('acq.'+name,Int32Array,A);
         for(const name of ['saX','saY'])_acqArray('acq.'+name,Float32Array,ecap);
         for(const name of ['saOwner','saId','saSlot'])_acqArray('acq.'+name,Int32Array,ecap);
+        _acqArray('acq.saKey',Int32Array,ecap);
         const near=_acqArray('acq.saNear',Int32Array,areaTargets?1:A*64);
         const I=simParallelStageParams(ACQ_LANE,1);I.fill(0);I[0]=ne;I[20]=A;I[7]=B[7];
         I[15]=GRID_W;I[16]=GRID_H;I[28]=areaTargets?1:0;I[30]=1;I[5]=TILE;
+        // (The slots, and the tiles an area step stands for: the answers stop at the farthest reach.)
+        I[31]=n;I[29]=AREA_UNIT_TILE_EQUIVALENT;
         I[26]=_acqSampleNearVer!==_simAreaLayoutVer||_acqSampleNearOf!==near?1:0;
         if(!areaTargets){_acqSampleNearVer=_simAreaLayoutVer;_acqSampleNearOf=near;}
         if(areaTargets){
             for(const name of ['saNearest','saDistance'])_acqArray('acq.'+name,Int32Array,A*np);
             for(const name of ['saStructure','saStructureDistance'])_acqArray('acq.'+name,Int32Array,A*np*4);
-            _acqArray('acq.saQueue',Int32Array,A);
+            // (A queue a job: the answers' jobs run side by side.)
+            _acqArray('acq.saQueue',Int32Array,A*playersK*5);
         }
         stages.push([SIM_KERNEL_ACQ_AREA_BUILD,1]);
+        if(answers){
+            // (The same params for the answers' jobs: their own slot.)
+            simParallelStageParams(ACQ_LANE,2).set(I);
+            stages.push([SIM_KERNEL_ACQ_AREA_ANSWERS,playersK*5]);
+        }
     }
     stages.push([SIM_KERNEL_ACQ_SCAN,Math.ceil((sampled?n:ne)/256)],[SIM_KERNEL_COMBAT_BRAIN,SIM_COMBAT_BRAIN?Math.ceil(n/2048):0]);
     simParallelBackgroundChain(ACQ_LANE,stages);

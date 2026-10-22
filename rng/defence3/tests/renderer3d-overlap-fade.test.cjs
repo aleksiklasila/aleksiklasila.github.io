@@ -11,11 +11,13 @@ const context = {
     RENDERER3D_OVERLAP_HEIGHT_FRACTION: 0.25, RENDERER3D_OVERLAP_MIN_HEIGHT: 0.05, RENDERER3D_OVERLAP_MAX_HEIGHT: 0.14,
     fullVisibility: true, visibilityGrid: [], VISIBILITY_LIGHT_NORMALIZATION_RANGE: 1,
     DEFAULT_SHADOW_DIR_X: 0, DEFAULT_SHADOW_DIR_Y: 1,
-    resolveRenderVisionRange: () => NaN,
+    resolveRenderVisionRange: () => NaN, BASE_CARD_TYPES: {}, BASE_UNIT_STATS: {}, AREA_UNIT_TILE_EQUIVALENT: 5,
     _getCachedLitTint: color => color,
     RENDER_NO_MODEL_CANDIDATES: Object.freeze([])
 };
 vm.createContext(context);
+// (The base sight a model's height follows comes with it.)
+vm.runInContext(source.slice(source.indexOf('function _renderBaseVisionTiles('), source.indexOf('function resolveRenderVisionRange(')), context);
 vm.runInContext(source.slice(start, end), context);
 const push = vm.runInContext('push3DRenderObject', context);
 

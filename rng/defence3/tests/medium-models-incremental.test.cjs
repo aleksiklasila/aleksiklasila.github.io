@@ -22,15 +22,17 @@ c._detailViewKey = () => String(c.view || 0);
 // (A score from the position: units cross the threshold as they move.)
 c._detailScore = (x, z, size, flat, retained, minPixels) => ((Math.floor(x * 3) + Math.floor(z * 5)) % 5 !== 0 && size * 40 > minPixels) ? 10 : 0;
 c._structureDetailCandidates = () => [];
+// (The catalog entry's model height: renderer.js, loaded with it in the page.)
+vm.runInContext(read('src/audio_visual/renderer.js').match(/function _cmBaseHeight[\s\S]*?\r?\n}\r?\n/)[0], c);
 let seed = 12345;
 const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
 const TAU = Math.PI * 2;
 // A catalog of three unit types (row 7), one flying, one with an owner rim
-// and a status picture.
+// and a status picture (the heights are the types' baked sight scale).
 const styles = [
-    { modelKey: 'unit_norm', weaponType: 'sword', scaleX: 1, scaleY: 1.45, color: '#fff' },
+    { modelKey: 'unit_norm', weaponType: 'sword', scaleX: 1, scaleY: 1.45, bakeHeight: 2.4, color: '#fff' },
     { modelKey: 'unit_flying', weaponType: 'sword', scaleX: .9, scaleY: 1.2, color: '#dd0', isFlying: true },
-    { modelKey: 'unit_tank', weaponType: 'sword', scaleX: 1.2, scaleY: 1, color: '#555', drawOwnerRim: true, statusTextureCanvas: { status: 1 } }];
+    { modelKey: 'unit_tank', weaponType: 'sword', scaleX: 1.2, scaleY: 1, bakeHeight: 1.7, color: '#555', drawOwnerRim: true, statusTextureCanvas: { status: 1 } }];
 const width = 4, stride = 9, lookup = new Float32Array(8 * width * 4);
 for (let code = 1; code <= 3; code++) lookup[(7 * width + code) * 4] = (code - 1) * stride + 1;
 const panels = styles.map((_, i) => ({ panel: i }));
@@ -67,7 +69,7 @@ function reference(C, F, mask) {
         const d = new Float32Array(28), flying = style.isFlying, sx = size * style.scaleX;
         let sy = size * style.scaleY;
         if (!style.mounted) sy = style.snake ? Math.max(.24, sy) : Math.max(.48 * style.scaleX, sy);
-        if (!(style.preserveModelHeight || style.isFlying || style.mounted) && F.vision[s] > 0) sy *= Math.max(.18, F.vision[s] * 5 / 5);
+        if (!(style.preserveModelHeight || style.isFlying || style.mounted)) sy *= style.bakeHeight || 1;
         const f = F.facing[s], co = Math.cos(f), sn = Math.sin(f);
         d[0] = co * sx; d[1] = 0; d[2] = -sn * sx; d[3] = (F.px[s] - F.x[s]) / C.tile;
         d[4] = flying ? (F.id[s] * 1.7) % TAU : 0; d[5] = sy; d[6] = flying ? 1 : 0; d[7] = (F.py[s] - F.y[s]) / C.tile;

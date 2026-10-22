@@ -1,1 +1,0 @@
-PASS: storage ABI (110 movement kernel columns match their Rust types; 192 columns, 517 bytes per slot)

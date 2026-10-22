@@ -1,2 +1,0 @@
-{"visible":true,"units":30,"holding":30,"parked":30,"calls":300,"perUnitTick":0.25,"hitAt":0,"moved":30,"P":4}
-PASS: held attackers parked between looks (0.25 updates a unit a tick), an enemy shot after 0 ticks, released ones move on

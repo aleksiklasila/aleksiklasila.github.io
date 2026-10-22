@@ -79,7 +79,8 @@ function hudViolations(inst, pid) {
         try { return labs.length ? renderQueuedResearchTasksForGroup(labs) : ''; } finally { _renderResearchQueueThingIconHtml = icon; }
     })()`);
     const tasks = tasksOf(inst, pid);
-    const labels = [...html.matchAll(/<span style="color:#9cf">R(\d+)<\/span>/g)].map(m => Number(m[1]));
+    // (Each row's level: its stat button's target level.)
+    const labels = [...html.matchAll(/info-research-stat-matrix-btn"[^>]*data-to-level="(\d+)"/g)].map(m => Number(m[1]));
     const out = [];
     if (labels.length !== tasks.length) out.push('rows ' + labels.length + ' vs tasks ' + tasks.length);
     tasks.forEach((t, i) => { if (labels[i] !== t.toLevel) out.push('row ' + i + ' shows R' + labels[i] + ' for R' + t.toLevel); });

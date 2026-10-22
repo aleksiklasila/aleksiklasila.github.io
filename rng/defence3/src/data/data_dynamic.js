@@ -2875,6 +2875,8 @@ function getBuildingStatForOwner(playerId, buildingKey, level, statKey) {
     let key = _normalizePlayerPrecomputedBuildingKey(buildingKey);
     let lvl = Math.max(1, clampThingLevel(level || 1));
     let entry = ownerMap && ownerMap.building && ownerMap.building[key] ? ownerMap.building[key][lvl] : null;
+    // (The range stat is in areas, as the unit getter's; the entry's attackRange is the pixel distance.)
+    if (entry && statKey === 'attackRange' && Object.prototype.hasOwnProperty.call(entry, 'attackRangeArea')) return entry.attackRangeArea;
     if (entry && Object.prototype.hasOwnProperty.call(entry, statKey)) return entry[statKey];
     let rLevel = getPlayerResearchLevel(playerId, 'building', buildingKey, statKey);
     return getBuildingStatFromMap(buildingKey, level, statKey, rLevel);
@@ -3006,7 +3008,9 @@ function formatResearchStatValue(statKey, value) {
     if (statKey === 'blastDamage') return compact(value, 2);
     if (statKey === 'blastRadius') return areaCompact(value);
     if (statKey === 'workerSearchDistance') return areaCompact(value);
-    if (statKey === 'attackRange' || statKey === 'visionRange') return areaCompact(value);
+    // (The attack range in areas, fractional: 1.5 areas.)
+    if (statKey === 'attackRange') { const a = Math.round(Math.max(0, Number(value) || 0) * 100) / 100; return `${a} area${a === 1 ? '' : 's'}`; }
+    if (statKey === 'visionRange') return areaCompact(value);
     if (statKey === 'speed' || statKey === 'multiplier' || statKey === 'astarCost') return compact(value, 2);
     if (statKey === 'efficiency') return compact(value, 2);
     if (statKey === 'drainRate') return `${compact(value, 1)}\uD83D\uDC80/ s`;
@@ -3500,6 +3504,10 @@ function applyUnitLevelScaling(unit, level) {
     unit._lastAppliedEffectiveLevel = lvl;
     if (typeof effStatsUnitBaseChanged === 'function') effStatsUnitBaseChanged(unit);
     if (typeof _effRowAttach === 'function') _effRowAttach(unit);
+    // (Its tables are of the stat tables' current version: no catch-up
+    // pass, and its base entry noted, for the kernels that take the others of
+    // its owner, type and level: things_utils.js _effBaseNote.)
+    if (unit._us && typeof _unitStatsVerOf === 'function') { unit._us.esVer[unit._si] = _unitStatsVerOf(unit); if (typeof _effBaseNote === 'function') _effBaseNote(unit); }
     if (!_unitStatsNotifyHeld && typeof simMoveStatsChanged === 'function') simMoveStatsChanged(unit, previousRow);
     if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(unit);
 }
@@ -3509,12 +3517,12 @@ function applyUnitLevelScaling(unit, level) {
 // applyUnitEffectiveScaling makes them, with no energy, level or cover side
 // effects (the unit's fields are the snapshot's).
 function unitDerivedStatsRestore(unit) {
-    if (!unit || unit._needsStatsInit || unit.preComputed) return;
+    if (!unit || unit.preComputed) return;
     const base = unit.preComputedBase || unit.basePreComputed;
-    if (!base) { unit._needsStatsInit = true; return; }
+    if (!base) return;
     const lvl = Math.max(1, Math.floor(Number(unit.effectiveLevel) || Number(unit.unitLevel) || 1));
     const scaled = computeUnitLevelScaledStats(unit, lvl);
-    if (!scaled) { unit._needsStatsInit = true; return; }
+    if (!scaled) return;
     unit.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(base, scaled);
     unit.preComputed = unit.preComputedEffective;
 }

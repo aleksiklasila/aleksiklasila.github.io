@@ -3,7 +3,8 @@
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const timings=[],differences=[];
-const approximate=process.argv.includes('--approx');
+// (The SIMD kernel's Float32 contact geometry differs from the frozen baseline's in the last place: positions by one 1/8 pixel at most, in a few units. Contact counts, closing and flow outputs stay exact. --exact: no difference at all.)
+const approximate=!process.argv.includes('--exact');
 function compare(now,old,label){
     for(const key of Object.keys(old)){
         if(!approximate||!['px','py','ov'].includes(key)){assert.deepEqual(now[key],old[key],key+' '+label);continue;}
@@ -12,7 +13,7 @@ function compare(now,old,label){
         let max=0,changed=0;
         for(let i=0;i<a.length;i++)if(a[i]!==b[i]&&!(Number.isNaN(a[i])&&Number.isNaN(b[i]))){max=Math.max(max,Math.abs(a[i]-b[i]));changed++;}
         differences.push({label,key,max,changed});
-        assert.ok(max<=(key==='ov'?0.0001:32),key+' excessive geometry error '+max+' '+label);
+        assert.ok(max<=(key==='ov'?0.0001:1),key+' excessive geometry error '+max+' '+label);
     }
 }
 function run(file,seed,still,edge=null,budget=0) {

@@ -323,8 +323,7 @@ const PAGE_COLLECT = (longMs = 50) => {
 // (wrappers put in by its diagnostics eval; nested parts count in their
 // callers too).
 const PHASE_NAMES = ['gameTick', 'processActions', '_simPostResult', 'snapRecordTickHash', 'computeLockstepStateHashFast', 'resyncAfterTick',
-    'updateAllPlayerVisibility', 'updateVisibility', 'syncVisibilityCoverage', 'recalculateUnitEffectiveStats', 'recalculateThingPrecomputedStats',
-    'processGlobalSpawnerQueue', 'simMoveRun', 'simMoveEndTick', 'spatialIndexRebuild', 'runUnitSeparationPass', '_forEachUnitInTickOrder', 'simUnitStateCollect',
+    'updateAllPlayerVisibility', 'updateVisibility', 'syncVisibilityCoverage', 'recalculateUnitEffectiveLevel', 'processGlobalSpawnerQueue', 'simMoveRun', 'simMoveEndTick', 'spatialIndexRebuild', 'runUnitSeparationPass', '_forEachUnitInTickOrder', 'simUnitStateCollect',
     'advanceGroupRoutes', 'takeDuePendingPathUnits', 'flushPendingMovementAstarSpend', 'recomputePlayerPopCaps', '_runAdjacencyRecalculation', 'sampleGameStats',
     'visCoverHoldEnd', 'unitHitsResolve', 'statusPrepassRun', 'runQueuedOrders', 'navTick', 'navFieldsFlush', 'compactRemovedUnits', 'flushPendingResourceStatRebuilds',
     'ensureLaserConnections', 'gameStatsStep', 'projectilesBegin', '_buildDeterministicBuildingUpdateOrderForTick', 'healerCandidatesStep', 'tickStatusEffects',

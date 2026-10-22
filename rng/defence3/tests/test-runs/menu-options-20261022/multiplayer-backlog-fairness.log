@@ -1,3 +1,0 @@
-PASS: slow guest worker, 16-tick lead: host 2457 ms, guest 2468 ms; maximum host lead 4 completed ticks.
-PASS: slow host worker, 16-tick lead: host 2652 ms, guest 2639 ms; maximum host lead 0 completed ticks.
-PASS: temporary slow client recovers to 20 TPS without changing simulation state.

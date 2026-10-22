@@ -42,8 +42,7 @@ if (process.argv.includes('--profile')) { session.connect(); session.post('Profi
 const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     const times = [], frames = [], sep = [], phaseTimes = {}, populations = [];
     let measuring = false;
-    if (${phases}) for (const name of ['recalculateUnitEffectiveStats', 'recalculateThingPrecomputedStats',
-        'updateAllPlayerVisibility', '_buildDeterministicUnitUpdateOrderForTick', '_resolveDeferredPathsByGroup',
+    if (${phases}) for (const name of ['recalculateUnitEffectiveLevel', 'updateAllPlayerVisibility', '_buildDeterministicUnitUpdateOrderForTick', '_resolveDeferredPathsByGroup',
         'simUnitStateCollect', 'updateUnitSpatial', 'simParallelRun']) {
         const original = eval(name);
         const wrapped = function (...args) {

@@ -129,7 +129,7 @@ function _simClientSpawn(c, viaBlob, maxHelpers) {
         let text = (ev.message || 'worker error, no message (script failed to load?)') + where;
         c.errors.push(text); if (!c.loaded) c.failed = text; console.error('[sim worker]', text, ev);
     };
-    worker.postMessage({ type: 'load', scripts: _simClientScriptUrls(), maxHelpers, ctl: c.ctl, ctlBase: c.ctlBase });
+    worker.postMessage({ type: 'load', scripts: _simClientScriptUrls(), maxHelpers, ctl: c.ctl, ctlBase: c.ctlBase, trace: /[?&]simtrace=1(?:&|$)/.test(location.search) });
 }
 
 // Loaded ahead (the scripts take a few hundred ms), so matches start at once.
@@ -681,6 +681,8 @@ function _simClientOnMessage(msg) {
             if (msg.world) { if (msg.epoch === c.epoch) _simClientApplyWorld(msg.world, 1); else _simClientReturnBufs(_simClientWorldBufs(msg.world)); }
             break;
         case 'ticked': _simClientApplyTick(msg); break;
+        // (?simtrace=1: the worker's per-tick phase times, see sim_worker.js.)
+        case 'trace': { const T = window.__simTrace || (window.__simTrace = []); for (const r of msg.rows || []) T.push(r); if (T.length > 6000) T.splice(0, T.length - 6000); break; }
         // The worker's own ticks (a stalled page): one it ran, one a host's
         // worker sealed, a bundle the host's worker sealed (to a guest).
         case 'autoRan': if (msg.epoch === c.epoch && c.active) lockstepAdoptAutoTick(msg.tick, msg.due); break;

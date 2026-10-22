@@ -64,7 +64,7 @@ const run = async ms => { await world.run(ms); };
     })())`));
     console.log('columns outside, then a reservation with room', JSON.stringify(fixed));
     assert.equal(fixed.broken, true, 'the test made columns outside the heap');
-    assert.ok(fixed.threw && /Rust kernel cannot run/.test(fixed.threw), 'a kernel over them fails: ' + fixed.threw);
+    assert.ok(fixed.threw && /Rust kernel cannot run|missing heap arrays/.test(fixed.threw), 'a kernel over them fails: ' + fixed.threw);
     assert.equal(fixed.outside, false, 'made again in the heap');
     inst.errors.length = 0;
     const t0 = inst.eval('currentTick');

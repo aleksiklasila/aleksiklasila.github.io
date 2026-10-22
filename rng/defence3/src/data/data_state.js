@@ -809,7 +809,19 @@ const STRUCT_SHARED_REFS = new Set(['type','unitType']);
 // resolve owner/type/level directly into shared flat-table views.
 const STRUCT_DERIVED_STATS=new Set(['preComputedBase','preComputedEffective','preComputed','preComputedPotential','baseStats','currentStats','maxEnergy','damage','spawnCooldown','x','y']);
 const _sBuildingStatKeys=new Map();
+// The entry is kept in the structure's row (T.mEnt, valid while T.mTok is the
+// stat tables' version + 1): it depends on the owner, type and levels, whose
+// setters clear it (_sDerivedReconcile), and on the tables (a version). The
+// sweeps over thousands of structures (cover, work sites, statuses) read it
+// for each one: ~4 us a lookup was a third of a tick at 4M units.
 function _sThingStatEntry(e,which='base') {
+    const sr=e._sr,T=sr===undefined?null:_sTables.get(e.constructor),ix=sr*3+(which==='effective'?1:which==='potential'?2:0);
+    if(T!==null&&T.mTok[ix]===_precomputedStatsVersion+1)return T.mEnt[ix];
+    const res=_sThingStatEntryCompute(e,which);
+    if(T!==null&&res!==undefined){T.mTok[ix]=_precomputedStatsVersion+1;T.mEnt[ix]=res;}
+    return res;
+}
+function _sThingStatEntryCompute(e,which) {
     const type=e.type;if(!type)return undefined;
     const raw=type==='barrack'?'barrack_'+e.unitType:type;
     let key=_sBuildingStatKeys.get(raw);
@@ -847,6 +859,7 @@ function _sDerivedSet(T,e,name,v) {
     if(Object.is(v,normal))map.delete(e._sr);else map.set(e._sr,v);
 }
 function _sDerivedReconcile(T,e) {
+    { const b=e._sr*3,m=T.mTok; m[b]=0; m[b+1]=0; m[b+2]=0; }
     for(const name of T.derived){const map=T.unique[name];if(!map.size)continue;const v=map.get(e._sr);if(v!==undefined&&Object.is(v,_sDerivedValue(e,name)))map.delete(e._sr);}
 }
 // Class C's table (made, and its accessors defined, at its first row).
@@ -868,7 +881,7 @@ function _sTableOf(C) {
         const at = col + '[this._sr]';
         const read = f.kind === 'n' ? 'let x = ' + at + '; return x === x ? x : undefined;' : f.kind === 'b' ? 'const x = ' + at + '; return x === 2 ? true : x === 1 ? false : undefined;' : 'return ' + (f.shared ? col+'.get(this._sr)' : at) + ';';
         let write = f.kind === 'n' ? at + ' = v === undefined ? NaN : v;' : f.kind === 'b' ? at + ' = v === undefined ? 0 : v ? 2 : 1;' : f.shared ? col+'.set(this._sr,v);' : at + ' = v;';
-        if(['_ow','level','effectiveLevel','potentialEffectiveLevel','type','unitType'].includes(f.name))write+=' _sDerivedReconcile(T,this);';
+        if(['_ow','level','effectiveLevel','potentialEffectiveLevel','type','unitType','stacks','manualStacks'].includes(f.name))write+=' _sDerivedReconcile(T,this);';
         Object.defineProperty(C.prototype, f.name, { configurable: true, enumerable: false,
             get: new Function('T', 'return function () { ' + read + ' };')(T), set: new Function('T','_sDerivedReconcile', 'return function (v) { ' + write + ' };')(T,_sDerivedReconcile) });
     }
@@ -882,6 +895,11 @@ function _sTableGrow(T, cap) {
         else if (f.kind === 'r') { a = new Array(cap).fill(undefined); if (was) for (let i = 0; i < T.n; i++) a[i] = was[i]; }
         else { a = f.kind === 'n' ? new Float64Array(cap).fill(NaN) : new Uint8Array(cap); if (was) a.set(was.subarray(0, T.n)); }
         T[f.col] = a;
+    }
+    {
+        const was = T.mTok, tok = new Int32Array(cap * 3), ent = new Array(cap * 3).fill(undefined);
+        if (was) { tok.set(was.subarray(0, T.n * 3)); for (let i = 0; i < T.n * 3; i++) ent[i] = T.mEnt[i]; }
+        T.mTok = tok; T.mEnt = ent;
     }
     T.cap = cap;
 }
@@ -899,6 +917,7 @@ function _sRowTake(o) {
 function _sTablesReset() {
     for (const T of _sTables.values()) {
         T.n = 0;
+        T.mTok.fill(0); T.mEnt.fill(undefined);
         for(const map of Object.values(T.unique))map.clear();
         for (const f of T.fields) if (f.shared) T[f.col]=new SimSharedColumn(T.cap); else if (f.kind === 'r') T[f.col].fill(undefined); else if (f.kind === 'n') T[f.col].fill(NaN); else T[f.col].fill(0);
     }
@@ -1442,6 +1461,17 @@ function removeDroppedItem(drop) {
 const TEAM_PRESET_COLORS = ['#ff4d4f', '#4da6ff', '#4dff88', '#ffd24d', '#b366ff', '#ff8c4d', '#4dfff5', '#ff4dd2'];
 let players = Array.from({ length: 8 }, () => ({ energy: 2000, astar: 9000, popCount: 0 }));
 let playerPopCaps = Array.from({ length: 8 }, () => 200);
+// The slots of the teams playing, not eight: every per-player table and loop
+// of the simulation (the unit index's counts, the sight cover, the
+// acquisition's area answers, the navigation profiles) is as long as the
+// players list, and a match of two teams paid 4x in each. Before any of them
+// is made: the start of resetWorldState.
+function fitPlayersToTeams() {
+    const ids = activeTeamIds && activeTeamIds.length ? activeTeamIds : [0, 1];
+    const slots = Math.max(2, 1 + Math.max(0, ...ids));
+    while (players.length > slots) players.pop();
+    while (players.length < slots) players.push({ energy: 2000, astar: 9000, popCount: 0 });
+}
 let _popCapScratchByOwner = new Int32Array(0);
 let localPlayerId = 0;
 let activeTeamIds = [0, 1];

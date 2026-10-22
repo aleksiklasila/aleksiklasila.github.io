@@ -268,7 +268,9 @@ function applySoloScene(scene) {
     areas = Array.from(rows('areas'), a => ({ ...a, active: false }));
     _areaById = []; for (const a of areas) _areaById[a.id] = a;
     rebuildAreaDistanceCachesFromAreas();
-    for (let pid = 0; pid < h.players.length; pid++) {
+    // (A file of eight slots, a match of fewer: the slots of the teams.)
+    const slots = Math.min(h.players.length, players.length);
+    for (let pid = 0; pid < slots; pid++) {
         const saved = h.players[pid], p = players[pid];
         addPlayerResource(pid, 'energy', saved.energy - p.energy);
         addPlayerResource(pid, 'astar', saved.astar - p.astar);
@@ -311,7 +313,7 @@ function applySoloScene(scene) {
         }
     }
     if(typeof salvageMarksChanged==='function') salvageMarksChanged();
-    for(let pid=0;pid<h.players.length;pid++) {
+    for(let pid=0;pid<slots;pid++) {
         const orders=h.players[pid].researchOrders || [], p=ensurePlayerResearchQueueState(pid),depth={};
         if(orders.length>getResearchQueueCapacityForPlayer(pid)) throw new Error('The scene research queue exceeds its lab capacity.');
         for(const order of orders) {
@@ -325,6 +327,15 @@ function applySoloScene(scene) {
         tryAdvancePlayerResearchTask(pid);
     }
     simMoveWallsDirty(); simMoveStructsReset(); navReset();
+    // (The unit columns made for every unit at once: each growth made a new set of every column and gave the old one
+    // back, ~4.3 GB allocated and 2.9 GB of it freed at 2.3M units, a heap of 3.3 GB committed and unused.)
+    if (typeof simUnitStateReserve === 'function') {
+        let n = 0, workers = 0;
+        for (const r of scene.records) if (r.units) { n += r.units.length; for (const row of r.units) { const t = row[0]; if (t === 'salvager_unit' || t === 'builder_unit' || t === 'healer_unit' || t === 'researcher_unit' || getResourceTypeByCollectorUnit(t)) workers++; } }
+        if (n > 0) simUnitStateReserve(n, Math.max(typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0, simReserveCap(n)));
+        // (And their worker records at once: each growth of the pool made a new set of its columns.)
+        if (workers > 0 && typeof simUnitWkReserve === 'function') simUnitWkReserve(workers);
+    }
     const groups = new Map();
     for (const r of rows('units')) {
         const u = new Unit(r[0],r[1],r[2]*TILE,r[3]*TILE);

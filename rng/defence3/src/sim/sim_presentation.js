@@ -42,7 +42,8 @@ function simPresentTickEnd() {
     // (Each slot's last visual change, for the reader's frames by changes:
     // every tick, before the reader may take this tick's snapshot.)
     if (typeof SIM_KERNEL_PV_MARKS === 'number' && S.columns.pvAt) {
-        const P = _simParams, per = 65536;
+        // (Small jobs: 65536 slots a job were four, and the helpers' share of them small: this thread did most of the ~2.7 ms.)
+        const P = _simParams, per = 8192;
         P[0] = n; P[1] = per; P[2] = typeof currentTick === 'number' ? currentTick : 0;
         simParallelRun(SIM_KERNEL_PV_MARKS, Math.ceil(Math.max(1, n) / per));
     }
@@ -316,7 +317,10 @@ function simPresentationPump() {
     const next = typeof _simStream !== 'undefined' && _simStream.length ? _simStream[0] : null;
     if (next && next.type === 'tick' && Number.isFinite(next.due)) {
         const wait = next.due - _simNowAbs();
-        if (wait < 2 && performance.now() - (p.sliceAt || 0) < SIM_PRESENT_PUMP_STARVE_MS) { p.timer = setTimeout(simPresentationPump, Math.max(1, wait + 1)); return; }
+        // (A million units or more: a slice every 4x as long, ~5% of a 2.3M-unit step otherwise: the cycle
+        // only refreshes slow attributes; a new unit's metadata is written at its start.)
+        const starve = SIM_PRESENT_PUMP_STARVE_MS * (units.length >= 1000000 ? 4 : 1);
+        if (wait < 2 && performance.now() - (p.sliceAt || 0) < starve) { p.timer = setTimeout(simPresentationPump, Math.max(1, wait + 1)); return; }
     }
     const start=performance.now();
     p.sliceAt = start;

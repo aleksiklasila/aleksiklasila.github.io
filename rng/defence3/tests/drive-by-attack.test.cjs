@@ -12,6 +12,7 @@ const context = {
     towers: [], barracks: [], collectorSpawners: [],
     gameTime: 1, pathTopologyVersion: 1, localPlayerId: 0,
     simDk: 1, simStepCrosses: (ph, p) => ((context.gameTime + ph) % p + p) % p < context.simDk,
+    areaSearchEnabled: () => true,
     getRawVisibilityGridForPlayer: () => [[1]],
     _visCoverReady: () => false,
     getAreaIdAtWorld: () => 0,
