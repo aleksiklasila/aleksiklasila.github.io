@@ -415,6 +415,18 @@ const META_COPY=['type','wtype','wstate','style','watchedBy','vision','maxEnergy
 // Append the render-only spatial index to the immutable presentation buffer.
 // Its lifetime follows the existing three-buffer pool; no extra messages or
 // population-sized indexing pass on the animation thread.
+// A frame's first count order entries (slots) by unit id: a native numeric
+// sort of id * 2^b + slot, not a comparator over 200k slots. b covers every
+// slot of the frame (cap): a fixed 21 bits gave the slots past 2,097,152 of
+// a 4M match another slot's number, so those units (the second team's) were
+// missing from the page's list and the camera's buckets and never got a
+// model, only glyphs. (ids stay below 2^53 / 2^b.)
+function frameIdOrder(FORD, FID, count, cap) {
+    const SB = 2 ** Math.max(21, Math.ceil(Math.log2(cap + 1))), keys = new Float64Array(count);
+    for (let k = 0; k < count; k++) { const sl = FORD[k]; keys[k] = FID[sl] * SB + sl; }
+    keys.sort();
+    for (let k = 0; k < count; k++) FORD[k] = keys[k] % SB;
+}
 function buildRenderBuckets(F, count, columns, rows, tile) {
     const cells = columns * rows, offset = F.cap * SIM_FRAME_SLOT_BYTES;
     const head = new Int32Array(F.buf, offset, cells);
@@ -792,15 +804,10 @@ function draw() {
     }
     const t2=performance.now();
     if(changed) membership++;
-    // Stable simulation identity order even after authoritative slot reuse:
-    // by id (a native numeric sort of id * 2^21 + slot, not a comparator
-    // over 200k slots).
-    const FORD=F.order, FID=F.id;
+    // Stable simulation identity order even after authoritative slot reuse.
+    const FORD=F.order;
     if(changed || !lastOrder || lastOrder.length!==count) {
-        const keys=new Float64Array(count);
-        for (let k=0;k<count;k++) {const sl=FORD[k];keys[k]=FID[sl]*2097152+sl;}
-        keys.sort();
-        for (let k=0;k<count;k++) FORD[k]=keys[k]%2097152;
+        frameIdOrder(FORD,F.id,count,F.cap);
         lastOrder=FORD.slice(0,count);
     } else FORD.set(lastOrder);
     const t3=performance.now();

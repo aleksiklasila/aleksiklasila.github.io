@@ -27,15 +27,14 @@ const NET_HOST_AUTO_DROP_MS = 1000000000; // disabled for now
 const NET_STALL_WINDOW_MS = 10000;
 const GUEST_RECONNECT_MAX_ATTEMPTS = 25;
 
-let netAutoEnabled = true;
 let netLinkStatsByPeer = {};
 let netRemoteReportByPeer = {};
 let netAutoExtraTicks = 0;
 // Fair play: every player's commands take effect the same number of ticks
 // after they are issued. The host sets this from what its guests' links
 // need and its own commands wait as long (otherwise the host, with no link to
-// cross, would react faster than anyone).
-let netFairInputDelay = true;
+// cross, would react faster than anyone). The step interval follows the
+// fastest pace all players, the host included, can sustain.
 let netMatchInputDelay = 0;
 let netMatchDelayCalmSince = 0;
 let netMatchTickMs = 0;
@@ -237,7 +236,6 @@ function netComputeRttInputDelayTicks(link = netGetHostLinkStats()) {
 
 function netTargetInputDelayTicks(now = performance.now()) {
     if (!isMultiplayer || isHost) return Math.max(0, Math.floor(Number(INPUT_DELAY) || 0));
-    if (!netAutoEnabled) return Math.max(Math.floor(Number(INPUT_DELAY) || 0), Math.floor(Number(LOCKSTEP_PIPELINE_MIN) || 0));
     return Math.max(1, Math.min(NET_MAX_INPUT_DELAY_TICKS, netComputeRttInputDelayTicks() + netAutoExtraTicks));
 }
 
@@ -250,12 +248,10 @@ function netUpdateAutoController(now = performance.now()) {
         netHostUpdateMatchInputDelay(now);
         return;
     }
-    if (netAutoEnabled) {
-        let calmMs = 5000;
-        if (netAutoExtraTicks > 0 && (now - netAutoLastStallAt) > calmMs && (now - netAutoLastRaiseAt) > calmMs) {
-            netAutoExtraTicks--;
-            netAutoLastRaiseAt = now;
-        }
+    let calmMs = 5000;
+    if (netAutoExtraTicks > 0 && (now - netAutoLastStallAt) > calmMs && (now - netAutoLastRaiseAt) > calmMs) {
+        netAutoExtraTicks--;
+        netAutoLastRaiseAt = now;
     }
     let target = netTargetInputDelayTicks(now);
     let current = Math.floor(Number(LOCKSTEP_PIPELINE_TICKS) || 0);
@@ -283,19 +279,17 @@ function netUpdateAutoController(now = performance.now()) {
 // Raised at once, lowered a tick at a time after a calm period.
 function netHostUpdateMatchInputDelay(now = performance.now()) {
     if (!isHost) return;
-    let target = netFairInputDelay ? netLocalInputDelayTicks() : 0;
-    if (netFairInputDelay) {
-        for (let pid of getActiveMatchPeerIds()) {
-            if (!pid || pid === myPeerId) continue;
-            let r = netRemoteReportByPeer[pid];
-            let need = r ? r.inputDelay : NaN;
-            if (!Number.isFinite(need) || need <= 0) {
-                let link = netGetLinkStats(pid);
-                let rtt = netRttBudgetMs(link);
-                need = Number.isFinite(rtt) ? Math.ceil((rtt + 1000 / 60 + 10) / netSimulationTickMs()) : Math.floor(Number(LOCKSTEP_PIPELINE_MIN) || 2);
-            }
-            target = Math.max(target, need);
+    let target = netLocalInputDelayTicks();
+    for (let pid of getActiveMatchPeerIds()) {
+        if (!pid || pid === myPeerId) continue;
+        let r = netRemoteReportByPeer[pid];
+        let need = r ? r.inputDelay : NaN;
+        if (!Number.isFinite(need) || need <= 0) {
+            let link = netGetLinkStats(pid);
+            let rtt = netRttBudgetMs(link);
+            need = Number.isFinite(rtt) ? Math.ceil((rtt + 1000 / 60 + 10) / netSimulationTickMs()) : Math.floor(Number(LOCKSTEP_PIPELINE_MIN) || 2);
         }
+        target = Math.max(target, need);
     }
     target = Math.max(0, Math.min(NET_MAX_INPUT_DELAY_TICKS, Math.floor(target)));
     if (target > netMatchInputDelay) {
@@ -318,17 +312,17 @@ function netCommandLeadTicks() {
     let lead = Math.max(0, Math.floor(INPUT_DELAY || 0));
     if (!isMultiplayer || !gameStarted) return lead;
     if (!isHost) {
-        let baseTick = netFairInputDelay ? netCompletedSimulationTick() : currentTick;
+        let baseTick = netCompletedSimulationTick();
         lead = Math.max(lead, Math.max(0, Math.floor(LOCKSTEP_PIPELINE_TICKS || 0)) + 1,
             lockstepHighestSentLocalTick + 1 - baseTick);
     }
-    if (netFairInputDelay) lead = Math.max(lead, netMatchInputDelay + 1, netLocalInputDelayTicks() + 1);
+    lead = Math.max(lead, netMatchInputDelay + 1, netLocalInputDelayTicks() + 1);
     return lead;
 }
 
 function netLocalInputDelayTicks() {
     let delay = Math.max(0, Math.floor(Number(LOCKSTEP_PIPELINE_TICKS) || 0));
-    if (!isMultiplayer || !gameStarted || !netFairInputDelay) return delay;
+    if (!isMultiplayer || !gameStarted) return delay;
     let completed = netCompletedSimulationTick();
     let openTick = currentTick;
     while (lockstepCommittedByTick[openTick] || lockstepBundleByTick[openTick]) openTick++;
@@ -379,15 +373,33 @@ function netSimulationTickMs() {
 }
 // The pace as measured (not whole base ticks).
 function netPaceRawMs() {
-    if (isMultiplayer ? !netFairInputDelay : !SIM_ADAPTIVE_STEPS) return TICK_MS;
+    if (!isMultiplayer && !SIM_ADAPTIVE_STEPS) return TICK_MS;
     return Math.max(TICK_MS, netMatchTickMs);
 }
 // The base ticks of a step sealed (or, solo, run) now.
 function netStepTicks() { return SIM_ADAPTIVE_STEPS ? simStepTicksForMs(netSimulationTickMs()) : 1; }
 
-function netSimulationBusy() {
-    let meanWork = netSimulationWorkTimes.length
+// The mean work of a step (ms) against the time that step has: a step of
+// several base ticks has that many ticks' time (61 ms of work for a step of
+// 3 base ticks is 41% of its 150 ms, not 150% of one tick: measured against
+// one tick every such step read as busy, and the pace never came back from 3
+// base ticks to 2).
+function netSimulationUtilization() {
+    const meanWork = netSimulationWorkTimes.length
         ? netSimulationWorkTimes.reduce((sum, ms) => sum + ms, 0) / netSimulationWorkTimes.length : 0;
+    return meanWork / Math.max(TICK_MS, netSimulationTickMs());
+}
+const NET_BUSY_UTILIZATION = 0.8, NET_SLACK_UTILIZATION = 0.55;
+// Well under the busy mark (and not late): room for a shorter step. A gap
+// between this and busy keeps the pace where it is: the fewer base ticks of a
+// step cost more than their share (per-step work), so a pace taken down at
+// just under busy comes straight back up.
+function netSimulationSlack() {
+    if (typeof simClientDispatchAhead === 'function' && simClientDispatchAhead() && (_simClient.lateMs > TICK_MS * 0.25 || simClientBehind())) return false;
+    return netSimulationUtilization() < NET_SLACK_UTILIZATION;
+}
+function netSimulationBusy() {
+    const utilization = netSimulationUtilization();
     // Ticks dispatched ahead to the simulation worker (sim_client.js): its own
     // cost, its ticks starting late against their deadlines, or page frames
     // longer than the queued lead (only those stall it), not the page's
@@ -395,15 +407,15 @@ function netSimulationBusy() {
     if (typeof simClientDispatchAhead === 'function' && simClientDispatchAhead()) {
         // (With the worker's own ticks, a stalled page stalls none.)
         let own = typeof _simAutoCtl === 'function' && !!_simAutoCtl();
-        return meanWork > TICK_MS * 0.8 || _simClient.lateMs > TICK_MS * 0.5 || simClientBehind() || (!own && netFrameMs() > TICK_MS * SIM_CLIENT_LEAD_TICKS);
+        return utilization > NET_BUSY_UTILIZATION || _simClient.lateMs > TICK_MS * 0.5 || simClientBehind() || (!own && netFrameMs() > TICK_MS * SIM_CLIENT_LEAD_TICKS);
     }
-    return meanWork > TICK_MS * 0.8 || netFrameMs() > TICK_MS * 1.25
+    return utilization > NET_BUSY_UTILIZATION || netFrameMs() > TICK_MS * 1.25
         || (typeof simClientActive === 'function' && simClientActive() && simClientInFlight() >= SIM_CLIENT_MAX_IN_FLIGHT);
 }
 
 function netHostUpdateSimulationPace(now = performance.now()) {
     // (Solo too, with adaptive steps: its own machine's pace.)
-    if (isMultiplayer ? (!isHost || !netFairInputDelay) : !SIM_ADAPTIVE_STEPS) return;
+    if (isMultiplayer ? !isHost : !SIM_ADAPTIVE_STEPS) return;
     if (!gameStarted || gameOver) return;
     let ownRate = netCompletedSimulationTps();
     if (!(ownRate > 0)) return;
@@ -440,7 +452,8 @@ function netHostUpdateSimulationPace(now = performance.now()) {
         netMatchPaceChangedAt = now;
         return;
     }
-    if (!busy && interval > TICK_MS && now - netMatchPaceChangedAt >= 1000) {
+    const slack = !busy && netSimulationSlack();
+    if (slack && interval > TICK_MS && now - netMatchPaceChangedAt >= 1000) {
         // (Down in steps: a step of fewer base ticks costs more than its
         // share (its per-step work), and a pace rounded up to whole base
         // ticks leaves slack that reads as idle: a jump to one base tick
@@ -456,7 +469,7 @@ function netHostUpdateSimulationPace(now = performance.now()) {
     if (slowest < 1000 / interval * 0.95) {
         netMatchTickMs = Math.max(TICK_MS, 1000 / slowest);
         netMatchPaceChangedAt = now;
-    } else if (interval > TICK_MS && slowest >= 1000 / interval * 0.95) {
+    } else if (slack && interval > TICK_MS && slowest >= 1000 / interval * 0.95) {
         netMatchTickMs = Math.max(TICK_MS, interval / 1.1);
         netMatchPaceChangedAt = now;
     }
@@ -496,7 +509,7 @@ function netNoteOwnPacketLate(now = performance.now()) {
     netCounters.lateSeals = (netCounters.lateSeals || 0) + 1;
     netLateSamples.push(now);
     while (netLateSamples.length > 0 && (now - netLateSamples[0]) > NET_STALL_WINDOW_MS) netLateSamples.shift();
-    if (!netAutoEnabled || !isMultiplayer || isHost || lockstepResyncPauseActive) return;
+    if (!isMultiplayer || isHost || lockstepResyncPauseActive) return;
     // Packets of an outage (this peer waiting, or just back from one) come
     // late all together; that is the outage, not a short lead.
     if (netStallStartedAt || (now - netLastOutageAt) < 3000) return;
@@ -526,7 +539,6 @@ function netLocalReport(now = performance.now()) {
     let hostLink = isHost ? null : netGetHostLinkStats();
     return {
         inputDelay: netLocalInputDelayTicks(),
-        auto: !!netAutoEnabled,
         srtt: hostLink && Number.isFinite(hostLink.srtt) ? Math.round(hostLink.srtt) : null,
         jitter: hostLink ? Math.round(hostLink.rttvar) : null,
         stallPct: Math.round(netStallPercent(now) * 10) / 10,
@@ -547,7 +559,6 @@ function netNoteRemoteReport(peerId, report) {
     if (!pid || !report || typeof report !== 'object') return;
     netRemoteReportByPeer[pid] = {
         inputDelay: Math.max(0, Math.floor(Number(report.inputDelay) || 0)),
-        auto: !!report.auto,
         srtt: Number.isFinite(Number(report.srtt)) && report.srtt !== null ? Math.round(Number(report.srtt)) : null,
         jitter: Number.isFinite(Number(report.jitter)) && report.jitter !== null ? Math.round(Number(report.jitter)) : null,
         stallPct: Math.max(0, Number(report.stallPct) || 0),
@@ -575,7 +586,7 @@ function netMaybeBroadcastStats(now = performance.now()) {
         byPeer[pid] = { ...r, srtt: link && Number.isFinite(link.srtt) ? Math.round(link.srtt) : r.srtt, jitter: link ? Math.round(link.rttvar) : r.jitter };
     }
     if (myPeerId) byPeer[myPeerId] = { ...netLocalReport(now), srtt: 0, jitter: 0 };
-    let payload = { type: 'NET_STATS', byPeer, tickRate: TICK_RATE, auto: !!netAutoEnabled, latencyByPeer: buildHostLatencySnapshot() };
+    let payload = { type: 'NET_STATS', byPeer, tickRate: TICK_RATE, latencyByPeer: buildHostLatencySnapshot() };
     for (let c of connections) {
         if (!c) continue;
         try { c.send(payload); } catch { }
@@ -780,9 +791,8 @@ function buildNetworkInfoPanelHtml() {
     let sectionKey = 'network';
     let collapsed = _isInfoSectionCollapsed(sectionKey);
     let delayTicks = Math.floor(Number(LOCKSTEP_PIPELINE_TICKS) || 0);
-    let mode = netAutoEnabled ? 'auto' : 'manual';
     let title = _buildCollapsibleInfoSectionTitle(sectionKey, 'Network',
-        `<span style="color:#8ab;font-size:10px">${TICK_RATE} TPS · ${mode}</span>`);
+        `<span style="color:#8ab;font-size:10px">${TICK_RATE} TPS · auto</span>`);
     if (collapsed) return title;
     let row = (label, value, color = '#cde') => `<div class="info-row" style="gap:6px"><span class="info-label" style="color:#9aa">${label}</span><span class="info-value" style="color:${color};font-variant-numeric:tabular-nums">${value}</span></div>`;
     let stall = netStallPercent(now);
@@ -791,12 +801,12 @@ function buildNetworkInfoPanelHtml() {
     html += row('Tick rate', `${Math.round(completedTps * 10) / 10} / ${TICK_RATE} TPS`, completedTps >= TICK_RATE * 0.9 ? '#9f9' : '#fc8');
     let leadTicks = netCommandLeadTicks();
     let observedTps = Math.min(TICK_RATE, Math.max(1, completedTps || TICK_RATE));
-    html += row('Command delay', `${leadTicks} ticks (~${Math.round(leadTicks * 1000 / observedTps)} ms)${netFairInputDelay ? ' · equal for all' : ''}`);
+    html += row('Command delay', `${leadTicks} ticks (~${Math.round(leadTicks * 1000 / observedTps)} ms) · equal for all`);
     if (isHost) {
         html += row('Your input delay', `${delayTicks} ticks (${Math.round(delayTicks * TICK_MS)} ms)`);
     } else {
         let hostLink = netGetHostLinkStats();
-        html += row('Input delay', `${delayTicks} ticks (${Math.round((delayTicks + 1) * TICK_MS)} ms)${netAutoEnabled ? ' auto' : ''}`);
+        html += row('Input delay', `${delayTicks} ticks (${Math.round((delayTicks + 1) * TICK_MS)} ms) auto`);
         html += row('Ping to host', hostLink && Number.isFinite(hostLink.srtt) ? `${Math.round(hostLink.srtt)} ms ±${Math.round(hostLink.rttvar)}` : '--');
     }
     html += row('Waiting (10s)', `${stall.toFixed(1)}%`, stall < 2 ? '#9f9' : stall < 10 ? '#fc8' : '#f88');

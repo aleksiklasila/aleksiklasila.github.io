@@ -393,7 +393,7 @@ function _simAutoStep() {
     A.run++; A.ran++;
     const at = A.due + (t - A.dueTick) * tickMs;
     _simPost({ type: 'autoRan', epoch: _simEpoch, tick: t, due: at });
-    try { _simTick({ type: 'tick', tick: t, actions: e.actions, teams: A.teams || [0, 1], flush: e.flush, hash: true, due: at, auto: true, dk: e.dk | 0 || 1 }); } catch (err) { _simError('tick', err); }
+    try { _simTick({ type: 'tick', tick: t, actions: e.actions, teams: A.teams || [0, 1], flush: e.flush, hash: arm.role !== 'solo', due: at, auto: true, dk: e.dk | 0 || 1 }); } catch (err) { _simError('tick', err); }
     _simAutoPoll(1);
 }
 

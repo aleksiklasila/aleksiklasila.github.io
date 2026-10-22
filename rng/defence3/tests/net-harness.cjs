@@ -621,6 +621,9 @@ function createInstance(world, name, options = {}) {
                 if (data && data.type === 'start') {
                     try {
                         vm.runInContext('simReportLockstepHashes = true;', this._ctx);
+                        // (inst.simSetup: a test's code in this worker before its
+                        // match starts, as hostSetup on the page.)
+                        if (inst.simSetup && !this._simSetupDone) { this._simSetupDone = true; vm.runInContext(inst.simSetup, this._ctx); }
                         if (world.exactHashes || world.recordParts) {
                             if (vm.runInContext('typeof __exactStateHash', this._ctx) === 'undefined') vm.runInContext(EXACT_STATE_HASH_SRC, this._ctx);
                             vm.runInContext(`simTickReportHook = t => ({ exact: ${world.exactHashes ? '__exactStateHash()' : 'null'},
@@ -968,8 +971,9 @@ const SMALL_MATCH_CONTROLS = {
 
 // `teams` gives the team color index of the host, then of each guest, e.g.
 // [0, 1, 0, 1] is a 2v2. Default: everyone on their own team.
-// `hostSetup` is code run on the host before the start (e.g. starting resources).
-async function startHostedMatch(world, { guests = 1, hostName = 'host', guestNames = null, maxMs = 20000, controls = {}, teams = null, hostSetup = '', guestOptions = [] } = {}) {
+// `hostSetup` is code run on the host before the start (e.g. starting resources);
+// `simSetup` in the host's simulation worker when it has one (it builds the world).
+async function startHostedMatch(world, { guests = 1, hostName = 'host', guestNames = null, maxMs = 20000, controls = {}, teams = null, hostSetup = '', simSetup = '', guestOptions = [] } = {}) {
     const teamOf = i => (teams ? teams[i] : i);
     const host = world.spawn(hostName, { controls });
     host.eval('loadOrCreateLocalIdentity(); hostOnlineGame();');
@@ -997,6 +1001,7 @@ async function startHostedMatch(world, { guests = 1, hostName = 'host', guestNam
     });
     await world.run(1000);
     if (hostSetup) host.eval(hostSetup);
+    if (simSetup) host.simSetup = simSetup;
     host.eval('startHostedGame()');
     const started = await world.runUntil(() => [host, ...list].every(i => i.eval('gameStarted') && !i.eval('matchStartWaitingForReady')) && host.eval('currentTick') > 5, maxMs);
     if (!started) throw new Error('match never started: ' + JSON.stringify([host, ...list].map(i => [i.name, i.eval('gameStarted'), i.eval('matchStartWaitingForReady'), i.eval('currentTick')])));

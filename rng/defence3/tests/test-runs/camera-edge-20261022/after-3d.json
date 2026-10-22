@@ -1,0 +1,52 @@
+{
+ "right edge: hold d, then a": {
+  "frames": 172,
+  "maxPopPx": 12.9,
+  "framesOver3px": 49,
+  "maxCameraStepPx": 23.9,
+  "slideJumpsOver200px": 0
+ },
+ "right edge: hold d, tap a repeatedly": {
+  "frames": 200,
+  "maxPopPx": 6.6,
+  "framesOver3px": 102,
+  "maxCameraStepPx": 12.3,
+  "slideJumpsOver200px": 0
+ },
+ "left edge: hold a, then d": {
+  "frames": 172,
+  "maxPopPx": 6.5,
+  "framesOver3px": 50,
+  "maxCameraStepPx": 12.1,
+  "slideJumpsOver200px": 0
+ },
+ "bottom edge: hold s, then w": {
+  "frames": 170,
+  "maxPopPx": 9.5,
+  "framesOver3px": 53,
+  "maxCameraStepPx": 12.2,
+  "slideJumpsOver200px": 0
+ },
+ "top edge: hold w, then s": {
+  "frames": 170,
+  "maxPopPx": 9.5,
+  "framesOver3px": 52,
+  "maxCameraStepPx": 12.2,
+  "slideJumpsOver200px": 0
+ },
+ "corner: hold d+s, then a": {
+  "frames": 171,
+  "maxPopPx": 6.7,
+  "framesOver3px": 51,
+  "maxCameraStepPx": 12.5,
+  "slideJumpsOver200px": 0
+ },
+ "middle: d then a (reference)": {
+  "frames": 112,
+  "maxPopPx": 6.6,
+  "framesOver3px": 76,
+  "maxCameraStepPx": 12.3,
+  "slideJumpsOver200px": 0
+ }
+}
+errors []

@@ -30,11 +30,14 @@ const check = (name, ok, info) => { results[name] = { ok: !!ok, info }; console.
     page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|Permissions policy/.test(m.text())) errors.push(m.text().slice(0, 300)); });
     await page.goto(`http://127.0.0.1:${server.address().port}/index.html`, { waitUntil: 'load' });
     await page.waitForTimeout(800);
-    const fixture = process.argv[2] || '';
-    await page.evaluate(async fixture => {
+    const fixture = process.argv[2] || '', fullVisibilityRun = (process.env.VIS || 'full') === 'full';
+    // (Full visibility: the enemies spawned below are seen wherever they
+    // walk, for the detail check; VIS=team|history for the others.)
+    await page.evaluate(async ([fixture, vis]) => {
         if (fixture) { const data = await (await fetch('tests/' + fixture)).json(); applyMainMenuSettingsSnapshot(data); }
+        document.getElementById('cfg-full-vis').value = vis;
         startSoloGame();
-    }, fixture);
+    }, [fixture, process.env.VIS || 'full']);
     await page.waitForFunction(() => typeof gameStarted !== 'undefined' && gameStarted && typeof simClientStats === 'function' && simClientStats().appliedTick >= 5, {}, { timeout: 240000 });
     await page.waitForTimeout(1500);
     // Units of both owners in front of the camera: own at the left, enemy at the right.
@@ -87,16 +90,28 @@ const check = (name, ok, info) => { results[name] = { ok: !!ok, info }; console.
             const h = _renderBaseVisionTiles({ visibilitySource: u, modelKey: 'unit_' + k }); (out[k] ||= {})[lv >= 10 ? 'high' : 'low'] = h; }
         return out; });
     check('model height by base sight, not level', Object.values(heights).every(v => v.high === undefined || v.low === undefined || v.high === v.low), heights);
-    // 5. 3D: own and enemy units at the same distance both get detail models.
-    await page.click('#btn-view-3d'); await center(3);
+    // 5. 3D: own and enemy units the player sees, readable on screen, both
+    // get detail models. (Only the seen ones: enemies in the fog are hidden
+    // (flag 1024) or remembered glyphs (65536) by design. The 4M case, slots
+    // past 2^21, is tests/frame-order-slots.test.cjs.) The camera on the
+    // two groups' middle, wherever they walked to.
+    await page.click('#btn-view-3d');
+    const mid = await page.evaluate(() => { const F = simClientCurrentUnitVis(); let x = 0, y = 0, n = 0;
+        for (let s = 0; s < F.n; s++) if (F.id[s] >= 0 && F.energy[s] > 0 && !(F.flags[s] & (1024 | 65536))) { x += F.x[s]; y += F.y[s]; n++; }
+        return n ? { x: x / n, y: y / n } : { x: WORLD_W / 2, y: WORLD_H / 2 }; });
+    await page.evaluate(([z, x, y]) => { camera.zoom = z; camera.x = x - viewW / camera.zoom / 2; camera.y = y - viewH / camera.zoom / 2; clampCamera(); }, [3, mid.x, mid.y]);
     await page.waitForTimeout(2500);
     const det = await page.evaluate(() => {
         const F = simClientCurrentUnitVis(), mask = typeof _detailMask !== 'undefined' ? _detailMask : null, r = { own: [0, 0], enemy: [0, 0] };
         if (!F || !mask) return { error: 'no frame/mask' };
-        for (let s = 0; s < F.n; s++) { if (F.id[s] < 0 || F.energy[s] <= 0) continue; const k = F.owner[s] === 0 ? 'own' : F.owner[s] === 1 ? 'enemy' : null; if (!k) continue;
-            const x = F.x[s] / TILE, y = F.y[s] / TILE; if (Math.abs(x - GRID_W / 2) > 6 || Math.abs(y - GRID_H / 2) > 7) continue; r[k][0]++; if (mask[s]) r[k][1]++; }
+        for (let s = 0; s < F.n; s++) { if (F.id[s] < 0 || F.energy[s] <= 0 || (F.flags[s] & (1024 | 65536))) continue; const k = F.owner[s] === localPlayerId ? 'own' : 'enemy';
+            const x = F.x[s] / TILE, z = F.y[s] / TILE, size = Math.max(.28, Math.min(.9, F.r[s] * 2.2 / TILE));
+            if (!fullVisibility && k === 'enemy' && !(visibilityGrid[Math.floor(z)]?.[Math.floor(x)] > 0)) continue;
+            if (!(_detailScore(x, z, size, false, false, 24) > 0)) continue;
+            r[k][0]++; if (mask[s]) r[k][1]++; }
         return r; });
-    check('enemy units get detail models like own ones', !det.error && det.enemy[0] > 0 && det.own[0] > 0 && det.enemy[1] / det.enemy[0] >= 0.8 * det.own[1] / det.own[0], det);
+    check('seen enemy units get detail models like own ones', !det.error && det.own[0] > 0 && (fullVisibilityRun ? det.enemy[0] > 0 : true)
+        && (det.enemy[0] === 0 || det.enemy[1] / det.enemy[0] >= 0.8 * det.own[1] / det.own[0]), det);
     await shot('3d-near-own-vs-enemy');
     await page.click('#btn-view-3d5'); await page.waitForTimeout(800); await shot('3d5-near');
     await page.click('#btn-view-2d'); await center(0.25); await shot('2d-far');

@@ -1,0 +1,4 @@
+PASS: tiny-eight-teams: 24 starting norm, 576 gestures, 833 exact comparisons, no repairs.
+PASS: huge-four-teams-mines: 320 starting collector, 288 gestures, 357 exact comparisons, no repairs.
+PASS: dense-snakes: 1200 starting snake, 144 gestures, 119 exact comparisons, no repairs.
+PASS: healers-portals: 800 starting healer_unit, 144 gestures, 119 exact comparisons, no repairs.

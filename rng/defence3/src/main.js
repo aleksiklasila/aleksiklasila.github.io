@@ -1086,6 +1086,11 @@ function initInput() {
         // One action per point with its buildings' tiles (setRallyMany; at
         // most ACTION_MAX_RALLY_COORDS each): an action per building could
         // not carry thousands of them (a packet holds 256 actions).
+        // (One point: all the buildings' pending rally is that one, see
+        // renderer.js noteRallyCover; a unit to follow keeps its own keys.)
+        const single = multiRallyPoints.length === 1 && !multiRallyPoints[0].targetUnitId && typeof noteRallyCover === 'function';
+        if (single) noteRallyCover(selSpawners, multiRallyPoints[0].x, multiRallyPoints[0].y);
+        try {
         let byPoint = multiRallyPoints.map(() => []);
         for (let i = 0; i < selSpawners.length; i++) {
             let b = selSpawners[i];
@@ -1096,6 +1101,7 @@ function initInput() {
             let rp = multiRallyPoints[j], c = byPoint[j];
             for (let k = 0; k < c.length; k += 2 * ACTION_MAX_RALLY_COORDS) queueAction({ action: 'setRallyMany', coords: c.slice(k, k + 2 * ACTION_MAX_RALLY_COORDS), targetX: rp.x, targetY: rp.y, targetUnitId: rp.targetUnitId || null });
         }
+        } finally { if (single) noteRallyCoverDone(); }
     }
 
     function _findResearchRallyTargetNear(worldX, worldY, owner, radius = 48) {
@@ -1181,24 +1187,83 @@ function initInput() {
         return { x: worldX, y: worldY, targetUnitId: null };
     }
 
+    const RALLY_CAPABLE_TYPES = new Set(['barrack', 'spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research']);
     function isRallyCapableEntity(ent) {
         if (!ent || ent.owner !== localPlayerId) return false;
-        let byType = ['barrack', 'spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research'].includes(ent.type);
-        let byShape = Number.isFinite(ent.gx) && Number.isFinite(ent.gy) && ('rallyX' in ent) && ('rallyY' in ent);
-        return !!(byType || byShape);
+        if (RALLY_CAPABLE_TYPES.has(ent.type)) return true;
+        return Number.isFinite(ent.gx) && Number.isFinite(ent.gy) && ('rallyX' in ent) && ('rallyY' in ent);
     }
 
+    // The selected buildings that rally and the own towers among them, found
+    // once for a selection: a click is not a pass over thousands of buildings
+    // (the rally order and the tower order both asked for it). What a
+    // building is, and whose, does not change while it is selected; only the
+    // towers' energy is read again.
+    let _structSelection = { ents: null, len: -1, off: '', rally: [], towers: [] };
+    function activeStructureSelection() {
+        const S = _structSelection;
+        let off = '';
+        for (const key in activeSubGroups) if (activeSubGroups[key] === false) off += key + ';';
+        if (!(S.ents === selectedEntities && S.len === selectedEntities.length && S.off === off)) {
+            const active = getActiveEntities();
+            S.rally = active.filter(isRallyCapableEntity);
+            S.allTowers = active.filter(e => e instanceof Tower && e.owner === localPlayerId);
+            S.ents = selectedEntities; S.len = selectedEntities.length; S.off = off;
+        }
+        S.towers = S.allTowers.filter(t => t.energy > 0);
+        return S;
+    }
+
+    // A right click's marker at once, before the work of finding what it
+    // orders (renderer.js noteOrderPing): a rally arrow when buildings that
+    // rally are selected, a cross when own units are.
+    function noteOrderClickPing(worldX, worldY) {
+        if (typeof noteOrderPing !== 'function') return;
+        // (The first few of a selection tell what it is: no pass over it
+        // before the marker is drawn.)
+        let rally = false, own = false;
+        for (let i = 0, n = Math.min(selectedEntities.length, 64); i < n && !rally; i++) rally = isRallyCapableEntity(selectedEntities[i]);
+        for (let i = 0, n = Math.min(selectedUnits.length, 8); i < n && !own; i++) { const u = selectedUnits[i]; own = !!u && !u.dead && u.owner === localPlayerId; }
+        if (rally) noteOrderPing(worldX, worldY, 'arrow', '#9aa');
+        if (own) noteOrderPing(worldX, worldY, 'plus', attackMoveMode ? '#f66' : '#4f4');
+    }
+
+    // A big selection's order (a pass over its units, buildings and ids: tens
+    // of ms) goes after the click's marker has been shown: the click only
+    // draws the marker (noteOrderClickPing), the order follows once the frame
+    // with it is out (the next animation frame, then a task), still before
+    // any other input is handled (flushDeferredOrders, from a capturing
+    // listener on every key and press) and always within ~120 ms (a hidden
+    // page has no frames). The simulation takes the order a few ticks after
+    // the click anyway (the command lead).
+    const ORDER_DEFER_MIN = 2000;
+    const deferredOrders = [];
+    function flushDeferredOrders() {
+        while (deferredOrders.length) {
+            const run = deferredOrders.shift();
+            try { run(); } catch (err) { reportRuntimeError('order', err); }
+        }
+    }
+    function deferOrderWork(run) {
+        deferredOrders.push(run);
+        if (deferredOrders.length > 1) return;
+        requestAnimationFrame(() => setTimeout(flushDeferredOrders, 0));
+        setTimeout(flushDeferredOrders, 120);
+    }
+    // (Not in the test harness: its clicks expect their orders at once.)
+    const deferBigOrders = typeof requestAnimationFrame === 'function' && !/harness/.test(navigator.userAgent || '');
+    for (const type of ['mousedown', 'pointerdown', 'keydown', 'touchstart']) document.addEventListener(type, flushDeferredOrders, true);
+
     function findOwnRallyAnchorNear(worldX, worldY) {
+        // (Only the tiles a hit can reach: the click's and its neighbours', not
+        // every barracks and spawner of the map.)
         let candidates = [];
-        for (let b of barracks) {
-            if (b.owner !== localPlayerId || b.energy <= 0 || b.underConstruction) continue;
+        let cgx = Math.floor(worldX / TILE), cgy = Math.floor(worldY / TILE);
+        for (let gy = cgy - 1; gy <= cgy + 1; gy++) for (let gx = cgx - 1; gx <= cgx + 1; gx++) {
+            let b = getTileEntityRef(gx, gy);
+            if (!b || !RALLY_CAPABLE_TYPES.has(b.type) || b.owner !== localPlayerId || b.energy <= 0 || b.underConstruction) continue;
             if (!isTileVisible(b.gx, b.gy)) continue;
             candidates.push({ ref: b, x: b.x, y: b.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
-        }
-        for (let s of collectorSpawners) {
-            if (s.owner !== localPlayerId || s.energy <= 0 || s.underConstruction) continue;
-            if (!isTileVisible(s.gx, s.gy)) continue;
-            candidates.push({ ref: s, x: s.x, y: s.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
         }
         let hit = pickNearestHitCandidate(candidates, worldX, worldY);
         return hit ? hit.ref : null;
@@ -1720,6 +1785,15 @@ function initInput() {
         }
         if (multiUnitCommandPoints.length === 0) multiUnitCommandPoints = [{ x: targetX, y: targetY }];
 
+        // One point: all of them, in their order (no pass over the ids; a
+        // long list is only encoded for the wire, never changed).
+        if (multiUnitCommandPoints.length === 1) {
+            queueAction({ action: actionName, unitIds: unitIds.length >= 64 ? unitIds : unitIds.slice(), targetX: multiUnitCommandPoints[0].x, targetY: multiUnitCommandPoints[0].y });
+            return;
+        }
+        // (The units' views, for the split by distance: a function, made only now.)
+        if (typeof unitObjs === 'function') unitObjs = unitObjs();
+
         let buckets = Array.from({ length: multiUnitCommandPoints.length }, () => []);
         let pick;
         // The units given (in the ids' order): their positions straight from
@@ -1961,13 +2035,15 @@ function initInput() {
             if (localDefeated) return;
             if (selectedBuildItem) { selectedBuildItem = null; requestBuildMenuRefresh(); stopBuildPlacementDrag(); return; }
             let isCtrlMulti = isCtrlMultiCommand(e);
+            noteOrderClickPing(world.x, world.y);
+            const issueOrders = () => {
             let clickGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(world.x / TILE)));
             let clickGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(world.y / TILE)));
             let clickTileVisible = isGameplayTargetVisibleToPlayer(localPlayerId, clickGx, clickGy);
             let clickedEnemyUnit = clickTileVisible ? findEnemyUnitNear(world.x, world.y, clickScreenX, clickScreenY) : null;
             let issuedStructureCommand = false;
             // Set rally for active selected barracks and spawners
-            let selSpawners = getActiveEntities().filter(isRallyCapableEntity);
+            let selSpawners = activeStructureSelection().rally;
             if (selSpawners.length > 0) {
                 let seed = _resolveSpawnerRallyPointForClick(selSpawners[0], world.x, world.y, clickedEnemyUnit);
                 applyRallyTargets(selSpawners, seed.x, seed.y, isCtrlMulti, seed.targetUnitId || null);
@@ -1976,7 +2052,7 @@ function initInput() {
                 multiRallyPoints = [];
             }
             // Set preferred target for selected own towers
-            let selTowers = getActiveEntities().filter(e => e instanceof Tower && e.owner === localPlayerId && e.energy > 0);
+            let selTowers = activeStructureSelection().towers;
             if (selTowers.length > 0) {
                 // Pick nearest clicked enemy target (unit/building/item) by center distance.
                 let towerTarget = null;
@@ -1999,22 +2075,23 @@ function initInput() {
                     issuedStructureCommand = true;
                 }
             }
-            const SC = getActiveUnitClasses();
-            let activeUnits = SC.active;
-            if (issuedStructureCommand && activeUnits.length === 0) {
+            const SC = getActiveUnitClasses(true);
+            // (Counts and ids, not the unit lists: they are made only when asked for.)
+            const activeCount = SC.count;
+            if (issuedStructureCommand && activeCount === 0) {
                 requestInfoPanelRefresh();
                 return;
             }
 
             // Non-visible tiles must always use direct location commands (no target snapping).
-            if (!clickTileVisible && activeUnits.length > 0) {
-                applyUnitCommandTargets(SC.allIds, world.x, world.y, isCtrlMulti, 'move', SC.active);
+            if (!clickTileVisible && activeCount > 0) {
+                applyUnitCommandTargets(SC.allIds, world.x, world.y, isCtrlMulti, 'move', () => SC.active);
                 requestInfoPanelRefresh();
                 return;
             }
 
             // Right-click own barrack to queue unit (only if no workers or combat units selected)
-            if (selSpawners.length === 0 && activeUnits.length === 0) {
+            if (selSpawners.length === 0 && activeCount === 0) {
                 let ownBarrackHits = [];
                 for (let b of barracks) {
                     if (b.owner !== localPlayerId || b.energy <= 0 || b.underConstruction) continue;
@@ -2027,7 +2104,7 @@ function initInput() {
                     return;
                 }
             }
-            if (activeUnits.length > 0) {
+            if (activeCount > 0) {
                 let forceManualWorkerMove = issuedStructureCommand;
                 // --- Worker targeting logic ---
                 let builderUnits = SC.of('builder');
@@ -2041,7 +2118,7 @@ function initInput() {
                 let salvagerUnits = SC.of('salvager');
                 let healerUnits = SC.of('healer');
                 let researcherUnits = SC.of('researcher');
-                let workerIds = SC.workerIds;
+                let workerIds = SC.workerCount > 0 ? SC.workerIds : [];
 
                 if (!forceManualWorkerMove && builderUnits.length > 0) {
                     // Generic builder-targeting for any placeable object that can be built/upgraded.
@@ -2050,8 +2127,7 @@ function initInput() {
                         applyWorkerAssignTargets(builderUnits, 'build', buildTarget.gx, buildTarget.gy, isCtrlMulti);
                         requestInfoPanelRefresh();
                         // If no non-worker units, return
-                        let nonWorkers = SC.combat;
-                        if (nonWorkers.length === 0) return;
+                        if (SC.combatCount === 0) return;
                     }
                 } else if (!isCtrlMulti) {
                     multiBuilderAssignTargets = [];
@@ -2070,8 +2146,7 @@ function initInput() {
                     }
                     if (issuedCollectorAssign) {
                         requestInfoPanelRefresh();
-                        let nonWorkers = SC.combat;
-                        if (nonWorkers.length === 0) return;
+                        if (SC.combatCount === 0) return;
                     }
                 } else if (!isCtrlMulti) {
                     multiCollectorAssignTargets = [];
@@ -2082,8 +2157,7 @@ function initInput() {
                     if (queueTarget) {
                         applyWorkerAssignTargets(healerUnits, 'queue', queueTarget.gx, queueTarget.gy, isCtrlMulti);
                         requestInfoPanelRefresh();
-                        let nonWorkers = SC.combat;
-                        if (nonWorkers.length === 0) return;
+                        if (SC.combatCount === 0) return;
                     }
                 } else if (!isCtrlMulti) {
                     multiHealerAssignTargets = [];
@@ -2103,16 +2177,15 @@ function initInput() {
                     if (researchTarget) {
                         applyWorkerAssignTargets(researcherUnits, 'research', researchTarget.gx, researchTarget.gy, isCtrlMulti);
                         requestInfoPanelRefresh();
-                        let nonWorkers = SC.combat;
-                        if (nonWorkers.length === 0) return;
+                        if (SC.combatCount === 0) return;
                     }
                 } else if (!isCtrlMulti) {
                     multiResearcherAssignTargets = [];
                 }
 
                 // --- Normal combat unit targeting ---
-                let combatUnits = SC.combat;
-                if (combatUnits.length > 0) {
+                const combatUnits = () => SC.combat;
+                if (SC.combatCount > 0) {
                     let targetUnit = null, targetBuilding = null;
                     let targetBuildingGx = null, targetBuildingGy = null;
                     let combatHit = pickNearestHitCandidate(collectEnemyClickTargetCandidates(world.x, world.y, true), world.x, world.y, clickScreenX, clickScreenY);
@@ -2161,16 +2234,19 @@ function initInput() {
                         attackMoveMode = false;
                     } else {
                         // Workers also move to the position if no special target found
-                        applyUnitCommandTargets(SC.allIds, world.x, world.y, isCtrlMulti, 'move', SC.active);
+                        applyUnitCommandTargets(SC.allIds, world.x, world.y, isCtrlMulti, 'move', () => SC.active);
                     }
                 } else if (workerIds.length > 0) {
                     // Only workers selected and no special target - move them
-                    applyUnitCommandTargets(workerIds, world.x, world.y, isCtrlMulti, 'move', SC.workers);
+                    applyUnitCommandTargets(workerIds, world.x, world.y, isCtrlMulti, 'move', () => SC.workers);
                 }
             } else if (!isCtrlMulti) {
                 multiUnitCommandPoints = [];
             }
             requestInfoPanelRefresh();
+            };
+            if (deferBigOrders && selectedUnits.length + selectedEntities.length >= ORDER_DEFER_MIN) deferOrderWork(issueOrders);
+            else issueOrders();
         }
     });
 
@@ -2403,17 +2479,19 @@ function initInput() {
             if (selectedBuildItem) { selectedBuildItem = null; requestBuildMenuRefresh(); stopBuildPlacementDrag(); return; }
 
             let isCtrlMulti = isCtrlMultiCommand(e);
-            let selSpawners = getActiveEntities().filter(isRallyCapableEntity);
+            noteOrderClickPing(worldX, worldY);
+            const issueOrders = () => {
+            let selSpawners = activeStructureSelection().rally;
             if (selSpawners.length > 0) {
                 applyRallyTargets(selSpawners, worldX, worldY, isCtrlMulti);
             } else if (!isCtrlMulti) {
                 multiRallyPoints = [];
             }
 
-            let activeUnits = getActiveUnits();
-            if (activeUnits.length > 0) {
-                let combatUnits = activeUnits.filter(u => !u.workerType).map(u => u.id);
-                let workerUnits = activeUnits.filter(u => !!u.workerType).map(u => u.id);
+            const SC = getActiveUnitClasses(true);
+            if (SC.count > 0) {
+                let combatUnits = SC.combatCount > 0 ? SC.combatIds : [];
+                let workerUnits = SC.workerCount > 0 ? SC.workerIds : [];
                 if (combatUnits.length > 0) {
                     if (attackMoveMode) {
                         applyUnitCommandTargets(combatUnits, worldX, worldY, isCtrlMulti, 'attackMove');
@@ -2430,6 +2508,9 @@ function initInput() {
             }
 
             requestInfoPanelRefresh();
+            };
+            if (deferBigOrders && selectedUnits.length + selectedEntities.length >= ORDER_DEFER_MIN) deferOrderWork(issueOrders);
+            else issueOrders();
             return;
         }
 
@@ -2958,11 +3039,7 @@ function initInput() {
             leaveMultiplayerToMainMenu('');
         });
     }
-    let netAutoEl = document.getElementById('cfg-net-auto');
-    if (netAutoEl) {
-        netAutoEl.addEventListener('change', syncNetAutoMenuState);
-        syncNetAutoMenuState();
-    }
+    syncNetAutoMenuState();
     document.querySelectorAll('.go-graph-metric').forEach(btn => {
         btn.addEventListener('click', () => {
             let metric = btn.dataset.metric || 'units';
@@ -4594,10 +4671,14 @@ function processAction(a, playerId) {
 // ============================================================
 // The view's centre stays on the map: up to half a view past each edge, so
 // edges and corners can be centred, zoomed into and worked at.
-function clampCamera() {
+function cameraRange() {
     let vw = viewW / camera.zoom, vh = viewH / camera.zoom;
-    camera.x = Math.max(-vw / 2, Math.min(WORLD_W - vw / 2, camera.x));
-    camera.y = Math.max(-vh / 2, Math.min(WORLD_H - vh / 2, camera.y));
+    return { minX: -vw / 2, maxX: WORLD_W - vw / 2, minY: -vh / 2, maxY: WORLD_H - vh / 2 };
+}
+function clampCamera() {
+    let r = cameraRange();
+    camera.x = Math.max(r.minX, Math.min(r.maxX, camera.x));
+    camera.y = Math.max(r.minY, Math.min(r.maxY, camera.y));
 }
 
 // Settings > Target FPS: the Auto option shows the rate it currently uses.
@@ -5025,14 +5106,30 @@ function startGame() {
     // Starting units spread over enough free tiles for at most
     // STARTER_UNITS_PER_TILE each (the area grows with the army), dealt out
     // round robin; units sharing a tile stand at distinct offsets in it, so
-    // no two start on the same point.
+    // no two start on the same point. With occupancy the area is the units'
+    // own footprints (starterUnitTilesByTeam): three to a tile packed more
+    // than it holds, and the units it could not place were never made (the
+    // 200k fixture started with 168k).
     const STARTER_UNITS_PER_TILE = 3;
-    let starterUnitCountByTeam = {};
+    let starterUnitCountByTeam = {}, starterUnitTilesByTeam = {}, starterRejectedByTeam = {};
     const STARTER_TILE_OFFSETS = [[0, 0], [-9, -9], [9, 9], [9, -9], [-9, 9], [0, -11], [0, 11], [-11, 0], [11, 0]];
+    // A unit's exclusive footprint in tiles: occupancy holds a disk of
+    // ceil(R / cell) cells, neighbours at least two radii apart, dealt on the
+    // tiles' grid (a 24 px disk takes a whole 32 px tile, a 16 px one a
+    // quarter); a tenth more for the relocation's slack (sim_occupancy.js
+    // occupancySpawn).
+    let starterUnitFootprintTiles = (unitType) => {
+        let st = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm || {};
+        let cell = TILE / SIM_OCCUPANCY_SUBCELLS, cells = Math.max(1, Math.ceil((Number(st.collisionR) || Number(st.r) || 8) / cell));
+        let d = 2 * cells * cell, side = Math.floor(TILE / d);
+        return 1.1 * (side >= 1 ? 1 / (side * side) : Math.ceil(d / TILE) ** 2);
+    };
+    let starterOccupancy = () => typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED;
     let getNextStarterUnitSpawnTile = (pid, origin) => {
         let state = teamStarterSpawnState[pid];
         if (!state) {
-            let want = Math.ceil(Math.max(1, starterUnitCountByTeam[pid] || 0) / STARTER_UNITS_PER_TILE);
+            let want = starterOccupancy() && starterUnitTilesByTeam[pid] > 0 ? Math.ceil(starterUnitTilesByTeam[pid])
+                : Math.ceil(Math.max(1, starterUnitCountByTeam[pid] || 0) / STARTER_UNITS_PER_TILE);
             let others = [];
             for (let other in teamSpawnPos) if (Number(other) !== Number(pid) && teamSpawnPos[other]) others.push(teamSpawnPos[other]);
             // The nearest tiles (BFS order) that hold the army; a small army
@@ -5062,8 +5159,17 @@ function startGame() {
     // (A start snapshot replaces every entity at once: the simulation
     // worker's start makes none; startGameSkipStarters.)
     let spawnStartingUnit = (pid, origin, unitType, level) => {
-        let spawnTile = getNextStarterUnitSpawnTile(pid, origin);
-        let u = new Unit(unitType, pid, spawnTile.gx * TILE + 16 + spawnTile.ox, spawnTile.gy * TILE + 16 + spawnTile.oy);
+        // (Occupancy found no room within its search of the dealt tile: the
+        // next tiles; once many found none, the area is full (more units than
+        // the map holds) and each further try would be a failed search.)
+        let rejected = starterRejectedByTeam[pid] || 0;
+        let u = null, tries = rejected < Math.max(256, (starterUnitCountByTeam[pid] || 0) >> 6) ? 8 : 1;
+        for (let k = 0; k < tries; k++) {
+            let spawnTile = getNextStarterUnitSpawnTile(pid, origin);
+            u = new Unit(unitType, pid, spawnTile.gx * TILE + 16 + spawnTile.ox, spawnTile.gy * TILE + 16 + spawnTile.oy);
+            if (!u.dead) break;
+            starterRejectedByTeam[pid] = ++rejected;
+        }
         if (u.dead) return null;
         applyWorkerDefaults(u);
         applyUnitLevelScaling(u, Math.max(1, clampThingLevel(level || 1)));
@@ -5127,13 +5233,23 @@ function startGame() {
         let pos = teamSpawnPos[pid];
         let spawnByThing = startingResourcesConfig.spawnCounts || {};
         // Buildings first, then units on the tiles left free.
-        let unitCount = 0;
+        let unitCount = 0, unitTiles = 0;
         for (let thingId in spawnByThing) {
             let parsed = parseStartingThingId(thingId), levelMap = spawnByThing[thingId];
             if (!parsed || parsed.kind === 'building' || !levelMap || typeof levelMap !== 'object') continue;
-            for (let levelText in levelMap) unitCount += normalizeStartingSpawnCount(levelMap[levelText]);
+            let n = 0;
+            for (let levelText in levelMap) n += normalizeStartingSpawnCount(levelMap[levelText]);
+            unitCount += n;
+            if (starterOccupancy()) unitTiles += n * starterUnitFootprintTiles(parsed.key);
         }
         starterUnitCountByTeam[pid] = Math.min(unitCount, getConfiguredMaxPop());
+        starterUnitTilesByTeam[pid] = unitCount > 0 ? unitTiles * starterUnitCountByTeam[pid] / unitCount : 0;
+        // (Units: the population cap takes them in the listed order; with
+        // occupancy the largest footprints are placed first, the small ones
+        // then fill the gaps between them. Listed order, small types came
+        // first and left only holes too small for the big ones: 11k of the
+        // 200k fixture's tanks and bosses were not made.)
+        let unitJobs = [], popLeft = Math.max(0, getConfiguredMaxPop() - players[pid].popCount);
         for (let pass = 0; pass < 2; pass++) for (let thingId in spawnByThing) {
             let parsed = parseStartingThingId(thingId);
             if (!parsed) continue;
@@ -5144,15 +5260,21 @@ function startGame() {
             for (let levelText in levelMap) {
                 let lvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(levelText) || 1)));
                 let count = normalizeStartingSpawnCount(levelMap[levelText]);
-                if (parsed.kind === 'unit') count = Math.min(count, Math.max(0, getConfiguredMaxPop() - players[pid].popCount));
-                for (let i = 0; i < count; i++) {
-                    if (parsed.kind === 'building') {
-                        if (!spawnStartingBuilding(pid, pos, parsed.key, lvl)) break;
-                    } else {
-                        spawnStartingUnit(pid, pos, parsed.key, lvl);
-                    }
+                if (parsed.kind === 'unit') {
+                    count = Math.min(count, popLeft); popLeft -= count;
+                    if (count > 0) unitJobs.push({ key: parsed.key, lvl, count, order: unitJobs.length,
+                        size: starterOccupancy() ? starterUnitFootprintTiles(parsed.key) : 0 });
+                    continue;
                 }
+                for (let i = 0; i < count; i++) if (!spawnStartingBuilding(pid, pos, parsed.key, lvl)) break;
             }
+        }
+        // (Up to 64 units each has a tile of its own: the listed order, as
+        // it always was; small scenarios keep their layouts and ids.)
+        if (starterUnitCountByTeam[pid] > 64) unitJobs.sort((a, b) => b.size - a.size || a.order - b.order);
+        for (let job of unitJobs) {
+            let count = Math.min(job.count, Math.max(0, getConfiguredMaxPop() - players[pid].popCount));
+            for (let i = 0; i < count; i++) spawnStartingUnit(pid, pos, job.key, job.lvl);
         }
     }
 
@@ -5637,7 +5759,7 @@ function sendLocalTickPacketWindow(tick, force = false) {
     let completedTick = netCompletedSimulationTick();
     // Anchor the future input window to the same visible tick as commands.
     // Keep any additional resync horizon, but not the worker's unshown ticks.
-    let horizonTick = netFairInputDelay ? baseTick - (currentTick - completedTick) : baseTick;
+    let horizonTick = baseTick - (currentTick - completedTick);
     let horizon = Math.max(baseTick, horizonTick + lead);
     let endTick = Math.max(horizon, lockstepHighestSentLocalTick);
     let now = performance.now();

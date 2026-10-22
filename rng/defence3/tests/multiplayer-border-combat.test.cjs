@@ -67,7 +67,8 @@ startingResourcesConfig = ${JSON.stringify({ researchLevels: {}, spawnCounts: {
     // Left sees right: a king (vision 1 area) facing a soldier (vision .6)
     // beyond the border, for each owner; a laser caster facing a soldier.
     const pairs = [[[0, 'king'], [1, 'norm']], [[1, 'king'], [0, 'norm']], [[0, 'laser_resistant'], [1, 'norm']]];
-    const { host, guests } = await H.startHostedMatch(world, { guests: 1, controls: CONTROLS, hostSetup: placementSetup(pairs) });
+    // (In the simulation worker too: there the world is made, not on the page.)
+    const { host, guests } = await H.startHostedMatch(world, { guests: 1, controls: CONTROLS, hostSetup: placementSetup(pairs), simSetup: placementSetup(pairs) });
     const all = [host, ...guests];
     const energy = () => JSON.parse(host.eval(`JSON.stringify(units.filter(u => !u.dead).map(u => [u.owner, u.unitType, Math.round(u.energy)]))`));
     const start = energy();

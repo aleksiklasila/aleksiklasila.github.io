@@ -1,0 +1,13 @@
+{"at":"2s","ticksPerSec":16.9,"simMean":121.3,"simP95":285.4,"encMean":0.52,"applyMean":2.62,"lateMean":228.82,"latencyMean":356.91,"step":1,"helpers":7,"tpsShown":16,"fps":110,"units":211815}
+{"at":"2s","ticksPerSec":19.9,"simMean":85.49,"simP95":91.41,"encMean":0.44,"applyMean":1.79,"lateMean":178.02,"latencyMean":268.05,"step":1,"helpers":7,"tpsShown":20,"fps":119,"units":211377}
+{"at":"2s","ticksPerSec":20.8,"simMean":72.18,"simP95":83.89,"encMean":0.4,"applyMean":1.52,"lateMean":139.75,"latencyMean":215.76,"step":1,"helpers":7,"tpsShown":21,"fps":118,"units":210848}
+{"at":"2s","ticksPerSec":19.8,"simMean":64.88,"simP95":77.1,"encMean":0.39,"applyMean":1.36,"lateMean":105.53,"latencyMean":173.76,"step":1,"helpers":7,"tpsShown":20,"fps":117,"units":210430}
+{"at":"2s","ticksPerSec":19.8,"simMean":60.61,"simP95":74.33,"encMean":0.37,"applyMean":1.28,"lateMean":89.58,"latencyMean":153.3,"step":1,"helpers":7,"tpsShown":18,"fps":119,"units":209953}
+{"at":"2s","ticksPerSec":20.4,"simMean":57.3,"simP95":70.16,"encMean":0.37,"applyMean":1.21,"lateMean":75.62,"latencyMean":135.84,"step":1,"helpers":7,"tpsShown":20,"fps":120,"units":209442}
+{"at":"2s","ticksPerSec":19.8,"simMean":54.81,"simP95":64.55,"encMean":0.37,"applyMean":1.17,"lateMean":65.13,"latencyMean":122.77,"step":1,"helpers":7,"tpsShown":20,"fps":118,"units":208927}
+{"at":"2s","ticksPerSec":19.9,"simMean":53.84,"simP95":65.75,"encMean":0.36,"applyMean":1.16,"lateMean":58.98,"latencyMean":115.6,"step":1,"helpers":7,"tpsShown":21,"fps":119,"units":208448}
+{"at":"2s","ticksPerSec":19.9,"simMean":53.16,"simP95":66.81,"encMean":0.36,"applyMean":1.15,"lateMean":55.21,"latencyMean":111.18,"step":1,"helpers":7,"tpsShown":20,"fps":119,"units":207959}
+{"at":"2s","ticksPerSec":16.8,"simMean":53.61,"simP95":71.24,"encMean":0.37,"applyMean":1.15,"lateMean":59.88,"latencyMean":116.3,"step":1,"helpers":7,"tpsShown":17,"fps":116,"units":207613}
+{"at":"2s","ticksPerSec":21.3,"simMean":52.4,"simP95":70.71,"encMean":0.36,"applyMean":1.13,"lateMean":57.52,"latencyMean":112.67,"step":1,"helpers":7,"tpsShown":21,"fps":119,"units":207037}
+{"at":"2s","ticksPerSec":19.9,"simMean":51.56,"simP95":70.36,"encMean":0.36,"applyMean":1.12,"lateMean":52.98,"latencyMean":107.22,"step":1,"helpers":7,"tpsShown":20,"fps":118,"units":206541}
+errors []

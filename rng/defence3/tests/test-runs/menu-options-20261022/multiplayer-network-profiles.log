@@ -1,0 +1,7 @@
+PASS: multiplayer network profiles
+  lan: 20.0/20 TPS, guest latency p50 150ms, input delay 1 ticks, 22 msg/s
+  wan: 20.0/20 TPS, guest latency p50 233ms, input delay 3 ticks, 22 msg/s
+  high-ping: 20.0/20 TPS, guest latency p50 433ms, input delay 7 ticks, 21 msg/s
+  intercontinental-vpn: 20.0/20 TPS, guest latency p50 717ms, input delay 13 ticks, 21 msg/s
+  unstable: 19.8/20 TPS, guest latency p50 583ms, input delay 9 ticks, 21 msg/s
+  asymmetric, equal command delay: pipelines near 1 far 8; command latency host 467ms near 483ms far 483ms

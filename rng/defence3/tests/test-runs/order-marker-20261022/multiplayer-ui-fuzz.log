@@ -1,0 +1,1 @@
+PASS: UI fuzz: 2400 gestures (31 kinds) -> 1011 commands, input never touched simulation state, 1998 bit-exact tick comparisons equal

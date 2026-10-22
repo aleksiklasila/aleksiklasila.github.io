@@ -2532,7 +2532,77 @@ const _pendingUnitOrderMarkers = new Map(), _pendingRallyMarkers = new Map();
 const _pendingCommandMarkers = [];
 const ORDER_PENDING_PER_UNIT_MAX = 64;
 let _orderMarkerRevision = 0, _orderMarkerCache = null, _rallyVisualLastSeen = new WeakMap();
+// The click's own marker. An order reaches the simulation a few ticks later,
+// the frames show it later still (a big army at a low tick rate: a second or
+// more), and the page may be busy finding what the click orders. So the
+// marker is drawn where the player clicked, on the overlay and in the click's
+// own event, before any of that; the order's marker (noteOrderMarker) takes
+// over from it, and an order that never comes leaves no marker after
+// ORDER_PING_MS. Local, drawn only: nothing of the match depends on it.
+const ORDER_PING_MS = 800;
+const _orderPings = [];
+function noteOrderPing(x, y, kind, color) {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !gameStarted) return;
+    const ping = { x, y, kind, color, at: performance.now() };
+    _orderPings.push(ping);
+    if (_orderPings.length > 16) _orderPings.shift();
+    _orderMarkerRevision++;
+    const r = renderer3dInstance, ctx = overlayCtx;
+    // (On the frame last drawn: its view is the one on screen.)
+    if (!ctx || !overlayCanvas || !r || !r.supported || !_lastOverlaySnapshot || typeof r.drawOverlay !== 'function') return;
+    const dpr = window.devicePixelRatio || 1;
+    ctx.save();
+    try {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        r.drawOverlay({ markers: [{ x: x / TILE, z: y / TILE, kind, color }], worldTileSize: TILE }, ctx);
+    } finally { ctx.restore(); }
+    overlayCanvas._interactionEmpty = false;
+}
+// A rally order of a selection's buildings that all go to one point: one
+// record for the lot (their order is the selection's), not a key per building
+// (31k buildings: ~8 ms a click, and the same again every frame until the
+// frames show the order). { tick, x, y, sel, len, rally, keys, at }
+const _pendingRallyCovers = [];
+let _rallyCoverOpen = null;
+function noteRallyCover(rally, x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    // (Newer than any earlier pending rally of these buildings.)
+    _pendingRallyMarkers.clear();
+    for (let i = _pendingRallyCovers.length - 1; i >= 0; i--) if (_pendingRallyCovers[i].sel === selectedEntities && _pendingRallyCovers[i].len === selectedEntities.length) _pendingRallyCovers.splice(i, 1);
+    _rallyCoverOpen = { tick: -1, x, y, sel: selectedEntities, len: selectedEntities.length, rally, keys: null, at: performance.now() };
+    _pendingRallyCovers.push(_rallyCoverOpen);
+}
+function noteRallyCoverDone() { _rallyCoverOpen = null; }
+function _rallyCoverShown(c) {
+    // (An order never queued, or one the frames never show: not for ever.)
+    if (performance.now() - c.at > 6000) return true;
+    if (c.tick < 0) return false;
+    const shown = typeof _simClient !== 'undefined' && _simClient && Number.isFinite(_simClient.presentationTick) ? _simClient.presentationTick : currentTick - 1;
+    return shown >= c.tick;
+}
+// The cover of the current selection, if its rally is still on its way.
+function _rallyCoverCurrent() {
+    for (let i = _pendingRallyCovers.length - 1; i >= 0; i--) {
+        const c = _pendingRallyCovers[i];
+        if (_rallyCoverShown(c)) { _pendingRallyCovers.splice(i, 1); continue; }
+        if (c.sel === selectedEntities && c.len === selectedEntities.length) return c;
+    }
+    return null;
+}
+function _rallyCoverOf(ent) {
+    const c = _rallyCoverCurrent();
+    if (c) return c;
+    // (Another selection since: by the buildings' tiles.)
+    for (let i = _pendingRallyCovers.length - 1; i >= 0; i--) {
+        const k = _pendingRallyCovers[i];
+        if (!k.keys) k.keys = new Set(k.rally.map(e => e.gy * GRID_W + e.gx));
+        if (k.keys.has(ent.gy * GRID_W + ent.gx)) return k;
+    }
+    return null;
+}
 function resetOrderMarkers() {
+    _pendingRallyCovers.length = 0; _rallyCoverOpen = null;
+    _orderPings.length = 0;
     _pendingUnitOrderMarkers.clear(); _pendingRallyMarkers.clear(); _pendingCommandMarkers.length = 0;
     _orderMarkerCache = null; _orderMarkerRevision++;
     _rallyVisualLastSeen = new WeakMap();
@@ -2550,9 +2620,14 @@ function noteOrderMarker(a, tick = currentTick) {
     const n = (a.unitIds || []).length, X = typeof selectionIndex === 'function' ? selectionIndex() : null;
     const cover = move && n > 0 && n >= _selectedOwnUnitCount();
     const pending = { tick, target, cover, version: X ? X.version : -1 };
+    // (The click's own marker gives way to the order's.)
+    if (rally || move) for (let i = _orderPings.length - 1; i >= 0; i--) if (_orderPings[i].kind === (rally ? 'arrow' : 'plus')) _orderPings.splice(i, 1);
     if (rally) {
-        const coords = a.action === 'setRally' ? [a.gx, a.gy] : a.coords || [];
-        for (let i = 0; i + 1 < coords.length; i += 2) _pendingRallyMarkers.set(coords[i] + ',' + coords[i + 1], pending);
+        if (_rallyCoverOpen) _rallyCoverOpen.tick = Math.max(_rallyCoverOpen.tick, tick);
+        else {
+            const coords = a.action === 'setRally' ? [a.gx, a.gy] : a.coords || [];
+            for (let i = 0; i + 1 < coords.length; i += 2) _pendingRallyMarkers.set(coords[i] + ',' + coords[i + 1], pending);
+        }
     } else if ((a.unitIds || []).length > ORDER_PENDING_PER_UNIT_MAX) { if (target) _pendingCommandMarkers.push(pending); }
     else for (const id of a.unitIds || []) _pendingUnitOrderMarkers.set(id, pending);
     _orderMarkerRevision++;
@@ -2576,7 +2651,11 @@ function _pendingOrderTarget(map, key, entity) {
     return pending.target;
 }
 function getBuildingOrderTarget(ent) {
-    const pending = _pendingOrderTarget(_pendingRallyMarkers, ent.gx + ',' + ent.gy, ent);
+    let pending = _pendingRallyMarkers.size ? _pendingOrderTarget(_pendingRallyMarkers, ent.gx + ',' + ent.gy, ent) : undefined;
+    if (pending === undefined && _pendingRallyCovers.length) {
+        const c = _rallyCoverOf(ent);
+        if (c) pending = { x: c.x, y: c.y, targetUnitId: null };
+    }
     if (pending === null) return null;
     const x = pending ? pending.x : ent.rallyX, y = pending ? pending.y : ent.rallyY;
     const id = pending ? pending.targetUnitId : ent.rallyTargetUnitId;
@@ -2627,7 +2706,7 @@ function getOrderMarkers() {
     // (A big selection's markers a few times a second: thousands of rally
     // points and an army's destinations do not move by the frame.)
     const big = selectedUnits.length + selectedEntities.length > SELECTED_UNIT_LINES_MAX, now = performance.now();
-    if (same && big && now - C.at < 150 && _pendingUnitOrderMarkers.size === 0 && _pendingRallyMarkers.size === 0 && _pendingCommandMarkers.length === 0) return C.markers;
+    if (same && big && now - C.at < 150 && _pendingUnitOrderMarkers.size === 0 && _pendingRallyMarkers.size === 0 && _pendingCommandMarkers.length === 0 && _orderPings.length === 0 && _pendingRallyCovers.length === 0) return C.markers;
     const markers = [], seen = new Set();
     const add = t => {
         if (!t || !Number.isFinite(t.x) || !Number.isFinite(t.y) || markers.length >= ORDER_MARKERS_MAX) return;
@@ -2636,7 +2715,11 @@ function getOrderMarkers() {
         if (seen.has(key)) return;
         seen.add(key); markers.push({ x: t.x / TILE, z: t.y / TILE, kind: t.kind, color: t.color });
     };
-    for (const ent of getActiveEntities()) {
+    // (One order for the whole selection's rally, still on its way: its one
+    // marker, no pass over the buildings.)
+    const cover = _pendingRallyCovers.length && _pendingRallyMarkers.size === 0 ? _rallyCoverCurrent() : null;
+    if (cover) add({ x: cover.x, y: cover.y, kind: 'arrow', color: '#9aa' });
+    else for (const ent of getActiveEntities()) {
         if (markers.length >= ORDER_MARKERS_MAX) break;
         if (!ent || ent.owner !== localPlayerId || (ent.energy !== undefined && ent.energy <= 0)) continue;
         if (_isRallySpawnerType(ent.type)) add(getBuildingOrderTarget(ent));
@@ -2702,6 +2785,10 @@ function getOrderMarkers() {
                 add({ x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' });
             }
         } else if (u.owner === localPlayerId) add(getUnitOrderTarget(u));
+    }
+    for (let i = _orderPings.length - 1; i >= 0; i--) {
+        if (now - _orderPings[i].at > ORDER_PING_MS) _orderPings.splice(i, 1);
+        else add(_orderPings[i]);
     }
     _orderMarkerCache = { tick: gameTime, frame, at: now, version, revision: _orderMarkerRevision,
         units: selectedUnits, ulen: selectedUnits.length, entities: selectedEntities, elen: selectedEntities.length,
@@ -3555,7 +3642,9 @@ function build3DFrameData(flat2d = false) {
     for (let li = 0; li < loopCount; li++) {
         let ui = slowIdx ? slowIdx[li] : li;
         let u = slowIdx ? units[ui] : unitList[ui];
-        _uSlotVisIndex = unitVis ? (u._s ?? unitVis.order[ui]) : -1;
+        // (ui indexes units or unitList: the frame's order only when that is
+        // the whole list, not the detail split's.)
+        _uSlotVisIndex = unitVis ? (u._s ?? ((slowIdx ? units : unitList) === sourceView.units ? unitVis.order[ui] : -1)) : -1;
         if (flat2d) drainFlatObjects();
         if (u.dead) continue;
         let ux = u.prevX + (u.x - u.prevX) * alpha;
@@ -3612,7 +3701,7 @@ function build3DFrameData(flat2d = false) {
                 objects.push(o);
                 if (!flat2d) pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
                 if (layerBuilding) layerCollect(u, footprint);
-                if (unitVis) cached.sigW = unitVis.sig[unitVis.order[ui]];
+                if (unitVis) cached.sigW = unitVis.sig[_uSlotVisIndex];
                 continue;
             }
             pushSnakeRenderObjects(objects, u, ux, uy, footprint);
@@ -3646,7 +3735,7 @@ function build3DFrameData(flat2d = false) {
                     }
                     objects.push(o);
                     layerCollect(u, footprint);
-                    if (unitVis) cached.sigW = unitVis.sig[unitVis.order[ui]];
+                    if (unitVis) cached.sigW = unitVis.sig[_uSlotVisIndex];
                     // This frame's motion effects (the layer's own start next frame).
                     if (u.unitType === 'tank' || u.unitType === 'boss' || u.unitType === 'king') {
                         pushUnitMotionFx(u, ux / TILE, uy / TILE, footprint, o.scaleY);
@@ -3667,7 +3756,7 @@ function build3DFrameData(flat2d = false) {
                 objects.push(o);
                 if (!flat2d) pushUnitMotionFx(u, o.x, o.z, footprint, o.scaleY);
                 if (layerBuilding) layerCollect(u, footprint);
-                if (unitVis) cached.sigW = unitVis.sig[unitVis.order[ui]];
+                if (unitVis) cached.sigW = unitVis.sig[_uSlotVisIndex];
                 continue;
             }
             // Mounts (pony, winged horses) carry a rider: larger than a lone figure.
@@ -3727,7 +3816,7 @@ function build3DFrameData(flat2d = false) {
             }
             if (layerBuilding) layerCollect(u, footprint);
         }
-        if (unitVis && u._r3d) u._r3d.sigW = unitVis.sig[unitVis.order[ui]];
+        if (unitVis && u._r3d) u._r3d.sigW = unitVis.sig[_uSlotVisIndex];
     }
 
     _ph = _r3dPhase(layerBuilding ? 'unitsBuild' : 'unitsReuse', _ph);
@@ -6180,9 +6269,11 @@ function updateCameraSlide(frameTime) {
     let baseInv = _m3inv(base);
     if (!baseInv) { _cameraSlideFrame = null; return; }
     let vel = _cameraPanVel, tgt = _cameraPanTarget;
+    // (The camera's own range, which reaches half a view past the map's edges.)
+    let range = cameraRange();
     _cameraSlideFrame = {
         frameTime, base, baseInv, pad, W, H, cx: camera.x, cy: camera.y, v0x: vel.x, v0y: vel.y, tx: tgt.x, ty: tgt.y,
-        maxX: WORLD_W - viewW / camera.zoom, maxY: WORLD_H - viewH / camera.zoom
+        minX: range.minX, maxX: range.maxX, minY: range.minY, maxY: range.maxY
     };
     _buildCameraSlide();
 }
@@ -6201,30 +6292,42 @@ function _buildCameraSlide() {
         if (_cameraSlideActive) _stopCameraSlide();
         return;
     }
-    // Where the camera will be `sec` after the frame, in tiles from there:
-    // updateCamera's own motion model through the key changes so far, each
-    // axis stopping where the camera is clamped at the map edge.
-    let shift = sec => {
-        let r = cameraPanTravel(F.v0x, F.v0y, F.tx, F.ty, F.frameTime, sec, inputs);
-        return [Math.max(-F.cx, Math.min(F.maxX - F.cx, r.x)) / TILE, Math.max(-F.cy, Math.min(F.maxY - F.cy, r.y)) / TILE];
+    // Where the camera will be at k/steps of `durMs` after the frame, in tiles
+    // from there: updateCamera's own motion model through the key changes so
+    // far, clamped to the camera's range at every step as updateCamera clamps
+    // it every frame. (The end point alone, clamped, is not the same: a camera
+    // held against an edge stays there while the keys push on, then leaves
+    // from the edge, and the slide must too.)
+    let travel = (durMs, steps) => {
+        let dx = new Float64Array(steps + 1), dz = new Float64Array(steps + 1);
+        let x = F.cx, y = F.cy, lastX = 0, lastY = 0;
+        for (let k = 1; k <= steps; k++) {
+            let r = cameraPanTravel(F.v0x, F.v0y, F.tx, F.ty, F.frameTime, durMs / 1000 * k / steps, inputs);
+            x = Math.max(F.minX, Math.min(F.maxX, x + r.x - lastX));
+            y = Math.max(F.minY, Math.min(F.maxY, y + r.y - lastY));
+            lastX = r.x; lastY = r.y;
+            dx[k] = (x - F.cx) / TILE; dz[k] = (y - F.cy) / TILE;
+        }
+        return { dx, dz };
     };
-    // How long until the view's corners would show past the margin.
+    // How far the view's corners would show past the margin along the way.
     let pad = F.pad, W = F.W, H = F.H;
     let corners = [[pad, pad], [W - pad, pad], [pad, H - pad], [W - pad, H - pad]];
-    let reach = sec => {
-        let [dx, dz] = shift(sec);
-        let inv = _m3inv(_cameraSlideWarp(F.base, F.baseInv, dx, dz));
-        if (!inv) return Infinity;
+    let reach = p => {
         let worst = 0;
-        for (let [x, y] of corners) {
-            let [sx, sy] = _m3apply(inv, x, y);
-            worst = Math.max(worst, Math.abs(sx - x), Math.abs(sy - y));
+        for (let k = 1; k < p.dx.length; k++) {
+            let inv = _m3inv(_cameraSlideWarp(F.base, F.baseInv, p.dx[k], p.dz[k]));
+            if (!inv) return Infinity;
+            for (let [x, y] of corners) {
+                let [sx, sy] = _m3apply(inv, x, y);
+                worst = Math.max(worst, Math.abs(sx - x), Math.abs(sy - y));
+            }
         }
         return worst;
     };
     let durMs = CAMERA_SLIDE_MAX_MS;
     for (let i = 0; i < 3; i++) {
-        let r = reach(durMs / 1000);
+        let r = reach(travel(durMs, Math.max(2, Math.ceil(durMs / 16))));
         if (!(r > pad)) break;
         durMs *= pad / r * 0.98;
     }
@@ -6232,10 +6335,12 @@ function _buildCameraSlide() {
     // Keyframes every ~8 ms: the browser interpolates between them, and the
     // warp is not linear in time.
     let steps = Math.max(2, Math.ceil(durMs / 8));
+    let path = travel(durMs, steps);
+    // (Held against an edge: nothing to slide.)
+    if (!path.dx.some(v => Math.abs(v) > 1e-4) && !path.dz.some(v => Math.abs(v) > 1e-4)) { if (_cameraSlideActive) _stopCameraSlide(); return; }
     let keyframes = [];
     for (let k = 0; k <= steps; k++) {
-        let [dx, dz] = shift(durMs / 1000 * k / steps);
-        keyframes.push({ offset: k / steps, transform: _cssMatrixFromHomography(_cameraSlideWarp(F.base, F.baseInv, dx, dz)) });
+        keyframes.push({ offset: k / steps, transform: _cssMatrixFromHomography(_cameraSlideWarp(F.base, F.baseInv, path.dx[k], path.dz[k])) });
     }
     let next = layers.map(el => {
         let anim = el.animate(keyframes, { duration: durMs, fill: 'forwards', easing: 'linear' });
@@ -6247,7 +6352,7 @@ function _buildCameraSlide() {
     for (let a of _cameraSlideAnims) a.cancel();
     _cameraSlideAnims = next;
     _cameraSlideActive = true;
-    _cameraSlideLast = { frameTime: F.frameTime, durMs, base: F.base, baseInv: F.baseInv, shift };
+    _cameraSlideLast = { frameTime: F.frameTime, durMs, base: F.base, baseInv: F.baseInv, path };
 }
 
 // The first 3D frame compiles the 3D-only shaders and builds their first data

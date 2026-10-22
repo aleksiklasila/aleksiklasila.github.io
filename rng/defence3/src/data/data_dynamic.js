@@ -793,7 +793,6 @@ function createEditableRuntimeConfigSnapshot() {
             LOCKSTEP_PIPELINE_MIN,
             THING_STATS_RECALC_INTERVAL_SECONDS,
             LOCKSTEP_STRICT_DEBUG_MODE: !!lockstepStrictDebugMode,
-            FAIR_INPUT_DELAY: !!netFairInputDelay,
             UNIT_EFFECTIVE_STATS_RECALC_TICKS,
             UNIT_COLLISION_RECALC_TICKS,
             ASTAR_MAX_ITERS_LIMIT,
@@ -852,8 +851,6 @@ function syncMainMenuFromRuntimeConfig() {
     setValue('cfg-thing-stats-seconds', THING_STATS_RECALC_INTERVAL_SECONDS);
     let exactLockstepEl = document.getElementById('cfg-exact-lockstep');
     if (exactLockstepEl) exactLockstepEl.checked = !!lockstepStrictDebugMode;
-    let fairDelayEl = document.getElementById('cfg-fair-delay');
-    if (fairDelayEl) fairDelayEl.checked = !!netFairInputDelay;
     setValue('cfg-unit-eff-stats-ticks', UNIT_EFFECTIVE_STATS_RECALC_TICKS);
     setValue('cfg-unit-collision-ticks', UNIT_COLLISION_RECALC_TICKS);
     setValue('cfg-astar-iter-budget-per-player', ASTAR_ITER_BUDGET_PER_PLAYER_TICK);
@@ -918,7 +915,6 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     if (cfg.LOCKSTEP_STRICT_DEBUG_MODE !== undefined) {
         lockstepStrictDebugMode = !!cfg.LOCKSTEP_STRICT_DEBUG_MODE;
     }
-    if (cfg.FAIR_INPUT_DELAY !== undefined) netFairInputDelay = !!cfg.FAIR_INPUT_DELAY;
     if (Number.isFinite(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))) {
         UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
     }
@@ -1156,7 +1152,6 @@ function createEditableRuntimeConfigSnapshotFromMainMenu() {
     cfg.LOCKSTEP_PIPELINE_MIN = Math.max(0, Math.floor(getNumber('cfg-pipeline-delay', cfg.LOCKSTEP_PIPELINE_MIN)));
     cfg.THING_STATS_RECALC_INTERVAL_SECONDS = Math.max(0.05, Math.min(600, getNumber('cfg-thing-stats-seconds', cfg.THING_STATS_RECALC_INTERVAL_SECONDS)));
     cfg.LOCKSTEP_STRICT_DEBUG_MODE = !!((document.getElementById('cfg-exact-lockstep') || {}).checked);
-    cfg.FAIR_INPUT_DELAY = readFairDelayFromMenu();
     cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-eff-stats-ticks', cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
     cfg.UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-collision-ticks', cfg.UNIT_COLLISION_RECALC_TICKS))));
     cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(getNumber('cfg-astar-iter-budget-per-player', cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))));
@@ -1198,7 +1193,6 @@ function applyMainMenuControlsToRuntimeState() {
     WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(Number(cfg.WORKER_AI_TICK_DELAY) || WORKER_AI_TICK_DELAY)));
     applyTimingConfig(cfg.TICK_RATE, cfg.LOCKSTEP_PIPELINE_MIN);
     lockstepStrictDebugMode = !!cfg.LOCKSTEP_STRICT_DEBUG_MODE;
-    if (cfg.FAIR_INPUT_DELAY !== undefined) netFairInputDelay = !!cfg.FAIR_INPUT_DELAY;
 
     let gameModeEl = document.getElementById('cfg-gamemode');
     if (gameModeEl) gameMode = String(gameModeEl.value || gameMode || 'destroy');
@@ -3499,6 +3493,11 @@ function applyUnitLevelScaling(unit, level) {
     unit.baseLevel = lvl;
     unit.effectiveStacks = Math.max(1, Number.isFinite(unit.stackCount) ? Math.floor(unit.stackCount) : 1);
     unit.effectiveLevel = lvl;
+    // (Its effective tables are this level's now: as applied. Left at the
+    // level before, a split or merge's unit that came back to that level
+    // kept this level's tables (the refresh saw them as applied), until a
+    // resync made them anew on the restored peer only: a divergence.)
+    unit._lastAppliedEffectiveLevel = lvl;
     if (typeof effStatsUnitBaseChanged === 'function') effStatsUnitBaseChanged(unit);
     if (typeof _effRowAttach === 'function') _effRowAttach(unit);
     if (!_unitStatsNotifyHeld && typeof simMoveStatsChanged === 'function') simMoveStatsChanged(unit, previousRow);
@@ -3538,6 +3537,7 @@ function applyUnitEffectiveScaling(unit, effectiveLevel, previousRow) {
     unit.energy = Math.max(1, Math.min(unit.maxEnergy, Math.floor(unit.energy)));
 
     unit.effectiveLevel = lvl;
+    unit._lastAppliedEffectiveLevel = lvl;
     if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(unit);
     // (Its tables as a stat row: units of the same tables take it in the kernel.)
     if (typeof _effRowAttach === 'function') _effRowAttach(unit);

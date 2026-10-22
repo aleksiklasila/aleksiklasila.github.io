@@ -1638,8 +1638,6 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing', taken = nul
         // Timing last: the editable config carries the host's menu values,
         // while these are what the host actually runs with.
         applyTimingConfig(parseInt(data.cfg.tickRate), parseInt(data.cfg.pipelineDelay));
-        netAutoEnabled = data.cfg.netAuto !== undefined ? !!data.cfg.netAuto : netAutoEnabled;
-        netFairInputDelay = data.cfg.fairInputDelay !== undefined ? !!data.cfg.fairInputDelay : true;
         lockstepStrictDebugMode = !!data.cfg.exactLockstep;
     }
     let snapshotText = null;
@@ -2117,9 +2115,8 @@ function renderLobbyNetEstimate() {
     let el = document.getElementById('lobby-net-estimate');
     if (!el) return;
     let est = lobbyExpectedCommandDelayMs();
-    let fair = readFairDelayFromMenu();
     el.textContent = est
-        ? `Expected command delay ≈ ${est.ms} ms${fair ? ' for everyone' : ' for the slowest player'} (worst ping ${est.worst} ms).`
+        ? `Expected command delay ≈ ${est.ms} ms for everyone (worst ping ${est.worst} ms).`
         : '';
 }
 
@@ -2226,8 +2223,7 @@ function broadcastLobbyState(force = false) {
     let payload = lobbyPlayers.map(p => ({ peerId: p.peerId, name: (p.name || '').slice(0, 24), color: normalizeLobbyColor(p.color), uid: String(p.uid || peerUidByPeerId[p.peerId] || '') }));
     let msg = {
         type: 'LOBBY_STATE', players: payload, gameRunning: !!(gameStarted && !gameOver),
-        roleByPeer: buildHostRoleSnapshot(), presenceByPeer: buildHostPresenceSnapshot(), latencyByPeer: buildHostLatencySnapshot(),
-        netAuto: !!netAutoEnabled
+        roleByPeer: buildHostRoleSnapshot(), presenceByPeer: buildHostPresenceSnapshot(), latencyByPeer: buildHostLatencySnapshot()
     };
     for (let c of connections) {
         if (!c) continue;
@@ -2765,7 +2761,6 @@ function _handleConnectionMessage(conn, data) {
         remotePresenceByPeerId = (data && data.presenceByPeer && typeof data.presenceByPeer === 'object') ? { ...data.presenceByPeer } : {};
         remoteLatencyByPeerId = (data && data.latencyByPeer && typeof data.latencyByPeer === 'object') ? { ...data.latencyByPeer } : {};
         if (myPeerId) remotePresenceByPeerId[myPeerId] = true;
-        if (data.netAuto !== undefined && !gameStarted) netAutoEnabled = !!data.netAuto;
         if (!gameStarted) {
             let st = document.getElementById('lobby-status');
             if (st && /Connect|Reconnect/.test(st.textContent)) _setLobbyStatus(remoteMatchRunning ? 'Match in progress. You can spectate.' : 'Connected! Waiting for host to start...', '#4af');
@@ -3560,30 +3555,18 @@ function refreshGameOverRematchUi() {
     }
 }
 
-function readNetAutoFromMenu() {
-    let el = document.getElementById('cfg-net-auto');
-    return el ? !!el.checked : true;
-}
-
-function readFairDelayFromMenu() {
-    let el = document.getElementById('cfg-fair-delay');
-    return el ? !!el.checked : true;
-}
-
-// Grey out the manual timing fields while Auto is on.
+// The network timing is always automatic (set from measured ping and
+// stability during the match): its fields are shown greyed out.
 function syncNetAutoMenuState() {
-    let auto = readNetAutoFromMenu();
     for (let id of ['cfg-tick-rate', 'cfg-pipeline-delay']) {
         let el = document.getElementById(id);
         if (!el) continue;
-        el.disabled = auto;
-        if (el.style) el.style.opacity = auto ? '0.45' : '';
-        el.title = auto ? 'Automatic: set from measured ping and stability during the match.' : (id === 'cfg-tick-rate' ? 'Game ticks per second' : 'Minimum lockstep pipeline delay in ticks');
+        el.disabled = true;
+        if (el.style) el.style.opacity = '0.45';
+        el.title = 'Automatic: set from measured ping and stability during the match.';
         let row = typeof el.closest === 'function' ? el.closest('.lobby-setting-row') : null;
-        if (row && row.style) row.style.opacity = auto ? '0.6' : '';
+        if (row && row.style) row.style.opacity = '0.6';
     }
-    if (!gameStarted) netAutoEnabled = auto;
-    if (isHost && !gameStarted) broadcastLobbyState(true);
 }
 
 function hostOnlineGame() {
@@ -3591,7 +3574,6 @@ function hostOnlineGame() {
     duplicateUidBlocked = false;
     duplicateUidBlockReason = '';
     remoteMatchRunning = false;
-    netAutoEnabled = readNetAutoFromMenu();
     _clearGuestJoinTimeout();
     setLobbyMode('host');
     document.getElementById('lobby-status').textContent = 'Creating game...';
@@ -3741,8 +3723,6 @@ function startHostedGame(opts = null) {
                 mapType: MAP_TYPE,
                 tickRate: TICK_RATE,
                 pipelineDelay: LOCKSTEP_PIPELINE_MIN,
-                netAuto: !!netAutoEnabled,
-                fairInputDelay: !!netFairInputDelay,
                 exactLockstep: !!lockstepStrictDebugMode,
                 thingStatsRecalcIntervalSeconds: THING_STATS_RECALC_INTERVAL_SECONDS,
                 unitEffectiveStatsRecalcTicks: UNIT_EFFECTIVE_STATS_RECALC_TICKS,
@@ -4200,14 +4180,10 @@ function readConfigFromMenu() {
     WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(Number((document.getElementById('cfg-worker-ai-tick-delay') || {}).value) || WORKER_AI_TICK_DELAY)));
     lockstepStrictDebugMode = !!((document.getElementById('cfg-exact-lockstep') || {}).checked);
 
-    netAutoEnabled = readNetAutoFromMenu();
-    netFairInputDelay = readFairDelayFromMenu();
-    let menuTickRate = parseInt(document.getElementById('cfg-tick-rate').value);
     let menuPipelineDelay = parseInt(document.getElementById('cfg-pipeline-delay').value);
-    // Auto: the tick rate is the game's reference rate, and each guest's
-    // input delay follows its measured link during the match.
-    if (netAutoEnabled) menuTickRate = netChooseAutoTickRate();
-    applyTimingConfig(menuTickRate, menuPipelineDelay);
+    // The tick rate is the game's reference rate, and each guest's input
+    // delay follows its measured link during the match.
+    applyTimingConfig(netChooseAutoTickRate(), menuPipelineDelay);
 
     MAX_THING_LEVEL = Math.max(1, Math.floor(Number(document.getElementById('cfg-max-thing-level').value) || 20));
     MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(Number(document.getElementById('cfg-max-research-level').value) || 10));

@@ -33,17 +33,19 @@ function occupancyEnsure() {
     }
     const O=_occ,n=_simUnitState.cap;
     if(O.cap<n){
-        for(const [name,Type]of [['x',Int32Array],['y',Int32Array],['radius',Uint8Array],['layer',Uint8Array],['active',Uint8Array]]){
+        for(const [name,Type]of [['x',Int32Array],['y',Int32Array],['radius',Uint8Array],['layer',Uint8Array],['active',Uint8Array],['need',Uint8Array]]){
             const old=O[name],a=O[name]=simHeapArray(Type,n);if(old){a.set(old);simHeapFree(old);}
         }O.cap=n;
     }
-    for(const name of ['bits','mask','x','y','radius','layer','active'])simParallelBind('occ.'+name,O[name]);
+    for(const name of ['bits','mask','x','y','radius','layer','active','need'])simParallelBind('occ.'+name,O[name]);
     if(typeof trafficEnsure==='function')trafficEnsure(O);
     return O;
 }
 function _occupancyAddresses(){return _occNames.map(n=>_simWEnc(_simParReg[n].byteOffset));}
 function occupancySpawn(u) {
-    if(!SIM_OCCUPANCY_ENABLED)return true;
+    // (No kernels here, as the world a page keeps beside its simulation
+    // worker: no grid; the worker's world has one.)
+    if(!SIM_OCCUPANCY_ENABLED||typeof _simWasmX==='undefined'||!_simWasmX)return true;
     const O=occupancyEnsure();if(!O||!u._us)return true;
     const s=u._si;if(O.active[s])return true;
     const x=u._us.x[s],y=u._us.y[s],r=Math.max(1,Math.min(32,Math.ceil((u.collisionR||u.r||1)/(TILE/SIM_OCCUPANCY_SUBCELLS))));
@@ -85,15 +87,69 @@ function occupancyPrepareMovement() {
     F[jobs]=total;
     return jobs;
 }
+// The blocks the occupancy's second stage runs (mv.rs move_job, 36): per
+// phase (colour) those with units in the index, heaviest first, so the long
+// ones start first and the empty ones (most of a map: ~3k of 4k blocks at
+// 200k units) are not run at all. What an empty block's job wrote is written
+// here: its post and pushed-unit counts (postc, sexc), its step-charge flag
+// (chFix, W a chunk), its cross-block swaps and stats, and the traffic
+// inputs all at once (each job cleared its own block's). The order within a
+// phase decides nothing: its blocks touch disjoint cells.
+function occupancyJobs(postc,sexc,chFix,W){
+    const O=_occ,C=O.config,bw=C[5],bh=C[6],jobs=bw*bh,F=O.offsets,k=SIM_OCCUPANCY_XSWAP+1;
+    if(!O.jobs||O.jobs.length<jobs+8){if(O.jobs)simHeapFree(O.jobs);O.jobs=simHeapArray(Int32Array,jobs+8);O.jobKeys=new Float64Array(jobs);}
+    simParallelBind('occ.jobs',O.jobs);
+    const J=O.jobs,K=O.jobKeys;
+    O.stats.fill(0,0,jobs*8);
+    let n=8;
+    for(let p=0;p<4;p++){
+        let m=0;J[p]=n-8;
+        for(let by=p>>1;by<bh;by+=2)for(let bx=p&1;bx<bw;bx+=2){
+            const j=by*bw+bx,c=F[j+1]-F[j];
+            if(c>0){K[m++]=(16777216-Math.min(c,16777215))*65536+j;continue;}
+            postc[j]=0;if(sexc)sexc[j]=0;if(chFix)chFix[j*W+W-1]=0;O.xswap[j*k]=0;
+        }
+        const S=K.subarray(0,m);S.sort();
+        for(let i=0;i<m;i++)J[n+i]=S[i]%65536;
+        J[4+p]=m;n+=m;
+    }
+    if(_traffic)for(const key of ['workX','workY','workLoss'])_traffic[key].fill(0);
+    return J;
+}
 // Idle units a movement job swapped with in a neighbouring block: their
 // tiles in the index (its own epilogue may have run before the swap).
 function occupancyAfterMovement(c) {
     const O=_occ,X=O.xswap,jobs=O.config[5]*O.config[6],k=SIM_OCCUPANCY_XSWAP+1;
     for(let j=0;j<jobs;j++){const n=X[j*k];for(let i=1;i<=n;i++)spatialSlotUpdate(c,X[j*k+i]);}
 }
+// Whether a position write moves unit slot s through the grid: a unit in
+// this world's grid (the grid of another world, a rematch's last match,
+// swept a restored guest's units from that match's positions and left them
+// there), and not while a snapshot is decoded (the grid is rebuilt from the
+// decoded positions after it: a resync's units were swept from where the
+// diverged peer had them and stopped on the way).
+function occupancyTracks(s){
+    return _occ!==null&&_occ.epoch===spatialEpoch&&_occ.active[s]===1&&(typeof _snapDec==='undefined'||_snapDec===null);
+}
+// A jump, not a walk (a portal, a placement): the footprint leaves where it
+// stood and is placed at the nearest free spot around (x, y) (Q8), as a
+// spawn is; with no room there, back where it stood. (Swept, it stopped at
+// the first unit on the way, and a target past its block's halo was
+// refused: portal jumps did not happen.)
+function occupancyTeleport(u,x,y) {
+    const O=_occ,s=u._si,c=u._us,ox=O.x[s],oy=O.y[s],r=O.radius[s],layer=O.layer[s];
+    occupancyRelease(u);
+    const A=_occupancyAddresses();
+    let ok=_simWasmX.occ_spawn(...A,O.w,O.h,O.stride,O.cell,O.planes,s,x,y,r,layer,32);
+    if(!ok)ok=_simWasmX.occ_spawn(...A,O.w,O.h,O.stride,O.cell,O.planes,s,ox,oy,r,layer,32);
+    if(ok){O.registered++;O.expectedBits+=O.sizes[r];x=O.x[s];y=O.y[s];}
+    c.x[s]=x;c.y[s]=y;c.mvSteady[s]=0;c.mvCT[s]=-1;c.mvCD[s]=-1;
+}
 function occupancyMovePosition(u,x,y) {
     const O=_occ,s=u._si,c=u._us;
     if(x===O.x[s] && y===O.y[s])return;
+    // (Farther than any step goes: a jump.)
+    if(Math.max(Math.abs(x-O.x[s]),Math.abs(y-O.y[s]))>3*TILE*8){occupancyTeleport(u,x,y);return;}
     // Same bitmap operation for JS-only movement; called at the coordinate
     // write, with helpers idle. It never scans another unit.
     for(let i=0;i<_occNames.length;i++)_simWasmArgI[512+i]=_simWEnc(_simParReg[_occNames[i]].byteOffset);

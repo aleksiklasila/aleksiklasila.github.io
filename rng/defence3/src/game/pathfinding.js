@@ -2173,6 +2173,8 @@ class GroupRoute {
         this.owner = owner; this.ex = ex; this.ey = ey; this.canWalk = canWalk;
         let n = GRID_W * GRID_H;
         this.w = GRID_W; this.h = GRID_H;
+        // (The heap's tile field: 2^21 up to 1448^2 tiles, more for the 2000 map.)
+        this.ks = 2 ** Math.max(21, Math.ceil(Math.log2(Math.max(2, n))));
         this.version = pathTopologyVersion; this.fid = -1; this.gen = 0;
         this.g = simSharedArray(Int32Array, n).fill(-1);
         // Per tile: bit 0 settled, bit 1 start tile (may be left though blocked).
@@ -2215,10 +2217,11 @@ class GroupRoute {
         return this.portalEntries ? _portalHeuristic(this.portalEntries, x, y, h) : h;
     }
 
-    // Min-heap of priority * 2^21 + tile (tiles below 2^21: maps up to 1448^2).
+    // Min-heap of priority * ks + tile (ks: 2^21 up to 1448^2 tiles; past
+    // that a fixed 2^21 read tiles of the 2000 map as other tiles).
     _push(priority, key) {
         if (this.heapSize >= this.heap.length) { let grown = new Float64Array(this.heap.length * 2); grown.set(this.heap); this.heap = grown; }
-        let h = this.heap, i = this.heapSize++, v = priority * 2097152 + key;
+        let h = this.heap, i = this.heapSize++, v = priority * this.ks + key;
         while (i > 0) { let p = (i - 1) >> 1; if (h[p] <= v) break; h[i] = h[p]; i = p; }
         h[i] = v;
     }
@@ -2270,13 +2273,13 @@ class GroupRoute {
         let expanded = 0;
         while (this.heapSize > 0) {
             let top = this.heap[0];
-            let priority = Math.floor(top / 2097152);
+            let priority = Math.floor(top / this.ks);
             if (this.pendingCount === 0 && priority > this.bound) return true;
             if (expanded >= maxNodes) return false;
             let budgetOk = fastBudget ? (budgetArr[owner] >= 1 ? (budgetArr[owner]--, true) : false) : _tryConsumeAstarNodeBudget(owner, 1);
             if (!budgetOk) { _lastPathfindAbortedByBudget = true; return false; }
             this._pop();
-            let cur = top - priority * 2097152;
+            let cur = top - priority * this.ks;
             if (flags[cur] & 1) continue;
             expanded++; this.expandedTotal++;
             flags[cur] |= 1;

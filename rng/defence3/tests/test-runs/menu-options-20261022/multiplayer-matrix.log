@@ -1,0 +1,9 @@
+PASS: configuration matrix
+  1v1 arena destroy LAN: 284 fingerprints equal, 20.0/20 TPS, delay 2 ticks, ended together, rematch ok
+  2v2 islands kill-king 200ms: 876 fingerprints equal, 20.0/20 TPS, delay 7 ticks, ended together, rematch ok
+  FFA4 crossroads full-vis 60ms: 858 fingerprints equal, 20.0/20 TPS, delay 4 ticks, ended together, rematch ok
+  1v1 solar kill-king lossy: 290 fingerprints equal, 20.0/20 TPS, delay 6 ticks, ended together, rematch ok
+  2v1v1 random unstable: 873 fingerprints equal, 19.6/20 TPS, delay 8 ticks, ended together, rematch ok
+  FFA3 island 300ms: 590 fingerprints equal, 20.0/20 TPS, delay 9 ticks, ended together, rematch ok
+  1v1 arena exact-lockstep: 285 fingerprints equal, 19.9/20 TPS, delay 3 ticks, ended together, rematch ok
+  FFA6 big map: 1425 fingerprints equal, 20.0/20 TPS, delay 3 ticks, ended together, rematch ok

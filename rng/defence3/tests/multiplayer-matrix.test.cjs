@@ -1,8 +1,7 @@
 // Many starting configurations, each played with the chaos command stream
-// and then ended: maps, game modes, visibility, manual and automatic tick
-// rates, team layouts (1v1, 2v2, free-for-all, shared teams), equal or own
-// command delay, exact-lockstep mode, and network profiles from LAN to lossy
-// and unstable. Every peer must agree on every tick with no repair, end on
+// and then ended: maps, game modes, visibility, team layouts (1v1, 2v2,
+// free-for-all, shared teams), exact-lockstep mode, and network profiles from
+// LAN to lossy and unstable. Every peer must agree on every tick with no repair, end on
 // the same tick with the same winner, and start a rematch cleanly.
 //
 // Usage: node tests/multiplayer-matrix.test.cjs [case,case,...]
@@ -12,23 +11,18 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
 const CASES = [
     { name: '1v1 arena destroy LAN', map: 'arena', teams: [0, 1], mode: 'destroy', vis: 'team', net: { latencyMs: 4, jitterMs: 1 } },
     { name: '2v2 islands kill-king 200ms', map: 'islands', teams: [0, 1, 0, 1], mode: 'killking', vis: 'history', net: { latencyMs: 200, jitterMs: 30 } },
-    { name: 'FFA4 crossroads full-vis 10TPS', map: 'crossroads', teams: [0, 1, 2, 3], mode: 'destroy', vis: 'full', tps: 10, net: { latencyMs: 60, jitterMs: 10 } },
-    { name: '1v1 solar kill-king 30TPS lossy', map: 'solar_system', teams: [0, 1], mode: 'killking', vis: 'team', tps: 30, net: { latencyMs: 150, jitterMs: 20, lossRate: 0.01 } },
+    { name: 'FFA4 crossroads full-vis 60ms', map: 'crossroads', teams: [0, 1, 2, 3], mode: 'destroy', vis: 'full', net: { latencyMs: 60, jitterMs: 10 } },
+    { name: '1v1 solar kill-king lossy', map: 'solar_system', teams: [0, 1], mode: 'killking', vis: 'team', net: { latencyMs: 150, jitterMs: 20, lossRate: 0.01 } },
     { name: '2v1v1 random unstable', map: 'random', teams: [0, 1, 2, 0], mode: 'destroy', vis: 'history', net: { latencyMs: 80, jitterMs: 120, lossRate: 0.02, spikeEveryMs: 6000, spikeMs: 400 } },
-    { name: 'FFA3 island own-delay 300ms', map: 'island', teams: [0, 1, 2], mode: 'killking', vis: 'full', fair: false, net: { latencyMs: 300, jitterMs: 40 } },
+    { name: 'FFA3 island 300ms', map: 'island', teams: [0, 1, 2], mode: 'killking', vis: 'full', net: { latencyMs: 300, jitterMs: 40 } },
     { name: '1v1 arena exact-lockstep', map: 'arena', teams: [0, 1], mode: 'destroy', vis: 'team', exact: true, net: { latencyMs: 40, jitterMs: 5 } },
     { name: 'FFA6 big map', map: 'random', teams: [0, 1, 2, 3, 4, 5], mode: 'destroy', vis: 'team', mapSize: 72, net: { latencyMs: 50, jitterMs: 10 } },
 ];
 
 async function runCase(c, seed) {
     const controls = { 'cfg-gamemode': c.mode, 'cfg-full-vis': c.vis };
-    // Manual timing: the pipeline covers the round trip (manual mode does not
-    // adapt it).
-    if (c.tps) Object.assign(controls, { 'cfg-net-auto': false, 'cfg-tick-rate': String(c.tps), 'cfg-pipeline-delay': String(Math.ceil((c.net.latencyMs + 2 * (c.net.jitterMs || 0) + 30) / (1000 / c.tps)) + 1) });
-    if (c.fair === false) controls['cfg-fair-delay'] = false;
     if (c.exact) controls['cfg-exact-lockstep'] = true;
     const { world, host, guests, all } = await C.setupChaosWorld(c.map, seed, { teams: c.teams, mapSize: c.mapSize || 40, network: c.net, controls, exactHashes: true });
-    if (c.tps) for (const i of all) assert.equal(i.eval('TICK_RATE'), c.tps, i.name + ' tick rate');
     let s = seed;
     const rand = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
     const startTick = host.eval('currentTick');

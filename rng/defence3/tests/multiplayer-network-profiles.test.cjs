@@ -42,11 +42,10 @@ const PROFILES = [
     }
 
     // Asymmetric links: one guest on LAN, one far away. Each guest's packet
-    // pipeline follows its own link. With equal command delay (the default)
-    // every player's commands wait what the far link needs; without it the
-    // near guest stays as responsive as its own link allows.
-    for (const fair of [true, false]) {
-        const world = new H.World({ network: { latencyMs: 5 }, controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-fair-delay': fair } });
+    // pipeline follows its own link. With equal command delay every player's
+    // commands wait what the far link needs.
+    {
+        const world = new H.World({ network: { latencyMs: 5 }, controls: H.SMALL_MATCH_CONTROLS });
         const hostPromise = H.startHostedMatch(world, { guests: 2, guestNames: ['near', 'far'] });
         // Links are keyed by instance name, so they can be set before connecting.
         world.net.setProfile({ latencyMs: 300, jitterMs: 40 }, 'host', 'far');
@@ -62,12 +61,8 @@ const PROFILES = [
         const nearP50 = H.percentile(world.actionLatencies(near), 0.5);
         const farP50 = H.percentile(world.actionLatencies(far), 0.5);
         const hostP50 = H.percentile(world.actionLatencies(host), 0.5);
-        if (fair) {
-            assert.ok(Math.abs(nearP50 - farP50) <= 80 && Math.abs(hostP50 - farP50) <= 80, `equal command delay: host ${hostP50}, near ${nearP50}, far ${farP50}`);
-        } else {
-            assert.ok(nearP50 <= 160, 'near guest stays responsive next to a far one: ' + nearP50);
-        }
-        rows.push(`asymmetric, ${fair ? 'equal' : 'own'} command delay: pipelines near ${nearDelay} far ${farDelay}; command latency host ${Math.round(hostP50)}ms near ${Math.round(nearP50)}ms far ${Math.round(farP50)}ms`);
+        assert.ok(Math.abs(nearP50 - farP50) <= 80 && Math.abs(hostP50 - farP50) <= 80, `equal command delay: host ${hostP50}, near ${nearP50}, far ${farP50}`);
+        rows.push(`asymmetric, equal command delay: pipelines near ${nearDelay} far ${farDelay}; command latency host ${Math.round(hostP50)}ms near ${Math.round(nearP50)}ms far ${Math.round(farP50)}ms`);
     }
 
     console.log('PASS: multiplayer network profiles\n  ' + rows.join('\n  '));

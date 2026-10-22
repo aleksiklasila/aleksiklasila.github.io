@@ -4049,7 +4049,7 @@ function _localActionTick() {
     // the host. Ticks merely queued in a busy worker must not add another
     // private delay on top of the shared command lead.
     let actionLead = netCommandLeadTicks();
-    let commandTick = isMultiplayer && gameStarted && netFairInputDelay ? netCompletedSimulationTick() : currentTick;
+    let commandTick = isMultiplayer && gameStarted ? netCompletedSimulationTick() : currentTick;
     let tick = Math.max(currentTick, commandTick + actionLead);
     if (isMultiplayer && gameStarted && !isHost && resyncGuest.liveFromTick > tick) tick = resyncGuest.liveFromTick;
     if (isMultiplayer && gameStarted) {

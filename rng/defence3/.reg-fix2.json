@@ -1,0 +1,58 @@
+[
+  {
+    "mode": "0",
+    "file": "eff-behind-kernel.test.cjs",
+    "status": 0,
+    "output": "PASS: eff-behind-kernel (240 ticks, 137 units, 712 taken in the kernel)\n",
+    "timedOut": false,
+    "elapsedMs": 5126
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-scenarios.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: stacking resumes after research (waited 120000ms)\n    at until (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-scenarios.test.cjs:75:12)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-scenarios.test.cjs:115:25 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 12215
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-snapshot.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: mixed-browser patches applied\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-snapshot.test.cjs:95:16 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 36667
+  },
+  {
+    "mode": "0",
+    "file": "shared-stat-rows.test.cjs",
+    "status": 0,
+    "output": "PASS: shared stat publication updates existing handles without accessing units or owners {\n  before: 2.66849422454834,\n  after: 2.953944206237793,\n  pc: 2.953944206237793,\n  sameHandle: true,\n  cacheRemoved: true,\n  unchangedMovePreserved: true,\n  stableAfterRefresh: true,\n  rowsBefore: 9,\n  rowsAfter: 9\n}\n",
+    "timedOut": false,
+    "elapsedMs": 2266
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-corruption-fuzz.test.cjs",
+    "status": 0,
+    "output": "PASS: corruption fuzz\n  unitMove (u1 moved) on guest1: 1 patch, the first after 2000 ms, whole state equal 2700 ms later\n  unitEnergy (u8 energy) on guest2: 1 patch, the first after 1600 ms, whole state equal 2700 ms later\n  unitOrders (u4 holds) on guest3: 1 patch, the first after 2000 ms, whole state equal 2700 ms later\n  unitPath: nothing to change, skipped\n  unitTarget (u1 attacks u203) on guest2: overwritten by the next ticks alike on every peer, no patch needed\n  workerCargo (u169 cargo) on guest3: 1 patch, the first after 1600 ms, whole state equal 2720 ms later\n  unitStacksLevel (u8 stacks 2 -> 3, level 2 -> 3) on guest1: overwritten by the next ticks alike on every peer, no patch needed\n  unitGone (u1 gone) on guest2: 1 patch, the first after 1600 ms, whole state equal 2700 ms later\n  unitExtra (extra u271) on guest3: 1 patch, the first after 1200 ms, whole state equal 2700 ms later\n  buildingEnergy (poison energy) on guest1: 1 patch, the first after 2400 ms, whole state equal 2700 ms later\n  buildingLevel (barrack level) on guest2: 1 patch, the first after 10400 ms, whole state equal 2700 ms later\n  buildingTimer (barrack timer) on guest3: 1 patch, the first after 2000 ms, whole state equal 2700 ms later\n  towerGone (tower gone at 29,25) on guest1: 1 patch, the first after 1600 ms, whole state equal 2700 ms later\n  cellOwner (cell owner at 32,26) on guest2: 1 patch, the first after 2800 ms, whole state equal 2680 ms later\n  cellType (wall at 2,2) on guest3: 1 patch, the first after 4000 ms, whole state equal 2700 ms later\n  reservation (reservation 5 -> u270) on guest1: 1 patch, the first after 2400 ms, whole state equal 2700 ms later\n  reservationDrop (reservation 1600 dropped) on guest2: 1 patch, the first after 1600 ms, whole state equal 2740 ms later\n  towerOrder (tower order) on guest3: 1 patch, the first after 2000 ms, whole state equal 2740 ms later\n  playerEnergy (player energy) on guest1: 1 patch, the first after 1600 ms, whole state equal 2700 ms later\n  playerResearch (research energy) on guest2: 1 patch, the first after 1600 ms, whole state equal 2700 ms later\n  rng (random state) on guest3: 1 patch, the first after 1600 ms, whole state equal 2760 ms later\n  unitIds (unit ids) on guest1: 1 patch, the first after 1600 ms, whole state equal 2740 ms later\n  adjacency (adjacency pass) on guest2: 1 patch, the first after 1600 ms, whole state equal 2760 ms later\n  area (area level) on guest3: 1 patch, the first after 1600 ms, whole state equal 2700 ms later\n  mine (mine) on guest1: 1 patch, the first after 1600 ms, whole state equal 2700 ms later\n  drop: nothing to change, skipped\n  projectile (projectile) on guest3: 1 patch, the first after 1600 ms, whole state equal 2660 ms later\n  whole state equal on all 4 peers afterwards; 555 exact fingerprints since the last repair\n",
+    "timedOut": false,
+    "elapsedMs": 67259
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-patch.test.cjs",
+    "status": 0,
+    "output": "PASS: per-guest patches\n  crossroads: full restore on guest1 only: identical to the host for 40 ticks (111 KB, 171 units)\n  crossroads: full restore on guest2 only: identical to the host for 40 ticks (111 KB, 143 units)\n  crossroads: 1-unit divergence on guest1: 1 patch(es), first after 1640ms {\"bytes\":67329,\"apply\":0,\"stall\":50.00000000000364,\"changed\":1}; exact state equal for 246 ticks\n  crossroads: 6-unit divergence on guest2: 2 patch(es), first after 1240ms {\"bytes\":37906,\"apply\":0,\"stall\":16.66666666666788,\"changed\":0}; exact state equal for 171 ticks\n  crossroads: 40-unit divergence on guest3: 1 patch(es), first after 1260ms {\"bytes\":137601,\"apply\":0,\"stall\":49.999999999992724,\"changed\":50}; exact state equal for 243 ticks\n  crossroads: forced full patch: 111 KB, exact state equal for 243 ticks\n  crossroads: live joins (spectator, reloaded player): exact state for 1692 tick fingerprints, no repair\n  islands: full restore on guest1 only: identical to the host for 40 ticks (100 KB, 154 units)\n  islands: full restore on guest2 only: identical to the host for 40 ticks (106 KB, 126 units)\n  islands: 1-unit divergence on guest1: 1 patch(es), first after 1480ms {\"bytes\":33705,\"apply\":0,\"stall\":50.00000000000364,\"changed\":1}; exact state equal for 243 ticks\n  islands: 6-unit divergence on guest2: 1 patch(es), first after 1360ms {\"bytes\":76415,\"apply\":0,\"stall\":50.00000000000364,\"changed\":7}; exact state equal for 246 ticks\n  islands: 40-unit divergence on guest3: 1 patch(es), first after 1240ms {\"bytes\":89795,\"apply\":0,\"stall\":49.999999999992724,\"changed\":47}; exact state equal for 243 ticks\n  islands: forced full patch: 76 KB, exact state equal for 243 ticks\n  islands: live joins (spectator, reloaded player): exact state for 1696 tick fingerprints, no repair\n  solar_system: full restore on guest1 only: identical to the host for 40 ticks (109 KB, 185 units)\n  solar_system: full restore on guest2 only: identical to the host for 40 ticks (124 KB, 185 units)\n  solar_system: 1-unit divergence on guest1: 1 patch(es), first after 1640ms {\"bytes\":47590,\"apply\":0,\"stall\":50.00000000000364,\"changed\":2}; exact state equal for 246 ticks\n  solar_system: 6-unit divergence on guest2: 1 patch(es), first after 1440ms {\"bytes\":94561,\"apply\":0,\"stall\":50.00000000000364,\"changed\":10}; exact state equal for 243 ticks\n  solar_system: 40-unit divergence on guest3: 1 patch(es), first after 1260ms {\"bytes\":134544,\"apply\":0,\"stall\":49.999999999992724,\"changed\":50}; exact state equal for 243 ticks\n  solar_system: forced full patch: 113 KB, exact state equal for 243 ticks\n  solar_system: live joins (spectator, reloaded player): exact state for 1696 tick fingerprints, no repair\n",
+    "timedOut": false,
+    "elapsedMs": 129454
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-chaos-determinism.test.cjs",
+    "status": 0,
+    "output": "PASS: chaos determinism\n  arena: 180 units + 201 buildings at start (max 192 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n  random: 159 units + 201 buildings at start (max 159 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n  islands: 171 units + 201 buildings at start (max 179 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n  crossroads: 177 units + 201 buildings at start (max 177 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 3 patches for forced divergences\n  solar_system: 177 units + 201 buildings at start (max 212 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n  island: 177 units + 201 buildings at start (max 180 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n",
+    "timedOut": false,
+    "elapsedMs": 129954
+  }
+]

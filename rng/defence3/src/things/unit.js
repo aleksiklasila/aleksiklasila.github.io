@@ -640,9 +640,16 @@ class Unit {
     get owner() { return this._us ? this._us.owner[this._si] : (this._det ? this._det.owner : undefined); }
     set owner(v) { if (this._us) { if (this._us.owner[this._si] !== v) this._us.mvOn[this._si] = 0; this._us.owner[this._si] = v; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.owner = v; else Object.defineProperty(this, 'owner', { value: v, writable: true, enumerable: true, configurable: true }); }
     get x() { return this._us ? this._us.x[this._si] * 0.125 : (this._det ? this._det.x : undefined); }
-    set x(v) { if (this._us) { if(typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED && _occ && _occ.active[this._si]) occupancyMovePosition(this,Math.round(v*8),this._us.y[this._si]); else this._us.x[this._si] = Math.round(v * 8); } else if (this._det) this._det.x = v; else Object.defineProperty(this, 'x', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set x(v) { if (this._us) { if(typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED && occupancyTracks(this._si)) occupancyMovePosition(this,Math.round(v*8),this._us.y[this._si]); else this._us.x[this._si] = Math.round(v * 8); } else if (this._det) this._det.x = v; else Object.defineProperty(this, 'x', { value: v, writable: true, enumerable: true, configurable: true }); }
     get y() { return this._us ? this._us.y[this._si] * 0.125 : (this._det ? this._det.y : undefined); }
-    set y(v) { if (this._us) { if(typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED && _occ && _occ.active[this._si]) occupancyMovePosition(this,this._us.x[this._si],Math.round(v*8)); else this._us.y[this._si] = Math.round(v * 8); } else if (this._det) this._det.y = v; else Object.defineProperty(this, 'y', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set y(v) { if (this._us) { if(typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED && occupancyTracks(this._si)) occupancyMovePosition(this,this._us.x[this._si],Math.round(v*8)); else this._us.y[this._si] = Math.round(v * 8); } else if (this._det) this._det.y = v; else Object.defineProperty(this, 'y', { value: v, writable: true, enumerable: true, configurable: true }); }
+    // A jump (a portal): both coordinates at once, placed at the nearest free
+    // spot there in the occupancy grid (sim_occupancy.js occupancyTeleport),
+    // not swept through it.
+    teleportTo(x, y) {
+        if (this._us && typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED && occupancyTracks(this._si)) occupancyTeleport(this, Math.round(x * 8), Math.round(y * 8));
+        else { this.x = x; this.y = y; }
+    }
     get prevX() { return this._us ? this._us.prevX[this._si] * 0.125 : (this._det ? this._det.prevX : undefined); }
     set prevX(v) { if (this._us) this._us.prevX[this._si] = Math.round(v * 8); else if (this._det) this._det.prevX = v; else Object.defineProperty(this, 'prevX', { value: v, writable: true, enumerable: true, configurable: true }); }
     get prevY() { return this._us ? this._us.prevY[this._si] * 0.125 : (this._det ? this._det.prevY : undefined); }
@@ -1523,8 +1530,7 @@ class Unit {
                 } else {
                     nTx += (linkDyNow < 0 ? -laneOffsetNow : laneOffsetNow);
                 }
-                this.x = nTx;
-                this.y = nTy;
+                this.teleportTo(nTx, nTy);
                 this.teleportHideTicks = Math.max(this.teleportHideTicks, 2);
                 this.pathIndex += 2;
             } else {
@@ -1779,8 +1785,7 @@ class Unit {
                 } else {
                     nTx += (linkDy < 0 ? -laneOffset : laneOffset);
                 }
-                this.x = nTx;
-                this.y = nTy;
+                this.teleportTo(nTx, nTy);
                 this.teleportHideTicks = Math.max(this.teleportHideTicks, 2);
                 this.pathIndex += 2;
                 if (this.pathIndex >= this.path.length) return true;
@@ -4285,7 +4290,9 @@ function simMoveRun() {
         // phases the wanted positions against the exclusive footprints (the
         // pressure's steering, shoulders, swaps, pushes) and the epilogue.
         P[4]=-1;simParallelRun(SIM_KERNEL_MOVE,stepChunks);
-        for(let phase=0;phase<4;phase++){P[4]=phase;simParallelRun(SIM_KERNEL_MOVE_OCCUPANCY,Math.ceil(_occ.config[5]/2)*Math.ceil(_occ.config[6]/2));}
+        // (Each phase's blocks with units, heaviest first: occupancyJobs.)
+        const J=occupancyJobs(_simMovePostC,P[54]===1&&_sep?_sep.exc:null,_simMoveChFix,NPa+1);
+        for(let phase=0;phase<4;phase++){if(J[4+phase]>0){P[4]=phase;simParallelRun(SIM_KERNEL_MOVE_OCCUPANCY,J[4+phase]);}}
     }else simParallelRun(SIM_KERNEL_MOVE, chunks);
     _simMoveRunWallVer = _simMoveWallVer; _simDead0Tick = gameTime;
     _spatialKernelMoves = true;

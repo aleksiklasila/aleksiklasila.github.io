@@ -14,7 +14,7 @@ function settingsFor(units) {
                 'cfg-starting-astar': 1000000000000, 'cfg-gold-count': 0, 'cfg-astar-mine-count': 0,
                 'cfg-tick-rate': 20, 'cfg-pipeline-delay': 2 },
             selects: { 'cfg-mapsize': '1000', 'cfg-map-type': 'arena', 'cfg-full-vis': 'full', 'cfg-gamemode': 'destroy' },
-            checks: { 'cfg-net-auto': true, 'cfg-exact-lockstep': false }
+            checks: { 'cfg-exact-lockstep': false }
         },
         startingResources: { researchLevels: {}, spawnCounts: spec.spawnCounts }
     };

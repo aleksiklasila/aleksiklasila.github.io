@@ -1,0 +1,26 @@
+[
+  {
+    "mode": "0",
+    "file": "shared-unit-state.test.cjs",
+    "status": 0,
+    "output": "PASS: shared unit growth, Float32 precision, stale references, slot reuse, snapshot restore; scalar frame oracle: { compared: 171640, units: 241, capacity: 4096 }\n",
+    "timedOut": false,
+    "elapsedMs": 2578
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-snapshot.test.cjs",
+    "status": 0,
+    "output": "PASS: snapshots\n  6 restores from differing pre-states evolve bit-identically for 12 ticks; 90 KB (456 B/entity); unit shapes 1/1/1/1 -> 1/1/1/1\n  gzip transport: delta then full patch (13 KB -> 3 KB), no pause\n  guest without DecompressionStream gets JSON (start and patches); others gzip\n",
+    "timedOut": false,
+    "elapsedMs": 34708
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-scenarios.test.cjs",
+    "status": 0,
+    "output": "PASS: multiplayer scenarios\n  build 2s, research 11s, stack after research 9s; build/auto-stack toggles respected\n  area of 7 filled in 5s, upgraded, base levels followed research after 14s\n  workers: mining, A* mining, salvage and healer/researcher trips (6 worker states seen)\n  production queues, dequeue, disabled queue and rallies (0 following enemy units) with a spectator and a resigned player in sync\n  split 6->12 and merge, hold/stop, and a battle, all in sync\n",
+    "timedOut": false,
+    "elapsedMs": 37498
+  }
+]

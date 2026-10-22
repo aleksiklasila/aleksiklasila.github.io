@@ -1,0 +1,386 @@
+[
+  {
+    "mode": "0",
+    "file": "multiplayer-border-combat.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: kings strike the soldiers they see across an area border: {\"start\":[[0,\"king\",250],[0,\"laser_resistant\",32],[0,\"norm\",40],[0,\"norm\",40],[0,\"norm\",40],[1,\"king\",250],[1,\"laser_resistant\",32],[1,\"norm\",40],[1,\"norm\",40],[1,\"norm\",40]],\"now\":[[0,\"king\",250],[0,\"laser_resistant\",32],[0,\"norm\",40],[0,\"norm\",40],[0,\"norm\",40],[1,\"king\",250],[1,\"laser_resistant\",32],[1,\"norm\",40],[1,\"norm\",40],[1,\"norm\",40]]}\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-border-combat.test.cjs:85:12 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 7554
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-corruption-fuzz.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: unitGone: match-wide resync\n\n2 !== 1\n\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-corruption-fuzz.test.cjs:179:16 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 2,\n  expected: 1,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 38534
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-cross-engine.test.cjs",
+    "status": 0,
+    "output": "PASS: cross-engine math\n  solar_system: 1638 tick hashes bit-exact fingerprints equal across engines\n  islands: 1638 tick hashes bit-exact fingerprints equal across engines\n",
+    "timedOut": false,
+    "elapsedMs": 46720
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-chaos-determinism.test.cjs",
+    "status": 1,
+    "output": "Error: random: nondeterministic divergence at tick 408 (host vs guest3) in [players]; forced [{\"victim\":\"guest3\",\"tick\":273,\"unit\":\"snake 71\"},{\"victim\":\"guest3\",\"tick\":541,\"unit\":\"snake 18\"}], repairs [[\"host\",[0]],[\"guest1\",[0]],[\"guest2\",[0]],[\"guest3\",[310,334,430,465,489,514,561,0,538]]]: [{\"tick\":408,\"a\":\"host\",\"b\":\"guest3\"},{\"tick\":409,\"a\":\"host\",\"b\":\"guest3\"},{\"tick\":410,\"a\":\"host\",\"b\":\"guest3\"},{\"tick\":411,\"a\":\"host\",\"b\":\"guest3\"}]\n  host saw: [{\"peer\":\"autoe5fc76d700\",\"tick\":306,\"differs\":[\"players\",\"globals\",\"tiles 12-15,16-19: unit 54 tank, unit 57 boss, unit 61 fire_resistant, unit 71 snake, unit 75 king, unit 98 salvager_unit\",\"tiles 12-15,20-23: unit 188 snake, unit 66 ice_resistant, unit 72 snake, unit 74 snake, unit 76 norm, unit 190 flying\",\"tiles 4-7,24-27: unit 152 salvager_unit, unit 154 builder_unit, unit 124 snake, unit 147 astar_collector, unit 126 snake, barrack at 4,26\",\"tiles 12-15,28-31: unit 33 mole, unit 48 builder_unit, unit 172 fast, unit 148 astar_collector\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":331,\"differs\":[\"players\",\"tiles 24-27,16-19: unit 31 flying, unit 180 snake, g at 24,16\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":427,\"differs\":[\"players\",\"tiles 28-31,28-31: unit 18 snake, unit 34 water_resistant, barrack at 31,28, barrack at 28,29, barrack at 30,29, barrack at 29,30\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":462,\"differs\":[\"players\",\"tiles 28-31,28-31: unit 194 astar_collector, barrack at 31,28, barrack at 28,29, barrack at 30,29, barrack at 29,30, salvager at 28,28\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":485,\"differs\":[\"players\",\"tiles 28-31,32-35: barrack at 31,34, g at 29,34\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":511,\"differs\":[\"players\",\"tiles 32-35,32-35: unit 34 water_resistant, g at 33,34\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":534,\"differs\":[\"players\",\"tiles 36-39,32-35: unit 34 water_resistant\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":557,\"differs\":[\"players\",\"tiles 24-27,28-31: unit 7 poison_resistant, unit 18 snake, unit 170 ice_resistant, unit 25 fast, unit 175 snake, barrack at 27,28\",\"tiles 12-15,24-27: unit 186 poison_resistant, unit 195 mole, unit 60 poison_resistant, g at 12,27\",\"tiles 36-39,32-35: nothing\",\"tiles 12-15,12-15: unit 106 researcher_unit, fire at 12,14, cloud_0b at 14,14, pistol at 12,15, sand_gun at 13,15, cloud_1b at 15,15\",\"tiles 0-3,12-15: nothing\"]}]\n  patched: host []\n  guest1 []\n  guest2 []\n  guest3 [\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":310,\\\"fields\\\":[\\\"P1:astar,_resourceFixedValues\\\",\\\"u188:energy\\\",\\\"u33:y,vx,vy\\\",\\\"u152:y\\\",\\\"u57:y,vx,vy\\\",\\\"u64:x,vx\\\",\\\"u71:x,y,vx,vy,energy,_floorTile\\\",\\\"u74:energy\\\",\\\"u75:x,y,vx,vy\\\",\\\"u86:vx,vy\\\",\\\"u94:x\\\",\\\"u95:targetUnit\\\"]}]\",\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":334,\\\"fields\\\":[\\\"P0:astar,_resourceFixedValues\\\",\\\"u180:x,vy,preComputedEffective,preComputed\\\",\\\"u49:targetUnit\\\"]}]\",\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":430,\\\"fields\\\":[\\\"P0:astar,_resourceFixedValues\\\",\\\"u34:vx,vy,preComputedEffective,preComputed\\\",\\\"u49:targetUnit\\\",\\\"s32,26:_tgk\\\",\\\"s31,27:_tgk\\\",\\\"s28,28:_tgk\\\"]}]\",\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":465,\\\"fields\\\":[\\\"P0:astar,_resourceFixedValues\\\",\\\"u14:preComputedEffective,preComputed\\\",\\\"u34:x,vx,vy,preComputedEffective,preComputed\\\"]}]\",\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":561,\\\"fields\\\":[\\\"P0:astar,_resourceFixedValues\\\",\\\"u18:x,energy\\\",\\\"u186:x,y\\\",\\\"u106:x,y,vx,vy,_floorTile\\\"]}]\"]\n    at chaosMatch (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-chaos-determinism.test.cjs:255:15)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-chaos-determinism.test.cjs:288:40\n",
+    "timedOut": false,
+    "elapsedMs": 51689
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-late-carry-restore.test.cjs",
+    "status": 0,
+    "output": "PASS multiplayer-late-carry-restore\n",
+    "timedOut": false,
+    "elapsedMs": 6406
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-late-seal.test.cjs",
+    "status": 0,
+    "output": "PASS: late seal\n  one guest's link spiking 500 ms: host and other guest max frame gap 117/167 ms (spiky guest 500 ms), 30 ticks sealed without it, 5 of its commands carried, each run once, in sync\n  guest silent 3 s: the match went on for 14 ticks, then waited; afterwards every command ran once, in sync\n  guest link 250 ms slower each way: lead 4 -> 9 ticks, commands meanwhile carried once each, in sync\n",
+    "timedOut": false,
+    "elapsedMs": 26412
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-action-fuzz.test.cjs",
+    "status": 0,
+    "output": "PASS: action fuzz\n  targeted: 2 of the host's buildings and 3 units attacked with every command kind: untouched\n  30s of malformed commands from one guest: no errors, no divergence, 20.0 TPS\n",
+    "timedOut": false,
+    "elapsedMs": 88914
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-matrix.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: 1v1 arena destroy LAN rematch: [{\"tick\":11,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":12,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":13,\"a\":\"host\",\"b\":\"guest1\"}]\n\n11 !== 0\n\n    at runCase (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-matrix.test.cjs:70:12)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-matrix.test.cjs:78:37 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 11,\n  expected: 0,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 13081
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-patch.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: crossroads: restored guest differs from host 1 ticks after the restore: 2 fields: u13.preComputedEffective host=\"~M0,u,ice_resistant,2\" guest=\"[\\\"~E\\\",\\\"~M0,u,ice_resistant,3\\\",79]\" | u13.preComputed host=\"~M0,u,ice_resistant,2\" guest=\"[\\\"~E\\\",\\\"~M0,u,ice_resistant,3\\\",79]\"\n    at mapCase (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-patch.test.cjs:78:20)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-patch.test.cjs:176:56 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 14905
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-scenarios.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: stacking resumes after research (waited 120000ms)\n    at until (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-scenarios.test.cjs:75:12)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-scenarios.test.cjs:115:25 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 12191
+  },
+  {
+    "mode": "0",
+    "file": "nav-shared-build.test.cjs",
+    "status": 0,
+    "output": "PASS: navigation shares equal geometry, with independent profile versions and replacements\n",
+    "timedOut": false,
+    "elapsedMs": 1982
+  },
+  {
+    "mode": "0",
+    "file": "parallel-kernels.test.cjs",
+    "status": 0,
+    "output": "PASS: parallel kernels match the serial code (visibility: 18 checks, 1158 lit tiles at most).\n",
+    "timedOut": false,
+    "elapsedMs": 6586
+  },
+  {
+    "mode": "0",
+    "file": "shared-frame-ownership.test.cjs",
+    "status": 1,
+    "output": "TypeError: Cannot read properties of null (reading 'occ_spawn')\n    at occupancySpawn (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:10079:24)\n    at new Unit (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:66612:87)\n    at spawnStartingUnit (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:83748:17)\n    at startGame (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:83854:45)\n    at begin (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:17195:13)\n    at startSoloGame (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:17202:22)\n    at eval (eval at eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21)), <anonymous>:1:578)\n    at Object.eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:89470:21)\n    at inst.eval (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:677:35)\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\sim-frame-replica.test.cjs:47:7\n",
+    "timedOut": false,
+    "elapsedMs": 2136
+  },
+  {
+    "mode": "0",
+    "file": "shared-kernel-threads.test.cjs",
+    "status": 0,
+    "output": "PASS: actual SharedArrayBuffer workers: every separation/frame output byte identical with 0, 1 and 7 helpers over repeated rebindings.\n",
+    "timedOut": false,
+    "elapsedMs": 3820
+  },
+  {
+    "mode": "0",
+    "file": "shared-spatial-determinism.test.cjs",
+    "status": 0,
+    "output": "PASS: 4,200 active units: 0 vs 7 real helpers agree every tick, including a mid-run snapshot restore.\n",
+    "timedOut": false,
+    "elapsedMs": 7386
+  },
+  {
+    "mode": "0",
+    "file": "shared-spatial-order.test.cjs",
+    "status": 0,
+    "output": "PASS: stable shared spatial ordering matches scalar sort with 0, 1, 7 and 11 real helpers, including resize/reuse and uint32 keys.\n",
+    "timedOut": false,
+    "elapsedMs": 1089
+  },
+  {
+    "mode": "0",
+    "file": "shared-stat-rows.test.cjs",
+    "status": 0,
+    "output": "PASS: shared stat publication updates existing handles without accessing units or owners {\n  before: 2.66849422454834,\n  after: 2.953944206237793,\n  pc: 2.953944206237793,\n  sameHandle: true,\n  cacheRemoved: true,\n  unchangedMovePreserved: true,\n  stableAfterRefresh: true,\n  rowsBefore: 9,\n  rowsAfter: 9\n}\n",
+    "timedOut": false,
+    "elapsedMs": 2709
+  },
+  {
+    "mode": "0",
+    "file": "shared-unit-state.test.cjs",
+    "status": 1,
+    "output": "<anonymous_script>:2\r\n    const fail = msg => { throw new Error(msg); };\r\n                          ^\r\n\r\nError: slot retirement\r\n    at fail (eval at eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21)), <anonymous>:2:33)\r\n    at eval (eval at eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21)), <anonymous>:26:57)\r\n    at eval (eval at eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21)), <anonymous>:76:3)\r\n    at Object.eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:89470:21)\r\n    at inst.eval (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:677:35)\r\n    at Object.<anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\shared-unit-state.test.cjs:8:32)\r\n    at Module._compile (node:internal/modules/cjs/loader:1706:14)\r\n    at Object..js (node:internal/modules/cjs/loader:1839:10)\r\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\r\n    at Function._load (node:internal/modules/cjs/loader:1263:12)\r\n\r\nNode.js v22.20.0\r\n",
+    "timedOut": false,
+    "elapsedMs": 2399
+  },
+  {
+    "mode": "0",
+    "file": "sim-frame-replica.test.cjs",
+    "status": 1,
+    "output": "TypeError: Cannot read properties of null (reading 'occ_spawn')\n    at occupancySpawn (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:10079:24)\n    at new Unit (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:66612:87)\n    at spawnStartingUnit (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:83748:17)\n    at startGame (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:83854:45)\n    at begin (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:17195:13)\n    at startSoloGame (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:17202:22)\n    at eval (eval at eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21)), <anonymous>:1:578)\n    at Object.eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:89470:21)\n    at inst.eval (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:677:35)\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\sim-frame-replica.test.cjs:47:7\n",
+    "timedOut": false,
+    "elapsedMs": 2160
+  },
+  {
+    "mode": "0",
+    "file": "visibility-shared-source.test.cjs",
+    "status": 0,
+    "output": "PASS: shared visibility rows match public-stat reference with multiple owners, levels and watchers.\n",
+    "timedOut": false,
+    "elapsedMs": 2060
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-snapshot.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: mixed-browser patches applied\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-snapshot.test.cjs:95:16 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 40413
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-desync-recovery.test.cjs",
+    "status": 0,
+    "output": "PASS: multiplayer desync recovery\n  guest unit divergence patched in 1220ms (guest waited 50ms, others 0/0ms), in sync 20s after\n  guest player divergence patched in 1220ms (guest waited 50ms, others 0/0ms), in sync 20s after\n  guest mine divergence patched in 1220ms (guest waited 50ms, others 0/0ms), in sync 20s after\n  guest building divergence patched in 1500ms (guest waited 67ms, others 0/0ms), in sync 20s after\n  host divergence in 2v2: each guest patched, in 1860ms\n  two guests diverging together patched in 1660ms\n  commands issued while a patch was pending ran once everywhere\n  disconnects mid-patch: the patch survives another guest dropping out; the patched one rejoins in sync\n  reload while a patch is pending joins cleanly\n  3 repairs under 400ms jitter (reordered messages)\n  15 divergences in 30s: all patched, 20.0 of 20 TPS\n  lost patch: guest waited 2083ms at most, re-asked and was patched after 4240ms; others unaffected\n  persistent bug on a guest for 40s: 15 patches (10 full), 1 reload(s) of the match on it alone, 20.0 TPS\n  exact-lockstep mode freezes every peer at the first mismatch and names what differs: state hash mismatch at tick 47 in tiles 12-15,8-11: unit 1 king, unit 2 builder_unit, builder_spawner at 14,8, healer_sp\n  exception mid-tick: match keeps running; same-on-all needs no repair, one-sided is patched\n",
+    "timedOut": false,
+    "elapsedMs": 145309
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-border-combat.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: kings strike the soldiers they see across an area border: {\"start\":[[0,\"king\",250],[0,\"laser_resistant\",32],[0,\"norm\",40],[0,\"norm\",40],[0,\"norm\",40],[1,\"king\",250],[1,\"laser_resistant\",32],[1,\"norm\",40],[1,\"norm\",40],[1,\"norm\",40]],\"now\":[[0,\"king\",250],[0,\"laser_resistant\",32],[0,\"norm\",40],[0,\"norm\",40],[0,\"norm\",40],[1,\"king\",250],[1,\"laser_resistant\",32],[1,\"norm\",40],[1,\"norm\",40],[1,\"norm\",40]]}\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-border-combat.test.cjs:85:12 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 23935
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-extremes.test.cjs",
+    "status": 0,
+    "output": "PASS: extremes\n  8 teams, 483 units + 536 buildings at start (max 66 units now), research 0 -> 10 on every stat, debt and back: 5456 tick fingerprints equal, 20.0 TPS\n  divergence on one of 8 peers after all that: 1 patch(es) of 358 KB, exact again\n",
+    "timedOut": false,
+    "elapsedMs": 133962
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-host-migration.test.cjs",
+    "status": 0,
+    "output": "PASS: host migration\n  host left a 3-team match: successor took over in 500ms, host's team resigned, others in sync\n  host tab closed in 2v2: moved in 1050ms; reloaded host found the match and rejoined its team in 1050ms\n  1v1 host reload (gzip start): guest took over, host back as a player in 2300ms, no forfeit; a second reload from the stale link rejoins too\n  silent host death: match moved 15.8s after the host went quiet\n  host offline 40s: others moved after 15.8s; old host rejoined as guest 3.0s after its network returned\n  guest offline 30s: never took over, rejoined the same host\n  one broken guest-host link (guest first in successor order): no split, back on the original host\n  one broken guest-host link (guest second in successor order): no split, back on the original host\n  1v1 host crash: guest takes over, dropping the host ends the match in its favor\n  two hosts leave in a row: the last two players continue in sync\n  spectator present: a player takes over, the spectator follows in sync\n  8-seed sweep (latency 40-160ms, jitter 10-50ms, gzip): moved within 1650ms, host back within 1550ms, in sync\n",
+    "timedOut": false,
+    "elapsedMs": 212592
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-action-fuzz.test.cjs",
+    "status": 0,
+    "output": "PASS: action fuzz\n  targeted: 2 of the host's buildings and 3 units attacked with every command kind: untouched\n  30s of malformed commands from one guest: no errors, no divergence, 20.0 TPS\n",
+    "timedOut": false,
+    "elapsedMs": 160745
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-corruption-fuzz.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: unitStacksLevel: match-wide resync\n\n2 !== 1\n\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-corruption-fuzz.test.cjs:179:16 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 2,\n  expected: 1,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 285522
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-cross-engine.test.cjs",
+    "status": 0,
+    "output": "PASS: cross-engine math\n  solar_system: 1635 tick hashes bit-exact fingerprints equal across engines\n  islands: 1635 tick hashes bit-exact fingerprints equal across engines\n",
+    "timedOut": false,
+    "elapsedMs": 342390
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-late-carry-restore.test.cjs",
+    "status": 0,
+    "output": "PASS multiplayer-late-carry-restore\n",
+    "timedOut": false,
+    "elapsedMs": 20393
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-late-seal.test.cjs",
+    "status": 0,
+    "output": "PASS: late seal\n  one guest's link spiking 500 ms: host and other guest max frame gap 117/183 ms (spiky guest 517 ms), 27 ticks sealed without it, 10 of its commands carried, each run once, in sync\n  guest silent 3 s: the match went on for 14 ticks, then waited; afterwards every command ran once, in sync\n  guest link 250 ms slower each way: lead 4 -> 9 ticks, commands meanwhile carried once each, in sync\n",
+    "timedOut": false,
+    "elapsedMs": 97702
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-desync-recovery.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: each divergence patched: 13\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-desync-recovery.test.cjs:228:16 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 401544
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-matrix.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: 1v1 arena destroy LAN rematch: [{\"tick\":11,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":12,\"a\":\"host\",\"b\":\"guest1\"},{\"tick\":13,\"a\":\"host\",\"b\":\"guest1\"}]\n\n12 !== 0\n\n    at runCase (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-matrix.test.cjs:70:12)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-matrix.test.cjs:78:37 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 12,\n  expected: 0,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 65927
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-patch.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: crossroads: restored guest differs from host 1 ticks after the restore: 2 fields: u13.preComputedEffective host=\"~M0,u,ice_resistant,2\" guest=\"[\\\"~E\\\",\\\"~M0,u,ice_resistant,3\\\",79]\" | u13.preComputed host=\"~M0,u,ice_resistant,2\" guest=\"[\\\"~E\\\",\\\"~M0,u,ice_resistant,3\\\",79]\"\n    at mapCase (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-patch.test.cjs:78:20)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-patch.test.cjs:176:56 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 76460
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-scenarios.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: stacking resumes after research (waited 120000ms)\n    at until (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-scenarios.test.cjs:75:12)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-scenarios.test.cjs:115:25 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 66972
+  },
+  {
+    "mode": "1",
+    "file": "nav-shared-build.test.cjs",
+    "status": 0,
+    "output": "PASS: navigation shares equal geometry, with independent profile versions and replacements\n",
+    "timedOut": false,
+    "elapsedMs": 2135
+  },
+  {
+    "mode": "1",
+    "file": "parallel-kernels.test.cjs",
+    "status": 1,
+    "output": "TypeError: Cannot read properties of null (reading 'occ_spawn')\n    at occupancySpawn (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:10079:24)\n    at new Unit (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:66612:87)\n    at spawnStartingUnit (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:83748:17)\n    at startGame (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:83854:45)\n    at begin (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:17195:13)\n    at startSoloGame (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:17202:22)\n    at eval (eval at eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21)), <anonymous>:1:196)\n    at Object.eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:89470:21)\n    at inst.eval (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:677:35)\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\parallel-kernels.test.cjs:36:14\n",
+    "timedOut": false,
+    "elapsedMs": 2171
+  },
+  {
+    "mode": "1",
+    "file": "shared-frame-ownership.test.cjs",
+    "status": 1,
+    "output": "TypeError: Cannot read properties of null (reading 'occ_spawn')\n    at occupancySpawn (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:10079:24)\n    at new Unit (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:66612:87)\n    at spawnStartingUnit (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:83748:17)\n    at startGame (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:83854:45)\n    at begin (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:17195:13)\n    at startSoloGame (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:17202:22)\n    at eval (eval at eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21)), <anonymous>:1:578)\n    at Object.eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:89470:21)\n    at inst.eval (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:677:35)\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\sim-frame-replica.test.cjs:47:7\n",
+    "timedOut": false,
+    "elapsedMs": 2140
+  },
+  {
+    "mode": "1",
+    "file": "shared-kernel-threads.test.cjs",
+    "status": 0,
+    "output": "PASS: actual SharedArrayBuffer workers: every separation/frame output byte identical with 0, 1 and 7 helpers over repeated rebindings.\n",
+    "timedOut": false,
+    "elapsedMs": 3835
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-snapshot.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: mixed-browser patches applied\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-snapshot.test.cjs:95:16 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 39976
+  },
+  {
+    "mode": "1",
+    "file": "shared-spatial-order.test.cjs",
+    "status": 0,
+    "output": "PASS: stable shared spatial ordering matches scalar sort with 0, 1, 7 and 11 real helpers, including resize/reuse and uint32 keys.\n",
+    "timedOut": false,
+    "elapsedMs": 1353
+  },
+  {
+    "mode": "1",
+    "file": "shared-stat-rows.test.cjs",
+    "status": 0,
+    "output": "PASS: shared stat publication updates existing handles without accessing units or owners {\n  before: 2.66849422454834,\n  after: 2.953944206237793,\n  pc: 2.953944206237793,\n  sameHandle: true,\n  cacheRemoved: true,\n  unchangedMovePreserved: true,\n  stableAfterRefresh: true,\n  rowsBefore: 9,\n  rowsAfter: 9\n}\n",
+    "timedOut": false,
+    "elapsedMs": 2587
+  },
+  {
+    "mode": "1",
+    "file": "shared-unit-state.test.cjs",
+    "status": 1,
+    "output": "<anonymous_script>:2\r\n    const fail = msg => { throw new Error(msg); };\r\n                          ^\r\n\r\nError: slot retirement\r\n    at fail (eval at eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21)), <anonymous>:2:33)\r\n    at eval (eval at eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21)), <anonymous>:26:57)\r\n    at eval (eval at eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21)), <anonymous>:76:3)\r\n    at Object.eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:89470:21)\r\n    at inst.eval (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:677:35)\r\n    at Object.<anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\shared-unit-state.test.cjs:8:32)\r\n    at Module._compile (node:internal/modules/cjs/loader:1706:14)\r\n    at Object..js (node:internal/modules/cjs/loader:1839:10)\r\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\r\n    at Function._load (node:internal/modules/cjs/loader:1263:12)\r\n\r\nNode.js v22.20.0\r\n",
+    "timedOut": false,
+    "elapsedMs": 2596
+  },
+  {
+    "mode": "1",
+    "file": "shared-spatial-determinism.test.cjs",
+    "status": 0,
+    "output": "PASS: 4,200 active units: 0 vs 7 real helpers agree every tick, including a mid-run snapshot restore.\n",
+    "timedOut": false,
+    "elapsedMs": 8519
+  },
+  {
+    "mode": "1",
+    "file": "sim-frame-replica.test.cjs",
+    "status": 1,
+    "output": "TypeError: Cannot read properties of null (reading 'occ_spawn')\n    at occupancySpawn (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:10079:24)\n    at new Unit (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:66612:87)\n    at spawnStartingUnit (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:83748:17)\n    at startGame (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:83854:45)\n    at begin (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:17195:13)\n    at startSoloGame (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:17202:22)\n    at eval (eval at eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21)), <anonymous>:1:578)\n    at Object.eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:89470:21)\n    at inst.eval (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:677:35)\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\sim-frame-replica.test.cjs:47:7\n",
+    "timedOut": false,
+    "elapsedMs": 2367
+  },
+  {
+    "mode": "1",
+    "file": "visibility-shared-source.test.cjs",
+    "status": 0,
+    "output": "PASS: shared visibility rows match public-stat reference with multiple owners, levels and watchers.\n",
+    "timedOut": false,
+    "elapsedMs": 2284
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-chaos-determinism.test.cjs",
+    "status": 1,
+    "output": "Error: crossroads: nondeterministic divergence at tick 621 (host vs guest2) in [players]; forced [{\"victim\":\"guest2\",\"tick\":273,\"unit\":\"snake 23\"},{\"victim\":\"guest2\",\"tick\":540,\"unit\":\"snake 81\"}], repairs [[\"host\",[0]],[\"guest1\",[0]],[\"guest2\",[297,576,619,644,0]],[\"guest3\",[0]]]: [{\"tick\":621,\"a\":\"host\",\"b\":\"guest2\"},{\"tick\":622,\"a\":\"host\",\"b\":\"guest2\"},{\"tick\":623,\"a\":\"host\",\"b\":\"guest2\"},{\"tick\":624,\"a\":\"host\",\"b\":\"guest2\"}]\n  host saw: [{\"peer\":\"auto4e9e6fed00\",\"tick\":293,\"differs\":[\"players\",\"globals\",\"tiles 24-27,28-31: unit 5 boss, unit 186 tank, unit 200 fire_resistant, unit 191 collector, unit 56 researcher_unit, watch_tower at 25,31\",\"tiles 20-23,32-35: unit 40 scout, g at 20,33, g at 20,35\",\"tiles 20-23,36-39: unit 23 snake, unit 203 water_resistant, unit 36 water_resistant, g at 20,37, g at 20,38\",\"tiles 24-27,20-23: unit 8 poison_resistant, unit 9 poison_resistant, unit 20 laser_resistant, unit 29 fast, unit 30 fast, unit 33 mole\"]},{\"peer\":\"auto4e9e6fed00\",\"tick\":572,\"differs\":[\"tiles 12-15,28-31: unit 65 boss, unit 79 laser_resistant, unit 81 snake, unit 217 boss, barrack at 12,28\"]},{\"peer\":\"auto4e9e6fed00\",\"tick\":615,\"differs\":[\"tiles 4-7,24-27: unit 69 fire_resistant, unit 70 fire_resistant, unit 218 poison_resistant, sand_gun at 7,26\"]},{\"peer\":\"auto4e9e6fed00\",\"tick\":640,\"differs\":[\"players\",\"tiles 12-15,28-31: unit 79 laser_resistant, unit 81 snake, unit 217 boss, barrack at 12,28\"]}]\n  patched: host []\n  guest1 []\n  guest2 []\n  guest3 []\n    at chaosMatch (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-chaos-determinism.test.cjs:255:15)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-chaos-determinism.test.cjs:288:40\n",
+    "timedOut": false,
+    "elapsedMs": 775133
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-host-migration.test.cjs",
+    "status": 0,
+    "output": "PASS: host migration\n  host left a 3-team match: successor took over in 550ms, host's team resigned, others in sync\n  host tab closed in 2v2: moved in 1050ms; reloaded host found the match and rejoined its team in 1000ms\n  1v1 host reload (gzip start): guest took over, host back as a player in 2250ms, no forfeit; a second reload from the stale link rejoins too\n  silent host death: match moved 15.8s after the host went quiet\n  host offline 40s: others moved after 15.8s; old host rejoined as guest 3.0s after its network returned\n  guest offline 30s: never took over, rejoined the same host\n  one broken guest-host link (guest first in successor order): no split, back on the original host\n  one broken guest-host link (guest second in successor order): no split, back on the original host\n  1v1 host crash: guest takes over, dropping the host ends the match in its favor\n  two hosts leave in a row: the last two players continue in sync\n  spectator present: a player takes over, the spectator follows in sync\n  8-seed sweep (latency 40-160ms, jitter 10-50ms, gzip): moved within 1700ms, host back within 1700ms, in sync\n",
+    "timedOut": false,
+    "elapsedMs": 734239
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-extremes.test.cjs",
+    "status": 0,
+    "output": "PASS: extremes\n  8 teams, 483 units + 536 buildings at start (max 56 units now), research 0 -> 10 on every stat, debt and back: 5456 tick fingerprints equal, 20.0 TPS\n  divergence on one of 8 peers after all that: 1 patch(es) of 348 KB, exact again\n",
+    "timedOut": false,
+    "elapsedMs": 1141408
+  }
+]

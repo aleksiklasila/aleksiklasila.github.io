@@ -1224,6 +1224,10 @@ function _effStatsFullUnit(u, canUseSpatialCounts, chunkPx) {
     let baseStacks = getUnitStackCount(u);
     let baseLevel = stackCountToLevel(baseStacks);
     const previousRow=u._us ? u._us.statRow[u._si] : -1;
+    // (The effective level applied before this refresh: the sticky level's
+    // reference, as the kernel twin reads it; the base refresh below applies
+    // the base level's tables.)
+    const lastApplied = u._lastAppliedEffectiveLevel;
     const c = u._us, ver = _unitStatsVerOf(u), behind = !!c && c.esVer[u._si] !== ver;
     if (c) c.esVer[u._si] = ver;
     let needsRefresh = behind || !Number.isFinite(u.baseLevel) || u.baseLevel !== baseLevel ||
@@ -1249,9 +1253,9 @@ function _effStatsFullUnit(u, canUseSpatialCounts, chunkPx) {
     if (similarCount < 1) similarCount = 1;
     let effStacks = Math.max(1, Math.floor(similarCount * baseStacks));
     u.effectiveStacks = effStacks;
-    u.effectiveLevel = _effSticky(stackCountToLevel(effStacks), effStacks, u._lastAppliedEffectiveLevel);
+    u.effectiveLevel = _effSticky(stackCountToLevel(effStacks), effStacks, lastApplied);
     let nextEffLevel = getUnitEffectiveLevel(u);
-    if (needsRefresh || u._lastAppliedEffectiveLevel !== nextEffLevel) {
+    if (needsRefresh || lastApplied !== nextEffLevel) {
         applyUnitEffectiveScaling(u, nextEffLevel, previousRow);
         u._lastAppliedEffectiveLevel = nextEffLevel;
     }

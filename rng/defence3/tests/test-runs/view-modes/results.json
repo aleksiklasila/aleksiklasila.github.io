@@ -88,14 +88,14 @@
   "model height by base sight, not level": {
    "ok": true,
    "info": {
+    "king": {
+     "low": 5
+    },
     "builder_unit": {
      "low": 3
     },
     "healer_unit": {
      "low": 3
-    },
-    "king": {
-     "low": 5
     },
     "norm": {
      "low": 3
@@ -114,16 +114,16 @@
     }
    }
   },
-  "enemy units get detail models like own ones": {
-   "ok": false,
+  "seen enemy units get detail models like own ones": {
+   "ok": true,
    "info": {
     "own": [
-     0,
-     0
+     18,
+     18
     ],
     "enemy": [
-     11,
-     0
+     16,
+     16
     ]
    }
   },

@@ -69,22 +69,18 @@ async function lobby(world, guests = 1) {
         rows.push('leave lobby, close lobby (guests informed), then single player');
     }
 
-    // The host's Auto setting reaches guests; manual mode keeps fixed delays.
+    // The network timing is always automatic: no Auto / Equal Command Delay
+    // options, the tick rate field is ignored and greyed out.
     {
-        const world = new H.World({ network: WAN, controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-net-auto': false, 'cfg-pipeline-delay': '4', 'cfg-tick-rate': '25' } });
-        const { host, guests } = await H.startHostedMatch(world, { guests: 1 });
+        const world = new H.World({ network: WAN, controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-tick-rate': '40' } });
+        const m = await H.startHostedMatch(world, { guests: 1 });
         await world.run(3000);
-        assert.equal(guests[0].eval('netAutoEnabled'), false);
-        assert.equal(guests[0].eval('TICK_RATE'), 25, 'manual tick rate used');
-        assert.equal(guests[0].eval('LOCKSTEP_PIPELINE_TICKS'), 4, 'manual delay used');
-        const world2 = new H.World({ network: WAN, controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-tick-rate': '40' } });
-        const m2 = await H.startHostedMatch(world2, { guests: 1 });
-        await world2.run(3000);
-        assert.equal(m2.guests[0].eval('netAutoEnabled'), true);
-        assert.equal(m2.guests[0].eval('TICK_RATE'), 20, 'auto ignores the manual tick rate');
-        m2.host.eval('syncNetAutoMenuState()'); // page init does this
-        assert.equal(m2.host.element('cfg-tick-rate').disabled, true, 'manual fields greyed out');
-        rows.push('Auto on by default (manual fields disabled); manual tick rate and delay honored when off');
+        assert.equal(m.guests[0].eval('TICK_RATE'), 20, 'auto ignores the manual tick rate');
+        m.host.eval('syncNetAutoMenuState()'); // page init does this
+        assert.equal(m.host.element('cfg-tick-rate').disabled, true, 'manual fields greyed out');
+        const page = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'index.html'), 'utf8');
+        for (const id of ['cfg-net-auto', 'cfg-fair-delay']) assert.equal(page.includes(id), false, id + ' option is gone');
+        rows.push('timing always automatic (manual fields disabled, no Auto / Equal Command Delay options)');
     }
 
     // Someone joins while the host is starting: they are not put into the

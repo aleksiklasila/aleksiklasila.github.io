@@ -614,7 +614,9 @@ function simClientRunTick(tick, actions, teams, flush, dk = 1) {
     // (Its deadline as absolute time: the worker's clock has another origin.
     // Only when dispatched ahead: otherwise at once, as before.)
     let due = simClientDispatchAhead() && !asap && typeof performance.timeOrigin === 'number' ? performance.timeOrigin + at : undefined;
-    c.worker.postMessage({ type: 'tick', tick, actions, teams, flush: !!flush, hash: true, due, dk });
+    // (The state hash only for a match with others: it is what peers compare
+    // and repair from; alone it was ~2 ms of every tick for nobody.)
+    c.worker.postMessage({ type: 'tick', tick, actions, teams, flush: !!flush, hash: !!isMultiplayer, due, dk });
 }
 
 // Whether ticks go to the worker ahead of time (shared memory).

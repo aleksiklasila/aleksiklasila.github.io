@@ -284,6 +284,14 @@ struct Mv {
     traffic_mode: i32,
     /// unit.rtEnd (word 458): a route's end tile, kept after arrival.
     rte: *const i32,
+    /// Per slot, whether the occupancy's second stage visits it (word 459,
+    /// occ.need: the first stage writes it, mark_need; null: every slot);
+    /// the footprints' positions and registrations for it (words 460-462:
+    /// occ.x, occ.y, occ.active).
+    need: *mut u8,
+    ofx: *const i32,
+    ofy: *const i32,
+    oact: *const u8,
     /// This occupancy job's swapped idle units (traffic_swap), to list in
     /// its second pass; null outside one.
     swl: *mut i32,
@@ -600,6 +608,10 @@ impl Mv {
             traffic: p!(456),
             traffic_mode: {let c:*const i32=p!(456);if c.is_null(){0}else{*c}},
             rte: p!(458),
+            need: p!(459),
+            ofx: p!(460),
+            ofy: p!(461),
+            oact: p!(462),
             swl: core::ptr::null_mut(),
             swn: core::ptr::null_mut(),
             span_n: 4,
@@ -2476,7 +2488,14 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
         let ptr=|i:usize|waddr(*a.add(512+i) as u32) as *const i32;
         let cfg=ptr(33);let bw=*cfg.add(5);let bh=*cfg.add(6);let block=*cfg.add(7);
         let phase=rd(f,4) as i32;let halfw=(bw+1)>>1;
-        let bx=irem(chunk,halfw)*2+(phase&1);let by=idiv(chunk,halfw)*2+(phase>>1);
+        // (36: the phase's blocks with units, heaviest first (occ.jobs, see
+        // sim_occupancy.js occupancyJobs: [0..4) the phases' starts, [4..8)
+        // their counts, then the blocks): the empty blocks are not run, the
+        // caller zeroes their outputs and the traffic inputs. Else every
+        // block of the phase's colour by the chunk.)
+        let listed=*a.add(512+36)!=0;
+        let (bx,by)=if listed{let jl=ptr(36);let j=*jl.add((8+*jl.add(phase as usize)+chunk) as usize);(irem(j,bw),idiv(j,bw))}
+            else{(irem(chunk,halfw)*2+(phase&1),idiv(chunk,halfw)*2+(phase>>1))};
         if bx>=bw || by>=bh {return;}
         let job=by*bw+bx;let base=*ptr(32).add(job as usize) as usize;
         p.chunk=job as usize;p.s0=base;
@@ -2485,13 +2504,16 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
         // The units the second pass looks at (in the order the first met
         // them), at the job's range of occ.work: out bit 7 marks one listed.
         let wk=if *a.add(512+35)==0{core::ptr::null_mut()}else{(ptr(35) as *mut i32).add(base)};let mut wn=0usize;
+        // (37: the first stage's marks, mark_need; a unit not marked in a cell
+        // without a push record is passed over.)
+        let need=if *a.add(512+37)==0{core::ptr::null()}else{ptr(37) as *const u8};
         let mut ep=epi_begin(&m,f,job,0,1);ep.pb=base;
         // (The attacks are listed by the first stage's slot chunks.)
         let cw=*cfg.add(9);let ch=*cfg.add(10);let epoch=*cfg.add(11);
         let x0=bx*block;let x1=((bx+1)*block).min(cw);
         let y0=by*block;let y1=((by+1)*block).min(ch);
-        super::traffic::clear_job(m.traffic,bx*block* *cfg.add(15)* *cfg.add(14),by*block* *cfg.add(15)* *cfg.add(14),
-            (bx+1)*block* *cfg.add(15)* *cfg.add(14),(by+1)*block* *cfg.add(15)* *cfg.add(14));
+        if !listed{super::traffic::clear_job(m.traffic,bx*block* *cfg.add(15)* *cfg.add(14),by*block* *cfg.add(15)* *cfg.add(14),
+            (bx+1)*block* *cfg.add(15)* *cfg.add(14),(by+1)*block* *cfg.add(15)* *cfg.add(14));}
         // Leaders vacate space before followers claim it. Sample cached
         // desired velocities (actual velocity is zero in a jam), bounded
         // to one unit per tile; no sorting or per-unit allocation.
@@ -2516,7 +2538,7 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
             let pushed=traffic_deferred(&m)&&super::traffic::push_at(m.traffic,cx,cy);
             while i<end {
                 let slot=*ptr(24).add(i as usize);
-                if slot>=0 {
+                if slot>=0 && (need.is_null()||pushed||*need.add(slot as usize)!=0) {
                     let s=slot as usize;
                     resolve_slot(&m,s);
                     if !wk.is_null()&&(*m.out.add(s)>1||*m.spent.add(s)!=0||(traffic_deferred(&m)&&(pushed||walker_short(&m,s)))){
@@ -2571,7 +2593,23 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
         let b0=s0.max(0) as usize;let e=end.max(0) as usize;
         let mut ep=if intent{epi_none()}else{epi_begin(&m,f,chunk,b0,e)};
         move_span(&mut m,f,&p,&sp,&mut ep,b0,e);
+        if intent&&!m.need.is_null(){mark_need(&m,b0,e);}
         if !intent{epi_end(&m,&ep,chunk);}
+    }
+}
+/// The first stage's marks for the second (occ.need), a byte a slot in slot
+/// order: a unit whose wanted position is not its footprint's (resolve_slot
+/// moves it), with an epilogue (out > 1, spent) or a flow walker (its short
+/// step's retry, walker_short). The second stage's visit of any other unit
+/// did nothing but read its columns (~6 cache lines a unit in index order;
+/// idle armies were most of its time), unless its cell holds a push record:
+/// then every unit there is visited, as before.
+#[cfg_attr(feature="prof",inline(never))]
+unsafe fn mark_need(m:&Mv,b0:usize,e:usize){
+    let occ=!m.ofx.is_null()&&!m.ofy.is_null()&&!m.oact.is_null();
+    for s in b0..e{
+        let moved=!occ||(*m.oact.add(s)!=0&&(*(m.x.add(s) as *const i32)!=*m.ofx.add(s)||*(m.y.add(s) as *const i32)!=*m.ofy.add(s)));
+        *m.need.add(s)=(moved||*m.out.add(s)>1||*m.spent.add(s)!=0||*m.on.add(s)==1) as u8;
     }
 }
 /// A flow unit left short of its step (its second-pass retry may move it:

@@ -90,7 +90,10 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
         const kinds = [];
         for (const g of m.guests) g.scratch.kinds = kinds;
         for (const g of m.guests) g.eval(`(() => { const orig = _handleConnectionMessage; _handleConnectionMessage = (c, d) => { if (d && d.type === 'RESYNC_PATCH') __scratch.kinds.push(myPeerId + ':' + (d.payload.z ? 'z' : 'json')); return orig(c, d); }; })()`);
-        for (const g of m.guests) g.evalSim(`(() => { const u = units.find(u => !u.dead); u.x += 13; })()`);
+        // (A corrupted column, as a divergence leaves it: through the x
+        // setter the occupancy grid sweeps the unit and a boxed-in one does
+        // not move at all.)
+        for (const g of m.guests) g.evalSim(`(() => { const u = units.find(u => !u.dead); u._us.x[u._si] += 13 * 8; })()`);
         const ok = await w.runUntil(() => m.guests.every(g => g.patchesApplied >= 1), 15000, 20);
         assert.ok(ok, 'mixed-browser patches applied');
         const byPeer = Object.fromEntries(kinds.map(k => k.split(':')));

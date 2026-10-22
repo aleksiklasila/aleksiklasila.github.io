@@ -187,8 +187,10 @@ const _simOccW = _simWK(['occ.bits','occ.mask','occ.x','occ.y','occ.radius','occ
     'unit.spTile','unit.sepKey','unit.spArea','unit.spMvOld','unit.spMvNew','unit.spMvOwn','unit.owner','unit.spOwner',
     'occ.areaGrid','occ.eslot','occ.start','occ.count','occ.stamp','occ.stats','unit.mvSteady','unit.mvCT','unit.mvCD','occ.offsets','occ.config',
     // (34: per job, the idle units it swapped across its block's edge: mv.rs traffic_swap;
-    // 35: per job's range (as mv.post's), the units its second pass looks at.)
-    'occ.xswap', '?occ.work']);
+    // 35: per job's range (as mv.post's), the units its second pass looks at;
+    // 36: the phases' blocks with units, heaviest first: occupancyJobs;
+    // 37: the first stage's per-slot marks, mv.rs mark_need.)
+    'occ.xswap', '?occ.work', '?occ.jobs', '?occ.need']);
 // Per spatial block its index entries (occ.offsets, summed up after; occ.rs occ_block_counts), 64 blocks a chunk.
 const SIM_KERNEL_OCC_COUNTS = 97;
 SIM_KERNELS[SIM_KERNEL_OCC_COUNTS] = function(R,P,c){
@@ -1229,6 +1231,13 @@ function _simMoveWasm(R, P) {
     // (Word 458: unit.rtEnd, the occupancy swap's crowd test, mv.rs traffic_swap.)
     const rte=R['unit.rtEnd'];
     _simWasmArgI[458]=rte&&simHeapHas(rte)?_simWEnc(rte.byteOffset):0;
+    // (Words 459-462: the occupancy's per-slot marks for its second stage and
+    // the footprints' positions, mv.rs mark_need; 0 without the occupancy.)
+    const occNeed=R['occ.need'];
+    if(occNeed&&simHeapHas(occNeed)&&R['occ.x']&&R['occ.y']&&R['occ.active']){
+        _simWasmArgI[459]=_simWEnc(occNeed.byteOffset);_simWasmArgI[460]=_simWEnc(R['occ.x'].byteOffset);
+        _simWasmArgI[461]=_simWEnc(R['occ.y'].byteOffset);_simWasmArgI[462]=_simWEnc(R['occ.active'].byteOffset);
+    }else _simWasmArgI.fill(0,459,463);
     return true;
 }
 

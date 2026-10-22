@@ -9,7 +9,7 @@ async function latencyCase(slowHost) {
     const all = [host, ...guests];
     for (const inst of all) {
         assert.equal(inst.eval('simClientActive()'), true, inst.name + ' uses the worker');
-        inst.eval('netAutoEnabled = false; LOCKSTEP_PIPELINE_MIN = 15; LOCKSTEP_PIPELINE_TICKS = isHost ? 0 : 15; netMatchInputDelay = 15;');
+        inst.eval('netComputeRttInputDelayTicks = () => 15; LOCKSTEP_PIPELINE_MIN = 15; LOCKSTEP_PIPELINE_TICKS = isHost ? 0 : 15; netMatchInputDelay = 15;');
     }
     await world.run(5000);
     const completed = inst => inst.eval('_simClient.appliedTick + 1');

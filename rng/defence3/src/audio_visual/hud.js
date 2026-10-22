@@ -3474,21 +3474,94 @@ function getActiveUnits() {
     return out;
 }
 
-// The active selection by kind, from one pass (kept for the selection: a
-// command handler filtered 100k selected units through their views several
-// times a click): active, combat (no worker type), byType (worker type ->
-// units), and their ids.
-let _selClassCache = { sel: null, len: -1, sub: null, ver: -1, out: null };
-function getActiveUnitClasses() {
+// The active selection by kind (kept for the selection: a command handler
+// filtered 100k selected units through their views several times a click):
+// active, combat (no worker type), byType (worker type -> units), workers,
+// their ids, and counts. A framed selection with no subgroup turned off is
+// read by its slots in the frame's columns, the lists made when asked for (a
+// click on an army of combat units needs the counts and ids only).
+let _selClassCache = { sel: null, len: -1, sub: null, ver: -1, out: null, at: 0 };
+// (staleOk: a command's own use. The lists of a moment ago, with the units
+// that have died since in them, serve it: their ids are left out by the
+// ids, and a pass over 100k selected units after every death would be a
+// click's cost.)
+function getActiveUnitClasses(staleOk = false) {
     let sub = '';
     for (let key in activeSubGroups) if (activeSubGroups[key] === false) sub += key + ';';
     const C = _selClassCache;
     const X = selectionIndex();
     // (The frame's views: a death among them moves the index's version.)
     if (C.out && C.sel === selectedUnits && C.len === selectedUnits.length && C.sub === sub
-        && (X.framed ? C.ver === X.version : !C.out.active.some(_selDeadFirst))) return C.out;
-    const active = getActiveUnits(), combat = [], byType = new Map();
+        && (X.framed ? C.ver === X.version || (staleOk && performance.now() - C.at < 1500) : !C.out.active.some(_selDeadFirst))) return C.out;
     const F = X.framed ? simClientCurrentUnitVis() : null;
+    const out = F && sub === '' && X.sel === selectedUnits ? _slotUnitClasses(X, F) : _listUnitClasses(X, F);
+    C.sel = selectedUnits; C.len = selectedUnits.length; C.sub = sub; C.ver = X.version; C.at = performance.now();
+    C.out = out;
+    return out;
+}
+const _WORKER_KINDS_IN_ORDER = () => ['builder', ...RESOURCE_TYPE_LIST.map(c => c && c.collectorUnitKey).filter(Boolean), 'salvager', 'healer', 'researcher'];
+// The ids of the live units of the selection now, by its slots in the
+// frame's columns (contiguous), not through 100k unit views (25 ms). kind:
+// 0 all, 1 combat, 2 workers. Made once a version of the selection.
+function _slotUnitIds(self, key, kind) {
+    const X = selectionIndex();
+    if (self[key] && self[key + 'V'] === X.version) return self[key];
+    const F = X.framed && X.sel === selectedUnits ? simClientCurrentUnitVis() : null;
+    const out = [];
+    if (F) {
+        const slots = X.slots, n = X.n, ID = F.id, WT = F.wtype;
+        for (let i = 0; i < n; i++) {
+            const s = slots[i];
+            if (kind === 0 || (WT[s] === 0) === (kind === 1)) out.push(ID[s]);
+        }
+    }
+    self[key] = out; self[key + 'V'] = X.version;
+    return out;
+}
+function _slotUnitClasses(X, F) {
+    const slots = X.slots, n = X.n, WT = F.wtype, ID = F.id;
+    let nWorkers = 0;
+    for (let i = 0; i < n; i++) if (WT[slots[i]] !== 0) nWorkers++;
+    let active = null, combat = null, byType = null, workers = null;
+    return {
+        count: n, combatCount: n - nWorkers, workerCount: nWorkers,
+        get active() { return active || (active = X.dead === 0 ? selectedUnits : selectedUnits.filter(u => !u.dead)); },
+        get combat() {
+            if (combat) return combat;
+            if (nWorkers === 0) return combat = this.active;
+            combat = [];
+            for (const u of this.active) { const s = u._s; if (s >= 0 ? WT[s] === 0 : !u.workerType) combat.push(u); }
+            return combat;
+        },
+        get byType() {
+            if (byType) return byType;
+            byType = new Map();
+            if (nWorkers) for (let i = 0; i < n; i++) {
+                const s = slots[i], c = WT[s];
+                if (c === 0) continue;
+                const u = _pageSlotViews[s] || _pageUnitsById.get(ID[s]);
+                if (!u) continue;
+                const wt = _pageFrameStrings[c];
+                let a = byType.get(wt);
+                if (!a) byType.set(wt, a = []);
+                a.push(u);
+            }
+            return byType;
+        },
+        get workers() {
+            if (workers) return workers;
+            workers = [];
+            if (nWorkers) for (const k of _WORKER_KINDS_IN_ORDER()) { const a = this.byType.get(k); if (a) for (const u of a) workers.push(u); }
+            return workers;
+        },
+        get allIds() { return _slotUnitIds(this, '_all', 0); },
+        get combatIds() { return _slotUnitIds(this, '_combat', 1); },
+        get workerIds() { return _slotUnitIds(this, '_workers', 2); },
+        of(type) { return nWorkers ? this.byType.get(type) || [] : []; }
+    };
+}
+function _listUnitClasses(X, F) {
+    const active = getActiveUnits(), combat = [], byType = new Map();
     if (F) {
         // (Worker types from the frame's codes: no string through a view
         // per unit.)
@@ -3508,11 +3581,10 @@ function getActiveUnitClasses() {
     }
     const ids = list => list.map(u => u.id);
     const workers = [];
-    for (const k of ['builder', ...RESOURCE_TYPE_LIST.map(c => c && c.collectorUnitKey).filter(Boolean), 'salvager', 'healer', 'researcher']) { const a = byType.get(k); if (a) for (const u of a) workers.push(u); }
-    C.sel = selectedUnits; C.len = selectedUnits.length; C.sub = sub; C.ver = X.version;
-    C.out = { active, combat, byType, workers, get allIds() { return this._all || (this._all = ids(active)); }, get combatIds() { return this._combat || (this._combat = ids(combat)); },
+    for (const k of _WORKER_KINDS_IN_ORDER()) { const a = byType.get(k); if (a) for (const u of a) workers.push(u); }
+    return { count: active.length, combatCount: combat.length, workerCount: workers.length, active, combat, byType, workers,
+        get allIds() { return this._all || (this._all = ids(active)); }, get combatIds() { return this._combat || (this._combat = ids(combat)); },
         get workerIds() { return this._workers || (this._workers = ids(workers)); }, of(type) { return byType.get(type) || []; } };
-    return C.out;
 }
 // (Only the first dead unit is looked for: a dead one changes the selection
 // on the next tick anyway.)

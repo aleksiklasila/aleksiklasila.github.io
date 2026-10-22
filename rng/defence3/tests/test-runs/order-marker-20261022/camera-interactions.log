@@ -1,0 +1,12 @@
+AssertionError [ERR_ASSERTION]: pan remains within map
+
+false !== true
+
+    at Z:\data\gitrepos\aleksiklasila.github.io\rng\defence3\tests\camera-interactions.test.cjs:63:20 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: 'strictEqual',
+  diff: 'simple'
+}

@@ -1,0 +1,82 @@
+[
+  {
+    "mode": "0",
+    "file": "multiplayer-border-combat.test.cjs",
+    "status": 0,
+    "output": "PASS: kings fight visible soldiers across area borders in lockstep (125 tick hashes compared, [[0,\"king\",225],[0,\"laser_resistant\",7],[1,\"norm\",25],[0,\"norm\",40],[0,\"norm\",40],[1,\"king\",225],[1,\"laser_resistant\",32],[1,\"norm\",40]]).\n",
+    "timedOut": false,
+    "elapsedMs": 6359
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-patch.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: crossroads: restored guest differs from host 1 ticks after the restore: 2 fields: u13.preComputedEffective host=\"~M0,u,ice_resistant,2\" guest=\"[\\\"~E\\\",\\\"~M0,u,ice_resistant,3\\\",79]\" | u13.preComputed host=\"~M0,u,ice_resistant,2\" guest=\"[\\\"~E\\\",\\\"~M0,u,ice_resistant,3\\\",79]\"\n    at mapCase (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-patch.test.cjs:78:20)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-patch.test.cjs:176:56 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 15495
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-scenarios.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: stacking resumes after research (waited 120000ms)\n    at until (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-scenarios.test.cjs:75:12)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-scenarios.test.cjs:115:25 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 12102
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-corruption-fuzz.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: unitGone: match-wide resync\n\n2 !== 1\n\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-corruption-fuzz.test.cjs:179:16 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 2,\n  expected: 1,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 39613
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-chaos-determinism.test.cjs",
+    "status": 1,
+    "output": "Error: random: nondeterministic divergence at tick 408 (host vs guest3) in [players]; forced [{\"victim\":\"guest3\",\"tick\":273,\"unit\":\"snake 71\"},{\"victim\":\"guest3\",\"tick\":541,\"unit\":\"snake 18\"}], repairs [[\"host\",[0]],[\"guest1\",[0]],[\"guest2\",[0]],[\"guest3\",[310,334,430,465,489,514,561,0,538]]]: [{\"tick\":408,\"a\":\"host\",\"b\":\"guest3\"},{\"tick\":409,\"a\":\"host\",\"b\":\"guest3\"},{\"tick\":410,\"a\":\"host\",\"b\":\"guest3\"},{\"tick\":411,\"a\":\"host\",\"b\":\"guest3\"}]\n  host saw: [{\"peer\":\"autoe5fc76d700\",\"tick\":306,\"differs\":[\"players\",\"globals\",\"tiles 12-15,16-19: unit 54 tank, unit 57 boss, unit 61 fire_resistant, unit 71 snake, unit 75 king, unit 98 salvager_unit\",\"tiles 12-15,20-23: unit 188 snake, unit 66 ice_resistant, unit 72 snake, unit 74 snake, unit 76 norm, unit 190 flying\",\"tiles 4-7,24-27: unit 152 salvager_unit, unit 154 builder_unit, unit 124 snake, unit 147 astar_collector, unit 126 snake, barrack at 4,26\",\"tiles 12-15,28-31: unit 33 mole, unit 48 builder_unit, unit 172 fast, unit 148 astar_collector\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":331,\"differs\":[\"players\",\"tiles 24-27,16-19: unit 31 flying, unit 180 snake, g at 24,16\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":427,\"differs\":[\"players\",\"tiles 28-31,28-31: unit 18 snake, unit 34 water_resistant, barrack at 31,28, barrack at 28,29, barrack at 30,29, barrack at 29,30\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":462,\"differs\":[\"players\",\"tiles 28-31,28-31: unit 194 astar_collector, barrack at 31,28, barrack at 28,29, barrack at 30,29, barrack at 29,30, salvager at 28,28\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":485,\"differs\":[\"players\",\"tiles 28-31,32-35: barrack at 31,34, g at 29,34\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":511,\"differs\":[\"players\",\"tiles 32-35,32-35: unit 34 water_resistant, g at 33,34\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":534,\"differs\":[\"players\",\"tiles 36-39,32-35: unit 34 water_resistant\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":557,\"differs\":[\"players\",\"tiles 24-27,28-31: unit 7 poison_resistant, unit 18 snake, unit 170 ice_resistant, unit 25 fast, unit 175 snake, barrack at 27,28\",\"tiles 36-39,32-35: nothing\"]}]\n  patched: host []\n  guest1 []\n  guest2 []\n  guest3 [\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":310,\\\"fields\\\":[\\\"P1:astar,_resourceFixedValues\\\",\\\"u188:energy\\\",\\\"u33:y,vx,vy\\\",\\\"u152:y\\\",\\\"u57:y,vx,vy\\\",\\\"u64:x,vx\\\",\\\"u71:x,y,vx,vy,energy,_floorTile\\\",\\\"u74:energy\\\",\\\"u75:x,y,vx,vy\\\",\\\"u86:vx,vy\\\",\\\"u94:x\\\",\\\"u95:targetUnit\\\"]}]\",\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":334,\\\"fields\\\":[\\\"P0:astar,_resourceFixedValues\\\",\\\"u180:x,vy,preComputedEffective,preComputed\\\",\\\"u49:targetUnit\\\"]}]\",\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":430,\\\"fields\\\":[\\\"P0:astar,_resourceFixedValues\\\",\\\"u34:vx,vy,preComputedEffective,preComputed\\\",\\\"u49:targetUnit\\\",\\\"s32,26:_tgk\\\",\\\"s31,27:_tgk\\\",\\\"s28,28:_tgk\\\"]}]\",\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":465,\\\"fields\\\":[\\\"P0:astar,_resourceFixedValues\\\",\\\"u14:preComputedEffective,preComputed\\\",\\\"u34:x,vx,vy,preComputedEffective,preComputed\\\"]}]\",\"[\\\"[LOCKSTEP]\\\",\\\"Patched diverged state\\\",{\\\"tick\\\":561,\\\"fields\\\":[\\\"P0:astar,_resourceFixedValues\\\",\\\"u18:x,energy\\\"]}]\"]\n    at chaosMatch (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-chaos-determinism.test.cjs:255:15)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-chaos-determinism.test.cjs:288:40\n",
+    "timedOut": false,
+    "elapsedMs": 50811
+  },
+  {
+    "mode": "0",
+    "file": "shared-unit-state.test.cjs",
+    "status": 1,
+    "output": "<anonymous_script>:2\r\n    const fail = msg => { throw new Error(msg); };\r\n                          ^\r\n\r\nError: slot retirement\r\n    at fail (eval at eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21)), <anonymous>:2:33)\r\n    at eval (eval at eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21)), <anonymous>:26:57)\r\n    at eval (eval at eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21)), <anonymous>:76:3)\r\n    at Object.eval (eval at createInstance (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:660:21), <anonymous>:89502:21)\r\n    at inst.eval (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\net-harness.cjs:677:35)\r\n    at Object.<anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\shared-unit-state.test.cjs:8:32)\r\n    at Module._compile (node:internal/modules/cjs/loader:1706:14)\r\n    at Object..js (node:internal/modules/cjs/loader:1839:10)\r\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\r\n    at Function._load (node:internal/modules/cjs/loader:1263:12)\r\n\r\nNode.js v22.20.0\r\n",
+    "timedOut": false,
+    "elapsedMs": 2318
+  },
+  {
+    "mode": "0",
+    "file": "shared-frame-ownership.test.cjs",
+    "status": 0,
+    "output": "PASS: the page's units and world matched the worker on 400 results (up to 480 units); page apply 0 ms, worker encode 0 ms.\n",
+    "timedOut": false,
+    "elapsedMs": 24200
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-snapshot.test.cjs",
+    "status": 1,
+    "output": "AssertionError [ERR_ASSERTION]: mixed-browser patches applied\n    at Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-snapshot.test.cjs:95:16 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n",
+    "timedOut": false,
+    "elapsedMs": 38150
+  },
+  {
+    "mode": "0",
+    "file": "sim-frame-replica.test.cjs",
+    "status": 0,
+    "output": "PASS: the page's units and world matched the worker on 400 results (up to 480 units); page apply 0 ms, worker encode 0 ms.\n",
+    "timedOut": false,
+    "elapsedMs": 23332
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-matrix.test.cjs",
+    "status": 0,
+    "output": "PASS: configuration matrix\n  1v1 arena destroy LAN: 284 fingerprints equal, 20.0/20 TPS, delay 2 ticks, ended together, rematch ok\n  2v2 islands kill-king 200ms: 876 fingerprints equal, 20.0/20 TPS, delay 7 ticks, ended together, rematch ok\n  FFA4 crossroads full-vis 10TPS: 435 fingerprints equal, 10.0/10 TPS, delay 4 ticks, ended together, rematch ok\n  1v1 solar kill-king 30TPS lossy: 433 fingerprints equal, 30.0/30 TPS, delay 9 ticks, ended together, rematch ok\n  2v1v1 random unstable: 873 fingerprints equal, 19.6/20 TPS, delay 8 ticks, ended together, rematch ok\n  FFA3 island own-delay 300ms: 576 fingerprints equal, 20.0/20 TPS, delay 0 ticks, ended together, rematch ok\n  1v1 arena exact-lockstep: 285 fingerprints equal, 19.9/20 TPS, delay 3 ticks, ended together, rematch ok\n  FFA6 big map: 1425 fingerprints equal, 20.0/20 TPS, delay 3 ticks, ended together, rematch ok\n",
+    "timedOut": false,
+    "elapsedMs": 166840
+  }
+]
